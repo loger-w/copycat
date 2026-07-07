@@ -30,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     p_rep.add_argument("--data-dir", type=Path, default=Path("data"))
     p_rep.add_argument("--out", type=Path, default=Path("out"))
 
+    p_val = sub.add_parser("validate", help="replay 彙總 vs evidence golden")
+    p_val.add_argument("--run-five", type=Path, default=Path("out/five_tigers"))
+    p_val.add_argument("--run-four", type=Path, default=Path("out/four_tigers"))
+    p_val.add_argument("--out", type=Path, default=None)
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -48,6 +53,15 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = run_replay(args.data_dir, args.watchlist, args.out, args.config)
         sys.stdout.write(f"replay 完成 → {run_dir}\n")
         return 0
+    if args.command == "validate":
+        from copycat.replay.validate import format_validate, run_validate
+
+        checks = run_validate(args.run_five, args.run_four)
+        text = format_validate(checks)
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+        sys.stdout.write(text + "\n")
+        return 0 if all(c["ok"] for c in checks) else 1
     return 1
 
 
