@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+data/
+out/
+spikes/TCPY/
+spikes/catalog_dump/
+spikes/.ruff_cache/
+.claude/

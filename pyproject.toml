@@ -1,0 +1,29 @@
+[project]
+name = "copycat"
+version = "0.1.0"
+description = "分點行為指紋辨識 — 評分引擎 + 歷史 replay(回測基建)"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "pyright>=1.1"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.pyright]
+typeCheckingMode = "basic"
+include = ["copycat", "tests"]
+exclude = ["**/__pycache__", ".venv", "spikes", "docs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]   # tests 跨檔共用 fixture helper(tests.data.test_import_neigui)需要
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["copycat*"]
