@@ -35,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     p_val.add_argument("--run-four", type=Path, default=Path("out/four_tigers"))
     p_val.add_argument("--out", type=Path, default=None)
 
+    p_cmp = sub.add_parser("compare", help="兩份 replay run 並排對照")
+    p_cmp.add_argument("run_a", type=Path)
+    p_cmp.add_argument("run_b", type=Path)
+    p_cmp.add_argument("--out", type=Path, default=Path("out/compare.md"))
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -62,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
             args.out.write_text(text, encoding="utf-8")
         sys.stdout.write(text + "\n")
         return 0 if all(c["ok"] for c in checks) else 1
+    if args.command == "compare":
+        from copycat.replay.compare import write_compare
+
+        out = write_compare(args.run_a, args.run_b, args.out)
+        sys.stdout.write(f"對照表 → {out}\n")
+        return 0
     return 1
 
 

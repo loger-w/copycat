@@ -190,5 +190,6 @@ def test_run_import(tmp_path: Path) -> None:
     # manifest:control 的 T+1 1K 缺(2001/2025-09-11 沒有 1K)
     assert manifest["k1_days"] == 3
     assert manifest["tiger_events"] == 1 and manifest["control_events"] == 1
-    assert "2001,2025-09-11" in manifest["missing_t1_1k"]
+    missing_t1 = manifest["missing_t1_1k"]
+    assert isinstance(missing_t1, list) and "2001,2025-09-11" in missing_t1
     assert (data / "manifest.json").exists()
