@@ -33,9 +33,14 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   daily(adv20/一價到底/連板)、import_neigui(種子匯入)
 ├── engine/               #   lock_quality(LockTracker)、t1_open(T1Tracker)— 零 IO 狀態機
 ├── replay/               #   runner / report(summary.md)/ validate(golden gate)/ compare
+├── backtest/             #   T 日跟多隔日沖 GA 回測(2026-07-07):config(BacktestConfig 版本化)、
+│                         #   universe(LOCKABLE_GROUPS/權重)、features(neigui 同源 19 欄 + 位階族)、
+│                         #   simulate(悲觀成交/鎖死凍結)、search(GA/凍結規則)、stats(三道驗證)、
+│                         #   pipeline(features/search CLI 入口,outcome cache 三重失效)、report
+├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── strategy_config.py    #   全部策略門檻(版本化,configs/*.json 覆寫)
 ├── watchlist.py          #   可替換分點集合(watchlists/*.json)
-└── cli.py                #   python -m copycat <import-neigui|replay|validate|compare>
+└── cli.py                #   python -m copycat <import-neigui|replay|validate|compare|backfill-daily|tday-features|tday-search>
 data/(git-ignored)       # 匯入產物;out/(git-ignored)= replay 產物
 docs/superpowers/         # spec 與 implementation plan
 ```
@@ -53,6 +58,9 @@ docs/superpowers/         # spec 與 implementation plan
 | Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
 | Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
+| 日線回補(位階特徵前置,一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
+| T 日跟多回測:特徵 | `.venv\Scripts\python -m copycat tday-features` | repo root |
+| T 日跟多回測:搜索+報告 | `.venv\Scripts\python -m copycat tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
 
 完成前要過的 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過 four/five 兩份 replay)。venv = Python 3.13(`py -3.13 -m venv .venv`;`py` launcher 預設 3.14,別直接用)。目前無 frontend。
 
@@ -220,6 +228,12 @@ WebSocket / 即時 Stream 紀律:
 - **Touchance 下單仍要券商授權**:Touchance 本身只是抽象層,實際送單要再向所屬期貨商申請 API 交易權限。設計下單流程(§7)時要假設「即使 Touchance 通了,期貨商那邊還可能擋」,要分開錯誤碼:`TOUCHANCE_DOWN` vs `BROKER_REJECTED`。
 - **Touchance Windows app 常駐 = 部署綁定**:這個 repo 一啟動就被 Windows 綁住(scope 純 Touchance),Linux Docker 不在規劃內。寫 code 時放心用 ZMQ + Windows 路徑;若想跨 host 部署(Touchance host vs Python backend host),先實測 ZMQ 跨網段穩定度。
 
-### 實作後沉澱(空,踩坑後寫進來)
+### 實作後沉澱
+
+- **FinMind `TaiwanStockPrice` 無 data_id 全市場回傳含權證等**,一天 ~3 萬 rows;334 天真跑灌了 4.2M rows 進 prices.csv。`backfill_finmind` 已內建 known_ids 過濾(只收既有檔已知代碼,冷啟動空檔會 warning),別移除。(2026-07-07,Trigger:碰 backfill 或新增 FinMind dataset)
+- **urllib 的 SSL read timeout 以 `TimeoutError` 拋出,不包在 `URLError`**,retry 的 except 集合要含它,否則長跑批次中途炸。(2026-07-07,Trigger:寫任何 HTTP retry)
+- **prev_close 語意 = 當日 close − spread(除權息參考價),neigui 同源**;`DailyIndex.ref_prev_close` row-level 處理 spread 缺值(None → fallback 前日 close)。不要用「前一日 close」直接當參考前收。(2026-07-07,Trigger:碰漲停價/報酬率計算)
+- **驗證指令別接 `| tail`/`| head` 再看結果** — pipe 會把 exit code 換成 tail 的 0,本 feature 兩次踩到(ruff 紅著 commit、backfill 崩了顯示 exit 0)。要嘛先落檔再 tail,要嘛檢查 `$?` 前不接管線。(2026-07-07,Trigger:任何 gate 指令)
+- **neigui 種子事件池有截止邊界**(3055 的 2026-06-24 鎖板不在池內)— 用 replay/backtest 結論時記得資料端點,滾動重驗要先刷新種子池。(2026-07-07,Trigger:引用回測結論或排 Phase B)
 
 (寫入規則參考 trash-cmoney CLAUDE.md §8。)
