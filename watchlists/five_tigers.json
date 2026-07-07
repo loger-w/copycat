@@ -1,0 +1,10 @@
+{
+  "name": "five_tigers",
+  "members": [
+    {"broker_id": "9227", "name": "凱基城中", "role": "leader"},
+    {"broker_id": "5854", "name": "統一城中", "role": "follower"},
+    {"broker_id": "779c", "name": "國票敦北", "role": "follower"},
+    {"broker_id": "779Z", "name": "國票安和", "role": "follower"},
+    {"broker_id": "9600", "name": "富邦總部(訊號稀釋,輔助)", "role": "auxiliary"}
+  ]
+}
