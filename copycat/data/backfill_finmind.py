@@ -67,7 +67,8 @@ def _fetch_retry(fetch: FetchFn, date: str, token: str, sleep_s: float) -> list[
     for attempt in range(3):
         try:
             return fetch(date, token)
-        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        # TimeoutError:SSL read timeout 不包在 URLError 裡直接拋(2026-07-07 真跑踩到)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
             # 訊息只含日期與次數,不含 URL / token
             logger.warning(
                 "backfill %s 失敗(第 %d/3 次): %s", date, attempt + 1, type(exc).__name__

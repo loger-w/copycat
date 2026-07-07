@@ -103,6 +103,21 @@ def test_backfill_no_overwrite_existing_key(tmp_path: Path) -> None:
     assert len(rows) == 1 and rows[0]["volume_lots"] == "999.0"  # 既有鍵不覆寫
 
 
+def test_backfill_retries_socket_timeout(tmp_path: Path) -> None:
+    """SSL read timeout 以 TimeoutError 拋出(非 URLError)— retry 必須接住(真跑踩到)."""
+    _seed_prices(tmp_path, [])
+    attempts = {"n": 0}
+
+    def flaky(date: str, token: str) -> list[dict[str, object]]:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise TimeoutError("The read operation timed out")
+        return [_fm_row("2330", date)]
+
+    stats = run_backfill(tmp_path, "2024-06-03", "2024-06-03", "tok", fetch=flaky, sleep_s=0.0)
+    assert attempts["n"] == 3 and stats["added_rows"] == 1
+
+
 def test_backfill_retry_and_progress_kept(tmp_path: Path) -> None:
     _seed_prices(tmp_path, [])
     attempts: dict[str, int] = {}
