@@ -10,6 +10,7 @@ from pathlib import Path
 
 from copycat.data.daily import DailyIndex
 from copycat.data.store import read_bars
+from copycat.replay.report import write_summary
 from copycat.engine.lock_quality import LockTracker
 from copycat.engine.t1_open import EventContext, T1Tracker
 from copycat.strategy_config import StrategyConfig, load_config
@@ -118,5 +119,6 @@ def run_replay(
     (run_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    write_summary(run_dir)
     logger.info("replay 完成: %s", meta)
     return run_dir
