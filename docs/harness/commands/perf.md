@@ -2,7 +2,7 @@
 
 (若 $ARGUMENTS 為空,先問我要優化什麼、目標數字是多少再繼續。)
 
-共通鐵則套用 `~/.claude/CLAUDE.md`。自主模式契約見 `~/.claude/commands/goal.md`。
+共通鐵則套用 `~/.claude/CLAUDE.md`。自主模式契約見 `~/.claude/commands/auto.md`。
 
 ## 核心紀律
 **沒量測就不是 optimization。** 沒可量化目標 → 切到 `/refactor`。
@@ -14,6 +14,7 @@
    - **現況數字** + 量測方式 + 環境(例:LCP p95 = 3.2s / DevTools Performance / prod-like build)
    - **目標數字**:具體 threshold
    - **可重現量測步驟**(寫下來,unit + 指令,同 /feat 的量化 SC gate)
+   - Baseline 量測前呼叫 `auto-verify` 自動化節確認全綠(壞掉的 tree 量出的 baseline 無意義;對應該 skill「何時呼叫」的 /perf Phase 1 條目)
    - 沒可量化目標 → 停,「感覺慢」不算
 2. **Phase 2|Profile 找真實 bottleneck**:呼叫 `superpowers:systematic-debugging`(profile 假說同樣是假說 — 一次驗一個,用實驗證明是 **root bottleneck** 不是「順便也慢」的旁支),不准靠直覺猜:
    - Frontend:DevTools Performance / React Profiler / bundle analyzer
@@ -27,7 +28,7 @@
 4. **Phase 4|實作**:
    - 既有測試保持全綠(行為不變)
    - 加 **performance test / benchmark**(可重複跑的,入庫 — Done 條件之一)
-   - Cache → 特別小心 invalidation(cache 是最容易引入 bug 的優化)
+   - Cache 類策略:實作前 optimize-plan.md 該策略節必列 invalidation 三欄 — 失效時機 / bust 觸發點(誰在哪呼叫)/ 驗證測試名;缺任一欄不准實作(cache 是最容易引入 bug 的優化)
    - **一個策略一個 commit**(才能歸因哪個有效)
 5. **Phase 5|量測**(關鍵):
    - 跑跟 Phase 1 **完全一樣**的量測方式
@@ -43,16 +44,16 @@
 - 3 次量測都沒達標 → 套鐵則 F 回報三策略
 
 ## 自主模式建議
-✓ 強烈推薦:`/goal <metric 達標如 LCP < 2.5s> 且 既有測試全綠 /perf <metric>`
+✓ 強烈推薦:`/auto <metric 達標如 LCP < 2.5s> 且 既有測試全綠 /perf <metric>`
 
 ## Done
 Metric 達標 + 既有測試全綠 + benchmark 入庫 + 沒退化其他 metric + before/after 對照表。
-**全過後呼叫 `branch-lifecycle` 收尾節**(自動 merge 回 main + 刪分支),再做最終回報。
+**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → merge 確認 → auto-merge),再做最終回報。
 
 ## 禁止(本流程特有,共通禁止見 CLAUDE.md)
 - ❌ 沒量測就開始改(premature optimization)
 - ❌ 沒 profile 靠猜哪裡慢
-- ❌ Cache 沒想清楚 invalidation 就加 cache
+- ❌ optimize-plan.md 沒列 invalidation 三欄(失效時機 / bust 觸發點 / 驗證測試名)就加 cache
 - ❌ 為了 1% 改善加 100% 複雜度
 - ❌ 改完沒重新量測就說「應該更快了」
 - ❌ Dev 環境量到的數字當 production 用

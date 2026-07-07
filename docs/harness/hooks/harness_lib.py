@@ -27,7 +27,7 @@ PHASE_GATES: list[tuple[float, str]] = [
     (-1.0, "工作區隔離(branch + artifact 目錄 + state.json 初始化)"),
     (0.0, "Brainstorm:SC 可驗證性 gate(SC-N 編號 + 驗證方式 + 單位/量法)"),
     (1.0, "設計 spec review:無 P0 且 P1≤2(max 3 輪)"),
-    (2.0, "逐檔實作 spec(>15 檔切 condensed)"),
+    (2.0, "實作 spec(預設 condensed PLAN.md;L 級高風險檔才 per_file)"),
     (3.0, "TDD:[red] 先於 [green],commit 帶 tag"),
     (4.0, "自評 code-review:雙焦點 + 單輪退場條件"),
     (5.0, "自動化驗證:auto-verify 全綠"),

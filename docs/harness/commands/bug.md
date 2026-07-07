@@ -2,7 +2,7 @@
 
 (若 $ARGUMENTS 為空,先問我 bug 描述再繼續。)
 
-共通鐵則套用 `~/.claude/CLAUDE.md`。自主模式契約見 `~/.claude/commands/goal.md`。
+共通鐵則套用 `~/.claude/CLAUDE.md`。自主模式契約見 `~/.claude/commands/auto.md`。
 
 ## 核心紀律
 **穩定重現 → 紅測試 → 修 root cause → 反向驗證**。沒重現先別動 code。
@@ -17,7 +17,7 @@
 5. **Phase 5|Blast radius**:grep 同函式 / 變數所有 caller(含動態用法 / template string / reflection / 外部 caller),列受影響功能各跑 sanity check
 6. **Phase 6|自動化驗證**:呼叫 `auto-verify` skill(驗證指令來源以該 skill 為準)全綠
 7. **Phase 7|真實環境驗證**:dev server 重走 Phase 1 重現步驟,**現在不會發生**;抽 2 個沒改的相關功能確認沒打壞;Console 0 errors
-8. **Phase 8|反向驗證**(關鍵):改動 `git stash` → Phase 3 紅測試該紅回來 → unstash → 綠回去。**stash 後測試還是綠 → 測試沒抓到 bug,回 Phase 3 重寫測試**(計入鐵則 F 次數)
+8. **Phase 8|反向驗證**(關鍵):暫時還原 Phase 4 修復讓 bug 重現 — 修復已 commit(本流程預設,Phase 4 有 commit)→ `git revert --no-commit <fix-sha>`;尚未 commit → `git stash`。Phase 3 紅測試**該紅回來** → 還原修復(`git revert --abort` / `git stash pop`)→ 綠回去。**還原修復後測試還是綠 → 測試沒抓到 bug,回 Phase 3 重寫測試**(計入鐵則 F 次數)
 9. **Phase 9|留尾巴**:同類結構的 code 可能有同樣問題?寫進 `docs/next-time.md`(不在本次 fix 處理)
 
 ## 失敗 routing
@@ -26,11 +26,11 @@
 - Blast radius 抽樣紅 → 改錯方向,回 Phase 2
 
 ## 自主模式建議
-✓ 強烈推薦:`/goal pytest 全綠 且 Phase 3 紅測試轉綠 且 regression 抽樣綠 /bug <desc>`
+✓ 強烈推薦:`/auto pytest 全綠 且 Phase 3 紅測試轉綠 且 regression 抽樣綠 /bug <desc>`
 
 ## Done
 紅測試綠 + 既有測試保持綠 + regression 抽樣綠 + 反向驗證通過。
-**全過後呼叫 `branch-lifecycle` 收尾節**(自動 merge 回 main + 刪分支),再做最終回報。
+**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → merge 確認 → auto-merge),再做最終回報。
 
 ## 禁止(本流程特有,共通禁止見 CLAUDE.md)
 - ❌ 「無法重現,姑且修一下」

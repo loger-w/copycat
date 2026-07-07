@@ -3,7 +3,7 @@ name: auto-verify
 description: 跑「自動化驗證指令(tsc / vitest / pytest / ruff / build)」與「真實環境驗證(dev server + DevTools MCP + 截圖 / curl / CLI)」。在 /feat /bug /mod /refactor /perf 流程的「完成前 gate」階段呼叫,確認改動沒打壞既有測試與 build。先檢查專案形狀再選對應驗證指令來源,不硬跑 `cd frontend/` 撞牆。本 skill 是形狀偵測表與驗證方式表的唯一 source of truth(command 檔不重抄)。
 metadata:
   author: user
-  version: "2.1.0"
+  version: "2.2.0"
 ---
 
 # Auto-Verify
@@ -18,10 +18,12 @@ metadata:
 | 1 | `npx tsc -b` | `frontend/` | 0 errors |
 | 2 | `npx vitest run` | `frontend/` | 全綠 |
 | 3 | `python -m pytest -v` | `backend/` | 全綠 |
-| 4 | `ruff check . && ruff check --fix .` | `backend/` | 0 issues |
+| 4 | `ruff check .` | `backend/` | 0 issues |
 | 5 | `npm run build` | `frontend/` | 成功 |
 
 **指令組來源優先序**:專案有 `.claude/harness.json` → 自動化驗證以其 `verify` 陣列為準(與 git pre-push hook 共用,單一 source of truth);沒有 → 用本 skill 的形狀對應表。
+
+**E2E 是 harness.json 之外的條件 gate**(刻意不入 verify 陣列 — 太慢,pre-push 不跑):有 Playwright e2e 的專案,verify 陣列全綠**不等於自動化驗證完成** — 還要依專案 e2e 判準(neigui:skill `e2e-conventions` 判準表)判定本次改動是否必跑 e2e;屬豁免類型 → commit message 註明(如 `[no-e2e: internal refactor]`)。
 
 任一步紅 → 停下修,套鐵則 F「失敗處理 3 次上限」(見 `~/.claude/CLAUDE.md`)。
 

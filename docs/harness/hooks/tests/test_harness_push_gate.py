@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).parent.parent / "harness-push-gate.py"
 
 
@@ -68,3 +70,37 @@ def test_malformed_stdin_fail_closed_asks():
         encoding="utf-8",
     )
     assert json.loads(res.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("prefix", ["feat", "fix", "mod", "refactor", "perf"])
+def test_flow_branch_push_allowed(prefix):
+    assert (
+        ask_decision(run_hook(f"git push -u origin {prefix}/pr-lifecycle")) == "allow"
+    )
+
+
+def test_flow_branch_push_with_force_asks():
+    assert ask_decision(run_hook("git push -u origin feat/x --force")) == "ask"
+
+
+def test_non_flow_prefix_push_asks():
+    assert ask_decision(run_hook("git push -u origin experiment/x")) == "ask"
+
+
+def test_bare_push_asks():
+    assert ask_decision(run_hook("git push")) == "ask"
+
+
+def test_compound_flow_branch_push_asks():
+    assert ask_decision(run_hook("git commit -m x; git push -u origin feat/x")) == "ask"
+
+
+def test_uppercase_slug_asks():
+    assert ask_decision(run_hook("git push -u origin feat/X")) == "ask"
+
+
+def test_merge_reason_mentions_confirmation_point():
+    res = run_hook("gh pr merge 12 --rebase")
+    out = json.loads(res.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask"
+    assert "確認點" in out["permissionDecisionReason"]

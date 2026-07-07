@@ -2,13 +2,14 @@
 
 (若 $ARGUMENTS 為空,先問我要做什麼功能再繼續。)
 
-共通鐵則套用 `~/.claude/CLAUDE.md`。自主模式契約見 `~/.claude/commands/goal.md`(下稱 /goal)。
+共通鐵則套用 `~/.claude/CLAUDE.md`。自主模式契約見 `~/.claude/commands/auto.md`(下稱 /auto)。
 
 ## 核心原則(全程適用)
 
 - **Artifacts 釘檔**:每 phase 產物寫到 `.claude/feat/<slug>/`,跨 session 可 resume(state.json schema 見尾)。**此為 user preference,顯式覆寫** `superpowers:brainstorming` / `superpowers:writing-plans` 的 `docs/superpowers/` 落點與「設計文件先 commit」要求 — artifact 統一釘專案內,Phase 8 才 commit。
 - **Receiving 紀律**:所有 RECEIVING feedback(sub-agent JSON / `/code-review` finding / 環境問題)一律過 `superpowers:receiving-code-review` 分類 `accepted` / `rejected_with_reason` / `needs_more_context`,絕不照單全收。
 - **Review 輪數上限 3**:**顯式覆寫** `superpowers:subagent-driven-development` 與 `superpowers:requesting-code-review` 的「repeat until approved」無上限迴圈 — 理由:鐵則 G + token 經濟。**Tech pivot(換架構重做)想重置計數 → 必須先向 user 回報並取得批准**,不准自行續跑超限。
+- **P1 帶額度退場**:Phase 1/2 退出條件「無 P0 且 P1 ≤ 2(入 Known Risks)」與 Phase 4 的單輪退場條件,**顯式覆寫**鐵則 G 的退出條件「無 P0/P1」— 理由:餘 P1 已具名寫入 Known Risks 落檔追蹤,非默默放掉。
 - **失敗類型分流**:Phase 7 失敗不是無腦回 Phase 3,依失敗類型(goal 漏 / design 漏 / impl 漏 / test 漏)回對應 phase。
 - **跨 phase meta-cycle**:同 SC 單 phase 回退 ≥ 2 次或跨 phase 累計 ≥ 3 次 → 升級回 Phase 0/1,計數寫 `state.json.sc_cycle_counts`(Phase -1 豁免)。
 - **state.json 為唯一資料源**:`brainstorm.md` 對應 SC 旁只標 `cycle-count: [see state.json]`。**每完成一個 phase 立即回寫 `current_phase` / `completed_phases`**(2026-07-06 審計:9 個 feature 有 3 個 state 與 artifact 不同步)。
@@ -18,19 +19,19 @@
 
 1. 呼叫 `branch-lifecycle` 開工節:status 乾淨 + 主線同步 + 從 $ARGUMENTS 推導 kebab-case `<slug>` + `git switch -c feat/<slug>`(monorepo / 長隔離 → 改呼叫 `superpowers:using-git-worktrees`,worktree 路徑寫 state.json)
 2. 建 `.claude/feat/<slug>/` + `echo ".claude/feat/<slug>/" >> .git/info/exclude`(Phase 8 再拿掉)
-3. 初始化 state.json(schema 見尾,必含 `sc_cycle_counts._unscoped` 骨架),記錄 `start_sha`
+3. 初始化 state.json(schema 見尾;`sc_cycle_counts` 只建 `_unscoped`,SC-N 條目**稀疏** — 首次回退發生時才建),記錄 `start_sha`
 
 ## Phase 0:Brainstorm + 可驗證性 gate + S/M/L 分流
 
 1. 呼叫 `superpowers:brainstorming`,**遵循 skill 的對話流程**(一次一問、2-3 方案、分節確認)。以下 2-4 是本流程的**加值 gate**,疊在 skill 之上,不取代其流程。
-2. **SC gate**:每條成功條件編號 `SC-1, SC-2…`,強制附「驗證方式」一行(指令 / 測試名 / 截圖步驟)。**量化 SC(size / time / count)必附 measurement unit + 量法指令** — `size ≤ 50 KB` 不合格,要寫 `size ≤ 50 KB(gzip 後;量法 curl --compressed | wc -c)`。寫不出 → 該條不合格(gate 不是建議)。同步在 state.json `sc_cycle_counts` 補 SC-N 子物件。
+2. **SC gate**:每條成功條件編號 `SC-1, SC-2…`,強制附「驗證方式」一行(指令 / 測試名 / 截圖步驟)。**量化 SC(size / time / count)必附 measurement unit + 量法指令** — `size ≤ 50 KB` 不合格,要寫 `size ≤ 50 KB(gzip 後;量法 curl --compressed | wc -c)`。寫不出 → 該條不合格(gate 不是建議)。
 3. 寫入 `brainstorm.md`(後續修改必標 `[amendment YYYY-MM-DD: <原因>]`)+ ≥ 3 edge cases + out of scope。
 4. **S/M/L 分流**(寫 `state.json.scope`):
-   - **S**:單檔 / 無新資料流 / 無新依賴 / 不在 hot path、安全邊界、共用 util、對外 API → 跳 Phase 1 文件化,Phase 2 0 輪 review
+   - **S**:單檔 / 無新資料流 / 無新依賴 / 不在 hot path、安全邊界、共用 util、對外 API → 跳 Phase 1 文件化,Phase 2 0 輪 review(hot path 判準:有 profile 證據或專案文件 / skill 點名的路徑才算;無證據視為不在)
    - **M**:2-4 檔 → Phase 1/2 各 1 輪 review
    - **L**:≥ 5 檔、跨前後端 / 跨服務、或鑑權 / 加密 / 金流 / 對外 API 任何單檔改動 → 完整流程,Phase 1/2 各 max 3 輪
    - **風險升級**:碰到高風險面無視檔案數一律升 L
-5. 等使用者確認再進 Phase 1(自主模式的替代確認條件見 goal.md)
+5. 等使用者確認再進 Phase 1(自主模式的替代確認條件見 auto.md)
 
 ## Phase 1:設計 spec(L: max 3 輪;M: 1 輪;S: 跳過)
 
@@ -43,8 +44,9 @@
 
 ## Phase 2:Implementation spec(L: max 3 輪;M: 1 輪;S: 簡化版)
 
-1. **模式選擇**(寫 `state.json.phase_2_mode`):預估改動檔數 ≤ 15 → `per_file`(逐檔 `implementation/<file>.md`:signature / 輸入輸出範例 / 失敗測試清單對應 SC-N);> 15 → `condensed_grid`(單一 `implementation/PLAN.md` grid,Phase 3 落地時 ad-hoc 對齊)
-2. 多檔用 `superpowers:dispatching-parallel-agents` fan-out,每檔 dispatch 一個 `impl-spec-reviewer`(傳該檔 + design.md 路徑;criteria / JSON schema / {file, section} 雙欄 location 固化在 agent 定義)
+1. **模式選擇**(寫 `state.json.phase_2_mode`):**預設 `condensed`** — 單一 `implementation/PLAN.md`,每檔一節 3-5 行(動什麼 / 新增或變更的 signature / 失敗測試清單對應 SC-N)。`per_file`(逐檔 `implementation/<file>.md`:signature / 輸入輸出範例 / 失敗測試清單)**降為 opt-in**:僅 L 級且該檔屬高風險面(安全邊界 / 共用 util / 對外 API / hot path)才逐檔寫(2026-07-06 實證:per-file MD 零回讀、condensed 走完全程,token 成本差一個量級)
+   - **Phase 3 對齊規則**(取代舊「ad-hoc 對齊」):落地發現 PLAN.md 該節粒度不足 → 就地補 signature 細節並標 `[phase-3 補註]`,不回頭重跑 review;介面級衝突仍走 Phase 3 失敗回退表
+2. Review dispatch:`condensed` → 對 PLAN.md dispatch **單一** `impl-spec-reviewer`(逐節視同逐檔套 criteria);`per_file` → 用 `superpowers:dispatching-parallel-agents` fan-out 每檔一個(傳該檔 + design.md 路徑;criteria / JSON schema / {file, section} 雙欄 location 固化在 agent 定義)
 3. Receiving 分類同 Phase 1;退出條件:全檔無 P0 且 P1 ≤ 2(進 Known Risks)→ reset 進 Phase 3
 4. 3 輪上限後仍有 P0 → [1] 縮 scope 回 Phase 0 / [2] implementation 改寫(finding 暗示問題在 design → escalate 回 Phase 1,計次歸零需 user 批准)/ [3] 接受寫入 Known Risks,Phase 7 表格 regression 欄必涵蓋
 
@@ -60,7 +62,7 @@
    - 紅測試:`git add <測試檔>`(不要 `-A`)+ `🟢 test(<area>): add failing test for SC-N [red]`
    - 實作到綠:`git add <實作檔>` + `🟢 feat(<area>): implement SC-N [green]`(body 註 `red→green for <red-sha>`)
    - Refactor(再跑測試綠才 commit):`🔵 refactor(<area>): ... [refactor]`
-   - **goal_efficiency_mode**(見 goal.md):可改 wave batch,單 `[waveN]` tag,commit body 列該 wave 涵蓋的 SC-N
+   - **goal_efficiency_mode**(見 auto.md):可改 wave batch,單 `[waveN]` tag,commit body 列該 wave 涵蓋的 SC-N
 3. 新發現 case:先回 Phase 2 文件追加(只追加不重跑 review)再寫紅。**test-infra 例外**:selector / matcher / jsdom 行為修正(非新 SC 行為)可同階段直接 patch test 檔,commit body 註 `test-infra-fix: <reason>`,不回 Phase 2
 4. **失敗回退**(禁止「就地改 code 不更新上游文件」):(a) 介面 / 資料流無法實作 → 回 Phase 1(快速路徑:只 review 變更段落)/(b) signature 細節錯 → 回 Phase 2 /(c) edge case 沒列 → 回 Phase 0 補 SC
 5. **next-time.md 鉤子**:每次 commit 前 cat `docs/next-time.md`,順手改動衝動寫進去或拆獨立 commit。**Subagent 模式下 main agent 在每 task dispatch 前代查**,有相關條目才塞進 dispatch prompt(fresh context 的 subagent 不知道檔案存在)
@@ -68,11 +70,13 @@
 
 ## Phase 4:自評 — code-review 雙焦點 → receiving → 依層級回對應 phase
 
-1. 跑 `/code-review`,**雙焦點**:(a) implementation bug;(b) **missing-from-spec** — 回看 design.md 交叉確認「spec 機制在 impl 有沒有 spec 沒提到的副作用」。寫 `code-review-round-<N>.json`
+1. 跑 `/code-review`(**預設 medium 檔位**;xhigh 全量掃描保留給 user 顯式要求 — 2026-07-06 實證:xhigh 52 候選中真 P1 僅 1 條),**雙焦點**:(a) implementation bug;(b) **missing-from-spec** — 回看 design.md 交叉確認「spec 機制在 impl 有沒有 spec 沒提到的副作用」。寫 `code-review-round-<N>.json`
+   - **輸出契約**:round JSON 只逐條展開 P0/P1;P2 慣例 / 風格類彙總為 `p2_summary`(計數 + 主題一行),**不逐條 receiving**。例外:P2 中疑似行為級(資料正確性 / 時序 / 邊界)照常展開
 2. 呼叫 `superpowers:receiving-code-review` 對每條 finding 分類。**Verify / skeptic 階段前,先摘 design.md changelog 的 accepted findings + rationale 注入 verify prompt**(避免 refute 事後合理的設計收窄)。Lens 經驗值:mature codebase 上 test_coverage lens 命中率最高,correctness / consistency 易產生被 refute 的風格建議 — lens prompt 要角度真差異化
 3. accepted 依層級回對應 phase:spec 漏 → Phase 1/2 改文件 / impl 漏 → Phase 3 / test 漏 → Phase 3 紅先行(鐵則 C)。**Test-gap finding 補 lock test**:鎖「已正確行為」天生無紅 → 走 mutation 抽驗(手動改壞 → lock test 紅 → 還原 → 綠),commit 用 `[lock]` tag + body 註 `mutation-verified`
 4. **退場條件**:round 1 accepted ≤ 5 且無 P0 且 fix 後自動化測試全綠 → 可單輪退場;accepted > 5 或有 P0 → 強制 round 2 verify。loop max 3 輪
 5. 完成後跑 **inline 完工自查 checklist**(不呼叫 requesting-code-review — 該 skill 是 dispatch reviewer 流程,不是自查):測試齊全 / commit 分類分明 / 文件同步 / known-risk 已標記
+6. 自評收斂後把當下 HEAD sha 寫入 state.json `self_review_head`(收尾節 review 增量判準:`self_review_head..HEAD` 非空才補增量 review)
 
 ## Phase 5:自動化驗證
 
@@ -84,10 +88,7 @@
 
 1. 呼叫 `auto-verify` skill 的「真實環境驗證」節(feature shape 分流表以 skill 為準)
 2. **Subsumed 判定**:feature shape = web 且該 SC 已有 Playwright e2e 覆蓋(Phase 5 跑過真 backend + 真 browser)→ 該 SC 標 `subsumed by Phase 5`,不重複 DevTools MCP 截圖
-3. **Infra_fail 標準 case**(不算 SC 回退,`_unscoped.phase_6 += 1` + state.json 記 `phase_6_blocked_reason`):
-   - 外部 API token 過期(JWT exp 是日常事件)
-   - Browser MCP 連不上 → fallback A:`--isolated` profile 重試;fallback B:curl + JSON shape check 證 backend SC,UI SC 標「RTL 測試涵蓋 logic,視覺 next session 補」寫進 Phase 7 evidence 欄
-   - 外部服務 503 / dev server boot fail
+3. **Infra_fail 標準 case 與 fallback 路徑以 `auto-verify` skill 真實環境節為準**(token 過期 / browser MCP 斷線 / 外部 503,本檔不重抄)。本流程只補記帳規則:不算 SC 回退,`_unscoped.phase_6 += 1` + state.json 記 `phase_6_blocked_reason`;fallback 的 UI SC 註記(「RTL 涵蓋 logic,視覺 next session 補」)寫進 Phase 7 evidence 欄
 4. **失敗回退**(依 cycle-count rule 記數):(a) 情境沒列 SC → 回 Phase 0 補 SC /(b) SC 有列 design 沒兼顧 → 回 Phase 1 /(c) 測試漏 → 回 Phase 3 先寫紅
 5. 證據放 `evidence/`,檔名含 SC-N(例:`SC-2_login-empty-input.png`);每輪輸出 `real-env-verification-round-<N>.json`
 
@@ -106,21 +107,18 @@
 
 ## Phase 8:整合與收尾
 
-1. 收尾路徑:**預設走 `branch-lifecycle` 收尾節**(自動 local merge + 刪分支)— **顯式覆寫** `superpowers:finishing-a-development-branch` 的三選一互動,理由:solo 無 reviewer,user 2026-07-06 拍板自動化。user 事先指定 PR → 走收尾節 PR 路徑。執行順序:步驟 2 tag 驗證 → 步驟 3 artifact commit → 收尾節 merge
-2. **Commit tag 機械化驗證**(從 state.json 取 START_SHA),四類 grep:
+1. 收尾路徑:**預設走 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → merge 確認 → auto-merge;2026-07-07 拍板)— **顯式覆寫** `superpowers:finishing-a-development-branch` 的三選一互動,理由:solo 無 reviewer,user 拍板自動化。執行順序:步驟 2 tag 驗證 → 步驟 3 artifact commit → 收尾節
+2. **Commit tag 機械化驗證(script 化,2026-07-06)**:
    ```bash
-   git log $START_SHA..HEAD --grep='\[red\]' --oneline       # 標準 TDD 流須 > 0
-   git log $START_SHA..HEAD --grep='\[green\]' --oneline     # 配對規則見下
-   git log $START_SHA..HEAD --grep='\[refactor\]' --oneline  # 可為 0
-   git log $START_SHA..HEAD --grep='\[lock\]' --oneline      # 可為 0
+   python ~/.claude/hooks/check_feat_tags.py --state .claude/feat/<slug>/state.json
    ```
-   **配對規則**:每個 `[green]` 對應一個更早的 `[red]`,**豁免**:(a) `[lock]` commit(body 含 `mutation-verified`)不需配對;(b) 🟢 + body 含 `Phase 6 real-env finding` 的 design-amend commit 不需配對;(c) `goal_efficiency_mode` 下改驗 `[waveN]` 序列 — 每 wave body 列涵蓋 SC-N,全 SC 有 wave 歸屬即過。配對失敗且無豁免 → 回 Phase 3 rebase commit message(不增計數)。emoji 三類:🟢 新功能 / 🔵 純重構 / 🔴 行為改動(/feat 純新功能 🔴 可為 0)
+   四類 tag 掃描 / `[green]`→`[red]` 配對 / 豁免((a) `[lock]`+`mutation-verified`、(b) `Phase 6 real-env finding` design-amend)/ wave 模式判定**固化在 script**(規則本檔不重抄;script 有 pytest 護住)。**wave 模式的「全 SC 有 wave 歸屬」屬半語意判定** — script 只列 wave→SC 對映,由 main agent 對照 brainstorm.md 核。FAIL 且無豁免 → 回 Phase 3 rebase commit message(不增計數)。emoji 三類:🟢 新功能 / 🔵 純重構 / 🔴 行為改動(/feat 純新功能 🔴 可為 0)
 3. **Artifact commit**:手動編輯 `.git/info/exclude` 移除 `.claude/feat/<slug>/` 該行(用編輯器 / `grep -v` 重寫,**不用花式 sed delimiter**),然後:
    ```bash
    git add ".claude/feat/<slug>/" && git commit -m "chore(feat-<slug>): artifacts"
    ```
    不允許 `git add -f` 短路(會掩蓋 exclude 是否真清除)
-4. 非預設路徑(user 指定才走):**PR**(`/code-review --comment` 落 Phase 4 已分類 findings + 收尾節 PR 路徑)/ **保留 branch**(state.json 標 `paused: <reason>`,不 merge)。merge 規則(一律 ff)在 branch-lifecycle,不重抄
+4. 非預設路徑(user 指定才走):**保留 branch**(state.json 標 `paused: <reason>`,不 push 不 merge)。PR 已是預設收尾;merge 規則在 branch-lifecycle,不重抄
 5. Worktree 清理(若有):`git worktree remove <path>` + `git branch -d feat/<slug>`
 
 ## Phase 8.5:沉澱(閉環)
@@ -160,20 +158,19 @@
   "blockers": [], "phase_6_blocked_reason": null,
   "scope_overrides": { "goal_efficiency_mode": false },
   "last_updated": "<ISO>", "project_shape": null,
-  "last_commit_sha": null, "final_merge_sha": null,
+  "last_commit_sha": null, "final_merge_sha": null, "self_review_head": null,
   "sc_cycle_counts": {
-    "SC-1": { "phase_1": 0, "phase_2": 0, "phase_3": 0, "phase_4": 0, "phase_5": 0, "phase_6": 0, "phase_7": 0, "total": 0 },
     "_unscoped": { "phase_1": 0, "phase_2": 0, "phase_3": 0, "phase_4": 0, "phase_5": 0, "phase_6": 0, "phase_7": 0, "total": 0 }
   },
   "paused": null }
 ```
-(`sc_cycle_counts.SC-N.phase_7` 是「Phase 7 判定失敗後回退到該 phase」的記錄欄;Phase 7 自身不 increment `phase_7` — 該欄只在回退目標是 Phase 7 重驗時使用。)
+(`sc_cycle_counts` **稀疏記帳**(2026-07-06,實證多數 feature 全零):初始化只建 `_unscoped`;`SC-N` 條目在該 SC **首次回退時才建**,且只含實際發生過的 phase 欄 + `total` — 零回退的 SC 不出現在 state。`phase_7` 欄是「Phase 7 判定失敗後回退到該 phase」的記錄欄;Phase 7 自身不 increment。meta-cycle 升級規則(同 SC ≥2 / 跨 phase ≥3)讀法不變。)
 
 ## 自主模式建議
-- 完整契約見 `~/.claude/commands/goal.md`
-- **S 級**想全自動:`/goal Phase 8.5 完成 /feat <desc>`
-- 保留 PR 決策、中段自動:`/goal Phase 7 結構化表格全綠 /feat <desc>`
-- **L 級不建議全自動**(Phase 0 對齊 + Phase 8 PR 決策價值高)
+- 完整契約見 `~/.claude/commands/auto.md`
+- **S 級**想全自動:`/auto Phase 8.5 完成 /feat <desc>`
+- 中段自動(merge 確認天然停在收尾):`/auto Phase 7 結構化表格全綠 /feat <desc>`
+- **L 級不建議全自動**(Phase 0 對齊 + 收尾 merge 確認前人工試用價值高)
 
 ## Done
 **Phase 8 完成 + Phase 8.5 (A)(B)(C) 都處理**才算結束:Phase 7 表格全綠 / Phase 8 tag 驗證過 + artifact commit / 沉澱寫入 + GC pass + meta-review 檢查,缺一不可。

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """PreToolUse hook: block destructive ops + secrets exposure (customized).
 
-Triggers on Bash. Coexists with block-no-verify.py — both run, either can block.
+Triggers on Bash + PowerShell(2026-07-07:PowerShell 工具原是繞過面,補齊
+matcher 與 PS 專屬 pattern)。Coexists with block-no-verify.py — both run,
+either can block.
 
 Blocks:
 - rm -rf on dangerous targets (/, ~, $HOME, *, .git, system dirs)
@@ -105,6 +107,23 @@ REGEX_BLOCKS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\bchmod\s+(?:-[A-Za-z]+\s+)*(?:777|a\+rwx)\b"),
         "chmod 777 / a+rwx makes file world-writable — security risk",
     ),
+    # --- PowerShell: reading secrets (Get-Content / gc / type / Select-String) ---
+    # PS cmdlet 大小寫不敏感;`type` 只在後面直接接 secrets 檔時才攔。
+    (
+        re.compile(
+            rf"(?i)\b(?:Get-Content|gc|type|Select-String|sls)\s+"
+            rf"(?:-\w+(?::\S+)?\s+)*[^|;&]*?{SECRET_FILE}\b"
+        ),
+        "reading a secrets file (PowerShell) leaks credentials into the conversation context",
+    ),
+    # --- PowerShell: writing into secrets (Set-Content / Add-Content / Out-File) ---
+    (
+        re.compile(
+            rf"(?i)\b(?:Set-Content|Add-Content|Out-File|sc|ac)\s+"
+            rf"(?:-\w+(?::\S+)?\s+)*(?:[^\s|;&]+[/\\])?{SECRET_FILE}\b"
+        ),
+        "writing into secrets file (PowerShell) may overwrite credentials",
+    ),
 ]
 
 
@@ -133,7 +152,7 @@ def main() -> int:
         return 0
 
     tool_name = payload.get("tool_name") or payload.get("toolName") or ""
-    if tool_name != "Bash":
+    if tool_name not in ("Bash", "PowerShell"):
         return 0
 
     tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
