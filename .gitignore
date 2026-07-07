@@ -10,3 +10,4 @@ spikes/TCPY/
 spikes/catalog_dump/
 spikes/.ruff_cache/
 .claude/
+.env
