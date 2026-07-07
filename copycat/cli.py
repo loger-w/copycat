@@ -24,6 +24,12 @@ def main(argv: list[str] | None = None) -> int:
     p_imp.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
     p_imp.add_argument("--data-dir", type=Path, default=Path("data"))
 
+    p_rep = sub.add_parser("replay", help="對事件清單跑評分引擎")
+    p_rep.add_argument("--watchlist", type=Path, default=Path("watchlists/four_tigers.json"))
+    p_rep.add_argument("--config", type=Path, default=None)
+    p_rep.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_rep.add_argument("--out", type=Path, default=Path("out"))
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -35,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
             f"虎事件 {manifest['tiger_events']}、對照 {manifest['control_events']}、"
             f"缺 T 日 1K {len(missing_t)} 筆、缺 T+1 1K {len(missing_t1)} 筆\n"
         )
+        return 0
+    if args.command == "replay":
+        from copycat.replay.runner import run_replay
+
+        run_dir = run_replay(args.data_dir, args.watchlist, args.out, args.config)
+        sys.stdout.write(f"replay 完成 → {run_dir}\n")
         return 0
     return 1
 
