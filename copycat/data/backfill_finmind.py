@@ -122,11 +122,14 @@ def run_backfill(
     prices_path = data_dir / "daily" / "prices.csv"
     manifest_path = data_dir / "daily" / "backfill_manifest.json"
     rows = _read_existing(prices_path)
+    # 只收既有檔已知的 stock_id(FinMind 全市場回傳含權證等,2026-07-07 真跑 4.2M rows 教訓);
+    # 既有檔為空 → 不過濾(冷啟動)
+    known_ids = {sid for sid, _ in rows}
     done: set[str] = set()
     if manifest_path.exists():
         done = set(json.loads(manifest_path.read_text(encoding="utf-8"))["done_dates"])
 
-    fetched = skipped = added = 0
+    fetched = skipped = added = filtered = 0
     for day in _dates(start, end):
         if day in done:
             skipped += 1
@@ -136,6 +139,9 @@ def run_backfill(
         for raw in raw_rows:
             mapped = _map_row(raw)
             if mapped is None:
+                continue
+            if known_ids and mapped["stock_id"] not in known_ids:
+                filtered += 1
                 continue
             key = (mapped["stock_id"], mapped["date"])
             if key not in rows:  # 既有鍵不覆寫
@@ -150,5 +156,16 @@ def run_backfill(
         os.replace(tmp, manifest_path)
         if sleep_s:
             time.sleep(sleep_s)
-    logger.info("backfill 完成: fetched=%d skipped=%d added=%d", fetched, skipped, added)
-    return {"fetched_days": fetched, "skipped_days": skipped, "added_rows": added}
+    logger.info(
+        "backfill 完成: fetched=%d skipped=%d added=%d filtered=%d",
+        fetched,
+        skipped,
+        added,
+        filtered,
+    )
+    return {
+        "fetched_days": fetched,
+        "skipped_days": skipped,
+        "added_rows": added,
+        "filtered_rows": filtered,
+    }

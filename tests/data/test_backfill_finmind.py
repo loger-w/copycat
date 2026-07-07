@@ -59,23 +59,31 @@ def test_map_row_units() -> None:
 
 
 def test_backfill_merge_and_manifest(tmp_path: Path) -> None:
+    # [assertion 事前標記該變 2026-07-07] backfill 改為只收既有檔已知的 stock_id
+    # (真跑踩到:FinMind 全市場含權證 → 4.2M rows 撐爆 DailyIndex)→ 種子加入 2330
     _seed_prices(
         tmp_path,
-        [dict(zip(_FIELDS, ["1104", "2025-05-02", "29", "30", "29", "30", "1", "150.0"]))],
+        [
+            dict(zip(_FIELDS, ["1104", "2025-05-02", "29", "30", "29", "30", "1", "150.0"])),
+            dict(zip(_FIELDS, ["2330", "2025-05-02", "900", "910", "890", "900", "1", "30000"])),
+        ],
     )
     calls: list[str] = []
 
     def fake_fetch(date: str, token: str) -> list[dict[str, object]]:
         calls.append(date)
-        return [_fm_row("2330", date)] if date == "2024-06-03" else []
+        # 2330 已知 → 收;9999U(權證類未知代碼)→ 過濾
+        return [_fm_row("2330", date), _fm_row("9999U", date)] if date == "2024-06-03" else []
 
     stats = run_backfill(tmp_path, "2024-06-03", "2024-06-04", "tok", fetch=fake_fetch, sleep_s=0.0)
     assert stats["fetched_days"] == 2 and stats["added_rows"] == 1
+    assert stats["filtered_rows"] == 1  # 未知代碼被過濾且有計數(no silent caps)
     rows = _read_prices(tmp_path)
     # sorted (stock_id, date),舊 row 保留、新 row 併入、spread 欄在
     assert [(r["stock_id"], r["date"]) for r in rows] == [
         ("1104", "2025-05-02"),
         ("2330", "2024-06-03"),
+        ("2330", "2025-05-02"),
     ]
     assert rows[1]["volume_lots"] == "25000.0" and rows[1]["spread"] == "10.0"
     manifest = json.loads((tmp_path / "daily" / "backfill_manifest.json").read_text("utf-8"))
