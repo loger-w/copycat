@@ -86,12 +86,13 @@ copycat/                      # Python 3.13 package(repo root,pyproject.toml)
 
 原則:每個訊號直接對應 evidence 已驗證的量;輸出「結構化訊號 + 規則分級」,無黑箱總分。門檻值以下皆為 config 預設值。
 
-### 4a. 前置定義(tick 判定,1K 輔助)
+### 4a. 前置定義(1K 判定;與 neigui 研究腳本 `extract_features.py` 對齊,golden 才能對數)
 
-- **漲停價** = 前收 ×1.10 依 tick 檔位進位(前收由日線資料帶入)
-- **鎖死** = 某 tick 起成交價 = 漲停價,延續到收盤或下一次打開
-- **打開** = 鎖死後出現成交價 < 漲停價;段數 = 打開次數
-- **首鎖時刻** = 第一段鎖死區間起點
+- **MVP 訊號全部 1K-based**:對照組沒有 tick(2007 個 tick 檔皆為虎事件),且 evidence golden 表主要由 1K 特徵算出。tick 級訊號(秒級鎖死時刻、tick 內外盤、掃單分佈)列為後續擴充。
+- **漲停價** = 事件清單自帶 `limitup_close`(T 日鎖死收盤價);T+1 觸停/漲停開判定閾值 = 前日漲停 ×1.095(沿研究慣例,tick 進位下界)。前收 ×1.10 檔位進位函式不做(YAGNI,盤中 live 才需要)。
+- **at_limit** = bar close ≥ 漲停價 − ε;**touch** = bar high ≥ 漲停價 − ε
+- **鎖死(final lock)** = 最後一段連續 at_limit 延伸到收盤的起點 bar(與研究定義一致;非第一段)
+- **打開次數** = first_touch 之後「離開 at_limit」的段數
 
 ### 4b. Phase 2 — 鎖板品質(T 日)
 
@@ -99,7 +100,7 @@ copycat/                      # Python 3.13 package(repo root,pyproject.toml)
 |---|---|---|
 | `lock_time_bucket` | 首鎖時刻五桶:<09:05 / –10:00 / –12:00 / –13:00 / 13:00+ | med gap +7.4% → +0.6% 單調遞減 |
 | `open_count` | 打開段數 | ≥6 次 → 續鎖 0% |
-| `violent_pull` | 首鎖前 10 分鐘推升 ≥6% | gap +6.2% 但續鎖僅 3.3% |
+| `violent_pull` | 首鎖前 10 分鐘推升 ≥6%(1K 近似;golden 原始定義為 tick 級,SC-3 容忍度對應放寬為方向一致) | gap +6.2% 但續鎖僅 3.3% |
 | `queue_consumption` | 鎖死後量 ÷ 全日量;≥40% / 15–40% / <15% | ≥40% → gap +6.0%;<15% → 續鎖 0% |
 | `one_price` | 全日 high == low | 續鎖條件表核心項 |
 | `board_streak` | 連板數(日線歷史) | 第 1 板 × 漲停開 × 一價到底 → 續鎖 33.3% |
@@ -138,7 +139,7 @@ TDD(紅先行)。ruff line-length 100 + pyright basic + pytest 從第一天。
 |---|---|---|
 | SC-1 | 事件覆蓋率 ≥99%,缺漏明列 | — |
 | SC-2 | 鎖板時間五桶 × med gap / 續鎖率(intraday_playbook §2d) | 各桶 n 差 ≤5%、med gap 差 ≤0.5pp |
-| SC-3 | 暴力拉板 vs 開盤自然鎖對比(6.2%/3.3% vs 18.3%) | 同上 |
+| SC-3 | 暴力拉板 vs 開盤自然鎖對比(6.2%/3.3% vs 18.3%) | 方向與排序一致、續鎖率差 ≤3pp(violent_pull 為 1K 近似 tick 定義) |
 | SC-4 | 排隊消耗三桶 | 同上 |
 | SC-5 | T+1 gap 六桶佔比 + E[開→收](open_gap_definition §2–3) | 同上 |
 | SC-6 | 競價 tell 研究版重現 evidence;盤中版(÷20日均量)另列新表 | 研究版對 golden |
@@ -149,9 +150,9 @@ TDD(紅先行)。ruff line-length 100 + pyright basic + pytest 從第一天。
 
 ## 7. 開放問題(實作時驗證)
 
-1. neigui ticks/ 目錄的實際檔案格式與完整度(匯入器實作時盤點)。
-2. 「鎖死」定義與 neigui 研究腳本(`analyze_intraday.py`)是否完全一致 — SC-2 不達標時第一個查這裡。
-3. 20 日均量的計算窗與除權息調整 — 用日線資料實作時定案。
+1. ~~neigui ticks/ 格式~~ 已盤點(2026-07-07):`ticks/{stock_id}_{date}.json`,單一 JSON array,欄位 `t/p/q/b/a`(UTC 無前導零時刻/價/張/一檔買/一檔賣),共 2007 檔、僅虎事件。1K = `k1_bars.jsonl` 每行 `{stock_id, date, bars:[...]}`。日線 = `prices.csv`(volume 單位為股,÷1000 = 張)。
+2. ~~鎖死定義是否一致~~ 已盤點:研究定義在 `extract_features.py`(1K:final lock = 最後一段連續 close≥limit;n_reopens = first_touch 後離開段數;鎖板時間桶以分鐘索引 [0,4)/[4,59)/[59,179)/[179,239)/[239,∞) 切,09:01=idx 0),引擎沿用同定義。暴力拉板 golden 來自 `extract_tick_features.py`(tick 級 sprint10),MVP 用 1K 近似(SC-3 容忍度已對應調整)。
+3. 20 日均量的計算窗與除權息調整 — 用日線資料實作時定案(MVP:截至 T 日含當日的近 20 個交易日簡單平均,不調除權息)。
 
 ## 8. 隨附變更
 
