@@ -1,0 +1,6 @@
+{
+  "name": "fubon_9600",
+  "members": [
+    {"broker_id": "9600", "name": "富邦總部(訊號稀釋,輔助)", "role": "auxiliary"}
+  ]
+}
