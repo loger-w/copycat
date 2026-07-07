@@ -1,0 +1,43 @@
+"""CLI 入口:import-neigui / replay / validate / compare 逐 task 接上."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from copycat.data.import_neigui import run_import
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_EVENTS_CSV = Path("docs/evidence/five_tigers_events_2025-06-30_2026-06-26.csv")
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    parser = argparse.ArgumentParser(prog="copycat")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_imp = sub.add_parser("import-neigui", help="匯入 neigui five-tigers 種子資料")
+    p_imp.add_argument("--src", type=Path, required=True)
+    p_imp.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    p_imp.add_argument("--data-dir", type=Path, default=Path("data"))
+
+    args = parser.parse_args(argv)
+    if args.command == "import-neigui":
+        manifest = run_import(args.src, args.events_csv, args.data_dir)
+        missing_t = manifest["missing_t_1k"]
+        missing_t1 = manifest["missing_t1_1k"]
+        assert isinstance(missing_t, list) and isinstance(missing_t1, list)
+        sys.stdout.write(
+            f"匯入完成:1K {manifest['k1_days']} stock-day、"
+            f"虎事件 {manifest['tiger_events']}、對照 {manifest['control_events']}、"
+            f"缺 T 日 1K {len(missing_t)} 筆、缺 T+1 1K {len(missing_t1)} 筆\n"
+        )
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
