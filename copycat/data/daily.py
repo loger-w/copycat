@@ -19,18 +19,28 @@ class _DayRow:
     low: float
     close: float
     volume_lots: float
+    spread: float = 0.0
 
 
 class DailyIndex:
-    def __init__(self, rows: dict[str, list[_DayRow]], limitup: set[tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        rows: dict[str, list[_DayRow]],
+        limitup: set[tuple[str, str]],
+        has_spread: bool = True,
+    ) -> None:
         self._rows = rows  # stock_id → 按 date 排序的日線
         self._limitup = limitup  # {(stock_id, date)}
+        self._has_spread = has_spread  # 舊檔無 spread 欄 → ref_prev_close 走 fallback
 
     @classmethod
     def load(cls, data_dir: Path) -> DailyIndex:
         rows: dict[str, list[_DayRow]] = {}
+        has_spread = True
         with (data_dir / "daily" / "prices.csv").open("r", encoding="utf-8") as fh:
-            for r in csv.DictReader(fh):
+            reader = csv.DictReader(fh)
+            has_spread = "spread" in (reader.fieldnames or [])
+            for r in reader:
                 rows.setdefault(r["stock_id"], []).append(
                     _DayRow(
                         date=r["date"],
@@ -39,6 +49,7 @@ class DailyIndex:
                         low=float(r["low"]),
                         close=float(r["close"]),
                         volume_lots=float(r["volume_lots"]),
+                        spread=float(r.get("spread") or 0.0),
                     )
                 )
         for lst in rows.values():
@@ -48,7 +59,7 @@ class DailyIndex:
             for r in csv.DictReader(fh):
                 limitup.add((r["stock_id"], r["date"]))
         logger.info("DailyIndex: %d stocks, %d limitup events", len(rows), len(limitup))
-        return cls(rows, limitup)
+        return cls(rows, limitup, has_spread)
 
     def _find(self, stock_id: str, date: str) -> tuple[list[_DayRow], int] | None:
         lst = self._rows.get(stock_id)
@@ -91,6 +102,101 @@ class DailyIndex:
             return None
         lst, i = hit
         return lst[i + 1].date if i + 1 < len(lst) else None
+
+    def prev_date(self, stock_id: str, date: str) -> str | None:
+        return self.shift_date(stock_id, date, 1)
+
+    def shift_date(self, stock_id: str, date: str, n: int) -> str | None:
+        """n 個交易日前的 date;不足 → None."""
+        hit = self._find(stock_id, date)
+        if not hit:
+            return None
+        lst, i = hit
+        return lst[i - n].date if i - n >= 0 else None
+
+    def close_of(self, stock_id: str, date: str) -> float | None:
+        hit = self._find(stock_id, date)
+        return hit[0][hit[1]].close if hit else None
+
+    def volume_of(self, stock_id: str, date: str) -> float | None:
+        hit = self._find(stock_id, date)
+        return hit[0][hit[1]].volume_lots if hit else None
+
+    def ref_prev_close(self, stock_id: str, date: str) -> float | None:
+        """參考前收 = close − spread(neigui 同源,除權息安全);≤0 → None。
+
+        舊檔無 spread 欄 → fallback 前一交易日 close(重跑 import 後為死碼)。
+        """
+        hit = self._find(stock_id, date)
+        if not hit:
+            return None
+        lst, i = hit
+        if self._has_spread:
+            v = lst[i].close - lst[i].spread
+            return v if v > 0 else None
+        if i == 0:
+            return None
+        v = lst[i - 1].close
+        return v if v > 0 else None
+
+    def _close_window(self, stock_id: str, date: str, n: int) -> list[float] | None:
+        """含當日往前 n 個 close;不足 → None."""
+        hit = self._find(stock_id, date)
+        if not hit:
+            return None
+        lst, i = hit
+        if i - n + 1 < 0:
+            return None
+        return [r.close for r in lst[i - n + 1 : i + 1]]
+
+    def ma(self, stock_id: str, date: str, n: int) -> float | None:
+        window = self._close_window(stock_id, date, n)
+        return sum(window) / n if window else None
+
+    def bb_width(self, stock_id: str, date: str, n: int, k: float) -> float | None:
+        """布林帶寬 = 2kσ/MA(母體 σ);MA ≤ 0 或資料不足 → None."""
+        window = self._close_window(stock_id, date, n)
+        if not window:
+            return None
+        mean = sum(window) / n
+        if mean <= 0:
+            return None
+        var = sum((c - mean) ** 2 for c in window) / n
+        return 2 * k * (var**0.5) / mean
+
+    def bb_width_pct(self, stock_id: str, date: str, n: int, k: float, window: int) -> float | None:
+        """當日帶寬在近 window 日帶寬中的百分位 rank(嚴格小於比例);資料不足 → None."""
+        hit = self._find(stock_id, date)
+        if not hit:
+            return None
+        lst, i = hit
+        widths: list[float] = []
+        for j in range(i - window + 1, i + 1):
+            if j < 0:
+                return None
+            w = self.bb_width(stock_id, lst[j].date, n, k)
+            if w is None:
+                return None
+            widths.append(w)
+        today = widths[-1]
+        others = widths[:-1]
+        if not others:
+            return 0.0
+        return sum(1 for w in others if w < today) / len(others)
+
+    def pos_52w(self, stock_id: str, date: str) -> float | None:
+        """(close − 250 日低)/(高 − 低);不足 60 日或高 == 低 → None."""
+        hit = self._find(stock_id, date)
+        if not hit:
+            return None
+        lst, i = hit
+        window = [r.close for r in lst[max(0, i - 249) : i + 1]]
+        if len(window) < 60:
+            return None
+        lo, hi = min(window), max(window)
+        if hi == lo:
+            return None
+        return (lst[i].close - lo) / (hi - lo)
 
     def is_limitup(self, stock_id: str, date: str) -> bool:
         return (stock_id, date) in self._limitup

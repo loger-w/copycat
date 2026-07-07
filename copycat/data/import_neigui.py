@@ -45,7 +45,17 @@ def _import_daily(src: Path, data_dir: Path) -> None:
         out.open("w", encoding="utf-8", newline="") as fout,
     ):
         w = csv.DictWriter(
-            fout, fieldnames=["stock_id", "date", "open", "high", "low", "close", "volume_lots"]
+            fout,
+            fieldnames=[
+                "stock_id",
+                "date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "spread",
+                "volume_lots",
+            ],
         )
         w.writeheader()
         for r in csv.DictReader(fin):
@@ -57,6 +67,7 @@ def _import_daily(src: Path, data_dir: Path) -> None:
                     "high": r["high"],
                     "low": r["low"],
                     "close": r["close"],
+                    "spread": r.get("spread", ""),
                     "volume_lots": str(float(r["volume"]) / 1000.0),
                 }
             )
@@ -74,6 +85,32 @@ def _import_limitup(src: Path, data_dir: Path) -> list[dict[str, str]]:
         w.writeheader()
         w.writerows(rows)
     return rows
+
+
+def _import_near_miss(src: Path, data_dir: Path) -> int:
+    """從 k1_control.jsonl 的 group 欄抽 near_miss 名單(權重 ×5 的宇宙來源).
+
+    group 枚舉 {ctrl_lock, near_miss};缺 group 的舊行視為 ctrl_lock;未知值 raise。
+    """
+    out = data_dir / "events" / "near_miss.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    ctrl_file = src / "k1_control.jsonl"
+    rows: list[tuple[str, str]] = []
+    if ctrl_file.exists():
+        with ctrl_file.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                rec = json.loads(line)
+                group = rec.get("group", "ctrl_lock")
+                if group not in ("ctrl_lock", "near_miss"):
+                    raise ValueError(f"未知 k1_control group: {group!r}")
+                if group == "near_miss":
+                    rows.append((rec["stock_id"], rec["date"]))
+    rows.sort()
+    with out.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["stock_id", "date"])
+        w.writeheader()
+        w.writerows({"stock_id": s, "date": d} for s, d in rows)
+    return len(rows)
 
 
 def _import_tick_auction(src: Path, data_dir: Path) -> int:
@@ -183,6 +220,7 @@ def run_import(src: Path, events_csv: Path, data_dir: Path) -> dict[str, object]
     if not events_csv.exists():
         raise FileNotFoundError(events_csv)
 
+    n_near_miss = _import_near_miss(src, data_dir)  # 先驗 group 枚舉,壞資料 fail-fast
     days, skipped = _import_k1(src / "k1_bars.jsonl", data_dir)
     ctrl_file = src / "k1_control.jsonl"
     if ctrl_file.exists():
@@ -206,6 +244,7 @@ def run_import(src: Path, events_csv: Path, data_dir: Path) -> dict[str, object]
     manifest: dict[str, object] = {
         "k1_days": days,
         "skipped_bars": skipped,
+        "near_miss_days": n_near_miss,
         "tick_auction_days": n_tick_auction,
         "tiger_events": n_tiger,
         "control_events": n_ctrl,

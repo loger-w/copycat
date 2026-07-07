@@ -4,6 +4,8 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 from copycat.data.import_neigui import run_import
 from copycat.data.store import read_bars
 
@@ -173,6 +175,59 @@ def _write_events_csv(path: Path) -> None:
                 "again": "False",
             }
         )
+
+
+def test_import_spread_and_near_miss(tmp_path: Path) -> None:
+    """SC-2 前置:spread 欄透傳 + near_miss 名單匯出(group 枚舉)."""
+    src = tmp_path / "src"
+    _write_src(src)
+    # 追加 near_miss 樣本與 group 標籤(真實 k1_control.jsonl 每行都有 group)
+    with (src / "k1_control.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "stock_id": "3001",
+                    "date": "2025-09-10",
+                    "group": "near_miss",
+                    "bars": [_bar_raw("10100", "20", "5")],
+                }
+            )
+            + "\n"
+        )
+    ev_csv = tmp_path / "tigers.csv"
+    _write_events_csv(ev_csv)
+    data = tmp_path / "data"
+
+    manifest = run_import(src, ev_csv, data)
+
+    with (data / "daily" / "prices.csv").open("r", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert rows[0]["spread"] == "2.9"  # spread 欄透傳(ref_prev_close 依賴)
+    with (data / "events" / "near_miss.csv").open("r", encoding="utf-8") as fh:
+        nm = list(csv.DictReader(fh))
+    assert [(r["stock_id"], r["date"]) for r in nm] == [("3001", "2025-09-10")]
+    assert manifest["near_miss_days"] == 1
+
+
+def test_import_unknown_group_raises(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    _write_src(src)
+    with (src / "k1_control.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "stock_id": "3002",
+                    "date": "2025-09-10",
+                    "group": "weird",
+                    "bars": [_bar_raw("10100", "20", "5")],
+                }
+            )
+            + "\n"
+        )
+    ev_csv = tmp_path / "tigers.csv"
+    _write_events_csv(ev_csv)
+    with pytest.raises(ValueError):
+        run_import(src, ev_csv, tmp_path / "data")
 
 
 def test_run_import(tmp_path: Path) -> None:
