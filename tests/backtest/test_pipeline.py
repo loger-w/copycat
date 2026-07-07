@@ -220,6 +220,17 @@ def test_outcome_cache_invalidation(tmp_path: Path) -> None:
     assert cache3["rows_hash"] != "deadbeef" and len(cache3["rows_hash"]) >= 12
 
 
+def test_report_dir_override(tmp_path: Path) -> None:
+    """SC-8:報告落點可指定(CLI 用 docs/evidence/;artifacts 留 out/)."""
+    data, core, aux = _write_universe(tmp_path)
+    out = tmp_path / "out"
+    cfg = _cfg()
+    run_features(data, out, cfg, core, aux)
+    report = run_search(data, out, cfg, "2026-07-07", report_dir=tmp_path / "docs_evidence")
+    assert report.parent.name == "docs_evidence" and report.exists()
+    assert (out / "rules_final.json").exists()  # artifacts 不動
+
+
 def test_multi_anchor_no_overwrite(tmp_path: Path) -> None:
     """F7:多 anchor 時 theta_curves / slippage_stress key 不互相覆蓋."""
     data, core, aux = _write_universe(tmp_path)

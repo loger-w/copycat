@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ts.add_argument("--out", type=Path, default=Path("out/tday_ga"))
     p_ts.add_argument("--config", type=Path, default=None)
     p_ts.add_argument("--report-date", required=True)
+    p_ts.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
 
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
@@ -116,7 +117,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             sys.stdout.write(f"features 完成 → {out_dir}\n")
             return 0
-        report = pipeline.run_search(args.data_dir, args.out, cfg, args.report_date)
+        report = pipeline.run_search(
+            args.data_dir, args.out, cfg, args.report_date, report_dir=args.report_dir
+        )
         sys.stdout.write(f"回測報告 → {report}\n")
         return 0
     return 1

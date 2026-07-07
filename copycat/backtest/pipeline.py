@@ -351,7 +351,13 @@ def _feature_row(row: dict[str, object]) -> dict[str, float | None]:
     return {k: (v if isinstance(v, float) else None) for k, v in row.items() if k in FEATURE_NAMES}
 
 
-def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: str) -> Path:
+def run_search(
+    data_dir: Path,
+    out_dir: Path,
+    cfg: BacktestConfig,
+    report_date: str,
+    report_dir: Path | None = None,
+) -> Path:
     rows_by_theta = {t: _read_features(out_dir, t) for t in cfg.theta_grid}
     outcomes = {
         t: _load_or_simulate(
@@ -529,4 +535,4 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
         json.dumps(result, ensure_ascii=False, sort_keys=True, indent=1), encoding="utf-8"
     )
     os.replace(tmp, rules_path)
-    return write_report(out_dir, result, counts, report_date, cfg)
+    return write_report(report_dir or out_dir, result, counts, report_date, cfg)
