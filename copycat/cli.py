@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(
             f"回補完成:fetch {stats['fetched_days']} 日、跳過 {stats['skipped_days']} 日、"
-            f"新增 {stats['added_rows']} rows\n"
+            f"新增 {stats['added_rows']} rows、過濾未知代碼 {stats.get('filtered_rows', 0)} rows\n"
         )
         return 0
     if args.command in ("tday-features", "tday-search"):

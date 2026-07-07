@@ -125,6 +125,11 @@ def run_backfill(
     # 只收既有檔已知的 stock_id(FinMind 全市場回傳含權證等,2026-07-07 真跑 4.2M rows 教訓);
     # 既有檔為空 → 不過濾(冷啟動)
     known_ids = {sid for sid, _ in rows}
+    if not known_ids:
+        logger.warning(
+            "既有 prices.csv 為空 → 本次回補處於未過濾模式(收全市場含權證);"
+            "建議先跑 import-neigui 播種再回補"
+        )
     done: set[str] = set()
     if manifest_path.exists():
         done = set(json.loads(manifest_path.read_text(encoding="utf-8"))["done_dates"])
