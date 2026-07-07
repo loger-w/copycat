@@ -78,13 +78,17 @@ def apply_rule(conditions: list[Condition], rows: list[Row]) -> int:
     return mask
 
 
-def _bit_indices(mask: int) -> list[int]:
+def bit_indices(mask: int) -> list[int]:
+    """bitmask → set-bit index list(pipeline 共用,勿另行實作)."""
     out = []
     while mask:
         lsb = mask & -mask
         out.append(lsb.bit_length() - 1)
         mask ^= lsb
     return out
+
+
+_bit_indices = bit_indices  # 內部舊名沿用
 
 
 def _evaluate(
@@ -110,7 +114,9 @@ def _evaluate(
 def _entry(
     rule: tuple[Predicate, ...], pnl: list[float], weights: list[float], cfg: BacktestConfig
 ) -> dict[str, object]:
-    mask = (1 << 62) - 1 if not rule else rule[0].mask
+    if not rule:
+        raise ValueError("規則至少需要一個謂詞(空規則的全樣本 mask 無法由謂詞推得)")
+    mask = rule[0].mask
     for p in rule[1:]:
         mask &= p.mask
     fitness, exp, raw, wsum = _evaluate(mask, pnl, weights, cfg)

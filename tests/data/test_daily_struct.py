@@ -117,6 +117,18 @@ def test_ref_prev_close(tmp_path: Path) -> None:
     assert DailyIndex.load(tmp_path).ref_prev_close("1101", d2) is None
 
 
+def test_ref_prev_close_mixed_missing_spread(tmp_path: Path) -> None:
+    """同檔混合:有 spread 欄但某 row 值缺(空字串)→ 該 row 走 fallback 前日 close."""
+    rows = [_row(*a) for a in zip(_dates(3), (29.1, 30.0, 32.0))]
+    rows[1]["spread"] = ""  # 缺值(舊匯入資料)
+    rows[2]["spread"] = "2.0"
+    _write(tmp_path, rows)
+    idx = DailyIndex.load(tmp_path)
+    d1, d2, d3 = _dates(3)
+    assert idx.ref_prev_close("1101", d2) == 29.1  # 缺值 → fallback 前日 close
+    assert idx.ref_prev_close("1101", d3) == 30.0  # 有值 → close − spread
+
+
 def test_ref_prev_close_fallback_without_spread_column(tmp_path: Path) -> None:
     rows = [_row(*a) for a in zip(_dates(2), (29.1, 32.0))]
     _write(tmp_path, rows, with_spread=False)

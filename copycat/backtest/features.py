@@ -36,6 +36,8 @@ def trigger_features(
     theta: float,
     avg20_lots: float,
     static: dict[str, float | bool | None],
+    tb_upper: float = 0.075,
+    tb_lower: float = 0.07,
 ) -> dict[str, float | None]:
     """觸發窗 w = bars[:trig_idx+1] 上的 13 盤中特徵 + 靜態 6 欄(bool → 1.0/0.0)."""
     w = bars[: trig_idx + 1]
@@ -72,9 +74,9 @@ def trigger_features(
     touches = 0
     above = False
     for b in w:
-        if b.high / pc - 1.0 >= 0.075 and not above:  # 門檻固定,不隨 θ 縮放(同源)
+        if b.high / pc - 1.0 >= tb_upper and not above:  # 門檻固定,不隨 θ 縮放(同源)
             above = True
-        elif above and b.close / pc - 1.0 < 0.07:
+        elif above and b.close / pc - 1.0 < tb_lower:
             touches += 1
             above = False
 

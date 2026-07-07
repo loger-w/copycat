@@ -23,6 +23,7 @@ from copycat.backtest.features import (
 from copycat.backtest.report import write_report
 from copycat.backtest.search import (
     apply_rule,
+    bit_indices,
     build_predicates,
     exhaustive_scan,
     ga_search,
@@ -101,13 +102,34 @@ def run_features(
     aux = load_watchlist(aux_wl_path)
     universe, u_counts = build_universe(data_dir, daily, core, aux, cfg)
 
+    # θ 無關的每樣本前置(static/structural/avg20/t1_open/bars)只算一次(review F4)
+    per_sample: list[
+        tuple[
+            Sample,
+            list,
+            dict[str, float | bool | None] | None,
+            float | None,
+            dict[str, float | None],
+            float | None,
+        ]
+    ] = []
+    for s in universe:
+        bars = read_bars(data_dir, s.stock_id, s.date)
+        if not bars:
+            per_sample.append((s, [], None, None, {}, None))
+            continue
+        stat = static_features(daily, s.stock_id, s.date)
+        avg20 = avg20_t1(daily, s.stock_id, s.date)
+        struct = structural_features(daily, s.stock_id, s.date, cfg)
+        t1_open = daily.open_of(s.stock_id, s.t1_date) if s.t1_date else None
+        per_sample.append((s, bars, stat, avg20, struct, t1_open))
+
     per_theta: dict[str, dict[str, int]] = {}
     fields = _META_COLS + _TRIGGER_COLS + _STATIC_COLS + _STRUCT_COLS
     for theta in cfg.theta_grid:
         counts = {"rows": 0, "missing_1k": 0, "no_trigger": 0, "missing_static": 0}
         rows_out: list[dict[str, str]] = []
-        for s in universe:
-            bars = read_bars(data_dir, s.stock_id, s.date)
+        for s, bars, stat, avg20, struct, t1_open in per_sample:
             if not bars:
                 counts["missing_1k"] += 1
                 continue
@@ -115,14 +137,19 @@ def run_features(
             if trig is None:
                 counts["no_trigger"] += 1
                 continue
-            stat = static_features(daily, s.stock_id, s.date)
-            avg20 = avg20_t1(daily, s.stock_id, s.date)
             if stat is None or avg20 is None:
                 counts["missing_static"] += 1
                 continue
-            feats = trigger_features(bars, trig, s.prev_close, theta, avg20, stat)
-            struct = structural_features(daily, s.stock_id, s.date, cfg)
-            t1_open = daily.open_of(s.stock_id, s.t1_date) if s.t1_date else None
+            feats = trigger_features(
+                bars,
+                trig,
+                s.prev_close,
+                theta,
+                avg20,
+                stat,
+                tb_upper=cfg.touchback_upper,
+                tb_lower=cfg.touchback_lower,
+            )
             row: dict[str, str] = {
                 "stock_id": s.stock_id,
                 "date": s.date,
@@ -150,7 +177,9 @@ def run_features(
             w.writerows(rows_out)
         os.replace(tmp, path)
         per_theta[_theta_key(theta)] = counts
-    (out_dir / "universe_counts.json").write_text(
+    counts_path = out_dir / "universe_counts.json"
+    counts_tmp = counts_path.with_suffix(".tmp")
+    counts_tmp.write_text(
         json.dumps(
             {"universe": u_counts, "per_theta": per_theta},
             ensure_ascii=False,
@@ -159,13 +188,20 @@ def run_features(
         ),
         encoding="utf-8",
     )
+    os.replace(counts_tmp, counts_path)
     logger.info("features 完成 → %s", out_dir)
     return out_dir
 
 
 def _read_features(out_dir: Path, theta: float) -> list[dict[str, object]]:
+    path = _features_path(out_dir, theta)
+    if not path.exists():
+        raise RuntimeError(
+            f"缺 {path.name} — 請先以同一份 config 跑 `python -m copycat tday-features`"
+            f"(θ 網格不一致,review F10)"
+        )
     rows: list[dict[str, object]] = []
-    with _features_path(out_dir, theta).open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
             row: dict[str, object] = {
                 "stock_id": r["stock_id"],
@@ -200,26 +236,40 @@ def _row_sample(row: dict[str, object]) -> Sample:
     )
 
 
+def _rows_hash(rows: list[dict[str, object]]) -> str:
+    """樣本身分 hash(stock_id/date/trig_idx 序列)— cache 錯位防護(review F1)."""
+    import hashlib
+
+    blob = json.dumps(
+        [(str(r["stock_id"]), str(r["date"]), r["trig_idx"]) for r in rows], sort_keys=True
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def _load_or_simulate(
     data_dir: Path,
     out_dir: Path,
     cfg: BacktestConfig,
     theta: float,
     rows: list[dict[str, object]],
+    with_grid: bool,
 ) -> dict[str, object]:
     path = _outcomes_path(out_dir, theta)
     sim_hash = sim_config_hash(cfg)
+    rows_hash = _rows_hash(rows)
     if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
         if (
             payload.get("_cache_version") == _CACHE_VERSION
             and payload.get("sim_hash") == sim_hash
-            and payload.get("n_samples") == len(rows)
+            and payload.get("rows_hash") == rows_hash
+            and payload.get("with_grid") == with_grid
         ):
             return payload
         logger.info("outcome cache 不符(%s)→ 重算", path.name)
 
-    combos = enumerate_stop_combos(cfg)
+    # 252 網格只在 anchor θ 展開(review F2:非 anchor 只需 baseline 供 θ 曲線)
+    combos = enumerate_stop_combos(cfg) if with_grid else []
     baseline = StopCombo(
         s1_n=None,
         s1_phi=None,
@@ -250,6 +300,8 @@ def _load_or_simulate(
     payload: dict[str, object] = {
         "_cache_version": _CACHE_VERSION,
         "sim_hash": sim_hash,
+        "rows_hash": rows_hash,
+        "with_grid": with_grid,
         "theta": _theta_key(theta),
         "n_samples": len(rows),
         "combo_keys": [k for k, _, _ in keyed],
@@ -294,19 +346,18 @@ def _trades_for(
     return out
 
 
-def _mask_indices(mask: int) -> list[int]:
-    out = []
-    while mask:
-        lsb = mask & -mask
-        out.append(lsb.bit_length() - 1)
-        mask ^= lsb
-    return out
+def _feature_row(row: dict[str, object]) -> dict[str, float | None]:
+    """features row → 謂詞用特徵 dict(單一出口,train/test/跨 θ 三處共用)."""
+    return {k: (v if isinstance(v, float) else None) for k, v in row.items() if k in FEATURE_NAMES}
 
 
 def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: str) -> Path:
     rows_by_theta = {t: _read_features(out_dir, t) for t in cfg.theta_grid}
     outcomes = {
-        t: _load_or_simulate(data_dir, out_dir, cfg, t, rows_by_theta[t]) for t in cfg.theta_grid
+        t: _load_or_simulate(
+            data_dir, out_dir, cfg, t, rows_by_theta[t], with_grid=(t in cfg.anchor_thetas)
+        )
+        for t in cfg.theta_grid
     }
 
     test_end = max(
@@ -343,16 +394,7 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
                 fit_pnl.append(p if ok and p is not None else 0.0)
                 fit_w.append(weight if ok else 0.0)
             preds = build_predicates(
-                [
-                    {
-                        k: (v if isinstance(v, float) else None)
-                        for k, v in r.items()
-                        if k in FEATURE_NAMES
-                    }
-                    for r in train_rows
-                ],
-                FEATURE_NAMES,
-                cfg.quantile_probs,
+                [_feature_row(r) for r in train_rows], FEATURE_NAMES, cfg.quantile_probs
             )
             cands = exhaustive_scan(preds, fit_pnl, fit_w, cfg)
             for seed in cfg.ga_seeds:
@@ -376,16 +418,9 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
                         for i, r in enumerate(t_rows)
                         if str(r["date"]) >= cfg.split_date and _regime_filter(regime, r, cfg)
                     ]
-                    feat_rows = [
-                        {
-                            k: (v if isinstance(v, float) else None)
-                            for k, v in t_rows[i].items()
-                            if k in FEATURE_NAMES
-                        }
-                        for i in t_test
-                    ]
+                    feat_rows = [_feature_row(t_rows[i]) for i in t_test]
                     mask = apply_rule(conds, feat_rows)
-                    hit_idx = [t_test[j] for j in _mask_indices(mask)]
+                    hit_idx = [t_test[j] for j in bit_indices(mask)]
                     trades = _trades_for(t_rows, hit_idx, t_pnl, t_status)
                     stats = weighted_stats(trades)
                     exp = stats["expectancy"]
@@ -393,16 +428,9 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
                     if isinstance(exp, float):
                         curve[round(theta, 4)] = exp
                 # anchor θ test 統計 + 三道驗證
-                feat_rows_anchor = [
-                    {
-                        k: (v if isinstance(v, float) else None)
-                        for k, v in rows[i].items()
-                        if k in FEATURE_NAMES
-                    }
-                    for i in test_idx
-                ]
+                feat_rows_anchor = [_feature_row(rows[i]) for i in test_idx]
                 mask_a = apply_rule(conds, feat_rows_anchor)
-                hits_a = [test_idx[j] for j in _mask_indices(mask_a)]
+                hits_a = [test_idx[j] for j in bit_indices(mask_a)]
                 trades_a = _trades_for(rows, hits_a, base_pnl, base_status)
                 stats_a = weighted_stats(trades_a)
                 monthly = monthly_consistency(trades_a, cfg.split_date, test_end)
@@ -443,8 +471,8 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
                     "stress_expectancy": weighted_stats(stress_trades)["expectancy"],
                 }
                 final_rules.append(record)
-                if rank == 0:
-                    theta_curves[f"{regime}#top"] = curve_out
+                if rank == 0:  # key 含 anchor,多錨點不互相覆蓋(review F7)
+                    theta_curves[f"{regime}@{_theta_key(anchor)}#top"] = curve_out
                 if not passed:
                     negative.append(
                         f"regime={regime} rank={rank}: "
@@ -472,7 +500,7 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
                 "ignition_first": r["ignition_first"],
             }
             for r in rows0
-            if str(r["stock_id"]) == "3055"
+            if str(r["stock_id"]) == cfg.case_stock_id
         ),
         None,
     )
@@ -487,7 +515,9 @@ def run_search(data_dir: Path, out_dir: Path, cfg: BacktestConfig, report_date: 
         "slippage_stress": {
             r_key: {"base": r["test_expectancy"], "stress": r["stress_expectancy"]}
             for r_key, r in (
-                (f"{r['regime']}#r{r['rank']}", r) for r in final_rules if r["rank"] == 0
+                (f"{r['regime']}@{r['anchor_theta']}#r{r['rank']}", r)
+                for r in final_rules
+                if r["rank"] == 0
             )
         },
         "case_3055": case_3055,

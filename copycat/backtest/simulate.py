@@ -13,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from copycat.backtest.config import BacktestConfig
-from copycat.backtest.universe import Sample
+from copycat.backtest.universe import LOCKABLE_GROUPS, Sample
 from copycat.data.models import Bar1K
 from copycat.market import tick_size
 
@@ -102,6 +102,8 @@ def simulate_sample(
 
     limit = sample.limit_price
     eps = cfg.limit_eps
+    if trig.low >= limit - eps:  # 觸發 bar 本身鎖死 → 無可成交賣單,進不了場(悲觀)
+        return TradeOutcome("excluded_unfillable", None, None)
     entry = min(trig.close + slippage_ticks * tick_size(trig.close), limit)
     post = bars[trig_idx + 1 :]
     if entry >= limit - eps and all(b.low >= limit - eps for b in post):
@@ -173,7 +175,7 @@ def simulate_sample(
     # --- 收盤:留倉資格(D7 雙保險)---
     last = post[-1]
     closed_at_limit = last.close >= limit - eps
-    lockable = sample.group in ("tiger_core", "tiger_9600", "ctrl_lock")
+    lockable = sample.group in LOCKABLE_GROUPS
     if closed_at_limit != lockable:
         return TradeOutcome("excluded_lock_conflict", None, None)
     if closed_at_limit:

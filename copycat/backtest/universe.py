@@ -14,6 +14,9 @@ from copycat.watchlist import Watchlist
 
 logger = logging.getLogger(__name__)
 
+# 可鎖板留倉的 group(single source;simulate 依此判留倉資格,新分組在此登記)
+LOCKABLE_GROUPS = ("tiger_core", "tiger_9600", "ctrl_lock")
+
 
 @dataclass(frozen=True, slots=True)
 class Sample:

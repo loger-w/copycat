@@ -225,6 +225,14 @@ def test_unfillable_and_lastbar() -> None:
     assert out2.status == "excluded_lastbar"
 
 
+def test_unfillable_when_trigger_bar_locked() -> None:
+    # 觸發 bar 本身鎖死(low ≥ limit−eps)→ 即使盤中曾打開也進不了場(悲觀)
+    trig_locked = _bar(10, 110.0, 110.0, 110.0, 110.0)
+    bars = [trig_locked, _bar(11, 109.5, 109.8, 109.0, 109.2)]
+    out = simulate_sample(bars, 0, _sample("near_miss", None), None, _combo(), CFG, 1)
+    assert out.status == "excluded_unfillable"
+
+
 def test_lock_conflict_and_t1_missing() -> None:
     # ctrl_lock 但收盤沒鎖 → 矛盾剔除
     bars = [_TRIG, _bar(11, 108.0, 108.5, 107.0, 107.5)]

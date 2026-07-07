@@ -71,9 +71,14 @@ class BacktestConfig:
     ignition_ret5_abs: float = 0.03
     ignition_days_since_limitup: int = 20
     ignition_touch_theta: float = 0.08
+    # --- 特徵門檻(characterization 同源預設,調整會偏離 neigui 錨點)---
+    touchback_upper: float = 0.075
+    touchback_lower: float = 0.07
     # --- 驗證三道 ---
     plateau_neighbor_steps: tuple[int, ...] = (1, 2)
     plateau_min_frac: float = 0.4
+    # --- 報告 ---
+    case_stock_id: str = "3055"  # sanity case(低位階啟動 regime)
 
     @classmethod
     def default(cls) -> BacktestConfig:

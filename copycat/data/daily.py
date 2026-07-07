@@ -19,28 +19,21 @@ class _DayRow:
     low: float
     close: float
     volume_lots: float
-    spread: float = 0.0
+    spread: float | None = None  # None = 該 row 無 spread 資訊(舊資料),非 0.0
 
 
 class DailyIndex:
-    def __init__(
-        self,
-        rows: dict[str, list[_DayRow]],
-        limitup: set[tuple[str, str]],
-        has_spread: bool = True,
-    ) -> None:
+    def __init__(self, rows: dict[str, list[_DayRow]], limitup: set[tuple[str, str]]) -> None:
         self._rows = rows  # stock_id → 按 date 排序的日線
         self._limitup = limitup  # {(stock_id, date)}
-        self._has_spread = has_spread  # 舊檔無 spread 欄 → ref_prev_close 走 fallback
+        self._dates = {sid: [r.date for r in lst] for sid, lst in rows.items()}  # bisect 索引
 
     @classmethod
     def load(cls, data_dir: Path) -> DailyIndex:
         rows: dict[str, list[_DayRow]] = {}
-        has_spread = True
         with (data_dir / "daily" / "prices.csv").open("r", encoding="utf-8") as fh:
-            reader = csv.DictReader(fh)
-            has_spread = "spread" in (reader.fieldnames or [])
-            for r in reader:
+            for r in csv.DictReader(fh):
+                raw_spread = r.get("spread")
                 rows.setdefault(r["stock_id"], []).append(
                     _DayRow(
                         date=r["date"],
@@ -49,7 +42,8 @@ class DailyIndex:
                         low=float(r["low"]),
                         close=float(r["close"]),
                         volume_lots=float(r["volume_lots"]),
-                        spread=float(r.get("spread") or 0.0),
+                        # row-level 缺值語意:空字串/缺欄 → None(0.0 是合法的平盤值)
+                        spread=float(raw_spread) if raw_spread else None,
                     )
                 )
         for lst in rows.values():
@@ -59,13 +53,13 @@ class DailyIndex:
             for r in csv.DictReader(fh):
                 limitup.add((r["stock_id"], r["date"]))
         logger.info("DailyIndex: %d stocks, %d limitup events", len(rows), len(limitup))
-        return cls(rows, limitup, has_spread)
+        return cls(rows, limitup)
 
     def _find(self, stock_id: str, date: str) -> tuple[list[_DayRow], int] | None:
         lst = self._rows.get(stock_id)
         if not lst:
             return None
-        i = bisect_left([r.date for r in lst], date)
+        i = bisect_left(self._dates[stock_id], date)
         if i >= len(lst) or lst[i].date != date:
             return None
         return lst, i
@@ -125,14 +119,16 @@ class DailyIndex:
     def ref_prev_close(self, stock_id: str, date: str) -> float | None:
         """參考前收 = close − spread(neigui 同源,除權息安全);≤0 → None。
 
-        舊檔無 spread 欄 → fallback 前一交易日 close(重跑 import 後為死碼)。
+        該 row 無 spread 資訊(None)→ fallback 前一交易日 close(row-level,
+        混合新舊資料安全;重跑 import 後全 row 有值)。
         """
         hit = self._find(stock_id, date)
         if not hit:
             return None
         lst, i = hit
-        if self._has_spread:
-            v = lst[i].close - lst[i].spread
+        spread = lst[i].spread
+        if spread is not None:
+            v = lst[i].close - spread
             return v if v > 0 else None
         if i == 0:
             return None

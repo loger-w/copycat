@@ -105,6 +105,15 @@ def test_ga_determinism_and_seed_variation() -> None:
         assert isinstance(conds, list) and len(conds) <= cfg.ga_max_conditions
 
 
+def test_entry_rejects_empty_rule() -> None:
+    import pytest
+
+    from copycat.backtest.search import _entry
+
+    with pytest.raises(ValueError):
+        _entry((), _PNL, _W, _cfg())
+
+
 def test_jaccard_dedupe() -> None:
     items = [
         {"mask": 0b1111, "fitness": 3.0},

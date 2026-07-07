@@ -184,6 +184,11 @@ def test_pipeline_end_to_end_and_determinism(tmp_path: Path) -> None:
     assert report.name == "tday_join_ga_backtest_2026-07-07.md"
     rules_path = out / "rules_final.json"
     assert rules_path.exists() and (out / "outcomes_theta0.080.json").exists()
+    # 網格只在 anchor θ 展開(F2):非 anchor 只有 baseline + stress
+    oc80 = json.loads((out / "outcomes_theta0.080.json").read_text(encoding="utf-8"))
+    oc81 = json.loads((out / "outcomes_theta0.081.json").read_text(encoding="utf-8"))
+    assert oc81["combo_keys"] == ["baseline", "baseline_stress"]
+    assert len(oc80["combo_keys"]) == 12  # 2 + 10 組(縮小網格 5×t1300 2)
 
     # determinism:重跑 → rules 與報告 byte-identical(SC-6)
     first_rules = rules_path.read_bytes()
@@ -199,10 +204,41 @@ def test_outcome_cache_invalidation(tmp_path: Path) -> None:
     cfg = _cfg()
     run_features(data, out, cfg, core, aux)
     run_search(data, out, cfg, "2026-07-07")
-    cache = json.loads((out / "outcomes_theta0.080.json").read_text(encoding="utf-8"))
+    cache_path = out / "outcomes_theta0.080.json"
+    cache = json.loads(cache_path.read_text(encoding="utf-8"))
     h1 = cache["sim_hash"]
     # 改模擬相關參數 → hash 不符 → 重算(cache 檔更新為新 hash)
     cfg2 = _cfg(intraday_tax=0.003)
     run_search(data, out, cfg2, "2026-07-07")
-    cache2 = json.loads((out / "outcomes_theta0.080.json").read_text(encoding="utf-8"))
+    cache2 = json.loads(cache_path.read_text(encoding="utf-8"))
     assert cache2["sim_hash"] != h1
+    # 樣本身分失效(F1):rows_hash 不符 → 重算回正確值
+    cache2["rows_hash"] = "deadbeef"
+    cache_path.write_text(json.dumps(cache2), encoding="utf-8")
+    run_search(data, out, cfg2, "2026-07-07")
+    cache3 = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert cache3["rows_hash"] != "deadbeef" and len(cache3["rows_hash"]) >= 12
+
+
+def test_multi_anchor_no_overwrite(tmp_path: Path) -> None:
+    """F7:多 anchor 時 theta_curves / slippage_stress key 不互相覆蓋."""
+    data, core, aux = _write_universe(tmp_path)
+    out = tmp_path / "out"
+    cfg = _cfg(anchor_thetas=(0.08, 0.081))
+    run_features(data, out, cfg, core, aux)
+    run_search(data, out, cfg, "2026-07-07")
+    result = json.loads((out / "rules_final.json").read_text(encoding="utf-8"))
+    curve_keys = list(result["theta_curves"])
+    assert any("0.080" in k for k in curve_keys) and any("0.081" in k for k in curve_keys)
+
+
+def test_missing_features_clear_error(tmp_path: Path) -> None:
+    """F10:search 的 θ 網格包含沒跑過 features 的 θ → 清楚錯誤而非裸 FileNotFoundError."""
+    import pytest
+
+    data, core, aux = _write_universe(tmp_path)
+    out = tmp_path / "out"
+    run_features(data, out, _cfg(), core, aux)
+    cfg2 = _cfg(theta_grid=(0.08, 0.082))
+    with pytest.raises(RuntimeError, match="tday-features"):
+        run_search(data, out, cfg2, "2026-07-07")
