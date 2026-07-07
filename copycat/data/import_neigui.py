@@ -76,6 +76,27 @@ def _import_limitup(src: Path, data_dir: Path) -> list[dict[str, str]]:
     return rows
 
 
+def _import_tick_auction(src: Path, data_dir: Path) -> int:
+    """從 tick 檔抽每 stock-day 首筆成交張數(09:00:06 純競價量,SC-6 golden 同源)."""
+    ticks_dir = src / "ticks"
+    out = data_dir / "events" / "tick_auction.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with out.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["stock_id", "date", "auction_lots"])
+        w.writeheader()
+        if not ticks_dir.exists():
+            return 0
+        for p in sorted(ticks_dir.glob("*.json")):
+            stock_id, _, date = p.stem.partition("_")
+            ticks = json.loads(p.read_text(encoding="utf-8"))
+            if not ticks:
+                continue
+            w.writerow({"stock_id": stock_id, "date": date, "auction_lots": ticks[0]["q"]})
+            n += 1
+    return n
+
+
 def _build_events(
     events_csv: Path, limitup: list[dict[str, str]], daily: DailyIndex, data_dir: Path
 ) -> tuple[int, int]:
@@ -169,6 +190,7 @@ def run_import(src: Path, events_csv: Path, data_dir: Path) -> dict[str, object]
         days, skipped = days + d2, skipped + s2
     _import_daily(src, data_dir)
     limitup = _import_limitup(src, data_dir)
+    n_tick_auction = _import_tick_auction(src, data_dir)
     daily = DailyIndex.load(data_dir)
     n_tiger, n_ctrl = _build_events(events_csv, limitup, daily, data_dir)
 
@@ -184,6 +206,7 @@ def run_import(src: Path, events_csv: Path, data_dir: Path) -> dict[str, object]
     manifest: dict[str, object] = {
         "k1_days": days,
         "skipped_bars": skipped,
+        "tick_auction_days": n_tick_auction,
         "tiger_events": n_tiger,
         "control_events": n_ctrl,
         "missing_t_1k": missing_t,

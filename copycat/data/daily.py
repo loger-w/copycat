@@ -63,6 +63,13 @@ class DailyIndex:
         hit = self._find(stock_id, date)
         return hit[0][hit[1]].open if hit else None
 
+    def ohlc(self, stock_id: str, date: str) -> tuple[float, float, float, float] | None:
+        hit = self._find(stock_id, date)
+        if not hit:
+            return None
+        row = hit[0][hit[1]]
+        return (row.open, row.high, row.low, row.close)
+
     def one_price(self, stock_id: str, date: str) -> bool | None:
         hit = self._find(stock_id, date)
         if not hit:

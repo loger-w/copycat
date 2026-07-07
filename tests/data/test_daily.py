@@ -69,6 +69,13 @@ def test_adv20_partial_window(tmp_path: Path) -> None:
     assert idx.adv20("1101", "2026-07-02") == 150.0
 
 
+def test_ohlc(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    idx = DailyIndex.load(tmp_path)
+    assert idx.ohlc("1101", "2026-07-03") == (11.5, 12.3, 11.4, 12.3)
+    assert idx.ohlc("9999", "2026-07-03") is None
+
+
 def test_next_date(tmp_path: Path) -> None:
     _write_fixture(tmp_path)
     idx = DailyIndex.load(tmp_path)

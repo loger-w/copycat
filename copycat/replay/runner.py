@@ -12,11 +12,49 @@ from copycat.data.daily import DailyIndex
 from copycat.data.store import read_bars
 from copycat.replay.report import write_summary
 from copycat.engine.lock_quality import LockTracker
-from copycat.engine.t1_open import EventContext, T1Tracker
+from copycat.engine.t1_open import EventContext, T1Tracker, gap_bucket_label
 from copycat.strategy_config import StrategyConfig, load_config
 from copycat.watchlist import load_watchlist
 
 logger = logging.getLogger(__name__)
+
+
+def _load_tick_auction(data_dir: Path) -> dict[tuple[str, str], float]:
+    path = data_dir / "events" / "tick_auction.csv"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as fh:
+        return {(r["stock_id"], r["date"]): float(r["auction_lots"]) for r in csv.DictReader(fh)}
+
+
+def _t1_daily_fallback(
+    cfg: StrategyConfig, daily: DailyIndex, ev: dict[str, str], limit: float
+) -> dict | None:
+    """T+1 1K 缺但日線在:給出日線可得的部分訊號(golden gap 矩陣同源為日線)."""
+    row = daily.ohlc(ev["stock_id"], ev["t1_date"])
+    if row is None:
+        return None
+    o, h, _low, c = row
+    if o <= 0:
+        return None
+    gap = o / limit - 1
+    return {
+        "open_px": o,
+        "gap": gap,
+        "gap_bucket": gap_bucket_label(cfg, gap),
+        "auction_lots": None,
+        "auction_share_adv20": None,
+        "auction_tell": "n/a",
+        "auction_share_dayvol": None,
+        "inner15": None,
+        "high_idx": None,
+        "high_time": None,
+        "high_vs_open": h / o - 1,
+        "close_vs_open": c / o - 1,
+        "touched_limit": h >= limit * cfg.t1_limit_mult - cfg.limit_eps,
+        "path": "(daily)",
+        "daily_fallback": True,
+    }
 
 
 def _cohort(source: str, broker_ids: str, members: frozenset[str]) -> str:
@@ -32,6 +70,7 @@ def run_replay(
     cfg = load_config(config_path) if config_path else StrategyConfig.default()
     wl = load_watchlist(watchlist_path)
     daily = DailyIndex.load(data_dir)
+    tick_auction = _load_tick_auction(data_dir)
     run_dir = out_dir / wl.name
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,7 +100,7 @@ def run_replay(
                     tracker.feed(b)
                 lock_sig = tracker.finalize()
 
-            t1_sig = None
+            t1_out: dict | None = None
             again = False
             if not ev["t1_date"]:
                 skip.append("no_t1_date")
@@ -71,6 +110,7 @@ def run_replay(
                 if t1_bars is None:
                     skip.append("missing_t1_1k")
                     missing_t1 += 1
+                    t1_out = _t1_daily_fallback(cfg, daily, ev, limit)
                 else:
                     ctx = EventContext(
                         stock_id=ev["stock_id"],
@@ -81,11 +121,20 @@ def run_replay(
                         one_price=daily.one_price(ev["stock_id"], ev["date"]),
                         board_streak=daily.board_streak(ev["stock_id"], ev["date"]),
                         lock=lock_sig,
+                        t1_open_px=daily.open_of(ev["stock_id"], ev["t1_date"]),
+                        auction_lots_tick=tick_auction.get((ev["stock_id"], ev["t1_date"])),
                     )
                     t1 = T1Tracker(cfg, ctx)
                     for b in t1_bars:
                         t1.feed(b)
                     t1_sig = t1.finalize(again)
+                    if t1_sig is not None:
+                        t1_out = dataclasses.asdict(t1_sig)
+                        t1_out["daily_fallback"] = False
+                    else:
+                        # 1K 在但無有效量(處置股分盤等)→ 日線 fallback
+                        skip.append("t1_1k_empty")
+                        t1_out = _t1_daily_fallback(cfg, daily, ev, limit)
 
             out.write(
                 json.dumps(
@@ -98,7 +147,7 @@ def run_replay(
                         "broker_ids": ev["broker_ids"],
                         "again": again,
                         "lock": dataclasses.asdict(lock_sig) if lock_sig else None,
-                        "t1": dataclasses.asdict(t1_sig) if t1_sig else None,
+                        "t1": t1_out,
                         "skip": skip,
                     },
                     ensure_ascii=False,

@@ -91,6 +91,18 @@ def _write_src(src: Path) -> None:
         w = csv.DictWriter(fh, fieldnames=list(prices[0]))
         w.writeheader()
         w.writerows(prices)
+    ticks = src / "ticks"
+    ticks.mkdir()
+    # T+1 日 tick:首筆 = 09:00:06 競價 20 張
+    (ticks / "1104_2025-09-11.json").write_text(
+        json.dumps(
+            [
+                {"t": "10006", "p": "33", "q": "20", "b": "32.9", "a": "33"},
+                {"t": "10010", "p": "33.1", "q": "5", "b": "33", "a": "33.1"},
+            ]
+        ),
+        encoding="utf-8",
+    )
     with (src / "all_limitup_events.csv").open("w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["stock_id", "date", "close", "spread", "pct", "volume"])
         w.writeheader()
@@ -193,3 +205,7 @@ def test_run_import(tmp_path: Path) -> None:
     missing_t1 = manifest["missing_t1_1k"]
     assert isinstance(missing_t1, list) and "2001,2025-09-11" in missing_t1
     assert (data / "manifest.json").exists()
+    # tick 競價量抽取(首筆成交)
+    with (data / "events" / "tick_auction.csv").open("r", encoding="utf-8") as fh:
+        auct = {(r["stock_id"], r["date"]): r["auction_lots"] for r in csv.DictReader(fh)}
+    assert auct[("1104", "2025-09-11")] == "20"

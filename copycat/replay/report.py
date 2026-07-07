@@ -106,6 +106,8 @@ def agg_auction(events: list[dict], cohort: str, basis: str) -> list[dict]:
 
             def in_bucket(e: dict, b: str = bucket) -> bool:
                 s = e["t1"]["auction_share_dayvol"]
+                if s is None:  # daily fallback 事件無盤中量,不入桶
+                    return False
                 return {"<3%": s < 0.03, "3-8%": 0.03 <= s < 0.08, ">=8%": s >= 0.08}[b]
 
             sel = [e for e in sel_all if in_bucket(e)]

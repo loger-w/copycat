@@ -24,6 +24,9 @@ class EventContext:
     one_price: bool | None     # T 日一價到底(日線 high==low)
     board_streak: int          # T 日連板數
     lock: LockQualitySignals | None
+    # 以下兩項在 T+1 09:00:06 即可知,非 lookahead;提供時優先於 1K 推算值
+    t1_open_px: float | None = None        # T+1 日線開盤價(競價成交價,權威)
+    auction_lots_tick: float | None = None  # T+1 開盤競價張數(tick 首筆,純競價)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +47,7 @@ class T1OpenSignals:
     path: str
 
 
-def _gap_bucket(cfg: StrategyConfig, gap: float) -> str:
+def gap_bucket_label(cfg: StrategyConfig, gap: float) -> str:
     for label, cut in zip(_GAP_LABELS, cfg.gap_buckets):
         if gap < cut:
             return label
@@ -79,11 +82,19 @@ class T1Tracker:
             self._high = bar.high
             self._high_pos = len(self._bars) - 1
 
+    def _open_px(self) -> float:
+        ctx_open = self._ctx.t1_open_px
+        return ctx_open if ctx_open is not None else self._bars[0].open
+
+    def _auction_lots(self) -> float:
+        tick = self._ctx.auction_lots_tick
+        return tick if tick is not None else self._bars[0].volume
+
     @property
     def gap(self) -> float | None:
         if not self._bars:
             return None
-        return self._bars[0].open / self._ctx.limit - 1
+        return self._open_px() / self._ctx.limit - 1
 
     @property
     def auction_tell(self) -> str | None:
@@ -95,7 +106,7 @@ class T1Tracker:
         adv = self._ctx.adv20_lots
         if adv is None or adv <= 0 or not self._bars:
             return None
-        return self._bars[0].volume / adv
+        return self._auction_lots() / adv
 
     def finalize(self, again: bool) -> T1OpenSignals | None:
         cfg = self._cfg
@@ -105,7 +116,7 @@ class T1Tracker:
         day_vol = sum(b.volume for b in bars)
         if day_vol <= 0:
             return None
-        open_px = bars[0].open
+        open_px = self._open_px()
         if open_px <= 0:
             return None
         close_px = bars[-1].close
@@ -135,11 +146,11 @@ class T1Tracker:
         return T1OpenSignals(
             open_px=open_px,
             gap=gap,
-            gap_bucket=_gap_bucket(cfg, gap),
-            auction_lots=bars[0].volume,
+            gap_bucket=gap_bucket_label(cfg, gap),
+            auction_lots=self._auction_lots(),
             auction_share_adv20=self._auction_share_adv20(),
             auction_tell=_auction_tell(cfg, self._auction_share_adv20()),
-            auction_share_dayvol=bars[0].volume / day_vol,
+            auction_share_dayvol=self._auction_lots() / day_vol,
             inner15=inner15,
             high_idx=high_m,
             high_time=fmt_min(high_m),

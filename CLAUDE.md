@@ -28,7 +28,16 @@ User-global `~/.claude/CLAUDE.md` 的鐵則(觀察優先 / Scope / 測試 / 證�
 - **目前階段(2026-07-07)**:策略調整與回測基建期,尚未落地盤中;終局 = 盤中輔助手動下單。第一個交付物 = 評分引擎 + 歷史 replay(Phase 2 鎖板品質 + Phase 3 T+1 開盤訊號,事件驅動、無 lookahead、身分無關),策略門檻全部收在版本化 strategy config,調策略 = 改 config 重跑對照,不動引擎。設計 spec:`docs/superpowers/specs/2026-07-07-broker-fingerprint-replay-design.md`。種子資料 = neigui `backend/data/research/five-tigers/`(1.24 GB,本機不納版控)。**硬限制:五檔委買賣深度不可得**(TC4 tick 僅成交當下一檔 Bid/Ask),依賴掛牆厚度的策略假設不可回測。
 
 ```
-(待補)
+copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/pyright dev)
+├── data/                 #   models(Bar1K/台北分鐘索引)、store(1K atomic JSON)、
+│                         #   daily(adv20/一價到底/連板)、import_neigui(種子匯入)
+├── engine/               #   lock_quality(LockTracker)、t1_open(T1Tracker)— 零 IO 狀態機
+├── replay/               #   runner / report(summary.md)/ validate(golden gate)/ compare
+├── strategy_config.py    #   全部策略門檻(版本化,configs/*.json 覆寫)
+├── watchlist.py          #   可替換分點集合(watchlists/*.json)
+└── cli.py                #   python -m copycat <import-neigui|replay|validate|compare>
+data/(git-ignored)       # 匯入產物;out/(git-ignored)= replay 產物
+docs/superpowers/         # spec 與 implementation plan
 ```
 
 ---
@@ -37,9 +46,15 @@ User-global `~/.claude/CLAUDE.md` 的鐵則(觀察優先 / Scope / 測試 / 證�
 
 | 用途 | 指令 | 工作目錄 |
 |------|------|---------|
-| (待補,等專案啟動) | | |
+| 測試 | `.venv\Scripts\python -m pytest -q` | repo root |
+| Lint | `.venv\Scripts\python -m ruff check copycat tests` | repo root |
+| 型別 | `.venv\Scripts\python -m pyright` | repo root |
+| 種子匯入(一次性) | `.venv\Scripts\python -m copycat import-neigui --src C:\side-project\neigui\backend\data\research\five-tigers` | repo root |
+| Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
+| Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
+| Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 
-完成前要過的 gate:預期至少 `pytest -q` + frontend test + build,UI 改動還要走 chrome-devtools-mcp 真實截圖。實際 gate 等專案落地後補。
+完成前要過的 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過 four/five 兩份 replay)。venv = Python 3.13(`py -3.13 -m venv .venv`;`py` launcher 預設 3.14,別直接用)。目前無 frontend。
 
 **部署前置(Touchance 特性)**:
 

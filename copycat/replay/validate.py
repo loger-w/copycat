@@ -126,7 +126,9 @@ def run_validate(run_five: Path, run_four: Path) -> list[dict]:
         )
     )
 
-    queue = {r["bucket"]: r for r in agg_queue(ev5, "tiger")}
+    # SC-4 golden cell 出自四虎 core 事件集(與 SC-5 同,2026-07-07 定義掃描確認:
+    # 四虎 lock<10:00 × share≥0.40 → med gap +6.00% / 續鎖 13.2% 與 golden 完全一致)
+    queue = {r["bucket"]: r for r in agg_queue(ev4, "tiger")}
     checks.append(
         _check(
             "SC-4",

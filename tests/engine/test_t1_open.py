@@ -10,10 +10,12 @@ CFG = StrategyConfig.default()
 LIMIT_T = 100.0  # T 日漲停收盤
 
 
-def ctx(adv20: float | None = 1000.0) -> EventContext:
+def ctx(adv20: float | None = 1000.0, t1_open_px: float | None = None,
+        auction_lots_tick: float | None = None) -> EventContext:
     return EventContext(stock_id="1104", date="2025-09-10", t1_date="2025-09-11",
                         limit=LIMIT_T, adv20_lots=adv20, one_price=False,
-                        board_streak=1, lock=None)
+                        board_streak=1, lock=None, t1_open_px=t1_open_px,
+                        auction_lots_tick=auction_lots_tick)
 
 
 def bar(m: int, close: float, *, open_: float | None = None, high: float | None = None,
@@ -114,3 +116,31 @@ def test_feed_non_increasing_raises() -> None:
     t.feed(bar(3, 103.0))
     with pytest.raises(ValueError):
         t.feed(bar(2, 104.0))
+
+
+def test_t1_open_px_override_wins_gap() -> None:
+    # 日線 open(權威競價價)與 1K 首根 open 不同時,gap 以日線為準
+    t = T1Tracker(CFG, ctx(t1_open_px=99.5))
+    t.feed(bar(0, 103.0, v=100.0))
+    assert t.gap == pytest.approx(-0.005)
+    sig = t.finalize(False)
+    assert sig is not None
+    assert sig.open_px == 99.5 and sig.gap_bucket == "<0%"
+
+
+def test_auction_lots_tick_override() -> None:
+    # tick 競價量(純 09:00:06 那筆)優先於 1K 首根 volume
+    sig = run_with_ctx([bar(0, 103.0, v=100.0), bar(1, 104.0, v=60.0)],
+                       ctx(auction_lots_tick=20.0))
+    assert sig is not None
+    assert sig.auction_lots == 20.0
+    assert sig.auction_share_adv20 == pytest.approx(0.02)
+    assert sig.auction_tell == "<3%"
+    assert sig.auction_share_dayvol == pytest.approx(20.0 / 160.0)
+
+
+def run_with_ctx(bars: list[Bar1K], context: EventContext) -> T1OpenSignals | None:
+    t = T1Tracker(CFG, context)
+    for b in bars:
+        t.feed(b)
+    return t.finalize(False)
