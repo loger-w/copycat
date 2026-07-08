@@ -114,6 +114,15 @@ class FadeBacktestConfig:
     )
     # --- 時間窗 ---
     max_window_grid: tuple[int, ...] = (10, 15, 20, 30, 45, 60, 90, 120)
+    # --- 位階特徵(structural_features 需要,沿 BacktestConfig 預設)---
+    lowbase_dist_ma60_abs: float = 0.05
+    lowbase_bb_pct: float = 0.20
+    ignition_lookback: int = 20
+    ignition_ret5_abs: float = 0.03
+    ignition_days_since_limitup: int = 20
+    ignition_touch_theta: float = 0.08
+    touchback_upper: float = 0.075
+    touchback_lower: float = 0.07
     # --- 驗證三道 ---
     plateau_neighbor_steps: tuple[int, ...] = (1, 2)
     plateau_min_frac: float = 0.4
@@ -124,9 +133,12 @@ class FadeBacktestConfig:
 
 
 def enumerate_baseline_combos(cfg: FadeBacktestConfig) -> list[FadeStopCombo]:
-    """S1/S2/S3/S4 單族 baseline(S5=off, t1300=baseline),用於 train 排名."""
+    """S1/S2/S3/S4 單族 baseline + 無停損 baseline(S5=off, t1300=baseline),用於 train 排名."""
     combos: list[FadeStopCombo] = []
     base = {"s5_x": None, "t1300": cfg.baseline_t1300}
+    combos.append(
+        FadeStopCombo(s1_n=None, s1_phi=None, s2_m=None, s2_buf=None, s3_x=None, s4_x=None, **base)
+    )
     for n in cfg.s1_stall_bars:
         for phi in cfg.s1_outer_max:
             combos.append(
@@ -156,8 +168,8 @@ def enumerate_fade_stop_combos(
     cfg: FadeBacktestConfig,
     top3_s1: list[tuple[int, float]],
 ) -> list[FadeStopCombo]:
-    """最終停損網格:單族 + top3 S1×S2 疊加 × S5(on/off) × 13:00(on/off)."""
-    bases: list[dict[str, object]] = []
+    """最終停損網格:無停損 + 單族 + top3 S1×S2 疊加 × S5(on/off) × 13:00(on/off)."""
+    bases: list[dict[str, object]] = [{}]
     for n in cfg.s1_stall_bars:
         for phi in cfg.s1_outer_max:
             bases.append({"s1_n": n, "s1_phi": phi})
