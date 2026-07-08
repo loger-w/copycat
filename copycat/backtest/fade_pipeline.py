@@ -24,13 +24,16 @@ from copycat.backtest.fade_config import (
 from copycat.backtest.fade_features import fade_trigger_features
 from copycat.backtest.fade_simulate import FadeSample, simulate_fade_sample
 from copycat.backtest.market_features import compute_mkt_daily_features_full
+from copycat.backtest.features import static_features, structural_features
 from copycat.backtest.search import (
+    apply_rule,
     build_predicates,
     exhaustive_scan,
     ga_search,
     jaccard_dedupe,
     rule_sort_key,
 )
+from copycat.backtest.stats import Trade, max_drawdown, monthly_consistency, weighted_stats
 from copycat.data.daily import DailyIndex
 from copycat.data.models import Bar1K
 from copycat.data.store import read_bars
@@ -141,8 +144,6 @@ def run_fade_arm(
             no_trigger_count += 1
             continue
 
-        from copycat.backtest.features import static_features, structural_features
-
         stat = static_features(daily, sample.stock_id, sample.date)
         struct = structural_features(daily, sample.stock_id, sample.date, cfg)  # type: ignore[arg-type]
 
@@ -160,6 +161,7 @@ def run_fade_arm(
             static_features={**(stat or {}), **(struct or {})},
             mkt_daily=mkt_daily_feats,
             mkt_intraday=None,
+            limit=sample.limit,
         )
         triggered.append((sample, bars, trig_idx))
         features_list.append(feats)
@@ -229,28 +231,7 @@ def run_fade_arm(
                 pnl_map[cid].append(out_r.pnl_rate)
                 status_map[cid].append(out_r.status)
 
-    stress_combo = FadeStopCombo(
-        s1_n=None,
-        s1_phi=None,
-        s2_m=None,
-        s2_buf=None,
-        s3_x=None,
-        s4_x=None,
-        s5_x=None,
-        t1300=cfg.baseline_t1300,
-    )
-    stress_pnl: list[float | None] = []
-    for sample, bars, trig_idx in triggered:
-        out_s = simulate_fade_sample(
-            bars,
-            trig_idx,
-            sample,
-            stress_combo,
-            cfg,
-            cfg.stress_slippage_ticks,
-        )
-        stress_pnl.append(out_s.pnl_rate)
-
+    # F6 fix: removed stress_pnl dead computation
     default_combo = FadeStopCombo(
         s1_n=None,
         s1_phi=None,
@@ -264,37 +245,79 @@ def run_fade_arm(
     default_pnl = pnl_map.get(default_combo.combo_id, [])
     default_status = status_map.get(default_combo.combo_id, [])
 
-    feature_rows: list[dict[str, float | None]] = []
-    weights: list[float] = []
-    pnl_for_ga: list[float] = []
+    # F2 fix: only tradeable samples enter GA; F1 fix: split train/test
+    train_feat: list[dict[str, float | None]] = []
+    train_weights: list[float] = []
+    train_pnl: list[float] = []
+    all_feat: list[dict[str, float | None]] = []
+    all_pnl: list[float] = []
+    all_dates: list[str] = []
+    all_sids: list[str] = []
 
     for i, (sample, bars, trig_idx) in enumerate(triggered):
         p = default_pnl[i] if i < len(default_pnl) else None
         s = default_status[i] if i < len(default_status) else ""
         if s not in _TRADEABLE or p is None:
-            feature_rows.append(features_list[i])
-            weights.append(1.0)
-            pnl_for_ga.append(0.0)
             continue
-        feature_rows.append(features_list[i])
-        weights.append(1.0)
-        pnl_for_ga.append(p)
+        all_feat.append(features_list[i])
+        all_pnl.append(p)
+        all_dates.append(sample.t1_date)
+        all_sids.append(sample.stock_id)
+        if sample.t1_date < cfg.split_date:
+            train_feat.append(features_list[i])
+            train_weights.append(1.0)
+            train_pnl.append(p)
 
+    # F1 fix: GA on train only, three-gate validation on test
     rules: list[dict[str, object]] = []
-    if is_anchor and feature_rows:
-        feature_names = sorted({k for row in feature_rows for k in row if row[k] is not None})
-        predicates = build_predicates(feature_rows, feature_names, cfg.quantile_probs)
+    if is_anchor and train_feat:
+        feature_names = sorted({k for row in train_feat for k in row if row[k] is not None})
+        predicates = build_predicates(train_feat, feature_names, cfg.quantile_probs)
         logger.info("predicates: %d (features: %d)", len(predicates), len(feature_names))
 
-        exh = exhaustive_scan(predicates, pnl_for_ga, weights, cfg)  # type: ignore[arg-type]
+        exh = exhaustive_scan(predicates, train_pnl, train_weights, cfg)  # type: ignore[arg-type]
         ga_all: list[dict[str, object]] = list(exh)
         for seed in cfg.ga_seeds:
-            ga_all.extend(ga_search(predicates, pnl_for_ga, weights, cfg, seed))  # type: ignore[arg-type]
+            ga_all.extend(ga_search(predicates, train_pnl, train_weights, cfg, seed))  # type: ignore[arg-type]
         ga_all.sort(key=rule_sort_key)
-        rules = jaccard_dedupe(ga_all, cfg.jaccard_max)[:30]
-        logger.info("rules after dedupe: %d", len(rules))
+        candidates = jaccard_dedupe(ga_all, cfg.jaccard_max)[:30]
 
-    lock_count = sum(1 for s_list in status_map.values() for s in s_list if s == "locked_at_limit")
+        test_start = cfg.split_date
+        test_end = max(all_dates) if all_dates else cfg.split_date
+        for rule in candidates:
+            conds = rule["conditions"]
+            assert isinstance(conds, list)
+            mask = apply_rule(conds, all_feat)
+            test_t = [
+                Trade(date=all_dates[j], stock_id=all_sids[j], pnl=all_pnl[j])
+                for j in range(len(all_feat))
+                if mask & (1 << j) and all_dates[j] >= cfg.split_date
+            ]
+            if not test_t:
+                continue
+            ts = weighted_stats(test_t)
+            test_exp = ts.get("expectancy")
+            if test_exp is None or test_exp <= 0:
+                continue
+            mc = monthly_consistency(test_t, test_start, test_end)
+            rule["test_expectancy"] = test_exp
+            rule["test_p_win"] = ts.get("p_win")
+            rule["test_payoff"] = ts.get("payoff")
+            rule["test_n_raw"] = ts.get("n_raw")
+            rule["test_mdd"] = max_drawdown(test_t)
+            rule["monthly_passed"] = mc["passed"]
+            rule["monthly_hits"] = mc.get("monthly_hits")
+            rule["passed_all"] = bool(mc["passed"])
+            rules.append(rule)
+
+        logger.info("rules after three-gate: %d / %d candidates", len(rules), len(candidates))
+
+    # F4 fix: lock count per unique triggered sample (not per combo)
+    lock_count = sum(
+        1
+        for i in range(len(triggered))
+        if i < len(default_status) and default_status[i] == "locked_at_limit"
+    )
 
     return {
         "arm": arm.name,
@@ -306,6 +329,8 @@ def run_fade_arm(
         "rules": rules,
         "is_anchor": is_anchor,
         "lock_events": lock_count,
+        "n_train": len(train_feat),
+        "n_test": len(all_feat) - len(train_feat),
     }
 
 

@@ -12,7 +12,9 @@ def _safe_div(a: float, b: float) -> float | None:
     return a / b if b != 0 else None
 
 
-def _intraday_basic(bars: list[Bar1K], trig_idx: int) -> dict[str, float | None]:
+def _intraday_basic(
+    bars: list[Bar1K], trig_idx: int, limit: float = 0.0
+) -> dict[str, float | None]:
     """盤中基礎 7 欄(§6e)."""
     w = bars[: trig_idx + 1]
     out: dict[str, float | None] = {}
@@ -54,10 +56,10 @@ def _intraday_basic(bars: list[Bar1K], trig_idx: int) -> dict[str, float | None]
     out["consecutive_red"] = float(red_count)
 
     open_px = w[0].open
-    limit_prev = open_px  # fallback
     current = w[-1].close
-    if open_px > 0:
-        out["gap_fill_pct"] = (open_px - current) / open_px if open_px != limit_prev else None
+    gap_range = open_px - limit if limit > 0 else 0.0
+    if gap_range > 0:
+        out["gap_fill_pct"] = (open_px - current) / gap_range
     else:
         out["gap_fill_pct"] = None
 
@@ -232,11 +234,12 @@ def fade_trigger_features(
     static_features: dict[str, float | None] | None,
     mkt_daily: dict[str, float | None] | None,
     mkt_intraday: dict[str, float | None] | None,
+    limit: float = 0.0,
 ) -> dict[str, float | None]:
     """觸發時點全特徵 ~224 欄."""
     out: dict[str, float | None] = {}
 
-    out.update(_intraday_basic(bars, trig_idx))
+    out.update(_intraday_basic(bars, trig_idx, limit=limit))
     out.update(_unch_vol_spike(bars, trig_idx))
     out.update(_price_vol_divergence(bars, trig_idx))
     out.update(_open_eq_high_count(bars, trig_idx))

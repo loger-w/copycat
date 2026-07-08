@@ -49,7 +49,7 @@ def test_fade_search_dispatches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert called["evidence_dir"] == tmp_path / "evidence"
 
 
-def test_fade_features_dispatches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_fade_search_default_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     called: dict[str, object] = {}
 
     def fake_pipeline(
@@ -60,17 +60,21 @@ def test_fade_features_dispatches(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         evidence_dir: Path | None = None,
     ) -> dict[str, object]:
         called["dispatched"] = True
+        called["cfg_type"] = type(cfg).__name__
         return {"report": "", "rules_final": ""}
 
     monkeypatch.setattr("copycat.backtest.fade_pipeline.run_fade_pipeline", fake_pipeline)
     rc = main(
         [
-            "fade-features",
+            "fade-search",
             "--data-dir",
             str(tmp_path / "data"),
             "--out",
             str(tmp_path / "out"),
+            "--report-date",
+            "2026-07-08",
         ]
     )
     assert rc == 0
     assert called.get("dispatched") is True
+    assert called.get("cfg_type") == "FadeBacktestConfig"

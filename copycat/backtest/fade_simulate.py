@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from copycat.backtest.fade_config import FadeBacktestConfig, FadeStopCombo
 from copycat.data.models import Bar1K
-from copycat.market import tick_size
+from copycat.market import limit_up_price, tick_size
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +57,7 @@ def simulate_fade_sample(
         raise ValueError(f"bars 不含觸發 bar: {sample.stock_id} {sample.t1_date}")
 
     trig = bars[trig_idx]
-    t1_limit = sample.limit * 1.10
+    t1_limit = limit_up_price(sample.limit)
     t1_down_limit = sample.limit * 0.90
     eps = cfg.limit_eps
 

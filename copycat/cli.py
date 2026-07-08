@@ -62,11 +62,6 @@ def main(argv: list[str] | None = None) -> int:
     p_ts.add_argument("--report-date", required=True)
     p_ts.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
 
-    p_ff = sub.add_parser("fade-features", help="T+1 fade 回測:觸發特徵管線")
-    p_ff.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_ff.add_argument("--out", type=Path, default=Path("out/fade_ga"))
-    p_ff.add_argument("--config", type=Path, default=None)
-
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -134,17 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(f"回測報告 → {report}\n")
         return 0
-    if args.command in ("fade-features", "fade-search"):
+    if args.command == "fade-search":
         from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
         from copycat.backtest.fade_pipeline import run_fade_pipeline
 
         fade_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
-        if args.command == "fade-features":
-            result = run_fade_pipeline(
-                args.data_dir, args.out, fade_cfg, "features-only",
-            )
-            sys.stdout.write(f"fade features 完成 → {args.out}\n")
-            return 0
         result = run_fade_pipeline(
             args.data_dir, args.out, fade_cfg, args.report_date,
             evidence_dir=args.report_dir,
