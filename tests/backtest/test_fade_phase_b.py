@@ -213,3 +213,99 @@ class TestOptimizeRuleTp:
         optimize_rule_tp([], rules, [], [], [], _CFG)
         assert rules[0]["stress_passed"] is False
         assert rules[0]["best_tp"] is None
+
+
+class TestBuildCrossArmTable:
+    def test_ranking(self) -> None:
+        from copycat.backtest.fade_optimize import build_cross_arm_table
+
+        results: list[dict[str, object]] = [
+            {
+                "arm": "pullback",
+                "param": {"x_pct": 0.003},
+                "rules": [
+                    {
+                        "best_test_expectancy": 0.005,
+                        "stress_expectancy": 0.003,
+                        "best_test_p_win": 0.6,
+                        "best_test_payoff": 1.5,
+                        "best_test_mdd": 0.02,
+                        "best_lock_pct": 0.1,
+                        "stress_passed": True,
+                        "best_stop": "s1",
+                        "best_tp": "tp1",
+                        "best_test_n": 30,
+                    },
+                ],
+            },
+            {
+                "arm": "inner_flip",
+                "param": {"n_window": 5},
+                "rules": [
+                    {
+                        "best_test_expectancy": 0.008,
+                        "stress_expectancy": 0.005,
+                        "best_test_p_win": 0.65,
+                        "best_test_payoff": 1.8,
+                        "best_test_mdd": 0.03,
+                        "best_lock_pct": 0.05,
+                        "stress_passed": True,
+                        "best_stop": "s2",
+                        "best_tp": "tp2",
+                        "best_test_n": 25,
+                    },
+                ],
+            },
+            {
+                "arm": "delta_flip",
+                "param": {},
+                "rules": [
+                    {
+                        "best_test_expectancy": 0.003,
+                        "stress_expectancy": -0.001,
+                        "best_test_p_win": 0.55,
+                        "best_test_payoff": 1.2,
+                        "best_test_mdd": 0.04,
+                        "best_lock_pct": 0.15,
+                        "stress_passed": False,
+                        "best_stop": "s3",
+                        "best_tp": "tp3",
+                        "best_test_n": 20,
+                    },
+                ],
+            },
+        ]
+        table = build_cross_arm_table(results)
+        assert len(table) == 3
+        assert table[0]["arm"] == "inner_flip"
+        assert table[0]["rank"] == 1
+        assert table[1]["arm"] == "pullback"
+        assert table[2]["arm"] == "delta_flip"
+
+    def test_empty_arm(self) -> None:
+        from copycat.backtest.fade_optimize import build_cross_arm_table
+
+        results: list[dict[str, object]] = [
+            {"arm": "pullback", "param": {}, "rules": []},
+            {
+                "arm": "inner_flip",
+                "param": {},
+                "rules": [
+                    {
+                        "best_test_expectancy": 0.005,
+                        "stress_expectancy": 0.003,
+                        "best_test_p_win": 0.6,
+                        "best_test_payoff": 1.5,
+                        "best_test_mdd": 0.02,
+                        "best_lock_pct": 0.1,
+                        "stress_passed": True,
+                        "best_stop": "s1",
+                        "best_tp": "tp1",
+                        "best_test_n": 30,
+                    },
+                ],
+            },
+        ]
+        table = build_cross_arm_table(results)
+        assert len(table) == 1
+        assert table[0]["arm"] == "inner_flip"

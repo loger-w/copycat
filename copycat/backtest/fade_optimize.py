@@ -229,3 +229,43 @@ def optimize_rule_tp(
             rule.get("best_test_expectancy"),
             rule.get("stress_passed"),
         )
+
+
+def build_cross_arm_table(
+    all_results: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """7 臂 top-1 rule 橫向比較表(best_test_expectancy DESC)."""
+    rows: list[dict[str, object]] = []
+    for result in all_results:
+        rules = result.get("rules")
+        if not isinstance(rules, list) or not rules:
+            continue
+        best_rule = None
+        best_exp = -1e18
+        for rule in rules:
+            exp = rule.get("best_test_expectancy")
+            if isinstance(exp, float | int) and exp > best_exp:
+                best_exp = float(exp)
+                best_rule = rule
+        if best_rule is None:
+            continue
+        rows.append(
+            {
+                "arm": result.get("arm", "?"),
+                "param": result.get("param", {}),
+                "test_exp": best_rule.get("best_test_expectancy"),
+                "stress_exp": best_rule.get("stress_expectancy"),
+                "p_win": best_rule.get("best_test_p_win"),
+                "payoff": best_rule.get("best_test_payoff"),
+                "mdd": best_rule.get("best_test_mdd"),
+                "lock_pct": best_rule.get("best_lock_pct"),
+                "stress_passed": best_rule.get("stress_passed"),
+                "best_stop": best_rule.get("best_stop"),
+                "best_tp": best_rule.get("best_tp"),
+                "n_test": best_rule.get("best_test_n"),
+            }
+        )
+    rows.sort(key=lambda r: (-float(r.get("test_exp") or -1e18), float(r.get("mdd") or 0)))
+    for i, row in enumerate(rows):
+        row["rank"] = i + 1
+    return rows
