@@ -45,7 +45,7 @@ def _round_trip_cost(cfg: FadeBacktestConfig) -> float:
     return fee + cfg.intraday_tax
 
 
-def simulate_fade_sample(
+def _simulate_core(
     bars: list[Bar1K],
     trig_idx: int,
     sample: FadeSample,
@@ -153,3 +153,14 @@ def simulate_fade_sample(
     if last.low >= t1_limit - eps:
         return FadeTradeOutcome("locked_at_limit", _pnl(t1_limit), None, True)
     return FadeTradeOutcome("closeout", _pnl(last.close), last.m, ever_locked)
+
+
+def simulate_fade_sample(
+    bars: list[Bar1K],
+    trig_idx: int,
+    sample: FadeSample,
+    combo: FadeStopCombo,
+    cfg: FadeBacktestConfig,
+    slippage_ticks: int,
+) -> FadeTradeOutcome:
+    return _simulate_core(bars, trig_idx, sample, combo, cfg, slippage_ticks)
