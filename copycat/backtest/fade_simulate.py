@@ -188,18 +188,14 @@ def _simulate_core(
                 worst = max(worst, time_fill)
             return FadeTradeOutcome("stopped", _pnl(worst), b.m, ever_locked)
 
-        best_tp_exit = None
-        if target_fill is not None and tp_fill is not None:
-            best_tp_exit = max(target_fill, tp_fill)
-        elif target_fill is not None:
-            best_tp_exit = target_fill
-        elif tp_fill is not None:
-            best_tp_exit = tp_fill
+        if target_fill is not None:
+            exit_price = target_fill
+            if tp_fill is not None:
+                exit_price = max(target_fill, tp_fill)
+            return FadeTradeOutcome("target_hit", _pnl(exit_price), b.m, ever_locked)
 
-        if best_tp_exit is not None:
-            if time_fill is not None:
-                best_tp_exit = max(best_tp_exit, time_fill)
-            return FadeTradeOutcome("target_hit", _pnl(best_tp_exit), b.m, ever_locked)
+        if tp_fill is not None:
+            return FadeTradeOutcome("target_hit", _pnl(tp_fill), b.m, ever_locked)
 
         if time_fill is not None:
             return FadeTradeOutcome("time_1300", _pnl(time_fill), b.m, ever_locked)

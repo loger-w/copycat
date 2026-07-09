@@ -224,7 +224,10 @@ class TestTP4:
             _bar(1, 52.0, 52.0, 51.0, 51.5),
             _bar(2, 51.5, 51.5, 50.5, 51.0),  # new low
             _bar(3, 51.0, 51.0, 50.0, 50.5),  # new low
-            _bar(4, 50.5, 50.5, 49.5, 50.0),  # new low -> 3 consecutive
+            _bar(4, 50.5, 50.5, 49.5, 50.0),  # new low -> 3 consecutive (prior bars, excl current)
+            _bar(
+                5, 50.0, 50.0, 49.0, 49.5
+            ),  # current bar; prior window [bar2,bar3,bar4] has 3 new lows
         ]
         r = simulate_fade_with_tp(bars, 0, _SAMPLE, _NONE_COMBO, tp, _CFG, 1)
         assert r.status == "target_hit"

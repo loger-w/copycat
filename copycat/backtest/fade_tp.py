@@ -63,7 +63,7 @@ def _tp1(
         return None
     lb = int(tp.get("lookback"))
     window = post_bars[-(lb + 1) : -1] if len(post_bars) > 1 else []
-    if not window:
+    if len(window) < lb:
         return None
     avg_vol = sum(b.volume for b in window) / len(window)
     if avg_vol <= 0:
@@ -127,7 +127,13 @@ def _tp3(
     if bar.low > running_low:
         return None
     recent = post_bars[-(n + 1) : -1] if len(post_bars) > n else post_bars[:-1]
-    prior = post_bars[-(2 * n + 1) : -(n + 1)] if len(post_bars) > 2 * n else []
+    prior = (
+        post_bars[-(2 * n + 1) : -(n + 1)]
+        if len(post_bars) >= 2 * n + 1
+        else post_bars[: -(n + 1)]
+        if len(post_bars) > n + 1
+        else []
+    )
     if len(recent) < 2 or len(prior) < 2:
         return None
     recent_drops = []
@@ -158,9 +164,11 @@ def _tp4(
     if profit < tp.get("min_profit"):
         return None
     n = int(tp.get("n"))
-    if len(post_bars) < n + 1:
+    if len(post_bars) < n + 2:
         return None
-    window = post_bars[-(n + 1) :]
+    window = post_bars[-(n + 2) : -1]
+    if len(window) < n + 1:
+        return None
     for i in range(1, len(window)):
         if window[i].low >= window[i - 1].low:
             return None

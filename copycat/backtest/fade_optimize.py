@@ -98,7 +98,7 @@ def optimize_rule_stops(
             continue
 
         best_exp = -1e18
-        best_combo = all_combos[0]
+        best_combo: FadeStopCombo | None = None
         for combo in all_combos:
             ev = _eval_combo(train_idx, tradeable_samples, combo, None, cfg, cfg.slippage_ticks)
             exp = ev.get("expectancy")
@@ -106,6 +106,10 @@ def optimize_rule_stops(
                 best_exp = exp
                 best_combo = combo
 
+        if best_combo is None:
+            rule["best_stop"] = None
+            rule["best_stop_params"] = None
+            continue
         rule["best_stop"] = best_combo.combo_id
         rule["best_stop_params"] = asdict(best_combo)
         logger.info(
@@ -174,16 +178,19 @@ def optimize_rule_tp(
         test_idx = _test_indices(mask, all_dates, cfg.split_date, is_train=False)
 
         best_tp_exp = -1e18
-        best_tp = tp_combos[0]
-        for tp in tp_combos:
-            if not train_idx:
-                break
-            ev = _eval_combo(train_idx, tradeable_samples, best_stop, tp, cfg, cfg.slippage_ticks)
-            exp = ev.get("expectancy")
-            if exp is not None and exp > best_tp_exp:
-                best_tp_exp = exp
-                best_tp = tp
+        best_tp: FadeTakeProfitCombo | None = None
+        if train_idx:
+            for tp in tp_combos:
+                ev = _eval_combo(
+                    train_idx, tradeable_samples, best_stop, tp, cfg, cfg.slippage_ticks
+                )
+                exp = ev.get("expectancy")
+                if exp is not None and exp > best_tp_exp:
+                    best_tp_exp = exp
+                    best_tp = tp
 
+        if best_tp is None:
+            best_tp = FadeTakeProfitCombo(None, ())
         rule["best_tp"] = best_tp.tp_id
         rule["best_tp_params"] = {"tp_type": best_tp.tp_type, "params": dict(best_tp.params)}
 
