@@ -12,6 +12,7 @@ def write_fade_report(
     report_date: str,
     out_dir: Path,
     evidence_dir: Path | None = None,
+    cross_arm_table: list[dict[str, object]] | None = None,
 ) -> Path:
     """Markdown 報告."""
     lines: list[str] = []
@@ -74,6 +75,36 @@ def write_fade_report(
         lines.append("## 存活規則")
         lines.append("")
         lines.append("無規則通過三道驗證。")
+        lines.append("")
+
+    if cross_arm_table:
+        lines.append("## 臂間對決(Phase B)")
+        lines.append("")
+        lines.append(
+            "| rank | arm | param | test_exp | stress_exp"
+            " | p_win | payoff | MDD | lock% | stress | best_stop | best_tp | n_test |"
+        )
+        lines.append("|---:|---|---|---:|---:|---:|---:|---:|---:|---|---|---|---:|")
+        for row in cross_arm_table:
+
+            def _f(v: object, fmt: str = ".4f") -> str:
+                return f"{v:{fmt}}" if isinstance(v, float | int) else "—"
+
+            stress = "PASS" if row.get("stress_passed") else "FAIL"
+            lines.append(
+                f"| {row.get('rank', '?')} | {row.get('arm', '?')}"
+                f" | {row.get('param', '')}"
+                f" | {_f(row.get('test_exp'))}"
+                f" | {_f(row.get('stress_exp'))}"
+                f" | {_f(row.get('p_win'), '.2f')}"
+                f" | {_f(row.get('payoff'), '.1f')}"
+                f" | {_f(row.get('mdd'))}"
+                f" | {_f(row.get('lock_pct'), '.1%') if isinstance(row.get('lock_pct'), float | int) else '—'}"
+                f" | {stress}"
+                f" | {row.get('best_stop', '—')}"
+                f" | {row.get('best_tp', '—')}"
+                f" | {row.get('n_test', '?')} |"
+            )
         lines.append("")
 
     lines.append("## 負結果")

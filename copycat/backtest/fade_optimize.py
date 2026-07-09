@@ -265,7 +265,16 @@ def build_cross_arm_table(
                 "n_test": best_rule.get("best_test_n"),
             }
         )
-    rows.sort(key=lambda r: (-float(r.get("test_exp") or -1e18), float(r.get("mdd") or 0)))
+
+    def _sort_key(r: dict[str, object]) -> tuple[float, float]:
+        te = r.get("test_exp")
+        md = r.get("mdd")
+        return (
+            -float(te if isinstance(te, float | int) else -1e18),
+            float(md if isinstance(md, float | int) else 0),
+        )
+
+    rows.sort(key=_sort_key)
     for i, row in enumerate(rows):
         row["rank"] = i + 1
     return rows

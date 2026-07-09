@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from copycat.backtest.fade_config import (
     FadeBacktestConfig,
     FadeStopCombo,
@@ -309,3 +311,42 @@ class TestBuildCrossArmTable:
         table = build_cross_arm_table(results)
         assert len(table) == 1
         assert table[0]["arm"] == "inner_flip"
+
+
+class TestFadeReportCrossArm:
+    def test_report_contains_cross_arm_section(self, tmp_path: "Path") -> None:
+        from copycat.backtest.fade_report import write_fade_report
+
+        cross_arm = [
+            {
+                "rank": 1,
+                "arm": "pullback",
+                "param": {"x_pct": 0.003},
+                "test_exp": 0.008,
+                "stress_exp": 0.005,
+                "p_win": 0.62,
+                "payoff": 1.8,
+                "mdd": 0.02,
+                "lock_pct": 0.1,
+                "stress_passed": True,
+                "best_stop": "s1=3/-1.0|...",
+                "best_tp": "tp=tp1|...",
+                "n_test": 30,
+            },
+        ]
+        out = tmp_path / "out"
+        out.mkdir()
+        path = write_fade_report([], object(), "2026-07-09", out, cross_arm_table=cross_arm)
+        content = path.read_text(encoding="utf-8")
+        assert "## 臂間對決(Phase B)" in content
+        assert "pullback" in content
+        assert "PASS" in content
+
+    def test_report_no_cross_arm_when_none(self, tmp_path: "Path") -> None:
+        from copycat.backtest.fade_report import write_fade_report
+
+        out = tmp_path / "out"
+        out.mkdir()
+        path = write_fade_report([], object(), "2026-07-09", out, cross_arm_table=None)
+        content = path.read_text(encoding="utf-8")
+        assert "臂間對決" not in content
