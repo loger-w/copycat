@@ -7,7 +7,7 @@
 - S1 外盤比:>= phi 觸發(買盤強 = 空方不利;多方版是 < phi)
 - running_low 初始 = trig.low(對稱多方 run_high = trig.high)
 - 鎖死 = bar.low >= t1_limit − eps → 凍結,全日鎖 → 漲停價回補
-- 衝突:停損 > 停利 > 13:00 > 收盤(取最差 = 最高回補價)
+- 衝突:停損 > 停利/TP > 13:00 > 收盤(取最差 = 最高回補價)
 - 無留倉(當沖先賣制度)
 """
 
@@ -15,10 +15,14 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from copycat.backtest.fade_config import FadeBacktestConfig, FadeStopCombo
 from copycat.data.models import Bar1K
 from copycat.market import limit_up_price, tick_size
+
+if TYPE_CHECKING:
+    from copycat.backtest.fade_config import FadeTakeProfitCombo
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +54,7 @@ def _simulate_core(
     trig_idx: int,
     sample: FadeSample,
     combo: FadeStopCombo,
+    tp: FadeTakeProfitCombo | None,
     cfg: FadeBacktestConfig,
     slippage_ticks: int,
 ) -> FadeTradeOutcome:
@@ -78,11 +83,19 @@ def _simulate_core(
         swing_high = swing * (1.0 + (combo.s2_buf or 0.0))
 
     running_low = trig.low
+    running_high = trig.high
     stall = 0
     outer_win: deque[tuple[float, float]] = deque(maxlen=cfg.s1_outer_window)
     t1300_consumed = not combo.t1300
     cost = _round_trip_cost(cfg)
     ever_locked = False
+
+    post_bars_so_far: list[Bar1K] = []
+    cum_pv = 0.0
+    cum_vol = 0.0
+    cum_delta = 0.0
+    prev_cum_delta = 0.0
+    elapsed_bars = 0
 
     def _pnl(exit_price: float) -> float:
         return 1.0 - exit_price / entry - cost
@@ -92,8 +105,11 @@ def _simulate_core(
         if locked:
             ever_locked = True
             running_low = min(running_low, b.low)
+            running_high = max(running_high, b.high)
             if not t1300_consumed and b.m >= cfg.t1300_min_idx:
                 t1300_consumed = True
+            elapsed_bars += 1
+            post_bars_so_far.append(b)
             continue
 
         if b.low < running_low:
@@ -101,7 +117,15 @@ def _simulate_core(
             stall = 0
         else:
             stall += 1
+        running_high = max(running_high, b.high)
         outer_win.append((b.up_volume, b.down_volume))
+
+        prev_cum_delta = cum_delta
+        cum_delta += b.up_volume - b.down_volume
+        cum_pv += b.close * b.volume
+        cum_vol += b.volume
+        post_bars_so_far.append(b)
+        elapsed_bars += 1
 
         stop_fills: list[float] = []
         if combo.s4_x is not None:
@@ -130,6 +154,25 @@ def _simulate_core(
             if b.low <= target_level:
                 target_fill = target_level
 
+        tp_fill: float | None = None
+        if tp is not None:
+            from copycat.backtest.fade_tp import check_tp_exit
+
+            tp_fill = check_tp_exit(
+                tp,
+                b,
+                entry,
+                running_low,
+                running_high,
+                post_bars_so_far,
+                cum_delta,
+                prev_cum_delta,
+                sample,
+                elapsed_bars,
+                cum_pv,
+                cum_vol,
+            )
+
         time_fill: float | None = None
         if not t1300_consumed and b.m >= cfg.t1300_min_idx:
             t1300_consumed = True
@@ -139,12 +182,24 @@ def _simulate_core(
             worst = max(stop_fills)
             if target_fill is not None:
                 worst = max(worst, target_fill)
+            if tp_fill is not None:
+                worst = max(worst, tp_fill)
             if time_fill is not None:
                 worst = max(worst, time_fill)
             return FadeTradeOutcome("stopped", _pnl(worst), b.m, ever_locked)
 
-        if target_fill is not None:
-            return FadeTradeOutcome("target_hit", _pnl(target_fill), b.m, ever_locked)
+        best_tp_exit = None
+        if target_fill is not None and tp_fill is not None:
+            best_tp_exit = max(target_fill, tp_fill)
+        elif target_fill is not None:
+            best_tp_exit = target_fill
+        elif tp_fill is not None:
+            best_tp_exit = tp_fill
+
+        if best_tp_exit is not None:
+            if time_fill is not None:
+                best_tp_exit = max(best_tp_exit, time_fill)
+            return FadeTradeOutcome("target_hit", _pnl(best_tp_exit), b.m, ever_locked)
 
         if time_fill is not None:
             return FadeTradeOutcome("time_1300", _pnl(time_fill), b.m, ever_locked)
@@ -163,4 +218,16 @@ def simulate_fade_sample(
     cfg: FadeBacktestConfig,
     slippage_ticks: int,
 ) -> FadeTradeOutcome:
-    return _simulate_core(bars, trig_idx, sample, combo, cfg, slippage_ticks)
+    return _simulate_core(bars, trig_idx, sample, combo, None, cfg, slippage_ticks)
+
+
+def simulate_fade_with_tp(
+    bars: list[Bar1K],
+    trig_idx: int,
+    sample: FadeSample,
+    combo: FadeStopCombo,
+    tp: FadeTakeProfitCombo | None,
+    cfg: FadeBacktestConfig,
+    slippage_ticks: int,
+) -> FadeTradeOutcome:
+    return _simulate_core(bars, trig_idx, sample, combo, tp, cfg, slippage_ticks)
