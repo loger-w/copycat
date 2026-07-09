@@ -10,7 +10,6 @@ from copycat.backtest.fade_config import (
 )
 from copycat.backtest.fade_simulate import (
     FadeSample,
-    FadeTradeOutcome,
     simulate_fade_sample,
     simulate_fade_with_tp,
 )

@@ -254,6 +254,8 @@ def run_fade_arm(
     all_dates: list[str] = []
     all_sids: list[str] = []
 
+    tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]] = []
+
     for i, (sample, bars, trig_idx) in enumerate(triggered):
         p = default_pnl[i] if i < len(default_pnl) else None
         s = default_status[i] if i < len(default_status) else ""
@@ -263,6 +265,7 @@ def run_fade_arm(
         all_pnl.append(p)
         all_dates.append(sample.t1_date)
         all_sids.append(sample.stock_id)
+        tradeable_samples.append((sample, bars, trig_idx))
         if sample.t1_date < cfg.split_date:
             train_feat.append(features_list[i])
             train_weights.append(1.0)
@@ -311,6 +314,14 @@ def run_fade_arm(
             rules.append(rule)
 
         logger.info("rules after three-gate: %d / %d candidates", len(rules), len(candidates))
+
+    if is_anchor and rules:
+        from copycat.backtest.fade_config import enumerate_tp_combos
+        from copycat.backtest.fade_optimize import optimize_rule_stops, optimize_rule_tp
+
+        optimize_rule_stops(tradeable_samples, rules, all_combos, all_feat, all_dates, cfg)
+        tp_combos = enumerate_tp_combos(cfg)
+        optimize_rule_tp(tradeable_samples, rules, tp_combos, all_feat, all_dates, cfg)
 
     # F4 fix: lock count per unique triggered sample (not per combo)
     lock_count = sum(
@@ -370,9 +381,13 @@ def run_fade_pipeline(
             )
             all_results.append(result)
 
+    from copycat.backtest.fade_optimize import build_cross_arm_table
     from copycat.backtest.fade_report import write_fade_report
 
-    report_path = write_fade_report(all_results, cfg, report_date, out_dir, evidence_dir)
+    cross_arm = build_cross_arm_table(all_results)
+    report_path = write_fade_report(
+        all_results, cfg, report_date, out_dir, evidence_dir, cross_arm_table=cross_arm
+    )
 
     final_path = out_dir / "rules_final.json"
     tmp = final_path.with_suffix(".tmp")
