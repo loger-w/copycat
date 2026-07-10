@@ -14,6 +14,8 @@ def _fake_fetch(dataset: str, start: str, end: str) -> list[dict[str, object]]:
             return [
                 {"stock_id": "2330", "date": "2026-07-01", "BuyAfterSale": ""},
                 {"stock_id": "1101", "date": "2026-07-01", "BuyAfterSale": ""},
+                {"stock_id": "3037", "date": "2026-07-01", "BuyAfterSale": "Y"},  # 禁先賣
+                {"stock_id": "6182", "date": "2026-07-01", "BuyAfterSale": "＊"},  # 禁先賣
             ]
         if start == "2026-07-02":
             return [{"stock_id": "2330", "date": "2026-07-02", "BuyAfterSale": ""}]
@@ -25,12 +27,21 @@ def _fake_fetch(dataset: str, start: str, end: str) -> list[dict[str, object]]:
 
 def test_run_backfill_writes_and_dedups(tmp_path: Path) -> None:
     stats = run_backfill_daytrade(tmp_path, "2026-07-01", "2026-07-02", "t", fetch=_fake_fetch)
-    assert stats["added_rows"] == 3
+    assert stats["added_rows"] == 5
     assert stats["disposition_rows"] == 1
     stats2 = run_backfill_daytrade(tmp_path, "2026-07-01", "2026-07-02", "t", fetch=_fake_fetch)
     assert stats2["added_rows"] == 0  # manifest 續傳 + (sid,date) 冪等
     with (tmp_path / "daytrade" / "day_trading.csv").open(encoding="utf-8") as fh:
-        assert len(list(csv.DictReader(fh))) == 3
+        assert len(list(csv.DictReader(fh))) == 5
+
+
+def test_index_sell_first_restricted_is_ineligible(tmp_path: Path) -> None:
+    # BuyAfterSale 非空('Y' / '＊')= 僅可先買後賣 → 當沖「先賣」策略不可交易
+    run_backfill_daytrade(tmp_path, "2026-07-01", "2026-07-02", "t", fetch=_fake_fetch)
+    idx = DayTradeIndex.load(tmp_path)
+    assert idx is not None
+    assert idx.eligible("3037", "2026-07-01") is False
+    assert idx.eligible("6182", "2026-07-01") is False
 
 
 def test_index_eligible_in_list(tmp_path: Path) -> None:

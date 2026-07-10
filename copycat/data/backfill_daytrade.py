@@ -184,9 +184,11 @@ class DayTradeIndex:
         self,
         by_date: dict[str, set[str]],
         periods: dict[str, list[tuple[str, str]]],
+        sell_first_banned: set[tuple[str, str]] | None = None,
     ) -> None:
         self._by_date = by_date
         self._periods = periods
+        self._sell_first_banned = sell_first_banned or set()
 
     @classmethod
     def load(cls, data_dir: Path) -> DayTradeIndex | None:
@@ -194,9 +196,13 @@ class DayTradeIndex:
         if not dt_path.exists():
             return None
         by_date: dict[str, set[str]] = {}
+        banned: set[tuple[str, str]] = set()
         with dt_path.open("r", encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
                 by_date.setdefault(r["date"], set()).add(r["stock_id"])
+                # BuyAfterSale 非空('Y' / '＊')= 僅可先買後賣 → 先賣策略不可交易
+                if r.get("buy_after_sale", ""):
+                    banned.add((r["stock_id"], r["date"]))
         periods: dict[str, list[tuple[str, str]]] = {}
         dispo_path = data_dir / "daytrade" / "disposition.csv"
         if dispo_path.exists():
@@ -205,13 +211,15 @@ class DayTradeIndex:
                     periods.setdefault(r["stock_id"], []).append(
                         (r["period_start"], r["period_end"])
                     )
-        return cls(by_date, periods)
+        return cls(by_date, periods, banned)
 
     def in_disposition(self, stock_id: str, date: str) -> bool:
         return any(ps <= date <= pe for ps, pe in self._periods.get(stock_id, []))
 
     def eligible(self, stock_id: str, date: str) -> bool | None:
         if self.in_disposition(stock_id, date):  # 處置期間優先於覆蓋判定
+            return False
+        if (stock_id, date) in self._sell_first_banned:  # 僅可先買後賣 → 先賣不可
             return False
         stocks = self._by_date.get(date)
         if not stocks:
