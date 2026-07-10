@@ -131,6 +131,239 @@ def build_fade_universe(
     return samples, counts
 
 
+def _add_months(date_str: str, months: int) -> str:
+    y, m, d = (int(x) for x in date_str.split("-"))
+    m += months
+    y += (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+def _trade_stats(trades: list[Trade]) -> dict[str, float | int | None]:
+    if not trades:
+        return {"expectancy": None, "p_win": None, "payoff": None, "n": 0, "mdd": 0.0}
+    s = weighted_stats(trades)
+    return {
+        "expectancy": s.get("expectancy"),
+        "p_win": s.get("p_win"),
+        "payoff": s.get("payoff"),
+        "n": s.get("n_raw"),
+        "mdd": max_drawdown(trades),
+    }
+
+
+def _sim_trades(
+    indices: list[int],
+    tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]],
+    combo: FadeStopCombo,
+    tp: object,
+    cfg: FadeBacktestConfig,
+    slippage: int,
+) -> tuple[list[Trade], list[str], int]:
+    """模擬 indices → (trades, 對應 source list, lock_count)。tp=None 走無 TP 路徑."""
+    from copycat.backtest.fade_simulate import simulate_fade_with_tp
+
+    trades: list[Trade] = []
+    sources: list[str] = []
+    lock = 0
+    for i in indices:
+        sample, bars, trig_idx = tradeable_samples[i]
+        out = simulate_fade_with_tp(bars, trig_idx, sample, combo, tp, cfg, slippage)  # type: ignore[arg-type]
+        if out.status in _TRADEABLE and out.pnl_rate is not None:
+            trades.append(Trade(date=sample.t1_date, stock_id=sample.stock_id, pnl=out.pnl_rate))
+            sources.append(sample.source)
+        if out.status == "locked_at_limit":
+            lock += 1
+    return trades, sources, lock
+
+
+def _run_walk_forward(
+    tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]],
+    all_feat: list[dict[str, float | None]],
+    all_pnl: list[float],
+    all_dates: list[str],
+    cfg: FadeBacktestConfig,
+) -> dict[str, object]:
+    """walk-forward:fold 內 GA(core)→ val 三道選 top-1 → t1300/TP 對決(train)→
+    fold-test [start, end) 評估;OOS = 各 fold top-1 串接(R13)。test 不進任何選擇。"""
+    import dataclasses
+
+    from copycat.backtest.fade_config import enumerate_tp_combos
+    from copycat.backtest.fade_optimize import _fold_test_indices, optimize_tp_for_indices
+
+    tp_combos = enumerate_tp_combos(cfg)
+    folds_out: list[dict[str, object]] = []
+    oos_trades: list[Trade] = []
+    oos_sources: list[str] = []
+    stress_trades: list[Trade] = []
+    sens_trades: dict[float, list[Trade]] = {d: [] for d in cfg.guard_dist_grid}
+    total_test_idx = 0
+    total_lock = 0
+    fold_positive = 0
+    val_exps: list[float] = []
+
+    for test_start in cfg.wf_test_starts:
+        test_end = _add_months(test_start, cfg.wf_test_months)
+        train_ids = sorted(
+            (i for i in range(len(all_dates)) if all_dates[i] < test_start),
+            key=lambda i: all_dates[i],
+        )
+        fold_rec: dict[str, object] = {"test_start": test_start, "test_end": test_end}
+        if len(train_ids) < cfg.support_raw_min * 2:
+            fold_rec["skipped"] = "train 樣本不足"
+            folds_out.append(fold_rec)
+            continue
+
+        val_n = max(1, int(len(train_ids) * cfg.wf_val_frac))
+        val_cut = all_dates[train_ids[-val_n]]  # 按日期切,同日不跨界
+        core_ids = [i for i in train_ids if all_dates[i] < val_cut]
+        val_ids = [i for i in train_ids if all_dates[i] >= val_cut]
+        if not core_ids or not val_ids:
+            fold_rec["skipped"] = "core/val 切分退化"
+            folds_out.append(fold_rec)
+            continue
+
+        core_feat = [all_feat[i] for i in core_ids]
+        core_pnl = [all_pnl[i] for i in core_ids]
+        core_w = [1.0] * len(core_ids)
+        feature_names = sorted({k2 for row in core_feat for k2 in row if row[k2] is not None})
+        predicates = build_predicates(core_feat, feature_names, cfg.quantile_probs)
+        ga_all: list[dict[str, object]] = list(exhaustive_scan(predicates, core_pnl, core_w, cfg))  # type: ignore[arg-type]
+        for seed in cfg.ga_seeds:
+            ga_all.extend(ga_search(predicates, core_pnl, core_w, cfg, seed))  # type: ignore[arg-type]
+        ga_all.sort(key=rule_sort_key)
+        candidates = jaccard_dedupe(ga_all, cfg.jaccard_max)[:30]
+
+        # val 三道(val_exp>0 + 月度)→ top-1;val 用 default-combo pnl(與 GA fitness 同基準)
+        best_rule: dict[str, object] | None = None
+        best_val_exp = -1e18
+        val_start = min(all_dates[i] for i in val_ids)
+        val_end = max(all_dates[i] for i in val_ids)
+        for rule in candidates:
+            conds = rule["conditions"]
+            assert isinstance(conds, list)
+            mask = apply_rule(conds, all_feat)
+            val_t = [
+                Trade(date=all_dates[i], stock_id="", pnl=all_pnl[i])
+                for i in val_ids
+                if mask & (1 << i)
+            ]
+            if not val_t:
+                continue
+            v = weighted_stats(val_t).get("expectancy")
+            if v is None or v <= 0:
+                continue
+            if not bool(monthly_consistency(val_t, val_start, val_end)["passed"]):
+                continue
+            if v > best_val_exp:
+                best_val_exp = float(v)
+                best_rule = rule
+
+        if best_rule is None:
+            fold_rec["skipped"] = "無規則過 val 三道"
+            folds_out.append(fold_rec)
+            continue
+
+        conds = best_rule["conditions"]
+        assert isinstance(conds, list)
+        mask = apply_rule(conds, all_feat)
+        matched_train = [i for i in train_ids if mask & (1 << i)]
+
+        # t1300 對決(train,tp=None)→ TP 對決(train)
+        chosen_combo: FadeStopCombo | None = None
+        chosen_exp = -1e18
+        for t13 in (True, False):
+            combo = FadeStopCombo(
+                s1_n=None, s1_phi=None, s2_m=None, s2_buf=None,
+                s3_x=None, s4_x=None, s5_x=None, t1300=t13,
+            )
+            tr, _, _ = _sim_trades(
+                matched_train, tradeable_samples, combo, None, cfg, cfg.slippage_ticks
+            )
+            ev = _trade_stats(tr).get("expectancy")
+            if ev is not None and float(ev) > chosen_exp:
+                chosen_exp = float(ev)
+                chosen_combo = combo
+        if chosen_combo is None:
+            fold_rec["skipped"] = "train 無可交易樣本"
+            folds_out.append(fold_rec)
+            continue
+
+        best_tp, _ = optimize_tp_for_indices(
+            matched_train, tradeable_samples, chosen_combo, tp_combos, cfg
+        )
+
+        test_idx = _fold_test_indices(mask, all_dates, test_start, test_end)
+        f_trades, f_sources, f_lock = _sim_trades(
+            test_idx, tradeable_samples, chosen_combo, best_tp, cfg, cfg.slippage_ticks
+        )
+        s_trades, _, _ = _sim_trades(
+            test_idx, tradeable_samples, chosen_combo, best_tp, cfg, cfg.stress_slippage_ticks
+        )
+        for dist in cfg.guard_dist_grid:  # 敏感度診斷:凍結選擇,只換 guard(R5:不入選擇)
+            cfg_d = dataclasses.replace(cfg, guard_limit_dist=dist)
+            d_trades, _, _ = _sim_trades(
+                test_idx, tradeable_samples, chosen_combo, best_tp, cfg_d, cfg.slippage_ticks
+            )
+            sens_trades[dist].extend(d_trades)
+
+        oos_trades.extend(f_trades)
+        oos_sources.extend(f_sources)
+        stress_trades.extend(s_trades)
+        total_test_idx += len(test_idx)
+        total_lock += f_lock
+        val_exps.append(best_val_exp)
+        f_stats = _trade_stats(f_trades)
+        exp = f_stats.get("expectancy")
+        if isinstance(exp, float | int) and exp > 0:
+            fold_positive += 1
+        fold_rec.update(
+            {
+                "n_core": len(core_ids),
+                "n_val": len(val_ids),
+                "n_test_matched": len(test_idx),
+                "conditions": conds,
+                "val_exp": best_val_exp,
+                "t1300": chosen_combo.t1300,
+                "tp": best_tp.tp_id,
+                "fold_oos": f_stats,
+            }
+        )
+        folds_out.append(fold_rec)
+
+    oos = _trade_stats(oos_trades)
+    oos["lock_pct"] = (total_lock / total_test_idx) if total_test_idx else 0.0
+    by_source: dict[str, dict[str, float | int | None]] = {}
+    for src in sorted(set(oos_sources)):
+        by_source[src] = _trade_stats(
+            [t for t, s in zip(oos_trades, oos_sources) if s == src]
+        )
+    tp_choices = "|".join(
+        str(f.get("tp", "-")) for f in folds_out if "tp" in f
+    )
+    t1300_choices = "|".join(
+        str(f.get("t1300", "-")) for f in folds_out if "t1300" in f
+    )
+    return {
+        "folds": folds_out,
+        "oos": oos,
+        "oos_by_source": by_source,
+        "oos_stress": _trade_stats(stress_trades),
+        "guard_sensitivity": {
+            str(d): _trade_stats(ts) for d, ts in sens_trades.items()
+        },
+        "fold_positive": fold_positive,
+        "n_folds": sum(1 for f in folds_out if "fold_oos" in f),
+        "mean_val_exp": (sum(val_exps) / len(val_exps)) if val_exps else None,
+        "tp_choices": tp_choices,
+        "t1300_choices": t1300_choices,
+        "oos_trades": [
+            {"date": t.date, "stock_id": t.stock_id, "pnl": t.pnl, "source": s}
+            for t, s in zip(oos_trades, oos_sources)
+        ],
+    }
+
+
 def _param_hash(arm_name: str, params: ArmParamSet) -> str:
     blob = json.dumps({"arm": arm_name, "params": params.values}, sort_keys=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
@@ -209,6 +442,40 @@ def run_fade_arm(
             "n_triggered": 0,
             "n_no_trigger": no_trigger_count,
             "rules": [],
+        }
+
+    if cfg.wf_test_starts:  # walk-forward 路徑:固定停損(強制風控在 cfg)、GA per fold
+        wf_default = FadeStopCombo(
+            s1_n=None, s1_phi=None, s2_m=None, s2_buf=None,
+            s3_x=None, s4_x=None, s5_x=None, t1300=cfg.baseline_t1300,
+        )
+        wf_feat: list[dict[str, float | None]] = []
+        wf_pnl: list[float] = []
+        wf_dates: list[str] = []
+        wf_tradeable: list[tuple[FadeSample, list[Bar1K], int]] = []
+        wf_lock = 0
+        for i, (sample, bars, trig_idx) in enumerate(triggered):
+            out = simulate_fade_sample(bars, trig_idx, sample, wf_default, cfg, cfg.slippage_ticks)
+            if out.status == "locked_at_limit":
+                wf_lock += 1
+            if out.status not in _TRADEABLE or out.pnl_rate is None:
+                continue
+            wf_feat.append(features_list[i])
+            wf_pnl.append(out.pnl_rate)
+            wf_dates.append(sample.t1_date)
+            wf_tradeable.append((sample, bars, trig_idx))
+        wf = _run_walk_forward(wf_tradeable, wf_feat, wf_pnl, wf_dates, cfg)
+        return {
+            "arm": arm.name,
+            "param": params.values,
+            "max_window": max_window_m,
+            "n_triggered": len(triggered),
+            "n_no_trigger": no_trigger_count,
+            "rules": [],
+            "wf": wf,
+            "is_anchor": is_anchor,
+            "lock_events": wf_lock,
+            "n_tradeable": len(wf_tradeable),
         }
 
     baseline_combos = enumerate_baseline_combos(cfg)
@@ -407,10 +674,13 @@ def run_fade_pipeline(
             )
             all_results.append(result)
 
-    from copycat.backtest.fade_optimize import build_cross_arm_table
+    from copycat.backtest.fade_optimize import build_cross_arm_table, build_wf_cross_arm_table
     from copycat.backtest.fade_report import write_fade_report
 
-    cross_arm = build_cross_arm_table(all_results)
+    if cfg.wf_test_starts:
+        cross_arm = build_wf_cross_arm_table(all_results, cfg.min_n_test)
+    else:
+        cross_arm = build_cross_arm_table(all_results)
     report_path = write_fade_report(
         all_results, cfg, report_date, out_dir, evidence_dir, cross_arm_table=cross_arm
     )

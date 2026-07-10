@@ -37,6 +37,11 @@ def _test_indices(
     return [i for i in indices if all_dates[i] >= split_date]
 
 
+def _fold_test_indices(mask: int, all_dates: list[str], start: str, end: str) -> list[int]:
+    """fold-test 雙界 [start, end)(R12:防跨 fold 重複計入)."""
+    return [i for i in bit_indices(mask) if start <= all_dates[i] < end]
+
+
 def _eval_combo(
     indices: list[int],
     tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]],
@@ -86,13 +91,18 @@ def optimize_rule_stops(
     all_feat: list[dict[str, float | None]],
     all_dates: list[str],
     cfg: FadeBacktestConfig,
+    boundary: str | None = None,
 ) -> None:
-    """Stage 1: train set 上找每條規則的最佳停損。就地擴充 rule dict。"""
+    """Stage 1: train set 上找每條規則的最佳停損。就地擴充 rule dict。
+
+    boundary(R11):train/test 切分日;None → cfg.split_date(單 split legacy 路徑)。
+    """
+    split = boundary if boundary is not None else cfg.split_date
     for ri, rule in enumerate(rules):
         conds = rule["conditions"]
         assert isinstance(conds, list)
         mask = apply_rule(conds, all_feat)
-        train_idx = _test_indices(mask, all_dates, cfg.split_date, is_train=True)
+        train_idx = _test_indices(mask, all_dates, split, is_train=True)
         if not train_idx:
             rule["best_stop"] = None
             rule["best_stop_params"] = None
@@ -150,6 +160,28 @@ def _rebuild_combo(params: dict[str, object]) -> FadeStopCombo:
     )
 
 
+def optimize_tp_for_indices(
+    train_idx: list[int],
+    tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]],
+    stop: FadeStopCombo,
+    tp_combos: list[FadeTakeProfitCombo],
+    cfg: FadeBacktestConfig,
+) -> tuple[FadeTakeProfitCombo, float]:
+    """給定 train indices 的 TP 對決(train 期望值最高);無資料 → (tp=None, -inf)."""
+    best_exp = -1e18
+    best_tp: FadeTakeProfitCombo | None = None
+    if train_idx:
+        for tp in tp_combos:
+            ev = _eval_combo(train_idx, tradeable_samples, stop, tp, cfg, cfg.slippage_ticks)
+            exp = ev.get("expectancy")
+            if exp is not None and exp > best_exp:
+                best_exp = float(exp)
+                best_tp = tp
+    if best_tp is None:
+        best_tp = FadeTakeProfitCombo(None, ())
+    return best_tp, best_exp
+
+
 def optimize_rule_tp(
     tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]],
     rules: list[dict[str, object]],
@@ -157,8 +189,13 @@ def optimize_rule_tp(
     all_feat: list[dict[str, float | None]],
     all_dates: list[str],
     cfg: FadeBacktestConfig,
+    boundary: str | None = None,
 ) -> None:
-    """Stage 2 + 3: train 上找最佳 TP,test 上驗證 + 壓測。就地擴充 rule dict。"""
+    """Stage 2 + 3: train 上找最佳 TP,test 上驗證 + 壓測。就地擴充 rule dict。
+
+    boundary(R11):train/test 切分日;None → cfg.split_date(單 split legacy 路徑)。
+    """
+    split = boundary if boundary is not None else cfg.split_date
     for ri, rule in enumerate(rules):
         stop_params = rule.get("best_stop_params")
         if stop_params is None:
@@ -175,23 +212,12 @@ def optimize_rule_tp(
         conds = rule["conditions"]
         assert isinstance(conds, list)
         mask = apply_rule(conds, all_feat)
-        train_idx = _test_indices(mask, all_dates, cfg.split_date, is_train=True)
-        test_idx = _test_indices(mask, all_dates, cfg.split_date, is_train=False)
+        train_idx = _test_indices(mask, all_dates, split, is_train=True)
+        test_idx = _test_indices(mask, all_dates, split, is_train=False)
 
-        best_tp_exp = -1e18
-        best_tp: FadeTakeProfitCombo | None = None
-        if train_idx:
-            for tp in tp_combos:
-                ev = _eval_combo(
-                    train_idx, tradeable_samples, best_stop, tp, cfg, cfg.slippage_ticks
-                )
-                exp = ev.get("expectancy")
-                if exp is not None and exp > best_tp_exp:
-                    best_tp_exp = exp
-                    best_tp = tp
-
-        if best_tp is None:
-            best_tp = FadeTakeProfitCombo(None, ())
+        best_tp, _ = optimize_tp_for_indices(
+            train_idx, tradeable_samples, best_stop, tp_combos, cfg
+        )
         rule["best_tp"] = best_tp.tp_id
         rule["best_tp_params"] = {"tp_type": best_tp.tp_type, "params": dict(best_tp.params)}
 
@@ -240,8 +266,9 @@ def optimize_rule_tp(
 
 def build_cross_arm_table(
     all_results: list[dict[str, object]],
+    min_n: int = 0,
 ) -> list[dict[str, object]]:
-    """7 臂 top-1 rule 橫向比較表(best_test_expectancy DESC)."""
+    """7 臂 top-1 rule 橫向比較表(best_test_expectancy DESC);n_test < min_n → appendix=True."""
     rows: list[dict[str, object]] = []
     for result in all_results:
         rules = result.get("rules")
@@ -284,4 +311,61 @@ def build_cross_arm_table(
     rows.sort(key=_sort_key)
     for i, row in enumerate(rows):
         row["rank"] = i + 1
+        n = row.get("n_test")
+        row["appendix"] = not (isinstance(n, int) and n >= min_n)
+    return rows
+
+
+def build_wf_cross_arm_table(
+    all_results: list[dict[str, object]],
+    min_n: int = 0,
+) -> list[dict[str, object]]:
+    """walk-forward 臂間表:每臂輸入 = 已於 val 側定案的 per-fold-top-1 串接 OOS(R14,
+    不做任何 by-OOS 掃描);排序僅供展示,附多重比較 caveat 於報告。"""
+    rows: list[dict[str, object]] = []
+    for result in all_results:
+        wf = result.get("wf")
+        if not isinstance(wf, dict):
+            continue
+        oos = wf.get("oos")
+        if not isinstance(oos, dict) or not oos.get("n"):
+            continue
+        stress = wf.get("oos_stress") if isinstance(wf.get("oos_stress"), dict) else {}
+        assert isinstance(stress, dict)
+        rows.append(
+            {
+                "arm": result.get("arm", "?"),
+                "param": result.get("param", {}),
+                "test_exp": oos.get("expectancy"),
+                "stress_exp": stress.get("expectancy"),
+                "p_win": oos.get("p_win"),
+                "payoff": oos.get("payoff"),
+                "mdd": oos.get("mdd"),
+                "lock_pct": oos.get("lock_pct"),
+                "stress_passed": (
+                    isinstance(stress.get("expectancy"), float | int)
+                    and float(stress["expectancy"]) > 0  # type: ignore[arg-type]
+                ),
+                "best_stop": wf.get("t1300_choices"),
+                "best_tp": wf.get("tp_choices"),
+                "n_test": oos.get("n"),
+                "fold_positive": wf.get("fold_positive"),
+                "n_folds": wf.get("n_folds"),
+                "mean_val_exp": wf.get("mean_val_exp"),
+            }
+        )
+
+    def _sort_key(r: dict[str, object]) -> tuple[float, float]:
+        te = r.get("test_exp")
+        md = r.get("mdd")
+        return (
+            -float(te if isinstance(te, float | int) else -1e18),
+            float(md if isinstance(md, float | int) else 0),
+        )
+
+    rows.sort(key=_sort_key)
+    for i, row in enumerate(rows):
+        row["rank"] = i + 1
+        n = row.get("n_test")
+        row["appendix"] = not (isinstance(n, int) and n >= min_n)
     return rows
