@@ -40,7 +40,8 @@ from copycat.data.store import read_bars
 
 logger = logging.getLogger(__name__)
 
-_TRADEABLE = {"stopped", "target_hit", "time_1300", "closeout", "locked_at_limit"}
+# guard_exit 必須在列(R1):強制風控停出的正是最差虧損交易,不入統計 = 期望值灌水
+_TRADEABLE = {"stopped", "target_hit", "time_1300", "closeout", "locked_at_limit", "guard_exit"}
 
 
 def build_fade_universe(

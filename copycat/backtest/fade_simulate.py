@@ -74,6 +74,15 @@ def _simulate_core(
         return FadeTradeOutcome("excluded_at_limit", None, None, False)
 
     entry = max(trig.close - slippage_ticks * tick_size(trig.close), t1_down_limit)
+
+    # 強制風控(round 1;None = 停用):guard = 距漲停強制回補、disaster = 災難停損
+    guard_level: float | None = None
+    if cfg.guard_limit_dist is not None:
+        guard_level = t1_limit * (1.0 - cfg.guard_limit_dist)
+        if entry >= guard_level:  # 進場已在 guard 區內(高 gap)→ 排除而非即時虧損出場
+            return FadeTradeOutcome("excluded_guard_at_entry", None, None, False)
+    disaster_level = entry * (1.0 + cfg.disaster_x) if cfg.disaster_x is not None else None
+
     post = bars[trig_idx + 1 :]
 
     swing_high: float | None = None
@@ -127,6 +136,12 @@ def _simulate_core(
         post_bars_so_far.append(b)
         elapsed_bars += 1
 
+        forced_fills: list[float] = []  # guard/disaster(鎖死凍結 bar 不會走到這裡)
+        if guard_level is not None and b.high >= guard_level:
+            forced_fills.append(max(guard_level, b.close))
+        if disaster_level is not None and b.high >= disaster_level:
+            forced_fills.append(max(disaster_level, b.close))
+
         stop_fills: list[float] = []
         if combo.s4_x is not None:
             level = entry * (1.0 + combo.s4_x)
@@ -178,15 +193,16 @@ def _simulate_core(
             t1300_consumed = True
             time_fill = b.close
 
-        if stop_fills:
-            worst = max(stop_fills)
+        if stop_fills or forced_fills:
+            worst = max(stop_fills + forced_fills)
             if target_fill is not None:
                 worst = max(worst, target_fill)
             if tp_fill is not None:
                 worst = max(worst, tp_fill)
             if time_fill is not None:
                 worst = max(worst, time_fill)
-            return FadeTradeOutcome("stopped", _pnl(worst), b.m, ever_locked)
+            status = "guard_exit" if forced_fills else "stopped"
+            return FadeTradeOutcome(status, _pnl(worst), b.m, ever_locked)
 
         if target_fill is not None:
             exit_price = target_fill
@@ -202,7 +218,10 @@ def _simulate_core(
 
     last = post[-1]
     if last.low >= t1_limit - eps:
-        return FadeTradeOutcome("locked_at_limit", _pnl(t1_limit), None, True)
+        lock_exit = (
+            t1_limit * (1.0 + cfg.lock_penalty) if cfg.lock_penalty is not None else t1_limit
+        )
+        return FadeTradeOutcome("locked_at_limit", _pnl(lock_exit), None, True)
     return FadeTradeOutcome("closeout", _pnl(last.close), last.m, ever_locked)
 
 
