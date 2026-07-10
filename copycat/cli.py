@@ -62,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     p_ts.add_argument("--report-date", required=True)
     p_ts.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
 
+    p_bt = sub.add_parser("backfill-tc4", help="TC4 歷史 1K 回補(缺的 stock-day)")
+    p_bt.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_bt.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    p_bt.add_argument("--port", default="50774")
+    p_bt.add_argument("--batch", type=int, default=0, help="0=全部")
+
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -128,6 +134,15 @@ def main(argv: list[str] | None = None) -> int:
             args.data_dir, args.out, cfg, args.report_date, report_dir=args.report_dir
         )
         sys.stdout.write(f"回測報告 → {report}\n")
+        return 0
+    if args.command == "backfill-tc4":
+        from copycat.data.backfill_tc4 import run_backfill_tc4
+
+        stats = run_backfill_tc4(args.data_dir, args.events_csv, args.port, args.batch)
+        sys.stdout.write(
+            f"TC4 回補完成:缺 {stats['total_missing']} 筆、"
+            f"成功 {stats['fetched']} 筆、失敗 {stats['failed']} 筆\n"
+        )
         return 0
     if args.command == "fade-search":
         from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
