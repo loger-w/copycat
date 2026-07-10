@@ -57,8 +57,21 @@ def build_fade_universe(
         "excluded_high_gap": 0,
         "excluded_low_gap": 0,
         "excluded_missing_1k": 0,
+        "excluded_no_daytrade": 0,
+        "excluded_disposition": 0,
+        "daytrade_uncovered_date": 0,
         "included": 0,
     }
+    dt_index = None
+    if cfg.universe_daytrade_filter:
+        from copycat.data.backfill_daytrade import DayTradeIndex
+
+        dt_index = DayTradeIndex.load(data_dir)
+        if dt_index is None:  # R7 fail-fast:防漏跑 backfill-daytrade 靜默產出未過濾報告
+            raise RuntimeError(
+                "universe_daytrade_filter 開啟但 data/daytrade 未回補,先跑 backfill-daytrade"
+            )
+
     samples: list[FadeSample] = []
     with events_path.open("r", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
@@ -66,6 +79,17 @@ def build_fade_universe(
             stock_id = row["stock_id"]
             t1_date = row["t1_date"]
             limit = float(row["limitup_close"])
+
+            if dt_index is not None and t1_date:
+                if dt_index.in_disposition(stock_id, t1_date):
+                    counts["excluded_disposition"] += 1
+                    continue
+                ok = dt_index.eligible(stock_id, t1_date)
+                if ok is None:
+                    counts["daytrade_uncovered_date"] += 1  # 該日未覆蓋 → 不過濾(R18)
+                elif not ok:
+                    counts["excluded_no_daytrade"] += 1
+                    continue
 
             t1_1k_path = data_dir / "1k" / stock_id / f"{t1_date}.json"
             if not t1_1k_path.exists():
@@ -99,6 +123,7 @@ def build_fade_universe(
                     t1_open=t1_open,
                     gap=gap,
                     broker_ids=row.get("broker_ids", ""),
+                    source=row.get("source", ""),
                 )
             )
             counts["included"] += 1

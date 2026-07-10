@@ -207,10 +207,12 @@ class DayTradeIndex:
                     )
         return cls(by_date, periods)
 
+    def in_disposition(self, stock_id: str, date: str) -> bool:
+        return any(ps <= date <= pe for ps, pe in self._periods.get(stock_id, []))
+
     def eligible(self, stock_id: str, date: str) -> bool | None:
-        for ps, pe in self._periods.get(stock_id, []):  # 處置期間優先於覆蓋判定
-            if ps <= date <= pe:
-                return False
+        if self.in_disposition(stock_id, date):  # 處置期間優先於覆蓋判定
+            return False
         stocks = self._by_date.get(date)
         if not stocks:
             return None  # 該日未覆蓋(FinMind 未更新)→ caller 不過濾

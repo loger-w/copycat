@@ -34,6 +34,7 @@ class FadeSample:
     t1_open: float
     gap: float
     broker_ids: str
+    source: str = ""  # tiger_csv / control / scan(分層報告用)
 
 
 @dataclass(frozen=True, slots=True)
