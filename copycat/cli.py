@@ -73,6 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument("--port", default="50774")
     p_bt.add_argument("--batch", type=int, default=0, help="0=全部")
 
+    p_dt = sub.add_parser("backfill-daytrade", help="FinMind 當沖資格 + 處置期間回補")
+    p_dt.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_dt.add_argument("--start", required=True)
+    p_dt.add_argument("--end", required=True)
+
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -157,6 +162,15 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(
             f"TC4 回補完成:缺 {stats['total_missing']} 筆、"
             f"成功 {stats['fetched']} 筆、失敗 {stats['failed']} 筆\n"
+        )
+        return 0
+    if args.command == "backfill-daytrade":
+        from copycat.data.backfill_daytrade import run_backfill_daytrade
+
+        stats = run_backfill_daytrade(args.data_dir, args.start, args.end, _resolve_finmind_token())
+        sys.stdout.write(
+            f"當沖資格回補完成:fetch {stats['fetched_days']} 日、"
+            f"新增 {stats['added_rows']} rows、處置期間 {stats['disposition_rows']} 筆\n"
         )
         return 0
     if args.command == "fade-search":
