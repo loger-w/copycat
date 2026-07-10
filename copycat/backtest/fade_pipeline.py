@@ -681,8 +681,25 @@ def run_fade_pipeline(
         cross_arm = build_wf_cross_arm_table(all_results, cfg.min_n_test)
     else:
         cross_arm = build_cross_arm_table(all_results)
+
+    diagnose: dict[str, object] | None = None
+    if cfg.wf_test_starts:
+        from copycat.backtest.fade_diagnose import diagnose_limit_approach
+
+        samples_bars = [
+            (s, read_bars(data_dir, s.stock_id, s.t1_date) or []) for s in samples
+        ]
+        diagnose = diagnose_limit_approach(samples_bars, cfg)
+
     report_path = write_fade_report(
-        all_results, cfg, report_date, out_dir, evidence_dir, cross_arm_table=cross_arm
+        all_results,
+        cfg,
+        report_date,
+        out_dir,
+        evidence_dir,
+        cross_arm_table=cross_arm,
+        diagnose=diagnose,
+        universe_counts=u_counts,
     )
 
     final_path = out_dir / "rules_final.json"
