@@ -62,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     p_ts.add_argument("--report-date", required=True)
     p_ts.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
 
+    p_se = sub.add_parser("scan-events", help="自產漲停事件掃描(append events.csv + limitup_all)")
+    p_se.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_se.add_argument("--start", required=True)
+    p_se.add_argument("--end", required=True)
+
     p_bt = sub.add_parser("backfill-tc4", help="TC4 歷史 1K 回補(缺的 stock-day)")
     p_bt.add_argument("--data-dir", type=Path, default=Path("data"))
     p_bt.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
@@ -134,6 +139,16 @@ def main(argv: list[str] | None = None) -> int:
             args.data_dir, args.out, cfg, args.report_date, report_dir=args.report_dir
         )
         sys.stdout.write(f"回測報告 → {report}\n")
+        return 0
+    if args.command == "scan-events":
+        from copycat.data.scan_events import scan_limitup_events
+
+        stats = scan_limitup_events(args.data_dir, args.start, args.end)
+        sys.stdout.write(
+            f"掃描完成:events 新增 {stats['events_appended']} 筆、"
+            f"limitup_all 新增 {stats['limitup_appended']} 筆、"
+            f"t1_date 修復 {stats['t1_fixed']} 筆\n"
+        )
         return 0
     if args.command == "backfill-tc4":
         from copycat.data.backfill_tc4 import run_backfill_tc4
