@@ -1,0 +1,10 @@
+{
+  "fee_discount": 0.84,
+  "guard_limit_dist": 0.03,
+  "disaster_x": 0.04,
+  "lock_penalty": 0.03,
+  "wf_test_starts": ["2026-01-01", "2026-03-01", "2026-05-01", "2026-07-01"],
+  "wf_test_months": 2,
+  "universe_daytrade_filter": true,
+  "ga_seeds": [1, 2, 3, 4]
+}

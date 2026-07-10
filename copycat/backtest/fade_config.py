@@ -126,6 +126,20 @@ class FadeBacktestConfig:
     # --- 驗證三道 ---
     plateau_neighbor_steps: tuple[int, ...] = (1, 2)
     plateau_min_frac: float = 0.4
+    # --- 強制風控(round 1;None = 停用 = 舊行為)---
+    guard_limit_dist: float | None = None  # 距漲停 x 強制回補(防鎖 guard)
+    disaster_x: float | None = None  # 災難停損 entry×(1+x),獨立於 combo 永遠生效
+    lock_penalty: float | None = None  # 全日鎖死回補 = 漲停×(1+p)(悲觀化)
+    guard_dist_grid: tuple[float, ...] = (0.02, 0.03, 0.04)  # 敏感度診斷(不入選擇)
+    # --- walk-forward(空 = 舊單 split 路徑)---
+    wf_test_starts: tuple[str, ...] = ()
+    wf_test_months: int = 2
+    wf_val_frac: float = 0.25
+    wf_top_rules: int = 5
+    # --- 報告 ---
+    min_n_test: int = 15
+    # --- 宇宙 ---
+    universe_daytrade_filter: bool = False
     # --- TP 停利網格(Phase B)---
     tp1_min_profit: tuple[float, ...] = (0.003, 0.005, 0.008, 0.01, 0.015, 0.02)
     tp1_z: tuple[float, ...] = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
@@ -231,6 +245,8 @@ def enumerate_fade_stop_combos(
 
 
 _TUPLE_KEYS = {
+    "guard_dist_grid",
+    "wf_test_starts",
     "s1_stall_bars",
     "s1_outer_max",
     "s2_swing_lookback",
@@ -271,6 +287,9 @@ _TUPLE_KEYS = {
 }
 
 _SIM_FIELDS = (
+    "guard_limit_dist",
+    "disaster_x",
+    "lock_penalty",
     "fee_rate",
     "fee_discount",
     "intraday_tax",
