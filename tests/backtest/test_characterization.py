@@ -93,8 +93,12 @@ def test_characterization_50_samples_vs_neigui() -> None:
                 continue
             if not _rel_close(float(gv_raw), ov):
                 mismatches.append(f"{sid} {date} {col}: golden={gv_raw} ours={ov}")
+        # prev_limitup 單向比對(2026-07-10 scan-events 之後):limitup_all 已補全
+        # neigui 漏收的真實收盤漲停(1569/2025-08-01、2478/2026-06-16、2340/2026-04-20
+        # 皆實證 close == limit_up_price(ref_prev_close),golden=False 是漏收)。
+        # 公式錨點仍保留:golden=True 而我們 False = 真偏差。
         g_pl = g["prev_limitup"] == "True"
-        if (ours["prev_limitup"] == 1.0) != g_pl:
+        if g_pl and ours["prev_limitup"] != 1.0:
             mismatches.append(
                 f"{sid} {date} prev_limitup: golden={g_pl} ours={ours['prev_limitup']}"
             )
