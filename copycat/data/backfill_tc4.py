@@ -13,6 +13,7 @@ from copycat.data.models import Bar1K, parse_raw_bar
 
 logger = logging.getLogger(__name__)
 
+# Touchance 官方範例公開的 app 憑證(GitBook / TCPY sample 原樣),非帳號 secret
 TC4_APPID = "ZMQ"
 TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
 
@@ -37,6 +38,8 @@ def _find_missing(data_dir: Path, events_path: Path) -> list[tuple[str, str]]:
         for row in csv.DictReader(fh):
             stock_id = row["stock_id"]
             t1_date = row["t1_date"]
+            if not stock_id or not t1_date:  # 尚無次一交易日的事件 t1_date 為空
+                continue
             path = data_dir / "1k" / stock_id / f"{t1_date}.json"
             if _needs_refetch(path):
                 missing.append((stock_id, t1_date))
@@ -86,9 +89,10 @@ def _fetch_1k(api: object, session: str, stock_id: str, date_str: str) -> list[B
             if bar.m < 0:  # 盤前雜訊(TC4 時窗涵蓋 08:00 起)
                 continue
             bars.append(bar)
-        qry_index = page[-1].get("QryIndex", "")
-        if not qry_index:
+        next_index = page[-1].get("QryIndex", "")
+        if not next_index or next_index == qry_index:  # 空 = 結束;停滯 = 防無限迴圈
             break
+        qry_index = next_index
     bars.sort(key=lambda b: b.m)
     return bars
 

@@ -121,3 +121,26 @@ def test_find_missing_dedups_and_reads_events(tmp_path: Path) -> None:
     have.mkdir(parents=True)
     (have / "2026-07-04.json").write_text(json.dumps({"bars": []}), encoding="utf-8")
     assert _find_missing(tmp_path, events) == [("2330", "2026-07-03")]
+
+
+def test_find_missing_skips_empty_t1_date(tmp_path: Path) -> None:
+    # events.csv 對「尚無次一交易日」的事件會留空 t1_date(實際存在 3 筆)
+    events = tmp_path / "events.csv"
+    events.write_text(
+        "stock_id,t1_date\n1435,\n,2026-07-03\n2330,2026-07-03\n",
+        encoding="utf-8",
+    )
+    assert _find_missing(tmp_path, events) == [("2330", "2026-07-03")]
+
+
+def test_fetch_stops_when_qry_index_does_not_advance() -> None:
+    # TC4 若回傳停滯的 QryIndex,不可無限迴圈
+    bar = _raw_bar("10100")
+    bar["QryIndex"] = "0"  # 永遠指回同一頁
+
+    class _Stuck(_FakeApi):
+        def GetHistory(self, *args: Any) -> dict[str, Any]:  # noqa: N802
+            return {"HisData": [bar]}
+
+    bars = _fetch_1k(_Stuck([]), "s", "2330", "2026-07-03")
+    assert [b.m for b in bars] == [0]
