@@ -5,7 +5,7 @@ from __future__ import annotations
 from copycat.backtest.fade_config import FadeBacktestConfig, FadeStopCombo
 from copycat.backtest.fade_optimize import _TRADEABLE as _TRADEABLE_OPT
 from copycat.backtest.fade_pipeline import _TRADEABLE as _TRADEABLE_PIPE
-from copycat.backtest.fade_simulate import FadeSample, simulate_fade_sample
+from copycat.backtest.fade_simulate import TRADEABLE_STATUSES, FadeSample, simulate_fade_sample
 from copycat.data.models import Bar1K
 from copycat.market import tick_size
 
@@ -148,7 +148,8 @@ def test_all_none_equals_legacy_output() -> None:
     assert abs(r.pnl_rate - (1.0 - 49.8 / entry - _cost(cfg))) < 1e-9
 
 
-def test_guard_exit_is_tradeable_in_both_sets() -> None:
-    assert "guard_exit" in _TRADEABLE_PIPE
-    assert "guard_exit" in _TRADEABLE_OPT
-    assert "excluded_guard_at_entry" not in _TRADEABLE_PIPE
+def test_tradeable_statuses_single_source_of_truth() -> None:
+    assert _TRADEABLE_PIPE is TRADEABLE_STATUSES
+    assert _TRADEABLE_OPT is TRADEABLE_STATUSES
+    assert "guard_exit" in TRADEABLE_STATUSES
+    assert "excluded_guard_at_entry" not in TRADEABLE_STATUSES

@@ -22,6 +22,9 @@ from copycat.backtest.fade_config import (
     fade_sim_config_hash,
 )
 from copycat.backtest.fade_features import fade_trigger_features
+from copycat.backtest.fade_simulate import (
+    TRADEABLE_STATUSES as _TRADEABLE,
+)
 from copycat.backtest.fade_simulate import FadeSample, simulate_fade_sample
 from copycat.backtest.market_features import compute_mkt_daily_features_full
 from copycat.backtest.features import static_features, structural_features
@@ -39,10 +42,6 @@ from copycat.data.models import Bar1K
 from copycat.data.store import read_bars
 
 logger = logging.getLogger(__name__)
-
-# guard_exit 必須在列(R1):強制風控停出的正是最差虧損交易,不入統計 = 期望值灌水
-_TRADEABLE = {"stopped", "target_hit", "time_1300", "closeout", "locked_at_limit", "guard_exit"}
-
 
 def build_fade_universe(
     data_dir: Path,

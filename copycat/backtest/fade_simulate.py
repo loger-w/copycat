@@ -45,6 +45,14 @@ class FadeTradeOutcome:
     lock_flag: bool
 
 
+# 入統計的出場 status 單一定義(消費端 fade_pipeline / fade_optimize 一律 import,不各自複製)。
+# guard_exit 必須在列(R1):強制風控停出的正是最差虧損交易,不入統計 = 期望值灌水。
+# 新增出場 status 時只改這裡;excluded_* 前綴 = 未進場,永不在列。
+TRADEABLE_STATUSES = frozenset(
+    {"stopped", "target_hit", "time_1300", "closeout", "locked_at_limit", "guard_exit"}
+)
+
+
 def _round_trip_cost(cfg: FadeBacktestConfig) -> float:
     fee = cfg.fee_rate * (1.0 - cfg.fee_discount) * 2.0
     return fee + cfg.intraday_tax

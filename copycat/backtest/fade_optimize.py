@@ -11,6 +11,9 @@ from copycat.backtest.fade_config import (
     FadeTakeProfitCombo,
 )
 from copycat.backtest.fade_simulate import (
+    TRADEABLE_STATUSES as _TRADEABLE,
+)
+from copycat.backtest.fade_simulate import (
     FadeSample,
     simulate_fade_sample,
     simulate_fade_with_tp,
@@ -20,9 +23,6 @@ from copycat.backtest.stats import Trade, max_drawdown, weighted_stats
 from copycat.data.models import Bar1K
 
 logger = logging.getLogger(__name__)
-
-# guard_exit 必須在列(R1,與 fade_pipeline 同步):強制風控停出不入統計 = 期望值灌水
-_TRADEABLE = {"stopped", "target_hit", "time_1300", "closeout", "locked_at_limit", "guard_exit"}
 
 
 def _test_indices(
