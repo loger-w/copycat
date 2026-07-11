@@ -7,3 +7,4 @@
 - [ ] neigui 種子事件池刷新管道(池截止邊界:3055 2026-06-18/24 不在池內;滾動重驗前置)
 - [ ] .claude/harness.json 殘留模板修正(verify 陣列指向不存在的 backend/frontend)
 - [ ] 對照組 T+1 1K 補抓 2,068 筆 + 7-8% 帶 6,509 stock-day TC4 回補(Phase B 前置,需達錢 4 開著)
+- [2026-07-10] backfill_finmind:空回應日(FinMind 尚未發布 vs 真假日)一律進 manifest done_dates,當日盤後跑會永久跳過該日;應比照 backfill_daytrade 的 if data 判斷。這次手動從 manifest 移除 2026-07-10。
