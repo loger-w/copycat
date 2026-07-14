@@ -46,6 +46,14 @@ _CFG = FadeBacktestConfig()
 _WATCH = frozenset({"9227", "9600"})
 
 
+def _dig(obj: object, *keys: str) -> dict[str, object]:
+    for k in keys:
+        assert isinstance(obj, dict)
+        obj = obj[k]
+    assert isinstance(obj, dict)
+    return obj
+
+
 def _cell_a_bars() -> list[Bar1K]:
     """拉高(53.5 ≥ 52×1.01)→ 回落(52.8 ≤ 53.5×0.992)、headroom 4.2%、內盤比 0.7."""
     return [
@@ -158,7 +166,9 @@ def test_evaluate_variant_count_and_observation_flag() -> None:
         else:
             assert c["observation"] is False
             assert "passed" in c["d5"]
-    assert set(result["baselines"].keys()) == {"main", "low"}
+    baselines = result["baselines"]
+    assert isinstance(baselines, dict)
+    assert set(baselines.keys()) == {"main", "low"}
 
 
 def test_d5_pass_and_fail_by_config_thresholds() -> None:
@@ -171,16 +181,18 @@ def test_d5_pass_and_fail_by_config_thresholds() -> None:
         cells_eval_segments=2, d5_min_n=2, d5_min_positive_segments=1, d5_min_ev=0.001
     )
     result = evaluate_cells_from_universe(universe, [], loose, _WATCH)
-    d5 = result["cells"]["cell_a:inner_0.45"]["d5"]
+    d5 = _dig(result, "cells", "cell_a:inner_0.45", "d5")
     assert d5["passed"] is True
 
     strict = FadeBacktestConfig(
         cells_eval_segments=2, d5_min_n=99, d5_min_positive_segments=1, d5_min_ev=0.001
     )
     result2 = evaluate_cells_from_universe(universe, [], strict, _WATCH)
-    d5b = result2["cells"]["cell_a:inner_0.45"]["d5"]
+    d5b = _dig(result2, "cells", "cell_a:inner_0.45", "d5")
     assert d5b["passed"] is False
-    assert d5b["criteria"]["n_ge_min"] is False
+    crit = d5b["criteria"]
+    assert isinstance(crit, dict)
+    assert crit["n_ge_min"] is False
 
 
 def test_segments_split_by_calendar() -> None:
@@ -190,6 +202,7 @@ def test_segments_split_by_calendar() -> None:
     ]
     cfg = FadeBacktestConfig(cells_eval_segments=2)
     result = evaluate_cells_from_universe(universe, [], cfg, _WATCH)
-    base = result["cells"]["cell_a:inner_0.45"]["base"]
+    base = _dig(result, "cells", "cell_a:inner_0.45", "base")
     segs = base["segments"]
+    assert isinstance(segs, list)
     assert [s["n"] for s in segs] == [1, 1]  # 等日曆切分,各落一段
