@@ -98,6 +98,14 @@ def main(argv: list[str] | None = None) -> int:
     p_fd.add_argument("--label-cutoff", required=True, help="標記截止日(共同期間上界)")
     p_fd.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
 
+    p_fc = sub.add_parser("fade-cells", help="UC 池劇本格子評估(pre-registered,D5 判定)")
+    p_fc.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_fc.add_argument("--out", type=Path, default=Path("out/fade_cells"))
+    p_fc.add_argument("--config", type=Path, default=None)
+    p_fc.add_argument("--report-date", required=True)
+    p_fc.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
+    p_fc.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
+
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -238,6 +246,21 @@ def main(argv: list[str] | None = None) -> int:
             report_dir=args.report_dir,
         )
         sys.stdout.write(f"三池複驗報告 → {report}\n")
+        return 0
+    if args.command == "fade-cells":
+        from copycat.backtest.fade_cells import run_cells
+        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
+
+        cells_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
+        report = run_cells(
+            args.data_dir,
+            args.out,
+            cells_cfg,
+            args.report_date,
+            args.watchlist,
+            report_dir=args.report_dir,
+        )
+        sys.stdout.write(f"劇本格子報告 → {report}\n")
         return 0
     if args.command == "fade-search":
         from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
