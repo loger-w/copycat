@@ -78,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     p_dt.add_argument("--start", required=True)
     p_dt.add_argument("--end", required=True)
 
+    p_bb = sub.add_parser("backfill-brokers", help="FinMind 分點日報回補(events T 日,完整聚合)")
+    p_bb.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_bb.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    p_bb.add_argument("--limit", type=int, default=None, help="樣本驗證用,只抓前 N 筆")
+
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -171,6 +176,17 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(
             f"當沖資格回補完成:fetch {stats['fetched_days']} 日、"
             f"新增 {stats['added_rows']} rows、處置期間 {stats['disposition_rows']} 筆\n"
+        )
+        return 0
+    if args.command == "backfill-brokers":
+        from copycat.data.backfill_brokers import run_backfill_brokers
+
+        stats = run_backfill_brokers(
+            args.data_dir, args.events_csv, _resolve_finmind_token(), limit=args.limit
+        )
+        sys.stdout.write(
+            f"分點日報回補完成:fetch {stats['fetched']}、跳過 {stats['skipped']}、"
+            f"空回應 {stats['empty']}、目標 {stats['targets']} 筆\n"
         )
         return 0
     if args.command == "fade-search":
