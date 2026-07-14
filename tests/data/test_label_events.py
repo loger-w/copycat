@@ -68,20 +68,21 @@ def _brokers_ranked(n: int, watch_id: str, watch_rank: int) -> list[dict[str, ob
     return out
 
 
-def test_top30_boundary_rank30_hits_rank31_does_not() -> None:
+def test_top5_boundary_rank5_hits_rank6_does_not() -> None:
+    # 語意 = top-5 淨買超(2026-07-15 實證修正:top-30 是 neigui 儲存截斷非標籤準則)
     watch = frozenset({"9227"})
-    assert top_netbuy_hits(_brokers_ranked(35, "9227", 30), watch) == ["9227"]
-    assert top_netbuy_hits(_brokers_ranked(35, "9227", 31), watch) == []
+    assert top_netbuy_hits(_brokers_ranked(10, "9227", 5), watch) == ["9227"]
+    assert top_netbuy_hits(_brokers_ranked(10, "9227", 6), watch) == []
 
 
-def test_top30_tiebreak_broker_id_asc() -> None:
-    # 31 個分點 net 全相等 → tie-break broker_id asc,前 30 名入列
+def test_top5_tiebreak_broker_id_asc() -> None:
+    # 6 個分點 net 全相等 → tie-break broker_id asc,前 5 名入列
     brokers: list[dict[str, object]] = [
-        {"broker_id": f"B{i:03d}", "name": "", "buy": 100, "sell": 0} for i in range(1, 31)
+        {"broker_id": f"B{i:03d}", "name": "", "buy": 100, "sell": 0} for i in range(1, 6)
     ]
     brokers.append({"broker_id": "Z999", "name": "", "buy": 100, "sell": 0})  # asc 排最後 → 出局
     assert top_netbuy_hits(brokers, frozenset({"Z999"})) == []
-    assert top_netbuy_hits(brokers, frozenset({"B030"})) == ["B030"]
+    assert top_netbuy_hits(brokers, frozenset({"B005"})) == ["B005"]
 
 
 def test_label_fills_empty_only(tmp_path: Path) -> None:

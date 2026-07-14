@@ -1,7 +1,10 @@
 """events.csv 分點標籤:brokers store × watchlist → broker_ids 就地補值.
 
 標籤語意(change-spec SC-2,寫死、與 neigui 舊池一致):watchlist broker ∈ 該股
-T 日 top-30 淨買超(net = buy − sell,排序 net desc、tie-break broker_id asc)。
+T 日 **top-5 淨買超**(net = buy − sell,排序 net desc、tie-break broker_id asc)。
+(2026-07-15 Phase 7 實證修正:top-30 是 neigui 儲存層截斷,標籤準則是 top-5 ——
+對既有 1,029 筆重算,top-5 一致率 100.00%、top-30 僅 48.98% 且 mismatch 全為
+old ⊂ new;佐證 = neigui event_top5.csv 與 strategy.md「top-5 買超」。)
 只補空值不改既有值(冪等);--verify-existing 對既有非空 broker_ids 重算比對,
 輸出一致率(不寫檔)。
 """
@@ -18,11 +21,11 @@ from copycat.watchlist import load_watchlist
 
 logger = logging.getLogger(__name__)
 
-_TOP_N = 30
+_TOP_N = 5
 
 
 def top_netbuy_hits(brokers: list[dict[str, object]], watchlist_ids: frozenset[str]) -> list[str]:
-    """top-30 淨買超中的 watchlist 命中(回傳 broker_id asc;命中順序不進語意)."""
+    """top-5 淨買超中的 watchlist 命中(回傳 broker_id asc;命中順序不進語意)."""
     ranked = sorted(
         brokers,
         key=lambda b: (
