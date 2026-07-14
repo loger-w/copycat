@@ -66,6 +66,8 @@ def _simulate_core(
     tp: FadeTakeProfitCombo | None,
     cfg: FadeBacktestConfig,
     slippage_ticks: int,
+    entry_price_override: float | None = None,
+    fixed_stop_level: float | None = None,
 ) -> FadeTradeOutcome:
     if not bars or trig_idx >= len(bars):
         raise ValueError(f"bars 不含觸發 bar: {sample.stock_id} {sample.t1_date}")
@@ -82,7 +84,9 @@ def _simulate_core(
     if trig.low >= t1_limit - eps:
         return FadeTradeOutcome("excluded_at_limit", None, None, False)
 
-    entry = max(trig.close - slippage_ticks * tick_size(trig.close), t1_down_limit)
+    # round 2:entry_price_override(None = 舊行為,以觸發 bar close 為進場參考價)
+    entry_ref = entry_price_override if entry_price_override is not None else trig.close
+    entry = max(entry_ref - slippage_ticks * tick_size(entry_ref), t1_down_limit)
 
     # 強制風控(round 1;None = 停用):guard = 距漲停強制回補、disaster = 災難停損
     guard_level: float | None = None
@@ -145,11 +149,16 @@ def _simulate_core(
         post_bars_so_far.append(b)
         elapsed_bars += 1
 
-        forced_fills: list[float] = []  # guard/disaster(鎖死凍結 bar 不會走到這裡)
+        # guard/disaster/fixed_stop(鎖死凍結 bar 不會走到這裡);
+        # stress_guard_fill_high:嘎空瞬間全市場搶買 → 壓測成交價改取 bar 最高價
+        forced_ref = b.high if cfg.stress_guard_fill_high else b.close
+        forced_fills: list[float] = []
         if guard_level is not None and b.high >= guard_level:
-            forced_fills.append(max(guard_level, b.close))
+            forced_fills.append(max(guard_level, forced_ref))
         if disaster_level is not None and b.high >= disaster_level:
-            forced_fills.append(max(disaster_level, b.close))
+            forced_fills.append(max(disaster_level, forced_ref))
+        if fixed_stop_level is not None and b.high >= fixed_stop_level:
+            forced_fills.append(max(fixed_stop_level, forced_ref))
 
         stop_fills: list[float] = []
         if combo.s4_x is not None:
@@ -241,8 +250,20 @@ def simulate_fade_sample(
     combo: FadeStopCombo,
     cfg: FadeBacktestConfig,
     slippage_ticks: int,
+    entry_price_override: float | None = None,
+    fixed_stop_level: float | None = None,
 ) -> FadeTradeOutcome:
-    return _simulate_core(bars, trig_idx, sample, combo, None, cfg, slippage_ticks)
+    return _simulate_core(
+        bars,
+        trig_idx,
+        sample,
+        combo,
+        None,
+        cfg,
+        slippage_ticks,
+        entry_price_override=entry_price_override,
+        fixed_stop_level=fixed_stop_level,
+    )
 
 
 def simulate_fade_with_tp(
