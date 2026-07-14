@@ -80,12 +80,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_bb = sub.add_parser("backfill-brokers", help="FinMind 分點日報回補(events T 日,完整聚合)")
     p_bb.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_bb.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    p_bb.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
     p_bb.add_argument("--limit", type=int, default=None, help="樣本驗證用,只抓前 N 筆")
 
     p_le = sub.add_parser("label-events", help="events.csv 分點標籤(watchlist ∈ T 日 top-30 淨買超)")
     p_le.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_le.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    p_le.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
     p_le.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
     p_le.add_argument("--verify-existing", action="store_true", help="只比對既有標籤,不寫檔")
 
