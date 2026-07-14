@@ -115,3 +115,13 @@ def test_scan_skips_non_limitup(tmp_path: Path) -> None:
         rows = list(csv.DictReader(fh))
     assert not any(r["stock_id"] == "2330" and r["date"] == "2026-07-03" for r in rows)
     assert not any(r["stock_id"] == "1101" and r["date"] == "2026-07-02" for r in rows)
+
+
+def test_scan_rerun_preserves_existing_broker_ids(tmp_path: Path) -> None:
+    """R11 characterization:scan-events 重跑不得清空既有列的 broker_ids(每日更新鏈契約)."""
+    data = _setup(tmp_path)
+    scan_limitup_events(data, "2026-07-01", "2026-07-03")
+    scan_limitup_events(data, "2026-07-01", "2026-07-03")  # 冪等重跑
+    with (data / "events" / "events.csv").open(encoding="utf-8") as fh:
+        rows = {(r["stock_id"], r["date"]): r for r in csv.DictReader(fh)}
+    assert rows[("1101", "2026-07-01")]["broker_ids"] == "9227"

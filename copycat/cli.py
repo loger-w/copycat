@@ -83,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
     p_bb.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
     p_bb.add_argument("--limit", type=int, default=None, help="樣本驗證用,只抓前 N 筆")
 
+    p_le = sub.add_parser("label-events", help="events.csv 分點標籤(watchlist ∈ T 日 top-30 淨買超)")
+    p_le.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_le.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    p_le.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
+    p_le.add_argument("--verify-existing", action="store_true", help="只比對既有標籤,不寫檔")
+
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -187,6 +193,25 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(
             f"分點日報回補完成:fetch {stats['fetched']}、跳過 {stats['skipped']}、"
             f"空回應 {stats['empty']}、目標 {stats['targets']} 筆\n"
+        )
+        return 0
+    if args.command == "label-events":
+        from copycat.data.label_events import label_events
+
+        stats = label_events(
+            args.data_dir, args.events_csv, args.watchlist, verify_existing=args.verify_existing
+        )
+        if args.verify_existing:
+            compared = stats["verified_matched"] + stats["verified_mismatched"]
+            rate = stats["verified_matched"] / compared if compared else 0.0
+            sys.stdout.write(
+                f"標籤一致率 {rate:.2%}({stats['verified_matched']}/{compared};"
+                f"無分點檔 {stats['verified_uncovered']} 筆)\n"
+            )
+            return 0 if rate >= 0.99 else 1
+        sys.stdout.write(
+            f"標籤完成:命中 {stats['labeled_hit']}、無命中 {stats['labeled_no_hit']}、"
+            f"無分點檔 {stats['uncovered']}、既有標籤 {stats['already_labeled']}\n"
         )
         return 0
     if args.command == "fade-search":
