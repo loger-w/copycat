@@ -1,4 +1,4 @@
-"""label-events:top-30 淨買超標籤(邊界/tie-break/只補空/verify;change-spec SC-2)."""
+"""label-events:top-5 淨買超標籤(邊界/tie-break/只補空/verify;change-spec SC-2)."""
 
 from __future__ import annotations
 

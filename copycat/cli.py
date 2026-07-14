@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     p_bb.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
     p_bb.add_argument("--limit", type=int, default=None, help="樣本驗證用,只抓前 N 筆")
 
-    p_le = sub.add_parser("label-events", help="events.csv 分點標籤(watchlist ∈ T 日 top-30 淨買超)")
+    p_le = sub.add_parser("label-events", help="events.csv 分點標籤(watchlist ∈ T 日 top-5 淨買超)")
     p_le.add_argument("--data-dir", type=Path, default=Path("data"))
     p_le.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
     p_le.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
