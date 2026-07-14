@@ -234,7 +234,7 @@ WebSocket / 即時 Stream 紀律:
 - **urllib 的 SSL read timeout 以 `TimeoutError` 拋出,不包在 `URLError`**,retry 的 except 集合要含它,否則長跑批次中途炸。(2026-07-07,Trigger:寫任何 HTTP retry)
 - **prev_close 語意 = 當日 close − spread(除權息參考價),neigui 同源**;`DailyIndex.ref_prev_close` row-level 處理 spread 缺值(None → fallback 前日 close)。不要用「前一日 close」直接當參考前收。(2026-07-07,Trigger:碰漲停價/報酬率計算)
 - **驗證指令別接 `| tail`/`| head` 再看結果** — pipe 會把 exit code 換成 tail 的 0,本 feature 兩次踩到(ruff 紅著 commit、backfill 崩了顯示 exit 0)。要嘛先落檔再 tail,要嘛檢查 `$?` 前不接管線。(2026-07-07,Trigger:任何 gate 指令)
-- **neigui 種子事件池不可當母體**:除截止邊界(3055 的 2026-06-24 鎖板不在池內)外,實證**系統性漏收約一半真收盤漲停**(母體 10,900 vs 種子 3,511,抽驗 15 筆全為真漲停)。`scan-events` CLI 已自產補全(data/events/events.csv + limitup_all 同步);引用種子池結論或做母體統計前先跑 scan-events。(2026-07-07 邊界 → 2026-07-10 漏收實證合併,Trigger:引用回測結論、算 base rate、或任何以事件池當母體的分析)
+- **neigui 種子事件池不可當母體**:除截止邊界(3055 的 2026-06-24 鎖板不在池內)外,實證**系統性漏收約三分之二真收盤漲停**(母體 10,900 vs 種子 3,511,抽驗 15 筆全為真漲停;2026-07-14 review 更正:早前寫「約一半」係低估)。`scan-events` CLI 已自產補全(data/events/events.csv + limitup_all 同步);引用種子池結論或做母體統計前先跑 scan-events。(2026-07-07 邊界 → 2026-07-10 漏收實證合併,Trigger:引用回測結論、算 base rate、或任何以事件池當母體的分析)
 - **TC4 股票 1K 實測可回補一年以上**(2025-07-01 起回補成功,2026-07-10 實測),官方文件「1 分 K 一年」限制**僅適用期貨**。排股票歷史回補計畫時不要被官方數字自我設限,先實測邊界。(2026-07-10,Trigger:排 TC4 歷史回補範圍或評估回測期間長度)
 - **FinMind `TaiwanStockDayTrading` 的 `BuyAfterSale` 欄位 'Y' 或 '＊' = 僅可先買後賣**——對先賣後買的空方策略即**不可交易**,當沖資格過濾必須把這類標記視為 excluded,不是「可當沖」。(2026-07-10,Trigger:碰當沖資格 proxy 或新增依賴 DayTrading dataset 的過濾)
 - **模擬器出場 status 的入統計集合 = `fade_simulate.TRADEABLE_STATUSES` 單一定義**(收尾 review 已從 fade_pipeline/fade_optimize 兩份手動同步收斂,測試驗兩端同物件)。新增出場 status 只改這一處;曾因 guard_exit 只加一邊,最差虧損被靜默剔除 → 期望值灌水。注意 `pipeline.py`(舊 T 日 pipeline)另有自己的 `_TRADEABLE` 狀態字彙,兩者不通用。(2026-07-11,Trigger:模擬器新增/改出場 status)
