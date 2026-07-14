@@ -229,19 +229,15 @@ def enumerate_fade_stop_combos(
     for t13 in cfg.t1300_variants:
         for s5 in (None, *cfg.s5_target):
             for base in bases:
-                combos.append(
-                    FadeStopCombo(
-                        s1_n=base.get("s1_n"),  # type: ignore[arg-type]
-                        s1_phi=base.get("s1_phi"),  # type: ignore[arg-type]
-                        s2_m=base.get("s2_m"),  # type: ignore[arg-type]
-                        s2_buf=base.get("s2_buf"),  # type: ignore[arg-type]
-                        s3_x=base.get("s3_x"),  # type: ignore[arg-type]
-                        s4_x=base.get("s4_x"),  # type: ignore[arg-type]
-                        s5_x=s5,
-                        t1300=t13,
-                    )
-                )
+                combos.append(_combo_from_base(base, s5_x=s5, t1300=t13))
     return combos
+
+
+def _combo_from_base(base: dict[str, object], **overrides: object) -> FadeStopCombo:
+    """dict 基底 + 覆寫 → FadeStopCombo(欄位由 dataclass fields 驅動,新增欄位不需改此處)."""
+    kwargs: dict[str, object] = {f.name: base.get(f.name) for f in fields(FadeStopCombo)}
+    kwargs.update(overrides)
+    return FadeStopCombo(**kwargs)  # type: ignore[arg-type]
 
 
 _TUPLE_KEYS = {

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, fields, replace
 
 from copycat.backtest.fade_config import (
     FadeBacktestConfig,
@@ -135,29 +135,13 @@ def optimize_rule_stops(
 def _strip_s5(combo: FadeStopCombo) -> FadeStopCombo:
     if combo.s5_x is None:
         return combo
-    return FadeStopCombo(
-        s1_n=combo.s1_n,
-        s1_phi=combo.s1_phi,
-        s2_m=combo.s2_m,
-        s2_buf=combo.s2_buf,
-        s3_x=combo.s3_x,
-        s4_x=combo.s4_x,
-        s5_x=None,
-        t1300=combo.t1300,
-    )
+    return replace(combo, s5_x=None)
 
 
 def _rebuild_combo(params: dict[str, object]) -> FadeStopCombo:
-    return FadeStopCombo(
-        s1_n=params.get("s1_n"),  # type: ignore[arg-type]
-        s1_phi=params.get("s1_phi"),  # type: ignore[arg-type]
-        s2_m=params.get("s2_m"),  # type: ignore[arg-type]
-        s2_buf=params.get("s2_buf"),  # type: ignore[arg-type]
-        s3_x=params.get("s3_x"),  # type: ignore[arg-type]
-        s4_x=params.get("s4_x"),  # type: ignore[arg-type]
-        s5_x=params.get("s5_x"),  # type: ignore[arg-type]
-        t1300=bool(params.get("t1300", True)),
-    )
+    kwargs = {f.name: params.get(f.name) for f in fields(FadeStopCombo)}
+    kwargs["t1300"] = bool(params.get("t1300", True))
+    return FadeStopCombo(**kwargs)  # type: ignore[arg-type]
 
 
 def optimize_tp_for_indices(
@@ -264,6 +248,25 @@ def optimize_rule_tp(
         )
 
 
+def _rank_and_split(rows: list[dict[str, object]], min_n: int) -> list[dict[str, object]]:
+    """排序(test_exp DESC、mdd ASC)+ rank + n_test < min_n → appendix=True(兩張臂間表共用)."""
+
+    def _sort_key(r: dict[str, object]) -> tuple[float, float]:
+        te = r.get("test_exp")
+        md = r.get("mdd")
+        return (
+            -float(te if isinstance(te, float | int) else -1e18),
+            float(md if isinstance(md, float | int) else 0),
+        )
+
+    rows.sort(key=_sort_key)
+    for i, row in enumerate(rows):
+        row["rank"] = i + 1
+        n = row.get("n_test")
+        row["appendix"] = not (isinstance(n, int) and n >= min_n)
+    return rows
+
+
 def build_cross_arm_table(
     all_results: list[dict[str, object]],
     min_n: int = 0,
@@ -300,20 +303,7 @@ def build_cross_arm_table(
             }
         )
 
-    def _sort_key(r: dict[str, object]) -> tuple[float, float]:
-        te = r.get("test_exp")
-        md = r.get("mdd")
-        return (
-            -float(te if isinstance(te, float | int) else -1e18),
-            float(md if isinstance(md, float | int) else 0),
-        )
-
-    rows.sort(key=_sort_key)
-    for i, row in enumerate(rows):
-        row["rank"] = i + 1
-        n = row.get("n_test")
-        row["appendix"] = not (isinstance(n, int) and n >= min_n)
-    return rows
+    return _rank_and_split(rows, min_n)
 
 
 def build_wf_cross_arm_table(
@@ -355,17 +345,4 @@ def build_wf_cross_arm_table(
             }
         )
 
-    def _sort_key(r: dict[str, object]) -> tuple[float, float]:
-        te = r.get("test_exp")
-        md = r.get("mdd")
-        return (
-            -float(te if isinstance(te, float | int) else -1e18),
-            float(md if isinstance(md, float | int) else 0),
-        )
-
-    rows.sort(key=_sort_key)
-    for i, row in enumerate(rows):
-        row["rank"] = i + 1
-        n = row.get("n_test")
-        row["appendix"] = not (isinstance(n, int) and n >= min_n)
-    return rows
+    return _rank_and_split(rows, min_n)
