@@ -7,13 +7,18 @@
 
 from __future__ import annotations
 
+import csv
 import dataclasses
+import json
 import logging
 import math
+import os
 import random
 from collections import defaultdict
+from pathlib import Path
 
-from copycat.backtest.fade_config import FadeBacktestConfig, FadeStopCombo
+from copycat.backtest.fade_config import NO_STOP_HOLD_COMBO, FadeBacktestConfig
+from copycat.backtest.fade_report import _fmt
 from copycat.backtest.fade_simulate import FadeSample, simulate_fade_sample
 from copycat.data.models import Bar1K
 from copycat.market import limit_up_price
@@ -112,9 +117,7 @@ def diagnose_limit_approach(
 
 _POOLS = ("tiger_2plus", "tiger_1", "control", "scan")
 
-_NO_STOP_COMBO = FadeStopCombo(
-    s1_n=None, s1_phi=None, s2_m=None, s2_buf=None, s3_x=None, s4_x=None, s5_x=None, t1300=False
-)
+_NO_STOP_COMBO = NO_STOP_HOLD_COMBO
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -347,10 +350,6 @@ def diagnose_pool_fade(
     }
 
 
-def _fmt(v: object, fmt: str = ".4f") -> str:
-    return f"{v:{fmt}}" if isinstance(v, float | int) else "—"
-
-
 def _pool_table_lines(pools: dict[str, object], title: str) -> list[str]:
     lines = [f"### {title}", ""]
     lines.append("| pool | n | days | 淨EV | 日聚類SE | med | p_win | 再鎖率 | guard排除 |")
@@ -374,13 +373,9 @@ def write_pool_fade_report(
     result: dict[str, object],
     cfg: FadeBacktestConfig,
     report_date: str,
-    path: object,
+    path: Path,
 ) -> None:
     """三池複驗 markdown 報告(獨立檔,不動 fade_report.py 既有章節)."""
-    import os
-    from pathlib import Path
-
-    assert isinstance(path, Path)
     cost = cfg.fee_rate * (1.0 - cfg.fee_discount) * 2.0 + cfg.intraday_tax
     lines: list[str] = []
     lines.append(f"# UC 池無條件 fade 複驗(1K + guard;{report_date})")
@@ -445,45 +440,39 @@ def write_pool_fade_report(
     os.replace(tmp, path)
 
 
-def load_turnover_map(data_dir: object) -> dict[tuple[str, str], float]:
+def load_turnover_map(data_dir: Path) -> dict[tuple[str, str], float]:
     """T 日成交額(close × volume_lots)map,雙重分層用;缺檔回空 map."""
-    import csv
-    from pathlib import Path
-
-    assert isinstance(data_dir, Path)
     path = data_dir / "daily" / "prices.csv"
     out: dict[tuple[str, str], float] = {}
     if not path.exists():
         return out
+    bad = 0
     with path.open("r", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
             try:
                 out[(r["stock_id"], r["date"])] = float(r["close"]) * float(r["volume_lots"])
             except (ValueError, KeyError):
-                continue
+                bad += 1  # 已知資料不齊型態(空值列);計數不靜默
+    if bad:
+        logger.warning("load_turnover_map:跳過 %d 列無法解析的 daily rows", bad)
     return out
 
 
 def run_pool_diagnose(
-    data_dir: object,
-    out_dir: object,
+    data_dir: Path,
+    out_dir: Path,
     cfg: FadeBacktestConfig,
     report_date: str,
     label_cutoff: str,
-    watchlist_path: object,
-    report_dir: object = None,
-) -> object:
+    watchlist_path: Path,
+    report_dir: Path | None = None,
+) -> Path:
     """CLI 協調:universe → bars → turnover → diagnose_pool_fade → JSON + 報告."""
-    import json
-    import os
-    from pathlib import Path
+    from copycat.backtest.fade_pipeline import build_fade_universe  # 延遲:避免與 pipeline 互import
 
-    from copycat.backtest.fade_pipeline import build_fade_universe
     from copycat.data.store import read_bars
     from copycat.watchlist import load_watchlist
 
-    assert isinstance(data_dir, Path) and isinstance(out_dir, Path)
-    assert isinstance(watchlist_path, Path)
     samples, counts = build_fade_universe(data_dir, data_dir / "events" / "events.csv", cfg)
     samples_bars: list[tuple[FadeSample, list[Bar1K]]] = []
     for s in samples:
@@ -505,7 +494,6 @@ def run_pool_diagnose(
     report_path = out_dir / f"uc_pool_fade_{report_date}.md"
     write_pool_fade_report(result, cfg, report_date, report_path)
     if report_dir is not None:
-        assert isinstance(report_dir, Path)
         report_dir.mkdir(parents=True, exist_ok=True)
         write_pool_fade_report(result, cfg, report_date, report_dir / report_path.name)
     return report_path

@@ -13,10 +13,14 @@ cell_c 低開反拉(觀察格):低開宇宙,反拉 ≥r 後回落進場;只統�
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
+import os
 from datetime import date as _date
+from pathlib import Path
 
-from copycat.backtest.fade_config import FadeBacktestConfig, FadeStopCombo
+from copycat.backtest.fade_config import NO_STOP_HOLD_COMBO, FadeBacktestConfig
+from copycat.backtest.fade_report import _fmt
 from copycat.backtest.fade_simulate import (
     TRADEABLE_STATUSES as _TRADEABLE,
 )
@@ -29,9 +33,7 @@ from copycat.market import limit_up_price
 
 logger = logging.getLogger(__name__)
 
-_NO_STOP_COMBO = FadeStopCombo(
-    s1_n=None, s1_phi=None, s2_m=None, s2_buf=None, s3_x=None, s4_x=None, s5_x=None, t1300=False
-)
+_NO_STOP_COMBO = NO_STOP_HOLD_COMBO
 
 _BASELINE_M = 6  # 09:07 bar(m 索引 6)= 「第 7 分鐘無條件空」基準線
 
@@ -281,12 +283,8 @@ def evaluate_cells_from_universe(
 
 
 def write_cells_report(
-    result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: object
+    result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: Path
 ) -> None:
-    import os
-    from pathlib import Path
-
-    assert isinstance(path, Path)
     lines: list[str] = []
     lines.append(f"# UC 池劇本格子評估(pre-registered;{report_date})")
     lines.append("")
@@ -302,9 +300,7 @@ def write_cells_report(
     lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---|")
     cells = result.get("cells")
     assert isinstance(cells, dict)
-
-    def _f(v: object, fmt: str = ".4f") -> str:
-        return f"{v:{fmt}}" if isinstance(v, float | int) else "—"
+    _f = _fmt
 
     for key in sorted(cells):
         c = cells[key]
@@ -352,24 +348,19 @@ def write_cells_report(
 
 
 def run_cells(
-    data_dir: object,
-    out_dir: object,
+    data_dir: Path,
+    out_dir: Path,
     cfg: FadeBacktestConfig,
     report_date: str,
-    watchlist_path: object,
-    report_dir: object = None,
-) -> object:
+    watchlist_path: Path,
+    report_dir: Path | None = None,
+) -> Path:
     """CLI 協調:主池 + 低開池 universe → bars → 評估 → JSON + 報告."""
-    import json
-    import os
-    from pathlib import Path
+    from copycat.backtest.fade_pipeline import build_fade_universe  # 延遲:避免與 pipeline 互import
 
-    from copycat.backtest.fade_pipeline import build_fade_universe
     from copycat.data.store import read_bars
     from copycat.watchlist import load_watchlist
 
-    assert isinstance(data_dir, Path) and isinstance(out_dir, Path)
-    assert isinstance(watchlist_path, Path)
     events = data_dir / "events" / "events.csv"
     main_samples, main_counts = build_fade_universe(data_dir, events, cfg)
     low_cfg = dataclasses.replace(cfg, fade_gap_min=-0.095, fade_gap_max=0.01)
@@ -399,7 +390,6 @@ def run_cells(
     report_path = out_dir / f"uc_cells_{report_date}.md"
     write_cells_report(result, cfg, report_date, report_path)
     if report_dir is not None:
-        assert isinstance(report_dir, Path)
         report_dir.mkdir(parents=True, exist_ok=True)
         write_cells_report(result, cfg, report_date, report_dir / report_path.name)
     return report_path

@@ -195,6 +195,12 @@ class FadeBacktestConfig:
         return cls()
 
 
+# 無停損、持有到收盤(t1300 off)— diagnose/cells 無條件模擬共用(單一定義防漂移)
+NO_STOP_HOLD_COMBO = FadeStopCombo(
+    s1_n=None, s1_phi=None, s2_m=None, s2_buf=None, s3_x=None, s4_x=None, s5_x=None, t1300=False
+)
+
+
 def enumerate_baseline_combos(cfg: FadeBacktestConfig) -> list[FadeStopCombo]:
     """S1/S2/S3/S4 單族 baseline + 無停損 baseline(S5=off, t1300=baseline),用於 train 排名."""
     combos: list[FadeStopCombo] = []
