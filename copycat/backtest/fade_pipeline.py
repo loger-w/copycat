@@ -6,7 +6,6 @@ Outcome cache 移植 tday pipeline 慣例(三重失效:config hash / rows hash /
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -363,17 +362,54 @@ def _run_walk_forward(
     }
 
 
-def _param_hash(arm_name: str, params: ArmParamSet) -> str:
-    blob = json.dumps({"arm": arm_name, "params": params.values}, sort_keys=True)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+def _simulate_default(
+    triggered: list[tuple[FadeSample, list[Bar1K], int]],
+    combo: FadeStopCombo,
+    cfg: FadeBacktestConfig,
+) -> tuple[list[float | None], list[str]]:
+    """全 triggered 以單一 combo 模擬 → (pnl_rate 序列, status 序列)."""
+    pnl: list[float | None] = []
+    status: list[str] = []
+    for sample, bars, trig_idx in triggered:
+        out = simulate_fade_sample(bars, trig_idx, sample, combo, cfg, cfg.slippage_ticks)
+        pnl.append(out.pnl_rate)
+        status.append(out.status)
+    return pnl, status
 
 
-def _samples_hash(samples: list[FadeSample]) -> str:
-    blob = json.dumps(
-        [(s.stock_id, s.t1_date) for s in samples],
-        sort_keys=True,
-    )
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+def _collect_tradeable(
+    triggered: list[tuple[FadeSample, list[Bar1K], int]],
+    features_list: list[dict[str, float | None]],
+    pnl_list: list[float | None],
+    status_list: list[str],
+) -> tuple[
+    list[dict[str, float | None]],
+    list[float],
+    list[str],
+    list[str],
+    list[tuple[FadeSample, list[Bar1K], int]],
+    int,
+]:
+    """_TRADEABLE 過濾 → 組平行陣列(feat/pnl/dates/sids/tradeable)+ 鎖死計數(兩路徑共用)."""
+    feat: list[dict[str, float | None]] = []
+    pnl: list[float] = []
+    dates: list[str] = []
+    sids: list[str] = []
+    tradeable: list[tuple[FadeSample, list[Bar1K], int]] = []
+    lock = 0
+    for i, (sample, bars, trig_idx) in enumerate(triggered):
+        p = pnl_list[i] if i < len(pnl_list) else None
+        s = status_list[i] if i < len(status_list) else ""
+        if s == "locked_at_limit":
+            lock += 1
+        if s not in _TRADEABLE or p is None:
+            continue
+        feat.append(features_list[i])
+        pnl.append(p)
+        dates.append(sample.t1_date)
+        sids.append(sample.stock_id)
+        tradeable.append((sample, bars, trig_idx))
+    return feat, pnl, dates, sids, tradeable, lock
 
 
 def run_fade_arm(
@@ -448,21 +484,10 @@ def run_fade_arm(
             s1_n=None, s1_phi=None, s2_m=None, s2_buf=None,
             s3_x=None, s4_x=None, s5_x=None, t1300=cfg.baseline_t1300,
         )
-        wf_feat: list[dict[str, float | None]] = []
-        wf_pnl: list[float] = []
-        wf_dates: list[str] = []
-        wf_tradeable: list[tuple[FadeSample, list[Bar1K], int]] = []
-        wf_lock = 0
-        for i, (sample, bars, trig_idx) in enumerate(triggered):
-            out = simulate_fade_sample(bars, trig_idx, sample, wf_default, cfg, cfg.slippage_ticks)
-            if out.status == "locked_at_limit":
-                wf_lock += 1
-            if out.status not in _TRADEABLE or out.pnl_rate is None:
-                continue
-            wf_feat.append(features_list[i])
-            wf_pnl.append(out.pnl_rate)
-            wf_dates.append(sample.t1_date)
-            wf_tradeable.append((sample, bars, trig_idx))
+        wf_pnl_list, wf_status_list = _simulate_default(triggered, wf_default, cfg)
+        wf_feat, wf_pnl, wf_dates, _wf_sids, wf_tradeable, wf_lock = _collect_tradeable(
+            triggered, features_list, wf_pnl_list, wf_status_list
+        )
         wf = _run_walk_forward(wf_tradeable, wf_feat, wf_pnl, wf_dates, cfg)
         return {
             "arm": arm.name,
@@ -538,28 +563,15 @@ def run_fade_arm(
     default_status = status_map.get(default_combo.combo_id, [])
 
     # F2 fix: only tradeable samples enter GA; F1 fix: split train/test
+    all_feat, all_pnl, all_dates, all_sids, tradeable_samples, _lock_n = _collect_tradeable(
+        triggered, features_list, default_pnl, default_status
+    )
     train_feat: list[dict[str, float | None]] = []
     train_weights: list[float] = []
     train_pnl: list[float] = []
-    all_feat: list[dict[str, float | None]] = []
-    all_pnl: list[float] = []
-    all_dates: list[str] = []
-    all_sids: list[str] = []
-
-    tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]] = []
-
-    for i, (sample, bars, trig_idx) in enumerate(triggered):
-        p = default_pnl[i] if i < len(default_pnl) else None
-        s = default_status[i] if i < len(default_status) else ""
-        if s not in _TRADEABLE or p is None:
-            continue
-        all_feat.append(features_list[i])
-        all_pnl.append(p)
-        all_dates.append(sample.t1_date)
-        all_sids.append(sample.stock_id)
-        tradeable_samples.append((sample, bars, trig_idx))
-        if sample.t1_date < cfg.split_date:
-            train_feat.append(features_list[i])
+    for f, p, d in zip(all_feat, all_pnl, all_dates):
+        if d < cfg.split_date:
+            train_feat.append(f)
             train_weights.append(1.0)
             train_pnl.append(p)
 
