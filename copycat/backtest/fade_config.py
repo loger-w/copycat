@@ -140,6 +140,29 @@ class FadeBacktestConfig:
     min_n_test: int = 15
     # --- 宇宙 ---
     universe_daytrade_filter: bool = False
+    # --- round 2:壓測變體(SC-6;影響模擬 → 入 _SIM_FIELDS)---
+    stress_guard_fill_high: bool = False  # guard/disaster/fixed_stop 成交 = max(level, bar.high)
+    # --- round 2:三池複驗(SC-3;不影響 fade-search 模擬)---
+    lock_penalty_grid: tuple[float, ...] = ()  # 鎖死懲罰敏感度(診斷用)
+    diagnose_perm_iters: int = 5000
+    diagnose_perm_seed: int = 42
+    diagnose_min_edge_pp: float = 0.003  # 判定式 (ii) tiger−對照 差值門檻
+    diagnose_p_threshold: float = 0.05  # 判定式 (i)/(ii) 顯著門檻
+    # --- round 2:劇本格子 pre-registration(SC-4;不影響 fade-search 模擬)---
+    cell_a_pullback_x: float = 0.008
+    cell_a_headroom_min: float = 0.04
+    cell_a_inner_thresholds: tuple[float, ...] = (0.45, 0.55)
+    cell_a_window_m: int = 60
+    cell_a_min_rally: float = 0.01
+    cell_b_approach_dists: tuple[float, ...] = (0.02, 0.03)
+    cell_b_fail_confirm: float = 0.01
+    cell_b_stop_buffer: float = 0.005
+    cell_c_rally_pcts: tuple[float, ...] = (0.03, 0.05)
+    cell_c_pullback_x: float = 0.008
+    cells_eval_segments: int = 4
+    d5_min_ev: float = 0.01
+    d5_min_n: int = 80
+    d5_min_positive_segments: int = 3
     # --- TP 停利網格(Phase B)---
     tp1_min_profit: tuple[float, ...] = (0.003, 0.005, 0.008, 0.01, 0.015, 0.02)
     tp1_z: tuple[float, ...] = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
@@ -243,6 +266,10 @@ def _combo_from_base(base: dict[str, object], **overrides: object) -> FadeStopCo
 _TUPLE_KEYS = {
     "guard_dist_grid",
     "wf_test_starts",
+    "lock_penalty_grid",
+    "cell_a_inner_thresholds",
+    "cell_b_approach_dists",
+    "cell_c_rally_pcts",
     "s1_stall_bars",
     "s1_outer_max",
     "s2_swing_lookback",
@@ -286,6 +313,7 @@ _SIM_FIELDS = (
     "guard_limit_dist",
     "disaster_x",
     "lock_penalty",
+    "stress_guard_fill_high",
     "fee_rate",
     "fee_discount",
     "intraday_tax",
