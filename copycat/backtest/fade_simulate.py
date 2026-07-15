@@ -17,7 +17,11 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from copycat.backtest.fade_config import FadeBacktestConfig, FadeStopCombo
+from copycat.backtest.fade_config import (
+    FadeBacktestConfig,
+    FadeStopCombo,
+    validate_disaster_fields,
+)
 from copycat.data.models import Bar1K
 from copycat.market import limit_up_price, tick_size
 
@@ -43,6 +47,19 @@ class FadeTradeOutcome:
     pnl_rate: float | None
     exit_m: int | None
     lock_flag: bool
+    # round 3 精算表歸因(僅強制出場設值):hardline / struct_fixed / struct_ratchet /
+    # disaster_x / disaster_retrace;非強制出場 = None
+    exit_reason: str | None = None
+
+
+# 強制出場同價 tie-break 優先序(change-spec §9.2:hardline > struct > disaster)
+_REASON_RANK = {
+    "hardline": 3,
+    "struct_fixed": 2,
+    "struct_ratchet": 2,
+    "disaster_x": 1,
+    "disaster_retrace": 1,
+}
 
 
 # 入統計的出場 status 單一定義(消費端 fade_pipeline / fade_optimize 一律 import,不各自複製)。
@@ -68,9 +85,12 @@ def _simulate_core(
     slippage_ticks: int,
     entry_price_override: float | None = None,
     fixed_stop_level: float | None = None,
+    ratchet_stop_b: float | None = None,
 ) -> FadeTradeOutcome:
     if not bars or trig_idx >= len(bars):
         raise ValueError(f"bars 不含觸發 bar: {sample.stock_id} {sample.t1_date}")
+    validate_disaster_fields(cfg)  # 擋 dataclasses.replace 繞過 config 驗證(round 3)
+    retrace_on = cfg.disaster_arm_x is not None and cfg.disaster_retrace_r is not None
 
     trig = bars[trig_idx]
     t1_limit = limit_up_price(sample.limit)
@@ -123,6 +143,7 @@ def _simulate_core(
         return 1.0 - exit_price / entry - cost
 
     for b in post:
+        prev_high = running_high  # 不含當前 bar(ratchet / 災難回落錨;無 lookahead)
         locked = b.low >= t1_limit - eps
         if locked:
             ever_locked = True
@@ -149,16 +170,26 @@ def _simulate_core(
         post_bars_so_far.append(b)
         elapsed_bars += 1
 
-        # guard/disaster/fixed_stop(鎖死凍結 bar 不會走到這裡);
+        # guard/disaster/fixed_stop/ratchet(鎖死凍結 bar 不會走到這裡);
         # stress_guard_fill_high:嘎空瞬間全市場搶買 → 壓測成交價改取 bar 最高價
         forced_ref = b.high if cfg.stress_guard_fill_high else b.close
-        forced_fills: list[float] = []
+        forced_fills: list[tuple[float, str]] = []
         if guard_level is not None and b.high >= guard_level:
-            forced_fills.append(max(guard_level, forced_ref))
+            forced_fills.append((max(guard_level, forced_ref), "hardline"))
         if disaster_level is not None and b.high >= disaster_level:
-            forced_fills.append(max(disaster_level, forced_ref))
+            forced_fills.append((max(disaster_level, forced_ref), "disaster_x"))
         if fixed_stop_level is not None and b.high >= fixed_stop_level:
-            forced_fills.append(max(fixed_stop_level, forced_ref))
+            forced_fills.append((max(fixed_stop_level, forced_ref), "struct_fixed"))
+        if ratchet_stop_b is not None:
+            ratchet_level = prev_high * (1.0 + ratchet_stop_b)
+            if b.high >= ratchet_level:
+                forced_fills.append((max(ratchet_level, forced_ref), "struct_ratchet"))
+        # 回落式災難(round 3):prev_high 武裝 + 回落確認,成交 = level(限價語意,
+        # 同 S5,不吃 stress);當前 bar 只更新錨,觸發自下一 bar 起
+        if retrace_on and prev_high >= entry * (1.0 + cfg.disaster_arm_x):  # type: ignore[operator]
+            retrace_level = prev_high * (1.0 - cfg.disaster_retrace_r)  # type: ignore[operator]
+            if b.low <= retrace_level:
+                forced_fills.append((retrace_level, "disaster_retrace"))
 
         stop_fills: list[float] = []
         if combo.s4_x is not None:
@@ -212,7 +243,7 @@ def _simulate_core(
             time_fill = b.close
 
         if stop_fills or forced_fills:
-            worst = max(stop_fills + forced_fills)
+            worst = max(stop_fills + [f for f, _ in forced_fills])
             if target_fill is not None:
                 worst = max(worst, target_fill)
             if tp_fill is not None:
@@ -220,7 +251,10 @@ def _simulate_core(
             if time_fill is not None:
                 worst = max(worst, time_fill)
             status = "guard_exit" if forced_fills else "stopped"
-            return FadeTradeOutcome(status, _pnl(worst), b.m, ever_locked)
+            reason: str | None = None
+            if forced_fills:  # 歸因 = worst 強制成交價所屬機制,同價依 _REASON_RANK
+                reason = max(forced_fills, key=lambda t: (t[0], _REASON_RANK[t[1]]))[1]
+            return FadeTradeOutcome(status, _pnl(worst), b.m, ever_locked, reason)
 
         if target_fill is not None:
             exit_price = target_fill
@@ -252,6 +286,7 @@ def simulate_fade_sample(
     slippage_ticks: int,
     entry_price_override: float | None = None,
     fixed_stop_level: float | None = None,
+    ratchet_stop_b: float | None = None,
 ) -> FadeTradeOutcome:
     return _simulate_core(
         bars,
@@ -263,6 +298,7 @@ def simulate_fade_sample(
         slippage_ticks,
         entry_price_override=entry_price_override,
         fixed_stop_level=fixed_stop_level,
+        ratchet_stop_b=ratchet_stop_b,
     )
 
 
