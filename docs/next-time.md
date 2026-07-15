@@ -25,3 +25,14 @@
 - [ ] fade_cells find_cell_a_entry 的 headroom 除式無 b.close>0 防禦(實際 1K 資料恆正;若接入外部資料源先補 guard)
 - [ ] backfill_brokers/label_events 對 FinMind 非數值欄位(如 'N/A')無韌性(現況未觀察到;出現時在 aggregate 層加 tolerant parse + 計數)
 - [2026-07-15] backfill-tc4 的 --events-csv 預設仍指 five-tigers 種子 CSV(_DEFAULT_EVENTS_CSV)——與 round 2 已修的 backfill-brokers/label-events 同類 stale default;不帶參數跑會漏掉 scan 補全事件的 1K 回補(增量補審 P2,範圍外)
+
+## 2026-07-15(fade-round-3 自評 review P2 彙總,8 條聚類)
+
+- [ ] fade_cells 兩套 cell 分派機制並存(round 2 _CellSpec vs round 3 kind 字串 if-elif;_simulate_cell_trades / _simulate_r3_trades 各一套)→ round 4 動 cells 前先收斂成單一 dispatch(🔵 獨立工)
+- [ ] evaluate_cells_from_universe 頂層 round gate 分岔:再加一輪會變 if-elif chain,屆時抽 evaluator factory
+- [ ] tuple-unpack 樣板重複(found_x[0] if found_x is not None else None ×2;_simulate_r3_trades 三個同型 found 分支)
+- [ ] D5 criteria dict 建構在 cells round2/round3 兩處重複(門檻改一邊會漏另一邊)
+- [ ] _act_rows 報告閉包可升 module-level(round 4+ 報告複用)
+- [ ] 底倉格 grid 對 in_w 掃 6 次(單次分桶可 O(n),n 小暫無感)
+- [ ] run_cells 三次 build_fade_universe(cellb 可由 main 超集記憶體過濾,現況重讀 1K JSON)
+- [ ] validate_disaster_fields 在 _simulate_core 每 call 驗一次(GA 熱迴圈微耗;可改 config frozen 後驗一次的快取)
