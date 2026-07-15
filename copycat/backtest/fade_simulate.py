@@ -253,7 +253,10 @@ def _simulate_core(
             status = "guard_exit" if forced_fills else "stopped"
             reason: str | None = None
             if forced_fills:  # 歸因 = worst 強制成交價所屬機制,同價依 _REASON_RANK
-                reason = max(forced_fills, key=lambda t: (t[0], _REASON_RANK[t[1]]))[1]
+                best_fill, best_reason = max(forced_fills, key=lambda t: (t[0], _REASON_RANK[t[1]]))
+                # worst 若由非強制來源(combo stop/target/tp/time)決定 → 不歸因(review A3)
+                if best_fill >= worst:
+                    reason = best_reason
             return FadeTradeOutcome(status, _pnl(worst), b.m, ever_locked, reason)
 
         if target_fill is not None:

@@ -223,3 +223,24 @@ def test_non_forced_exit_reason_is_none() -> None:
     r = simulate_fade_sample(bars, 0, _SAMPLE, _NONE_COMBO, cfg, 1)
     assert r.status == "closeout"
     assert r.exit_reason is None
+
+
+def test_exit_reason_none_when_worst_from_combo_stop() -> None:
+    # review A3/B1:worst 出場價來自 combo stop(非強制機制)時,exit_reason 不得掛強制標籤
+    cfg = FadeBacktestConfig()
+    combo = FadeStopCombo(
+        s1_n=None, s1_phi=None, s2_m=None, s2_buf=None,
+        s3_x=None, s4_x=0.03, s5_x=None, t1300=False,
+    )
+    bars = [
+        _bar(0, 52.0, 52.2, 51.8, 52.0),  # entry = 52.0 − 0.1 = 51.9;s4 level = 53.457
+        _bar(1, 52.0, 53.6, 51.9, 52.6),  # 同 bar 觸 fixed 52.5(fill 52.6)與 s4(fill 53.457)
+        _bar(2, 52.6, 52.7, 52.0, 52.1),
+    ]
+    r = simulate_fade_sample(bars, 0, _SAMPLE, combo, cfg, 1, fixed_stop_level=52.5)
+    assert r.status == "guard_exit"  # forced 有觸發 → status 沿舊語意
+    assert r.exit_reason is None  # 但 worst = s4 fill 53.457 非強制機制 → 不歸因
+    entry = 52.0 - tick_size(52.0)
+    level_s4 = entry * 1.03
+    assert r.pnl_rate is not None
+    assert abs(r.pnl_rate - (1.0 - max(level_s4, 52.6) / entry - 0.001425 * 2 - 0.0015)) < 1e-9

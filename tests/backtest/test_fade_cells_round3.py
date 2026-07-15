@@ -199,3 +199,43 @@ def test_round2_path_ignores_cellb_universe_param() -> None:
     r_no = evaluate_cells_from_universe(universe, [], cfg, _WATCH)
     r_with = evaluate_cells_from_universe(universe, [], cfg, _WATCH, cellb_universe=universe)
     assert r_no == r_with
+
+
+def test_actuarial_covers_legacy_disaster_x() -> None:
+    # review A2:round3 gate + 舊式 disaster_x 合法共存,精算表不得漏列該機制
+    from copycat.backtest.fade_cells import _ACTUARIAL_REASONS, _actuarial_block, _TradeRec
+
+    assert "disaster_x" in _ACTUARIAL_REASONS
+    rec = _TradeRec(
+        pnl=-0.03, day="2026-02-01", exit_reason="disaster_x",
+        locked_close=True, gap=0.04, hits=1,
+    )
+    act = _actuarial_block([rec])
+    assert isinstance(act["disaster_x"], dict)
+    assert act["disaster_x"]["n"] == 1
+
+
+def test_b_capped_not_counted_for_excluded_entry() -> None:
+    # review A4:excluded_guard_at_entry 的事件不得計入 b_capped(封頂數 ≤ 可交易 n)
+    cfg = FadeBacktestConfig(
+        guard_limit_dist=0.05,  # guard_level = 55×0.95 = 52.25
+        struct_stop_buffers=(0.025,),
+        cell_a_inner_thresholds=(0.45,),
+        cell_b_approach_dists=(0.03,),
+        cell_c_rally_pcts=(0.03,),
+        base_arm=False,
+    )
+    bars = [  # cell_b:逼近 54.0 後 fail confirm 收 52.5;entry 52.4 ≥ 52.25 → excluded
+        _bar(0, 52.0, 52.5, 51.8, 52.2),
+        _bar(1, 52.2, 54.0, 52.1, 53.8),
+        _bar(2, 53.3, 53.3, 52.4, 52.5),
+        _bar(3, 52.5, 52.6, 51.9, 52.0),
+    ]
+    result = evaluate_cells_from_universe(
+        [], [], cfg, _WATCH, cellb_universe=[(_sample("uc1", "2026-02-01", gap=0.08), bars)]
+    )
+    cell = _dig(result, "cells", "cell_b:dist_0.03:b0.025", "in_window")
+    base = cell["base"]
+    assert isinstance(base, dict)
+    assert base["n"] == 0  # excluded_guard_at_entry → 不入統計
+    assert cell["b_capped"] == 0  # 未入統計的事件不得計封頂

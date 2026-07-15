@@ -370,12 +370,12 @@ def _simulate_r3_trades(
             ratchet = b
         if idx is None or idx >= len(bars) - 1:
             continue
+        was_capped = False
         if struct_high is not None:
             fixed_stop = struct_high * (1.0 + b)
             if guard_level is not None and fixed_stop >= guard_level:
                 fixed_stop = None  # 硬線封頂(min() 語意)
-                seg = "forward" if sample.t1_date >= cfg.forward_start else "in_window"
-                capped[seg] += 1
+                was_capped = True
         r = simulate_fade_sample(
             bars,
             idx,
@@ -388,6 +388,9 @@ def _simulate_r3_trades(
             ratchet_stop_b=ratchet,
         )
         if r.status in _TRADEABLE and r.pnl_rate is not None:
+            if was_capped:  # 只計入統計的交易(封頂數 ≤ n;review A4)
+                seg = "forward" if sample.t1_date >= cfg.forward_start else "in_window"
+                capped[seg] += 1
             locked_close = bars[-1].low >= t1_limit - cfg.limit_eps
             trades.append(
                 _TradeRec(
@@ -402,7 +405,13 @@ def _simulate_r3_trades(
     return trades, capped
 
 
-_ACTUARIAL_REASONS = ("hardline", "struct_fixed", "struct_ratchet", "disaster_retrace")
+_ACTUARIAL_REASONS = (
+    "hardline",
+    "struct_fixed",
+    "struct_ratchet",
+    "disaster_retrace",
+    "disaster_x",  # 舊式災難(round3 gate 與 disaster_x 可合法共存,不得漏列;review A2)
+)
 
 
 def _actuarial_block(trades: list[_TradeRec]) -> dict[str, object]:
