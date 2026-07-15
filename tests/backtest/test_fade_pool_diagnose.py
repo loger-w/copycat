@@ -160,3 +160,52 @@ def test_report_writer_sections(tmp_path: Path) -> None:
     assert "敏感度" in text
     assert "UC 方向值得繼續" in text
     assert "included=16" in text
+
+
+# --- round 3:forward 段切分(change-spec §9.4;SC-7/二輪 R2)---
+
+
+def _forward_universe() -> list[tuple[FadeSample, list[Bar1K]]]:
+    """in-window 6 日(2026-02)+ forward 3 日(2026-07-13 起)."""
+    out = _build_universe(6)
+    for i in range(3):
+        day = f"2026-07-{13 + i:02d}"
+        out.append((_sample(f"ft{i}", day, broker_ids="9227"), _win_bars()))
+        out.append((_sample(f"fs{i}", day, source="scan"), _flat_bars()))
+    return out
+
+
+def test_forward_section_splits_pools() -> None:
+    cfg = FadeBacktestConfig(diagnose_perm_iters=100)
+    result = diagnose_pool_fade(_forward_universe(), {}, "2026-12-31", cfg, _WATCH)
+    fwd = result["forward"]
+    assert isinstance(fwd, dict)
+    pools = fwd["pools"]
+    assert isinstance(pools, dict)
+    assert pools["tiger_1"]["n"] == 3
+    assert pools["scan"]["n"] == 3
+    # forward 段完整判定式欄位存在,但門檻(≥20 交易日)未到 → 不判定
+    assert fwd["threshold_met"] is False
+    assert "comparison" in fwd and "verdict" in fwd
+
+
+def test_forward_section_empty_marks_zero() -> None:
+    cfg = FadeBacktestConfig(diagnose_perm_iters=100)
+    result = diagnose_pool_fade(_build_universe(4), {}, "2026-12-31", cfg, _WATCH)
+    fwd = result["forward"]
+    assert isinstance(fwd, dict)
+    pools = fwd["pools"]
+    assert isinstance(pools, dict)
+    assert pools["tiger_1"]["n"] == 0
+    assert fwd["threshold_met"] is False
+
+
+def test_main_verdict_unchanged_by_forward_section() -> None:
+    # 白名單 2:主判定式仍以全共同期間計(含 forward 樣本),數值不因新節改變
+    cfg = FadeBacktestConfig(diagnose_perm_iters=300, diagnose_perm_seed=42)
+    universe = _build_universe(24)
+    result = diagnose_pool_fade(universe, {}, "2026-12-31", cfg, _WATCH)
+    assert isinstance(result["verdict"], dict)
+    pools = result["pools"]
+    assert isinstance(pools, dict)
+    assert pools["tiger_1"]["n"] == 24

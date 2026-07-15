@@ -244,24 +244,10 @@ def _pool_run(
     return pools, trades
 
 
-def diagnose_pool_fade(
-    samples_bars: list[tuple[FadeSample, list[Bar1K]]],
-    turnover_map: dict[tuple[str, str], float],
-    label_cutoff: str,
-    cfg: FadeBacktestConfig,
-    watchlist_ids: frozenset[str],
-) -> dict[str, object]:
-    """四池無條件 fade 複驗 + 判定式(base config 判定;stress / lock_penalty 僅敏感度).
-
-    判定式(pre-registered,change-spec SC-3):tiger = tiger_1 ∪ tiger_2plus;
-    對照 = control + scan(無標記全池);
-    (i) tiger mean > 0 且日聚類 z 單尾 p < diagnose_p_threshold;
-    (ii) diff ≥ diagnose_min_edge_pp 且日內分層 permutation 單尾 p < diagnose_p_threshold。
-    """
-    pools, trades = _pool_run(
-        samples_bars, turnover_map, label_cutoff, cfg, watchlist_ids, cfg.slippage_ticks
-    )
-
+def _comparison_and_verdict(
+    trades: dict[str, list[_PoolTrade]], cfg: FadeBacktestConfig
+) -> tuple[dict[str, object], dict[str, object]]:
+    """判定式 (i)(ii) 計算(全期間主判定與 forward 段複核共用;數值路徑不變)."""
     tiger = trades["tiger_1"] + trades["tiger_2plus"]
     others = trades["control"] + trades["scan"]
     comparison: dict[str, object] = {"n_tiger": len(tiger), "n_others": len(others)}
@@ -313,6 +299,46 @@ def diagnose_pool_fade(
             }
         )
         verdict = {"continue_uc": all(criteria.values()), "criteria": criteria}
+    return comparison, verdict
+
+
+def diagnose_pool_fade(
+    samples_bars: list[tuple[FadeSample, list[Bar1K]]],
+    turnover_map: dict[tuple[str, str], float],
+    label_cutoff: str,
+    cfg: FadeBacktestConfig,
+    watchlist_ids: frozenset[str],
+) -> dict[str, object]:
+    """四池無條件 fade 複驗 + 判定式(base config 判定;stress / lock_penalty 僅敏感度).
+
+    判定式(pre-registered,change-spec SC-3):tiger = tiger_1 ∪ tiger_2plus;
+    對照 = control + scan(無標記全池);
+    (i) tiger mean > 0 且日聚類 z 單尾 p < diagnose_p_threshold;
+    (ii) diff ≥ diagnose_min_edge_pp 且日內分層 permutation 單尾 p < diagnose_p_threshold。
+    """
+    pools, trades = _pool_run(
+        samples_bars, turnover_map, label_cutoff, cfg, watchlist_ids, cfg.slippage_ticks
+    )
+    comparison, verdict = _comparison_and_verdict(trades, cfg)
+
+    # round 3(SC-7/二輪 R2):forward 段(≥ forward_start)同式複核,
+    # 機制事先凍結;門檻(≥20 交易日)未到僅列數不判定。主判定仍以全共同期間計。
+    fwd_samples = [(s, b) for s, b in samples_bars if s.t1_date >= cfg.forward_start]
+    fwd_pools, fwd_trades = _pool_run(
+        fwd_samples, turnover_map, label_cutoff, cfg, watchlist_ids, cfg.slippage_ticks
+    )
+    fwd_comparison, fwd_verdict = _comparison_and_verdict(fwd_trades, cfg)
+    fwd_tiger_days = {
+        t.day for t in fwd_trades["tiger_1"] + fwd_trades["tiger_2plus"]
+    }
+    forward = {
+        "forward_start": cfg.forward_start,
+        "pools": fwd_pools,
+        "comparison": fwd_comparison,
+        "verdict": fwd_verdict,
+        "tiger_days": len(fwd_tiger_days),
+        "threshold_met": len(fwd_tiger_days) >= 20,
+    }
 
     variants: dict[str, object] = {}
     stress_pools, _ = _pool_run(
@@ -346,6 +372,7 @@ def diagnose_pool_fade(
         "pools": pools,
         "comparison": comparison,
         "verdict": verdict,
+        "forward": forward,
         "variants": variants,
     }
 
@@ -401,7 +428,7 @@ def write_pool_fade_report(
     comp = result.get("comparison")
     verdict = result.get("verdict")
     if isinstance(comp, dict) and isinstance(verdict, dict):
-        lines.append("## 判定")
+        lines.append("## 判定 Q1(池子有肉;SC-3 拆兩題,本檔僅答 Q1)")
         lines.append("")
         lines.append(
             f"- tiger(合併)淨 EV = {_fmt(comp.get('tiger_mean'))}"
@@ -420,6 +447,29 @@ def write_pool_fade_report(
         lines.append("")
         lines.append(f"**UC 方向值得繼續:{'是' if verdict.get('continue_uc') else '否(見上列未過項)'}**")
         lines.append("")
+
+    forward = result.get("forward")
+    if isinstance(forward, dict):
+        lines.append(f"## forward 段(t1 ≥ {forward.get('forward_start')};同式複核)")
+        lines.append("")
+        met = forward.get("threshold_met")
+        lines.append(
+            f"- tiger 交易日 = {forward.get('tiger_days')};門檻(≥20 交易日)"
+            f"{'已到,判定生效' if met else '未到,僅列數不判定'}。"
+        )
+        lines.append("")
+        fwd_pools = forward.get("pools")
+        if isinstance(fwd_pools, dict):
+            lines.extend(_pool_table_lines(fwd_pools, "forward 四池"))
+        fwd_comp = forward.get("comparison")
+        if isinstance(fwd_comp, dict) and fwd_comp.get("tiger_mean") is not None:
+            lines.append(
+                f"- forward tiger 淨 EV = {_fmt(fwd_comp.get('tiger_mean'))}"
+                f"(z = {_fmt(fwd_comp.get('tiger_z'), '.2f')},"
+                f"diff = {_fmt(fwd_comp.get('diff'))},"
+                f"洗牌 p = {_fmt(fwd_comp.get('diff_perm_p'))})"
+            )
+            lines.append("")
 
     variants = result.get("variants")
     if isinstance(variants, dict):
