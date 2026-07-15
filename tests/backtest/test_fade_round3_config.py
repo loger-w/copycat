@@ -73,3 +73,16 @@ def test_sim_hash_sensitive_to_retrace_disaster() -> None:
     h0 = fade_sim_config_hash(FadeBacktestConfig())
     h1 = fade_sim_config_hash(FadeBacktestConfig(disaster_arm_x=0.06, disaster_retrace_r=0.02))
     assert h0 != h1
+
+
+def test_repo_round3_config_loads() -> None:
+    cfg = load_fade_config(Path("configs/fade_uc_round3.json"))
+    assert cfg.fade_gap_max == 0.075  # 貼板線(2026-07-15 拍板)
+    assert cfg.guard_limit_dist == 0.01  # 硬線 = 漲 9%
+    assert cfg.disaster_x is None  # 舊災難停用
+    assert cfg.disaster_arm_x == 0.06 and cfg.disaster_retrace_r == 0.02  # §5a 凍結值
+    assert cfg.struct_stop_buffers == (0.025, 0.0375)  # b1/b2(§5a 凍結值)
+    assert cfg.cell_b_gap_max == 0.095
+    assert cfg.cell_a_inner_thresholds == (0.45,)
+    assert cfg.cell_b_approach_dists == (0.03,)
+    assert cfg.base_arm is True
