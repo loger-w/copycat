@@ -131,6 +131,15 @@ class FadeBacktestConfig:
     disaster_x: float | None = None  # 災難停損 entry×(1+x),獨立於 combo 永遠生效
     lock_penalty: float | None = None  # 全日鎖死回補 = 漲停×(1+p)(悲觀化)
     guard_dist_grid: tuple[float, ...] = (0.02, 0.03, 0.04)  # 敏感度診斷(不入選擇)
+    # --- round 3:回落式災難停損(兩欄同設才啟用;與 disaster_x 互斥)---
+    disaster_arm_x: float | None = None  # 武裝深度 D:prev_high ≥ entry×(1+D)
+    disaster_retrace_r: float | None = None  # 回落確認 r:bar.low ≤ prev_high×(1−r)
+    # --- round 3:結構停損 b 候選 + 貼板線 + 底倉臂(cells 層;空/False = round 2 形狀)---
+    struct_stop_buffers: tuple[float, ...] = ()
+    cell_b_gap_max: float | None = None  # cell_b 獨立宇宙上限(None = 沿 fade_gap_max)
+    base_arm: bool = False
+    base_arm_gap_edges: tuple[float, ...] = (0.01, 0.03, 0.055, 0.075)
+    forward_start: str = "2026-07-11"  # SC-7 考場切分日
     # --- walk-forward(空 = 舊單 split 路徑)---
     wf_test_starts: tuple[str, ...] = ()
     wf_test_months: int = 2
@@ -273,6 +282,8 @@ _TUPLE_KEYS = {
     "guard_dist_grid",
     "wf_test_starts",
     "lock_penalty_grid",
+    "struct_stop_buffers",
+    "base_arm_gap_edges",
     "cell_a_inner_thresholds",
     "cell_b_approach_dists",
     "cell_c_rally_pcts",
@@ -318,6 +329,8 @@ _TUPLE_KEYS = {
 _SIM_FIELDS = (
     "guard_limit_dist",
     "disaster_x",
+    "disaster_arm_x",
+    "disaster_retrace_r",
     "lock_penalty",
     "stress_guard_fill_high",
     "fee_rate",
@@ -377,7 +390,18 @@ def load_fade_config(path: Path) -> FadeBacktestConfig:
             value = payload[key]
             assert isinstance(value, list)
             payload[key] = tuple(value)
-    return FadeBacktestConfig(**payload)  # type: ignore[arg-type]
+    cfg = FadeBacktestConfig(**payload)  # type: ignore[arg-type]
+    validate_disaster_fields(cfg)
+    return cfg
+
+
+def validate_disaster_fields(cfg: FadeBacktestConfig) -> None:
+    """round 3 災難停損欄位不變式(load 與引擎共用;change-spec §9.1/二輪 P2-5)."""
+    retrace_on = cfg.disaster_arm_x is not None or cfg.disaster_retrace_r is not None
+    if retrace_on and (cfg.disaster_arm_x is None or cfg.disaster_retrace_r is None):
+        raise ValueError("disaster_arm_x 與 disaster_retrace_r 必須同設")
+    if cfg.disaster_x is not None and retrace_on:
+        raise ValueError("disaster_x 與回落式災難停損(arm/retrace)互斥")
 
 
 def fade_sim_config_hash(cfg: FadeBacktestConfig) -> str:
