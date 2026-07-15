@@ -45,9 +45,10 @@ def is_uc_sample(sample: FadeSample, watchlist_ids: frozenset[str]) -> bool:
 
 def find_cell_a_entry(
     bars: list[Bar1K], t1_limit: float, inner_threshold: float, cfg: FadeBacktestConfig
-) -> int | None:
+) -> tuple[int, float] | None:
     """先拉再出:窗內拉高 ≥ min_rally 後,收盤自高點回落 ≥ pullback_x,
-    且進場當下(累計至該 bar)內盤比 ≥ 閾值、headroom ≥ 門檻."""
+    且進場當下(累計至該 bar)內盤比 ≥ 閾值、headroom ≥ 門檻 →
+    (entry_idx, 結構高 = 進場前盤中高點)."""
     open_p = bars[0].open
     if open_p <= 0:
         return None
@@ -67,7 +68,7 @@ def find_cell_a_entry(
             continue
         total = cum_up + cum_dn
         if total > 0 and cum_dn / total >= inner_threshold:
-            return i
+            return i, run_high
     return None
 
 
@@ -89,8 +90,9 @@ def find_cell_b_entry(
 
 def find_cell_c_entry(
     bars: list[Bar1K], rally_pct: float, cfg: FadeBacktestConfig
-) -> int | None:
-    """低開反拉:自開盤反拉 ≥ r 後,收盤自高點回落 ≥ pullback_x 進場."""
+) -> tuple[int, float] | None:
+    """低開反拉:自開盤反拉 ≥ r 後,收盤自高點回落 ≥ pullback_x 進場 →
+    (entry_idx, 結構高 = 反拉高點)."""
     open_p = bars[0].open
     if open_p <= 0:
         return None
@@ -100,7 +102,7 @@ def find_cell_c_entry(
         if run_high < open_p * (1.0 + rally_pct):
             continue
         if b.close <= run_high * (1.0 - cfg.cell_c_pullback_x):
-            return i
+            return i, run_high
     return None
 
 
@@ -162,7 +164,8 @@ def _simulate_cell_trades(
         fixed_stop: float | None = None
         sim_cfg = cfg
         if spec.cell == "cell_a":
-            idx = find_cell_a_entry(bars, t1_limit, param, cfg)
+            found_a = find_cell_a_entry(bars, t1_limit, param, cfg)
+            idx = found_a[0] if found_a is not None else None
         elif spec.cell == "cell_b":
             found = find_cell_b_entry(bars, t1_limit, param, cfg)
             if found is None:
@@ -171,7 +174,8 @@ def _simulate_cell_trades(
             fixed_stop = approach_high * (1.0 + cfg.cell_b_stop_buffer)
             sim_cfg = dataclasses.replace(cfg, guard_limit_dist=None)  # 自帶風控(SC-4)
         elif spec.cell == "cell_c":
-            idx = find_cell_c_entry(bars, param, cfg)
+            found_c = find_cell_c_entry(bars, param, cfg)
+            idx = found_c[0] if found_c is not None else None
         else:  # baseline_m7
             idx = _baseline_entry_idx(bars)
         if idx is None or idx >= len(bars) - 1:

@@ -65,7 +65,11 @@ def _cell_a_bars() -> list[Bar1K]:
 
 
 def test_cell_a_triggers_on_pullback_with_inner_gate() -> None:
-    assert find_cell_a_entry(_cell_a_bars(), _LIMIT, 0.45, _CFG) == 2
+    found = find_cell_a_entry(_cell_a_bars(), _LIMIT, 0.45, _CFG)
+    assert found is not None
+    idx, struct_high = found
+    assert idx == 2
+    assert abs(struct_high - 53.5) < 1e-9  # 進場前盤中高點(round 3 結構高)
 
 
 def test_cell_a_requires_min_rally() -> None:
@@ -136,7 +140,11 @@ def test_cell_c_triggers_on_rally_then_pullback() -> None:
         _bar(2, 50.5, 50.5, 50.0, 50.1),  # 收 50.1 ≤ 50.195 → 進場
         _bar(3, 50.1, 50.2, 48.9, 49.0),
     ]
-    assert find_cell_c_entry(bars, 0.03, _CFG) == 2
+    found = find_cell_c_entry(bars, 0.03, _CFG)
+    assert found is not None
+    idx, struct_high = found
+    assert idx == 2
+    assert abs(struct_high - 50.6) < 1e-9  # 反拉高點(round 3 結構高)
 
 
 def test_evaluate_filters_to_uc_pool_only() -> None:
