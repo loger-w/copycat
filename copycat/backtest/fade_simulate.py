@@ -21,12 +21,14 @@ from copycat.backtest.fade_config import (
     FadeBacktestConfig,
     FadeStopCombo,
     validate_disaster_fields,
+    validate_round4_fields,
 )
 from copycat.data.models import Bar1K
 from copycat.market import limit_up_price, tick_size
 
 if TYPE_CHECKING:
     from copycat.backtest.fade_config import FadeTakeProfitCombo
+    from copycat.backtest.fade_tp import PivotState
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,16 +49,22 @@ class FadeTradeOutcome:
     pnl_rate: float | None
     exit_m: int | None
     lock_flag: bool
-    # round 3 精算表歸因(僅強制出場設值):hardline / struct_fixed / struct_ratchet /
-    # disaster_x / disaster_retrace;非強制出場 = None
+    # 精算表歸因:round 3 強制出場 = hardline / struct_fixed / struct_ratchet /
+    # disaster_x / disaster_retrace / inner_flip;round 4 停利 = tp_flush / tp_hl;
+    # 其他出場 = None
     exit_reason: str | None = None
+    # round 4:最大有利波動(毛,不扣成本)與引擎內部進場價;excluded_* = None
+    mfe_rate: float | None = None
+    entry_price: float | None = None
 
 
-# 強制出場同價 tie-break 優先序(change-spec §9.2:hardline > struct > disaster)
+# 強制出場同價 tie-break 優先序(change-spec §9.2:hardline > struct > disaster;
+# round 4 inner_flip 與 struct 同級,同價同級取 append 序前者 = struct 優先)
 _REASON_RANK = {
     "hardline": 3,
     "struct_fixed": 2,
     "struct_ratchet": 2,
+    "inner_flip": 2,
     "disaster_x": 1,
     "disaster_retrace": 1,
 }
@@ -86,10 +94,12 @@ def _simulate_core(
     entry_price_override: float | None = None,
     fixed_stop_level: float | None = None,
     ratchet_stop_b: float | None = None,
+    inner_flip_phi: float | None = None,
 ) -> FadeTradeOutcome:
     if not bars or trig_idx >= len(bars):
         raise ValueError(f"bars 不含觸發 bar: {sample.stock_id} {sample.t1_date}")
     validate_disaster_fields(cfg)  # 擋 dataclasses.replace 繞過 config 驗證(round 3)
+    validate_round4_fields(cfg)  # 同上(round 4)
     retrace_on = cfg.disaster_arm_x is not None and cfg.disaster_retrace_r is not None
 
     trig = bars[trig_idx]
@@ -139,8 +149,21 @@ def _simulate_core(
     prev_cum_delta = 0.0
     elapsed_bars = 0
 
+    # round 4:累計內外盤自開盤起算(含 trig bar;與 cell_a gate / 全池證據同語意)
+    cum_up = sum(pb.up_volume for pb in bars[: trig_idx + 1])
+    cum_dn = sum(pb.down_volume for pb in bars[: trig_idx + 1])
+    post_low: float | None = None  # 進場後最低(不含 trig bar;MFE / flush 錨)
+    pivot_state: PivotState | None = None
+    if cfg.tp_hl_k is not None:
+        from copycat.backtest.fade_tp import PivotState as _PivotState
+
+        pivot_state = _PivotState()
+
     def _pnl(exit_price: float) -> float:
         return 1.0 - exit_price / entry - cost
+
+    def _mfe() -> float | None:
+        return None if post_low is None else 1.0 - post_low / entry
 
     for b in post:
         prev_high = running_high  # 不含當前 bar(ratchet / 災難回落錨;無 lookahead)
@@ -153,6 +176,12 @@ def _simulate_core(
                 t1300_consumed = True
             elapsed_bars += 1
             post_bars_so_far.append(b)
+            # round 4:凍結 bar 資訊真實存在 → 累計/錨/pivot 照餵,僅不做出場檢查
+            cum_up += b.up_volume
+            cum_dn += b.down_volume
+            post_low = b.low if post_low is None else min(post_low, b.low)
+            if pivot_state is not None:
+                pivot_state.update(b)
             continue
 
         if b.low < running_low:
@@ -169,6 +198,11 @@ def _simulate_core(
         cum_vol += b.volume
         post_bars_so_far.append(b)
         elapsed_bars += 1
+        cum_up += b.up_volume
+        cum_dn += b.down_volume
+        post_low = b.low if post_low is None else min(post_low, b.low)
+        if pivot_state is not None:
+            pivot_state.update(b)
 
         # guard/disaster/fixed_stop/ratchet(鎖死凍結 bar 不會走到這裡);
         # stress_guard_fill_high:嘎空瞬間全市場搶買 → 壓測成交價改取 bar 最高價
@@ -184,6 +218,16 @@ def _simulate_core(
             ratchet_level = prev_high * (1.0 + ratchet_stop_b)
             if b.high >= ratchet_level:
                 forced_fills.append((max(ratchet_level, forced_ref), "struct_ratchet"))
+        # round 4 inner_flip:累計內盤比跌破 φ = 買壓吃掉賣壓(劇本走樣)。
+        # 成交 = close(訊號性市價出場,同 S1 慣例,不吃 stress);append 在 struct
+        # 之後 → 同價同級歸因 struct 優先(change-spec §5.3)
+        if (
+            inner_flip_phi is not None
+            and b.m >= cfg.inner_flip_min_bars
+            and cum_up + cum_dn > 0
+            and cum_dn / (cum_up + cum_dn) < inner_flip_phi
+        ):
+            forced_fills.append((b.close, "inner_flip"))
         # 回落式災難(round 3):prev_high 武裝 + 回落確認,成交 = level(限價語意,
         # 同 S5,不吃 stress);當前 bar 只更新錨,觸發自下一 bar 起
         if retrace_on and prev_high >= entry * (1.0 + cfg.disaster_arm_x):  # type: ignore[operator]
@@ -237,6 +281,27 @@ def _simulate_core(
                 cum_vol,
             )
 
+        # round 4 TP 決策樹(cfg 驅動,獨立於 combo tp):flush 優先於 hl(同 bar 寫死)
+        tp_reason: str | None = None
+        if cfg.tp_flush_z is not None or pivot_state is not None:
+            from copycat.backtest.fade_tp import check_flush_exit, check_higher_low_exit
+
+            profit_gross = 1.0 - b.close / entry
+            tree_fill: float | None = None
+            tree_reason: str | None = None
+            if cfg.tp_flush_z is not None and post_low is not None:
+                tree_fill = check_flush_exit(cfg, b, post_low, post_bars_so_far, profit_gross)
+                if tree_fill is not None:
+                    tree_reason = "tp_flush"
+            if tree_fill is None and pivot_state is not None:
+                tree_fill = check_higher_low_exit(pivot_state, b, profit_gross, cfg)
+                if tree_fill is not None:
+                    tree_reason = "tp_hl"
+            if tree_fill is not None:
+                if tp_fill is None or tree_fill >= tp_fill:
+                    tp_reason = tree_reason
+                tp_fill = tree_fill if tp_fill is None else max(tp_fill, tree_fill)
+
         time_fill: float | None = None
         if not t1300_consumed and b.m >= cfg.t1300_min_idx:
             t1300_consumed = True
@@ -257,27 +322,35 @@ def _simulate_core(
                 # worst 若由非強制來源(combo stop/target/tp/time)決定 → 不歸因(review A3)
                 if best_fill >= worst:
                     reason = best_reason
-            return FadeTradeOutcome(status, _pnl(worst), b.m, ever_locked, reason)
+            return FadeTradeOutcome(status, _pnl(worst), b.m, ever_locked, reason, _mfe(), entry)
 
         if target_fill is not None:
             exit_price = target_fill
             if tp_fill is not None:
                 exit_price = max(target_fill, tp_fill)
-            return FadeTradeOutcome("target_hit", _pnl(exit_price), b.m, ever_locked)
+            # 歸因給 TP 樹僅當出場價由它決定(combo target 勝出 → None,現規則不變)
+            reason_tp = tp_reason if tp_fill is not None and tp_fill >= target_fill else None
+            return FadeTradeOutcome(
+                "target_hit", _pnl(exit_price), b.m, ever_locked, reason_tp, _mfe(), entry
+            )
 
         if tp_fill is not None:
-            return FadeTradeOutcome("target_hit", _pnl(tp_fill), b.m, ever_locked)
+            return FadeTradeOutcome(
+                "target_hit", _pnl(tp_fill), b.m, ever_locked, tp_reason, _mfe(), entry
+            )
 
         if time_fill is not None:
-            return FadeTradeOutcome("time_1300", _pnl(time_fill), b.m, ever_locked)
+            return FadeTradeOutcome(
+                "time_1300", _pnl(time_fill), b.m, ever_locked, None, _mfe(), entry
+            )
 
     last = post[-1]
     if last.low >= t1_limit - eps:
         lock_exit = (
             t1_limit * (1.0 + cfg.lock_penalty) if cfg.lock_penalty is not None else t1_limit
         )
-        return FadeTradeOutcome("locked_at_limit", _pnl(lock_exit), None, True)
-    return FadeTradeOutcome("closeout", _pnl(last.close), last.m, ever_locked)
+        return FadeTradeOutcome("locked_at_limit", _pnl(lock_exit), None, True, None, _mfe(), entry)
+    return FadeTradeOutcome("closeout", _pnl(last.close), last.m, ever_locked, None, _mfe(), entry)
 
 
 def simulate_fade_sample(
@@ -290,6 +363,7 @@ def simulate_fade_sample(
     entry_price_override: float | None = None,
     fixed_stop_level: float | None = None,
     ratchet_stop_b: float | None = None,
+    inner_flip_phi: float | None = None,
 ) -> FadeTradeOutcome:
     return _simulate_core(
         bars,
@@ -302,6 +376,7 @@ def simulate_fade_sample(
         entry_price_override=entry_price_override,
         fixed_stop_level=fixed_stop_level,
         ratchet_stop_b=ratchet_stop_b,
+        inner_flip_phi=inner_flip_phi,
     )
 
 
@@ -313,5 +388,8 @@ def simulate_fade_with_tp(
     tp: FadeTakeProfitCombo | None,
     cfg: FadeBacktestConfig,
     slippage_ticks: int,
+    inner_flip_phi: float | None = None,
 ) -> FadeTradeOutcome:
-    return _simulate_core(bars, trig_idx, sample, combo, tp, cfg, slippage_ticks)
+    return _simulate_core(
+        bars, trig_idx, sample, combo, tp, cfg, slippage_ticks, inner_flip_phi=inner_flip_phi
+    )
