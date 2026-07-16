@@ -117,5 +117,14 @@ guard fill = bar.high)、lock_penalty 0.03、貼板線 7.5%、宇宙過濾全部
 1. 進場陣容 = 沿 round 3 + 第 7 分鐘升正式臂 ✅(user 拍板)
 2. 停損收斂 = 內盤比反轉主打 + 結構前高沿用 + 硬線/災難沿凍結;緩漲反轉觀察 ✅(user 拍板)
 3. 停利形狀 = 單一決策樹(出量殺 + 墊高同掛先到先收)+ 消融對照 ✅(user 拍板)
-4. §0 凍結值(φ_flip / tp1 參數 / 墊高 k)、§0(d) gate 結果與 fallback 啟用:**待開工定值後回填**
+4. §0 凍結值回填(2026-07-16 實跑,證據 `docs/evidence/fade_round4_anatomy_2026-07-16.md`):
+   - **(d) 內盤比 gate = PASS**(>0.55 桶摸板率 8.3% vs <0.45 桶 56.2%,gap 分層 3/3
+     一致)→ φ_flip 凍結 = [0.45 主, 0.55 敏感度]。
+   - **(c) 墊高 = DEMOTE(fallback #2 啟用)**:讓肉中位 3.24%(k2)>
+     抱到收盤讓回中位 1.57% → tp_hl 本輪不設,樹只剩 flush,消融「只 hl」跳過。
+   - **(b) 出量殺凍結**:z=3(出現率 58.9% 適中檔)/ lookback=5 /
+     recovery=0.4(p75 自然分位;次組 0.65≈p90 走 `configs/fade_uc_round4_sens_tp.json`)/
+     min_profit=0.005。落 `configs/fade_uc_round4.json`。
+   - (e) 緩漲觀察:出現率 66.7%,段末後 10 根 post_move 中位 +0.19%(方向支持
+     「結束後反向」但效果量小)——維持觀察。
 5. 整份 prereg 凍結 ✅(2026-07-16 user:「沒問題 凍結吧」)
