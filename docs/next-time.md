@@ -36,3 +36,11 @@
 - [ ] 底倉格 grid 對 in_w 掃 6 次(單次分桶可 O(n),n 小暫無感)
 - [ ] run_cells 三次 build_fade_universe(cellb 可由 main 超集記憶體過濾,現況重讀 1K JSON)
 - [ ] validate_disaster_fields 在 _simulate_core 每 call 驗一次(GA 熱迴圈微耗;可改 config frozen 後驗一次的快取)
+
+## 2026-07-16(fade-round-4 自評 review P2 彙總,12 條聚類)
+
+- [ ] 分位數實作三份(fade_anatomy._quantiles / fade_cells._pctl / fade_diagnose._quantile,演算法還不一致:round vs int truncate)→ 統一到共用 stats helper(🔵 獨立工;2026-07-11 節已有同類條目,合併處理)
+- [ ] D5 判定三條件 + vs_baseline 計算在 _evaluate_round3 與 _evaluate_round4._variant_block 逐行重複 → 抽純函式(抽取不動 round 3 輸出,bit-for-bit 可保;改 D5 判準時兩份會分岔)
+- [ ] fade_anatomy 效能候選(單次跑分鐘級,量級可接受;/perf 先 profile):flush_anatomy 每個 z 全宇宙重掃(可單趟收三個 z)、hl_anatomy 每個 k × arm 重算 entry idx(可 cache)、_evaluate_round4 消融 5 組 × 5 變體 = 25 趟全量模擬
+- [ ] fade_anatomy 報表 micro 重複:inner gate 兩張 touch_rate 表同構、nested isinstance/get 鏈提取 helper、mfe_anatomy 與 _entry_idx_for 的 cell 參數抽取樣板兩份(cell registry 條目 2026-07-14 節已有,合併)
+- [ ] check_flush_exit(cfg 驅動)與 _tp1(combo 驅動)結構重複但錨不同(進場後最低 vs running_low 含 trig)——已在 docstring 註明差異;若 Phase B 網格路徑退役,_tp1 可刪併

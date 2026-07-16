@@ -544,7 +544,11 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                     f" | {_fmtq(blk.get('first_m'), '.0f')} | {_fmtq(blk.get('recovery'), '.2f')}"
                     f" | {_fmtq(blk.get('post_move'))} |"
                 )
-    lines.append("- 凍結值建議:z 取事件率適中之檔位;recovery / min_profit 取分佈自然分位。")
+    lines.append(
+        "- 凍結值建議:z 取事件率適中之檔位;recovery / min_profit 取分佈自然分位。"
+        "**注意:出現率為未套 recovery / min_profit gate 的上界**"
+        "(gate 值由本表凍結,引擎實跑觸發率必然更低)。"
+    )
     lines.append("")
 
     lines.append("## (c) 墊高解剖(讓肉 = 確認價 − 確認前最低,毛口徑)")

@@ -855,10 +855,11 @@ def _evaluate_round4(
         }
 
     cells: dict[str, object] = {}
-    for kind, variant, param, uni, base_key in specs:
+    for i, (kind, variant, param, uni, base_key) in enumerate(specs, start=1):
         cells[f"{kind}:{variant}:b{b_main:g}"] = _variant_block(
             kind, variant, param, uni, base_key, b_main, phi_main
         )
+        logger.info("round4 主判定 %d/%d 完成(%s:%s)", i, len(specs), kind, variant)
 
     # 敏感度列(不入 D5;報告獨立節):φ 次值 / b 次值重跑主 5 變體
     sensitivity: dict[str, object] = {}
@@ -867,11 +868,13 @@ def _evaluate_round4(
             sensitivity[f"phi{phi_sens:g}:{kind}:{variant}"] = _variant_block(
                 kind, variant, param, uni, base_key, b_main, phi_sens
             )
+        logger.info("round4 敏感度 φ=%s 完成(%d 變體)", phi_sens, len(specs))
     if b_sens is not None:
         for kind, variant, param, uni, base_key in specs:
             sensitivity[f"b{b_sens:g}:{kind}:{variant}"] = _variant_block(
                 kind, variant, param, uni, base_key, b_sens, phi_main
             )
+        logger.info("round4 敏感度 b=%s 完成(%d 變體)", b_sens, len(specs))
 
     # 底倉臂 + Q2′(交易集合寫死 = base_arm 套新出場、in-window;主 5 變體不入)
     base_arm: dict[str, object] = {}
@@ -926,14 +929,18 @@ def _evaluate_round4(
         in_w, _fwd = _split_fw(merged, cfg.forward_start)
         return _rec_stats(in_w, start, seg_days, k)
 
-    ablation: dict[str, object] = {
-        "tp_off": _ablation_run(cfg_legacy, phi_main, False),
-        "stop_struct_only": _ablation_run(cfg, None, False),
-    }
+    ablation: dict[str, object] = {}
+    for name, args in (
+        ("tp_off", (cfg_legacy, phi_main, False)),
+        ("stop_struct_only", (cfg, None, False)),
+    ):
+        ablation[name] = _ablation_run(*args)
+        logger.info("round4 消融 %s 完成", name)
     if not hl_demoted:
         ablation["flush_only"] = _ablation_run(
             dataclasses.replace(cfg, tp_hl_k=None, tp_hl_min_profit=None), phi_main, False
         )
+        logger.info("round4 消融 flush_only 完成")
         ablation["hl_only"] = _ablation_run(
             dataclasses.replace(
                 cfg,
@@ -945,10 +952,13 @@ def _evaluate_round4(
             phi_main,
             False,
         )
+        logger.info("round4 消融 hl_only 完成")
     elif cfg.tp_flush_z is not None:
         ablation["flush_only"] = _ablation_run(cfg, phi_main, False)
+        logger.info("round4 消融 flush_only 完成")
     if not inner_demoted:
         ablation["stop_inner_only"] = _ablation_run(cfg, phi_main, True)
+        logger.info("round4 消融 stop_inner_only 完成")
 
     logger.info(
         "evaluate_round4 main=%d low=%d cellb=%d cells=%d base_arm=%s ablation=%s",
