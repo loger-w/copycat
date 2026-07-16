@@ -140,6 +140,15 @@ class FadeBacktestConfig:
     base_arm: bool = False
     base_arm_gap_edges: tuple[float, ...] = (0.01, 0.03, 0.055, 0.075)
     forward_start: str = "2026-07-11"  # SC-7 考場切分日
+    # --- round 4:劇本結構化出場(prereg 2026-07-16;None/空 = round 3 行為)---
+    inner_flip_phi_grid: tuple[float, ...] = ()  # cells 層 φ 變體(主值 + 敏感度次值)
+    inner_flip_min_bars: int = 15  # 累計比最短觀察(b.m 分鐘索引口徑,15 = 09:16 起)
+    tp_flush_z: float | None = None  # 出量殺:量 > 前 lookback 均量 z 倍
+    tp_flush_lookback: int | None = None
+    tp_flush_recovery: float | None = None  # 長下影收回比例
+    tp_flush_min_profit: float | None = None  # 毛利 gate(1 − close/entry)
+    tp_hl_k: int | None = None  # 墊高:連續 k 對 pivot 確認
+    tp_hl_min_profit: float | None = None
     # --- walk-forward(空 = 舊單 split 路徑)---
     wf_test_starts: tuple[str, ...] = ()
     wf_test_months: int = 2
@@ -279,6 +288,7 @@ def _combo_from_base(base: dict[str, object], **overrides: object) -> FadeStopCo
 
 
 _TUPLE_KEYS = {
+    "inner_flip_phi_grid",
     "guard_dist_grid",
     "wf_test_starts",
     "lock_penalty_grid",
@@ -333,6 +343,13 @@ _SIM_FIELDS = (
     "disaster_retrace_r",
     "lock_penalty",
     "stress_guard_fill_high",
+    "inner_flip_min_bars",
+    "tp_flush_z",
+    "tp_flush_lookback",
+    "tp_flush_recovery",
+    "tp_flush_min_profit",
+    "tp_hl_k",
+    "tp_hl_min_profit",
     "fee_rate",
     "fee_discount",
     "intraday_tax",
@@ -392,6 +409,7 @@ def load_fade_config(path: Path) -> FadeBacktestConfig:
             payload[key] = tuple(value)
     cfg = FadeBacktestConfig(**payload)  # type: ignore[arg-type]
     validate_disaster_fields(cfg)
+    validate_round4_fields(cfg)
     return cfg
 
 
@@ -402,6 +420,24 @@ def validate_disaster_fields(cfg: FadeBacktestConfig) -> None:
         raise ValueError("disaster_arm_x 與 disaster_retrace_r 必須同設")
     if cfg.disaster_x is not None and retrace_on:
         raise ValueError("disaster_x 與回落式災難停損(arm/retrace)互斥")
+
+
+def validate_round4_fields(cfg: FadeBacktestConfig) -> None:
+    """round 4 出場欄位不變式(load 與引擎共用;change-spec §5.1)."""
+    flush_fields = (
+        cfg.tp_flush_z,
+        cfg.tp_flush_lookback,
+        cfg.tp_flush_recovery,
+        cfg.tp_flush_min_profit,
+    )
+    flush_set = sum(1 for f in flush_fields if f is not None)
+    if flush_set not in (0, len(flush_fields)):
+        raise ValueError("tp_flush_z/lookback/recovery/min_profit 四欄必須同設")
+    hl_set = sum(1 for f in (cfg.tp_hl_k, cfg.tp_hl_min_profit) if f is not None)
+    if hl_set not in (0, 2):
+        raise ValueError("tp_hl_k 與 tp_hl_min_profit 必須同設")
+    if cfg.inner_flip_min_bars < 1:
+        raise ValueError("inner_flip_min_bars 必須 ≥ 1")
 
 
 def fade_sim_config_hash(cfg: FadeBacktestConfig) -> str:
