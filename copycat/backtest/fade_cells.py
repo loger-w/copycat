@@ -864,19 +864,20 @@ def write_cells_report(
     os.replace(tmp, path)
 
 
-def run_cells(
-    data_dir: Path,
-    out_dir: Path,
-    cfg: FadeBacktestConfig,
-    report_date: str,
-    watchlist_path: Path,
-    report_dir: Path | None = None,
-) -> Path:
-    """CLI 協調:主池 + 低開池 universe → bars → 評估 → JSON + 報告."""
+def build_universes(
+    data_dir: Path, cfg: FadeBacktestConfig
+) -> tuple[
+    dict[str, list[tuple[FadeSample, list[Bar1K]]]],
+    dict[str, dict[str, int]],
+]:
+    """main / low(/ cellb)宇宙構建 + 1K 掛載(run_cells 與 fade_anatomy 共用)。
+
+    cellb 僅在 round 3 形狀(struct_stop_buffers + cell_b_gap_max)下產生,
+    round 3(§9.3/R7):cell_b 獨立宇宙(貼板線例外,gap 上限 = cell_b_gap_max)。
+    """
     from copycat.backtest.fade_pipeline import build_fade_universe  # 延遲:避免與 pipeline 互import
 
     from copycat.data.store import read_bars
-    from copycat.watchlist import load_watchlist
 
     events = data_dir / "events" / "events.csv"
     main_samples, main_counts = build_fade_universe(data_dir, events, cfg)
@@ -891,25 +892,40 @@ def run_cells(
                 out.append((s, bars))
         return out
 
-    watchlist = load_watchlist(watchlist_path)
-    # round 3(§9.3/R7):cell_b 獨立宇宙(貼板線例外,gap 上限 = cell_b_gap_max)
-    cellb_with_bars: list[tuple[FadeSample, list[Bar1K]]] | None = None
-    cellb_counts: dict[str, int] | None = None
+    universes = {"main": _with_bars(main_samples), "low": _with_bars(low_samples)}
+    counts = {"main": main_counts, "low": low_counts}
     if cfg.struct_stop_buffers and cfg.cell_b_gap_max is not None:
         cellb_cfg = dataclasses.replace(cfg, fade_gap_max=cfg.cell_b_gap_max)
         cellb_samples, cellb_counts = build_fade_universe(data_dir, events, cellb_cfg)
-        cellb_with_bars = _with_bars(cellb_samples)
+        universes["cellb"] = _with_bars(cellb_samples)
+        counts["cellb"] = cellb_counts
+    return universes, counts
+
+
+def run_cells(
+    data_dir: Path,
+    out_dir: Path,
+    cfg: FadeBacktestConfig,
+    report_date: str,
+    watchlist_path: Path,
+    report_dir: Path | None = None,
+) -> Path:
+    """CLI 協調:主池 + 低開池 universe → bars → 評估 → JSON + 報告."""
+    from copycat.watchlist import load_watchlist
+
+    watchlist = load_watchlist(watchlist_path)
+    universes, counts = build_universes(data_dir, cfg)
     result = evaluate_cells_from_universe(
-        _with_bars(main_samples),
-        _with_bars(low_samples),
+        universes["main"],
+        universes["low"],
         cfg,
         watchlist.broker_ids,
-        cellb_universe=cellb_with_bars,
+        cellb_universe=universes.get("cellb"),
     )
-    result["universe_counts_main"] = main_counts
-    result["universe_counts_low"] = low_counts
-    if cellb_counts is not None:
-        result["universe_counts_cellb"] = cellb_counts
+    result["universe_counts_main"] = counts["main"]
+    result["universe_counts_low"] = counts["low"]
+    if "cellb" in counts:
+        result["universe_counts_cellb"] = counts["cellb"]
 
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"cells_{report_date}.json"
