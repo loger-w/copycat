@@ -114,6 +114,41 @@ class TestSignalEntry:
         assert find_signal_entry(bars, (60.0,), _params(m_min=0), "level") is None
 
 
+class TestFlowConsistencyWithAnatomy:
+    """fade_vote flow 票與 fade_entry_anatomy._first_flip 必須同定義
+    (收尾 review:雙實作無共用,以本測試釘住等價性防漂移)。"""
+
+    def _fixtures(self) -> list[list[Bar1K]]:
+        # 攻擊 → 翻轉
+        f1 = []
+        price = 52.0
+        for m in range(6):
+            new_p = round(price * 1.004, 2)
+            f1.append(_bar(m, price, new_p, price, new_p, up=80, dn=20))
+            price = new_p
+        f1 += [_bar(m, price, price, price - 0.3, price - 0.2, up=20, dn=900) for m in range(6, 10)]
+        # 全日內盤、無攻擊段
+        f2 = [_bar(m, 52.0, 52.1, 51.9, 52.0, up=20, dn=80) for m in range(20)]
+        # 攻擊後盤整、未翻轉
+        f3 = []
+        price = 52.0
+        for m in range(8):
+            new_p = round(price * 1.004, 2)
+            f3.append(_bar(m, price, new_p, price, new_p, up=80, dn=20))
+            price = new_p
+        f3 += [_bar(m, price, price, price - 0.05, price, up=60, dn=40) for m in range(8, 15)]
+        return [f1, f2, f3]
+
+    def test_flow_entry_equals_anatomy_first_flip(self) -> None:
+        from copycat.backtest.fade_entry_anatomy import _first_flip
+
+        for confirm in (1, 2):
+            for bars in self._fixtures():
+                expected = _first_flip(bars, 1.5, confirm, require_attack=True, n=5)
+                got = find_signal_entry(bars, (), _params(m_min=0, confirm=confirm), "flow")
+                assert got == expected
+
+
 class TestInner15:
     def test_gate_and_entry_bar(self) -> None:
         # 前 15 分內盤比 0.7 > 0.55 → 進場於首根 m ≥ 15

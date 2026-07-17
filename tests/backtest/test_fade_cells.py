@@ -279,6 +279,24 @@ def test_round5_no_levels_blocks_s5() -> None:
     assert _dig(sens["S4"], "in_window", "base")["n"] == 1
 
 
+def test_round5_validate_fail_fast() -> None:
+    # 收尾 review:缺量尺 b / round4 欄位同設,必須在 config 層就擋(不等宇宙載入)
+    from copycat.backtest.fade_config import validate_round5_fields
+
+    try:
+        validate_round5_fields(_round5_cfg(struct_stop_buffers=()))
+    except ValueError as e:
+        assert "struct_stop_buffers" in str(e)
+    else:
+        raise AssertionError("缺 struct_stop_buffers 應在 validate 層 raise")
+    try:
+        validate_round5_fields(_round5_cfg(inner_flip_phi_grid=(0.45,)))
+    except ValueError as e:
+        assert "不得同時啟用" in str(e)
+    else:
+        raise AssertionError("round 4/5 欄位同設應在 validate 層 raise")
+
+
 def test_round5_and_round4_fields_mutually_exclusive() -> None:
     cfg = _round5_cfg(inner_flip_phi_grid=(0.45,))
     try:

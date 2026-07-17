@@ -44,3 +44,12 @@
 - [ ] fade_anatomy 效能候選(單次跑分鐘級,量級可接受;/perf 先 profile):flush_anatomy 每個 z 全宇宙重掃(可單趟收三個 z)、hl_anatomy 每個 k × arm 重算 entry idx(可 cache)、_evaluate_round4 消融 5 組 × 5 變體 = 25 趟全量模擬
 - [ ] fade_anatomy 報表 micro 重複:inner gate 兩張 touch_rate 表同構、nested isinstance/get 鏈提取 helper、mfe_anatomy 與 _entry_idx_for 的 cell 參數抽取樣板兩份(cell registry 條目 2026-07-14 節已有,合併)
 - [ ] check_flush_exit(cfg 驅動)與 _tp1(combo 驅動)結構重複但錨不同(進場後最低 vs running_low 含 trig)——已在 docstring 註明差異;若 Phase B 網格路徑退役,_tp1 可刪併
+
+## 2026-07-17(fade-round-5 收尾 review P2 彙總,8 finder → 6 條)
+
+- [ ] flow 狀態機雙實作收斂(🔵 獨立工):fade_vote._iter_votes 與 fade_entry_anatomy._first_flip 各寫一份「同定義」狀態機——已加一致性測試釘住等價(test_fade_vote TestFlowConsistencyWithAnatomy),真正共用實作(抽 per-bar step generator)留獨立 refactor
+- [ ] _evaluate_round5._trades 尾段(locked_close/hold_pnl/_TradeRec 建構)與 _simulate_r3_trades 尾段重複 → 抽 _finalize_trade 共用(該段歷史上已修過 P1,單邊同步風險同 §8 TRADEABLE_STATUSES 教訓)
+- [ ] fade_entry_anatomy 兩處 two-sample cluster-z 公式(level_stratified_duel 加權版 / level_anatomy duel 直接版)→ 抽共用 helper;run_entry_anatomy 內 _build_day_recs 被 level_anatomy 與 level_stratified_duel 各建一次 → 建一次傳入
+- [ ] round5 效能候選(/perf 先 profile):stress 跑法重執行 entry_fn 全宇宙掃描(進場 idx 不依 run_cfg)、樣本預算表 4×全宇宙重掃(可單趟 _iter_votes 同時判多個 S)、消融 3 單訊號各自重跑狀態機
+- [ ] levels_map 靜默空 dict:直呼 evaluate_cells_from_universe 忘傳 → 位階票全釘中性 1 分無警告(production 唯一 caller run_cells 會建;考慮 vote 臂啟用且 levels_map 空時 logger.warning)
+- [ ] 敏感度區塊複製貼上(S/c/m 三塊近同)+ disaster_off 手刻出異形 dict shape + round 輪次 dispatch 鏈成長(round 6 時考慮 active_round 單點解析);flow_flip_anatomy 出現率分母含 len(bars)<2 跳過日(輕微低估,不影響判準)

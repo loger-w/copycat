@@ -457,7 +457,16 @@ def validate_round4_fields(cfg: FadeBacktestConfig) -> None:
 
 
 def validate_round5_fields(cfg: FadeBacktestConfig) -> None:
-    """round 5 投票進場欄位不變式(prereg 2026-07-17 §2)."""
+    """round 5 投票進場欄位不變式(prereg 2026-07-17 §2;收尾 review 補 fail-fast)."""
+    if cfg.vote_s_grid or cfg.inner15_arm:
+        if not cfg.struct_stop_buffers:
+            raise ValueError("round 5 需 struct_stop_buffers 提供量尺 ratchet b 值")
+        if (
+            cfg.tp_flush_z is not None
+            or cfg.tp_hl_k is not None
+            or bool(cfg.inner_flip_phi_grid)
+        ):
+            raise ValueError("round 5 投票進場與 round 4 出場欄位不得同時啟用")
     if cfg.vote_s_grid:
         scalars = (
             cfg.vote_flow_n,
