@@ -155,13 +155,8 @@ def cdp_levels(h: float, low: float, c: float) -> dict[str, float]:
     return {"cdp": cdp, "ah": cdp + rng, "nh": 2 * cdp - low, "nl": 2 * cdp - h, "al": cdp - rng}
 
 
-def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
-    """位階對決:CDP 線距 gate(中位 < 2% 整組出局)→ 各線觸發率 gate(< 10% 出局)
-    → 存活線 vs 固定拉幅帶(開盤 × 1.033~1.041)的 post_move 對決。
-
-    適用 = 線值 ≥ T+1 開盤(壓力位語意);觸發 = 當日高距線 ≤ ±0.5%;
-    post_move = (當日高 − 收盤)/當日高,正 = 見高回落(位階若有訊息,貼線子集應更差)。
-    """
+def _build_day_recs(uni: _Universe, daily: DailyIndex) -> tuple[list[_DayRec], list[float]]:
+    """共用:UC 池 T+1 日紀錄(位階線值 + 當日高/收)與 CDP 線距分佈。"""
     day_recs: list[_DayRec] = []
     widths: list[float] = []
     for sample, bars in uni:
@@ -187,6 +182,96 @@ def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
                 levels=levels,
             )
         )
+    return day_recs, widths
+
+
+def _near_line(rec: _DayRec, names: tuple[str, ...]) -> bool:
+    for name in names:
+        v = rec.levels.get(name)
+        if v is not None and v > 0 and v >= rec.t1_open and abs(rec.high - v) / v <= _NEAR_EPS:
+            return True
+    return False
+
+
+def level_stratified_duel(
+    uni: _Universe,
+    daily: DailyIndex,
+    lines: tuple[str, ...] = ("ah", "nh"),
+    strata_edges: tuple[float, ...] = (0.02, 0.04, 0.06),
+) -> dict[str, object]:
+    """0′(1) 拉幅混淆補驗(round 5 prereg §0′,判準凍結):同拉幅層內
+    貼 AH/NH vs 不貼的 post_move 對照。
+
+    PASS(寫死)= 有資料的層 ≥2/3 方向一致(貼線更差)且分層合併
+    z ≥ 1.645(逆變異數加權,cluster_se 日聚類);FAIL → 位階票降級觀察。
+    層需兩組各 ≥2 筆才入計。
+    """
+    day_recs, _ = _build_day_recs(uni, daily)
+    edges = (*strata_edges, float("inf"))
+    strata: dict[str, object] = {}
+    layers = 0
+    consistent = 0
+    num = 0.0
+    wsum = 0.0
+    for lo, hi in zip(edges, edges[1:]):
+        key = f"pull_{lo:g}_{hi:g}"
+        near: list[tuple[float, str]] = []
+        far: list[tuple[float, str]] = []
+        for rec in day_recs:
+            if rec.high <= 0 or rec.t1_open <= 0:
+                continue
+            pull = rec.high / rec.t1_open - 1.0
+            if not (lo <= pull < hi):
+                continue
+            post = (rec.high - rec.close) / rec.high
+            (near if _near_line(rec, lines) else far).append((post, rec.t1_date))
+        blk: dict[str, object] = {
+            "n_near": len(near),
+            "n_far": len(far),
+            "post_move_near": _quantiles([v for v, _ in near]),
+            "post_move_far": _quantiles([v for v, _ in far]),
+        }
+        if len(near) >= 2 and len(far) >= 2:
+            mean_n = sum(v for v, _ in near) / len(near)
+            mean_f = sum(v for v, _ in far) / len(far)
+            diff = mean_n - mean_f
+            se_n = cluster_se([v for v, _ in near], [d for _, d in near])
+            se_f = cluster_se([v for v, _ in far], [d for _, d in far])
+            var = se_n**2 + se_f**2
+            blk["diff"] = diff
+            blk["consistent"] = diff > 0
+            layers += 1
+            if diff > 0:
+                consistent += 1
+            if var > 0:
+                w = 1.0 / var
+                num += w * diff
+                wsum += w
+        strata[key] = blk
+    z: float | None = (num / (wsum**0.5)) if wsum > 0 else None
+    passed = (
+        layers > 0
+        and (consistent / layers) >= (2.0 / 3.0)
+        and isinstance(z, float)
+        and z >= _DUEL_Z_ONE_SIDED
+    )
+    return {
+        "strata": strata,
+        "layers": layers,
+        "consistent_layers": consistent,
+        "z": z,
+        "pass": passed,
+    }
+
+
+def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
+    """位階對決:CDP 線距 gate(中位 < 2% 整組出局)→ 各線觸發率 gate(< 10% 出局)
+    → 存活線 vs 固定拉幅帶(開盤 × 1.033~1.041)的 post_move 對決。
+
+    適用 = 線值 ≥ T+1 開盤(壓力位語意);觸發 = 當日高距線 ≤ ±0.5%;
+    post_move = (當日高 − 收盤)/當日高,正 = 見高回落(位階若有訊息,貼線子集應更差)。
+    """
+    day_recs, widths = _build_day_recs(uni, daily)
 
     width_q = _quantiles(widths)
     width_p50 = width_q.get("p50")
@@ -308,6 +393,8 @@ def run_entry_anatomy(
     logger.info("entry anatomy (a) flow flip done")
     c = level_anatomy(main_uc, daily)
     logger.info("entry anatomy (c) levels done(cdp_drop=%s)", c.get("cdp_drop"))
+    strat = level_stratified_duel(main_uc, daily)
+    logger.info("entry anatomy (0') stratified duel done(pass=%s)", strat.get("pass"))
 
     # (a) GO/DROP:各訊號組對照同 ρ×confirm 的 ctrl
     verdicts: dict[str, bool] = {}
@@ -336,11 +423,14 @@ def run_entry_anatomy(
         "a_flow_flip": a,
         "a_verdicts": verdicts,
         "c_levels": c,
+        "c_stratified": strat,
         "verdicts": {
             "flow_flip": "GO" if flow_go else "DROP",
             "tick_backfill": "GO" if flow_go else "HOLD",  # (b) 依賴 (a) GO(spec 資料前置 #2)
             "cdp": "DROP" if c.get("cdp_drop") else ("GO" if level_go else "NO_INCREMENT"),
             "level_duel": "GO" if level_go else "DROP",
+            # 0′(1) 拉幅混淆補驗(round 5 prereg):FAIL → 位階票降級觀察
+            "level_vote": "KEEP" if strat.get("pass") else "DEMOTE",
         },
     }
 
@@ -471,6 +561,34 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                 f"(門檻 1.645)→ **{'GO' if duel.get('go') else 'DROP(無增量)'}**。"
             )
     lines.append("")
+
+    strat = result.get("c_stratified")
+    if isinstance(strat, dict):
+        lines.append("## (0′) 位階同拉幅分層對照(round 5 prereg;拉幅混淆補驗)")
+        lines.append("")
+        lines.append("| 拉幅層 | 貼線 n | 不貼 n | 貼線 post_move | 不貼 post_move | 差 |")
+        lines.append("|---|---:|---:|---|---|---:|")
+        st = strat.get("strata")
+        if isinstance(st, dict):
+            for key in sorted(st):
+                blk = st[key]
+                if not isinstance(blk, dict):
+                    continue
+                d = blk.get("diff")
+                lines.append(
+                    f"| {key} | {blk.get('n_near')} | {blk.get('n_far')}"
+                    f" | {_fmtq(blk.get('post_move_near'))} | {_fmtq(blk.get('post_move_far'))}"
+                    f" | {format(d, '+.2%') if isinstance(d, float) else '—'} |"
+                )
+        sz = strat.get("z")
+        lines.append("")
+        lines.append(
+            f"- 方向一致層:{strat.get('consistent_layers')}/{strat.get('layers')}"
+            f"(門檻 ≥2/3);分層合併 z = "
+            f"{format(sz, '.2f') if isinstance(sz, float) else '—'}(門檻 1.645)→ "
+            f"**{'PASS(位階票保留)' if strat.get('pass') else 'FAIL(位階票降級觀察,投票縮兩訊號)'}**。"
+        )
+        lines.append("")
 
     tmp = path.with_suffix(".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")

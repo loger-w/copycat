@@ -13,6 +13,7 @@ from copycat.backtest.fade_entry_anatomy import (
     flow_flip_anatomy,
     flow_flip_go,
     level_anatomy,
+    level_stratified_duel,
 )
 from copycat.backtest.fade_simulate import FadeSample
 from copycat.data.daily import DailyIndex
@@ -226,6 +227,74 @@ class TestLevelAnatomy:
         ma5 = lines["ma5"]
         assert isinstance(ma5, dict)
         assert ma5["applicable"] == 0  # 只有一天日線 → MA5 不可得
+
+    def test_stratified_duel_pass_when_near_falls_harder(self, tmp_path: Path) -> None:
+        # 兩個拉幅層,層內「貼線局」回落一致深於「不貼局」→ 方向 2/2 + z 過門檻
+        # T 日:H=50,L=46,C=50 → NH=52、AH=53
+        rows = [_drow("2026-03-02", 46.5, 50.0, 46.0, 50.0)]
+        daily = _write_daily(tmp_path, rows)
+        uni = []
+        day = 3
+
+        def _day(open_: float, high: float, close: float) -> None:
+            nonlocal day
+            s = FadeSample(
+                stock_id="2330",
+                date="2026-03-02",
+                t1_date=f"2026-03-{day:02d}",
+                limit=50.0,
+                t1_open=open_,
+                gap=open_ / 50.0 - 1.0,
+                broker_ids="9227",
+            )
+            bars = [_bar(0, open_, high, open_ - 0.1, open_)]
+            bars += [_bar(m, close, close + 0.05, close - 0.05, close) for m in range(1, 10)]
+            uni.append((s, bars))
+            day += 1
+
+        # 層 2~4%(open 50.5):貼 NH=52 的局重摔、不貼的小回
+        for _ in range(3):
+            _day(50.5, 52.0, 48.5)  # pull 2.97%,|高−NH|=0 貼線,回落 6.7%
+            _day(50.5, 51.6, 51.3)  # pull 2.18%,距 NH 0.77% 不貼,回落 0.6%
+        # 層 4~6%(open 49.8)
+        for _ in range(3):
+            _day(49.8, 52.0, 48.6)  # pull 4.4%,貼 NH,回落 6.5%
+            _day(49.8, 52.6, 52.2)  # pull 5.6%,距 NH 1.15%/AH 0.75% 不貼,回落 0.8%
+
+        out = level_stratified_duel(uni, daily)
+        assert isinstance(out["z"], float)
+        cl = out["consistent_layers"]
+        assert isinstance(cl, int) and cl >= 2
+        assert out["pass"] is True
+
+    def test_stratified_duel_fail_when_reversed(self, tmp_path: Path) -> None:
+        rows = [_drow("2026-03-02", 46.5, 50.0, 46.0, 50.0)]
+        daily = _write_daily(tmp_path, rows)
+        uni = []
+        day = 3
+
+        def _day(open_: float, high: float, close: float) -> None:
+            nonlocal day
+            s = FadeSample(
+                stock_id="2330",
+                date="2026-03-02",
+                t1_date=f"2026-03-{day:02d}",
+                limit=50.0,
+                t1_open=open_,
+                gap=open_ / 50.0 - 1.0,
+                broker_ids="9227",
+            )
+            bars = [_bar(0, open_, high, open_ - 0.1, open_)]
+            bars += [_bar(m, close, close + 0.05, close - 0.05, close) for m in range(1, 10)]
+            uni.append((s, bars))
+            day += 1
+
+        # 方向反轉:貼線的局反而不跌
+        for _ in range(3):
+            _day(50.5, 52.0, 51.9)  # 貼 NH,幾乎不回
+            _day(49.8, 52.6, 49.0)  # 不貼,重摔
+        out = level_stratified_duel(uni, daily)
+        assert out["pass"] is False
 
     def test_duel_groups_present(self, tmp_path: Path) -> None:
         daily = _write_daily(tmp_path, [_drow("2026-03-02", 46.5, 50.0, 46.0, 50.0)])
