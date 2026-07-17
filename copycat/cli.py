@@ -114,6 +114,16 @@ def main(argv: list[str] | None = None) -> int:
     p_fa.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
     p_fa.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
 
+    p_fe = sub.add_parser(
+        "fade-entry-anatomy", help="round 5 §0 進場訊號解剖(流向反轉/位階對決,不入判定)"
+    )
+    p_fe.add_argument("--data-dir", type=Path, default=Path("data"))
+    p_fe.add_argument("--out", type=Path, default=Path("out/fade_entry_anatomy"))
+    p_fe.add_argument("--config", type=Path, default=None)
+    p_fe.add_argument("--report-date", required=True)
+    p_fe.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
+    p_fe.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
+
     p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
     p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
     p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
@@ -284,6 +294,21 @@ def main(argv: list[str] | None = None) -> int:
             report_dir=args.report_dir,
         )
         sys.stdout.write(f"§0 前置統計報告 → {report}\n")
+        return 0
+    if args.command == "fade-entry-anatomy":
+        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
+        from copycat.backtest.fade_entry_anatomy import run_entry_anatomy
+
+        entry_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
+        report = run_entry_anatomy(
+            args.data_dir,
+            args.out,
+            entry_cfg,
+            args.report_date,
+            args.watchlist,
+            report_dir=args.report_dir,
+        )
+        sys.stdout.write(f"進場訊號解剖報告 → {report}\n")
         return 0
     if args.command == "fade-search":
         from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
