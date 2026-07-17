@@ -1,0 +1,41 @@
+{
+  "fee_discount": 0.84,
+  "universe_daytrade_filter": true,
+  "fade_gap_max": 0.075,
+  "guard_limit_dist": 0.01,
+  "disaster_arm_x": 0.06,
+  "disaster_retrace_r": 0.02,
+  "lock_penalty": 0.03,
+  "struct_stop_buffers": [
+    0.025
+  ],
+  "base_arm": true,
+  "vote_s_grid": [
+    5,
+    4
+  ],
+  "vote_m_min_grid": [
+    6,
+    14
+  ],
+  "vote_flow_confirm_grid": [
+    1,
+    2
+  ],
+  "vote_flow_n": 5,
+  "vote_flow_rho": 1.5,
+  "vote_flow_seg_gain": 0.01,
+  "vote_inner_lo": 0.45,
+  "vote_inner_hi": 0.55,
+  "vote_level_eps": 0.005,
+  "inner15_arm": true,
+  "inner15_phi": 0.55,
+  "diagnose_perm_iters": 5000,
+  "diagnose_perm_seed": 42,
+  "diagnose_min_edge_pp": 0.003,
+  "diagnose_p_threshold": 0.05,
+  "cells_eval_segments": 4,
+  "d5_min_ev": 0.01,
+  "d5_min_n": 80,
+  "d5_min_positive_segments": 3
+}

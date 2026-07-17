@@ -16,6 +16,7 @@ import dataclasses
 import json
 import logging
 import os
+from collections.abc import Callable
 from datetime import date as _date
 from pathlib import Path
 
@@ -28,6 +29,12 @@ from copycat.backtest.fade_simulate import (
     FadeSample,
     _round_trip_cost,
     simulate_fade_sample,
+)
+from copycat.backtest.fade_vote import (
+    VoteParams,
+    find_inner15_entry,
+    find_signal_entry,
+    find_vote_entry,
 )
 from copycat.data.models import Bar1K
 from copycat.market import limit_up_price
@@ -202,16 +209,23 @@ def evaluate_cells_from_universe(
     cfg: FadeBacktestConfig,
     watchlist_ids: frozenset[str],
     cellb_universe: list[tuple[FadeSample, list[Bar1K]]] | None = None,
+    levels_map: dict[tuple[str, str], tuple[float, ...]] | None = None,
 ) -> dict[str, object]:
     """純評估(IO 由 run_cells 負責):UC 過濾 → 觸發 → base/stress 模擬 →
     四等分 + D5(壓測組合)+ 基準線對照.
 
+    round 5 gate(prereg 2026-07-17,最優先):vote_s_grid / inner15_arm 任一啟用
+    → 投票制進場路徑(與 round 4 出場欄位互斥,load 驗證擋)。
     round 4 gate(change-spec §5.4,優先於 round 3):tp_flush_z / tp_hl_k /
     inner_flip_phi_grid 任一啟用 → round 4 路徑(劇本結構化出場)。
     round 3 gate(change-spec §9.3):struct_stop_buffers 非空 → round 3 路徑
     (結構停損 × b 變體 + 底倉臂 + 精算表 + forward 切分);空 = round 2 形狀,
     cellb_universe 被忽略(舊 config 行為完全不變)。
     """
+    if _round5_enabled(cfg):
+        if _round4_enabled(cfg):
+            raise ValueError("round 5 投票進場與 round 4 出場欄位不得同時啟用")
+        return _evaluate_round5(main_universe, cfg, watchlist_ids, levels_map or {})
     if _round4_enabled(cfg):
         return _evaluate_round4(
             main_universe,
@@ -1395,9 +1409,490 @@ def _write_round4_report(
     os.replace(tmp, path)
 
 
+# ---------- round 5(prereg 2026-07-17;gate = vote_s_grid / inner15_arm)----------
+
+
+def _round5_enabled(cfg: FadeBacktestConfig) -> bool:
+    return bool(cfg.vote_s_grid) or cfg.inner15_arm
+
+
+def _evaluate_round5(
+    main_universe: list[tuple[FadeSample, list[Bar1K]]],
+    cfg: FadeBacktestConfig,
+    watchlist_ids: frozenset[str],
+    levels_map: dict[tuple[str, str], tuple[float, ...]],
+) -> dict[str, object]:
+    """round 5 評估:投票制進場(內盤比 × 流向反轉 × 位階)+ 最簡出場。
+
+    出場 = 硬線(guard)∧ 災難回落 ∧ 抱到收盤(無結構停損 / TP / inner_flip;
+    round 2~4 結論)。主判定 = vote_arm(S 主值)+ inner15_arm;量尺 = 第 7 分鐘
+    + round 3 舊出場(ratchet b);敏感度(S 次值 / confirm 次值 / m_min 次值 /
+    災難 off)與消融(單訊號)不入判定。Q3 = vote_arm in-window 日聚類 z。
+    位階票 = levels_map(AH/NH,run_cells 由 T 日日線注入;0′(1) PASS 已確認)。
+    """
+    main_uc = [(s, b) for s, b in main_universe if is_uc_sample(s, watchlist_ids)]
+    k = cfg.cells_eval_segments
+    in_days = [s.t1_date for s, _ in main_uc if s.t1_date < cfg.forward_start]
+    if in_days:
+        start = _date.fromisoformat(min(in_days))
+        end = _date.fromisoformat(max(in_days))
+        seg_days = max(((end - start).days + 1) / k, 1.0)
+    else:
+        start = _date(2025, 1, 1)
+        seg_days = 1.0
+
+    if not cfg.struct_stop_buffers:
+        raise ValueError("round 5 config 需 struct_stop_buffers 提供量尺 ratchet b 值")
+    b_main = cfg.struct_stop_buffers[0]
+    stress_cfg = dataclasses.replace(cfg, stress_guard_fill_high=True)
+
+    def _levels_for(sample: FadeSample) -> tuple[float, ...]:
+        vals = levels_map.get((sample.stock_id, sample.date), ())
+        return tuple(v for v in vals if v > 0 and v >= sample.t1_open)
+
+    def _vote_params(s: int, m_min: int, confirm: int) -> VoteParams:
+        assert cfg.vote_flow_n is not None and cfg.vote_flow_rho is not None
+        assert cfg.vote_flow_seg_gain is not None
+        assert cfg.vote_inner_lo is not None and cfg.vote_inner_hi is not None
+        assert cfg.vote_level_eps is not None
+        return VoteParams(
+            s_threshold=s,
+            m_min=m_min,
+            flow_n=cfg.vote_flow_n,
+            flow_rho=cfg.vote_flow_rho,
+            flow_confirm=confirm,
+            inner_lo=cfg.vote_inner_lo,
+            inner_hi=cfg.vote_inner_hi,
+            level_eps=cfg.vote_level_eps,
+            flow_seg_gain=cfg.vote_flow_seg_gain,
+        )
+
+    def _entry_vote(p: VoteParams, sample: FadeSample, bars: list[Bar1K]) -> tuple[int | None, float | None]:
+        return find_vote_entry(bars, _levels_for(sample), p), None
+
+    def _entry_inner15(sample: FadeSample, bars: list[Bar1K]) -> tuple[int | None, float | None]:
+        assert cfg.inner15_phi is not None
+        idx = find_inner15_entry(bars, cfg.inner15_phi)
+        # gate 於 m<15 窗收齊後才知 → 進場價 = 首根 m≥15 的開盤(無 lookahead)
+        return idx, (bars[idx].open if idx is not None else None)
+
+    def _entry_signal(
+        p: VoteParams, signal: str, sample: FadeSample, bars: list[Bar1K]
+    ) -> tuple[int | None, float | None]:
+        assert signal in ("inner", "flow", "level")
+        return find_signal_entry(bars, _levels_for(sample), p, signal), None  # type: ignore[arg-type]
+
+    def _trades(
+        entry_fn: Callable[[FadeSample, list[Bar1K]], tuple[int | None, float | None]],
+        run_cfg: FadeBacktestConfig,
+        slippage: int,
+    ) -> list[_TradeRec]:
+        out: list[_TradeRec] = []
+        for sample, bars in main_uc:
+            if not bars:
+                continue
+            idx, override = entry_fn(sample, bars)
+            if idx is None or idx >= len(bars) - 1:
+                continue
+            t1_limit = limit_up_price(sample.limit)
+            r = simulate_fade_sample(
+                bars,
+                idx,
+                sample,
+                _NO_STOP_COMBO,
+                run_cfg,
+                slippage,
+                entry_price_override=override,
+            )
+            if r.status in _TRADEABLE and r.pnl_rate is not None:
+                locked_close = bars[-1].low >= t1_limit - cfg.limit_eps
+                hold_pnl: float | None = None
+                if not locked_close and r.entry_price is not None:
+                    hold_pnl = 1.0 - bars[-1].close / r.entry_price - _round_trip_cost(cfg)
+                out.append(
+                    _TradeRec(
+                        pnl=r.pnl_rate,
+                        day=sample.t1_date,
+                        exit_reason=r.exit_reason,
+                        locked_close=locked_close,
+                        gap=sample.gap,
+                        hits=_broker_hits(sample, watchlist_ids),
+                        mfe=r.mfe_rate,
+                        hold_pnl=hold_pnl,
+                        entry_price=r.entry_price,
+                    )
+                )
+        return out
+
+    # 量尺:第 7 分鐘 + round 3 舊出場(ratchet b + 災難 + 硬線;cfg 無 TP/φ 即舊語意)
+    bl_tr, _ = _simulate_r3_trades(
+        main_uc, "baseline_m7", 0.0, b_main, cfg, cfg.slippage_ticks, watchlist_ids
+    )
+    bl_in, bl_fwd = _split_fw(bl_tr, cfg.forward_start)
+    baseline = {
+        "in_window": _rec_stats(bl_in, start, seg_days, k),
+        "forward": _rec_stats(bl_fwd, start, seg_days, k),
+    }
+    baseline_mean = baseline["in_window"].get("mean")
+    logger.info("round5 量尺完成(n=%d)", len(bl_in))
+
+    def _arm_block(
+        entry_fn: Callable[[FadeSample, list[Bar1K]], tuple[int | None, float | None]],
+        *,
+        judged: bool,
+    ) -> dict[str, object]:
+        base_tr = _trades(entry_fn, cfg, cfg.slippage_ticks)
+        stress_tr = _trades(entry_fn, stress_cfg, cfg.stress_slippage_ticks)
+        in_w, fwd = _split_fw(base_tr, cfg.forward_start)
+        s_in, _ = _split_fw(stress_tr, cfg.forward_start)
+        in_stats = _rec_stats(in_w, start, seg_days, k)
+        stress_stats = _rec_stats(s_in, start, seg_days, k)
+        s_mean = stress_stats.get("mean")
+        s_n = stress_stats.get("n")
+        pos = stress_stats.get("positive_segments")
+        crit = {
+            "stress_ev_ge_min": isinstance(s_mean, float) and s_mean >= cfg.d5_min_ev,
+            "n_ge_min": isinstance(s_n, int) and s_n >= cfg.d5_min_n,
+            "segments_direction": (
+                isinstance(pos, int)
+                and pos >= cfg.d5_min_positive_segments
+                and isinstance(s_mean, float)
+                and s_mean > 0
+            ),
+        }
+        vs_baseline = None
+        b_mean = in_stats.get("mean")
+        if isinstance(b_mean, float) and isinstance(baseline_mean, float):
+            vs_baseline = b_mean - baseline_mean
+        blk: dict[str, object] = {
+            "in_window": {
+                "base": in_stats,
+                "stress": stress_stats,
+                "actuarial": _actuarial_block(in_w),
+            },
+            "forward": {"base": _rec_stats(fwd, start, seg_days, k)},
+            "vs_baseline_mean": vs_baseline,
+            "d5": {"applicable": judged, "criteria": crit, "passed": all(crit.values())},
+        }
+        if judged:
+            q = _cluster_z_block(in_w, cfg.diagnose_p_threshold)
+            blk["cluster_z"] = q
+        return blk
+
+    s_main = cfg.vote_s_grid[0] if cfg.vote_s_grid else None
+    s_sens = cfg.vote_s_grid[1] if len(cfg.vote_s_grid) > 1 else None
+    m_main = cfg.vote_m_min_grid[0] if cfg.vote_m_min_grid else 6
+    m_sens = cfg.vote_m_min_grid[1] if len(cfg.vote_m_min_grid) > 1 else None
+    c_main = cfg.vote_flow_confirm_grid[0] if cfg.vote_flow_confirm_grid else 1
+    c_sens = cfg.vote_flow_confirm_grid[1] if len(cfg.vote_flow_confirm_grid) > 1 else None
+
+    arms: dict[str, object] = {}
+    if s_main is not None:
+        p_main = _vote_params(s_main, m_main, c_main)
+        arms[f"vote_S{s_main}:m{m_main}:c{c_main}"] = _arm_block(
+            lambda s, b: _entry_vote(p_main, s, b), judged=True
+        )
+        logger.info("round5 vote 主判定完成(S=%d)", s_main)
+    if cfg.inner15_arm:
+        arms["inner15"] = _arm_block(_entry_inner15, judged=True)
+        logger.info("round5 inner15 臂完成")
+
+    # 0′(2) 樣本預算表(進場計數,不看損益;in-window)
+    budget: dict[str, int] = {}
+    if s_main is not None:
+        for s_val in (6, 5, 4, 3):
+            p_b = _vote_params(s_val, m_main, c_main)
+            budget[f"S{s_val}"] = sum(
+                1
+                for sample, bars in main_uc
+                if sample.t1_date < cfg.forward_start
+                and bars
+                and find_vote_entry(bars, _levels_for(sample), p_b) is not None
+            )
+    if cfg.inner15_arm and cfg.inner15_phi is not None:
+        budget["inner15"] = sum(
+            1
+            for sample, bars in main_uc
+            if sample.t1_date < cfg.forward_start
+            and bars
+            and find_inner15_entry(bars, cfg.inner15_phi) is not None
+        )
+    logger.info("round5 樣本預算完成 %s", budget)
+
+    # 敏感度列(不入判定)
+    sensitivity: dict[str, object] = {}
+    if s_main is not None:
+        if s_sens is not None:
+            p = _vote_params(s_sens, m_main, c_main)
+            sensitivity[f"S{s_sens}"] = _arm_block(
+                lambda s, b: _entry_vote(p, s, b), judged=False
+            )
+        if c_sens is not None:
+            p2 = _vote_params(s_main, m_main, c_sens)
+            sensitivity[f"c{c_sens}"] = _arm_block(
+                lambda s, b: _entry_vote(p2, s, b), judged=False
+            )
+        if m_sens is not None:
+            p3 = _vote_params(s_main, m_sens, c_main)
+            sensitivity[f"m{m_sens}"] = _arm_block(
+                lambda s, b: _entry_vote(p3, s, b), judged=False
+            )
+        # 災難回落 off(出場敏感度)
+        cfg_nd = dataclasses.replace(cfg, disaster_arm_x=None, disaster_retrace_r=None)
+        p_main2 = _vote_params(s_main, m_main, c_main)
+        base_tr = _trades(
+            lambda s, b: _entry_vote(p_main2, s, b), cfg_nd, cfg.slippage_ticks
+        )
+        in_w, _fw = _split_fw(base_tr, cfg.forward_start)
+        sensitivity["disaster_off"] = {
+            "in_window": {"base": _rec_stats(in_w, start, seg_days, k)}
+        }
+        logger.info("round5 敏感度完成(%d 列)", len(sensitivity))
+
+    # 消融:單訊號進場(診斷)
+    ablation: dict[str, object] = {}
+    if s_main is not None:
+        p_abl = _vote_params(s_main, m_main, c_main)
+        for sig in ("inner", "flow", "level"):
+            tr = _trades(
+                lambda s, b, _sig=sig: _entry_signal(p_abl, _sig, s, b),
+                cfg,
+                cfg.slippage_ticks,
+            )
+            in_w, _fw = _split_fw(tr, cfg.forward_start)
+            ablation[f"{sig}_only"] = _rec_stats(in_w, start, seg_days, k)
+        logger.info("round5 消融完成(3 單訊號)")
+
+    # 底倉 grid(觀察;round 3 出場語意 = ratchet b,gated vs ungated 硬線對比用)
+    base_arm_grid: dict[str, object] = {}
+    base_arm_actuarial: dict[str, object] = {}
+    if cfg.base_arm:
+        arm_tr, _ = _simulate_r3_trades(
+            main_uc, "base_arm", 0.0, b_main, cfg, cfg.slippage_ticks, watchlist_ids
+        )
+        in_w, _fw = _split_fw(arm_tr, cfg.forward_start)
+        edges = cfg.base_arm_gap_edges
+        for lo, hi in zip(edges, edges[1:]):
+            for tag, cond in (("2plus", 2), ("1", 1)):
+                sub = [
+                    t
+                    for t in in_w
+                    if lo <= t.gap < hi and (t.hits >= 2 if cond == 2 else t.hits == 1)
+                ]
+                blk = _cluster_z_block(sub, cfg.diagnose_p_threshold)
+                blk["open"] = bool(blk["pass"]) and (
+                    isinstance(blk["n"], int) and blk["n"] >= cfg.d5_min_n
+                )
+                base_arm_grid[f"{tag}:gap_{lo:g}_{hi:g}"] = blk
+        base_arm_actuarial = _actuarial_block(in_w)
+        logger.info("round5 底倉 grid 完成(n=%d)", len(in_w))
+
+    return {
+        "round5": True,
+        "n_uc_main": len(main_uc),
+        "segments": k,
+        "s_main": s_main,
+        "s_sens": s_sens,
+        "m_main": m_main,
+        "c_main": c_main,
+        "b_main": b_main,
+        "arms": arms,
+        "sample_budget": budget,
+        "baseline": baseline,
+        "sensitivity": sensitivity,
+        "ablation": ablation,
+        "base_arm_grid": base_arm_grid,
+        "base_arm_actuarial": base_arm_actuarial,
+        "levels_map_n": len(levels_map),
+    }
+
+
+def _write_round5_report(
+    result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: Path
+) -> None:
+    """round 5 報告:樣本預算 + 主判定臂(Q3)+ 敏感度 + 消融 + 精算對比 + 底倉觀察."""
+    _f = _fmt
+    lines: list[str] = []
+    lines.append(f"# UC 池投票制進場評估 round 5(pre-registered;{report_date})")
+    lines.append("")
+    lines.append(
+        f"- 宇宙:main n={result.get('n_uc_main')};投票 = 內盤比"
+        f"({_f(cfg.vote_inner_lo)}/{_f(cfg.vote_inner_hi)})× 流向反轉"
+        f"(N{cfg.vote_flow_n}/ρ{_f(cfg.vote_flow_rho)}/c{result.get('c_main')})"
+        f"× 位階(AH/NH ±{_f(cfg.vote_level_eps, '.1%')};levels n={result.get('levels_map_n')});"
+        f"S 主 = {result.get('s_main')};m_min = {result.get('m_main')}。"
+    )
+    lines.append(
+        f"- 出場 = 硬線(guard {_f(cfg.guard_limit_dist, '.1%')})∧ 災難回落"
+        f"(D {_f(cfg.disaster_arm_x, '.1%')}/r {_f(cfg.disaster_retrace_r, '.1%')})"
+        f"∧ 抱到收盤;量尺 = 第 7 分鐘 + round 3 舊出場(ratchet b {_f(result.get('b_main'))})。"
+    )
+    lines.append("")
+
+    budget = result.get("sample_budget")
+    if isinstance(budget, dict) and budget:
+        lines.append("## 0′(2) 樣本預算表(in-window 進場數;n<80 之臂依 prereg 降觀察)")
+        lines.append("")
+        lines.append("| 門檻 | n |")
+        lines.append("|---|---:|")
+        for key, n in budget.items():
+            lines.append(f"| {key} | {n} |")
+        lines.append("")
+
+    lines.append("## 主判定臂(in-window;Q3 = 日聚類 z 單尾)")
+    lines.append("")
+    lines.append(
+        "| 臂 | n | 淨EV | z | p | p_win | avg win | avg loss | PF | 壓測EV | 壓測n | 段+ | vs量尺 | D5 |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    arms = result.get("arms")
+
+    def _arm_row(name: str, blk: object) -> str:
+        assert isinstance(blk, dict)
+        in_blk = blk.get("in_window")
+        assert isinstance(in_blk, dict)
+        base = in_blk.get("base")
+        stress = in_blk.get("stress")
+        assert isinstance(base, dict) and isinstance(stress, dict)
+        q = blk.get("cluster_z") if isinstance(blk.get("cluster_z"), dict) else {}
+        assert isinstance(q, dict)
+        d5 = blk.get("d5")
+        passed = d5.get("passed") if isinstance(d5, dict) else None
+        pos = base.get("positive_segments")
+        return (
+            f"| {name} | {base.get('n')} | {_f(base.get('mean'))} | {_f(q.get('z'), '.2f')}"
+            f" | {_f(q.get('p'), '.4f')} | {_f(base.get('p_win'), '.2f')}"
+            f" | {_f(base.get('avg_win'))} | {_f(base.get('avg_loss'))}"
+            f" | {_f(base.get('profit_factor'), '.2f')} | {_f(stress.get('mean'))}"
+            f" | {stress.get('n')} | {pos}/{result.get('segments')}"
+            f" | {_f(blk.get('vs_baseline_mean'))} | {'PASS' if passed else 'FAIL'} |"
+        )
+
+    if isinstance(arms, dict):
+        for name in sorted(arms):
+            lines.append(_arm_row(name, arms[name]))
+    lines.append("")
+
+    bl = result.get("baseline")
+    if isinstance(bl, dict):
+        in_bl = bl.get("in_window")
+        if isinstance(in_bl, dict):
+            lines.append(
+                f"- 量尺(m7 + round 3 舊出場):in-window n={in_bl.get('n')}"
+                f" 淨EV={_f(in_bl.get('mean'))}。"
+            )
+    lines.append("")
+
+    sens = result.get("sensitivity")
+    if isinstance(sens, dict) and sens:
+        lines.append("## 敏感度列(不入判定)")
+        lines.append("")
+        lines.append("| key | n | 淨EV | p_win | 壓測EV | 段+ | vs量尺 |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        for key in sorted(sens):
+            blk = sens[key]
+            if not isinstance(blk, dict):
+                continue
+            in_blk = blk.get("in_window")
+            base = in_blk.get("base") if isinstance(in_blk, dict) else None
+            if not isinstance(base, dict):
+                continue
+            stress = in_blk.get("stress") if isinstance(in_blk, dict) else None
+            s_mean = stress.get("mean") if isinstance(stress, dict) else None
+            lines.append(
+                f"| {key} | {base.get('n')} | {_f(base.get('mean'))}"
+                f" | {_f(base.get('p_win'), '.2f')} | {_f(s_mean)}"
+                f" | {base.get('positive_segments')}/{result.get('segments')}"
+                f" | {_f(blk.get('vs_baseline_mean'))} |"
+            )
+        lines.append("")
+
+    abl = result.get("ablation")
+    if isinstance(abl, dict) and abl:
+        lines.append("## 消融:單訊號進場(診斷,不入判定)")
+        lines.append("")
+        lines.append("| 組 | n | 淨EV | p_win | PF |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for key in sorted(abl):
+            blk = abl[key]
+            if isinstance(blk, dict):
+                lines.append(
+                    f"| {key} | {blk.get('n')} | {_f(blk.get('mean'))}"
+                    f" | {_f(blk.get('p_win'), '.2f')} | {_f(blk.get('profit_factor'), '.2f')} |"
+                )
+        lines.append("")
+
+    lines.append("## 停損精算(gated vs ungated 硬線觸發率對比)")
+    lines.append("")
+    lines.append("| 臂 | 機制 | 觸發 n | 觸發率 | 均pnl | 砍對 | 砍錯 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|")
+
+    def _act_rows(name: str, act: object) -> None:
+        if not isinstance(act, dict):
+            return
+        for reason, blk in act.items():
+            if not isinstance(blk, dict) or not blk.get("n"):
+                continue
+            cut = blk.get("cut_right")
+            wrong = (1.0 - cut) if isinstance(cut, float) else None
+            lines.append(
+                f"| {name} | {reason} | {blk.get('n')} | {_f(blk.get('rate'), '.1%')}"
+                f" | {_f(blk.get('avg_pnl'))} | {_f(cut, '.1%')} | {_f(wrong, '.1%')} |"
+            )
+
+    if isinstance(arms, dict):
+        for name in sorted(arms):
+            blk = arms[name]
+            if isinstance(blk, dict):
+                in_blk = blk.get("in_window")
+                if isinstance(in_blk, dict):
+                    _act_rows(name, in_blk.get("actuarial"))
+    _act_rows("base_arm(ungated 對照)", result.get("base_arm_actuarial"))
+    lines.append("")
+
+    grid = result.get("base_arm_grid")
+    if isinstance(grid, dict) and grid:
+        lines.append("## 底倉格(分點數 × gap;觀察,round 3 出場)")
+        lines.append("")
+        lines.append("| 格 | n | 淨EV | z | p | 開放 |")
+        lines.append("|---|---:|---:|---:|---:|---|")
+        for key in sorted(grid):
+            blk = grid[key]
+            if isinstance(blk, dict):
+                lines.append(
+                    f"| {key} | {blk.get('n')} | {_f(blk.get('mean'))}"
+                    f" | {_f(blk.get('z'), '.2f')} | {_f(blk.get('p'), '.4f')}"
+                    f" | {'是' if blk.get('open') else '否'} |"
+                )
+        lines.append("")
+
+    if isinstance(arms, dict):
+        lines.append("## forward 段(≥ forward_start;複核輸出)")
+        lines.append("")
+        for name in sorted(arms):
+            blk = arms[name]
+            if isinstance(blk, dict):
+                fwd = blk.get("forward")
+                fb = fwd.get("base") if isinstance(fwd, dict) else None
+                n_f = fb.get("n") if isinstance(fb, dict) else None
+                if isinstance(n_f, int) and n_f >= 1:
+                    assert isinstance(fb, dict)
+                    lines.append(f"- {name}:forward n={n_f} 淨EV={_f(fb.get('mean'))}")
+                else:
+                    lines.append(f"- {name}:forward 樣本 0,僅候選")
+        lines.append("")
+
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def write_cells_report(
     result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: Path
 ) -> None:
+    if result.get("round5") is True:
+        _write_round5_report(result, cfg, report_date, path)
+        return
     if result.get("round4") is True:
         _write_round4_report(result, cfg, report_date, path)
         return
@@ -1517,12 +2012,34 @@ def run_cells(
 
     watchlist = load_watchlist(watchlist_path)
     universes, counts = build_universes(data_dir, cfg)
+    levels_map: dict[tuple[str, str], tuple[float, ...]] | None = None
+    if _round5_enabled(cfg):
+        # 位階票:AH/NH 由 T 日日線 H/L/C 計(lazy import 防循環)
+        from copycat.backtest.fade_entry_anatomy import cdp_levels
+        from copycat.data.daily import DailyIndex
+
+        daily = DailyIndex.load(data_dir)
+        levels_map = {}
+        for sample, _bars in universes.get("main", []):
+            key = (sample.stock_id, sample.date)
+            if key in levels_map:
+                continue
+            ohlc_t = daily.ohlc(sample.stock_id, sample.date)
+            if ohlc_t is None:
+                continue
+            _o, h, low, c = ohlc_t
+            if c <= 0:
+                continue
+            lv = cdp_levels(h, low, c)
+            levels_map[key] = (lv["ah"], lv["nh"])
+        logger.info("round5 levels_map 完成(%d keys)", len(levels_map))
     result = evaluate_cells_from_universe(
         universes["main"],
         universes["low"],
         cfg,
         watchlist.broker_ids,
         cellb_universe=universes.get("cellb"),
+        levels_map=levels_map,
     )
     result["universe_counts_main"] = counts["main"]
     result["universe_counts_low"] = counts["low"]

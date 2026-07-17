@@ -149,6 +149,18 @@ class FadeBacktestConfig:
     tp_flush_min_profit: float | None = None  # 毛利 gate(1 − close/entry)
     tp_hl_k: int | None = None  # 墊高:連續 k 對 pivot 確認
     tp_hl_min_profit: float | None = None
+    # --- round 5:投票制進場(prereg 2026-07-17;空/False = round 4 行為)---
+    vote_s_grid: tuple[int, ...] = ()  # S 主值 + 次值(敏感度)
+    vote_m_min_grid: tuple[int, ...] = ()  # bar m 索引下限:6 主 / 14 敏感度
+    vote_flow_n: int | None = None  # 流向反轉:攻擊段連續根數(凍結 5)
+    vote_flow_rho: float | None = None  # 翻轉內盤倍率(凍結 1.5)
+    vote_flow_confirm_grid: tuple[int, ...] = ()  # 確認根數 1 主 / 2 次
+    vote_flow_seg_gain: float | None = None  # 攻擊段累計漲幅門檻(凍結 0.01)
+    vote_inner_lo: float | None = None  # 內盤比票下閾(凍結 0.45)
+    vote_inner_hi: float | None = None  # 內盤比票上閾(凍結 0.55)
+    vote_level_eps: float | None = None  # 位階觸線帶(凍結 0.005)
+    inner15_arm: bool = False  # round 4 候選 (a):前 15 分內盤比 gate 臂
+    inner15_phi: float | None = None  # gate 閾(凍結 0.55)
     # --- walk-forward(空 = 舊單 split 路徑)---
     wf_test_starts: tuple[str, ...] = ()
     wf_test_months: int = 2
@@ -288,6 +300,9 @@ def _combo_from_base(base: dict[str, object], **overrides: object) -> FadeStopCo
 
 
 _TUPLE_KEYS = {
+    "vote_s_grid",
+    "vote_m_min_grid",
+    "vote_flow_confirm_grid",
     "inner_flip_phi_grid",
     "guard_dist_grid",
     "wf_test_starts",
@@ -410,6 +425,7 @@ def load_fade_config(path: Path) -> FadeBacktestConfig:
     cfg = FadeBacktestConfig(**payload)  # type: ignore[arg-type]
     validate_disaster_fields(cfg)
     validate_round4_fields(cfg)
+    validate_round5_fields(cfg)
     return cfg
 
 
@@ -438,6 +454,25 @@ def validate_round4_fields(cfg: FadeBacktestConfig) -> None:
         raise ValueError("tp_hl_k 與 tp_hl_min_profit 必須同設")
     if cfg.inner_flip_min_bars < 1:
         raise ValueError("inner_flip_min_bars 必須 ≥ 1")
+
+
+def validate_round5_fields(cfg: FadeBacktestConfig) -> None:
+    """round 5 投票進場欄位不變式(prereg 2026-07-17 §2)."""
+    if cfg.vote_s_grid:
+        scalars = (
+            cfg.vote_flow_n,
+            cfg.vote_flow_rho,
+            cfg.vote_flow_seg_gain,
+            cfg.vote_inner_lo,
+            cfg.vote_inner_hi,
+            cfg.vote_level_eps,
+        )
+        if any(v is None for v in scalars):
+            raise ValueError("vote_s_grid 啟用時 vote_flow_*/vote_inner_*/vote_level_eps 必須全設")
+        if not cfg.vote_m_min_grid or not cfg.vote_flow_confirm_grid:
+            raise ValueError("vote_s_grid 啟用時 vote_m_min_grid / vote_flow_confirm_grid 必須非空")
+    if cfg.inner15_arm and cfg.inner15_phi is None:
+        raise ValueError("inner15_arm 啟用時 inner15_phi 必須設值")
 
 
 def fade_sim_config_hash(cfg: FadeBacktestConfig) -> str:
