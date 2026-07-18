@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from copycat.live.aggregate import ChainAggregator
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 
@@ -165,3 +169,86 @@ class TestSnapshot:
         assert (44_000_000, 10_000.0) in snap["curve"]
         assert snap["spot"]["price"] == 44000.0
         assert snap["spot_pnl"] == 10_000.0
+
+
+class TestContractsDetail:
+    """SC-1:snapshot per-contract 明細(design.md §2;內外盤分量 + 排序 + 不變量)。"""
+
+    def test_snapshot_contracts_detail(self) -> None:
+        agg = make_agg()
+        # C44000:外盤 2 @100pt、內盤 1 @99pt、未分類 3 @99.5pt
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000))
+        agg.route(tick(C44000.symbol, price=99_000, qty=1, bid=99_000, ask=100_000))
+        agg.route(tick(C44000.symbol, price=99_500, qty=3, bid=99_000, ask=100_000))
+        # P44000:內盤 4 @50pt
+        agg.route(tick(P44000.symbol, price=50_000, qty=4, bid=50_000, ask=51_000))
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["contracts"] == [
+            {
+                "symbol": C44000.symbol,
+                "cp": "C",
+                "strike": 44000,
+                "net_qty": 1,
+                "volume": 6,
+                "outer_qty": 2,
+                "inner_qty": 1,
+            },
+            {
+                "symbol": P44000.symbol,
+                "cp": "P",
+                "strike": 44000,
+                "net_qty": -4,
+                "volume": 4,
+                "outer_qty": 0,
+                "inner_qty": 4,
+            },
+        ]
+
+    def test_contracts_invariants(self) -> None:
+        # 手寫固定序列覆蓋外/內/未分類三分支(IR-5:不用 random)
+        c43 = OptionContract(
+            symbol="TC.O.TWF.TX4.202607.C.43000", cp="C", strike_millipts=43_000_000
+        )
+        agg = ChainAggregator([C44000, P44000, c43])
+        for t in [
+            tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000),
+            tick(C44000.symbol, price=99_000, qty=5, bid=99_000, ask=100_000),
+            tick(c43.symbol, price=99_500, qty=3, bid=99_000, ask=100_000),
+            tick(c43.symbol, price=100_000, qty=7, bid=99_000, ask=100_000),
+            tick(P44000.symbol, price=50_000, qty=4, bid=50_000, ask=51_000),
+            tick(P44000.symbol, price=50_200, qty=6, bid=50_000, ask=51_000),
+        ]:
+            agg.route(t)
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        rows = snap["contracts"]
+        assert len(rows) == 3
+        for row in rows:
+            assert row["net_qty"] == row["outer_qty"] - row["inner_qty"]
+            assert row["volume"] - row["outer_qty"] - row["inner_qty"] >= 0
+        unclassified = sum(r["volume"] - r["outer_qty"] - r["inner_qty"] for r in rows)
+        assert unclassified == snap["totals"]["unclassified_qty"]
+        # 排序 deterministic:strike 升冪、同 strike C 在前
+        assert [(r["strike"], r["cp"]) for r in rows] == [
+            (43000, "C"),
+            (44000, "C"),
+            (44000, "P"),
+        ]
+
+    def test_contracts_reset_cleared(self) -> None:
+        agg = make_agg()
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000))
+        agg.reset([P44000])
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["contracts"] == []
+
+    def test_non_integer_strike_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        # DR-5:非整數點履約價不靜默截斷 — warning 後整除
+        odd = OptionContract(
+            symbol="TC.O.TWF.TX4.202607.C.42500", cp="C", strike_millipts=42_500_500
+        )
+        agg = ChainAggregator([odd])
+        agg.route(tick(odd.symbol, price=100_000, qty=1, bid=99_000, ask=100_000))
+        with caplog.at_level(logging.WARNING, logger="copycat.live.aggregate"):
+            snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert any("strike" in rec.message for rec in caplog.records)
+        assert snap["contracts"][0]["strike"] == 42500
