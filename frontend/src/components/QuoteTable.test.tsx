@@ -56,13 +56,17 @@ describe("QuoteTable", () => {
     expect(first?.textContent?.match(/—/g)?.length).toBe(4);
   });
 
-  it("ATM 分隔線掛在該列每個 td(IR-6)", () => {
+  it("ATM 分隔線掛在該列每個 td(IR-6),且履約價脊柱不被 twMerge 吃掉", () => {
     const { container } = render(<QuoteTable contracts={CONTRACTS} spotPrice={44400} />);
     const firstRowTds = container.querySelectorAll("tbody tr")[0]?.querySelectorAll("td") ?? [];
     expect(firstRowTds.length).toBeGreaterThan(0);
     for (const td of firstRowTds) {
-      expect(td.className).toContain("border-accent");
+      expect(td.className).toMatch(/border-(b-)?accent/);
     }
+    // 增量 review P1:border-accent(全側色)與 border-x-line 同 conflict group,
+    // ATM 列的脊柱 class 曾被 twMerge 靜默移除 — 鎖住脊柱必須保留
+    const strikeTd = [...firstRowTds].find((td) => td.textContent?.includes("45,000"));
+    expect(strikeTd?.className).toContain("border-x-line");
   });
 
   it("spot 超出範圍不畫分隔線", () => {
