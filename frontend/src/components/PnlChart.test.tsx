@@ -57,6 +57,32 @@ describe("PnlChart", () => {
     expect(screen.queryByText(/▸/)).toBeNull();
   });
 
+  it("SC-3:滑鼠靜止時曲線更新,readout 隨新曲線重算(CR-1)", () => {
+    const snapA: Snapshot = {
+      ...BASE,
+      curve: [
+        [43_000_000, 100_000],
+        [44_000_000, -100_000],
+      ],
+    };
+    const { rerender } = render(<PnlChart snapshot={snapA} />);
+    const svg = screen.getByRole("img");
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 960, height: 420 }) as DOMRect;
+    fireEvent.mouseMove(svg, { clientX: 480, clientY: 200 });
+    expect(screen.getByText(/▸/).textContent).toContain("NT$ 0");
+    // WS 推新 snapshot:同 x=43,500,000 的損益變 100,000 → readout 必須跟上
+    const snapB: Snapshot = {
+      ...BASE,
+      curve: [
+        [43_000_000, 200_000],
+        [44_000_000, 0],
+      ],
+    };
+    rerender(<PnlChart snapshot={snapB} />);
+    expect(screen.getByText(/▸/).textContent).toContain("NT$ 10萬");
+  });
+
   it("SC-3:游標超出曲線範圍不顯示 readout", () => {
     const snap: Snapshot = {
       ...BASE,

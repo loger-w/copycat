@@ -241,14 +241,19 @@ class TestContractsDetail:
         snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
         assert snap["contracts"] == []
 
-    def test_non_integer_strike_warns(self, caplog: pytest.LogCaptureFixture) -> None:
-        # DR-5:非整數點履約價不靜默截斷 — warning 後整除
+    def test_non_integer_strike_warns_once_at_reset(self, caplog: pytest.LogCaptureFixture) -> None:
+        # DR-5 + CR-2:非整數點履約價於合約集合載入時 warning 一次,
+        # snapshot(~1/s 廣播路徑)不重複洗版
         odd = OptionContract(
             symbol="TC.O.TWF.TX4.202607.C.42500", cp="C", strike_millipts=42_500_500
         )
-        agg = ChainAggregator([odd])
+        with caplog.at_level(logging.WARNING, logger="copycat.live.aggregate"):
+            agg = ChainAggregator([odd])
+        assert any("strike" in rec.message for rec in caplog.records)
+        caplog.clear()
         agg.route(tick(odd.symbol, price=100_000, qty=1, bid=99_000, ask=100_000))
         with caplog.at_level(logging.WARNING, logger="copycat.live.aggregate"):
             snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
-        assert any("strike" in rec.message for rec in caplog.records)
+            agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert not caplog.records  # snapshot 路徑零 warning
         assert snap["contracts"][0]["strike"] == 42500
