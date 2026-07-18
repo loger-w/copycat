@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { areaPaths, buildScales, curvePath, splitAtZero } from "@/lib/pnl-svg";
+import {
+  areaPaths,
+  buildScales,
+  curvePath,
+  interpCurve,
+  invertX,
+  splitAtZero,
+} from "@/lib/pnl-svg";
 
 // 簡單曲線:x 毫點,y NTD。零交叉在 x=43500(y: +100 → -100 的中點)
 const CURVE: [number, number][] = [
@@ -35,6 +42,37 @@ describe("curvePath", () => {
   it("組出 M/L path", () => {
     const s = buildScales(CURVE, { width: 100, height: 100, pad: 0 });
     expect(curvePath(CURVE, s)).toBe("M0,33.3 L50,66.7 L100,100");
+  });
+});
+
+describe("invertX", () => {
+  const box = { width: 100, height: 100, pad: 10 };
+
+  it("與 buildScales.x 嚴格互逆(DR-2 同源 domain)", () => {
+    const s = buildScales(CURVE, box);
+    for (const v of [43_000_000, 43_500_000, 44_250_000, 45_000_000]) {
+      expect(invertX(s.x(v), CURVE, box)).toBeCloseTo(v, 6);
+    }
+  });
+
+  it("pad 外像素 → null", () => {
+    expect(invertX(5, CURVE, box)).toBeNull();
+    expect(invertX(95, CURVE, box)).toBeNull();
+  });
+});
+
+describe("interpCurve", () => {
+  it("線段內線性插值(與後端 payoff.interp_pnl 同語意手算例)", () => {
+    expect(interpCurve(CURVE, 43_500_000)).toBeCloseTo(0);
+    expect(interpCurve(CURVE, 43_250_000)).toBeCloseTo(50);
+    expect(interpCurve(CURVE, 44_500_000)).toBeCloseTo(-200);
+    expect(interpCurve(CURVE, 43_000_000)).toBe(100);
+    expect(interpCurve(CURVE, 45_000_000)).toBe(-300);
+  });
+
+  it("範圍外 → null", () => {
+    expect(interpCurve(CURVE, 42_999_999)).toBeNull();
+    expect(interpCurve(CURVE, 45_000_001)).toBeNull();
   });
 });
 
