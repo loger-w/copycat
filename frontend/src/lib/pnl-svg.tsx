@@ -13,11 +13,16 @@ export interface Scales {
   y: (ntd: number) => number;
 }
 
-export function buildScales(curve: CurvePoint[], box: ScaleBox): Scales {
+/** x 軸 domain 單一來源:buildScales 與 invertX 皆由此取值,單邊修改不破互逆(DR-2)。 */
+export function xDomain(curve: CurvePoint[]): { minX: number; spanX: number } {
   const xs = curve.map(([x]) => x);
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
-  const spanX = maxX - minX || 1;
+  return { minX, spanX: maxX - minX || 1 };
+}
+
+export function buildScales(curve: CurvePoint[], box: ScaleBox): Scales {
+  const { minX, spanX } = xDomain(curve);
   const yMax = Math.max(...curve.map(([, y]) => Math.abs(y)), 1);
   const innerW = box.width - box.pad * 2;
   const innerH = box.height - box.pad * 2;
