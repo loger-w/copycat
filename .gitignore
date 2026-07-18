@@ -12,3 +12,5 @@ spikes/.ruff_cache/
 .claude/
 .env
 spikes/out/
+frontend/node_modules/
+frontend/dist/

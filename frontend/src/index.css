@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  /* 交易室終端暗色系(auto-default:向參考截圖的金/青配色致意,台股紅漲綠跌) */
+  --color-bg: #0a0e14;
+  --color-bg-deep: #060910;
+  --color-surface: #10161f;
+  --color-line: #1e2735;
+  --color-ink: #e8edf5;
+  --color-ink-muted: #8b96a8;
+  --color-ink-dim: #55617a;
+  --color-accent: #e8467c; /* 現價線桃紅 */
+  --color-profit: #d9a441; /* 獲利區琥珀金 */
+  --color-loss: #2e8b8b; /* 虧損區暗青 */
+  --color-bull: #f0524f; /* 台股紅漲 */
+  --color-bear: #3ba272; /* 台股綠跌 */
+
+  --font-sans: "IBM Plex Sans TC", "Noto Sans TC", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
