@@ -1,6 +1,7 @@
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { MetricsBar } from "@/components/MetricsBar";
 import { PnlChart } from "@/components/PnlChart";
+import { QuoteTable } from "@/components/QuoteTable";
 import { SeriesSelect } from "@/components/SeriesSelect";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
 
@@ -28,6 +29,10 @@ export default function App() {
         <>
           <MetricsBar snapshot={snapshot} />
           <PnlChart snapshot={snapshot} />
+          <QuoteTable
+            contracts={snapshot.contracts}
+            spotPrice={snapshot.spot?.price ?? null}
+          />
           <footer className="flex justify-between font-mono text-xs text-ink-dim">
             <span>
               tick {snapshot.totals?.ticks ?? 0} · 未分類 {snapshot.totals?.unclassified_ticks ?? 0}

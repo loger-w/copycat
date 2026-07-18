@@ -19,6 +19,16 @@ export interface SnapshotTotals {
   queue_dropped: number;
 }
 
+export interface ContractRow {
+  symbol: string;
+  cp: "C" | "P";
+  strike: number;
+  net_qty: number;
+  volume: number;
+  outer_qty: number;
+  inner_qty: number;
+}
+
 export interface Snapshot {
   series_id: string | null;
   series_name?: string;
@@ -31,6 +41,7 @@ export interface Snapshot {
   max_profit?: { x: number; y: number } | null;
   max_loss?: { x: number; y: number } | null;
   spot_pnl?: number | null;
+  contracts?: ContractRow[];
   totals?: SnapshotTotals;
 }
 

@@ -1,13 +1,19 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { formatNtd, formatPts } from "@/lib/format";
-import { areaPaths, buildScales, curvePath } from "@/lib/pnl-svg";
+import { areaPaths, buildScales, curvePath, interpCurve, invertX } from "@/lib/pnl-svg";
 import type { Snapshot } from "@/types";
 
 const BOX = { width: 960, height: 420, pad: 24 };
 
+interface Cursor {
+  xMillipts: number;
+  pnl: number;
+}
+
 export function PnlChart({ snapshot }: { snapshot: Snapshot }) {
   const curve = snapshot.curve;
+  const [cursor, setCursor] = useState<Cursor | null>(null);
   const parts = useMemo(() => {
     if (curve.length < 2) return null;
     const scales = buildScales(curve, BOX);
@@ -17,6 +23,16 @@ export function PnlChart({ snapshot }: { snapshot: Snapshot }) {
       areas: areaPaths(curve, scales),
     };
   }, [curve]);
+
+  // SC-3 游標試算:座標換算假設 svg 為 w-full 等比渲染(viewBox 比例 = 渲染盒比例,DR-3)
+  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const px = ((e.clientX - rect.left) / rect.width) * BOX.width;
+    const xMillipts = invertX(px, curve, BOX);
+    const pnl = xMillipts === null ? null : interpCurve(curve, xMillipts);
+    setCursor(xMillipts !== null && pnl !== null ? { xMillipts, pnl } : null);
+  }
 
   if (parts === null) {
     return (
@@ -52,6 +68,8 @@ export function PnlChart({ snapshot }: { snapshot: Snapshot }) {
         role="img"
         aria-label="綜合到期損益曲線"
         className="w-full"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setCursor(null)}
       >
         {/* 零線 */}
         <line
@@ -121,6 +139,28 @@ export function PnlChart({ snapshot }: { snapshot: Snapshot }) {
           >
             現價 {spotPrice != null ? formatPts(spotPrice) : ""}
           </text>
+        )}
+        {/* SC-3 游標 crosshair + 右上角 readout(DR-6:固定位,與現價標籤空間分離) */}
+        {cursor !== null && parts !== null && (
+          <g className="pointer-events-none">
+            <line
+              x1={scales.x(cursor.xMillipts)}
+              x2={scales.x(cursor.xMillipts)}
+              y1={BOX.pad}
+              y2={BOX.height - BOX.pad}
+              className="stroke-ink-muted"
+              strokeWidth={1}
+              strokeDasharray="2 3"
+            />
+            <text
+              x={BOX.width - BOX.pad}
+              y={16}
+              textAnchor="end"
+              className="fill-ink font-mono text-[11px]"
+            >
+              {formatPts(cursor.xMillipts / 1000)} ▸ {formatNtd(cursor.pnl)}
+            </text>
+          </g>
         )}
       </svg>
       <div className="mt-2 flex gap-4 text-xs text-ink-muted">
