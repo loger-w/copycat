@@ -18,9 +18,11 @@ class HandoverBuffer:
     def __init__(self, cap: int = DEFAULT_BUFFER_CAP) -> None:
         self._cap = cap
         self._ticks: list[Tick] = []
+        self.overflowed = False
 
     def append(self, tick: Tick) -> bool:
         if len(self._ticks) >= self._cap:
+            self.overflowed = True
             return False
         self._ticks.append(tick)
         return True
