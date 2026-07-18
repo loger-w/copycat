@@ -14,3 +14,4 @@ spikes/.ruff_cache/
 spikes/out/
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
