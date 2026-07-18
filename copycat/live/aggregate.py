@@ -53,6 +53,10 @@ class ChainAggregator:
     def reset(self, contracts: Iterable[OptionContract]) -> None:
         """DR-3:清空全部 per-symbol 狀態並替換合約集合(select 切換時呼叫)。"""
         self._contracts = {c.symbol: c for c in contracts}
+        for c in self._contracts.values():
+            # DR-5/CR-2:非整數點履約價於載入時警告一次,不在 snapshot 廣播路徑洗版
+            if c.strike_millipts % 1000 != 0:
+                logger.warning("non-integer strike_millipts=%d (%s)", c.strike_millipts, c.symbol)
         self._pos = {}
         self._last_cum = {}
         self.totals = Totals()
@@ -111,8 +115,6 @@ class ChainAggregator:
         rows: list[dict] = []
         for sym, st in self._pos.items():
             contract = self._contracts[sym]
-            if contract.strike_millipts % 1000 != 0:
-                logger.warning("non-integer strike_millipts=%d (%s)", contract.strike_millipts, sym)
             rows.append(
                 {
                     "symbol": sym,

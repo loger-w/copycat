@@ -5,12 +5,13 @@
 才覆寫 expected_snapshot.json;diff 非零 → 列出並 exit 1,不覆寫。
 
 跑法(repo root):.venv\\Scripts\\python tests/fixtures/txo_golden/regen.py
-CLI 腳本,stdout 報告即輸出物(允許 print,同 spikes 慣例,不進 package)。
+報告走 logging(stdout handler;專案 §2 禁 print)。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from copycat.live.models import (
 )
 
 FIXTURE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
 def build_snapshot() -> dict:
@@ -53,23 +55,27 @@ def main() -> int:
     golden_path = FIXTURE_DIR / "expected_snapshot.json"
     old = json.loads(golden_path.read_text(encoding="utf-8"))
 
+    # 兩側皆移除 contracts 再比對:golden 遷移後(已含 contracts)重跑仍 idempotent
     stripped = dict(snap)
     stripped.pop("contracts", None)
-    if stripped != old:
-        print("old-keys diff: FOUND — 不覆寫,逐 key 列出:")
-        for key in sorted(set(stripped) | set(old)):
-            if stripped.get(key) != old.get(key):
-                print(f"  {key}: old={old.get(key)!r} new={stripped.get(key)!r}")
+    old_stripped = dict(old)
+    old_stripped.pop("contracts", None)
+    if stripped != old_stripped:
+        logger.error("old-keys diff: FOUND — 不覆寫,逐 key 列出:")
+        for key in sorted(set(stripped) | set(old_stripped)):
+            if stripped.get(key) != old_stripped.get(key):
+                logger.error("  %s: old=%r new=%r", key, old_stripped.get(key), stripped.get(key))
         return 1
 
-    print("old-keys diff: NONE(移除 contracts 後與現行 golden 全等)")
+    logger.info("old-keys diff: NONE(移除 contracts 後與現行 golden 全等)")
     golden_path.write_text(json.dumps(snap, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print(f"golden 已覆寫:{golden_path}")
-    print(f"contracts 筆數:{len(snap['contracts'])}")
+    logger.info("golden 已覆寫:%s", golden_path)
+    logger.info("contracts 筆數:%d", len(snap["contracts"]))
     for row in snap["contracts"][:3]:
-        print(f"  抽核樣本:{row}")
+        logger.info("  抽核樣本:%s", row)
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     sys.exit(main())
