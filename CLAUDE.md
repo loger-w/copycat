@@ -37,10 +37,16 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   universe(LOCKABLE_GROUPS/權重)、features(neigui 同源 19 欄 + 位階族)、
 │                         #   simulate(悲觀成交/鎖死凍結)、search(GA/凍結規則)、stats(三道驗證)、
 │                         #   pipeline(features/search CLI 入口,outcome cache 三重失效)、report
+├── live/                 #   TXO 即時看盤(2026-07-18):models(TC4 訊息對映/毫點)、payoff(到期
+│                         #   損益純函數)、aggregate(內外盤累積狀態機)、handover(回補↔live 交接)、
+│                         #   tc4(TC4QuoteSource,唯一碰 ZMQ 的模組)— extras [live] 才需 fastapi/pyzmq
+├── server/               #   FastAPI 轉發層:engine(EngineRuntime/QuoteSource Protocol)、app(routes/WS)、
+│                         #   __main__(python -m copycat.server,port env TXO_SERVER_PORT 預設 8721)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── strategy_config.py    #   全部策略門檻(版本化,configs/*.json 覆寫)
 ├── watchlist.py          #   可替換分點集合(watchlists/*.json)
 └── cli.py                #   python -m copycat <import-neigui|replay|validate|compare|backfill-daily|tday-features|tday-search>
+frontend/                 # React 19 + Vite + TS strict + Tailwind v4 + TanStack Query(綜合損益單頁)
 data/(git-ignored)       # 匯入產物;out/(git-ignored)= replay 產物
 docs/superpowers/         # spec 與 implementation plan
 ```
@@ -57,16 +63,18 @@ docs/superpowers/         # spec 與 implementation plan
 | 種子匯入(一次性) | `.venv\Scripts\python -m copycat import-neigui --src C:\side-project\neigui\backend\data\research\five-tigers` | repo root |
 | Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
 | Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
+| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;休市日補 env `TXO_BACKFILL_DATE=<上一交易日>`) | repo root |
+| Frontend dev / 測試 / build | `npm run dev` / `npm test` / `npm run build` | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 | 日線回補(位階特徵前置,一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
 | T 日跟多回測:特徵 | `.venv\Scripts\python -m copycat tday-features` | repo root |
 | T 日跟多回測:搜索+報告 | `.venv\Scripts\python -m copycat tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
 
-完成前要過的 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過 four/five 兩份 replay)。venv = Python 3.13(`py -3.13 -m venv .venv`;`py` launcher 預設 3.14,別直接用)。目前無 frontend。
+完成前要過的 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過 four/five 兩份 replay)。venv = Python 3.13(`py -3.13 -m venv .venv`;`py` launcher 預設 3.14,別直接用)。動到 frontend/ 另加:`npm test` + `npx tsc -b` + `npx eslint src`(在 frontend/)。
 
 **部署前置(Touchance 特性)**:
 
-Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ**(Quote port 51171 / Trade port 51141)跟它通訊。意味著:
+Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通訊(**實測 OpenAPI 登入 port = 50774**,SubPort 動態發配;官方文件的 51171/51141 與現版不符,2026-07-18 實測)。意味著:
 
 - 後端 host 必須是 **Windows + Touchance 常駐開啟 + ZMQ ports 對 localhost 通**。
 - 不是 headless Linux server 友善,**Docker 化困難**(要先驗證跨 host ZMQ 是否可用)。
@@ -143,7 +151,7 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ**(Quote port
 
 ### 主資料源 = Touchance 4.0(達錢 4)
 
-- 艾揚資訊獨立平台,**非券商產品**(易混淆,溝通要寫全名)。Python API 走 **ZMQ**(Quote port 51171 / Trade port 51141)。
+- 艾揚資訊獨立平台,**非券商產品**(易混淆,溝通要寫全名)。Python API 走 **ZMQ**(實測 OpenAPI 登入 port **50774**、SubPort 動態;文件舊值 51171/51141 不適用,2026-07-18 實測)。
 - User 持有最高會員訂閱(綁帳號不綁 repo,事實留 user memory `touchance-account-tier`)。
 - 涵蓋:**國內外期貨即時行情** + 歷史(1 分 K 一年、日 K 十年)+ 下單抽象 + 帳務查詢。
 - 官方 GitBook:https://touchance-1.gitbook.io/touchance/
@@ -224,7 +232,7 @@ WebSocket / 即時 Stream 紀律:
 - **trash-mr-warrant 只做 Touchance scope**(期貨 + 選擇權 + 權證 + 下單)。個股 + 族群即時監控**分到 trash-cmoney 做**(純 FinMind / Linux Docker / 不要 Touchance 常駐 / 已有 FinMind 接入慣例可借鏡)。這是 2026-06-26 第三次釐清的結論 — 前兩次先把 Touchance 當 phase-無關主源,再分 phase 但同 repo,最終分 repo。(Trigger:擴 scope 或選資料源時、或有 PR 想把個股相關 code 推進這個 repo)
 - **「達錢 4」≠ 任何券商產品 = Touchance 4.0**(艾揚)。命名容易跟「DQ2 國際贏家」(SYSTEX)、「XQ 全球贏家」(SysJust)混淆 — 三家不同公司不同產品。實作或對外文件提到「DQ4」時一定要附 Touchance 全名避免歧義。(Trigger:寫 README / commit message / 跟非自己人溝通時)
 - **Touchance 主打期貨,台股權證涵蓋待驗**:官方 `行情串接` 文件只給 TXF 範例 + 「QuoteManager 商品檔 ( 國內外期貨熱門月 )」字樣 → 權證涵蓋不明,Phase 2 啟動前要驗(若沒涵蓋,Phase 2 改 fallback FinMind 權證分點 + TPEx 公開資料)。(Trigger:Phase 2 啟動前)
-- **Touchance Python API = ZMQ**,**不是** REST/WebSocket/COM/DDE/RTD。Quote port 51171 / Trade port 51141。寫 client 時記得是 `pyzmq` + asyncio,不是 `httpx` / `aiohttp`。Async 整合模式跟 trash-cmoney 既有 httpx pattern 不同,新接 service 不要照貼。(Trigger:寫 `services/touchance_*.py`)
+- **Touchance Python API = ZMQ**,**不是** REST/WebSocket/COM/DDE/RTD。實測登入 port 50774(SubPort 動態);且現版 `SUBQUOTE REALTIME` 必帶 StartTime/EndTime(官方 wrapper SubQuote 未帶會 fail,見 docs/research/2026-07-18-txo-chain-probe.md)。寫 client 時記得是 `pyzmq` + asyncio,不是 `httpx` / `aiohttp`。Async 整合模式跟 trash-cmoney 既有 httpx pattern 不同,新接 service 不要照貼。(Trigger:寫 `services/touchance_*.py`)
 - **Touchance 下單仍要券商授權**:Touchance 本身只是抽象層,實際送單要再向所屬期貨商申請 API 交易權限。設計下單流程(§7)時要假設「即使 Touchance 通了,期貨商那邊還可能擋」,要分開錯誤碼:`TOUCHANCE_DOWN` vs `BROKER_REJECTED`。
 - **Touchance Windows app 常駐 = 部署綁定**:這個 repo 一啟動就被 Windows 綁住(scope 純 Touchance),Linux Docker 不在規劃內。寫 code 時放心用 ZMQ + Windows 路徑;若想跨 host 部署(Touchance host vs Python backend host),先實測 ZMQ 跨網段穩定度。
 
