@@ -70,6 +70,143 @@
   "y": -1852600.0
  },
  "spot_pnl": null,
+ "contracts": [
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45050",
+   "cp": "C",
+   "strike": 45050,
+   "net_qty": -28,
+   "volume": 96,
+   "outer_qty": 31,
+   "inner_qty": 59
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45100",
+   "cp": "C",
+   "strike": 45100,
+   "net_qty": 21,
+   "volume": 271,
+   "outer_qty": 131,
+   "inner_qty": 110
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.P.45100",
+   "cp": "P",
+   "strike": 45100,
+   "net_qty": 2,
+   "volume": 4,
+   "outer_qty": 3,
+   "inner_qty": 1
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45150",
+   "cp": "C",
+   "strike": 45150,
+   "net_qty": -33,
+   "volume": 117,
+   "outer_qty": 36,
+   "inner_qty": 69
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45200",
+   "cp": "C",
+   "strike": 45200,
+   "net_qty": -59,
+   "volume": 295,
+   "outer_qty": 106,
+   "inner_qty": 165
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.P.45200",
+   "cp": "P",
+   "strike": 45200,
+   "net_qty": 1,
+   "volume": 1,
+   "outer_qty": 1,
+   "inner_qty": 0
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45250",
+   "cp": "C",
+   "strike": 45250,
+   "net_qty": 4,
+   "volume": 143,
+   "outer_qty": 68,
+   "inner_qty": 64
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.P.45250",
+   "cp": "P",
+   "strike": 45250,
+   "net_qty": 0,
+   "volume": 1,
+   "outer_qty": 0,
+   "inner_qty": 0
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45300",
+   "cp": "C",
+   "strike": 45300,
+   "net_qty": -4,
+   "volume": 227,
+   "outer_qty": 97,
+   "inner_qty": 101
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.P.45300",
+   "cp": "P",
+   "strike": 45300,
+   "net_qty": 3,
+   "volume": 4,
+   "outer_qty": 3,
+   "inner_qty": 0
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45350",
+   "cp": "C",
+   "strike": 45350,
+   "net_qty": -3,
+   "volume": 139,
+   "outer_qty": 57,
+   "inner_qty": 60
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45400",
+   "cp": "C",
+   "strike": 45400,
+   "net_qty": -30,
+   "volume": 138,
+   "outer_qty": 44,
+   "inner_qty": 74
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45450",
+   "cp": "C",
+   "strike": 45450,
+   "net_qty": -13,
+   "volume": 84,
+   "outer_qty": 28,
+   "inner_qty": 41
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.C.45500",
+   "cp": "C",
+   "strike": 45500,
+   "net_qty": -118,
+   "volume": 993,
+   "outer_qty": 351,
+   "inner_qty": 469
+  },
+  {
+   "symbol": "TC.O.TWF.TX4.202607.P.45500",
+   "cp": "P",
+   "strike": 45500,
+   "net_qty": 3,
+   "volume": 3,
+   "outer_qty": 3,
+   "inner_qty": 0
+  }
+ ],
  "totals": {
   "call_net_qty": -263,
   "put_net_qty": 9,

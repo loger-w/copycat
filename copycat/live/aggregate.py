@@ -35,6 +35,8 @@ class _PosState:
     net_qty: int = 0
     net_cost_millipts: int = 0
     volume: int = 0
+    outer_qty: int = 0
+    inner_qty: int = 0
 
 
 class ChainAggregator:
@@ -77,9 +79,11 @@ class ChainAggregator:
         if tick.ask_millipts is not None and tick.price_millipts >= tick.ask_millipts:
             pos.net_qty += tick.qty
             pos.net_cost_millipts += tick.qty * tick.price_millipts
+            pos.outer_qty += tick.qty
         elif tick.bid_millipts is not None and tick.price_millipts <= tick.bid_millipts:
             pos.net_qty -= tick.qty
             pos.net_cost_millipts -= tick.qty * tick.price_millipts
+            pos.inner_qty += tick.qty
         else:
             self.totals.unclassified_ticks += 1
             self.totals.unclassified_qty += tick.qty
@@ -101,6 +105,27 @@ class ChainAggregator:
 
     def last_cum(self, symbol: str) -> int | None:
         return self._last_cum.get(symbol)
+
+    def _contract_rows(self) -> list[dict]:
+        """SC-1 per-contract 明細:strike 升冪、同 strike C 在前(deterministic)。"""
+        rows: list[dict] = []
+        for sym, st in self._pos.items():
+            contract = self._contracts[sym]
+            if contract.strike_millipts % 1000 != 0:
+                logger.warning("non-integer strike_millipts=%d (%s)", contract.strike_millipts, sym)
+            rows.append(
+                {
+                    "symbol": sym,
+                    "cp": contract.cp,
+                    "strike": contract.strike_millipts // 1000,
+                    "net_qty": st.net_qty,
+                    "volume": st.volume,
+                    "outer_qty": st.outer_qty,
+                    "inner_qty": st.inner_qty,
+                }
+            )
+        rows.sort(key=lambda r: (r["strike"], r["cp"]))
+        return rows
 
     def snapshot(
         self,
@@ -151,6 +176,7 @@ class ChainAggregator:
             "max_profit": max_profit,
             "max_loss": max_loss,
             "spot_pnl": spot_pnl,
+            "contracts": self._contract_rows(),
             "totals": {
                 "call_net_qty": call_net,
                 "put_net_qty": put_net,
