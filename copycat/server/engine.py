@@ -31,8 +31,10 @@ class QuoteSource(Protocol):
 
 
 def _fmt_precise_time(precise_time: int) -> str:
+    """PreciseTime(UTC HHMMSS+µs)→ 台北 HH:MM:SS(+8,Phase 6 實測 00:45=開盤 08:45)。"""
     hhmmss = str(precise_time).zfill(12)[:6]
-    return f"{hhmmss[0:2]}:{hhmmss[2:4]}:{hhmmss[4:6]}"
+    hour = (int(hhmmss[0:2]) + 8) % 24
+    return f"{hour:02d}:{hhmmss[2:4]}:{hhmmss[4:6]}"
 
 
 class EngineRuntime:

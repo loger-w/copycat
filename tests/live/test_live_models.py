@@ -98,6 +98,20 @@ class TestParseRealtime:
         assert parse_realtime(dict(REALTIME_RAW, TradeQuantity="0")) is None
         assert parse_realtime(dict(REALTIME_RAW, TradeQuantity="")) is None
 
+    def test_spot_snapshot_without_trade_qty_still_parses(self) -> None:
+        """TC.F.*(現價源)休市 snapshot 的 TradeQuantity 可為 0,只需 price(Phase 6 實測)。"""
+        raw = dict(
+            REALTIME_RAW,
+            Symbol="TC.F.TWF.FITX.HOT",
+            TradeQuantity="0",
+            TradingPrice="43735.46",
+        )
+        tick = parse_realtime(raw)
+        assert tick is not None
+        assert tick.symbol == "TC.F.TWF.FITX.HOT"
+        assert tick.price_millipts == 43_735_460
+        assert tick.qty == 0
+
 
 class TestParseOptionSymbol:
     def test_leaf_symbol(self) -> None:

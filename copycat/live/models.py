@@ -78,13 +78,21 @@ def parse_history_tick(symbol: str, raw: dict) -> Tick | None:
 
 
 def parse_realtime(raw: dict) -> Tick | None:
-    """REALTIME Quote dict → Tick(DR-4 隔離層);無成交(qty 空/0)→ None。"""
+    """REALTIME Quote dict → Tick(DR-4 隔離層);無成交(qty 空/0)→ None。
+
+    例外:TC.F.*(現價源)只取 price,qty 可為 0 — 休市 snapshot 無成交量
+    仍要能更新現價線(Phase 6 實測)。
+    """
     symbol = raw.get("Symbol", "")
     price = to_millipts(raw.get("TradingPrice", ""))
     qty = _to_int(raw.get("TradeQuantity", ""))
     ptime = _to_int(raw.get("PreciseTime", ""))
-    if not symbol or price is None or qty is None or qty <= 0 or ptime is None:
+    if not symbol or price is None or ptime is None:
         return None
+    if qty is None or qty <= 0:
+        if not symbol.startswith("TC.F."):
+            return None
+        qty = 0
     return Tick(
         symbol=symbol,
         precise_time=ptime,

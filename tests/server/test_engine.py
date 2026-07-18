@@ -135,6 +135,14 @@ async def test_queue_overflow_counts_and_self_heals() -> None:
         await rt.close()
 
 
+def test_fmt_precise_time_converts_utc_to_taipei() -> None:
+    """PreciseTime 為 UTC(spike 實測 00:45 = 台北 08:45 開盤),顯示須 +8。"""
+    from copycat.server.engine import _fmt_precise_time
+
+    assert _fmt_precise_time(4500127000) == "08:45:00"  # 004500.127 UTC
+    assert _fmt_precise_time(235959000000) == "07:59:59"  # 跨日 wrap
+
+
 async def test_not_ready_snapshot_totals_is_none() -> None:
     """engine 未就緒時 totals 必須是 None(非空 dict),前端 truthy guard 才會生效。"""
     rt = EngineRuntime(FakeQuoteSource(), throttle_secs=0.01)
