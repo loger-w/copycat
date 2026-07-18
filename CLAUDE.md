@@ -246,6 +246,10 @@ WebSocket / 即時 Stream 紀律:
 - **TC4 股票 1K 實測可回補一年以上**(2025-07-01 起回補成功,2026-07-10 實測),官方文件「1 分 K 一年」限制**僅適用期貨**。排股票歷史回補計畫時不要被官方數字自我設限,先實測邊界。(2026-07-10,Trigger:排 TC4 歷史回補範圍或評估回測期間長度)
 - **FinMind `TaiwanStockDayTrading` 的 `BuyAfterSale` 欄位 'Y' 或 '＊' = 僅可先買後賣**——對先賣後買的空方策略即**不可交易**,當沖資格過濾必須把這類標記視為 excluded,不是「可當沖」。(2026-07-10,Trigger:碰當沖資格 proxy 或新增依賴 DayTrading dataset 的過濾)
 - **模擬器出場 status 的入統計集合 = `fade_simulate.TRADEABLE_STATUSES` 單一定義**(收尾 review 已從 fade_pipeline/fade_optimize 兩份手動同步收斂,測試驗兩端同物件)。新增出場 status 只改這一處;曾因 guard_exit 只加一邊,最差虧損被靜默剔除 → 期望值灌水。注意 `pipeline.py`(舊 T 日 pipeline)另有自己的 `_TRADEABLE` 狀態字彙,兩者不通用。(2026-07-11,Trigger:模擬器新增/改出場 status)
+- **TC4 tick 欄位語意(2026-07-18 實測,詳 docs/research/2026-07-18-txo-chain-probe.md)**:歷史 TICKS 的 `TradeVolume` 全為 0(無累積量,排序靠微秒級 `PreciseTime` + `QryIndex`);REALTIME 才有累積 `TradeVolume`(去重主鍵)。`PreciseTime`/`FilledTime` 是 **UTC**,顯示要 +8。REALTIME 五檔命名有位移:`Bid`=最佳、`Bid1`=第二檔。休市日訂閱會回推 snapshot,但**期貨(FITX)不推、選擇權有推**。(Trigger:碰 live tick 解析、現價源、或任何用 TC4 時間欄位的顯示)
+- **TXO 序列動態發現**:月選(TXO)第三週三到期後即從合約清單消失;週選產品碼 TX4/TX5(+TXY/TXZ 待確認別)同月並存 → 序列清單必須每次跟 TC4 查,不可 hardcode;`QUERYALLINSTRUMENT` 的 Type 實測是 `"Opt"`(wrapper 註解寫 Options 是錯的)。(2026-07-18,Trigger:碰序列選單/合約發現)
+- **TC4 歷史批次回補要「先全鏈 SubHistory 再逐檔收割」**:逐檔 Sub→sleep→收 280 檔實測 ~10 分鐘,先全訂讓 TC4 平行備資料再收割 → ~2 分鐘。(2026-07-18,Trigger:寫任何 TC4 多 symbol 歷史回補)
+- **純 `uvicorn` 沒有 WebSocket protocol 支援**,WS upgrade 直接 404(且錯誤訊息不會提示缺件)— 要 `uvicorn[standard]`。(2026-07-18,Trigger:新增 WS endpoint 或部署裝依賴)
 - **長跑 pipeline 必須有進度 log**:round 1 fade-search 跑 6 小時全程黑箱,無法判斷卡死或正常。fold/arm/generation 邊界各 log 一行(logger,含完成比例與耗時),成本近零。(2026-07-11,Trigger:寫任何預期 >10 分鐘的批次/搜索迴圈)
 
 (寫入規則參考 trash-cmoney CLAUDE.md §8。)

@@ -60,3 +60,5 @@
 - [ ] TC4 reuse:TC4_APPID/TC4_SKEY 常數與 QryIndex 分頁迴圈在 data/backfill_tc4.py 與 live/tc4.py 兩份 → 抽共用 helper(🔵 獨立工,動到穩定 backfill 檔先補 characterization)
 - [ ] 觀測性:handover buffer 溢出僅 log 無 snapshot 計數欄位(degraded 時前端難診斷);前端 WS 無 heartbeat 判停(server 靜默時段分不出斷線 vs 無變更;考慮 server 週期 keepalive frame + client stale timer,週一盤中觀察真實需求再定)
 - [ ] engine._run_handover 重試時 re-subscribe 與 activate 的 unsubscribe 不對稱,若改主動觸發自癒要先收斂這段
+
+- [ ] frontend/tsconfig.*.tsbuildinfo 是 build 產物被誤入版控(wave4),加 .gitignore 並 git rm --cached(2026-07-18)
