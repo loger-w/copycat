@@ -43,7 +43,7 @@ export function MetricsBar({ snapshot }: { snapshot: Snapshot }) {
   return (
     <section
       aria-label="關鍵指標"
-      className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9"
+      className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-5"
     >
       <Metric
         label="全市場最大獲利"
