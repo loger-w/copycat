@@ -143,7 +143,8 @@ export function QuoteTable({
                   <td
                     className={cn(
                       "border-x border-x-line bg-bg-deep/50 px-3 py-1 text-center font-mono font-bold text-ink",
-                      atm && "border-b border-accent",
+                      // side-specific 色避開 twMerge 全側 border-color conflict group(收尾 review P1)
+                      atm && "border-b border-b-accent",
                     )}
                   >
                     {formatPts(row.strike)}
