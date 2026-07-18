@@ -149,6 +149,13 @@ export function PnlChart({ snapshot }: { snapshot: Snapshot }) {
               strokeWidth={1}
               strokeDasharray="2 3"
             />
+            <circle
+              cx={scales.x(cursorX)}
+              cy={scales.y(cursorPnl)}
+              r={3.5}
+              className="fill-ink stroke-bg"
+              strokeWidth={1.5}
+            />
             <text
               x={BOX.width - BOX.pad}
               y={16}

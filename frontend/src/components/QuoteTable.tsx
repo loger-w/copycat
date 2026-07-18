@@ -18,6 +18,15 @@ function ratioText(row: ContractRow): string {
   return r === null ? DASH : `${Math.round(r * 100)}%`;
 }
 
+/** 內外盤比方向色:外盤佔優(≥60%)紅、內盤佔優(≤40%)綠,中性 muted。 */
+function ratioTone(row: ContractRow): string {
+  const r = outerRatio(row);
+  if (r === null) return "text-ink-dim";
+  if (r >= 0.6) return "text-bull";
+  if (r <= 0.4) return "text-bear";
+  return "text-ink-muted";
+}
+
 function EnergyBar({
   netQty,
   maxAbs,
@@ -68,7 +77,7 @@ function SideCells({
     <td key="energy" className={cn(td, "w-24 min-w-16 align-middle")}>
       <EnergyBar netQty={row.net_qty} maxAbs={maxAbs} align={side === "call" ? "right" : "left"} />
     </td>,
-    <td key="ratio" className={cn(td, "text-right text-ink-muted")}>
+    <td key="ratio" className={cn(td, "text-right", ratioTone(row))}>
       {ratioText(row)}
     </td>,
     <td key="volume" className={cn(td, "text-right text-ink")}>
@@ -133,7 +142,7 @@ export function QuoteTable({
                   <SideCells row={row.call} maxAbs={maxAbs} side="call" atm={atm} />
                   <td
                     className={cn(
-                      "px-3 py-1 text-center font-mono font-bold text-ink",
+                      "border-x border-x-line bg-bg-deep/50 px-3 py-1 text-center font-mono font-bold text-ink",
                       atm && "border-b border-accent",
                     )}
                   >
