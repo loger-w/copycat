@@ -48,7 +48,7 @@
 
 ## Done
 Metric 達標 + 既有測試全綠 + benchmark 入庫 + 沒退化其他 metric + before/after 對照表。
-**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → merge 確認 → auto-merge),再做最終回報。
+**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → 自動 merge,2026-07-18 起無確認),再做最終回報。
 
 ## 禁止(本流程特有,共通禁止見 CLAUDE.md)
 - ❌ 沒量測就開始改(premature optimization)

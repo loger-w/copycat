@@ -25,8 +25,8 @@ harness 的設計理念、演進史與量化成果紀錄在宿主專案 neigui �
 │
 ├─ 版控 skill(skills/branch-lifecycle.md,~/.claude/skills/)
 │   開工(主線同步 + prefix 分支)/ 收尾(push → PR → review 補齊 →
-│   merge 確認 → auto-merge;離線 fallback local merge)/ 異常處理
-│   五個流程 command 共用(單一 source of truth;merge 確認 = 唯一必停點)
+│   自動 merge,2026-07-18 起全程無確認;離線 fallback local merge)/ 異常處理
+│   五個流程 command 共用(單一 source of truth)
 │
 ├─ Review agent 定義(agents/,~/.claude/agents/)
 │   design-reviewer(/feat P1,medium)/ impl-spec-reviewer(/feat P2,low)/
@@ -55,9 +55,7 @@ harness 的設計理念、演進史與量化成果紀錄在宿主專案 neigui �
 │   harness-context.py — SessionStart/UserPromptSubmit 注入進行中 /feat
 │                        的 phase 與 gate(soft reminder,弱模型防遺忘)
 │   harness-stop-audit.py — Stop 審計 state.json 回寫與收件匣義務
-│   harness-push-gate.py  — 流程分支 push 放行(嚴格 fullmatch);
-│                           push main / force / gh pr merge 強制 user 確認
-│                           (鐵則 H 硬化;merge ask = PR 收尾單一確認點)
+│   (harness-push-gate.py 已於 2026-07-18 除役 — push / merge 全自動)
 │   tests/             — hooks 的 pytest(強制層有 bug 比沒有更糟)
 │
 └─ 自我改進迴路
@@ -86,7 +84,7 @@ harness 的設計理念、演進史與量化成果紀錄在宿主專案 neigui �
 | 改既有功能的行為或介面 | `/mod <改什麼>` |
 | 純結構整理(行為不變) | `/refactor <為什麼現在做>` |
 | 有量化目標的變快 | `/perf <metric + 目標數字>`(沒數字會被擋,「感覺慢」→ 先 `/bug` 或 `/refactor`) |
-| 想全自動跑到某個檢查點 | `/auto <退出條件> /feat <目標>`(收尾自動 push + 開 PR;merge 確認框仍會停) |
+| 想全自動跑到某個檢查點 | `/auto <退出條件> /feat <目標>`(收尾自動 push + 開 PR + merge 到底,2026-07-18 起無 merge 確認) |
 | 完成前驗證 | 各流程內建呼叫 `auto-verify`,不需手動 |
 | 深度審查當前 diff | `/code-review`(想要多 agent 深審在訊息加 `ultracode`) |
 | 動 FinMind / cancel 鏈 / e2e / 前端某塊之前 | 對應主題 skill 會自動掛上;手動看:`.claude/skills/` 各 description |
@@ -97,7 +95,7 @@ harness 的設計理念、演進史與量化成果紀錄在宿主專案 neigui �
 
 ```bash
 cp ~/.claude/commands/{feat,bug,mod,perf,refactor,auto}.md docs/harness/commands/
-cp ~/.claude/hooks/{block-no-verify,safety-hooks,format-on-edit,harness_lib,harness-context,harness-stop-audit,harness-push-gate,check_feat_tags}.py docs/harness/hooks/
+cp ~/.claude/hooks/{block-no-verify,safety-hooks,format-on-edit,harness_lib,harness-context,harness-stop-audit,check_feat_tags}.py docs/harness/hooks/
 cp ~/.claude/hooks/tests/test_*.py docs/harness/hooks/tests/
 cp ~/.claude/skills/auto-verify/SKILL.md docs/harness/skills/auto-verify.md
 cp ~/.claude/skills/branch-lifecycle/SKILL.md docs/harness/skills/branch-lifecycle.md

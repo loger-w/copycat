@@ -30,7 +30,7 @@
    - 🔴 行為改動:先改測試讓它紅 → 改實作讓它綠
    - 🟢 新功能:先寫紅測試 → 實作 → 綠
    - Commit 前 cat `docs/next-time.md`(順手衝動寫進去)
-5. **Phase 5|自評**:`/code-review`(**預設 medium 檔位**,xhigh 留 user 顯式要求;**輸出契約**:P0/P1 逐條展開,P2 慣例 / 風格類彙總計數不逐條 receiving,疑似行為級 P2 例外照常展開)→ `superpowers:receiving-code-review` 分類處理 → inline 完工自查 checklist(測試齊全 / 三類 commit 分明 / 文件同步)→ 自評收斂後把當下 HEAD sha 追記到 change-spec.md 末尾一行 `self_review_head: <sha>`(收尾節 review 增量判準)
+5. **Phase 5|自評**:`/code-review`(**預設 medium 檔位**,xhigh 留 user 顯式要求;**輸出契約**:P0/P1 逐條展開,P2 慣例 / 風格類彙總計數不逐條 receiving,疑似行為級 P2 例外照常展開;minimal-model finder 的 dispatch / 快篩紀律同 /feat Phase 4 步驟 1)→ `superpowers:receiving-code-review` 分類處理 → inline 完工自查 checklist(測試齊全 / 三類 commit 分明 / 文件同步)→ 自評收斂後把當下 HEAD sha 追記到 change-spec.md 末尾一行 `self_review_head: <sha>`(收尾節 review 增量判準)
 6. **Phase 6|自動化驗證**:呼叫 `auto-verify` skill 全綠。**既有測試紅時對照 Phase 3 spec**:
    - 該紅(🔴)→ 改 assertion(行為真的變了)
    - **不該紅 → 不改 assertion**,代表打到無關東西,回去看打到什麼
@@ -57,7 +57,7 @@
 
 ## Done
 目標成功條件全綠 + 既有行為白名單全保留 + 三類 commit 分明 + migration 可逆(若有)。
-**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → merge 確認 → auto-merge),再做最終回報。
+**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → 自動 merge,2026-07-18 起無確認),再做最終回報。
 
 ## 禁止(本流程特有,共通禁止見 CLAUDE.md)
 - ❌ 「順手」refactor / rename / 風格修正(寫進 `docs/next-time.md`)

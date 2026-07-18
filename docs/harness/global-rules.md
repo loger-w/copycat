@@ -50,9 +50,9 @@ TDD 走 `superpowers:test-driven-development`(紅先行)。沒測試保護的 co
 - 資源:Workflow `agent()` 預設 `effort:'low'` 省額度;Agent tool 無 effort 參數改用最小可勝任 model(如 haiku);難 judge 才升級且說明理由
 
 ## H. Git 推送紀律
-- 流程分支 push(單獨指令 `git push -u origin <feat|fix|mod|refactor|perf>/<slug>`,PR 收尾用)屬自動步驟,不必停。
-- 其他 push(main / `--force` / 非流程分支)前必列 `origin/<branch>..HEAD` commit 清單 + 目標 branch 給我確認;「push」≠「直推 main」。
-- `gh pr merge` = PR 收尾單一確認點(push-gate hook ask 框,試用完按 allow 即 merge 到底)。自主模式(/auto)不豁免。
+- **2026-07-18 起 push / merge 全自動**:所有 `git push`(含 main / `--force` / 非流程分支)與 `gh pr merge` 屬自動步驟,不需 user 確認(取代 2026-07-07「單一確認點」拍板;push-gate hook 已除役)。
+- 推 main 或 `--force` 時,回覆中附 `origin/<branch>..HEAD` commit 清單 + 目標 branch **告知**(事後可追溯;是告知不是等確認)。
+- 多 session 並行動 main 的前提不變:push / merge 前重查 HEAD 與 origin 狀態,偏好新 commit 不 amend。
 
 ---
 

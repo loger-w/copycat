@@ -30,7 +30,7 @@
 
 ## Done
 紅測試綠 + 既有測試保持綠 + regression 抽樣綠 + 反向驗證通過。
-**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → merge 確認 → auto-merge),再做最終回報。
+**全過後呼叫 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → 自動 merge,2026-07-18 起無確認),再做最終回報。
 
 ## 禁止(本流程特有,共通禁止見 CLAUDE.md)
 - ❌ 「無法重現,姑且修一下」

@@ -72,8 +72,9 @@
 
 1. 跑 `/code-review`(**預設 medium 檔位**;xhigh 全量掃描保留給 user 顯式要求 — 2026-07-06 實證:xhigh 52 候選中真 P1 僅 1 條),**雙焦點**:(a) implementation bug;(b) **missing-from-spec** — 回看 design.md 交叉確認「spec 機制在 impl 有沒有 spec 沒提到的副作用」。寫 `code-review-round-<N>.json`
    - **輸出契約**:round JSON 只逐條展開 P0/P1;P2 慣例 / 風格類彙總為 `p2_summary`(計數 + 主題一行),**不逐條 receiving**。例外:P2 中疑似行為級(資料正確性 / 時序 / 邊界)照常展開
+   - **Dispatch / 快篩紀律**(2026-07-11 meta-review,同根因收斂:minimal-model finder 對「機械事實」與「prompt 內排除契約」皆不可靠,把關在 main agent 不在 finder):(a) finder prompt 的排除清單(已文件化慣例 / 刻意 pattern)放 prompt **開頭**並要求輸出前對照自檢 — 此為降噪手段,不可依賴;(b) candidate 進 receiving / verifier dispatch 前 main agent **先機械快篩**:grep/Read 可直接查證的 claim(pragma / import / 行號 / 檔案存在)先反證,誤報直接記 REFUTED 不 dispatch verifier;命中排除清單者彙總計數丟棄,不逐條 receiving
 2. 呼叫 `superpowers:receiving-code-review` 對每條 finding 分類。**Verify / skeptic 階段前,先摘 design.md changelog 的 accepted findings + rationale 注入 verify prompt**(避免 refute 事後合理的設計收窄)。Lens 經驗值:mature codebase 上 test_coverage lens 命中率最高,correctness / consistency 易產生被 refute 的風格建議 — lens prompt 要角度真差異化
-3. accepted 依層級回對應 phase:spec 漏 → Phase 1/2 改文件 / impl 漏 → Phase 3 / test 漏 → Phase 3 紅先行(鐵則 C)。**Test-gap finding 補 lock test**:鎖「已正確行為」天生無紅 → 走 mutation 抽驗(手動改壞 → lock test 紅 → 還原 → 綠),commit 用 `[lock]` tag + body 註 `mutation-verified`
+3. accepted 依層級回對應 phase:spec 漏 → Phase 1/2 改文件 / impl 漏 → Phase 3 / test 漏 → Phase 3 紅先行(鐵則 C)。**Test-gap finding 補 lock test**:鎖「已正確行為」天生無紅 → 走 mutation 抽驗(手動改壞 → lock test 紅 → 還原 → 綠),commit 用 `[lock]` tag + body 註 `mutation-verified`。**改壞 / 還原一律用 Edit 工具成對操作,禁止 `git checkout` / `git restore`**(會連同掃掉同檔尚未 commit 的 review fix;2026-07-11 實證損失後補)
 4. **退場條件**:round 1 accepted ≤ 5 且無 P0 且 fix 後自動化測試全綠 → 可單輪退場;accepted > 5 或有 P0 → 強制 round 2 verify。loop max 3 輪
 5. 完成後跑 **inline 完工自查 checklist**(不呼叫 requesting-code-review — 該 skill 是 dispatch reviewer 流程,不是自查):測試齊全 / commit 分類分明 / 文件同步 / known-risk 已標記
 6. 自評收斂後把當下 HEAD sha 寫入 state.json `self_review_head`(收尾節 review 增量判準:`self_review_head..HEAD` 非空才補增量 review)
@@ -107,7 +108,7 @@
 
 ## Phase 8:整合與收尾
 
-1. 收尾路徑:**預設走 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → merge 確認 → auto-merge;2026-07-07 拍板)— **顯式覆寫** `superpowers:finishing-a-development-branch` 的三選一互動,理由:solo 無 reviewer,user 拍板自動化。執行順序:步驟 2 tag 驗證 → 步驟 3 artifact commit → 收尾節
+1. 收尾路徑:**預設走 `branch-lifecycle` 收尾節**(push → PR → review 補齊 → 自動 merge;2026-07-18 拍板全自動無確認)— **顯式覆寫** `superpowers:finishing-a-development-branch` 的三選一互動,理由:solo 無 reviewer,user 拍板自動化。執行順序:步驟 2 tag 驗證 → 步驟 3 artifact commit → 收尾節
 2. **Commit tag 機械化驗證(script 化,2026-07-06)**:
    ```bash
    python ~/.claude/hooks/check_feat_tags.py --state .claude/feat/<slug>/state.json
@@ -117,7 +118,7 @@
    ```bash
    git add ".claude/feat/<slug>/" && git commit -m "chore(feat-<slug>): artifacts"
    ```
-   不允許 `git add -f` 短路(會掩蓋 exclude 是否真清除)
+   不允許 `git add -f` 短路(會掩蓋 exclude 是否真清除)。**分支條件**:repo `.gitignore` 排除 `.claude/` → 沿專案政策 skip artifact commit,state.json 記 `artifact_commit: "skipped (.claude/ gitignored)"`(2026-07-11 copycat 實證;有 commit 前例的專案如 neigui 照常 commit)
 4. 非預設路徑(user 指定才走):**保留 branch**(state.json 標 `paused: <reason>`,不 push 不 merge)。PR 已是預設收尾;merge 規則在 branch-lifecycle,不重抄
 5. Worktree 清理(若有):`git worktree remove <path>` + `git branch -d feat/<slug>`
 
@@ -159,6 +160,7 @@
   "scope_overrides": { "goal_efficiency_mode": false },
   "last_updated": "<ISO>", "project_shape": null,
   "last_commit_sha": null, "final_merge_sha": null, "self_review_head": null,
+  "artifact_commit": null,
   "sc_cycle_counts": {
     "_unscoped": { "phase_1": 0, "phase_2": 0, "phase_3": 0, "phase_4": 0, "phase_5": 0, "phase_6": 0, "phase_7": 0, "total": 0 }
   },
@@ -169,8 +171,8 @@
 ## 自主模式建議
 - 完整契約見 `~/.claude/commands/auto.md`
 - **S 級**想全自動:`/auto Phase 8.5 完成 /feat <desc>`
-- 中段自動(merge 確認天然停在收尾):`/auto Phase 7 結構化表格全綠 /feat <desc>`
-- **L 級不建議全自動**(Phase 0 對齊 + 收尾 merge 確認前人工試用價值高)
+- 中段自動:`/auto Phase 7 結構化表格全綠 /feat <desc>`(2026-07-18 起收尾自動 merge 到底,不再天然停在 merge 確認)
+- **L 級不建議全自動**(Phase 0 對齊價值高;merge 確認已移除,想在 merge 前人工試用就不要疊 /auto 跑完收尾)
 
 ## Done
 **Phase 8 完成 + Phase 8.5 (A)(B)(C) 都處理**才算結束:Phase 7 表格全綠 / Phase 8 tag 驗證過 + artifact commit / 沉澱寫入 + GC pass + meta-review 檢查,缺一不可。
