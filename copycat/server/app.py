@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +24,10 @@ class SelectBody(BaseModel):
 def _default_source() -> QuoteSource:
     from copycat.live.tc4 import TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
 
-    return TC4QuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+    return TC4QuoteSource(
+        port=os.environ.get("TC4_PORT", "50774"),
+        backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
+    )
 
 
 def create_app(
@@ -34,7 +37,7 @@ def create_app(
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         runtime = EngineRuntime(
             source if source is not None else _default_source(),
             throttle_secs=throttle_secs,

@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+import zmq
+
 from copycat.live.models import (
     OptionContract,
     SeriesInfo,
@@ -111,7 +113,7 @@ class TC4QuoteSource:
         self._session = session
         self._sub_port: str | None = None
         self._poll_wait = poll_wait_secs
-        self._backfill_date = backfill_date
+        self._backfill_date = backfill_date.replace("-", "") if backfill_date else None
         self._on_tick: Callable[[Tick], None] | None = None
         self._subscribed: set[str] = set()
         self._listener: threading.Thread | None = None
@@ -168,6 +170,10 @@ class TC4QuoteSource:
         assert self._api is not None
         ymd = self._backfill_date or _today_ymd()
         start, end = f"{ymd}00", f"{ymd}06"
+        # 先對全鏈送 SubHistory 讓 TC4 平行備資料再逐檔收割 —
+        # 逐檔「Sub → 等 → 收」實測 280 檔 ~10 分鐘,先全訂可砍掉大部分等待(Phase 4 自評)
+        for contract in series.contracts:
+            self._api.SubHistory(self._session, contract.symbol, "TICKS", start, end)
         ticks: list[Tick] = []
         for i, contract in enumerate(series.contracts):
             ticks.extend(self._fetch_symbol_ticks(contract.symbol, start, end))
@@ -181,15 +187,14 @@ class TC4QuoteSource:
     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
         assert self._api is not None
         api = self._api
-        api.SubHistory(self._session, symbol, "TICKS", start, end)
         rows: list[dict] = []
         first: dict | None = None
-        for _ in range(6):
-            if self._poll_wait:
-                time.sleep(self._poll_wait)
+        for attempt in range(6):
             first = api.GetHistory(self._session, symbol, "TICKS", start, end, "0")
             if first and first.get("HisData"):
                 break
+            if self._poll_wait and attempt < 5:
+                time.sleep(self._poll_wait * 0.3)  # 全鏈已先 SubHistory,等待縮短
         if not first or not first.get("HisData"):
             return []
         qry_index = "0"
@@ -233,7 +238,9 @@ class TC4QuoteSource:
             for sym in list(self._subscribed):
                 try:
                     self._rt_request("UNSUBQUOTE", sym)
-                except Exception:  # noqa: BLE001 — 收工路徑,盡力退訂後仍必須 Disconnect
+                except (zmq.ZMQError, ConnectionError, OSError, json.JSONDecodeError):
+                    # 收工路徑:退訂失敗多半是連線已死,其餘 symbol 也會失敗;
+                    # 停止嘗試但仍必須往下走 Disconnect(§0a)
                     logger.exception("UNSUBQUOTE failed during close: %s", sym)
                     break
             self._api.Disconnect()  # §0a KeepAlive 生命週期:不呼叫則 process 不退出
@@ -295,6 +302,7 @@ class TC4QuoteSource:
                     resub = list(self._subscribed)
                     self._subscribed = set()
                     for sym in resub:
+                        self._rt_request("UNSUBQUOTE", sym)  # 冪等,與 subscribe 路徑一致(Alt-4)
                         r = self._rt_request("SUBQUOTE", sym)
                         if r.get("Success") == "OK":
                             self._subscribed.add(sym)

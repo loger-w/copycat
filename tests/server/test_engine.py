@@ -135,6 +135,38 @@ async def test_queue_overflow_counts_and_self_heals() -> None:
         await rt.close()
 
 
+async def test_not_ready_snapshot_totals_is_none() -> None:
+    """engine 未就緒時 totals 必須是 None(非空 dict),前端 truthy guard 才會生效。"""
+    rt = EngineRuntime(FakeQuoteSource(), throttle_secs=0.01)
+    snap = rt.latest_snapshot()
+    assert snap["series_id"] is None
+    assert snap["totals"] is None
+
+
+async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
+    """request_self_heal 後即使 tick 連續流入(queue 永不 timeout),自癒仍須觸發。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        assert fake.on_tick is not None
+        rt.request_self_heal()
+
+        async def feeder() -> None:
+            for i in range(120):
+                assert fake.on_tick is not None
+                fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=i + 1, t=i + 1))
+                await asyncio.sleep(0.005)
+
+        task = asyncio.create_task(feeder())
+        await asyncio.sleep(0.25)  # feed 進行中(gap << timeout,timeout 分支不會觸發)
+        healed = fake.backfill_calls.count("TX4.202607")
+        task.cancel()
+        assert healed >= 2
+    finally:
+        await rt.close()
+
+
 async def test_snapshots_throttled_stream_yields_on_change() -> None:
     fake = FakeQuoteSource()
     rt = EngineRuntime(fake, throttle_secs=0.01)

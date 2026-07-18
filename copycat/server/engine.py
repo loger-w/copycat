@@ -70,7 +70,8 @@ class EngineRuntime:
 
     def latest_snapshot(self) -> dict:
         if self._agg is None or self._active is None:
-            return {"series_id": None, "status": self.status, "totals": {}, "curve": []}
+            # totals 必須是 None 而非空 dict:前端以 truthy 判斷有無數據(C-1)
+            return {"series_id": None, "status": self.status, "totals": None, "curve": []}
         return self._agg.snapshot(
             series=self._active,
             status=self.status,
@@ -183,6 +184,9 @@ class EngineRuntime:
             if self._agg is not None:
                 self._agg.route(tick)
                 self._mark_changed()
+            if self._force_heal:
+                # 重連自癒不能只靠 timeout 分支:盤中連續 tick 下 timeout 永不觸發(Alt-3)
+                await self._maybe_self_heal()
 
     def request_self_heal(self) -> None:
         """外部(如 TC4 重連後)要求重跑交接補回遺失段;thread-safe。"""
@@ -192,9 +196,12 @@ class EngineRuntime:
         loop.call_soon_threadsafe(setattr, self, "_force_heal", True)
 
     async def _maybe_self_heal(self) -> None:
-        """DR-10:queue 滿載丟過 tick 且壓力解除(queue 清空)→ 重跑交接補回遺失段。"""
+        """DR-10:queue 滿載丟過 tick 且壓力解除(queue 清空)→ 重跑交接補回遺失段。
+
+        force(重連後)不等 queue 清空 — 交接期間新 tick 進 buffer,不會遺失(Alt-3)。
+        """
         force = self._force_heal
-        if (self.queue_dropped > self._healed_dropped or force) and self._queue.empty():
+        if force or (self.queue_dropped > self._healed_dropped and self._queue.empty()):
             dropped = self.queue_dropped
             logger.warning("self-heal: re-running handover (dropped=%d, forced=%s)", dropped, force)
             self._force_heal = False
