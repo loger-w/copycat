@@ -11,3 +11,4 @@ spikes/catalog_dump/
 spikes/.ruff_cache/
 .claude/
 .env
+spikes/out/
