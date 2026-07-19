@@ -92,6 +92,44 @@ describe("OrderPanel", () => {
     expect(screen.queryByLabelText("價格(點)")).toBeNull();
   });
 
+  it("confirm 失敗關閉 dialog 並顯示錯誤(不允許重試已消耗的 preview_id)", async () => {
+    mockFetch({
+      "/api/trade/account": () => json(account()),
+      "/api/trade/preview": () =>
+        json({
+          preview_id: "pv1",
+          request_id: "rq1",
+          param: {
+            Symbol: SYM,
+            Side: "1",
+            OrderType: "2",
+            TimeInForce: "1",
+            Price: "15.5",
+            OrderQty: "1",
+            PositionEffect: "4",
+          },
+          account_masked: "****9000",
+          mode: "sim",
+        }),
+      "/api/trade/orders": (init) =>
+        init?.method === "POST"
+          ? json({ detail: { error: "BROKER_REJECTED", err_code: "-22" } }, 400)
+          : json(EMPTY_ORDERS),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    fireEvent.click(screen.getByText("送單(預覽)"));
+    await waitFor(() => {
+      expect(screen.getByText("確認送出")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("確認送出"));
+    await waitFor(() => {
+      expect(screen.queryByText("確認送出")).toBeNull(); // dialog 必須關閉(review A1)
+    });
+    expect(screen.getByText(/券商拒單/)).toBeTruthy();
+  });
+
   it("送單(預覽)呼叫 preview API 並開啟確認 dialog", async () => {
     const previewBodies: unknown[] = [];
     mockFetch({
