@@ -1,5 +1,6 @@
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { MetricsBar } from "@/components/MetricsBar";
+import { OrderPanel } from "@/components/OrderPanel";
 import { PnlChart } from "@/components/PnlChart";
 import { QuoteTable } from "@/components/QuoteTable";
 import { SeriesSelect } from "@/components/SeriesSelect";
@@ -33,6 +34,7 @@ export default function App() {
             contracts={snapshot.contracts}
             spotPrice={snapshot.spot?.price ?? null}
           />
+          <OrderPanel />
           <footer className="flex justify-between font-mono text-xs text-ink-dim">
             <span>
               tick {snapshot.totals?.ticks ?? 0} · 未分類 {snapshot.totals?.unclassified_ticks ?? 0}
