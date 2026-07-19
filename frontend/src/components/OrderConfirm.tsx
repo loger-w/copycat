@@ -1,4 +1,4 @@
-import { orderSideText } from "@/lib/trade-text";
+import { orderSideText, shortSymbol } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { OrderPreviewResult } from "@/types";
 
@@ -46,7 +46,7 @@ export function OrderConfirm({
         <dl className="space-y-2">
           <div className={ROW}>
             <dt className={K}>商品</dt>
-            <dd className={V}>{param.Symbol?.replace(/^TC\.[FO]\.TWF\./, "")}</dd>
+            <dd className={V}>{shortSymbol(param.Symbol ?? "")}</dd>
           </div>
           <div className={ROW}>
             <dt className={K}>買賣</dt>

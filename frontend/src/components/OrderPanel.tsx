@@ -3,23 +3,19 @@ import { useState } from "react";
 import { OrderConfirm } from "@/components/OrderConfirm";
 import { OrdersList } from "@/components/OrdersList";
 import { useConfirmOrder, useOrders, usePreviewOrder, useTradeAccount } from "@/hooks/useTrade";
-import { tradeErrorText } from "@/lib/trade-text";
+import { shortSymbol, tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { OrderPreviewResult } from "@/types";
 
 const FIELD =
   "w-full rounded-sm border border-line bg-bg-deep px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none";
 
-// status → 送單鈕 disabled 原因(edge case 1/2/閘一,繁中可區分)
+// status → 送單鈕 disabled 原因(edge case 1/2/閘一);文案由錯誤碼對照導出,單一來源(review p2)
 const BLOCKED_REASON: Record<string, string> = {
-  touchance_down: "達錢未連線",
-  no_account: "請在達錢 4 登入交易帳號",
-  live_blocked: "正式戶未啟用(DQ4_LIVE)",
+  touchance_down: tradeErrorText("TOUCHANCE_DOWN"),
+  no_account: tradeErrorText("TRADE_NOT_READY"),
+  live_blocked: tradeErrorText("LIVE_DISABLED"),
 };
-
-function shortSymbol(symbol: string): string {
-  return symbol.replace(/^TC\.[FO]\.TWF\./, "");
-}
 
 export function OrderPanel() {
   const account = useTradeAccount();

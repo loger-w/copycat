@@ -74,8 +74,9 @@ class EngineRuntime:
         """可下單商品全集:active 序列合約(SeriesInfo 全集,非 snapshot 已成交子集)∪ TXF。
 
         trade 白名單資料驅動(design R5),序列動態發現、不 hardcode 產品碼(CLAUDE.md §8)。
+        SPOT_SYMBOL 來自 zmq-free 的 models(review C1:fake-trade 場景不拉 pyzmq)。
         """
-        from copycat.live.tc4 import SPOT_SYMBOL  # 延遲 import:server 不強制 pyzmq
+        from copycat.live.models import SPOT_SYMBOL
 
         symbols = {SPOT_SYMBOL}
         if self._active is not None:

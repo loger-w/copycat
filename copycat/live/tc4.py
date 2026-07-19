@@ -20,6 +20,7 @@ from typing import Any, Callable
 import zmq
 
 from copycat.live.models import (
+    SPOT_SYMBOL,
     OptionContract,
     SeriesInfo,
     Tick,
@@ -28,13 +29,13 @@ from copycat.live.models import (
     parse_realtime,
 )
 
+__all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_series"]
+
 logger = logging.getLogger(__name__)
 
 # Touchance 官方範例公開的 app 憑證(同 backfill_tc4),非帳號 secret
 TC4_APPID = "ZMQ"
 TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
-
-SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 TXF(FITX 不存在,07-20 實證)
 
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0

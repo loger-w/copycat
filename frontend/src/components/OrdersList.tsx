@@ -1,10 +1,6 @@
-import { orderSideText, orderStatusText } from "@/lib/trade-text";
+import { orderSideText, orderStatusText, shortSymbol } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { OrderRow, OrdersView } from "@/types";
-
-function shortSymbol(symbol: string): string {
-  return symbol.replace(/^TC\.[FO]\.TWF\./, "");
-}
 
 function Rows({ rows, empty }: { rows: OrderRow[]; empty: string }) {
   if (rows.length === 0) {

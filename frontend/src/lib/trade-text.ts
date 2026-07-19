@@ -38,3 +38,7 @@ const SIDE_TEXT: Record<string, string> = { "1": "買", "2": "賣" };
 export function orderSideText(raw: string): string {
   return SIDE_TEXT[raw] ?? raw;
 }
+
+export function shortSymbol(symbol: string): string {
+  return symbol.replace(/^TC\.[FO]\.TWF\./, "");
+}
