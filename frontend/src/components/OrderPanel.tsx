@@ -121,6 +121,7 @@ export function OrderPanel() {
             商品
             <select
               aria-label="商品"
+              name="symbol"
               value={selected}
               onChange={(e) => setSymbol(e.target.value)}
               className={cn(FIELD, "mt-1")}
@@ -196,6 +197,7 @@ export function OrderPanel() {
               口數
               <input
                 aria-label="口數"
+                name="qty"
                 type="number"
                 min={1}
                 value={qty}
@@ -208,6 +210,7 @@ export function OrderPanel() {
                 價格(點)
                 <input
                   aria-label="價格(點)"
+                  name="price"
                   inputMode="decimal"
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
