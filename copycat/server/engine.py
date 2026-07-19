@@ -70,6 +70,18 @@ class EngineRuntime:
     def list_series(self) -> list[SeriesInfo]:
         return list(self._series.values())
 
+    def orderable_symbols(self) -> set[str]:
+        """可下單商品全集:active 序列合約(SeriesInfo 全集,非 snapshot 已成交子集)∪ TXF。
+
+        trade 白名單資料驅動(design R5),序列動態發現、不 hardcode 產品碼(CLAUDE.md §8)。
+        """
+        from copycat.live.tc4 import SPOT_SYMBOL  # 延遲 import:server 不強制 pyzmq
+
+        symbols = {SPOT_SYMBOL}
+        if self._active is not None:
+            symbols.update(c.symbol for c in self._active.contracts)
+        return symbols
+
     def latest_snapshot(self) -> dict:
         if self._agg is None or self._active is None:
             # totals 必須是 None 而非空 dict:前端以 truthy 判斷有無數據(C-1)

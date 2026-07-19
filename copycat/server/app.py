@@ -2,23 +2,59 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from pathlib import Path
+from typing import AsyncGenerator, Final, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from copycat.live.trade_models import (
+    BrokerRejectedError,
+    OrderRequest,
+    TouchanceDownError,
+    millipts_from_price_str,
+)
+from copycat.server.audit import AuditWriteError
 from copycat.server.engine import EngineRuntime, QuoteSource
+from copycat.server.trade import (
+    ConfirmRequiredError,
+    InvalidOrderError,
+    LiveBlockedError,
+    NotReadyError,
+    PreviewExpiredError,
+    SymbolNotAllowedError,
+    TradeRuntime,
+    TradeSource,
+)
 
 logger = logging.getLogger(__name__)
+
+# sentinel:trade_source=None = 不建 trade(既有測試零連線);__main__ 傳 DEFAULT_TRADE 才建真 source
+DEFAULT_TRADE: Final = object()
+
+_TRADE_START_TIMEOUT_SECS = 15.0
 
 
 class SelectBody(BaseModel):
     series_id: str
+
+
+class PreviewBody(BaseModel):
+    symbol: str
+    side: Literal["buy", "sell"]
+    kind: Literal["limit", "market"]
+    qty: int
+    price: str | None = None
+
+
+class SubmitBody(BaseModel):
+    preview_id: str
 
 
 def _default_source() -> QuoteSource:
@@ -30,9 +66,20 @@ def _default_source() -> QuoteSource:
     )
 
 
+def _default_trade_source() -> TradeSource:
+    if os.environ.get("TXO_FAKE_TRADE") == "1":
+        from copycat.server.fake_trade import FakeTradeSource
+
+        return FakeTradeSource()
+    from copycat.live.tc4_trade import TC4TradeSource  # 延遲 import:測試不觸 pyzmq/TC4
+
+    return TC4TradeSource(port=os.environ.get("TC4_TRADE_PORT", "51207"))
+
+
 def create_app(
     source: QuoteSource | None = None,
     *,
+    trade_source: TradeSource | object | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
@@ -45,9 +92,31 @@ def create_app(
         )
         app.state.runtime = runtime
         await runtime.start()
+        trade: TradeRuntime | None = None
+        resolved = _default_trade_source() if trade_source is DEFAULT_TRADE else trade_source
+        if resolved is not None:
+            trade = TradeRuntime(
+                cast(TradeSource, resolved),
+                live_enabled=os.environ.get("DQ4_LIVE") == "1",
+                sim_patterns=[p for p in os.environ.get("DQ4_SIM_BROKERS", "SIM").split(",") if p],
+                audit_dir=Path(os.environ.get("TXO_AUDIT_DIR", "data/audit")),
+                allowed_symbols=runtime.orderable_symbols,
+            )
+            try:
+                await asyncio.wait_for(trade.start(), _TRADE_START_TIMEOUT_SECS)
+            except (TimeoutError, TouchanceDownError):
+                # R2-7:中段逾時 best-effort 清理 listener;app 照常起,quote 不受影響
+                logger.warning("trade start 逾時/失敗,best-effort 清理後以 touchance_down 續行")
+                try:
+                    await trade.close()
+                except (TouchanceDownError, OSError):
+                    logger.exception("trade close 失敗(忽略)")
+        app.state.trade = trade
         try:
             yield
         finally:
+            if trade is not None:
+                await trade.close()
             await runtime.close()
 
     app = FastAPI(lifespan=lifespan)
@@ -107,5 +176,79 @@ def create_app(
                 await websocket.send_json(snap)
         except WebSocketDisconnect:
             return
+
+    # ---- trade(§7 三道閘;錯誤分流 design §2.3/§2.5) ----
+
+    _TRADE_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
+        TouchanceDownError: (502, "TOUCHANCE_DOWN"),
+        NotReadyError: (503, "TRADE_NOT_READY"),
+        LiveBlockedError: (403, "LIVE_DISABLED"),
+        ConfirmRequiredError: (400, "CONFIRM_REQUIRED"),
+        PreviewExpiredError: (400, "PREVIEW_EXPIRED"),
+        InvalidOrderError: (400, "INVALID_ORDER"),
+        SymbolNotAllowedError: (400, "SYMBOL_NOT_ALLOWED"),
+        AuditWriteError: (500, "AUDIT_WRITE_FAILED"),
+    }
+
+    for exc_type, (status_code, code) in _TRADE_ERROR_MAP.items():
+
+        def _make_handler(sc: int, error_code: str):  # noqa: ANN202 - closure factory
+            async def _handler(request: Request, exc: Exception) -> JSONResponse:
+                return JSONResponse(status_code=sc, content={"detail": {"error": error_code}})
+
+            return _handler
+
+        app.add_exception_handler(exc_type, _make_handler(status_code, code))
+
+    @app.exception_handler(BrokerRejectedError)
+    async def _broker_rejected(request: Request, exc: BrokerRejectedError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": {
+                    "error": "BROKER_REJECTED",
+                    "err_code": exc.err_code,
+                    "err_msg": exc.err_msg,
+                }
+            },
+        )
+
+    def _trade(request: Request) -> TradeRuntime:
+        trade: TradeRuntime | None = request.app.state.trade
+        if trade is None:
+            raise NotReadyError("trade source not configured")
+        return trade
+
+    @app.get("/api/trade/account")
+    async def trade_account(request: Request) -> dict:
+        return _trade(request).account_view()
+
+    @app.post("/api/trade/preview")
+    async def trade_preview(request: Request, body: PreviewBody) -> dict:
+        trade = _trade(request)
+        price_millipts: int | None = None
+        if body.kind == "limit":
+            if body.price is None:
+                raise InvalidOrderError("limit order requires price")
+            try:
+                price_millipts = millipts_from_price_str(body.price)
+            except ValueError:
+                raise InvalidOrderError(f"invalid price: {body.price!r}") from None
+        req = OrderRequest(
+            symbol=body.symbol,
+            side=body.side,
+            kind=body.kind,
+            qty=body.qty,
+            price_millipts=price_millipts,
+        )
+        return await trade.preview(req)
+
+    @app.post("/api/trade/orders")
+    async def trade_submit(request: Request, body: SubmitBody) -> dict:
+        return await _trade(request).submit(body.preview_id)
+
+    @app.get("/api/trade/orders")
+    async def trade_orders(request: Request) -> dict:
+        return _trade(request).orders_view()
 
     return app
