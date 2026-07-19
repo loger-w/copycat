@@ -80,6 +80,17 @@ describe("OrderPanel", () => {
     expect(btn?.getAttribute("disabled")).not.toBeNull();
   });
 
+  it("live_blocked 顯示正式戶未啟用(含 DQ4_LIVE 提示)且鈕 disabled", async () => {
+    mockFetch({
+      "/api/trade/account": () => json(account({ status: "live_blocked", mode: null })),
+      "/api/trade/orders": () => json(EMPTY_ORDERS),
+    });
+    renderPanel();
+    expect(await screen.findByText("正式戶未啟用(DQ4_LIVE)")).toBeTruthy();
+    const btn = screen.getByText("送單(預覽)").closest("button");
+    expect(btn?.getAttribute("disabled")).not.toBeNull();
+  });
+
   it("切市價隱藏價格欄", async () => {
     mockFetch({
       "/api/trade/account": () => json(account()),

@@ -4,7 +4,7 @@
 const TRADE_ERROR_TEXT: Record<string, string> = {
   TOUCHANCE_DOWN: "達錢未連線",
   TRADE_NOT_READY: "交易服務未就緒(請在達錢 4 登入交易帳號)",
-  LIVE_DISABLED: "正式戶未啟用",
+  LIVE_DISABLED: "正式戶未啟用(DQ4_LIVE)",
   CONFIRM_REQUIRED: "確認已失效,請重新送單",
   PREVIEW_EXPIRED: "預覽已過期,請重新送單",
   INVALID_ORDER: "下單參數不合法",
