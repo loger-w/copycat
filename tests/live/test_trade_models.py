@@ -125,6 +125,11 @@ class TestParsers:
         assert rep.err_msg == "tick size"
         assert rep.raw is r
 
+    @pytest.mark.parametrize("zero", [0, "0"])
+    def test_errcode_zero_means_no_error(self, zero: object) -> None:
+        rep = parse_execution_report({"ReportID": "X", "ErrCode": zero})
+        assert rep.err_code is None  # 慣例 0 = 無錯,不得整列標紅(review A4)
+
     def test_parse_execution_report_missing_fields(self) -> None:
         rep = parse_execution_report({"ReportID": "X"})
         assert rep.report_id == "X"

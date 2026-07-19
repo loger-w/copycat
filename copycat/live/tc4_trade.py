@@ -123,6 +123,13 @@ class TC4TradeSource:
             logger.warning("TC4 trade dispose: api.lock busy,跳過實體 close(洩漏優於 crash)")
 
     def _req_request(self, obj: dict[str, Any], *, dispose_on_error: bool = True) -> dict:
+        resp, _ = self._req_request_pair(obj, dispose_on_error=dispose_on_error)
+        return resp
+
+    def _req_request_pair(
+        self, obj: dict[str, Any], *, dispose_on_error: bool = True
+    ) -> tuple[dict, Any]:
+        """回傳 (回應, 本次請求用的 api)— 呼叫端要 dispose 必須用這顆 api(review A3)。"""
         api = self._ensure_connected()
         info = self._conn_info
         assert info is not None
@@ -146,7 +153,7 @@ class TC4TradeSource:
             if dispose_on_error:
                 self._dispose(api)
             raise TouchanceDownError(f"TC4 trade request failed: {error}") from error
-        return json.loads(message)
+        return json.loads(message), api
 
     # ---- TradeSource 介面 ----
 
@@ -154,13 +161,12 @@ class TC4TradeSource:
         return parse_accounts(self._req_request({"Request": "ACCOUNTS"}))
 
     def place_order(self, param: dict[str, str]) -> dict:
-        resp = self._req_request({"Request": "NEWORDER", "Param": param})
+        resp, api = self._req_request_pair({"Request": "NEWORDER", "Param": param})
         if resp.get("Success") != "OK":
             err_code = str(resp.get("ErrCode", ""))
             if err_code == "-20":  # 未建立連線 = Touchance 端故障(design R2)
-                api = self._api
-                if api is not None:
-                    self._dispose(api)
+                # dispose 本次請求用的 api;若期間已換新連線,identity guard 使其 no-op(review A3)
+                self._dispose(api)
                 raise TouchanceDownError("TC4 trade not connected to broker (ErrCode -20)")
             raise BrokerRejectedError(err_code, str(resp.get("ErrMsg", "")))
         return resp

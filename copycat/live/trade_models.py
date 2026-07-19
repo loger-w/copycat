@@ -119,6 +119,8 @@ def parse_accounts(msg: Mapping[str, Any]) -> list[AccountInfo]:
 
 def _parse_report(row: Mapping[str, Any]) -> OrderReport:
     err_code = row.get("ErrCode")
+    if err_code in (0, "0"):  # 慣例 0 = 無錯,不得標成錯誤列(值域見 design §8)
+        err_code = None
     err_msg = row.get("ErrMsg")
     return OrderReport(
         report_id=str(row.get("ReportID", "")),

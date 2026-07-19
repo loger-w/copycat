@@ -92,31 +92,47 @@ def create_app(
         )
         app.state.runtime = runtime
         await runtime.start()
+        # trade 初始化任何失敗都不得波及 quote(review B1):非預期例外 → 交易停用(503)
         trade: TradeRuntime | None = None
-        resolved = _default_trade_source() if trade_source is DEFAULT_TRADE else trade_source
-        if resolved is not None:
-            trade = TradeRuntime(
-                cast(TradeSource, resolved),
-                live_enabled=os.environ.get("DQ4_LIVE") == "1",
-                sim_patterns=[p for p in os.environ.get("DQ4_SIM_BROKERS", "SIM").split(",") if p],
-                audit_dir=Path(os.environ.get("TXO_AUDIT_DIR", "data/audit")),
-                allowed_symbols=runtime.orderable_symbols,
-            )
-            try:
-                await asyncio.wait_for(trade.start(), _TRADE_START_TIMEOUT_SECS)
-            except (TimeoutError, TouchanceDownError):
-                # R2-7:中段逾時 best-effort 清理 listener;app 照常起,quote 不受影響
-                logger.warning("trade start 逾時/失敗,best-effort 清理後以 touchance_down 續行")
+        try:
+            resolved = _default_trade_source() if trade_source is DEFAULT_TRADE else trade_source
+            if resolved is not None:
+                trade = TradeRuntime(
+                    cast(TradeSource, resolved),
+                    live_enabled=os.environ.get("DQ4_LIVE") == "1",
+                    sim_patterns=[
+                        p for p in os.environ.get("DQ4_SIM_BROKERS", "SIM").split(",") if p
+                    ],
+                    audit_dir=Path(os.environ.get("TXO_AUDIT_DIR", "data/audit")),
+                    allowed_symbols=runtime.orderable_symbols,
+                )
+                try:
+                    await asyncio.wait_for(trade.start(), _TRADE_START_TIMEOUT_SECS)
+                except (TimeoutError, TouchanceDownError):
+                    # R2-7:中段逾時 best-effort 清理 listener;app 照常起,quote 不受影響
+                    logger.warning("trade start 逾時/失敗,best-effort 清理後以 touchance_down 續行")
+                    try:
+                        await trade.close()
+                    except (TouchanceDownError, OSError):
+                        logger.exception("trade close 失敗(忽略)")
+        except Exception:  # lifespan 邊界:交易停用但 app 必須照常起 + logger.exception(§2)
+            logger.exception("trade 初始化非預期失敗,交易功能停用(quote 不受影響)")
+            if trade is not None:
                 try:
                     await trade.close()
-                except (TouchanceDownError, OSError):
+                except Exception:
                     logger.exception("trade close 失敗(忽略)")
+            trade = None
         app.state.trade = trade
         try:
             yield
         finally:
+            # trade 清理失敗不得擋掉 quote runtime 清理(review B2)
             if trade is not None:
-                await trade.close()
+                try:
+                    await trade.close()
+                except Exception:
+                    logger.exception("trade close 失敗(關機續行)")
             await runtime.close()
 
     app = FastAPI(lifespan=lifespan)

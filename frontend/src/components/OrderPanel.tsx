@@ -34,6 +34,7 @@ export function OrderPanel() {
   const [price, setPrice] = useState("");
   const [pending, setPending] = useState<OrderPreviewResult | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const info = account.data;
   const symbols = info?.orderable_symbols ?? [];
@@ -53,6 +54,7 @@ export function OrderPanel() {
 
   const handlePreview = () => {
     setNotice(null);
+    setSubmitError(null);
     preview.mutate(
       {
         symbol: selected,
@@ -72,6 +74,12 @@ export function OrderPanel() {
         setPending(null);
         confirm.reset();
         setNotice(`已送出(單號 ${result.request_id.slice(0, 8)}),回報見下方列表`);
+      },
+      onError: (err) => {
+        // preview_id 已被 server 消耗(一次性),留在 dialog 重試注定失敗(review A1)
+        setPending(null);
+        confirm.reset();
+        setSubmitError(`${tradeErrorText(err.message)},請重新送單`);
       },
     });
   };
@@ -232,6 +240,7 @@ export function OrderPanel() {
           {preview.error != null && (
             <p className="text-xs text-loss">{tradeErrorText(preview.error.message)}</p>
           )}
+          {submitError != null && <p className="text-xs text-loss">{submitError}</p>}
           {notice != null && <p className="text-xs text-accent">{notice}</p>}
         </form>
 

@@ -231,6 +231,7 @@ class TradeRuntime:
                 when=date.today(),
             )
         )  # 前置寫失敗 → AuditWriteError 冒泡拒單(閘三)
+        self._audit_degraded = False  # 寫入成功即清旗(review A2)
         preview_id = uuid.uuid4().hex
         self._previews[preview_id] = (request_id, param, self._now() + self._ttl)
         return {
@@ -257,6 +258,7 @@ class TradeRuntime:
                 when=date.today(),
             )
         )  # 前置寫失敗 → 拒單(單尚未送出)
+        self._audit_degraded = False  # 寫入成功即清旗(review A2)
         try:
             resp = await asyncio.to_thread(self._source.place_order, param)
         except BrokerRejectedError as exc:
@@ -304,6 +306,8 @@ class TradeRuntime:
         except AuditWriteError:
             logger.exception("送出後審計寫入失敗(降級,不回 5xx)")
             self._audit_degraded = True
+        else:
+            self._audit_degraded = False  # 寫入恢復即清旗(review A2)
 
     # ---- 回報 store(listener thread 進入點) ----
 
@@ -318,6 +322,8 @@ class TradeRuntime:
         except AuditWriteError:
             logger.exception("report 審計寫入失敗(降級)")
             self._audit_degraded = True
+        else:
+            self._audit_degraded = False  # 寫入恢復即清旗(review A2)
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._store_report, kind, rep)

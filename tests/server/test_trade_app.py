@@ -22,6 +22,9 @@ SERIES = SeriesInfo(series_id="TXO.202607", name="TXO 202607", expiry="202607", 
 
 
 class FakeQuoteSource:
+    def __init__(self) -> None:
+        self.closed = False
+
     def list_series(self) -> list[SeriesInfo]:
         return [SERIES]
 
@@ -35,7 +38,7 @@ class FakeQuoteSource:
         return None
 
     def close(self) -> None:
-        return None
+        self.closed = True
 
 
 class FakeTrade:
@@ -72,11 +75,16 @@ def make_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     trade: FakeTrade | None,
+    quote: FakeQuoteSource | None = None,
 ) -> TestClient:
     monkeypatch.setenv("TXO_AUDIT_DIR", str(tmp_path / "audit"))
     monkeypatch.delenv("DQ4_LIVE", raising=False)
     return TestClient(
-        create_app(FakeQuoteSource(), trade_source=trade, throttle_secs=0.01),
+        create_app(
+            quote if quote is not None else FakeQuoteSource(),
+            trade_source=trade,
+            throttle_secs=0.01,
+        ),
         raise_server_exceptions=False,
     )
 
@@ -205,6 +213,37 @@ class TestErrorMapping:
             res = do_preview(client)
             assert res.status_code == 403
             assert res.json()["detail"]["error"] == "LIVE_DISABLED"
+
+
+class TestLifespanRobustness:
+    def test_unexpected_trade_error_disables_trade_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """trade 初始化炸非預期例外 → 交易停用(503),quote 照常(review B1)。"""
+
+        class BrokenTrade(FakeTrade):
+            def accounts(self) -> list[AccountInfo]:
+                raise RuntimeError("boom")
+
+        with make_client(tmp_path, monkeypatch, BrokenTrade()) as client:
+            assert client.get("/api/txo/series").status_code == 200
+            res = client.get("/api/trade/account")
+            assert res.status_code == 503
+            assert res.json()["detail"]["error"] == "TRADE_NOT_READY"
+
+    def test_trade_close_failure_does_not_block_quote_close(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """關機時 trade.close() 拋錯不得擋掉 quote runtime 清理(review B2)。"""
+
+        class BadCloseTrade(FakeTrade):
+            def close(self) -> None:
+                raise RuntimeError("close boom")
+
+        quote = FakeQuoteSource()
+        with make_client(tmp_path, monkeypatch, BadCloseTrade(), quote=quote) as client:
+            client.get("/api/trade/account")
+        assert quote.closed is True
 
 
 class TestOrdersRoute:

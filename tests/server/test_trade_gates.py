@@ -265,6 +265,32 @@ class TestGateThree:
         assert result["result"]["Success"] == "OK"
         assert rt.orders_view()["audit_degraded"] is True
 
+    async def test_audit_degraded_recovers_after_successful_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """暫時性審計失敗不得變永久警示:下一次寫入成功即清旗(review A2)。"""
+        import copycat.server.trade as trade_mod
+
+        src = SpyTradeSource()
+        rt = make_runtime(src, tmp_path)
+        await rt.start()
+        p1 = await rt.preview(order())
+        real_append = trade_mod.append_audit
+        fail_once = {"armed": True}
+
+        def flaky(base: Path, record: dict, *, when: Any) -> None:
+            if record.get("event") == "result" and fail_once["armed"]:
+                fail_once["armed"] = False
+                raise trade_mod.AuditWriteError("transient")
+            real_append(base, record, when=when)
+
+        monkeypatch.setattr(trade_mod, "append_audit", flaky)
+        await rt.submit(p1["preview_id"])
+        assert rt.orders_view()["audit_degraded"] is True
+        p2 = await rt.preview(order())
+        await rt.submit(p2["preview_id"])  # 這輪審計全成功
+        assert rt.orders_view()["audit_degraded"] is False
+
     async def test_broker_reject_still_audits_result(self, tmp_path: Path) -> None:
         src = SpyTradeSource()
         src.place_error = BrokerRejectedError("-22", "tick size")

@@ -15,17 +15,20 @@ from copycat.live.trade_models import BrokerRejectedError, TouchanceDownError
 
 
 class FakeSocket:
-    """REQ socket 替身:依 Request 類型回 scripted 回應;可注入 zmq.Again。"""
+    """REQ socket 替身:依 Request 類型回 scripted 回應;可注入 zmq.Again 與 recv side-effect。"""
 
     def __init__(self, responses: dict[str, list[dict] | dict]) -> None:
         self.responses = responses
         self.sent: list[dict] = []
         self.raise_again_on: set[str] = set()
+        self.on_recv: Callable[[], None] | None = None
 
     def send_string(self, text: str) -> None:
         self.sent.append(json.loads(text))
 
     def recv(self) -> bytes:
+        if self.on_recv is not None:
+            self.on_recv()
         req = self.sent[-1]["Request"]
         if req in self.raise_again_on:
             raise zmq.Again()
@@ -107,6 +110,20 @@ class TestPlaceOrder:
         src, _ = make_source({"NEWORDER": {"Success": "FAIL", "ErrCode": "-20"}})
         with pytest.raises(TouchanceDownError):
             src.place_order({"Symbol": "S"})
+
+    def test_errcode_minus_20_disposes_request_api_not_current(self) -> None:
+        """-20 dispose 的對象必須是本次請求用的 api;若期間已換新連線不得誤殺(review A3)。"""
+        src, api = make_source({"NEWORDER": {"Success": "FAIL", "ErrCode": "-20"}})
+        replacement = FakeTradeApi({})
+
+        def swap() -> None:
+            src._api = replacement  # 模擬:回覆抵達前另一條路徑已 dispose + lazy reconnect
+
+        api.socket.on_recv = swap
+        with pytest.raises(TouchanceDownError):
+            src.place_order({"Symbol": "S"})
+        assert replacement.disconnects == 0  # 新連線不得被誤殺
+        assert src.connected is True  # replacement 仍在役
 
     def test_other_errcode_is_broker_rejected(self) -> None:
         src, _ = make_source(
