@@ -63,6 +63,13 @@
 
 - [x] frontend/tsconfig.*.tsbuildinfo 是 build 產物被誤入版控(wave4),加 .gitignore 並 git rm --cached(2026-07-18)— 已處理(c26a981)
 
+## 2026-07-19(dq4-order-phase1 Phase 4 自評 P2 彙總,15 條聚類,shortSymbol/BLOCKED_REASON 已本輪吸收)
+
+- [ ] trade 重複 helper 候選:useTrade.ts getJson/postJson 80% 同構(可併單一 fetchJson)、trade.py _apply_restore 雙迴圈(抽 _apply_to_store)、tc4_trade.handle_sub_message exec/fill 分支(dict dispatch)、OrdersList 警示列/區塊樣板 ×2
+- [ ] 錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:新增錯誤碼要動多處;若錯誤碼家族再擴,考慮 codegen 或 shared JSON(現況 frontend 未知碼原樣顯示 = 安全漂移)
+- [ ] trade 效能微優化候選(手動單低頻,全部先不動;若未來策略自動下單高頻化再 /perf):orders_view 每 poll 重建 list、account_view 每呼叫 sorted、orderable_symbols 每呼叫重建 set
+- [ ] parse_execution_report 的 err_code 判定含 0/"0" 白名單,真值域(design §8 #3)整合實測後回頭校正
+
 ## 2026-07-18(txo-tquote-cursor Phase 4 自評 P2)
 
 - [ ] QuoteTable 欄定義三處手動同步(SideCells cells 陣列 + reverse() 鏡像 + thead 手寫標籤;netTone/EnergyBar 各自判 net_qty 正負色)→ T 字表要加欄(如成交價/OI)前先抽共用 column def,否則 desync 無測試可抓
