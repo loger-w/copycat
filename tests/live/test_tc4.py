@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from copycat.live.tc4 import TC4QuoteSource, build_rt_request, group_series
+from copycat.live.tc4 import SPOT_SYMBOL, TC4QuoteSource, build_rt_request, group_series
 
 SYMS = [
     "TC.O.TWF.TX4.202607.C.44550",
@@ -151,3 +151,13 @@ class TestListenerFollowsSubPort:
             pub_a.close(linger=0)
             pub_b.close(linger=0)
             ctx.term()
+
+
+class TestSpotSymbol:
+    def test_spot_symbol_uses_txf_product_code(self) -> None:
+        """item 2(2026-07-20 盤中驗證):TC4 symbol 樹的台指期產品碼是 TXF,FITX 不存在。
+
+        FITX 只出現在 Quote.Security 欄位;SUBQUOTE 對不存在 symbol 照回 OK(平台不驗證)
+        → 訂了永遠沒推播,spot 恆 None。證據:驗證報告 item 2 四步診斷鏈。
+        """
+        assert SPOT_SYMBOL == "TC.F.TWF.TXF.HOT"

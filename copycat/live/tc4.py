@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 TC4_APPID = "ZMQ"
 TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
 
-SPOT_SYMBOL = "TC.F.TWF.FITX.HOT"
+SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 TXF(FITX 不存在,07-20 實證)
 
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
