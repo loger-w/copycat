@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 MULTIPLIER = 50  # TXO 每點 NTD
 
 # TXF 現貨 symbol(zmq-free 常數;tc4.py re-export — server 端 import 不拉 pyzmq,review C1)
-SPOT_SYMBOL = "TC.F.TWF.FITX.HOT"
+SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 TXF(FITX 不存在,07-20 實證)
 
 _OPTION_LEAF_RE = re.compile(
     r"^TC\.O\.TWF\.(?P<prod>[A-Z0-9]+)\.(?P<expiry>[0-9A-Z/]+)\.(?P<cp>[CP])\.(?P<strike>\d+)$"
