@@ -145,8 +145,7 @@ class EngineRuntime:
     async def _run_handover(self, series: SeriesInfo, *, subscribe: bool) -> None:
         assert self._agg is not None
         for attempt in range(1, _HANDOVER_RETRIES + 1):
-            self.status = "backfilling"
-            self._mark_changed()
+            self._set_status("backfilling")
             self._buffer = HandoverBuffer()
             if subscribe or attempt > 1:
                 await asyncio.to_thread(self._source.subscribe, series, self.on_tick)
@@ -161,11 +160,9 @@ class EngineRuntime:
             if backfill:
                 first = min(t.precise_time for t in backfill)
                 self._accumulated_from = _fmt_precise_time(first)
-            self.status = "live"
-            self._mark_changed()
+            self._set_status("live")
             return
-        self.status = "degraded"
-        self._mark_changed()
+        self._set_status("degraded")
         logger.warning("handover degraded after %d attempts", _HANDOVER_RETRIES)
 
     # ---- tick 入口(source thread → loop)----
@@ -224,6 +221,11 @@ class EngineRuntime:
                 self._agg.reset(self._active.contracts)
                 await self._run_handover(self._active, subscribe=False)
             self._healed_dropped = dropped
+
+    def _set_status(self, status: str) -> None:
+        """狀態轉換一律經此(賦值 + 廣播喚醒),避免單邊漏 _mark_changed。"""
+        self.status = status
+        self._mark_changed()
 
     def _mark_changed(self) -> None:
         self._version += 1
