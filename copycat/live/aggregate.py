@@ -161,8 +161,13 @@ class ChainAggregator:
         spot_pnl: float | None = None
         if curve and self.spot_millipts is not None:
             spot_pnl = interp_pnl(curve, self.spot_millipts)
-        call_net = sum(r.net_qty for r in rows if r.contract.cp == "C")
-        put_net = sum(r.net_qty for r in rows if r.contract.cp == "P")
+        call_net = 0
+        put_net = 0
+        for r in rows:
+            if r.contract.cp == "C":
+                call_net += r.net_qty
+            elif r.contract.cp == "P":
+                put_net += r.net_qty
         return {
             "series_id": series.series_id,
             "series_name": series.name,
