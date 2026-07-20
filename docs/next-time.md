@@ -74,6 +74,10 @@
 
 - [ ] QuoteTable 欄定義三處手動同步(SideCells cells 陣列 + reverse() 鏡像 + thead 手寫標籤;netTone/EnergyBar 各自判 net_qty 正負色)→ T 字表要加欄(如成交價/OI)前先抽共用 column def,否則 desync 無測試可抓
 
+## 2026-07-20(refactor/tc4-shared-helper 發現)
+
+- [ ] `copycat validate` 在 master 已紅(12/42 PASS,SC-4/SC-6 多格超 tolerance)— golden gate(89e0041,2026-07-07)以種子事件池定錨,scan-events 補全後事件池 11048 筆,分佈漂移。與 tc4-shared-helper refactor 無關(master 與分支跑出逐字相同結果)。需決策:golden 重定錨(對補全池重拍)或 gate 降級為種子池子集比對 — 屬行為級決定,開獨立輪處理
+
 ## 2026-07-20(/bug txo-live-fixes 順手衝動收納)
 
 - [ ] 測試裡的 `TC.F.TWF.FITX.HOT` 字面值(test_aggregate/test_live_models/test_tc4 共 5 處,行為中性的任意 TC.F.* 範例)改成 TXF 命名,免得繼續傳播已證實不存在的 symbol
