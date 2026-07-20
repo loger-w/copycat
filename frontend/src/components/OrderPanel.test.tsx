@@ -20,7 +20,7 @@ function account(overrides: Partial<TradeAccount> = {}): TradeAccount {
     account_masked: "****9000",
     broker_id: "SIM",
     audit_degraded: false,
-    orderable_symbols: ["TC.F.TWF.FITX.HOT", SYM],
+    orderable_symbols: ["TC.F.TWF.TXF.HOT", SYM],
     ...overrides,
   };
 }
