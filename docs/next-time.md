@@ -50,7 +50,7 @@
 
 ## 2026-07-18(txo-aggregate-pnl Phase 4 自評 P2 彙總,10 條聚類)
 
-- [ ] 觀測性:handover buffer 溢出僅 log 無 snapshot 計數欄位(degraded 時前端難診斷);前端 WS 無 heartbeat 判停(server 靜默時段分不出斷線 vs 無變更;考慮 server 週期 keepalive frame + client stale timer,週一盤中觀察真實需求再定)
+- [ ] 觀測性:~~handover buffer 溢出僅 log 無 snapshot 計數欄位(degraded 時前端難診斷)~~(2026-07-20 fix/txo-quote-resilience:snapshot handover 欄位含 overflows 計數已覆蓋);前端 WS 無 heartbeat 判停(server 靜默時段分不出斷線 vs 無變更;考慮 server 週期 keepalive frame + client stale timer,週一盤中觀察真實需求再定)
 - [ ] engine._run_handover 重試時 re-subscribe 與 activate 的 unsubscribe 不對稱,若改主動觸發自癒要先收斂這段
 
 ## 2026-07-19(dq4-order-phase1 Phase 4 自評 P2 彙總,15 條聚類,shortSymbol/BLOCKED_REASON 已本輪吸收)
@@ -66,8 +66,8 @@
 
 ## 2026-07-20(/bug txo-live-fixes 順手衝動收納)
 
-- [ ] quote 端 QuoteAPI Connect 無 RCVTIMEO:app 死亡時重連迴圈阻塞在裸 recv(等 app 回來才續走,盤中實測可用但不可中斷);比照 trade 端 context 級 timeout + LINGER=0 的防護(要驗 QuoteManager 分頁大回應不會被 5s timeout 誤傷)
-- [ ] 交接 buffer cap 200k:實測訂閱→回補完成 ~4.5 分鐘已 buffer ~110k,若回補拖過 ~8 分鐘會溢出→無限重跑回補;考慮 cap 動態化或回補逾時預警(驗證報告平台觀測 4)
+- [x] ~~quote 端 QuoteAPI Connect 無 RCVTIMEO:app 死亡時重連迴圈阻塞在裸 recv;比照 trade 端 context 級 timeout + LINGER=0 的防護(要驗 QuoteManager 分頁大回應不會被 5s timeout 誤傷)~~(2026-07-20 fix/txo-quote-resilience:context 級 10s timeout(實測 QUERYALLINSTRUMENT(Opt) 1.93s ×5 裕度;GetHistory 分頁 3,482 次 max 1.1ms 不受影響)+ LINGER=0 + _rt_request lock timeout;死 port 實測重連可中斷、app 回來可恢復)
+- [x] ~~交接 buffer cap 200k:回補拖過 ~8 分鐘會溢出→無限重跑回補;考慮 cap 動態化或回補逾時預警~~(2026-07-20 同輪:只做預警(user 拍板)— 80% 閾值一次性 warning + snapshot handover 欄位(backfill_secs/buffer_used/buffer_cap/buffer_warned/overflows);cap 動態化未做,溢出仍會重跑,預警先給觀測點)
 
 ## 2026-07-20(backfill 雙修 review P2)
 
