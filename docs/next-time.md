@@ -4,7 +4,7 @@
 - [x] ~~config JSON 載入器樣板與 strategy_config.load_config 重複 → 抽 generic helper(review Reuse3,動既有檔屬 🔵 獨立工)~~(2026-07-20 refactor/shared-infra-helpers:copycat/configio.load_dataclass_json)
 - [x] ~~atomic write(tmp+os.replace)全專案 5 處手刻 → 共用 helper(review Reuse5)~~(2026-07-20 同輪:實際 27 處 13 檔,收斂 copycat/fileio;spikes/ 一次性腳本不在範圍)
 - [ ] simulate 完整 derived-series 預計算重構(review F2 只做了 anchor 網格限定;若 Phase B 全量變慢再做)
-- [ ] 對照組 T+1 1K 補抓 2,068 筆 + 7-8% 帶 6,509 stock-day TC4 回補(Phase B 前置,需達錢 4 開著)
+- [x] ~~對照組 T+1 1K 補抓 2,068 筆 + 7-8% 帶 6,509 stock-day TC4 回補(Phase B 前置,需達錢 4 開著)~~(2026-07-20 spikes/backfill_phaseb_1k.py:fetched 5,015 / no_data 225 / failed 0,8.7 分鐘;殘缺 232 筆經長等待重試確認 TC4 真無資料(下市/創新板),帶宇宙有效覆蓋 97.5%;筆數對照與設計值差異解釋見 docs/evidence/tc4_1k_phaseb_backfill_2026-07-20.md)
 
 ## 2026-07-11(fade-round-1 收尾 review P2 彙總,18 條聚類)
 
