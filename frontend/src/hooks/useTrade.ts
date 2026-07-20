@@ -26,18 +26,17 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(await parseError(res));
-  return (await res.json()) as T;
-}
-
-async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+/** GET(無 body)/ POST JSON(帶 body)單一入口;非 2xx 統一走 parseError。 */
+async function fetchJson<T>(url: string, body?: unknown): Promise<T> {
+  const init: RequestInit | undefined =
+    body === undefined
+      ? undefined
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        };
+  const res = await fetch(url, init);
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as T;
 }
@@ -45,7 +44,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 export function useTradeAccount() {
   return useQuery({
     queryKey: ["trade-account"],
-    queryFn: () => getJson<TradeAccount>("/api/trade/account"),
+    queryFn: () => fetchJson<TradeAccount>("/api/trade/account"),
     refetchInterval: 10_000,
     retry: 1,
   });
@@ -54,7 +53,7 @@ export function useTradeAccount() {
 export function useOrders() {
   return useQuery({
     queryKey: ["trade-orders"],
-    queryFn: () => getJson<OrdersView>("/api/trade/orders"),
+    queryFn: () => fetchJson<OrdersView>("/api/trade/orders"),
     refetchInterval: 2_000,
     retry: 1,
   });
@@ -63,7 +62,7 @@ export function useOrders() {
 export function usePreviewOrder() {
   return useMutation({
     mutationFn: (body: OrderPreviewBody) =>
-      postJson<OrderPreviewResult>("/api/trade/preview", body),
+      fetchJson<OrderPreviewResult>("/api/trade/preview", body),
   });
 }
 
@@ -71,7 +70,7 @@ export function useConfirmOrder() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (previewId: string) =>
-      postJson<SubmitResult>("/api/trade/orders", { preview_id: previewId }),
+      fetchJson<SubmitResult>("/api/trade/orders", { preview_id: previewId }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["trade-orders"] });
     },

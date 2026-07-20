@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { ReactElement } from "react";
 
 import { formatPts } from "@/lib/format";
 import {
@@ -27,6 +28,13 @@ function ratioTone(row: ContractRow): string {
   return "text-ink-muted";
 }
 
+/** net_qty 正負 → 多空色單一判定(text/bg 兩用;Bull=紅/Bear=綠 台股慣例)。 */
+function netTone(netQty: number, kind: "text" | "bg"): string {
+  if (netQty > 0) return kind === "text" ? "text-bull" : "bg-bull";
+  if (netQty < 0) return kind === "text" ? "text-bear" : "bg-bear";
+  return kind === "text" ? "text-ink-muted" : "";
+}
+
 function EnergyBar({
   netQty,
   maxAbs,
@@ -41,11 +49,72 @@ function EnergyBar({
   return (
     <div className={cn("flex h-2 w-full", align === "right" && "justify-end")} aria-hidden>
       <div
-        className={cn("h-full rounded-xs", netQty > 0 ? "bg-bull" : "bg-bear")}
+        className={cn("h-full rounded-xs", netTone(netQty, "bg"))}
         style={{ width: `${Math.max(width * 100, 4)}%` }}
       />
     </div>
   );
+}
+
+type SideCellCtx = {
+  row: ContractRow;
+  maxAbs: number;
+  side: "call" | "put";
+  td: string;
+};
+
+/** T 字表單側欄定義(順序 = Call 側靠外 → 靠履約價;Put 側 reverse 鏡像)。
+ *  thead 標籤與 SideCells 儲存格同源於此 — 加欄(如成交價/OI)只改這裡。 */
+const QUOTE_COLUMNS: {
+  key: string;
+  label: string;
+  cell: (ctx: SideCellCtx) => ReactElement;
+}[] = [
+  {
+    key: "energy",
+    label: "能量",
+    cell: ({ row, maxAbs, side, td }) => (
+      <td key="energy" className={cn(td, "w-24 min-w-16 align-middle")}>
+        <EnergyBar
+          netQty={row.net_qty}
+          maxAbs={maxAbs}
+          align={side === "call" ? "right" : "left"}
+        />
+      </td>
+    ),
+  },
+  {
+    key: "ratio",
+    label: "內外盤比",
+    cell: ({ row, td }) => (
+      <td key="ratio" className={cn(td, "text-right", ratioTone(row))}>
+        {ratioText(row)}
+      </td>
+    ),
+  },
+  {
+    key: "volume",
+    label: "成交量",
+    cell: ({ row, td }) => (
+      <td key="volume" className={cn(td, "text-right text-ink")}>
+        {formatPts(row.volume)}
+      </td>
+    ),
+  },
+  {
+    key: "net",
+    label: "淨部位",
+    cell: ({ row, td }) => (
+      <td key="net" className={cn(td, "text-right font-medium", netTone(row.net_qty, "text"))}>
+        {formatPts(row.net_qty)}
+      </td>
+    ),
+  },
+];
+
+/** 單側欄序:Call 照定義、Put 鏡像(靠履約價欄相鄰)。 */
+function sideColumns(side: "call" | "put") {
+  return side === "call" ? QUOTE_COLUMNS : [...QUOTE_COLUMNS].reverse();
 }
 
 /** 單側四欄:能量 / 內外盤比 / 成交量 / 淨部位(Call 側)或鏡像(Put 側)。 */
@@ -64,31 +133,33 @@ function SideCells({
   if (row === null) {
     return (
       <>
-        {[0, 1, 2, 3].map((i) => (
-          <td key={i} className={cn(td, "text-center text-ink-dim")}>
+        {QUOTE_COLUMNS.map((col) => (
+          <td key={col.key} className={cn(td, "text-center text-ink-dim")}>
             {DASH}
           </td>
         ))}
       </>
     );
   }
-  const netTone = row.net_qty > 0 ? "text-bull" : row.net_qty < 0 ? "text-bear" : "text-ink-muted";
-  const cells = [
-    <td key="energy" className={cn(td, "w-24 min-w-16 align-middle")}>
-      <EnergyBar netQty={row.net_qty} maxAbs={maxAbs} align={side === "call" ? "right" : "left"} />
-    </td>,
-    <td key="ratio" className={cn(td, "text-right", ratioTone(row))}>
-      {ratioText(row)}
-    </td>,
-    <td key="volume" className={cn(td, "text-right text-ink")}>
-      {formatPts(row.volume)}
-    </td>,
-    <td key="net" className={cn(td, "text-right font-medium", netTone)}>
-      {formatPts(row.net_qty)}
-    </td>,
-  ];
-  // Call 側:能量|比|量|淨(靠履約價);Put 側鏡像:淨|量|比|能量
-  return <>{side === "call" ? cells : [...cells].reverse()}</>;
+  return <>{sideColumns(side).map((col) => col.cell({ row, maxAbs, side, td }))}</>;
+}
+
+function HeadCells({ side }: { side: "call" | "put" }) {
+  return (
+    <>
+      {sideColumns(side).map((col) => (
+        <th
+          key={col.key}
+          className={cn(
+            "px-2 py-1 font-normal",
+            col.key === "energy" && side === "call" ? "text-left" : "text-right",
+          )}
+        >
+          {col.label}
+        </th>
+      ))}
+    </>
+  );
 }
 
 export function QuoteTable({
@@ -123,15 +194,9 @@ export function QuoteTable({
         <table className="w-full border-collapse text-xs">
           <thead>
             <tr className="text-ink-muted">
-              <th className="px-2 py-1 text-left font-normal">能量</th>
-              <th className="px-2 py-1 text-right font-normal">內外盤比</th>
-              <th className="px-2 py-1 text-right font-normal">成交量</th>
-              <th className="px-2 py-1 text-right font-normal">淨部位</th>
+              <HeadCells side="call" />
               <th className="px-2 py-1 text-center font-normal">履約價</th>
-              <th className="px-2 py-1 text-right font-normal">淨部位</th>
-              <th className="px-2 py-1 text-right font-normal">成交量</th>
-              <th className="px-2 py-1 text-right font-normal">內外盤比</th>
-              <th className="px-2 py-1 text-right font-normal">能量</th>
+              <HeadCells side="put" />
             </tr>
           </thead>
           <tbody>

@@ -31,32 +31,32 @@ function Rows({ rows, empty }: { rows: OrderRow[]; empty: string }) {
   );
 }
 
+function Warning({ show, text }: { show: boolean | undefined; text: string }) {
+  if (!show) return null;
+  return (
+    <p className="mb-2 border border-loss/40 bg-loss/10 px-2 py-1 text-xs text-loss">{text}</p>
+  );
+}
+
+function Section({ title, rows, empty }: { title: string; rows: OrderRow[]; empty: string }) {
+  return (
+    <section>
+      <h3 className="mb-1 border-b border-line pb-1 text-xs tracking-wide text-ink-dim">
+        {title}
+      </h3>
+      <Rows rows={rows} empty={empty} />
+    </section>
+  );
+}
+
 export function OrdersList({ view }: { view: OrdersView | undefined }) {
   return (
     <div className="min-w-0">
-      {view?.degraded && (
-        <p className="mb-2 border border-loss/40 bg-loss/10 px-2 py-1 text-xs text-loss">
-          回報連線中斷,列表可能不完整
-        </p>
-      )}
-      {view?.audit_degraded && (
-        <p className="mb-2 border border-loss/40 bg-loss/10 px-2 py-1 text-xs text-loss">
-          審計記錄異常,請檢查 server log
-        </p>
-      )}
+      <Warning show={view?.degraded} text="回報連線中斷,列表可能不完整" />
+      <Warning show={view?.audit_degraded} text="審計記錄異常,請檢查 server log" />
       <div className="grid gap-4 @[560px]:grid-cols-2">
-        <section>
-          <h3 className="mb-1 border-b border-line pb-1 text-xs tracking-wide text-ink-dim">
-            當日委託
-          </h3>
-          <Rows rows={view?.orders ?? []} empty="尚無委託" />
-        </section>
-        <section>
-          <h3 className="mb-1 border-b border-line pb-1 text-xs tracking-wide text-ink-dim">
-            當日成交
-          </h3>
-          <Rows rows={view?.fills ?? []} empty="尚無成交" />
-        </section>
+        <Section title="當日委託" rows={view?.orders ?? []} empty="尚無委託" />
+        <Section title="當日成交" rows={view?.fills ?? []} empty="尚無成交" />
       </div>
     </div>
   );
