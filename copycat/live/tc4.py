@@ -28,14 +28,11 @@ from copycat.live.models import (
     parse_option_symbol,
     parse_realtime,
 )
+from copycat.tc4common import TC4_APPID, TC4_SKEY, iter_qry_pages
 
 __all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_series"]
 
 logger = logging.getLogger(__name__)
-
-# Touchance 官方範例公開的 app 憑證(同 backfill_tc4),非帳號 secret
-TC4_APPID = "ZMQ"
-TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
 
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
@@ -198,17 +195,13 @@ class TC4QuoteSource:
                 time.sleep(self._poll_wait * 0.3)  # 全鏈已先 SubHistory,等待縮短
         if not first or not first.get("HisData"):
             return []
-        qry_index = "0"
-        while True:
+
+        def _page(qry_index: str) -> list[dict]:
             his = api.GetHistory(self._session, symbol, "TICKS", start, end, qry_index)
-            page = his.get("HisData", [])
-            if not page:
-                break
+            return his.get("HisData", [])
+
+        for page in iter_qry_pages(_page):
             rows.extend(page)
-            nxt = page[-1].get("QryIndex", "")
-            if not nxt or nxt == qry_index:  # 空 = 結束;停滯 = 防無限迴圈
-                break
-            qry_index = nxt
         return [t for r in rows if (t := parse_history_tick(symbol, r)) is not None]
 
     def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:

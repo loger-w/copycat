@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 import zmq
 
-from copycat.live.tc4 import TC4_APPID, TC4_SKEY
+from copycat.tc4common import TC4_APPID, TC4_SKEY, iter_qry_pages
 from copycat.live.trade_models import (
     AccountInfo,
     BrokerRejectedError,
@@ -184,18 +184,13 @@ class TC4TradeSource:
     def _restore(
         self, request: str, parse: Callable[[dict[str, Any]], OrderReport]
     ) -> list[OrderReport]:
-        out: list[OrderReport] = []
-        qry_index = ""
-        while True:
+        def _page(qry_index: str) -> list[dict]:
             resp = self._req_request({"Request": request, "QryIndex": qry_index})
-            rows = resp.get("Orders") or []
-            if not rows:
-                break
+            return resp.get("Orders") or []
+
+        out: list[OrderReport] = []
+        for rows in iter_qry_pages(_page, start=""):
             out.extend(parse(r) for r in rows)
-            nxt = str(rows[-1].get("QryIndex", ""))
-            if not nxt or nxt == qry_index:  # 空 = 結束;停滯 = 防無限迴圈(R3-6)
-                break
-            qry_index = nxt
         return out
 
     def subscribe_reports(
