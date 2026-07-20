@@ -4,14 +4,12 @@
 - [ ] config JSON 載入器樣板與 strategy_config.load_config 重複 → 抽 generic helper(review Reuse3,動既有檔屬 🔵 獨立工)
 - [ ] atomic write(tmp+os.replace)全專案 5 處手刻 → 共用 helper(review Reuse5)
 - [ ] simulate 完整 derived-series 預計算重構(review F2 只做了 anchor 網格限定;若 Phase B 全量變慢再做)
-- [ ] .claude/harness.json 殘留模板修正(verify 陣列指向不存在的 backend/frontend)
 - [ ] 對照組 T+1 1K 補抓 2,068 筆 + 7-8% 帶 6,509 stock-day TC4 回補(Phase B 前置,需達錢 4 開著)
 
 ## 2026-07-11(fade-round-1 收尾 review P2 彙總,18 條聚類)
 
 - [ ] fade wf 結構債(🔵 獨立工,下輪動 walk-forward 前先收斂):run_fade_arm 的 wf/單切分雙路徑重複「模擬→過濾→組特徵」邏輯;build_wf_cross_arm_table 與 build_cross_arm_table 排序/appendix 邏輯逐字複製(含 _sort_key×2);fade_report 6+ 處 `if wf_starts` 散落
 - [ ] fade combo 手動欄位複製 → dataclasses.replace:fade_optimize._strip_s5/_rebuild_combo、fade_config.enumerate_fade_stop_combos 各 8 個 .get(新增 FadeStopCombo 欄位會靜默漏)
-- [ ] dead code:fade_pipeline._param_hash/_samples_hash 定義後零 caller,可刪
 - [ ] fade pipeline 效能候選(6h 長跑;/perf 先 profile 再動):診斷段重讀全部 1K bars(run 時已讀過)、optimize_rule_tp 重算 optimize_rule_stops 已算過的 rule mask、guard_dist_grid 每格全量重模擬、by_source O(sources×trades) 重掃
 - [ ] 格式/統計 helper 各兩份:_fmt(report.py vs fade_report.py + 函式內重定義)、_quantile(search.py nearest-rank vs fade_diagnose int(p*len),場景獨立但演算法不同,共用時要先統一)
 
@@ -48,7 +46,6 @@
 - [ ] _evaluate_round5._trades 尾段(locked_close/hold_pnl/_TradeRec 建構)與 _simulate_r3_trades 尾段重複 → 抽 _finalize_trade 共用(該段歷史上已修過 P1,單邊同步風險同 §8 TRADEABLE_STATUSES 教訓)
 - [ ] fade_entry_anatomy 兩處 two-sample cluster-z 公式(level_stratified_duel 加權版 / level_anatomy duel 直接版)→ 抽共用 helper;run_entry_anatomy 內 _build_day_recs 被 level_anatomy 與 level_stratified_duel 各建一次 → 建一次傳入
 - [ ] round5 效能候選(/perf 先 profile):stress 跑法重執行 entry_fn 全宇宙掃描(進場 idx 不依 run_cfg)、樣本預算表 4×全宇宙重掃(可單趟 _iter_votes 同時判多個 S)、消融 3 單訊號各自重跑狀態機
-- [ ] levels_map 靜默空 dict:直呼 evaluate_cells_from_universe 忘傳 → 位階票全釘中性 1 分無警告(production 唯一 caller run_cells 會建;考慮 vote 臂啟用且 levels_map 空時 logger.warning)
 - [ ] 敏感度區塊複製貼上(S/c/m 三塊近同)+ disaster_off 手刻出異形 dict shape + round 輪次 dispatch 鏈成長(round 6 時考慮 active_round 單點解析);flow_flip_anatomy 出現率分母含 len(bars)<2 跳過日(輕微低估,不影響判準)
 
 ## 2026-07-18(txo-aggregate-pnl Phase 4 自評 P2 彙總,10 條聚類)
