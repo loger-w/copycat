@@ -152,7 +152,8 @@ def run_backfill(
             if key not in rows:  # 既有鍵不覆寫
                 rows[key] = mapped
                 added += 1
-        done.add(day)
+        if raw_rows:  # 空日(假日/FinMind 未發布不可分)不進 marker,之後可補(同 backfill_daytrade)
+            done.add(day)
         _write_atomic(prices_path, rows)
         tmp = manifest_path.with_suffix(".tmp")
         tmp.write_text(

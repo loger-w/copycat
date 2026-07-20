@@ -87,14 +87,45 @@ def test_backfill_merge_and_manifest(tmp_path: Path) -> None:
     ]
     assert rows[1]["volume_lots"] == "25000.0" and rows[1]["spread"] == "10.0"
     manifest = json.loads((tmp_path / "daily" / "backfill_manifest.json").read_text("utf-8"))
-    assert set(manifest["done_dates"]) == {"2024-06-03", "2024-06-04"}
+    # [assertion 事前標記該變 2026-07-20] 空回應日(06-04)不再進 marker(修永久跳過 bug)
+    assert set(manifest["done_dates"]) == {"2024-06-03"}
 
-    # 續傳:同範圍重跑 → marker 全跳過,fetch 不再被呼叫
+    # 續傳:同範圍重跑 → 已成功日跳過,空日重抓
     calls.clear()
     stats2 = run_backfill(
         tmp_path, "2024-06-03", "2024-06-04", "tok", fetch=fake_fetch, sleep_s=0.0
     )
-    assert calls == [] and stats2["skipped_days"] == 2 and stats2["added_rows"] == 0
+    assert calls == ["2024-06-04"] and stats2["skipped_days"] == 1 and stats2["added_rows"] == 0
+
+
+def test_backfill_empty_day_not_marked_done(tmp_path: Path) -> None:
+    """空回應日(FinMind 尚未發布 vs 真假日不可分)不得進 done_dates,下次重跑要再抓.
+
+    比照 backfill_daytrade 的 if data 判斷(2026-07-10 真跑踩到:當日盤後跑
+    永久跳過該日,得手動改 manifest)。
+    """
+    _seed_prices(
+        tmp_path,
+        [dict(zip(_FIELDS, ["2330", "2025-05-02", "900", "910", "890", "900", "1", "30000"]))],
+    )
+    calls: list[str] = []
+    payload: dict[str, list[dict[str, object]]] = {"2024-06-03": []}
+
+    def fake_fetch(date: str, token: str) -> list[dict[str, object]]:
+        calls.append(date)
+        return payload.get(date, [])
+
+    run_backfill(tmp_path, "2024-06-03", "2024-06-03", "tok", fetch=fake_fetch, sleep_s=0.0)
+    manifest = json.loads((tmp_path / "daily" / "backfill_manifest.json").read_text("utf-8"))
+    assert manifest["done_dates"] == []  # 空日不進 marker
+
+    # FinMind 盤後補發布 → 重跑同日要真的再抓、抓到後才進 marker
+    payload["2024-06-03"] = [_fm_row("2330", "2024-06-03")]
+    calls.clear()
+    stats = run_backfill(tmp_path, "2024-06-03", "2024-06-03", "tok", fetch=fake_fetch, sleep_s=0.0)
+    assert calls == ["2024-06-03"] and stats["added_rows"] == 1
+    manifest = json.loads((tmp_path / "daily" / "backfill_manifest.json").read_text("utf-8"))
+    assert manifest["done_dates"] == ["2024-06-03"]
 
 
 def test_backfill_no_overwrite_existing_key(tmp_path: Path) -> None:
