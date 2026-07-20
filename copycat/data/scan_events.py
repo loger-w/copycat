@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 from pathlib import Path
 
 from copycat.data.daily import DailyIndex
+from copycat.fileio import atomic_open_text
 from copycat.market import limit_up_price
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,10 @@ def _read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def _write_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as fh:
+    with atomic_open_text(path) as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(rows)
-    os.replace(tmp, path)
 
 
 def scan_limitup_events(data_dir: Path, start: str, end: str) -> dict[str, int]:

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from copycat.data.models import Bar1K
+from copycat.fileio import atomic_write_text
 
 
 def bars_path(data_dir: Path, stock_id: str, date: str) -> Path:
@@ -36,9 +36,7 @@ def write_bars(data_dir: Path, stock_id: str, date: str, bars: list[Bar1K]) -> N
     }
     path = bars_path(data_dir, stock_id, date)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(payload, separators=(",", ":")))
 
 
 def read_bars(data_dir: Path, stock_id: str, date: str) -> list[Bar1K] | None:

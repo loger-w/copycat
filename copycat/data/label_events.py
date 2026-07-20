@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 from pathlib import Path
 
 from copycat.data.backfill_brokers import read_brokers
+from copycat.fileio import atomic_open_text
 from copycat.watchlist import load_watchlist
 
 logger = logging.getLogger(__name__)
@@ -99,12 +99,10 @@ def label_events(
             stats["labeled_no_hit"] += 1
 
     if changed and not verify_existing:
-        tmp = events_csv.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8", newline="") as fh:
+        with atomic_open_text(events_csv) as fh:
             w = csv.DictWriter(fh, fieldnames=fieldnames)
             w.writeheader()
             w.writerows(rows)
-        os.replace(tmp, events_csv)
 
     logger.info("label-events(%s):%s", watchlist.name, stats)
     return stats

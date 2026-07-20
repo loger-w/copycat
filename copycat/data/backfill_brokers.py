@@ -12,13 +12,14 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+
+from copycat.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +143,9 @@ def run_backfill_brokers(
         brokers = aggregate_brokers(rows)
         path = brokers_path(data_dir, sid, day)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps({"stock_id": sid, "date": day, "brokers": brokers}, ensure_ascii=False),
-            encoding="utf-8",
+        atomic_write_text(
+            path, json.dumps({"stock_id": sid, "date": day, "brokers": brokers}, ensure_ascii=False)
         )
-        os.replace(tmp, path)
         done.add(key)
         if fetch is None:
             time.sleep(sleep_s)
@@ -156,9 +154,7 @@ def run_backfill_brokers(
                 "backfill-brokers 進度 %d/%d(skipped=%d empty=%d)", fetched, total, skipped, empty
             )
 
-    tmp = manifest_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"done": sorted(done)}), encoding="utf-8")
-    os.replace(tmp, manifest_path)
+    atomic_write_text(manifest_path, json.dumps({"done": sorted(done)}))
 
     logger.info(
         "backfill-brokers 完成:fetched=%d skipped=%d empty=%d targets=%d",

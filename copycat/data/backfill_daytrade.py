@@ -11,7 +11,6 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -20,6 +19,8 @@ from collections.abc import Callable
 from datetime import date as _date
 from datetime import timedelta
 from pathlib import Path
+
+from copycat.fileio import atomic_open_text, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +72,10 @@ def _dates(start: str, end: str) -> list[str]:
 
 def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as fh:
+    with atomic_open_text(path) as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(rows)
-    os.replace(tmp, path)
 
 
 def run_backfill_daytrade(
@@ -162,9 +161,7 @@ def run_backfill_daytrade(
         dispo_rows.append({"stock_id": sid, "period_start": ps, "period_end": pe})
     _write_csv(dispo_path, ["stock_id", "period_start", "period_end"], dispo_rows)
 
-    tmp = manifest_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"done_dates": sorted(done)}), encoding="utf-8")
-    os.replace(tmp, manifest_path)
+    atomic_write_text(manifest_path, json.dumps({"done_dates": sorted(done)}))
 
     logger.info(
         "backfill-daytrade [%s..%s]: fetched_days=%d added=%d dispo=%d",

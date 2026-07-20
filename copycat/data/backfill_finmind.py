@@ -10,7 +10,6 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -19,6 +18,8 @@ from collections.abc import Callable
 from datetime import date as _date
 from datetime import timedelta
 from pathlib import Path
+
+from copycat.fileio import atomic_open_text, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +92,11 @@ def _read_existing(path: Path) -> dict[tuple[str, str], dict[str, str]]:
 
 def _write_atomic(path: Path, rows: dict[tuple[str, str], dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as fh:
+    with atomic_open_text(path) as fh:
         w = csv.DictWriter(fh, fieldnames=_FIELDS)
         w.writeheader()
         for key in sorted(rows):
             w.writerow(rows[key])
-    os.replace(tmp, path)
 
 
 def _dates(start: str, end: str) -> list[str]:
@@ -155,11 +154,9 @@ def run_backfill(
         if raw_rows:  # 空日(假日/FinMind 未發布不可分)不進 marker,之後可補(同 backfill_daytrade)
             done.add(day)
         _write_atomic(prices_path, rows)
-        tmp = manifest_path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps({"done_dates": sorted(done)}, ensure_ascii=False), encoding="utf-8"
+        atomic_write_text(
+            manifest_path, json.dumps({"done_dates": sorted(done)}, ensure_ascii=False)
         )
-        os.replace(tmp, manifest_path)
         if sleep_s:
             time.sleep(sleep_s)
     logger.info(
