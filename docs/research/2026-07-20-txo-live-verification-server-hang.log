@@ -1,0 +1,24 @@
+INFO:     Started server process [22652]
+INFO:     Waiting for application startup.
+2026-07-20 09:52:45,093 copycat.live.tc4 INFO TC4 connected, session=0a2759c4
+2026-07-20 09:52:47,032 copycat.live.tc4 INFO subscribed 357 symbols (series=TX4.202607)
+2026-07-20 09:53:02,281 copycat.live.tc4 INFO backfill 20/356 symbols, 1280 ticks
+2026-07-20 09:53:15,883 copycat.live.tc4 INFO backfill 40/356 symbols, 4951 ticks
+2026-07-20 09:53:31,010 copycat.live.tc4 INFO backfill 60/356 symbols, 10319 ticks
+2026-07-20 09:53:32,568 copycat.live.tc4 INFO backfill 80/356 symbols, 13317 ticks
+2026-07-20 09:53:32,639 copycat.live.tc4 INFO backfill 100/356 symbols, 18024 ticks
+2026-07-20 09:53:32,720 copycat.live.tc4 INFO backfill 120/356 symbols, 23419 ticks
+2026-07-20 09:53:32,804 copycat.live.tc4 INFO backfill 140/356 symbols, 28407 ticks
+2026-07-20 09:53:32,881 copycat.live.tc4 INFO backfill 160/356 symbols, 33707 ticks
+2026-07-20 09:53:38,974 copycat.live.tc4 INFO backfill 180/356 symbols, 38648 ticks
+2026-07-20 09:53:48,070 copycat.live.tc4 INFO backfill 200/356 symbols, 42981 ticks
+2026-07-20 09:54:01,651 copycat.live.tc4 INFO backfill 220/356 symbols, 44861 ticks
+2026-07-20 09:54:10,702 copycat.live.tc4 INFO backfill 240/356 symbols, 45473 ticks
+2026-07-20 09:54:25,769 copycat.live.tc4 INFO backfill 260/356 symbols, 45983 ticks
+2026-07-20 09:54:40,834 copycat.live.tc4 INFO backfill 280/356 symbols, 46129 ticks
+2026-07-20 09:55:01,915 copycat.live.tc4 INFO backfill 300/356 symbols, 46182 ticks
+2026-07-20 09:55:24,497 copycat.live.tc4 INFO backfill 320/356 symbols, 46197 ticks
+2026-07-20 09:55:48,586 copycat.live.tc4 INFO backfill 340/356 symbols, 46213 ticks
+2026-07-20 09:56:12,665 copycat.live.tc4 INFO backfill done: 46213 ticks from 356 symbols
+2026-07-20 09:56:12,755 copycat.live.handover INFO handover done: backfill=46213 symbols=220 buffered=99767
+2026-07-20 09:56:17,787 copycat.server.trade WARNING TC4 trade ³s½u¥¢±Ñ,status=touchance_down

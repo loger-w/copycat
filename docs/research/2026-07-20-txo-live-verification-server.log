@@ -1,0 +1,126 @@
+INFO:     Started server process [2340]
+INFO:     Waiting for application startup.
+2026-07-20 09:59:30,334 copycat.live.tc4 INFO TC4 connected, session=94ce291d
+2026-07-20 09:59:32,133 copycat.live.tc4 INFO subscribed 357 symbols (series=TX4.202607)
+2026-07-20 09:59:47,340 copycat.live.tc4 INFO backfill 20/356 symbols, 1322 ticks
+2026-07-20 10:00:00,950 copycat.live.tc4 INFO backfill 40/356 symbols, 5182 ticks
+2026-07-20 10:00:16,083 copycat.live.tc4 INFO backfill 60/356 symbols, 10825 ticks
+2026-07-20 10:00:17,640 copycat.live.tc4 INFO backfill 80/356 symbols, 13951 ticks
+2026-07-20 10:00:17,711 copycat.live.tc4 INFO backfill 100/356 symbols, 18809 ticks
+2026-07-20 10:00:17,793 copycat.live.tc4 INFO backfill 120/356 symbols, 24415 ticks
+2026-07-20 10:00:17,877 copycat.live.tc4 INFO backfill 140/356 symbols, 29570 ticks
+2026-07-20 10:00:17,963 copycat.live.tc4 INFO backfill 160/356 symbols, 35190 ticks
+2026-07-20 10:00:24,060 copycat.live.tc4 INFO backfill 180/356 symbols, 40437 ticks
+2026-07-20 10:00:33,158 copycat.live.tc4 INFO backfill 200/356 symbols, 44941 ticks
+2026-07-20 10:00:46,738 copycat.live.tc4 INFO backfill 220/356 symbols, 46872 ticks
+2026-07-20 10:00:55,790 copycat.live.tc4 INFO backfill 240/356 symbols, 47511 ticks
+2026-07-20 10:01:10,858 copycat.live.tc4 INFO backfill 260/356 symbols, 48029 ticks
+2026-07-20 10:01:25,923 copycat.live.tc4 INFO backfill 280/356 symbols, 48178 ticks
+2026-07-20 10:01:47,009 copycat.live.tc4 INFO backfill 300/356 symbols, 48231 ticks
+2026-07-20 10:02:09,606 copycat.live.tc4 INFO backfill 320/356 symbols, 48246 ticks
+2026-07-20 10:02:33,691 copycat.live.tc4 INFO backfill 340/356 symbols, 48262 ticks
+2026-07-20 10:02:57,774 copycat.live.tc4 INFO backfill done: 48262 ticks from 356 symbols
+2026-07-20 10:02:57,867 copycat.live.handover INFO handover done: backfill=48262 symbols=220 buffered=109377
+2026-07-20 10:02:57,885 copycat.server.trade WARNING === DQ4 交易環境:模擬 | 帳戶:****9000 | 候選帳戶 1 個 ===
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8721 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52852 - "WebSocket /ws/txo-pnl" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:60031 - "WebSocket /ws/txo-pnl" [accepted]
+INFO:     connection open
+2026-07-20 10:12:12,553 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:17:20,306 copycat.live.tc4 INFO TC4 connected, session=06b10b91
+2026-07-20 10:17:20,717 copycat.live.tc4 INFO TC4 reconnected (total=1)
+2026-07-20 10:17:20,742 copycat.server.engine WARNING self-heal: re-running handover (dropped=0, forced=True)
+2026-07-20 10:17:35,996 copycat.live.tc4 INFO backfill 20/356 symbols, 1470 ticks
+2026-07-20 10:17:49,609 copycat.live.tc4 INFO backfill 40/356 symbols, 5906 ticks
+2026-07-20 10:17:50,989 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:17:51,008 copycat.live.tc4 INFO TC4 connected, session=b8bdc6c8
+2026-07-20 10:17:51,266 copycat.live.tc4 INFO TC4 reconnected (total=2)
+2026-07-20 10:18:21,550 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:18:21,569 copycat.live.tc4 INFO TC4 connected, session=2de3d7e9
+2026-07-20 10:18:21,818 copycat.live.tc4 INFO TC4 reconnected (total=3)
+2026-07-20 10:18:52,152 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:18:52,161 copycat.live.tc4 INFO TC4 connected, session=fcfcc405
+2026-07-20 10:18:52,415 copycat.live.tc4 INFO TC4 reconnected (total=4)
+2026-07-20 10:19:22,751 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:19:22,773 copycat.live.tc4 INFO TC4 connected, session=ab69e1e7
+2026-07-20 10:19:23,029 copycat.live.tc4 INFO TC4 reconnected (total=5)
+2026-07-20 10:19:53,272 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:19:53,281 copycat.live.tc4 INFO TC4 connected, session=91d8d26f
+2026-07-20 10:19:53,539 copycat.live.tc4 INFO TC4 reconnected (total=6)
+2026-07-20 10:20:23,857 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:20:23,865 copycat.live.tc4 INFO TC4 connected, session=ae74083e
+2026-07-20 10:20:24,126 copycat.live.tc4 INFO TC4 reconnected (total=7)
+2026-07-20 10:20:54,340 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:20:54,358 copycat.live.tc4 INFO TC4 connected, session=5d42eb46
+2026-07-20 10:20:54,768 copycat.live.tc4 INFO TC4 reconnected (total=8)
+2026-07-20 10:21:25,038 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:21:25,047 copycat.live.tc4 INFO TC4 connected, session=c7700971
+2026-07-20 10:21:25,300 copycat.live.tc4 INFO TC4 reconnected (total=9)
+2026-07-20 10:21:55,639 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:21:55,658 copycat.live.tc4 INFO TC4 connected, session=70d33902
+2026-07-20 10:21:55,915 copycat.live.tc4 INFO TC4 reconnected (total=10)
+2026-07-20 10:22:26,202 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:22:26,210 copycat.live.tc4 INFO TC4 connected, session=491ad132
+2026-07-20 10:22:26,464 copycat.live.tc4 INFO TC4 reconnected (total=11)
+2026-07-20 10:22:56,758 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:22:56,777 copycat.live.tc4 INFO TC4 connected, session=f039673b
+2026-07-20 10:22:57,033 copycat.live.tc4 INFO TC4 reconnected (total=12)
+2026-07-20 10:23:27,359 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:23:27,366 copycat.live.tc4 INFO TC4 connected, session=787f3175
+2026-07-20 10:23:27,617 copycat.live.tc4 INFO TC4 reconnected (total=13)
+2026-07-20 10:23:57,955 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:23:57,963 copycat.live.tc4 INFO TC4 connected, session=1b179b3b
+2026-07-20 10:23:58,214 copycat.live.tc4 INFO TC4 reconnected (total=14)
+2026-07-20 10:24:28,581 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:24:28,601 copycat.live.tc4 INFO TC4 connected, session=3114d6dd
+2026-07-20 10:24:28,867 copycat.live.tc4 INFO TC4 reconnected (total=15)
+2026-07-20 10:24:59,168 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:24:59,186 copycat.live.tc4 INFO TC4 connected, session=b9808808
+2026-07-20 10:24:59,437 copycat.live.tc4 INFO TC4 reconnected (total=16)
+2026-07-20 10:25:29,717 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:25:29,736 copycat.live.tc4 INFO TC4 connected, session=2cc1f12b
+2026-07-20 10:25:29,985 copycat.live.tc4 INFO TC4 reconnected (total=17)
+2026-07-20 10:26:00,285 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:26:00,303 copycat.live.tc4 INFO TC4 connected, session=1ba056a2
+2026-07-20 10:26:00,560 copycat.live.tc4 INFO TC4 reconnected (total=18)
+2026-07-20 10:26:30,833 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:26:30,852 copycat.live.tc4 INFO TC4 connected, session=74ebd319
+2026-07-20 10:26:31,112 copycat.live.tc4 INFO TC4 reconnected (total=19)
+2026-07-20 10:27:01,445 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:27:01,465 copycat.live.tc4 INFO TC4 connected, session=fbee59c0
+2026-07-20 10:27:01,724 copycat.live.tc4 INFO TC4 reconnected (total=20)
+2026-07-20 10:27:31,927 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:27:31,935 copycat.live.tc4 INFO TC4 connected, session=671c931d
+2026-07-20 10:27:32,185 copycat.live.tc4 INFO TC4 reconnected (total=21)
+2026-07-20 10:28:02,467 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:28:02,499 copycat.live.tc4 INFO TC4 connected, session=e0466ef2
+2026-07-20 10:28:02,759 copycat.live.tc4 INFO TC4 reconnected (total=22)
+2026-07-20 10:28:33,078 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:28:33,096 copycat.live.tc4 INFO TC4 connected, session=6658ddb0
+2026-07-20 10:28:33,348 copycat.live.tc4 INFO TC4 reconnected (total=23)
+2026-07-20 10:29:03,622 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:29:03,642 copycat.live.tc4 INFO TC4 connected, session=6cee40f5
+2026-07-20 10:29:03,896 copycat.live.tc4 INFO TC4 reconnected (total=24)
+2026-07-20 10:29:34,120 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:29:34,128 copycat.live.tc4 INFO TC4 connected, session=0d604314
+2026-07-20 10:29:34,382 copycat.live.tc4 INFO TC4 reconnected (total=25)
+2026-07-20 10:30:04,713 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:30:04,721 copycat.live.tc4 INFO TC4 connected, session=f6c2b907
+2026-07-20 10:30:04,976 copycat.live.tc4 INFO TC4 reconnected (total=26)
+2026-07-20 10:30:35,254 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:30:35,274 copycat.live.tc4 INFO TC4 connected, session=907244a8
+2026-07-20 10:30:35,562 copycat.live.tc4 INFO TC4 reconnected (total=27)
+2026-07-20 10:31:05,827 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:31:05,846 copycat.live.tc4 INFO TC4 connected, session=fee79cfb
+2026-07-20 10:31:06,127 copycat.live.tc4 INFO TC4 reconnected (total=28)
+2026-07-20 10:31:36,312 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:31:36,331 copycat.live.tc4 INFO TC4 connected, session=2e6b7982
+2026-07-20 10:31:36,586 copycat.live.tc4 INFO TC4 reconnected (total=29)
+2026-07-20 10:32:06,875 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:32:06,894 copycat.live.tc4 INFO TC4 connected, session=f3fe5049
+2026-07-20 10:32:07,148 copycat.live.tc4 INFO TC4 reconnected (total=30)
+2026-07-20 10:32:37,412 copycat.live.tc4 WARNING TC4 stale >30.0s, reconnecting...
+2026-07-20 10:32:37,420 copycat.live.tc4 INFO TC4 connected, session=0aa809b8
+2026-07-20 10:32:37,680 copycat.live.tc4 INFO TC4 reconnected (total=31)
