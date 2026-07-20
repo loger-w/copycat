@@ -180,7 +180,22 @@ class TC4QuoteSource:
         else:
             logger.warning("TC4 quote dispose: api.lock busy,跳過實體 close(洩漏優於 crash)")
 
-    def _req(self, obj: dict, *, strip_prefix: bool = False) -> dict:
+    def _connection(self) -> tuple[Any, str]:
+        """_api/_session 一致快照(_api_lock,與 _dispose/_ensure_connected 寫側對齊):
+        重連瞬間不可拿到「新 api × 舊 session」的錯配對(review P2:讀側也持鎖)。
+        未連線 → ConnectionError(不可裸 assert,見 _req)。"""
+        with self._api_lock:
+            api, session = self._api, self._session
+        if api is None or session is None:
+            raise ConnectionError("TC4 quote not connected")
+        return api, session
+
+    def _session_req(self, build: Callable[[str], dict], *, strip_prefix: bool = False) -> dict:
+        """帶 SessionKey 的 REQ:同一把快照取 (api, session) 再送,配對一致。"""
+        api, session = self._connection()
+        return self._req(build(session), api=api, strip_prefix=strip_prefix)
+
+    def _req(self, obj: dict, *, api: Any | None = None, strip_prefix: bool = False) -> dict:
         """自組電文 REQ:lock timeout + 錯誤收斂 ConnectionError + 失敗棄連線。
 
         wrapper 方法(QueryAllInstrumentInfo/GetHistory/SubHistory)內部 blocking
@@ -188,7 +203,9 @@ class TC4QuoteSource:
         不直呼 wrapper,REQ 全走這裡(review F1;同 tc4_trade 自組電文模式)。
         strip_prefix:GETHISDATA 回應帶 "<type>:" 前綴(wrapper GetHistory 同語意)。
         """
-        api = self._api
+        if api is None:
+            with self._api_lock:
+                api = self._api
         if api is None:
             # dispose 後殘存呼叫:收斂 ConnectionError,不可裸 assert 讓
             # AssertionError 逃出 engine 的 except ConnectionError 攔截網
@@ -216,21 +233,21 @@ class TC4QuoteSource:
             return json.loads(text[idx + 1 :] if idx >= 0 else text)
         return json.loads(message)
 
-    def _require_session(self) -> str:
-        session = self._session
-        if session is None:
-            raise ConnectionError("TC4 quote not connected")
-        return session
-
     def _rt_request(self, request: str, symbol: str) -> dict:
-        return self._req(build_rt_request(request, self._require_session(), symbol, _today_ymd()))
+        return self._session_req(
+            lambda session: build_rt_request(request, session, symbol, _today_ymd())
+        )
 
     # ---- QuoteSource 介面 ----
 
     def list_series(self) -> list[SeriesInfo]:
         self._ensure_connected()
-        res = self._req(
-            {"Request": "QUERYALLINSTRUMENT", "SessionKey": self._require_session(), "Type": "Opt"}
+        res = self._session_req(
+            lambda session: {
+                "Request": "QUERYALLINSTRUMENT",
+                "SessionKey": session,
+                "Type": "Opt",
+            }
         )
         if res.get("Success") != "OK":
             raise ConnectionError(f"TC4 QUERYALLINSTRUMENT failed: {res.get('ErrMsg')}")
@@ -258,10 +275,10 @@ class TC4QuoteSource:
         return ticks
 
     def _sub_history(self, symbol: str, start: str, end: str) -> dict:
-        return self._req(
-            {
+        return self._session_req(
+            lambda session: {
                 "Request": "SUBQUOTE",
-                "SessionKey": self._require_session(),
+                "SessionKey": session,
                 "Param": {
                     "Symbol": symbol,
                     "SubDataType": "TICKS",
@@ -272,10 +289,10 @@ class TC4QuoteSource:
         )
 
     def _get_history(self, symbol: str, start: str, end: str, qry_index: str) -> dict:
-        return self._req(
-            {
+        return self._session_req(
+            lambda session: {
                 "Request": "GETHISDATA",
-                "SessionKey": self._require_session(),
+                "SessionKey": session,
                 "Param": {
                     "Symbol": symbol,
                     "SubDataType": "TICKS",
@@ -330,7 +347,9 @@ class TC4QuoteSource:
 
     def close(self) -> None:
         self._stop.set()
-        if self._api is not None:
+        with self._api_lock:
+            connected = self._api is not None
+        if connected:
             for sym in list(self._subscribed):
                 try:
                     self._rt_request("UNSUBQUOTE", sym)
@@ -342,7 +361,8 @@ class TC4QuoteSource:
         # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
         # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive
         # 生命週期:不關則 process 不退出)
-        api = self._api
+        with self._api_lock:
+            api = self._api
         if api is not None:
             self._dispose(api)
 
@@ -351,7 +371,10 @@ class TC4QuoteSource:
     def _start_listener(self) -> None:
         if self._listener is not None:
             return
-        assert self._sub_port is not None, "listener 需要真連線的 SubPort"
+        if self._sub_port is None:
+            # 注入 api/session 而未真連線的路徑:收斂 ConnectionError,
+            # 不讓 AssertionError 逃出 engine 的 except ConnectionError 攔截網
+            raise ConnectionError("TC4 quote listener 需要真連線的 SubPort")
         self._listener = threading.Thread(target=self._listen_loop, daemon=True)
         self._listener.start()
 
