@@ -1,8 +1,24 @@
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
+import pytest
+import zmq
+
+import copycat.live.tc4 as tc4_mod
 from copycat.live.tc4 import SPOT_SYMBOL, TC4QuoteSource, build_rt_request, group_series
+
+
+def _free_port() -> int:
+    """取一個當下無 listener 的 port(bind 後立即釋放)。"""
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
 
 SYMS = [
     "TC.O.TWF.TX4.202607.C.44550",
@@ -177,6 +193,68 @@ class TestListenerFollowsSubPort:
             pub_a.close(linger=0)
             pub_b.close(linger=0)
             ctx.term()
+
+
+class _ReqApi:
+    """_rt_request 測試替身:真 threading.Lock + 可注入 socket 行為。"""
+
+    def __init__(self, socket: Any) -> None:
+        self.lock = threading.Lock()
+        self.socket = socket
+
+
+class _RaisingSocket:
+    def send_string(self, _payload: str) -> None:
+        raise zmq.ZMQError()
+
+    def recv(self) -> bytes:
+        raise AssertionError("recv 不應被呼叫")
+
+
+class TestRtRequestResilience:
+    """條 1(next-time 2026-07-20):REQ 路徑錯誤收斂 ConnectionError + lock timeout。"""
+
+    def test_lock_timeout_raises_connection_error(self) -> None:
+        api = _ReqApi(_RaisingSocket())
+        api.lock.acquire()  # 模擬 Pong 毒鎖(wrapper 無 try/finally 路徑)
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.05)
+        with pytest.raises(ConnectionError):
+            src._rt_request("SUBQUOTE", "TC.F.TWF.TXF.HOT")
+
+    def test_zmq_error_converted_and_lock_released(self) -> None:
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        with pytest.raises(ConnectionError):
+            src._rt_request("SUBQUOTE", "TC.F.TWF.TXF.HOT")
+        # lock 必須釋放(try/finally),否則下一次請求永久卡死
+        assert api.lock.acquire(timeout=0.5) is True
+
+
+class TestConnectInterruptible:
+    """條 1 核心:app 死亡時 Connect 裸 recv 必須有 timeout,重連迴圈可中斷。"""
+
+    def test_connect_dead_port_raises_connection_error_fast(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tc4_mod, "_REQ_TIMEOUT_MS", 300)
+        src = TC4QuoteSource(port=str(_free_port()))
+        t0 = time.monotonic()
+        with pytest.raises(ConnectionError):
+            src._ensure_connected()
+        assert time.monotonic() - t0 < 3.0, "無 RCVTIMEO:recv 阻塞不返回"
+
+    def test_check_stale_reconnect_loop_stoppable_when_app_dead(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tc4_mod, "_REQ_TIMEOUT_MS", 300)
+        src = TC4QuoteSource(port=str(_free_port()))
+        src._last_msg = time.monotonic() - 999.0  # 觸發 stale 判定
+        worker = threading.Thread(target=src._check_stale, daemon=True)
+        worker.start()
+        time.sleep(0.5)  # 讓迴圈至少失敗一次進 backoff
+        src._stop.set()
+        worker.join(timeout=3.0)
+        assert not worker.is_alive(), "重連迴圈不可中斷(阻塞在裸 recv)"
 
 
 class TestSpotSymbol:

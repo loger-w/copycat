@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
+# context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
+# 才可被 _stop 中斷。10s = 實測最重呼叫 QUERYALLINSTRUMENT(Opt) 1.93s 的 5 倍裕度;
+# GetHistory 分頁實測 max 1.1ms(3,482 次、10.7 萬 rows)不受影響(2026-07-20 probe)。
+_REQ_TIMEOUT_MS = 10_000
 
 
 def _today_ymd() -> str:
@@ -105,12 +109,14 @@ class TC4QuoteSource:
         session: str | None = None,
         poll_wait_secs: float = 1.0,
         backfill_date: str | None = None,
+        lock_timeout_secs: float = 5.0,
     ) -> None:
         self._port = port
         self._api = api
         self._session = session
         self._sub_port: str | None = None
         self._poll_wait = poll_wait_secs
+        self._lock_timeout = lock_timeout_secs
         self._backfill_date = backfill_date.replace("-", "") if backfill_date else None
         self._on_tick: Callable[[Tick], None] | None = None
         self._subscribed: set[str] = set()
@@ -130,7 +136,16 @@ class TC4QuoteSource:
         from tcoreapi_mq import QuoteAPI  # type: ignore[import-untyped]
 
         api = QuoteAPI(TC4_APPID, TC4_SKEY)
-        q = api.Connect(self._port)
+        # Connect() 內部裸 recv → context 級 timeout 讓之後建立的 socket 全部繼承;
+        # LINGER=0 讓失敗被棄的 api 在 GC term 時不為 pending LOGIN 無限阻塞
+        # (同 tc4_trade R2-2 / F-1 防護;timeout 值依據見 _REQ_TIMEOUT_MS 註解)
+        api.context.setsockopt(zmq.RCVTIMEO, _REQ_TIMEOUT_MS)
+        api.context.setsockopt(zmq.SNDTIMEO, _REQ_TIMEOUT_MS)
+        api.context.setsockopt(zmq.LINGER, 0)
+        try:
+            q = api.Connect(self._port)
+        except (zmq.ZMQError, OSError) as exc:
+            raise ConnectionError(f"TC4 quote connect failed: {exc}") from exc
         if q.get("Success") != "OK":
             raise ConnectionError(f"TC4 login failed: {q}")
         self._api = api
@@ -142,10 +157,15 @@ class TC4QuoteSource:
         assert self._api is not None and self._session is not None
         obj = build_rt_request(request, self._session, symbol, _today_ymd())
         api = self._api
-        api.lock.acquire()
+        if not api.lock.acquire(timeout=self._lock_timeout):
+            # wrapper KeepAlive Pong 無 try/finally,timeout 毒鎖 → 收斂 ConnectionError
+            # 讓 _check_stale 重連路徑換新 api,而非永久卡死
+            raise ConnectionError("TC4 quote api.lock timeout")
         try:
             api.socket.send_string(json.dumps(obj))
             message = api.socket.recv()[:-1]
+        except (zmq.ZMQError, OSError) as exc:
+            raise ConnectionError(f"TC4 quote request failed: {exc}") from exc
         finally:
             api.lock.release()
         return json.loads(message)
@@ -316,7 +336,8 @@ class TC4QuoteSource:
                     self.on_reconnect()
                 logger.info("TC4 reconnected (total=%d)", self.reconnects)
                 return
-            except (ConnectionError, OSError):
+            except (ConnectionError, OSError, zmq.ZMQError):
+                # zmq.ZMQError:Disconnect / wrapper 路徑仍可能裸拋,漏接會殺 listener
                 logger.exception("reconnect attempt failed, backoff %.0fs", backoff)
                 if self._stop.wait(backoff):
                     return
