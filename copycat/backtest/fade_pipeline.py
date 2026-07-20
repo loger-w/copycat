@@ -175,6 +175,23 @@ def _sim_trades(
     return trades, sources, lock
 
 
+def _ga_candidates(
+    feat: list[dict[str, float | None]],
+    pnl: list[float],
+    weights: list[float],
+    cfg: FadeBacktestConfig,
+) -> list[dict[str, object]]:
+    """GA 候選規則:predicates → exhaustive + GA seeds → 排序 → jaccard 去重 top-30(wf/單切分共用)."""
+    feature_names = sorted({k for row in feat for k in row if row[k] is not None})
+    predicates = build_predicates(feat, feature_names, cfg.quantile_probs)
+    logger.info("predicates: %d (features: %d)", len(predicates), len(feature_names))
+    ga_all: list[dict[str, object]] = list(exhaustive_scan(predicates, pnl, weights, cfg))  # type: ignore[arg-type]
+    for seed in cfg.ga_seeds:
+        ga_all.extend(ga_search(predicates, pnl, weights, cfg, seed))  # type: ignore[arg-type]
+    ga_all.sort(key=rule_sort_key)
+    return jaccard_dedupe(ga_all, cfg.jaccard_max)[:30]
+
+
 def _run_walk_forward(
     tradeable_samples: list[tuple[FadeSample, list[Bar1K], int]],
     all_feat: list[dict[str, float | None]],
@@ -224,13 +241,7 @@ def _run_walk_forward(
         core_feat = [all_feat[i] for i in core_ids]
         core_pnl = [all_pnl[i] for i in core_ids]
         core_w = [1.0] * len(core_ids)
-        feature_names = sorted({k2 for row in core_feat for k2 in row if row[k2] is not None})
-        predicates = build_predicates(core_feat, feature_names, cfg.quantile_probs)
-        ga_all: list[dict[str, object]] = list(exhaustive_scan(predicates, core_pnl, core_w, cfg))  # type: ignore[arg-type]
-        for seed in cfg.ga_seeds:
-            ga_all.extend(ga_search(predicates, core_pnl, core_w, cfg, seed))  # type: ignore[arg-type]
-        ga_all.sort(key=rule_sort_key)
-        candidates = jaccard_dedupe(ga_all, cfg.jaccard_max)[:30]
+        candidates = _ga_candidates(core_feat, core_pnl, core_w, cfg)
 
         # val 三道(val_exp>0 + 月度)→ top-1;val 用 default-combo pnl(與 GA fitness 同基準)
         best_rule: dict[str, object] | None = None
@@ -578,16 +589,7 @@ def run_fade_arm(
     # F1 fix: GA on train only, three-gate validation on test
     rules: list[dict[str, object]] = []
     if is_anchor and train_feat:
-        feature_names = sorted({k for row in train_feat for k in row if row[k] is not None})
-        predicates = build_predicates(train_feat, feature_names, cfg.quantile_probs)
-        logger.info("predicates: %d (features: %d)", len(predicates), len(feature_names))
-
-        exh = exhaustive_scan(predicates, train_pnl, train_weights, cfg)  # type: ignore[arg-type]
-        ga_all: list[dict[str, object]] = list(exh)
-        for seed in cfg.ga_seeds:
-            ga_all.extend(ga_search(predicates, train_pnl, train_weights, cfg, seed))  # type: ignore[arg-type]
-        ga_all.sort(key=rule_sort_key)
-        candidates = jaccard_dedupe(ga_all, cfg.jaccard_max)[:30]
+        candidates = _ga_candidates(train_feat, train_pnl, train_weights, cfg)
 
         test_start = cfg.split_date
         test_end = max(all_dates) if all_dates else cfg.split_date
