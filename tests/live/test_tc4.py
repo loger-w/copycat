@@ -94,6 +94,32 @@ class TestFetchBackfill:
         assert ticks[0].symbol == sym
         assert ticks[0].price_millipts == 100_000
 
+    def test_stops_when_qry_index_does_not_advance(self) -> None:
+        # TC4 若回傳停滯的 QryIndex(永遠指回同一頁),不可無限迴圈(同 backfill 停滯防呆)
+        row = hist_row(1)
+        row["QryIndex"] = "0"
+
+        class _Stuck:
+            def GetHistory(self, *args: Any) -> dict[str, Any]:  # noqa: N802
+                return {"HisData": [row]}
+
+        src = TC4QuoteSource(port="0", api=_Stuck(), session="sess-1", poll_wait_secs=0.0)
+        ticks = src._fetch_symbol_ticks("TC.O.TWF.TX4.202607.C.44550", "2026071800", "2026071806")
+        assert len(ticks) == 1
+
+    def test_stops_on_empty_qry_index(self) -> None:
+        # 末筆 QryIndex 空字串 = 分頁結束
+        row = hist_row(1)
+        row["QryIndex"] = ""
+
+        class _LastPage:
+            def GetHistory(self, *args: Any) -> dict[str, Any]:  # noqa: N802
+                return {"HisData": [row]}
+
+        src = TC4QuoteSource(port="0", api=_LastPage(), session="sess-1", poll_wait_secs=0.0)
+        ticks = src._fetch_symbol_ticks("TC.O.TWF.TX4.202607.C.44550", "2026071800", "2026071806")
+        assert len(ticks) == 1
+
 
 def _rt_payload(symbol: str, vol: str) -> bytes:
     quote = {
