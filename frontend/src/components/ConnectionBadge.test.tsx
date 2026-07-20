@@ -21,4 +21,18 @@ describe("ConnectionBadge", () => {
     render(<ConnectionBadge status="live" wsStatus="closed" />);
     expect(screen.getByText("連線中斷,重試中")).toBeTruthy();
   });
+
+  it("degraded 用警示 tone", () => {
+    render(<ConnectionBadge status="degraded" wsStatus="open" />);
+    const el = screen.getByText("資料降級");
+    expect(el.className).toContain("text-bull");
+    expect(el.className).toContain("border-bull/40");
+  });
+
+  it("未知狀態 fallback:label 原樣、預設 tone", () => {
+    render(<ConnectionBadge status="mystery" wsStatus="open" />);
+    const el = screen.getByText("mystery");
+    expect(el.className).toContain("bg-surface");
+    expect(el.className).toContain("text-ink-muted");
+  });
 });

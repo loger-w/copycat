@@ -84,4 +84,11 @@ describe("areaPaths", () => {
     expect(loss).toContain("Z");
     expect(profit).not.toBe(loss);
   });
+
+  it("精確 path 輸出(characterization)", () => {
+    const s = buildScales(CURVE, { width: 100, height: 100, pad: 0 });
+    const { profit, loss } = areaPaths(CURVE, s);
+    expect(profit).toBe("M0,33.3 L25,50 L25,50 L0,50 Z");
+    expect(loss).toBe("M25,50 L50,66.7 L100,100 L100,50 L25,50 Z");
+  });
 });

@@ -46,4 +46,11 @@ describe("MetricsBar", () => {
     render(<MetricsBar snapshot={{ ...SNAP, max_profit: null, beps: [], spot_pnl: null }} />);
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
+
+  it("totals 缺失時口數/合約數/覆蓋率顯示破折號", () => {
+    render(<MetricsBar snapshot={{ ...SNAP, totals: undefined }} />);
+    for (const label of ["Call 淨口數", "Put 淨口數", "參與合約數", "分類覆蓋率"]) {
+      expect(screen.getByText(label).nextElementSibling?.textContent).toBe("—");
+    }
+  });
 });
