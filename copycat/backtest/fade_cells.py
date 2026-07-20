@@ -225,6 +225,11 @@ def evaluate_cells_from_universe(
     if _round5_enabled(cfg):
         if _round4_enabled(cfg):
             raise ValueError("round 5 投票進場與 round 4 出場欄位不得同時啟用")
+        if not levels_map:
+            logger.warning(
+                "round5 vote 臂啟用但 levels_map 為空——位階票全數釘中性 1 分"
+                "(直呼時需自行傳入;run_cells 會由 T 日日線自建)"
+            )
         return _evaluate_round5(main_universe, cfg, watchlist_ids, levels_map or {})
     if _round4_enabled(cfg):
         return _evaluate_round4(

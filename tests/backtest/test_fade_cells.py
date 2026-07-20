@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from copycat.backtest.fade_cells import (
     evaluate_cells_from_universe,
     find_cell_a_entry,
@@ -277,6 +281,24 @@ def test_round5_no_levels_blocks_s5() -> None:
     sens = result["sensitivity"]
     assert isinstance(sens, dict)
     assert _dig(sens["S4"], "in_window", "base")["n"] == 1
+
+
+def test_round5_empty_levels_map_warns(caplog: pytest.LogCaptureFixture) -> None:
+    # 直呼忘傳 levels_map → 位階票全釘中性 1 分,必須有警告(run_cells 會自建故不受影響)
+    cfg = _round5_cfg()
+    universe = [(_sample("uc1", "2026-02-01"), _round5_bars())]
+    with caplog.at_level(logging.WARNING, logger="copycat.backtest.fade_cells"):
+        evaluate_cells_from_universe(universe, [], cfg, _WATCH, levels_map={})
+    assert any("levels_map" in m for m in caplog.messages)
+
+
+def test_round5_populated_levels_map_no_warning(caplog: pytest.LogCaptureFixture) -> None:
+    cfg = _round5_cfg()
+    universe = [(_sample("uc1", "2026-02-01"), _round5_bars())]
+    levels = {("uc1", "2026-01-01"): (52.2,)}
+    with caplog.at_level(logging.WARNING, logger="copycat.backtest.fade_cells"):
+        evaluate_cells_from_universe(universe, [], cfg, _WATCH, levels_map=levels)
+    assert not any("levels_map" in m for m in caplog.messages)
 
 
 def test_round5_validate_fail_fast() -> None:
