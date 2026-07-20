@@ -6,14 +6,7 @@ import json
 from pathlib import Path
 
 from copycat.backtest.config import BacktestConfig
-
-
-def _fmt(v: object) -> str:
-    if v is None:
-        return "—"
-    if isinstance(v, float):
-        return f"{v:+.4f}" if abs(v) < 1 else f"{v:.2f}"
-    return str(v)
+from copycat.backtest.report_fmt import fmt_cell
 
 
 def write_report(
@@ -58,12 +51,12 @@ def write_report(
         for r in rules:
             assert isinstance(r, dict)
             conds = " & ".join(
-                f"{c['feature']}{c['op']}{_fmt(c['threshold'])}" for c in r["conditions"]
+                f"{c['feature']}{c['op']}{fmt_cell(c['threshold'])}" for c in r["conditions"]
             )
             lines.append(
-                f"| {r['regime']} | {conds} | {_fmt(r.get('test_expectancy'))} "
-                f"| {_fmt(r.get('test_p_win'))} | {_fmt(r.get('test_payoff'))} "
-                f"| {_fmt(r.get('test_mdd'))} | {r.get('test_n_raw')} "
+                f"| {r['regime']} | {conds} | {fmt_cell(r.get('test_expectancy'))} "
+                f"| {fmt_cell(r.get('test_p_win'))} | {fmt_cell(r.get('test_payoff'))} "
+                f"| {fmt_cell(r.get('test_mdd'))} | {r.get('test_n_raw')} "
                 f"| {'✓' if r.get('monthly_passed') else '✗'} "
                 f"| {'✓' if r.get('plateau_passed') else '✗'} "
                 f"| {'**✓**' if r.get('passed_all') else '✗'} |"
@@ -80,7 +73,7 @@ def write_report(
         for name in sorted(curves):
             c = curves[name]
             lines.append(
-                f"| {name} | " + " | ".join(_fmt(c.get(t)) for t in thetas) + " |"
+                f"| {name} | " + " | ".join(fmt_cell(c.get(t)) for t in thetas) + " |"
             )
     else:
         lines.append("(無資料)")
@@ -95,8 +88,8 @@ def write_report(
         for combo_id in sorted(duel):
             s = duel[combo_id]
             lines.append(
-                f"| {combo_id} | {_fmt(s.get('expectancy'))} | {_fmt(s.get('p_win'))} "
-                f"| {_fmt(s.get('payoff'))} | {_fmt(s.get('mdd'))} | {s.get('n_raw')} |"
+                f"| {combo_id} | {fmt_cell(s.get('expectancy'))} | {fmt_cell(s.get('p_win'))} "
+                f"| {fmt_cell(s.get('payoff'))} | {fmt_cell(s.get('mdd'))} | {s.get('n_raw')} |"
             )
     else:
         lines.append("(無資料)")

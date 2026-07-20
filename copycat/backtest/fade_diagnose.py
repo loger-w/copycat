@@ -17,8 +17,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from copycat.backtest.fade_config import NO_STOP_HOLD_COMBO, FadeBacktestConfig
-from copycat.backtest.fade_report import _fmt
 from copycat.backtest.fade_simulate import FadeSample, simulate_fade_sample
+from copycat.backtest.quantiles import quantile_trunc
+from copycat.backtest.report_fmt import fmt_num
 from copycat.data.models import Bar1K
 from copycat.fileio import atomic_write_text
 from copycat.market import limit_up_price
@@ -27,14 +28,6 @@ logger = logging.getLogger(__name__)
 
 _EARLY_M = 59  # < 10:00
 _HEAVY_VOL_RATIO = 2.0  # 逼近 bar 量 / 前 20bar 均量
-
-
-def _quantile(vals: list[float], p: float) -> float | None:
-    if not vals:
-        return None
-    s = sorted(vals)
-    idx = min(len(s) - 1, int(p * len(s)))
-    return s[idx]
 
 
 def _classify_approach(
@@ -74,9 +67,9 @@ def _bucket_stats(events: list[dict[str, object]]) -> dict[str, float | int | No
         "n": n,
         "p_lock": (locked / n) if n else None,
         "p_reverse": ((n - locked) / n) if n else None,
-        "reversal_depth_med": _quantile(depths_f, 0.5),
-        "reversal_depth_p25": _quantile(depths_f, 0.25),
-        "reversal_depth_p75": _quantile(depths_f, 0.75),
+        "reversal_depth_med": quantile_trunc(depths_f, 0.5),
+        "reversal_depth_p25": quantile_trunc(depths_f, 0.25),
+        "reversal_depth_p75": quantile_trunc(depths_f, 0.75),
     }
 
 
@@ -235,7 +228,7 @@ def _pool_run(
             "days": len(set(days)),
             "mean": (sum(pnl) / len(pnl)) if pnl else None,
             "cluster_se": cluster_se(pnl, days) if pnl else None,
-            "median": _quantile(pnl, 0.5),
+            "median": quantile_trunc(pnl, 0.5),
             "p_win": (sum(1 for x in pnl if x > 0) / len(pnl)) if pnl else None,
             "relock_rate": (locked / len(pnl)) if pnl else None,
             "excluded_guard_at_entry": excluded_guard[p],
@@ -272,7 +265,7 @@ def _comparison_and_verdict(
 
         # 日 × T 日成交額中位數 雙重分層(成分混淆控制,報告項不入判定)
         all_turn = [t.turnover for t in tiger + others if t.turnover > 0]
-        med_turn = _quantile(all_turn, 0.5) or 0.0
+        med_turn = quantile_trunc(all_turn, 0.5) or 0.0
         strata2_t = [f"{t.day}|{int(t.turnover > med_turn)}" for t in tiger]
         strata2_o = [f"{t.day}|{int(t.turnover > med_turn)}" for t in others]
         _, p_diff2 = stratified_permutation_p(
@@ -387,9 +380,9 @@ def _pool_table_lines(pools: dict[str, object], title: str) -> list[str]:
             continue
         lines.append(
             f"| {p} | {s.get('n', 0)} | {s.get('days', 0)}"
-            f" | {_fmt(s.get('mean'))} | {_fmt(s.get('cluster_se'))}"
-            f" | {_fmt(s.get('median'))} | {_fmt(s.get('p_win'), '.2f')}"
-            f" | {_fmt(s.get('relock_rate'), '.1%')}"
+            f" | {fmt_num(s.get('mean'))} | {fmt_num(s.get('cluster_se'))}"
+            f" | {fmt_num(s.get('median'))} | {fmt_num(s.get('p_win'), '.2f')}"
+            f" | {fmt_num(s.get('relock_rate'), '.1%')}"
             f" | {s.get('excluded_guard_at_entry', 0)} |"
         )
     lines.append("")
@@ -411,8 +404,8 @@ def write_pool_fade_report(
     lines.append("")
     lines.append("- 進場 = T+1 首根 1K bar open − slippage(悲觀);出場 = guard/災難/鎖死/收盤。")
     lines.append(
-        f"- 成本 {cost:.4%}/來回;guard {_fmt(cfg.guard_limit_dist, '.1%')}、"
-        f"災難 {_fmt(cfg.disaster_x, '.1%')}、鎖死懲罰 {_fmt(cfg.lock_penalty, '.2f')}。"
+        f"- 成本 {cost:.4%}/來回;guard {fmt_num(cfg.guard_limit_dist, '.1%')}、"
+        f"災難 {fmt_num(cfg.disaster_x, '.1%')}、鎖死懲罰 {fmt_num(cfg.lock_penalty, '.2f')}。"
     )
     lines.append(f"- 共同期間:t1_date ≤ {result.get('label_cutoff')}(標記截止;期間外不進對照)。")
     lines.append(
@@ -431,14 +424,14 @@ def write_pool_fade_report(
         lines.append("## 判定 Q1(池子有肉;SC-3 拆兩題,本檔僅答 Q1)")
         lines.append("")
         lines.append(
-            f"- tiger(合併)淨 EV = {_fmt(comp.get('tiger_mean'))}"
-            f"(日聚類 SE {_fmt(comp.get('tiger_cluster_se'))},z = {_fmt(comp.get('tiger_z'), '.2f')},"
-            f"單尾 p = {_fmt(comp.get('tiger_p_positive'))})"
+            f"- tiger(合併)淨 EV = {fmt_num(comp.get('tiger_mean'))}"
+            f"(日聚類 SE {fmt_num(comp.get('tiger_cluster_se'))},z = {fmt_num(comp.get('tiger_z'), '.2f')},"
+            f"單尾 p = {fmt_num(comp.get('tiger_p_positive'))})"
         )
         lines.append(
-            f"- tiger − 對照(control+scan)差 = {_fmt(comp.get('diff'))}"
-            f"(日內分層洗牌 p = {_fmt(comp.get('diff_perm_p'))};"
-            f"日×成交額雙重分層 p = {_fmt(comp.get('diff_perm_p_double_strat'))})"
+            f"- tiger − 對照(control+scan)差 = {fmt_num(comp.get('diff'))}"
+            f"(日內分層洗牌 p = {fmt_num(comp.get('diff_perm_p'))};"
+            f"日×成交額雙重分層 p = {fmt_num(comp.get('diff_perm_p_double_strat'))})"
         )
         crit = verdict.get("criteria")
         if isinstance(crit, dict):
@@ -464,10 +457,10 @@ def write_pool_fade_report(
         fwd_comp = forward.get("comparison")
         if isinstance(fwd_comp, dict) and fwd_comp.get("tiger_mean") is not None:
             lines.append(
-                f"- forward tiger 淨 EV = {_fmt(fwd_comp.get('tiger_mean'))}"
-                f"(z = {_fmt(fwd_comp.get('tiger_z'), '.2f')},"
-                f"diff = {_fmt(fwd_comp.get('diff'))},"
-                f"洗牌 p = {_fmt(fwd_comp.get('diff_perm_p'))})"
+                f"- forward tiger 淨 EV = {fmt_num(fwd_comp.get('tiger_mean'))}"
+                f"(z = {fmt_num(fwd_comp.get('tiger_z'), '.2f')},"
+                f"diff = {fmt_num(fwd_comp.get('diff'))},"
+                f"洗牌 p = {fmt_num(fwd_comp.get('diff_perm_p'))})"
             )
             lines.append("")
 

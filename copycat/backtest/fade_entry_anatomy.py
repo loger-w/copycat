@@ -12,10 +12,11 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from copycat.backtest.fade_anatomy import _quantiles
 from copycat.backtest.fade_config import FadeBacktestConfig
 from copycat.backtest.fade_diagnose import cluster_se
 from copycat.backtest.fade_simulate import FadeSample
+from copycat.backtest.quantiles import quantiles_round
+from copycat.backtest.report_fmt import fmt_quantiles
 from copycat.data.daily import DailyIndex
 from copycat.data.models import Bar1K
 from copycat.fileio import atomic_write_text
@@ -108,8 +109,8 @@ def flow_flip_anatomy(
             "n_days": len(uni),
             "found": found,
             "found_rate": (found / len(uni)) if uni else None,
-            "first_m": _quantiles(firsts),
-            "post_move": _quantiles(post_moves),
+            "first_m": quantiles_round(firsts),
+            "post_move": quantiles_round(post_moves),
             "false_rate": (false_cnt / found) if found else None,
         }
 
@@ -228,8 +229,8 @@ def level_stratified_duel(
         blk: dict[str, object] = {
             "n_near": len(near),
             "n_far": len(far),
-            "post_move_near": _quantiles([v for v, _ in near]),
-            "post_move_far": _quantiles([v for v, _ in far]),
+            "post_move_near": quantiles_round([v for v, _ in near]),
+            "post_move_far": quantiles_round([v for v, _ in far]),
         }
         if len(near) >= 2 and len(far) >= 2:
             mean_n = sum(v for v, _ in near) / len(near)
@@ -273,7 +274,7 @@ def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
     """
     day_recs, widths = _build_day_recs(uni, daily)
 
-    width_q = _quantiles(widths)
+    width_q = quantiles_round(widths)
     width_p50 = width_q.get("p50")
     cdp_drop = not isinstance(width_p50, float) or width_p50 < _WIDTH_DROP_MEDIAN
 
@@ -332,7 +333,7 @@ def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
         groups[key].append(((rec.high - rec.close) / rec.high, rec.t1_date))
 
     group_blocks: dict[str, object] = {
-        key: {"n": len(vals), "post_move": _quantiles([v for v, _ in vals])}
+        key: {"n": len(vals), "post_move": quantiles_round([v for v, _ in vals])}
         for key, vals in groups.items()
     }
     a = groups["near_level_only"]
@@ -446,16 +447,6 @@ def run_entry_anatomy(
     return report_path
 
 
-def _fmtq(q: object, spec: str = ".2%") -> str:
-    if not isinstance(q, dict):
-        return "—"
-    parts = []
-    for key in ("p25", "p50", "p75", "p90"):
-        v = q.get(key)
-        parts.append(format(v, spec) if isinstance(v, float) else "—")
-    return "/".join(parts) + f"(n={q.get('n')})"
-
-
 def _fmt_rate(v: object) -> str:
     return format(v, ".1%") if isinstance(v, float) else "—"
 
@@ -496,7 +487,7 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                 go = "**GO**" if av[key] else "DROP"
             lines.append(
                 f"| {key} | {_fmt_rate(blk.get('found_rate'))}"
-                f" | {_fmtq(blk.get('first_m'), '.0f')} | {_fmtq(blk.get('post_move'))}"
+                f" | {fmt_quantiles(blk.get('first_m'), '.0f')} | {fmt_quantiles(blk.get('post_move'))}"
                 f" | {_fmt_rate(blk.get('false_rate'))} | {go} |"
             )
     lines.append("")
@@ -514,7 +505,7 @@ def _write_report(result: dict[str, object], path: Path) -> None:
         med = width.get("median") if isinstance(width, dict) else None
         lines.append(
             f"- CDP 線距 (AH−AL)/T日收:中位 = {_fmt_rate(med)}"
-            f"(分佈 {_fmtq(width)});出局線 2% → "
+            f"(分佈 {fmt_quantiles(width)});出局線 2% → "
             f"**{'DROP(全組出局)' if c.get('cdp_drop') else 'PASS'}**。"
         )
         lines.append("")
@@ -549,7 +540,7 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                 blk = duel.get(key)
                 if isinstance(blk, dict):
                     lines.append(
-                        f"| {label} | {blk.get('n')} | {_fmtq(blk.get('post_move'))} |"
+                        f"| {label} | {blk.get('n')} | {fmt_quantiles(blk.get('post_move'))} |"
                     )
             z = duel.get("z")
             lines.append("")
@@ -575,7 +566,7 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                 d = blk.get("diff")
                 lines.append(
                     f"| {key} | {blk.get('n_near')} | {blk.get('n_far')}"
-                    f" | {_fmtq(blk.get('post_move_near'))} | {_fmtq(blk.get('post_move_far'))}"
+                    f" | {fmt_quantiles(blk.get('post_move_near'))} | {fmt_quantiles(blk.get('post_move_far'))}"
                     f" | {format(d, '+.2%') if isinstance(d, float) else '—'} |"
                 )
         sz = strat.get("z")

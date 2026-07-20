@@ -20,7 +20,6 @@ from datetime import date as _date
 from pathlib import Path
 
 from copycat.backtest.fade_config import NO_STOP_HOLD_COMBO, FadeBacktestConfig
-from copycat.backtest.fade_report import _fmt
 from copycat.backtest.fade_simulate import (
     TRADEABLE_STATUSES as _TRADEABLE,
 )
@@ -35,6 +34,8 @@ from copycat.backtest.fade_vote import (
     find_signal_entry,
     find_vote_entry,
 )
+from copycat.backtest.quantiles import quantile_round
+from copycat.backtest.report_fmt import fmt_num
 from copycat.data.models import Bar1K
 from copycat.fileio import atomic_write_text
 from copycat.market import limit_up_price
@@ -474,14 +475,6 @@ _ACTUARIAL_REASONS = (
 _ACTUARIAL_REASONS_R4 = (*_ACTUARIAL_REASONS, "inner_flip")
 
 
-def _pctl(values: list[float], q: float) -> float | None:
-    if not values:
-        return None
-    s = sorted(values)
-    idx = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
-    return s[idx]
-
-
 def _tp_actuarial_block(trades: list[_TradeRec]) -> dict[str, object]:
     """停利精算表(round 4):saved = pnl − hold_pnl(同淨口徑,成本相消);
     收盤鎖死日 hold_pnl=None 排除並計數(防省肉灌水)."""
@@ -495,9 +488,9 @@ def _tp_actuarial_block(trades: list[_TradeRec]) -> dict[str, object]:
             "rate": (len(sub) / n_total) if n_total else None,
             "avg_pnl": (sum(t.pnl for t in sub) / len(sub)) if sub else None,
             "saved_mean": (sum(saved) / len(saved)) if saved else None,
-            "saved_p25": _pctl(saved, 0.25),
-            "saved_p50": _pctl(saved, 0.50),
-            "saved_p75": _pctl(saved, 0.75),
+            "saved_p25": quantile_round(saved, 0.25),
+            "saved_p50": quantile_round(saved, 0.50),
+            "saved_p75": quantile_round(saved, 0.75),
             "saved_excluded_lock": sum(1 for t in sub if t.hold_pnl is None),
         }
     return out
@@ -1008,14 +1001,14 @@ def _evaluate_round4(
 
 def _fwd_note(stats: dict[str, object]) -> str:
     n = stats.get("n", 0)
-    return "forward 樣本 0,僅候選" if n == 0 else f"n={n}, EV={_fmt(stats.get('mean'))}"
+    return "forward 樣本 0,僅候選" if n == 0 else f"n={n}, EV={fmt_num(stats.get('mean'))}"
 
 
 def _write_round3_report(
     result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: Path
 ) -> None:
     """round 3 報告:b 變體表 + Q2(候選)+ 底倉格 + 精算表 + forward 段(SC-2/4/7)。"""
-    _f = _fmt
+    _f = fmt_num
     lines: list[str] = []
     lines.append(f"# UC 池劇本格子評估 round 3(pre-registered;{report_date})")
     lines.append("")
@@ -1176,7 +1169,7 @@ def _write_round4_report(
     result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: Path
 ) -> None:
     """round 4 報告:主判定變體表(含賺賠比)+ Q2′ + 消融 + 敏感度 + 雙精算表."""
-    _f = _fmt
+    _f = fmt_num
     lines: list[str] = []
     lines.append(f"# UC 池劇本格子評估 round 4(pre-registered;{report_date})")
     lines.append("")
@@ -1712,7 +1705,7 @@ def _write_round5_report(
     result: dict[str, object], cfg: FadeBacktestConfig, report_date: str, path: Path
 ) -> None:
     """round 5 報告:樣本預算 + 主判定臂(Q3)+ 敏感度 + 消融 + 精算對比 + 底倉觀察."""
-    _f = _fmt
+    _f = fmt_num
     lines: list[str] = []
     lines.append(f"# UC 池投票制進場評估 round 5(pre-registered;{report_date})")
     lines.append("")
@@ -1913,7 +1906,7 @@ def write_cells_report(
     lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---|")
     cells = result.get("cells")
     assert isinstance(cells, dict)
-    _f = _fmt
+    _f = fmt_num
 
     for key in sorted(cells):
         c = cells[key]

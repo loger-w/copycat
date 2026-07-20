@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from copycat.backtest.report_fmt import fmt_num
 from copycat.fileio import atomic_write_text
-
-
-def _fmt(v: object, fmt: str = ".4f") -> str:
-    return f"{v:{fmt}}" if isinstance(v, float | int) else "—"
 
 
 def write_fade_report(
@@ -45,8 +42,8 @@ def write_fade_report(
     )
     if guard is not None or disaster is not None:
         lines.append(
-            f"- 強制風控:防鎖 guard 距漲停 {_fmt(guard, '.1%')} 強制回補、"
-            f"災難停損 entry+{_fmt(disaster, '.1%')}(不入搜索,永遠生效)。"
+            f"- 強制風控:防鎖 guard 距漲停 {fmt_num(guard, '.1%')} 強制回補、"
+            f"災難停損 entry+{fmt_num(disaster, '.1%')}(不入搜索,永遠生效)。"
         )
     if lock_pen is not None:
         lines.append(f"- 鎖死語意(悲觀化):全日鎖死 → 漲停 ×(1+{lock_pen:.2f})回補。")
@@ -131,12 +128,12 @@ def write_fade_report(
             return (
                 f"| {row.get('rank', '?')} | {row.get('arm', '?')}"
                 f" | {row.get('param', '')}"
-                f" | {_fmt(row.get('test_exp'))}"
-                f" | {_fmt(row.get('stress_exp'))}"
-                f" | {_fmt(row.get('p_win'), '.2f')}"
-                f" | {_fmt(row.get('payoff'), '.1f')}"
-                f" | {_fmt(row.get('mdd'))}"
-                f" | {_fmt(row.get('lock_pct'), '.1%') if isinstance(row.get('lock_pct'), float | int) else '—'}"
+                f" | {fmt_num(row.get('test_exp'))}"
+                f" | {fmt_num(row.get('stress_exp'))}"
+                f" | {fmt_num(row.get('p_win'), '.2f')}"
+                f" | {fmt_num(row.get('payoff'), '.1f')}"
+                f" | {fmt_num(row.get('mdd'))}"
+                f" | {fmt_num(row.get('lock_pct'), '.1%') if isinstance(row.get('lock_pct'), float | int) else '—'}"
                 f" | {stress}"
                 f" | {row.get('best_stop', '—')}"
                 f" | {row.get('best_tp', '—')}"
@@ -191,8 +188,8 @@ def write_fade_report(
                     continue
                 lines.append(
                     f"| {r.get('arm', '?')} | {r.get('param', '')} | {src}"
-                    f" | {_fmt(s.get('expectancy'))} | {_fmt(s.get('p_win'), '.2f')}"
-                    f" | {_fmt(s.get('payoff'), '.1f')} | {_fmt(s.get('mdd'))}"
+                    f" | {fmt_num(s.get('expectancy'))} | {fmt_num(s.get('p_win'), '.2f')}"
+                    f" | {fmt_num(s.get('payoff'), '.1f')} | {fmt_num(s.get('mdd'))}"
                     f" | {s.get('n', 0)} |"
                 )
         lines.append("")
@@ -212,7 +209,7 @@ def write_fade_report(
                     continue
                 lines.append(
                     f"| {r.get('arm', '?')} | {r.get('param', '')} | {dist}"
-                    f" | {_fmt(s.get('expectancy'))} | {s.get('n', 0)} |"
+                    f" | {fmt_num(s.get('expectancy'))} | {s.get('n', 0)} |"
                 )
         lines.append("")
 
@@ -238,11 +235,11 @@ def write_fade_report(
                         continue
                     lines.append(
                         f"| {dist} | {name} | {s.get('n', 0)}"
-                        f" | {_fmt(s.get('p_lock'), '.1%')}"
-                        f" | {_fmt(s.get('p_reverse'), '.1%')}"
-                        f" | {_fmt(s.get('reversal_depth_med'), '.2%')}"
-                        f" | {_fmt(s.get('reversal_depth_p25'), '.2%')}"
-                        f" | {_fmt(s.get('reversal_depth_p75'), '.2%')} |"
+                        f" | {fmt_num(s.get('p_lock'), '.1%')}"
+                        f" | {fmt_num(s.get('p_reverse'), '.1%')}"
+                        f" | {fmt_num(s.get('reversal_depth_med'), '.2%')}"
+                        f" | {fmt_num(s.get('reversal_depth_p25'), '.2%')}"
+                        f" | {fmt_num(s.get('reversal_depth_p75'), '.2%')} |"
                     )
         lines.append("")
 

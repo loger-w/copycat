@@ -25,6 +25,8 @@ from copycat.backtest.fade_cells import (
 )
 from copycat.backtest.fade_config import FadeBacktestConfig
 from copycat.backtest.fade_simulate import FadeSample, _round_trip_cost
+from copycat.backtest.quantiles import quantiles_round
+from copycat.backtest.report_fmt import fmt_quantiles
 from copycat.data.models import Bar1K
 from copycat.fileio import atomic_write_text
 from copycat.market import limit_up_price
@@ -32,17 +34,6 @@ from copycat.market import limit_up_price
 logger = logging.getLogger(__name__)
 
 _Universe = list[tuple[FadeSample, list[Bar1K]]]
-
-
-def _quantiles(values: list[float]) -> dict[str, object]:
-    if not values:
-        return {"p25": None, "p50": None, "p75": None, "p90": None, "n": 0}
-    s = sorted(values)
-
-    def _q(q: float) -> float:
-        return s[min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))]
-
-    return {"p25": _q(0.25), "p50": _q(0.50), "p75": _q(0.75), "p90": _q(0.90), "n": len(s)}
 
 
 def _gap_bucket(gap: float, edges: tuple[float, ...]) -> str:
@@ -102,9 +93,9 @@ def flush_anatomy(
             "n_days": len(uni),
             "found": found,
             "found_rate": (found / len(uni)) if uni else None,
-            "first_m": _quantiles(firsts_m),
-            "recovery": _quantiles(recoveries),
-            "post_move": _quantiles(post_moves),
+            "first_m": quantiles_round(firsts_m),
+            "recovery": quantiles_round(recoveries),
+            "post_move": quantiles_round(post_moves),
             "by_gap": by_gap,
         }
     return out
@@ -190,9 +181,9 @@ def hl_anatomy(
                 "n_days": n_days,
                 "found": found,
                 "found_rate": (found / n_days) if n_days else None,
-                "confirm_m": _quantiles(confirms_m),
-                "giveback": _quantiles(givebacks),
-                "post_move": _quantiles(post_moves),
+                "confirm_m": quantiles_round(confirms_m),
+                "giveback": quantiles_round(givebacks),
+                "post_move": quantiles_round(post_moves),
             }
         out[f"k{k}"] = arm_blocks
     return out
@@ -335,8 +326,8 @@ def slow_rally_anatomy(
         "n_days": len(uni),
         "days_with_segment": days_with,
         "rate": (days_with / len(uni)) if uni else None,
-        "segment_len": _quantiles(seg_lens),
-        "post_move": _quantiles(post_moves),
+        "segment_len": quantiles_round(seg_lens),
+        "post_move": quantiles_round(post_moves),
     }
 
 
@@ -389,8 +380,8 @@ def mfe_anatomy(
         ]
         out[kind] = {
             "n": len(trades),
-            "mfe": _quantiles(mfes),
-            "giveback_closeout": _quantiles(givebacks),
+            "mfe": quantiles_round(mfes),
+            "giveback_closeout": quantiles_round(givebacks),
         }
     return out
 
@@ -485,16 +476,6 @@ def run_anatomy(
     return report_path
 
 
-def _fmtq(q: object, spec: str = ".2%") -> str:
-    if not isinstance(q, dict):
-        return "—"
-    parts = []
-    for key in ("p25", "p50", "p75", "p90"):
-        v = q.get(key)
-        parts.append(format(v, spec) if isinstance(v, float) else "—")
-    return "/".join(parts) + f"(n={q.get('n')})"
-
-
 def _write_report(result: dict[str, object], path: Path) -> None:
     lines: list[str] = []
     lines.append(f"# Round 4 §0 前置描述統計({result.get('report_date')};設計輸入,不入判定)")
@@ -522,8 +503,8 @@ def _write_report(result: dict[str, object], path: Path) -> None:
             blk = a[kind]
             if isinstance(blk, dict):
                 lines.append(
-                    f"| {kind} | {blk.get('n')} | {_fmtq(blk.get('mfe'))}"
-                    f" | {_fmtq(blk.get('giveback_closeout'))} |"
+                    f"| {kind} | {blk.get('n')} | {fmt_quantiles(blk.get('mfe'))}"
+                    f" | {fmt_quantiles(blk.get('giveback_closeout'))} |"
                 )
     lines.append("")
 
@@ -539,8 +520,8 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                 rate = blk.get("found_rate")
                 lines.append(
                     f"| {zkey} | {format(rate, '.1%') if isinstance(rate, float) else '—'}"
-                    f" | {_fmtq(blk.get('first_m'), '.0f')} | {_fmtq(blk.get('recovery'), '.2f')}"
-                    f" | {_fmtq(blk.get('post_move'))} |"
+                    f" | {fmt_quantiles(blk.get('first_m'), '.0f')} | {fmt_quantiles(blk.get('recovery'), '.2f')}"
+                    f" | {fmt_quantiles(blk.get('post_move'))} |"
                 )
     lines.append(
         "- 凍結值建議:z 取事件率適中之檔位;recovery / min_profit 取分佈自然分位。"
@@ -566,8 +547,8 @@ def _write_report(result: dict[str, object], path: Path) -> None:
                     lines.append(
                         f"| {kkey} | {akey}"
                         f" | {format(rate, '.1%') if isinstance(rate, float) else '—'}"
-                        f" | {_fmtq(blk.get('confirm_m'), '.0f')} | {_fmtq(blk.get('giveback'))}"
-                        f" | {_fmtq(blk.get('post_move'))} |"
+                        f" | {fmt_quantiles(blk.get('confirm_m'), '.0f')} | {fmt_quantiles(blk.get('giveback'))}"
+                        f" | {fmt_quantiles(blk.get('post_move'))} |"
                     )
     lines.append("")
 
@@ -616,8 +597,8 @@ def _write_report(result: dict[str, object], path: Path) -> None:
         lines.append(
             f"- 出現率 = {format(rate, '.1%') if isinstance(rate, float) else '—'}"
             f"({e.get('days_with_segment')}/{e.get('n_days')});"
-            f"段長 = {_fmtq(e.get('segment_len'), '.0f')};"
-            f"段末後 10 根 post_move(正=結束後下跌)= {_fmtq(e.get('post_move'))}。"
+            f"段長 = {fmt_quantiles(e.get('segment_len'), '.0f')};"
+            f"段末後 10 根 post_move(正=結束後下跌)= {fmt_quantiles(e.get('post_move'))}。"
         )
     lines.append("")
 
