@@ -259,11 +259,20 @@ class TC4QuoteSource:
         import zmq
 
         ctx = zmq.Context()
-        sock = ctx.socket(zmq.SUB)
-        sock.connect(f"tcp://127.0.0.1:{self._sub_port}")
-        sock.setsockopt_string(zmq.SUBSCRIBE, "")
-        sock.setsockopt(zmq.RCVTIMEO, 1_000)
+        sock: zmq.Socket | None = None
+        bound_port: str | None = None
         while not self._stop.is_set():
+            if sock is None or self._sub_port != bound_port:
+                # 重連會換 SubPort(_check_stale → _ensure_connected);listener 不跟隨
+                # 則新 session 推播(含 PING)永遠收不到 → 30 秒週期無限重連
+                # (2026-07-20 盤中實證 30 次;同 tc4_trade R3-1 的跟隨語意)
+                if sock is not None:
+                    sock.close(linger=0)
+                sock = ctx.socket(zmq.SUB)
+                sock.connect(f"tcp://127.0.0.1:{self._sub_port}")
+                sock.setsockopt_string(zmq.SUBSCRIBE, "")
+                sock.setsockopt(zmq.RCVTIMEO, 1_000)
+                bound_port = self._sub_port
             try:
                 raw = (sock.recv()[:-1]).decode("utf-8")
             except zmq.ZMQError:
@@ -282,7 +291,8 @@ class TC4QuoteSource:
             tick = parse_realtime(msg.get("Quote", {}))
             if tick is not None and self._on_tick is not None:
                 self._on_tick(tick)
-        sock.close(linger=0)
+        if sock is not None:
+            sock.close(linger=0)
         ctx.term()
 
     def _check_stale(self) -> None:

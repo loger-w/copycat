@@ -93,3 +93,61 @@ class TestFetchBackfill:
         assert len(ticks) == 120
         assert ticks[0].symbol == sym
         assert ticks[0].price_millipts == 100_000
+
+
+def _rt_payload(symbol: str, vol: str) -> bytes:
+    quote = {
+        "Symbol": symbol,
+        "TradingPrice": "100",
+        "TradeQuantity": "1",
+        "TradeVolume": vol,
+        "PreciseTime": "20000000000",
+    }
+    import json as _json
+
+    return b"Q:" + _json.dumps({"DataType": "REALTIME", "Quote": quote}).encode() + b"\x00"
+
+
+class TestListenerFollowsSubPort:
+    def test_listener_rebinds_when_sub_port_changes(self) -> None:
+        """item 3(2026-07-20 盤中驗證):重連換 SubPort 後 listener 必須跟隨。
+
+        盤中實證:達錢 4 重啟後重連成功,但 listener 停在舊 SubPort → 新 session 推播
+        (含 PING)收不到 → 每 30 秒無限重連(實測 30 次),自癒永不收斂。
+        """
+        import zmq
+
+        sym_a = "TC.O.TWF.TX4.202607.C.44000"
+        sym_b = "TC.O.TWF.TX4.202607.C.44100"
+        ctx = zmq.Context()
+        pub_a = ctx.socket(zmq.PUB)
+        port_a = pub_a.bind_to_random_port("tcp://127.0.0.1")
+        pub_b = ctx.socket(zmq.PUB)
+        port_b = pub_b.bind_to_random_port("tcp://127.0.0.1")
+        got: list[str] = []
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        src._sub_port = str(port_a)
+        src._on_tick = lambda t: got.append(t.symbol)
+        src._start_listener()
+        try:
+            import time as _time
+
+            deadline = _time.monotonic() + 5.0
+            while sym_a not in got and _time.monotonic() < deadline:
+                pub_a.send(_rt_payload(sym_a, "1"))  # PUB/SUB slow joiner:輪發到送達
+                _time.sleep(0.05)
+            assert sym_a in got, "baseline:port A 訊息未送達"
+            src._sub_port = str(port_b)  # 模擬 _check_stale 重連換 SubPort
+            deadline = _time.monotonic() + 5.0
+            while sym_b not in got and _time.monotonic() < deadline:
+                pub_b.send(_rt_payload(sym_b, "2"))
+                _time.sleep(0.05)
+            assert sym_b in got, "listener 未跟隨新 SubPort(item 3)"
+        finally:
+            src._stop.set()
+            listener = src._listener
+            if listener is not None:
+                listener.join(timeout=3.0)
+            pub_a.close(linger=0)
+            pub_b.close(linger=0)
+            ctx.term()
