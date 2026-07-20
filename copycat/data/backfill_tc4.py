@@ -10,12 +10,9 @@ import time
 from pathlib import Path
 
 from copycat.data.models import Bar1K, parse_raw_bar
+from copycat.tc4common import TC4_APPID, TC4_SKEY, iter_qry_pages
 
 logger = logging.getLogger(__name__)
-
-# Touchance 官方範例公開的 app 憑證(GitBook / TCPY sample 原樣),非帳號 secret
-TC4_APPID = "ZMQ"
-TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
 
 
 def _needs_refetch(path: Path) -> bool:
@@ -74,13 +71,12 @@ def _fetch_1k(api: object, session: str, stock_id: str, date_str: str) -> list[B
     else:
         return []
 
-    bars: list[Bar1K] = []
-    qry_index = "0"
-    while True:
+    def _page(qry_index: str) -> list[dict]:
         his = api.GetHistory(session, sym, "1K", start, end, qry_index)  # type: ignore[attr-defined]
-        page = his.get("HisData", [])
-        if not page:
-            break
+        return his.get("HisData", [])
+
+    bars: list[Bar1K] = []
+    for page in iter_qry_pages(_page):
         for raw in page:
             try:
                 bar = parse_raw_bar(raw)
@@ -89,10 +85,6 @@ def _fetch_1k(api: object, session: str, stock_id: str, date_str: str) -> list[B
             if bar.m < 0:  # 盤前雜訊(TC4 時窗涵蓋 08:00 起)
                 continue
             bars.append(bar)
-        next_index = page[-1].get("QryIndex", "")
-        if not next_index or next_index == qry_index:  # 空 = 結束;停滯 = 防無限迴圈
-            break
-        qry_index = next_index
     bars.sort(key=lambda b: b.m)
     return bars
 
