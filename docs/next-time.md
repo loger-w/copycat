@@ -69,6 +69,10 @@
 - [x] ~~quote 端 QuoteAPI Connect 無 RCVTIMEO:app 死亡時重連迴圈阻塞在裸 recv;比照 trade 端 context 級 timeout + LINGER=0 的防護(要驗 QuoteManager 分頁大回應不會被 5s timeout 誤傷)~~(2026-07-20 fix/txo-quote-resilience:context 級 10s timeout(實測 QUERYALLINSTRUMENT(Opt) 1.93s ×5 裕度;GetHistory 分頁 3,482 次 max 1.1ms 不受影響)+ LINGER=0 + _rt_request lock timeout;死 port 實測重連可中斷、app 回來可恢復)
 - [x] ~~交接 buffer cap 200k:回補拖過 ~8 分鐘會溢出→無限重跑回補;考慮 cap 動態化或回補逾時預警~~(2026-07-20 同輪:只做預警(user 拍板)— 80% 閾值一次性 warning + snapshot handover 欄位(backfill_secs/buffer_used/buffer_cap/buffer_warned/overflows);cap 動態化未做,溢出仍會重跑,預警先給觀測點)
 
+## 2026-07-20(txo-quote-resilience 收尾 review P2)
+
+- [ ] tc4.py `_check_stale` 用 `self._lock` 保護重連期的 `_api/_session` 寫入,但 `_rt_request`/`close()` 讀寫同狀態不持鎖(pre-existing,觸發窗口 = 毫秒級重連瞬間撞併發請求;裸 `assert` 會拋 AssertionError 不在 except 收斂內)→ 若要處理,讓讀側也持鎖或把 assert 換明確 ConnectionError
+
 ## 2026-07-20(backfill 雙修 review P2)
 
 - [ ] backfill_finmind/backfill_daytrade 空日不進 marker 後,真假日在重跑同 range 時會反覆重抓(range 約 11 個月含 100+ 週末假日);若 FinMind 配額吃緊,疊加靜態台股假日曆只重試「非假日空回應」
