@@ -79,6 +79,7 @@ def test_run_validate_ignores_scan_events(tmp_path: Path) -> None:
                 "auction_tell": ">=8%",
             },
         ),
+        _ev("future_source", again=True),  # 未知 source 也不得入池(fail closed)
     ]
     run5_a = _write_run(tmp_path / "a5", seed)
     run4_a = _write_run(tmp_path / "a4", seed)

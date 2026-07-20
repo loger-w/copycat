@@ -58,9 +58,12 @@ def _check(sc: str, name: str, golden_s: str, actual_s: str, tol_s: str, ok: boo
     return {"sc": sc, "name": name, "golden": golden_s, "actual": actual_s, "tol": tol_s, "ok": ok}
 
 
+_SEED_SOURCES = frozenset({"tiger_csv", "control"})
+
+
 def _seed_only(events: list[dict]) -> list[dict]:
-    """種子事件池(tiger_csv/control)— gate 的凍結輸入,scan 補全事件不入比對."""
-    return [e for e in events if e["source"] != "scan"]
+    """種子事件池(tiger_csv/control)— gate 的凍結輸入;未知 source 一律排除(fail closed)."""
+    return [e for e in events if e["source"] in _SEED_SOURCES]
 
 
 def run_validate(run_five: Path, run_four: Path) -> list[dict]:
