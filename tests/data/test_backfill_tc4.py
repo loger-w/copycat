@@ -144,3 +144,19 @@ def test_fetch_stops_when_qry_index_does_not_advance() -> None:
 
     bars = _fetch_1k(_Stuck([]), "s", "2330", "2026-07-03")
     assert [b.m for b in bars] == [0]
+
+
+def test_cli_backfill_tc4_default_events_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--events-csv 預設須指向 scan 補全後的 data/events/events.csv,不是 five-tigers 種子
+    CSV(同 backfill-brokers/label-events 已修的 stale default;種子 CSV 會漏 scan 事件)."""
+    captured: dict[str, Path] = {}
+
+    def fake_run(data_dir: Path, events_csv: Path, port: str, batch: int) -> dict[str, int]:
+        captured["events_csv"] = events_csv
+        return {"total_missing": 0, "fetched": 0, "failed": 0}
+
+    monkeypatch.setattr("copycat.data.backfill_tc4.run_backfill_tc4", fake_run)
+    from copycat.cli import main
+
+    assert main(["backfill-tc4"]) == 0
+    assert captured["events_csv"] == Path("data/events/events.csv")

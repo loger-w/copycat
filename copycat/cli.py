@@ -69,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_bt = sub.add_parser("backfill-tc4", help="TC4 歷史 1K 回補(缺的 stock-day)")
     p_bt.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_bt.add_argument("--events-csv", type=Path, default=_DEFAULT_EVENTS_CSV)
+    # scan 補全後的全事件池;種子 CSV(_DEFAULT_EVENTS_CSV)只在 import-neigui 用
+    p_bt.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
     p_bt.add_argument("--port", default="50774")
     p_bt.add_argument("--batch", type=int, default=0, help="0=全部")
 
