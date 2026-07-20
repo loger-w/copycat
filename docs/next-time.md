@@ -57,7 +57,7 @@
 ## 2026-07-18(txo-aggregate-pnl Phase 4 自評 P2 彙總,10 條聚類)
 
 - [ ] live/server simplification:aggregate.snapshot call/put 求和雙迴圈可併;ConnectionBadge STATUS_LABEL/STATUS_TONE 併單一 config;pnl-svg areaPaths 內 path 格式化與 curvePath 同構可抽 helper;engine._run_handover 內 _mark_changed 呼叫可集中;MetricsBar t 的 null 檢查可提前解構
-- [ ] TC4 reuse:TC4_APPID/TC4_SKEY 常數與 QryIndex 分頁迴圈在 data/backfill_tc4.py 與 live/tc4.py 兩份 → 抽共用 helper(🔵 獨立工,動到穩定 backfill 檔先補 characterization)
+- [x] TC4 reuse:TC4_APPID/TC4_SKEY 常數與 QryIndex 分頁迴圈在 data/backfill_tc4.py 與 live/tc4.py 兩份 → 抽共用 helper(🔵 獨立工,動到穩定 backfill 檔先補 characterization)— 已處理(refactor/tc4-shared-helper:b88f262/b1a36bb/387f8f8,tc4common.py)
 - [ ] 觀測性:handover buffer 溢出僅 log 無 snapshot 計數欄位(degraded 時前端難診斷);前端 WS 無 heartbeat 判停(server 靜默時段分不出斷線 vs 無變更;考慮 server 週期 keepalive frame + client stale timer,週一盤中觀察真實需求再定)
 - [ ] engine._run_handover 重試時 re-subscribe 與 activate 的 unsubscribe 不對稱,若改主動觸發自癒要先收斂這段
 
