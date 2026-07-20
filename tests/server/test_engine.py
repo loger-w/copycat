@@ -152,6 +152,46 @@ async def test_not_ready_snapshot_totals_is_none() -> None:
     assert snap["handover"] is None  # 交接尚未跑過
 
 
+class FlakyQuoteSource(FakeQuoteSource):
+    """fetch_backfill 依 fail 旗標拋 ConnectionError(模擬 TC4 app 死亡期)。"""
+
+    def __init__(self) -> None:
+        super().__init__(backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]})
+        self.fail = False
+
+    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+        if self.fail:
+            self.backfill_calls.append(series.series_id)
+            raise ConnectionError("TC4 quote request failed (simulated)")
+        return super().fetch_backfill(series)
+
+
+async def test_self_heal_source_error_degrades_then_recovers() -> None:
+    """review F3:自癒路徑來源拋 ConnectionError 不可殺死 _consume task(靜默永久停擺);
+
+    降 degraded + 清孤兒 buffer,TC4 重連後再度 force_heal 自癒回 live。
+    (user 路徑 select/start 維持立即 raise → route 502,見 test_app 502 測試。)
+    """
+    fake = FlakyQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        assert rt.status == "live"
+        fake.fail = True  # app「死亡」
+        rt.request_self_heal()
+        await asyncio.sleep(0.2)
+        assert rt.status == "degraded"
+        assert rt._consume_task is not None and not rt._consume_task.done()
+        assert rt._buffer is None, "例外路徑孤兒 buffer 未清,後續 tick 會被吞"
+        fake.fail = False  # app「回來」→ 重連 callback 觸發自癒
+        rt.request_self_heal()
+        await asyncio.sleep(0.2)
+        assert rt.status == "live"
+        assert rt.latest_snapshot()["totals"]["call_net_qty"] == 3
+    finally:
+        await rt.close()
+
+
 async def test_snapshot_reports_handover_stats() -> None:
     """條 2(next-time 2026-07-20):回補逾時預警的 snapshot 欄位(degraded 時可診斷)。"""
     fake = FakeQuoteSource(

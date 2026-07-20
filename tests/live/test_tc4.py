@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any
@@ -62,20 +63,42 @@ class TestBuildRtRequest:
         }
 
 
+class _JsonSocket:
+    """socket 替身:send 的 JSON 電文交 handler 分派,recv 回其回應(自組電文路徑)。"""
+
+    def __init__(self, handler: Any) -> None:
+        self._handler = handler
+        self._resp = b""
+
+    def send_string(self, payload: str) -> None:
+        self._resp = self._handler(json.loads(payload))
+
+    def recv(self) -> bytes:
+        return self._resp
+
+
 class FakeApi:
-    """最小 QuoteAPI 替身:GetHistory 分頁 + 呼叫記錄。"""
+    """最小 QuoteAPI 替身:socket 層分派(GETHISDATA 分頁語意 + SubHistory 呼叫記錄)。"""
 
     def __init__(self, pages: dict[str, list[list[dict]]]) -> None:
+        self.lock = threading.Lock()
+        self.socket = _JsonSocket(self._handle)
         self.pages = pages
         self.sub_history_calls: list[str] = []
         self.disconnected = False
 
-    def SubHistory(self, session: str, sym: str, dtype: str, start: str, end: str) -> None:  # noqa: N802
-        self.sub_history_calls.append(sym)
+    def _handle(self, req: dict) -> bytes:
+        kind = req.get("Request")
+        if kind == "GETHISDATA":
+            param = req["Param"]
+            # GETHISDATA 回應帶 "<type>:" 前綴(真 TC4 / wrapper GetHistory 同語意)
+            data = self._page(param["Symbol"], param["QryIndex"])
+            return b"TICKS:" + json.dumps(data).encode() + b"\x00"
+        if kind == "SUBQUOTE" and req.get("Param", {}).get("SubDataType") == "TICKS":
+            self.sub_history_calls.append(req["Param"]["Symbol"])
+        return b'{"Success": "OK"}\x00'
 
-    def GetHistory(  # noqa: N802
-        self, session: str, sym: str, dtype: str, start: str, end: str, qry_index: str
-    ) -> dict[str, Any]:
+    def _page(self, sym: str, qry_index: str) -> dict:
         # 真 TC4 語意:回傳 QryIndex 大於游標的下一批(耗盡 → 空頁)
         rows = [r for page in self.pages.get(sym, []) for r in page]
         idx = int(qry_index) if qry_index.isdigit() else 0
@@ -115,11 +138,11 @@ class TestFetchBackfill:
         row = hist_row(1)
         row["QryIndex"] = "0"
 
-        class _Stuck:
-            def GetHistory(self, *args: Any) -> dict[str, Any]:  # noqa: N802
+        class _Stuck(FakeApi):
+            def _page(self, sym: str, qry_index: str) -> dict:
                 return {"HisData": [row]}
 
-        src = TC4QuoteSource(port="0", api=_Stuck(), session="sess-1", poll_wait_secs=0.0)
+        src = TC4QuoteSource(port="0", api=_Stuck({}), session="sess-1", poll_wait_secs=0.0)
         ticks = src._fetch_symbol_ticks("TC.O.TWF.TX4.202607.C.44550", "2026071800", "2026071806")
         assert len(ticks) == 1
 
@@ -128,11 +151,11 @@ class TestFetchBackfill:
         row = hist_row(1)
         row["QryIndex"] = ""
 
-        class _LastPage:
-            def GetHistory(self, *args: Any) -> dict[str, Any]:  # noqa: N802
+        class _LastPage(FakeApi):
+            def _page(self, sym: str, qry_index: str) -> dict:
                 return {"HisData": [row]}
 
-        src = TC4QuoteSource(port="0", api=_LastPage(), session="sess-1", poll_wait_secs=0.0)
+        src = TC4QuoteSource(port="0", api=_LastPage({}), session="sess-1", poll_wait_secs=0.0)
         ticks = src._fetch_symbol_ticks("TC.O.TWF.TX4.202607.C.44550", "2026071800", "2026071806")
         assert len(ticks) == 1
 
@@ -201,6 +224,10 @@ class _ReqApi:
     def __init__(self, socket: Any) -> None:
         self.lock = threading.Lock()
         self.socket = socket
+        self.disconnected = False
+
+    def Disconnect(self) -> None:  # noqa: N802
+        self.disconnected = True
 
 
 class _RaisingSocket:
@@ -228,6 +255,33 @@ class TestRtRequestResilience:
             src._rt_request("SUBQUOTE", "TC.F.TWF.TXF.HOT")
         # lock 必須釋放(try/finally),否則下一次請求永久卡死
         assert api.lock.acquire(timeout=0.5) is True
+
+
+class TestReqProtection:
+    """review F1/F2:wrapper 直呼路徑收斂 _req(lock timeout + 錯誤轉換 + 失敗棄連線)。"""
+
+    def test_list_series_converts_socket_error_to_connection_error(self) -> None:
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        with pytest.raises(ConnectionError):
+            src.list_series()
+
+    def test_fetch_backfill_lock_timeout_raises_connection_error(self) -> None:
+        api = _ReqApi(_RaisingSocket())
+        api.lock.acquire()  # 模擬 Pong 毒鎖:不可永久阻塞(修前 wrapper blocking acquire)
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.05)
+        series = group_series(["TC.O.TWF.TX4.202607.C.44550"])[0]
+        with pytest.raises(ConnectionError):
+            src.fetch_backfill(series)
+
+    def test_req_failure_disposes_api_for_lazy_reconnect(self) -> None:
+        # REQ timeout 後 EFSM 壞狀態不可重用;若不棄連線,SUB 有 tick 流動時
+        # _check_stale 永不觸發 → REQ 通道永久壞死(review F2)
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        with pytest.raises(ConnectionError):
+            src._rt_request("SUBQUOTE", SPOT_SYMBOL)
+        assert src._api is None, "失敗後未棄連線,下一次呼叫仍用壞 socket"
 
 
 class TestConnectInterruptible:

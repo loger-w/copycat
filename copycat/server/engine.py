@@ -157,11 +157,19 @@ class EngineRuntime:
         for attempt in range(1, _HANDOVER_RETRIES + 1):
             self._set_status("backfilling")
             self._buffer = HandoverBuffer()
-            if subscribe or attempt > 1:
-                await asyncio.to_thread(self._source.subscribe, series, self.on_tick)
-                subscribe = False
-            t0 = time.monotonic()
-            backfill = await asyncio.to_thread(self._source.fetch_backfill, series)
+            try:
+                if subscribe or attempt > 1:
+                    await asyncio.to_thread(self._source.subscribe, series, self.on_tick)
+                    subscribe = False
+                t0 = time.monotonic()
+                backfill = await asyncio.to_thread(self._source.fetch_backfill, series)
+            except ConnectionError:
+                # 來源 REQ 失敗:孤兒 buffer 必清(否則後續 tick 全被吞、totals 凍結),
+                # 狀態誠實降 degraded 後把例外交還呼叫端 — user 路徑(select/start)
+                # 由 route 層轉 502(TC4_DOWN 合約);自癒路徑由 _maybe_self_heal 接住。
+                self._buffer = None
+                self._set_status("degraded")
+                raise
             backfill_secs = time.monotonic() - t0
             buffer = self._buffer
             self._buffer = None
@@ -245,7 +253,13 @@ class EngineRuntime:
             self._force_heal = False
             if self._active is not None and self._agg is not None:
                 self._agg.reset(self._active.contracts)
-                await self._run_handover(self._active, subscribe=False)
+                try:
+                    await self._run_handover(self._active, subscribe=False)
+                except ConnectionError:
+                    # 背景自癒的來源失敗是預期事件(app 死亡期),不可炸出去殺死
+                    # _consume task(靜默永久停擺;review F3)。已 degraded,
+                    # 待 TC4 重連 on_reconnect 再度 force_heal 自癒。
+                    logger.exception("self-heal handover failed (source down)")
             self._healed_dropped = dropped
 
     def _set_status(self, status: str) -> None:

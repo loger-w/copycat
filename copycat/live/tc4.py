@@ -153,29 +153,71 @@ class TC4QuoteSource:
         self._sub_port = q["SubPort"]
         logger.info("TC4 connected, session=%s", self._session[:8])
 
-    def _rt_request(self, request: str, symbol: str) -> dict:
-        assert self._api is not None and self._session is not None
-        obj = build_rt_request(request, self._session, symbol, _today_ymd())
+    def _dispose(self, api: Any) -> None:
+        """REQ 失敗即棄連線:timeout 後 REQ EFSM 壞狀態不可重用,若不丟棄,SUB 有 tick
+        流動時 _check_stale 永不觸發 → REQ 通道永久壞死(review F2;同 tc4_trade _dispose)。
+
+        不取 self._lock:_check_stale 持鎖中經 _rt_request 走到這裡,取鎖即自鎖。
+        """
+        if self._api is not api:
+            return
+        self._api = None
+        self._session = None
+        if api.lock.acquire(timeout=self._lock_timeout):
+            try:
+                api.Disconnect()
+            except (zmq.ZMQError, OSError):
+                logger.exception("TC4 quote Disconnect failed (best-effort)")
+            finally:
+                api.lock.release()
+        else:
+            logger.warning("TC4 quote dispose: api.lock busy,跳過實體 close(洩漏優於 crash)")
+
+    def _req(self, obj: dict, *, strip_prefix: bool = False) -> dict:
+        """自組電文 REQ:lock timeout + 錯誤收斂 ConnectionError + 失敗棄連線。
+
+        wrapper 方法(QueryAllInstrumentInfo/GetHistory/SubHistory)內部 blocking
+        acquire 無 timeout、無 try/finally,毒鎖下永久阻塞、timeout 下裸拋 → 一律
+        不直呼 wrapper,REQ 全走這裡(review F1;同 tc4_trade 自組電文模式)。
+        strip_prefix:GETHISDATA 回應帶 "<type>:" 前綴(wrapper GetHistory 同語意)。
+        """
+        assert self._api is not None
         api = self._api
         if not api.lock.acquire(timeout=self._lock_timeout):
-            # wrapper KeepAlive Pong 無 try/finally,timeout 毒鎖 → 收斂 ConnectionError
-            # 讓 _check_stale 重連路徑換新 api,而非永久卡死
+            # wrapper KeepAlive Pong 無 try/finally,timeout 毒鎖 → 棄連線重建,
+            # 而非永久卡死
+            self._dispose(api)
             raise ConnectionError("TC4 quote api.lock timeout")
+        error: Exception | None = None
+        message = b""
         try:
             api.socket.send_string(json.dumps(obj))
             message = api.socket.recv()[:-1]
         except (zmq.ZMQError, OSError) as exc:
-            raise ConnectionError(f"TC4 quote request failed: {exc}") from exc
+            error = exc
         finally:
             api.lock.release()
+        if error is not None:
+            self._dispose(api)
+            raise ConnectionError(f"TC4 quote request failed: {error}") from error
+        if strip_prefix:
+            text = message.decode("utf-8")
+            idx = text.find(":")
+            return json.loads(text[idx + 1 :] if idx >= 0 else text)
         return json.loads(message)
+
+    def _rt_request(self, request: str, symbol: str) -> dict:
+        assert self._session is not None
+        return self._req(build_rt_request(request, self._session, symbol, _today_ymd()))
 
     # ---- QuoteSource 介面 ----
 
     def list_series(self) -> list[SeriesInfo]:
         self._ensure_connected()
-        assert self._api is not None
-        res = self._api.QueryAllInstrumentInfo(self._session, "Opt")
+        assert self._session is not None
+        res = self._req(
+            {"Request": "QUERYALLINSTRUMENT", "SessionKey": self._session, "Type": "Opt"}
+        )
         if res.get("Success") != "OK":
             raise ConnectionError(f"TC4 QUERYALLINSTRUMENT failed: {res.get('ErrMsg')}")
         strings: list[str] = []
@@ -185,13 +227,12 @@ class TC4QuoteSource:
 
     def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
         self._ensure_connected()
-        assert self._api is not None
         ymd = self._backfill_date or _today_ymd()
         start, end = f"{ymd}00", f"{ymd}06"
         # 先對全鏈送 SubHistory 讓 TC4 平行備資料再逐檔收割 —
         # 逐檔「Sub → 等 → 收」實測 280 檔 ~10 分鐘,先全訂可砍掉大部分等待(Phase 4 自評)
         for contract in series.contracts:
-            self._api.SubHistory(self._session, contract.symbol, "TICKS", start, end)
+            self._sub_history(contract.symbol, start, end)
         ticks: list[Tick] = []
         for i, contract in enumerate(series.contracts):
             ticks.extend(self._fetch_symbol_ticks(contract.symbol, start, end))
@@ -202,13 +243,43 @@ class TC4QuoteSource:
         logger.info("backfill done: %d ticks from %d symbols", len(ticks), len(series.contracts))
         return ticks
 
+    def _sub_history(self, symbol: str, start: str, end: str) -> dict:
+        assert self._session is not None
+        return self._req(
+            {
+                "Request": "SUBQUOTE",
+                "SessionKey": self._session,
+                "Param": {
+                    "Symbol": symbol,
+                    "SubDataType": "TICKS",
+                    "StartTime": start,
+                    "EndTime": end,
+                },
+            }
+        )
+
+    def _get_history(self, symbol: str, start: str, end: str, qry_index: str) -> dict:
+        assert self._session is not None
+        return self._req(
+            {
+                "Request": "GETHISDATA",
+                "SessionKey": self._session,
+                "Param": {
+                    "Symbol": symbol,
+                    "SubDataType": "TICKS",
+                    "StartTime": start,
+                    "EndTime": end,
+                    "QryIndex": qry_index,
+                },
+            },
+            strip_prefix=True,
+        )
+
     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
-        assert self._api is not None
-        api = self._api
         rows: list[dict] = []
         first: dict | None = None
         for attempt in range(6):
-            first = api.GetHistory(self._session, symbol, "TICKS", start, end, "0")
+            first = self._get_history(symbol, start, end, "0")
             if first and first.get("HisData"):
                 break
             if self._poll_wait and attempt < 5:
@@ -217,8 +288,7 @@ class TC4QuoteSource:
             return []
 
         def _page(qry_index: str) -> list[dict]:
-            his = api.GetHistory(self._session, symbol, "TICKS", start, end, qry_index)
-            return his.get("HisData", [])
+            return self._get_history(symbol, start, end, qry_index).get("HisData", [])
 
         for page in iter_qry_pages(_page):
             rows.extend(page)
