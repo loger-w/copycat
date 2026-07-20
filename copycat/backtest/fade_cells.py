@@ -25,6 +25,7 @@ from copycat.backtest.fade_simulate import (
 )
 from copycat.backtest.fade_simulate import (
     FadeSample,
+    FadeTradeOutcome,
     _round_trip_cost,
     simulate_fade_sample,
 )
@@ -122,6 +123,27 @@ def _baseline_entry_idx(bars: list[Bar1K]) -> int | None:
     return None
 
 
+def _find_cell_entry(
+    kind: str,
+    bars: list[Bar1K],
+    t1_limit: float,
+    param: float,
+    cfg: FadeBacktestConfig,
+) -> tuple[int | None, float | None]:
+    """cell 進場單一分派(round 2 _CellSpec 與 round 3 kind 兩套 simulate 共用):
+    → (entry_idx, 結構高/逼近高;baseline_m7/m7_arm 無結構高 = None)。
+    base_arm(idx=0 + entry_override)不經此分派。"""
+    if kind == "cell_a":
+        found = find_cell_a_entry(bars, t1_limit, param, cfg)
+    elif kind == "cell_b":
+        found = find_cell_b_entry(bars, t1_limit, param, cfg)
+    elif kind == "cell_c":
+        found = find_cell_c_entry(bars, param, cfg)
+    else:  # baseline_m7 / m7_arm(第 7 分鐘)
+        return _baseline_entry_idx(bars), None
+    return found if found is not None else (None, None)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class _CellSpec:
     cell: str
@@ -163,6 +185,31 @@ def _stats_block(
     }
 
 
+def _d5_criteria(stress_stats: dict[str, object], cfg: FadeBacktestConfig) -> dict[str, bool]:
+    """D5 判定三條件(round 2/3/4/5 單一定義;全部以壓測統計計,R6)."""
+    s_mean = stress_stats.get("mean")
+    s_n = stress_stats.get("n")
+    pos = stress_stats.get("positive_segments")
+    return {
+        "stress_ev_ge_min": isinstance(s_mean, float) and s_mean >= cfg.d5_min_ev,
+        "n_ge_min": isinstance(s_n, int) and s_n >= cfg.d5_min_n,
+        "segments_direction": (
+            isinstance(pos, int)
+            and pos >= cfg.d5_min_positive_segments
+            and isinstance(s_mean, float)
+            and s_mean > 0
+        ),
+    }
+
+
+def _vs_baseline_mean(in_stats: dict[str, object], baseline_mean: object) -> float | None:
+    """vs 基準線淨 EV 差(round 2/3/4/5 單一定義);任一側非 float → None."""
+    b_mean = in_stats.get("mean")
+    if isinstance(b_mean, float) and isinstance(baseline_mean, float):
+        return b_mean - baseline_mean
+    return None
+
+
 def _simulate_cell_trades(
     universe: list[tuple[FadeSample, list[Bar1K]]],
     spec: _CellSpec,
@@ -178,23 +225,13 @@ def _simulate_cell_trades(
         t1_limit = limit_up_price(sample.limit)
         fixed_stop: float | None = None
         sim_cfg = cfg
-        if spec.cell == "cell_a":
-            found_a = find_cell_a_entry(bars, t1_limit, param, cfg)
-            idx = found_a[0] if found_a is not None else None
-        elif spec.cell == "cell_b":
-            found = find_cell_b_entry(bars, t1_limit, param, cfg)
-            if found is None:
-                continue
-            idx, approach_high = found
-            fixed_stop = approach_high * (1.0 + cfg.cell_b_stop_buffer)
-            sim_cfg = dataclasses.replace(cfg, guard_limit_dist=None)  # 自帶風控(SC-4)
-        elif spec.cell == "cell_c":
-            found_c = find_cell_c_entry(bars, param, cfg)
-            idx = found_c[0] if found_c is not None else None
-        else:  # baseline_m7
-            idx = _baseline_entry_idx(bars)
+        idx, struct_high = _find_cell_entry(spec.cell, bars, t1_limit, param, cfg)
         if idx is None or idx >= len(bars) - 1:
             continue
+        if spec.cell == "cell_b":
+            assert struct_high is not None
+            fixed_stop = struct_high * (1.0 + cfg.cell_b_stop_buffer)
+            sim_cfg = dataclasses.replace(cfg, guard_limit_dist=None)  # 自帶風控(SC-4)
         r = simulate_fade_sample(
             bars, idx, sample, _NO_STOP_COMBO, sim_cfg, slippage_ticks,
             fixed_stop_level=fixed_stop,
@@ -301,23 +338,10 @@ def evaluate_cells_from_universe(
 
         d5: dict[str, object] = {"applicable": not spec.observation}
         if not spec.observation:
-            s_mean = stress_stats.get("mean")
-            s_n = stress_stats.get("n")
-            pos = stress_stats.get("positive_segments")
-            total_pos = isinstance(s_mean, float) and s_mean > 0
-            crit = {
-                "stress_ev_ge_min": isinstance(s_mean, float) and s_mean >= cfg.d5_min_ev,
-                "n_ge_min": isinstance(s_n, int) and s_n >= cfg.d5_min_n,
-                "segments_direction": (
-                    isinstance(pos, int) and pos >= cfg.d5_min_positive_segments and total_pos
-                ),
-            }
+            crit = _d5_criteria(stress_stats, cfg)
             d5.update({"criteria": crit, "passed": all(crit.values())})
 
-        vs_baseline = None
-        b_mean = base_stats.get("mean")
-        if isinstance(b_mean, float) and isinstance(baseline_mean, float):
-            vs_baseline = b_mean - baseline_mean
+        vs_baseline = _vs_baseline_mean(base_stats, baseline_mean)
         cells[f"{spec.cell}:{spec.variant}"] = {
             "cell": spec.cell,
             "variant": spec.variant,
@@ -358,6 +382,35 @@ def _broker_hits(sample: FadeSample, watchlist_ids: frozenset[str]) -> int:
     return len([x for x in sample.broker_ids.split("|") if x and x in watchlist_ids])
 
 
+def _finalize_trade(
+    r: FadeTradeOutcome,
+    sample: FadeSample,
+    bars: list[Bar1K],
+    t1_limit: float,
+    cfg: FadeBacktestConfig,
+    watchlist_ids: frozenset[str],
+) -> _TradeRec | None:
+    """模擬結果 → _TradeRec(round 3 _simulate_r3_trades / round 5 _trades 共用尾段);
+    非 tradeable → None。hold_pnl = 抱到收盤對照(收盤鎖死日 None;entry / cost 取引擎)."""
+    if r.status not in _TRADEABLE or r.pnl_rate is None:
+        return None
+    locked_close = bars[-1].low >= t1_limit - cfg.limit_eps
+    hold_pnl: float | None = None
+    if not locked_close and r.entry_price is not None:
+        hold_pnl = 1.0 - bars[-1].close / r.entry_price - _round_trip_cost(cfg)
+    return _TradeRec(
+        pnl=r.pnl_rate,
+        day=sample.t1_date,
+        exit_reason=r.exit_reason,
+        locked_close=locked_close,
+        gap=sample.gap,
+        hits=_broker_hits(sample, watchlist_ids),
+        mfe=r.mfe_rate,
+        hold_pnl=hold_pnl,
+        entry_price=r.entry_price,
+    )
+
+
 def _simulate_r3_trades(
     universe: list[tuple[FadeSample, list[Bar1K]]],
     kind: str,
@@ -392,28 +445,14 @@ def _simulate_r3_trades(
         entry_override: float | None = None
         struct_high: float | None = None
         idx: int | None
-        if kind == "cell_a":
-            found_a = find_cell_a_entry(bars, t1_limit, param, cfg)
-            if found_a is None:
-                continue
-            idx, struct_high = found_a
-        elif kind == "cell_b":
-            found_b = find_cell_b_entry(bars, t1_limit, param, cfg)
-            if found_b is None:
-                continue
-            idx, struct_high = found_b
-        elif kind == "cell_c":
-            found_c = find_cell_c_entry(bars, param, cfg)
-            if found_c is None:
-                continue
-            idx, struct_high = found_c
-        elif kind == "base_arm":
+        if kind == "base_arm":
             idx = 0
             entry_override = bars[0].open
             ratchet = b
-        else:  # baseline_m7 / m7_arm(第 7 分鐘進場;風控 = ratchet + 災難 + 硬線)
-            idx = _baseline_entry_idx(bars)
-            ratchet = b
+        else:
+            idx, struct_high = _find_cell_entry(kind, bars, t1_limit, param, cfg)
+            if kind not in ("cell_a", "cell_b", "cell_c"):
+                ratchet = b  # baseline_m7 / m7_arm(風控 = ratchet + 災難 + 硬線)
         if idx is None or idx >= len(bars) - 1:
             continue
         was_capped = False
@@ -438,28 +477,13 @@ def _simulate_r3_trades(
             ratchet_stop_b=ratchet,
             inner_flip_phi=inner_flip_phi,
         )
-        if r.status in _TRADEABLE and r.pnl_rate is not None:
-            if was_capped:  # 只計入統計的交易(封頂數 ≤ n;review A4)
-                seg = "forward" if sample.t1_date >= cfg.forward_start else "in_window"
-                capped[seg] += 1
-            locked_close = bars[-1].low >= t1_limit - cfg.limit_eps
-            hold_pnl: float | None = None
-            if not locked_close and r.entry_price is not None:
-                # 抱到收盤對照(entry 取引擎回傳,cost 取引擎單一定義 — review P1)
-                hold_pnl = 1.0 - bars[-1].close / r.entry_price - _round_trip_cost(cfg)
-            trades.append(
-                _TradeRec(
-                    pnl=r.pnl_rate,
-                    day=sample.t1_date,
-                    exit_reason=r.exit_reason,
-                    locked_close=locked_close,
-                    gap=sample.gap,
-                    hits=_broker_hits(sample, watchlist_ids),
-                    mfe=r.mfe_rate,
-                    hold_pnl=hold_pnl,
-                    entry_price=r.entry_price,
-                )
-            )
+        rec = _finalize_trade(r, sample, bars, t1_limit, cfg, watchlist_ids)
+        if rec is None:
+            continue
+        if was_capped:  # 只計入統計的交易(封頂數 ≤ n;review A4)
+            seg = "forward" if sample.t1_date >= cfg.forward_start else "in_window"
+            capped[seg] += 1
+        trades.append(rec)
     return trades, capped
 
 
@@ -512,6 +536,23 @@ def _actuarial_block(
             "cut_wrong": (sum(1 for t in sub if not t.locked_close) / len(sub)) if sub else None,
         }
     return out
+
+
+def _actuarial_rows(
+    lines: list[str], label: str, act: object, reasons: tuple[str, ...]
+) -> None:
+    """保險精算表 markdown 列(round 3/4 報告共用;round 5 版語意不同不在此)."""
+    if not isinstance(act, dict):
+        return
+    for reason in reasons:
+        a = act.get(reason)
+        if not isinstance(a, dict):
+            continue
+        lines.append(
+            f"| {label} | {reason} | {a.get('n')} | {fmt_num(a.get('rate'), '.1%')}"
+            f" | {fmt_num(a.get('avg_pnl'))} | {fmt_num(a.get('cut_right'), '.1%')}"
+            f" | {fmt_num(a.get('cut_wrong'), '.1%')} |"
+        )
 
 
 def _cluster_z_block(trades: list[_TradeRec], p_threshold: float) -> dict[str, object]:
@@ -619,27 +660,12 @@ def _evaluate_round3(
             in_stats = _rec_stats(in_w, start, seg_days, k)
             stress_stats = _rec_stats(s_in, start, seg_days, k)
 
-            s_mean = stress_stats.get("mean")
-            s_n = stress_stats.get("n")
-            pos = stress_stats.get("positive_segments")
-            crit = {
-                "stress_ev_ge_min": isinstance(s_mean, float) and s_mean >= cfg.d5_min_ev,
-                "n_ge_min": isinstance(s_n, int) and s_n >= cfg.d5_min_n,
-                "segments_direction": (
-                    isinstance(pos, int)
-                    and pos >= cfg.d5_min_positive_segments
-                    and isinstance(s_mean, float)
-                    and s_mean > 0
-                ),
-            }
+            crit = _d5_criteria(stress_stats, cfg)
             baseline_stats = baselines[f"{base_key}:b{b:g}"]["in_window"]
             baseline_mean = (
                 baseline_stats.get("mean") if isinstance(baseline_stats, dict) else None
             )
-            vs_baseline = None
-            b_mean = in_stats.get("mean")
-            if isinstance(b_mean, float) and isinstance(baseline_mean, float):
-                vs_baseline = b_mean - baseline_mean
+            vs_baseline = _vs_baseline_mean(in_stats, baseline_mean)
             cells[f"{kind}:{variant}:b{b:g}"] = {
                 "cell": kind,
                 "variant": variant,
@@ -830,25 +856,10 @@ def _evaluate_round4(
         s_in, _ = _split_fw(stress_tr, cfg.forward_start)
         in_stats = _rec_stats(in_w, start, seg_days, k)
         stress_stats = _rec_stats(s_in, start, seg_days, k)
-        s_mean = stress_stats.get("mean")
-        s_n = stress_stats.get("n")
-        pos = stress_stats.get("positive_segments")
-        crit = {
-            "stress_ev_ge_min": isinstance(s_mean, float) and s_mean >= cfg.d5_min_ev,
-            "n_ge_min": isinstance(s_n, int) and s_n >= cfg.d5_min_n,
-            "segments_direction": (
-                isinstance(pos, int)
-                and pos >= cfg.d5_min_positive_segments
-                and isinstance(s_mean, float)
-                and s_mean > 0
-            ),
-        }
+        crit = _d5_criteria(stress_stats, cfg)
         baseline_stats = baselines[f"{base_key}:legacy_b{b_main:g}"]["in_window"]
         baseline_mean = baseline_stats.get("mean") if isinstance(baseline_stats, dict) else None
-        vs_baseline = None
-        b_mean = in_stats.get("mean")
-        if isinstance(b_mean, float) and isinstance(baseline_mean, float):
-            vs_baseline = b_mean - baseline_mean
+        vs_baseline = _vs_baseline_mean(in_stats, baseline_mean)
         return {
             "cell": kind,
             "variant": variant,
@@ -1112,32 +1123,21 @@ def _write_round3_report(
     lines.append("| 變體 | 機制 | 觸發 n | 觸發率 | 均pnl | 砍對(收盤鎖死) | 砍錯 |")
     lines.append("|---|---|---:|---:|---:|---:|---:|")
 
-    def _act_rows(label: str, act: object) -> None:
-        if not isinstance(act, dict):
-            return
-        for reason in _ACTUARIAL_REASONS:
-            a = act.get(reason)
-            if not isinstance(a, dict):
-                continue
-            lines.append(
-                f"| {label} | {reason} | {a.get('n')} | {_f(a.get('rate'), '.1%')}"
-                f" | {_f(a.get('avg_pnl'))} | {_f(a.get('cut_right'), '.1%')}"
-                f" | {_f(a.get('cut_wrong'), '.1%')} |"
-            )
-
     for key in sorted(cells):
         c = cells[key]
         if isinstance(c, dict):
             in_w = c.get("in_window", {})
             assert isinstance(in_w, dict)
-            _act_rows(key, in_w.get("actuarial"))
+            _actuarial_rows(lines, key, in_w.get("actuarial"), _ACTUARIAL_REASONS)
     if isinstance(base_arm, dict):
         for bkey in sorted(base_arm):
             arm = base_arm[bkey]
             if isinstance(arm, dict):
                 in_w = arm.get("in_window", {})
                 assert isinstance(in_w, dict)
-                _act_rows(f"base_arm:{bkey}", in_w.get("actuarial"))
+                _actuarial_rows(
+                    lines, f"base_arm:{bkey}", in_w.get("actuarial"), _ACTUARIAL_REASONS
+                )
     lines.append("")
 
     lines.append("## 基準線(同宇宙同風控:ratchet b + 災難 + 硬線)")
@@ -1287,19 +1287,6 @@ def _write_round4_report(
     lines.append("| 變體 | 機制 | 觸發 n | 觸發率 | 均pnl | 砍對(收盤鎖死) | 砍錯 |")
     lines.append("|---|---|---:|---:|---:|---:|---:|")
 
-    def _act_rows(label: str, act: object) -> None:
-        if not isinstance(act, dict):
-            return
-        for reason in _ACTUARIAL_REASONS_R4:
-            a = act.get(reason)
-            if not isinstance(a, dict):
-                continue
-            lines.append(
-                f"| {label} | {reason} | {a.get('n')} | {_f(a.get('rate'), '.1%')}"
-                f" | {_f(a.get('avg_pnl'))} | {_f(a.get('cut_right'), '.1%')}"
-                f" | {_f(a.get('cut_wrong'), '.1%')} |"
-            )
-
     def _tp_rows(label: str, act: object) -> None:
         if not isinstance(act, dict):
             return
@@ -1320,7 +1307,7 @@ def _write_round4_report(
         if isinstance(c, dict):
             in_w = c.get("in_window", {})
             assert isinstance(in_w, dict)
-            _act_rows(key, in_w.get("actuarial"))
+            _actuarial_rows(lines, key, in_w.get("actuarial"), _ACTUARIAL_REASONS_R4)
             _tp_rows(key, in_w.get("tp_actuarial"))
     if isinstance(base_arm, dict):
         for bkey in sorted(base_arm):
@@ -1328,7 +1315,9 @@ def _write_round4_report(
             if isinstance(arm, dict):
                 in_w = arm.get("in_window", {})
                 assert isinstance(in_w, dict)
-                _act_rows(f"base_arm:{bkey}", in_w.get("actuarial"))
+                _actuarial_rows(
+                    lines, f"base_arm:{bkey}", in_w.get("actuarial"), _ACTUARIAL_REASONS_R4
+                )
                 _tp_rows(f"base_arm:{bkey}", in_w.get("tp_actuarial"))
     lines.append("")
 
@@ -1498,24 +1487,9 @@ def _evaluate_round5(
                 slippage,
                 entry_price_override=override,
             )
-            if r.status in _TRADEABLE and r.pnl_rate is not None:
-                locked_close = bars[-1].low >= t1_limit - cfg.limit_eps
-                hold_pnl: float | None = None
-                if not locked_close and r.entry_price is not None:
-                    hold_pnl = 1.0 - bars[-1].close / r.entry_price - _round_trip_cost(cfg)
-                out.append(
-                    _TradeRec(
-                        pnl=r.pnl_rate,
-                        day=sample.t1_date,
-                        exit_reason=r.exit_reason,
-                        locked_close=locked_close,
-                        gap=sample.gap,
-                        hits=_broker_hits(sample, watchlist_ids),
-                        mfe=r.mfe_rate,
-                        hold_pnl=hold_pnl,
-                        entry_price=r.entry_price,
-                    )
-                )
+            rec = _finalize_trade(r, sample, bars, t1_limit, cfg, watchlist_ids)
+            if rec is not None:
+                out.append(rec)
         return out
 
     # 量尺:第 7 分鐘 + round 3 舊出場(ratchet b + 災難 + 硬線;cfg 無 TP/φ 即舊語意)
@@ -1541,23 +1515,8 @@ def _evaluate_round5(
         s_in, _ = _split_fw(stress_tr, cfg.forward_start)
         in_stats = _rec_stats(in_w, start, seg_days, k)
         stress_stats = _rec_stats(s_in, start, seg_days, k)
-        s_mean = stress_stats.get("mean")
-        s_n = stress_stats.get("n")
-        pos = stress_stats.get("positive_segments")
-        crit = {
-            "stress_ev_ge_min": isinstance(s_mean, float) and s_mean >= cfg.d5_min_ev,
-            "n_ge_min": isinstance(s_n, int) and s_n >= cfg.d5_min_n,
-            "segments_direction": (
-                isinstance(pos, int)
-                and pos >= cfg.d5_min_positive_segments
-                and isinstance(s_mean, float)
-                and s_mean > 0
-            ),
-        }
-        vs_baseline = None
-        b_mean = in_stats.get("mean")
-        if isinstance(b_mean, float) and isinstance(baseline_mean, float):
-            vs_baseline = b_mean - baseline_mean
+        crit = _d5_criteria(stress_stats, cfg)
+        vs_baseline = _vs_baseline_mean(in_stats, baseline_mean)
         blk: dict[str, object] = {
             "in_window": {
                 "base": in_stats,
