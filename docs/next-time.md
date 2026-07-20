@@ -75,4 +75,3 @@
 - [ ] 測試裡的 `TC.F.TWF.FITX.HOT` 字面值(test_aggregate/test_live_models/test_tc4 共 5 處,行為中性的任意 TC.F.* 範例)改成 TXF 命名,免得繼續傳播已證實不存在的 symbol
 - [ ] quote 端 QuoteAPI Connect 無 RCVTIMEO:app 死亡時重連迴圈阻塞在裸 recv(等 app 回來才續走,盤中實測可用但不可中斷);比照 trade 端 context 級 timeout + LINGER=0 的防護(要驗 QuoteManager 分頁大回應不會被 5s timeout 誤傷)
 - [ ] 交接 buffer cap 200k:實測訂閱→回補完成 ~4.5 分鐘已 buffer ~110k,若回補拖過 ~8 分鐘會溢出→無限重跑回補;考慮 cap 動態化或回補逾時預警(驗證報告平台觀測 4)
-- [ ] feat/dq4-order-phase1 收尾 rebase 時:tc4.py 會在 SPOT_SYMBOL 匯入區起衝突(master 改定義行、feat 移到 models.py)— 解法 = 保留 feat 的 models re-export 版(models.py 已是 TXF,a1ce559);_listen_loop 的 item 3 fix hunk 兩邊同文自動帶入。TestSpotSymbol + TestListenerFollowsSubPort 會在 rebase gate 驗證,紅了就是解錯
