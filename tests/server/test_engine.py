@@ -149,6 +149,25 @@ async def test_not_ready_snapshot_totals_is_none() -> None:
     snap = rt.latest_snapshot()
     assert snap["series_id"] is None
     assert snap["totals"] is None
+    assert snap["handover"] is None  # 交接尚未跑過
+
+
+async def test_snapshot_reports_handover_stats() -> None:
+    """條 2(next-time 2026-07-20):回補逾時預警的 snapshot 欄位(degraded 時可診斷)。"""
+    fake = FakeQuoteSource(
+        backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]}
+    )
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        h = rt.latest_snapshot()["handover"]
+        assert h["buffer_used"] == 0  # fake 交接期無 live tick
+        assert h["buffer_cap"] == 200_000
+        assert h["buffer_warned"] is False
+        assert h["overflows"] == 0
+        assert h["backfill_secs"] >= 0.0
+    finally:
+        await rt.close()
 
 
 async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:

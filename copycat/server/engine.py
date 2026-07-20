@@ -62,6 +62,7 @@ class EngineRuntime:
         self._healed_dropped = 0
         self._force_heal = False
         self._accumulated_from = "-"
+        self._handover: dict | None = None
         self._version = 0
         self._changed = asyncio.Event()
 
@@ -86,14 +87,22 @@ class EngineRuntime:
     def latest_snapshot(self) -> dict:
         if self._agg is None or self._active is None:
             # totals 必須是 None 而非空 dict:前端以 truthy 判斷有無數據(C-1)
-            return {"series_id": None, "status": self.status, "totals": None, "curve": []}
-        return self._agg.snapshot(
+            return {
+                "series_id": None,
+                "status": self.status,
+                "totals": None,
+                "curve": [],
+                "handover": self._handover,
+            }
+        snap = self._agg.snapshot(
             series=self._active,
             status=self.status,
             accumulated_from=self._accumulated_from,
             generated_at=time.strftime("%H:%M:%S"),
             queue_dropped=self.queue_dropped,
         )
+        snap["handover"] = self._handover
+        return snap
 
     async def snapshots(self) -> AsyncGenerator[dict, None]:
         """節流 snapshot 流:版本有變才 yield,間隔 ≥ throttle_secs。"""
@@ -144,17 +153,34 @@ class EngineRuntime:
 
     async def _run_handover(self, series: SeriesInfo, *, subscribe: bool) -> None:
         assert self._agg is not None
+        overflows = 0
         for attempt in range(1, _HANDOVER_RETRIES + 1):
             self._set_status("backfilling")
             self._buffer = HandoverBuffer()
             if subscribe or attempt > 1:
                 await asyncio.to_thread(self._source.subscribe, series, self.on_tick)
                 subscribe = False
+            t0 = time.monotonic()
             backfill = await asyncio.to_thread(self._source.fetch_backfill, series)
+            backfill_secs = time.monotonic() - t0
             buffer = self._buffer
             self._buffer = None
+            if buffer is not None:
+                # 回補逾時預警的觀測欄位(log 之外前端可診斷;next-time 2026-07-20 條 2)
+                self._handover = {
+                    "backfill_secs": round(backfill_secs, 1),
+                    "buffer_used": len(buffer),
+                    "buffer_cap": buffer.cap,
+                    "buffer_warned": buffer.warned,
+                    "overflows": overflows + (1 if buffer.overflowed else 0),
+                }
             if buffer is None or buffer.overflowed:
-                logger.warning("handover buffer overflow (attempt %d), retrying", attempt)
+                overflows += 1
+                logger.warning(
+                    "handover buffer overflow (attempt %d, backfill %.1fs), retrying",
+                    attempt,
+                    backfill_secs,
+                )
                 continue
             run_handover(self._agg, backfill, buffer)
             if backfill:

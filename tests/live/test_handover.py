@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from copycat.live.aggregate import ChainAggregator
 from copycat.live.handover import HandoverBuffer, run_handover
 from copycat.live.models import OptionContract, SeriesInfo, Tick
@@ -34,6 +38,31 @@ class TestHandoverBuffer:
         buf = HandoverBuffer(cap=1)
         assert buf.append(tick(price=100_000, qty=1, cum=1)) is True
         assert buf.append(tick(price=100_000, qty=1, cum=2)) is False
+
+
+class TestHandoverBufferWarning:
+    """條 2(next-time 2026-07-20):回補逾時預警 — 80% 閾值一次性 warning + warned 旗標。
+
+    實測訂閱→回補 ~4.5 分鐘已 buffer ~110k(cap 200k),拖過 ~8 分鐘溢出 → 無限重跑;
+    預警讓溢出前有 log 可觀測(cap 動態化另議,本輪只做預警)。
+    """
+
+    def test_warned_flag_set_at_80_percent(self) -> None:
+        buf = HandoverBuffer(cap=10)
+        for i in range(7):
+            buf.append(tick(price=100_000, qty=1, cum=i + 1))
+        assert buf.warned is False
+        buf.append(tick(price=100_000, qty=1, cum=8))  # 第 8 筆 = 80%
+        assert buf.warned is True
+        assert buf.overflowed is False
+
+    def test_warning_logged_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        buf = HandoverBuffer(cap=10)
+        with caplog.at_level(logging.WARNING, logger="copycat.live.handover"):
+            for i in range(10):
+                buf.append(tick(price=100_000, qty=1, cum=i + 1))
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1  # 越過閾值只警一次,不逐筆刷 log
 
 
 class TestRunHandover:

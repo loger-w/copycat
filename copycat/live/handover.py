@@ -10,6 +10,9 @@ from copycat.live.models import Tick
 logger = logging.getLogger(__name__)
 
 DEFAULT_BUFFER_CAP = 200_000
+# 回補逾時預警閾值:實測訂閱→回補 ~4.5 分鐘已 buffer ~110k(cap 200k),拖過 ~8 分鐘
+# 溢出 → 無限重跑回補;80% 時先警,讓溢出前有觀測點(next-time 2026-07-20 條 2)
+_WARN_FRACTION = 0.8
 
 
 class HandoverBuffer:
@@ -17,14 +20,28 @@ class HandoverBuffer:
 
     def __init__(self, cap: int = DEFAULT_BUFFER_CAP) -> None:
         self._cap = cap
+        self._warn_at = max(1, int(cap * _WARN_FRACTION))
         self._ticks: list[Tick] = []
         self.overflowed = False
+        self.warned = False
+
+    @property
+    def cap(self) -> int:
+        return self._cap
 
     def append(self, tick: Tick) -> bool:
         if len(self._ticks) >= self._cap:
             self.overflowed = True
             return False
         self._ticks.append(tick)
+        if not self.warned and len(self._ticks) >= self._warn_at:
+            self.warned = True
+            logger.warning(
+                "handover buffer %d/%d(≥%.0f%%):回補逾時預警,再拖將溢出重跑回補",
+                len(self._ticks),
+                self._cap,
+                _WARN_FRACTION * 100,
+            )
         return True
 
     def __len__(self) -> int:
