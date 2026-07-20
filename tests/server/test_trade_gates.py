@@ -117,7 +117,7 @@ def make_runtime(
         live_enabled=live_enabled,
         sim_patterns=["SIM"],
         audit_dir=tmp_path / "audit",
-        allowed_symbols=lambda: {SYM, "TC.F.TWF.FITX.HOT"},
+        allowed_symbols=lambda: {SYM, "TC.F.TWF.TXF.HOT"},
         preview_ttl_secs=ttl,
         now=clock if clock is not None else Clock(),
     )

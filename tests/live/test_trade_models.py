@@ -109,7 +109,7 @@ class TestParsers:
     def test_parse_execution_report_full(self) -> None:
         r = {
             "ReportID": "4094755221B",
-            "Symbol": "TC.F.TWF.FITX.HOT",
+            "Symbol": "TC.F.TWF.TXF.HOT",
             "Side": "1",
             "OrdStatus": "4",
             "Price": "23000",

@@ -15,7 +15,7 @@ SERIES = SeriesInfo(
     expiry="202607",
     contracts=(C44000, P44000),
 )
-TXF = "TC.F.TWF.FITX.HOT"
+TXF = "TC.F.TWF.TXF.HOT"
 
 
 def tick(

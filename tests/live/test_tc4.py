@@ -11,7 +11,7 @@ SYMS = [
     "TC.O.TWF.TX5.202607.C.44550",
     "TC.O.TWF.TXO.202608.C.44550",
     "TC.O.TWF.TXO.202608.P.44000",
-    "TC.F.TWF.FITX.HOT",  # 非期權,應被忽略
+    "TC.F.TWF.TXF.HOT",  # 非期權,應被忽略
     "TC.O.TWF.TXO.202608",  # 產品層節點,非葉子
 ]
 
@@ -33,12 +33,12 @@ class TestGroupSeries:
 
 class TestBuildRtRequest:
     def test_subquote_carries_time_window(self) -> None:
-        obj = build_rt_request("SUBQUOTE", "sess-1", "TC.F.TWF.FITX.HOT", "20260718")
+        obj = build_rt_request("SUBQUOTE", "sess-1", "TC.F.TWF.TXF.HOT", "20260718")
         assert obj == {
             "Request": "SUBQUOTE",
             "SessionKey": "sess-1",
             "Param": {
-                "Symbol": "TC.F.TWF.FITX.HOT",
+                "Symbol": "TC.F.TWF.TXF.HOT",
                 "SubDataType": "REALTIME",
                 "StartTime": "2026071800",
                 "EndTime": "2026071806",
