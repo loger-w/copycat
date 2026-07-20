@@ -38,6 +38,10 @@ function pnlTone(v: number | null | undefined): "bull" | "bear" | undefined {
 
 export function MetricsBar({ snapshot }: { snapshot: Snapshot }) {
   const t = snapshot.totals;
+  // t 缺失(engine 未就緒)→ 各欄 undefined,JSX 統一以 != null 落 DASH,不逐欄重判 t
+  const callNet = t?.call_net_qty;
+  const putNet = t?.put_net_qty;
+  const contractsActive = t?.contracts_active;
   const coverage =
     t && t.ticks > 0 ? `${(((t.ticks - t.unclassified_ticks) / t.ticks) * 100).toFixed(1)}%` : DASH;
   return (
@@ -76,15 +80,15 @@ export function MetricsBar({ snapshot }: { snapshot: Snapshot }) {
       />
       <Metric
         label="Call 淨口數"
-        value={t ? formatPts(t.call_net_qty) : DASH}
-        tone={pnlTone(t?.call_net_qty)}
+        value={callNet != null ? formatPts(callNet) : DASH}
+        tone={pnlTone(callNet)}
       />
       <Metric
         label="Put 淨口數"
-        value={t ? formatPts(t.put_net_qty) : DASH}
-        tone={pnlTone(t?.put_net_qty)}
+        value={putNet != null ? formatPts(putNet) : DASH}
+        tone={pnlTone(putNet)}
       />
-      <Metric label="參與合約數" value={t ? String(t.contracts_active) : DASH} />
+      <Metric label="參與合約數" value={contractsActive != null ? String(contractsActive) : DASH} />
       <Metric label="分類覆蓋率" value={coverage} />
     </section>
   );
