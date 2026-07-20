@@ -13,21 +13,26 @@ from copycat.replay.report import (
     load_events,
 )
 
-# golden 出處:intraday_playbook §2d / open_gap_definition §2-3 / strategy.md §5
+# golden 出處:intraday_playbook §2d / open_gap_definition §2-3 / strategy.md §5。
+# gate 凍結在種子事件池(source != scan):characterization 需要凍結輸入,scan 池會隨
+# 掃描範圍成長(2026-07-20 補全至 11048 筆時全池比對紅掉,種子子集 n/med gap 仍逐字重現)。
+# 續鎖率(again)golden 為 2026-07-20 重拍值:原 evidence 值算自漏收約三分之二真漲停的
+# limitup_all(scan-events 補全前),標籤已知錯誤,不可再當錨;n / med gap / E[開→收]
+# 維持 evidence 原值(種子子集實測逐字一致,出處鏈未斷)。
 _G_LOCK = [
-    ("<09:05", 175, 0.074, 0.183),
-    ("09:05-10:00", 322, 0.035, 0.056),
-    ("10:00-12:00", 311, 0.024, 0.068),
-    ("12:00-13:00", 125, 0.015, 0.112),
-    ("13:00+", 90, 0.006, 0.044),
+    ("<09:05", 175, 0.074, 0.4571),
+    ("09:05-10:00", 322, 0.035, 0.2547),
+    ("10:00-12:00", 311, 0.024, 0.1543),
+    ("12:00-13:00", 125, 0.015, 0.2480),
+    ("13:00+", 90, 0.006, 0.0889),
 ]
 _G_GAP = [
-    ("<0%", 92, 0.0072, 0.022),
-    ("0-1%", 63, 0.0026, 0.048),
-    ("1-3%", 96, -0.0160, 0.000),
-    ("3-7%", 170, -0.0164, 0.094),
-    ("7-9.5%", 45, -0.0347, 0.067),
-    ("漲停開", 76, -0.0126, 0.263),
+    ("<0%", 92, 0.0072, 0.0543),
+    ("0-1%", 63, 0.0026, 0.1429),
+    ("1-3%", 96, -0.0160, 0.0938),
+    ("3-7%", 170, -0.0164, 0.2353),
+    ("7-9.5%", 45, -0.0347, 0.2444),
+    ("漲停開", 76, -0.0126, 0.8158),
 ]
 _G_AUCTION = [("<3%", 0.018), ("3-8%", 0.027), (">=8%", 0.090)]
 
@@ -53,9 +58,14 @@ def _check(sc: str, name: str, golden_s: str, actual_s: str, tol_s: str, ok: boo
     return {"sc": sc, "name": name, "golden": golden_s, "actual": actual_s, "tol": tol_s, "ok": ok}
 
 
+def _seed_only(events: list[dict]) -> list[dict]:
+    """種子事件池(tiger_csv/control)— gate 的凍結輸入,scan 補全事件不入比對."""
+    return [e for e in events if e["source"] != "scan"]
+
+
 def run_validate(run_five: Path, run_four: Path) -> list[dict]:
-    ev5 = load_events(run_five)
-    ev4 = load_events(run_four)
+    ev5 = _seed_only(load_events(run_five))
+    ev4 = _seed_only(load_events(run_four))
     checks: list[dict] = []
 
     lock = {r["bucket"]: r for r in agg_lock_buckets(ev5, "tiger")}
@@ -109,20 +119,20 @@ def run_validate(run_five: Path, run_four: Path) -> list[dict]:
         _check(
             "SC-3",
             "violent 續鎖",
-            "+3.30%",
+            "+30.99%",
             _pct(vio["again_rate"]),
             "±3pp",
-            _within_pp(vio["again_rate"], 0.033, _TOL_SC3),
+            _within_pp(vio["again_rate"], 0.3099, _TOL_SC3),
         )
     )
     checks.append(
         _check(
             "SC-3",
             "natural_early 續鎖",
-            "+18.30%",
+            "+45.61%",
             _pct(nat["again_rate"]),
             "±3pp,且 natural≫violent",
-            _within_pp(nat["again_rate"], 0.183, _TOL_SC3) and direction,
+            _within_pp(nat["again_rate"], 0.4561, _TOL_SC3) and direction,
         )
     )
 
@@ -143,20 +153,20 @@ def run_validate(run_five: Path, run_four: Path) -> list[dict]:
         _check(
             "SC-4",
             "早盤鎖 >=40% 續鎖",
-            "+13.20%",
+            "+40.74%",
             _pct(queue[">=40%"]["again_rate"]),
             "±1pp",
-            _within_pp(queue[">=40%"]["again_rate"], 0.132, _TOL_AGAIN),
+            _within_pp(queue[">=40%"]["again_rate"], 0.4074, _TOL_AGAIN),
         )
     )
     checks.append(
         _check(
             "SC-4",
             "早盤鎖 <15% 續鎖",
-            "+0.00%",
+            "+16.67%",
             _pct(queue["<15%"]["again_rate"]),
             "±1pp",
-            _within_pp(queue["<15%"]["again_rate"], 0.0, _TOL_AGAIN),
+            _within_pp(queue["<15%"]["again_rate"], 0.1667, _TOL_AGAIN),
         )
     )
 
