@@ -16,11 +16,9 @@ from pathlib import Path
 from copycat.backtest.fade_cells import (
     _R4_TP_OFF,
     _baseline_entry_idx,
+    _find_cell_entry,
     _simulate_r3_trades,
     build_universes,
-    find_cell_a_entry,
-    find_cell_b_entry,
-    find_cell_c_entry,
     is_uc_sample,
 )
 from copycat.backtest.fade_config import FadeBacktestConfig
@@ -41,6 +39,16 @@ def _gap_bucket(gap: float, edges: tuple[float, ...]) -> str:
         if lo <= gap < hi:
             return f"gap_{lo:g}_{hi:g}"
     return "gap_other"
+
+
+def _nested_float(root: object, *keys: str) -> float | None:
+    """dict 巢狀取值(每層需為 dict,終值需為 float)— 報告/判準的 isinstance 鏈收斂."""
+    cur = root
+    for key in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur if isinstance(cur, float) else None
 
 
 # ---------- (b) 出量殺解剖 ----------
@@ -104,26 +112,28 @@ def flush_anatomy(
 # ---------- (c) 墊高解剖 ----------
 
 
+def _cell_param(kind: str, cfg: FadeBacktestConfig) -> float:
+    """主值 cell 參數(grid 首值;空 grid 用凍結預設)— _entry_idx_for / mfe_anatomy 共用."""
+    if kind == "cell_a":
+        return cfg.cell_a_inner_thresholds[0] if cfg.cell_a_inner_thresholds else 0.45
+    if kind == "cell_b":
+        return cfg.cell_b_approach_dists[0] if cfg.cell_b_approach_dists else 0.03
+    if kind == "cell_c":
+        return cfg.cell_c_rally_pcts[0] if cfg.cell_c_rally_pcts else 0.05
+    return 0.0
+
+
 def _entry_idx_for(
     kind: str, sample: FadeSample, bars: list[Bar1K], cfg: FadeBacktestConfig
 ) -> int | None:
-    t1_limit = limit_up_price(sample.limit)
     if kind == "base_arm":
         return 0
     if kind == "m7_arm":
         return _baseline_entry_idx(bars)
-    if kind == "cell_a":
-        thr = cfg.cell_a_inner_thresholds[0] if cfg.cell_a_inner_thresholds else 0.45
-        found = find_cell_a_entry(bars, t1_limit, thr, cfg)
-        return found[0] if found else None
-    if kind == "cell_b":
-        d = cfg.cell_b_approach_dists[0] if cfg.cell_b_approach_dists else 0.03
-        found = find_cell_b_entry(bars, t1_limit, d, cfg)
-        return found[0] if found else None
-    if kind == "cell_c":
-        r = cfg.cell_c_rally_pcts[0] if cfg.cell_c_rally_pcts else 0.05
-        found = find_cell_c_entry(bars, r, cfg)
-        return found[0] if found else None
+    if kind in ("cell_a", "cell_b", "cell_c"):
+        t1_limit = limit_up_price(sample.limit)
+        idx, _high = _find_cell_entry(kind, bars, t1_limit, _cell_param(kind, cfg), cfg)
+        return idx
     raise ValueError(f"未知 arm kind: {kind}")
 
 
@@ -362,13 +372,7 @@ def mfe_anatomy(
         uni = universes.get(uni_key) or universes.get("main") or []
         if not uni:
             continue
-        param = 0.0
-        if kind == "cell_a":
-            param = cfg.cell_a_inner_thresholds[0] if cfg.cell_a_inner_thresholds else 0.45
-        elif kind == "cell_b":
-            param = cfg.cell_b_approach_dists[0] if cfg.cell_b_approach_dists else 0.03
-        elif kind == "cell_c":
-            param = cfg.cell_c_rally_pcts[0] if cfg.cell_c_rally_pcts else 0.05
+        param = _cell_param(kind, cfg)
         trades, _ = _simulate_r3_trades(
             uni, kind, param, b, cfg_legacy, cfg.slippage_ticks, watchlist_ids
         )
@@ -428,24 +432,9 @@ def run_anatomy(
     e = slow_rally_anatomy(main_uc)
     logger.info("anatomy (e) slow rally done")
 
-    base_blk = a.get("base_arm")
-    hold_gb = None
-    if isinstance(base_blk, dict):
-        gb = base_blk.get("giveback_closeout")
-        if isinstance(gb, dict):
-            hold_gb = gb.get("p50")
-    k2 = c.get("k2")
-    hl_gb = None
-    if isinstance(k2, dict):
-        arm = k2.get("base_arm")
-        if isinstance(arm, dict):
-            gbq = arm.get("giveback")
-            if isinstance(gbq, dict):
-                hl_gb = gbq.get("p50")
-    demote = tp_hl_demote(
-        hl_gb if isinstance(hl_gb, float) else None,
-        hold_gb if isinstance(hold_gb, float) else None,
-    )
+    hold_gb = _nested_float(a, "base_arm", "giveback_closeout", "p50")
+    hl_gb = _nested_float(c, "k2", "base_arm", "giveback", "p50")
+    demote = tp_hl_demote(hl_gb, hold_gb)
 
     result: dict[str, object] = {
         "report_date": report_date,
@@ -474,6 +463,14 @@ def run_anatomy(
         report_dir.mkdir(parents=True, exist_ok=True)
         _write_report(result, report_dir / report_path.name)
     return report_path
+
+
+def _touch_rate_row(label: str, blk: object) -> str | None:
+    """(d) 節摸板率表列((內盤比桶 / 桶:gap 兩張同構表共用)."""
+    if not isinstance(blk, dict):
+        return None
+    r = blk.get("touch_rate")
+    return f"| {label} | {blk.get('n')} | {format(r, '.1%') if isinstance(r, float) else '—'} |"
 
 
 def _write_report(result: dict[str, object], path: Path) -> None:
@@ -561,13 +558,9 @@ def _write_report(result: dict[str, object], path: Path) -> None:
             lines.append("| 內盤比桶 | n | 摸板率 |")
             lines.append("|---|---:|---:|")
             for bkey in ("lt_0.45", "mid", "gt_0.55"):
-                blk = combined.get(bkey)
-                if isinstance(blk, dict):
-                    r = blk.get("touch_rate")
-                    lines.append(
-                        f"| {bkey} | {blk.get('n')}"
-                        f" | {format(r, '.1%') if isinstance(r, float) else '—'} |"
-                    )
+                row = _touch_rate_row(bkey, combined.get(bkey))
+                if row is not None:
+                    lines.append(row)
             lines.append("")
         lines.append(
             f"- gap 分層一致:{d.get('consistent_layers')}/{d.get('layers')};"
@@ -580,13 +573,9 @@ def _write_report(result: dict[str, object], path: Path) -> None:
             lines.append("| 桶:gap | n | 摸板率 |")
             lines.append("|---|---:|---:|")
             for key in sorted(cells):
-                blk = cells[key]
-                if isinstance(blk, dict):
-                    r = blk.get("touch_rate")
-                    lines.append(
-                        f"| {key} | {blk.get('n')}"
-                        f" | {format(r, '.1%') if isinstance(r, float) else '—'} |"
-                    )
+                row = _touch_rate_row(key, cells[key])
+                if row is not None:
+                    lines.append(row)
     lines.append("")
 
     lines.append("## (e) 緩漲觀察(≥10 根 close 不減、單根 ≤0.3%;僅描述)")
