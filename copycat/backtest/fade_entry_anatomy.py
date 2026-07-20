@@ -15,6 +15,7 @@ from pathlib import Path
 from copycat.backtest.fade_config import FadeBacktestConfig
 from copycat.backtest.fade_diagnose import cluster_se
 from copycat.backtest.fade_simulate import FadeSample
+from copycat.backtest.fade_vote import iter_flow_flip
 from copycat.backtest.quantiles import quantiles_round
 from copycat.backtest.report_fmt import fmt_quantiles
 from copycat.data.daily import DailyIndex
@@ -43,33 +44,15 @@ def _first_flip(
 ) -> int | None:
     """回傳翻轉 bar 的 list index;require_attack=False 為無前置對照(自 index 1 起掃)。
 
-    攻擊段 = 連續 ≥n 根外盤張數 > 內盤張數,且段內累計漲幅 ≥ _MIN_SEG_GAIN
-    (基準 = 段前一根 close,段自首根起算則用首根 open)。armed 一經成立即保持。
-    翻轉 = 連續 confirm 根內盤張數 > 外盤張數 × rho。
+    狀態機 = fade_vote.iter_flow_flip 單一實作(攻擊段 armed / 翻轉判定同定義,
+    seg_gain 用本模組凍結值 _MIN_SEG_GAIN)。
     """
-    armed = not require_attack
-    run_start: int | None = None
-    flip_run = 0
-    for i, b in enumerate(bars):
-        if not armed:
-            if b.up_volume > b.down_volume:
-                if run_start is None:
-                    run_start = i
-                run_len = i - run_start + 1
-                base = bars[run_start].open if run_start == 0 else bars[run_start - 1].close
-                if run_len >= n and base > 0 and (b.close / base - 1.0) >= _MIN_SEG_GAIN:
-                    armed = True
-            else:
-                run_start = None
-            continue
-        if not require_attack and i == 0:
-            continue  # 對照組自 index 1 起掃(首根無日內脈絡)
-        if b.down_volume > b.up_volume * rho:
-            flip_run += 1
-            if flip_run >= confirm:
-                return i
-        else:
-            flip_run = 0
+    for i, _b, _armed, flipped in iter_flow_flip(
+        bars, n=n, rho=rho, confirm=confirm, seg_gain=_MIN_SEG_GAIN,
+        require_attack=require_attack,
+    ):
+        if flipped:
+            return i
     return None
 
 
@@ -186,6 +169,18 @@ def _build_day_recs(uni: _Universe, daily: DailyIndex) -> tuple[list[_DayRec], l
     return day_recs, widths
 
 
+def _two_sample_cluster(
+    a: list[tuple[float, str]], b: list[tuple[float, str]]
+) -> tuple[float, float]:
+    """兩組 (value, day) 的 two-sample cluster-z 素材:(均值差, 變異數和 se_a²+se_b²)
+    (level_stratified_duel 加權版 / level_anatomy duel 直接版共用)。呼叫端保證兩組非空。"""
+    mean_a = sum(v for v, _ in a) / len(a)
+    mean_b = sum(v for v, _ in b) / len(b)
+    se_a = cluster_se([v for v, _ in a], [d for _, d in a])
+    se_b = cluster_se([v for v, _ in b], [d for _, d in b])
+    return mean_a - mean_b, se_a**2 + se_b**2
+
+
 def _near_line(rec: _DayRec, names: tuple[str, ...]) -> bool:
     for name in names:
         v = rec.levels.get(name)
@@ -199,6 +194,7 @@ def level_stratified_duel(
     daily: DailyIndex,
     lines: tuple[str, ...] = ("ah", "nh"),
     strata_edges: tuple[float, ...] = (0.02, 0.04, 0.06),
+    day_recs: list[_DayRec] | None = None,
 ) -> dict[str, object]:
     """0′(1) 拉幅混淆補驗(round 5 prereg §0′,判準凍結):同拉幅層內
     貼 AH/NH vs 不貼的 post_move 對照。
@@ -207,7 +203,8 @@ def level_stratified_duel(
     z ≥ 1.645(逆變異數加權,cluster_se 日聚類);FAIL → 位階票降級觀察。
     層需兩組各 ≥2 筆才入計。
     """
-    day_recs, _ = _build_day_recs(uni, daily)
+    if day_recs is None:
+        day_recs, _ = _build_day_recs(uni, daily)
     edges = (*strata_edges, float("inf"))
     strata: dict[str, object] = {}
     layers = 0
@@ -233,12 +230,7 @@ def level_stratified_duel(
             "post_move_far": quantiles_round([v for v, _ in far]),
         }
         if len(near) >= 2 and len(far) >= 2:
-            mean_n = sum(v for v, _ in near) / len(near)
-            mean_f = sum(v for v, _ in far) / len(far)
-            diff = mean_n - mean_f
-            se_n = cluster_se([v for v, _ in near], [d for _, d in near])
-            se_f = cluster_se([v for v, _ in far], [d for _, d in far])
-            var = se_n**2 + se_f**2
+            diff, var = _two_sample_cluster(near, far)
             blk["diff"] = diff
             blk["consistent"] = diff > 0
             layers += 1
@@ -265,14 +257,18 @@ def level_stratified_duel(
     }
 
 
-def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
+def level_anatomy(
+    uni: _Universe,
+    daily: DailyIndex,
+    prebuilt: tuple[list[_DayRec], list[float]] | None = None,
+) -> dict[str, object]:
     """位階對決:CDP 線距 gate(中位 < 2% 整組出局)→ 各線觸發率 gate(< 10% 出局)
     → 存活線 vs 固定拉幅帶(開盤 × 1.033~1.041)的 post_move 對決。
 
     適用 = 線值 ≥ T+1 開盤(壓力位語意);觸發 = 當日高距線 ≤ ±0.5%;
     post_move = (當日高 − 收盤)/當日高,正 = 見高回落(位階若有訊息,貼線子集應更差)。
     """
-    day_recs, widths = _build_day_recs(uni, daily)
+    day_recs, widths = prebuilt if prebuilt is not None else _build_day_recs(uni, daily)
 
     width_q = quantiles_round(widths)
     width_p50 = width_q.get("p50")
@@ -340,13 +336,10 @@ def level_anatomy(uni: _Universe, daily: DailyIndex) -> dict[str, object]:
     b = groups["neither"]
     z: float | None = None
     if a and b:
-        mean_a = sum(v for v, _ in a) / len(a)
-        mean_b = sum(v for v, _ in b) / len(b)
-        se_a = cluster_se([v for v, _ in a], [d for _, d in a])
-        se_b = cluster_se([v for v, _ in b], [d for _, d in b])
-        denom = (se_a**2 + se_b**2) ** 0.5
+        diff, var = _two_sample_cluster(a, b)
+        denom = var**0.5
         if denom > 0:
-            z = (mean_a - mean_b) / denom
+            z = diff / denom
     go = isinstance(z, float) and z >= _DUEL_Z_ONE_SIDED
 
     return {
@@ -392,9 +385,10 @@ def run_entry_anatomy(
     daily = DailyIndex.load(data_dir)
     a = flow_flip_anatomy(main_uc)
     logger.info("entry anatomy (a) flow flip done")
-    c = level_anatomy(main_uc, daily)
+    built = _build_day_recs(main_uc, daily)  # (c) 與 (0′) 共用,建一次
+    c = level_anatomy(main_uc, daily, prebuilt=built)
     logger.info("entry anatomy (c) levels done(cdp_drop=%s)", c.get("cdp_drop"))
-    strat = level_stratified_duel(main_uc, daily)
+    strat = level_stratified_duel(main_uc, daily, day_recs=built[0])
     logger.info("entry anatomy (0') stratified duel done(pass=%s)", strat.get("pass"))
 
     # (a) GO/DROP:各訊號組對照同 ρ×confirm 的 ctrl
