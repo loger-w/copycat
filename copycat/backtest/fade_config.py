@@ -12,6 +12,8 @@ import json
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+from copycat.configio import load_dataclass_json
+
 
 @dataclass(frozen=True, slots=True)
 class FadeStopCombo:
@@ -412,17 +414,9 @@ _SIM_FIELDS = (
 
 
 def load_fade_config(path: Path) -> FadeBacktestConfig:
-    payload: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
-    known = {f.name for f in fields(FadeBacktestConfig)}
-    unknown = set(payload) - known
-    if unknown:
-        raise ValueError(f"未知回測參數: {sorted(unknown)}")
-    for key in _TUPLE_KEYS:
-        if key in payload:
-            value = payload[key]
-            assert isinstance(value, list)
-            payload[key] = tuple(value)
-    cfg = FadeBacktestConfig(**payload)  # type: ignore[arg-type]
+    cfg = load_dataclass_json(
+        path, FadeBacktestConfig, tuple_keys=_TUPLE_KEYS, unknown_label="未知回測參數"
+    )
     validate_disaster_fields(cfg)
     validate_round4_fields(cfg)
     validate_round5_fields(cfg)

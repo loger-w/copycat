@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
+
+from copycat.configio import load_dataclass_json
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,17 +126,9 @@ _SIM_FIELDS = (
 
 
 def load_backtest_config(path: Path) -> BacktestConfig:
-    payload: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
-    known = {f.name for f in fields(BacktestConfig)}
-    unknown = set(payload) - known
-    if unknown:
-        raise ValueError(f"未知回測參數: {sorted(unknown)}")
-    for key in _TUPLE_KEYS:
-        if key in payload:
-            value = payload[key]
-            assert isinstance(value, list)
-            payload[key] = tuple(value)
-    return BacktestConfig(**payload)  # type: ignore[arg-type]
+    return load_dataclass_json(
+        path, BacktestConfig, tuple_keys=_TUPLE_KEYS, unknown_label="未知回測參數"
+    )
 
 
 def sim_config_hash(cfg: BacktestConfig) -> str:

@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
+
+from copycat.configio import load_dataclass_json
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,14 +40,9 @@ class StrategyConfig:
 
 
 def load_config(path: Path) -> StrategyConfig:
-    payload: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
-    known = {f.name for f in fields(StrategyConfig)}
-    unknown = set(payload) - known
-    if unknown:
-        raise ValueError(f"未知策略參數: {sorted(unknown)}")
-    for key in ("lock_time_buckets", "gap_buckets", "auction_buckets"):
-        if key in payload:
-            value = payload[key]
-            assert isinstance(value, list)
-            payload[key] = tuple(value)
-    return StrategyConfig(**payload)  # type: ignore[arg-type]
+    return load_dataclass_json(
+        path,
+        StrategyConfig,
+        tuple_keys=("lock_time_buckets", "gap_buckets", "auction_buckets"),
+        unknown_label="未知策略參數",
+    )
