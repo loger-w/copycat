@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -251,3 +254,33 @@ class TestClose:
         src, api = make_source()
         src.close()
         assert api.disconnects == 1  # §0a:不 Disconnect process 不退出
+
+
+class TestFailedConnectGcSafety:
+    def test_failed_connect_gc_does_not_block_process(self) -> None:
+        """F-1(2026-07-20 盤中驗證):Connect 失敗被丟棄的 api,GC 回收 zmq Context 不得卡死。
+
+        盤中實證:trade port 不通時,被棄 TradeAPI 的 Context.__del__ → term() 因 pending
+        LOGIN + 預設 LINGER=-1 無限期阻塞 event loop,server 永不 bind(py-spy stack 見
+        docs/research/2026-07-20-txo-live-verification.md F-1)。子行程重現:逾時 = 卡死。
+        """
+        script = (
+            "import gc\n"
+            "from copycat.live.tc4_trade import TC4TradeSource\n"
+            "from copycat.live.trade_models import TouchanceDownError\n"
+            "src = TC4TradeSource(port='1')\n"  # 無 listener 的 port:LOGIN 永遠 pending
+            "try:\n"
+            "    src._ensure_connected()\n"
+            "except TouchanceDownError:\n"
+            "    pass\n"
+            "gc.collect()\n"
+            "print('GC_OK', flush=True)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(Path(__file__).resolve().parent.parent.parent),
+        )
+        assert "GC_OK" in proc.stdout

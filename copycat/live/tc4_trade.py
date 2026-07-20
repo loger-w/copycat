@@ -90,6 +90,10 @@ class TC4TradeSource:
             # Connect() 內部裸 recv → context 級 timeout 讓之後建立的 socket 全部繼承(R2-2)
             api.context.setsockopt(zmq.RCVTIMEO, _REQ_TIMEOUT_MS)
             api.context.setsockopt(zmq.SNDTIMEO, _REQ_TIMEOUT_MS)
+            # F-1:Connect 失敗被丟棄的 api 在 GC 時走 Context.__del__ → term(),預設
+            # LINGER=-1 會為 pending LOGIN 無限期阻塞(事發在 event loop thread,server
+            # 永不 bind;2026-07-20 盤中實證)。棄單容忍訊息丟失,LINGER=0 讓 term 立即返回
+            api.context.setsockopt(zmq.LINGER, 0)
             try:
                 q = api.Connect(self._port)
             except (zmq.ZMQError, OSError) as exc:
