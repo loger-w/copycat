@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +38,7 @@ from copycat.backtest.stats import Trade, max_drawdown, monthly_consistency, wei
 from copycat.data.daily import DailyIndex
 from copycat.data.models import Bar1K
 from copycat.data.store import read_bars
+from copycat.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -714,8 +714,8 @@ def run_fade_pipeline(
     )
 
     final_path = out_dir / "rules_final.json"
-    tmp = final_path.with_suffix(".tmp")
-    tmp.write_text(
+    atomic_write_text(
+        final_path,
         json.dumps(
             {
                 "results": all_results,
@@ -727,9 +727,7 @@ def run_fade_pipeline(
             indent=1,
             default=str,
         ),
-        encoding="utf-8",
     )
-    os.replace(tmp, final_path)
 
     logger.info("pipeline 完成 → %s", out_dir)
     return {"results": all_results, "report": str(report_path), "rules_final": str(final_path)}

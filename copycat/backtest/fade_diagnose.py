@@ -12,7 +12,6 @@ import dataclasses
 import json
 import logging
 import math
-import os
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -21,6 +20,7 @@ from copycat.backtest.fade_config import NO_STOP_HOLD_COMBO, FadeBacktestConfig
 from copycat.backtest.fade_report import _fmt
 from copycat.backtest.fade_simulate import FadeSample, simulate_fade_sample
 from copycat.data.models import Bar1K
+from copycat.fileio import atomic_write_text
 from copycat.market import limit_up_price
 
 logger = logging.getLogger(__name__)
@@ -485,9 +485,7 @@ def write_pool_fade_report(
         lines.append(f"Universe counts:{parts}")
         lines.append("")
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def load_turnover_map(data_dir: Path) -> dict[tuple[str, str], float]:
@@ -537,9 +535,7 @@ def run_pool_diagnose(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"pool_fade_{report_date}.json"
-    tmp = json_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, json_path)
+    atomic_write_text(json_path, json.dumps(result, ensure_ascii=False, indent=1))
 
     report_path = out_dir / f"uc_pool_fade_{report_date}.md"
     write_pool_fade_report(result, cfg, report_date, report_path)

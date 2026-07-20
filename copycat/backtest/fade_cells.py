@@ -15,7 +15,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
 from collections.abc import Callable
 from datetime import date as _date
 from pathlib import Path
@@ -37,6 +36,7 @@ from copycat.backtest.fade_vote import (
     find_vote_entry,
 )
 from copycat.data.models import Bar1K
+from copycat.fileio import atomic_write_text
 from copycat.market import limit_up_price
 
 logger = logging.getLogger(__name__)
@@ -1169,9 +1169,7 @@ def _write_round3_report(
         "D 以開盤錨校準、套用為進場錨(entry×(1+D)),盤中進場臂武裝偏早(保守向)。"
     )
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def _write_round4_report(
@@ -1409,9 +1407,7 @@ def _write_round4_report(
             )
     lines.append("")
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 # ---------- round 5(prereg 2026-07-17;gate = vote_s_grid / inner15_arm)----------
@@ -1887,9 +1883,7 @@ def _write_round5_report(
                     lines.append(f"- {name}:forward 樣本 0,僅候選")
         lines.append("")
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def write_cells_report(
@@ -1961,9 +1955,7 @@ def write_cells_report(
             )
         lines.append("")
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def build_universes(
@@ -2053,9 +2045,7 @@ def run_cells(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"cells_{report_date}.json"
-    tmp = json_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, json_path)
+    atomic_write_text(json_path, json.dumps(result, ensure_ascii=False, indent=1))
 
     report_path = out_dir / f"uc_cells_{report_date}.md"
     write_cells_report(result, cfg, report_date, report_path)

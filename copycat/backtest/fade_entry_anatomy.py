@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from copycat.backtest.fade_diagnose import cluster_se
 from copycat.backtest.fade_simulate import FadeSample
 from copycat.data.daily import DailyIndex
 from copycat.data.models import Bar1K
+from copycat.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -436,9 +436,7 @@ def run_entry_anatomy(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"entry_anatomy_{report_date}.json"
-    tmp = json_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, json_path)
+    atomic_write_text(json_path, json.dumps(result, ensure_ascii=False, indent=1))
 
     report_path = out_dir / f"fade_round5_entry_anatomy_{report_date}.md"
     _write_report(result, report_path)
@@ -590,6 +588,4 @@ def _write_report(result: dict[str, object], path: Path) -> None:
         )
         lines.append("")
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")

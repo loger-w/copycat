@@ -11,7 +11,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
 from pathlib import Path
 
 from copycat.backtest.fade_cells import (
@@ -27,6 +26,7 @@ from copycat.backtest.fade_cells import (
 from copycat.backtest.fade_config import FadeBacktestConfig
 from copycat.backtest.fade_simulate import FadeSample, _round_trip_cost
 from copycat.data.models import Bar1K
+from copycat.fileio import atomic_write_text
 from copycat.market import limit_up_price
 
 logger = logging.getLogger(__name__)
@@ -475,9 +475,7 @@ def run_anatomy(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"anatomy_{report_date}.json"
-    tmp = json_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, json_path)
+    atomic_write_text(json_path, json.dumps(result, ensure_ascii=False, indent=1))
 
     report_path = out_dir / f"fade_round4_anatomy_{report_date}.md"
     _write_report(result, report_path)
@@ -623,6 +621,4 @@ def _write_report(result: dict[str, object], path: Path) -> None:
         )
     lines.append("")
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, "\n".join(lines) + "\n")

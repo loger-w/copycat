@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from copycat.fileio import atomic_write_text
 
 
 def _fmt(v: object, fmt: str = ".4f") -> str:
@@ -259,15 +260,11 @@ def write_fade_report(
     content = "\n".join(lines) + "\n"
 
     report_path = out_dir / f"tday_fade_backtest_{report_date}.md"
-    tmp = report_path.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, report_path)
+    atomic_write_text(report_path, content)
 
     if evidence_dir:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         ev_path = evidence_dir / f"tday_fade_backtest_{report_date}.md"
-        ev_tmp = ev_path.with_suffix(".tmp")
-        ev_tmp.write_text(content, encoding="utf-8")
-        os.replace(ev_tmp, ev_path)
+        atomic_write_text(ev_path, content)
 
     return report_path

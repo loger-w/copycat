@@ -9,7 +9,6 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 from pathlib import Path
 
 from copycat.backtest.config import BacktestConfig, sim_config_hash
@@ -41,6 +40,7 @@ from copycat.backtest.stats import (
 from copycat.backtest.universe import Sample, build_universe
 from copycat.data.daily import DailyIndex
 from copycat.data.store import read_bars
+from copycat.fileio import atomic_open_text, atomic_write_text
 from copycat.watchlist import load_watchlist
 
 logger = logging.getLogger(__name__)
@@ -170,25 +170,21 @@ def run_features(
             rows_out.append(row)
             counts["rows"] += 1
         path = _features_path(out_dir, theta)
-        tmp = path.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8", newline="") as fh:
+        with atomic_open_text(path) as fh:
             w = csv.DictWriter(fh, fieldnames=fields)
             w.writeheader()
             w.writerows(rows_out)
-        os.replace(tmp, path)
         per_theta[_theta_key(theta)] = counts
     counts_path = out_dir / "universe_counts.json"
-    counts_tmp = counts_path.with_suffix(".tmp")
-    counts_tmp.write_text(
+    atomic_write_text(
+        counts_path,
         json.dumps(
             {"universe": u_counts, "per_theta": per_theta},
             ensure_ascii=False,
             sort_keys=True,
             indent=1,
         ),
-        encoding="utf-8",
     )
-    os.replace(counts_tmp, counts_path)
     logger.info("features 完成 → %s", out_dir)
     return out_dir
 
@@ -308,9 +304,7 @@ def _load_or_simulate(
         "pnl": pnl,
         "status": status,
     }
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return payload
 
 
@@ -530,9 +524,5 @@ def run_search(
         "negative_findings": sorted(negative),
     }
     rules_path = out_dir / "rules_final.json"
-    tmp = rules_path.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(result, ensure_ascii=False, sort_keys=True, indent=1), encoding="utf-8"
-    )
-    os.replace(tmp, rules_path)
+    atomic_write_text(rules_path, json.dumps(result, ensure_ascii=False, sort_keys=True, indent=1))
     return write_report(report_dir or out_dir, result, counts, report_date, cfg)
