@@ -83,10 +83,15 @@ function fmt(n: number): string {
   return String(Math.round(n * 10) / 10);
 }
 
-export function curvePath(curve: CurvePoint[], scales: Scales): string {
-  return curve
+/** M/L 折線 path;curvePath 與 areaPaths 共用同一格式化來源。 */
+function linePath(points: CurvePoint[], scales: Scales): string {
+  return points
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${fmt(scales.x(x))},${fmt(scales.y(y))}`)
     .join(" ");
+}
+
+export function curvePath(curve: CurvePoint[], scales: Scales): string {
+  return linePath(curve, scales);
 }
 
 /** 獲利(y>0)與虧損(y<0)分區面積 path,各自閉合到零線。 */
@@ -98,9 +103,7 @@ export function areaPaths(
   const build = (segs: CurvePoint[][]): string =>
     segs
       .map((seg) => {
-        const line = seg
-          .map(([x, y], i) => `${i === 0 ? "M" : "L"}${fmt(scales.x(x))},${fmt(scales.y(y))}`)
-          .join(" ");
+        const line = linePath(seg, scales);
         const lastX = fmt(scales.x((seg[seg.length - 1] as CurvePoint)[0]));
         const firstX = fmt(scales.x((seg[0] as CurvePoint)[0]));
         return `${line} L${lastX},${zeroY} L${firstX},${zeroY} Z`;
