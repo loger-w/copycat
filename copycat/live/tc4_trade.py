@@ -36,6 +36,12 @@ _SUB_TIMEOUT_MS = 1000
 
 OnReport = Callable[[str, OrderReport], None]
 
+# SubPort 回報訊息分派表:DataType → (kind, parser)。新增回報型別只改這一處。
+_REPORT_PARSERS: dict[str, tuple[str, Callable[[dict[str, Any]], OrderReport]]] = {
+    "EXECUTIONREPORT": ("exec", parse_execution_report),
+    "FILLEDREPORT": ("fill", parse_fill_report),
+}
+
 
 class TC4TradeSource:
     """TradeSource 實作;api/session/sub_port 可注入(測試口徑,注入時不做真連線)。"""
@@ -282,12 +288,11 @@ class TC4TradeSource:
     def handle_sub_message(self, data: dict[str, Any]) -> None:
         """SubPort 訊息分派(listener 呼叫;測試直接呼叫驗分流)。"""
         dtype = data.get("DataType")
-        if dtype == "EXECUTIONREPORT":
+        dispatch = _REPORT_PARSERS.get(dtype) if isinstance(dtype, str) else None
+        if dispatch is not None:
             if self._on_report is not None:
-                self._on_report("exec", parse_execution_report(data.get("Report") or {}))
-        elif dtype == "FILLEDREPORT":
-            if self._on_report is not None:
-                self._on_report("fill", parse_fill_report(data.get("Report") or {}))
+                kind, parse = dispatch
+                self._on_report(kind, parse(data.get("Report") or {}))
         elif dtype == "PING":
             if self._api is None:
                 return  # disposed:不觸發 lazy reconnect(R4-5)

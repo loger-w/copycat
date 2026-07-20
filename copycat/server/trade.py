@@ -93,6 +93,17 @@ def _report_dict(rep: OrderReport) -> dict[str, Any]:
     }
 
 
+def _apply_to_store(
+    store: dict[str, OrderReport], reports: list[OrderReport], *, overwrite: bool
+) -> None:
+    """restore 回寫(orders/fills 兩 store 同一套語意):overwrite 蓋回,否則 setdefault."""
+    for rep in reports:
+        if overwrite:
+            store[rep.report_id] = rep
+        else:
+            store.setdefault(rep.report_id, rep)
+
+
 def _ts() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -357,16 +368,8 @@ class TradeRuntime:
     def _apply_restore(
         self, reports: list[OrderReport], fills: list[OrderReport], *, overwrite: bool
     ) -> None:
-        for rep in reports:
-            if overwrite:
-                self._orders[rep.report_id] = rep
-            else:
-                self._orders.setdefault(rep.report_id, rep)
-        for rep in fills:
-            if overwrite:
-                self._fills[rep.report_id] = rep
-            else:
-                self._fills.setdefault(rep.report_id, rep)
+        _apply_to_store(self._orders, reports, overwrite=overwrite)
+        _apply_to_store(self._fills, fills, overwrite=overwrite)
 
     # ---- 視圖 ----
 
