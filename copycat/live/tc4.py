@@ -124,6 +124,11 @@ class TC4QuoteSource:
         self._stop = threading.Event()
         self._last_msg = time.monotonic()
         self._lock = threading.Lock()
+        # _api/_session 指標讀寫專用小鎖:_dispose 的 check-then-clear 與
+        # _ensure_connected 的指標發布必須原子,否則 REQ 失敗的 worker 可能清掉
+        # _check_stale 剛建好的新連線(round-2 P1)。與 self._lock 分離,
+        # _check_stale 持大鎖中經 _req → _dispose 不會自鎖。
+        self._api_lock = threading.Lock()
         self.reconnects = 0
         self.on_reconnect: Callable[[], None] | None = None
 
@@ -148,10 +153,11 @@ class TC4QuoteSource:
             raise ConnectionError(f"TC4 quote connect failed: {exc}") from exc
         if q.get("Success") != "OK":
             raise ConnectionError(f"TC4 login failed: {q}")
-        self._api = api
-        self._session = q["SessionKey"]
+        with self._api_lock:
+            self._api = api
+            self._session = q["SessionKey"]
         self._sub_port = q["SubPort"]
-        logger.info("TC4 connected, session=%s", self._session[:8])
+        logger.info("TC4 connected, session=%s", q["SessionKey"][:8])
 
     def _dispose(self, api: Any) -> None:
         """REQ 失敗即棄連線:timeout 後 REQ EFSM 壞狀態不可重用,若不丟棄,SUB 有 tick
@@ -159,10 +165,11 @@ class TC4QuoteSource:
 
         不取 self._lock:_check_stale 持鎖中經 _rt_request 走到這裡,取鎖即自鎖。
         """
-        if self._api is not api:
-            return
-        self._api = None
-        self._session = None
+        with self._api_lock:
+            if self._api is not api:
+                return
+            self._api = None
+            self._session = None
         if api.lock.acquire(timeout=self._lock_timeout):
             try:
                 api.Disconnect()
@@ -181,8 +188,11 @@ class TC4QuoteSource:
         不直呼 wrapper,REQ 全走這裡(review F1;同 tc4_trade 自組電文模式)。
         strip_prefix:GETHISDATA 回應帶 "<type>:" 前綴(wrapper GetHistory 同語意)。
         """
-        assert self._api is not None
         api = self._api
+        if api is None:
+            # dispose 後殘存呼叫:收斂 ConnectionError,不可裸 assert 讓
+            # AssertionError 逃出 engine 的 except ConnectionError 攔截網
+            raise ConnectionError("TC4 quote not connected")
         if not api.lock.acquire(timeout=self._lock_timeout):
             # wrapper KeepAlive Pong 無 try/finally,timeout 毒鎖 → 棄連線重建,
             # 而非永久卡死
@@ -206,17 +216,21 @@ class TC4QuoteSource:
             return json.loads(text[idx + 1 :] if idx >= 0 else text)
         return json.loads(message)
 
+    def _require_session(self) -> str:
+        session = self._session
+        if session is None:
+            raise ConnectionError("TC4 quote not connected")
+        return session
+
     def _rt_request(self, request: str, symbol: str) -> dict:
-        assert self._session is not None
-        return self._req(build_rt_request(request, self._session, symbol, _today_ymd()))
+        return self._req(build_rt_request(request, self._require_session(), symbol, _today_ymd()))
 
     # ---- QuoteSource 介面 ----
 
     def list_series(self) -> list[SeriesInfo]:
         self._ensure_connected()
-        assert self._session is not None
         res = self._req(
-            {"Request": "QUERYALLINSTRUMENT", "SessionKey": self._session, "Type": "Opt"}
+            {"Request": "QUERYALLINSTRUMENT", "SessionKey": self._require_session(), "Type": "Opt"}
         )
         if res.get("Success") != "OK":
             raise ConnectionError(f"TC4 QUERYALLINSTRUMENT failed: {res.get('ErrMsg')}")
@@ -244,11 +258,10 @@ class TC4QuoteSource:
         return ticks
 
     def _sub_history(self, symbol: str, start: str, end: str) -> dict:
-        assert self._session is not None
         return self._req(
             {
                 "Request": "SUBQUOTE",
-                "SessionKey": self._session,
+                "SessionKey": self._require_session(),
                 "Param": {
                     "Symbol": symbol,
                     "SubDataType": "TICKS",
@@ -259,11 +272,10 @@ class TC4QuoteSource:
         )
 
     def _get_history(self, symbol: str, start: str, end: str, qry_index: str) -> dict:
-        assert self._session is not None
         return self._req(
             {
                 "Request": "GETHISDATA",
-                "SessionKey": self._session,
+                "SessionKey": self._require_session(),
                 "Param": {
                     "Symbol": symbol,
                     "SubDataType": "TICKS",
@@ -324,11 +336,15 @@ class TC4QuoteSource:
                     self._rt_request("UNSUBQUOTE", sym)
                 except (zmq.ZMQError, ConnectionError, OSError, json.JSONDecodeError):
                     # 收工路徑:退訂失敗多半是連線已死,其餘 symbol 也會失敗;
-                    # 停止嘗試但仍必須往下走 Disconnect(§0a)
+                    # 停止嘗試但仍必須收尾 Disconnect(§0a)
                     logger.exception("UNSUBQUOTE failed during close: %s", sym)
                     break
-            self._api.Disconnect()  # §0a KeepAlive 生命週期:不呼叫則 process 不退出
-            self._api = None
+        # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
+        # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive
+        # 生命週期:不關則 process 不退出)
+        api = self._api
+        if api is not None:
+            self._dispose(api)
 
     # ---- REALTIME 監聽(thread)----
 
@@ -388,10 +404,11 @@ class TC4QuoteSource:
             logger.warning("TC4 stale >%ss, reconnecting...", _STALE_THRESHOLD_SECS)
             try:
                 with self._lock:
-                    if self._api is not None:
-                        self._api.Disconnect()
-                    self._api = None
-                    self._session = None
+                    old = self._api
+                    if old is not None:
+                        # 舊 api 拆除統一走 _dispose(round-2 P2:消滅無鎖 Disconnect
+                        # 與 _dispose 的雙路徑並發)
+                        self._dispose(old)
                     self._ensure_connected()
                     resub = list(self._subscribed)
                     self._subscribed = set()

@@ -274,6 +274,25 @@ class TestReqProtection:
         with pytest.raises(ConnectionError):
             src.fetch_backfill(series)
 
+    def test_close_survives_unsub_failure(self) -> None:
+        # round-2 P0:UNSUBQUOTE 失敗 → _req 內 _dispose 已清 self._api,
+        # close() 收尾不可再 None.Disconnect() 炸 AttributeError(收工路徑必須乾淨)
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        src._subscribed = {SPOT_SYMBOL}
+        src.close()  # 不得拋例外
+        assert api.disconnected is True  # dispose best-effort 已關
+
+    def test_request_after_dispose_raises_connection_error_not_assert(self) -> None:
+        # round-2 P1 衍生:dispose 後殘存呼叫要收斂 ConnectionError,
+        # 不可裸 assert 拋 AssertionError 逃出 engine 的 except ConnectionError 攔截網
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        with pytest.raises(ConnectionError):
+            src._rt_request("SUBQUOTE", SPOT_SYMBOL)  # 第一次:失敗 + dispose
+        with pytest.raises(ConnectionError):
+            src._rt_request("SUBQUOTE", SPOT_SYMBOL)  # 第二次:已 dispose,仍是 ConnectionError
+
     def test_req_failure_disposes_api_for_lazy_reconnect(self) -> None:
         # REQ timeout 後 EFSM 壞狀態不可重用;若不棄連線,SUB 有 tick 流動時
         # _check_stale 永不觸發 → REQ 通道永久壞死(review F2)
