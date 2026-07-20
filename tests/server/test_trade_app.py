@@ -8,7 +8,7 @@ from typing import Any, Callable
 import pytest
 from fastapi.testclient import TestClient
 
-from copycat.live.models import OptionContract, SeriesInfo, Tick
+from copycat.live.models import SPOT_SYMBOL, OptionContract, SeriesInfo, Tick
 from copycat.live.trade_models import (
     AccountInfo,
     BrokerRejectedError,
@@ -113,7 +113,7 @@ class TestAccountRoute:
             assert body["mode"] == "sim"
             assert body["status"] == "ready"
             assert C23000.symbol in body["orderable_symbols"]
-            assert "TC.F.TWF.FITX.HOT" in body["orderable_symbols"]
+            assert SPOT_SYMBOL in body["orderable_symbols"]
 
     def test_no_trade_source_is_not_ready(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
