@@ -288,7 +288,9 @@ class TestReviewFixes:
         await engine.set_main("2330")
         await _drain(engine)
         src.subscribe_gate = threading.Event()  # 未 set → subscribe 阻塞
-        engine.rollover_stage1("2026-07-22")  # 若同步重掛,這裡永不返回
+        t0 = asyncio.get_running_loop().time()
+        engine.rollover_stage1("2026-07-22")  # 同步重掛會在此吃掉 subscribe 阻塞時間
+        assert asyncio.get_running_loop().time() - t0 < 0.5  # 必須立即返回
         assert "2026-07-22" in src.trade_dates  # 同步部分已生效
         src.subscribe_gate.set()
         await _drain(engine)
