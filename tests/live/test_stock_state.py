@@ -61,8 +61,8 @@ class TestAggregation:
         assert m1.inner == 4
         assert st.cum_outer == 16
         assert st.cum_inner == 4
-        # VWAP = (2380*10 + 2390*4 + 2400*6) / 20 = 2387.0 元
-        assert st.vwap_milli == 2_387_000
+        # VWAP = (2380*10 + 2390*4 + 2400*6) / 20 = 47760/20 = 2388.0 元
+        assert st.vwap_milli == 2_388_000
 
     def test_snapshot_shape_and_seq(self) -> None:
         st = StockDayState()
