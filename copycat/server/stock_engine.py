@@ -175,7 +175,8 @@ class StockEngine:
         if entry is None:
             return
         try:
-            await asyncio.to_thread(self._acquire, f"{entry['prod']}.HOT", f"stkfut:{code}")
+            # F: 前綴 = 期貨鍵(source 對映到 TC.F.TWF.<prod>.HOT;real-env 修正)
+            await asyncio.to_thread(self._acquire, f"F:{entry['prod']}", f"stkfut:{code}")
         except ConnectionError:
             logger.warning("stkfut subscribe %s failed", entry["prod"])
 
@@ -183,7 +184,7 @@ class StockEngine:
         entry = self._map.get(code)
         if entry is None:
             return
-        self._release(f"{entry['prod']}.HOT", f"stkfut:{code}")
+        self._release(f"F:{entry['prod']}", f"stkfut:{code}")
 
     # ---- rollover(兩段式,design §2.4)----
 

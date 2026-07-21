@@ -51,6 +51,11 @@ class TestSymbolAndWindow:
     def test_stock_symbol(self) -> None:
         assert stock_symbol("2330") == "TC.S.TWS.2330"
 
+    def test_future_prefix_maps_to_twf_hot(self) -> None:
+        # 期現對照加訂個股期:F:<prod> → 期貨樹 HOT(2026-07-21 real-env 實證:
+        # 誤組成 TC.S.TWS.CDF.HOT 時 SUBQUOTE 照回 OK,零錯誤訊號)
+        assert stock_symbol("F:CDF") == "TC.F.TWF.CDF.HOT"
+
     def test_stock_window_utc_day(self) -> None:
         assert stock_window("2026-07-21") == ("2026072100", "2026072106")
 

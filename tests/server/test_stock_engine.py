@@ -248,6 +248,14 @@ class TestStreamAndStatus:
 
 
 class TestStkfut:
+    async def test_stkfut_subscribed_with_future_prefix(self) -> None:
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert "F:CDF" in src.subscribed  # 期貨鍵,不是股號鍵(real-env 修正)
+        await engine.set_main("2317")  # 換主圖 → 舊 stkfut 退訂
+        assert "F:CDF" in src.unsubscribed
+        await engine.close()
+
     async def test_stkfut_quote_published_with_basis(self) -> None:
         engine, src = await _make()
         await engine.set_main("2330")  # 對映表有 2330 → 加訂 CDF

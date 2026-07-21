@@ -30,7 +30,12 @@ _TRADING_END = _dt.time(13, 35)
 
 
 def stock_symbol(code: str) -> str:
-    """股號 → TC4 symbol。上市/上櫃都掛 TWS 段(2026-07-21 spike:5483 上櫃推播成功)。"""
+    """股號 → TC4 symbol。上市/上櫃都掛 TWS 段(2026-07-21 spike:5483 上櫃推播成功)。
+
+    `F:<prod>` 前綴 = 個股期(期現對照加訂)→ 期貨樹 HOT;誤走股票段時 SUBQUOTE
+    照回 OK 零錯誤訊號(2026-07-21 real-env 實證),前綴分流是唯一防線。"""
+    if code.startswith("F:"):
+        return f"TC.F.TWF.{code[2:]}.HOT"
     return f"TC.S.TWS.{code}"
 
 
@@ -100,7 +105,8 @@ class StockQuoteSource(TC4QuoteSource):
         self._subscribed.add(sym)
         with self._seen_lock:
             self._seen.discard(code)
-        if self._in_trading_hours():
+        # 個股期(F:)不做無推播健檢:seen 以 Security(=股號)為鍵,期貨鍵對不上
+        if not code.startswith("F:") and self._in_trading_hours():
             timer = threading.Timer(self._no_data_secs, self._health_check, args=(code,))
             timer.daemon = True
             timer.start()
