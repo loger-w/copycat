@@ -50,7 +50,9 @@ class TestGroupSeries:
 
 class TestBuildRtRequest:
     def test_subquote_carries_time_window(self) -> None:
-        obj = build_rt_request("SUBQUOTE", "sess-1", "TC.F.TWF.TXF.HOT", "20260718")
+        obj = build_rt_request(
+            "SUBQUOTE", "sess-1", "TC.F.TWF.TXF.HOT", ("2026071800", "2026071806")
+        )
         assert obj == {
             "Request": "SUBQUOTE",
             "SessionKey": "sess-1",
@@ -85,6 +87,8 @@ class FakeApi:
         self.socket = _JsonSocket(self._handle)
         self.pages = pages
         self.sub_history_calls: list[str] = []
+        self.sub_history_windows: list[tuple[str, str]] = []
+        self.rt_requests: list[dict] = []
         self.disconnected = False
 
     def _handle(self, req: dict) -> bytes:
@@ -96,6 +100,11 @@ class FakeApi:
             return b"TICKS:" + json.dumps(data).encode() + b"\x00"
         if kind == "SUBQUOTE" and req.get("Param", {}).get("SubDataType") == "TICKS":
             self.sub_history_calls.append(req["Param"]["Symbol"])
+            self.sub_history_windows.append(
+                (req["Param"]["StartTime"], req["Param"]["EndTime"])
+            )
+        if req.get("Param", {}).get("SubDataType") == "REALTIME":
+            self.rt_requests.append(req)
         return b'{"Success": "OK"}\x00'
 
     def _page(self, sym: str, qry_index: str) -> dict:
@@ -179,6 +188,29 @@ class TestFetchBackfill:
         series = group_series([sym])[0]
         ticks = src.fetch_backfill(series)
         assert len(ticks) == 2
+
+    def test_night_session_uses_night_window(self, monkeypatch: Any) -> None:
+        # 夜盤時刻:回補與 REALTIME 訂閱都要用夜盤窗(cum 基準對齊的前提)
+        sym = "TC.O.TWF.TX4.202607.C.44550"
+        api = FakeApi({sym: [[hist_row(1)]]})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", poll_wait_secs=0.0)
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260720", "night"))
+        src.fetch_backfill(group_series([sym])[0])
+        assert api.sub_history_windows[0] == ("2026072006", "2026072022")
+        src._rt_request("SUBQUOTE", sym)
+        param = api.rt_requests[-1]["Param"]
+        assert (param["StartTime"], param["EndTime"]) == ("2026072006", "2026072022")
+
+    def test_backfill_date_mode_pins_day_window(self, monkeypatch: Any) -> None:
+        # TXO_BACKFILL_DATE 休市日回補:指定日期 = 該日日盤窗,不隨當下時段走(白名單 1)
+        sym = "TC.O.TWF.TX4.202607.C.44550"
+        api = FakeApi({sym: [[hist_row(1)]]})
+        src = TC4QuoteSource(
+            port="0", api=api, session="sess-1", poll_wait_secs=0.0, backfill_date="2026-07-18"
+        )
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260720", "night"))
+        src.fetch_backfill(group_series([sym])[0])
+        assert api.sub_history_windows[0] == ("2026071800", "2026071806")
 
     def test_empty_symbols_share_bounded_sleep_budget(self, monkeypatch: Any) -> None:
         """空 symbol 不逐檔空等:等待為全局輪間 sleep(≤ 輪數上限),與空 symbol 數無關。

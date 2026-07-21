@@ -102,6 +102,22 @@ async def test_activate_switches_series_and_resets() -> None:
         await rt.close()
 
 
+async def test_empty_backfill_clears_accumulated_from() -> None:
+    # 空回補不得殘留上一次起點(rollover 後顯示舊時段起點會誤導;change-spec R3)
+    fake = FakeQuoteSource(
+        backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]}
+    )
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        assert rt.latest_snapshot()["accumulated_from"] != "-"
+        fake.backfill = {}
+        await rt.activate("TX4.202607")
+        assert rt.latest_snapshot()["accumulated_from"] == "-"
+    finally:
+        await rt.close()
+
+
 async def test_unknown_series_raises() -> None:
     fake = FakeQuoteSource()
     rt = EngineRuntime(fake, throttle_secs=0.01)

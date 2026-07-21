@@ -194,6 +194,9 @@ class EngineRuntime:
             if backfill:
                 first = min(t.precise_time for t in backfill)
                 self._accumulated_from = _fmt_precise_time(first)
+            else:
+                # 空回補不得殘留上一次起點(時段 rollover 後會誤顯示舊時段起點)
+                self._accumulated_from = "-"
             self._set_status("live")
             return
         self._set_status("degraded")

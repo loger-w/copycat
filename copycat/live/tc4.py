@@ -28,6 +28,7 @@ from copycat.live.models import (
     parse_option_symbol,
     parse_realtime,
 )
+from copycat.live.session import session_key, session_window
 from copycat.tc4common import TC4_APPID, TC4_SKEY, iter_qry_pages
 
 __all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_series"]
@@ -45,20 +46,17 @@ _HARVEST_ROUNDS = 8
 _HARVEST_DRY_LIMIT = 3
 
 
-def _today_ymd() -> str:
-    return time.strftime("%Y%m%d", time.gmtime())
-
-
-def build_rt_request(request: str, session: str, symbol: str, ymd: str) -> dict:
-    """SUBQUOTE/UNSUBQUOTE REALTIME 請求(必帶當日 UTC 時間窗,spike 實測)。"""
+def build_rt_request(request: str, session: str, symbol: str, window: tuple[str, str]) -> dict:
+    """SUBQUOTE/UNSUBQUOTE REALTIME 請求(必帶合法 UTC 時間窗,spike 實測)。"""
+    start, end = window
     return {
         "Request": request,
         "SessionKey": session,
         "Param": {
             "Symbol": symbol,
             "SubDataType": "REALTIME",
-            "StartTime": f"{ymd}00",
-            "EndTime": f"{ymd}06",
+            "StartTime": start,
+            "EndTime": end,
         },
     }
 
@@ -237,9 +235,8 @@ class TC4QuoteSource:
         return json.loads(message)
 
     def _rt_request(self, request: str, symbol: str) -> dict:
-        return self._session_req(
-            lambda session: build_rt_request(request, session, symbol, _today_ymd())
-        )
+        window = session_window(session_key())
+        return self._session_req(lambda session: build_rt_request(request, session, symbol, window))
 
     # ---- QuoteSource 介面 ----
 
@@ -261,8 +258,11 @@ class TC4QuoteSource:
 
     def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
         self._ensure_connected()
-        ymd = self._backfill_date or _today_ymd()
-        start, end = f"{ymd}00", f"{ymd}06"
+        if self._backfill_date:
+            # TXO_BACKFILL_DATE 休市日回補:指定日期固定日盤窗,不隨當下時段走
+            start, end = f"{self._backfill_date}00", f"{self._backfill_date}06"
+        else:
+            start, end = session_window(session_key())
         # 先對全鏈送 SubHistory 讓 TC4 平行備資料再逐檔收割 —
         # 逐檔「Sub → 等 → 收」實測 280 檔 ~10 分鐘,先全訂可砍掉大部分等待(Phase 4 自評)
         for contract in series.contracts:
