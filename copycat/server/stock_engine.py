@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 from typing import Any, AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import StockTick, parse_stock_realtime

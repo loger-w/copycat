@@ -75,8 +75,8 @@ class FakeSource:
     def set_on_no_data(self, cb: Callable[[str], None]) -> None:
         self.on_no_data = cb
 
-    def set_trade_date(self, d: str) -> None:
-        self.trade_dates.append(d)
+    def set_trade_date(self, trade_date: str) -> None:
+        self.trade_dates.append(trade_date)
 
     def close(self) -> None:
         pass

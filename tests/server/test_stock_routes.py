@@ -53,7 +53,7 @@ class FakeStockSource:
     def set_on_no_data(self, cb: Callable[[str], None]) -> None:
         pass
 
-    def set_trade_date(self, d: str) -> None:
+    def set_trade_date(self, trade_date: str) -> None:
         pass
 
     def close(self) -> None:
