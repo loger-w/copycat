@@ -127,10 +127,10 @@ def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockM
         close_time=_hhmmss(str(msg.get("CloseTime", ""))),
     )
     status = str(msg.get("TradeStatus", "0") or "0")
-    if status != "0":
-        logger.warning(
-            "TradeStatus=%s on %s(值域未實測,僅觀測不丟棄)", status, msg.get("Symbol", "")
-        )
+    # 已知值域(2026-07-21 盤中實測):0=正常;1=試撮期狀態(13:25-13:30 簿更新,213 筆)。
+    # 其餘值僅觀測不丟棄(丟棄的失效模式 = 處置股整檔靜默消失,design r2-F5)
+    if status not in ("0", "1"):
+        logger.warning("TradeStatus=%s on %s(值域外,僅觀測不丟棄)", status, msg.get("Symbol", ""))
     price = to_milli(msg.get("TradingPrice", ""))
     qty = _to_int(msg.get("TradeQuantity", ""))
     if price is None or qty is None or qty <= 0:
