@@ -157,6 +157,31 @@ class TestSessionRollover:
         finally:
             await rt.close()
 
+    async def test_rollover_during_inflight_handover_serializes(self, monkeypatch) -> None:
+        # review F1(repro 實證):交接 to_thread 期間 key 跨界不得並發第二個交接
+        # (雙份 backfill 疊加 + buffer 互搶);完成後下一輪 timeout 補跑恰一次。
+        import time as _time
+
+        key = self._patch_key(monkeypatch)
+
+        class _Slow(FakeQuoteSource):
+            def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+                _time.sleep(0.15)
+                return super().fetch_backfill(series)
+
+        fake = _Slow(backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]})
+        rt = EngineRuntime(fake, throttle_secs=0.01)
+        start_task = asyncio.create_task(rt.start())
+        await asyncio.sleep(0.05)  # 初始交接進行中
+        key["v"] = ("20260720", "night")
+        await start_task
+        try:
+            await asyncio.sleep(0.3)
+            assert len(fake.backfill_calls) == 2  # 初始 + 完成後補跑一次,無並發
+            assert rt.latest_snapshot()["totals"]["call_net_qty"] == 3  # 單份重建,非疊加
+        finally:
+            await rt.close()
+
     async def test_rollover_during_source_down_degrades_then_recovers(self, monkeypatch) -> None:
         # rollover 當下 TC4 死亡:degraded 且 _consume 存活,恢復依 on_reconnect 鏈(spec R7-2)
         key = self._patch_key(monkeypatch)

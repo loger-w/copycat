@@ -344,8 +344,9 @@ class TC4QuoteSource:
         self._on_tick = on_tick
         self._start_listener()
         symbols = [c.symbol for c in series.contracts]
-        if SPOT_SYMBOL not in self._subscribed:
-            symbols.append(SPOT_SYMBOL)  # TXF 現貨獨立於序列(DR-13),首次順帶訂
+        # TXF 現貨獨立於序列(DR-13);每次都重掛(UNSUB→SUB 冪等)— rollover 重訂閱
+        # 必須讓 spot 也換新時段窗,否則其訂閱窗永遠停在最初時段(review F2)
+        symbols.append(SPOT_SYMBOL)
         for sym in symbols:
             self._rt_request("UNSUBQUOTE", sym)
             r = self._rt_request("SUBQUOTE", sym)

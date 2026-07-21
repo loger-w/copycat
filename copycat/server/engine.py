@@ -63,6 +63,7 @@ class EngineRuntime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._consume_task: asyncio.Task[None] | None = None
         self._paused = False
+        self._handover_running = False
         self.status = "connecting"
         self.queue_dropped = 0
         self._healed_dropped = 0
@@ -162,6 +163,16 @@ class EngineRuntime:
         # 交接起點即記時段 key:失敗也記(避免 rollover 條件無限重觸發;恢復走
         # on_reconnect 鏈,test_rollover_during_source_down 釘住)
         self._session_key = session_key()
+        # 交接不可並發(review F1):to_thread 回補期間 _consume 照輪詢,rollover /
+        # force 若再啟動第二個交接會共用 _buffer 互搶 + backfill 雙份疊加
+        self._handover_running = True
+        try:
+            await self._run_handover_locked(series, subscribe=subscribe)
+        finally:
+            self._handover_running = False
+
+    async def _run_handover_locked(self, series: SeriesInfo, *, subscribe: bool) -> None:
+        assert self._agg is not None
         overflows = 0
         for attempt in range(1, _HANDOVER_RETRIES + 1):
             self._set_status("backfilling")
@@ -258,6 +269,10 @@ class EngineRuntime:
 
         force(重連後)不等 queue 清空 — 交接期間新 tick 進 buffer,不會遺失(Alt-3)。
         """
+        if self._handover_running:
+            # 交接進行中一律不重入;rollover 的 key 差異在交接完成後的下一輪
+            # timeout 輪詢仍在,天然補跑(review F1)
+            return
         force = self._force_heal
         rollover = (
             self._session_rollover

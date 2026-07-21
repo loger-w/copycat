@@ -212,6 +212,23 @@ class TestFetchBackfill:
         src.fetch_backfill(group_series([sym])[0])
         assert api.sub_history_windows[0] == ("2026071800", "2026071806")
 
+    def test_spot_resubscribed_on_every_subscribe(self, monkeypatch: Any) -> None:
+        # review F2:spot 必須隨每次 subscribe 重掛(rollover 重訂閱要帶新時段窗;
+        # 舊寫法 spot 已在 _subscribed 即跳過,訂閱窗永遠停在最初時段)
+        sym = "TC.O.TWF.TX4.202607.C.44550"
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", poll_wait_secs=0.0)
+        monkeypatch.setattr(src, "_start_listener", lambda: None)
+        series = group_series([sym])[0]
+        src.subscribe(series, lambda t: None)
+        src.subscribe(series, lambda t: None)
+        spot_subs = [
+            r
+            for r in api.rt_requests
+            if r["Request"] == "SUBQUOTE" and r["Param"]["Symbol"] == SPOT_SYMBOL
+        ]
+        assert len(spot_subs) == 2
+
     def test_empty_symbols_share_bounded_sleep_budget(self, monkeypatch: Any) -> None:
         """空 symbol 不逐檔空等:等待為全局輪間 sleep(≤ 輪數上限),與空 symbol 數無關。
 
