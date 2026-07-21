@@ -43,6 +43,28 @@ class TestParseTaifexHtml:
             "0050": {"prod": "NYF", "name": "元大台灣50"},
         }
 
+    def test_standard_contract_preferred_over_mini(self) -> None:
+        # 期交所同頁含標準(2,000 股)與小型(100 股)兩列同股號 — 期現對照要標準檔
+        # (2026-07-21 真實頁面實證:2330 被小型 QFF 覆蓋)
+        html = """
+        <tr><td align="center">CD</td><td>台灣積體電路</td><td align="center">2330</td>
+        <td>台積電</td><td><font>●</font><span>是股票期貨標的</span></td><td></td>
+        <td style="text-align: right">2,000</td><td>8:45~13:45</td></tr>
+        <tr><td align="center">QF</td><td>台灣積體電路</td><td align="center">2330</td>
+        <td>小型台積電</td><td><font>●</font><span>是股票期貨標的</span></td><td></td>
+        <td style="text-align: right">100</td><td>8:45~13:45</td></tr>
+        """
+        result = parse_taifex_html(html)
+        assert result["2330"] == {"prod": "CDF", "name": "台積電"}
+
+    def test_mini_only_still_included(self) -> None:
+        html = """
+        <tr><td align="center">QX</td><td>某公司</td><td align="center">8888</td>
+        <td>小型某</td><td><font>●</font><span>是股票期貨標的</span></td><td></td>
+        <td style="text-align: right">100</td><td>8:45~13:45</td></tr>
+        """
+        assert parse_taifex_html(html)["8888"]["prod"] == "QXF"
+
 
 class TestMapIo:
     def test_write_then_load_round_trip(self, tmp_path: Path) -> None:

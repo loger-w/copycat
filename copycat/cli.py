@@ -132,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     p_fs.add_argument("--report-date", required=True)
     p_fs.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
 
+    sub.add_parser("refresh-stkfut-map", help="重抓期交所股票期貨對映(期現對照用)")
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -321,6 +323,12 @@ def main(argv: list[str] | None = None) -> int:
             evidence_dir=args.report_dir,
         )
         sys.stdout.write(f"fade 回測報告 → {result.get('report', args.out)}\n")
+        return 0
+    if args.command == "refresh-stkfut-map":
+        from copycat.stkfut_map import refresh
+
+        mapping = refresh()
+        sys.stdout.write(f"stkfut map 更新完成:{len(mapping)} 檔\n")
         return 0
     return 1
 
