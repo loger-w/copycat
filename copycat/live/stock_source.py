@@ -89,6 +89,9 @@ class StockQuoteSource(TC4QuoteSource):
     def subscribe_symbol(self, code: str) -> None:
         """UNSUB→SUB 冪等重掛;失敗 raise(engine refcount 回滾依賴,design §2.4)。"""
         self._ensure_connected()
+        if self._sub_port is not None:
+            # 真連線才有 SubPort;漏啟 = 訂閱成功但永收不到推播(2026-07-21 real-env 實證)
+            self._start_listener()
         sym = stock_symbol(code)
         self._rt_request("UNSUBQUOTE", sym)
         r = self._rt_request("SUBQUOTE", sym)

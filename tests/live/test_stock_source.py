@@ -72,6 +72,20 @@ class TestSubscribe:
         assert param["StartTime"] == "2026072100"
         assert param["EndTime"] == "2026072106"
 
+    def test_subscribe_starts_listener_when_sub_port_known(self) -> None:
+        # 2026-07-21 real-env 實證:漏啟 listener → 訂閱成功但永收不到推播,
+        # 健檢把全部檔誤標 no_data
+        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
+        src._sub_port = "59999"  # 模擬真連線已知 SubPort
+        src.subscribe_symbol("2330")
+        assert src._listener is not None
+
+    def test_subscribe_without_sub_port_skips_listener(self) -> None:
+        # 注入測試路徑(無真連線)不得因 listener 缺 SubPort 而炸
+        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
+        src.subscribe_symbol("2330")
+        assert src._listener is None
+
     def test_subscribe_failure_raises_for_rollback(self) -> None:
         def handler(obj: dict) -> bytes:
             if obj["Request"] == "SUBQUOTE":
