@@ -1,0 +1,24 @@
+{
+ "trial_msgs": 0,
+ "status_values": {
+  "0": 1108,
+  "1": 213
+ },
+ "close_auction_seen": true,
+ "post_close_snapshot_2317": {
+  "recv_at": "13:39:26.524",
+  "sym": "TC.S.TWS.2317",
+  "FilledTime": "53000",
+  "TradingPrice": "246",
+  "TradeQuantity": "3360",
+  "TradeVolume": "49852",
+  "TradeStatus": "0",
+  "BreakCountDown": ""
+ },
+ "trial_period_pushes": [],
+ "post_close_sub_reply": {
+  "Reply": "SUBQUOTE",
+  "Success": "OK"
+ },
+ "total_rows": 1321
+}
