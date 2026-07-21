@@ -112,6 +112,15 @@ class TestParseStockRealtime:
         assert tick is not None  # r2-F5:未驗值域不丟,只觀測
         assert any("TradeStatus" in r.message for r in caplog.records)
 
+    def test_trade_status_one_is_known_no_warning(self, caplog) -> None:
+        # 2026-07-21 13:25-13:30 實測:試撮期簿更新帶 TradeStatus=1(213 筆),
+        # 屬已知狀態,不 warning(否則每天收盤前刷 213 條)
+        msg = {**REALTIME_MSG, "TradeStatus": "1"}
+        with caplog.at_level(logging.WARNING):
+            tick, _, _ = parse_stock_realtime(msg)
+        assert tick is not None
+        assert not any("TradeStatus" in r.message for r in caplog.records)
+
     def test_trial_window_tick_marked(self) -> None:
         # UTC 00:35:00 = 台北 08:35(試撮窗內)
         msg = {**REALTIME_MSG, "FilledTime": "3500", "PreciseTime": "3500000000"}
