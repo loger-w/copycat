@@ -268,13 +268,15 @@ class TC4QuoteSource:
         for contract in series.contracts:
             self._sub_history(contract.symbol, start, end)
         # round 制收割:空 symbol 不逐檔空等(舊制每空檔 6 查 + 5 sleep,夜盤深價外
-        # 大量無成交會拖到分鐘級),等待改全局輪間 sleep;連續 2 輪零進展 = 剩餘
-        # 皆真無資料,早停(GETHISDATA 空頁無法區分「未備妥」與「無資料」,只能以
-        # 進展停滯收斂)
+        # 大量無成交會拖到分鐘級),等待改全局輪間 sleep;連續 _HARVEST_DRY_LIMIT 輪
+        # 零進展 = 剩餘皆真無資料,早停(GETHISDATA 空頁無法區分「未備妥」與
+        # 「無資料」,只能以進展停滯收斂)
         ticks: list[Tick] = []
         pending = [c.symbol for c in series.contracts]
         dry_rounds = 0
         for rnd in range(1, _HARVEST_ROUNDS + 1):
+            if rnd > 1 and self._poll_wait:
+                time.sleep(self._poll_wait * 0.5)  # 輪間等待放頂端:早停時不多睡尾輪
             still: list[str] = []
             for sym in pending:
                 symbol_ticks = self._fetch_symbol_ticks(sym, start, end)
@@ -290,8 +292,6 @@ class TC4QuoteSource:
             dry_rounds = 0 if progressed else dry_rounds + 1
             if dry_rounds >= _HARVEST_DRY_LIMIT:
                 break
-            if self._poll_wait:
-                time.sleep(self._poll_wait * 0.5)
         logger.info("backfill done: %d ticks from %d symbols", len(ticks), len(series.contracts))
         return ticks
 

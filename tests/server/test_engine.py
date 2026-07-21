@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import Any, Callable
 
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.engine import EngineRuntime
@@ -105,14 +105,12 @@ async def test_activate_switches_series_and_resets() -> None:
 class TestSessionRollover:
     """時段切換偵測:跨盤界(日↔夜)自動 reset + 重跑交接,新時段從零累積(SC-3)。"""
 
-    def _patch_key(self, monkeypatch: object) -> dict[str, tuple[str, str]]:
+    def _patch_key(self, monkeypatch: Any) -> dict[str, tuple[str, str]]:
         key = {"v": ("20260720", "day")}
-        monkeypatch.setattr(  # type: ignore[attr-defined]
-            "copycat.server.engine.session_key", lambda: key["v"]
-        )
+        monkeypatch.setattr("copycat.server.engine.session_key", lambda: key["v"])
         return key
 
-    async def test_key_change_triggers_rehandover_with_resubscribe(self, monkeypatch) -> None:
+    async def test_key_change_triggers_rehandover_with_resubscribe(self, monkeypatch: Any) -> None:
         key = self._patch_key(monkeypatch)
         fake = FakeQuoteSource(
             backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]}
@@ -133,7 +131,7 @@ class TestSessionRollover:
         finally:
             await rt.close()
 
-    async def test_same_key_does_not_rehandover(self, monkeypatch) -> None:
+    async def test_same_key_does_not_rehandover(self, monkeypatch: Any) -> None:
         self._patch_key(monkeypatch)
         fake = FakeQuoteSource()
         rt = EngineRuntime(fake, throttle_secs=0.01)
@@ -144,7 +142,7 @@ class TestSessionRollover:
         finally:
             await rt.close()
 
-    async def test_rollover_disabled_ignores_key_change(self, monkeypatch) -> None:
+    async def test_rollover_disabled_ignores_key_change(self, monkeypatch: Any) -> None:
         # TXO_BACKFILL_DATE 固定日模式:app 層以 session_rollover=False 組裝(spec R5)
         key = self._patch_key(monkeypatch)
         fake = FakeQuoteSource()
@@ -157,7 +155,7 @@ class TestSessionRollover:
         finally:
             await rt.close()
 
-    async def test_rollover_during_inflight_handover_serializes(self, monkeypatch) -> None:
+    async def test_rollover_during_inflight_handover_serializes(self, monkeypatch: Any) -> None:
         # review F1(repro 實證):交接 to_thread 期間 key 跨界不得並發第二個交接
         # (雙份 backfill 疊加 + buffer 互搶);完成後下一輪 timeout 補跑恰一次。
         import time as _time
@@ -182,7 +180,9 @@ class TestSessionRollover:
         finally:
             await rt.close()
 
-    async def test_rollover_during_source_down_degrades_then_recovers(self, monkeypatch) -> None:
+    async def test_rollover_during_source_down_degrades_then_recovers(
+        self, monkeypatch: Any
+    ) -> None:
         # rollover 當下 TC4 死亡:degraded 且 _consume 存活,恢復依 on_reconnect 鏈(spec R7-2)
         key = self._patch_key(monkeypatch)
 

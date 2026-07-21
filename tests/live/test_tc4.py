@@ -238,11 +238,26 @@ class TestFetchBackfill:
         sleeps: list[float] = []
         monkeypatch.setattr("copycat.live.tc4.time.sleep", lambda s: sleeps.append(s))
         syms = [f"TC.O.TWF.TX4.202607.C.4{i}000" for i in range(3)]
-        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1", poll_wait_secs=1.0)
+
+        class _Counting(FakeApi):
+            def __init__(self) -> None:
+                super().__init__({})
+                self.first_page_queries = 0
+
+            def _page(self, sym: str, qry_index: str) -> dict:
+                if qry_index == "0":
+                    self.first_page_queries += 1
+                return super()._page(sym, qry_index)
+
+        api = _Counting()
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", poll_wait_secs=1.0)
         series = group_series(syms)[0]
         ticks = src.fetch_backfill(series)
         assert ticks == []
-        assert len(sleeps) <= 8  # 輪數上限;舊制 3 檔 × 5 次 = 15 會炸
+        # 連續 3 輪(_HARVEST_DRY_LIMIT)零進展早停:輪間 sleep 恰 2 次(輪 2、3 前),
+        # 每 symbol 首頁查詢恰 3 次;舊制 3 檔 × 5 次 sleep = 15 會炸
+        assert len(sleeps) == 2
+        assert api.first_page_queries == 3 * len(syms)
 
 
 def _rt_payload(symbol: str, vol: str) -> bytes:
