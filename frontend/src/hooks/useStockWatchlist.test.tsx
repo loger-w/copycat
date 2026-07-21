@@ -9,7 +9,7 @@ import { useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as { codes: string[] };
       return new Response(JSON.stringify({ codes: body.codes }));

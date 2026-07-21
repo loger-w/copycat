@@ -87,7 +87,6 @@ export function useStockStream(code: string | null): StockStreamState {
     accumRef.current = null;
     if (code === null) return;
     void refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch 依 codeRef 讀最新值
   }, [code]);
 
   // WS 連線(單條,頁面生命週期)
@@ -202,7 +201,6 @@ export function useStockStream(code: string | null): StockStreamState {
       window.clearTimeout(timer);
       ws?.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- WS 單條跨 code,經 codeRef 讀最新
   }, []);
 
   return { accum, watchlist, status, stkfut, wsStatus };

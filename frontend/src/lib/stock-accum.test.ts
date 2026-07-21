@@ -11,7 +11,7 @@ const SNAP = {
   cum_outer: 10,
   minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
   ticks: [{ t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer" }],
-  book: { bids: [[2_375_000, 5]], asks: [[2_380_000, 7]] },
+  book: { bids: [[2_375_000, 5]] as [number, number][], asks: [[2_380_000, 7]] as [number, number][] },
   meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
   no_data: false,
   tc4: "up",

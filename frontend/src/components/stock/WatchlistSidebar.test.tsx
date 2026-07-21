@@ -11,7 +11,7 @@ let putBodies: string[][];
 
 beforeEach(() => {
   putBodies = [];
-  fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as { codes: string[] };
       putBodies.push(body.codes);
