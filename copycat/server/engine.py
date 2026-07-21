@@ -10,6 +10,7 @@ from typing import AsyncGenerator, Callable, Protocol
 from copycat.live.aggregate import ChainAggregator
 from copycat.live.handover import HandoverBuffer, run_handover
 from copycat.live.models import SeriesInfo, Tick
+from copycat.live.session import SessionKey, session_key
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,14 @@ class EngineRuntime:
         *,
         throttle_secs: float = 1.0,
         queue_maxsize: int = 10_000,
+        session_rollover: bool = True,
     ) -> None:
         self._source = source
         self._throttle = throttle_secs
+        # TXO_BACKFILL_DATE 固定日回補模式要傳 False:偵測依真實時鐘,固定日模式下
+        # 跨界重跑只會拿到同一份指定日資料,純浪費(spec R5)
+        self._session_rollover = session_rollover
+        self._session_key: SessionKey | None = None
         self._queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=queue_maxsize)
         self._agg: ChainAggregator | None = None
         self._series: dict[str, SeriesInfo] = {}
@@ -153,6 +159,9 @@ class EngineRuntime:
 
     async def _run_handover(self, series: SeriesInfo, *, subscribe: bool) -> None:
         assert self._agg is not None
+        # 交接起點即記時段 key:失敗也記(避免 rollover 條件無限重觸發;恢復走
+        # on_reconnect 鏈,test_rollover_during_source_down 釘住)
+        self._session_key = session_key()
         overflows = 0
         for attempt in range(1, _HANDOVER_RETRIES + 1):
             self._set_status("backfilling")
@@ -250,14 +259,27 @@ class EngineRuntime:
         force(重連後)不等 queue 清空 — 交接期間新 tick 進 buffer,不會遺失(Alt-3)。
         """
         force = self._force_heal
-        if force or (self.queue_dropped > self._healed_dropped and self._queue.empty()):
+        rollover = (
+            self._session_rollover
+            and self._active is not None
+            and self._session_key is not None
+            and session_key() != self._session_key
+        )
+        if force or rollover or (self.queue_dropped > self._healed_dropped and self._queue.empty()):
             dropped = self.queue_dropped
-            logger.warning("self-heal: re-running handover (dropped=%d, forced=%s)", dropped, force)
+            logger.warning(
+                "self-heal: re-running handover (dropped=%d, forced=%s, rollover=%s)",
+                dropped,
+                force,
+                rollover,
+            )
             self._force_heal = False
             if self._active is not None and self._agg is not None:
                 self._agg.reset(self._active.contracts)
                 try:
-                    await self._run_handover(self._active, subscribe=False)
+                    # rollover 必須重訂閱:REALTIME 以新時段窗重掛(subscribe 冪等
+                    # UNSUB→SUB;舊窗訂閱跨 UTC 日後 TC4 是否續推未驗證,spec R1)
+                    await self._run_handover(self._active, subscribe=rollover)
                 except ConnectionError:
                     # 背景自癒的來源失敗是預期事件(app 死亡期),不可炸出去殺死
                     # _consume task(靜默永久停擺;review F3)。已 degraded,

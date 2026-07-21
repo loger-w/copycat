@@ -89,6 +89,9 @@ def create_app(
             source if source is not None else _default_source(),
             throttle_secs=throttle_secs,
             queue_maxsize=queue_maxsize,
+            # 固定日回補模式(休市日)停用時段切換偵測:跨界重跑只會重拿同一份
+            # 指定日資料(spec R5)
+            session_rollover=os.environ.get("TXO_BACKFILL_DATE") is None,
         )
         app.state.runtime = runtime
         await runtime.start()

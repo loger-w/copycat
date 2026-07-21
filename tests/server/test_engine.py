@@ -102,6 +102,89 @@ async def test_activate_switches_series_and_resets() -> None:
         await rt.close()
 
 
+class TestSessionRollover:
+    """時段切換偵測:跨盤界(日↔夜)自動 reset + 重跑交接,新時段從零累積(SC-3)。"""
+
+    def _patch_key(self, monkeypatch: object) -> dict[str, tuple[str, str]]:
+        key = {"v": ("20260720", "day")}
+        monkeypatch.setattr(  # type: ignore[attr-defined]
+            "copycat.server.engine.session_key", lambda: key["v"]
+        )
+        return key
+
+    async def test_key_change_triggers_rehandover_with_resubscribe(self, monkeypatch) -> None:
+        key = self._patch_key(monkeypatch)
+        fake = FakeQuoteSource(
+            backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]}
+        )
+        rt = EngineRuntime(fake, throttle_secs=0.01)
+        await rt.start()
+        try:
+            assert fake.subscribed == ["TX4.202607"]
+            key["v"] = ("20260720", "night")
+            await asyncio.sleep(0.3)
+            # 重跑交接 + 重訂閱(REALTIME 以新時段窗重掛;spec R1)
+            assert len(fake.backfill_calls) == 2
+            assert fake.subscribed == ["TX4.202607", "TX4.202607"]
+            snap = rt.latest_snapshot()
+            assert snap["status"] == "live"
+            # reset 後重灌:累積是重建值不是疊加(3 不是 6)
+            assert snap["totals"]["call_net_qty"] == 3
+        finally:
+            await rt.close()
+
+    async def test_same_key_does_not_rehandover(self, monkeypatch) -> None:
+        self._patch_key(monkeypatch)
+        fake = FakeQuoteSource()
+        rt = EngineRuntime(fake, throttle_secs=0.01)
+        await rt.start()
+        try:
+            await asyncio.sleep(0.3)
+            assert len(fake.backfill_calls) == 1
+        finally:
+            await rt.close()
+
+    async def test_rollover_disabled_ignores_key_change(self, monkeypatch) -> None:
+        # TXO_BACKFILL_DATE 固定日模式:app 層以 session_rollover=False 組裝(spec R5)
+        key = self._patch_key(monkeypatch)
+        fake = FakeQuoteSource()
+        rt = EngineRuntime(fake, throttle_secs=0.01, session_rollover=False)
+        await rt.start()
+        try:
+            key["v"] = ("20260720", "night")
+            await asyncio.sleep(0.3)
+            assert len(fake.backfill_calls) == 1
+        finally:
+            await rt.close()
+
+    async def test_rollover_during_source_down_degrades_then_recovers(self, monkeypatch) -> None:
+        # rollover 當下 TC4 死亡:degraded 且 _consume 存活,恢復依 on_reconnect 鏈(spec R7-2)
+        key = self._patch_key(monkeypatch)
+
+        class _FailToggle(FakeQuoteSource):
+            fail = False
+
+            def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+                if self.fail:
+                    raise ConnectionError("tc4 down")
+                return super().fetch_backfill(series)
+
+        fake = _FailToggle()
+        rt = EngineRuntime(fake, throttle_secs=0.01)
+        await rt.start()
+        try:
+            fake.fail = True
+            key["v"] = ("20260720", "night")
+            await asyncio.sleep(0.3)
+            assert rt.latest_snapshot()["status"] == "degraded"
+            fake.fail = False
+            rt.request_self_heal()
+            await asyncio.sleep(0.3)
+            assert rt.latest_snapshot()["status"] == "live"
+        finally:
+            await rt.close()
+
+
 async def test_empty_backfill_clears_accumulated_from() -> None:
     # 空回補不得殘留上一次起點(rollover 後顯示舊時段起點會誤導;change-spec R3)
     fake = FakeQuoteSource(
