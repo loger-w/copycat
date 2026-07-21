@@ -42,7 +42,7 @@ _RECONNECT_BACKOFF_CAP = 60.0
 # GetHistory 分頁實測 max 1.1ms(3,482 次、10.7 萬 rows)不受影響(2026-07-20 probe)。
 _REQ_TIMEOUT_MS = 10_000
 # 回補收割輪數上限與零進展早停(fetch_backfill round 制;空頁無法區分未備妥/無資料)
-_HARVEST_ROUNDS = 8
+_HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
 
 
