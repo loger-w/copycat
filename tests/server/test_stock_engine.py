@@ -49,8 +49,10 @@ class FakeSource:
         self.trade_dates: list[str] = []
         self.backfills: list[str] = []
         self.fail_subscribe: set[str] = set()
+        self.subscribe_gate: threading.Event | None = None
         self.backfill_gate: threading.Event | None = None
         self.backfill_result: list = []
+        self.backfill_error: Exception | None = None
         self.on_message: Callable[[dict], None] | None = None
         self.on_no_data: Callable[[str], None] | None = None
         self.on_reconnect: Callable[[], None] | None = None
@@ -58,6 +60,8 @@ class FakeSource:
     def subscribe_symbol(self, code: str) -> None:
         if code in self.fail_subscribe:
             raise ConnectionError(f"SUBQUOTE fail {code}")
+        if self.subscribe_gate is not None:
+            self.subscribe_gate.wait(timeout=5)
         self.subscribed.append(code)
 
     def unsubscribe_symbol(self, code: str) -> None:
@@ -65,6 +69,8 @@ class FakeSource:
 
     def backfill(self, code: str) -> list:
         self.backfills.append(code)
+        if self.backfill_error is not None:
+            raise self.backfill_error
         if self.backfill_gate is not None:
             self.backfill_gate.wait(timeout=5)
         return list(self.backfill_result)
@@ -244,6 +250,60 @@ class TestStreamAndStatus:
         except (TimeoutError, asyncio.TimeoutError):
             pass
         assert any(m["type"] == "watchlist_quote" and m["no_data"] for m in got)
+        await engine.close()
+
+
+class TestReviewFixes:
+    """Phase 4 round 1 accepted P1 的 regression lock(CR2~CR5)。"""
+
+    async def test_worker_survives_unexpected_backfill_error(self) -> None:
+        # CR4:非 ConnectionError 例外不得殺死 worker
+        engine, src = await _make()
+        src.backfill_error = ValueError("truncated payload")
+        await engine.set_main("2330")
+        await _drain(engine)
+        src.backfill_error = None
+        await engine.set_main("5483")
+        await _drain(engine)
+        assert "5483" in src.backfills  # worker 仍活著
+        assert engine.snapshot("5483")["backfilling"] is None  # 清乾淨
+
+    async def test_weekend_makeup_day_fast_path_rollover(self) -> None:
+        # CR5:無 checkpoint(週六補市)下,新日 tick 直接觸發兩段式
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=12000))
+        await _drain(engine)
+        src.on_message(_quote(cum=50, date="20260722"))
+        await _drain(engine)
+        snap = engine.snapshot("2330")
+        assert snap["last"] is not None
+        assert snap["last"]["cum_vol"] == 50  # 不被 stale-drop
+        assert "2026-07-22" in src.trade_dates  # stage1 快路徑跑過(換日窗)
+
+    async def test_rollover_stage1_does_not_block_event_loop(self) -> None:
+        # CR3:重掛阻塞時 stage1 呼叫必須立即返回(sync 呼叫會在此 deadlock)
+        engine, src = await _make()
+        await engine.set_main("2330")
+        await _drain(engine)
+        src.subscribe_gate = threading.Event()  # 未 set → subscribe 阻塞
+        engine.rollover_stage1("2026-07-22")  # 若同步重掛,這裡永不返回
+        assert "2026-07-22" in src.trade_dates  # 同步部分已生效
+        src.subscribe_gate.set()
+        await _drain(engine)
+        assert src.subscribed.count("2330") >= 2  # 背景重掛完成
+
+    async def test_concurrent_watchlist_removal_keeps_main_subscribed(self) -> None:
+        # CR2:並發「移出自選 + 設為主圖」不得把主圖檔退訂 / 弄丟 refs
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await asyncio.gather(engine.set_main("2330"), engine.set_watchlist([]))
+        await _drain(engine)
+        assert "2330" not in src.unsubscribed  # main owner 仍持有
+        # refs 未損毀:再次移除 main(切走)才真退訂
+        await engine.set_main("2317")
+        assert "2330" in src.unsubscribed
         await engine.close()
 
 
