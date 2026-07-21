@@ -78,6 +78,7 @@ class StockEngine:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        self._source.set_trade_date(self._trade_date)  # 休市日回補模式與 source 日窗同步
         self._source.set_on_message(self._on_raw_threadsafe)
         self._source.set_on_no_data(self._on_no_data_threadsafe)
         if hasattr(self._source, "on_reconnect"):

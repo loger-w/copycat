@@ -22,6 +22,14 @@ from copycat.live.trade_models import (
 )
 from copycat.server.audit import AuditWriteError
 from copycat.server.engine import EngineRuntime, QuoteSource
+from copycat.server.stock_engine import StockEngine, StockSource
+from copycat.stock_watchlist import (
+    WatchlistError,
+    load_watchlist,
+    save_watchlist,
+    validate_code,
+)
+from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
 from copycat.server.trade import (
     ConfirmRequiredError,
     InvalidOrderError,
@@ -37,12 +45,17 @@ logger = logging.getLogger(__name__)
 
 # sentinel:trade_source=None = 不建 trade(既有測試零連線);__main__ 傳 DEFAULT_TRADE 才建真 source
 DEFAULT_TRADE: Final = object()
+DEFAULT_STOCK: Final = object()  # 同語意:__main__ 傳入才建真 StockQuoteSource
 
 _TRADE_START_TIMEOUT_SECS = 15.0
 
 
 class SelectBody(BaseModel):
     series_id: str
+
+
+class WatchlistBody(BaseModel):
+    codes: list[str]
 
 
 class PreviewBody(BaseModel):
@@ -76,13 +89,23 @@ def _default_trade_source() -> TradeSource:
     return TC4TradeSource(port=os.environ.get("TC4_TRADE_PORT", "51207"))
 
 
+def _default_stock_source() -> StockSource:
+    from copycat.live.stock_source import StockQuoteSource  # 延遲 import:測試不觸 pyzmq
+
+    return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+
+
 def create_app(
     source: QuoteSource | None = None,
     *,
     trade_source: TradeSource | object | None = None,
+    stock_source: StockSource | object | None = None,
+    stock_watchlist_path: Path | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
+    wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         runtime = EngineRuntime(
@@ -127,9 +150,43 @@ def create_app(
                     logger.exception("trade close 失敗(忽略)")
             trade = None
         app.state.trade = trade
+        # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
+        stock: StockEngine | None = None
+        try:
+            resolved_stock = (
+                _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
+            )
+            if resolved_stock is not None:
+                import datetime as _dt
+
+                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+                stock = StockEngine(
+                    cast(StockSource, resolved_stock),
+                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+                    throttle_secs=throttle_secs,
+                    checkpoint=backfill_date is None,
+                )
+                await stock.start()
+                persisted = load_watchlist(wl_path)
+                if persisted:
+                    await stock.set_watchlist(persisted)
+        except Exception:
+            logger.exception("stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)")
+            if stock is not None:
+                try:
+                    await stock.close()
+                except Exception:
+                    logger.exception("stock close 失敗(忽略)")
+            stock = None
+        app.state.stock = stock
         try:
             yield
         finally:
+            if stock is not None:
+                try:
+                    await stock.close()
+                except Exception:
+                    logger.exception("stock close 失敗(關機續行)")
             # trade 清理失敗不得擋掉 quote runtime 清理(review B2)
             if trade is not None:
                 try:
@@ -193,6 +250,51 @@ def create_app(
             await websocket.send_json(runtime.latest_snapshot())
             async for snap in runtime.snapshots():
                 await websocket.send_json(snap)
+        except WebSocketDisconnect:
+            return
+
+    # ---- stock(個股看盤;design v4 §2.5)----
+
+    @app.exception_handler(WatchlistError)
+    async def _watchlist_error(request: Request, exc: WatchlistError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": {"error": str(exc)}})
+
+    def _stock(request: Request) -> StockEngine:
+        stock: StockEngine | None = request.app.state.stock
+        if stock is None:
+            raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+        return stock
+
+    @app.get("/api/stock/watchlist")
+    async def stock_watchlist_get(request: Request) -> dict:
+        _stock(request)
+        return {"codes": load_watchlist(wl_path)}
+
+    @app.put("/api/stock/watchlist")
+    async def stock_watchlist_put(request: Request, body: WatchlistBody) -> dict:
+        stock = _stock(request)
+        saved = save_watchlist(wl_path, body.codes)  # WatchlistError → 400(handler)
+        await stock.set_watchlist(saved)
+        return {"codes": saved}
+
+    @app.get("/api/stock/state/{code}")
+    async def stock_state(request: Request, code: str) -> dict:
+        stock = _stock(request)
+        if not validate_code(code):
+            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+        await stock.set_main(code)  # 含回補觸發(design §2.5)
+        return stock.snapshot(code)
+
+    @app.websocket("/ws/stock")
+    async def ws_stock(websocket: WebSocket) -> None:
+        stock: StockEngine | None = websocket.app.state.stock
+        await websocket.accept()
+        if stock is None:
+            await websocket.close()
+            return
+        try:
+            async for msg in stock.stream():
+                await websocket.send_json(msg)
         except WebSocketDisconnect:
             return
 
