@@ -110,6 +110,26 @@ describe("useStockStream", () => {
     expect(hook.result.current.accum?.ticks.length).toBe(5);
   });
 
+  it("切檔撞上 in-flight refetch 不被吞(CR1:合併不丟棄)", async () => {
+    let resolveFirst: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((res) => { resolveFirst = res; }),
+    );
+    const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
+      initialProps: { c: "2330" },
+    });
+    // 2330 的 fetch in-flight 中切到 5483
+    hook.rerender({ c: "5483" });
+    act(() => {
+      resolveFirst(new Response(JSON.stringify(snap(1, []))));
+    });
+    // 舊結果作廢後必須補發新檔 fetch(修前:單飛旗標把 5483 的需求吞掉)
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === "/api/stock/state/5483")).toBe(true),
+    );
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+  });
+
   it("status 訊息更新 tc4 狀態;backfilling 完成觸發 refetch", async () => {
     const { hook, ws } = await setup();
     act(() => ws.emit({ type: "status", tc4: "down", backfilling: null }));
