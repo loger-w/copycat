@@ -40,6 +40,9 @@ _RECONNECT_BACKOFF_CAP = 60.0
 # 才可被 _stop 中斷。10s = 實測最重呼叫 QUERYALLINSTRUMENT(Opt) 1.93s 的 5 倍裕度;
 # GetHistory 分頁實測 max 1.1ms(3,482 次、10.7 萬 rows)不受影響(2026-07-20 probe)。
 _REQ_TIMEOUT_MS = 10_000
+# 回補收割輪數上限與零進展早停(fetch_backfill round 制;空頁無法區分未備妥/無資料)
+_HARVEST_ROUNDS = 8
+_HARVEST_DRY_LIMIT = 3
 
 
 def _today_ymd() -> str:
@@ -264,13 +267,31 @@ class TC4QuoteSource:
         # 逐檔「Sub → 等 → 收」實測 280 檔 ~10 分鐘,先全訂可砍掉大部分等待(Phase 4 自評)
         for contract in series.contracts:
             self._sub_history(contract.symbol, start, end)
+        # round 制收割:空 symbol 不逐檔空等(舊制每空檔 6 查 + 5 sleep,夜盤深價外
+        # 大量無成交會拖到分鐘級),等待改全局輪間 sleep;連續 2 輪零進展 = 剩餘
+        # 皆真無資料,早停(GETHISDATA 空頁無法區分「未備妥」與「無資料」,只能以
+        # 進展停滯收斂)
         ticks: list[Tick] = []
-        for i, contract in enumerate(series.contracts):
-            ticks.extend(self._fetch_symbol_ticks(contract.symbol, start, end))
-            if (i + 1) % 20 == 0:
-                logger.info(
-                    "backfill %d/%d symbols, %d ticks", i + 1, len(series.contracts), len(ticks)
-                )
+        pending = [c.symbol for c in series.contracts]
+        dry_rounds = 0
+        for rnd in range(1, _HARVEST_ROUNDS + 1):
+            still: list[str] = []
+            for sym in pending:
+                symbol_ticks = self._fetch_symbol_ticks(sym, start, end)
+                if symbol_ticks:
+                    ticks.extend(symbol_ticks)
+                else:
+                    still.append(sym)
+            progressed = len(still) < len(pending)
+            pending = still
+            logger.info("backfill round %d: %d pending, %d ticks", rnd, len(pending), len(ticks))
+            if not pending:
+                break
+            dry_rounds = 0 if progressed else dry_rounds + 1
+            if dry_rounds >= _HARVEST_DRY_LIMIT:
+                break
+            if self._poll_wait:
+                time.sleep(self._poll_wait * 0.5)
         logger.info("backfill done: %d ticks from %d symbols", len(ticks), len(series.contracts))
         return ticks
 
@@ -305,15 +326,10 @@ class TC4QuoteSource:
         )
 
     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
+        # 單發:首頁空即回空(未備妥的重試由 fetch_backfill 的 round 制統籌,不逐檔等)
         rows: list[dict] = []
-        first: dict | None = None
-        for attempt in range(6):
-            first = self._get_history(symbol, start, end, "0")
-            if first and first.get("HisData"):
-                break
-            if self._poll_wait and attempt < 5:
-                time.sleep(self._poll_wait * 0.3)  # 全鏈已先 SubHistory,等待縮短
-        if not first or not first.get("HisData"):
+        first = self._get_history(symbol, start, end, "0")
+        if not first.get("HisData"):
             return []
 
         def _page(qry_index: str) -> list[dict]:

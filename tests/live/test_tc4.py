@@ -159,6 +159,42 @@ class TestFetchBackfill:
         ticks = src._fetch_symbol_ticks("TC.O.TWF.TX4.202607.C.44550", "2026071800", "2026071806")
         assert len(ticks) == 1
 
+    def test_late_ready_symbol_harvested_in_later_round(self) -> None:
+        # round 制:首輪查詢時 TC4 尚未備妥(空頁)、之後備妥的 symbol 仍要被收割
+        sym = "TC.O.TWF.TX4.202607.C.44550"
+
+        class _LateReady(FakeApi):
+            def __init__(self) -> None:
+                super().__init__({sym: [[hist_row(1), hist_row(2)]]})
+                self.first_page_queries = 0
+
+            def _page(self, s: str, qry_index: str) -> dict:
+                if qry_index == "0":
+                    self.first_page_queries += 1
+                    if self.first_page_queries <= 2:
+                        return {"HisData": []}
+                return super()._page(s, qry_index)
+
+        src = TC4QuoteSource(port="0", api=_LateReady(), session="sess-1", poll_wait_secs=0.0)
+        series = group_series([sym])[0]
+        ticks = src.fetch_backfill(series)
+        assert len(ticks) == 2
+
+    def test_empty_symbols_share_bounded_sleep_budget(self, monkeypatch: Any) -> None:
+        """空 symbol 不逐檔空等:等待為全局輪間 sleep(≤ 輪數上限),與空 symbol 數無關。
+
+        舊制每個空 symbol 自帶 5 次 sleep(3 檔 = 15 次);round 制下連續零進展
+        即早停,sleep 次數必須遠小於逐檔制。
+        """
+        sleeps: list[float] = []
+        monkeypatch.setattr("copycat.live.tc4.time.sleep", lambda s: sleeps.append(s))
+        syms = [f"TC.O.TWF.TX4.202607.C.4{i}000" for i in range(3)]
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1", poll_wait_secs=1.0)
+        series = group_series(syms)[0]
+        ticks = src.fetch_backfill(series)
+        assert ticks == []
+        assert len(sleeps) <= 8  # 輪數上限;舊制 3 檔 × 5 次 = 15 會炸
+
 
 def _rt_payload(symbol: str, vol: str) -> bytes:
     quote = {
