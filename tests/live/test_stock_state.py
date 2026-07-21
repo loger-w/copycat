@@ -95,3 +95,21 @@ class TestApplyBackfill:
         st = StockDayState()
         st.apply_backfill([_tick(5, time="08:40:00.000", trial=True), _tick(8)])
         assert len(st.ticks) == 1
+
+    def test_backfill_merges_live_ticks_newer_than_backfill(self) -> None:
+        # 回補期間持續 ingest 的 live tick(cum > 回補上限)不得被原子重建洗掉;
+        # 空回補 = 全數倖存(rollover stage2 後 TC4 尚無資料的場景)
+        st = StockDayState()
+        st.ingest(_tick(10, qty=10, time="09:05:00.000"))
+        st.ingest(_tick(12, qty=2, time="09:05:01.000"))
+        st.apply_backfill([_tick(11, qty=11, time="09:04:00.000")])
+        cums = [t.cum_vol for t in st.ticks]
+        assert cums == [11, 12]  # 回補列 + 倖存者(cum 10 被回補覆蓋、cum 12 保留)
+        assert st.ingest(_tick(13)) is True
+
+    def test_empty_backfill_preserves_live_state(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(50, qty=50, time="09:00:01.000"))
+        st.apply_backfill([])
+        assert st.last is not None
+        assert st.last.cum_vol == 50

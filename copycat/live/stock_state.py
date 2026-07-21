@@ -67,8 +67,12 @@ class StockDayState:
         return True
 
     def apply_backfill(self, ticks: list[StockTick]) -> None:
-        """原子重建:清空後灌回補序列,seq 一次跳增(≥ 筆數 + margin)。"""
+        """原子重建 + merge:回補列為基底,回補期間已 ingest 的 live tick
+        (cum > 回補上限)為倖存者接續重放 — 空回補即全數倖存,不洗掉 live 狀態。
+        seq 一次跳增(前端跳號規則觸發全量 refetch,design §4)。"""
         old_seq = self.seq
+        backfill_max = max((t.cum_vol for t in ticks), default=-1)
+        survivors = [t for t in self.ticks if t.cum_vol > backfill_max]
         self.reset()
         for tick in ticks:
             if tick.is_trial:
@@ -76,6 +80,10 @@ class StockDayState:
             if tick.cum_vol > self._last_cum:
                 self._last_cum = tick.cum_vol
             self._apply(tick)
+        for tick in survivors:
+            if tick.cum_vol > self._last_cum:
+                self._last_cum = tick.cum_vol
+                self._apply(tick)
         self.seq = old_seq + max(len(ticks), 1) + _BACKFILL_SEQ_MARGIN
 
     def update_book(self, book: StockBook) -> None:
