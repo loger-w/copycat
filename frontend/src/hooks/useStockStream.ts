@@ -53,6 +53,7 @@ export function useStockStream(code: string | null): StockStreamState {
   // refetch 單飛 + 交錯緩衝(ref:WS callback 不隨 render 換)
   const accumRef = useRef<StockAccum | null>(null);
   const refetchingRef = useRef(false);
+  const pendingRefetchRef = useRef(false);
   const pendingRef = useRef<StockTickMsg[]>([]);
   const codeRef = useRef(code);
   codeRef.current = code;
@@ -60,23 +61,36 @@ export function useStockStream(code: string | null): StockStreamState {
 
   const refetch = async (): Promise<void> => {
     const current = codeRef.current;
-    if (current === null || refetchingRef.current) return;
+    if (current === null) return;
+    if (refetchingRef.current) {
+      // CR1:in-flight 中的需求「合併不丟棄」— finally 補發,切檔/回補完成不被吞
+      pendingRefetchRef.current = true;
+      return;
+    }
     refetchingRef.current = true;
     pendingRef.current = [];
     try {
       const res = await fetch(`/api/stock/state/${current}`);
-      if (!res.ok) return;
-      const snap = fromSnapshot(await res.json());
-      if (codeRef.current !== current) return; // 已切檔,結果作廢
-      let next = snap;
-      for (const msg of pendingRef.current) {
-        if (msg.seq > snap.seq) next = applyTick(next, msg);
+      if (res.ok) {
+        const snap = fromSnapshot(await res.json());
+        if (codeRef.current === current) {
+          let next = snap;
+          for (const msg of pendingRef.current) {
+            if (msg.seq > snap.seq) next = applyTick(next, msg);
+          }
+          accumRef.current = next;
+          setAccum(next);
+        }
       }
-      accumRef.current = next;
-      setAccum(next);
+    } catch (err) {
+      console.warn("stock: snapshot refetch 失敗", err);
     } finally {
       refetchingRef.current = false;
       pendingRef.current = [];
+      if (pendingRefetchRef.current || codeRef.current !== current) {
+        pendingRefetchRef.current = false;
+        void refetch();
+      }
     }
   };
 

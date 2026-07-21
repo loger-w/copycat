@@ -71,6 +71,10 @@ class StockEngine:
         self._dirty_watchlist: set[str] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: list[asyncio.Task[None]] = []
+        # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
+        # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
+        self._pool_lock = asyncio.Lock()
+        self._resub_task: asyncio.Task[None] | None = None
         self.tc4_status = "up"
 
     # ---- 生命週期 ----
@@ -129,30 +133,32 @@ class StockEngine:
     # ---- 對外操作 ----
 
     async def set_watchlist(self, codes: list[str]) -> None:
-        # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
-        added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
-        removed = [c for c in self._watchlist if c not in codes]
-        for code in added:
-            try:
-                await asyncio.to_thread(self._acquire, code, "watchlist")
-            except ConnectionError:
-                logger.warning("watchlist subscribe %s failed", code)
-        for code in removed:
-            await asyncio.to_thread(self._release, code, "watchlist")
-            self._no_data.discard(code)
-        self._watchlist = list(codes)
+        async with self._pool_lock:  # CR2
+            # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
+            added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
+            removed = [c for c in self._watchlist if c not in codes]
+            for code in added:
+                try:
+                    await asyncio.to_thread(self._acquire, code, "watchlist")
+                except ConnectionError:
+                    logger.warning("watchlist subscribe %s failed", code)
+            for code in removed:
+                await asyncio.to_thread(self._release, code, "watchlist")
+                self._no_data.discard(code)
+            self._watchlist = list(codes)
 
     async def set_main(self, code: str) -> None:
-        old = self._main
-        if old == code:
-            return
-        await asyncio.to_thread(self._acquire, code, "main")
-        self._main = code
-        if old is not None:
-            await asyncio.to_thread(self._release, old, "main")
-            self._release_stkfut(old)
-        await self._acquire_stkfut(code)
-        self._backfill_jobs.put_nowait((code, self._generation))
+        async with self._pool_lock:  # CR2
+            old = self._main
+            if old == code:
+                return
+            await asyncio.to_thread(self._acquire, code, "main")
+            self._main = code
+            if old is not None:
+                await asyncio.to_thread(self._release, old, "main")
+                await asyncio.to_thread(self._release_stkfut, old)  # CR3:UNSUB 不佔 loop
+            await self._acquire_stkfut(code)
+            self._backfill_jobs.put_nowait((code, self._generation))
 
     def snapshot(self, code: str) -> dict:
         state = self._states.get(code)
@@ -189,16 +195,27 @@ class StockEngine:
     # ---- rollover(兩段式,design §2.4)----
 
     def rollover_stage1(self, new_date: str) -> None:
-        """階段一:換日窗 + 全量重掛,不清狀態;generation bump 作廢 in-flight 回補。"""
+        """階段一:換日窗(同步、即返)+ 全量重掛(背景 to_thread,CR3);不清狀態;
+        generation bump 作廢 in-flight 回補。"""
         self._generation += 1
         self._pending_date = new_date
         self._source.set_trade_date(new_date)
-        for code in list(self._refs):
-            try:
-                self._source.subscribe_symbol(code)  # UNSUB→SUB 冪等重掛(新日窗)
-            except ConnectionError:
-                logger.warning("rollover resubscribe %s failed", code)
+        self._resub_task = asyncio.get_running_loop().create_task(self._resubscribe_all())
         logger.info("rollover stage1 → %s (gen=%d)", new_date, self._generation)
+
+    async def _resubscribe_all(self) -> None:
+        """全量重掛(UNSUB→SUB 冪等,新日窗);ZMQ REQ 全程 to_thread,不佔 event loop。"""
+        async with self._pool_lock:
+            codes = list(self._refs)
+
+        def _do() -> None:
+            for code in codes:
+                try:
+                    self._source.subscribe_symbol(code)
+                except ConnectionError:
+                    logger.warning("rollover resubscribe %s failed", code)
+
+        await asyncio.to_thread(_do)
 
     def _rollover_stage2(self, first_tick: StockTick) -> None:
         """階段二:首筆新日 tick 確認 → reset 全部狀態,觸發 tick 重新 ingest。"""
@@ -279,6 +296,10 @@ class StockEngine:
         self._no_data.discard(code)
         state.update_book(book)
         state.update_meta(meta)
+        if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
+            # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
+            # 新日 tick → 先補 stage1 再走 stage2
+            self.rollover_stage1(tick.trade_date)
         if (
             tick is not None
             and self._pending_date is not None
@@ -337,6 +358,13 @@ class StockEngine:
                 self.tc4_status = "down"
                 self._backfilling = None
                 self._publish({"type": "status", "tc4": "down", "backfilling": None})
+                continue
+            except Exception:
+                # CR4:非連線類例外(壞電文 JSONDecodeError 等)不得殺死 worker —
+                # 死掉 = 之後所有回補靜默失效、backfilling 永久卡住
+                logger.exception("backfill %s unexpected failure(worker 續行)", code)
+                self._backfilling = None
+                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
                 continue
             self._backfilling = None
             # 套用 guard:回補期間主圖切換或 rollover → 丟棄(design §2.3);
