@@ -182,6 +182,16 @@ def test_network_errors_swallowed(monkeypatch: pytest.MonkeyPatch, exc: Exceptio
 # ---------- SC-1/SC-4:URL 解析 ----------
 
 
+def test_env_file_invalid_utf8_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """never-raise:.env 壞編碼不可讓 UnicodeDecodeError 外溢(review F1)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_bytes(b"DISCORD_WEBHOOK_URL=\xff\xfe\x9c\n")
+    assert notify.resolve_webhook_url() is None
+    assert notify.notify_discord("m") is False
+
+
 def test_env_file_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(
