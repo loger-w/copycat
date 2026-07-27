@@ -18,6 +18,8 @@ _DEFAULT_EVENTS_CSV = Path("docs/evidence/five_tigers_events_2025-06-30_2026-06-
 def main(argv: list[str] | None = None) -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows console cp950
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # stderr 與 stdout 同編碼
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="copycat")
     sub = parser.add_subparsers(dest="command", required=True)
