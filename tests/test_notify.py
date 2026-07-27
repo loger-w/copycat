@@ -179,6 +179,25 @@ def test_network_errors_swallowed(monkeypatch: pytest.MonkeyPatch, exc: Exceptio
     assert notify.notify_discord("m") is False
 
 
+def test_429_then_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """lock:429 重試遇網路層例外 → False 不外溢(review F4)."""
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", URL)
+    sleeps: list[float] = []
+    monkeypatch.setattr(notify, "sleep", sleeps.append)
+    attempts: list[int] = []
+
+    def fake(req: Any, timeout: float = 0.0) -> FakeResp:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise _http_error(429, retry_after="1")
+        raise TimeoutError("ssl read timeout on retry")
+
+    monkeypatch.setattr(notify, "urlopen", fake)
+    assert notify.notify_discord("m") is False
+    assert sleeps == [1.0]
+    assert len(attempts) == 2
+
+
 # ---------- SC-1/SC-4:URL 解析 ----------
 
 
@@ -198,6 +217,13 @@ def test_env_file_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         "FINMIND_TOKEN=x\nDISCORD_WEBHOOK_URL=" + URL + "\n", encoding="utf-8"
     )
     assert notify.resolve_webhook_url() == URL
+
+
+def test_env_file_missing_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """lock:.env 存在但只有其他 key → 視同未設(review F5)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("FINMIND_TOKEN=x\n", encoding="utf-8")
+    assert notify.resolve_webhook_url() is None
 
 
 def test_env_var_wins_and_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
