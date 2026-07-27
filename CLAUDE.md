@@ -46,6 +46,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   stock_engine(個股訂閱池/兩段式 rollover/回補 worker/廣播,2026-07-21)、
 │                         #   __main__(python -m copycat.server,port env TXO_SERVER_PORT 預設 8721)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
+├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
+│                         #   URL 未設 no-op、429 Retry-After 重試一次、never-raise;stdlib urllib。
+│                         #   訊號內容/觸發時機未定(待討論);CLI `notify-test` 實發驗證
 ├── strategy_config.py    #   全部策略門檻(版本化,configs/*.json 覆寫)
 ├── watchlist.py          #   可替換分點集合(watchlists/*.json)
 └── cli.py                #   python -m copycat <import-neigui|replay|validate|compare|backfill-daily|tday-features|tday-search>
@@ -86,6 +89,7 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
 
 `.env` 需要的 secret:
 - `FINMIND_TOKEN`(沿用 trash-cmoney,補期貨 / 選擇權 chip 用)
+- `DISCORD_WEBHOOK_URL`(Discord 通知,選配;未設時 notify 層 no-op。驗收:`python -m copycat notify-test`)
 - `FRONTEND_ORIGIN`(CORS)
 - Touchance 訂閱授權碼 / 帳號 — 實裝時補確切變數名
 
