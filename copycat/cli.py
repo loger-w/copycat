@@ -134,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("refresh-stkfut-map", help="重抓期交所股票期貨對映(期現對照用)")
 
+    p_nt = sub.add_parser("notify-test", help="Discord webhook 實發測試")
+    p_nt.add_argument("--message", default="copycat notify-test")
+    p_nt.add_argument("--title", default=None)
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -324,6 +328,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(f"fade 回測報告 → {result.get('report', args.out)}\n")
         return 0
+    if args.command == "notify-test":
+        from copycat import notify
+
+        if notify.resolve_webhook_url() is None:
+            sys.stderr.write("DISCORD_WEBHOOK_URL 未設定(env 或 repo root .env)\n")
+            return 1
+        if notify.notify_discord(args.message, title=args.title):
+            sys.stdout.write("Discord webhook 發送成功\n")
+            return 0
+        sys.stderr.write("Discord webhook 發送失敗(詳見 log)\n")
+        return 1
     if args.command == "refresh-stkfut-map":
         from copycat.stkfut_map import refresh
 
