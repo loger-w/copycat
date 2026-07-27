@@ -67,14 +67,11 @@ def _build_embed(message: str, title: str | None, fields: dict[str, str] | None)
 
 
 def _post(url: str, data: bytes) -> bool:
-    """單次 POST;429 拋回 caller 決定重試,其餘非 2xx 記 log 回 False."""
+    """單次 POST;urlopen 對非 2xx 一律拋 HTTPError,由 caller 分流(429 重試/其餘記 log)."""
     req = Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urlopen(req, timeout=_TIMEOUT) as resp:
-        status = int(getattr(resp, "status", 0) or 0)
-    if 200 <= status < 300:
-        return True
-    logger.error("Discord webhook 非 2xx:%s", status)
-    return False
+    with urlopen(req, timeout=_TIMEOUT):
+        pass
+    return True
 
 
 def notify_discord(
