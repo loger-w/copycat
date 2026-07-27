@@ -37,12 +37,17 @@ def resolve_webhook_url() -> str | None:
     url = os.environ.get(_ENV_KEY, "").strip()
     if not url:
         env_file = Path(".env")
-        if env_file.exists():
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                key, sep, value = line.partition("=")
-                if sep and key.strip() == _ENV_KEY and value.strip():
-                    url = value.strip()
-                    break
+        try:
+            lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+        except (OSError, UnicodeDecodeError) as e:
+            # never-raise:.env 壞檔視同未設(review F1)
+            logger.warning(".env 讀取失敗,視同 %s 未設定:%s", _ENV_KEY, e)
+            lines = []
+        for line in lines:
+            key, sep, value = line.partition("=")
+            if sep and key.strip() == _ENV_KEY and value.strip():
+                url = value.strip()
+                break
     _WEBHOOK_URL = url or None
     _URL_RESOLVED = True
     return _WEBHOOK_URL
