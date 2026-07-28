@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
+import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
 import { OrderBook } from "@/components/stock/OrderBook";
 import { PriceLadder } from "@/components/stock/PriceLadder";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
@@ -85,6 +87,7 @@ export function StockPage() {
                 <div className="flex flex-wrap gap-3">
                   <div className="min-w-56">
                     <OrderBook
+                      code={code}
                       book={accum.book}
                       last={last}
                       ref_={meta?.ref ?? null}
@@ -95,7 +98,7 @@ export function StockPage() {
                   <div className="min-w-0 flex-1">
                     <TickTape ticks={accum.ticks} />
                   </div>
-                  <PriceLadder book={accum.book} last={last} meta={meta} />
+                  <PriceLadder code={code} book={accum.book} last={last} meta={meta} />
                 </div>
               </>
             ) : (
@@ -103,6 +106,22 @@ export function StockPage() {
                 <p className="text-sm text-ink-muted">載入中…</p>
               </div>
             )}
+            {/* 群益委託/部位(market=sec;平倉估價 = 主檔最新成交價,useClosePosition 單位為元) */}
+            <div className="flex flex-wrap gap-6 border-t border-line pt-3">
+              <section className="min-w-64 flex-1">
+                <h3 className="mb-1 text-sm text-ink-muted">委託</h3>
+                <CapitalOrdersList market="sec" />
+              </section>
+              <section className="min-w-64 flex-1">
+                <h3 className="mb-1 text-sm text-ink-muted">部位</h3>
+                <CapitalPositionsList
+                  market="sec"
+                  closePriceOf={(pos) =>
+                    pos.stock_no === code && last !== null ? last.p / 1000 : null
+                  }
+                />
+              </section>
+            </div>
           </>
         )}
       </main>

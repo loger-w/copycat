@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 
 interface Props {
+  code: string;
   book: { bids: [number, number][]; asks: [number, number][] } | null;
   last: { p: number; t: string; cum_vol: number } | null;
   ref_: number | null; // 參考價(漲跌色基準)
@@ -15,12 +16,14 @@ function fmt(milli: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
-function emitPriceClick(priceMilli: number): void {
-  // 下一輪下單匣接點(design §3:本輪 no-op 監聽者)
-  window.dispatchEvent(new CustomEvent("stock-price-click", { detail: { priceMilli } }));
+function emitPriceClick(priceMilli: number, side: "bid" | "ask", code: string): void {
+  // PriceLadder 監聽 → 該價置中(不送單;design §11:五檔誤觸面大,送單集中在梯上)
+  window.dispatchEvent(
+    new CustomEvent("stock-price-click", { detail: { priceMilli, side, code } }),
+  );
 }
 
-export function OrderBook({ book, last, ref_, upper = null, lower = null }: Props) {
+export function OrderBook({ code, book, last, ref_, upper = null, lower = null }: Props) {
   const asks = [...(book?.asks ?? [])].slice(0, DEPTH);
   const bids = (book?.bids ?? []).slice(0, DEPTH);
   const maxVol = Math.max(1, ...asks.map(([, v]) => v), ...bids.map(([, v]) => v));
@@ -42,7 +45,7 @@ export function OrderBook({ book, last, ref_, upper = null, lower = null }: Prop
             <button
               type="button"
               className={cn("w-full text-right", side === "ask" ? "text-bear" : "text-bull")}
-              onClick={() => emitPriceClick(entry[0])}
+              onClick={() => emitPriceClick(entry[0], side, code)}
             >
               {fmt(entry[0])}
             </button>
