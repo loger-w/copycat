@@ -69,6 +69,21 @@ def test_config_defaults_disabled_and_unlimited() -> None:
 # ── None = 不限(僅基本驗證) ─────────────────────────────────
 
 
+def test_max_amount_boundary_equal_allows_plus_one_blocks() -> None:
+    # review C7:金額閘語意 = 「超過」才擋(est > max);等值 = 上限內
+    est = 590.0 * 1 * 1000  # 590,000
+    assert check_stock_order(_stock(), _cfg(max_amount=est)).allowed is True
+    r = check_stock_order(_stock(), _cfg(max_amount=est - 1))  # est = max+1 → 擋
+    assert r.allowed is False and r.reason is not None and "超過上限" in r.reason
+    fut_est = 23000.0 * 1 * 200  # 4.6M
+    assert check_future_order(_fut(), _cfg(max_amount=fut_est), multiplier=200).allowed is True
+    assert (
+        check_future_order(_fut(), _cfg(max_amount=fut_est - 1), multiplier=200).allowed is False
+    )
+    assert check_correct_price(590.0, 1, _cfg(max_amount=est)).allowed is True
+    assert check_correct_price(590.0, 1, _cfg(max_amount=est - 1)).allowed is False
+
+
 def test_none_limits_allow_any_size() -> None:
     cfg = _cfg()  # max_qty=None, max_amount=None
     assert check_stock_order(_stock(qty=99_999, price=1000.0), cfg).allowed is True

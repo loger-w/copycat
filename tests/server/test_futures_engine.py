@@ -155,6 +155,22 @@ class TestBroadcast:
         await engine.close()
 
 
+class TestClosedEngine:
+    async def test_push_after_close_no_broadcast_no_seq_no_error(self) -> None:
+        # review C9:close 先斷 threadsafe 入口 — 之後 TC4 推播不得
+        # call_soon_threadsafe 到關閉中的 loop(不炸、seq 不變、無新廣播)
+        engine, src, events = await _make()
+        _push(src, _quote())
+        await _drain()
+        assert engine.state()["seq"] == 1
+        await engine.close()
+        n = len(events)
+        _push(src, _quote(TradingPrice="23600"))  # 不得 raise
+        await _drain()
+        assert engine.state()["seq"] == 1  # 狀態凍結
+        assert len(events) == n  # 無新 broadcast
+
+
 class TestResolvedContract:
     async def test_none_before_any_signal(self) -> None:
         engine, src, _ = await _make()

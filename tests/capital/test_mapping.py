@@ -222,6 +222,19 @@ def test_hot_without_resolved_ym_raises() -> None:
         to_exchange_symbol("TC.F.TWF.TXF.HOT")
 
 
+@pytest.mark.parametrize("bad_ym", ["2026-09", "20269"])
+def test_hot_resolved_ym_bad_format_raises(bad_ym: str) -> None:
+    # review C6:resolved_ym 非 YYYYMM 形(帶分隔/長度不足)不可靜默組出錯誤契約碼
+    with pytest.raises(ValueError):
+        to_exchange_symbol("TC.F.TWF.TXF.HOT", resolved_ym=bad_ym)
+
+
+def test_month_zero_raises() -> None:
+    # review C6:月份 00 過得了 \d{6} regex,月碼表必須擋(chr 位移會算出 '@')
+    with pytest.raises(ValueError):
+        to_exchange_symbol("TC.F.TWF.TXF.202600")
+
+
 @pytest.mark.parametrize(
     "symbol",
     [

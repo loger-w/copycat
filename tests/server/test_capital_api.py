@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import copycat.capital.factory as factory_mod
 from copycat.capital.client import CapitalClient
+from copycat.server.capital_api import _CLIENT_QUEUE_MAX, WsBroadcaster
 from copycat.capital.models import Position
 from copycat.capital.safety import SafetyConfig
 from copycat.live.models import OptionContract, SeriesInfo, Tick
@@ -590,6 +591,34 @@ class TestFuturesState:
             res = client.get("/api/futures/state")
             assert res.status_code == 503
             assert res.json()["detail"]["error"] == "NOT_READY"
+
+
+class TestWsBroadcasterBackpressure:
+    async def test_overflow_drops_oldest_keeps_newest(self) -> None:
+        # review C8:慢連線灌超量 → 丟最舊、保最新(行情/回報都是最新有意義)
+        b = WsBroadcaster()
+        gen = b.stream()
+        try:
+            for i in range(_CLIENT_QUEUE_MAX + 5):
+                b.publish({"i": i})
+            got = [await gen.__anext__() for _ in range(_CLIENT_QUEUE_MAX)]
+            assert got[0] == {"i": 5}  # 最舊 0..4 被丟
+            assert got[-1] == {"i": _CLIENT_QUEUE_MAX + 4}  # 收尾端 = 最新
+        finally:
+            await gen.aclose()
+
+    async def test_slow_client_does_not_affect_fast_client(self) -> None:
+        b = WsBroadcaster()
+        slow = b.stream()
+        fast = b.stream()
+        try:
+            for i in range(_CLIENT_QUEUE_MAX + 3):
+                b.publish({"i": i})
+            assert await fast.__anext__() == {"i": 3}  # 各自獨立 queue,各自丟舊
+            assert await slow.__anext__() == {"i": 3}
+        finally:
+            await slow.aclose()
+            await fast.aclose()
 
 
 class TestWebSockets:
