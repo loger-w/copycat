@@ -245,6 +245,36 @@ class CapitalClient:
         except Exception:
             logger.exception("審計後置寫入失敗(action=%s)— 委託已送出,結果未入帳: %s", action, result)
 
+    def _on_late_result(
+        self, action: str, req: _WriteReq, fut: asyncio.Future[tuple[str, int]]
+    ) -> None:
+        """timeout / route 取消後 COM 晚到的結果:補一行後置審計(late=true)+ warning
+        (review B1)。done_callback 在 loop 上跑,同步 append_audit 可接受(罕見路徑)。"""
+        if fut.cancelled():
+            return
+        exc = fut.exception()
+        if exc is not None:
+            result = OrderResult(
+                ok=False, code=-1, message=f"COM 例外: {type(exc).__name__}: {exc}", seq_no=None
+            )
+        else:
+            message, code = fut.result()
+            ok = code == 0
+            text = f"{self._com.return_code_message(code)} {message}".strip()
+            result = OrderResult(
+                ok=ok, code=code, message=text, seq_no=(message.strip() or None) if ok else None
+            )
+        logger.warning(
+            "寫入結果晚到(action=%s, seq_no=%s, ok=%s)— 補記審計 late 行",
+            action, result.seq_no, result.ok,
+        )
+        record = self._record(action, req, result=result)
+        record["late"] = True
+        try:
+            self._audit(record)
+        except Exception:
+            logger.exception("晚到結果審計寫入失敗(action=%s): %s", action, result)
+
     # ------------------------------------------------------------------ COM 事件(COM 執行緒)
 
     def _handle_reply(self, bstr_data: str) -> None:
@@ -554,13 +584,20 @@ class CapitalClient:
         fut: asyncio.Future[tuple[str, int]] = self._loop.create_future()
         self._cmd_q.put((com_call, fut))
         try:
-            message, code = await asyncio.wait_for(fut, timeout=_WRITE_TIMEOUT_S)
+            # shield:timeout / route 取消都不可 cancel 底層 fut —
+            # 真錢命令可能已送進群益,晚到結果要能落審計(review B1)
+            message, code = await asyncio.wait_for(asyncio.shield(fut), timeout=_WRITE_TIMEOUT_S)
         except TimeoutError:
             # 命令可能已送進群益(同步呼叫卡在群益端)→ 結果未知,
-            # 不可回「失敗」誘發重送;照樣審計留帳
+            # 不可回「失敗」誘發重送;照樣審計留帳;晚到結果補 late 行
             result = OrderResult(ok=False, code=-1, message="結果未知,勿重送", seq_no=None)
             self._audit_after(action, req, result)
+            fut.add_done_callback(lambda f: self._on_late_result(action, req, f))
             return result
+        except asyncio.CancelledError:
+            # route task 取消(cancel-chain):單可能已出手,晚到結果補審計;取消不可吞
+            fut.add_done_callback(lambda f: self._on_late_result(action, req, f))
+            raise
         except Exception as e:  # noqa: BLE001 — COM 例外/執行緒亡故:審計後轉 CapitalDownError
             result = OrderResult(
                 ok=False, code=-1, message=f"COM 例外: {type(e).__name__}: {e}", seq_no=None

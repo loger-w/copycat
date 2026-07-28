@@ -575,6 +575,56 @@ async def test_write_timeout_returns_unknown_result(
     assert lines[-1]["result"]["message"] == "結果未知,勿重送"
 
 
+async def test_route_cancel_late_result_audited_and_cancel_not_swallowed(tmp_path: Path) -> None:
+    # review B1:route task 取消(cancel-chain)時真錢單可能已送出 —
+    # CancelledError 不可吞、COM 晚到結果要補後置審計(late=true)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec")))
+    for _ in range(200):  # 等命令入佇列(前置審計後)
+        await asyncio.sleep(0.005)
+        if not client._cmd_q.empty():
+            break
+    else:
+        raise AssertionError("命令未入佇列")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    cmd = client._cmd_q.get_nowait()
+    assert cmd is not None
+    fn, fut = cmd
+    fut.set_result(fn())  # COM 晚回(執行緒側 _settle 等價)
+    await asyncio.sleep(0)  # 消化 done_callback
+    lines = _audit_lines(client)
+    late = [ln for ln in lines if ln.get("late")]
+    assert len(late) == 1
+    assert late[0]["result"]["ok"] is True and late[0]["result"]["seq_no"] == "OK"
+
+
+async def test_timeout_then_late_result_appends_late_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # review B1:timeout 已審計「結果未知」,COM 晚回再補第二行(late=true)
+    monkeypatch.setattr(client_mod, "_WRITE_TIMEOUT_S", 0.01)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._loop = asyncio.get_running_loop()
+    res = await client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
+    assert res.message == "結果未知,勿重送"
+    cmd = client._cmd_q.get_nowait()
+    assert cmd is not None
+    fn, fut = cmd
+    fut.set_result(fn())
+    await asyncio.sleep(0)
+    lines = _audit_lines(client)
+    assert len(lines) == 3  # 前置 + 結果未知後置 + late 補記
+    assert lines[-1].get("late") is True
+    assert lines[-1]["result"]["ok"] is True
+
+
 async def test_com_exception_raises_capital_down_and_audits(tmp_path: Path) -> None:
     class BoomCom(FakeCom):
         def cancel_order(self, user_id: str, full_account: str, seq_no: str) -> tuple[str, int]:
