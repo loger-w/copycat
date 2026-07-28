@@ -69,6 +69,7 @@ from copycat.capital.safety import (
     check_stock_order,
 )
 from copycat.capital.store import CapitalStore
+from copycat.live.trade_models import BrokerRejectedError
 from copycat.server.audit import append_audit
 
 logger = logging.getLogger(__name__)
@@ -575,6 +576,10 @@ class CapitalClient:
             seq_no=(message.strip() or None) if ok else None,
         )
         self._audit_after(action, req, result)
+        if not ok:
+            # 群益明確拒絕(code≠0):審計後置照寫,再透傳 400 BROKER_REJECTED
+            # (design §6;review A2/C1)。timeout「結果未知」(code=-1)不走這裡。
+            raise BrokerRejectedError(err_code=str(code), err_msg=text)
         return result
 
     # ------------------------------------------------------------------ 送單

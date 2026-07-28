@@ -36,7 +36,8 @@ from copycat.capital.models import (
 from copycat.capital.reply import parse_onnewdata
 from copycat.capital.safety import SafetyConfig
 from copycat.server.audit import AuditWriteError
-from tests.capital.fake_com import FakeCom, RecordingCom
+from copycat.live.trade_models import BrokerRejectedError
+from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -518,6 +519,39 @@ async def test_correct_price_unknown_seq_allowed_r3(tmp_path: Path) -> None:
     )
     assert res.ok is True
     assert ("correct_price", "1234567890A", "ghost", 9.0) in com.sent
+
+
+# ---------------------------------------------------------------------------
+# 群益拒單透傳(review A2/C1):code≠0 → 後置審計 ok=False → BrokerRejectedError
+# ---------------------------------------------------------------------------
+
+
+async def test_com_reject_raises_broker_rejected_and_audits(tmp_path: Path) -> None:
+    com = RejectingCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with pytest.raises(BrokerRejectedError) as ei:
+        await _drive(client, lambda: client.submit_stock_order(_stock_req()))
+    assert ei.value.err_code == "1097"
+    assert "查無委託" in ei.value.err_msg
+    lines = _audit_lines(client)  # 後置審計先落(result ok=False)再 raise
+    assert lines[-1]["result"]["ok"] is False
+    assert lines[-1]["result"]["code"] == 1097
+
+
+async def test_com_reject_cancel_and_future_paths(tmp_path: Path) -> None:
+    com = RejectingCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with pytest.raises(BrokerRejectedError):
+        await _drive(
+            client, lambda: client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
+        )
+    with pytest.raises(BrokerRejectedError):
+        await _drive(
+            client,
+            lambda: client.submit_future_order(_fut_req(), contract="TXFI6", multiplier=200),
+        )
 
 
 # ---------------------------------------------------------------------------

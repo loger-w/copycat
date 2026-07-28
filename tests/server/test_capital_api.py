@@ -20,7 +20,7 @@ from copycat.capital.models import Position
 from copycat.capital.safety import SafetyConfig
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.app import create_app
-from tests.capital.fake_com import FakeCom
+from tests.capital.fake_com import FakeCom, RejectingCom
 
 C23000 = OptionContract(symbol="TC.O.TWF.TXO.202607.C.23000", cp="C", strike_millipts=23_000_000)
 SERIES = SeriesInfo(series_id="TXO.202607", name="TXO 202607", expiry="202607", contracts=(C23000,))
@@ -459,6 +459,65 @@ class TestPositionClose:
             assert isinstance(fields, dict)
             assert fields["sBuySell"] == 1  # 現股多 → 反向賣
             assert fields["nQty"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 群益拒單透傳 400 BROKER_REJECTED(review A2/C1/C2)
+# ---------------------------------------------------------------------------
+
+
+class TestBrokerRejected:
+    def _assert_rejected(self, res: Any) -> None:
+        assert res.status_code == 400
+        detail = res.json()["detail"]
+        assert detail["error"] == "BROKER_REJECTED"
+        assert detail["err_code"] == "1097"
+        assert "查無委託" in detail["err_msg"]
+
+    def test_order_stock_reject_400(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cap, _com = _capital_client(tmp_path, com=RejectingCom())
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._assert_rejected(client.post("/api/capital/order/stock", json=_STOCK_BODY))
+
+    def test_order_cancel_reject_400(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cap, _com = _capital_client(tmp_path, com=RejectingCom())
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._assert_rejected(
+                client.post(
+                    "/api/capital/order/cancel", json={"seq_no": "00000000001", "market": "sec"}
+                )
+            )
+
+    def test_correct_price_reject_400(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cap, com = _capital_client(tmp_path, com=RejectingCom())
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            assert com.on_reply is not None
+            com.on_reply(_stock_evt_raw("00000000001"))  # store 有此單(排除 R3 逃生口變因)
+            self._assert_rejected(
+                client.post(
+                    "/api/capital/order/correct-price",
+                    json={"seq_no": "00000000001", "market": "sec", "price": 91.0},
+                )
+            )
+
+    def test_correct_price_unknown_seq_passthrough_400(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # C2/SC-4:改價對不存在委託 — store 查無(R3 逃生口)放行送群益,
+        # 群益 1097 透傳 400 = 「可辨識錯誤」的最終語意
+        cap, com = _capital_client(tmp_path, com=RejectingCom())
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._assert_rejected(
+                client.post(
+                    "/api/capital/order/correct-price",
+                    json={"seq_no": "99999999999", "market": "sec", "price": 91.0},
+                )
+            )
+            assert _sent(com, "correct_price")  # 逃生口確實放行到 COM
 
 
 # ---------------------------------------------------------------------------

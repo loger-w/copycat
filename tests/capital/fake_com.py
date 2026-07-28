@@ -105,6 +105,40 @@ class FakeCom:
     def pump(self) -> None: ...
 
 
+class RejectingCom(FakeCom):
+    """所有寫入方法回群益拒單 code(預設 1097「查無委託」)— 拒單透傳測試用(review A2/C1/C2)。"""
+
+    def __init__(self, accounts: list[tuple[str, str]] | None = None) -> None:
+        super().__init__(accounts)
+        self.reject: tuple[str, int] = ("查無委託", 1097)
+
+    def send_stock_order(self, user_id: str, fields: dict[str, object]) -> tuple[str, int]:
+        self.sent.append(("stock", fields))
+        return self.reject
+
+    def send_future_order(
+        self, user_id: str, fields: dict[str, object], *, is_option: bool
+    ) -> tuple[str, int]:
+        self.sent.append(("future", fields, is_option))
+        return self.reject
+
+    def cancel_order(self, user_id: str, full_account: str, seq_no: str) -> tuple[str, int]:
+        self.sent.append(("cancel", full_account, seq_no))
+        return self.reject
+
+    def correct_price(
+        self, user_id: str, full_account: str, seq_no: str, price: float
+    ) -> tuple[str, int]:
+        self.sent.append(("correct_price", full_account, seq_no, price))
+        return self.reject
+
+    def decrease_qty(
+        self, user_id: str, full_account: str, seq_no: str, qty: int
+    ) -> tuple[str, int]:
+        self.sent.append(("decrease", full_account, seq_no, qty))
+        return self.reject
+
+
 class RecordingCom(FakeCom):
     """記錄啟動時呼叫到的 COM 方法順序,驗證啟動序列(SC-1)。"""
 
