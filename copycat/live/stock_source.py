@@ -50,6 +50,7 @@ def _iso_date(ymd: str) -> str:
 
 def _parse_dk_rows(rows: list[dict]) -> list[DailyBar]:
     bars: list[DailyBar] = []
+    skipped = 0
     for r in rows:
         try:
             bars.append(
@@ -61,7 +62,10 @@ def _parse_dk_rows(rows: list[dict]) -> list[DailyBar]:
                 )
             )
         except (KeyError, ValueError):
-            continue
+            skipped += 1
+    if skipped:
+        # DK 欄位格式未實測(design Known Risk 1):略過計數是唯一診斷訊號
+        logger.warning("DK rows 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
     bars.sort(key=lambda b: b["date"])
     return bars
 
@@ -69,12 +73,16 @@ def _parse_dk_rows(rows: list[dict]) -> list[DailyBar]:
 def _aggregate_1k_rows(rows: list[dict]) -> list[DailyBar]:
     """1K rows → 日 bar(per Date:high=max、low=min、close=最後一根 close,依 Time 序)。"""
     by_date: dict[str, list[tuple[str, int, int, int]]] = {}
+    skipped = 0
     for r in rows:
         try:
             item = (str(r["Time"]), _milli(r["High"]), _milli(r["Low"]), _milli(r["Close"]))
         except (KeyError, ValueError):
+            skipped += 1
             continue
         by_date.setdefault(str(r["Date"]), []).append(item)
+    if skipped:
+        logger.warning("1K rows 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
     bars: list[DailyBar] = []
     for ymd in sorted(by_date):
         items = sorted(by_date[ymd], key=lambda x: x[0])
