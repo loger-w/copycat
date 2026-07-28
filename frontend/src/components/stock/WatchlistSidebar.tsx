@@ -111,8 +111,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   }
 
   function removeGroup(name: string): void {
-    if (activeGroup === name) setActiveGroup(null);
-    mutateGroups(groups.filter((g) => g.name !== name));
+    // mutation 成功才切走 active tab(review A2:失敗時 cache 未動,tab 不該先跳)
+    save.mutate(
+      groups.filter((g) => g.name !== name),
+      { onSuccess: () => setActiveGroup((cur) => (cur === name ? null : cur)) },
+    );
   }
 
   function toggleMembership(code: string, groupName: string): void {
