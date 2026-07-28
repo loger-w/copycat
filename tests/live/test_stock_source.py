@@ -130,6 +130,141 @@ class TestBackfill:
         assert ticks[0].time == "09:00:06.840"
 
 
+class TestFetchDailyBars:
+    """SC-4 overlay 資料源:DK 優先、1K 聚合 fallback、SubDataType 欄位釘死(impl-spec R3)."""
+
+    @staticmethod
+    def _dk_row(date: str, h: str, lo: str, c: str) -> dict:
+        return {"Date": date, "High": h, "Low": lo, "Close": c, "QryIndex": "1"}
+
+    def test_dk_path_parses_and_asserts_subdatatype(self) -> None:
+        sent: list[dict] = []
+        pages = {
+            "0": [
+                self._dk_row("20260724", "101.5", "99", "100.5"),
+                self._dk_row("20260727", "103", "100", "102"),
+            ],
+            "1": [],
+        }
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "DK:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return _ok()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        bars = src.fetch_daily_bars("2330")
+        assert bars == [
+            {"date": "2026-07-24", "high": 101_500, "low": 99_000, "close": 100_500},
+            {"date": "2026-07-27", "high": 103_000, "low": 100_000, "close": 102_000},
+        ]
+        dk_reqs = [o for o in sent if o["Param"].get("SubDataType") == "DK"]
+        assert {o["Request"] for o in dk_reqs} == {"SUBQUOTE", "GETHISDATA"}
+
+    def test_dk_empty_falls_back_to_1k_aggregation(self) -> None:
+        sent: list[dict] = []
+        k1_pages = {
+            "0": [
+                {
+                    "Date": "20260724",
+                    "Time": "10000",
+                    "Open": "100",
+                    "High": "101",
+                    "Low": "100",
+                    "Close": "100.5",
+                    "Volume": "10",
+                    "QryIndex": "1",
+                },
+                {
+                    "Date": "20260724",
+                    "Time": "10100",
+                    "Open": "100.5",
+                    "High": "102",
+                    "Low": "99",
+                    "Close": "101",
+                    "Volume": "5",
+                    "QryIndex": "2",
+                },
+                {
+                    "Date": "20260727",
+                    "Time": "10000",
+                    "Open": "101",
+                    "High": "103",
+                    "Low": "101",
+                    "Close": "102",
+                    "Volume": "8",
+                    "QryIndex": "3",
+                },
+            ],
+            "3": [],
+        }
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            if obj["Request"] == "GETHISDATA":
+                dtype = obj["Param"]["SubDataType"]
+                if dtype == "DK":
+                    return ("DK:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
+                ).encode()
+            return _ok()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        bars = src.fetch_daily_bars("2330")
+        assert bars == [
+            {"date": "2026-07-24", "high": 102_000, "low": 99_000, "close": 101_000},
+            {"date": "2026-07-27", "high": 103_000, "low": 101_000, "close": 102_000},
+        ]
+        assert any(o["Param"].get("SubDataType") == "1K" for o in sent)
+
+    def test_tail_limited_to_n(self) -> None:
+        rows = [self._dk_row(f"202607{d:02d}", "10", "9", "9.5") for d in range(1, 28)]
+        for i, r in enumerate(rows):
+            r["QryIndex"] = str(i + 1)
+        pages = {"0": rows, str(len(rows)): []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "DK:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return _ok()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        bars = src.fetch_daily_bars("2330", n=25)
+        assert len(bars) == 25
+        assert bars[0]["date"] == "2026-07-03"  # 27 根裁尾取最後 25
+
+    def test_zmq_error_normalized_to_connection_error(self) -> None:
+        import zmq
+
+        def handler(obj: dict) -> bytes:
+            raise zmq.ZMQError()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        try:
+            src.fetch_daily_bars("2330")
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("TC4 通訊失敗必須正規化為 ConnectionError(design R10)")
+
+
 class TestRawDispatch:
     def test_realtime_quote_dispatched(self) -> None:
         src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
