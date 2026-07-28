@@ -131,10 +131,10 @@ describe("StockIntradayChart", () => {
     const svg = container.querySelector("svg")!;
     // width 800、x 域 540..810 分鐘 → 541 分在 x = 1/270*800 ≈ 2.96px
     fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
-    expect(screen.getByText(/09:01/)).toBeTruthy();
-    expect(screen.getByText(/2380/)).toBeTruthy();
+    expect(screen.getByText(/09:01/, { selector: "text" })).toBeTruthy();
+    expect(screen.getByText(/2380/, { selector: "text" })).toBeTruthy();
     fireEvent.mouseLeave(svg);
-    expect(screen.queryByText(/09:01/)).toBeNull();
+    expect(screen.queryByText(/09:01/, { selector: "text" })).toBeNull();
   });
 
   it("hover 無資料分鐘不顯示 tooltip(edge 7)", () => {
