@@ -83,6 +83,26 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
     expect(rows.find((r) => r.isCenter)!.priceMilli).toBe(23_000_000);
   });
 
+  it("center > upper → clamp 到 upper:置中列 = upper 且無更高列(review C5)", () => {
+    const rows = buildFuturesLadder({ centerMilli: 25_400_000, ...wide, ...noDepth, rows: 3 });
+    expect(rows.map((r) => r.priceMilli)).toEqual([
+      25_300_000, 25_299_000, 25_298_000, 25_297_000,
+    ]);
+    expect(rows[0]!.priceMilli).toBe(25_300_000); // = upperMilli
+    expect(rows[0]!.isCenter).toBe(true);
+    expect(rows.filter((r) => r.isCenter)).toHaveLength(1);
+  });
+
+  it("center < lower → clamp 到 lower:置中列 = lower 且無更低列(review C5)", () => {
+    const rows = buildFuturesLadder({ centerMilli: 20_600_000, ...wide, ...noDepth, rows: 3 });
+    expect(rows.map((r) => r.priceMilli)).toEqual([
+      20_703_000, 20_702_000, 20_701_000, 20_700_000,
+    ]);
+    expect(rows.at(-1)!.priceMilli).toBe(20_700_000); // = lowerMilli
+    expect(rows.at(-1)!.isCenter).toBe(true);
+    expect(rows.filter((r) => r.isCenter)).toHaveLength(1);
+  });
+
   it("界反轉(upper < lower)→ 空 rows", () => {
     expect(
       buildFuturesLadder({
