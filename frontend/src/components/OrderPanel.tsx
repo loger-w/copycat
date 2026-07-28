@@ -1,112 +1,128 @@
 import { useState } from "react";
 
-import { OrderConfirm } from "@/components/OrderConfirm";
-import { OrdersList } from "@/components/OrdersList";
-import { useConfirmOrder, useOrders, usePreviewOrder, useTradeAccount } from "@/hooks/useTrade";
+import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
+import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
+import { useCapitalStatus, useSubmitFuture } from "@/hooks/useCapital";
 import { shortSymbol, tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
-import type { OrderPreviewResult } from "@/types";
+import type { ContractRow } from "@/types";
 
 const FIELD =
   "w-full rounded-sm border border-line bg-bg-deep px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none";
 
-// status → 送單鈕 disabled 原因(edge case 1/2/閘一);文案由錯誤碼對照導出,單一來源(review p2)
-const BLOCKED_REASON: Record<string, string> = {
-  touchance_down: tradeErrorText("TOUCHANCE_DOWN"),
-  no_account: tradeErrorText("TRADE_NOT_READY"),
-  live_blocked: tradeErrorText("LIVE_DISABLED"),
+/** TXO 契約乘數(元/點;review R9)— 預估權利金 = 價 × 口 × 50。 */
+const TXO_MULTIPLIER = 50;
+
+// status → 送單鈕 disabled 原因(文案由錯誤碼對照導出,單一來源;degraded 不在此 = 不鎖)
+const STATUS_BLOCKED: Record<string, string> = {
+  disabled: tradeErrorText("CAPITAL_DISABLED"),
+  error: tradeErrorText("CAPITAL_DOWN"),
+  starting: tradeErrorText("CAPITAL_NOT_READY"),
 };
 
-export function OrderPanel() {
-  const account = useTradeAccount();
-  const orders = useOrders();
-  const preview = usePreviewOrder();
-  const confirm = useConfirmOrder();
+export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
+  const status = useCapitalStatus();
+  const submit = useSubmitFuture();
 
   const [symbol, setSymbol] = useState("");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [kind, setKind] = useState<"limit" | "market">("limit");
   const [qty, setQty] = useState("1");
   const [price, setPrice] = useState("");
-  const [pending, setPending] = useState<OrderPreviewResult | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const info = account.data;
-  const symbols = info?.orderable_symbols ?? [];
+  const info = status.data;
+  // 商品清單 = TXO snapshot 序列合約(TC4 symbol;snapshot 契約只加不改)
+  const symbols = (contracts ?? []).map((c) => c.symbol);
   const selected = symbol || symbols[0] || "";
-  const status = info?.status ?? "loading";
+  // 市價閘用估價 = 該合約最近成交價(snapshot last_price);缺值 → 鎖市價選項
+  const marketEstimate = (contracts ?? []).find((c) => c.symbol === selected)?.last_price ?? null;
+
+  const capStatus = info?.status;
   const blockedReason =
-    account.error != null
-      ? tradeErrorText(account.error.message)
-      : BLOCKED_REASON[status] ?? (info == null ? "交易狀態載入中…" : null);
+    status.error != null
+      ? tradeErrorText(status.error.message)
+      : info == null
+        ? "交易狀態載入中…"
+        : (capStatus != null ? STATUS_BLOCKED[capStatus] : undefined) ?? null;
+  const degradedNote =
+    capStatus === "degraded" ? "群益回報連線降級(可送單,回報可能延遲)" : null;
+
   const qtyNum = Number.parseInt(qty, 10);
+  const priceNum = Number(price.trim());
+  const effectivePrice = kind === "limit" ? priceNum : marketEstimate;
   const formInvalid =
     selected === "" ||
     !Number.isFinite(qtyNum) ||
     qtyNum < 1 ||
-    (kind === "limit" && price.trim() === "");
-  const disabled = blockedReason != null || formInvalid || preview.isPending;
+    (kind === "limit" && (price.trim() === "" || !Number.isFinite(priceNum) || priceNum <= 0)) ||
+    (kind === "market" && marketEstimate == null);
+  const disabled = blockedReason != null || formInvalid || submit.isPending;
 
-  const handlePreview = () => {
+  const handleOpen = () => {
     setNotice(null);
     setSubmitError(null);
-    preview.mutate(
-      {
-        symbol: selected,
-        side,
-        kind,
-        qty: qtyNum,
-        price: kind === "limit" ? price.trim() : null,
-      },
-      { onSuccess: (result) => setPending(result) },
-    );
+    submit.reset();
+    setConfirming(true);
   };
 
   const handleConfirm = () => {
-    if (pending == null) return;
-    confirm.mutate(pending.preview_id, {
-      onSuccess: (result) => {
-        setPending(null);
-        confirm.reset();
-        setNotice(`已送出(單號 ${result.request_id.slice(0, 8)}),回報見下方列表`);
+    setConfirming(false);
+    if (effectivePrice == null) return;
+    submit.mutate(
+      {
+        tc4_symbol: selected,
+        buy_sell: side,
+        price: effectivePrice,
+        qty: qtyNum,
+        price_type: kind,
+        time_in_force: "ROD",
+        day_trade: false,
+        source: "panel",
       },
-      onError: (err) => {
-        // preview_id 已被 server 消耗(一次性),留在 dialog 重試注定失敗(review A1)
-        setPending(null);
-        confirm.reset();
-        setSubmitError(`${tradeErrorText(err.message)},請重新送單`);
+      {
+        onSuccess: (result) => {
+          if (result.ok) {
+            setNotice(`已送出(單號 ${result.seq_no ?? "—"}),回報見下方列表`);
+          } else {
+            // 「結果未知,勿重送」等 ok=false 走 200(design §6):顯示 message 不誘發重送
+            setSubmitError(result.message);
+          }
+        },
+        onError: (err) => {
+          setSubmitError(tradeErrorText(err.message));
+        },
       },
-    });
+    );
   };
 
-  const handleCancel = () => {
-    setPending(null);
-    confirm.reset();
-  };
-
-  const isSim = info?.mode !== "live";
+  const env = info?.env;
+  const isProd = env === "prod";
+  const masked = info?.futures_account_masked ?? info?.account_masked;
+  const premium =
+    effectivePrice != null && Number.isFinite(qtyNum)
+      ? Math.round(effectivePrice * qtyNum * TXO_MULTIPLIER * 100) / 100
+      : null;
 
   return (
     <section className="@container border-t border-line pt-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-baseline gap-3">
           <h2 className="text-sm font-bold tracking-wide text-ink">手動下單</h2>
-          {info?.mode != null && (
+          {env != null && (
             <span
               className={cn(
                 "px-2 py-0.5 text-xs",
-                isSim ? "border border-accent text-accent" : "bg-loss font-bold text-bg",
+                isProd ? "bg-loss font-bold text-bg" : "border border-accent text-accent",
               )}
             >
-              {isSim ? "模擬" : "正式"}
+              {isProd ? "正式" : "模擬"}
             </span>
           )}
-          {info?.account_masked != null && (
-            <span className="font-mono text-xs text-ink-dim">{info.account_masked}</span>
-          )}
+          {masked != null && <span className="font-mono text-xs text-ink-dim">{masked}</span>}
         </div>
-        {info?.audit_degraded && <span className="text-xs text-loss">審計記錄異常</span>}
       </div>
 
       <div className="grid gap-5 @[720px]:grid-cols-[minmax(250px,300px)_1fr]">
@@ -114,7 +130,7 @@ export function OrderPanel() {
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            handlePreview();
+            handleOpen();
           }}
         >
           <label className="block text-xs text-ink-muted">
@@ -180,12 +196,15 @@ export function OrderPanel() {
             <button
               type="button"
               aria-pressed={kind === "market"}
+              disabled={marketEstimate == null}
+              title={marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined}
               onClick={() => setKind("market")}
               className={cn(
                 "border px-3 py-1.5 text-sm transition-colors",
                 kind === "market"
                   ? "border-accent text-accent"
                   : "border-line text-ink-dim hover:text-ink",
+                marketEstimate == null && "cursor-not-allowed opacity-40",
               )}
             >
               市價
@@ -232,27 +251,34 @@ export function OrderPanel() {
               disabled && "cursor-not-allowed opacity-40",
             )}
           >
-            {preview.isPending ? "預覽中…" : "送單(預覽)"}
+            {submit.isPending ? "送出中…" : "送出"}
           </button>
 
           {blockedReason != null && <p className="text-xs text-loss">{blockedReason}</p>}
-          {preview.error != null && (
-            <p className="text-xs text-loss">{tradeErrorText(preview.error.message)}</p>
-          )}
+          {degradedNote != null && <p className="text-xs text-loss">{degradedNote}</p>}
           {submitError != null && <p className="text-xs text-loss">{submitError}</p>}
           {notice != null && <p className="text-xs text-accent">{notice}</p>}
         </form>
 
-        <OrdersList view={orders.data} />
+        <CapitalOrdersList market="fut" />
       </div>
 
-      {pending != null && (
-        <OrderConfirm
-          preview={pending}
-          submitting={confirm.isPending}
-          errorText={confirm.error != null ? tradeErrorText(confirm.error.message) : null}
+      {confirming && premium != null && (
+        <CapitalConfirmDialog
+          title="確認送單"
+          rows={[
+            { label: "商品", value: shortSymbol(selected) },
+            { label: "買賣", value: side === "buy" ? "買進" : "賣出" },
+            {
+              label: "價格",
+              value: kind === "limit" ? `${priceNum} 點` : `市價(估 ${marketEstimate} 點)`,
+            },
+            { label: "數量", value: `${qtyNum} 口` },
+            { label: "預估權利金", value: `${premium.toLocaleString("zh-TW")} 元` },
+          ]}
+          danger={isProd}
           onConfirm={handleConfirm}
-          onCancel={handleCancel}
+          onCancel={() => setConfirming(false)}
         />
       )}
     </section>

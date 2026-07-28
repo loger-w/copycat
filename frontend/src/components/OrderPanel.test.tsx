@@ -156,7 +156,7 @@ describe("OrderPanel(群益)", () => {
       source: "panel",
     });
     await waitFor(() => expect(screen.queryByText("確認送單")).toBeNull());
-    expect(await screen.findByText(/已送出(單號 0001)/)).toBeTruthy();
+    expect(await screen.findByText("已送出(單號 0001),回報見下方列表")).toBeTruthy();
   });
 
   it("送單 503 CAPITAL_DISABLED → 顯示群益未啟用", async () => {
@@ -205,7 +205,7 @@ describe("OrderPanel(群益)", () => {
     expect(screen.queryByLabelText("價格(點)")).toBeNull();
     fireEvent.click(screen.getByText("送出"));
     expect(await screen.findByText("確認送單")).toBeTruthy();
-    expect(screen.getByText(/市價(估 15\.5 點)/)).toBeTruthy();
+    expect(screen.getByText("市價(估 15.5 點)")).toBeTruthy();
     expect(screen.getByText("775 元")).toBeTruthy(); // 15.5 × 1 口 × 50 元/點
     fireEvent.click(screen.getByText("確認"));
     await waitFor(() => expect(bodies.length).toBe(1));

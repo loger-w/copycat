@@ -27,6 +27,8 @@ export interface ContractRow {
   volume: number;
   outer_qty: number;
   inner_qty: number;
+  /** 最近成交價(點;snapshot 契約只加不改)。缺值時 OrderPanel 鎖市價選項。 */
+  last_price?: number | null;
 }
 
 export interface Snapshot {

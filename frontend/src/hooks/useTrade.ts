@@ -1,3 +1,4 @@
+/** @deprecated 2026-07-28 capital-order:TC4 TradeRuntime 停用,改群益 /api/capital;下輪清 */
 // trade hooks 集中一檔共用 parseError / fetch helper(PLAN 原列三檔,[phase-3 補註]:
 // 三檔各抄一份 parseError 違反 DRY,收斂為單檔多 export,對外 API 不變)。
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

@@ -1,3 +1,4 @@
+/** @deprecated 2026-07-28 capital-order:TC4 TradeRuntime 停用,改群益 /api/capital;下輪清 */
 import { orderSideText, shortSymbol } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { OrderPreviewResult } from "@/types";

@@ -129,7 +129,7 @@ function TxoPage() {
             contracts={snapshot.contracts}
             spotPrice={snapshot.spot?.price ?? null}
           />
-          <OrderPanel />
+          <OrderPanel contracts={snapshot.contracts} />
           <footer className="flex justify-between font-mono text-xs text-ink-dim">
             <span>
               tick {snapshot.totals?.ticks ?? 0} · 未分類 {snapshot.totals?.unclassified_ticks ?? 0}
