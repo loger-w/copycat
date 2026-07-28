@@ -242,6 +242,35 @@ class StockQuoteSource(TC4QuoteSource):
             rows.extend(page)
         return rows
 
+    def fetch_day_minutes(self, code: str) -> dict[str, int]:
+        """當日 1K → {HHMM(台北,bar 終點標記): close 毫點}(index-board SC-4)。
+
+        1K Time 為 UTC 終點標記(實測 09:01 起);域 0901–1330 inclusive,
+        1331–1335 clamp "1330"(收盤補正),其餘丟棄(design F5/IR4)。"""
+        self._ensure_connected()
+        sym = stock_symbol(code)
+        start, end = stock_window(self._trade_date)
+        rows = self._collect_history(sym, "1K", start, end)
+        minutes: dict[str, int] = {}
+        skipped = 0
+        for r in rows:
+            try:
+                raw = str(r["Time"]).zfill(6)
+                hh = (int(raw[:2]) + 8) % 24
+                key = f"{hh:02d}{raw[2:4]}"
+                value = round(float(r["Close"]) * 1000)
+            except (KeyError, ValueError):
+                skipped += 1
+                continue
+            if "1330" < key <= "1335":
+                key = "1330"
+            if not ("0901" <= key <= "1330"):
+                continue
+            minutes[key] = value
+        if skipped:
+            logger.warning("1K minutes 解析略過 %d/%d 列", skipped, len(rows))
+        return minutes
+
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。
 

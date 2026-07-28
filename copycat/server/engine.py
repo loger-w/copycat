@@ -91,6 +91,11 @@ class EngineRuntime:
             symbols.update(c.symbol for c in self._active.contracts)
         return symbols
 
+    def spot_millipts(self) -> int | None:
+        """現貨(台指期)最新價;index-board txf_getter 用(IR1)。單值讀取免鎖(GIL 原子)。"""
+        agg = self._agg
+        return agg.spot_millipts if agg is not None else None
+
     def latest_snapshot(self) -> dict:
         if self._agg is None or self._active is None:
             # totals 必須是 None 而非空 dict:前端以 truthy 判斷有無數據(C-1)
