@@ -221,7 +221,7 @@ async def test_schedule_retry_single_flight() -> None:
         second = eng._retry_task  # type: ignore[attr-defined]
         await asyncio.sleep(0)
         assert first.cancelled()
-        assert second is not first and not second.done()
+        assert second is not None and second is not first and not second.done()
     finally:
         await eng.close()
 
