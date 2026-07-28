@@ -53,13 +53,12 @@ from copycat.server.trade import (
 
 logger = logging.getLogger(__name__)
 
-# sentinel:trade_source=None = 不建 trade(既有測試零連線);__main__ 傳 DEFAULT_TRADE 才建真 source
+# sentinel:__main__ 傳 DEFAULT_TRADE = 正式啟動旗標(TradeRuntime 已停用,SC-11;
+# 現僅用於 futures 行情引擎的預設接線 — __main__ 不動,lifespan 見 futures 段)
 DEFAULT_TRADE: Final = object()
 DEFAULT_STOCK: Final = object()  # 同語意:__main__ 傳入才建真 StockQuoteSource
 DEFAULT_INDEX: Final = object()  # 同語意(index-board IR9)
 DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
-
-_TRADE_START_TIMEOUT_SECS = 15.0
 
 
 class SelectBody(BaseModel):
@@ -94,16 +93,6 @@ def _default_source() -> QuoteSource:
         port=os.environ.get("TC4_PORT", "50774"),
         backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
     )
-
-
-def _default_trade_source() -> TradeSource:
-    if os.environ.get("TXO_FAKE_TRADE") == "1":
-        from copycat.server.fake_trade import FakeTradeSource
-
-        return FakeTradeSource()
-    from copycat.live.tc4_trade import TC4TradeSource  # 延遲 import:測試不觸 pyzmq/TC4
-
-    return TC4TradeSource(port=os.environ.get("TC4_TRADE_PORT", "51207"))
 
 
 def _default_stock_source() -> StockSource:
@@ -153,38 +142,13 @@ def create_app(
         )
         app.state.runtime = runtime
         await runtime.start()
-        # trade 初始化任何失敗都不得波及 quote(review B1):非預期例外 → 交易停用(503)
-        trade: TradeRuntime | None = None
-        try:
-            resolved = _default_trade_source() if trade_source is DEFAULT_TRADE else trade_source
-            if resolved is not None:
-                trade = TradeRuntime(
-                    cast(TradeSource, resolved),
-                    live_enabled=os.environ.get("DQ4_LIVE") == "1",
-                    sim_patterns=[
-                        p for p in os.environ.get("DQ4_SIM_BROKERS", "SIM").split(",") if p
-                    ],
-                    audit_dir=Path(os.environ.get("TXO_AUDIT_DIR", "data/audit")),
-                    allowed_symbols=runtime.orderable_symbols,
-                )
-                try:
-                    await asyncio.wait_for(trade.start(), _TRADE_START_TIMEOUT_SECS)
-                except (TimeoutError, TouchanceDownError):
-                    # R2-7:中段逾時 best-effort 清理 listener;app 照常起,quote 不受影響
-                    logger.warning("trade start 逾時/失敗,best-effort 清理後以 touchance_down 續行")
-                    try:
-                        await trade.close()
-                    except (TouchanceDownError, OSError):
-                        logger.exception("trade close 失敗(忽略)")
-        except Exception:  # lifespan 邊界:交易停用但 app 必須照常起 + logger.exception(§2)
-            logger.exception("trade 初始化非預期失敗,交易功能停用(quote 不受影響)")
-            if trade is not None:
-                try:
-                    await trade.close()
-                except Exception:
-                    logger.exception("trade close 失敗(忽略)")
-            trade = None
-        app.state.trade = trade
+        # TradeRuntime 停用(deprecated 2026-07-28 群益接手,capital-order SC-11):
+        # /api/trade routes 與 _TRADE_ERROR_MAP 保留,state.trade=None → _trade() 的
+        # NotReadyError 路徑天然 503 TRADE_NOT_READY;trade_source 參數(含 DEFAULT_TRADE
+        # sentinel)不再啟動任何東西,僅剩「正式啟動旗標」語意(futures 接線用,見下);
+        # TXO_FAKE_TRADE 分支一併失效。舊路 code(trade.py/tc4_trade.py/fake_trade.py)
+        # 保留,刪除候選記 docs/next-time.md。
+        app.state.trade = None
         # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
         stock: StockEngine | None = None
         try:
@@ -314,12 +278,6 @@ def create_app(
                     await stock.close()
                 except Exception:
                     logger.exception("stock close 失敗(關機續行)")
-            # trade 清理失敗不得擋掉 quote runtime 清理(review B2)
-            if trade is not None:
-                try:
-                    await trade.close()
-                except Exception:
-                    logger.exception("trade close 失敗(關機續行)")
             await runtime.close()
 
     app = FastAPI(lifespan=lifespan)
