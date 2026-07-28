@@ -3,15 +3,60 @@
 
 from __future__ import annotations
 
+import pytest
+
 from copycat.capital.balance import (
     BalanceCollector,
     ProfitRow,
     dedupe_positions,
+    merge_fut_positions,
     parse_balance_line,
     parse_open_interest_line,
     parse_profit_line,
 )
 from copycat.capital.models import Position
+
+
+# ── merge_fut_positions:同契約淨額合併(review A5)──────────────
+
+
+def test_merge_fut_positions_nets_buy_and_sell(caplog: pytest.LogCaptureFixture) -> None:
+    rows = [
+        Position(market="fut", stock_no="TXFI6", qty=3, avg_price=23000.0),
+        Position(market="fut", stock_no="TXFI6", qty=-1, avg_price=22900.0),
+    ]
+    with caplog.at_level("WARNING"):
+        out = merge_fut_positions(rows)
+    assert len(out) == 1
+    assert out[0].qty == 2  # B 正 S 負相加
+    assert any("TXFI6" in r.message for r in caplog.records)  # 合併發生要留痕
+
+
+def test_merge_fut_positions_same_side_sums() -> None:
+    rows = [
+        Position(market="fut", stock_no="TXFI6", qty=2, avg_price=23000.0),
+        Position(market="fut", stock_no="TXFI6", qty=1, avg_price=23100.0),
+    ]
+    out = merge_fut_positions(rows)
+    assert len(out) == 1 and out[0].qty == 3
+
+
+def test_merge_fut_positions_distinct_contracts_untouched() -> None:
+    rows = [
+        Position(market="fut", stock_no="TXFI6", qty=2),
+        Position(market="fut", stock_no="MXFI6", qty=-1),
+    ]
+    out = merge_fut_positions(rows)
+    assert [(p.stock_no, p.qty) for p in out] == [("TXFI6", 2), ("MXFI6", -1)]
+
+
+def test_merge_fut_positions_zero_net_dropped() -> None:
+    rows = [
+        Position(market="fut", stock_no="TXFI6", qty=1),
+        Position(market="fut", stock_no="TXFI6", qty=-1),
+    ]
+    assert merge_fut_positions(rows) == []  # 淨額 0 = 無部位,不佔一列
+
 
 # 今日買進 1 張現股:昨庫 0、今委買/買成 1000、即時庫存[14]=1000
 RAW_T_BOUGHT = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"

@@ -294,7 +294,7 @@ class _StubCom:
         return "", 0
 
     def correct_price(
-        self, user_id: str, full_account: str, seq_no: str, price: float
+        self, user_id: str, full_account: str, seq_no: str, price_str: str
     ) -> tuple[str, int]:
         return "", 0
 

@@ -89,6 +89,27 @@ def dedupe_positions(positions: list[Position]) -> list[Position]:
     return list(seen.values())
 
 
+def merge_fut_positions(rows: list[Position]) -> list[Position]:
+    """同契約多列期貨部位 → 淨額合併(B 正 S 負相加;review A5)。
+
+    store 以 stock_no 為鍵,B/S 兩列同 key 會互蓋成「後到的那列」;
+    淨額才是可平倉曝險。合併發生時 warning 留痕(prod 欄序假定下的異常訊號);
+    淨額 0 = 無部位,不佔一列。avg_price 等附屬欄保留首列值(淨額語意下
+    混合成本無單一正解,寧取首列不硬算)。
+    """
+    merged: dict[str, Position] = {}
+    for p in rows:
+        q = merged.get(p.stock_no)
+        if q is None:
+            merged[p.stock_no] = p
+            continue
+        logger.warning(
+            "同契約多列期貨部位 %s: %+d口 + %+d口 → 淨額合併", p.stock_no, q.qty, p.qty
+        )
+        q.qty += p.qty
+    return [p for p in merged.values() if p.qty != 0]
+
+
 # OnOpenInterest(GetOpenInterestGW nFormat=1)假定欄序(群益手冊慣例):
 # [0]市場 [1]帳號 [2]商品(期交所契約碼) [3]買賣別 B/S [4]口數 [5]當沖口數 [6]平均成本
 _OI_IDX_CONTRACT = 2

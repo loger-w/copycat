@@ -422,7 +422,7 @@ class TestCancelCorrectDecrease:
             )
             assert res.status_code == 200
             assert _sent(com, "correct_price") == [
-                ("correct_price", "1234567890A", "00000000001", 91.0)
+                ("correct_price", "1234567890A", "00000000001", "91.00")  # A6:COM 收字串
             ]
             assert _sent(com, "decrease") == [("decrease", "1234567890A", "00000000001", 1)]
 

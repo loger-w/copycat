@@ -3,8 +3,9 @@
 STOCKORDER 映射照搬 treading-king backend/services/capital_mapping.py(enum → Literal);
 FUTUREORDER 用欄依 Task 0 spike 定案(docs/research/2026-07-28-skcom-typelib.md):
 bstrFullAccount / bstrStockNo(=期交所契約碼)/ bstrPrice / sTradeType / sBuySell /
-sDayTrade / sNewClose / nQty,餘欄不設。期交所市價單僅允許 IOC/FOK,mapping 層強制
-market → IOC + bstrPrice="M"(test 沙盒未開通,literal 未實測;design §5 R4)。
+sDayTrade / sNewClose / nQty,餘欄不設。期交所市價單僅允許 IOC/FOK,mapping 層對
+market+ROD 升 IOC(FOK 保留,review A9)+ bstrPrice="M"(test 沙盒未開通,literal
+未實測;design §5 R4)。
 月碼:期貨/Call 1-12 → A..L、Put 1-12 → M..X;年末碼 = 西元年最後一位。
 """
 
@@ -122,10 +123,11 @@ def to_exchange_symbol(tc4_symbol: str, *, resolved_ym: str | None = None) -> st
     raise ValueError(f"cannot parse TC4 symbol: {tc4_symbol!r}")
 
 
-def _future_price_str(price: float) -> str:
-    """限價 → 數字字串:整數價去小數("23000")、有小數保留("96.5")。
+def future_price_str(price: float) -> str:
+    """期貨限價 → 數字字串:整數價去小數("23000")、有小數保留("96.5")。
 
     Decimal(str(price)) 避免 float 尾差(同 live/trade_models.price_str_from_millipts 手法)。
+    送單與改價(review A6)共用 — 期貨端價格字串格式單一出口。
     """
     return format(Decimal(str(price)).normalize(), "f")
 
@@ -161,9 +163,11 @@ def to_futureorder_fields(
     """
     if req.price_type == "market":
         price_str = "M"
-        trade_type = _TIF["IOC"]
+        # 期交所市價不允許 ROD(掛整天)→ 升 IOC;FOK(全成或全撤)是使用者
+        # 明示意圖,不可靜默降級(review A9)
+        trade_type = _TIF["IOC"] if req.time_in_force == "ROD" else _TIF[req.time_in_force]
     else:
-        price_str = _future_price_str(req.price)
+        price_str = future_price_str(req.price)
         trade_type = _TIF[req.time_in_force]
     return {
         "bstrFullAccount": futures_account,

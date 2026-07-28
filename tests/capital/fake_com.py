@@ -73,9 +73,9 @@ class FakeCom:
         return "OK", 0
 
     def correct_price(
-        self, user_id: str, full_account: str, seq_no: str, price: float
+        self, user_id: str, full_account: str, seq_no: str, price_str: str
     ) -> tuple[str, int]:
-        self.sent.append(("correct_price", full_account, seq_no, price))
+        self.sent.append(("correct_price", full_account, seq_no, price_str))
         return "OK", 0
 
     def decrease_qty(
@@ -127,9 +127,9 @@ class RejectingCom(FakeCom):
         return self.reject
 
     def correct_price(
-        self, user_id: str, full_account: str, seq_no: str, price: float
+        self, user_id: str, full_account: str, seq_no: str, price_str: str
     ) -> tuple[str, int]:
-        self.sent.append(("correct_price", full_account, seq_no, price))
+        self.sent.append(("correct_price", full_account, seq_no, price_str))
         return self.reject
 
     def decrease_qty(

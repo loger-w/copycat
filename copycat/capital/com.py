@@ -43,8 +43,8 @@ class CapitalCom(Protocol):
     ) -> tuple[str, int]: ...  # 期權共用 FUTUREORDER struct;is_option 決定 SendOptionOrder
     def cancel_order(self, user_id: str, full_account: str, seq_no: str) -> tuple[str, int]: ...
     def correct_price(
-        self, user_id: str, full_account: str, seq_no: str, price: float
-    ) -> tuple[str, int]: ...
+        self, user_id: str, full_account: str, seq_no: str, price_str: str
+    ) -> tuple[str, int]: ...  # 價格字串由 client 依 market 格式化(review A6)
     def decrease_qty(
         self, user_id: str, full_account: str, seq_no: str, qty: int
     ) -> tuple[str, int]: ...
@@ -173,11 +173,13 @@ class SkcomCapitalCom:
         return message, code
 
     def correct_price(
-        self, user_id: str, full_account: str, seq_no: str, price: float
+        self, user_id: str, full_account: str, seq_no: str, price_str: str
     ) -> tuple[str, int]:
-        # 末參數 nTradeType=0(ROD),同官方範例;價格字串化 %.2f 與送單一致
+        # 末參數 nTradeType=0(ROD),同官方範例;對期權 IOC/FOK 單的影響
+        # prod 首驗(review A6 next-time)。價格字串由 client 依 market 格式化
+        # (sec 兩位小數 / fut 走 mapping.future_price_str),此處原樣傳。
         message, code = self._order.CorrectPriceBySeqNo(
-            user_id, 0, full_account, seq_no, f"{price:.2f}", 0
+            user_id, 0, full_account, seq_no, price_str, 0
         )
         return message, code
 

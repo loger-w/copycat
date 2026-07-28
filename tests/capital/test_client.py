@@ -73,15 +73,17 @@ def _mark_ready(client: CapitalClient, futures_account: str | None = "F9999999")
 async def _drive(
     client: CapitalClient, factory: Callable[[], Awaitable[OrderResult]]
 ) -> OrderResult:
-    """測試替代 COM 執行緒:綁 running loop、投遞後同步 drain 佇列(與 _run 同構)。"""
+    """測試替代 COM 執行緒:綁 running loop、邊讓步邊 drain 佇列(與 _run 同構)。
+    審計走 to_thread(review B6)→ 命令入佇列的時點跨多輪 loop,
+    需輪詢至 task 完成(卡死由 _WRITE_TIMEOUT_S 10s 收束,不會無限迴圈)。"""
     client._loop = asyncio.get_running_loop()
     task = asyncio.ensure_future(factory())
-    await asyncio.sleep(0)  # 讓 coroutine 先把命令投進佇列
-    while True:
+    while not task.done():
+        await asyncio.sleep(0)
         try:
             cmd = client._cmd_q.get_nowait()
         except queue.Empty:
-            break
+            continue
         if cmd is None:
             continue
         fn, fut = cmd
@@ -463,7 +465,8 @@ async def test_correct_price_sec_amount_gate_in_lots(tmp_path: Path) -> None:
         lambda: client.correct_price(CorrectPriceRequest(seq_no="S9", market="sec", price=95.0)),
     )
     assert res.ok is True
-    assert ("correct_price", "1234567890A", "S9", 95.0) in com.sent
+    # review A6:COM 介面收字串,證券兩位小數(送單同慣例)
+    assert ("correct_price", "1234567890A", "S9", "95.00") in com.sent
 
 
 async def test_correct_price_fut_multiplier_lookup(tmp_path: Path) -> None:
@@ -504,7 +507,7 @@ async def test_correct_price_fut_unknown_product_falls_back_multiplier_1(
             ),
         )
     assert res.ok is True  # 23000×2×1 = 46,000 ≤ 1M(multiplier=1 fallback)
-    assert ("correct_price", "F9999999", "F2", 23000.0) in com.sent
+    assert ("correct_price", "F9999999", "F2", "23000") in com.sent  # fut 整數價無小數尾(A6)
     assert any("multiplier=1" in r.message for r in caplog.records)
 
 
@@ -518,7 +521,24 @@ async def test_correct_price_unknown_seq_allowed_r3(tmp_path: Path) -> None:
         lambda: client.correct_price(CorrectPriceRequest(seq_no="ghost", market="sec", price=9.0)),
     )
     assert res.ok is True
-    assert ("correct_price", "1234567890A", "ghost", 9.0) in com.sent
+    assert ("correct_price", "1234567890A", "ghost", "9.00") in com.sent
+
+
+async def test_correct_price_fut_price_string_no_decimal_tail(tmp_path: Path) -> None:
+    # review A6:期貨改價價格字串走 mapping.future_price_str(整數價無 ".00" 尾),
+    # 證券才是兩位小數 — %.2f 全市場共用會讓期貨端收到 "23000.00"
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_fut_evt_raw("F1", contract="TXFI6")))
+    res = await _drive(
+        client,
+        lambda: client.correct_price(
+            CorrectPriceRequest(seq_no="F1", market="fut", price=23000.0)
+        ),
+    )
+    assert res.ok is True
+    assert ("correct_price", "F9999999", "F1", "23000") in com.sent
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +679,20 @@ def test_run_thread_exit_drops_status_and_drains_pending(tmp_path: Path) -> None
         loop.close()
 
 
+def test_run_survives_closed_loop_on_result_settle(tmp_path: Path) -> None:
+    # review B5:主圈 call_soon_threadsafe 撞上已關閉 loop(行程收尾競態)
+    # 不可讓例外炸出 _run — 對齊 _drain_pending 的 RuntimeError guard
+    com = RecordingCom()
+    client = _client(com, tmp_path)
+    loop = asyncio.new_event_loop()
+    fut: asyncio.Future[tuple[str, int]] = loop.create_future()
+    loop.close()
+    client._loop = loop
+    client._cmd_q.put(((lambda: ("OK", 0)), fut))
+    client._run()  # 不得 raise:RuntimeError → log + break → finally 收尾
+    assert client.status == "error"
+
+
 def test_pump_once_swallows_exceptions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)  # 防洪水節流不拖慢測試
     com = FakeCom()
@@ -732,6 +766,37 @@ async def test_close_sec_builds_reverse_order_and_blocks_second_inflight(tmp_pat
     assert ei.value.reason is not None and "在途" in ei.value.reason
     assert len(com.sent) == 1
     assert "在途" in _audit_lines(client)[-1]["blocked"]
+
+
+async def test_close_inflight_unlocked_when_gate_blocks_submit(tmp_path: Path) -> None:
+    # review A8:submit 被前置閘擋下(錢沒動)→ in-flight 鎖解除,
+    # 立即重試看到的是真正的擋單原因,不是「在途」
+    com = FakeCom()
+    client = _client(com, tmp_path, enabled=False)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="sec", stock_no="2330", qty=1, kind="cash")])
+    req = PositionCloseRequest(market="sec", key="2330", price=590.0)
+    for _ in range(2):  # 第二次不可被「在途」擋
+        with pytest.raises(CapitalGateBlockedError) as ei:
+            await client.close_position(req)
+        assert ei.value.reason == "order_disabled"
+    assert "2330" not in client._close_inflight
+    assert com.sent == []
+
+
+async def test_close_fut_inflight_unlocked_when_gate_blocks_submit(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path, enabled=False)
+    _mark_ready(client)
+    client.store.set_positions(
+        [Position(market="fut", stock_no="TXFI6", qty=1, avg_price=23000.0)]
+    )
+    req = PositionCloseRequest(market="fut", key="TXFI6", price=22000.0)
+    for _ in range(2):
+        with pytest.raises(CapitalGateBlockedError) as ei:
+            await client.close_position(req)
+        assert ei.value.reason == "order_disabled"
+    assert "TXFI6" not in client._close_inflight
 
 
 async def test_close_sec_no_position_blocked(tmp_path: Path) -> None:
@@ -853,6 +918,64 @@ def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
     assert sec.avg_price == 150.55  # 損益回填進 pending 再合併發布
     assert fut is not None and fut.market == "fut" and fut.qty == 2 and fut.avg_price == 23000.0
     assert any(p["event"] == "capital_position" for p in pushed)
+
+
+def test_oi_same_contract_rows_netted(tmp_path: Path) -> None:
+    # review A5:OI 同契約 B/S 兩列 → 淨額合併,不可兩列同 key 互蓋
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("TF,F9999999,TXFI6,B,3,0,23000.0")
+    client._handle_open_interest("TF,F9999999,TXFI6,S,1,0,23100.0")
+    client._handle_open_interest("##")
+    fut = client.store.position_for("TXFI6")
+    assert fut is not None and fut.qty == 2  # B3 + S(-1) 淨額
+
+
+def test_oi_failure_keeps_previous_fut_positions(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # review A7:OI 查詢 rc≠0 → 沿用上一輪 fut 部位,不可清空(閃斷把面板期貨部位歸零)
+    class OiFailCom(FakeCom):
+        def get_open_interest(self, user_id: str, futures_account: str) -> int:
+            self.sent.append(("get_open_interest", futures_account))
+            return 1
+
+    com = OiFailCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(
+        [Position(market="fut", stock_no="TXFI6", qty=2, avg_price=23000.0)]
+    )
+    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    with caplog.at_level("WARNING"):
+        client._handle_balance(bal)
+        client._handle_balance("##")
+        client._handle_profit("##,,,,")
+    fut = client.store.position_for("TXFI6")
+    assert fut is not None and fut.qty == 2  # 舊 fut 沿用
+    sec = client.store.position_for("3357")
+    assert sec is not None and sec.qty == 3  # 新證券段照常發布
+    assert any("沿用" in r.message for r in caplog.records)
+
+
+def test_oi_pending_timeout_keeps_previous_fut_positions(tmp_path: Path) -> None:
+    # review A7:pending watchdog 逾時同樣沿用舊 fut 部位
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(
+        [Position(market="fut", stock_no="TXFI6", qty=1, avg_price=23000.0)]
+    )
+    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    client._handle_balance(bal)
+    client._handle_balance("##")
+    client._pending_deadline = 0.0  # 損益/OI 卡死 → 強制逾時
+    client._pump_once()
+    fut = client.store.position_for("TXFI6")
+    assert fut is not None and fut.qty == 1
 
 
 def test_balance_chain_without_futures_account_publishes_sec_only(tmp_path: Path) -> None:

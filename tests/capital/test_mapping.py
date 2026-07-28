@@ -142,7 +142,16 @@ def test_future_market_forces_ioc_and_m_literal() -> None:
         _fut(price_type="market", time_in_force="ROD"), "acc", contract="TXFI6"
     )
     assert f["bstrPrice"] == "M"  # 市價 literal(spike 定案 M,未實測)
-    assert f["sTradeType"] == 1  # 市價強制 IOC,ROD 靜默升級
+    assert f["sTradeType"] == 1  # 市價 ROD(不可市價掛整天)→ 升 IOC
+
+
+def test_future_market_fok_keeps_fok() -> None:
+    # review A9:市價單僅 ROD 升 IOC;使用者明示 FOK(全成或全撤)不可被靜默降成 IOC
+    f = to_futureorder_fields(
+        _fut(price_type="market", time_in_force="FOK"), "acc", contract="TXFI6"
+    )
+    assert f["bstrPrice"] == "M"
+    assert f["sTradeType"] == 2  # FOK 保留
 
 
 def test_future_new_close_override() -> None:

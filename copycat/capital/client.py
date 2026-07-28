@@ -23,7 +23,7 @@ import logging
 import queue
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from pathlib import Path
 
@@ -31,6 +31,7 @@ from copycat.capital.balance import (
     BalanceCollector,
     ProfitRow,
     dedupe_positions,
+    merge_fut_positions,
     parse_open_interest_line,
     parse_profit_line,
 )
@@ -38,6 +39,7 @@ from copycat.capital.close import build_close_order, build_future_close_order
 from copycat.capital.com import CapitalCom
 from copycat.capital.mapping import (
     exchange_product_of,
+    future_price_str,
     multiplier_of,
     to_futureorder_fields,
     to_stockorder_fields,
@@ -70,7 +72,7 @@ from copycat.capital.safety import (
 )
 from copycat.capital.store import CapitalStore
 from copycat.live.trade_models import BrokerRejectedError
-from copycat.server.audit import append_audit
+from copycat.server.audit import AuditWriteError, append_audit
 
 logger = logging.getLogger(__name__)
 
@@ -233,15 +235,16 @@ class CapitalClient:
             "result": dataclasses.asdict(result) if result is not None else None,
         }
 
-    def _audit_blocked(self, action: str, req: _WriteReq, reason: str) -> None:
-        """拒單審計:寫不進去照樣 raise AuditWriteError — 錢沒動,寧可整筆失敗。"""
-        self._audit(self._record(action, req, blocked=reason))
+    async def _audit_blocked(self, action: str, req: _WriteReq, reason: str) -> None:
+        """拒單審計:寫不進去照樣 raise AuditWriteError — 錢沒動,寧可整筆失敗。
+        to_thread:同步寫檔不可卡 event loop(review B6;例外原樣透傳)。"""
+        await asyncio.to_thread(self._audit, self._record(action, req, blocked=reason))
 
-    def _audit_after(self, action: str, req: _WriteReq, result: OrderResult) -> None:
+    async def _audit_after(self, action: str, req: _WriteReq, result: OrderResult) -> None:
         """命令已出手後的審計:寫檔失敗只能記 log,
         不可把已送進群益的單回報成失敗(誘發重送)。"""
         try:
-            self._audit(self._record(action, req, result=result))
+            await asyncio.to_thread(self._audit, self._record(action, req, result=result))
         except Exception:
             logger.exception("審計後置寫入失敗(action=%s)— 委託已送出,結果未入帳: %s", action, result)
 
@@ -374,7 +377,8 @@ class CapitalClient:
         self._query_open_interest()
 
     def _query_open_interest(self) -> None:
-        """期貨部位查詢(串行末段);無期貨帳號/查詢失敗 → 直接以證券部位收尾。"""
+        """期貨部位查詢(串行末段);無期貨帳號 → fut 恆空;查詢失敗 → 沿用上一輪
+        fut 部位收尾(review A7:閃斷不可把面板期貨部位清空)。"""
         if self._futures_account is None:
             self._finalize_positions([])
             return
@@ -382,10 +386,17 @@ class CapitalClient:
         rc = self._com.get_open_interest(self._user_id, self._futures_account)
         if rc != 0:
             logger.warning("GetOpenInterestGW rc=%s: %s", rc, self._com.return_code_message(rc))
-            self._finalize_positions([])
+            self._finalize_positions(self._stale_fut_positions())
+
+    def _stale_fut_positions(self) -> list[Position]:
+        """OI 查詢失敗/逾時:沿用 store 既有 fut 部位(review A7)。
+        僅 OI 成功回報(_on_oi_complete)才全量覆蓋 fut 段。"""
+        stale = [p for p in self.store.positions() if p.market == "fut"]
+        logger.warning("期貨部位查詢未完成 — 沿用上一輪 fut 部位(%d 列)", len(stale))
+        return stale
 
     def _on_oi_complete(self, rows: list[Position]) -> None:
-        self._finalize_positions(rows)
+        self._finalize_positions(merge_fut_positions(rows))
 
     def _finalize_positions(self, fut_rows: list[Position]) -> None:
         """證券(pending)+ 期貨合併,一次全量覆蓋 store(set_positions 全量語意,
@@ -407,7 +418,7 @@ class CapitalClient:
             return
         if time.monotonic() >= self._pending_deadline:
             logger.warning("部位合併逾時(損益/期貨查詢未完成)— 以已收證券部位寫入")
-            self._finalize_positions([])
+            self._finalize_positions(self._stale_fut_positions())  # fut 沿用上一輪(A7)
 
     # ------------------------------------------------------------------ 執行緒生命週期
 
@@ -417,7 +428,9 @@ class CapitalClient:
         self._thread.start()
 
     def close(self) -> None:
-        """關機:投終止訊號 + join(timeout=5)。執行緒側 finally 會降 status 並 drain。"""
+        """關機:投終止訊號 + join(timeout=5)。執行緒側 finally 會降 status 並 drain。
+        join 逾時不 raise(review B5):COM 呼叫卡死時執行緒可能還活著,
+        daemon 執行緒隨行程結束回收 — 不為等它阻塞關機。"""
         self._cmd_q.put(None)
         t = self._thread
         if t is not None:
@@ -527,7 +540,13 @@ class CapitalClient:
                     exc = e
                 loop = self._loop
                 if loop is not None:
-                    loop.call_soon_threadsafe(_settle, fut, result, exc)
+                    try:
+                        loop.call_soon_threadsafe(_settle, fut, result, exc)
+                    except RuntimeError:
+                        # loop 已關閉(行程收尾競態)— 對齊 _drain_pending 的 guard
+                        # (review B5):結果無從回傳,終止執行緒走 finally 收尾
+                        logger.error("event loop 已關閉,寫入結果無法回傳 — COM 執行緒終止")
+                        break
         finally:
             # 執行緒亡故必須降 status:否則寫入請求進佇列後 future 永不 resolve,UI 還顯示健康
             if not self._last_error:
@@ -574,13 +593,14 @@ class CapitalClient:
         所有「拒絕/失敗」路徑都留審計 —— 真錢寫入,事後要能查帳(design §3/§9)。"""
         if not gate.allowed:
             reason = gate.reason or "blocked"
-            self._audit_blocked(action, req, reason)
+            await self._audit_blocked(action, req, reason)
             raise CapitalGateBlockedError(reason)
         # degraded(回報斷線)放行:送單通道獨立可用,且刪單/平倉是降風險操作
         if self._status not in ("ok", "degraded") or self._loop is None:
-            self._audit_blocked(action, req, "capital_not_ready")
+            await self._audit_blocked(action, req, "capital_not_ready")
             raise CapitalNotReadyError("群益未就緒(尚未登入或執行緒未啟動)")
-        self._audit(self._record(action, req))  # 前置:寫不進去 → AuditWriteError,錢沒動
+        # 前置:寫不進去 → AuditWriteError,錢沒動(to_thread 不卡 loop,review B6)
+        await asyncio.to_thread(self._audit, self._record(action, req))
         fut: asyncio.Future[tuple[str, int]] = self._loop.create_future()
         self._cmd_q.put((com_call, fut))
         try:
@@ -591,7 +611,7 @@ class CapitalClient:
             # 命令可能已送進群益(同步呼叫卡在群益端)→ 結果未知,
             # 不可回「失敗」誘發重送;照樣審計留帳;晚到結果補 late 行
             result = OrderResult(ok=False, code=-1, message="結果未知,勿重送", seq_no=None)
-            self._audit_after(action, req, result)
+            await self._audit_after(action, req, result)
             fut.add_done_callback(lambda f: self._on_late_result(action, req, f))
             return result
         except asyncio.CancelledError:
@@ -602,7 +622,7 @@ class CapitalClient:
             result = OrderResult(
                 ok=False, code=-1, message=f"COM 例外: {type(e).__name__}: {e}", seq_no=None
             )
-            self._audit_after(action, req, result)
+            await self._audit_after(action, req, result)
             raise CapitalDownError(result.message) from e
         ok = code == 0
         text = f"{self._com.return_code_message(code)} {message}".strip()
@@ -612,7 +632,7 @@ class CapitalClient:
             message=(message_prefix + text) if message_prefix else text,
             seq_no=(message.strip() or None) if ok else None,
         )
-        self._audit_after(action, req, result)
+        await self._audit_after(action, req, result)
         if not ok:
             # 群益明確拒絕(code≠0):審計後置照寫,再透傳 400 BROKER_REJECTED
             # (design §6;review A2/C1)。timeout「結果未知」(code=-1)不走這裡。
@@ -726,9 +746,14 @@ class CapitalClient:
             else:
                 mult = self._fut_multiplier(req.seq_no)
             gate = check_correct_price(req.price, remaining, self._safety, multiplier=mult)
+        # COM 介面收字串,依 market 格式化:證券兩位小數、期貨走送單同款
+        # future_price_str(整數價無小數尾;review A6)
+        price_str = (
+            f"{req.price:.2f}" if req.market == "sec" else future_price_str(req.price)
+        )
 
         def _do() -> tuple[str, int]:
-            return self._com.correct_price(self._user_id, account, req.seq_no, req.price)
+            return self._com.correct_price(self._user_id, account, req.seq_no, price_str)
 
         return await self._execute_write(action="correct_price", req=req, gate=gate, com_call=_do)
 
@@ -759,41 +784,58 @@ class CapitalClient:
                 return f"{key} 已有同向活躍委託(seq={o.seq_no}),請先刪單或等其成交"
         return None
 
-    def _close_blocked(self, req: PositionCloseRequest, reason: str) -> CapitalGateBlockedError:
-        self._audit_blocked("close", req, reason)
+    async def _close_blocked(
+        self, req: PositionCloseRequest, reason: str
+    ) -> CapitalGateBlockedError:
+        await self._audit_blocked("close", req, reason)
         return CapitalGateBlockedError(reason)
+
+    async def _submit_close_locked(
+        self, req: PositionCloseRequest, submit: Callable[[], Awaitable[OrderResult]]
+    ) -> OrderResult:
+        """in-flight 標記 + 送單。await 前就標記:同 loop 上的併發請求才擋得住。
+        submit 被前置閘擋下(CapitalGateBlockedError / AuditWriteError / NotReady,
+        錢沒動)→ 解鎖再 re-raise,立即重試不被「在途」擋(review A8);
+        逾時/COM 例外的結果未知 → 不解鎖,寧可鎖滿窗口(多鎖 10s 是可接受代價)。"""
+        self._close_inflight[req.key] = time.monotonic() + _CLOSE_INFLIGHT_S
+        try:
+            return await submit()
+        except (CapitalGateBlockedError, AuditWriteError, CapitalNotReadyError):
+            self._close_inflight.pop(req.key, None)
+            raise
 
     async def close_position(self, req: PositionCloseRequest) -> OrderResult:
         if req.market == "sec":
             pos = self.store.position_for(req.key)
             if pos is None or pos.qty == 0 or pos.market != "sec":
-                raise self._close_blocked(req, f"{req.key} 無部位可平")
+                raise await self._close_blocked(req, f"{req.key} 無部位可平")
             try:
                 # kind 來自即時庫存 — 融資部位平倉送融資賣,不可送現股賣
                 order = build_close_order(pos, req)
             except ValueError as e:
-                raise self._close_blocked(req, str(e)) from e
+                raise await self._close_blocked(req, str(e)) from e
             reason = self._close_dup_reason(req.key, order.buy_sell)
             if reason:
-                raise self._close_blocked(req, reason)
-            # await 前就標記:同 loop 上的併發請求才擋得住。失敗也不提前解鎖 —
-            # 逾時/COM 例外的結果未知,寧可鎖滿窗口(多鎖 10s 是可接受代價)
-            self._close_inflight[req.key] = time.monotonic() + _CLOSE_INFLIGHT_S
-            return await self.submit_stock_order(order, action="close")
+                raise await self._close_blocked(req, reason)
+            return await self._submit_close_locked(
+                req, lambda: self.submit_stock_order(order, action="close")
+            )
 
         pos = self.store.position_for(req.key)
         if pos is None or pos.qty == 0 or pos.market != "fut":
-            raise self._close_blocked(req, f"{req.key} 無部位可平")
+            raise await self._close_blocked(req, f"{req.key} 無部位可平")
         try:
             # 反向 限價貼漲跌停 + IOC(design amendment);tc4_symbol 欄存期交所契約碼
-            order = build_future_close_order(pos, req)
+            fut_order = build_future_close_order(pos, req)
         except ValueError as e:
-            raise self._close_blocked(req, str(e)) from e
-        reason = self._close_dup_reason(req.key, order.buy_sell)
+            raise await self._close_blocked(req, str(e)) from e
+        reason = self._close_dup_reason(req.key, fut_order.buy_sell)
         if reason:
-            raise self._close_blocked(req, reason)
+            raise await self._close_blocked(req, reason)
         multiplier = self._multiplier_for_contract(req.key, seq_no="(close)")
-        self._close_inflight[req.key] = time.monotonic() + _CLOSE_INFLIGHT_S
-        return await self.submit_future_order(
-            order, contract=req.key, multiplier=multiplier, new_close=1, action="close"
+        return await self._submit_close_locked(
+            req,
+            lambda: self.submit_future_order(
+                fut_order, contract=req.key, multiplier=multiplier, new_close=1, action="close"
+            ),
         )
