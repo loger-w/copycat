@@ -94,9 +94,17 @@ describe("useIndexStream", () => {
   it("trade_date 變更 → 清 minutes 並 refetch(F3)", async () => {
     const { hook, ws } = await setup();
     const before = fetchMock.mock.calls.length;
+    // 換日後 server state 也已是新日(真實時序)
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ ...STATE, trade_date: "2026-07-29", twse: { ...STATE.twse, minutes: { "0901": 1 } } }),
+        ),
+    );
     act(() => ws.emit(wsMsg({ trade_date: "2026-07-29" } as never)));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
-    expect(hook.result.current.tradeDate).toBe("2026-07-29");
+    await waitFor(() => expect(hook.result.current.tradeDate).toBe("2026-07-29"));
+    expect(hook.result.current.twse!.minutes).toEqual({ "0901": 1 }); // 舊日 minutes 已清
   });
 
   it("WS reconnect → refetch state 全量(F3)", async () => {
