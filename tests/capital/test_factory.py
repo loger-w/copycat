@@ -16,6 +16,10 @@ import copycat.capital.factory as factory_mod
 from copycat.capital.com import SkcomCapitalCom
 from copycat.capital.factory import get_capital
 
+# 收集期捕捉真 dotenv 解析函式 — conftest autouse 會把它換成 lambda: {}
+# (經 `import tests.conftest` 拿會踩雙重 import,捕到已 patch 的假貨)
+_REAL_DOTENV_VALUES = factory_mod._dotenv_values
+
 _ENV_KEYS = (
     "CAPITAL_USER_ID",
     "CAPITAL_PASSWORD",
@@ -203,6 +207,7 @@ class TestDotenvFallback:
     def test_reads_capital_keys_from_repo_dotenv(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        monkeypatch.setattr(factory_mod, "_dotenv_values", _REAL_DOTENV_VALUES)
         (tmp_path / ".env").write_text(
             "CAPITAL_USER_ID=A123456789\nCAPITAL_ENV=test\nCAPITAL_PASSWORD=pw\n"
             "CAPITAL_FULL_ACCOUNT=9800123\n# comment\nCAPITAL_MAX_QTY=\n",
@@ -217,6 +222,7 @@ class TestDotenvFallback:
     def test_os_environ_wins_over_dotenv(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        monkeypatch.setattr(factory_mod, "_dotenv_values", _REAL_DOTENV_VALUES)
         (tmp_path / ".env").write_text(
             "CAPITAL_USER_ID=FILEUSER99\nCAPITAL_ENV=prod\n", encoding="utf-8"
         )
