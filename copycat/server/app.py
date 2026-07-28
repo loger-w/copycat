@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import date as _date
 from pathlib import Path
-from typing import AsyncGenerator, Final, Literal, cast
+from typing import AsyncGenerator, Callable, Final, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +23,8 @@ from copycat.live.trade_models import (
 )
 from copycat.server.audit import AuditWriteError
 from copycat.server.engine import EngineRuntime, QuoteSource
+from copycat.server.index_engine import IndexEngine, IndexSource
+from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 # sentinel:trade_source=None = 不建 trade(既有測試零連線);__main__ 傳 DEFAULT_TRADE 才建真 source
 DEFAULT_TRADE: Final = object()
 DEFAULT_STOCK: Final = object()  # 同語意:__main__ 傳入才建真 StockQuoteSource
+DEFAULT_INDEX: Final = object()  # 同語意(index-board IR9)
 
 _TRADE_START_TIMEOUT_SECS = 15.0
 
@@ -104,11 +107,19 @@ def _default_stock_source() -> StockSource:
     return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
 
 
+def _default_index_source() -> IndexSource:
+    from copycat.live.stock_source import StockQuoteSource  # 獨立 session(指數專用)
+
+    return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+
+
 def create_app(
     source: QuoteSource | None = None,
     *,
     trade_source: TradeSource | object | None = None,
     stock_source: StockSource | object | None = None,
+    index_source: IndexSource | object | None = None,
+    index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
@@ -189,9 +200,43 @@ def create_app(
                     logger.exception("stock close 失敗(忽略)")
             stock = None
         app.state.stock = stock
+        # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
+        index: IndexEngine | None = None
+        try:
+            resolved_index = (
+                _default_index_source() if index_source is DEFAULT_INDEX else index_source
+            )
+            if resolved_index is not None:
+                import datetime as _dt
+
+                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+                index = IndexEngine(
+                    cast(IndexSource, resolved_index),
+                    # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
+                    txf_getter=runtime.spot_millipts,
+                    mis_fetch=index_mis_fetch,
+                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+                    rollover=backfill_date is None,
+                    throttle_secs=throttle_secs,
+                )
+                await index.start()
+        except Exception:
+            logger.exception("index engine 初始化非預期失敗,指數功能停用(其餘不受影響)")
+            if index is not None:
+                try:
+                    await index.close()
+                except Exception:
+                    logger.exception("index close 失敗(忽略)")
+            index = None
+        app.state.index = index
         try:
             yield
         finally:
+            if index is not None:
+                try:
+                    await index.close()
+                except Exception:
+                    logger.exception("index close 失敗(關機續行)")
             if stock is not None:
                 try:
                     await stock.close()
@@ -309,6 +354,28 @@ def create_app(
             raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
         await stock.set_main(code)  # 含回補觸發(design §2.5)
         return stock.snapshot(code)
+
+    # ---- index(指數看盤;index-board SC-4)----
+
+    @app.get("/api/index/state")
+    async def index_state(request: Request) -> dict:
+        index: IndexEngine | None = request.app.state.index
+        if index is None:
+            raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+        return index.state()
+
+    @app.websocket("/ws/index")
+    async def ws_index(websocket: WebSocket) -> None:
+        index: IndexEngine | None = websocket.app.state.index
+        await websocket.accept()
+        if index is None:
+            await websocket.close()
+            return
+        try:
+            async for msg in index.stream():
+                await websocket.send_json(msg)
+        except WebSocketDisconnect:
+            return
 
     @app.websocket("/ws/stock")
     async def ws_stock(websocket: WebSocket) -> None:
