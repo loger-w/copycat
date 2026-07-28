@@ -38,6 +38,7 @@ class FakeSource:
         self.unsubscribed: list[str] = []
         self.leaf_subscribed: list[tuple[str, str]] = []
         self.fail_subscribe: set[str] = set()
+        self.fail_leaf: set[str] = set()
         self.closed = False
         self.on_message: Callable[[dict], None] | None = None
 
@@ -47,6 +48,8 @@ class FakeSource:
         self.subscribed.append(product)
 
     def subscribe_leaf(self, product: str, ym: str) -> None:
+        if product in self.fail_leaf:
+            raise ConnectionError(f"SUBQUOTE fail {product} {ym}")
         self.leaf_subscribed.append((product, ym))
 
     def unsubscribe_symbol(self, product: str) -> None:
@@ -275,6 +278,7 @@ class TestLeafFallbackSubscribe:
         await engine.close()
 
     async def test_no_leaf_subscribe_after_close(self) -> None:
+        # review I1:close 前排入 leaf(grace 內)→ close() → 不得重連(無 subscribe_leaf、無例外)
         src = FakeSource()
         engine = FuturesEngine(lambda: src, leaf_grace_secs=0.05)
         await engine.start()
@@ -282,3 +286,41 @@ class TestLeafFallbackSubscribe:
         await engine.close()
         await asyncio.sleep(0.1)
         assert src.leaf_subscribed == []
+        assert src.closed
+
+    async def test_month_rollover_rearms_leaf_fed_products(self) -> None:
+        # review I2/T6:結算換月後 leaf-fed 商品不可永久凍結 — 跨日重新武裝,補訂新月 leaf
+        src = FakeSource()
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") in src.leaf_subscribed
+        _push(src, _quote(Symbol="TC.F.TWF.TXF.202608"))  # leaf 推播回填 → pending 判準已消耗
+        await _drain()
+        assert engine.state()["products"]["TXF"]["p"] is not None
+        # 換月:MXF 推新月 ym + 跨日 date 變更 → TXF(曾 leaf-fed)p 清 None 重新武裝
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202609", TradeDate="20260819"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202609") in src.leaf_subscribed
+        await engine.close()
+
+    async def test_leaf_failure_not_fatal_and_retried_next_round(self) -> None:
+        # review I3/T7:leaf 失敗不炸 engine、不消耗 one-shot — 下輪推播重排重試
+        src = FakeSource()
+        src.fail_leaf.add("TXF")
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") not in src.leaf_subscribed  # 失敗(raise)但 engine 不炸
+        assert ("TMF", "202608") in src.leaf_subscribed  # 其他商品不受牽連
+        src.fail_leaf.clear()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))  # 下輪推播 → 重排重試
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") in src.leaf_subscribed
+        await engine.close()

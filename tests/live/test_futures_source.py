@@ -86,6 +86,38 @@ class TestSubscribe:
         else:
             raise AssertionError("subscribe 失敗必須 raise(engine 降級/重試依賴)")
 
+    def test_subscribe_leaf_unsub_then_sub_realtime_with_session_window(self) -> None:
+        # review T8:leaf 電文層(補訂實際月份契約,鏡射 subscribe_symbol)
+        sent: list[dict] = []
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            return _ok()
+
+        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
+        src.subscribe_leaf("TXF", "202608")
+        assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+        param = sent[1]["Param"]
+        assert param["Symbol"] == "TC.F.TWF.TXF.202608"
+        assert param["SubDataType"] == "REALTIME"
+        start, end = session_window(session_key())
+        assert param["StartTime"] == start
+        assert param["EndTime"] == end
+
+    def test_subscribe_leaf_failure_raises(self) -> None:
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "SUBQUOTE":
+                return (json.dumps({"Success": "Fail", "ErrMsg": "x"}) + "\0").encode()
+            return _ok()
+
+        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
+        try:
+            src.subscribe_leaf("TXF", "202608")
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("leaf subscribe 失敗必須 raise(engine 失敗重排依賴)")
+
     def test_unsubscribe_only_when_subscribed(self) -> None:
         sent: list[dict] = []
 
