@@ -109,6 +109,9 @@ class FuturesEngine:
         # (2026-07-28 盤中實證)→ resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約
         self._leaf_grace_secs = leaf_grace_secs
         self._leaf_done: set[tuple[str, str]] = set()
+        self._leaf_inflight: set[tuple[str, str]] = set()
+        self._leaf_fed: set[str] = set()  # 曾成功補訂 leaf 的商品(換月重武裝判準)
+        self._leaf_tasks: set[asyncio.Task[None]] = set()
         self._leaf_timer: asyncio.TimerHandle | None = None
 
     # ---- 生命週期 ----
@@ -130,13 +133,19 @@ class FuturesEngine:
 
     async def close(self) -> None:
         # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
-        # 到即將關閉的 loop(index_engine review A1 同款)
+        # 到即將關閉的 loop(index_engine review A1 同款);_loop=None 同時擋
+        # leaf task 的收尾回寫(review I1)
         self._loop = None
         if self._leaf_timer is not None:
             self._leaf_timer.cancel()
             self._leaf_timer = None
-        if self._source is not None:
-            await asyncio.to_thread(self._source.close)
+        if self._leaf_tasks:
+            # in-flight leaf 訂閱先收完再關 source:close 後 subscribe_leaf 的
+            # _ensure_connected 會重連 TC4 → session/KeepAlive 洩漏,process 不退(review I1)
+            await asyncio.gather(*self._leaf_tasks, return_exceptions=True)
+        source, self._source = self._source, None
+        if source is not None:
+            await asyncio.to_thread(source.close)
 
     # ---- 對外查詢 ----
 
@@ -168,25 +177,44 @@ class FuturesEngine:
 
     def _leaf_fallback(self, ym: str) -> None:
         self._leaf_timer = None
-        if self._loop is None or self._source is None:
+        loop = self._loop
+        if loop is None or self._source is None:
             return
         for product, st in self._states.items():
-            if st.p is not None or (product, ym) in self._leaf_done:
+            key = (product, ym)
+            if st.p is not None or key in self._leaf_done or key in self._leaf_inflight:
                 continue
-            self._leaf_done.add((product, ym))
+            # 成功才入 _leaf_done(_leaf_finish);失敗 discard in-flight,
+            # 下輪推播的 _schedule_leaf_fallback 自然重排重試(review I3)
+            self._leaf_inflight.add(key)
             logger.warning(
                 "futures %s HOT 零推播,補訂 leaf %s(同 symbol 跨 session 衝突)", product, ym
             )
-            self._loop.create_task(asyncio.to_thread(self._leaf_subscribe_blocking, product, ym))
+            task = loop.create_task(asyncio.to_thread(self._leaf_subscribe_blocking, product, ym))
+            self._leaf_tasks.add(task)  # 存引用防 GC;close 時 gather 收尾(review I1)
+            task.add_done_callback(self._leaf_tasks.discard)
 
     def _leaf_subscribe_blocking(self, product: str, ym: str) -> None:
+        """executor thread:訂 leaf 後把結果經 call_soon_threadsafe 回寫集合
+        (集合只在 loop thread 動;_loop 已斷 = close 中,放棄回寫)。"""
         source = self._source
-        if source is None:
+        ok = False
+        if source is not None:
+            try:
+                source.subscribe_leaf(product, ym)
+                ok = True
+            except ConnectionError:
+                logger.warning("futures leaf subscribe %s %s failed", product, ym)
+        loop = self._loop
+        if loop is None:
             return
-        try:
-            source.subscribe_leaf(product, ym)
-        except ConnectionError:
-            logger.warning("futures leaf subscribe %s %s failed", product, ym)
+        loop.call_soon_threadsafe(self._leaf_finish, product, ym, ok)
+
+    def _leaf_finish(self, product: str, ym: str, ok: bool) -> None:
+        self._leaf_inflight.discard((product, ym))
+        if ok:
+            self._leaf_done.add((product, ym))
+            self._leaf_fed.add(product)
 
     def _on_quote_threadsafe(self, quote: dict) -> None:
         loop = self._loop
@@ -215,6 +243,14 @@ class FuturesEngine:
         if tick is not None:
             if st.date is not None and tick.trade_date != st.date:
                 st.resolved_ym = None  # 跨日失效:先清,同筆有月份訊號再重解
+                # 換月重武裝(review I2):leaf-fed 商品的舊月 leaf 到期後零推播,
+                # pending 判準(p is None)只會冷啟動觸發一次 → 跨日時把 date 仍停在
+                # 舊日的 leaf-fed 商品 p 清 None,新 ym 到達即補訂新月 leaf。
+                # 舊月 leaf 不退訂 — 到期契約零推播,session 訂閱殘留可接受。
+                for fed in self._leaf_fed:
+                    fed_st = self._states.get(fed)
+                    if fed_st is not None and fed_st.date != tick.trade_date:
+                        fed_st.p = None
             st.date = tick.trade_date
             st.p = tick.price_milli
             st.q = tick.qty
