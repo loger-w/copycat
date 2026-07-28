@@ -101,3 +101,132 @@ export interface OrdersView {
   degraded: boolean;
   audit_degraded: boolean;
 }
+
+// ---- capital(群益;對應 backend copycat/capital/models.py + client.status_view)----
+
+/** GET /api/capital/status;未啟用時只有 {status:"disabled"},其餘欄位 optional。 */
+export interface CapitalStatus {
+  status: "starting" | "ok" | "degraded" | "error" | "disabled" | (string & {});
+  env?: string;
+  account_masked?: string | null;
+  futures_account_masked?: string | null;
+  order_enabled?: boolean;
+}
+
+/** OrderRecord asdict(委託清單一列;qty 已換算顯示單位)。 */
+export interface CapitalOrder {
+  seq_no: string;
+  stock_no: string | null;
+  name: string;
+  market: string | null;
+  buy_sell: string | null; // "B"/"S"
+  flag_label: string | null;
+  book_no: string | null;
+  status_raw: string | null;
+  status_label: string | null;
+  price: number | null;
+  avg_fill_price: number | null;
+  order_qty: number;
+  filled_qty: number;
+  unit: string;
+  date: string | null; // YYYYMMDD
+  time: string | null; // HH:MM:SS
+  pre_order: boolean;
+  error_msg: string | null;
+  actionable: boolean; // store 算好;前端不要自己抄狀態表
+  raw: string;
+}
+
+/** Position asdict(sec=股號;fut=期交所契約碼;空方 qty 為負)。 */
+export interface CapitalPosition {
+  market: string; // sec/fut
+  stock_no: string;
+  qty: number;
+  name: string;
+  avg_price: number | null;
+  kind: string; // cash/margin/short
+  pnl_base: number | null;
+  pnl_base_price: number | null;
+  pnl_cost: number | null;
+}
+
+/** OrderResult asdict(寫入動作共同回傳形)。 */
+export interface OrderResult {
+  ok: boolean;
+  code: number;
+  message: string;
+  seq_no: string | null;
+}
+
+export type CapitalMarket = "sec" | "fut";
+
+export interface CapitalStockOrderBody {
+  stock_no: string;
+  buy_sell: "buy" | "sell";
+  price: number;
+  qty: number; // 張
+  price_type?: "limit" | "market";
+  time_in_force?: "ROD" | "IOC" | "FOK";
+  trade_kind?: "cash" | "margin" | "short" | "daytrade_sell";
+  source?: string;
+}
+
+export interface CapitalFutureOrderBody {
+  tc4_symbol: string;
+  buy_sell: "buy" | "sell";
+  price: number;
+  qty: number; // 口
+  price_type?: "limit" | "market";
+  time_in_force?: "ROD" | "IOC" | "FOK";
+  day_trade?: boolean;
+  source?: string;
+}
+
+export interface CapitalCancelBody {
+  seq_no: string;
+  market: CapitalMarket;
+}
+
+export interface CapitalCorrectPriceBody {
+  seq_no: string;
+  market: CapitalMarket;
+  price: number;
+}
+
+export interface CapitalDecreaseBody {
+  seq_no: string;
+  market: CapitalMarket;
+  qty: number;
+}
+
+export interface CapitalCloseBody {
+  market: CapitalMarket;
+  key: string;
+  price: number; // 市價單也必帶(閘用估價)
+  qty?: number | null; // null=全部
+  price_type?: "limit" | "market";
+  source?: string;
+}
+
+// ---- futures 行情(對應 copycat/server/futures_engine.py state())----
+
+export interface FuturesProductState {
+  product: string; // TXF/MXF/TMF
+  name: string;
+  p: number | null; // 毫點
+  q: number | null;
+  cum_vol: number | null;
+  t: string | null;
+  date: string | null;
+  bids: [number, number][]; // [price_milli, qty] 最佳在前
+  asks: [number, number][];
+  ref: number | null;
+  upper: number | null;
+  lower: number | null;
+  resolved_contract: string | null; // HOT → YYYYMM;null=未解析(送單層拒單)
+}
+
+export interface FuturesState {
+  seq: number;
+  products: Record<string, FuturesProductState>;
+}

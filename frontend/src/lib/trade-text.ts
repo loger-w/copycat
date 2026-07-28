@@ -11,6 +11,11 @@ const TRADE_ERROR_TEXT: Record<string, string> = {
   SYMBOL_NOT_ALLOWED: "商品不可下單",
   BROKER_REJECTED: "券商拒單",
   AUDIT_WRITE_FAILED: "審計寫入失敗,單未送出",
+  // capital(群益)— ORDER_BLOCKED 的 reason 走 ":" 後綴(parseCapitalError 契約)
+  CAPITAL_DISABLED: "群益未啟用",
+  CAPITAL_NOT_READY: "群益連線未就緒",
+  ORDER_BLOCKED: "安全閘拒絕",
+  CAPITAL_DOWN: "群益連線故障",
 };
 
 export function tradeErrorText(code: string): string {
