@@ -50,7 +50,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="50774")
     ap.add_argument("--listen-secs", type=int, default=20)
+    ap.add_argument("--candidates", default=None, help="逗號分隔覆寫候選清單")
     args = ap.parse_args()
+    global CANDIDATES
+    if args.candidates:
+        CANDIDATES = [s for s in args.candidates.split(",") if s]
 
     OUT_DIR.mkdir(exist_ok=True)
     api = QuoteAPI(APPID, SKEY)
