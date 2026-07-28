@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import date as _date
 from pathlib import Path
 from typing import AsyncGenerator, Final, Literal, cast
 
@@ -22,6 +23,7 @@ from copycat.live.trade_models import (
 )
 from copycat.server.audit import AuditWriteError
 from copycat.server.engine import EngineRuntime, QuoteSource
+from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
     Group,
@@ -112,6 +114,7 @@ def create_app(
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
+    overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -284,6 +287,20 @@ def create_app(
         saved = save_watchlist_groups(wl_path, groups)  # WatchlistError → 400(handler)
         await stock.set_watchlist(union(saved))
         return {"groups": saved}
+
+    @app.get("/api/stock/overlay/{code}")
+    async def stock_overlay(request: Request, code: str) -> dict:
+        stock = _stock(request)
+        if not validate_code(code):
+            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+        # today = 本機日界(= 台北,部署綁本機;design R6/R13);backfill 模式亦以本機為準
+        today = f"{_date.today():%Y-%m-%d}"
+        cached = overlay_cache.get(code, today)
+        if cached is not None:
+            return cached
+        result = build_overlay(await stock.daily_bars(code), today)
+        overlay_cache.put(code, today, result)  # 空結果不 cache(overlay.py 規則)
+        return result
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:

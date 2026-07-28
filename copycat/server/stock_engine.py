@@ -16,6 +16,7 @@ import logging
 from typing import Any, AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import StockTick, parse_stock_realtime
+from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.stkfut_map import load_map
 
@@ -32,6 +33,8 @@ class StockSource(Protocol):
     def unsubscribe_symbol(self, code: str) -> None: ...
 
     def backfill(self, code: str) -> list[StockTick]: ...
+
+    def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
 
@@ -173,6 +176,14 @@ class StockEngine:
 
     def watchlist_codes(self) -> list[str]:
         return list(self._watchlist)
+
+    async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+        """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
+        try:
+            return await asyncio.to_thread(self._source.fetch_daily_bars, code, n)
+        except ConnectionError as e:
+            logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
+            return []
 
     # ---- stkfut ----
 
