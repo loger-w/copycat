@@ -122,3 +122,24 @@ class TestWebSocket:
                 fake.on_tick(tick(price=100_000, qty=2, cum=2, t=5))
                 nxt = ws.receive_json()
                 assert nxt["totals"]["call_net_qty"] == 2
+
+
+class TestTxoContractsRoute:
+    """SC-11(Task 16b):OrderPanel 全鏈選單來源 — active 序列全集,非 snapshot 成交子集。"""
+
+    def test_contracts_empty_before_select(self) -> None:
+        client, _ = make_client()
+        with client:
+            res = client.get("/api/txo/contracts")
+            assert res.status_code == 200
+            assert res.json() == {"contracts": []}
+
+    def test_contracts_after_select_full_chain_no_spot(self) -> None:
+        client, _ = make_client()
+        with client:
+            client.post("/api/txo/select", json={"series_id": "TX4.202607"})
+            res = client.get("/api/txo/contracts")
+            assert res.status_code == 200
+            contracts = res.json()["contracts"]
+            assert C44000.symbol in contracts
+            assert all(s.startswith("TC.O.") for s in contracts)
