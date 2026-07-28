@@ -47,6 +47,10 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   overlay(CDP/MA 疊線計算,2026-07-28:已完成 bar 剔除/don't-cache-empty;
 │                         #   資料源 = TC4 DK 優先 1K 聚合 fallback,DK 支援度未實測)、
 │                         #   __main__(python -m copycat.server,port env TXO_SERVER_PORT 預設 8721)
+│                         #   index_engine(指數引擎,2026-07-28:加權 TC4 IX0001 push+1K 回補、
+│                         #   櫃買 MIS 5s poll、台指期由 TXO runtime spot 轉供;watchdog 09:00-13:25、
+│                         #   兩段式換日 pending buffer;REST /api/index/state + WS /ws/index)、
+│                         #   mis(TPEx 櫃買 MIS 快照,非契約公開端點,失敗 None 降級)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
 │                         #   URL 未設 no-op、429 Retry-After 重試一次、never-raise;stdlib urllib。
