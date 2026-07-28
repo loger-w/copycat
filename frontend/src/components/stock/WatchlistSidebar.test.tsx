@@ -5,19 +5,26 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import type { Group } from "@/hooks/useStockWatchlist";
 
 let fetchMock: ReturnType<typeof vi.fn>;
-let putBodies: string[][];
+let putBodies: Group[][];
+
+const GROUPS: Group[] = [
+  { name: "主力", codes: ["2330", "5483"] },
+  { name: "觀察", codes: ["3231", "2330"] },
+];
 
 beforeEach(() => {
+  window.localStorage.removeItem("stock-wl-group");
   putBodies = [];
   fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.method === "PUT") {
-      const body = JSON.parse(String(init.body)) as { codes: string[] };
-      putBodies.push(body.codes);
-      return new Response(JSON.stringify({ codes: body.codes }));
+      const body = JSON.parse(String(init.body)) as { groups: Group[] };
+      putBodies.push(body.groups);
+      return new Response(JSON.stringify({ groups: body.groups }));
     }
-    return new Response(JSON.stringify({ codes: ["2330", "5483"] }));
+    return new Response(JSON.stringify({ groups: GROUPS }));
   });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -35,15 +42,27 @@ function wrap(ui: ReactNode) {
 const QUOTES = {
   "2330": { p: 2_380_000, chg_pct: 2.59, vol: 12479, no_data: false },
   "5483": { p: null, chg_pct: null, vol: null, no_data: true },
+  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, no_data: false },
 };
 
-describe("WatchlistSidebar", () => {
-  it("渲染清單與即時報價;no_data 檔顯示無資料", async () => {
+describe("WatchlistSidebar(SC-6 群組)", () => {
+  it("群組 tab 列:全部 + 各群組;預設全部顯示聯集(去重)與即時報價", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
-    await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
-    expect(screen.getByText("2380")).toBeTruthy(); // 毫元 → 元
-    expect(screen.getByText("+2.59%")).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+    expect(screen.getByRole("tab", { name: "全部" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByText("2330")).toHaveLength(1); // 跨群組去重
+    expect(screen.getByText("5483")).toBeTruthy();
+    expect(screen.getByText("3231")).toBeTruthy();
+    expect(screen.getByText("2380")).toBeTruthy();
     expect(screen.getByText("無資料")).toBeTruthy();
+  });
+
+  it("點群組 tab 只顯示該群組股票", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("tab", { name: "主力" }));
+    expect(screen.getByText("2330")).toBeTruthy();
+    expect(screen.queryByText("3231")).toBeNull();
   });
 
   it("點列觸發 onSelect", async () => {
@@ -54,18 +73,84 @@ describe("WatchlistSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("2330");
   });
 
-  it("輸入股號新增 → PUT 整份", async () => {
+  it("群組下新增 → 只加進該群組(R4)", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("tab", { name: "主力" }));
+    fireEvent.change(screen.getByPlaceholderText("輸入股號"), { target: { value: "2317" } });
+    fireEvent.click(screen.getByText("新增"));
+    await waitFor(() =>
+      expect(putBodies).toEqual([
+        [
+          { name: "主力", codes: ["2330", "5483", "2317"] },
+          { name: "觀察", codes: ["3231", "2330"] },
+        ],
+      ]),
+    );
+  });
+
+  it("「全部」下新增 → 自動建「自選」群組(R4)", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
     await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
     fireEvent.change(screen.getByPlaceholderText("輸入股號"), { target: { value: "2317" } });
     fireEvent.click(screen.getByText("新增"));
-    await waitFor(() => expect(putBodies).toEqual([["2330", "5483", "2317"]]));
+    await waitFor(() =>
+      expect(putBodies).toEqual([[...GROUPS, { name: "自選", codes: ["2317"] }]]),
+    );
   });
 
-  it("刪除鈕移除該檔 → PUT 整份", async () => {
+  it("「全部」下移除 = 從所有群組移除(R4)", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
     await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
-    fireEvent.click(screen.getAllByLabelText(/移除/)[0]!);
-    await waitFor(() => expect(putBodies).toEqual([["5483"]]));
+    fireEvent.click(screen.getByLabelText("移除 2330"));
+    await waitFor(() =>
+      expect(putBodies).toEqual([
+        [
+          { name: "主力", codes: ["5483"] },
+          { name: "觀察", codes: ["3231"] },
+        ],
+      ]),
+    );
+  });
+
+  it("新增群組:+ 鈕 → 輸入名稱 → PUT 帶新空群組", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("新增群組"));
+    fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "當沖" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
+    await waitFor(() => expect(putBodies).toEqual([[...GROUPS, { name: "當沖", codes: [] }]]));
+  });
+
+  it("刪除群組:tab 的 × → PUT 不含該群組(股票留在其他群組)", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "觀察" })).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toEqual([[{ name: "主力", codes: ["2330", "5483"] }]]));
+  });
+
+  it("「全部」下停用拖拉、群組下可拖拉", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+    await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
+    expect(screen.queryByLabelText(/拖拉/)).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "主力" }));
+    expect(screen.getAllByLabelText(/拖拉/).length).toBe(2);
+  });
+
+  it("移組選單:checkbox 切換股票所屬群組", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+    await waitFor(() => expect(screen.getByText("5483")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("移組 5483"));
+    const checkbox = screen.getByRole("checkbox", { name: "觀察" });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(putBodies).toEqual([
+        [
+          { name: "主力", codes: ["2330", "5483"] },
+          { name: "觀察", codes: ["3231", "2330", "5483"] },
+        ],
+      ]),
+    );
   });
 });
