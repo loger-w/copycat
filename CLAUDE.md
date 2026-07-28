@@ -123,46 +123,13 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
 
 ## 2. Python 風格(專案特化)
 
-只列非顯而易見、跨檔一致的:
-
-- **`from __future__ import annotations` 強制**寫在每個 `.py` 第一行(註解後)。
-- Type hints **無例外**:函式參數 + 回傳、module-level globals。`dict | None` / `list[dict]` 風格,不要 `Optional` / `List`。
-- **Logging**:`logger = logging.getLogger(__name__)`,**禁止** `print`。
-- **FastAPI error contract**(若採 FastAPI 後端):`raise HTTPException(status_code=..., detail={"error": "<code>"})` — frontend 依賴 `detail.error` 字串解析。新 endpoint 不要塞自由文字。
-  - 502 = upstream 故障;503 = 服務尚未就緒;400 = 用戶錯;404 = 找不到。
-- **全域 exception handler**(從第一天就開):`@app.exception_handler` 在 `main.py`,route 內**只 raise 不 catch**。避免 trash-cmoney `routes/options.py` 6 處重複 try/except 的債。
-- **外部 IO 慣例**(類比 trash-cmoney `services/finmind.py` 樣板):
-  - Module-level singleton client,不要每次 `new`。
-  - 所有外部呼叫先過 rate limiter / token bucket。
-  - JSON cache 用 `atomic_write_json` / `read_json`,寫入帶 `_cache_version`,版本 bump 即失效。
-  - 同 key 並發走 `_run_once` inflight dedup。
-- **async**:`httpx.AsyncClient(timeout=30.0)` + `await`。同步阻塞函式不要混進 route handler。WebSocket / Stream 用 `asyncio` event loop。
-- **錯誤處理**:catch 要具體(`httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException`,以及 DQ4 SDK 特有 exception),不裸 `except`。`except Exception` 只在 route 邊界 + 一定要 `logger.exception` + 轉 502。
-- **測試**:pytest + `asyncio_mode = "auto"`,async test 不用 `@pytest.mark.asyncio`。Mock 走 `monkeypatch`,不 `unittest.mock`。
-- **Ruff**:line-length 100。Format 跟既有檔對齊,不順手重排既存格式。
-- **pyright basic**(從第一天就開)— type hint 已寫齊,加 checker 拿免費 invariant check。
+整節移至專案 skill `backend-conventions`(2026-07-28 瘦身,neigui 同款);寫或改任何 `.py` 前先讀該 skill。
 
 ---
 
-## 3. React / TypeScript 風格(若採 React 前端)
+## 3. React / TypeScript 風格
 
-從 trash-cmoney §7 升級路線的「採納項」直接內建,不重蹈技術債:
-
-- **Custom hook 統一回傳 shape**:`{ data, loading, error, refresh, ...extras }`。
-- **Server state 一律走 TanStack Query**,**禁止**手寫 `useEffect + fetch + seqRef`。React 19 + TQ 是新專案 baseline,避開 trash-cmoney 累積 8 個手寫 hook 的債。
-- **Stale-drop**:TQ 自帶 cancellation,不額外寫 `seqRef`。
-- **Function component + hooks only**。沒有 class 元件,**沒有 `forwardRef`**(React 19 `ref` 是普通 prop)。
-- **TypeScript**:`strict: true` + **`noUncheckedIndexedAccess: true`**(從第一天就開)。
-- **Tailwind 用 semantic token**:`text-ink` / `text-ink-muted` / `text-ink-dim` / `text-accent` / `border-line` / `bg-bg` / `bg-bg-deep`。token 在 `src/index.css` 的 `@theme`。**Bull = 紅 / Bear = 綠**(台股慣例,不套美股 green-up)。
-- **重元件 lazy**:跨 tab 切換的大元件走 `React.lazy()` + `<Suspense fallback={...}>`。
-- **純渲染抽到 `lib/*-svg.tsx`**:SVG 計算函式無 React 依賴,獨立單元測試。元件只負責掛 DOM。
-- **`cn(...classes)`** 走 `lib/utils.ts`(`clsx` + `tailwind-merge`),不直接拼字串。
-- **UI 文字一律繁體中文**(`重新整理` / `載入中` / `無交易日` …)。錯誤訊息、aria-label 也用繁中。
-- **Vitest 測試 colocated** `*.test.tsx` / `*.test.ts`,跑 RTL 的檔要在頂端寫 `/** @vitest-environment jsdom */` pragma。`afterEach(cleanup)`。
-- **Path alias** `@/` → `src/`(`vite.config.ts` + `tsconfig.app.json`)。**新 code 一律用 `@/`**,不用相對 import。
-- **Date 用 `YYYY-MM-DD` 字串** 在 API + state 流動;`new Date()` 只在邊界。
-- **`hidden` attribute > 條件 render**:tab 切換用 `<div hidden={tab !== "x"}>` 保留 DOM。
-- **`eslint-plugin-react-you-might-not-need-an-effect`** 開起來,`useEffect` 是 anti-pattern 直接 lint 抓。
+整節併入專案 skill `frontend-conventions`「React / TypeScript 基本風格」節(2026-07-28 瘦身);寫或改 `frontend/` 前先讀該 skill。
 
 ---
 
@@ -178,19 +145,16 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
 
 **確認結果(2026-06-26 deep-research + targeted Touchance fetch,完整報告 `docs/research/2026-06-26-dq4-and-broker-api-survey.md`)。**
 
-**這個 repo 只做 Touchance scope。個股 + 族群即時監控分到 trash-cmoney(純 FinMind 一條線更乾淨)。**
-
 ---
 
 ### 主資料源 = Touchance 4.0(達錢 4)
 
-- 艾揚資訊獨立平台,**非券商產品**(易混淆,溝通要寫全名)。Python API 走 **ZMQ**(實測 OpenAPI 登入 port **50774**、SubPort 動態;文件舊值 51171/51141 不適用,2026-07-18 實測)。
+- 身份釐清(≠ 任何券商產品)與 ZMQ port 事實見 §0 與 §1 部署前置,不重述(2026-07-28 去重)。
 - User 持有最高會員訂閱(綁帳號不綁 repo,事實留 user memory `touchance-account-tier`)。
-- 涵蓋:**國內外期貨即時行情** + 歷史(1 分 K 一年、日 K 十年)+ 下單抽象 + 帳務查詢。
+- 涵蓋:**國內外期貨即時行情** + 歷史(1 分 K 一年、日 K 十年)+ 帳務查詢。~~下單抽象~~ **達錢 4 無下單功能(2026-07-21 實證,§8),下單全走群益 Capital(2026-07-28 拍板,§0)** — 2026-06-26 survey 的「下單抽象 + 券商授權前提」記載已被實證推翻(2026-07-28 更正)。
 - 官方 GitBook:https://touchance-1.gitbook.io/touchance/
 - 官方 Python wrapper:GitHub `TOUCHANCE/TCPY`
 - 環境前置:`pip install zmq` + Touchance Windows app 常駐 + 與 ZMQ ports 通。
-- **下單前提**:Touchance 只是抽象層,實際送單仍要向所屬期貨商申請 API 交易權限 — §7 流程要考慮這層。
 
 ---
 
