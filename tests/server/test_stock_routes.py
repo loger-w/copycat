@@ -37,6 +37,12 @@ class FakeStockSource:
     def __init__(self) -> None:
         self.subscribed: list[str] = []
         self.on_message: Callable[[dict], None] | None = None
+        self.daily_bars_result: list[dict] | Exception = []
+
+    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+        if isinstance(self.daily_bars_result, Exception):
+            raise self.daily_bars_result
+        return self.daily_bars_result
 
     def subscribe_symbol(self, code: str) -> None:
         self.subscribed.append(code)
@@ -138,6 +144,42 @@ class TestWatchlistRoutes:
                 "groups": [{"name": "自選", "codes": ["2330", "5483"]}]
             }
             assert "2330" in fake.subscribed and "5483" in fake.subscribed
+
+
+class TestOverlayRoute:
+    """SC-4:/api/stock/overlay/{code} — 200 形狀 / BAD_CODE / TC4 down 全 null."""
+
+    BARS = [
+        {"date": f"2026-06-{d:02d}", "high": 103_000, "low": 100_000, "close": 100_000 + d * 100}
+        for d in range(1, 27)
+    ]
+
+    def test_overlay_shape_200(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        fake.daily_bars_result = list(self.BARS)
+        with client:
+            r = client.get("/api/stock/overlay/2330")
+            assert r.status_code == 200
+            body = r.json()
+            assert set(body) == {"cdp", "ma5", "ma20", "date"}
+            assert body["date"] == "2026-06-26"
+            assert set(body["cdp"]) == {"cdp", "ah", "nh", "nl", "al"}
+            assert isinstance(body["ma5"], int) and isinstance(body["ma20"], int)
+
+    def test_overlay_bad_code_400(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            r = client.get("/api/stock/overlay/bad!")
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_CODE"
+
+    def test_overlay_tc4_down_returns_all_null_200(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        fake.daily_bars_result = ConnectionError("tc4 down")
+        with client:
+            r = client.get("/api/stock/overlay/2330")
+            assert r.status_code == 200
+            assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
 
 
 class TestStateRoute:
