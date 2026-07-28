@@ -61,6 +61,21 @@ class FuturesQuoteSource(TC4QuoteSource):
             self._rt_request("UNSUBQUOTE", sym)
             self._subscribed.discard(sym)
 
+    def subscribe_leaf(self, product: str, ym: str) -> None:
+        """補訂實際月份 leaf 契約(TC.F.TWF.<p>.<YYYYMM>)。
+
+        HOT 與 TXO runtime 的 spot 訂閱同 symbol 時,TC4 只推一邊(2026-07-28 盤中實證,
+        同 process 四 session);leaf 字串不同即無衝突。冪等同 subscribe_symbol。"""
+        self._ensure_connected()
+        if self._sub_port is not None:
+            self._start_listener()
+        sym = f"TC.F.TWF.{product}.{ym}"
+        self._rt_request("UNSUBQUOTE", sym)
+        r = self._rt_request("SUBQUOTE", sym)
+        if r.get("Success") != "OK":
+            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
+        self._subscribed.add(sym)
+
     def subscribe_all(self) -> None:
         for product in PRODUCTS:
             self.subscribe_symbol(product)

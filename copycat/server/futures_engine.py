@@ -32,6 +32,8 @@ class FuturesSource(Protocol):
 
     def subscribe_symbol(self, product: str) -> None: ...
 
+    def subscribe_leaf(self, product: str, ym: str) -> None: ...
+
     def unsubscribe_symbol(self, product: str) -> None: ...
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
@@ -94,6 +96,7 @@ class FuturesEngine:
         *,
         broadcast: Callable[[dict], None] | None = None,
         products: tuple[str, ...] = PRODUCTS,
+        leaf_grace_secs: float = 3.0,
     ) -> None:
         self._source_factory = source_factory
         self._broadcast = broadcast
@@ -102,6 +105,11 @@ class FuturesEngine:
         self._seq = 0
         self._source: FuturesSource | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # leaf fallback:HOT 與 TXO runtime spot 同 symbol 跨 session 只推一邊
+        # (2026-07-28 盤中實證)→ resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約
+        self._leaf_grace_secs = leaf_grace_secs
+        self._leaf_done: set[tuple[str, str]] = set()
+        self._leaf_timer: asyncio.TimerHandle | None = None
 
     # ---- 生命週期 ----
 
@@ -124,6 +132,9 @@ class FuturesEngine:
         # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
         # 到即將關閉的 loop(index_engine review A1 同款)
         self._loop = None
+        if self._leaf_timer is not None:
+            self._leaf_timer.cancel()
+            self._leaf_timer = None
         if self._source is not None:
             await asyncio.to_thread(self._source.close)
 
@@ -141,6 +152,41 @@ class FuturesEngine:
         return st.resolved_ym if st is not None else None
 
     # ---- 推播處理(source thread → loop)----
+
+    def _schedule_leaf_fallback(self, ym: str) -> None:
+        """寬限期後,對仍零推播的商品補訂 leaf 契約(每 (product, ym) 只補一次)。
+
+        月份借同家族已 resolve 的 ym(TXF/MXF/TMF 同結算月序)。健康情境所有商品都在
+        寬限期內收到 HOT 推播 → 零補訂;衝突情境(spot 同 symbol)該品 p 恆 None → 補訂。
+        """
+        if self._loop is None or self._leaf_timer is not None:
+            return
+        pending = [p for p, st in self._states.items() if st.p is None]
+        if not pending or all((p, ym) in self._leaf_done for p in pending):
+            return
+        self._leaf_timer = self._loop.call_later(self._leaf_grace_secs, self._leaf_fallback, ym)
+
+    def _leaf_fallback(self, ym: str) -> None:
+        self._leaf_timer = None
+        if self._loop is None or self._source is None:
+            return
+        for product, st in self._states.items():
+            if st.p is not None or (product, ym) in self._leaf_done:
+                continue
+            self._leaf_done.add((product, ym))
+            logger.warning(
+                "futures %s HOT 零推播,補訂 leaf %s(同 symbol 跨 session 衝突)", product, ym
+            )
+            self._loop.create_task(asyncio.to_thread(self._leaf_subscribe_blocking, product, ym))
+
+    def _leaf_subscribe_blocking(self, product: str, ym: str) -> None:
+        source = self._source
+        if source is None:
+            return
+        try:
+            source.subscribe_leaf(product, ym)
+        except ConnectionError:
+            logger.warning("futures leaf subscribe %s %s failed", product, ym)
 
     def _on_quote_threadsafe(self, quote: dict) -> None:
         loop = self._loop
@@ -177,6 +223,7 @@ class FuturesEngine:
         ym = resolve_contract_ym(quote)
         if ym is not None:
             st.resolved_ym = ym  # 快取;換月推播即更新
+            self._schedule_leaf_fallback(ym)
         self._seq += 1
         if self._broadcast is not None:
             self._broadcast(
