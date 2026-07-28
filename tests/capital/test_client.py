@@ -476,6 +476,18 @@ async def test_correct_price_fut_multiplier_lookup(tmp_path: Path) -> None:
     assert com.sent == []
 
 
+async def test_correct_price_weekly_contract_multiplier_50(tmp_path: Path) -> None:
+    # 週選契約碼反查:最長前綴比對 → TX4 → 乘數 50,不再 fallback 1(review A1)
+    com = FakeCom()
+    client = _client(com, tmp_path, max_amount=1_000_000.0)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_fut_evt_raw("W1", contract="TX422000T6", price="22000")))
+    with pytest.raises(CapitalGateBlockedError) as ei:  # 22000×2口×50 = 2.2M > 1M(fallback 1 只有 44,000 會放行)
+        await client.correct_price(CorrectPriceRequest(seq_no="W1", market="fut", price=22000.0))
+    assert ei.value.reason is not None and "超過上限" in ei.value.reason
+    assert com.sent == []
+
+
 async def test_correct_price_fut_unknown_product_falls_back_multiplier_1(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

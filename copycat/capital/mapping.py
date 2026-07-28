@@ -30,6 +30,11 @@ _WEEKLY_50: frozenset[str] = frozenset(
     {"TX1", "TX2", "TX3", "TX4", "TX5", "TXY", "TXZ", "MX1", "MX2", "MX3", "MX4", "MX5"}
 )
 
+# 已知產品碼(乘數表 ∪ 週選家族),長者優先 — 契約碼反查最長前綴比對用(review A1)
+_KNOWN_PRODUCTS: tuple[str, ...] = tuple(
+    sorted(set(MULTIPLIERS) | _WEEKLY_50, key=len, reverse=True)
+)
+
 _BUYSELL: dict[BuySell, int] = {"buy": 0, "sell": 1}
 _SPECIAL: dict[PriceType, int] = {"market": 1, "limit": 2}
 _TIF: dict[TimeInForce, int] = {"ROD": 0, "IOC": 1, "FOK": 2}
@@ -64,9 +69,14 @@ def product_of(tc4_symbol: str) -> str:
 def exchange_product_of(contract: str) -> str:
     """期交所契約碼 → product("TXFI6"→"TXF";fut 改價乘數反查用,review R7)。
 
-    規則:去尾 2 碼(月碼+年碼)後即產品碼;選擇權碼(如 "TXO20000I6")
-    含履約價 → 取開頭連續英文字母段。
+    先對已知產品碼(MULTIPLIERS ∪ 週選家族)做最長前綴比對 —— 週選契約
+    (如 "TX422000T6")用啟發式會截成 "TX" → 乘數反查失敗 fallback 1,
+    金額閘鬆 50 倍(review A1)。比對不到才走啟發式:去尾 2 碼(月碼+年碼)
+    後即產品碼;選擇權碼(如 "TXO20000I6")含履約價 → 取開頭連續英文字母段。
     """
+    for prod in _KNOWN_PRODUCTS:
+        if contract.startswith(prod):
+            return prod
     body = contract[:-2]
     if body and body.isalpha():
         return body

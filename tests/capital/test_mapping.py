@@ -260,6 +260,16 @@ def test_exchange_product_of(contract: str, product: str) -> None:
     assert exchange_product_of(contract) == product
 
 
+@pytest.mark.parametrize(
+    ("contract", "product"),
+    [("TX422000T6", "TX4"), ("MXFI6", "MXF"), ("TXO20000I6", "TXO"), ("MX523000G6", "MX5")],
+)
+def test_exchange_product_of_known_prefix_wins(contract: str, product: str) -> None:
+    # 週選契約(TX422000T6)的「去尾 2 碼取字母段」啟發式會截成 "TX" →
+    # 乘數反查 ValueError → fallback 1,金額閘鬆 50 倍(review A1)
+    assert exchange_product_of(contract) == product
+
+
 def test_product_of_takes_fourth_segment() -> None:
     assert product_of("TC.F.TWF.TXF.HOT") == "TXF"
     assert product_of("TC.F.TWF.MXF.202609") == "MXF"
