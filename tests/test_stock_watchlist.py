@@ -7,6 +7,7 @@ import pytest
 
 from copycat.stock_watchlist import (
     WATCHLIST_LIMIT,
+    Group,
     WatchlistError,
     load_watchlist_groups,
     save_watchlist_groups,
@@ -35,7 +36,7 @@ class TestGroupsPersistence:
 
     def test_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "watchlist.json"
-        groups = [
+        groups: list[Group] = [
             {"name": "主力", "codes": ["2330", "5483"]},
             {"name": "觀察", "codes": ["2330", "3231"]},
         ]
@@ -61,7 +62,7 @@ class TestGroupsPersistence:
 
     def test_union_over_limit_rejected(self, tmp_path: Path) -> None:
         half = WATCHLIST_LIMIT // 2 + 1
-        groups = [
+        groups: list[Group] = [
             {"name": "a", "codes": [f"{1000 + i}" for i in range(half)]},
             {"name": "b", "codes": [f"{2000 + i}" for i in range(half)]},
         ]
@@ -70,7 +71,7 @@ class TestGroupsPersistence:
 
     def test_shared_code_counts_once_toward_limit(self, tmp_path: Path) -> None:
         codes = [f"{1000 + i}" for i in range(WATCHLIST_LIMIT)]
-        groups = [{"name": "a", "codes": codes}, {"name": "b", "codes": codes[:5]}]
+        groups: list[Group] = [{"name": "a", "codes": codes}, {"name": "b", "codes": codes[:5]}]
         saved = save_watchlist_groups(tmp_path / "w.json", groups)
         assert len(union(saved)) == WATCHLIST_LIMIT
 
@@ -95,7 +96,7 @@ class TestGroupsPersistence:
 
 class TestUnion:
     def test_union_keeps_first_seen_order(self) -> None:
-        groups = [
+        groups: list[Group] = [
             {"name": "a", "codes": ["2330", "5483"]},
             {"name": "b", "codes": ["3231", "2330"]},
         ]

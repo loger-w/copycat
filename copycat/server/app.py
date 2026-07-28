@@ -24,9 +24,11 @@ from copycat.server.audit import AuditWriteError
 from copycat.server.engine import EngineRuntime, QuoteSource
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
+    Group,
     WatchlistError,
-    load_watchlist,
-    save_watchlist,
+    load_watchlist_groups,
+    save_watchlist_groups,
+    union,
     validate_code,
 )
 from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
@@ -54,8 +56,13 @@ class SelectBody(BaseModel):
     series_id: str
 
 
-class WatchlistBody(BaseModel):
+class GroupBody(BaseModel):
+    name: str
     codes: list[str]
+
+
+class GroupsBody(BaseModel):
+    groups: list[GroupBody]
 
 
 class PreviewBody(BaseModel):
@@ -167,7 +174,7 @@ def create_app(
                     checkpoint=backfill_date is None,
                 )
                 await stock.start()
-                persisted = load_watchlist(wl_path)
+                persisted = union(load_watchlist_groups(wl_path))
                 if persisted:
                     await stock.set_watchlist(persisted)
         except Exception:
@@ -268,14 +275,15 @@ def create_app(
     @app.get("/api/stock/watchlist")
     async def stock_watchlist_get(request: Request) -> dict:
         _stock(request)
-        return {"codes": load_watchlist(wl_path)}
+        return {"groups": load_watchlist_groups(wl_path)}
 
     @app.put("/api/stock/watchlist")
-    async def stock_watchlist_put(request: Request, body: WatchlistBody) -> dict:
+    async def stock_watchlist_put(request: Request, body: GroupsBody) -> dict:
         stock = _stock(request)
-        saved = save_watchlist(wl_path, body.codes)  # WatchlistError → 400(handler)
-        await stock.set_watchlist(saved)
-        return {"codes": saved}
+        groups: list[Group] = [{"name": g.name, "codes": g.codes} for g in body.groups]
+        saved = save_watchlist_groups(wl_path, groups)  # WatchlistError → 400(handler)
+        await stock.set_watchlist(union(saved))
+        return {"groups": saved}
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:

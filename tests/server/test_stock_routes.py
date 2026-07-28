@@ -72,39 +72,72 @@ def make_client(tmp_path: Path) -> tuple[TestClient, FakeStockSource]:
 
 
 class TestWatchlistRoutes:
+    """groups shape(stock-ui-upgrade SC-6);舊 codes shape 斷言隨 API 契約同輪遷移."""
+
     def test_get_empty_then_put_round_trip(self, tmp_path: Path) -> None:
         client, fake = make_client(tmp_path)
         with client:
-            assert client.get("/api/stock/watchlist").json() == {"codes": []}
-            r = client.put("/api/stock/watchlist", json={"codes": ["2330", "5483"]})
+            assert client.get("/api/stock/watchlist").json() == {"groups": []}
+            groups = [
+                {"name": "主力", "codes": ["2330", "5483"]},
+                {"name": "觀察", "codes": ["3231"]},
+            ]
+            r = client.put("/api/stock/watchlist", json={"groups": groups})
             assert r.status_code == 200
-            assert r.json() == {"codes": ["2330", "5483"]}
-            assert client.get("/api/stock/watchlist").json() == {"codes": ["2330", "5483"]}
-            assert "2330" in fake.subscribed  # engine 已同步訂閱
+            assert r.json() == {"groups": groups}
+            assert client.get("/api/stock/watchlist").json() == {"groups": groups}
+            assert "2330" in fake.subscribed and "3231" in fake.subscribed  # 聯集已訂
 
     def test_put_bad_code_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
-            r = client.put("/api/stock/watchlist", json={"codes": ["bad code"]})
+            body = {"groups": [{"name": "a", "codes": ["bad code"]}]}
+            r = client.put("/api/stock/watchlist", json=body)
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_CODE"
+
+    def test_put_bad_group_400(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            body = {"groups": [{"name": "  ", "codes": ["2330"]}]}
+            r = client.put("/api/stock/watchlist", json=body)
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_GROUP"
 
     def test_put_over_limit_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
             codes = [f"{1000 + i}" for i in range(31)]
-            r = client.put("/api/stock/watchlist", json={"codes": codes})
+            r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "WATCHLIST_FULL"
 
     def test_watchlist_persists_across_app_restart(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
-            client.put("/api/stock/watchlist", json={"codes": ["2330"]})
+            client.put(
+                "/api/stock/watchlist", json={"groups": [{"name": "自選", "codes": ["2330"]}]}
+            )
         client2, fake2 = make_client(tmp_path)
         with client2:
-            assert client2.get("/api/stock/watchlist").json() == {"codes": ["2330"]}
+            assert client2.get("/api/stock/watchlist").json() == {
+                "groups": [{"name": "自選", "codes": ["2330"]}]
+            }
             assert "2330" in fake2.subscribed  # 啟動即訂回持久化清單
+
+    def test_v1_file_restores_union_on_startup(self, tmp_path: Path) -> None:
+        """R2:v1 檔(codes shape)重啟 → set_watchlist 收到遷移後聯集."""
+        import json as _json
+
+        (tmp_path / "watchlist.json").write_text(
+            _json.dumps({"_cache_version": 1, "codes": ["2330", "5483"]}), encoding="utf-8"
+        )
+        client, fake = make_client(tmp_path)
+        with client:
+            assert client.get("/api/stock/watchlist").json() == {
+                "groups": [{"name": "自選", "codes": ["2330", "5483"]}]
+            }
+            assert "2330" in fake.subscribed and "5483" in fake.subscribed
 
 
 class TestStateRoute:
