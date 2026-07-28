@@ -265,6 +265,71 @@ class TestFetchDailyBars:
             raise AssertionError("TC4 通訊失敗必須正規化為 ConnectionError(design R10)")
 
 
+class TestFetchDayMinutes:
+    """index-board SC-4:當日 1K → {HHMM(台北,終點標記): close 毫點};域 0901-1330。"""
+
+    @staticmethod
+    def _row(time_utc: str, close: str, qi: str) -> dict:
+        return {"Date": "20260728", "Time": time_utc, "Close": close, "QryIndex": qi}
+
+    def test_utc_plus8_domain_and_clamp(self) -> None:
+        rows = [
+            self._row("10100", "100.5", "1"),  # 01:01 UTC → 0901
+            self._row("53000", "101", "2"),  # 13:30 → inclusive 保留
+            self._row("53300", "102", "3"),  # 13:33 → clamp 1330 覆寫
+            self._row("60000", "103", "4"),  # 14:00 → >1335 丟棄
+            self._row("3000", "99", "5"),  # 08:30 → <0901 丟棄
+        ]
+        pages = {"0": rows, "5": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return _ok()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        minutes = src.fetch_day_minutes("IX0001")
+        assert minutes == {"0901": 100_500, "1330": 102_000}
+
+    def test_bad_rows_skipped(self) -> None:
+        rows = [self._row("10100", "100", "1"), {"Date": "20260728", "QryIndex": "2"}]
+        pages = {"0": rows, "2": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return _ok()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
+
+    def test_zmq_error_normalized(self) -> None:
+        import zmq
+
+        def handler(obj: dict) -> bytes:
+            raise zmq.ZMQError()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        try:
+            src.fetch_day_minutes("IX0001")
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("必須正規化為 ConnectionError")
+
+
 class TestRawDispatch:
     def test_realtime_quote_dispatched(self) -> None:
         src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")

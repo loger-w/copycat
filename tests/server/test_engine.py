@@ -85,6 +85,21 @@ async def test_live_tick_after_handover_flows_into_snapshot() -> None:
         await rt.close()
 
 
+async def test_spot_millipts_public_accessor() -> None:
+    """index-board IR1:txf_getter 依賴的 public 現貨價 accessor."""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    assert rt.spot_millipts() is None  # 未就緒
+    await rt.start()
+    try:
+        assert fake.on_tick is not None
+        fake.on_tick(tick("TC.F.TWF.TXF.HOT", price=42_142_000, qty=0, t=9))
+        await asyncio.sleep(0.05)
+        assert rt.spot_millipts() == 42_142_000
+    finally:
+        await rt.close()
+
+
 async def test_activate_switches_series_and_resets() -> None:
     fake = FakeQuoteSource(
         backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]}
