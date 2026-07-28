@@ -323,6 +323,13 @@ def create_app(
             raise HTTPException(status_code=400, detail={"error": "UNKNOWN_SERIES"}) from None
         return runtime.latest_snapshot()
 
+    @app.get("/api/txo/contracts")
+    async def txo_contracts(request: Request) -> dict:
+        """Active 序列全鏈合約(OrderPanel 選單;snapshot.contracts 僅成交子集)。"""
+        runtime = _runtime(request)
+        symbols = sorted(s for s in runtime.orderable_symbols() if s.startswith("TC.O."))
+        return {"contracts": symbols}
+
     @app.get("/api/txo/snapshot")
     async def snapshot(request: Request) -> dict:
         runtime = _runtime(request)
