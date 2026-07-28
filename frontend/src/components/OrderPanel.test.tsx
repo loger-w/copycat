@@ -216,6 +216,57 @@ describe("OrderPanel(群益)", () => {
     expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
   });
 
+  it("選單以 /api/txo/contracts 全鏈為主:props 子集仍列全鏈;鏈上無估價合約鎖市價", async () => {
+    const EXTRA = "TC.O.TWF.TXO.202607.C.24000";
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/txo/contracts": () => json({ contracts: [CALL, PUT, EXTRA] }),
+    });
+    renderPanel([contract()]); // props 僅 CALL(當日成交子集)
+    await screen.findByText("模擬");
+    expect(await screen.findByRole("option", { name: "TXO.202607.C.24000" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "TXO.202607.P.22000" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "TXO.202607.C.23000" })).toBeTruthy();
+    // EXTRA 不在 props → 無 last_price → 市價鎖定(估價查找仍走 props)
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: EXTRA } });
+    expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
+  });
+
+  it("props 為空時選單仍列全鏈", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/txo/contracts": () => json({ contracts: [CALL, PUT] }),
+    });
+    renderPanel([]);
+    await screen.findByText("模擬");
+    expect(await screen.findByRole("option", { name: "TXO.202607.C.23000" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "TXO.202607.P.22000" })).toBeTruthy();
+  });
+
+  it("/api/txo/contracts 空列表或失敗 → fallback props contracts", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/txo/contracts": () => json({ contracts: [] }),
+    });
+    const first = renderPanel();
+    await screen.findByText("模擬");
+    expect(await screen.findByRole("option", { name: "TXO.202607.C.23000" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "TXO.202607.P.22000" })).toBeTruthy();
+    first.unmount();
+
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/txo/contracts": () => json({ detail: { error: "NOT_READY" } }, 503),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    expect(await screen.findByRole("option", { name: "TXO.202607.C.23000" })).toBeTruthy();
+  });
+
   it("切市價隱藏價格欄、切回限價恢復", async () => {
     mockFetch({
       "/api/capital/status": () => json(capStatus()),
