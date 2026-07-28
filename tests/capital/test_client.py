@@ -602,11 +602,11 @@ async def test_audit_post_write_failure_keeps_result(
     calls = {"n": 0}
     real_append = client_mod.append_audit
 
-    def flaky(base: Path, record: dict[str, Any], *, when: Any) -> None:
+    def flaky(base: Path, record: dict[str, Any], *, when: Any, prefix: str = "orders") -> None:
         calls["n"] += 1
         if calls["n"] >= 2:  # 前置成功、後置失敗
             raise AuditWriteError("disk full")
-        real_append(base, record, when=when)
+        real_append(base, record, when=when, prefix=prefix)
 
     monkeypatch.setattr(client_mod, "append_audit", flaky)
     res = await _drive(client, lambda: client.submit_stock_order(_stock_req()))

@@ -19,12 +19,13 @@ class AuditWriteError(Exception):
     """審計寫入失敗;NewOrder 送出前 = 拒單(500 AUDIT_WRITE_FAILED),送出後 = 降級旗標。"""
 
 
-def audit_path(base: Path, when: date) -> Path:
-    return base / f"orders-{when:%Y%m%d}.jsonl"
+def audit_path(base: Path, when: date, *, prefix: str = "orders") -> Path:
+    # prefix 分檔:TC4 trade 走預設 orders-*,群益 CapitalClient 傳 capital-*(同 base 不混檔)
+    return base / f"{prefix}-{when:%Y%m%d}.jsonl"
 
 
-def append_audit(base: Path, record: dict[str, Any], *, when: date) -> None:
-    path = audit_path(base, when)
+def append_audit(base: Path, record: dict[str, Any], *, when: date, prefix: str = "orders") -> None:
+    path = audit_path(base, when, prefix=prefix)
     line = json.dumps(record, ensure_ascii=False)
     try:
         with _audit_lock:

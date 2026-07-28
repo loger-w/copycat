@@ -10,7 +10,7 @@
   CapitalGateBlockedError)→ 審計前置(失敗 raise AuditWriteError,錢沒動整筆失敗)
   → COM(10s timeout → 結果未知)→ 審計後置(失敗只 log,不改 OrderResult)。
 - 審計走 copycat/server/audit.append_audit;檔名 prefix 耦合點只在 _audit() 一處
-  (目前落 orders-*.jsonl,Task 7 加 prefix 參數切 capital- 時只動該行)。
+  (prefix="capital" → capital-*.jsonl,與 TC4 trade 的 orders-* 分檔)。
 - 回報斷線 → degraded、不自動重連、不 clear store(design §8 / review R7)。
 """
 
@@ -194,9 +194,9 @@ class CapitalClient:
     # ------------------------------------------------------------------ 審計
 
     def _audit(self, record: dict[str, object]) -> None:
-        # append_audit 檔名 prefix 耦合點只在這一行(目前 orders-*.jsonl;
-        # Task 7 為 audit_path 加 prefix 參數後,此處改傳 prefix="capital" 即完成切換)
-        append_audit(self._audit_base, record, when=date.today())
+        # 檔名 prefix 耦合點只在這一行:群益審計落 capital-*.jsonl,
+        # 與 TC4 trade 的 orders-*.jsonl 同 base 分檔
+        append_audit(self._audit_base, record, when=date.today(), prefix="capital")
 
     def _record(
         self,
