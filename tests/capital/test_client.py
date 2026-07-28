@@ -818,3 +818,18 @@ async def test_degraded_still_allows_writes(tmp_path: Path) -> None:
         client, lambda: client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
     )
     assert res.ok is True  # 刪單是降風險操作,degraded 不擋
+
+
+# ---------------------------------------------------------------------------
+# 審計檔名 prefix(SC-9:群益走 capital-*.jsonl,與 TC4 trade 的 orders-* 分檔)
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_files_use_capital_prefix(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    await _drive(client, lambda: client.submit_stock_order(_stock_req()))
+    files = sorted(client._audit_base.glob("*.jsonl"))
+    assert files, "審計檔未落地"
+    assert all(f.name.startswith("capital-") for f in files)
