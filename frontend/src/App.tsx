@@ -12,14 +12,15 @@ import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
 import { cn } from "@/lib/utils";
 
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
+const FuturesPage = lazy(() => import("@/components/futures/FuturesPage"));
 const IndexPage = lazy(() => import("@/components/index/IndexPage"));
 
-type Tab = "txo" | "stock" | "index";
+type Tab = "txo" | "stock" | "futures" | "index";
 const TAB_KEY = "copycat-tab";
 
 function initialTab(): Tab {
   const saved = window.localStorage.getItem(TAB_KEY);
-  return saved === "stock" || saved === "index" ? saved : "txo";
+  return saved === "stock" || saved === "futures" || saved === "index" ? saved : "txo";
 }
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
   const [visited, setVisited] = useState<Record<Tab, boolean>>({
     txo: true,
     stock: tab === "stock",
+    futures: tab === "futures",
     index: tab === "index",
   });
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
@@ -45,6 +47,7 @@ export default function App() {
           [
             ["txo", "TXO 綜合損益"],
             ["stock", "個股"],
+            ["futures", "期貨"],
             ["index", "指數"],
           ] as [Tab, string][]
         ).map(([id, label]) => (
@@ -73,6 +76,15 @@ export default function App() {
             fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
           >
             <StockPage />
+          </Suspense>
+        </div>
+      ) : null}
+      {visited.futures ? (
+        <div hidden={tab !== "futures"} className={tab === "futures" ? "flex flex-1 flex-col" : ""}>
+          <Suspense
+            fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+          >
+            <FuturesPage />
           </Suspense>
         </div>
       ) : null}

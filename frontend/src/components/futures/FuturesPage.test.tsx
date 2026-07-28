@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesPage, futCloseEstimate } from "@/components/futures/FuturesPage";
@@ -150,10 +150,12 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
   it("預設大台:現價/漲跌/漲跌%/合約顯示", async () => {
     mockFetch(baseRoutes());
     render(page());
-    await waitFor(() => expect(screen.getByText("23000")).toBeTruthy());
-    expect(screen.getByText("+200")).toBeTruthy(); // 漲跌(點)
-    expect(screen.getByText("+0.88%")).toBeTruthy();
-    expect(screen.getByText("TXF 2026/09")).toBeTruthy();
+    // 「23000」同時出現在梯的價格欄 → 收斂 scope 到頂部資訊列(header)
+    const header = () => within(screen.getByRole("banner"));
+    await waitFor(() => expect(header().getByText("23000")).toBeTruthy());
+    expect(header().getByText("+200")).toBeTruthy(); // 漲跌(點)
+    expect(header().getByText("+0.88%")).toBeTruthy();
+    expect(header().getByText("TXF 2026/09")).toBeTruthy();
     expect(screen.getByRole("button", { name: "大台" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
@@ -163,8 +165,9 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
     mockFetch(baseRoutes());
     render(page());
     fireEvent.click(screen.getByRole("button", { name: "小台" }));
-    await waitFor(() => expect(screen.getByText("MXF 2026/09")).toBeTruthy());
-    expect(screen.getByText("23010")).toBeTruthy();
+    const header = () => within(screen.getByRole("banner"));
+    await waitFor(() => expect(header().getByText("MXF 2026/09")).toBeTruthy());
+    expect(header().getByText("23010")).toBeTruthy();
     expect(window.localStorage.getItem("copycat-fut-product")).toBe("MXF");
   });
 

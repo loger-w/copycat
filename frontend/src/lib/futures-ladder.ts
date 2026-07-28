@@ -64,6 +64,16 @@ export function splitMyLots(
     .sort((a, b) => b.priceMilli - a.priceMilli);
 }
 
+/** 商品碼 + 解析月份 YYYYMM → 期交所契約碼(期貨月碼 A..L + 年末碼;backend mapping 同款)。 */
+export function futExchangeContract(product: string, ym: string): string {
+  const year = Number(ym.slice(0, 4));
+  const month = Number(ym.slice(4, 6));
+  if (!/^\d{6}$/.test(ym) || month < 1 || month > 12) {
+    throw new Error(`invalid YYYYMM: ${ym}`);
+  }
+  return product + String.fromCharCode(65 + month - 1) + String(year % 10);
+}
+
 export function buildFuturesLadder(opts: {
   centerMilli: number;
   upperMilli: number;
