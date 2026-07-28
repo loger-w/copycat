@@ -1,8 +1,18 @@
 /** @vitest-environment jsdom */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
+
+function renderApp() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <App />
+    </QueryClientProvider>,
+  );
+}
 
 class FakeWS {
   onopen: (() => void) | null = null;
@@ -49,15 +59,18 @@ afterEach(() => {
 
 describe("App(index-board T9)", () => {
   it("nav 有「指數」tab 且 IndexBar 常駐(TXO tab 下可見)", async () => {
-    render(<App />);
+    renderApp();
     expect(screen.getByRole("tab", { name: "指數" })).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/加權/).textContent).toContain("42039.92"));
-    expect(screen.getByText(/櫃買/)).toBeTruthy();
-    expect(screen.getByText(/台指/)).toBeTruthy();
+    expect(screen.getByText(/櫃買/).textContent).toContain("359.8");
+    // /台指/ 會撞 TXO h1「台指選擇權」→ 以基差數字指認 IndexBar 台指組
+    expect(screen.getAllByText(/台指/).some((el) => el.textContent?.includes("+102.08"))).toBe(
+      true,
+    );
   });
 
   it("切到指數 tab 顯示 IndexPage(台指期列與兩張卡)", async () => {
-    render(<App />);
+    renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "指數" }));
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
     expect(screen.getByText("櫃買指數")).toBeTruthy();

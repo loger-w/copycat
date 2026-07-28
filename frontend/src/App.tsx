@@ -1,38 +1,51 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import { ConnectionBadge } from "@/components/ConnectionBadge";
+import { IndexBar } from "@/components/IndexBar";
 import { MetricsBar } from "@/components/MetricsBar";
 import { OrderPanel } from "@/components/OrderPanel";
 import { PnlChart } from "@/components/PnlChart";
 import { QuoteTable } from "@/components/QuoteTable";
 import { SeriesSelect } from "@/components/SeriesSelect";
+import { useIndexStream } from "@/hooks/useIndexStream";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
 import { cn } from "@/lib/utils";
 
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
+const IndexPage = lazy(() => import("@/components/index/IndexPage"));
 
-type Tab = "txo" | "stock";
+type Tab = "txo" | "stock" | "index";
 const TAB_KEY = "copycat-tab";
 
+function initialTab(): Tab {
+  const saved = window.localStorage.getItem(TAB_KEY);
+  return saved === "stock" || saved === "index" ? saved : "txo";
+}
+
 export default function App() {
-  const [tab, setTab] = useState<Tab>(
-    () => (window.localStorage.getItem(TAB_KEY) === "stock" ? "stock" : "txo"),
-  );
-  // 個股頁首次進入才 mount(lazy + WS 延後建立);之後 hidden 保留 DOM(§3 慣例)
-  const [stockVisited, setStockVisited] = useState(tab === "stock");
+  const [tab, setTab] = useState<Tab>(initialTab);
+  // 首次進入才 mount(lazy + WS 延後建立);之後 hidden 保留 DOM(§3 慣例)
+  const [visited, setVisited] = useState<Record<Tab, boolean>>({
+    txo: true,
+    stock: tab === "stock",
+    index: tab === "index",
+  });
+  // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
+  const { twse, otc, txf } = useIndexStream();
 
   useEffect(() => {
     window.localStorage.setItem(TAB_KEY, tab);
-    if (tab === "stock") setStockVisited(true);
+    setVisited((prev) => (prev[tab] ? prev : { ...prev, [tab]: true }));
   }, [tab]);
 
   return (
     <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 px-4 py-5">
-      <nav className="flex gap-1 border-b border-line" role="tablist">
+      <nav className="flex items-baseline gap-1 border-b border-line" role="tablist">
         {(
           [
             ["txo", "TXO 綜合損益"],
             ["stock", "個股"],
+            ["index", "指數"],
           ] as [Tab, string][]
         ).map(([id, label]) => (
           <button
@@ -49,16 +62,26 @@ export default function App() {
             {label}
           </button>
         ))}
+        <IndexBar twse={twse} otc={otc} txf={txf} />
       </nav>
       <div hidden={tab !== "txo"} className={tab === "txo" ? "flex flex-1 flex-col gap-4" : ""}>
         <TxoPage />
       </div>
-      {stockVisited ? (
+      {visited.stock ? (
         <div hidden={tab !== "stock"} className={tab === "stock" ? "flex flex-1 flex-col" : ""}>
           <Suspense
             fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
           >
             <StockPage />
+          </Suspense>
+        </div>
+      ) : null}
+      {visited.index ? (
+        <div hidden={tab !== "index"} className={tab === "index" ? "flex flex-1 flex-col" : ""}>
+          <Suspense
+            fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+          >
+            <IndexPage twse={twse} otc={otc} txf={txf} />
           </Suspense>
         </div>
       ) : null}
