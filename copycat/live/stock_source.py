@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict
 
 from copycat.live.stock_models import StockTick, parse_hist_tick
 from copycat.live.tc4 import TC4QuoteSource, build_rt_request
@@ -27,6 +27,66 @@ logger = logging.getLogger(__name__)
 
 _TRADING_START = _dt.time(8, 30)
 _TRADING_END = _dt.time(13, 35)
+
+_DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
+
+
+class DailyBar(TypedDict):
+    """overlay 用日 bar(毫元;date = YYYY-MM-DD)。定義在 source 層避免 live→server 逆依賴。"""
+
+    date: str
+    high: int
+    low: int
+    close: int
+
+
+def _milli(raw: str) -> int:
+    return round(float(raw) * 1000)
+
+
+def _iso_date(ymd: str) -> str:
+    return f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}"
+
+
+def _parse_dk_rows(rows: list[dict]) -> list[DailyBar]:
+    bars: list[DailyBar] = []
+    for r in rows:
+        try:
+            bars.append(
+                DailyBar(
+                    date=_iso_date(str(r["Date"])),
+                    high=_milli(r["High"]),
+                    low=_milli(r["Low"]),
+                    close=_milli(r["Close"]),
+                )
+            )
+        except (KeyError, ValueError):
+            continue
+    bars.sort(key=lambda b: b["date"])
+    return bars
+
+
+def _aggregate_1k_rows(rows: list[dict]) -> list[DailyBar]:
+    """1K rows → 日 bar(per Date:high=max、low=min、close=最後一根 close,依 Time 序)。"""
+    by_date: dict[str, list[tuple[str, int, int, int]]] = {}
+    for r in rows:
+        try:
+            item = (str(r["Time"]), _milli(r["High"]), _milli(r["Low"]), _milli(r["Close"]))
+        except (KeyError, ValueError):
+            continue
+        by_date.setdefault(str(r["Date"]), []).append(item)
+    bars: list[DailyBar] = []
+    for ymd in sorted(by_date):
+        items = sorted(by_date[ymd], key=lambda x: x[0])
+        bars.append(
+            DailyBar(
+                date=_iso_date(ymd),
+                high=max(h for _, h, _lo, _c in items),
+                low=min(lo for _, _h, lo, _c in items),
+                close=items[-1][3],
+            )
+        )
+    return bars
 
 
 def stock_symbol(code: str) -> str:
@@ -150,6 +210,44 @@ class StockQuoteSource(TC4QuoteSource):
         ticks = [t for r in rows if (t := parse_hist_tick(code, r)) is not None]
         logger.info("stock backfill %s: %d ticks", code, len(ticks))
         return ticks
+
+    # ---- 日 K(overlay 資料源;SC-4)----
+
+    def _collect_history(self, sym: str, data_type: str, start: str, end: str) -> list[dict]:
+        """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。"""
+        self._sub_history(sym, start, end, data_type)
+        deadline = time.monotonic() + max(self._poll_wait * 30, 1.0)
+        while True:
+            first = self._get_history(sym, start, end, "0", data_type)
+            if first.get("HisData"):
+                break
+            if time.monotonic() >= deadline:
+                return []
+            if self._poll_wait:
+                time.sleep(self._poll_wait)
+
+        def _page(qry_index: str) -> list[dict]:
+            return self._get_history(sym, start, end, qry_index, data_type).get("HisData", [])
+
+        rows: list[dict] = []
+        for page in iter_qry_pages(_page):
+            rows.extend(page)
+        return rows
+
+    def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+        """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。
+
+        含今日 partial bar 也照回 — 「已完成 bar」剔除在 overlay 層(design R1)。"""
+        self._ensure_connected()
+        sym = stock_symbol(code)
+        end_d = _dt.date.today()
+        start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
+        start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
+        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end))
+        if not bars:
+            logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
+            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end))
+        return bars[-n:]
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑)----
 

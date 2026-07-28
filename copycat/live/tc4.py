@@ -295,28 +295,30 @@ class TC4QuoteSource:
         logger.info("backfill done: %d ticks from %d symbols", len(ticks), len(series.contracts))
         return ticks
 
-    def _sub_history(self, symbol: str, start: str, end: str) -> dict:
+    def _sub_history(self, symbol: str, start: str, end: str, data_type: str = "TICKS") -> dict:
         return self._session_req(
             lambda session: {
                 "Request": "SUBQUOTE",
                 "SessionKey": session,
                 "Param": {
                     "Symbol": symbol,
-                    "SubDataType": "TICKS",
+                    "SubDataType": data_type,
                     "StartTime": start,
                     "EndTime": end,
                 },
             }
         )
 
-    def _get_history(self, symbol: str, start: str, end: str, qry_index: str) -> dict:
+    def _get_history(
+        self, symbol: str, start: str, end: str, qry_index: str, data_type: str = "TICKS"
+    ) -> dict:
         return self._session_req(
             lambda session: {
                 "Request": "GETHISDATA",
                 "SessionKey": session,
                 "Param": {
                     "Symbol": symbol,
-                    "SubDataType": "TICKS",
+                    "SubDataType": data_type,
                     "StartTime": start,
                     "EndTime": end,
                     "QryIndex": qry_index,
