@@ -59,3 +59,13 @@
 - [ ] frontend localStorage key 無統一前綴(copycat-tab / stock-main-code / copycat-chart-toggles / stock-ladder-open / stock-wl-group)— 下次新增 key 時考慮收斂 `copycat-` 前綴 + lib/constants.ts 集中
 - [ ] PriceLadder 全域 rows(最壞 ~200 列)無上限 lock 測試;若低價股(tick 10 毫元、±10% = 2000 列)出現效能問題再虛擬化
 - [ ] stock-ui-upgrade real-env 真截圖待補(TC4 離線 infra_fail;清單見 .claude/feat/stock-ui-upgrade/real-env-verification-round-1.json;達錢 4 開啟後跑 server + devtools 補 evidence)
+
+## 2026-07-28(capital-order Phase 3 順手清單)
+
+- [ ] 舊 TC4 trade 路刪除(server/trade.py、live/tc4_trade.py、fake_trade.py、frontend useTrade.ts/OrdersList.tsx/OrderConfirm.tsx + 測試;全部已標 @deprecated,/api/trade/* 恆 503)
+- [ ] TXO snapshot 補推 per-contract last_price(OrderPanel 市價估價目前缺值全鎖,限價不受影響;ContractRow.last_price 前端欄位已預留)
+- [ ] app.py futures source 啟動旗標借用 trade_source is DEFAULT_TRADE(sentinel 語意耦合已註解;__main__ 顯式傳 DEFAULT_FUTURES 後可解耦)
+- [ ] 期貨平倉「範圍市價 P + IOC」候選:prod 實測 bstrPrice="P"/"M" 可送性後,可從限價貼漲跌停切回(docs/research/2026-07-28-skcom-typelib.md)
+- [ ] 選擇權閃電梯(本輪 out of scope,TXO 表單已群益化)
+- [ ] 群益回報自動重連(本輪拍板不做;做之前 store 聚合非冪等 → 必先 clear 再重播 backlog)
+- [ ] OnAccount / OnOpenInterest 欄序為 prod 未實測假定(com.py `_parse_account_row`、balance.py `parse_open_interest_line` docstring 已標)— 首次 prod 登入核對後校正
