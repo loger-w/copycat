@@ -14,6 +14,8 @@
   --color-loss: #2e8b8b; /* 虧損區暗青 */
   --color-bull: #f0524f; /* 台股紅漲 */
   --color-bear: #3ba272; /* 台股綠跌 */
+  --color-ma5: #f0b429; /* MA5 黃 */
+  --color-ma20: #b794f4; /* MA20 紫 */
 
   --font-sans: "IBM Plex Sans TC", "Noto Sans TC", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
