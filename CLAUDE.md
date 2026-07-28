@@ -262,6 +262,7 @@ WebSocket / 即時 Stream 紀律:
 - **純 `uvicorn` 沒有 WebSocket protocol 支援**,WS upgrade 直接 404(且錯誤訊息不會提示缺件)— 要 `uvicorn[standard]`。(2026-07-18,Trigger:新增 WS endpoint 或部署裝依賴)
 - **個股 REALTIME 實測事實(2026-07-21,stock-terminal 落地)**:上市+上櫃**全掛 `TC.S.TWS.<code>` 段**(TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推成交 tick**(時間窗過濾為雙保險),`TradeStatus` 值域實測 {0=正常, 1=試撮期簿更新};**盤後 fresh subscribe 會回當日收盤 snapshot**(延遲分鐘級);股票類 `QUERYALLINSTRUMENT` 無有效 Type(Stock/Stk/Sec/Equity 全 Fail),股號存在性靠「訂閱後有無推播」健檢。(Trigger:碰個股訂閱/試撮處理/盤外顯示)
 - **個股期不在 Fut 商品樹但可訂閱**:`TC.F.TWF.<期交所兩碼+F>.HOT`(CDF=2330);對映靠期交所股票期貨清單頁(`copycat/stkfut_map.py` refresh CLI),**同股號標準(2,000 股)/小型(100 股)並存取契約單位大者**;推播 `SecurityName` 帶「名稱(股號)」可交叉核對。**達錢 4 無下單功能**(合作清單全期貨商),交易面另接券商 API。(2026-07-21,Trigger:期現對照/個股期訂閱/評估下單路線)
+- **TC4 指數/日 K 實測(2026-07-28 盤中)**:(a) 加權指數 = `TC.S.TWS.IX0001`(REALTIME 推播含五檔/高低/漲跌停鍵);TWS 指數目錄 81 檔(IX0001-42 上市類股 + IX0100+ 特色),**櫃買指數不在 TC4 symbol 樹**(TWO/OTC/TPE/GTSM 段與 IX0043-0200 掃盡皆無)。(b) `QUERYINSTRUMENTINFO` 對不存在 symbol 回 parse failed = **存在性 oracle**(SUBQUOTE 照回 OK 不可靠,健檢之外的第二判法);股票/指數同段查詢會附父節點資訊(TickSize/OpenCloseTime)。(c) **股票 SubHistory `DK` 直接支援**(2330 實測 25 根日 K 解析零略過,官方文件未載;overlay 的 1K 聚合 fallback 為備援)。probe 工具:`spikes/index_symbol_probe.py`(--candidates 覆寫)/`index_node_probe.py`。(Trigger:訂閱指數、查 symbol 存在性、抓日 K)
 - **長跑 pipeline 必須有進度 log**:round 1 fade-search 跑 6 小時全程黑箱,無法判斷卡死或正常。fold/arm/generation 邊界各 log 一行(logger,含完成比例與耗時),成本近零。(2026-07-11,Trigger:寫任何預期 >10 分鐘的批次/搜索迴圈)
 
 (寫入規則參考 trash-cmoney CLAUDE.md §8。)
