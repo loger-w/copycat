@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { OrderBook } from "@/components/stock/OrderBook";
+import { PriceLadder } from "@/components/stock/PriceLadder";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
@@ -83,11 +84,18 @@ export function StockPage() {
                 <StockIntradayChart accum={accum} />
                 <div className="flex flex-wrap gap-3">
                   <div className="min-w-56">
-                    <OrderBook book={accum.book} last={last} ref_={meta?.ref ?? null} />
+                    <OrderBook
+                      book={accum.book}
+                      last={last}
+                      ref_={meta?.ref ?? null}
+                      upper={meta?.upper ?? null}
+                      lower={meta?.lower ?? null}
+                    />
                   </div>
                   <div className="min-w-0 flex-1">
                     <TickTape ticks={accum.ticks} />
                   </div>
+                  <PriceLadder book={accum.book} last={last} meta={meta} />
                 </div>
               </>
             ) : (
