@@ -31,7 +31,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string) => {
       if (String(url).includes("/api/stock/watchlist")) {
-        return new Response(JSON.stringify({ codes: ["2330"] }));
+        return new Response(JSON.stringify({ groups: [{ name: "自選", codes: ["2330"] }] }));
       }
       return new Response(
         JSON.stringify({
