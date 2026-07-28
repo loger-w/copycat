@@ -33,6 +33,15 @@ beforeEach(() => {
       if (String(url).includes("/api/stock/watchlist")) {
         return new Response(JSON.stringify({ groups: [{ name: "自選", codes: ["2330"] }] }));
       }
+      if (String(url).includes("/api/capital/status")) {
+        return new Response(JSON.stringify({ status: "ok", env: "test", order_enabled: true }));
+      }
+      if (String(url).includes("/api/capital/orders")) {
+        return new Response(JSON.stringify({ orders: [] }));
+      }
+      if (String(url).includes("/api/capital/positions")) {
+        return new Response(JSON.stringify({ positions: [] }));
+      }
       return new Response(
         JSON.stringify({
           code: "2330", seq: 1,
@@ -73,5 +82,14 @@ describe("StockPage", () => {
     const ws = FakeWS.instances[0]!;
     ws.emit({ type: "status", tc4: "down", backfilling: null });
     await waitFor(() => expect(screen.getByText(/達錢 4 連線中斷/)).toBeTruthy());
+  });
+
+  it("選檔後下方渲染群益委託/部位列表(market=sec;SC-5/6)", async () => {
+    window.localStorage.setItem("stock-main-code", "2330");
+    wrap(<StockPage />);
+    expect(await screen.findByText("委託")).toBeTruthy();
+    expect(screen.getByText("部位")).toBeTruthy();
+    expect(await screen.findByText("無委託")).toBeTruthy();
+    expect(await screen.findByText("無部位")).toBeTruthy();
   });
 });
