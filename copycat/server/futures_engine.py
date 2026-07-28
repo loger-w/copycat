@@ -1,0 +1,189 @@
+"""FuturesEngine:TXF/MXF/TMF HOT 五檔/成交狀態機 + HOT→實際契約解析(SC-8;design §10)。
+
+- per-product 狀態:最新成交(價/量/累積量/時刻/日期)、五檔(REALTIME `Bid`=最佳位移
+  歸一)、漲跌停/參考價;`seq` 全域遞增;`state()` 供 REST/WS 全量。
+- `resolved_contract(product)`:HOT 推播月份欄位解析 YYYYMM(resolve_contract_ym 純函式,
+  futures_models)快取;跨日失效(date 變更清空)、換月即更新;解析不到 None = 送單層
+  拒單(design §5 edge case 4)。
+- 期貨無試撮窗、分鐘聚合 out of scope(梯不需要)→ 不做兩段式換日/StockDayState。
+- 成交欄位 last-write-wins 不做 cum 序 stale-drop:REALTIME TradeVolume 每時段(日/夜盤)
+  重新起算(live/session 時區事實),同日 cum 回捲是正常換場,嚴格遞增 guard 會整段丟夜盤。
+- 建構子吃 source factory + broadcast callback(app.py 接線是 Task 9;測試注入 fake)。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Callable, Protocol
+
+from copycat.live.futures_models import (
+    PRODUCTS,
+    parse_futures_realtime,
+    product_from_symbol,
+    resolve_contract_ym,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class FuturesSource(Protocol):
+    """期貨行情來源抽象;TC4 實作在 copycat.live.futures_source,測試注入 fake。"""
+
+    def subscribe_symbol(self, product: str) -> None: ...
+
+    def unsubscribe_symbol(self, product: str) -> None: ...
+
+    def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class _ProductState:
+    __slots__ = (
+        "name",
+        "p",
+        "q",
+        "cum_vol",
+        "t",
+        "date",
+        "bids",
+        "asks",
+        "ref",
+        "upper",
+        "lower",
+        "resolved_ym",
+    )
+
+    def __init__(self) -> None:
+        self.name = ""
+        self.p: int | None = None
+        self.q: int | None = None
+        self.cum_vol: int | None = None
+        self.t: str | None = None
+        self.date: str | None = None
+        self.bids: list[tuple[int, int]] = []
+        self.asks: list[tuple[int, int]] = []
+        self.ref: int | None = None
+        self.upper: int | None = None
+        self.lower: int | None = None
+        self.resolved_ym: str | None = None
+
+    def payload(self, product: str) -> dict:
+        return {
+            "product": product,
+            "name": self.name,
+            "p": self.p,
+            "q": self.q,
+            "cum_vol": self.cum_vol,
+            "t": self.t,
+            "date": self.date,
+            "bids": list(self.bids),
+            "asks": list(self.asks),
+            "ref": self.ref,
+            "upper": self.upper,
+            "lower": self.lower,
+            "resolved_contract": self.resolved_ym,
+        }
+
+
+class FuturesEngine:
+    def __init__(
+        self,
+        source_factory: Callable[[], FuturesSource],
+        *,
+        broadcast: Callable[[dict], None] | None = None,
+        products: tuple[str, ...] = PRODUCTS,
+    ) -> None:
+        self._source_factory = source_factory
+        self._broadcast = broadcast
+        self._products = products
+        self._states: dict[str, _ProductState] = {p: _ProductState() for p in products}
+        self._seq = 0
+        self._source: FuturesSource | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    # ---- 生命週期 ----
+
+    async def start(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._source = self._source_factory()
+        self._source.set_on_message(self._on_quote_threadsafe)
+        await asyncio.to_thread(self._subscribe_all)
+
+    def _subscribe_all(self) -> None:
+        assert self._source is not None
+        for product in self._products:
+            try:
+                self._source.subscribe_symbol(product)
+            except ConnectionError:
+                # 單品訂閱失敗降級續行(app 層照起;stale 重連時基底會重掛成功品)
+                logger.warning("futures subscribe %s failed", product)
+
+    async def close(self) -> None:
+        # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
+        # 到即將關閉的 loop(index_engine review A1 同款)
+        self._loop = None
+        if self._source is not None:
+            await asyncio.to_thread(self._source.close)
+
+    # ---- 對外查詢 ----
+
+    def state(self) -> dict:
+        return {
+            "seq": self._seq,
+            "products": {p: st.payload(p) for p, st in self._states.items()},
+        }
+
+    def resolved_contract(self, product: str) -> str | None:
+        """HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。"""
+        st = self._states.get(product)
+        return st.resolved_ym if st is not None else None
+
+    # ---- 推播處理(source thread → loop)----
+
+    def _on_quote_threadsafe(self, quote: dict) -> None:
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._handle_quote, quote)
+
+    def _handle_quote(self, quote: dict) -> None:
+        product = product_from_symbol(str(quote.get("Symbol", "")))
+        if product is None:
+            return
+        st = self._states.get(product)
+        if st is None:
+            return
+        tick, book, meta = parse_futures_realtime(quote)
+        if book.bids or book.asks:
+            st.bids = book.bids
+            st.asks = book.asks
+        if meta.name:
+            st.name = meta.name
+        if meta.ref_milli is not None:
+            st.ref = meta.ref_milli
+        if meta.upper_milli is not None:
+            st.upper = meta.upper_milli
+        if meta.lower_milli is not None:
+            st.lower = meta.lower_milli
+        if tick is not None:
+            if st.date is not None and tick.trade_date != st.date:
+                st.resolved_ym = None  # 跨日失效:先清,同筆有月份訊號再重解
+            st.date = tick.trade_date
+            st.p = tick.price_milli
+            st.q = tick.qty
+            st.cum_vol = tick.cum_vol
+            st.t = tick.time
+        ym = resolve_contract_ym(quote)
+        if ym is not None:
+            st.resolved_ym = ym  # 快取;換月推播即更新
+        self._seq += 1
+        if self._broadcast is not None:
+            self._broadcast(
+                {
+                    "type": "futures",
+                    "seq": self._seq,
+                    "product": product,
+                    "state": st.payload(product),
+                }
+            )
