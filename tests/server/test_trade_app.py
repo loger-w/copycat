@@ -1,4 +1,9 @@
-"""SC-6/7:/api/trade/* 契約、錯誤碼 HTTP 對映、與 quote 路徑隔離。"""
+"""SC-11(capital-order):TC4 TradeRuntime 停用 — /api/trade/* 一律 503,舊 source 不啟動。
+
+原本此檔測 preview/submit/錯誤映射的 HTTP 流(經 TradeRuntime);lifespan 停用後
+routes 保留但 state.trade 恆 None → 全部 503 TRADE_NOT_READY。TradeRuntime 本身的
+gate/preview/submit 邏輯仍由 tests/server/test_trade_gates.py 直測覆蓋(trade.py 不退役)。
+"""
 
 from __future__ import annotations
 
@@ -8,13 +13,8 @@ from typing import Any, Callable
 import pytest
 from fastapi.testclient import TestClient
 
-from copycat.live.models import SPOT_SYMBOL, OptionContract, SeriesInfo, Tick
-from copycat.live.trade_models import (
-    AccountInfo,
-    BrokerRejectedError,
-    OrderReport,
-    TouchanceDownError,
-)
+from copycat.live.models import OptionContract, SeriesInfo, Tick
+from copycat.live.trade_models import AccountInfo, OrderReport
 from copycat.server.app import create_app
 
 C23000 = OptionContract(symbol="TC.O.TWF.TXO.202607.C.23000", cp="C", strike_millipts=23_000_000)
@@ -42,33 +42,32 @@ class FakeQuoteSource:
 
 
 class FakeTrade:
+    """舊 TC4 trade source 治具:任何方法被呼叫都記進 calls(SC-11 斷言不得啟動)。"""
+
     def __init__(self) -> None:
-        self.account_list = [
-            AccountInfo(broker_id="SIM", account="9999000", account_mask="SIM-9999000", raw={})
-        ]
-        self.place_error: Exception | None = None
-        self.place_calls: list[dict[str, str]] = []
+        self.calls: list[str] = []
 
     def accounts(self) -> list[AccountInfo]:
-        return self.account_list
+        self.calls.append("accounts")
+        return []
 
     def place_order(self, param: dict[str, str]) -> dict:
-        self.place_calls.append(param)
-        if self.place_error is not None:
-            raise self.place_error
+        self.calls.append("place_order")
         return {"Success": "OK"}
 
     def restore_reports(self) -> list[OrderReport]:
+        self.calls.append("restore_reports")
         return []
 
     def restore_fills(self) -> list[OrderReport]:
+        self.calls.append("restore_fills")
         return []
 
     def subscribe_reports(self, on_report: Any, on_reconnect: Any) -> None:
-        return None
+        self.calls.append("subscribe_reports")
 
     def close(self) -> None:
-        return None
+        self.calls.append("close")
 
 
 def make_client(
@@ -89,170 +88,58 @@ def make_client(
     )
 
 
-def do_preview(client: TestClient, **overrides: Any) -> Any:
-    body: dict[str, Any] = {
-        "symbol": C23000.symbol,
-        "side": "buy",
-        "kind": "limit",
-        "qty": 1,
-        "price": "15.5",
-    }
-    body.update(overrides)
-    return client.post("/api/trade/preview", json=body)
+_PREVIEW_BODY = {
+    "symbol": C23000.symbol,
+    "side": "buy",
+    "kind": "limit",
+    "qty": 1,
+    "price": "15.5",
+}
+
+_TRADE_ROUTES: list[tuple[str, str, dict[str, Any] | None]] = [
+    ("GET", "/api/trade/account", None),
+    ("POST", "/api/trade/preview", _PREVIEW_BODY),
+    ("POST", "/api/trade/orders", {"preview_id": "x"}),
+    ("GET", "/api/trade/orders", None),
+]
 
 
-class TestAccountRoute:
-    def test_account_with_orderable_symbols(
+class TestTradeRoutesDisabled:
+    def test_all_routes_503_even_with_source(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """SC-11:即使傳入 trade_source,lifespan 不再啟動 TradeRuntime → 一律 503。"""
         with make_client(tmp_path, monkeypatch, FakeTrade()) as client:
             client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            res = client.get("/api/trade/account")
-            assert res.status_code == 200
-            body = res.json()
-            assert body["mode"] == "sim"
-            assert body["status"] == "ready"
-            assert C23000.symbol in body["orderable_symbols"]
-            assert SPOT_SYMBOL in body["orderable_symbols"]
+            for method, url, body in _TRADE_ROUTES:
+                res = client.request(method, url, json=body)
+                assert res.status_code == 503, url
+                assert res.json()["detail"]["error"] == "TRADE_NOT_READY", url
 
     def test_no_trade_source_is_not_ready(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         with make_client(tmp_path, monkeypatch, None) as client:
-            preview_body = {
-                "symbol": C23000.symbol,
-                "side": "buy",
-                "kind": "limit",
-                "qty": 1,
-                "price": "15.5",
-            }
-            for method, url, body in [
-                ("GET", "/api/trade/account", None),
-                ("POST", "/api/trade/preview", preview_body),
-                ("POST", "/api/trade/orders", {"preview_id": "x"}),
-                ("GET", "/api/trade/orders", None),
-            ]:
+            for method, url, body in _TRADE_ROUTES:
                 res = client.request(method, url, json=body)
                 assert res.status_code == 503, url
-                assert res.json()["detail"]["error"] == "TRADE_NOT_READY"
+                assert res.json()["detail"]["error"] == "TRADE_NOT_READY", url
 
-
-class TestPreviewSubmit:
-    def test_happy_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        trade = FakeTrade()
-        with make_client(tmp_path, monkeypatch, trade) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            pv = do_preview(client)
-            assert pv.status_code == 200
-            preview_id = pv.json()["preview_id"]
-            res = client.post("/api/trade/orders", json={"preview_id": preview_id})
-            assert res.status_code == 200
-            assert trade.place_calls[0]["Price"] == "15.5"
-
-    def test_submit_without_preview(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        with make_client(tmp_path, monkeypatch, FakeTrade()) as client:
-            res = client.post("/api/trade/orders", json={"preview_id": "ghost"})
-            assert res.status_code == 400
-            assert res.json()["detail"]["error"] == "CONFIRM_REQUIRED"
-
-    def test_invalid_price(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        with make_client(tmp_path, monkeypatch, FakeTrade()) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            res = do_preview(client, price="abc")
-            assert res.status_code == 400
-            assert res.json()["detail"]["error"] == "INVALID_ORDER"
-
-    def test_limit_without_price(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        with make_client(tmp_path, monkeypatch, FakeTrade()) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            res = do_preview(client, price=None)
-            assert res.status_code == 400
-            assert res.json()["detail"]["error"] == "INVALID_ORDER"
-
-    def test_symbol_not_allowed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        with make_client(tmp_path, monkeypatch, FakeTrade()) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            res = do_preview(client, symbol="TC.O.TWF.TXO.209912.C.1")
-            assert res.status_code == 400
-            assert res.json()["detail"]["error"] == "SYMBOL_NOT_ALLOWED"
-
-
-class TestErrorMapping:
-    def test_broker_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        trade = FakeTrade()
-        trade.place_error = BrokerRejectedError("-22", "tick size")
-        with make_client(tmp_path, monkeypatch, trade) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            preview_id = do_preview(client).json()["preview_id"]
-            res = client.post("/api/trade/orders", json={"preview_id": preview_id})
-            assert res.status_code == 400
-            detail = res.json()["detail"]
-            assert detail["error"] == "BROKER_REJECTED"
-            assert detail["err_code"] == "-22"
-
-    def test_touchance_down_and_quote_unaffected(
+    def test_trade_source_never_started(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """舊 source 完全不被觸碰(不啟動也不 close — 從未開啟過)。"""
         trade = FakeTrade()
-        trade.place_error = TouchanceDownError("down")
-        with make_client(tmp_path, monkeypatch, trade) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            preview_id = do_preview(client).json()["preview_id"]
-            res = client.post("/api/trade/orders", json={"preview_id": preview_id})
-            assert res.status_code == 502
-            assert res.json()["detail"]["error"] == "TOUCHANCE_DOWN"
-            assert client.get("/api/txo/snapshot").status_code == 200  # 隔離:看盤不受影響
+        with make_client(tmp_path, monkeypatch, trade):
+            pass
+        assert trade.calls == []
 
-    def test_live_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        trade = FakeTrade()
-        trade.account_list = [
-            AccountInfo(broker_id="F999", account="1234567", account_mask="F999-1234567", raw={})
-        ]
-        with make_client(tmp_path, monkeypatch, trade) as client:
-            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
-            res = do_preview(client)
-            assert res.status_code == 403
-            assert res.json()["detail"]["error"] == "LIVE_DISABLED"
-
-
-class TestLifespanRobustness:
-    def test_unexpected_trade_error_disables_trade_only(
+    def test_quote_unaffected_and_closed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """trade 初始化炸非預期例外 → 交易停用(503),quote 照常(review B1)。"""
-
-        class BrokenTrade(FakeTrade):
-            def accounts(self) -> list[AccountInfo]:
-                raise RuntimeError("boom")
-
-        with make_client(tmp_path, monkeypatch, BrokenTrade()) as client:
-            assert client.get("/api/txo/series").status_code == 200
-            res = client.get("/api/trade/account")
-            assert res.status_code == 503
-            assert res.json()["detail"]["error"] == "TRADE_NOT_READY"
-
-    def test_trade_close_failure_does_not_block_quote_close(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """關機時 trade.close() 拋錯不得擋掉 quote runtime 清理(review B2)。"""
-
-        class BadCloseTrade(FakeTrade):
-            def close(self) -> None:
-                raise RuntimeError("close boom")
-
+        """trade 停用不得波及看盤;關機仍正常清理 quote runtime。"""
         quote = FakeQuoteSource()
-        with make_client(tmp_path, monkeypatch, BadCloseTrade(), quote=quote) as client:
-            client.get("/api/trade/account")
+        with make_client(tmp_path, monkeypatch, FakeTrade(), quote=quote) as client:
+            client.post("/api/txo/select", json={"series_id": SERIES.series_id})
+            assert client.get("/api/txo/snapshot").status_code == 200
         assert quote.closed is True
-
-
-class TestOrdersRoute:
-    def test_orders_view_shape(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        with make_client(tmp_path, monkeypatch, FakeTrade()) as client:
-            res = client.get("/api/trade/orders")
-            assert res.status_code == 200
-            body = res.json()
-            assert body["orders"] == []
-            assert body["fills"] == []
-            assert body["degraded"] is False
-            assert body["audit_degraded"] is False
