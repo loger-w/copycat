@@ -21,8 +21,12 @@ from copycat.live.trade_models import (
     TouchanceDownError,
     millipts_from_price_str,
 )
+from copycat.capital import factory as capital_factory
+from copycat.capital.client import CapitalClient
 from copycat.server.audit import AuditWriteError
+from copycat.server.capital_api import WsBroadcaster, register_capital
 from copycat.server.engine import EngineRuntime, QuoteSource
+from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.overlay import OverlayCache, build_overlay
@@ -53,6 +57,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TRADE: Final = object()
 DEFAULT_STOCK: Final = object()  # 同語意:__main__ 傳入才建真 StockQuoteSource
 DEFAULT_INDEX: Final = object()  # 同語意(index-board IR9)
+DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
 
 _TRADE_START_TIMEOUT_SECS = 15.0
 
@@ -113,12 +118,19 @@ def _default_index_source() -> IndexSource:
     return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
 
 
+def _default_futures_source() -> FuturesSource:
+    from copycat.live.futures_source import FuturesQuoteSource  # 延遲 import:測試不觸 pyzmq
+
+    return FuturesQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+
+
 def create_app(
     source: QuoteSource | None = None,
     *,
     trade_source: TradeSource | object | None = None,
     stock_source: StockSource | object | None = None,
     index_source: IndexSource | object | None = None,
+    futures_source: FuturesSource | object | None = None,
     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
     throttle_secs: float = 1.0,
@@ -126,6 +138,8 @@ def create_app(
 ) -> FastAPI:
     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
+    capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
+    futures_ws = WsBroadcaster()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -229,9 +243,67 @@ def create_app(
                     logger.exception("index close 失敗(忽略)")
             index = None
         app.state.index = index
+        # capital(群益下單;capital-order design §13):factory 未設定 → None = disabled;
+        # 啟動失敗 catch → None 降級,server 照起(stock/index 同慣例)
+        capital: CapitalClient | None = None
+        try:
+            capital = capital_factory.get_capital()
+            if capital is not None:
+                loop = asyncio.get_running_loop()
+
+                def _capital_broadcast(payload: dict[str, object]) -> None:
+                    # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
+                    loop.call_soon_threadsafe(capital_ws.publish, payload)
+
+                capital.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
+                capital.start(loop)
+        except Exception:
+            logger.exception("capital 初始化非預期失敗,群益功能停用(其餘不受影響)")
+            if capital is not None:
+                try:
+                    await asyncio.to_thread(capital.close)
+                except Exception:
+                    logger.exception("capital close 失敗(忽略)")
+            capital = None
+        app.state.capital = capital
+        # futures 行情引擎(SC-8):__main__ 不改 — 正式啟動(trade_source=DEFAULT_TRADE,
+        # TradeRuntime 停用後該 sentinel 僅剩「正式啟動旗標」語意)即建真 source;
+        # 測試未傳(None)零連線;顯式 DEFAULT_FUTURES / source 實例亦可
+        futures: FuturesEngine | None = None
+        try:
+            if futures_source is DEFAULT_FUTURES or (
+                futures_source is None and trade_source is DEFAULT_TRADE
+            ):
+                resolved_futures: FuturesSource | None = _default_futures_source()
+            else:
+                resolved_futures = cast("FuturesSource | None", futures_source)
+            if resolved_futures is not None:
+                fut_src = resolved_futures
+                futures = FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
+                await futures.start()
+        except Exception:
+            logger.exception("futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)")
+            if futures is not None:
+                try:
+                    await futures.close()
+                except Exception:
+                    logger.exception("futures close 失敗(忽略)")
+            futures = None
+        app.state.futures = futures
         try:
             yield
         finally:
+            # 關機反序:futures → capital → index → stock → (trade) → runtime
+            if futures is not None:
+                try:
+                    await futures.close()
+                except Exception:
+                    logger.exception("futures close 失敗(關機續行)")
+            if capital is not None:
+                try:
+                    await asyncio.to_thread(capital.close)  # join COM 執行緒(≤5s)
+                except Exception:
+                    logger.exception("capital close 失敗(關機續行)")
             if index is not None:
                 try:
                     await index.close()
@@ -259,6 +331,10 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    app.state.capital_ws = capital_ws
+    app.state.futures_ws = futures_ws
+    register_capital(app)  # capital/futures routes + 例外映射(capital-order design §6)
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

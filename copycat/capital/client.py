@@ -103,6 +103,13 @@ _ComCall = Callable[[], tuple[str, int]]
 _Cmd = tuple[_ComCall, "asyncio.Future[tuple[str, int]]"]
 
 
+def _mask_account(value: str | None) -> str | None:
+    """帳號遮罩:只露末 4 碼(status route/log 共用語意;帳號本體不得外流)。"""
+    if not value:
+        return None
+    return "****" + value[-4:]
+
+
 def _settle(
     fut: asyncio.Future[tuple[str, int]],
     result: tuple[str, int] | None = None,
@@ -167,6 +174,16 @@ class CapitalClient:
     @property
     def futures_account(self) -> str | None:
         return self._futures_account
+
+    def status_view(self) -> dict[str, object]:
+        """GET /api/capital/status 欄位(design §6);disabled 情境由 route 處理(client None)。"""
+        return {
+            "status": self._status,
+            "env": self._env,
+            "account_masked": _mask_account(self._full_account),
+            "futures_account_masked": _mask_account(self._futures_account),
+            "order_enabled": self._safety.order_enabled,
+        }
 
     def set_broadcast(self, fn: Callable[[dict[str, object]], None]) -> None:
         """fn(payload) —— 由 app 注入,通常包成 call_soon_threadsafe + broadcaster。"""
