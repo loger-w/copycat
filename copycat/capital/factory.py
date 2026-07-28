@@ -30,12 +30,21 @@ _VALID_ENVS = ("test", "prod")
 
 def _dotenv_values() -> dict[str, str]:
     """repo root .env 的 CAPITAL_*/TXO_AUDIT_DIR 逐 key 解析(每次 get_capital 重讀,
-    量小;server 不載 dotenv,慣例=env → .env → 預設,對齊 cli/notify)。"""
+    量小;server 不載 dotenv,慣例=env → .env → 預設,對齊 cli/notify)。
+
+    utf-8-sig:Windows 編輯器常存 BOM,utf-8 會把首 key 讀成 \\ufeffKEY 靜默失效(T2)。
+    never-raise:.env 壞檔(權限/壞編碼)視同無檔,警告後回 {} — 對齊
+    notify.resolve_webhook_url 的 review F1 慣例(I4)。"""
     env_file = Path(".env")
-    if not env_file.exists():
+    try:
+        if not env_file.exists():
+            return {}
+        text = env_file.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning(".env 讀取失敗,dotenv fallback 視同無檔:%s", e)
         return {}
     out: dict[str, str] = {}
-    for line in env_file.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         key, sep, value = line.partition("=")
         if sep and not line.lstrip().startswith("#"):
             out[key.strip()] = value.strip()
@@ -46,10 +55,13 @@ _dotenv_cache: dict[str, str] | None = None
 
 
 def _getenv(name: str) -> str | None:
-    """os.environ 優先,缺值 fallback repo root .env(Phase 6 real-env finding)。"""
-    value = os.getenv(name)
-    if value is not None and value.strip():
-        return value
+    """os.environ 有此 key(含空字串)即回傳,完全不 fallback;僅未設才讀 repo root .env。
+
+    與 cli/notify(值空白也 fallback)刻意不同:CAPITAL_* 含下單開關/憑證等安全 key,
+    operator 用 `set KEY=` 清空必須能壓制 .env(空值經 caller strip 即為未設語意),
+    否則「已明確清空」會被檔案值復活 — 安全方向取不 fallback(review I5)。"""
+    if name in os.environ:
+        return os.environ[name]
     global _dotenv_cache
     if _dotenv_cache is None:
         _dotenv_cache = _dotenv_values()
