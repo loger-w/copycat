@@ -75,6 +75,9 @@ class FakeSource:
             self.backfill_gate.wait(timeout=5)
         return list(self.backfill_result)
 
+    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+        return []
+
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.on_message = cb
 
