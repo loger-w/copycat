@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
@@ -20,9 +21,24 @@ const STATUS_BLOCKED: Record<string, string> = {
   starting: tradeErrorText("CAPITAL_NOT_READY"),
 };
 
+/** Active 序列全鏈合約(Task 16b;snapshot.contracts 僅當日成交子集,選單要全鏈)。 */
+function useTxoContracts() {
+  return useQuery({
+    queryKey: ["txo-contracts"],
+    queryFn: async () => {
+      const res = await fetch("/api/txo/contracts");
+      if (!res.ok) throw new Error(`HTTP_${res.status}`);
+      return (await res.json()) as { contracts: string[] };
+    },
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+}
+
 export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
   const status = useCapitalStatus();
   const submit = useSubmitFuture();
+  const chain = useTxoContracts();
 
   const [symbol, setSymbol] = useState("");
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -34,8 +50,9 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const info = status.data;
-  // 商品清單 = TXO snapshot 序列合約(TC4 symbol;snapshot 契約只加不改)
-  const symbols = (contracts ?? []).map((c) => c.symbol);
+  // 商品清單主來源 = /api/txo/contracts 全鏈;失敗或空列表 fallback snapshot contracts(子集)
+  const chainSymbols = chain.data?.contracts ?? [];
+  const symbols = chainSymbols.length > 0 ? chainSymbols : (contracts ?? []).map((c) => c.symbol);
   const selected = symbol || symbols[0] || "";
   // 市價閘用估價 = 該合約最近成交價(snapshot last_price);缺值 → 鎖市價選項
   const marketEstimate = (contracts ?? []).find((c) => c.symbol === selected)?.last_price ?? null;
