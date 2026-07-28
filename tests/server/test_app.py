@@ -127,8 +127,9 @@ class TestWebSocket:
 class TestTxoContractsRoute:
     """SC-11(Task 16b):OrderPanel 全鏈選單來源 — active 序列全集,非 snapshot 成交子集。"""
 
-    def test_contracts_empty_before_select(self) -> None:
-        client, _ = make_client()
+    def test_contracts_empty_when_no_series(self) -> None:
+        # runtime 啟動即自動 activate 首序列 → 空態要用零序列 fake 逼出
+        client, _ = make_client(FakeQuoteSource(series=[]))
         with client:
             res = client.get("/api/txo/contracts")
             assert res.status_code == 200
