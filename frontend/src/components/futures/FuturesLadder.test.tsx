@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
+import { ARM_IDLE_MS } from "@/lib/flash-arm";
 import type { CapitalOrder, FuturesProductState } from "@/types";
 
 const TXF_STATE: FuturesProductState = {
@@ -223,6 +224,71 @@ describe("FuturesLadder 武裝直送(SC-8)", () => {
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
     act(() => setCapitalWsStatus("closed"));
     expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+  });
+});
+
+describe("FuturesLadder 武裝防護(review C3/C4)", () => {
+  it("idle 5 分鐘自動解除", () => {
+    vi.useFakeTimers();
+    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    render(ladder());
+    armUp();
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(ARM_IDLE_MS + 1);
+    });
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+  });
+
+  it("送單 400:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除", async () => {
+    mockFetch({
+      "/api/capital/order/future": () =>
+        json({ detail: { error: "BROKER_REJECTED", err_code: "1097", err_msg: "廢單" } }, 400),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(screen.getByLabelText("買 22999"));
+    await waitFor(() => expect(screen.getByText("券商拒單(1097)")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 1 次失敗仍武裝
+    fireEvent.click(screen.getByLabelText("賣 23001"));
+    fireEvent.click(screen.getByLabelText("買 23000"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+  });
+
+  it("200 但 ok:false(結果未知 code=-1)→ hint 顯示 message 且 failStreak 累積", async () => {
+    mockFetch({
+      "/api/capital/order/future": () =>
+        json({ ok: false, code: -1, message: "結果未知(逾時)", seq_no: null }),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(screen.getByLabelText("買 22999"));
+    await waitFor(() => expect(screen.getByText("結果未知(逾時)")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 1 次失敗仍武裝
+    fireEvent.click(screen.getByLabelText("賣 23001"));
+    fireEvent.click(screen.getByLabelText("買 23000"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+  });
+
+  it("qty 快捷「3」按兩下累加 → payload qty 6(review C4)", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    render(ladder());
+    fireEvent.click(screen.getByRole("button", { name: "3" }));
+    fireEvent.click(screen.getByRole("button", { name: "3" }));
+    expect((screen.getByLabelText("口數") as HTMLInputElement).value).toBe("6");
+    armUp();
+    fireEvent.click(screen.getByLabelText("買 22999"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({ qty: 6 });
   });
 });
 
