@@ -4,6 +4,8 @@ interface Props {
   book: { bids: [number, number][]; asks: [number, number][] } | null;
   last: { p: number; t: string; cum_vol: number } | null;
   ref_: number | null; // 參考價(漲跌色基準)
+  upper?: number | null; // 漲停價(鎖停 badge 判定;SC-5)
+  lower?: number | null;
 }
 
 const DEPTH = 5;
@@ -18,11 +20,15 @@ function emitPriceClick(priceMilli: number): void {
   window.dispatchEvent(new CustomEvent("stock-price-click", { detail: { priceMilli } }));
 }
 
-export function OrderBook({ book, last, ref_ }: Props) {
+export function OrderBook({ book, last, ref_, upper = null, lower = null }: Props) {
   const asks = [...(book?.asks ?? [])].slice(0, DEPTH);
   const bids = (book?.bids ?? []).slice(0, DEPTH);
   const maxVol = Math.max(1, ...asks.map(([, v]) => v), ...bids.map(([, v]) => v));
   const chg = last && ref_ ? ((last.p - ref_) / ref_) * 100 : null;
+  const bidTotal = bids.reduce((s, [, v]) => s + v, 0);
+  const askTotal = asks.reduce((s, [, v]) => s + v, 0);
+  const lockedUp = upper !== null && bids[0]?.[0] === upper;
+  const lockedDown = lower !== null && asks[0]?.[0] === lower;
 
   function row(side: "ask" | "bid", level: number) {
     const entry = side === "ask" ? asks[level] : bids[level];
@@ -49,8 +55,9 @@ export function OrderBook({ book, last, ref_ }: Props) {
             <>
               <span
                 className={cn(
-                  "absolute inset-y-1 left-0 rounded-sm",
-                  side === "ask" ? "bg-bear/20" : "bg-bull/20",
+                  "absolute inset-y-1 rounded-sm",
+                  // 買側靠右往左長、賣側靠左往右長(SC-5,treading-king 方向慣例)
+                  side === "ask" ? "left-0 bg-bear/20" : "right-0 bg-bull/20",
                 )}
                 style={{ width: `${(entry[1] / maxVol) * 100}%` }}
               />
@@ -66,6 +73,10 @@ export function OrderBook({ book, last, ref_ }: Props) {
 
   return (
     <div className="rounded-md border border-line bg-surface p-3">
+      <div className="mb-1 flex justify-between border-b border-line pb-1 font-mono text-xs">
+        <span className="text-bull">委買 {bidTotal}</span>
+        <span className="text-bear">委賣 {askTotal}</span>
+      </div>
       <table className="w-full border-collapse">
         <tbody>
           {[...Array(DEPTH).keys()].reverse().map((i) => row("ask", i))}
@@ -81,6 +92,12 @@ export function OrderBook({ book, last, ref_ }: Props) {
               ) : (
                 <span className="text-sm text-ink-dim">—</span>
               )}
+              {lockedUp ? (
+                <span className="ml-2 rounded bg-bull/15 px-1.5 py-0.5 text-xs text-bull">鎖漲停</span>
+              ) : null}
+              {lockedDown ? (
+                <span className="ml-2 rounded bg-bear/15 px-1.5 py-0.5 text-xs text-bear">鎖跌停</span>
+              ) : null}
             </td>
           </tr>
           {[...Array(DEPTH).keys()].map((i) => row("bid", i))}
