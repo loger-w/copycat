@@ -54,4 +54,12 @@ describe("IndexBar(SC-1)", () => {
     expect(screen.getByText(/櫃買/).textContent).toContain("-");
     expect(screen.getByText(/台指/).textContent).toContain("-");
   });
+
+  it("txf null 但 twse 有值 → 台指組「-」、加權照示(review B3 組合)", () => {
+    render(<IndexBar twse={series()} otc={OTC} txf={null} />);
+    expect(screen.getByText(/加權/).textContent).toContain("42039.92");
+    const txf = screen.getByText(/台指/);
+    expect(txf.textContent).toContain("-");
+    expect(txf.textContent).not.toContain("42142");
+  });
 });

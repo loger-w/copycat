@@ -195,6 +195,37 @@ async def test_watchdog_marks_stale_and_broadcasts_without_pushes() -> None:
         await eng.close()
 
 
+class TestWatchWindowBoundaries:
+    """lock:watchdog 窗界(09:00–13:25 end-exclusive;design F4/IR10)."""
+
+    def test_boundaries(self) -> None:
+        from copycat.server.index_engine import in_watch_window_now
+
+        assert in_watch_window_now(_dt.time(8, 59)) is False
+        assert in_watch_window_now(_dt.time(9, 0)) is True
+        assert in_watch_window_now(_dt.time(13, 24)) is True
+        assert in_watch_window_now(_dt.time(13, 25)) is False  # 試撮窗起點即凍結
+        assert in_watch_window_now(_dt.time(13, 26)) is False
+
+
+async def test_schedule_retry_single_flight() -> None:
+    """lock:重複 _schedule_retry 取消舊 task(design F2/IR8)."""
+    fake = FakeIndexSource()
+    fake.subscribe_error = ConnectionError("down")
+    eng = make_engine(fake, retry_secs=10.0)  # 長 backoff:task 存活期間再排一次
+    await eng.start()
+    try:
+        first = eng._retry_task  # type: ignore[attr-defined]
+        assert first is not None and not first.done()
+        eng._schedule_retry()  # type: ignore[attr-defined]
+        second = eng._retry_task  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+        assert first.cancelled()
+        assert second is not first and not second.done()
+    finally:
+        await eng.close()
+
+
 async def test_watchdog_inactive_outside_window() -> None:
     fake = FakeIndexSource()
     eng = make_engine(fake, in_watch_window=lambda: False, stale_secs=0.03)

@@ -69,6 +69,13 @@ describe("App(index-board T9)", () => {
     );
   });
 
+  it("localStorage 記住 index tab,重載復原(review B8)", async () => {
+    window.localStorage.setItem("copycat-tab", "index");
+    renderApp();
+    expect(screen.getByRole("tab", { name: "指數" }).getAttribute("aria-selected")).toBe("true");
+    await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
+  });
+
   it("切到指數 tab 顯示 IndexPage(台指期列與兩張卡)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "指數" }));
