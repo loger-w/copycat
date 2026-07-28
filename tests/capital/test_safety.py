@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from copycat.capital.models import FutureOrderRequest, StockOrderRequest
+from copycat.capital.models import FutureOrderRequest, PriceType, StockOrderRequest
 from copycat.capital.safety import (
     GateResult,
     SafetyConfig,
@@ -15,14 +15,20 @@ from copycat.capital.safety import (
 )
 
 
-def _stock(qty: int = 1, price: float = 590.0, **kw: object) -> StockOrderRequest:
-    return StockOrderRequest(stock_no="2330", buy_sell="buy", price=price, qty=qty, **kw)  # type: ignore[arg-type]
+def _stock(qty: int = 1, price: float = 590.0) -> StockOrderRequest:
+    return StockOrderRequest(stock_no="2330", buy_sell="buy", price=price, qty=qty)
 
 
-def _fut(qty: int = 1, price: float = 23000.0, **kw: object) -> FutureOrderRequest:
+def _fut(
+    qty: int = 1, price: float = 23000.0, price_type: PriceType = "limit"
+) -> FutureOrderRequest:
     return FutureOrderRequest(
-        tc4_symbol="TC.F.TWF.TXF.202609", buy_sell="buy", price=price, qty=qty, **kw
-    )  # type: ignore[arg-type]
+        tc4_symbol="TC.F.TWF.TXF.202609",
+        buy_sell="buy",
+        price=price,
+        qty=qty,
+        price_type=price_type,
+    )
 
 
 def _cfg(
