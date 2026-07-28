@@ -129,6 +129,21 @@ describe("WatchlistSidebar(SC-6 群組)", () => {
     await waitFor(() => expect(putBodies).toEqual([[{ name: "主力", codes: ["2330", "5483"] }]]));
   });
 
+  it("刪除群組失敗(PUT 4xx)→ active tab 不切走(review A2)", async () => {
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ groups: GROUPS }));
+    });
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "觀察" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("tab", { name: "觀察" }));
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    expect(screen.getByRole("tab", { name: "觀察" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   it("「全部」下停用拖拉、群組下可拖拉", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
     await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
