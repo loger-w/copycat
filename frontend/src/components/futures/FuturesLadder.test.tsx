@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
+import { setCapitalWsStatus } from "@/hooks/useCapital";
 import type { CapitalOrder, FuturesProductState } from "@/types";
 
 const TXF_STATE: FuturesProductState = {
@@ -27,20 +28,6 @@ const MXF_STATE: FuturesProductState = {
   product: "MXF",
   name: "小型臺指",
 };
-
-class FakeWS {
-  static instances: FakeWS[] = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-
-  constructor(public url: string) {
-    FakeWS.instances.push(this);
-  }
-
-  close(): void {}
-}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -106,8 +93,7 @@ function armUp(): void {
 
 beforeEach(() => {
   window.localStorage.clear();
-  FakeWS.instances = [];
-  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
+  setCapitalWsStatus("connecting"); // wsStatus module store 跨測試重置
   Element.prototype.scrollIntoView = vi.fn();
   qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -229,15 +215,13 @@ describe("FuturesLadder 武裝直送(SC-8)", () => {
     expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
   });
 
-  it("capital WS 轉 closed 自動解除(conn_lost)", () => {
+  it("capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
     armUp();
-    const ws = FakeWS.instances.find((w) => w.url.endsWith("/ws/capital"))!;
-    act(() => {
-      ws.onopen?.();
-      ws.onclose?.();
-    });
+    act(() => setCapitalWsStatus("open"));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    act(() => setCapitalWsStatus("closed"));
     expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
   });
 });

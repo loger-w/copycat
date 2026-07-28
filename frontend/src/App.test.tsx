@@ -15,12 +15,15 @@ function renderApp() {
 }
 
 class FakeWS {
+  static instances: FakeWS[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
-  constructor(public url: string) {}
+  constructor(public url: string) {
+    FakeWS.instances.push(this);
+  }
 
   close(): void {}
 }
@@ -40,6 +43,7 @@ const INDEX_STATE = {
 
 beforeEach(() => {
   window.localStorage.clear();
+  FakeWS.instances = [];
   vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
   vi.stubGlobal(
     "fetch",
@@ -82,6 +86,20 @@ describe("App(index-board T9)", () => {
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
     expect(screen.getByText("櫃買指數")).toBeTruthy();
     expect(screen.getByText(/台指期/)).toBeTruthy();
+  });
+});
+
+describe("App(capital WS 唯一掛載 review B2)", () => {
+  it("App 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線", async () => {
+    renderApp();
+    const capitalCount = () =>
+      FakeWS.instances.filter((w) => w.url.endsWith("/ws/capital")).length;
+    expect(capitalCount()).toBe(1); // TXO tab 下也有推播(B2 主訴)
+    fireEvent.click(screen.getByRole("tab", { name: "個股" }));
+    await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
+    fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    expect(capitalCount()).toBe(1); // ladder 掛載不再各開一條
   });
 });
 

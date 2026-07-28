@@ -7,10 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitCapitalEvent,
   parseCapitalError,
+  setCapitalWsStatus,
   subscribeCapitalEvents,
   useCapitalOrders,
   useCapitalPositions,
   useCapitalStream,
+  useCapitalWsStatus,
   type CapitalEvent,
 } from "@/hooks/useCapital";
 
@@ -39,6 +41,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   FakeWS.instances = [];
+  setCapitalWsStatus("connecting"); // module store 跨測試重置
   vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
   fetchMock = vi.fn(async () => new Response(JSON.stringify({ orders: [], positions: [] })));
   vi.stubGlobal("fetch", fetchMock);
@@ -103,30 +106,41 @@ describe("parseCapitalError", () => {
   });
 });
 
-describe("useCapitalStream", () => {
-  it("連 /ws/capital;訊息轉發到全域 listener;wsStatus 轉態", () => {
+describe("useCapitalStream(WS 連線 + wsStatus store)", () => {
+  it("連 /ws/capital;訊息轉發到全域 listener;wsStatus store 轉態", () => {
     const got: CapitalEvent[] = [];
     const unsub = subscribeCapitalEvents((ev) => got.push(ev));
-    const hook = renderHook(() => useCapitalStream());
+    const hook = renderHook(
+      () => {
+        useCapitalStream();
+        return useCapitalWsStatus();
+      },
+      { wrapper: makeWrapper(newClient()) },
+    );
     const ws = FakeWS.instances[0]!;
     expect(ws.url.endsWith("/ws/capital")).toBe(true);
-    expect(hook.result.current.wsStatus).toBe("connecting");
+    expect(hook.result.current).toBe("connecting");
     act(() => ws.onopen?.());
-    expect(hook.result.current.wsStatus).toBe("open");
+    expect(hook.result.current).toBe("open");
     act(() => ws.emit({ event: "capital_order", data: { seq_no: "001" } }));
-    expect(got.length).toBe(1);
-    expect(got[0]!.event).toBe("capital_order");
+    expect(got.some((ev) => ev.event === "capital_order")).toBe(true);
     unsub();
   });
 
   it("斷線標 closed 並退避重連;unmount 關 socket", () => {
     vi.useFakeTimers();
-    const hook = renderHook(() => useCapitalStream());
+    const hook = renderHook(
+      () => {
+        useCapitalStream();
+        return useCapitalWsStatus();
+      },
+      { wrapper: makeWrapper(newClient()) },
+    );
     act(() => {
       FakeWS.instances[0]!.onopen?.();
       FakeWS.instances[0]!.onclose?.();
     });
-    expect(hook.result.current.wsStatus).toBe("closed");
+    expect(hook.result.current).toBe("closed");
     act(() => {
       vi.advanceTimersByTime(1_100);
     });
@@ -134,14 +148,21 @@ describe("useCapitalStream", () => {
     hook.unmount();
     expect(FakeWS.instances[1]!.closed).toBe(true);
   });
+
+  it("useCapitalWsStatus 可在 stream 外元件讀(module store + 測試 setter)", () => {
+    const hook = renderHook(() => useCapitalWsStatus());
+    expect(hook.result.current).toBe("connecting");
+    act(() => setCapitalWsStatus("closed"));
+    expect(hook.result.current).toBe("closed");
+  });
 });
 
-describe("useCapitalOrders(WS invalidate debounce)", () => {
+describe("useCapitalStream = 唯一 invalidate 擁有者(review B2/B4)", () => {
   it("capital_order 事件 200ms trailing debounce 後 invalidate 一次", () => {
     vi.useFakeTimers();
     const client = newClient();
     const spy = vi.spyOn(client, "invalidateQueries");
-    renderHook(() => useCapitalOrders(), { wrapper: makeWrapper(client) });
+    renderHook(() => useCapitalStream(), { wrapper: makeWrapper(client) });
     act(() => {
       emitCapitalEvent({ event: "capital_order", data: { seq_no: "001" } });
       emitCapitalEvent({ event: "capital_order", data: { seq_no: "002" } });
@@ -157,23 +178,65 @@ describe("useCapitalOrders(WS invalidate debounce)", () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-orders"] });
   });
 
-  it("非 capital_order 事件不觸發 orders invalidate", () => {
+  it("capital_position → invalidate positions;capital_status 不觸發任何 invalidate", () => {
     vi.useFakeTimers();
     const client = newClient();
     const spy = vi.spyOn(client, "invalidateQueries");
-    renderHook(() => useCapitalOrders(), { wrapper: makeWrapper(client) });
+    renderHook(() => useCapitalStream(), { wrapper: makeWrapper(client) });
     act(() => {
+      emitCapitalEvent({ event: "capital_position", data: { count: 2 } });
       emitCapitalEvent({ event: "capital_status", data: {} });
+      vi.advanceTimersByTime(200);
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-positions"] });
+  });
+
+  it("orders/positions hooks 多處掛載:單事件仍單 invalidate(review B4)", () => {
+    vi.useFakeTimers();
+    const client = newClient();
+    const spy = vi.spyOn(client, "invalidateQueries");
+    renderHook(
+      () => {
+        useCapitalStream();
+        useCapitalOrders();
+        useCapitalOrders();
+        useCapitalPositions();
+      },
+      { wrapper: makeWrapper(client) },
+    );
+    act(() => {
+      emitCapitalEvent({ event: "capital_order", data: { seq_no: "001" } });
+      vi.advanceTimersByTime(200);
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-orders"] });
+  });
+
+  it("stream 未掛載:orders/positions hooks 不自行接 WS 事件(review B2)", () => {
+    vi.useFakeTimers();
+    const client = newClient();
+    const spy = vi.spyOn(client, "invalidateQueries");
+    renderHook(
+      () => {
+        useCapitalOrders();
+        useCapitalPositions();
+      },
+      { wrapper: makeWrapper(client) },
+    );
+    act(() => {
+      emitCapitalEvent({ event: "capital_order", data: {} });
+      emitCapitalEvent({ event: "capital_position", data: {} });
       vi.advanceTimersByTime(300);
     });
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("unmount 後事件不再 invalidate(退訂 + 清 timer)", () => {
+  it("stream unmount 後事件不再 invalidate(退訂 + 清 timer)", () => {
     vi.useFakeTimers();
     const client = newClient();
     const spy = vi.spyOn(client, "invalidateQueries");
-    const hook = renderHook(() => useCapitalOrders(), { wrapper: makeWrapper(client) });
+    const hook = renderHook(() => useCapitalStream(), { wrapper: makeWrapper(client) });
     act(() => {
       emitCapitalEvent({ event: "capital_order", data: {} });
     });
@@ -182,19 +245,5 @@ describe("useCapitalOrders(WS invalidate debounce)", () => {
       vi.advanceTimersByTime(300);
     });
     expect(spy).not.toHaveBeenCalled();
-  });
-});
-
-describe("useCapitalPositions(WS invalidate)", () => {
-  it("capital_position 事件 debounce 後 invalidate positions", () => {
-    vi.useFakeTimers();
-    const client = newClient();
-    const spy = vi.spyOn(client, "invalidateQueries");
-    renderHook(() => useCapitalPositions(), { wrapper: makeWrapper(client) });
-    act(() => {
-      emitCapitalEvent({ event: "capital_position", data: { count: 2 } });
-      vi.advanceTimersByTime(200);
-    });
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-positions"] });
   });
 });

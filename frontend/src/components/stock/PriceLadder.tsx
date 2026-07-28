@@ -3,7 +3,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import {
   useCancelOrder,
   useCapitalOrders,
-  useCapitalStream,
+  useCapitalWsStatus,
   useSubmitStock,
 } from "@/hooks/useCapital";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
@@ -80,7 +80,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
 
-  const { wsStatus } = useCapitalStream();
+  const wsStatus = useCapitalWsStatus();
   const submitStock = useSubmitStock();
   const cancelOrder = useCancelOrder();
   const { data: ordersData } = useCapitalOrders();

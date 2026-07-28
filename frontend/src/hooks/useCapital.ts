@@ -1,13 +1,16 @@
 /** 群益 capital hooks:TQ polling + WS 事件觸發 invalidate + 寫入 mutations(design §6)。
  *
- * WS 事件走 module-level pub/sub:useCapitalStream 是唯一 WS 連線(App 層掛一次),
- * 事件 fanout 到全域 listener set;orders/positions hooks 訂閱後 invalidate 對應
- * queryKey(200ms trailing debounce,回報連發只重抓尾端一次)。
+ * useCapitalStream 是唯一 WS 連線「與」唯一 invalidate 接線擁有者(App 層掛一次;
+ * review B2/B4):WS 事件 fanout 到全域 listener set 之外,自己也訂閱並對
+ * capital_order/capital_position 做 200ms trailing debounce invalidate(module-level
+ * 單一 timer per queryKey,多元件用 orders/positions hooks 也不重複 invalidate)。
+ * orders/positions hooks 只剩 TQ 輪詢 + 被動吃 invalidate;wsStatus 走 module store
+ * (useCapitalWsStatus 任何元件可讀)。
  * fetch helper 複製 useTrade.ts 最小版(不動其本體;ORDER_BLOCKED 帶 reason 以 ":"
  * 後綴進 Error message,trade-text 解析)。
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useEffect, useSyncExternalStore } from "react";
 
 import type {
   CapitalCancelBody,
@@ -51,6 +54,32 @@ export function emitCapitalEvent(ev: CapitalEvent): void {
 }
 
 // ---------------------------------------------------------------------------
+// wsStatus module store(useSyncExternalStore;任何元件經 useCapitalWsStatus 讀)
+// ---------------------------------------------------------------------------
+
+let currentWsStatus: WsStatus = "connecting";
+const wsStatusListeners = new Set<() => void>();
+
+/** 更新 wsStatus 並通知訂閱者(產品碼只由 useCapitalStream 呼叫;export 供測試注入)。 */
+export function setCapitalWsStatus(next: WsStatus): void {
+  if (next === currentWsStatus) return;
+  currentWsStatus = next;
+  for (const fn of wsStatusListeners) fn();
+}
+
+function subscribeWsStatus(fn: () => void): () => void {
+  wsStatusListeners.add(fn);
+  return () => {
+    wsStatusListeners.delete(fn);
+  };
+}
+
+/** capital WS 連線狀態(閃電梯 conn_lost 自動解除等用)。 */
+export function useCapitalWsStatus(): WsStatus {
+  return useSyncExternalStore(subscribeWsStatus, () => currentWsStatus);
+}
+
+// ---------------------------------------------------------------------------
 // fetch helper(useTrade.ts 最小複製;error contract {detail:{error, reason?}})
 // ---------------------------------------------------------------------------
 
@@ -90,23 +119,31 @@ async function fetchJson<T>(url: string, body?: unknown): Promise<T> {
 
 const INVALIDATE_DEBOUNCE_MS = 200;
 
-/** WS 事件 → invalidate queryKey(trailing debounce:連發只在尾端重抓一次)。 */
-function useEventInvalidate(eventName: string, queryKey: string): void {
-  const queryClient = useQueryClient();
-  useEffect(() => {
-    let timer: number | undefined;
-    const unsub = subscribeCapitalEvents((ev) => {
-      if (ev.event !== eventName) return;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        void queryClient.invalidateQueries({ queryKey: [queryKey] });
-      }, INVALIDATE_DEBOUNCE_MS);
-    });
-    return () => {
-      window.clearTimeout(timer);
-      unsub();
-    };
-  }, [queryClient, eventName, queryKey]);
+/** WS event 名 → 對應 queryKey(useCapitalStream 唯一接線;review B2/B4)。 */
+const EVENT_QUERY_KEY: Record<string, string> = {
+  capital_order: "capital-orders",
+  capital_position: "capital-positions",
+};
+
+// module-level 單一 timer per queryKey:同 key 連發只在尾端 invalidate 一次,
+// 且不因多處掛載而重複(review B4)
+const invalidateTimers = new Map<string, number>();
+
+function scheduleInvalidate(queryClient: QueryClient, queryKey: string): void {
+  const prev = invalidateTimers.get(queryKey);
+  if (prev !== undefined) window.clearTimeout(prev);
+  invalidateTimers.set(
+    queryKey,
+    window.setTimeout(() => {
+      invalidateTimers.delete(queryKey);
+      void queryClient.invalidateQueries({ queryKey: [queryKey] });
+    }, INVALIDATE_DEBOUNCE_MS),
+  );
+}
+
+function clearInvalidateTimers(): void {
+  for (const timer of invalidateTimers.values()) window.clearTimeout(timer);
+  invalidateTimers.clear();
 }
 
 export function useCapitalStatus() {
@@ -119,7 +156,6 @@ export function useCapitalStatus() {
 }
 
 export function useCapitalOrders() {
-  useEventInvalidate("capital_order", "capital-orders");
   return useQuery({
     queryKey: ["capital-orders"],
     queryFn: () => fetchJson<{ orders: CapitalOrder[] }>("/api/capital/orders"),
@@ -129,7 +165,6 @@ export function useCapitalOrders() {
 }
 
 export function useCapitalPositions() {
-  useEventInvalidate("capital_position", "capital-positions");
   return useQuery({
     queryKey: ["capital-positions"],
     queryFn: () => fetchJson<{ positions: CapitalPosition[] }>("/api/capital/positions"),
@@ -178,14 +213,14 @@ export function useClosePosition() {
 }
 
 // ---------------------------------------------------------------------------
-// WS 連線(App 層掛一次;wsStatus 供閃電梯武裝 conn_lost 自動解除)
+// WS 連線(App 層掛一次 = 唯一連線 + 唯一 invalidate 接線;review B2/B4)
 // ---------------------------------------------------------------------------
 
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
 
-export function useCapitalStream(): { wsStatus: WsStatus } {
-  const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
+export function useCapitalStream(): void {
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let alive = true;
@@ -193,13 +228,19 @@ export function useCapitalStream(): { wsStatus: WsStatus } {
     let timer: number | undefined;
     let backoff = BACKOFF_START_MS;
 
+    // 唯一擁有者:WS 事件 → debounce invalidate(orders/positions hooks 不自行接線)
+    const unsub = subscribeCapitalEvents((ev) => {
+      const queryKey = EVENT_QUERY_KEY[ev.event];
+      if (queryKey !== undefined) scheduleInvalidate(queryClient, queryKey);
+    });
+
     const connect = (): void => {
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${window.location.host}/ws/capital`);
-      setWsStatus("connecting");
+      setCapitalWsStatus("connecting");
       ws.onopen = () => {
         backoff = BACKOFF_START_MS;
-        setWsStatus("open");
+        setCapitalWsStatus("open");
       };
       ws.onmessage = (ev: MessageEvent<string>) => {
         try {
@@ -211,7 +252,7 @@ export function useCapitalStream(): { wsStatus: WsStatus } {
       };
       ws.onclose = () => {
         if (!alive) return;
-        setWsStatus("closed");
+        setCapitalWsStatus("closed");
         timer = window.setTimeout(connect, backoff);
         backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
       };
@@ -223,10 +264,10 @@ export function useCapitalStream(): { wsStatus: WsStatus } {
     connect();
     return () => {
       alive = false;
+      unsub();
+      clearInvalidateTimers();
       window.clearTimeout(timer);
       ws?.close();
     };
-  }, []);
-
-  return { wsStatus };
+  }, [queryClient]);
 }

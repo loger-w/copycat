@@ -7,6 +7,7 @@ import { OrderPanel } from "@/components/OrderPanel";
 import { PnlChart } from "@/components/PnlChart";
 import { QuoteTable } from "@/components/QuoteTable";
 import { SeriesSelect } from "@/components/SeriesSelect";
+import { useCapitalStream } from "@/hooks/useCapital";
 import { useIndexStream } from "@/hooks/useIndexStream";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,8 @@ export default function App() {
   });
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
   const { twse, otc, txf } = useIndexStream();
+  // capital 下單 WS 常駐 App 層:唯一連線 + 唯一 invalidate 接線(review B2/B4)
+  useCapitalStream();
 
   useEffect(() => {
     window.localStorage.setItem(TAB_KEY, tab);
