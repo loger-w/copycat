@@ -4,28 +4,46 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OrderPanel } from "@/components/OrderPanel";
-import type { OrdersView, TradeAccount } from "@/types";
+import type { CapitalStatus, ContractRow } from "@/types";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
-const SYM = "TC.O.TWF.TXO.202607.C.23000";
+const CALL = "TC.O.TWF.TXO.202607.C.23000";
+const PUT = "TC.O.TWF.TXO.202607.P.22000";
 
-function account(overrides: Partial<TradeAccount> = {}): TradeAccount {
+function contract(overrides: Partial<ContractRow> = {}): ContractRow {
   return {
-    status: "ready",
-    mode: "sim",
-    account_masked: "****9000",
-    broker_id: "SIM",
-    audit_degraded: false,
-    orderable_symbols: ["TC.F.TWF.TXF.HOT", SYM],
+    symbol: CALL,
+    cp: "C",
+    strike: 23000,
+    net_qty: 1,
+    volume: 10,
+    outer_qty: 6,
+    inner_qty: 4,
+    last_price: 15.5,
     ...overrides,
   };
 }
 
-const EMPTY_ORDERS: OrdersView = { orders: [], fills: [], degraded: false, audit_degraded: false };
+// CALL 有成交估價;PUT 無(市價選項應鎖定)
+const CONTRACTS: ContractRow[] = [
+  contract(),
+  contract({ symbol: PUT, cp: "P", strike: 22000, last_price: null }),
+];
+
+function capStatus(overrides: Partial<CapitalStatus> = {}): CapitalStatus {
+  return {
+    status: "ok",
+    env: "test",
+    account_masked: "****1234",
+    futures_account_masked: "****5678",
+    order_enabled: true,
+    ...overrides,
+  };
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -34,7 +52,9 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function mockFetch(routes: Record<string, (init?: RequestInit) => Response>) {
+type Route = (init?: RequestInit) => Response | Promise<Response>;
+
+function mockFetch(routes: Record<string, Route>) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -45,136 +65,168 @@ function mockFetch(routes: Record<string, (init?: RequestInit) => Response>) {
   });
 }
 
-function renderPanel() {
+function renderPanel(contracts: ContractRow[] | undefined = CONTRACTS) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={qc}>
-      <OrderPanel />
+      <OrderPanel contracts={contracts} />
     </QueryClientProvider>,
   );
 }
 
-describe("OrderPanel", () => {
-  it("ready 時顯示模擬徽章且送單鈕可按", async () => {
+describe("OrderPanel(群益)", () => {
+  it("ok 時顯示模擬徽章(accent 框)+ 期貨帳號遮罩,送出鈕可按", async () => {
     mockFetch({
-      "/api/trade/account": () => json(account()),
-      "/api/trade/orders": () => json(EMPTY_ORDERS),
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
     });
     renderPanel();
-    expect(await screen.findByText("模擬")).toBeTruthy();
+    const badge = await screen.findByText("模擬");
+    expect(badge.className).toContain("border-accent");
+    expect(screen.getByText("****5678")).toBeTruthy(); // futures_account_masked 優先
     fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
-    const btn = screen.getByText("送單(預覽)").closest("button");
+    const btn = screen.getByText("送出").closest("button");
     expect(btn?.getAttribute("disabled")).toBeNull();
   });
 
-  it("touchance_down 時鈕 disabled 且顯示達錢未連線", async () => {
+  it("status=disabled 顯示群益未啟用且送出鈕鎖定", async () => {
     mockFetch({
-      "/api/trade/account": () => json(account({ status: "touchance_down", mode: null })),
-      "/api/trade/orders": () => json(EMPTY_ORDERS),
+      "/api/capital/status": () => json({ status: "disabled" }),
+      "/api/capital/orders": () => json({ orders: [] }),
     });
     renderPanel();
-    expect(await screen.findByText(/達錢未連線/)).toBeTruthy();
-    const btn = screen.getByText("送單(預覽)").closest("button");
+    expect(await screen.findByText("群益未啟用")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    const btn = screen.getByText("送出").closest("button");
     expect(btn?.getAttribute("disabled")).not.toBeNull();
   });
 
-  it("live_blocked 顯示正式戶未啟用(含 DQ4_LIVE 提示)且鈕 disabled", async () => {
+  it("status=starting 顯示群益連線未就緒且鎖定;degraded 顯示註記但不鎖", async () => {
     mockFetch({
-      "/api/trade/account": () => json(account({ status: "live_blocked", mode: null })),
-      "/api/trade/orders": () => json(EMPTY_ORDERS),
+      "/api/capital/status": () => json(capStatus({ status: "starting" })),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    const first = renderPanel();
+    expect(await screen.findByText("群益連線未就緒")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    expect(screen.getByText("送出").closest("button")?.getAttribute("disabled")).not.toBeNull();
+    first.unmount();
+
+    mockFetch({
+      "/api/capital/status": () => json(capStatus({ status: "degraded" })),
+      "/api/capital/orders": () => json({ orders: [] }),
     });
     renderPanel();
-    expect(await screen.findByText("正式戶未啟用(DQ4_LIVE)")).toBeTruthy();
-    const btn = screen.getByText("送單(預覽)").closest("button");
-    expect(btn?.getAttribute("disabled")).not.toBeNull();
+    expect(await screen.findByText(/群益回報連線降級/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    expect(screen.getByText("送出").closest("button")?.getAttribute("disabled")).toBeNull();
   });
 
-  it("切市價隱藏價格欄", async () => {
+  it("彈窗流:送出 → rows 含預估權利金 → 確認 → POST /api/capital/order/future payload", async () => {
+    const bodies: unknown[] = [];
     mockFetch({
-      "/api/trade/account": () => json(account()),
-      "/api/trade/orders": () => json(EMPTY_ORDERS),
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ ok: true, code: 0, message: "ok", seq_no: "0001" });
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: CALL } });
+    fireEvent.change(screen.getByLabelText("口數"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    fireEvent.click(screen.getByText("送出"));
+    expect(await screen.findByText("確認送單")).toBeTruthy();
+    expect(screen.getByText("預估權利金")).toBeTruthy();
+    expect(screen.getByText("1,550 元")).toBeTruthy(); // 15.5 × 2 口 × 50 元/點
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({
+      tc4_symbol: CALL,
+      buy_sell: "buy",
+      price: 15.5,
+      qty: 2,
+      price_type: "limit",
+      time_in_force: "ROD",
+      day_trade: false,
+      source: "panel",
+    });
+    await waitFor(() => expect(screen.queryByText("確認送單")).toBeNull());
+    expect(await screen.findByText(/已送出(單號 0001)/)).toBeTruthy();
+  });
+
+  it("送單 503 CAPITAL_DISABLED → 顯示群益未啟用", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/order/future": () => json({ detail: { error: "CAPITAL_DISABLED" } }, 503),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    fireEvent.click(screen.getByText("送出"));
+    await screen.findByText("確認送單");
+    fireEvent.click(screen.getByText("確認"));
+    expect(await screen.findByText("群益未啟用")).toBeTruthy();
+  });
+
+  it("prod 徽章紅底 + 彈窗 danger 標題列紅底", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus({ env: "prod" })),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    const badge = await screen.findByText("正式");
+    expect(badge.className).toContain("bg-loss");
+    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
+    fireEvent.click(screen.getByText("送出"));
+    await waitFor(() => {
+      expect(screen.getByText("確認送單").closest("div")?.className).toContain("bg-loss");
+    });
+  });
+
+  it("市價估價:snapshot 估價入 payload;無估價合約鎖市價選項", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ ok: true, code: 0, message: "ok", seq_no: "0002" });
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    fireEvent.click(screen.getByText("市價"));
+    expect(screen.queryByLabelText("價格(點)")).toBeNull();
+    fireEvent.click(screen.getByText("送出"));
+    expect(await screen.findByText("確認送單")).toBeTruthy();
+    expect(screen.getByText(/市價(估 15\.5 點)/)).toBeTruthy();
+    expect(screen.getByText("775 元")).toBeTruthy(); // 15.5 × 1 口 × 50 元/點
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({ tc4_symbol: CALL, price: 15.5, price_type: "market" });
+
+    // 無估價合約(PUT last_price=null)→ 市價鈕 disabled
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
+    expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
+  });
+
+  it("切市價隱藏價格欄、切回限價恢復", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
     });
     renderPanel();
     await screen.findByText("模擬");
     expect(screen.getByLabelText("價格(點)")).toBeTruthy();
     fireEvent.click(screen.getByText("市價"));
     expect(screen.queryByLabelText("價格(點)")).toBeNull();
-  });
-
-  it("confirm 失敗關閉 dialog 並顯示錯誤(不允許重試已消耗的 preview_id)", async () => {
-    mockFetch({
-      "/api/trade/account": () => json(account()),
-      "/api/trade/preview": () =>
-        json({
-          preview_id: "pv1",
-          request_id: "rq1",
-          param: {
-            Symbol: SYM,
-            Side: "1",
-            OrderType: "2",
-            TimeInForce: "1",
-            Price: "15.5",
-            OrderQty: "1",
-            PositionEffect: "4",
-          },
-          account_masked: "****9000",
-          mode: "sim",
-        }),
-      "/api/trade/orders": (init) =>
-        init?.method === "POST"
-          ? json({ detail: { error: "BROKER_REJECTED", err_code: "-22" } }, 400)
-          : json(EMPTY_ORDERS),
-    });
-    renderPanel();
-    await screen.findByText("模擬");
-    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
-    fireEvent.click(screen.getByText("送單(預覽)"));
-    await waitFor(() => {
-      expect(screen.getByText("確認送出")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText("確認送出"));
-    await waitFor(() => {
-      expect(screen.queryByText("確認送出")).toBeNull(); // dialog 必須關閉(review A1)
-    });
-    expect(screen.getByText(/券商拒單/)).toBeTruthy();
-  });
-
-  it("送單(預覽)呼叫 preview API 並開啟確認 dialog", async () => {
-    const previewBodies: unknown[] = [];
-    mockFetch({
-      "/api/trade/account": () => json(account()),
-      "/api/trade/preview": (init) => {
-        previewBodies.push(JSON.parse(String(init?.body)));
-        return json({
-          preview_id: "pv1",
-          request_id: "rq1",
-          param: {
-            Symbol: SYM,
-            BrokerID: "SIM",
-            Account: "9999000",
-            Side: "1",
-            OrderType: "2",
-            TimeInForce: "1",
-            Price: "15.5",
-            OrderQty: "1",
-            PositionEffect: "4",
-          },
-          account_masked: "****9000",
-          mode: "sim",
-        });
-      },
-      "/api/trade/orders": () => json(EMPTY_ORDERS),
-    });
-    renderPanel();
-    await screen.findByText("模擬");
-    fireEvent.change(screen.getByLabelText("商品"), { target: { value: SYM } });
-    fireEvent.change(screen.getByLabelText("價格(點)"), { target: { value: "15.5" } });
-    fireEvent.click(screen.getByText("送單(預覽)"));
-    await waitFor(() => {
-      expect(screen.getByText("確認送出")).toBeTruthy();
-    });
-    expect(previewBodies[0]).toMatchObject({ symbol: SYM, side: "buy", kind: "limit", qty: 1 });
+    fireEvent.click(screen.getByText("限價"));
+    expect(screen.getByLabelText("價格(點)")).toBeTruthy();
   });
 });
