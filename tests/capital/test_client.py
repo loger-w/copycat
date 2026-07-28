@@ -128,6 +128,13 @@ def _fut_req(**kw: Any) -> FutureOrderRequest:
     return FutureOrderRequest(**base)
 
 
+def _sent_fields(entry: tuple[object, ...]) -> dict[str, object]:
+    """sent tuple 第二欄的 fields dict(pyright 收窄用)。"""
+    fields = entry[1]
+    assert isinstance(fields, dict)
+    return fields
+
+
 def test_fake_com_satisfies_protocol() -> None:
     c: CapitalCom = FakeCom()  # pyright 驗 Protocol 完整性
     assert c.set_authority(2) == 0
@@ -268,9 +275,9 @@ async def test_submit_option_goes_send_option_order(tmp_path: Path) -> None:
     await _drive(
         client, lambda: client.submit_future_order(req, contract="TXO20000I6", multiplier=50)
     )
-    kind, fields, is_option = com.sent[0]
+    kind, _fields, is_option = com.sent[0]
     assert kind == "future" and is_option is True
-    assert fields["bstrStockNo"] == "TXO20000I6"
+    assert _sent_fields(com.sent[0])["bstrStockNo"] == "TXO20000I6"
 
 
 async def test_weekly_contract_routes_as_option(tmp_path: Path) -> None:
@@ -293,7 +300,7 @@ async def test_market_rod_upgraded_to_ioc_with_message_note(tmp_path: Path) -> N
     res = await _drive(
         client, lambda: client.submit_future_order(req, contract="TXFI6", multiplier=200)
     )
-    fields = com.sent[0][1]
+    fields = _sent_fields(com.sent[0])
     assert fields["bstrPrice"] == "M" and fields["sTradeType"] == 1  # IOC
     assert res.message.startswith("市價單已升級 IOC;")
 
@@ -620,8 +627,8 @@ async def test_close_sec_builds_reverse_order_and_blocks_second_inflight(tmp_pat
     req = PositionCloseRequest(market="sec", key="2330", price=590.0)
     res = await _drive(client, lambda: client.close_position(req))
     assert res.ok is True
-    kind, fields = com.sent[0][0], com.sent[0][1]
-    assert kind == "stock"
+    assert com.sent[0][0] == "stock"
+    fields = _sent_fields(com.sent[0])
     assert fields["sBuySell"] == 1 and fields["sFlag"] == 1  # 融資多 → 融資賣
     assert _audit_lines(client)[-1]["action"] == "close"
     with pytest.raises(CapitalGateBlockedError) as ei:  # in-flight 10s 防重送
@@ -664,8 +671,9 @@ async def test_close_fut_builds_reverse_ioc_new_close_1(tmp_path: Path) -> None:
     req = PositionCloseRequest(market="fut", key="TXFI6", price=22000.0)
     res = await _drive(client, lambda: client.close_position(req))
     assert res.ok is True
-    kind, fields, is_option = com.sent[0]
+    kind, _fields, is_option = com.sent[0]
     assert kind == "future" and is_option is False
+    fields = _sent_fields(com.sent[0])
     assert fields["sBuySell"] == 1  # 多倉 → 反向賣
     assert fields["sNewClose"] == 1  # 倉別=平倉
     assert fields["sTradeType"] == 1  # IOC
