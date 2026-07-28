@@ -53,3 +53,9 @@
 ## 2026-07-20(backfill 雙修 review P2)
 
 - [ ] backfill_finmind/backfill_daytrade 空日不進 marker 後,真假日在重跑同 range 時會反覆重抓(range 約 11 個月含 100+ 週末假日);若 FinMind 配額吃緊,疊加靜態台股假日曆只重試「非假日空回應」
+
+## 2026-07-28(stock-ui-upgrade Phase 4 review P2 彙總)
+
+- [ ] frontend localStorage key 無統一前綴(copycat-tab / stock-main-code / copycat-chart-toggles / stock-ladder-open / stock-wl-group)— 下次新增 key 時考慮收斂 `copycat-` 前綴 + lib/constants.ts 集中
+- [ ] PriceLadder 全域 rows(最壞 ~200 列)無上限 lock 測試;若低價股(tick 10 毫元、±10% = 2000 列)出現效能問題再虛擬化
+- [ ] stock-ui-upgrade real-env 真截圖待補(TC4 離線 infra_fail;清單見 .claude/feat/stock-ui-upgrade/real-env-verification-round-1.json;達錢 4 開啟後跑 server + devtools 補 evidence)

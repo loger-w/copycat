@@ -44,12 +44,15 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   stock_state(當日狀態機:去重/分鐘聚合/VWAP)、stock_source(繼承 TC4QuoteSource)
 ├── server/               #   FastAPI 轉發層:engine(EngineRuntime/QuoteSource Protocol)、app(routes/WS)、
 │                         #   stock_engine(個股訂閱池/兩段式 rollover/回補 worker/廣播,2026-07-21)、
+│                         #   overlay(CDP/MA 疊線計算,2026-07-28:已完成 bar 剔除/don't-cache-empty;
+│                         #   資料源 = TC4 DK 優先 1K 聚合 fallback,DK 支援度未實測)、
 │                         #   __main__(python -m copycat.server,port env TXO_SERVER_PORT 預設 8721)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
 │                         #   URL 未設 no-op、429 Retry-After 重試一次、never-raise;stdlib urllib。
 │                         #   訊號內容/觸發時機未定(待討論);CLI `notify-test` 實發驗證
 ├── strategy_config.py    #   全部策略門檻(版本化,configs/*.json 覆寫)
+├── stock_watchlist.py    #   個股自選(2026-07-28 起 schema v2 groups;v1 讀時遷移、上限以聯集計)
 ├── watchlist.py          #   可替換分點集合(watchlists/*.json)
 └── cli.py                #   python -m copycat <import-neigui|replay|validate|compare|backfill-daily|tday-features|tday-search>
 frontend/                 # React 19 + Vite + TS strict + Tailwind v4 + TanStack Query(綜合損益單頁)
