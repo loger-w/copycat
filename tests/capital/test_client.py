@@ -1,0 +1,812 @@
+"""CapitalClient:COM 執行緒橋 + 閘/審計/雙帳號路由(SC-1/2/3/4/6/9)。
+
+治具 tests/capital/fake_com.py(FakeCom 收集 sent、RecordingCom 記啟動序列)。
+寫入紀律(design §3/§9):master 閘 → 各閘(不過 = 審計 blocked 行 + raise
+CapitalGateBlockedError)→ 審計前置(失敗 raise AuditWriteError 整筆失敗)→
+COM(10s timeout → 結果未知)→ 審計後置(失敗只 log、不改 OrderResult)。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+import copycat.capital.client as client_mod
+from copycat.capital.client import CapitalClient
+from copycat.capital.com import CapitalCom
+from copycat.capital.models import (
+    CancelOrderRequest,
+    CapitalDownError,
+    CapitalGateBlockedError,
+    CapitalNotReadyError,
+    CorrectPriceRequest,
+    DecreaseQtyRequest,
+    FutureOrderRequest,
+    OrderResult,
+    Position,
+    PositionCloseRequest,
+    StockOrderRequest,
+)
+from copycat.capital.reply import parse_onnewdata
+from copycat.capital.safety import SafetyConfig
+from copycat.server.audit import AuditWriteError
+from tests.capital.fake_com import FakeCom, RecordingCom
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _client(
+    com: FakeCom,
+    tmp_path: Path,
+    *,
+    enabled: bool = True,
+    env: str = "test",
+    max_qty: int | None = 5,
+    max_amount: float | None = None,
+) -> CapitalClient:
+    return CapitalClient(
+        com,
+        user_id="u",
+        password="p",
+        full_account="1234567890A",
+        env=env,
+        safety=SafetyConfig(order_enabled=enabled, max_qty=max_qty, max_amount=max_amount),
+        audit_base=tmp_path / "audit",
+    )
+
+
+def _mark_ready(client: CapitalClient, futures_account: str | None = "F9999999") -> None:
+    """不跑真執行緒:直接標 ok + 注入期貨帳號(佇列由 _drive 消化)。"""
+    client._status = "ok"
+    client._futures_account = futures_account
+
+
+async def _drive(
+    client: CapitalClient, factory: Callable[[], Awaitable[OrderResult]]
+) -> OrderResult:
+    """測試替代 COM 執行緒:綁 running loop、投遞後同步 drain 佇列(與 _run 同構)。"""
+    client._loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(factory())
+    await asyncio.sleep(0)  # 讓 coroutine 先把命令投進佇列
+    while True:
+        try:
+            cmd = client._cmd_q.get_nowait()
+        except queue.Empty:
+            break
+        if cmd is None:
+            continue
+        fn, fut = cmd
+        try:
+            fut.set_result(fn())
+        except Exception as e:  # noqa: BLE001 — 與 production _run 同構
+            fut.set_exception(e)
+    return await task
+
+
+def _audit_lines(client: CapitalClient) -> list[dict[str, Any]]:
+    files = sorted((client._audit_base).glob("*.jsonl"))
+    out: list[dict[str, Any]] = []
+    for f in files:
+        out.extend(json.loads(line) for line in f.read_text(encoding="utf-8").splitlines())
+    return out
+
+
+def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000", bs: str = "B00R2") -> str:
+    arr = [""] * 48
+    arr[0], arr[1], arr[2], arr[3] = seq, "TS", "N", "N"
+    arr[6], arr[8], arr[11], arr[20] = bs, "3357", price, qty
+    return ",".join(arr)
+
+
+def _fut_evt_raw(seq: str, contract: str = "TXFI6", qty: str = "2", price: str = "23000") -> str:
+    arr = [""] * 48
+    arr[0], arr[1], arr[2], arr[3] = seq, "TF", "N", "N"
+    arr[6], arr[8], arr[11], arr[20] = "BNR20", contract, price, qty
+    return ",".join(arr)
+
+
+def _stock_req(qty: int = 2) -> StockOrderRequest:
+    return StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=qty)
+
+
+def _fut_req(**kw: Any) -> FutureOrderRequest:
+    base: dict[str, Any] = {
+        "tc4_symbol": "TC.F.TWF.TXF.202609",
+        "buy_sell": "buy",
+        "price": 23000.0,
+        "qty": 2,
+    }
+    base.update(kw)
+    return FutureOrderRequest(**base)
+
+
+def test_fake_com_satisfies_protocol() -> None:
+    c: CapitalCom = FakeCom()  # pyright 驗 Protocol 完整性
+    assert c.set_authority(2) == 0
+
+
+# ---------------------------------------------------------------------------
+# 啟動序列 / TF 帳號自動發現(SC-1)
+# ---------------------------------------------------------------------------
+
+
+def test_init_com_sequence_order(tmp_path: Path) -> None:
+    com = RecordingCom()
+    client = _client(com, tmp_path)
+    assert client._init_com() is True
+    assert com.calls == [
+        "setup",
+        "set_authority",
+        "login",
+        "init_order",
+        "read_cert",
+        "connect_reply",
+        "get_user_accounts",
+    ]
+    assert client.status == "ok"
+    assert com.authority == 2  # env=test → SetAuthority(2)
+
+
+def test_init_com_prod_authority_zero(tmp_path: Path) -> None:
+    com = RecordingCom()
+    client = _client(com, tmp_path, env="prod")
+    assert client._init_com() is True
+    assert com.authority == 0
+
+
+def test_futures_account_discovered_from_tf_market(tmp_path: Path) -> None:
+    com = FakeCom()  # 預設含 ("TF", "F9999999")
+    client = _client(com, tmp_path)
+    assert client._init_com() is True
+    assert client.futures_account == "F9999999"
+
+
+def test_no_tf_account_warns_and_leaves_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    com = FakeCom(accounts=[("TS", "1234567890A")])
+    client = _client(com, tmp_path)
+    with caplog.at_level("WARNING"):
+        assert client._init_com() is True
+    assert client.futures_account is None
+    assert any("期貨" in r.message for r in caplog.records)
+
+
+def test_connect_reply_failure_degrades_but_init_succeeds(tmp_path: Path) -> None:
+    com = RecordingCom()
+    com.connect_reply_rc = 3001
+    client = _client(com, tmp_path)
+    assert client._init_com() is True
+    assert client.status == "degraded"
+    assert client.last_error is not None
+    # 回報失敗不可中斷後續:帳號發現仍要跑
+    assert "get_user_accounts" in com.calls
+
+
+def test_status_change_broadcasts_capital_status(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    pushed: list[dict[str, object]] = []
+    client.set_broadcast(pushed.append)
+    assert client._init_com() is True
+    assert any(p["event"] == "capital_status" for p in pushed)
+
+
+# ---------------------------------------------------------------------------
+# 證券送單 fields 逐欄(SC-2)
+# ---------------------------------------------------------------------------
+
+
+async def test_submit_stock_fields_and_result(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    res = await _drive(client, lambda: client.submit_stock_order(_stock_req()))
+    assert res.ok is True and res.code == 0
+    assert res.seq_no == "SEQ0001"
+    kind, fields = com.sent[0][0], com.sent[0][1]
+    assert kind == "stock"
+    assert fields == {
+        "bstrFullAccount": "1234567890A",
+        "bstrStockNo": "2330",
+        "sBuySell": 0,
+        "bstrPrice": "590.00",
+        "nQty": 2,
+        "nSpecialTradeType": 2,
+        "nTradeType": 0,
+        "sFlag": 0,
+        "sPeriod": 0,
+        "sPrime": 0,
+    }
+    lines = _audit_lines(client)
+    assert len(lines) == 2  # 前置 + 後置
+    assert lines[0]["action"] == "order" and lines[0]["result"] is None
+    assert lines[1]["result"]["ok"] is True
+    assert lines[0]["env"] == "test" and lines[0]["req"]["stock_no"] == "2330"
+
+
+# ---------------------------------------------------------------------------
+# 期貨/選擇權送單分流 + ROD→IOC 註記(SC-3)
+# ---------------------------------------------------------------------------
+
+
+async def test_submit_future_goes_send_future_order(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    res = await _drive(
+        client, lambda: client.submit_future_order(_fut_req(), contract="TXFI6", multiplier=200)
+    )
+    assert res.ok is True and res.seq_no == "SEQF001"
+    kind, fields, is_option = com.sent[0]
+    assert kind == "future" and is_option is False
+    assert fields == {
+        "bstrFullAccount": "F9999999",
+        "bstrStockNo": "TXFI6",
+        "bstrPrice": "23000",
+        "sTradeType": 0,
+        "sBuySell": 0,
+        "sDayTrade": 0,
+        "sNewClose": 2,
+        "nQty": 2,
+    }
+
+
+async def test_submit_option_goes_send_option_order(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    req = _fut_req(tc4_symbol="TC.O.TWF.TXO.202609.C.20000", price=300.0, qty=1)
+    await _drive(
+        client, lambda: client.submit_future_order(req, contract="TXO20000I6", multiplier=50)
+    )
+    kind, fields, is_option = com.sent[0]
+    assert kind == "future" and is_option is True
+    assert fields["bstrStockNo"] == "TXO20000I6"
+
+
+async def test_weekly_contract_routes_as_option(tmp_path: Path) -> None:
+    # TX4 週選是選擇權家族:非 {TXF, MXF, TMF} 一律走 SendOptionOrder
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    req = _fut_req(tc4_symbol="TC.O.TWF.TX4.202607.C.23000", price=100.0, qty=1)
+    await _drive(
+        client, lambda: client.submit_future_order(req, contract="TX423000G6", multiplier=50)
+    )
+    assert com.sent[0][2] is True
+
+
+async def test_market_rod_upgraded_to_ioc_with_message_note(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    req = _fut_req(price_type="market")  # 預設 TIF=ROD
+    res = await _drive(
+        client, lambda: client.submit_future_order(req, contract="TXFI6", multiplier=200)
+    )
+    fields = com.sent[0][1]
+    assert fields["bstrPrice"] == "M" and fields["sTradeType"] == 1  # IOC
+    assert res.message.startswith("市價單已升級 IOC;")
+
+
+async def test_market_explicit_ioc_no_message_note(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    req = _fut_req(price_type="market", time_in_force="IOC")
+    res = await _drive(
+        client, lambda: client.submit_future_order(req, contract="TXFI6", multiplier=200)
+    )
+    assert not res.message.startswith("市價單已升級")
+
+
+async def test_future_order_no_futures_account_blocked(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.submit_future_order(_fut_req(), contract="TXFI6", multiplier=200)
+    assert ei.value.reason == "no_futures_account"
+    assert com.sent == []
+    assert _audit_lines(client)[-1]["blocked"] == "no_futures_account"
+
+
+async def test_future_amount_gate_uses_multiplier(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path, max_amount=1_000_000.0)
+    _mark_ready(client)
+    with pytest.raises(CapitalGateBlockedError) as ei:  # 23000×2×200 = 9.2M > 1M
+        await client.submit_future_order(_fut_req(), contract="TXFI6", multiplier=200)
+    assert ei.value.reason is not None and "超過上限" in ei.value.reason
+    assert com.sent == []
+
+
+# ---------------------------------------------------------------------------
+# 閘不過 = 審計 blocked + raise;未就緒 raise(SC-9)
+# ---------------------------------------------------------------------------
+
+
+async def test_master_off_blocks_audits_and_never_touches_com(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path, enabled=False)
+    _mark_ready(client)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.submit_stock_order(_stock_req())
+    assert ei.value.reason == "order_disabled"
+    assert com.sent == []
+    lines = _audit_lines(client)
+    assert len(lines) == 1
+    assert lines[0]["blocked"] == "order_disabled" and lines[0]["result"] is None
+
+
+async def test_master_off_precedes_no_futures_account(tmp_path: Path) -> None:
+    # 稽核 blocked 要記真正原因:總開關關閉時不可被 no_futures_account 遮蔽
+    com = FakeCom()
+    client = _client(com, tmp_path, enabled=False)
+    _mark_ready(client, futures_account=None)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.submit_future_order(_fut_req(), contract="TXFI6", multiplier=200)
+    assert ei.value.reason == "order_disabled"
+
+
+async def test_not_ready_raises_and_audits(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)  # status=starting、loop 未綁
+    with pytest.raises(CapitalNotReadyError):
+        await client.submit_stock_order(_stock_req())
+    assert com.sent == []
+    assert _audit_lines(client)[-1]["blocked"] == "capital_not_ready"
+
+
+# ---------------------------------------------------------------------------
+# cancel / correct / decrease:雙帳號路由 + market 交叉驗證(SC-4)
+# ---------------------------------------------------------------------------
+
+
+async def test_cancel_sec_routes_full_account(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    res = await _drive(
+        client, lambda: client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
+    )
+    assert res.ok is True
+    assert ("cancel", "1234567890A", "S1") in com.sent
+
+
+async def test_cancel_fut_routes_futures_account(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    await _drive(client, lambda: client.cancel_order(CancelOrderRequest(seq_no="F1", market="fut")))
+    assert ("cancel", "F9999999", "F1") in com.sent
+
+
+async def test_cancel_fut_without_account_blocked(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.cancel_order(CancelOrderRequest(seq_no="F1", market="fut"))
+    assert ei.value.reason == "no_futures_account"
+    assert com.sent == []
+
+
+async def test_market_mismatch_blocked_both_ways(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_fut_evt_raw("F1")))  # store 記 TF
+    client.store.apply_reply(parse_onnewdata(_stock_evt_raw("S1")))  # store 記 TS
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.cancel_order(CancelOrderRequest(seq_no="F1", market="sec"))
+    assert ei.value.reason == "market_mismatch"
+    with pytest.raises(CapitalGateBlockedError) as ei2:
+        await client.decrease_qty(DecreaseQtyRequest(seq_no="S1", market="fut", qty=1))
+    assert ei2.value.reason == "market_mismatch"
+    assert com.sent == []
+    assert _audit_lines(client)[-1]["blocked"] == "market_mismatch"
+
+
+async def test_unknown_seq_trusts_request_market(tmp_path: Path) -> None:
+    # review R3:斷線時 store 空仍要能刪單 — store 查無(None)信 request 的 market 放行
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    res = await _drive(
+        client, lambda: client.cancel_order(CancelOrderRequest(seq_no="ghost", market="fut"))
+    )
+    assert res.ok is True
+    assert ("cancel", "F9999999", "ghost") in com.sent
+
+
+async def test_decrease_fut_routes_futures_account(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_fut_evt_raw("F1")))
+    res = await _drive(
+        client, lambda: client.decrease_qty(DecreaseQtyRequest(seq_no="F1", market="fut", qty=1))
+    )
+    assert res.ok is True
+    assert ("decrease", "F9999999", "F1", 1) in com.sent
+
+
+async def test_correct_price_sec_amount_gate_in_lots(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path, max_amount=100_000.0)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_stock_evt_raw("S9")))  # 未成交 1000 股 = 1 張
+    with pytest.raises(CapitalGateBlockedError) as ei:  # 200×1張×1000 = 200,000 > 100,000
+        await client.correct_price(CorrectPriceRequest(seq_no="S9", market="sec", price=200.0))
+    assert ei.value.reason is not None and "超過上限" in ei.value.reason
+    assert com.sent == []
+    res = await _drive(
+        client,
+        lambda: client.correct_price(CorrectPriceRequest(seq_no="S9", market="sec", price=95.0)),
+    )
+    assert res.ok is True
+    assert ("correct_price", "1234567890A", "S9", 95.0) in com.sent
+
+
+async def test_correct_price_fut_multiplier_lookup(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path, max_amount=1_000_000.0)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_fut_evt_raw("F1", contract="TXFI6")))
+    with pytest.raises(CapitalGateBlockedError) as ei:  # 23000×2口×200 = 9.2M > 1M
+        await client.correct_price(CorrectPriceRequest(seq_no="F1", market="fut", price=23000.0))
+    assert ei.value.reason is not None and "超過上限" in ei.value.reason
+    assert com.sent == []
+
+
+async def test_correct_price_fut_unknown_product_falls_back_multiplier_1(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path, max_amount=1_000_000.0)
+    _mark_ready(client)
+    client.store.apply_reply(parse_onnewdata(_fut_evt_raw("F2", contract="ZZZZZ9")))
+    with caplog.at_level("WARNING"):
+        res = await _drive(
+            client,
+            lambda: client.correct_price(
+                CorrectPriceRequest(seq_no="F2", market="fut", price=23000.0)
+            ),
+        )
+    assert res.ok is True  # 23000×2×1 = 46,000 ≤ 1M(multiplier=1 fallback)
+    assert ("correct_price", "F9999999", "F2", 23000.0) in com.sent
+    assert any("multiplier=1" in r.message for r in caplog.records)
+
+
+async def test_correct_price_unknown_seq_allowed_r3(tmp_path: Path) -> None:
+    # remaining=None(store 查無)→ 金額/數量閘跳過,只驗價 > 0(review R3 逃生口)
+    com = FakeCom()
+    client = _client(com, tmp_path, max_amount=1.0)
+    _mark_ready(client)
+    res = await _drive(
+        client,
+        lambda: client.correct_price(CorrectPriceRequest(seq_no="ghost", market="sec", price=9.0)),
+    )
+    assert res.ok is True
+    assert ("correct_price", "1234567890A", "ghost", 9.0) in com.sent
+
+
+# ---------------------------------------------------------------------------
+# timeout / COM 例外 / 執行緒亡故(SC-1)
+# ---------------------------------------------------------------------------
+
+
+async def test_write_timeout_returns_unknown_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(client_mod, "_WRITE_TIMEOUT_S", 0.01)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._loop = asyncio.get_running_loop()
+    # 不 drain 佇列 = COM 卡死
+    res = await client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
+    assert res.ok is False and res.code == -1 and res.seq_no is None
+    assert res.message == "結果未知,勿重送"
+    lines = _audit_lines(client)
+    assert lines[-1]["result"]["message"] == "結果未知,勿重送"
+
+
+async def test_com_exception_raises_capital_down_and_audits(tmp_path: Path) -> None:
+    class BoomCom(FakeCom):
+        def cancel_order(self, user_id: str, full_account: str, seq_no: str) -> tuple[str, int]:
+            raise RuntimeError("COM died")
+
+    com = BoomCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with pytest.raises(CapitalDownError):
+        await _drive(
+            client, lambda: client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
+        )
+    lines = _audit_lines(client)
+    assert "COM 例外" in lines[-1]["result"]["message"]
+
+
+def test_run_thread_exit_drops_status_and_drains_pending(tmp_path: Path) -> None:
+    com = RecordingCom()
+    client = _client(com, tmp_path)
+    loop = asyncio.new_event_loop()
+    try:
+        client._loop = loop
+        fut: asyncio.Future[tuple[str, int]] = loop.create_future()
+        client._cmd_q.put(None)  # 終止訊號:init 成功後第一輪 break
+        client._cmd_q.put(((lambda: ("OK", 0)), fut))  # 終止後殘留的命令
+        client._run()
+        loop.run_until_complete(asyncio.sleep(0))  # 消化 call_soon_threadsafe
+        assert client.status == "error"
+        assert client.last_error is not None
+        assert fut.done() and isinstance(fut.exception(), RuntimeError)
+    finally:
+        loop.close()
+
+
+def test_pump_once_swallows_exceptions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)  # 防洪水節流不拖慢測試
+    com = FakeCom()
+    client = _client(com, tmp_path)
+
+    def boom() -> None:
+        raise RuntimeError("COM 斷線")
+
+    com.pump = boom  # type: ignore[method-assign]
+    client._pump_once()  # 不得 raise
+
+
+# ---------------------------------------------------------------------------
+# 審計不對稱紀律(SC-9;design §9)
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_pre_write_failure_fails_whole_request(tmp_path: Path) -> None:
+    # audit_base 位置被檔案佔住 → mkdir 失敗 → 前置審計寫不進去 = 整筆失敗、錢不動
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._audit_base.parent.mkdir(parents=True, exist_ok=True)
+    client._audit_base.write_text("occupied", encoding="utf-8")
+    with pytest.raises(AuditWriteError):
+        await client.submit_stock_order(_stock_req())
+    assert com.sent == []
+
+
+async def test_audit_post_write_failure_keeps_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 命令已出手後審計寫失敗只能 log:回失敗會誘發重送 → 真錢重複下單
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    calls = {"n": 0}
+    real_append = client_mod.append_audit
+
+    def flaky(base: Path, record: dict[str, Any], *, when: Any) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:  # 前置成功、後置失敗
+            raise AuditWriteError("disk full")
+        real_append(base, record, when=when)
+
+    monkeypatch.setattr(client_mod, "append_audit", flaky)
+    res = await _drive(client, lambda: client.submit_stock_order(_stock_req()))
+    assert res.ok is True and res.seq_no == "SEQ0001"
+    assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# close_position:sec/fut 組裝 + 防重送(SC-6)
+# ---------------------------------------------------------------------------
+
+
+async def test_close_sec_builds_reverse_order_and_blocks_second_inflight(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="sec", stock_no="2330", qty=1, kind="margin")])
+    req = PositionCloseRequest(market="sec", key="2330", price=590.0)
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    kind, fields = com.sent[0][0], com.sent[0][1]
+    assert kind == "stock"
+    assert fields["sBuySell"] == 1 and fields["sFlag"] == 1  # 融資多 → 融資賣
+    assert _audit_lines(client)[-1]["action"] == "close"
+    with pytest.raises(CapitalGateBlockedError) as ei:  # in-flight 10s 防重送
+        await client.close_position(req)
+    assert ei.value.reason is not None and "在途" in ei.value.reason
+    assert len(com.sent) == 1
+    assert "在途" in _audit_lines(client)[-1]["blocked"]
+
+
+async def test_close_sec_no_position_blocked(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.close_position(PositionCloseRequest(market="sec", key="2330", price=590.0))
+    assert ei.value.reason is not None and "無部位可平" in ei.value.reason
+    assert com.sent == []
+    assert "無部位可平" in _audit_lines(client)[-1]["blocked"]
+
+
+async def test_close_sec_blocked_by_same_side_active_order(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="sec", stock_no="3357", qty=1, kind="cash")])
+    client.store.apply_reply(parse_onnewdata(_stock_evt_raw("S1", bs="S00R2")))  # 活躍賣單
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.close_position(PositionCloseRequest(market="sec", key="3357", price=90.0))
+    assert ei.value.reason is not None and "活躍委託" in ei.value.reason
+    assert com.sent == []
+
+
+async def test_close_fut_builds_reverse_ioc_new_close_1(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(
+        [Position(market="fut", stock_no="TXFI6", qty=2, avg_price=23000.0)]
+    )
+    req = PositionCloseRequest(market="fut", key="TXFI6", price=22000.0)
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    kind, fields, is_option = com.sent[0]
+    assert kind == "future" and is_option is False
+    assert fields["sBuySell"] == 1  # 多倉 → 反向賣
+    assert fields["sNewClose"] == 1  # 倉別=平倉
+    assert fields["sTradeType"] == 1  # IOC
+    assert fields["bstrPrice"] == "22000"  # 限價貼漲跌停(req.price)
+    assert fields["nQty"] == 2
+    assert _audit_lines(client)[-1]["action"] == "close"
+    with pytest.raises(CapitalGateBlockedError):  # 防重送同樣生效
+        await client.close_position(req)
+    assert len(com.sent) == 1
+
+
+async def test_close_fut_no_position_blocked(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.close_position(PositionCloseRequest(market="fut", key="TXFI6", price=22000.0))
+    assert ei.value.reason is not None and "無部位可平" in ei.value.reason
+
+
+async def test_close_fut_without_futures_account_blocked(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    client.store.set_positions(
+        [Position(market="fut", stock_no="TXFI6", qty=1, avg_price=23000.0)]
+    )
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.close_position(PositionCloseRequest(market="fut", key="TXFI6", price=22000.0))
+    assert ei.value.reason == "no_futures_account"
+    assert com.sent == []
+
+
+# ---------------------------------------------------------------------------
+# 回報 → store → broadcast;balance 觸發(SC-5/6 的 client 面)
+# ---------------------------------------------------------------------------
+
+
+def test_reply_updates_store_marks_dirty_and_broadcasts(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    pushed: list[dict[str, object]] = []
+    client.set_broadcast(pushed.append)
+    client._handle_reply(_stock_evt_raw("S1"))
+    orders = client.store.orders()
+    assert len(orders) == 1 and orders[0].seq_no == "S1"
+    assert pushed and pushed[0]["event"] == "capital_order"
+    assert client._balance_due is None  # N 委託不觸發重查
+    fill = [""] * 48
+    fill[0], fill[1], fill[2], fill[3] = "S1", "TS", "D", "N"
+    fill[6], fill[8], fill[11], fill[20] = "B00R2", "3357", "90.0000", "1000"
+    client._handle_reply(",".join(fill))
+    assert client._balance_due is not None  # 成交 → debounce 排程重查
+
+
+def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    pushed: list[dict[str, object]] = []
+    client.set_broadcast(pushed.append)
+    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    client._handle_balance(bal)
+    client._handle_balance("##")
+    assert ("get_profit_loss_gw", "1234567890A") in com.sent
+    assert client.store.positions() == []  # 期貨回完才合併寫入,不先落半套
+    client._handle_profit("000,查詢成功")
+    client._handle_profit(
+        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
+        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+    )
+    client._handle_profit("##,,,,")
+    assert ("get_open_interest", "F9999999") in com.sent
+    assert client.store.positions() == []
+    client._handle_open_interest("TF,F9999999,TXFI6,B,2,0,23000.0")
+    client._handle_open_interest("##")
+    sec = client.store.position_for("3357")
+    fut = client.store.position_for("TXFI6")
+    assert sec is not None and sec.qty == 3 and sec.kind == "margin"
+    assert sec.avg_price == 150.55  # 損益回填進 pending 再合併發布
+    assert fut is not None and fut.market == "fut" and fut.qty == 2 and fut.avg_price == 23000.0
+    assert any(p["event"] == "capital_position" for p in pushed)
+
+
+def test_balance_chain_without_futures_account_publishes_sec_only(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    client._handle_balance(bal)
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    assert all(entry[0] != "get_open_interest" for entry in com.sent)
+    sec = client.store.position_for("3357")
+    assert sec is not None and sec.qty == 3
+
+
+def test_pending_watchdog_publishes_sec_when_chain_stalls(tmp_path: Path) -> None:
+    # 損益/期貨查詢卡住(零事件)時 pending 不可永久滯留 — 逾時以已收資料寫入
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    client._handle_balance(bal)
+    client._handle_balance("##")
+    assert client.store.positions() == []
+    client._pending_deadline = 0.0  # 強制逾時
+    client._pump_once()
+    sec = client.store.position_for("3357")
+    assert sec is not None and sec.qty == 3
+
+
+def test_maybe_query_balance_runs_in_degraded(tmp_path: Path) -> None:
+    # degraded(回報斷線)也要輪詢 — 此時 60s 輪詢是部位唯一更新源
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._status = "degraded"
+    client._balance_last_ts = 0.0
+    client._maybe_query_balance()
+    assert ("get_real_balance", "1234567890A") in com.sent
+
+
+def test_reply_disconnect_degrades_and_keeps_store(tmp_path: Path) -> None:
+    com = RecordingCom()
+    client = _client(com, tmp_path)
+    assert client._init_com() is True
+    client.store.apply_reply(parse_onnewdata(_stock_evt_raw("S1")))
+    client._handle_reply_disconnect(3002)
+    assert client.status == "degraded"
+    assert client.last_error is not None and "3002" in client.last_error
+    assert len(client.store.orders()) == 1  # 不 clear store、不自動重連(review R7)
+
+
+async def test_degraded_still_allows_writes(tmp_path: Path) -> None:
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._status = "degraded"
+    res = await _drive(
+        client, lambda: client.cancel_order(CancelOrderRequest(seq_no="S1", market="sec"))
+    )
+    assert res.ok is True  # 刪單是降風險操作,degraded 不擋
