@@ -1,0 +1,238 @@
+"""OnRealBalanceReport(即時庫存)/ 損益試算 / OnOpenInterest(期貨部位)解析與收集。
+
+邏輯照搬 treading-king backend/services/capital_balance.py(pydantic → dataclass,
+Position 建構補 market 欄);parse_open_interest_line 為本專案新增(期權面)。
+
+欄位定義 = 官方 4-2-c(策略王COM元件使用說明_V2.13.58.docx),
+2026-06-11 以正式環境真實回報逐欄驗證(樣本見 test_balance.py):
+  [0]股票代號 [1]庫存種類(T:集保 C:融資 L:融券) [2][3]資額度(原始/可用)
+  [4][5]券額度(原始/可用) [6]昨日庫存(股) [7]今日委買 [8]今日委賣
+  [9]今日買進成交 [10]今日賣出成交 [11]今日資券可回補/集保可賣出
+  [12]可資沖 [13]可券沖 [14]即時庫存 [15]忽略 [16]即時個股維持率
+  [17]LOGIN_ID [18]帳號
+⚠ 此報告**沒有均價欄**([16] 是維持率、會隨現價跳動,絕不可當價格)→
+Position.avg_price 一律 None,均價待接損益試算 GetProfitLossGWReport。
+
+事件節奏(實測):每檔一事件、結尾 ## 標記;BalanceCollector 雙保險:
+收到結束標記 flush,或 timeout 後由 COM 執行緒 poll() flush。
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+from typing import Any, NamedTuple
+
+from copycat.capital.models import Position
+
+logger = logging.getLogger(__name__)
+
+_IDX_STOCK_NO = 0
+_IDX_KIND = 1
+_IDX_SHARES = 14  # 即時庫存(股)
+_MIN_FIELDS = 15
+_KIND = {"T": "cash", "C": "margin", "L": "short"}
+
+
+def parse_balance_line(raw: str) -> Position | None:
+    """一筆事件字串 → Position;結束標記/欄位不足/數字壞/餘額 0/未知種類 → None。
+    未知種類寧缺勿錯:平倉映射依 kind 送單,猜錯=送錯單種。"""
+    if not raw or raw.startswith("#"):
+        return None
+    parts = raw.split(",")
+    if len(parts) < _MIN_FIELDS:
+        return None
+    try:
+        shares = int(float(parts[_IDX_SHARES]))
+    except ValueError:
+        logger.warning("balance line 解析失敗: %r", raw)
+        return None
+    if shares == 0:
+        return None
+    stock_no = parts[_IDX_STOCK_NO].strip()
+    kind = _KIND.get(parts[_IDX_KIND].strip())
+    if not stock_no or kind is None:
+        if stock_no:
+            logger.warning("balance line 未知庫存種類 %r: %r", parts[_IDX_KIND], raw)
+        return None
+    # 用 abs 取幅度再按 kind 定號:若融券列回的是負股數,floor division 會把
+    # -1500//1000 算成 -2(幅度多算一張)、再取負變 +2(方向也錯)。
+    # 融券真實符號待首次有券空部位時 probe 校準;此寫法兩種符號都正確。
+    lots = abs(shares) // 1000
+    if lots == 0:  # 零股不足 1 張:清單以張為單位,暫不顯示
+        return None
+    if kind == "short":
+        lots = -lots  # 融券放空 → 負張數(close 映射靠 qty>0 判多空)
+    return Position(market="sec", stock_no=stock_no, qty=lots, kind=kind)
+
+
+def dedupe_positions(positions: list[Position]) -> list[Position]:
+    """同檔多種庫存列(集保+融資並存)→ 保留張數大者。store 以 stock_no 為鍵,
+    被捨棄的部分平倉鍵不到 — 部位資料分種類建模前的過渡取捨,寧少不錯。"""
+    seen: dict[str, Position] = {}
+    for p in positions:
+        q = seen.get(p.stock_no)
+        if q is not None:
+            # debug 級:資+集保並存是穩定狀態,每 60s 查詢都會走到這裡,warning 會洗版
+            logger.debug(
+                "同檔多種庫存列 %s: %s %d張 / %s %d張 — 保留張數大者",
+                p.stock_no,
+                q.kind,
+                q.qty,
+                p.kind,
+                p.qty,
+            )
+            if abs(p.qty) <= abs(q.qty):
+                continue
+        seen[p.stock_no] = p
+    return list(seen.values())
+
+
+# OnOpenInterest(GetOpenInterestGW nFormat=1)假定欄序(群益手冊慣例):
+# [0]市場 [1]帳號 [2]商品(期交所契約碼) [3]買賣別 B/S [4]口數 [5]當沖口數 [6]平均成本
+_OI_IDX_CONTRACT = 2
+_OI_IDX_SIDE = 3
+_OI_IDX_LOTS = 4
+_OI_IDX_AVG = 6
+_OI_MIN_FIELDS = 5
+
+
+def parse_open_interest_line(raw: str) -> Position | None:
+    """OnOpenInterest(GetOpenInterestGW nFormat=1)一筆 → Position(market="fut")。
+
+    ⚠ 欄序 prod 未實測,依群益手冊慣例假定(市場,帳號,商品,買賣別,口數,當沖口數,
+    平均成本,...)— **欄序 prod 實測後校正**;`#` 開頭為結束標記。
+    防禦性解析:市場/帳號欄跳過;商品碼/買賣別(B/S)/口數/成本價 取候選欄位;
+    結束標記("##" 開頭)或含「無資料」訊息列、任何解析失敗 → None(由 caller log)。
+    S 賣方 → 負口數(close 映射靠 qty>0 判多空);成本價附屬欄壞掉不丟整筆。
+    """
+    if not raw or raw.startswith("#") or "無資料" in raw:
+        return None
+    parts = raw.split(",")
+    if len(parts) < _OI_MIN_FIELDS:
+        return None
+    contract = parts[_OI_IDX_CONTRACT].strip()
+    side = parts[_OI_IDX_SIDE].strip()
+    if not contract or side not in ("B", "S"):
+        return None
+    try:
+        lots = int(float(parts[_OI_IDX_LOTS]))
+    except ValueError:
+        return None
+    if lots == 0:
+        return None
+    lots = abs(lots)  # 同 parse_balance_line 防禦:符號未實測,取幅度再按方向定號
+    if side == "S":
+        lots = -lots
+    avg: float | None
+    try:
+        avg = float(parts[_OI_IDX_AVG])
+    except (ValueError, IndexError):
+        avg = None
+    return Position(market="fut", stock_no=contract, qty=lots, avg_price=avg)
+
+
+_PNL_IDX_STOCK_NO = 1
+_PNL_IDX_KIND = 3  # 交易種類(現股/融資/融券)— 同檔多種庫存並存時每種類一列
+_PNL_IDX_PRICE = 5  # 報告市價(前端「券商基底+即時平移」的平移基準)
+_PNL_IDX_PNL = 9  # 損益(含費稅息,與群益 App 同源)
+_PNL_IDX_AVG = 10  # 平均買進(券賣)成本(4-2-p 未實現-彙總)
+_PNL_IDX_COST = 12  # 成交價金(報酬率分母 — 實測同報告[21]口徑)
+_PNL_MIN_FIELDS = 11
+_PNL_KIND = {"現股": "cash", "融資": "margin", "融券": "short"}
+
+
+class ProfitRow(NamedTuple):
+    stock_no: str
+    avg_price: float
+    pnl: float | None  # 含費稅息淨損益(報告市價時點)
+    price: float | None  # 報告市價
+    cost: float | None  # 成交價金(% 分母)
+    kind: str | None = None  # cash/margin/short;None=未知標籤(回填端視為不符、略過)
+
+
+def _opt_float(parts: list[str], i: int) -> float | None:
+    try:
+        return float(parts[i])
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_profit_line(raw: str) -> ProfitRow | None:
+    """OnProfitLossGWReport(未實現-彙總)一筆 → ProfitRow;
+    查詢結果列(000開頭)/結束標記/總計列(股號空)/欄位不足/均價壞 → None。
+    損益三欄各自可缺(均價是主要產出,不因附屬欄壞掉丟整筆)。"""
+    if not raw or raw.startswith("#"):
+        return None
+    parts = raw.split(",")
+    if len(parts) < _PNL_MIN_FIELDS or parts[0].strip() == "000":
+        return None
+    stock_no = parts[_PNL_IDX_STOCK_NO].strip()
+    try:
+        avg = float(parts[_PNL_IDX_AVG])
+    except ValueError:
+        logger.warning("profit line 解析失敗: %r", raw)
+        return None
+    if not stock_no or avg <= 0:
+        return None
+    return ProfitRow(
+        stock_no=stock_no,
+        avg_price=avg,
+        pnl=_opt_float(parts, _PNL_IDX_PNL),
+        price=_opt_float(parts, _PNL_IDX_PRICE),
+        cost=_opt_float(parts, _PNL_IDX_COST),
+        kind=_PNL_KIND.get(parts[_PNL_IDX_KIND].strip()),
+    )
+
+
+class BalanceCollector:
+    """收集一輪查詢的多筆事件,結束標記或 timeout 後一次 flush(全量替換語意)。
+    只在 COM 執行緒上被呼叫(feed=事件、poll=幫浦圈、reset=發查詢前),無鎖。
+    parse 可換 — 損益試算報告(parse_profit_line)/期貨部位(parse_open_interest_line)
+    共用同一套節奏。"""
+
+    def __init__(
+        self,
+        on_complete: Callable[[list[Any]], None],
+        timeout_s: float = 1.0,
+        parse: Callable[[str], object | None] = parse_balance_line,
+    ) -> None:
+        self._on_complete = on_complete
+        self._timeout_s = timeout_s
+        self._parse = parse
+        self._staging: list[Any] = []
+        self._last_feed: float | None = None
+        self._closed = False  # 本輪已 flush;reset(發新查詢)前的事件一律丟棄
+
+    def reset(self) -> None:
+        self._staging = []
+        self._last_feed = None
+        self._closed = False
+
+    def feed(self, raw: str) -> None:
+        # flush 後本輪即關閉:timeout 保險先 flush 的話,殘餘事件+遲到的 ## 不可
+        # 再 flush 一次 — on_complete 是全量取代語意,尾段幾檔或空集合會整批蓋掉部位
+        if self._closed:
+            logger.debug("collector 本輪已 flush,事件丟棄: %r", raw)
+            return
+        if raw and raw.startswith("#"):  # 結束標記
+            self._flush()
+            return
+        p = self._parse(raw)
+        self._last_feed = time.monotonic()
+        if p is not None:
+            self._staging.append(p)
+
+    def poll(self, now_monotonic: float | None = None) -> None:
+        """COM 幫浦圈呼叫:距最後一筆事件超過 timeout → flush(沒等到 ## 的保險)。"""
+        if self._last_feed is None:
+            return
+        now = time.monotonic() if now_monotonic is None else now_monotonic
+        if now - self._last_feed >= self._timeout_s:
+            self._flush()
+
+    def _flush(self) -> None:
+        out, self._staging, self._last_feed = self._staging, [], None
+        self._closed = True
+        self._on_complete(out)
