@@ -41,9 +41,10 @@ class IndexSource(Protocol):
     def close(self) -> None: ...
 
 
-def in_watch_window_now() -> bool:
-    now = _dt.datetime.now().time()
-    return _WATCH_START <= now <= _WATCH_END
+def in_watch_window_now(now: _dt.time | None = None) -> bool:
+    """watchdog 判定窗;end-exclusive(13:25:00 起即試撮窗凍結 — review F4 界義)。"""
+    t = now if now is not None else _dt.datetime.now().time()
+    return _WATCH_START <= t < _WATCH_END
 
 
 def minute_key(hhmmss: str, *, utc: bool) -> str | None:
@@ -58,7 +59,7 @@ def minute_key(hhmmss: str, *, utc: bool) -> str | None:
     mm += 1
     if mm == 60:
         mm = 0
-        hh += 1
+        hh = (hh + 1) % 24  # 防禦:域檢查會擋 24 時,但鍵格式不得出現 "24xx"(review A2)
     key = f"{hh:02d}{mm:02d}"
     if "1330" < key <= "1335":
         key = "1330"
@@ -162,6 +163,9 @@ class IndexEngine:
             self._tasks.append(asyncio.create_task(self._rollover_loop()))
 
     async def close(self) -> None:
+        # 先斷 threadsafe callback 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
+        # 到即將關閉的 loop(review A1)
+        self._loop = None
         tasks = list(self._tasks)
         if self._retry_task is not None:
             tasks.append(self._retry_task)

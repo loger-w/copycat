@@ -113,7 +113,8 @@ export function useIndexStream(): IndexStreamState {
         tradeDateRef.current !== null &&
         incomingDate !== tradeDateRef.current
       ) {
-        // 換日(F3):清本地 minutes,以全量 refetch 對齊
+        // 換日(F3):清本地 minutes,以全量 refetch 對齊。refetch 不 await 是安全的:
+        // state 為全量快照恆 ≥ 增量,且後續 WS 訊息只會 upsert 新日分鐘(review A3)
         setTradeDate(incomingDate);
         setTwse(null);
         setOtc(null);
