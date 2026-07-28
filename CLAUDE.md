@@ -42,6 +42,14 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   tc4(TC4QuoteSource,唯一碰 ZMQ 的模組)— extras [live] 才需 fastapi/pyzmq
 │                         #   個股看盤(2026-07-21):stock_models(REALTIME 對映/五檔位移歸一/試撮窗)、
 │                         #   stock_state(當日狀態機:去重/分鐘聚合/VWAP)、stock_source(繼承 TC4QuoteSource)
+│                         #   期貨行情(2026-07-28):futures_models(HOT 契約 YYYYMM 解析)、
+│                         #   futures_source(TXF/MXF/TMF HOT REALTIME)
+├── capital/              #   群益 Capital 下單(2026-07-28,extras [capital]=comtypes+pywin32):
+│                         #   com(SKCOM COM 封裝,證券+期權共用 FUTUREORDER)、client(COM 專屬
+│                         #   執行緒+命令佇列+審計三段不對稱)、models/safety(上限 None=不限)/
+│                         #   mapping(期交所碼轉換/乘數)/reply/store/balance/close/factory(env 單例)
+│                         #   ⚠ 群益 test 沙盒帳號未開通(1097),驗證走 prod 安全首單;
+│                         #   達錢 4 無下單功能 → 下單全走群益(2026-07-28 拍板)
 ├── server/               #   FastAPI 轉發層:engine(EngineRuntime/QuoteSource Protocol)、app(routes/WS)、
 │                         #   stock_engine(個股訂閱池/兩段式 rollover/回補 worker/廣播,2026-07-21)、
 │                         #   overlay(CDP/MA 疊線計算,2026-07-28:已完成 bar 剔除/don't-cache-empty;
@@ -50,7 +58,11 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   index_engine(指數引擎,2026-07-28:加權 TC4 IX0001 push+1K 回補、
 │                         #   櫃買 MIS 5s poll、台指期由 TXO runtime spot 轉供;watchdog 09:00-13:25、
 │                         #   兩段式換日 pending buffer;REST /api/index/state + WS /ws/index)、
-│                         #   mis(TPEx 櫃買 MIS 快照,非契約公開端點,失敗 None 降級)
+│                         #   mis(TPEx 櫃買 MIS 快照,非契約公開端點,失敗 None 降級)、
+│                         #   capital_api(/api/capital/* + /ws/capital + /api/futures/state +
+│                         #   /ws/futures,2026-07-28)、futures_engine(TXF/MXF/TMF 五檔 +
+│                         #   resolved_contract HOT→YYYYMM);⚠ TC4 TradeRuntime 已停用
+│                         #   (trade.py/tc4_trade.py 保留 deprecated,/api/trade/* 恆 503,下輪清)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
 │                         #   URL 未設 no-op、429 Retry-After 重試一次、never-raise;stdlib urllib。
@@ -99,6 +111,13 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
 - `DISCORD_WEBHOOK_URL`(Discord 通知,選配;未設時 notify 層 no-op。驗收:`python -m copycat notify-test`)
 - `FRONTEND_ORIGIN`(CORS)
 - Touchance 訂閱授權碼 / 帳號 — 實裝時補確切變數名
+- 群益 Capital(2026-07-28,沿用 treading-king 值):`CAPITAL_USER_ID` / `CAPITAL_PASSWORD` /
+  `CAPITAL_FULL_ACCOUNT`(證券帳號;期貨帳號登入後 GetUserAccount 自動發現)/
+  `CAPITAL_ENV`(test|prod;test 沙盒群益端未開通,登入 1097 → 降級 status=error)/
+  `CAPITAL_DLL_DIR` / `CAPITAL_ORDER_ENABLED`(false=總開關全擋)/
+  `CAPITAL_MAX_QTY` / `CAPITAL_MAX_AMOUNT`(未設/0 = 不限,user 拍板)/
+  `CAPITAL_AUDIT_DIR`(選配,預設隨 TXO_AUDIT_DIR;審計檔 capital-YYYYMMDD.jsonl)。
+  `TXO_FAKE_TRADE` 已失效(TradeRuntime 停用)。
 
 ---
 
