@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 import { useCapitalPositions, useCapitalStatus, useClosePosition } from "@/hooks/useCapital";
+import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { CapitalMarket, CapitalPosition } from "@/types";
 
@@ -53,6 +54,12 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
         <span className="text-right">損益</span>
         <span />
       </li>
+      {closePosition.error !== null && (
+        // 平倉失敗錯誤列(400 BROKER_REJECTED 等;review A2);下次 mutate 自動清除
+        <li className="border-b border-line/60 py-1 text-xs text-loss">
+          {tradeErrorText(closePosition.error.message)}
+        </li>
+      )}
       {positions.map((p) => {
         const isLong = p.qty > 0;
         const est = closePriceOf?.(p) ?? null;

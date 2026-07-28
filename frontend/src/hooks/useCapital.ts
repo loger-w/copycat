@@ -83,15 +83,19 @@ export function useCapitalWsStatus(): WsStatus {
 // fetch helper(useTrade.ts 最小複製;error contract {detail:{error, reason?}})
 // ---------------------------------------------------------------------------
 
-/** 非 2xx body → 錯誤碼字串;ORDER_BLOCKED 附 reason 走 ":" 後綴(trade-text 契約)。 */
+/** 非 2xx body → 錯誤碼字串;ORDER_BLOCKED 附 reason、BROKER_REJECTED 附 err_code,
+ *  皆走 ":" 後綴(trade-text 契約;useTrade parseError 同款)。 */
 export async function parseCapitalError(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as {
-      detail?: { error?: string; reason?: string };
+      detail?: { error?: string; reason?: string; err_code?: string };
     };
     const code = body.detail?.error ?? `HTTP_${res.status}`;
     if (code === "ORDER_BLOCKED" && body.detail?.reason) {
       return `${code}:${body.detail.reason}`;
+    }
+    if (code === "BROKER_REJECTED" && body.detail?.err_code) {
+      return `${code}:${body.detail.err_code}`;
     }
     return code;
   } catch {

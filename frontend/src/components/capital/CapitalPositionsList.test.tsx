@@ -157,6 +157,21 @@ describe("CapitalPositionsList", () => {
     await waitFor(() => expect(screen.queryByText("確認平倉")).toBeNull());
   });
 
+  it("平倉 400 BROKER_REJECTED → 錯誤列繁中顯示(review A2)", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(STATUS),
+      "/api/capital/position/close": () =>
+        json({ detail: { error: "BROKER_REJECTED", err_code: "1097", err_msg: "廢單" } }, 400),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    renderList("fut", () => 23000);
+    await screen.findByText(/TXFI6/);
+    fireEvent.click(screen.getByText("平倉"));
+    fireEvent.click(screen.getByText("確認"));
+    expect(await screen.findByText("券商拒單(1097)")).toBeTruthy();
+    expect(screen.getByText("券商拒單(1097)").className).toContain("text-loss");
+  });
+
   it("mutation pending 中鎖平倉鍵", async () => {
     mockFetch({
       "/api/capital/status": () => json(STATUS),

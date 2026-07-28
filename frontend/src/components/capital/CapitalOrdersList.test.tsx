@@ -238,6 +238,29 @@ describe("CapitalOrdersList", () => {
     expect(screen.getByText("改").closest("button")?.getAttribute("disabled")).not.toBeNull();
   });
 
+  it("操作 400 BROKER_REJECTED → 錯誤列繁中顯示;下次操作成功後清除(review A2)", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(STATUS),
+      "/api/capital/order/cancel": () =>
+        json({ detail: { error: "BROKER_REJECTED", err_code: "1097", err_msg: "廢單" } }, 400),
+      "/api/capital/order/correct-price": () =>
+        json({ ok: true, code: 0, message: "ok", seq_no: "001" }),
+      "/api/capital/orders": () => json({ orders: [order()] }),
+    });
+    renderList("sec");
+    await screen.findByText(/2330/);
+    fireEvent.click(screen.getByText("刪單"));
+    fireEvent.click(screen.getByText("確認"));
+    expect(await screen.findByText("券商拒單(1097)")).toBeTruthy();
+    expect(screen.getByText("券商拒單(1097)").className).toContain("text-loss");
+    // 下次操作(改價成功)前清除錯誤列
+    fireEvent.click(screen.getByText("改"));
+    fireEvent.change(screen.getByLabelText("改價"), { target: { value: "1060" } });
+    fireEvent.click(screen.getByLabelText("送出改價"));
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(screen.queryByText("券商拒單(1097)")).toBeNull());
+  });
+
   it("正式環境(env=prod)彈窗標題列紅底", async () => {
     mockFetch({
       "/api/capital/status": () => json({ ...STATUS, env: "prod" }),

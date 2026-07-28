@@ -104,6 +104,14 @@ describe("parseCapitalError", () => {
     const res = new Response("boom", { status: 500 });
     expect(await parseCapitalError(res)).toBe("HTTP_500");
   });
+
+  it("BROKER_REJECTED 帶 err_code 以 : 後綴(群益拒單透傳;review A2)", async () => {
+    const res = new Response(
+      JSON.stringify({ detail: { error: "BROKER_REJECTED", err_code: "1097", err_msg: "廢單" } }),
+      { status: 400 },
+    );
+    expect(await parseCapitalError(res)).toBe("BROKER_REJECTED:1097");
+  });
 });
 
 describe("useCapitalStream(WS 連線 + wsStatus store)", () => {

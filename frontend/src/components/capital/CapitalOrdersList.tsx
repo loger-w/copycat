@@ -8,6 +8,7 @@ import {
   useCorrectPrice,
   useDecreaseQty,
 } from "@/hooks/useCapital";
+import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { CapitalMarket, CapitalOrder } from "@/types";
 
@@ -35,9 +36,18 @@ export function CapitalOrdersList({ market }: { market: CapitalMarket }) {
 
   const danger = status.data?.env === "prod";
   const busy = cancelOrder.isPending || correctPrice.isPending || decreaseQty.isPending;
+  // 操作失敗顯示錯誤列(400 BROKER_REJECTED 等;review A2);下次操作前 reset 清除
+  const actionError = cancelOrder.error ?? correctPrice.error ?? decreaseQty.error;
   const orders = (data?.orders ?? []).filter(
     (o) => (market === "fut") === isFutMarket(o.market),
   );
+
+  function runAction(action: () => void): void {
+    cancelOrder.reset();
+    correctPrice.reset();
+    decreaseQty.reset();
+    action();
+  }
 
   if (orders.length === 0) {
     return <p className="py-3 text-center text-xs text-ink-dim">無委託</p>;
@@ -51,15 +61,22 @@ export function CapitalOrdersList({ market }: { market: CapitalMarket }) {
         <span>數量</span>
         <span className="text-right">狀態</span>
       </li>
+      {actionError !== null && (
+        <li className="border-b border-line/60 py-1 text-xs text-loss">
+          {tradeErrorText(actionError.message)}
+        </li>
+      )}
       {orders.map((o) => (
         <OrderRow
           key={o.seq_no}
           order={o}
           danger={danger}
           busy={busy}
-          onCancel={() => cancelOrder.mutate({ seq_no: o.seq_no, market })}
-          onCorrectPrice={(price) => correctPrice.mutate({ seq_no: o.seq_no, market, price })}
-          onDecrease={(qty) => decreaseQty.mutate({ seq_no: o.seq_no, market, qty })}
+          onCancel={() => runAction(() => cancelOrder.mutate({ seq_no: o.seq_no, market }))}
+          onCorrectPrice={(price) =>
+            runAction(() => correctPrice.mutate({ seq_no: o.seq_no, market, price }))
+          }
+          onDecrease={(qty) => runAction(() => decreaseQty.mutate({ seq_no: o.seq_no, market, qty }))}
         />
       ))}
     </ul>
