@@ -36,6 +36,7 @@ class FakeSource:
     def __init__(self) -> None:
         self.subscribed: list[str] = []
         self.unsubscribed: list[str] = []
+        self.leaf_subscribed: list[tuple[str, str]] = []
         self.fail_subscribe: set[str] = set()
         self.closed = False
         self.on_message: Callable[[dict], None] | None = None
@@ -44,6 +45,9 @@ class FakeSource:
         if product in self.fail_subscribe:
             raise ConnectionError(f"SUBQUOTE fail {product}")
         self.subscribed.append(product)
+
+    def subscribe_leaf(self, product: str, ym: str) -> None:
+        self.leaf_subscribed.append((product, ym))
 
     def unsubscribe_symbol(self, product: str) -> None:
         self.unsubscribed.append(product)
@@ -228,3 +232,53 @@ class TestResolvedContract:
         assert engine.resolved_contract("MXF") is None
         assert engine.resolved_contract("NOPE") is None
         await engine.close()
+
+
+class TestLeafFallbackSubscribe:
+    """Phase 6 real-env finding:TXO runtime 同 process 已訂 TC.F.TWF.TXF.HOT(spot),
+    TC4 對同 symbol 跨 session 只推一邊 → futures 的 TXF HOT 永收不到。
+    解法:resolve 已知後,寬限期內仍零推播的商品補訂 leaf 契約(symbol 字串不同無衝突)。"""
+
+    async def test_empty_product_gets_leaf_subscribe_after_grace(self) -> None:
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, leaf_grace_secs=0.01)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") in src.leaf_subscribed
+        assert ("TMF", "202608") in src.leaf_subscribed
+        assert ("MXF", "202608") not in src.leaf_subscribed  # 有推播的不補訂
+        await engine.close()
+
+    async def test_leaf_subscribe_once_per_ym(self) -> None:
+        src = FakeSource()
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert src.leaf_subscribed.count(("TXF", "202608")) == 1
+        await engine.close()
+
+    async def test_leaf_quote_populates_state(self) -> None:
+        src = FakeSource()
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01)
+        await engine.start()
+        _push(src, _quote(Symbol="TC.F.TWF.TXF.202608"))
+        await _drain()
+        st = engine.state()["products"]["TXF"]
+        assert st["p"] is not None
+        assert st["resolved_contract"] == "202608"
+        await engine.close()
+
+    async def test_no_leaf_subscribe_after_close(self) -> None:
+        src = FakeSource()
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.05)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await engine.close()
+        await asyncio.sleep(0.1)
+        assert src.leaf_subscribed == []
