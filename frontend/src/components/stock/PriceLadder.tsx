@@ -79,6 +79,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
   const idleTimer = useRef<number | undefined>(undefined);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+  const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
 
   const wsStatus = useCapitalWsStatus();
   const submitStock = useSubmitStock();
@@ -110,6 +111,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
   }
 
   function showHint(text: string, autoClear = false): void {
+    if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
     window.clearTimeout(hintTimer.current);
     setHint(text);
     if (autoClear) hintTimer.current = window.setTimeout(() => setHint(null), HINT_MS);
@@ -147,6 +149,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
         source: "flash",
       })
       .then((r) => {
+        if (!aliveRef.current) return; // review B8
         if (r.ok) {
           dispatchArm({ type: "send_ok" });
           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`);
@@ -156,6 +159,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
         }
       })
       .catch((err: unknown) => {
+        if (!aliveRef.current) return; // review B8
         dispatchArm({ type: "send_fail" });
         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
       });
@@ -201,14 +205,15 @@ export function PriceLadder({ code, book, last, meta }: Props) {
     return () => window.removeEventListener("stock-price-click", onPriceClick);
   }, [code]);
 
-  // unmount 清計時器
-  useEffect(
-    () => () => {
+  // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
       window.clearTimeout(idleTimer.current);
       window.clearTimeout(hintTimer.current);
-    },
-    [],
-  );
+    };
+  }, []);
 
   // 跟隨置中:center 價變更才捲(rows identity 每 tick 變,依 centerPrice 值 — R5)
   useEffect(() => {
