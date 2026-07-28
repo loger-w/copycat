@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   FUT_TICK_MILLI,
   buildFuturesLadder,
+  futExchangeContract,
   splitMyLots,
   type FutOrderSource,
 } from "@/lib/futures-ladder";
@@ -137,5 +138,21 @@ describe("splitMyLots 該契約活單按價位聚合", () => {
   it("價 float → 毫點 round(100.1 × 1000 的浮點殘差收斂)", () => {
     const lots = splitMyLots([o({ price: 100.1 })], "TXFI6");
     expect(lots).toEqual([{ priceMilli: 100_100, qty: 2, seqNos: ["S1"] }]);
+  });
+});
+
+describe("futExchangeContract 商品 + YYYYMM → 期交所契約碼", () => {
+  it("202609 → 月碼 I + 年末 6", () => {
+    expect(futExchangeContract("TXF", "202609")).toBe("TXFI6");
+  });
+
+  it("202701 → 月碼 A + 年末 7;產品碼原樣前綴", () => {
+    expect(futExchangeContract("TMF", "202701")).toBe("TMFA7");
+    expect(futExchangeContract("MXF", "202612")).toBe("MXFL6");
+  });
+
+  it("非法月份 throw", () => {
+    expect(() => futExchangeContract("TXF", "202613")).toThrow();
+    expect(() => futExchangeContract("TXF", "bad")).toThrow();
   });
 });

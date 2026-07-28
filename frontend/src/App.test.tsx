@@ -84,3 +84,28 @@ describe("App(index-board T9)", () => {
     expect(screen.getByText(/台指期/)).toBeTruthy();
   });
 });
+
+describe("App(期貨 tab T15)", () => {
+  it("nav 有「期貨」tab,排在「個股」後", () => {
+    renderApp();
+    const labels = screen.getAllByRole("tab").map((el) => el.textContent);
+    expect(labels).toEqual(["TXO 綜合損益", "個股", "期貨", "指數"]);
+  });
+
+  it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "小台" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "微台" })).toBeTruthy();
+  });
+
+  it("localStorage copycat-tab=futures 重載復原", async () => {
+    window.localStorage.setItem("copycat-tab", "futures");
+    renderApp();
+    expect(screen.getByRole("tab", { name: "期貨" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+  });
+});
