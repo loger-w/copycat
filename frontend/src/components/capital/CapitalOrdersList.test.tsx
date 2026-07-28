@@ -119,7 +119,7 @@ describe("CapitalOrdersList", () => {
         json({ orders: [order(), order({ seq_no: "004", buy_sell: "S", actionable: false })] }),
     });
     renderList("sec");
-    await screen.findByText(/2330/);
+    await screen.findAllByText(/2330/);
     for (const head of ["代號", "買賣", "價格", "數量", "狀態"]) {
       expect(screen.getByText(head)).toBeTruthy();
     }
