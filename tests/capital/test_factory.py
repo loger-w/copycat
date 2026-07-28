@@ -194,3 +194,36 @@ def test_singleton_second_call_same_object(monkeypatch: pytest.MonkeyPatch) -> N
     first = get_capital()
     assert first is not None
     assert get_capital() is first
+
+
+class TestDotenvFallback:
+    """Phase 6 real-env finding:server 不載 dotenv 檔,factory 需逐 key「環境變數 →
+    repo root dotenv 檔」fallback(對齊 cli._resolve_finmind_token / notify 慣例)。"""
+
+    def test_reads_capital_keys_from_repo_dotenv(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        (tmp_path / ".env").write_text(
+            "CAPITAL_USER_ID=A123456789\nCAPITAL_ENV=test\nCAPITAL_PASSWORD=pw\n"
+            "CAPITAL_FULL_ACCOUNT=9800123\n# comment\nCAPITAL_MAX_QTY=\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        client = get_capital()
+        assert client is not None
+        assert client._user_id == "A123456789"
+        assert client._full_account == "9800123"
+
+    def test_os_environ_wins_over_dotenv(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        (tmp_path / ".env").write_text(
+            "CAPITAL_USER_ID=FILEUSER99\nCAPITAL_ENV=prod\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CAPITAL_USER_ID", "ENVUSER123")
+        monkeypatch.setenv("CAPITAL_ENV", "test")
+        client = get_capital()
+        assert client is not None
+        assert client._user_id == "ENVUSER123"
+        assert client._env == "test"
