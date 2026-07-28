@@ -178,17 +178,18 @@ async def test_start_connection_error_sets_stale_then_retry_recovers() -> None:
 
 async def test_watchdog_marks_stale_and_broadcasts_without_pushes() -> None:
     fake = FakeIndexSource()
-    eng = make_engine(fake, in_watch_window=lambda: True, stale_secs=0.03)
+    eng = make_engine(fake, in_watch_window=lambda: True, stale_secs=0.06)
     await eng.start()
     try:
         stream = eng.stream()
-        await asyncio.sleep(0.12)
+        await asyncio.sleep(0.15)
         assert eng.state()["twse"]["stale"] is True
         msg = await asyncio.wait_for(stream.__anext__(), timeout=1)
         assert msg["twse"]["stale"] is True  # IR7:停止推播仍廣播
         assert fake.on_message is not None
         fake.on_message(_quote())
-        await asyncio.sleep(0.08)
+        # push 後在 stale_secs 內查驗(真實世界推播連續;等太久 watchdog 會再標)
+        await asyncio.sleep(0.03)
         assert eng.state()["twse"]["stale"] is False
     finally:
         await eng.close()
