@@ -48,12 +48,25 @@ describe("OrderBook", () => {
     expect(screen.getByText(/委賣 1033/)).toBeTruthy();
   });
 
-  it("量 bar 方向:買側靠右往左長、賣側靠左往右長(SC-5)", () => {
-    const { container } = render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
-    const bullBar = container.querySelector('span[class*="bg-bull"]')!;
-    const bearBar = container.querySelector('span[class*="bg-bear"]')!;
-    expect(bullBar.className).toContain("right-0");
-    expect(bearBar.className).toContain("left-0");
+  // 🔴-2:直式改水平(SC-4)後 bar 由「左右生長」改為「格內高度」,原方向斷言已不適用。
+  it("量 bar 改為格內高度、依最大量歸一(SC-4)", () => {
+    render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+    // BOOK 最大量 = 賣2 的 572
+    const maxCell = screen.getByRole("button", { name: "賣2 2390" });
+    expect(maxCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
+      "100%",
+    );
+    // 買1 = 125 / 572 ≈ 22%
+    const bidCell = screen.getByRole("button", { name: "買1 2380" });
+    expect(bidCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
+      "22%",
+    );
+  });
+
+  it("水平排列:買側由中央往左 買1→買5、賣側往右 賣1→賣5(SC-4)", () => {
+    render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+    const labels = screen.getAllByRole("button").map((el) => el.getAttribute("aria-label"));
+    expect(labels).toEqual(["買2 2375", "買1 2380", "賣1 2385", "賣2 2390"]);
   });
 
   it("買一 = 漲停 → 鎖漲停 badge;賣一 = 跌停 → 鎖跌停(SC-5)", () => {
