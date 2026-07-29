@@ -75,7 +75,9 @@ class TestCorrelationCorrectness:
 
         ts = _feed(state, base, list(base))
 
-        assert math.isclose(state.correlations(ts)["NQ"]["w60"], 1.0, abs_tol=1e-9)
+        got = state.correlations(ts)["NQ"]["w60"]
+        assert got is not None
+        assert math.isclose(got, 1.0, abs_tol=1e-9)
 
     def test_constant_series_returns_none_not_nan(self) -> None:
         """標準差為 0 → 分母為零。必須回 None,不可 NaN 或拋(edge case 1)。"""
