@@ -5,13 +5,29 @@ import type { Bar } from "@/lib/candle";
 /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
  *  - `D`:當日內不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
  *  - `1`:交易時段每 60s 重取(D-9)。成本控制在後端 —— 歷史日走永久 memo,
- *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。 */
+ *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。
+ *
+ *  2–10 分 K **共用同一份 `tf=1` 原料**,由前端 `aggregateBars` 聚合;後端 `tf` 值域
+ *  仍只有 `D` / `1`,不需要改(app.py:399 的 BAD_TF 白名單)。 */
 
-export type ChartMode = "intraday" | "m1" | "m5" | "day";
+/** 分 K 由 1/5 兩檔擴為 1–10 連續(SC-6.1)。union 展開而非 template literal 型別 ——
+ *  後者在 noUncheckedIndexedAccess 下的推導比較難駕馭,而這裡只有十個值。 */
+export type MinuteMode =
+  | "m1" | "m2" | "m3" | "m4" | "m5"
+  | "m6" | "m7" | "m8" | "m9" | "m10";
+export type ChartMode = "intraday" | "day" | MinuteMode;
 
-export const DAYS_STEP = 5;
-export const DAYS_MAX = 30;
+/** 分 K 一次載滿的天數。原本是「往前」鈕每次 +5 的上限,現在是固定值 ——
+ *  user 要求不必再點往前才能看 30 日,改由圖上縮放/平移取用(SC-6.2)。 */
+export const MINUTE_DAYS = 30;
 const POLL_MS = 60_000;
+
+/** `m7` → 7;非分 K 模式回 1(不聚合)。 */
+export function minutesOf(mode: ChartMode): number {
+  if (mode === "intraday" || mode === "day") return 1;
+  const n = Number(mode.slice(1));
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
 
 /** 台北交易時段(本機時區 = 台北,部署綁本機)。
  *

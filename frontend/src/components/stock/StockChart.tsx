@@ -2,55 +2,54 @@ import { useMemo, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
-import { DAYS_MAX, DAYS_STEP, useStockBars, type ChartMode } from "@/hooks/useStockBars";
+import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
 import { aggregateBars } from "@/lib/candle";
 import type { StockAccum } from "@/lib/stock-accum";
 import { cn } from "@/lib/utils";
 
-/** 圖表模式切換容器(SC-7):江波圖 / 1分K / 5分K / 日K。
- *  江波圖走既有即時 accum;K 線走 /api/stock/bars。5 分 K 由 1 分前端聚合(D-8)。 */
+/** 圖表模式切換容器(SC-6):江波圖 / 1–10 分K / 日K。
+ *  江波圖走既有即時 accum;K 線走 /api/stock/bars。2–10 分 K 全由 1 分前端聚合(D-8)。 */
 
 const MODE_KEY = "copycat-chart-mode";
 const DAILY_MAX_BARS = 120;
-// 分 K 根數上限:1400px viewBox 下超過 ~700 根蠟燭寬度就被壓到 <2px,再多只是把
-// 圖畫成色塊並拖慢 hover。往前翻仍可載更多天,只是畫最近的 N 根(review P1-1)。
-const MINUTE_MAX_BARS = { m1: 700, m5: 400 } as const;
+// 分 K 可視根數上限。舊 MINUTE_MAX_BARS 的註解已載明:1400px viewBox 下超過 ~700 根,
+// 蠟燭寬度會被壓到 <2px 只剩色塊並拖慢 hover。往前鈕移除、改一次載滿 30 日之後,
+// 這條保護改由此常數(下一步接上 viewport 縮放時移交 candle-viewport 的 MAX_VISIBLE)。
+const MINUTE_MAX_BARS = 700;
 
-const MODES = [
+const MODE_LABELS: [ChartMode, string][] = [
   ["intraday", "江波圖"],
-  ["m1", "1分K"],
-  ["m5", "5分K"],
+  ...(Array.from({ length: 10 }, (_, i) => [`m${i + 1}`, `${i + 1}分K`]) as [ChartMode, string][]),
   ["day", "日K"],
-] as const;
+];
+
+const VALID_MODE = /^(intraday|day|m([1-9]|10))$/;
 
 function initialMode(): ChartMode {
   const saved = window.localStorage.getItem(MODE_KEY);
-  return saved === "m1" || saved === "m5" || saved === "day" ? saved : "intraday";
+  return saved !== null && VALID_MODE.test(saved) ? (saved as ChartMode) : "intraday";
 }
 
 export function StockChart({ accum, code }: { accum: StockAccum; code: string }) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
-  const [days, setDays] = useState(DAYS_STEP);
-  const { data, isPending, isError, error } = useStockBars(code, mode, days);
+  const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS);
 
   function selectMode(next: ChartMode): void {
     setMode(next);
     window.localStorage.setItem(MODE_KEY, next);
   }
 
-  const bars = useMemo(
-    () => (mode === "m5" ? aggregateBars(data ?? [], 5) : (data ?? [])),
-    [data, mode],
-  );
+  // n=1 時 aggregateBars 原樣回傳,不必特判
+  const bars = useMemo(() => aggregateBars(data ?? [], minutesOf(mode)), [data, mode]);
 
-  const isMinute = mode === "m1" || mode === "m5";
+  const isMinute = mode !== "intraday" && mode !== "day";
 
   return (
     // shrink-0:圖表維持 viewBox 決定的自然高度。少了它,負剩餘空間時本容器會被壓縮,
     // 而內部固定高度的 svg 不跟著縮 → 溢出並與下半列重疊(SC-6 / W-17)。
     <div className="flex shrink-0 flex-col">
-      <div className="mb-1 flex items-center gap-1">
-        {MODES.map(([id, label]) => (
+      <div className="mb-1 flex flex-wrap items-center gap-1">
+        {MODE_LABELS.map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -64,17 +63,6 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
             {label}
           </button>
         ))}
-        {isMinute ? (
-          <button
-            type="button"
-            disabled={days >= DAYS_MAX}
-            onClick={() => setDays((d) => Math.min(DAYS_MAX, d + DAYS_STEP))}
-            className="ml-2 rounded border border-line px-2 py-0.5 text-xs text-ink-dim hover:text-ink disabled:opacity-40"
-          >
-            往前
-          </button>
-        ) : null}
-        {isMinute ? <span className="text-xs text-ink-dim">近 {days} 日</span> : null}
       </div>
       {mode === "intraday" ? (
         <StockIntradayChart accum={accum} />
@@ -93,8 +81,8 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
       ) : (
         <CandleChart
           bars={bars}
-          maxBars={mode === "day" ? DAILY_MAX_BARS : MINUTE_MAX_BARS[mode]}
-          showMa={mode === "day"}
+          maxBars={isMinute ? MINUTE_MAX_BARS : DAILY_MAX_BARS}
+          showMa
         />
       )}
     </div>

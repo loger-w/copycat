@@ -4,7 +4,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DAYS_MAX, DAYS_STEP, inTradingHours, useStockBars } from "@/hooks/useStockBars";
+import { inTradingHours, MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -82,16 +82,24 @@ describe("useStockBars 取數條件", () => {
     expect(urls()[before]).toContain("tf=1");
   });
 
-  it("days 改變會重新取數(D-10 往前鈕靠 query key;review R2-3)", async () => {
+  // days 已固定為 MINUTE_DAYS(往前鈕移除),但 query key 仍含 days —— 這條保住
+  // 「days 進 key」的契約,之後若要恢復可變天數不會靜默失效
+  it("days 改變會重新取數(query key 含 days)", async () => {
     const { rerender } = renderHook(({ d }: { d: number }) => useStockBars("2330", "m1", d), {
       wrapper,
-      initialProps: { d: DAYS_STEP },
+      initialProps: { d: 5 },
     });
-    await waitFor(() => expect(urls().some((u) => u.includes(`days=${DAYS_STEP}`))).toBe(true));
-    rerender({ d: DAYS_STEP * 2 });
-    await waitFor(() =>
-      expect(urls().some((u) => u.includes(`days=${DAYS_STEP * 2}`))).toBe(true),
-    );
+    await waitFor(() => expect(urls().some((u) => u.includes("days=5"))).toBe(true));
+    rerender({ d: 10 });
+    await waitFor(() => expect(urls().some((u) => u.includes("days=10"))).toBe(true));
+  });
+
+  it("m2…m10 一律走 tf=1(前端聚合,不打新 endpoint)", async () => {
+    renderHook(() => useStockBars("2330", "m7", MINUTE_DAYS), { wrapper });
+    await waitFor(() => expect(urls().some((u) => u.includes("/api/stock/bars"))).toBe(true));
+    const url = urls().find((u) => u.includes("/api/stock/bars"))!;
+    expect(url).toContain("tf=1");
+    expect(url).toContain(`days=${MINUTE_DAYS}`);
   });
 
   it("錯誤碼依專案契約自 detail.error 解析", async () => {
@@ -104,7 +112,7 @@ describe("useStockBars 取數條件", () => {
     expect(result.current.error?.message).toBe("BAD_TF");
   });
 
-  it("DAYS_MAX 為 30(與後端 clamp 一致)", () => {
-    expect(DAYS_MAX).toBe(30);
+  it("MINUTE_DAYS 為 30(與後端 clamp 一致;分K 一次載滿不再分頁)", () => {
+    expect(MINUTE_DAYS).toBe(30);
   });
 });

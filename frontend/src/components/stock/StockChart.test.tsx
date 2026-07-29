@@ -63,10 +63,24 @@ function chart() {
 }
 
 describe("StockChart 模式切換(SC-7)", () => {
-  it("四顆鈕文字依序為 江波圖 / 1分K / 5分K / 日K", () => {
+  // 🔴 SC-6.1:分 K 由 1/5 兩顆擴為 1–10 連續十顆,共 12 顆模式鈕
+  it("模式鈕共 12 顆:江波圖 + 1分K…10分K + 日K", () => {
     chart();
-    const labels = ["江波圖", "1分K", "5分K", "日K"];
+    const labels = ["江波圖", ...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"];
     for (const l of labels) expect(screen.getByRole("button", { name: l })).toBeTruthy();
+    // 只數模式鈕 —— 江波圖自己的 均價/CDP/MA toggle 也帶 aria-pressed,不能一起數
+    const modeButtons = screen
+      .getAllByRole("button")
+      .filter((b) => /^(江波圖|日K|\d+分K)$/.test(b.textContent ?? ""));
+    expect(modeButtons.length).toBe(12);
+  });
+
+  it("3分K / 7分K 等新模式可切換且寫入 localStorage", async () => {
+    chart();
+    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
+    expect(window.localStorage.getItem("copycat-chart-mode")).toBe("m7");
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "7分K" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("預設江波圖:選中者 aria-pressed=true 且外框 border-accent", () => {
@@ -105,31 +119,33 @@ describe("StockChart 模式切換(SC-7)", () => {
     expect(screen.getByRole("button", { name: "5分K" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("分K 模式才有「往前」鈕,每次 +5 日並重新取數(D-10)", async () => {
+  // 🔴 SC-6.2:「往前」鈕與「近 N 日」文字移除,分 K 一次就載滿 30 日(縮放/平移取代分頁載入)
+  it("分K 直接載 30 日,無「往前」鈕與「近 N 日」文字", async () => {
     chart();
-    expect(screen.queryByRole("button", { name: "往前" })).toBeNull(); // 江波圖無
     fireEvent.click(screen.getByRole("button", { name: "1分K" }));
-    await waitFor(() => expect(barsUrls.some((u) => u.includes("days=5"))).toBe(true));
-    expect(screen.getByText("近 5 日")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "往前" }));
-    await waitFor(() => expect(barsUrls.some((u) => u.includes("days=10"))).toBe(true));
-    expect(screen.getByText("近 10 日")).toBeTruthy();
+    await waitFor(() => expect(barsUrls.some((u) => u.includes("days=30"))).toBe(true));
+    expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
+    expect(screen.queryByText(/近 \d+ 日/)).toBeNull();
+    // 只打一次,不再有 5→10→…→30 的階梯式重取
+    expect(barsUrls.filter((u) => u.includes("tf=1")).length).toBe(1);
   });
 
-  it("日K 模式無「往前」鈕", async () => {
+  it("日K 走 tf=D 且 query 不帶 days(D-15)", async () => {
     chart();
     fireEvent.click(screen.getByRole("button", { name: "日K" }));
-    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+    await waitFor(() => expect(barsUrls.some((u) => u.includes("tf=D"))).toBe(true));
+    expect(barsUrls.find((u) => u.includes("tf=D"))).not.toContain("days=");
     expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
   });
 
-  it("往前到上限 30 日後鈕 disabled", async () => {
+  it("2–10 分K 共用同一份 tf=1 資料(前端聚合,切模式不重打)", async () => {
     chart();
     fireEvent.click(screen.getByRole("button", { name: "1分K" }));
-    const back = () => screen.getByRole("button", { name: "往前" });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(back());
-    await waitFor(() => expect(screen.getByText("近 30 日")).toBeTruthy());
-    expect(back().hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(barsUrls.length).toBeGreaterThan(0));
+    const before = barsUrls.length;
+    fireEvent.click(screen.getByRole("button", { name: "3分K" }));
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+    expect(barsUrls.length).toBe(before);
   });
 
   // 🔴 SC-3:失敗態與「真的沒資料」原本共用同一句「無 K 線資料」,害 2026-07-29 那次
