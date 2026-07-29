@@ -91,3 +91,27 @@ export function buildLadder(input: LadderInput): LadderRow[] {
   if (bestIdx >= 0) rows[bestIdx]!.isCenter = true;
   return rows;
 }
+
+/** snap 到**最近**合法 tick(`snapDown` / `snapUp` 是方向性的,顯示用刻度要取最近)。
+ *
+ * 跨級距的邊界:先用該價位自己的 tick 算上下兩個候選,再比距離。上界候選可能跨進
+ * 更粗的級距(如 99.9 → 100),此時它本身仍是合法檔位(100 在 100-500 帶是 0.5 的倍數),
+ * 不必再校正。 */
+export function snapNearest(priceMilli: number): number {
+  const down = snapDown(priceMilli);
+  if (down === priceMilli) return priceMilli;
+  const up = down + tickOf(priceMilli);
+  return priceMilli - down <= up - priceMilli ? down : up;
+}
+
+/** 依該價位帶的 tick 級距決定小數位,再輸出 —— 顯示的價位要「到得了」。
+ *
+ * tick 5 元 / 1 元 → 0 位(1000 元的股票不會出現 1003);tick 0.5 / 0.1 元 → 1 位
+ * (100 元的股票不會出現 102.4);tick 0.05 / 0.01 元 → 2 位。
+ * 小數位由 **snap 後**的價位帶決定:跨級距時(如 99.95 → 100)級距會變粗。 */
+export function fmtTickPrice(priceMilli: number): string {
+  const p = snapNearest(priceMilli);
+  const tick = tickOf(p);
+  const decimals = tick >= 1_000 ? 0 : tick >= 100 ? 1 : 2;
+  return (p / 1000).toFixed(decimals);
+}
