@@ -87,6 +87,28 @@
 - [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**(當日段恆空 + don't-cache-empty → 每次真打 TC4,`_collect_history` 首頁 poll deadline ≈ 30s)。要擋需要交易日曆;或改由後端對「當日段回空」做短負向快取(需與 TC4 連線失敗區分)
 - [ ] `_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s。當日段這種高頻小查詢可考慮獨立較短 deadline(改動共用路徑,overlay 也吃這條,要一起評估)
 
+## 2026-07-29(stock-ui-round2 批一 順手清單)
+
+- [ ] **批二(user 已拍板拆兩批,本輪 out of scope)**:項 9 閃電梯跟隨置中(判定為描述現況,
+  待 user 確認是否有症狀)/ 項 12 自選側欄重做(預設群組取代「全部」+ 顯示名稱 →
+  **需後端 `watchlist_quote` WS 訊息加 `name` 欄位**,跨檔契約改動)/ 項 13 閃電梯部位 +
+  未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板預設 6 折)
+- [ ] K 線「走到 30 日前第一根」的取用路徑偏長:1 分 K × 30 日 ≈ 5,900 根、最大視窗 700 根、
+  初始 240 根 → 從右端拖到最左端約需 8 次滿寬拖曳。本輪刻意不加捷徑(雙擊回最右 / Home
+  跳最左屬新互動,scope 紀律)。真用起來嫌煩再開
+- [ ] 拖曳平移每次 mousemove 都重算 `buildCandleGeometry` 並 diff 整個 ChartStatic;
+  700 根時約 2,100 個節點。目前靠 MAX_VISIBLE=700 + memo 修復壓住,真環境拖曳掉幀再改 rAF 節流
+- [ ] 分 K 首載耗時未量到(2330 走後端永久 memo)。change-spec §7 估 10–15s;
+  盤中或換冷資料標的時補量,若 >20s 退回預設 10 日 + 縮放到左端自動續載
+- [ ] `buildCandleGeometry` 的 `yTicks` 是 `lo + span×i/(N−1)` 等分,不 snap 合法 tick →
+  日 K 左緣會出現 `2547.32` 這種非法價位。既有行為(非本輪改出),但與江波圖新的
+  11 條「全合法 tick」刻度並置後對比明顯,下次碰 K 線刻度時一併收
+- [ ] 布林通道填色用 `fill-ink-muted` 0.07,在 20 期低波動段會蓋成一大片灰塊;
+  若嫌干擾可改只畫上下軌不填色,或降到 0.04
+- [ ] `MINUTE_INIT_BARS = 240` / `DAILY_INIT_BARS = 120` / `MAX_VISIBLE = 700` /
+  `ZOOM_STEP = 1.15` 四個常數分散在 `StockChart.tsx` 與 `candle-viewport.ts`;
+  若之後要做「可設定的圖表偏好」再收斂到單一 config
+
 ## 2026-07-29(stock-ui-fixes 順手清單)
 
 - [ ] 🔴 **server 版本無可視性 —— 本輪 item 2 的真正代價**:「K 線沒有資料」的根因是 :8721 跑的是**舊版 build**(`openapi.json` 根本沒有 `/api/stock/bars` 這條 route),但前端與人都無從辨識執行中的 server 是哪一版。已做的緩解只是讓失敗態顯示錯誤碼(SC-3)。真正的修法候選:啟動 banner 印 git sha / `/api/health` 回 sha + 啟動時間 / 前端在 console 或狀態列比對。
