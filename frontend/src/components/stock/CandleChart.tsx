@@ -83,12 +83,15 @@ function seriesLine(
  *  (分 K 可達數百根;對齊 StockIntradayChart 的 ChartStatic 慣例 — review P1-1)。 */
 const ChartStatic = memo(function ChartStatic({
   g,
+  w,
   ma5Line,
   ma20Line,
   bbUpperLine,
   bbLowerLine,
 }: {
   g: CandleGeometry;
+  /** viewBox 寬。**純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
+  w: number;
   ma5Line: { x: number; y: number }[];
   ma20Line: { x: number; y: number }[];
   bbUpperLine: { x: number; y: number }[];
@@ -101,7 +104,7 @@ const ChartStatic = memo(function ChartStatic({
         <g key={`yt-${t.priceMilli}`}>
           <line
             x1={0}
-            x2={DIMS.width}
+            x2={w}
             y1={t.y}
             y2={t.y}
             className="stroke-line"
@@ -201,11 +204,13 @@ const ChartStatic = memo(function ChartStatic({
  *  重建的成本可忽略;真正重的蠟燭/量/線層仍在 memo 內(白名單 3)。 */
 function XAxisLabels({
   g,
+  h,
   shown,
   labelStep,
   tagSpan,
 }: {
   g: CandleGeometry;
+  h: number;
   shown: Bar[];
   labelStep: number;
   tagSpan: [number, number] | null;
@@ -221,7 +226,7 @@ function XAxisLabels({
           <text
             key={`x-${i}`}
             x={cx}
-            y={DIMS.height - 3}
+            y={h - 3}
             textAnchor="middle"
             className="fill-ink-dim"
             fontSize="0.625rem"
@@ -275,6 +280,9 @@ function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[
 }
 
 export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }: Props) {
+  // 尺寸取模組常數(本 commit 值不變);之後改為隨可用高度變動的 props。
+  const dimW = DIMS.width;
+  const dimH = DIMS.height;
   // hover 存的是 **viewBox 座標**不是 bar index:index 是對可視窗口 shown 的,
   // 一旦滾輪縮放或資料延伸讓 viewport.start 改變,同一個索引就指到別根 bar —— 十字線與
   // 資訊列會一起指錯,而且要等下次滑鼠移動才修正(實測游標在 x=700、十字線飄到 807)。
@@ -307,7 +315,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
     const extra = showBb ? [bandSeries(bb, "upper"), bandSeries(bb, "lower")] : undefined;
     return {
       shown: shownBars,
-      g: buildCandleGeometry(shownBars, DIMS, extra),
+      g: buildCandleGeometry(shownBars, { width: dimW, height: dimH }, extra),
       ma5: m5,
       ma20: m20,
       bands: bb,
@@ -335,8 +343,8 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
-      const { x } = toSvgPoint(e, rect, DIMS);
-      const ratio = DIMS.width > 0 ? x / DIMS.width : 0.5;
+      const { x } = toSvgPoint(e, rect, { width: dimW, height: dimH });
+      const ratio = dimW > 0 ? x / dimW : 0.5;
       const factor = e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
       setViewport((v) => zoomAt(v, total, factor, ratio));
     };
@@ -346,7 +354,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
 
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
-    const { x, y } = toSvgPoint(e, rect, DIMS);
+    const { x, y } = toSvgPoint(e, rect, { width: dimW, height: dimH });
     const rx = Math.round(x);
     const ry = Math.round(y);
     // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
@@ -360,13 +368,13 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
     const el = svgRef.current;
     if (el === null) return;
     const rect = el.getBoundingClientRect();
-    const scale = rect.width > 0 ? DIMS.width / rect.width : 1;
+    const scale = rect.width > 0 ? dimW / rect.width : 1;
     const startX = e.clientX;
     // 起始窗口直接取 closure 的 viewport —— 這個 handler 來自最近一次 render,值即為當下。
     // 不要用 `setViewport(v => { startVp = v; return v; })` 的 side effect 去讀:React 不保證
     // updater 同步執行(只是常常如此),讀到 null 就得 fallback,等於多一條沒必要的路徑。
     const startVp = viewport;
-    const slot = DIMS.width / Math.max(1, startVp.count);
+    const slot = dimW / Math.max(1, startVp.count);
     const move = (ev: MouseEvent): void => {
       // 往右拖 = 看更早的資料 → start 往左。以「拖曳起點」為基準算絕對位移,
       // 不是逐次累加 —— 累加會因為 clamp 而在端點附近漂移。
@@ -392,7 +400,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
   // prev 從**完整序列**取,不是視窗切片:視窗最左那根在切片裡沒有前一根,漲跌% 會恆顯示
   // "-" 即使 bars 裡真的有前一根(MA/BB 已經是「完整序列算完再切」以免斷頭,這裡同源)
   const fields = readoutFields(shown[shownIdx], bars[viewport.start + shownIdx - 1]);
-  const plotBottom = DIMS.height - X_LABEL_H;
+  const plotBottom = dimH - X_LABEL_H;
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const windowHigh = shown.length > 0 ? Math.max(...shown.map((b) => b.h)) : 0;
   const windowLow = shown.length > 0 ? Math.min(...shown.map((b) => b.l)) : 0;
@@ -401,7 +409,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
       ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
       : null;
   const timeTagX =
-    hoverCandle !== undefined ? clampTagX(hoverCandle.cx, TIME_TAG.w, DIMS.width) : null;
+    hoverCandle !== undefined ? clampTagX(hoverCandle.cx, TIME_TAG.w, dimW) : null;
   const timeTagSpan: [number, number] | null =
     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
 
@@ -436,7 +444,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
       ) : (
         <svg
           ref={svgRef}
-          viewBox={`0 0 ${DIMS.width} ${DIMS.height}`}
+          viewBox={`0 0 ${dimW} ${dimH}`}
           className="w-full"
           style={{ touchAction: "pan-y" }}
           role="img"
@@ -447,12 +455,13 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
         >
           <ChartStatic
             g={g}
+            w={dimW}
             ma5Line={ma5Line}
             ma20Line={ma20Line}
             bbUpperLine={bbUpperLine}
             bbLowerLine={bbLowerLine}
           />
-          <XAxisLabels g={g} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
+          <XAxisLabels g={g} h={dimH} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
           {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
           {hover !== null ? (
             <g pointerEvents="none">
@@ -471,7 +480,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
               <line
                 data-testid="crosshair-h"
                 x1={0}
-                x2={DIMS.width}
+                x2={dimW}
                 y1={hover.y}
                 y2={hover.y}
                 className="stroke-ink-muted"
@@ -500,8 +509,8 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
               {/* 底部時間標籤:x 軸標籤是每 labelStep 根才一個,hover 讀不到精確時間 */}
               {hoverCandle !== undefined && hoverBar !== undefined ? (
                 <g
-                  transform={`translate(${clampTagX(hoverCandle.cx, TIME_TAG.w, DIMS.width)}, ${
-                    DIMS.height - TIME_TAG.h
+                  transform={`translate(${clampTagX(hoverCandle.cx, TIME_TAG.w, dimW)}, ${
+                    dimH - TIME_TAG.h
                   })`}
                 >
                   <rect
