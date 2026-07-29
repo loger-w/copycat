@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 from pathlib import Path
 from typing import Callable
 
@@ -38,6 +39,15 @@ class FakeStockSource:
         self.subscribed: list[str] = []
         self.on_message: Callable[[dict], None] | None = None
         self.daily_bars_result: list[dict] | Exception = []
+        self.bars_calls: list[tuple[str, str, str, str]] = []
+        self.bars_result: list[dict] = []
+
+    def fetch_bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> list:
+        """Protocol 新增方法(change-spec R2-1)。"""
+        self.bars_calls.append((code, tf, start_date, end_date))
+        return self.bars_result
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
         if isinstance(self.daily_bars_result, Exception):
@@ -236,3 +246,76 @@ class TestStockWs:
                 got = [ws.receive_json(), ws.receive_json()]
                 types = {m["type"] for m in got}
                 assert {"tick", "book"} & types
+
+
+class TestBarsRoute:
+    """K 線 endpoint(SC-7;change-spec 🟢-6)。"""
+
+    def _bar(self, t: str) -> dict:
+        return {"t": t, "o": 100, "h": 110, "l": 90, "c": 105, "v": 7}
+
+    def test_daily_shape_200(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        fake.bars_result = [self._bar("2026-07-27")]
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=D")
+            assert r.status_code == 200
+            assert r.json() == {
+                "code": "2330",
+                "tf": "D",
+                "bars": [{"t": "2026-07-27", "o": 100, "h": 110, "l": 90, "c": 105, "v": 7}],
+            }
+            assert fake.bars_calls[0][1] == "D"
+
+    def test_minute_shape_200(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        fake.bars_result = [self._bar("2026-07-28 09:01")]
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=1&days=1")
+            assert r.status_code == 200
+            assert r.json()["tf"] == "1"
+            assert fake.bars_calls[0][1] == "1"
+
+    def test_default_tf_is_daily(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        with client:
+            assert client.get("/api/stock/bars/2330").json()["tf"] == "D"
+
+    def test_bad_code_400(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            r = client.get("/api/stock/bars/bad code?tf=D")
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_CODE"
+
+    def test_bad_tf_400(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=5m")
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_TF"
+
+    def test_days_clamped_not_rejected(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        fake.bars_result = [self._bar("2026-07-28 09:01")]
+        with client:
+            assert client.get("/api/stock/bars/2330?tf=1&days=999").status_code == 200
+            starts = [c[2] for c in fake.bars_calls]
+            ends = [c[3] for c in fake.bars_calls]
+            span = (
+                _dt.date.fromisoformat(max(ends)) - _dt.date.fromisoformat(min(starts))
+            ).days
+            assert span <= 30
+
+    def test_tc4_down_returns_empty_200(self, tmp_path: Path) -> None:
+        """engine 層降級空(不是 502)—— 前端顯示「無 K 線資料」而非炸掉。"""
+        client, fake = make_client(tmp_path)
+
+        def boom(code: str, tf: str, start_date: str, end_date: str) -> list:
+            raise ConnectionError("tc4 down")
+
+        fake.fetch_bars_range = boom  # type: ignore[method-assign]
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=D")
+            assert r.status_code == 200
+            assert r.json()["bars"] == []

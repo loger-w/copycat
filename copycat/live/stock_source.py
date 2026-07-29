@@ -30,6 +30,15 @@ _TRADING_END = _dt.time(13, 35)
 
 _DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
 
+# K 線 fallback:DK 空時改走 1K 聚合,但 1K 量級是 DK 的數百倍(180 日曆日 ≈ 4.8 萬列
+# 分頁收割)→ fallback 另用較小視窗,寧可根數不足也不打爆 REQ 往返(change-spec R2-7)
+_OHLC_FALLBACK_WINDOW_DAYS = 90
+
+# 1K 分鐘域(台北,終點標記;與 fetch_day_minutes 同一把尺)
+_MIN_DOMAIN_START = "0901"
+_MIN_DOMAIN_END = "1330"
+_MIN_CLAMP_END = "1335"
+
 
 class DailyBar(TypedDict):
     """overlay 用日 bar(毫元;date = YYYY-MM-DD)。定義在 source 層避免 live→server 逆依賴。"""
@@ -38,6 +47,20 @@ class DailyBar(TypedDict):
     high: int
     low: int
     close: int
+
+
+class Bar(TypedDict):
+    """K 線 bar(毫元整數;`t` 日 K = YYYY-MM-DD、分 K = "YYYY-MM-DD HH:MM" 台北)。
+
+    與 DailyBar 分開定義:後者是 overlay(實盤路徑)在用的,只有 high/low/close,
+    不得為了畫蠟燭去動它(change-spec W-D2)。"""
+
+    t: str
+    o: int
+    h: int
+    l: int  # noqa: E741 - 與前端 Bar 欄位對齊(o/h/l/c/v)
+    c: int
+    v: int
 
 
 def _milli(raw: str) -> int:
@@ -95,6 +118,138 @@ def _aggregate_1k_rows(rows: list[dict]) -> list[DailyBar]:
             )
         )
     return bars
+
+
+def _int_field(row: dict, *names: str) -> int:
+    """量欄位名未實測(DK 尤其)→ 依序試,全缺回 0(缺量不該讓整根 bar 掉)。"""
+    for name in names:
+        raw = row.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(float(raw))
+        except ValueError:
+            continue
+    return 0
+
+
+def parse_dk_bars(rows: list[dict]) -> list[Bar]:
+    """DK rows → 日 Bar。缺 Open → 用 Close(欄位名未實測,CLAUDE.md §8 只實證 H/L/C)。"""
+    bars: list[Bar] = []
+    skipped = 0
+    for r in rows:
+        try:
+            close = _milli(r["Close"])
+            bars.append(
+                Bar(
+                    t=_iso_date(str(r["Date"])),
+                    o=_milli(r["Open"]) if r.get("Open") else close,
+                    h=_milli(r["High"]),
+                    l=_milli(r["Low"]),
+                    c=close,
+                    v=_int_field(r, "Volume", "TotalVolume", "Vol"),
+                )
+            )
+        except (KeyError, ValueError):
+            skipped += 1
+    if skipped:
+        logger.warning("DK bars 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
+    bars.sort(key=lambda b: b["t"])
+    return bars
+
+
+def _taipei_minute_key(raw_time: str) -> str | None:
+    """1K Time(UTC HHMMSS)→ 台北 HHMM 終點標記;域外回 None。
+
+    1331–1335 clamp 為 1330(收盤補正),與 `fetch_day_minutes` 同規則。"""
+    raw = raw_time.zfill(6)
+    hh = (int(raw[:2]) + 8) % 24
+    key = f"{hh:02d}{raw[2:4]}"
+    if _MIN_DOMAIN_END < key <= _MIN_CLAMP_END:
+        key = _MIN_DOMAIN_END
+    if not (_MIN_DOMAIN_START <= key <= _MIN_DOMAIN_END):
+        return None
+    return key
+
+
+def _merge_into(bar: Bar, o: int, h: int, low: int, c: int, v: int) -> None:
+    """同 t 的後續列併入(o 保留第一根、c 取最後一根)。"""
+    bar["h"] = max(bar["h"], h)
+    bar["l"] = min(bar["l"], low)
+    bar["c"] = c
+    bar["v"] += v
+
+
+class _RawK(TypedDict):
+    date: str  # YYYY-MM-DD
+    time: str  # 原始 UTC HHMMSS(排序用)
+    o: int
+    h: int
+    l: int  # noqa: E741
+    c: int
+    v: int
+
+
+def _parse_1k_rows(rows: list[dict]) -> list[_RawK]:
+    """1K rows → 中性列(不套分鐘域過濾;分鐘域是 x 軸語意,日聚合不該吃)。"""
+    out: list[_RawK] = []
+    skipped = 0
+    for r in rows:
+        try:
+            close = _milli(r["Close"])
+            out.append(
+                _RawK(
+                    date=_iso_date(str(r["Date"])),
+                    time=str(r["Time"]).zfill(6),
+                    o=_milli(r["Open"]) if r.get("Open") else close,
+                    h=_milli(r["High"]),
+                    l=_milli(r["Low"]),
+                    c=close,
+                    v=_int_field(r, "Volume", "TotalVolume", "Vol"),
+                )
+            )
+        except (KeyError, ValueError):
+            skipped += 1
+    if skipped:
+        logger.warning("1K bars 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
+    out.sort(key=lambda k: (k["date"], k["time"]))
+    return out
+
+
+def _fold(bars: dict[str, Bar], order: list[str], t: str, k: _RawK) -> None:
+    existing = bars.get(t)
+    if existing is None:
+        bars[t] = Bar(t=t, o=k["o"], h=k["h"], l=k["l"], c=k["c"], v=k["v"])
+        order.append(t)
+    else:
+        _merge_into(existing, k["o"], k["h"], k["l"], k["c"], k["v"])
+
+
+def parse_1k_bars(rows: list[dict]) -> list[Bar]:
+    """1K rows → 分鐘 Bar(台北終點標記;域外丟棄)。
+
+    clamp 後同 t 會有多列(13:31–13:35 全標 1330)→ **必須合併**:`fetch_day_minutes`
+    回 dict 靠 key 覆寫躲掉了這件事,list 不會(change-spec R2-6)。"""
+    by_key: dict[str, Bar] = {}
+    order: list[str] = []
+    for k in _parse_1k_rows(rows):
+        key = _taipei_minute_key(k["time"])
+        if key is None:
+            continue
+        _fold(by_key, order, f"{k['date']} {key[:2]}:{key[2:]}", k)
+    return [by_key[t] for t in order]
+
+
+def aggregate_1k_to_daily(rows: list[dict]) -> list[Bar]:
+    """1K rows → 日 Bar(DK 不支援時的 fallback;o = 當日第一根 open、v = 加總)。
+
+    **不套分鐘域過濾** —— 域(0901–1330)是江波圖 x 軸語意,套進日聚合會把域外列
+    (如試撮/開盤前後)的量與極值靜默丟掉,與既有 `_aggregate_1k_rows` 行為也不一致。"""
+    by_date: dict[str, Bar] = {}
+    order: list[str] = []
+    for k in _parse_1k_rows(rows):
+        _fold(by_date, order, k["date"], k)
+    return [by_date[d] for d in order]
 
 
 def stock_symbol(code: str) -> str:
@@ -270,6 +425,31 @@ class StockQuoteSource(TC4QuoteSource):
         if skipped:
             logger.warning("1K minutes 解析略過 %d/%d 列", skipped, len(rows))
         return minutes
+
+    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
+        """K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
+
+        range 型而非 days 型:server 層要把「歷史段(永久 memo)」與「當日段(短 TTL)」
+        分開取,才不會每次輪詢都重拉整段歷史(change-spec R2-1/R2-2)。
+
+        `tf="D"` 走 DK,空則 fallback 1K 聚合 —— fallback 視窗另行縮到
+        `_OHLC_FALLBACK_WINDOW_DAYS`,避免 4.5× 量級放大(R2-7)。"""
+        self._ensure_connected()
+        sym = stock_symbol(code)
+        start = f"{start_date.replace('-', '')}00"
+        end = f"{end_date.replace('-', '')}23"
+        if tf == "1":
+            return parse_1k_bars(self._collect_history(sym, "1K", start, end))
+
+        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end))
+        if bars:
+            return bars
+        fb_start = max(
+            _dt.date.fromisoformat(start_date),
+            _dt.date.fromisoformat(end_date) - _dt.timedelta(days=_OHLC_FALLBACK_WINDOW_DAYS),
+        )
+        logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
+        return aggregate_1k_to_daily(self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end))
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。

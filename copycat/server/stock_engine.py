@@ -16,7 +16,7 @@ import logging
 from typing import Any, AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import StockTick, parse_stock_realtime
-from copycat.live.stock_source import DailyBar
+from copycat.live.stock_source import Bar, DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.stkfut_map import load_map
 
@@ -35,6 +35,10 @@ class StockSource(Protocol):
     def backfill(self, code: str) -> list[StockTick]: ...
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
+
+    def fetch_bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> list[Bar]: ...
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
 
@@ -183,6 +187,18 @@ class StockEngine:
             return await asyncio.to_thread(self._source.fetch_daily_bars, code, n)
         except ConnectionError as e:
             logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
+            return []
+
+    async def bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> list[Bar]:
+        """K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。"""
+        try:
+            return await asyncio.to_thread(
+                self._source.fetch_bars_range, code, tf, start_date, end_date
+            )
+        except ConnectionError as e:
+            logger.warning("bars_range %s(%s): TC4 不可用,降級空(%s)", code, tf, e)
             return []
 
     # ---- stkfut ----

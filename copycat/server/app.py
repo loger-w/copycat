@@ -29,6 +29,7 @@ from copycat.server.engine import EngineRuntime, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
+from copycat.server.bars import BarsCache, build_daily, build_minute, clamp_days
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
@@ -127,6 +128,7 @@ def create_app(
 ) -> FastAPI:
     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
+    bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
     futures_ws = WsBroadcaster()
 
@@ -387,6 +389,22 @@ def create_app(
         result = build_overlay(await stock.daily_bars(code), today)
         overlay_cache.put(code, today, result)  # 空結果不 cache(overlay.py 規則)
         return result
+
+    @app.get("/api/stock/bars/{code}")
+    async def stock_bars(request: Request, code: str, tf: str = "D", days: int = 5) -> dict:
+        """K 線 bar(SC-7)。tf=D 忽略 days(D-15:忽略的參數不該進 cache/query key)。"""
+        stock = _stock(request)
+        if not validate_code(code):
+            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+        if tf not in ("D", "1"):
+            raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
+        # today = 本機日界(= 台北,部署綁本機;同 overlay 的 design R6/R13)
+        today = _date.today()
+        if tf == "D":
+            bars = await build_daily(stock.bars_range, bars_cache, code, today)
+        else:
+            bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days), today)
+        return {"code": code, "tf": tf, "bars": bars}
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:

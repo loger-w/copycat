@@ -75,6 +75,12 @@ class FakeSource:
             self.backfill_gate.wait(timeout=5)
         return list(self.backfill_result)
 
+    def fetch_bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> list:
+        """Protocol 新增方法(change-spec R2-1);既有斷言不依賴,回空即可。"""
+        return []
+
     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
         return []
 
