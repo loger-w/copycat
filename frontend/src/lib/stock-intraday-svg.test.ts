@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { MinuteAgg } from "@/lib/stock-accum";
-import { buildIntradayGeometry, overlayLines, X_END_MIN, X_START_MIN } from "@/lib/stock-intraday-svg";
+import {
+  buildIntradayGeometry,
+  overlayLines,
+  SUB_TOP_PAD,
+  X_END_MIN,
+  X_START_MIN,
+} from "@/lib/stock-intraday-svg";
 
 function minutes(entries: [number, Partial<MinuteAgg>][]): Map<number, MinuteAgg> {
   return new Map(
@@ -105,9 +111,6 @@ describe("buildIntradayGeometry", () => {
     expect(g.yTicks[0]!.priceMilli).toBe(2_550_000);
     expect(g.yTicks[5]!.priceMilli).toBe(2_320_000);
     expect(g.yTicks[10]!.priceMilli).toBe(2_090_000);
-    expect(g.yTicks[5]!.pct).toBe(0);
-    expect(g.yTicks[0]!.pct).toBeCloseTo(9.9, 1);
-    expect(g.yTicks[10]!.pct).toBeCloseTo(-9.9, 1);
     // ±2% 的價位 = snapDown(ref×1.02) = snapDown(2366400) = 2365000(5 元 tick)
     expect(g.yTicks[4]!.priceMilli).toBe(2_365_000);
     for (const t of g.yTicks) expect(t.priceMilli % 5_000).toBe(0);
@@ -171,7 +174,7 @@ describe("buildIntradayGeometry", () => {
     expect(prices.length).toBeLessThanOrEqual(11);
   });
 
-  it("yTicks:缺漲跌停 → 沿用 3 點 pct null 的 fallback(白名單 11,不套 11 點)", () => {
+  it("yTicks:缺漲跌停 → 沿用 3 點的 fallback(白名單 11,不套 11 點)", () => {
     const g2 = buildIntradayGeometry(
       {
         minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
@@ -180,7 +183,6 @@ describe("buildIntradayGeometry", () => {
       { width: 270, height: 100 },
     );
     expect(g2.yTicks).toHaveLength(3);
-    expect(g2.yTicks.every((t) => t.pct === null)).toBe(true);
   });
 
   it("minuteOf:bucket 有資料回分鐘、無資料回 null(SC-1/R6)", () => {
@@ -197,7 +199,7 @@ describe("buildIntradayGeometry", () => {
 
   // 🔴 SC-5:主圖底部量 bar 已移除(user 拍板留內外盤能量副圖),volumeBars 不再存在
 
-  it("overlayLines:域內才給、含 label 與 kind(SC-4)", () => {
+  it("overlayLines:域內才給、含 level 與 kind(SC-2)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
       { width: 270, height: 100 },
@@ -209,11 +211,13 @@ describe("buildIntradayGeometry", () => {
       date: "2026-07-25",
     };
     const lines = overlayLines(overlay, g, { cdp: true, ma: true });
-    const labels = lines.map((l) => l.label);
-    expect(labels).toContain("CDP");
-    expect(labels).toContain("AH");
-    expect(labels).toContain("MA5");
-    expect(labels).not.toContain("MA20");
+    const levels = lines.map((l) => l.level);
+    expect(levels).toContain("cdp");
+    expect(levels).toContain("ah");
+    expect(levels).toContain("ma5");
+    expect(levels).not.toContain("ma20");
+    // label 欄位已移除:右緣文字改由元件用 priceMilli 現算(SC-2)
+    expect("label" in lines[0]!).toBe(false);
     expect(lines.every((l) => l.y >= 0 && l.y <= 100)).toBe(true);
     // toggle 關 → 不給該類
     expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.kind)).not.toContain(
@@ -238,8 +242,8 @@ describe("buildIntradayGeometry", () => {
     expect(overlayLines(overlay, g, { cdp: false, ma: true })).toEqual([]);
     // 域內的照給
     expect(
-      overlayLines({ ...overlay, ma5: 2_540_000 }, g, { cdp: false, ma: true }).map((l) => l.label),
-    ).toEqual(["MA5"]);
+      overlayLines({ ...overlay, ma5: 2_540_000 }, g, { cdp: false, ma: true }).map((l) => l.level),
+    ).toEqual(["ma5"]);
   });
 
   it("energy bars per minute(SC-5:只剩內外盤能量,主圖量 bar 已移除)", () => {
@@ -290,5 +294,58 @@ describe("buildIntradayGeometry", () => {
       { width: 270, height: 100 },
     );
     expect(Number.isFinite(g.priceLine[0]!.y)).toBe(true);
+  });
+});
+
+// ---- round3 新增(T-2)----
+
+describe("round3:overlayLines level 與副圖量刻度出口", () => {
+  const G = () =>
+    buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+      { width: 270, height: 100 },
+    );
+
+  it("CDP 五個 level 齊全且由上而下 = ah / nh / cdp / nl / al(SC-2 靠顏色區分,順序即語意)", () => {
+    const lines = overlayLines(
+      {
+        cdp: { cdp: 2_320_000, ah: 2_400_000, nh: 2_360_000, nl: 2_280_000, al: 2_240_000 },
+        ma5: null,
+        ma20: null,
+        date: "2026-07-25",
+      },
+      G(),
+      { cdp: true, ma: false },
+    );
+    expect(lines.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al"]);
+    // 由上而下:priceMilli 遞減、y 遞增
+    for (let i = 1; i < lines.length; i += 1) {
+      expect(lines[i]!.priceMilli).toBeLessThan(lines[i - 1]!.priceMilli);
+      expect(lines[i]!.y).toBeGreaterThan(lines[i - 1]!.y);
+    }
+  });
+
+  it("maxSide 出口 = 該日內外盤最大單邊(SC-8 量刻度的分母)", () => {
+    const g = buildIntradayGeometry(
+      {
+        minutes: minutes([
+          [540, { c: 2_320_000, v: 10, o: 7, i: 3 }],
+          [545, { c: 2_330_000, v: 5, o: 1, i: 4 }],
+        ]),
+        meta: META,
+      },
+      { width: 270, height: 100 },
+    );
+    expect(g.maxSide).toBe(7);
+  });
+
+  it("energyBars 高度分母已扣掉頂端留白,最高的 bar 不會頂滿全高(SC-8 刻度才不被蓋住)", () => {
+    const H = 100;
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 2_320_000, v: 10, o: 7, i: 3 }]]), meta: META },
+      { width: 270, height: H },
+    );
+    expect(g.energyBars[0]!.outerH).toBeLessThan(H);
+    expect(g.energyBars[0]!.outerH).toBe(H - SUB_TOP_PAD);
   });
 });
