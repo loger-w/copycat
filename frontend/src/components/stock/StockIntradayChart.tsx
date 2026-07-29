@@ -200,7 +200,9 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
   ];
 
   return (
-    <figure className="rounded-md border border-line bg-surface p-4">
+    // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
+    // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
+    <figure className="select-none rounded-md border border-line bg-surface p-4">
       <div className="mb-1 flex justify-end gap-1">
         {toggleDefs.map(({ key, label, available }) => (
           <button

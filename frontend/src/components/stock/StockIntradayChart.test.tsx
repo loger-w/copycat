@@ -143,4 +143,10 @@ describe("StockIntradayChart", () => {
     fireEvent.mouseMove(svg, { clientX: 400, clientY: 100 }); // ~11:15 無資料
     expect(screen.queryByText(/11:1/)).toBeNull();
   });
+
+  // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把時間軸 / 價位刻度 / 內外盤文字反白
+  it("圖表容器禁止選字(拖曳不反白;SC-4)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelector("figure")?.className).toContain("select-none");
+  });
 });

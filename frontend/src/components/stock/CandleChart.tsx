@@ -200,7 +200,9 @@ export function CandleChart({ bars, maxBars, showMa = false }: Props) {
   }
 
   return (
-    <figure className="rounded-md border border-line bg-surface p-4">
+    // select-none:SVG 的 <text>(價位刻度 / 日期標籤)預設可選,在圖上拖曳會整片反白(SC-4)。
+    // 不影響 hover — user-select 只管選取,mouse 事件照舊(W-10)。
+    <figure className="select-none rounded-md border border-line bg-surface p-4">
       <svg
         viewBox={`0 0 ${DIMS.width} ${DIMS.height}`}
         className="w-full"

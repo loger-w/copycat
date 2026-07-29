@@ -80,4 +80,10 @@ describe("CandleChart(SC-7)", () => {
     render(<CandleChart bars={BARS} />);
     expect(screen.getByLabelText("K 線圖")).toBeTruthy();
   });
+
+  // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把座標軸數字 / 日期標籤反白選起來
+  it("圖表容器禁止選字(拖曳不反白;SC-4)", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    expect(container.querySelector("figure")?.className).toContain("select-none");
+  });
 });
