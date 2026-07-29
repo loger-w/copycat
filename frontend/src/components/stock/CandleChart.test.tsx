@@ -185,6 +185,44 @@ describe("CandleChart 縮放與平移(SC-6.3/6.4)", () => {
     expect(firstStamp()).toBe(MANY[0]!.t);
   });
 
+  // 🔴 C3:hover 存的是「對可視窗口的索引」,縮放改變 viewport.start 後同一個索引會指到
+  // 別根 bar —— 十字線與資訊列一起指錯,而且要等下次滑鼠移動才會修正。
+  // 不變式:十字線垂直線必須落在游標附近(±1 個 slot),縮放前後都成立。
+  it("原地滾輪縮放後,十字線仍落在游標位置(hover 不因視窗位移而失準)", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={240} />);
+    const svg = container.querySelector("svg")!;
+    const X = 700;
+    const crossX = () => Number(container.querySelector("[data-testid='crosshair-v']")!.getAttribute("x1"));
+    const slot = () => 1400 / container.querySelectorAll("[data-testid='candle-body']").length;
+
+    fireEvent.mouseMove(svg, { clientX: X, clientY: 200 });
+    expect(Math.abs(crossX() - X)).toBeLessThanOrEqual(slot());
+
+    // 滑鼠不動,只滾輪縮放
+    fireEvent.wheel(svg, { deltaY: -100, clientX: X });
+    expect(Math.abs(crossX() - X)).toBeLessThanOrEqual(slot());
+    fireEvent.wheel(svg, { deltaY: -100, clientX: X });
+    fireEvent.wheel(svg, { deltaY: 100, clientX: X });
+    expect(Math.abs(crossX() - X)).toBeLessThanOrEqual(slot());
+  });
+
+  // 🔴 C4:漲跌% 的前一根若只在可視窗口內找,窗口最左那根永遠拿不到 prev → 恆顯示 "-"。
+  // MA/BB 已經是「用完整序列算完再切片」以免斷頭,這裡也該同源。
+  it("視窗最左一根的漲跌%取自完整序列的前一根,不因切片而顯示 -", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
+    const svg = container.querySelector("svg")!;
+    // 先往右拖(看更早的資料),確保視窗左緣不是整個序列的第一根
+    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 1100 });
+    fireEvent.mouseUp(window, { clientX: 1100 });
+    // hover 視窗最左那根
+    fireEvent.mouseMove(svg, { clientX: 1, clientY: 200 });
+    const text = screen.getByTestId("chart-readout").textContent ?? "";
+    expect(text).toContain("漲跌");
+    expect(text).not.toContain("漲跌 - "); // 佔位
+    expect(/漲跌 [+-]?\d/.test(text)).toBe(true);
+  });
+
   it("資料延伸時:原本貼右緣 → 跟進;已平移 → 不被拉回(R10)", () => {
     const { container, rerender } = render(<CandleChart bars={MANY} initBars={100} />);
     const firstStamp = () =>

@@ -275,9 +275,13 @@ function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[
 }
 
 export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }: Props) {
-  // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不是鎖在收盤價 —— 盤中最常做的事是
+  // hover 存的是 **viewBox 座標**不是 bar index:index 是對可視窗口 shown 的,
+  // 一旦滾輪縮放或資料延伸讓 viewport.start 改變,同一個索引就指到別根 bar —— 十字線與
+  // 資訊列會一起指錯,而且要等下次滑鼠移動才修正(實測游標在 x=700、十字線飄到 807)。
+  // 存座標則每次 render 都用當下的 g 重新反查,錨點守恆的縮放天然維持「指著同一根」。
+  // y 同時是水平線位置:水平線是「自由量尺」(跟滑鼠),不鎖收盤價 —— 盤中最常做的事是
   // 量距離(現價到某價位差幾%),鎖收盤價的水平線與蠟燭重合、資訊冗餘。
-  const [hover, setHover] = useState<{ index: number | null; y: number } | null>(null);
+  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const [viewport, setViewport] = useState<Viewport>(() => initialViewport(bars.length, initBars));
   const [prevTotal, setPrevTotal] = useState(bars.length);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -343,10 +347,10 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
     const { x, y } = toSvgPoint(e, rect, DIMS);
-    const index = g.indexOf(x);
+    const rx = Math.round(x);
     const ry = Math.round(y);
     // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
-    setHover((p) => (p !== null && p.index === index && p.y === ry ? p : { index, y: ry }));
+    setHover((p) => (p !== null && p.x === rx && p.y === ry ? p : { x: rx, y: ry }));
   }
 
   /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
@@ -379,12 +383,15 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
   }
 
   const labelStep = Math.max(1, Math.ceil(Math.max(1, shown.length) / 6));
-  const hoverIdx = hover?.index ?? null;
+  // 每次 render 以當下的 g 反查索引 —— viewport 一變就自動重新對位
+  const hoverIdx = hover !== null ? g.indexOf(hover.x) : null;
   const hoverBar = hoverIdx !== null ? shown[hoverIdx] : undefined;
   const hoverCandle = hoverIdx !== null ? g.candles[hoverIdx] : undefined;
   // 資訊列:沒 hover 顯示最後一根(即時態),不是空白
   const shownIdx = hoverBar !== undefined ? hoverIdx! : shown.length - 1;
-  const fields = readoutFields(shown[shownIdx], shown[shownIdx - 1]);
+  // prev 從**完整序列**取,不是視窗切片:視窗最左那根在切片裡沒有前一根,漲跌% 會恆顯示
+  // "-" 即使 bars 裡真的有前一根(MA/BB 已經是「完整序列算完再切」以免斷頭,這裡同源)
+  const fields = readoutFields(shown[shownIdx], bars[viewport.start + shownIdx - 1]);
   const plotBottom = DIMS.height - X_LABEL_H;
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const windowHigh = shown.length > 0 ? Math.max(...shown.map((b) => b.h)) : 0;
