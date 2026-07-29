@@ -288,3 +288,31 @@ describe("CandleChart 布林通道(SC-6.6)", () => {
     expect(calls).toEqual([true]);
   });
 });
+
+// ---- round3 T-10b:尺寸 prop regression(同 StockIntradayChart 的理由)----
+describe("CandleChart 高度 prop(SC-6 / T-10b)", () => {
+  function probe(height?: number) {
+    const { container } = render(<CandleChart bars={BARS} height={height} />);
+    const svg = container.querySelector("svg")!;
+    return {
+      viewBox: svg.getAttribute("viewBox"),
+      lastTickY: [...svg.querySelectorAll("text")]
+        .filter((t) => Number(t.getAttribute("x")) === 2)
+        .at(-1)!
+        .getAttribute("y"),
+    };
+  }
+
+  it("高度改變 → viewBox 與刻度 y 座標都跟著變(幾何必須重算)", () => {
+    const a = probe(578);
+    cleanup();
+    const b = probe(900);
+    expect(a.viewBox).not.toBe(b.viewBox);
+    expect(b.viewBox).toContain("900");
+    expect(a.lastTickY).not.toBe(b.lastTickY);
+  });
+
+  it("未傳高度時沿用固定常數(既有行為不變)", () => {
+    expect(probe().viewBox).toBe("0 0 1400 578");
+  });
+});

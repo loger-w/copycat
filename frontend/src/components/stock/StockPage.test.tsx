@@ -114,20 +114,33 @@ describe("StockPage", () => {
     expect(screen.queryByText("部位")).toBeNull();
   });
 
-  // 🔴 SC-6:最外圍不出現捲軸的機制 = 圖表維持自然高度、下半列吃剩餘空間。
+  // 🔴 round3 SC-6:高度分配反過來 —— 圖表吃剩餘空間、下半列固定高貼底。
   // jsdom 沒有版面引擎量不到真實高度,只能鎖住產生該效果的 class 組合(真實溢出量測走
   // Phase 7 真環境 scrollHeight/clientHeight)。
-  //   flex-1   → 吃掉圖表下方的剩餘空間(現況那片死白)
-  //   min-h-56 → 高度地板。flex-1 = `flex:1 1 0%`,basis 0 在負剩餘空間時分不到收縮額度
-  //              會被算成 0 高 → 明細與「載入更多」鈕整塊消失且 <main> 的捲軸救不到。
-  //              有地板才會真的把 <main> 撐出捲軸(逃生口),而不是靜默裁掉內容。
-  it("下半列吃剩餘高度且有高度地板(SC-6)", () => {
+  //   下半列 h-56 shrink-0 → **確定高度**。TickTape 根節點的 h-full + overflow-y-auto
+  //     需要父層有確定高度才會內捲;父層若退化成「內容自然高」,30 筆明細會把該列撐成
+  //     ~770px,每點一次載入更多再 +720px,圖表被擠光而 <main> 靜默裁切。
+  //   圖表 wrapper flex-1 min-h-0 → 吃掉剩餘,不再是 shrink-0 的固定比例高。
+  it("下半列固定高、圖表吃剩餘空間(SC-6)", () => {
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
     const row = screen.getByTestId("stock-lower-row");
-    expect(row.className).toContain("flex-1");
-    expect(row.className).toContain("min-h-56");
-    // self-review C4:五檔 wrapper 的 self-start —— 少了它,五檔卡片會被 items-stretch
-    // 拉滿整列高度,卡片內部出現大片留白。
-    expect((row.firstElementChild as HTMLElement).className).toContain("self-start");
+    expect(row.className).toContain("h-56");
+    expect(row.className).toContain("shrink-0");
+    expect(row.className).not.toContain("flex-1");
+    // 兩塊子 wrapper 都要 min-h-0(否則內層 overflow 容器算不出可捲高度)
+    for (const child of [...row.children] as HTMLElement[]) {
+      expect(child.className).toContain("min-h-0");
+    }
+    // self-start 移除:五檔卡片要撐滿列高才能與明細底邊齊平(SC-6「貼底」)
+    expect((row.firstElementChild as HTMLElement).className).not.toContain("self-start");
+  });
+
+  // W-11 regression lock:捲軸逃生口不可拆。極矮視窗 / 字級放大時內容仍會超出,
+  // 拆掉 overflow-y-auto 會讓「載入更多」變成不可達而不是可捲到。
+  it("<main> 保留 overflow-y-auto 當逃生口(W-11)", () => {
+    const { container } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    const main = container.querySelector("main")!;
+    expect(main.className).toContain("overflow-y-auto");
+    expect(main.className).toContain("min-h-0");
   });
 });

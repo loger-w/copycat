@@ -319,3 +319,45 @@ describe("StockIntradayChart", () => {
     expect(container.querySelector("figure")?.className).toContain("select-none");
   });
 });
+
+// ---- round3 T-10b:尺寸 prop regression ----
+//
+// 這條鎖的是「幾何 useMemo 的 deps 忘了加高度」—— 那會讓 viewBox 換了新高度、
+// 但 toY / 刻度仍用舊高度算,畫面錯位且完全不報錯。repo 的 eslint 沒裝
+// react-hooks plugin,exhaustive-deps 抓不到;lib 層的純函數測試也照樣全綠。
+// 唯一能抓到的位置就是元件層:同一份資料只改高度 prop,render 兩次比對。
+describe("StockIntradayChart 高度 prop(SC-6 / T-10b)", () => {
+  function heights(mainHeight: number) {
+    const { container } = wrap(
+      <StockIntradayChart accum={ACCUM} mainHeight={mainHeight} subHeight={70} />,
+    );
+    const main = [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )!;
+    return {
+      viewBox: main.getAttribute("viewBox"),
+      firstTickY: main.querySelector('[data-testid="y-tick-price"]')!.getAttribute("y"),
+      lastTickY: [...main.querySelectorAll('[data-testid="y-tick-price"]')]
+        .at(-1)!
+        .getAttribute("y"),
+    };
+  }
+
+  it("高度改變 → viewBox 與刻度 y 座標都跟著變(幾何必須重算)", () => {
+    const a = heights(260);
+    cleanup();
+    const b = heights(420);
+    expect(a.viewBox).not.toBe(b.viewBox);
+    expect(b.viewBox).toContain("420");
+    // 只有 viewBox 變、y 沒變 = 幾何沒重算(deps 漏了高度),圖會整片錯位
+    expect(a.lastTickY).not.toBe(b.lastTickY);
+  });
+
+  it("未傳高度時沿用固定常數(量測未就緒 / jsdom → 既有行為不變)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const main = [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )!;
+    expect(main.getAttribute("viewBox")).toBe("0 0 800 260");
+  });
+});
