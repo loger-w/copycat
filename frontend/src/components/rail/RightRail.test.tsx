@@ -108,6 +108,16 @@ function rail(ctx: RailContext) {
   );
 }
 
+// 🔴 round3 SC-5:右欄與中間主區之間要有可見分隔線
+describe("RightRail 版面(round3 SC-5)", () => {
+  it("aside 左緣有 border 與中間區隔", () => {
+    render(rail(STOCK_CTX));
+    const aside = screen.getByRole("complementary", { name: "交易面板" });
+    expect(aside.className).toContain("border-l");
+    expect(aside.className).toContain("border-line");
+  });
+});
+
 describe("RightRail 三 tab(SC-2 / D1)", () => {
   it("三顆 tab 文字依序為 閃電 / 委託 / 部位", () => {
     render(rail(STOCK_CTX));

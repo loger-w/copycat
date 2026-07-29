@@ -45,6 +45,16 @@ const QUOTES = {
   "3231": { p: 100_000, chg_pct: 0.5, vol: 10, no_data: false },
 };
 
+// 🔴 round3 SC-5:自選側欄與中間主區之間要有可見分隔線
+describe("WatchlistSidebar 版面(round3 SC-5)", () => {
+  it("aside 右緣有 border 與中間區隔", () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
+    const aside = screen.getByRole("complementary", { name: "自選清單" });
+    expect(aside.className).toContain("border-r");
+    expect(aside.className).toContain("border-line");
+  });
+});
+
 describe("WatchlistSidebar(SC-6 群組)", () => {
   it("群組 tab 列:全部 + 各群組;預設全部顯示聯集(去重)與即時報價", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
