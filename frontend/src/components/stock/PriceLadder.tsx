@@ -7,24 +7,23 @@ import {
   useSubmitStock,
 } from "@/hooks/useCapital";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
-import { initialQtyState, manualQty, pressQuick, QTY_PRESETS } from "@/lib/qty-quick";
+import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { CapitalOrder } from "@/types";
 
-const OPEN_KEY = "stock-ladder-open";
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
 
-const TRADE_KINDS = [
+export const TRADE_KINDS = [
   ["cash", "現股"],
   ["margin", "融資"],
   ["short", "融券"],
   ["daytrade_sell", "無券"],
 ] as const;
-type TradeKind = (typeof TRADE_KINDS)[number][0];
+export type TradeKind = (typeof TRADE_KINDS)[number][0];
 
 function fmt(milli: number): string {
   const v = milli / 1000;
@@ -56,22 +55,54 @@ function aggregateLots(
   return { buy, sell };
 }
 
+/** OrderBook 點價置中請求。nonce 變化即觸發(同價連點也要重捲);訂閱者是 RightRail
+ *  (唯一 window listener),因為右欄非閃電 tab 時本元件已 unmount(change-spec R2-5)。 */
+export interface CenterRequest {
+  priceMilli: number;
+  nonce: number;
+}
+
 interface Props {
   code: string;
+  /** 股名(標題列標的顯示,D-12 降誤送風險) */
+  name?: string;
   book: StockBook | null;
   last: { p: number; t: string; cum_vol: number } | null;
   meta: StockMeta | null;
+  centerRequest?: CenterRequest | null;
+  /** 交易別 / 張數改由 RightRail 持有 → 切 rail tab 不靜默重置(change-spec R2-10)。
+   *  未給時退回元件內部 state(獨立使用與既有測試路徑)。 */
+  tradeKind?: TradeKind;
+  onTradeKind?: (kind: TradeKind) => void;
+  qtyState?: QtyState;
+  onQtyState?: (next: QtyState) => void;
 }
 
-export function PriceLadder({ code, book, last, meta }: Props) {
-  const [open, setOpen] = useState<boolean>(
-    () => window.localStorage.getItem(OPEN_KEY) === "1",
-  );
+export function PriceLadder({
+  code,
+  name = "",
+  book,
+  last,
+  meta,
+  centerRequest = null,
+  tradeKind: tradeKindProp,
+  onTradeKind,
+  qtyState: qtyStateProp,
+  onQtyState,
+}: Props) {
   const [follow, setFollow] = useState(true);
-  // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換股/斷線/idle/Esc/連 3 次失敗
+  // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換股/斷線/idle/Esc/連 3 次失敗/離開畫面
+  // (離開畫面 = RightRail 條件 render 讓本元件 unmount,arm state 隨之消滅;change-spec D-13)
   const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
-  const [qtyState, setQtyState] = useState(initialQtyState);
-  const [tradeKind, setTradeKind] = useState<TradeKind>("cash");
+  const [qtyLocal, setQtyLocal] = useState(initialQtyState);
+  const [tradeKindLocal, setTradeKindLocal] = useState<TradeKind>("cash");
+  const tradeKind = tradeKindProp ?? tradeKindLocal;
+  const setTradeKind = onTradeKind ?? setTradeKindLocal;
+  const qtyState = qtyStateProp ?? qtyLocal;
+  const setQtyState = (next: QtyState): void => {
+    if (onQtyState) onQtyState(next);
+    else setQtyLocal(next);
+  };
   const [hint, setHint] = useState<string | null>(null);
   const centerRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
@@ -95,12 +126,6 @@ export function PriceLadder({ code, book, last, meta }: Props) {
     book,
   });
   const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
-
-  function toggleOpen(): void {
-    const next = !open;
-    setOpen(next);
-    window.localStorage.setItem(OPEN_KEY, next ? "1" : "0");
-  }
 
   function touchIdle(): void {
     window.clearTimeout(idleTimer.current);
@@ -191,19 +216,15 @@ export function PriceLadder({ code, book, last, meta }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [arm.armed]);
 
-  // OrderBook 點價(stock-price-click)→ 該價置中,不送單
+  // OrderBook 點價 → 該價置中,不送單(W-C1)。事件由 RightRail 收(唯一 listener)後
+  // 以 centerRequest prop 下傳:右欄非閃電 tab 時本元件已 unmount,window listener 收不到。
   useEffect(() => {
-    const onPriceClick = (e: Event): void => {
-      const detail = (e as CustomEvent<{ priceMilli?: number; code?: string }>).detail;
-      if (!detail || detail.code !== code || typeof detail.priceMilli !== "number") return;
-      const el = rowRefs.current.get(detail.priceMilli);
-      if (!el) return;
-      setFollow(false);
-      el.scrollIntoView({ block: "center" });
-    };
-    window.addEventListener("stock-price-click", onPriceClick);
-    return () => window.removeEventListener("stock-price-click", onPriceClick);
-  }, [code]);
+    if (centerRequest === null) return;
+    const el = rowRefs.current.get(centerRequest.priceMilli);
+    if (!el) return;
+    setFollow(false);
+    el.scrollIntoView({ block: "center" });
+  }, [centerRequest?.nonce, centerRequest?.priceMilli]);
 
   // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
   useEffect(() => {
@@ -217,32 +238,22 @@ export function PriceLadder({ code, book, last, meta }: Props) {
 
   // 跟隨置中:center 價變更才捲(rows identity 每 tick 變,依 centerPrice 值 — R5)
   useEffect(() => {
-    if (!open || !follow || centerPrice === null) return;
+    if (!follow || centerPrice === null) return;
     progScroll.current = true;
     centerRef.current?.scrollIntoView({ block: "center" });
     requestAnimationFrame(() => {
       progScroll.current = false;
     });
-  }, [open, follow, centerPrice]);
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={toggleOpen}
-        className="self-start rounded border border-line px-2 py-1 text-sm text-ink-dim hover:border-accent hover:text-ink"
-      >
-        閃電梯
-      </button>
-    );
-  }
+  }, [follow, centerPrice]);
 
   return (
-    <div className="flex w-60 shrink-0 flex-col rounded-md border border-line bg-surface">
+    <div className="flex min-h-0 w-full flex-1 flex-col rounded-md border border-line bg-surface">
+      {/* 標的列(D-12):右欄內容會隨主 tab 切換,標的必須畫面可指認以降誤送風險 */}
       <div className="flex items-center justify-between border-b border-line px-2 py-1">
-        <button type="button" onClick={toggleOpen} className="text-sm text-ink hover:text-accent">
-          閃電梯
-        </button>
+        <span className="truncate font-mono text-sm text-ink">
+          {code}
+          {name !== "" ? <span className="ml-1 font-sans text-ink-muted">{name}</span> : null}
+        </span>
         <button
           type="button"
           aria-pressed={follow}
@@ -297,7 +308,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
               type="button"
               onClick={() => {
                 touchIdle();
-                setQtyState((s) => pressQuick(s, p));
+                setQtyState(pressQuick(qtyState, p));
               }}
               className="flex-1 rounded border border-line py-0.5 font-mono text-xs text-ink hover:border-accent"
             >
@@ -311,7 +322,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
             value={qtyState.qty}
             onChange={(e) => {
               touchIdle();
-              setQtyState((s) => manualQty(s, Number(e.target.value)));
+              setQtyState(manualQty(qtyState, Number(e.target.value)));
             }}
             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
           />
@@ -324,7 +335,7 @@ export function PriceLadder({ code, book, last, meta }: Props) {
         <p className="px-2 py-4 text-center text-xs text-ink-dim">無資料</p>
       ) : (
         <div
-          className="max-h-96 overflow-y-auto"
+          className="min-h-0 flex-1 overflow-y-auto"
           onScroll={() => {
             // 手動捲動(非程式捲)自動暫停跟隨(design R5)
             if (!progScroll.current && follow) setFollow(false);

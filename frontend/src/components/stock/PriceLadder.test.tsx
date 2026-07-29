@@ -82,10 +82,6 @@ function ladder(code = "2330", last: typeof LAST | null = LAST) {
   );
 }
 
-function expand(): void {
-  fireEvent.click(screen.getByRole("button", { name: "閃電梯" }));
-}
-
 function armUp(): void {
   fireEvent.click(screen.getByRole("button", { name: "武裝" }));
 }
@@ -108,19 +104,29 @@ afterEach(() => {
 });
 
 describe("PriceLadder(既有顯示行為)", () => {
-  it("預設收合:只有「閃電梯」鈕;點擊展開出現價格列(SC-7)", () => {
+  // 🔴-6:摺疊機制移除(右欄 tab 本身即顯隱,stock-ladder-open 停用)
+  it("直接展開:價格列即時可見,標題列顯示標的(D-12)", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
-    expect(screen.queryByText("110")).toBeNull();
-    expand();
     expect(screen.getByText("110")).toBeTruthy(); // 漲停端點
     expect(screen.getByText("90")).toBeTruthy(); // 跌停端點
+    expect(screen.queryByRole("button", { name: "閃電梯" })).toBeNull(); // 無摺疊鈕
+    expect(screen.getByText("2330")).toBeTruthy(); // 標的股號
+  });
+
+  it("標題列帶股名時一併顯示(右欄跨 tab 切換的誤送防線)", () => {
+    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    render(
+      <QueryClientProvider client={qc}>
+        <PriceLadder code="2330" name="台積電" book={BOOK} last={LAST} meta={META} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("台積電")).toBeTruthy();
   });
 
   it("五檔量對映顯示於對應價位列(買賣側各自可點區)", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
-    expand();
     expect(screen.getByLabelText("買 100").textContent).toBe("30");
     expect(screen.getByLabelText("賣 100.5").textContent).toBe("10");
   });
@@ -128,7 +134,6 @@ describe("PriceLadder(既有顯示行為)", () => {
   it("±5% 外價位買賣側皆反灰不可點(SC-7)", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
-    expand();
     expect(screen.getByLabelText("買 110").hasAttribute("disabled")).toBe(true);
     expect(screen.getByLabelText("賣 110").hasAttribute("disabled")).toBe(true);
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(false);
@@ -137,7 +142,6 @@ describe("PriceLadder(既有顯示行為)", () => {
   it("跟隨置中預設開,center 變更觸發 scrollIntoView", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     const { rerender } = render(ladder());
-    expand();
     expect(
       screen.getByRole("button", { name: "跟隨置中" }).getAttribute("aria-pressed"),
     ).toBe("true");
@@ -159,7 +163,6 @@ describe("PriceLadder(既有顯示行為)", () => {
         />
       </QueryClientProvider>,
     );
-    expand();
     expect(screen.getByText("無資料")).toBeTruthy();
   });
 });
@@ -175,7 +178,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
       "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
-    expand();
     armUp();
     const disarmBtn = screen.getByRole("button", { name: "解除" });
     expect(disarmBtn.getAttribute("aria-pressed")).toBe("true");
@@ -205,7 +207,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
       "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
-    expand();
     fireEvent.click(screen.getByLabelText("賣 100.5"));
     expect(screen.getByText("未武裝 — 點價不送單")).toBeTruthy();
     expect(bodies.length).toBe(0);
@@ -225,7 +226,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
       "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
-    expand();
     armUp();
     fireEvent.click(screen.getByLabelText("買 100"));
     fireEvent.click(screen.getByLabelText("買 100"));
@@ -237,7 +237,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   it("code 變更自動解除武裝(symbol_changed)", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     const { rerender } = render(ladder());
-    expand();
     armUp();
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
     rerender(ladder("2317"));
@@ -247,7 +246,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   it("Esc 鍵解除武裝", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
-    expand();
     armUp();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
@@ -256,7 +254,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   it("capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)", () => {
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
-    expand();
     armUp();
     act(() => setCapitalWsStatus("open"));
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
@@ -268,7 +265,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
     vi.useFakeTimers();
     mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
     render(ladder());
-    expand();
     armUp();
     act(() => {
       vi.advanceTimersByTime(ARM_IDLE_MS + 1);
@@ -286,7 +282,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
       "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
-    expand();
     armUp();
     fireEvent.change(screen.getByLabelText("交易別"), { target: { value: "daytrade_sell" } });
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
@@ -307,7 +302,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
       "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
-    expand();
     const qtyInput = screen.getByLabelText("張數") as HTMLInputElement;
     fireEvent.click(screen.getByRole("button", { name: "3" }));
     fireEvent.click(screen.getByRole("button", { name: "3" }));
@@ -333,7 +327,6 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
       "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
-    expand();
     armUp();
     fireEvent.click(screen.getByLabelText("買 100"));
     await waitFor(() => expect(screen.getByText("安全閘拒絕(order_disabled)")).toBeTruthy());
@@ -364,7 +357,6 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
         }),
     });
     render(ladder());
-    expand();
     const buyLot = await screen.findByLabelText("刪 100 買單");
     expect(buyLot.textContent).toBe("4"); // 2 + (3-1)
     expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1");
@@ -378,8 +370,25 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
   });
 });
 
-describe("PriceLadder 置中事件(OrderBook 接點)", () => {
-  it("stock-price-click(本檔)→ 該價置中且不送單;他檔忽略", () => {
+// 🔴-10:window listener 上移到 RightRail(右欄非閃電 tab 時本元件已 unmount,
+// 自有 listener 收不到 — change-spec R2-5)。本元件改吃 centerRequest prop。
+// 「事件 → 切回閃電 tab → 置中」的完整鏈由 RightRail.test.tsx 覆蓋。
+describe("PriceLadder 置中請求(centerRequest prop)", () => {
+  function withCenter(centerRequest: { priceMilli: number; nonce: number } | null) {
+    return (
+      <QueryClientProvider client={qc}>
+        <PriceLadder
+          code="2330"
+          book={BOOK}
+          last={LAST}
+          meta={META}
+          centerRequest={centerRequest}
+        />
+      </QueryClientProvider>
+    );
+  }
+
+  it("centerRequest → 該價置中、暫停跟隨,且不送單", () => {
     const bodies: unknown[] = [];
     mockFetch({
       "/api/capital/order/stock": (init) => {
@@ -388,30 +397,32 @@ describe("PriceLadder 置中事件(OrderBook 接點)", () => {
       },
       "/api/capital/orders": () => json({ orders: [] }),
     });
-    render(ladder());
-    expand();
+    const { rerender } = render(withCenter(null));
     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
     spy.mockClear();
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("stock-price-click", {
-          detail: { priceMilli: 100_500, side: "ask", code: "2330" },
-        }),
-      );
-    });
+    rerender(withCenter({ priceMilli: 100_500, nonce: 1 }));
     expect(spy).toHaveBeenCalled();
     expect(bodies.length).toBe(0);
     expect(
       screen.getByRole("button", { name: "跟隨置中" }).getAttribute("aria-pressed"),
     ).toBe("false");
+  });
+
+  it("同價連點靠 nonce 變化重捲(值相同不會被 effect deps 吞掉)", () => {
+    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    const { rerender } = render(withCenter({ priceMilli: 100_500, nonce: 1 }));
+    const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
     spy.mockClear();
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("stock-price-click", {
-          detail: { priceMilli: 100_500, side: "ask", code: "9999" },
-        }),
-      );
-    });
+    rerender(withCenter({ priceMilli: 100_500, nonce: 2 }));
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("不在階梯上的價位 → 不捲動也不崩", () => {
+    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    const { rerender } = render(withCenter(null));
+    const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    rerender(withCenter({ priceMilli: 999_999, nonce: 1 }));
     expect(spy).not.toHaveBeenCalled();
   });
 });
