@@ -136,7 +136,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
 // 🔴-5:閃電梯 / 委託 / 部位已移到常駐右欄。
 // 「部位平倉:多單估價貼跌停,確認彈窗顯示閘用估價」已逐條搬入 RightRail.test.tsx。
 describe("FuturesPage 中間主區(SC-5)", () => {
-  it("渲染水平五檔(與個股共用 DepthBar)", () => {
+  it("渲染水平五檔(DepthBar)", () => {
     render(<Harness />);
     // 期貨頁不傳 onPriceClick(五檔點價置中是個股專屬)→ 格子非 button
     expect(screen.getByLabelText("買1 22999")).toBeTruthy();

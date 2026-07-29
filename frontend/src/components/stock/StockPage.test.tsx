@@ -97,13 +97,13 @@ describe("StockPage", () => {
     expect(screen.getByText(/伺服器連線中斷,重連中…/)).toBeTruthy();
   });
 
-  it("選檔後中間主區 = 圖表切換 + 水平五檔 + 明細(SC-6/SC-7)", () => {
+  it("選檔後中間主區 = 圖表切換 + 五檔 + 明細(SC-6/SC-7)", () => {
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
     expect(screen.getByRole("button", { name: "江波圖" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "1分K" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "5分K" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "買1 2375" })).toBeTruthy(); // 水平五檔
+    expect(screen.getByRole("button", { name: "買1 2375" })).toBeTruthy(); // 五檔(W-16:aria-label 格式是定位鍵)
     expect(screen.getByText("時間")).toBeTruthy(); // 明細表頭
   });
 
