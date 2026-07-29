@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Callable
 
 from copycat.corr_config import CorrConfig, Leg
@@ -149,6 +150,7 @@ class TestStaleHandling:
         try:
             assert src.cb is not None
             src.cb(_quote("TC.F.CME.NQ.HOT", 27_000_000, 27_002_000))
+            await asyncio.sleep(0)
             eng.tick_once()
 
             leg = eng.state()["legs"]["NQ"]
@@ -166,6 +168,7 @@ class TestStaleHandling:
         try:
             assert src.cb is not None
             src.cb(_quote("TC.F.CME.NQ.HOT", 27_000_000, 27_002_000))
+            await asyncio.sleep(0)
             eng.tick_once()
             assert eng.state()["legs"]["NQ"]["mid"] == 27_001_000
 
@@ -285,6 +288,7 @@ class TestBroadcastAndState:
                 book["ask"] += step
                 nq += step
                 src.cb(_quote("TC.F.CME.NQ.HOT", nq, nq + 2000))
+                await asyncio.sleep(0)
                 clock.t += 1.0
                 eng.tick_once()
 
