@@ -15,7 +15,7 @@ import {
   type Viewport,
 } from "@/lib/candle-viewport";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
-import { snapDown } from "@/lib/stock-tick";
+import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 
@@ -112,7 +112,9 @@ const ChartStatic = memo(function ChartStatic({
             strokeWidth={0.5}
           />
           <text x={2} y={t.y - 2} className="fill-ink-dim" fontSize="0.625rem">
-            {fmt(t.priceMilli)}
+            {/* fmtTickPrice 而非 fmt:小數位由該價位帶的 tick 級距決定,
+                1000 元以上顯示整數、100-500 元一位(round3 項 10) */}
+            {fmtTickPrice(t.priceMilli)}
           </text>
         </g>
       ))}

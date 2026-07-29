@@ -4,6 +4,8 @@
  * 當日第一根為 09:01)。因此 5 分桶界為 (09:00, 09:05]、(09:05, 09:10]…,
  * 一根 09:01 的 1 分 bar 屬於標記 09:05 的 5 分桶(change-spec amendment P2-14)。 */
 
+import { snapNearest } from "@/lib/stock-tick";
+
 export interface Bar {
   /** 日 K:`YYYY-MM-DD`;分 K:`YYYY-MM-DD HH:MM`(台北) */
   t: string;
@@ -217,11 +219,25 @@ export function buildCandleGeometry(
   // span=0(全平盤)只給一條刻度 — 否則 5 條同價位重疊(且會撞 React key)
   const yTicks: { y: number; priceMilli: number }[] = [];
   if (span <= 0) {
-    yTicks.push({ y: toY(hi), priceMilli: hi });
+    yTicks.push({ y: toY(hi), priceMilli: snapNearest(hi) });
   } else {
+    // 等分後 snap 到合法檔位:等分值是任意整數,直接顯示會吐出 2547.32 這種下不了
+    // 單的價位(round3 項 10)。snap 後可能溢出 [lo, hi] —— lo/hi 本身不必然合法
+    // (extraSeries 的 MA/布林是 Math.floor 的任意整數),端點被 snap 出界是常態。
+    const seen = new Set<number>();
     for (let i = 0; i < Y_TICKS; i += 1) {
-      const priceMilli = Math.round(lo + (span * i) / (Y_TICKS - 1));
+      const raw = Math.round(lo + (span * i) / (Y_TICKS - 1));
+      const priceMilli = snapNearest(raw);
+      if (priceMilli < lo || priceMilli > hi) continue;
+      if (seen.has(priceMilli)) continue; // tick 粗於等分間距時相鄰刻度會 snap 同價
+      seen.add(priceMilli);
       yTicks.push({ y: toY(priceMilli), priceMilli });
+    }
+    // 保底:域寬 < 一個 tick 且區間內無合法檔位時上面會全部跳過,y 格線與價位標
+    // 會整組靜默消失。寧可顯示一根「域中點」也不要空白。
+    if (yTicks.length === 0) {
+      const mid = Math.round((lo + hi) / 2);
+      yTicks.push({ y: toY(mid), priceMilli: mid });
     }
   }
 
