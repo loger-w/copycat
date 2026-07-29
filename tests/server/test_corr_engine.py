@@ -295,3 +295,36 @@ class TestBroadcastAndState:
             assert eng.state()["pairs"]["NQ"]["w60"] is not None
         finally:
             await eng.close()
+
+
+class TestNoHardcodedSymbols:
+    def test_engine_module_has_no_tc4_symbol_literals(self) -> None:
+        """SC-8 lock:商品清單走設定檔,引擎內不得出現 symbol 字面值。
+
+        沒有這條鎖,日後有人為了除錯在引擎裡寫死一條 symbol,「加腿只需改設定檔」
+        會靜默失效而沒有任何測試會紅。
+
+        以 AST 取字串常數而非整檔 grep:docstring 裡為了說明而提到 symbol 是正當的
+        (本檔自己就是例子),整檔 grep 會把說明誤判成 hardcode。
+        """
+        import ast
+        from pathlib import Path
+
+        import copycat.server.corr_engine as mod
+
+        tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
+        offending: list[str] = []
+
+        class _Visitor(ast.NodeVisitor):
+            def visit_Expr(self, node: ast.Expr) -> None:
+                # 獨立字串陳述句 = docstring,不算字面值
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    return
+                self.generic_visit(node)
+
+            def visit_Constant(self, node: ast.Constant) -> None:
+                if isinstance(node.value, str) and ("TC.F." in node.value or "TC.S." in node.value):
+                    offending.append(node.value)
+
+        _Visitor().visit(tree)
+        assert offending == []

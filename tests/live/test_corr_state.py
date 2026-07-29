@@ -230,3 +230,20 @@ class TestMultipleLegs:
         out = state.correlations(ts)
         assert out["NQ"]["n60"] == 30
         assert out["SXF"]["n60"] == 28
+
+
+class TestWindowsDiffer:
+    def test_full_windows_yield_different_values(self) -> None:
+        """SC-3 驗證方式逐字對照:各窗滿窗後值互不相等。"""
+        state = CorrState(
+            ["TXF", "NQ"], "TXF", windows=(60, 300), min_samples={60: 30, 300: 100}
+        )
+        base = _walk(61, 301)
+        leg = _walk(67, 301)
+
+        ts = _feed(state, base, leg)
+        out = state.correlations(ts)["NQ"]
+
+        assert out["w60"] is not None
+        assert out["w300"] is not None
+        assert out["w60"] != out["w300"]
