@@ -28,13 +28,20 @@ function urls(): string[] {
 }
 
 describe("inTradingHours(台北本機時區)", () => {
-  it("08:45–13:35 為真,域外為假", () => {
+  // 2026-07-29 是週三;2026-08-01/02 是週六/日
+  it("平日 09:01–13:35 為真,域外為假", () => {
     const at = (h: number, m: number) => new Date(2026, 6, 29, h, m);
-    expect(inTradingHours(at(8, 44))).toBe(false);
-    expect(inTradingHours(at(8, 45))).toBe(true);
+    expect(inTradingHours(at(9, 0))).toBe(false);
+    expect(inTradingHours(at(9, 1))).toBe(true);
     expect(inTradingHours(at(11, 0))).toBe(true);
     expect(inTradingHours(at(13, 35))).toBe(true);
     expect(inTradingHours(at(13, 36))).toBe(false);
+  });
+
+  it("週末恆假(P1-3:否則整個週末每 60s 空打 TC4 約 30 秒)", () => {
+    expect(new Date(2026, 7, 1, 11, 0).getDay()).toBe(6); // 前提自檢
+    expect(inTradingHours(new Date(2026, 7, 1, 11, 0))).toBe(false); // 週六
+    expect(inTradingHours(new Date(2026, 7, 2, 11, 0))).toBe(false); // 週日
   });
 });
 

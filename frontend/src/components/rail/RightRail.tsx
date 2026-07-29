@@ -69,6 +69,11 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
   function selectTab(next: RailTab): void {
     setTab(next);
     window.localStorage.setItem(TAB_KEY, next);
+    // 離開閃電 tab 就清掉置中請求:ladder 會 unmount,留著的話下次掛載時 effect 會拿
+    // 舊 centerRequest 再捲一次到過期價位並關掉跟隨(review phase5 P2-2)。
+    // 註:ladder 的 `follow` 也隨 unmount 回到預設 true(重新掛載即置中於現價)—— 這是
+    // D-13 的既定代價,刻意不上提:它沒有「誤觸即送單」的性質,回到跟隨現價是合理預設。
+    if (next !== "flash") setCenterRequest(null);
   }
 
   // 五檔點價的唯一 window listener(W-C1 / R2-5):ladder 在非閃電 tab 已 unmount,
@@ -86,7 +91,11 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
       }));
     };
     window.addEventListener("stock-price-click", onPriceClick);
-    return () => window.removeEventListener("stock-price-click", onPriceClick);
+    return () => {
+      window.removeEventListener("stock-price-click", onPriceClick);
+      // 換標的:舊的置中請求對新標的無意義,留著會在新 ladder 掛載時捲到不存在的價位
+      setCenterRequest(null);
+    };
   }, [stockCode]);
 
   const market = ctx.kind === "futures" ? "fut" : "sec";

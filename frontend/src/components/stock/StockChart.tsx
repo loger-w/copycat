@@ -12,6 +12,9 @@ import { cn } from "@/lib/utils";
 
 const MODE_KEY = "copycat-chart-mode";
 const DAILY_MAX_BARS = 120;
+// 分 K 根數上限:1400px viewBox 下超過 ~700 根蠟燭寬度就被壓到 <2px,再多只是把
+// 圖畫成色塊並拖慢 hover。往前翻仍可載更多天,只是畫最近的 N 根(review P1-1)。
+const MINUTE_MAX_BARS = { m1: 700, m5: 400 } as const;
 
 const MODES = [
   ["intraday", "江波圖"],
@@ -84,7 +87,7 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
       ) : (
         <CandleChart
           bars={bars}
-          maxBars={mode === "day" ? DAILY_MAX_BARS : undefined}
+          maxBars={mode === "day" ? DAILY_MAX_BARS : MINUTE_MAX_BARS[mode]}
           showMa={mode === "day"}
         />
       )}

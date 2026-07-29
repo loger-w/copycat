@@ -44,14 +44,19 @@ function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
     );
   }
   const [priceMilli, qty] = entry;
+  // 未給 onPriceClick(期貨頁)→ 渲染成 div:button 可聚焦卻點了沒反應是假 affordance
+  const Tag = onPriceClick ? "button" : "div";
   return (
-    <button
-      type="button"
+    <Tag
+      {...(onPriceClick
+        ? { type: "button" as const, onClick: () => onPriceClick(priceMilli, side) }
+        : {})}
       aria-label={`${label} ${fmt(priceMilli)}`}
-      onClick={() => onPriceClick?.(priceMilli, side)}
       className={cn(
         "flex min-w-0 flex-col items-center gap-0.5 px-0.5 py-1 font-mono",
-        side === "bid" ? "text-bull hover:bg-bull/10" : "text-bear hover:bg-bear/10",
+        side === "bid"
+          ? cn("text-bull", onPriceClick && "hover:bg-bull/10")
+          : cn("text-bear", onPriceClick && "hover:bg-bear/10"),
       )}
     >
       <span className="text-xs text-ink">{qty}</span>
@@ -63,7 +68,7 @@ function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
           style={{ height: `${Math.round((qty / maxVol) * 100)}%` }}
         />
       </span>
-    </button>
+    </Tag>
   );
 }
 

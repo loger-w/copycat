@@ -63,7 +63,15 @@ export default function App() {
   // capital 下單 WS 常駐 App 層:唯一連線 + 唯一 invalidate 接線(review B2/B4)
   useCapitalStream();
   // D-16:沒訪問過個股 tab 時傳 null —— /api/stock/state/{code} 內含 set_main,
-  // 會觸發訂閱池變更 + 當日 tick 全量回補,不該只因開了 TXO 頁就發生
+  // 會觸發訂閱池變更 + 當日 tick 全量回補,不該只因開了 TXO 頁就發生。
+  //
+  // 取捨(review phase5 P2-3):`code=null` 只擋掉 set_main / 回補這條**有成本的**路徑,
+  // 擋不掉 `/ws/stock` 連線本身(該 hook 的 WS effect deps 為 []);且 watchlist_quote 的
+  // setState 現在落在 App 層 → 每秒一批側欄報價會重繪整棵樹。判定可接受:
+  // (a) WS 連線本身輕,後端 stock engine 本就常駐訂閱整份 watchlist,與有無 client 無關;
+  // (b) App 層本來就會因 useIndexStream 每則指數推播重繪,不是新增的重繪類別。
+  // 若日後量測到掉幀,先做的是讓 useStockStream 吃 `enabled` 參數(與這裡同一個開關),
+  // 而不是把資料流搬回頁面內 —— 右欄跟隨當前 tab 標的(D2)依賴資料在 App 層。
   const stockStream = useStockStream(tab === "stock" || visited.stock ? stockCode : null);
   const futuresStream = useFuturesStream();
 
@@ -83,7 +91,17 @@ export default function App() {
   const accum = stockStream.accum;
   const futProd = futuresStream.state?.products[product] ?? null;
   const resolvedYm = futProd?.resolved_contract ?? null;
-  const futContract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
+  // futExchangeContract 對非 YYYYMM 會 throw。改動前它在 FuturesLadder 內(只炸期貨頁),
+  // 移到 App render body 後未捕捉 = 壞掉的 resolved_contract 白屏整個 App(review P2-7)。
+  // contract=null 已是 W-A6 的既有安全狀態(武裝鈕 disabled + 強制解除)。
+  let futContract: string | null = null;
+  if (resolvedYm !== null) {
+    try {
+      futContract = futExchangeContract(product, resolvedYm);
+    } catch {
+      futContract = null;
+    }
+  }
 
   // 右欄內容跟隨當前 tab 標的,版面位置固定(D2)
   const railCtx: RailContext =

@@ -5,10 +5,11 @@
 
 兩段式:
 
-- **歷史段**(`date < today`):per (code, date) **永久 memo**。已完成交易日的 1K 不會再變。
-  關鍵是 **負向快取** —— 一次區間抓取成功後,對區間內**所有** `< today` 的日曆日都寫入
-  (無資料者寫空 list)。窗內必有週末/假日,少了負向快取就會「永遠缺、每次重拉」,
-  等於沒 cache(change-spec R2-2)。
+- **歷史段**(`date < today`):per (code, date) memo(視窗外由 `prune` 剪除)。
+  已完成交易日的 1K 不會再變。關鍵是 **負向快取** —— 一次區間抓取後,無資料的日曆日
+  也寫空 list。窗內必有週末/假日,少了負向快取就會「永遠缺、每次重拉」,等於沒 cache
+  (change-spec R2-2)。但負向快取**只寫到有證據掃過的最後一天**,TC4 分頁截斷時
+  不把後面的日子誤釘成空(review P1-2)。
 - **當日段**:短 TTL(預設 30s,短於前端 60s 輪詢),讓盤中最後一根會前進(SC-10)。
 
 `tf="D"` 不走兩段式:日 K 當日內不過期,整份 per (code, today) memo 即可(D-15:
@@ -51,7 +52,7 @@ def _iter_days(start: _dt.date, end: _dt.date):
 class BarsCache:
     def __init__(self, ttl: float = TODAY_TTL_SECS, clock: Callable[[], float] = time.monotonic):
         self._hist: dict[tuple[str, str], list[Bar]] = {}
-        self._today: dict[str, tuple[float, list[Bar]]] = {}
+        self._today: dict[tuple[str, str], tuple[float, list[Bar]]] = {}
         self._daily: dict[tuple[str, str], list[Bar]] = {}
         self._ttl = ttl
         self._clock = clock
@@ -62,12 +63,23 @@ class BarsCache:
         return [d for d in _iter_days(start, end) if (code, d.isoformat()) not in self._hist]
 
     def put_hist_range(self, code: str, start: _dt.date, end: _dt.date, bars: list[Bar]) -> None:
-        """把一次區間抓取的結果攤進 per-day memo;**沒資料的日子寫空 list(負向快取)**。"""
+        """把一次區間抓取的結果攤進 per-day memo;沒資料的日子寫空 list(負向快取)。
+
+        **負向快取只寫到「有證據掃過」的最後一天**:TC4 分頁可能提早截斷
+        (`tc4common.iter_qry_pages` 遇 QryIndex 停滯即靜默結束,不區分收完與異常中斷),
+        若無條件把整段寫空,截斷後缺的日子會被永久釘成空、只能重啟 server 才恢復
+        (review P1-2)。已有非空值的日子也不被空值覆寫。"""
         by_date: dict[str, list[Bar]] = {}
         for b in bars:
             by_date.setdefault(b["t"][:10], []).append(b)
+        last_seen = max(by_date) if by_date else None
         for d in _iter_days(start, end):
-            self._hist[(code, d.isoformat())] = by_date.get(d.isoformat(), [])
+            key = d.isoformat()
+            got = by_date.get(key)
+            if got:
+                self._hist[(code, key)] = got
+            elif last_seen is not None and key <= last_seen:
+                self._hist.setdefault((code, key), [])
 
     def hist_range(self, code: str, start: _dt.date, end: _dt.date) -> list[Bar]:
         out: list[Bar] = []
@@ -77,16 +89,30 @@ class BarsCache:
 
     # ---- 當日段(短 TTL)----
 
-    def today_get(self, code: str) -> list[Bar] | None:
-        entry = self._today.get(code)
+    def today_get(self, code: str, today: str) -> list[Bar] | None:
+        # key 含日期:只用 code 的話,server 跨午夜後的 TTL 窗內會把昨日 bars 當今日回,
+        # 而歷史段此時已含昨日 → 同一回應出現重複 t(review P2-9)
+        entry = self._today.get((code, today))
         if entry is None or self._clock() - entry[0] >= self._ttl:
             return None
         return entry[1]
 
-    def today_put(self, code: str, bars: list[Bar]) -> None:
+    def today_put(self, code: str, today: str, bars: list[Bar]) -> None:
         if not bars:
             return  # don't-cache-empty
-        self._today[code] = (self._clock(), bars)
+        self._today[(code, today)] = (self._clock(), bars)
+
+    def prune(self, today: _dt.date) -> None:
+        """剪掉視窗外條目。三個 dict 都無 evict,長跑 server 的成長主要來自**日期維度**
+        (股號受 watchlist 30 檔上限約束,日期不受)—— review P2-5。"""
+        floor = (today - _dt.timedelta(days=DAYS_MAX * 2)).isoformat()
+        for key in [k for k in self._hist if k[1] < floor]:
+            del self._hist[key]
+        today_iso = today.isoformat()
+        for key in [k for k in self._daily if k[1] != today_iso]:
+            del self._daily[key]
+        for key in [k for k in self._today if k[1] != today_iso]:
+            del self._today[key]
 
     # ---- 日 K(per (code, today) memo)----
 
@@ -102,6 +128,7 @@ class BarsCache:
 async def build_daily(
     fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date
 ) -> list[Bar]:
+    cache.prune(today)
     cached = cache.daily_get(code, today.isoformat())
     if cached is not None:
         return cached
@@ -115,6 +142,7 @@ async def build_minute(
     fetch: BarsFetcher, cache: BarsCache, code: str, days: int, today: _dt.date
 ) -> list[Bar]:
     """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。"""
+    cache.prune(today)
     start = today - _dt.timedelta(days=clamp_days(days) - 1)
     yesterday = today - _dt.timedelta(days=1)
 
@@ -132,9 +160,9 @@ async def build_minute(
                 logger.info("bars %s: 歷史段 %s..%s 回空,不入 memo", code, lo, hi)
         out.extend(cache.hist_range(code, start, yesterday))
 
-    today_bars = cache.today_get(code)
+    today_bars = cache.today_get(code, today.isoformat())
     if today_bars is None:
         today_bars = await fetch(code, "1", today.isoformat(), today.isoformat())
-        cache.today_put(code, today_bars)
+        cache.today_put(code, today.isoformat(), today_bars)
     out.extend(today_bars)
     return out

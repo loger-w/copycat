@@ -146,8 +146,14 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
   let lo = Infinity;
   let maxVol = 1;
   for (const b of bars) {
+    // 值域一併吃 o/c:DK 的 Open 欄位名/值域未實測(change-spec §7 Known Risk),
+    // 若回 "0.00" 而 h/l 正常,只取 h/l 會讓實體畫到圖框外(review P2-8)
     if (b.h > hi) hi = b.h;
+    if (b.o > hi) hi = b.o;
+    if (b.c > hi) hi = b.c;
     if (b.l < lo) lo = b.l;
+    if (b.o < lo) lo = b.o;
+    if (b.c < lo) lo = b.c;
     if (b.v > maxVol) maxVol = b.v;
   }
   const span = hi - lo;
@@ -156,7 +162,8 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
     span <= 0 ? PAD_Y + usable / 2 : PAD_Y + ((hi - priceMilli) / span) * usable;
 
   const slot = size.width / bars.length;
-  const w = Math.max(1, slot * 0.7);
+  // 夾在 slot 內:bars 多到 slot < 1.43 時,max(1, …) 會讓 w > slot 而互相重疊(review P1-1)
+  const w = Math.min(Math.max(1, slot * 0.7), slot);
 
   const candles: Candle[] = [];
   const volBars: VolBar[] = [];

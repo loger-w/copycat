@@ -82,3 +82,6 @@
 - [ ] `/api/stock/bars` 的真實環境驗證待補:本輪出貨時 8721 已被舊版 server 佔用且盤中(2026-07-29 11:57),不自行重啟搶 TC4 推播。重啟 server 後要驗:(a) `tf=D` 回應 `bars.length` 落在 100–120(SC-7);(b) DK 的 `Open`/`Volume` 欄位名(CLAUDE.md §8 只實證 H/L/C,現為防禦解析 + 略過計數 log);(c) 分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10);(d) 一次當日段耗時 >5s 就回頭改設計(change-spec §7)
 - [ ] `BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除:watchlist 上限 30 檔 × 30 日曆日量級可接受,若之後放寬 days 上限或改多帳號再加 LRU
 - [ ] 🔴 **既有 bug(本輪 real-env 截圖發現,非本輪改出來)**:`copycat/live/aggregate.py:21 _SPOT_PREFIX = "TC.F."` 是整棵期貨樹前綴,`route()` 把**任何** `TC.F.*` tick 當台指期寫進 `spot_millipts`。個股頁選一檔有個股期的股票(如 2317→DHF `TC.F.TWF.DHF.HOT`)後,IndexBar 台指顯示成該個股期價(實測 2026-07-29 盤中:台指顯示 232.5)。ZMQ SUB 訂 `""` 收全部推播,TXO runtime 的 listener 也會收到個股引擎訂的個股期 tick。**影響不只 IndexBar**:`aggregate.py:162-163 spot_pnl` 同源 → TXO 綜合損益的現貨損益點位一併錯。修法要一併決定 `route()` 與 `:102` 對個股期該算 foreign 還是丟棄 → 開 /bug 走紅測試先行
+- [ ] K 線 endpoint 未做 inflight dedup(專案 `_run_once` 慣例):同 code 併發請求會各自打一輪 TC4。單人本機用量下未觀察到問題,若之後多分頁/多 client 再補
+- [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**(當日段恆空 + don't-cache-empty → 每次真打 TC4,`_collect_history` 首頁 poll deadline ≈ 30s)。要擋需要交易日曆;或改由後端對「當日段回空」做短負向快取(需與 TC4 連線失敗區分)
+- [ ] `_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s。當日段這種高頻小查詢可考慮獨立較短 deadline(改動共用路徑,overlay 也吃這條,要一起評估)

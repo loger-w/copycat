@@ -143,3 +143,47 @@ class TestMinuteTwoTier:
         cache = BarsCache(ttl=999.0)
         assert await build_minute(fetch, cache, "2330", 1, today) == []
         assert await build_minute(fetch, cache, "2330", 1, today) != []
+
+
+class TestPhase5Hardening:
+    async def test_truncated_fetch_does_not_pin_later_days_empty(self) -> None:
+        """TC4 分頁提早截斷 → 後面的日子不可寫負向快取,否則永久釘成空(review P1-2)。"""
+        today = _dt.date(2026, 7, 28)
+        # 請求 07-24..07-27,但只回到 07-25 就截斷
+        truncated = [bar("2026-07-24 09:01"), bar("2026-07-25 09:01")]
+        full = truncated + [bar("2026-07-26 09:01"), bar("2026-07-27 09:01")]
+        fetch = _Fetcher([truncated, [], full, []])
+        cache = BarsCache(ttl=999.0)
+        await build_minute(fetch, cache, "2330", 5, today)
+        # 07-26 / 07-27 仍算「缺」→ 下次會重抓
+        assert cache.hist_missing("2330", _dt.date(2026, 7, 26), _dt.date(2026, 7, 27)) == [
+            _dt.date(2026, 7, 26),
+            _dt.date(2026, 7, 27),
+        ]
+        out = await build_minute(fetch, cache, "2330", 5, today)
+        assert [b["t"] for b in out] == [b["t"] for b in full]
+
+    async def test_existing_bars_not_overwritten_by_empty(self) -> None:
+        cache = BarsCache()
+        d = _dt.date(2026, 7, 24)
+        cache.put_hist_range("2330", d, d, [bar("2026-07-24 09:01")])
+        cache.put_hist_range("2330", d, d, [])  # second pass returns nothing
+        assert cache.hist_range("2330", d, d) == [bar("2026-07-24 09:01")]
+
+    async def test_today_cache_keyed_by_date_survives_midnight(self) -> None:
+        """跨午夜:昨日的當日段不可在 TTL 窗內被當成今日資料回(review P2-9)。"""
+        cache = BarsCache(ttl=999.0)
+        cache.today_put("2330", "2026-07-28", [bar("2026-07-28 13:30")])
+        assert cache.today_get("2330", "2026-07-28") is not None
+        assert cache.today_get("2330", "2026-07-29") is None
+
+    async def test_prune_drops_out_of_window_entries(self) -> None:
+        cache = BarsCache()
+        old = _dt.date(2026, 1, 1)
+        cache.put_hist_range("2330", old, old, [bar("2026-01-01 09:01")])
+        cache.daily_put("2330", "2026-01-01", [bar("2026-01-01")])
+        cache.today_put("2330", "2026-01-01", [bar("2026-01-01 09:01")])
+        cache.prune(_dt.date(2026, 7, 28))
+        assert cache.hist_range("2330", old, old) == []
+        assert cache.daily_get("2330", "2026-01-01") is None
+        assert cache.today_get("2330", "2026-01-01") is None

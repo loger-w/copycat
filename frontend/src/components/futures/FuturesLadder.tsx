@@ -34,7 +34,7 @@ interface Props {
   /** 口數改由 RightRail 持有 → 切 rail tab 不靜默重置(change-spec R2-10);
    *  未給時退回元件內部 state(獨立使用與既有測試路徑)。 */
   qtyState?: QtyState;
-  onQtyState?: (next: QtyState) => void;
+  onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
 }
 
 /** 期貨閃電梯:武裝機制與 PriceLadder 同款(見該檔註解);差異 = 當沖 checkbox、量單位口、
@@ -52,10 +52,9 @@ export function FuturesLadder({
   const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
   const [qtyLocal, setQtyLocal] = useState(initialQtyState);
   const qtyState = qtyStateProp ?? qtyLocal;
-  const setQtyState = (next: QtyState): void => {
-    if (onQtyState) onQtyState(next);
-    else setQtyLocal(next);
-  };
+  // 保持 functional updater:同一批次內連按快捷鍵要逐次累加(W-A12),
+  // 值式會用到 stale state(review P2-9(3))
+  const setQtyState = onQtyState ?? setQtyLocal;
   const [dayTrade, setDayTrade] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const centerRef = useRef<HTMLDivElement | null>(null);
@@ -265,7 +264,7 @@ export function FuturesLadder({
               type="button"
               onClick={() => {
                 touchIdle();
-                setQtyState(pressQuick(qtyState, p));
+                setQtyState((s) => pressQuick(s, p));
               }}
               className="flex-1 rounded border border-line py-0.5 font-mono text-xs text-ink hover:border-accent"
             >
@@ -279,7 +278,7 @@ export function FuturesLadder({
             value={qtyState.qty}
             onChange={(e) => {
               touchIdle();
-              setQtyState(manualQty(qtyState, Number(e.target.value)));
+              setQtyState((s) => manualQty(s, Number(e.target.value)));
             }}
             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
           />

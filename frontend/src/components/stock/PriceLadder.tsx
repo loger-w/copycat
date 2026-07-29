@@ -75,7 +75,7 @@ interface Props {
   tradeKind?: TradeKind;
   onTradeKind?: (kind: TradeKind) => void;
   qtyState?: QtyState;
-  onQtyState?: (next: QtyState) => void;
+  onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
 }
 
 export function PriceLadder({
@@ -99,10 +99,9 @@ export function PriceLadder({
   const tradeKind = tradeKindProp ?? tradeKindLocal;
   const setTradeKind = onTradeKind ?? setTradeKindLocal;
   const qtyState = qtyStateProp ?? qtyLocal;
-  const setQtyState = (next: QtyState): void => {
-    if (onQtyState) onQtyState(next);
-    else setQtyLocal(next);
-  };
+  // 保持 functional updater:同一批次內連按快捷鍵要逐次累加(W-A12),
+  // 值式會用到 stale state(review P2-9(3))
+  const setQtyState = onQtyState ?? setQtyLocal;
   const [hint, setHint] = useState<string | null>(null);
   const centerRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
@@ -308,7 +307,7 @@ export function PriceLadder({
               type="button"
               onClick={() => {
                 touchIdle();
-                setQtyState(pressQuick(qtyState, p));
+                setQtyState((s) => pressQuick(s, p));
               }}
               className="flex-1 rounded border border-line py-0.5 font-mono text-xs text-ink hover:border-accent"
             >
@@ -322,7 +321,7 @@ export function PriceLadder({
             value={qtyState.qty}
             onChange={(e) => {
               touchIdle();
-              setQtyState(manualQty(qtyState, Number(e.target.value)));
+              setQtyState((s) => manualQty(s, Number(e.target.value)));
             }}
             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
           />

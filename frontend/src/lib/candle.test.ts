@@ -153,3 +153,27 @@ describe("buildCandleGeometry", () => {
     }
   });
 });
+
+describe("buildCandleGeometry 密集/異常值韌性(phase5 review)", () => {
+  const size = { width: 1400, height: 320 };
+
+  it("bars 極密時蠟燭寬度不超過欄位間距(P1-1:否則橫向重疊)", () => {
+    const many = Array.from({ length: 5670 }, (_, i) =>
+      bar(`2026-07-28 ${String(i)}`, 100, 101, 99, 100),
+    );
+    const g = buildCandleGeometry(many, size);
+    const slot = size.width / many.length;
+    for (const c of g.candles) expect(c.w).toBeLessThanOrEqual(slot + 1e-9);
+    // 相鄰蠟燭不重疊
+    for (let i = 1; i < 50; i += 1) {
+      expect(g.candles[i]!.x).toBeGreaterThanOrEqual(g.candles[i - 1]!.x + g.candles[i - 1]!.w - 1e-9);
+    }
+  });
+
+  it("open 越界(DK 回 0)時實體仍落在畫布內(P2-8)", () => {
+    const g = buildCandleGeometry([bar("d", 0, 110_000, 90_000, 105_000)], size);
+    const c = g.candles[0]!;
+    expect(c.bodyTop).toBeGreaterThanOrEqual(0);
+    expect(c.bodyTop + c.bodyH).toBeLessThanOrEqual(size.height);
+  });
+});

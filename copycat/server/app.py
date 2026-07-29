@@ -391,19 +391,25 @@ def create_app(
         return result
 
     @app.get("/api/stock/bars/{code}")
-    async def stock_bars(request: Request, code: str, tf: str = "D", days: int = 5) -> dict:
+    async def stock_bars(request: Request, code: str, tf: str = "D", days: str = "5") -> dict:
         """K 線 bar(SC-7)。tf=D 忽略 days(D-15:忽略的參數不該進 cache/query key)。"""
         stock = _stock(request)
         if not validate_code(code):
             raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
         if tf not in ("D", "1"):
             raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
+        # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
+        # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
+        try:
+            days_n = int(days)
+        except ValueError:
+            raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
         # today = 本機日界(= 台北,部署綁本機;同 overlay 的 design R6/R13)
         today = _date.today()
         if tf == "D":
             bars = await build_daily(stock.bars_range, bars_cache, code, today)
         else:
-            bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days), today)
+            bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days_n), today)
         return {"code": code, "tf": tf, "bars": bars}
 
     @app.get("/api/stock/state/{code}")

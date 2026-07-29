@@ -24,7 +24,14 @@ const ASKS: [number, number][] = [
 
 function renderBar(over: Partial<Parameters<typeof DepthBar>[0]> = {}) {
   return render(
-    <DepthBar bids={BIDS} asks={ASKS} last={583_000} ref_={571_000} {...over} />,
+    <DepthBar
+      bids={BIDS}
+      asks={ASKS}
+      last={583_000}
+      ref_={571_000}
+      onPriceClick={() => {}}
+      {...over}
+    />,
   );
 }
 
@@ -84,17 +91,21 @@ describe("DepthBar 水平五檔(SC-4)", () => {
     expect(bars.length).toBe(10);
   });
 
-  it("點價回呼帶毫元價與買賣側;未給 onPriceClick 時不當機", () => {
+  it("點價回呼帶毫元價與買賣側", () => {
     const onPriceClick = vi.fn();
     renderBar({ onPriceClick });
     fireEvent.click(screen.getByRole("button", { name: "賣1 583" }));
     expect(onPriceClick).toHaveBeenCalledWith(583_000, "ask");
     fireEvent.click(screen.getByRole("button", { name: "買1 582" }));
     expect(onPriceClick).toHaveBeenCalledWith(582_000, "bid");
+  });
 
-    cleanup();
-    renderBar();
-    fireEvent.click(screen.getByRole("button", { name: "買1 582" })); // 不 throw
+  it("未給 onPriceClick(期貨頁)→ 不渲染成 button,避免可聚焦卻點了沒反應(review P2-9)", () => {
+    render(<DepthBar bids={BIDS} asks={ASKS} last={583_000} ref_={571_000} />);
+    expect(screen.queryAllByRole("button").length).toBe(0);
+    // 價量仍照常顯示且可被 aria-label 指認
+    expect(screen.getByLabelText("買1 582").textContent).toContain("12");
+    expect(screen.getByLabelText("賣1 583").textContent).toContain("583");
   });
 
   it("鎖漲停:買1 = 漲停價時顯示 badge", () => {
@@ -110,7 +121,7 @@ describe("DepthBar 水平五檔(SC-4)", () => {
 
   it("檔位不足時補空格(—),不塌陷欄位", () => {
     renderBar({ bids: [[582_000, 12]], asks: [] });
-    expect(screen.getAllByRole("button").length).toBe(1); // 只有買1 可點
+    expect(screen.getAllByRole("button").length).toBe(1); // 只有買1 有資料
     expect(screen.getAllByText("—").length).toBe(9); // 其餘 9 格空
   });
 

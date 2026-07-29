@@ -138,8 +138,9 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
 describe("FuturesPage 中間主區(SC-5)", () => {
   it("渲染水平五檔(與個股共用 DepthBar)", () => {
     render(<Harness />);
-    expect(screen.getByRole("button", { name: "買1 22999" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "賣1 23001" })).toBeTruthy();
+    // 期貨頁不傳 onPriceClick(五檔點價置中是個股專屬)→ 格子非 button
+    expect(screen.getByLabelText("買1 22999")).toBeTruthy();
+    expect(screen.getByLabelText("賣1 23001")).toBeTruthy();
     expect(screen.getByText(/委買 45/)).toBeTruthy();
     expect(screen.getByText(/委賣 88/)).toBeTruthy();
   });

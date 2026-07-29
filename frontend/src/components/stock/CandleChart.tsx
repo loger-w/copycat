@@ -1,6 +1,11 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
-import { buildCandleGeometry, movingAverage, type Bar } from "@/lib/candle";
+import {
+  buildCandleGeometry,
+  movingAverage,
+  type Bar,
+  type CandleGeometry,
+} from "@/lib/candle";
 import { cn } from "@/lib/utils";
 
 /** K 線圖(SC-7)。幾何全在 lib/candle.ts,本檔只掛 DOM。
@@ -36,6 +41,111 @@ function shortStamp(t: string): string {
 function pts(line: { x: number; y: number }[]): string {
   return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
+
+
+/** 靜態圖層 memo:hover 每 mousemove re-render 父層,蠟燭/量/標籤層不可每次重建
+ *  (分 K 可達數千根;對齊 StockIntradayChart 的 ChartStatic 慣例 — review P1-1)。 */
+const ChartStatic = memo(function ChartStatic({
+  g,
+  shown,
+  ma5Line,
+  ma20Line,
+  labelStep,
+}: {
+  g: CandleGeometry;
+  shown: Bar[];
+  ma5Line: { x: number; y: number }[];
+  ma20Line: { x: number; y: number }[];
+  labelStep: number;
+}) {
+  return (
+    <g>
+        {/* y 軸格線 + 價位刻度 */}
+      {g.yTicks.map((t) => (
+        <g key={`yt-${t.priceMilli}`}>
+          <line
+            x1={0}
+            x2={DIMS.width}
+            y1={t.y}
+            y2={t.y}
+            className="stroke-line"
+            strokeDasharray="2 3"
+            strokeWidth={0.5}
+          />
+          <text x={2} y={t.y - 2} className="fill-ink-dim" fontSize="0.625rem">
+            {fmt(t.priceMilli)}
+          </text>
+        </g>
+      ))}
+      {/* 量 bar */}
+      {g.volBars.map((b, i) => (
+        <rect
+          key={`v-${i}`}
+          x={b.x}
+          y={b.y}
+          width={b.w}
+          height={b.h}
+          className={VOL_CLASS[b.dir]}
+        />
+      ))}
+      {/* 蠟燭:影線 + 實體 */}
+      {g.candles.map((c, i) => (
+        <g key={`c-${i}`}>
+          <line
+            x1={c.cx}
+            x2={c.cx}
+            y1={c.wickTop}
+            y2={c.wickBottom}
+            className={BODY_CLASS[c.dir]}
+            strokeWidth={1}
+          />
+          <rect
+            data-testid="candle-body"
+            x={c.x}
+            y={c.bodyTop}
+            width={c.w}
+            height={c.bodyH}
+            className={BODY_CLASS[c.dir]}
+          />
+        </g>
+      ))}
+      {/* MA 疊線 */}
+      {ma5Line.length > 1 ? (
+        <polyline
+          data-testid="ma-5"
+          points={pts(ma5Line)}
+          fill="none"
+          className="stroke-ma5"
+          strokeWidth={1.2}
+        />
+      ) : null}
+      {ma20Line.length > 1 ? (
+        <polyline
+          data-testid="ma-20"
+          points={pts(ma20Line)}
+          fill="none"
+          className="stroke-ma20"
+          strokeWidth={1.2}
+        />
+      ) : null}
+      {/* x 軸標籤 */}
+      {shown.map((b, i) =>
+        i % labelStep === 0 ? (
+          <text
+            key={`x-${i}`}
+            x={g.candles[i]!.cx}
+            y={DIMS.height - 3}
+            textAnchor="middle"
+            className="fill-ink-dim"
+            fontSize="0.625rem"
+          >
+            {shortStamp(b.t)}
+          </text>
+        ) : null,
+      )}
+    </g>
+  );
+});
 
 interface Props {
   bars: Bar[];
@@ -99,89 +209,7 @@ export function CandleChart({ bars, maxBars, showMa = false }: Props) {
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
-        {/* y 軸格線 + 價位刻度 */}
-        {g.yTicks.map((t) => (
-          <g key={`yt-${t.priceMilli}`}>
-            <line
-              x1={0}
-              x2={DIMS.width}
-              y1={t.y}
-              y2={t.y}
-              className="stroke-line"
-              strokeDasharray="2 3"
-              strokeWidth={0.5}
-            />
-            <text x={2} y={t.y - 2} className="fill-ink-dim" fontSize="0.625rem">
-              {fmt(t.priceMilli)}
-            </text>
-          </g>
-        ))}
-        {/* 量 bar */}
-        {g.volBars.map((b, i) => (
-          <rect
-            key={`v-${i}`}
-            x={b.x}
-            y={b.y}
-            width={b.w}
-            height={b.h}
-            className={VOL_CLASS[b.dir]}
-          />
-        ))}
-        {/* 蠟燭:影線 + 實體 */}
-        {g.candles.map((c, i) => (
-          <g key={`c-${i}`}>
-            <line
-              x1={c.cx}
-              x2={c.cx}
-              y1={c.wickTop}
-              y2={c.wickBottom}
-              className={BODY_CLASS[c.dir]}
-              strokeWidth={1}
-            />
-            <rect
-              data-testid="candle-body"
-              x={c.x}
-              y={c.bodyTop}
-              width={c.w}
-              height={c.bodyH}
-              className={BODY_CLASS[c.dir]}
-            />
-          </g>
-        ))}
-        {/* MA 疊線 */}
-        {ma5Line.length > 1 ? (
-          <polyline
-            data-testid="ma-5"
-            points={pts(ma5Line)}
-            fill="none"
-            className="stroke-ma5"
-            strokeWidth={1.2}
-          />
-        ) : null}
-        {ma20Line.length > 1 ? (
-          <polyline
-            data-testid="ma-20"
-            points={pts(ma20Line)}
-            fill="none"
-            className="stroke-ma20"
-            strokeWidth={1.2}
-          />
-        ) : null}
-        {/* x 軸標籤 */}
-        {shown.map((b, i) =>
-          i % labelStep === 0 ? (
-            <text
-              key={`x-${i}`}
-              x={g.candles[i]!.cx}
-              y={DIMS.height - 3}
-              textAnchor="middle"
-              className="fill-ink-dim"
-              fontSize="0.625rem"
-            >
-              {shortStamp(b.t)}
-            </text>
-          ) : null,
-        )}
+        <ChartStatic g={g} shown={shown} ma5Line={ma5Line} ma20Line={ma20Line} labelStep={labelStep} />
         {/* hover 十字 */}
         {hoverCandle !== undefined ? (
           <line

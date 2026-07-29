@@ -231,6 +231,27 @@ describe("RightRail 五檔點價接點(W-C1 / R2-5)", () => {
     expect(Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
 
+  it("切離閃電 tab 會清掉置中請求(重掛載不重放過期價位;review P2-2)", async () => {
+    render(rail(STOCK_CTX));
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("stock-price-click", {
+          detail: { priceMilli: 100_500, side: "ask", code: "2330" },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "閃電" }).getAttribute("aria-selected")).toBe("true"),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+    // 重掛載後跟隨回到開啟(置中於現價),不是捲回剛才點的價位
+    expect(
+      screen.getByRole("button", { name: "跟隨置中" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
   it("他檔的點價事件忽略(不切 tab)", () => {
     render(rail(STOCK_CTX));
     fireEvent.click(screen.getByRole("tab", { name: "委託" }));

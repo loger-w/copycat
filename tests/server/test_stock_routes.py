@@ -307,6 +307,14 @@ class TestBarsRoute:
             ).days
             assert span <= 30
 
+    def test_bad_days_400_not_422(self, tmp_path: Path) -> None:
+        """days 轉換失敗要走專案錯誤契約,不是 FastAPI 預設 422 + list 形 detail(W-D3)。"""
+        client, _ = make_client(tmp_path)
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=1&days=abc")
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_DAYS"
+
     def test_tc4_down_returns_empty_200(self, tmp_path: Path) -> None:
         """engine 層降級空(不是 502)—— 前端顯示「無 K 線資料」而非炸掉。"""
         client, fake = make_client(tmp_path)
