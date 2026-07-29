@@ -28,6 +28,18 @@ body,
   height: 100%;
 }
 
+/* 捲軸配色(SC-5)。預設 Chrome 捲軸是白底淺灰,在 --color-bg #0a0e14 的暗色盤面上
+   非常突兀(明細 / 閃電梯 / 自選清單三處都看得到)。
+
+   用標準屬性而非 ::-webkit-scrollbar:Chrome 121+ 兩者並存時標準屬性優先、webkit
+   規則會被整組忽略;標準屬性一條規則同時涵蓋 Chrome 與 Firefox,且會被子元素繼承,
+   不必逐個捲動容器掛 class。掛在 html 靠繼承生效於全站(含 TXO / 期貨 / 指數頁)——
+   這是刻意的統一,純視覺,不影響任何 scroll 事件(閃電梯的 onScroll 暫停跟隨照舊)。 */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-dim) transparent;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-ink);
