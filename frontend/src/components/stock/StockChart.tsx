@@ -31,7 +31,7 @@ function initialMode(): ChartMode {
 export function StockChart({ accum, code }: { accum: StockAccum; code: string }) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const [days, setDays] = useState(DAYS_STEP);
-  const { data, isPending, isError } = useStockBars(code, mode, days);
+  const { data, isPending, isError, error } = useStockBars(code, mode, days);
 
   function selectMode(next: ChartMode): void {
     setMode(next);
@@ -81,8 +81,12 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
           <p className="text-sm text-ink-muted">載入中…</p>
         </div>
       ) : isError ? (
-        <div className="flex h-64 items-center justify-center rounded-md border border-line bg-surface">
-          <p className="text-sm text-ink-muted">無 K 線資料</p>
+        // 失敗態必須與「真的沒資料」分得開:2026-07-29 舊 build 佔 port 讓 endpoint 回 404,
+        // 當時兩者共用「無 K 線資料」一句 → 被誤讀成「這檔沒 K 線」(SC-3)。
+        // 錯誤碼取值鏈見 useStockBars.ts:35-44(detail.error 優先 → HTTP_<status>)。
+        <div className="flex h-64 flex-col items-center justify-center gap-1 rounded-md border border-line bg-surface">
+          <p className="text-sm text-bear">K 線載入失敗</p>
+          <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
         </div>
       ) : (
         <CandleChart

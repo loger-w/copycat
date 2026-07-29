@@ -43,12 +43,13 @@ describe("OrderBook", () => {
   });
 
   // 🔴-1:垂直雙欄(SC-1)後總量列改成「<千分位數字> 張」大字,不再有「委買 / 委賣」前綴。
-  // markup 是 {n.toLocaleString("en-US")}<span>張</span> —— 兩節點間無空白,故用 \s* 正則
-  // (RTL 只正規化空白,不會替你補;review R16)。
+  // 「張」依 SC-1 是獨立小字 span,而 RTL 的 getNodeText 只取**直接** text node
+  // (element 子節點不算)→ getByText 不可能一次匹配「382張」。改以 testid 取整段
+  // textContent 斷言,數值 / 千分位 / 單位三者仍全鎖(review R16 的精確版)。
   it("總量列:買賣五檔加總 + 張 + 千分位(SC-1)", () => {
     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
-    expect(screen.getByText(/^382\s*張$/)).toBeTruthy();
-    expect(screen.getByText(/^1,033\s*張$/)).toBeTruthy();
+    expect(screen.getByTestId("depth-total-bid").textContent).toBe("382張");
+    expect(screen.getByTestId("depth-total-ask").textContent).toBe("1,033張");
   });
 
   // 🔴-2:水平 10 格改垂直雙欄(SC-1)後,量 bar 由「格內垂直高度」改為「列背景水平寬度」。
