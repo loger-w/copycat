@@ -187,11 +187,19 @@ describe("StockChart 模式切換(SC-7)", () => {
     expect(screen.getByText("HTTP_404")).toBeTruthy();
   });
 
-  // 🟢 self-review C3:圖表容器的 shrink-0 是 SC-6 防「svg 溢出與下半列重疊」的關鍵 class,
-  // 同輪其他版面 class 都有 regression lock,唯獨它沒鎖。
-  it("圖表容器 shrink-0(SC-6:負剩餘空間時不被壓縮致 svg 溢出)", () => {
+  // 🔴 round3 SC-6:高度分配反轉 —— 圖表由「shrink-0 的固定比例高」改成「吃剩餘空間」。
+  // 舊 shrink-0 防的是「被壓縮致 svg 溢出」,新機制從源頭消掉那個情境:svg 高度本身
+  // 就跟著可用空間走,而不是由寬度算出來的固定值。
+  it("圖表容器吃剩餘高度,且量測 wrapper 為恆存(SC-6)", () => {
     const { container } = chart();
-    expect((container.firstChild as HTMLElement).className).toContain("shrink-0");
+    const root = container.firstChild as HTMLElement;
+    expect(root.className).toContain("flex-1");
+    expect(root.className).toContain("min-h-0");
+    expect(root.className).not.toContain("shrink-0");
+    // 恆存 wrapper = 模式列的下一個兄弟;三態都掛在它底下(useContainerSize 契約)
+    const wrapper = root.children[1] as HTMLElement;
+    expect(wrapper.className).toContain("flex-1");
+    expect(wrapper.className).toContain("min-h-0");
   });
 
   // 🟢 SC-3 反向:真的取到空陣列 → 仍是「無 K 線資料」,不可誤報成失敗(W-13)

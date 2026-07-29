@@ -296,9 +296,10 @@ describe("CandleChart 高度 prop(SC-6 / T-10b)", () => {
     const svg = container.querySelector("svg")!;
     return {
       viewBox: svg.getAttribute("viewBox"),
-      lastTickY: [...svg.querySelectorAll("text")]
-        .filter((t) => Number(t.getAttribute("x")) === 2)
-        .at(-1)!
+      // 取**最低價**那根刻度:它的 y 依賴可用高度。最高價那根恆在 PAD_Y,
+      // 拿它比對會兩次都是 4,測試就抓不到「幾何沒重算」。
+      lowTickY: [...svg.querySelectorAll("text")]
+        .filter((t) => Number(t.getAttribute("x")) === 2)[0]!
         .getAttribute("y"),
     };
   }
@@ -309,7 +310,7 @@ describe("CandleChart 高度 prop(SC-6 / T-10b)", () => {
     const b = probe(900);
     expect(a.viewBox).not.toBe(b.viewBox);
     expect(b.viewBox).toContain("900");
-    expect(a.lastTickY).not.toBe(b.lastTickY);
+    expect(a.lowTickY).not.toBe(b.lowTickY);
   });
 
   it("未傳高度時沿用固定常數(既有行為不變)", () => {

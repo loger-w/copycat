@@ -4,7 +4,9 @@ import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
+import { useContainerSize } from "@/hooks/useContainerSize";
 import { aggregateBars } from "@/lib/candle";
+import { svgBox } from "@/lib/chart-frame";
 import type { StockAccum } from "@/lib/stock-accum";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +19,9 @@ const MODE_KEY = "copycat-chart-mode";
 // candle-viewport 的 MAX_VISIBLE(700 = viewBox 寬 1400 ÷ 2px)。
 const DAILY_INIT_BARS = 120;
 const MINUTE_INIT_BARS = 240;
+/** 兩張圖的 viewBox 寬(固定);高度才是隨可用空間變的那一維(SC-6) */
+const INTRADAY_VB_W = 800;
+const CANDLE_VB_W = 1400;
 
 const MODE_LABELS: [ChartMode, string][] = [
   ["intraday", "江波圖"],
@@ -47,10 +52,20 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
 
   const isMinute = mode !== "intraday" && mode !== "day";
 
+  // 量測 wrapper 的可用空間 → 圖表 viewBox 高度(round3 SC-6)。
+  // 量的是「剩下多少」不是「圖表現在多高」—— 被量元素的高度必須由外層 flex 指派
+  // (useContainerSize 的呼叫端契約),否則會形成「圖表高 → 量測值 → 圖表高」的迴圈。
+  const [sizeRef, size] = useContainerSize<HTMLDivElement>();
+  const box = svgBox(size, mode === "intraday" ? INTRADAY_VB_W : CANDLE_VB_W);
+  // 江波圖兩張 svg 上下相接:總 viewBox 高度按現行 260:70 拆分,且用減法讓兩者相加
+  // 恰等於總高(各自 round 會多出 1px 誤差)。
+  const mainH = box.usable ? Math.round((box.viewBoxHeight * 260) / 330) : undefined;
+  const subH = box.usable ? box.viewBoxHeight - (mainH ?? 0) : undefined;
+
   return (
-    // shrink-0:圖表維持 viewBox 決定的自然高度。少了它,負剩餘空間時本容器會被壓縮,
-    // 而內部固定高度的 svg 不跟著縮 → 溢出並與下半列重疊(SC-6 / W-17)。
-    <div className="flex shrink-0 flex-col">
+    // flex-1 min-h-0:圖表吃掉下半列以外的剩餘高度(SC-6)。原本是 shrink-0 的
+    // 「寬度決定高度」固定比例,不隨剩餘空間縮,那正是 <main> 會頂出捲軸的原因。
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-1 flex flex-wrap items-center gap-1">
         {MODE_LABELS.map(([id, label]) => (
           <button
@@ -67,17 +82,20 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
           </button>
         ))}
       </div>
+      {/* 量測用的恆存 wrapper:loading / error / data 三態都掛在它底下(useContainerSize
+          的呼叫端契約 —— ref 只掛 data 分支的話,冷載入會量到 0×0 而 hook 不再重跑)。 */}
+      <div ref={sizeRef} className="flex min-h-0 flex-1 flex-col">
       {mode === "intraday" ? (
-        <StockIntradayChart accum={accum} />
+        <StockIntradayChart accum={accum} mainHeight={mainH} subHeight={subH} />
       ) : isPending ? (
-        <div className="flex h-64 items-center justify-center rounded-md border border-line bg-surface">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
           <p className="text-sm text-ink-muted">載入中…</p>
         </div>
       ) : isError ? (
         // 失敗態必須與「真的沒資料」分得開:2026-07-29 舊 build 佔 port 讓 endpoint 回 404,
         // 當時兩者共用「無 K 線資料」一句 → 被誤讀成「這檔沒 K 線」(SC-3)。
         // 錯誤碼取值鏈見 useStockBars.ts:35-44(detail.error 優先 → HTTP_<status>)。
-        <div className="flex h-64 flex-col items-center justify-center gap-1 rounded-md border border-line bg-surface">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 rounded-md border border-line bg-surface">
           <p className="text-sm text-bear">K 線載入失敗</p>
           <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
         </div>
@@ -90,8 +108,10 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
           initBars={isMinute ? MINUTE_INIT_BARS : DAILY_INIT_BARS}
           showBb={toggles.bb}
           onToggleBb={(v) => set("bb", v)}
+          height={box.usable ? box.viewBoxHeight : undefined}
         />
       )}
+      </div>
     </div>
   );
 }

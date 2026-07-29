@@ -249,6 +249,9 @@ interface Props {
    *  本元件不自呼叫該 hook,否則按鈕與圖會各管各的) */
   showBb?: boolean;
   onToggleBb?: (value: boolean) => void;
+  /** viewBox 高度(SC-6)。純量不是物件 —— memo 子元件吃純量才不會因 identity 重建
+   *  (W-5)。未傳 = 量測未就緒 / jsdom,沿用固定常數。 */
+  height?: number;
 }
 
 /** 一根 bar → 資訊列欄位。`prev` 用來算漲跌%(K 線跨多日,沒有「昨收」可比)。 */
@@ -281,10 +284,15 @@ function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[
   ];
 }
 
-export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }: Props) {
-  // 尺寸取模組常數(本 commit 值不變);之後改為隨可用高度變動的 props。
+export function CandleChart({
+  bars,
+  initBars = 120,
+  showBb = false,
+  onToggleBb,
+  height,
+}: Props) {
   const dimW = DIMS.width;
-  const dimH = DIMS.height;
+  const dimH = height ?? DIMS.height;
   // hover 存的是 **viewBox 座標**不是 bar index:index 是對可視窗口 shown 的,
   // 一旦滾輪縮放或資料延伸讓 viewport.start 改變,同一個索引就指到別根 bar —— 十字線與
   // 資訊列會一起指錯,而且要等下次滑鼠移動才修正(實測游標在 x=700、十字線飄到 807)。
@@ -322,7 +330,8 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
       ma20: m20,
       bands: bb,
     };
-  }, [bars, viewport, showBb]);
+    // dimW / dimH 必入 deps:少了高度,viewBox 換新高而 toY / 刻度仍舊高算(T-10b)
+  }, [bars, viewport, showBb, dimW, dimH]);
 
   const ma5Line = useMemo(() => seriesLine(ma5, g), [ma5, g]);
   const ma20Line = useMemo(() => seriesLine(ma20, g), [ma20, g]);
@@ -422,7 +431,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
       data-testid="candle-figure"
       data-first={shown[0]?.t ?? ""}
       data-count={shown.length}
-      className="select-none rounded-md border border-line bg-surface p-4"
+      className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4"
     >
       {/* 頂列:左側留給資訊條、右側指標 toggle。高度以 rem 固定(root font-size 縮放才等比) */}
       <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
@@ -440,7 +449,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
         </button>
       </div>
       {shown.length === 0 ? (
-        <div className="flex h-64 items-center justify-center">
+        <div className="flex min-h-0 flex-1 items-center justify-center">
           <p className="text-sm text-ink-muted">無 K 線資料</p>
         </div>
       ) : (

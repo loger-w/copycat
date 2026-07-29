@@ -117,7 +117,9 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   const lockedDown = lower !== null && a[0]?.[0] === lower;
 
   return (
-    <section className="rounded-md border border-line bg-surface p-2.5">
+    // h-full:兩塊卡片底邊要與中間欄底部齊平(round3 SC-6)。內容約 200px、
+    // 列高 224px → 卡片底部約 24px 留白,是「貼底」的必要代價。
+    <section className="h-full rounded-md border border-line bg-surface p-2.5">
       {/* 標題列:鎖停 badge + 成交價(五檔區自足,不必回頭看頁面最上方的 header) */}
       <div
         data-testid="depth-head"

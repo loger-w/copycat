@@ -79,16 +79,20 @@ export function StockPage({ code, onSelect, stream }: Props) {
             {accum ? (
               <>
                 <StockChart accum={accum} code={code} />
-                {/* 下半:左五檔、右明細(SC-6)。
-                    flex-1   → 吃掉圖表下方的剩餘空間,明細因此撐到視窗底(原本那裡是死白)。
-                    min-h-56 → 高度地板。flex-1 = `flex:1 1 0%`,basis 0 在負剩餘空間時分不到
-                               收縮額度會被算成 0 高,明細與「載入更多」鈕整塊消失、且 <main>
-                               的捲軸救不到(它是被壓縮不是撐出捲軸)。有地板才會真的把
-                               <main> 撐出捲軸當逃生口。
-                    items-stretch(預設)讓明細自然撐滿列高;五檔另加 self-start 維持自然高度,
-                    不被拉長成內部留白的空盒。 */}
-                <div data-testid="stock-lower-row" className="flex min-h-56 min-w-0 flex-1 gap-3">
-                  <div className="min-w-0 flex-[3] self-start">
+                {/* 下半:左五檔、右明細(round3 SC-6)。
+
+                    h-56 shrink-0 = **確定高度**,不吃剩餘空間 —— 剩餘全歸圖表。
+                    確定高度是必要的而不只是好看:TickTape 根節點的 `h-full` +
+                    `overflow-y-auto` 只有在父層高度確定時才會內捲;父層若退化成
+                    「內容自然高」,30 筆明細(每列 h-6)就把這列撐成 ~770px,
+                    每點一次「載入更多」再 +720px,圖表被擠光而 <main> 靜默裁切。
+
+                    兩個子 wrapper 都要 min-h-0,內層的 overflow 容器才算得出可捲高度。
+                    五檔的 self-start 已移除、OrderBook 卡片加 h-full ——「兩塊底邊
+                    齊平貼底」要求卡片撐滿列高,代價是卡片底部約 24px 留白,
+                    這是對舊 self-start 取捨的刻意推翻(change-spec Known Risks 3)。 */}
+                <div data-testid="stock-lower-row" className="flex h-56 min-w-0 shrink-0 gap-3">
+                  <div className="min-h-0 min-w-0 flex-[3]">
                     <OrderBook
                       code={code}
                       book={accum.book}
@@ -98,7 +102,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
                       lower={meta?.lower ?? null}
                     />
                   </div>
-                  <div className="min-w-0 flex-[2]">
+                  <div className="min-h-0 min-w-0 flex-[2]">
                     <TickTape ticks={accum.ticks} />
                   </div>
                 </div>

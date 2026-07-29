@@ -16,7 +16,8 @@ export function TickTape({ ticks }: { ticks: TickRow[] }) {
 
   if (rows.length === 0) {
     return (
-      <div className="flex h-40 items-center justify-center rounded-md border border-line bg-surface">
+      // h-full 而非 h-40:空態(盤前 / 剛切股)也要與五檔卡片底邊齊平(round3 SC-6)
+      <div className="flex h-full items-center justify-center rounded-md border border-line bg-surface">
         <p className="text-sm text-ink-muted">尚無成交</p>
       </div>
     );

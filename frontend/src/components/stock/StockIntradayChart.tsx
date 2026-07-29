@@ -292,14 +292,20 @@ const EnergySub = memo(function EnergySub({
   );
 });
 
-export function StockIntradayChart({ accum }: { accum: StockAccum }) {
+interface Props {
+  accum: StockAccum;
+  /** 主圖 / 副圖的 viewBox 高度(SC-6)。**純量不是物件** —— memo 子元件吃純量才不會
+   *  每次 render 因 identity 改變而重建(W-5)。未傳 = 量測未就緒 / jsdom,沿用固定常數。 */
+  mainHeight?: number;
+  subHeight?: number;
+}
+
+export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   const { toggles, set } = useChartToggles();
-  // 尺寸取模組常數(本 commit 值不變);之後改為隨可用高度變動的 props。
-  // 純量而非物件:memo 子元件吃純量才不會每次 render 因 identity 改變而重建(W-5)。
   const mainW = MAIN.width;
-  const mainH = MAIN.height;
+  const mainH = mainHeight ?? MAIN.height;
   const subW = SUB.width;
-  const subH = SUB.height;
+  const subH = subHeight ?? SUB.height;
   const overlayQ = useStockOverlay(accum.code || null, toggles.cdp || toggles.ma);
   // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
@@ -311,12 +317,14 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
 
   const g = useMemo(
     () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, { width: mainW, height: mainH }),
-    [accum.minutes, accum.meta],
+    // mainW / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
+    // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)
+    [accum.minutes, accum.meta, mainW, mainH],
   );
 
   const subGeo = useMemo(
     () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, { width: subW, height: subH }),
-    [accum.minutes, accum.meta],
+    [accum.minutes, accum.meta, subW, subH],
   );
 
   const overlay = overlayQ.data ?? null;
@@ -341,7 +349,7 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
 
   if (g.priceLine.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-md border border-line bg-surface">
+      <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
         <p className="text-sm text-ink-muted">尚無成交</p>
       </div>
     );
@@ -411,7 +419,7 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
   return (
     // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
     // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
-    <figure className="select-none rounded-md border border-line bg-surface p-4">
+    <figure className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4">
       {/* 頂列:左資訊條、右 toggle。高度以 rem 固定,與 K 線頂列逐項對稱(SC-6.7) */}
       <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
         <ChartReadout fields={fields} hovering={hoverAgg !== undefined} />
