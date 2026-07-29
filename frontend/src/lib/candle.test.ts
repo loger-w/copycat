@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { aggregateBars, buildCandleGeometry, movingAverage, type Bar } from "@/lib/candle";
+import { snapNearest } from "@/lib/stock-tick";
 
 function bar(t: string, o: number, h: number, l: number, c: number, v = 1): Bar {
   return { t, o, h, l, c, v };
@@ -254,5 +255,64 @@ describe("buildCandleGeometry.extraSeries(R4)", () => {
     expect(g.toY(145_000)).toBeGreaterThanOrEqual(0);
     // yTicks 仍以最終 hi/lo 產生,不出現 null 造成的 NaN
     for (const t of g.yTicks) expect(Number.isFinite(t.priceMilli)).toBe(true);
+  });
+});
+
+// ---- round3 T-3:y 刻度合法檔位(user 項 10)----
+
+describe("buildCandleGeometry yTicks 合法檔位(round3 SC-10)", () => {
+  const size = { width: 1400, height: 320 };
+
+  it("1000 元以上標的:刻度只出現 5 元的倍數,不帶小數(user 原話「不要出現 1003」)", () => {
+    // 等分會算出 2547.32 / 2560.74 這種非法價位(next-time 2026-07-29 實際觀察到的症狀)
+    const g = buildCandleGeometry(
+      [
+        bar("d1", 2_550_000, 2_601_000, 2_547_320, 2_580_000),
+        bar("d2", 2_580_000, 2_600_000, 2_550_000, 2_595_000),
+      ],
+      size,
+    );
+    expect(g.yTicks.length).toBeGreaterThan(0);
+    for (const t of g.yTicks) {
+      expect(t.priceMilli % 5_000).toBe(0);
+      expect(snapNearest(t.priceMilli)).toBe(t.priceMilli);
+    }
+  });
+
+  it("100-500 元標的:刻度只出現 0.5 元的倍數(不出現 102.4)", () => {
+    const g = buildCandleGeometry(
+      [bar("d1", 100_400, 104_900, 100_400, 103_000), bar("d2", 103_000, 104_900, 101_100, 102_400)],
+      size,
+    );
+    for (const t of g.yTicks) {
+      expect(t.priceMilli % 500).toBe(0);
+    }
+  });
+
+  it("刻度不重複(tick 粗於等分間距時相鄰刻度會 snap 到同價)", () => {
+    // 1000 元帶 tick 5 元,域寬僅 8 元 → 等分間距 2 元 < tick
+    const g = buildCandleGeometry([bar("d", 1_000_000, 1_008_000, 1_000_000, 1_006_000)], size);
+    const prices = g.yTicks.map((t) => t.priceMilli);
+    expect(new Set(prices).size).toBe(prices.length);
+  });
+
+  it("極窄域(區間內無任何合法檔位)仍給至少一根刻度,不整組消失", () => {
+    // 1000 元帶 tick 5 元;域 = [1000.1, 1003.0] 內部沒有 5 的倍數
+    const g = buildCandleGeometry([bar("d", 1_000_100, 1_003_000, 1_000_100, 1_003_000)], size);
+    expect(g.yTicks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("extraSeries(布林/MA)撐開的非法端點:刻度仍全合法且不落到域外", () => {
+    const g = buildCandleGeometry(
+      [bar("d1", 100_000, 110_000, 95_000, 105_000), bar("d2", 105_000, 112_000, 98_000, 108_000)],
+      size,
+      [[92_137, 113_881]], // movingAverage 的 Math.floor 產物,非合法檔位
+    );
+    expect(g.yTicks.length).toBeGreaterThan(0);
+    for (const t of g.yTicks) {
+      expect(snapNearest(t.priceMilli)).toBe(t.priceMilli);
+      expect(t.priceMilli).toBeGreaterThanOrEqual(92_137);
+      expect(t.priceMilli).toBeLessThanOrEqual(113_881);
+    }
   });
 });
