@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildLadder,
+  fmtTickPrice,
+  snapNearest,
   snapDown,
   snapUp,
   stepDown,
@@ -129,5 +131,47 @@ describe("buildLadder(固定界錨定)", () => {
       book: null,
     });
     expect(rows.every((r) => r.bidQty === 0 && r.askQty === 0)).toBe(true);
+  });
+});
+
+describe("snapNearest(round3 SC-3/SC-10)", () => {
+  it("取最近合法檔位,不是一律向下", () => {
+    // 100-500 元帶 tick 0.5 元(500 毫元):102.4 → 102.5(向上較近)
+    expect(snapNearest(102_400)).toBe(102_500);
+    expect(snapNearest(102_100)).toBe(102_000); // 向下較近
+    // >=1000 元帶 tick 5 元:1003 → 1005;1002 → 1000
+    expect(snapNearest(1_003_000)).toBe(1_005_000);
+    expect(snapNearest(1_002_000)).toBe(1_000_000);
+  });
+
+  it("已在合法檔位上的值原樣回傳", () => {
+    expect(snapNearest(102_500)).toBe(102_500);
+    expect(snapNearest(1_000_000)).toBe(1_000_000);
+    expect(snapNearest(9_990)).toBe(9_990); // <10 元 tick 0.01
+  });
+
+  it("結果恆為合法檔位(冪等)", () => {
+    for (const p of [7_777, 12_345, 63_210, 234_567, 654_321, 2_547_320]) {
+      const s = snapNearest(p);
+      expect(snapNearest(s)).toBe(s);
+    }
+  });
+});
+
+describe("fmtTickPrice(round3 SC-3/SC-10)", () => {
+  it("依 tick 級距決定小數位", () => {
+    expect(fmtTickPrice(1_003_000)).toBe("1005"); // >=1000 元:0 位
+    expect(fmtTickPrice(654_000)).toBe("654"); // 500-1000 元 tick 1 元:0 位
+    expect(fmtTickPrice(102_400)).toBe("102.5"); // 100-500 元 tick 0.5:1 位
+    expect(fmtTickPrice(63_210)).toBe("63.2"); // 50-100 元 tick 0.1:1 位
+    expect(fmtTickPrice(12_340)).toBe("12.35"); // 10-50 元 tick 0.05:2 位
+    expect(fmtTickPrice(7_777)).toBe("7.78"); // <10 元 tick 0.01:2 位
+  });
+
+  it("不吐出該價位帶到不了的數字", () => {
+    // 1000 元的股票不該出現 1003;100 元的不該出現 102.4(user 項 10 原話)
+    expect(fmtTickPrice(1_003_000)).not.toContain(".");
+    expect(Number(fmtTickPrice(1_003_000)) % 5).toBe(0);
+    expect(fmtTickPrice(102_400)).not.toBe("102.4");
   });
 });
