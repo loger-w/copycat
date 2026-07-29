@@ -358,17 +358,16 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
     const rect = el.getBoundingClientRect();
     const scale = rect.width > 0 ? DIMS.width / rect.width : 1;
     const startX = e.clientX;
-    let startVp: Viewport | null = null;
-    setViewport((v) => {
-      startVp = v;
-      return v;
-    });
+    // 起始窗口直接取 closure 的 viewport —— 這個 handler 來自最近一次 render,值即為當下。
+    // 不要用 `setViewport(v => { startVp = v; return v; })` 的 side effect 去讀:React 不保證
+    // updater 同步執行(只是常常如此),讀到 null 就得 fallback,等於多一條沒必要的路徑。
+    const startVp = viewport;
+    const slot = DIMS.width / Math.max(1, startVp.count);
     const move = (ev: MouseEvent): void => {
-      const slot = DIMS.width / Math.max(1, startVp?.count ?? viewport.count);
-      // 往右拖 = 看更早的資料 → start 往左
+      // 往右拖 = 看更早的資料 → start 往左。以「拖曳起點」為基準算絕對位移,
+      // 不是逐次累加 —— 累加會因為 clamp 而在端點附近漂移。
       const deltaBars = -Math.round(((ev.clientX - startX) * scale) / slot);
-      const base = startVp ?? viewport;
-      setViewport(panBy(base, total, deltaBars));
+      setViewport(panBy(startVp, total, deltaBars));
       setHover(null); // 拖曳中不更新十字線,避免抖動
     };
     const up = (): void => {
