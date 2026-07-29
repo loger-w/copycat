@@ -79,9 +79,17 @@
 ## 2026-07-29(trade-layout-rework 順手清單)
 
 - [ ] `stock-ladder-open` localStorage key 已停用(閃電梯摺疊機制隨右欄 tab 取代):舊值殘留無害,未做清除 migration;若之後做 key 收斂(見 2026-07-28 條)一併清掉
-- [ ] `/api/stock/bars` 的真實環境驗證待補:本輪出貨時 8721 已被舊版 server 佔用且盤中(2026-07-29 11:57),不自行重啟搶 TC4 推播。重啟 server 後要驗:(a) `tf=D` 回應 `bars.length` 落在 100–120(SC-7);(b) DK 的 `Open`/`Volume` 欄位名(CLAUDE.md §8 只實證 H/L/C,現為防禦解析 + 略過計數 log);(c) 分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10);(d) 一次當日段耗時 >5s 就回頭改設計(change-spec §7)
+- [x] ~~`/api/stock/bars` 的真實環境驗證待補~~ **(a)(b)(d) 已於 2026-07-29 18:00 盤後驗畢**(mod/stock-ui-fixes;重啟 server 後實打 2317):(a) `tf=D` → **116 根**,落在 100–120 ✅;(b) **DK 的 `Open`/`Volume` 欄位名假定成立**,`o=240000` / `v=81973` 皆真值且 `v` 與畫面表頭總量一致,server log 無「DK rows 解析略過」warning ✅;(d) 當日段耗時 `tf=D` 1.1s / `tf=1&days=5` 2.1s(810 根 / 3 交易日),遠低於 5s 門檻 ✅
+  - [ ] **(c) 仍待盤中驗**:分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10)—— 需交易時段,盤後當日段不會再前進
 - [ ] `BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除:watchlist 上限 30 檔 × 30 日曆日量級可接受,若之後放寬 days 上限或改多帳號再加 LRU
 - [ ] 🔴 **既有 bug(本輪 real-env 截圖發現,非本輪改出來)**:`copycat/live/aggregate.py:21 _SPOT_PREFIX = "TC.F."` 是整棵期貨樹前綴,`route()` 把**任何** `TC.F.*` tick 當台指期寫進 `spot_millipts`。個股頁選一檔有個股期的股票(如 2317→DHF `TC.F.TWF.DHF.HOT`)後,IndexBar 台指顯示成該個股期價(實測 2026-07-29 盤中:台指顯示 232.5)。ZMQ SUB 訂 `""` 收全部推播,TXO runtime 的 listener 也會收到個股引擎訂的個股期 tick。**影響不只 IndexBar**:`aggregate.py:162-163 spot_pnl` 同源 → TXO 綜合損益的現貨損益點位一併錯。修法要一併決定 `route()` 與 `:102` 對個股期該算 foreign 還是丟棄 → 開 /bug 走紅測試先行
 - [ ] K 線 endpoint 未做 inflight dedup(專案 `_run_once` 慣例):同 code 併發請求會各自打一輪 TC4。單人本機用量下未觀察到問題,若之後多分頁/多 client 再補
 - [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**(當日段恆空 + don't-cache-empty → 每次真打 TC4,`_collect_history` 首頁 poll deadline ≈ 30s)。要擋需要交易日曆;或改由後端對「當日段回空」做短負向快取(需與 TC4 連線失敗區分)
 - [ ] `_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s。當日段這種高頻小查詢可考慮獨立較短 deadline(改動共用路徑,overlay 也吃這條,要一起評估)
+
+## 2026-07-29(stock-ui-fixes 順手清單)
+
+- [ ] 🔴 **server 版本無可視性 —— 本輪 item 2 的真正代價**:「K 線沒有資料」的根因是 :8721 跑的是**舊版 build**(`openapi.json` 根本沒有 `/api/stock/bars` 這條 route),但前端與人都無從辨識執行中的 server 是哪一版。已做的緩解只是讓失敗態顯示錯誤碼(SC-3)。真正的修法候選:啟動 banner 印 git sha / `/api/health` 回 sha + 啟動時間 / 前端在 console 或狀態列比對。
+- [ ] 自選清單「全部」群組顯示「尚無自選,輸入股號新增」但主檔 2317 有完整資料(截圖 `.claude/mod/stock-ui-fixes/` 的 stock-before.png 可見)。watchlist v2 groups 的既有行為,**非 stock-ui-fixes 範圍**,未查根因。
+- [ ] 五檔垂直版式的高度預算餘裕很薄:1440×800 江波圖模式下,下半列實測 226px vs `min-h-56` 地板 224px,**只剩 2px**。字級縮放或圖表高度再長一點就會頂到地板讓 `<main>` 出現捲軸(這是設計好的退化,不是壞掉)。若之後改動圖表高度或五檔列高,重跑一次 SC-6 的兩尺寸量測。
+- [ ] 盤後重啟 server 後五檔 / 閃電梯恆空(TC4 REALTIME 五檔盤後無推播;tick 明細與江波圖走 TICKS 回補所以有資料)。CLAUDE.md §8 記載「盤後 fresh subscribe 會回當日收盤 snapshot(延遲分鐘級)」—— 本次實測 1.5 小時後 `book.bids`/`book.asks` 仍為空,該記載可能只適用成交 tick 不含五檔,值得再確認後修正文件。
