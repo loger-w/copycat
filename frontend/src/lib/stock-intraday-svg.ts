@@ -115,9 +115,15 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   }
   // 繪圖區高度(扣掉底部時間帶與上下留邊);至少 1 避免除以零
   const plotH = Math.max(1, size.height - X_LABEL_H - PAD_Y * 2);
-  const ySpan = yTop - yBottom || 1;
-  const toY = (p: number): number => PAD_Y + ((yTop - p) / ySpan) * plotH;
+  // 退化域(upper === lower)必須把 toY 也特判成常數,不能只靠 `|| 1` 擋除以零 ——
+  // 那只讓分母合法,toY 仍是無界線性函數:域寬 1 毫元時差 10 毫元就算出 10×plotH 的座標,
+  // 直接飛出畫布數百 px;而 priceAtY 有 clamp 會收斂成常數,兩者就不再互逆。
+  const ySpan = yTop - yBottom;
+  const flat = ySpan <= 0;
+  const toY = (p: number): number =>
+    flat ? PAD_Y + plotH / 2 : PAD_Y + ((yTop - p) / ySpan) * plotH;
   const priceAtY = (y: number): number => {
+    if (flat) return yTop;
     const raw = yTop - ((y - PAD_Y) / plotH) * ySpan;
     return Math.min(yTop, Math.max(yBottom, Math.round(raw)));
   };
@@ -157,6 +163,10 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     for (const pct of TICK_PCTS) {
       const p =
         pct === 10 ? upper : pct === -10 ? lower : pct === 0 ? ref : snapDown(Math.round(ref * (1 + pct / 100)));
+      // 域外的中間刻度直接跳過:±10% 取的是 upper/lower 原值,±2/4/6/8% 卻是拿 ref 獨立
+      // 算的,兩者沒互相校驗。漲跌幅不是 ±10% 的商品(槓桿型 ETF ±20%,或任何比 ±10% 窄的)
+      // 會讓公式算出的刻度落在 [lower, upper] 之外 → toY 變負、刻度視覺次序反轉。
+      if (p < yBottom || p > yTop) continue;
       if (seen.has(p)) continue;
       seen.add(p);
       yTicks.push({ y: toY(p), priceMilli: p, pct: pctOf(p) });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampCount,
   clampViewport,
   initialViewport,
   MAX_VISIBLE,
@@ -9,6 +10,23 @@ import {
   panBy,
   zoomAt,
 } from "@/lib/candle-viewport";
+
+// 🔴 M4:clampCount 是 exported 的公開函式,自述「不超過資料量」卻在 total=0 時回 1。
+// 現有三個內部呼叫端都先擋掉 total<=0,但契約要由函式自己滿足,不能只靠呼叫端 guard。
+describe("clampCount", () => {
+  it("total = 0 → 回 0(不靠呼叫端 guard 撐契約)", () => {
+    expect(clampCount(5, 0)).toBe(0);
+    expect(clampCount(0, 0)).toBe(0);
+  });
+
+  it("回傳值恆滿足 c <= total", () => {
+    for (const total of [0, 1, 3, 19, 20, 100, 5000]) {
+      for (const want of [0, 1, 5, 240, 9999]) {
+        expect(clampCount(want, total)).toBeLessThanOrEqual(total);
+      }
+    }
+  });
+});
 
 describe("clampViewport", () => {
   it("count 上限 = min(total, MAX_VISIBLE)", () => {

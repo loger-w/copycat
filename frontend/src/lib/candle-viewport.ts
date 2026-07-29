@@ -16,6 +16,9 @@ export const MAX_VISIBLE = 700;
 /** 夾制次序寫死:先 min(不超過資料量與上限)後條件式 max(資料本來就不足 20 根 → 不強拉)。
  *  次序寫反會得到 count > total 與負的 start,而 2–8 根正是既有元件測試的常態。 */
 export function clampCount(count: number, total: number): number {
+  // 契約由函式自己滿足(c <= total),不靠呼叫端的 total<=0 guard 撐著 ——
+  // 這是 exported 函式,繞過 clampViewport/zoomAt/panBy 直接呼叫也要對
+  if (total <= 0) return 0;
   let c = Math.max(1, Math.min(count, total, MAX_VISIBLE));
   if (total >= MIN_BARS) c = Math.max(c, MIN_BARS);
   return c;

@@ -119,6 +119,48 @@ describe("buildIntradayGeometry", () => {
   });
 
   // 低價股 tick 粗 → 相鄰 pct snap 到同價;去重後少於 11 點屬正常(SC-4.2)
+  // 🔴 M2:±10% 用 upper/lower 原值,±2/4/6/8% 卻是拿 ref 獨立算的 —— 兩者沒互相校驗。
+  // 漲跌幅不是 ±10% 的商品(槓桿 ETF ±20%、或任何比 ±10% 窄的),公式算出的中間刻度會
+  // 落到 [lower, upper] 之外 → toY 變負、刻度視覺次序反轉。
+  it("yTicks:漲跌幅非 ±10% 的商品,所有刻度仍落在 [lower, upper] 內且嚴格遞減", () => {
+    for (const [lower, upper] of [
+      [4_850, 5_150], // ±3%(比 ±10% 窄)
+      [4_000, 6_000], // ±20%(槓桿型 ETF)
+    ] as [number, number][]) {
+      const g = buildIntradayGeometry(
+        { minutes: minutes([[540, { c: 5_000, v: 1 }]]), meta: { ...META, ref: 5_000, upper, lower } },
+        { width: 270, height: 100 },
+      );
+      for (const t of g.yTicks) {
+        expect(t.priceMilli).toBeGreaterThanOrEqual(lower);
+        expect(t.priceMilli).toBeLessThanOrEqual(upper);
+      }
+      for (let i = 1; i < g.yTicks.length; i += 1) {
+        expect(g.yTicks[i]!.priceMilli).toBeLessThan(g.yTicks[i - 1]!.priceMilli);
+        expect(g.yTicks[i]!.y).toBeGreaterThan(g.yTicks[i - 1]!.y);
+      }
+      // 端點恆為漲跌停原值
+      expect(g.yTicks[0]!.priceMilli).toBe(upper);
+      expect(g.yTicks[g.yTicks.length - 1]!.priceMilli).toBe(lower);
+    }
+  });
+
+  // 🔴 M1:yTop === yBottom 時 `ySpan || 1` 只擋除以零,toY 仍是無界線性函數 ——
+  // 只差 10 毫元就會算出跑出畫布數百 px 的座標,而 priceAtY 靠 clamp 收斂成常數,兩者不再互逆。
+  it("退化域(upper === lower)時 toY 為常數且與 priceAtY 互逆,座標不飛出畫布", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 5_000, v: 1 }]]), meta: { ...META, ref: 5_000, upper: 5_000, lower: 5_000 } },
+      { width: 270, height: 70 },
+    );
+    for (const p of [4_990, 5_000, 5_010]) {
+      const y = g.toY(p);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(70);
+    }
+    expect(g.toY(4_990)).toBe(g.toY(5_010)); // 常數函數
+    expect(g.priceAtY(g.toY(5_000))).toBe(5_000);
+  });
+
   it("yTicks:低價股相鄰檔位 snap 到同價時去重,不產生重複 priceMilli", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 10_000, v: 1 }]]), meta: { ...META, ref: 10_000, upper: 11_000, lower: 9_000 } },
