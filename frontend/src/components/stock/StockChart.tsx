@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+import { useChartToggles } from "@/hooks/useChartToggles";
 import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
 import { aggregateBars } from "@/lib/candle";
 import type { StockAccum } from "@/lib/stock-accum";
@@ -11,11 +12,11 @@ import { cn } from "@/lib/utils";
  *  江波圖走既有即時 accum;K 線走 /api/stock/bars。2–10 分 K 全由 1 分前端聚合(D-8)。 */
 
 const MODE_KEY = "copycat-chart-mode";
-const DAILY_MAX_BARS = 120;
-// 分 K 可視根數上限。舊 MINUTE_MAX_BARS 的註解已載明:1400px viewBox 下超過 ~700 根,
-// 蠟燭寬度會被壓到 <2px 只剩色塊並拖慢 hover。往前鈕移除、改一次載滿 30 日之後,
-// 這條保護改由此常數(下一步接上 viewport 縮放時移交 candle-viewport 的 MAX_VISIBLE)。
-const MINUTE_MAX_BARS = 700;
+// 初始可視根數(之後由滾輪縮放/拖曳平移控制)。分 K 240 ≈ 一個交易日的 1 分 K 全長 ——
+// 切進去先看今天,再往左縮放/平移看更早。可視上限的 ≥2px 保護移交
+// candle-viewport 的 MAX_VISIBLE(700 = viewBox 寬 1400 ÷ 2px)。
+const DAILY_INIT_BARS = 120;
+const MINUTE_INIT_BARS = 240;
 
 const MODE_LABELS: [ChartMode, string][] = [
   ["intraday", "江波圖"],
@@ -33,6 +34,8 @@ function initialMode(): ChartMode {
 export function StockChart({ accum, code }: { accum: StockAccum; code: string }) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS);
+  // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
+  const { toggles, set } = useChartToggles();
 
   function selectMode(next: ChartMode): void {
     setMode(next);
@@ -79,10 +82,14 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
           <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
         </div>
       ) : (
+        // key:換股或換模式時強制重掛,viewport 回到初始式。換模式會讓 total 由
+        // ~5,900 變 ~590,沿用舊 index 沒有意義(onTotalChange 只處理同序列的延伸)。
         <CandleChart
+          key={`${code}-${mode}`}
           bars={bars}
-          maxBars={isMinute ? MINUTE_MAX_BARS : DAILY_MAX_BARS}
-          showMa
+          initBars={isMinute ? MINUTE_INIT_BARS : DAILY_INIT_BARS}
+          showBb={toggles.bb}
+          onToggleBb={(v) => set("bb", v)}
         />
       )}
     </div>
