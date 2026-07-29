@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesPage, futCloseEstimate } from "@/components/futures/FuturesPage";
 import type { CapitalPosition, FuturesProductState } from "@/types";
@@ -36,51 +36,17 @@ const TMF_STATE: FuturesProductState = {
   resolved_contract: null,
 };
 
-const FUT_STATE = {
-  seq: 1,
-  products: { TXF: TXF_STATE, MXF: MXF_STATE, TMF: TMF_STATE },
+const STATES: Record<string, FuturesProductState> = {
+  TXF: TXF_STATE,
+  MXF: MXF_STATE,
+  TMF: TMF_STATE,
 };
 
-class FakeWS {
-  onopen: (() => void) | null = null;
-  onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-
-  constructor(public url: string) {}
-
-  close(): void {}
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-type Route = (init?: RequestInit) => Response | Promise<Response>;
-
-function mockFetch(routes: Record<string, Route>) {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const url =
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    for (const [prefix, make] of Object.entries(routes)) {
-      if (url.includes(prefix)) return make(init ?? undefined);
-    }
-    throw new Error(`unexpected fetch: ${url}`);
-  });
-}
-
-function baseRoutes(overrides: Record<string, Route> = {}): Record<string, Route> {
-  return {
-    "/api/futures/state": () => json(FUT_STATE),
-    "/api/capital/orders": () => json({ orders: [] }),
-    "/api/capital/positions": () => json({ positions: [] }),
-    "/api/capital/status": () => json({ status: "ok", env: "test", order_enabled: true }),
-    ...overrides,
-  };
-}
+const PRODUCTS = [
+  ["TXF", "大台"],
+  ["MXF", "小台"],
+  ["TMF", "微台"],
+] as const;
 
 function futPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
   return {
@@ -97,29 +63,25 @@ function futPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition 
   };
 }
 
-let qc: QueryClient;
-
-function page() {
+/** product 已上提到 App(D-3)→ 這裡用受控 wrapper 模擬父層持有 state。 */
+function Harness({ initial = "TXF" }: { initial?: string }) {
+  const [product, setProduct] = useState(initial);
+  const state = STATES[product] ?? null;
   return (
-    <QueryClientProvider client={qc}>
-      <FuturesPage />
-    </QueryClientProvider>
+    <FuturesPage
+      products={PRODUCTS}
+      product={product}
+      onProduct={setProduct}
+      state={state}
+      resolvedYm={state?.resolved_contract ?? null}
+      wsStatus="open"
+    />
   );
 }
-
-beforeEach(() => {
-  window.localStorage.clear();
-  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
-  Element.prototype.scrollIntoView = vi.fn();
-  qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-});
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 describe("futCloseEstimate 平倉閘用估價(design amendment:限價貼漲跌停)", () => {
@@ -140,57 +102,52 @@ describe("futCloseEstimate 平倉閘用估價(design amendment:限價貼漲跌�
   });
 
   it("行情缺漲跌停 → null", () => {
-    expect(
-      futCloseEstimate(futPosition(), "TXFI6", { ...TXF_STATE, lower: null }),
-    ).toBe(null);
+    expect(futCloseEstimate(futPosition(), "TXFI6", { ...TXF_STATE, lower: null })).toBe(null);
   });
 });
 
 describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
-  it("預設大台:現價/漲跌/漲跌%/合約顯示", async () => {
-    mockFetch(baseRoutes());
-    render(page());
-    // 「23000」同時出現在梯的價格欄 → 收斂 scope 到頂部資訊列(header)
-    const header = () => within(screen.getByRole("banner"));
-    await waitFor(() => expect(header().getByText("23000")).toBeTruthy());
-    expect(header().getByText("+200")).toBeTruthy(); // 漲跌(點)
-    expect(header().getByText("+0.88%")).toBeTruthy();
-    expect(header().getByText("TXF 2026/09")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "大台" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+  it("預設大台:現價/漲跌/漲跌%/合約顯示", () => {
+    render(<Harness />);
+    // 「23000」同時出現在五檔中央 → 收斂 scope 到頂部資訊列(header)
+    const header = within(screen.getByRole("banner"));
+    expect(header.getByText("23000")).toBeTruthy();
+    expect(header.getByText("+200")).toBeTruthy(); // 漲跌(點)
+    expect(header.getByText("+0.88%")).toBeTruthy();
+    expect(header.getByText("TXF 2026/09")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "大台" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("切小台:顯示 MXF 行情與合約;localStorage 記憶商品", async () => {
-    mockFetch(baseRoutes());
-    render(page());
+  it("切小台:回呼上拋並顯示 MXF 行情與合約", () => {
+    render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "小台" }));
-    const header = () => within(screen.getByRole("banner"));
-    await waitFor(() => expect(header().getByText("MXF 2026/09")).toBeTruthy());
-    expect(header().getByText("23010")).toBeTruthy();
-    expect(window.localStorage.getItem("copycat-fut-product")).toBe("MXF");
+    const header = within(screen.getByRole("banner"));
+    expect(header.getByText("MXF 2026/09")).toBeTruthy();
+    expect(header.getByText("23010")).toBeTruthy();
   });
 
-  it("localStorage 既值 TMF → 初始微台;resolved null 顯示「合約解析中」", async () => {
-    window.localStorage.setItem("copycat-fut-product", "TMF");
-    mockFetch(baseRoutes());
-    render(page());
-    expect(screen.getByRole("button", { name: "微台" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    await waitFor(() => expect(screen.getByText("合約解析中")).toBeTruthy());
+  it("初始微台;resolved null 顯示「合約解析中」", () => {
+    render(<Harness initial="TMF" />);
+    expect(screen.getByRole("button", { name: "微台" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("合約解析中")).toBeTruthy();
+  });
+});
+
+// 🔴-5:閃電梯 / 委託 / 部位已移到常駐右欄。
+// 「部位平倉:多單估價貼跌停,確認彈窗顯示閘用估價」已逐條搬入 RightRail.test.tsx。
+describe("FuturesPage 中間主區(SC-5)", () => {
+  it("渲染水平五檔(與個股共用 DepthBar)", () => {
+    render(<Harness />);
+    expect(screen.getByRole("button", { name: "買1 22999" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "賣1 23001" })).toBeTruthy();
+    expect(screen.getByText(/委買 45/)).toBeTruthy();
+    expect(screen.getByText(/委賣 88/)).toBeTruthy();
   });
 
-  it("部位平倉:多單估價貼跌停,確認彈窗顯示閘用估價", async () => {
-    mockFetch(
-      baseRoutes({
-        "/api/capital/positions": () => json({ positions: [futPosition({ qty: 2 })] }),
-      }),
-    );
-    render(page());
-    const btn = await screen.findByRole("button", { name: "平倉" });
-    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
-    fireEvent.click(btn);
-    expect(screen.getByText("20520")).toBeTruthy();
+  it("不再渲染閃電梯 / 委託 / 部位(已移到右欄)", () => {
+    render(<Harness />);
+    expect(screen.queryByRole("button", { name: "武裝" })).toBeNull();
+    expect(screen.queryByText("委託")).toBeNull();
+    expect(screen.queryByText("部位")).toBeNull();
   });
 });

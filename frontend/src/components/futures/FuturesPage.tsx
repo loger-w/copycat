@@ -1,61 +1,47 @@
-import { useEffect, useState } from "react";
-
 import { ConnectionBadge } from "@/components/ConnectionBadge";
-import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
-import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
-import { FuturesLadder } from "@/components/futures/FuturesLadder";
-import { useFuturesStream } from "@/hooks/useFuturesStream";
-import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
+import { DepthBar } from "@/components/quote/DepthBar";
+import type { WsStatus } from "@/hooks/useFuturesStream";
 import { cn } from "@/lib/utils";
+import type { FuturesProductState } from "@/types";
+
+/** 期貨頁中間主區(SC-5):商品切換 → 報價列 → 與個股同款的水平五檔。
+ *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);商品與資料流由 App 持有(D-3)。
+ *  江波圖 / 明細不做 —— 後端 futures engine 無分鐘聚合、也不保留 tick(D5 拍板)。 */
 
 // 本體已搬到 lib/futures-ladder.ts(右欄需要它,不能經 lazy 頁面 import);
 // 既有測試 import 路徑不破 → 保留 re-export。
-export { futCloseEstimate };
-
-const PRODUCTS = [
-  ["TXF", "大台"],
-  ["MXF", "小台"],
-  ["TMF", "微台"],
-] as const;
-type Product = (typeof PRODUCTS)[number][0];
-const PRODUCT_KEY = "copycat-fut-product";
-
-function initialProduct(): Product {
-  const saved = window.localStorage.getItem(PRODUCT_KEY);
-  return saved === "MXF" || saved === "TMF" ? saved : "TXF";
-}
+export { futCloseEstimate } from "@/lib/futures-ladder";
 
 function fmt(milli: number): string {
   const v = milli / 1000;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
-export function FuturesPage() {
-  const [product, setProduct] = useState<Product>(initialProduct);
-  const { state, wsStatus } = useFuturesStream();
+interface Props {
+  products: readonly (readonly [string, string])[];
+  product: string;
+  onProduct: (product: string) => void;
+  state: FuturesProductState | null;
+  resolvedYm: string | null;
+  wsStatus: WsStatus;
+}
 
-  useEffect(() => {
-    window.localStorage.setItem(PRODUCT_KEY, product);
-  }, [product]);
-
-  const prod = state?.products[product] ?? null;
-  const resolvedYm = prod?.resolved_contract ?? null;
-  const contract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
-  const diff = prod?.p != null && prod.ref != null ? prod.p - prod.ref : null;
-  const chg = diff !== null && prod?.ref ? (diff / prod.ref) * 100 : null;
+export function FuturesPage({ products, product, onProduct, state, resolvedYm, wsStatus }: Props) {
+  const diff = state?.p != null && state.ref != null ? state.p - state.ref : null;
+  const chg = diff !== null && state?.ref ? (diff / state.ref) * 100 : null;
   const tone =
     diff === null ? "text-ink" : diff > 0 ? "text-bull" : diff < 0 ? "text-bear" : "text-ink";
 
   return (
-    <div className="flex flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
       <header className="flex flex-wrap items-center gap-3 border-b border-line pb-3">
         <div className="flex overflow-hidden rounded border border-line" role="group" aria-label="商品切換">
-          {PRODUCTS.map(([id, label]) => (
+          {products.map(([id, label]) => (
             <button
               key={id}
               type="button"
               aria-pressed={product === id}
-              onClick={() => setProduct(id)}
+              onClick={() => onProduct(id)}
               className={cn(
                 "px-3 py-1 text-sm",
                 product === id ? "bg-surface text-ink" : "text-ink-dim hover:text-ink",
@@ -66,11 +52,11 @@ export function FuturesPage() {
           ))}
         </div>
         <h2 className="text-lg font-bold text-ink">
-          {prod?.name ?? ""} <span className="font-mono text-sm text-ink-muted">{product}</span>
+          {state?.name ?? ""} <span className="font-mono text-sm text-ink-muted">{product}</span>
         </h2>
-        {prod?.p != null ? (
+        {state?.p != null ? (
           <span className={cn("flex items-baseline gap-1.5 font-mono text-lg", tone)}>
-            <span>{fmt(prod.p)}</span>
+            <span>{fmt(state.p)}</span>
             {diff !== null ? (
               <span className="text-xs">{`${diff > 0 ? "+" : ""}${fmt(diff)}`}</span>
             ) : null}
@@ -88,23 +74,15 @@ export function FuturesPage() {
           <ConnectionBadge status="live" wsStatus={wsStatus} />
         </span>
       </header>
-      <div className="flex flex-wrap items-start gap-4">
-        <FuturesLadder product={product} state={prod} />
-        {/* 群益委託/部位(market=fut;平倉估價 = 漲跌停貼價,futCloseEstimate) */}
-        <div className="flex min-w-64 flex-1 flex-col gap-4">
-          <section>
-            <h3 className="mb-1 text-sm text-ink-muted">委託</h3>
-            <CapitalOrdersList market="fut" />
-          </section>
-          <section>
-            <h3 className="mb-1 text-sm text-ink-muted">部位</h3>
-            <CapitalPositionsList
-              market="fut"
-              closePriceOf={(pos) => futCloseEstimate(pos, contract, prod)}
-            />
-          </section>
-        </div>
-      </div>
+      {/* 水平五檔(與個股共用 DepthBar;SC-5) */}
+      <DepthBar
+        bids={state?.bids ?? []}
+        asks={state?.asks ?? []}
+        last={state?.p ?? null}
+        ref_={state?.ref ?? null}
+        upper={state?.upper ?? null}
+        lower={state?.lower ?? null}
+      />
     </div>
   );
 }

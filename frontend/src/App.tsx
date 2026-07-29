@@ -6,10 +6,14 @@ import { MetricsBar } from "@/components/MetricsBar";
 import { OrderPanel } from "@/components/OrderPanel";
 import { PnlChart } from "@/components/PnlChart";
 import { QuoteTable } from "@/components/QuoteTable";
+import { RightRail, type RailContext } from "@/components/rail/RightRail";
 import { SeriesSelect } from "@/components/SeriesSelect";
 import { useCapitalStream } from "@/hooks/useCapital";
+import { useFuturesStream } from "@/hooks/useFuturesStream";
 import { useIndexStream } from "@/hooks/useIndexStream";
+import { useStockStream } from "@/hooks/useStockStream";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
+import { futExchangeContract } from "@/lib/futures-ladder";
 import { cn } from "@/lib/utils";
 
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
@@ -18,34 +22,87 @@ const IndexPage = lazy(() => import("@/components/index/IndexPage"));
 
 type Tab = "txo" | "stock" | "futures" | "index";
 const TAB_KEY = "copycat-tab";
+const MAIN_CODE_KEY = "stock-main-code";
+const PRODUCT_KEY = "copycat-fut-product";
+
+const FUT_PRODUCTS = [
+  ["TXF", "大台"],
+  ["MXF", "小台"],
+  ["TMF", "微台"],
+] as const;
+export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
 
 function initialTab(): Tab {
   const saved = window.localStorage.getItem(TAB_KEY);
   return saved === "stock" || saved === "futures" || saved === "index" ? saved : "txo";
 }
 
+function initialProduct(): FutProduct {
+  const saved = window.localStorage.getItem(PRODUCT_KEY);
+  return saved === "MXF" || saved === "TMF" ? saved : "TXF";
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
-  // 首次進入才 mount(lazy + WS 延後建立);之後 hidden 保留 DOM(§3 慣例)
+  // 首次進入才 mount(lazy:重元件延後載入);之後 hidden 保留 DOM(§3 慣例)。
+  // 注意:資料流已上提到本層(D-3),visited 只管元件載入時機,不再兼管 WS 建立。
   const [visited, setVisited] = useState<Record<Tab, boolean>>({
     txo: true,
     stock: tab === "stock",
     futures: tab === "futures",
     index: tab === "index",
   });
+  // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
+  const [stockCode, setStockCode] = useState<string | null>(
+    () => window.localStorage.getItem(MAIN_CODE_KEY) || null,
+  );
+  const [product, setProduct] = useState<FutProduct>(initialProduct);
+
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
   const { twse, otc, txf } = useIndexStream();
   // capital 下單 WS 常駐 App 層:唯一連線 + 唯一 invalidate 接線(review B2/B4)
   useCapitalStream();
+  // D-16:沒訪問過個股 tab 時傳 null —— /api/stock/state/{code} 內含 set_main,
+  // 會觸發訂閱池變更 + 當日 tick 全量回補,不該只因開了 TXO 頁就發生
+  const stockStream = useStockStream(tab === "stock" || visited.stock ? stockCode : null);
+  const futuresStream = useFuturesStream();
 
   useEffect(() => {
     window.localStorage.setItem(TAB_KEY, tab);
     setVisited((prev) => (prev[tab] ? prev : { ...prev, [tab]: true }));
   }, [tab]);
 
+  useEffect(() => {
+    if (stockCode) window.localStorage.setItem(MAIN_CODE_KEY, stockCode);
+  }, [stockCode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(PRODUCT_KEY, product);
+  }, [product]);
+
+  const accum = stockStream.accum;
+  const futProd = futuresStream.state?.products[product] ?? null;
+  const resolvedYm = futProd?.resolved_contract ?? null;
+  const futContract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
+
+  // 右欄內容跟隨當前 tab 標的,版面位置固定(D2)
+  const railCtx: RailContext =
+    tab === "stock"
+      ? {
+          kind: "stock",
+          code: stockCode,
+          name: accum?.meta?.name ?? "",
+          book: accum?.book ?? null,
+          last: accum?.last ?? null,
+          meta: accum?.meta ?? null,
+        }
+      : tab === "futures"
+        ? { kind: "futures", product, state: futProd, contract: futContract }
+        : { kind: "none" };
+
   return (
-    <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 px-4 py-5">
-      <nav className="flex items-baseline gap-1 border-b border-line" role="tablist">
+    <div className="flex h-full w-full flex-col gap-3 px-4 py-4">
+      <nav className="flex items-baseline gap-1 border-b border-line" role="tablist" aria-label="主要分頁">
         {(
           [
             ["txo", "TXO 綜合損益"],
@@ -70,36 +127,49 @@ export default function App() {
         ))}
         <IndexBar twse={twse} otc={otc} txf={txf} />
       </nav>
-      <div hidden={tab !== "txo"} className={tab === "txo" ? "flex flex-1 flex-col gap-4" : ""}>
-        <TxoPage />
+      {/* 主區 + 常駐右欄(SC-3:切 tab 時右欄位置 / 寬度 / 三顆 tab 都不變) */}
+      <div className="flex min-h-0 min-w-0 flex-1 gap-4">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div hidden={tab !== "txo"} className={tab === "txo" ? "flex min-h-0 flex-1 flex-col gap-4" : ""}>
+            <TxoPage />
+          </div>
+          {visited.stock ? (
+            <div hidden={tab !== "stock"} className={tab === "stock" ? "flex min-h-0 flex-1 flex-col" : ""}>
+              <Suspense
+                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+              >
+                <StockPage code={stockCode} onSelect={setStockCode} stream={stockStream} />
+              </Suspense>
+            </div>
+          ) : null}
+          {visited.futures ? (
+            <div hidden={tab !== "futures"} className={tab === "futures" ? "flex min-h-0 flex-1 flex-col" : ""}>
+              <Suspense
+                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+              >
+                <FuturesPage
+                  products={FUT_PRODUCTS}
+                  product={product}
+                  onProduct={(p) => setProduct(p as FutProduct)}
+                  state={futProd}
+                  resolvedYm={resolvedYm}
+                  wsStatus={futuresStream.wsStatus}
+                />
+              </Suspense>
+            </div>
+          ) : null}
+          {visited.index ? (
+            <div hidden={tab !== "index"} className={tab === "index" ? "flex min-h-0 flex-1 flex-col" : ""}>
+              <Suspense
+                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+              >
+                <IndexPage twse={twse} otc={otc} txf={txf} />
+              </Suspense>
+            </div>
+          ) : null}
+        </div>
+        <RightRail ctx={railCtx} />
       </div>
-      {visited.stock ? (
-        <div hidden={tab !== "stock"} className={tab === "stock" ? "flex flex-1 flex-col" : ""}>
-          <Suspense
-            fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
-          >
-            <StockPage />
-          </Suspense>
-        </div>
-      ) : null}
-      {visited.futures ? (
-        <div hidden={tab !== "futures"} className={tab === "futures" ? "flex flex-1 flex-col" : ""}>
-          <Suspense
-            fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
-          >
-            <FuturesPage />
-          </Suspense>
-        </div>
-      ) : null}
-      {visited.index ? (
-        <div hidden={tab !== "index"} className={tab === "index" ? "flex flex-1 flex-col" : ""}>
-          <Suspense
-            fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
-          >
-            <IndexPage twse={twse} otc={otc} txf={txf} />
-          </Suspense>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -108,7 +178,7 @@ function TxoPage() {
   const { data: snapshot, wsStatus } = useTxoSnapshot();
 
   return (
-    <div className="flex flex-1 flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-wide text-ink">

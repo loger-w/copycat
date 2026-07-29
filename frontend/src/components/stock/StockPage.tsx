@@ -1,40 +1,35 @@
-import { useEffect, useState } from "react";
-
-import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
-import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
 import { OrderBook } from "@/components/stock/OrderBook";
-import { PriceLadder } from "@/components/stock/PriceLadder";
-import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+import { StockChart } from "@/components/stock/StockChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
-import { useStockStream } from "@/hooks/useStockStream";
+import type { StockStreamState } from "@/hooks/useStockStream";
 import { cn } from "@/lib/utils";
 
-const MAIN_CODE_KEY = "stock-main-code";
+/** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
+ *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
 
 function fmt(milli: number): string {
   const v = milli / 1000;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
-export function StockPage() {
-  const [code, setCode] = useState<string | null>(
-    () => window.localStorage.getItem(MAIN_CODE_KEY) || null,
-  );
-  const { accum, watchlist, status, stkfut, wsStatus } = useStockStream(code);
+interface Props {
+  code: string | null;
+  onSelect: (code: string) => void;
+  stream: StockStreamState;
+}
 
-  useEffect(() => {
-    if (code) window.localStorage.setItem(MAIN_CODE_KEY, code);
-  }, [code]);
+export function StockPage({ code, onSelect, stream }: Props) {
+  const { accum, watchlist, status, stkfut, wsStatus } = stream;
 
   const meta = accum?.meta ?? null;
   const last = accum?.last ?? null;
   const chg = last && meta?.ref ? ((last.p - meta.ref) / meta.ref) * 100 : null;
 
   return (
-    <div className="flex flex-1 gap-4">
-      <WatchlistSidebar active={code} onSelect={setCode} quotes={watchlist} />
-      <main className="flex min-w-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 gap-4">
+      <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
         {status.tc4 === "down" || wsStatus === "closed" ? (
           <p className="rounded border border-bear bg-bear/10 px-3 py-1 text-sm text-bear">
             {status.tc4 === "down" ? "達錢 4 連線中斷,恢復後自動回補" : "伺服器連線中斷,重連中…"}
@@ -83,9 +78,10 @@ export function StockPage() {
             </header>
             {accum ? (
               <>
-                <StockIntradayChart accum={accum} />
-                <div className="flex flex-wrap gap-3">
-                  <div className="min-w-56">
+                <StockChart accum={accum} code={code} />
+                {/* 下半:左五檔、右明細(SC-6) */}
+                <div className="flex min-w-0 gap-3">
+                  <div className="min-w-0 flex-[3]">
                     <OrderBook
                       code={code}
                       book={accum.book}
@@ -95,10 +91,9 @@ export function StockPage() {
                       lower={meta?.lower ?? null}
                     />
                   </div>
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-[2]">
                     <TickTape ticks={accum.ticks} />
                   </div>
-                  <PriceLadder code={code} book={accum.book} last={last} meta={meta} />
                 </div>
               </>
             ) : (
@@ -106,22 +101,6 @@ export function StockPage() {
                 <p className="text-sm text-ink-muted">載入中…</p>
               </div>
             )}
-            {/* 群益委託/部位(market=sec;平倉估價 = 主檔最新成交價,useClosePosition 單位為元) */}
-            <div className="flex flex-wrap gap-6 border-t border-line pt-3">
-              <section className="min-w-64 flex-1">
-                <h3 className="mb-1 text-sm text-ink-muted">委託</h3>
-                <CapitalOrdersList market="sec" />
-              </section>
-              <section className="min-w-64 flex-1">
-                <h3 className="mb-1 text-sm text-ink-muted">部位</h3>
-                <CapitalPositionsList
-                  market="sec"
-                  closePriceOf={(pos) =>
-                    pos.stock_no === code && last !== null ? last.p / 1000 : null
-                  }
-                />
-              </section>
-            </div>
           </>
         )}
       </main>
