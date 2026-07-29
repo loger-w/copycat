@@ -17,6 +17,16 @@ export function clampTagX(xSvg: number, boxW: number, width: number): number {
   return clamp(xSvg - boxW / 2, 0, Math.max(0, width - boxW));
 }
 
+/** 兩個水平區間是否重疊(用於「靜態 X 標籤是否被 hover 時間標蓋到」)。
+ *
+ * 為什麼需要:hover 時間標是不透明小框,但它只蓋得住自己那塊寬度。鄰近的靜態 X 標籤
+ * 若中心落在框內、尾巴露在框外,畫面上就會出現半截殘字(實測:江波圖「11:00」被
+ * 「11:01」框蓋掉前半只剩一個 0)。把標籤加寬不是通解 —— 標籤位置是離散的,
+ * 總存在「中心在框內、尾巴在框外」的相對距離。正解是重疊時直接不畫該標籤。 */
+export function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
 /** 螢幕座標 → SVG viewBox 座標。
  *
  * 這條線性映射成立的前提是 svg 的實際高寬比由 viewBox 決定(現況兩張圖都是

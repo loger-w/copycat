@@ -14,7 +14,7 @@ import {
   zoomAt,
   type Viewport,
 } from "@/lib/candle-viewport";
-import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
+import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { snapDown } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
@@ -83,20 +83,16 @@ function seriesLine(
  *  (分 K 可達數百根;對齊 StockIntradayChart 的 ChartStatic 慣例 — review P1-1)。 */
 const ChartStatic = memo(function ChartStatic({
   g,
-  shown,
   ma5Line,
   ma20Line,
   bbUpperLine,
   bbLowerLine,
-  labelStep,
 }: {
   g: CandleGeometry;
-  shown: Bar[];
   ma5Line: { x: number; y: number }[];
   ma20Line: { x: number; y: number }[];
   bbUpperLine: { x: number; y: number }[];
   bbLowerLine: { x: number; y: number }[];
-  labelStep: number;
 }) {
   return (
     <g>
@@ -195,12 +191,36 @@ const ChartStatic = memo(function ChartStatic({
           strokeWidth={1.2}
         />
       ) : null}
-      {/* x 軸標籤 */}
-      {shown.map((b, i) =>
-        i % labelStep === 0 ? (
+    </g>
+  );
+});
+
+/** X 軸時間文字層。**刻意不在 ChartStatic 內**:hover 時間標會蓋住鄰近的靜態標籤,
+ *  只蓋一半會露出殘字(實測:hover 05/18 時「05/19」被蓋掉前半只剩一個 9),
+ *  所以重疊的要直接不畫 —— 那需要 hover 位置。至多 6 個 text 節點,每次 mousemove
+ *  重建的成本可忽略;真正重的蠟燭/量/線層仍在 memo 內(白名單 3)。 */
+function XAxisLabels({
+  g,
+  shown,
+  labelStep,
+  tagSpan,
+}: {
+  g: CandleGeometry;
+  shown: Bar[];
+  labelStep: number;
+  tagSpan: [number, number] | null;
+}) {
+  return (
+    <g>
+      {shown.map((b, i) => {
+        if (i % labelStep !== 0) return null;
+        const cx = g.candles[i]?.cx;
+        if (cx === undefined) return null;
+        if (tagSpan !== null && overlaps(cx - 15, cx + 15, tagSpan[0], tagSpan[1])) return null;
+        return (
           <text
             key={`x-${i}`}
-            x={g.candles[i]!.cx}
+            x={cx}
             y={DIMS.height - 3}
             textAnchor="middle"
             className="fill-ink-dim"
@@ -208,11 +228,11 @@ const ChartStatic = memo(function ChartStatic({
           >
             {shortStamp(b.t)}
           </text>
-        ) : null,
-      )}
+        );
+      })}
     </g>
   );
-});
+}
 
 interface Props {
   bars: Bar[];
@@ -374,6 +394,10 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
     shown.length > 1 && shown[0]!.c > 0
       ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
       : null;
+  const timeTagX =
+    hoverCandle !== undefined ? clampTagX(hoverCandle.cx, TIME_TAG.w, DIMS.width) : null;
+  const timeTagSpan: [number, number] | null =
+    timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
 
   return (
     // select-none:SVG 的 <text>(價位刻度 / 日期標籤)預設可選,在圖上拖曳會整片反白(SC-4)。
@@ -417,13 +441,12 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
         >
           <ChartStatic
             g={g}
-            shown={shown}
             ma5Line={ma5Line}
             ma20Line={ma20Line}
             bbUpperLine={bbUpperLine}
             bbLowerLine={bbLowerLine}
-            labelStep={labelStep}
           />
+          <XAxisLabels g={g} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
           {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
           {hover !== null ? (
             <g pointerEvents="none">

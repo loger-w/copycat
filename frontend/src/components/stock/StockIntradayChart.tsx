@@ -2,7 +2,7 @@ import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 import { useChartToggles } from "@/hooks/useChartToggles";
-import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
+import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { snapDown } from "@/lib/stock-tick";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
@@ -96,13 +96,16 @@ const ChartStatic = memo(function ChartStatic({
         <line x1={0} x2={MAIN.width} y1={g.lowerY} y2={g.lowerY} className="stroke-bear" strokeDasharray="4 3" strokeWidth={0.8} />
       ) : null}
       <line x1={0} x2={MAIN.width} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
-      {X_LABELS.map(({ minute, label }) => (
-        <g key={minute}>
-          <line x1={toX(minute)} x2={toX(minute)} y1={0} y2={MAIN.height - 14} className="stroke-line" strokeWidth={0.4} />
-          <text x={toX(minute) + 2} y={MAIN.height - 3} className="fill-ink-dim" fontSize="0.625rem">
-            {label}
-          </text>
-        </g>
+      {X_LABELS.map(({ minute }) => (
+        <line
+          key={minute}
+          x1={toX(minute)}
+          x2={toX(minute)}
+          y1={0}
+          y2={MAIN.height - X_LABEL_H}
+          className="stroke-line"
+          strokeWidth={0.4}
+        />
       ))}
       {/* Y 軸刻度:左價位、右 %(SC-2) */}
       {g.yTicks.map((t) => (
@@ -194,6 +197,25 @@ const ChartStatic = memo(function ChartStatic({
     </g>
   );
 });
+
+/** X 軸時間文字層。**刻意不在 ChartStatic 內**:hover 時間標會蓋住鄰近的靜態標籤,
+ *  只蓋一半會露出殘字,所以重疊的要直接不畫 —— 那需要 hover 位置。至多 5 個 text 節點,
+ *  每次 mousemove 重建的成本可忽略;真正重的蠟燭/量/線層仍在 memo 內(白名單 3)。 */
+function XAxisLabels({ tagSpan }: { tagSpan: [number, number] | null }) {
+  return (
+    <g>
+      {X_LABELS.map(({ minute, label }) => {
+        const x = toX(minute) + 2;
+        if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
+        return (
+          <text key={minute} x={x} y={MAIN.height - 3} className="fill-ink-dim" fontSize="0.625rem">
+            {label}
+          </text>
+        );
+      })}
+    </g>
+  );
+}
 
 /** 內外盤能量副圖的 bar 層。**必須 memo**:hover 每個 mousemove 都 re-render 父層,
  *  這層最多 270 組 × 2 = 540 個 `<rect>`,不可每次重建(對齊 ChartStatic 的慣例)。
@@ -309,6 +331,9 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
 
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const hoverPct = hoverPrice !== null && ref ? ((hoverPrice - ref) / ref) * 100 : null;
+  const timeTagX = hoverMin !== null ? clampTagX(toX(hoverMin), TIME_TAG.w, MAIN.width) : null;
+  const timeTagSpan: [number, number] | null =
+    timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
 
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -370,6 +395,7 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
           clipAbove={clipAbove}
           clipBelow={clipBelow}
         />
+        <XAxisLabels tagSpan={timeTagSpan} />
         {/* hover 十字 + 軸標籤(SC-7)。
             分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
             垂直線與資料點需要資料,缺就不畫(白名單 2:minuteOf 不 snap 最近)。 */}
@@ -447,12 +473,8 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
               </g>
             ) : null}
             {/* 底部時間標籤 */}
-            {hoverMin !== null ? (
-              <g
-                transform={`translate(${clampTagX(toX(hoverMin), TIME_TAG.w, MAIN.width)}, ${
-                  MAIN.height - TIME_TAG.h
-                })`}
-              >
+            {timeTagX !== null && hoverMin !== null ? (
+              <g transform={`translate(${timeTagX}, ${MAIN.height - TIME_TAG.h})`}>
                 <rect
                   data-testid="time-tag"
                   width={TIME_TAG.w}
