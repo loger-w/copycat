@@ -68,14 +68,62 @@ describe("CandleChart(SC-7)", () => {
     expect(container.querySelector("[data-testid='ma-20']")).toBeNull();
   });
 
-  it("hover 顯示該根 OHLC tooltip;移出清除", () => {
+  // 🔴 SC-7.6:圖下方的浮動 tooltip 改成圖上方常駐資訊列 —— 沒 hover 時顯示最後一根,
+  // 不是空白。固定停靠、零遮圖、零版面跳動。
+  it("資訊列:預設顯示最後一根(即時態),hover 時切換為游標所在根", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    const readout = () => screen.getByTestId("chart-readout");
+    expect(screen.queryByTestId("candle-tooltip")).toBeNull(); // 舊 tooltip 已移除
+    expect(readout().textContent).toContain("2026-07-28"); // 即時態 = 最後一根
+    expect(readout().getAttribute("data-hovering")).toBe("false");
+
+    const svg = container.querySelector("svg")!;
+    // jsdom 的 getBoundingClientRect 恆 0 寬 → x 直接當 viewBox 座標,x=5 落在第一根
+    fireEvent.mouseMove(svg, { clientX: 5, clientY: 100 });
+    expect(readout().textContent).toContain("2026-07-24");
+    expect(readout().getAttribute("data-hovering")).toBe("true");
+
+    fireEvent.mouseLeave(svg);
+    expect(readout().textContent).toContain("2026-07-28");
+    expect(readout().getAttribute("data-hovering")).toBe("false");
+  });
+
+  // 🔴 SC-7.2:K 線原本只有垂直線,現在兩軸都有,且水平線跟滑鼠 y(當量尺)不是鎖收盤價
+  it("十字線:垂直線 snap 蠟燭、水平線跟滑鼠 y", () => {
     const { container } = render(<CandleChart bars={BARS} />);
     const svg = container.querySelector("svg")!;
-    fireEvent.mouseMove(svg, { clientX: 5, clientY: 5 });
-    // jsdom 的 getBoundingClientRect 恆 0 寬 → x=0 落在第一根
-    expect(screen.getByTestId("candle-tooltip").textContent).toContain("2026-07-24");
+    fireEvent.mouseMove(svg, { clientX: 5, clientY: 120 });
+    const h = container.querySelector("[data-testid='crosshair-h']")!;
+    expect(h).toBeTruthy();
+    expect(Number(h.getAttribute("y1"))).toBe(120);
+    fireEvent.mouseMove(svg, { clientX: 5, clientY: 200 });
+    expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(200);
+    expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
     fireEvent.mouseLeave(svg);
-    expect(screen.queryByTestId("candle-tooltip")).toBeNull();
+    expect(container.querySelector("[data-testid='crosshair-h']")).toBeNull();
+    expect(container.querySelector("[data-testid='crosshair-v']")).toBeNull();
+  });
+
+  // 🟢 SC-7.3:左緣顯示滑鼠所在價位(snap 到合法 tick、夾制在資料值域內)
+  it("左價標:顯示滑鼠所在價位,量區的 y 夾制在最低價不出負值", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    const svg = container.querySelector("svg")!;
+    const tagText = () => container.querySelector("[data-testid='price-tag-text']")!.textContent;
+    fireEvent.mouseMove(svg, { clientX: 5, clientY: 10 });
+    expect(Number(tagText())).toBeLessThanOrEqual(118); // ≤ 全域最高 118
+    fireEvent.mouseMove(svg, { clientX: 5, clientY: 999 }); // 遠低於量區
+    expect(Number(tagText())).toBe(95); // 夾制在全域最低 95
+  });
+
+  // 🟢 SC-7.5:底部時間標籤,且不被 viewBox 上下緣裁切
+  it("底部時間標:顯示 hover 根的時間,矩形底邊不超出 viewBox", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    const svg = container.querySelector("svg")!;
+    fireEvent.mouseMove(svg, { clientX: 5, clientY: 100 });
+    const rect = container.querySelector("[data-testid='time-tag']")!;
+    const vbH = Number(svg.getAttribute("viewBox")!.split(" ")[3]);
+    expect(Number(rect.getAttribute("y")) + Number(rect.getAttribute("height"))).toBeLessThanOrEqual(vbH);
+    expect(container.querySelector("[data-testid='time-tag-text']")!.textContent).toBe("07/24");
   });
 
   it("圖表有可辨識的 aria-label", () => {

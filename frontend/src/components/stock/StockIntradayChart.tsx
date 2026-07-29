@@ -1,6 +1,9 @@
 import { memo, useId, useMemo, useState } from "react";
 
+import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 import { useChartToggles } from "@/hooks/useChartToggles";
+import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
+import { snapDown } from "@/lib/stock-tick";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
@@ -17,6 +20,14 @@ import { cn } from "@/lib/utils";
 
 const MAIN = { width: 800, height: 260 };
 const SUB = { width: 800, height: 70 };
+/** 軸標籤尺寸;time tag 的 y = MAIN.height − boxH,底邊恰貼 viewBox 底不被裁 */
+const PRICE_TAG = { w: 46, h: 14 };
+const PCT_TAG = { w: 46, h: 14 };
+const TIME_TAG = { w: 34, h: 13 };
+
+function hhmm(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
 
 function fmt(milli: number): string {
   const v = milli / 1000;
@@ -209,7 +220,9 @@ const EnergySub = memo(function EnergySub({ bars }: { bars: EnergyBar[] }) {
 export function StockIntradayChart({ accum }: { accum: StockAccum }) {
   const { toggles, set } = useChartToggles();
   const overlayQ = useStockOverlay(accum.code || null, toggles.cdp || toggles.ma);
-  const [hoverMin, setHoverMin] = useState<number | null>(null);
+  // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
+  // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
+  const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
   // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const clipAbove = `${uid}-above`;
@@ -256,20 +269,54 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
   const total = accum.cumInner + accum.cumOuter;
   const outerPct = total > 0 ? ((accum.cumOuter / total) * 100).toFixed(1) : "-";
 
+  const hoverMin = hover?.min ?? null;
   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
   const ref = accum.meta?.ref ?? null;
-  const hoverChg =
-    hoverAgg && ref ? (((hoverAgg.c - ref) / ref) * 100).toFixed(2) : null;
-  const hoverLabel =
-    hoverMin !== null
-      ? `${String(Math.floor(hoverMin / 60)).padStart(2, "0")}:${String(hoverMin % 60).padStart(2, "0")}`
-      : "";
+  const plotBottom = MAIN.height - X_LABEL_H;
+
+  // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
+  const lastPt = g.priceLine[g.priceLine.length - 1];
+  const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
+  const shownAgg = shownMin !== null ? accum.minutes.get(shownMin) : undefined;
+  const shownChg =
+    shownAgg !== undefined && ref ? ((shownAgg.c - ref) / ref) * 100 : null;
+  const fields: ReadoutField[] =
+    shownAgg === undefined || shownMin === null
+      ? [
+          { label: "", value: "-" },
+          { label: "", value: "-" },
+          { label: "", value: "-" },
+          { label: "量", value: "-" },
+          { label: "外", value: "-" },
+          { label: "內", value: "-" },
+        ]
+      : [
+          { label: "", value: hhmm(shownMin) },
+          {
+            label: "",
+            value: fmt(shownAgg.c),
+            tone: shownChg === null ? undefined : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : undefined,
+          },
+          {
+            label: "",
+            value: shownChg === null ? "-" : `${shownChg > 0 ? "+" : ""}${shownChg.toFixed(2)}%`,
+            tone: shownChg === null ? "muted" : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : "muted",
+          },
+          { label: "量", value: String(shownAgg.v) },
+          { label: "外", value: String(shownAgg.o), tone: "bull" },
+          { label: "內", value: String(shownAgg.i), tone: "bear" },
+        ];
+
+  const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
+  const hoverPct = hoverPrice !== null && ref ? ((hoverPrice - ref) / ref) * 100 : null;
 
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const x = ((e.clientX - rect.left) / rect.width) * MAIN.width;
-    setHoverMin(g.minuteOf(x));
+    const { x, y } = toSvgPoint(e, rect, MAIN);
+    const min = g.minuteOf(x);
+    const ry = Math.round(y);
+    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
+    setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
   }
 
   const toggleDefs: { key: "vwap" | "cdp" | "ma"; label: string; available: boolean }[] = [
@@ -282,7 +329,10 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
     // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
     // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
     <figure className="select-none rounded-md border border-line bg-surface p-4">
-      <div className="mb-1 flex justify-end gap-1">
+      {/* 頂列:左資訊條、右 toggle。高度以 rem 固定,與 K 線頂列逐項對稱(SC-6.7) */}
+      <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
+        <ChartReadout fields={fields} hovering={hoverAgg !== undefined} />
+        <div className="flex shrink-0 gap-1">
         {toggleDefs.map(({ key, label, available }) => (
           <button
             key={key}
@@ -302,14 +352,16 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
             {label}
           </button>
         ))}
+        </div>
       </div>
       <svg
         viewBox={`0 0 ${MAIN.width} ${MAIN.height}`}
         className="w-full"
+        style={{ touchAction: "pan-y" }}
         role="img"
         aria-label="分時走勢圖"
         onMouseMove={onMove}
-        onMouseLeave={() => setHoverMin(null)}
+        onMouseLeave={() => setHover(null)}
       >
         <ChartStatic
           g={g}
@@ -318,45 +370,130 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
           clipAbove={clipAbove}
           clipBelow={clipBelow}
         />
-        {/* hover 十字 + tooltip(SC-1) */}
-        {hoverMin !== null && hoverAgg ? (
+        {/* hover 十字 + 軸標籤(SC-7)。
+            分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
+            垂直線與資料點需要資料,缺就不畫(白名單 2:minuteOf 不 snap 最近)。 */}
+        {hover !== null ? (
           <g pointerEvents="none">
+            {hoverMin !== null && hoverAgg ? (
+              <>
+                <line
+                  data-testid="crosshair-v"
+                  x1={toX(hoverMin)}
+                  x2={toX(hoverMin)}
+                  y1={0}
+                  y2={plotBottom}
+                  className="stroke-ink-muted"
+                  strokeDasharray="2 2"
+                  strokeWidth={0.7}
+                />
+                {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
+                <circle cx={toX(hoverMin)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
+              </>
+            ) : null}
             <line
-              x1={toX(hoverMin)}
-              x2={toX(hoverMin)}
-              y1={0}
-              y2={MAIN.height - 14}
-              className="stroke-ink-muted"
-              strokeDasharray="2 2"
-              strokeWidth={0.7}
-            />
-            <line
+              data-testid="crosshair-h"
               x1={0}
               x2={MAIN.width}
-              y1={g.toY(hoverAgg.c)}
-              y2={g.toY(hoverAgg.c)}
+              y1={hover.y}
+              y2={hover.y}
               className="stroke-ink-muted"
               strokeDasharray="2 2"
               strokeWidth={0.7}
             />
-            <g transform={`translate(${Math.min(toX(hoverMin) + 8, MAIN.width - 130)}, 10)`}>
-              <rect width={122} height={34} rx={3} className="fill-bg-deep/90 stroke-line" />
-              <text x={6} y={13} className="fill-ink" fontSize="0.625rem">
-                {hoverLabel} · {fmt(hoverAgg.c)}
-              </text>
-              <text x={6} y={27} className="fill-ink-dim" fontSize="0.625rem">
-                {hoverChg !== null ? `${Number(hoverChg) > 0 ? "+" : ""}${hoverChg}%` : "-"} · 量{" "}
-                {hoverAgg.v}
+            {/* 左緣價位標籤(snap 到合法 tick:顯示的價位要「可下單」) */}
+            <g transform={`translate(0, ${clampTagY(hover.y, PRICE_TAG.h, plotBottom)})`}>
+              <rect
+                data-testid="price-tag"
+                width={PRICE_TAG.w}
+                height={PRICE_TAG.h}
+                rx={2}
+                className="fill-bg-deep stroke-line"
+              />
+              <text
+                data-testid="price-tag-text"
+                x={4}
+                y={PRICE_TAG.h - 4}
+                className="fill-ink"
+                fontSize="0.625rem"
+              >
+                {hoverPrice !== null ? fmt(hoverPrice) : ""}
               </text>
             </g>
+            {/* 右緣 % 標籤(江波圖獨有:K 線跨多日沒有「相對昨收」語意) */}
+            {hoverPct !== null ? (
+              <g
+                transform={`translate(${MAIN.width - PCT_TAG.w}, ${clampTagY(hover.y, PCT_TAG.h, plotBottom)})`}
+              >
+                <rect
+                  data-testid="pct-tag"
+                  width={PCT_TAG.w}
+                  height={PCT_TAG.h}
+                  rx={2}
+                  className="fill-bg-deep stroke-line"
+                />
+                <text
+                  data-testid="pct-tag-text"
+                  x={PCT_TAG.w - 4}
+                  y={PCT_TAG.h - 4}
+                  textAnchor="end"
+                  className={cn(
+                    hoverPct > 0 ? "fill-bull" : hoverPct < 0 ? "fill-bear" : "fill-ink-dim",
+                  )}
+                  fontSize="0.625rem"
+                >
+                  {`${hoverPct > 0 ? "+" : ""}${hoverPct.toFixed(1)}%`}
+                </text>
+              </g>
+            ) : null}
+            {/* 底部時間標籤 */}
+            {hoverMin !== null ? (
+              <g
+                transform={`translate(${clampTagX(toX(hoverMin), TIME_TAG.w, MAIN.width)}, ${
+                  MAIN.height - TIME_TAG.h
+                })`}
+              >
+                <rect
+                  data-testid="time-tag"
+                  width={TIME_TAG.w}
+                  height={TIME_TAG.h}
+                  rx={2}
+                  className="fill-bg-deep stroke-line"
+                />
+                <text
+                  data-testid="time-tag-text"
+                  x={TIME_TAG.w / 2}
+                  y={TIME_TAG.h - 3.5}
+                  textAnchor="middle"
+                  className="fill-ink"
+                  fontSize="0.625rem"
+                >
+                  {hhmm(hoverMin)}
+                </text>
+              </g>
+            ) : null}
           </g>
         ) : null}
       </svg>
-      {/* 內外盤能量副圖 */}
-      <svg viewBox={`0 0 ${SUB.width} ${SUB.height}`} className="mt-1 w-full" role="img" aria-label="內外盤能量">
+      {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
+          多出的固定 4px 會讓比例隨容器寬漂移。 */}
+      <svg viewBox={`0 0 ${SUB.width} ${SUB.height}`} className="w-full" role="img" aria-label="內外盤能量">
         <EnergySub bars={subGeo.energyBars} />
+        {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
+        {hoverMin !== null ? (
+          <line
+            x1={toX(hoverMin)}
+            x2={toX(hoverMin)}
+            y1={0}
+            y2={SUB.height}
+            className="stroke-ink-muted"
+            strokeDasharray="2 2"
+            strokeWidth={0.7}
+            pointerEvents="none"
+          />
+        ) : null}
       </svg>
-      <figcaption className="mt-1 flex justify-between font-mono text-xs text-ink-dim">
+      <figcaption className="mt-1 flex h-4 items-center justify-between font-mono text-xs text-ink-dim">
         <span>
           累積外盤 <span className="text-bull">{accum.cumOuter}</span> · 內盤{" "}
           <span className="text-bear">{accum.cumInner}</span> · 外盤比 {outerPct}%

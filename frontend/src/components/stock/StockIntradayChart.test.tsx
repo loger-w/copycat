@@ -195,22 +195,59 @@ describe("StockIntradayChart", () => {
     expect(sub.querySelectorAll("rect").length).toBeGreaterThan(0);
   });
 
-  it("hover 顯示十字與 tooltip、移出消失(SC-1)", () => {
+  // 🔴 SC-7:SVG 內浮動 tooltip 移除,改圖上方常駐資訊列;水平線改跟滑鼠 y 當量尺
+  it("資訊列:預設顯示最新分鐘(即時態),hover 時切換為游標所在分鐘", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const readout = () => screen.getByTestId("chart-readout");
+    expect(readout().textContent).toContain("09:02"); // 最新分鐘 = 542
+    expect(readout().getAttribute("data-hovering")).toBe("false");
     const svg = container.querySelector("svg")!;
     // width 800、x 域 540..810 分鐘 → 541 分在 x = 1/270*800 ≈ 2.96px
     fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
-    expect(screen.getByText(/09:01/, { selector: "text" })).toBeTruthy();
-    expect(screen.getByText(/2380/, { selector: "text" })).toBeTruthy();
+    expect(readout().textContent).toContain("09:01");
+    expect(readout().getAttribute("data-hovering")).toBe("true");
     fireEvent.mouseLeave(svg);
-    expect(screen.queryByText(/09:01/, { selector: "text" })).toBeNull();
+    expect(readout().getAttribute("data-hovering")).toBe("false");
+    expect(readout().textContent).toContain("09:02");
   });
 
-  it("hover 無資料分鐘不顯示 tooltip(edge 7)", () => {
+  it("資訊列含每分鐘內外盤(本專案核心訊號,原 tooltip 沒顯示)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const svg = container.querySelector("svg")!;
+    fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
+    const text = screen.getByTestId("chart-readout").textContent ?? "";
+    expect(text).toContain("外 10");
+    expect(text).toContain("內 0");
+  });
+
+  it("十字線:垂直線 snap 分鐘、水平線跟滑鼠 y(不再鎖該分鐘收盤價)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const svg = container.querySelector("svg")!;
+    fireEvent.mouseMove(svg, { clientX: 3, clientY: 120 });
+    expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(120);
+    fireEvent.mouseMove(svg, { clientX: 3, clientY: 60 });
+    expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(60);
+    expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
+    fireEvent.mouseLeave(svg);
+    expect(container.querySelector("[data-testid='crosshair-h']")).toBeNull();
+  });
+
+  // 🟢 SC-7.8:量尺不依賴資料 —— 無成交分鐘仍要能量價位,只是沒有 bar 可指
+  it("hover 無資料分鐘:垂直線與 hover 資訊列不出現,水平線與左價標仍在(分解退化)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const svg = container.querySelector("svg")!;
     fireEvent.mouseMove(svg, { clientX: 400, clientY: 100 }); // ~11:15 無資料
-    expect(screen.queryByText(/11:1/)).toBeNull();
+    expect(container.querySelector("[data-testid='crosshair-v']")).toBeNull();
+    expect(screen.getByTestId("chart-readout").getAttribute("data-hovering")).toBe("false");
+    expect(container.querySelector("[data-testid='crosshair-h']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='price-tag-text']")).toBeTruthy();
+  });
+
+  // 🟢 SC-7.4:右緣 % 標籤(江波圖獨有;K 線跨多日無「相對昨收」語意)
+  it("右 % 標:顯示滑鼠價位相對昨收的百分比,無 ref 時不出現", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 3, clientY: 100 });
+    expect(container.querySelector("[data-testid='pct-tag-text']")!.textContent).toMatch(/^[+-]?\d/);
   });
 
   // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把時間軸 / 價位刻度 / 內外盤文字反白

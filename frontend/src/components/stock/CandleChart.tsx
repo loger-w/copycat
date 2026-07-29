@@ -14,16 +14,24 @@ import {
   zoomAt,
   type Viewport,
 } from "@/lib/candle-viewport";
-import { toSvgPoint } from "@/lib/chart-crosshair";
+import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
+import { snapDown } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
+import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 
 /** K 線圖(SC-6/SC-7)。幾何全在 lib/candle.ts + lib/candle-viewport.ts,本檔只掛 DOM。
  *  台股慣例:紅漲(bull)/ 綠跌(bear)。 */
 
-const DIMS = { width: 1400, height: 320 };
+/** height 578 = 1400 × (江波圖 260+70)/800 —— 讓兩張圖的 svg 佔容器寬比例相同。
+ *  再加上兩個 figure 的框外 chrome 逐項對稱(頂列 h-[1.375rem]+mb-1、底列 mt-1+h-4),
+ *  切換模式時圖表區塊高度才不會跳(SC-6.7)。殘差 0.5px @ 容器寬 1400。 */
+const DIMS = { width: 1400, height: 578 };
 const X_LABEL_H = 14;
 /** 滾輪每一格的縮放倍率 */
 const ZOOM_STEP = 1.15;
+/** 軸標籤尺寸;time tag 的 y = height − boxH,底邊恰貼 viewBox 底不被裁 */
+const PRICE_TAG = { w: 56, h: 16 };
+const TIME_TAG = { w: 48, h: 14 };
 
 const BODY_CLASS = {
   up: "fill-bull stroke-bull",
@@ -216,8 +224,40 @@ interface Props {
   onToggleBb?: (value: boolean) => void;
 }
 
+/** 一根 bar → 資訊列欄位。`prev` 用來算漲跌%(K 線跨多日,沒有「昨收」可比)。 */
+function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[] {
+  if (b === undefined) {
+    return [
+      { label: "", value: "-" },
+      { label: "開", value: "-" },
+      { label: "高", value: "-" },
+      { label: "低", value: "-" },
+      { label: "收", value: "-" },
+      { label: "漲跌", value: "-" },
+      { label: "量", value: "-" },
+    ];
+  }
+  const tone = b.c > b.o ? "bull" : b.c < b.o ? "bear" : undefined;
+  const pct = prev !== undefined && prev.c > 0 ? ((b.c - prev.c) / prev.c) * 100 : null;
+  return [
+    { label: "", value: b.t },
+    { label: "開", value: fmt(b.o) },
+    { label: "高", value: fmt(b.h) },
+    { label: "低", value: fmt(b.l) },
+    { label: "收", value: fmt(b.c), tone },
+    {
+      label: "漲跌",
+      value: pct === null ? "-" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`,
+      tone: pct === null ? "muted" : pct > 0 ? "bull" : pct < 0 ? "bear" : "muted",
+    },
+    { label: "量", value: String(b.v) },
+  ];
+}
+
 export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }: Props) {
-  const [hover, setHover] = useState<number | null>(null);
+  // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不是鎖在收盤價 —— 盤中最常做的事是
+  // 量距離(現價到某價位差幾%),鎖收盤價的水平線與蠟燭重合、資訊冗餘。
+  const [hover, setHover] = useState<{ index: number | null; y: number } | null>(null);
   const [viewport, setViewport] = useState<Viewport>(() => initialViewport(bars.length, initBars));
   const [prevTotal, setPrevTotal] = useState(bars.length);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -282,8 +322,11 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
 
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
-    const { x } = toSvgPoint(e, rect, DIMS);
-    setHover(g.indexOf(x));
+    const { x, y } = toSvgPoint(e, rect, DIMS);
+    const index = g.indexOf(x);
+    const ry = Math.round(y);
+    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
+    setHover((p) => (p !== null && p.index === index && p.y === ry ? p : { index, y: ry }));
   }
 
   /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
@@ -317,8 +360,20 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
   }
 
   const labelStep = Math.max(1, Math.ceil(Math.max(1, shown.length) / 6));
-  const hoverBar = hover !== null ? shown[hover] : undefined;
-  const hoverCandle = hover !== null ? g.candles[hover] : undefined;
+  const hoverIdx = hover?.index ?? null;
+  const hoverBar = hoverIdx !== null ? shown[hoverIdx] : undefined;
+  const hoverCandle = hoverIdx !== null ? g.candles[hoverIdx] : undefined;
+  // 資訊列:沒 hover 顯示最後一根(即時態),不是空白
+  const shownIdx = hoverBar !== undefined ? hoverIdx! : shown.length - 1;
+  const fields = readoutFields(shown[shownIdx], shown[shownIdx - 1]);
+  const plotBottom = DIMS.height - X_LABEL_H;
+  const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
+  const windowHigh = shown.length > 0 ? Math.max(...shown.map((b) => b.h)) : 0;
+  const windowLow = shown.length > 0 ? Math.min(...shown.map((b) => b.l)) : 0;
+  const windowPct =
+    shown.length > 1 && shown[0]!.c > 0
+      ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
+      : null;
 
   return (
     // select-none:SVG 的 <text>(價位刻度 / 日期標籤)預設可選,在圖上拖曳會整片反白(SC-4)。
@@ -331,7 +386,7 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
     >
       {/* 頂列:左側留給資訊條、右側指標 toggle。高度以 rem 固定(root font-size 縮放才等比) */}
       <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
-        <span />
+        <ChartReadout fields={fields} hovering={hoverBar !== undefined} />
         <button
           type="button"
           aria-pressed={showBb}
@@ -369,40 +424,95 @@ export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }
             bbLowerLine={bbLowerLine}
             labelStep={labelStep}
           />
-          {/* hover 十字 */}
-          {hoverCandle !== undefined ? (
-            <line
-              x1={hoverCandle.cx}
-              x2={hoverCandle.cx}
-              y1={0}
-              y2={DIMS.height - X_LABEL_H}
-              className="stroke-ink-muted"
-              strokeDasharray="2 2"
-              strokeWidth={0.7}
-              pointerEvents="none"
-            />
+          {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
+          {hover !== null ? (
+            <g pointerEvents="none">
+              {hoverCandle !== undefined ? (
+                <line
+                  data-testid="crosshair-v"
+                  x1={hoverCandle.cx}
+                  x2={hoverCandle.cx}
+                  y1={0}
+                  y2={plotBottom}
+                  className="stroke-ink-muted"
+                  strokeDasharray="2 2"
+                  strokeWidth={0.7}
+                />
+              ) : null}
+              <line
+                data-testid="crosshair-h"
+                x1={0}
+                x2={DIMS.width}
+                y1={hover.y}
+                y2={hover.y}
+                className="stroke-ink-muted"
+                strokeDasharray="2 2"
+                strokeWidth={0.7}
+              />
+              {/* 左緣價位標籤:滑鼠所在價位 snap 到合法 tick(顯示的價位要「可下單」) */}
+              <g transform={`translate(0, ${clampTagY(hover.y, PRICE_TAG.h, plotBottom)})`}>
+                <rect
+                  data-testid="price-tag"
+                  width={PRICE_TAG.w}
+                  height={PRICE_TAG.h}
+                  rx={2}
+                  className="fill-bg-deep stroke-line"
+                />
+                <text
+                  data-testid="price-tag-text"
+                  x={4}
+                  y={PRICE_TAG.h - 5}
+                  className="fill-ink"
+                  fontSize="0.625rem"
+                >
+                  {hoverPrice !== null ? fmt(hoverPrice) : ""}
+                </text>
+              </g>
+              {/* 底部時間標籤:x 軸標籤是每 labelStep 根才一個,hover 讀不到精確時間 */}
+              {hoverCandle !== undefined && hoverBar !== undefined ? (
+                <g
+                  transform={`translate(${clampTagX(hoverCandle.cx, TIME_TAG.w, DIMS.width)}, ${
+                    DIMS.height - TIME_TAG.h
+                  })`}
+                >
+                  <rect
+                    data-testid="time-tag"
+                    y={0}
+                    width={TIME_TAG.w}
+                    height={TIME_TAG.h}
+                    rx={2}
+                    className="fill-bg-deep stroke-line"
+                  />
+                  <text
+                    data-testid="time-tag-text"
+                    x={TIME_TAG.w / 2}
+                    y={TIME_TAG.h - 4}
+                    textAnchor="middle"
+                    className="fill-ink"
+                    fontSize="0.625rem"
+                  >
+                    {shortStamp(hoverBar.t)}
+                  </text>
+                </g>
+              ) : null}
+            </g>
           ) : null}
         </svg>
       )}
-      {hoverBar !== undefined ? (
-        <figcaption
-          data-testid="candle-tooltip"
-          className="mt-1 flex flex-wrap gap-x-3 font-mono text-xs text-ink-dim"
+      {/* 底列:視窗摘要。與江波圖底部 figcaption 同結構同高度 —— 兩個 figure 的框外
+          chrome 逐項對稱,SC-6.7 的「切模式不跳高」才成立。 */}
+      <figcaption className="mt-1 flex h-4 items-center gap-x-3 font-mono text-xs text-ink-dim">
+        <span>{shown.length} 根</span>
+        <span>高 {fmt(windowHigh)}</span>
+        <span>低 {fmt(windowLow)}</span>
+        <span
+          className={cn(
+            windowPct === null ? "" : windowPct > 0 ? "text-bull" : windowPct < 0 ? "text-bear" : "",
+          )}
         >
-          <span className="text-ink">{hoverBar.t}</span>
-          <span>開 {fmt(hoverBar.o)}</span>
-          <span>高 {fmt(hoverBar.h)}</span>
-          <span>低 {fmt(hoverBar.l)}</span>
-          <span
-            className={cn(
-              hoverBar.c > hoverBar.o ? "text-bull" : hoverBar.c < hoverBar.o ? "text-bear" : "",
-            )}
-          >
-            收 {fmt(hoverBar.c)}
-          </span>
-          <span>量 {hoverBar.v}</span>
-        </figcaption>
-      ) : null}
+          期間 {windowPct === null ? "-" : `${windowPct > 0 ? "+" : ""}${windowPct.toFixed(2)}%`}
+        </span>
+      </figcaption>
     </figure>
   );
 }
