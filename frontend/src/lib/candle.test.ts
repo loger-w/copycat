@@ -177,3 +177,82 @@ describe("buildCandleGeometry 密集/異常值韌性(phase5 review)", () => {
     expect(c.bodyTop + c.bodyH).toBeLessThanOrEqual(size.height);
   });
 });
+
+// 🔵 R2a:priceAtY 是 toY 的逆函數,SC-7 的「左緣顯示滑鼠所在價位」全靠它。
+// round-trip 是唯一能抓到「公式與 toY 不同步」的測試(中間點永遠正確,只有兩端偏移)。
+describe("buildCandleGeometry.priceAtY(R2a)", () => {
+  const size = { width: 400, height: 200 };
+  const bars = [
+    bar("2026-07-27", 100_000, 110_000, 90_000, 105_000, 10),
+    bar("2026-07-28", 105_000, 120_000, 100_000, 102_000, 20),
+  ];
+
+  it("round-trip:域內價位經 toY 再 priceAtY 回到原值(±1 毫元)", () => {
+    const g = buildCandleGeometry(bars, size);
+    for (const p of [90_000, 97_500, 105_000, 112_500, 120_000]) {
+      expect(Math.abs(g.priceAtY(g.toY(p)) - p)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("底部量區的 y 被夾制在 lo,不產生低於最低價或負數的價位", () => {
+    const g = buildCandleGeometry(bars, size);
+    // 量區在 priceBottom 之下,一路到 size.height 都不該反演出 < lo
+    for (const y of [size.height - 20, size.height, size.height * 2]) {
+      expect(g.priceAtY(y)).toBe(90_000);
+    }
+  });
+
+  it("上緣越界夾制在 hi", () => {
+    const g = buildCandleGeometry(bars, size);
+    expect(g.priceAtY(-50)).toBe(120_000);
+  });
+
+  it("全平盤(span=0)回 hi,不產生 NaN/Infinity", () => {
+    const g = buildCandleGeometry([bar("d", 100_000, 100_000, 100_000, 100_000)], size);
+    expect(g.priceAtY(10)).toBe(100_000);
+    expect(Number.isFinite(g.priceAtY(150))).toBe(true);
+  });
+
+  it("空幾何有 priceAtY 可呼叫(不是 undefined)", () => {
+    const g = buildCandleGeometry([], size);
+    expect(typeof g.priceAtY).toBe("function");
+    expect(g.priceAtY(50)).toBe(0);
+  });
+});
+
+// 🔵 R4:extraSeries 讓布林上下軌參與 y 域,否則超出 o/h/l/c 值域的軌線會被畫到圖框外。
+describe("buildCandleGeometry.extraSeries(R4)", () => {
+  const size = { width: 400, height: 200 };
+  const bars = [
+    bar("2026-07-27", 100_000, 110_000, 90_000, 105_000, 10),
+    bar("2026-07-28", 105_000, 120_000, 100_000, 102_000, 20),
+  ];
+
+  it("不傳時 y 域與現況相同(向後相容)", () => {
+    const a = buildCandleGeometry(bars, size);
+    const b = buildCandleGeometry(bars, size, []);
+    expect(b.toY(120_000)).toBeCloseTo(a.toY(120_000), 9);
+    expect(b.toY(90_000)).toBeCloseTo(a.toY(90_000), 9);
+  });
+
+  it("超出 o/h/l/c 值域的序列被納入 y 域,toY 落在繪圖區內", () => {
+    const upper = [140_000, 145_000];
+    const lower = [70_000, 72_000];
+    const g = buildCandleGeometry(bars, size, [upper, lower]);
+    const priceBottom = (size.height - 14) * (1 - 0.22);
+    for (const v of [...upper, ...lower]) {
+      expect(g.toY(v)).toBeGreaterThanOrEqual(0);
+      expect(g.toY(v)).toBeLessThanOrEqual(priceBottom);
+    }
+    // 未納入時 145000 會被畫到 y < 0
+    expect(buildCandleGeometry(bars, size).toY(145_000)).toBeLessThan(0);
+  });
+
+  it("null 元素略過,不汙染 y 域", () => {
+    const withNulls = [null, null, 145_000];
+    const g = buildCandleGeometry(bars, size, [withNulls]);
+    expect(g.toY(145_000)).toBeGreaterThanOrEqual(0);
+    // yTicks 仍以最終 hi/lo 產生,不出現 null 造成的 NaN
+    for (const t of g.yTicks) expect(Number.isFinite(t.priceMilli)).toBe(true);
+  });
+});

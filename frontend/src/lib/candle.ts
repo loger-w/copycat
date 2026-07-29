@@ -111,6 +111,9 @@ export interface CandleGeometry {
   yTicks: { y: number; priceMilli: number }[];
   /** 毫元 → y 像素(反向) */
   toY: (priceMilli: number) => number;
+  /** y 像素 → 毫元(`toY` 的逆函數);回傳前夾制進 [lo, hi]。
+   *  夾制是必要的:滑鼠移到底部量區(佔 VOL_RATIO)時原式會反演出低於 lo 甚至負的價格。 */
+  priceAtY: (y: number) => number;
   /** x 像素 → bar index(hover 用);超界回 null */
   indexOf: (x: number) => number | null;
 }
@@ -126,8 +129,16 @@ const MIN_BODY_H = 1; // 開收同價仍要看得見
 const VOL_RATIO = 0.22; // 量區佔價圖高度比例
 const Y_TICKS = 5;
 
-/** bars(升冪)→ 蠟燭幾何。空輸入回空幾何(不崩)。 */
-export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeometry {
+/** bars(升冪)→ 蠟燭幾何。空輸入回空幾何(不崩)。
+ *
+ * `extraSeries`(選用)= 額外要納入 y 域的序列(布林上下軌等)。不傳 = 行為與未加參數前
+ * 完全相同。**呼叫端必須先把序列 slice 成與 `bars` 同一視窗**,否則 y 域會被視窗外的
+ * 極值撐開、圖被壓扁且不會報錯(change-spec R4/R20)。 */
+export function buildCandleGeometry(
+  bars: readonly Bar[],
+  size: Size,
+  extraSeries?: readonly (readonly (number | null)[])[],
+): CandleGeometry {
   const bottom = size.height - X_LABEL_H;
   const volH = bottom * VOL_RATIO;
   const priceBottom = bottom - volH;
@@ -138,6 +149,7 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
       volBars: [],
       yTicks: [],
       toY: () => priceBottom,
+      priceAtY: () => 0,
       indexOf: () => null,
     };
   }
@@ -156,10 +168,23 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
     if (b.c < lo) lo = b.c;
     if (b.v > maxVol) maxVol = b.v;
   }
+  for (const series of extraSeries ?? []) {
+    for (const v of series) {
+      if (v === null) continue;
+      if (v > hi) hi = v;
+      if (v < lo) lo = v;
+    }
+  }
   const span = hi - lo;
   const usable = Math.max(1, priceBottom - PAD_Y * 2);
   const toY = (priceMilli: number): number =>
     span <= 0 ? PAD_Y + usable / 2 : PAD_Y + ((hi - priceMilli) / span) * usable;
+  // toY 的逆函數。span<=0(全平盤)時 toY 是常數函數、無逆可言 → 回 hi。
+  const priceAtY = (y: number): number => {
+    if (span <= 0) return hi;
+    const raw = hi - ((y - PAD_Y) / usable) * span;
+    return Math.min(hi, Math.max(lo, Math.round(raw)));
+  };
 
   const slot = size.width / bars.length;
   // 夾在 slot 內:bars 多到 slot < 1.43 時,max(1, …) 會讓 w > slot 而互相重疊(review P1-1)
@@ -206,5 +231,5 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
     return i >= 0 && i < bars.length ? i : null;
   };
 
-  return { candles, volBars, yTicks, toY, indexOf };
+  return { candles, volBars, yTicks, toY, priceAtY, indexOf };
 }

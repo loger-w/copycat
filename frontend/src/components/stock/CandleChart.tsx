@@ -42,6 +42,22 @@ function pts(line: { x: number; y: number }[]): string {
   return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
 
+/** 穩定 identity 的空線:`showMa` 關閉時若回 `[]` 字面量,每次 render 都是新 array,
+ *  `ChartStatic` 的 memo 會被打穿(見下方 maLine 的說明)。 */
+const EMPTY_LINE: { x: number; y: number }[] = [];
+
+/** MA 值序列 → 折線點。**必須在元件外**且結果包 useMemo:
+ *  hover 每個 mousemove 都會 re-render 父層,若 ma5Line/ma20Line 每次都是新 array identity,
+ *  memo 過的 ChartStatic 仍會每次重建(最多 700 根蠟燭 × 3 個節點)。 */
+function maLine(values: readonly (number | null)[], g: CandleGeometry): { x: number; y: number }[] {
+  const line: { x: number; y: number }[] = [];
+  values.forEach((v, i) => {
+    const c = g.candles[i];
+    if (v !== null && c !== undefined) line.push({ x: c.cx, y: g.toY(v) });
+  });
+  return line;
+}
+
 
 /** 靜態圖層 memo:hover 每 mousemove re-render 父層,蠟燭/量/標籤層不可每次重建
  *  (分 K 可達數千根;對齊 StockIntradayChart 的 ChartStatic 慣例 — review P1-1)。 */
@@ -167,6 +183,10 @@ export function CandleChart({ bars, maxBars, showMa = false }: Props) {
     return { shown: shownBars, g: geo, ma5: m5, ma20: m20 };
   }, [bars, maxBars]);
 
+  // useMemo 必須在 early return 之前(hooks 規則);空資料時 g.candles 為空、maLine 回空陣列
+  const ma5Line = useMemo(() => (showMa ? maLine(ma5, g) : EMPTY_LINE), [showMa, ma5, g]);
+  const ma20Line = useMemo(() => (showMa ? maLine(ma20, g) : EMPTY_LINE), [showMa, ma20, g]);
+
   if (shown.length === 0) {
     return (
       <div className="flex h-64 items-center justify-center rounded-md border border-line bg-surface">
@@ -174,18 +194,6 @@ export function CandleChart({ bars, maxBars, showMa = false }: Props) {
       </div>
     );
   }
-
-  function maLine(values: (number | null)[]): { x: number; y: number }[] {
-    const line: { x: number; y: number }[] = [];
-    values.forEach((v, i) => {
-      const c = g.candles[i];
-      if (v !== null && c !== undefined) line.push({ x: c.cx, y: g.toY(v) });
-    });
-    return line;
-  }
-
-  const ma5Line = showMa ? maLine(ma5) : [];
-  const ma20Line = showMa ? maLine(ma20) : [];
 
   // x 軸標籤:等距取至多 6 個
   const labelStep = Math.max(1, Math.ceil(shown.length / 6));

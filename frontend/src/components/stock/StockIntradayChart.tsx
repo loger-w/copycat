@@ -8,6 +8,7 @@ import {
   overlayLines,
   X_END_MIN,
   X_START_MIN,
+  type EnergyBar,
   type IntradayGeometry,
   type OverlayLine,
 } from "@/lib/stock-intraday-svg";
@@ -127,6 +128,28 @@ const ChartStatic = memo(function ChartStatic({
         <polyline points={pts(g.vwapLine)} fill="none" className="stroke-profit" strokeWidth={1.2} />
       ) : null}
       <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
+    </g>
+  );
+});
+
+/** 內外盤能量副圖的 bar 層。**必須 memo**:hover 每個 mousemove 都 re-render 父層,
+ *  這層最多 270 組 × 2 = 540 個 `<rect>`,不可每次重建(對齊 ChartStatic 的慣例)。
+ *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
+const EnergySub = memo(function EnergySub({ bars }: { bars: EnergyBar[] }) {
+  return (
+    <g>
+      {bars.map((b) => (
+        <g key={`e-${b.x}`}>
+          <rect x={b.x} y={SUB.height - b.outerH} width={BAR_W / 2} height={b.outerH} className="fill-bull" />
+          <rect
+            x={b.x + BAR_W / 2}
+            y={SUB.height - b.innerH}
+            width={BAR_W / 2}
+            height={b.innerH}
+            className="fill-bear"
+          />
+        </g>
+      ))}
     </g>
   );
 });
@@ -269,12 +292,7 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
       </svg>
       {/* 內外盤能量副圖 */}
       <svg viewBox={`0 0 ${SUB.width} ${SUB.height}`} className="mt-1 w-full" role="img" aria-label="內外盤能量">
-        {subGeo.energyBars.map((b) => (
-          <g key={`e-${b.x}`}>
-            <rect x={b.x} y={SUB.height - b.outerH} width={BAR_W / 2} height={b.outerH} className="fill-bull" />
-            <rect x={b.x + BAR_W / 2} y={SUB.height - b.innerH} width={BAR_W / 2} height={b.innerH} className="fill-bear" />
-          </g>
-        ))}
+        <EnergySub bars={subGeo.energyBars} />
       </svg>
       <figcaption className="mt-1 flex justify-between font-mono text-xs text-ink-dim">
         <span>
