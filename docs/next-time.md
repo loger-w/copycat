@@ -75,3 +75,9 @@
 - [ ] COM 卡死 stalled 心跳偵測(review B7):寫入 timeout 連發 / 幫浦圈停擺目前只靠 log,需心跳觀測基建(status 加 last_pump_ts + watchdog 降級);監控面非正確性,本輪 deferred
 - [ ] 期貨改價 `CorrectPriceBySeqNo` 末參數 nTradeType=0(ROD)對期權 IOC/FOK 單的影響 prod 首驗(review A6;test 沙盒未開通不可先驗)— 若群益端把改價後 TIF 重設為 ROD,IOC 單改價語意會變
 - [ ] 部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到
+
+## 2026-07-29(trade-layout-rework 順手清單)
+
+- [ ] `stock-ladder-open` localStorage key 已停用(閃電梯摺疊機制隨右欄 tab 取代):舊值殘留無害,未做清除 migration;若之後做 key 收斂(見 2026-07-28 條)一併清掉
+- [ ] `/api/stock/bars` 的真實環境驗證待補:本輪出貨時 8721 已被舊版 server 佔用且盤中(2026-07-29 11:57),不自行重啟搶 TC4 推播。重啟 server 後要驗:(a) `tf=D` 回應 `bars.length` 落在 100–120(SC-7);(b) DK 的 `Open`/`Volume` 欄位名(CLAUDE.md §8 只實證 H/L/C,現為防禦解析 + 略過計數 log);(c) 分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10);(d) 一次當日段耗時 >5s 就回頭改設計(change-spec §7)
+- [ ] `BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除:watchlist 上限 30 檔 × 30 日曆日量級可接受,若之後放寬 days 上限或改多帳號再加 LRU
