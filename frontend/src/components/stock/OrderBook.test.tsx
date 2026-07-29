@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { OrderBook } from "@/components/stock/OrderBook";
@@ -42,31 +42,44 @@ describe("OrderBook", () => {
     window.removeEventListener("stock-price-click", handler);
   });
 
-  it("總量列:委買/委賣五檔加總(SC-5)", () => {
+  // 🔴-1:垂直雙欄(SC-1)後總量列改成「<千分位數字> 張」大字,不再有「委買 / 委賣」前綴。
+  // markup 是 {n.toLocaleString("en-US")}<span>張</span> —— 兩節點間無空白,故用 \s* 正則
+  // (RTL 只正規化空白,不會替你補;review R16)。
+  it("總量列:買賣五檔加總 + 張 + 千分位(SC-1)", () => {
     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
-    expect(screen.getByText(/委買 382/)).toBeTruthy();
-    expect(screen.getByText(/委賣 1033/)).toBeTruthy();
+    expect(screen.getByText(/^382\s*張$/)).toBeTruthy();
+    expect(screen.getByText(/^1,033\s*張$/)).toBeTruthy();
   });
 
-  // 🔴-2:直式改水平(SC-4)後 bar 由「左右生長」改為「格內高度」,原方向斷言已不適用。
-  it("量 bar 改為格內高度、依最大量歸一(SC-4)", () => {
+  // 🔴-2:水平 10 格改垂直雙欄(SC-1)後,量 bar 由「格內垂直高度」改為「列背景水平寬度」。
+  it("量 bar 改為列背景寬度、依買賣共用最大量歸一(SC-1)", () => {
     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
     // BOOK 最大量 = 賣2 的 572
     const maxCell = screen.getByRole("button", { name: "賣2 2390" });
-    expect(maxCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
+    expect(maxCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.width).toBe(
       "100%",
     );
     // 買1 = 125 / 572 ≈ 22%
     const bidCell = screen.getByRole("button", { name: "買1 2380" });
-    expect(bidCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
+    expect(bidCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.width).toBe(
       "22%",
     );
   });
 
-  it("水平排列:買側由中央往左 買1→買5、賣側往右 賣1→賣5(SC-4)", () => {
+  // 🔴-3:買側 bar 由列右緣往左長、賣側由左緣往右長(SC-1)
+  it("量 bar 方向:買側靠右、賣側靠左(SC-1)", () => {
+    render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+    const bid = screen.getByRole("button", { name: "買1 2380" });
+    const ask = screen.getByRole("button", { name: "賣1 2385" });
+    expect(bid.querySelector("[data-testid='depth-vol-bar']")?.className).toContain("right-0");
+    expect(ask.querySelector("[data-testid='depth-vol-bar']")?.className).toContain("left-0");
+  });
+
+  // 🔴-4:垂直雙欄 = 左欄買1→買5 由上而下、右欄賣1→賣5 由上而下(原水平版是買5..買1|賣1..賣5)
+  it("垂直雙欄排列:左欄 買1→買5、右欄 賣1→賣5(SC-1)", () => {
     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
     const labels = screen.getAllByRole("button").map((el) => el.getAttribute("aria-label"));
-    expect(labels).toEqual(["買2 2375", "買1 2380", "賣1 2385", "賣2 2390"]);
+    expect(labels).toEqual(["買1 2380", "買2 2375", "賣1 2385", "賣2 2390"]);
   });
 
   it("買一 = 漲停 → 鎖漲停 badge;賣一 = 跌停 → 鎖跌停(SC-5)", () => {
@@ -102,5 +115,58 @@ describe("OrderBook", () => {
     );
     expect(screen.queryByText("鎖漲停")).toBeNull();
     expect(screen.queryByText("鎖跌停")).toBeNull();
+  });
+
+  // 🟢 SC-1:badge 位置由中央成交價格移到標題列(既有的文字斷言與位置無關,故另立一條)
+  it("鎖停 badge 出現在標題列容器內(SC-1)", () => {
+    render(
+      <OrderBook
+        code="2330"
+        book={{ bids: [[2_552_000, 999]], asks: [] }}
+        last={{ p: 2_552_000, t: "09:10:00.000", cum_vol: 1 }}
+        ref_={2_320_000}
+        upper={2_552_000}
+      />,
+    );
+    const head = screen.getByTestId("depth-head");
+    expect(within(head).getByText("鎖漲停")).toBeTruthy();
+  });
+
+  // 🟢 SC-1:標題列右側成交價 + 漲跌%(auto-default:五檔區自足,不必回頭看頁面 header)
+  it("標題列右側顯示成交價 + 漲跌%(SC-1)", () => {
+    render(
+      <OrderBook code="2330" book={BOOK} last={{ p: 2_380_000, t: "10:57:51.000", cum_vol: 1 }} ref_={2_320_000} />,
+    );
+    const head = screen.getByTestId("depth-head");
+    expect(within(head).getByText("2380")).toBeTruthy();
+    // (2380000 - 2320000) / 2320000 = +2.586%
+    expect(within(head).getByText("+2.59%")).toBeTruthy();
+  });
+
+  // 🟢 review R7:重寫時最容易掉的除零保護(DepthBar.tsx:78 的 Math.max(1, ...))
+  it("book=null 與五檔全 0 量:不崩、bar 寬不出現 NaN", () => {
+    const { container, rerender } = render(
+      <OrderBook code="2330" book={null} last={null} ref_={null} />,
+    );
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    rerender(
+      <OrderBook
+        code="2330"
+        book={{ bids: [[2_380_000, 0]], asks: [[2_385_000, 0]] }}
+        last={null}
+        ref_={null}
+      />,
+    );
+    const bars = container.querySelectorAll<HTMLElement>("[data-testid='depth-vol-bar']");
+    expect(bars.length).toBeGreaterThan(0);
+    bars.forEach((b) => expect(b.style.width.includes("NaN")).toBe(false));
+  });
+
+  // 🟢 review R15:本元件的 last 是物件({p,t,cum_vol} | null),與 DepthBar 收 number 不同
+  it("last=null / ref_=null:成交價顯示 —、不出現 NaN%", () => {
+    const { container } = render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+    const head = screen.getByTestId("depth-head");
+    expect(within(head).getByText("—")).toBeTruthy();
+    expect(container.textContent?.includes("NaN")).toBe(false);
   });
 });

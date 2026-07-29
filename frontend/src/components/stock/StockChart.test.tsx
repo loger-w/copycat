@@ -132,7 +132,11 @@ describe("StockChart 模式切換(SC-7)", () => {
     expect(back().hasAttribute("disabled")).toBe(true);
   });
 
-  it("取數失敗顯示「無 K 線資料」,不崩", async () => {
+  // 🔴 SC-3:失敗態與「真的沒資料」原本共用同一句「無 K 線資料」,害 2026-07-29 那次
+  // 舊 build 佔 port(endpoint 404)被誤讀成「這檔沒 K 線」。失敗態要看得出是失敗。
+  // 錯誤碼取值鏈:body 的 detail.error 優先 → 否則 HTTP_<status>(useStockBars.ts:35-44),
+  // 故本 case 的碼是 NOT_READY 而非 HTTP_503。
+  it("取數失敗顯示「K 線載入失敗」+ 錯誤碼,不崩", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
@@ -143,6 +147,24 @@ describe("StockChart 模式切換(SC-7)", () => {
     );
     chart();
     fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.getByText("NOT_READY")).toBeTruthy();
+    expect(screen.queryByText("無 K 線資料")).toBeNull();
+  });
+
+  // 🟢 SC-3 反向:真的取到空陣列 → 仍是「無 K 線資料」,不可誤報成失敗(W-13)
+  it("取到空 bars 仍顯示「無 K 線資料」,不誤報失敗", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/api/stock/bars")
+          ? new Response(JSON.stringify({ bars: [] }))
+          : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
+      ),
+    );
+    chart();
+    fireEvent.click(screen.getByRole("button", { name: "日K" }));
     await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByText("K 線載入失敗")).toBeNull();
   });
 });
