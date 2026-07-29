@@ -232,3 +232,23 @@ export interface FuturesState {
   seq: number;
   products: Record<string, FuturesProductState>;
 }
+
+/** 相關係數面板(realtime-correlation SC-6/7)。 */
+export interface CorrLegState {
+  label: string; // 繁中顯示名(後端帶,前端不寫死對照表)
+  mid: number | null; // 毫點中價;stale 或無報價 → null
+  stale: boolean;
+}
+
+/** 一條腿對 base 的各窗結果:`w<秒>` = 相關係數(樣本不足/常數序列 → null)、`n<秒>` = 樣本數。 */
+export type CorrPairState = Record<string, number | null>;
+
+export interface CorrState {
+  type: string; // "corr"
+  seq: number;
+  session: string; // "day" | "night"
+  base: string; // 基準腿 key(其餘各腿與它配對)
+  windows: number[]; // 秒;前端據此產欄,後端改設定時自動跟上
+  legs: Record<string, CorrLegState>;
+  pairs: Record<string, CorrPairState>;
+}
