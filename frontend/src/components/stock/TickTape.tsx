@@ -23,7 +23,12 @@ export function TickTape({ ticks }: { ticks: TickRow[] }) {
   }
 
   return (
-    <div className="flex max-h-80 flex-col overflow-y-auto rounded-md border border-line bg-surface p-3">
+    // h-full(非固定 max-h-80):高度由 StockPage 下半列決定 —— 圖表佔自然高度後,
+    // 剩下的全給下半列,明細因此撐到視窗底(SC-6)。內層 overflow-y-auto 不變。
+    <div
+      data-testid="tick-tape"
+      className="flex h-full flex-col overflow-y-auto rounded-md border border-line bg-surface p-3"
+    >
       <table className="w-full border-collapse font-mono text-xs">
         <thead>
           <tr className="text-ink-dim">

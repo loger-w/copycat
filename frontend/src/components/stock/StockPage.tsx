@@ -79,9 +79,16 @@ export function StockPage({ code, onSelect, stream }: Props) {
             {accum ? (
               <>
                 <StockChart accum={accum} code={code} />
-                {/* 下半:左五檔、右明細(SC-6) */}
-                <div className="flex min-w-0 gap-3">
-                  <div className="min-w-0 flex-[3]">
+                {/* 下半:左五檔、右明細(SC-6)。
+                    flex-1   → 吃掉圖表下方的剩餘空間,明細因此撐到視窗底(原本那裡是死白)。
+                    min-h-56 → 高度地板。flex-1 = `flex:1 1 0%`,basis 0 在負剩餘空間時分不到
+                               收縮額度會被算成 0 高,明細與「載入更多」鈕整塊消失、且 <main>
+                               的捲軸救不到(它是被壓縮不是撐出捲軸)。有地板才會真的把
+                               <main> 撐出捲軸當逃生口。
+                    items-stretch(預設)讓明細自然撐滿列高;五檔另加 self-start 維持自然高度,
+                    不被拉長成內部留白的空盒。 */}
+                <div data-testid="stock-lower-row" className="flex min-h-56 min-w-0 flex-1 gap-3">
+                  <div className="min-w-0 flex-[3] self-start">
                     <OrderBook
                       code={code}
                       book={accum.book}

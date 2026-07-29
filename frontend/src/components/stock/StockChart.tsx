@@ -46,7 +46,9 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
   const isMinute = mode === "m1" || mode === "m5";
 
   return (
-    <div className="flex flex-col">
+    // shrink-0:圖表維持 viewBox 決定的自然高度。少了它,負剩餘空間時本容器會被壓縮,
+    // 而內部固定高度的 svg 不跟著縮 → 溢出並與下半列重疊(SC-6 / W-17)。
+    <div className="flex shrink-0 flex-col">
       <div className="mb-1 flex items-center gap-1">
         {MODES.map(([id, label]) => (
           <button

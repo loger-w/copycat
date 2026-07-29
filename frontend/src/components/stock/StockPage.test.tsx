@@ -113,4 +113,18 @@ describe("StockPage", () => {
     expect(screen.queryByText("委託")).toBeNull();
     expect(screen.queryByText("部位")).toBeNull();
   });
+
+  // 🔴 SC-6:最外圍不出現捲軸的機制 = 圖表維持自然高度、下半列吃剩餘空間。
+  // jsdom 沒有版面引擎量不到真實高度,只能鎖住產生該效果的 class 組合(真實溢出量測走
+  // Phase 7 真環境 scrollHeight/clientHeight)。
+  //   flex-1   → 吃掉圖表下方的剩餘空間(現況那片死白)
+  //   min-h-56 → 高度地板。flex-1 = `flex:1 1 0%`,basis 0 在負剩餘空間時分不到收縮額度
+  //              會被算成 0 高 → 明細與「載入更多」鈕整塊消失且 <main> 的捲軸救不到。
+  //              有地板才會真的把 <main> 撐出捲軸(逃生口),而不是靜默裁掉內容。
+  it("下半列吃剩餘高度且有高度地板(SC-6)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    const row = screen.getByTestId("stock-lower-row");
+    expect(row.className).toContain("flex-1");
+    expect(row.className).toContain("min-h-56");
+  });
 });
