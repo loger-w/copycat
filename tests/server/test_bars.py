@@ -5,6 +5,7 @@ import datetime as _dt
 from copycat.live.stock_source import Bar
 from copycat.server.bars import (
     DAILY_MAX_BARS,
+    EMPTY_TTL_SECS,
     BarsCache,
     build_daily,
     build_minute,
@@ -122,12 +123,18 @@ class TestMinuteTwoTier:
         assert out[-1]["t"] == "2026-07-28 09:02"  # SC-10:最後一根會前進
 
     async def test_empty_history_not_negatively_cached(self) -> None:
-        """整段回空可能是 TC4 失敗 → 不可寫負向快取,否則被永久釘成空。"""
+        """整段回空可能是 TC4 失敗 → 不可寫**永久**負向快取,否則被釘成空。
+
+        round3:全空結果現在會被短 TTL(EMPTY_TTL_SECS)擋一下以收斂重複空等,
+        但過了 TTL 必須恢復重抓 —— W-15 的「可恢復」性質不變,只是延後幾秒。
+        """
         today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
         fetch = _Fetcher([[], [], [bar("2026-07-27 09:01")], []])
-        cache = BarsCache(ttl=999.0)
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
         await build_minute(fetch, cache, "2330", 2, today)
         assert cache.hist_missing("2330", _dt.date(2026, 7, 27), _dt.date(2026, 7, 27)) != []
+        clock["t"] = EMPTY_TTL_SECS + 1.0
         out = await build_minute(fetch, cache, "2330", 2, today)
         assert out == [bar("2026-07-27 09:01")]
 
@@ -138,10 +145,13 @@ class TestMinuteTwoTier:
         assert [c[1:] for c in fetch.calls] == [("1", "2026-07-28", "2026-07-28")]
 
     async def test_today_empty_not_cached(self) -> None:
+        """當日段回空同樣只被短 TTL 擋,過了就重抓(W-15)。"""
         today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
         fetch = _Fetcher([[], [bar("2026-07-28 09:01")]])
-        cache = BarsCache(ttl=999.0)
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
         assert await build_minute(fetch, cache, "2330", 1, today) == []
+        clock["t"] = EMPTY_TTL_SECS + 1.0
         assert await build_minute(fetch, cache, "2330", 1, today) != []
 
 
@@ -187,3 +197,60 @@ class TestPhase5Hardening:
         assert cache.hist_range("2330", old, old) == []
         assert cache.daily_get("2330", "2026-01-01") is None
         assert cache.today_get("2330", "2026-01-01") is None
+
+
+class TestEmptyNegativeCache:
+    """round3 T-8(項 9):TC4 查無該檔時每次請求都重付 60s 的空等。
+
+    實測(2026-07-29,server :8721 + TC4 在線):9999 的 ?tf=1&days=30 兩次都是
+    60.1s —— 歷史段與當日段各等滿 30s deadline,且完全沒有快取。
+    """
+
+    async def test_empty_result_short_ttl_blocks_refetch(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], []])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert await build_minute(fetch, cache, "9999", 2, today) == []
+        calls = len(fetch.calls)
+        clock["t"] = EMPTY_TTL_SECS - 1.0
+        assert await build_minute(fetch, cache, "9999", 2, today) == []
+        assert len(fetch.calls) == calls  # TTL 內完全不打 TC4
+
+    async def test_empty_ttl_expiry_recovers(self) -> None:
+        """W-15:負向標記必須會過期,否則等於把「可恢復」改成永久釘死。"""
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], [], [bar("2026-07-27 09:01")], [bar("2026-07-28 09:01")]])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert await build_minute(fetch, cache, "9999", 2, today) == []
+        clock["t"] = EMPTY_TTL_SECS + 1.0
+        assert await build_minute(fetch, cache, "9999", 2, today) != []
+
+    async def test_empty_key_includes_days(self) -> None:
+        """key 含 days:days=1 的空結果不可把 days=30 一併釘住(review R15)。"""
+        today = _dt.date(2026, 7, 28)
+        cache = BarsCache(ttl=999.0)
+        fetch = _Fetcher([[], [bar("2026-07-27 09:01")], [bar("2026-07-28 09:01")]])
+        assert await build_minute(fetch, cache, "2330", 1, today) == []
+        calls = len(fetch.calls)
+        await build_minute(fetch, cache, "2330", 30, today)
+        assert len(fetch.calls) > calls
+
+    async def test_daily_empty_also_short_ttl_cached(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], []])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert await build_daily(fetch, cache, "9999", today) == []
+        calls = len(fetch.calls)
+        clock["t"] = EMPTY_TTL_SECS - 1.0
+        assert await build_daily(fetch, cache, "9999", today) == []
+        assert len(fetch.calls) == calls
+
+    async def test_prune_clears_empty_marks(self) -> None:
+        cache = BarsCache(ttl=999.0)
+        cache.empty_mark("2330", "1", 30)
+        assert cache.empty_fresh("2330", "1", 30) is True
+        cache.prune(_dt.date(2026, 7, 28))
+        assert cache.empty_fresh("2330", "1", 30) is False

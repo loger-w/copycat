@@ -179,3 +179,74 @@ class TestFetchBarsRangeErrors:
         assert src.fetch_daily_bars("2330") == [
             {"date": "2026-07-24", "high": 101_500, "low": 99_000, "close": 100_500}
         ]
+
+
+class TestCollectHistoryWaiting:
+    """round3 T-9(項 9):首頁 poll 的等待策略。
+
+    實測(2026-07-29):TC4 查無該檔資料時 `?tf=1&days=30` 要 60.1s —— `_collect_history`
+    的 deadline 寫死 `poll_wait*30` = 30s,而 `build_minute` 歷史段 + 當日段各發一次。
+    有資料的冷載入也固定 2.13s,因為首輪 poll 必定落空後就睡滿 1.0s。
+    """
+
+    @staticmethod
+    def _run_with_fake_clock(src: StockQuoteSource, *args: Any) -> tuple[Any, list[float]]:
+        """sleep 不真睡,改推進假的 monotonic —— 否則測試會照 budget 真等 10 秒。"""
+        import copycat.live.stock_source as mod
+
+        slept: list[float] = []
+        now = {"t": 0.0}
+        real_sleep, real_mono = mod.time.sleep, mod.time.monotonic
+
+        def fake_sleep(secs: float) -> None:
+            slept.append(secs)
+            now["t"] += secs
+
+        mod.time.sleep = fake_sleep  # type: ignore[assignment]
+        mod.time.monotonic = lambda: now["t"]  # type: ignore[assignment]
+        try:
+            return src.fetch_bars_range(*args), slept
+        finally:
+            mod.time.sleep = real_sleep  # type: ignore[assignment]
+            mod.time.monotonic = real_mono  # type: ignore[assignment]
+
+    def test_poll_wait_zero_probes_once(self) -> None:
+        """poll_wait=0(測試組態)不重試 —— 否則就是在 budget 內全速空轉打 fake API。"""
+        sent: list[dict] = []
+        src = _src(_pager({"1K": {}}, sent))
+        assert src.fetch_bars_range("2330", "1", "2026-07-24", "2026-07-24") == []
+        probes = [o for o in sent if o["Request"] == "GETHISDATA"]
+        assert len(probes) == 1
+
+    def test_bars_deadline_shorter_than_default(self) -> None:
+        """bars 路徑用獨立的短 budget;其他 caller(overlay 日 K)維持 30s 舊值。"""
+        from copycat.live.stock_source import _BARS_POLL_DEADLINE
+
+        assert _BARS_POLL_DEADLINE <= 10.0
+
+    def test_backoff_starts_well_below_poll_wait(self) -> None:
+        """首輪落空後不再睡滿 poll_wait,改退避輪詢(2.13s → 目標 ≤1.6s)。"""
+        src = StockQuoteSource(
+            api=_FakeApi(_pager({"1K": {}})),
+            session="s1",
+            trade_date="2026-07-28",
+            poll_wait_secs=1.0,
+        )
+        _, slept = self._run_with_fake_clock(src, "2330", "1", "2026-07-24", "2026-07-24")
+        assert slept, "應該有等待"
+        assert slept[0] <= 0.15
+        assert max(slept) <= 1.0  # 退避上限 = 原 poll_wait
+        assert sum(slept) <= 10.0  # 不超過 bars 專屬 budget
+
+    def test_fallback_1k_also_uses_short_deadline(self) -> None:
+        """tf=D 的 DK→1K fallback 也要傳短 budget,否則無資料標的仍是 10+30=40s。"""
+        src = StockQuoteSource(
+            api=_FakeApi(_pager({"DK": {}, "1K": {}})),
+            session="s1",
+            trade_date="2026-07-28",
+            poll_wait_secs=1.0,
+        )
+        out, slept = self._run_with_fake_clock(src, "2330", "D", "2026-07-24", "2026-07-24")
+        assert out == []
+        # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束
+        assert sum(slept) <= 20.0
