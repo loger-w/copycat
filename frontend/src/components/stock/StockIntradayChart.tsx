@@ -3,7 +3,7 @@ import { memo, useId, useMemo, useState } from "react";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
-import { snapDown } from "@/lib/stock-tick";
+import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
@@ -11,9 +11,11 @@ import {
   overlayLines,
   X_END_MIN,
   X_LABEL_H,
+  SUB_TOP_PAD,
   X_START_MIN,
   type EnergyBar,
   type IntradayGeometry,
+  type OverlayLevel,
   type OverlayLine,
 } from "@/lib/stock-intraday-svg";
 import { cn } from "@/lib/utils";
@@ -22,7 +24,6 @@ const MAIN = { width: 800, height: 260 };
 const SUB = { width: 800, height: 70 };
 /** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁 */
 const PRICE_TAG = { w: 46, h: 14 };
-const PCT_TAG = { w: 46, h: 14 };
 const TIME_TAG = { w: 34, h: 13 };
 
 function hhmm(minute: number): string {
@@ -32,11 +33,6 @@ function hhmm(minute: number): string {
 function fmt(milli: number): string {
   const v = milli / 1000;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
-
-function fmtPct(pct: number): string {
-  if (pct === 0) return "0%";
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
 }
 
 function pts(line: { x: number; y: number }[]): string {
@@ -56,6 +52,35 @@ function toX(minute: number, width: number): number {
 
 function barW(width: number): number {
   return Math.max(1, width / (X_END_MIN - X_START_MIN) - 0.4);
+}
+
+/** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
+ *  上方壓力位紅、下方支撐位綠(台股紅漲綠跌),中軸取琥珀金不與紅綠系混淆。 */
+const LEVEL_STROKE: Record<OverlayLevel, string> = {
+  ah: "stroke-bull",
+  nh: "stroke-bull/55",
+  cdp: "stroke-profit",
+  nl: "stroke-bear/55",
+  al: "stroke-bear",
+  ma5: "stroke-ma5",
+  ma20: "stroke-ma20",
+};
+
+const LEVEL_FILL: Record<OverlayLevel, string> = {
+  ah: "fill-bull",
+  nh: "fill-bull/70",
+  cdp: "fill-profit",
+  nl: "fill-bear/70",
+  al: "fill-bear",
+  ma5: "fill-ma5",
+  ma20: "fill-ma20",
+};
+
+/** 右緣文字:CDP 五線印合法價位 + `*`(一眼分出是 CDP 不是 MA);MA 維持名稱 */
+function levelText(level: OverlayLevel, priceMilli: number): string {
+  return level === "ma5" || level === "ma20"
+    ? level.toUpperCase()
+    : `${fmtTickPrice(priceMilli)}*`;
 }
 
 /** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
@@ -98,12 +123,8 @@ const ChartStatic = memo(function ChartStatic({
           </clipPath>
         </defs>
       ) : null}
-      {g.upperY !== null ? (
-        <line x1={0} x2={w} y1={g.upperY} y2={g.upperY} className="stroke-bull" strokeDasharray="4 3" strokeWidth={0.8} />
-      ) : null}
-      {g.lowerY !== null ? (
-        <line x1={0} x2={w} y1={g.lowerY} y2={g.lowerY} className="stroke-bear" strokeDasharray="4 3" strokeWidth={0.8} />
-      ) : null}
+      {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
+          上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
       <line x1={0} x2={w} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
       {X_LABELS.map(({ minute }) => (
         <line
@@ -116,7 +137,7 @@ const ChartStatic = memo(function ChartStatic({
           strokeWidth={0.4}
         />
       ))}
-      {/* Y 軸刻度:左價位、右 %(SC-2) */}
+      {/* Y 軸刻度:只剩左緣價位(round3 SC-1:右緣 % 欄移除,讓位給 CDP 價位標) */}
       {g.yTicks.map((t) => (
         <g key={`yt-${t.priceMilli}`}>
           <text
@@ -128,17 +149,6 @@ const ChartStatic = memo(function ChartStatic({
           >
             {fmt(t.priceMilli)}
           </text>
-          {t.pct !== null ? (
-            <text
-              x={w - 2}
-              y={Math.min(Math.max(t.y - 2, 8), h - 16)}
-              textAnchor="end"
-              className={cn(t.pct > 0 ? "fill-bull" : t.pct < 0 ? "fill-bear" : "fill-ink-dim")}
-              fontSize="0.625rem"
-            >
-              {fmtPct(t.pct)}
-            </text>
-          ) : null}
         </g>
       ))}
       {/* 平盤與走勢線之間的填色(SC-3):同一個封閉多邊形,用 clip 切上下兩半分別塗色 */}
@@ -158,22 +168,26 @@ const ChartStatic = memo(function ChartStatic({
           />
         </>
       ) : null}
-      {/* 疊線(CDP/MA)+ 右緣 label(SC-4) */}
+      {/* 疊線(CDP/MA)+ 右緣價位標(round3 SC-2) */}
       {oLines.map((l) => (
-        <g key={`o-${l.label}`}>
+        // key 用 level 不用文字:文字現在是價位,兩條線同價時會撞 key
+        <g key={`o-${l.level}`}>
           <line
             x1={0}
             x2={w - 34}
             y1={l.y}
             y2={l.y}
-            className={
-              l.kind === "cdp" ? "stroke-ink-dim" : l.label === "MA20" ? "stroke-ma20" : "stroke-ma5"
-            }
+            className={LEVEL_STROKE[l.level]}
             strokeDasharray="3 2"
             strokeWidth={0.8}
           />
-          <text x={w - 32} y={l.y + 3} className="fill-ink-dim" fontSize="0.5625rem">
-            {l.label}
+          <text
+            x={w - 32}
+            y={l.y + 3}
+            className={LEVEL_FILL[l.level]}
+            fontSize="0.5625rem"
+          >
+            {levelText(l.level, l.priceMilli)}
           </text>
         </g>
       ))}
@@ -225,7 +239,7 @@ function XAxisLabels({
         const x = toX(minute, w) + 2;
         if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
         return (
-          <text key={minute} x={x} y={h - 3} className="fill-ink-dim" fontSize="0.625rem">
+          <text key={minute} x={x} y={h - 3} className="fill-time" fontSize="0.625rem">
             {label}
           </text>
         );
@@ -239,16 +253,29 @@ function XAxisLabels({
  *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
 const EnergySub = memo(function EnergySub({
   bars,
+  maxSide,
   w,
   h,
 }: {
   bars: EnergyBar[];
+  /** 歸一分母 = 該日單邊最大張數,即頂端刻度值(SC-8) */
+  maxSide: number;
   w: number;
   h: number;
 }) {
   const bw = barW(w);
+  const midY = h - (h - SUB_TOP_PAD) / 2;
   return (
     <g>
+      {/* 量刻度(SC-8):中線淡橫線 + 左緣兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
+          頂端那根不會蓋住刻度文字。 */}
+      <line x1={0} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
+      <text x={2} y={SUB_TOP_PAD - 2} className="fill-ink-dim" fontSize="0.5rem">
+        {maxSide}
+      </text>
+      <text x={2} y={midY - 2} className="fill-ink-dim" fontSize="0.5rem">
+        {Math.round(maxSide / 2)}
+      </text>
       {bars.map((b) => (
         <g key={`e-${b.x}`}>
           <rect x={b.x} y={h - b.outerH} width={bw / 2} height={b.outerH} className="fill-bull" />
@@ -362,7 +389,6 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
         ];
 
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
-  const hoverPct = hoverPrice !== null && ref ? ((hoverPrice - ref) / ref) * 100 : null;
   const timeTagX = hoverMin !== null ? clampTagX(toX(hoverMin, mainW), TIME_TAG.w, mainW) : null;
   const timeTagSpan: [number, number] | null =
     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
@@ -480,32 +506,6 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
                 {hoverPrice !== null ? fmt(hoverPrice) : ""}
               </text>
             </g>
-            {/* 右緣 % 標籤(江波圖獨有:K 線跨多日沒有「相對昨收」語意) */}
-            {hoverPct !== null ? (
-              <g
-                transform={`translate(${mainW - PCT_TAG.w}, ${clampTagY(hover.y, PCT_TAG.h, plotBottom)})`}
-              >
-                <rect
-                  data-testid="pct-tag"
-                  width={PCT_TAG.w}
-                  height={PCT_TAG.h}
-                  rx={2}
-                  className="fill-bg-deep stroke-line"
-                />
-                <text
-                  data-testid="pct-tag-text"
-                  x={PCT_TAG.w - 4}
-                  y={PCT_TAG.h - 4}
-                  textAnchor="end"
-                  className={cn(
-                    hoverPct > 0 ? "fill-bull" : hoverPct < 0 ? "fill-bear" : "fill-ink-dim",
-                  )}
-                  fontSize="0.625rem"
-                >
-                  {`${hoverPct > 0 ? "+" : ""}${hoverPct.toFixed(1)}%`}
-                </text>
-              </g>
-            ) : null}
             {/* 底部時間標籤 */}
             {timeTagX !== null && hoverMin !== null ? (
               <g transform={`translate(${timeTagX}, ${mainH - TIME_TAG.h})`}>
@@ -521,7 +521,7 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
                   x={TIME_TAG.w / 2}
                   y={TIME_TAG.h - 3.5}
                   textAnchor="middle"
-                  className="fill-ink"
+                  className="fill-time"
                   fontSize="0.625rem"
                 >
                   {hhmm(hoverMin)}
@@ -534,7 +534,7 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
       <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="內外盤能量">
-        <EnergySub bars={subGeo.energyBars} w={subW} h={subH} />
+        <EnergySub bars={subGeo.energyBars} maxSide={subGeo.maxSide} w={subW} h={subH} />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
           <line

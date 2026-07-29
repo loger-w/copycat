@@ -21,6 +21,10 @@ export const X_END_MIN = 13 * 60 + 30; // 13:30
 export const X_LABEL_H = 14;
 export const PAD_Y = 4;
 
+/** 內外盤副圖頂端預留(SC-8):量刻度文字畫在這裡。不留的話最大那根 bar 高度恰等於
+ *  副圖全高,頂端刻度必被蓋住。 */
+export const SUB_TOP_PAD = 10;
+
 /** 左緣刻度的百分比階(SC-4:由上而下)。±10 直接用 upper/lower 原值、0 用 ref 原值。 */
 const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
 
@@ -40,8 +44,6 @@ export interface EnergyBar {
 export interface YTick {
   y: number;
   priceMilli: number;
-  /** 相對昨收 %;無漲跌停(或無 ref)時 null = 不顯示 % 欄(SC-2) */
-  pct: number | null;
 }
 
 export interface IntradayGeometry {
@@ -58,6 +60,8 @@ export interface IntradayGeometry {
   yDomain: [number, number]; // 毫元
   yTicks: YTick[];
   energyBars: EnergyBar[];
+  /** 內外盤能量的歸一分母 = 該日單邊最大張數(SC-8 量刻度的頂端值) */
+  maxSide: number;
   /** 價格 → y 座標(overlay 線共用同一縮放) */
   toY: (priceMilli: number) => number;
   /** y 座標 → 價格(`toY` 的逆函數);回傳前夾制進 yDomain */
@@ -73,10 +77,14 @@ export interface StockOverlay {
   date: string | null;
 }
 
+/** 疊線種類。`label` 字串已移除(round3 SC-2:右緣改印價位)—— 名稱語意留在 `level`,
+ *  顯示文字由元件用 `priceMilli` 現算,判色 / React key 也一律走 `level` 不走文字。 */
+export type OverlayLevel = "ah" | "nh" | "cdp" | "nl" | "al" | "ma5" | "ma20";
+
 export interface OverlayLine {
   y: number;
   priceMilli: number;
-  label: string;
+  level: OverlayLevel;
   kind: "cdp" | "ma";
 }
 
@@ -145,17 +153,17 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   }
 
   const maxSide = Math.max(1, ...entries.map(([, m]) => Math.max(m.o, m.i)));
+  // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
+  const energyH = Math.max(1, size.height - SUB_TOP_PAD);
   const energyBars = entries.map(([minute, m]) => ({
     x: toX(minute),
     outer: m.o,
     inner: m.i,
-    outerH: (m.o / maxSide) * size.height,
-    innerH: (m.i / maxSide) * size.height,
+    outerH: (m.o / maxSide) * energyH,
+    innerH: (m.i / maxSide) * energyH,
   }));
 
   const yTicks: YTick[] = [];
-  const pctOf = (p: number): number | null =>
-    ref > 0 ? (p === ref ? 0 : ((p - ref) / ref) * 100) : null;
   if (upper !== null && lower !== null && ref > 0) {
     // SC-4:由上而下 +10/+8/…/0/…/−8/−10%。端點與中央用原值,其餘 snap 到合法 tick。
     // 去重:低價股 tick 粗時相鄰檔位會 snap 到同價,重複的 priceMilli 會撞 React key。
@@ -169,11 +177,11 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
       if (p < yBottom || p > yTop) continue;
       if (seen.has(p)) continue;
       seen.add(p);
-      yTicks.push({ y: toY(p), priceMilli: p, pct: pctOf(p) });
+      yTicks.push({ y: toY(p), priceMilli: p });
     }
   } else {
     for (const p of [yTop, ref, yBottom]) {
-      yTicks.push({ y: toY(p), priceMilli: Math.round(p), pct: null });
+      yTicks.push({ y: toY(p), priceMilli: Math.round(p) });
     }
   }
 
@@ -208,6 +216,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     yDomain: [yBottom, yTop],
     yTicks,
     energyBars,
+    maxSide,
     toY,
     priceAtY,
     minuteOf,
@@ -222,20 +231,21 @@ export function overlayLines(
 ): OverlayLine[] {
   const [yBottom, yTop] = g.yDomain;
   const lines: OverlayLine[] = [];
-  const push = (p: number | null | undefined, label: string, kind: OverlayLine["kind"]): void => {
+  const push = (p: number | null | undefined, level: OverlayLevel, kind: OverlayLine["kind"]): void => {
     if (p == null || p < yBottom || p > yTop) return;
-    lines.push({ y: g.toY(p), priceMilli: p, label, kind });
+    lines.push({ y: g.toY(p), priceMilli: p, level, kind });
   };
   if (toggles.cdp && overlay.cdp) {
-    push(overlay.cdp.ah, "AH", "cdp");
-    push(overlay.cdp.nh, "NH", "cdp");
-    push(overlay.cdp.cdp, "CDP", "cdp");
-    push(overlay.cdp.nl, "NL", "cdp");
-    push(overlay.cdp.al, "AL", "cdp");
+    // 順序 = 由上而下,元件的配色表依賴這個語意(SC-2:名稱移除後靠顏色區分)
+    push(overlay.cdp.ah, "ah", "cdp");
+    push(overlay.cdp.nh, "nh", "cdp");
+    push(overlay.cdp.cdp, "cdp", "cdp");
+    push(overlay.cdp.nl, "nl", "cdp");
+    push(overlay.cdp.al, "al", "cdp");
   }
   if (toggles.ma) {
-    push(overlay.ma5, "MA5", "ma");
-    push(overlay.ma20, "MA20", "ma");
+    push(overlay.ma5, "ma5", "ma");
+    push(overlay.ma20, "ma20", "ma");
   }
   return lines;
 }

@@ -15,6 +15,7 @@
   --color-bull: #f0524f; /* 台股紅漲 */
   --color-bear: #3ba272; /* 台股綠跌 */
   --color-ma5: #f0b429; /* MA5 黃 */
+  --color-time: #f0b429; /* 江波圖時間軸黃(語意獨立於 ma5;同色值是刻意的) */
   --color-ma20: #b794f4; /* MA20 紫 */
   --color-idx-otc: #3b82f6; /* 櫃買指數識別藍(重疊圖固定色,不隨漲跌) */
 
