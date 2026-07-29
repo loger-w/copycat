@@ -87,9 +87,9 @@ describe("CorrPanel(SC-7)", () => {
     expect(screen.getByText(/載入中/).textContent).toBeTruthy();
   });
 
-  it("斷線時顯示連線狀態", () => {
+  it("斷線時顯示連線狀態(沿用全站 ConnectionBadge 文案)", () => {
     render(<CorrPanel state={state()} wsStatus="closed" />);
-    expect(screen.getByText(/斷線|重連/)).toBeTruthy();
+    expect(screen.getByText(/連線中斷/)).toBeTruthy();
   });
 
   it("基準腿名稱顯示在標題(說明是對誰的相關)", () => {
