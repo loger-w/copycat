@@ -1,0 +1,43 @@
+{
+  "_comment": "相關係數引擎的腿設定。新增一腿只需在 legs 加一筆(SC-8),不必改引擎程式碼。source: tc4 = 本引擎自行 SUBQUOTE;futures_engine = 讀既有期貨引擎狀態(base 腿必須用這個,TXF.HOT 已被 futures_engine 訂閱,同 symbol 跨 session 只推一邊)。label 是前端顯示名,前端不寫死對照表。窗長/樣本門檻/stale 秒數目前在 copycat/corr_config.py 的 CorrConfig 預設值,此檔不覆寫。",
+  "_todo_tsm": "CME single stock futures(含 TSMC ADR)2026-07-27 上市,達錢 4 尚未上架(2026-07-29 實測 64 種命名組合全 fail)。上架後在 legs 加一筆即可,symbol 待實測確認。",
+  "base": "TXF",
+  "legs": [
+    {
+      "key": "TXF",
+      "label": "台指",
+      "symbol": "TC.F.TWF.TXF.HOT",
+      "source": "futures_engine"
+    },
+    {
+      "key": "TWN",
+      "label": "富台",
+      "symbol": "TC.F.SGX.TWN.HOT",
+      "source": "tc4"
+    },
+    {
+      "key": "YM",
+      "label": "道瓊",
+      "symbol": "TC.F.CBOT.YM.HOT",
+      "source": "tc4"
+    },
+    {
+      "key": "ES",
+      "label": "標普",
+      "symbol": "TC.F.CME.ES.HOT",
+      "source": "tc4"
+    },
+    {
+      "key": "NQ",
+      "label": "納指",
+      "symbol": "TC.F.CME.NQ.HOT",
+      "source": "tc4"
+    },
+    {
+      "key": "SXF",
+      "label": "費半",
+      "symbol": "TC.F.TWF.SXF.HOT",
+      "source": "tc4"
+    }
+  ]
+}
