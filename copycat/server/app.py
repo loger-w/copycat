@@ -24,7 +24,9 @@ from copycat.live.trade_models import (
 from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
 from copycat.server.audit import AuditWriteError
+from copycat.corr_config import load_config as load_corr_config
 from copycat.server.capital_api import WsBroadcaster, register_capital
+from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
@@ -60,6 +62,7 @@ DEFAULT_TRADE: Final = object()
 DEFAULT_STOCK: Final = object()  # 同語意:__main__ 傳入才建真 StockQuoteSource
 DEFAULT_INDEX: Final = object()  # 同語意(index-board IR9)
 DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
+DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
 
 
 class SelectBody(BaseModel):
@@ -114,6 +117,12 @@ def _default_futures_source() -> FuturesSource:
     return FuturesQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
 
 
+def _default_corr_source() -> CorrSource:
+    from copycat.live.corr_source import CorrQuoteSource  # 延遲 import:測試不觸 pyzmq
+
+    return CorrQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+
+
 def create_app(
     source: QuoteSource | None = None,
     *,
@@ -121,6 +130,7 @@ def create_app(
     stock_source: StockSource | object | None = None,
     index_source: IndexSource | object | None = None,
     futures_source: FuturesSource | object | None = None,
+    corr_source: CorrSource | object | None = None,
     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
     throttle_secs: float = 1.0,
@@ -131,6 +141,7 @@ def create_app(
     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
     futures_ws = WsBroadcaster()
+    corr_ws = WsBroadcaster()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -256,10 +267,48 @@ def create_app(
                     logger.exception("futures close 失敗(忽略)")
             futures = None
         app.state.futures = futures
+        # 相關係數引擎(realtime-correlation SC-6):必須在 futures 之後建 —— base 腿
+        # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
+        # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
+        corr: CorrelationEngine | None = None
+        try:
+            if corr_source is DEFAULT_CORR or (
+                corr_source is None and trade_source is DEFAULT_TRADE
+            ):
+                resolved_corr: CorrSource | None = _default_corr_source()
+            else:
+                resolved_corr = cast("CorrSource | None", corr_source)
+            if resolved_corr is not None:
+                corr_src = resolved_corr
+                futures_engine = futures
+                corr = CorrelationEngine(
+                    lambda: corr_src,
+                    config=load_corr_config(),
+                    txf_state_getter=(
+                        lambda: futures_engine.state() if futures_engine is not None else {}
+                    ),
+                    broadcast=corr_ws.publish,
+                )
+                await corr.start()
+        except Exception:
+            logger.exception("corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)")
+            if corr is not None:
+                try:
+                    await corr.close()
+                except Exception:
+                    logger.exception("corr close 失敗(忽略)")
+            corr = None
+        app.state.corr = corr
         try:
             yield
         finally:
-            # 關機反序:futures → capital → index → stock → (trade) → runtime
+            # 關機反序:corr → futures → capital → index → stock → (trade) → runtime
+            # (corr 依賴 futures.state(),必須先收)
+            if corr is not None:
+                try:
+                    await corr.close()
+                except Exception:
+                    logger.exception("corr close 失敗(關機續行)")
             if futures is not None:
                 try:
                     await futures.close()
@@ -294,6 +343,7 @@ def create_app(
 
     app.state.capital_ws = capital_ws
     app.state.futures_ws = futures_ws
+    app.state.corr_ws = corr_ws
     register_capital(app)  # capital/futures routes + 例外映射(capital-order design §6)
 
     @app.exception_handler(Exception)
@@ -428,6 +478,28 @@ def create_app(
         if index is None:
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
         return index.state()
+
+    @app.get("/api/corr/state")
+    async def corr_state(request: Request) -> dict:
+        corr: CorrelationEngine | None = request.app.state.corr
+        if corr is None:
+            raise HTTPException(status_code=503, detail={"error": "CORR_NOT_READY"})
+        return corr.state()
+
+    @app.websocket("/ws/corr")
+    async def ws_corr(websocket: WebSocket) -> None:
+        corr: CorrelationEngine | None = websocket.app.state.corr
+        await websocket.accept()
+        if corr is None:
+            await websocket.close()
+            return
+        try:
+            # 先送當前快照:client 不必等到下一個 tick 才有畫面
+            await websocket.send_json(corr.state())
+            async for msg in corr_ws.stream():
+                await websocket.send_json(msg)
+        except WebSocketDisconnect:
+            return
 
     @app.websocket("/ws/index")
     async def ws_index(websocket: WebSocket) -> None:
