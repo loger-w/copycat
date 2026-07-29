@@ -186,7 +186,12 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col gap-2" aria-label="交易面板">
+    // border-l:與中間主區的視覺分隔(round3 項 5)。本元件常駐**全部 tab**,
+    // 所以這條線在 TXO / 期貨 / 指數頁也會出現 —— 刻意的一致性。
+    <aside
+      className="flex w-72 shrink-0 flex-col gap-2 border-l border-line pl-3"
+      aria-label="交易面板"
+    >
       <div className="flex items-center gap-1 border-b border-line pb-1" role="tablist" aria-label="交易面板分頁">
         {TABS.map(([id, label]) => (
           <button

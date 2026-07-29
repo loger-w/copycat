@@ -160,7 +160,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   }
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col gap-2" aria-label="自選清單">
+    // border-r:與中間主區的視覺分隔(round3 項 5);pr-3 讓內容不貼線
+    <aside
+      className="flex w-60 shrink-0 flex-col gap-2 border-r border-line pr-3"
+      aria-label="自選清單"
+    >
       {/* 群組 tab 列(SC-6) */}
       <div className="flex flex-wrap items-center gap-1 border-b border-line pb-1" role="tablist" aria-label="自選群組">
         <button
