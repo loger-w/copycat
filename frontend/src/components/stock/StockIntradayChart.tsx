@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
 
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
@@ -7,6 +7,7 @@ import {
   buildIntradayGeometry,
   overlayLines,
   X_END_MIN,
+  X_LABEL_H,
   X_START_MIN,
   type EnergyBar,
   type IntradayGeometry,
@@ -42,24 +43,41 @@ function toX(minute: number): number {
 
 const BAR_W = Math.max(1, MAIN.width / (X_END_MIN - X_START_MIN) - 0.4);
 
-const DIR_CLASS = {
-  up: "fill-bull/50",
-  down: "fill-bear/50",
-  flat: "fill-ink-dim/40",
-} as const;
-
-/** 靜態圖層 memo:hover 每 mousemove re-render 父層,量 bar/線層不可每次重建(SC-1)。 */
+/** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
 const ChartStatic = memo(function ChartStatic({
   g,
   showVwap,
   oLines,
+  clipAbove,
+  clipBelow,
 }: {
   g: IntradayGeometry;
   showVwap: boolean;
   oLines: OverlayLine[];
+  clipAbove: string;
+  clipBelow: string;
 }) {
   return (
     <g>
+      {/* 平盤上下的填色與雙色價線共用這兩個 clip(SC-2)。
+          id 必須全域唯一(SVG id 是 document 範圍),且只含識別字元 ——
+          React 19 的 useId 產出 «r0» 形態,直接拼進 url(#…) 的解析行為未實測,
+          解析失敗時 SVG 規範下該元素**不會被繪製**,是完全靜默的失敗。 */}
+      {g.hasRef ? (
+        <defs>
+          <clipPath id={clipAbove}>
+            <rect x={0} y={0} width={MAIN.width} height={Math.max(0, g.refY)} />
+          </clipPath>
+          <clipPath id={clipBelow}>
+            <rect
+              x={0}
+              y={g.refY}
+              width={MAIN.width}
+              height={Math.max(0, MAIN.height - X_LABEL_H - g.refY)}
+            />
+          </clipPath>
+        </defs>
+      ) : null}
       {g.upperY !== null ? (
         <line x1={0} x2={MAIN.width} y1={g.upperY} y2={g.upperY} className="stroke-bull" strokeDasharray="4 3" strokeWidth={0.8} />
       ) : null}
@@ -78,7 +96,13 @@ const ChartStatic = memo(function ChartStatic({
       {/* Y 軸刻度:左價位、右 %(SC-2) */}
       {g.yTicks.map((t) => (
         <g key={`yt-${t.priceMilli}`}>
-          <text x={2} y={Math.min(Math.max(t.y - 2, 8), MAIN.height - 16)} className="fill-ink-dim" fontSize="0.625rem">
+          <text
+            data-testid="y-tick-price"
+            x={2}
+            y={Math.min(Math.max(t.y - 2, 8), MAIN.height - 16)}
+            className="fill-ink-dim"
+            fontSize="0.625rem"
+          >
             {fmt(t.priceMilli)}
           </text>
           {t.pct !== null ? (
@@ -94,17 +118,23 @@ const ChartStatic = memo(function ChartStatic({
           ) : null}
         </g>
       ))}
-      {/* 量 bar(底部 1/4 高;依分鐘漲跌著色 — SC-3) */}
-      {g.volumeBars.map((b) => (
-        <rect
-          key={`v-${b.x}`}
-          x={b.x}
-          y={MAIN.height - 14 - (b.h / MAIN.height) * (MAIN.height / 4)}
-          width={BAR_W}
-          height={(b.h / MAIN.height) * (MAIN.height / 4)}
-          className={DIR_CLASS[b.dir]}
-        />
-      ))}
+      {/* 平盤與走勢線之間的填色(SC-3):同一個封閉多邊形,用 clip 切上下兩半分別塗色 */}
+      {g.hasRef && g.areaPolygon !== "" ? (
+        <>
+          <polygon
+            points={g.areaPolygon}
+            className="fill-bull"
+            fillOpacity="0.15"
+            clipPath={`url(#${clipAbove})`}
+          />
+          <polygon
+            points={g.areaPolygon}
+            className="fill-bear"
+            fillOpacity="0.15"
+            clipPath={`url(#${clipBelow})`}
+          />
+        </>
+      ) : null}
       {/* 疊線(CDP/MA)+ 右緣 label(SC-4) */}
       {oLines.map((l) => (
         <g key={`o-${l.label}`}>
@@ -125,9 +155,31 @@ const ChartStatic = memo(function ChartStatic({
         </g>
       ))}
       {showVwap ? (
-        <polyline points={pts(g.vwapLine)} fill="none" className="stroke-profit" strokeWidth={1.2} />
+        // 均價線白色(SC-2.3);原本是琥珀金 profit,與新的紅綠雙色價線對比不足
+        <polyline points={pts(g.vwapLine)} fill="none" className="stroke-ink" strokeWidth={1.2} />
       ) : null}
-      <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
+      {/* 主價線(SC-2):有昨收 → clip 切上下兩段,平盤上紅、平盤下綠;
+          無昨收 → 沒有「平盤」可言,退回單條 accent 桃紅(不是白 —— 會跟 VWAP 同色) */}
+      {g.hasRef ? (
+        <>
+          <polyline
+            points={pts(g.priceLine)}
+            fill="none"
+            className="stroke-bull"
+            strokeWidth={1.6}
+            clipPath={`url(#${clipAbove})`}
+          />
+          <polyline
+            points={pts(g.priceLine)}
+            fill="none"
+            className="stroke-bear"
+            strokeWidth={1.6}
+            clipPath={`url(#${clipBelow})`}
+          />
+        </>
+      ) : (
+        <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
+      )}
     </g>
   );
 });
@@ -158,6 +210,10 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
   const { toggles, set } = useChartToggles();
   const overlayQ = useStockOverlay(accum.code || null, toggles.cdp || toggles.ma);
   const [hoverMin, setHoverMin] = useState<number | null>(null);
+  // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const clipAbove = `${uid}-above`;
+  const clipBelow = `${uid}-below`;
 
   const g = useMemo(
     () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, MAIN),
@@ -255,7 +311,13 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
         onMouseMove={onMove}
         onMouseLeave={() => setHoverMin(null)}
       >
-        <ChartStatic g={g} showVwap={toggles.vwap} oLines={oLines} />
+        <ChartStatic
+          g={g}
+          showVwap={toggles.vwap}
+          oLines={oLines}
+          clipAbove={clipAbove}
+          clipBelow={clipBelow}
+        />
         {/* hover 十字 + tooltip(SC-1) */}
         {hoverMin !== null && hoverAgg ? (
           <g pointerEvents="none">

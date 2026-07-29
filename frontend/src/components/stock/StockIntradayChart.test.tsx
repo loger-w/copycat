@@ -61,9 +61,58 @@ describe("StockIntradayChart", () => {
   it("渲染價線/VWAP/內外盤副圖", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const polylines = container.querySelectorAll("polyline");
-    expect(polylines.length).toBeGreaterThanOrEqual(2); // 價線 + VWAP
+    expect(polylines.length).toBeGreaterThanOrEqual(2);
     expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/累積外盤/)).toBeTruthy();
+  });
+
+  // 🔴 SC-2:走勢線平盤上紅、平盤下綠(clipPath 切上下兩段),線與平盤之間填半透明色塊
+  it("價線雙色 + 平盤填色:bull/bear 各一條 polyline 與一個 polygon", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelector('polyline[class*="stroke-bull"]')).toBeTruthy();
+    expect(container.querySelector('polyline[class*="stroke-bear"]')).toBeTruthy();
+    const up = container.querySelector('polygon[class*="fill-bull"]');
+    const down = container.querySelector('polygon[class*="fill-bear"]');
+    expect(up).toBeTruthy();
+    expect(down).toBeTruthy();
+    expect(up!.getAttribute("fill-opacity")).toBe("0.15");
+    expect(down!.getAttribute("fill-opacity")).toBe("0.15");
+  });
+
+  it("clipPath id 互異、只含識別字元,且被對應元素以 url(#…) 引用", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const clips = [...container.querySelectorAll("clipPath")];
+    expect(clips.length).toBe(2);
+    const ids = clips.map((c) => c.getAttribute("id")!);
+    expect(new Set(ids).size).toBe(2);
+    // React 19 的 useId 產出 «r0» 形態,含非識別字元;必須過濾後才拼進 url(#…)
+    for (const id of ids) expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+    for (const id of ids) {
+      expect(container.querySelector(`[clip-path="url(#${id})"]`)).toBeTruthy();
+    }
+  });
+
+  it("無昨收(meta.ref 缺)→ 單條 accent 價線、無填色無 clipPath,且與白色 VWAP 可區分", () => {
+    const noRef = fromSnapshot({
+      code: "2330", seq: 1,
+      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
+      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={noRef} />);
+    expect(container.querySelectorAll("clipPath").length).toBe(0);
+    expect(container.querySelectorAll("polygon").length).toBe(0);
+    expect(container.querySelector('polyline[class*="stroke-accent"]')).toBeTruthy();
+    expect(container.querySelector('polyline[class*="stroke-ink"]')).toBeTruthy(); // VWAP
+  });
+
+  // 🔴 SC-2.3:均價線由琥珀金 profit 改白色 ink
+  it("VWAP 線為 stroke-ink,全圖不再出現 stroke-profit", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelector('polyline[class*="stroke-profit"]')).toBeNull();
+    expect(container.querySelector('polyline[class*="stroke-ink"]')).toBeTruthy();
   });
 
   it("無分鐘資料顯示等待提示", () => {
@@ -75,12 +124,12 @@ describe("StockIntradayChart", () => {
     expect(screen.getByText("尚無成交")).toBeTruthy();
   });
 
-  it("toggle 列:均價/CDP/MA 三鈕,均價預設開(SC-4)", () => {
+  // 🔴 SC-3:CDP 改為預設開
+  it("toggle 列:均價/CDP/MA 三鈕,均價與 CDP 預設開(SC-3)", () => {
     wrap(<StockIntradayChart accum={ACCUM} />);
-    const vwap = screen.getByRole("button", { name: "均價" });
-    expect(vwap.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "CDP" }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByRole("button", { name: "MA" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "均價" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "CDP" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "MA" }).getAttribute("aria-pressed")).toBe("false");
   });
 
   it("均價 toggle 關 → VWAP 線消失", () => {
@@ -90,12 +139,19 @@ describe("StockIntradayChart", () => {
     expect(container.querySelectorAll("polyline").length).toBe(before - 1);
   });
 
-  it("CDP toggle 開 → overlay 線與 label 出現(SC-4)", async () => {
+  it("CDP 預設開 → overlay 線與 label 直接出現(SC-3)", async () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    fireEvent.click(screen.getByRole("button", { name: "CDP" }));
     await waitFor(() => expect(screen.getByText("CDP", { selector: "text" })).toBeTruthy());
     expect(screen.getByText("AH", { selector: "text" })).toBeTruthy();
     expect(container.querySelectorAll("line").length).toBeGreaterThan(5);
+  });
+
+  it("CDP toggle 關 → overlay 線與 label 消失(toggle 行為仍在)", async () => {
+    wrap(<StockIntradayChart accum={ACCUM} />);
+    await waitFor(() => expect(screen.getByText("CDP", { selector: "text" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "CDP" }));
+    expect(screen.queryByText("CDP", { selector: "text" })).toBeNull();
+    expect(screen.queryByText("AH", { selector: "text" })).toBeNull();
   });
 
   it("overlay 全 null → CDP/MA 反灰 disabled + title 無日線資料(SC-4/R8)", async () => {
@@ -111,19 +167,32 @@ describe("StockIntradayChart", () => {
     expect(btn.getAttribute("aria-pressed")).toBe("false"); // 自動置 off,不卡開著關不掉
   });
 
-  it("Y 軸刻度:左緣價位、右緣 %(SC-2)", () => {
-    wrap(<StockIntradayChart accum={ACCUM} />);
+  // 🔴 SC-4:刻度由 5 條(以 5% 為分隔)改為 11 條(0/±2/±4/±6/±8/±10%)
+  it("Y 軸刻度:左緣 11 個價位、右緣 11 個 %,含 ±2% 階(SC-4)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    // 端點 = 漲跌停原值
     expect(screen.getByText("2090", { selector: "text" })).toBeTruthy();
     expect(screen.getByText("2550", { selector: "text" })).toBeTruthy();
     expect(screen.getByText("+9.9%", { selector: "text" })).toBeTruthy();
     expect(screen.getByText("0%", { selector: "text" })).toBeTruthy();
+    // ±2% 階:ref 2320 → snapDown(2366.4) = 2365 / snapDown(2273.6) = 2270
+    expect(screen.getByText("2365", { selector: "text" })).toBeTruthy();
+    expect(screen.getByText("2270", { selector: "text" })).toBeTruthy();
+    // 左緣價位刻度共 11 個(不能用 x="2" 選 —— 會撞到 09:00 的時間軸標籤 toX(540)+2)
+    expect(container.querySelectorAll('[data-testid="y-tick-price"]').length).toBe(11);
+    expect(container.querySelectorAll('text[text-anchor="end"]').length).toBe(11); // 右緣 %
   });
 
-  it("量 bar 依分鐘漲跌著色(SC-3)", () => {
+  // 🔴 SC-5:主圖底部量 bar 移除,只留內外盤能量副圖
+  it("主圖不再有量 bar;內外盤能量副圖仍在(SC-5)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    // 541 首分鐘 flat、542 收高於 541 → up(fill-bull)
-    expect(container.querySelector('rect[class*="fill-bull"]')).toBeTruthy();
-    expect(container.querySelector('rect[class*="fill-ink-dim"]')).toBeTruthy();
+    const svgs = [...container.querySelectorAll("svg")];
+    const main = svgs.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!;
+    const sub = svgs.find((s) => s.getAttribute("aria-label") === "內外盤能量")!;
+    // defs 內的 rect 是 clipPath 的裁切框、不是畫面元素,要排除
+    const drawnRects = [...main.querySelectorAll("rect")].filter((r) => r.closest("defs") === null);
+    expect(drawnRects.length).toBe(0);
+    expect(sub.querySelectorAll("rect").length).toBeGreaterThan(0);
   });
 
   it("hover 顯示十字與 tooltip、移出消失(SC-1)", () => {

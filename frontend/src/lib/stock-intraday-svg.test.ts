@@ -24,24 +24,61 @@ describe("buildIntradayGeometry", () => {
     expect(X_END_MIN).toBe(810);
   });
 
-  it("price line spans minutes;有漲跌停 → 漲跌停域(SC-2,該變:原 ref 置中斷言)", () => {
+  it("price line spans minutes;有漲跌停 → 域**恰為**漲跌停(SC-4,該變:原 ×1.02/×0.98 留邊)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
       { width: 810 - 540, height: 100 },
     );
     expect(g.priceLine.length).toBe(2);
-    // 漲跌停域:yTop = upper×1.02、yBottom = lower×0.98(design v2 SC-2)
-    expect(g.yDomain[1]).toBeCloseTo(2_550_000 * 1.02, 3);
-    expect(g.yDomain[0]).toBeCloseTo(2_090_000 * 0.98, 3);
+    // 🔴 SC-4:區間就是漲停/跌停,不再多留 2% 邊
+    expect(g.yDomain[1]).toBe(2_550_000);
+    expect(g.yDomain[0]).toBe(2_090_000);
     expect(g.priceLine[1]!.y).toBeLessThan(g.priceLine[0]!.y);
-    // 漲跌停線恆在域內(貼近上下緣)
+    // 域端點落在幾何留邊上(PAD_Y=4、X_LABEL_H=14):走勢線在漲跌停時不被圖框裁掉半條 stroke
     expect(g.upperY).not.toBeNull();
     expect(g.lowerY).not.toBeNull();
-    expect(g.upperY!).toBeGreaterThan(0);
-    expect(g.lowerY!).toBeLessThan(100);
+    expect(g.upperY!).toBeCloseTo(4, 6);
+    expect(g.lowerY!).toBeCloseTo(100 - 14 - 4, 6);
     // x:每分鐘 1px(width = 分鐘數)
     expect(g.priceLine[0]!.x).toBeCloseTo(0, 5);
     expect(g.priceLine[1]!.x).toBeCloseTo(1, 5);
+  });
+
+  // 🔴 SC-4 / R1:priceAtY 必須是改動後 toY 的逆函數。中間點在任何公式下都剛好正確,
+  // 只有兩端會偏 —— round-trip 是唯一抓得到「公式沒跟著 toY 改」的測試。
+  it("priceAtY 是 toY 的逆函數(域內 round-trip ±1 毫元),超界夾制", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+      { width: 270, height: 100 },
+    );
+    for (const p of [2_090_000, 2_205_000, 2_320_000, 2_435_000, 2_550_000]) {
+      expect(Math.abs(g.priceAtY(g.toY(p)) - p)).toBeLessThanOrEqual(1);
+    }
+    expect(g.priceAtY(-99)).toBe(2_550_000);
+    expect(g.priceAtY(9999)).toBe(2_090_000);
+  });
+
+  // 🔴 SC-2:走勢線與平盤之間的封閉多邊形(起點x,refY → 各點 → 終點x,refY)
+  it("areaPolygon 以 refY 封閉且首尾點貼齊平盤", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
+      { width: 270, height: 100 },
+    );
+    const pts = g.areaPolygon.split(" ");
+    expect(pts.length).toBe(4); // 起點 + 2 個資料點 + 終點
+    expect(pts[0]).toBe(`0.0,${g.refY.toFixed(1)}`);
+    expect(pts[3]).toBe(`1.0,${g.refY.toFixed(1)}`);
+  });
+
+  it("無 ref 時 areaPolygon 為空字串(fallback 走單色線、不填色)", () => {
+    const g = buildIntradayGeometry(
+      {
+        minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
+        meta: { ...META, ref: null, upper: null, lower: null },
+      },
+      { width: 270, height: 100 },
+    );
+    expect(g.areaPolygon).toBe("");
   });
 
   it("upper/lower 缺 → 沿用對稱 autofit 域(edge 1)", () => {
@@ -57,20 +94,42 @@ describe("buildIntradayGeometry", () => {
     expect((lo + hi) / 2).toBeCloseTo(2_320_000, -2);
   });
 
-  it("yTicks:有漲跌停 → 5 點(端點+昨收+snap 中點)含 pct;缺 → 3 點 pct null(SC-2)", () => {
+  // 🔴 SC-4:刻度由「以 5% 為分隔的 5 點」改為 ±2/4/6/8/10% 的 11 點(2330 tick 5 元,不去重)
+  it("yTicks:有漲跌停 → 11 點(0/±2/±4/±6/±8/±10%),全為合法 tick 且由上而下遞減", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
       { width: 270, height: 100 },
     );
-    expect(g.yTicks).toHaveLength(5);
-    expect(g.yTicks[0]!.priceMilli).toBe(2_090_000);
-    expect(g.yTicks[2]!.priceMilli).toBe(2_320_000);
-    expect(g.yTicks[4]!.priceMilli).toBe(2_550_000);
-    expect(g.yTicks[0]!.pct).toBeCloseTo(-9.9, 1);
-    expect(g.yTicks[2]!.pct).toBe(0);
-    // 中點 snap 到合法 tick(2435 已對齊 5 元 tick)
-    expect(g.yTicks[3]!.priceMilli % 5_000).toBe(0);
+    expect(g.yTicks).toHaveLength(11);
+    // 端點用 upper/lower 原值、中央用 ref 原值(不經 snap,避免與域端點差一個 tick)
+    expect(g.yTicks[0]!.priceMilli).toBe(2_550_000);
+    expect(g.yTicks[5]!.priceMilli).toBe(2_320_000);
+    expect(g.yTicks[10]!.priceMilli).toBe(2_090_000);
+    expect(g.yTicks[5]!.pct).toBe(0);
+    expect(g.yTicks[0]!.pct).toBeCloseTo(9.9, 1);
+    expect(g.yTicks[10]!.pct).toBeCloseTo(-9.9, 1);
+    // ±2% 的價位 = snapDown(ref×1.02) = snapDown(2366400) = 2365000(5 元 tick)
+    expect(g.yTicks[4]!.priceMilli).toBe(2_365_000);
+    for (const t of g.yTicks) expect(t.priceMilli % 5_000).toBe(0);
+    // 由上而下:價位遞減、y 遞增
+    for (let i = 1; i < g.yTicks.length; i += 1) {
+      expect(g.yTicks[i]!.priceMilli).toBeLessThan(g.yTicks[i - 1]!.priceMilli);
+      expect(g.yTicks[i]!.y).toBeGreaterThan(g.yTicks[i - 1]!.y);
+    }
+  });
 
+  // 低價股 tick 粗 → 相鄰 pct snap 到同價;去重後少於 11 點屬正常(SC-4.2)
+  it("yTicks:低價股相鄰檔位 snap 到同價時去重,不產生重複 priceMilli", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 10_000, v: 1 }]]), meta: { ...META, ref: 10_000, upper: 11_000, lower: 9_000 } },
+      { width: 270, height: 100 },
+    );
+    const prices = g.yTicks.map((t) => t.priceMilli);
+    expect(new Set(prices).size).toBe(prices.length);
+    expect(prices.length).toBeLessThanOrEqual(11);
+  });
+
+  it("yTicks:缺漲跌停 → 沿用 3 點 pct null 的 fallback(白名單 11,不套 11 點)", () => {
     const g2 = buildIntradayGeometry(
       {
         minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
@@ -94,21 +153,7 @@ describe("buildIntradayGeometry", () => {
     expect(g.minuteOf(999)).toBeNull();
   });
 
-  it("volume bar dir:比前一有效分鐘 c(首分鐘 flat)(SC-3)", () => {
-    const g = buildIntradayGeometry(
-      {
-        minutes: minutes([
-          [540, { c: 2_320_000, v: 1 }],
-          [541, { c: 2_330_000, v: 1 }],
-          [542, { c: 2_310_000, v: 1 }],
-          [543, { c: 2_310_000, v: 1 }],
-        ]),
-        meta: META,
-      },
-      { width: 270, height: 100 },
-    );
-    expect(g.volumeBars.map((b) => b.dir)).toEqual(["flat", "up", "down", "flat"]);
-  });
+  // 🔴 SC-5:主圖底部量 bar 已移除(user 拍板留內外盤能量副圖),volumeBars 不再存在
 
   it("overlayLines:域內才給、含 label 與 kind(SC-4)", () => {
     const g = buildIntradayGeometry(
@@ -134,7 +179,28 @@ describe("buildIntradayGeometry", () => {
     );
   });
 
-  it("volume and energy bars per minute", () => {
+  // 🔴 SC-4 收窄 yDomain 的連帶語意(review R6):落在 upper..upper×1.02 那 2% 夾層的疊線
+  // 由「有畫」變成「不畫」。刻意接受 —— 超出漲停的價位當日不可能成交,畫出來是雜訊。
+  it("overlayLines:介於 upper 與舊域上緣(upper×1.02)之間的線不再給(域收窄後的新語意)", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+      { width: 270, height: 100 },
+    );
+    // 2_570_000 > upper(2_550_000) 但 < 舊上緣 2_601_000
+    const overlay = {
+      cdp: null,
+      ma5: 2_570_000,
+      ma20: 2_060_000, // < lower(2_090_000) 但 > 舊下緣 2_048_200
+      date: "2026-07-25",
+    };
+    expect(overlayLines(overlay, g, { cdp: false, ma: true })).toEqual([]);
+    // 域內的照給
+    expect(
+      overlayLines({ ...overlay, ma5: 2_540_000 }, g, { cdp: false, ma: true }).map((l) => l.label),
+    ).toEqual(["MA5"]);
+  });
+
+  it("energy bars per minute(SC-5:只剩內外盤能量,主圖量 bar 已移除)", () => {
     const g = buildIntradayGeometry(
       {
         minutes: minutes([
@@ -145,13 +211,12 @@ describe("buildIntradayGeometry", () => {
       },
       { width: 270, height: 100 },
     );
-    expect(g.volumeBars.length).toBe(2);
-    expect(g.volumeBars[0]!.v).toBe(10);
     expect(g.energyBars.length).toBe(2);
     expect(g.energyBars[0]!.outer).toBe(7);
     expect(g.energyBars[0]!.inner).toBe(3);
-    // 量 bar 高度正規化:最大分鐘量 = 滿高
-    expect(g.volumeBars[0]!.h).toBeGreaterThan(g.volumeBars[1]!.h);
+    // 高度依「該分鐘內外盤較大側」正規化
+    expect(g.energyBars[0]!.outerH).toBeGreaterThan(g.energyBars[1]!.outerH);
+    expect("volumeBars" in g).toBe(false);
   });
 
   it("vwap line approximates running average from minutes", () => {
