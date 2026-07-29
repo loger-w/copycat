@@ -107,11 +107,12 @@ describe("App(期貨 tab T15)", () => {
   it("nav 有「期貨」tab,排在「個股」後", () => {
     renderApp();
     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
-    // 收斂到 nav。斷言意圖(nav 四顆 tab 的文字與順序)完全不變。
+    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)完全不變。
+    // realtime-correlation SC-7:新增第五顆「相關係數」,排在「指數」後。
     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
       .getAllByRole("tab")
       .map((el) => el.textContent);
-    expect(labels).toEqual(["TXO 綜合損益", "個股", "期貨", "指數"]);
+    expect(labels).toEqual(["TXO 綜合損益", "個股", "期貨", "指數", "相關係數"]);
   });
 
   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
@@ -171,9 +172,11 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
     expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
   });
 
-  it("nav 有 4 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
+  it("nav 有 5 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
     renderApp();
-    expect(navTabs().length).toBe(4);
+    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 4 → 5 是 realtime-correlation SC-7
+    // 新增「相關係數」分頁的預期行為改變,右欄三顆不受影響。
+    expect(navTabs().length).toBe(5);
     expect(railTabs().length).toBe(3);
   });
 });

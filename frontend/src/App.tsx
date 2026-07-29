@@ -19,8 +19,9 @@ import { cn } from "@/lib/utils";
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
 const FuturesPage = lazy(() => import("@/components/futures/FuturesPage"));
 const IndexPage = lazy(() => import("@/components/index/IndexPage"));
+const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
 
-type Tab = "txo" | "stock" | "futures" | "index";
+type Tab = "txo" | "stock" | "futures" | "index" | "corr";
 const TAB_KEY = "copycat-tab";
 const MAIN_CODE_KEY = "stock-main-code";
 const PRODUCT_KEY = "copycat-fut-product";
@@ -34,7 +35,9 @@ export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
 
 function initialTab(): Tab {
   const saved = window.localStorage.getItem(TAB_KEY);
-  return saved === "stock" || saved === "futures" || saved === "index" ? saved : "txo";
+  return saved === "stock" || saved === "futures" || saved === "index" || saved === "corr"
+    ? saved
+    : "txo";
 }
 
 function initialProduct(): FutProduct {
@@ -51,6 +54,7 @@ export default function App() {
     stock: tab === "stock",
     futures: tab === "futures",
     index: tab === "index",
+    corr: tab === "corr",
   });
   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
   const [stockCode, setStockCode] = useState<string | null>(
@@ -127,6 +131,7 @@ export default function App() {
             ["stock", "個股"],
             ["futures", "期貨"],
             ["index", "指數"],
+            ["corr", "相關係數"],
           ] as [Tab, string][]
         ).map(([id, label]) => (
           <button
@@ -182,6 +187,15 @@ export default function App() {
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
                 <IndexPage twse={twse} otc={otc} txf={txf} />
+              </Suspense>
+            </div>
+          ) : null}
+          {visited.corr ? (
+            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
+              <Suspense
+                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+              >
+                <CorrPage />
               </Suspense>
             </div>
           ) : null}
