@@ -74,6 +74,31 @@ export function futExchangeContract(product: string, ym: string): string {
   return product + String.fromCharCode(65 + month - 1) + String(year % 10);
 }
 
+/** CapitalPosition 的結構子集(同 FutOrderSource,lib 不 import api 型別) */
+export interface FutClosePos {
+  stock_no: string;
+  qty: number;
+}
+
+/** FuturesProductState 的結構子集(漲跌停) */
+export interface FutCloseQuote {
+  upper: number | null;
+  lower: number | null;
+}
+
+/** 平倉閘用估價(design amendment:期貨平倉限價貼漲跌停)——
+ *  多單平倉(賣)用跌停價、空單平倉(買)用漲停價;單位元 = Milli/1000。
+ *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。 */
+export function futCloseEstimate(
+  pos: FutClosePos,
+  contract: string | null,
+  prod: FutCloseQuote | null,
+): number | null {
+  if (contract === null || prod === null || pos.stock_no !== contract) return null;
+  const edge = pos.qty > 0 ? prod.lower : prod.upper;
+  return edge !== null ? edge / 1000 : null;
+}
+
 export function buildFuturesLadder(opts: {
   centerMilli: number;
   upperMilli: number;

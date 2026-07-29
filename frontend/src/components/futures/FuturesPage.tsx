@@ -5,9 +5,12 @@ import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
 import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import { useFuturesStream } from "@/hooks/useFuturesStream";
-import { futExchangeContract } from "@/lib/futures-ladder";
+import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { cn } from "@/lib/utils";
-import type { CapitalPosition, FuturesProductState } from "@/types";
+
+// 本體已搬到 lib/futures-ladder.ts(右欄需要它,不能經 lazy 頁面 import);
+// 既有測試 import 路徑不破 → 保留 re-export。
+export { futCloseEstimate };
 
 const PRODUCTS = [
   ["TXF", "大台"],
@@ -25,19 +28,6 @@ function initialProduct(): Product {
 function fmt(milli: number): string {
   const v = milli / 1000;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
-
-/** 平倉閘用估價(design amendment:期貨平倉限價貼漲跌停)——
- *  多單平倉(賣)用跌停價、空單平倉(買)用漲停價;單位元 = Milli/1000。
- *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。 */
-export function futCloseEstimate(
-  pos: CapitalPosition,
-  contract: string | null,
-  prod: FuturesProductState | null,
-): number | null {
-  if (contract === null || prod === null || pos.stock_no !== contract) return null;
-  const edge = pos.qty > 0 ? prod.lower : prod.upper;
-  return edge !== null ? edge / 1000 : null;
 }
 
 export function FuturesPage() {
