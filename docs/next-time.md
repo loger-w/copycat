@@ -105,6 +105,11 @@
   11 條「全合法 tick」刻度並置後對比明顯,下次碰 K 線刻度時一併收
 - [ ] 布林通道填色用 `fill-ink-muted` 0.07,在 20 期低波動段會蓋成一大片灰塊;
   若嫌干擾可改只畫上下軌不填色,或降到 0.04
+- [ ] **既有行為,自評 lens 抓到但本輪駁回不修(鐵則 B 不順手改)**:`candle.ts` 的
+  `indexOf` guard 是 `x > size.width` 才回 null,`x` 恰等於 `size.width` 時
+  `Math.floor(x/slot)` 算出 `bars.length` → 被 `i < bars.length` 擋掉一樣回 null,
+  但那個像素理應對應最後一根。症狀 = 最右一個像素的 hover 失去十字線。
+  本輪未動那行;要修時 `x >= size.width` 或 `Math.min(bars.length-1, …)` 擇一
 - [ ] `MINUTE_INIT_BARS = 240` / `DAILY_INIT_BARS = 120` / `MAX_VISIBLE = 700` /
   `ZOOM_STEP = 1.15` 四個常數分散在 `StockChart.tsx` 與 `candle-viewport.ts`;
   若之後要做「可設定的圖表偏好」再收斂到單一 config
