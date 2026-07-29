@@ -126,5 +126,8 @@ describe("StockPage", () => {
     const row = screen.getByTestId("stock-lower-row");
     expect(row.className).toContain("flex-1");
     expect(row.className).toContain("min-h-56");
+    // self-review C4:五檔 wrapper 的 self-start —— 少了它,五檔卡片會被 items-stretch
+    // 拉滿整列高度,卡片內部出現大片留白。
+    expect((row.firstElementChild as HTMLElement).className).toContain("self-start");
   });
 });

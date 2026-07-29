@@ -144,6 +144,31 @@ describe("OrderBook", () => {
     expect(within(head).getByText("+2.59%")).toBeTruthy();
   });
 
+  // 🟢 self-review C1:標題列漲跌色的三個分支只有「漲」被 render 過,且沒有一條測試讀
+  // className —— 把 bull/bear 寫反(台股紅漲綠跌與美股相反,是最容易寫反的方向)測試照樣全綠。
+  it("標題列漲跌色:漲紅 / 跌綠 / 平盤中性(SC-1)", () => {
+    const { rerender } = render(
+      <OrderBook code="2330" book={BOOK} last={{ p: 2_380_000, t: "t", cum_vol: 1 }} ref_={2_320_000} />,
+    );
+    // 精確 testid:平盤時 /^\d/ 會同時撞到價格「2320」與百分比「0.00%」(selector 過鬆)
+    const price = () => screen.getByTestId("depth-last");
+    expect(price().className).toContain("text-bull");
+    expect(within(screen.getByTestId("depth-head")).getByText("+2.59%").className).toContain("text-bull");
+
+    rerender(
+      <OrderBook code="2330" book={BOOK} last={{ p: 2_300_000, t: "t", cum_vol: 1 }} ref_={2_320_000} />,
+    );
+    expect(price().className).toContain("text-bear");
+    expect(within(screen.getByTestId("depth-head")).getByText("-0.86%").className).toContain("text-bear");
+
+    rerender(
+      <OrderBook code="2330" book={BOOK} last={{ p: 2_320_000, t: "t", cum_vol: 1 }} ref_={2_320_000} />,
+    );
+    expect(price().className).toContain("text-ink");
+    expect(price().className).not.toContain("text-bull");
+    expect(price().className).not.toContain("text-bear");
+  });
+
   // 🟢 review R7:重寫時最容易掉的除零保護(DepthBar.tsx:78 的 Math.max(1, ...))
   it("book=null 與五檔全 0 量:不崩、bar 寬不出現 NaN", () => {
     const { container, rerender } = render(

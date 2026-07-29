@@ -152,6 +152,32 @@ describe("StockChart 模式切換(SC-7)", () => {
     expect(screen.queryByText("無 K 線資料")).toBeNull();
   });
 
+  // 🟢 self-review C2:錯誤碼取值鏈的**第二條路**(body 無 detail.error → HTTP_<status>)。
+  // 這正是 2026-07-29 的真實事故路徑:舊 build 佔 port,FastAPI 對未知 route 回
+  // {"detail":"Not Found"} —— detail 是字串不是物件,`.error` 為 undefined → 落回 HTTP_404。
+  // 只測 detail.error 那條的話,這條 fallback 壞掉不會有任何測試變紅。
+  it("錯誤碼 fallback:body 無 detail.error → 顯示 HTTP_<status>", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/api/stock/bars")
+          ? new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })
+          : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
+      ),
+    );
+    chart();
+    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.getByText("HTTP_404")).toBeTruthy();
+  });
+
+  // 🟢 self-review C3:圖表容器的 shrink-0 是 SC-6 防「svg 溢出與下半列重疊」的關鍵 class,
+  // 同輪其他版面 class 都有 regression lock,唯獨它沒鎖。
+  it("圖表容器 shrink-0(SC-6:負剩餘空間時不被壓縮致 svg 溢出)", () => {
+    const { container } = chart();
+    expect((container.firstChild as HTMLElement).className).toContain("shrink-0");
+  });
+
   // 🟢 SC-3 反向:真的取到空陣列 → 仍是「無 K 線資料」,不可誤報成失敗(W-13)
   it("取到空 bars 仍顯示「無 K 線資料」,不誤報失敗", async () => {
     vi.stubGlobal(

@@ -132,6 +132,7 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
         ) : null}
         <span className="ml-auto flex items-baseline gap-1 font-mono">
           <span
+            data-testid="depth-last"
             className={cn(
               "text-sm",
               chg === null ? "text-ink" : chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink",
