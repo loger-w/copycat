@@ -281,6 +281,26 @@ class TestEmptyNegativeCache:
         clock["t"] = EMPTY_TTL_SECS + 1.0
         assert await build_minute(fetch, cache, "2317", 2, today) == hist + cur
 
+    async def test_prune_evicts_expired_today_entries(self) -> None:
+        """`today_put` 開始存空 entry 後,同日內過期的 entry 也要能回收。
+
+        prune 原本對 `_today` 只做「日期 != 今日就刪」。空結果不進 cache 的時代,
+        股號維度實質被「真的有今日資料的股號」約束(prune docstring 據此判定成長受控);
+        改成空也存之後,任何通過 validate_code 的字串被請求一次就會留一筆到跨日
+        (self-review round2 P2)。
+        """
+        clock = {"t": 0.0}
+        today = _dt.date(2026, 7, 28)
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        cache.today_put("9999", today.isoformat(), [])  # 空 → 吃 EMPTY_TTL_SECS
+        cache.today_put("2330", today.isoformat(), [bar("2026-07-28 09:01")])  # 非空 → 吃 ttl
+        clock["t"] = EMPTY_TTL_SECS + 1.0
+        cache.prune(today)
+        # 空 entry 已過期 → 回收;非空 entry 的 ttl=999 還沒到 → 留著
+        assert cache.today_get("9999", today.isoformat()) is None
+        assert cache.today_get("2330", today.isoformat()) is not None
+        assert cache.today_entry_count() == 1
+
     async def test_prune_drops_only_expired_empty_marks(self) -> None:
         """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。"""
         clock = {"t": 0.0}
