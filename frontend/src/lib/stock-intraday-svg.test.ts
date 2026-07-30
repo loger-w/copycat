@@ -133,8 +133,12 @@ describe("buildIntradayGeometry", () => {
   describe("左緣價位帶(gutter)", () => {
     const W = Y_AXIS_W + 270 + R_AXIS_W;
 
-    it("Y_AXIS_W 等於 hover 價位標寬度(標籤恰好整格塞進價位帶,不再壓線)", () => {
-      expect(Y_AXIS_W).toBe(46);
+    // 🔴 round4 項 6:原本硬編 `expect(Y_AXIS_W).toBe(46)`,測的其實是「hover 價位標整格
+    // 塞得進價位帶」這個語意 —— 那條不變式屬於元件(PRICE_TAG.w === Y_AXIS_W),
+    // 在純函數測試裡只能退化成一個會隨帶寬改動而失效的字面值。改成守語意:
+    // 繪圖區左界必須恰是價位帶右緣(帶寬多少由元件與 UI 決定)。
+    it("繪圖區左界恰是價位帶右緣(帶寬本身不寫死)", () => {
+      expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
     });
 
     it("繪圖區起於價位帶右緣、迄於圖右緣", () => {

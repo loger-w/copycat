@@ -236,7 +236,7 @@ describe("StockIntradayChart", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const nine = screen.getByText("09:00", { selector: "text" });
     expect(nine.getAttribute("class")).toContain("fill-time");
-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 100 });
     expect(
       container.querySelector("[data-testid='time-tag-text']")!.getAttribute("class"),
     ).toContain("fill-time");
@@ -273,9 +273,9 @@ describe("StockIntradayChart", () => {
     expect(readout().textContent).toContain("09:02"); // 最新分鐘 = 542
     expect(readout().getAttribute("data-hovering")).toBe("false");
     const svg = container.querySelector("svg")!;
-    // 🔴 round4 項 3:繪圖區起於左緣價位帶右側(Y_AXIS_W=46),541 分在
-    // x = 46 + 1/270*(800-46) ≈ 48.8px;舊的 x≈3 現在落在價位帶內 → 不對應任何分鐘
-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
+    // 🔴 round4 項 3 / 項 6:繪圖區起於左緣價位帶右側(Y_AXIS_W=36),541 分在
+    // x = 36 + 1/270*(800-36-40) ≈ 38.7px;x≈3 落在價位帶內 → 不對應任何分鐘
+    fireEvent.mouseMove(svg, { clientX: 39, clientY: 100 });
     expect(readout().textContent).toContain("09:01");
     expect(readout().getAttribute("data-hovering")).toBe("true");
     fireEvent.mouseLeave(svg);
@@ -286,7 +286,7 @@ describe("StockIntradayChart", () => {
   it("資訊列含每分鐘內外盤(本專案核心訊號,原 tooltip 沒顯示)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const svg = container.querySelector("svg")!;
-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
+    fireEvent.mouseMove(svg, { clientX: 39, clientY: 100 });
     const text = screen.getByTestId("chart-readout").textContent ?? "";
     expect(text).toContain("外 10");
     expect(text).toContain("內 0");
@@ -295,9 +295,9 @@ describe("StockIntradayChart", () => {
   it("十字線:垂直線 snap 分鐘、水平線跟滑鼠 y(不再鎖該分鐘收盤價)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const svg = container.querySelector("svg")!;
-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 120 });
+    fireEvent.mouseMove(svg, { clientX: 39, clientY: 120 });
     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(120);
-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 60 });
+    fireEvent.mouseMove(svg, { clientX: 39, clientY: 60 });
     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(60);
     expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
     fireEvent.mouseLeave(svg);
@@ -318,7 +318,7 @@ describe("StockIntradayChart", () => {
   // 🔴 round3 SC-1:hover 右緣 % 標整個移除(左緣價位標與底部時間標照舊)
   it("hover 右緣不再浮出 % 標,左價標與時間標仍在(SC-1)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 100 });
     expect(container.querySelector("[data-testid='pct-tag']")).toBeNull();
     expect(container.querySelector("[data-testid='pct-tag-text']")).toBeNull();
     expect(container.querySelector("[data-testid='price-tag-text']")).toBeTruthy();
@@ -404,7 +404,7 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
 
   it("項 3:hover 水平線起於價位帶右緣(不穿過價位文字)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 120 });
     const h = container.querySelector("[data-testid='crosshair-h']")!;
     expect(Number(h.getAttribute("x1"))).toBe(Y_AXIS_W);
   });
@@ -446,11 +446,57 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
   });
 
   // review R15b:兩份 46 靠註解維持相等 → 任一方改動就讓 hover 價位標壓線復發
-  it("hover 價位標寬度恰等於價位帶寬度(不得各寫一份 46)", () => {
+  it("hover 價位標寬度恰等於價位帶寬度(不得各寫一份字面值)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 120 });
     const tag = container.querySelector('[data-testid="price-tag"]')!;
     expect(Number(tag.getAttribute("width"))).toBe(Y_AXIS_W);
+  });
+});
+
+// 🔴 round4 項 6:價位帶內縮 + 刻度右對齊 + 垂直置中 + 縮字
+describe("StockIntradayChart 左緣價位帶(round4 項 6)", () => {
+  it("價位帶內縮(繪圖區左界更靠左)", () => {
+    // 46 → 36:右對齊之後帶內只需容納數字本身,不必再為左對齊的參差留空間
+    expect(Y_AXIS_W).toBe(36);
+  });
+
+  it("刻度數字右對齊成一直欄,右緣距繪圖區左界 4px", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const ticks = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const t of ticks) {
+      expect(t.getAttribute("text-anchor")).toBe("end");
+      expect(Number(t.getAttribute("x"))).toBe(Y_AXIS_W - 4);
+    }
+  });
+
+  it("刻度數字垂直中心壓在對應格線上(不再整體浮在線上方、不再夾制)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const grids = [...container.querySelectorAll('[data-testid="y-grid"]')];
+    const ticks = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
+    expect(ticks.length).toBe(grids.length);
+    ticks.forEach((t, i) => {
+      // baseline 直接取格線 y,視覺置中靠 dy(em 單位 → root font-size 放大時等比)
+      expect(Number(t.getAttribute("y"))).toBeCloseTo(Number(grids[i]!.getAttribute("y1")), 6);
+      expect(t.getAttribute("dy")).toBe("0.35em");
+    });
+  });
+
+  it("刻度字級縮到 0.5625rem(與右緣疊線價位標同級)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    for (const t of container.querySelectorAll('[data-testid="y-tick-price"]')) {
+      expect(t.getAttribute("font-size")).toBe("0.5625rem");
+    }
+  });
+
+  it("hover 價位標的數字與靜態刻度右緣對齊在同一條線上", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 120 });
+    const tagText = container.querySelector('[data-testid="price-tag-text"]')!;
+    expect(tagText.getAttribute("text-anchor")).toBe("end");
+    expect(Number(tagText.getAttribute("x"))).toBe(Y_AXIS_W - 4);
+    expect(tagText.getAttribute("font-size")).toBe("0.5625rem");
   });
 });
 

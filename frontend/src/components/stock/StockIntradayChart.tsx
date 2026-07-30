@@ -179,12 +179,23 @@ const ChartStatic = memo(function ChartStatic({
             strokeDasharray="2 3"
             strokeWidth={0.5}
           />
+          {/* 價位文字**右對齊**貼著繪圖區左界(round4 項 6):左對齊時數字長度不同會讓
+              右緣參差、且兩位數的刻度離走勢圖特別遠。
+              垂直用 `dy="0.35em"` 讓數字中心壓在格線上,不用 `dominantBaseline` ——
+              em 相對自身 font-size,root font-size media query 放大時偏移自動等比;
+              而各引擎對 `middle`(x-height 中點)/ `central`(em-box 中點)取值不同,
+              純數字會有 0.5~1px 的引擎差(本專案對「幾何自己算」已有明確立場)。
+              原本的 `clamp(t.y − 2, 8, h − 16)` 夾制整條移除:`toY` 值域恰為
+              `[PAD_Y, PAD_Y + plotH]`,置中後兩端都不會被裁,夾制反而讓最上 / 最下
+              兩根刻度「字沒對到線」= 本項要修的症狀本身。 */}
           <text
             data-testid="y-tick-price"
-            x={2}
-            y={Math.min(Math.max(t.y - 2, 8), h - 16)}
+            x={Y_AXIS_W - 4}
+            y={t.y}
+            dy="0.35em"
+            textAnchor="end"
             className={tickTone(t.priceMilli, refMilli)}
-            fontSize="0.625rem"
+            fontSize="0.5625rem"
           >
             {fmt(t.priceMilli)}
           </text>
@@ -643,12 +654,15 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
                 rx={2}
                 className="fill-bg-deep stroke-line"
               />
+              {/* 與靜態刻度同一條右對齊基準線(round4 項 6):視覺上像「價位軸在游標那一格
+                  亮起來」,而不是另一個飄出來的框 */}
               <text
                 data-testid="price-tag-text"
-                x={4}
+                x={PRICE_TAG.w - 4}
                 y={PRICE_TAG.h - 4}
+                textAnchor="end"
                 className="fill-ink"
-                fontSize="0.625rem"
+                fontSize="0.5625rem"
               >
                 {hoverPrice !== null ? fmt(hoverPrice) : ""}
               </text>
