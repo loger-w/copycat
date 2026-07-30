@@ -265,6 +265,11 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   };
 }
 
+/** 走勢線末點 = 現價圈的落點(也是資訊列「最新分鐘」的來源);空線 → null(SC-2)。 */
+export function lastPoint(g: IntradayGeometry): (Pt & { minute: number }) | null {
+  return g.priceLine[g.priceLine.length - 1] ?? null;
+}
+
 /** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。 */
 export function overlayLines(
   overlay: StockOverlay,

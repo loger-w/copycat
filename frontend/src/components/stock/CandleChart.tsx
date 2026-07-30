@@ -88,6 +88,10 @@ const ChartStatic = memo(function ChartStatic({
   ma20Line,
   bbUpperLine,
   bbLowerLine,
+  highY,
+  lowY,
+  highText,
+  lowText,
 }: {
   g: CandleGeometry;
   /** viewBox 寬。**純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -96,9 +100,47 @@ const ChartStatic = memo(function ChartStatic({
   ma20Line: { x: number; y: number }[];
   bbUpperLine: { x: number; y: number }[];
   bbLowerLine: { x: number; y: number }[];
+  /** 可視視窗的最高 / 最低與其 y;**文字與 figcaption 是同一個字串**(SC-3 由建構保證) */
+  highY: number | null;
+  lowY: number | null;
+  highText: string;
+  lowText: string;
 }) {
   return (
     <g>
+      {/* 視窗高低(SC-3)。與江波圖當日高低同款樣式(4 3 / 0.8),
+          與 y 軸格線(2 3 / 0.5)可區分 */}
+      {([
+        ["window-high", highY, highText],
+        ["window-low", lowY, lowText],
+      ] as const).map(([id, y, text]) =>
+        y === null ? null : (
+          <g key={id}>
+            <line
+              data-testid={id}
+              x1={0}
+              x2={w}
+              y1={y}
+              y2={y}
+              className="stroke-ink-muted"
+              strokeDasharray="4 3"
+              strokeWidth={0.8}
+            />
+            <text
+              data-testid={`${id}-label`}
+              x={w - 2}
+              y={y - 2}
+              textAnchor="end"
+              className="fill-ink-muted stroke-surface"
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.625rem"
+            >
+              {text}
+            </text>
+          </g>
+        ),
+      )}
         {/* y 軸格線 + 價位刻度 */}
       {g.yTicks.map((t) => (
         <g key={`yt-${t.priceMilli}`}>
@@ -415,6 +457,10 @@ export function CandleChart({
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const windowHigh = shown.length > 0 ? Math.max(...shown.map((b) => b.h)) : 0;
   const windowLow = shown.length > 0 ? Math.min(...shown.map((b) => b.l)) : 0;
+  // 圖上的價位標與 figcaption 用**同一個字串**:SC-3 的「兩者始終相等」由建構保證,
+  // 不靠兩處各自格式化後恰好一樣
+  const highText = fmt(windowHigh);
+  const lowText = fmt(windowLow);
   const windowPct =
     shown.length > 1 && shown[0]!.c > 0
       ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
@@ -471,6 +517,10 @@ export function CandleChart({
             ma20Line={ma20Line}
             bbUpperLine={bbUpperLine}
             bbLowerLine={bbLowerLine}
+            highY={shown.length > 0 ? g.toY(windowHigh) : null}
+            lowY={shown.length > 0 ? g.toY(windowLow) : null}
+            highText={highText}
+            lowText={lowText}
           />
           <XAxisLabels g={g} h={dimH} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
           {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
@@ -552,8 +602,8 @@ export function CandleChart({
           chrome 逐項對稱,SC-6.7 的「切模式不跳高」才成立。 */}
       <figcaption className="mt-1 flex h-4 items-center gap-x-3 font-mono text-xs text-ink-dim">
         <span>{shown.length} 根</span>
-        <span>高 {fmt(windowHigh)}</span>
-        <span>低 {fmt(windowLow)}</span>
+        <span>高 {highText}</span>
+        <span>低 {lowText}</span>
         <span
           className={cn(
             windowPct === null ? "" : windowPct > 0 ? "text-bull" : windowPct < 0 ? "text-bear" : "",

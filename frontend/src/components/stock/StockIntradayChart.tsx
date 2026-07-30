@@ -8,6 +8,7 @@ import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
+  lastPoint,
   minuteToX,
   overlayLines,
   plotWidth,
@@ -104,6 +105,10 @@ const ChartStatic = memo(function ChartStatic({
   oLines,
   clipAbove,
   clipBelow,
+  highMilli,
+  lowMilli,
+  highY,
+  lowY,
 }: {
   g: IntradayGeometry;
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -115,6 +120,11 @@ const ChartStatic = memo(function ChartStatic({
   oLines: OverlayLine[];
   clipAbove: string;
   clipBelow: string;
+  /** 當日高低(毫元)與其 y;**域外 / 缺值時 y 為 null → 不畫**。純量,memo 安全 */
+  highMilli: number | null;
+  lowMilli: number | null;
+  highY: number | null;
+  lowY: number | null;
 }) {
   return (
     <g>
@@ -217,6 +227,38 @@ const ChartStatic = memo(function ChartStatic({
           </text>
         </g>
       ))}
+      {/* 當日高低(SC-1)。虛線節奏 4 3 / 0.8 與 y 軸格線(2 3 / 0.5)刻意不同,
+          肉眼可區分「這是今天的高低」而不是又一條格線 */}
+      {([
+        ["day-high", highY, highMilli],
+        ["day-low", lowY, lowMilli],
+      ] as const).map(([id, y, milli]) =>
+        y === null || milli === null ? null : (
+          <g key={id}>
+            <line
+              data-testid={id}
+              x1={Y_AXIS_W}
+              x2={w - R_AXIS_W}
+              y1={y}
+              y2={y}
+              className="stroke-ink-muted"
+              strokeDasharray="4 3"
+              strokeWidth={0.8}
+            />
+            <text
+              data-testid={`${id}-label`}
+              x={w - R_AXIS_W + 2}
+              y={y - 2}
+              className="fill-ink-muted stroke-surface"
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.5625rem"
+            >
+              {fmt(milli)}
+            </text>
+          </g>
+        ),
+      )}
       {showVwap ? (
         // 均價線白色(SC-2.3);原本是琥珀金 profit,與新的紅綠雙色價線對比不足
         <polyline points={pts(g.vwapLine)} fill="none" className="stroke-ink" strokeWidth={1.2} />
@@ -428,7 +470,24 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   const plotBottom = mainH - X_LABEL_H;
 
   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
-  const lastPt = g.priceLine[g.priceLine.length - 1];
+  const lastPt = lastPoint(g);
+
+  // 當日高低(SC-1)。**域外不畫** —— 沿用 overlayLines 的規則:無漲跌停時 y 域由
+  // 分鐘收盤極值決定,裝不下逐筆極值,線會畫到時間軸上。
+  const inDomain = (p: number | null): number | null =>
+    p === null || p < g.yDomain[0] || p > g.yDomain[1] ? null : g.toY(p);
+  const dayHighY = inDomain(accum.high);
+  const dayLowY = inDomain(accum.low);
+  // 現價圈(SC-2):值每 tick 都變 → 畫在 ChartStatic 之外,不打穿 memo
+  const lastPrice = accum.last?.p ?? null;
+  const lastTone =
+    lastPrice === null || ref === null
+      ? "fill-ink-dim"
+      : lastPrice > ref
+        ? "fill-bull"
+        : lastPrice < ref
+          ? "fill-bear"
+          : "fill-ink-dim";
   const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
   const shownAgg = shownMin !== null ? accum.minutes.get(shownMin) : undefined;
   const shownChg =
@@ -527,8 +586,28 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           oLines={oLines}
           clipAbove={clipAbove}
           clipBelow={clipBelow}
+          highMilli={accum.high}
+          lowMilli={accum.low}
+          highY={dayHighY}
+          lowY={dayLowY}
         />
         <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} />
+        {lastPt !== null && lastPrice !== null ? (
+          <g pointerEvents="none">
+            <circle data-testid="last-dot" cx={lastPt.x} cy={lastPt.y} r={3} className={lastTone} />
+            <text
+              data-testid="last-price"
+              x={lastPt.x + 5}
+              y={lastPt.y - 4}
+              className={cn(lastTone, "stroke-surface")}
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.5625rem"
+            >
+              {fmt(lastPrice)}
+            </text>
+          </g>
+        ) : null}
         {/* hover 十字 + 軸標籤(SC-7)。
             分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
             垂直線與資料點需要資料,缺就不畫(白名單 2:minuteOf 不 snap 最近)。 */}
