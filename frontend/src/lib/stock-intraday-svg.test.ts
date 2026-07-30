@@ -81,6 +81,18 @@ describe("buildIntradayGeometry", () => {
       }
     });
 
+    // 🔴 self-review R4-4:width <= Y_AXIS_W 時 plotWidth 被 clamp 成 1,minuteToX 最大回
+    // Y_AXIS_W + 1 = 47 > width,而 minuteOf 的上界用 size.width 擋 → 兩者不再互逆。
+    // 現行唯一呼叫端寫死 800 不會踩到,但這兩支是 export 的公開純函數,不變量要自洽。
+    it("退化寬度(width <= Y_AXIS_W)下仍互逆", () => {
+      const g = buildIntradayGeometry(
+        { minutes: minutes([[X_END_MIN, { c: 2_320_000, v: 1 }]]), meta: META },
+        { width: Y_AXIS_W, height: 100 },
+      );
+      const x = minuteToX(X_END_MIN, Y_AXIS_W);
+      expect(g.minuteOf(x)).toBe(X_END_MIN);
+    });
+
     it("價位帶內的 x 不對應任何分鐘(不會被誤讀成 09:00)", () => {
       const g = buildIntradayGeometry(
         { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },

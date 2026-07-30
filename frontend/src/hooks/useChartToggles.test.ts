@@ -42,6 +42,39 @@ describe("useChartToggles", () => {
     expect(hook.result.current.toggles).toEqual(DEFAULTS);
   });
 
+  // 🔴 self-review R4-3:JSON.parse("null") 成功回 null,對 null 解構是 TypeError
+  it("存檔內容是 JSON null → 回預設不炸(解構 null 會 throw)", () => {
+    window.localStorage.setItem(KEY, "null");
+    const hook = renderHook(() => useChartToggles());
+    expect(hook.result.current.toggles).toEqual(DEFAULTS);
+  });
+
+  it("存檔內容是 JSON 陣列 / 字串 → 回預設不炸", () => {
+    window.localStorage.setItem(KEY, '"nope"');
+    expect(renderHook(() => useChartToggles()).result.current.toggles).toEqual(DEFAULTS);
+    cleanup();
+    window.localStorage.setItem(KEY, "[1,2]");
+    expect(renderHook(() => useChartToggles()).result.current.toggles).toEqual(DEFAULTS);
+  });
+
+  // 🔴 self-review R4-2:一次性升級是**新增的寫入路徑**(舊 load 只讀不寫),而所有既有
+  // 使用者第一次載入必走它。setItem 在 Safari 私密視窗 / storage 被政策鎖時會拋
+  // QuotaExceededError → useState(load) 的 initializer 拋錯 → 整個圖表元件首次 render 就掛。
+  it("localStorage 寫入失敗 → 記憶體狀態照常生效,不讓元件崩潰", () => {
+    window.localStorage.setItem(KEY, JSON.stringify({ vwap: false, cdp: true, ma: false, bb: false }));
+    const spy = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("QuotaExceededError");
+    });
+    const hook = renderHook(() => useChartToggles());
+    // 升級後的值在記憶體內生效(只是這次沒落檔)
+    expect(hook.result.current.toggles.bb).toBe(true);
+    expect(hook.result.current.toggles.vwap).toBe(false);
+    // set 也不能因為寫入失敗而炸
+    act(() => hook.result.current.set("ma", true));
+    expect(hook.result.current.toggles.ma).toBe(true);
+    spy.mockRestore();
+  });
+
   it("v 欄位不得洩進 toggles 物件(storage-only)", () => {
     window.localStorage.setItem(KEY, JSON.stringify({ ...DEFAULTS, v: V }));
     const hook = renderHook(() => useChartToggles());

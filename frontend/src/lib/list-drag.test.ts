@@ -97,6 +97,58 @@ describe("dropTargetFromPointer", () => {
   });
 });
 
+// 🔴 self-review R4-1:`dropTargetFromPointer` 回的 index 是**相對渲染清單**的插入槽
+// (zonesNow 的 count = g.codes.length,不因正在拖曳而扣掉被拖那一列),而 moveCode 是插入到
+// **濾掉該檔之後**的清單 —— 兩者在「該檔已在目標組」時差 1,往下拖會落到下一格。
+describe("moveCode 的槽位語意(往下拖的 off-by-one)", () => {
+  const one = (codes: string[]) => [{ name: "G", codes }];
+
+  it("同組往下拖:[A,B,C,D] 拖 A 到槽 3 → BCAD(不是 BCDA)", () => {
+    expect(moveCode(one(["A", "B", "C", "D"]), "A", "G", "G", 3)[0]!.codes).toEqual([
+      "B",
+      "C",
+      "A",
+      "D",
+    ]);
+  });
+
+  it("同組往下拖到最尾:[A,B,C,D] 拖 A 到槽 4 → BCDA", () => {
+    expect(moveCode(one(["A", "B", "C", "D"]), "A", "G", "G", 4)[0]!.codes).toEqual([
+      "B",
+      "C",
+      "D",
+      "A",
+    ]);
+  });
+
+  it("同組往上拖不受影響:[A,B,C,D] 拖 D 到槽 0 → DABC", () => {
+    expect(moveCode(one(["A", "B", "C", "D"]), "D", "G", "G", 0)[0]!.codes).toEqual([
+      "D",
+      "A",
+      "B",
+      "C",
+    ]);
+  });
+
+  it("跨組但目標組已有該檔(W-1 一檔多組):[A,X,B,C] 拖 X 到槽 3 → ABXC", () => {
+    const groups = [
+      { name: "來源", codes: ["X", "Z"] },
+      { name: "目標", codes: ["A", "X", "B", "C"] },
+    ];
+    const out = moveCode(groups, "X", "來源", "目標", 3);
+    expect(out[1]!.codes).toEqual(["A", "B", "X", "C"]);
+    expect(out[0]!.codes).toEqual(["Z"]);
+  });
+
+  it("跨組且目標組沒有該檔 → 槽即 index,不做補償:[A,B,C] 拖 X 到槽 2 → ABXC", () => {
+    const groups = [
+      { name: "來源", codes: ["X"] },
+      { name: "目標", codes: ["A", "B", "C"] },
+    ];
+    expect(moveCode(groups, "X", "來源", "目標", 2)[1]!.codes).toEqual(["A", "B", "X", "C"]);
+  });
+});
+
 describe("moveCode", () => {
   const GROUPS = [
     { name: "主力", codes: ["2330", "5483"] },
