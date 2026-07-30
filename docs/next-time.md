@@ -179,3 +179,11 @@
 - [ ] `_POLL_BACKOFF_START = 0.15` 與 `_BARS_POLL_DEADLINE = 10.0` 兩個常數是實測推得
   (有資料標的首頁 <1s 備妥),TC4 忙碌時的真實分布未量。若 real-env 出現誤判為空的
   頻率偏高,先量首頁備妥時間分布再調,不要盲目放大 deadline(那會把 60s 問題帶回來)。
+
+## 2026-07-30(stock-ui-round4 自評 review 沉澱)
+
+- [ ] localStorage key 收斂:`stock-wl-group`(舊 activeGroup)在本輪後已成**孤兒鍵**(讀取端移除,刻意不清);新增的 `copycat-stock-wl-collapsed` 已用 `copycat-` 前綴。做 `lib/constants.ts` 集中時一併清掉孤兒鍵
+- [ ] 股票名稱表(`copycat/stock_names.json`)無自動更新:新上市 / 改名要手動 `python -m copycat refresh-stock-names`。若要自動化,考慮 server 啟動時檢查檔案 mtime > N 天才背景重抓(**不要**放進 request path,ISIN 頁 10 MB)
+- [ ] worktree 陷阱:`spikes/TCPY/` 在 .gitignore 內 → 新 worktree 缺它會讓 `test_tc4.py::…dead_port…` 與 `test_tc4_trade.py::…gc…` 兩支以 `ModuleNotFoundError: tcoreapi_mq` 紅。若 worktree 常用,考慮把 TCPY 納版控或在 branch-lifecycle 開工節加一步 copy
+- [ ] **盤中不要起第二台後端**:TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8),驗證用途只起前端 dev server(vite proxy 已指 8721,零新增訂閱)。本輪踩過一次(約 90 秒),值得考慮寫進 CLAUDE.md §8
+- [ ] `dropTargetFromPointer` 的 nearest-zone 在兩個 zone 距離相等時取先出現者(未定義偏好);群組間縫隙很窄時使用者感受不到,若日後 section 間距變大再定規則
