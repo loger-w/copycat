@@ -49,10 +49,16 @@ class TestDailyCache:
         assert len(fetch.calls) == 1  # 第二次全走 memo
 
     async def test_daily_empty_not_cached(self) -> None:
-        # don't-cache-empty:TC4 失敗與真無資料上游不可分,要留重試餘地
+        """don't-cache-empty:TC4 失敗與真無資料上游不可分,要留重試餘地。
+
+        round3:空結果改由短 TTL 負向快取擋一下(收斂重複的首頁 deadline 空等),
+        過了 EMPTY_TTL_SECS 必須恢復重抓 —— 「可恢復」性質不變,只是延後幾秒(W-15)。
+        """
+        clock = {"t": 0.0}
         fetch = _Fetcher([[], [bar("2026-07-27")]])
-        cache = BarsCache()
+        cache = BarsCache(clock=lambda: clock["t"])
         assert await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28)) == []
+        clock["t"] = EMPTY_TTL_SECS + 1.0
         assert await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28)) != []
         assert len(fetch.calls) == 2
 
@@ -248,9 +254,13 @@ class TestEmptyNegativeCache:
         assert await build_daily(fetch, cache, "9999", today) == []
         assert len(fetch.calls) == calls
 
-    async def test_prune_clears_empty_marks(self) -> None:
-        cache = BarsCache(ttl=999.0)
+    async def test_prune_drops_only_expired_empty_marks(self) -> None:
+        """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。"""
+        clock = {"t": 0.0}
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
         cache.empty_mark("2330", "1", 30)
-        assert cache.empty_fresh("2330", "1", 30) is True
         cache.prune(_dt.date(2026, 7, 28))
-        assert cache.empty_fresh("2330", "1", 30) is False
+        assert cache.empty_fresh("2330", "1", 30) is True  # 未過期 → 留著
+        clock["t"] = EMPTY_TTL_SECS + 1.0
+        cache.prune(_dt.date(2026, 7, 28))
+        assert cache.empty_fresh("2330", "1", 30) is False  # 過期 → 被 prune 丟掉

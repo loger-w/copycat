@@ -29,6 +29,10 @@ from copycat.live.stock_source import Bar
 logger = logging.getLogger(__name__)
 
 TODAY_TTL_SECS = 30.0
+#: 空結果的負向快取存活時間。**刻意短**:TC4 失敗與真無資料在上游不可分(見檔頭),
+#: 永久快取會把斷線恢復後的重試路徑釘死。15s < 前端 60s 輪詢 → 交易時段內自動自癒,
+#: 同時把「TC4 查無該檔 → 每次請求重付 60s 空等」收斂掉(round3 項 9)。
+EMPTY_TTL_SECS = 15.0
 DAYS_MIN = 1
 DAYS_MAX = 30
 DAILY_WINDOW_DAYS = 180  # 日曆日 ≈ 120 交易日(change-spec D-14)
@@ -54,6 +58,9 @@ class BarsCache:
         self._hist: dict[tuple[str, str], list[Bar]] = {}
         self._today: dict[tuple[str, str], tuple[float, list[Bar]]] = {}
         self._daily: dict[tuple[str, str], list[Bar]] = {}
+        #: (code, tf, days) -> 寫入時刻。days 必須進 key —— 少了它,days=1 的空結果
+        #: 會把 days=30 的請求一併釘住(spec review R15)。tf="D" 一律傳 days=0。
+        self._empty: dict[tuple[str, str, int], float] = {}
         self._ttl = ttl
         self._clock = clock
 
@@ -87,6 +94,18 @@ class BarsCache:
             out.extend(self._hist.get((code, d.isoformat()), []))
         return out
 
+    # ---- 空結果負向快取(短 TTL)----
+
+    def empty_fresh(self, code: str, tf: str, days: int) -> bool:
+        ts = self._empty.get((code, tf, days))
+        return ts is not None and self._clock() - ts < EMPTY_TTL_SECS
+
+    def empty_mark(self, code: str, tf: str, days: int) -> None:
+        self._empty[(code, tf, days)] = self._clock()
+
+    def empty_clear(self, code: str, tf: str, days: int) -> None:
+        self._empty.pop((code, tf, days), None)
+
     # ---- 當日段(短 TTL)----
 
     def today_get(self, code: str, today: str) -> list[Bar] | None:
@@ -113,6 +132,10 @@ class BarsCache:
             del self._daily[key]
         for key in [k for k in self._today if k[1] != today_iso]:
             del self._today[key]
+        # 只丟已過期的:prune 每次 build_* 開頭都會跑,無條件 clear 等於負向快取從未生效
+        now = self._clock()
+        for key in [k for k, ts in self._empty.items() if now - ts >= EMPTY_TTL_SECS]:
+            del self._empty[key]
 
     # ---- 日 K(per (code, today) memo)----
 
@@ -132,9 +155,16 @@ async def build_daily(
     cached = cache.daily_get(code, today.isoformat())
     if cached is not None:
         return cached
+    # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline
+    if cache.empty_fresh(code, "D", 0):
+        return []
     start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
     bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-DAILY_MAX_BARS:]
     cache.daily_put(code, today.isoformat(), bars)
+    if bars:
+        cache.empty_clear(code, "D", 0)
+    else:
+        cache.empty_mark(code, "D", 0)
     return bars
 
 
@@ -143,6 +173,8 @@ async def build_minute(
 ) -> list[Bar]:
     """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。"""
     cache.prune(today)
+    if cache.empty_fresh(code, "1", days):
+        return []
     start = today - _dt.timedelta(days=clamp_days(days) - 1)
     yesterday = today - _dt.timedelta(days=1)
 
@@ -165,4 +197,10 @@ async def build_minute(
         today_bars = await fetch(code, "1", today.isoformat(), today.isoformat())
         cache.today_put(code, today.isoformat(), today_bars)
     out.extend(today_bars)
+    # 兩段都空 = 這檔在 TC4 查不到(或 TC4 正忙)。標記 15 秒,期間的重複請求直接回空,
+    # 不再各付一次首頁 deadline。過期即自動重試(W-15)。
+    if out:
+        cache.empty_clear(code, "1", days)
+    else:
+        cache.empty_mark(code, "1", days)
     return out

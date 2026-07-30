@@ -133,6 +133,13 @@ def _int_field(row: dict, *names: str) -> int:
     return 0
 
 
+#: K 線路徑的首頁等待預算(秒)。實測有資料標的 <1s 備妥 → 10× 餘裕;
+#: 誤判為空時由 server 層的短 TTL 負向快取在 15s 後自動重試,不是永久釘死。
+_BARS_POLL_DEADLINE = 10.0
+#: 退避輪詢起點;逐次加倍到 poll_wait 封頂
+_POLL_BACKOFF_START = 0.15
+
+
 def parse_dk_bars(rows: list[dict]) -> list[Bar]:
     """DK rows → 日 Bar。缺 Open → 用 Close(欄位名未實測,CLAUDE.md §8 只實證 H/L/C)。"""
     bars: list[Bar] = []
@@ -376,18 +383,43 @@ class StockQuoteSource(TC4QuoteSource):
 
     # ---- 日 K(overlay 資料源;SC-4)----
 
-    def _collect_history(self, sym: str, data_type: str, start: str, end: str) -> list[dict]:
-        """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。"""
+    def _collect_history(
+        self,
+        sym: str,
+        data_type: str,
+        start: str,
+        end: str,
+        deadline_secs: float | None = None,
+    ) -> list[dict]:
+        """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。
+
+        `deadline_secs` = 首頁備妥的等待預算。預設沿用舊值(`poll_wait*30` ≈ 30s),
+        K 線路徑改傳 `_BARS_POLL_DEADLINE` —— 實測有資料的標的首頁 <1s 內就備妥,
+        30s 預算只有在「TC4 根本沒有這檔」時才會用滿,而那條路徑一次要付兩段(歷史 +
+        當日)= 60s。
+
+        輪詢改**退避**:首輪落空後只睡 0.15s 再問,逐次加倍到原 `poll_wait` 封頂。
+        舊制固定睡滿 1.0s,讓所有冷載入無條件多等約 0.9 秒。
+
+        `poll_wait == 0` 是測試組態,語意 = 不等待 → 探測一次就回,不 busy loop。
+        """
         self._sub_history(sym, start, end, data_type)
-        deadline = time.monotonic() + max(self._poll_wait * 30, 1.0)
+        budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
+        deadline = time.monotonic() + budget
+        wait = min(_POLL_BACKOFF_START, self._poll_wait)
         while True:
             first = self._get_history(sym, start, end, "0", data_type)
             if first.get("HisData"):
                 break
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if wait <= 0 or remaining <= 0:
+                logger.info(
+                    "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
+                )
                 return []
-            if self._poll_wait:
-                time.sleep(self._poll_wait)
+            # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
+            time.sleep(min(wait, remaining))
+            wait = min(wait * 2, self._poll_wait)
 
         def _page(qry_index: str) -> list[dict]:
             return self._get_history(sym, start, end, qry_index, data_type).get("HisData", [])
@@ -439,9 +471,11 @@ class StockQuoteSource(TC4QuoteSource):
         start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            return parse_1k_bars(self._collect_history(sym, "1K", start, end))
+            return parse_1k_bars(
+                self._collect_history(sym, "1K", start, end, _BARS_POLL_DEADLINE)
+            )
 
-        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end))
+        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, _BARS_POLL_DEADLINE))
         if bars:
             return bars
         fb_start = max(
@@ -449,7 +483,10 @@ class StockQuoteSource(TC4QuoteSource):
             _dt.date.fromisoformat(end_date) - _dt.timedelta(days=_OHLC_FALLBACK_WINDOW_DAYS),
         )
         logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
-        return aggregate_1k_to_daily(self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end))
+        # fallback 也要傳短 budget:漏傳的話 tf=D 無資料標的變成 10 + 30 = 40s
+        return aggregate_1k_to_daily(
+            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, _BARS_POLL_DEADLINE)
+        )
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。
