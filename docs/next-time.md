@@ -120,3 +120,11 @@
 - [ ] 自選清單「全部」群組顯示「尚無自選,輸入股號新增」但主檔 2317 有完整資料(截圖 `.claude/mod/stock-ui-fixes/` 的 stock-before.png 可見)。watchlist v2 groups 的既有行為,**非 stock-ui-fixes 範圍**,未查根因。
 - [ ] 五檔垂直版式的高度預算餘裕很薄:1440×800 江波圖模式下,下半列實測 226px vs `min-h-56` 地板 224px,**只剩 2px**。字級縮放或圖表高度再長一點就會頂到地板讓 `<main>` 出現捲軸(這是設計好的退化,不是壞掉)。若之後改動圖表高度或五檔列高,重跑一次 SC-6 的兩尺寸量測。
 - [ ] 盤後重啟 server 後五檔 / 閃電梯恆空(TC4 REALTIME 五檔盤後無推播;tick 明細與江波圖走 TICKS 回補所以有資料)。CLAUDE.md §8 記載「盤後 fresh subscribe 會回當日收盤 snapshot(延遲分鐘級)」—— 本次實測 1.5 小時後 `book.bids`/`book.asks` 仍為空,該記載可能只適用成交 tick 不含五檔,值得再確認後修正文件。
+
+## 2026-07-30(realtime-correlation 收尾沉澱)
+
+- [ ] **P0 既有 bug:`futures_engine` 零推播死鎖(期貨面板一直是壞的)**。TXO runtime 的訂閱清單含 `SPOT_SYMBOL = TC.F.TWF.TXF.HOT`(`server/engine.py:89`),`futures_engine` 訂同一 symbol 回 `Success: OK` 但永遠零推播(CLAUDE.md §8);其 leaf fallback 需先由推播解析契約月份才啟動 → 全零推播時死鎖。實證:2026-07-29 17:33 起跑的 server 到 00:50 為止 TXF/MXF/TMF 全 `p=null`、`seq=0`,而同時段獨立訂閱 TXF.HOT 有 235 則/30 秒(MXF 324 則)、五檔俱全。**連帶擋住 realtime-correlation 的 base 腿**(該 feature 讀 `futures_engine.state()` 取台指五檔算中價)。修法候選:leaf fallback 改為可由「非推播來源」取得月份(合約清單查詢),或 runtime 與 futures_engine 共用單一 TXF 訂閱。
+- [ ] `test_index_engine.py::test_rollover_two_phase` 只在真實時鐘 ≥ 08:30 才會綠:`_rollover_loop`(`index_engine.py:279`)以 `_dt.datetime.now().time()` 判 08:30 門檻,該時鐘無注入點(同建構子已注入 `today_fn` / `in_watch_window`,唯獨漏它)。決定性實驗:把模組的 `_dt` 換成固定 10:00 的 shim 後立即轉綠。修法:建構子補 `now_fn`。
+- [ ] `test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`(`.gitignore:9`),任何乾淨 checkout 都會紅。修法:測試層 skip-if-missing,或把 wrapper 納入版控。
+- [ ] realtime-correlation 的 SC-5 日盤補驗(訂閱窗鑑別力只在台指日盤 08:45–13:45 成立;夜盤窗涵蓋 UTC 06–22,驗不出 CME 腿是否落在窗外)。指令:啟動 server 後 `curl -s localhost:8721/api/corr/state`,確認 YM/ES/NQ 三腿 `mid` 非 null。
+- [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
