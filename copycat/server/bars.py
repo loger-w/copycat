@@ -112,13 +112,22 @@ class BarsCache:
         # key 含日期:只用 code 的話,server 跨午夜後的 TTL 窗內會把昨日 bars 當今日回,
         # 而歷史段此時已含昨日 → 同一回應出現重複 t(review P2-9)
         entry = self._today.get((code, today))
-        if entry is None or self._clock() - entry[0] >= self._ttl:
+        if entry is None:
+            return None
+        # 空結果用更短的 TTL(見 today_put)
+        ttl = self._ttl if entry[1] else min(self._ttl, EMPTY_TTL_SECS)
+        if self._clock() - entry[0] >= ttl:
             return None
         return entry[1]
 
     def today_put(self, code: str, today: str, bars: list[Bar]) -> None:
-        if not bars:
-            return  # don't-cache-empty
+        """空結果也存,但吃更短的 TTL(`EMPTY_TTL_SECS`)。
+
+        原本空結果一律不存(don't-cache-empty)。問題是**歷史有資料但今日零成交**的
+        股票(冷門股常態):`build_minute` 合併後的 `out` 因為歷史段非空而永不觸發
+        `empty_mark`,當日段自己又不存空 → 每次請求都要重付一次 TC4 首頁等待
+        (self-review B2)。短 TTL 兩邊都顧:15 秒內的重複請求免費,過期即重抓,
+        該股一開始成交就看得到。"""
         self._today[(code, today)] = (self._clock(), bars)
 
     def prune(self, today: _dt.date) -> None:

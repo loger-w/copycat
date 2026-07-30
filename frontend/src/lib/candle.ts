@@ -234,10 +234,15 @@ export function buildCandleGeometry(
       yTicks.push({ y: toY(priceMilli), priceMilli });
     }
     // 保底:域寬 < 一個 tick 且區間內無合法檔位時上面會全部跳過,y 格線與價位標
-    // 會整組靜默消失。寧可顯示一根「域中點」也不要空白。
+    // 會整組靜默消失。寧可顯示一根也不要空白 —— 但那一根**也必須是合法檔位**
+    // (self-review B1:直接用 (lo+hi)/2 會吐出 1001.55 這種下不了單的價位)。
+    //
+    // 此時唯一的合法檔位必然落在域外(域本身就窄於一個 tick),所以 y 要夾回繪圖區,
+    // 否則刻度線與文字會畫到下方量區裡。這是刻意的取捨:在次-tick 寬的域裡,能誠實
+    // 講的只有「這一帶都在某個合法檔位附近」。
     if (yTicks.length === 0) {
-      const mid = Math.round((lo + hi) / 2);
-      yTicks.push({ y: toY(mid), priceMilli: mid });
+      const p = snapNearest(Math.round((lo + hi) / 2));
+      yTicks.push({ y: Math.min(Math.max(toY(p), PAD_Y), PAD_Y + usable), priceMilli: p });
     }
   }
 

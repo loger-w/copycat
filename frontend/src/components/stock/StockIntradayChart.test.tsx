@@ -145,10 +145,11 @@ describe("StockIntradayChart", () => {
   // 🔴 round3 SC-2:右緣不再印 AH / NH / CDP 等用語,改印該線的合法價位 + `*`
   it("CDP 預設開 → 右緣印價位(帶 *),不出現 AH / NH 等用語(SC-2)", async () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    // ah 2401.237 → snap 到合法檔位 2400(5 元 tick);nh 2357.8 → 2355
+    // ah 2401.237 → 最近合法檔位 2400(5 元 tick,向下 1.237 < 向上 3.763)
+    // nh 2357.8   → 2360(向上 2.2 < 向下 2.8)—— snap 是取最近不是一律向下
     await waitFor(() => expect(screen.getByText("2400*", { selector: "text" })).toBeTruthy());
     expect(screen.getByText("2320*", { selector: "text" })).toBeTruthy();
-    expect(screen.getByText("2355*", { selector: "text" })).toBeTruthy();
+    expect(screen.getByText("2360*", { selector: "text" })).toBeTruthy();
     // 未 snap 的原值不得出現
     expect(screen.queryByText("2401.2*", { selector: "text" })).toBeNull();
     expect(screen.queryByText("2357.8*", { selector: "text" })).toBeNull();
