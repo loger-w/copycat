@@ -248,3 +248,28 @@ class TestFutures:
             txf = c.get("/api/market/bars/TXF?tf=D").json()
         assert len(twse["bars"]) == 3
         assert len(txf["bars"]) == 1
+
+
+class TestVolumeMeta:
+    """`volume` 由資料判定(2026-07-30 real-env 抓到:加權 DK 的 v 全為 0)。
+
+    指數沒有量欄位 → `_int_field` 缺值回 0 → 整條序列 v=0。標 volume=true 會讓前端
+    畫一排貼底的 0 高柱,與「真的零成交」在畫面上無法區分,正是 SC-6 要避免的假造零。
+    """
+
+    def test_all_zero_volume_series_reports_volume_false(self) -> None:
+        class ZeroVol(FakeIndexSource):
+            def fetch_bars_range_tagged(
+                self, code: str, tf: str, start: str, end: str
+            ) -> tuple[list[dict], str]:
+                return [{"t": "2026-07-29", "o": 1, "h": 2, "l": 0, "c": 1, "v": 0}], "tc4_dk"
+
+        with make_client(index_source=ZeroVol()) as c:
+            r = c.get("/api/market/bars/TWSE?tf=D")
+        assert r.json()["meta"]["volume"] is False
+
+    def test_series_with_volume_reports_true(self) -> None:
+        fut = FakeFuturesSource()
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TXF?tf=D")
+        assert r.json()["meta"]["volume"] is True

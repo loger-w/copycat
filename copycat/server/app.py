@@ -70,7 +70,7 @@ def _market_payload(
     bars: list[Bar],
     *,
     source: str,
-    volume: bool = True,
+    volume: bool | None = None,
     partial_last: bool = False,
     refusal: str | None = None,
     synth_since: str | None = None,
@@ -82,6 +82,10 @@ def _market_payload(
     不能是預期值 —— DK 空時 fallback 成 1K 聚合而 meta 仍標 tc4_dk,等於在最可能出事的
     那條路上說謊(review P1-4)。
     """
+    # volume 未指定時**由資料判定**:指數(IX0001)的 DK/1K 沒有量欄位,`_int_field`
+    # 缺值回 0 → 整條序列 v=0。標 volume=true 會讓前端畫一排貼底的 0 高柱,與「真的
+    # 零成交」在畫面上無法區分 —— 正是 SC-6 要避免的假造零(2026-07-30 real-env 抓到)。
+    has_volume = volume if volume is not None else any(b["v"] > 0 for b in bars)
     return {
         "key": key,
         "tf": tf,
@@ -91,7 +95,7 @@ def _market_payload(
             "coverage_from": bars[0]["t"][:10] if bars else None,
             "coverage_to": bars[-1]["t"][:10] if bars else None,
             "partial_last": partial_last,
-            "volume": volume,
+            "volume": has_volume,
             "refusal": refusal,
             "synth_since": synth_since,
         },
