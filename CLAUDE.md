@@ -47,6 +47,10 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   即時相關係數(2026-07-30):corr_models(中價/對數報酬)、
 │                         #   corr_state(三窗滾動 Pearson/盤別重置/報酬不跨洞,零 IO)、
 │                         #   corr_source(泛化 symbol 訂閱;覆寫全天窗 — 海外腿不可用台指盤別窗)
+│                         #   六腿江波圖(2026-07-30):river_models(盤別窗/終點標記分鐘鍵/
+│                         #   收盤 clamp/1K 解析;分鐘桶用 FilledTime 不用 PreciseTime — 欄寬
+│                         #   跨段不同)、river_state(per-leg 分鐘序列狀態機,零 IO)、
+│                         #   river_backfill(1K 當日回補共用收割器,吃 bound method)
 ├── capital/              #   群益 Capital 下單(2026-07-28,extras [capital]=comtypes+pywin32):
 │                         #   com(SKCOM COM 封裝,證券+期權共用 FUTUREORDER)、client(COM 專屬
 │                         #   執行緒+命令佇列+審計三段不對稱)、models/safety(上限 None=不限)/
@@ -65,6 +69,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   capital_api(/api/capital/* + /ws/capital + /api/futures/state +
 │                         #   /ws/futures,2026-07-28)、futures_engine(TXF/MXF/TMF 五檔 +
 │                         #   resolved_contract HOT→YYYYMM)、
+│                         #   corr_engine 另兼六腿江波圖(2026-07-30):同一份報價流餵
+│                         #   RiverState(零新增訂閱)、背景 1K 回補逐腿降級、每秒 delta;
+│                         #   REST /api/river/state(全量)+ WS /ws/river(首則全量後每秒增量)
 │                         #   corr_engine(即時相關係數,2026-07-30:每秒 pull 六腿中價 →
 │                         #   三窗滾動 Pearson;base 腿(台指)讀 futures_engine.state() 不自訂
 │                         #   TXF.HOT 避 symbol 衝突 — ⚠ 該上游目前零推播,見 §8 與 next-time;
@@ -260,6 +267,8 @@ WebSocket / 即時 Stream 紀律:
 - **個股期不在 Fut 商品樹但可訂閱**:`TC.F.TWF.<期交所兩碼+F>.HOT`(CDF=2330);對映靠期交所股票期貨清單頁(`copycat/stkfut_map.py` refresh CLI),**同股號標準(2,000 股)/小型(100 股)並存取契約單位大者**;推播 `SecurityName` 帶「名稱(股號)」可交叉核對。**達錢 4 無下單功能**(合作清單全期貨商),交易面另接券商 API。(2026-07-21,Trigger:期現對照/個股期訂閱/評估下單路線)
 - **TC4 指數/日 K 實測(2026-07-28 盤中)**:(a) 加權指數 = `TC.S.TWS.IX0001`(REALTIME 推播含五檔/高低/漲跌停鍵);TWS 指數目錄 81 檔(IX0001-42 上市類股 + IX0100+ 特色),**櫃買指數不在 TC4 symbol 樹**(TWO/OTC/TPE/GTSM 段與 IX0043-0200 掃盡皆無)。**2026-07-29 補實證:現貨段(`TC.S.*`)只有台股 TWS 一段** —— 美股 17 段名 × {AAPL, TSM} × 3 格式 = 102 組合全 `parse failed`(AAPL 當對照:若有美股不可能全滅)、港/日/星/陸現貨 8 種亦全滅、`QUERYALLINSTRUMENT` 25 個 Type 名窮舉只有 `Fut`/`Fut2`/`Opt` 有效且零美股命中;官方訂閱層也只賣「國內期貨 / 海外期貨」兩類權限。**美股個股與美股現貨指數不在達錢 4 產品線內,訂閱等級再高也拿不到**(是沒有,不是沒找到)。(b) `QUERYINSTRUMENTINFO` 對不存在 symbol 回 parse failed = **存在性 oracle**(SUBQUOTE 照回 OK 不可靠,健檢之外的第二判法);股票/指數同段查詢會附父節點資訊(TickSize/OpenCloseTime)。(c) **股票 SubHistory `DK` 直接支援**(2330 實測 25 根日 K 解析零略過,官方文件未載;overlay 的 1K 聚合 fallback 為備援)。**2026-07-29 盤後補實證(2317,180 日曆日窗)**:DK 的 **`Open` / `Volume` 欄位名假定成立** —— 回 116 根、`o=240000`(240 元)與 `v=81973` 皆真值且 `v` 與 REALTIME 累積總量完全一致,server log 零「DK rows 解析略過」;耗時 `tf=D` 1.1s、`tf=1&days=5`(810 根 / 3 交易日)2.1s。原「只實證 H/L/C」的保留可解除,`stock_source.py` 的防禦解析與略過計數 log 保留為韌性即可。probe 工具:`spikes/index_symbol_probe.py`(--candidates 覆寫)/`index_node_probe.py`。(Trigger:訂閱指數、查 symbol 存在性、抓日 K)
 - **海外指數期貨在 TC4 的取得與陷阱(2026-07-29/30 實證,realtime-correlation)**:(a) **台期交自己就有美國四大指數期貨**:`UDF` 美國道瓊 / `SPF` 美國標普500 / `UNF` 那斯達克100 / **`SXF` 費城半導體**(2023-12 上市,DK 631 根)/ 另有 `SOF` 半導體30指 —— 全在 `TC.F.TWF.*` 段,台幣計價、與台指同時段同結算。**查商品必查 catalog 的中文名(CHT 欄)不能只比對 symbol 前綴**,否則會漏(本輪連掃兩輪才發現費半)。(b) **但台期交這幾檔流動性極差**:SPF 近 60 交易日有 57 天成交 <100 口、12 天零成交 → 日 K 收盤價不是市場定價,不可用於報酬相關;道瓊/標普/納指改用 CME/CBOT 的 `YM`/`ES`/`NQ`(DK 924 根、量大數千倍),費半無 CME 對應只能用 SXF。(c) **富台** = `TC.F.SGX.TWN.HOT`(DK 929 根;`MTWN` 小富台 SubHistory 逾時空),**SGX 在台灣連假照開** → 富台 929 根 vs 台指 860 根,配對計算必須取交集日。(d) **海外期貨 DK 的收盤時點 = 該市場收盤**(美股期貨 `Time=210000` = 21:00 UTC = 美東 16:00),與美股現貨日 K 日界天然對齊。(e) **訂閱海外腿建議用全天窗**(`corr_source.py` 覆寫 `_rt_request` 為 `all_day_window()`)—— 基底 `TC4QuoteSource._rt_request` 寫死台指盤別窗,而 TC4 對訂閱一律回 `Success: OK`,窗不匹配的失效樣態會是「訂閱成功但零推播」毫無錯誤訊號,故用全天窗消除一整類風險。**但要誠實記帳:「沿用 session 窗會失效」目前是推論不是實證** —— 台指日盤窗(UTC 00–06)+ 夜盤窗(UTC 06–22)合計涵蓋 UTC 00–22,海外期貨近 23 小時交易的時段幾乎都落在其中之一,訂閱當下不會落窗外;真正的風險是「訂閱後跨過窗結束邊界(UTC 06 或 22)推播是否停止」,那需要跨邊界連續觀察才能驗,2026-07-30 日盤驗證(六腿全有推播,含 CME 三檔)只證明了全天窗這條路可行。(f) 費半 SXF 的推播密度隨時段差異極大:23:09 為 146 則/60 秒,00:55 只有 2 則/40 秒。(Trigger:接任何海外商品行情、選指數資料源、或繼承 TC4QuoteSource 寫新 source)
+- **TC4 REALTIME 的 `PreciseTime` 欄寬跨交易所段不同,`FilledTime` 才是通用的(2026-07-30 實證)**:台期交(TWF)是 `HHMMSSffffff`(微秒 11–12 位),**CME / CBOT / SGX 是 `HHMMSS`**(實測 MES 的 PreciseTime 與 FilledTime 同值 `"41256"` = 04:12:56 UTC)。`stock_models._taipei_time` 的 `zfill(12)` 對海外段會把 6 位值左補成 `000000041256` → **恆為台北 08:00:00.0xx 的假時刻**,與真實時刻無關。失效樣態極安靜:tick 照樣解析成功(價量都對),只有時刻是假的 —— 相關係數只用五檔中價所以沒被咬到,江波圖是第一個依賴跨段 tick 時刻的功能,四條海外腿的 live 點全部落在盤別窗外(畫面表現為「回補到啟動時刻後就不再前進」)。任何要用 tick 時刻的跨段功能一律走 `FilledTime`(UTC HHMMSS,zfill(6);`index_engine` 對 IX0001 也是用它),缺值才退回本機時鐘。(Trigger:任何跨交易所段用 tick 時刻 / 分鐘聚合 / 時序去重)
+- **TC4 1K 當日回補在 CME / CBOT / SGX / TWF 四段皆可用(2026-07-30 實證)**:六腿(TXF/TWN/YM/ES/NQ/SXF)實跑各 201–247 列 → 日盤窗內 202 分鐘、覆蓋率 100%(SXF 94.4%,稀疏腿真的沒成交)。**富台 TWN 的 1K 可用**(先前只知小富台 MTWN 的 SubHistory 逾時空 —— 那是該檔本身無資料,不能推論 SGX 段)。1K row 另帶 `UpVolume`/`DownVolume`/`UpTick`/`DownTick`(= 內外盤量),首頁固定 50 列必須走 `iter_qry_pages` 收割。兩個盤別各自完整落在單一 UTC 日 → 回補窗用「當日 UTC 全天窗」即可涵蓋。(Trigger:排任何 TC4 分鐘級回補、或評估內外盤能量副圖)
 - **CME single stock futures(含 TSMC ADR)2026-07-27 上市,達錢 4 尚未上架**:55 檔美股 + 22 檔微型、現金結算、一天 23 小時交易 —— 那 23 小時交易是關鍵,代表台股盤中也會有 TSM 的連續報價(ADR 現貨在台股盤中是休市的)。2026-07-29 實測 TC4 對 `CME`/`CME_SSF`/`CME_EQ`/`CMESSF` × `TSM`/`NVDA`/`AAPL` 等 64 種命名組合全 fail(對照組 `TC.F.CME.ES.HOT` 回 OK)。上架後在 `configs/correlation.json` 的 `legs` 加一筆即可(SC-8 設計)。(Trigger:評估 TSM/美股個股資料源、或想確認 TC4 是否已上架 SSF)
 - **`statistics.correlation` 是 stdlib(Python 3.10+)且夠快**:1800 樣本實測 0.15 ms、六腿五對三窗的完整 tick 6.43 ms。相關係數不必自寫增量統計量(整批重算讓「增量 vs 整批一致」恆真,免追浮點誤差上界);常數序列會拋 `StatisticsError`,catch 後回 `None`。(2026-07-30,Trigger:要算相關/共變異數而想引 numpy 或自寫演算法時)
 - **長跑 pipeline 必須有進度 log**:round 1 fade-search 跑 6 小時全程黑箱,無法判斷卡死或正常。fold/arm/generation 邊界各 log 一行(logger,含完成比例與耗時),成本近零。(2026-07-11,Trigger:寫任何預期 >10 分鐘的批次/搜索迴圈)

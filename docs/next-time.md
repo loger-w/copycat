@@ -129,6 +129,35 @@
 - [x] ~~realtime-correlation 的 SC-5 日盤補驗~~ **2026-07-30 10:24 已驗**:日盤六腿全部有中價且非 stale(TXF 40646 / TWN 3462.62 / YM 51909.5 / ES 7388.88 / NQ 27638 / SXF 10776),五對相關係數算出實值(TWN 0.590 / YM 0.147 / ES 0.336 / NQ 0.520;SXF 因整窗中價未動 → 標準差 0 正確回 null)。SC-6 同時驗過:60 秒收 61 則、間隔中位數 1.010s、seq 連續遞增。
 - [ ] realtime-correlation 訂閱窗的**反向**驗證仍未做:「沿用 `session_window` 會失效」是推論不是實證 —— 台指日盤窗(UTC 00–06)+ 夜盤窗(UTC 06–22)合計涵蓋 UTC 00–22,訂閱當下海外腿幾乎不會落窗外;真正的風險是「訂閱後跨過窗結束邊界(UTC 06 / 22)推播是否停止」。驗法:在 UTC 05:5x(台北 13:5x)前訂閱並持續監聽到 UTC 06:0x 之後,看推播是否中斷。全天窗實作本身已是防禦性選擇,此項只影響「基底 source 是否也該改」的判斷。
 - [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
+## 2026-07-30(index-river-chart 收尾沉澱)
+
+- [ ] 🔴 **既有 bug 加證:`aggregate.py:21 _SPOT_PREFIX = "TC.F."` 的汙染範圍比原記載更大**。
+  原記載(2026-07-29 條)只提個股期;本輪 real-env 截圖實見 **IndexBar 的台指顯示成富台
+  3419 / 納指 27488**(corr 引擎訂的五條海外腿 tick 全走同一條 ZMQ SUB 全訂閱通道)。
+  即 realtime-correlation 出貨後這個 bug 就一直在汙染 IndexBar 與 TXO 綜合損益的現貨損益,
+  不需要開個股頁也會發生。修法仍同原條目(route() 對非台指期的 TC.F.* 該丟棄),
+  已從「碰個股頁才踩」升級為「開 server 就踩」。
+- [ ] 內外盤能量副圖:1K row 實測帶 `UpVolume`/`DownVolume`/`UpTick`/`DownTick`,
+  live REALTIME 也有 `TradeQuantity` + 五檔可判內外盤 → 江波圖副圖(量柱 / 內外盤)
+  資料齊備,本輪 user 拍板不做。要做時注意六腿量單位不可比(各腿自己歸一)。
+- [ ] `river-chart-svg.ts` 與既有 `index-chart-svg.ts` / `stock-intraday-svg.ts` 三份幾何
+  模組結構相似(x 等分 / autofit / 平盤線 / 時間刻度)。本輪刻意不泛化既有兩支(已上線
+  且窗寫死 09:00–13:30)。**收斂條件**:出現第四份、或既有兩支需要可變窗時,抽共用
+  `window → toX/toY` 層。
+- [ ] `stock_source._collect_history` 與 `river_backfill.collect_1k_minutes` 是同型邏輯的
+  兩份實作(前者服務 K 線 / overlay 且參數已被四個呼叫點綁住)。若第三個回補路徑出現,
+  以 `collect_1k_minutes` 的「吃 bound method」形狀收斂。
+- [ ] `_schedule_backfill` 覆寫 `_backfill_task` 參照:兩次快速重連可能留下 close() 不會
+  await 的孤兒 task(inflight 旗標在第一個 await 前設定,重入窗極小;孤兒的 fetch 失敗
+  已被 ConnectionError 攔)。要對稱化就比照 `futures_engine._leaf_tasks` 用集合 + gather。
+- [ ] 江波圖每則 delta 重算全窗幾何(滿窗夜盤 840 點 × 6 腿);`timeTicks` 逐分鐘掃窗且
+  每張卡各算一次。與既有 IndexPage 同款做法,未量到掉幀;真環境掉幀先量再改 memo。
+- [ ] 台指腿的 live 分鐘桶用**本機時鐘**(futures_engine 的 `st.t` 在既有 bug 1 情境不可靠)。
+  若本機時鐘與交易所差超過一分鐘,台指線會相對其餘腿位移一格。
+- [ ] `ws_river_count.py`(evidence 腳本)第一版沒回 Pong → uvicorn 的 websockets 在
+  ping_interval + ping_timeout(各 20s)後關連線,量成「39 則/60 秒」。**寫任何手打
+  WebSocket client 的量測腳本都要回 Pong**,否則超過 40 秒的觀測窗會被截斷。
+
 ## 2026-07-30(stock-ui-round3 順手清單)
 
 - [ ] 🔴 **「有資料但 TC4 慢」會顯示肯定語氣的錯誤結論**(change-spec Known Risks 1):
