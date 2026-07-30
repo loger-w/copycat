@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from copycat.live.models import (
     OptionContract,
     Tick,
@@ -111,6 +113,23 @@ class TestParseRealtime:
         assert tick.symbol == "TC.F.TWF.TXF.HOT"
         assert tick.price_millipts == 43_735_460
         assert tick.qty == 0
+
+    def test_txf_month_leaf_zero_qty_also_parses(self) -> None:
+        """leaf 契約(futures_engine fallback)同屬現價源。"""
+        raw = dict(
+            REALTIME_RAW, Symbol="TC.F.TWF.TXF.202609", TradeQuantity="0", TradingPrice="43800"
+        )
+        assert parse_realtime(raw) is not None
+
+    @pytest.mark.parametrize(
+        "symbol",
+        ["TC.F.TWF.DHF.HOT", "TC.F.CME.YM.HOT", "TC.F.SGX.TWN.HOT", "TC.F.TWF.MXF.HOT"],
+    )
+    def test_non_txf_futures_zero_qty_is_dropped(self, symbol: str) -> None:
+        """零量放行的特例只給台指期(現價源)。放寬到整棵 TC.F.* 會讓個股期 / 海外腿的
+        零量 snapshot 也流進 ChainAggregator.route,放大 spot 被覆寫的頻率。"""
+        raw = dict(REALTIME_RAW, Symbol=symbol, TradeQuantity="0", TradingPrice="232.5")
+        assert parse_realtime(raw) is None
 
 
 class TestParseOptionSymbol:

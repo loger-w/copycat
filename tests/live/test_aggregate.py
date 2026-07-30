@@ -100,6 +100,50 @@ class TestRouting:
         assert snap["totals"]["dropped_foreign_ticks"] == 1
         assert snap["totals"]["ticks"] == 0
 
+    def test_txf_month_leaf_also_updates_spot(self) -> None:
+        """futures_engine 的 leaf fallback 訂 TC.F.TWF.TXF.<YYYYMM> —— 同一標的同一價位,
+        HOT 推播被搶走時它是唯一的現價來源(CLAUDE.md §8 同 symbol 跨 session 只推一邊)。"""
+        agg = make_agg()
+        agg.route(tick("TC.F.TWF.TXF.202609", price=43_800_000, qty=1))
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["spot"]["price"] == 43800.0
+
+    @pytest.mark.parametrize(
+        "symbol",
+        [
+            "TC.F.TWF.DHF.HOT",  # 個股期(2317;stock_engine 期現對照訂的)
+            "TC.F.CME.YM.HOT",  # 海外腿(corr_engine 六腿)
+            "TC.F.CME.ES.HOT",
+            "TC.F.CBOT.NQ.HOT",
+            "TC.F.SGX.TWN.HOT",  # 富台
+            "TC.F.TWF.SXF.HOT",  # 費半(台期交段但非台指期)
+            "TC.F.TWF.MXF.HOT",  # 小台(futures_engine 訂的,非 TXO runtime 的現價源)
+        ],
+    )
+    def test_non_txf_futures_must_not_overwrite_spot(self, symbol: str) -> None:
+        """TXO runtime 的 ZMQ SUB 訂 "" 會收到同 process 其他引擎訂的所有期貨推播。
+        整棵 TC.F.* 樹當現價源 → spot 被不同商品輪流覆寫(右上角台指與 spot_pnl 一起亂跳,
+        2026-07-29 盤中實測個股期 232.5)。"""
+        agg = make_agg()
+        agg.route(tick(TXF, price=43_735_460, qty=1, cum=100))
+        agg.route(tick(symbol, price=232_500, qty=1, cum=200))
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["spot"]["price"] == 43735.46
+        assert snap["totals"]["dropped_foreign_ticks"] == 1
+        assert snap["totals"]["ticks"] == 0  # 非合約 → 不進內外盤累積
+
+    def test_backfill_skips_non_txf_futures(self) -> None:
+        """回補路徑同樣不得把其他期貨當合約灌進累積(ingest_backfill 與 route 共用同一判斷)。"""
+        agg = make_agg()
+        rebuilt = agg.ingest_backfill(
+            [
+                tick(TXF, price=43_735_460, qty=1),
+                tick("TC.F.TWF.DHF.HOT", price=232_500, qty=1),
+                tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000),
+            ]
+        )
+        assert rebuilt == {C44000.symbol: 2}
+
 
 class TestBackfillIngest:
     def test_rebuilds_cum_from_qty(self) -> None:
