@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
@@ -19,7 +19,13 @@ import {
   type Watchlist,
 } from "@/lib/watchlist-model";
 
-const ROW_H = 44;
+/** 列高(round4 項 4:44 → 52,兩行式)。
+ *
+ *  **同時是拖曳落點幾何的分母**(`dropTargetFromPointer`)—— 與畫面上的實際列高一旦
+ *  漂移,拖曳愈往下插入位置愈偏,而症狀是「放開後插到別的位置」= 靜默改資料、零錯誤訊號。
+ *  所以列高由這個常數用 inline style 指派,不寫 Tailwind class:jsdom 沒有版面引擎,
+ *  class 寫的高度沒有任何測試看得到。 */
+export const ROW_H = 52;
 /** 折疊中的群組名(round4 項 2)。前綴沿用 `copycat-`(docs/next-time.md 的 key 收斂方向) */
 const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 /** 未分組區塊的折疊(`"1"` = 折疊);與群組折疊分開存,兩者互不影響 */
@@ -88,6 +94,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const listRefs = useRef<Map<string | null, HTMLElement>>(new Map());
 
   const suggestions = searchStocks(input, names, SUGGEST_LIMIT);
+  // 名冊 2,401 筆;每列 `names.find(...)` 是 O(列數 × 2401),而側欄每則 quote 都會 re-render
+  const nameOf = useMemo(() => new Map(names.map((n) => [n.code, n.name])), [names]);
 
   /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
    *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
@@ -217,11 +225,14 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
 
   function stockRow(code: string, group: string | null): React.ReactElement {
     const q = quotes[code];
+    const name = nameOf.get(code);
     return (
       <li key={code}>
         <div
+          data-testid={`wl-row-${code}`}
+          style={{ height: ROW_H }}
           className={cn(
-            "group flex h-11 cursor-pointer items-center gap-2 border-b border-line px-1",
+            "group flex cursor-pointer items-center gap-1.5 border-b border-line px-1",
             active === code && "bg-bg-deep",
             drag?.code === code && "opacity-50",
           )}
@@ -230,32 +241,58 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           <span
             role="button"
             aria-label={`拖拉 ${code}`}
-            className="cursor-grab select-none text-ink-dim"
+            className="shrink-0 cursor-grab select-none text-ink-dim"
             onPointerDown={(e) => onHandleDown(group, code, e)}
             onClick={(e) => e.stopPropagation()}
           >
             ⋮⋮
           </span>
-          <span className="w-14 font-mono text-sm text-ink">{code}</span>
+          {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
+              放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是
+              主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
+              漲幅刻意不跟著放大:四個元素同權重反而更難掃。
+              `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
+          <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
+            <span className="font-mono text-base text-ink">{code}</span>
+            {name !== undefined ? (
+              <span className="truncate text-xs text-ink-muted">{name}</span>
+            ) : null}
+          </div>
           {q?.no_data ? (
-            <span className="flex-1 text-right text-xs text-ink-dim">無資料</span>
+            <span className="shrink-0 text-xs text-ink-dim">無資料</span>
           ) : (
-            <span className="flex flex-1 items-baseline justify-end gap-2 font-mono text-xs">
-              <span className="text-sm text-ink">{fmtPrice(q?.p ?? null)}</span>
-              <span
-                className={cn(
-                  "w-14 text-right",
-                  (q?.chg_pct ?? 0) > 0
-                    ? "text-bull"
-                    : (q?.chg_pct ?? 0) < 0
-                      ? "text-bear"
-                      : "text-ink-dim",
-                )}
-              >
-                {q?.chg_pct != null
-                  ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
-                  : "-"}
-              </span>
+            <span className="flex shrink-0 flex-col items-end justify-center font-mono leading-tight">
+              {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
+                  參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
+              {q?.p != null ? (
+                <>
+                  <span className="text-base text-ink">{fmtPrice(q.p)}</span>
+                  <span
+                    className={cn(
+                      "text-xs",
+                      (q.chg_pct ?? 0) > 0
+                        ? "text-bull"
+                        : (q.chg_pct ?? 0) < 0
+                          ? "text-bear"
+                          : "text-ink-dim",
+                    )}
+                  >
+                    {q.chg_pct != null
+                      ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
+                      : "-"}
+                  </span>
+                </>
+              ) : q?.ref != null ? (
+                <>
+                  <span className="text-base text-ink-dim">{fmtPrice(q.ref)}</span>
+                  <span className="text-xs text-ink-dim">參考</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-base text-ink-dim">-</span>
+                  <span className="text-xs text-ink-dim">-</span>
+                </>
+              )}
             </span>
           )}
           {group === null ? (
@@ -400,7 +437,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           >
             {ungrouped.map((code) => stockRow(code, null))}
             {ungrouped.length === 0 ? (
-              <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
+              <li style={{ minHeight: ROW_H }} className="flex items-center px-1 text-xs text-ink-dim">
                 拖曳到此移出群組
               </li>
             ) : null}
@@ -449,7 +486,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               >
                 {g.codes.map((code) => stockRow(code, g.name))}
                 {g.codes.length === 0 ? (
-                  <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
+                  <li style={{ minHeight: ROW_H }} className="flex items-center px-1 text-xs text-ink-dim">
                     拖曳股票到此
                   </li>
                 ) : null}

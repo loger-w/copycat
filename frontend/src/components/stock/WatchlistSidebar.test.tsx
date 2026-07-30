@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import type { Group, Watchlist } from "@/lib/watchlist-model";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -570,5 +570,68 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     mockWatchlist([{ name: "空組", codes: [] }], []);
     sidebar();
     await waitFor(() => expect(screen.getByText("拖曳股票到此")).toBeTruthy());
+  });
+});
+
+// 🔴 round4 項 4(自選列)+ 項 5(字級)
+describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
+  it("列出股票名稱(名冊有的檔)", async () => {
+    sidebar();
+    await waitGroups();
+    // NAMES 有 2330 台積電;5483 / 3231 不在名冊 → 只顯示代號
+    expect(screen.getAllByText("台積電").length).toBeGreaterThan(0);
+  });
+
+  it("代號與現價放大到 text-base,名稱與漲幅維持 text-xs", async () => {
+    const { container } = sidebar();
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]')!;
+    expect(within(row as HTMLElement).getByText("2330").getAttribute("class")).toContain("text-base");
+    expect(within(row as HTMLElement).getByText("2380").getAttribute("class")).toContain("text-base");
+    expect(within(row as HTMLElement).getByText("台積電").getAttribute("class")).toContain("text-xs");
+    expect(within(row as HTMLElement).getByText("+2.59%").getAttribute("class")).toContain("text-xs");
+  });
+
+  it("列高由 ROW_H 單一真值推導(拖曳落點幾何的分母,不得與 class 各寫一份)", async () => {
+    const { container } = sidebar();
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
+    expect(row.style.height).toBe(`${ROW_H}px`);
+  });
+
+  it("尚無成交但有參考價 → 灰色參考價 + 灰字「參考」,不顯示 0.00%", async () => {
+    const quotes = {
+      ...QUOTES,
+      "3231": { p: null, chg_pct: null, vol: null, ref: 99_500, no_data: false },
+    };
+    const { container } = wrap(
+      <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
+    );
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-3231"]') as HTMLElement;
+    const price = within(row).getByText("99.5");
+    expect(price.getAttribute("class")).toContain("text-ink-dim");
+    expect(within(row).getByText("參考")).toBeTruthy();
+    expect(within(row).queryByText("0.00%")).toBeNull();
+  });
+
+  it("無參考價也無成交 → 維持 `-`(不憑空編值)", async () => {
+    const quotes = {
+      ...QUOTES,
+      "3231": { p: null, chg_pct: null, vol: null, ref: null, no_data: false },
+    };
+    const { container } = wrap(
+      <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
+    );
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-3231"]') as HTMLElement;
+    expect(within(row).getAllByText("-").length).toBeGreaterThan(0);
+    expect(within(row).queryByText("參考")).toBeNull();
+  });
+
+  it("no_data 仍優先顯示「無資料」(既有行為)", async () => {
+    sidebar();
+    await waitGroups();
+    expect(screen.getAllByText("無資料").length).toBeGreaterThan(0);
   });
 });
