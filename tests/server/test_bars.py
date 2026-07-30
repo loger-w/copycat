@@ -254,6 +254,33 @@ class TestEmptyNegativeCache:
         assert await build_daily(fetch, cache, "9999", today) == []
         assert len(fetch.calls) == calls
 
+    async def test_today_empty_with_nonempty_history_still_short_cached(self) -> None:
+        """歷史有資料但今日零成交:合併後的 out 非空 → 不會觸發 empty_mark,
+        於是當日段每次請求都重付一次 TC4 首頁等待(self-review B2)。
+        當日段自己也要有短 TTL 負向快取。"""
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        hist = [bar("2026-07-27 09:01")]
+        fetch = _Fetcher([hist, [], []])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert await build_minute(fetch, cache, "2317", 2, today) == hist
+        calls = len(fetch.calls)
+        clock["t"] = EMPTY_TTL_SECS - 1.0
+        assert await build_minute(fetch, cache, "2317", 2, today) == hist
+        assert len(fetch.calls) == calls  # 當日段不再重打
+
+    async def test_today_empty_short_ttl_expires(self) -> None:
+        """短 TTL 過期後當日段必須重抓 —— 該股開始成交時要看得到(W-15 同理)。"""
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        hist = [bar("2026-07-27 09:01")]
+        cur = [bar("2026-07-28 09:01")]
+        fetch = _Fetcher([hist, [], cur])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert await build_minute(fetch, cache, "2317", 2, today) == hist
+        clock["t"] = EMPTY_TTL_SECS + 1.0
+        assert await build_minute(fetch, cache, "2317", 2, today) == hist + cur
+
     async def test_prune_drops_only_expired_empty_marks(self) -> None:
         """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。"""
         clock = {"t": 0.0}

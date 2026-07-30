@@ -296,10 +296,21 @@ describe("buildCandleGeometry yTicks 合法檔位(round3 SC-10)", () => {
     expect(new Set(prices).size).toBe(prices.length);
   });
 
-  it("極窄域(區間內無任何合法檔位)仍給至少一根刻度,不整組消失", () => {
+  it("極窄域(區間內無任何合法檔位)仍給至少一根刻度,且該刻度也必須合法", () => {
     // 1000 元帶 tick 5 元;域 = [1000.1, 1003.0] 內部沒有 5 的倍數
+    // → 5 個等分候選全被域外過濾掉,走保底分支。
+    // 保底值若不 snap 會吐出 1001.55(= (lo+hi)/2)這種下不了單的價位(self-review B1)。
     const g = buildCandleGeometry([bar("d", 1_000_100, 1_003_000, 1_000_100, 1_003_000)], size);
     expect(g.yTicks.length).toBeGreaterThanOrEqual(1);
+    for (const t of g.yTicks) {
+      expect(t.priceMilli % 5_000).toBe(0);
+      expect(snapNearest(t.priceMilli)).toBe(t.priceMilli);
+    }
+    // 唯一的合法檔位落在域外 → y 要夾回繪圖區,否則刻度會畫進下方量區
+    for (const t of g.yTicks) {
+      expect(t.y).toBeGreaterThanOrEqual(0);
+      expect(t.y).toBeLessThanOrEqual(size.height);
+    }
   });
 
   it("extraSeries(布林/MA)撐開的非法端點:刻度仍全合法且不落到域外", () => {

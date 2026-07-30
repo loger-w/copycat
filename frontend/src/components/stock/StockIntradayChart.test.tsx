@@ -8,7 +8,10 @@ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
 
 const OVERLAY = {
-  cdp: { cdp: 2_320_000, ah: 2_400_000, nh: 2_360_000, nl: 2_280_000, al: 2_240_000 },
+  // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
+  // fmtTickPrice 的理由)。2_401_237 → snap 到 2_400_000 → 顯示 "2400*";
+  // 沒 snap 的話會顯示 "2401.2*" 這種下不了單的價位(self-review B4)。
+  cdp: { cdp: 2_320_000, ah: 2_401_237, nh: 2_357_800, nl: 2_280_000, al: 2_240_000 },
   ma5: 2_330_000,
   ma20: 2_310_000,
   date: "2026-07-25",
@@ -142,9 +145,13 @@ describe("StockIntradayChart", () => {
   // 🔴 round3 SC-2:右緣不再印 AH / NH / CDP 等用語,改印該線的合法價位 + `*`
   it("CDP 預設開 → 右緣印價位(帶 *),不出現 AH / NH 等用語(SC-2)", async () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    // overlay mock:cdp 2320 / ah 2400 / nh 2360 / nl 2280 / al 2240(毫元 ×1000)
+    // ah 2401.237 → snap 到合法檔位 2400(5 元 tick);nh 2357.8 → 2355
     await waitFor(() => expect(screen.getByText("2400*", { selector: "text" })).toBeTruthy());
     expect(screen.getByText("2320*", { selector: "text" })).toBeTruthy();
+    expect(screen.getByText("2355*", { selector: "text" })).toBeTruthy();
+    // 未 snap 的原值不得出現
+    expect(screen.queryByText("2401.2*", { selector: "text" })).toBeNull();
+    expect(screen.queryByText("2357.8*", { selector: "text" })).toBeNull();
     for (const term of ["AH", "NH", "NL", "AL"]) {
       expect(screen.queryByText(term, { selector: "text" })).toBeNull();
     }

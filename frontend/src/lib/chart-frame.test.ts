@@ -36,6 +36,17 @@ describe("svgBox", () => {
     expect(box.viewBoxHeight).toBe(Math.round(box.renderPx / (svgW / VB_W)));
   });
 
+  it("容器寬扣掉 padding/border 後為負 → usable:false(不可算出負的 viewBox 高)", () => {
+    // 自選側欄很寬 / 視窗極窄時圖表區可能只剩 20px;少了這條 guard,
+    // s 會是負值 → viewBox="0 0 800 -N",SVG 屬性不合法(self-review B3)
+    const box = svgBox({ width: 20, height: 600 }, VB_W);
+    expect(box.usable).toBe(false);
+    expect(box.viewBoxHeight).toBe(0);
+    expect(svgBox({ width: CHART_FRAME.padX + CHART_FRAME.border, height: 600 }, VB_W).usable).toBe(
+      false,
+    );
+  });
+
   it("極矮視窗夾制到 minPx,不讓 viewBox 高度趨零", () => {
     const box = svgBox({ width: 1200, height: 60 }, VB_W, 180);
     expect(box.renderPx).toBe(180);
