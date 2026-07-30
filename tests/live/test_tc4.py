@@ -10,6 +10,7 @@ import zmq
 
 import copycat.live.tc4 as tc4_mod
 from copycat.live.tc4 import SPOT_SYMBOL, TC4QuoteSource, build_rt_request, group_series
+from tests.conftest import requires_tcpy
 
 
 def _free_port() -> int:
@@ -403,8 +404,15 @@ class TestReqProtection:
         assert src._api is None, "失敗後未棄連線,下一次呼叫仍用壞 socket"
 
 
+@requires_tcpy
 class TestConnectInterruptible:
-    """條 1 核心:app 死亡時 Connect 裸 recv 必須有 timeout,重連迴圈可中斷。"""
+    """條 1 核心:app 死亡時 Connect 裸 recv 必須有 timeout,重連迴圈可中斷。
+
+    兩條都會真的走 `_ensure_connected` → import TCPY wrapper,缺 wrapper 時
+    `test_connect_dead_port...` 直接紅,而 `test_check_stale...` 更糟:重連執行緒
+    死於 ModuleNotFoundError 也滿足 `not worker.is_alive()` → 假綠(2026-07-30 實測)。
+    故整個 class 一起 skip。
+    """
 
     def test_connect_dead_port_raises_connection_error_fast(
         self, monkeypatch: pytest.MonkeyPatch

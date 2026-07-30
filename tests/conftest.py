@@ -9,9 +9,21 @@ factory._getenv 讀 os.environ + repo root .env(Phase 6 real-env finding)— 開
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import copycat.capital.factory as _capital_factory
+
+# TC4 官方 wrapper(spikes/TCPY)不在版控(.gitignore:9)→ 乾淨 checkout 與新 worktree
+# 一律缺它。真的要 import 它的測試必須 skip 而非紅:紅會讓「環境沒裝」看起來像「程式壞了」。
+# 路徑與 live/tc4.py / tc4_trade.py 的 sys.path.insert 指向同一處(repo_root/spikes/TCPY)。
+TCPY_DIR = Path(__file__).resolve().parent.parent / "spikes" / "TCPY"
+
+requires_tcpy = pytest.mark.skipif(
+    not (TCPY_DIR / "tcoreapi_mq.py").exists(),
+    reason=f"TC4 官方 wrapper 不在版控,此環境未就緒:{TCPY_DIR}",
+)
 
 # factory 讀取的全部環境變數 key(test_factory._isolate import 同一清單,消除兩處漂移)
 CAPITAL_ENV_KEYS = (

@@ -15,6 +15,7 @@ import zmq
 
 from copycat.live.tc4_trade import TC4TradeSource
 from copycat.live.trade_models import BrokerRejectedError, TouchanceDownError
+from tests.conftest import requires_tcpy
 
 
 class FakeSocket:
@@ -256,6 +257,7 @@ class TestClose:
         assert api.disconnects == 1  # §0a:不 Disconnect process 不退出
 
 
+@requires_tcpy
 class TestFailedConnectGcSafety:
     def test_failed_connect_gc_does_not_block_process(self) -> None:
         """F-1(2026-07-20 盤中驗證):Connect 失敗被丟棄的 api,GC 回收 zmq Context 不得卡死。
