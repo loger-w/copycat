@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copycat.live.stock_models import StockTick
+from copycat.live.stock_models import StockMeta, StockTick
 from copycat.live.stock_state import StockDayState
 
 
@@ -12,6 +12,8 @@ def _tick(
     time: str = "10:57:51.000",
     side: str = "outer",
     trial: bool = False,
+    bid: int | None = None,
+    ask: int | None = None,
 ) -> StockTick:
     return StockTick(
         code="2330",
@@ -23,6 +25,8 @@ def _tick(
         side=side,
         buy_sell_flag=None,
         is_trial=trial,
+        bid_milli=bid,
+        ask_milli=ask,
     )
 
 
@@ -113,3 +117,82 @@ class TestApplyBackfill:
         st.apply_backfill([])
         assert st.last is not None
         assert st.last.cum_vol == 50
+
+
+class TestDayHighLow:
+    """round5 項 1:當日最高 / 最低。
+
+    資料源刻意選「後端逐 tick running max/min」而不是 TC4 的 HighPrice/LowPrice ——
+    2026-07-21 個股 REALTIME probe 樣本裡沒有那兩個欄位(帶不帶沒實證),而本狀態機
+    握有當日全部 tick(含回補重放),算出來是建構保證正確的。
+    """
+
+    def test_running_max_min_over_ingested_ticks(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000))
+        st.ingest(_tick(20, price=2_395_000))
+        st.ingest(_tick(30, price=2_370_000))
+        assert st.high_milli == 2_395_000
+        assert st.low_milli == 2_370_000
+
+    def test_no_ticks_leaves_none(self) -> None:
+        st = StockDayState()
+        assert st.high_milli is None
+        assert st.low_milli is None
+
+    def test_dropped_ticks_do_not_move_extremes(self) -> None:
+        # 去重丟棄與試撮丟棄都走不到 _apply,極值不該被它們污染
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000))
+        assert st.ingest(_tick(10, price=9_990_000)) is False  # cum 重送
+        assert st.ingest(_tick(5, price=1_000)) is False  # cum 回退
+        assert st.ingest(_tick(99, price=9_990_000, time="08:40:00.000", trial=True)) is False
+        assert st.high_milli == 2_380_000
+        assert st.low_milli == 2_380_000
+
+    def test_reset_clears_extremes_but_keeps_meta(self) -> None:
+        # 當日衍生狀態必須跟著 reset 清掉(W-24);book/meta 是盤外靜態值,照舊保留
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000))
+        st.meta = StockMeta(
+            name="台積電",
+            ref_milli=2_320_000,
+            upper_milli=2_550_000,
+            lower_milli=2_090_000,
+            y_close_milli=2_320_000,
+            y_volume=45_197,
+            open_time="09:00:00",
+            close_time="13:30:00",
+        )
+        st.reset()
+        assert st.high_milli is None
+        assert st.low_milli is None
+        assert st.meta is not None  # 盤外顯示昨收靜態值依賴它
+
+    def test_backfill_replay_rebuilds_extremes(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(5, price=9_990_000))  # 會被原子重建洗掉
+        st.apply_backfill(
+            [
+                _tick(10, price=2_400_000, time="09:01:00.000"),
+                _tick(20, price=2_360_000, time="09:02:00.000"),
+            ]
+        )
+        assert st.high_milli == 2_400_000
+        assert st.low_milli == 2_360_000
+
+    def test_snapshot_exposes_extremes_at_top_level(self) -> None:
+        # 刻意放 top-level(與 vwap 同層)不放 meta:meta 是 TC4 來的靜態盤別資料,
+        # 而高低是由成交推導的當日狀態;放 top-level 後 meta 為 None 時高低照樣有值
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000))
+        snap = st.snapshot()
+        assert snap["high"] == 2_380_000
+        assert snap["low"] == 2_380_000
+        assert snap["meta"] is None
+
+    def test_snapshot_ticks_carry_bid_ask(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(10, bid=2_375_000, ask=2_380_000))
+        assert st.snapshot()["ticks"][0]["b"] == 2_375_000
+        assert st.snapshot()["ticks"][0]["a"] == 2_380_000

@@ -224,6 +224,33 @@ class TestStreamAndStatus:
         assert tick_msg["code"] == "2330"
         assert tick_msg["p"] == 2_380_000
         assert tick_msg["seq"] == 1
+        # round5:明細要買賣價、江波圖當日高低線要能盤中更新。
+        # h/l 掛 tick 而不另立 meta 訊息型別 —— engine 只發 tick/book/watchlist_quote 三種,
+        # 而當日高低本來就只在成交時才會變,與 tick 同步天然正確。
+        assert tick_msg["b"] == 2_375_000
+        assert tick_msg["a"] == 2_380_000
+        assert tick_msg["h"] == 2_380_000
+        assert tick_msg["l"] == 2_380_000
+        await engine.close()
+
+    async def test_tick_high_low_track_new_extreme(self) -> None:
+        engine, src = await _make()
+        await engine.set_main("2330")
+        await _drain(engine)
+        stream = engine.stream()
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, price="2380"))
+        src.on_message(_quote(cum=2, price="2410"))
+        await _drain(engine)
+        got: list[dict] = []
+        try:
+            while True:
+                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+        ticks = [m for m in got if m["type"] == "tick"]
+        assert ticks[-1]["h"] == 2_410_000  # 新高跟著推
+        assert ticks[-1]["l"] == 2_380_000
         await engine.close()
 
     async def test_reconnect_pushes_status_and_reenqueues_main_backfill(self) -> None:

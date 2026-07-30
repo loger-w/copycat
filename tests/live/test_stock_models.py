@@ -188,3 +188,58 @@ class TestParseHistTick:
         row = {"Date": "20260703", "FilledTime": "10006", "TradeQuantity": "1",
                "TradingPrice": "", "PreciseTime": "10006840000"}
         assert parse_hist_tick("2330", row) is None
+
+
+class TestTickCarriesBidAsk:
+    """round5 項 3:明細要顯示成交當下的買賣價。
+
+    `derive_side` 早就取了 bid0/ask0(`:139-140`)只是沒留存 —— 補欄位不是新資料源。
+    """
+
+    def test_realtime_tick_keeps_best_bid_ask(self) -> None:
+        tick, _book, _meta = parse_stock_realtime(REALTIME_MSG)
+        assert tick is not None
+        assert tick.bid_milli == 2_380_000  # Bid=2380
+        assert tick.ask_milli == 2_385_000  # Ask=2385
+
+    def test_realtime_missing_book_side_gives_none_without_changing_side(self) -> None:
+        # 漲停鎖死(賣方掛單被吃光)→ ask 側空。side 判定必須與現況一字不差(W-18)
+        msg = dict(REALTIME_MSG)
+        for key in ("Ask", "Ask1", "Ask2", "Ask3", "Ask4", "Ask5"):
+            msg[key] = ""
+        tick, _book, _meta = parse_stock_realtime(msg)
+        assert tick is not None
+        assert tick.ask_milli is None
+        assert tick.bid_milli == 2_380_000
+        assert tick.side == "outer"  # 現況:ask 不可得時 2380 對 bid 2380 → 既有判定
+
+    def test_hist_tick_keeps_bid_ask(self) -> None:
+        row = {
+            "Date": "20260703",
+            "FilledTime": "10006",
+            "TradeQuantity": "4182",
+            "TradeVolume": "0",
+            "Bid": "2415",
+            "Ask": "2420",
+            "TradingPrice": "2415",
+            "PreciseTime": "10006840000",
+            "QryIndex": "1",
+        }
+        tick = parse_hist_tick("2330", row)
+        assert tick is not None
+        assert tick.bid_milli == 2_415_000
+        assert tick.ask_milli == 2_420_000
+        assert tick.side == "inner"  # 既有判定不變(W-18)
+
+    def test_hist_tick_without_bid_ask_columns(self) -> None:
+        row = {
+            "Date": "20260703",
+            "FilledTime": "10006",
+            "TradeQuantity": "1",
+            "TradingPrice": "2415",
+            "PreciseTime": "10006840000",
+        }
+        tick = parse_hist_tick("2330", row)
+        assert tick is not None
+        assert tick.bid_milli is None
+        assert tick.ask_milli is None
