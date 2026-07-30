@@ -247,7 +247,10 @@ class CorrelationEngine:
         self._backfill_inflight = True
         try:
             session = self._session_fn()
-            self._river.set_session(session)
+            # 這裡**不呼叫** set_session:回補是慢動作(每腿 SubHistory + 分頁收割),
+            # 換場邊界上晚到的回補會把狀態機拉回發起時那一場,清掉新場已累積的點並退回舊窗
+            # (Phase 4 自評 finding)。盤別由每秒的 _river_tick 單點驅動;
+            # apply_backfill 自己會用 session 比對丟棄過期回補。
             for leg in self._config.legs:
                 rows = await self._fetch_leg_minutes(leg.key, leg.symbol, leg.source)
                 if rows:

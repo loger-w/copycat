@@ -87,7 +87,11 @@ export function useRiver(): RiverStreamState {
     let backoff = BACKOFF_START_MS;
 
     const applySnapshot = (next: RiverState): void => {
-      seqRef.current = Math.max(seqRef.current, next.seq);
+      // 直接採用 snapshot 的 seq(不取 max):snapshot 一律反映 server 當下狀態,
+      // 而 server 重啟後 river_seq 從 0 起算 —— 取 max 會讓之後每一則 delta 都被當舊訊息
+      // 丟掉,畫面凍在 snapshot 那一刻直到 seq 追上舊值(Phase 4 自評 finding)。
+      // 資料不會因此倒退:snapshot 走 union 合併,舊值蓋不掉新值。
+      seqRef.current = next.seq;
       setState((prev) => mergeSnapshot(prev, next));
     };
 
