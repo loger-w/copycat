@@ -16,6 +16,7 @@ const GROUPS: Group[] = [
   { name: "觀察", codes: ["3231", "2330"] },
 ];
 
+/** 預設 fixture 的未分組是空的 —— 計數型斷言(2330 兩次 / 握把 4 個)依賴這個前提 */
 const CODES = ["2330", "5483", "3231"];
 
 const NAMES = {
@@ -28,6 +29,7 @@ const NAMES = {
 };
 
 const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 
 /** 名稱表分支不能回空表 —— 空表下「名稱命中」的提示列永遠不可能成立(review R19)。 */
 function respond(url: string, groups: Group[] = GROUPS, codes: string[] = CODES): Response {
@@ -35,8 +37,21 @@ function respond(url: string, groups: Group[] = GROUPS, codes: string[] = CODES)
   return new Response(JSON.stringify({ codes, groups }));
 }
 
+/** GET 回指定自選、PUT 記錄整包 body 並原樣回傳 */
+function mockWatchlist(groups: Group[], codes: string[]): void {
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Watchlist;
+      putBodies.push(body);
+      return new Response(JSON.stringify(body));
+    }
+    return respond(url, groups, codes);
+  });
+}
+
 beforeEach(() => {
   window.localStorage.removeItem(COLLAPSED_KEY);
+  window.localStorage.removeItem(UNGROUPED_KEY);
   putBodies = [];
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "PUT") {
@@ -77,6 +92,10 @@ function sidebar() {
 
 async function waitGroups(): Promise<void> {
   await waitFor(() => expect(screen.getByTestId("wl-group-主力")).toBeTruthy());
+}
+
+function search(): HTMLElement {
+  return screen.getByPlaceholderText("股號或名稱");
 }
 
 // 🔴 round3 SC-5:自選側欄與中間主區之間要有可見分隔線
@@ -122,26 +141,88 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
   it("每組每列都有拖拉握把(不再有「全部」停用拖拉的狀態)", async () => {
     sidebar();
     await waitGroups();
-    expect(screen.getAllByLabelText(/拖拉/)).toHaveLength(4); // 2+2
+    expect(screen.getAllByLabelText(/拖拉/)).toHaveLength(4); // 2+2,未分組為空
   });
 });
 
 describe("WatchlistSidebar 的 v3 契約(codes 全體)", () => {
   it("PUT 一律帶 codes,且不屬任何群組的股票不會被洗掉", async () => {
     // 2317 在自選但不屬任何群組 —— 側欄若把 codes 算成「群組聯集」,它會被靜默刪除
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as Watchlist;
-        putBodies.push(body);
-        return new Response(JSON.stringify(body));
-      }
-      return respond(url, GROUPS, [...CODES, "2317"]);
-    });
+    mockWatchlist(GROUPS, [...CODES, "2317"]);
     sidebar();
     await waitGroups();
     fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移除 2330"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
     expect(putBodies[0]!.codes).toContain("2317");
+  });
+});
+
+describe("WatchlistSidebar 未分組桶(SC-8~11)", () => {
+  it("未分組區塊列出不屬任何群組的股票", async () => {
+    mockWatchlist(GROUPS, [...CODES, "2317"]);
+    sidebar();
+    await waitGroups();
+    const ung = screen.getByTestId("wl-list-ungrouped");
+    expect(within(ung).getByText("2317")).toBeTruthy();
+    expect(within(ung).queryByText("2330")).toBeNull(); // 已屬群組 → 不在未分組
+  });
+
+  it("零群組時未分組列的 + 為停用(SC-9)", async () => {
+    mockWatchlist([], ["2317"]);
+    sidebar();
+    await waitFor(() => expect(screen.getByTestId("wl-list-ungrouped")).toBeTruthy());
+    const plus = screen.getByLabelText("加入群組 2317");
+    expect((plus as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("+ → 選群組 → 該檔離開未分組、進該組(SC-10)", async () => {
+    mockWatchlist(GROUPS, [...CODES, "2317"]);
+    sidebar();
+    await waitGroups();
+    fireEvent.click(screen.getByLabelText("加入群組 2317"));
+    fireEvent.click(screen.getByLabelText("加入 2317 到 主力"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putGroups()[0]![0]!.codes).toEqual(["2330", "5483", "2317"]);
+    await waitFor(() =>
+      expect(within(screen.getByTestId("wl-list-ungrouped")).queryByText("2317")).toBeNull(),
+    );
+  });
+
+  it("群組列的 × 只從該組移除,該檔掉回未分組(不是從自選消失)", async () => {
+    sidebar();
+    await waitGroups();
+    fireEvent.click(within(screen.getByTestId("wl-group-觀察")).getByLabelText("移除 3231"));
+    await waitFor(() =>
+      expect(putGroups()).toEqual([
+        [
+          { name: "主力", codes: ["2330", "5483"] },
+          { name: "觀察", codes: ["2330"] },
+        ],
+      ]),
+    );
+    expect(putBodies[0]!.codes).toContain("3231");
+    await waitFor(() =>
+      expect(within(screen.getByTestId("wl-list-ungrouped")).getByText("3231")).toBeTruthy(),
+    );
+  });
+
+  it("未分組列的 × 從自選整個移除", async () => {
+    mockWatchlist(GROUPS, [...CODES, "2317"]);
+    sidebar();
+    await waitGroups();
+    fireEvent.click(within(screen.getByTestId("wl-list-ungrouped")).getByLabelText("移除 2317"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]!.codes).toEqual(CODES);
+  });
+
+  it("未分組折疊獨立於群組折疊,且落 localStorage", async () => {
+    mockWatchlist(GROUPS, [...CODES, "2317"]);
+    sidebar();
+    await waitGroups();
+    fireEvent.click(screen.getByLabelText("折疊 未分組"));
+    expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
+    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
   });
 });
 
@@ -168,73 +249,80 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
   });
 });
 
-describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
-  async function openAdd(group: string): Promise<void> {
+describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+  it("零群組零股票時搜尋框仍在(W-16 的新實體)", async () => {
+    mockWatchlist([], []);
     sidebar();
-    await waitGroups();
-    fireEvent.click(screen.getByLabelText(`新增到 ${group}`));
-  }
+    await waitFor(() => expect(search()).toBeTruthy());
+    expect(screen.getByText("新增")).toBeTruthy();
+  });
 
   it("輸入名稱 → 提示列出現該檔代碼與名稱", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "鴻海" } });
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "鴻海" } });
     const suggest = screen.getByTestId("stock-suggest");
     expect(within(suggest).getByText("2317")).toBeTruthy();
     expect(within(suggest).getByText("鴻海")).toBeTruthy();
   });
 
   it("輸入代碼 → 提示列出現同一檔", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "2317" } });
     expect(within(screen.getByTestId("stock-suggest")).getByText("鴻海")).toBeTruthy();
   });
 
-  it("點提示列 → 加入該群組(不是別組)", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "鴻海" } });
+  it("點提示列 → 進未分組(不進任何群組)", async () => {
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "鴻海" } });
     fireEvent.click(screen.getByLabelText("加入 2317 鴻海"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]!.codes).toEqual([...CODES, "2317"]);
+    expect(putBodies[0]!.groups).toEqual(GROUPS); // 群組零改動
     await waitFor(() =>
-      expect(putGroups()).toEqual([
-        [
-          { name: "主力", codes: ["2330", "5483", "2317"] },
-          { name: "觀察", codes: ["3231", "2330"] },
-        ],
-      ]),
+      expect(within(screen.getByTestId("wl-list-ungrouped")).getByText("2317")).toBeTruthy(),
     );
   });
 
   it("點「新增」鈕加入(W-4 的兩條路徑之一,不能只留 Enter)", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "2317" } });
     fireEvent.click(screen.getByText("新增"));
-    await waitFor(() => expect(putGroups()[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
+    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "2317"]));
   });
 
-  it("Enter + 提示列無命中 → 原樣當股號加入(W-4 / SC-1c)", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "9958" } });
+  it("Enter + 提示列無命中 → 原樣當股號加入(W-4)", async () => {
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "9958" } });
     expect(screen.queryByTestId("stock-suggest")).toBeNull();
-    fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Enter" });
-    await waitFor(() => expect(putGroups()[0]?.[0]?.codes).toEqual(["2330", "5483", "9958"]));
+    fireEvent.keyDown(search(), { key: "Enter" });
+    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "9958"]));
   });
 
-  // self-review MC-6:mutation test 證明停用 `target.codes.includes(code)` 早退後
-  // 25 條測試照樣全綠 → 該組已有的股票被重複送進 PUT 也沒人發現
-  it("該組已有的股票再加一次 → 零 PUT(不送重複)", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2330" } });
+  // self-review MC-6:mutation test 證明停用早退後測試照樣全綠 → 重複 PUT 沒人發現
+  it("已在自選的股票再加一次 → 零 PUT(不送重複)", async () => {
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "2330" } });
     fireEvent.click(screen.getByText("新增"));
     await new Promise((r) => setTimeout(r, 30));
     expect(putBodies).toEqual([]);
   });
 
   // self-review MC-8:搜尋框自己的 Escape(與拖曳取消的 Escape 是兩個不同 handler)
-  it("搜尋框按 Esc → 收起輸入框且零 PUT", async () => {
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
-    fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Escape" });
+  it("搜尋框按 Esc → 清空輸入、收起提示列且零 PUT", async () => {
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "2317" } });
+    expect(screen.getByTestId("stock-suggest")).toBeTruthy();
+    fireEvent.keyDown(search(), { key: "Escape" });
     await new Promise((r) => setTimeout(r, 30));
-    expect(screen.queryByPlaceholderText("股號或名稱")).toBeNull();
+    expect((search() as HTMLInputElement).value).toBe("");
+    expect(screen.queryByTestId("stock-suggest")).toBeNull();
     expect(putBodies).toEqual([]);
   });
 
@@ -251,121 +339,71 @@ describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
       // 這支刻意回**舊形狀**(只有 groups):守住「回應缺 codes → 前端用聯集補」的相容路徑
       return new Response(JSON.stringify({ groups: GROUPS }));
     });
-    await openAdd("主力");
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
+    sidebar();
+    await waitGroups();
+    fireEvent.change(search(), { target: { value: "2317" } });
     expect(screen.queryByTestId("stock-suggest")).toBeNull();
-    fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Enter" });
-    await waitFor(() => expect(putGroups()[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
-  });
-});
-
-describe("WatchlistSidebar 群組增刪(既有行為)", () => {
-  it("新增群組:+ 群組 → 輸入名稱 → PUT 帶新空群組", async () => {
-    sidebar();
-    await waitGroups();
-    fireEvent.click(screen.getByLabelText("新增群組"));
-    fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "當沖" } });
-    fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
-    await waitFor(() => expect(putGroups()).toEqual([[...GROUPS, { name: "當沖", codes: [] }]]));
+    fireEvent.keyDown(search(), { key: "Enter" });
+    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "2317"]));
   });
 
-  it("刪除群組:標題列的 × → PUT 不含該群組(股票留在其他群組)", async () => {
-    sidebar();
-    await waitGroups();
-    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
-    await waitFor(() => expect(putGroups()).toEqual([[{ name: "主力", codes: ["2330", "5483"] }]]));
-  });
-
-  it("刪除群組成功 → localStorage 折疊清單不留該組名(不累積孤兒)", async () => {
-    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
-    sidebar();
-    await waitGroups();
-    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
-    await waitFor(() =>
-      expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]),
-    );
-  });
-
-  // W-3:失敗時 cache 未動 → UI 不該先跳。改寫成有實體的斷言(review R14)
-  it("刪除群組失敗(PUT 4xx)→ 錯誤文案出現、不發第二次 PUT、折疊狀態不變", async () => {
-    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察"]));
+  it("PUT 失敗 → 側欄顯示對應的中文文案", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
-        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
+        return new Response(JSON.stringify({ detail: { error: "WATCHLIST_FULL" } }), {
+          status: 400,
+        });
       }
       return respond(url);
     });
     sidebar();
     await waitGroups();
-    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
-    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
-    expect(putBodies).toHaveLength(1);
-    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["觀察"]);
-    expect(screen.getByTestId("wl-group-觀察")).toBeTruthy();
-  });
-
-  it("該組的 × 只從該組移除,另一組保留(不再有「全部」的跨組移除)", async () => {
-    sidebar();
-    await waitGroups();
-    fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移除 2330"));
-    await waitFor(() =>
-      expect(putGroups()).toEqual([
-        [
-          { name: "主力", codes: ["5483"] },
-          { name: "觀察", codes: ["3231", "2330"] },
-        ],
-      ]),
-    );
-  });
-
-  it("移組選單:checkbox 切換股票所屬群組(W-1 一檔多組)", async () => {
-    sidebar();
-    await waitGroups();
-    fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移組 5483"));
-    const checkbox = screen.getByRole("checkbox", { name: "觀察" });
-    expect((checkbox as HTMLInputElement).checked).toBe(false);
-    fireEvent.click(checkbox);
-    await waitFor(() =>
-      expect(putGroups()).toEqual([
-        [
-          { name: "主力", codes: ["2330", "5483"] },
-          { name: "觀察", codes: ["3231", "2330", "5483"] },
-        ],
-      ]),
-    );
-  });
-});
-
-describe("WatchlistSidebar 零群組(SC-2b / W-16)", () => {
-  beforeEach(() => {
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as Watchlist;
-        putBodies.push(body);
-        return new Response(JSON.stringify(body));
-      }
-      return respond(url, [], []);
-    });
-  });
-
-  it("顯示空狀態文案 + 搜尋框,加入後自動建「自選」組", async () => {
-    sidebar();
-    await waitFor(() => expect(screen.getByText("尚無自選,輸入股號新增")).toBeTruthy());
-    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
+    fireEvent.change(search(), { target: { value: "2317" } });
     fireEvent.click(screen.getByText("新增"));
-    await waitFor(() => expect(putGroups()).toEqual([[{ name: "自選", codes: ["2317"] }]]));
+    await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
   });
 });
 
-// 🟢 round4 SC-4:跨群組拖曳。jsdom 的 getBoundingClientRect 恆 0 → 不 stub 的話
-// 護欄退化成「clientX > 16 一律回 null」,負向測試會恆綠(假綠,review R17)。
-describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
+describe("WatchlistSidebar 管理入口(SC-13 / SC-15)", () => {
+  it("側欄不再有 ⊞ / 群組標題的 + 與 ×", async () => {
+    sidebar();
+    await waitGroups();
+    expect(screen.queryAllByLabelText(/移組/)).toHaveLength(0);
+    expect(screen.queryByLabelText("新增到 主力")).toBeNull();
+    expect(screen.queryByLabelText("刪除群組 主力")).toBeNull();
+  });
+
+  it("點「管理」開啟 Dialog", async () => {
+    sidebar();
+    await waitGroups();
+    expect(screen.queryByText("管理群組與股票")).toBeNull(); // 關閉時內容不在 DOM
+    fireEvent.click(screen.getByRole("button", { name: "管理群組與股票" }));
+    expect(screen.getByText("管理群組與股票")).toBeTruthy();
+  });
+
+  // W-20:collapsed state 與 localStorage 住在側欄,Dialog 測試觀察不到 → 必須在這一層驗
+  it("在 Dialog 刪除群組成功 → localStorage 折疊清單不留該組名", async () => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
+    sidebar();
+    await waitGroups();
+    fireEvent.click(screen.getByRole("button", { name: "管理群組與股票" }));
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]),
+    );
+  });
+});
+
+// 🟢 round4 SC-4 + round5 SC-12:跨群組 / 未分組拖曳。jsdom 的 getBoundingClientRect 恆 0
+// → 不 stub 的話護欄退化成「clientX > 16 一律回 null」,負向測試會恆綠(假綠,review R17)。
+describe("WatchlistSidebar 拖曳(SC-12)", () => {
   const RECTS: Record<string, [number, number]> = {
     "wl-group-主力": [0, 120],
     "wl-list-主力": [24, 120],
     "wl-group-觀察": [130, 250],
     "wl-list-觀察": [154, 250],
+    "wl-ungrouped": [260, 340],
+    "wl-list-ungrouped": [284, 340],
   };
 
   function stubRects(): void {
@@ -483,11 +521,53 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
     );
   });
 
+  // W-22:拖起來放回原位 → 內容相同的 PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB),
+  // 無錯誤訊號、無畫面差異
+  it("放回原位(結果與現況相同)→ 零 PUT", async () => {
+    await startDrag();
+    fireEvent(window, ptr("pointermove", 100, 68));
+    fireEvent(window, ptr("pointerup", 100, 68));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+  });
+
+  it("群組 → 未分組 → 從**所有**群組移除(SC-12c)", async () => {
+    sidebar();
+    await waitGroups();
+    stubRects();
+    // 2330 同屬主力與觀察 —— 只移除來源組的話它會從畫面上憑空消失(仍屬觀察)
+    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 2330");
+    fireEvent(handle, ptr("pointerdown", 10, 30));
+    fireEvent(window, ptr("pointermove", 100, 290));
+    fireEvent(window, ptr("pointerup", 100, 290));
+    await waitFor(() =>
+      expect(putGroups()).toEqual([
+        [
+          { name: "主力", codes: ["5483"] },
+          { name: "觀察", codes: ["3231"] },
+        ],
+      ]),
+    );
+    expect(putBodies[0]!.codes).toContain("2330");
+  });
+
+  it("未分組內拖曳 = 排序,群組成員在 codes 的相對位置不動", async () => {
+    mockWatchlist([{ name: "主力", codes: ["2330"] }], ["2330", "5483", "3231"]);
+    sidebar();
+    await waitGroups();
+    stubRects();
+    // 未分組 = [5483, 3231];把 3231 拖到第一列
+    const handle = within(screen.getByTestId("wl-list-ungrouped")).getByLabelText("拖拉 3231");
+    fireEvent(handle, ptr("pointerdown", 10, 320));
+    fireEvent(window, ptr("pointermove", 100, 286));
+    fireEvent(window, ptr("pointerup", 100, 286));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]!.codes).toEqual(["2330", "3231", "5483"]);
+    expect(putBodies[0]!.groups).toEqual([{ name: "主力", codes: ["2330"] }]);
+  });
+
   it("空群組顯示「拖曳股票到此」(否則沒有高度 = 拖不進去的死組)", async () => {
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") return new Response(JSON.stringify({ codes: [], groups: [] }));
-      return respond(url, [{ name: "空組", codes: [] }], []);
-    });
+    mockWatchlist([{ name: "空組", codes: [] }], []);
     sidebar();
     await waitFor(() => expect(screen.getByText("拖曳股票到此")).toBeTruthy());
   });

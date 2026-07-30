@@ -121,6 +121,35 @@ describe("moveToGroup", () => {
       "2330",
     ]);
   });
+
+  it("slot 為負 → clamp 到頭", () => {
+    expect(moveToGroup(base(), "2330", "主力", "觀察", -5).groups[1]!.codes).toEqual([
+      "2330",
+      "3231",
+    ]);
+  });
+
+  it("不影響第三組(一檔多組的其他歸屬保留,W-1)", () => {
+    const w = wl(
+      ["2330", "3231"],
+      [
+        { name: "主力", codes: ["2330"] },
+        { name: "觀察", codes: ["3231"] },
+        { name: "旁觀", codes: ["2330"] },
+      ],
+    );
+    expect(moveToGroup(w, "2330", "主力", "觀察", 0).groups[2]).toEqual({
+      name: "旁觀",
+      codes: ["2330"],
+    });
+  });
+
+  it("來源組不存在該 code → 其他組不被破壞", () => {
+    expect(moveToGroup(base(), "9999", "主力", "觀察", 0).groups[0]!.codes).toEqual([
+      "2330",
+      "5483",
+    ]);
+  });
 });
 
 describe("assignToGroup", () => {
