@@ -21,8 +21,9 @@ const NAMES = {
     { code: "2330", name: "台積電" },
     { code: "5483", name: "中美晶" },
     { code: "2317", name: "鴻海" },
+    { code: "2331", name: "精英" }, // 不在自選 —— 右欄搜尋要能加進來
   ],
-  count: 3,
+  count: 4,
 };
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -62,11 +63,20 @@ function open(wl: Watchlist = WL) {
 }
 
 describe("WatchlistManagerDialog 開關(SC-13)", () => {
-  it("開啟時標題與兩個區塊都在", () => {
+  it("開啟時標題與左右兩欄都在", () => {
     open();
     expect(screen.getByText("管理群組與股票")).toBeTruthy();
     expect(screen.getByLabelText("群組")).toBeTruthy();
     expect(screen.getByLabelText("股票")).toBeTruthy();
+  });
+
+  // 🔴 round4 項 4(B-8):Tailwind v4 的 preflight 把 `margin: 0` 套到所有元素(含
+  // dialog),覆蓋掉 UA stylesheet 給 modal dialog 的 `margin: auto` → 貼到左上角。
+  // jsdom 沒有版面引擎,這個 bug 只能用 class 守。
+  it("dialog 帶 m-auto(否則被 preflight 的 margin:0 釘在左上角)", () => {
+    open();
+    const dlg = screen.getByLabelText("管理群組與股票");
+    expect(dlg.className).toContain("m-auto");
   });
 
   it("關閉時內容不在 DOM(否則側欄的計數型斷言會被 Dialog 的重複文字打壞)", () => {
@@ -151,46 +161,174 @@ describe("WatchlistManagerDialog 群組管理(SC-14)", () => {
   });
 });
 
-describe("WatchlistManagerDialog 股票管理(SC-14 / W-1)", () => {
-  it("逐檔列出自選全體(含未分組)與名稱", async () => {
-    open();
-    const section = screen.getByLabelText("股票");
-    expect(within(section).getByText("2317")).toBeTruthy(); // 未分組也要能管理
-    // 名稱表是另一個 query,晚一拍才到
-    await waitFor(() => expect(within(section).getByText("鴻海")).toBeTruthy());
+// 🔴 round4 項 4(B-8):checkbox 矩陣(N 檔 × M 群組)改成「左選一組、右列該組股票」。
+// 矩陣在 3 組 20 檔時就是 60 個 checkbox,而且會橫向換行。
+describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
+  function stocks(): HTMLElement {
+    return screen.getByLabelText("股票");
+  }
+
+  it("畫面上沒有任何 checkbox(矩陣已移除)", () => {
+    const { container } = wrap(
+      <WatchlistManagerDialog open wl={WL} onClose={vi.fn()} onGroupDeleted={vi.fn()} />,
+    );
+    expect(container.querySelectorAll('input[type="checkbox"]').length).toBe(0);
   });
 
-  it("checkbox 反映一檔多組的現況(W-1)", () => {
+  it("預設選中「未分組」偽群組,右欄列出不屬任何群組的股票", async () => {
     open();
-    expect((screen.getByLabelText("2330 屬於 主力") as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText("2330 屬於 觀察") as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText("2317 屬於 主力") as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole("button", { name: "未分組" })).toBeTruthy();
+    expect(within(stocks()).getByText("2317")).toBeTruthy();
+    expect(within(stocks()).queryByText("5483")).toBeNull(); // 已屬主力
+    await waitFor(() => expect(within(stocks()).getByText("鴻海")).toBeTruthy());
   });
 
-  it("勾選 → PUT 帶該組多出這檔(一檔可屬多組)", async () => {
+  it("「未分組」列沒有改名 / 刪除鈕(它不是真群組)", () => {
     open();
-    fireEvent.click(screen.getByLabelText("2317 屬於 觀察"));
+    expect(screen.queryByLabelText("改名 未分組")).toBeNull();
+    expect(screen.queryByLabelText("刪除群組 未分組")).toBeNull();
+  });
+
+  it("點左欄群組 → 右欄換成該組股票,並標示選中態", () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    expect(within(stocks()).getByText("5483")).toBeTruthy();
+    expect(within(stocks()).queryByText("2317")).toBeNull();
+    // 選中態的邊條掛在列的容器上(button 只承載名稱與點擊)
+    expect(screen.getByRole("button", { name: "主力" }).parentElement!.className).toContain(
+      "border-l-accent",
+    );
+  });
+
+  it("一檔多組 → 右欄標示它還屬於哪些別組(矩陣資訊不憑空消失)", () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    const row = within(stocks()).getByTestId("mgr-row-2330");
+    expect(within(row).getByText("觀察")).toBeTruthy();
+  });
+
+  it("右欄搜尋加入該組 → **PUT 恰一筆**,codes 與該組同時含該檔", async () => {
+    open();
+    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy()); // 名冊載入
+    fireEvent.click(screen.getByRole("button", { name: "觀察" }));
+    const box = screen.getByPlaceholderText(/加入股票到/);
+    fireEvent.change(box, { target: { value: "5483" } });
+    fireEvent.click(screen.getByLabelText("加入 5483 到 觀察"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
-    expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "2317"]);
-    expect(putBodies[0]!.groups[0]!.codes).toEqual(["2330", "5483"]); // 另一組不動
+    expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "5483"]);
+    expect(putBodies[0]!.codes).toEqual(WL.codes); // 已在自選 → codes 不變
   });
 
-  it("取消勾選 → 只離開該組,code 留在 codes", async () => {
+  it("加入非自選股 → codes 與群組同時多出該檔(單次 PUT)", async () => {
     open();
-    fireEvent.click(screen.getByLabelText("2330 屬於 觀察"));
+    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "觀察" }));
+    fireEvent.change(screen.getByPlaceholderText(/加入股票到/), { target: { value: "2331" } });
+    fireEvent.click(screen.getByLabelText("加入 2331 到 觀察"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
-    expect(putBodies[0]!.groups[1]!.codes).toEqual([]);
+    expect(putBodies[0]!.codes).toEqual([...WL.codes, "2331"]);
+    expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "2331"]);
+  });
+
+  it("已在本組的候選為停用 + 尾綴說明", async () => {
+    open();
+    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    fireEvent.change(screen.getByPlaceholderText(/加入股票到/), { target: { value: "2330" } });
+    const btn = screen.getByLabelText("加入 2330 到 主力") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain("已在此群組");
+  });
+
+  it("群組列的 − 只離開該組(code 留在 codes)", async () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    fireEvent.click(screen.getByLabelText("從 主力 移出 5483"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]!.groups[0]!.codes).toEqual(["2330"]);
     expect(putBodies[0]!.codes).toEqual(WL.codes);
   });
 
-  it("× → codes 與所有群組都少掉該檔", async () => {
+  // B-8 登記:舊版股票區列 wl.codes 全體、每列一顆「從自選移除」。改成分組視圖後
+  // 若真群組只有「移出本組」,已分組的股票就沒有任何一步刪除入口 = 功能退化。
+  it("群組列仍有「從自選移除」(一步刪除的入口不得消失)", async () => {
     open();
-    fireEvent.click(screen.getByLabelText("從自選移除 2330"));
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    fireEvent.click(screen.getByLabelText("從自選移除 5483"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
-    expect(putBodies[0]!.codes).toEqual(["5483", "2317"]);
-    expect(putBodies[0]!.groups).toEqual([
-      { name: "主力", codes: ["5483"] },
-      { name: "觀察", codes: [] },
-    ]);
+    expect(putBodies[0]!.codes).toEqual(["2330", "2317"]);
+    expect(putBodies[0]!.groups[0]!.codes).toEqual(["2330"]);
+  });
+
+  it("未分組列的 × → codes 與所有群組都少掉該檔", async () => {
+    open();
+    fireEvent.click(screen.getByLabelText("從自選移除 2317"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]!.codes).toEqual(["2330", "5483"]);
+  });
+
+  it("空群組顯示引導文案", () => {
+    open({ codes: ["2330"], groups: [{ name: "空組", codes: [] }] });
+    fireEvent.click(screen.getByRole("button", { name: "空組" }));
+    expect(screen.getByText(/還沒有股票/)).toBeTruthy();
+  });
+
+  it("零自訂群組 → 左欄仍有未分組,並提示可在下方新增", () => {
+    open({ codes: ["2330"], groups: [] });
+    expect(screen.getByRole("button", { name: "未分組" })).toBeTruthy();
+    expect(screen.getByText("尚無群組,可在下方新增")).toBeTruthy();
+  });
+});
+
+describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
+  it("右欄用 derived 值渲染:改名失敗留下的懸空 selected 不會讓右欄空白", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
+        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    fireEvent.click(screen.getByLabelText("改名 主力"));
+    const input = screen.getByDisplayValue("主力");
+    fireEvent.change(input, { target: { value: "強勢" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    // PUT 失敗 → wl 仍是舊值 → 右欄照樣顯示主力的成員(不是空白)
+    await waitFor(() => expect(within(screen.getByLabelText("股票")).getByText("5483")).toBeTruthy());
+  });
+
+  it("「未分組」是保留名:新增同名群組 → 零 PUT + 錯誤文案", async () => {
+    open();
+    fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "未分組" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    expect(putBodies).toEqual([]);
+  });
+
+  it("關閉再開 → selected 回到未分組(不殘留上次選的組)", async () => {
+    const onClose = vi.fn();
+    const { rerender } = wrap(
+      <WatchlistManagerDialog open wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "主力" }));
+    expect(within(screen.getByLabelText("股票")).getByText("5483")).toBeTruthy();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <WatchlistManagerDialog open={false} wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <WatchlistManagerDialog open wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() =>
+      expect(within(screen.getByLabelText("股票")).getByText("2317")).toBeTruthy(),
+    );
+    expect(within(screen.getByLabelText("股票")).queryByText("5483")).toBeNull();
   });
 });
