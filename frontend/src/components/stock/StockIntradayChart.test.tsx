@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
+import { Y_AXIS_W } from "@/lib/stock-intraday-svg";
 
 const OVERLAY = {
   // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
@@ -233,7 +234,7 @@ describe("StockIntradayChart", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const nine = screen.getByText("09:00", { selector: "text" });
     expect(nine.getAttribute("class")).toContain("fill-time");
-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 3, clientY: 100 });
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
     expect(
       container.querySelector("[data-testid='time-tag-text']")!.getAttribute("class"),
     ).toContain("fill-time");
@@ -270,8 +271,9 @@ describe("StockIntradayChart", () => {
     expect(readout().textContent).toContain("09:02"); // 最新分鐘 = 542
     expect(readout().getAttribute("data-hovering")).toBe("false");
     const svg = container.querySelector("svg")!;
-    // width 800、x 域 540..810 分鐘 → 541 分在 x = 1/270*800 ≈ 2.96px
-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
+    // 🔴 round4 項 3:繪圖區起於左緣價位帶右側(Y_AXIS_W=46),541 分在
+    // x = 46 + 1/270*(800-46) ≈ 48.8px;舊的 x≈3 現在落在價位帶內 → 不對應任何分鐘
+    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
     expect(readout().textContent).toContain("09:01");
     expect(readout().getAttribute("data-hovering")).toBe("true");
     fireEvent.mouseLeave(svg);
@@ -282,7 +284,7 @@ describe("StockIntradayChart", () => {
   it("資訊列含每分鐘內外盤(本專案核心訊號,原 tooltip 沒顯示)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const svg = container.querySelector("svg")!;
-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
+    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
     const text = screen.getByTestId("chart-readout").textContent ?? "";
     expect(text).toContain("外 10");
     expect(text).toContain("內 0");
@@ -291,9 +293,9 @@ describe("StockIntradayChart", () => {
   it("十字線:垂直線 snap 分鐘、水平線跟滑鼠 y(不再鎖該分鐘收盤價)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const svg = container.querySelector("svg")!;
-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 120 });
+    fireEvent.mouseMove(svg, { clientX: 49, clientY: 120 });
     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(120);
-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 60 });
+    fireEvent.mouseMove(svg, { clientX: 49, clientY: 60 });
     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(60);
     expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
     fireEvent.mouseLeave(svg);
@@ -314,7 +316,7 @@ describe("StockIntradayChart", () => {
   // 🔴 round3 SC-1:hover 右緣 % 標整個移除(左緣價位標與底部時間標照舊)
   it("hover 右緣不再浮出 % 標,左價標與時間標仍在(SC-1)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 3, clientY: 100 });
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
     expect(container.querySelector("[data-testid='pct-tag']")).toBeNull();
     expect(container.querySelector("[data-testid='pct-tag-text']")).toBeNull();
     expect(container.querySelector("[data-testid='price-tag-text']")).toBeTruthy();
@@ -367,5 +369,68 @@ describe("StockIntradayChart 高度 prop(SC-6 / T-10b)", () => {
       (s) => s.getAttribute("aria-label") === "分時走勢圖",
     )!;
     expect(main.getAttribute("viewBox")).toBe("0 0 800 260");
+  });
+});
+
+// 🔴 round4 項 3/4/5:左緣價位不再壓線、價位有對應水平線、量刻度改靠右
+describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
+  function svgs(container: HTMLElement) {
+    const all = [...container.querySelectorAll("svg")];
+    return {
+      main: all.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!,
+      sub: all.find((s) => s.getAttribute("aria-label") === "內外盤能量")!,
+    };
+  }
+
+  it("項 3:繪圖區元素一律從價位帶右緣起,價位文字仍在帶內(不重疊)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const { main } = svgs(container);
+    // 走勢線第一點的 x 就是繪圖區左界
+    const priceLine = main.querySelector('polyline[class*="stroke-bull"]')!;
+    const firstX = Number(priceLine.getAttribute("points")!.split(" ")[0]!.split(",")[0]);
+    expect(firstX).toBeGreaterThanOrEqual(Y_AXIS_W);
+    // 平盤線 / 水平十字線 / 疊線都不得越界進價位帶
+    const refLine = [...main.querySelectorAll("line")].find(
+      (l) => (l.getAttribute("stroke-dasharray") ?? "") === "2 3" && l.getAttribute("stroke-width") === "1",
+    )!;
+    expect(Number(refLine.getAttribute("x1"))).toBe(Y_AXIS_W);
+    // 價位文字仍畫在帶內(x < Y_AXIS_W)
+    for (const t of main.querySelectorAll('[data-testid="y-tick-price"]')) {
+      expect(Number(t.getAttribute("x"))).toBeLessThan(Y_AXIS_W);
+    }
+  });
+
+  it("項 3:hover 水平線起於價位帶右緣(不穿過價位文字)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
+    const h = container.querySelector("[data-testid='crosshair-h']")!;
+    expect(Number(h.getAttribute("x1"))).toBe(Y_AXIS_W);
+  });
+
+  it("項 4:每個左緣價位都有一條對應的水平格線,與整點垂直線同色系", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const { main } = svgs(container);
+    const ticks = main.querySelectorAll('[data-testid="y-tick-price"]').length;
+    const grids = [...main.querySelectorAll('[data-testid="y-grid"]')];
+    expect(ticks).toBeGreaterThan(0);
+    expect(grids.length).toBe(ticks);
+    for (const g of grids) {
+      expect(g.getAttribute("class")).toContain("stroke-line");
+      expect(Number(g.getAttribute("x1"))).toBe(Y_AXIS_W);
+      expect(Number(g.getAttribute("x2"))).toBe(800);
+      // 水平線:y1 === y2
+      expect(g.getAttribute("y1")).toBe(g.getAttribute("y2"));
+    }
+  });
+
+  it("項 5:內外盤量刻度兩個數字靠右緣、左緣不再有數字", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const { sub } = svgs(container);
+    const texts = [...sub.querySelectorAll("text")];
+    expect(texts.length).toBe(2); // 頂端 = 單邊最大張數、中線 = 其半
+    for (const t of texts) {
+      expect(t.getAttribute("text-anchor")).toBe("end");
+      expect(Number(t.getAttribute("x"))).toBe(800 - 2);
+    }
   });
 });

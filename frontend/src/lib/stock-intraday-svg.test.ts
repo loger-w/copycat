@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { MinuteAgg } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
+  minuteToX,
   overlayLines,
+  plotWidth,
   SUB_TOP_PAD,
   X_END_MIN,
   X_START_MIN,
+  Y_AXIS_W,
 } from "@/lib/stock-intraday-svg";
 
 function minutes(entries: [number, Partial<MinuteAgg>][]): Map<number, MinuteAgg> {
@@ -33,7 +36,7 @@ describe("buildIntradayGeometry", () => {
   it("price line spans minutes;有漲跌停 → 域**恰為**漲跌停(SC-4,該變:原 ×1.02/×0.98 留邊)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
-      { width: 810 - 540, height: 100 },
+      { width: Y_AXIS_W + 810 - 540, height: 100 },
     );
     expect(g.priceLine.length).toBe(2);
     // 🔴 SC-4:區間就是漲停/跌停,不再多留 2% 邊
@@ -45,9 +48,59 @@ describe("buildIntradayGeometry", () => {
     expect(g.lowerY).not.toBeNull();
     expect(g.upperY!).toBeCloseTo(4, 6);
     expect(g.lowerY!).toBeCloseTo(100 - 14 - 4, 6);
-    // x:每分鐘 1px(width = 分鐘數)
-    expect(g.priceLine[0]!.x).toBeCloseTo(0, 5);
-    expect(g.priceLine[1]!.x).toBeCloseTo(1, 5);
+    // 🔴 round4 項 3:繪圖區改從左緣價位帶右側起算,x 不再從 0 開始
+    // (width = Y_AXIS_W + 分鐘數 → 繪圖區仍是每分鐘 1px)
+    expect(g.priceLine[0]!.x).toBeCloseTo(Y_AXIS_W, 5);
+    expect(g.priceLine[1]!.x).toBeCloseTo(Y_AXIS_W + 1, 5);
+  });
+
+  // 🔴 round4 項 3:價位文字原本畫在 x=2 而繪圖區從 x=0 起,文字直接壓在走勢線上。
+  // 左緣讓出 Y_AXIS_W 寬的價位帶後,`minuteToX` / `minuteOf` 必須**共用**同一組常數,
+  // 否則反演只在兩端偏移(同 toY / priceAtY 共用 PAD_Y 的理由)。
+  describe("左緣價位帶(gutter)", () => {
+    const W = Y_AXIS_W + 270;
+
+    it("Y_AXIS_W 等於 hover 價位標寬度(標籤恰好整格塞進價位帶,不再壓線)", () => {
+      expect(Y_AXIS_W).toBe(46);
+    });
+
+    it("繪圖區起於價位帶右緣、迄於圖右緣", () => {
+      expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
+      expect(minuteToX(X_END_MIN, W)).toBeCloseTo(W, 6);
+      expect(plotWidth(W)).toBeCloseTo(270, 6);
+    });
+
+    it("minuteOf ↔ minuteToX 互逆(每個有成交分鐘往返守恆)", () => {
+      const ms = [540, 600, 661, 720, 809];
+      const g = buildIntradayGeometry(
+        { minutes: minutes(ms.map((m) => [m, { c: 2_320_000, v: 1 }])), meta: META },
+        { width: W, height: 100 },
+      );
+      for (const m of ms) {
+        expect(g.minuteOf(minuteToX(m, W))).toBe(m);
+      }
+    });
+
+    it("價位帶內的 x 不對應任何分鐘(不會被誤讀成 09:00)", () => {
+      const g = buildIntradayGeometry(
+        { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+        { width: W, height: 100 },
+      );
+      expect(g.minuteOf(Y_AXIS_W)).toBe(540);
+      expect(g.minuteOf(Y_AXIS_W - 1)).toBeNull();
+      expect(g.minuteOf(0)).toBeNull();
+    });
+
+    it("副圖 bar 與主圖價點同 x(同 width 下對位守恆;hover 直線貫穿兩圖要對準)", () => {
+      const input = {
+        minutes: minutes([[540, { c: 2_320_000, v: 1, o: 1, i: 1 }], [600, { c: 2_330_000, v: 1, o: 2, i: 1 }]]),
+        meta: META,
+      };
+      const main = buildIntradayGeometry(input, { width: W, height: 260 });
+      const sub = buildIntradayGeometry(input, { width: W, height: 70 });
+      expect(sub.energyBars[0]!.x).toBeCloseTo(Y_AXIS_W, 6);
+      expect(sub.energyBars.map((b) => b.x)).toEqual(main.priceLine.map((p) => p.x));
+    });
   });
 
   // 🔴 SC-4 / R1:priceAtY 必須是改動後 toY 的逆函數。中間點在任何公式下都剛好正確,
@@ -68,12 +121,13 @@ describe("buildIntradayGeometry", () => {
   it("areaPolygon 以 refY 封閉且首尾點貼齊平盤", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
-      { width: 270, height: 100 },
+      { width: Y_AXIS_W + 270, height: 100 },
     );
     const pts = g.areaPolygon.split(" ");
     expect(pts.length).toBe(4); // 起點 + 2 個資料點 + 終點
-    expect(pts[0]).toBe(`0.0,${g.refY.toFixed(1)}`);
-    expect(pts[3]).toBe(`1.0,${g.refY.toFixed(1)}`);
+    // 🔴 round4 項 3:填色多邊形一併右移到繪圖區內(否則會延伸進左緣價位帶)
+    expect(pts[0]).toBe(`${Y_AXIS_W.toFixed(1)},${g.refY.toFixed(1)}`);
+    expect(pts[3]).toBe(`${(Y_AXIS_W + 1).toFixed(1)},${g.refY.toFixed(1)}`);
   });
 
   it("無 ref 時 areaPolygon 為空字串(fallback 走單色線、不填色)", () => {
@@ -188,11 +242,11 @@ describe("buildIntradayGeometry", () => {
   it("minuteOf:bucket 有資料回分鐘、無資料回 null(SC-1/R6)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [600, { c: 2_330_000, v: 1 }]]), meta: META },
-      { width: 270, height: 100 },
+      { width: Y_AXIS_W + 270, height: 100 },
     );
-    expect(g.minuteOf(0)).toBe(540); // x=0 → 09:00
-    expect(g.minuteOf(60)).toBe(600); // x=60px → 10:00(width=270 → 1px/分)
-    expect(g.minuteOf(30)).toBeNull(); // 09:30 無資料
+    expect(g.minuteOf(Y_AXIS_W)).toBe(540); // 繪圖區起點 → 09:00
+    expect(g.minuteOf(Y_AXIS_W + 60)).toBe(600); // +60px → 10:00(繪圖區 270 → 1px/分)
+    expect(g.minuteOf(Y_AXIS_W + 30)).toBeNull(); // 09:30 無資料
     expect(g.minuteOf(-5)).toBeNull();
     expect(g.minuteOf(999)).toBeNull();
   });
