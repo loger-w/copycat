@@ -1,23 +1,32 @@
 import { useRef, useState } from "react";
 
-import {
-  errText,
-  useSaveWatchlist,
-  useStockWatchlist,
-  type Group,
-} from "@/hooks/useStockWatchlist";
+import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
+import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
-import { dropTargetFromPointer, moveCode, type DropZone } from "@/lib/list-drag";
+import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks } from "@/lib/stock-search";
 import { cn } from "@/lib/utils";
+import {
+  addCode,
+  assignToGroup,
+  detachFromGroups,
+  moveToGroup,
+  removeCode,
+  removeFromGroup,
+  reorderUngrouped,
+  ungroupedCodes,
+  type Watchlist,
+} from "@/lib/watchlist-model";
 
 const ROW_H = 44;
 /** 折疊中的群組名(round4 項 2)。前綴沿用 `copycat-`(docs/next-time.md 的 key 收斂方向) */
 const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
-const DEFAULT_GROUP = "自選";
+/** 未分組區塊的折疊(`"1"` = 折疊);與群組折疊分開存,兩者互不影響 */
+const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 /** 提示列筆數:多過這個高度就開始擠掉股票列 */
 const SUGGEST_LIMIT = 8;
+const EMPTY_WL: Watchlist = { codes: [], groups: [] };
 
 function fmtPrice(milli: number | null): string {
   if (milli === null) return "-";
@@ -40,6 +49,14 @@ function persistCollapsed(names: Set<string>): void {
   window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...names]));
 }
 
+function loadUngroupedCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(UNGROUPED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 interface Props {
   active: string | null;
   onSelect: (code: string) => void;
@@ -47,30 +64,36 @@ interface Props {
 }
 
 export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
-  const { data: wl, error } = useStockWatchlist();
-  const groups = wl?.groups ?? [];
+  const { data, error } = useStockWatchlist();
+  const wl = data ?? EMPTY_WL;
+  const groups = wl.groups;
+  const ungrouped = ungroupedCodes(wl);
   const { data: names = [] } = useStockNames();
   const save = useSaveWatchlist();
-  /** 哪一組展開了搜尋框;`""` = 零群組時的 fallback 搜尋框 */
-  const [adding, setAdding] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [addingGroup, setAddingGroup] = useState(false);
-  const [groupInput, setGroupInput] = useState("");
-  const [movingCode, setMovingCode] = useState<string | null>(null);
+  /** 哪一檔未分組股票展開了「加入群組」清單 */
+  const [assigning, setAssigning] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
-  const [drag, setDrag] = useState<{ code: string; from: string; to: string; index: number } | null>(
-    null,
-  );
+  const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [drag, setDrag] = useState<{
+    code: string;
+    from: string | null;
+    to: string | null;
+    index: number;
+  } | null>(null);
   const asideRef = useRef<HTMLElement | null>(null);
-  const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
-  const listRefs = useRef<Map<string, HTMLElement>>(new Map());
+  // key = 群組名;`null` = 未分組區塊
+  const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());
+  const listRefs = useRef<Map<string | null, HTMLElement>>(new Map());
 
   const suggestions = searchStocks(input, names, SUGGEST_LIMIT);
 
-  /** 只改群組成員關係時,`codes`(自選全體)原樣送回 —— 自算聯集會把不屬任何群組的
-   *  股票靜默刪掉。新加入的 code 不在 codes 裡時由後端正規化補進尾端。 */
-  function mutateGroups(next: Group[]): void {
-    save.mutate({ codes: wl?.codes ?? [], groups: next });
+  /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
+   *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
+  function commit(next: Watchlist): void {
+    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
+    save.mutate(next);
   }
 
   function toggleCollapsed(name: string): void {
@@ -83,97 +106,84 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     });
   }
 
-  /** 加入指定群組;`group` 不在 `groups` 內(零群組 fallback)→ 自動建立該組。 */
-  function addTo(group: string, rawCode: string): void {
+  function toggleUngroupedCollapsed(): void {
+    setUngroupedCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(UNGROUPED_KEY, next ? "1" : "0");
+      return next;
+    });
+  }
+
+  /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。 */
+  function dropCollapsed(name: string): void {
+    setCollapsed((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      persistCollapsed(next);
+      return next;
+    });
+  }
+
+  /** 加進自選(落未分組);已在自選 → `addCode` 回原物件 → 零 PUT(W-21)。 */
+  function add(rawCode: string): void {
     const code = rawCode.trim().toUpperCase();
-    setAdding(null);
     setInput("");
-    if (!code) return;
-    const target = groups.find((g) => g.name === group);
-    if (target) {
-      if (target.codes.includes(code)) return;
-      mutateGroups(groups.map((g) => (g.name === group ? { ...g, codes: [...g.codes, code] } : g)));
-      return;
-    }
-    mutateGroups([...groups, { name: group, codes: [code] }]);
+    if (code === "") return;
+    commit(addCode(wl, code));
   }
 
-  /** Enter / 點「新增」:提示列有命中取第一筆,無命中則原樣當股號(白名單 W-4)。 */
-  function submitAdd(group: string): void {
-    addTo(group, suggestions[0]?.code ?? input);
-  }
-
-  function remove(group: string, code: string): void {
-    mutateGroups(
-      groups.map((g) => (g.name === group ? { ...g, codes: g.codes.filter((c) => c !== code) } : g)),
-    );
-  }
-
-  function addGroup(): void {
-    const name = groupInput.trim();
-    setAddingGroup(false);
-    setGroupInput("");
-    if (!name || groups.some((g) => g.name === name)) return;
-    mutateGroups([...groups, { name, codes: [] }]);
-  }
-
-  function removeGroup(name: string): void {
-    // mutation 成功才收斂衍生狀態(review A2:失敗時 cache 未動,UI 不該先跳)。
-    // 折疊清單必須清掉該組名,否則 localStorage 累積孤兒名,日後建同名群組會意外呈折疊。
-    save.mutate(
-      { codes: wl?.codes ?? [], groups: groups.filter((g) => g.name !== name) },
-      {
-        onSuccess: () => {
-          setCollapsed((prev) => {
-            if (!prev.has(name)) return prev;
-            const next = new Set(prev);
-            next.delete(name);
-            persistCollapsed(next);
-            return next;
-          });
-          setAdding((cur) => (cur === name ? null : cur));
-        },
-      },
-    );
-  }
-
-  function toggleMembership(code: string, groupName: string): void {
-    mutateGroups(
-      groups.map((g) => {
-        if (g.name !== groupName) return g;
-        return g.codes.includes(code)
-          ? { ...g, codes: g.codes.filter((c) => c !== code) }
-          : { ...g, codes: [...g.codes, code] };
-      }),
-    );
+  /** Enter / 點「新增」:提示列有命中取第一筆,無命中則原樣當股號(W-4 的兩條路徑)。 */
+  function submitAdd(): void {
+    add(suggestions[0]?.code ?? input);
   }
 
   /** 落點幾何。**每次 pointermove 重算** —— 只在 pointerdown 算一次的話,側欄捲動或
    *  錯誤文案出現消失都會讓 rect 失效,而失效樣態是「拖到別組結果落錯組」= 靜默改資料。 */
   function zonesNow(): { zones: DropZone[]; bounds: { left: number; right: number } } {
     const zones: DropZone[] = [];
-    for (const g of groups) {
-      const section = sectionRefs.current.get(g.name);
-      if (section === undefined) continue;
+    const push = (key: string | null, count: number): void => {
+      const section = sectionRefs.current.get(key);
+      if (section === undefined) return;
       const box = section.getBoundingClientRect();
-      const list = listRefs.current.get(g.name);
-      const isCollapsed = collapsed.has(g.name) || list === undefined;
+      const list = listRefs.current.get(key);
+      const isCollapsed =
+        (key === null ? ungroupedCollapsed : collapsed.has(key)) || list === undefined;
       zones.push({
-        group: g.name,
+        group: key,
         top: box.top,
         bottom: box.bottom,
         listTop: isCollapsed ? box.bottom : list.getBoundingClientRect().top,
-        count: g.codes.length,
+        count,
         collapsed: isCollapsed,
       });
-    }
+    };
+    push(null, ungrouped.length);
+    for (const g of groups) push(g.name, g.codes.length);
     const aside = asideRef.current?.getBoundingClientRect();
     return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 } };
   }
 
-  function onHandleDown(group: string, code: string, e: React.PointerEvent): void {
+  /** 四條落點路徑(SC-12)。拖進未分組 = 從**所有**群組移除:只移除來源組的話,
+   *  一檔多組的股票會從來源組消失卻不出現在未分組(它仍屬別組)= 畫面上像資料被吃掉。 */
+  function applyDrop(code: string, from: string | null, to: string | null, slot: number): Watchlist {
+    if (to === null) {
+      return from === null
+        ? reorderUngrouped(wl, code, slot)
+        : detachFromGroups(wl, code, slot);
+    }
+    return from === null
+      ? assignToGroup(wl, code, to, slot)
+      : moveToGroup(wl, code, from, to, slot);
+  }
+
+  function onHandleDown(from: string | null, code: string, e: React.PointerEvent): void {
     e.preventDefault();
-    setDrag({ code, from: group, to: group, index: groups.find((g) => g.name === group)?.codes.indexOf(code) ?? 0 });
+    const at =
+      from === null
+        ? ungrouped.indexOf(code)
+        : (groups.find((g) => g.name === from)?.codes.indexOf(code) ?? 0);
+    setDrag({ code, from, to: from, index: at });
     // 取消(Esc)與完成(pointerup)走**同一個** teardown。取消之所以有效是因為這裡把
     // `pointerup` listener 移掉了 —— 之後放開手指根本進不到 `up`。
     // ⚠ 曾另外加過一個 `cancelled` 旗標在 `up` 開頭早退,mutation test 證明它不可達
@@ -194,10 +204,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
       teardown();
       if (target === null) return; // 側欄外放開 → 整個作廢(移動語意不可逆)
-      const source = groups.find((g) => g.name === group);
-      const at = source?.codes.indexOf(code) ?? -1;
-      if (target.group === group && (target.index === at || target.index === at + 1)) return;
-      mutateGroups(moveCode(groups, code, group, target.group, target.index));
+      commit(applyDrop(code, from, target.group, target.index));
     };
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.key !== "Escape") return;
@@ -208,27 +215,128 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     window.addEventListener("keydown", onKey);
   }
 
-  function searchBox(group: string): React.ReactElement {
+  function stockRow(code: string, group: string | null): React.ReactElement {
+    const q = quotes[code];
     return (
-      <div className="px-1 py-1">
+      <li key={code}>
+        <div
+          className={cn(
+            "group flex h-11 cursor-pointer items-center gap-2 border-b border-line px-1",
+            active === code && "bg-bg-deep",
+            drag?.code === code && "opacity-50",
+          )}
+          onClick={() => onSelect(code)}
+        >
+          <span
+            role="button"
+            aria-label={`拖拉 ${code}`}
+            className="cursor-grab select-none text-ink-dim"
+            onPointerDown={(e) => onHandleDown(group, code, e)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            ⋮⋮
+          </span>
+          <span className="w-14 font-mono text-sm text-ink">{code}</span>
+          {q?.no_data ? (
+            <span className="flex-1 text-right text-xs text-ink-dim">無資料</span>
+          ) : (
+            <span className="flex flex-1 items-baseline justify-end gap-2 font-mono text-xs">
+              <span className="text-sm text-ink">{fmtPrice(q?.p ?? null)}</span>
+              <span
+                className={cn(
+                  "w-14 text-right",
+                  (q?.chg_pct ?? 0) > 0
+                    ? "text-bull"
+                    : (q?.chg_pct ?? 0) < 0
+                      ? "text-bear"
+                      : "text-ink-dim",
+                )}
+              >
+                {q?.chg_pct != null
+                  ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
+                  : "-"}
+              </span>
+            </span>
+          )}
+          {group === null ? (
+            <button
+              type="button"
+              aria-label={`加入群組 ${code}`}
+              // 零群組時沒有可指派的對象 → 停用(SC-9),不是點了沒反應
+              disabled={groups.length === 0}
+              className="text-ink-dim hover:text-accent disabled:text-ink-dim/40 disabled:hover:text-ink-dim/40"
+              onClick={(e) => {
+                e.stopPropagation();
+                setAssigning((cur) => (cur === code ? null : code));
+              }}
+            >
+              +
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label={`移除 ${code}`}
+            className="invisible text-ink-dim hover:text-bear group-hover:visible"
+            onClick={(e) => {
+              e.stopPropagation();
+              // 群組列 = 只離開該組(該檔掉回未分組);未分組列 = 從自選整個移除
+              commit(group === null ? removeCode(wl, code) : removeFromGroup(wl, code, group));
+            }}
+          >
+            ×
+          </button>
+        </div>
+        {/* 群組清單渲染在**該列正下方**:放在區塊之後會落到側欄底部、常在可視範圍外 */}
+        {group === null && assigning === code ? (
+          <div className="rounded border border-line bg-bg-deep p-2">
+            <p className="mb-1 font-mono text-xs text-ink-dim">{code} 加入群組</p>
+            <div className="flex flex-wrap gap-1">
+              {groups.map((g) => (
+                <button
+                  key={g.name}
+                  type="button"
+                  aria-label={`加入 ${code} 到 ${g.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAssigning(null);
+                    commit(assignToGroup(wl, code, g.name, g.codes.length));
+                  }}
+                  className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent"
+                >
+                  {g.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </li>
+    );
+  }
+
+  return (
+    // overflow-y-auto 掛在 aside(不是單一 ul):群組全列出後側欄高度不再受單組限制。
+    // border-r:與中間主區的視覺分隔(round3 項 5);pr-3 讓內容不貼線
+    <aside
+      ref={asideRef}
+      className="flex w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-line pr-3"
+      aria-label="自選清單"
+    >
+      {/* 搜尋框恆存且 sticky:群組多起來捲動後仍要看得到(W-16 的新實體) */}
+      <div className="sticky top-0 z-10 bg-bg pb-1">
         <div className="flex gap-1">
           <input
-            autoFocus
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") submitAdd(group);
-              if (e.key === "Escape") {
-                setAdding(null);
-                setInput("");
-              }
+              if (e.key === "Enter") submitAdd();
+              if (e.key === "Escape") setInput("");
             }}
             placeholder="股號或名稱"
             className="w-full rounded border border-line bg-bg px-2 py-1 font-mono text-sm text-ink outline-none focus:border-accent"
           />
           <button
             type="button"
-            onClick={() => submitAdd(group)}
+            onClick={submitAdd}
             className="shrink-0 rounded border border-line px-2 py-1 text-sm text-ink hover:border-accent"
           >
             新增
@@ -241,7 +349,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                 <button
                   type="button"
                   aria-label={`加入 ${s.code} ${s.name}`}
-                  onClick={() => addTo(group, s.code)}
+                  onClick={() => add(s.code)}
                   className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface"
                 >
                   <span className="w-14 font-mono text-ink">{s.code}</span>
@@ -252,19 +360,53 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           </ul>
         ) : null}
       </div>
-    );
-  }
 
-  return (
-    // overflow-y-auto 掛在 aside(不是單一 ul):群組全列出後側欄高度不再受單組限制。
-    // border-r:與中間主區的視覺分隔(round3 項 5);pr-3 讓內容不貼線
-    <aside
-      ref={asideRef}
-      className="flex w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-line pr-3"
-      aria-label="自選清單"
-    >
       {save.error ? <p className="text-xs text-bear">{errText(save.error.message)}</p> : null}
       {error ? <p className="text-xs text-bear">自選清單載入失敗</p> : null}
+
+      <section
+        data-testid="wl-ungrouped"
+        ref={(el) => {
+          if (el) sectionRefs.current.set(null, el);
+          else sectionRefs.current.delete(null);
+        }}
+        className={cn(
+          "rounded border border-transparent",
+          drag !== null && drag.to === null && "border-accent",
+        )}
+      >
+        <header className="flex items-center gap-1 border-b border-line px-1 py-0.5">
+          <button
+            type="button"
+            aria-label={`${ungroupedCollapsed ? "展開" : "折疊"} 未分組`}
+            onClick={toggleUngroupedCollapsed}
+            className="w-3 shrink-0 text-xs text-ink-dim hover:text-ink"
+          >
+            {ungroupedCollapsed ? "▸" : "▾"}
+          </button>
+          <span className="min-w-0 flex-1 truncate text-xs text-ink">未分組</span>
+          <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">
+            {ungrouped.length}
+          </span>
+        </header>
+        {ungroupedCollapsed ? null : (
+          <ul
+            data-testid="wl-list-ungrouped"
+            ref={(el) => {
+              if (el) listRefs.current.set(null, el);
+              else listRefs.current.delete(null);
+            }}
+            className="flex flex-col"
+          >
+            {ungrouped.map((code) => stockRow(code, null))}
+            {ungrouped.length === 0 ? (
+              <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
+                拖曳到此移出群組
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </section>
 
       {groups.map((g) => {
         const isCollapsed = collapsed.has(g.name);
@@ -281,7 +423,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               drag !== null && drag.to === g.name && "border-accent",
             )}
           >
-            <header className="group/hdr flex items-center gap-1 border-b border-line px-1 py-0.5">
+            <header className="flex items-center gap-1 border-b border-line px-1 py-0.5">
               <button
                 type="button"
                 aria-label={`${isCollapsed ? "展開" : "折疊"} ${g.name}`}
@@ -291,29 +433,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                 {isCollapsed ? "▸" : "▾"}
               </button>
               <span className="min-w-0 flex-1 truncate text-xs text-ink">{g.name}</span>
-              <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{g.codes.length}</span>
-              <button
-                type="button"
-                aria-label={`新增到 ${g.name}`}
-                onClick={() => {
-                  setAdding((cur) => (cur === g.name ? null : g.name));
-                  setInput("");
-                }}
-                className="shrink-0 px-0.5 text-xs text-ink-dim hover:text-ink"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                aria-label={`刪除群組 ${g.name}`}
-                onClick={() => removeGroup(g.name)}
-                className="invisible shrink-0 px-0.5 text-xs text-ink-dim hover:text-bear group-hover/hdr:visible"
-              >
-                ×
-              </button>
+              <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">
+                {g.codes.length}
+              </span>
             </header>
-
-            {adding === g.name ? searchBox(g.name) : null}
 
             {isCollapsed ? null : (
               <ul
@@ -324,97 +447,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                 }}
                 className="flex flex-col"
               >
-                {g.codes.map((code) => {
-                  const q = quotes[code];
-                  return (
-                    <li key={code}>
-                      <div
-                        className={cn(
-                          "group flex h-11 cursor-pointer items-center gap-2 border-b border-line px-1",
-                          active === code && "bg-bg-deep",
-                          drag?.code === code && "opacity-50",
-                        )}
-                        onClick={() => onSelect(code)}
-                      >
-                        <span
-                          role="button"
-                          aria-label={`拖拉 ${code}`}
-                          className="cursor-grab select-none text-ink-dim"
-                          onPointerDown={(e) => onHandleDown(g.name, code, e)}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          ⋮⋮
-                        </span>
-                        <span className="w-14 font-mono text-sm text-ink">{code}</span>
-                        {q?.no_data ? (
-                          <span className="flex-1 text-right text-xs text-ink-dim">無資料</span>
-                        ) : (
-                          <span className="flex flex-1 items-baseline justify-end gap-2 font-mono text-xs">
-                            <span className="text-sm text-ink">{fmtPrice(q?.p ?? null)}</span>
-                            <span
-                              className={cn(
-                                "w-14 text-right",
-                                (q?.chg_pct ?? 0) > 0
-                                  ? "text-bull"
-                                  : (q?.chg_pct ?? 0) < 0
-                                    ? "text-bear"
-                                    : "text-ink-dim",
-                              )}
-                            >
-                              {q?.chg_pct != null
-                                ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
-                                : "-"}
-                            </span>
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          aria-label={`移組 ${code}`}
-                          className="invisible text-ink-dim hover:text-accent group-hover:visible"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setMovingCode(movingCode === code ? null : code);
-                          }}
-                        >
-                          ⊞
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`移除 ${code}`}
-                          className="invisible text-ink-dim hover:text-bear group-hover:visible"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            remove(g.name, code);
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                      {/* ⊞ 面板渲染在**該列正下方**:捲動容器搬到 aside 且群組全列出後,
-                          放在所有 section 之後會落到側欄底部、常在可視範圍外(W-1 名義
-                          保留但實際到不了)。 */}
-                      {movingCode === code ? (
-                        <div className="rounded border border-line bg-bg-deep p-2">
-                          <p className="mb-1 font-mono text-xs text-ink-dim">{code} 所屬群組</p>
-                          {groups.map((other) => (
-                            <label
-                              key={other.name}
-                              className="flex items-center gap-1 py-0.5 text-xs text-ink"
-                            >
-                              <input
-                                type="checkbox"
-                                aria-label={other.name}
-                                checked={other.codes.includes(code)}
-                                onChange={() => toggleMembership(code, other.name)}
-                              />
-                              {other.name}
-                            </label>
-                          ))}
-                        </div>
-                      ) : null}
-                    </li>
-                  );
-                })}
+                {g.codes.map((code) => stockRow(code, g.name))}
                 {g.codes.length === 0 ? (
                   <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
                     拖曳股票到此
@@ -426,35 +459,20 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
         );
       })}
 
-      {/* 零群組(冷啟動 / 全刪):既有「全部下新增自動建自選」的語意搬到這裡,
-          否則側欄只剩「+ 群組」一條隱性前提 = 死路(白名單 W-16)。 */}
-      {groups.length === 0 ? (
-        <div>
-          <p className="px-1 text-xs text-ink-dim">尚無自選,輸入股號新增</p>
-          {searchBox(DEFAULT_GROUP)}
-        </div>
-      ) : null}
-
-      {addingGroup ? (
-        <input
-          autoFocus
-          value={groupInput}
-          onChange={(e) => setGroupInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addGroup()}
-          onBlur={addGroup}
-          placeholder="群組名稱"
-          className="mx-1 rounded border border-line bg-bg px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
-        />
-      ) : (
-        <button
-          type="button"
-          aria-label="新增群組"
-          onClick={() => setAddingGroup(true)}
-          className="mx-1 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:text-ink"
-        >
-          + 群組
-        </button>
-      )}
+      <button
+        type="button"
+        aria-label="管理群組與股票"
+        onClick={() => setDialogOpen(true)}
+        className="mx-1 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:text-ink"
+      >
+        管理
+      </button>
+      <WatchlistManagerDialog
+        open={dialogOpen}
+        wl={wl}
+        onClose={() => setDialogOpen(false)}
+        onGroupDeleted={dropCollapsed}
+      />
     </aside>
   );
 }

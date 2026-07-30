@@ -170,9 +170,9 @@ describe("WatchlistSidebar 未分組桶(SC-8~11)", () => {
   it("零群組時未分組列的 + 為停用(SC-9)", async () => {
     mockWatchlist([], ["2317"]);
     sidebar();
-    await waitFor(() => expect(screen.getByTestId("wl-list-ungrouped")).toBeTruthy());
-    const plus = screen.getByLabelText("加入群組 2317");
-    expect((plus as HTMLButtonElement).disabled).toBe(true);
+    // 未分組區塊本身一開始就在(空的也在)→ 要等到那一列真的長出來
+    await waitFor(() => expect(screen.getByLabelText("加入群組 2317")).toBeTruthy());
+    expect((screen.getByLabelText("加入群組 2317") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("+ → 選群組 → 該檔離開未分組、進該組(SC-10)", async () => {
