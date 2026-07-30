@@ -260,7 +260,10 @@ const ChartStatic = memo(function ChartStatic({
           <g key={id}>
             <polygon
               data-testid={id}
-              points={trianglePoints(mark.x, mark.y, dir, INTRADAY_MARK)}
+              // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止三角被裁,不是把它
+              // 趕出價位帶 —— 取繪圖區的話 09:00 附近的極值會被推開 3.5px,而標記的 x
+              // 承載的是「哪一分鐘」的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
+              points={trianglePoints(mark.x, mark.y, dir, INTRADAY_MARK, { min: 0, max: w })}
               className="fill-ink-muted stroke-surface"
               strokeWidth={1}
               paintOrder="stroke"

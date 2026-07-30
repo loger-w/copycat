@@ -233,3 +233,10 @@
   把三個標的 × 各週期的 cache key、entry 年齡、上次 upstream 呼叫時間與結果攤成一頁
 - [ ] `MARKET_KEYS`(後端)與 `MarketKey`(前端 `lib/timeframe.ts`)是兩份手動同步的值域;
   第三個消費端出現時考慮 codegen 或 shared JSON(現況新增標的要改兩處)
+
+## 2026-07-31(stock-ui-round4 Phase 5 自評 P2 彙總)
+
+- [ ] **memo 是否被打穿沒有任何測試 pattern**(review F11,rejected_with_reason):`StockIntradayChart` 的 `ChartStatic` / `EnergySub`、`CandleChart` 的 `ChartStatic` 全域零覆蓋,W-3 一直只靠 code review + 註解自律。要補就該一次建立可重用的 render-count 觀測基建(而不是為單一 props 發明一套沒人維護的寫法);它守的是效能不是正確性,優先度依實測掉幀情況再定
+- [ ] 側欄的 `EMPTY_WL` fallback 在自選載入失敗時仍可能被寫入而把整份自選清空(change-spec K-3):本輪只在新入口 StockPage 加了 `wl !== undefined` gate,側欄既有入口(拖曳 / ×  / 加入群組)未動
+- [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);目前靠 `save.isPending` 停用各自的觸發點,跨元件並發未處理
+- [ ] 預覽非自選股後 `stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)

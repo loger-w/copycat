@@ -230,6 +230,45 @@ describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
     expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "2331"]);
   });
 
+  // review F6:未分組視圖的 rows 不含「已屬別組」的檔 —— 只看 rows 會顯示成可加入,
+  // 點下去卻是零 PUT 早退,唯一可見變化是搜尋框被清空 = 看起來成功實際沒事發生
+  it("未分組視圖:已在自選(但屬別組)的候選也要停用,文案為「已在自選」", async () => {
+    open();
+    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/加入自選/), { target: { value: "5483" } });
+    const btn = screen.getByLabelText("加入 5483 到 未分組") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain("已在自選");
+  });
+
+  // review F1:PUT 未回前 wl 仍是舊值,commit() 的零 PUT 早退擋不住重複送出
+  // (算出來的 next 與舊 wl 內容確實不同)—— 只能靠 save.isPending 停用建議列
+  it("PUT pending 期間重複加入同一檔到同一組 → 建議列停用,仍只送一筆 PUT", async () => {
+    const gate: { release?: () => void } = {};
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
+        await new Promise<void>((r) => { gate.release = r; }); // 卡住 → wl 不刷新
+        return new Response(String(init.body));
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+    open();
+    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "觀察" }));
+    fireEvent.change(screen.getByPlaceholderText(/加入股票到/), { target: { value: "5483" } });
+    fireEvent.click(screen.getByLabelText("加入 5483 到 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.change(screen.getByPlaceholderText(/加入股票到/), { target: { value: "5483" } });
+    const again = screen.getByLabelText("加入 5483 到 觀察") as HTMLButtonElement;
+    expect(again.disabled).toBe(true);
+    fireEvent.click(again);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toHaveLength(1);
+    gate.release?.();
+  });
+
   it("已在本組的候選為停用 + 尾綴說明", async () => {
     open();
     await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
@@ -330,5 +369,35 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
       expect(within(screen.getByLabelText("股票")).getByText("2317")).toBeTruthy(),
     );
     expect(within(screen.getByLabelText("股票")).queryByText("5483")).toBeNull();
+  });
+
+  // review F8:重置一次做四件事,原本只有 selected 被間接驗到 —— 刪掉另外三行測試仍全綠
+  it("關閉再開 → 改名輸入框 / 搜尋文字 / 錯誤文案都不殘留", async () => {
+    const props = { wl: WL, onClose: vi.fn(), onGroupDeleted: vi.fn() };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <WatchlistManagerDialog open {...props} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
+    // 製造三種殘留:改名編輯態 / 搜尋框文字 / BAD_GROUP 錯誤文案
+    fireEvent.click(screen.getByLabelText("改名 主力"));
+    expect(screen.getByDisplayValue("主力")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(/加入自選/), { target: { value: "2317" } });
+    fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "觀察" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+
+    const view = (open: boolean) => (
+      <QueryClientProvider client={client}>
+        <WatchlistManagerDialog open={open} {...props} />
+      </QueryClientProvider>
+    );
+    rerender(view(false));
+    rerender(view(true));
+    expect(screen.queryByDisplayValue("主力")).toBeNull(); // 改名態已離開
+    expect((screen.getByPlaceholderText(/加入自選/) as HTMLInputElement).value).toBe("");
+    expect(screen.queryByText("群組名稱不合法")).toBeNull();
   });
 });

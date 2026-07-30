@@ -430,9 +430,14 @@ class StockEngine:
         都把昨收讀成今價。取 `meta.ref_milli` 而不是 `y_close`:`chg_pct` 的分母就是它,
         除權息日拿昨收顯示、漲幅卻對 ref 算會做出自相矛盾的側欄。
         """
+        # 「無資料」時**所有值欄位一律 None**(round4 之前的既有契約)。改走共用 builder
+        # 之後若讓 p/vol 沿用最後已知值,訊息就變成「no_data=True 卻夾帶成交價」——
+        # 現行側欄先判 no_data 所以畫面不會錯,但那是巧合式的保護,任何沒有同款判斷順序
+        # 的消費端會把它讀成有效報價。
+        no_data = code in self._no_data
         state = self._states.get(code)
-        last = state.last if state is not None else None
-        meta = state.meta if state is not None else None
+        last = None if no_data or state is None else state.last
+        meta = None if no_data or state is None else state.meta
         chg_pct: float | None = None
         if last is not None and meta is not None and meta.ref_milli:
             chg_pct = round((last.price_milli - meta.ref_milli) / meta.ref_milli * 100, 2)
@@ -442,9 +447,10 @@ class StockEngine:
             "p": last.price_milli if last is not None else None,
             "chg_pct": chg_pct,
             "vol": last.cum_vol if last is not None else None,
+            # 尚無成交才給參考價,與 `p` **互斥** —— 兩者同時有值會讓消費端分不出
+            # 「今天的價」與「昨天的基準」
             "ref": None if last is not None else (meta.ref_milli if meta is not None else None),
-            # `no_data` 讀實況不硬寫 False:否則轉態補推會把「無資料」洗回價格列
-            "no_data": code in self._no_data,
+            "no_data": no_data,
         }
 
     def stream(self) -> AsyncGenerator[dict, None]:

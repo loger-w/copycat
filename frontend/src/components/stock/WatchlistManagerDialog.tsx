@@ -81,7 +81,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
   /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
    *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
   function commit(next: Watchlist, onDone?: () => void): void {
-    if (next === wl) return;
+    // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
+    // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
+    // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
+    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
     setLocalError(null);
     save.mutate(next, onDone === undefined ? undefined : { onSuccess: onDone });
   }
@@ -311,19 +314,32 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                 {suggestions.length > 0 ? (
                   <ul className="mt-1 rounded border border-line bg-bg-deep">
                     {suggestions.map((s) => {
-                      const already = rows.includes(s.code);
+                      // 未分組視圖要看的是「是否已在自選」不是「是否在 rows」(review F6):
+                      // 已屬別組的檔不在 ungrouped 裡,若只看 rows 會顯示成可加入,
+                      // 但點下去 addCode 回原物件 → 零 PUT 早退,唯一可見變化是搜尋框被
+                      // 清空 = 看起來成功、實際什麼都沒發生。
+                      const already =
+                        activeGroup === null ? wl.codes.includes(s.code) : rows.includes(s.code);
                       return (
                         <li key={s.code}>
                           <button
                             type="button"
-                            disabled={already}
+                            // `save.isPending` 期間停用(review F1):PUT 未回前 `wl` 仍是
+                            // 舊值,commit() 的零 PUT 早退**擋不住**這條 —— 算出來的 next
+                            // 與舊 wl 內容確實不同,兩次點擊就是兩筆真 PUT,而每筆都會讓
+                            // 後端重設整個訂閱池(TC4 全量 UNSUB/SUB)。
+                            disabled={already || save.isPending}
                             aria-label={`加入 ${s.code} 到 ${activeGroup?.name ?? UNGROUPED_LABEL}`}
                             onClick={() => addStock(s.code)}
                             className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface disabled:opacity-50 disabled:hover:bg-transparent"
                           >
                             <span className="w-14 font-mono text-ink">{s.code}</span>
                             <span className="min-w-0 flex-1 truncate text-ink-muted">{s.name}</span>
-                            {already ? <span className="text-ink-dim">已在此群組</span> : null}
+                            {already ? (
+                              <span className="text-ink-dim">
+                                {activeGroup === null ? "已在自選" : "已在此群組"}
+                              </span>
+                            ) : null}
                           </button>
                         </li>
                       );

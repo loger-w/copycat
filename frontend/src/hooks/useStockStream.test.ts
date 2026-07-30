@@ -148,6 +148,28 @@ describe("useStockStream", () => {
     expect(hook.result.current.watchlist["9999"]?.no_data).toBe(true);
   });
 
+  // round4 項 4(review F4):`ref` 的解析只有這一層測得到 —— 下游的參考價測試都是把
+  // quotes 當 props 直接餵元件,繞過 WS 解析,把這行改壞不會有任何測試紅。
+  it("watchlist_quote 的 ref 欄位(尚無成交時的參考價)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "9998",
+        p: null, chg_pct: null, vol: null, ref: 995_000, no_data: false,
+      }),
+    );
+    expect(hook.result.current.watchlist["9998"]?.ref).toBe(995_000);
+    expect(hook.result.current.watchlist["9998"]?.p).toBeNull();
+  });
+
+  it("舊後端不發 ref → 降級 null(不是 undefined)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({ type: "watchlist_quote", code: "9997", p: 100_000, chg_pct: 0, vol: 1, no_data: false }),
+    );
+    expect(hook.result.current.watchlist["9997"]?.ref).toBeNull();
+  });
+
   it("stkfut 訊息更新期現對照", async () => {
     const { hook, ws } = await setup();
     act(() => ws.emit({ type: "stkfut", code: "2330", prod: "CDF", p: 2_398_000, basis: 18_000 }));

@@ -38,15 +38,25 @@ export const CANDLE_MARK: ExtremeMarkStyle = {
 
 /** 三角形點串。**apex 貼在價位上、body 朝圖內延伸** ——
  *  body 朝圖外的話,極值恰在 y 域端點時(K 線視窗高低是常態、分時圖漲跌停時)
- *  三角會被 viewBox 裁掉半截。 */
+ *  三角會被 viewBox 裁掉半截。
+ *
+ *  `bounds`(選填)= 繪圖區左右界。極值落在第一根 / 最後一根、而每根的 slot 又比三角
+ *  還窄時(K 線分 K 預設 240 根 → slot ≈ 5.8px、首根 cx ≈ 2.9px,而 half = 5),
+ *  沒有夾制的話左右翼會出界被裁成殘缺形狀。**整個三角一起平移**(不是只夾兩翼),
+ *  形狀才不會變形;位移最多一個 half,仍指得到那根蠟燭。 */
 export function trianglePoints(
   x: number,
   y: number,
   dir: ExtremeDir,
   style: ExtremeMarkStyle,
+  bounds?: { min: number; max: number },
 ): string {
   const dy = dir === "up" ? style.height : -style.height;
-  return `${x},${y} ${x - style.half},${y + dy} ${x + style.half},${y + dy}`;
+  const cx =
+    bounds === undefined
+      ? x
+      : Math.min(Math.max(x, bounds.min + style.half), bounds.max - style.half);
+  return `${cx},${y} ${cx - style.half},${y + dy} ${cx + style.half},${y + dy}`;
 }
 
 /** 價位文字的 baseline。預設畫在三角外側,撞到圖框就翻到內側。

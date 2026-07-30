@@ -138,7 +138,9 @@ const ChartStatic = memo(function ChartStatic({
           <g key={id}>
             <polygon
               data-testid={id}
-              points={trianglePoints(mark.cx, mark.y, dir, CANDLE_MARK)}
+              // 夾制:分 K 預設 240 根時 slot ≈ 5.8px、首根 cx ≈ 2.9px 而三角半寬 5,
+              // 不夾的話左翼落在 x < 0 被 viewBox 裁成殘缺形狀(review F2)
+              points={trianglePoints(mark.cx, mark.y, dir, CANDLE_MARK, { min: 0, max: w })}
               className="fill-ink-muted stroke-surface"
               strokeWidth={1}
               paintOrder="stroke"

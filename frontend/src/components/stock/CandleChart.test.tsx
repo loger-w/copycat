@@ -451,6 +451,30 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
     );
   });
 
+  // review F2:分 K 預設 240 根 → slot ≈ 5.8px、首根 cx ≈ 2.9px,而三角半寬 5。
+  // 3 根 bar 的 BARS fixture(slot ≈ 466)完全碰不到這條路徑。
+  it("窄 slot + 極值落在首 / 末根 → 三角仍完整落在 viewBox 內", () => {
+    const many = Array.from({ length: 240 }, (_, i) =>
+      // 第 1 根是全場最高、最後一根是全場最低
+      bar(
+        `2026-01-${String((i % 28) + 1).padStart(2, "0")}`,
+        100_000,
+        i === 0 ? 200_000 : 100_000,
+        i === 239 ? 10_000 : 100_000,
+        100_000,
+      ),
+    );
+    const { container } = render(<CandleChart bars={many} initBars={240} />);
+    for (const id of ["window-high", "window-low"]) {
+      const pts = container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!;
+      for (const p of pts.split(" ")) {
+        const x = Number(p.split(",")[0]);
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(1400);
+      }
+    }
+  });
+
   it("平移視窗後標記跟著換根(視窗高低是「當下視野」不是全序列)", () => {
     const many = Array.from({ length: 40 }, (_, i) =>
       bar(`2026-01-${String((i % 28) + 1).padStart(2, "0")}`, 100_000, 100_000 + i * 100, 100_000 - i * 100, 100_000),

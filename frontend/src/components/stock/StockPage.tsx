@@ -30,6 +30,14 @@ export function StockPage({ code, onSelect, stream }: Props) {
   const { data: wl } = useStockWatchlist();
   const save = useSaveWatchlist();
   const [pickerOpen, setPickerOpen] = useState(false);
+  // 換股時關掉面板(review F3)。App 渲染本元件沒帶 key,同一個 instance 會活過切檔 ——
+  // 面板留在展開狀態、按鈕卻已綁到新的 code,誤觸就把**錯的股票**靜默加進群組。
+  // 用 render 期間調整 state 的官方 pattern(專案有 you-might-not-need-an-effect lint)。
+  const [prevCode, setPrevCode] = useState(code);
+  if (prevCode !== code) {
+    setPrevCode(code);
+    setPickerOpen(false);
+  }
 
   const meta = accum?.meta ?? null;
   const last = accum?.last ?? null;
@@ -124,8 +132,11 @@ export function StockPage({ code, onSelect, stream }: Props) {
                           key={g.name}
                           type="button"
                           aria-label={`加入 ${code} 到 ${g.name}`}
+                          // PUT 未回前 wl 仍是舊值 → commit() 的零 PUT 早退擋不住重複送出
+                          // (算出來的 next 與舊 wl 內容確實不同),只能靠停用(review F5)
+                          disabled={save.isPending}
                           onClick={() => addTo(g.name)}
-                          className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent"
+                          className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent disabled:opacity-50"
                         >
                           {g.name}
                         </button>
@@ -134,8 +145,9 @@ export function StockPage({ code, onSelect, stream }: Props) {
                       <button
                         type="button"
                         aria-label={`加入 ${code} 到未分組`}
+                        disabled={save.isPending}
                         onClick={() => addTo(null)}
-                        className="rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink"
+                        className="rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink disabled:opacity-50"
                       >
                         未分組
                       </button>

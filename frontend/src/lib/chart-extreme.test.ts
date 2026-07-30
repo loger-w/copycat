@@ -25,6 +25,45 @@ describe("trianglePoints", () => {
     expect(CANDLE_MARK.half).toBeGreaterThan(INTRADAY_MARK.half);
     expect(CANDLE_MARK.height).toBeGreaterThan(INTRADAY_MARK.height);
   });
+
+  // review F10:只驗方向與 apex 的話,half / height 被改壞(三角變歪斜或過高)測試仍全綠
+  it("底邊兩點的精確幾何(±half / height)被鎖住", () => {
+    expect(trianglePoints(100, 50, "up", INTRADAY_MARK)).toBe("100,50 96.5,56 103.5,56");
+    expect(trianglePoints(100, 50, "down", INTRADAY_MARK)).toBe("100,50 96.5,44 103.5,44");
+    expect(trianglePoints(200, 30, "up", CANDLE_MARK)).toBe("200,30 195,38 205,38");
+  });
+
+  // review F2:分 K 240 根時 slot ≈ 5.8px、首根 cx ≈ 2.9px,而 CANDLE_MARK.half = 5
+  describe("邊界夾制(bounds)", () => {
+    it("未傳 bounds → 不夾制(既有行為)", () => {
+      expect(trianglePoints(2.92, 100, "up", CANDLE_MARK)).toBe("2.92,100 -2.08,108 7.92,108");
+    });
+
+    it("靠左出界 → 整個三角平移到剛好貼齊左界(形狀不變形)", () => {
+      const pts = trianglePoints(2.92, 100, "up", CANDLE_MARK, { min: 0, max: 1400 })
+        .split(" ")
+        .map((p) => p.split(",").map(Number));
+      expect(pts[0]![0]).toBe(5); // apex 被推到 half
+      expect(pts[1]![0]).toBe(0); // 左翼恰貼左界,不再是負數
+      expect(pts[2]![0]).toBe(10);
+      // 三角仍是等腰(左右翼與 apex 等距)= 只平移沒變形
+      expect(pts[0]![0]! - pts[1]![0]!).toBe(pts[2]![0]! - pts[0]![0]!);
+    });
+
+    it("靠右出界 → 平移到貼齊右界", () => {
+      const pts = trianglePoints(1399, 100, "down", CANDLE_MARK, { min: 0, max: 1400 })
+        .split(" ")
+        .map((p) => p.split(",").map(Number));
+      expect(pts[0]![0]).toBe(1395);
+      expect(pts[2]![0]).toBe(1400);
+    });
+
+    it("域內的 x 原樣保留(不因為傳了 bounds 就位移)", () => {
+      expect(trianglePoints(700, 100, "up", CANDLE_MARK, { min: 0, max: 1400 })).toBe(
+        "700,100 695,108 705,108",
+      );
+    });
+  });
 });
 
 describe("markLabelY 翻面", () => {

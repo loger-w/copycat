@@ -223,6 +223,60 @@ describe("StockPage 加入自選(round4 項 4)", () => {
     expect(body.groups).toEqual(GROUPS);
   });
 
+  // review F5:R16 指名的「連點兩下」場景 —— 第一次 PUT 未回前 wl 仍是舊值、gate 仍 true。
+  // 沒有這支測試的話,把 commit() 的深度比對拿掉不會有任何測試紅。
+  it("PUT pending 期間重複選同一組 → 仍只送一筆 PUT(W-9 零 PUT 早退)", async () => {
+    const bodies: unknown[] = [];
+    const gate: { release?: () => void } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          bodies.push(JSON.parse(String(init.body)));
+          // 卡住第一筆:wl 不會被更新 → gate 仍為 true,重現連點兩下
+          await new Promise<void>((r) => { gate.release = r; });
+          return new Response(String(init.body));
+        }
+        if (String(url).includes("/api/stock/names")) {
+          return new Response(JSON.stringify({ names: [], count: 0 }));
+        }
+        if (String(url).includes("/api/stock/watchlist")) {
+          return new Response(JSON.stringify({ codes: ["2330"], groups: GROUPS }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+    fireEvent.click(screen.getByLabelText("加入 2317 到 主力"));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    // pending 期間「加入自選」本身就停用 → 面板連開都開不了,第二筆 PUT 無從發生
+    const trigger = screen.getByRole("button", { name: "加入自選" }) as HTMLButtonElement;
+    expect(trigger.disabled).toBe(true);
+    fireEvent.click(trigger);
+    expect(screen.queryByLabelText("加入 2317 到 主力")).toBeNull();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bodies).toHaveLength(1);
+    gate.release?.();
+  });
+
+  // review F3:App 渲染 StockPage 沒帶 key,同一 instance 活過切檔 → 面板留在展開狀態
+  // 而按鈕已綁到新 code,誤觸就把錯的股票靜默加進群組
+  it("切換股票 → 展開中的群組面板自動收起", async () => {
+    mockApi(["2330"], GROUPS);
+    const { rerender } = wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+    expect(screen.getByLabelText("加入 2317 到 主力")).toBeTruthy();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <StockPage code="2331" onSelect={vi.fn()} stream={stream()} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByLabelText(/加入 .* 到 主力/)).toBeNull();
+  });
+
   it("自選尚未載入 → 按鈕不渲染(EMPTY_WL fallback 上按加入會把整份自選清空)", () => {
     vi.stubGlobal(
       "fetch",

@@ -321,6 +321,9 @@ class TestWatchlistQuoteSeed:
         assert seeds[0]["p"] == 2_400_000
         assert seeds[0]["vol"] == 7
         assert seeds[0]["no_data"] is False
+        # p 與 ref **互斥**:有成交時 ref 必為 None,否則消費端分不出「今天的價」與
+        # 「昨天的基準」(round4 項 4 / review F9;原本只驗了反方向)
+        assert seeds[0]["ref"] is None
         await engine.close()
 
     async def test_seed_uses_ref_field_never_p_when_no_trade(self) -> None:
@@ -417,6 +420,26 @@ class TestWatchlistQuoteSeed:
         got = await self._collect(stream)
         msg = next(m for m in got if m["type"] == "watchlist_quote" and m["no_data"])
         assert "ref" in msg
+
+    async def test_no_data_message_clears_value_fields(self) -> None:
+        """「無資料」時所有值欄位一律 None(round4 之前的既有契約,review F7)。
+        讓 p 沿用最後已知值的話,訊息會變成「no_data=True 卻夾帶成交價」——
+        現行側欄先判 no_data 所以畫面不會錯,但那是巧合式的保護。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None and src.on_no_data is not None
+        src.on_message(_quote(cum=5, price="2400"))  # 先有成交價
+        await _drain(engine)
+        stream = engine.stream()
+        src.on_no_data("2330")
+        await _drain(engine)
+        got = await self._collect(stream)
+        msg = next(m for m in got if m["type"] == "watchlist_quote" and m["no_data"])
+        assert msg["p"] is None
+        assert msg["chg_pct"] is None
+        assert msg["vol"] is None
+        assert msg["ref"] is None
+        await engine.close()
 
 
 class TestReviewFixes:
