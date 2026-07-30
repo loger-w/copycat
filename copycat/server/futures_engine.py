@@ -17,6 +17,7 @@ import asyncio
 import logging
 from typing import Callable, Protocol
 
+from copycat.live.stock_source import Bar
 from copycat.live.futures_models import (
     PRODUCTS,
     parse_futures_realtime,
@@ -156,6 +157,25 @@ class FuturesEngine:
             "seq": self._seq,
             "products": {p: st.payload(p) for p, st in self._states.items()},
         }
+
+    async def bars_range(self, product: str, tf: str, start: str, end: str) -> list[Bar]:
+        """期指 K 線歷史 —— **必須從本引擎的 session 問**(同 `fetch_day_1k` 的理由)。
+
+        借不到就回空、不 fallback 不猜:回空 + 固定可 grep 的 log 字串,3am 時
+        `grep 'market: futures history proxy miss'` 就能分辨「TC4 掛了」與「真沒資料」。
+        """
+        source = self._source
+        # getattr 而非加進 Protocol:既有測試 fake 沒有這個方法,加進 Protocol 會讓
+        # 每個注入點都要補一個用不到的 stub(K 線是可選能力,不是行情來源的本質)
+        fetch = getattr(source, "fetch_bars_range", None) if source is not None else None
+        if fetch is None:
+            logger.warning("market: futures history proxy miss %s(source 未建/不支援)", product)
+            return []
+        try:
+            return await asyncio.to_thread(fetch, product, tf, start, end)
+        except ConnectionError as e:
+            logger.warning("market: futures history proxy miss %s(%s)", product, e)
+            return []
 
     def resolved_contract(self, product: str) -> str | None:
         """HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。"""

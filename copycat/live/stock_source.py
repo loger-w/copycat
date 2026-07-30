@@ -133,8 +133,6 @@ def _int_field(row: dict, *names: str) -> int:
     return 0
 
 
-
-
 def parse_dk_bars(rows: list[dict]) -> list[Bar]:
     """DK rows → 日 Bar。缺 Open → 用 Close(欄位名未實測,CLAUDE.md §8 只實證 H/L/C)。"""
     bars: list[Bar] = []
@@ -437,25 +435,40 @@ class StockQuoteSource(TC4QuoteSource):
 
         `tf="D"` 走 DK,空則 fallback 1K 聚合 —— fallback 視窗另行縮到
         `_OHLC_FALLBACK_WINDOW_DAYS`,避免 4.5× 量級放大(R2-7)。"""
+        return self.fetch_bars_range_tagged(code, tf, start_date, end_date)[0]
+
+    def fetch_bars_range_tagged(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> tuple[list[Bar], str]:
+        """同 `fetch_bars_range`,另回**實際走到的資料源標籤**。
+
+        大盤頁的 meta 行要誠實說出這一份 bar 從哪來(index-board review P1-4):
+        `tf="D"` 在 DK 空時會 fallback 成 90 日窗的 1K 聚合,若 meta 仍標 `tc4_dk`,
+        「壞了 vs 沒資料看畫面即可答」的設計主軸剛好在最可能出事的那條路上失效。
+
+        `source_tag ∈ {"tc4_1k", "tc4_dk", "tc4_dk_1k_agg"}`。
+        """
         self._ensure_connected()
         sym = stock_symbol(code)
         start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            return parse_1k_bars(self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE))
+            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
+            return parse_1k_bars(rows), "tc4_1k"
 
         bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
         if bars:
-            return bars
+            return bars, "tc4_dk"
         fb_start = max(
             _dt.date.fromisoformat(start_date),
             _dt.date.fromisoformat(end_date) - _dt.timedelta(days=_OHLC_FALLBACK_WINDOW_DAYS),
         )
         logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
         # fallback 也要傳短 budget:漏傳的話 tf=D 無資料標的變成 10 + 30 = 40s
-        return aggregate_1k_to_daily(
+        fb = aggregate_1k_to_daily(
             self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE)
         )
+        return fb, "tc4_dk_1k_agg"
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。

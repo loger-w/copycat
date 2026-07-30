@@ -30,8 +30,9 @@ from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
+from copycat.live.stock_source import Bar
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
-from copycat.server.bars import BarsCache, build_daily, build_minute, clamp_days
+from copycat.server.bars import BarsCache, build_daily, build_minute, build_period, clamp_days
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
@@ -57,6 +58,44 @@ from copycat.server.trade import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: 大盤頁支援的標的鍵。值域小且固定 → 白名單比 regex 好:非法鍵一律 400 BAD_KEY,
+#: 不讓打錯的字串一路走到 TC4 才回空(那會被誤讀成「沒資料」)。
+MARKET_KEYS = ("TWSE", "OTC", "TXF", "MXF", "TMF")
+
+
+def _market_payload(
+    key: str,
+    tf: str,
+    bars: list[Bar],
+    *,
+    source: str,
+    volume: bool = True,
+    partial_last: bool = False,
+    refusal: str | None = None,
+    synth_since: str | None = None,
+) -> dict:
+    """大盤 K 線回應(index-board N-5)。
+
+    `meta` 不是裝飾:前端固定把它渲染成一行「來源 · 涵蓋期間」,讓「壞了 vs 沒資料」
+    看畫面就能答(/adhd 三個 frame 收斂到的同一點)。`source` 必須是**實際走到的分支**,
+    不能是預期值 —— DK 空時 fallback 成 1K 聚合而 meta 仍標 tc4_dk,等於在最可能出事的
+    那條路上說謊(review P1-4)。
+    """
+    return {
+        "key": key,
+        "tf": tf,
+        "bars": bars,
+        "meta": {
+            "source": source,
+            "coverage_from": bars[0]["t"][:10] if bars else None,
+            "coverage_to": bars[-1]["t"][:10] if bars else None,
+            "partial_last": partial_last,
+            "volume": volume,
+            "refusal": refusal,
+            "synth_since": synth_since,
+        },
+    }
 
 # sentinel:__main__ 傳 DEFAULT_TRADE = 正式啟動旗標(TradeRuntime 已停用,SC-11;
 # 現僅用於 futures 行情引擎的預設接線 — __main__ 不動,lifespan 見 futures 段)
@@ -499,6 +538,8 @@ def create_app(
         await stock.set_main(code)  # 含回補觸發(design §2.5)
         return stock.snapshot(code)
 
+    # ---- market(大盤 K 線;index-board SC-4/5/6)----
+
     # ---- index(指數看盤;index-board SC-4)----
 
     @app.get("/api/index/state")
@@ -507,6 +548,68 @@ def create_app(
         if index is None:
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
         return index.state()
+
+    @app.get("/api/market/bars/{key}")
+    async def market_bars(request: Request, key: str, tf: str = "D", days: str = "30") -> dict:
+        """大盤頁 K 線(index-board N-5)。
+
+        **拒繪走 200 + `meta.refusal`,不用 4xx**:4xx 會被 TanStack Query 的 error 路徑
+        吞成同一種紅色,分不出「平台不支援」與「TC4 掛了」—— 而那正是本輪要讓使用者
+        五秒內答出來的問題。400/503 只留給「請求本身錯」與「引擎沒起來」。
+
+        分派 = 每個 symbol 都向**持有它 REALTIME 訂閱的那條 session** 問歷史
+        (CLAUDE.md §8 同 symbol 跨 session 只推一邊):
+        `TWSE` → index 引擎、`TXF/MXF/TMF` → futures 引擎、`OTC` → 本機合成(無 TC4 來源)。
+        """
+        if key not in MARKET_KEYS:
+            raise HTTPException(status_code=400, detail={"error": "BAD_KEY"})
+        if tf not in ("1", "D", "W", "M"):
+            raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
+        try:
+            days_n = clamp_days(int(days))
+        except ValueError:
+            raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
+        today = _date.today()
+
+        if key == "OTC":
+            index: IndexEngine | None = request.app.state.index
+            if index is None:
+                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+            if tf != "1":
+                # 櫃買指數不在 TC4 symbol 樹(CLAUDE.md §8 掃盡確認)→ 沒有任何歷史來源。
+                # 給空陣列 + 明確理由,不拿當日合成假裝成日/週/月 K。
+                return _market_payload(key, tf, [], source="none", refusal="NO_HISTORICAL_SOURCE")
+            bars, since = index.otc_bars()
+            return _market_payload(
+                key, tf, bars, source="mis_poll_synth", volume=False, synth_since=since
+            )
+
+        if key == "TWSE":
+            index = request.app.state.index
+            if index is None:
+                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+
+            async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
+                return await index.bars_range(tf_, s, e)
+        else:
+            futures: FuturesEngine | None = request.app.state.futures
+            if futures is None:
+                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+
+            async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
+                # 期指沒有 DK→1K 的 fallback 分支,tag 恆定;回空 = 借不到(engine 已 log)
+                got = await futures.bars_range(key, tf_, s, e)
+                return got, ("tc4_dk" if got else "unavailable")
+
+        async def plain(c: str, tf_: str, s: str, e: str) -> list[Bar]:
+            return (await tagged(c, tf_, s, e))[0]
+
+        code = "IX0001" if key == "TWSE" else f"F:{key}"
+        if tf == "1":
+            bars = await build_minute(plain, bars_cache, code, days_n, today)
+            return _market_payload(key, tf, bars, source="tc4_1k" if bars else "unavailable")
+        bars, tag = await build_period(tagged, bars_cache, code, today, tf)
+        return _market_payload(key, tf, bars, source=tag, partial_last=bool(bars) and tf != "D")
 
     @app.get("/api/corr/state")
     async def corr_state(request: Request) -> dict:

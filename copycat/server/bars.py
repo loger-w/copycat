@@ -73,6 +73,9 @@ class BarsCache:
         self._hist: dict[tuple[str, str], list[Bar]] = {}
         self._today: dict[tuple[str, str], tuple[float, list[Bar]]] = {}
         self._daily: dict[tuple[str, str], list[Bar]] = {}
+        #: 與 `_daily` 同鍵的資料源標籤(大盤 meta 用)。分開存而不塞進值:
+        #: `_daily` 的值型別是 `list[Bar]`,個股路徑四個呼叫點都吃它
+        self._daily_tag: dict[tuple[str, str], str] = {}
         #: (code, tf, days) -> 寫入時刻。days 必須進 key —— 少了它,days=1 的空結果
         #: 會把 days=30 的請求一併釘住(spec review R15)。tf="D" 一律傳 days=0。
         self._empty: dict[tuple[str, str, int], float] = {}
@@ -166,6 +169,8 @@ class BarsCache:
         today_iso = today.isoformat()
         for key in [k for k in self._daily if k[1] != today_iso]:
             del self._daily[key]
+        for key in [k for k in self._daily_tag if k[1] != today_iso]:
+            del self._daily_tag[key]
         now = self._clock()
         for key in [
             k
@@ -187,38 +192,32 @@ class BarsCache:
             return  # don't-cache-empty
         self._daily[(code, today)] = bars
 
+    # ---- 資料源標籤(大盤 meta;cache hit 也要還原正確 tag)----
+
+    def daily_tag_get(self, code: str, today: str) -> str | None:
+        return self._daily_tag.get((code, today))
+
+    def daily_tag_put(self, code: str, today: str, tag: str) -> None:
+        self._daily_tag[(code, today)] = tag
+
 
 async def build_daily(
-    fetch: BarsFetcher,
-    cache: BarsCache,
-    code: str,
-    today: _dt.date,
-    *,
-    window_days: int = DAILY_WINDOW_DAYS,
-    max_bars: int = DAILY_MAX_BARS,
-    cache_key: str | None = None,
+    fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date
 ) -> list[Bar]:
-    """日 K(per (cache_key, today) memo)。
-
-    `cache_key` 讓同一個 `code` 的不同窗長各自佔一個快取格 —— 大盤頁的長窗日 K
-    與個股頁的 180 日窗共用 `code` 會互相覆寫,取到誰全看誰先到(index-board N-1)。
-    預設 `None` = 沿用 `code`,既有呼叫端行為完全不變。
-    """
-    key = cache_key if cache_key is not None else code
     cache.prune(today)
-    cached = cache.daily_get(key, today.isoformat())
+    cached = cache.daily_get(code, today.isoformat())
     if cached is not None:
         return cached
     # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline
-    if cache.empty_fresh(key, "D", 0):
+    if cache.empty_fresh(code, "D", 0):
         return []
-    start = today - _dt.timedelta(days=window_days)
-    bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-max_bars:]
-    cache.daily_put(key, today.isoformat(), bars)
+    start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
+    bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-DAILY_MAX_BARS:]
+    cache.daily_put(code, today.isoformat(), bars)
     if bars:
-        cache.empty_clear(key, "D", 0)
+        cache.empty_clear(code, "D", 0)
     else:
-        cache.empty_mark(key, "D", 0)
+        cache.empty_mark(code, "D", 0)
     return bars
 
 
@@ -269,25 +268,42 @@ def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
     return out
 
 
+#: `engine.bars_range_tagged(code, tf, start, end) -> (bars, source_tag)`
+TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[tuple[list[Bar], str]]]
+
+
 async def build_period(
-    fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
-) -> list[Bar]:
+    fetch: TaggedBarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
+) -> tuple[list[Bar], str]:
     """大盤頁的日 / 週 / 月 K —— 三者共用同一份長窗日 K(見 `DAILY_LONG_WINDOW_DAYS`)。
 
-    `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。
+    `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。回 `(bars, source_tag)`。
+
+    **獨立實作而不借 `build_daily`**(review P2-1):快取鍵一律 `f"{code}|L"`,
+    `_daily` / `_daily_tag` / `_empty` 三處都用它 —— 只隔開 `_daily` 而讓 `_empty`
+    共用 `code`,會讓 180 日窗的一次空結果在 15 秒內把長窗請求也擋掉(反之亦然),
+    診斷時看到的是「日K 有、週K 空」這種難以歸因的狀態。`build_daily` 則維持原簽名,
+    個股路徑零風險。
     """
-    daily = await build_daily(
-        fetch,
-        cache,
-        code,
-        today,
-        window_days=DAILY_LONG_WINDOW_DAYS,
-        max_bars=DAILY_LONG_MAX_BARS,
-        cache_key=f"{code}|L",
-    )
-    if period == "D":
-        return daily
-    return aggregate_period(daily, period)
+    key = f"{code}|L"
+    day = today.isoformat()
+    cache.prune(today)
+    cached = cache.daily_get(key, day)
+    if cached is not None:
+        tag = cache.daily_tag_get(key, day) or "tc4_dk"
+        return (cached if period == "D" else aggregate_period(cached, period)), tag
+    if cache.empty_fresh(key, "D", 0):
+        return [], "unavailable"
+    start = today - _dt.timedelta(days=DAILY_LONG_WINDOW_DAYS)
+    daily, tag = await fetch(code, "D", start.isoformat(), day)
+    daily = daily[-DAILY_LONG_MAX_BARS:]
+    cache.daily_put(key, day, daily)
+    if daily:
+        cache.daily_tag_put(key, day, tag)
+        cache.empty_clear(key, "D", 0)
+    else:
+        cache.empty_mark(key, "D", 0)
+    return (daily if period == "D" else aggregate_period(daily, period)), tag
 
 
 async def build_minute(

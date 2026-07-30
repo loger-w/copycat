@@ -336,3 +336,66 @@ async def test_close_cancels_all_tasks() -> None:
     await eng.close()
     assert fake.closed is True
     assert all(t.done() for t in eng._tasks)  # type: ignore[attr-defined]
+
+
+class TestOtcSynthBars:
+    """櫃買當日分 bar 由 5 秒 MIS 快照合成(index-board N-4 / SC-6)。
+
+    TC4 沒有櫃買指數 symbol(CLAUDE.md §8 掃盡確認)→ 這是唯一可能的分 K 來源,
+    也因此必須誠實標成 `mis_poll_synth` 且不畫量。
+    """
+
+    def _engine(self) -> IndexEngine:
+        return IndexEngine(
+            FakeIndexSource(),
+            txf_getter=lambda: None,
+            mis_fetch=lambda: None,
+            trade_date="2026-07-30",
+            rollover=False,
+        )
+
+    def _snap(self, p: int, time: str) -> OtcSnap:
+        return OtcSnap(p=p, ref=378_090, open=0, high=0, low=0, time=time)
+
+    def test_ohlc_from_samples_within_minute(self) -> None:
+        eng = self._engine()
+        for p, t in [(100, "101601"), (130, "101606"), (90, "101611"), (110, "101656")]:
+            eng._apply_otc(self._snap(p, t))
+        bars, since = eng.otc_bars()
+        assert len(bars) == 1
+        assert (bars[0]["o"], bars[0]["h"], bars[0]["l"], bars[0]["c"]) == (100, 130, 90, 110)
+        assert bars[0]["v"] == 0  # MIS 無量欄位 → 由 meta.volume=False 標明,不畫 0 柱
+        assert since == "10:17"
+
+    def test_t_is_date_space_hhmm(self) -> None:
+        """前端 candle.ts:splitStamp 靠**有無空格**判斷日 K / 分 K —— 格式錯了
+        30/60/90 分完全不聚合,而畫面看起來仍是正常 K 線圖(review P1-9)。"""
+        eng = self._engine()
+        eng._apply_otc(self._snap(100, "090030"))
+        bars, _ = eng.otc_bars()
+        assert bars[0]["t"] == "2026-07-30 09:01"
+
+    def test_minutes_are_sorted(self) -> None:
+        eng = self._engine()
+        for p, t in [(3, "110000"), (1, "090100"), (2, "100000")]:
+            eng._apply_otc(self._snap(p, t))
+        bars, _ = eng.otc_bars()
+        assert [b["c"] for b in bars] == [1, 2, 3]
+
+    def test_empty_before_any_snapshot(self) -> None:
+        assert self._engine().otc_bars() == ([], None)
+
+    def test_rollover_clears_synth_bars(self) -> None:
+        """換日必清:否則昨日的合成分 bar 會混進新交易日(review P1-9)。"""
+        eng = self._engine()
+        eng._apply_otc(self._snap(100, "101601"))
+        eng._pending_date = "2026-07-31"
+        eng._swap_day(backfill={})
+        assert eng.otc_bars() == ([], None)
+
+    def test_pending_day_snapshots_do_not_leak_into_bars(self) -> None:
+        """偵測到新交易日後、swap 前的快照不得進當日桶(沿用 _apply_otc 既有守衛)。"""
+        eng = self._engine()
+        eng._pending_date = "2026-07-31"
+        eng._apply_otc(self._snap(100, "101601"))
+        assert eng.otc_bars() == ([], None)
