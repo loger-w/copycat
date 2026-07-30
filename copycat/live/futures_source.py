@@ -17,7 +17,13 @@ from typing import Any, Callable
 
 from copycat.live.futures_models import PRODUCTS
 from copycat.live.river_backfill import collect_1k_minutes
-from copycat.live.tc4 import TC4QuoteSource
+from copycat.live.stock_source import (
+    FUTURES_MINUTE_DOMAIN,
+    Bar,
+    parse_1k_bars,
+    parse_dk_bars,
+)
+from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,33 @@ class FuturesQuoteSource(TC4QuoteSource):
             symbol=futures_symbol(product),
             poll_wait=self._poll_wait,
         )
+
+    # ---- K 線歷史(index-board N-2)----
+
+    def fetch_bars_range(self, product: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
+        """期指 K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
+
+        **必須從這條 session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這裡,
+        TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從別的 session 問同一檔
+        有把推播搶走的風險,而失效樣態是「訂閱成功但零推播」,零錯誤訊號。
+
+        窗:**只有 SubHistory 的 start/end** 用 `YYYYMMDDHH` 全天範圍(與 stock_source
+        的歷史窗同款)。**不覆寫 `_rt_request`** —— 期貨 REALTIME 訂閱窗維持盤別窗
+        (檔頭:期貨與 TXO 同時段),動它會改到期貨 tab 三檔的既有訂閱行為。
+
+        分鐘域走 `FUTURES_MINUTE_DOMAIN`(08:46–13:45),不是個股的 0901–1330:
+        套個股的尺會丟掉開盤前 15 分並把 13:31–13:35 錯併進 13:30。
+        """
+        self._ensure_connected()
+        sym = futures_symbol(product)
+        start = f"{start_date.replace('-', '')}00"
+        end = f"{end_date.replace('-', '')}23"
+        if tf == "1":
+            return parse_1k_bars(
+                self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE),
+                FUTURES_MINUTE_DOMAIN,
+            )
+        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
 
