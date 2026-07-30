@@ -33,11 +33,13 @@ const FUT_PRODUCTS = [
 ] as const;
 export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
 
+/** localStorage 值域**不變**(五個舊值全數仍還原到對應 tab);只有「無值」時的 fallback
+ *  由 `txo` 改 `index` —— 大盤自 index-board SC-1 起排第一顆。 */
 function initialTab(): Tab {
   const saved = window.localStorage.getItem(TAB_KEY);
-  return saved === "stock" || saved === "futures" || saved === "index" || saved === "corr"
+  return saved === "stock" || saved === "futures" || saved === "txo" || saved === "corr"
     ? saved
-    : "txo";
+    : "index";
 }
 
 function initialProduct(): FutProduct {
@@ -49,11 +51,13 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   // 首次進入才 mount(lazy:重元件延後載入);之後 hidden 保留 DOM(§3 慣例)。
   // 注意:資料流已上提到本層(D-3),visited 只管元件載入時機,不再兼管 WS 建立。
+  // index 改為恆 true(SC-1 起是預設頁);txo 維持恆 true —— TxoPage 本來就未受 visited
+  // 閘門管制(直接 render),改成按需會連帶改變 TXO WS 的建立時機(白名單 W-2)。
   const [visited, setVisited] = useState<Record<Tab, boolean>>({
+    index: true,
     txo: true,
     stock: tab === "stock",
     futures: tab === "futures",
-    index: tab === "index",
     corr: tab === "corr",
   });
   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
@@ -127,10 +131,10 @@ export default function App() {
       <nav className="flex items-baseline gap-1 border-b border-line" role="tablist" aria-label="主要分頁">
         {(
           [
-            ["txo", "TXO 綜合損益"],
-            ["stock", "個股"],
+            ["index", "大盤"],
+            ["stock", "個股(期)"],
+            ["txo", "選擇權"],
             ["futures", "期貨"],
-            ["index", "指數"],
             ["corr", "相關係數"],
           ] as [Tab, string][]
         ).map(([id, label]) => (
