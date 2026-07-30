@@ -142,6 +142,7 @@ def create_app(
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
     futures_ws = WsBroadcaster()
     corr_ws = WsBroadcaster()
+    river_ws = WsBroadcaster()  # 江波圖每秒 delta(全量走 REST/WS 首則;index-river-chart SC-5)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -288,6 +289,15 @@ def create_app(
                         lambda: futures_engine.state() if futures_engine is not None else {}
                     ),
                     broadcast=corr_ws.publish,
+                    river_broadcast=river_ws.publish,
+                    # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
+                    futures_minutes_fetch=(
+                        lambda product: (
+                            futures_engine.fetch_day_1k(product)
+                            if futures_engine is not None
+                            else []
+                        )
+                    ),
                 )
                 await corr.start()
         except Exception:
@@ -344,6 +354,7 @@ def create_app(
     app.state.capital_ws = capital_ws
     app.state.futures_ws = futures_ws
     app.state.corr_ws = corr_ws
+    app.state.river_ws = river_ws
     register_capital(app)  # capital/futures routes + 例外映射(capital-order design §6)
 
     @app.exception_handler(Exception)
@@ -497,6 +508,30 @@ def create_app(
             # 先送當前快照:client 不必等到下一個 tick 才有畫面
             await websocket.send_json(corr.state())
             async for msg in corr_ws.stream():
+                await websocket.send_json(msg)
+        except WebSocketDisconnect:
+            return
+
+    # ---- river(六腿江波圖;index-river-chart SC-5)----
+
+    @app.get("/api/river/state")
+    async def river_state(request: Request) -> dict:
+        corr: CorrelationEngine | None = request.app.state.corr
+        if corr is None:
+            raise HTTPException(status_code=503, detail={"error": "RIVER_NOT_READY"})
+        return corr.river_snapshot()
+
+    @app.websocket("/ws/river")
+    async def ws_river(websocket: WebSocket) -> None:
+        corr: CorrelationEngine | None = websocket.app.state.corr
+        await websocket.accept()
+        if corr is None:
+            await websocket.close()
+            return
+        try:
+            # 首則送全量 snapshot;之後每秒只送當前分鐘的 delta(全量每秒推 = 每分鐘數 MB)
+            await websocket.send_json(corr.river_snapshot())
+            async for msg in river_ws.stream():
                 await websocket.send_json(msg)
         except WebSocketDisconnect:
             return
