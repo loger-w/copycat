@@ -128,3 +128,24 @@
 - [ ] `test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`(`.gitignore:9`),任何乾淨 checkout 都會紅。修法:測試層 skip-if-missing,或把 wrapper 納入版控。
 - [ ] realtime-correlation 的 SC-5 日盤補驗(訂閱窗鑑別力只在台指日盤 08:45–13:45 成立;夜盤窗涵蓋 UTC 06–22,驗不出 CME 腿是否落在窗外)。指令:啟動 server 後 `curl -s localhost:8721/api/corr/state`,確認 YM/ES/NQ 三腿 `mid` 非 null。
 - [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
+## 2026-07-30(stock-ui-round3 順手清單)
+
+- [ ] 🔴 **「有資料但 TC4 慢」會顯示肯定語氣的錯誤結論**(change-spec Known Risks 1):
+  `_BARS_POLL_DEADLINE=10s` 誤判為空 + 15s 負向快取 → `CandleChart` 顯示「無 K 線資料」
+  而非「還在等」。這是**既有行為**(現況等滿 60s 後顯示同一句話),本輪只讓它更快抵達。
+  要真正修好必須把「逾時 / 真無資料 / TC4 斷線」沿
+  `_collect_history → fetch_bars_range → bars_range → BarsFetcher` 整條型別鏈區分開
+  (`stock_engine.bars_range` 連 `ConnectionError` 都吞成 `[]`),外加 response 加欄位 +
+  前端文案分態 + `tests/server/test_bars.py` 20 個 call site 與 `test_stock_routes.py`
+  的精確相等契約要一起改 —— round3 spec review 評估後判定為獨立一輪的工作,已撤回。
+- [ ] 大螢幕明細列數不再隨視窗變高(下半列固定 224px ≈ 7 列)。1920×1080 上明細與
+  1440×900 一樣多,這是「圖表吃剩餘高度 + 兩塊卡片貼底」的直接代價(Known Risks 2)。
+  若之後嫌明細太短,考慮把下半列改成 `flex-1 max-h-72 min-h-56`(需重驗 SC-6)。
+- [ ] 五檔卡片底部約 24px 留白:`h-full` 讓卡片撐滿 224px 而內容約 200px。這是對舊
+  `self-start` 取捨的刻意推翻(user 要求貼底)。若嫌空,可讓五檔列高改為內容高並只讓
+  明細貼底(但兩塊底邊就不齊平)。
+- [ ] `--color-time` 與 `--color-ma5` 目前同色值(#f0b429),語意獨立是刻意的。
+  若之後 MA5 改色,時間軸不受影響 —— 但也要記得兩者並置時對比度會消失。
+- [ ] `_POLL_BACKOFF_START = 0.15` 與 `_BARS_POLL_DEADLINE = 10.0` 兩個常數是實測推得
+  (有資料標的首頁 <1s 備妥),TC4 忙碌時的真實分布未量。若 real-env 出現誤判為空的
+  頻率偏高,先量首頁備妥時間分布再調,不要盲目放大 deadline(那會把 60s 問題帶回來)。
