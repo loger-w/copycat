@@ -66,6 +66,7 @@ def make_engine(
     rollover: bool = False,
     today_fn: Any = None,
     in_watch_window: Any = None,
+    now_fn: Any = None,
     stale_secs: float = 999.0,
     retry_secs: float = 0.01,
 ) -> IndexEngine:
@@ -77,6 +78,9 @@ def make_engine(
         rollover=rollover,
         today_fn=today_fn or (lambda: _dt.date(2026, 7, 28)),
         in_watch_window=in_watch_window or (lambda: False),
+        # 換日 08:30 門檻的時鐘也必須注入:預設固定 10:00(門檻後),否則整份測試
+        # 只在真實牆鐘 ≥ 08:30 才綠(00:2x 跑 5/5 紅、09:5x 跑 6/6 綠,2026-07-30 實測)
+        now_fn=now_fn or (lambda: _dt.time(10, 0)),
         poll_secs=0.02,
         throttle_secs=0.02,
         stale_secs=stale_secs,
@@ -281,6 +285,33 @@ async def test_rollover_two_phase() -> None:
         assert state["trade_date"] == "2026-07-29"
         assert state["twse"]["minutes"] == {"0901": 2_000}
         assert state["otc"]["minutes"] == {}
+    finally:
+        await eng.close()
+
+
+async def test_rollover_gate_opens_at_0830() -> None:
+    """08:30 門檻:門檻前即使日期已跨也不換日,到門檻才換。
+
+    門檻本身原本無測試覆蓋(唯一的時鐘讀取沒有注入點),補上。
+    """
+    fake = FakeIndexSource()
+    fake.day_minutes = {"0901": 1_000}
+    clock = [_dt.time(8, 29)]
+    eng = make_engine(
+        fake,
+        rollover=True,
+        today_fn=lambda: _dt.date(2026, 7, 29),
+        now_fn=lambda: clock[0],
+    )
+    eng._rollover_check_secs = 0.03  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        await asyncio.sleep(0.15)
+        assert eng.state()["trade_date"] == "2026-07-28"  # 門檻前不動
+        assert fake.trade_dates == ["2026-07-28"]  # 只有 start 同步那次
+        clock[0] = _dt.time(8, 30)  # 門檻含界(now < 08:30 才擋)
+        await asyncio.sleep(0.15)
+        assert eng.state()["trade_date"] == "2026-07-29"
     finally:
         await eng.close()
 
