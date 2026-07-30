@@ -118,17 +118,24 @@ class BarsCache:
 
     # ---- 當日段(短 TTL)----
 
+    def _today_ttl(self, bars: list[Bar]) -> float:
+        """空結果吃更短的 TTL(見 `today_put`)。`today_get` 與 `prune` 共用同一條規則
+        —— 各寫一份必然漂移。"""
+        return self._ttl if bars else min(self._ttl, EMPTY_TTL_SECS)
+
     def today_get(self, code: str, today: str) -> list[Bar] | None:
         # key 含日期:只用 code 的話,server 跨午夜後的 TTL 窗內會把昨日 bars 當今日回,
         # 而歷史段此時已含昨日 → 同一回應出現重複 t(review P2-9)
         entry = self._today.get((code, today))
         if entry is None:
             return None
-        # 空結果用更短的 TTL(見 today_put)
-        ttl = self._ttl if entry[1] else min(self._ttl, EMPTY_TTL_SECS)
-        if self._clock() - entry[0] >= ttl:
+        if self._clock() - entry[0] >= self._today_ttl(entry[1]):
             return None
         return entry[1]
+
+    def today_entry_count(self) -> int:
+        """`_today` 的條目數(成長觀測用;prune 的 TTL evict 測試需要)。"""
+        return len(self._today)
 
     def today_put(self, code: str, today: str, bars: list[Bar]) -> None:
         """空結果也存,但吃更短的 TTL(`EMPTY_TTL_SECS`)。
@@ -141,18 +148,27 @@ class BarsCache:
         self._today[(code, today)] = (self._clock(), bars)
 
     def prune(self, today: _dt.date) -> None:
-        """剪掉視窗外條目。三個 dict 都無 evict,長跑 server 的成長主要來自**日期維度**
-        (股號受 watchlist 30 檔上限約束,日期不受)—— review P2-5。"""
+        """剪掉視窗外與已過期的條目。
+
+        `_hist` / `_daily` 的成長來自**日期維度**(股號受 watchlist 30 檔上限約束)
+        —— review P2-5。`_today` 從 round3 起會存空 entry,股號維度不再被「真的有今日
+        資料的股號」約束(任何通過 `validate_code` 的字串請求一次就留一筆),所以
+        除了日期還要按 TTL evict —— 否則同日內累積到跨日才歸零(self-review round2 P2)。
+        """
         floor = (today - _dt.timedelta(days=DAYS_MAX * 2)).isoformat()
         for key in [k for k in self._hist if k[1] < floor]:
             del self._hist[key]
         today_iso = today.isoformat()
         for key in [k for k in self._daily if k[1] != today_iso]:
             del self._daily[key]
-        for key in [k for k in self._today if k[1] != today_iso]:
+        now = self._clock()
+        for key in [
+            k
+            for k, e in self._today.items()
+            if k[1] != today_iso or now - e[0] >= self._today_ttl(e[1])
+        ]:
             del self._today[key]
         # 只丟已過期的:prune 每次 build_* 開頭都會跑,無條件 clear 等於負向快取從未生效
-        now = self._clock()
         for key in [k for k, ts in self._empty.items() if now - ts >= EMPTY_TTL_SECS]:
             del self._empty[key]
 
