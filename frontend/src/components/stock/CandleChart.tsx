@@ -92,6 +92,7 @@ const ChartStatic = memo(function ChartStatic({
   lowY,
   highText,
   lowText,
+  showVolume,
 }: {
   g: CandleGeometry;
   /** viewBox 寬。**純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -105,6 +106,8 @@ const ChartStatic = memo(function ChartStatic({
   lowY: number | null;
   highText: string;
   lowText: string;
+  /** false = 該資料源沒有量(如櫃買 MIS 取樣合成)→ 量區改印說明,不畫一排 0 柱 */
+  showVolume: boolean;
 }) {
   return (
     <g>
@@ -187,17 +190,24 @@ const ChartStatic = memo(function ChartStatic({
           />
         </>
       ) : null}
-      {/* 量 bar */}
-      {g.volBars.map((b, i) => (
-        <rect
-          key={`v-${i}`}
-          x={b.x}
-          y={b.y}
-          width={b.w}
-          height={b.h}
-          className={VOL_CLASS[b.dir]}
-        />
-      ))}
+      {/* 量 bar。無量資料時不畫 0 柱 —— 一排貼底的 0 高柱與「真的零成交」
+          在畫面上無法區分,正是本輪要避免的假造零(index-board SC-6)。 */}
+      {showVolume ? (
+        g.volBars.map((b, i) => (
+          <rect
+            key={`v-${i}`}
+            x={b.x}
+            y={b.y}
+            width={b.w}
+            height={b.h}
+            className={VOL_CLASS[b.dir]}
+          />
+        ))
+      ) : (
+        <text x={4} y={g.volBars[0]?.y ?? 0} className="fill-ink-muted" fontSize="0.625rem">
+          無量資料
+        </text>
+      )}
       {/* 蠟燭:影線 + 實體 */}
       {g.candles.map((c, i) => (
         <g key={`c-${i}`}>
@@ -294,10 +304,17 @@ interface Props {
   /** viewBox 高度(SC-6)。純量不是物件 —— memo 子元件吃純量才不會因 identity 重建
    *  (W-5)。未傳 = 量測未就緒 / jsdom,沿用固定常數。 */
   height?: number;
+  /** 資料源有無成交量。預設 `true` = 既有行為(個股頁零變化);`false` 時量區印
+   *  「無量資料」、資訊列的量欄顯示 `—`(index-board SC-6)。 */
+  showVolume?: boolean;
 }
 
 /** 一根 bar → 資訊列欄位。`prev` 用來算漲跌%(K 線跨多日,沒有「昨收」可比)。 */
-function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[] {
+function readoutFields(
+  b: Bar | undefined,
+  prev: Bar | undefined,
+  showVolume: boolean,
+): ReadoutField[] {
   if (b === undefined) {
     return [
       { label: "", value: "-" },
@@ -322,7 +339,7 @@ function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[
       value: pct === null ? "-" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`,
       tone: pct === null ? "muted" : pct > 0 ? "bull" : pct < 0 ? "bear" : "muted",
     },
-    { label: "量", value: String(b.v) },
+    { label: "量", value: showVolume ? String(b.v) : "—" },
   ];
 }
 
@@ -332,6 +349,7 @@ export function CandleChart({
   showBb = false,
   onToggleBb,
   height,
+  showVolume = true,
 }: Props) {
   const dimW = DIMS.width;
   const dimH = height ?? DIMS.height;
@@ -452,7 +470,7 @@ export function CandleChart({
   const shownIdx = hoverBar !== undefined ? hoverIdx! : shown.length - 1;
   // prev 從**完整序列**取,不是視窗切片:視窗最左那根在切片裡沒有前一根,漲跌% 會恆顯示
   // "-" 即使 bars 裡真的有前一根(MA/BB 已經是「完整序列算完再切」以免斷頭,這裡同源)
-  const fields = readoutFields(shown[shownIdx], bars[viewport.start + shownIdx - 1]);
+  const fields = readoutFields(shown[shownIdx], bars[viewport.start + shownIdx - 1], showVolume);
   const plotBottom = dimH - X_LABEL_H;
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const windowHigh = shown.length > 0 ? Math.max(...shown.map((b) => b.h)) : 0;
@@ -521,6 +539,7 @@ export function CandleChart({
             lowY={shown.length > 0 ? g.toY(windowLow) : null}
             highText={highText}
             lowText={lowText}
+            showVolume={showVolume}
           />
           <XAxisLabels g={g} h={dimH} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
           {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
