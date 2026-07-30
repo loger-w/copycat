@@ -32,6 +32,50 @@ describe("fromSnapshot", () => {
   });
 });
 
+describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
+  it("snapshot 的 high / low 讀 top-level(不是 meta)", () => {
+    const acc = fromSnapshot({ ...SNAP, high: 2_395_000, low: 2_370_000 });
+    expect(acc.high).toBe(2_395_000);
+    expect(acc.low).toBe(2_370_000);
+  });
+
+  it("snapshot 缺欄位(舊後端)→ null,不崩", () => {
+    const acc = fromSnapshot(SNAP);
+    expect(acc.high).toBeNull();
+    expect(acc.low).toBeNull();
+  });
+
+  it("snapshot 的 ticks 帶買賣價", () => {
+    const acc = fromSnapshot({
+      ...SNAP,
+      ticks: [{ t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer", b: 2_379_000, a: 2_380_000 }],
+    });
+    expect(acc.ticks[0]?.b).toBe(2_379_000);
+    expect(acc.ticks[0]?.a).toBe(2_380_000);
+  });
+
+  it("tick 的 h / l 增量更新當日高低(WS 不發 meta 型別訊息)", () => {
+    let acc = fromSnapshot({ ...SNAP, high: 2_380_000, low: 2_380_000 });
+    acc = applyTick(acc, {
+      type: "tick", code: "2330", t: "09:02:00.000", p: 2_395_000, q: 1, side: "outer",
+      seq: 4, b: 2_394_000, a: 2_395_000, h: 2_395_000, l: 2_380_000,
+    });
+    expect(acc.high).toBe(2_395_000);
+    expect(acc.low).toBe(2_380_000);
+    expect(acc.ticks.at(-1)?.b).toBe(2_394_000);
+    expect(acc.ticks.at(-1)?.a).toBe(2_395_000);
+  });
+
+  it("tick 缺 h / l(舊後端)→ 保留原值,不打成 null", () => {
+    let acc = fromSnapshot({ ...SNAP, high: 2_390_000, low: 2_370_000 });
+    acc = applyTick(acc, {
+      type: "tick", code: "2330", t: "09:02:00.000", p: 2_380_000, q: 1, side: "outer", seq: 4,
+    });
+    expect(acc.high).toBe(2_390_000);
+    expect(acc.low).toBe(2_370_000);
+  });
+});
+
 describe("applyTick", () => {
   it("accumulates minutes, vwap and inner/outer(與後端 StockDayState 等值)", () => {
     // 後端 tests/live/test_stock_state.py::TestAggregation 同一組數字
