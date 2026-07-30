@@ -1,7 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 from typing import Callable
+
+import pytest
 
 from copycat.server.futures_engine import FuturesEngine
 
@@ -39,6 +41,9 @@ class FakeSource:
         self.leaf_subscribed: list[tuple[str, str]] = []
         self.fail_subscribe: set[str] = set()
         self.fail_leaf: set[str] = set()
+        self.fail_1k: set[str] = set()
+        self.fetched_1k: list[str] = []
+        self.minutes_1k: list[tuple[int, int]] = [(526, 23_400_000)]
         self.closed = False
         self.on_message: Callable[[dict], None] | None = None
 
@@ -57,6 +62,12 @@ class FakeSource:
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.on_message = cb
+
+    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
+        if product in self.fail_1k:
+            raise ConnectionError(f"1K fail {product}")
+        self.fetched_1k.append(product)
+        return self.minutes_1k
 
     def close(self) -> None:
         self.closed = True
@@ -323,4 +334,25 @@ class TestLeafFallbackSubscribe:
         await asyncio.sleep(0.05)
         await _drain()
         assert ("TXF", "202608") in src.leaf_subscribed
+        await engine.close()
+
+
+class TestFetchDay1kPassthrough:
+    """江波圖回補(index-river-chart SC-4):台指 1K 必須從持有 TXF 訂閱的這條 session 問。"""
+
+    async def test_passthrough_returns_source_minutes(self) -> None:
+        engine, src, _ = await _make()
+        assert engine.fetch_day_1k("TXF") == [(526, 23_400_000)]
+        assert src.fetched_1k == ["TXF"]
+        await engine.close()
+
+    async def test_without_source_returns_empty(self) -> None:
+        engine = FuturesEngine(lambda: FakeSource())  # 未 start → 無 source
+        assert engine.fetch_day_1k("TXF") == []
+
+    async def test_connection_error_propagates_for_caller_degradation(self) -> None:
+        engine, src, _ = await _make()
+        src.fail_1k.add("TXF")
+        with pytest.raises(ConnectionError):
+            engine.fetch_day_1k("TXF")
         await engine.close()

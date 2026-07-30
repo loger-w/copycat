@@ -56,6 +56,12 @@ class FakeFuturesSource:
     def unsubscribe_symbol(self, product: str) -> None:
         return None
 
+    def subscribe_leaf(self, product: str, ym: str) -> None:
+        return None
+
+    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
+        return []  # 江波圖回補在本檔不受測(FuturesSource Protocol 對齊用)
+
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.on_message = cb
 
