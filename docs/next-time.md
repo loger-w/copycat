@@ -82,7 +82,7 @@
 - [x] ~~`/api/stock/bars` 的真實環境驗證待補~~ **(a)(b)(d) 已於 2026-07-29 18:00 盤後驗畢**(mod/stock-ui-fixes;重啟 server 後實打 2317):(a) `tf=D` → **116 根**,落在 100–120 ✅;(b) **DK 的 `Open`/`Volume` 欄位名假定成立**,`o=240000` / `v=81973` 皆真值且 `v` 與畫面表頭總量一致,server log 無「DK rows 解析略過」warning ✅;(d) 當日段耗時 `tf=D` 1.1s / `tf=1&days=5` 2.1s(810 根 / 3 交易日),遠低於 5s 門檻 ✅
   - [ ] **(c) 仍待盤中驗**:分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10)—— 需交易時段,盤後當日段不會再前進
 - [ ] `BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除:watchlist 上限 30 檔 × 30 日曆日量級可接受,若之後放寬 days 上限或改多帳號再加 LRU
-- [ ] 🔴 **既有 bug(本輪 real-env 截圖發現,非本輪改出來)**:`copycat/live/aggregate.py:21 _SPOT_PREFIX = "TC.F."` 是整棵期貨樹前綴,`route()` 把**任何** `TC.F.*` tick 當台指期寫進 `spot_millipts`。個股頁選一檔有個股期的股票(如 2317→DHF `TC.F.TWF.DHF.HOT`)後,IndexBar 台指顯示成該個股期價(實測 2026-07-29 盤中:台指顯示 232.5)。ZMQ SUB 訂 `""` 收全部推播,TXO runtime 的 listener 也會收到個股引擎訂的個股期 tick。**影響不只 IndexBar**:`aggregate.py:162-163 spot_pnl` 同源 → TXO 綜合損益的現貨損益點位一併錯。修法要一併決定 `route()` 與 `:102` 對個股期該算 foreign 還是丟棄 → 開 /bug 走紅測試先行
+- [x] ~~🔴 **既有 bug:`_SPOT_PREFIX = "TC.F."` 讓任何期貨 tick 覆寫台指現價**~~ **已於 2026-07-30 修畢(mod/index-board)**:收斂為 `TC.F.TWF.TXF.`(台指期產品樹,含月份 leaf,常數單一定義在 `models.SPOT_PREFIX`)。real-env 夜盤實證:IndexBar 台指 41750.0 vs 期貨 tab TXF 41749.0(差 1.0 點),TXO snapshot spot 同值,`dropped_foreign_ticks` 4057 筆 = 被正確擋掉的個股期/海外六腿/小台微台。另加節流 warning `txo spot 無 TXF 推播`(盤中連續 3 分鐘無現價才印)—— 收斂後多了「靜默空白」的新失效態,比亂跳更難察覺
 - [ ] K 線 endpoint 未做 inflight dedup(專案 `_run_once` 慣例):同 code 併發請求會各自打一輪 TC4。單人本機用量下未觀察到問題,若之後多分頁/多 client 再補
 - [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**(當日段恆空 + don't-cache-empty → 每次真打 TC4,`_collect_history` 首頁 poll deadline ≈ 30s)。要擋需要交易日曆;或改由後端對「當日段回空」做短負向快取(需與 TC4 連線失敗區分)
 - [ ] `_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s。當日段這種高頻小查詢可考慮獨立較短 deadline(改動共用路徑,overlay 也吃這條,要一起評估)
@@ -216,3 +216,20 @@
 - [ ] 側欄的零 PUT 判定用 `JSON.stringify(next) === JSON.stringify(wl)` 深度比較(W-22)。
   物件鍵序目前由 model 純函數保證一致,若日後有人改成從別處組 `Watchlist`(鍵序不同)
   這個比較會失效成「永遠不相等」→ 悄悄退化回每次都送 PUT。要更穩就換成逐欄位比較。
+## 2026-07-30(index-board 大盤看盤改造 順手清單)
+
+- [ ] **期指分時走勢**(本輪 out of scope):大盤頁選台指期時「分時」鈕 disabled,自動落到 1 分 K。
+  要做需接 corr/river 的分鐘序列當資料源(那條管線目前只餵加權/櫃買)
+- [ ] **期指夜盤 K 線**:本輪 `FUTURES_MINUTE_DOMAIN` 只取日盤 08:46–13:45,夜盤(15:00–05:00)落在域外被丟。
+  要做需決定 x 軸怎麼表現跨午夜(`aggregateBars` 跨日不合併)
+- [ ] **櫃買永久歷史庫存**:目前只有「本機當日合成」(server 啟動後由 MIS 5 秒快照累積,重啟即歸零)。
+  永久化需要排程 + 落盤 + 長期維護,屬新 scope。/adhd 的 logistics/3am frame 都獨立提出這條
+- [ ] **大盤頁「加權」在盤後顯示 `-`**:`index_engine` 的 `twse.p` 只由 REALTIME push 設定,收盤後沒有推播 →
+  現價/高/低/昨收全空(既有行為,非本輪改出;分時線本身有資料)。要修可在 `fetch_day_minutes` 回補後
+  以最後一分鐘 close 種 `p`,但要與 watchdog 的 stale 判定對齊
+- [ ] **期指的高/低在大盤頁顯示 `-`**:`futures_engine` 的 payload 有 `ref`/`upper`/`lower`(漲跌停)但沒有當日高低,
+  要顯示需引擎補欄位
+- [ ] `/api/market/diag` 診斷端點(/adhd 3am frame 提案,本輪判定非正確性必需):
+  把三個標的 × 各週期的 cache key、entry 年齡、上次 upstream 呼叫時間與結果攤成一頁
+- [ ] `MARKET_KEYS`(後端)與 `MarketKey`(前端 `lib/timeframe.ts`)是兩份手動同步的值域;
+  第三個消費端出現時考慮 codegen 或 shared JSON(現況新增標的要改兩處)
