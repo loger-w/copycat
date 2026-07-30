@@ -8,9 +8,11 @@ import pytest
 from copycat.stock_watchlist import (
     WATCHLIST_LIMIT,
     Group,
+    Watchlist,
     WatchlistError,
-    load_watchlist_groups,
-    save_watchlist_groups,
+    load_watchlist,
+    save_watchlist,
+    ungrouped,
     union,
     validate_code,
 )
@@ -31,33 +33,57 @@ class TestValidateCode:
         assert validate_code("1234567") is False  # 超過 6 位
 
 
-class TestGroupsPersistence:
-    """groups schema v2(stock-ui-upgrade SC-6);舊 list persistence 測試隨 API 替換遷移."""
+class TestWatchlistPersistence:
+    """schema v3(stock-ui-round5 §🔴-4):codes(全體 = 訂閱池)+ groups(成員關係)."""
 
     def test_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "watchlist.json"
-        groups: list[Group] = [
-            {"name": "主力", "codes": ["2330", "5483"]},
-            {"name": "觀察", "codes": ["2330", "3231"]},
-        ]
-        save_watchlist_groups(path, groups)
-        assert load_watchlist_groups(path) == groups
+        wl: Watchlist = {
+            "codes": ["2330", "5483", "3231"],
+            "groups": [
+                {"name": "主力", "codes": ["2330", "5483"]},
+                {"name": "觀察", "codes": ["2330", "3231"]},
+            ],
+        }
+        save_watchlist(path, wl)
+        assert load_watchlist(path) == wl
 
     def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
-        assert load_watchlist_groups(tmp_path / "nope.json") == []
+        assert load_watchlist(tmp_path / "nope.json") == {"codes": [], "groups": []}
 
-    def test_v1_file_migrates_to_single_group(self, tmp_path: Path) -> None:
+    def test_v1_file_migrates_to_ungrouped(self, tmp_path: Path) -> None:
+        """v1 從來沒有群組概念 → codes 原樣落未分組,不再包成假的「自選」組(🔴 行為改)."""
         path = tmp_path / "w.json"
         path.write_text(
             json.dumps({"_cache_version": 1, "codes": ["2330", "5483"]}), encoding="utf-8"
         )
-        assert load_watchlist_groups(path) == [{"name": "自選", "codes": ["2330", "5483"]}]
+        assert load_watchlist(path) == {"codes": ["2330", "5483"], "groups": []}
 
-    def test_saved_file_is_v2(self, tmp_path: Path) -> None:
+    def test_v2_file_migrates_codes_from_union(self, tmp_path: Path) -> None:
+        """v2(有 groups 無 codes)→ codes = 聯集,畫面零差異(SC-17)."""
         path = tmp_path / "w.json"
-        save_watchlist_groups(path, [{"name": "自選", "codes": ["2330"]}])
+        path.write_text(
+            json.dumps(
+                {
+                    "_cache_version": 2,
+                    "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        wl = load_watchlist(path)
+        assert wl == {
+            "codes": ["2330", "5483"],
+            "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
+        }
+        assert ungrouped(wl) == []
+
+    def test_saved_file_is_v3(self, tmp_path: Path) -> None:
+        path = tmp_path / "w.json"
+        save_watchlist(path, {"codes": ["2330"], "groups": [{"name": "自選", "codes": ["2330"]}]})
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 2
+        assert payload["_cache_version"] == 3
+        assert payload["codes"] == ["2330"]
         assert payload["groups"] == [{"name": "自選", "codes": ["2330"]}]
 
     def test_union_over_limit_rejected(self, tmp_path: Path) -> None:
@@ -67,31 +93,90 @@ class TestGroupsPersistence:
             {"name": "b", "codes": [f"{2000 + i}" for i in range(half)]},
         ]
         with pytest.raises(WatchlistError, match="WATCHLIST_FULL"):
-            save_watchlist_groups(tmp_path / "w.json", groups)
+            save_watchlist(tmp_path / "w.json", {"codes": [], "groups": groups})
+
+    def test_ungrouped_codes_count_toward_limit(self, tmp_path: Path) -> None:
+        """上限以 codes 計 —— 未分組的股票同樣佔額度."""
+        codes = [f"{1000 + i}" for i in range(WATCHLIST_LIMIT + 1)]
+        with pytest.raises(WatchlistError, match="WATCHLIST_FULL"):
+            save_watchlist(tmp_path / "w.json", {"codes": codes, "groups": []})
 
     def test_shared_code_counts_once_toward_limit(self, tmp_path: Path) -> None:
         codes = [f"{1000 + i}" for i in range(WATCHLIST_LIMIT)]
         groups: list[Group] = [{"name": "a", "codes": codes}, {"name": "b", "codes": codes[:5]}]
-        saved = save_watchlist_groups(tmp_path / "w.json", groups)
-        assert len(union(saved)) == WATCHLIST_LIMIT
+        saved = save_watchlist(tmp_path / "w.json", {"codes": codes, "groups": groups})
+        assert len(saved["codes"]) == WATCHLIST_LIMIT
 
     def test_bad_code_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(WatchlistError, match="BAD_CODE"):
-            save_watchlist_groups(tmp_path / "w.json", [{"name": "a", "codes": ["bad code"]}])
+            save_watchlist(
+                tmp_path / "w.json",
+                {"codes": ["bad code"], "groups": [{"name": "a", "codes": ["bad code"]}]},
+            )
+
+    def test_bad_code_in_codes_only_rejected(self, tmp_path: Path) -> None:
+        """未分組的 code 一樣要驗(它也會進訂閱池)."""
+        with pytest.raises(WatchlistError, match="BAD_CODE"):
+            save_watchlist(tmp_path / "w.json", {"codes": ["bad code"], "groups": []})
 
     def test_bad_group_name_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(WatchlistError, match="BAD_GROUP"):
-            save_watchlist_groups(tmp_path / "w.json", [{"name": "  ", "codes": ["2330"]}])
+            save_watchlist(
+                tmp_path / "w.json", {"codes": ["2330"], "groups": [{"name": "  ", "codes": ["2330"]}]}
+            )
         with pytest.raises(WatchlistError, match="BAD_GROUP"):
-            save_watchlist_groups(
+            save_watchlist(
                 tmp_path / "w.json",
-                [{"name": "a", "codes": ["2330"]}, {"name": "a", "codes": ["5483"]}],
+                {
+                    "codes": ["2330", "5483"],
+                    "groups": [
+                        {"name": "a", "codes": ["2330"]},
+                        {"name": "a", "codes": ["5483"]},
+                    ],
+                },
             )
 
     def test_codes_deduped_within_group_keeping_order(self, tmp_path: Path) -> None:
         path = tmp_path / "w.json"
-        saved = save_watchlist_groups(path, [{"name": "a", "codes": ["2330", "5483", "2330"]}])
-        assert saved == [{"name": "a", "codes": ["2330", "5483"]}]
+        saved = save_watchlist(
+            path,
+            {"codes": ["2330", "5483"], "groups": [{"name": "a", "codes": ["2330", "5483", "2330"]}]},
+        )
+        assert saved["groups"] == [{"name": "a", "codes": ["2330", "5483"]}]
+
+    def test_top_level_codes_deduped_keeping_order(self, tmp_path: Path) -> None:
+        saved = save_watchlist(
+            tmp_path / "w.json", {"codes": ["2330", "5483", "2330"], "groups": []}
+        )
+        assert saved["codes"] == ["2330", "5483"]
+
+    def test_group_code_missing_from_codes_appended_to_tail(self, tmp_path: Path) -> None:
+        """「加進群組」蘊含「加進自選」——正規化補進 codes 尾端,不報錯."""
+        saved = save_watchlist(
+            tmp_path / "w.json",
+            {"codes": ["2330"], "groups": [{"name": "a", "codes": ["5483", "3231"]}]},
+        )
+        assert saved["codes"] == ["2330", "5483", "3231"]
+
+
+class TestUngrouped:
+    def test_excludes_group_members_keeping_codes_order(self) -> None:
+        wl: Watchlist = {
+            "codes": ["2330", "5483", "3231", "2317"],
+            "groups": [{"name": "a", "codes": ["5483"]}, {"name": "b", "codes": ["2317"]}],
+        }
+        assert ungrouped(wl) == ["2330", "3231"]
+
+    def test_empty_when_every_code_grouped(self) -> None:
+        wl: Watchlist = {
+            "codes": ["2330", "5483"],
+            "groups": [{"name": "a", "codes": ["2330", "5483"]}],
+        }
+        assert ungrouped(wl) == []
+
+    def test_all_ungrouped_when_no_groups(self) -> None:
+        wl: Watchlist = {"codes": ["2330", "5483"], "groups": []}
+        assert ungrouped(wl) == ["2330", "5483"]
 
 
 class TestUnion:

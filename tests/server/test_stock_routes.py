@@ -125,21 +125,49 @@ class TestStockNamesRoute:
 
 
 class TestWatchlistRoutes:
-    """groups shape(stock-ui-upgrade SC-6);舊 codes shape 斷言隨 API 契約同輪遷移."""
+    """v3 shape `{codes, groups}`(stock-ui-round5 §🔴-5);舊 groups-only body 仍相容."""
 
     def test_get_empty_then_put_round_trip(self, tmp_path: Path) -> None:
         client, fake = make_client(tmp_path)
         with client:
-            assert client.get("/api/stock/watchlist").json() == {"groups": []}
+            assert client.get("/api/stock/watchlist").json() == {"codes": [], "groups": []}
             groups = [
                 {"name": "主力", "codes": ["2330", "5483"]},
                 {"name": "觀察", "codes": ["3231"]},
             ]
+            body = {"codes": ["2330", "5483", "3231"], "groups": groups}
+            r = client.put("/api/stock/watchlist", json=body)
+            assert r.status_code == 200
+            assert r.json() == body
+            assert client.get("/api/stock/watchlist").json() == body
+            assert "2330" in fake.subscribed and "3231" in fake.subscribed  # 全體已訂
+
+    def test_put_without_codes_defaults_to_union(self, tmp_path: Path) -> None:
+        """舊 client 只送 groups → 存檔結果與 v2 時代逐字元相同(codes = 聯集)."""
+        client, _ = make_client(tmp_path)
+        with client:
+            groups = [
+                {"name": "主力", "codes": ["2330", "5483"]},
+                {"name": "觀察", "codes": ["3231", "2330"]},
+            ]
             r = client.put("/api/stock/watchlist", json={"groups": groups})
             assert r.status_code == 200
-            assert r.json() == {"groups": groups}
-            assert client.get("/api/stock/watchlist").json() == {"groups": groups}
-            assert "2330" in fake.subscribed and "3231" in fake.subscribed  # 聯集已訂
+            assert r.json() == {"codes": ["2330", "5483", "3231"], "groups": groups}
+
+    def test_ungrouped_code_enters_subscription_pool(self, tmp_path: Path) -> None:
+        """SC-18 的機械守門:不屬任何群組的 code 也要進 set_watchlist."""
+        client, fake = make_client(tmp_path)
+        with client:
+            r = client.put(
+                "/api/stock/watchlist",
+                json={
+                    "codes": ["2330", "5483"],
+                    "groups": [{"name": "主力", "codes": ["2330"]}],
+                },
+            )
+            assert r.status_code == 200
+            assert r.json()["codes"] == ["2330", "5483"]
+            assert "5483" in fake.subscribed
 
     def test_put_bad_code_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
@@ -174,12 +202,13 @@ class TestWatchlistRoutes:
         client2, fake2 = make_client(tmp_path)
         with client2:
             assert client2.get("/api/stock/watchlist").json() == {
-                "groups": [{"name": "自選", "codes": ["2330"]}]
+                "codes": ["2330"],
+                "groups": [{"name": "自選", "codes": ["2330"]}],
             }
             assert "2330" in fake2.subscribed  # 啟動即訂回持久化清單
 
-    def test_v1_file_restores_union_on_startup(self, tmp_path: Path) -> None:
-        """R2:v1 檔(codes shape)重啟 → set_watchlist 收到遷移後聯集."""
+    def test_v1_file_restores_codes_on_startup(self, tmp_path: Path) -> None:
+        """v1 檔(codes shape)重啟 → 全部落未分組,codes 仍進訂閱池(🔴 行為改)."""
         import json as _json
 
         (tmp_path / "watchlist.json").write_text(
@@ -188,7 +217,26 @@ class TestWatchlistRoutes:
         client, fake = make_client(tmp_path)
         with client:
             assert client.get("/api/stock/watchlist").json() == {
-                "groups": [{"name": "自選", "codes": ["2330", "5483"]}]
+                "codes": ["2330", "5483"],
+                "groups": [],
+            }
+            assert "2330" in fake.subscribed and "5483" in fake.subscribed
+
+    def test_v2_file_restores_union_on_startup(self, tmp_path: Path) -> None:
+        """v2 檔(groups shape)重啟 → codes 由聯集補,畫面零差異(SC-17)."""
+        import json as _json
+
+        (tmp_path / "watchlist.json").write_text(
+            _json.dumps(
+                {"_cache_version": 2, "groups": [{"name": "主力", "codes": ["2330", "5483"]}]}
+            ),
+            encoding="utf-8",
+        )
+        client, fake = make_client(tmp_path)
+        with client:
+            assert client.get("/api/stock/watchlist").json() == {
+                "codes": ["2330", "5483"],
+                "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
             }
             assert "2330" in fake.subscribed and "5483" in fake.subscribed
 
