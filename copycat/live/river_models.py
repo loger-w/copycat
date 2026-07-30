@@ -29,6 +29,7 @@ __all__ = [
     "all_day_utc_window",
     "minute_end_from_1k",
     "minute_end_from_taipei",
+    "minute_end_from_utc_hhmmss",
     "offset_of",
     "parse_1k_minutes",
     "window_bounds",
@@ -96,6 +97,26 @@ def minute_end_from_taipei(hhmmss: str) -> int | None:
         return None
     hh, mm = parsed
     return hh * 60 + mm + 1
+
+
+def minute_end_from_utc_hhmmss(raw: str) -> int | None:
+    """UTC `HHMMSS`(TC4 `FilledTime`)→ floor(分)+1 的台北 minute-of-day;壞格式 None。
+
+    **為什麼不用 `PreciseTime`**(2026-07-30 real-env 實證):該欄的寬度跨交易所段不同 ——
+    台期交是 `HHMMSSffffff`(微秒),CME/CBOT/SGX 是 `HHMMSS`(實測 MES 為 `"41256"`)。
+    `stock_models._taipei_time` 的 `zfill(12)` 對後者會算出恆為台北 08:00:00.0xx 的假時刻,
+    分鐘落在盤別窗外 → 該腿永遠不進點(相關係數只用五檔中價,所以沒被這個問題咬到)。
+    `FilledTime` 兩段同寬,`index_engine` 對 IX0001 也是用它 + zfill(6)。
+    """
+    text = str(raw).strip()
+    if not text:
+        return None
+    padded = text.zfill(6)
+    parsed = _hh_mm(padded[:2], padded[2:4])
+    if parsed is None:
+        return None
+    hh, mm = parsed
+    return ((hh + 8) % 24) * 60 + mm + 1
 
 
 def minute_end_from_1k(row: dict) -> int | None:

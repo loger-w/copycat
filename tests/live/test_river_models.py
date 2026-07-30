@@ -9,6 +9,7 @@ from copycat.live.river_models import (
     all_day_utc_window,
     minute_end_from_1k,
     minute_end_from_taipei,
+    minute_end_from_utc_hhmmss,
     offset_of,
     parse_1k_minutes,
     window_bounds,
@@ -78,6 +79,35 @@ class TestMinuteEndFromTaipei:
     def test_bad_format_is_none(self) -> None:
         assert minute_end_from_taipei("bad") is None
         assert minute_end_from_taipei("") is None
+
+
+class TestMinuteEndFromUtcHhmmss:
+    """Phase 6 real-env finding:`PreciseTime` 欄寬跨交易所段不同 → 改吃 `FilledTime`。
+
+    CME/CBOT/SGX 的 PreciseTime 是 6 位 HHMMSS(實測 MES `"41256"`),台期交是 12 位
+    HHMMSSffffff。`stock_models._taipei_time` 的 zfill(12) 對海外腿會算出恆為
+    台北 08:00:00.0xx 的假時刻 → 分鐘落在窗外 → 該腿永遠不進點。
+    """
+
+    def test_six_digit_utc_becomes_taipei_bar_end(self) -> None:
+        # "41256" = 04:12:56 UTC = 台北 12:12:56 → 桶 12:13 = 733
+        assert minute_end_from_utc_hhmmss("41256") == 733
+
+    def test_zero_padded_form(self) -> None:
+        assert minute_end_from_utc_hhmmss("041256") == 733
+
+    def test_midnight_utc_wraps_to_taipei_morning(self) -> None:
+        # 00:30:10 UTC = 台北 08:30:10 → 桶 08:31 = 511
+        assert minute_end_from_utc_hhmmss("3010") == 511
+
+    def test_2359_taipei_rolls_to_1440(self) -> None:
+        # 15:59:30 UTC = 台北 23:59:30 → 桶 1440(不是 0;夜盤 offset 才連續)
+        assert minute_end_from_utc_hhmmss("155930") == 1440
+
+    def test_bad_or_empty_is_none(self) -> None:
+        assert minute_end_from_utc_hhmmss("") is None
+        assert minute_end_from_utc_hhmmss("bad") is None
+        assert minute_end_from_utc_hhmmss("990000") is None
 
 
 class TestMinuteEndFrom1k:

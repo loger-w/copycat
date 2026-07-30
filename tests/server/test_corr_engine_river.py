@@ -74,6 +74,28 @@ def _trade_quote(symbol: str, price_milli: int, *, precise: str = "030030000000"
     }
 
 
+def _foreign_trade_quote(symbol: str, price_milli: int) -> dict:
+    """海外腿(CME/CBOT/SGX)實測形狀:`PreciseTime` 是 **6 位 HHMMSS**,不是台期交的 12 位。
+
+    Phase 6 real-env finding —— 用 zfill(12) 解讀 "41256" 會得到台北 08:00:00.041 的假時刻,
+    分鐘落在日盤窗外 → 該腿永遠不進點。`FilledTime` 兩段同寬,改吃它。
+    """
+    return {
+        "Symbol": symbol,
+        "SecurityName": "x",
+        "TradingPrice": str(price_milli / 1000),
+        "TradeQuantity": "4",
+        "TradeVolume": "100",
+        "TradeDate": "20260730",
+        "PreciseTime": "41256",  # 6 位;zfill(12) 會解成 00:00:00.041
+        "FilledTime": "41256",  # 04:12:56 UTC → 台北 12:12:56 → 桶 12:13 = 733 → offset 208
+        "Bid": str((price_milli - 1000) / 1000),
+        "BidVolume": "5",
+        "Ask": str((price_milli + 1000) / 1000),
+        "AskVolume": "5",
+    }
+
+
 def _book_quote(symbol: str, bid: int, ask: int) -> dict:
     return {
         "Symbol": symbol,
@@ -162,6 +184,34 @@ class TestLiveFeed:
             assert _minutes(eng, "NQ") == {}
             eng.tick_once()
             assert eng.state()["legs"]["NQ"]["mid"] == 27_638_000  # 既有中價行為不變
+        finally:
+            await eng.close()
+
+    async def test_foreign_leg_uses_filled_time_not_precise_time(self) -> None:
+        """Phase 6 real-env finding:海外腿的 PreciseTime 是 6 位 → 必須用 FilledTime 分桶。"""
+        src = _FakeSource()
+        eng = _engine(src)
+        await eng.start()
+        try:
+            assert src.cb is not None
+            src.cb(_foreign_trade_quote("TC.F.CME.NQ.HOT", 27_638_000))
+            await _drain()
+            assert _minutes(eng, "NQ") == {208: 27_638_000}  # 12:13 → offset 208
+        finally:
+            await eng.close()
+
+    async def test_tc4_leg_without_filled_time_falls_back_to_local_clock(self) -> None:
+        """FilledTime 缺值/壞值 → 退回本機時鐘(與台指腿同款),不是丟掉這一點。"""
+        src = _FakeSource()
+        eng = _engine(src, taipei_time="110030")  # → 桶 11:01 = 661 → offset 136
+        await eng.start()
+        try:
+            assert src.cb is not None
+            quote = _foreign_trade_quote("TC.F.CME.NQ.HOT", 27_638_000)
+            quote["FilledTime"] = ""
+            src.cb(quote)
+            await _drain()
+            assert _minutes(eng, "NQ") == {136: 27_638_000}
         finally:
             await eng.close()
 

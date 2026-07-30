@@ -23,7 +23,7 @@ from typing import Any, Callable, Protocol
 from copycat.corr_config import SOURCE_FUTURES_ENGINE, SOURCE_TC4, CorrConfig
 from copycat.live.corr_models import mid_from_book
 from copycat.live.corr_state import CorrState, SessionKey
-from copycat.live.river_models import minute_end_from_taipei
+from copycat.live.river_models import minute_end_from_taipei, minute_end_from_utc_hhmmss
 from copycat.live.river_state import RiverState
 from copycat.live.session import session_key
 from copycat.live.stock_models import parse_stock_realtime
@@ -171,8 +171,16 @@ class CorrelationEngine:
         tick, book, _meta = parse_stock_realtime(quote)
         if tick is not None:
             # 江波圖走**成交價**(不是中價):1K 回補給的是 close,live 用中價會讓
-            # 回補段與 live 段不同尺(design §9-3)
-            minute = minute_end_from_taipei(tick.time)
+            # 回補段與 live 段不同尺(design §9-3)。
+            #
+            # 分鐘桶用 `FilledTime` 而**不是** `tick.time` —— tick.time 由
+            # `stock_models._taipei_time` 以 zfill(12) 解 `PreciseTime`,而該欄寬度跨交易所段
+            # 不同(台期交 12 位微秒 / CME·CBOT·SGX 6 位 HHMMSS,2026-07-30 real-env 實證)。
+            # 對海外腿那個假設會算出恆為台北 08:00:00.0xx 的時刻 → 分鐘落在窗外 → 該腿永遠
+            # 不進點。FilledTime 兩段同寬;缺值才退回本機時鐘(同台指腿處理)。
+            minute = minute_end_from_utc_hhmmss(str(quote.get("FilledTime", "")))
+            if minute is None:
+                minute = minute_end_from_taipei(self._taipei_time_fn())
             if minute is not None:
                 self._river.push(leg.key, minute, tick.price_milli, self._session_fn())
         if not book.bids and not book.asks:
