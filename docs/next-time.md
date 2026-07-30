@@ -123,10 +123,11 @@
 
 ## 2026-07-30(realtime-correlation 收尾沉澱)
 
-- [ ] **P0 既有 bug:`futures_engine` 零推播死鎖(期貨面板一直是壞的)**。TXO runtime 的訂閱清單含 `SPOT_SYMBOL = TC.F.TWF.TXF.HOT`(`server/engine.py:89`),`futures_engine` 訂同一 symbol 回 `Success: OK` 但永遠零推播(CLAUDE.md §8);其 leaf fallback 需先由推播解析契約月份才啟動 → 全零推播時死鎖。實證:2026-07-29 17:33 起跑的 server 到 00:50 為止 TXF/MXF/TMF 全 `p=null`、`seq=0`,而同時段獨立訂閱 TXF.HOT 有 235 則/30 秒(MXF 324 則)、五檔俱全。**連帶擋住 realtime-correlation 的 base 腿**(該 feature 讀 `futures_engine.state()` 取台指五檔算中價)。修法候選:leaf fallback 改為可由「非推播來源」取得月份(合約清單查詢),或 runtime 與 futures_engine 共用單一 TXF 訂閱。
+- [ ] **P1 既有 bug:`futures_engine` 會間歇性整段零推播(期貨面板時好時壞)**。〔2026-07-30 10:24 更正:原記「P0 死鎖 / 一直是壞的」下得過重〕TXO runtime 的訂閱清單含 `SPOT_SYMBOL = TC.F.TWF.TXF.HOT`(`server/engine.py:89`),`futures_engine` 訂同一 symbol 時 TC4 只推一邊(CLAUDE.md §8);其 leaf fallback 需先由推播解析契約月份才啟動 → 全零推播時啟動不了。**兩個相反的實測狀態**:(i) 2026-07-29 17:33 起跑的 server 到 00:50 為止 TXF/MXF/TMF 全 `p=null`、`seq=0`,同時段獨立訂閱 TXF.HOT 有 235 則/30 秒(MXF 324 則)、五檔俱全 → TC4 端正常;(ii) 2026-07-30 10:24 起跑的 server 六腿含 TXF 全部正常有值,realtime-correlation 的 base 腿與五對相關係數都算得出來。**故為間歇性,觸發條件未定位**(疑似啟動時序 / TC4 session 殘留 / 先前有 process 訂過同 symbol)。下輪要做的第一件事是**穩定重現**(鐵則 A:先穩定重現再談修),而不是直接動 fallback。修法候選:leaf fallback 改為可由「非推播來源」取得月份(合約清單查詢),或 runtime 與 futures_engine 共用單一 TXF 訂閱。
 - [ ] `test_index_engine.py::test_rollover_two_phase` 只在真實時鐘 ≥ 08:30 才會綠:`_rollover_loop`(`index_engine.py:279`)以 `_dt.datetime.now().time()` 判 08:30 門檻,該時鐘無注入點(同建構子已注入 `today_fn` / `in_watch_window`,唯獨漏它)。決定性實驗:把模組的 `_dt` 換成固定 10:00 的 shim 後立即轉綠。修法:建構子補 `now_fn`。
 - [ ] `test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`(`.gitignore:9`),任何乾淨 checkout 都會紅。修法:測試層 skip-if-missing,或把 wrapper 納入版控。
-- [ ] realtime-correlation 的 SC-5 日盤補驗(訂閱窗鑑別力只在台指日盤 08:45–13:45 成立;夜盤窗涵蓋 UTC 06–22,驗不出 CME 腿是否落在窗外)。指令:啟動 server 後 `curl -s localhost:8721/api/corr/state`,確認 YM/ES/NQ 三腿 `mid` 非 null。
+- [x] ~~realtime-correlation 的 SC-5 日盤補驗~~ **2026-07-30 10:24 已驗**:日盤六腿全部有中價且非 stale(TXF 40646 / TWN 3462.62 / YM 51909.5 / ES 7388.88 / NQ 27638 / SXF 10776),五對相關係數算出實值(TWN 0.590 / YM 0.147 / ES 0.336 / NQ 0.520;SXF 因整窗中價未動 → 標準差 0 正確回 null)。SC-6 同時驗過:60 秒收 61 則、間隔中位數 1.010s、seq 連續遞增。
+- [ ] realtime-correlation 訂閱窗的**反向**驗證仍未做:「沿用 `session_window` 會失效」是推論不是實證 —— 台指日盤窗(UTC 00–06)+ 夜盤窗(UTC 06–22)合計涵蓋 UTC 00–22,訂閱當下海外腿幾乎不會落窗外;真正的風險是「訂閱後跨過窗結束邊界(UTC 06 / 22)推播是否停止」。驗法:在 UTC 05:5x(台北 13:5x)前訂閱並持續監聽到 UTC 06:0x 之後,看推播是否中斷。全天窗實作本身已是防禦性選擇,此項只影響「基底 source 是否也該改」的判斷。
 - [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
 ## 2026-07-30(stock-ui-round3 順手清單)
 
