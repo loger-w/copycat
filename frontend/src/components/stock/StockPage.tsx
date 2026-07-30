@@ -103,7 +103,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
                     />
                   </div>
                   <div className="min-h-0 min-w-0 flex-[2]">
-                    <TickTape ticks={accum.ticks} />
+                    <TickTape ticks={accum.ticks} ref_={meta?.ref ?? null} />
                   </div>
                 </div>
               </>

@@ -2,7 +2,8 @@
 
 seq gap 復原:跳號判定 `next != last+1`(含回退)→ refetch 全量 snapshot;
 refetch 期間交錯的 tick 進 pending buffer,snapshot(seq=S)套用後丟 seq ≤ S、
-依序 append seq > S。meta 走 snapshot(engine 不發 meta WS 型別,book 每則自足)。 */
+依序 append seq > S。meta 基底走 snapshot(engine 不發 meta WS 型別,book 每則自足);
+**當日高低由 tick 的 `h`/`l` 增量更新** —— 盤中不重抓 snapshot,掛 meta 上會停在舊值。 */
 
 import { useEffect, useRef, useState } from "react";
 
