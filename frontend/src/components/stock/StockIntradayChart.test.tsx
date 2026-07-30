@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
-import { Y_AXIS_W } from "@/lib/stock-intraday-svg";
+import { R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
 
 const OVERLAY = {
   // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
@@ -417,7 +417,8 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
     for (const g of grids) {
       expect(g.getAttribute("class")).toContain("stroke-line");
       expect(Number(g.getAttribute("x1"))).toBe(Y_AXIS_W);
-      expect(Number(g.getAttribute("x2"))).toBe(800);
+      // 🔴 round5 D:右緣讓出 R_AXIS_W 給疊線價位標,格線右端跟著內縮
+      expect(Number(g.getAttribute("x2"))).toBe(800 - R_AXIS_W);
       // 水平線:y1 === y2
       expect(g.getAttribute("y1")).toBe(g.getAttribute("y2"));
     }

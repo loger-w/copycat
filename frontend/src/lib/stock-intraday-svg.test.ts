@@ -394,7 +394,9 @@ describe("round3:overlayLines level 與副圖量刻度出口", () => {
     }
   });
 
-  it("maxSide 出口 = 該日內外盤最大單邊(SC-8 量刻度的分母)", () => {
+  // 🔴 round5 E:出口由 maxSide(單邊最大)改為 maxTotal(總量最大)。事前標為該變 ——
+  // 單邊分母讓資訊列的「量」在副圖上找不到對應高度(未分類整批不畫)。
+  it("maxTotal 出口 = 該日最大總量(量刻度的分母)", () => {
     const g = buildIntradayGeometry(
       {
         minutes: minutes([
@@ -405,7 +407,7 @@ describe("round3:overlayLines level 與副圖量刻度出口", () => {
       },
       { width: 270, height: 100 },
     );
-    expect(g.maxSide).toBe(7);
+    expect(g.maxTotal).toBe(10);
   });
 
   it("energyBars 高度分母已扣掉頂端留白,最高的 bar 不會頂滿全高(SC-8 刻度才不被蓋住)", () => {
@@ -414,8 +416,11 @@ describe("round3:overlayLines level 與副圖量刻度出口", () => {
       { minutes: minutes([[540, { c: 2_320_000, v: 10, o: 7, i: 3 }]]), meta: META },
       { width: 270, height: H },
     );
-    expect(g.energyBars[0]!.outerH).toBeLessThan(H);
-    expect(g.energyBars[0]!.outerH).toBe(H - SUB_TOP_PAD);
+    // 🔴 round5 E:分母改成總量後,滿格的是**整根堆疊**不是外盤那一段。
+    // 事前標為該變 —— 舊斷言之所以成立只是因為 fixture 的 o=7 恰好等於單邊最大值。
+    const b = g.energyBars[0]!;
+    expect(b.outerH).toBeLessThan(H);
+    expect(b.outerH + b.innerH + b.unchH).toBeCloseTo(H - SUB_TOP_PAD, 6);
   });
 });
 

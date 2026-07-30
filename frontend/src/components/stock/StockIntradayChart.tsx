@@ -11,6 +11,7 @@ import {
   minuteToX,
   overlayLines,
   plotWidth,
+  R_AXIS_W,
   X_END_MIN,
   X_LABEL_H,
   SUB_TOP_PAD,
@@ -75,6 +76,17 @@ const LEVEL_FILL: Record<OverlayLevel, string> = {
   ma20: "fill-ma20",
 };
 
+/** 左緣價位刻度的配色(round5 C):高於平盤紅、低於平盤綠、平盤白。
+ *  刻度值本身不變 —— 它們本來就是 ±10/8/6/4/2/0% 對應的價位,user 要的是「對應百分比的
+ *  數字」而不是顯示百分比字樣。`ref` 不可得(無昨收)時全部退回中性灰:那時沒有「平盤」
+ *  可言,硬分紅綠等於憑首筆成交價編一個基準出來(同 `hasRef` 的既有紀律)。 */
+function tickTone(priceMilli: number, refMilli: number | null): string {
+  if (refMilli === null || refMilli <= 0) return "fill-ink-dim";
+  if (priceMilli > refMilli) return "fill-bull";
+  if (priceMilli < refMilli) return "fill-bear";
+  return "fill-ink";
+}
+
 /** 右緣文字:CDP 五線印合法價位 + `*`(一眼分出是 CDP 不是 MA);MA 維持名稱 */
 function levelText(level: OverlayLevel, priceMilli: number): string {
   return level === "ma5" || level === "ma20"
@@ -87,6 +99,7 @@ const ChartStatic = memo(function ChartStatic({
   g,
   w,
   h,
+  refMilli,
   showVwap,
   oLines,
   clipAbove,
@@ -96,6 +109,8 @@ const ChartStatic = memo(function ChartStatic({
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
   w: number;
   h: number;
+  /** 參考價(左緣刻度判色用);純量,memo 安全 */
+  refMilli: number | null;
   showVwap: boolean;
   oLines: OverlayLine[];
   clipAbove: string;
@@ -124,7 +139,7 @@ const ChartStatic = memo(function ChartStatic({
       ) : null}
       {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
           上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
-      <line x1={Y_AXIS_W} x2={w} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
+      <line x1={Y_AXIS_W} x2={w - R_AXIS_W} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
       {X_LABELS.map(({ minute }) => (
         <line
           key={minute}
@@ -144,7 +159,7 @@ const ChartStatic = memo(function ChartStatic({
           <line
             data-testid="y-grid"
             x1={Y_AXIS_W}
-            x2={w}
+            x2={w - R_AXIS_W}
             y1={t.y}
             y2={t.y}
             className="stroke-line"
@@ -155,7 +170,7 @@ const ChartStatic = memo(function ChartStatic({
             data-testid="y-tick-price"
             x={2}
             y={Math.min(Math.max(t.y - 2, 8), h - 16)}
-            className="fill-ink-dim"
+            className={tickTone(t.priceMilli, refMilli)}
             fontSize="0.625rem"
           >
             {fmt(t.priceMilli)}
@@ -185,7 +200,7 @@ const ChartStatic = memo(function ChartStatic({
         <g key={`o-${l.level}`}>
           <line
             x1={Y_AXIS_W}
-            x2={w - 34}
+            x2={w - R_AXIS_W}
             y1={l.y}
             y2={l.y}
             className={LEVEL_STROKE[l.level]}
@@ -193,7 +208,7 @@ const ChartStatic = memo(function ChartStatic({
             strokeWidth={0.8}
           />
           <text
-            x={w - 32}
+            x={w - R_AXIS_W + 2}
             y={l.y + 3}
             className={LEVEL_FILL[l.level]}
             fontSize="0.5625rem"
@@ -259,18 +274,19 @@ function XAxisLabels({
   );
 }
 
-/** 內外盤能量副圖的 bar 層。**必須 memo**:hover 每個 mousemove 都 re-render 父層,
- *  這層最多 270 組 × 2 = 540 個 `<rect>`,不可每次重建(對齊 ChartStatic 的慣例)。
+/** 成交量副圖的 bar 層(round5 E:由「內外盤並排」改為「總量堆疊」)。
+ *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 組 × 3 個
+ *  `<rect>`,不可每次重建(對齊 ChartStatic 的慣例)。
  *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
 const EnergySub = memo(function EnergySub({
   bars,
-  maxSide,
+  maxTotal,
   w,
   h,
 }: {
   bars: EnergyBar[];
-  /** 歸一分母 = 該日單邊最大張數,即頂端刻度值(SC-8) */
-  maxSide: number;
+  /** 歸一分母 = 全日最大**總量**,即頂端刻度值 */
+  maxTotal: number;
   w: number;
   h: number;
 }) {
@@ -278,16 +294,26 @@ const EnergySub = memo(function EnergySub({
   const midY = h - (h - SUB_TOP_PAD) / 2;
   return (
     <g>
-      {/* 量刻度(SC-8):中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
+      {/* 量刻度:中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
           頂端那根不會蓋住頂端的刻度文字。
-          round4 項 5:兩個值移到**右緣**(textAnchor="end")—— 左緣讓給主圖的價位帶,
-          兩張圖的左界對齊。⚠ bar 一路畫到右緣,**右緣數字必然與 bar 同區域**
-          (盤中最新分鐘就在那裡),所以兩個數字都要靠描邊拉對比,見下。 */}
-      <line x1={Y_AXIS_W} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
+          刻度值 = 全日最大**總量**(round5 E)—— 舊的「單邊最大」讓資訊列的「量」
+          在副圖上找不到對應高度:未分類(開盤集合競價無 Bid/Ask 可比)整批不畫,
+          而刻度又只算單邊。實測 09:00 量 269 = 外 127 + 內 20 + 未分類 122,
+          舊刻度顯示 164。
+          兩個值靠右緣(textAnchor="end")—— 左緣讓給主圖的價位帶,兩張圖左界對齊。
+          ⚠ bar 畫到右緣帶左界為止,但中線數字仍可能與 bar 同區域,所以都要描邊。 */}
+      <line
+        x1={Y_AXIS_W}
+        x2={w - R_AXIS_W}
+        y1={midY}
+        y2={midY}
+        className="stroke-line"
+        strokeWidth={0.4}
+      />
       {/* 兩個數字都加同底色描邊(paintOrder="stroke" 讓描邊畫在字下面)。頂端那個有
-          SUB_TOP_PAD 清出的空白可靠,**中線那個沒有** —— 盤中右緣恆有 bar,不加對比
-          就會被 bar 蓋掉(SC-7)。 */}
+          SUB_TOP_PAD 清出的空白可靠,**中線那個沒有**,不加對比會被 bar 蓋掉。 */}
       <text
+        data-testid="vol-tick-top"
         x={w - 2}
         y={SUB_TOP_PAD - 2}
         textAnchor="end"
@@ -296,7 +322,7 @@ const EnergySub = memo(function EnergySub({
         paintOrder="stroke"
         fontSize="0.5rem"
       >
-        {maxSide}
+        {maxTotal}
       </text>
       <text
         data-testid="vol-tick-mid"
@@ -308,20 +334,24 @@ const EnergySub = memo(function EnergySub({
         paintOrder="stroke"
         fontSize="0.5rem"
       >
-        {Math.round(maxSide / 2)}
+        {Math.round(maxTotal / 2)}
       </text>
-      {bars.map((b) => (
-        <g key={`e-${b.x}`}>
-          <rect x={b.x} y={h - b.outerH} width={bw / 2} height={b.outerH} className="fill-bull" />
-          <rect
-            x={b.x + bw / 2}
-            y={h - b.innerH}
-            width={bw / 2}
-            height={b.innerH}
-            className="fill-bear"
-          />
-        </g>
-      ))}
+      {/* 堆疊(由下而上):外盤紅 → 內盤綠 → 未分類灰。整根以 `b.x` 為**中心** ——
+          `b.x` 是走勢線頂點與十字線的 x,舊版把 bar 畫在 `[b.x, b.x+bw]` 讓 `b.x`
+          變成左緣,十字線因此落在那根的左邊(round5 A,user 截圖指認)。 */}
+      {bars.map((b) => {
+        const x = b.x - bw / 2;
+        const outerY = h - b.outerH;
+        const innerY = outerY - b.innerH;
+        const unchY = innerY - b.unchH;
+        return (
+          <g key={`e-${b.x}`}>
+            <rect x={x} y={outerY} width={bw} height={b.outerH} className="fill-bull" />
+            <rect x={x} y={innerY} width={bw} height={b.innerH} className="fill-bear" />
+            <rect x={x} y={unchY} width={bw} height={b.unchH} className="fill-ink-dim" />
+          </g>
+        );
+      })}
     </g>
   );
 });
@@ -492,6 +522,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           g={g}
           w={mainW}
           h={mainH}
+          refMilli={ref}
           showVwap={toggles.vwap}
           oLines={oLines}
           clipAbove={clipAbove}
@@ -522,7 +553,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
             <line
               data-testid="crosshair-h"
               x1={Y_AXIS_W}
-              x2={mainW}
+              x2={mainW - R_AXIS_W}
               y1={hover.y}
               y2={hover.y}
               className="stroke-ink-muted"
@@ -576,7 +607,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
       <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="內外盤能量">
-        <EnergySub bars={subGeo.energyBars} maxSide={subGeo.maxSide} w={subW} h={subH} />
+        <EnergySub bars={subGeo.energyBars} maxTotal={subGeo.maxTotal} w={subW} h={subH} />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
           <line

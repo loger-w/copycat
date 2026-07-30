@@ -35,9 +35,15 @@ const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
  *  不必再為它另留空間;價位文字本身只需 ~24px。 */
 export const Y_AXIS_W = 46;
 
-/** 繪圖區寬度(扣掉左緣價位帶);至少 1 避免除以零。 */
+/** 右緣疊線標籤帶寬度(round5 D)。CDP/MA 的價位標原本畫在 `x = width − 32`,而繪圖區
+ *  一路到 `width` —— 標籤直接疊在走勢線上,與左緣價位帶當初的症狀是同一個。
+ *
+ *  取 40:最寬的標籤是四位數價位加 `*`(例 `1005.0*`,~34px),留 6px 呼吸。 */
+export const R_AXIS_W = 40;
+
+/** 繪圖區寬度(扣掉左右兩條軸帶);至少 1 避免除以零。 */
 export function plotWidth(width: number): number {
-  return Math.max(1, width - Y_AXIS_W);
+  return Math.max(1, width - Y_AXIS_W - R_AXIS_W);
 }
 
 /** 分鐘 → x 座標。**幾何與元件共用這一份** —— 兩邊各寫一次的話,任何 x 軸幾何改動
@@ -53,11 +59,14 @@ export interface Pt {
 }
 
 export interface EnergyBar {
+  /** 該分鐘的中心 x(= 走勢線頂點與十字線的 x);bar 由元件以此為中心左右各畫半根 */
   x: number;
   outer: number;
   inner: number;
+  unch: number;
   outerH: number;
   innerH: number;
+  unchH: number;
 }
 
 export interface YTick {
@@ -79,8 +88,9 @@ export interface IntradayGeometry {
   yDomain: [number, number]; // 毫元
   yTicks: YTick[];
   energyBars: EnergyBar[];
-  /** 內外盤能量的歸一分母 = 該日單邊最大張數(SC-8 量刻度的頂端值) */
-  maxSide: number;
+  /** 歸一分母 = 全日最大**總量**(外+內+未分類),即副圖頂端刻度值。
+   *  round5 E 之前是「單邊最大」,那讓資訊列的「量」在副圖上找不到對應高度。 */
+  maxTotal: number;
   /** 價格 → y 座標(overlay 線共用同一縮放) */
   toY: (priceMilli: number) => number;
   /** y 座標 → 價格(`toY` 的逆函數);回傳前夾制進 yDomain */
@@ -170,15 +180,21 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     }
   }
 
-  const maxSide = Math.max(1, ...entries.map(([, m]) => Math.max(m.o, m.i)));
+  // round5 E:分母是**全日最大總量**(外+內+未分類)而不是舊的「單邊最大」。
+  // 舊分母讓資訊列的「量」在副圖上找不到對應高度 —— 未分類(開盤集合競價沒有 Bid/Ask
+  // 可比,derive_side 判 neutral)整批不畫,而刻度又是單邊值。實測截圖 09:00:
+  // 量 269 = 外 127 + 內 20 + 未分類 122,舊刻度顯示 164。
+  const maxTotal = Math.max(1, ...entries.map(([, m]) => m.o + m.i + m.u));
   // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
   const energyH = Math.max(1, size.height - SUB_TOP_PAD);
   const energyBars = entries.map(([minute, m]) => ({
     x: toX(minute),
     outer: m.o,
     inner: m.i,
-    outerH: (m.o / maxSide) * energyH,
-    innerH: (m.i / maxSide) * energyH,
+    unch: m.u,
+    outerH: (m.o / maxTotal) * energyH,
+    innerH: (m.i / maxTotal) * energyH,
+    unchH: (m.u / maxTotal) * energyH,
   }));
 
   const yTicks: YTick[] = [];
@@ -242,7 +258,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     yDomain: [yBottom, yTop],
     yTicks,
     energyBars,
-    maxSide,
+    maxTotal,
     toY,
     priceAtY,
     minuteOf,
