@@ -35,6 +35,12 @@ class StockDayState:
     cum_inner: int = 0
     cum_outer: int = 0
     vwap_milli: int | None = None
+    # 當日最高 / 最低成交價(round5 項 1)。刻意由本狀態機逐 tick 維護而不取 TC4 的
+    # HighPrice/LowPrice —— 個股 REALTIME 帶不帶那兩個欄位沒有實證(2026-07-21 probe
+    # 的 33 個欄位樣本裡沒有),而這裡握有當日全部 tick(含 apply_backfill 重放),
+    # running max/min 是建構保證正確且天然單調。
+    high_milli: int | None = None
+    low_milli: int | None = None
     _last_cum: int = -1
     _amount_milli: int = 0  # Σ(價毫元 × 量),VWAP 分子
     _volume: int = 0
@@ -50,6 +56,9 @@ class StockDayState:
         self.cum_inner = 0
         self.cum_outer = 0
         self.vwap_milli = None
+        # 高低是當日衍生狀態,與 vwap 同批清;book/meta 才是盤外要保留的靜態值
+        self.high_milli = None
+        self.low_milli = None
         self._last_cum = -1
         self._amount_milli = 0
         self._volume = 0
@@ -94,6 +103,10 @@ class StockDayState:
 
     def _apply(self, tick: StockTick) -> None:
         self.ticks.append(tick)
+        if self.high_milli is None or tick.price_milli > self.high_milli:
+            self.high_milli = tick.price_milli
+        if self.low_milli is None or tick.price_milli < self.low_milli:
+            self.low_milli = tick.price_milli
         self._amount_milli += tick.price_milli * tick.qty
         self._volume += tick.qty
         if self._volume:
@@ -120,6 +133,11 @@ class StockDayState:
             if last
             else None,
             "vwap": self.vwap_milli,
+            # 高低與 vwap 同層(top-level)不進 meta:meta 是 TC4 來的靜態盤別資料
+            # (名稱 / 參考價 / 漲跌停),而高低是由成交推導的當日狀態。放這裡之後
+            # meta 為 None(只跑過回補、未收 REALTIME)時高低照樣有值。
+            "high": self.high_milli,
+            "low": self.low_milli,
             "cum_inner": self.cum_inner,
             "cum_outer": self.cum_outer,
             "minutes": {
@@ -133,7 +151,15 @@ class StockDayState:
                 for k, m in sorted(self.minutes.items())
             },
             "ticks": [
-                {"t": t.time, "p": t.price_milli, "q": t.qty, "side": t.side} for t in self.ticks
+                {
+                    "t": t.time,
+                    "p": t.price_milli,
+                    "q": t.qty,
+                    "side": t.side,
+                    "b": t.bid_milli,
+                    "a": t.ask_milli,
+                }
+                for t in self.ticks
             ],
             "book": {"bids": self.book.bids, "asks": self.book.asks} if self.book else None,
             "meta": {

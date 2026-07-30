@@ -36,9 +36,7 @@ class StockSource(Protocol):
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
 
-    def fetch_bars_range(
-        self, code: str, tf: str, start_date: str, end_date: str
-    ) -> list[Bar]: ...
+    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]: ...
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
 
@@ -189,9 +187,7 @@ class StockEngine:
             logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
             return []
 
-    async def bars_range(
-        self, code: str, tf: str, start_date: str, end_date: str
-    ) -> list[Bar]:
+    async def bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
         """K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。"""
         try:
             return await asyncio.to_thread(
@@ -344,6 +340,14 @@ class StockEngine:
                         "p": tick.price_milli,
                         "q": tick.qty,
                         "side": tick.side,
+                        "b": tick.bid_milli,
+                        "a": tick.ask_milli,
+                        # 當日高低掛 tick 而不另立 meta 訊息型別:engine 只發
+                        # tick / book / watchlist_quote 三種,而高低本來就只在成交時
+                        # 才會變,與 tick 同步天然正確。ingest 為真必已跑過 _apply,
+                        # 所以這兩個在此必不為 None。
+                        "h": state.high_milli,
+                        "l": state.low_milli,
                         "seq": state.seq,
                     }
                 )

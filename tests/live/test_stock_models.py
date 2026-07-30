@@ -211,7 +211,9 @@ class TestTickCarriesBidAsk:
         assert tick is not None
         assert tick.ask_milli is None
         assert tick.bid_milli == 2_380_000
-        assert tick.side == "outer"  # 現況:ask 不可得時 2380 對 bid 2380 → 既有判定
+        # ask 不可得 → derive_side 第一條(price >= ask → outer)整條跳過,落到第二條
+        # price(2380)<= bid(2380)→ inner。這是**既有**判定,補欄位不得改動它(W-18)。
+        assert tick.side == "inner"
 
     def test_hist_tick_keeps_bid_ask(self) -> None:
         row = {

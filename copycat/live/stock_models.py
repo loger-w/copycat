@@ -50,6 +50,11 @@ class StockTick:
     side: str  # "outer" | "inner" | "neutral"(成交當下對照 Bid/Ask)
     buy_sell_flag: int | None
     is_trial: bool
+    # 成交當下的最佳買賣價(= derive_side 的輸入,round5 明細欄位)。
+    # 有 default 是必要的:既有建構點(tests/live/test_stock_state.py、
+    # tests/server/test_stock_engine.py)以關鍵字建構且不會帶新欄位。
+    bid_milli: int | None = None
+    ask_milli: int | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +153,8 @@ def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockM
         side=derive_side(price, bid0, ask0),
         buy_sell_flag=_to_int(msg.get("FlagOfBuySell", "")),
         is_trial=is_trial_window(time_tp),
+        bid_milli=bid0,
+        ask_milli=ask0,
     )
     return tick, book, meta
 
@@ -163,6 +170,8 @@ def parse_hist_tick(code: str, row: dict) -> StockTick | None:
     if not precise or not date:
         return None
     time_tp, date_tp = _taipei_time(precise, date)
+    bid = to_milli(row.get("Bid", ""))
+    ask = to_milli(row.get("Ask", ""))
     tick = StockTick(
         code=code,
         price_milli=price,
@@ -170,8 +179,10 @@ def parse_hist_tick(code: str, row: dict) -> StockTick | None:
         cum_vol=_to_int(row.get("TradeVolume", "")) or 0,
         time=time_tp,
         trade_date=date_tp,
-        side=derive_side(price, to_milli(row.get("Bid", "")), to_milli(row.get("Ask", ""))),
+        side=derive_side(price, bid, ask),
         buy_sell_flag=None,
         is_trial=is_trial_window(time_tp),
+        bid_milli=bid,
+        ask_milli=ask,
     )
     return tick
