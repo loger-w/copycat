@@ -42,6 +42,9 @@ class _FakeSource:
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.cb = cb
 
+    def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
+        return []  # 江波圖回補在本檔不受測(CorrSource Protocol 對齊用)
+
     def close(self) -> None:
         self.closed = True
 

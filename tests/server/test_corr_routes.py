@@ -47,6 +47,9 @@ class FakeCorrSource:
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.cb = cb
 
+    def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
+        return []  # 江波圖回補的路由測試在 test_river_routes.py
+
     def close(self) -> None:
         return None
 
