@@ -28,6 +28,13 @@ export const SUB_TOP_PAD = 10;
 /** 左緣刻度的百分比階(SC-4:由上而下)。±10 直接用 upper/lower 原值、0 用 ref 原值。 */
 const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
 
+/** 分鐘 → x 座標。**幾何與元件共用這一份** —— 兩邊各寫一次的話,任何 x 軸幾何改動
+ *  都得同時改對兩處,而漂移的症狀是「線與刻度差幾 px」,目視幾乎抓不到
+ *  (同 `toY` / `priceAtY` 必須共用 `PAD_Y` 的理由)。 */
+export function minuteToX(minute: number, width: number): number {
+  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * width;
+}
+
 export interface Pt {
   x: number;
   y: number;
@@ -135,8 +142,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     const raw = yTop - ((y - PAD_Y) / plotH) * ySpan;
     return Math.min(yTop, Math.max(yBottom, Math.round(raw)));
   };
-  const toX = (minute: number): number =>
-    ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * size.width;
+  const toX = (minute: number): number => minuteToX(minute, size.width);
 
   const priceLine = entries.map(([minute, m]) => ({ minute, x: toX(minute), y: toY(m.c) }));
 

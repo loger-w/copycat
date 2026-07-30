@@ -8,6 +8,7 @@ import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
+  minuteToX,
   overlayLines,
   X_END_MIN,
   X_LABEL_H,
@@ -43,12 +44,6 @@ const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
   minute: m,
   label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
 }));
-
-/** 分鐘 → x 座標。**吃 width 參數**(不再閉包模組常數):viewBox 高度改為可變後,
- *  memo 子元件必須經 props 拿尺寸,模組級純函數也一併參數化以免兩套來源漂移。 */
-function toX(minute: number, width: number): number {
-  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * width;
-}
 
 function barW(width: number): number {
   return Math.max(1, width / (X_END_MIN - X_START_MIN) - 0.4);
@@ -129,8 +124,8 @@ const ChartStatic = memo(function ChartStatic({
       {X_LABELS.map(({ minute }) => (
         <line
           key={minute}
-          x1={toX(minute, w)}
-          x2={toX(minute, w)}
+          x1={minuteToX(minute, w)}
+          x2={minuteToX(minute, w)}
           y1={0}
           y2={h - X_LABEL_H}
           className="stroke-line"
@@ -236,7 +231,7 @@ function XAxisLabels({
   return (
     <g>
       {X_LABELS.map(({ minute, label }) => {
-        const x = toX(minute, w) + 2;
+        const x = minuteToX(minute, w) + 2;
         if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
         return (
           <text key={minute} x={x} y={h - 3} className="fill-time" fontSize="0.625rem">
@@ -397,7 +392,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
         ];
 
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
-  const timeTagX = hoverMin !== null ? clampTagX(toX(hoverMin, mainW), TIME_TAG.w, mainW) : null;
+  const timeTagX = hoverMin !== null ? clampTagX(minuteToX(hoverMin, mainW), TIME_TAG.w, mainW) : null;
   const timeTagSpan: [number, number] | null =
     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
 
@@ -473,8 +468,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
               <>
                 <line
                   data-testid="crosshair-v"
-                  x1={toX(hoverMin, mainW)}
-                  x2={toX(hoverMin, mainW)}
+                  x1={minuteToX(hoverMin, mainW)}
+                  x2={minuteToX(hoverMin, mainW)}
                   y1={0}
                   y2={plotBottom}
                   className="stroke-ink-muted"
@@ -482,7 +477,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
                   strokeWidth={0.7}
                 />
                 {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
-                <circle cx={toX(hoverMin, mainW)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
+                <circle cx={minuteToX(hoverMin, mainW)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
               </>
             ) : null}
             <line
@@ -546,8 +541,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
           <line
-            x1={toX(hoverMin, mainW)}
-            x2={toX(hoverMin, mainW)}
+            x1={minuteToX(hoverMin, mainW)}
+            x2={minuteToX(hoverMin, mainW)}
             y1={0}
             y2={subH}
             className="stroke-ink-muted"
