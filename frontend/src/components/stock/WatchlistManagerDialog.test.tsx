@@ -152,11 +152,12 @@ describe("WatchlistManagerDialog 群組管理(SC-14)", () => {
 });
 
 describe("WatchlistManagerDialog 股票管理(SC-14 / W-1)", () => {
-  it("逐檔列出自選全體(含未分組)與名稱", () => {
+  it("逐檔列出自選全體(含未分組)與名稱", async () => {
     open();
     const section = screen.getByLabelText("股票");
     expect(within(section).getByText("2317")).toBeTruthy(); // 未分組也要能管理
-    expect(within(section).getByText("鴻海")).toBeTruthy();
+    // 名稱表是另一個 query,晚一拍才到
+    await waitFor(() => expect(within(section).getByText("鴻海")).toBeTruthy());
   });
 
   it("checkbox 反映一檔多組的現況(W-1)", () => {
