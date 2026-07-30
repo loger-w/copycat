@@ -37,7 +37,11 @@ const SUB = { width: 800, height: 70 };
  *  寬度**直接取 `Y_AXIS_W`** 不另寫一份數字:兩份靠註解維持相等的話,任一方改動就讓
  *  「hover 價位標壓在走勢線上」這個本輪要修的症狀復發,而且沒有測試會發現。 */
 const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
-const TIME_TAG = { w: 34, h: 13 };
+/** 底部 hover 標籤(round4 項 3:時間 + 該分鐘成交價兩行)。
+ *  高度**往上長**不往下溢出 —— 盒子底邊已貼死 viewBox 底,而圖高由 StockChart 量測後
+ *  指派,不能為了標籤加高。寬度 40 是常數不是 JSX 硬編:`XAxisLabels` 的「與 tag 重疊
+ *  就不畫」靠 `tagSpan` 判定,寫死在 JSX 會讓遮蔽判定與實際寬度脫鉤。 */
+const TIME_TAG = { w: 40, h: 24 };
 
 function hhmm(minute: number): string {
   return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
@@ -667,8 +671,12 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
                 {hoverPrice !== null ? fmt(hoverPrice) : ""}
               </text>
             </g>
-            {/* 底部時間標籤 */}
-            {timeTagX !== null && hoverMin !== null ? (
+            {/* 底部標籤:上行時間、下行該分鐘成交價(round4 項 3)。
+                價位取 `hoverAgg.c` 與資訊列同源 —— 左緣 price-tag 是「自由量尺」(滑鼠 y),
+                兩者語意分權:左緣 = 我想量的價,底部 = 該分鐘真實成交。
+                時間黃(與 x 軸標籤同色)、價位紅綠(與圖上每個價格輸出同規則),
+                一眼分辨上行是時間語意、下行是價格語意。 */}
+            {timeTagX !== null && hoverMin !== null && hoverAgg !== undefined ? (
               <g transform={`translate(${timeTagX}, ${mainH - TIME_TAG.h})`}>
                 <rect
                   data-testid="time-tag"
@@ -680,12 +688,32 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
                 <text
                   data-testid="time-tag-text"
                   x={TIME_TAG.w / 2}
-                  y={TIME_TAG.h - 3.5}
+                  y={10}
                   textAnchor="middle"
                   className="fill-time"
                   fontSize="0.625rem"
                 >
                   {hhmm(hoverMin)}
+                </text>
+                <text
+                  data-testid="time-tag-price"
+                  x={TIME_TAG.w / 2}
+                  y={21}
+                  textAnchor="middle"
+                  // `ref` 的 null 檢查必須在最前面:`c > null` 會把 null 強轉 0,
+                  // 毫元恆 > 0 → 無昨收的商品被塗成紅色,打穿 hasRef 紀律(W-6)
+                  className={
+                    ref === null
+                      ? "fill-ink"
+                      : hoverAgg.c > ref
+                        ? "fill-bull"
+                        : hoverAgg.c < ref
+                          ? "fill-bear"
+                          : "fill-ink"
+                  }
+                  fontSize="0.625rem"
+                >
+                  {fmt(hoverAgg.c)}
                 </text>
               </g>
             ) : null}

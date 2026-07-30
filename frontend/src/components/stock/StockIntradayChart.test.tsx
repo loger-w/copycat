@@ -454,6 +454,80 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
   });
 });
 
+// 🟢 round4 項 3:底部 hover 標籤在時間下方多一行「該分鐘成交價」
+describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
+  function hover(container: HTMLElement, clientX = 39): void {
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX, clientY: 100 });
+  }
+
+  it("時間標下方多一行價位,值 = 該分鐘收盤(與資訊列同源同格式)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    hover(container);
+    expect(screen.getByTestId("time-tag-text").textContent).toBe("09:01");
+    // 541 分收盤 2_380_000 → "2380"(資訊列同值)
+    expect(screen.getByTestId("time-tag-price").textContent).toBe("2380");
+    expect(screen.getByTestId("chart-readout").textContent).toContain("2380");
+  });
+
+  it("兩行都置中對齊、盒子仍貼齊 viewBox 底邊(往上長不往下溢出)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    hover(container);
+    const rect = container.querySelector('[data-testid="time-tag"]')!;
+    const h = Number(rect.getAttribute("height"));
+    expect(h).toBe(24);
+    const g = rect.parentElement!;
+    // translate(x, mainH − h):底邊恰貼 viewBox 底(mainH 預設 260)
+    expect(g.getAttribute("transform")).toContain(`, ${260 - h})`);
+    expect(screen.getByTestId("time-tag-text").getAttribute("text-anchor")).toBe("middle");
+    expect(screen.getByTestId("time-tag-price").getAttribute("text-anchor")).toBe("middle");
+  });
+
+  it("價位行相對昨收上色:高於 → bull、低於 → bear", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />); // 2380 > ref 2320
+    hover(container);
+    expect(screen.getByTestId("time-tag-price").getAttribute("class")).toContain("fill-bull");
+    cleanup();
+
+    const bear = {
+      ...ACCUM,
+      minutes: new Map([[541, { c: 2_300_000, v: 10, i: 0, o: 10, u: 0, h: 2_300_000, l: 2_300_000 }]]),
+    };
+    const r2 = wrap(<StockIntradayChart accum={bear} />);
+    hover(r2.container);
+    expect(screen.getByTestId("time-tag-price").getAttribute("class")).toContain("fill-bear");
+  });
+
+  it("無昨收(meta.ref 為 null)→ 中性白,不得因 null 被當 0 而塗紅(W-6)", () => {
+    const noRef = fromSnapshot({
+      code: "2330", seq: 1,
+      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+      vwap: 2_380_000, cum_inner: 0, cum_outer: 10,
+      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={noRef} />);
+    hover(container);
+    const cls = screen.getByTestId("time-tag-price").getAttribute("class")!;
+    expect(cls).toContain("fill-ink");
+    expect(cls).not.toContain("fill-bull");
+    expect(cls).not.toContain("fill-bear");
+  });
+
+  it("時間行維持 fill-time(黃),與價格語意分色", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    hover(container);
+    expect(screen.getByTestId("time-tag-text").getAttribute("class")).toContain("fill-time");
+  });
+
+  it("滑到沒有成交的分鐘 → 整個底部標籤不出現(W-1 回歸)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 400, clientY: 100 });
+    expect(container.querySelector('[data-testid="time-tag"]')).toBeNull();
+    expect(container.querySelector('[data-testid="time-tag-price"]')).toBeNull();
+  });
+});
+
 // 🔴 round4 項 6:價位帶內縮 + 刻度右對齊 + 垂直置中 + 縮字
 describe("StockIntradayChart 左緣價位帶(round4 項 6)", () => {
   it("價位帶內縮(繪圖區左界更靠左)", () => {
