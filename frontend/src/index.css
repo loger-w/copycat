@@ -19,6 +19,16 @@
   --color-ma20: #b794f4; /* MA20 紫 */
   --color-idx-otc: #3b82f6; /* 櫃買指數識別藍(重疊圖固定色,不隨漲跌) */
 
+  /* 六腿江波圖:依腿**序位**指派(腿清單走設定檔,顏色不綁 leg key)。
+     序位 0 = base 腿(台指)用最亮的近白色 + 粗線,其餘五色相互可辨且都不是紅/綠
+     (紅綠在本專案是漲跌語意,拿來當腿識別色會誤讀)。 */
+  --color-river-1: #e8edf5;
+  --color-river-2: #3b82f6;
+  --color-river-3: #f0b429;
+  --color-river-4: #b794f4;
+  --color-river-5: #2dd4bf;
+  --color-river-6: #fb923c;
+
   --font-sans: "IBM Plex Sans TC", "Noto Sans TC", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
