@@ -53,8 +53,10 @@ const ACCUM = fromSnapshot({
   cum_inner: 2,
   cum_outer: 10,
   minutes: {
-    "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 },
-    "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0 },
+    // round4 項 1:per-minute h/l 是當日高低標記的定位依據 —— 標記畫在「摸到極值的
+    // 那一分鐘」上,而 541 的高(2_395_000)高於任何一分鐘的收盤,正是「摸到就算」的樣態
+    "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 },
+    "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_385_000 },
   },
   ticks: [],
   book: null,
@@ -468,26 +470,81 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     );
   }
 
-  it("域內的當日高低 → 兩條線 + 右緣價位標(數字 = top-level high/low 毫元轉元)", () => {
+  // 🔴 round4 項 1(B-1):橫虛線 → 三角標記 + 就地價位文字
+  it("域內的當日高低 → 三角標記 + 價位文字(數字 = top-level high/low 毫元轉元)", () => {
     const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
-    expect(container.querySelector('[data-testid="day-high"]')).toBeTruthy();
-    expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
+    expect(container.querySelector('polygon[data-testid="day-high"]')).toBeTruthy();
+    expect(container.querySelector('polygon[data-testid="day-low"]')).toBeTruthy();
     expect(screen.getByTestId("day-high-label").textContent).toBe("2395");
     expect(screen.getByTestId("day-low-label").textContent).toBe("2370");
   });
 
-  it("高低線的 y 對得上價格縮放(與疊線共用 toY)", () => {
+  it("整張圖不再有橫貫左右的高低虛線(4 3 / 0.8)", () => {
     const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
-    const g = geometryOf(container);
-    const high = container.querySelector('[data-testid="day-high"]')!;
-    expect(Number(high.getAttribute("y1"))).toBeCloseTo(g.toY(2_395_000), 5);
+    const dashed = [...container.querySelectorAll("line")].filter(
+      (l) => l.getAttribute("stroke-dasharray") === "4 3",
+    );
+    expect(dashed.length).toBe(0);
   });
 
-  // review R12:無漲跌停時 y 域由**分鐘收盤**極值決定,裝不下逐筆極值 → 線會畫到時間軸上
+  it("三角的尖端(apex)壓在極值價位上,body 朝圖內延伸", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+    const g = geometryOf(container);
+    const high = container.querySelector('polygon[data-testid="day-high"]')!;
+    const [apex, ...rest] = high.getAttribute("points")!.split(" ").map((p) => p.split(",").map(Number));
+    expect(apex![1]).toBeCloseTo(g.toY(2_395_000), 5);
+    // body 在 apex 下方(朝圖內),不會被 viewBox 頂端裁掉
+    for (const p of rest) expect(p[1]!).toBeGreaterThan(apex![1]!);
+  });
+
+  it("標記落在**摸到極值的那一分鐘**,不是最後一分鐘", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+    const g = geometryOf(container);
+    // 高低都發生在 541 分(ACCUM fixture 的 per-minute h/l);最後一分鐘是 542
+    const expectedX = g.priceLine[0]!.x;
+    const lastX = g.priceLine[g.priceLine.length - 1]!.x;
+    const apexX = (id: string) =>
+      Number(
+        container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!
+          .split(" ")[0]!.split(",")[0],
+      );
+    expect(apexX("day-high")).toBeCloseTo(expectedX, 5);
+    expect(apexX("day-high")).not.toBeCloseTo(lastX, 1);
+    expect(apexX("day-low")).toBeCloseTo(expectedX, 5);
+  });
+
+  it("當日高 === 當日低(漲停鎖死)→ 只畫高標,不畫低標", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_395_000)} />);
+    expect(container.querySelector('polygon[data-testid="day-high"]')).toBeTruthy();
+    expect(container.querySelector('polygon[data-testid="day-low"]')).toBeNull();
+  });
+
+  // review R12:無漲跌停時 y 域由**分鐘收盤**極值決定,裝不下逐筆極值 → 標記會落到時間軸上
   it("當日高超出 y 域 → 不畫(低點仍畫)", () => {
     const { container } = wrap(<StockIntradayChart accum={withHL(2_600_000, 2_370_000)} />);
     expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
     expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
+  });
+
+  it("域內但沒有分鐘的 h 等於該值(反查落空)→ 不畫,不退而求其次挑別的分鐘", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_392_000, 2_371_000)} />);
+    expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
+    expect(container.querySelector('[data-testid="day-low"]')).toBeNull();
+  });
+
+  it("minutes 缺 per-minute h/l(舊後端 snapshot)→ 不畫", () => {
+    const legacy = fromSnapshot({
+      code: "2330", seq: 2,
+      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
+      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
+      high: 2_380_000, low: 2_380_000,
+    });
+    const { container } = wrap(<StockIntradayChart accum={legacy} />);
+    expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
+    expect(container.querySelector('[data-testid="day-low"]')).toBeNull();
   });
 
   it("高低為 null(舊 snapshot / 尚無成交)→ 不畫", () => {
@@ -505,12 +562,18 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     expect(Number(dot.getAttribute("cy"))).toBeCloseTo(lp.y, 5);
   });
 
-  it("現價圈與數字依現價 vs 參考價三態上色", () => {
+  // 🔴 round4 項 2(B-3):即時價位文字移除,只留圓點 —— 文字會與右緣疊線價位標重疊
+  it("走勢線末端只有圓點,沒有即時價位文字", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelector('[data-testid="last-dot"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="last-price"]')).toBeNull();
+  });
+
+  it("現價圈依現價 vs 參考價三態上色", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />); // 2380 > ref 2320
     expect(container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")).toContain(
       "fill-bull",
     );
-    expect(screen.getByTestId("last-price").getAttribute("class")).toContain("fill-bull");
     cleanup();
 
     const bear = { ...ACCUM, last: { p: 2_300_000, t: "09:02:00.000", cum_vol: 12 } };

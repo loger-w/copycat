@@ -95,6 +95,19 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
     : `${fmtTickPrice(priceMilli)}*`;
 }
 
+/** 極值標記的三角(round4 項 1)。**apex 貼在價位上、body 朝圖內延伸** ——
+ *  body 朝圖外的話,當極值恰在 y 域端點(K 線視窗高低是常態、分時圖漲跌停時)
+ *  三角會被 viewBox 裁掉半截。 */
+function trianglePoints(x: number, y: number, dir: "up" | "down"): string {
+  const dy = dir === "up" ? 6 : -6;
+  return `${x},${y} ${x - 3.5},${y + dy} ${x + 3.5},${y + dy}`;
+}
+
+/** 極值價位文字的 baseline。預設畫在三角的外側,撞到圖框就翻到另一側。 */
+function markLabelY(y: number, dir: "up" | "down", bottomLimit: number): number {
+  return dir === "up" ? (y - 5 < 9 ? y + 15 : y - 5) : y + 12 > bottomLimit ? y - 10 : y + 12;
+}
+
 /** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
 const ChartStatic = memo(function ChartStatic({
   g,
@@ -105,10 +118,7 @@ const ChartStatic = memo(function ChartStatic({
   oLines,
   clipAbove,
   clipBelow,
-  highMilli,
-  lowMilli,
-  highY,
-  lowY,
+  plotBottom,
 }: {
   g: IntradayGeometry;
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -120,11 +130,8 @@ const ChartStatic = memo(function ChartStatic({
   oLines: OverlayLine[];
   clipAbove: string;
   clipBelow: string;
-  /** 當日高低(毫元)與其 y;**域外 / 缺值時 y 為 null → 不畫**。純量,memo 安全 */
-  highMilli: number | null;
-  lowMilli: number | null;
-  highY: number | null;
-  lowY: number | null;
+  /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
+  plotBottom: number;
 }) {
   return (
     <g>
@@ -227,34 +234,37 @@ const ChartStatic = memo(function ChartStatic({
           </text>
         </g>
       ))}
-      {/* 當日高低(SC-1)。虛線節奏 4 3 / 0.8 與 y 軸格線(2 3 / 0.5)刻意不同,
-          肉眼可區分「這是今天的高低」而不是又一條格線 */}
+      {/* 當日高低(round4 項 1)。橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」
+          這個語意,而使用者要的只是「最高點在哪、多少錢」。改成標在**摸到極值的那一分鐘**
+          上的三角 + 就地價位文字(參考 treading-king 分時圖)。
+          用三角不用圓點:圓點會與現價圈(r=3)、hover 收盤錨(r=2.5)混淆,而 ▲/▼ 的方向
+          本身就帶「高 / 低」語意,單色下仍可辨。
+          顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
+          其日高仍低於昨收,塗紅等於假陳述。 */}
       {([
-        ["day-high", highY, highMilli],
-        ["day-low", lowY, lowMilli],
-      ] as const).map(([id, y, milli]) =>
-        y === null || milli === null ? null : (
+        ["day-high", g.highMark, "up"],
+        ["day-low", g.lowMark, "down"],
+      ] as const).map(([id, mark, dir]) =>
+        mark === null ? null : (
           <g key={id}>
-            <line
+            <polygon
               data-testid={id}
-              x1={Y_AXIS_W}
-              x2={w - R_AXIS_W}
-              y1={y}
-              y2={y}
-              className="stroke-ink-muted"
-              strokeDasharray="4 3"
-              strokeWidth={0.8}
+              points={trianglePoints(mark.x, mark.y, dir)}
+              className="fill-ink-muted stroke-surface"
+              strokeWidth={1}
+              paintOrder="stroke"
             />
             <text
               data-testid={`${id}-label`}
-              x={w - R_AXIS_W + 2}
-              y={y - 2}
+              x={Math.min(Math.max(mark.x, Y_AXIS_W + 16), w - R_AXIS_W - 16)}
+              y={markLabelY(mark.y, dir, plotBottom)}
+              textAnchor="middle"
               className="fill-ink-muted stroke-surface"
               strokeWidth={2}
               paintOrder="stroke"
               fontSize="0.5625rem"
             >
-              {fmt(milli)}
+              {fmt(mark.priceMilli)}
             </text>
           </g>
         ),
@@ -422,10 +432,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   const clipBelow = `${uid}-below`;
 
   const g = useMemo(
-    () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, { width: mainW, height: mainH }),
+    () =>
+      buildIntradayGeometry(
+        { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+        { width: mainW, height: mainH },
+      ),
     // mainW / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)
-    [accum.minutes, accum.meta, mainW, mainH],
+    [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH],
   );
 
   const subGeo = useMemo(
@@ -472,12 +486,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
   const lastPt = lastPoint(g);
 
-  // 當日高低(SC-1)。**域外不畫** —— 沿用 overlayLines 的規則:無漲跌停時 y 域由
-  // 分鐘收盤極值決定,裝不下逐筆極值,線會畫到時間軸上。
-  const inDomain = (p: number | null): number | null =>
-    p === null || p < g.yDomain[0] || p > g.yDomain[1] ? null : g.toY(p);
-  const dayHighY = inDomain(accum.high);
-  const dayLowY = inDomain(accum.low);
+  // 當日高低標記已下沉進 geometry(`g.highMark` / `g.lowMark`):域外、等值反查落空、
+  // 舊後端缺 per-minute h/l 三種成因都收斂成 null = 不畫。
   // 現價圈(SC-2):值每 tick 都變 → 畫在 ChartStatic 之外,不打穿 memo
   const lastPrice = accum.last?.p ?? null;
   const lastTone =
@@ -586,26 +596,15 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           oLines={oLines}
           clipAbove={clipAbove}
           clipBelow={clipBelow}
-          highMilli={accum.high}
-          lowMilli={accum.low}
-          highY={dayHighY}
-          lowY={dayLowY}
+          plotBottom={plotBottom}
         />
         <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} />
+        {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
+            會與右緣疊線價位標(R_AXIS_W 帶)重疊;現價本來就在資訊列與報價 header
+            各有一份,圈的作用是「線走到哪」而不是再報一次價。 */}
         {lastPt !== null && lastPrice !== null ? (
           <g pointerEvents="none">
             <circle data-testid="last-dot" cx={lastPt.x} cy={lastPt.y} r={3} className={lastTone} />
-            <text
-              data-testid="last-price"
-              x={lastPt.x + 5}
-              y={lastPt.y - 4}
-              className={cn(lastTone, "stroke-surface")}
-              strokeWidth={2}
-              paintOrder="stroke"
-              fontSize="0.5625rem"
-            >
-              {fmt(lastPrice)}
-            </text>
           </g>
         ) : null}
         {/* hover 十字 + 軸標籤(SC-7)。

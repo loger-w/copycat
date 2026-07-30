@@ -55,6 +55,78 @@ describe("buildIntradayGeometry", () => {
     expect(g.priceLine[1]!.x).toBeCloseTo(Y_AXIS_W + 1, 5);
   });
 
+  // 🟢 round4 項 1:當日高低由橫虛線改成「標在摸到的那一分鐘上」的標記。
+  // 位置靠 per-minute h/l 與 top-level high 的**等值反查**取得。
+  describe("當日高低標記(highMark / lowMark)", () => {
+    const W = Y_AXIS_W + 270 + R_AXIS_W;
+    const MS = minutes([
+      [540, { c: 2_320_000, v: 1, h: 2_330_000, l: 2_310_000 }],
+      [545, { c: 2_380_000, v: 1, h: 2_395_000, l: 2_360_000 }],
+      [550, { c: 2_350_000, v: 1, h: 2_360_000, l: 2_300_000 }],
+    ]);
+
+    it("標記落在摸到極值的那一分鐘(不是收盤最高的分鐘、不是最後一分鐘)", () => {
+      const g = buildIntradayGeometry(
+        { minutes: MS, meta: META, high: 2_395_000, low: 2_300_000 },
+        { width: W, height: 100 },
+      );
+      expect(g.highMark).not.toBeNull();
+      expect(g.highMark!.priceMilli).toBe(2_395_000);
+      expect(g.highMark!.x).toBeCloseTo(minuteToX(545, W), 6);
+      expect(g.highMark!.y).toBeCloseTo(g.toY(2_395_000), 6);
+      // 低點在 550 分,而 550 的收盤(2_350_000)不是全日最低收盤 → 只有 per-minute l 找得到
+      expect(g.lowMark!.x).toBeCloseTo(minuteToX(550, W), 6);
+      expect(g.lowMark!.priceMilli).toBe(2_300_000);
+    });
+
+    it("high === low(漲停鎖死)→ 只給 highMark,lowMark 為 null", () => {
+      const flat = minutes([[540, { c: 2_550_000, v: 1, h: 2_550_000, l: 2_550_000 }]]);
+      const g = buildIntradayGeometry(
+        { minutes: flat, meta: META, high: 2_550_000, low: 2_550_000 },
+        { width: W, height: 100 },
+      );
+      expect(g.highMark).not.toBeNull();
+      expect(g.lowMark).toBeNull();
+    });
+
+    it("域外的極值不畫(沿用既有規則)", () => {
+      const g = buildIntradayGeometry(
+        { minutes: MS, meta: META, high: 9_999_000, low: 1_000 },
+        { width: W, height: 100 },
+      );
+      expect(g.highMark).toBeNull();
+      expect(g.lowMark).toBeNull();
+    });
+
+    it("域內但反查落空(沒有分鐘的 h 等於該值)→ 不畫,不退而求其次", () => {
+      const g = buildIntradayGeometry(
+        { minutes: MS, meta: META, high: 2_390_000, low: 2_305_000 },
+        { width: W, height: 100 },
+      );
+      expect(g.highMark).toBeNull();
+      expect(g.lowMark).toBeNull();
+    });
+
+    it("minutes 缺 h / l(舊後端降級)→ 不畫", () => {
+      const noHL = minutes([
+        [540, { c: 2_320_000, v: 1 }],
+        [545, { c: 2_395_000, v: 1 }],
+      ]);
+      const g = buildIntradayGeometry(
+        { minutes: noHL, meta: META, high: 2_395_000, low: 2_320_000 },
+        { width: W, height: 100 },
+      );
+      expect(g.highMark).toBeNull();
+      expect(g.lowMark).toBeNull();
+    });
+
+    it("high / low 未傳(呼叫端沒給)→ 兩者皆 null", () => {
+      const g = buildIntradayGeometry({ minutes: MS, meta: META }, { width: W, height: 100 });
+      expect(g.highMark).toBeNull();
+      expect(g.lowMark).toBeNull();
+    });
+  });
+
   // 🔴 round4 項 3:價位文字原本畫在 x=2 而繪圖區從 x=0 起,文字直接壓在走勢線上。
   // 左緣讓出 Y_AXIS_W 寬的價位帶後,`minuteToX` / `minuteOf` 必須**共用**同一組常數,
   // 否則反演只在兩端偏移(同 toY / priceAtY 共用 PAD_Y 的理由)。

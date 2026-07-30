@@ -74,6 +74,13 @@ export interface YTick {
   priceMilli: number;
 }
 
+/** 當日極值標記(round4 項 1)。位置 = 摸到該價位的那一分鐘,值 = tick 級極值本身。 */
+export interface ExtremeMark {
+  x: number;
+  y: number;
+  priceMilli: number;
+}
+
 export interface IntradayGeometry {
   priceLine: (Pt & { minute: number })[];
   vwapLine: (Pt & { vwap: number })[];
@@ -87,6 +94,9 @@ export interface IntradayGeometry {
   lowerY: number | null;
   yDomain: [number, number]; // 毫元
   yTicks: YTick[];
+  /** 當日高 / 低的標記(round4 項 1);域外、反查落空、缺 per-minute h/l 一律 null = 不畫 */
+  highMark: ExtremeMark | null;
+  lowMark: ExtremeMark | null;
   energyBars: EnergyBar[];
   /** 歸一分母 = 全日最大**總量**(外+內+未分類),即副圖頂端刻度值。
    *  round5 E 之前是「單邊最大」,那讓資訊列的「量」在副圖上找不到對應高度。 */
@@ -120,6 +130,9 @@ export interface OverlayLine {
 interface Input {
   minutes: Map<number, MinuteAgg>;
   meta: StockMeta | null;
+  /** 當日 tick 級高 / 低(後端 running max/min)。未傳 → 不畫標記。 */
+  high?: number | null;
+  low?: number | null;
 }
 
 interface Size {
@@ -247,12 +260,28 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
         ].join(" ")
       : "";
 
+  // 當日高低標記(round4 項 1)。**等值反查**:找出 per-minute h(或 l)恰等於當日極值的
+  // 那一分鐘,取它的 x。反查落空一律回 null(不畫)而不是退而求其次挑「收盤最接近的分鐘」——
+  // 位置錯就是資料錯,而且完全靜默。落空的三種成因(域外 / 無等值分鐘 / 舊後端缺 h,l)
+  // 都收斂到同一個安全結果。
+  const markFor = (target: number | null | undefined, pick: "h" | "l"): ExtremeMark | null => {
+    if (target == null) return null;
+    if (target < yBottom || target > yTop) return null; // 域外不畫(既有規則)
+    const hit = entries.find(([, m]) => (pick === "h" ? m.h : m.l) === target);
+    return hit === undefined ? null : { x: toX(hit[0]), y: toY(target), priceMilli: target };
+  };
+  const highMark = markFor(input.high, "h");
+  // 高 === 低(漲停鎖死 / 一字盤)時兩個標記會疊在同一點變成看不懂的黑塊 → 只留高標
+  const lowMark = input.low != null && input.low === input.high ? null : markFor(input.low, "l");
+
   return {
     priceLine,
     vwapLine,
     refY,
     hasRef,
     areaPolygon,
+    highMark,
+    lowMark,
     upperY: upper != null && upper <= yTop ? toY(upper) : null,
     lowerY: lower != null && lower >= yBottom ? toY(lower) : null,
     yDomain: [yBottom, yTop],
