@@ -23,6 +23,13 @@ export interface MinuteAgg {
   i: number;
   o: number;
   u: number;
+  /** 分鐘內高 / 低(round4 項 1;與後端 `MinuteAgg.high_milli/low_milli` 等值)。
+   *
+   *  **選填且 `null` 有意義** —— `null` = 「這一分鐘的高低不可知」(舊後端 snapshot 沒給),
+   *  不是「等於收盤價」。拿 `c` 頂替會讓分時圖的等值反查(`minute.h === accum.high`)
+   *  命中錯的分鐘 → 標記畫在錯的時間點,而且完全靜默。 */
+  h?: number | null;
+  l?: number | null;
 }
 
 export interface TickRow {
@@ -102,7 +109,7 @@ interface SnapshotShape {
 export function fromSnapshot(snap: SnapshotShape): StockAccum {
   const minutes = new Map<number, MinuteAgg>();
   for (const [k, v] of Object.entries(snap.minutes ?? {})) {
-    minutes.set(Number(k), { ...v });
+    minutes.set(Number(k), { ...v, h: v.h ?? null, l: v.l ?? null });
   }
   const volume = snap.last?.cum_vol ?? 0;
   return {
@@ -131,12 +138,18 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
   const key = minuteKey(msg.t);
   const minutes = new Map(acc.minutes);
   const prev = minutes.get(key) ?? { c: 0, v: 0, i: 0, o: 0, u: 0 };
+  // 分鐘高低三條路徑:新分鐘(v=0)→ 本筆;已知高低 → max/min;
+  // **高低不可知(舊 snapshot:h 為 null 但已有量)→ 維持 null** ——
+  // 只用「本次載入後看到的 tick」算出來的極值不是整分鐘的極值,不可冒充。
+  const unknown = prev.v > 0 && prev.h == null;
   const agg: MinuteAgg = {
     c: msg.p,
     v: prev.v + msg.q,
     i: prev.i + (msg.side === "inner" ? msg.q : 0),
     o: prev.o + (msg.side === "outer" ? msg.q : 0),
     u: prev.u + (msg.side === "neutral" ? msg.q : 0),
+    h: unknown ? null : Math.max(prev.h ?? msg.p, msg.p),
+    l: unknown ? null : Math.min(prev.l ?? msg.p, msg.p),
   };
   minutes.set(key, agg);
   const amountMilli = acc.amountMilli + msg.p * msg.q;

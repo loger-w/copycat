@@ -23,6 +23,12 @@ class MinuteAgg:
     inner: int = 0
     outer: int = 0
     unch: int = 0
+    # 分鐘內高低(round4 項 1)。分時圖要把當日高低標在「摸到的那一分鐘」上,而
+    # top-level high/low 只有值沒有時間歸屬 —— 前端靠 `minute.h == accum.high` 等值反查
+    # 定位,那條等式由 `_apply` 同源維護建構保證(day high = max(minute highs))。
+    # **預設必須是 None 不是 0**:`min(0, price)` 會把最低價永久卡在 0,而且是靜默錯值。
+    high_milli: int | None = None
+    low_milli: int | None = None
 
 
 @dataclass
@@ -114,6 +120,13 @@ class StockDayState:
         minute_key = int(tick.time[:2]) * 60 + int(tick.time[3:5])
         agg = self.minutes.setdefault(minute_key, MinuteAgg())
         agg.close_milli = tick.price_milli
+        # 與 top-level high/low 同一批維護 → day high == max(minute highs) 由建構保證
+        agg.high_milli = (
+            tick.price_milli if agg.high_milli is None else max(agg.high_milli, tick.price_milli)
+        )
+        agg.low_milli = (
+            tick.price_milli if agg.low_milli is None else min(agg.low_milli, tick.price_milli)
+        )
         agg.volume += tick.qty
         if tick.side == "outer":
             agg.outer += tick.qty
@@ -147,6 +160,10 @@ class StockDayState:
                     "i": m.inner,
                     "o": m.outer,
                     "u": m.unch,
+                    # additive(round4 項 1):舊前端忽略未知 key;新前端缺 key 時填 null
+                    # 而不是拿 c 頂替 —— 頂替會讓等值反查命中錯的分鐘 = 靜默標錯位置
+                    "h": m.high_milli,
+                    "l": m.low_milli,
                 }
                 for k, m in sorted(self.minutes.items())
             },

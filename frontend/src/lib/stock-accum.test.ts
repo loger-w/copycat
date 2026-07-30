@@ -76,6 +76,45 @@ describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
   });
 });
 
+describe("per-minute 高低(round4 項 1)", () => {
+  it("snapshot 帶 h / l → 原樣進 minutes", () => {
+    const acc = fromSnapshot({
+      ...SNAP,
+      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 } },
+    });
+    expect(acc.minutes.get(541)?.h).toBe(2_395_000);
+    expect(acc.minutes.get(541)?.l).toBe(2_370_000);
+  });
+
+  it("snapshot 缺 h / l(舊後端)→ null,**不拿 c 頂替**", () => {
+    // 頂替會讓「minute.h === accum.high」的等值反查命中錯的分鐘 = 靜默標錯位置;
+    // null 則讓反查落空 → 標記不畫(誠實降級)
+    const acc = fromSnapshot(SNAP);
+    expect(acc.minutes.get(541)?.h).toBeNull();
+    expect(acc.minutes.get(541)?.l).toBeNull();
+  });
+
+  it("applyTick 在同一分鐘內滾動 h / l", () => {
+    let acc = fromSnapshot({ ...SNAP, minutes: {}, ticks: [], last: null, vwap: null });
+    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:10.000", p: 2_380_000, q: 1, side: "outer", seq: 4 });
+    expect(acc.minutes.get(541)?.h).toBe(2_380_000);
+    expect(acc.minutes.get(541)?.l).toBe(2_380_000); // 單筆分鐘:高 = 低 = 該筆
+    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:30.000", p: 2_395_000, q: 1, side: "outer", seq: 5 });
+    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:50.000", p: 2_370_000, q: 1, side: "inner", seq: 6 });
+    expect(acc.minutes.get(541)?.h).toBe(2_395_000);
+    expect(acc.minutes.get(541)?.l).toBe(2_370_000);
+    expect(acc.minutes.get(541)?.c).toBe(2_370_000); // 收盤與高低分離
+  });
+
+  it("舊 snapshot 來的分鐘(h=null 且 v>0)再吃 tick → h 仍為 null", () => {
+    // 只用「本次載入後看到的 tick」算出來的高低不是整分鐘的高低,不可冒充
+    let acc = fromSnapshot(SNAP); // 541 有量、無 h/l
+    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:55.000", p: 2_390_000, q: 1, side: "outer", seq: 4 });
+    expect(acc.minutes.get(541)?.h).toBeNull();
+    expect(acc.minutes.get(541)?.l).toBeNull();
+  });
+});
+
 describe("applyTick", () => {
   it("accumulates minutes, vwap and inner/outer(與後端 StockDayState 等值)", () => {
     // 後端 tests/live/test_stock_state.py::TestAggregation 同一組數字

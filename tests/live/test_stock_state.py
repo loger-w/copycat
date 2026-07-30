@@ -80,6 +80,67 @@ class TestAggregation:
         assert snap["minutes"]
 
 
+class TestMinuteHighLow:
+    """per-minute 高低(round4 項 1):分時圖要把當日高低標在**摸到的那一分鐘**上,
+    而 top-level high/low 只有值沒有時間歸屬。"""
+
+    def test_minute_high_low_tracks_intra_minute_swing(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
+        st.ingest(_tick(20, price=2_395_000, time="09:01:30.000"))
+        st.ingest(_tick(30, price=2_370_000, time="09:01:50.000"))
+        st.ingest(_tick(40, price=2_385_000, time="09:02:10.000"))
+        m1 = st.minutes[9 * 60 + 1]
+        assert m1.high_milli == 2_395_000
+        assert m1.low_milli == 2_370_000
+        assert m1.close_milli == 2_370_000  # 收盤仍是最後一筆,與高低分離
+        m2 = st.minutes[9 * 60 + 2]
+        assert m2.high_milli == 2_385_000
+        assert m2.low_milli == 2_385_000  # 單筆分鐘:高 = 低 = 該筆
+
+    def test_low_default_is_none_not_zero(self) -> None:
+        # 預設 0 會讓 min(0, p) 把最低價永久卡在 0(靜默錯值,畫面上就是標記黏在 0 元)
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
+        assert st.minutes[9 * 60 + 1].low_milli == 2_380_000
+
+    def test_snapshot_minutes_carry_h_l(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
+        st.ingest(_tick(20, price=2_395_000, time="09:01:30.000"))
+        entry = st.snapshot()["minutes"]["541"]
+        assert entry["h"] == 2_395_000
+        assert entry["l"] == 2_380_000
+        assert entry["c"] == 2_395_000
+
+    def test_day_high_equals_max_of_minute_highs(self) -> None:
+        """前端靠 `minute.h === accum.high` 等值反查定位 —— 這條等式必須由建構保證,
+        否則標記會落空(或更糟:命中錯的分鐘)。"""
+        st = StockDayState()
+        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
+        st.ingest(_tick(20, price=2_395_000, time="09:03:30.000"))
+        st.ingest(_tick(30, price=2_370_000, time="09:05:50.000"))
+        assert st.high_milli == max(m.high_milli or 0 for m in st.minutes.values())
+        assert st.low_milli == min(m.low_milli or 0 for m in st.minutes.values())
+
+    def test_backfill_replay_equals_incremental_ingest(self) -> None:
+        """回補重放路徑也要維持等式(apply_backfill 走 _apply,不是另一條計算)。"""
+        ticks = [
+            _tick(10, price=2_380_000, time="09:01:10.000"),
+            _tick(20, price=2_395_000, time="09:01:30.000"),
+            _tick(30, price=2_370_000, time="09:01:50.000"),
+        ]
+        live = StockDayState()
+        for t in ticks:
+            live.ingest(t)
+        back = StockDayState()
+        back.apply_backfill(ticks)
+        key = 9 * 60 + 1
+        assert back.minutes[key].high_milli == live.minutes[key].high_milli == 2_395_000
+        assert back.minutes[key].low_milli == live.minutes[key].low_milli == 2_370_000
+        assert back.high_milli == max(m.high_milli or 0 for m in back.minutes.values())
+
+
 class TestApplyBackfill:
     def test_atomic_rebuild_and_seq_jump(self) -> None:
         st = StockDayState()
