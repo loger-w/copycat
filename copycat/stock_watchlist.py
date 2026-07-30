@@ -1,7 +1,13 @@
 """個股自選清單持久化(design v4 §2.5;atomic JSON、無 DB — 專案慣例)。
 
-v2(stock-ui-upgrade SC-6):群組 schema `{"groups": [{"name", "codes"}]}`;
-v1(`{"codes": [...]}`)讀時遷移為單一「自選」群組。上限以跨群組聯集計。
+v3(stock-ui-round5 §🔴-4):`{"codes": [...], "groups": [{"name", "codes"}]}`。
+`codes` = 自選全體(有序)= 訂閱池;`groups` 只記成員關係。
+**未分組 = codes − ∪groups 衍生不另存** —— 另存一份 ungrouped 會產生「同一檔同時在
+未分組與某群組」的可違反不變式,而那個違反在畫面上是「同一檔出現兩次」= 靜默資料錯。
+
+讀時遷移(不就地寫檔):v2(有 groups 無 codes)→ `codes = union(groups)`(畫面零差異);
+v1(只有 codes)→ codes 原樣 + 零群組(v1 從來沒有群組概念,包成假的「自選」組是 v2
+時代沒有未分組桶的權宜)。
 """
 
 from __future__ import annotations
@@ -19,8 +25,13 @@ class Group(TypedDict):
     codes: list[str]
 
 
+class Watchlist(TypedDict):
+    codes: list[str]
+    groups: list[Group]
+
+
 WATCHLIST_LIMIT = 30
-_CACHE_VERSION = 2
+_CACHE_VERSION = 3
 # 4-6 位英數且至少一位數字(涵蓋 00637L 等字母尾碼 ETF;design r1-F6)。
 # 存在性不在此驗 — SUBQUOTE 對不存在 symbol 照回 OK,推播健檢才是真閘。
 _CODE_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9]{4,6}$")
@@ -36,19 +47,6 @@ def validate_code(code: str) -> bool:
     return _CODE_RE.match(code) is not None
 
 
-def load_watchlist_groups(path: Path = DEFAULT_PATH) -> list[Group]:
-    if not path.exists():
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if "groups" in payload:
-        return [
-            {"name": str(g["name"]), "codes": list(g["codes"])} for g in payload["groups"]
-        ]
-    codes = list(payload.get("codes", []))
-    # v1 讀時遷移(不就地寫檔,下次 save 落 v2)
-    return [{"name": "自選", "codes": codes}] if codes else []
-
-
 def union(groups: list[Group]) -> list[str]:
     """跨群組聯集,首見序去重。"""
     seen: list[str] = []
@@ -59,11 +57,29 @@ def union(groups: list[Group]) -> list[str]:
     return seen
 
 
-def save_watchlist_groups(path: Path, groups: list[Group]) -> list[Group]:
-    """驗證(code / 群組名)+ 群組內去重(保序)+ 聯集上限 + atomic 寫 v2。"""
+def ungrouped(wl: Watchlist) -> list[str]:
+    """不屬任何群組的 code,保 `codes` 序(衍生集合,不落檔)。"""
+    grouped = set(union(wl["groups"]))
+    return [code for code in wl["codes"] if code not in grouped]
+
+
+def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
+    if not path.exists():
+        return {"codes": [], "groups": []}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    groups: list[Group] = [
+        {"name": str(g["name"]), "codes": list(g["codes"])} for g in payload.get("groups", [])
+    ]
+    if "codes" in payload:  # v3 / v1
+        return {"codes": list(payload["codes"]), "groups": groups}
+    return {"codes": union(groups), "groups": groups}  # v2 遷移
+
+
+def save_watchlist(path: Path, wl: Watchlist) -> Watchlist:
+    """驗證(群組名 / code)+ 去重保序 + 群組成員補進 codes + 上限 + atomic 寫 v3。"""
     cleaned: list[Group] = []
     names: set[str] = set()
-    for g in groups:
+    for g in wl["groups"]:
         name = g["name"].strip()
         if not name or name in names:
             raise WatchlistError("BAD_GROUP")
@@ -75,15 +91,25 @@ def save_watchlist_groups(path: Path, groups: list[Group]) -> list[Group]:
             if code not in deduped:
                 deduped.append(code)
         cleaned.append({"name": name, "codes": deduped})
-    if len(union(cleaned)) > WATCHLIST_LIMIT:
+    codes: list[str] = []
+    for code in wl["codes"]:
+        if not validate_code(code):
+            raise WatchlistError("BAD_CODE")
+        if code not in codes:
+            codes.append(code)
+    # 「加進群組」蘊含「加進自選」:群組成員缺席 codes 時補進尾端(語意無矛盾,不報錯)
+    for code in union(cleaned):
+        if code not in codes:
+            codes.append(code)
+    if len(codes) > WATCHLIST_LIMIT:
         raise WatchlistError("WATCHLIST_FULL")
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         path,
         json.dumps(
-            {"_cache_version": _CACHE_VERSION, "groups": cleaned},
+            {"_cache_version": _CACHE_VERSION, "codes": codes, "groups": cleaned},
             ensure_ascii=False,
             indent=1,
         ),
     )
-    return cleaned
+    return {"codes": codes, "groups": cleaned}

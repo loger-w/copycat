@@ -37,8 +37,8 @@ from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
     Group,
     WatchlistError,
-    load_watchlist_groups,
-    save_watchlist_groups,
+    load_watchlist,
+    save_watchlist,
     union,
     validate_code,
 )
@@ -78,6 +78,7 @@ class GroupBody(BaseModel):
 
 class GroupsBody(BaseModel):
     groups: list[GroupBody]
+    codes: list[str] | None = None  # v3 自選全體;缺省 → union(groups)(舊 client 相容)
 
 
 class PreviewBody(BaseModel):
@@ -185,7 +186,7 @@ def create_app(
                     checkpoint=backfill_date is None,
                 )
                 await stock.start()
-                persisted = union(load_watchlist_groups(wl_path))
+                persisted = load_watchlist(wl_path)["codes"]
                 if persisted:
                     await stock.set_watchlist(persisted)
         except Exception:
@@ -442,15 +443,17 @@ def create_app(
     @app.get("/api/stock/watchlist")
     async def stock_watchlist_get(request: Request) -> dict:
         _stock(request)
-        return {"groups": load_watchlist_groups(wl_path)}
+        wl = load_watchlist(wl_path)
+        return {"codes": wl["codes"], "groups": wl["groups"]}
 
     @app.put("/api/stock/watchlist")
     async def stock_watchlist_put(request: Request, body: GroupsBody) -> dict:
         stock = _stock(request)
         groups: list[Group] = [{"name": g.name, "codes": g.codes} for g in body.groups]
-        saved = save_watchlist_groups(wl_path, groups)  # WatchlistError → 400(handler)
-        await stock.set_watchlist(union(saved))
-        return {"groups": saved}
+        codes = body.codes if body.codes is not None else union(groups)
+        saved = save_watchlist(wl_path, {"codes": codes, "groups": groups})  # 400 由 handler
+        await stock.set_watchlist(saved["codes"])  # 未分組也要進訂閱池
+        return {"codes": saved["codes"], "groups": saved["groups"]}
 
     @app.get("/api/stock/overlay/{code}")
     async def stock_overlay(request: Request, code: str) -> dict:
