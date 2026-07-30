@@ -28,11 +28,23 @@ export const SUB_TOP_PAD = 10;
 /** 左緣刻度的百分比階(SC-4:由上而下)。±10 直接用 upper/lower 原值、0 用 ref 原值。 */
 const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
 
+/** 左緣價位帶寬度(round4 項 3)。價位文字原本畫在 `x=2` 而繪圖區從 `x=0` 起,
+ *  文字直接壓在走勢線與紅綠填色上。讓出這條帶後繪圖區改為 `[Y_AXIS_W, width]`。
+ *
+ *  取 46 = 元件的 `PRICE_TAG.w`:hover 價位標(左上角固定在 x=0)恰好整格塞進帶內,
+ *  不必再為它另留空間;價位文字本身只需 ~24px。 */
+export const Y_AXIS_W = 46;
+
+/** 繪圖區寬度(扣掉左緣價位帶);至少 1 避免除以零。 */
+export function plotWidth(width: number): number {
+  return Math.max(1, width - Y_AXIS_W);
+}
+
 /** 分鐘 → x 座標。**幾何與元件共用這一份** —— 兩邊各寫一次的話,任何 x 軸幾何改動
  *  都得同時改對兩處,而漂移的症狀是「線與刻度差幾 px」,目視幾乎抓不到
  *  (同 `toY` / `priceAtY` 必須共用 `PAD_Y` 的理由)。 */
 export function minuteToX(minute: number, width: number): number {
-  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * width;
+  return Y_AXIS_W + ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * plotWidth(width);
 }
 
 export interface Pt {
@@ -193,8 +205,13 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
 
   const haveMinutes = new Set(entries.map(([k]) => k));
   const minuteOf = (xPx: number): number | null => {
-    if (xPx < 0 || xPx > size.width) return null;
-    const m = Math.round((xPx / size.width) * (X_END_MIN - X_START_MIN)) + X_START_MIN;
+    // 價位帶內(x < Y_AXIS_W)不對應任何分鐘 —— 不夾制成 09:00,否則滑過左緣價位文字時
+    // 十字線會憑空指到開盤那一分鐘。必須與 `minuteToX` 共用 Y_AXIS_W / plotWidth,
+    // 各自硬編會讓反演只在兩端偏移(同 toY / priceAtY 的教訓)。
+    if (xPx < Y_AXIS_W || xPx > size.width) return null;
+    const m =
+      Math.round(((xPx - Y_AXIS_W) / plotWidth(size.width)) * (X_END_MIN - X_START_MIN)) +
+      X_START_MIN;
     return haveMinutes.has(m) ? m : null;
   };
 

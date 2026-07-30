@@ -10,10 +10,12 @@ import {
   buildIntradayGeometry,
   minuteToX,
   overlayLines,
+  plotWidth,
   X_END_MIN,
   X_LABEL_H,
   SUB_TOP_PAD,
   X_START_MIN,
+  Y_AXIS_W,
   type EnergyBar,
   type IntradayGeometry,
   type OverlayLevel,
@@ -46,7 +48,7 @@ const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
 }));
 
 function barW(width: number): number {
-  return Math.max(1, width / (X_END_MIN - X_START_MIN) - 0.4);
+  return Math.max(1, plotWidth(width) / (X_END_MIN - X_START_MIN) - 0.4);
 }
 
 /** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
@@ -120,7 +122,7 @@ const ChartStatic = memo(function ChartStatic({
       ) : null}
       {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
           上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
-      <line x1={0} x2={w} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
+      <line x1={Y_AXIS_W} x2={w} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
       {X_LABELS.map(({ minute }) => (
         <line
           key={minute}
@@ -132,9 +134,21 @@ const ChartStatic = memo(function ChartStatic({
           strokeWidth={0.4}
         />
       ))}
-      {/* Y 軸刻度:只剩左緣價位(round3 SC-1:右緣 % 欄移除,讓位給 CDP 價位標) */}
+      {/* Y 軸刻度:左緣價位(round3 SC-1:右緣 % 欄移除,讓位給 CDP 價位標)
+          + 對應水平格線(round4 項 4)。線起於價位帶右緣,不穿過價位文字;
+          風格與 K 線圖的 y 軸格線一致(stroke-line / 2 3 / 0.5)。 */}
       {g.yTicks.map((t) => (
         <g key={`yt-${t.priceMilli}`}>
+          <line
+            data-testid="y-grid"
+            x1={Y_AXIS_W}
+            x2={w}
+            y1={t.y}
+            y2={t.y}
+            className="stroke-line"
+            strokeDasharray="2 3"
+            strokeWidth={0.5}
+          />
           <text
             data-testid="y-tick-price"
             x={2}
@@ -168,7 +182,7 @@ const ChartStatic = memo(function ChartStatic({
         // key 用 level 不用文字:文字現在是價位,兩條線同價時會撞 key
         <g key={`o-${l.level}`}>
           <line
-            x1={0}
+            x1={Y_AXIS_W}
             x2={w - 34}
             y1={l.y}
             y2={l.y}
@@ -262,13 +276,15 @@ const EnergySub = memo(function EnergySub({
   const midY = h - (h - SUB_TOP_PAD) / 2;
   return (
     <g>
-      {/* 量刻度(SC-8):中線淡橫線 + 左緣兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
-          頂端那根不會蓋住刻度文字。 */}
-      <line x1={0} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
-      <text x={2} y={SUB_TOP_PAD - 2} className="fill-ink-dim" fontSize="0.5rem">
+      {/* 量刻度(SC-8):中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
+          頂端那根不會蓋住刻度文字。
+          round4 項 5:兩個值移到**右緣**(textAnchor="end")—— 左緣讓給主圖的價位帶,
+          兩張圖的左界對齊;bar 從 Y_AXIS_W 起,不會壓到右緣數字。 */}
+      <line x1={Y_AXIS_W} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
+      <text x={w - 2} y={SUB_TOP_PAD - 2} textAnchor="end" className="fill-ink-dim" fontSize="0.5rem">
         {maxSide}
       </text>
-      <text x={2} y={midY - 2} className="fill-ink-dim" fontSize="0.5rem">
+      <text x={w - 2} y={midY - 2} textAnchor="end" className="fill-ink-dim" fontSize="0.5rem">
         {Math.round(maxSide / 2)}
       </text>
       {bars.map((b) => (
@@ -482,7 +498,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
             ) : null}
             <line
               data-testid="crosshair-h"
-              x1={0}
+              x1={Y_AXIS_W}
               x2={mainW}
               y1={hover.y}
               y2={hover.y}
