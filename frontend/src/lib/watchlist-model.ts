@@ -1,0 +1,160 @@
+/** 自選清單模型純函數(stock-ui-round5 §🟢-7)。
+ *
+ *  schema v3:`codes` = 自選全體(有序)= 訂閱池,`groups` 只記成員關係,
+ *  **未分組 = codes − ∪groups 衍生不另存** —— 另存一份會產生「同一檔同時在未分組與
+ *  某群組」的可違反不變式,畫面上的樣態是同一檔出現兩次 = 靜默資料錯。
+ *
+ *  全部純函數;**無變化時回原物件**(呼叫端據此早退,避免送出內容相同的 PUT ——
+ *  那會讓後端重設整個訂閱池、TC4 全量 UNSUB/SUB,而且無錯誤訊號、無測試會紅)。 */
+
+export interface Group {
+  name: string;
+  codes: string[];
+}
+
+export interface Watchlist {
+  codes: string[];
+  groups: Group[];
+}
+
+/** 插入 + off-by-one 補償。
+ *
+ *  `slot` = 相對目標清單「移除前」渲染索引(含被拖的那一列,即 `dropTargetFromPointer`
+ *  直接回傳的值),而真正寫入的是**濾掉該檔之後**的陣列 —— 該檔已在清單中且往下拖時
+ *  兩者差 1。少了 `- 1`,`[A,B,C,D]` 拖 A 到槽 3 會得到 `BCDA` 而不是 `BCAD`,
+ *  且會靜默寫進後端。 */
+function insertAt(list: string[], code: string, slot: number, at: number): string[] {
+  const index = at >= 0 && slot > at ? slot - 1 : slot;
+  const base = list.filter((c) => c !== code);
+  const clamped = Math.max(0, Math.min(base.length, index));
+  return [...base.slice(0, clamped), code, ...base.slice(clamped)];
+}
+
+/** 未分組清單內的 `slot` → `codes` 的絕對 index 後插入。
+ *
+ *  未分組是 `codes` 的**子序列**,而被改寫的是 `codes` 本身 —— 直接拿 slot 當 index
+ *  會在「未分組之間夾著群組成員」時落錯位置。 */
+function reinsertIntoCodes(wl: Watchlist, code: string, slot: number): string[] {
+  const ung = ungroupedCodes(wl);
+  const target = ung[Math.max(0, slot)];
+  const absSlot = target === undefined ? wl.codes.length : wl.codes.indexOf(target);
+  return insertAt(wl.codes, code, absSlot, wl.codes.indexOf(code));
+}
+
+export function ungroupedCodes(wl: Watchlist): string[] {
+  const grouped = new Set(wl.groups.flatMap((g) => g.codes));
+  return wl.codes.filter((code) => !grouped.has(code));
+}
+
+/** 加進自選(落未分組);已在自選 → 原物件。 */
+export function addCode(wl: Watchlist, code: string): Watchlist {
+  if (wl.codes.includes(code)) return wl;
+  return { ...wl, codes: [...wl.codes, code] };
+}
+
+/** 從自選整個移除(codes 與所有群組)。 */
+export function removeCode(wl: Watchlist, code: string): Watchlist {
+  return {
+    codes: wl.codes.filter((c) => c !== code),
+    groups: wl.groups.map((g) => ({ ...g, codes: g.codes.filter((c) => c !== code) })),
+  };
+}
+
+/** 未分組 → 群組:目標組插入即可,未分組是衍生集合會自動少掉它。 */
+export function assignToGroup(
+  wl: Watchlist,
+  code: string,
+  group: string,
+  slot: number,
+): Watchlist {
+  return {
+    ...wl,
+    groups: wl.groups.map((g) =>
+      g.name === group ? { ...g, codes: insertAt(g.codes, code, slot, g.codes.indexOf(code)) } : g,
+    ),
+  };
+}
+
+/** 群組 A → 群組 B:**移動語意**(來源組移除,round 4 拍板不可改成複製)。
+ *  `from === to` 時退化為同組排序(W-19);其他群組的歸屬不動(W-1)。 */
+export function moveToGroup(
+  wl: Watchlist,
+  code: string,
+  from: string,
+  to: string,
+  slot: number,
+): Watchlist {
+  return {
+    ...wl,
+    groups: wl.groups.map((g) => {
+      // 先 filter 再插入:`from === to` 時 insertAt 內的 filter 已完成移除
+      if (g.name === to) {
+        return { ...g, codes: insertAt(g.codes, code, slot, g.codes.indexOf(code)) };
+      }
+      if (g.name === from) return { ...g, codes: g.codes.filter((c) => c !== code) };
+      return g;
+    }),
+  };
+}
+
+/** 群組 → 未分組:**從所有群組移除**。只移除來源組的話,一檔多組的股票會從來源組
+ *  消失卻不出現在未分組(它仍屬別組)= 畫面上像資料被吃掉。 */
+export function detachFromGroups(wl: Watchlist, code: string, slot: number): Watchlist {
+  return {
+    codes: reinsertIntoCodes(wl, code, slot),
+    groups: wl.groups.map((g) => ({ ...g, codes: g.codes.filter((c) => c !== code) })),
+  };
+}
+
+/** 未分組內排序:群組成員在 `codes` 的相對位置不動。 */
+export function reorderUngrouped(wl: Watchlist, code: string, slot: number): Watchlist {
+  return { ...wl, codes: reinsertIntoCodes(wl, code, slot) };
+}
+
+/** 只從該組移除;code 留在自選 → 不屬任何組時自動回未分組。 */
+export function removeFromGroup(wl: Watchlist, code: string, group: string): Watchlist {
+  return {
+    ...wl,
+    groups: wl.groups.map((g) =>
+      g.name === group ? { ...g, codes: g.codes.filter((c) => c !== code) } : g,
+    ),
+  };
+}
+
+/** Dialog 的 checkbox:勾選 = 加進該組尾端,取消 = 離開該組(一檔可勾多組,W-1)。 */
+export function setMembership(
+  wl: Watchlist,
+  code: string,
+  group: string,
+  on: boolean,
+): Watchlist {
+  const target = wl.groups.find((g) => g.name === group);
+  if (target === undefined || target.codes.includes(code) === on) return wl;
+  return {
+    ...wl,
+    groups: wl.groups.map((g) =>
+      g.name === group
+        ? { ...g, codes: on ? [...g.codes, code] : g.codes.filter((c) => c !== code) }
+        : g,
+    ),
+  };
+}
+
+/** 空白名 / 重名 → 原物件(對應後端 BAD_GROUP,呼叫端零 PUT 直接顯示文案)。 */
+export function addGroup(wl: Watchlist, name: string): Watchlist {
+  const trimmed = name.trim();
+  if (trimmed === "" || wl.groups.some((g) => g.name === trimmed)) return wl;
+  return { ...wl, groups: [...wl.groups, { name: trimmed, codes: [] }] };
+}
+
+/** 空白名 / 撞既有名 → 原物件(改成自己原本的名字也算撞,同樣零 PUT)。 */
+export function renameGroup(wl: Watchlist, from: string, to: string): Watchlist {
+  const trimmed = to.trim();
+  if (trimmed === "" || wl.groups.some((g) => g.name === trimmed)) return wl;
+  return { ...wl, groups: wl.groups.map((g) => (g.name === from ? { ...g, name: trimmed } : g)) };
+}
+
+/** 只刪群組:成員的 code 留在 `codes` → 自動回到未分組。 */
+export function deleteGroup(wl: Watchlist, name: string): Watchlist {
+  return { ...wl, groups: wl.groups.filter((g) => g.name !== name) };
+}
