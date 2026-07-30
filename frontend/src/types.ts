@@ -252,3 +252,37 @@ export interface CorrState {
   legs: Record<string, CorrLegState>;
   pairs: Record<string, CorrPairState>;
 }
+
+// ---- 六腿江波圖(對應 copycat/live/river_state.py;index-river-chart)----
+
+/** 當場盤別的 x 軸窗(台北 minute-of-day;夜盤 end_min > 1440 = 跨午夜展開)。 */
+export interface RiverWindow {
+  start_min: number;
+  end_min: number;
+}
+
+/** 一條腿的分鐘序列。`minutes` 鍵是窗內 offset,但 **JSON 物件鍵恆為字串** → 幾何層 Number(k)。 */
+export interface RiverLeg {
+  label: string; // 繁中顯示名(後端帶)
+  minutes: Record<string, number>; // offset → 該分鐘收盤毫點
+  last: number | null; // 最大 offset 的價;本場無資料 → null
+  last_minute: number | null;
+}
+
+export interface RiverState {
+  type: string; // "river"
+  seq: number;
+  session: string; // "day" | "night"
+  base: string; // 基準腿 key(重疊圖畫粗線)
+  window: RiverWindow;
+  legs: Record<string, RiverLeg>;
+}
+
+/** 每秒增量:各腿最後寫入的那一分鐘;該腿本場尚無 live 點 → null。 */
+export interface RiverDelta {
+  type: string; // "river_delta"
+  seq: number;
+  session: string;
+  window: RiverWindow;
+  legs: Record<string, { m: number; p: number } | null>;
+}
