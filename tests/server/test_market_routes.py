@@ -212,18 +212,31 @@ class TestOtc:
                 assert r.json()["meta"]["refusal"] == "NO_HISTORICAL_SOURCE"
 
     def test_minute_is_local_synth_without_volume(self) -> None:
-        snaps = [
-            OtcSnap(p=359_800, ref=378_090, open=0, high=0, low=0, time="101610"),
-        ]
-        with make_client(index_source=FakeIndexSource(), mis=lambda: snaps[0]) as c:
+        """**不依賴 MIS 背景 task 的時序**:直接餵引擎再打 route。
+
+        原本寫成 `if body["bars"]:` 的條件式斷言 —— `_mis_loop` 是 `asyncio.create_task`
+        起的背景任務,首拍未必趕在請求前完成,bars 空時整段斷言被跳過而測試照樣綠。
+        那是本專案已經吃過虧的假綠樣態,條件式斷言不留在 repo(review P1-4)。"""
+        with make_client(index_source=FakeIndexSource()) as c:
+            engine = c.app.state.index  # type: ignore[attr-defined]
+            engine._apply_otc(
+                OtcSnap(p=359_800, ref=378_090, open=0, high=0, low=0, time="101610")
+            )
+            engine._apply_otc(
+                OtcSnap(p=360_100, ref=378_090, open=0, high=0, low=0, time="101655")
+            )
             r = c.get("/api/market/bars/OTC?tf=1")
         body = r.json()
         assert body["meta"]["source"] == "mis_poll_synth"
         assert body["meta"]["volume"] is False
         assert body["meta"]["refusal"] is None
-        if body["bars"]:  # MIS poll 是背景 task,首拍未必趕上
-            assert body["bars"][0]["t"].startswith(f"{_TODAY} ")
-            assert body["meta"]["synth_since"] is not None
+        assert body["meta"]["synth_since"] == "10:17"
+        assert len(body["bars"]) == 1
+        bar = body["bars"][0]
+        assert bar["t"] == f"{_TODAY} 10:17"  # 前端靠空格分辨日 K / 分 K
+        assert (bar["o"], bar["h"], bar["l"], bar["c"], bar["v"]) == (
+            359_800, 360_100, 359_800, 360_100, 0,
+        )
 
 
 class TestFutures:
@@ -273,3 +286,90 @@ class TestVolumeMeta:
         with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
             r = c.get("/api/market/bars/TXF?tf=D")
         assert r.json()["meta"]["volume"] is True
+
+
+class TestMinutePath:
+    """tf=1 是 UI 最常走的一條(17 顆週期鈕裡有 13 顆走它),原本零測試(review P1-3)。"""
+
+    def test_twse_minute_hits_index_engine_with_tf1(self) -> None:
+        src = FakeIndexSource()
+        with make_client(index_source=src) as c:
+            r = c.get("/api/market/bars/TWSE?tf=1&days=5")
+        body = r.json()
+        assert body["meta"]["source"] == "tc4_1k"
+        assert body["bars"][0]["t"] == f"{_TODAY} 09:01"
+        # build_minute 是兩段式:歷史段(start..昨日)+ 當日段 各發一次(W-7 語意)
+        assert {(call[0], call[1]) for call in src.calls} == {("IX0001", "1")}
+
+    def test_futures_minute_hits_futures_engine_with_tf1(self) -> None:
+        fut = FakeFuturesSource()
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TMF?tf=1")
+        assert r.json()["meta"]["source"] == "tc4_1k"
+        assert {(call[0], call[1]) for call in fut.calls} == {("TMF", "1")}
+
+    def test_days_is_clamped_to_30(self) -> None:
+        src = FakeIndexSource()
+        with make_client(index_source=src) as c:
+            c.get("/api/market/bars/TWSE?tf=1&days=999")
+        # 取最早的 start(歷史段)到今天 = 實際請求窗
+        earliest = min(call[2] for call in src.calls)
+        span = (_dt.date.today() - _dt.date.fromisoformat(earliest)).days + 1
+        assert span == 30
+
+    def test_empty_minute_result_reports_unavailable(self) -> None:
+        class Empty(FakeIndexSource):
+            def fetch_bars_range_tagged(
+                self, code: str, tf: str, start: str, end: str
+            ) -> tuple[list[dict], str]:
+                return [], "tc4_1k"
+
+        with make_client(index_source=Empty()) as c:
+            r = c.get("/api/market/bars/TWSE?tf=1")
+        assert r.status_code == 200
+        assert r.json()["meta"]["source"] == "unavailable"
+
+    def test_minute_cache_key_isolated_from_stock_session(self) -> None:
+        """裸 "IX0001" 會與 /api/stock/bars/IX0001(走 **stock** session)共用同一格,
+        讓 W-12「歷史從持有其 REALTIME 訂閱的 session 問」在快取層被繞過(review P1-6)。"""
+        src = FakeIndexSource()
+        with make_client(index_source=src) as c:
+            c.get("/api/market/bars/TWSE?tf=1&days=1")
+            # 個股路徑不存在(未注入 stock source)→ 503;重點是 market 端不受污染
+            c.get("/api/market/bars/TWSE?tf=D")
+        # 分鐘與長窗各打一次(共用同一格的話第二次會 cache hit 到錯的那份)
+        assert [call[1] for call in src.calls] == ["1", "D"]
+
+
+class TestPartialLast:
+    """`partial_last` 由資料判定,不是 tf 的常數(review P1-1)。"""
+
+    def _src(self, last_date: str) -> FakeIndexSource:
+        class Fixed(FakeIndexSource):
+            def fetch_bars_range_tagged(
+                self, code: str, tf: str, start: str, end: str
+            ) -> tuple[list[dict], str]:
+                return [_dbar(last_date, 1_000)], "tc4_dk"
+
+        return Fixed()
+
+    def test_today_daily_bar_is_partial(self) -> None:
+        with make_client(index_source=self._src(_TODAY)) as c:
+            r = c.get("/api/market/bars/TWSE?tf=D")
+        assert r.json()["meta"]["partial_last"] is True
+
+    def test_old_daily_bar_is_not_partial(self) -> None:
+        with make_client(index_source=self._src("2020-01-02")) as c:
+            r = c.get("/api/market/bars/TWSE?tf=D")
+        assert r.json()["meta"]["partial_last"] is False
+
+    def test_old_week_bucket_is_not_partial(self) -> None:
+        """週末查已收盤的週 K 不該恆標「未收盤」(舊實作 tf != "D" 就恆 True)。"""
+        with make_client(index_source=self._src("2020-01-02")) as c:
+            r = c.get("/api/market/bars/TWSE?tf=W")
+        assert r.json()["meta"]["partial_last"] is False
+
+    def test_current_week_and_month_are_partial(self) -> None:
+        with make_client(index_source=self._src(_TODAY)) as c:
+            assert c.get("/api/market/bars/TWSE?tf=W").json()["meta"]["partial_last"] is True
+            assert c.get("/api/market/bars/TWSE?tf=M").json()["meta"]["partial_last"] is True

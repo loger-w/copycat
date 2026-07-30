@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Callable
 
 import pytest
 
+from copycat.live.stock_source import Bar
 from copycat.server.futures_engine import FuturesEngine
 
 
@@ -356,3 +358,36 @@ class TestFetchDay1kPassthrough:
         with pytest.raises(ConnectionError):
             engine.fetch_day_1k("TXF")
         await engine.close()
+
+
+class TestBarsRangeProxy:
+    """借不到就回空 + 固定可 grep 的 log 字串(index-board N-3;3am frame)。
+
+    那條字串是「TC4 掛了 vs 真沒資料」的唯一五秒判準,沒有測試等於沒人驗過它真的會印。
+    """
+
+    async def _run(self, engine: FuturesEngine, caplog) -> list[Bar]:
+        with caplog.at_level(logging.WARNING):
+            return await engine.bars_range("TXF", "D", "2026-07-01", "2026-07-30")
+
+    @pytest.mark.asyncio
+    async def test_source_absent_returns_empty_with_fixed_log(self, caplog) -> None:
+        engine = FuturesEngine(lambda: FakeSource())  # 未 start → _source is None
+        got = await self._run(engine, caplog)
+        assert got == []
+        assert "market: futures history proxy miss" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_connection_error_returns_empty_with_fixed_log(self, caplog) -> None:
+        class Boom(FakeSource):
+            def fetch_bars_range(self, product: str, tf: str, start: str, end: str) -> list[dict]:
+                raise ConnectionError("TC4 down")
+
+        engine = FuturesEngine(lambda: Boom())
+        await engine.start()
+        try:
+            got = await self._run(engine, caplog)
+        finally:
+            await engine.close()
+        assert got == []
+        assert "market: futures history proxy miss" in caplog.text

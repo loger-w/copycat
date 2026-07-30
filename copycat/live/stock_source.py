@@ -235,11 +235,6 @@ def _fold(bars: dict[str, Bar], order: list[str], t: str, k: _RawK) -> None:
         _merge_into(existing, k["o"], k["h"], k["l"], k["c"], k["v"])
 
 
-#: 台指期日盤分鐘域(08:45 開盤 → 首根終點標記 0846;13:45 收盤,1346–1350 clamp)。
-#: 夜盤(15:00–05:00)不在本輪 scope,落在域外自然被丟(change-spec §5)。
-FUTURES_MINUTE_DOMAIN = ("0846", "1345", "1350")
-
-
 def parse_1k_bars(rows: list[dict], domain: tuple[str, str, str] | None = None) -> list[Bar]:
     """1K rows → 分鐘 Bar(台北終點標記;域外丟棄)。
 

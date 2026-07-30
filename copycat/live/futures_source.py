@@ -17,15 +17,16 @@ from typing import Any, Callable
 
 from copycat.live.futures_models import PRODUCTS
 from copycat.live.river_backfill import collect_1k_minutes
-from copycat.live.stock_source import (
-    FUTURES_MINUTE_DOMAIN,
-    Bar,
-    parse_1k_bars,
-    parse_dk_bars,
-)
+from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
 from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource
 
 logger = logging.getLogger(__name__)
+
+
+#: 台指期日盤分鐘域(08:45 開盤 → 首根終點標記 0846;13:45 收盤,1346–1350 clamp)。
+#: 個股那把尺是 0901–1330,套上去會靜默丟掉開盤前 15 分與 13:31–13:45。
+#: 夜盤(15:00–05:00)不在本輪 scope,落在域外自然被丟(change-spec §5)。
+FUTURES_MINUTE_DOMAIN = ("0846", "1345", "1350")
 
 
 def futures_symbol(product: str) -> str:

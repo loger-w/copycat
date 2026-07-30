@@ -204,7 +204,7 @@ const ChartStatic = memo(function ChartStatic({
           />
         ))
       ) : (
-        <text x={4} y={g.volBars[0]?.y ?? 0} className="fill-ink-muted" fontSize="0.625rem">
+        <text x={4} y={g.volBars[0]?.y ?? DIMS.height * 0.85} className="fill-ink-muted" fontSize="0.625rem">
           無量資料
         </text>
       )}

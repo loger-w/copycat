@@ -32,7 +32,14 @@ from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
 from copycat.live.stock_source import Bar
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
-from copycat.server.bars import BarsCache, build_daily, build_minute, build_period, clamp_days
+from copycat.server.bars import (
+    BarsCache,
+    build_daily,
+    build_minute,
+    build_period,
+    clamp_days,
+    is_partial_last,
+)
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.stock_watchlist import (
@@ -542,8 +549,6 @@ def create_app(
         await stock.set_main(code)  # 含回補觸發(design §2.5)
         return stock.snapshot(code)
 
-    # ---- market(大盤 K 線;index-board SC-4/5/6)----
-
     # ---- index(指數看盤;index-board SC-4)----
 
     @app.get("/api/index/state")
@@ -552,6 +557,8 @@ def create_app(
         if index is None:
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
         return index.state()
+
+    # ---- market(大盤 K 線;index-board SC-4/5/6)----
 
     @app.get("/api/market/bars/{key}")
     async def market_bars(request: Request, key: str, tf: str = "D", days: str = "30") -> dict:
@@ -585,7 +592,13 @@ def create_app(
                 return _market_payload(key, tf, [], source="none", refusal="NO_HISTORICAL_SOURCE")
             bars, since = index.otc_bars()
             return _market_payload(
-                key, tf, bars, source="mis_poll_synth", volume=False, synth_since=since
+                key,
+                tf,
+                bars,
+                source="mis_poll_synth",
+                volume=False,
+                synth_since=since,
+                partial_last=is_partial_last(bars, tf, today),
             )
 
         if key == "TWSE":
@@ -608,12 +621,24 @@ def create_app(
         async def plain(c: str, tf_: str, s: str, e: str) -> list[Bar]:
             return (await tagged(c, tf_, s, e))[0]
 
-        code = "IX0001" if key == "TWSE" else f"F:{key}"
+        # 分鐘路徑的 cache code 加 |M 後綴:裸 "IX0001" 會與 /api/stock/bars/IX0001
+        # (走 **stock** session)共用 `_hist` / `_today` / `_empty` 同一格 —— 那會讓
+        # W-12「歷史一律從持有其 REALTIME 訂閱的 session 問」在快取層被繞過(review P1-6)。
+        # 長窗路徑的 |L 後綴同理(review P2-1)。期指的 F: 前綴含冒號,本來就撞不到。
+        code = ("IX0001|M" if tf == "1" else "IX0001") if key == "TWSE" else f"F:{key}"
         if tf == "1":
             bars = await build_minute(plain, bars_cache, code, days_n, today)
-            return _market_payload(key, tf, bars, source="tc4_1k" if bars else "unavailable")
+            return _market_payload(
+                key,
+                tf,
+                bars,
+                source="tc4_1k" if bars else "unavailable",
+                partial_last=is_partial_last(bars, tf, today),
+            )
         bars, tag = await build_period(tagged, bars_cache, code, today, tf)
-        return _market_payload(key, tf, bars, source=tag, partial_last=bool(bars) and tf != "D")
+        return _market_payload(
+            key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)
+        )
 
     @app.get("/api/corr/state")
     async def corr_state(request: Request) -> dict:

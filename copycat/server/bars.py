@@ -235,6 +235,8 @@ def _period_key(stamp: str, period: str) -> str | None:
         return None
     if period == "M":
         return stamp[:7]
+    if period != "W":
+        return None  # 防呆:未知 period 不得被靜默當成週(呼叫端應只傳 W / M)
     iso = d.isocalendar()
     return f"{iso[0]:04d}-W{iso[1]:02d}"
 
@@ -272,6 +274,26 @@ def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
 TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[tuple[list[Bar], str]]]
 
 
+def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
+    """最後一根是否仍在進行中(尚未收盤)。
+
+    **由資料判定,不是 tf 的常數**:盤中的日 K / 分 K 最後一根就是今天 / 當下那分鐘,
+    週末查的週 K 最後一桶其實已收盤 —— 用 `tf != "D"` 這種常數兩個方向都會誤導,
+    而「meta 不說謊」正是本輪的設計主軸(review P1-1)。
+    """
+    if not bars:
+        return False
+    last = bars[-1]["t"][:10]
+    today_iso = today.isoformat()
+    if tf in ("1", "D"):
+        return last == today_iso
+    if tf == "M":
+        return last[:7] == today_iso[:7]
+    if tf == "W":
+        return _dt.date.fromisoformat(last).isocalendar()[:2] == today.isocalendar()[:2]
+    return False
+
+
 async def build_period(
     fetch: TaggedBarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
 ) -> tuple[list[Bar], str]:
@@ -290,7 +312,9 @@ async def build_period(
     cache.prune(today)
     cached = cache.daily_get(key, day)
     if cached is not None:
-        tag = cache.daily_tag_get(key, day) or "tc4_dk"
+        # tag 缺失回 unavailable 而非猜一個漂亮值 —— 猜值就是在最需要誠實的
+        # 那條路上說謊(review P1-4 的同一條理由)
+        tag = cache.daily_tag_get(key, day) or "unavailable"
         return (cached if period == "D" else aggregate_period(cached, period)), tag
     if cache.empty_fresh(key, "D", 0):
         return [], "unavailable"

@@ -22,6 +22,22 @@ _CLIENT_QUEUE_MAX = 32
 _SYMBOL = "IX0001"
 #: 盤中台指現價連續為 None 多久後開始 warn(SC-8 反向判準:連續 3 分鐘 = 未通過)
 _SPOT_SILENCE_SECS = 180.0
+#: 台指期交易時段(台北):日盤 08:45–13:45、夜盤 15:00–次日 05:00。
+#: **不可沿用 watchdog 的 09:00–13:25** —— CLAUDE.md §8 記載的 futures_engine 整段
+#: 零推播實測案例(2026-07-29 17:33 起跑、到 00:50 為止 TXF/MXF/TMF 全 p=null)發生在
+#: **夜盤**,完全落在那個窗之外;用 watchdog 窗等於這道安全網對它要偵測的那個 bug
+#: 時間上零覆蓋(review P1-2)。
+_FUT_DAY = (_dt.time(8, 45), _dt.time(13, 45))
+_FUT_NIGHT_OPEN = _dt.time(15, 0)
+_FUT_NIGHT_CLOSE = _dt.time(5, 0)
+
+
+def in_futures_session(now: _dt.time | None = None) -> bool:
+    """台指期交易時段(跨午夜的夜盤以「或」拆兩段判)。"""
+    t = now if now is not None else _dt.datetime.now().time()
+    if _FUT_DAY[0] <= t <= _FUT_DAY[1]:
+        return True
+    return t >= _FUT_NIGHT_OPEN or t <= _FUT_NIGHT_CLOSE
 
 # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
 _WATCH_START = _dt.time(9, 0)
@@ -120,6 +136,7 @@ class IndexEngine:
         rollover: bool = True,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
         in_watch_window: Callable[[], bool] = in_watch_window_now,
+        in_futures_session: Callable[[], bool] = in_futures_session,
         now_fn: Callable[[], _dt.time] = now_time,
         poll_secs: float = 5.0,
         throttle_secs: float = 1.0,
@@ -133,6 +150,7 @@ class IndexEngine:
         self._rollover_enabled = rollover
         self._today_fn = today_fn
         self._in_watch_window = in_watch_window
+        self._in_futures_session = in_futures_session
         self._now_fn = now_fn
         self._poll = poll_secs
         self._throttle = throttle_secs
@@ -421,6 +439,8 @@ class IndexEngine:
         """盤中台指現價長時間為 None → 節流 warning(index-board review P1-1)。
 
         現價源自 2026-07-30 起收斂為 `TC.F.TWF.TXF.*`(修掉「任何期貨都當台指」的亂跳)。
+        判定窗用**台指期交易時段**(日盤 + 夜盤),不是 watchdog 的 09:00–13:25 ——
+        已實證的零推播案例發生在夜盤(review P1-2)。
         代價是多了一個**安靜**的新失效態:若 TXF 推播被 futures session 搶走
         (同 symbol 跨 session 只推一邊)或 futures engine 整段零推播(CLAUDE.md §8 的
         間歇性症狀),`spot` 會恆 `None` —— 右上角台指與 TXO 綜合損益的現貨點位一起
@@ -429,7 +449,8 @@ class IndexEngine:
         if p is not None:
             self._spot_silent_since = None
             return
-        if not self._in_watch_window():
+        if not self._in_futures_session():
+            self._spot_silent_since = None  # 非交易時段的 None 是正常,不累積計時
             return
         now = _time.monotonic()
         if self._spot_silent_since is None:

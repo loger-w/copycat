@@ -350,5 +350,23 @@ describe("CandleChart 視窗高低標", () => {
   it("無可視 bar → 不渲染", () => {
     const { container } = render(<CandleChart bars={[]} />);
     expect(container.querySelector("[data-testid='window-high']")).toBeNull();
+describe("CandleChart 量副圖(index-board W-1 pin)", () => {
+  const bars = [
+    { t: "2026-07-28", o: 100, h: 110, l: 90, c: 105, v: 12 },
+    { t: "2026-07-29", o: 105, h: 115, l: 100, c: 112, v: 34 },
+  ];
+
+  it("未傳 showVolume → 量柱存在(個股頁既有行為的唯一保護)", () => {
+    const { container } = render(<CandleChart bars={bars} />);
+    expect(container.querySelectorAll('rect[class*="fill-bull"], rect[class*="fill-bear"]').length)
+      .toBeGreaterThan(0);
+    expect(screen.queryByText("無量資料")).toBeNull();
+  });
+
+  it("showVolume=false → 不畫量柱,改印「無量資料」,資訊列量欄為「—」", () => {
+    render(<CandleChart bars={bars} showVolume={false} />);
+    expect(screen.getByText("無量資料")).toBeTruthy();
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.queryByText("34")).toBeNull();
   });
 });
