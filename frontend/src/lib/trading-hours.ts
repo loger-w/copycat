@@ -17,3 +17,14 @@ export function inTradingHours(now: Date = new Date()): boolean {
   const mins = now.getHours() * 60 + now.getMinutes();
   return mins >= 9 * 60 + 1 && mins <= 13 * 60 + 35;
 }
+
+/** 台指期日盤時段(08:45 開盤 → 首根 1K 是 08:46;13:45 收盤 + 一分鐘餘裕)。
+ *
+ * 個股那把尺(09:01–13:35)套在期指上,開盤前 15 分與 13:36–13:45 的分 K 不會自動
+ * 更新,要手動切模式才重取(review P2-5)。夜盤不在本輪 scope(期指 K 線只取日盤窗)。 */
+export function inFuturesTradingHours(now: Date = new Date()): boolean {
+  const day = now.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = now.getHours() * 60 + now.getMinutes();
+  return mins >= 8 * 60 + 46 && mins <= 13 * 60 + 46;
+}

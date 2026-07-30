@@ -190,7 +190,12 @@ export default function App() {
               <Suspense
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
-                <IndexPage twse={twse} otc={otc} txf={txf} />
+                <IndexPage
+                  twse={twse}
+                  otc={otc}
+                  txf={txf}
+                  futures={futuresStream.state?.products ?? null}
+                />
               </Suspense>
             </div>
           ) : null}

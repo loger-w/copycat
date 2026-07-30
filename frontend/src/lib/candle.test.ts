@@ -327,3 +327,42 @@ describe("buildCandleGeometry yTicks 合法檔位(round3 SC-10)", () => {
     }
   });
 });
+
+describe("aggregateBars 大盤週期(index-board T-6)", () => {
+  function m(hhmm: string, c: number) {
+    return { t: `2026-07-30 ${hhmm}`, o: c, h: c + 1, l: c - 1, c, v: 1 };
+  }
+
+  it("n=30/60/90 桶界以 09:00 為原點、終點標記", () => {
+    const bars = [m("09:01", 1), m("09:30", 2), m("09:31", 3), m("10:30", 4)];
+    expect(aggregateBars(bars, 30).map((b) => b.t)).toEqual([
+      "2026-07-30 09:30",
+      "2026-07-30 10:00",
+      "2026-07-30 10:30",
+    ]);
+    // 10:30 落在 09:00+60×2 = 11:00 那一桶(終點標記,非「該筆時刻」)
+    expect(aggregateBars(bars, 60).map((b) => b.t)).toEqual([
+      "2026-07-30 10:00",
+      "2026-07-30 11:00",
+    ]);
+    expect(aggregateBars(bars, 90).map((b) => b.t)).toEqual(["2026-07-30 10:30"]);
+  });
+
+  it("早於 09:00 的分鐘(期指 08:45 開盤)獨立成標記 09:00 的短桶,不遺失資料", () => {
+    // review P2-3:不是「第一根較寬」—— n=30 時該桶只含 ≤15 分鐘,首根寬度不等,刻意接受
+    const bars = [m("08:46", 1), m("08:59", 2), m("09:01", 3)];
+    const out = aggregateBars(bars, 30);
+    expect(out.map((b) => b.t)).toEqual(["2026-07-30 09:00", "2026-07-30 09:30"]);
+    expect(out[0]!.o).toBe(1);
+    expect(out[0]!.c).toBe(2);
+    expect(out[0]!.v).toBe(2);
+  });
+
+  it("跨日不合併", () => {
+    const out = aggregateBars(
+      [m("13:00", 1), { ...m("09:01", 2), t: "2026-07-31 09:01" }],
+      90,
+    );
+    expect(out).toHaveLength(2);
+  });
+});

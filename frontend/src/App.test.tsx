@@ -92,12 +92,14 @@ describe("App(index-board T9)", () => {
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
   });
 
-  it("切到指數 tab 顯示 IndexPage(台指期列與兩張卡)", async () => {
+  it("切到大盤 tab 顯示 IndexPage(標的列 + 週期列)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
+    // 版面自 index-board SC-2/3 起由「兩張並排卡」改為「標的切換 + 單一主圖」
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
-    expect(screen.getByText("櫃買指數")).toBeTruthy();
-    expect(screen.getByText(/台指期/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "櫃買" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "台指期" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
   });
 });
 
