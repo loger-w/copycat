@@ -10,6 +10,17 @@ MULTIPLIER = 50  # TXO 每點 NTD
 
 # TXF 現貨 symbol(zmq-free 常數;tc4.py re-export — server 端 import 不拉 pyzmq,review C1)
 SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 TXF(FITX 不存在,07-20 實證)
+#: 現價源判定前綴 = **台指期產品樹**,含 HOT 與月份 leaf(`TC.F.TWF.TXF.202609`)。
+#:
+#: **不可放寬成 `"TC.F."`**:TXO runtime 的 ZMQ SUB 訂 `""`,會收到同 process 其他引擎訂的
+#: 所有期貨推播 —— 個股期(`TC.F.TWF.DHF.HOT`)、六腿海外(`TC.F.CME.YM.HOT` 等)、
+#: 費半、小台微台。整棵樹前綴會讓它們輪流覆寫現價,右上角台指與 TXO 綜合損益的
+#: `spot_pnl` 一起亂跳(2026-07-29 盤中實測個股期 232.5 顯示成台指)。
+#:
+#: 留 leaf 而非只認 `SPOT_SYMBOL` 完全相等:`futures_engine` 在 HOT 推播被搶走時會補訂
+#: 月份 leaf(CLAUDE.md §8 同 symbol 跨 session 只推一邊),那是同一標的同一價位,
+#: 也是該情境下唯一的現價來源。
+SPOT_PREFIX = "TC.F.TWF.TXF."
 
 _OPTION_LEAF_RE = re.compile(
     r"^TC\.O\.TWF\.(?P<prod>[A-Z0-9]+)\.(?P<expiry>[0-9A-Z/]+)\.(?P<cp>[CP])\.(?P<strike>\d+)$"
@@ -83,8 +94,9 @@ def parse_history_tick(symbol: str, raw: dict) -> Tick | None:
 def parse_realtime(raw: dict) -> Tick | None:
     """REALTIME Quote dict → Tick(DR-4 隔離層);無成交(qty 空/0)→ None。
 
-    例外:TC.F.*(現價源)只取 price,qty 可為 0 — 休市 snapshot 無成交量
-    仍要能更新現價線(Phase 6 實測)。
+    例外:台指期(`SPOT_PREFIX`,現價源)只取 price,qty 可為 0 — 休市 snapshot
+    無成交量仍要能更新現價線(Phase 6 實測)。**這個例外只給台指期**:放寬到整棵
+    `TC.F.*` 會讓個股期 / 海外腿的零量 snapshot 也流進 `ChainAggregator.route`。
     """
     symbol = raw.get("Symbol", "")
     price = to_millipts(raw.get("TradingPrice", ""))
@@ -93,7 +105,7 @@ def parse_realtime(raw: dict) -> Tick | None:
     if not symbol or price is None or ptime is None:
         return None
     if qty is None or qty <= 0:
-        if not symbol.startswith("TC.F."):
+        if not symbol.startswith(SPOT_PREFIX):
             return None
         qty = 0
     return Tick(

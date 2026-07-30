@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Iterable
 
-from copycat.live.models import OptionContract, SeriesInfo, Tick
+from copycat.live.models import SPOT_PREFIX, OptionContract, SeriesInfo, Tick
 from copycat.live.payoff import (
     PositionRow,
     build_grid,
@@ -18,7 +18,7 @@ from copycat.live.payoff import (
 
 logger = logging.getLogger(__name__)
 
-_SPOT_PREFIX = "TC.F."
+_SPOT_PREFIX = SPOT_PREFIX  # 台指期產品樹(含月份 leaf);單一定義在 models.py
 
 
 @dataclass
@@ -40,7 +40,11 @@ class _PosState:
 
 
 class ChainAggregator:
-    """單一 active 序列的逐檔累積;TC.F.* 只更新 spot(DR-9 分流)。"""
+    """單一 active 序列的逐檔累積;台指期(`SPOT_PREFIX`)只更新 spot(DR-9 分流)。
+
+    其餘期貨(個股期 / 海外腿 / 費半 / 小台微台)一律走 foreign 丟棄計數 —— 它們會
+    出現在這條流上是因為 TXO runtime 的 ZMQ SUB 訂 `""`,收得到同 process 其他引擎的
+    訂閱推播,不是本序列的資料。"""
 
     def __init__(self, contracts: Iterable[OptionContract]) -> None:
         self._contracts: dict[str, OptionContract] = {}
