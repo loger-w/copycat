@@ -142,6 +142,12 @@ class StockEngine:
             # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
             added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
             removed = [c for c in self._watchlist if c not in codes]
+            # **名單先指派再訂閱**(round4 項 4):每個 `await to_thread` 都讓出 loop,而 TC4
+            # 在 SUB 回來後幾乎立刻推第一則 REALTIME。名單留到最後才指派的話,那一則會在
+            # `code not in self._watchlist` 的窗內進 `_handle_quote` → meta 轉態補推被擋掉;
+            # 盤後沒有後續 tick、flush 又只推 dirty,該檔就卡在 `-` 直到使用者重整。
+            # 名單是「意圖」、訂閱是副作用;最終狀態與舊順序等價(舊碼也是不論成敗都指派)。
+            self._watchlist = list(codes)
             for code in added:
                 try:
                     await asyncio.to_thread(self._acquire, code, "watchlist")
@@ -150,7 +156,11 @@ class StockEngine:
             for code in removed:
                 await asyncio.to_thread(self._release, code, "watchlist")
                 self._no_data.discard(code)
-            self._watchlist = list(codes)
+            # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
+            # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
+            # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
+            for code in added:
+                self._publish(self._quote_payload(code))
 
     async def set_main(self, code: str) -> None:
         async with self._pool_lock:  # CR2
@@ -288,16 +298,8 @@ class StockEngine:
 
     def _handle_no_data(self, code: str) -> None:
         self._no_data.add(code)
-        self._publish(
-            {
-                "type": "watchlist_quote",
-                "code": code,
-                "p": None,
-                "chg_pct": None,
-                "vol": None,
-                "no_data": True,
-            }
-        )
+        # 走共用 builder(`no_data` 由 `_no_data` 實況決定,上一行剛加進去)
+        self._publish(self._quote_payload(code))
 
     def _handle_reconnect(self) -> None:
         """TC4 重連:status 推播 + 主圖自癒重回補(design §2.4)。"""
@@ -316,7 +318,11 @@ class StockEngine:
         state = self._states.get(code)
         if state is None:
             return
+        # 「無資料」復原:**命中才推**。寫成無條件 discard + publish 會變成每 tick 廣播,
+        # 直接打穿 1s 節流(W-17)。
+        recovered = code in self._no_data
         self._no_data.discard(code)
+        was_meta_none = state.meta is None
         state.update_book(book)
         state.update_meta(meta)
         if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
@@ -352,6 +358,12 @@ class StockEngine:
                     }
                 )
             self._dirty_watchlist.add(code)
+        # 轉態補推(round4 項 4):meta 由 None → 有值 = 這一檔第一次拿到參考價;
+        # 「無資料」復原同理。冷門股整天可能只有簿更新、盤後更是零成交,
+        # `_dirty_watchlist` 永遠不會被加進去 → 不補推就永遠是 `-`。
+        # 放在 ingest **之後**:同一則若也帶成交,推出去的就是新價而不是空值。
+        if (recovered or was_meta_none) and code in self._watchlist:
+            self._publish(self._quote_payload(code))
         if code == self._main:
             self._publish({"type": "book", "code": code, "bids": book.bids, "asks": book.asks})
 
@@ -408,9 +420,47 @@ class StockEngine:
 
     # ---- 廣播 ----
 
+    def _quote_payload(self, code: str) -> dict:
+        """`watchlist_quote` 的**唯一** payload builder(round4 項 4)。
+
+        四個產出點(連線種子 / set_watchlist 新增 / 轉態補推 / 1s flush)共用這一份,
+        否則同一個訊息型別會長出多種形狀,而消費端只會在缺欄位那一刻靜默降級。
+
+        尚無成交時參考價走**獨立欄位 `ref`**,絕不塞進 `p` —— 塞進 `p` 會讓新舊 client
+        都把昨收讀成今價。取 `meta.ref_milli` 而不是 `y_close`:`chg_pct` 的分母就是它,
+        除權息日拿昨收顯示、漲幅卻對 ref 算會做出自相矛盾的側欄。
+        """
+        state = self._states.get(code)
+        last = state.last if state is not None else None
+        meta = state.meta if state is not None else None
+        chg_pct: float | None = None
+        if last is not None and meta is not None and meta.ref_milli:
+            chg_pct = round((last.price_milli - meta.ref_milli) / meta.ref_milli * 100, 2)
+        return {
+            "type": "watchlist_quote",
+            "code": code,
+            "p": last.price_milli if last is not None else None,
+            "chg_pct": chg_pct,
+            "vol": last.cum_vol if last is not None else None,
+            "ref": None if last is not None else (meta.ref_milli if meta is not None else None),
+            # `no_data` 讀實況不硬寫 False:否則轉態補推會把「無資料」洗回價格列
+            "no_data": code in self._no_data,
+        }
+
     def stream(self) -> AsyncGenerator[dict, None]:
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
         self._clients.add(queue)
+        # 連線先送一輪自選種子(round4 項 4)。側欄開頁 / 盤後全是 `-` 的根因是
+        # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
+        # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
+        # 「連線先送快照」的既成慣例一致)。
+        # **不可借用 `_publish`**(那會打到所有 client);同步區間無 await,對 event loop
+        # 原子,不會與其它推播交錯。30 檔對 queue maxsize 安全。
+        for code in self._watchlist:
+            try:
+                queue.put_nowait(self._quote_payload(code))
+            except asyncio.QueueFull:  # pragma: no cover - 種子數遠小於 queue 上限
+                break
 
         async def _gen() -> AsyncGenerator[dict, None]:
             try:
@@ -444,21 +494,7 @@ class StockEngine:
                 state = self._states.get(code)
                 if state is None or state.last is None:
                     continue
-                last = state.last
-                meta = state.meta
-                chg_pct: float | None = None
-                if meta is not None and meta.ref_milli:
-                    chg_pct = round((last.price_milli - meta.ref_milli) / meta.ref_milli * 100, 2)
-                self._publish(
-                    {
-                        "type": "watchlist_quote",
-                        "code": code,
-                        "p": last.price_milli,
-                        "chg_pct": chg_pct,
-                        "vol": last.cum_vol,
-                        "no_data": False,
-                    }
-                )
+                self._publish(self._quote_payload(code))
 
 
 # 型別匯出(routes 注入用)

@@ -15,6 +15,9 @@ export interface WatchlistQuote {
   p: number | null;
   chg_pct: number | null;
   vol: number | null;
+  /** 今日參考價(round4 項 4)。**只在尚無成交時才有值**,與 `p` 互斥 ——
+   *  參考價塞進 `p` 會讓畫面把昨收讀成今價。舊後端不發此欄 → null → 側欄維持 `-`。 */
+  ref: number | null;
   no_data: boolean;
 }
 
@@ -150,6 +153,7 @@ export function useStockStream(code: string | null): StockStreamState {
             p: (msg.p as number | null) ?? null,
             chg_pct: (msg.chg_pct as number | null) ?? null,
             vol: (msg.vol as number | null) ?? null,
+            ref: (msg.ref as number | null) ?? null,
             no_data: Boolean(msg.no_data),
           };
           setWatchlist((prev) => ({ ...prev, [msg.code as string]: q }));

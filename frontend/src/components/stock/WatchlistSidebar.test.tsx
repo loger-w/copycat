@@ -81,9 +81,9 @@ function wrap(ui: ReactNode) {
 }
 
 const QUOTES = {
-  "2330": { p: 2_380_000, chg_pct: 2.59, vol: 12479, no_data: false },
-  "5483": { p: null, chg_pct: null, vol: null, no_data: true },
-  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, no_data: false },
+  "2330": { p: 2_380_000, chg_pct: 2.59, vol: 12479, ref: null, no_data: false },
+  "5483": { p: null, chg_pct: null, vol: null, ref: null, no_data: true },
+  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, ref: null, no_data: false },
 };
 
 function sidebar() {

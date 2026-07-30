@@ -56,6 +56,7 @@ class FakeSource:
         self.on_message: Callable[[dict], None] | None = None
         self.on_no_data: Callable[[str], None] | None = None
         self.on_reconnect: Callable[[], None] | None = None
+        self.on_subscribe: Callable[[str], None] | None = None
 
     def subscribe_symbol(self, code: str) -> None:
         if code in self.fail_subscribe:
@@ -63,6 +64,10 @@ class FakeSource:
         if self.subscribe_gate is not None:
             self.subscribe_gate.wait(timeout=5)
         self.subscribed.append(code)
+        # 真 TC4 在 SUB 回來後幾乎立刻推第一則 REALTIME。這個 hook 讓測試能重現
+        # 「報價在 set_watchlist 的 await 窗內到貨」的競態(round4 項 4 R7)。
+        if self.on_subscribe is not None:
+            self.on_subscribe(code)
 
     def unsubscribe_symbol(self, code: str) -> None:
         self.unsubscribed.append(code)
@@ -287,6 +292,131 @@ class TestStreamAndStatus:
             pass
         assert any(m["type"] == "watchlist_quote" and m["no_data"] for m in got)
         await engine.close()
+
+
+class TestWatchlistQuoteSeed:
+    """round4 項 4:側欄開頁 / 盤後全是 `-` 的根因 —— quote 只有 tick 驅動的生產點,
+    新 client 連上時沒有任何歷史訊息可收。修在 stream() 接點(開頁與重連天然自癒),
+    與 ws_corr / ws_river「連線先送快照」的既成慣例一致。"""
+
+    async def _collect(self, stream) -> list[dict]:
+        got: list[dict] = []
+        try:
+            while True:
+                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+        return got
+
+    async def test_stream_seeds_current_watchlist_quotes(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7, price="2400"))
+        await _drain(engine)
+        # 新 client 在成交之後才連上 → 沒有種子的話這一則永遠收不到
+        got = await self._collect(engine.stream())
+        seeds = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330"]
+        assert seeds, "連線時必須先送一輪 watchlist quote 種子"
+        assert seeds[0]["p"] == 2_400_000
+        assert seeds[0]["vol"] == 7
+        assert seeds[0]["no_data"] is False
+        await engine.close()
+
+    async def test_seed_uses_ref_field_never_p_when_no_trade(self) -> None:
+        """盤前 / 盤後尚無成交:參考價走**獨立欄位**,絕不塞進 p ——
+        塞進 p 會讓新舊 client 都把昨收讀成今價(資料誠實紅線)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        # 只有報價沒有成交(TradeVolume 0 → 無 tick,但 meta 會更新)
+        quote = _quote(cum=0, qty="0")
+        src.on_message(quote)
+        await _drain(engine)
+        got = await self._collect(engine.stream())
+        seed = next(m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330")
+        assert seed["p"] is None
+        assert seed["chg_pct"] is None
+        assert seed["ref"] == 2_320_000
+        await engine.close()
+
+    async def test_seed_absent_when_watchlist_empty(self) -> None:
+        engine, _src = await _make()
+        got = await self._collect(engine.stream())
+        assert [m for m in got if m["type"] == "watchlist_quote"] == []
+        await engine.close()
+
+    async def test_set_watchlist_broadcasts_seed_for_added_codes(self) -> None:
+        engine, _src = await _make()
+        stream = engine.stream()
+        await engine.set_watchlist(["2330"])
+        await _drain(engine)
+        got = await self._collect(stream)
+        assert any(m["type"] == "watchlist_quote" and m["code"] == "2330" for m in got)
+        await engine.close()
+
+    async def test_meta_arriving_during_subscribe_still_pushes(self) -> None:
+        """`_watchlist` 若在 acquire 的 await 窗之後才指派,這一則會被 gate 擋掉:
+        TC4 在 SUB 後幾乎立刻推第一則 REALTIME,而每個 `await to_thread` 都讓出 loop
+        → 第一檔的報價會在名單還沒指派時就進 `_handle_quote`;盤後沒有後續 tick、
+        flush 只推 dirty → 該檔卡在 `-` 直到重整。"""
+        engine, src = await _make()
+        stream = engine.stream()
+
+        def _on_sub(code: str) -> None:
+            # 訂閱第二檔時,第一檔(_states 已建好)的報價到貨 —— 此刻 _watchlist 是否
+            # 已指派,決定 meta 轉態補推會不會被擋掉
+            if code == "5483":
+                assert src.on_message is not None
+                src.on_message(_quote(cum=0, qty="0"))
+
+        src.on_subscribe = _on_sub
+        await engine.set_watchlist(["2330", "5483"])
+        await _drain(engine)
+        got = await self._collect(stream)
+        quotes = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330"]
+        assert quotes, "meta 在訂閱 await 窗內到貨時仍要推播"
+        assert quotes[-1]["ref"] == 2_320_000
+        await engine.close()
+
+    async def test_no_data_recovery_pushes_once_not_every_tick(self) -> None:
+        """`no_data` 復原要補推,但**命中才推** —— 寫成無條件 publish 會變成每 tick 廣播,
+        直接打穿 1s 節流(W-17)。"""
+        # throttle 拉大到 60s:排除 1s flush loop 的貢獻,讓斷言只看轉態補推
+        src = FakeSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=60, checkpoint=False)
+        await engine.start()
+        await engine.set_watchlist(["2330"])
+        assert src.on_no_data is not None and src.on_message is not None
+        src.on_no_data("2330")
+        await _drain(engine)
+        stream = engine.stream()
+        src.on_message(_quote(cum=1))
+        src.on_message(_quote(cum=2))
+        src.on_message(_quote(cum=3))
+        await _drain(engine)
+        got = await self._collect(stream)
+        # 首則是連線種子,復原補推只該有一則(不是三則)
+        recoveries = [
+            m
+            for m in got[1:]
+            if m["type"] == "watchlist_quote" and m["code"] == "2330" and not m["no_data"]
+        ]
+        assert len(recoveries) == 1
+        assert recoveries[0]["p"] == 2_380_000  # 補推在 ingest 之後 → 帶新價不是空值
+        await engine.close()
+
+    async def test_no_data_message_carries_ref_key(self) -> None:
+        """所有 watchlist_quote 產出點共用同一份 payload builder,形狀不得分歧。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["9998"])
+        assert src.on_no_data is not None
+        stream = engine.stream()
+        src.on_no_data("9998")
+        await _drain(engine)
+        got = await self._collect(stream)
+        msg = next(m for m in got if m["type"] == "watchlist_quote" and m["no_data"])
+        assert "ref" in msg
 
 
 class TestReviewFixes:
