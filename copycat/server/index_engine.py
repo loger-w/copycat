@@ -47,6 +47,11 @@ def in_watch_window_now(now: _dt.time | None = None) -> bool:
     return _WATCH_START <= t < _WATCH_END
 
 
+def now_time() -> _dt.time:
+    """當下牆鐘時刻(換日 08:30 門檻用)。建構子注入點 — 測試傳固定值。"""
+    return _dt.datetime.now().time()
+
+
 def minute_key(hhmmss: str, *, utc: bool) -> str | None:
     """時刻 → 分鐘鍵(1K 終點標記 = floor+1;IR3/IR4/F5)。utc=True 先 +8。"""
     raw = str(hhmmss).zfill(6)
@@ -109,6 +114,7 @@ class IndexEngine:
         rollover: bool = True,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
         in_watch_window: Callable[[], bool] = in_watch_window_now,
+        now_fn: Callable[[], _dt.time] = now_time,
         poll_secs: float = 5.0,
         throttle_secs: float = 1.0,
         stale_secs: float = 30.0,
@@ -121,6 +127,7 @@ class IndexEngine:
         self._rollover_enabled = rollover
         self._today_fn = today_fn
         self._in_watch_window = in_watch_window
+        self._now_fn = now_fn
         self._poll = poll_secs
         self._throttle = throttle_secs
         self._stale_secs = stale_secs
@@ -276,7 +283,7 @@ class IndexEngine:
             try:
                 today = self._today_fn()
                 new_date = f"{today:%Y-%m-%d}"
-                now = _dt.datetime.now().time()
+                now = self._now_fn()
                 if new_date <= self._trade_date or now < _dt.time(8, 30):
                     continue
                 if self._pending_date != new_date:
