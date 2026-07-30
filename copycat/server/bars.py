@@ -13,8 +13,18 @@
 - **當日段**:短 TTL(預設 30s,短於前端 60s 輪詢),讓盤中最後一根會前進(SC-10)。
 
 `tf="D"` 不走兩段式:日 K 當日內不過期,整份 per (code, today) memo 即可(D-15:
-key 不含 days)。空結果一律不 cache —— TC4 失敗與真無資料在上游不可分,
-don't-cache-empty 讓斷線恢復後可重試(同 `OverlayCache` 慣例)。
+key 不含 days)。
+
+**空結果的處理(round3 修訂)**:TC4 失敗與真無資料在上游不可分,所以空結果**不可
+永久 cache** —— 否則斷線恢復後的重試路徑被釘死。但完全不 cache 也不行:TC4 查無該檔
+時每次請求都要重付一次首頁等待 deadline(實測 60.1s,每次都一樣)。折衷 = **短 TTL
+負向快取 `EMPTY_TTL_SECS`(15s < 前端 60s 輪詢)**,分兩層:
+
+- `_empty`(code, tf, days):整份結果為空時標記,擋掉 15 秒內的重複請求。
+- `today_put` / `today_get`:當日段自己的空也存,吃同一個短 TTL。這層是必要的 ——
+  歷史有資料但今日零成交的冷門股,合併後的結果非空、永遠不會觸發上面那個標記。
+
+`daily_put` 維持 don't-cache-empty(空由 `_empty` 那層負責)。
 """
 
 from __future__ import annotations
