@@ -98,6 +98,18 @@ function search(): HTMLElement {
   return screen.getByPlaceholderText("股號或名稱");
 }
 
+/** 群組 / 未分組的標題列(round4 項 4:整條 header 是一顆 button)。
+ *  可及名稱由可見文字提供(組名 + 計數),不再是 `aria-label="折疊 X"` ——
+ *  有了 `aria-expanded` 之後把狀態寫進名稱會重複播報而且可能不同步。 */
+function groupHeader(name: string): HTMLElement {
+  return screen.getByRole("button", { name: new RegExp(name) });
+}
+
+/** jsdom 沒有 PointerEvent;MouseEvent 帶 clientX/clientY 且 type 對得上即可 */
+function ptrEvt(type: string, x: number, y: number): MouseEvent {
+  return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+}
+
 // 🔴 round3 SC-5:自選側欄與中間主區之間要有可見分隔線
 describe("WatchlistSidebar 版面(round3 SC-5)", () => {
   it("aside 右緣有 border 與中間區隔", () => {
@@ -219,7 +231,7 @@ describe("WatchlistSidebar 未分組桶(SC-8~11)", () => {
     mockWatchlist(GROUPS, [...CODES, "2317"]);
     sidebar();
     await waitGroups();
-    fireEvent.click(screen.getByLabelText("折疊 未分組"));
+    fireEvent.click(groupHeader("未分組"));
     expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
     expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
     expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
@@ -230,22 +242,77 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
   it("點折疊 → 該組列隱藏、標題仍在、其他組不受影響", async () => {
     sidebar();
     await waitGroups();
-    fireEvent.click(screen.getByLabelText("折疊 主力"));
+    fireEvent.click(groupHeader("主力"));
     expect(screen.getByTestId("wl-group-主力")).toBeTruthy();
     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
     expect(screen.getByTestId("wl-list-觀察")).toBeTruthy();
-    expect(screen.getByLabelText("展開 主力")).toBeTruthy();
+    expect(groupHeader("主力").getAttribute("aria-expanded")).toBe("false");
   });
 
   it("折疊狀態落 localStorage 且重新掛載後維持", async () => {
     sidebar();
     await waitGroups();
-    fireEvent.click(screen.getByLabelText("折疊 主力"));
+    fireEvent.click(groupHeader("主力"));
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]);
     cleanup();
     sidebar();
     await waitGroups();
     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+  });
+
+  // 🔴 round4 項 4(B-6):整條標題可點,不再只有 ▸/▾ 那個 3px 寬的按鈕
+  it("整條標題是一顆 button:點組名文字或計數同樣折疊", async () => {
+    sidebar();
+    await waitGroups();
+    const header = groupHeader("主力");
+    expect(header.tagName).toBe("BUTTON");
+    // 點的是 header 內的組名 <span>,事件冒泡到 button
+    fireEvent.click(within(header).getByText("主力"));
+    expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+    fireEvent.click(within(header).getByText("2")); // 計數 badge
+    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+  });
+
+  it("aria-expanded 反映展開狀態,aria-controls 指向該組清單且是合法 id token", async () => {
+    sidebar();
+    await waitGroups();
+    const header = groupHeader("主力");
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    const controls = header.getAttribute("aria-controls")!;
+    // 組名可含空白,不能拿來拼 id(ID token list 會被拆成兩個不存在的 token)
+    expect(controls).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(document.getElementById(controls)).toBe(screen.getByTestId("wl-list-主力"));
+    fireEvent.click(header);
+    expect(groupHeader("主力").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("含空白的組名不會產生非法 id", async () => {
+    mockWatchlist([{ name: "主力 觀察", codes: ["2330"] }], ["2330"]);
+    sidebar();
+    await waitFor(() => expect(screen.getByTestId("wl-group-主力 觀察")).toBeTruthy());
+    const controls = groupHeader("主力 觀察").getAttribute("aria-controls")!;
+    expect(controls).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(document.getElementById(controls)).toBeTruthy();
+  });
+
+  it("▸/▾ 是 aria-hidden 的狀態指示,不再是獨立按鈕(避免 SR 重複播報)", async () => {
+    sidebar();
+    await waitGroups();
+    const header = groupHeader("主力");
+    expect(header.querySelectorAll("button").length).toBe(0); // 巢狀 button 是非法 HTML
+    const caret = within(header).getByText("▾");
+    expect(caret.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByLabelText("折疊 主力")).toBeNull();
+  });
+
+  it("拖曳中點到標題不折疊(放開瞬間的時序守衛)", async () => {
+    sidebar();
+    await waitGroups();
+    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
+    fireEvent(handle, ptrEvt("pointerdown", 10, 80));
+    fireEvent.click(groupHeader("主力"));
+    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+    fireEvent(window, ptrEvt("pointerup", 10, 80));
   });
 });
 
@@ -473,7 +540,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
   it("拖進折疊中的群組 → append 到該組尾端", async () => {
     sidebar();
     await waitGroups();
-    fireEvent.click(screen.getByLabelText("折疊 觀察"));
+    fireEvent.click(groupHeader("觀察"));
     expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
     stubRects();
     const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");

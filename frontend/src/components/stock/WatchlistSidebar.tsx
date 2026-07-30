@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 
 import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
@@ -88,6 +88,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     to: string | null;
     index: number;
   } | null>(null);
+  // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const asideRef = useRef<HTMLElement | null>(null);
   // key = 群組名;`null` = 未分組區塊
   const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());
@@ -221,6 +223,54 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("keydown", onKey);
+  }
+
+  /** 群組 / 未分組的標題列(round4 項 4)。**整條是一顆 `<button>`** ——
+   *  原本只有 3px 寬的 `▸/▾` 可點,而折疊是高頻操作。
+   *
+   *  用原生 button 不用 `role="button"` + tabIndex:免費得到鍵盤 Enter/Space、
+   *  focus ring 與正確的 SR 角色;`role` 版要自己補 `onKeyDown` 處理 Space(且預設會捲頁)。
+   *  `▸/▾` 降級成 `aria-hidden` 的狀態指示,狀態改由 `aria-expanded` 播報 ——
+   *  兩邊都講會重複播報,而且可能不同步。舊的 `aria-label="折疊 X"` 隨之移除,
+   *  可及名稱改由可見文字(組名 + 計數)提供。
+   *
+   *  `aria-controls` 的 id **不可拿組名拼**:組名是使用者自由輸入(`addGroup` 只 trim),
+   *  含空白的名字會產生含空白的 id,而 ID token list 會把它拆成兩個不存在的 token →
+   *  a11y 關聯靜默失效;叫 `ungrouped` 的群組還會撞未分組區塊的 id。 */
+  function sectionHeader(o: {
+    label: string;
+    count: number;
+    collapsed: boolean;
+    listId: string;
+    onToggle: () => void;
+  }): React.ReactElement {
+    return (
+      <button
+        type="button"
+        aria-expanded={!o.collapsed}
+        aria-controls={o.listId}
+        // 拖曳放開的瞬間 React 可能剛重繪、游標恰落在新的 header 上。天然防線是
+        // click 只在 pointerdown/up 的最近共同祖先派發(握把在列內,祖先是 section),
+        // 這行是針對時序邊角的顯式守衛。
+        onClick={() => {
+          if (drag !== null) return;
+          o.onToggle();
+        }}
+        className={cn(
+          "flex w-full items-center gap-1 border-b border-line px-1 py-1 text-left",
+          "focus-visible:border-b-accent focus-visible:outline-none",
+          // 拖曳中關掉 hover 亮色:否則會與落點高亮(border-accent)搶語意 ——
+          // 使用者分不清「這是可放的組」還是「這是可點的鈕」
+          drag === null && "hover:bg-surface",
+        )}
+      >
+        <span aria-hidden="true" className="w-3 shrink-0 text-xs text-ink-dim">
+          {o.collapsed ? "▸" : "▾"}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-xs text-ink">{o.label}</span>
+        <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
+      </button>
+    );
   }
 
   function stockRow(code: string, group: string | null): React.ReactElement {
@@ -412,22 +462,16 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           drag !== null && drag.to === null && "border-accent",
         )}
       >
-        <header className="flex items-center gap-1 border-b border-line px-1 py-0.5">
-          <button
-            type="button"
-            aria-label={`${ungroupedCollapsed ? "展開" : "折疊"} 未分組`}
-            onClick={toggleUngroupedCollapsed}
-            className="w-3 shrink-0 text-xs text-ink-dim hover:text-ink"
-          >
-            {ungroupedCollapsed ? "▸" : "▾"}
-          </button>
-          <span className="min-w-0 flex-1 truncate text-xs text-ink">未分組</span>
-          <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">
-            {ungrouped.length}
-          </span>
-        </header>
+        {sectionHeader({
+          label: "未分組",
+          count: ungrouped.length,
+          collapsed: ungroupedCollapsed,
+          listId: `${uid}-wl-list-ung`,
+          onToggle: toggleUngroupedCollapsed,
+        })}
         {ungroupedCollapsed ? null : (
           <ul
+            id={`${uid}-wl-list-ung`}
             data-testid="wl-list-ungrouped"
             ref={(el) => {
               if (el) listRefs.current.set(null, el);
@@ -445,8 +489,9 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
         )}
       </section>
 
-      {groups.map((g) => {
+      {groups.map((g, i) => {
         const isCollapsed = collapsed.has(g.name);
+        const listId = `${uid}-wl-list-${i}`;
         return (
           <section
             key={g.name}
@@ -460,23 +505,17 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               drag !== null && drag.to === g.name && "border-accent",
             )}
           >
-            <header className="flex items-center gap-1 border-b border-line px-1 py-0.5">
-              <button
-                type="button"
-                aria-label={`${isCollapsed ? "展開" : "折疊"} ${g.name}`}
-                onClick={() => toggleCollapsed(g.name)}
-                className="w-3 shrink-0 text-xs text-ink-dim hover:text-ink"
-              >
-                {isCollapsed ? "▸" : "▾"}
-              </button>
-              <span className="min-w-0 flex-1 truncate text-xs text-ink">{g.name}</span>
-              <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">
-                {g.codes.length}
-              </span>
-            </header>
+            {sectionHeader({
+              label: g.name,
+              count: g.codes.length,
+              collapsed: isCollapsed,
+              listId,
+              onToggle: () => toggleCollapsed(g.name),
+            })}
 
             {isCollapsed ? null : (
               <ul
+                id={listId}
                 data-testid={`wl-list-${g.name}`}
                 ref={(el) => {
                   if (el) listRefs.current.set(g.name, el);
