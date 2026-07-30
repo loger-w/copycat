@@ -43,6 +43,8 @@ from copycat.stock_watchlist import (
     validate_code,
 )
 from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
+from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
+from copycat.stock_names import load_names as load_stock_names
 from copycat.server.trade import (
     ConfirmRequiredError,
     InvalidOrderError,
@@ -133,10 +135,13 @@ def create_app(
     corr_source: CorrSource | object | None = None,
     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
+    stock_names_path: Path | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
+    # 名稱表是版控檔(必然存在)→ 沒有注入點的話「表不可用」這條降級路徑無法測
+    names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
@@ -423,6 +428,16 @@ def create_app(
         if stock is None:
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
         return stock
+
+    @app.get("/api/stock/names")
+    async def stock_names() -> dict:
+        """全市場代號↔名稱(搜尋提示列用)。**刻意不過 `_stock()` 閘** —— 名稱表與 TC4
+        連線無關,達錢 4 沒開時也該能搜尋。表不存在 / 壞檔 → 空陣列(不 500)。"""
+        names = load_stock_names(names_path)
+        return {
+            "names": [{"code": code, "name": name} for code, name in names.items()],
+            "count": len(names),
+        }
 
     @app.get("/api/stock/watchlist")
     async def stock_watchlist_get(request: Request) -> dict:

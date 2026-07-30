@@ -136,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("refresh-stkfut-map", help="重抓期交所股票期貨對映(期現對照用)")
 
+    sub.add_parser("refresh-stock-names", help="重抓 TWSE ISIN 全市場股票名稱表(搜尋提示用)")
+
     p_nt = sub.add_parser("notify-test", help="Discord webhook 實發測試")
     p_nt.add_argument("--message", default="copycat notify-test")
     p_nt.add_argument("--title", default=None)
@@ -346,6 +348,12 @@ def main(argv: list[str] | None = None) -> int:
 
         mapping = refresh()
         sys.stdout.write(f"stkfut map 更新完成:{len(mapping)} 檔\n")
+        return 0
+    if args.command == "refresh-stock-names":
+        from copycat.stock_names import refresh as refresh_names
+
+        names = refresh_names()
+        sys.stdout.write(f"股票名稱表更新完成:{len(names)} 檔\n")
         return 0
     return 1
 

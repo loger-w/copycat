@@ -76,15 +76,52 @@ class FakeStockSource:
         pass
 
 
-def make_client(tmp_path: Path) -> tuple[TestClient, FakeStockSource]:
+def make_client(
+    tmp_path: Path, *, names_path: Path | None = None
+) -> tuple[TestClient, FakeStockSource]:
     fake = FakeStockSource()
     app = create_app(
         FakeTxoSource(),
         stock_source=fake,
         stock_watchlist_path=tmp_path / "watchlist.json",
+        stock_names_path=names_path,
         throttle_secs=0.01,
     )
     return TestClient(app, raise_server_exceptions=False), fake
+
+
+class TestStockNamesRoute:
+    """搜尋提示列的名稱表(round4 項 1)。表是版控檔 → 降級路徑必須靠注入點才測得到。"""
+
+    def test_returns_versioned_table(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)  # names_path=None → 用版控檔
+        with client:
+            body = client.get("/api/stock/names").json()
+        assert body["count"] == len(body["names"])
+        assert body["count"] > 1_800  # 版控檔實測 2,401
+        assert {"code": "2330", "name": "台積電"} in body["names"]
+
+    def test_missing_table_returns_empty_not_500(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path, names_path=tmp_path / "nope.json")
+        with client:
+            r = client.get("/api/stock/names")
+        assert r.status_code == 200
+        assert r.json() == {"names": [], "count": 0}
+
+    def test_corrupt_table_returns_empty_not_500(self, tmp_path: Path) -> None:
+        bad = tmp_path / "bad.json"
+        bad.write_text("{oops", encoding="utf-8")
+        client, _ = make_client(tmp_path, names_path=bad)
+        with client:
+            r = client.get("/api/stock/names")
+        assert r.status_code == 200
+        assert r.json() == {"names": [], "count": 0}
+
+    def test_available_without_tc4(self, tmp_path: Path) -> None:
+        """名稱表與 TC4 連線無關:達錢 4 沒開(stock engine 未就緒)也要能搜尋。"""
+        app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
+        with TestClient(app, raise_server_exceptions=False) as client:
+            assert client.get("/api/stock/names").status_code == 200
 
 
 class TestWatchlistRoutes:
