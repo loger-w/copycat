@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -142,5 +142,118 @@ describe("StockPage", () => {
     const main = container.querySelector("main")!;
     expect(main.className).toContain("overflow-y-auto");
     expect(main.className).toContain("min-h-0");
+  });
+});
+
+// 🟢 round4 項 4:搜尋改預覽後,「加入自選」的入口移到分時圖上方的報價 header
+describe("StockPage 加入自選(round4 項 4)", () => {
+  let putBodies: unknown[];
+
+  function mockApi(codes: string[], groups: { name: string; codes: string[] }[]): void {
+    putBodies = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as unknown;
+          putBodies.push(body);
+          return new Response(JSON.stringify(body));
+        }
+        if (String(url).includes("/api/stock/names")) {
+          return new Response(JSON.stringify({ names: [], count: 0 }));
+        }
+        if (String(url).includes("/api/stock/watchlist")) {
+          return new Response(JSON.stringify({ codes, groups }));
+        }
+        if (String(url).includes("/api/stock/bars")) return new Response(JSON.stringify({ bars: [] }));
+        if (String(url).includes("/api/stock/overlay")) {
+          return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+  }
+
+  const GROUPS = [{ name: "主力", codes: ["2330"] }];
+
+  it("看非自選股 → header 出現「加入自選」;已在自選 → 不出現", async () => {
+    mockApi(["2330"], GROUPS);
+    const { rerender } = wrap(
+      <StockPage code="2317" onSelect={vi.fn()} stream={stream()} />,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    cleanup();
+    mockApi(["2330"], GROUPS);
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.queryByText("台積電")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "加入自選" })).toBeNull();
+    expect(rerender).toBeTruthy();
+  });
+
+  it("點按鈕 → 展開群組清單 + 未分組", async () => {
+    mockApi(["2330"], GROUPS);
+    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+    expect(screen.getByLabelText("加入 2317 到 主力")).toBeTruthy();
+    expect(screen.getByLabelText("加入 2317 到未分組")).toBeTruthy();
+  });
+
+  it("選群組 → **PUT 恰一筆**,codes 與該組同時含該檔", async () => {
+    mockApi(["2330"], GROUPS);
+    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+    fireEvent.click(screen.getByLabelText("加入 2317 到 主力"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    const body = putBodies[0] as { codes: string[]; groups: { name: string; codes: string[] }[] };
+    expect(body.codes).toEqual(["2330", "2317"]);
+    expect(body.groups[0]!.codes).toEqual(["2330", "2317"]);
+  });
+
+  it("選「未分組」→ 只加進 codes,群組零改動", async () => {
+    mockApi(["2330"], GROUPS);
+    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+    fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    const body = putBodies[0] as { codes: string[]; groups: { name: string; codes: string[] }[] };
+    expect(body.codes).toEqual(["2330", "2317"]);
+    expect(body.groups).toEqual(GROUPS);
+  });
+
+  it("自選尚未載入 → 按鈕不渲染(EMPTY_WL fallback 上按加入會把整份自選清空)", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Promise<Response>(() => {})), // 永不 resolve
+    );
+    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    expect(screen.queryByRole("button", { name: "加入自選" })).toBeNull();
+  });
+
+  it("PUT 失敗 → header 顯示中文文案(上限 / 壞碼看得到)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          return new Response(JSON.stringify({ detail: { error: "WATCHLIST_FULL" } }), {
+            status: 400,
+          });
+        }
+        if (String(url).includes("/api/stock/names")) {
+          return new Response(JSON.stringify({ names: [], count: 0 }));
+        }
+        if (String(url).includes("/api/stock/watchlist")) {
+          return new Response(JSON.stringify({ codes: ["2330"], groups: GROUPS }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+    fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
+    await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
   });
 });

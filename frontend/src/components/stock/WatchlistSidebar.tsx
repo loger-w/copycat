@@ -8,7 +8,6 @@ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks } from "@/lib/stock-search";
 import { cn } from "@/lib/utils";
 import {
-  addCode,
   assignToGroup,
   detachFromGroups,
   moveToGroup,
@@ -135,17 +134,22 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     });
   }
 
-  /** 加進自選(落未分組);已在自選 → `addCode` 回原物件 → 零 PUT(W-21)。 */
-  function add(rawCode: string): void {
+  /** 搜尋命中 → **預覽**該檔(round4 項 4)。
+   *
+   *  舊行為是直接寫進自選(落未分組)。使用者的抱怨是「還沒看過就被塞進清單」——
+   *  現在改成只換主圖;要不要收藏、收藏到哪一組,由分時圖上方的「加入自選」按鈕決定。
+   *  非自選股照樣能訂閱看盤(`/api/stock/state/{code}` 內含 `set_main`),
+   *  所以「預覽」不需要任何新狀態,直接複用主檔選取。 */
+  function preview(rawCode: string): void {
     const code = rawCode.trim().toUpperCase();
     setInput("");
     if (code === "") return;
-    commit(addCode(wl, code));
+    onSelect(code);
   }
 
-  /** Enter / 點「新增」:提示列有命中取第一筆,無命中則原樣當股號(W-4 的兩條路徑)。 */
+  /** Enter / 點「查看」:提示列有命中取第一筆,無命中則原樣當股號(W-4 的兩條路徑)。 */
   function submitAdd(): void {
-    add(suggestions[0]?.code ?? input);
+    preview(suggestions[0]?.code ?? input);
   }
 
   /** 落點幾何。**每次 pointermove 重算** —— 只在 pointerdown 算一次的話,側欄捲動或
@@ -426,7 +430,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
             onClick={submitAdd}
             className="shrink-0 rounded border border-line px-2 py-1 text-sm text-ink hover:border-accent"
           >
-            新增
+            查看
           </button>
         </div>
         {suggestions.length > 0 ? (
@@ -435,8 +439,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               <li key={s.code}>
                 <button
                   type="button"
-                  aria-label={`加入 ${s.code} ${s.name}`}
-                  onClick={() => add(s.code)}
+                  aria-label={`查看 ${s.code} ${s.name}`}
+                  onClick={() => preview(s.code)}
                   className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface"
                 >
                   <span className="w-14 font-mono text-ink">{s.code}</span>

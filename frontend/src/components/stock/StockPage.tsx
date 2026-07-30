@@ -1,9 +1,13 @@
+import { useState } from "react";
+
 import { OrderBook } from "@/components/stock/OrderBook";
 import { StockChart } from "@/components/stock/StockChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { cn } from "@/lib/utils";
+import { addCode, assignToGroup, type Watchlist } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
@@ -21,10 +25,36 @@ interface Props {
 
 export function StockPage({ code, onSelect, stream }: Props) {
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
+  // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
+  // 使用者先看到資料,再決定要不要收藏、收到哪一組。
+  const { data: wl } = useStockWatchlist();
+  const save = useSaveWatchlist();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const meta = accum?.meta ?? null;
   const last = accum?.last ?? null;
   const chg = last && meta?.ref ? ((last.p - meta.ref) / meta.ref) * 100 : null;
+
+  // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
+  // 靜默清空。這是新入口才有的 gate,不是既有行為。
+  const canAdd = wl !== undefined && code !== null && !wl.codes.includes(code);
+
+  /** 零 PUT 早退(W-9):`assignToGroup` 內部恆回新陣列,內容相同也會送出,
+   *  而內容相同的 PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB)。 */
+  function commit(next: Watchlist): void {
+    setPickerOpen(false);
+    if (wl === undefined) return;
+    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
+    save.mutate(next);
+  }
+
+  /** 加自選 + 指派群組**合成單次 PUT**:分兩次會產出「在群組但不在 codes」的中間態。 */
+  function addTo(group: string | null): void {
+    if (wl === undefined || code === null) return;
+    const withCode = addCode(wl, code);
+    const g = group === null ? null : withCode.groups.find((x) => x.name === group);
+    commit(g === null || g === undefined ? withCode : assignToGroup(withCode, code, g.name, g.codes.length));
+  }
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
@@ -71,6 +101,51 @@ export function StockPage({ code, onSelect, stream }: Props) {
                     </span>
                   ) : null}
                 </span>
+              ) : null}
+              {/* 加入自選(round4 項 4)。只在「看的是非自選股」時出現 —— 已在自選的檔
+                  按了也沒有意義,按鈕本身就是狀態指示。
+                  面板照側欄 assigning 的裸 div + button 慣例(專案無 Radix)。 */}
+              {canAdd ? (
+                <span className="relative">
+                  <button
+                    type="button"
+                    aria-label="加入自選"
+                    aria-expanded={pickerOpen}
+                    disabled={save.isPending}
+                    onClick={() => setPickerOpen((v) => !v)}
+                    className="rounded border border-accent px-2 py-0.5 text-xs text-accent disabled:opacity-50"
+                  >
+                    加入自選
+                  </button>
+                  {pickerOpen ? (
+                    <span className="absolute top-full left-0 z-20 mt-1 flex w-max flex-wrap gap-1 rounded border border-line bg-bg-deep p-2">
+                      {wl.groups.map((g) => (
+                        <button
+                          key={g.name}
+                          type="button"
+                          aria-label={`加入 ${code} 到 ${g.name}`}
+                          onClick={() => addTo(g.name)}
+                          className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent"
+                        >
+                          {g.name}
+                        </button>
+                      ))}
+                      {/* 零群組的使用者唯一的路徑,不可省 */}
+                      <button
+                        type="button"
+                        aria-label={`加入 ${code} 到未分組`}
+                        onClick={() => addTo(null)}
+                        className="rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink"
+                      >
+                        未分組
+                      </button>
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+              {/* 上限 / 壞碼的文案要看得見,否則點了像沒反應 */}
+              {save.error ? (
+                <span className="text-xs text-bear">{errText(save.error.message)}</span>
               ) : null}
               <span className="ml-auto font-mono text-xs text-ink-dim">
                 總量 {last?.cum_vol ?? "-"} · 昨量 {meta?.y_vol ?? "-"}

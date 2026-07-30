@@ -321,7 +321,7 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
     mockWatchlist([], []);
     sidebar();
     await waitFor(() => expect(search()).toBeTruthy());
-    expect(screen.getByText("新增")).toBeTruthy();
+    expect(screen.getByText("查看")).toBeTruthy();
   });
 
   it("輸入名稱 → 提示列出現該檔代碼與名稱", async () => {
@@ -340,42 +340,50 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
     expect(within(screen.getByTestId("stock-suggest")).getByText("鴻海")).toBeTruthy();
   });
 
-  it("點提示列 → 進未分組(不進任何群組)", async () => {
-    sidebar();
+  // 🔴 round4 項 4(B-5):搜尋三條路徑一律改成**預覽**,不再直接寫進自選。
+  // 「加入哪一組」交給分時圖上方的按鈕決定(StockPage)。
+  it("點提示列 → 只預覽該檔(onSelect),不寫進自選", async () => {
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
     await waitGroups();
     fireEvent.change(search(), { target: { value: "鴻海" } });
-    fireEvent.click(screen.getByLabelText("加入 2317 鴻海"));
-    await waitFor(() => expect(putBodies).toHaveLength(1));
-    expect(putBodies[0]!.codes).toEqual([...CODES, "2317"]);
-    expect(putBodies[0]!.groups).toEqual(GROUPS); // 群組零改動
-    await waitFor(() =>
-      expect(within(screen.getByTestId("wl-list-ungrouped")).getByText("2317")).toBeTruthy(),
-    );
+    fireEvent.click(screen.getByLabelText("查看 2317 鴻海"));
+    expect(onSelect).toHaveBeenCalledWith("2317");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+    expect(within(screen.getByTestId("wl-list-ungrouped")).queryByText("2317")).toBeNull();
   });
 
-  it("點「新增」鈕加入(W-4 的兩條路徑之一,不能只留 Enter)", async () => {
-    sidebar();
+  it("點「查看」鈕 → 預覽提示列第一筆,零 PUT(W-4 兩條路徑之一)", async () => {
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
     await waitGroups();
     fireEvent.change(search(), { target: { value: "2317" } });
-    fireEvent.click(screen.getByText("新增"));
-    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "2317"]));
+    fireEvent.click(screen.getByText("查看"));
+    expect(onSelect).toHaveBeenCalledWith("2317");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
   });
 
-  it("Enter + 提示列無命中 → 原樣當股號加入(W-4)", async () => {
-    sidebar();
+  it("Enter + 提示列無命中 → 原樣當股號預覽(W-4)", async () => {
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
     await waitGroups();
     fireEvent.change(search(), { target: { value: "9958" } });
     expect(screen.queryByTestId("stock-suggest")).toBeNull();
     fireEvent.keyDown(search(), { key: "Enter" });
-    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "9958"]));
+    expect(onSelect).toHaveBeenCalledWith("9958");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
   });
 
-  // self-review MC-6:mutation test 證明停用早退後測試照樣全綠 → 重複 PUT 沒人發現
-  it("已在自選的股票再加一次 → 零 PUT(不送重複)", async () => {
-    sidebar();
+  it("已在自選的股票搜尋 → 一樣只預覽(零 PUT)", async () => {
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
     await waitGroups();
     fireEvent.change(search(), { target: { value: "2330" } });
-    fireEvent.click(screen.getByText("新增"));
+    fireEvent.click(screen.getByText("查看"));
+    expect(onSelect).toHaveBeenCalledWith("2330");
     await new Promise((r) => setTimeout(r, 30));
     expect(putBodies).toEqual([]);
   });
@@ -406,12 +414,13 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
       // 這支刻意回**舊形狀**(只有 groups):守住「回應缺 codes → 前端用聯集補」的相容路徑
       return new Response(JSON.stringify({ groups: GROUPS }));
     });
-    sidebar();
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
     await waitGroups();
     fireEvent.change(search(), { target: { value: "2317" } });
     expect(screen.queryByTestId("stock-suggest")).toBeNull();
     fireEvent.keyDown(search(), { key: "Enter" });
-    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "2317"]));
+    expect(onSelect).toHaveBeenCalledWith("2317");
   });
 
   it("PUT 失敗 → 側欄顯示對應的中文文案", async () => {
@@ -425,8 +434,8 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
     });
     sidebar();
     await waitGroups();
-    fireEvent.change(search(), { target: { value: "2317" } });
-    fireEvent.click(screen.getByText("新增"));
+    // 搜尋改成預覽後不再發 PUT → 用仍會 PUT 的路徑(群組列的 ×)驗錯誤文案
+    fireEvent.click(within(screen.getByTestId("wl-group-觀察")).getByLabelText("移除 3231"));
     await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
   });
 });
