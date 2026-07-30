@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
-import { R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
+import { buildIntradayGeometry, lastPoint, R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
 
 const OVERLAY = {
   // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
@@ -449,5 +449,92 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
     fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
     const tag = container.querySelector('[data-testid="price-tag"]')!;
     expect(Number(tag.getAttribute("width"))).toBe(Y_AXIS_W);
+  });
+});
+
+// 🟢 round5 SC-1 / SC-2:當日高低線 + 現價圈
+describe("StockIntradayChart 當日高低與現價圈", () => {
+  const withHL = (high: number | null, low: number | null) => ({ ...ACCUM, high, low });
+
+  function geometryOf(container: HTMLElement) {
+    const [, , w, h] = container
+      .querySelector("svg")!
+      .getAttribute("viewBox")!
+      .split(" ")
+      .map(Number);
+    return buildIntradayGeometry(
+      { minutes: ACCUM.minutes, meta: ACCUM.meta },
+      { width: w!, height: h! },
+    );
+  }
+
+  it("域內的當日高低 → 兩條線 + 右緣價位標(數字 = top-level high/low 毫元轉元)", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+    expect(container.querySelector('[data-testid="day-high"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
+    expect(screen.getByTestId("day-high-label").textContent).toBe("2395");
+    expect(screen.getByTestId("day-low-label").textContent).toBe("2370");
+  });
+
+  it("高低線的 y 對得上價格縮放(與疊線共用 toY)", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+    const g = geometryOf(container);
+    const high = container.querySelector('[data-testid="day-high"]')!;
+    expect(Number(high.getAttribute("y1"))).toBeCloseTo(g.toY(2_395_000), 5);
+  });
+
+  // review R12:無漲跌停時 y 域由**分鐘收盤**極值決定,裝不下逐筆極值 → 線會畫到時間軸上
+  it("當日高超出 y 域 → 不畫(低點仍畫)", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_600_000, 2_370_000)} />);
+    expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
+    expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
+  });
+
+  it("高低為 null(舊 snapshot / 尚無成交)→ 不畫", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(null, null)} />);
+    expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
+    expect(container.querySelector('[data-testid="day-low"]')).toBeNull();
+  });
+
+  it("現價圈落在走勢線最右端", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const g = geometryOf(container);
+    const lp = lastPoint(g)!;
+    const dot = container.querySelector('[data-testid="last-dot"]')!;
+    expect(Number(dot.getAttribute("cx"))).toBeCloseTo(lp.x, 5);
+    expect(Number(dot.getAttribute("cy"))).toBeCloseTo(lp.y, 5);
+  });
+
+  it("現價圈與數字依現價 vs 參考價三態上色", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />); // 2380 > ref 2320
+    expect(container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")).toContain(
+      "fill-bull",
+    );
+    expect(screen.getByTestId("last-price").getAttribute("class")).toContain("fill-bull");
+    cleanup();
+
+    const bear = { ...ACCUM, last: { p: 2_300_000, t: "09:02:00.000", cum_vol: 12 } };
+    const r2 = wrap(<StockIntradayChart accum={bear} />);
+    expect(r2.container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")).toContain(
+      "fill-bear",
+    );
+    cleanup();
+
+    const flat = { ...ACCUM, last: { p: 2_320_000, t: "09:02:00.000", cum_vol: 12 } };
+    const r3 = wrap(<StockIntradayChart accum={flat} />);
+    expect(r3.container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")).toContain(
+      "fill-ink-dim",
+    );
+  });
+
+  it("尚無成交 → 不渲染圓點且不崩", () => {
+    const empty = fromSnapshot({
+      code: "2330", seq: 1, last: null, vwap: null, cum_inner: 0, cum_outer: 0,
+      minutes: {}, ticks: [], book: null,
+      meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_close: null, y_vol: null },
+    });
+    const { container } = wrap(<StockIntradayChart accum={empty} />);
+    expect(container.querySelector('[data-testid="last-dot"]')).toBeNull();
+    expect(screen.getByText("尚無成交")).toBeTruthy();
   });
 });

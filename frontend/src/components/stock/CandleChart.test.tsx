@@ -317,3 +317,38 @@ describe("CandleChart 高度 prop(SC-6 / T-10b)", () => {
     expect(probe().viewBox).toBe("0 0 1400 578");
   });
 });
+
+// 🟢 round5 SC-3:視窗高低標(數字與 figcaption 同源 → 縮放後必然同步)
+describe("CandleChart 視窗高低標", () => {
+  const capOf = (container: HTMLElement): string =>
+    container.querySelector("figcaption")!.textContent ?? "";
+
+  it("兩條線 + 價位標,數字等於 figcaption 的高 / 低", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    expect(container.querySelector("[data-testid='window-high']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='window-low']")).toBeTruthy();
+    expect(screen.getByTestId("window-high-label").textContent).toBe("118");
+    expect(screen.getByTestId("window-low-label").textContent).toBe("95");
+    expect(capOf(container)).toContain("高 118");
+    expect(capOf(container)).toContain("低 95");
+  });
+
+  it("滾輪縮放改變可視範圍後,價位標與 figcaption 仍相等", () => {
+    const many = Array.from({ length: 300 }, (_, i) =>
+      bar(`2026-01-${String((i % 28) + 1).padStart(2, "0")}`,
+        100_000 + i, 100_100 + i, 99_900 + i, 100_000 + i),
+    );
+    const { container } = render(<CandleChart bars={many} initBars={240} />);
+    const svg = container.querySelector("svg")!;
+    for (let i = 0; i < 5; i += 1) fireEvent.wheel(svg, { deltaY: -100, clientX: 700 });
+    const high = screen.getByTestId("window-high-label").textContent!;
+    const low = screen.getByTestId("window-low-label").textContent!;
+    expect(capOf(container)).toContain(`高 ${high}`);
+    expect(capOf(container)).toContain(`低 ${low}`);
+  });
+
+  it("無可視 bar → 不渲染", () => {
+    const { container } = render(<CandleChart bars={[]} />);
+    expect(container.querySelector("[data-testid='window-high']")).toBeNull();
+  });
+});
