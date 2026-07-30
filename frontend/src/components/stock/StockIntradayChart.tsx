@@ -1,6 +1,12 @@
 import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+import {
+  clampLabelX,
+  INTRADAY_MARK,
+  markLabelY,
+  trianglePoints,
+} from "@/lib/chart-extreme";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
@@ -95,18 +101,8 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
     : `${fmtTickPrice(priceMilli)}*`;
 }
 
-/** 極值標記的三角(round4 項 1)。**apex 貼在價位上、body 朝圖內延伸** ——
- *  body 朝圖外的話,當極值恰在 y 域端點(K 線視窗高低是常態、分時圖漲跌停時)
- *  三角會被 viewBox 裁掉半截。 */
-function trianglePoints(x: number, y: number, dir: "up" | "down"): string {
-  const dy = dir === "up" ? 6 : -6;
-  return `${x},${y} ${x - 3.5},${y + dy} ${x + 3.5},${y + dy}`;
-}
-
-/** 極值價位文字的 baseline。預設畫在三角的外側,撞到圖框就翻到另一側。 */
-function markLabelY(y: number, dir: "up" | "down", bottomLimit: number): number {
-  return dir === "up" ? (y - 5 < 9 ? y + 15 : y - 5) : y + 12 > bottomLimit ? y - 10 : y + 12;
-}
+/** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
+const MARK_LABEL_TOP = 9;
 
 /** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
 const ChartStatic = memo(function ChartStatic({
@@ -249,15 +245,15 @@ const ChartStatic = memo(function ChartStatic({
           <g key={id}>
             <polygon
               data-testid={id}
-              points={trianglePoints(mark.x, mark.y, dir)}
+              points={trianglePoints(mark.x, mark.y, dir, INTRADAY_MARK)}
               className="fill-ink-muted stroke-surface"
               strokeWidth={1}
               paintOrder="stroke"
             />
             <text
               data-testid={`${id}-label`}
-              x={Math.min(Math.max(mark.x, Y_AXIS_W + 16), w - R_AXIS_W - 16)}
-              y={markLabelY(mark.y, dir, plotBottom)}
+              x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
+              y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
               textAnchor="middle"
               className="fill-ink-muted stroke-surface"
               strokeWidth={2}
