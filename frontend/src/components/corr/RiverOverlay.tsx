@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   buildOverlayGeometry,
   offsetAtX,
+  spreadLabelYs,
   timeTicks,
   type OverlayEntry,
   type RiverSize,
@@ -50,6 +51,13 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     const px = ((e.clientX - rect.left) / rect.width) * SIZE.width;
     setCursor(offsetAtX(px, win, SIZE));
   }
+
+  // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
+  const labelYs = spreadLabelYs(
+    g.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
+    11,
+    SIZE.height - 14,
+  );
 
   const readout =
     cursor === null
@@ -118,7 +126,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
         <text x={2} y={SIZE.height - 16} className="fill-ink-dim" fontSize="0.625rem">
           {fmtPct(g.pctDomain[0])}
         </text>
-        {g.lines.map((line) => (
+        {g.lines.map((line, i) => (
           <g key={line.key}>
             <polyline
               points={pts(line.pts)}
@@ -129,7 +137,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
             {line.pts.length > 0 ? (
               <text
                 x={Math.min(line.pts[line.pts.length - 1]!.x + 4, SIZE.width - 30)}
-                y={line.pts[line.pts.length - 1]!.y + 3}
+                y={labelYs[i]}
                 className={RIVER_FILLS[line.colorIndex % RIVER_FILLS.length]}
                 fontSize="0.625rem"
               >

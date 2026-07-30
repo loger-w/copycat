@@ -186,6 +186,28 @@ export function timeTicks(window: RiverWindow): { offset: number; label: string 
   return ticks;
 }
 
+/** 右緣腿名的防疊:把靠太近的 y 往下推開至 `minGap`,推到底再往上回折。
+ *
+ * 六腿收盤價位接近時(real-env 截圖實見),原位標籤會互相疊住 —— 既有 `IndexPage` 只有
+ * 兩條線所以沒踩到。回傳陣列與**輸入順序**對應(呼叫端依 index 取用)。
+ */
+export function spreadLabelYs(ys: number[], minGap: number, maxY: number): number[] {
+  const order = ys.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y);
+  let prev = -Infinity;
+  for (const item of order) {
+    item.y = Math.max(item.y, prev + minGap);
+    prev = item.y;
+  }
+  // 超出下緣 → 整串往上平移(仍保持彼此間距)
+  const overflow = prev - maxY;
+  if (overflow > 0) {
+    for (const item of order) item.y -= overflow;
+  }
+  const out = new Array<number>(ys.length);
+  for (const item of order) out[item.i] = item.y;
+  return out;
+}
+
 /** 游標 x(viewBox 座標)→ 最近的分鐘 offset;域外 null(不 clamp 成端點)。 */
 export function offsetAtX(
   xPx: number,

@@ -4,6 +4,7 @@ import {
   buildLegGeometry,
   buildOverlayGeometry,
   offsetAtX,
+  spreadLabelYs,
   timeTicks,
 } from "@/lib/river-chart-svg";
 import type { RiverLeg, RiverWindow } from "@/types";
@@ -152,6 +153,32 @@ describe("timeTicks", () => {
       { offset: 540, label: "00:00" },
       { offset: 720, label: "03:00" },
     ]);
+  });
+});
+
+describe("spreadLabelYs", () => {
+  // real-env 截圖發現:六腿收盤價位接近時,右緣腿名互相疊住讀不到(SC-8 要求「右緣印腿名」)
+  it("間距足夠時原位不動", () => {
+    expect(spreadLabelYs([10, 40, 80], 11, 300)).toEqual([10, 40, 80]);
+  });
+
+  it("擠在一起的標籤往下推開到最小間距", () => {
+    expect(spreadLabelYs([100, 103, 106], 11, 300)).toEqual([100, 111, 122]);
+  });
+
+  it("回傳順序與輸入順序對應(不是排序後的順序)", () => {
+    // 依 y 升冪推開:100(idx1)不動 → 103(idx2)推到 111 → 106(idx0)推到 122
+    expect(spreadLabelYs([106, 100, 103], 11, 300)).toEqual([122, 100, 111]);
+  });
+
+  it("推到底時往上回折,不超出畫布", () => {
+    const out = spreadLabelYs([98, 99, 100], 11, 100);
+    expect(Math.max(...out)).toBeLessThanOrEqual(100);
+    expect(new Set(out).size).toBe(3);
+  });
+
+  it("空輸入回空", () => {
+    expect(spreadLabelYs([], 11, 300)).toEqual([]);
   });
 });
 
