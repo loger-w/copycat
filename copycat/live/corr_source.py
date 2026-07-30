@@ -20,6 +20,7 @@ import logging
 import time
 from typing import Any, Callable
 
+from copycat.live.river_backfill import collect_1k_minutes
 from copycat.live.tc4 import TC4QuoteSource, build_rt_request
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,18 @@ class CorrQuoteSource(TC4QuoteSource):
         if symbol in self._subscribed:
             self._rt_request("UNSUBQUOTE", symbol)
             self._subscribed.discard(symbol)
+
+    # ---- 江波圖當日回補(index-river-chart SC-3)----
+
+    def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
+        """當日 1K → [(台北 minute_end, close 毫點)];首頁未備妥回空(引擎逐腿降級)。"""
+        self._ensure_connected()
+        return collect_1k_minutes(
+            sub_history=self._sub_history,
+            get_history=self._get_history,
+            symbol=symbol,
+            poll_wait=self._poll_wait,
+        )
 
     # ---- listener:原始 Quote dict 分派(同 futures_source 手法)----
 

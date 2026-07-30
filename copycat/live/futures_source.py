@@ -16,6 +16,7 @@ import time
 from typing import Any, Callable
 
 from copycat.live.futures_models import PRODUCTS
+from copycat.live.river_backfill import collect_1k_minutes
 from copycat.live.tc4 import TC4QuoteSource
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,23 @@ class FuturesQuoteSource(TC4QuoteSource):
     def subscribe_all(self) -> None:
         for product in PRODUCTS:
             self.subscribe_symbol(product)
+
+    # ---- 江波圖當日回補(index-river-chart SC-4)----
+
+    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
+        """當日 1K → [(台北 minute_end, close 毫點)]。
+
+        台指的回補**必須從這條 session 發** —— `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在這裡,
+        同 symbol 跨 session 只推一邊(CLAUDE.md §8),從別的 session 問同一檔有把推播
+        搶走的風險。
+        """
+        self._ensure_connected()
+        return collect_1k_minutes(
+            sub_history=self._sub_history,
+            get_history=self._get_history,
+            symbol=futures_symbol(product),
+            poll_wait=self._poll_wait,
+        )
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
 

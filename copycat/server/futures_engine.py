@@ -36,6 +36,8 @@ class FuturesSource(Protocol):
 
     def unsubscribe_symbol(self, product: str) -> None: ...
 
+    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]: ...
+
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
 
     def close(self) -> None: ...
@@ -159,6 +161,19 @@ class FuturesEngine:
         """HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。"""
         st = self._states.get(product)
         return st.resolved_ym if st is not None else None
+
+    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
+        """當日 1K 分鐘序列 passthrough(江波圖台指腿回補;index-river-chart SC-4)。
+
+        阻塞呼叫,呼叫端負責丟 `asyncio.to_thread`。source 未建(未 start / 已 close)→ 回空;
+        `ConnectionError` 照原樣往外拋 —— 回補是可降級的,由呼叫端逐腿處置。
+        本引擎持有 `TC.F.TWF.<product>.HOT` 的 REALTIME 訂閱,所以這檔的歷史也只能從這裡問
+        (同 symbol 跨 session 只推一邊,CLAUDE.md §8)。
+        """
+        source = self._source
+        if source is None:
+            return []
+        return source.fetch_day_1k(product)
 
     # ---- 推播處理(source thread → loop)----
 
