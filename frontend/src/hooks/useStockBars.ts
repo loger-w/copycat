@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import type { Bar } from "@/lib/candle";
+import { inTradingHours } from "@/lib/trading-hours";
 
 /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
  *  - `D`:當日內不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
@@ -29,21 +30,9 @@ export function minutesOf(mode: ChartMode): number {
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
-/** 台北交易時段(本機時區 = 台北,部署綁本機)。
- *
- * 週末必須擋掉:少了星期判定,週六日整個上午都會每 60s 打一次當日段,而當日段恆空
- * → `today_put` don't-cache-empty → 每次都真的走 TC4 SubHistory(首頁 poll deadline
- * ≈ 30s、約 30 個 REQ,搶同一個 source 的 `api.lock`)。也違反 SC-10 的
- * 「非交易時段不應出現週期性請求」(review P1-3)。
- *
- * 起點取 09:01 而非 08:45:當日第一根 1K 就是 09:01,更早輪詢必定空手而回。
- * (國定假日仍會空跑 —— 需要交易日曆才擋得掉,列入 docs/next-time.md。) */
-export function inTradingHours(now: Date = new Date()): boolean {
-  const day = now.getDay();
-  if (day === 0 || day === 6) return false;
-  const mins = now.getHours() * 60 + now.getMinutes();
-  return mins >= 9 * 60 + 1 && mins <= 13 * 60 + 35;
-}
+/** 台北交易時段(本機時區 = 台北)。實作搬到 `lib/trading-hours.ts`(大盤頁共用),
+ *  此處 re-export 讓既有 import 路徑不變。 */
+export { inTradingHours } from "@/lib/trading-hours";
 
 async function fetchBars(code: string, tf: string, days: number): Promise<Bar[]> {
   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
