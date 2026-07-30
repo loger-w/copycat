@@ -118,6 +118,13 @@ export interface CandleGeometry {
   priceAtY: (y: number) => number;
   /** x 像素 → bar index(hover 用);超界回 null */
   indexOf: (x: number) => number | null;
+  /** 價格區底邊(= `height − X_LABEL_H` 再扣掉量區)。
+   *
+   *  極值標記的文字翻面要以**價格區**底為界,不是整張圖底 —— 拿整張圖底當界的話,
+   *  視窗最低點的文字永遠不會翻面、直接落進成交量柱上(常態路徑,BB 關閉時
+   *  `toY(windowLow)` 恰在 `priceBottom − PAD_Y`)。
+   *  由本函數回傳而不是讓元件端重算 `VOL_RATIO`:兩處各寫一份必漂移(同 W-4)。 */
+  priceBottom: number;
 }
 
 export interface Size {
@@ -153,6 +160,7 @@ export function buildCandleGeometry(
       toY: () => priceBottom,
       priceAtY: () => 0,
       indexOf: () => null,
+      priceBottom,
     };
   }
 
@@ -252,5 +260,5 @@ export function buildCandleGeometry(
     return i >= 0 && i < bars.length ? i : null;
   };
 
-  return { candles, volBars, yTicks, toY, priceAtY, indexOf };
+  return { candles, volBars, yTicks, toY, priceAtY, indexOf, priceBottom };
 }

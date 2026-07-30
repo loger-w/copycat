@@ -15,6 +15,12 @@ import {
   type Viewport,
 } from "@/lib/candle-viewport";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+import {
+  CANDLE_MARK,
+  clampLabelX,
+  markLabelY,
+  trianglePoints,
+} from "@/lib/chart-extreme";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
@@ -64,6 +70,17 @@ function pts(line: { x: number; y: number }[]): string {
 /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
 const EMPTY_LINE: { x: number; y: number }[] = [];
 
+/** 視窗高低標記(round4 項 1)。`cx` = 造成該極值那根蠟燭的中心 x。 */
+interface WindowMark {
+  cx: number;
+  y: number;
+  text: string;
+}
+
+/** 極值文字的 baseline 上界(字級 0.625rem ≈ 10px,再留 1px)與左右夾制留邊 */
+const MARK_LABEL_TOP = 11;
+const MARK_LABEL_PAD_X = 20;
+
 /** 值序列 → 折線點。**必須在元件外**且結果包 useMemo:
  *  hover 每個 mousemove 都會 re-render 父層,若線的 array identity 每次都變,
  *  memo 過的 ChartStatic 仍會每次重建(最多 700 根蠟燭 × 3 個節點)。 */
@@ -88,10 +105,8 @@ const ChartStatic = memo(function ChartStatic({
   ma20Line,
   bbUpperLine,
   bbLowerLine,
-  highY,
-  lowY,
-  highText,
-  lowText,
+  highMark,
+  lowMark,
   showVolume,
 }: {
   g: CandleGeometry;
@@ -101,45 +116,49 @@ const ChartStatic = memo(function ChartStatic({
   ma20Line: { x: number; y: number }[];
   bbUpperLine: { x: number; y: number }[];
   bbLowerLine: { x: number; y: number }[];
-  /** 可視視窗的最高 / 最低與其 y;**文字與 figcaption 是同一個字串**(SC-3 由建構保證) */
-  highY: number | null;
-  lowY: number | null;
-  highText: string;
-  lowText: string;
+  /** 可視視窗的最高 / 最低標記(落在造成該極值的那根蠟燭上)。
+   *  **文字與 figcaption 是同一個字串**(SC-3 由建構保證);
+   *  物件必須由呼叫端 useMemo 穩定 identity,否則打穿本 memo(W-3) */
+  highMark: WindowMark | null;
+  lowMark: WindowMark | null;
   /** false = 該資料源沒有量(如櫃買 MIS 取樣合成)→ 量區改印說明,不畫一排 0 柱 */
   showVolume: boolean;
 }) {
   return (
     <g>
-      {/* 視窗高低(SC-3)。與江波圖當日高低同款樣式(4 3 / 0.8),
-          與 y 軸格線(2 3 / 0.5)可區分 */}
+      {/* 視窗高低(round4 項 1)。橫貫左右的虛線已移除 —— 它把整條價位軸都染上
+          「這個視窗的高」這個語意,而使用者要的只是「最高那根在哪、多少錢」。
+          改成標在造成該極值的那根蠟燭影線端點上的三角 + 就地價位文字(與分時圖同語言,
+          幾何規則共用 lib/chart-extreme,尺寸依 viewBox 各帶一份)。 */}
       {([
-        ["window-high", highY, highText],
-        ["window-low", lowY, lowText],
-      ] as const).map(([id, y, text]) =>
-        y === null ? null : (
+        ["window-high", highMark, "up"],
+        ["window-low", lowMark, "down"],
+      ] as const).map(([id, mark, dir]) =>
+        mark === null ? null : (
           <g key={id}>
-            <line
+            <polygon
               data-testid={id}
-              x1={0}
-              x2={w}
-              y1={y}
-              y2={y}
-              className="stroke-ink-muted"
-              strokeDasharray="4 3"
-              strokeWidth={0.8}
+              points={trianglePoints(mark.cx, mark.y, dir, CANDLE_MARK)}
+              className="fill-ink-muted stroke-surface"
+              strokeWidth={1}
+              paintOrder="stroke"
             />
             <text
               data-testid={`${id}-label`}
-              x={w - 2}
-              y={y - 2}
-              textAnchor="end"
+              x={clampLabelX(mark.cx, MARK_LABEL_PAD_X, w - MARK_LABEL_PAD_X)}
+              y={markLabelY(mark.y, dir, CANDLE_MARK, {
+                top: MARK_LABEL_TOP,
+                // 文字翻面以**價格區**底為界,不是整張圖底 —— 用圖底的話低標文字永遠
+                // 不會翻面、直接落進成交量柱上(常態路徑)
+                bottom: g.priceBottom - 2,
+              })}
+              textAnchor="middle"
               className="fill-ink-muted stroke-surface"
               strokeWidth={2}
               paintOrder="stroke"
               fontSize="0.625rem"
             >
-              {text}
+              {mark.text}
             </text>
           </g>
         ),
@@ -479,6 +498,18 @@ export function CandleChart({
   // 不靠兩處各自格式化後恰好一樣
   const highText = fmt(windowHigh);
   const lowText = fmt(windowLow);
+  // 標記落在造成該極值的那根蠟燭上(**取最早出現的** —— 先到者才是「當時創的高」)。
+  // useMemo:物件 identity 每次 render 變會打穿 ChartStatic 的 memo(W-3)。
+  const highMark = useMemo<WindowMark | null>(() => {
+    if (shown.length === 0) return null;
+    const cx = g.candles[shown.findIndex((b) => b.h === windowHigh)]?.cx;
+    return cx === undefined ? null : { cx, y: g.toY(windowHigh), text: highText };
+  }, [shown, g, windowHigh, highText]);
+  const lowMark = useMemo<WindowMark | null>(() => {
+    if (shown.length === 0) return null;
+    const cx = g.candles[shown.findIndex((b) => b.l === windowLow)]?.cx;
+    return cx === undefined ? null : { cx, y: g.toY(windowLow), text: lowText };
+  }, [shown, g, windowLow, lowText]);
   const windowPct =
     shown.length > 1 && shown[0]!.c > 0
       ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
@@ -535,10 +566,8 @@ export function CandleChart({
             ma20Line={ma20Line}
             bbUpperLine={bbUpperLine}
             bbLowerLine={bbLowerLine}
-            highY={shown.length > 0 ? g.toY(windowHigh) : null}
-            lowY={shown.length > 0 ? g.toY(windowLow) : null}
-            highText={highText}
-            lowText={lowText}
+            highMark={highMark}
+            lowMark={lowMark}
             showVolume={showVolume}
           />
           <XAxisLabels g={g} h={dimH} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
