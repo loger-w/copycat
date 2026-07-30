@@ -62,9 +62,21 @@ afterEach(() => {
 });
 
 describe("App(index-board T9)", () => {
-  it("nav 有「指數」tab 且 IndexBar 常駐(TXO tab 下可見)", async () => {
+  it("無 localStorage 時預設停在「大盤」(index-board SC-1)", () => {
     renderApp();
-    expect(screen.getByRole("tab", { name: "指數" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "大盤" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("舊 localStorage 值 txo 仍還原到「選擇權」(backward compat)", () => {
+    window.localStorage.setItem("copycat-tab", "txo");
+    renderApp();
+    expect(screen.getByRole("tab", { name: "選擇權" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("nav 有「大盤」tab 且 IndexBar 常駐(切到選擇權 tab 仍可見)", async () => {
+    renderApp();
+    expect(screen.getByRole("tab", { name: "大盤" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
     await waitFor(() => expect(screen.getByText(/加權/).textContent).toContain("42039.92"));
     expect(screen.getByText(/櫃買/).textContent).toContain("359.8");
     // /台指/ 會撞 TXO h1「台指選擇權」→ 以基差數字指認 IndexBar 台指組
@@ -76,13 +88,13 @@ describe("App(index-board T9)", () => {
   it("localStorage 記住 index tab,重載復原(review B8)", async () => {
     window.localStorage.setItem("copycat-tab", "index");
     renderApp();
-    expect(screen.getByRole("tab", { name: "指數" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "大盤" }).getAttribute("aria-selected")).toBe("true");
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
   });
 
   it("切到指數 tab 顯示 IndexPage(台指期列與兩張卡)", async () => {
     renderApp();
-    fireEvent.click(screen.getByRole("tab", { name: "指數" }));
+    fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
     expect(screen.getByText("櫃買指數")).toBeTruthy();
     expect(screen.getByText(/台指期/)).toBeTruthy();
@@ -95,7 +107,7 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
     const capitalCount = () =>
       FakeWS.instances.filter((w) => w.url.endsWith("/ws/capital")).length;
     expect(capitalCount()).toBe(1); // TXO tab 下也有推播(B2 主訴)
-    fireEvent.click(screen.getByRole("tab", { name: "個股" }));
+    fireEvent.click(screen.getByRole("tab", { name: "個股(期)" }));
     await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
@@ -104,15 +116,15 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
 });
 
 describe("App(期貨 tab T15)", () => {
-  it("nav 有「期貨」tab,排在「個股」後", () => {
+  it("nav tab 順序 = 大盤 / 個股(期) / 選擇權 / 期貨 / 相關係數", () => {
     renderApp();
     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
-    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)完全不變。
-    // realtime-correlation SC-7:新增第五顆「相關係數」,排在「指數」後。
+    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變,只有順序與標籤依
+    // index-board SC-1 改動(期貨 / 相關係數保留,只是排序在後)。
     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
       .getAllByRole("tab")
       .map((el) => el.textContent);
-    expect(labels).toEqual(["TXO 綜合損益", "個股", "期貨", "指數", "相關係數"]);
+    expect(labels).toEqual(["大盤", "個股(期)", "選擇權", "期貨", "相關係數"]);
   });
 
   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
@@ -156,13 +168,13 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
     const expectRail = () =>
       expect(railTabs().map((el) => el.textContent)).toEqual(["閃電", "委託", "部位"]);
     expectRail(); // TXO
-    fireEvent.click(screen.getByRole("tab", { name: "個股" }));
+    fireEvent.click(screen.getByRole("tab", { name: "個股(期)" }));
     await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
     expectRail();
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
     expectRail();
-    fireEvent.click(screen.getByRole("tab", { name: "指數" }));
+    fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
     expectRail();
   });
@@ -194,7 +206,7 @@ describe("App 資料流上提(D-3 / D-16)", () => {
   it("切到個股 tab 後才建立 stock WS 並取 snapshot", async () => {
     window.localStorage.setItem("stock-main-code", "2330");
     renderApp();
-    fireEvent.click(screen.getByRole("tab", { name: "個股" }));
+    fireEvent.click(screen.getByRole("tab", { name: "個股(期)" }));
     await waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
         String(c[0]),
