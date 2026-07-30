@@ -35,6 +35,13 @@ __all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_seri
 
 logger = logging.getLogger(__name__)
 
+#: K 線路徑的首頁等待預算(秒)。實測有資料標的 <1s 備妥 → 10× 餘裕;誤判為空時由
+#: server 層的短 TTL 負向快取在 15s 後自動重試,不是永久釘死。
+BARS_POLL_DEADLINE = 10.0
+#: 歷史收割的退避輪詢起點;逐次加倍到 poll_wait 封頂(隨 _collect_history 自
+#: stock_source 上提 — index-board R-3)
+_POLL_BACKOFF_START = 0.15
+
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
 # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
@@ -326,6 +333,52 @@ class TC4QuoteSource:
             },
             strip_prefix=True,
         )
+
+    def _collect_history(
+        self,
+        sym: str,
+        data_type: str,
+        start: str,
+        end: str,
+        deadline_secs: float | None = None,
+    ) -> list[dict]:
+        """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。
+
+        `deadline_secs` = 首頁備妥的等待預算。預設沿用舊值(`poll_wait*30` ≈ 30s),
+        K 線路徑改傳 `_BARS_POLL_DEADLINE` —— 實測有資料的標的首頁 <1s 內就備妥,
+        30s 預算只有在「TC4 根本沒有這檔」時才會用滿,而那條路徑一次要付兩段(歷史 +
+        當日)= 60s。
+
+        輪詢改**退避**:首輪落空後只睡 0.15s 再問,逐次加倍到原 `poll_wait` 封頂。
+        舊制固定睡滿 1.0s,讓所有冷載入無條件多等約 0.9 秒。
+
+        `poll_wait == 0` 是測試組態,語意 = 不等待 → 探測一次就回,不 busy loop。
+        """
+        self._sub_history(sym, start, end, data_type)
+        budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
+        deadline = time.monotonic() + budget
+        wait = min(_POLL_BACKOFF_START, self._poll_wait)
+        while True:
+            first = self._get_history(sym, start, end, "0", data_type)
+            if first.get("HisData"):
+                break
+            remaining = deadline - time.monotonic()
+            if wait <= 0 or remaining <= 0:
+                logger.info(
+                    "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
+                )
+                return []
+            # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
+            time.sleep(min(wait, remaining))
+            wait = min(wait * 2, self._poll_wait)
+
+        def _page(qry_index: str) -> list[dict]:
+            return self._get_history(sym, start, end, qry_index, data_type).get("HisData", [])
+
+        rows: list[dict] = []
+        for page in iter_qry_pages(_page):
+            rows.extend(page)
+        return rows
 
     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
         # 單發:首頁空即回空(未備妥的重試由 fetch_backfill 的 round 制統籌,不逐檔等)

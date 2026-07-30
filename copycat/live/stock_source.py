@@ -20,7 +20,7 @@ import time
 from typing import Any, Callable, TypedDict
 
 from copycat.live.stock_models import StockTick, parse_hist_tick
-from copycat.live.tc4 import TC4QuoteSource, build_rt_request
+from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
 from copycat.tc4common import iter_qry_pages
 
 logger = logging.getLogger(__name__)
@@ -133,11 +133,6 @@ def _int_field(row: dict, *names: str) -> int:
     return 0
 
 
-#: K 線路徑的首頁等待預算(秒)。實測有資料標的 <1s 備妥 → 10× 餘裕;
-#: 誤判為空時由 server 層的短 TTL 負向快取在 15s 後自動重試,不是永久釘死。
-_BARS_POLL_DEADLINE = 10.0
-#: 退避輪詢起點;逐次加倍到 poll_wait 封頂
-_POLL_BACKOFF_START = 0.15
 
 
 def parse_dk_bars(rows: list[dict]) -> list[Bar]:
@@ -165,16 +160,26 @@ def parse_dk_bars(rows: list[dict]) -> list[Bar]:
     return bars
 
 
-def _taipei_minute_key(raw_time: str) -> str | None:
+def _taipei_minute_key(
+    raw_time: str,
+    domain_start: str = _MIN_DOMAIN_START,
+    domain_end: str = _MIN_DOMAIN_END,
+    clamp_end: str = _MIN_CLAMP_END,
+) -> str | None:
     """1K Time(UTC HHMMSS)→ 台北 HHMM 終點標記;域外回 None。
 
-    1331–1335 clamp 為 1330(收盤補正),與 `fetch_day_minutes` 同規則。"""
+    `domain_end`+1 ~ `clamp_end` clamp 為 `domain_end`(收盤補正),與 `fetch_day_minutes` 同規則。
+
+    **域是可換的尺**(index-board R-3 修正):預設值是**個股**日盤 09:00–13:30;
+    台指期日盤是 08:45–13:45,套個股的尺會丟掉 08:46–09:00(開盤跳空是看盤重點)、
+    把 13:31–13:35 的成交錯併進 13:30 那根、再丟掉 13:36–13:45 —— 圖畫得出來、
+    根數也合理,沒有任何 assertion 會紅。"""
     raw = raw_time.zfill(6)
     hh = (int(raw[:2]) + 8) % 24
     key = f"{hh:02d}{raw[2:4]}"
-    if _MIN_DOMAIN_END < key <= _MIN_CLAMP_END:
-        key = _MIN_DOMAIN_END
-    if not (_MIN_DOMAIN_START <= key <= _MIN_DOMAIN_END):
+    if domain_end < key <= clamp_end:
+        key = domain_end
+    if not (domain_start <= key <= domain_end):
         return None
     return key
 
@@ -232,15 +237,24 @@ def _fold(bars: dict[str, Bar], order: list[str], t: str, k: _RawK) -> None:
         _merge_into(existing, k["o"], k["h"], k["l"], k["c"], k["v"])
 
 
-def parse_1k_bars(rows: list[dict]) -> list[Bar]:
+#: 台指期日盤分鐘域(08:45 開盤 → 首根終點標記 0846;13:45 收盤,1346–1350 clamp)。
+#: 夜盤(15:00–05:00)不在本輪 scope,落在域外自然被丟(change-spec §5)。
+FUTURES_MINUTE_DOMAIN = ("0846", "1345", "1350")
+
+
+def parse_1k_bars(rows: list[dict], domain: tuple[str, str, str] | None = None) -> list[Bar]:
     """1K rows → 分鐘 Bar(台北終點標記;域外丟棄)。
 
-    clamp 後同 t 會有多列(13:31–13:35 全標 1330)→ **必須合併**:`fetch_day_minutes`
-    回 dict 靠 key 覆寫躲掉了這件事,list 不會(change-spec R2-6)。"""
+    clamp 後同 t 會有多列(個股 13:31–13:35 全標 1330)→ **必須合併**:`fetch_day_minutes`
+    回 dict 靠 key 覆寫躲掉了這件事,list 不會(change-spec R2-6)。
+
+    `domain` = `(start, end, clamp_end)`;`None` = 個股日盤(既有行為)。
+    期貨傳 `FUTURES_MINUTE_DOMAIN`。"""
+    d = domain if domain is not None else (_MIN_DOMAIN_START, _MIN_DOMAIN_END, _MIN_CLAMP_END)
     by_key: dict[str, Bar] = {}
     order: list[str] = []
     for k in _parse_1k_rows(rows):
-        key = _taipei_minute_key(k["time"])
+        key = _taipei_minute_key(k["time"], d[0], d[1], d[2])
         if key is None:
             continue
         _fold(by_key, order, f"{k['date']} {key[:2]}:{key[2:]}", k)
@@ -382,52 +396,9 @@ class StockQuoteSource(TC4QuoteSource):
         return ticks
 
     # ---- 日 K(overlay 資料源;SC-4)----
-
-    def _collect_history(
-        self,
-        sym: str,
-        data_type: str,
-        start: str,
-        end: str,
-        deadline_secs: float | None = None,
-    ) -> list[dict]:
-        """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。
-
-        `deadline_secs` = 首頁備妥的等待預算。預設沿用舊值(`poll_wait*30` ≈ 30s),
-        K 線路徑改傳 `_BARS_POLL_DEADLINE` —— 實測有資料的標的首頁 <1s 內就備妥,
-        30s 預算只有在「TC4 根本沒有這檔」時才會用滿,而那條路徑一次要付兩段(歷史 +
-        當日)= 60s。
-
-        輪詢改**退避**:首輪落空後只睡 0.15s 再問,逐次加倍到原 `poll_wait` 封頂。
-        舊制固定睡滿 1.0s,讓所有冷載入無條件多等約 0.9 秒。
-
-        `poll_wait == 0` 是測試組態,語意 = 不等待 → 探測一次就回,不 busy loop。
-        """
-        self._sub_history(sym, start, end, data_type)
-        budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
-        deadline = time.monotonic() + budget
-        wait = min(_POLL_BACKOFF_START, self._poll_wait)
-        while True:
-            first = self._get_history(sym, start, end, "0", data_type)
-            if first.get("HisData"):
-                break
-            remaining = deadline - time.monotonic()
-            if wait <= 0 or remaining <= 0:
-                logger.info(
-                    "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
-                )
-                return []
-            # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
-            time.sleep(min(wait, remaining))
-            wait = min(wait * 2, self._poll_wait)
-
-        def _page(qry_index: str) -> list[dict]:
-            return self._get_history(sym, start, end, qry_index, data_type).get("HisData", [])
-
-        rows: list[dict] = []
-        for page in iter_qry_pages(_page):
-            rows.extend(page)
-        return rows
+    #
+    # `_collect_history` 已上提到基底 `TC4QuoteSource`(index-board R-3):futures_source
+    # 的 K 線路徑要用同一份收割/退避/deadline 邏輯,各寫一份必然漂移。
 
     def fetch_day_minutes(self, code: str) -> dict[str, int]:
         """當日 1K → {HHMM(台北,bar 終點標記): close 毫點}(index-board SC-4)。
@@ -471,11 +442,9 @@ class StockQuoteSource(TC4QuoteSource):
         start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            return parse_1k_bars(
-                self._collect_history(sym, "1K", start, end, _BARS_POLL_DEADLINE)
-            )
+            return parse_1k_bars(self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE))
 
-        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, _BARS_POLL_DEADLINE))
+        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
         if bars:
             return bars
         fb_start = max(
@@ -485,7 +454,7 @@ class StockQuoteSource(TC4QuoteSource):
         logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
         # fallback 也要傳短 budget:漏傳的話 tf=D 無資料標的變成 10 + 30 = 40s
         return aggregate_1k_to_daily(
-            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, _BARS_POLL_DEADLINE)
+            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE)
         )
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:

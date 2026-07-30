@@ -219,10 +219,12 @@ class TestCollectHistoryWaiting:
         assert len(probes) == 1
 
     def test_bars_deadline_shorter_than_default(self) -> None:
-        """bars 路徑用獨立的短 budget;其他 caller(overlay 日 K)維持 30s 舊值。"""
-        from copycat.live.stock_source import _BARS_POLL_DEADLINE
+        """bars 路徑用獨立的短 budget;其他 caller(overlay 日 K)維持 30s 舊值。
 
-        assert _BARS_POLL_DEADLINE <= 10.0
+        常數隨 `_collect_history` 一起上提到基底 `tc4`(index-board R-3),斷言意圖不變。"""
+        from copycat.live.tc4 import BARS_POLL_DEADLINE
+
+        assert BARS_POLL_DEADLINE <= 10.0
 
     def test_backoff_starts_well_below_poll_wait(self) -> None:
         """首輪落空後不再睡滿 poll_wait,改退避輪詢(2.13s → 目標 ≤1.6s)。"""
