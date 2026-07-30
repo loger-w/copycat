@@ -260,6 +260,47 @@ class TestBackfill:
             await eng.close()
 
 
+class TestBackfillSessionOrdering:
+    """Phase 4 自評 finding:回補任務不得把狀態機的盤別「拉回」發起時的那一場。
+
+    情境:14:59:58 起跑的回補在 15:00:01 才回來 —— 此時 tick 已把 river 切到夜盤。
+    若回補流程對狀態機重設發起時的 session,夜盤已累積的點會被清掉、窗也退回日盤,
+    畫面出現一秒的錯盤別資料(下一拍才自我修正)。
+    直呼私有 `_backfill_river` 是為了精確控制「回補晚於換場」的時序 —— 走 start() 無法
+    穩定重現這個順序。
+    """
+
+    async def test_late_backfill_does_not_revert_session(self) -> None:
+        src = _FakeSource()
+        src.minutes["TC.F.CME.NQ.HOT"] = [(600, 27_600_000)]  # 日盤窗的分鐘
+        sessions = [("20260730", "night")]
+        eng = CorrelationEngine(
+            lambda: src,
+            config=CONFIG,
+            txf_state_getter=lambda: _futures_state(),
+            tick_secs=1.0,
+            now_fn=_Clock(),
+            session_fn=lambda: sessions[0],
+            taipei_time_fn=lambda: "230030",  # 夜盤 23:01 → offset 481
+        )
+        await eng.start()
+        try:
+            await _drain()
+            eng.tick_once()  # 夜盤點入帳
+            assert _minutes(eng, "TXF") == {481: 40_400_000}
+
+            sessions[0] = ("20260730", "day")  # 回補以「日盤」身分晚到
+            await eng._backfill_river()
+
+            snap = eng.river_snapshot()
+            assert snap["session"] == "night"
+            assert snap["window"] == {"start_min": 900, "end_min": 1740}
+            assert _minutes(eng, "TXF") == {481: 40_400_000}  # 夜盤點沒被清掉
+            assert _minutes(eng, "NQ") == {}  # 日盤回補資料不得混入夜盤
+        finally:
+            await eng.close()
+
+
 class TestRiverBroadcast:
     async def test_one_delta_per_tick_with_monotonic_seq(self) -> None:
         src = _FakeSource()

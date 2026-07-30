@@ -122,6 +122,18 @@ describe("useRiver", () => {
     expect(minutes["20"]).toBe(40_900_000); // 既有(較新的 delta)不被覆蓋
   });
 
+  it("server 重啟(snapshot seq 歸零)後,小 seq 的 delta 仍要生效", async () => {
+    // Phase 4 自評 finding:seq 若取 max,server 重啟(river_seq 從 0 起算)後
+    // 所有 delta 都會被當成「舊訊息」丟掉,畫面凍在 snapshot 那一刻直到 seq 追上舊值。
+    const { hook, ws } = await setup();
+    act(() => ws.emit(delta(500, 20, 40_900_000)));
+
+    act(() => ws.emit(snap(0, { "5": 39_900_000 }))); // 重連後的首則 snapshot
+    act(() => ws.emit(delta(1, 6, 39_950_000)));
+
+    expect(txfMinutes(hook.result.current.state)["6"]).toBe(39_950_000);
+  });
+
   it("盤別變更 → 清空 + 換窗 + 重抓全量", async () => {
     const { hook, ws } = await setup();
     fetchMock.mockClear();
