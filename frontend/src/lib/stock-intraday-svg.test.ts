@@ -6,6 +6,7 @@ import {
   minuteToX,
   overlayLines,
   plotWidth,
+  R_AXIS_W,
   SUB_TOP_PAD,
   X_END_MIN,
   X_START_MIN,
@@ -36,7 +37,7 @@ describe("buildIntradayGeometry", () => {
   it("price line spans minutes;有漲跌停 → 域**恰為**漲跌停(SC-4,該變:原 ×1.02/×0.98 留邊)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
-      { width: Y_AXIS_W + 810 - 540, height: 100 },
+      { width: Y_AXIS_W + (810 - 540) + R_AXIS_W, height: 100 },
     );
     expect(g.priceLine.length).toBe(2);
     // 🔴 SC-4:區間就是漲停/跌停,不再多留 2% 邊
@@ -58,7 +59,7 @@ describe("buildIntradayGeometry", () => {
   // 左緣讓出 Y_AXIS_W 寬的價位帶後,`minuteToX` / `minuteOf` 必須**共用**同一組常數,
   // 否則反演只在兩端偏移(同 toY / priceAtY 共用 PAD_Y 的理由)。
   describe("左緣價位帶(gutter)", () => {
-    const W = Y_AXIS_W + 270;
+    const W = Y_AXIS_W + 270 + R_AXIS_W;
 
     it("Y_AXIS_W 等於 hover 價位標寬度(標籤恰好整格塞進價位帶,不再壓線)", () => {
       expect(Y_AXIS_W).toBe(46);
@@ -66,7 +67,7 @@ describe("buildIntradayGeometry", () => {
 
     it("繪圖區起於價位帶右緣、迄於圖右緣", () => {
       expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
-      expect(minuteToX(X_END_MIN, W)).toBeCloseTo(W, 6);
+      expect(minuteToX(X_END_MIN, W)).toBeCloseTo(W - R_AXIS_W, 6);
       expect(plotWidth(W)).toBeCloseTo(270, 6);
     });
 
@@ -87,9 +88,9 @@ describe("buildIntradayGeometry", () => {
     it("退化寬度(width <= Y_AXIS_W)下仍互逆", () => {
       const g = buildIntradayGeometry(
         { minutes: minutes([[X_END_MIN, { c: 2_320_000, v: 1 }]]), meta: META },
-        { width: Y_AXIS_W, height: 100 },
+        { width: Y_AXIS_W + R_AXIS_W, height: 100 },
       );
-      const x = minuteToX(X_END_MIN, Y_AXIS_W);
+      const x = minuteToX(X_END_MIN, Y_AXIS_W + R_AXIS_W);
       expect(g.minuteOf(x)).toBe(X_END_MIN);
     });
 
@@ -133,7 +134,7 @@ describe("buildIntradayGeometry", () => {
   it("areaPolygon 以 refY 封閉且首尾點貼齊平盤", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
-      { width: Y_AXIS_W + 270, height: 100 },
+      { width: Y_AXIS_W + 270 + R_AXIS_W, height: 100 },
     );
     const pts = g.areaPolygon.split(" ");
     expect(pts.length).toBe(4); // 起點 + 2 個資料點 + 終點
@@ -254,7 +255,7 @@ describe("buildIntradayGeometry", () => {
   it("minuteOf:bucket 有資料回分鐘、無資料回 null(SC-1/R6)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [600, { c: 2_330_000, v: 1 }]]), meta: META },
-      { width: Y_AXIS_W + 270, height: 100 },
+      { width: Y_AXIS_W + 270 + R_AXIS_W, height: 100 },
     );
     expect(g.minuteOf(Y_AXIS_W)).toBe(540); // 繪圖區起點 → 09:00
     expect(g.minuteOf(Y_AXIS_W + 60)).toBe(600); // +60px → 10:00(繪圖區 270 → 1px/分)
@@ -326,7 +327,9 @@ describe("buildIntradayGeometry", () => {
     expect(g.energyBars.length).toBe(2);
     expect(g.energyBars[0]!.outer).toBe(7);
     expect(g.energyBars[0]!.inner).toBe(3);
-    // 高度依「該分鐘內外盤較大側」正規化
+    // 🔴 round5 E:分母由「全日單邊最大」改成「全日最大總量」。事前標為該變 ——
+    // 舊分母讓資訊列的「量」在副圖上找不到任何對應高度(截圖 09:00:量 269、
+    // 外 127、內 20,差的 122 張 neutral 根本沒畫,而刻度 164 是單邊最大)。
     expect(g.energyBars[0]!.outerH).toBeGreaterThan(g.energyBars[1]!.outerH);
     expect("volumeBars" in g).toBe(false);
   });
@@ -413,5 +416,82 @@ describe("round3:overlayLines level 與副圖量刻度出口", () => {
     );
     expect(g.energyBars[0]!.outerH).toBeLessThan(H);
     expect(g.energyBars[0]!.outerH).toBe(H - SUB_TOP_PAD);
+  });
+});
+
+// round5 第二輪(user 看畫面後提出;截圖 docs/specs/stock-ui-round5/screenshots/)
+describe("round5:右緣帶 + 總量堆疊", () => {
+  const META = {
+    name: "台積電",
+    ref: 2_320_000,
+    upper: 2_550_000,
+    lower: 2_090_000,
+    y_close: 2_320_000,
+    y_vol: 1,
+  };
+  const W = Y_AXIS_W + 270 + R_AXIS_W;
+
+  it("R_AXIS_W:繪圖區右界退到右緣帶左緣(疊線標籤才不壓走勢圖)", () => {
+    expect(R_AXIS_W).toBeGreaterThan(0);
+    expect(plotWidth(W)).toBeCloseTo(270, 6);
+    expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
+    expect(minuteToX(X_END_MIN, W)).toBeCloseTo(W - R_AXIS_W, 6);
+  });
+
+  it("右緣帶內不對應任何分鐘(與左緣價位帶同款)", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+      { width: W, height: 100 },
+    );
+    expect(g.minuteOf(W - R_AXIS_W + 1)).toBeNull();
+    expect(g.minuteOf(W)).toBeNull();
+  });
+
+  it("minuteOf ↔ minuteToX 在雙側帶下仍互逆(共用 plotWidth 的建構保證)", () => {
+    const g = buildIntradayGeometry(
+      { minutes: minutes([[540, { c: 1 }], [600, { c: 1 }], [810, { c: 1 }]]), meta: META },
+      { width: W, height: 100 },
+    );
+    for (const m of [540, 600, 810]) {
+      expect(g.minuteOf(minuteToX(m, W))).toBe(m);
+    }
+  });
+
+  it("energyBars 三段高度依「全日最大總量」正規化,和 = 總量比例", () => {
+    const g = buildIntradayGeometry(
+      {
+        minutes: minutes([
+          // 總量 269 = 外 127 + 內 20 + 未分類 122(截圖 09:00 的真實組成)
+          [540, { c: 2_320_000, v: 269, o: 127, i: 20, u: 122 }],
+          [541, { c: 2_330_000, v: 100, o: 60, i: 40, u: 0 }],
+        ]),
+        meta: META,
+      },
+      { width: W, height: 100 },
+    );
+    const b0 = g.energyBars[0]!;
+    expect(g.maxTotal).toBe(269);
+    const energyH = 100 - SUB_TOP_PAD;
+    expect(b0.outerH + b0.innerH + b0.unchH).toBeCloseTo(energyH, 5);
+    expect(b0.outerH).toBeCloseTo((127 / 269) * energyH, 5);
+    expect(b0.innerH).toBeCloseTo((20 / 269) * energyH, 5);
+    expect(b0.unchH).toBeCloseTo((122 / 269) * energyH, 5);
+    // 第二根總量 100 → 高度為第一根的 100/269
+    const b1 = g.energyBars[1]!;
+    expect(b1.outerH + b1.innerH + b1.unchH).toBeCloseTo((100 / 269) * energyH, 5);
+  });
+
+  it("maxTotal 取全日最大總量,不是單邊最大", () => {
+    const g = buildIntradayGeometry(
+      {
+        minutes: minutes([
+          [540, { c: 1, v: 269, o: 127, i: 20, u: 122 }],
+          [541, { c: 1, v: 200, o: 164, i: 36, u: 0 }], // 單邊最大在這裡(164)
+        ]),
+        meta: META,
+      },
+      { width: W, height: 100 },
+    );
+    expect(g.maxTotal).toBe(269); // 不是 164
   });
 });
