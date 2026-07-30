@@ -48,11 +48,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     else el.removeAttribute("open");
   }, [open]);
 
+  /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
+   *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
   function commit(next: Watchlist, onDone?: () => void): void {
-    if (next === wl) {
-      setLocalError("BAD_GROUP"); // 撞名 / 空白 → 前端早退,不送 PUT
-      return;
-    }
+    if (next === wl) return;
     setLocalError(null);
     save.mutate(next, onDone === undefined ? undefined : { onSuccess: onDone });
   }
@@ -60,8 +59,13 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
   function submitAddGroup(): void {
     const name = groupInput.trim();
     if (name === "") return;
+    const next = addGroup(wl, name);
+    if (next === wl) {
+      setLocalError("BAD_GROUP"); // 撞既有名 → 零 PUT + 文案
+      return;
+    }
     setGroupInput("");
-    commit(addGroup(wl, name));
+    commit(next);
   }
 
   function submitRename(from: string): void {
