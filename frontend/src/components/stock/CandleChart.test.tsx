@@ -350,6 +350,10 @@ describe("CandleChart 視窗高低標", () => {
   it("無可視 bar → 不渲染", () => {
     const { container } = render(<CandleChart bars={[]} />);
     expect(container.querySelector("[data-testid='window-high']")).toBeNull();
+    expect(container.querySelector("[data-testid='window-low']")).toBeNull();
+  });
+});
+
 describe("CandleChart 量副圖(index-board W-1 pin)", () => {
   const bars = [
     { t: "2026-07-28", o: 100, h: 110, l: 90, c: 105, v: 12 },
