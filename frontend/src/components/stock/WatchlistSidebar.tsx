@@ -1,6 +1,11 @@
 import { useRef, useState } from "react";
 
-import { useSaveWatchlist, useStockWatchlist, type Group } from "@/hooks/useStockWatchlist";
+import {
+  errText,
+  useSaveWatchlist,
+  useStockWatchlist,
+  type Group,
+} from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { dropTargetFromPointer, moveCode, type DropZone } from "@/lib/list-drag";
@@ -18,13 +23,6 @@ function fmtPrice(milli: number | null): string {
   if (milli === null) return "-";
   const v = milli / 1000;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
-
-function errText(message: string): string {
-  if (message === "WATCHLIST_FULL") return "自選已達 30 檔上限";
-  if (message === "BAD_CODE") return "股號格式不正確";
-  if (message === "BAD_GROUP") return "群組名稱不合法";
-  return "儲存失敗";
 }
 
 function loadCollapsed(): Set<string> {
@@ -49,7 +47,8 @@ interface Props {
 }
 
 export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
-  const { data: groups = [], error } = useStockWatchlist();
+  const { data: wl, error } = useStockWatchlist();
+  const groups = wl?.groups ?? [];
   const { data: names = [] } = useStockNames();
   const save = useSaveWatchlist();
   /** 哪一組展開了搜尋框;`""` = 零群組時的 fallback 搜尋框 */
@@ -68,8 +67,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
 
   const suggestions = searchStocks(input, names, SUGGEST_LIMIT);
 
+  /** 只改群組成員關係時,`codes`(自選全體)原樣送回 —— 自算聯集會把不屬任何群組的
+   *  股票靜默刪掉。新加入的 code 不在 codes 裡時由後端正規化補進尾端。 */
   function mutateGroups(next: Group[]): void {
-    save.mutate(next);
+    save.mutate({ codes: wl?.codes ?? [], groups: next });
   }
 
   function toggleCollapsed(name: string): void {
@@ -120,7 +121,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     // mutation 成功才收斂衍生狀態(review A2:失敗時 cache 未動,UI 不該先跳)。
     // 折疊清單必須清掉該組名,否則 localStorage 累積孤兒名,日後建同名群組會意外呈折疊。
     save.mutate(
-      groups.filter((g) => g.name !== name),
+      { codes: wl?.codes ?? [], groups: groups.filter((g) => g.name !== name) },
       {
         onSuccess: () => {
           setCollapsed((prev) => {
