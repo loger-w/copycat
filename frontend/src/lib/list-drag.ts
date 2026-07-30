@@ -64,7 +64,14 @@ export function dropTargetFromPointer(
   return { group: best.group, index };
 }
 
-/** 把 `code` 從 `fromGroup` 移到 `toGroup` 的 `index`(`from === to` 時等價於同組重排)。
+/** 把 `code` 從 `fromGroup` 移到 `toGroup` 的 `slot`(`from === to` 時等價於同組重排)。
+ *
+ *  `slot` 的語意 = **相對目標組「渲染清單」的插入槽**,也就是 `dropTargetFromPointer`
+ *  直接回傳的那個值 —— 渲染清單包含被拖的那一列(zone 的 `count` 是 `codes.length`,
+ *  不因正在拖曳而扣掉)。所以當該檔**已在目標組**時(同組重排,或一檔多組的跨組拖曳),
+ *  `slot > 該檔位置` 必須先減 1 才是「濾掉它之後」的 index。少了這步,往下拖會落到
+ *  下一格:`[A,B,C,D]` 拖 A 到槽 3 會得到 `BCDA` 而不是 `BCAD`,且會靜默寫進後端。
+ *  換算刻意放在這裡而不是呼叫端:只有這支同時看得到 `toGroup.codes` 與 `code`。
  *
  *  **移動語意**(user 2026-07-30 拍板):來源組移除。其他群組完全不動 —— 一檔多組的
  *  其他歸屬照樣保留,要改那些走每列的 `⊞` 面板。 */
@@ -73,14 +80,16 @@ export function moveCode<G extends { name: string; codes: string[] }>(
   code: string,
   fromGroup: string,
   toGroup: string,
-  index: number,
+  slot: number,
 ): G[] {
   return groups.map((g) => {
     if (g.name === toGroup) {
+      const at = g.codes.indexOf(code);
+      const index = at >= 0 && slot > at ? slot - 1 : slot;
       // 先 filter 再插入:`from === to` 時這一步同時完成移除與插入
       const base = g.codes.filter((c) => c !== code);
-      const at = Math.max(0, Math.min(base.length, index));
-      return { ...g, codes: [...base.slice(0, at), code, ...base.slice(at)] };
+      const clamped = Math.max(0, Math.min(base.length, index));
+      return { ...g, codes: [...base.slice(0, clamped), code, ...base.slice(clamped)] };
     }
     if (g.name === fromGroup) return { ...g, codes: g.codes.filter((c) => c !== code) };
     return g;

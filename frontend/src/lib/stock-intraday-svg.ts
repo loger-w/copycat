@@ -208,7 +208,10 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     // 價位帶內(x < Y_AXIS_W)不對應任何分鐘 —— 不夾制成 09:00,否則滑過左緣價位文字時
     // 十字線會憑空指到開盤那一分鐘。必須與 `minuteToX` 共用 Y_AXIS_W / plotWidth,
     // 各自硬編會讓反演只在兩端偏移(同 toY / priceAtY 的教訓)。
-    if (xPx < Y_AXIS_W || xPx > size.width) return null;
+    // 上界用 `Y_AXIS_W + plotWidth(width)` 不是 `width`:正常寬度下兩者相等,但退化寬度
+    // (width ≤ Y_AXIS_W,plotWidth 被 clamp 成 1)時 minuteToX 最大會回 Y_AXIS_W + 1
+    // 而超過 width,用 width 當上界就會把自己算出來的座標判成域外 → 兩者不再互逆。
+    if (xPx < Y_AXIS_W || xPx > Y_AXIS_W + plotWidth(size.width)) return null;
     const m =
       Math.round(((xPx - Y_AXIS_W) / plotWidth(size.width)) * (X_END_MIN - X_START_MIN)) +
       X_START_MIN;

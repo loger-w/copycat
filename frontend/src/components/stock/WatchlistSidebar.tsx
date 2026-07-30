@@ -173,7 +173,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   function onHandleDown(group: string, code: string, e: React.PointerEvent): void {
     e.preventDefault();
     setDrag({ code, from: group, to: group, index: groups.find((g) => g.name === group)?.codes.indexOf(code) ?? 0 });
-    let cancelled = false;
+    // 取消(Esc)與完成(pointerup)走**同一個** teardown。取消之所以有效是因為這裡把
+    // `pointerup` listener 移掉了 —— 之後放開手指根本進不到 `up`。
+    // ⚠ 曾另外加過一個 `cancelled` 旗標在 `up` 開頭早退,mutation test 證明它不可達
+    // (把它停用後全部測試照樣綠),所以移除:不可達的防禦等於沒有測試覆蓋的死碼。
     const teardown = (): void => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -186,8 +189,6 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group, index: target.index }));
     };
     const up = (ev: PointerEvent): void => {
-      // Esc 取消後放開手指仍會走到這裡 —— 沒有這個早退,取消等於沒取消
-      if (cancelled) return;
       const { zones, bounds } = zonesNow();
       const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
       teardown();
@@ -199,7 +200,6 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     };
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.key !== "Escape") return;
-      cancelled = true;
       teardown();
     };
     window.addEventListener("pointermove", move);
