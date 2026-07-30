@@ -5,15 +5,18 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
-import type { Group } from "@/hooks/useStockWatchlist";
+import type { Group, Watchlist } from "@/lib/watchlist-model";
 
 let fetchMock: ReturnType<typeof vi.fn>;
-let putBodies: Group[][];
+/** 整包 PUT body(v3 起 codes 與 groups 都是契約的一部分,只推 groups 會漏掉未分組) */
+let putBodies: Watchlist[];
 
 const GROUPS: Group[] = [
   { name: "主力", codes: ["2330", "5483"] },
   { name: "觀察", codes: ["3231", "2330"] },
 ];
+
+const CODES = ["2330", "5483", "3231"];
 
 const NAMES = {
   names: [
@@ -27,9 +30,9 @@ const NAMES = {
 const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 
 /** 名稱表分支不能回空表 —— 空表下「名稱命中」的提示列永遠不可能成立(review R19)。 */
-function respond(url: string, groups: Group[] = GROUPS): Response {
+function respond(url: string, groups: Group[] = GROUPS, codes: string[] = CODES): Response {
   if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
-  return new Response(JSON.stringify({ groups }));
+  return new Response(JSON.stringify({ codes, groups }));
 }
 
 beforeEach(() => {
@@ -37,14 +40,19 @@ beforeEach(() => {
   putBodies = [];
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "PUT") {
-      const body = JSON.parse(String(init.body)) as { groups: Group[] };
-      putBodies.push(body.groups);
-      return new Response(JSON.stringify({ groups: body.groups }));
+      const body = JSON.parse(String(init.body)) as Watchlist;
+      putBodies.push(body);
+      return new Response(JSON.stringify(body));
     }
     return respond(url);
   });
   vi.stubGlobal("fetch", fetchMock);
 });
+
+/** 只看 groups 的斷言用它 —— codes 的斷言各測試自己指名,才不會被整包比對淹掉 */
+function putGroups(): Group[][] {
+  return putBodies.map((b) => b.groups);
+}
 
 afterEach(() => {
   cleanup();
@@ -118,6 +126,25 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
   });
 });
 
+describe("WatchlistSidebar 的 v3 契約(codes 全體)", () => {
+  it("PUT 一律帶 codes,且不屬任何群組的股票不會被洗掉", async () => {
+    // 2317 在自選但不屬任何群組 —— 側欄若把 codes 算成「群組聯集」,它會被靜默刪除
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Response(JSON.stringify(body));
+      }
+      return respond(url, GROUPS, [...CODES, "2317"]);
+    });
+    sidebar();
+    await waitGroups();
+    fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移除 2330"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(putBodies[0]!.codes).toContain("2317");
+  });
+});
+
 describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
   it("點折疊 → 該組列隱藏、標題仍在、其他組不受影響", async () => {
     sidebar();
@@ -167,7 +194,7 @@ describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
     fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "鴻海" } });
     fireEvent.click(screen.getByLabelText("加入 2317 鴻海"));
     await waitFor(() =>
-      expect(putBodies).toEqual([
+      expect(putGroups()).toEqual([
         [
           { name: "主力", codes: ["2330", "5483", "2317"] },
           { name: "觀察", codes: ["3231", "2330"] },
@@ -180,7 +207,7 @@ describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
     await openAdd("主力");
     fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
     fireEvent.click(screen.getByText("新增"));
-    await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
+    await waitFor(() => expect(putGroups()[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
   });
 
   it("Enter + 提示列無命中 → 原樣當股號加入(W-4 / SC-1c)", async () => {
@@ -188,7 +215,7 @@ describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
     fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "9958" } });
     expect(screen.queryByTestId("stock-suggest")).toBeNull();
     fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Enter" });
-    await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "9958"]));
+    await waitFor(() => expect(putGroups()[0]?.[0]?.codes).toEqual(["2330", "5483", "9958"]));
   });
 
   // self-review MC-6:mutation test 證明停用 `target.codes.includes(code)` 早退後
@@ -214,20 +241,21 @@ describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
   it("名稱表不可用(空表)→ 提示列不出現,直接打股號仍可加入", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as { groups: Group[] };
-        putBodies.push(body.groups);
-        return new Response(JSON.stringify({ groups: body.groups }));
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Response(JSON.stringify(body));
       }
       if (url.includes("/api/stock/names")) {
         return new Response(JSON.stringify({ names: [], count: 0 }));
       }
+      // 這支刻意回**舊形狀**(只有 groups):守住「回應缺 codes → 前端用聯集補」的相容路徑
       return new Response(JSON.stringify({ groups: GROUPS }));
     });
     await openAdd("主力");
     fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
     expect(screen.queryByTestId("stock-suggest")).toBeNull();
     fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Enter" });
-    await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
+    await waitFor(() => expect(putGroups()[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
   });
 });
 
@@ -238,14 +266,14 @@ describe("WatchlistSidebar 群組增刪(既有行為)", () => {
     fireEvent.click(screen.getByLabelText("新增群組"));
     fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "當沖" } });
     fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
-    await waitFor(() => expect(putBodies).toEqual([[...GROUPS, { name: "當沖", codes: [] }]]));
+    await waitFor(() => expect(putGroups()).toEqual([[...GROUPS, { name: "當沖", codes: [] }]]));
   });
 
   it("刪除群組:標題列的 × → PUT 不含該群組(股票留在其他群組)", async () => {
     sidebar();
     await waitGroups();
     fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
-    await waitFor(() => expect(putBodies).toEqual([[{ name: "主力", codes: ["2330", "5483"] }]]));
+    await waitFor(() => expect(putGroups()).toEqual([[{ name: "主力", codes: ["2330", "5483"] }]]));
   });
 
   it("刪除群組成功 → localStorage 折疊清單不留該組名(不累積孤兒)", async () => {
@@ -263,7 +291,7 @@ describe("WatchlistSidebar 群組增刪(既有行為)", () => {
     window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察"]));
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        putBodies.push([]);
+        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
         return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
       }
       return respond(url);
@@ -282,7 +310,7 @@ describe("WatchlistSidebar 群組增刪(既有行為)", () => {
     await waitGroups();
     fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移除 2330"));
     await waitFor(() =>
-      expect(putBodies).toEqual([
+      expect(putGroups()).toEqual([
         [
           { name: "主力", codes: ["5483"] },
           { name: "觀察", codes: ["3231", "2330"] },
@@ -299,7 +327,7 @@ describe("WatchlistSidebar 群組增刪(既有行為)", () => {
     expect((checkbox as HTMLInputElement).checked).toBe(false);
     fireEvent.click(checkbox);
     await waitFor(() =>
-      expect(putBodies).toEqual([
+      expect(putGroups()).toEqual([
         [
           { name: "主力", codes: ["2330", "5483"] },
           { name: "觀察", codes: ["3231", "2330", "5483"] },
@@ -313,11 +341,11 @@ describe("WatchlistSidebar 零群組(SC-2b / W-16)", () => {
   beforeEach(() => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as { groups: Group[] };
-        putBodies.push(body.groups);
-        return new Response(JSON.stringify({ groups: body.groups }));
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Response(JSON.stringify(body));
       }
-      return respond(url, []);
+      return respond(url, [], []);
     });
   });
 
@@ -326,7 +354,7 @@ describe("WatchlistSidebar 零群組(SC-2b / W-16)", () => {
     await waitFor(() => expect(screen.getByText("尚無自選,輸入股號新增")).toBeTruthy());
     fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
     fireEvent.click(screen.getByText("新增"));
-    await waitFor(() => expect(putBodies).toEqual([[{ name: "自選", codes: ["2317"] }]]));
+    await waitFor(() => expect(putGroups()).toEqual([[{ name: "自選", codes: ["2317"] }]]));
   });
 });
 
@@ -374,7 +402,7 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
     fireEvent(window, ptr("pointermove", 100, 160));
     fireEvent(window, ptr("pointerup", 100, 160));
     await waitFor(() =>
-      expect(putBodies).toEqual([
+      expect(putGroups()).toEqual([
         [
           { name: "主力", codes: ["2330"] },
           { name: "觀察", codes: ["5483", "3231", "2330"] },
@@ -391,7 +419,7 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
     await startDrag();
     fireEvent(window, ptr("pointermove", 250, 160));
     fireEvent(window, ptr("pointerup", 250, 160));
-    await waitFor(() => expect(putBodies[0]?.[1]?.codes).toEqual(["5483", "3231", "2330"]));
+    await waitFor(() => expect(putGroups()[0]?.[1]?.codes).toEqual(["5483", "3231", "2330"]));
   });
 
   it("剛超出側欄右緣寬容 → 零 PUT(右邊界釘在真實 aside 寬度)", async () => {
@@ -415,7 +443,7 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
     fireEvent(window, ptr("pointermove", 100, 140));
     fireEvent(window, ptr("pointerup", 100, 140));
     await waitFor(() =>
-      expect(putBodies).toEqual([
+      expect(putGroups()).toEqual([
         [
           { name: "主力", codes: ["2330"] },
           { name: "觀察", codes: ["3231", "2330", "5483"] },
@@ -446,7 +474,7 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
     fireEvent(window, ptr("pointermove", 100, 24));
     fireEvent(window, ptr("pointerup", 100, 24));
     await waitFor(() =>
-      expect(putBodies).toEqual([
+      expect(putGroups()).toEqual([
         [
           { name: "主力", codes: ["5483", "2330"] },
           { name: "觀察", codes: ["3231", "2330"] },
@@ -457,8 +485,8 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
 
   it("空群組顯示「拖曳股票到此」(否則沒有高度 = 拖不進去的死組)", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") return new Response(JSON.stringify({ groups: [] }));
-      return respond(url, [{ name: "空組", codes: [] }]);
+      if (init?.method === "PUT") return new Response(JSON.stringify({ codes: [], groups: [] }));
+      return respond(url, [{ name: "空組", codes: [] }], []);
     });
     sidebar();
     await waitFor(() => expect(screen.getByText("拖曳股票到此")).toBeTruthy());
