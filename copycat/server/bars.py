@@ -47,6 +47,11 @@ DAYS_MIN = 1
 DAYS_MAX = 30
 DAILY_WINDOW_DAYS = 180  # 日曆日 ≈ 120 交易日(change-spec D-14)
 DAILY_MAX_BARS = 120
+#: 大盤頁日/週/月 K 共用的長窗(index-board N-1)。5 年 ≈ 1,220 根日 K,一次抓完後
+#: 日 K / 週 K / 月 K 都由這一份衍生 —— 週月各自再打一次 TC4 是純粹的重工,而且
+#: 三份窗長不同會讓「同一天的日 K 與週 K 對不起來」這種難查的不一致有機可乘。
+DAILY_LONG_WINDOW_DAYS = 1825
+DAILY_LONG_MAX_BARS = 1500  # 不截斷 5 年(留餘裕);上限只為防呆
 
 #: engine.bars_range(code, tf, start_date, end_date) -> list[Bar]
 BarsFetcher = Callable[[str, str, str, str], Awaitable[list[Bar]]]
@@ -184,23 +189,105 @@ class BarsCache:
 
 
 async def build_daily(
-    fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date
+    fetch: BarsFetcher,
+    cache: BarsCache,
+    code: str,
+    today: _dt.date,
+    *,
+    window_days: int = DAILY_WINDOW_DAYS,
+    max_bars: int = DAILY_MAX_BARS,
+    cache_key: str | None = None,
 ) -> list[Bar]:
+    """日 K(per (cache_key, today) memo)。
+
+    `cache_key` 讓同一個 `code` 的不同窗長各自佔一個快取格 —— 大盤頁的長窗日 K
+    與個股頁的 180 日窗共用 `code` 會互相覆寫,取到誰全看誰先到(index-board N-1)。
+    預設 `None` = 沿用 `code`,既有呼叫端行為完全不變。
+    """
+    key = cache_key if cache_key is not None else code
     cache.prune(today)
-    cached = cache.daily_get(code, today.isoformat())
+    cached = cache.daily_get(key, today.isoformat())
     if cached is not None:
         return cached
     # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline
-    if cache.empty_fresh(code, "D", 0):
+    if cache.empty_fresh(key, "D", 0):
         return []
-    start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
-    bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-DAILY_MAX_BARS:]
-    cache.daily_put(code, today.isoformat(), bars)
+    start = today - _dt.timedelta(days=window_days)
+    bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-max_bars:]
+    cache.daily_put(key, today.isoformat(), bars)
     if bars:
-        cache.empty_clear(code, "D", 0)
+        cache.empty_clear(key, "D", 0)
     else:
-        cache.empty_mark(code, "D", 0)
+        cache.empty_mark(key, "D", 0)
     return bars
+
+
+def _period_key(stamp: str, period: str) -> str | None:
+    """日 bar 的 `t`(YYYY-MM-DD)→ 桶鍵;非日 bar / 壞日期 → None(丟棄,不猜)。
+
+    **W 用 ISO 年-週**:2025-12-29 ~ 2026-01-02 同屬 ISO 2026-W01,用曆年 + 週號
+    當鍵會把跨年那一週拆成兩桶。
+    """
+    if len(stamp) != 10:  # 分 K 的 `t` 是 "YYYY-MM-DD HH:MM"
+        return None
+    try:
+        d = _dt.date.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if period == "M":
+        return stamp[:7]
+    iso = d.isocalendar()
+    return f"{iso[0]:04d}-W{iso[1]:02d}"
+
+
+def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
+    """日 Bar → 週("W")/ 月("M") Bar。
+
+    **桶鍵取實際日期**(ISO 年-週 / 年-月),不是「每 N 根一組」—— 連假 / 補班週的
+    交易日數不固定,固定根數分組會累積錯位,而且圖形看起來完全正常、沒有任何斷言
+    會紅(change-spec §1.2)。
+
+    o = 桶內第一根 o、h = max、l = min、c = 最後一根 c、v = Σv;
+    `t` 取桶內**最後一個實際交易日**(右端對齊;不憑空造出非交易日的月底日期)。
+    """
+    out: list[Bar] = []
+    cur_key: str | None = None
+    for b in sorted(bars, key=lambda x: x["t"]):
+        key = _period_key(b["t"], period)
+        if key is None:
+            continue
+        if key != cur_key:
+            out.append(Bar(t=b["t"], o=b["o"], h=b["h"], l=b["l"], c=b["c"], v=b["v"]))
+            cur_key = key
+            continue
+        agg = out[-1]
+        agg["t"] = b["t"]
+        agg["h"] = max(agg["h"], b["h"])
+        agg["l"] = min(agg["l"], b["l"])
+        agg["c"] = b["c"]
+        agg["v"] += b["v"]
+    return out
+
+
+async def build_period(
+    fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
+) -> list[Bar]:
+    """大盤頁的日 / 週 / 月 K —— 三者共用同一份長窗日 K(見 `DAILY_LONG_WINDOW_DAYS`)。
+
+    `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。
+    """
+    daily = await build_daily(
+        fetch,
+        cache,
+        code,
+        today,
+        window_days=DAILY_LONG_WINDOW_DAYS,
+        max_bars=DAILY_LONG_MAX_BARS,
+        cache_key=f"{code}|L",
+    )
+    if period == "D":
+        return daily
+    return aggregate_period(daily, period)
 
 
 async def build_minute(
