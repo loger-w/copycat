@@ -279,9 +279,10 @@ const EnergySub = memo(function EnergySub({
   return (
     <g>
       {/* 量刻度(SC-8):中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
-          頂端那根不會蓋住刻度文字。
+          頂端那根不會蓋住頂端的刻度文字。
           round4 項 5:兩個值移到**右緣**(textAnchor="end")—— 左緣讓給主圖的價位帶,
-          兩張圖的左界對齊;bar 從 Y_AXIS_W 起,不會壓到右緣數字。 */}
+          兩張圖的左界對齊。⚠ bar 一路畫到右緣,**右緣數字必然與 bar 同區域**
+          (盤中最新分鐘就在那裡),所以兩個數字都要靠描邊拉對比,見下。 */}
       <line x1={Y_AXIS_W} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
       {/* 兩個數字都加同底色描邊(paintOrder="stroke" 讓描邊畫在字下面)。頂端那個有
           SUB_TOP_PAD 清出的空白可靠,**中線那個沒有** —— 盤中右緣恆有 bar,不加對比
