@@ -197,3 +197,22 @@
 - [ ] worktree 陷阱:`spikes/TCPY/` 在 .gitignore 內 → 新 worktree 缺它會讓 `test_tc4.py::…dead_port…` 與 `test_tc4_trade.py::…gc…` 兩支以 `ModuleNotFoundError: tcoreapi_mq` 紅。若 worktree 常用,考慮把 TCPY 納版控或在 branch-lifecycle 開工節加一步 copy
 - [ ] **盤中不要起第二台後端**:TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8),驗證用途只起前端 dev server(vite proxy 已指 8721,零新增訂閱)。本輪踩過一次(約 90 秒),值得考慮寫進 CLAUDE.md §8
 - [ ] `dropTargetFromPointer` 的 nearest-zone 在兩個 zone 距離相等時取先出現者(未定義偏好);群組間縫隙很窄時使用者感受不到,若日後 section 間距變大再定規則
+
+## 2026-07-30(stock-ui-round5 沉澱)
+
+- [ ] **SC-1~SC-22 的畫面對照未做**(merge 時只有量化 gate + 後端真實資料佐證)。最該補的一項是
+  側欄「管理」鈕開出的 `<dialog>`:jsdom 26 的 `HTMLDialogElement` 是空 class,`showModal()`
+  這條路徑**自動化結構上守不住**,失效樣態是「測試全綠、真瀏覽器第一次點就白畫面」。
+  下次開盤把這一項排第一個看。
+- [ ] **顏色類 SC 只能盤中驗**:收盤後 TC4 不推 REALTIME → `meta` 恆為 `null`,而漲跌色一律以
+  `meta.ref` 為基準 → 明細三欄(SC-5)、現價圈(SC-2)、左軸刻度(SC-20)盤後全灰。
+  這是既有行為不是本輪的 bug,但排驗收時程要考慮進去(盤後只驗得到幾何與有無)。
+- [ ] **江波圖 autofit 域裝不下逐筆極值 —— 有實例了**:2330 於 2026-07-30 盤後(無 meta →
+  autofit)域為 `[2160.5, 2259.5]` 而當日最高 `2260.0` 落在域外 0.5 元 → 高點線不畫(設計如此,
+  spec R12)。要讓兩條線在無漲跌停時也必定看得到,得把 y 域改成「含當日高低」再算 —— 那會動到
+  `buildIntradayGeometry` 的域語意與一整批座標斷言,是獨立一輪的工作,不要順手改。
+- [ ] `WatchlistManagerDialog` 的群組列**沒有排序握把**(spec 草圖有 `⋮⋮`,但 SC-14 沒有「群組
+  排序」這條 → 刻意不長沒有行為的 UI)。若日後群組變多想調順序,那時再一併設計拖曳語意。
+- [ ] 側欄的零 PUT 判定用 `JSON.stringify(next) === JSON.stringify(wl)` 深度比較(W-22)。
+  物件鍵序目前由 model 純函數保證一致,若日後有人改成從別處組 `Watchlist`(鍵序不同)
+  這個比較會失效成「永遠不相等」→ 悄悄退化回每次都送 PUT。要更穩就換成逐欄位比較。
