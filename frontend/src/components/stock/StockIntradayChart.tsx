@@ -25,8 +25,10 @@ import { cn } from "@/lib/utils";
 
 const MAIN = { width: 800, height: 260 };
 const SUB = { width: 800, height: 70 };
-/** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁 */
-const PRICE_TAG = { w: 46, h: 14 };
+/** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁。
+ *  寬度**直接取 `Y_AXIS_W`** 不另寫一份數字:兩份靠註解維持相等的話,任一方改動就讓
+ *  「hover 價位標壓在走勢線上」這個本輪要修的症狀復發,而且沒有測試會發現。 */
+const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
 const TIME_TAG = { w: 34, h: 13 };
 
 function hhmm(minute: number): string {
@@ -281,10 +283,30 @@ const EnergySub = memo(function EnergySub({
           round4 項 5:兩個值移到**右緣**(textAnchor="end")—— 左緣讓給主圖的價位帶,
           兩張圖的左界對齊;bar 從 Y_AXIS_W 起,不會壓到右緣數字。 */}
       <line x1={Y_AXIS_W} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
-      <text x={w - 2} y={SUB_TOP_PAD - 2} textAnchor="end" className="fill-ink-dim" fontSize="0.5rem">
+      {/* 兩個數字都加同底色描邊(paintOrder="stroke" 讓描邊畫在字下面)。頂端那個有
+          SUB_TOP_PAD 清出的空白可靠,**中線那個沒有** —— 盤中右緣恆有 bar,不加對比
+          就會被 bar 蓋掉(SC-7)。 */}
+      <text
+        x={w - 2}
+        y={SUB_TOP_PAD - 2}
+        textAnchor="end"
+        className="fill-ink-dim stroke-surface"
+        strokeWidth={2.5}
+        paintOrder="stroke"
+        fontSize="0.5rem"
+      >
         {maxSide}
       </text>
-      <text x={w - 2} y={midY - 2} textAnchor="end" className="fill-ink-dim" fontSize="0.5rem">
+      <text
+        data-testid="vol-tick-mid"
+        x={w - 2}
+        y={midY - 2}
+        textAnchor="end"
+        className="fill-ink-dim stroke-surface"
+        strokeWidth={2.5}
+        paintOrder="stroke"
+        fontSize="0.5rem"
+      >
         {Math.round(maxSide / 2)}
       </text>
       {bars.map((b) => (

@@ -433,4 +433,20 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
       expect(Number(t.getAttribute("x"))).toBe(800 - 2);
     }
   });
+
+  // review R15a:中線數字沒有 SUB_TOP_PAD 那種空白保護,盤中右緣恆有 bar
+  it("項 5:中線量刻度有同底色描邊,不會被右緣 bar 蓋掉", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const mid = container.querySelector('[data-testid="vol-tick-mid"]')!;
+    expect(mid.getAttribute("class")).toContain("stroke-surface");
+    expect(mid.getAttribute("paint-order")).toBe("stroke");
+  });
+
+  // review R15b:兩份 46 靠註解維持相等 → 任一方改動就讓 hover 價位標壓線復發
+  it("hover 價位標寬度恰等於價位帶寬度(不得各寫一份 46)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
+    const tag = container.querySelector('[data-testid="price-tag"]')!;
+    expect(Number(tag.getAttribute("width"))).toBe(Y_AXIS_W);
+  });
 });
