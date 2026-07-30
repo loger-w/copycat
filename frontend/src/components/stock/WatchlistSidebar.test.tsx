@@ -191,6 +191,26 @@ describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
     await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "9958"]));
   });
 
+  // self-review MC-6:mutation test 證明停用 `target.codes.includes(code)` 早退後
+  // 25 條測試照樣全綠 → 該組已有的股票被重複送進 PUT 也沒人發現
+  it("該組已有的股票再加一次 → 零 PUT(不送重複)", async () => {
+    await openAdd("主力");
+    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2330" } });
+    fireEvent.click(screen.getByText("新增"));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+  });
+
+  // self-review MC-8:搜尋框自己的 Escape(與拖曳取消的 Escape 是兩個不同 handler)
+  it("搜尋框按 Esc → 收起輸入框且零 PUT", async () => {
+    await openAdd("主力");
+    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Escape" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByPlaceholderText("股號或名稱")).toBeNull();
+    expect(putBodies).toEqual([]);
+  });
+
   it("名稱表不可用(空表)→ 提示列不出現,直接打股號仍可加入", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
@@ -358,6 +378,47 @@ describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
         [
           { name: "主力", codes: ["2330"] },
           { name: "觀察", codes: ["5483", "3231", "2330"] },
+        ],
+      ]),
+    );
+  });
+
+  // self-review FG-1:原本只驗 clientX=900,那個 x 超出「真實 bounds(right=240)」與
+  // 「asideRef 沒接上時的退化 bounds(right=0)」**兩者**,所以測不出 bounds 是否真的來自
+  // aside rect。下面這一對把右邊界釘在真實側欄寬度上:250 在 240+16 寬容內要成立、
+  // 270 在寬容外要作廢 —— bounds 若退化成 {0,0},250 那支就會紅。
+  it("貼著側欄右緣(寬容內)放開 → 照樣搬組", async () => {
+    await startDrag();
+    fireEvent(window, ptr("pointermove", 250, 160));
+    fireEvent(window, ptr("pointerup", 250, 160));
+    await waitFor(() => expect(putBodies[0]?.[1]?.codes).toEqual(["5483", "3231", "2330"]));
+  });
+
+  it("剛超出側欄右緣寬容 → 零 PUT(右邊界釘在真實 aside 寬度)", async () => {
+    await startDrag();
+    fireEvent(window, ptr("pointermove", 270, 160));
+    fireEvent(window, ptr("pointerup", 270, 160));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+  });
+
+  // self-review MC-7:折疊群組的 zone 幾何(listTop = section 下緣 → index = count)
+  // 只有純函數層驗過;元件層的 `collapsed.has(name) || list === undefined` 接線沒驗過
+  it("拖進折疊中的群組 → append 到該組尾端", async () => {
+    sidebar();
+    await waitGroups();
+    fireEvent.click(screen.getByLabelText("折疊 觀察"));
+    expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
+    stubRects();
+    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
+    fireEvent(handle, ptr("pointerdown", 10, 80));
+    fireEvent(window, ptr("pointermove", 100, 140));
+    fireEvent(window, ptr("pointerup", 100, 140));
+    await waitFor(() =>
+      expect(putBodies).toEqual([
+        [
+          { name: "主力", codes: ["2330"] },
+          { name: "觀察", codes: ["3231", "2330", "5483"] },
         ],
       ]),
     );

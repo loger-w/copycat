@@ -116,9 +116,31 @@ def _fetcher(pages: dict[str, str]):
     return fetch
 
 
+def _build_html(*, warrant_rows: int, stock_rows: int, base: int = 2000) -> str:
+    """權證段 N 列 + 股票段 M 列。三條守門要能被**分別**觸發,fixture 就得能獨立調參 ——
+    否則測試名稱寫「下界」卻其實撞在權證那條(self-review FG-3 實際踩過)。"""
+    warrants = "".join(
+        f"<tr><td>03{i:04d}　權證{i}</td><td>TW{i}</td><td>d</td><td>上市</td><td>x</td></tr>"
+        for i in range(warrant_rows)
+    )
+    stocks = "".join(
+        f"<tr><td>{base + i}　股票{i}</td><td>TWS{i}</td><td>d</td><td>上市</td><td>x</td></tr>"
+        for i in range(stock_rows)
+    )
+    return (
+        "<table><tbody>"
+        f"<tr><td colspan='7'>上市認購(售)權證</td></tr>{warrants}"
+        f"<tr><td colspan='7'>股票</td></tr>{stocks}"
+        "</tbody></table>"
+    )
+
+
 class TestRefreshGuards:
     """守門必須雙側 + 語意檢查:只防「收太少」的話,段標題偵測失效(收進 4 萬筆權證)
-    完全不觸發,靜默覆寫版控檔。"""
+    完全不觸發,靜默覆寫版控檔。
+
+    **每支測試都斷言錯誤訊息**,確保它釘的是自己那條守門 —— 只驗 `pytest.raises(ValueError)`
+    的話,三支可以全部撞在同一條上而測試名稱看起來都對(FG-3)。"""
 
     def _existing(self, tmp_path: Path) -> Path:
         path = tmp_path / "names.json"
@@ -126,52 +148,53 @@ class TestRefreshGuards:
         return path
 
     def test_too_few_raises_and_keeps_old_file(self, tmp_path: Path) -> None:
+        """下界:權證段與股票段都健康,只有總筆數不足 → 必須是**總數**那條守門攔下。"""
         path = self._existing(tmp_path)
-        pages = {url: FIXTURE_HTML for url in ISIN_URLS}
-        with pytest.raises(ValueError):
-            refresh(path, fetcher=_fetcher(pages))
+        # 權證 5001(> 5000 過關)、股票 600(> 500 過關)、總數 600(< 1800 不過)
+        html = _build_html(warrant_rows=5001, stock_rows=600)
+        with pytest.raises(ValueError, match=r"\[1800, 6000\]"):
+            refresh(path, fetcher=_fetcher({url: html for url in ISIN_URLS}))
         assert load_names(path) == {"9999": "舊檔"}
 
     def test_warrant_section_not_detected_raises(self, tmp_path: Path) -> None:
         """段標題偵測失效 → 沒有任何段名含「權證」→ 視為解析失敗。"""
         path = self._existing(tmp_path)
         pages = {url: BROKEN_SECTION_HTML for url in ISIN_URLS}
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="權證段"):
             refresh(path, fetcher=_fetcher(pages))
+        assert load_names(path) == {"9999": "舊檔"}
+
+    def test_stock_section_missing_raises(self, tmp_path: Path) -> None:
+        """段名改動導致「股票」段收不到 → 保留舊檔(而不是寫一份只有 ETF 的表)。"""
+        path = self._existing(tmp_path)
+        html = _build_html(warrant_rows=5001, stock_rows=10)
+        with pytest.raises(ValueError, match="「股票」段"):
+            refresh(path, fetcher=_fetcher({url: html for url in ISIN_URLS}))
         assert load_names(path) == {"9999": "舊檔"}
 
     def test_too_many_raises(self, tmp_path: Path) -> None:
         """上界:段落偵測失效但仍有權證段名時,筆數會暴增到上萬。"""
         path = self._existing(tmp_path)
-        rows = "\n".join(
-            f"<tr><td>{3000 + i}　權證{i}</td><td>TW{i}</td><td>d</td><td>上市</td><td>x</td></tr>"
-            for i in range(6100)
-        )
-        big = (
-            "<table><tbody><tr><td colspan='7'>上市認購(售)權證</td></tr>"
-            + "<tr><td>030001　權證A</td><td>TW</td><td>d</td><td>上市</td><td>x</td></tr>" * 5001
-            + "<tr><td colspan='7'>股票</td></tr>"
-            + rows
-            + "</tbody></table>"
-        )
-        with pytest.raises(ValueError):
-            refresh(path, fetcher=_fetcher({url: big for url in ISIN_URLS}))
+        html = _build_html(warrant_rows=5001, stock_rows=6100)
+        with pytest.raises(ValueError, match=r"\[1800, 6000\]"):
+            refresh(path, fetcher=_fetcher({url: html for url in ISIN_URLS}))
         assert load_names(path) == {"9999": "舊檔"}
 
     def test_healthy_payload_writes(self, tmp_path: Path) -> None:
         path = tmp_path / "names.json"
-        rows = "\n".join(
-            f"<tr><td>{2000 + i}　股票{i}</td><td>TW{i}</td><td>d</td><td>上市</td><td>x</td></tr>"
-            for i in range(1900)
-        )
-        html = (
-            "<table><tbody><tr><td colspan='7'>上市認購(售)權證</td></tr>"
-            + "<tr><td>030001　權證A</td><td>TW</td><td>d</td><td>上市</td><td>x</td></tr>" * 5001
-            + "<tr><td colspan='7'>股票</td></tr>"
-            + rows
-            + "</tbody></table>"
-        )
+        html = _build_html(warrant_rows=5001, stock_rows=1900)
         # 兩個 URL 同內容 → 第二份全是重複 code,總數仍為 1900(落在 [1800, 6000])
         names = refresh(path, fetcher=_fetcher({url: html for url in ISIN_URLS}))
         assert len(names) == 1900
         assert load_names(path) == names
+
+    def test_cross_market_duplicate_keeps_first_url(self, tmp_path: Path) -> None:
+        """跨市場同號 → 保留先出現者(上市優先,因 URL 順序)。原本三支 refresh 測試都餵
+        同一份 HTML 給兩個 URL,這條 setdefault 語意只存在註解裡(FG-3 同批 MC-9)。"""
+        path = tmp_path / "names.json"
+        listed = _build_html(warrant_rows=5001, stock_rows=1900, base=2000)
+        otc = _build_html(warrant_rows=5001, stock_rows=1900, base=2000).replace(
+            "股票0</td>", "上櫃同號</td>"
+        )
+        names = refresh(path, fetcher=_fetcher({ISIN_URLS[0]: listed, ISIN_URLS[1]: otc}))
+        assert names["2000"] == "股票0"  # 上市那份贏
