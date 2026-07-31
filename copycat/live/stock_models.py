@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,36 @@ def derive_side(price_milli: int, bid_milli: int | None, ask_milli: int | None) 
     if bid_milli is not None and price_milli <= bid_milli:
         return "inner"
     return "neutral"
+
+
+def relabel_locked_side(
+    tick: StockTick, upper_milli: int | None, lower_milli: int | None
+) -> StockTick:
+    """鎖漲跌停且對手側整個不可得時,補回 `derive_side` 判不出來的那一邊。
+
+    **為什麼需要這個**:歷史 TICKS row 只有單一 `Bid`/`Ask` 欄(不像 REALTIME 有五檔可以
+    往下找第一個限價檔),鎖停日那一欄就是市價佇列的 `0`,`_best_limit_price` 無從施力
+    → 整天的回補 tick 全判 neutral。而 `apply_backfill` 會先 `reset()` 再用回補資料重放,
+    所以 live 期間判好的值每次切檔都被洗掉 —— 2026-07-31 實測 2327 切檔後
+    `cum_outer = cum_inner = 0` 回到原點。
+
+    **為什麼可以補**:這不是猜測,是漲跌停制度下的恆等式。鎖漲停時漲停價之上沒有更高價可掛,
+    主動買方只能排隊,**唯一**能促成成交的是主動賣方 → 內盤;鎖跌停對稱 → 外盤。
+
+    四道閘一律不套用(寧可留 neutral 也不冒充):
+    - 已判定的 tick(只補 neutral)
+    - 成交價不在漲停 / 跌停價上
+    - 漲跌停不可得
+    - **對手側拿得到** —— 有 ask 還判不出來是另一回事(價差內成交),
+      不可用鎖停規則蓋過去
+    """
+    if tick.side != "neutral":
+        return tick
+    if upper_milli is not None and tick.price_milli == upper_milli and tick.ask_milli is None:
+        return replace(tick, side="inner")
+    if lower_milli is not None and tick.price_milli == lower_milli and tick.bid_milli is None:
+        return replace(tick, side="outer")
+    return tick
 
 
 def _best_limit_price(levels: list[tuple[int, int]]) -> int | None:

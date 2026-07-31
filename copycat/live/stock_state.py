@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
-from copycat.live.stock_models import StockBook, StockMeta, StockTick
+from copycat.live.stock_models import StockBook, StockMeta, StockTick, relabel_locked_side
 
 _TICKS_MAXLEN = 20_000  # 熱門股單日 6.2k 實測、漲停攻防股更高(design r1-F8)
 _BACKFILL_SEQ_MARGIN = 1_000  # seq 跳增下限,確保前端必偵測到跳號
@@ -85,6 +85,14 @@ class StockDayState:
         """原子重建 + merge:回補列為基底,回補期間已 ingest 的 live tick
         (cum > 回補上限)為倖存者接續重放 — 空回補即全數倖存,不洗掉 live 狀態。
         seq 一次跳增(前端跳號規則觸發全量 refetch,design §4)。"""
+        # 鎖停日的回補補判(round6 項 2)。歷史 TICKS row 只有單一 Bid/Ask 欄,鎖停時那欄
+        # 就是市價佇列的 0 → `derive_side` 整天判 neutral;而本方法會先 reset() 再用回補
+        # 重放,live 期間判好的值每次切檔都被洗掉(2026-07-31 實測 2327 切檔後
+        # cum_outer = cum_inner = 0 回到原點)。meta 是 reset() 刻意保留的靜態值,
+        # 補判的依據就在手上 —— 見 `relabel_locked_side` 的四道閘。
+        if self.meta is not None:
+            up, lo = self.meta.upper_milli, self.meta.lower_milli
+            ticks = [relabel_locked_side(t, up, lo) for t in ticks]
         old_seq = self.seq
         backfill_max = max((t.cum_vol for t in ticks), default=-1)
         survivors = [t for t in self.ticks if t.cum_vol > backfill_max]

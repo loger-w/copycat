@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from copycat.live.stock_models import (
+    StockTick,
     derive_side,
     is_trial_window,
     parse_hist_tick,
     parse_stock_realtime,
+    relabel_locked_side,
 )
 
 # 2026-07-21 盤中 probe 真實樣本(docs/research/2026-07-21-stock-spot-quote-order-probe.md)
@@ -282,6 +285,58 @@ class TestMarketOrderPseudoLevel:
         assert tick.bid_milli == 2_380_000
         assert tick.ask_milli == 2_385_000
         assert tick.side == "inner"
+
+    def test_locked_relabel_recovers_side_when_book_column_is_unusable(self) -> None:
+        """歷史 TICKS row 只有單一 Bid/Ask 欄,鎖停日該欄就是市價佇列的 0,**沒有第二檔可退**
+        → `derive_side` 只能誠實回 neutral。
+
+        但「鎖漲停 + 委賣側不可得」這個組合本身就決定了主動方:漲停價之上沒有更高價可掛,
+        主動買方只能排隊,所以**唯一**能促成成交的是主動賣方 → 內盤。鎖跌停對稱。
+        這不是猜測,是漲跌停制度下的恆等式,所以可以在拿得到 upper/lower 的地方補判。
+        """
+        neutral = StockTick(
+            code="2327",
+            price_milli=502_000,
+            qty=3,
+            cum_vol=5448,
+            time="12:00:00.000",
+            trade_date="2026-07-31",
+            side="neutral",
+            buy_sell_flag=None,
+            is_trial=False,
+            bid_milli=None,
+            ask_milli=None,
+        )
+        up = relabel_locked_side(neutral, upper_milli=502_000, lower_milli=411_000)
+        assert up.side == "inner"
+
+        at_lower = replace(neutral, price_milli=411_000)
+        assert relabel_locked_side(at_lower, upper_milli=502_000, lower_milli=411_000).side == "outer"
+
+    def test_locked_relabel_leaves_everything_else_alone(self) -> None:
+        base = StockTick(
+            code="2330",
+            price_milli=2_382_500,
+            qty=1,
+            cum_vol=1,
+            time="10:00:00.000",
+            trade_date="2026-07-31",
+            side="neutral",
+            buy_sell_flag=None,
+            is_trial=False,
+            bid_milli=2_380_000,
+            ask_milli=2_385_000,
+        )
+        # 價差內成交,不在漲跌停 → 維持 neutral(本輪不動這條,誠實留白)
+        assert relabel_locked_side(base, upper_milli=2_550_000, lower_milli=2_090_000) is base
+        # 已判定的 tick 一律不動(即使價格恰在漲停)
+        decided = replace(base, side="outer", price_milli=2_550_000)
+        assert relabel_locked_side(decided, upper_milli=2_550_000, lower_milli=2_090_000) is decided
+        # 漲跌停不可得 → 不猜
+        assert relabel_locked_side(base, upper_milli=None, lower_milli=None) is base
+        # 對手側**拿得到**時不套用 —— 有 ask 還判不出來是另一回事,不可用鎖停規則蓋過去
+        with_ask = replace(base, price_milli=2_550_000, bid_milli=None)
+        assert relabel_locked_side(with_ask, upper_milli=2_550_000, lower_milli=2_090_000) is with_ask
 
     def test_hist_row_zero_bid_is_not_a_price(self) -> None:
         row = {
