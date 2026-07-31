@@ -102,8 +102,34 @@ def derive_side(price_milli: int, bid_milli: int | None, ask_milli: int | None) 
     return "neutral"
 
 
+def _best_limit_price(levels: list[tuple[int, int]]) -> int | None:
+    """簿的最佳**限價**檔位;全是市價佇列 / 空簿 → None。
+
+    鎖漲跌停時 TC4 會在第一檔推「市價單佇列」,價格欄是 `0`。**`0` 不是價格** ——
+    它的語意是「這些委託沒有限價」。拿它當 `derive_side` 的 bid/ask 兩側都會壞:
+
+    - 鎖漲停(`bids[0] = (0, N)`、ask 側空):`price <= 0` 恆假 → 每筆成交判 neutral。
+      2026-07-31 盤中實測 2327 國巨全日 5450 張成交,`cum_outer = cum_inner = 0`,
+      內外盤副圖整片灰、外盤比分母 0 算不出來。
+    - 鎖跌停(`asks[0] = (0, N)`、bid 側空):`price >= 0` **恆真** → 一律判 outer。
+      方向碰巧對(鎖跌停的成交確為主動買),但 bid 側判定被整條短路。
+
+    **只影響餵給 `derive_side` 的取值,不影響 `book` 本身** —— 簿要原樣保留 0 檔位,
+    五檔與閃電梯得把它顯示成「市價」。所以這裡是獨立的挑選函式,
+    不是把過濾塞進 `_parse_levels`。
+    """
+    for price, _vol in levels:
+        if price > 0:
+            return price
+    return None
+
+
 def _parse_levels(msg: dict, price_key: str, vol_key: str) -> list[tuple[int, int]]:
-    """位移命名歸一:`Bid`/`BidVolume`=L0、`Bid1`/`BidVolume1`=L1…;空價位跳過。"""
+    """位移命名歸一:`Bid`/`BidVolume`=L0、`Bid1`/`BidVolume1`=L1…;空價位跳過。
+
+    ⚠ 這裡的「空」只指 `price is None`(欄位不存在 / 空字串)。價格 `0` 是**市價單佇列**,
+    是真實資料要保留(見 `_best_limit_price`);過濾它是消費端的事,不是解析端的事。
+    """
     levels: list[tuple[int, int]] = []
     for i in range(_DEPTH):
         suffix = "" if i == 0 else str(i)
@@ -141,8 +167,8 @@ def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockM
     if price is None or qty is None or qty <= 0:
         return None, book, meta
     time_tp, date_tp = _taipei_time(str(msg.get("PreciseTime", "")), str(msg.get("TradeDate", "")))
-    bid0 = book.bids[0][0] if book.bids else None
-    ask0 = book.asks[0][0] if book.asks else None
+    bid0 = _best_limit_price(book.bids)
+    ask0 = _best_limit_price(book.asks)
     tick = StockTick(
         code=str(msg.get("Security", "")),
         price_milli=price,
@@ -170,8 +196,11 @@ def parse_hist_tick(code: str, row: dict) -> StockTick | None:
     if not precise or not date:
         return None
     time_tp, date_tp = _taipei_time(precise, date)
-    bid = to_milli(row.get("Bid", ""))
-    ask = to_milli(row.get("Ask", ""))
+    # 歷史 row 只有單一 Bid/Ask 欄,沒有「往下找第一個限價檔」的餘地 ——
+    # 0(市價單佇列)一律歸零成 None,誠實地讓 derive_side 判不出來,
+    # 而不是留一個假價位把判定短路(同 `_best_limit_price` 的理由)。
+    bid = to_milli(row.get("Bid", "")) or None
+    ask = to_milli(row.get("Ask", "")) or None
     tick = StockTick(
         code=code,
         price_milli=price,
