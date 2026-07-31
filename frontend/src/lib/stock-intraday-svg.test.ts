@@ -264,6 +264,47 @@ describe("buildIntradayGeometry", () => {
     }
   });
 
+  // 🔴 round6 項 5:左緣價位軸的漲停 / 跌停兩格要亮燈 → 幾何層標出哪一格是哪個
+  describe("yTicks.kind(漲跌停亮燈的判定來源)", () => {
+    it("端點兩格標 upper / lower,中間各格不標", () => {
+      const g = buildIntradayGeometry(
+        { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+        { width: 270, height: 100 },
+      );
+      expect(g.yTicks[0]!.kind).toBe("upper");
+      expect(g.yTicks[10]!.kind).toBe("lower");
+      for (const t of g.yTicks.slice(1, 10)) expect(t.kind).toBeUndefined();
+    });
+
+    it("缺漲跌停(對稱 autofit)→ 兩格都不標(SC-5.5:沒有漲跌停可言就不亮)", () => {
+      const g = buildIntradayGeometry(
+        {
+          minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
+          meta: { ...META, upper: null, lower: null },
+        },
+        { width: 270, height: 100 },
+      );
+      for (const t of g.yTicks) expect(t.kind).toBeUndefined();
+    });
+
+    /** review R9:kind 的標記條件不可綁在「11 點分支」上。決定 y 域的條件是
+     *  `upper !== null && lower !== null`(**不含** `ref > 0`),而 tick 分支多了 `ref > 0`
+     *  —— 有漲跌停但 ref 不可得時會走 3 點 fallback,那條分支的 yTop / yBottom
+     *  **仍然就是** upper / lower,兩格畫的確實是漲跌停價卻不會亮,違反 SC-5.4「恆亮」。 */
+    it("有漲跌停但 ref 不可得(走 3 點 fallback)→ 端點仍標 kind", () => {
+      const g = buildIntradayGeometry(
+        {
+          minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
+          meta: { ...META, ref: null },
+        },
+        { width: 270, height: 100 },
+      );
+      expect(g.yTicks[0]!.priceMilli).toBe(2_550_000);
+      expect(g.yTicks[0]!.kind).toBe("upper");
+      expect(g.yTicks[g.yTicks.length - 1]!.kind).toBe("lower");
+    });
+  });
+
   // 低價股 tick 粗 → 相鄰 pct snap 到同價;去重後少於 11 點屬正常(SC-4.2)
   // 🔴 M2:±10% 用 upper/lower 原值,±2/4/6/8% 卻是拿 ref 獨立算的 —— 兩者沒互相校驗。
   // 漲跌幅不是 ±10% 的商品(槓桿 ETF ±20%、或任何比 ±10% 窄的),公式算出的中間刻度會

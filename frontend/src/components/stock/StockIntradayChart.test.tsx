@@ -260,8 +260,17 @@ describe("StockIntradayChart", () => {
     const svgs = [...container.querySelectorAll("svg")];
     const main = svgs.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!;
     const sub = svgs.find((s) => s.getAttribute("aria-label") === "內外盤能量")!;
-    // defs 內的 rect 是 clipPath 的裁切框、不是畫面元素,要排除
-    const drawnRects = [...main.querySelectorAll("rect")].filter((r) => r.closest("defs") === null);
+    // defs 內的 rect 是 clipPath 的裁切框、不是畫面元素,要排除。
+    // round6 項 5 起主圖多了兩個 rect(左緣漲跌停亮燈),它們不是量 bar ——
+    // 本條守的是「量 bar 不在主圖」,所以改成排除已知的非量元素後仍須為 0,
+    // 而不是「主圖一個 rect 都不能有」(後者會把任何新的色塊元素都誤判成 regression)。
+    const drawnRects = [...main.querySelectorAll("rect")].filter(
+      (r) =>
+        r.closest("defs") === null &&
+        !(r.getAttribute("data-testid") ?? "").startsWith("y-tick-lamp") &&
+        r.getAttribute("data-testid") !== "price-tag" &&
+        r.getAttribute("data-testid") !== "time-tag",
+    );
     expect(drawnRects.length).toBe(0);
     expect(sub.querySelectorAll("rect").length).toBeGreaterThan(0);
   });
@@ -575,6 +584,48 @@ describe("StockIntradayChart 左緣價位帶(round4 項 6)", () => {
 });
 
 // 🟢 round5 SC-1 / SC-2:當日高低線 + 現價圈
+describe("StockIntradayChart 左緣漲跌停亮燈(round6 項 5)", () => {
+  it("最上格紅底、最下格綠底,兩格皆白字", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const up = container.querySelector('[data-testid="y-tick-lamp-upper"]')!;
+    const down = container.querySelector('[data-testid="y-tick-lamp-lower"]')!;
+    expect(up.getAttribute("class")).toContain("fill-bull");
+    expect(down.getAttribute("class")).toContain("fill-bear");
+    const texts = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
+    expect(texts[0]!.getAttribute("class")).toContain("fill-white");
+    expect(texts[texts.length - 1]!.getAttribute("class")).toContain("fill-white");
+  });
+
+  it("中間各格不亮、維持 tickTone 的漲跌色(W-27)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelectorAll('[data-testid^="y-tick-lamp"]')).toHaveLength(2);
+    const texts = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
+    for (const t of texts.slice(1, -1)) {
+      expect(t.getAttribute("class")).not.toContain("fill-white");
+    }
+  });
+
+  it("色塊不出左緣價位帶、也不被 viewBox 上緣裁掉(SC-5.6)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const [, , w, h] = container.querySelector("svg")!.getAttribute("viewBox")!.split(" ").map(Number);
+    for (const r of container.querySelectorAll('[data-testid^="y-tick-lamp"]')) {
+      const x = Number(r.getAttribute("x"));
+      const y = Number(r.getAttribute("y"));
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x + Number(r.getAttribute("width"))).toBeLessThanOrEqual(Y_AXIS_W);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y + Number(r.getAttribute("height"))).toBeLessThanOrEqual(h!);
+      expect(w).toBeGreaterThan(0);
+    }
+  });
+
+  it("無漲跌停的商品不亮燈(SC-5.5)", () => {
+    const noLimit = { ...ACCUM, meta: { ...ACCUM.meta!, upper: null, lower: null } };
+    const { container } = wrap(<StockIntradayChart accum={noLimit} />);
+    expect(container.querySelectorAll('[data-testid^="y-tick-lamp"]')).toHaveLength(0);
+  });
+});
+
 describe("StockIntradayChart 當日高低與現價圈", () => {
   const withHL = (high: number | null, low: number | null) => ({ ...ACCUM, high, low });
 

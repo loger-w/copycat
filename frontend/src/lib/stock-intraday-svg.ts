@@ -78,6 +78,13 @@ export interface EnergyBar {
 export interface YTick {
   y: number;
   priceMilli: number;
+  /** 這一格恰好是漲停 / 跌停價(round6 項 5:左緣要亮燈)。其餘格為 undefined。
+   *
+   *  **判定必須與 y 域的分支條件對齊**(`upper !== null && lower !== null`,不含 `ref > 0`)
+   *  —— 刻度有兩條分支(11 點 / 3 點 fallback),但兩條的 yTop / yBottom 在有漲跌停時
+   *  **都是** upper / lower。把 kind 綁在 11 點那條上的話,「有漲跌停但 ref 不可得」
+   *  會畫出漲跌停價卻不亮燈。所以這裡採「與 upper/lower 比值」的統一後處理,不分支。 */
+  kind?: "upper" | "lower";
 }
 
 /** 當日極值標記(round4 項 1)。位置 = 摸到該價位的那一分鐘,值 = tick 級極值本身。 */
@@ -235,6 +242,15 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   } else {
     for (const p of [yTop, ref, yBottom]) {
       yTicks.push({ y: toY(p), priceMilli: Math.round(p) });
+    }
+  }
+  // 漲跌停亮燈的判定(round6 項 5):統一後處理,不綁在上面任何一條分支上(見 YTick.kind)。
+  // upper / lower 不可得 → 一格都不標 = 不亮(SC-5.5:沒有漲跌停可言就不猜)。
+  if (upper !== null && lower !== null) {
+    for (const t of yTicks) {
+      // upper 先判:退化商品(upper === lower)時只認一邊,不讓同一格同時是漲停又是跌停
+      if (t.priceMilli === upper) t.kind = "upper";
+      else if (t.priceMilli === lower) t.kind = "lower";
     }
   }
 

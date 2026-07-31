@@ -103,6 +103,9 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
 /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
 const MARK_LABEL_TOP = 9;
 
+/** 漲跌停亮燈色塊的高度(項 5)。字高 ≈ 9px,上下各留 1.5px。 */
+const TICK_LAMP_H = 12;
+
 /** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
 const ChartStatic = memo(function ChartStatic({
   g,
@@ -168,6 +171,22 @@ const ChartStatic = memo(function ChartStatic({
           風格與 K 線圖的 y 軸格線一致(stroke-line / 2 3 / 0.5)。 */}
       {g.yTicks.map((t) => (
         <g key={`yt-${t.priceMilli}`}>
+          {/* 漲停 / 跌停亮燈(round6 項 5)。恆亮 —— 與今天有沒有真的漲跌停無關,
+              作用是讓「今天最多能到哪」一眼可見。
+              y 要夾制:最上那格的 t.y = PAD_Y(4),色塊置中後上緣會落到 −2 被 viewBox 裁掉。
+              寬度收在 `Y_AXIS_W − 2` 不碰繪圖區(SC-5.6);底部時間標籤最左一個畫在
+              x = Y_AXIS_W + 2,所以左緣這條帶在標籤列是空的,下緣不必再夾。 */}
+          {t.kind !== undefined ? (
+            <rect
+              data-testid={`y-tick-lamp-${t.kind}`}
+              x={0}
+              y={Math.min(Math.max(t.y - TICK_LAMP_H / 2, 0), h - TICK_LAMP_H)}
+              width={Y_AXIS_W - 2}
+              height={TICK_LAMP_H}
+              rx={2}
+              className={t.kind === "upper" ? "fill-bull" : "fill-bear"}
+            />
+          ) : null}
           <line
             data-testid="y-grid"
             x1={Y_AXIS_W}
@@ -193,7 +212,9 @@ const ChartStatic = memo(function ChartStatic({
             y={t.y}
             dy="0.35em"
             textAnchor="end"
-            className={tickTone(t.priceMilli, refMilli)}
+            // 亮燈那兩格一律白字:紅底紅字 / 綠底綠字看不見,`tickTone` 的漲跌色在這裡
+            // 也已由底色講完了(W-27 只護中間各格)
+            className={t.kind !== undefined ? "fill-white" : tickTone(t.priceMilli, refMilli)}
             fontSize="0.5625rem"
           >
             {fmt(t.priceMilli)}
