@@ -60,6 +60,58 @@ describe("OrderBook 市價單檔位(round6 項 4)", () => {
     expect(screen.queryByLabelText("買1 0")).toBeNull();
   });
 
+  // 2026-07-31 user 拍板:總量列與量 bar 歸一一律**只算限價量**,市價量獨立顯示。
+  // 理由:總量列是「委買 vs 委賣力道對比」這種跨日跨股比較的相對讀數,而市價偽檔位
+  // 讓同一欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」—— 定義隨日子變、
+  // 比較靜默失真。量 bar 是限價檔之間的形狀比較,沒有價位的市價檔不該參與歸一。
+  it("總量列只算限價量,市價量不混進來", () => {
+    render(
+      <OrderBook code="2327" book={LOCK_UP_BOOK} last={null} ref_={456_500} upper={502_000} />,
+    );
+    // 9385 + 41(排除市價 15966);混進來會是 25,392
+    expect(screen.getByTestId("depth-total-bid").textContent).toBe("9,426張");
+  });
+
+  it("市價量獨立顯示,不藏在 hover title 裡", () => {
+    render(
+      <OrderBook code="2327" book={LOCK_UP_BOOK} last={null} ref_={456_500} upper={502_000} />,
+    );
+    const el = screen.getByTestId("depth-market-bid");
+    expect(el.textContent).toContain("15,966");
+    // 鎖板日「無限價排隊多少張」是本專案最在意的訊號(§0a 鎖板品質),不可只留 hover
+    expect(screen.getByTestId("depth-total-bid").getAttribute("title")).toBeNull();
+  });
+
+  it("無市價量時該列不顯示數字但保留高度(不抖動)", () => {
+    render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+    const el = screen.getByTestId("depth-market-bid");
+    expect(el.textContent).toBe("");
+    // 高度由容器固定,市價量在 0 與非 0 之間切換時版面不得跳動
+    expect(el.parentElement!.className).toContain("h-4");
+  });
+
+  it("量 bar 歸一排除市價檔 —— 限價檔恢復可讀", () => {
+    render(
+      <OrderBook code="2327" book={LOCK_UP_BOOK} last={null} ref_={456_500} upper={502_000} />,
+    );
+    // maxQty = 9385(限價最大),不是 15966 → 買2 應為滿格
+    const bid2 = screen.getByRole("button", { name: "買2 502" });
+    expect(bid2.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.width).toBe(
+      "100%",
+    );
+  });
+
+  it("市價列的 bar 夾制在 100%(它的量可以遠超限價最大量)", () => {
+    render(
+      <OrderBook code="2327" book={LOCK_UP_BOOK} last={null} ref_={456_500} upper={502_000} />,
+    );
+    // 15966 / 9385 = 170% → 不夾制會溢出列外
+    const row = screen.getByLabelText("買1 市價");
+    expect(row.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.width).toBe(
+      "100%",
+    );
+  });
+
   it("鎖漲停 badge 不再被市價偽檔位打穿(bids[0] 是 0 而非漲停價)", () => {
     render(
       <OrderBook

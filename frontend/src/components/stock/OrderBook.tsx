@@ -92,7 +92,8 @@ function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
                   "pointer-events-none absolute inset-y-0",
                   isBid ? "right-0 bg-bull/15" : "left-0 bg-bear/15",
                 )}
-                style={{ width: `${Math.round((qty / maxQty) * 100)}%` }}
+                // 夾制不可省:`maxQty` 只看限價檔,而市價列的量可以遠超它(2327 是 1.7 倍)
+                style={{ width: `${Math.min(100, Math.round((qty / maxQty) * 100))}%` }}
               />
               {isBid ? (
                 <>
@@ -145,13 +146,25 @@ function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
 export function OrderBook({ code, book, last, ref_, upper = null, lower = null }: Props) {
   const b = (book?.bids ?? []).slice(0, DEPTH);
   const a = (book?.asks ?? []).slice(0, DEPTH);
+  // 總量列與量 bar 歸一**一律只算限價量**(2026-07-31 user 拍板)。市價偽檔位若混進來,
+  // 同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」(市價那格吃掉 DEPTH
+  // 的一格)—— 定義隨日子變,跨日 / 跨股比較靜默失真。量 bar 是限價檔之間的形狀比較,
+  // 沒有價位的市價檔本來就不在那個維度上,卻會把五根限價 bar 一起壓成看不見的短樁
+  // (2327 實測市價 14167 vs 限價最大 11877,而市價佇列可以是限價量的數倍)。
+  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
+  const marketOnly = (levels: [number, number][]) =>
+    levels.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
   // `1` 不可省:五檔全 0 量(盤前 / 剛重啟未收 snapshot)時除零 → width "NaN%",
   // React 靜默產生無效 style,只有盤中才看得到(review R7;對齊 DepthBar.tsx:78)
-  const maxQty = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
-  const bidTotal = b.reduce((s, [, v]) => s + v, 0);
-  const askTotal = a.reduce((s, [, v]) => s + v, 0);
-  const marketBid = b.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
-  const marketAsk = a.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
+  const maxQty = Math.max(
+    1,
+    ...limitOnly(b).map(([, v]) => v),
+    ...limitOnly(a).map(([, v]) => v),
+  );
+  const bidTotal = limitOnly(b).reduce((s, [, v]) => s + v, 0);
+  const askTotal = limitOnly(a).reduce((s, [, v]) => s + v, 0);
+  const marketBid = marketOnly(b);
+  const marketAsk = marketOnly(a);
   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
   const lastMilli = last?.p ?? null;
   const chg = lastMilli !== null && ref_ ? ((lastMilli - ref_) / ref_) * 100 : null;
@@ -226,26 +239,27 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
         </span>
       </div>
 
-      {/* 總量列。**市價量照算進來**(round6 刻意維持既有計算)——但那讓同一個欄位在
-          鎖停日與平常日的定義不同:鎖停日是「市價量 + 4 檔限價量」(市價偽檔位吃掉
-          DEPTH=5 的一格),平常日是「5 檔限價量」,跨日 / 跨股比較會失真。
-          畫面零提示不行,所以有市價量時掛 title 說明(Phase 5 review P2)。 */}
-      <div className="mb-1.5 flex items-baseline justify-between font-mono">
-        <span
-          data-testid="depth-total-bid"
-          className="text-base font-bold text-bull"
-          title={marketBid > 0 ? `含市價委託 ${lots(marketBid)} 張` : undefined}
-        >
+      {/* 總量列 = **限價量**的委買 vs 委賣力道對比(定義不隨鎖停日改變,可跨日跨股比)。 */}
+      <div className="flex items-baseline justify-between font-mono">
+        <span data-testid="depth-total-bid" className="text-base font-bold text-bull">
           {lots(bidTotal)}
           <span className="ml-1 text-xs font-normal text-bull/70">張</span>
         </span>
-        <span
-          data-testid="depth-total-ask"
-          className="text-base font-bold text-bear"
-          title={marketAsk > 0 ? `含市價委託 ${lots(marketAsk)} 張` : undefined}
-        >
+        <span data-testid="depth-total-ask" className="text-base font-bold text-bear">
           {lots(askTotal)}
           <span className="ml-1 text-xs font-normal text-bear/70">張</span>
+        </span>
+      </div>
+
+      {/* 市價量獨立一列。**不縮回 hover title** —— 鎖板日「無限價排隊多少張」正是本專案
+          最在意的訊號(CLAUDE.md §0a 鎖板品質),藏在 hover 等於沒有。
+          `h-4` 固定高度:多數日子兩側都是 0(整列空字串),有無市價量時版面不得跳動。 */}
+      <div className="mb-1.5 flex h-4 items-baseline justify-between font-mono text-xs">
+        <span data-testid="depth-market-bid" className="text-bull/70">
+          {marketBid > 0 ? `市價 ${lots(marketBid)}` : ""}
+        </span>
+        <span data-testid="depth-market-ask" className="text-bear/70">
+          {marketAsk > 0 ? `市價 ${lots(marketAsk)}` : ""}
         </span>
       </div>
 
