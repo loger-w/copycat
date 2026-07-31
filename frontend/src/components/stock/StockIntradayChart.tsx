@@ -105,8 +105,13 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
 /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
 const MARK_LABEL_TOP = 9;
 
-/** 漲跌停亮燈色塊的高度(項 5)。字高 ≈ 9px,上下各留 1.5px。 */
-const TICK_LAMP_H = 12;
+/** 漲跌停亮燈色塊的高度(項 5)。
+ *
+ *  **必須 ≤ 2 × PAD_Y(8)**(Phase 5 review P2):最上格的 `t.y = PAD_Y = 4`,色塊置中後
+ *  上緣落在 `t.y − h/2`;h 大於 8 就得夾制成 0,而文字仍畫在 `t.y` → 字在色塊裡偏上,
+ *  最下格則反過來把色塊擠進底部時間標籤帶。取 8 讓兩端都不必夾制,兩格自然與文字同心。
+ *  字高 ≈ 9px 略高於 8,視覺上是「底線比字略窄」的 highlight 而不是滿框,可接受。 */
+const TICK_LAMP_H = 8;
 
 /** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
 const ChartStatic = memo(function ChartStatic({
@@ -420,7 +425,10 @@ const EnergySub = memo(function EnergySub({
           patternTransform="rotate(45)"
         >
           <rect width={3} height={3} className="fill-ink-dim" fillOpacity={0.3} />
-          <line x1={0} y1={0} x2={0} y2={3} className="stroke-ink-dim" strokeWidth={1.4} />
+          {/* 線畫在 tile **中心**不是左邊界(Phase 5 review P2):pattern 會把 tile 外的
+              內容裁掉且不 wrap 到對邊,畫在 x=0 時左半 [−0.7, 0) 直接消失 →
+              實際只有設計值一半的墨量,而 2.5px 柱寬本來就吃緊。 */}
+          <line x1={1.5} y1={0} x2={1.5} y2={3} className="stroke-ink-dim" strokeWidth={1.4} />
         </pattern>
       </defs>
       {/* 量刻度:中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
@@ -828,8 +836,11 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           「判定率」是本輪的關鍵資訊:外盤比的分母**排除**未分類,而這件事以前完全沒揭露。
           判定率一低就代表那個百分比是用不到一半的資料算出來的 —— 低於門檻時把外盤比
           降對比,讓失真的數字自己承認。 */}
-      <figcaption className="mt-1 flex h-4 items-center justify-between font-mono text-xs text-ink-dim">
-        <span>
+      {/* `h-4` 是固定 16px,任何換行都會直接溢出壓到下方元素(Phase 5 review P2)——
+          左段本輪從 ~33 字元長到 ~46 字元,窄容器時會換行。兩段各自 nowrap,
+          左段可截斷、右段不縮。 */}
+      <figcaption className="mt-1 flex h-4 items-center justify-between gap-2 font-mono text-xs text-ink-dim">
+        <span className="min-w-0 truncate whitespace-nowrap">
           外盤 <span className="text-bull">{side.outer}</span> · 內盤{" "}
           <span className="text-bear">{side.inner}</span> · 未分類{" "}
           <span data-testid="unch-total">{side.unch}</span> · 外盤比{" "}
@@ -844,7 +855,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
             (判定率 {side.decidedPct === null ? "-" : `${side.decidedPct.toFixed(0)}%`})
           </span>
         </span>
-        <span>
+        <span className="shrink-0 whitespace-nowrap">
           {overlay?.date && (toggles.cdp || toggles.ma) ? `疊線基準 ${overlay.date} · ` : ""}
           VWAP {accum.vwap != null ? fmt(accum.vwap) : "-"}
         </span>

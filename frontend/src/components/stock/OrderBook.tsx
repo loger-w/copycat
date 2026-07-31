@@ -78,6 +78,11 @@ function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
           return (
             <div
               key={i}
+              // `role="group"` 不可省(Phase 5 review P2):ARIA 規範禁止 generic role 從
+              // author 取 accessible name,裸 `<div aria-label>` 主流 AT 不會朗讀
+              // —— 改成 div 之前它是 button(role=button,label 有效),不補 role
+              // 就是本輪造成的可及性回歸。RTL 的 getByLabelText 只讀屬性不查 role,測不出來。
+              role="group"
               aria-label={`${isBid ? "買" : "賣"}${i + 1} 市價`}
               className="relative grid h-[25px] w-full grid-cols-2 items-center gap-2 border-b border-line px-2 font-mono text-sm"
             >
@@ -145,6 +150,8 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   const maxQty = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
   const bidTotal = b.reduce((s, [, v]) => s + v, 0);
   const askTotal = a.reduce((s, [, v]) => s + v, 0);
+  const marketBid = b.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
+  const marketAsk = a.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
   const lastMilli = last?.p ?? null;
   const chg = lastMilli !== null && ref_ ? ((lastMilli - ref_) / ref_) * 100 : null;
@@ -219,13 +226,24 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
         </span>
       </div>
 
-      {/* 總量列 */}
+      {/* 總量列。**市價量照算進來**(round6 刻意維持既有計算)——但那讓同一個欄位在
+          鎖停日與平常日的定義不同:鎖停日是「市價量 + 4 檔限價量」(市價偽檔位吃掉
+          DEPTH=5 的一格),平常日是「5 檔限價量」,跨日 / 跨股比較會失真。
+          畫面零提示不行,所以有市價量時掛 title 說明(Phase 5 review P2)。 */}
       <div className="mb-1.5 flex items-baseline justify-between font-mono">
-        <span data-testid="depth-total-bid" className="text-base font-bold text-bull">
+        <span
+          data-testid="depth-total-bid"
+          className="text-base font-bold text-bull"
+          title={marketBid > 0 ? `含市價委託 ${lots(marketBid)} 張` : undefined}
+        >
           {lots(bidTotal)}
           <span className="ml-1 text-xs font-normal text-bull/70">張</span>
         </span>
-        <span data-testid="depth-total-ask" className="text-base font-bold text-bear">
+        <span
+          data-testid="depth-total-ask"
+          className="text-base font-bold text-bear"
+          title={marketAsk > 0 ? `含市價委託 ${lots(marketAsk)} 張` : undefined}
+        >
           {lots(askTotal)}
           <span className="ml-1 text-xs font-normal text-bear/70">張</span>
         </span>

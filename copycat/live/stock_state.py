@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 
 from copycat.live.stock_models import StockBook, StockMeta, StockTick, relabel_locked_side
+
+logger = logging.getLogger(__name__)
 
 _TICKS_MAXLEN = 20_000  # 熱門股單日 6.2k 實測、漲停攻防股更高(design r1-F8)
 _BACKFILL_SEQ_MARGIN = 1_000  # seq 跳增下限,確保前端必偵測到跳號
@@ -88,11 +91,22 @@ class StockDayState:
         # 鎖停日的回補補判(round6 項 2)。歷史 TICKS row 只有單一 Bid/Ask 欄,鎖停時那欄
         # 就是市價佇列的 0 → `derive_side` 整天判 neutral;而本方法會先 reset() 再用回補
         # 重放,live 期間判好的值每次切檔都被洗掉(2026-07-31 實測 2327 切檔後
-        # cum_outer = cum_inner = 0 回到原點)。meta 是 reset() 刻意保留的靜態值,
-        # 補判的依據就在手上 —— 見 `relabel_locked_side` 的四道閘。
+        # cum_outer = cum_inner = 0 回到原點)。meta 是 reset() 刻意保留的靜態值。
+        #
+        # ⚠ **meta 與回補 tick 不同源**(Phase 5 review P1):`set_main` 訂閱後立刻把回補
+        # 入列,而 meta 只有收到 REALTIME 才寫入 —— server 冷啟動後第一次開一檔鎖停股時
+        # 回補可能先跑完,補判整段跳過而且**沒有任何重跑點**。所以這裡缺 meta 不能靜默:
+        # 出聲讓它可被發現,並由 `stock_engine` 在漲跌停值變化時重新入列回補。
+        # survivors(回補期間已 ingest 的 live tick)不套補判是刻意的:它們走的是
+        # REALTIME 路徑,`_best_limit_price` 有五檔可退,已經判得出來。
         if self.meta is not None:
             up, lo = self.meta.upper_milli, self.meta.lower_milli
             ticks = [relabel_locked_side(t, up, lo) for t in ticks]
+        elif any(t.side == "neutral" for t in ticks):
+            logger.warning(
+                "apply_backfill: meta 未到,%d 筆回補 tick 的鎖停補判跳過(等 meta 到齊後重跑)",
+                sum(1 for t in ticks if t.side == "neutral"),
+            )
         old_seq = self.seq
         backfill_max = max((t.cum_vol for t in ticks), default=-1)
         survivors = [t for t in self.ticks if t.cum_vol > backfill_max]

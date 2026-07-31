@@ -323,8 +323,25 @@ class StockEngine:
         recovered = code in self._no_data
         self._no_data.discard(code)
         was_meta_none = state.meta is None
+        prev_limits = (
+            None if state.meta is None else (state.meta.upper_milli, state.meta.lower_milli)
+        )
         state.update_book(book)
         state.update_meta(meta)
+        # 漲跌停值變化 → 主檔重跑回補(round6 項 2 / Phase 5 review P1)。
+        # `apply_backfill` 的鎖停補判要拿 upper/lower 當依據,但**meta 與回補 tick 不同源**:
+        #   (a) `set_main` 訂閱後立刻把回補入列,而 meta 只有 REALTIME 才寫入 ——
+        #       冷啟動後第一次開一檔鎖停股時回補可能先跑完,補判整段跳過
+        #   (b) `_rollover_stage2` 對每個 state `reset()` 而 reset 刻意保留 meta ——
+        #       主檔若不是觸發 rollover 的那一檔,會拿**昨日**的漲跌停比對今日 tick
+        # 兩種失效都零錯誤訊號。用「值變了就重跑」一次涵蓋兩者:冷啟動是 None → 有值,
+        # 跨日是舊值 → 新值。值沒變就不重跑,避免每則 REALTIME 都排隊。
+        if (
+            code == self._main
+            and meta.upper_milli is not None
+            and (meta.upper_milli, meta.lower_milli) != prev_limits
+        ):
+            self._backfill_jobs.put_nowait((code, self._generation))
         if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
             # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
             # 新日 tick → 先補 stage1 再走 stage2

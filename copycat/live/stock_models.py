@@ -116,18 +116,26 @@ def relabel_locked_side(
     **為什麼可以補**:這不是猜測,是漲跌停制度下的恆等式。鎖漲停時漲停價之上沒有更高價可掛,
     主動買方只能排隊,**唯一**能促成成交的是主動賣方 → 內盤;鎖跌停對稱 → 外盤。
 
-    四道閘一律不套用(寧可留 neutral 也不冒充):
+    五道閘一律不套用(寧可留 neutral 也不冒充):
     - 已判定的 tick(只補 neutral)
     - 成交價不在漲停 / 跌停價上
     - 漲跌停不可得
     - **對手側拿得到** —— 有 ask 還判不出來是另一回事(價差內成交),
       不可用鎖停規則蓋過去
+    - **同側也要不可得**(Phase 5 review P2):`ask is None` 不等於「鎖住了」。
+      「首次攻上漲停、把賣方掛單一次吃光」的那一筆,成交後簿的 ask 側同樣是空的,
+      但它實際是**主動買**(outer)—— 只看 ask 空會把它反向標成 inner,而偏誤方向固定
+      (系統性低估攻擊方),恰好打到本輪要修對的外盤比。真鎖停時歷史 row 的 Bid 是市價
+      佇列的 0(`parse_hist_tick` 已歸零成 None),首攻那一筆的 Bid 通常有值 → 兩者可分。
     """
     if tick.side != "neutral":
         return tick
-    if upper_milli is not None and tick.price_milli == upper_milli and tick.ask_milli is None:
+    locked = tick.bid_milli is None and tick.ask_milli is None
+    if not locked:
+        return tick
+    if upper_milli is not None and tick.price_milli == upper_milli:
         return replace(tick, side="inner")
-    if lower_milli is not None and tick.price_milli == lower_milli and tick.bid_milli is None:
+    if lower_milli is not None and tick.price_milli == lower_milli:
         return replace(tick, side="outer")
     return tick
 

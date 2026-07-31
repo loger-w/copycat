@@ -338,6 +338,32 @@ class TestMarketOrderPseudoLevel:
         with_ask = replace(base, price_milli=2_550_000, bid_milli=None)
         assert relabel_locked_side(with_ask, upper_milli=2_550_000, lower_milli=2_090_000) is with_ask
 
+    def test_first_touch_of_limit_is_not_relabelled(self) -> None:
+        """Phase 5 review P2:`ask is None` 不等於「鎖住了」。
+
+        「首次攻上漲停、把賣方掛單一次吃光」的那一筆,成交後簿的 ask 側同樣是空的,
+        但它實際是**主動買**(outer)。只看 ask 空會把它反向標成 inner,偏誤方向固定
+        (系統性低估攻擊方)—— 恰好打到本輪要修對的外盤比。
+        真鎖停時歷史 row 的 Bid 是市價佇列的 0(已歸零成 None),首攻那筆的 Bid 有值。
+        """
+        first_touch = StockTick(
+            code="2327",
+            price_milli=502_000,
+            qty=50,
+            cum_vol=1200,
+            time="09:30:00.000",
+            trade_date="2026-07-31",
+            side="neutral",
+            buy_sell_flag=None,
+            is_trial=False,
+            bid_milli=501_000,  # 買方還掛著限價 → 不是鎖死
+            ask_milli=None,  # 賣單剛被吃光
+        )
+        assert (
+            relabel_locked_side(first_touch, upper_milli=502_000, lower_milli=411_000)
+            is first_touch
+        )
+
     def test_hist_row_zero_bid_is_not_a_price(self) -> None:
         row = {
             "Date": "20260731",

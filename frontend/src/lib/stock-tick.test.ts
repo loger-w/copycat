@@ -180,7 +180,11 @@ describe("市價單檔位(round6 項 4)", () => {
     expect(l.rows.find((r) => r.priceMilli === 411_000)!.askQty).toBe(100);
   });
 
-  it("兩處早退也要帶市價量(否則鎖停 + 無 ref 時數字憑空消失)", () => {
+  /** Phase 5 review P2:原本的理由寫成「否則畫面上數字憑空消失」,但元件在
+   *  `rows.length === 0` 時就印「無資料」而跳過整個階梯容器,市價列本來就不會渲染
+   *  —— 那個理由不成立。這條守的是 **lib 層契約完整**:早退不代表資訊要一起丟,
+   *  之後若有別的消費端(或元件改成早退時也顯示),不必回頭補。 */
+  it("兩處早退仍回完整形狀,不因早退丟掉市價量(lib 層契約)", () => {
     const noAnchor = buildLadder({
       center: null,
       ref: null,
