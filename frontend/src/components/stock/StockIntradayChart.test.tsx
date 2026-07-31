@@ -634,19 +634,53 @@ describe("StockIntradayChart 未分類量的呈現(round6 項 2)", () => {
     expect(screen.getByTestId("decided-pct").textContent).toContain("55%"); // 147/269
   });
 
-  it("判定率低於門檻 → 外盤比降對比(SC-2.4)", () => {
-    wrap(<StockIntradayChart accum={withUnch} />);
-    expect(screen.getByTestId("outer-pct").className).toContain("text-ink-dim/50");
+  // 警示改掛「判定率」本身而非暗化外盤比(2026-07-31 user 拍板):降對比在 UI 語彙裡
+  // 是「不重要 / 停用」,而這個數字是「重要但失真」;且判定率本來就印在旁邊,
+  // 暗化沒有增加任何資訊位元,只增加一個門檻懸崖。
+  function accumWithDecided(decided: number) {
+    const v = 100;
+    const o = Math.round(decided * 0.6);
+    return {
+      ...ACCUM,
+      minutes: new Map([
+        [540, { c: 2_380_000, v, o, i: decided - o, u: v - decided, h: null, l: null }],
+      ]),
+    } as unknown as typeof ACCUM;
+  }
+
+  it("判定率低於門檻 → **判定率本身**標警示色,外盤比維持可讀(SC-2.4)", () => {
+    wrap(<StockIntradayChart accum={withUnch} />); // 55%
+    expect(screen.getByTestId("decided-pct").className).toContain("text-warn");
+    // 外盤比不再降對比 —— 它是重要但失真,不是不重要
+    expect(screen.getByTestId("outer-pct").className).not.toContain("text-ink-dim/50");
   });
 
-  it("判定率高 → 外盤比維持原色", () => {
-    const clean = {
-      ...ACCUM,
-      minutes: new Map([[540, { c: 2_380_000, v: 100, o: 60, i: 40, u: 0, h: null, l: null }]]),
-    } as unknown as typeof ACCUM;
-    wrap(<StockIntradayChart accum={clean} />);
-    expect(screen.getByTestId("outer-pct").className).not.toContain("text-ink-dim/50");
+  it("判定率高 → 判定率不標警示", () => {
+    wrap(<StockIntradayChart accum={accumWithDecided(100)} />);
+    expect(screen.getByTestId("decided-pct").className).not.toContain("text-warn");
     expect(screen.getByTestId("decided-pct").textContent).toContain("100%");
+  });
+
+  // 門檻 60 → 75 的理由(user 拍板):併上盤中 / 盤後六檔樣本後分佈是雙峰 ——
+  // 正常群 83.7–100、劣化群 51–64。60 落在劣化群**內部**,讓 4989(未分類逾三分之一)
+  // 被顯示成完全可信。最大間隔切點約 74,取 75 兩側各留餘裕。
+  it("判定率 64%(4989 實測值)在新門檻下要標警示 —— 舊門檻 60 抓不到", () => {
+    wrap(<StockIntradayChart accum={accumWithDecided(64)} />);
+    expect(screen.getByTestId("decided-pct").textContent).toContain("64%");
+    expect(screen.getByTestId("decided-pct").className).toContain("text-warn");
+  });
+
+  it("判定率 83.7%(2317 實測值)屬正常群,不標警示", () => {
+    wrap(<StockIntradayChart accum={accumWithDecided(84)} />);
+    expect(screen.getByTestId("decided-pct").className).not.toContain("text-warn");
+  });
+
+  it("門檻本身:74 標、75 不標(邊界)", () => {
+    const { unmount } = wrap(<StockIntradayChart accum={accumWithDecided(74)} />);
+    expect(screen.getByTestId("decided-pct").className).toContain("text-warn");
+    unmount();
+    wrap(<StockIntradayChart accum={accumWithDecided(75)} />);
+    expect(screen.getByTestId("decided-pct").className).not.toContain("text-warn");
   });
 
   it("鎖漲停整天判不出來 → 外盤比顯示「-」不是 0%(0% 會被讀成全內盤)", () => {

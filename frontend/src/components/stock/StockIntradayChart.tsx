@@ -799,14 +799,18 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           外盤 <span className="text-bull">{side.outer}</span> · 內盤{" "}
           <span className="text-bear">{side.inner}</span> · 未分類{" "}
           <span data-testid="unch-total">{side.unch}</span> · 外盤比{" "}
-          <span
-            data-testid="outer-pct"
-            className={cn(lowDecided && "text-ink-dim/50")}
-            title={lowDecided ? "判定率偏低,外盤比的分母排除了未分類量" : undefined}
-          >
+          <span data-testid="outer-pct">
             {side.outerPct === null ? "-" : `${side.outerPct.toFixed(1)}%`}
           </span>{" "}
-          <span data-testid="decided-pct">
+          {/* 警示掛在**判定率**上,不暗化外盤比(2026-07-31 user 拍板):降對比在 UI
+              語彙裡是「不重要 / 停用」,而外盤比是「重要但失真」——讀者該看到它、
+              同時知道它的分母縮水了。判定率本來就印在旁邊,暗化外盤比沒有增加任何
+              資訊位元,只增加一個門檻懸崖(判定率會隨盤中累積漂移,跨過就整個翻面)。 */}
+          <span
+            data-testid="decided-pct"
+            className={cn(lowDecided && "text-warn")}
+            title={lowDecided ? "判定率偏低:外盤比的分母排除了未分類量" : undefined}
+          >
             (判定率 {side.decidedPct === null ? "-" : `${side.decidedPct.toFixed(0)}%`})
           </span>
         </span>
