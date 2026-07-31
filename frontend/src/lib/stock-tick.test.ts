@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildLadder,
   fmtTickPrice,
+  isMarketLevel,
+  limitState,
   snapNearest,
   snapDown,
   snapUp,
@@ -61,7 +63,7 @@ describe("buildLadder(固定界錨定)", () => {
   };
 
   it("rows = 上界到下界全域合法 tick、遞減、端點為界", () => {
-    const rows = buildLadder({
+    const { rows } = buildLadder({
       center: 100_000,
       ref: 100_000,
       upper: 110_000,
@@ -76,7 +78,7 @@ describe("buildLadder(固定界錨定)", () => {
   });
 
   it("五檔量 exact match 對映、其餘 0", () => {
-    const rows = buildLadder({
+    const { rows } = buildLadder({
       center: 100_000,
       ref: 100_000,
       upper: 110_000,
@@ -92,7 +94,7 @@ describe("buildLadder(固定界錨定)", () => {
   });
 
   it("isCenter 標在最接近 center 的價位、dimmed 在 ±5% 外", () => {
-    const rows = buildLadder({
+    const { rows } = buildLadder({
       center: 100_000,
       ref: 100_000,
       upper: 110_000,
@@ -107,7 +109,7 @@ describe("buildLadder(固定界錨定)", () => {
   });
 
   it("upper/lower 缺 → 假想界 round-then-snap(ref×1.1 / ×0.9)", () => {
-    const rows = buildLadder({
+    const { rows } = buildLadder({
       center: 33_500,
       ref: 33_500,
       upper: null,
@@ -120,10 +122,10 @@ describe("buildLadder(固定界錨定)", () => {
   });
 
   it("ref 與 last 皆缺 → 空 rows;book null → 量全 0", () => {
-    expect(buildLadder({ center: null, ref: null, upper: null, lower: null, book: null })).toEqual(
-      [],
-    );
-    const rows = buildLadder({
+    expect(
+      buildLadder({ center: null, ref: null, upper: null, lower: null, book: null }),
+    ).toEqual({ rows: [], marketBidQty: 0, marketAskQty: 0 });
+    const { rows } = buildLadder({
       center: 100_000,
       ref: 100_000,
       upper: 101_000,
@@ -131,6 +133,87 @@ describe("buildLadder(固定界錨定)", () => {
       book: null,
     });
     expect(rows.every((r) => r.bidQty === 0 && r.askQty === 0)).toBe(true);
+  });
+});
+
+describe("市價單檔位(round6 項 4)", () => {
+  /** 2026-07-31 盤中實測 2327 國巨鎖漲停的簿:第一檔價格欄是 0 = 市價買單佇列 */
+  const LOCK_UP = {
+    bids: [
+      [0, 15_966],
+      [502_000, 9_385],
+    ] as [number, number][],
+    asks: [] as [number, number][],
+  };
+
+  it("isMarketLevel:0 與負值是市價檔,正價不是", () => {
+    expect(isMarketLevel(0)).toBe(true);
+    expect(isMarketLevel(-1)).toBe(true);
+    expect(isMarketLevel(502_000)).toBe(false);
+  });
+
+  it("市價量獨立帶出,不混進任何一列(階梯只涵蓋合法 tick,0 永遠落不進來)", () => {
+    const l = buildLadder({
+      center: 502_000,
+      ref: 456_500,
+      upper: 502_000,
+      lower: 411_000,
+      book: LOCK_UP,
+    });
+    expect(l.marketBidQty).toBe(15_966);
+    expect(l.marketAskQty).toBe(0);
+    // 漲停價那列拿到的是**限價**量,不是市價量
+    expect(l.rows.find((r) => r.priceMilli === 502_000)!.bidQty).toBe(9_385);
+    // rows 集合語意不變(W-15):沒有 priceMilli 0 的列
+    expect(l.rows.some((r) => r.priceMilli === 0)).toBe(false);
+  });
+
+  it("同側多個市價檔位加總", () => {
+    const l = buildLadder({
+      center: 411_000,
+      ref: 456_500,
+      upper: 502_000,
+      lower: 411_000,
+      book: { bids: [], asks: [[0, 20_000], [0, 5], [411_000, 100]] },
+    });
+    expect(l.marketAskQty).toBe(20_005);
+    expect(l.rows.find((r) => r.priceMilli === 411_000)!.askQty).toBe(100);
+  });
+
+  it("兩處早退也要帶市價量(否則鎖停 + 無 ref 時數字憑空消失)", () => {
+    const noAnchor = buildLadder({
+      center: null,
+      ref: null,
+      upper: null,
+      lower: null,
+      book: LOCK_UP,
+    });
+    expect(noAnchor.rows).toEqual([]);
+    expect(noAnchor.marketBidQty).toBe(15_966);
+
+    const badBounds = buildLadder({
+      center: 502_000,
+      ref: 456_500,
+      upper: 100_000, // upper < lower → 界不合法
+      lower: 411_000,
+      book: LOCK_UP,
+    });
+    expect(badBounds.rows).toEqual([]);
+    expect(badBounds.marketBidQty).toBe(15_966);
+  });
+});
+
+describe("limitState(round6 項 3)", () => {
+  it("踩到漲停 / 跌停 / 都不是", () => {
+    expect(limitState(502_000, 502_000, 411_000)).toBe("upper");
+    expect(limitState(411_000, 502_000, 411_000)).toBe("lower");
+    expect(limitState(450_000, 502_000, 411_000)).toBeNull();
+  });
+
+  it("漲跌停或現價不可得 → null(不猜)", () => {
+    expect(limitState(null, 502_000, 411_000)).toBeNull();
+    expect(limitState(502_000, null, null)).toBeNull();
+    expect(limitState(411_000, 502_000, null)).toBeNull();
   });
 });
 

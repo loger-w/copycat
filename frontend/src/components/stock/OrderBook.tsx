@@ -1,3 +1,4 @@
+import { isMarketLevel, limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
 /** 個股五檔 —— 垂直雙欄版式(SC-1,參照 treading-king `QuoteBook.tsx`)。
@@ -68,12 +69,46 @@ function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
           );
         }
         const [priceMilli, qty] = entry;
+        // 市價單佇列(價格欄 0):鎖漲跌停時 TC4 推的第一檔。印「市價」不印 0,
+        // 且**不可點** —— 它沒有價格,置中請求送出去只會讓 PriceLadder 查無列而靜默無反應。
+        // 用 <div> 不用 disabled button:不需要 focus 進去,也不該出現在 tab 序。
+        const market = isMarketLevel(priceMilli);
+        const priceText = market ? "市價" : fmt(priceMilli);
+        if (market) {
+          return (
+            <div
+              key={i}
+              aria-label={`${isBid ? "買" : "賣"}${i + 1} 市價`}
+              className="relative grid h-[25px] w-full grid-cols-2 items-center gap-2 border-b border-line px-2 font-mono text-sm"
+            >
+              <span
+                data-testid="depth-vol-bar"
+                className={cn(
+                  "pointer-events-none absolute inset-y-0",
+                  isBid ? "right-0 bg-bull/15" : "left-0 bg-bear/15",
+                )}
+                style={{ width: `${Math.round((qty / maxQty) * 100)}%` }}
+              />
+              {isBid ? (
+                <>
+                  <span className="relative z-[1] text-left text-ink-muted">{qty}</span>
+                  <span className="relative z-[1] text-right text-bull">{priceText}</span>
+                </>
+              ) : (
+                <>
+                  <span className="relative z-[1] text-left text-bear">{priceText}</span>
+                  <span className="relative z-[1] text-right text-ink-muted">{qty}</span>
+                </>
+              )}
+            </div>
+          );
+        }
         return (
           <button
             type="button"
             key={i}
             onClick={() => onPriceClick(priceMilli, side)}
-            aria-label={`${isBid ? "買" : "賣"}${i + 1} ${fmt(priceMilli)}`}
+            aria-label={`${isBid ? "買" : "賣"}${i + 1} ${priceText}`}
             className="relative grid h-[25px] w-full grid-cols-2 items-center gap-2 border-b border-line px-2 font-mono text-sm hover:bg-bg-deep/60"
           >
             <span
@@ -113,8 +148,14 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
   const lastMilli = last?.p ?? null;
   const chg = lastMilli !== null && ref_ ? ((lastMilli - ref_) / ref_) * 100 : null;
-  const lockedUp = upper !== null && b[0]?.[0] === upper;
-  const lockedDown = lower !== null && a[0]?.[0] === lower;
+  // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價格 0),
+  // 漲停價被擠到 `bids[1]` → 判定恆假、badge 靜默消失(實測 2327 就是如此)。
+  // 改看「委買側有沒有掛在漲停價的檔位」,市價偽檔位再也打不穿它。
+  const lockedUp = upper !== null && b.some(([p]) => p === upper);
+  const lockedDown = lower !== null && a.some(([p]) => p === lower);
+  // 漲跌停亮燈(項 3):現價踩到漲跌停 → 成交價 + 漲跌% 整塊反白底色,
+  // 不只是換文字色 —— 這是盤中要用餘光捕捉的狀態。
+  const limit = limitState(lastMilli, upper, lower);
 
   return (
     // h-full:兩塊卡片底邊要與中間欄底部齊平(round3 SC-6)。內容約 200px、
@@ -132,18 +173,46 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
         {lockedDown ? (
           <span className="rounded border border-bear/40 px-1.5 text-xs text-bear">鎖跌停</span>
         ) : null}
-        <span className="ml-auto flex items-baseline gap-1 font-mono">
+        {/* 亮燈時**整塊**吃底色,所以 testid 掛在外層容器上;文字色由 limit 覆蓋
+            (亮燈時一律白字,不再走漲跌色 —— 紅底紅字看不見)。 */}
+        <span
+          data-testid="depth-quote"
+          className={cn(
+            "ml-auto flex items-baseline gap-1 font-mono",
+            limit === "upper" && "rounded bg-bull px-1.5 text-white",
+            limit === "lower" && "rounded bg-bear px-1.5 text-white",
+          )}
+        >
           <span
             data-testid="depth-last"
             className={cn(
               "text-sm",
-              chg === null ? "text-ink" : chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink",
+              limit !== null
+                ? undefined
+                : chg === null
+                  ? "text-ink"
+                  : chg > 0
+                    ? "text-bull"
+                    : chg < 0
+                      ? "text-bear"
+                      : "text-ink",
             )}
           >
             {lastMilli !== null ? fmt(lastMilli) : "—"}
           </span>
           {chg !== null ? (
-            <span className={cn("text-xs", chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink-dim")}>
+            <span
+              className={cn(
+                "text-xs",
+                limit !== null
+                  ? undefined
+                  : chg > 0
+                    ? "text-bull"
+                    : chg < 0
+                      ? "text-bear"
+                      : "text-ink-dim",
+              )}
+            >
               {`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}
             </span>
           ) : null}

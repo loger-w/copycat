@@ -229,6 +229,16 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
       }}
+      // **原生 close 一定要拉回 prop**(review R4)。`display` 現在由 `open` prop 選,
+      // 前提是「prop 永遠等於元素真實狀態」。而群組改名輸入框對 Escape 呼叫
+      // `stopPropagation()` 且不呼叫 `onClose` —— stopPropagation 只擋 React 合成事件冒泡,
+      // 擋不掉瀏覽器對 modal dialog 的原生 cancel/close。那條路徑會讓元素 open 變 false
+      // 但 prop 還是 true → class 停在 `flex`、內容仍渲染,而 effect 因 `open` 沒變不會重跑
+      // showModal() → 同一個「方框卡在畫面上」的 bug 換形態復發(這次盒子裡還有內容、
+      // 非 modal、Esc 也關不掉)。
+      onClose={() => {
+        if (open) onClose();
+      }}
       // **m-auto 不可省**:Tailwind v4 的 preflight 把 `margin: 0` 套到所有元素(含
       // dialog),覆蓋掉 UA stylesheet 給 modal dialog 的 `margin: auto` → 貼在左上角。
       // jsdom 沒有版面引擎,這個 bug 沒有任何測試看得到(同 showModal 的教訓)。

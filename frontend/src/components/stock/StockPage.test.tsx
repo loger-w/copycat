@@ -146,6 +146,33 @@ describe("StockPage", () => {
 });
 
 // 🟢 round4 項 4:搜尋改預覽後,「加入自選」的入口移到分時圖上方的報價 header
+describe("StockPage 漲跌停亮燈(round6 項 3)", () => {
+  const atLimit = (p: number) =>
+    stream({ accum: { ...ACCUM, last: { p, t: "09:00:01.000", cum_vol: 1 } } as StockAccum });
+
+  it("漲停 → header 的價格 + %數整塊紅底白字", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_550_000)} />);
+    const cls = screen.getByTestId("page-quote").className;
+    expect(cls).toContain("bg-bull");
+    expect(cls).toContain("text-white");
+  });
+
+  it("跌停 → 綠底白字", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_090_000)} />);
+    const cls = screen.getByTestId("page-quote").className;
+    expect(cls).toContain("bg-bear");
+    expect(cls).toContain("text-white");
+  });
+
+  it("未漲跌停 → 不亮燈,維持漲跌文字色(SC-3.4)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
+    const cls = screen.getByTestId("page-quote").className;
+    expect(cls).not.toContain("bg-bull");
+    expect(cls).not.toContain("bg-bear");
+    expect(cls).toContain("text-bull"); // 2380 > ref 2320
+  });
+});
+
 describe("StockPage 加入自選(round4 項 4)", () => {
   let putBodies: unknown[];
 

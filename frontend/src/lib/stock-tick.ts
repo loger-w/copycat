@@ -42,6 +42,30 @@ export function snapUp(priceMilli: number): number {
   return Math.ceil(priceMilli / tick) * tick;
 }
 
+/** 市價單佇列的檔位。
+ *
+ *  鎖漲跌停時 TC4 會在簿的第一檔推「沒有限價的委託」,價格欄是 `0`。**`0` 不是價格** ——
+ *  直接印出來會變成「有人掛 0 元」,而且它會打穿任何拿 `bids[0][0]` 當最佳價的判定
+ *  (實測 2327 的「鎖漲停」badge 就是這樣消失的)。後端同一件事的對應函式是
+ *  `live/stock_models.py::_best_limit_price`。 */
+export function isMarketLevel(priceMilli: number): boolean {
+  return priceMilli <= 0;
+}
+
+/** 現價踩到漲停 / 跌停?兩者皆非(或漲跌停不可得)→ null。
+ *
+ *  `upper` / `lower` 為 null 的商品(無漲跌幅限制、舊後端)一律回 null —— 不猜。 */
+export function limitState(
+  lastMilli: number | null,
+  upper: number | null,
+  lower: number | null,
+): "upper" | "lower" | null {
+  if (lastMilli === null) return null;
+  if (upper !== null && lastMilli === upper) return "upper";
+  if (lower !== null && lastMilli === lower) return "lower";
+  return null;
+}
+
 export interface LadderRow {
   priceMilli: number;
   bidQty: number;
@@ -58,15 +82,31 @@ interface LadderInput {
   book: { bids: [number, number][]; asks: [number, number][] } | null;
 }
 
-export function buildLadder(input: LadderInput): LadderRow[] {
+export interface Ladder {
+  rows: LadderRow[];
+  /** 市價買單總量(價格欄 ≤ 0 的檔位合計)。階梯只涵蓋 [下界, 上界] 的合法 tick,
+   *  市價單沒有價格所以**永遠不會落進任何一列** —— 不獨立帶出來的話它在閃電梯完全消失
+   *  (不是顯示成 0,是根本沒有那一列)。 */
+  marketBidQty: number;
+  marketAskQty: number;
+}
+
+function marketQty(levels: [number, number][] | undefined): number {
+  return (levels ?? []).reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
+}
+
+export function buildLadder(input: LadderInput): Ladder {
+  const marketBidQty = marketQty(input.book?.bids);
+  const marketAskQty = marketQty(input.book?.asks);
+  const empty: Ladder = { rows: [], marketBidQty, marketAskQty };
   const anchor = input.center ?? input.ref;
-  if (anchor === null) return [];
+  if (anchor === null) return empty;
   // 界:漲跌停;缺 → 假想界 round-then-snap(design R7)
   const upperBound =
     input.upper ?? (input.ref !== null ? snapDown(Math.round(input.ref * 1.1)) : null);
   const lowerBound =
     input.lower ?? (input.ref !== null ? snapUp(Math.round(input.ref * 0.9)) : null);
-  if (upperBound === null || lowerBound === null || upperBound < lowerBound) return [];
+  if (upperBound === null || lowerBound === null || upperBound < lowerBound) return empty;
 
   const bidMap = new Map(input.book?.bids ?? []);
   const askMap = new Map(input.book?.asks ?? []);
@@ -89,7 +129,7 @@ export function buildLadder(input: LadderInput): LadderRow[] {
     });
   }
   if (bestIdx >= 0) rows[bestIdx]!.isCenter = true;
-  return rows;
+  return { rows, marketBidQty, marketAskQty };
 }
 
 /** snap 到**最近**合法 tick(`snapDown` / `snapUp` 是方向性的,顯示用刻度要取最近)。

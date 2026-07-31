@@ -117,13 +117,14 @@ export function PriceLadder({
   const { data: ordersData } = useCapitalOrders();
   const lots = aggregateLots(ordersData?.orders, code);
 
-  const rows = buildLadder({
+  const ladder = buildLadder({
     center: last?.p ?? null,
     ref: meta?.ref ?? null,
     upper: meta?.upper ?? null,
     lower: meta?.lower ?? null,
     book,
   });
+  const rows = ladder.rows;
   const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
 
   function touchIdle(): void {
@@ -340,6 +341,23 @@ export function PriceLadder({
             if (!progScroll.current && follow) setFollow(false);
           }}
         >
+          {/* 市價買單列(項 4)。階梯只涵蓋 [下界, 上界] 的合法 tick,市價單沒有價格
+              → 永遠不會落進任何一列,不獨立畫的話它在閃電梯完全消失。
+              位置語意:市價買單優先於任何限價買單 → 價格軸最上。
+              **不可點、不進 rowRefs**:它沒有價格,既送不了單也不是置中目標(W-15
+              的 rows 集合語意不變)。 */}
+          {ladder.marketBidQty > 0 ? (
+            <div
+              data-testid="ladder-market-bid"
+              className="grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 bg-bull/5 font-mono text-xs"
+            >
+              <span className="flex items-center justify-end pr-1 text-bull">
+                {ladder.marketBidQty}
+              </span>
+              <span className="flex items-center justify-center text-ink-muted">市價</span>
+              <span />
+            </div>
+          ) : null}
           {rows.map((r) => {
             const buyLot = lots.buy.get(r.priceMilli);
             const sellLot = lots.sell.get(r.priceMilli);
@@ -417,6 +435,17 @@ export function PriceLadder({
               </div>
             );
           })}
+          {/* 市價賣單列:對稱 —— 優先於任何限價賣單 → 價格軸最下 */}
+          {ladder.marketAskQty > 0 ? (
+            <div
+              data-testid="ladder-market-ask"
+              className="grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 bg-bear/5 font-mono text-xs"
+            >
+              <span />
+              <span className="flex items-center justify-center text-ink-muted">市價</span>
+              <span className="flex items-center pl-1 text-bear">{ladder.marketAskQty}</span>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

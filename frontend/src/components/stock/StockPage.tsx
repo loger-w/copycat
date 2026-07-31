@@ -6,6 +6,7 @@ import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
+import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup, type Watchlist } from "@/lib/watchlist-model";
 
@@ -42,6 +43,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
   const meta = accum?.meta ?? null;
   const last = accum?.last ?? null;
   const chg = last && meta?.ref ? ((last.p - meta.ref) / meta.ref) * 100 : null;
+  const limit = limitState(last?.p ?? null, meta?.upper ?? null, meta?.lower ?? null);
 
   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
   // 靜默清空。這是新入口才有的 gate,不是既有行為。
@@ -83,11 +85,17 @@ export function StockPage({ code, onSelect, stream }: Props) {
               <h2 className="text-lg font-bold text-ink">
                 {meta?.name ?? ""} <span className="font-mono text-ink-muted">{code}</span>
               </h2>
+              {/* 漲跌停亮燈(項 3):踩到漲跌停時整塊反白底色,不只是換文字色 ——
+                  這是盤中要用餘光捕捉的狀態,而紅字與「今天最多只能到這裡」是兩件事。 */}
               {last ? (
                 <span
+                  data-testid="page-quote"
                   className={cn(
                     "font-mono text-lg",
-                    (chg ?? 0) > 0 ? "text-bull" : (chg ?? 0) < 0 ? "text-bear" : "text-ink",
+                    limit === "upper" && "rounded bg-bull px-1.5 text-white",
+                    limit === "lower" && "rounded bg-bear px-1.5 text-white",
+                    limit === null &&
+                      ((chg ?? 0) > 0 ? "text-bull" : (chg ?? 0) < 0 ? "text-bear" : "text-ink"),
                   )}
                 >
                   {fmt(last.p)}

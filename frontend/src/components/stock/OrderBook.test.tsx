@@ -31,8 +31,12 @@ describe("OrderBook 市價單檔位(round6 項 4)", () => {
     );
     expect(screen.getByText("市價")).toBeTruthy();
     expect(screen.getByText("15966")).toBeTruthy();
-    // 「0」不得出現在價格欄
-    expect(screen.queryByText("0")).toBeNull();
+    // 「0」不得出現在**價格欄**。不能用 queryByText("0") 全域找 ——
+    // 委賣側掛空時總量列本來就是 0,那是對的。
+    const row = screen.getByLabelText("買1 市價");
+    expect(row.textContent).toContain("市價");
+    expect(row.textContent).not.toContain("0 ");
+    expect(row.querySelector("span:last-of-type")!.textContent).toBe("市價");
   });
 
   it("市價列不可點(不發 stock-price-click)", () => {

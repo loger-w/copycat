@@ -103,6 +103,59 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("PriceLadder 市價單列(round6 項 4)", () => {
+  /** 2026-07-31 盤中實測 2327 國巨鎖漲停:bids[0] 是 15966 張市價買單、價格欄 0 */
+  const LOCK_UP_BOOK = {
+    bids: [[0, 15_966], [110_000, 9_385]] as [number, number][],
+    asks: [] as [number, number][],
+  };
+  const LOCK_DOWN_BOOK = {
+    bids: [] as [number, number][],
+    asks: [[0, 20_000], [90_000, 5_000]] as [number, number][],
+  };
+
+  function render_(book: typeof BOOK) {
+    return render(
+      <QueryClientProvider client={qc}>
+        <PriceLadder code="2327" book={book} last={LAST} meta={META} />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("有市價買單 → 階梯最上方多一列「市價」顯示量(SC-4.3)", () => {
+    const { container } = render_(LOCK_UP_BOOK);
+    const row = screen.getByTestId("ladder-market-bid");
+    expect(row.textContent).toContain("市價");
+    expect(row.textContent).toContain("15966");
+    // 位置語意:市價買單優先於任何限價買單 → 在漲停價那列**之前**
+    const all = [...container.querySelectorAll("[data-testid], .grid")];
+    expect(all.indexOf(row)).toBeLessThan(
+      all.findIndex((n) => n.textContent?.trim().startsWith("9385")),
+    );
+  });
+
+  it("有市價賣單 → 階梯最下方多一列(SC-4.3 對稱)", () => {
+    render_(LOCK_DOWN_BOOK);
+    const row = screen.getByTestId("ladder-market-ask");
+    expect(row.textContent).toContain("市價");
+    expect(row.textContent).toContain("20000");
+    expect(screen.queryByTestId("ladder-market-bid")).toBeNull();
+  });
+
+  it("無市價單 → 兩列都不出現", () => {
+    render_(BOOK);
+    expect(screen.queryByTestId("ladder-market-bid")).toBeNull();
+    expect(screen.queryByTestId("ladder-market-ask")).toBeNull();
+  });
+
+  it("市價列不可送單 —— 即使已武裝也沒有可點的送單鈕(SC-4.4)", () => {
+    render_(LOCK_UP_BOOK);
+    armUp();
+    const row = screen.getByTestId("ladder-market-bid");
+    expect(row.querySelectorAll("button")).toHaveLength(0);
+  });
+});
+
 describe("PriceLadder(既有顯示行為)", () => {
   // 🔴-6:摺疊機制移除(右欄 tab 本身即顯隱,stock-ladder-open 停用)
   it("直接展開:價格列即時可見,標題列顯示標的(D-12)", () => {
