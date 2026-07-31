@@ -711,15 +711,47 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     expect(screen.getByTestId("day-low-label").textContent).toBe("2370");
   });
 
-  it("標記是**空心**環,不是實心點 —— 與實心的現價圈 / hover 錨區分(SC-1.5)", () => {
+  /** 🔴 round6b:空心環 → **實心小圓**,且圖案與文字同色、依相對平盤判紅 / 綠 / 灰。
+   *  ACCUM 的 ref = 2_320_000,所以 2_395_000 是紅、2_300_000 是綠。 */
+  it("標記是實心圓,圖案與文字同色", () => {
     const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
-    const ring = container.querySelector('circle[data-testid="day-high"]')!;
-    expect(ring.getAttribute("fill")).toBe("none");
-    expect(ring.getAttribute("class")).toContain("stroke-ink-muted");
-    // 現價圈是實心且帶漲跌色
-    const dot = container.querySelector('[data-testid="last-dot"]')!;
-    expect(dot.getAttribute("fill")).toBeNull();
-    expect(dot.getAttribute("class")).toMatch(/^fill-/);
+    const dot = container.querySelector('circle[data-testid="day-high"]')!;
+    expect(dot.getAttribute("fill")).toBeNull(); // 不再是 fill="none"
+    expect(dot.getAttribute("class")).toContain("fill-bull");
+    expect(screen.getByTestId("day-high-label").getAttribute("class")).toContain("fill-bull");
+  });
+
+  /** 高低值必須用 fixture 裡真的存在的 per-minute h/l(2_395_000 / 2_370_000)——
+   *  換成別的值會被等值反查擋掉而根本不畫(W-6)。要造出「一紅一綠」只能移動 `ref`。 */
+  const withRef = (ref: number) =>
+    ({
+      ...withHL(2_395_000, 2_370_000),
+      meta: { ...ACCUM.meta!, ref },
+    }) as typeof ACCUM;
+
+  it("高於平盤紅、低於平盤綠", () => {
+    // ref 落在兩個極值中間 → 日高紅、日低綠
+    const { container } = wrap(<StockIntradayChart accum={withRef(2_380_000)} />);
+    expect(container.querySelector('circle[data-testid="day-high"]')!.getAttribute("class")).toContain(
+      "fill-bull",
+    );
+    expect(container.querySelector('circle[data-testid="day-low"]')!.getAttribute("class")).toContain(
+      "fill-bear",
+    );
+  });
+
+  it("整天下跌的股票,其當日高也判綠(判色基準是平盤不是「高低」)", () => {
+    // ref 高於當日高 = 這檔今天從頭到尾都在平盤下
+    const { container } = wrap(<StockIntradayChart accum={withRef(2_400_000)} />);
+    expect(container.querySelector('circle[data-testid="day-high"]')!.getAttribute("class")).toContain(
+      "fill-bear",
+    );
+  });
+
+  it("圓比舊的環小(user:圖案再小一點)", () => {
+    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+    const r = Number(container.querySelector('circle[data-testid="day-high"]')!.getAttribute("r"));
+    expect(r).toBeLessThan(3); // 舊環 radius 3
   });
 
   it("標記畫在主價線**之後**(SC-1.2:被價線蓋住等於沒畫)", () => {

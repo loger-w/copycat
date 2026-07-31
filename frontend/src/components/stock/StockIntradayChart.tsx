@@ -1,7 +1,7 @@
 import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
-import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY } from "@/lib/chart-extreme";
+import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
@@ -312,36 +312,31 @@ const ChartStatic = memo(function ChartStatic({
         ["day-low", g.lowMark, "down"],
       ] as const).map(([id, mark, dir]) => {
         if (mark === null) return null;
-        // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止環被裁,不是把它趕出價位帶
+        // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止圓被裁,不是把它趕出價位帶
         // —— 取繪圖區的話 09:00 附近的極值會被推開,而標記的 x 承載的是「哪一分鐘」
         // 的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
         const cx = markCenterX(mark.x, INTRADAY_MARK, { min: 0, max: w });
+        // round6b:圖案與文字**同色**,依相對平盤判紅 / 綠 / 灰(見 `markTone`)
+        const tone = markTone(mark.priceMilli, refMilli);
         return (
           <g key={id}>
-            {/* 底環墊在面環下,讓標記在走勢線 / 紅綠填色 / 格線上都讀得出來 */}
-            <circle
-              cx={cx}
-              cy={mark.y}
-              r={INTRADAY_MARK.radius}
-              fill="none"
-              className="stroke-surface"
-              strokeWidth={INTRADAY_MARK.halo}
-            />
             <circle
               data-testid={id}
               cx={cx}
               cy={mark.y}
-              r={INTRADAY_MARK.radius}
-              fill="none"
-              className="stroke-ink-muted"
-              strokeWidth={INTRADAY_MARK.ring}
+              r={INTRADAY_MARK.dot!.radius}
+              className={cn(tone, "stroke-surface")}
+              // paintOrder="stroke":描邊先畫、填色蓋上去 → 只露出外側半條,
+              // 圓在走勢線 / 紅綠填色 / 格線上都讀得出來而不會胖一圈
+              strokeWidth={INTRADAY_MARK.dot!.halo}
+              paintOrder="stroke"
             />
             <text
               data-testid={`${id}-label`}
               x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
               y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
               textAnchor="middle"
-              className="fill-ink-muted stroke-surface"
+              className={cn(tone, "stroke-surface")}
               strokeWidth={2}
               paintOrder="stroke"
               fontSize="0.5625rem"

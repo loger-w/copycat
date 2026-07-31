@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import type { Bar } from "@/lib/candle";
-import { CANDLE_MARK, markOuterRadius } from "@/lib/chart-extreme";
 
 afterEach(cleanup);
 
@@ -320,14 +319,15 @@ describe("CandleChart 高度 prop(SC-6 / T-10b)", () => {
 });
 
 // 🟢 round5 SC-3:視窗高低標(數字與 figcaption 同源 → 縮放後必然同步)
-describe("CandleChart 視窗高低標", () => {
+describe("CandleChart 視窗高低標(數字與 figcaption 同源)", () => {
   const capOf = (container: HTMLElement): string =>
     container.querySelector("figcaption")!.textContent ?? "";
 
   it("兩條線 + 價位標,數字等於 figcaption 的高 / 低", () => {
     const { container } = render(<CandleChart bars={BARS} />);
-    expect(container.querySelector("[data-testid='window-high']")).toBeTruthy();
-    expect(container.querySelector("[data-testid='window-low']")).toBeTruthy();
+    // round6b:圖案已移除,只剩價位文字
+    expect(container.querySelector("[data-testid='window-high-label']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='window-low-label']")).toBeTruthy();
     expect(screen.getByTestId("window-high-label").textContent).toBe("118");
     expect(screen.getByTestId("window-low-label").textContent).toBe("95");
     expect(capOf(container)).toContain("高 118");
@@ -350,8 +350,8 @@ describe("CandleChart 視窗高低標", () => {
 
   it("無可視 bar → 不渲染", () => {
     const { container } = render(<CandleChart bars={[]} />);
-    expect(container.querySelector("[data-testid='window-high']")).toBeNull();
-    expect(container.querySelector("[data-testid='window-low']")).toBeNull();
+    expect(container.querySelector("[data-testid='window-high-label']")).toBeNull();
+    expect(container.querySelector("[data-testid='window-low-label']")).toBeNull();
   });
 });
 
@@ -379,17 +379,22 @@ describe("CandleChart 量副圖(index-board W-1 pin)", () => {
 // 🔴 round4 項 1(B-2):視窗高低由橫貫左右的虛線改成標在該根蠟燭上的三角 + 價位文字。
 // 現況零測試覆蓋(grep 全 frontend/src,window-high/low 只出現在元件自身)→ 先寫新版紅測試。
 describe("CandleChart 視窗高低標記(round4 項 1)", () => {
-  /** round6 項 1:三角 polygon → 空心圓環 circle。圓心承接原本 apex 的語意
-   *  (貼在影線端點 / 承載「哪一根蠟燭」)。 */
-  function center(container: HTMLElement, id: string): [number, number] {
-    const el = container.querySelector(`circle[data-testid="${id}"]`)!;
-    return [Number(el.getAttribute("cx")), Number(el.getAttribute("cy"))];
+  /** 🔴 round6b:K 線圖**不再畫任何圖案**(三角 → 空心環 → 只留文字)。
+   *  蠟燭圖本身已經把「哪一根是最高」講得很清楚,再加一顆點只是在影線端點上多一塊遮蔽物。
+   *  位置語意改由文字的 x 承載(BARS fixture 的 slot ≈ 466px,遠大於 `MARK_LABEL_PAD_X`,
+   *  `clampLabelX` 不會觸發 → 文字 x === 該根蠟燭 cx)。 */
+  function labelX(id: string): number {
+    return Number(screen.getByTestId(`${id}-label`).getAttribute("x"));
+  }
+  function labelY(id: string): number {
+    return Number(screen.getByTestId(`${id}-label`).getAttribute("y"));
   }
 
-  it("高低各一個圓環標記 + 價位文字,文字與底列 figcaption 同值", () => {
+  it("只有價位文字、沒有任何圖案;文字與底列 figcaption 同值", () => {
     const { container } = render(<CandleChart bars={BARS} />);
-    expect(container.querySelector('circle[data-testid="window-high"]')).toBeTruthy();
-    expect(container.querySelector('circle[data-testid="window-low"]')).toBeTruthy();
+    expect(container.querySelector('circle[data-testid="window-high"]')).toBeNull();
+    expect(container.querySelector('polygon[data-testid="window-high"]')).toBeNull();
+    expect(container.querySelector('circle[data-testid="window-low"]')).toBeNull();
     // BARS 視窗高 118_000 → "118";低 95_000 → "95"
     expect(screen.getByTestId("window-high-label").textContent).toBe("118");
     expect(screen.getByTestId("window-low-label").textContent).toBe("95");
@@ -412,31 +417,22 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
       const el = bodies[i]!;
       return Number(el.getAttribute("x")) + Number(el.getAttribute("width")) / 2;
     };
-    expect(center(container, "window-high")[0]).toBeCloseTo(cxOf(2), 5); // 118_000 在第 3 根
-    expect(center(container, "window-low")[0]).toBeCloseTo(cxOf(0), 5); // 95_000 在第 1 根
+    expect(labelX("window-high")).toBeCloseTo(cxOf(2), 5); // 118_000 在第 3 根
+    expect(labelX("window-low")).toBeCloseTo(cxOf(0), 5); // 95_000 在第 1 根
   });
 
-  it("圓心貼在影線端點(高 = 該根 wickTop、低 = 該根 wickBottom)", () => {
-    const { container } = render(<CandleChart bars={BARS} />);
-    const wicks = [...container.querySelectorAll("svg line")].filter(
-      (l) => l.getAttribute("stroke-dasharray") === null && l.getAttribute("stroke-width") === "1",
-    );
-    const highY = center(container, "window-high")[1];
-    const lowY = center(container, "window-low")[1];
-    // 最高點的 y 是全圖最小 y、最低點是最大(價格區內)
-    for (const w of wicks) expect(Number(w.getAttribute("y1"))).toBeGreaterThanOrEqual(highY - 0.01);
-    for (const w of wicks) expect(Number(w.getAttribute("y2"))).toBeLessThanOrEqual(lowY + 0.01);
+  it("最高點紅字、最低點綠字(round6b:顏色是唯一的方向語意)", () => {
+    render(<CandleChart bars={BARS} />);
+    expect(screen.getByTestId("window-high-label").getAttribute("class")).toContain("fill-bull");
+    expect(screen.getByTestId("window-low-label").getAttribute("class")).toContain("fill-bear");
   });
 
-  it("環的視覺外緣完整落在 viewBox 內(不被裁成缺角)", () => {
-    const { container } = render(<CandleChart bars={BARS} />);
-    const r = markOuterRadius(CANDLE_MARK);
+  it("文字完整落在 viewBox 內(不被上下緣裁掉)", () => {
+    render(<CandleChart bars={BARS} />);
     for (const id of ["window-high", "window-low"]) {
-      const [cx, cy] = center(container, id);
-      expect(cx - r).toBeGreaterThanOrEqual(0);
-      expect(cx + r).toBeLessThanOrEqual(1400);
-      expect(cy - r).toBeGreaterThanOrEqual(0);
-      expect(cy + r).toBeLessThanOrEqual(578);
+      // baseline 扣掉字高(0.625rem ≈ 10px)後仍在域內
+      expect(labelY(id) - 10).toBeGreaterThanOrEqual(0);
+      expect(labelY(id)).toBeLessThanOrEqual(578);
     }
   });
 
@@ -445,26 +441,28 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
     const svg = container.querySelector("svg")!;
     const all = [...svg.querySelectorAll("*")];
     const lastBody = all.map((n) => n.getAttribute("data-testid")).lastIndexOf("candle-body");
-    const mark = all.map((n) => n.getAttribute("data-testid")).indexOf("window-high");
+    const mark = all.map((n) => n.getAttribute("data-testid")).indexOf("window-high-label");
     expect(lastBody).toBeGreaterThanOrEqual(0);
     expect(mark).toBeGreaterThan(lastBody);
   });
 
-  it("常態(BB 關閉):高標文字翻到環下方、低標文字翻到環上方", () => {
+  it("常態(BB 關閉):高標文字翻到影線端點下方、低標文字翻到上方", () => {
     // toY(windowHigh) === PAD_Y === 6 → 文字畫在上方會被裁;
-    // toY(windowLow) 貼價格區底 → 文字畫在下方會落進成交量區
+    // toY(windowLow) 貼價格區底 → 文字畫在下方會落進成交量區。
+    // 圖案已移除,改用影線端點(全圖最小 / 最大 wick y)當參照。
     const { container } = render(<CandleChart bars={BARS} />);
-    expect(Number(screen.getByTestId("window-high-label").getAttribute("y"))).toBeGreaterThan(
-      center(container, "window-high")[1],
+    const wicks = [...container.querySelectorAll("svg line")].filter(
+      (l) => l.getAttribute("stroke-dasharray") === null && l.getAttribute("stroke-width") === "1",
     );
-    expect(Number(screen.getByTestId("window-low-label").getAttribute("y"))).toBeLessThan(
-      center(container, "window-low")[1],
-    );
+    const topY = Math.min(...wicks.map((w) => Number(w.getAttribute("y1"))));
+    const bottomY = Math.max(...wicks.map((w) => Number(w.getAttribute("y2"))));
+    expect(labelY("window-high")).toBeGreaterThan(topY);
+    expect(labelY("window-low")).toBeLessThan(bottomY);
   });
 
-  // review F2:分 K 預設 240 根 → slot ≈ 5.8px、首根 cx ≈ 2.9px,而環的視覺外緣 6.5。
+  // 分 K 預設 240 根 → slot ≈ 5.8px、首根 cx ≈ 2.9px。圖案已移除,只剩文字要夾。
   // 3 根 bar 的 BARS fixture(slot ≈ 466)完全碰不到這條路徑。
-  it("窄 slot + 極值落在首 / 末根 → 環仍完整落在 viewBox 內", () => {
+  it("窄 slot + 極值落在首 / 末根 → 文字仍完整落在 viewBox 內", () => {
     const many = Array.from({ length: 240 }, (_, i) =>
       // 第 1 根是全場最高、最後一根是全場最低
       bar(
@@ -475,12 +473,10 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
         100_000,
       ),
     );
-    const { container } = render(<CandleChart bars={many} initBars={240} />);
-    const r = markOuterRadius(CANDLE_MARK);
+    render(<CandleChart bars={many} initBars={240} />);
     for (const id of ["window-high", "window-low"]) {
-      const cx = center(container, id)[0];
-      expect(cx - r).toBeGreaterThanOrEqual(0);
-      expect(cx + r).toBeLessThanOrEqual(1400);
+      expect(labelX(id)).toBeGreaterThanOrEqual(0);
+      expect(labelX(id)).toBeLessThanOrEqual(1400);
     }
   });
 
@@ -496,7 +492,7 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
     const r2 = render(<CandleChart bars={many.slice(0, 10)} initBars={10} />);
     // 換成前 10 根 → 高 = 第 10 根的 h = 100_900
     expect(screen.getByTestId("window-high-label").textContent).toBe("100.9");
-    expect(r2.container.querySelector('circle[data-testid="window-high"]')).toBeTruthy();
+    expect(r2.container.querySelector('[data-testid="window-high-label"]')).toBeTruthy();
     expect(container).toBeTruthy();
   });
 });
