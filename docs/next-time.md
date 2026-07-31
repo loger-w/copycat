@@ -39,14 +39,14 @@
 
 ## 2026-07-19(dq4-order-phase1 Phase 4 自評 P2 彙總,15 條聚類,shortSymbol/BLOCKED_REASON 已本輪吸收)
 
-- [ ] 錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:新增錯誤碼要動多處;若錯誤碼家族再擴,考慮 codegen 或 shared JSON(現況 frontend 未知碼原樣顯示 = 安全漂移)
+- [ ] 錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:新增錯誤碼要動多處;若錯誤碼家族再擴,考慮 codegen 或 shared JSON(現況 frontend 未知碼原樣顯示 = 安全漂移)。〔2026-07-31 盤點:**「家族再擴」的條件已達成** —— `capital_api.py:345` 長出第二個 `_CAPITAL_ERROR_MAP`,這條從觀察升為可開工〕
 - [ ] trade 效能微優化候選(手動單低頻,全部先不動;若未來策略自動下單高頻化再 /perf):orders_view 每 poll 重建 list、account_view 每呼叫 sorted、orderable_symbols 每呼叫重建 set
 - [ ] parse_execution_report 的 err_code 判定含 0/"0" 白名單,真值域(design §8 #3)整合實測後回頭校正
 
 ## 2026-07-21(stock-terminal Phase 4 自評 P2 彙總,13 條聚類)
 
 - [ ] 個股 stream 韌性候選:hook pending 重放只驗 seq>S 不驗連續性(回補期 WS 掉訊成永久缺筆);fromSnapshot 以 vwap×cum_vol 還原 VWAP 分子與後端 Σq 分母有近似差;apply_backfill 對回補列不去重(TC4 重送列會雙算);tc4_status 只靠 on_reconnect 復位(純 REQ 失敗 banner 永久誤掛)
-- [ ] 個股 UI 盤後體驗:reset() 保留 book 與 design 字面不符(rollover 後非觸發檔殘留昨日五檔);盤後重載側欄顯示 "-" 而非昨收靜態值(需 snapshot 種子側欄)
+- [ ] 個股 UI 盤後體驗:reset() 保留 book 與 design 字面不符(rollover 後非觸發檔殘留昨日五檔)。〔2026-07-31 盤點:**後半「盤後重載側欄顯示 `-`」已做掉**,可刪 —— `stock_engine` 連線種子逐檔送 `_quote_payload`,`ref` 欄在尚無成交時給參考價,`WatchlistSidebar` 已渲染「參考」態〕
 - [ ] 個股效能/清潔候選:snapshot 每次全量序列化 20k tick deque(切檔/跳號 refetch 都全量 JSON);_states 永不清除;F:xxx 建立永不使用的 StockDayState;backfill TICKS 訂閱事後不退訂
 - [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時;backfill 首頁 30s 逾時靜默回空無 log;watchlist 啟動時 TC4 離線可被 30 檔 × 10s 拖慢 lifespan
 
@@ -58,7 +58,7 @@
 
 - [ ] frontend localStorage key 無統一前綴(copycat-tab / stock-main-code / copycat-chart-toggles / stock-ladder-open / stock-wl-group)— 下次新增 key 時考慮收斂 `copycat-` 前綴 + lib/constants.ts 集中
 - [ ] PriceLadder 全域 rows(最壞 ~200 列)無上限 lock 測試;若低價股(tick 10 毫元、±10% = 2000 列)出現效能問題再虛擬化
-- [ ] stock-ui-upgrade real-env 真截圖待補(TC4 離線 infra_fail;清單見 .claude/feat/stock-ui-upgrade/real-env-verification-round-1.json;達錢 4 開啟後跑 server + devtools 補 evidence)
+- [x] ~~stock-ui-upgrade real-env 真截圖待補(TC4 離線 infra_fail)~~ **2026-07-31 盤點:已補畢** — `.claude/feat/stock-ui-upgrade/real-env-verification-round-2.json` 記「2026-07-28 10:00-10:05 盤中(大跌日,5483 -6.6%),達錢 4 開啟後補驗(round 1 infra_fail 解除)」,`evidence/` 下 5 張截圖齊備(SC-1 hover / SC-2,3,5,6 stock-page-live / SC-4 cdp-ma-overlay / SC-6 group-tab / SC-7 ladder)
 
 ## 2026-07-28(capital-order Phase 3 順手清單)
 
@@ -81,28 +81,38 @@
 - [ ] `stock-ladder-open` localStorage key 已停用(閃電梯摺疊機制隨右欄 tab 取代):舊值殘留無害,未做清除 migration;若之後做 key 收斂(見 2026-07-28 條)一併清掉
 - [x] ~~`/api/stock/bars` 的真實環境驗證待補~~ **(a)(b)(d) 已於 2026-07-29 18:00 盤後驗畢**(mod/stock-ui-fixes;重啟 server 後實打 2317):(a) `tf=D` → **116 根**,落在 100–120 ✅;(b) **DK 的 `Open`/`Volume` 欄位名假定成立**,`o=240000` / `v=81973` 皆真值且 `v` 與畫面表頭總量一致,server log 無「DK rows 解析略過」warning ✅;(d) 當日段耗時 `tf=D` 1.1s / `tf=1&days=5` 2.1s(810 根 / 3 交易日),遠低於 5s 門檻 ✅
   - [ ] **(c) 仍待盤中驗**:分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10)—— 需交易時段,盤後當日段不會再前進
-- [ ] `BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除:watchlist 上限 30 檔 × 30 日曆日量級可接受,若之後放寬 days 上限或改多帳號再加 LRU
+- [x] ~~`BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除~~ **2026-07-31 盤點:已由後續輪次順手解掉** — `server/bars.py:158-183` 有 `prune(today)`:`_hist` 按 `today - DAYS_MAX*2` 刪、`_daily`/`_daily_tag` 非今日即刪、`_today` 按日期 + TTL evict、`_empty` 過期即刪;三個呼叫點(bars.py:207/312/337)在每次 `build_*` 開頭。註解記來源為「review P2-5」「self-review round2 P2」
 - [x] ~~🔴 **既有 bug:`_SPOT_PREFIX = "TC.F."` 讓任何期貨 tick 覆寫台指現價**~~ **已於 2026-07-30 修畢(mod/index-board)**:收斂為 `TC.F.TWF.TXF.`(台指期產品樹,含月份 leaf,常數單一定義在 `models.SPOT_PREFIX`)。real-env 夜盤實證:IndexBar 台指 41750.0 vs 期貨 tab TXF 41749.0(差 1.0 點),TXO snapshot spot 同值,`dropped_foreign_ticks` 4057 筆 = 被正確擋掉的個股期/海外六腿/小台微台。另加節流 warning `txo spot 無 TXF 推播`(盤中連續 3 分鐘無現價才印)—— 收斂後多了「靜默空白」的新失效態,比亂跳更難察覺
 - [ ] K 線 endpoint 未做 inflight dedup(專案 `_run_once` 慣例):同 code 併發請求會各自打一輪 TC4。單人本機用量下未觀察到問題,若之後多分頁/多 client 再補
-- [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**(當日段恆空 + don't-cache-empty → 每次真打 TC4,`_collect_history` 首頁 poll deadline ≈ 30s)。要擋需要交易日曆;或改由後端對「當日段回空」做短負向快取(需與 TC4 連線失敗區分)
-- [ ] `_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s。當日段這種高頻小查詢可考慮獨立較短 deadline(改動共用路徑,overlay 也吃這條,要一起評估)
+- [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**。〔2026-07-31 盤點:兩個子前提已漂移但**結論不變** —— 後端短負向快取已做(`bars.py:45` `EMPTY_TTL_SECS = 15.0`,空結果也存)、deadline 已縮到 10s,但 **15s TTL < 前端 60s 輪詢**,假日每輪仍會真打 TC4〕。要根治需要交易日曆
+- [x] ~~`_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s~~ **2026-07-31 盤點:已做** — `live/tc4.py:40` `BARS_POLL_DEADLINE = 10.0`,`_collect_history` 簽名加 `deadline_secs`(tc4.py:337-343、:358 fallback 回舊預算),另加退避輪詢(:353-354);K 線呼叫點皆已改傳(`stock_source.py:451/454/464`、`futures_source.py:130/133`,overlay 共用路徑一併評估過)。**注意**:`_collect_history` 已自 `stock_source` 上提到 `live/tc4.py`,舊條目引用的檔名過期
 
 ## 2026-07-29(stock-ui-round2 批一 順手清單)
 
-- [ ] **批二(user 已拍板拆兩批,本輪 out of scope)**:項 9 閃電梯跟隨置中(判定為描述現況,
-  待 user 確認是否有症狀)/ 項 12 自選側欄重做(預設群組取代「全部」+ 顯示名稱 →
-  **需後端 `watchlist_quote` WS 訊息加 `name` 欄位**,跨檔契約改動)/ 項 13 閃電梯部位 +
-  未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板預設 6 折)
+- [ ] **批二(user 已拍板拆兩批)剩兩項**:項 9 閃電梯跟隨置中(判定為描述現況,
+  待 user 確認是否有症狀;`PriceLadder.tsx:93,241-247,341` 行為未動)/ 項 13 閃電梯部位 +
+  未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板預設 6 折;`PriceLadder.tsx`
+  目前只有活單殘量聚合,手續費設定不存在於任何一端)
+  - [x] ~~項 12 自選側欄重做(預設群組取代「全部」+ 顯示名稱 → 需後端 `watchlist_quote`
+    加 `name` 欄位,跨檔契約改動)~~ **2026-07-31 盤點:做掉了,但走的是另一條路** —
+    側欄已改為「未分組 section + 逐群組 section 並列」+ `WatchlistManagerDialog`
+    (`WatchlistSidebar.tsx:458-555`),後端 schema 升 v3(未分組 = `codes − ∪groups` 衍生
+    不另存);名稱改由 `/api/stock/names` REST 供應(`useStockNames.ts` → `WatchlistSidebar.tsx:76,99,282`)。
+    **`watchlist_quote` 至今仍沒有 `name` 欄位 —— 原記載的跨檔契約改動不需要發生**
 - [ ] K 線「走到 30 日前第一根」的取用路徑偏長:1 分 K × 30 日 ≈ 5,900 根、最大視窗 700 根、
   初始 240 根 → 從右端拖到最左端約需 8 次滿寬拖曳。本輪刻意不加捷徑(雙擊回最右 / Home
   跳最左屬新互動,scope 紀律)。真用起來嫌煩再開
 - [ ] 拖曳平移每次 mousemove 都重算 `buildCandleGeometry` 並 diff 整個 ChartStatic;
   700 根時約 2,100 個節點。目前靠 MAX_VISIBLE=700 + memo 修復壓住,真環境拖曳掉幀再改 rAF 節流
-- [ ] 分 K 首載耗時未量到(2330 走後端永久 memo)。change-spec §7 估 10–15s;
-  盤中或換冷資料標的時補量,若 >20s 退回預設 10 日 + 縮放到左端自動續載
-- [ ] `buildCandleGeometry` 的 `yTicks` 是 `lo + span×i/(N−1)` 等分,不 snap 合法 tick →
-  日 K 左緣會出現 `2547.32` 這種非法價位。既有行為(非本輪改出),但與江波圖新的
-  11 條「全合法 tick」刻度並置後對比明顯,下次碰 K 線刻度時一併收
+- [x] ~~分 K 首載耗時未量到(2330 走後端永久 memo)。change-spec §7 估 10–15s;若 >20s 退回
+  預設 10 日~~ **2026-07-31 盤點:已於 stock-ui-round3 量到,估值高估近一個量級** —
+  冷資料標的 1101 / 2603 / 3037 三檔 `?tf=1&days=30` 實測 **2.12 / 2.13 / 2.12s**
+  (`.claude/mod/stock-ui-round3/real-env-verification.md:78`);三檔幾乎完全相同 →
+  主導成本是固定等待不是資料量。>20s 的退回條件不成立
+- [x] ~~`buildCandleGeometry` 的 `yTicks` 是等分不 snap 合法 tick → 日 K 左緣會出現
+  `2547.32` 這種非法價位~~ **2026-07-31 盤點:已收** — `lib/candle.ts:234-242`
+  `const raw = Math.round(lo + (span * i) / (Y_TICKS - 1)); const priceMilli = snapNearest(raw);`
+  + 出界/重複過濾,:230 的 `span<=0` 分支與 :251-253 保底那根亦 snap;註解直接引用「round3 項 10」
 - [ ] 布林通道填色用 `fill-ink-muted` 0.07,在 20 期低波動段會蓋成一大片灰塊;
   若嫌干擾可改只畫上下軌不填色,或降到 0.04
 - [ ] **既有行為,自評 lens 抓到但本輪駁回不修(鐵則 B 不順手改)**:`candle.ts` 的
@@ -111,14 +121,19 @@
   但那個像素理應對應最後一根。症狀 = 最右一個像素的 hover 失去十字線。
   本輪未動那行;要修時 `x >= size.width` 或 `Math.min(bars.length-1, …)` 擇一
 - [ ] `MINUTE_INIT_BARS = 240` / `DAILY_INIT_BARS = 120` / `MAX_VISIBLE = 700` /
-  `ZOOM_STEP = 1.15` 四個常數分散在 `StockChart.tsx` 與 `candle-viewport.ts`;
+  `ZOOM_STEP = 1.15` 四個常數分散(**2026-07-31 盤點:已從兩檔擴散到三檔** ——
+  `StockChart.tsx:20-21` / `candle-viewport.ts:14` / `CandleChart.tsx:32`);
   若之後要做「可設定的圖表偏好」再收斂到單一 config
 
 ## 2026-07-29(stock-ui-fixes 順手清單)
 
-- [ ] 🔴 **server 版本無可視性 —— 本輪 item 2 的真正代價**:「K 線沒有資料」的根因是 :8721 跑的是**舊版 build**(`openapi.json` 根本沒有 `/api/stock/bars` 這條 route),但前端與人都無從辨識執行中的 server 是哪一版。已做的緩解只是讓失敗態顯示錯誤碼(SC-3)。真正的修法候選:啟動 banner 印 git sha / `/api/health` 回 sha + 啟動時間 / 前端在 console 或狀態列比對。
-- [ ] 自選清單「全部」群組顯示「尚無自選,輸入股號新增」但主檔 2317 有完整資料(截圖 `.claude/mod/stock-ui-fixes/` 的 stock-before.png 可見)。watchlist v2 groups 的既有行為,**非 stock-ui-fixes 範圍**,未查根因。
-- [ ] 五檔垂直版式的高度預算餘裕很薄:1440×800 江波圖模式下,下半列實測 226px vs `min-h-56` 地板 224px,**只剩 2px**。字級縮放或圖表高度再長一點就會頂到地板讓 `<main>` 出現捲軸(這是設計好的退化,不是壞掉)。若之後改動圖表高度或五檔列高,重跑一次 SC-6 的兩尺寸量測。
+- [x] ~~🔴 **server 版本無可視性 —— 本輪 item 2 的真正代價**:「K 線沒有資料」的根因是 :8721 跑的是**舊版 build**(`openapi.json` 根本沒有 `/api/stock/bars` 這條 route),但前端與人都無從辨識執行中的 server 是哪一版~~ **2026-07-31 修畢(後端兩個候選都做了,前端比對未做)**:新增 `copycat/server/build_info.py` + `/api/health` 回 `{git_sha, git_dirty, started_at}`,啟動印 banner。排查用法 = `git log <git_sha>..HEAD -- copycat/` 有輸出即該重啟。
+  - 真環境證據(fake source、獨立 port,刻意不碰 TC4):`copycat server build dfbc795 +dirty started_at=2026-07-31T15:59:24` / HTTP 200 `{"git_sha":"dfbc795","git_dirty":true,...}`
+  - 8 條測試;反向驗證 route 改成每次請求重算 → `capture` 被叫 4 次而非 1 次 → 紅
+  - `git_dirty` 三態(拿得到 sha 但問不到 status → `None` 而非 `False`):假的「乾淨」比沒有更糟
+  - **剩下的**:前端狀態列/console 比對版本未做(第三個候選修法)。真要防同一類事故,前端拿到 `git_sha` 後與 build 時嵌入的 sha 比對才是閉環
+- [x] ~~自選清單「全部」群組顯示「尚無自選,輸入股號新增」但主檔 2317 有完整資料~~ **2026-07-31 盤點:前提消滅(不是查明根因)** — 「全部」群組已不存在(側欄改為未分組 + 逐群組 section 並列,無群組切換 tab),frontend 全域 grep「尚無自選」零命中;後端 watchlist 升 v3,`ungrouped()` 由 `codes − ∪groups` 衍生。原症狀所在的 UI 元素不復存在,根因永遠不會查了
+- [x] ~~五檔垂直版式的高度預算餘裕很薄(1440×800 下只剩 2px,再長一點就頂到 `min-h-56` 地板讓 `<main>` 出捲軸)~~ **2026-07-31 盤點:機制已不存在** — `StockPage.tsx:188` 下半列改成 `h-56 shrink-0`(**確定高度**,不吃剩餘空間,剩餘全歸圖表),`min-h-56` 已從 frontend/src 全數消失。不再是「會被內容撐大而頂到地板」的 min-height,原退化路徑不成立
 - [ ] 盤後重啟 server 後五檔 / 閃電梯恆空(TC4 REALTIME 五檔盤後無推播;tick 明細與江波圖走 TICKS 回補所以有資料)。CLAUDE.md §8 記載「盤後 fresh subscribe 會回當日收盤 snapshot(延遲分鐘級)」—— 本次實測 1.5 小時後 `book.bids`/`book.asks` 仍為空,該記載可能只適用成交 tick 不含五檔,值得再確認後修正文件。
 
 ## 2026-07-30(realtime-correlation 收尾沉澱)
@@ -133,6 +148,7 @@
   - **新的首要假說(讀 code + 探針成立,尚未在真環境確認)**:`_subscribe_all`(`server/futures_engine.py:127`)`except ConnectionError` 只 log 就跳下一品,**失敗的商品之後沒有任何重試路徑** —— 失敗 symbol 不進 `_subscribed`,而 `_check_stale` 的重訂閱只走 `list(self._subscribed)`(`live/tc4.py:456`);leaf fallback 又需要先收到推播才會排程。探針(`mechanism_probe.py`,真 engine + 假 source)實測:三品訂閱失敗 → `seq=0`、三品 `p=null`、`subscribe_symbol` 每品只呼叫一次、leaf 永不觸發 —— **與通報症狀逐項相同**。佐證:當晚兩份 log 的 TC4 connect 間隔是 30.0s = 3 × `_REQ_TIMEOUT_MS`(今天只有 1 ×),即當晚 TC4 REQ 通道確實在逾時。
   - **下次再發生時的一次定案法**:grep server log 有沒有 `futures <p> subscribe ... failed`(`_subscribe_all` 的 warning)。**有** → 上述機制確認,修法 = 失敗品進重試佇列(或把失敗 symbol 也記進 `_subscribed` 讓 `_check_stale` 接手)。**沒有** → 不是它,改查 SubPort / listener 執行緒存活。
   - **前提:server 要留 log**。通報那台沒保存 stdout,是這輪定位不了的直接原因 —— 日常啟動建議 `python -m copycat.server > logs/server-YYYYMMDD-HHMM.log 2>&1`。
+  - **〔2026-07-31 15:47 第 7 次未重現,且涵蓋一個全新條件〕** 一台 13:20 起跑、**橫跨日盤 → 夜盤 session 轉換**的 server(先前 6 次全是單一盤別內的冷啟動),15:47 打 `/api/futures/state`:TXF/MXF/TMF **三品全有價 + 五檔俱全**,`resolved_contract=202608`,`seq=138718`。同一台的六腿江波圖與相關係數表(台指腿正是讀 `futures_engine.state()`)夜盤畫面全部有值。累計 **7/7 未重現**。判準不變:下次發生時先 grep server log 有沒有 `futures <p> subscribe ... failed`。
 - [x] ~~`test_index_engine.py::test_rollover_two_phase` 只在真實時鐘 ≥ 08:30 才會綠~~ **2026-07-30 修畢**:建構子補 `now_fn`(預設 `now_time()` = 真實牆鐘 → prod 行為零改變;`IndexEngine(` 只有 `app.py:210` 與測試兩個呼叫點)。另補 `test_rollover_gate_opens_at_0830` 覆蓋門檻本身(原本無測試 —— 唯一的時鐘讀取沒有注入點,寫不出來)。注入 00/08/10/23 皆綠;反向驗證 revert → 12 紅。
 - [x] ~~`test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`~~ **2026-07-30 修畢**:`tests/conftest.py` 出 `requires_tcpy` marker,兩個 class 整體 skip。**過程中抓到第三條(原記載未列)**:`test_check_stale_reconnect_loop_stoppable_when_app_dead` 在缺 wrapper 時是**假綠** —— 重連執行緒死於 `ModuleNotFoundError` 也滿足 `assert not worker.is_alive()`,等於沒驗到「迴圈可中斷」。雙向驗證:缺 TCPY → 3 skipped/37 passed;複製 TCPY 進 worktree → 40 passed/**0 skipped**(marker 不過度 skip)。
 - [ ] TCPY 路徑運算式 `Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"` 在 production 重複三處(`live/tc4.py:141`、`live/tc4_trade.py:91`、`data/backfill_tc4.py:104`),`tests/conftest.py` 的 `TCPY_DIR` 是第四處。本輪刻意不抽共用常數(P2 測試層 bug 不動 production 三檔)。**收斂條件**:出現第五處、或 `spikes/TCPY` 位置要改時,抽 `copycat/tc4common.py` 的 `TCPY_DIR` 單一定義,四處都引它。
@@ -141,12 +157,15 @@
 - [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
 ## 2026-07-30(index-river-chart 收尾沉澱)
 
-- [ ] 🔴 **既有 bug 加證:`aggregate.py:21 _SPOT_PREFIX = "TC.F."` 的汙染範圍比原記載更大**。
-  原記載(2026-07-29 條)只提個股期;本輪 real-env 截圖實見 **IndexBar 的台指顯示成富台
-  3419 / 納指 27488**(corr 引擎訂的五條海外腿 tick 全走同一條 ZMQ SUB 全訂閱通道)。
-  即 realtime-correlation 出貨後這個 bug 就一直在汙染 IndexBar 與 TXO 綜合損益的現貨損益,
-  不需要開個股頁也會發生。修法仍同原條目(route() 對非台指期的 TC.F.* 該丟棄),
-  已從「碰個股頁才踩」升級為「開 server 就踩」。
+- [x] ~~🔴 **既有 bug 加證:`aggregate.py:21 _SPOT_PREFIX = "TC.F."` 的汙染範圍比原記載更大**
+  (real-env 實見 IndexBar 台指顯示成富台 3419 / 納指 27488,開 server 就踩)~~
+  **2026-07-31 盤點:與 2026-07-29 條的 `[x]` 是同一個根因,同一個 commit 一起修掉了** —
+  修復 commit `abfcd7a`(2026-07-30 index-board)。現況:`models.py:23`
+  `SPOT_PREFIX = "TC.F.TWF.TXF."`(註解明寫「不可放寬成 `"TC.F."`」),`aggregate.py:21`
+  引用它;`route()` 對非台指期的 `TC.F.*` → 不匹配前綴 → 不在 `_contracts` →
+  `dropped_foreign_ticks += 1; return`,即丟棄且只計數 = 完全等同本條要求的修法。
+  **教訓**:同一個 bug 在兩個分節各記一條(07-29 修了打勾、07-30 又記一條沒打勾),
+  盤點時才發現 —— 加新條目前先 grep next-time.md 有沒有同根因的既有條目
 - [ ] 內外盤能量副圖:1K row 實測帶 `UpVolume`/`DownVolume`/`UpTick`/`DownTick`,
   live REALTIME 也有 `TradeQuantity` + 五檔可判內外盤 → 江波圖副圖(量柱 / 內外盤)
   資料齊備,本輪 user 拍板不做。要做時注意六腿量單位不可比(各腿自己歸一)。
@@ -154,9 +173,10 @@
   模組結構相似(x 等分 / autofit / 平盤線 / 時間刻度)。本輪刻意不泛化既有兩支(已上線
   且窗寫死 09:00–13:30)。**收斂條件**:出現第四份、或既有兩支需要可變窗時,抽共用
   `window → toX/toY` 層。
-- [ ] `stock_source._collect_history` 與 `river_backfill.collect_1k_minutes` 是同型邏輯的
-  兩份實作(前者服務 K 線 / overlay 且參數已被四個呼叫點綁住)。若第三個回補路徑出現,
-  以 `collect_1k_minutes` 的「吃 bound method」形狀收斂。
+- [ ] `_collect_history`(**2026-07-31 更正:已自 `stock_source` 上提到 `live/tc4.py:337`**)
+  與 `river_backfill.collect_1k_minutes` 是同型邏輯的兩份實作(前者服務 K 線 / overlay
+  且參數已被四個呼叫點綁住)。若第三個回補路徑出現,以 `collect_1k_minutes` 的
+  「吃 bound method」形狀收斂。
 - [ ] `_schedule_backfill` 覆寫 `_backfill_task` 參照:兩次快速重連可能留下 close() 不會
   await 的孤兒 task(inflight 旗標在第一個 await 前設定,重入窗極小;孤兒的 fetch 失敗
   已被 ConnectionError 攔)。要對稱化就比照 `futures_engine._leaf_tasks` 用集合 + gather。
@@ -186,7 +206,8 @@
   明細貼底(但兩塊底邊就不齊平)。
 - [ ] `--color-time` 與 `--color-ma5` 目前同色值(#f0b429),語意獨立是刻意的。
   若之後 MA5 改色,時間軸不受影響 —— 但也要記得兩者並置時對比度會消失。
-- [ ] `_POLL_BACKOFF_START = 0.15` 與 `_BARS_POLL_DEADLINE = 10.0` 兩個常數是實測推得
+- [ ] `_POLL_BACKOFF_START = 0.15` 與 `BARS_POLL_DEADLINE = 10.0`(**2026-07-31 更正:
+  後者已去底線且與 `_collect_history` 一起上提到 `live/tc4.py:40,43`**)兩個常數是實測推得
   (有資料標的首頁 <1s 備妥),TC4 忙碌時的真實分布未量。若 real-env 出現誤判為空的
   頻率偏高,先量首頁備妥時間分布再調,不要盲目放大 deadline(那會把 60s 問題帶回來)。
 
@@ -194,16 +215,20 @@
 
 - [ ] localStorage key 收斂:`stock-wl-group`(舊 activeGroup)在本輪後已成**孤兒鍵**(讀取端移除,刻意不清);新增的 `copycat-stock-wl-collapsed` 已用 `copycat-` 前綴。做 `lib/constants.ts` 集中時一併清掉孤兒鍵
 - [ ] 股票名稱表(`copycat/stock_names.json`)無自動更新:新上市 / 改名要手動 `python -m copycat refresh-stock-names`。若要自動化,考慮 server 啟動時檢查檔案 mtime > N 天才背景重抓(**不要**放進 request path,ISIN 頁 10 MB)
-- [ ] worktree 陷阱:`spikes/TCPY/` 在 .gitignore 內 → 新 worktree 缺它會讓 `test_tc4.py::…dead_port…` 與 `test_tc4_trade.py::…gc…` 兩支以 `ModuleNotFoundError: tcoreapi_mq` 紅。若 worktree 常用,考慮把 TCPY 納版控或在 branch-lifecycle 開工節加一步 copy
-- [ ] **盤中不要起第二台後端**:TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8),驗證用途只起前端 dev server(vite proxy 已指 8721,零新增訂閱)。本輪踩過一次(約 90 秒),值得考慮寫進 CLAUDE.md §8
+- [x] ~~worktree 陷阱:`spikes/TCPY/` 在 .gitignore 內 → 新 worktree 缺它會讓 `test_tc4.py::…dead_port…` 與 `test_tc4_trade.py::…gc…` 兩支以 `ModuleNotFoundError` 紅~~ **2026-07-31 盤點:測試變紅的前提已解除** — `tests/conftest.py:21-25` 出 `requires_tcpy` marker(wrapper 不在時整 class skip),同檔 2026-07-30 條已記雙向驗證(缺 TCPY → 3 skipped/37 passed;補 TCPY → 40 passed/0 skipped)。殘留事實:`.gitignore` 仍排除 `spikes/TCPY/`,worktree 仍需 `Copy-Item` 帶過去(那是 CLAUDE.md §8 的 worktree 教訓,不是本條)
+- [x] ~~**盤中不要起第二台後端**:TC4 同 symbol 跨 session 只推一邊,驗證用途只起前端 dev server。本輪踩過一次(約 90 秒),值得考慮寫進 CLAUDE.md §8~~ **2026-07-31 已寫進 CLAUDE.md §8**(連同「若非驗行情則用 fake source + 另一個 port」這條繞法)
 - [ ] `dropTargetFromPointer` 的 nearest-zone 在兩個 zone 距離相等時取先出現者(未定義偏好);群組間縫隙很窄時使用者感受不到,若日後 section 間距變大再定規則
 
 ## 2026-07-30(stock-ui-round5 沉澱)
 
-- [ ] **SC-1~SC-22 的畫面對照未做**(merge 時只有量化 gate + 後端真實資料佐證)。最該補的一項是
-  側欄「管理」鈕開出的 `<dialog>`:jsdom 26 的 `HTMLDialogElement` 是空 class,`showModal()`
-  這條路徑**自動化結構上守不住**,失效樣態是「測試全綠、真瀏覽器第一次點就白畫面」。
-  下次開盤把這一項排第一個看。
+- [ ] **SC-1~SC-22 的畫面對照大部分仍未做**(merge 時只有量化 gate + 後端真實資料佐證)。
+  - [x] ~~最該補的一項:側欄「管理」鈕的 `<dialog>` / `showModal()`~~ **2026-07-31 15:5x 真瀏覽器驗畢**
+    (Chrome 1440 視窗,盤後):關閉態 `open:false` / class 帶 `hidden` / `display:none` /
+    rect 0×0(不佔版面);點「管理」→ `showModal()` 正常開啟,backdrop 變暗、群組列
+    (未分組 1 / 自選 3)與加入自選輸入框齊備;按 ESC → `open:false` / `display:none` /
+    **`childCount:0`**(內容卸載 = React prop 確實被 `onClose` 同步回去)。
+    round6 的兩個修法(display 跟著 open 切、補 `onClose`)在真瀏覽器均成立。
+  - 其餘 SC 的畫面對照仍缺;顏色類要盤中(見下條)。
 - [ ] **顏色類 SC 只能盤中驗**:收盤後 TC4 不推 REALTIME → `meta` 恆為 `null`,而漲跌色一律以
   `meta.ref` 為基準 → 明細三欄(SC-5)、現價圈(SC-2)、左軸刻度(SC-20)盤後全灰。
   這是既有行為不是本輪的 bug,但排驗收時程要考慮進去(盤後只驗得到幾何與有無)。
@@ -216,19 +241,46 @@
 - [ ] 側欄的零 PUT 判定用 `JSON.stringify(next) === JSON.stringify(wl)` 深度比較(W-22)。
   物件鍵序目前由 model 純函數保證一致,若日後有人改成從別處組 `Watchlist`(鍵序不同)
   這個比較會失效成「永遠不相等」→ 悄悄退化回每次都送 PUT。要更穩就換成逐欄位比較。
+  〔2026-07-31 盤點:**已擴散到三處**(`WatchlistSidebar.tsx:104` / `WatchlistManagerDialog.tsx:87`
+  / `StockPage.tsx:57`),鍵序假設的曝險比原記載大〕
 ## 2026-07-30(index-board 大盤看盤改造 順手清單)
 
 - [ ] **期指分時走勢**(本輪 out of scope):大盤頁選台指期時「分時」鈕 disabled,自動落到 1 分 K。
   要做需接 corr/river 的分鐘序列當資料源(那條管線目前只餵加權/櫃買)
-- [ ] **期指夜盤 K 線**:本輪 `FUTURES_MINUTE_DOMAIN` 只取日盤 08:46–13:45,夜盤(15:00–05:00)落在域外被丟。
-  要做需決定 x 軸怎麼表現跨午夜(`aggregateBars` 跨日不合併)
+- [ ] **期指夜盤 K 線**:`FUTURES_MINUTE_DOMAIN = ("0846","1345","1350")` 只取日盤,夜盤(15:00–05:00)落在域外被丟。
+  要做需決定 x 軸怎麼表現跨午夜(`aggregateBars` 跨日不合併)。
+  〔2026-07-31 15:51 畫面確認:夜盤已開 51 分鐘,大盤頁台指期標題現價 43776 是**即時**的,
+  但 1 分 K 最後一根停在 **13:45** —— 現價與 K 線不同源的落差在畫面上看得見〕
 - [ ] **櫃買永久歷史庫存**:目前只有「本機當日合成」(server 啟動後由 MIS 5 秒快照累積,重啟即歸零)。
   永久化需要排程 + 落盤 + 長期維護,屬新 scope。/adhd 的 logistics/3am frame 都獨立提出這條
-- [ ] **大盤頁「加權」在盤後顯示 `-`**:`index_engine` 的 `twse.p` 只由 REALTIME push 設定,收盤後沒有推播 →
-  現價/高/低/昨收全空(既有行為,非本輪改出;分時線本身有資料)。要修可在 `fetch_day_minutes` 回補後
-  以最後一分鐘 close 種 `p`,但要與 watchdog 的 stale 判定對齊
-- [ ] **期指的高/低在大盤頁顯示 `-`**:`futures_engine` 的 payload 有 `ref`/`upper`/`lower`(漲跌停)但沒有當日高低,
-  要顯示需引擎補欄位
+- [ ] **大盤頁「加權」在**盤後重啟 server 後**顯示 `-`**(原記載措辭不精確,2026-07-31 更正):
+  `twse.p` 只由 REALTIME push 設定,但**盤中起跑的 server 盤後照樣有值** —— 15:52 實測
+  加權 43119.75 / 高 43214.36 / 低 41610.41 / 昨收 39933.3 全部有值(該 server 13:20 起跑,
+  state 留在記憶體)。真正的觸發條件是**盤後重啟**。
+  - **watchdog 不會被污染**(subagent 查證):stale 判定只看 `_last_push`(僅 `_handle_quote`
+    更新)與 `in_watch_window()`(09:00–13:25)。只要修法不碰 `_last_push`、不設 `stale=False`,
+    種 `p` 對告警零影響。
+  - **真正的風險在別處**:`fetch_day_minutes` 只有每分鐘 close → **只種得到 `p`**;
+    `high`/`low` 用分鐘 close 取 max/min 會系統性內縮,`ref`(昨收)根本拿不到。
+    要全補得再打一次 DK(CLAUDE.md 已實證 IX0001 DK 可用 748 根)。
+    **只種 `p` 的話畫面變成「現價有值、高/低/昨收 `-`」—— 半修比不修更難解讀。**
+    另 `TXO_BACKFILL_DATE` 休市模式下種出來的是別的交易日收盤價卻長得像現價;
+    且需 guard `if self._twse.p is None` 才不會蓋掉已到的 live 值(`_retry_loop` 會再呼叫)。
+  - 開工前先做可證偽的 2 分鐘實驗:盤後重啟 server 打 `/api/index/state` 確認 `twse.p` 為 null。
+- [ ] **期指的高/低在大盤頁顯示 `-`**(2026-07-31 15:51 畫面再確認):`futures_engine` 的
+  payload 有 `ref`/`upper`/`lower` 但沒有當日高低。**開工前必做一件事:dump 一則 TXF
+  REALTIME 確認有無 `HighPrice`/`LowPrice` 欄** —— 資料源二選一不是實作細節:
+  - `index_engine` 用 TC4 的 `HighPrice`/`LowPrice`;`live/stock_state.py` 則刻意**不用**
+    (個股 REALTIME 的 33 欄樣本裡沒有這兩欄),改逐 tick running max/min。
+    **期貨段有沒有這兩欄無實證**,`parse_stock_realtime` 也沒抽。
+  - 有 → 照 `index_engine` 兩行取值,**小**;沒有 → 自算,但**盤中重啟 server 會低估
+    當日振幅且零錯誤訊號**(期貨 `fetch_day_1k` 只回 `(minute, close)`,沒有 h/l 可回補;
+    個股是靠 `apply_backfill` 重放 tick 補起來的,期貨沒有這條路),**中**。
+  - **日 / 夜盤語意未定**:`cum_vol` 已是每時段重起算,高低要「全日」還是「當時段」是
+    產品決策。走 TC4 欄位 = 接受平台語意;自算則要在 `_handle_quote` 的
+    `tick.trade_date != st.date` 分支補 reset(現在只清 `resolved_ym`)。
+  - **最容易漏的改動點**:`IndexPage.tsx:45-49` **自帶一份同名 local interface**(只有
+    `p`/`ref`),不加這裡前端拿不到值;`<Quote>` 本身早已收 `high`/`low` optional prop(零改動)。
 - [ ] `/api/market/diag` 診斷端點(/adhd 3am frame 提案,本輪判定非正確性必需):
   把三個標的 × 各週期的 cache key、entry 年齡、上次 upstream 呼叫時間與結果攤成一頁
 - [ ] `MARKET_KEYS`(後端)與 `MarketKey`(前端 `lib/timeframe.ts`)是兩份手動同步的值域;
@@ -244,9 +296,15 @@
 
 ## 2026-07-31(stock-ui-round6:市價偽檔位 / 內外盤判定)
 
-- [ ] **側欄自選列的漲跌停亮燈**(本輪 out of scope):`WatchlistQuote`(`hooks/useStockStream.ts`)
-  沒有 `upper`/`lower`,前端無從判定 → 要動後端 `watchlist_quote` payload(additive,低風險)。
-  不可用 `chg_pct ≈ ±10%` 猜:ETF ±20%、無漲跌幅商品都會誤判。
+- [x] ~~**側欄自選列的漲跌停亮燈**(本輪 out of scope)~~ **2026-07-31 做掉了**:
+  `_quote_payload` additive 加 `upper`/`lower`(`no_data` 時 meta 已為 None → 自動滿足
+  「所有值欄位一律 None」契約,零例外路徑);前端用既有 `limitState()`,亮燈時整塊吃
+  底色 + 白字。**側欄亮燈 = 觸停,與主區五檔的鎖停 badge 刻意不共用**(後者是
+  `bids[0]===upper`,需要五檔,側欄沒有)。後端 1 + 前端 4 條測試,含「`chg_pct=+19.9%`
+  但 `upper=null` → 不亮」把「不可用百分比猜」釘住。
+  - **⚠ 畫面對照未做**:要看到亮燈得**重啟 :8721**(舊 build 不發 `upper`/`lower`),
+    而重啟會清掉櫃買當日 in-memory 序列 → 刻意沒做。下次重啟後順手看一眼即可
+    (今天 2327 / 2330 都鎖漲停,是現成的驗證素材)。
 - [ ] **價差內成交(bid < 成交價 < ask)的判定**:2026-07-31 實測 4989 / 6207 這類近漲停股
   有約半數成交落在這裡。逐筆拆解顯示主因是**時序假影** —— 同一則 REALTIME 帶的五檔已是
   成交後的簿,`p=55700 b=55600 a=55800` 判 neutral 而 `p=55700 b=55700 a=55800` 判 inner,
@@ -255,11 +313,56 @@
 - [ ] **`0` 檔位是否只在鎖漲跌停出現**:實測只見鎖漲停一例(2327)。若集合競價期間
   或其他情境也推 price=0,`_best_limit_price` 的作用面會比預期大(方向仍正確)。
   下次碰到集合競價時段的簿快照時順手確認。
-- [ ] **五檔的 `maxQty` / 總量列仍計入市價量**(本輪 review R14 明訂維持):2327 實測
+- [ ] **五檔的 `maxQty` / 總量列仍計入市價量 —— 待 user 拍板(分析已備妥)**:2327 實測
   市價 14167 vs 最佳限價 11877,量 bar 被市價那列壓縮、總量列 26,216 混著兩者。
-  要改需另立 SC(「總量列該不該含市價單」本身是個產品問題,不是實作細節)。
-- [ ] **判定率門檻 60% 的吵雜度**:近漲停股常態落在 50%,外盤比會常態顯示暗色。
-  誠實但可能被感知為「壞掉」,等 user 用幾天再定。
+  - **兩個數字回答的問題不同**:總量列 = 「委買 vs 委賣力道對比」,是**跨日跨股比較**的
+    相對讀數 —— 現況讓同一欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」
+    (市價偽檔位吃掉 DEPTH 一格),**定義隨日子變、比較靜默失真**;量 bar = 「哪一檔厚」,
+    是限價檔之間的形狀比較,市價檔沒有價位卻參與歸一。2327 壓縮比 0.84 還算輕,
+    但市價佇列可以是限價量的數倍,那時五根限價 bar 會一起壓成看不見的短樁。
+  - **subagent 建議(未執行)= 分開顯示**:總量列只算限價量、市價量獨立成一個數字;
+    量 bar 歸一分母排除市價檔。三案取捨 —— 全含保住「總壓力」頭條但定義漂移;
+    **全排除會藏掉鎖板日最重要的數字**(14167 張無限價排隊 = §0a 鎖板品質核心訊號),
+    在本專案最在意的情境下反而最糟。
+  - **最強反對**:鎖漲停時交易者要的可能正是「買方一共排了 26,216 張」這個合計,
+    拆開反而逼他心算。若這個讀法成立,正解是**維持全含但把市價量常駐顯示**
+    (而非 hover),只改 `maxQty`。
+  - 改動點:`OrderBook.tsx:150`(maxQty 過濾)/ `:151-152`(總量)/ `:233-250`(顯示,
+    需預留固定高度避免市價量為 0 的日子抖動)/ `OrderBook.test.tsx:193-207,328` 斷言重算。
+- [ ] **判定率門檻 60% 的吵雜度 —— 待 user 拍板(分析已備妥,改一個常數 + 一處呈現)**。
+  2026-07-31 **盤後**重量四檔:2327 **100%** / 2330 98% / 4989 **64%** / 6207 51%
+  —— 只有一檔落在暗色,原記載「近漲停股常態落在 50%」偏悲觀。
+  - **併上盤中舊樣本(2330 100% / 2317 83.7% / 6207 52% / 4989 50.8%)後分佈是雙峰**:
+    正常群 83.7–100、劣化群 51–64。60 落在**劣化群內部** → 4989(未分類 1500 /
+    總量 4132,逾三分之一被排除在分母外)被顯示為完全可信。最大間隔切點約 74。
+  - **subagent 建議(未執行)**:(a) 門檻 60 → **75**;(b) 警示從「暗化外盤比」改成
+    「標記判定率本身」—— 降對比在 UI 語彙裡是「不重要 / 停用」,而這個數字是
+    「重要但失真」;且判定率本來就印在旁邊,暗化沒增加任何資訊位元,只增加一個
+    懸崖(4989 盤中 50.8% → 盤後 64%,跨過門檻整個亮暗翻面)。
+  - **最強反對**:樣本僅 6 檔、單一交易日、集中在近漲停股;83.7 與 64 之間的「間隔」
+    可能是抽樣假象,平常日判定率 70% 的普通股會被新門檻標成可疑而舊門檻不會。
+    若不接受換門檻,(b) 只改呈現的部分不依賴樣本量,可單獨採納。
+  - 改動點:`stock-intraday-svg.ts:136` 常數 + `StockIntradayChart.tsx:804-811` 呈現 +
+    `StockIntradayChart.test.tsx:634,649,659` 斷言。
+  - [x] ~~註解裡的 2327 = 0%~~ **已更正**(那是 round6 修法前的數字,修法正是為了消滅它;
+    留著會讓下一個人用失效證據重推門檻)。
 - [ ] **`relabel_locked_side` 只掛在 `apply_backfill`**:live 路徑靠 `_best_limit_price` 就夠
   (五檔有第二檔可退)。若之後出現「簿裡只有市價檔、連第二檔都沒有」的 live 情境,
   live 也會判不出來 —— 屆時再考慮把 relabel 提到 `ingest`。
+  - 〔2026-07-31 15:5x 盤後畫面驗證:**修法在真環境成立**。2327 國巨(整日鎖漲停)
+    內盤 5964 / **判定率 100%** / 外盤比 0.0% —— 對照 CLAUDE.md §8 記載的修法前狀態
+    「全日 5450 張成交 `cum_outer = cum_inner = 0`、副圖整片灰、外盤比分母 0 算不出來」。
+    2330(尾盤鎖漲停)判定率 98%〕
+
+## 2026-07-31(next-time 全檔盤點輪 —— 新增)
+
+- [ ] **同一個 bug 在兩個分節各記一條、只有一條被打勾**:`_SPOT_PREFIX` 汙染在 07-29 條
+  已 `[x]`(commit `abfcd7a`),07-30 index-river-chart 卻又記了一條沒打勾的紅標,
+  盤點才發現。**加新條目前先 grep 本檔有沒有同根因的既有條目**,而不是新增一條加證。
+- [ ] **本檔的條目引用會隨重構靜默腐爛**:本輪盤點抓到三處引用失效(`stock_source._collect_history`
+  → `live/tc4.py`、`_BARS_POLL_DEADLINE` → 去底線、`min-h-56` → `h-56 shrink-0`),
+  都是「條目還在、指的東西已經搬走或改名」。條目寫 `檔案:行號` 很好用但過期無聲;
+  下次大盤點時同樣要逐條回查,或考慮條目只寫**符號名**不寫行號。
+- [ ] **前端狀態列版本比對**(`/api/health` 的第三個候選修法,本輪只做後端兩個):
+  前端拿到 `git_sha` 後與 build 時嵌入的 sha 比對才是閉環 —— 現況仍需要人主動去打
+  `/api/health` 才發現版本落差。
