@@ -244,11 +244,11 @@ describe("StockIntradayChart", () => {
     ).toContain("fill-time");
   });
 
-  // 🟢 round3 SC-8:內外盤能量副圖的量刻度
+  // 🟢 round3 SC-8:成交量副圖的量刻度
   it("內外盤副圖左緣有量刻度(頂端 = 單邊最大張數、中線 = 其半)(SC-8)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const sub = [...container.querySelectorAll("svg")].find(
-      (s2) => s2.getAttribute("aria-label") === "內外盤能量",
+      (s2) => s2.getAttribute("aria-label") === "成交量",
     )!;
     const texts = [...sub.querySelectorAll("text")].map((t) => t.textContent);
     // ACCUM 的最大單邊 = 10(540 分 o:10)
@@ -256,12 +256,12 @@ describe("StockIntradayChart", () => {
     expect(texts).toContain("5");
   });
 
-  // 🔴 SC-5:主圖底部量 bar 移除,只留內外盤能量副圖
-  it("主圖不再有量 bar;內外盤能量副圖仍在(SC-5)", () => {
+  // 🔴 SC-5:主圖底部量 bar 移除,只留成交量副圖
+  it("主圖不再有量 bar;成交量副圖仍在(SC-5)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const svgs = [...container.querySelectorAll("svg")];
     const main = svgs.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!;
-    const sub = svgs.find((s) => s.getAttribute("aria-label") === "內外盤能量")!;
+    const sub = svgs.find((s) => s.getAttribute("aria-label") === "成交量")!;
     // defs 內的 rect 是 clipPath 的裁切框、不是畫面元素,要排除。
     // round6 項 5 起主圖多了兩個 rect(左緣漲跌停亮燈),它們不是量 bar ——
     // 本條守的是「量 bar 不在主圖」,所以改成排除已知的非量元素後仍須為 0,
@@ -391,7 +391,7 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
     const all = [...container.querySelectorAll("svg")];
     return {
       main: all.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!,
-      sub: all.find((s) => s.getAttribute("aria-label") === "內外盤能量")!,
+      sub: all.find((s) => s.getAttribute("aria-label") === "成交量")!,
     };
   }
 
@@ -593,22 +593,38 @@ describe("StockIntradayChart 未分類量的呈現(round6 項 2)", () => {
     minutes: new Map([[540, { c: 2_380_000, v: 269, o: 127, i: 20, u: 122, h: null, l: null }]]),
   } as unknown as typeof ACCUM;
 
-  it("未分類段用斜線 pattern,不是實心 fill-* class(review R11)", () => {
+  /** 🔴 round6c:量柱不再依內外盤分色。灰段是 user 連兩輪反映的痛點 —— 它在圖表語彙裡
+   *  看起來像「第三種方向」,而它其實是「判不出方向」。修完後端判定的根因、又改成斜線紋理
+   *  之後 user 仍覺得多餘,拍板「不要分顏色,單純顯示量」。 */
+  it("量柱單色單根,不再有內外盤分段與斜線 pattern", () => {
     const { container } = wrap(<StockIntradayChart accum={withUnch} />);
-    const seg = container.querySelector('[data-testid="energy-unch"]')!;
-    expect(seg.getAttribute("style")).toMatch(/fill:\s*url\(#/);
-    // fill class 一旦留著就會蓋掉 pattern(presentation attribute 優先權低於 CSS)
-    expect(seg.getAttribute("class") ?? "").not.toContain("fill-");
+    const bars = [...container.querySelectorAll('[data-testid="energy-bar"]')];
+    expect(bars).toHaveLength(1); // 一分鐘一根,不是三段
+    expect(bars[0]!.getAttribute("class")).toContain("fill-ink-muted");
+    expect(container.querySelector('[data-testid="energy-unch"]')).toBeNull();
+    expect(container.querySelector("pattern")).toBeNull();
   });
 
-  it("pattern 用 userSpaceOnUse,且 id 隨 useId 唯一(同頁多張圖不撞)", () => {
-    const { container } = wrap(<StockIntradayChart accum={withUnch} />);
-    const pat = container.querySelector("pattern")!;
-    expect(pat.getAttribute("patternUnits")).toBe("userSpaceOnUse");
-    const seg = container.querySelector('[data-testid="energy-unch"]')!;
-    expect(seg.getAttribute("style")).toContain(pat.getAttribute("id")!);
-    // tile 內有底色 rect,窄柱不會整根落在空白帶上變透明(review R6)
-    expect(pat.querySelector("rect")).toBeTruthy();
+  it("柱高仍以總量正規化(W-1:分母含未分類,不因不分色而改)", () => {
+    const twoMin = {
+      ...ACCUM,
+      minutes: new Map([
+        [540, { c: 2_380_000, v: 269, o: 127, i: 20, u: 122, h: null, l: null }],
+        [541, { c: 2_380_000, v: 100, o: 60, i: 40, u: 0, h: null, l: null }],
+      ]),
+    } as unknown as typeof ACCUM;
+    const { container } = wrap(<StockIntradayChart accum={twoMin} />);
+    const hs = [...container.querySelectorAll('[data-testid="energy-bar"]')].map((r) =>
+      Number(r.getAttribute("height")),
+    );
+    // 269 : 100 —— 若分母退回「單邊最大」這個比例會跑掉
+    expect(hs[1]! / hs[0]!).toBeCloseTo(100 / 269, 5);
+  });
+
+  it("內外盤統計沒有消失,只是移到說明列", () => {
+    wrap(<StockIntradayChart accum={withUnch} />);
+    expect(screen.getByTestId("unch-total").textContent).toBe("122");
+    expect(screen.getByTestId("outer-pct").textContent).toBe("86.4%");
   });
 
   it("說明列印出未分類量與判定率", () => {

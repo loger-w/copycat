@@ -64,15 +64,21 @@ export interface Pt {
   y: number;
 }
 
+/** 成交量副圖的一根 bar(round6c:由「內外盤堆疊」改回**單純的量**)。
+ *
+ *  堆疊版曾把每分鐘拆成 外盤紅 / 內盤綠 / 未分類灰 三段。灰段是 user 連兩輪反映的痛點:
+ *  它在圖表語彙裡看起來像「第三種方向」,而它其實是「判不出方向」。round6 先修了後端
+ *  判定的根因、又把灰段改成斜線紋理,user 仍然覺得多餘 —— 拍板「不要分顏色,單純顯示量」。
+ *
+ *  內外盤的統計沒有消失,只是移出圖形語彙:說明列仍印 外盤 / 內盤 / 未分類 / 外盤比 /
+ *  判定率(見 `sideSummary`)。**用文字承載會誤讀的資訊,用圖形承載一眼要懂的資訊。** */
 export interface EnergyBar {
   /** 該分鐘的中心 x(= 走勢線頂點與十字線的 x);bar 由元件以此為中心左右各畫半根 */
   x: number;
-  outer: number;
-  inner: number;
-  unch: number;
-  outerH: number;
-  innerH: number;
-  unchH: number;
+  /** 該分鐘總量(外 + 內 + 未分類) */
+  total: number;
+  /** 依全日最大總量正規化後的高度 */
+  h: number;
 }
 
 export interface YTick {
@@ -261,15 +267,10 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   const maxTotal = Math.max(1, ...entries.map(([, m]) => m.o + m.i + m.u));
   // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
   const energyH = Math.max(1, size.height - SUB_TOP_PAD);
-  const energyBars = entries.map(([minute, m]) => ({
-    x: toX(minute),
-    outer: m.o,
-    inner: m.i,
-    unch: m.u,
-    outerH: (m.o / maxTotal) * energyH,
-    innerH: (m.i / maxTotal) * energyH,
-    unchH: (m.u / maxTotal) * energyH,
-  }));
+  const energyBars = entries.map(([minute, m]) => {
+    const total = m.o + m.i + m.u;
+    return { x: toX(minute), total, h: (total / maxTotal) * energyH };
+  });
 
   const yTicks: YTick[] = [];
   if (upper !== null && lower !== null && ref > 0) {

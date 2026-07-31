@@ -469,7 +469,7 @@ describe("buildIntradayGeometry", () => {
     ).toEqual(["ma5"]);
   });
 
-  it("energy bars per minute(SC-5:只剩內外盤能量,主圖量 bar 已移除)", () => {
+  it("energy bars per minute(SC-5:主圖量 bar 已移除,副圖每分鐘一根)", () => {
     const g = buildIntradayGeometry(
       {
         minutes: minutes([
@@ -481,12 +481,11 @@ describe("buildIntradayGeometry", () => {
       { width: 270, height: 100 },
     );
     expect(g.energyBars.length).toBe(2);
-    expect(g.energyBars[0]!.outer).toBe(7);
-    expect(g.energyBars[0]!.inner).toBe(3);
-    // 🔴 round5 E:分母由「全日單邊最大」改成「全日最大總量」。事前標為該變 ——
-    // 舊分母讓資訊列的「量」在副圖上找不到任何對應高度(截圖 09:00:量 269、
-    // 外 127、內 20,差的 122 張 neutral 根本沒畫,而刻度 164 是單邊最大)。
-    expect(g.energyBars[0]!.outerH).toBeGreaterThan(g.energyBars[1]!.outerH);
+    // 🔴 round6c:三段(outer/inner/unch)合併成單一 total —— user 拍板「不要分顏色,
+    // 單純顯示量」。內外盤統計沒有消失,移到說明列(`sideSummary`)。
+    expect(g.energyBars[0]!.total).toBe(10);
+    expect(g.energyBars[1]!.total).toBe(5);
+    expect(g.energyBars[0]!.h).toBeGreaterThan(g.energyBars[1]!.h);
     expect("volumeBars" in g).toBe(false);
   });
 
@@ -572,11 +571,10 @@ describe("round3:overlayLines level 與副圖量刻度出口", () => {
       { minutes: minutes([[540, { c: 2_320_000, v: 10, o: 7, i: 3 }]]), meta: META },
       { width: 270, height: H },
     );
-    // 🔴 round5 E:分母改成總量後,滿格的是**整根堆疊**不是外盤那一段。
-    // 事前標為該變 —— 舊斷言之所以成立只是因為 fixture 的 o=7 恰好等於單邊最大值。
+    // 分母扣掉頂端留白後,滿格的那根恰為 `H − SUB_TOP_PAD`(round5 E 的總量語意保留)
     const b = g.energyBars[0]!;
-    expect(b.outerH).toBeLessThan(H);
-    expect(b.outerH + b.innerH + b.unchH).toBeCloseTo(H - SUB_TOP_PAD, 6);
+    expect(b.h).toBeLessThan(H);
+    expect(b.h).toBeCloseTo(H - SUB_TOP_PAD, 6);
   });
 });
 
@@ -618,7 +616,7 @@ describe("round5:右緣帶 + 總量堆疊", () => {
     }
   });
 
-  it("energyBars 三段高度依「全日最大總量」正規化,和 = 總量比例", () => {
+  it("energyBars 高度依「全日最大總量」正規化(W-1:分母不是單邊最大)", () => {
     const g = buildIntradayGeometry(
       {
         minutes: minutes([
@@ -633,13 +631,14 @@ describe("round5:右緣帶 + 總量堆疊", () => {
     const b0 = g.energyBars[0]!;
     expect(g.maxTotal).toBe(269);
     const energyH = 100 - SUB_TOP_PAD;
-    expect(b0.outerH + b0.innerH + b0.unchH).toBeCloseTo(energyH, 5);
-    expect(b0.outerH).toBeCloseTo((127 / 269) * energyH, 5);
-    expect(b0.innerH).toBeCloseTo((20 / 269) * energyH, 5);
-    expect(b0.unchH).toBeCloseTo((122 / 269) * energyH, 5);
+    // 全日最大那根恰好滿格;total 含未分類(舊分母用單邊最大時,資訊列的「量」在副圖上
+    // 找不到對應高度 —— 122 張 neutral 根本沒畫而刻度是單邊最大 164)
+    expect(b0.total).toBe(269);
+    expect(b0.h).toBeCloseTo(energyH, 5);
     // 第二根總量 100 → 高度為第一根的 100/269
     const b1 = g.energyBars[1]!;
-    expect(b1.outerH + b1.innerH + b1.unchH).toBeCloseTo((100 / 269) * energyH, 5);
+    expect(b1.total).toBe(100);
+    expect(b1.h).toBeCloseTo((100 / 269) * energyH, 5);
   });
 
   it("maxTotal 取全日最大總量,不是單邊最大", () => {

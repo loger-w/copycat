@@ -377,55 +377,34 @@ function XAxisLabels({
   );
 }
 
-/** 成交量副圖的 bar 層(round5 E:由「內外盤並排」改為「總量堆疊」)。
- *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 組 × 3 個
- *  `<rect>`,不可每次重建(對齊 ChartStatic 的慣例)。
+/** 成交量副圖的 bar 層。
+ *
+ *  演變:內外盤並排 → 總量堆疊(round5 E)→ 灰段改斜線紋理(round6)→
+ *  **單色單根,不分內外盤(round6c,user 拍板)**。
+ *
+ *  灰段是 user 連兩輪反映的痛點:它在圖表語彙裡看起來像「第三種方向」,而它其實是
+ *  「判不出方向」。修完後端判定的根因、又改成紋理之後 user 仍覺得多餘 ——
+ *  拍板「不要分顏色,單純顯示量」。內外盤統計沒有消失,只是移出圖形語彙由說明列承載。
+ *
+ *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 個 `<rect>`,
+ *  不可每次重建(對齊 ChartStatic 的慣例)。
  *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
 const EnergySub = memo(function EnergySub({
   bars,
   maxTotal,
   w,
   h,
-  hatchId,
 }: {
   bars: EnergyBar[];
   /** 歸一分母 = 全日最大**總量**,即頂端刻度值 */
   maxTotal: number;
   w: number;
   h: number;
-  /** 未分類段的斜線 pattern id;**純量** prop,不打穿 memo(W-10) */
-  hatchId: string;
 }) {
   const bw = barW(w);
   const midY = h - (h - SUB_TOP_PAD) / 2;
   return (
     <g>
-      {/* 未分類量的斜線紋理(round6 項 2)。
-          灰色原本是實心的第三個顏色,而顏色在圖表語彙裡等於「一個類別」——
-          使用者問「灰色代表甚麼」其實是在問「這是第三種盤嗎」。它不是:它是**方向未知**。
-          紋理不是顏色,讀起來是「這段有不確定性」,顏色維度就只留給紅 / 綠兩個方向。
-
-          `patternUnits="userSpaceOnUse"` 不可改成 objectBoundingBox —— 後者會讓 tile
-          被每根 rect 各自拉伸,270 根不同高度的柱子會長出 270 種紋理密度。
-
-          tile 內**先鋪一層低透明度底色再疊斜線**(review R6):柱寬只有約 2.5px,
-          純斜線的 tile 有機會整根落在空白帶上 → 該段被畫成透明 = 看起來「這根沒有量」,
-          而量刻度分母仍含未分類(W-1)→ 柱高與頂端刻度對不上,比原本的實心灰更難讀。 */}
-      <defs>
-        <pattern
-          id={hatchId}
-          patternUnits="userSpaceOnUse"
-          width={3}
-          height={3}
-          patternTransform="rotate(45)"
-        >
-          <rect width={3} height={3} className="fill-ink-dim" fillOpacity={0.3} />
-          {/* 線畫在 tile **中心**不是左邊界(Phase 5 review P2):pattern 會把 tile 外的
-              內容裁掉且不 wrap 到對邊,畫在 x=0 時左半 [−0.7, 0) 直接消失 →
-              實際只有設計值一半的墨量,而 2.5px 柱寬本來就吃緊。 */}
-          <line x1={1.5} y1={0} x2={1.5} y2={3} className="stroke-ink-dim" strokeWidth={1.4} />
-        </pattern>
-      </defs>
       {/* 量刻度:中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
           頂端那根不會蓋住頂端的刻度文字。
           刻度值 = 全日最大**總量**(round5 E)—— 舊的「單邊最大」讓資訊列的「量」
@@ -468,32 +447,20 @@ const EnergySub = memo(function EnergySub({
       >
         {Math.round(maxTotal / 2)}
       </text>
-      {/* 堆疊(由下而上):外盤紅 → 內盤綠 → 未分類灰。整根以 `b.x` 為**中心** ——
-          `b.x` 是走勢線頂點與十字線的 x,舊版把 bar 畫在 `[b.x, b.x+bw]` 讓 `b.x`
-          變成左緣,十字線因此落在那根的左邊(round5 A,user 截圖指認)。 */}
-      {bars.map((b) => {
-        const x = b.x - bw / 2;
-        const outerY = h - b.outerH;
-        const innerY = outerY - b.innerH;
-        const unchY = innerY - b.unchH;
-        return (
-          <g key={`e-${b.x}`}>
-            <rect x={x} y={outerY} width={bw} height={b.outerH} className="fill-bull" />
-            <rect x={x} y={innerY} width={bw} height={b.innerH} className="fill-bear" />
-            {/* 填色**只能有一個來源**(review R11):`fill` 是 presentation attribute,
-                優先權低於任何 CSS 宣告 —— 留著 `fill-*` class 當「保險」的話 Tailwind 會
-                蓋掉 pattern,畫面退回實心灰而零錯誤訊號。故走 style 且不掛 fill class。 */}
-            <rect
-              data-testid="energy-unch"
-              x={x}
-              y={unchY}
-              width={bw}
-              height={b.unchH}
-              style={{ fill: `url(#${hatchId})` }}
-            />
-          </g>
-        );
-      })}
+      {/* 單色量柱(round6c)。整根以 `b.x` 為**中心** —— `b.x` 是走勢線頂點與十字線的 x,
+          舊版把 bar 畫在 `[b.x, b.x+bw]` 讓 `b.x` 變成左緣,十字線因此落在那根的左邊
+          (round5 A,user 截圖指認)。 */}
+      {bars.map((b) => (
+        <rect
+          key={`e-${b.x}`}
+          data-testid="energy-bar"
+          x={b.x - bw / 2}
+          y={h - b.h}
+          width={bw}
+          height={b.h}
+          className="fill-ink-muted"
+        />
+      ))}
     </g>
   );
 });
@@ -520,7 +487,6 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const clipAbove = `${uid}-above`;
   const clipBelow = `${uid}-below`;
-  const hatchId = `${uid}-hatch`;
 
   const g = useMemo(
     () =>
@@ -802,14 +768,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
       </svg>
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
-      <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="內外盤能量">
-        <EnergySub
-          bars={subGeo.energyBars}
-          maxTotal={subGeo.maxTotal}
-          w={subW}
-          h={subH}
-          hatchId={hatchId}
-        />
+      <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="成交量">
+        <EnergySub bars={subGeo.energyBars} maxTotal={subGeo.maxTotal} w={subW} h={subH} />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
           <line

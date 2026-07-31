@@ -105,7 +105,7 @@ describe("StockChart 模式切換(SC-7)", () => {
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
     expect(screen.getByLabelText("分時走勢圖")).toBeTruthy();
-    expect(screen.getByLabelText("內外盤能量")).toBeTruthy();
+    expect(screen.getByLabelText("成交量")).toBeTruthy();
     expect(screen.getByRole("button", { name: "均價" })).toBeTruthy();
   });
 
