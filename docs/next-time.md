@@ -240,3 +240,4 @@
 - [ ] 側欄的 `EMPTY_WL` fallback 在自選載入失敗時仍可能被寫入而把整份自選清空(change-spec K-3):本輪只在新入口 StockPage 加了 `wl !== undefined` gate,側欄既有入口(拖曳 / ×  / 加入群組)未動
 - [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);目前靠 `save.isPending` 停用各自的觸發點,跨元件並發未處理
 - [ ] 預覽非自選股後 `stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)
+- [ ] **驗證環境阻塞:達錢 4 未開時 server 起不來,錯誤訊息不指向根因**(2026-07-31 stock-ui-round4 Phase 7):`TC4 quote connect failed: Resource temporarily unavailable`(ZMQ REQ 的 EAGAIN)——實際成因是桌面程式沒開/沒登入,不是資源競爭。當時觀察序列:port 50774 有聽 + 舊 server 有真資料 → 舊 server 消失、port 仍聽但 LOGIN 逾時 → port 關閉。**「50774 有聽」不等於 OpenAPI 可用**,排查時先確認 app 已登入再看程式碼。另:兩個 server 同時連 TC4 是否可行本輪**未證實**(觀察被 app 關閉污染),別把「單一 session」當已知事實
