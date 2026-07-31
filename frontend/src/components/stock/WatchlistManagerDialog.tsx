@@ -233,7 +233,18 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       // dialog),覆蓋掉 UA stylesheet 給 modal dialog 的 `margin: auto` → 貼在左上角。
       // jsdom 沒有版面引擎,這個 bug 沒有任何測試看得到(同 showModal 的教訓)。
       // 高度**固定**不是 max-h:切換群組時 dialog 不跳高,右欄自己捲。
-      className="m-auto flex h-[min(30rem,80vh)] w-[min(56rem,92vw)] flex-col overflow-hidden rounded border border-line bg-bg p-0 text-ink backdrop:bg-black/50"
+      //
+      // **display 必須跟著 `open` 切**:UA stylesheet 的 `dialog:not([open]) { display:none }`
+      // 是**瀏覽器層**規則,而 `flex` 是 author 層 —— author 勝,寫死 `flex` 會讓關閉的
+      // dialog 照樣佔版面(896×480 的空盒子壓在圖表上,2026-07-31 真瀏覽器實測)。
+      // 這裡刻意用 `open` prop 選 class 而不是 Tailwind 的 `open:` variant:
+      // variant 產出的 class 字串恆定,測試只能斷言「有這個 class」,回歸時抓不到;
+      // prop 驅動的 class 會隨狀態變化,jsdom 測得到。
+      // ⚠ `open` 仍**不進 JSX 的 open 屬性**(見上方 effect 註解)—— 這裡只拿它選 class。
+      className={cn(
+        open ? "flex" : "hidden",
+        "m-auto h-[min(30rem,80vh)] w-[min(56rem,92vw)] flex-col overflow-hidden rounded border border-line bg-bg p-0 text-ink backdrop:bg-black/50",
+      )}
     >
       {/* 關閉時不渲染內容:RTL 的 getAllBy* 不過濾隱藏元素,常駐渲染會讓側欄的計數型
           斷言(2330 出現 2 次 / 握把 4 個)在 Dialog 掛上去之後莫名變 3 / 6 */}
