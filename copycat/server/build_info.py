@@ -13,13 +13,10 @@ server 沒重啟」。有了 sha + 啟動時刻,`git log <sha>..HEAD -- copycat/
 
 from __future__ import annotations
 
-import logging
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 # copycat/server/build_info.py → repo root。刻意不與 `live/tc4.py` 等處的 TCPY 路徑運算式
 # 共用常數(那條收斂記在 next-time.md,收斂條件未達)。
