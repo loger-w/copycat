@@ -11,6 +11,144 @@ const BOOK = {
   asks: [[2_385_000, 461], [2_390_000, 572]] as [number, number][],
 };
 
+/** 2026-07-31 盤中實測 2327 國巨(鎖漲停 502)的簿:第一檔是 15966 張市價買單,價格欄 0 */
+const LOCK_UP_BOOK = {
+  bids: [[0, 15_966], [502_000, 9_385], [501_000, 41]] as [number, number][],
+  asks: [] as [number, number][],
+};
+
+describe("OrderBook 市價單檔位(round6 項 4)", () => {
+  it("價格 0 的檔位顯示「市價」而不是 0", () => {
+    render(
+      <OrderBook
+        code="2327"
+        book={LOCK_UP_BOOK}
+        last={{ p: 502_000, t: "11:58:39.000", cum_vol: 5448 }}
+        ref_={456_500}
+        upper={502_000}
+        lower={411_000}
+      />,
+    );
+    expect(screen.getByText("市價")).toBeTruthy();
+    expect(screen.getByText("15966")).toBeTruthy();
+    // 「0」不得出現在價格欄
+    expect(screen.queryByText("0")).toBeNull();
+  });
+
+  it("市價列不可點(不發 stock-price-click)", () => {
+    const details: unknown[] = [];
+    const handler = (e: Event): void => void details.push((e as CustomEvent).detail);
+    window.addEventListener("stock-price-click", handler);
+    render(
+      <OrderBook code="2327" book={LOCK_UP_BOOK} last={null} ref_={456_500} upper={502_000} />,
+    );
+    fireEvent.click(screen.getByText("市價"));
+    // 一般檔位照樣可點(對照組)
+    fireEvent.click(screen.getByText("501"));
+    window.removeEventListener("stock-price-click", handler);
+    expect(details).toEqual([{ priceMilli: 501_000, side: "bid", code: "2327" }]);
+  });
+
+  it("aria-label 用「市價」不用 0", () => {
+    render(
+      <OrderBook code="2327" book={LOCK_UP_BOOK} last={null} ref_={456_500} upper={502_000} />,
+    );
+    expect(screen.queryByLabelText("買1 0")).toBeNull();
+  });
+
+  it("鎖漲停 badge 不再被市價偽檔位打穿(bids[0] 是 0 而非漲停價)", () => {
+    render(
+      <OrderBook
+        code="2327"
+        book={LOCK_UP_BOOK}
+        last={{ p: 502_000, t: "11:58:39.000", cum_vol: 5448 }}
+        ref_={456_500}
+        upper={502_000}
+        lower={411_000}
+      />,
+    );
+    expect(screen.getByText("鎖漲停")).toBeTruthy();
+  });
+
+  it("鎖跌停對稱:市價賣單在 asks[0]", () => {
+    render(
+      <OrderBook
+        code="2327"
+        book={{ bids: [], asks: [[0, 20_000], [411_000, 5_000]] }}
+        last={{ p: 411_000, t: "10:00:00.000", cum_vol: 100 }}
+        ref_={456_500}
+        upper={502_000}
+        lower={411_000}
+      />,
+    );
+    expect(screen.getByText("市價")).toBeTruthy();
+    expect(screen.getByText("鎖跌停")).toBeTruthy();
+  });
+});
+
+describe("OrderBook 漲跌停亮燈(round6 項 3)", () => {
+  it("漲停時標題列成交價區塊紅底白字", () => {
+    render(
+      <OrderBook
+        code="2327"
+        book={LOCK_UP_BOOK}
+        last={{ p: 502_000, t: "11:58:39.000", cum_vol: 5448 }}
+        ref_={456_500}
+        upper={502_000}
+        lower={411_000}
+      />,
+    );
+    const cls = screen.getByTestId("depth-quote").className;
+    expect(cls).toContain("bg-bull");
+    expect(cls).toContain("text-white");
+  });
+
+  it("跌停時綠底白字", () => {
+    render(
+      <OrderBook
+        code="2327"
+        book={{ bids: [], asks: [[411_000, 5_000]] }}
+        last={{ p: 411_000, t: "10:00:00.000", cum_vol: 100 }}
+        ref_={456_500}
+        upper={502_000}
+        lower={411_000}
+      />,
+    );
+    const cls = screen.getByTestId("depth-quote").className;
+    expect(cls).toContain("bg-bear");
+    expect(cls).toContain("text-white");
+  });
+
+  it("未漲跌停時不亮燈(SC-3.4)", () => {
+    render(
+      <OrderBook
+        code="2330"
+        book={BOOK}
+        last={{ p: 2_380_000, t: "10:57:51.000", cum_vol: 1 }}
+        ref_={2_320_000}
+        upper={2_550_000}
+        lower={2_090_000}
+      />,
+    );
+    const cls = screen.getByTestId("depth-quote").className;
+    expect(cls).not.toContain("bg-bull");
+    expect(cls).not.toContain("bg-bear");
+    expect(cls).not.toContain("text-white");
+  });
+
+  it("upper/lower 為 null(無漲跌幅商品)不亮燈", () => {
+    render(
+      <OrderBook
+        code="2330"
+        book={BOOK}
+        last={{ p: 2_380_000, t: "10:57:51.000", cum_vol: 1 }}
+        ref_={2_320_000}
+      />,
+    );
+    expect(screen.getByTestId("depth-quote").className).not.toContain("text-white");
+  });
+});
+
 describe("OrderBook", () => {
   it("渲染五檔價量(毫元 → 元)", () => {
     render(
