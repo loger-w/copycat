@@ -241,3 +241,25 @@
 - [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);目前靠 `save.isPending` 停用各自的觸發點,跨元件並發未處理
 - [ ] 預覽非自選股後 `stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)
 - [ ] **驗證環境阻塞:達錢 4 未開時 server 起不來,錯誤訊息不指向根因**(2026-07-31 stock-ui-round4 Phase 7):`TC4 quote connect failed: Resource temporarily unavailable`(ZMQ REQ 的 EAGAIN)——實際成因是桌面程式沒開/沒登入,不是資源競爭。當時觀察序列:port 50774 有聽 + 舊 server 有真資料 → 舊 server 消失、port 仍聽但 LOGIN 逾時 → port 關閉。**「50774 有聽」不等於 OpenAPI 可用**,排查時先確認 app 已登入再看程式碼。另:兩個 server 同時連 TC4 是否可行本輪**未證實**(觀察被 app 關閉污染),別把「單一 session」當已知事實
+
+## 2026-07-31(stock-ui-round6:市價偽檔位 / 內外盤判定)
+
+- [ ] **側欄自選列的漲跌停亮燈**(本輪 out of scope):`WatchlistQuote`(`hooks/useStockStream.ts`)
+  沒有 `upper`/`lower`,前端無從判定 → 要動後端 `watchlist_quote` payload(additive,低風險)。
+  不可用 `chg_pct ≈ ±10%` 猜:ETF ±20%、無漲跌幅商品都會誤判。
+- [ ] **價差內成交(bid < 成交價 < ask)的判定**:2026-07-31 實測 4989 / 6207 這類近漲停股
+  有約半數成交落在這裡。逐筆拆解顯示主因是**時序假影** —— 同一則 REALTIME 帶的五檔已是
+  成交後的簿,`p=55700 b=55600 a=55800` 判 neutral 而 `p=55700 b=55700 a=55800` 判 inner,
+  同一個價格因為簿的新舊而落到不同類。修法候選 = tick rule(比對前一筆成交價),
+  但那是換一套演算法,要先有對照驗證窗。本輪由「判定率」欄誠實呈現,未修。
+- [ ] **`0` 檔位是否只在鎖漲跌停出現**:實測只見鎖漲停一例(2327)。若集合競價期間
+  或其他情境也推 price=0,`_best_limit_price` 的作用面會比預期大(方向仍正確)。
+  下次碰到集合競價時段的簿快照時順手確認。
+- [ ] **五檔的 `maxQty` / 總量列仍計入市價量**(本輪 review R14 明訂維持):2327 實測
+  市價 14167 vs 最佳限價 11877,量 bar 被市價那列壓縮、總量列 26,216 混著兩者。
+  要改需另立 SC(「總量列該不該含市價單」本身是個產品問題,不是實作細節)。
+- [ ] **判定率門檻 60% 的吵雜度**:近漲停股常態落在 50%,外盤比會常態顯示暗色。
+  誠實但可能被感知為「壞掉」,等 user 用幾天再定。
+- [ ] **`relabel_locked_side` 只掛在 `apply_backfill`**:live 路徑靠 `_best_limit_price` 就夠
+  (五檔有第二檔可退)。若之後出現「簿裡只有市價檔、連第二檔都沒有」的 live 情境,
+  live 也會判不出來 —— 屆時再考慮把 relabel 提到 `ingest`。
