@@ -190,6 +190,115 @@ class TestParseHistTick:
         assert parse_hist_tick("2330", row) is None
 
 
+class TestMarketOrderPseudoLevel:
+    """round6 項 2:鎖漲跌停時 TC4 會在簿的第一檔推「市價單佇列」,價格欄是 `0`。
+
+    `0` 不是價格 —— 它是「這些單沒有限價」。拿它當 bid0/ask0 餵 `derive_side`,
+    兩側都會壞掉,而且是**靜默**的:
+
+    - 鎖漲停(ask 側空、`bids[0] = (0, N)`):`price <= 0` 恆假 → 每一筆成交判 neutral。
+      2026-07-31 盤中實測 2327 國巨:全日 5450 張成交,`cum_outer = cum_inner = 0`,
+      內外盤副圖整片灰、外盤比分母 0 算不出來。
+    - 鎖跌停(bid 側空、`asks[0] = (0, N)`):`price >= 0` **恆真** → 一律判 outer。
+      方向碰巧對(鎖跌停的成交確為主動買),但 bid 側判定被完全短路,
+      而且 `ask_milli` 會留下一個假的 `0` 進明細欄位。
+
+    修法只動「餵給 derive_side 的最佳價取值」,**簿本身原樣保留 0 檔位**(W-23)——
+    五檔與閃電梯要把它顯示成「市價」。
+    """
+
+    # 2026-07-31 盤中實測 2327 國巨的簿形狀(bids[0] 是 15966 張市價買單)
+    LOCK_UP_MSG = {
+        **REALTIME_MSG,
+        "Security": "2327",
+        "SecurityName": "國巨*",
+        "TradingPrice": "502",
+        "ReferencePrice": "456.5",
+        "UpperLimitPrice": "502",
+        "LowerLimitPrice": "411",
+        "Bid": "0",
+        "BidVolume": "15966",
+        "Bid1": "502",
+        "BidVolume1": "9385",
+        "Bid2": "501",
+        "Bid3": "500",
+        "Bid4": "499.5",
+        "Ask": "",
+        "Ask1": "",
+        "Ask2": "",
+        "Ask3": "",
+        "Ask4": "",
+        "Ask5": "",
+    }
+
+    def test_lock_up_market_bid_level_no_longer_swallows_side(self) -> None:
+        tick, _book, _meta = parse_stock_realtime(self.LOCK_UP_MSG)
+        assert tick is not None
+        # 最佳「限價」買 = 漲停價本身,不是市價佇列的 0
+        assert tick.bid_milli == 502_000
+        assert tick.ask_milli is None
+        # 成交價 == 最佳限價買 → 內盤(鎖漲停的成交都是賣方主動撞排隊的買單)
+        assert tick.side == "inner"
+
+    def test_lock_up_book_still_carries_the_zero_level(self) -> None:
+        """W-23:簿原樣保留 —— 五檔要把它畫成「市價 15966」。"""
+        _tick, book, _meta = parse_stock_realtime(self.LOCK_UP_MSG)
+        assert book.bids[0] == (0, 15966)
+        assert book.bids[1] == (502_000, 9385)
+
+    def test_lock_down_market_ask_level_no_longer_shortcircuits(self) -> None:
+        msg = {
+            **REALTIME_MSG,
+            "TradingPrice": "411",
+            "ReferencePrice": "456.5",
+            "UpperLimitPrice": "502",
+            "LowerLimitPrice": "411",
+            "Ask": "0",
+            "AskVolume": "20000",
+            "Ask1": "411",
+            "AskVolume1": "5000",
+            "Ask2": "",
+            "Ask3": "",
+            "Ask4": "",
+            "Bid": "",
+            "Bid1": "",
+            "Bid2": "",
+            "Bid3": "",
+            "Bid4": "",
+            "Bid5": "",
+        }
+        tick, book, _meta = parse_stock_realtime(msg)
+        assert tick is not None
+        # 假的 0 不可進明細欄位
+        assert tick.ask_milli == 411_000
+        assert tick.bid_milli is None
+        assert tick.side == "outer"
+        assert book.asks[0] == (0, 20000)  # 簿仍保留(W-23)
+
+    def test_normal_book_unaffected(self) -> None:
+        """回歸鎖:沒有 0 檔位的正常簿,判定與取值一字不差。"""
+        tick, _book, _meta = parse_stock_realtime(REALTIME_MSG)
+        assert tick is not None
+        assert tick.bid_milli == 2_380_000
+        assert tick.ask_milli == 2_385_000
+        assert tick.side == "inner"
+
+    def test_hist_row_zero_bid_is_not_a_price(self) -> None:
+        row = {
+            "Date": "20260731",
+            "PreciseTime": "40000000000",
+            "TradeQuantity": "3",
+            "TradingPrice": "502",
+            "TradeVolume": "5448",
+            "Bid": "0",
+            "Ask": "",
+        }
+        tick = parse_hist_tick("2327", row)
+        assert tick is not None
+        assert tick.bid_milli is None  # 0 不是價格
+        assert tick.side == "neutral"  # 兩側都不可得 → 誠實地判不出來
+
+
 class TestTickCarriesBidAsk:
     """round5 項 3:明細要顯示成交當下的買賣價。
 
