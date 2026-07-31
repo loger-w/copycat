@@ -23,6 +23,7 @@ from copycat.live.trade_models import (
 )
 from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
+from copycat.server import build_info
 from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.capital_api import WsBroadcaster, register_capital
@@ -107,6 +108,7 @@ def _market_payload(
             "synth_since": synth_since,
         },
     }
+
 
 # sentinel:__main__ 傳 DEFAULT_TRADE = 正式啟動旗標(TradeRuntime 已停用,SC-11;
 # 現僅用於 futures 行情引擎的預設接線 — __main__ 不動,lifespan 見 futures 段)
@@ -202,6 +204,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+        # 最先做:引擎起不來時 banner 也要印得出來(「這台是哪一版」是排查的第一個問題)
+        app.state.build = build_info.capture()
+        logger.info("%s", app.state.build.banner())
         runtime = EngineRuntime(
             source if source is not None else _default_source(),
             throttle_secs=throttle_secs,
@@ -417,6 +422,15 @@ def create_app(
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled error on %s", request.url.path, exc_info=exc)
         return JSONResponse(status_code=502, content={"detail": {"error": "TC4_DOWN"}})
+
+    @app.get("/api/health")
+    async def health(request: Request) -> dict:
+        """執行中 server 的建置身分 —— 「這台是不是舊版」的唯一可視管道。
+
+        用法:`git log <git_sha>..HEAD -- copycat/` 有輸出 = 後端 code 比跑著的新,該重啟。
+        刻意不含引擎健康度:那是另一個問題,混進來會讓這條在引擎壞掉時也答不出版本。
+        """
+        return request.app.state.build.as_dict()
 
     def _runtime(request: Request) -> EngineRuntime:
         return request.app.state.runtime
