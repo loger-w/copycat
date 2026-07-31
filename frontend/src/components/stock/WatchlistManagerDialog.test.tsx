@@ -62,6 +62,46 @@ function open(wl: Watchlist = WL) {
   return { onClose, onGroupDeleted };
 }
 
+describe("關閉時不佔版面(round6 bug)", () => {
+  /** f46cc29 把 dialog 的 className 從「無 display utility」改成含 `flex`。
+   *
+   *  UA stylesheet 的 `dialog:not([open]) { display: none }` 屬瀏覽器層,Tailwind 的
+   *  `.flex { display:flex }` 屬 author 層 —— author 勝,關閉的 dialog 照樣 `display:flex`,
+   *  變成一個 896×480 的空盒子壓在圖表上(2026-07-31 真瀏覽器實測 computed display = flex)。
+   *
+   *  **jsdom 測不到 computed display**(不載入 Tailwind CSS、`HTMLDialogElement` 是空 class),
+   *  所以這裡鎖的是「關閉時不得帶會覆蓋 UA display:none 的 utility」這條契約本身。
+   *  class 必須隨 `open` 變化才鎖得住 —— 用 Tailwind 的 `open:` variant 的話 class 字串恆定,
+   *  斷言只能確認「有這個 class」,回歸時抓不到。 */
+  function dialogEl(): HTMLDialogElement {
+    return screen.getByLabelText("管理群組與股票") as HTMLDialogElement;
+  }
+
+  it("open=false 時帶 hidden、不帶 flex", () => {
+    wrap(
+      <WatchlistManagerDialog open={false} wl={WL} onClose={vi.fn()} onGroupDeleted={vi.fn()} />,
+    );
+    const el = dialogEl();
+    expect(el.classList.contains("hidden")).toBe(true);
+    expect(el.classList.contains("flex")).toBe(false);
+  });
+
+  it("open=true 時帶 flex、不帶 hidden", () => {
+    open();
+    const el = dialogEl();
+    expect(el.classList.contains("flex")).toBe(true);
+    expect(el.classList.contains("hidden")).toBe(false);
+  });
+
+  it("m-auto 與 flex-col 兩態都保留(W-21:preflight 覆蓋 UA margin:auto 會貼左上角)", () => {
+    wrap(
+      <WatchlistManagerDialog open={false} wl={WL} onClose={vi.fn()} onGroupDeleted={vi.fn()} />,
+    );
+    expect(dialogEl().classList.contains("m-auto")).toBe(true);
+    expect(dialogEl().classList.contains("flex-col")).toBe(true);
+  });
+});
+
 describe("WatchlistManagerDialog 開關(SC-13)", () => {
   it("開啟時標題與左右兩欄都在", () => {
     open();
