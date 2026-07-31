@@ -1,12 +1,7 @@
 import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
-import {
-  clampLabelX,
-  INTRADAY_MARK,
-  markLabelY,
-  trianglePoints,
-} from "@/lib/chart-extreme";
+import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY } from "@/lib/chart-extreme";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
@@ -245,44 +240,6 @@ const ChartStatic = memo(function ChartStatic({
           </text>
         </g>
       ))}
-      {/* 當日高低(round4 項 1)。橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」
-          這個語意,而使用者要的只是「最高點在哪、多少錢」。改成標在**摸到極值的那一分鐘**
-          上的三角 + 就地價位文字(參考 treading-king 分時圖)。
-          用三角不用圓點:圓點會與現價圈(r=3)、hover 收盤錨(r=2.5)混淆,而 ▲/▼ 的方向
-          本身就帶「高 / 低」語意,單色下仍可辨。
-          顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
-          其日高仍低於昨收,塗紅等於假陳述。 */}
-      {([
-        ["day-high", g.highMark, "up"],
-        ["day-low", g.lowMark, "down"],
-      ] as const).map(([id, mark, dir]) =>
-        mark === null ? null : (
-          <g key={id}>
-            <polygon
-              data-testid={id}
-              // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止三角被裁,不是把它
-              // 趕出價位帶 —— 取繪圖區的話 09:00 附近的極值會被推開 3.5px,而標記的 x
-              // 承載的是「哪一分鐘」的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
-              points={trianglePoints(mark.x, mark.y, dir, INTRADAY_MARK, { min: 0, max: w })}
-              className="fill-ink-muted stroke-surface"
-              strokeWidth={1}
-              paintOrder="stroke"
-            />
-            <text
-              data-testid={`${id}-label`}
-              x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
-              y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
-              textAnchor="middle"
-              className="fill-ink-muted stroke-surface"
-              strokeWidth={2}
-              paintOrder="stroke"
-              fontSize="0.5625rem"
-            >
-              {fmt(mark.priceMilli)}
-            </text>
-          </g>
-        ),
-      )}
       {showVwap ? (
         // 均價線白色(SC-2.3);原本是琥珀金 profit,與新的紅綠雙色價線對比不足
         <polyline points={pts(g.vwapLine)} fill="none" className="stroke-ink" strokeWidth={1.2} />
@@ -309,6 +266,63 @@ const ChartStatic = memo(function ChartStatic({
       ) : (
         <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
       )}
+      {/* 當日高低(round4 項 1;round6 項 1 改圓環並上移圖層)。
+          橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」這個語意,而使用者要的
+          只是「最高點在哪、多少錢」。標在**摸到極值的那一分鐘**上 + 就地價位文字。
+
+          **必須畫在主價線之後**:舊版夾在疊線與 VWAP 之間,strokeWidth 1.6 的價線直接壓過
+          標記(user 回報「在走勢圖的圖層下」)。極值標記的整個作用就是指認價線上的一點,
+          被價線蓋住等於沒畫。
+
+          空心環不用實心點:防混淆改由**填滿與否**承擔 —— 現價圈(r=3)與 hover 收盤錨
+          (r=2.5)都是實心且帶漲跌色,這裡是空心且恆為中性灰。空心另有一個好處:
+          移到價線之上後,實心會把線在極值那一點截斷,空心則是套在線上。
+          顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
+          其日高仍低於昨收,塗紅等於假陳述。 */}
+      {([
+        ["day-high", g.highMark, "up"],
+        ["day-low", g.lowMark, "down"],
+      ] as const).map(([id, mark, dir]) => {
+        if (mark === null) return null;
+        // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止環被裁,不是把它趕出價位帶
+        // —— 取繪圖區的話 09:00 附近的極值會被推開,而標記的 x 承載的是「哪一分鐘」
+        // 的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
+        const cx = markCenterX(mark.x, INTRADAY_MARK, { min: 0, max: w });
+        return (
+          <g key={id}>
+            {/* 底環墊在面環下,讓標記在走勢線 / 紅綠填色 / 格線上都讀得出來 */}
+            <circle
+              cx={cx}
+              cy={mark.y}
+              r={INTRADAY_MARK.radius}
+              fill="none"
+              className="stroke-surface"
+              strokeWidth={INTRADAY_MARK.halo}
+            />
+            <circle
+              data-testid={id}
+              cx={cx}
+              cy={mark.y}
+              r={INTRADAY_MARK.radius}
+              fill="none"
+              className="stroke-ink-muted"
+              strokeWidth={INTRADAY_MARK.ring}
+            />
+            <text
+              data-testid={`${id}-label`}
+              x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
+              y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
+              textAnchor="middle"
+              className="fill-ink-muted stroke-surface"
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.5625rem"
+            >
+              {fmt(mark.priceMilli)}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 });

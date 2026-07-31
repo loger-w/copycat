@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import type { Bar } from "@/lib/candle";
+import { CANDLE_MARK, markOuterRadius } from "@/lib/chart-extreme";
 
 afterEach(cleanup);
 
@@ -378,16 +379,17 @@ describe("CandleChart 量副圖(index-board W-1 pin)", () => {
 // 🔴 round4 項 1(B-2):視窗高低由橫貫左右的虛線改成標在該根蠟燭上的三角 + 價位文字。
 // 現況零測試覆蓋(grep 全 frontend/src,window-high/low 只出現在元件自身)→ 先寫新版紅測試。
 describe("CandleChart 視窗高低標記(round4 項 1)", () => {
-  function apex(container: HTMLElement, id: string): [number, number] {
-    const pts = container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!;
-    const [x, y] = pts.split(" ")[0]!.split(",").map(Number);
-    return [x!, y!];
+  /** round6 項 1:三角 polygon → 空心圓環 circle。圓心承接原本 apex 的語意
+   *  (貼在影線端點 / 承載「哪一根蠟燭」)。 */
+  function center(container: HTMLElement, id: string): [number, number] {
+    const el = container.querySelector(`circle[data-testid="${id}"]`)!;
+    return [Number(el.getAttribute("cx")), Number(el.getAttribute("cy"))];
   }
 
-  it("高低各一個三角標記 + 價位文字,文字與底列 figcaption 同值", () => {
+  it("高低各一個圓環標記 + 價位文字,文字與底列 figcaption 同值", () => {
     const { container } = render(<CandleChart bars={BARS} />);
-    expect(container.querySelector('polygon[data-testid="window-high"]')).toBeTruthy();
-    expect(container.querySelector('polygon[data-testid="window-low"]')).toBeTruthy();
+    expect(container.querySelector('circle[data-testid="window-high"]')).toBeTruthy();
+    expect(container.querySelector('circle[data-testid="window-low"]')).toBeTruthy();
     // BARS 視窗高 118_000 → "118";低 95_000 → "95"
     expect(screen.getByTestId("window-high-label").textContent).toBe("118");
     expect(screen.getByTestId("window-low-label").textContent).toBe("95");
@@ -410,50 +412,59 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
       const el = bodies[i]!;
       return Number(el.getAttribute("x")) + Number(el.getAttribute("width")) / 2;
     };
-    expect(apex(container, "window-high")[0]).toBeCloseTo(cxOf(2), 5); // 118_000 在第 3 根
-    expect(apex(container, "window-low")[0]).toBeCloseTo(cxOf(0), 5); // 95_000 在第 1 根
+    expect(center(container, "window-high")[0]).toBeCloseTo(cxOf(2), 5); // 118_000 在第 3 根
+    expect(center(container, "window-low")[0]).toBeCloseTo(cxOf(0), 5); // 95_000 在第 1 根
   });
 
-  it("三角 apex 貼在影線端點(高 = 該根 wickTop、低 = 該根 wickBottom)", () => {
+  it("圓心貼在影線端點(高 = 該根 wickTop、低 = 該根 wickBottom)", () => {
     const { container } = render(<CandleChart bars={BARS} />);
     const wicks = [...container.querySelectorAll("svg line")].filter(
       (l) => l.getAttribute("stroke-dasharray") === null && l.getAttribute("stroke-width") === "1",
     );
-    const highY = apex(container, "window-high")[1];
-    const lowY = apex(container, "window-low")[1];
+    const highY = center(container, "window-high")[1];
+    const lowY = center(container, "window-low")[1];
     // 最高點的 y 是全圖最小 y、最低點是最大(價格區內)
     for (const w of wicks) expect(Number(w.getAttribute("y1"))).toBeGreaterThanOrEqual(highY - 0.01);
     for (const w of wicks) expect(Number(w.getAttribute("y2"))).toBeLessThanOrEqual(lowY + 0.01);
   });
 
-  it("三角三個頂點都落在 viewBox 內(body 朝圖內,不被裁)", () => {
+  it("環的視覺外緣完整落在 viewBox 內(不被裁成缺角)", () => {
     const { container } = render(<CandleChart bars={BARS} />);
+    const r = markOuterRadius(CANDLE_MARK);
     for (const id of ["window-high", "window-low"]) {
-      const pts = container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!;
-      for (const p of pts.split(" ")) {
-        const [x, y] = p.split(",").map(Number);
-        expect(x!).toBeGreaterThanOrEqual(0);
-        expect(y!).toBeGreaterThanOrEqual(0);
-        expect(y!).toBeLessThanOrEqual(578);
-      }
+      const [cx, cy] = center(container, id);
+      expect(cx - r).toBeGreaterThanOrEqual(0);
+      expect(cx + r).toBeLessThanOrEqual(1400);
+      expect(cy - r).toBeGreaterThanOrEqual(0);
+      expect(cy + r).toBeLessThanOrEqual(578);
     }
   });
 
-  it("常態(BB 關閉):高標文字翻到三角下方、低標文字翻到三角上方", () => {
+  it("標記畫在蠟燭 / MA 之後(SC-1.2:被上層蓋住等於沒畫)", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    const svg = container.querySelector("svg")!;
+    const all = [...svg.querySelectorAll("*")];
+    const lastBody = all.map((n) => n.getAttribute("data-testid")).lastIndexOf("candle-body");
+    const mark = all.map((n) => n.getAttribute("data-testid")).indexOf("window-high");
+    expect(lastBody).toBeGreaterThanOrEqual(0);
+    expect(mark).toBeGreaterThan(lastBody);
+  });
+
+  it("常態(BB 關閉):高標文字翻到環下方、低標文字翻到環上方", () => {
     // toY(windowHigh) === PAD_Y === 6 → 文字畫在上方會被裁;
     // toY(windowLow) 貼價格區底 → 文字畫在下方會落進成交量區
     const { container } = render(<CandleChart bars={BARS} />);
     expect(Number(screen.getByTestId("window-high-label").getAttribute("y"))).toBeGreaterThan(
-      apex(container, "window-high")[1],
+      center(container, "window-high")[1],
     );
     expect(Number(screen.getByTestId("window-low-label").getAttribute("y"))).toBeLessThan(
-      apex(container, "window-low")[1],
+      center(container, "window-low")[1],
     );
   });
 
-  // review F2:分 K 預設 240 根 → slot ≈ 5.8px、首根 cx ≈ 2.9px,而三角半寬 5。
+  // review F2:分 K 預設 240 根 → slot ≈ 5.8px、首根 cx ≈ 2.9px,而環的視覺外緣 6.5。
   // 3 根 bar 的 BARS fixture(slot ≈ 466)完全碰不到這條路徑。
-  it("窄 slot + 極值落在首 / 末根 → 三角仍完整落在 viewBox 內", () => {
+  it("窄 slot + 極值落在首 / 末根 → 環仍完整落在 viewBox 內", () => {
     const many = Array.from({ length: 240 }, (_, i) =>
       // 第 1 根是全場最高、最後一根是全場最低
       bar(
@@ -465,13 +476,11 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
       ),
     );
     const { container } = render(<CandleChart bars={many} initBars={240} />);
+    const r = markOuterRadius(CANDLE_MARK);
     for (const id of ["window-high", "window-low"]) {
-      const pts = container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!;
-      for (const p of pts.split(" ")) {
-        const x = Number(p.split(",")[0]);
-        expect(x).toBeGreaterThanOrEqual(0);
-        expect(x).toBeLessThanOrEqual(1400);
-      }
+      const cx = center(container, id)[0];
+      expect(cx - r).toBeGreaterThanOrEqual(0);
+      expect(cx + r).toBeLessThanOrEqual(1400);
     }
   });
 
@@ -487,7 +496,7 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
     const r2 = render(<CandleChart bars={many.slice(0, 10)} initBars={10} />);
     // 換成前 10 根 → 高 = 第 10 根的 h = 100_900
     expect(screen.getByTestId("window-high-label").textContent).toBe("100.9");
-    expect(r2.container.querySelector('polygon[data-testid="window-high"]')).toBeTruthy();
+    expect(r2.container.querySelector('circle[data-testid="window-high"]')).toBeTruthy();
     expect(container).toBeTruthy();
   });
 });

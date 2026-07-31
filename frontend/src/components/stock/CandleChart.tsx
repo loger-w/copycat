@@ -15,12 +15,7 @@ import {
   type Viewport,
 } from "@/lib/candle-viewport";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
-import {
-  CANDLE_MARK,
-  clampLabelX,
-  markLabelY,
-  trianglePoints,
-} from "@/lib/chart-extreme";
+import { CANDLE_MARK, clampLabelX, markCenterX, markLabelY } from "@/lib/chart-extreme";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
@@ -126,46 +121,7 @@ const ChartStatic = memo(function ChartStatic({
 }) {
   return (
     <g>
-      {/* 視窗高低(round4 項 1)。橫貫左右的虛線已移除 —— 它把整條價位軸都染上
-          「這個視窗的高」這個語意,而使用者要的只是「最高那根在哪、多少錢」。
-          改成標在造成該極值的那根蠟燭影線端點上的三角 + 就地價位文字(與分時圖同語言,
-          幾何規則共用 lib/chart-extreme,尺寸依 viewBox 各帶一份)。 */}
-      {([
-        ["window-high", highMark, "up"],
-        ["window-low", lowMark, "down"],
-      ] as const).map(([id, mark, dir]) =>
-        mark === null ? null : (
-          <g key={id}>
-            <polygon
-              data-testid={id}
-              // 夾制:分 K 預設 240 根時 slot ≈ 5.8px、首根 cx ≈ 2.9px 而三角半寬 5,
-              // 不夾的話左翼落在 x < 0 被 viewBox 裁成殘缺形狀(review F2)
-              points={trianglePoints(mark.cx, mark.y, dir, CANDLE_MARK, { min: 0, max: w })}
-              className="fill-ink-muted stroke-surface"
-              strokeWidth={1}
-              paintOrder="stroke"
-            />
-            <text
-              data-testid={`${id}-label`}
-              x={clampLabelX(mark.cx, MARK_LABEL_PAD_X, w - MARK_LABEL_PAD_X)}
-              y={markLabelY(mark.y, dir, CANDLE_MARK, {
-                top: MARK_LABEL_TOP,
-                // 文字翻面以**價格區**底為界,不是整張圖底 —— 用圖底的話低標文字永遠
-                // 不會翻面、直接落進成交量柱上(常態路徑)
-                bottom: g.priceBottom - 2,
-              })}
-              textAnchor="middle"
-              className="fill-ink-muted stroke-surface"
-              strokeWidth={2}
-              paintOrder="stroke"
-              fontSize="0.625rem"
-            >
-              {mark.text}
-            </text>
-          </g>
-        ),
-      )}
-        {/* y 軸格線 + 價位刻度 */}
+      {/* y 軸格線 + 價位刻度 */}
       {g.yTicks.map((t) => (
         <g key={`yt-${t.priceMilli}`}>
           <line
@@ -269,6 +225,60 @@ const ChartStatic = memo(function ChartStatic({
           strokeWidth={1.2}
         />
       ) : null}
+      {/* 視窗高低(round4 項 1;round6 項 1 改圓環並上移圖層)。
+          橫貫左右的虛線已移除 —— 它把整條價位軸都染上「這個視窗的高」這個語意,
+          而使用者要的只是「最高那根在哪、多少錢」。標在造成該極值的那根蠟燭影線端點上。
+
+          **必須畫在蠟燭 / BB / MA 之後**:舊版畫在整個 `<g>` 最前面,被後面每一層蓋過
+          (與分時圖同一個症狀)。與分時圖同語言:幾何規則共用 lib/chart-extreme,
+          尺寸依 viewBox 各帶一份。 */}
+      {([
+        ["window-high", highMark, "up"],
+        ["window-low", lowMark, "down"],
+      ] as const).map(([id, mark, dir]) => {
+        if (mark === null) return null;
+        // 夾制:分 K 預設 240 根時 slot ≈ 5.8px、首根 cx ≈ 2.9px 而環的視覺外緣 6.5,
+        // 不夾的話左緣落在 x < 0 被 viewBox 裁成缺角(review F2)
+        const cx = markCenterX(mark.cx, CANDLE_MARK, { min: 0, max: w });
+        return (
+          <g key={id}>
+            <circle
+              cx={cx}
+              cy={mark.y}
+              r={CANDLE_MARK.radius}
+              fill="none"
+              className="stroke-surface"
+              strokeWidth={CANDLE_MARK.halo}
+            />
+            <circle
+              data-testid={id}
+              cx={cx}
+              cy={mark.y}
+              r={CANDLE_MARK.radius}
+              fill="none"
+              className="stroke-ink-muted"
+              strokeWidth={CANDLE_MARK.ring}
+            />
+            <text
+              data-testid={`${id}-label`}
+              x={clampLabelX(mark.cx, MARK_LABEL_PAD_X, w - MARK_LABEL_PAD_X)}
+              y={markLabelY(mark.y, dir, CANDLE_MARK, {
+                top: MARK_LABEL_TOP,
+                // 文字翻面以**價格區**底為界,不是整張圖底 —— 用圖底的話低標文字永遠
+                // 不會翻面、直接落進成交量柱上(常態路徑)
+                bottom: g.priceBottom - 2,
+              })}
+              textAnchor="middle"
+              className="fill-ink-muted stroke-surface"
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.625rem"
+            >
+              {mark.text}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 });
