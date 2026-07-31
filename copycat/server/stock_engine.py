@@ -467,6 +467,11 @@ class StockEngine:
             # 尚無成交才給參考價,與 `p` **互斥** —— 兩者同時有值會讓消費端分不出
             # 「今天的價」與「昨天的基準」
             "ref": None if last is not None else (meta.ref_milli if meta is not None else None),
+            # 側欄漲跌停亮燈用。**不可讓前端拿 chg_pct ≈ ±10% 猜** —— ETF ±20%、
+            # 無漲跌幅商品都會誤判。`no_data` 時 meta 已為 None → 自動滿足
+            # 「所有值欄位一律 None」的既有契約,不新增例外路徑。
+            "upper": meta.upper_milli if meta is not None else None,
+            "lower": meta.lower_milli if meta is not None else None,
             "no_data": no_data,
         }
 

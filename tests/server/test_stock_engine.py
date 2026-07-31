@@ -409,6 +409,19 @@ class TestWatchlistQuoteSeed:
         assert recoveries[0]["p"] == 2_380_000  # 補推在 ingest 之後 → 帶新價不是空值
         await engine.close()
 
+    async def test_seed_carries_limit_prices(self) -> None:
+        """側欄漲跌停亮燈需要 upper/lower —— **不可用 chg_pct ≈ ±10% 猜**
+        (ETF ±20%、無漲跌幅商品都會誤判;next-time 2026-07-31 條)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7, price="2400"))
+        await _drain(engine)
+        got = await self._collect(engine.stream())
+        seed = next(m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330")
+        assert seed["upper"] == 2_550_000
+        assert seed["lower"] == 2_090_000
+
     async def test_no_data_message_carries_ref_key(self) -> None:
         """所有 watchlist_quote 產出點共用同一份 payload builder,形狀不得分歧。"""
         engine, src = await _make()
@@ -439,6 +452,8 @@ class TestWatchlistQuoteSeed:
         assert msg["chg_pct"] is None
         assert msg["vol"] is None
         assert msg["ref"] is None
+        assert msg["upper"] is None
+        assert msg["lower"] is None
         await engine.close()
 
 

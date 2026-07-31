@@ -81,9 +81,27 @@ function wrap(ui: ReactNode) {
 }
 
 const QUOTES = {
-  "2330": { p: 2_380_000, chg_pct: 2.59, vol: 12479, ref: null, no_data: false },
-  "5483": { p: null, chg_pct: null, vol: null, ref: null, no_data: true },
-  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, ref: null, no_data: false },
+  // 2330:一般價位(未觸停)—— upper/lower 有值但現價沒踩到,亮燈不該亮
+  "2330": {
+    p: 2_380_000,
+    chg_pct: 2.59,
+    vol: 12479,
+    ref: null,
+    upper: 2_550_000,
+    lower: 2_090_000,
+    no_data: false,
+  },
+  "5483": {
+    p: null,
+    chg_pct: null,
+    vol: null,
+    ref: null,
+    upper: null,
+    lower: null,
+    no_data: true,
+  },
+  // 3231:漲跌停不可得(舊後端 / 無漲跌幅商品)—— 一律不亮,不猜
+  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, ref: null, upper: null, lower: null, no_data: false },
 };
 
 function sidebar() {
@@ -154,6 +172,62 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
     sidebar();
     await waitGroups();
     expect(screen.getAllByLabelText(/拖拉/)).toHaveLength(4); // 2+2,未分組為空
+  });
+});
+
+// next-time 2026-07-31 條:側欄自選列的漲跌停亮燈。
+describe("WatchlistSidebar 漲跌停亮燈", () => {
+  function quotesWith(over: Record<string, unknown>) {
+    return { ...QUOTES, "2330": { ...QUOTES["2330"], ...over } } as typeof QUOTES;
+  }
+
+  it("現價踩到漲停 → 整塊吃 bull 底色", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        quotes={quotesWith({ p: 2_550_000, chg_pct: 9.91 })}
+      />,
+    );
+    await waitGroups();
+    const cls = screen.getAllByTestId("wl-quote-2330")[0]!.className;
+    expect(cls).toContain("bg-bull");
+    expect(cls).not.toContain("bg-bear");
+  });
+
+  it("現價踩到跌停 → 整塊吃 bear 底色", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        quotes={quotesWith({ p: 2_090_000, chg_pct: -9.91 })}
+      />,
+    );
+    await waitGroups();
+    expect(screen.getAllByTestId("wl-quote-2330")[0]!.className).toContain("bg-bear");
+  });
+
+  it("未觸停 → 不亮(有 upper/lower 也一樣)", async () => {
+    sidebar();
+    await waitGroups();
+    const cls = screen.getAllByTestId("wl-quote-2330")[0]!.className;
+    expect(cls).not.toContain("bg-bull");
+    expect(cls).not.toContain("bg-bear");
+  });
+
+  it("漲跌停不可得(舊後端 / 無漲跌幅商品)→ 一律不亮,**不用 chg_pct 猜**", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        // chg_pct 高達 +19.9%(ETF ±20% 情境):若用百分比猜就會誤亮
+        quotes={quotesWith({ p: 2_780_000, chg_pct: 19.9, upper: null, lower: null })}
+      />,
+    );
+    await waitGroups();
+    const cls = screen.getAllByTestId("wl-quote-2330")[0]!.className;
+    expect(cls).not.toContain("bg-bull");
+    expect(cls).not.toContain("bg-bear");
   });
 });
 
@@ -678,7 +752,15 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
   it("尚無成交但有參考價 → 灰色參考價 + 灰字「參考」,不顯示 0.00%", async () => {
     const quotes = {
       ...QUOTES,
-      "3231": { p: null, chg_pct: null, vol: null, ref: 99_500, no_data: false },
+      "3231": {
+        p: null,
+        chg_pct: null,
+        vol: null,
+        ref: 99_500,
+        upper: null,
+        lower: null,
+        no_data: false,
+      },
     };
     const { container } = wrap(
       <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
@@ -694,7 +776,15 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
   it("無參考價也無成交 → 維持 `-`(不憑空編值)", async () => {
     const quotes = {
       ...QUOTES,
-      "3231": { p: null, chg_pct: null, vol: null, ref: null, no_data: false },
+      "3231": {
+        p: null,
+        chg_pct: null,
+        vol: null,
+        ref: null,
+        upper: null,
+        lower: null,
+        no_data: false,
+      },
     };
     const { container } = wrap(
       <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,

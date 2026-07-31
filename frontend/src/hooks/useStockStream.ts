@@ -18,6 +18,10 @@ export interface WatchlistQuote {
   /** 今日參考價(round4 項 4)。**只在尚無成交時才有值**,與 `p` 互斥 ——
    *  參考價塞進 `p` 會讓畫面把昨收讀成今價。舊後端不發此欄 → null → 側欄維持 `-`。 */
   ref: number | null;
+  /** 漲 / 跌停價(側欄亮燈用)。舊後端不發 → null → `limitState` 回 null = 不亮。
+   *  **不可改用 `chg_pct ≈ ±10%` 推**:ETF ±20%、無漲跌幅商品都會誤判。 */
+  upper: number | null;
+  lower: number | null;
   no_data: boolean;
 }
 
@@ -154,6 +158,8 @@ export function useStockStream(code: string | null): StockStreamState {
             chg_pct: (msg.chg_pct as number | null) ?? null,
             vol: (msg.vol as number | null) ?? null,
             ref: (msg.ref as number | null) ?? null,
+            upper: (msg.upper as number | null) ?? null,
+            lower: (msg.lower as number | null) ?? null,
             no_data: Boolean(msg.no_data),
           };
           setWatchlist((prev) => ({ ...prev, [msg.code as string]: q }));

@@ -6,6 +6,7 @@ import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks } from "@/lib/stock-search";
+import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import {
   assignToGroup,
@@ -280,6 +281,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   function stockRow(code: string, group: string | null): React.ReactElement {
     const q = quotes[code];
     const name = nameOf.get(code);
+    // 側欄亮燈 = **觸停**(現價踩到漲跌停),與主區五檔的**鎖停** badge 語意不同 ——
+    // 後者是 `bids[0] === upper`(委買掛在漲停排隊),需要五檔,側欄沒有。
+    // 兩者刻意不共用,共用會逼側欄拿不存在的資料或稀釋 badge 語意。
+    const limit = limitState(q?.p ?? null, q?.upper ?? null, q?.lower ?? null);
     return (
       <li key={code}>
         <div
@@ -315,20 +320,33 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           {q?.no_data ? (
             <span className="shrink-0 text-xs text-ink-dim">無資料</span>
           ) : (
-            <span className="flex shrink-0 flex-col items-end justify-center font-mono leading-tight">
+            <span
+              data-testid={`wl-quote-${code}`}
+              className={cn(
+                "flex shrink-0 flex-col items-end justify-center font-mono leading-tight",
+                // 亮燈時**整塊**吃底色(同主區慣例):盤中要用餘光捕捉,換文字色不夠。
+                limit === "upper" && "rounded bg-bull px-1.5 text-white",
+                limit === "lower" && "rounded bg-bear px-1.5 text-white",
+              )}
+            >
               {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
                   參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
               {q?.p != null ? (
                 <>
-                  <span className="text-base text-ink">{fmtPrice(q.p)}</span>
+                  <span className={cn("text-base", limit === null ? "text-ink" : "text-white")}>
+                    {fmtPrice(q.p)}
+                  </span>
                   <span
                     className={cn(
                       "text-xs",
-                      (q.chg_pct ?? 0) > 0
-                        ? "text-bull"
-                        : (q.chg_pct ?? 0) < 0
-                          ? "text-bear"
-                          : "text-ink-dim",
+                      // 亮燈時一律白字,不再走漲跌色 —— 紅底紅字看不見(同 OrderBook)
+                      limit !== null
+                        ? "text-white"
+                        : (q.chg_pct ?? 0) > 0
+                          ? "text-bull"
+                          : (q.chg_pct ?? 0) < 0
+                            ? "text-bear"
+                            : "text-ink-dim",
                     )}
                   >
                     {q.chg_pct != null
