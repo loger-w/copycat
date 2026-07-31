@@ -7,6 +7,7 @@ import {
   overlayLines,
   plotWidth,
   R_AXIS_W,
+  sideSummary,
   SUB_TOP_PAD,
   X_END_MIN,
   X_START_MIN,
@@ -262,6 +263,44 @@ describe("buildIntradayGeometry", () => {
       expect(g.yTicks[i]!.priceMilli).toBeLessThan(g.yTicks[i - 1]!.priceMilli);
       expect(g.yTicks[i]!.y).toBeGreaterThan(g.yTicks[i - 1]!.y);
     }
+  });
+
+  // 🟢 round6 項 2:說明列要能誠實交代「灰色是多少、外盤比可不可信」
+  describe("sideSummary(內外盤口徑)", () => {
+    it("四個數字同源,外盤比分母**排除**未分類(既有語意不變)", () => {
+      // 2026-07-31 實測 09:00 那一分鐘:量 269 = 外 127 + 內 20 + 未分類 122
+      const s = sideSummary(minutes([[540, { c: 100_000, v: 269, o: 127, i: 20, u: 122 }]]));
+      expect(s).toMatchObject({ outer: 127, inner: 20, unch: 122, total: 269 });
+      expect(s.outerPct).toBeCloseTo((127 / 147) * 100, 5);
+      // 判定率的分母才是總量
+      expect(s.decidedPct).toBeCloseTo((147 / 269) * 100, 5);
+    });
+
+    it("鎖漲停整天判不出來 → 外盤比 null(不是 0)、判定率 0", () => {
+      const s = sideSummary(minutes([[540, { c: 502_000, v: 2131, o: 0, i: 0, u: 2131 }]]));
+      expect(s.outerPct).toBeNull();
+      expect(s.decidedPct).toBe(0);
+    });
+
+    it("無資料 → 兩個比率都是 null(不是 0 —— 0% 會被讀成「全內盤」)", () => {
+      const s = sideSummary(new Map());
+      expect(s.total).toBe(0);
+      expect(s.outerPct).toBeNull();
+      expect(s.decidedPct).toBeNull();
+    });
+
+    /** 與副圖的灰段總和對得上是這個數字的全部意義,所以窗要一致 ——
+     *  `buildIntradayGeometry` 會把分鐘過濾成 [09:00, 13:30],這裡也必須。 */
+    it("窗外的分鐘不計入(與副圖畫出來的灰段同窗)", () => {
+      const s = sideSummary(
+        minutes([
+          [539, { c: 100_000, v: 999, o: 999, i: 0, u: 0 }], // 08:59,窗外
+          [540, { c: 100_000, v: 10, o: 6, i: 4, u: 0 }],
+        ]),
+      );
+      expect(s.total).toBe(10);
+      expect(s.outer).toBe(6);
+    });
   });
 
   // 🔴 round6 項 5:左緣價位軸的漲停 / 跌停兩格要亮燈 → 幾何層標出哪一格是哪個

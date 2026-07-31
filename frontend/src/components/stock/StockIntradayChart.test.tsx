@@ -69,7 +69,9 @@ describe("StockIntradayChart", () => {
     const polylines = container.querySelectorAll("polyline");
     expect(polylines.length).toBeGreaterThanOrEqual(2);
     expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/累積外盤/)).toBeTruthy();
+    // round6 項 2:說明列由「累積外盤 / 內盤 / 外盤比」改為「外盤 / 內盤 / 未分類 /
+    // 外盤比(判定率)」—— 四個數字改為同源(sideSummary),不再混用後端 running 值
+    expect(screen.getByText(/外盤比/)).toBeTruthy();
   });
 
   // 🔴 SC-2:走勢線平盤上紅、平盤下綠(clipPath 切上下兩段),線與平盤之間填半透明色塊
@@ -584,6 +586,64 @@ describe("StockIntradayChart 左緣價位帶(round4 項 6)", () => {
 });
 
 // 🟢 round5 SC-1 / SC-2:當日高低線 + 現價圈
+describe("StockIntradayChart 未分類量的呈現(round6 項 2)", () => {
+  /** 2026-07-31 實測 09:00 那一分鐘:量 269 = 外 127 + 內 20 + 未分類 122 */
+  const withUnch = {
+    ...ACCUM,
+    minutes: new Map([[540, { c: 2_380_000, v: 269, o: 127, i: 20, u: 122, h: null, l: null }]]),
+  } as unknown as typeof ACCUM;
+
+  it("未分類段用斜線 pattern,不是實心 fill-* class(review R11)", () => {
+    const { container } = wrap(<StockIntradayChart accum={withUnch} />);
+    const seg = container.querySelector('[data-testid="energy-unch"]')!;
+    expect(seg.getAttribute("style")).toMatch(/fill:\s*url\(#/);
+    // fill class 一旦留著就會蓋掉 pattern(presentation attribute 優先權低於 CSS)
+    expect(seg.getAttribute("class") ?? "").not.toContain("fill-");
+  });
+
+  it("pattern 用 userSpaceOnUse,且 id 隨 useId 唯一(同頁多張圖不撞)", () => {
+    const { container } = wrap(<StockIntradayChart accum={withUnch} />);
+    const pat = container.querySelector("pattern")!;
+    expect(pat.getAttribute("patternUnits")).toBe("userSpaceOnUse");
+    const seg = container.querySelector('[data-testid="energy-unch"]')!;
+    expect(seg.getAttribute("style")).toContain(pat.getAttribute("id")!);
+    // tile 內有底色 rect,窄柱不會整根落在空白帶上變透明(review R6)
+    expect(pat.querySelector("rect")).toBeTruthy();
+  });
+
+  it("說明列印出未分類量與判定率", () => {
+    wrap(<StockIntradayChart accum={withUnch} />);
+    expect(screen.getByTestId("unch-total").textContent).toBe("122");
+    expect(screen.getByTestId("outer-pct").textContent).toBe("86.4%"); // 127/147
+    expect(screen.getByTestId("decided-pct").textContent).toContain("55%"); // 147/269
+  });
+
+  it("判定率低於門檻 → 外盤比降對比(SC-2.4)", () => {
+    wrap(<StockIntradayChart accum={withUnch} />);
+    expect(screen.getByTestId("outer-pct").className).toContain("text-ink-dim/50");
+  });
+
+  it("判定率高 → 外盤比維持原色", () => {
+    const clean = {
+      ...ACCUM,
+      minutes: new Map([[540, { c: 2_380_000, v: 100, o: 60, i: 40, u: 0, h: null, l: null }]]),
+    } as unknown as typeof ACCUM;
+    wrap(<StockIntradayChart accum={clean} />);
+    expect(screen.getByTestId("outer-pct").className).not.toContain("text-ink-dim/50");
+    expect(screen.getByTestId("decided-pct").textContent).toContain("100%");
+  });
+
+  it("鎖漲停整天判不出來 → 外盤比顯示「-」不是 0%(0% 會被讀成全內盤)", () => {
+    const locked = {
+      ...ACCUM,
+      minutes: new Map([[540, { c: 2_380_000, v: 2131, o: 0, i: 0, u: 2131, h: null, l: null }]]),
+    } as unknown as typeof ACCUM;
+    wrap(<StockIntradayChart accum={locked} />);
+    expect(screen.getByTestId("outer-pct").textContent).toBe("-");
+    expect(screen.getByTestId("decided-pct").textContent).toContain("0%");
+  });
+});
+
 describe("StockIntradayChart 左緣漲跌停亮燈(round6 項 5)", () => {
   it("最上格紅底、最下格綠底,兩格皆白字", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);

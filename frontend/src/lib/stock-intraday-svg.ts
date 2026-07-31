@@ -122,6 +122,54 @@ export interface IntradayGeometry {
   minuteOf: (xPx: number) => number | null;
 }
 
+/** 判定率低於這個門檻時,外盤比在畫面上降對比 —— 它的分母排除了未分類量,
+ *  判定率一低就等於「這個百分比是用不到一半的資料算出來的」。
+ *
+ *  2026-07-31 盤中實測:2330 台積電 100%、2317 鴻海 83.7%、6207 雷科 52%、
+ *  4989 榮科 50.8%、2327 國巨(鎖漲停)0%。60 恰好把「近漲停判定失準」與「正常」分開。 */
+export const LOW_DECIDED_PCT = 60;
+
+export interface SideSummary {
+  outer: number;
+  inner: number;
+  unch: number;
+  total: number;
+  /** 外盤比 = 外 /(外 + 內)。**分母刻意排除未分類**(既有語意,不在本輪改);
+   *  分母為 0 → `null` 而不是 0 —— `0%` 會被讀成「全部內盤」。 */
+  outerPct: number | null;
+  /** 判定率 = (外 + 內)/ 總量。回答「上面那個外盤比是用多少比例的資料算的」。 */
+  decidedPct: number | null;
+}
+
+/** 說明列四個數字的**唯一**來源(round6 項 2)。
+ *
+ *  舊版說明列的「累積外盤 / 內盤」取自後端 running 值 `cumOuter` / `cumInner`,而未分類量
+ *  根本沒印。要補「未分類 N」就必須從分鐘聚合算,那時若外 / 內仍走後端值,就會出現
+ *  兩個來源混用 —— 而混用的失效樣態是純數字不一致,沒有任何測試會紅。
+ *
+ *  **窗與副圖一致**([09:00, 13:30]):這個數字的全部意義就是與畫面上的灰段總和對得上。 */
+export function sideSummary(minutes: Map<number, MinuteAgg>): SideSummary {
+  let outer = 0;
+  let inner = 0;
+  let unch = 0;
+  for (const [k, m] of minutes) {
+    if (k < X_START_MIN || k > X_END_MIN) continue;
+    outer += m.o;
+    inner += m.i;
+    unch += m.u;
+  }
+  const decided = outer + inner;
+  const total = decided + unch;
+  return {
+    outer,
+    inner,
+    unch,
+    total,
+    outerPct: decided > 0 ? (outer / decided) * 100 : null,
+    decidedPct: total > 0 ? (decided / total) * 100 : null,
+  };
+}
+
 export interface StockOverlay {
   cdp: { cdp: number; ah: number; nh: number; nl: number; al: number } | null;
   ma5: number | null;

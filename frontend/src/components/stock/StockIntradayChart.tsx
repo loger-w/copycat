@@ -10,10 +10,12 @@ import type { StockAccum } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
   lastPoint,
+  LOW_DECIDED_PCT,
   minuteToX,
   overlayLines,
   plotWidth,
   R_AXIS_W,
+  sideSummary,
   X_END_MIN,
   X_LABEL_H,
   SUB_TOP_PAD,
@@ -384,17 +386,43 @@ const EnergySub = memo(function EnergySub({
   maxTotal,
   w,
   h,
+  hatchId,
 }: {
   bars: EnergyBar[];
   /** 歸一分母 = 全日最大**總量**,即頂端刻度值 */
   maxTotal: number;
   w: number;
   h: number;
+  /** 未分類段的斜線 pattern id;**純量** prop,不打穿 memo(W-10) */
+  hatchId: string;
 }) {
   const bw = barW(w);
   const midY = h - (h - SUB_TOP_PAD) / 2;
   return (
     <g>
+      {/* 未分類量的斜線紋理(round6 項 2)。
+          灰色原本是實心的第三個顏色,而顏色在圖表語彙裡等於「一個類別」——
+          使用者問「灰色代表甚麼」其實是在問「這是第三種盤嗎」。它不是:它是**方向未知**。
+          紋理不是顏色,讀起來是「這段有不確定性」,顏色維度就只留給紅 / 綠兩個方向。
+
+          `patternUnits="userSpaceOnUse"` 不可改成 objectBoundingBox —— 後者會讓 tile
+          被每根 rect 各自拉伸,270 根不同高度的柱子會長出 270 種紋理密度。
+
+          tile 內**先鋪一層低透明度底色再疊斜線**(review R6):柱寬只有約 2.5px,
+          純斜線的 tile 有機會整根落在空白帶上 → 該段被畫成透明 = 看起來「這根沒有量」,
+          而量刻度分母仍含未分類(W-1)→ 柱高與頂端刻度對不上,比原本的實心灰更難讀。 */}
+      <defs>
+        <pattern
+          id={hatchId}
+          patternUnits="userSpaceOnUse"
+          width={3}
+          height={3}
+          patternTransform="rotate(45)"
+        >
+          <rect width={3} height={3} className="fill-ink-dim" fillOpacity={0.3} />
+          <line x1={0} y1={0} x2={0} y2={3} className="stroke-ink-dim" strokeWidth={1.4} />
+        </pattern>
+      </defs>
       {/* 量刻度:中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
           頂端那根不會蓋住頂端的刻度文字。
           刻度值 = 全日最大**總量**(round5 E)—— 舊的「單邊最大」讓資訊列的「量」
@@ -449,7 +477,17 @@ const EnergySub = memo(function EnergySub({
           <g key={`e-${b.x}`}>
             <rect x={x} y={outerY} width={bw} height={b.outerH} className="fill-bull" />
             <rect x={x} y={innerY} width={bw} height={b.innerH} className="fill-bear" />
-            <rect x={x} y={unchY} width={bw} height={b.unchH} className="fill-ink-dim" />
+            {/* 填色**只能有一個來源**(review R11):`fill` 是 presentation attribute,
+                優先權低於任何 CSS 宣告 —— 留著 `fill-*` class 當「保險」的話 Tailwind 會
+                蓋掉 pattern,畫面退回實心灰而零錯誤訊號。故走 style 且不掛 fill class。 */}
+            <rect
+              data-testid="energy-unch"
+              x={x}
+              y={unchY}
+              width={bw}
+              height={b.unchH}
+              style={{ fill: `url(#${hatchId})` }}
+            />
           </g>
         );
       })}
@@ -479,6 +517,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const clipAbove = `${uid}-above`;
   const clipBelow = `${uid}-below`;
+  const hatchId = `${uid}-hatch`;
 
   const g = useMemo(
     () =>
@@ -524,8 +563,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
     );
   }
 
-  const total = accum.cumInner + accum.cumOuter;
-  const outerPct = total > 0 ? ((accum.cumOuter / total) * 100).toFixed(1) : "-";
+  const side = sideSummary(accum.minutes);
+  const lowDecided = side.decidedPct !== null && side.decidedPct < LOW_DECIDED_PCT;
 
   const hoverMin = hover?.min ?? null;
   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
@@ -761,7 +800,13 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
       <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="內外盤能量">
-        <EnergySub bars={subGeo.energyBars} maxTotal={subGeo.maxTotal} w={subW} h={subH} />
+        <EnergySub
+          bars={subGeo.energyBars}
+          maxTotal={subGeo.maxTotal}
+          w={subW}
+          h={subH}
+          hatchId={hatchId}
+        />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
           <line
@@ -776,10 +821,28 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           />
         ) : null}
       </svg>
+      {/* 說明列(round6 項 2)。四個數字全部同源走 `sideSummary(accum.minutes)` ——
+          舊版的外 / 內取自後端 running 值而未分類根本沒印,補印未分類就必須從分鐘聚合算,
+          那時混用兩個來源的失效樣態是純數字不一致,沒有任何測試會紅。
+
+          「判定率」是本輪的關鍵資訊:外盤比的分母**排除**未分類,而這件事以前完全沒揭露。
+          判定率一低就代表那個百分比是用不到一半的資料算出來的 —— 低於門檻時把外盤比
+          降對比,讓失真的數字自己承認。 */}
       <figcaption className="mt-1 flex h-4 items-center justify-between font-mono text-xs text-ink-dim">
         <span>
-          累積外盤 <span className="text-bull">{accum.cumOuter}</span> · 內盤{" "}
-          <span className="text-bear">{accum.cumInner}</span> · 外盤比 {outerPct}%
+          外盤 <span className="text-bull">{side.outer}</span> · 內盤{" "}
+          <span className="text-bear">{side.inner}</span> · 未分類{" "}
+          <span data-testid="unch-total">{side.unch}</span> · 外盤比{" "}
+          <span
+            data-testid="outer-pct"
+            className={cn(lowDecided && "text-ink-dim/50")}
+            title={lowDecided ? "判定率偏低,外盤比的分母排除了未分類量" : undefined}
+          >
+            {side.outerPct === null ? "-" : `${side.outerPct.toFixed(1)}%`}
+          </span>{" "}
+          <span data-testid="decided-pct">
+            (判定率 {side.decidedPct === null ? "-" : `${side.decidedPct.toFixed(0)}%`})
+          </span>
         </span>
         <span>
           {overlay?.date && (toggles.cdp || toggles.ma) ? `疊線基準 ${overlay.date} · ` : ""}
