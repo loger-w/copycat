@@ -61,8 +61,10 @@ describe("DepthBar 水平五檔(SC-4)", () => {
 
   it("表頭顯示委買 / 委賣總量", () => {
     renderBar();
-    expect(screen.getByText(/委買/).textContent).toContain("88"); // 12+32+15+8+21
-    expect(screen.getByText(/委賣/).textContent).toContain("63"); // 5+18+9+24+7
+    // 精確比對(TQ-2):`toContain` 對「多一位數」的錯值照樣綠(如 188 / 880),
+    // 而總量算錯的典型樣態正是多算了一筆量 —— 子字串收不住它
+    expect(screen.getByText(/委買/).textContent).toBe("委買 88"); // 12+32+15+8+21
+    expect(screen.getByText(/委賣/).textContent).toBe("委賣 63"); // 5+18+9+24+7
   });
 
   it("中央顯示成交價與漲跌%", () => {
@@ -143,8 +145,9 @@ describe("DepthBar 市價 0 價檔位(M6)", () => {
 
   it("總量只算限價檔(定義不隨鎖停日改變,可跨日跨股比)", () => {
     renderBar({ bids: LOCK_BIDS, asks: LOCK_ASKS });
-    expect(screen.getByText(/委買/).textContent).toContain("67"); // 12+32+15+8,不含市價 200
-    expect(screen.getByText(/委賣/).textContent).toContain("56"); // 5+18+9+24,不含市價 90
+    // 精確比對(TQ-2):市價量若混進來,委買會變成 267 —— `toContain("67")` 對它照樣綠
+    expect(screen.getByText(/委買/).textContent).toBe("委買 67"); // 12+32+15+8,不含市價 200
+    expect(screen.getByText(/委賣/).textContent).toBe("委賣 56"); // 5+18+9+24,不含市價 90
   });
 
   it("漲停價出現在非最佳限價檔 → 不亮 badge(判定看最佳限價檔,TQ-5)", () => {
