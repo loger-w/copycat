@@ -4,6 +4,7 @@
  * 低價腿壓成一條直線。跨腿比較走「重疊」模式(那邊才正規化成 %)。
  */
 import { buildLegGeometry, timeTicks, type RiverSize } from "@/lib/river-chart-svg";
+import { pts } from "@/lib/svg-points";
 import { cn } from "@/lib/utils";
 import type { RiverLeg, RiverWindow } from "@/types";
 
@@ -17,10 +18,6 @@ function fmtPrice(millipts: number): string {
 
 function fmtPct(pct: number): string {
   return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
-}
-
-function pts(line: { x: number; y: number }[]): string {
-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
 
 interface CardProps {

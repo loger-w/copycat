@@ -334,6 +334,8 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   // 會把「開盤後漲跌」誤指為「相對昨收漲跌」(SC-2.4)。
   const hasRef = (input.meta?.ref ?? 0) > 0;
   const refY = toY(ref);
+  // 這裡的點串是行內展開版(頭尾各補一個 refY 錨點,不是純 line.map),
+  // 精度必須與 lib/svg-points.ts 的 pts() 一致(皆 toFixed(1))。
   const areaPolygon =
     hasRef && priceLine.length > 0
       ? [

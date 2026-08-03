@@ -6,6 +6,7 @@ import { useChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { fmt } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+import { pts } from "@/lib/svg-points";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
@@ -43,10 +44,6 @@ const TIME_TAG = { w: 40, h: 24 };
 
 function hhmm(minute: number): string {
   return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
-}
-
-function pts(line: { x: number; y: number }[]): string {
-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
 
 const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({

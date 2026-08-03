@@ -9,6 +9,7 @@ import {
   type OverlayEntry,
   type RiverSize,
 } from "@/lib/river-chart-svg";
+import { pts } from "@/lib/svg-points";
 import { cn } from "@/lib/utils";
 import type { RiverWindow } from "@/types";
 
@@ -18,10 +19,6 @@ const SIZE: RiverSize = { width: 960, height: 340 };
 /** base 腿(序位 0)畫粗線,其餘細線 */
 const BASE_STROKE_W = 2;
 const LEG_STROKE_W = 1.2;
-
-function pts(line: { x: number; y: number }[]): string {
-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-}
 
 function fmtPct(pct: number): string {
   return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;

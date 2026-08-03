@@ -4,6 +4,7 @@ import { MarketChart } from "@/components/index/MarketChart";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+import { pts } from "@/lib/svg-points";
 import {
   coerceMode,
   isMarketKey,
@@ -55,10 +56,6 @@ function fmt(millipts: number): string {
 
 function toX(minute: number): number {
   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
-}
-
-function pts(line: { x: number; y: number }[]): string {
-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
 
 function Btn({
