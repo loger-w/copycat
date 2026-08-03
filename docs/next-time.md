@@ -115,11 +115,14 @@
   + 出界/重複過濾,:230 的 `span<=0` 分支與 :251-253 保底那根亦 snap;註解直接引用「round3 項 10」
 - [ ] 布林通道填色用 `fill-ink-muted` 0.07,在 20 期低波動段會蓋成一大片灰塊;
   若嫌干擾可改只畫上下軌不填色,或降到 0.04
-- [ ] **既有行為,自評 lens 抓到但本輪駁回不修(鐵則 B 不順手改)**:`candle.ts` 的
+- [x] ~~**既有行為,自評 lens 抓到但本輪駁回不修(鐵則 B 不順手改)**:`candle.ts` 的
   `indexOf` guard 是 `x > size.width` 才回 null,`x` 恰等於 `size.width` 時
   `Math.floor(x/slot)` 算出 `bars.length` → 被 `i < bars.length` 擋掉一樣回 null,
   但那個像素理應對應最後一根。症狀 = 最右一個像素的 hover 失去十字線。
-  本輪未動那行;要修時 `x >= size.width` 或 `Math.min(bars.length-1, …)` 擇一
+  本輪未動那行;要修時 `x >= size.width` 或 `Math.min(bars.length-1, …)` 擇一~~
+  **2026-08-03 修畢(fix/candle-right-edge-hover,/bug 流程)**:採 `Math.min` 夾制,
+  紅測試先行 + 反向驗證 + 真環境右緣四點掃描 PASS;artifact 見
+  `.claude/bug/candle-right-edge-hover/`
 - [ ] `MINUTE_INIT_BARS = 240` / `DAILY_INIT_BARS = 120` / `MAX_VISIBLE = 700` /
   `ZOOM_STEP = 1.15` 四個常數分散(**2026-07-31 盤點:已從兩檔擴散到三檔** ——
   `StockChart.tsx:20-21` / `candle-viewport.ts:14` / `CandleChart.tsx:32`);
@@ -378,3 +381,22 @@
 - [ ] **前端狀態列版本比對**(`/api/health` 的第三個候選修法,本輪只做後端兩個):
   前端拿到 `git_sha` 後與 build 時嵌入的 sha 比對才是閉環 —— 現況仍需要人主動去打
   `/api/health` 才發現版本落差。
+
+## 2026-08-03(candle-right-edge-hover /bug 輪 —— 新流程首驗)
+
+- [ ] **verify-gate hook 攔不到 copycat 的實際收尾路徑**:本 repo 無 remote,收尾走
+  branch-lifecycle fallback 的 `git merge --ff-only`,而 hook 觸發式只有
+  `git push` / `gh pr merge` —— 本輪的擋下/放行實證是靠「主動試 push」做出來的,
+  日常收尾不會自然經過 gate。候選:hook 觸發式加「在 main 上 merge 流程分支」的形;
+  或 copycat 補 remote(順帶解 artifact 異地備援)。
+- [ ] **固定日期 fixture 的同型潛伏紅**:test_market_routes 的 partial_last 週期斷言
+  已修(d84c440,動態 ISO 週 fixture),但全 tests/ 可能還有其他「fixture 寫死日期 +
+  斷言隨 today 變」的組合 —— 下次任何測試在沒改 code 的日子突然紅,先想日期依賴
+  (本輪 pattern:寫測試當週 True、跨週後恆 False)。
+- [ ] d84c440 夾帶 ~10 行 ruff format churn(`_apply_otc` 合行、v 元組拆行;收尾 review P2-3):
+  專案 gate 只有 `ruff check` 沒有 `ruff format`,implementer 順手 format 違反鐵則 B —
+  blame 會指到語意無關 commit。已成事實不回滾;**之後 dispatch prompt 的邊界句要含
+  「不要 ruff format 整檔」**(本輪第三個 dispatch 已補)。
+- [ ] `_this_week_days` 兩個已知邊界(收尾 review P2-4,均為極低機率):`date.today()`
+  同算式取兩次 + fixture 與 route 各自取 today,週日跨午夜起跑理論上可跨週變紅;
+  docstring 宣告 n<=7 但無 guard。要根治得讓 route 的 today 可注入,成本不成比例,先記帳。
