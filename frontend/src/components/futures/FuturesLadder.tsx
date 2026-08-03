@@ -7,6 +7,7 @@ import {
   useSubmitFuture,
 } from "@/hooks/useCapital";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
+import { fmt } from "@/lib/format";
 import {
   buildFuturesLadder,
   futExchangeContract,
@@ -20,11 +21,6 @@ import type { FuturesProductState } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
 
 interface Props {
   product: string; // TXF/MXF/TMF

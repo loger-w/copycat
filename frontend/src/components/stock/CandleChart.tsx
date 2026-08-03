@@ -16,6 +16,7 @@ import {
 } from "@/lib/candle-viewport";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
+import { fmt } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
@@ -45,11 +46,6 @@ const VOL_CLASS = {
   down: "fill-bear/40",
   flat: "fill-ink-dim/30",
 } as const;
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
 
 /** `YYYY-MM-DD` → `MM/DD`;`YYYY-MM-DD HH:MM` → `HH:MM` */
 function shortStamp(t: string): string {

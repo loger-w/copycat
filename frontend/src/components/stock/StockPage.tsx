@@ -6,17 +6,13 @@ import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
+import { fmt } from "@/lib/format";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup, type Watchlist } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
 
 interface Props {
   code: string | null;

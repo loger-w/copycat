@@ -1,6 +1,7 @@
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { DepthBar } from "@/components/quote/DepthBar";
 import type { WsStatus } from "@/hooks/useFuturesStream";
+import { fmt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
 
@@ -11,11 +12,6 @@ import type { FuturesProductState } from "@/types";
 // 本體已搬到 lib/futures-ladder.ts(右欄需要它,不能經 lazy 頁面 import);
 // 既有測試 import 路徑不破 → 保留 re-export。
 export { futCloseEstimate } from "@/lib/futures-ladder";
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
 
 interface Props {
   products: readonly (readonly [string, string])[];

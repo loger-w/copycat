@@ -7,6 +7,7 @@ import {
   useSubmitStock,
 } from "@/hooks/useCapital";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
+import { fmt } from "@/lib/format";
 import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
@@ -24,11 +25,6 @@ export const TRADE_KINDS = [
   ["daytrade_sell", "無券"],
 ] as const;
 export type TradeKind = (typeof TRADE_KINDS)[number][0];
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
 
 interface LotEntry {
   qty: number; // 殘量(order_qty - filled_qty 聚合)
