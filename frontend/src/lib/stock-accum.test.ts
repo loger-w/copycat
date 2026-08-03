@@ -133,6 +133,22 @@ describe("applyTick", () => {
     expect(acc.vwap).toBe(2_390_000);
   });
 
+  it("vwap 分母種子取 snapshot 的 vol(不是 last.cum_vol)", () => {
+    // 後端 vwap 分母 = `_volume`(去重剔試撮後的 Σqty),與 `last.cum_vol`
+    // (TC4 累積量)是兩個口徑;拿錯的當分母不會報錯,只會靜默偏移。
+    let acc = fromSnapshot({ ...SNAP, vwap: 100_000, last: { p: 100_000, t: "09:01:30.000", cum_vol: 80 }, vol: 50 });
+    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 200_000, q: 10, side: "outer", seq: 4 });
+    // 正確:(100_000×50 + 200_000×10) / (50+10) = 116_667
+    // 讀 cum_vol 的錯誤實作:(100_000×80 + 200_000×10) / 90 = 111_111
+    expect(acc.vwap).toBe(Math.round((100_000 * 50 + 200_000 * 10) / 60));
+  });
+
+  it("snapshot 無 vol(舊後端)→ fallback last.cum_vol", () => {
+    let acc = fromSnapshot(SNAP); // vwap 2380, cum_vol 10, 無 vol
+    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 2_400_000, q: 10, side: "outer", seq: 4 });
+    expect(acc.vwap).toBe(2_390_000);
+  });
+
   it("keeps tick tape bounded to latest 200 rows", () => {
     let acc = fromSnapshot({ ...SNAP, ticks: [] });
     for (let i = 0; i < 250; i++) {
