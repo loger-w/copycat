@@ -12,9 +12,6 @@ const SNAP = {
   book: { bids: [[2_375_000, 5]] as [number, number][], asks: [[2_380_000, 7]] as [number, number][] },
   meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
   no_data: false,
-  tc4: "up",
-  backfilling: null,
-  stkfut_prod: "CDF",
 };
 
 describe("fromSnapshot", () => {

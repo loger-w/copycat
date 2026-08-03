@@ -29,7 +29,6 @@ const ACCUM = {
     y_vol: 100,
   },
   noData: false,
-  backfilling: null,
 } as unknown as StockAccum;
 
 function stream(over: Partial<StockStreamState> = {}): StockStreamState {
