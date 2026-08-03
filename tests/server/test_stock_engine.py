@@ -49,7 +49,11 @@ class FakeSource:
         self.trade_dates: list[str] = []
         self.backfills: list[str] = []
         self.fail_subscribe: set[str] = set()
+        # 「訂閱丟非連線類例外」(壞電文 / wrapper 內部型別錯)—— `fail_subscribe` 丟的
+        # ConnectionError 是引擎預期並吞掉的那條路,測不到 task 帶例外結束的情境
+        self.subscribe_error: Exception | None = None
         self.subscribe_gate: threading.Event | None = None
+        self.closed = False
         self.backfill_gate: threading.Event | None = None
         self.backfill_result: list = []
         self.backfill_error: Exception | None = None
@@ -59,6 +63,8 @@ class FakeSource:
         self.on_subscribe: Callable[[str], None] | None = None
 
     def subscribe_symbol(self, code: str) -> None:
+        if self.subscribe_error is not None:
+            raise self.subscribe_error
         if code in self.fail_subscribe:
             raise ConnectionError(f"SUBQUOTE fail {code}")
         if self.subscribe_gate is not None:
@@ -99,7 +105,7 @@ class FakeSource:
         self.trade_dates.append(trade_date)
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
 
 async def _drain(engine: StockEngine) -> None:
@@ -561,6 +567,26 @@ class TestReviewFixes:
         await engine.close()
         assert resub.cancelled()
         engine._pool_lock.release()
+
+    async def test_close_completes_even_if_a_task_died_with_exception(self) -> None:
+        """TQ-1 + FC-1:背景 task 帶非 Cancelled 例外結束時,close() 仍要跑完並關掉 source。
+
+        `for task: await task` 只吞 `CancelledError` → 已死 task 的例外在那一行**重拋**,
+        close 就地中斷:後面的 task 不再被 await、`self._source.close()` 永不執行
+        (ZMQ session 洩漏),而關機路徑上沒有人會再呼叫第二次。重掛 task 是最現實的
+        來源 —— `_resubscribe_all` 只吞 ConnectionError,壞電文那類例外一路穿出去。
+        """
+        engine, src = await _make()
+        await engine.set_main("2330")
+        await _drain(engine)
+        src.subscribe_error = ValueError("wrapper 內部型別錯")
+        engine.rollover_stage1("2026-07-22")
+        await _drain(engine)
+        assert any(
+            t.done() and not t.cancelled() and t.exception() is not None for t in engine._tasks
+        ), "前提:確實有 task 帶例外結束(否則這條測不到東西)"
+        await asyncio.wait_for(engine.close(), timeout=2)
+        assert src.closed is True, "source 必須被關掉"
 
     async def test_concurrent_watchlist_removal_keeps_main_subscribed(self) -> None:
         # CR2:並發「移出自選 + 設為主圖」不得把主圖檔退訂 / 弄丟 refs
