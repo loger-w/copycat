@@ -99,13 +99,18 @@ export function buildLadder(input: LadderInput): Ladder {
   const marketBidQty = marketQty(input.book?.bids);
   const marketAskQty = marketQty(input.book?.asks);
   const empty: Ladder = { rows: [], marketBidQty, marketAskQty };
-  const anchor = input.center ?? input.ref;
+  // 入口歸一:`0` 不是價格這件事對 **input 的價欄**同樣成立(與 `isMarketLevel` 同一條
+  // 規則)。後端 meta 缺值時各價欄給的是 0 而不是 null,不歸一的話 anchor=0 且上下界
+  // 都是 0 → 迴圈剛好跑出**一列 priceMilli 0**,而那一列在閃電梯上可點;center 單獨
+  // 為 0 時置中還會停在跌停價。歸一成 null 之後,既有的「缺值」分支原封不動接手。
+  const px = (v: number | null): number | null => (v !== null && !isMarketLevel(v) ? v : null);
+  const center = px(input.center);
+  const ref = px(input.ref);
+  const anchor = center ?? ref;
   if (anchor === null) return empty;
   // 界:漲跌停;缺 → 假想界 round-then-snap(design R7)
-  const upperBound =
-    input.upper ?? (input.ref !== null ? snapDown(Math.round(input.ref * 1.1)) : null);
-  const lowerBound =
-    input.lower ?? (input.ref !== null ? snapUp(Math.round(input.ref * 0.9)) : null);
+  const upperBound = px(input.upper) ?? (ref !== null ? snapDown(Math.round(ref * 1.1)) : null);
+  const lowerBound = px(input.lower) ?? (ref !== null ? snapUp(Math.round(ref * 0.9)) : null);
   if (upperBound === null || lowerBound === null || upperBound < lowerBound) return empty;
 
   const bidMap = new Map(input.book?.bids ?? []);
