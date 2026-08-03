@@ -1,0 +1,30 @@
+{
+  "round": 1,
+  "stage": "closeout (branch-lifecycle C 節, medium;/mod 無自評輪 → 保守補跑)",
+  "date": "2026-08-03",
+  "diff": "master..HEAD -- copycat tests frontend/src docs(review-diff.txt,901 行,M1-M9)",
+  "lenses": [
+    {"lens": "fix-correctness", "model": "opus", "findings": 3},
+    {"lens": "test-quality", "model": "opus", "findings": 5}
+  ],
+  "dispositions": [
+    {"id": "TQ-1", "severity": "P1", "resolution": "accepted", "outcome": "fixed 81432b9+1c193ab — close() 強韌化:_loop=None 切入口、_tasks 快照、gather(return_exceptions);帶例外 task 不再擋掉 source.close"},
+    {"id": "FC-1", "severity": "P2", "resolution": "accepted", "outcome": "fixed 同上(合併修)"},
+    {"id": "FC-2", "severity": "P2", "resolution": "accepted", "outcome": "fixed 30fd0e0+cf2aed8 — snapshot vol → vwap_vol(與 WS vol=cum_vol 同名反義消除);兩端同步 + 'vol' not in snap 回退鎖"},
+    {"id": "FC-3", "severity": "P2", "resolution": "accepted", "outcome": "fixed 7ccee8d+551d359(buildLadder 入口 <=0 歸一,消單列 0 元可點)+ 289b8fc+e30a88b(OrderBook lockedUp 改限價過濾)— M5 一族補完"},
+    {"id": "TQ-2", "severity": "P2", "resolution": "accepted", "outcome": "fixed 0c4f225 — 總量斷言改精確比對(substring 假綠消除)"},
+    {"id": "TQ-3", "severity": "P2", "resolution": "accepted", "outcome": "fixed d17323a — M2 測試改 engine._tasks 顯式鎖,移除 all_tasks 全域耦合"},
+    {"id": "TQ-4", "severity": "P2", "resolution": "accepted", "outcome": "fixed d17323a — CR4 lock 補 stream() status 斷言;位置經 mutation 實測改在第二次回補前(擺最後恆綠)"},
+    {"id": "TQ-5", "severity": "P2", "resolution": "accepted", "outcome": "fixed 289b8fc+e30a88b — 鎖停判定收斂 bestLimit(對應後端 _best_limit_price),some 語意偏離消除 + 負向 fixture"}
+  ],
+  "post_fix_gate": {
+    "pytest": "1493 passed", "vitest": "913 passed / 66 files",
+    "ruff": "pass", "pyright": "0 errors", "tsc": "pass", "eslint": "pass",
+    "validate": "42/42 PASS",
+    "smoke": "6/6(fake source 8899:M1 200 / M3 死欄位全消 / vwap_vol 有、舊 vol 無)"
+  },
+  "known_risks": [
+    "M6/FC-3/TQ-5 的鎖停畫面差異需鎖停日簿才看得到 — UI 對照留待下個鎖停時段 user 過目",
+    "_tasks done task 每日 rollover +1 未清理(清理需連同 exception 取出設計,已記於 review notes,量級每日一筆可接受)"
+  ]
+}
