@@ -140,6 +140,40 @@ describe("OrderBook 市價單檔位(round6 項 4)", () => {
     expect(screen.getByText("市價")).toBeTruthy();
     expect(screen.getByText("鎖跌停")).toBeTruthy();
   });
+
+  it("upper 為 0(meta 缺值)+ 市價偽檔位 → 不得誤亮 badge(FC-3)", () => {
+    // 後端 meta 缺值時漲跌停給的是 0 不是 null,而鎖停日簿的第一檔正好也是 0
+    // → `some(p === upper)` 讓 0 對上 0,badge 在一檔根本沒鎖停的股票上亮起來。
+    render(
+      <OrderBook
+        code="2327"
+        book={LOCK_UP_BOOK}
+        last={{ p: 480_000, t: "10:00:00.000", cum_vol: 100 }}
+        ref_={456_500}
+        upper={0}
+        lower={0}
+      />,
+    );
+    expect(screen.queryByText("鎖漲停")).toBeNull();
+    expect(screen.queryByText("鎖跌停")).toBeNull();
+  });
+
+  it("漲停價出現在非最佳限價檔 → 不亮 badge(判定看最佳限價檔,TQ-5)", () => {
+    // 刻意畸形 / 過期的簿(well-formed 簿的 bids 遞減,不會有比漲停價更高的買檔)——
+    // 鎖的是**判定語意**:badge 的意思是「最佳限價檔就掛在漲停價」,不是「簿裡任何
+    // 一檔碰到漲停價」。用 `some` 的話這種簿會過度觸發。
+    render(
+      <OrderBook
+        code="2327"
+        book={{ bids: [[0, 15_966], [503_000, 10], [502_000, 9_385]], asks: [] }}
+        last={{ p: 503_000, t: "11:58:39.000", cum_vol: 5448 }}
+        ref_={456_500}
+        upper={502_000}
+        lower={411_000}
+      />,
+    );
+    expect(screen.queryByText("鎖漲停")).toBeNull();
+  });
 });
 
 describe("OrderBook 漲跌停亮燈(round6 項 3)", () => {
