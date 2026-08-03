@@ -11,6 +11,7 @@ import { hhmm, HOUR_TICKS } from "@/lib/time-labels";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
+  buildEnergyBars,
   buildIntradayGeometry,
   lastPoint,
   LOW_DECIDED_PCT,
@@ -484,9 +485,11 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
     [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH],
   );
 
-  const subGeo = useMemo(
-    () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, { width: subW, height: subH }),
-    [accum.minutes, accum.meta, subW, subH],
+  // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
+  // 價線 / 刻度 / 反演算完即丟。`meta` 不影響量的幾何,故不入 deps。
+  const subEnergy = useMemo(
+    () => buildEnergyBars(accum.minutes, { width: subW, height: subH }),
+    [accum.minutes, subW, subH],
   );
 
   const overlay = overlayQ.data ?? null;
@@ -541,7 +544,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           ? "fill-bear"
           : "fill-ink-dim";
   const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
-  const shownAgg = shownMin !== null ? accum.minutes.get(shownMin) : undefined;
+  // hover 態的 shownMin 恆等於 hoverMin → 重用已取好的那一格,不再查第二次(L-3)
+  const shownAgg = hoverAgg ?? (shownMin !== null ? accum.minutes.get(shownMin) : undefined);
   const shownChg =
     shownAgg !== undefined && ref ? chgPct(shownAgg.c, ref) : null;
   const fields: ReadoutField[] =
@@ -754,12 +758,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
       <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="成交量">
-        <EnergySub bars={subGeo.energyBars} maxTotal={subGeo.maxTotal} w={subW} h={subH} />
+        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={subW} h={subH} />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
+          // 這條線畫在 subW 的 viewBox 裡 → x 必須用 subW 換算(L-19)。今日 MAIN.width
+          // 與 SUB.width 同值,故輸出逐值相同;用 mainW 只是靠兩個常數碰巧相等在維持對位。
           <line
-            x1={minuteToX(hoverMin, mainW)}
-            x2={minuteToX(hoverMin, mainW)}
+            x1={minuteToX(hoverMin, subW)}
+            x2={minuteToX(hoverMin, subW)}
             y1={0}
             y2={subH}
             className="stroke-ink-muted"

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { errText, useSaveWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
@@ -125,7 +125,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     selected === null ? null : (wl.groups.find((g) => g.name === selected) ?? null);
   const ungrouped = ungroupedCodes(wl);
   const rows = activeGroup === null ? ungrouped : activeGroup.codes;
-  const nameOf = (code: string): string => names.find((n) => n.code === code)?.name ?? "";
+  // 名冊 2,401 筆;逐列 `names.find(...)` 是 O(列數 × 2401)。改 Map 查表(同側欄作法,
+  // 輸出逐值相同 —— 名冊無重複 code,find 的首筆命中即 Map 的值)。
+  const nameMap = useMemo(() => new Map(names.map((n) => [n.code, n.name])), [names]);
+  const nameOf = (code: string): string => nameMap.get(code) ?? "";
   const suggestions = searchStocks(stockInput, names, SUGGEST_LIMIT);
 
   /** 加進本組:`addCode` 與 `assignToGroup` **合成單次 PUT** ——

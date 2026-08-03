@@ -150,15 +150,13 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
   const marketOnly = (levels: [number, number][]) =>
     levels.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
+  const limitB = limitOnly(b);
+  const limitA = limitOnly(a);
   // `1` 不可省:五檔全 0 量(盤前 / 剛重啟未收 snapshot)時除零 → width "NaN%",
   // React 靜默產生無效 style,只有盤中才看得到(review R7;對齊 DepthBar.tsx:78)
-  const maxQty = Math.max(
-    1,
-    ...limitOnly(b).map(([, v]) => v),
-    ...limitOnly(a).map(([, v]) => v),
-  );
-  const bidTotal = limitOnly(b).reduce((s, [, v]) => s + v, 0);
-  const askTotal = limitOnly(a).reduce((s, [, v]) => s + v, 0);
+  const maxQty = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
+  const bidTotal = limitB.reduce((s, [, v]) => s + v, 0);
+  const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
   const marketBid = marketOnly(b);
   const marketAsk = marketOnly(a);
   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError

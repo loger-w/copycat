@@ -378,7 +378,9 @@ export function CandleChart({
     setViewport((v) => onTotalChange(v, prevTotal, bars.length));
   }
 
-  const { shown, g, ma5, ma20, bands } = useMemo(() => {
+  // 布林上下軌**由幾何 memo 一併回傳**:同一組值原本算四次(兩次餵 y 域、兩次畫線),
+  // 而「餵 y 域的那份」與「畫出來的那份」一旦不同源就是靜默錯位(L-2)。
+  const { shown, g, ma5, ma20, bbUpper, bbLower } = useMemo(() => {
     const start = viewport.start;
     const shownBars = bars.slice(start, start + viewport.count);
     // MA / BB 以完整序列計算後再裁切,左緣才不會斷頭;裁切區間必須與 shown 對齊,
@@ -388,13 +390,16 @@ export function CandleChart({
     const bb: (Band | null)[] = showBb
       ? bollinger(bars, 20).slice(start, start + viewport.count)
       : [];
-    const extra = showBb ? [bandSeries(bb, "upper"), bandSeries(bb, "lower")] : undefined;
+    const upper = bandSeries(bb, "upper");
+    const lower = bandSeries(bb, "lower");
+    const extra = showBb ? [upper, lower] : undefined;
     return {
       shown: shownBars,
       g: buildCandleGeometry(shownBars, { width: dimW, height: dimH }, extra),
       ma5: m5,
       ma20: m20,
-      bands: bb,
+      bbUpper: upper,
+      bbLower: lower,
     };
     // dimW / dimH 必入 deps:少了高度,viewBox 換新高而 toY / 刻度仍舊高算(T-10b)
   }, [bars, viewport, showBb, dimW, dimH]);
@@ -402,12 +407,12 @@ export function CandleChart({
   const ma5Line = useMemo(() => seriesLine(ma5, g), [ma5, g]);
   const ma20Line = useMemo(() => seriesLine(ma20, g), [ma20, g]);
   const bbUpperLine = useMemo(
-    () => (showBb ? seriesLine(bandSeries(bands, "upper"), g) : EMPTY_LINE),
-    [showBb, bands, g],
+    () => (showBb ? seriesLine(bbUpper, g) : EMPTY_LINE),
+    [showBb, bbUpper, g],
   );
   const bbLowerLine = useMemo(
-    () => (showBb ? seriesLine(bandSeries(bands, "lower"), g) : EMPTY_LINE),
-    [showBb, bands, g],
+    () => (showBb ? seriesLine(bbLower, g) : EMPTY_LINE),
+    [showBb, bbLower, g],
   );
 
   const total = bars.length;
