@@ -8,7 +8,7 @@ const PAGE = 30;
 
 /** 價格相對參考價的色調(四個呼叫點共用一份)。基準用 `meta.ref` 與 header / 側欄 /
  *  江波圖一致 —— 另立基準會出現「同一個價在兩處顏色不同」。 */
-export function priceTone(v: number | null | undefined, ref: number | null): string {
+function priceTone(v: number | null | undefined, ref: number | null): string {
   if (v == null || ref == null) return "text-ink-dim";
   if (v > ref) return "text-bull";
   if (v < ref) return "text-bear";

@@ -81,12 +81,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [drag, setDrag] = useState<{
-    code: string;
-    from: string | null;
-    to: string | null;
-    index: number;
-  } | null>(null);
+  // 落點 index 不入 state:插入位置在 pointerup 當下由 `dropTargetFromPointer` 現算,
+  // 存一份在這裡只會多一個「拖曳過程中的 index」而沒有任何讀者(DC-20)。
+  const [drag, setDrag] = useState<{ code: string; from: string | null; to: string | null } | null>(
+    null,
+  );
   // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
   const uid = safeIdToken(useId());
   const asideRef = useRef<HTMLElement | null>(null);
@@ -193,11 +192,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
 
   function onHandleDown(from: string | null, code: string, e: React.PointerEvent): void {
     e.preventDefault();
-    const at =
-      from === null
-        ? ungrouped.indexOf(code)
-        : (groups.find((g) => g.name === from)?.codes.indexOf(code) ?? 0);
-    setDrag({ code, from, to: from, index: at });
+    setDrag({ code, from, to: from });
     // 取消(Esc)與完成(pointerup)走**同一個** teardown。取消之所以有效是因為這裡把
     // `pointerup` listener 移掉了 —— 之後放開手指根本進不到 `up`。
     // ⚠ 曾另外加過一個 `cancelled` 旗標在 `up` 開頭早退,mutation test 證明它不可達
@@ -211,7 +206,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     const move = (ev: PointerEvent): void => {
       const { zones, bounds } = zonesNow();
       const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
-      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group, index: target.index }));
+      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group }));
     };
     const up = (ev: PointerEvent): void => {
       const { zones, bounds } = zonesNow();

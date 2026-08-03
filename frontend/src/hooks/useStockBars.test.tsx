@@ -4,7 +4,8 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { inTradingHours, MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
+import { MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
+import { inTradingHours } from "@/lib/trading-hours";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 

@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
  *
  * 版式:買側由中央往左 買1→買5、賣側由中央往右 賣1→賣5,中央夾成交價 + 漲跌%。
  * 每格內價量疊放(量在上、價在中、比例 bar 在下),欄位固定 10 格,檔位不足補「—」不塌陷。
- * 純展示 + onPriceClick 回呼;**不送單**(design §11:五檔誤觸面大,送單集中在閃電梯上)。 */
+ * 純展示;**不送單、不點價**(design §11:五檔誤觸面大,送單集中在閃電梯上)。格子一律
+ * 渲染成 div —— button 可聚焦卻點了沒反應是假 affordance(review P2-9)。 */
 
 const DEPTH = 5;
 
@@ -21,7 +22,6 @@ export interface Props {
   /** 漲停 / 跌停價(鎖停 badge 判定) */
   upper?: number | null;
   lower?: number | null;
-  onPriceClick?: (priceMilli: number, side: "bid" | "ask") => void;
 }
 
 interface CellProps {
@@ -29,10 +29,9 @@ interface CellProps {
   label: string;
   side: "bid" | "ask";
   maxVol: number;
-  onPriceClick?: (priceMilli: number, side: "bid" | "ask") => void;
 }
 
-function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
+function Cell({ entry, label, side, maxVol }: CellProps) {
   if (entry === undefined) {
     return (
       <div className="flex min-w-0 flex-col items-center justify-end gap-0.5 px-0.5 py-1">
@@ -41,19 +40,12 @@ function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
     );
   }
   const [priceMilli, qty] = entry;
-  // 未給 onPriceClick(期貨頁)→ 渲染成 div:button 可聚焦卻點了沒反應是假 affordance
-  const Tag = onPriceClick ? "button" : "div";
   return (
-    <Tag
-      {...(onPriceClick
-        ? { type: "button" as const, onClick: () => onPriceClick(priceMilli, side) }
-        : {})}
+    <div
       aria-label={`${label} ${fmt(priceMilli)}`}
       className={cn(
         "flex min-w-0 flex-col items-center gap-0.5 px-0.5 py-1 font-mono",
-        side === "bid"
-          ? cn("text-bull", onPriceClick && "hover:bg-bull/10")
-          : cn("text-bear", onPriceClick && "hover:bg-bear/10"),
+        side === "bid" ? "text-bull" : "text-bear",
       )}
     >
       <span className="text-xs text-ink">{qty}</span>
@@ -65,11 +57,11 @@ function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
           style={{ height: `${Math.round((qty / maxVol) * 100)}%` }}
         />
       </span>
-    </Tag>
+    </div>
   );
 }
 
-export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, onPriceClick }: Props) {
+export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }: Props) {
   const b = bids.slice(0, DEPTH);
   const a = asks.slice(0, DEPTH);
   const maxVol = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
@@ -97,13 +89,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
         </div>
         {bidSlots.map((i) => (
           <div key={`bid-${i}`} className="flex min-w-0 flex-1">
-            <Cell
-              entry={b[i]}
-              label={`買${i + 1}`}
-              side="bid"
-              maxVol={maxVol}
-              onPriceClick={onPriceClick}
-            />
+            <Cell entry={b[i]} label={`買${i + 1}`} side="bid" maxVol={maxVol} />
           </div>
         ))}
         {/* 中央成交價 */}
@@ -138,13 +124,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
         </div>
         {askSlots.map((i) => (
           <div key={`ask-${i}`} className="flex min-w-0 flex-1">
-            <Cell
-              entry={a[i]}
-              label={`賣${i + 1}`}
-              side="ask"
-              maxVol={maxVol}
-              onPriceClick={onPriceClick}
-            />
+            <Cell entry={a[i]} label={`賣${i + 1}`} side="ask" maxVol={maxVol} />
           </div>
         ))}
         <div className="flex shrink-0 flex-col items-start gap-0.5 pl-1 py-1 text-ink-dim">
