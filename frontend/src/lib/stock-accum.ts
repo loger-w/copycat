@@ -92,6 +92,8 @@ interface SnapshotShape {
   meta: StockMeta | null;
   high?: number | null;
   low?: number | null;
+  /** vwap 的分母(後端 `_volume` = 去重剔試撮後的 Σqty);**選填** —— 舊後端沒給 */
+  vol?: number | null;
   no_data?: boolean;
 }
 
@@ -100,7 +102,11 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
   for (const [k, v] of Object.entries(snap.minutes ?? {})) {
     minutes.set(Number(k), { ...v, h: v.h ?? null, l: v.l ?? null });
   }
-  const volume = snap.last?.cum_vol ?? 0;
+  // vwap 的分子要由 `vwap × 分母` 還原,分母是後端的 `vol`(去重剔試撮後的 Σqty)
+  // —— **不是** `last.cum_vol`(TC4 當日累積量)。兩者在有 tick 被去重或試撮丟棄時
+  // 就會岔開,拿錯的當分母不會報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
+  // `?? cum_vol` 是舊後端(還沒送 vol)的相容路徑。
+  const volume = snap.vol ?? snap.last?.cum_vol ?? 0;
   return {
     code: snap.code ?? "",
     seq: snap.seq,
