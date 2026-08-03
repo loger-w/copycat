@@ -460,6 +460,16 @@ class TestBarsRoute:
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_DAYS"
 
+    def test_daily_ignores_days_even_when_unparsable(self, tmp_path: Path) -> None:
+        """tf=D 忽略 days(對齊 docstring / D-15):壞 days 不該擋下日 K(M1)。"""
+        client, fake = make_client(tmp_path)
+        fake.bars_result = [self._bar("2026-07-27")]
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=D&days=abc")
+            assert r.status_code == 200
+            assert r.json()["tf"] == "D"
+            assert r.json()["bars"]
+
     def test_tc4_down_returns_empty_200(self, tmp_path: Path) -> None:
         """engine 層降級空(不是 502)—— 前端顯示「無 K 線資料」而非炸掉。"""
         client, fake = make_client(tmp_path)
