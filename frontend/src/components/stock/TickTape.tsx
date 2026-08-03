@@ -1,14 +1,10 @@
 import { useState } from "react";
 
+import { fmt } from "@/lib/format";
 import type { TickRow } from "@/lib/stock-accum";
 import { cn } from "@/lib/utils";
 
 const PAGE = 30;
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
-}
 
 /** 價格相對參考價的色調(四個呼叫點共用一份)。基準用 `meta.ref` 與 header / 側欄 /
  *  江波圖一致 —— 另立基準會出現「同一個價在兩處顏色不同」。 */

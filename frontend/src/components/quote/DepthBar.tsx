@@ -1,3 +1,4 @@
+import { fmt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
@@ -21,11 +22,6 @@ export interface Props {
   upper?: number | null;
   lower?: number | null;
   onPriceClick?: (priceMilli: number, side: "bid" | "ask") => void;
-}
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
 interface CellProps {

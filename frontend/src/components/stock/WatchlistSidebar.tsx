@@ -4,6 +4,7 @@ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialo
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
+import { fmt } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
@@ -36,8 +37,7 @@ const EMPTY_WL: Watchlist = { codes: [], groups: [] };
 
 function fmtPrice(milli: number | null): string {
   if (milli === null) return "-";
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+  return fmt(milli);
 }
 
 function loadCollapsed(): Set<string> {

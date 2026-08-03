@@ -17,3 +17,9 @@ export function formatNtd(value: number): string {
 export function formatPts(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
+
+/** 毫元價格 → 顯示字串:整數不帶小數,否則兩位並去掉尾隨 0。 */
+export function fmt(milli: number): string {
+  const v = milli / 1000;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+}

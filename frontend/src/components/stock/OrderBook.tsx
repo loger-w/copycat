@@ -1,3 +1,4 @@
+import { fmt } from "@/lib/format";
 import { isMarketLevel, limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
@@ -21,11 +22,6 @@ interface Props {
   ref_: number | null; // 參考價(漲跌色基準)
   upper?: number | null; // 漲停價(鎖停 badge 判定;SC-5)
   lower?: number | null;
-}
-
-function fmt(milli: number): string {
-  const v = milli / 1000;
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
 /** 千分位固定 en-US:不指定 locale 時分隔符隨執行環境 ICU 預設變動(非 en-US 會拿到
