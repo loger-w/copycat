@@ -90,7 +90,11 @@ class TestAggregation:
         assert st.ingest(_tick(31, qty=99)) is False  # 去重丟棄不進分母
         assert st.ingest(_tick(40, qty=99, trial=True)) is False  # 試撮同理
         snap = st.snapshot()
-        assert snap["vol"] == 15
+        assert snap["vwap_vol"] == 15
+        # 欄名不可再叫 `vol`(FC-2):WS `watchlist_quote` 的 `vol` 是 TC4 當日累積量
+        # (= `last.cum_vol`)—— 同名反義。兩份訊息同時在前端手上,誤用哪一個都不會
+        # 報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
+        assert "vol" not in snap
         assert snap["last"]["cum_vol"] == 31  # 兩個口徑本來就不等
 
     def test_snapshot_omits_dead_wire_fields(self) -> None:
