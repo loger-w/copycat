@@ -17,7 +17,7 @@ import {
 } from "@/lib/candle-viewport";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
-import { fmt } from "@/lib/format";
+import { fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
 import { cn } from "@/lib/utils";
@@ -342,7 +342,7 @@ function readoutFields(
     { label: "收", value: fmt(b.c), tone },
     {
       label: "漲跌",
-      value: pct === null ? "-" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`,
+      value: pct === null ? "-" : fmtPct(pct),
       tone: pct === null ? "muted" : pct > 0 ? "bull" : pct < 0 ? "bear" : "muted",
     },
     { label: "量", value: showVolume ? String(b.v) : "—" },
@@ -644,7 +644,7 @@ export function CandleChart({
             windowPct === null ? "" : windowPct > 0 ? "text-bull" : windowPct < 0 ? "text-bear" : "",
           )}
         >
-          期間 {windowPct === null ? "-" : `${windowPct > 0 ? "+" : ""}${windowPct.toFixed(2)}%`}
+          期間 {windowPct === null ? "-" : fmtPct(windowPct)}
         </span>
       </figcaption>
     </figure>

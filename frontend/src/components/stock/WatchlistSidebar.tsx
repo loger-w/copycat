@@ -4,7 +4,7 @@ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialo
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
-import { fmt } from "@/lib/format";
+import { fmt, fmtPct } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
@@ -350,9 +350,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                             : "text-ink-dim",
                     )}
                   >
-                    {q.chg_pct != null
-                      ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
-                      : "-"}
+                    {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}
                   </span>
                 </>
               ) : q?.ref != null ? (

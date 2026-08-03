@@ -1,4 +1,4 @@
-import { fmt } from "@/lib/format";
+import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { isMarketLevel, limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
@@ -163,7 +163,7 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   const marketAsk = marketOnly(a);
   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
   const lastMilli = last?.p ?? null;
-  const chg = lastMilli !== null && ref_ ? ((lastMilli - ref_) / ref_) * 100 : null;
+  const chg = lastMilli !== null && ref_ ? chgPct(lastMilli, ref_) : null;
   // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價格 0),
   // 漲停價被擠到 `bids[1]` → 判定恆假、badge 靜默消失(實測 2327 就是如此)。
   // 改看「委買側有沒有掛在漲停價的檔位」,市價偽檔位再也打不穿它。
@@ -229,7 +229,7 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
                       : "text-ink-dim",
               )}
             >
-              {`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}
+              {fmtPct(chg)}
             </span>
           ) : null}
         </span>
