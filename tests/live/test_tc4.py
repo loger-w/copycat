@@ -319,6 +319,70 @@ class TestListenerFollowsSubPort:
             ctx.term()
 
 
+class TestListenerRawFiltering:
+    """characterization(refactor C6 前置):listener 對壞電文的四道過濾與存活性。
+
+    `_listen_loop` 的訊息處理段即將上提成 `handle_raw` hook,而 TXO 解析是唯一的
+    實盤路徑 —— 搬移前先把「哪些電文會被靜默丟掉、丟掉後執行緒仍活著」釘住。
+    走 real-PUB harness(基底此時尚無可直呼的 hook)。
+    """
+
+    def test_bad_messages_dropped_and_listener_survives(self) -> None:
+        import json as _json
+        import time as _time
+
+        import zmq
+
+        sym_warm = "TC.O.TWF.TX4.202607.C.43000"
+        sym_ok = "TC.O.TWF.TX4.202607.C.44000"
+        sym_noqty = "TC.O.TWF.TX4.202607.C.45000"
+        ctx = zmq.Context()
+        pub = ctx.socket(zmq.PUB)
+        port = pub.bind_to_random_port("tcp://127.0.0.1")
+        got: list[str] = []
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        src._sub_port = str(port)
+        src._on_tick = lambda t: got.append(t.symbol)
+        src._start_listener()
+        try:
+            # 暖身:PUB/SUB slow joiner,先確認連線已建立才能單發後斷言順序
+            deadline = _time.monotonic() + 5.0
+            while not got and _time.monotonic() < deadline:
+                pub.send(_rt_payload(sym_warm, "1"))
+                _time.sleep(0.05)
+            assert got, "baseline:暖身訊息未送達"
+            got.clear()
+
+            no_qty = {
+                "Symbol": sym_noqty,
+                "TradingPrice": "100",
+                "TradeQuantity": "0",  # 非台指期 + 零量 → parse_realtime 回 None
+                "TradeVolume": "9",
+                "PreciseTime": "20000000000",
+            }
+            # FIFO:壞電文全排在合法那則之前 → 任何一則沒被丟掉都會先出現在 got
+            pub.send(b"nocolon-no-topic-separator\x00")
+            pub.send(b"Q:not-json\x00")
+            pub.send(b"Q:" + _json.dumps({"DataType": "PING"}).encode() + b"\x00")
+            rt_no_qty = _json.dumps({"DataType": "REALTIME", "Quote": no_qty}).encode()
+            pub.send(b"Q:" + rt_no_qty + b"\x00")
+            pub.send(_rt_payload(sym_ok, "2"))
+
+            deadline = _time.monotonic() + 5.0
+            while not got and _time.monotonic() < deadline:
+                _time.sleep(0.05)
+            assert got == [sym_ok]
+            listener = src._listener
+            assert listener is not None and listener.is_alive(), "壞電文不得殺死 listener 執行緒"
+        finally:
+            src._stop.set()
+            listener = src._listener
+            if listener is not None:
+                listener.join(timeout=3.0)
+            pub.close(linger=0)
+            ctx.term()
+
+
 class _ReqApi:
     """_rt_request 測試替身:真 threading.Lock + 可注入 socket 行為。"""
 
