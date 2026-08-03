@@ -8,7 +8,7 @@ import { fmt } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
-import { cn } from "@/lib/utils";
+import { cn, safeIdToken } from "@/lib/utils";
 import {
   assignToGroup,
   detachFromGroups,
@@ -90,7 +90,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     index: number;
   } | null>(null);
   // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const uid = safeIdToken(useId());
   const asideRef = useRef<HTMLElement | null>(null);
   // key = 群組名;`null` = 未分組區塊
   const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());

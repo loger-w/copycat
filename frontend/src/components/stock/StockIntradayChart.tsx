@@ -29,7 +29,7 @@ import {
   type OverlayLevel,
   type OverlayLine,
 } from "@/lib/stock-intraday-svg";
-import { cn } from "@/lib/utils";
+import { cn, safeIdToken } from "@/lib/utils";
 
 const MAIN = { width: 800, height: 260 };
 const SUB = { width: 800, height: 70 };
@@ -469,7 +469,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
   const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
   // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const uid = safeIdToken(useId());
   const clipAbove = `${uid}-above`;
   const clipBelow = `${uid}-below`;
 
