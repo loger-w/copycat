@@ -82,6 +82,17 @@ class _FailingStartStockSource(FakeStockSource):
         self.closed = True
 
 
+class _ClosingStockSource(FakeStockSource):
+    """start 全程正常、只記 `close()` 有沒有被呼叫。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class TestEngineStartFailureDegrades:
     """characterization(refactor C7 前置):引擎起停樣板的降級契約。
 
@@ -103,6 +114,28 @@ class TestEngineStartFailureDegrades:
         assert r.status_code == 503
         assert r.json()["detail"]["error"] == "NOT_READY"
         assert fake.closed, "start 失敗必須關掉已建好的 source(否則洩漏 TC4 session)"
+
+    def test_bad_watchlist_file_degrades_and_closes_source(self, tmp_path: Path) -> None:
+        """壞自選檔 = `_start_stock` 的**第二段**失敗(source 本身完全正常)。
+
+        `load_watchlist` 對壞檔不吞例外,而它留在 `_boot` 的 try 內是行為契約 ——
+        把自選回填移到 try 外(看起來只是「起完引擎再補資料」)會讓壞檔變成
+        lifespan 例外整台 server 起不來,而不是個股功能單獨降級。
+        """
+        (tmp_path / "watchlist.json").write_text("{not json", encoding="utf-8")
+        fake = _ClosingStockSource()
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=fake,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            throttle_secs=0.01,
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        with client:
+            r = client.get("/api/stock/watchlist")
+        assert r.status_code == 503
+        assert r.json()["detail"]["error"] == "NOT_READY"
+        assert fake.closed is True, "回填失敗一樣要關掉已建好的 source"
 
 
 class TestStockNamesRoute:
@@ -309,6 +342,18 @@ class TestStateRoute:
             r = client.get("/api/stock/state/bad!")
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_CODE"
+
+    def test_engine_missing_beats_bad_code(self) -> None:
+        """引擎未就緒 + 代號非法 → 503 不是 400(`_valid_code` 在 `_stock` 之後的優先序)。
+
+        把代號閘做成 `Depends` 看起來更整齊,但 FastAPI 會在 handler body 之前跑它 ——
+        優先序會靜默翻成 400,前端就把「達錢 4 沒開」誤顯示成「代號打錯」。
+        """
+        app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
+        with TestClient(app, raise_server_exceptions=False) as client:
+            r = client.get("/api/stock/state/@@@")
+        assert r.status_code == 503
+        assert r.json()["detail"]["error"] == "NOT_READY"
 
 
 class TestStockWs:

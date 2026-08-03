@@ -336,6 +336,7 @@ class TestListenerRawFiltering:
         sym_warm = "TC.O.TWF.TX4.202607.C.43000"
         sym_ok = "TC.O.TWF.TX4.202607.C.44000"
         sym_noqty = "TC.O.TWF.TX4.202607.C.45000"
+        sym_ping = "TC.O.TWF.TX4.202607.C.46000"
         ctx = zmq.Context()
         pub = ctx.socket(zmq.PUB)
         port = pub.bind_to_random_port("tcp://127.0.0.1")
@@ -360,10 +361,23 @@ class TestListenerRawFiltering:
                 "TradeVolume": "9",
                 "PreciseTime": "20000000000",
             }
+            # PING 帶**合法** Quote(與 sym_ok 那則同形,只換 symbol):空 PING 沒有 Quote,
+            # DataType 過濾拿掉後解析照樣回 None → 那條過濾根本沒被鎖住。帶了 Quote,
+            # 過濾一失效 got 就會多出 sym_ping(且 FIFO 排在 sym_ok 前面)。
+            ping_with_quote = {
+                "DataType": "PING",
+                "Quote": {
+                    "Symbol": sym_ping,
+                    "TradingPrice": "100",
+                    "TradeQuantity": "1",
+                    "TradeVolume": "3",
+                    "PreciseTime": "20000000000",
+                },
+            }
             # FIFO:壞電文全排在合法那則之前 → 任何一則沒被丟掉都會先出現在 got
             pub.send(b"nocolon-no-topic-separator\x00")
             pub.send(b"Q:not-json\x00")
-            pub.send(b"Q:" + _json.dumps({"DataType": "PING"}).encode() + b"\x00")
+            pub.send(b"Q:" + _json.dumps(ping_with_quote).encode() + b"\x00")
             rt_no_qty = _json.dumps({"DataType": "REALTIME", "Quote": no_qty}).encode()
             pub.send(b"Q:" + rt_no_qty + b"\x00")
             pub.send(_rt_payload(sym_ok, "2"))
