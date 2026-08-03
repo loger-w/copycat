@@ -589,17 +589,19 @@ def create_app(
         _valid_code(code)
         if tf not in ("D", "1"):
             raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
-        # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
-        # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
-        try:
-            days_n = int(days)
-        except ValueError:
-            raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
         # today = 本機日界(= 台北,部署綁本機;同 overlay 的 design R6/R13)
         today = _date.today()
         if tf == "D":
+            # days 在日線路徑完全不參與(不進 cache/query key,D-15)→ 連驗都不驗:
+            # 對忽略的參數回 400 會讓「多帶一個沒用的 query」變成擋下日 K 的理由(M1)
             bars = await build_daily(stock.bars_range, bars_cache, code, today)
         else:
+            # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
+            # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
+            try:
+                days_n = int(days)
+            except ValueError:
+                raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
             bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days_n), today)
         return {"code": code, "tf": tf, "bars": bars}
 
