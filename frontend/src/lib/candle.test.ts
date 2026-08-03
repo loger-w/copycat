@@ -221,6 +221,31 @@ describe("buildCandleGeometry.priceAtY(R2a)", () => {
   });
 });
 
+describe("buildCandleGeometry.indexOf(右緣邊界)", () => {
+  const size = { width: 400, height: 200 };
+  const bars = Array.from({ length: 10 }, (_, i) =>
+    bar(`2026-07-28 ${String(i)}`, 100_000, 110_000, 90_000, 105_000, 10),
+  );
+
+  it("最右像素(x === width)對應最後一根,不是 null", () => {
+    // slot = width / bars.length 整除 → floor(width/slot) === bars.length 被濾成 null,
+    // 最右一個像素 hover 失去十字線(next-time 2026-07-29)
+    const g = buildCandleGeometry(bars, size);
+    expect(g.indexOf(size.width)).toBe(bars.length - 1);
+  });
+
+  it("超出右緣仍回 null", () => {
+    const g = buildCandleGeometry(bars, size);
+    expect(g.indexOf(size.width + 0.1)).toBe(null);
+  });
+
+  it("左緣與右緣內側不受影響", () => {
+    const g = buildCandleGeometry(bars, size);
+    expect(g.indexOf(0)).toBe(0);
+    expect(g.indexOf(size.width - 0.1)).toBe(bars.length - 1);
+  });
+});
+
 // 🔵 R4:extraSeries 讓布林上下軌參與 y 域,否則超出 o/h/l/c 值域的軌線會被畫到圖框外。
 describe("buildCandleGeometry.extraSeries(R4)", () => {
   const size = { width: 400, height: 200 };
