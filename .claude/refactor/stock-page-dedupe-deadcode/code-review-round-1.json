@@ -1,0 +1,32 @@
+{
+  "round": 1,
+  "stage": "closeout (branch-lifecycle C 節, medium)",
+  "date": "2026-08-03",
+  "diff": "origin/master..HEAD -- copycat tests frontend/src docs(review-diff.txt,4923 行)",
+  "lenses": [
+    {"lens": "behavior-drift", "model": "opus", "findings": 0,
+     "note": "高風險點逐一驗證(_taipei_minute_key 域/clamp 序、to_milli_units、fmt/fmtPct/chgPct/pts/hhmm/safeIdToken/isSameWatchlist 逐字等價、parseError 錯誤路徑、_resub ConnectionError 契約、_boot 五段 log 字串、_listen_loop 逐行同、stream(seed) 同步入佇列、maxsize 1000/32/500 保留、payload 零欄位變動、DepthBar button→div 唯一 caller 不傳、Map vs find 名冊唯一性保證)全落在輸出逐值相同。"},
+    {"lens": "wrong-deletion", "model": "opus", "findings": 1,
+     "note": "全部刪除項 re-grep 零引用(含動態用法);唯一 finding WD-1 = 被刪斷言順帶覆蓋活幾何不變量(與 TC-8 同條)。"},
+    {"lens": "test-coverage", "model": "opus", "findings": 9,
+     "note": "TC-1/TC-2 P1、TC-3~TC-9 P2;全部為「補測試釘住 refactor 保留承諾」,無行為缺陷。"}
+  ],
+  "dispositions": [
+    {"id": "TC-1", "severity": "P1", "resolution": "accepted", "outcome": "fixed dd8e0ff — 壞 watchlist 檔 → 503 降級 + source closed(_boot try 邊界契約)"},
+    {"id": "TC-2", "severity": "P1", "resolution": "accepted", "outcome": "fixed dd8e0ff — WsBroadcaster(maxsize=3) 背壓保最後 3 則"},
+    {"id": "TC-3", "severity": "P2", "resolution": "accepted", "outcome": "fixed dd8e0ff — PING 帶合法 Quote,DataType 過濾被真鎖(mutation 驗證會咬)"},
+    {"id": "TC-4", "severity": "P2", "resolution": "accepted", "outcome": "fixed dd8e0ff — 發現既有 test 為 vacuous('bad' 走域外路徑非 skipped);原測試保留+docstring 記載,新測試 'xx0100' + caplog 真踩 skipped"},
+    {"id": "TC-5", "severity": "P2", "resolution": "accepted", "outcome": "fixed dd8e0ff — REALTIME 無 Quote → _on_message({}) 契約釘住"},
+    {"id": "TC-6", "severity": "P2", "resolution": "accepted", "outcome": "fixed 6d1bb30 — api-error.test.ts 三條(非 JSON body never-raise 分支)"},
+    {"id": "TC-7", "severity": "P2", "resolution": "accepted", "outcome": "fixed 6d1bb30 — 同 x 測試改走 buildEnergyBars 出貨路徑 + 與 buildIntradayGeometry 逐值相等斷言(含 maxTotal)"},
+    {"id": "TC-8/WD-1", "severity": "P2", "resolution": "accepted", "outcome": "fixed 6d1bb30 — toY 域端點幾何錨定改走存活 API"},
+    {"id": "TC-9", "severity": "P2", "resolution": "accepted", "outcome": "fixed dd8e0ff — engine=None + 非法碼 → 503 優先序契約"}
+  ],
+  "post_fix_gate": {
+    "pytest": "1486 passed(基準 1481,+5 全為 🟢 review 補測試)",
+    "vitest": "893 passed / 66 files(基準 889,+4)",
+    "ruff": "pass", "pyright": "0 errors", "tsc": "pass", "eslint": "pass",
+    "production_code_touched_in_fix": false
+  },
+  "exit": "P0 無;P1 2 條全修;P2 7 條全修(皆 test-only)。進 push。"
+}
