@@ -80,6 +80,19 @@ class TestAggregation:
         assert snap["minutes"]["657"]["o"] == 10
         assert len(snap["ticks"]) == 1
 
+    def test_snapshot_carries_vwap_denominator(self) -> None:
+        """M4:vwap 的分母是「去重剔試撮後的 Σqty」,與 `last.cum_vol`(TC4 累積量)
+        不同源。前端拿 cum_vol 當分母還原分子 → 兩者不等時增量 VWAP 靜默偏移,
+        所以分母必須由後端顯式給。"""
+        st = StockDayState()
+        st.ingest(_tick(30, qty=10, price=2_380_000))
+        st.ingest(_tick(31, qty=5, price=2_400_000))
+        assert st.ingest(_tick(31, qty=99)) is False  # 去重丟棄不進分母
+        assert st.ingest(_tick(40, qty=99, trial=True)) is False  # 試撮同理
+        snap = st.snapshot()
+        assert snap["vol"] == 15
+        assert snap["last"]["cum_vol"] == 31  # 兩個口徑本來就不等
+
     def test_snapshot_omits_dead_wire_fields(self) -> None:
         """M3:cum_inner/cum_outer/meta.y_close 前端零讀取 → 退出 wire。
         內外盤累積量仍可由 `minutes` 的 i/o 還原(能量副圖本來就讀那一份)。"""
