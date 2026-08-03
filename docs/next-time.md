@@ -384,11 +384,15 @@
 
 ## 2026-08-03(candle-right-edge-hover /bug 輪 —— 新流程首驗)
 
-- [ ] **verify-gate hook 攔不到 copycat 的實際收尾路徑**:本 repo 無 remote,收尾走
+- [x] ~~**verify-gate hook 攔不到 copycat 的實際收尾路徑**:本 repo 無 remote,收尾走
   branch-lifecycle fallback 的 `git merge --ff-only`,而 hook 觸發式只有
   `git push` / `gh pr merge` —— 本輪的擋下/放行實證是靠「主動試 push」做出來的,
   日常收尾不會自然經過 gate。候選:hook 觸發式加「在 main 上 merge 流程分支」的形;
-  或 copycat 補 remote(順帶解 artifact 異地備援)。
+  或 copycat 補 remote(順帶解 artifact 異地備援)。~~ **2026-08-03 同日採「補 remote」
+  解掉**:`https://github.com/loger-w/copycat`(**PRIVATE** — 策略 IP / 具名分點
+  watchlist 不可比照 neigui 走 public;neigui 是排除 intel 目錄才敢公開的),
+  master 00d451a 起追蹤。自此收尾走完整 branch-lifecycle(push → PR → merge),
+  verify-gate 攔的正是這條路;artifact 同時獲得異地備援。
 - [ ] **固定日期 fixture 的同型潛伏紅**:test_market_routes 的 partial_last 週期斷言
   已修(d84c440,動態 ISO 週 fixture),但全 tests/ 可能還有其他「fixture 寫死日期 +
   斷言隨 today 變」的組合 —— 下次任何測試在沒改 code 的日子突然紅,先想日期依賴
