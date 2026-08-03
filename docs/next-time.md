@@ -404,3 +404,54 @@
 - [ ] `_this_week_days` 兩個已知邊界(收尾 review P2-4,均為極低機率):`date.today()`
   同算式取兩次 + fixture 與 route 各自取 today,週日跨午夜起跑理論上可跨週變紅;
   docstring 宣告 n<=7 但無 guard。要根治得讓 route 的 today 可注入,成本不成比例,先記帳。
+
+## 2026-08-03(stock-page-dedupe-deadcode /refactor 輪 —— 行為類發現與範圍外遺留)
+
+盤點 artifacts:`.claude/refactor/stock-page-dedupe-deadcode/`(三份 findings + 計畫)。
+以下 [behavior] 全部是 /refactor 中發現但**修了就改行為**的項目,要修走 /bug 或 /mod。
+
+- [ ] **[behavior] ref=0 的「無參考價」語意不一致**(一族三處):
+  (a) `stock-intraday-svg.ts` `ref = input.meta?.ref ?? (prices[0] ?? 0)` 用 `??`,而後端
+  `to_milli_units("0")` 回 0 非 None → TC4 送 ReferencePrice="0" 時 ref 卡 0,autofit 分支
+  算出 yTop=hi×1.1 / yBottom=−hi×1.1 整條走勢壓上半;StockPage/OrderBook 同件事用 truthy 判。
+  (b) StockIntradayChart 的 lastTone 只擋 `ref === null`,而 `markTone` 多 `ref <= 0` 分支 —
+  ref=0 時兩者 className 分岔(Track A6 因此跳過收斂;lastTone 那份是既有不一致)。
+  修法方向:ref=0 一律視為無參考價(對齊 hasRef / tickTone / 後端 chg_pct),需 🔴 + 測試。
+- [ ] **[behavior] 前端增量 VWAP 分母錯位**:前端用 `vwap × last.cum_vol` 還原分子再
+  `+ msg.q` 累加,後端分母是去重剔試撮後的 Σqty ≠ cum_vol(TC4 TradeVolume)→
+  訂閱前漏單/試撮期時靜默分歧,至下次全量 refetch 才收斂(`stock-accum.ts` vs
+  `stock_state.py:139-141`)。
+- [ ] **[behavior] `/api/stock/bars` tf=D 忽略 days 但仍對 days 做 400 驗證**(docstring
+  說忽略;`?tf=D&days=abc` 回 BAD_DAYS)。
+- [ ] **[behavior] DepthBar 鎖停判定仍用 `b[0]?.[0] === upper`**:市價佇列 0 價檔位會打穿
+  (CLAUDE.md §8 2026-07-31 條;OrderBook 已改 `_best_limit_price` 思路,DepthBar 只服務
+  期貨面尚未觀測到 0 價檔位,屬潛伏不一致)。
+- [ ] **[behavior] CandleChart 滾輪 useEffect deps 缺 dimW/dimH**(deps 只有 [total],閉包
+  捕捉舊 dim):resize 後縮放錨點用舊寬 — 補 deps 是修 stale-closure bug,需 🔴 獨立
+  commit + 「resize 後滾輪錨點」回歸測試(plan review R-4 裁定)。
+- [ ] **[behavior] TickTape**:`limit`(載入更多)state 切股不歸零(StockPage 未帶 key,
+  與 pickerOpen 的換股歸零不一致);且 `[...ticks].reverse()` 每 tick render 複製反轉 200 列。
+- [ ] **[behavior] 後端 payload 死欄位**(前端讀取端已刪,後端仍每次算+送):
+  `snapshot.stkfut_prod`(stock_engine 每 snapshot 算)、`meta.y_close`、
+  `cum_inner`/`cum_outer`、`snapshot.tc4`/`backfilling`。清除屬 wire 契約改動 → /mod;
+  `names.count` / `bars.code,tf` 為刻意公開 API 表面,不清。
+- [ ] **[behavior] `_resub_task` 不進 `_tasks`,close() 不取消它**(重掛中的 rollover task
+  逃過關機;本輪僅補「持有參考防 GC」註解)。
+- [ ] **[behavior] useStockNames 錯誤路徑**:`res.json().catch(() => ({}))` 後直接
+  `body.detail?.error`,body 為合法 JSON `null` 時 TypeError 逸出 queryFn(錯誤訊息變
+  TypeError 文字)— 與 `lib/api-error.ts` parseError 產出不同,Track A4 因此跳過;
+  修掉即可併入 parseError。
+- [ ] **範圍外重複遺留**(本輪只收個股頁):parseError 同鏈 × 3(useTrade / useCapital /
+  useSeries);fmtPct 同字串 × 5(IndexBar / IndexPage / FuturesPage / RiverCards /
+  RiverOverlay,後兩者已各自包 pct());chgPct 大盤 2 處;CandleChart「期間漲跌」
+  (分母=視窗首根收盤)與「跨日漲跌」(分母=前一根收盤)是語意變體不可併 chgPct。
+- [ ] **跳過的 JSX / 參數化抽取**(plan review 裁定語意分岔,抽了即改行為或淨可讀性負值):
+  D-8 漲跌色 tone(中性態四種落點刻意不同)、D-10 ToggleButton(off 態 hover 分岔)、
+  D-13 GroupPicker(容器/stopPropagation/disabled 全不同;**側欄群組鈕 stopPropagation
+  「點群組不換主圖股票」無測試背書** — 補測試後才值得再議)、D-14 suggest 列 JSX
+  (aria-label 語意不同;本輪只收 SUGGEST_LIMIT)。
+- [ ] **B-D6 `_on_*_threadsafe` 守衛 8 份 × 4 行**(四引擎 loop=None close 閘):語意單一
+  定義有價值但 mixin 間接性 > 收益,暫不動;第五個引擎出現時再收。
+- [ ] **L-5 backfill 首頁抓兩次**(stock_source 輪詢 `_get_history(...,"0")` 丟棄 first 後
+  iter_qry_pages 又抓第 0 頁):每回補多一趟 REQ。修前必先驗 QryIndex 游標語意
+  (拿 first 末筆 QryIndex 當 start 是否嚴格銜接),改壞會靜默少一頁。
