@@ -12,7 +12,8 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
+
+from copycat.tc4common import to_milli_units
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +23,9 @@ _TAIPEI_OFFSET = _dt.timedelta(hours=8)
 _TRIAL_WINDOWS = (("08:30:00.000", "09:00:00.000"), ("13:25:00.000", "13:30:00.000"))
 
 
-def to_milli(raw: str) -> int | None:
-    """十進位字串 → 毫元整數(元 × 1000);空/無效 → None。"""
-    if not raw:
-        return None
-    try:
-        return int(Decimal(raw) * 1000)
-    except InvalidOperation:
-        return None
+#: 十進位字串 → 毫元整數(元 × 1000);空/無效 → None。
+#: 與 `live.models.to_millipts` 同一個運算(單位名不同)→ 實作在 tc4common,此處留具名別名。
+to_milli = to_milli_units
 
 
 def _to_int(raw: str) -> int | None:

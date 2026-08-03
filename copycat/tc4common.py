@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Callable, Iterator
 
 # Touchance 官方範例公開的 app 憑證(GitBook / TCPY sample 原樣),非帳號 secret
@@ -10,6 +11,22 @@ TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
 
 #: OpenAPI 登入 port(2026-07-18 實測;官方文件的 51171/51141 與現版不符)
 TC4_DEFAULT_PORT = "50774"
+
+
+def to_milli_units(raw: str) -> int | None:
+    """十進位字串 → 千分整數(× 1000);空/無效 → None。
+
+    毫元(個股)與毫點(TXO/期貨)是同一個運算,只有單位名不同 → 兩邊各留具名別名。
+
+    🚨 **不與 float 家族合併**(`stock_source._milli`、`round(float(x) * 1000)`):
+    Decimal 是截斷、float round 是 banker's rounding,在 tick 邊界會分岔。
+    """
+    if not raw:
+        return None
+    try:
+        return int(Decimal(raw) * 1000)
+    except InvalidOperation:
+        return None
 
 
 def iter_qry_pages(
