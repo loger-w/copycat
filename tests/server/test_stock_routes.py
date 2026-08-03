@@ -90,6 +90,43 @@ def make_client(
     return TestClient(app, raise_server_exceptions=False), fake
 
 
+class _FailingStartStockSource(FakeStockSource):
+    """start() 途中拋例外的 source(`set_trade_date` 是 StockEngine.start 的第一步)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    def set_trade_date(self, trade_date: str) -> None:
+        raise RuntimeError("boom during start")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TestEngineStartFailureDegrades:
+    """characterization(refactor C7 前置):引擎起停樣板的降級契約。
+
+    `_boot` 即將把五段 try/except 收成一支,而**建構成功但 start 失敗**是最容易在
+    重構中掉的分支 —— 掉了會洩漏一條已連線的 TC4 session,且畫面只會看到 503。
+    """
+
+    def test_start_exception_closes_source_and_app_still_serves_503(self, tmp_path: Path) -> None:
+        fake = _FailingStartStockSource()
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=fake,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            throttle_secs=0.01,
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        with client:
+            r = client.get("/api/stock/watchlist")
+        assert r.status_code == 503
+        assert r.json()["detail"]["error"] == "NOT_READY"
+        assert fake.closed, "start 失敗必須關掉已建好的 source(否則洩漏 TC4 session)"
+
+
 class TestStockNamesRoute:
     """搜尋提示列的名稱表(round4 項 1)。表是版控檔 → 降級路徑必須靠注入點才測得到。"""
 
