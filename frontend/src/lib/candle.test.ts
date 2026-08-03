@@ -244,6 +244,28 @@ describe("buildCandleGeometry.indexOf(右緣邊界)", () => {
     expect(g.indexOf(0)).toBe(0);
     expect(g.indexOf(size.width - 0.1)).toBe(bars.length - 1);
   });
+
+  it("0 ≤ x < width 的內部映射逐點不變(白名單只放行 x === width)", () => {
+    // 右緣修法是「只多放行最右那一個像素」。若哪天改成整體位移(例如 round 取代
+    // floor),下面每個槽的頭尾都會挪一格,而既有三條端點測試只釘得住兩端。
+    const g = buildCandleGeometry(bars, size);
+    const slot = size.width / bars.length;
+    for (let i = 0; i < bars.length; i += 1) {
+      expect(g.indexOf(i * slot)).toBe(i);
+      expect(g.indexOf((i + 1) * slot - 0.01)).toBe(i);
+    }
+  });
+
+  it("單根時最右像素回 0(bars.length - 1 的退化端點)", () => {
+    const g = buildCandleGeometry(bars.slice(0, 1), size);
+    expect(g.indexOf(size.width)).toBe(0);
+  });
+
+  it("空幾何的 indexOf 恆 null(另一個 closure,不吃上面的修法)", () => {
+    const g = buildCandleGeometry([], size);
+    expect(g.indexOf(0)).toBe(null);
+    expect(g.indexOf(size.width)).toBe(null);
+  });
 });
 
 // 🔵 R4:extraSeries 讓布林上下軌參與 y 域,否則超出 o/h/l/c 值域的軌線會被畫到圖框外。
