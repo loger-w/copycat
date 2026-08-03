@@ -525,7 +525,10 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
 
   const hoverMin = hover?.min ?? null;
   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
-  const ref = accum.meta?.ref ?? null;
+  // **一次歸一,三處共用**(lastTone / hover 時間標籤 / shownChg)。TC4 送 "0" 時後端
+  // 原樣轉 0 不轉 null,而毫元恆 > 0 → 拿 0 當平盤比較永遠是「高於」,三處會一起
+  // 靜默塗成紅色。歸一在這裡而不是各判色點各補一次 `> 0`,是為了不讓三處各漂各的。
+  const ref = (accum.meta?.ref ?? 0) > 0 ? accum.meta!.ref : null;
   const plotBottom = mainH - X_LABEL_H;
 
   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
@@ -535,14 +538,9 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   // 舊後端缺 per-minute h/l 三種成因都收斂成 null = 不畫。
   // 現價圈(SC-2):值每 tick 都變 → 畫在 ChartStatic 之外,不打穿 memo
   const lastPrice = accum.last?.p ?? null;
-  const lastTone =
-    lastPrice === null || ref === null
-      ? "fill-ink-dim"
-      : lastPrice > ref
-        ? "fill-bull"
-        : lastPrice < ref
-          ? "fill-bear"
-          : "fill-ink-dim";
+  // 判色與極值標記同一份規則(`markTone`:高於平盤紅 / 低於綠 / 平盤與無參考價灰)——
+  // 就地再寫一次三元式的話,兩處會各自漂
+  const lastTone = lastPrice === null ? "fill-ink-dim" : markTone(lastPrice, ref);
   const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
   // hover 態的 shownMin 恆等於 hoverMin → 重用已取好的那一格,不再查第二次(L-3)
   const shownAgg = hoverAgg ?? (shownMin !== null ? accum.minutes.get(shownMin) : undefined);
