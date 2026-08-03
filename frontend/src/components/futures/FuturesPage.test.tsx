@@ -138,7 +138,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
 describe("FuturesPage 中間主區(SC-5)", () => {
   it("渲染水平五檔(DepthBar)", () => {
     render(<Harness />);
-    // 期貨頁不傳 onPriceClick(五檔點價置中是個股專屬)→ 格子非 button
+    // DepthBar 的格子一律是 div(五檔點價置中是個股 OrderBook 專屬)→ 以 aria-label 指認
     expect(screen.getByLabelText("買1 22999")).toBeTruthy();
     expect(screen.getByLabelText("賣1 23001")).toBeTruthy();
     expect(screen.getByText(/委買 45/)).toBeTruthy();

@@ -31,10 +31,6 @@ export function minutesOf(mode: ChartMode): number {
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
-/** 台北交易時段(本機時區 = 台北)。實作搬到 `lib/trading-hours.ts`(大盤頁共用),
- *  此處 re-export 讓既有 import 路徑不變。 */
-export { inTradingHours } from "@/lib/trading-hours";
-
 async function fetchBars(code: string, tf: string, days: number): Promise<Bar[]> {
   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
   const res = await fetch(`/api/stock/bars/${code}?${qs}`);
