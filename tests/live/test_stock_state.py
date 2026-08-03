@@ -62,8 +62,10 @@ class TestAggregation:
         assert m1.volume == 14
         assert m1.outer == 10
         assert m1.inner == 4
-        assert st.cum_outer == 16
-        assert st.cum_inner == 4
+        m2 = st.minutes[9 * 60 + 2]
+        # 全日累積走 Σ(minutes) —— `cum_outer`/`cum_inner` 欄位已隨 M3 移除
+        assert m1.outer + m2.outer == 16
+        assert m1.inner + m2.inner == 4
         # VWAP = (2380*10 + 2390*4 + 2400*6) / 20 = 47760/20 = 2388.0 元
         assert st.vwap_milli == 2_388_000
 
