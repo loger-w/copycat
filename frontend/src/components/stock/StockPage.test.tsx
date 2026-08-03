@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockPage } from "@/components/stock/StockPage";
@@ -133,6 +133,48 @@ describe("StockPage", () => {
     const main = container.querySelector("main")!;
     expect(main.className).toContain("overflow-y-auto");
     expect(main.className).toContain("min-h-0");
+  });
+});
+
+// 🔴 M8:明細的「載入更多」筆數是 TickTape 內部 state,切股時必須跟著歸零 ——
+// 換一檔股票卻沿用上一檔展開到一半的筆數,與 pickerOpen 的換股歸零不一致
+describe("StockPage 切股時明細展開筆數歸零(M8)", () => {
+  function accumWithTicks(code: string): StockAccum {
+    return {
+      ...ACCUM,
+      code,
+      ticks: [...Array(70).keys()].map((i) => ({
+        t: `09:0${Math.floor(i / 10)}:0${i % 10}.000`,
+        p: 2_380_000,
+        q: 1,
+        side: "outer",
+      })),
+    } as unknown as StockAccum;
+  }
+
+  function rows(container: HTMLElement): number {
+    return container.querySelectorAll("tbody tr").length;
+  }
+
+  it("展開後切股 → 顯示筆數回初始值", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = (code: string) => (
+      <QueryClientProvider client={client}>
+        <StockPage
+          code={code}
+          onSelect={vi.fn()}
+          stream={stream({ accum: accumWithTicks(code) })}
+        />
+      </QueryClientProvider>
+    );
+    const { container, rerender } = render(page("2330"));
+    expect(rows(container)).toBe(30);
+    fireEvent.click(screen.getByRole("button", { name: "載入更多" }));
+    expect(rows(container)).toBe(60);
+
+    // 切股(元件不 unmount,只是 props 換了)
+    rerender(page("2317"));
+    expect(rows(container)).toBe(30);
   });
 });
 
