@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Callable, Protocol
 
@@ -100,6 +101,7 @@ class FuturesEngine:
         broadcast: Callable[[dict], None] | None = None,
         products: tuple[str, ...] = PRODUCTS,
         leaf_grace_secs: float = 3.0,
+        resub_interval_secs: float = 10.0,
     ) -> None:
         self._source_factory = source_factory
         self._broadcast = broadcast
@@ -116,6 +118,12 @@ class FuturesEngine:
         self._leaf_fed: set[str] = set()  # 曾成功補訂 leaf 的商品(換月重武裝判準)
         self._leaf_tasks: set[asyncio.Task[None]] = set()
         self._leaf_timer: asyncio.TimerHandle | None = None
+        # 訂閱失敗品的唯一重試路徑(bug startup-names-futures-resub 症狀 3):
+        # source 層 `_resub` 只重掛成功過的 symbol、`_leaf_fallback` 需先由推播解析 ym,
+        # 兩條都接不了「一開始就訂不到」的商品 → 面板整段零推播且無錯誤訊號。
+        self._resub_interval_secs = resub_interval_secs
+        self._pending_subs: set[str] = set()
+        self._resub_task: asyncio.Task[None] | None = None
 
     # ---- 生命週期 ----
 
@@ -124,6 +132,8 @@ class FuturesEngine:
         self._source = self._source_factory()
         self._source.set_on_message(self._on_quote_threadsafe)
         await asyncio.to_thread(self._subscribe_all)
+        if self._pending_subs:
+            self._resub_task = asyncio.create_task(self._resub_loop())
 
     def _subscribe_all(self) -> None:
         assert self._source is not None
@@ -131,14 +141,42 @@ class FuturesEngine:
             try:
                 self._source.subscribe_symbol(product)
             except ConnectionError:
-                # 單品訂閱失敗降級續行(app 層照起;stale 重連時基底會重掛成功品)
+                # 單品訂閱失敗降級續行(app 層照起),失敗品進 pending 由 _resub_loop 重試
+                # (寫入安全:start() 正 await 這個 to_thread,期間無並發讀寫)
                 logger.warning("futures subscribe %s failed", product)
+                self._pending_subs.add(product)
+
+    async def _resub_loop(self) -> None:
+        """pending 商品每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。
+
+        只有失敗品才會起這個 task —— 訂閱全成功時行為與修復前完全相同。
+        """
+        while self._pending_subs:
+            await asyncio.sleep(self._resub_interval_secs)
+            source = self._source  # 每輪重讀:close 中會變 None
+            if source is None:
+                return
+            for product in sorted(self._pending_subs):
+                try:
+                    await asyncio.to_thread(source.subscribe_symbol, product)
+                except ConnectionError:
+                    # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
+                    logger.warning("futures subscribe %s failed", product)
+                    continue
+                self._pending_subs.discard(product)
+                logger.info("futures %s subscribe retry ok", product)
 
     async def close(self) -> None:
         # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
         # 到即將關閉的 loop(index_engine review A1 同款);_loop=None 同時擋
         # leaf task 的收尾回寫(review I1)
         self._loop = None
+        # 重試迴圈先收掉:留著會在 source close 後繼續 subscribe → 重連 TC4(同 leaf I1 理由)
+        resub, self._resub_task = self._resub_task, None
+        if resub is not None:
+            resub.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await resub
         if self._leaf_timer is not None:
             self._leaf_timer.cancel()
             self._leaf_timer = None
