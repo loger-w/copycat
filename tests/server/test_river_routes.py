@@ -6,30 +6,8 @@ from typing import Callable
 
 from fastapi.testclient import TestClient
 
-from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.app import create_app
-
-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
-
-
-class FakeTxoSource:
-    """lifespan 需要的 TXO source;river 路由測試不碰它。"""
-
-    def list_series(self) -> list[SeriesInfo]:
-        return [_SERIES]
-
-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
-        return []
-
-    def subscribe(self, series: SeriesInfo, on_tick) -> None:
-        return None
-
-    def unsubscribe(self, series: SeriesInfo) -> None:
-        return None
-
-    def close(self) -> None:
-        return None
+from tests.helpers.fake_txo import FakeTxoSource
 
 
 class FakeCorrSource:
