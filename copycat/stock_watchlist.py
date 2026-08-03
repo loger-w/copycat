@@ -57,12 +57,6 @@ def union(groups: list[Group]) -> list[str]:
     return seen
 
 
-def ungrouped(wl: Watchlist) -> list[str]:
-    """不屬任何群組的 code,保 `codes` 序(衍生集合,不落檔)。"""
-    grouped = set(union(wl["groups"]))
-    return [code for code in wl["codes"] if code not in grouped]
-
-
 def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
     if not path.exists():
         return {"codes": [], "groups": []}
