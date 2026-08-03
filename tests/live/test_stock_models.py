@@ -302,7 +302,6 @@ class TestMarketOrderPseudoLevel:
             time="12:00:00.000",
             trade_date="2026-07-31",
             side="neutral",
-            buy_sell_flag=None,
             is_trial=False,
             bid_milli=None,
             ask_milli=None,
@@ -322,7 +321,6 @@ class TestMarketOrderPseudoLevel:
             time="10:00:00.000",
             trade_date="2026-07-31",
             side="neutral",
-            buy_sell_flag=None,
             is_trial=False,
             bid_milli=2_380_000,
             ask_milli=2_385_000,
@@ -354,7 +352,6 @@ class TestMarketOrderPseudoLevel:
             time="09:30:00.000",
             trade_date="2026-07-31",
             side="neutral",
-            buy_sell_flag=None,
             is_trial=False,
             bid_milli=501_000,  # 買方還掛著限價 → 不是鎖死
             ask_milli=None,  # 賣單剛被吃光

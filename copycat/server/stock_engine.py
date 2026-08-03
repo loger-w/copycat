@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncGenerator, Callable, Protocol
+from typing import AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import StockTick, parse_stock_realtime
 from copycat.live.stock_source import Bar, DailyBar
@@ -186,9 +186,6 @@ class StockEngine:
         stkfut = self._map.get(code)
         snap["stkfut_prod"] = stkfut["prod"] if stkfut else None
         return snap
-
-    def watchlist_codes(self) -> list[str]:
-        return list(self._watchlist)
 
     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
@@ -498,7 +495,3 @@ class StockEngine:
                     continue
                 self._publish(self._quote_payload(code))
 
-
-# 型別匯出(routes 注入用)
-StockEngineLike = StockEngine
-AnyDict = dict[str, Any]
