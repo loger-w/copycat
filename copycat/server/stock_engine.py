@@ -183,10 +183,10 @@ class StockEngine:
         snap = state.snapshot() if state is not None else StockDayState().snapshot()
         snap["code"] = code
         snap["no_data"] = code in self._no_data
-        snap["tc4"] = self.tc4_status
-        snap["backfilling"] = self._backfilling
-        stkfut = self._map.get(code)
-        snap["stkfut_prod"] = stkfut["prod"] if stkfut else None
+        # tc4 / backfilling **不進 snapshot**:畫面的唯一來源是 WS `status` 訊息
+        # (那邊是活碼)。同時送兩份等於讓同一個狀態有兩個真相,而 REST 那份是
+        # 請求當下的凍結值,重整時機不對就會與 WS 打架。
+        # stkfut_prod 同理零讀者(期現價差走 WS `stkfut` 訊息的 prod)。
         return snap
 
     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:

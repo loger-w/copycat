@@ -64,6 +64,9 @@ class StockMeta:
     ref_milli: int | None  # 參考價(除權息已反映,design:不自算前收)
     upper_milli: int | None
     lower_milli: int | None
+    # **刻意保留:目前無消費者**(M3 已把 `meta.y_close` 移出 REST snapshot)。
+    # 這是 TC4 `YClosedPrice` 的唯一落點,也是「除權息日」的唯一判別來源
+    # (ref_milli 已反映除權息,兩者不等 = 有除權息)—— parse 鏈砍掉就再也拿不回來。
     y_close_milli: int | None
     y_volume: int | None
     open_time: str  # HH:MM:SS(交易所當地時間)
