@@ -41,8 +41,6 @@ class StockDayState:
     ticks: deque[StockTick] = field(default_factory=lambda: deque(maxlen=_TICKS_MAXLEN))
     book: StockBook | None = None
     meta: StockMeta | None = None
-    cum_inner: int = 0
-    cum_outer: int = 0
     vwap_milli: int | None = None
     # 當日最高 / 最低成交價(round5 項 1)。刻意由本狀態機逐 tick 維護而不取 TC4 的
     # HighPrice/LowPrice —— 個股 REALTIME 帶不帶那兩個欄位沒有實證(2026-07-21 probe
@@ -62,8 +60,6 @@ class StockDayState:
         self.seq = 0
         self.minutes = {}
         self.ticks = deque(maxlen=_TICKS_MAXLEN)
-        self.cum_inner = 0
-        self.cum_outer = 0
         self.vwap_milli = None
         # 高低是當日衍生狀態,與 vwap 同批清;book/meta 才是盤外要保留的靜態值
         self.high_milli = None
@@ -154,12 +150,12 @@ class StockDayState:
             tick.price_milli if agg.low_milli is None else min(agg.low_milli, tick.price_milli)
         )
         agg.volume += tick.qty
+        # 全日累積內外盤不另存欄位:Σ(minutes.o/i) 同源且恆等,兩份並存只是多一個
+        # 會不同步的地方(M3 移除 wire 欄位後 prod 端已零讀者)
         if tick.side == "outer":
             agg.outer += tick.qty
-            self.cum_outer += tick.qty
         elif tick.side == "inner":
             agg.inner += tick.qty
-            self.cum_inner += tick.qty
         else:
             agg.unch += tick.qty
 
