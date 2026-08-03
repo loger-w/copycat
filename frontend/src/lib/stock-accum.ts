@@ -66,9 +66,6 @@ export interface StockAccum {
   book: StockBook | null;
   meta: StockMeta | null;
   noData: boolean;
-  tc4: string;
-  backfilling: string | null;
-  stkfutProd: string | null;
   /** 當日最高 / 最低成交價(毫元,後端 running max/min)。**top-level 不掛 meta** ——
    *  meta 是 TC4 來的靜態盤別資料,把「由成交推導的當日狀態」塞進去語意錯位,
    *  而且只跑過回補、未收 REALTIME 時 meta 為 null,高低照樣要有值 */
@@ -97,9 +94,6 @@ interface SnapshotShape {
   high?: number | null;
   low?: number | null;
   no_data?: boolean;
-  tc4?: string;
-  backfilling?: string | null;
-  stkfut_prod?: string | null;
 }
 
 export function fromSnapshot(snap: SnapshotShape): StockAccum {
@@ -120,9 +114,6 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
     high: snap.high ?? null,
     low: snap.low ?? null,
     noData: snap.no_data ?? false,
-    tc4: snap.tc4 ?? "up",
-    backfilling: snap.backfilling ?? null,
-    stkfutProd: snap.stkfut_prod ?? null,
     amountMilli: snap.vwap != null ? snap.vwap * volume : 0,
     volume,
   };

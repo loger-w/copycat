@@ -20,7 +20,6 @@ const ACCUM = {
     y_close: 2_320_000, y_vol: 100,
   },
   noData: false,
-  backfilling: null,
 } as unknown as StockAccum;
 
 const BARS = [
