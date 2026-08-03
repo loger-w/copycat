@@ -74,9 +74,9 @@ class TestAggregation:
         assert snap["seq"] == 1
         assert snap["last"]["p"] == 2_380_000
         assert snap["vwap"] == 2_380_000
-        assert snap["cum_outer"] == 10
+        assert "cum_outer" not in snap  # M3:退出 wire,累積量由 minutes 還原
+        assert snap["minutes"]["657"]["o"] == 10
         assert len(snap["ticks"]) == 1
-        assert snap["minutes"]
 
     def test_snapshot_omits_dead_wire_fields(self) -> None:
         """M3:cum_inner/cum_outer/meta.y_close 前端零讀取 → 退出 wire。

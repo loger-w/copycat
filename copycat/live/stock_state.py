@@ -177,8 +177,6 @@ class StockDayState:
             # meta 為 None(只跑過回補、未收 REALTIME)時高低照樣有值。
             "high": self.high_milli,
             "low": self.low_milli,
-            "cum_inner": self.cum_inner,
-            "cum_outer": self.cum_outer,
             "minutes": {
                 str(k): {
                     "c": m.close_milli,
@@ -210,7 +208,6 @@ class StockDayState:
                 "ref": self.meta.ref_milli,
                 "upper": self.meta.upper_milli,
                 "lower": self.meta.lower_milli,
-                "y_close": self.meta.y_close_milli,
                 "y_vol": self.meta.y_volume,
             }
             if self.meta

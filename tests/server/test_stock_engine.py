@@ -204,7 +204,9 @@ class TestRollover:
         await _drain(engine)
         snap = engine.snapshot("2330")
         assert snap["last"]["cum_vol"] == 50  # reset 後首筆被 ingest,不被 stale-drop
-        assert snap["cum_outer"] == 1
+        # 「reset 後首筆 ingest 且判到側」的唯一證明(M3 前為 snap["cum_outer"];
+        # 該欄位退出 wire 後改讀 minutes 的同源聚合,行為鎖不變)
+        assert snap["minutes"]["657"]["o"] == 1
         await engine.close()
 
 
@@ -506,7 +508,9 @@ class TestReviewFixes:
         await engine.set_main("5483")
         await _drain(engine)
         assert "5483" in src.backfills  # worker 仍活著
-        assert engine.snapshot("5483")["backfilling"] is None  # 清乾淨
+        # backfilling 已退出 REST snapshot(M3),改讀 engine 內部態 —— 鎖的行為
+        # (例外後 `_backfilling` 不會永久卡住)不變
+        assert engine._backfilling is None  # 清乾淨
 
     async def test_weekend_makeup_day_fast_path_rollover(self) -> None:
         # CR5:無 checkpoint(週六補市)下,新日 tick 直接觸發兩段式
