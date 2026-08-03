@@ -10,7 +10,6 @@ listener 覆寫為原始 Quote dict 分派(book/meta 都要,不能只回 Tick;�
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Callable
 
@@ -123,14 +122,8 @@ class FuturesQuoteSource(TC4QuoteSource):
 
     def handle_raw(self, raw: str) -> None:
         """SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。"""
-        idx = raw.find(":")
-        if idx < 0:
-            return
-        try:
-            msg = json.loads(raw[idx + 1 :])
-        except json.JSONDecodeError:
-            return
-        if msg.get("DataType") != "REALTIME":
+        msg = self._realtime_msg(raw)
+        if msg is None:
             return
         if self._on_message is not None:
             self._on_message(msg.get("Quote", {}))

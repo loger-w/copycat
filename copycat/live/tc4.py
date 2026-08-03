@@ -469,20 +469,31 @@ class TC4QuoteSource:
         self._listener = threading.Thread(target=self._listen_loop, daemon=True)
         self._listener.start()
 
+    def _realtime_msg(self, raw: str) -> dict | None:
+        """原始電文 → REALTIME 訊息 dict;無 topic 分隔 / 非 JSON / 非 REALTIME → None。
+
+        **回整則 msg 而非 `Quote`**:空 Quote 的現況是照送 `_on_message({})`,
+        回 Quote 會讓呼叫端只能用 truthy 判定,把空 Quote 一起吞掉(行為改動)。
+        """
+        idx = raw.find(":")
+        if idx < 0:
+            return None
+        try:
+            msg = json.loads(raw[idx + 1 :])
+        except json.JSONDecodeError:
+            return None
+        if msg.get("DataType") != "REALTIME":
+            return None
+        return msg
+
     def handle_raw(self, raw: str) -> None:
         """SUB socket 一則原始電文 → TXO Tick 分派(listener 與測試共用)。
 
         子類覆寫這一支即可共用整個 `_listen_loop`(generation-following 的重連跟隨
         邏輯 2026-07-20 盤中修過一次,四份各自持有等於下次要同步改四處)。
         """
-        idx = raw.find(":")
-        if idx < 0:
-            return
-        try:
-            msg = json.loads(raw[idx + 1 :])
-        except json.JSONDecodeError:
-            return
-        if msg.get("DataType") != "REALTIME":
+        msg = self._realtime_msg(raw)
+        if msg is None:
             return
         tick = parse_realtime(msg.get("Quote", {}))
         if tick is not None and self._on_tick is not None:

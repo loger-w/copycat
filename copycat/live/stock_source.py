@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import logging
 import threading
 import time
@@ -472,14 +471,8 @@ class StockQuoteSource(TC4QuoteSource):
 
     def handle_raw(self, raw: str) -> None:
         """SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。"""
-        idx = raw.find(":")
-        if idx < 0:
-            return
-        try:
-            msg = json.loads(raw[idx + 1 :])
-        except json.JSONDecodeError:
-            return
-        if msg.get("DataType") != "REALTIME":
+        msg = self._realtime_msg(raw)
+        if msg is None:
             return
         quote = msg.get("Quote", {})
         code = str(quote.get("Security", ""))

@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any, Callable
@@ -83,14 +82,8 @@ class CorrQuoteSource(TC4QuoteSource):
     # ---- listener:原始 Quote dict 分派(同 futures_source 手法)----
 
     def handle_raw(self, raw: str) -> None:
-        idx = raw.find(":")
-        if idx < 0:
-            return
-        try:
-            msg = json.loads(raw[idx + 1 :])
-        except json.JSONDecodeError:
-            return
-        if msg.get("DataType") != "REALTIME":
+        msg = self._realtime_msg(raw)
+        if msg is None:
             return
         if self._on_message is not None:
             self._on_message(msg.get("Quote", {}))
