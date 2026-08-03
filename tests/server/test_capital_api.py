@@ -614,6 +614,22 @@ class TestWsBroadcasterBackpressure:
         finally:
             await gen.aclose()
 
+    async def test_custom_maxsize_applies_to_client_queue(self) -> None:
+        """`maxsize` 參數必須真的傳到 per-client queue(engine 層各自傳值,B-D5)。
+
+        參數若被忽略(queue 一律吃模組常數 500),5 則全進得去 → 讀到的是**最舊** 3 則;
+        真的生效才會丟舊保新。上面兩條都用預設值,測不出這個差別。
+        """
+        b = WsBroadcaster(maxsize=3)
+        gen = b.stream()
+        try:
+            for i in range(5):
+                b.publish({"i": i})
+            got = [await gen.__anext__() for _ in range(3)]
+            assert got == [{"i": 2}, {"i": 3}, {"i": 4}]
+        finally:
+            await gen.aclose()
+
     async def test_slow_client_does_not_affect_fast_client(self) -> None:
         b = WsBroadcaster()
         slow = b.stream()

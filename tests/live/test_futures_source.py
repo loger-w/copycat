@@ -124,3 +124,16 @@ class TestRawDispatch:
         src.handle_raw("PING:" + json.dumps({"DataType": "PING"}))
         src.handle_raw("not-json")
         assert got == []
+
+    def test_realtime_without_quote_still_dispatched_as_empty(self) -> None:
+        """`_realtime_msg` 回**整則 msg** 而非 `Quote` 的理由(tc4.py 檔內註解的行為面)。
+
+        回 Quote 的話呼叫端只剩 truthy 可判,空 Quote 會跟「非 REALTIME」一起被吞掉。
+        現況是空 Quote 照送 `{}`,下游自己決定怎麼處理 —— 這條沒有測試釘住時,
+        改成回 Quote 的重構不會有任何測試變紅。
+        """
+        src = FuturesQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+        got: list[dict] = []
+        src.set_on_message(got.append)
+        src.handle_raw("Q:" + json.dumps({"DataType": "REALTIME"}))
+        assert got == [{}]

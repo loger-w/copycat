@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
+
+import pytest
 
 from copycat.live.stock_source import StockQuoteSource, stock_symbol, stock_window
 from tests.helpers.tc4_fakes import FakeApi, ok
@@ -286,7 +289,13 @@ class TestFetchDayMinutes:
         assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
 
     def test_bad_time_value_skipped_not_raised(self) -> None:
-        """Time 非數字 → 只計入 skipped(不得因共用 _taipei_minute_key 而外漏 ValueError)。"""
+        """Time 非數字 → 只計入 skipped(不得因共用 _taipei_minute_key 而外漏 ValueError)。
+
+        ⚠ **這條測不到 skipped 路徑**(2026-08-03 收尾 review TC-4 實測):`"bad"` 經
+        `zfill(6)` 變成 `"000bad"`,前兩碼是 `"00"` → `int()` 不炸 → 走的是**域外靜默**
+        丟棄(key `"080b"` 不在 0901–1330)。名稱與 docstring 描述的路徑實際沒被走到。
+        真正踩到 skipped 的輸入見下一條 `test_unparsable_time_counted_as_skipped`。
+        """
         rows = [self._row("10100", "100", "1"), self._row("bad", "100", "2")]
         pages = {"0": rows, "2": []}
 
@@ -302,6 +311,35 @@ class TestFetchDayMinutes:
             api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
+
+    def test_unparsable_time_counted_as_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """真正解析不了的 Time → 計入 skipped 並發 warning;域外列不計。
+
+        回傳值分不出「壞列」與「域外列」—— 兩者都只是沒進 dict。skipped 計數的 warning
+        是唯一的診斷訊號(壞列代表資料源格式有異、域外列是正常的日內過濾),兩者混為
+        一談會讓「TC4 換欄位格式」這種事完全靜默。
+        """
+        rows = [
+            self._row("10100", "100", "1"),
+            self._row("xx0100", "100", "2"),  # 前兩碼非數字 → int() 炸 → skipped
+            self._row("60000", "103", "3"),  # 14:00 台北,域外 → 靜默丟棄,不計 skipped
+        ]
+        pages = {"0": rows, "3": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        with caplog.at_level(logging.WARNING, logger="copycat.live.stock_source"):
+            assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
+        assert "1K minutes 解析略過 1/3 列" in caplog.text  # 3 列中恰 1 列壞,域外那列不算
 
     def test_zmq_error_normalized(self) -> None:
         import zmq
