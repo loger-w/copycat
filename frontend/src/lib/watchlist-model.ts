@@ -130,25 +130,6 @@ export function removeFromGroup(wl: Watchlist, code: string, group: string): Wat
   };
 }
 
-/** Dialog 的 checkbox:勾選 = 加進該組尾端,取消 = 離開該組(一檔可勾多組,W-1)。 */
-export function setMembership(
-  wl: Watchlist,
-  code: string,
-  group: string,
-  on: boolean,
-): Watchlist {
-  const target = wl.groups.find((g) => g.name === group);
-  if (target === undefined || target.codes.includes(code) === on) return wl;
-  return {
-    ...wl,
-    groups: wl.groups.map((g) =>
-      g.name === group
-        ? { ...g, codes: on ? [...g.codes, code] : g.codes.filter((c) => c !== code) }
-        : g,
-    ),
-  };
-}
-
 /** 空白名 / 重名 → 原物件(對應後端 BAD_GROUP,呼叫端零 PUT 直接顯示文案)。 */
 export function addGroup(wl: Watchlist, name: string): Watchlist {
   const trimmed = name.trim();

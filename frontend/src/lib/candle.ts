@@ -82,11 +82,6 @@ export function movingAverage(bars: readonly Bar[], n: number): (number | null)[
   return out;
 }
 
-export interface Pt {
-  x: number;
-  y: number;
-}
-
 export interface Candle {
   x: number;
   w: number;
@@ -96,7 +91,6 @@ export interface Candle {
   bodyTop: number;
   bodyH: number;
   dir: "up" | "down" | "flat";
-  bar: Bar;
 }
 
 export interface VolBar {
@@ -220,7 +214,6 @@ export function buildCandleGeometry(
       bodyTop,
       bodyH,
       dir,
-      bar: b,
     });
     const h = (b.v / maxVol) * volH;
     volBars.push({ x, w, y: bottom - h, h, dir });

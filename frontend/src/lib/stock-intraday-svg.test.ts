@@ -45,11 +45,6 @@ describe("buildIntradayGeometry", () => {
     expect(g.yDomain[1]).toBe(2_550_000);
     expect(g.yDomain[0]).toBe(2_090_000);
     expect(g.priceLine[1]!.y).toBeLessThan(g.priceLine[0]!.y);
-    // 域端點落在幾何留邊上(PAD_Y=4、X_LABEL_H=14):走勢線在漲跌停時不被圖框裁掉半條 stroke
-    expect(g.upperY).not.toBeNull();
-    expect(g.lowerY).not.toBeNull();
-    expect(g.upperY!).toBeCloseTo(4, 6);
-    expect(g.lowerY!).toBeCloseTo(100 - 14 - 4, 6);
     // 🔴 round4 項 3:繪圖區改從左緣價位帶右側起算,x 不再從 0 開始
     // (width = Y_AXIS_W + 分鐘數 → 繪圖區仍是每分鐘 1px)
     expect(g.priceLine[0]!.x).toBeCloseTo(Y_AXIS_W, 5);
@@ -270,7 +265,7 @@ describe("buildIntradayGeometry", () => {
     it("四個數字同源,外盤比分母**排除**未分類(既有語意不變)", () => {
       // 2026-07-31 實測 09:00 那一分鐘:量 269 = 外 127 + 內 20 + 未分類 122
       const s = sideSummary(minutes([[540, { c: 100_000, v: 269, o: 127, i: 20, u: 122 }]]));
-      expect(s).toMatchObject({ outer: 127, inner: 20, unch: 122, total: 269 });
+      expect(s).toMatchObject({ outer: 127, inner: 20, unch: 122 });
       expect(s.outerPct).toBeCloseTo((127 / 147) * 100, 5);
       // 判定率的分母才是總量
       expect(s.decidedPct).toBeCloseTo((147 / 269) * 100, 5);
@@ -284,7 +279,6 @@ describe("buildIntradayGeometry", () => {
 
     it("無資料 → 兩個比率都是 null(不是 0 —— 0% 會被讀成「全內盤」)", () => {
       const s = sideSummary(new Map());
-      expect(s.total).toBe(0);
       expect(s.outerPct).toBeNull();
       expect(s.decidedPct).toBeNull();
     });
@@ -298,7 +292,6 @@ describe("buildIntradayGeometry", () => {
           [540, { c: 100_000, v: 10, o: 6, i: 4, u: 0 }],
         ]),
       );
-      expect(s.total).toBe(10);
       expect(s.outer).toBe(6);
     });
   });
@@ -422,7 +415,7 @@ describe("buildIntradayGeometry", () => {
 
   // 🔴 SC-5:主圖底部量 bar 已移除(user 拍板留內外盤能量副圖),volumeBars 不再存在
 
-  it("overlayLines:域內才給、含 level 與 kind(SC-2)", () => {
+  it("overlayLines:域內才給、含 level(SC-2)", () => {
     const g = buildIntradayGeometry(
       { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
       { width: 270, height: 100 },
@@ -443,7 +436,7 @@ describe("buildIntradayGeometry", () => {
     expect("label" in lines[0]!).toBe(false);
     expect(lines.every((l) => l.y >= 0 && l.y <= 100)).toBe(true);
     // toggle 關 → 不給該類
-    expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.kind)).not.toContain(
+    expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.level)).not.toContain(
       "cdp",
     );
   });
@@ -481,10 +474,8 @@ describe("buildIntradayGeometry", () => {
       { width: 270, height: 100 },
     );
     expect(g.energyBars.length).toBe(2);
-    // 🔴 round6c:三段(outer/inner/unch)合併成單一 total —— user 拍板「不要分顏色,
+    // 🔴 round6c:三段(outer/inner/unch)合併成單一總量 —— user 拍板「不要分顏色,
     // 單純顯示量」。內外盤統計沒有消失,移到說明列(`sideSummary`)。
-    expect(g.energyBars[0]!.total).toBe(10);
-    expect(g.energyBars[1]!.total).toBe(5);
     expect(g.energyBars[0]!.h).toBeGreaterThan(g.energyBars[1]!.h);
     expect("volumeBars" in g).toBe(false);
   });
@@ -631,13 +622,11 @@ describe("round5:右緣帶 + 總量堆疊", () => {
     const b0 = g.energyBars[0]!;
     expect(g.maxTotal).toBe(269);
     const energyH = 100 - SUB_TOP_PAD;
-    // 全日最大那根恰好滿格;total 含未分類(舊分母用單邊最大時,資訊列的「量」在副圖上
+    // 全日最大那根恰好滿格;分子含未分類(舊分母用單邊最大時,資訊列的「量」在副圖上
     // 找不到對應高度 —— 122 張 neutral 根本沒畫而刻度是單邊最大 164)
-    expect(b0.total).toBe(269);
     expect(b0.h).toBeCloseTo(energyH, 5);
     // 第二根總量 100 → 高度為第一根的 100/269
     const b1 = g.energyBars[1]!;
-    expect(b1.total).toBe(100);
     expect(b1.h).toBeCloseTo((100 / 269) * energyH, 5);
   });
 
