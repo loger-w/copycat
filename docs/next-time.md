@@ -151,6 +151,13 @@
   - **新的首要假說(讀 code + 探針成立,尚未在真環境確認)**:`_subscribe_all`(`server/futures_engine.py:127`)`except ConnectionError` 只 log 就跳下一品,**失敗的商品之後沒有任何重試路徑** —— 失敗 symbol 不進 `_subscribed`,而 `_check_stale` 的重訂閱只走 `list(self._subscribed)`(`live/tc4.py:456`);leaf fallback 又需要先收到推播才會排程。探針(`mechanism_probe.py`,真 engine + 假 source)實測:三品訂閱失敗 → `seq=0`、三品 `p=null`、`subscribe_symbol` 每品只呼叫一次、leaf 永不觸發 —— **與通報症狀逐項相同**。佐證:當晚兩份 log 的 TC4 connect 間隔是 30.0s = 3 × `_REQ_TIMEOUT_MS`(今天只有 1 ×),即當晚 TC4 REQ 通道確實在逾時。
   - **下次再發生時的一次定案法**:grep server log 有沒有 `futures <p> subscribe ... failed`(`_subscribe_all` 的 warning)。**有** → 上述機制確認,修法 = 失敗品進重試佇列(或把失敗 symbol 也記進 `_subscribed` 讓 `_check_stale` 接手)。**沒有** → 不是它,改查 SubPort / listener 執行緒存活。
   - **前提:server 要留 log**。通報那台沒保存 stdout,是這輪定位不了的直接原因 —— 日常啟動建議 `python -m copycat.server > logs/server-YYYYMMDD-HHMM.log 2>&1`。
+  - **〔2026-08-04 首要假說的缺陷已修(fix/startup-names-futures-resub)〕**:`_subscribe_all`
+    失敗品改進 `_pending_subs`,背景 `_resub_loop`(預設 10s)重試至成功;warning 字串
+    `futures subscribe %s failed` 原封不動(本條 grep 判準繼續有效),重試成功另印
+    `futures %s subscribe retry ok`。**真實觸發源(REQ 為何逾時)仍未定位** —— 修的是
+    「失敗後零復原路徑」,下次真發生時症狀應在 ~10s 內自癒並在 log 留上述兩行;若再出現
+    「三品長時間 p=null 且 log 無 subscribe failed」= 不是這條機制,回頭查 SubPort / listener。
+    (第 8 次觀測 2026-08-04 00:06:三品健康,未重現。)
   - **〔2026-07-31 15:47 第 7 次未重現,且涵蓋一個全新條件〕** 一台 13:20 起跑、**橫跨日盤 → 夜盤 session 轉換**的 server(先前 6 次全是單一盤別內的冷啟動),15:47 打 `/api/futures/state`:TXF/MXF/TMF **三品全有價 + 五檔俱全**,`resolved_contract=202608`,`seq=138718`。同一台的六腿江波圖與相關係數表(台指腿正是讀 `futures_engine.state()`)夜盤畫面全部有值。累計 **7/7 未重現**。判準不變:下次發生時先 grep server log 有沒有 `futures <p> subscribe ... failed`。
 - [x] ~~`test_index_engine.py::test_rollover_two_phase` 只在真實時鐘 ≥ 08:30 才會綠~~ **2026-07-30 修畢**:建構子補 `now_fn`(預設 `now_time()` = 真實牆鐘 → prod 行為零改變;`IndexEngine(` 只有 `app.py:210` 與測試兩個呼叫點)。另補 `test_rollover_gate_opens_at_0830` 覆蓋門檻本身(原本無測試 —— 唯一的時鐘讀取沒有注入點,寫不出來)。注入 00/08/10/23 皆綠;反向驗證 revert → 12 紅。
 - [x] ~~`test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`~~ **2026-07-30 修畢**:`tests/conftest.py` 出 `requires_tcpy` marker,兩個 class 整體 skip。**過程中抓到第三條(原記載未列)**:`test_check_stale_reconnect_loop_stoppable_when_app_dead` 在缺 wrapper 時是**假綠** —— 重連執行緒死於 `ModuleNotFoundError` 也滿足 `assert not worker.is_alive()`,等於沒驗到「迴圈可中斷」。雙向驗證:缺 TCPY → 3 skipped/37 passed;複製 TCPY 進 worktree → 40 passed/**0 skipped**(marker 不過度 skip)。
@@ -464,3 +471,20 @@
 - [ ] **L-5 backfill 首頁抓兩次**(stock_source 輪詢 `_get_history(...,"0")` 丟棄 first 後
   iter_qry_pages 又抓第 0 頁):每回補多一趟 REQ。修前必先驗 QryIndex 游標語意
   (拿 first 末筆 QryIndex 當 start 是否嚴格銜接),改壞會靜默少一頁。
+
+## 2026-08-04(startup-names-futures-resub /bug 收尾留尾巴)
+
+- [ ] **「訂閱失敗零重試」同結構還有三處**(本輪只修 futures_engine,鐵則 B 不順手擴):
+  `corr_engine.py:129`(腿訂閱失敗「該腿停用」— 整天沒該腿的相關係數與江波圖線)、
+  `stock_engine.py:164`(自選逐檔 watchlist subscribe 失敗 — 該檔沒行情,直到下次
+  set_watchlist 才有機會重掛)、`stock_engine.py:226`(stkfut 個股期腿同款)。
+  對照組:`index_engine` 已有 `_schedule_retry` backoff 是好樣板。若要收斂,考慮把
+  futures_engine 的 pending-resub 形狀泛化(或至少 corr 腿先補 — 失效面最大)。
+- [ ] **啟動窗內其他 REST query 的失敗終態未盤點**:本輪只修 `useStockNames`
+  (refetchInterval 無資料 3s 輪詢)。同窗口失敗的其他 query(watchlist GET、capital
+  poll 類已有 interval 天然免疫;一次性 staleTime Infinity 類才有險)若 user 再回報
+  「某面板初載空、用一陣子才出現」,先套同款 refetchInterval 再查別的。
+- [ ] **lifespan 阻塞本身**(root 條件):TXO 全鏈回補 `await` 在 yield 前,啟動窗常態
+  數十秒~分鐘級,期間整個 HTTP 面不可用(真實量測:fake 延遲 12s → 12.6s 才首次 200)。
+  前端已能自癒,但若想根治「重啟後空窗」,得把 runtime.start 的回補段移到背景 task
+  (engines 的 app.state 時序假設要全部重審)— 獨立一輪的架構工作,勿順手。

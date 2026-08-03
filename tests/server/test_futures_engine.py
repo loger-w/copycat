@@ -339,6 +339,85 @@ class TestLeafFallbackSubscribe:
         await engine.close()
 
 
+class _FlakySource(FakeSource):
+    """前 N 次 subscribe_symbol raise ConnectionError,之後成功;attempts 記每次呼叫。"""
+
+    def __init__(self, fail_times: dict[str, int]) -> None:
+        super().__init__()
+        self._left = dict(fail_times)
+        self.attempts: list[str] = []
+
+    def subscribe_symbol(self, product: str) -> None:
+        self.attempts.append(product)
+        left = self._left.get(product, 0)
+        if left > 0:
+            self._left[product] = left - 1
+            raise ConnectionError(f"SUBQUOTE fail {product}")
+        super().subscribe_symbol(product)
+
+
+async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("條件逾時未成立")
+
+
+class TestPendingResubscribe:
+    """bug startup-names-futures-resub 症狀 3:訂閱失敗品**零重試路徑**。
+
+    source 層 `_resub` 只重掛成功過的 symbol、`_leaf_fallback` 需先由推播解析 ym →
+    「一開始就訂不到」的商品兩條路都接不了手,期貨面板整段 p=null 且無錯誤訊號。
+    """
+
+    async def test_failed_products_retried_until_success(self) -> None:
+        src = _FlakySource({"TXF": 2, "MXF": 1})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        assert src.subscribed == ["TMF"]  # 首輪只有 TMF 成功
+        try:
+            await _wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
+        finally:
+            await engine.close()
+        assert sorted(src.subscribed) == ["MXF", "TMF", "TXF"]
+        assert src.attempts.count("TXF") == 3  # 失敗 2 次 + 成功 1 次
+        assert src.attempts.count("TMF") == 1  # 成功品不重訂
+
+    async def test_state_updates_after_retry_success(self) -> None:
+        src = _FlakySource({"TXF": 1})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await _wait_until(lambda: "TXF" in src.subscribed)
+        _push(src, _quote())
+        await _drain()
+        assert engine.state()["products"]["TXF"]["p"] == 23_500_000
+        await engine.close()
+
+    async def test_all_success_no_retry_task(self) -> None:
+        src = _FlakySource({})
+        baseline = len(asyncio.all_tasks())
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await asyncio.sleep(0.05)
+        assert src.attempts == ["TXF", "MXF", "TMF"]  # 每品恰一次
+        assert len(asyncio.all_tasks()) == baseline  # 無 retry task 殘留
+        await engine.close()
+
+    async def test_close_stops_retry_loop(self) -> None:
+        src = _FlakySource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await _wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
+        await engine.close()
+        n = len(src.attempts)
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert pending == []
+        await asyncio.sleep(0.05)  # 5 個間隔
+        assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
+
+
 class TestFetchDay1kPassthrough:
     """江波圖回補(index-river-chart SC-4):台指 1K 必須從持有 TXF 訂閱的這條 session 問。"""
 
