@@ -194,7 +194,11 @@ export function StockPage({ code, onSelect, stream }: Props) {
                     />
                   </div>
                   <div className="min-h-0 min-w-0 flex-[2]">
-                    <TickTape ticks={accum.ticks} ref_={meta?.ref ?? null} />
+                    {/* `key={code}`:明細的「載入更多」筆數是 TickTape 內部 state,
+                        換股時元件不 unmount → 展開到一半的筆數會跟著新股票走
+                        (同一頁的 pickerOpen 是換股歸零的,兩者語意該一致)。
+                        用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。 */}
+                    <TickTape key={code} ticks={accum.ticks} ref_={meta?.ref ?? null} />
                   </div>
                 </div>
               </>
