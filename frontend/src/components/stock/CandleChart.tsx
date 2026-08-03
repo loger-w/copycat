@@ -432,7 +432,11 @@ export function CandleChart({
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [total]);
+    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
+    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
+    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
+    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
+  }, [total, dimW, dimH]);
 
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
