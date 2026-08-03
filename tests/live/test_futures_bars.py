@@ -8,31 +8,9 @@ session 手上,TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從�
 from __future__ import annotations
 
 import json
-import threading
-from typing import Any
 
 from copycat.live.futures_source import FuturesQuoteSource
-
-
-class _JsonSocket:
-    def __init__(self, handler: Any) -> None:
-        self._handler = handler
-        self._resp = b""
-
-    def send_string(self, payload: str) -> None:
-        self._resp = self._handler(json.loads(payload))
-
-    def recv(self) -> bytes:
-        return self._resp
-
-
-class _FakeApi:
-    def __init__(self, handler: Any) -> None:
-        self.socket = _JsonSocket(handler)
-        self.lock = threading.Lock()
-
-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
-        pass
+from tests.helpers.tc4_fakes import FakeApi
 
 
 def _dk_row(date: str, o: str, h: str, low: str, c: str, v: str = "100", qi: str = "1") -> dict:
@@ -72,7 +50,7 @@ def _source(rows: list[dict], sent: list[dict] | None = None) -> FuturesQuoteSou
             return (f"{dtype}:" + body + "\0").encode()
         return (json.dumps({"Success": "OK"}) + "\0").encode()
 
-    return FuturesQuoteSource(api=_FakeApi(handler), session="s1", poll_wait_secs=0.0)
+    return FuturesQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0.0)
 
 
 class TestFetchBarsRange:

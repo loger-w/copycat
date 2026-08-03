@@ -3,38 +3,13 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
 from typing import Any
 
 from copycat.live.corr_source import CorrQuoteSource
 from copycat.live.futures_source import FuturesQuoteSource
 from copycat.live.river_models import all_day_utc_window
-
-
-class _JsonSocket:
-    def __init__(self, handler: Any) -> None:
-        self._handler = handler
-        self._resp = b""
-
-    def send_string(self, payload: str) -> None:
-        self._resp = self._handler(json.loads(payload))
-
-    def recv(self) -> bytes:
-        return self._resp
-
-
-class _FakeApi:
-    def __init__(self, handler: Any) -> None:
-        self.socket = _JsonSocket(handler)
-        self.lock = threading.Lock()
-
-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
-        pass
-
-
-def _ok(payload: dict | None = None) -> bytes:
-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
+from tests.helpers.tc4_fakes import FakeApi, ok
 
 
 def _his(rows: list[dict]) -> bytes:
@@ -66,7 +41,7 @@ def _paging_handler(sent: list[dict]) -> Any:
     def handler(obj: dict) -> bytes:
         sent.append(obj)
         if obj["Request"] != "GETHISDATA":
-            return _ok()
+            return ok()
         return _his(PAGES.get(obj["Param"]["QryIndex"], []))
 
     return handler
@@ -75,7 +50,7 @@ def _paging_handler(sent: list[dict]) -> Any:
 class TestCorrSourceFetchDay1k:
     def test_harvests_all_pages_and_parses_minutes(self) -> None:
         sent: list[dict] = []
-        src = CorrQuoteSource(api=_FakeApi(_paging_handler(sent)), session="s1")
+        src = CorrQuoteSource(api=FakeApi(_paging_handler(sent)), session="s1")
 
         assert src.fetch_day_1k("TC.F.CME.ES.HOT") == [
             (526, 51_666_000),
@@ -86,7 +61,7 @@ class TestCorrSourceFetchDay1k:
 
     def test_subscribes_1k_with_all_day_utc_window(self) -> None:
         sent: list[dict] = []
-        src = CorrQuoteSource(api=_FakeApi(_paging_handler(sent)), session="s1")
+        src = CorrQuoteSource(api=FakeApi(_paging_handler(sent)), session="s1")
         src.fetch_day_1k("TC.F.CME.ES.HOT")
 
         sub = next(o for o in sent if o["Request"] == "SUBQUOTE")
@@ -95,9 +70,9 @@ class TestCorrSourceFetchDay1k:
 
     def test_empty_first_page_returns_empty_without_blocking(self) -> None:
         def handler(obj: dict) -> bytes:
-            return _his([]) if obj["Request"] == "GETHISDATA" else _ok()
+            return _his([]) if obj["Request"] == "GETHISDATA" else ok()
 
-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1", poll_wait_secs=0)
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
         started = time.monotonic()
 
         assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
@@ -107,7 +82,7 @@ class TestCorrSourceFetchDay1k:
 class TestFuturesSourceFetchDay1k:
     def test_product_maps_to_twf_hot_symbol(self) -> None:
         sent: list[dict] = []
-        src = FuturesQuoteSource(api=_FakeApi(_paging_handler(sent)), session="s1")
+        src = FuturesQuoteSource(api=FakeApi(_paging_handler(sent)), session="s1")
 
         minutes = src.fetch_day_1k("TXF")
 

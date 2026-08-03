@@ -2,37 +2,9 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any
 
 from copycat.live.stock_source import StockQuoteSource, stock_symbol, stock_window
-
-
-class _JsonSocket:
-    """socket 替身:send 的 JSON 電文交 handler 分派,recv 回其回應(同 test_tc4 慣例)。"""
-
-    def __init__(self, handler: Any) -> None:
-        self._handler = handler
-        self._resp = b""
-
-    def send_string(self, payload: str) -> None:
-        self._resp = self._handler(json.loads(payload))
-
-    def recv(self) -> bytes:
-        return self._resp
-
-
-class _FakeApi:
-    def __init__(self, handler: Any) -> None:
-        self.socket = _JsonSocket(handler)
-        self.lock = threading.Lock()
-
-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
-        pass
-
-
-def _ok(payload: dict | None = None) -> bytes:
-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
-
+from tests.helpers.tc4_fakes import FakeApi, ok
 
 HIST_ROW = {
     "Date": "20260721",
@@ -66,9 +38,9 @@ class TestSubscribe:
 
         def handler(obj: dict) -> bytes:
             sent.append(obj)
-            return _ok()
+            return ok()
 
-        src = StockQuoteSource(api=_FakeApi(handler), session="s1", trade_date="2026-07-21")
+        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
         src.subscribe_symbol("2330")
         assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
         param = sent[1]["Param"]
@@ -80,14 +52,14 @@ class TestSubscribe:
     def test_subscribe_starts_listener_when_sub_port_known(self) -> None:
         # 2026-07-21 real-env 實證:漏啟 listener → 訂閱成功但永收不到推播,
         # 健檢把全部檔誤標 no_data
-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
         src._sub_port = "59999"  # 模擬真連線已知 SubPort
         src.subscribe_symbol("2330")
         assert src._listener is not None
 
     def test_subscribe_without_sub_port_skips_listener(self) -> None:
         # 注入測試路徑(無真連線)不得因 listener 缺 SubPort 而炸
-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
         src.subscribe_symbol("2330")
         assert src._listener is None
 
@@ -95,9 +67,9 @@ class TestSubscribe:
         def handler(obj: dict) -> bytes:
             if obj["Request"] == "SUBQUOTE":
                 return (json.dumps({"Success": "Fail", "ErrMsg": "x"}) + "\0").encode()
-            return _ok()
+            return ok()
 
-        src = StockQuoteSource(api=_FakeApi(handler), session="s1", trade_date="2026-07-21")
+        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
         try:
             src.subscribe_symbol("2330")
         except ConnectionError:
@@ -112,16 +84,16 @@ class TestBackfill:
 
         def handler(obj: dict) -> bytes:
             if obj["Request"] == "SUBQUOTE":
-                return _ok()
+                return ok()
             if obj["Request"] == "GETHISDATA":
                 qi = obj["Param"]["QryIndex"]
                 return (
                     "TICKS:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
         )
         ticks = src.backfill("2330")
         assert len(ticks) == 1
@@ -154,10 +126,10 @@ class TestFetchDailyBars:
                 return (
                     "DK:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         bars = src.fetch_daily_bars("2330")
         assert bars == [
@@ -215,10 +187,10 @@ class TestFetchDailyBars:
                 return (
                     "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         bars = src.fetch_daily_bars("2330")
         assert bars == [
@@ -239,10 +211,10 @@ class TestFetchDailyBars:
                 return (
                     "DK:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         bars = src.fetch_daily_bars("2330", n=25)
         assert len(bars) == 25
@@ -255,7 +227,7 @@ class TestFetchDailyBars:
             raise zmq.ZMQError()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         try:
             src.fetch_daily_bars("2330")
@@ -288,10 +260,10 @@ class TestFetchDayMinutes:
                 return (
                     "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         minutes = src.fetch_day_minutes("IX0001")
         assert minutes == {"0901": 100_500, "1330": 102_000}
@@ -306,10 +278,10 @@ class TestFetchDayMinutes:
                 return (
                     "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
 
@@ -324,10 +296,10 @@ class TestFetchDayMinutes:
                 return (
                     "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
                 ).encode()
-            return _ok()
+            return ok()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
 
@@ -338,7 +310,7 @@ class TestFetchDayMinutes:
             raise zmq.ZMQError()
 
         src = StockQuoteSource(
-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
         try:
             src.fetch_day_minutes("IX0001")
@@ -350,7 +322,7 @@ class TestFetchDayMinutes:
 
 class TestRawDispatch:
     def test_realtime_quote_dispatched(self) -> None:
-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
         got: list[dict] = []
         src.set_on_message(got.append)
         raw = "REALTIME:" + json.dumps(
@@ -360,7 +332,7 @@ class TestRawDispatch:
         assert got == [{"Symbol": "TC.S.TWS.2330", "Security": "2330"}]
 
     def test_ping_ignored(self) -> None:
-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
         got: list[dict] = []
         src.set_on_message(got.append)
         src.handle_raw("PING:" + json.dumps({"DataType": "PING"}))
@@ -370,7 +342,7 @@ class TestRawDispatch:
 class TestNoDataHealthCheck:
     def test_no_push_within_deadline_flags_no_data(self) -> None:
         src = StockQuoteSource(
-            api=_FakeApi(lambda o: _ok()),
+            api=FakeApi(lambda o: ok()),
             session="s1",
             trade_date="2026-07-21",
             no_data_secs=0.01,
@@ -384,7 +356,7 @@ class TestNoDataHealthCheck:
 
     def test_push_cancels_health_check(self) -> None:
         src = StockQuoteSource(
-            api=_FakeApi(lambda o: _ok()),
+            api=FakeApi(lambda o: ok()),
             session="s1",
             trade_date="2026-07-21",
             no_data_secs=0.05,
@@ -404,7 +376,7 @@ class TestNoDataHealthCheck:
 
     def test_health_check_disabled_outside_trading_hours(self) -> None:
         src = StockQuoteSource(
-            api=_FakeApi(lambda o: _ok()),
+            api=FakeApi(lambda o: ok()),
             session="s1",
             trade_date="2026-07-21",
             no_data_secs=0.01,

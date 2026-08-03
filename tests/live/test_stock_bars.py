@@ -1,40 +1,15 @@
 from __future__ import annotations
 
 import json
-import threading
 from typing import Any
 
 from copycat.live.stock_source import StockQuoteSource
-
-
-class _JsonSocket:
-    def __init__(self, handler: Any) -> None:
-        self._handler = handler
-        self._resp = b""
-
-    def send_string(self, payload: str) -> None:
-        self._resp = self._handler(json.loads(payload))
-
-    def recv(self) -> bytes:
-        return self._resp
-
-
-class _FakeApi:
-    def __init__(self, handler: Any) -> None:
-        self.socket = _JsonSocket(handler)
-        self.lock = threading.Lock()
-
-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
-        pass
-
-
-def _ok(payload: dict | None = None) -> bytes:
-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
+from tests.helpers.tc4_fakes import FakeApi, ok
 
 
 def _src(handler: Any) -> StockQuoteSource:
     return StockQuoteSource(
-        api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
     )
 
 
@@ -49,7 +24,7 @@ def _pager(pages_by_type: dict[str, dict[str, list[dict]]], sent: list[dict] | N
             qi = obj["Param"]["QryIndex"]
             rows = pages_by_type.get(dtype, {}).get(qi, [])
             return (f"{dtype}:" + json.dumps({"Success": "OK", "HisData": rows}) + "\0").encode()
-        return _ok()
+        return ok()
 
     return handler
 
@@ -229,7 +204,7 @@ class TestCollectHistoryWaiting:
     def test_backoff_starts_well_below_poll_wait(self) -> None:
         """首輪落空後不再睡滿 poll_wait,改退避輪詢(2.13s → 目標 ≤1.6s)。"""
         src = StockQuoteSource(
-            api=_FakeApi(_pager({"1K": {}})),
+            api=FakeApi(_pager({"1K": {}})),
             session="s1",
             trade_date="2026-07-28",
             poll_wait_secs=1.0,
@@ -243,7 +218,7 @@ class TestCollectHistoryWaiting:
     def test_fallback_1k_also_uses_short_deadline(self) -> None:
         """tf=D 的 DK→1K fallback 也要傳短 budget,否則無資料標的仍是 10+30=40s。"""
         src = StockQuoteSource(
-            api=_FakeApi(_pager({"DK": {}, "1K": {}})),
+            api=FakeApi(_pager({"DK": {}, "1K": {}})),
             session="s1",
             trade_date="2026-07-28",
             poll_wait_secs=1.0,
