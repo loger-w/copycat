@@ -4,6 +4,7 @@ import { bandSeries, bollinger, type Band } from "@/lib/bollinger";
 import {
   buildCandleGeometry,
   movingAverage,
+  X_LABEL_H,
   type Bar,
   type CandleGeometry,
 } from "@/lib/candle";
@@ -29,7 +30,6 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
  *  再加上兩個 figure 的框外 chrome 逐項對稱(頂列 h-[1.375rem]+mb-1、底列 mt-1+h-4),
  *  切換模式時圖表區塊高度才不會跳(SC-6.7)。殘差 0.5px @ 容器寬 1400。 */
 const DIMS = { width: 1400, height: 578 };
-const X_LABEL_H = 14;
 /** 滾輪每一格的縮放倍率 */
 const ZOOM_STEP = 1.15;
 /** 軸標籤尺寸;time tag 的 y = height − boxH,底邊恰貼 viewBox 底不被裁 */
