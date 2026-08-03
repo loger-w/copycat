@@ -132,7 +132,9 @@ export interface Size {
   height: number;
 }
 
-const X_LABEL_H = 14; // 底部時間標籤帶
+/** 底部時間標籤帶。**export 給元件端共用** —— 元件的 `plotBottom` 與本檔的幾何必須用
+ *  同一個值,各留一份數字就是「幾何算出來的底」與「畫上去的底」靜默錯開。 */
+export const X_LABEL_H = 14;
 const PAD_Y = 6;
 const MIN_BODY_H = 1; // 開收同價仍要看得見
 const VOL_RATIO = 0.22; // 量區佔價圖高度比例
