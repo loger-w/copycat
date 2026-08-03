@@ -50,8 +50,6 @@ const ACCUM = fromSnapshot({
   seq: 2,
   last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
   vwap: 2_380_000,
-  cum_inner: 2,
-  cum_outer: 10,
   minutes: {
     // round4 項 1:per-minute h/l 是當日高低標記的定位依據 —— 標記畫在「摸到極值的
     // 那一分鐘」上,而 541 的高(2_395_000)高於任何一分鐘的收盤,正是「摸到就算」的樣態
@@ -104,7 +102,7 @@ describe("StockIntradayChart", () => {
     const noRef = fromSnapshot({
       code: "2330", seq: 1,
       last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
-      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
+      vwap: 2_380_000,
       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
       ticks: [], book: null,
       meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
@@ -125,7 +123,7 @@ describe("StockIntradayChart", () => {
 
   it("無分鐘資料顯示等待提示", () => {
     const empty = fromSnapshot({
-      code: "2330", seq: 0, last: null, vwap: null, cum_inner: 0, cum_outer: 0,
+      code: "2330", seq: 0, last: null, vwap: null,
       minutes: {}, ticks: [], book: null, meta: null,
     });
     wrap(<StockIntradayChart accum={empty} />);
@@ -512,7 +510,7 @@ describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
     const noRef = fromSnapshot({
       code: "2330", seq: 1,
       last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
-      vwap: 2_380_000, cum_inner: 0, cum_outer: 10,
+      vwap: 2_380_000,
       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
       ticks: [], book: null,
       meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
@@ -868,7 +866,7 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     const legacy = fromSnapshot({
       code: "2330", seq: 2,
       last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
-      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
+      vwap: 2_380_000,
       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
       ticks: [], book: null,
       meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
@@ -924,7 +922,7 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
 
   it("尚無成交 → 不渲染圓點且不崩", () => {
     const empty = fromSnapshot({
-      code: "2330", seq: 1, last: null, vwap: null, cum_inner: 0, cum_outer: 0,
+      code: "2330", seq: 1, last: null, vwap: null,
       minutes: {}, ticks: [], book: null,
       meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_close: null, y_vol: null },
     });

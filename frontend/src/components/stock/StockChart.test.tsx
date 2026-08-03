@@ -12,8 +12,6 @@ const ACCUM = {
   seq: 1,
   last: { p: 2_380_000, t: "09:00:01.000", cum_vol: 1 },
   vwap: 2_380_000,
-  cumInner: 0,
-  cumOuter: 1,
   minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
   ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
   book: { bids: [], asks: [] },

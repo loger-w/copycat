@@ -61,8 +61,6 @@ export interface StockAccum {
   seq: number;
   last: { p: number; t: string; cum_vol: number } | null;
   vwap: number | null;
-  cumInner: number;
-  cumOuter: number;
   minutes: Map<number, MinuteAgg>;
   ticks: TickRow[];
   book: StockBook | null;
@@ -92,8 +90,6 @@ interface SnapshotShape {
   seq: number;
   last: { p: number; t: string; cum_vol: number } | null;
   vwap: number | null;
-  cum_inner: number;
-  cum_outer: number;
   minutes: Record<string, MinuteAgg>;
   ticks: TickRow[];
   book: StockBook | null;
@@ -117,8 +113,6 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
     seq: snap.seq,
     last: snap.last,
     vwap: snap.vwap,
-    cumInner: snap.cum_inner,
-    cumOuter: snap.cum_outer,
     minutes,
     ticks: [...(snap.ticks ?? [])].slice(-TAPE_MAX),
     book: snap.book,
@@ -163,8 +157,6 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
     seq: msg.seq,
     last: { p: msg.p, t: msg.t, cum_vol: (acc.last?.cum_vol ?? acc.volume) + msg.q },
     vwap: volume > 0 ? Math.round(amountMilli / volume) : null,
-    cumInner: acc.cumInner + (msg.side === "inner" ? msg.q : 0),
-    cumOuter: acc.cumOuter + (msg.side === "outer" ? msg.q : 0),
     minutes,
     ticks,
     // 缺欄位 → 保留原值(舊後端不發 h/l 時,線不該閃掉)
