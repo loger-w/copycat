@@ -78,6 +78,31 @@ class TestAggregation:
         assert len(snap["ticks"]) == 1
         assert snap["minutes"]
 
+    def test_snapshot_omits_dead_wire_fields(self) -> None:
+        """M3:cum_inner/cum_outer/meta.y_close 前端零讀取 → 退出 wire。
+        內外盤累積量仍可由 `minutes` 的 i/o 還原(能量副圖本來就讀那一份)。"""
+        st = StockDayState()
+        st.ingest(_tick(10, qty=10, side="outer"))
+        st.update_meta(
+            StockMeta(
+                name="台積電",
+                ref_milli=2_320_000,
+                upper_milli=2_550_000,
+                lower_milli=2_090_000,
+                y_close_milli=2_320_000,
+                y_volume=100,
+                open_time="09:00:00",
+                close_time="13:30:00",
+            )
+        )
+        snap = st.snapshot()
+        assert "cum_inner" not in snap
+        assert "cum_outer" not in snap
+        assert snap["meta"] is not None
+        assert "y_close" not in snap["meta"]
+        assert snap["meta"]["y_vol"] == 100  # 同層仍在的欄位不受波及
+        assert snap["minutes"]["657"]["o"] == 10  # 累積量的還原來源
+
 
 class TestMinuteHighLow:
     """per-minute 高低(round4 項 1):分時圖要把當日高低標在**摸到的那一分鐘**上,

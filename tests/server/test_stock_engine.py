@@ -294,6 +294,42 @@ class TestStreamAndStatus:
         await engine.close()
 
 
+class TestSnapshotShape:
+    """M3:REST snapshot 只送有消費者的欄位。"""
+
+    async def test_snapshot_omits_dead_wire_fields(self) -> None:
+        """tc4 / backfilling 的畫面來源是 WS status 訊息(仍是活碼),snapshot 這三個
+        欄位前端零讀取;stkfut_prod 更是每次 snapshot 白算一次 map 查找。"""
+        engine, _ = await _make()
+        await engine.set_main("2330")
+        await _drain(engine)
+        snap = engine.snapshot("2330")
+        assert "tc4" not in snap
+        assert "backfilling" not in snap
+        assert "stkfut_prod" not in snap
+        assert snap["code"] == "2330"  # 仍在的欄位不受波及
+        assert snap["no_data"] is False
+        await engine.close()
+
+    async def test_status_message_still_carries_tc4_and_backfilling(self) -> None:
+        """同名活碼護欄:WS status 訊息是畫面「回補中…」與連線徽章的唯一來源。"""
+        engine, src = await _make()
+        stream = engine.stream()
+        assert src.on_reconnect is not None
+        src.on_reconnect()
+        await _drain(engine)
+        got: list[dict] = []
+        try:
+            while True:
+                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+        status = next(m for m in got if m["type"] == "status")
+        assert status["tc4"] == "up"
+        assert status["backfilling"] is None
+        await engine.close()
+
+
 class TestWatchlistQuoteSeed:
     """round4 項 4:側欄開頁 / 盤後全是 `-` 的根因 —— quote 只有 tick 驅動的生產點,
     新 client 連上時沒有任何歷史訊息可收。修在 stream() 接點(開頁與重連天然自癒),
