@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { parseError } from "@/lib/api-error";
 import type { Group, Watchlist } from "@/lib/watchlist-model";
 
 export type { Group, Watchlist };
@@ -27,15 +28,6 @@ export function errText(message: string): string {
   if (message === "BAD_CODE") return "股號格式不正確";
   if (message === "BAD_GROUP") return "群組名稱不合法";
   return "儲存失敗";
-}
-
-async function parseError(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { detail?: { error?: string } };
-    return body.detail?.error ?? `HTTP_${res.status}`;
-  } catch {
-    return `HTTP_${res.status}`;
-  }
 }
 
 async function fetchWatchlist(): Promise<Watchlist> {

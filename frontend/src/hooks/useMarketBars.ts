@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
 import { type MarketKey, type MarketMode, tfOf } from "@/lib/timeframe";
 import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
@@ -34,16 +35,7 @@ export interface MarketBars {
 async function fetchMarketBars(key: MarketKey, tf: string): Promise<MarketBars> {
   const qs = tf === "1" ? `tf=1&days=${MARKET_MINUTE_DAYS}` : `tf=${tf}`;
   const res = await fetch(`/api/market/bars/${key}?${qs}`);
-  if (!res.ok) {
-    let code = `HTTP_${res.status}`;
-    try {
-      const body = (await res.json()) as { detail?: { error?: string } };
-      code = body.detail?.error ?? code;
-    } catch {
-      /* 非 JSON body:保留 HTTP_ 前綴碼 */
-    }
-    throw new Error(code);
-  }
+  if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as MarketBars;
 }
 
