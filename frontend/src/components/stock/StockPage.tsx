@@ -9,7 +9,7 @@ import type { StockStreamState } from "@/hooks/useStockStream";
 import { fmt } from "@/lib/format";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
-import { addCode, assignToGroup, type Watchlist } from "@/lib/watchlist-model";
+import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
@@ -50,7 +50,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
   function commit(next: Watchlist): void {
     setPickerOpen(false);
     if (wl === undefined) return;
-    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
+    if (isSameWatchlist(next, wl)) return;
     save.mutate(next);
   }
 
