@@ -410,34 +410,43 @@
 盤點 artifacts:`.claude/refactor/stock-page-dedupe-deadcode/`(三份 findings + 計畫)。
 以下 [behavior] 全部是 /refactor 中發現但**修了就改行為**的項目,要修走 /bug 或 /mod。
 
-- [ ] **[behavior] ref=0 的「無參考價」語意不一致**(一族三處):
+- [x] **[behavior] ref=0 的「無參考價」語意不一致**(一族三處)**→ 2026-08-03 修畢
+  (mod/next-time-behavior-fixes M5,d3739cc):幾何入口 ref/upper/lower <=0 統一歸一
+  null + 元件端一次歸一;review 補抓 upper/lower=0 走 [0,0] flat 分支與 hover 價色恆 bull
+  兩處原描述沒涵蓋的失效**:
   (a) `stock-intraday-svg.ts` `ref = input.meta?.ref ?? (prices[0] ?? 0)` 用 `??`,而後端
   `to_milli_units("0")` 回 0 非 None → TC4 送 ReferencePrice="0" 時 ref 卡 0,autofit 分支
   算出 yTop=hi×1.1 / yBottom=−hi×1.1 整條走勢壓上半;StockPage/OrderBook 同件事用 truthy 判。
   (b) StockIntradayChart 的 lastTone 只擋 `ref === null`,而 `markTone` 多 `ref <= 0` 分支 —
   ref=0 時兩者 className 分岔(Track A6 因此跳過收斂;lastTone 那份是既有不一致)。
   修法方向:ref=0 一律視為無參考價(對齊 hasRef / tickTone / 後端 chg_pct),需 🔴 + 測試。
-- [ ] **[behavior] 前端增量 VWAP 分母錯位**:前端用 `vwap × last.cum_vol` 還原分子再
+- [x] **[behavior] 前端增量 VWAP 分母錯位****→ 2026-08-03 修畢(M4,2208a0e+74cc449):
+  snapshot 增 additive `vol`(去重剔試撮 Σqty),前端種子 `snap.vol ?? cum_vol ?? 0`**:前端用 `vwap × last.cum_vol` 還原分子再
   `+ msg.q` 累加,後端分母是去重剔試撮後的 Σqty ≠ cum_vol(TC4 TradeVolume)→
   訂閱前漏單/試撮期時靜默分歧,至下次全量 refetch 才收斂(`stock-accum.ts` vs
   `stock_state.py:139-141`)。
-- [ ] **[behavior] `/api/stock/bars` tf=D 忽略 days 但仍對 days 做 400 驗證**(docstring
-  說忽略;`?tf=D&days=abc` 回 BAD_DAYS)。
-- [ ] **[behavior] DepthBar 鎖停判定仍用 `b[0]?.[0] === upper`**:市價佇列 0 價檔位會打穿
+- [x] ~~**[behavior] `/api/stock/bars` tf=D 忽略 days 但仍對 days 做 400 驗證**~~
+  **2026-08-03 修畢(M1,f322781):tf=D 路徑不再驗 days**。
+- [x] **[behavior] DepthBar 鎖停判定仍用 `b[0]?.[0] === upper`****→ 2026-08-03 修畢
+  (M6,145c462):全套對齊 OrderBook — badge best-limit + maxVol/總量 limit-only +
+  0 價顯示「市價」(spec review S-6 把原本只修 badge 的半套擋下)**:市價佇列 0 價檔位會打穿
   (CLAUDE.md §8 2026-07-31 條;OrderBook 已改 `_best_limit_price` 思路,DepthBar 只服務
   期貨面尚未觀測到 0 價檔位,屬潛伏不一致)。
-- [ ] **[behavior] CandleChart 滾輪 useEffect deps 缺 dimW/dimH**(deps 只有 [total],閉包
-  捕捉舊 dim):resize 後縮放錨點用舊寬 — 補 deps 是修 stale-closure bug,需 🔴 獨立
-  commit + 「resize 後滾輪錨點」回歸測試(plan review R-4 裁定)。
-- [ ] **[behavior] TickTape**:`limit`(載入更多)state 切股不歸零(StockPage 未帶 key,
-  與 pickerOpen 的換股歸零不一致);且 `[...ticks].reverse()` 每 tick render 複製反轉 200 列。
-- [ ] **[behavior] 後端 payload 死欄位**(前端讀取端已刪,後端仍每次算+送):
+- [x] ~~**[behavior] CandleChart 滾輪 useEffect deps 缺 dimW/dimH**~~ **2026-08-03 結案
+  (M7,c420481):spec review S-1 推翻 R-4 —— dimW = DIMS.width 模組常數、dimH 不參與
+  錨點,無可觀察 bug;deps 已補為 🔵 hygiene**。
+- [x] ~~**[behavior] TickTape**:`limit` 切股不歸零 + 每 render reverse~~ **2026-08-03
+  修畢(M8,354fc6b key={code} + 68577a0 🔵 reverse useMemo)**。
+- [x] **[behavior] 後端 payload 死欄位****→ 2026-08-03 修畢(M3,3a7cf27+a9708ba):
+  六欄移除、cum_inner/cum_outer 內部累加連帶清除;y_close_milli parse 鏈刻意保留
+  (除權息判別唯一來源,S-9);names.count/bars.code,tf 維持公開**:
   `snapshot.stkfut_prod`(stock_engine 每 snapshot 算)、`meta.y_close`、
   `cum_inner`/`cum_outer`、`snapshot.tc4`/`backfilling`。清除屬 wire 契約改動 → /mod;
   `names.count` / `bars.code,tf` 為刻意公開 API 表面,不清。
-- [ ] **[behavior] `_resub_task` 不進 `_tasks`,close() 不取消它**(重掛中的 rollover task
-  逃過關機;本輪僅補「持有參考防 GC」註解)。
-- [ ] **[behavior] useStockNames 錯誤路徑**:`res.json().catch(() => ({}))` 後直接
+- [x] ~~**[behavior] `_resub_task` 不進 `_tasks`,close() 不取消它**~~ **2026-08-03 修畢
+  (M2,1aaa5eb):resub task 併入 `_tasks`(覆寫失參照的同類洩漏一併解)**。
+- [x] **[behavior] useStockNames 錯誤路徑****→ 2026-08-03 修畢(M9,cdd9dbc:
+  併入 parseError)**:`res.json().catch(() => ({}))` 後直接
   `body.detail?.error`,body 為合法 JSON `null` 時 TypeError 逸出 queryFn(錯誤訊息變
   TypeError 文字)— 與 `lib/api-error.ts` parseError 產出不同,Track A4 因此跳過;
   修掉即可併入 parseError。
