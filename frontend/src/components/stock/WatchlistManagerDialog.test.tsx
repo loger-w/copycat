@@ -1,11 +1,11 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
 import type { Watchlist } from "@/lib/watchlist-model";
+import { wrap } from "@/test-utils";
 
 /** 2317 在自選但不屬任何群組(未分組桶) */
 const WL: Watchlist = {
@@ -47,11 +47,6 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-
-function wrap(ui: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
-}
 
 function open(wl: Watchlist = WL) {
   const onClose = vi.fn();

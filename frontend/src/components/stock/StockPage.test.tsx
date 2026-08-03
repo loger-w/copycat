@@ -1,12 +1,12 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockPage } from "@/components/stock/StockPage";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import type { StockAccum } from "@/lib/stock-accum";
+import { wrap } from "@/test-utils";
 
 // 🔴-3:code / 資料流已上提到 App(D-3)→ 本元件改吃 props,不再自建 WS、不再讀 localStorage。
 // 「TC4 斷線告警列(W-B5)」文案斷言原本掛在此檔的 WS 驅動路徑上,改以 props 直接驅動,
@@ -64,11 +64,6 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-
-function wrap(ui: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
-}
 
 describe("StockPage", () => {
   it("未選檔時顯示提示;自選側欄仍渲染", async () => {

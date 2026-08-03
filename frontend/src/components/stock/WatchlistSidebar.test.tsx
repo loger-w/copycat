@@ -1,11 +1,10 @@
 /** @vitest-environment jsdom */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import type { Group, Watchlist } from "@/lib/watchlist-model";
+import { wrap } from "@/test-utils";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 /** 整包 PUT body(v3 起 codes 與 groups 都是契約的一部分,只推 groups 會漏掉未分組) */
@@ -74,11 +73,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-function wrap(ui: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
-}
 
 const QUOTES = {
   // 2330:一般價位(未觸停)—— upper/lower 有值但現價沒踩到,亮燈不該亮
