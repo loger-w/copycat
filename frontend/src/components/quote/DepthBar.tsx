@@ -1,4 +1,5 @@
 import { chgPct, fmt, fmtPct } from "@/lib/format";
+import { isMarketLevel } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
 /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
@@ -40,21 +41,25 @@ function Cell({ entry, label, side, maxVol }: CellProps) {
     );
   }
   const [priceMilli, qty] = entry;
+  // 市價單佇列(價格欄 0):鎖漲跌停時 TC4 推的第一檔。它沒有價格,印「市價」不印 0
+  // (照 OrderBook 既有慣例)—— 印 0 看起來像有人掛 0 元。
+  const priceText = isMarketLevel(priceMilli) ? "市價" : fmt(priceMilli);
   return (
     <div
-      aria-label={`${label} ${fmt(priceMilli)}`}
+      aria-label={`${label} ${priceText}`}
       className={cn(
         "flex min-w-0 flex-col items-center gap-0.5 px-0.5 py-1 font-mono",
         side === "bid" ? "text-bull" : "text-bear",
       )}
     >
       <span className="text-xs text-ink">{qty}</span>
-      <span className="text-sm">{fmt(priceMilli)}</span>
+      <span className="text-sm">{priceText}</span>
       <span className="flex h-5 w-full items-end">
         <span
           data-testid="depth-vol-bar"
           className={cn("w-full rounded-sm", side === "bid" ? "bg-bull/30" : "bg-bear/30")}
-          style={{ height: `${Math.round((qty / maxVol) * 100)}%` }}
+          // 夾制不可省:`maxVol` 只看限價檔,而市價列的量可以遠超它(比照 OrderBook)
+          style={{ height: `${Math.min(100, Math.round((qty / maxVol) * 100))}%` }}
         />
       </span>
     </div>
@@ -64,12 +69,22 @@ function Cell({ entry, label, side, maxVol }: CellProps) {
 export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }: Props) {
   const b = bids.slice(0, DEPTH);
   const a = asks.slice(0, DEPTH);
-  const maxVol = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
-  const bidTotal = b.reduce((s, [, v]) => s + v, 0);
-  const askTotal = a.reduce((s, [, v]) => s + v, 0);
+  // 總量與量 bar 歸一**一律只算限價量**(對齊 OrderBook,2026-07-31 user 拍板)。
+  // 市價偽檔位混進來的話,同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」
+  // —— 定義隨日子變,跨日 / 跨股比較靜默失真;量 bar 更慘,市價佇列可以是限價量的
+  // 數倍,五根限價 bar 會一起被壓成看不見的短樁。
+  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
+  const limitB = limitOnly(b);
+  const limitA = limitOnly(a);
+  const maxVol = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
+  const bidTotal = limitB.reduce((s, [, v]) => s + v, 0);
+  const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
   const chg = last !== null && ref_ ? chgPct(last, ref_) : null;
-  const lockedUp = upper !== null && b[0]?.[0] === upper;
-  const lockedDown = lower !== null && a[0]?.[0] === lower;
+  // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價 0),漲停價被擠到
+  // `bids[1]` → 判定恆假、badge 靜默消失(2327 實測)。改看「該側有沒有掛在漲跌停價的
+  // 限價檔」,市價偽檔位再也打不穿它。
+  const lockedUp = upper !== null && limitB.some(([p]) => p === upper);
+  const lockedDown = lower !== null && limitA.some(([p]) => p === lower);
 
   // 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
   const bidSlots = [...Array(DEPTH).keys()].reverse();
