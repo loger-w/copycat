@@ -76,13 +76,13 @@ class StockEngine:
         self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
         self._dirty_watchlist: set[str] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # 長駐迴圈 + 每次 rollover 的重掛 task 都進這裡:唯一持有點 = 唯一取消點,
+        # close() 的 cancel+await 鏈自然涵蓋(專用欄位存放會漏掉關機取消,且連跑
+        # 兩次 rollover 時後者覆寫前者 → 前一個 task 失去參照被中途 GC)
         self._tasks: list[asyncio.Task[None]] = []
         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
         self._pool_lock = asyncio.Lock()
-        # 只為持有參照防 GC:asyncio 不強引用 task,不留著會被中途回收
-        # (關機時取消它是行為改動,未做 — 記 docs/next-time.md)
-        self._resub_task: asyncio.Task[None] | None = None
         self.tc4_status = "up"
 
     # ---- 生命週期 ----
@@ -233,7 +233,9 @@ class StockEngine:
         self._generation += 1
         self._pending_date = new_date
         self._source.set_trade_date(new_date)
-        self._resub_task = asyncio.get_running_loop().create_task(self._resubscribe_all())
+        # 進 `_tasks` 而非專用欄位:持有參照防 GC(asyncio 不強引用 task)之外,
+        # 關機時一併被 close() 取消,且連跑兩次 rollover 不會互相覆寫掉參照
+        self._tasks.append(asyncio.get_running_loop().create_task(self._resubscribe_all()))
         logger.info("rollover stage1 → %s (gen=%d)", new_date, self._generation)
 
     async def _resubscribe_all(self) -> None:
@@ -493,4 +495,3 @@ class StockEngine:
                 if state is None or state.last is None:
                     continue
                 self._publish(self._quote_payload(code))
-
