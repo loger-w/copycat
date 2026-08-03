@@ -500,6 +500,28 @@ class TestReviewFixes:
         await _drain(engine)
         assert src.subscribed.count("2330") >= 2  # 背景重掛完成
 
+    async def test_close_cancels_pending_resubscribe_task(self) -> None:
+        """M2:關機要取消 in-flight 的重掛 task(否則 loop 收掉時它還掛著)。
+
+        pending 的製造刻意用 `_pool_lock` 而非 `subscribe_gate`:後者會讓 task 已經
+        進到 `to_thread` 的阻塞裡,cancel 等不回來 → 測試自己死鎖。卡在
+        `async with self._pool_lock` 時取消才乾淨。
+        """
+        engine, _ = await _make()
+        await engine.set_main("2330")
+        await _drain(engine)
+        await engine._pool_lock.acquire()
+        before = asyncio.all_tasks()
+        engine.rollover_stage1("2026-07-22")
+        created = asyncio.all_tasks() - before
+        assert len(created) == 1
+        resub = created.pop()
+        await asyncio.sleep(0.05)  # 讓它跑到 pool_lock 卡住
+        assert not resub.done()
+        await engine.close()
+        assert resub.cancelled()
+        engine._pool_lock.release()
+
     async def test_concurrent_watchlist_removal_keeps_main_subscribed(self) -> None:
         # CR2:並發「移出自選 + 設為主圖」不得把主圖檔退訂 / 弄丟 refs
         engine, src = await _make()
