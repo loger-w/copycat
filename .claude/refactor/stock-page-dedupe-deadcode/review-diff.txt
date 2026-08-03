@@ -1,0 +1,4923 @@
+﻿diff --git a/copycat/cli.py b/copycat/cli.py
+index 21f5b90..2fd1951 100644
+--- a/copycat/cli.py
++++ b/copycat/cli.py
+@@ -9,6 +9,7 @@ import sys
+ from pathlib import Path
+ 
+ from copycat.data.import_neigui import run_import
++from copycat.tc4common import TC4_DEFAULT_PORT
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -73,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
+     p_bt.add_argument("--data-dir", type=Path, default=Path("data"))
+     # scan 補全後的全事件池;種子 CSV(_DEFAULT_EVENTS_CSV)只在 import-neigui 用
+     p_bt.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
+-    p_bt.add_argument("--port", default="50774")
++    p_bt.add_argument("--port", default=TC4_DEFAULT_PORT)
+     p_bt.add_argument("--batch", type=int, default=0, help="0=全部")
+ 
+     p_dt = sub.add_parser("backfill-daytrade", help="FinMind 當沖資格 + 處置期間回補")
+diff --git a/copycat/live/corr_source.py b/copycat/live/corr_source.py
+index e594dda..8cf4775 100644
+--- a/copycat/live/corr_source.py
++++ b/copycat/live/corr_source.py
+@@ -15,13 +15,13 @@
+ 
+ from __future__ import annotations
+ 
+-import json
+ import logging
+ import time
+ from typing import Any, Callable
+ 
+ from copycat.live.river_backfill import collect_1k_minutes
+ from copycat.live.tc4 import TC4QuoteSource, build_rt_request
++from copycat.tc4common import TC4_DEFAULT_PORT
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -37,7 +37,7 @@ def all_day_window() -> tuple[str, str]:
+ class CorrQuoteSource(TC4QuoteSource):
+     def __init__(
+         self,
+-        port: str = "50774",
++        port: str = TC4_DEFAULT_PORT,
+         *,
+         api: Any | None = None,
+         session: str | None = None,
+@@ -62,16 +62,10 @@ class CorrQuoteSource(TC4QuoteSource):
+         if self._sub_port is not None:
+             # 真連線才有 SubPort;漏啟 listener = 訂閱成功但永收不到推播(07-21 實證)
+             self._start_listener()
+-        self._rt_request("UNSUBQUOTE", symbol)
+-        r = self._rt_request("SUBQUOTE", symbol)
+-        if r.get("Success") != "OK":
+-            raise ConnectionError(f"SUBQUOTE fail {symbol}: {r.get('ErrMsg')}")
+-        self._subscribed.add(symbol)
++        self._resub(symbol)
+ 
+     def unsubscribe_raw(self, symbol: str) -> None:
+-        if symbol in self._subscribed:
+-            self._rt_request("UNSUBQUOTE", symbol)
+-            self._subscribed.discard(symbol)
++        self._unsub(symbol)
+ 
+     # ---- 江波圖當日回補(index-river-chart SC-3)----
+ 
+@@ -88,41 +82,8 @@ class CorrQuoteSource(TC4QuoteSource):
+     # ---- listener:原始 Quote dict 分派(同 futures_source 手法)----
+ 
+     def handle_raw(self, raw: str) -> None:
+-        idx = raw.find(":")
+-        if idx < 0:
+-            return
+-        try:
+-            msg = json.loads(raw[idx + 1 :])
+-        except json.JSONDecodeError:
+-            return
+-        if msg.get("DataType") != "REALTIME":
++        msg = self._realtime_msg(raw)
++        if msg is None:
+             return
+         if self._on_message is not None:
+             self._on_message(msg.get("Quote", {}))
+-
+-    def _listen_loop(self) -> None:
+-        import zmq
+-
+-        ctx = zmq.Context()
+-        sock: Any | None = None
+-        bound_port: str | None = None
+-        while not self._stop.is_set():
+-            if sock is None or self._sub_port != bound_port:
+-                # generation-following:重連換 SubPort 必須跟隨(07-20 盤中實證)
+-                if sock is not None:
+-                    sock.close(linger=0)
+-                sock = ctx.socket(zmq.SUB)
+-                sock.connect(f"tcp://127.0.0.1:{self._sub_port}")
+-                sock.setsockopt_string(zmq.SUBSCRIBE, "")
+-                sock.setsockopt(zmq.RCVTIMEO, 1_000)
+-                bound_port = self._sub_port
+-            try:
+-                raw = (sock.recv()[:-1]).decode("utf-8")
+-            except zmq.ZMQError:
+-                self._check_stale()
+-                continue
+-            self._last_msg = time.monotonic()
+-            self.handle_raw(raw)
+-        if sock is not None:
+-            sock.close(linger=0)
+-        ctx.term()
+diff --git a/copycat/live/futures_source.py b/copycat/live/futures_source.py
+index 444bdf3..22c32af 100644
+--- a/copycat/live/futures_source.py
++++ b/copycat/live/futures_source.py
+@@ -10,15 +10,14 @@ listener 覆寫為原始 Quote dict 分派(book/meta 都要,不能只回 Tick;
+ 
+ from __future__ import annotations
+ 
+-import json
+ import logging
+-import time
+ from typing import Any, Callable
+ 
+ from copycat.live.futures_models import PRODUCTS
+ from copycat.live.river_backfill import collect_1k_minutes
+ from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
+ from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource
++from copycat.tc4common import TC4_DEFAULT_PORT
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -37,7 +36,7 @@ def futures_symbol(product: str) -> str:
+ class FuturesQuoteSource(TC4QuoteSource):
+     def __init__(
+         self,
+-        port: str = "50774",
++        port: str = TC4_DEFAULT_PORT,
+         *,
+         api: Any | None = None,
+         session: str | None = None,
+@@ -56,18 +55,10 @@ class FuturesQuoteSource(TC4QuoteSource):
+         if self._sub_port is not None:
+             # 真連線才有 SubPort;漏啟 listener = 訂閱成功但永收不到推播(07-21 實證)
+             self._start_listener()
+-        sym = futures_symbol(product)
+-        self._rt_request("UNSUBQUOTE", sym)
+-        r = self._rt_request("SUBQUOTE", sym)
+-        if r.get("Success") != "OK":
+-            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
+-        self._subscribed.add(sym)
++        self._resub(futures_symbol(product))
+ 
+     def unsubscribe_symbol(self, product: str) -> None:
+-        sym = futures_symbol(product)
+-        if sym in self._subscribed:
+-            self._rt_request("UNSUBQUOTE", sym)
+-            self._subscribed.discard(sym)
++        self._unsub(futures_symbol(product))
+ 
+     def subscribe_leaf(self, product: str, ym: str) -> None:
+         """補訂實際月份 leaf 契約(TC.F.TWF.<p>.<YYYYMM>)。
+@@ -77,12 +68,7 @@ class FuturesQuoteSource(TC4QuoteSource):
+         self._ensure_connected()
+         if self._sub_port is not None:
+             self._start_listener()
+-        sym = f"TC.F.TWF.{product}.{ym}"
+-        self._rt_request("UNSUBQUOTE", sym)
+-        r = self._rt_request("SUBQUOTE", sym)
+-        if r.get("Success") != "OK":
+-            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
+-        self._subscribed.add(sym)
++        self._resub(f"TC.F.TWF.{product}.{ym}")
+ 
+     def subscribe_all(self) -> None:
+         for product in PRODUCTS:
+@@ -136,41 +122,8 @@ class FuturesQuoteSource(TC4QuoteSource):
+ 
+     def handle_raw(self, raw: str) -> None:
+         """SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。"""
+-        idx = raw.find(":")
+-        if idx < 0:
+-            return
+-        try:
+-            msg = json.loads(raw[idx + 1 :])
+-        except json.JSONDecodeError:
+-            return
+-        if msg.get("DataType") != "REALTIME":
++        msg = self._realtime_msg(raw)
++        if msg is None:
+             return
+         if self._on_message is not None:
+             self._on_message(msg.get("Quote", {}))
+-
+-    def _listen_loop(self) -> None:
+-        import zmq
+-
+-        ctx = zmq.Context()
+-        sock: Any | None = None
+-        bound_port: str | None = None
+-        while not self._stop.is_set():
+-            if sock is None or self._sub_port != bound_port:
+-                # generation-following:重連換 SubPort 必須跟隨(07-20 盤中實證,同 tc4.py)
+-                if sock is not None:
+-                    sock.close(linger=0)
+-                sock = ctx.socket(zmq.SUB)
+-                sock.connect(f"tcp://127.0.0.1:{self._sub_port}")
+-                sock.setsockopt_string(zmq.SUBSCRIBE, "")
+-                sock.setsockopt(zmq.RCVTIMEO, 1_000)
+-                bound_port = self._sub_port
+-            try:
+-                raw = (sock.recv()[:-1]).decode("utf-8")
+-            except zmq.ZMQError:
+-                self._check_stale()
+-                continue
+-            self._last_msg = time.monotonic()
+-            self.handle_raw(raw)
+-        if sock is not None:
+-            sock.close(linger=0)
+-        ctx.term()
+diff --git a/copycat/live/models.py b/copycat/live/models.py
+index 6ca1ae7..99f6a51 100644
+--- a/copycat/live/models.py
++++ b/copycat/live/models.py
+@@ -4,7 +4,8 @@ from __future__ import annotations
+ 
+ import re
+ from dataclasses import dataclass
+-from decimal import Decimal, InvalidOperation
++
++from copycat.tc4common import to_milli_units
+ 
+ MULTIPLIER = 50  # TXO 每點 NTD
+ 
+@@ -27,14 +28,9 @@ _OPTION_LEAF_RE = re.compile(
+ )
+ 
+ 
+-def to_millipts(raw: str) -> int | None:
+-    """十進位字串 → 毫點整數(點 × 1000);空/無效 → None。"""
+-    if not raw:
+-        return None
+-    try:
+-        return int(Decimal(raw) * 1000)
+-    except InvalidOperation:
+-        return None
++#: 十進位字串 → 毫點整數(點 × 1000);空/無效 → None。
++#: 與 `live.stock_models.to_milli` 同一個運算(單位名不同)→ 實作在 tc4common,此處留具名別名。
++to_millipts = to_milli_units
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/copycat/live/stock_models.py b/copycat/live/stock_models.py
+index 9d1bbe5..aa12939 100644
+--- a/copycat/live/stock_models.py
++++ b/copycat/live/stock_models.py
+@@ -12,7 +12,8 @@ from __future__ import annotations
+ import datetime as _dt
+ import logging
+ from dataclasses import dataclass, replace
+-from decimal import Decimal, InvalidOperation
++
++from copycat.tc4common import to_milli_units
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -22,14 +23,9 @@ _TAIPEI_OFFSET = _dt.timedelta(hours=8)
+ _TRIAL_WINDOWS = (("08:30:00.000", "09:00:00.000"), ("13:25:00.000", "13:30:00.000"))
+ 
+ 
+-def to_milli(raw: str) -> int | None:
+-    """十進位字串 → 毫元整數(元 × 1000);空/無效 → None。"""
+-    if not raw:
+-        return None
+-    try:
+-        return int(Decimal(raw) * 1000)
+-    except InvalidOperation:
+-        return None
++#: 十進位字串 → 毫元整數(元 × 1000);空/無效 → None。
++#: 與 `live.models.to_millipts` 同一個運算(單位名不同)→ 實作在 tc4common,此處留具名別名。
++to_milli = to_milli_units
+ 
+ 
+ def _to_int(raw: str) -> int | None:
+@@ -48,7 +44,6 @@ class StockTick:
+     time: str  # 台北 HH:MM:SS.fff(parse 層已 +8)
+     trade_date: str  # 台北 YYYY-MM-DD
+     side: str  # "outer" | "inner" | "neutral"(成交當下對照 Bid/Ask)
+-    buy_sell_flag: int | None
+     is_trial: bool
+     # 成交當下的最佳買賣價(= derive_side 的輸入,round5 明細欄位)。
+     # 有 default 是必要的:既有建構點(tests/live/test_stock_state.py、
+@@ -172,9 +167,9 @@ def _parse_levels(msg: dict, price_key: str, vol_key: str) -> list[tuple[int, in
+     for i in range(_DEPTH):
+         suffix = "" if i == 0 else str(i)
+         price = to_milli(msg.get(price_key + suffix, ""))
+-        vol = _to_int(msg.get(vol_key + suffix, ""))
+         if price is None:
+             continue
++        vol = _to_int(msg.get(vol_key + suffix, ""))
+         levels.append((price, vol or 0))
+     return levels
+ 
+@@ -215,7 +210,6 @@ def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockM
+         time=time_tp,
+         trade_date=date_tp,
+         side=derive_side(price, bid0, ask0),
+-        buy_sell_flag=_to_int(msg.get("FlagOfBuySell", "")),
+         is_trial=is_trial_window(time_tp),
+         bid_milli=bid0,
+         ask_milli=ask0,
+@@ -247,7 +241,6 @@ def parse_hist_tick(code: str, row: dict) -> StockTick | None:
+         time=time_tp,
+         trade_date=date_tp,
+         side=derive_side(price, bid, ask),
+-        buy_sell_flag=None,
+         is_trial=is_trial_window(time_tp),
+         bid_milli=bid,
+         ask_milli=ask,
+diff --git a/copycat/live/stock_source.py b/copycat/live/stock_source.py
+index 6e3d6a6..bc45381 100644
+--- a/copycat/live/stock_source.py
++++ b/copycat/live/stock_source.py
+@@ -13,7 +13,6 @@
+ from __future__ import annotations
+ 
+ import datetime as _dt
+-import json
+ import logging
+ import threading
+ import time
+@@ -21,7 +20,7 @@ from typing import Any, Callable, TypedDict
+ 
+ from copycat.live.stock_models import StockTick, parse_hist_tick
+ from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
+-from copycat.tc4common import iter_qry_pages
++from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -277,7 +276,10 @@ def stock_symbol(code: str) -> str:
+ 
+ 
+ def stock_window(trade_date: str) -> tuple[str, str]:
+-    """台北交易日 YYYY-MM-DD → 日盤 UTC 窗(09:00–13:30 台北 = 01:00–05:30 UTC)。"""
++    """台北交易日 YYYY-MM-DD → 日盤 UTC 窗。
++
++    窗以**小時**為粒度(`YYYYMMDDHH`),實際回 UTC 00–06 = 台北 08:00–14:00 ——
++    比日盤 09:00–13:30 兩端各寬一些,涵蓋試撮與收盤補正,不是精準到分的 01–05:30。"""
+     day = trade_date.replace("-", "")
+     return f"{day}00", f"{day}06"
+ 
+@@ -290,7 +292,7 @@ def in_trading_hours_now() -> bool:
+ class StockQuoteSource(TC4QuoteSource):
+     def __init__(
+         self,
+-        port: str = "50774",
++        port: str = TC4_DEFAULT_PORT,
+         *,
+         api: Any | None = None,
+         session: str | None = None,
+@@ -334,12 +336,7 @@ class StockQuoteSource(TC4QuoteSource):
+         if self._sub_port is not None:
+             # 真連線才有 SubPort;漏啟 = 訂閱成功但永收不到推播(2026-07-21 real-env 實證)
+             self._start_listener()
+-        sym = stock_symbol(code)
+-        self._rt_request("UNSUBQUOTE", sym)
+-        r = self._rt_request("SUBQUOTE", sym)
+-        if r.get("Success") != "OK":
+-            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
+-        self._subscribed.add(sym)
++        self._resub(stock_symbol(code))
+         with self._seen_lock:
+             self._seen.discard(code)
+         # 個股期(F:)不做無推播健檢:seen 以 Security(=股號)為鍵,期貨鍵對不上
+@@ -349,10 +346,7 @@ class StockQuoteSource(TC4QuoteSource):
+             timer.start()
+ 
+     def unsubscribe_symbol(self, code: str) -> None:
+-        sym = stock_symbol(code)
+-        if sym in self._subscribed:
+-            self._rt_request("UNSUBQUOTE", sym)
+-            self._subscribed.discard(sym)
++        self._unsub(stock_symbol(code))
+ 
+     def _health_check(self, code: str) -> None:
+         with self._seen_lock:
+@@ -406,16 +400,12 @@ class StockQuoteSource(TC4QuoteSource):
+         skipped = 0
+         for r in rows:
+             try:
+-                raw = str(r["Time"]).zfill(6)
+-                hh = (int(raw[:2]) + 8) % 24
+-                key = f"{hh:02d}{raw[2:4]}"
++                key = _taipei_minute_key(str(r["Time"]))
+                 value = round(float(r["Close"]) * 1000)
+             except (KeyError, ValueError):
+                 skipped += 1
+                 continue
+-            if "1330" < key <= "1335":
+-                key = "1330"
+-            if not ("0901" <= key <= "1330"):
++            if key is None:  # 域外靜默丟棄(不計入 skipped)
+                 continue
+             minutes[key] = value
+         if skipped:
+@@ -484,14 +474,8 @@ class StockQuoteSource(TC4QuoteSource):
+ 
+     def handle_raw(self, raw: str) -> None:
+         """SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。"""
+-        idx = raw.find(":")
+-        if idx < 0:
+-            return
+-        try:
+-            msg = json.loads(raw[idx + 1 :])
+-        except json.JSONDecodeError:
+-            return
+-        if msg.get("DataType") != "REALTIME":
++        msg = self._realtime_msg(raw)
++        if msg is None:
+             return
+         quote = msg.get("Quote", {})
+         code = str(quote.get("Security", ""))
+@@ -500,30 +484,3 @@ class StockQuoteSource(TC4QuoteSource):
+                 self._seen.add(code)
+         if self._on_message is not None:
+             self._on_message(quote)
+-
+-    def _listen_loop(self) -> None:
+-        import zmq
+-
+-        ctx = zmq.Context()
+-        sock: Any | None = None
+-        bound_port: str | None = None
+-        while not self._stop.is_set():
+-            if sock is None or self._sub_port != bound_port:
+-                # generation-following:重連換 SubPort 必須跟隨(07-20 盤中實證,同 tc4.py)
+-                if sock is not None:
+-                    sock.close(linger=0)
+-                sock = ctx.socket(zmq.SUB)
+-                sock.connect(f"tcp://127.0.0.1:{self._sub_port}")
+-                sock.setsockopt_string(zmq.SUBSCRIBE, "")
+-                sock.setsockopt(zmq.RCVTIMEO, 1_000)
+-                bound_port = self._sub_port
+-            try:
+-                raw = (sock.recv()[:-1]).decode("utf-8")
+-            except zmq.ZMQError:
+-                self._check_stale()
+-                continue
+-            self._last_msg = time.monotonic()
+-            self.handle_raw(raw)
+-        if sock is not None:
+-            sock.close(linger=0)
+-        ctx.term()
+diff --git a/copycat/live/stock_state.py b/copycat/live/stock_state.py
+index 66af354..cca2b77 100644
+--- a/copycat/live/stock_state.py
++++ b/copycat/live/stock_state.py
+@@ -111,6 +111,10 @@ class StockDayState:
+         backfill_max = max((t.cum_vol for t in ticks), default=-1)
+         survivors = [t for t in self.ticks if t.cum_vol > backfill_max]
+         self.reset()
++        # ⚠ 兩個迴圈的去重**不對稱,且是刻意保留的現況**:回補列一律 `_apply`(cum 比對
++        # 只推進 `_last_cum`),survivors 則 cum 沒推進就整筆跳過。回補是 TC4 的權威重放
++        # (同 cum 的連續成交是真資料,丟了會少張數);survivors 是與回補重疊窗的 live 尾巴,
++        # 寧可漏也不可重複計。對齊兩者會改張數/內外盤累積值 → 屬行為改動,記 next-time。
+         for tick in ticks:
+             if tick.is_trial:
+                 continue
+diff --git a/copycat/live/tc4.py b/copycat/live/tc4.py
+index a9a3a23..2470de8 100644
+--- a/copycat/live/tc4.py
++++ b/copycat/live/tc4.py
+@@ -29,7 +29,7 @@ from copycat.live.models import (
+     parse_realtime,
+ )
+ from copycat.live.session import session_key, session_window
+-from copycat.tc4common import TC4_APPID, TC4_SKEY, iter_qry_pages
++from copycat.tc4common import TC4_APPID, TC4_DEFAULT_PORT, TC4_SKEY, iter_qry_pages
+ 
+ __all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_series"]
+ 
+@@ -111,7 +111,7 @@ class TC4QuoteSource:
+ 
+     def __init__(
+         self,
+-        port: str = "50774",
++        port: str = TC4_DEFAULT_PORT,
+         *,
+         api: Any | None = None,
+         session: str | None = None,
+@@ -394,6 +394,25 @@ class TC4QuoteSource:
+             rows.extend(page)
+         return [t for r in rows if (t := parse_history_tick(symbol, r)) is not None]
+ 
++    def _resub(self, sym: str) -> None:
++        """UNSUB→SUB 冪等重掛(逐 symbol 訂閱路徑共用;stock/futures/corr 三 source)。
++
++        **失敗語意是契約**:`stock_engine._acquire` 靠 ConnectionError 回滾 refcount,
++        不可改回傳 bool。下方 TXO 序列版 `subscribe` 刻意是 warn+continue(整條序列
++        不因單一 symbol 失敗而全斷),故不走這裡。
++        """
++        self._rt_request("UNSUBQUOTE", sym)
++        r = self._rt_request("SUBQUOTE", sym)
++        if r.get("Success") != "OK":
++            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
++        self._subscribed.add(sym)
++
++    def _unsub(self, sym: str) -> None:
++        """已訂閱才退訂(未訂閱 = no-op)。"""
++        if sym in self._subscribed:
++            self._rt_request("UNSUBQUOTE", sym)
++            self._subscribed.discard(sym)
++
+     def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
+         self._ensure_connected()
+         self._on_tick = on_tick
+@@ -450,6 +469,36 @@ class TC4QuoteSource:
+         self._listener = threading.Thread(target=self._listen_loop, daemon=True)
+         self._listener.start()
+ 
++    def _realtime_msg(self, raw: str) -> dict | None:
++        """原始電文 → REALTIME 訊息 dict;無 topic 分隔 / 非 JSON / 非 REALTIME → None。
++
++        **回整則 msg 而非 `Quote`**:空 Quote 的現況是照送 `_on_message({})`,
++        回 Quote 會讓呼叫端只能用 truthy 判定,把空 Quote 一起吞掉(行為改動)。
++        """
++        idx = raw.find(":")
++        if idx < 0:
++            return None
++        try:
++            msg = json.loads(raw[idx + 1 :])
++        except json.JSONDecodeError:
++            return None
++        if msg.get("DataType") != "REALTIME":
++            return None
++        return msg
++
++    def handle_raw(self, raw: str) -> None:
++        """SUB socket 一則原始電文 → TXO Tick 分派(listener 與測試共用)。
++
++        子類覆寫這一支即可共用整個 `_listen_loop`(generation-following 的重連跟隨
++        邏輯 2026-07-20 盤中修過一次,四份各自持有等於下次要同步改四處)。
++        """
++        msg = self._realtime_msg(raw)
++        if msg is None:
++            return
++        tick = parse_realtime(msg.get("Quote", {}))
++        if tick is not None and self._on_tick is not None:
++            self._on_tick(tick)
++
+     def _listen_loop(self) -> None:
+         import zmq
+ 
+@@ -474,18 +523,7 @@ class TC4QuoteSource:
+                 self._check_stale()
+                 continue
+             self._last_msg = time.monotonic()
+-            idx = raw.find(":")
+-            if idx < 0:
+-                continue
+-            try:
+-                msg = json.loads(raw[idx + 1 :])
+-            except json.JSONDecodeError:
+-                continue
+-            if msg.get("DataType") != "REALTIME":
+-                continue
+-            tick = parse_realtime(msg.get("Quote", {}))
+-            if tick is not None and self._on_tick is not None:
+-                self._on_tick(tick)
++            self.handle_raw(raw)
+         if sock is not None:
+             sock.close(linger=0)
+         ctx.term()
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index e9ebd21..d658ff7 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -8,7 +8,7 @@ import os
+ from contextlib import asynccontextmanager
+ from datetime import date as _date
+ from pathlib import Path
+-from typing import AsyncGenerator, Callable, Final, Literal, cast
++from typing import AsyncGenerator, Awaitable, Callable, Final, Literal, TypeVar, cast
+ 
+ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+ from fastapi.middleware.cors import CORSMiddleware
+@@ -26,7 +26,8 @@ from copycat.capital.client import CapitalClient
+ from copycat.server import build_info
+ from copycat.server.audit import AuditWriteError
+ from copycat.corr_config import load_config as load_corr_config
+-from copycat.server.capital_api import WsBroadcaster, register_capital
++from copycat.server.capital_api import register_capital
++from copycat.server.ws import WsBroadcaster
+ from copycat.server.corr_engine import CorrelationEngine, CorrSource
+ from copycat.server.engine import EngineRuntime, QuoteSource
+ from copycat.server.futures_engine import FuturesEngine, FuturesSource
+@@ -54,6 +55,7 @@ from copycat.stock_watchlist import (
+ from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
+ from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
+ from copycat.stock_names import load_names as load_stock_names
++from copycat.tc4common import TC4_DEFAULT_PORT
+ from copycat.server.trade import (
+     ConfirmRequiredError,
+     InvalidOrderError,
+@@ -145,11 +147,52 @@ class SubmitBody(BaseModel):
+     preview_id: str
+ 
+ 
++def _tc4_port() -> str:
++    return os.environ.get("TC4_PORT", TC4_DEFAULT_PORT)
++
++
++_BootT = TypeVar("_BootT")
++
++
++async def _boot(
++    name: str,
++    fail_msg: str,
++    make: Callable[[], _BootT | None],
++    start: Callable[[_BootT], Awaitable[None]],
++    close: Callable[[_BootT], Awaitable[None]],
++) -> _BootT | None:
++    """引擎起停樣板(B-D7):任一引擎起不來都只讓自己停用,不波及其他引擎。
++
++    兩段式而非單一 `build`:**`make` 與 `start` 都必須在同一個 try 內**,而 except
++    分支要拿得到已建好的物件才關得掉 —— 「建構成功但 start 失敗」若沒 close,會洩漏
++    一條已連線的 TC4 session,畫面只看得到 503。
++
++    - `make` 回 `None` = sentinel 解析結果為「不啟動」→ 整段跳過,**不記失敗 log**。
++    - `start` 語意 = 「帶到就緒的全部工作」,不只 `o.start()`:stock 的自選回填也在內
++      (`load_watchlist` 對壞檔不吞例外,現況正是由這個 except 接住)。
++    """
++    obj: _BootT | None = None
++    try:
++        obj = make()
++        if obj is None:
++            return None
++        await start(obj)
++        return obj
++    except Exception:
++        logger.exception("%s", fail_msg)
++        if obj is not None:
++            try:
++                await close(obj)
++            except Exception:
++                logger.exception("%s close 失敗(忽略)", name)
++        return None
++
++
+ def _default_source() -> QuoteSource:
+     from copycat.live.tc4 import TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
+ 
+     return TC4QuoteSource(
+-        port=os.environ.get("TC4_PORT", "50774"),
++        port=_tc4_port(),
+         backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
+     )
+ 
+@@ -157,25 +200,25 @@ def _default_source() -> QuoteSource:
+ def _default_stock_source() -> StockSource:
+     from copycat.live.stock_source import StockQuoteSource  # 延遲 import:測試不觸 pyzmq
+ 
+-    return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
++    return StockQuoteSource(port=_tc4_port())
+ 
+ 
+ def _default_index_source() -> IndexSource:
+     from copycat.live.stock_source import StockQuoteSource  # 獨立 session(指數專用)
+ 
+-    return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
++    return StockQuoteSource(port=_tc4_port())
+ 
+ 
+ def _default_futures_source() -> FuturesSource:
+     from copycat.live.futures_source import FuturesQuoteSource  # 延遲 import:測試不觸 pyzmq
+ 
+-    return FuturesQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
++    return FuturesQuoteSource(port=_tc4_port())
+ 
+ 
+ def _default_corr_source() -> CorrSource:
+     from copycat.live.corr_source import CorrQuoteSource  # 延遲 import:測試不觸 pyzmq
+ 
+-    return CorrQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
++    return CorrQuoteSource(port=_tc4_port())
+ 
+ 
+ def create_app(
+@@ -224,151 +267,152 @@ def create_app(
+         # TXO_FAKE_TRADE 分支一併失效。舊路 code(trade.py/tc4_trade.py/fake_trade.py)
+         # 保留,刪除候選記 docs/next-time.md。
+         app.state.trade = None
++
+         # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
+-        stock: StockEngine | None = None
+-        try:
++        def _make_stock() -> StockEngine | None:
+             resolved_stock = (
+                 _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
+             )
+-            if resolved_stock is not None:
+-                import datetime as _dt
+-
+-                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+-                stock = StockEngine(
+-                    cast(StockSource, resolved_stock),
+-                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+-                    throttle_secs=throttle_secs,
+-                    checkpoint=backfill_date is None,
+-                )
+-                await stock.start()
+-                persisted = load_watchlist(wl_path)["codes"]
+-                if persisted:
+-                    await stock.set_watchlist(persisted)
+-        except Exception:
+-            logger.exception("stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)")
+-            if stock is not None:
+-                try:
+-                    await stock.close()
+-                except Exception:
+-                    logger.exception("stock close 失敗(忽略)")
+-            stock = None
++            if resolved_stock is None:
++                return None
++            import datetime as _dt
++
++            backfill_date = os.environ.get("TXO_BACKFILL_DATE")
++            return StockEngine(
++                cast(StockSource, resolved_stock),
++                trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
++                throttle_secs=throttle_secs,
++                checkpoint=backfill_date is None,
++            )
++
++        async def _start_stock(o: StockEngine) -> None:
++            await o.start()
++            # 自選回填屬於「帶到就緒」的一部分:load_watchlist 對壞檔不吞例外,
++            # 現況正是由 _boot 的 except 接住(留在 try 內是行為契約)
++            persisted = load_watchlist(wl_path)["codes"]
++            if persisted:
++                await o.set_watchlist(persisted)
++
++        stock = await _boot(
++            "stock",
++            "stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)",
++            _make_stock,
++            _start_stock,
++            lambda o: o.close(),
++        )
+         app.state.stock = stock
++
+         # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
+-        index: IndexEngine | None = None
+-        try:
++        def _make_index() -> IndexEngine | None:
+             resolved_index = (
+                 _default_index_source() if index_source is DEFAULT_INDEX else index_source
+             )
+-            if resolved_index is not None:
+-                import datetime as _dt
+-
+-                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+-                index = IndexEngine(
+-                    cast(IndexSource, resolved_index),
+-                    # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
+-                    txf_getter=runtime.spot_millipts,
+-                    mis_fetch=index_mis_fetch,
+-                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+-                    rollover=backfill_date is None,
+-                    throttle_secs=throttle_secs,
+-                )
+-                await index.start()
+-        except Exception:
+-            logger.exception("index engine 初始化非預期失敗,指數功能停用(其餘不受影響)")
+-            if index is not None:
+-                try:
+-                    await index.close()
+-                except Exception:
+-                    logger.exception("index close 失敗(忽略)")
+-            index = None
++            if resolved_index is None:
++                return None
++            import datetime as _dt
++
++            backfill_date = os.environ.get("TXO_BACKFILL_DATE")
++            return IndexEngine(
++                cast(IndexSource, resolved_index),
++                # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
++                txf_getter=runtime.spot_millipts,
++                mis_fetch=index_mis_fetch,
++                trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
++                rollover=backfill_date is None,
++                throttle_secs=throttle_secs,
++            )
++
++        index = await _boot(
++            "index",
++            "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
++            _make_index,
++            lambda o: o.start(),
++            lambda o: o.close(),
++        )
+         app.state.index = index
++
+         # capital(群益下單;capital-order design §13):factory 未設定 → None = disabled;
+         # 啟動失敗 catch → None 降級,server 照起(stock/index 同慣例)
+-        capital: CapitalClient | None = None
+-        try:
+-            capital = capital_factory.get_capital()
+-            if capital is not None:
+-                loop = asyncio.get_running_loop()
+-
+-                def _capital_broadcast(payload: dict[str, object]) -> None:
+-                    # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
+-                    loop.call_soon_threadsafe(capital_ws.publish, payload)
+-
+-                capital.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
+-                capital.start(loop)
+-        except Exception:
+-            logger.exception("capital 初始化非預期失敗,群益功能停用(其餘不受影響)")
+-            if capital is not None:
+-                try:
+-                    await asyncio.to_thread(capital.close)
+-                except Exception:
+-                    logger.exception("capital close 失敗(忽略)")
+-            capital = None
++        async def _start_capital(c: CapitalClient) -> None:
++            loop = asyncio.get_running_loop()
++
++            def _capital_broadcast(payload: dict[str, object]) -> None:
++                # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
++                loop.call_soon_threadsafe(capital_ws.publish, payload)
++
++            c.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
++            c.start(loop)
++
++        capital = await _boot(
++            "capital",
++            "capital 初始化非預期失敗,群益功能停用(其餘不受影響)",
++            capital_factory.get_capital,
++            _start_capital,
++            lambda c: asyncio.to_thread(c.close),  # COM 執行緒 join 是同步的
++        )
+         app.state.capital = capital
++
+         # futures 行情引擎(SC-8):__main__ 不改 — 正式啟動(trade_source=DEFAULT_TRADE,
+         # TradeRuntime 停用後該 sentinel 僅剩「正式啟動旗標」語意)即建真 source;
+         # 測試未傳(None)零連線;顯式 DEFAULT_FUTURES / source 實例亦可
+-        futures: FuturesEngine | None = None
+-        try:
++        def _make_futures() -> FuturesEngine | None:
+             if futures_source is DEFAULT_FUTURES or (
+                 futures_source is None and trade_source is DEFAULT_TRADE
+             ):
+                 resolved_futures: FuturesSource | None = _default_futures_source()
+             else:
+                 resolved_futures = cast("FuturesSource | None", futures_source)
+-            if resolved_futures is not None:
+-                fut_src = resolved_futures
+-                futures = FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
+-                await futures.start()
+-        except Exception:
+-            logger.exception("futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)")
+-            if futures is not None:
+-                try:
+-                    await futures.close()
+-                except Exception:
+-                    logger.exception("futures close 失敗(忽略)")
+-            futures = None
++            if resolved_futures is None:
++                return None
++            fut_src = resolved_futures
++            return FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
++
++        futures = await _boot(
++            "futures",
++            "futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)",
++            _make_futures,
++            lambda o: o.start(),
++            lambda o: o.close(),
++        )
+         app.state.futures = futures
++
+         # 相關係數引擎(realtime-correlation SC-6):必須在 futures 之後建 —— base 腿
+         # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
+         # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
+-        corr: CorrelationEngine | None = None
+-        try:
++        def _make_corr() -> CorrelationEngine | None:
+             if corr_source is DEFAULT_CORR or (
+                 corr_source is None and trade_source is DEFAULT_TRADE
+             ):
+                 resolved_corr: CorrSource | None = _default_corr_source()
+             else:
+                 resolved_corr = cast("CorrSource | None", corr_source)
+-            if resolved_corr is not None:
+-                corr_src = resolved_corr
+-                futures_engine = futures
+-                corr = CorrelationEngine(
+-                    lambda: corr_src,
+-                    config=load_corr_config(),
+-                    txf_state_getter=(
+-                        lambda: futures_engine.state() if futures_engine is not None else {}
+-                    ),
+-                    broadcast=corr_ws.publish,
+-                    river_broadcast=river_ws.publish,
+-                    # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
+-                    futures_minutes_fetch=(
+-                        lambda product: (
+-                            futures_engine.fetch_day_1k(product)
+-                            if futures_engine is not None
+-                            else []
+-                        )
+-                    ),
+-                )
+-                await corr.start()
+-        except Exception:
+-            logger.exception("corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)")
+-            if corr is not None:
+-                try:
+-                    await corr.close()
+-                except Exception:
+-                    logger.exception("corr close 失敗(忽略)")
+-            corr = None
++            if resolved_corr is None:
++                return None
++            corr_src = resolved_corr
++            futures_engine = futures
++            return CorrelationEngine(
++                lambda: corr_src,
++                config=load_corr_config(),
++                txf_state_getter=(
++                    lambda: futures_engine.state() if futures_engine is not None else {}
++                ),
++                broadcast=corr_ws.publish,
++                river_broadcast=river_ws.publish,
++                # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
++                futures_minutes_fetch=(
++                    lambda product: (
++                        futures_engine.fetch_day_1k(product) if futures_engine is not None else []
++                    )
++                ),
++            )
++
++        corr = await _boot(
++            "corr",
++            "corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)",
++            _make_corr,
++            lambda o: o.start(),
++            lambda o: o.close(),
++        )
+         app.state.corr = corr
+         try:
+             yield
+@@ -494,6 +538,12 @@ def create_app(
+             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+         return stock
+ 
++    def _valid_code(code: str) -> None:
++        """個股代號閘。**必須在 `_stock(request)` 之後呼叫** —— 「引擎沒起來 + 代號非法」
++        現況回 503 不是 400,那個優先序是既有行為(做成 Depends 會被 FastAPI 提前跑)。"""
++        if not validate_code(code):
++            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
++
+     @app.get("/api/stock/names")
+     async def stock_names() -> dict:
+         """全市場代號↔名稱(搜尋提示列用)。**刻意不過 `_stock()` 閘** —— 名稱表與 TC4
+@@ -522,8 +572,7 @@ def create_app(
+     @app.get("/api/stock/overlay/{code}")
+     async def stock_overlay(request: Request, code: str) -> dict:
+         stock = _stock(request)
+-        if not validate_code(code):
+-            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
++        _valid_code(code)
+         # today = 本機日界(= 台北,部署綁本機;design R6/R13);backfill 模式亦以本機為準
+         today = f"{_date.today():%Y-%m-%d}"
+         cached = overlay_cache.get(code, today)
+@@ -537,8 +586,7 @@ def create_app(
+     async def stock_bars(request: Request, code: str, tf: str = "D", days: str = "5") -> dict:
+         """K 線 bar(SC-7)。tf=D 忽略 days(D-15:忽略的參數不該進 cache/query key)。"""
+         stock = _stock(request)
+-        if not validate_code(code):
+-            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
++        _valid_code(code)
+         if tf not in ("D", "1"):
+             raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
+         # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
+@@ -558,19 +606,21 @@ def create_app(
+     @app.get("/api/stock/state/{code}")
+     async def stock_state(request: Request, code: str) -> dict:
+         stock = _stock(request)
+-        if not validate_code(code):
+-            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
++        _valid_code(code)
+         await stock.set_main(code)  # 含回補觸發(design §2.5)
+         return stock.snapshot(code)
+ 
+     # ---- index(指數看盤;index-board SC-4)----
+ 
+-    @app.get("/api/index/state")
+-    async def index_state(request: Request) -> dict:
++    def _index(request: Request) -> IndexEngine:
+         index: IndexEngine | None = request.app.state.index
+         if index is None:
+             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+-        return index.state()
++        return index
++
++    @app.get("/api/index/state")
++    async def index_state(request: Request) -> dict:
++        return _index(request).state()
+ 
+     # ---- market(大盤 K 線;index-board SC-4/5/6)----
+ 
+@@ -597,9 +647,7 @@ def create_app(
+         today = _date.today()
+ 
+         if key == "OTC":
+-            index: IndexEngine | None = request.app.state.index
+-            if index is None:
+-                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
++            index = _index(request)
+             if tf != "1":
+                 # 櫃買指數不在 TC4 symbol 樹(CLAUDE.md §8 掃盡確認)→ 沒有任何歷史來源。
+                 # 給空陣列 + 明確理由,不拿當日合成假裝成日/週/月 K。
+@@ -616,9 +664,7 @@ def create_app(
+             )
+ 
+         if key == "TWSE":
+-            index = request.app.state.index
+-            if index is None:
+-                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
++            index = _index(request)
+ 
+             async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
+                 return await index.bars_range(tf_, s, e)
+diff --git a/copycat/server/capital_api.py b/copycat/server/capital_api.py
+index 2e3b0f0..2bbb7b8 100644
+--- a/copycat/server/capital_api.py
++++ b/copycat/server/capital_api.py
+@@ -18,7 +18,7 @@ from __future__ import annotations
+ import asyncio
+ import dataclasses
+ import logging
+-from typing import AsyncGenerator, Literal
++from typing import Literal
+ 
+ from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+ from fastapi.responses import JSONResponse
+@@ -39,47 +39,10 @@ from copycat.capital.models import (
+     StockOrderRequest,
+ )
+ from copycat.server.futures_engine import FuturesEngine
++from copycat.server.ws import WsBroadcaster
+ 
+ logger = logging.getLogger(__name__)
+ 
+-_CLIENT_QUEUE_MAX = 500
+-
+-
+-class WsBroadcaster:
+-    """per-client 有界 queue fanout(index_engine 同款);publish 必須在 event loop 上呼叫。"""
+-
+-    def __init__(self) -> None:
+-        self._clients: set[asyncio.Queue[dict]] = set()
+-
+-    def publish(self, msg: dict) -> None:
+-        for queue in self._clients:
+-            try:
+-                queue.put_nowait(msg)
+-            except asyncio.QueueFull:
+-                # 慢連線丟最舊、保最新(行情/回報都是最新有意義)
+-                try:
+-                    queue.get_nowait()
+-                except asyncio.QueueEmpty:
+-                    pass
+-                try:
+-                    queue.put_nowait(msg)
+-                except asyncio.QueueFull:
+-                    pass
+-
+-    def stream(self) -> AsyncGenerator[dict, None]:
+-        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
+-        self._clients.add(queue)
+-
+-        async def _gen() -> AsyncGenerator[dict, None]:
+-            try:
+-                while True:
+-                    yield await queue.get()
+-            finally:
+-                self._clients.discard(queue)
+-
+-        return _gen()
+-
+-
+ # ---------------------------------------------------------------------------
+ # request body(server 層 pydantic → runtime dataclass)
+ # ---------------------------------------------------------------------------
+diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index 8014069..ea84d73 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -15,6 +15,7 @@ from typing import AsyncGenerator, Callable, Protocol
+ 
+ from copycat.live.stock_source import Bar
+ from copycat.server.mis import OtcSnap, fetch_otc_snapshot
++from copycat.server.ws import WsBroadcaster
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -170,7 +171,7 @@ class IndexEngine:
+         self._loop: asyncio.AbstractEventLoop | None = None
+         self._tasks: list[asyncio.Task[None]] = []
+         self._retry_task: asyncio.Task[None] | None = None
+-        self._clients: set[asyncio.Queue[dict]] = set()
++        self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
+         self._dirty = False
+         self._last_push = _time.monotonic()
+         self._spot_silent_since: float | None = None
+@@ -486,28 +487,7 @@ class IndexEngine:
+     # ---- WS 廣播(沿 stock_engine per-client 有界 queue)----
+ 
+     def stream(self) -> AsyncGenerator[dict, None]:
+-        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
+-        self._clients.add(queue)
+-
+-        async def _gen() -> AsyncGenerator[dict, None]:
+-            try:
+-                while True:
+-                    yield await queue.get()
+-            finally:
+-                self._clients.discard(queue)
+-
+-        return _gen()
++        return self._ws.stream()
+ 
+     def _publish(self, msg: dict) -> None:
+-        for queue in self._clients:
+-            try:
+-                queue.put_nowait(msg)
+-            except asyncio.QueueFull:
+-                try:
+-                    queue.get_nowait()
+-                except asyncio.QueueEmpty:
+-                    pass
+-                try:
+-                    queue.put_nowait(msg)
+-                except asyncio.QueueFull:
+-                    pass
++        self._ws.publish(msg)
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index 26cf7ed..557359b 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -13,11 +13,12 @@ from __future__ import annotations
+ 
+ import asyncio
+ import logging
+-from typing import Any, AsyncGenerator, Callable, Protocol
++from typing import AsyncGenerator, Callable, Protocol
+ 
+-from copycat.live.stock_models import StockTick, parse_stock_realtime
++from copycat.live.stock_models import StockTick, parse_stock_realtime, to_milli
+ from copycat.live.stock_source import Bar, DailyBar
+ from copycat.live.stock_state import StockDayState
++from copycat.server.ws import WsBroadcaster
+ from copycat.stkfut_map import load_map
+ 
+ logger = logging.getLogger(__name__)
+@@ -72,13 +73,15 @@ class StockEngine:
+         self._generation = 1
+         self._backfill_jobs: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
+         self._backfilling: str | None = None
+-        self._clients: set[asyncio.Queue[dict]] = set()
++        self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
+         self._dirty_watchlist: set[str] = set()
+         self._loop: asyncio.AbstractEventLoop | None = None
+         self._tasks: list[asyncio.Task[None]] = []
+         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
+         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
+         self._pool_lock = asyncio.Lock()
++        # 只為持有參照防 GC:asyncio 不強引用 task,不留著會被中途回收
++        # (關機時取消它是行為改動,未做 — 記 docs/next-time.md)
+         self._resub_task: asyncio.Task[None] | None = None
+         self.tc4_status = "up"
+ 
+@@ -186,9 +189,6 @@ class StockEngine:
+         snap["stkfut_prod"] = stkfut["prod"] if stkfut else None
+         return snap
+ 
+-    def watchlist_codes(self) -> list[str]:
+-        return list(self._watchlist)
+-
+     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+         """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
+         try:
+@@ -352,7 +352,6 @@ class StockEngine:
+             and tick.trade_date == self._pending_date
+         ):
+             self._rollover_stage2(tick)
+-            state = self._states[code]
+         if tick is not None and state.ingest(tick):
+             if code == self._main:
+                 self._publish(
+@@ -392,8 +391,6 @@ class StockEngine:
+         name = str(quote.get("SecurityName", ""))
+         if code not in name:
+             logger.warning("stkfut 對映不符:%s 推播 SecurityName=%s(對映表過期?)", prod, name)
+-        from copycat.live.stock_models import to_milli
+-
+         price = to_milli(str(quote.get("TradingPrice", "")))
+         if price is None:
+             return
+@@ -476,42 +473,15 @@ class StockEngine:
+         }
+ 
+     def stream(self) -> AsyncGenerator[dict, None]:
+-        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
+-        self._clients.add(queue)
+         # 連線先送一輪自選種子(round4 項 4)。側欄開頁 / 盤後全是 `-` 的根因是
+         # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
+         # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
+-        # 「連線先送快照」的既成慣例一致)。
+-        # **不可借用 `_publish`**(那會打到所有 client);同步區間無 await,對 event loop
+-        # 原子,不會與其它推播交錯。30 檔對 queue maxsize 安全。
+-        for code in self._watchlist:
+-            try:
+-                queue.put_nowait(self._quote_payload(code))
+-            except asyncio.QueueFull:  # pragma: no cover - 種子數遠小於 queue 上限
+-                break
+-
+-        async def _gen() -> AsyncGenerator[dict, None]:
+-            try:
+-                while True:
+-                    yield await queue.get()
+-            finally:
+-                self._clients.discard(queue)
+-
+-        return _gen()
++        # 「連線先送快照」的既成慣例一致)。種子走 `stream(seed=...)` 而非 `publish`
++        # (後者會打到所有 client);30 檔對 queue maxsize 安全。
++        return self._ws.stream([self._quote_payload(code) for code in self._watchlist])
+ 
+     def _publish(self, msg: dict) -> None:
+-        for queue in self._clients:
+-            try:
+-                queue.put_nowait(msg)
+-            except asyncio.QueueFull:
+-                try:
+-                    queue.get_nowait()  # 滿丟最舊(treading-king Broadcaster 模型)
+-                except asyncio.QueueEmpty:
+-                    pass
+-                try:
+-                    queue.put_nowait(msg)
+-                except asyncio.QueueFull:
+-                    pass
++        self._ws.publish(msg)
+ 
+     async def _flush_watchlist_loop(self) -> None:
+         """側欄節流:1s 合併一則(design §2.4)。"""
+@@ -524,7 +494,3 @@ class StockEngine:
+                     continue
+                 self._publish(self._quote_payload(code))
+ 
+-
+-# 型別匯出(routes 注入用)
+-StockEngineLike = StockEngine
+-AnyDict = dict[str, Any]
+diff --git a/copycat/server/ws.py b/copycat/server/ws.py
+new file mode 100644
+index 0000000..c2e9d8c
+--- /dev/null
++++ b/copycat/server/ws.py
+@@ -0,0 +1,60 @@
++"""WS fanout 共用層:per-client 有界 queue。
++
++capital / futures / corr / river / stock / index 六路 WS 原本各抄一份同樣的
++「滿了丟最舊、保最新」邏輯(B-D5)。住 capital_api 會讓 stock_engine / index_engine
++逆向依賴 route 層,故獨立成檔。
++"""
++
++from __future__ import annotations
++
++import asyncio
++from typing import AsyncGenerator, Iterable
++
++#: 預設 per-client queue 上限(capital/futures/corr/river 沿用;engine 層各自傳值)
++CLIENT_QUEUE_MAX = 500
++
++
++class WsBroadcaster:
++    """per-client 有界 queue fanout;`publish` 必須在 event loop 上呼叫。"""
++
++    def __init__(self, maxsize: int = CLIENT_QUEUE_MAX) -> None:
++        self._maxsize = maxsize
++        self._clients: set[asyncio.Queue[dict]] = set()
++
++    def publish(self, msg: dict) -> None:
++        for queue in self._clients:
++            try:
++                queue.put_nowait(msg)
++            except asyncio.QueueFull:
++                # 慢連線丟最舊、保最新(行情/回報都是最新有意義)
++                try:
++                    queue.get_nowait()
++                except asyncio.QueueEmpty:
++                    pass
++                try:
++                    queue.put_nowait(msg)
++                except asyncio.QueueFull:
++                    pass
++
++    def stream(self, seed: Iterable[dict] = ()) -> AsyncGenerator[dict, None]:
++        """新 client 的訊息流;`seed` 逐則在**呼叫當下同步**入該 client 的佇列。
++
++        種子**不可借用 `publish`**(那會打到所有 client);同步區間無 await,
++        對 event loop 原子,不會與其它推播交錯。
++        """
++        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=self._maxsize)
++        self._clients.add(queue)
++        for msg in seed:
++            try:
++                queue.put_nowait(msg)
++            except asyncio.QueueFull:  # pragma: no cover - 種子數遠小於 queue 上限
++                break
++
++        async def _gen() -> AsyncGenerator[dict, None]:
++            try:
++                while True:
++                    yield await queue.get()
++            finally:
++                self._clients.discard(queue)
++
++        return _gen()
+diff --git a/copycat/stock_names.py b/copycat/stock_names.py
+index ec7397a..9bb1605 100644
+--- a/copycat/stock_names.py
++++ b/copycat/stock_names.py
+@@ -72,16 +72,10 @@ def _text(cell: str) -> str:
+     return _TAG_RE.sub("", cell).replace("&nbsp;", " ").strip()
+ 
+ 
+-def parse_isin_html(html: str) -> dict[str, str]:
+-    """ISIN 頁 → {股號: 名稱}。段名含「權證」的整段剔除;重複代號保留先出現者。"""
+-    return parse_isin_html_with_stats(html)[0]
+-
+-
+ def parse_isin_html_with_stats(html: str) -> tuple[dict[str, str], ParseStats]:
+-    """同 `parse_isin_html`,另回逐段筆數與剔除計數(`refresh` 的守門與 log 靠它)。
++    """ISIN 頁 → ({股號: 名稱}, 逐段筆數與剔除計數)。
+ 
+-    刻意做成兩支函式而不是一個 `with_stats` flag —— union 回傳型別在呼叫端無法窄化,
+-    只能靠 `assert isinstance` 補,那是把型別檢查推回 runtime。
++    段名含「權證」的整段剔除;重複代號保留先出現者。統計是 `refresh` 的守門與 log 依據。
+     """
+     names: dict[str, str] = {}
+     stats = ParseStats()
+diff --git a/copycat/stock_watchlist.py b/copycat/stock_watchlist.py
+index 5da4531..b82ba44 100644
+--- a/copycat/stock_watchlist.py
++++ b/copycat/stock_watchlist.py
+@@ -57,12 +57,6 @@ def union(groups: list[Group]) -> list[str]:
+     return seen
+ 
+ 
+-def ungrouped(wl: Watchlist) -> list[str]:
+-    """不屬任何群組的 code,保 `codes` 序(衍生集合,不落檔)。"""
+-    grouped = set(union(wl["groups"]))
+-    return [code for code in wl["codes"] if code not in grouped]
+-
+-
+ def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
+     if not path.exists():
+         return {"codes": [], "groups": []}
+diff --git a/copycat/tc4common.py b/copycat/tc4common.py
+index 3c5d71c..0451f87 100644
+--- a/copycat/tc4common.py
++++ b/copycat/tc4common.py
+@@ -2,12 +2,32 @@
+ 
+ from __future__ import annotations
+ 
++from decimal import Decimal, InvalidOperation
+ from typing import Callable, Iterator
+ 
+ # Touchance 官方範例公開的 app 憑證(GitBook / TCPY sample 原樣),非帳號 secret
+ TC4_APPID = "ZMQ"
+ TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
+ 
++#: OpenAPI 登入 port(2026-07-18 實測;官方文件的 51171/51141 與現版不符)
++TC4_DEFAULT_PORT = "50774"
++
++
++def to_milli_units(raw: str) -> int | None:
++    """十進位字串 → 千分整數(× 1000);空/無效 → None。
++
++    毫元(個股)與毫點(TXO/期貨)是同一個運算,只有單位名不同 → 兩邊各留具名別名。
++
++    🚨 **不與 float 家族合併**(`stock_source._milli`、`round(float(x) * 1000)`):
++    Decimal 是截斷、float round 是 banker's rounding,在 tick 邊界會分岔。
++    """
++    if not raw:
++        return None
++    try:
++        return int(Decimal(raw) * 1000)
++    except InvalidOperation:
++        return None
++
+ 
+ def iter_qry_pages(
+     fetch: Callable[[str], list[dict]],
+diff --git a/docs/next-time.md b/docs/next-time.md
+index d963cef..ad22461 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -404,3 +404,54 @@
+ - [ ] `_this_week_days` 兩個已知邊界(收尾 review P2-4,均為極低機率):`date.today()`
+   同算式取兩次 + fixture 與 route 各自取 today,週日跨午夜起跑理論上可跨週變紅;
+   docstring 宣告 n<=7 但無 guard。要根治得讓 route 的 today 可注入,成本不成比例,先記帳。
++
++## 2026-08-03(stock-page-dedupe-deadcode /refactor 輪 —— 行為類發現與範圍外遺留)
++
++盤點 artifacts:`.claude/refactor/stock-page-dedupe-deadcode/`(三份 findings + 計畫)。
++以下 [behavior] 全部是 /refactor 中發現但**修了就改行為**的項目,要修走 /bug 或 /mod。
++
++- [ ] **[behavior] ref=0 的「無參考價」語意不一致**(一族三處):
++  (a) `stock-intraday-svg.ts` `ref = input.meta?.ref ?? (prices[0] ?? 0)` 用 `??`,而後端
++  `to_milli_units("0")` 回 0 非 None → TC4 送 ReferencePrice="0" 時 ref 卡 0,autofit 分支
++  算出 yTop=hi×1.1 / yBottom=−hi×1.1 整條走勢壓上半;StockPage/OrderBook 同件事用 truthy 判。
++  (b) StockIntradayChart 的 lastTone 只擋 `ref === null`,而 `markTone` 多 `ref <= 0` 分支 —
++  ref=0 時兩者 className 分岔(Track A6 因此跳過收斂;lastTone 那份是既有不一致)。
++  修法方向:ref=0 一律視為無參考價(對齊 hasRef / tickTone / 後端 chg_pct),需 🔴 + 測試。
++- [ ] **[behavior] 前端增量 VWAP 分母錯位**:前端用 `vwap × last.cum_vol` 還原分子再
++  `+ msg.q` 累加,後端分母是去重剔試撮後的 Σqty ≠ cum_vol(TC4 TradeVolume)→
++  訂閱前漏單/試撮期時靜默分歧,至下次全量 refetch 才收斂(`stock-accum.ts` vs
++  `stock_state.py:139-141`)。
++- [ ] **[behavior] `/api/stock/bars` tf=D 忽略 days 但仍對 days 做 400 驗證**(docstring
++  說忽略;`?tf=D&days=abc` 回 BAD_DAYS)。
++- [ ] **[behavior] DepthBar 鎖停判定仍用 `b[0]?.[0] === upper`**:市價佇列 0 價檔位會打穿
++  (CLAUDE.md §8 2026-07-31 條;OrderBook 已改 `_best_limit_price` 思路,DepthBar 只服務
++  期貨面尚未觀測到 0 價檔位,屬潛伏不一致)。
++- [ ] **[behavior] CandleChart 滾輪 useEffect deps 缺 dimW/dimH**(deps 只有 [total],閉包
++  捕捉舊 dim):resize 後縮放錨點用舊寬 — 補 deps 是修 stale-closure bug,需 🔴 獨立
++  commit + 「resize 後滾輪錨點」回歸測試(plan review R-4 裁定)。
++- [ ] **[behavior] TickTape**:`limit`(載入更多)state 切股不歸零(StockPage 未帶 key,
++  與 pickerOpen 的換股歸零不一致);且 `[...ticks].reverse()` 每 tick render 複製反轉 200 列。
++- [ ] **[behavior] 後端 payload 死欄位**(前端讀取端已刪,後端仍每次算+送):
++  `snapshot.stkfut_prod`(stock_engine 每 snapshot 算)、`meta.y_close`、
++  `cum_inner`/`cum_outer`、`snapshot.tc4`/`backfilling`。清除屬 wire 契約改動 → /mod;
++  `names.count` / `bars.code,tf` 為刻意公開 API 表面,不清。
++- [ ] **[behavior] `_resub_task` 不進 `_tasks`,close() 不取消它**(重掛中的 rollover task
++  逃過關機;本輪僅補「持有參考防 GC」註解)。
++- [ ] **[behavior] useStockNames 錯誤路徑**:`res.json().catch(() => ({}))` 後直接
++  `body.detail?.error`,body 為合法 JSON `null` 時 TypeError 逸出 queryFn(錯誤訊息變
++  TypeError 文字)— 與 `lib/api-error.ts` parseError 產出不同,Track A4 因此跳過;
++  修掉即可併入 parseError。
++- [ ] **範圍外重複遺留**(本輪只收個股頁):parseError 同鏈 × 3(useTrade / useCapital /
++  useSeries);fmtPct 同字串 × 5(IndexBar / IndexPage / FuturesPage / RiverCards /
++  RiverOverlay,後兩者已各自包 pct());chgPct 大盤 2 處;CandleChart「期間漲跌」
++  (分母=視窗首根收盤)與「跨日漲跌」(分母=前一根收盤)是語意變體不可併 chgPct。
++- [ ] **跳過的 JSX / 參數化抽取**(plan review 裁定語意分岔,抽了即改行為或淨可讀性負值):
++  D-8 漲跌色 tone(中性態四種落點刻意不同)、D-10 ToggleButton(off 態 hover 分岔)、
++  D-13 GroupPicker(容器/stopPropagation/disabled 全不同;**側欄群組鈕 stopPropagation
++  「點群組不換主圖股票」無測試背書** — 補測試後才值得再議)、D-14 suggest 列 JSX
++  (aria-label 語意不同;本輪只收 SUGGEST_LIMIT)。
++- [ ] **B-D6 `_on_*_threadsafe` 守衛 8 份 × 4 行**(四引擎 loop=None close 閘):語意單一
++  定義有價值但 mixin 間接性 > 收益,暫不動;第五個引擎出現時再收。
++- [ ] **L-5 backfill 首頁抓兩次**(stock_source 輪詢 `_get_history(...,"0")` 丟棄 first 後
++  iter_qry_pages 又抓第 0 頁):每回補多一趟 REQ。修前必先驗 QryIndex 游標語意
++  (拿 first 末筆 QryIndex 當 start 是否嚴格銜接),改壞會靜默少一頁。
+diff --git a/frontend/src/components/corr/RiverCards.tsx b/frontend/src/components/corr/RiverCards.tsx
+index 486e405..ae7c541 100644
+--- a/frontend/src/components/corr/RiverCards.tsx
++++ b/frontend/src/components/corr/RiverCards.tsx
+@@ -4,6 +4,7 @@
+  * 低價腿壓成一條直線。跨腿比較走「重疊」模式(那邊才正規化成 %)。
+  */
+ import { buildLegGeometry, timeTicks, type RiverSize } from "@/lib/river-chart-svg";
++import { pts } from "@/lib/svg-points";
+ import { cn } from "@/lib/utils";
+ import type { RiverLeg, RiverWindow } from "@/types";
+ 
+@@ -19,10 +20,6 @@ function fmtPct(pct: number): string {
+   return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
+ }
+ 
+-function pts(line: { x: number; y: number }[]): string {
+-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+-}
+-
+ interface CardProps {
+   legKey: string;
+   leg: RiverLeg;
+diff --git a/frontend/src/components/corr/RiverOverlay.tsx b/frontend/src/components/corr/RiverOverlay.tsx
+index 9550c60..9588244 100644
+--- a/frontend/src/components/corr/RiverOverlay.tsx
++++ b/frontend/src/components/corr/RiverOverlay.tsx
+@@ -9,6 +9,7 @@ import {
+   type OverlayEntry,
+   type RiverSize,
+ } from "@/lib/river-chart-svg";
++import { pts } from "@/lib/svg-points";
+ import { cn } from "@/lib/utils";
+ import type { RiverWindow } from "@/types";
+ 
+@@ -19,10 +20,6 @@ const SIZE: RiverSize = { width: 960, height: 340 };
+ const BASE_STROKE_W = 2;
+ const LEG_STROKE_W = 1.2;
+ 
+-function pts(line: { x: number; y: number }[]): string {
+-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+-}
+-
+ function fmtPct(pct: number): string {
+   return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
+ }
+diff --git a/frontend/src/components/futures/FuturesLadder.tsx b/frontend/src/components/futures/FuturesLadder.tsx
+index ffbfbce..79386a6 100644
+--- a/frontend/src/components/futures/FuturesLadder.tsx
++++ b/frontend/src/components/futures/FuturesLadder.tsx
+@@ -7,6 +7,7 @@ import {
+   useSubmitFuture,
+ } from "@/hooks/useCapital";
+ import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
++import { fmt } from "@/lib/format";
+ import {
+   buildFuturesLadder,
+   futExchangeContract,
+@@ -21,11 +22,6 @@ import type { FuturesProductState } from "@/types";
+ const CLICK_DEBOUNCE_MS = 500;
+ const HINT_MS = 3_000;
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ interface Props {
+   product: string; // TXF/MXF/TMF
+   state: FuturesProductState | null;
+diff --git a/frontend/src/components/futures/FuturesPage.test.tsx b/frontend/src/components/futures/FuturesPage.test.tsx
+index edcc2c2..862d8fa 100644
+--- a/frontend/src/components/futures/FuturesPage.test.tsx
++++ b/frontend/src/components/futures/FuturesPage.test.tsx
+@@ -138,7 +138,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
+ describe("FuturesPage 中間主區(SC-5)", () => {
+   it("渲染水平五檔(DepthBar)", () => {
+     render(<Harness />);
+-    // 期貨頁不傳 onPriceClick(五檔點價置中是個股專屬)→ 格子非 button
++    // DepthBar 的格子一律是 div(五檔點價置中是個股 OrderBook 專屬)→ 以 aria-label 指認
+     expect(screen.getByLabelText("買1 22999")).toBeTruthy();
+     expect(screen.getByLabelText("賣1 23001")).toBeTruthy();
+     expect(screen.getByText(/委買 45/)).toBeTruthy();
+diff --git a/frontend/src/components/futures/FuturesPage.tsx b/frontend/src/components/futures/FuturesPage.tsx
+index 1085bd7..fba2654 100644
+--- a/frontend/src/components/futures/FuturesPage.tsx
++++ b/frontend/src/components/futures/FuturesPage.tsx
+@@ -1,6 +1,7 @@
+ import { ConnectionBadge } from "@/components/ConnectionBadge";
+ import { DepthBar } from "@/components/quote/DepthBar";
+ import type { WsStatus } from "@/hooks/useFuturesStream";
++import { fmt } from "@/lib/format";
+ import { cn } from "@/lib/utils";
+ import type { FuturesProductState } from "@/types";
+ 
+@@ -12,11 +13,6 @@ import type { FuturesProductState } from "@/types";
+ // 既有測試 import 路徑不破 → 保留 re-export。
+ export { futCloseEstimate } from "@/lib/futures-ladder";
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ interface Props {
+   products: readonly (readonly [string, string])[];
+   product: string;
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index 81024f1..befc19a 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -4,6 +4,8 @@ import { MarketChart } from "@/components/index/MarketChart";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+ import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
++import { pts } from "@/lib/svg-points";
++import { HOUR_TICKS } from "@/lib/time-labels";
+ import {
+   coerceMode,
+   isMarketKey,
+@@ -23,10 +25,6 @@ const OVERLAY_STORE = "copycat-index-mode";
+ const FUT_STORE = "copycat-market-fut";
+ 
+ const SIZE = { width: 640, height: 220 };
+-const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
+-  minute: m,
+-  label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
+-}));
+ 
+ type FutKey = "TXF" | "MXF" | "TMF";
+ const FUT_LABELS: readonly (readonly [FutKey, string])[] = [
+@@ -57,10 +55,6 @@ function toX(minute: number): number {
+   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
+ }
+ 
+-function pts(line: { x: number; y: number }[]): string {
+-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+-}
+-
+ function Btn({
+   label,
+   active,
+@@ -117,7 +111,7 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+         role="img"
+         aria-label="指數重疊走勢"
+       >
+-        {X_LABELS.map(({ minute, label }) => (
++        {HOUR_TICKS.map(({ minute, label }) => (
+           <g key={minute}>
+             <line
+               x1={toX(minute)}
+diff --git a/frontend/src/components/index/MarketChart.tsx b/frontend/src/components/index/MarketChart.tsx
+index d0f43be..0ca9129 100644
+--- a/frontend/src/components/index/MarketChart.tsx
++++ b/frontend/src/components/index/MarketChart.tsx
+@@ -5,13 +5,11 @@ import { useMarketBars } from "@/hooks/useMarketBars";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
+ import { aggregateBars } from "@/lib/candle";
+ import { buildIndexGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
++import { pts } from "@/lib/svg-points";
++import { HOUR_TICKS } from "@/lib/time-labels";
+ import { type MarketKey, type MarketMode, marketMinutesOf } from "@/lib/timeframe";
+ 
+ const SIZE = { width: 640, height: 220 };
+-const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
+-  minute: m,
+-  label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
+-}));
+ 
+ /** 資料源代碼 → 畫面文字。**必須逐一列舉**:未知碼原樣顯示(安全漂移),
+  *  不要 fallback 成「TC4」之類的漂亮字 —— 那等於替沒把握的來源背書。 */
+@@ -33,10 +31,6 @@ function toX(minute: number): number {
+   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
+ }
+ 
+-function pts(line: { x: number; y: number }[]): string {
+-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+-}
+-
+ function IntradayChart({ name, s }: { name: string; s: IndexSeries }) {
+   const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, SIZE);
+   return (
+@@ -46,7 +40,7 @@ function IntradayChart({ name, s }: { name: string; s: IndexSeries }) {
+       role="img"
+       aria-label={`${name}分時走勢`}
+     >
+-      {X_LABELS.map(({ minute, label }) => (
++      {HOUR_TICKS.map(({ minute, label }) => (
+         <g key={minute}>
+           <line
+             x1={toX(minute)}
+diff --git a/frontend/src/components/quote/DepthBar.test.tsx b/frontend/src/components/quote/DepthBar.test.tsx
+index 4405e36..7690559 100644
+--- a/frontend/src/components/quote/DepthBar.test.tsx
++++ b/frontend/src/components/quote/DepthBar.test.tsx
+@@ -1,6 +1,6 @@
+ /** @vitest-environment jsdom */
+-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+-import { afterEach, describe, expect, it, vi } from "vitest";
++import { cleanup, render, screen } from "@testing-library/react";
++import { afterEach, describe, expect, it } from "vitest";
+ 
+ import { DepthBar } from "@/components/quote/DepthBar";
+ 
+@@ -23,25 +23,16 @@ const ASKS: [number, number][] = [
+ ];
+ 
+ function renderBar(over: Partial<Parameters<typeof DepthBar>[0]> = {}) {
+-  return render(
+-    <DepthBar
+-      bids={BIDS}
+-      asks={ASKS}
+-      last={583_000}
+-      ref_={571_000}
+-      onPriceClick={() => {}}
+-      {...over}
+-    />,
+-  );
++  return render(<DepthBar bids={BIDS} asks={ASKS} last={583_000} ref_={571_000} {...over} />);
+ }
+ 
++/** 有資料的格子(空格補「—」不掛 aria-label);回傳序為 DOM 序 */
++const cells = () => screen.getAllByLabelText(/^[買賣]\d /);
++
+ describe("DepthBar 水平五檔(SC-4)", () => {
+   it("買側由中央往左 買1→買5、賣側由中央往右 賣1→賣5(DOM 由左至右 = 買5..買1, 賣1..賣5)", () => {
+     renderBar();
+-    const cells = screen
+-      .getAllByRole("button")
+-      .map((el) => el.getAttribute("aria-label"));
+-    expect(cells).toEqual([
++    expect(cells().map((el) => el.getAttribute("aria-label"))).toEqual([
+       "買5 578",
+       "買4 579",
+       "買3 580",
+@@ -57,15 +48,15 @@ describe("DepthBar 水平五檔(SC-4)", () => {
+ 
+   it("每格價量疊放:同一格內同時有量與價", () => {
+     renderBar();
+-    const best = screen.getByRole("button", { name: "買1 582" });
++    const best = screen.getByLabelText("買1 582");
+     expect(best.textContent).toContain("12");
+     expect(best.textContent).toContain("582");
+   });
+ 
+   it("買側 text-bull、賣側 text-bear(台股紅漲綠跌)", () => {
+     renderBar();
+-    expect(screen.getByRole("button", { name: "買1 582" }).className).toContain("text-bull");
+-    expect(screen.getByRole("button", { name: "賣1 583" }).className).toContain("text-bear");
++    expect(screen.getByLabelText("買1 582").className).toContain("text-bull");
++    expect(screen.getByLabelText("賣1 583").className).toContain("text-bear");
+   });
+ 
+   it("表頭顯示委買 / 委賣總量", () => {
+@@ -84,24 +75,15 @@ describe("DepthBar 水平五檔(SC-4)", () => {
+   it("量 bar 高度按最大量歸一(最大量該格 100%)", () => {
+     renderBar();
+     const bars = screen.getAllByTestId("depth-vol-bar");
+-    const max = screen.getByRole("button", { name: "買2 581" }); // qty 32 = 最大
++    const max = screen.getByLabelText("買2 581"); // qty 32 = 最大
+     expect(max.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
+       "100%",
+     );
+     expect(bars.length).toBe(10);
+   });
+ 
+-  it("點價回呼帶毫元價與買賣側", () => {
+-    const onPriceClick = vi.fn();
+-    renderBar({ onPriceClick });
+-    fireEvent.click(screen.getByRole("button", { name: "賣1 583" }));
+-    expect(onPriceClick).toHaveBeenCalledWith(583_000, "ask");
+-    fireEvent.click(screen.getByRole("button", { name: "買1 582" }));
+-    expect(onPriceClick).toHaveBeenCalledWith(582_000, "bid");
+-  });
+-
+-  it("未給 onPriceClick(期貨頁)→ 不渲染成 button,避免可聚焦卻點了沒反應(review P2-9)", () => {
+-    render(<DepthBar bids={BIDS} asks={ASKS} last={583_000} ref_={571_000} />);
++  it("格子不渲染成 button,避免可聚焦卻點了沒反應(review P2-9)", () => {
++    renderBar();
+     expect(screen.queryAllByRole("button").length).toBe(0);
+     // 價量仍照常顯示且可被 aria-label 指認
+     expect(screen.getByLabelText("買1 582").textContent).toContain("12");
+@@ -121,7 +103,7 @@ describe("DepthBar 水平五檔(SC-4)", () => {
+ 
+   it("檔位不足時補空格(—),不塌陷欄位", () => {
+     renderBar({ bids: [[582_000, 12]], asks: [] });
+-    expect(screen.getAllByRole("button").length).toBe(1); // 只有買1 有資料
++    expect(cells().length).toBe(1); // 只有買1 有資料
+     expect(screen.getAllByText("—").length).toBe(9); // 其餘 9 格空
+   });
+ 
+diff --git a/frontend/src/components/quote/DepthBar.tsx b/frontend/src/components/quote/DepthBar.tsx
+index 23b1e63..d0c7dd4 100644
+--- a/frontend/src/components/quote/DepthBar.tsx
++++ b/frontend/src/components/quote/DepthBar.tsx
+@@ -1,3 +1,4 @@
++import { chgPct, fmt, fmtPct } from "@/lib/format";
+ import { cn } from "@/lib/utils";
+ 
+ /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
+@@ -5,7 +6,8 @@ import { cn } from "@/lib/utils";
+  *
+  * 版式:買側由中央往左 買1→買5、賣側由中央往右 賣1→賣5,中央夾成交價 + 漲跌%。
+  * 每格內價量疊放(量在上、價在中、比例 bar 在下),欄位固定 10 格,檔位不足補「—」不塌陷。
+- * 純展示 + onPriceClick 回呼;**不送單**(design §11:五檔誤觸面大,送單集中在閃電梯上)。 */
++ * 純展示;**不送單、不點價**(design §11:五檔誤觸面大,送單集中在閃電梯上)。格子一律
++ * 渲染成 div —— button 可聚焦卻點了沒反應是假 affordance(review P2-9)。 */
+ 
+ const DEPTH = 5;
+ 
+@@ -20,12 +22,6 @@ export interface Props {
+   /** 漲停 / 跌停價(鎖停 badge 判定) */
+   upper?: number | null;
+   lower?: number | null;
+-  onPriceClick?: (priceMilli: number, side: "bid" | "ask") => void;
+-}
+-
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+ }
+ 
+ interface CellProps {
+@@ -33,10 +29,9 @@ interface CellProps {
+   label: string;
+   side: "bid" | "ask";
+   maxVol: number;
+-  onPriceClick?: (priceMilli: number, side: "bid" | "ask") => void;
+ }
+ 
+-function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
++function Cell({ entry, label, side, maxVol }: CellProps) {
+   if (entry === undefined) {
+     return (
+       <div className="flex min-w-0 flex-col items-center justify-end gap-0.5 px-0.5 py-1">
+@@ -45,19 +40,12 @@ function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
+     );
+   }
+   const [priceMilli, qty] = entry;
+-  // 未給 onPriceClick(期貨頁)→ 渲染成 div:button 可聚焦卻點了沒反應是假 affordance
+-  const Tag = onPriceClick ? "button" : "div";
+   return (
+-    <Tag
+-      {...(onPriceClick
+-        ? { type: "button" as const, onClick: () => onPriceClick(priceMilli, side) }
+-        : {})}
++    <div
+       aria-label={`${label} ${fmt(priceMilli)}`}
+       className={cn(
+         "flex min-w-0 flex-col items-center gap-0.5 px-0.5 py-1 font-mono",
+-        side === "bid"
+-          ? cn("text-bull", onPriceClick && "hover:bg-bull/10")
+-          : cn("text-bear", onPriceClick && "hover:bg-bear/10"),
++        side === "bid" ? "text-bull" : "text-bear",
+       )}
+     >
+       <span className="text-xs text-ink">{qty}</span>
+@@ -69,17 +57,17 @@ function Cell({ entry, label, side, maxVol, onPriceClick }: CellProps) {
+           style={{ height: `${Math.round((qty / maxVol) * 100)}%` }}
+         />
+       </span>
+-    </Tag>
++    </div>
+   );
+ }
+ 
+-export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, onPriceClick }: Props) {
++export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }: Props) {
+   const b = bids.slice(0, DEPTH);
+   const a = asks.slice(0, DEPTH);
+   const maxVol = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
+   const bidTotal = b.reduce((s, [, v]) => s + v, 0);
+   const askTotal = a.reduce((s, [, v]) => s + v, 0);
+-  const chg = last !== null && ref_ ? ((last - ref_) / ref_) * 100 : null;
++  const chg = last !== null && ref_ ? chgPct(last, ref_) : null;
+   const lockedUp = upper !== null && b[0]?.[0] === upper;
+   const lockedDown = lower !== null && a[0]?.[0] === lower;
+ 
+@@ -101,13 +89,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
+         </div>
+         {bidSlots.map((i) => (
+           <div key={`bid-${i}`} className="flex min-w-0 flex-1">
+-            <Cell
+-              entry={b[i]}
+-              label={`買${i + 1}`}
+-              side="bid"
+-              maxVol={maxVol}
+-              onPriceClick={onPriceClick}
+-            />
++            <Cell entry={b[i]} label={`買${i + 1}`} side="bid" maxVol={maxVol} />
+           </div>
+         ))}
+         {/* 中央成交價 */}
+@@ -130,7 +112,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
+                 chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink-dim",
+               )}
+             >
+-              {`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}
++              {fmtPct(chg)}
+             </span>
+           ) : null}
+           {lockedUp ? (
+@@ -142,13 +124,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
+         </div>
+         {askSlots.map((i) => (
+           <div key={`ask-${i}`} className="flex min-w-0 flex-1">
+-            <Cell
+-              entry={a[i]}
+-              label={`賣${i + 1}`}
+-              side="ask"
+-              maxVol={maxVol}
+-              onPriceClick={onPriceClick}
+-            />
++            <Cell entry={a[i]} label={`賣${i + 1}`} side="ask" maxVol={maxVol} />
+           </div>
+         ))}
+         <div className="flex shrink-0 flex-col items-start gap-0.5 pl-1 py-1 text-ink-dim">
+diff --git a/frontend/src/components/rail/RightRail.test.tsx b/frontend/src/components/rail/RightRail.test.tsx
+index 0e5f677..bc38cd1 100644
+--- a/frontend/src/components/rail/RightRail.test.tsx
++++ b/frontend/src/components/rail/RightRail.test.tsx
+@@ -12,7 +12,6 @@ const META = {
+   ref: 100_000,
+   upper: 110_000,
+   lower: 90_000,
+-  y_close: 100_000,
+   y_vol: 10,
+ };
+ const BOOK = {
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index cb49dc3..ac33ddd 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -4,6 +4,7 @@ import { bandSeries, bollinger, type Band } from "@/lib/bollinger";
+ import {
+   buildCandleGeometry,
+   movingAverage,
++  X_LABEL_H,
+   type Bar,
+   type CandleGeometry,
+ } from "@/lib/candle";
+@@ -16,7 +17,9 @@ import {
+ } from "@/lib/candle-viewport";
+ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+ import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
++import { fmt, fmtPct } from "@/lib/format";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
++import { pts } from "@/lib/svg-points";
+ import { cn } from "@/lib/utils";
+ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+ 
+@@ -27,7 +30,6 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
+  *  再加上兩個 figure 的框外 chrome 逐項對稱(頂列 h-[1.375rem]+mb-1、底列 mt-1+h-4),
+  *  切換模式時圖表區塊高度才不會跳(SC-6.7)。殘差 0.5px @ 容器寬 1400。 */
+ const DIMS = { width: 1400, height: 578 };
+-const X_LABEL_H = 14;
+ /** 滾輪每一格的縮放倍率 */
+ const ZOOM_STEP = 1.15;
+ /** 軸標籤尺寸;time tag 的 y = height − boxH,底邊恰貼 viewBox 底不被裁 */
+@@ -46,11 +48,6 @@ const VOL_CLASS = {
+   flat: "fill-ink-dim/30",
+ } as const;
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ /** `YYYY-MM-DD` → `MM/DD`;`YYYY-MM-DD HH:MM` → `HH:MM` */
+ function shortStamp(t: string): string {
+   const sp = t.indexOf(" ");
+@@ -58,10 +55,6 @@ function shortStamp(t: string): string {
+   return t.slice(5).replace("-", "/");
+ }
+ 
+-function pts(line: { x: number; y: number }[]): string {
+-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+-}
+-
+ /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
+ const EMPTY_LINE: { x: number; y: number }[] = [];
+ 
+@@ -349,7 +342,7 @@ function readoutFields(
+     { label: "收", value: fmt(b.c), tone },
+     {
+       label: "漲跌",
+-      value: pct === null ? "-" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`,
++      value: pct === null ? "-" : fmtPct(pct),
+       tone: pct === null ? "muted" : pct > 0 ? "bull" : pct < 0 ? "bear" : "muted",
+     },
+     { label: "量", value: showVolume ? String(b.v) : "—" },
+@@ -385,7 +378,9 @@ export function CandleChart({
+     setViewport((v) => onTotalChange(v, prevTotal, bars.length));
+   }
+ 
+-  const { shown, g, ma5, ma20, bands } = useMemo(() => {
++  // 布林上下軌**由幾何 memo 一併回傳**:同一組值原本算四次(兩次餵 y 域、兩次畫線),
++  // 而「餵 y 域的那份」與「畫出來的那份」一旦不同源就是靜默錯位(L-2)。
++  const { shown, g, ma5, ma20, bbUpper, bbLower } = useMemo(() => {
+     const start = viewport.start;
+     const shownBars = bars.slice(start, start + viewport.count);
+     // MA / BB 以完整序列計算後再裁切,左緣才不會斷頭;裁切區間必須與 shown 對齊,
+@@ -395,13 +390,16 @@ export function CandleChart({
+     const bb: (Band | null)[] = showBb
+       ? bollinger(bars, 20).slice(start, start + viewport.count)
+       : [];
+-    const extra = showBb ? [bandSeries(bb, "upper"), bandSeries(bb, "lower")] : undefined;
++    const upper = bandSeries(bb, "upper");
++    const lower = bandSeries(bb, "lower");
++    const extra = showBb ? [upper, lower] : undefined;
+     return {
+       shown: shownBars,
+       g: buildCandleGeometry(shownBars, { width: dimW, height: dimH }, extra),
+       ma5: m5,
+       ma20: m20,
+-      bands: bb,
++      bbUpper: upper,
++      bbLower: lower,
+     };
+     // dimW / dimH 必入 deps:少了高度,viewBox 換新高而 toY / 刻度仍舊高算(T-10b)
+   }, [bars, viewport, showBb, dimW, dimH]);
+@@ -409,12 +407,12 @@ export function CandleChart({
+   const ma5Line = useMemo(() => seriesLine(ma5, g), [ma5, g]);
+   const ma20Line = useMemo(() => seriesLine(ma20, g), [ma20, g]);
+   const bbUpperLine = useMemo(
+-    () => (showBb ? seriesLine(bandSeries(bands, "upper"), g) : EMPTY_LINE),
+-    [showBb, bands, g],
++    () => (showBb ? seriesLine(bbUpper, g) : EMPTY_LINE),
++    [showBb, bbUpper, g],
+   );
+   const bbLowerLine = useMemo(
+-    () => (showBb ? seriesLine(bandSeries(bands, "lower"), g) : EMPTY_LINE),
+-    [showBb, bands, g],
++    () => (showBb ? seriesLine(bbLower, g) : EMPTY_LINE),
++    [showBb, bbLower, g],
+   );
+ 
+   const total = bars.length;
+@@ -651,7 +649,7 @@ export function CandleChart({
+             windowPct === null ? "" : windowPct > 0 ? "text-bull" : windowPct < 0 ? "text-bear" : "",
+           )}
+         >
+-          期間 {windowPct === null ? "-" : `${windowPct > 0 ? "+" : ""}${windowPct.toFixed(2)}%`}
++          期間 {windowPct === null ? "-" : fmtPct(windowPct)}
+         </span>
+       </figcaption>
+     </figure>
+diff --git a/frontend/src/components/stock/OrderBook.tsx b/frontend/src/components/stock/OrderBook.tsx
+index cd9cb7a..504910b 100644
+--- a/frontend/src/components/stock/OrderBook.tsx
++++ b/frontend/src/components/stock/OrderBook.tsx
+@@ -1,3 +1,4 @@
++import { chgPct, fmt, fmtPct } from "@/lib/format";
+ import { isMarketLevel, limitState } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+ 
+@@ -23,11 +24,6 @@ interface Props {
+   lower?: number | null;
+ }
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ /** 千分位固定 en-US:不指定 locale 時分隔符隨執行環境 ICU 預設變動(非 en-US 會拿到
+  *  `1.033`),會讓斷言與畫面都變成環境相依(review R16)。 */
+ function lots(n: number): string {
+@@ -154,20 +150,18 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
+   const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
+   const marketOnly = (levels: [number, number][]) =>
+     levels.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
++  const limitB = limitOnly(b);
++  const limitA = limitOnly(a);
+   // `1` 不可省:五檔全 0 量(盤前 / 剛重啟未收 snapshot)時除零 → width "NaN%",
+   // React 靜默產生無效 style,只有盤中才看得到(review R7;對齊 DepthBar.tsx:78)
+-  const maxQty = Math.max(
+-    1,
+-    ...limitOnly(b).map(([, v]) => v),
+-    ...limitOnly(a).map(([, v]) => v),
+-  );
+-  const bidTotal = limitOnly(b).reduce((s, [, v]) => s + v, 0);
+-  const askTotal = limitOnly(a).reduce((s, [, v]) => s + v, 0);
++  const maxQty = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
++  const bidTotal = limitB.reduce((s, [, v]) => s + v, 0);
++  const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
+   const marketBid = marketOnly(b);
+   const marketAsk = marketOnly(a);
+   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
+   const lastMilli = last?.p ?? null;
+-  const chg = lastMilli !== null && ref_ ? ((lastMilli - ref_) / ref_) * 100 : null;
++  const chg = lastMilli !== null && ref_ ? chgPct(lastMilli, ref_) : null;
+   // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價格 0),
+   // 漲停價被擠到 `bids[1]` → 判定恆假、badge 靜默消失(實測 2327 就是如此)。
+   // 改看「委買側有沒有掛在漲停價的檔位」,市價偽檔位再也打不穿它。
+@@ -233,7 +227,7 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
+                       : "text-ink-dim",
+               )}
+             >
+-              {`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}
++              {fmtPct(chg)}
+             </span>
+           ) : null}
+         </span>
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index dbd3722..d46e761 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -13,7 +13,6 @@ const META = {
+   ref: 100_000,
+   upper: 110_000,
+   lower: 90_000,
+-  y_close: 100_000,
+   y_vol: 10,
+ };
+ 
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index 7e8fb58..64637db 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -7,6 +7,7 @@ import {
+   useSubmitStock,
+ } from "@/hooks/useCapital";
+ import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
++import { fmt } from "@/lib/format";
+ import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
+ import type { StockBook, StockMeta } from "@/lib/stock-accum";
+ import { buildLadder } from "@/lib/stock-tick";
+@@ -25,11 +26,6 @@ export const TRADE_KINDS = [
+ ] as const;
+ export type TradeKind = (typeof TRADE_KINDS)[number][0];
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ interface LotEntry {
+   qty: number; // 殘量(order_qty - filled_qty 聚合)
+   seqs: string[];
+diff --git a/frontend/src/components/stock/StockChart.test.tsx b/frontend/src/components/stock/StockChart.test.tsx
+index 3e666e9..5aea2ab 100644
+--- a/frontend/src/components/stock/StockChart.test.tsx
++++ b/frontend/src/components/stock/StockChart.test.tsx
+@@ -1,28 +1,24 @@
+ /** @vitest-environment jsdom */
+-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+-import type { ReactNode } from "react";
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StockChart } from "@/components/stock/StockChart";
+ import type { StockAccum } from "@/lib/stock-accum";
++import { wrap } from "@/test-utils";
+ 
+ const ACCUM = {
+   code: "2330",
+   seq: 1,
+   last: { p: 2_380_000, t: "09:00:01.000", cum_vol: 1 },
+   vwap: 2_380_000,
+-  cumInner: 0,
+-  cumOuter: 1,
+   minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
+   ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
+   book: { bids: [], asks: [] },
+   meta: {
+     name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000,
+-    y_close: 2_320_000, y_vol: 100,
++    y_vol: 100,
+   },
+   noData: false,
+-  backfilling: null,
+ } as unknown as StockAccum;
+ 
+ const BARS = [
+@@ -53,11 +49,6 @@ afterEach(() => {
+   vi.unstubAllGlobals();
+ });
+ 
+-function wrap(ui: ReactNode) {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+-}
+-
+ function chart() {
+   return wrap(<StockChart accum={ACCUM} code="2330" />);
+ }
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index 3064245..5ccf887 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -1,12 +1,11 @@
+ /** @vitest-environment jsdom */
+-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+-import type { ReactNode } from "react";
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+ import { fromSnapshot } from "@/lib/stock-accum";
+ import { buildIntradayGeometry, lastPoint, R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
++import { wrap } from "@/test-utils";
+ 
+ const OVERLAY = {
+   // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
+@@ -40,18 +39,11 @@ afterEach(() => {
+   vi.restoreAllMocks();
+ });
+ 
+-function wrap(ui: ReactNode) {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+-}
+-
+ const ACCUM = fromSnapshot({
+   code: "2330",
+   seq: 2,
+   last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+   vwap: 2_380_000,
+-  cum_inner: 2,
+-  cum_outer: 10,
+   minutes: {
+     // round4 項 1:per-minute h/l 是當日高低標記的定位依據 —— 標記畫在「摸到極值的
+     // 那一分鐘」上,而 541 的高(2_395_000)高於任何一分鐘的收盤,正是「摸到就算」的樣態
+@@ -60,7 +52,7 @@ const ACCUM = fromSnapshot({
+   },
+   ticks: [],
+   book: null,
+-  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
++  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+ });
+ 
+ describe("StockIntradayChart", () => {
+@@ -104,10 +96,10 @@ describe("StockIntradayChart", () => {
+     const noRef = fromSnapshot({
+       code: "2330", seq: 1,
+       last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+-      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
++      vwap: 2_380_000,
+       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+       ticks: [], book: null,
+-      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
++      meta: { name: "台積電", ref: null, upper: null, lower: null, y_vol: 100 },
+     });
+     const { container } = wrap(<StockIntradayChart accum={noRef} />);
+     expect(container.querySelectorAll("clipPath").length).toBe(0);
+@@ -125,7 +117,7 @@ describe("StockIntradayChart", () => {
+ 
+   it("無分鐘資料顯示等待提示", () => {
+     const empty = fromSnapshot({
+-      code: "2330", seq: 0, last: null, vwap: null, cum_inner: 0, cum_outer: 0,
++      code: "2330", seq: 0, last: null, vwap: null,
+       minutes: {}, ticks: [], book: null, meta: null,
+     });
+     wrap(<StockIntradayChart accum={empty} />);
+@@ -512,10 +504,10 @@ describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
+     const noRef = fromSnapshot({
+       code: "2330", seq: 1,
+       last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+-      vwap: 2_380_000, cum_inner: 0, cum_outer: 10,
++      vwap: 2_380_000,
+       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
+       ticks: [], book: null,
+-      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
++      meta: { name: "台積電", ref: null, upper: null, lower: null, y_vol: 100 },
+     });
+     const { container } = wrap(<StockIntradayChart accum={noRef} />);
+     hover(container);
+@@ -868,10 +860,10 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
+     const legacy = fromSnapshot({
+       code: "2330", seq: 2,
+       last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+-      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
++      vwap: 2_380_000,
+       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+       ticks: [], book: null,
+-      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
++      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+       high: 2_380_000, low: 2_380_000,
+     });
+     const { container } = wrap(<StockIntradayChart accum={legacy} />);
+@@ -924,9 +916,9 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
+ 
+   it("尚無成交 → 不渲染圓點且不崩", () => {
+     const empty = fromSnapshot({
+-      code: "2330", seq: 1, last: null, vwap: null, cum_inner: 0, cum_outer: 0,
++      code: "2330", seq: 1, last: null, vwap: null,
+       minutes: {}, ticks: [], book: null,
+-      meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_close: null, y_vol: null },
++      meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: null },
+     });
+     const { container } = wrap(<StockIntradayChart accum={empty} />);
+     expect(container.querySelector('[data-testid="last-dot"]')).toBeNull();
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index f617464..92936b2 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -4,10 +4,14 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
+ import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
++import { chgPct, fmt, fmtPct } from "@/lib/format";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
++import { pts } from "@/lib/svg-points";
++import { hhmm, HOUR_TICKS } from "@/lib/time-labels";
+ import { useStockOverlay } from "@/hooks/useStockOverlay";
+ import type { StockAccum } from "@/lib/stock-accum";
+ import {
++  buildEnergyBars,
+   buildIntradayGeometry,
+   lastPoint,
+   LOW_DECIDED_PCT,
+@@ -26,7 +30,7 @@ import {
+   type OverlayLevel,
+   type OverlayLine,
+ } from "@/lib/stock-intraday-svg";
+-import { cn } from "@/lib/utils";
++import { cn, safeIdToken } from "@/lib/utils";
+ 
+ const MAIN = { width: 800, height: 260 };
+ const SUB = { width: 800, height: 70 };
+@@ -40,24 +44,6 @@ const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
+  *  就不畫」靠 `tagSpan` 判定,寫死在 JSX 會讓遮蔽判定與實際寬度脫鉤。 */
+ const TIME_TAG = { w: 40, h: 24 };
+ 
+-function hhmm(minute: number): string {
+-  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+-}
+-
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+-function pts(line: { x: number; y: number }[]): string {
+-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+-}
+-
+-const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
+-  minute: m,
+-  label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
+-}));
+-
+ function barW(width: number): number {
+   return Math.max(1, plotWidth(width) / (X_END_MIN - X_START_MIN) - 0.4);
+ }
+@@ -162,7 +148,7 @@ const ChartStatic = memo(function ChartStatic({
+       {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
+           上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
+       <line x1={Y_AXIS_W} x2={w - R_AXIS_W} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
+-      {X_LABELS.map(({ minute }) => (
++      {HOUR_TICKS.map(({ minute }) => (
+         <line
+           key={minute}
+           x1={minuteToX(minute, w)}
+@@ -364,7 +350,7 @@ function XAxisLabels({
+ }) {
+   return (
+     <g>
+-      {X_LABELS.map(({ minute, label }) => {
++      {HOUR_TICKS.map(({ minute, label }) => {
+         const x = minuteToX(minute, w) + 2;
+         if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
+         return (
+@@ -484,7 +470,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
+   const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
+   // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
+-  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
++  const uid = safeIdToken(useId());
+   const clipAbove = `${uid}-above`;
+   const clipBelow = `${uid}-below`;
+ 
+@@ -499,9 +485,11 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+     [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH],
+   );
+ 
+-  const subGeo = useMemo(
+-    () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, { width: subW, height: subH }),
+-    [accum.minutes, accum.meta, subW, subH],
++  // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
++  // 價線 / 刻度 / 反演算完即丟。`meta` 不影響量的幾何,故不入 deps。
++  const subEnergy = useMemo(
++    () => buildEnergyBars(accum.minutes, { width: subW, height: subH }),
++    [accum.minutes, subW, subH],
+   );
+ 
+   const overlay = overlayQ.data ?? null;
+@@ -556,9 +544,10 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+           ? "fill-bear"
+           : "fill-ink-dim";
+   const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
+-  const shownAgg = shownMin !== null ? accum.minutes.get(shownMin) : undefined;
++  // hover 態的 shownMin 恆等於 hoverMin → 重用已取好的那一格,不再查第二次(L-3)
++  const shownAgg = hoverAgg ?? (shownMin !== null ? accum.minutes.get(shownMin) : undefined);
+   const shownChg =
+-    shownAgg !== undefined && ref ? ((shownAgg.c - ref) / ref) * 100 : null;
++    shownAgg !== undefined && ref ? chgPct(shownAgg.c, ref) : null;
+   const fields: ReadoutField[] =
+     shownAgg === undefined || shownMin === null
+       ? [
+@@ -578,7 +567,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+           },
+           {
+             label: "",
+-            value: shownChg === null ? "-" : `${shownChg > 0 ? "+" : ""}${shownChg.toFixed(2)}%`,
++            value: shownChg === null ? "-" : fmtPct(shownChg),
+             tone: shownChg === null ? "muted" : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : "muted",
+           },
+           { label: "量", value: String(shownAgg.v) },
+@@ -769,12 +758,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
+           多出的固定 4px 會讓比例隨容器寬漂移。 */}
+       <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="成交量">
+-        <EnergySub bars={subGeo.energyBars} maxTotal={subGeo.maxTotal} w={subW} h={subH} />
++        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={subW} h={subH} />
+         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
+         {hoverMin !== null ? (
++          // 這條線畫在 subW 的 viewBox 裡 → x 必須用 subW 換算(L-19)。今日 MAIN.width
++          // 與 SUB.width 同值,故輸出逐值相同;用 mainW 只是靠兩個常數碰巧相等在維持對位。
+           <line
+-            x1={minuteToX(hoverMin, mainW)}
+-            x2={minuteToX(hoverMin, mainW)}
++            x1={minuteToX(hoverMin, subW)}
++            x2={minuteToX(hoverMin, subW)}
+             y1={0}
+             y2={subH}
+             className="stroke-ink-muted"
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index bdd04c2..6985e64 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -1,12 +1,12 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+-import type { ReactNode } from "react";
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StockPage } from "@/components/stock/StockPage";
+ import type { StockStreamState } from "@/hooks/useStockStream";
+ import type { StockAccum } from "@/lib/stock-accum";
++import { wrap } from "@/test-utils";
+ 
+ // 🔴-3:code / 資料流已上提到 App(D-3)→ 本元件改吃 props,不再自建 WS、不再讀 localStorage。
+ // 「TC4 斷線告警列(W-B5)」文案斷言原本掛在此檔的 WS 驅動路徑上,改以 props 直接驅動,
+@@ -17,8 +17,6 @@ const ACCUM = {
+   seq: 1,
+   last: { p: 2_380_000, t: "09:00:01.000", cum_vol: 1 },
+   vwap: 2_380_000,
+-  cumInner: 0,
+-  cumOuter: 1,
+   minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
+   ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
+   book: { bids: [[2_375_000, 5]], asks: [[2_380_000, 3]] },
+@@ -27,11 +25,9 @@ const ACCUM = {
+     ref: 2_320_000,
+     upper: 2_550_000,
+     lower: 2_090_000,
+-    y_close: 2_320_000,
+     y_vol: 100,
+   },
+   noData: false,
+-  backfilling: null,
+ } as unknown as StockAccum;
+ 
+ function stream(over: Partial<StockStreamState> = {}): StockStreamState {
+@@ -69,11 +65,6 @@ afterEach(() => {
+   vi.unstubAllGlobals();
+ });
+ 
+-function wrap(ui: ReactNode) {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+-}
+-
+ describe("StockPage", () => {
+   it("未選檔時顯示提示;自選側欄仍渲染", async () => {
+     wrap(<StockPage code={null} onSelect={vi.fn()} stream={stream({ accum: null })} />);
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 8117df7..be236da 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -6,18 +6,14 @@ import { TickTape } from "@/components/stock/TickTape";
+ import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import type { StockStreamState } from "@/hooks/useStockStream";
++import { chgPct, fmt, fmtPct } from "@/lib/format";
+ import { limitState } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+-import { addCode, assignToGroup, type Watchlist } from "@/lib/watchlist-model";
++import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
+ 
+ /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
+  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ interface Props {
+   code: string | null;
+   onSelect: (code: string) => void;
+@@ -42,7 +38,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
+ 
+   const meta = accum?.meta ?? null;
+   const last = accum?.last ?? null;
+-  const chg = last && meta?.ref ? ((last.p - meta.ref) / meta.ref) * 100 : null;
++  const chg = last && meta?.ref ? chgPct(last.p, meta.ref) : null;
+   const limit = limitState(last?.p ?? null, meta?.upper ?? null, meta?.lower ?? null);
+ 
+   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
+@@ -54,7 +50,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
+   function commit(next: Watchlist): void {
+     setPickerOpen(false);
+     if (wl === undefined) return;
+-    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
++    if (isSameWatchlist(next, wl)) return;
+     save.mutate(next);
+   }
+ 
+@@ -100,7 +96,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
+                 >
+                   {fmt(last.p)}
+                   {chg != null ? (
+-                    <span className="ml-1 text-xs">{`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}</span>
++                    <span className="ml-1 text-xs">{fmtPct(chg)}</span>
+                   ) : null}
+                 </span>
+               ) : null}
+diff --git a/frontend/src/components/stock/TickTape.tsx b/frontend/src/components/stock/TickTape.tsx
+index f9ebb90..c08ccb8 100644
+--- a/frontend/src/components/stock/TickTape.tsx
++++ b/frontend/src/components/stock/TickTape.tsx
+@@ -1,18 +1,14 @@
+ import { useState } from "react";
+ 
++import { fmt } from "@/lib/format";
+ import type { TickRow } from "@/lib/stock-accum";
+ import { cn } from "@/lib/utils";
+ 
+ const PAGE = 30;
+ 
+-function fmt(milli: number): string {
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+-}
+-
+ /** 價格相對參考價的色調(四個呼叫點共用一份)。基準用 `meta.ref` 與 header / 側欄 /
+  *  江波圖一致 —— 另立基準會出現「同一個價在兩處顏色不同」。 */
+-export function priceTone(v: number | null | undefined, ref: number | null): string {
++function priceTone(v: number | null | undefined, ref: number | null): string {
+   if (v == null || ref == null) return "text-ink-dim";
+   if (v > ref) return "text-bull";
+   if (v < ref) return "text-bear";
+diff --git a/frontend/src/components/stock/WatchlistManagerDialog.test.tsx b/frontend/src/components/stock/WatchlistManagerDialog.test.tsx
+index 53c4ac1..7b84524 100644
+--- a/frontend/src/components/stock/WatchlistManagerDialog.test.tsx
++++ b/frontend/src/components/stock/WatchlistManagerDialog.test.tsx
+@@ -1,11 +1,11 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+-import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
+ import type { Watchlist } from "@/lib/watchlist-model";
++import { wrap } from "@/test-utils";
+ 
+ /** 2317 在自選但不屬任何群組(未分組桶) */
+ const WL: Watchlist = {
+@@ -48,11 +48,6 @@ afterEach(() => {
+   vi.unstubAllGlobals();
+ });
+ 
+-function wrap(ui: ReactNode) {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+-}
+-
+ function open(wl: Watchlist = WL) {
+   const onClose = vi.fn();
+   const onGroupDeleted = vi.fn();
+diff --git a/frontend/src/components/stock/WatchlistManagerDialog.tsx b/frontend/src/components/stock/WatchlistManagerDialog.tsx
+index 75d13e7..7f314fd 100644
+--- a/frontend/src/components/stock/WatchlistManagerDialog.tsx
++++ b/frontend/src/components/stock/WatchlistManagerDialog.tsx
+@@ -1,14 +1,15 @@
+-import { useEffect, useRef, useState } from "react";
++import { useEffect, useMemo, useRef, useState } from "react";
+ 
+ import { errText, useSaveWatchlist } from "@/hooks/useStockWatchlist";
+ import { useStockNames } from "@/hooks/useStockNames";
+-import { searchStocks } from "@/lib/stock-search";
++import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
+ import { cn } from "@/lib/utils";
+ import {
+   addCode,
+   addGroup,
+   assignToGroup,
+   deleteGroup,
++  isSameWatchlist,
+   removeCode,
+   removeFromGroup,
+   renameGroup,
+@@ -20,8 +21,6 @@ import {
+ /** 「未分組」是左欄第一列的**偽群組**,不是真的可以建的群組名 —— 兩者同名的話畫面上
+  *  無法區分(`selected === null` vs 一個真的叫「未分組」的群組)。 */
+ const UNGROUPED_LABEL = "未分組";
+-/** 右欄搜尋提示筆數(與側欄同一個量級) */
+-const SUGGEST_LIMIT = 8;
+ 
+ interface Props {
+   open: boolean;
+@@ -84,7 +83,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+     // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
+     // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
+     // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
+-    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
++    if (isSameWatchlist(next, wl)) return;
+     setLocalError(null);
+     save.mutate(next, onDone === undefined ? undefined : { onSuccess: onDone });
+   }
+@@ -126,7 +125,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+     selected === null ? null : (wl.groups.find((g) => g.name === selected) ?? null);
+   const ungrouped = ungroupedCodes(wl);
+   const rows = activeGroup === null ? ungrouped : activeGroup.codes;
+-  const nameOf = (code: string): string => names.find((n) => n.code === code)?.name ?? "";
++  // 名冊 2,401 筆;逐列 `names.find(...)` 是 O(列數 × 2401)。改 Map 查表(同側欄作法,
++  // 輸出逐值相同 —— 名冊無重複 code,find 的首筆命中即 Map 的值)。
++  const nameMap = useMemo(() => new Map(names.map((n) => [n.code, n.name])), [names]);
++  const nameOf = (code: string): string => nameMap.get(code) ?? "";
+   const suggestions = searchStocks(stockInput, names, SUGGEST_LIMIT);
+ 
+   /** 加進本組:`addCode` 與 `assignToGroup` **合成單次 PUT** ——
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index 0836e3a..934a9bd 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -1,11 +1,10 @@
+ /** @vitest-environment jsdom */
+-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+-import type { ReactNode } from "react";
++import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+ import type { Group, Watchlist } from "@/lib/watchlist-model";
++import { wrap } from "@/test-utils";
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+ /** 整包 PUT body(v3 起 codes 與 groups 都是契約的一部分,只推 groups 會漏掉未分組) */
+@@ -75,11 +74,6 @@ afterEach(() => {
+   vi.restoreAllMocks();
+ });
+ 
+-function wrap(ui: ReactNode) {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+-}
+-
+ const QUOTES = {
+   // 2330:一般價位(未觸停)—— upper/lower 有值但現價沒踩到,亮燈不該亮
+   "2330": {
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 0ccb08c..9cf6627 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -4,13 +4,15 @@ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialo
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import { useStockNames } from "@/hooks/useStockNames";
+ import type { WatchlistQuote } from "@/hooks/useStockStream";
++import { fmt, fmtPct } from "@/lib/format";
+ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
+-import { searchStocks } from "@/lib/stock-search";
++import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
+ import { limitState } from "@/lib/stock-tick";
+-import { cn } from "@/lib/utils";
++import { cn, safeIdToken } from "@/lib/utils";
+ import {
+   assignToGroup,
+   detachFromGroups,
++  isSameWatchlist,
+   moveToGroup,
+   removeCode,
+   removeFromGroup,
+@@ -30,14 +32,11 @@ export const ROW_H = 52;
+ const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+ /** 未分組區塊的折疊(`"1"` = 折疊);與群組折疊分開存,兩者互不影響 */
+ const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
+-/** 提示列筆數:多過這個高度就開始擠掉股票列 */
+-const SUGGEST_LIMIT = 8;
+ const EMPTY_WL: Watchlist = { codes: [], groups: [] };
+ 
+ function fmtPrice(milli: number | null): string {
+   if (milli === null) return "-";
+-  const v = milli / 1000;
+-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
++  return fmt(milli);
+ }
+ 
+ function loadCollapsed(): Set<string> {
+@@ -82,14 +81,13 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+   const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
+   const [dialogOpen, setDialogOpen] = useState(false);
+-  const [drag, setDrag] = useState<{
+-    code: string;
+-    from: string | null;
+-    to: string | null;
+-    index: number;
+-  } | null>(null);
++  // 落點 index 不入 state:插入位置在 pointerup 當下由 `dropTargetFromPointer` 現算,
++  // 存一份在這裡只會多一個「拖曳過程中的 index」而沒有任何讀者(DC-20)。
++  const [drag, setDrag] = useState<{ code: string; from: string | null; to: string | null } | null>(
++    null,
++  );
+   // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
+-  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
++  const uid = safeIdToken(useId());
+   const asideRef = useRef<HTMLElement | null>(null);
+   // key = 群組名;`null` = 未分組區塊
+   const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());
+@@ -102,7 +100,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
+    *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
+   function commit(next: Watchlist): void {
+-    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
++    if (isSameWatchlist(next, wl)) return;
+     save.mutate(next);
+   }
+ 
+@@ -194,11 +192,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+ 
+   function onHandleDown(from: string | null, code: string, e: React.PointerEvent): void {
+     e.preventDefault();
+-    const at =
+-      from === null
+-        ? ungrouped.indexOf(code)
+-        : (groups.find((g) => g.name === from)?.codes.indexOf(code) ?? 0);
+-    setDrag({ code, from, to: from, index: at });
++    setDrag({ code, from, to: from });
+     // 取消(Esc)與完成(pointerup)走**同一個** teardown。取消之所以有效是因為這裡把
+     // `pointerup` listener 移掉了 —— 之後放開手指根本進不到 `up`。
+     // ⚠ 曾另外加過一個 `cancelled` 旗標在 `up` 開頭早退,mutation test 證明它不可達
+@@ -212,7 +206,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     const move = (ev: PointerEvent): void => {
+       const { zones, bounds } = zonesNow();
+       const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
+-      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group, index: target.index }));
++      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group }));
+     };
+     const up = (ev: PointerEvent): void => {
+       const { zones, bounds } = zonesNow();
+@@ -349,9 +343,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+                             : "text-ink-dim",
+                     )}
+                   >
+-                    {q.chg_pct != null
+-                      ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
+-                      : "-"}
++                    {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}
+                   </span>
+                 </>
+               ) : q?.ref != null ? (
+diff --git a/frontend/src/hooks/useMarketBars.ts b/frontend/src/hooks/useMarketBars.ts
+index 99c234f..655523e 100644
+--- a/frontend/src/hooks/useMarketBars.ts
++++ b/frontend/src/hooks/useMarketBars.ts
+@@ -1,5 +1,6 @@
+ import { useQuery } from "@tanstack/react-query";
+ 
++import { parseError } from "@/lib/api-error";
+ import type { Bar } from "@/lib/candle";
+ import { type MarketKey, type MarketMode, tfOf } from "@/lib/timeframe";
+ import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
+@@ -34,16 +35,7 @@ export interface MarketBars {
+ async function fetchMarketBars(key: MarketKey, tf: string): Promise<MarketBars> {
+   const qs = tf === "1" ? `tf=1&days=${MARKET_MINUTE_DAYS}` : `tf=${tf}`;
+   const res = await fetch(`/api/market/bars/${key}?${qs}`);
+-  if (!res.ok) {
+-    let code = `HTTP_${res.status}`;
+-    try {
+-      const body = (await res.json()) as { detail?: { error?: string } };
+-      code = body.detail?.error ?? code;
+-    } catch {
+-      /* 非 JSON body:保留 HTTP_ 前綴碼 */
+-    }
+-    throw new Error(code);
+-  }
++  if (!res.ok) throw new Error(await parseError(res));
+   return (await res.json()) as MarketBars;
+ }
+ 
+diff --git a/frontend/src/hooks/useStockBars.test.tsx b/frontend/src/hooks/useStockBars.test.tsx
+index 6765fbb..5f662af 100644
+--- a/frontend/src/hooks/useStockBars.test.tsx
++++ b/frontend/src/hooks/useStockBars.test.tsx
+@@ -4,7 +4,8 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
+ import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+-import { inTradingHours, MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
++import { MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
++import { inTradingHours } from "@/lib/trading-hours";
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+ 
+diff --git a/frontend/src/hooks/useStockBars.ts b/frontend/src/hooks/useStockBars.ts
+index 8a3fde7..a899e6e 100644
+--- a/frontend/src/hooks/useStockBars.ts
++++ b/frontend/src/hooks/useStockBars.ts
+@@ -1,5 +1,6 @@
+ import { useQuery } from "@tanstack/react-query";
+ 
++import { parseError } from "@/lib/api-error";
+ import type { Bar } from "@/lib/candle";
+ import { inTradingHours } from "@/lib/trading-hours";
+ 
+@@ -30,23 +31,10 @@ export function minutesOf(mode: ChartMode): number {
+   return Number.isFinite(n) && n >= 1 ? n : 1;
+ }
+ 
+-/** 台北交易時段(本機時區 = 台北)。實作搬到 `lib/trading-hours.ts`(大盤頁共用),
+- *  此處 re-export 讓既有 import 路徑不變。 */
+-export { inTradingHours } from "@/lib/trading-hours";
+-
+ async function fetchBars(code: string, tf: string, days: number): Promise<Bar[]> {
+   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
+   const res = await fetch(`/api/stock/bars/${code}?${qs}`);
+-  if (!res.ok) {
+-    let code_ = `HTTP_${res.status}`;
+-    try {
+-      const body = (await res.json()) as { detail?: { error?: string } };
+-      code_ = body.detail?.error ?? code_;
+-    } catch {
+-      /* 非 JSON body:保留 HTTP_ 前綴碼 */
+-    }
+-    throw new Error(code_);
+-  }
++  if (!res.ok) throw new Error(await parseError(res));
+   return ((await res.json()) as { bars: Bar[] }).bars;
+ }
+ 
+diff --git a/frontend/src/hooks/useStockStream.test.ts b/frontend/src/hooks/useStockStream.test.ts
+index 9e6799f..1341687 100644
+--- a/frontend/src/hooks/useStockStream.test.ts
++++ b/frontend/src/hooks/useStockStream.test.ts
+@@ -33,16 +33,11 @@ function snap(seq: number, ticks: { t: string; p: number; q: number; side: strin
+       ? { p: ticks[ticks.length - 1]!.p, t: ticks[ticks.length - 1]!.t, cum_vol: seq }
+       : null,
+     vwap: null,
+-    cum_inner: 0,
+-    cum_outer: 0,
+     minutes: {},
+     ticks,
+     book: null,
+-    meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_close: null, y_vol: null },
++    meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: null },
+     no_data: false,
+-    tc4: "up",
+-    backfilling: null,
+-    stkfut_prod: null,
+   };
+ }
+ 
+diff --git a/frontend/src/hooks/useStockWatchlist.ts b/frontend/src/hooks/useStockWatchlist.ts
+index 346c51b..0880005 100644
+--- a/frontend/src/hooks/useStockWatchlist.ts
++++ b/frontend/src/hooks/useStockWatchlist.ts
+@@ -1,5 +1,6 @@
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ 
++import { parseError } from "@/lib/api-error";
+ import type { Group, Watchlist } from "@/lib/watchlist-model";
+ 
+ export type { Group, Watchlist };
+@@ -29,15 +30,6 @@ export function errText(message: string): string {
+   return "儲存失敗";
+ }
+ 
+-async function parseError(res: Response): Promise<string> {
+-  try {
+-    const body = (await res.json()) as { detail?: { error?: string } };
+-    return body.detail?.error ?? `HTTP_${res.status}`;
+-  } catch {
+-    return `HTTP_${res.status}`;
+-  }
+-}
+-
+ async function fetchWatchlist(): Promise<Watchlist> {
+   const res = await fetch("/api/stock/watchlist");
+   if (!res.ok) throw new Error(await parseError(res));
+diff --git a/frontend/src/lib/api-error.ts b/frontend/src/lib/api-error.ts
+new file mode 100644
+index 0000000..7aad980
+--- /dev/null
++++ b/frontend/src/lib/api-error.ts
+@@ -0,0 +1,13 @@
++/** 非 2xx 回應 → 錯誤碼字串(跨檔契約:`{ detail: { error } }`)。
++ *
++ *  非 JSON body、或 body 形狀不合(存取 detail 就炸)一律退回 `HTTP_<status>` ——
++ *  這裡吐出的字串是畫面文案的來源(errText / tradeErrorText),不可讓解析失敗
++ *  變成拋出去的 TypeError。 */
++export async function parseError(res: Response): Promise<string> {
++  try {
++    const body = (await res.json()) as { detail?: { error?: string } };
++    return body.detail?.error ?? `HTTP_${res.status}`;
++  } catch {
++    return `HTTP_${res.status}`;
++  }
++}
+diff --git a/frontend/src/lib/candle.ts b/frontend/src/lib/candle.ts
+index 1662465..fc9e55b 100644
+--- a/frontend/src/lib/candle.ts
++++ b/frontend/src/lib/candle.ts
+@@ -82,11 +82,6 @@ export function movingAverage(bars: readonly Bar[], n: number): (number | null)[
+   return out;
+ }
+ 
+-export interface Pt {
+-  x: number;
+-  y: number;
+-}
+-
+ export interface Candle {
+   x: number;
+   w: number;
+@@ -96,7 +91,6 @@ export interface Candle {
+   bodyTop: number;
+   bodyH: number;
+   dir: "up" | "down" | "flat";
+-  bar: Bar;
+ }
+ 
+ export interface VolBar {
+@@ -132,7 +126,9 @@ export interface Size {
+   height: number;
+ }
+ 
+-const X_LABEL_H = 14; // 底部時間標籤帶
++/** 底部時間標籤帶。**export 給元件端共用** —— 元件的 `plotBottom` 與本檔的幾何必須用
++ *  同一個值,各留一份數字就是「幾何算出來的底」與「畫上去的底」靜默錯開。 */
++export const X_LABEL_H = 14;
+ const PAD_Y = 6;
+ const MIN_BODY_H = 1; // 開收同價仍要看得見
+ const VOL_RATIO = 0.22; // 量區佔價圖高度比例
+@@ -218,7 +214,6 @@ export function buildCandleGeometry(
+       bodyTop,
+       bodyH,
+       dir,
+-      bar: b,
+     });
+     const h = (b.v / maxVol) * volH;
+     volBars.push({ x, w, y: bottom - h, h, dir });
+diff --git a/frontend/src/lib/format.ts b/frontend/src/lib/format.ts
+index 4e76b8c..039b276 100644
+--- a/frontend/src/lib/format.ts
++++ b/frontend/src/lib/format.ts
+@@ -17,3 +17,20 @@ export function formatNtd(value: number): string {
+ export function formatPts(value: number): string {
+   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
+ }
++
++/** 漲跌百分比 → 顯示字串:正值帶 `+`,固定兩位小數。
++ *  null 的「-」留在呼叫端 —— 各處的空值文案與 tone 判定不同。 */
++export function fmtPct(v: number): string {
++  return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
++}
++
++/** 相對參考價的漲跌百分比。`ref` 的合法性(null / 0)判定留在呼叫端。 */
++export function chgPct(v: number, ref: number): number {
++  return ((v - ref) / ref) * 100;
++}
++
++/** 毫元價格 → 顯示字串:整數不帶小數,否則兩位並去掉尾隨 0。 */
++export function fmt(milli: number): string {
++  const v = milli / 1000;
++  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
++}
+diff --git a/frontend/src/lib/list-drag.test.ts b/frontend/src/lib/list-drag.test.ts
+index 8296f38..e3298b8 100644
+--- a/frontend/src/lib/list-drag.test.ts
++++ b/frontend/src/lib/list-drag.test.ts
+@@ -1,39 +1,6 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import {
+-  dropTargetFromPointer,
+-  insertIndexFromPointer,
+-  reorder,
+-  type DropZone,
+-} from "@/lib/list-drag";
+-
+-describe("reorder", () => {
+-  it("moves item forward and backward", () => {
+-    expect(reorder(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+-    expect(reorder(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+-  });
+-
+-  it("same index is identity", () => {
+-    expect(reorder(["a", "b"], 1, 1)).toEqual(["a", "b"]);
+-  });
+-
+-  it("out of range clamps", () => {
+-    expect(reorder(["a", "b"], 0, 99)).toEqual(["b", "a"]);
+-  });
+-});
+-
+-describe("insertIndexFromPointer", () => {
+-  it("maps pointer y to row index by row height", () => {
+-    expect(insertIndexFromPointer(0, 40, 5)).toBe(0);
+-    expect(insertIndexFromPointer(59, 40, 5)).toBe(1); // 過半行高 → 下一格
+-    expect(insertIndexFromPointer(199, 40, 5)).toBe(4);
+-  });
+-
+-  it("clamps to list bounds", () => {
+-    expect(insertIndexFromPointer(-10, 40, 5)).toBe(0);
+-    expect(insertIndexFromPointer(9999, 40, 5)).toBe(4);
+-  });
+-});
++import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
+ 
+ // 🟢 round4 項 2:群組全列出後可跨群組拖曳(user 拍板「移動」語意 — 來源移除)
+ const ROW = 44;
+diff --git a/frontend/src/lib/list-drag.ts b/frontend/src/lib/list-drag.ts
+index 4b218f5..65411f4 100644
+--- a/frontend/src/lib/list-drag.ts
++++ b/frontend/src/lib/list-drag.ts
+@@ -1,23 +1,5 @@
+ /** 自選清單拖拉排序純函數(原生 pointer events,不引 dnd-kit;design v4 §3)。 */
+ 
+-export function reorder<T>(list: T[], from: number, to: number): T[] {
+-  const clampedTo = Math.max(0, Math.min(list.length - 1, to));
+-  if (from === clampedTo || from < 0 || from >= list.length) return [...list];
+-  const next = [...list];
+-  const [item] = next.splice(from, 1);
+-  next.splice(clampedTo, 0, item as T);
+-  return next;
+-}
+-
+-/** pointer 相對清單頂端的 y → 目標插入 index(過半行高進位)。
+- *
+- *  上界是 `count − 1`(同組重排:只能換到既有位置)。跨組落點請用
+- *  `dropTargetFromPointer`,它的上界是 `count`(要能 append 到尾)—— 兩者語意刻意不同。 */
+-export function insertIndexFromPointer(y: number, rowHeight: number, count: number): number {
+-  const idx = Math.round(y / rowHeight);
+-  return Math.max(0, Math.min(count - 1, idx));
+-}
+-
+ /** 一個群組 section 的落點幾何(round4 項 2)。**每次 pointermove 重算** ——
+  *  只在 pointerdown 算一次的話,側欄捲動、錯誤文案出現消失都會讓 rect 失效,
+  *  而失效的樣態是「拖到別組結果落錯組」= 靜默改資料。 */
+diff --git a/frontend/src/lib/stock-accum.test.ts b/frontend/src/lib/stock-accum.test.ts
+index c9579db..abfe0be 100644
+--- a/frontend/src/lib/stock-accum.test.ts
++++ b/frontend/src/lib/stock-accum.test.ts
+@@ -7,16 +7,11 @@ const SNAP = {
+   seq: 3,
+   last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 10 },
+   vwap: 2_380_000,
+-  cum_inner: 0,
+-  cum_outer: 10,
+   minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+   ticks: [{ t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer" }],
+   book: { bids: [[2_375_000, 5]] as [number, number][], asks: [[2_380_000, 7]] as [number, number][] },
+-  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
++  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+   no_data: false,
+-  tc4: "up",
+-  backfilling: null,
+-  stkfut_prod: "CDF",
+ };
+ 
+ describe("fromSnapshot", () => {
+@@ -25,7 +20,6 @@ describe("fromSnapshot", () => {
+     expect(acc.seq).toBe(3);
+     expect(acc.last?.p).toBe(2_380_000);
+     expect(acc.vwap).toBe(2_380_000);
+-    expect(acc.cumOuter).toBe(10);
+     expect(acc.minutes.get(541)?.v).toBe(10);
+     expect(acc.ticks.length).toBe(1);
+     expect(acc.meta?.name).toBe("台積電");
+@@ -118,7 +112,7 @@ describe("per-minute 高低(round4 項 1)", () => {
+ describe("applyTick", () => {
+   it("accumulates minutes, vwap and inner/outer(與後端 StockDayState 等值)", () => {
+     // 後端 tests/live/test_stock_state.py::TestAggregation 同一組數字
+-    let acc: StockAccum = fromSnapshot({ ...SNAP, seq: 1, minutes: {}, ticks: [], last: null, vwap: null, cum_outer: 0, cum_inner: 0 });
++    let acc: StockAccum = fromSnapshot({ ...SNAP, seq: 1, minutes: {}, ticks: [], last: null, vwap: null });
+     acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer", seq: 2 });
+     acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:59.000", p: 2_390_000, q: 4, side: "inner", seq: 3 });
+     acc = applyTick(acc, { type: "tick", code: "2330", t: "09:02:10.000", p: 2_400_000, q: 6, side: "outer", seq: 4 });
+@@ -127,8 +121,6 @@ describe("applyTick", () => {
+     expect(m1?.v).toBe(14);
+     expect(m1?.o).toBe(10);
+     expect(m1?.i).toBe(4);
+-    expect(acc.cumOuter).toBe(16);
+-    expect(acc.cumInner).toBe(4);
+     expect(acc.vwap).toBe(2_388_000);
+     expect(acc.seq).toBe(4);
+     expect(acc.last?.p).toBe(2_400_000);
+diff --git a/frontend/src/lib/stock-accum.ts b/frontend/src/lib/stock-accum.ts
+index bb9f666..3de1c63 100644
+--- a/frontend/src/lib/stock-accum.ts
++++ b/frontend/src/lib/stock-accum.ts
+@@ -47,7 +47,6 @@ export interface StockMeta {
+   ref: number | null;
+   upper: number | null;
+   lower: number | null;
+-  y_close: number | null;
+   y_vol: number | null;
+ }
+ 
+@@ -61,16 +60,11 @@ export interface StockAccum {
+   seq: number;
+   last: { p: number; t: string; cum_vol: number } | null;
+   vwap: number | null;
+-  cumInner: number;
+-  cumOuter: number;
+   minutes: Map<number, MinuteAgg>;
+   ticks: TickRow[];
+   book: StockBook | null;
+   meta: StockMeta | null;
+   noData: boolean;
+-  tc4: string;
+-  backfilling: string | null;
+-  stkfutProd: string | null;
+   /** 當日最高 / 最低成交價(毫元,後端 running max/min)。**top-level 不掛 meta** ——
+    *  meta 是 TC4 來的靜態盤別資料,把「由成交推導的當日狀態」塞進去語意錯位,
+    *  而且只跑過回補、未收 REALTIME 時 meta 為 null,高低照樣要有值 */
+@@ -92,8 +86,6 @@ interface SnapshotShape {
+   seq: number;
+   last: { p: number; t: string; cum_vol: number } | null;
+   vwap: number | null;
+-  cum_inner: number;
+-  cum_outer: number;
+   minutes: Record<string, MinuteAgg>;
+   ticks: TickRow[];
+   book: StockBook | null;
+@@ -101,9 +93,6 @@ interface SnapshotShape {
+   high?: number | null;
+   low?: number | null;
+   no_data?: boolean;
+-  tc4?: string;
+-  backfilling?: string | null;
+-  stkfut_prod?: string | null;
+ }
+ 
+ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+@@ -117,8 +106,6 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+     seq: snap.seq,
+     last: snap.last,
+     vwap: snap.vwap,
+-    cumInner: snap.cum_inner,
+-    cumOuter: snap.cum_outer,
+     minutes,
+     ticks: [...(snap.ticks ?? [])].slice(-TAPE_MAX),
+     book: snap.book,
+@@ -126,9 +113,6 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+     high: snap.high ?? null,
+     low: snap.low ?? null,
+     noData: snap.no_data ?? false,
+-    tc4: snap.tc4 ?? "up",
+-    backfilling: snap.backfilling ?? null,
+-    stkfutProd: snap.stkfut_prod ?? null,
+     amountMilli: snap.vwap != null ? snap.vwap * volume : 0,
+     volume,
+   };
+@@ -163,8 +147,6 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
+     seq: msg.seq,
+     last: { p: msg.p, t: msg.t, cum_vol: (acc.last?.cum_vol ?? acc.volume) + msg.q },
+     vwap: volume > 0 ? Math.round(amountMilli / volume) : null,
+-    cumInner: acc.cumInner + (msg.side === "inner" ? msg.q : 0),
+-    cumOuter: acc.cumOuter + (msg.side === "outer" ? msg.q : 0),
+     minutes,
+     ticks,
+     // 缺欄位 → 保留原值(舊後端不發 h/l 時,線不該閃掉)
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index c4fa999..b29600d 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -25,7 +25,6 @@ const META = {
+   ref: 2_320_000,
+   upper: 2_550_000,
+   lower: 2_090_000,
+-  y_close: 2_320_000,
+   y_vol: 100,
+ };
+ 
+@@ -45,11 +44,6 @@ describe("buildIntradayGeometry", () => {
+     expect(g.yDomain[1]).toBe(2_550_000);
+     expect(g.yDomain[0]).toBe(2_090_000);
+     expect(g.priceLine[1]!.y).toBeLessThan(g.priceLine[0]!.y);
+-    // 域端點落在幾何留邊上(PAD_Y=4、X_LABEL_H=14):走勢線在漲跌停時不被圖框裁掉半條 stroke
+-    expect(g.upperY).not.toBeNull();
+-    expect(g.lowerY).not.toBeNull();
+-    expect(g.upperY!).toBeCloseTo(4, 6);
+-    expect(g.lowerY!).toBeCloseTo(100 - 14 - 4, 6);
+     // 🔴 round4 項 3:繪圖區改從左緣價位帶右側起算,x 不再從 0 開始
+     // (width = Y_AXIS_W + 分鐘數 → 繪圖區仍是每分鐘 1px)
+     expect(g.priceLine[0]!.x).toBeCloseTo(Y_AXIS_W, 5);
+@@ -270,7 +264,7 @@ describe("buildIntradayGeometry", () => {
+     it("四個數字同源,外盤比分母**排除**未分類(既有語意不變)", () => {
+       // 2026-07-31 實測 09:00 那一分鐘:量 269 = 外 127 + 內 20 + 未分類 122
+       const s = sideSummary(minutes([[540, { c: 100_000, v: 269, o: 127, i: 20, u: 122 }]]));
+-      expect(s).toMatchObject({ outer: 127, inner: 20, unch: 122, total: 269 });
++      expect(s).toMatchObject({ outer: 127, inner: 20, unch: 122 });
+       expect(s.outerPct).toBeCloseTo((127 / 147) * 100, 5);
+       // 判定率的分母才是總量
+       expect(s.decidedPct).toBeCloseTo((147 / 269) * 100, 5);
+@@ -284,7 +278,6 @@ describe("buildIntradayGeometry", () => {
+ 
+     it("無資料 → 兩個比率都是 null(不是 0 —— 0% 會被讀成「全內盤」)", () => {
+       const s = sideSummary(new Map());
+-      expect(s.total).toBe(0);
+       expect(s.outerPct).toBeNull();
+       expect(s.decidedPct).toBeNull();
+     });
+@@ -298,7 +291,6 @@ describe("buildIntradayGeometry", () => {
+           [540, { c: 100_000, v: 10, o: 6, i: 4, u: 0 }],
+         ]),
+       );
+-      expect(s.total).toBe(10);
+       expect(s.outer).toBe(6);
+     });
+   });
+@@ -422,7 +414,7 @@ describe("buildIntradayGeometry", () => {
+ 
+   // 🔴 SC-5:主圖底部量 bar 已移除(user 拍板留內外盤能量副圖),volumeBars 不再存在
+ 
+-  it("overlayLines:域內才給、含 level 與 kind(SC-2)", () => {
++  it("overlayLines:域內才給、含 level(SC-2)", () => {
+     const g = buildIntradayGeometry(
+       { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+       { width: 270, height: 100 },
+@@ -443,7 +435,7 @@ describe("buildIntradayGeometry", () => {
+     expect("label" in lines[0]!).toBe(false);
+     expect(lines.every((l) => l.y >= 0 && l.y <= 100)).toBe(true);
+     // toggle 關 → 不給該類
+-    expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.kind)).not.toContain(
++    expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.level)).not.toContain(
+       "cdp",
+     );
+   });
+@@ -481,10 +473,8 @@ describe("buildIntradayGeometry", () => {
+       { width: 270, height: 100 },
+     );
+     expect(g.energyBars.length).toBe(2);
+-    // 🔴 round6c:三段(outer/inner/unch)合併成單一 total —— user 拍板「不要分顏色,
++    // 🔴 round6c:三段(outer/inner/unch)合併成單一總量 —— user 拍板「不要分顏色,
+     // 單純顯示量」。內外盤統計沒有消失,移到說明列(`sideSummary`)。
+-    expect(g.energyBars[0]!.total).toBe(10);
+-    expect(g.energyBars[1]!.total).toBe(5);
+     expect(g.energyBars[0]!.h).toBeGreaterThan(g.energyBars[1]!.h);
+     expect("volumeBars" in g).toBe(false);
+   });
+@@ -585,7 +575,6 @@ describe("round5:右緣帶 + 總量堆疊", () => {
+     ref: 2_320_000,
+     upper: 2_550_000,
+     lower: 2_090_000,
+-    y_close: 2_320_000,
+     y_vol: 1,
+   };
+   const W = Y_AXIS_W + 270 + R_AXIS_W;
+@@ -631,13 +620,11 @@ describe("round5:右緣帶 + 總量堆疊", () => {
+     const b0 = g.energyBars[0]!;
+     expect(g.maxTotal).toBe(269);
+     const energyH = 100 - SUB_TOP_PAD;
+-    // 全日最大那根恰好滿格;total 含未分類(舊分母用單邊最大時,資訊列的「量」在副圖上
++    // 全日最大那根恰好滿格;分子含未分類(舊分母用單邊最大時,資訊列的「量」在副圖上
+     // 找不到對應高度 —— 122 張 neutral 根本沒畫而刻度是單邊最大 164)
+-    expect(b0.total).toBe(269);
+     expect(b0.h).toBeCloseTo(energyH, 5);
+     // 第二根總量 100 → 高度為第一根的 100/269
+     const b1 = g.energyBars[1]!;
+-    expect(b1.total).toBe(100);
+     expect(b1.h).toBeCloseTo((100 / 269) * energyH, 5);
+   });
+ 
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index 20ca0b5..ed293cc 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -75,9 +75,7 @@ export interface Pt {
+ export interface EnergyBar {
+   /** 該分鐘的中心 x(= 走勢線頂點與十字線的 x);bar 由元件以此為中心左右各畫半根 */
+   x: number;
+-  /** 該分鐘總量(外 + 內 + 未分類) */
+-  total: number;
+-  /** 依全日最大總量正規化後的高度 */
++  /** 依全日最大總量(外 + 內 + 未分類)正規化後的高度 */
+   h: number;
+ }
+ 
+@@ -109,8 +107,6 @@ export interface IntradayGeometry {
+   hasRef: boolean;
+   /** 走勢線與平盤之間的封閉多邊形點串;`hasRef` 為 false 或無資料時為空字串 */
+   areaPolygon: string;
+-  upperY: number | null;
+-  lowerY: number | null;
+   yDomain: [number, number]; // 毫元
+   yTicks: YTick[];
+   /** 當日高 / 低的標記(round4 項 1);域外、反查落空、缺 per-minute h/l 一律 null = 不畫 */
+@@ -151,7 +147,6 @@ export interface SideSummary {
+   outer: number;
+   inner: number;
+   unch: number;
+-  total: number;
+   /** 外盤比 = 外 /(外 + 內)。**分母刻意排除未分類**(既有語意,不在本輪改);
+    *  分母為 0 → `null` 而不是 0 —— `0%` 會被讀成「全部內盤」。 */
+   outerPct: number | null;
+@@ -182,7 +177,6 @@ export function sideSummary(minutes: Map<number, MinuteAgg>): SideSummary {
+     outer,
+     inner,
+     unch,
+-    total,
+     outerPct: decided > 0 ? (outer / decided) * 100 : null,
+     decidedPct: total > 0 ? (decided / total) * 100 : null,
+   };
+@@ -203,7 +197,6 @@ export interface OverlayLine {
+   y: number;
+   priceMilli: number;
+   level: OverlayLevel;
+-  kind: "cdp" | "ma";
+ }
+ 
+ interface Input {
+@@ -219,10 +212,42 @@ interface Size {
+   height: number;
+ }
+ 
+-export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
+-  const entries = [...input.minutes.entries()]
++function windowedEntries(minutes: Map<number, MinuteAgg>): [number, MinuteAgg][] {
++  return [...minutes.entries()]
+     .filter(([k]) => k >= X_START_MIN && k <= X_END_MIN)
+     .sort(([a], [b]) => a - b);
++}
++
++function energyFrom(
++  entries: readonly [number, MinuteAgg][],
++  size: Size,
++): { bars: EnergyBar[]; maxTotal: number } {
++  // round5 E:分母是**全日最大總量**(外+內+未分類)而不是舊的「單邊最大」。
++  // 舊分母讓資訊列的「量」在副圖上找不到對應高度 —— 未分類(開盤集合競價沒有 Bid/Ask
++  // 可比,derive_side 判 neutral)整批不畫,而刻度又是單邊值。實測截圖 09:00:
++  // 量 269 = 外 127 + 內 20 + 未分類 122,舊刻度顯示 164。
++  const maxTotal = Math.max(1, ...entries.map(([, m]) => m.o + m.i + m.u));
++  // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
++  const energyH = Math.max(1, size.height - SUB_TOP_PAD);
++  const bars = entries.map(([minute, m]) => {
++    const total = m.o + m.i + m.u;
++    return { x: minuteToX(minute, size.width), h: (total / maxTotal) * energyH };
++  });
++  return { bars, maxTotal };
++}
++
++/** 副圖(成交量)專用幾何。**副圖只吃 bar 與歸一分母**,原本卻整份跑一次
++ *  `buildIntradayGeometry` —— 價線 / VWAP / 刻度 / 極值反查全算一遍再丟掉。
++ *  與主圖共用 `energyFrom`,兩邊的 bar 定義不可能各漂各的。 */
++export function buildEnergyBars(
++  minutes: Map<number, MinuteAgg>,
++  size: { width: number; height: number },
++): { bars: EnergyBar[]; maxTotal: number } {
++  return energyFrom(windowedEntries(minutes), size);
++}
++
++export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
++  const entries = windowedEntries(input.minutes);
+   const prices = entries.map(([, m]) => m.c).filter((p) => p > 0);
+   const ref = input.meta?.ref ?? (prices.length ? prices[0]! : 0);
+   const upper = input.meta?.upper ?? null;
+@@ -272,17 +297,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+     }
+   }
+ 
+-  // round5 E:分母是**全日最大總量**(外+內+未分類)而不是舊的「單邊最大」。
+-  // 舊分母讓資訊列的「量」在副圖上找不到對應高度 —— 未分類(開盤集合競價沒有 Bid/Ask
+-  // 可比,derive_side 判 neutral)整批不畫,而刻度又是單邊值。實測截圖 09:00:
+-  // 量 269 = 外 127 + 內 20 + 未分類 122,舊刻度顯示 164。
+-  const maxTotal = Math.max(1, ...entries.map(([, m]) => m.o + m.i + m.u));
+-  // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
+-  const energyH = Math.max(1, size.height - SUB_TOP_PAD);
+-  const energyBars = entries.map(([minute, m]) => {
+-    const total = m.o + m.i + m.u;
+-    return { x: toX(minute), total, h: (total / maxTotal) * energyH };
+-  });
++  const { bars: energyBars, maxTotal } = energyFrom(entries, size);
+ 
+   const yTicks: YTick[] = [];
+   if (upper !== null && lower !== null && ref > 0) {
+@@ -334,6 +349,8 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+   // 會把「開盤後漲跌」誤指為「相對昨收漲跌」(SC-2.4)。
+   const hasRef = (input.meta?.ref ?? 0) > 0;
+   const refY = toY(ref);
++  // 這裡的點串是行內展開版(頭尾各補一個 refY 錨點,不是純 line.map),
++  // 精度必須與 lib/svg-points.ts 的 pts() 一致(皆 toFixed(1))。
+   const areaPolygon =
+     hasRef && priceLine.length > 0
+       ? [
+@@ -365,8 +382,6 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+     areaPolygon,
+     highMark,
+     lowMark,
+-    upperY: upper != null && upper <= yTop ? toY(upper) : null,
+-    lowerY: lower != null && lower >= yBottom ? toY(lower) : null,
+     yDomain: [yBottom, yTop],
+     yTicks,
+     energyBars,
+@@ -390,21 +405,21 @@ export function overlayLines(
+ ): OverlayLine[] {
+   const [yBottom, yTop] = g.yDomain;
+   const lines: OverlayLine[] = [];
+-  const push = (p: number | null | undefined, level: OverlayLevel, kind: OverlayLine["kind"]): void => {
++  const push = (p: number | null | undefined, level: OverlayLevel): void => {
+     if (p == null || p < yBottom || p > yTop) return;
+-    lines.push({ y: g.toY(p), priceMilli: p, level, kind });
++    lines.push({ y: g.toY(p), priceMilli: p, level });
+   };
+   if (toggles.cdp && overlay.cdp) {
+     // 順序 = 由上而下,元件的配色表依賴這個語意(SC-2:名稱移除後靠顏色區分)
+-    push(overlay.cdp.ah, "ah", "cdp");
+-    push(overlay.cdp.nh, "nh", "cdp");
+-    push(overlay.cdp.cdp, "cdp", "cdp");
+-    push(overlay.cdp.nl, "nl", "cdp");
+-    push(overlay.cdp.al, "al", "cdp");
++    push(overlay.cdp.ah, "ah");
++    push(overlay.cdp.nh, "nh");
++    push(overlay.cdp.cdp, "cdp");
++    push(overlay.cdp.nl, "nl");
++    push(overlay.cdp.al, "al");
+   }
+   if (toggles.ma) {
+-    push(overlay.ma5, "ma5", "ma");
+-    push(overlay.ma20, "ma20", "ma");
++    push(overlay.ma5, "ma5");
++    push(overlay.ma20, "ma20");
+   }
+   return lines;
+ }
+diff --git a/frontend/src/lib/stock-search.ts b/frontend/src/lib/stock-search.ts
+index 976583f..3dd390c 100644
+--- a/frontend/src/lib/stock-search.ts
++++ b/frontend/src/lib/stock-search.ts
+@@ -9,6 +9,10 @@ export interface StockName {
+   name: string;
+ }
+ 
++/** 提示列筆數:多過這個高度就開始擠掉股票列。側欄與管理 Dialog 的右欄同一個量級,
++ *  兩處各硬編一份會讓「調一邊」變成兩邊版面不一致。 */
++export const SUGGEST_LIMIT = 8;
++
+ /** 代碼前綴命中優先於名稱片段命中,各段內按代碼升序;合併去重後取前 `limit` 筆。
+  *
+  *  代碼比對轉大寫(字母尾碼 ETF 如 `00679B`,使用者不會特意按 shift);
+diff --git a/frontend/src/lib/svg-points.ts b/frontend/src/lib/svg-points.ts
+new file mode 100644
+index 0000000..e63c5aa
+--- /dev/null
++++ b/frontend/src/lib/svg-points.ts
+@@ -0,0 +1,4 @@
++/** SVG polyline / polygon 的 `x,y` 點串:一律 toFixed(1),各圖精度須一致。 */
++export function pts(line: { x: number; y: number }[]): string {
++  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
++}
+diff --git a/frontend/src/lib/time-labels.ts b/frontend/src/lib/time-labels.ts
+new file mode 100644
+index 0000000..e3c1325
+--- /dev/null
++++ b/frontend/src/lib/time-labels.ts
+@@ -0,0 +1,9 @@
++/** 台北分鐘數(自 00:00 起算)→ `HH:MM`。 */
++export function hhmm(minute: number): string {
++  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
++}
++
++/** 日盤 X 軸整點刻度(09:00-13:00),個股分時與大盤分時共用同一組。 */
++export const HOUR_TICKS: readonly { minute: number; label: string }[] = [
++  540, 600, 660, 720, 780,
++].map((m) => ({ minute: m, label: hhmm(m) }));
+diff --git a/frontend/src/lib/timeframe.ts b/frontend/src/lib/timeframe.ts
+index c07808a..26b5df2 100644
+--- a/frontend/src/lib/timeframe.ts
++++ b/frontend/src/lib/timeframe.ts
+@@ -7,8 +7,6 @@
+ /** 大盤標的鍵;與後端 `/api/market/bars/{key}` 的 `MARKET_KEYS` 同值域。 */
+ export type MarketKey = "TWSE" | "OTC" | "TXF" | "MXF" | "TMF";
+ 
+-export const FUT_KEYS = ["TXF", "MXF", "TMF"] as const satisfies readonly MarketKey[];
+-
+ export type MarketMode =
+   | "intraday"
+   | "m1" | "m2" | "m3" | "m4" | "m5"
+diff --git a/frontend/src/lib/utils.ts b/frontend/src/lib/utils.ts
+index b500fb1..4b8ccb7 100644
+--- a/frontend/src/lib/utils.ts
++++ b/frontend/src/lib/utils.ts
+@@ -4,3 +4,11 @@ import { twMerge } from "tailwind-merge";
+ export function cn(...inputs: ClassValue[]): string {
+   return twMerge(clsx(inputs));
+ }
++
++/** `useId()` 產出 → 合法 id token。
++ *
++ *  React 19 的 useId 是 «r0» 形態,含非識別字元 —— 直接拼進 `url(#…)` 或 `aria-controls`
++ *  時的解析行為未實測,而 SVG 規範下 `url(#…)` 解析失敗是**該元素不繪製**,完全靜默。 */
++export function safeIdToken(raw: string): string {
++  return raw.replace(/[^a-zA-Z0-9]/g, "");
++}
+diff --git a/frontend/src/lib/watchlist-model.test.ts b/frontend/src/lib/watchlist-model.test.ts
+index 87795ae..67971a6 100644
+--- a/frontend/src/lib/watchlist-model.test.ts
++++ b/frontend/src/lib/watchlist-model.test.ts
+@@ -11,7 +11,6 @@ import {
+   removeFromGroup,
+   renameGroup,
+   reorderUngrouped,
+-  setMembership,
+   ungroupedCodes,
+   type Watchlist,
+ } from "@/lib/watchlist-model";
+@@ -269,33 +268,6 @@ describe("addCode", () => {
+   });
+ });
+ 
+-describe("setMembership", () => {
+-  it("勾選 → 進該組尾端;可同時屬兩組(W-1)", () => {
+-    const w = wl(
+-      ["2330"],
+-      [
+-        { name: "主力", codes: ["2330"] },
+-        { name: "觀察", codes: [] },
+-      ],
+-    );
+-    const out = setMembership(w, "2330", "觀察", true);
+-    expect(out.groups[0]!.codes).toEqual(["2330"]);
+-    expect(out.groups[1]!.codes).toEqual(["2330"]);
+-  });
+-
+-  it("取消勾選 → 離開該組,code 留在自選", () => {
+-    const w = wl(["2330"], [{ name: "主力", codes: ["2330"] }]);
+-    const out = setMembership(w, "2330", "主力", false);
+-    expect(out.groups[0]!.codes).toEqual([]);
+-    expect(out.codes).toEqual(["2330"]);
+-  });
+-
+-  it("勾選已在該組的檔 → 原物件不動", () => {
+-    const w = wl(["2330"], [{ name: "主力", codes: ["2330"] }]);
+-    expect(setMembership(w, "2330", "主力", true)).toBe(w);
+-  });
+-});
+-
+ describe("addGroup", () => {
+   it("附加一個空群組", () => {
+     expect(addGroup(wl([], []), "主力").groups).toEqual([{ name: "主力", codes: [] }]);
+diff --git a/frontend/src/lib/watchlist-model.ts b/frontend/src/lib/watchlist-model.ts
+index 9044206..e5acd9f 100644
+--- a/frontend/src/lib/watchlist-model.ts
++++ b/frontend/src/lib/watchlist-model.ts
+@@ -17,6 +17,15 @@ export interface Watchlist {
+   groups: Group[];
+ }
+ 
++/** 兩份自選內容是否相同(同一物件 或 深度逐字相同)。
++ *
++ *  呼叫端的**零 PUT 早退**判定(W-9 三處共用):純函數無變化時回原物件,但
++ *  `assignToGroup` 等恆回新陣列 → identity 比對不夠,深度比對不可省。內容相同的
++ *  PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來。 */
++export function isSameWatchlist(a: Watchlist, b: Watchlist): boolean {
++  return a === b || JSON.stringify(a) === JSON.stringify(b);
++}
++
+ /** 插入 + off-by-one 補償。
+  *
+  *  `slot` = 相對目標清單「移除前」渲染索引(含被拖的那一列,即 `dropTargetFromPointer`
+@@ -121,25 +130,6 @@ export function removeFromGroup(wl: Watchlist, code: string, group: string): Wat
+   };
+ }
+ 
+-/** Dialog 的 checkbox:勾選 = 加進該組尾端,取消 = 離開該組(一檔可勾多組,W-1)。 */
+-export function setMembership(
+-  wl: Watchlist,
+-  code: string,
+-  group: string,
+-  on: boolean,
+-): Watchlist {
+-  const target = wl.groups.find((g) => g.name === group);
+-  if (target === undefined || target.codes.includes(code) === on) return wl;
+-  return {
+-    ...wl,
+-    groups: wl.groups.map((g) =>
+-      g.name === group
+-        ? { ...g, codes: on ? [...g.codes, code] : g.codes.filter((c) => c !== code) }
+-        : g,
+-    ),
+-  };
+-}
+-
+ /** 空白名 / 重名 → 原物件(對應後端 BAD_GROUP,呼叫端零 PUT 直接顯示文案)。 */
+ export function addGroup(wl: Watchlist, name: string): Watchlist {
+   const trimmed = name.trim();
+diff --git a/frontend/src/test-utils.tsx b/frontend/src/test-utils.tsx
+new file mode 100644
+index 0000000..3105ef2
+--- /dev/null
++++ b/frontend/src/test-utils.tsx
+@@ -0,0 +1,15 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { render } from "@testing-library/react";
++import type { ReactNode } from "react";
++
++/**
++ * QueryClientProvider 包裝過的 render:每次呼叫給一個全新、關掉 retry 的 client。
++ *
++ * 全新是重點 —— 共用 client 會讓上一個 it 的 query cache 洩到下一個;retry 關掉則是
++ * 錯誤路徑測試不必等重試退避。個股頁五個元件測試各抄一份逐字相同的定義,任何一處
++ * 想調 defaultOptions 都會變成「這檔的 wrap 跟別檔不一樣」。
++ */
++export function wrap(ui: ReactNode) {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
++}
+diff --git a/tests/helpers/__init__.py b/tests/helpers/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/helpers/fake_txo.py b/tests/helpers/fake_txo.py
+new file mode 100644
+index 0000000..496c9f6
+--- /dev/null
++++ b/tests/helpers/fake_txo.py
+@@ -0,0 +1,35 @@
++"""server route 測試共用的 TXO QuoteSource fake。
++
++`create_app` 的 lifespan 一定要一個 `QuoteSource`,但 corr / river / stock / index /
++market / health 這六組路由測試都不碰 TXO 行情 —— 六檔各自抄一份逐字相同的 fake 與
++`_C` / `_SERIES` 常數,QuoteSource Protocol 一改就要六處同步(漏一處是 pyright 才會
++發現的靜默分岔)。這裡是唯一一份。
++"""
++
++from __future__ import annotations
++
++from typing import Callable
++
++from copycat.live.models import OptionContract, SeriesInfo, Tick
++
++C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
++SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(C,))
++
++
++class FakeTxoSource:
++    """全部 no-op 的 TXO source;lifespan 需要它,路由測試不碰它。"""
++
++    def list_series(self) -> list[SeriesInfo]:
++        return [SERIES]
++
++    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
++        return []
++
++    def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
++        return None
++
++    def unsubscribe(self, series: SeriesInfo) -> None:
++        return None
++
++    def close(self) -> None:
++        return None
+diff --git a/tests/helpers/tc4_fakes.py b/tests/helpers/tc4_fakes.py
+new file mode 100644
+index 0000000..1f6996e
+--- /dev/null
++++ b/tests/helpers/tc4_fakes.py
+@@ -0,0 +1,43 @@
++"""TC4 source 測試共用的 ZMQ socket / api 替身。
++
++`TC4QuoteSource` 家族(stock / futures / corr)全部走「`api.socket.send_string(JSON)` →
++`api.socket.recv()` 取回應」這條路,測試因此都要同一組替身:handler 吃解好的 dict、
++回一則位元組電文。六個測試檔各抄一份逐字相同的定義,wrapper 介面一變就要六處同步。
++
++`tests/live/test_tc4.py` 與 `tests/data/test_backfill_tc4.py` 的 FakeApi 是**不同的東西**
++(前者自帶分頁狀態機、後者對應 `_fetch_1k` 的另一種介面),刻意不收進來。
++"""
++
++from __future__ import annotations
++
++import json
++import threading
++from typing import Any
++
++
++class JsonSocket:
++    """socket 替身:send 的 JSON 電文交 handler 分派,recv 回其回應。"""
++
++    def __init__(self, handler: Any) -> None:
++        self._handler = handler
++        self._resp = b""
++
++    def send_string(self, payload: str) -> None:
++        self._resp = self._handler(json.loads(payload))
++
++    def recv(self) -> bytes:
++        return self._resp
++
++
++class FakeApi:
++    def __init__(self, handler: Any) -> None:
++        self.socket = JsonSocket(handler)
++        self.lock = threading.Lock()
++
++    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
++        pass
++
++
++def ok(payload: dict | None = None) -> bytes:
++    """TC4 的成功回應電文(NUL 結尾)。"""
++    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
+diff --git a/tests/live/test_corr_source.py b/tests/live/test_corr_source.py
+index 7015676..0ed1578 100644
+--- a/tests/live/test_corr_source.py
++++ b/tests/live/test_corr_source.py
+@@ -3,39 +3,13 @@
+ from __future__ import annotations
+ 
+ import json
+-import threading
+ import time
+-from typing import Any
+ 
+ import pytest
+ 
+ from copycat.live.corr_source import CorrQuoteSource, all_day_window
+ from copycat.live.session import session_key, session_window
+-
+-
+-class _JsonSocket:
+-    def __init__(self, handler: Any) -> None:
+-        self._handler = handler
+-        self._resp = b""
+-
+-    def send_string(self, payload: str) -> None:
+-        self._resp = self._handler(json.loads(payload))
+-
+-    def recv(self) -> bytes:
+-        return self._resp
+-
+-
+-class _FakeApi:
+-    def __init__(self, handler: Any) -> None:
+-        self.socket = _JsonSocket(handler)
+-        self.lock = threading.Lock()
+-
+-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+-        pass
+-
+-
+-def _ok(payload: dict | None = None) -> bytes:
+-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
++from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ 
+ def _fail() -> bytes:
+@@ -63,9 +37,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
+         src.subscribe_raw("TC.F.CME.ES.HOT")
+ 
+         assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+@@ -81,9 +55,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
+         for sym in (
+             "TC.F.SGX.TWN.HOT",
+             "TC.F.CBOT.YM.HOT",
+@@ -102,9 +76,9 @@ class TestSubscribe:
+ 
+     def test_failed_subscribe_raises_connection_error(self) -> None:
+         def handler(obj: dict) -> bytes:
+-            return _ok() if obj["Request"] == "UNSUBQUOTE" else _fail()
++            return ok() if obj["Request"] == "UNSUBQUOTE" else _fail()
+ 
+-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
+         with pytest.raises(ConnectionError):
+             src.subscribe_raw("TC.F.CME.ES.HOT")
+ 
+@@ -113,9 +87,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
+         src.unsubscribe_raw("TC.F.CME.ES.HOT")  # 未訂閱 → no-op
+         assert sent == []
+ 
+@@ -123,7 +97,7 @@ class TestSubscribe:
+ class TestHandleRaw:
+     def test_realtime_quote_dispatched(self) -> None:
+         got: list[dict] = []
+-        src = CorrQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
++        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+         src.set_on_message(got.append)
+ 
+         src.handle_raw('TOPIC:{"DataType":"REALTIME","Quote":{"Symbol":"TC.F.CME.ES.HOT"}}')
+@@ -132,7 +106,7 @@ class TestHandleRaw:
+ 
+     def test_non_realtime_ignored(self) -> None:
+         got: list[dict] = []
+-        src = CorrQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
++        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+         src.set_on_message(got.append)
+ 
+         src.handle_raw('TOPIC:{"DataType":"PING"}')
+@@ -141,7 +115,7 @@ class TestHandleRaw:
+ 
+     def test_malformed_payload_ignored(self) -> None:
+         got: list[dict] = []
+-        src = CorrQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
++        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+         src.set_on_message(got.append)
+ 
+         src.handle_raw("no-colon-here")
+diff --git a/tests/live/test_futures_bars.py b/tests/live/test_futures_bars.py
+index 4d5fd51..bb49067 100644
+--- a/tests/live/test_futures_bars.py
++++ b/tests/live/test_futures_bars.py
+@@ -8,31 +8,9 @@ session 手上,TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從
+ from __future__ import annotations
+ 
+ import json
+-import threading
+-from typing import Any
+ 
+ from copycat.live.futures_source import FuturesQuoteSource
+-
+-
+-class _JsonSocket:
+-    def __init__(self, handler: Any) -> None:
+-        self._handler = handler
+-        self._resp = b""
+-
+-    def send_string(self, payload: str) -> None:
+-        self._resp = self._handler(json.loads(payload))
+-
+-    def recv(self) -> bytes:
+-        return self._resp
+-
+-
+-class _FakeApi:
+-    def __init__(self, handler: Any) -> None:
+-        self.socket = _JsonSocket(handler)
+-        self.lock = threading.Lock()
+-
+-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+-        pass
++from tests.helpers.tc4_fakes import FakeApi
+ 
+ 
+ def _dk_row(date: str, o: str, h: str, low: str, c: str, v: str = "100", qi: str = "1") -> dict:
+@@ -72,7 +50,7 @@ def _source(rows: list[dict], sent: list[dict] | None = None) -> FuturesQuoteSou
+             return (f"{dtype}:" + body + "\0").encode()
+         return (json.dumps({"Success": "OK"}) + "\0").encode()
+ 
+-    return FuturesQuoteSource(api=_FakeApi(handler), session="s1", poll_wait_secs=0.0)
++    return FuturesQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0.0)
+ 
+ 
+ class TestFetchBarsRange:
+diff --git a/tests/live/test_futures_source.py b/tests/live/test_futures_source.py
+index 0a2438c..15e0246 100644
+--- a/tests/live/test_futures_source.py
++++ b/tests/live/test_futures_source.py
+@@ -1,38 +1,10 @@
+ from __future__ import annotations
+ 
+ import json
+-import threading
+-from typing import Any
+ 
+ from copycat.live.futures_source import FuturesQuoteSource, futures_symbol
+ from copycat.live.session import session_key, session_window
+-
+-
+-class _JsonSocket:
+-    """socket 替身:send 的 JSON 電文交 handler 分派,recv 回其回應(同 test_stock_source 慣例)。"""
+-
+-    def __init__(self, handler: Any) -> None:
+-        self._handler = handler
+-        self._resp = b""
+-
+-    def send_string(self, payload: str) -> None:
+-        self._resp = self._handler(json.loads(payload))
+-
+-    def recv(self) -> bytes:
+-        return self._resp
+-
+-
+-class _FakeApi:
+-    def __init__(self, handler: Any) -> None:
+-        self.socket = _JsonSocket(handler)
+-        self.lock = threading.Lock()
+-
+-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+-        pass
+-
+-
+-def _ok(payload: dict | None = None) -> bytes:
+-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
++from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ 
+ class TestSymbol:
+@@ -47,9 +19,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(handler), session="s1")
+         src.subscribe_symbol("TXF")
+         assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+         param = sent[1]["Param"]
+@@ -65,9 +37,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(handler), session="s1")
+         src.subscribe_all()
+         subs = [o["Param"]["Symbol"] for o in sent if o["Request"] == "SUBQUOTE"]
+         assert subs == ["TC.F.TWF.TXF.HOT", "TC.F.TWF.MXF.HOT", "TC.F.TWF.TMF.HOT"]
+@@ -76,9 +48,9 @@ class TestSubscribe:
+         def handler(obj: dict) -> bytes:
+             if obj["Request"] == "SUBQUOTE":
+                 return (json.dumps({"Success": "Fail", "ErrMsg": "x"}) + "\0").encode()
+-            return _ok()
++            return ok()
+ 
+-        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(handler), session="s1")
+         try:
+             src.subscribe_symbol("TXF")
+         except ConnectionError:
+@@ -92,9 +64,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(handler), session="s1")
+         src.subscribe_leaf("TXF", "202608")
+         assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+         param = sent[1]["Param"]
+@@ -108,9 +80,9 @@ class TestSubscribe:
+         def handler(obj: dict) -> bytes:
+             if obj["Request"] == "SUBQUOTE":
+                 return (json.dumps({"Success": "Fail", "ErrMsg": "x"}) + "\0").encode()
+-            return _ok()
++            return ok()
+ 
+-        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(handler), session="s1")
+         try:
+             src.subscribe_leaf("TXF", "202608")
+         except ConnectionError:
+@@ -123,9 +95,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = FuturesQuoteSource(api=_FakeApi(handler), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(handler), session="s1")
+         src.unsubscribe_symbol("TXF")  # 未訂閱 → 不送電文
+         assert sent == []
+         src.subscribe_symbol("TXF")
+@@ -136,7 +108,7 @@ class TestSubscribe:
+ 
+ class TestRawDispatch:
+     def test_realtime_quote_dispatched(self) -> None:
+-        src = FuturesQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+         got: list[dict] = []
+         src.set_on_message(got.append)
+         raw = "REALTIME:" + json.dumps(
+@@ -146,7 +118,7 @@ class TestRawDispatch:
+         assert got == [{"Symbol": "TC.F.TWF.TXF.HOT", "Security": "FITX"}]
+ 
+     def test_ping_ignored(self) -> None:
+-        src = FuturesQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+         got: list[dict] = []
+         src.set_on_message(got.append)
+         src.handle_raw("PING:" + json.dumps({"DataType": "PING"}))
+diff --git a/tests/live/test_river_backfill.py b/tests/live/test_river_backfill.py
+index 2c0596a..471442b 100644
+--- a/tests/live/test_river_backfill.py
++++ b/tests/live/test_river_backfill.py
+@@ -3,38 +3,13 @@
+ from __future__ import annotations
+ 
+ import json
+-import threading
+ import time
+ from typing import Any
+ 
+ from copycat.live.corr_source import CorrQuoteSource
+ from copycat.live.futures_source import FuturesQuoteSource
+ from copycat.live.river_models import all_day_utc_window
+-
+-
+-class _JsonSocket:
+-    def __init__(self, handler: Any) -> None:
+-        self._handler = handler
+-        self._resp = b""
+-
+-    def send_string(self, payload: str) -> None:
+-        self._resp = self._handler(json.loads(payload))
+-
+-    def recv(self) -> bytes:
+-        return self._resp
+-
+-
+-class _FakeApi:
+-    def __init__(self, handler: Any) -> None:
+-        self.socket = _JsonSocket(handler)
+-        self.lock = threading.Lock()
+-
+-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+-        pass
+-
+-
+-def _ok(payload: dict | None = None) -> bytes:
+-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
++from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ 
+ def _his(rows: list[dict]) -> bytes:
+@@ -66,7 +41,7 @@ def _paging_handler(sent: list[dict]) -> Any:
+     def handler(obj: dict) -> bytes:
+         sent.append(obj)
+         if obj["Request"] != "GETHISDATA":
+-            return _ok()
++            return ok()
+         return _his(PAGES.get(obj["Param"]["QryIndex"], []))
+ 
+     return handler
+@@ -75,7 +50,7 @@ def _paging_handler(sent: list[dict]) -> Any:
+ class TestCorrSourceFetchDay1k:
+     def test_harvests_all_pages_and_parses_minutes(self) -> None:
+         sent: list[dict] = []
+-        src = CorrQuoteSource(api=_FakeApi(_paging_handler(sent)), session="s1")
++        src = CorrQuoteSource(api=FakeApi(_paging_handler(sent)), session="s1")
+ 
+         assert src.fetch_day_1k("TC.F.CME.ES.HOT") == [
+             (526, 51_666_000),
+@@ -86,7 +61,7 @@ class TestCorrSourceFetchDay1k:
+ 
+     def test_subscribes_1k_with_all_day_utc_window(self) -> None:
+         sent: list[dict] = []
+-        src = CorrQuoteSource(api=_FakeApi(_paging_handler(sent)), session="s1")
++        src = CorrQuoteSource(api=FakeApi(_paging_handler(sent)), session="s1")
+         src.fetch_day_1k("TC.F.CME.ES.HOT")
+ 
+         sub = next(o for o in sent if o["Request"] == "SUBQUOTE")
+@@ -95,9 +70,9 @@ class TestCorrSourceFetchDay1k:
+ 
+     def test_empty_first_page_returns_empty_without_blocking(self) -> None:
+         def handler(obj: dict) -> bytes:
+-            return _his([]) if obj["Request"] == "GETHISDATA" else _ok()
++            return _his([]) if obj["Request"] == "GETHISDATA" else ok()
+ 
+-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1", poll_wait_secs=0)
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
+         started = time.monotonic()
+ 
+         assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
+@@ -107,7 +82,7 @@ class TestCorrSourceFetchDay1k:
+ class TestFuturesSourceFetchDay1k:
+     def test_product_maps_to_twf_hot_symbol(self) -> None:
+         sent: list[dict] = []
+-        src = FuturesQuoteSource(api=_FakeApi(_paging_handler(sent)), session="s1")
++        src = FuturesQuoteSource(api=FakeApi(_paging_handler(sent)), session="s1")
+ 
+         minutes = src.fetch_day_1k("TXF")
+ 
+diff --git a/tests/live/test_stock_bars.py b/tests/live/test_stock_bars.py
+index d10d82a..21e1615 100644
+--- a/tests/live/test_stock_bars.py
++++ b/tests/live/test_stock_bars.py
+@@ -1,40 +1,15 @@
+ from __future__ import annotations
+ 
+ import json
+-import threading
+ from typing import Any
+ 
+ from copycat.live.stock_source import StockQuoteSource
+-
+-
+-class _JsonSocket:
+-    def __init__(self, handler: Any) -> None:
+-        self._handler = handler
+-        self._resp = b""
+-
+-    def send_string(self, payload: str) -> None:
+-        self._resp = self._handler(json.loads(payload))
+-
+-    def recv(self) -> bytes:
+-        return self._resp
+-
+-
+-class _FakeApi:
+-    def __init__(self, handler: Any) -> None:
+-        self.socket = _JsonSocket(handler)
+-        self.lock = threading.Lock()
+-
+-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+-        pass
+-
+-
+-def _ok(payload: dict | None = None) -> bytes:
+-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
++from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ 
+ def _src(handler: Any) -> StockQuoteSource:
+     return StockQuoteSource(
+-        api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++        api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+     )
+ 
+ 
+@@ -49,7 +24,7 @@ def _pager(pages_by_type: dict[str, dict[str, list[dict]]], sent: list[dict] | N
+             qi = obj["Param"]["QryIndex"]
+             rows = pages_by_type.get(dtype, {}).get(qi, [])
+             return (f"{dtype}:" + json.dumps({"Success": "OK", "HisData": rows}) + "\0").encode()
+-        return _ok()
++        return ok()
+ 
+     return handler
+ 
+@@ -229,7 +204,7 @@ class TestCollectHistoryWaiting:
+     def test_backoff_starts_well_below_poll_wait(self) -> None:
+         """首輪落空後不再睡滿 poll_wait,改退避輪詢(2.13s → 目標 ≤1.6s)。"""
+         src = StockQuoteSource(
+-            api=_FakeApi(_pager({"1K": {}})),
++            api=FakeApi(_pager({"1K": {}})),
+             session="s1",
+             trade_date="2026-07-28",
+             poll_wait_secs=1.0,
+@@ -243,7 +218,7 @@ class TestCollectHistoryWaiting:
+     def test_fallback_1k_also_uses_short_deadline(self) -> None:
+         """tf=D 的 DK→1K fallback 也要傳短 budget,否則無資料標的仍是 10+30=40s。"""
+         src = StockQuoteSource(
+-            api=_FakeApi(_pager({"DK": {}, "1K": {}})),
++            api=FakeApi(_pager({"DK": {}, "1K": {}})),
+             session="s1",
+             trade_date="2026-07-28",
+             poll_wait_secs=1.0,
+diff --git a/tests/live/test_stock_models.py b/tests/live/test_stock_models.py
+index f381925..6b1f07f 100644
+--- a/tests/live/test_stock_models.py
++++ b/tests/live/test_stock_models.py
+@@ -302,7 +302,6 @@ class TestMarketOrderPseudoLevel:
+             time="12:00:00.000",
+             trade_date="2026-07-31",
+             side="neutral",
+-            buy_sell_flag=None,
+             is_trial=False,
+             bid_milli=None,
+             ask_milli=None,
+@@ -322,7 +321,6 @@ class TestMarketOrderPseudoLevel:
+             time="10:00:00.000",
+             trade_date="2026-07-31",
+             side="neutral",
+-            buy_sell_flag=None,
+             is_trial=False,
+             bid_milli=2_380_000,
+             ask_milli=2_385_000,
+@@ -354,7 +352,6 @@ class TestMarketOrderPseudoLevel:
+             time="09:30:00.000",
+             trade_date="2026-07-31",
+             side="neutral",
+-            buy_sell_flag=None,
+             is_trial=False,
+             bid_milli=501_000,  # 買方還掛著限價 → 不是鎖死
+             ask_milli=None,  # 賣單剛被吃光
+diff --git a/tests/live/test_stock_source.py b/tests/live/test_stock_source.py
+index 196ba13..f1796c0 100644
+--- a/tests/live/test_stock_source.py
++++ b/tests/live/test_stock_source.py
+@@ -2,37 +2,9 @@ from __future__ import annotations
+ 
+ import json
+ import threading
+-from typing import Any
+ 
+ from copycat.live.stock_source import StockQuoteSource, stock_symbol, stock_window
+-
+-
+-class _JsonSocket:
+-    """socket 替身:send 的 JSON 電文交 handler 分派,recv 回其回應(同 test_tc4 慣例)。"""
+-
+-    def __init__(self, handler: Any) -> None:
+-        self._handler = handler
+-        self._resp = b""
+-
+-    def send_string(self, payload: str) -> None:
+-        self._resp = self._handler(json.loads(payload))
+-
+-    def recv(self) -> bytes:
+-        return self._resp
+-
+-
+-class _FakeApi:
+-    def __init__(self, handler: Any) -> None:
+-        self.socket = _JsonSocket(handler)
+-        self.lock = threading.Lock()
+-
+-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+-        pass
+-
+-
+-def _ok(payload: dict | None = None) -> bytes:
+-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
+-
++from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ HIST_ROW = {
+     "Date": "20260721",
+@@ -66,9 +38,9 @@ class TestSubscribe:
+ 
+         def handler(obj: dict) -> bytes:
+             sent.append(obj)
+-            return _ok()
++            return ok()
+ 
+-        src = StockQuoteSource(api=_FakeApi(handler), session="s1", trade_date="2026-07-21")
++        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
+         src.subscribe_symbol("2330")
+         assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+         param = sent[1]["Param"]
+@@ -80,14 +52,14 @@ class TestSubscribe:
+     def test_subscribe_starts_listener_when_sub_port_known(self) -> None:
+         # 2026-07-21 real-env 實證:漏啟 listener → 訂閱成功但永收不到推播,
+         # 健檢把全部檔誤標 no_data
+-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
++        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+         src._sub_port = "59999"  # 模擬真連線已知 SubPort
+         src.subscribe_symbol("2330")
+         assert src._listener is not None
+ 
+     def test_subscribe_without_sub_port_skips_listener(self) -> None:
+         # 注入測試路徑(無真連線)不得因 listener 缺 SubPort 而炸
+-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
++        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+         src.subscribe_symbol("2330")
+         assert src._listener is None
+ 
+@@ -95,9 +67,9 @@ class TestSubscribe:
+         def handler(obj: dict) -> bytes:
+             if obj["Request"] == "SUBQUOTE":
+                 return (json.dumps({"Success": "Fail", "ErrMsg": "x"}) + "\0").encode()
+-            return _ok()
++            return ok()
+ 
+-        src = StockQuoteSource(api=_FakeApi(handler), session="s1", trade_date="2026-07-21")
++        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
+         try:
+             src.subscribe_symbol("2330")
+         except ConnectionError:
+@@ -112,16 +84,16 @@ class TestBackfill:
+ 
+         def handler(obj: dict) -> bytes:
+             if obj["Request"] == "SUBQUOTE":
+-                return _ok()
++                return ok()
+             if obj["Request"] == "GETHISDATA":
+                 qi = obj["Param"]["QryIndex"]
+                 return (
+                     "TICKS:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                 ).encode()
+-            return _ok()
++            return ok()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
+         )
+         ticks = src.backfill("2330")
+         assert len(ticks) == 1
+@@ -154,10 +126,10 @@ class TestFetchDailyBars:
+                 return (
+                     "DK:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                 ).encode()
+-            return _ok()
++            return ok()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         bars = src.fetch_daily_bars("2330")
+         assert bars == [
+@@ -215,10 +187,10 @@ class TestFetchDailyBars:
+                 return (
+                     "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
+                 ).encode()
+-            return _ok()
++            return ok()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         bars = src.fetch_daily_bars("2330")
+         assert bars == [
+@@ -239,10 +211,10 @@ class TestFetchDailyBars:
+                 return (
+                     "DK:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                 ).encode()
+-            return _ok()
++            return ok()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         bars = src.fetch_daily_bars("2330", n=25)
+         assert len(bars) == 25
+@@ -255,7 +227,7 @@ class TestFetchDailyBars:
+             raise zmq.ZMQError()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         try:
+             src.fetch_daily_bars("2330")
+@@ -288,10 +260,10 @@ class TestFetchDayMinutes:
+                 return (
+                     "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                 ).encode()
+-            return _ok()
++            return ok()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         minutes = src.fetch_day_minutes("IX0001")
+         assert minutes == {"0901": 100_500, "1330": 102_000}
+@@ -306,10 +278,28 @@ class TestFetchDayMinutes:
+                 return (
+                     "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                 ).encode()
+-            return _ok()
++            return ok()
++
++        src = StockQuoteSource(
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++        )
++        assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
++
++    def test_bad_time_value_skipped_not_raised(self) -> None:
++        """Time 非數字 → 只計入 skipped(不得因共用 _taipei_minute_key 而外漏 ValueError)。"""
++        rows = [self._row("10100", "100", "1"), self._row("bad", "100", "2")]
++        pages = {"0": rows, "2": []}
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] == "GETHISDATA":
++                qi = obj["Param"]["QryIndex"]
++                return (
++                    "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
++                ).encode()
++            return ok()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
+ 
+@@ -320,7 +310,7 @@ class TestFetchDayMinutes:
+             raise zmq.ZMQError()
+ 
+         src = StockQuoteSource(
+-            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+         )
+         try:
+             src.fetch_day_minutes("IX0001")
+@@ -332,7 +322,7 @@ class TestFetchDayMinutes:
+ 
+ class TestRawDispatch:
+     def test_realtime_quote_dispatched(self) -> None:
+-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
++        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+         got: list[dict] = []
+         src.set_on_message(got.append)
+         raw = "REALTIME:" + json.dumps(
+@@ -342,7 +332,7 @@ class TestRawDispatch:
+         assert got == [{"Symbol": "TC.S.TWS.2330", "Security": "2330"}]
+ 
+     def test_ping_ignored(self) -> None:
+-        src = StockQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1", trade_date="2026-07-21")
++        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+         got: list[dict] = []
+         src.set_on_message(got.append)
+         src.handle_raw("PING:" + json.dumps({"DataType": "PING"}))
+@@ -352,7 +342,7 @@ class TestRawDispatch:
+ class TestNoDataHealthCheck:
+     def test_no_push_within_deadline_flags_no_data(self) -> None:
+         src = StockQuoteSource(
+-            api=_FakeApi(lambda o: _ok()),
++            api=FakeApi(lambda o: ok()),
+             session="s1",
+             trade_date="2026-07-21",
+             no_data_secs=0.01,
+@@ -366,7 +356,7 @@ class TestNoDataHealthCheck:
+ 
+     def test_push_cancels_health_check(self) -> None:
+         src = StockQuoteSource(
+-            api=_FakeApi(lambda o: _ok()),
++            api=FakeApi(lambda o: ok()),
+             session="s1",
+             trade_date="2026-07-21",
+             no_data_secs=0.05,
+@@ -386,7 +376,7 @@ class TestNoDataHealthCheck:
+ 
+     def test_health_check_disabled_outside_trading_hours(self) -> None:
+         src = StockQuoteSource(
+-            api=_FakeApi(lambda o: _ok()),
++            api=FakeApi(lambda o: ok()),
+             session="s1",
+             trade_date="2026-07-21",
+             no_data_secs=0.01,
+diff --git a/tests/live/test_stock_state.py b/tests/live/test_stock_state.py
+index 691f26b..efc8c4e 100644
+--- a/tests/live/test_stock_state.py
++++ b/tests/live/test_stock_state.py
+@@ -23,7 +23,6 @@ def _tick(
+         time=time,
+         trade_date="2026-07-21",
+         side=side,
+-        buy_sell_flag=None,
+         is_trial=trial,
+         bid_milli=bid,
+         ask_milli=ask,
+diff --git a/tests/live/test_tc4.py b/tests/live/test_tc4.py
+index c66dae6..cb3b5f2 100644
+--- a/tests/live/test_tc4.py
++++ b/tests/live/test_tc4.py
+@@ -319,6 +319,70 @@ class TestListenerFollowsSubPort:
+             ctx.term()
+ 
+ 
++class TestListenerRawFiltering:
++    """characterization(refactor C6 前置):listener 對壞電文的四道過濾與存活性。
++
++    `_listen_loop` 的訊息處理段即將上提成 `handle_raw` hook,而 TXO 解析是唯一的
++    實盤路徑 —— 搬移前先把「哪些電文會被靜默丟掉、丟掉後執行緒仍活著」釘住。
++    走 real-PUB harness(基底此時尚無可直呼的 hook)。
++    """
++
++    def test_bad_messages_dropped_and_listener_survives(self) -> None:
++        import json as _json
++        import time as _time
++
++        import zmq
++
++        sym_warm = "TC.O.TWF.TX4.202607.C.43000"
++        sym_ok = "TC.O.TWF.TX4.202607.C.44000"
++        sym_noqty = "TC.O.TWF.TX4.202607.C.45000"
++        ctx = zmq.Context()
++        pub = ctx.socket(zmq.PUB)
++        port = pub.bind_to_random_port("tcp://127.0.0.1")
++        got: list[str] = []
++        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
++        src._sub_port = str(port)
++        src._on_tick = lambda t: got.append(t.symbol)
++        src._start_listener()
++        try:
++            # 暖身:PUB/SUB slow joiner,先確認連線已建立才能單發後斷言順序
++            deadline = _time.monotonic() + 5.0
++            while not got and _time.monotonic() < deadline:
++                pub.send(_rt_payload(sym_warm, "1"))
++                _time.sleep(0.05)
++            assert got, "baseline:暖身訊息未送達"
++            got.clear()
++
++            no_qty = {
++                "Symbol": sym_noqty,
++                "TradingPrice": "100",
++                "TradeQuantity": "0",  # 非台指期 + 零量 → parse_realtime 回 None
++                "TradeVolume": "9",
++                "PreciseTime": "20000000000",
++            }
++            # FIFO:壞電文全排在合法那則之前 → 任何一則沒被丟掉都會先出現在 got
++            pub.send(b"nocolon-no-topic-separator\x00")
++            pub.send(b"Q:not-json\x00")
++            pub.send(b"Q:" + _json.dumps({"DataType": "PING"}).encode() + b"\x00")
++            rt_no_qty = _json.dumps({"DataType": "REALTIME", "Quote": no_qty}).encode()
++            pub.send(b"Q:" + rt_no_qty + b"\x00")
++            pub.send(_rt_payload(sym_ok, "2"))
++
++            deadline = _time.monotonic() + 5.0
++            while not got and _time.monotonic() < deadline:
++                _time.sleep(0.05)
++            assert got == [sym_ok]
++            listener = src._listener
++            assert listener is not None and listener.is_alive(), "壞電文不得殺死 listener 執行緒"
++        finally:
++            src._stop.set()
++            listener = src._listener
++            if listener is not None:
++                listener.join(timeout=3.0)
++            pub.close(linger=0)
++            ctx.term()
++
++
+ class _ReqApi:
+     """_rt_request 測試替身:真 threading.Lock + 可注入 socket 行為。"""
+ 
+diff --git a/tests/server/test_capital_api.py b/tests/server/test_capital_api.py
+index cb2138d..1c8fc21 100644
+--- a/tests/server/test_capital_api.py
++++ b/tests/server/test_capital_api.py
+@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
+ 
+ import copycat.capital.factory as factory_mod
+ from copycat.capital.client import CapitalClient
+-from copycat.server.capital_api import _CLIENT_QUEUE_MAX, WsBroadcaster
++from copycat.server.ws import CLIENT_QUEUE_MAX as _CLIENT_QUEUE_MAX
++from copycat.server.ws import WsBroadcaster
+ from copycat.capital.models import Position
+ from copycat.capital.safety import SafetyConfig
+ from copycat.live.models import OptionContract, SeriesInfo, Tick
+diff --git a/tests/server/test_corr_routes.py b/tests/server/test_corr_routes.py
+index 96213f0..7f821a8 100644
+--- a/tests/server/test_corr_routes.py
++++ b/tests/server/test_corr_routes.py
+@@ -6,30 +6,8 @@ from typing import Callable
+ 
+ from fastapi.testclient import TestClient
+ 
+-from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+-
+-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
+-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
+-
+-
+-class FakeTxoSource:
+-    """lifespan 需要的 TXO source;corr 路由測試不碰它。"""
+-
+-    def list_series(self) -> list[SeriesInfo]:
+-        return [_SERIES]
+-
+-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+-        return []
+-
+-    def subscribe(self, series: SeriesInfo, on_tick) -> None:
+-        return None
+-
+-    def unsubscribe(self, series: SeriesInfo) -> None:
+-        return None
+-
+-    def close(self) -> None:
+-        return None
++from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ class FakeCorrSource:
+diff --git a/tests/server/test_health.py b/tests/server/test_health.py
+index 9653434..1e7fb41 100644
+--- a/tests/server/test_health.py
++++ b/tests/server/test_health.py
+@@ -10,31 +10,9 @@ import datetime as _dt
+ 
+ from fastapi.testclient import TestClient
+ 
+-from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server import build_info
+ from copycat.server.app import create_app
+-
+-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
+-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
+-
+-
+-class FakeTxoSource:
+-    """lifespan 需要一個 QuoteSource;health 不碰行情。"""
+-
+-    def list_series(self) -> list[SeriesInfo]:
+-        return [_SERIES]
+-
+-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+-        return []
+-
+-    def subscribe(self, series: SeriesInfo, on_tick) -> None:
+-        return None
+-
+-    def unsubscribe(self, series: SeriesInfo) -> None:
+-        return None
+-
+-    def close(self) -> None:
+-        return None
++from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ def _client() -> TestClient:
+diff --git a/tests/server/test_index_routes.py b/tests/server/test_index_routes.py
+index 5d654d0..8173421 100644
+--- a/tests/server/test_index_routes.py
++++ b/tests/server/test_index_routes.py
+@@ -6,29 +6,9 @@ from typing import Callable
+ 
+ from fastapi.testclient import TestClient
+ 
+-from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+ from copycat.server.mis import OtcSnap
+-
+-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
+-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
+-
+-
+-class FakeTxoSource:
+-    def list_series(self) -> list[SeriesInfo]:
+-        return [_SERIES]
+-
+-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+-        return []
+-
+-    def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
+-        return None
+-
+-    def unsubscribe(self, series: SeriesInfo) -> None:
+-        return None
+-
+-    def close(self) -> None:
+-        return None
++from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ class FakeIndexSource:
+diff --git a/tests/server/test_market_routes.py b/tests/server/test_market_routes.py
+index 7fe7d7f..bdb8224 100644
+--- a/tests/server/test_market_routes.py
++++ b/tests/server/test_market_routes.py
+@@ -12,32 +12,13 @@ from typing import Callable
+ 
+ from fastapi.testclient import TestClient
+ 
+-from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+ from copycat.server.mis import OtcSnap
++from tests.helpers.fake_txo import FakeTxoSource
+ 
+-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
+-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
+ _TODAY = f"{_dt.date.today():%Y-%m-%d}"
+ 
+ 
+-class FakeTxoSource:
+-    def list_series(self) -> list[SeriesInfo]:
+-        return [_SERIES]
+-
+-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+-        return []
+-
+-    def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
+-        return None
+-
+-    def unsubscribe(self, series: SeriesInfo) -> None:
+-        return None
+-
+-    def close(self) -> None:
+-        return None
+-
+-
+ def _dbar(t: str, c: int) -> dict:
+     return {"t": t, "o": c, "h": c + 1000, "l": c - 1000, "c": c, "v": 10}
+ 
+diff --git a/tests/server/test_river_routes.py b/tests/server/test_river_routes.py
+index d16e8e9..a6e4ee8 100644
+--- a/tests/server/test_river_routes.py
++++ b/tests/server/test_river_routes.py
+@@ -6,30 +6,8 @@ from typing import Callable
+ 
+ from fastapi.testclient import TestClient
+ 
+-from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+-
+-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
+-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
+-
+-
+-class FakeTxoSource:
+-    """lifespan 需要的 TXO source;river 路由測試不碰它。"""
+-
+-    def list_series(self) -> list[SeriesInfo]:
+-        return [_SERIES]
+-
+-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+-        return []
+-
+-    def subscribe(self, series: SeriesInfo, on_tick) -> None:
+-        return None
+-
+-    def unsubscribe(self, series: SeriesInfo) -> None:
+-        return None
+-
+-    def close(self) -> None:
+-        return None
++from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ class FakeCorrSource:
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index a0c4efc..5ab474c 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -147,7 +147,7 @@ class TestBackfillGuard:
+         src.backfill_result = [
+             StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
+                       time="09:01:00.000", trade_date="2026-07-21", side="outer",
+-                      buy_sell_flag=None, is_trial=False)
++                      is_trial=False)
+         ]
+         await engine.set_main("2330")
+         await engine.set_main("5483")  # A 回補中切 B
+@@ -164,7 +164,7 @@ class TestBackfillGuard:
+         src.backfill_result = [
+             StockTick(code="2330", price_milli=2_380_000, qty=12000, cum_vol=12000,
+                       time="09:01:00.000", trade_date="2026-07-21", side="outer",
+-                      buy_sell_flag=None, is_trial=False)
++                      is_trial=False)
+         ]
+         await engine.set_main("2330")
+         engine.rollover_stage1("2026-07-22")
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 600399a..1197bb4 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -6,30 +6,8 @@ from typing import Callable
+ 
+ from fastapi.testclient import TestClient
+ 
+-from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+-
+-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
+-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
+-
+-
+-class FakeTxoSource:
+-    """TXO QuoteSource fake(stock 路由測試不碰 TXO,但 lifespan 需要它)。"""
+-
+-    def list_series(self) -> list[SeriesInfo]:
+-        return [_SERIES]
+-
+-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+-        return []
+-
+-    def subscribe(self, series: SeriesInfo, on_tick) -> None:
+-        return None
+-
+-    def unsubscribe(self, series: SeriesInfo) -> None:
+-        return None
+-
+-    def close(self) -> None:
+-        return None
++from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ class FakeStockSource:
+@@ -90,6 +68,43 @@ def make_client(
+     return TestClient(app, raise_server_exceptions=False), fake
+ 
+ 
++class _FailingStartStockSource(FakeStockSource):
++    """start() 途中拋例外的 source(`set_trade_date` 是 StockEngine.start 的第一步)。"""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.closed = False
++
++    def set_trade_date(self, trade_date: str) -> None:
++        raise RuntimeError("boom during start")
++
++    def close(self) -> None:
++        self.closed = True
++
++
++class TestEngineStartFailureDegrades:
++    """characterization(refactor C7 前置):引擎起停樣板的降級契約。
++
++    `_boot` 即將把五段 try/except 收成一支,而**建構成功但 start 失敗**是最容易在
++    重構中掉的分支 —— 掉了會洩漏一條已連線的 TC4 session,且畫面只會看到 503。
++    """
++
++    def test_start_exception_closes_source_and_app_still_serves_503(self, tmp_path: Path) -> None:
++        fake = _FailingStartStockSource()
++        app = create_app(
++            FakeTxoSource(),
++            stock_source=fake,
++            stock_watchlist_path=tmp_path / "watchlist.json",
++            throttle_secs=0.01,
++        )
++        client = TestClient(app, raise_server_exceptions=False)
++        with client:
++            r = client.get("/api/stock/watchlist")
++        assert r.status_code == 503
++        assert r.json()["detail"]["error"] == "NOT_READY"
++        assert fake.closed, "start 失敗必須關掉已建好的 source(否則洩漏 TC4 session)"
++
++
+ class TestStockNamesRoute:
+     """搜尋提示列的名稱表(round4 項 1)。表是版控檔 → 降級路徑必須靠注入點才測得到。"""
+ 
+diff --git a/tests/test_stock_names.py b/tests/test_stock_names.py
+index 30e77d8..6ac7b3a 100644
+--- a/tests/test_stock_names.py
++++ b/tests/test_stock_names.py
+@@ -8,7 +8,6 @@ import pytest
+ from copycat.stock_names import (
+     ISIN_URLS,
+     load_names,
+-    parse_isin_html,
+     parse_isin_html_with_stats,
+     refresh,
+     write_names,
+@@ -49,7 +48,7 @@ BROKEN_SECTION_HTML = """
+ 
+ class TestParseIsinHtml:
+     def test_keeps_stock_and_etf_sections(self) -> None:
+-        result = parse_isin_html(FIXTURE_HTML)
++        result, _ = parse_isin_html_with_stats(FIXTURE_HTML)
+         assert result["2330"] == "台積電"
+         assert result["6547"] == "高端疫苗"
+         assert result["00679B"] == "元大美債20年"
+@@ -57,12 +56,12 @@ class TestParseIsinHtml:
+         assert result["2801A"] == "彰銀甲特"
+ 
+     def test_warrant_section_excluded(self) -> None:
+-        result = parse_isin_html(FIXTURE_HTML)
++        result, _ = parse_isin_html_with_stats(FIXTURE_HTML)
+         assert "030001" not in result
+         assert "030002" not in result
+ 
+     def test_invalid_codes_dropped(self) -> None:
+-        result = parse_isin_html(FIXTURE_HTML)
++        result, _ = parse_isin_html_with_stats(FIXTURE_HTML)
+         assert "999" not in result  # 太短
+         assert "ABCD" not in result  # 無數字
+         assert "1234" not in result  # 名稱空
+@@ -70,13 +69,14 @@ class TestParseIsinHtml:
+ 
+     def test_name_may_contain_fullwidth_space(self) -> None:
+         """split 必須 maxsplit=1,否則名稱含全形空格的列會被切碎或誤剔。"""
+-        assert parse_isin_html(FIXTURE_HTML)["8888"] == "名稱 含　全形空格"
++        assert parse_isin_html_with_stats(FIXTURE_HTML)[0]["8888"] == "名稱 含　全形空格"
+ 
+     def test_duplicate_code_keeps_first(self) -> None:
+-        assert parse_isin_html(FIXTURE_HTML)["2330"] == "台積電"
++        assert parse_isin_html_with_stats(FIXTURE_HTML)[0]["2330"] == "台積電"
+ 
+     def test_malformed_rows_do_not_raise(self) -> None:
+-        assert parse_isin_html("<tr><td>x</td></tr><tr></tr><tr><td>a</td><td>b</td></tr>") == {}
++        html = "<tr><td>x</td></tr><tr></tr><tr><td>a</td><td>b</td></tr>"
++        assert parse_isin_html_with_stats(html)[0] == {}
+ 
+     def test_section_counts_exposed_for_drift_visibility(self) -> None:
+         """refresh 要能 log 逐段筆數 + 被剔除的權證列數,漂移才看得見。"""
+diff --git a/tests/test_stock_watchlist.py b/tests/test_stock_watchlist.py
+index 54eb2ca..93c82da 100644
+--- a/tests/test_stock_watchlist.py
++++ b/tests/test_stock_watchlist.py
+@@ -12,7 +12,6 @@ from copycat.stock_watchlist import (
+     WatchlistError,
+     load_watchlist,
+     save_watchlist,
+-    ungrouped,
+     union,
+     validate_code,
+ )
+@@ -76,7 +75,6 @@ class TestWatchlistPersistence:
+             "codes": ["2330", "5483"],
+             "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
+         }
+-        assert ungrouped(wl) == []
+ 
+     def test_saved_file_is_v3(self, tmp_path: Path) -> None:
+         path = tmp_path / "w.json"
+@@ -159,26 +157,6 @@ class TestWatchlistPersistence:
+         assert saved["codes"] == ["2330", "5483", "3231"]
+ 
+ 
+-class TestUngrouped:
+-    def test_excludes_group_members_keeping_codes_order(self) -> None:
+-        wl: Watchlist = {
+-            "codes": ["2330", "5483", "3231", "2317"],
+-            "groups": [{"name": "a", "codes": ["5483"]}, {"name": "b", "codes": ["2317"]}],
+-        }
+-        assert ungrouped(wl) == ["2330", "3231"]
+-
+-    def test_empty_when_every_code_grouped(self) -> None:
+-        wl: Watchlist = {
+-            "codes": ["2330", "5483"],
+-            "groups": [{"name": "a", "codes": ["2330", "5483"]}],
+-        }
+-        assert ungrouped(wl) == []
+-
+-    def test_all_ungrouped_when_no_groups(self) -> None:
+-        wl: Watchlist = {"codes": ["2330", "5483"], "groups": []}
+-        assert ungrouped(wl) == ["2330", "5483"]
+-
+-
+ class TestUnion:
+     def test_union_keeps_first_seen_order(self) -> None:
+         groups: list[Group] = [
