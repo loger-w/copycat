@@ -167,9 +167,9 @@ def _parse_levels(msg: dict, price_key: str, vol_key: str) -> list[tuple[int, in
     for i in range(_DEPTH):
         suffix = "" if i == 0 else str(i)
         price = to_milli(msg.get(price_key + suffix, ""))
-        vol = _to_int(msg.get(vol_key + suffix, ""))
         if price is None:
             continue
+        vol = _to_int(msg.get(vol_key + suffix, ""))
         levels.append((price, vol or 0))
     return levels
 

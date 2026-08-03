@@ -111,6 +111,10 @@ class StockDayState:
         backfill_max = max((t.cum_vol for t in ticks), default=-1)
         survivors = [t for t in self.ticks if t.cum_vol > backfill_max]
         self.reset()
+        # ⚠ 兩個迴圈的去重**不對稱,且是刻意保留的現況**:回補列一律 `_apply`(cum 比對
+        # 只推進 `_last_cum`),survivors 則 cum 沒推進就整筆跳過。回補是 TC4 的權威重放
+        # (同 cum 的連續成交是真資料,丟了會少張數);survivors 是與回補重疊窗的 live 尾巴,
+        # 寧可漏也不可重複計。對齊兩者會改張數/內外盤累積值 → 屬行為改動,記 next-time。
         for tick in ticks:
             if tick.is_trial:
                 continue
