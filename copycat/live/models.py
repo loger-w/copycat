@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+
+from copycat.tc4common import to_milli_units
 
 MULTIPLIER = 50  # TXO 每點 NTD
 
@@ -27,14 +28,9 @@ _OPTION_LEAF_RE = re.compile(
 )
 
 
-def to_millipts(raw: str) -> int | None:
-    """十進位字串 → 毫點整數(點 × 1000);空/無效 → None。"""
-    if not raw:
-        return None
-    try:
-        return int(Decimal(raw) * 1000)
-    except InvalidOperation:
-        return None
+#: 十進位字串 → 毫點整數(點 × 1000);空/無效 → None。
+#: 與 `live.stock_models.to_milli` 同一個運算(單位名不同)→ 實作在 tc4common,此處留具名別名。
+to_millipts = to_milli_units
 
 
 @dataclass(frozen=True)
