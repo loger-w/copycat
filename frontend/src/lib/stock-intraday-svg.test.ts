@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MinuteAgg } from "@/lib/stock-accum";
 import {
+  buildEnergyBars,
   buildIntradayGeometry,
   minuteToX,
   overlayLines,
@@ -43,6 +44,12 @@ describe("buildIntradayGeometry", () => {
     // 🔴 SC-4:區間就是漲停/跌停,不再多留 2% 邊
     expect(g.yDomain[1]).toBe(2_550_000);
     expect(g.yDomain[0]).toBe(2_090_000);
+    // 域收窄到恰為漲跌停後,「走勢線在漲跌停不被裁掉半條 stroke」改由 PAD_Y 幾何留邊承擔
+    // (不是價格域放寬)。原本靠已刪的 y 邊界欄位間接守著,現在直接錨 toY 的兩個端點:
+    // height=100 → 上緣 = PAD_Y(4)、下緣 = height − X_LABEL_H(14) − PAD_Y(4)。
+    // 這兩個字面值即 X_LABEL_H / PAD_Y 的現值,改帶寬時本測試該一起被迫過目。
+    expect(g.toY(g.yDomain[1])).toBeCloseTo(4, 6);
+    expect(g.toY(g.yDomain[0])).toBeCloseTo(100 - 14 - 4, 6);
     expect(g.priceLine[1]!.y).toBeLessThan(g.priceLine[0]!.y);
     // 🔴 round4 項 3:繪圖區改從左緣價位帶右側起算,x 不再從 0 開始
     // (width = Y_AXIS_W + 分鐘數 → 繪圖區仍是每分鐘 1px)
@@ -181,9 +188,29 @@ describe("buildIntradayGeometry", () => {
         meta: META,
       };
       const main = buildIntradayGeometry(input, { width: W, height: 260 });
-      const sub = buildIntradayGeometry(input, { width: W, height: 70 });
-      expect(sub.energyBars[0]!.x).toBeCloseTo(Y_AXIS_W, 6);
-      expect(sub.energyBars.map((b) => b.x)).toEqual(main.priceLine.map((p) => p.x));
+      // 副圖走**出貨路徑** `buildEnergyBars`(元件實際呼叫的那支);沿用
+      // `buildIntradayGeometry` 只驗得到已經沒人走的舊路,對位漂了也不會紅。
+      const sub = buildEnergyBars(input.minutes, { width: W, height: 70 });
+      expect(sub.bars[0]!.x).toBeCloseTo(Y_AXIS_W, 6);
+      expect(sub.bars.map((b) => b.x)).toEqual(main.priceLine.map((p) => p.x));
+    });
+
+    // L-1:副圖抽出 `buildEnergyBars` 後,主圖的 `energyBars` 仍存在(hover/量刻度共用)。
+    // 兩份 bar 必須是同一份 `energyFrom` 的產物 —— 逐值相等是「沒有各漂各的」的守門,
+    // 只比 x 會漏掉高度與歸一分母(那才是副圖真正畫出來的東西)。
+    it("buildEnergyBars 與 buildIntradayGeometry.energyBars 輸出逐值相同", () => {
+      const input = {
+        minutes: minutes([
+          [540, { c: 2_320_000, v: 269, o: 127, i: 20, u: 122 }],
+          [600, { c: 2_330_000, v: 100, o: 60, i: 40, u: 0 }],
+        ]),
+        meta: META,
+      };
+      const size = { width: W, height: 70 };
+      const viaGeometry = buildIntradayGeometry(input, size);
+      const viaEnergy = buildEnergyBars(input.minutes, size);
+      expect(viaEnergy.bars).toEqual(viaGeometry.energyBars);
+      expect(viaEnergy.maxTotal).toBe(viaGeometry.maxTotal);
     });
   });
 
