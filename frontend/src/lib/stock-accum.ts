@@ -47,7 +47,6 @@ export interface StockMeta {
   ref: number | null;
   upper: number | null;
   lower: number | null;
-  y_close: number | null;
   y_vol: number | null;
 }
 

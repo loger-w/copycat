@@ -25,7 +25,6 @@ const ACCUM = {
     ref: 2_320_000,
     upper: 2_550_000,
     lower: 2_090_000,
-    y_close: 2_320_000,
     y_vol: 100,
   },
   noData: false,

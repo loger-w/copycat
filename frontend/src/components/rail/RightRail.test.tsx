@@ -12,7 +12,6 @@ const META = {
   ref: 100_000,
   upper: 110_000,
   lower: 90_000,
-  y_close: 100_000,
   y_vol: 10,
 };
 const BOOK = {

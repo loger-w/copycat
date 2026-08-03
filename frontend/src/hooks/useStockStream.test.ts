@@ -36,7 +36,7 @@ function snap(seq: number, ticks: { t: string; p: number; q: number; side: strin
     minutes: {},
     ticks,
     book: null,
-    meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_close: null, y_vol: null },
+    meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: null },
     no_data: false,
   };
 }

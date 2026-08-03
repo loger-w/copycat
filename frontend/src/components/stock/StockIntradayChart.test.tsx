@@ -58,7 +58,7 @@ const ACCUM = fromSnapshot({
   },
   ticks: [],
   book: null,
-  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
+  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
 });
 
 describe("StockIntradayChart", () => {
@@ -105,7 +105,7 @@ describe("StockIntradayChart", () => {
       vwap: 2_380_000,
       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
       ticks: [], book: null,
-      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
+      meta: { name: "台積電", ref: null, upper: null, lower: null, y_vol: 100 },
     });
     const { container } = wrap(<StockIntradayChart accum={noRef} />);
     expect(container.querySelectorAll("clipPath").length).toBe(0);
@@ -513,7 +513,7 @@ describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
       vwap: 2_380_000,
       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
       ticks: [], book: null,
-      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
+      meta: { name: "台積電", ref: null, upper: null, lower: null, y_vol: 100 },
     });
     const { container } = wrap(<StockIntradayChart accum={noRef} />);
     hover(container);
@@ -869,7 +869,7 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
       vwap: 2_380_000,
       minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
       ticks: [], book: null,
-      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
       high: 2_380_000, low: 2_380_000,
     });
     const { container } = wrap(<StockIntradayChart accum={legacy} />);
@@ -924,7 +924,7 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     const empty = fromSnapshot({
       code: "2330", seq: 1, last: null, vwap: null,
       minutes: {}, ticks: [], book: null,
-      meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_close: null, y_vol: null },
+      meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: null },
     });
     const { container } = wrap(<StockIntradayChart accum={empty} />);
     expect(container.querySelector('[data-testid="last-dot"]')).toBeNull();

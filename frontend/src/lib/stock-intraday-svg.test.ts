@@ -25,7 +25,6 @@ const META = {
   ref: 2_320_000,
   upper: 2_550_000,
   lower: 2_090_000,
-  y_close: 2_320_000,
   y_vol: 100,
 };
 
@@ -576,7 +575,6 @@ describe("round5:右緣帶 + 總量堆疊", () => {
     ref: 2_320_000,
     upper: 2_550_000,
     lower: 2_090_000,
-    y_close: 2_320_000,
     y_vol: 1,
   };
   const W = Y_AXIS_W + 270 + R_AXIS_W;
