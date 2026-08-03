@@ -63,16 +63,10 @@ class CorrQuoteSource(TC4QuoteSource):
         if self._sub_port is not None:
             # 真連線才有 SubPort;漏啟 listener = 訂閱成功但永收不到推播(07-21 實證)
             self._start_listener()
-        self._rt_request("UNSUBQUOTE", symbol)
-        r = self._rt_request("SUBQUOTE", symbol)
-        if r.get("Success") != "OK":
-            raise ConnectionError(f"SUBQUOTE fail {symbol}: {r.get('ErrMsg')}")
-        self._subscribed.add(symbol)
+        self._resub(symbol)
 
     def unsubscribe_raw(self, symbol: str) -> None:
-        if symbol in self._subscribed:
-            self._rt_request("UNSUBQUOTE", symbol)
-            self._subscribed.discard(symbol)
+        self._unsub(symbol)
 
     # ---- 江波圖當日回補(index-river-chart SC-3)----
 

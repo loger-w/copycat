@@ -57,18 +57,10 @@ class FuturesQuoteSource(TC4QuoteSource):
         if self._sub_port is not None:
             # 真連線才有 SubPort;漏啟 listener = 訂閱成功但永收不到推播(07-21 實證)
             self._start_listener()
-        sym = futures_symbol(product)
-        self._rt_request("UNSUBQUOTE", sym)
-        r = self._rt_request("SUBQUOTE", sym)
-        if r.get("Success") != "OK":
-            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
-        self._subscribed.add(sym)
+        self._resub(futures_symbol(product))
 
     def unsubscribe_symbol(self, product: str) -> None:
-        sym = futures_symbol(product)
-        if sym in self._subscribed:
-            self._rt_request("UNSUBQUOTE", sym)
-            self._subscribed.discard(sym)
+        self._unsub(futures_symbol(product))
 
     def subscribe_leaf(self, product: str, ym: str) -> None:
         """補訂實際月份 leaf 契約(TC.F.TWF.<p>.<YYYYMM>)。
@@ -78,12 +70,7 @@ class FuturesQuoteSource(TC4QuoteSource):
         self._ensure_connected()
         if self._sub_port is not None:
             self._start_listener()
-        sym = f"TC.F.TWF.{product}.{ym}"
-        self._rt_request("UNSUBQUOTE", sym)
-        r = self._rt_request("SUBQUOTE", sym)
-        if r.get("Success") != "OK":
-            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
-        self._subscribed.add(sym)
+        self._resub(f"TC.F.TWF.{product}.{ym}")
 
     def subscribe_all(self) -> None:
         for product in PRODUCTS:

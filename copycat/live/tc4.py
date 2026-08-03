@@ -394,6 +394,25 @@ class TC4QuoteSource:
             rows.extend(page)
         return [t for r in rows if (t := parse_history_tick(symbol, r)) is not None]
 
+    def _resub(self, sym: str) -> None:
+        """UNSUB→SUB 冪等重掛(逐 symbol 訂閱路徑共用;stock/futures/corr 三 source)。
+
+        **失敗語意是契約**:`stock_engine._acquire` 靠 ConnectionError 回滾 refcount,
+        不可改回傳 bool。下方 TXO 序列版 `subscribe` 刻意是 warn+continue(整條序列
+        不因單一 symbol 失敗而全斷),故不走這裡。
+        """
+        self._rt_request("UNSUBQUOTE", sym)
+        r = self._rt_request("SUBQUOTE", sym)
+        if r.get("Success") != "OK":
+            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
+        self._subscribed.add(sym)
+
+    def _unsub(self, sym: str) -> None:
+        """已訂閱才退訂(未訂閱 = no-op)。"""
+        if sym in self._subscribed:
+            self._rt_request("UNSUBQUOTE", sym)
+            self._subscribed.discard(sym)
+
     def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
         self._ensure_connected()
         self._on_tick = on_tick
