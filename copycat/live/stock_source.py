@@ -488,30 +488,3 @@ class StockQuoteSource(TC4QuoteSource):
                 self._seen.add(code)
         if self._on_message is not None:
             self._on_message(quote)
-
-    def _listen_loop(self) -> None:
-        import zmq
-
-        ctx = zmq.Context()
-        sock: Any | None = None
-        bound_port: str | None = None
-        while not self._stop.is_set():
-            if sock is None or self._sub_port != bound_port:
-                # generation-following:重連換 SubPort 必須跟隨(07-20 盤中實證,同 tc4.py)
-                if sock is not None:
-                    sock.close(linger=0)
-                sock = ctx.socket(zmq.SUB)
-                sock.connect(f"tcp://127.0.0.1:{self._sub_port}")
-                sock.setsockopt_string(zmq.SUBSCRIBE, "")
-                sock.setsockopt(zmq.RCVTIMEO, 1_000)
-                bound_port = self._sub_port
-            try:
-                raw = (sock.recv()[:-1]).decode("utf-8")
-            except zmq.ZMQError:
-                self._check_stale()
-                continue
-            self._last_msg = time.monotonic()
-            self.handle_raw(raw)
-        if sock is not None:
-            sock.close(linger=0)
-        ctx.term()

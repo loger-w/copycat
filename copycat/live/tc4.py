@@ -469,6 +469,25 @@ class TC4QuoteSource:
         self._listener = threading.Thread(target=self._listen_loop, daemon=True)
         self._listener.start()
 
+    def handle_raw(self, raw: str) -> None:
+        """SUB socket 一則原始電文 → TXO Tick 分派(listener 與測試共用)。
+
+        子類覆寫這一支即可共用整個 `_listen_loop`(generation-following 的重連跟隨
+        邏輯 2026-07-20 盤中修過一次,四份各自持有等於下次要同步改四處)。
+        """
+        idx = raw.find(":")
+        if idx < 0:
+            return
+        try:
+            msg = json.loads(raw[idx + 1 :])
+        except json.JSONDecodeError:
+            return
+        if msg.get("DataType") != "REALTIME":
+            return
+        tick = parse_realtime(msg.get("Quote", {}))
+        if tick is not None and self._on_tick is not None:
+            self._on_tick(tick)
+
     def _listen_loop(self) -> None:
         import zmq
 
@@ -493,18 +512,7 @@ class TC4QuoteSource:
                 self._check_stale()
                 continue
             self._last_msg = time.monotonic()
-            idx = raw.find(":")
-            if idx < 0:
-                continue
-            try:
-                msg = json.loads(raw[idx + 1 :])
-            except json.JSONDecodeError:
-                continue
-            if msg.get("DataType") != "REALTIME":
-                continue
-            tick = parse_realtime(msg.get("Quote", {}))
-            if tick is not None and self._on_tick is not None:
-                self._on_tick(tick)
+            self.handle_raw(raw)
         if sock is not None:
             sock.close(linger=0)
         ctx.term()
