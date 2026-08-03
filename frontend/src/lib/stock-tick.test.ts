@@ -205,6 +205,27 @@ describe("市價單檔位(round6 項 4)", () => {
     expect(badBounds.rows).toEqual([]);
     expect(badBounds.marketBidQty).toBe(15_966);
   });
+
+  /** M5 同族(FC-3):`0` 不是價格這件事對 **input 的價欄**同樣成立。後端 meta 缺值時
+   *  各價欄給的是 0 而不是 null(TC4 空字串解析結果),不在入口歸一的話 anchor=0、
+   *  上下界都是 0 → 迴圈剛好跑出**一列 priceMilli 0**,而那一列在閃電梯上是可點的。 */
+  it("center/ref/upper/lower 全 0(meta 缺值)→ 空 rows,不長出單列 0 元階梯", () => {
+    const l = buildLadder({ center: 0, ref: 0, upper: 0, lower: 0, book: LOCK_UP });
+    expect(l.rows).toEqual([]);
+    expect(l.marketBidQty).toBe(15_966); // 早退仍回完整形狀(同上一條的 lib 層契約)
+  });
+
+  it("center 為 0 → 退回 ref 當 anchor(0 不是價格,不能當「有 center」)", () => {
+    const l = buildLadder({ center: 0, ref: 456_500, upper: 502_000, lower: 411_000, book: null });
+    // 不歸一時 anchor=0 → 最接近 0 的是最下面那列,置中會停在跌停價
+    expect(l.rows.find((r) => r.isCenter)!.priceMilli).toBe(456_500);
+  });
+
+  it("upper/lower 為 0 → 視同缺,走 ref 假想界(不是 0 邊界)", () => {
+    const l = buildLadder({ center: 33_500, ref: 33_500, upper: 0, lower: 0, book: null });
+    expect(l.rows[0]!.priceMilli).toBe(36_850);
+    expect(l.rows[l.rows.length - 1]!.priceMilli).toBe(30_150);
+  });
 });
 
 describe("limitState(round6 項 3)", () => {
