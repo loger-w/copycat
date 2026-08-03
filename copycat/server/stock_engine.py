@@ -469,6 +469,9 @@ class StockEngine:
             "code": code,
             "p": last.price_milli if last is not None else None,
             "chg_pct": chg_pct,
+            # 這個 `vol` = TC4 當日累積量(`last.cum_vol`),**不是** REST snapshot 的
+            # `vwap_vol`(去重剔試撮後的 Σqty / vwap 分母)。兩者曾同名反義,
+            # 改名理由與對照見 `live/stock_state.py::snapshot` 的 `vwap_vol`(FC-2)。
             "vol": last.cum_vol if last is not None else None,
             # 尚無成交才給參考價,與 `p` **互斥** —— 兩者同時有值會讓消費端分不出
             # 「今天的價」與「昨天的基準」

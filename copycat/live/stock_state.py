@@ -173,7 +173,10 @@ class StockDayState:
             # **不是** `last.cum_vol`(TC4 的當日累積量)。兩者在有 tick 被去重
             # 或試撮丟棄時就會岔開,拿錯的那個當分母不會報錯,只會讓 VWAP 靜默
             # 偏移到下一次全量 refetch 為止。
-            "vol": self._volume,
+            # 欄名帶 `vwap_` 前綴不可省(FC-2):WS `watchlist_quote` 的 `vol` 就是
+            # 上面那個 `cum_vol`,叫同一個名字等於把「兩個口徑不可互換」這件事
+            # 藏起來,而前端同時握著兩份訊息。
+            "vwap_vol": self._volume,
             # 高低與 vwap 同層(top-level)不進 meta:meta 是 TC4 來的靜態盤別資料
             # (名稱 / 參考價 / 漲跌停),而高低是由成交推導的當日狀態。放這裡之後
             # meta 為 None(只跑過回補、未收 REALTIME)時高低照樣有值。
