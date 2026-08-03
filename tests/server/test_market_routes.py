@@ -42,10 +42,28 @@ def _dbar(t: str, c: int) -> dict:
     return {"t": t, "o": c, "h": c + 1000, "l": c - 1000, "c": c, "v": 10}
 
 
+def _this_week_days(n: int) -> list[str]:
+    """當前 ISO 週的週一起算 `n` 天(必同屬一個 ISO 週,`n <= 7`)。
+
+    週 K 的 `partial_last` 比的是「最後一根的 ISO 週 == today 的 ISO 週」,
+    寫死日期的 fixture 一過那週就恆 False —— 測試會因為日曆而紅,與被測行為無關。
+    """
+    monday = _dt.date.today() - _dt.timedelta(days=_dt.date.today().weekday())
+    return [(monday + _dt.timedelta(days=i)).isoformat() for i in range(n)]
+
+
+_DEFAULT_DAILY = [
+    _dbar("2026-07-27", 23_000_000),
+    _dbar("2026-07-28", 23_100_000),
+    _dbar("2026-07-29", 23_200_000),
+]
+
+
 class FakeIndexSource:
-    def __init__(self, *, tag: str = "tc4_dk") -> None:
+    def __init__(self, *, tag: str = "tc4_dk", daily_bars: list[dict] | None = None) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
         self._tag = tag
+        self._daily = _DEFAULT_DAILY if daily_bars is None else daily_bars
 
     def subscribe_symbol(self, code: str) -> None:
         pass
@@ -71,11 +89,7 @@ class FakeIndexSource:
         self.calls.append((code, tf, start, end))
         if tf == "1":
             return [{"t": f"{_TODAY} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}], "tc4_1k"
-        return [
-            _dbar("2026-07-27", 23_000_000),
-            _dbar("2026-07-28", 23_100_000),
-            _dbar("2026-07-29", 23_200_000),
-        ], self._tag
+        return list(self._daily), self._tag
 
 
 class NoHistoryIndexSource(FakeIndexSource):
@@ -172,15 +186,21 @@ class TestTwse:
         assert [c_[0] for c_ in src.calls] == ["IX0001"]
 
     def test_weekly_aggregates_from_same_long_daily_fetch(self) -> None:
-        """日/週/月共用同一份長窗日 K —— 第二次請求不得再打一次 TC4。"""
-        src = FakeIndexSource()
+        """日/週/月共用同一份長窗日 K —— 第二次請求不得再打一次 TC4。
+
+        fixture 取**當前 ISO 週**的週一~週三(見 `_this_week_days`):三根必同桶,
+        且最後一根與 today 同 ISO 週 → `partial_last` 恆 True,哪一天跑都成立
+        (含週日 —— ISO 的週日仍屬同一週)。
+        """
+        mon, tue, wed = _this_week_days(3)
+        src = FakeIndexSource(daily_bars=[_dbar(d, 23_000_000) for d in (mon, tue, wed)])
         with make_client(index_source=src) as c:
             c.get("/api/market/bars/TWSE?tf=D")
             r = c.get("/api/market/bars/TWSE?tf=W")
         assert len(src.calls) == 1  # cache hit
         body = r.json()
-        assert len(body["bars"]) == 1  # 三根同屬 ISO 2026-W31
-        assert body["bars"][0]["t"] == "2026-07-29"
+        assert len(body["bars"]) == 1  # 三根同屬當前 ISO 週
+        assert body["bars"][0]["t"] == wed  # 桶以最後一根標記
         assert body["meta"]["partial_last"] is True
 
     def test_source_tag_reflects_actual_branch_not_expectation(self) -> None:
@@ -219,12 +239,8 @@ class TestOtc:
         那是本專案已經吃過虧的假綠樣態,條件式斷言不留在 repo(review P1-4)。"""
         with make_client(index_source=FakeIndexSource()) as c:
             engine = c.app.state.index  # type: ignore[attr-defined]
-            engine._apply_otc(
-                OtcSnap(p=359_800, ref=378_090, open=0, high=0, low=0, time="101610")
-            )
-            engine._apply_otc(
-                OtcSnap(p=360_100, ref=378_090, open=0, high=0, low=0, time="101655")
-            )
+            engine._apply_otc(OtcSnap(p=359_800, ref=378_090, open=0, high=0, low=0, time="101610"))
+            engine._apply_otc(OtcSnap(p=360_100, ref=378_090, open=0, high=0, low=0, time="101655"))
             r = c.get("/api/market/bars/OTC?tf=1")
         body = r.json()
         assert body["meta"]["source"] == "mis_poll_synth"
@@ -235,7 +251,11 @@ class TestOtc:
         bar = body["bars"][0]
         assert bar["t"] == f"{_TODAY} 10:17"  # 前端靠空格分辨日 K / 分 K
         assert (bar["o"], bar["h"], bar["l"], bar["c"], bar["v"]) == (
-            359_800, 360_100, 359_800, 360_100, 0,
+            359_800,
+            360_100,
+            359_800,
+            360_100,
+            0,
         )
 
 
