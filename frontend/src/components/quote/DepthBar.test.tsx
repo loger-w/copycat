@@ -147,6 +147,25 @@ describe("DepthBar 市價 0 價檔位(M6)", () => {
     expect(screen.getByText(/委賣/).textContent).toContain("56"); // 5+18+9+24,不含市價 90
   });
 
+  it("漲停價出現在非最佳限價檔 → 不亮 badge(判定看最佳限價檔,TQ-5)", () => {
+    // 刻意畸形 / 過期的簿(well-formed 簿的 bids 遞減,不會有比漲停價更高的買檔)——
+    // 鎖的是**判定語意**:badge 的意思是「最佳限價檔就掛在漲停價」,不是「簿裡任何
+    // 一檔碰到漲停價」。用 `some` 的話這種簿會過度觸發。
+    renderBar({ bids: [[0, 200], [583_000, 10], [582_000, 12]], upper: 582_000 });
+    expect(screen.queryByText("鎖漲停")).toBeNull();
+  });
+
+  it("跌停價出現在非最佳限價檔 → 不亮 badge(賣側對稱)", () => {
+    renderBar({ asks: [[0, 90], [582_000, 10], [583_000, 5]], lower: 583_000 });
+    expect(screen.queryByText("鎖跌停")).toBeNull();
+  });
+
+  it("upper 為 0(meta 缺值)+ 市價偽檔位 → 不得誤亮 badge", () => {
+    renderBar({ bids: LOCK_BIDS, asks: LOCK_ASKS, upper: 0, lower: 0 });
+    expect(screen.queryByText("鎖漲停")).toBeNull();
+    expect(screen.queryByText("鎖跌停")).toBeNull();
+  });
+
   it("0 價檔位顯示「市價」不印 0,量照列", () => {
     renderBar({ bids: LOCK_BIDS });
     const cell = screen.getByLabelText("買1 市價");
