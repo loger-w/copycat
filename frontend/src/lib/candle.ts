@@ -256,7 +256,7 @@ export function buildCandleGeometry(
 
   const indexOf = (x: number): number | null => {
     if (x < 0 || x > size.width) return null;
-    const i = Math.floor(x / slot);
+    const i = Math.min(bars.length - 1, Math.floor(x / slot));
     return i >= 0 && i < bars.length ? i : null;
   };
 
