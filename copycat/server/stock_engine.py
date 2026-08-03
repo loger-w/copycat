@@ -18,6 +18,7 @@ from typing import Any, AsyncGenerator, Callable, Protocol
 from copycat.live.stock_models import StockTick, parse_stock_realtime
 from copycat.live.stock_source import Bar, DailyBar
 from copycat.live.stock_state import StockDayState
+from copycat.server.ws import WsBroadcaster
 from copycat.stkfut_map import load_map
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ class StockEngine:
         self._generation = 1
         self._backfill_jobs: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
         self._backfilling: str | None = None
-        self._clients: set[asyncio.Queue[dict]] = set()
+        self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
         self._dirty_watchlist: set[str] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: list[asyncio.Task[None]] = []
@@ -476,42 +477,15 @@ class StockEngine:
         }
 
     def stream(self) -> AsyncGenerator[dict, None]:
-        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
-        self._clients.add(queue)
         # 連線先送一輪自選種子(round4 項 4)。側欄開頁 / 盤後全是 `-` 的根因是
         # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
         # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
-        # 「連線先送快照」的既成慣例一致)。
-        # **不可借用 `_publish`**(那會打到所有 client);同步區間無 await,對 event loop
-        # 原子,不會與其它推播交錯。30 檔對 queue maxsize 安全。
-        for code in self._watchlist:
-            try:
-                queue.put_nowait(self._quote_payload(code))
-            except asyncio.QueueFull:  # pragma: no cover - 種子數遠小於 queue 上限
-                break
-
-        async def _gen() -> AsyncGenerator[dict, None]:
-            try:
-                while True:
-                    yield await queue.get()
-            finally:
-                self._clients.discard(queue)
-
-        return _gen()
+        # 「連線先送快照」的既成慣例一致)。種子走 `stream(seed=...)` 而非 `publish`
+        # (後者會打到所有 client);30 檔對 queue maxsize 安全。
+        return self._ws.stream([self._quote_payload(code) for code in self._watchlist])
 
     def _publish(self, msg: dict) -> None:
-        for queue in self._clients:
-            try:
-                queue.put_nowait(msg)
-            except asyncio.QueueFull:
-                try:
-                    queue.get_nowait()  # 滿丟最舊(treading-king Broadcaster 模型)
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    queue.put_nowait(msg)
-                except asyncio.QueueFull:
-                    pass
+        self._ws.publish(msg)
 
     async def _flush_watchlist_loop(self) -> None:
         """側欄節流:1s 合併一則(design §2.4)。"""

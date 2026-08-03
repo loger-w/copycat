@@ -15,6 +15,7 @@ from typing import AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_source import Bar
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
+from copycat.server.ws import WsBroadcaster
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,7 @@ class IndexEngine:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: list[asyncio.Task[None]] = []
         self._retry_task: asyncio.Task[None] | None = None
-        self._clients: set[asyncio.Queue[dict]] = set()
+        self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
         self._dirty = False
         self._last_push = _time.monotonic()
         self._spot_silent_since: float | None = None
@@ -486,28 +487,7 @@ class IndexEngine:
     # ---- WS 廣播(沿 stock_engine per-client 有界 queue)----
 
     def stream(self) -> AsyncGenerator[dict, None]:
-        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
-        self._clients.add(queue)
-
-        async def _gen() -> AsyncGenerator[dict, None]:
-            try:
-                while True:
-                    yield await queue.get()
-            finally:
-                self._clients.discard(queue)
-
-        return _gen()
+        return self._ws.stream()
 
     def _publish(self, msg: dict) -> None:
-        for queue in self._clients:
-            try:
-                queue.put_nowait(msg)
-            except asyncio.QueueFull:
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    queue.put_nowait(msg)
-                except asyncio.QueueFull:
-                    pass
+        self._ws.publish(msg)
