@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import {
   assignToGroup,
   detachFromGroups,
+  isSameWatchlist,
   moveToGroup,
   removeCode,
   removeFromGroup,
@@ -102,7 +103,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
    *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
   function commit(next: Watchlist): void {
-    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
+    if (isSameWatchlist(next, wl)) return;
     save.mutate(next);
   }
 

@@ -17,6 +17,15 @@ export interface Watchlist {
   groups: Group[];
 }
 
+/** 兩份自選內容是否相同(同一物件 或 深度逐字相同)。
+ *
+ *  呼叫端的**零 PUT 早退**判定(W-9 三處共用):純函數無變化時回原物件,但
+ *  `assignToGroup` 等恆回新陣列 → identity 比對不夠,深度比對不可省。內容相同的
+ *  PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來。 */
+export function isSameWatchlist(a: Watchlist, b: Watchlist): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** 插入 + off-by-one 補償。
  *
  *  `slot` = 相對目標清單「移除前」渲染索引(含被拖的那一列,即 `dropTargetFromPointer`

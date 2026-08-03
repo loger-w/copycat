@@ -9,6 +9,7 @@ import {
   addGroup,
   assignToGroup,
   deleteGroup,
+  isSameWatchlist,
   removeCode,
   removeFromGroup,
   renameGroup,
@@ -84,7 +85,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
     // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
     // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
-    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
+    if (isSameWatchlist(next, wl)) return;
     setLocalError(null);
     save.mutate(next, onDone === undefined ? undefined : { onSuccess: onDone });
   }
