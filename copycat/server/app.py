@@ -538,6 +538,12 @@ def create_app(
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
         return stock
 
+    def _valid_code(code: str) -> None:
+        """個股代號閘。**必須在 `_stock(request)` 之後呼叫** —— 「引擎沒起來 + 代號非法」
+        現況回 503 不是 400,那個優先序是既有行為(做成 Depends 會被 FastAPI 提前跑)。"""
+        if not validate_code(code):
+            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+
     @app.get("/api/stock/names")
     async def stock_names() -> dict:
         """全市場代號↔名稱(搜尋提示列用)。**刻意不過 `_stock()` 閘** —— 名稱表與 TC4
@@ -566,8 +572,7 @@ def create_app(
     @app.get("/api/stock/overlay/{code}")
     async def stock_overlay(request: Request, code: str) -> dict:
         stock = _stock(request)
-        if not validate_code(code):
-            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+        _valid_code(code)
         # today = 本機日界(= 台北,部署綁本機;design R6/R13);backfill 模式亦以本機為準
         today = f"{_date.today():%Y-%m-%d}"
         cached = overlay_cache.get(code, today)
@@ -581,8 +586,7 @@ def create_app(
     async def stock_bars(request: Request, code: str, tf: str = "D", days: str = "5") -> dict:
         """K 線 bar(SC-7)。tf=D 忽略 days(D-15:忽略的參數不該進 cache/query key)。"""
         stock = _stock(request)
-        if not validate_code(code):
-            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+        _valid_code(code)
         if tf not in ("D", "1"):
             raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
         # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
@@ -602,19 +606,21 @@ def create_app(
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:
         stock = _stock(request)
-        if not validate_code(code):
-            raise HTTPException(status_code=400, detail={"error": "BAD_CODE"})
+        _valid_code(code)
         await stock.set_main(code)  # 含回補觸發(design §2.5)
         return stock.snapshot(code)
 
     # ---- index(指數看盤;index-board SC-4)----
 
-    @app.get("/api/index/state")
-    async def index_state(request: Request) -> dict:
+    def _index(request: Request) -> IndexEngine:
         index: IndexEngine | None = request.app.state.index
         if index is None:
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
-        return index.state()
+        return index
+
+    @app.get("/api/index/state")
+    async def index_state(request: Request) -> dict:
+        return _index(request).state()
 
     # ---- market(大盤 K 線;index-board SC-4/5/6)----
 
@@ -641,9 +647,7 @@ def create_app(
         today = _date.today()
 
         if key == "OTC":
-            index: IndexEngine | None = request.app.state.index
-            if index is None:
-                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+            index = _index(request)
             if tf != "1":
                 # 櫃買指數不在 TC4 symbol 樹(CLAUDE.md §8 掃盡確認)→ 沒有任何歷史來源。
                 # 給空陣列 + 明確理由,不拿當日合成假裝成日/週/月 K。
@@ -660,9 +664,7 @@ def create_app(
             )
 
         if key == "TWSE":
-            index = request.app.state.index
-            if index is None:
-                raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+            index = _index(request)
 
             async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
                 return await index.bars_range(tf_, s, e)
