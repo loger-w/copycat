@@ -6,7 +6,7 @@ import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { fmt, fmtPct } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
-import { searchStocks } from "@/lib/stock-search";
+import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
 import { cn, safeIdToken } from "@/lib/utils";
 import {
@@ -32,8 +32,6 @@ export const ROW_H = 52;
 const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 /** 未分組區塊的折疊(`"1"` = 折疊);與群組折疊分開存,兩者互不影響 */
 const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
-/** 提示列筆數:多過這個高度就開始擠掉股票列 */
-const SUGGEST_LIMIT = 8;
 const EMPTY_WL: Watchlist = { codes: [], groups: [] };
 
 function fmtPrice(milli: number | null): string {

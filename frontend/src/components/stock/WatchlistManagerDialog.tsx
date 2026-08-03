@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { errText, useSaveWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
-import { searchStocks } from "@/lib/stock-search";
+import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { cn } from "@/lib/utils";
 import {
   addCode,
@@ -21,8 +21,6 @@ import {
 /** 「未分組」是左欄第一列的**偽群組**,不是真的可以建的群組名 —— 兩者同名的話畫面上
  *  無法區分(`selected === null` vs 一個真的叫「未分組」的群組)。 */
 const UNGROUPED_LABEL = "未分組";
-/** 右欄搜尋提示筆數(與側欄同一個量級) */
-const SUGGEST_LIMIT = 8;
 
 interface Props {
   open: boolean;
