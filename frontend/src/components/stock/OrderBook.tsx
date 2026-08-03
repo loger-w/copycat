@@ -1,5 +1,5 @@
 import { chgPct, fmt, fmtPct } from "@/lib/format";
-import { isMarketLevel, limitState } from "@/lib/stock-tick";
+import { bestLimit, isMarketLevel, limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
 /** 個股五檔 —— 垂直雙欄版式(SC-1,參照 treading-king `QuoteBook.tsx`)。
@@ -164,9 +164,11 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   const chg = lastMilli !== null && ref_ ? chgPct(lastMilli, ref_) : null;
   // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價格 0),
   // 漲停價被擠到 `bids[1]` → 判定恆假、badge 靜默消失(實測 2327 就是如此)。
-  // 改看「委買側有沒有掛在漲停價的檔位」,市價偽檔位再也打不穿它。
-  const lockedUp = upper !== null && b.some(([p]) => p === upper);
-  const lockedDown = lower !== null && a.some(([p]) => p === lower);
+  // 改看**最佳限價檔**是不是掛在漲跌停價上(與 DepthBar 同一份 `bestLimit`)——
+  // 用 `some`(簿裡任何一檔碰到漲停價)則會在畸形 / 過期的簿上過度觸發,且
+  // `upper` 為 0(meta 缺值)時會與市價偽檔位的 0 對上,在沒鎖停的股票亮起 badge。
+  const lockedUp = upper !== null && bestLimit(b) === upper;
+  const lockedDown = lower !== null && bestLimit(a) === lower;
   // 漲跌停亮燈(項 3):現價踩到漲跌停 → 成交價 + 漲跌% 整塊反白底色,
   // 不只是換文字色 —— 這是盤中要用餘光捕捉的狀態。
   const limit = limitState(lastMilli, upper, lower);
