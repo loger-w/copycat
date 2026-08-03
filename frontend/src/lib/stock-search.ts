@@ -9,6 +9,10 @@ export interface StockName {
   name: string;
 }
 
+/** 提示列筆數:多過這個高度就開始擠掉股票列。側欄與管理 Dialog 的右欄同一個量級,
+ *  兩處各硬編一份會讓「調一邊」變成兩邊版面不一致。 */
+export const SUGGEST_LIMIT = 8;
+
 /** 代碼前綴命中優先於名稱片段命中,各段內按代碼升序;合併去重後取前 `limit` 筆。
  *
  *  代碼比對轉大寫(字母尾碼 ETF 如 `00679B`,使用者不會特意按 shift);
