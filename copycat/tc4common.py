@@ -8,6 +8,9 @@ from typing import Callable, Iterator
 TC4_APPID = "ZMQ"
 TC4_SKEY = "8076c9867a372d2a9a814ae710c256e2"
 
+#: OpenAPI 登入 port(2026-07-18 實測;官方文件的 51171/51141 與現版不符)
+TC4_DEFAULT_PORT = "50774"
+
 
 def iter_qry_pages(
     fetch: Callable[[str], list[dict]],

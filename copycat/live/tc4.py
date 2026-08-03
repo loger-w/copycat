@@ -29,7 +29,7 @@ from copycat.live.models import (
     parse_realtime,
 )
 from copycat.live.session import session_key, session_window
-from copycat.tc4common import TC4_APPID, TC4_SKEY, iter_qry_pages
+from copycat.tc4common import TC4_APPID, TC4_DEFAULT_PORT, TC4_SKEY, iter_qry_pages
 
 __all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_series"]
 
@@ -111,7 +111,7 @@ class TC4QuoteSource:
 
     def __init__(
         self,
-        port: str = "50774",
+        port: str = TC4_DEFAULT_PORT,
         *,
         api: Any | None = None,
         session: str | None = None,

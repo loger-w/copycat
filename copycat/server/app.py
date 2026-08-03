@@ -54,6 +54,7 @@ from copycat.stock_watchlist import (
 from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
 from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
 from copycat.stock_names import load_names as load_stock_names
+from copycat.tc4common import TC4_DEFAULT_PORT
 from copycat.server.trade import (
     ConfirmRequiredError,
     InvalidOrderError,
@@ -145,11 +146,15 @@ class SubmitBody(BaseModel):
     preview_id: str
 
 
+def _tc4_port() -> str:
+    return os.environ.get("TC4_PORT", TC4_DEFAULT_PORT)
+
+
 def _default_source() -> QuoteSource:
     from copycat.live.tc4 import TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
 
     return TC4QuoteSource(
-        port=os.environ.get("TC4_PORT", "50774"),
+        port=_tc4_port(),
         backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
     )
 
@@ -157,25 +162,25 @@ def _default_source() -> QuoteSource:
 def _default_stock_source() -> StockSource:
     from copycat.live.stock_source import StockQuoteSource  # 延遲 import:測試不觸 pyzmq
 
-    return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+    return StockQuoteSource(port=_tc4_port())
 
 
 def _default_index_source() -> IndexSource:
     from copycat.live.stock_source import StockQuoteSource  # 獨立 session(指數專用)
 
-    return StockQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+    return StockQuoteSource(port=_tc4_port())
 
 
 def _default_futures_source() -> FuturesSource:
     from copycat.live.futures_source import FuturesQuoteSource  # 延遲 import:測試不觸 pyzmq
 
-    return FuturesQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+    return FuturesQuoteSource(port=_tc4_port())
 
 
 def _default_corr_source() -> CorrSource:
     from copycat.live.corr_source import CorrQuoteSource  # 延遲 import:測試不觸 pyzmq
 
-    return CorrQuoteSource(port=os.environ.get("TC4_PORT", "50774"))
+    return CorrQuoteSource(port=_tc4_port())
 
 
 def create_app(
