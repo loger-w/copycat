@@ -18,6 +18,7 @@ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshai
 import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
 import { fmt } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+import { pts } from "@/lib/svg-points";
 import { cn } from "@/lib/utils";
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 
@@ -52,10 +53,6 @@ function shortStamp(t: string): string {
   const sp = t.indexOf(" ");
   if (sp >= 0) return t.slice(sp + 1);
   return t.slice(5).replace("-", "/");
-}
-
-function pts(line: { x: number; y: number }[]): string {
-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
 
 /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */

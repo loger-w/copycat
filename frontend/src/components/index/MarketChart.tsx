@@ -5,6 +5,7 @@ import { useMarketBars } from "@/hooks/useMarketBars";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import { aggregateBars } from "@/lib/candle";
 import { buildIndexGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+import { pts } from "@/lib/svg-points";
 import { type MarketKey, type MarketMode, marketMinutesOf } from "@/lib/timeframe";
 
 const SIZE = { width: 640, height: 220 };
@@ -31,10 +32,6 @@ function fmt(millipts: number): string {
 
 function toX(minute: number): number {
   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
-}
-
-function pts(line: { x: number; y: number }[]): string {
-  return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 }
 
 function IntradayChart({ name, s }: { name: string; s: IndexSeries }) {
