@@ -334,12 +334,7 @@ class StockQuoteSource(TC4QuoteSource):
         if self._sub_port is not None:
             # 真連線才有 SubPort;漏啟 = 訂閱成功但永收不到推播(2026-07-21 real-env 實證)
             self._start_listener()
-        sym = stock_symbol(code)
-        self._rt_request("UNSUBQUOTE", sym)
-        r = self._rt_request("SUBQUOTE", sym)
-        if r.get("Success") != "OK":
-            raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
-        self._subscribed.add(sym)
+        self._resub(stock_symbol(code))
         with self._seen_lock:
             self._seen.discard(code)
         # 個股期(F:)不做無推播健檢:seen 以 Security(=股號)為鍵,期貨鍵對不上
@@ -349,10 +344,7 @@ class StockQuoteSource(TC4QuoteSource):
             timer.start()
 
     def unsubscribe_symbol(self, code: str) -> None:
-        sym = stock_symbol(code)
-        if sym in self._subscribed:
-            self._rt_request("UNSUBQUOTE", sym)
-            self._subscribed.discard(sym)
+        self._unsub(stock_symbol(code))
 
     def _health_check(self, code: str) -> None:
         with self._seen_lock:
