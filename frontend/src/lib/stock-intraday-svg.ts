@@ -212,10 +212,42 @@ interface Size {
   height: number;
 }
 
-export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
-  const entries = [...input.minutes.entries()]
+function windowedEntries(minutes: Map<number, MinuteAgg>): [number, MinuteAgg][] {
+  return [...minutes.entries()]
     .filter(([k]) => k >= X_START_MIN && k <= X_END_MIN)
     .sort(([a], [b]) => a - b);
+}
+
+function energyFrom(
+  entries: readonly [number, MinuteAgg][],
+  size: Size,
+): { bars: EnergyBar[]; maxTotal: number } {
+  // round5 E:分母是**全日最大總量**(外+內+未分類)而不是舊的「單邊最大」。
+  // 舊分母讓資訊列的「量」在副圖上找不到對應高度 —— 未分類(開盤集合競價沒有 Bid/Ask
+  // 可比,derive_side 判 neutral)整批不畫,而刻度又是單邊值。實測截圖 09:00:
+  // 量 269 = 外 127 + 內 20 + 未分類 122,舊刻度顯示 164。
+  const maxTotal = Math.max(1, ...entries.map(([, m]) => m.o + m.i + m.u));
+  // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
+  const energyH = Math.max(1, size.height - SUB_TOP_PAD);
+  const bars = entries.map(([minute, m]) => {
+    const total = m.o + m.i + m.u;
+    return { x: minuteToX(minute, size.width), h: (total / maxTotal) * energyH };
+  });
+  return { bars, maxTotal };
+}
+
+/** 副圖(成交量)專用幾何。**副圖只吃 bar 與歸一分母**,原本卻整份跑一次
+ *  `buildIntradayGeometry` —— 價線 / VWAP / 刻度 / 極值反查全算一遍再丟掉。
+ *  與主圖共用 `energyFrom`,兩邊的 bar 定義不可能各漂各的。 */
+export function buildEnergyBars(
+  minutes: Map<number, MinuteAgg>,
+  size: { width: number; height: number },
+): { bars: EnergyBar[]; maxTotal: number } {
+  return energyFrom(windowedEntries(minutes), size);
+}
+
+export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
+  const entries = windowedEntries(input.minutes);
   const prices = entries.map(([, m]) => m.c).filter((p) => p > 0);
   const ref = input.meta?.ref ?? (prices.length ? prices[0]! : 0);
   const upper = input.meta?.upper ?? null;
@@ -265,17 +297,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     }
   }
 
-  // round5 E:分母是**全日最大總量**(外+內+未分類)而不是舊的「單邊最大」。
-  // 舊分母讓資訊列的「量」在副圖上找不到對應高度 —— 未分類(開盤集合競價沒有 Bid/Ask
-  // 可比,derive_side 判 neutral)整批不畫,而刻度又是單邊值。實測截圖 09:00:
-  // 量 269 = 外 127 + 內 20 + 未分類 122,舊刻度顯示 164。
-  const maxTotal = Math.max(1, ...entries.map(([, m]) => m.o + m.i + m.u));
-  // 分母扣掉 SUB_TOP_PAD:滿格那根不再頂到副圖上緣,頂端量刻度文字才有地方站(SC-8)
-  const energyH = Math.max(1, size.height - SUB_TOP_PAD);
-  const energyBars = entries.map(([minute, m]) => {
-    const total = m.o + m.i + m.u;
-    return { x: toX(minute), h: (total / maxTotal) * energyH };
-  });
+  const { bars: energyBars, maxTotal } = energyFrom(entries, size);
 
   const yTicks: YTick[] = [];
   if (upper !== null && lower !== null && ref > 0) {
