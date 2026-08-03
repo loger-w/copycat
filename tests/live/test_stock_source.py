@@ -313,6 +313,24 @@ class TestFetchDayMinutes:
         )
         assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
 
+    def test_bad_time_value_skipped_not_raised(self) -> None:
+        """Time 非數字 → 只計入 skipped(不得因共用 _taipei_minute_key 而外漏 ValueError)。"""
+        rows = [self._row("10100", "100", "1"), self._row("bad", "100", "2")]
+        pages = {"0": rows, "2": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return _ok()
+
+        src = StockQuoteSource(
+            api=_FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        assert src.fetch_day_minutes("IX0001") == {"0901": 100_000}
+
     def test_zmq_error_normalized(self) -> None:
         import zmq
 

@@ -406,16 +406,12 @@ class StockQuoteSource(TC4QuoteSource):
         skipped = 0
         for r in rows:
             try:
-                raw = str(r["Time"]).zfill(6)
-                hh = (int(raw[:2]) + 8) % 24
-                key = f"{hh:02d}{raw[2:4]}"
+                key = _taipei_minute_key(str(r["Time"]))
                 value = round(float(r["Close"]) * 1000)
             except (KeyError, ValueError):
                 skipped += 1
                 continue
-            if "1330" < key <= "1335":
-                key = "1330"
-            if not ("0901" <= key <= "1330"):
+            if key is None:  # 域外靜默丟棄(不計入 skipped)
                 continue
             minutes[key] = value
         if skipped:
