@@ -1,11 +1,10 @@
 /** @vitest-environment jsdom */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockChart } from "@/components/stock/StockChart";
 import type { StockAccum } from "@/lib/stock-accum";
+import { wrap } from "@/test-utils";
 
 const ACCUM = {
   code: "2330",
@@ -49,11 +48,6 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-
-function wrap(ui: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
-}
 
 function chart() {
   return wrap(<StockChart accum={ACCUM} code="2330" />);
