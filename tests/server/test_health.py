@@ -10,31 +10,9 @@ import datetime as _dt
 
 from fastapi.testclient import TestClient
 
-from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server import build_info
 from copycat.server.app import create_app
-
-_C = OptionContract(symbol="TC.O.TWF.TXO.202608.C.23000", cp="C", strike_millipts=23_000_000)
-_SERIES = SeriesInfo(series_id="TXO.202608", name="TXO 202608", expiry="202608", contracts=(_C,))
-
-
-class FakeTxoSource:
-    """lifespan 需要一個 QuoteSource;health 不碰行情。"""
-
-    def list_series(self) -> list[SeriesInfo]:
-        return [_SERIES]
-
-    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
-        return []
-
-    def subscribe(self, series: SeriesInfo, on_tick) -> None:
-        return None
-
-    def unsubscribe(self, series: SeriesInfo) -> None:
-        return None
-
-    def close(self) -> None:
-        return None
+from tests.helpers.fake_txo import FakeTxoSource
 
 
 def _client() -> TestClient:
