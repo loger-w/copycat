@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from copycat.live.river_backfill import collect_1k_minutes
 from copycat.live.tc4 import TC4QuoteSource, build_rt_request
+from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def all_day_window() -> tuple[str, str]:
 class CorrQuoteSource(TC4QuoteSource):
     def __init__(
         self,
-        port: str = "50774",
+        port: str = TC4_DEFAULT_PORT,
         *,
         api: Any | None = None,
         session: str | None = None,

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from copycat.data.import_neigui import run_import
+from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument("--data-dir", type=Path, default=Path("data"))
     # scan 補全後的全事件池;種子 CSV(_DEFAULT_EVENTS_CSV)只在 import-neigui 用
     p_bt.add_argument("--events-csv", type=Path, default=Path("data/events/events.csv"))
-    p_bt.add_argument("--port", default="50774")
+    p_bt.add_argument("--port", default=TC4_DEFAULT_PORT)
     p_bt.add_argument("--batch", type=int, default=0, help="0=全部")
 
     p_dt = sub.add_parser("backfill-daytrade", help="FinMind 當沖資格 + 處置期間回補")
