@@ -517,6 +517,25 @@ describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
     expect(cls).not.toContain("fill-bear");
   });
 
+  // 🔴 M5:ref = 0(TC4 送 "0",後端不轉 None)與 ref = null 同義 —— 毫元恆 > 0,
+  // 不歸一的話 `c > 0` 恆真 → 無參考價的商品被塗成一片紅
+  it("ref 為 0(不可得)→ 中性白,與 ref=null 同語意", () => {
+    const zeroRef = fromSnapshot({
+      code: "2330", seq: 1,
+      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+      vwap: 2_380_000,
+      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: 0, upper: 0, lower: 0, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={zeroRef} />);
+    hover(container);
+    const cls = screen.getByTestId("time-tag-price").getAttribute("class")!;
+    expect(cls).toContain("fill-ink");
+    expect(cls).not.toContain("fill-bull");
+    expect(cls).not.toContain("fill-bear");
+  });
+
   it("時間行維持 fill-time(黃),與價格語意分色", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     hover(container);
@@ -912,6 +931,15 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     expect(r3.container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")).toContain(
       "fill-ink-dim",
     );
+  });
+
+  // 🔴 M5:同上,現價圈的判色也要把 ref=0 當不可得(否則恆 fill-bull)
+  it("ref 為 0(不可得)→ 現價圈中性灰,不判紅綠", () => {
+    const zeroRef = { ...ACCUM, meta: { name: "台積電", ref: 0, upper: 0, lower: 0, y_vol: 100 } };
+    const { container } = wrap(<StockIntradayChart accum={zeroRef} />);
+    const cls = container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")!;
+    expect(cls).toContain("fill-ink-dim");
+    expect(cls).not.toContain("fill-bull");
   });
 
   it("尚無成交 → 不渲染圓點且不崩", () => {

@@ -265,6 +265,28 @@ describe("buildIntradayGeometry", () => {
     expect((lo + hi) / 2).toBeCloseTo(2_320_000, -2);
   });
 
+  // 🔴 M5:後端 `to_milli_units("0")` 對 ref/upper/lower 回 0 不回 None,而 TC4 真的會送 "0"
+  // (三欄多半同時 0)。0 不是價格是「不可得」,幾何入口統一歸一,此後既有分支自然走 autofit。
+  it("ref/upper/lower 皆為 0 → 視為不可得,y 域走 autofit 且不含 0", () => {
+    const g = buildIntradayGeometry(
+      {
+        minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]),
+        meta: { ...META, ref: 0, upper: 0, lower: 0 },
+      },
+      { width: 270, height: 100 },
+    );
+    const [lo, hi] = g.yDomain;
+    // 走 autofit(以首筆成交價為中心)而不是退化的 [0, 0] 常數域
+    expect(hi).toBeGreaterThan(lo);
+    expect(lo).toBeGreaterThan(0);
+    // 域涵蓋實際成交價
+    expect(lo).toBeLessThanOrEqual(2_320_000);
+    expect(hi).toBeGreaterThanOrEqual(2_436_000);
+    // ref=0 不得留在刻度上變成假價位
+    expect(g.yTicks.every((t) => t.priceMilli > 0)).toBe(true);
+    expect(g.hasRef).toBe(false);
+  });
+
   // 🔴 SC-4:刻度由「以 5% 為分隔的 5 點」改為 ±2/4/6/8/10% 的 11 點(2330 tick 5 元,不去重)
   it("yTicks:有漲跌停 → 11 點(0/±2/±4/±6/±8/±10%),全為合法 tick 且由上而下遞減", () => {
     const g = buildIntradayGeometry(
