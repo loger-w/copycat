@@ -1,0 +1,901 @@
+﻿diff --git a/copycat/live/stock_models.py b/copycat/live/stock_models.py
+index aa12939..9a407d9 100644
+--- a/copycat/live/stock_models.py
++++ b/copycat/live/stock_models.py
+@@ -64,6 +64,9 @@ class StockMeta:
+     ref_milli: int | None  # 參考價(除權息已反映,design:不自算前收)
+     upper_milli: int | None
+     lower_milli: int | None
++    # **刻意保留:目前無消費者**(M3 已把 `meta.y_close` 移出 REST snapshot)。
++    # 這是 TC4 `YClosedPrice` 的唯一落點,也是「除權息日」的唯一判別來源
++    # (ref_milli 已反映除權息,兩者不等 = 有除權息)—— parse 鏈砍掉就再也拿不回來。
+     y_close_milli: int | None
+     y_volume: int | None
+     open_time: str  # HH:MM:SS(交易所當地時間)
+diff --git a/copycat/live/stock_state.py b/copycat/live/stock_state.py
+index cca2b77..630003d 100644
+--- a/copycat/live/stock_state.py
++++ b/copycat/live/stock_state.py
+@@ -41,8 +41,6 @@ class StockDayState:
+     ticks: deque[StockTick] = field(default_factory=lambda: deque(maxlen=_TICKS_MAXLEN))
+     book: StockBook | None = None
+     meta: StockMeta | None = None
+-    cum_inner: int = 0
+-    cum_outer: int = 0
+     vwap_milli: int | None = None
+     # 當日最高 / 最低成交價(round5 項 1)。刻意由本狀態機逐 tick 維護而不取 TC4 的
+     # HighPrice/LowPrice —— 個股 REALTIME 帶不帶那兩個欄位沒有實證(2026-07-21 probe
+@@ -62,8 +60,6 @@ class StockDayState:
+         self.seq = 0
+         self.minutes = {}
+         self.ticks = deque(maxlen=_TICKS_MAXLEN)
+-        self.cum_inner = 0
+-        self.cum_outer = 0
+         self.vwap_milli = None
+         # 高低是當日衍生狀態,與 vwap 同批清;book/meta 才是盤外要保留的靜態值
+         self.high_milli = None
+@@ -154,12 +150,12 @@ class StockDayState:
+             tick.price_milli if agg.low_milli is None else min(agg.low_milli, tick.price_milli)
+         )
+         agg.volume += tick.qty
++        # 全日累積內外盤不另存欄位:Σ(minutes.o/i) 同源且恆等,兩份並存只是多一個
++        # 會不同步的地方(M3 移除 wire 欄位後 prod 端已零讀者)
+         if tick.side == "outer":
+             agg.outer += tick.qty
+-            self.cum_outer += tick.qty
+         elif tick.side == "inner":
+             agg.inner += tick.qty
+-            self.cum_inner += tick.qty
+         else:
+             agg.unch += tick.qty
+ 
+@@ -172,13 +168,17 @@ class StockDayState:
+             if last
+             else None,
+             "vwap": self.vwap_milli,
++            # vwap 的**分母**(additive,M4)。前端要做增量 VWAP 就得先還原分子
++            # (vwap × 分母),而分母是這裡的 `_volume` = 去重剔試撮後的 Σqty ——
++            # **不是** `last.cum_vol`(TC4 的當日累積量)。兩者在有 tick 被去重
++            # 或試撮丟棄時就會岔開,拿錯的那個當分母不會報錯,只會讓 VWAP 靜默
++            # 偏移到下一次全量 refetch 為止。
++            "vol": self._volume,
+             # 高低與 vwap 同層(top-level)不進 meta:meta 是 TC4 來的靜態盤別資料
+             # (名稱 / 參考價 / 漲跌停),而高低是由成交推導的當日狀態。放這裡之後
+             # meta 為 None(只跑過回補、未收 REALTIME)時高低照樣有值。
+             "high": self.high_milli,
+             "low": self.low_milli,
+-            "cum_inner": self.cum_inner,
+-            "cum_outer": self.cum_outer,
+             "minutes": {
+                 str(k): {
+                     "c": m.close_milli,
+@@ -210,7 +210,6 @@ class StockDayState:
+                 "ref": self.meta.ref_milli,
+                 "upper": self.meta.upper_milli,
+                 "lower": self.meta.lower_milli,
+-                "y_close": self.meta.y_close_milli,
+                 "y_vol": self.meta.y_volume,
+             }
+             if self.meta
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index d658ff7..39812db 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -589,17 +589,19 @@ def create_app(
+         _valid_code(code)
+         if tf not in ("D", "1"):
+             raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
+-        # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
+-        # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
+-        try:
+-            days_n = int(days)
+-        except ValueError:
+-            raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
+         # today = 本機日界(= 台北,部署綁本機;同 overlay 的 design R6/R13)
+         today = _date.today()
+         if tf == "D":
++            # days 在日線路徑完全不參與(不進 cache/query key,D-15)→ 連驗都不驗:
++            # 對忽略的參數回 400 會讓「多帶一個沒用的 query」變成擋下日 K 的理由(M1)
+             bars = await build_daily(stock.bars_range, bars_cache, code, today)
+         else:
++            # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
++            # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
++            try:
++                days_n = int(days)
++            except ValueError:
++                raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
+             bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days_n), today)
+         return {"code": code, "tf": tf, "bars": bars}
+ 
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index 557359b..379f158 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -76,13 +76,13 @@ class StockEngine:
+         self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
+         self._dirty_watchlist: set[str] = set()
+         self._loop: asyncio.AbstractEventLoop | None = None
++        # 長駐迴圈 + 每次 rollover 的重掛 task 都進這裡:唯一持有點 = 唯一取消點,
++        # close() 的 cancel+await 鏈自然涵蓋(專用欄位存放會漏掉關機取消,且連跑
++        # 兩次 rollover 時後者覆寫前者 → 前一個 task 失去參照被中途 GC)
+         self._tasks: list[asyncio.Task[None]] = []
+         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
+         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
+         self._pool_lock = asyncio.Lock()
+-        # 只為持有參照防 GC:asyncio 不強引用 task,不留著會被中途回收
+-        # (關機時取消它是行為改動,未做 — 記 docs/next-time.md)
+-        self._resub_task: asyncio.Task[None] | None = None
+         self.tc4_status = "up"
+ 
+     # ---- 生命週期 ----
+@@ -183,10 +183,10 @@ class StockEngine:
+         snap = state.snapshot() if state is not None else StockDayState().snapshot()
+         snap["code"] = code
+         snap["no_data"] = code in self._no_data
+-        snap["tc4"] = self.tc4_status
+-        snap["backfilling"] = self._backfilling
+-        stkfut = self._map.get(code)
+-        snap["stkfut_prod"] = stkfut["prod"] if stkfut else None
++        # tc4 / backfilling **不進 snapshot**:畫面的唯一來源是 WS `status` 訊息
++        # (那邊是活碼)。同時送兩份等於讓同一個狀態有兩個真相,而 REST 那份是
++        # 請求當下的凍結值,重整時機不對就會與 WS 打架。
++        # stkfut_prod 同理零讀者(期現價差走 WS `stkfut` 訊息的 prod)。
+         return snap
+ 
+     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+@@ -233,7 +233,9 @@ class StockEngine:
+         self._generation += 1
+         self._pending_date = new_date
+         self._source.set_trade_date(new_date)
+-        self._resub_task = asyncio.get_running_loop().create_task(self._resubscribe_all())
++        # 進 `_tasks` 而非專用欄位:持有參照防 GC(asyncio 不強引用 task)之外,
++        # 關機時一併被 close() 取消,且連跑兩次 rollover 不會互相覆寫掉參照
++        self._tasks.append(asyncio.get_running_loop().create_task(self._resubscribe_all()))
+         logger.info("rollover stage1 → %s (gen=%d)", new_date, self._generation)
+ 
+     async def _resubscribe_all(self) -> None:
+@@ -493,4 +495,3 @@ class StockEngine:
+                 if state is None or state.last is None:
+                     continue
+                 self._publish(self._quote_payload(code))
+-
+diff --git a/docs/next-time.md b/docs/next-time.md
+index ad22461..2cb8ac9 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -410,34 +410,43 @@
+ 盤點 artifacts:`.claude/refactor/stock-page-dedupe-deadcode/`(三份 findings + 計畫)。
+ 以下 [behavior] 全部是 /refactor 中發現但**修了就改行為**的項目,要修走 /bug 或 /mod。
+ 
+-- [ ] **[behavior] ref=0 的「無參考價」語意不一致**(一族三處):
++- [x] **[behavior] ref=0 的「無參考價」語意不一致**(一族三處)**→ 2026-08-03 修畢
++  (mod/next-time-behavior-fixes M5,d3739cc):幾何入口 ref/upper/lower <=0 統一歸一
++  null + 元件端一次歸一;review 補抓 upper/lower=0 走 [0,0] flat 分支與 hover 價色恆 bull
++  兩處原描述沒涵蓋的失效**:
+   (a) `stock-intraday-svg.ts` `ref = input.meta?.ref ?? (prices[0] ?? 0)` 用 `??`,而後端
+   `to_milli_units("0")` 回 0 非 None → TC4 送 ReferencePrice="0" 時 ref 卡 0,autofit 分支
+   算出 yTop=hi×1.1 / yBottom=−hi×1.1 整條走勢壓上半;StockPage/OrderBook 同件事用 truthy 判。
+   (b) StockIntradayChart 的 lastTone 只擋 `ref === null`,而 `markTone` 多 `ref <= 0` 分支 —
+   ref=0 時兩者 className 分岔(Track A6 因此跳過收斂;lastTone 那份是既有不一致)。
+   修法方向:ref=0 一律視為無參考價(對齊 hasRef / tickTone / 後端 chg_pct),需 🔴 + 測試。
+-- [ ] **[behavior] 前端增量 VWAP 分母錯位**:前端用 `vwap × last.cum_vol` 還原分子再
++- [x] **[behavior] 前端增量 VWAP 分母錯位****→ 2026-08-03 修畢(M4,2208a0e+74cc449):
++  snapshot 增 additive `vol`(去重剔試撮 Σqty),前端種子 `snap.vol ?? cum_vol ?? 0`**:前端用 `vwap × last.cum_vol` 還原分子再
+   `+ msg.q` 累加,後端分母是去重剔試撮後的 Σqty ≠ cum_vol(TC4 TradeVolume)→
+   訂閱前漏單/試撮期時靜默分歧,至下次全量 refetch 才收斂(`stock-accum.ts` vs
+   `stock_state.py:139-141`)。
+-- [ ] **[behavior] `/api/stock/bars` tf=D 忽略 days 但仍對 days 做 400 驗證**(docstring
+-  說忽略;`?tf=D&days=abc` 回 BAD_DAYS)。
+-- [ ] **[behavior] DepthBar 鎖停判定仍用 `b[0]?.[0] === upper`**:市價佇列 0 價檔位會打穿
++- [x] ~~**[behavior] `/api/stock/bars` tf=D 忽略 days 但仍對 days 做 400 驗證**~~
++  **2026-08-03 修畢(M1,f322781):tf=D 路徑不再驗 days**。
++- [x] **[behavior] DepthBar 鎖停判定仍用 `b[0]?.[0] === upper`****→ 2026-08-03 修畢
++  (M6,145c462):全套對齊 OrderBook — badge best-limit + maxVol/總量 limit-only +
++  0 價顯示「市價」(spec review S-6 把原本只修 badge 的半套擋下)**:市價佇列 0 價檔位會打穿
+   (CLAUDE.md §8 2026-07-31 條;OrderBook 已改 `_best_limit_price` 思路,DepthBar 只服務
+   期貨面尚未觀測到 0 價檔位,屬潛伏不一致)。
+-- [ ] **[behavior] CandleChart 滾輪 useEffect deps 缺 dimW/dimH**(deps 只有 [total],閉包
+-  捕捉舊 dim):resize 後縮放錨點用舊寬 — 補 deps 是修 stale-closure bug,需 🔴 獨立
+-  commit + 「resize 後滾輪錨點」回歸測試(plan review R-4 裁定)。
+-- [ ] **[behavior] TickTape**:`limit`(載入更多)state 切股不歸零(StockPage 未帶 key,
+-  與 pickerOpen 的換股歸零不一致);且 `[...ticks].reverse()` 每 tick render 複製反轉 200 列。
+-- [ ] **[behavior] 後端 payload 死欄位**(前端讀取端已刪,後端仍每次算+送):
++- [x] ~~**[behavior] CandleChart 滾輪 useEffect deps 缺 dimW/dimH**~~ **2026-08-03 結案
++  (M7,c420481):spec review S-1 推翻 R-4 —— dimW = DIMS.width 模組常數、dimH 不參與
++  錨點,無可觀察 bug;deps 已補為 🔵 hygiene**。
++- [x] ~~**[behavior] TickTape**:`limit` 切股不歸零 + 每 render reverse~~ **2026-08-03
++  修畢(M8,354fc6b key={code} + 68577a0 🔵 reverse useMemo)**。
++- [x] **[behavior] 後端 payload 死欄位****→ 2026-08-03 修畢(M3,3a7cf27+a9708ba):
++  六欄移除、cum_inner/cum_outer 內部累加連帶清除;y_close_milli parse 鏈刻意保留
++  (除權息判別唯一來源,S-9);names.count/bars.code,tf 維持公開**:
+   `snapshot.stkfut_prod`(stock_engine 每 snapshot 算)、`meta.y_close`、
+   `cum_inner`/`cum_outer`、`snapshot.tc4`/`backfilling`。清除屬 wire 契約改動 → /mod;
+   `names.count` / `bars.code,tf` 為刻意公開 API 表面,不清。
+-- [ ] **[behavior] `_resub_task` 不進 `_tasks`,close() 不取消它**(重掛中的 rollover task
+-  逃過關機;本輪僅補「持有參考防 GC」註解)。
+-- [ ] **[behavior] useStockNames 錯誤路徑**:`res.json().catch(() => ({}))` 後直接
++- [x] ~~**[behavior] `_resub_task` 不進 `_tasks`,close() 不取消它**~~ **2026-08-03 修畢
++  (M2,1aaa5eb):resub task 併入 `_tasks`(覆寫失參照的同類洩漏一併解)**。
++- [x] **[behavior] useStockNames 錯誤路徑****→ 2026-08-03 修畢(M9,cdd9dbc:
++  併入 parseError)**:`res.json().catch(() => ({}))` 後直接
+   `body.detail?.error`,body 為合法 JSON `null` 時 TypeError 逸出 queryFn(錯誤訊息變
+   TypeError 文字)— 與 `lib/api-error.ts` parseError 產出不同,Track A4 因此跳過;
+   修掉即可併入 parseError。
+diff --git a/frontend/src/components/quote/DepthBar.test.tsx b/frontend/src/components/quote/DepthBar.test.tsx
+index 7690559..d74517d 100644
+--- a/frontend/src/components/quote/DepthBar.test.tsx
++++ b/frontend/src/components/quote/DepthBar.test.tsx
+@@ -112,3 +112,59 @@ describe("DepthBar 水平五檔(SC-4)", () => {
+     expect(screen.getByLabelText("成交價").textContent).toContain("—");
+   });
+ });
++
++// 🔴 M6:鎖漲跌停時 TC4 會在簿的第一檔推「市價單佇列」,價格欄是 0
++// (CLAUDE.md §8「第四處」;OrderBook 已全套修過,本檔沿用同一套規則)
++describe("DepthBar 市價 0 價檔位(M6)", () => {
++  const LOCK_BIDS: [number, number][] = [
++    [0, 200], // 市價佇列(量可以是限價量的數倍)
++    [582_000, 12],
++    [581_000, 32],
++    [580_000, 15],
++    [579_000, 8],
++  ];
++  const LOCK_ASKS: [number, number][] = [
++    [0, 90],
++    [583_000, 5],
++    [584_000, 18],
++    [585_000, 9],
++    [586_000, 24],
++  ];
++
++  it("鎖漲停 badge:比對第一個限價檔而不是 bids[0](市價佇列不得打穿判定)", () => {
++    renderBar({ bids: LOCK_BIDS, upper: 582_000 });
++    expect(screen.getByText("鎖漲停")).toBeTruthy();
++  });
++
++  it("鎖跌停 badge:賣側對稱", () => {
++    renderBar({ asks: LOCK_ASKS, lower: 583_000 });
++    expect(screen.getByText("鎖跌停")).toBeTruthy();
++  });
++
++  it("總量只算限價檔(定義不隨鎖停日改變,可跨日跨股比)", () => {
++    renderBar({ bids: LOCK_BIDS, asks: LOCK_ASKS });
++    expect(screen.getByText(/委買/).textContent).toContain("67"); // 12+32+15+8,不含市價 200
++    expect(screen.getByText(/委賣/).textContent).toContain("56"); // 5+18+9+24,不含市價 90
++  });
++
++  it("0 價檔位顯示「市價」不印 0,量照列", () => {
++    renderBar({ bids: LOCK_BIDS });
++    const cell = screen.getByLabelText("買1 市價");
++    expect(cell.textContent).toContain("市價");
++    expect(cell.textContent).toContain("200");
++    expect(screen.queryByLabelText("買1 0")).toBeNull();
++  });
++
++  it("量 bar 歸一只看限價檔,市價列自己的 bar 夾制在 100%", () => {
++    renderBar({ bids: LOCK_BIDS, asks: LOCK_ASKS });
++    // 限價最大量 = 32(買3 581,市價佔掉買1 這格),不是市價的 200
++    const limitMax = screen.getByLabelText("買3 581");
++    expect(
++      limitMax.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height,
++    ).toBe("100%");
++    const market = screen.getByLabelText("買1 市價");
++    expect(market.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
++      "100%",
++    );
++  });
++});
+diff --git a/frontend/src/components/quote/DepthBar.tsx b/frontend/src/components/quote/DepthBar.tsx
+index d0c7dd4..32881f5 100644
+--- a/frontend/src/components/quote/DepthBar.tsx
++++ b/frontend/src/components/quote/DepthBar.tsx
+@@ -1,4 +1,5 @@
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
++import { isMarketLevel } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+ 
+ /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
+@@ -40,21 +41,25 @@ function Cell({ entry, label, side, maxVol }: CellProps) {
+     );
+   }
+   const [priceMilli, qty] = entry;
++  // 市價單佇列(價格欄 0):鎖漲跌停時 TC4 推的第一檔。它沒有價格,印「市價」不印 0
++  // (照 OrderBook 既有慣例)—— 印 0 看起來像有人掛 0 元。
++  const priceText = isMarketLevel(priceMilli) ? "市價" : fmt(priceMilli);
+   return (
+     <div
+-      aria-label={`${label} ${fmt(priceMilli)}`}
++      aria-label={`${label} ${priceText}`}
+       className={cn(
+         "flex min-w-0 flex-col items-center gap-0.5 px-0.5 py-1 font-mono",
+         side === "bid" ? "text-bull" : "text-bear",
+       )}
+     >
+       <span className="text-xs text-ink">{qty}</span>
+-      <span className="text-sm">{fmt(priceMilli)}</span>
++      <span className="text-sm">{priceText}</span>
+       <span className="flex h-5 w-full items-end">
+         <span
+           data-testid="depth-vol-bar"
+           className={cn("w-full rounded-sm", side === "bid" ? "bg-bull/30" : "bg-bear/30")}
+-          style={{ height: `${Math.round((qty / maxVol) * 100)}%` }}
++          // 夾制不可省:`maxVol` 只看限價檔,而市價列的量可以遠超它(比照 OrderBook)
++          style={{ height: `${Math.min(100, Math.round((qty / maxVol) * 100))}%` }}
+         />
+       </span>
+     </div>
+@@ -64,12 +69,22 @@ function Cell({ entry, label, side, maxVol }: CellProps) {
+ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }: Props) {
+   const b = bids.slice(0, DEPTH);
+   const a = asks.slice(0, DEPTH);
+-  const maxVol = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
+-  const bidTotal = b.reduce((s, [, v]) => s + v, 0);
+-  const askTotal = a.reduce((s, [, v]) => s + v, 0);
++  // 總量與量 bar 歸一**一律只算限價量**(對齊 OrderBook,2026-07-31 user 拍板)。
++  // 市價偽檔位混進來的話,同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」
++  // —— 定義隨日子變,跨日 / 跨股比較靜默失真;量 bar 更慘,市價佇列可以是限價量的
++  // 數倍,五根限價 bar 會一起被壓成看不見的短樁。
++  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
++  const limitB = limitOnly(b);
++  const limitA = limitOnly(a);
++  const maxVol = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
++  const bidTotal = limitB.reduce((s, [, v]) => s + v, 0);
++  const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
+   const chg = last !== null && ref_ ? chgPct(last, ref_) : null;
+-  const lockedUp = upper !== null && b[0]?.[0] === upper;
+-  const lockedDown = lower !== null && a[0]?.[0] === lower;
++  // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價 0),漲停價被擠到
++  // `bids[1]` → 判定恆假、badge 靜默消失(2327 實測)。改看「該側有沒有掛在漲跌停價的
++  // 限價檔」,市價偽檔位再也打不穿它。
++  const lockedUp = upper !== null && limitB.some(([p]) => p === upper);
++  const lockedDown = lower !== null && limitA.some(([p]) => p === lower);
+ 
+   // 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
+   const bidSlots = [...Array(DEPTH).keys()].reverse();
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index ac33ddd..4137df9 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -432,7 +432,11 @@ export function CandleChart({
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     return () => el.removeEventListener("wheel", onWheel);
+-  }, [total]);
++    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
++    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
++    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
++    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
++  }, [total, dimW, dimH]);
+ 
+   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
+     const rect = e.currentTarget.getBoundingClientRect();
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index 5ccf887..0764a2c 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -517,6 +517,25 @@ describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
+     expect(cls).not.toContain("fill-bear");
+   });
+ 
++  // 🔴 M5:ref = 0(TC4 送 "0",後端不轉 None)與 ref = null 同義 —— 毫元恆 > 0,
++  // 不歸一的話 `c > 0` 恆真 → 無參考價的商品被塗成一片紅
++  it("ref 為 0(不可得)→ 中性白,與 ref=null 同語意", () => {
++    const zeroRef = fromSnapshot({
++      code: "2330", seq: 1,
++      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
++      vwap: 2_380_000,
++      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
++      ticks: [], book: null,
++      meta: { name: "台積電", ref: 0, upper: 0, lower: 0, y_vol: 100 },
++    });
++    const { container } = wrap(<StockIntradayChart accum={zeroRef} />);
++    hover(container);
++    const cls = screen.getByTestId("time-tag-price").getAttribute("class")!;
++    expect(cls).toContain("fill-ink");
++    expect(cls).not.toContain("fill-bull");
++    expect(cls).not.toContain("fill-bear");
++  });
++
+   it("時間行維持 fill-time(黃),與價格語意分色", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     hover(container);
+@@ -914,6 +933,15 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
+     );
+   });
+ 
++  // 🔴 M5:同上,現價圈的判色也要把 ref=0 當不可得(否則恆 fill-bull)
++  it("ref 為 0(不可得)→ 現價圈中性灰,不判紅綠", () => {
++    const zeroRef = { ...ACCUM, meta: { name: "台積電", ref: 0, upper: 0, lower: 0, y_vol: 100 } };
++    const { container } = wrap(<StockIntradayChart accum={zeroRef} />);
++    const cls = container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")!;
++    expect(cls).toContain("fill-ink-dim");
++    expect(cls).not.toContain("fill-bull");
++  });
++
+   it("尚無成交 → 不渲染圓點且不崩", () => {
+     const empty = fromSnapshot({
+       code: "2330", seq: 1, last: null, vwap: null,
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 92936b2..7abbaea 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -525,7 +525,10 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+ 
+   const hoverMin = hover?.min ?? null;
+   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
+-  const ref = accum.meta?.ref ?? null;
++  // **一次歸一,三處共用**(lastTone / hover 時間標籤 / shownChg)。TC4 送 "0" 時後端
++  // 原樣轉 0 不轉 null,而毫元恆 > 0 → 拿 0 當平盤比較永遠是「高於」,三處會一起
++  // 靜默塗成紅色。歸一在這裡而不是各判色點各補一次 `> 0`,是為了不讓三處各漂各的。
++  const ref = (accum.meta?.ref ?? 0) > 0 ? accum.meta!.ref : null;
+   const plotBottom = mainH - X_LABEL_H;
+ 
+   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
+@@ -535,14 +538,9 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+   // 舊後端缺 per-minute h/l 三種成因都收斂成 null = 不畫。
+   // 現價圈(SC-2):值每 tick 都變 → 畫在 ChartStatic 之外,不打穿 memo
+   const lastPrice = accum.last?.p ?? null;
+-  const lastTone =
+-    lastPrice === null || ref === null
+-      ? "fill-ink-dim"
+-      : lastPrice > ref
+-        ? "fill-bull"
+-        : lastPrice < ref
+-          ? "fill-bear"
+-          : "fill-ink-dim";
++  // 判色與極值標記同一份規則(`markTone`:高於平盤紅 / 低於綠 / 平盤與無參考價灰)——
++  // 就地再寫一次三元式的話,兩處會各自漂
++  const lastTone = lastPrice === null ? "fill-ink-dim" : markTone(lastPrice, ref);
+   const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
+   // hover 態的 shownMin 恆等於 hoverMin → 重用已取好的那一格,不再查第二次(L-3)
+   const shownAgg = hoverAgg ?? (shownMin !== null ? accum.minutes.get(shownMin) : undefined);
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index 6985e64..ad54628 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -1,6 +1,6 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StockPage } from "@/components/stock/StockPage";
+@@ -136,6 +136,48 @@ describe("StockPage", () => {
+   });
+ });
+ 
++// 🔴 M8:明細的「載入更多」筆數是 TickTape 內部 state,切股時必須跟著歸零 ——
++// 換一檔股票卻沿用上一檔展開到一半的筆數,與 pickerOpen 的換股歸零不一致
++describe("StockPage 切股時明細展開筆數歸零(M8)", () => {
++  function accumWithTicks(code: string): StockAccum {
++    return {
++      ...ACCUM,
++      code,
++      ticks: [...Array(70).keys()].map((i) => ({
++        t: `09:0${Math.floor(i / 10)}:0${i % 10}.000`,
++        p: 2_380_000,
++        q: 1,
++        side: "outer",
++      })),
++    } as unknown as StockAccum;
++  }
++
++  function rows(container: HTMLElement): number {
++    return container.querySelectorAll("tbody tr").length;
++  }
++
++  it("展開後切股 → 顯示筆數回初始值", () => {
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    const page = (code: string) => (
++      <QueryClientProvider client={client}>
++        <StockPage
++          code={code}
++          onSelect={vi.fn()}
++          stream={stream({ accum: accumWithTicks(code) })}
++        />
++      </QueryClientProvider>
++    );
++    const { container, rerender } = render(page("2330"));
++    expect(rows(container)).toBe(30);
++    fireEvent.click(screen.getByRole("button", { name: "載入更多" }));
++    expect(rows(container)).toBe(60);
++
++    // 切股(元件不 unmount,只是 props 換了)
++    rerender(page("2317"));
++    expect(rows(container)).toBe(30);
++  });
++});
++
+ // 🟢 round4 項 4:搜尋改預覽後,「加入自選」的入口移到分時圖上方的報價 header
+ describe("StockPage 漲跌停亮燈(round6 項 3)", () => {
+   const atLimit = (p: number) =>
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index be236da..9f8c7ce 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -194,7 +194,11 @@ export function StockPage({ code, onSelect, stream }: Props) {
+                     />
+                   </div>
+                   <div className="min-h-0 min-w-0 flex-[2]">
+-                    <TickTape ticks={accum.ticks} ref_={meta?.ref ?? null} />
++                    {/* `key={code}`:明細的「載入更多」筆數是 TickTape 內部 state,
++                        換股時元件不 unmount → 展開到一半的筆數會跟著新股票走
++                        (同一頁的 pickerOpen 是換股歸零的,兩者語意該一致)。
++                        用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。 */}
++                    <TickTape key={code} ticks={accum.ticks} ref_={meta?.ref ?? null} />
+                   </div>
+                 </div>
+               </>
+diff --git a/frontend/src/components/stock/TickTape.tsx b/frontend/src/components/stock/TickTape.tsx
+index c08ccb8..9a4e947 100644
+--- a/frontend/src/components/stock/TickTape.tsx
++++ b/frontend/src/components/stock/TickTape.tsx
+@@ -1,4 +1,4 @@
+-import { useState } from "react";
++import { useMemo, useState } from "react";
+ 
+ import { fmt } from "@/lib/format";
+ import type { TickRow } from "@/lib/stock-accum";
+@@ -21,7 +21,10 @@ function volTone(side: string): string {
+ 
+ export function TickTape({ ticks, ref_ }: { ticks: TickRow[]; ref_: number | null }) {
+   const [limit, setLimit] = useState(PAGE);
+-  const rows = [...ticks].reverse().slice(0, limit);
++  // reverse 吃整份 ticks(上限 200 筆),而 hover / 展開等純 UI state 變動也會 re-render
++  // —— 複製 + 反轉的成本與 ticks 綁定就好,不必跟著每次 render 重付。
++  const newestFirst = useMemo(() => [...ticks].reverse(), [ticks]);
++  const rows = newestFirst.slice(0, limit);
+ 
+   if (rows.length === 0) {
+     return (
+diff --git a/frontend/src/hooks/useStockNames.test.tsx b/frontend/src/hooks/useStockNames.test.tsx
+index 5ace271..c459d85 100644
+--- a/frontend/src/hooks/useStockNames.test.tsx
++++ b/frontend/src/hooks/useStockNames.test.tsx
+@@ -51,4 +51,13 @@ describe("useStockNames", () => {
+     await waitFor(() => expect(hook.result.current.isError).toBe(true), { timeout: 5000 });
+     expect((hook.result.current.error as Error).message).toBe("NOT_READY");
+   });
++
++  // 🔴 M9:`null` 是合法 JSON,`.catch(() => ({}))` 攔不到它 —— 存取 `null.detail`
++  // 會拋 TypeError 逸出 queryFn,錯誤訊息變成 TypeError 文字而不是錯誤碼
++  it("body 為合法 JSON null → 退回 HTTP_<status>,不讓 TypeError 逸出", async () => {
++    vi.stubGlobal("fetch", vi.fn(async () => new Response("null", { status: 500 })));
++    const hook = renderHook(() => useStockNames(), { wrapper: wrap });
++    await waitFor(() => expect(hook.result.current.isError).toBe(true), { timeout: 5000 });
++    expect((hook.result.current.error as Error).message).toBe("HTTP_500");
++  });
+ });
+diff --git a/frontend/src/hooks/useStockNames.ts b/frontend/src/hooks/useStockNames.ts
+index d27667f..97ac33c 100644
+--- a/frontend/src/hooks/useStockNames.ts
++++ b/frontend/src/hooks/useStockNames.ts
+@@ -1,5 +1,6 @@
+ import { useQuery } from "@tanstack/react-query";
+ 
++import { parseError } from "@/lib/api-error";
+ import type { StockName } from "@/lib/stock-search";
+ 
+ /** 全市場代號↔名稱表(搜尋提示列用;round4 項 1)。
+@@ -8,10 +9,10 @@ import type { StockName } from "@/lib/stock-search";
+  *  `staleTime: Infinity` 一次載入就好,不需要 refresh 慣例的 `?refresh=true`。 */
+ async function fetchStockNames(): Promise<StockName[]> {
+   const res = await fetch("/api/stock/names");
+-  if (!res.ok) {
+-    const body = (await res.json().catch(() => ({}))) as { detail?: { error?: string } };
+-    throw new Error(body.detail?.error ?? `HTTP_${res.status}`);
+-  }
++  // 走共用的 parseError(never-raise):行內的 `.json().catch(() => ({}))` 只擋得住
++  // 「不是 JSON」,擋不住「是 JSON 的 null」—— 那時存取 detail 會把 TypeError
++  // 拋出 queryFn,畫面拿到的是解析失敗的訊息而不是錯誤碼。
++  if (!res.ok) throw new Error(await parseError(res));
+   const body = (await res.json()) as { names?: StockName[] };
+   // 後端表不可用時回空陣列(不 500);欄位缺失也一律當空表 —— 提示列不出現,
+   // 但「直接打完整股號 Enter 新增」那條路徑照樣可用(白名單 W-4)
+diff --git a/frontend/src/lib/stock-accum.test.ts b/frontend/src/lib/stock-accum.test.ts
+index abfe0be..cee22e5 100644
+--- a/frontend/src/lib/stock-accum.test.ts
++++ b/frontend/src/lib/stock-accum.test.ts
+@@ -133,6 +133,22 @@ describe("applyTick", () => {
+     expect(acc.vwap).toBe(2_390_000);
+   });
+ 
++  it("vwap 分母種子取 snapshot 的 vol(不是 last.cum_vol)", () => {
++    // 後端 vwap 分母 = `_volume`(去重剔試撮後的 Σqty),與 `last.cum_vol`
++    // (TC4 累積量)是兩個口徑;拿錯的當分母不會報錯,只會靜默偏移。
++    let acc = fromSnapshot({ ...SNAP, vwap: 100_000, last: { p: 100_000, t: "09:01:30.000", cum_vol: 80 }, vol: 50 });
++    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 200_000, q: 10, side: "outer", seq: 4 });
++    // 正確:(100_000×50 + 200_000×10) / (50+10) = 116_667
++    // 讀 cum_vol 的錯誤實作:(100_000×80 + 200_000×10) / 90 = 111_111
++    expect(acc.vwap).toBe(Math.round((100_000 * 50 + 200_000 * 10) / 60));
++  });
++
++  it("snapshot 無 vol(舊後端)→ fallback last.cum_vol", () => {
++    let acc = fromSnapshot(SNAP); // vwap 2380, cum_vol 10, 無 vol
++    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 2_400_000, q: 10, side: "outer", seq: 4 });
++    expect(acc.vwap).toBe(2_390_000);
++  });
++
+   it("keeps tick tape bounded to latest 200 rows", () => {
+     let acc = fromSnapshot({ ...SNAP, ticks: [] });
+     for (let i = 0; i < 250; i++) {
+diff --git a/frontend/src/lib/stock-accum.ts b/frontend/src/lib/stock-accum.ts
+index 3de1c63..95a4c4c 100644
+--- a/frontend/src/lib/stock-accum.ts
++++ b/frontend/src/lib/stock-accum.ts
+@@ -92,6 +92,8 @@ interface SnapshotShape {
+   meta: StockMeta | null;
+   high?: number | null;
+   low?: number | null;
++  /** vwap 的分母(後端 `_volume` = 去重剔試撮後的 Σqty);**選填** —— 舊後端沒給 */
++  vol?: number | null;
+   no_data?: boolean;
+ }
+ 
+@@ -100,7 +102,11 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+   for (const [k, v] of Object.entries(snap.minutes ?? {})) {
+     minutes.set(Number(k), { ...v, h: v.h ?? null, l: v.l ?? null });
+   }
+-  const volume = snap.last?.cum_vol ?? 0;
++  // vwap 的分子要由 `vwap × 分母` 還原,分母是後端的 `vol`(去重剔試撮後的 Σqty)
++  // —— **不是** `last.cum_vol`(TC4 當日累積量)。兩者在有 tick 被去重或試撮丟棄時
++  // 就會岔開,拿錯的當分母不會報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
++  // `?? cum_vol` 是舊後端(還沒送 vol)的相容路徑。
++  const volume = snap.vol ?? snap.last?.cum_vol ?? 0;
+   return {
+     code: snap.code ?? "",
+     seq: snap.seq,
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index e997142..687546e 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -265,6 +265,28 @@ describe("buildIntradayGeometry", () => {
+     expect((lo + hi) / 2).toBeCloseTo(2_320_000, -2);
+   });
+ 
++  // 🔴 M5:後端 `to_milli_units("0")` 對 ref/upper/lower 回 0 不回 None,而 TC4 真的會送 "0"
++  // (三欄多半同時 0)。0 不是價格是「不可得」,幾何入口統一歸一,此後既有分支自然走 autofit。
++  it("ref/upper/lower 皆為 0 → 視為不可得,y 域走 autofit 且不含 0", () => {
++    const g = buildIntradayGeometry(
++      {
++        minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]),
++        meta: { ...META, ref: 0, upper: 0, lower: 0 },
++      },
++      { width: 270, height: 100 },
++    );
++    const [lo, hi] = g.yDomain;
++    // 走 autofit(以首筆成交價為中心)而不是退化的 [0, 0] 常數域
++    expect(hi).toBeGreaterThan(lo);
++    expect(lo).toBeGreaterThan(0);
++    // 域涵蓋實際成交價
++    expect(lo).toBeLessThanOrEqual(2_320_000);
++    expect(hi).toBeGreaterThanOrEqual(2_436_000);
++    // ref=0 不得留在刻度上變成假價位
++    expect(g.yTicks.every((t) => t.priceMilli > 0)).toBe(true);
++    expect(g.hasRef).toBe(false);
++  });
++
+   // 🔴 SC-4:刻度由「以 5% 為分隔的 5 點」改為 ±2/4/6/8/10% 的 11 點(2330 tick 5 元,不去重)
+   it("yTicks:有漲跌停 → 11 點(0/±2/±4/±6/±8/±10%),全為合法 tick 且由上而下遞減", () => {
+     const g = buildIntradayGeometry(
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index ed293cc..9fa28d9 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -249,9 +249,17 @@ export function buildEnergyBars(
+ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
+   const entries = windowedEntries(input.minutes);
+   const prices = entries.map(([, m]) => m.c).filter((p) => p > 0);
+-  const ref = input.meta?.ref ?? (prices.length ? prices[0]! : 0);
+-  const upper = input.meta?.upper ?? null;
+-  const lower = input.meta?.lower ?? null;
++  // **幾何入口統一歸一**:TC4 會送 "0",後端 `to_milli_units` 原樣轉成 0 而不是 None,
++  // 三欄多半同時為 0。毫元價格恆 > 0,所以 0 只可能是「不可得」——
++  // 不在這裡收乾淨的話它會同時打穿三處而且全部靜默:y 域走
++  // `upper !== null && lower !== null` 分支得到退化的 [0,0](flat 常數 toY)、
++  // yTicks 的 `ref > 0` 退化成 3 格 fallback 且印出假價位 0、判色一律恆 bull。
++  // 歸一成 null 之後,既有的「缺漲跌停 → autofit」「無 ref → 不填色」分支自然接手。
++  const norm = (v: number | null | undefined): number | null => ((v ?? 0) > 0 ? v! : null);
++  const metaRef = norm(input.meta?.ref);
++  const ref = metaRef ?? (prices.length ? prices[0]! : 0);
++  const upper = norm(input.meta?.upper);
++  const lower = norm(input.meta?.lower);
+ 
+   let yTop: number;
+   let yBottom: number;
+@@ -347,7 +355,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+ 
+   // 「真的有昨收」才有平盤可言 —— ref 的 fallback 是首筆成交價,拿它當平盤畫紅綠填色
+   // 會把「開盤後漲跌」誤指為「相對昨收漲跌」(SC-2.4)。
+-  const hasRef = (input.meta?.ref ?? 0) > 0;
++  const hasRef = metaRef !== null;
+   const refY = toY(ref);
+   // 這裡的點串是行內展開版(頭尾各補一個 refY 錨點,不是純 line.map),
+   // 精度必須與 lib/svg-points.ts 的 pts() 一致(皆 toFixed(1))。
+diff --git a/tests/live/test_stock_state.py b/tests/live/test_stock_state.py
+index efc8c4e..15ee489 100644
+--- a/tests/live/test_stock_state.py
++++ b/tests/live/test_stock_state.py
+@@ -62,8 +62,10 @@ class TestAggregation:
+         assert m1.volume == 14
+         assert m1.outer == 10
+         assert m1.inner == 4
+-        assert st.cum_outer == 16
+-        assert st.cum_inner == 4
++        m2 = st.minutes[9 * 60 + 2]
++        # 全日累積走 Σ(minutes) —— `cum_outer`/`cum_inner` 欄位已隨 M3 移除
++        assert m1.outer + m2.outer == 16
++        assert m1.inner + m2.inner == 4
+         # VWAP = (2380*10 + 2390*4 + 2400*6) / 20 = 47760/20 = 2388.0 元
+         assert st.vwap_milli == 2_388_000
+ 
+@@ -74,9 +76,47 @@ class TestAggregation:
+         assert snap["seq"] == 1
+         assert snap["last"]["p"] == 2_380_000
+         assert snap["vwap"] == 2_380_000
+-        assert snap["cum_outer"] == 10
++        assert "cum_outer" not in snap  # M3:退出 wire,累積量由 minutes 還原
++        assert snap["minutes"]["657"]["o"] == 10
+         assert len(snap["ticks"]) == 1
+-        assert snap["minutes"]
++
++    def test_snapshot_carries_vwap_denominator(self) -> None:
++        """M4:vwap 的分母是「去重剔試撮後的 Σqty」,與 `last.cum_vol`(TC4 累積量)
++        不同源。前端拿 cum_vol 當分母還原分子 → 兩者不等時增量 VWAP 靜默偏移,
++        所以分母必須由後端顯式給。"""
++        st = StockDayState()
++        st.ingest(_tick(30, qty=10, price=2_380_000))
++        st.ingest(_tick(31, qty=5, price=2_400_000))
++        assert st.ingest(_tick(31, qty=99)) is False  # 去重丟棄不進分母
++        assert st.ingest(_tick(40, qty=99, trial=True)) is False  # 試撮同理
++        snap = st.snapshot()
++        assert snap["vol"] == 15
++        assert snap["last"]["cum_vol"] == 31  # 兩個口徑本來就不等
++
++    def test_snapshot_omits_dead_wire_fields(self) -> None:
++        """M3:cum_inner/cum_outer/meta.y_close 前端零讀取 → 退出 wire。
++        內外盤累積量仍可由 `minutes` 的 i/o 還原(能量副圖本來就讀那一份)。"""
++        st = StockDayState()
++        st.ingest(_tick(10, qty=10, side="outer"))
++        st.update_meta(
++            StockMeta(
++                name="台積電",
++                ref_milli=2_320_000,
++                upper_milli=2_550_000,
++                lower_milli=2_090_000,
++                y_close_milli=2_320_000,
++                y_volume=100,
++                open_time="09:00:00",
++                close_time="13:30:00",
++            )
++        )
++        snap = st.snapshot()
++        assert "cum_inner" not in snap
++        assert "cum_outer" not in snap
++        assert snap["meta"] is not None
++        assert "y_close" not in snap["meta"]
++        assert snap["meta"]["y_vol"] == 100  # 同層仍在的欄位不受波及
++        assert snap["minutes"]["657"]["o"] == 10  # 累積量的還原來源
+ 
+ 
+ class TestMinuteHighLow:
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 5ab474c..d1a6cbf 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -204,7 +204,9 @@ class TestRollover:
+         await _drain(engine)
+         snap = engine.snapshot("2330")
+         assert snap["last"]["cum_vol"] == 50  # reset 後首筆被 ingest,不被 stale-drop
+-        assert snap["cum_outer"] == 1
++        # 「reset 後首筆 ingest 且判到側」的唯一證明(M3 前為 snap["cum_outer"];
++        # 該欄位退出 wire 後改讀 minutes 的同源聚合,行為鎖不變)
++        assert snap["minutes"]["657"]["o"] == 1
+         await engine.close()
+ 
+ 
+@@ -294,6 +296,42 @@ class TestStreamAndStatus:
+         await engine.close()
+ 
+ 
++class TestSnapshotShape:
++    """M3:REST snapshot 只送有消費者的欄位。"""
++
++    async def test_snapshot_omits_dead_wire_fields(self) -> None:
++        """tc4 / backfilling 的畫面來源是 WS status 訊息(仍是活碼),snapshot 這三個
++        欄位前端零讀取;stkfut_prod 更是每次 snapshot 白算一次 map 查找。"""
++        engine, _ = await _make()
++        await engine.set_main("2330")
++        await _drain(engine)
++        snap = engine.snapshot("2330")
++        assert "tc4" not in snap
++        assert "backfilling" not in snap
++        assert "stkfut_prod" not in snap
++        assert snap["code"] == "2330"  # 仍在的欄位不受波及
++        assert snap["no_data"] is False
++        await engine.close()
++
++    async def test_status_message_still_carries_tc4_and_backfilling(self) -> None:
++        """同名活碼護欄:WS status 訊息是畫面「回補中…」與連線徽章的唯一來源。"""
++        engine, src = await _make()
++        stream = engine.stream()
++        assert src.on_reconnect is not None
++        src.on_reconnect()
++        await _drain(engine)
++        got: list[dict] = []
++        try:
++            while True:
++                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
++        except (TimeoutError, asyncio.TimeoutError):
++            pass
++        status = next(m for m in got if m["type"] == "status")
++        assert status["tc4"] == "up"
++        assert status["backfilling"] is None
++        await engine.close()
++
++
+ class TestWatchlistQuoteSeed:
+     """round4 項 4:側欄開頁 / 盤後全是 `-` 的根因 —— quote 只有 tick 驅動的生產點,
+     新 client 連上時沒有任何歷史訊息可收。修在 stream() 接點(開頁與重連天然自癒),
+@@ -470,7 +508,9 @@ class TestReviewFixes:
+         await engine.set_main("5483")
+         await _drain(engine)
+         assert "5483" in src.backfills  # worker 仍活著
+-        assert engine.snapshot("5483")["backfilling"] is None  # 清乾淨
++        # backfilling 已退出 REST snapshot(M3),改讀 engine 內部態 —— 鎖的行為
++        # (例外後 `_backfilling` 不會永久卡住)不變
++        assert engine._backfilling is None  # 清乾淨
+ 
+     async def test_weekend_makeup_day_fast_path_rollover(self) -> None:
+         # CR5:無 checkpoint(週六補市)下,新日 tick 直接觸發兩段式
+@@ -500,6 +540,28 @@ class TestReviewFixes:
+         await _drain(engine)
+         assert src.subscribed.count("2330") >= 2  # 背景重掛完成
+ 
++    async def test_close_cancels_pending_resubscribe_task(self) -> None:
++        """M2:關機要取消 in-flight 的重掛 task(否則 loop 收掉時它還掛著)。
++
++        pending 的製造刻意用 `_pool_lock` 而非 `subscribe_gate`:後者會讓 task 已經
++        進到 `to_thread` 的阻塞裡,cancel 等不回來 → 測試自己死鎖。卡在
++        `async with self._pool_lock` 時取消才乾淨。
++        """
++        engine, _ = await _make()
++        await engine.set_main("2330")
++        await _drain(engine)
++        await engine._pool_lock.acquire()
++        before = asyncio.all_tasks()
++        engine.rollover_stage1("2026-07-22")
++        created = asyncio.all_tasks() - before
++        assert len(created) == 1
++        resub = created.pop()
++        await asyncio.sleep(0.05)  # 讓它跑到 pool_lock 卡住
++        assert not resub.done()
++        await engine.close()
++        assert resub.cancelled()
++        engine._pool_lock.release()
++
+     async def test_concurrent_watchlist_removal_keeps_main_subscribed(self) -> None:
+         # CR2:並發「移出自選 + 設為主圖」不得把主圖檔退訂 / 弄丟 refs
+         engine, src = await _make()
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index ad9dd68..cced14e 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -460,6 +460,16 @@ class TestBarsRoute:
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "BAD_DAYS"
+ 
++    def test_daily_ignores_days_even_when_unparsable(self, tmp_path: Path) -> None:
++        """tf=D 忽略 days(對齊 docstring / D-15):壞 days 不該擋下日 K(M1)。"""
++        client, fake = make_client(tmp_path)
++        fake.bars_result = [self._bar("2026-07-27")]
++        with client:
++            r = client.get("/api/stock/bars/2330?tf=D&days=abc")
++            assert r.status_code == 200
++            assert r.json()["tf"] == "D"
++            assert r.json()["bars"]
++
+     def test_tc4_down_returns_empty_200(self, tmp_path: Path) -> None:
+         """engine 層降級空(不是 502)—— 前端顯示「無 K 線資料」而非炸掉。"""
+         client, fake = make_client(tmp_path)
