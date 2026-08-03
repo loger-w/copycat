@@ -249,9 +249,17 @@ export function buildEnergyBars(
 export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
   const entries = windowedEntries(input.minutes);
   const prices = entries.map(([, m]) => m.c).filter((p) => p > 0);
-  const ref = input.meta?.ref ?? (prices.length ? prices[0]! : 0);
-  const upper = input.meta?.upper ?? null;
-  const lower = input.meta?.lower ?? null;
+  // **幾何入口統一歸一**:TC4 會送 "0",後端 `to_milli_units` 原樣轉成 0 而不是 None,
+  // 三欄多半同時為 0。毫元價格恆 > 0,所以 0 只可能是「不可得」——
+  // 不在這裡收乾淨的話它會同時打穿三處而且全部靜默:y 域走
+  // `upper !== null && lower !== null` 分支得到退化的 [0,0](flat 常數 toY)、
+  // yTicks 的 `ref > 0` 退化成 3 格 fallback 且印出假價位 0、判色一律恆 bull。
+  // 歸一成 null 之後,既有的「缺漲跌停 → autofit」「無 ref → 不填色」分支自然接手。
+  const norm = (v: number | null | undefined): number | null => ((v ?? 0) > 0 ? v! : null);
+  const metaRef = norm(input.meta?.ref);
+  const ref = metaRef ?? (prices.length ? prices[0]! : 0);
+  const upper = norm(input.meta?.upper);
+  const lower = norm(input.meta?.lower);
 
   let yTop: number;
   let yBottom: number;
@@ -347,7 +355,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
 
   // 「真的有昨收」才有平盤可言 —— ref 的 fallback 是首筆成交價,拿它當平盤畫紅綠填色
   // 會把「開盤後漲跌」誤指為「相對昨收漲跌」(SC-2.4)。
-  const hasRef = (input.meta?.ref ?? 0) > 0;
+  const hasRef = metaRef !== null;
   const refY = toY(ref);
   // 這裡的點串是行內展開版(頭尾各補一個 refY 錨點,不是純 line.map),
   // 精度必須與 lib/svg-points.ts 的 pts() 一致(皆 toFixed(1))。
