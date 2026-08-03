@@ -1,0 +1,25 @@
+16:36:38 ===== trial 1 =====
+16:36:49 started pid=7864 log=trial2_restart.log
+16:36:59   seq=145 silent=none
+16:36:59   RESULT trial 1: seq=145 silent=none
+16:36:59   log[subscribe]: 2026-07-30 16:36:51,244 copycat.live.tc4 INFO subscribed 451 symbols (series=TXZ.202607)
+16:36:59   log[failed]: 2026-07-30 16:36:53,682 copycat.capital.client ERROR Capital init failed: RuntimeError: Login: SK_ERROR_TELNET_LOGINSERVER_FAIL
+16:36:59 ===== trial 2 =====
+16:37:09 started pid=19704 log=trial3_restart.log
+16:37:19   seq=150 silent=none
+16:37:19   RESULT trial 2: seq=150 silent=none
+16:37:19   log[subscribe]: 2026-07-30 16:37:11,550 copycat.live.tc4 INFO subscribed 451 symbols (series=TXZ.202607)
+16:37:19   log[failed]: 2026-07-30 16:37:13,945 copycat.capital.client ERROR Capital init failed: RuntimeError: Login: SK_ERROR_TELNET_LOGINSERVER_FAIL
+16:37:19 ===== trial 3 =====
+16:37:29 started pid=22236 log=trial4_restart.log
+16:37:39   seq=99 silent=none
+16:37:39   RESULT trial 3: seq=99 silent=none
+16:37:39   log[subscribe]: 2026-07-30 16:37:31,817 copycat.live.tc4 INFO subscribed 451 symbols (series=TXZ.202607)
+16:37:39   log[failed]: 2026-07-30 16:37:34,218 copycat.capital.client ERROR Capital init failed: RuntimeError: Login: SK_ERROR_TELNET_LOGINSERVER_FAIL
+16:37:39 ===== trial 4 =====
+16:37:49 started pid=4064 log=trial5_restart.log
+16:37:59   seq=125 silent=none
+16:37:59   RESULT trial 4: seq=125 silent=none
+16:37:59   log[subscribe]: 2026-07-30 16:37:52,203 copycat.live.tc4 INFO subscribed 451 symbols (series=TXZ.202607)
+16:37:59   log[failed]: 2026-07-30 16:37:54,636 copycat.capital.client ERROR Capital init failed: RuntimeError: Login: SK_ERROR_TELNET_LOGINSERVER_FAIL
+16:37:59 done — server left running

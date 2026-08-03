@@ -1,0 +1,14 @@
+{
+  "round": 2,
+  "reviewer": "design-reviewer",
+  "verdict": "1 P0 / 4 P1 / 1 P2",
+  "findings": [
+    {"id": "F1", "severity": "P0", "section": "§2.3/§2.4", "summary": "rollover 與 in-flight 回補 race:owner guard 擋不住舊日回補污染新日狀態", "resolution": "accepted — v3 回補 job 帶 day-generation,rollover bump + 作廢 in-flight;套用 guard = owner 一致 ∧ generation 一致 + 測試(回補中 rollover → 舊結果不落地)"},
+    {"id": "F2", "severity": "P1", "section": "§2.1/§2.4", "summary": "rollover 靠 TradeDate 但 StockTick 無日期欄;time_utc/time 欄名時區矛盾", "resolution": "accepted — v3 StockTick 加 trade_date(台北),欄名統一 time(已台北化)"},
+    {"id": "F3", "severity": "P1", "section": "§2.2/§2.4/§4", "summary": "seq 回退判定與 refetch 期間 WS 交錯的一致性未定義", "resolution": "accepted — v3 跳號判定 next != last+1;snapshot 套用後丟 seq ≤ S 的 WS 訊息;hooks 測試補交錯案例"},
+    {"id": "F4", "severity": "P1", "section": "§2.3/§2.4", "summary": "REQ 互斥只涵蓋回補 worker,SUB/UNSUB 與收割交錯未排除", "resolution": "accepted — v3 全部 REQ 過單一互斥(tc4 _session_req 同款);收割中 SUB 排隊頁間插入"},
+    {"id": "F5", "severity": "P1", "section": "§2.1/§7", "summary": "未驗證 TradeStatus 放 OR 丟棄路徑,值域外正常值 → 整檔靜默消失", "resolution": "accepted — v3 丟棄只以時間窗為準;TradeStatus != 0 先 logger.warning 觀測,實測值域後才升級"},
+    {"id": "F6", "severity": "P2", "section": "§2.4", "summary": "非交易日 08:00 rollover 清空畫面且無資料可補", "resolution": "accepted — v3 rollover 僅在首筆新日 tick 或台北日為交易日時觸發,非交易日保留上一日狀態"}
+  ],
+  "p2_summary": "round 1 六條修訂核實為真閉合;冷門股健檢假設與 R5 同批盤後 probe 收斂"
+}

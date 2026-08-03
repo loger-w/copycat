@@ -1,0 +1,12 @@
+{
+  "trigger": "branch-lifecycle 收尾節步驟 3:self_review_head(284977b)..HEAD 非空(設計精修 commit)→ 補一輪 medium review 於增量 diff",
+  "findings": [
+    {
+      "severity": "P1", "verdict": "CONFIRMED(reviewer 以 twMerge 實呼叫 + RTL 渲染實證)",
+      "file": "frontend/src/components/QuoteTable.tsx",
+      "claim": "tailwind-merge 將 border-accent(全側 border-color group)與 border-x-line 判為衝突,ATM 列履約價脊柱 class 被靜默移除",
+      "resolution": "accepted — 紅測試先行(64406b0 鎖 ATM 列保留 border-x-line)→ ATM 改 side-specific border-b-accent(9a231c2);vitest 42/tsc/eslint 綠"
+    }
+  ],
+  "also_verified_clean": "ratioTone 門檻與 null 分支、cursor circle cy 恆在 plot 區內(|pnl| ≤ yMax 數學保證)、border-x-line/bg-bg-deep/50/rounded-xs 皆為合法 utility(vite build 產物核實)"
+}

@@ -1,0 +1,13 @@
+{
+  "round": 1,
+  "focus": "implementation bug + missing-from-spec",
+  "verdict": "0 P0 / 5 P1 / 13 P2(彙總)— accepted 5 ≤ 5 且無 P0,修復後單輪退場",
+  "findings": [
+    {"id": "CR1", "severity": "P1", "file": "useStockStream.ts", "summary": "refetch 單飛丟棄並發需求:切檔撞 in-flight refetch → 新檔 GET 永不發出、set_main 不觸發", "resolution": "accepted — pendingRef 合併不丟棄,finally 補發;紅測試先行"},
+    {"id": "CR2", "severity": "P1", "file": "stock_engine.py", "summary": "訂閱池共享狀態 to_thread 與 loop 並發讀寫無鎖,refcount check-then-act 交錯", "resolution": "accepted — asyncio.Lock 序列化 set_watchlist/set_main/重掛;併發 regression 測試"},
+    {"id": "CR3", "severity": "P1", "file": "stock_engine.py", "summary": "rollover_stage1 重掛與 _release_stkfut 在 event loop 上同步 ZMQ REQ,降級情境凍結全 server", "resolution": "accepted — 重掛移 background task + to_thread;stage1 同步部分只留 bump/pending/set_trade_date"},
+    {"id": "CR4", "severity": "P1", "file": "stock_engine.py", "summary": "_backfill_worker 只 except ConnectionError,其他例外殺死 worker 永不回補", "resolution": "accepted — except Exception 續行 + 清 _backfilling + status 推播;紅測試 ValueError 案例"},
+    {"id": "CR5", "severity": "P1", "file": "stock_engine.py", "summary": "design §2.4 快路徑未實作:週六補市日(weekday≥5)rollover 整鏈不觸發,全日 stale-drop 凍結", "resolution": "accepted — _handle_quote 補快路徑:新日 tick 且無 pending → 先 stage1 再 stage2;紅測試"}
+  ],
+  "p2_summary": "13 條彙總(hook pending 連續性、VWAP 還原近似、回補列去重、reset book 字面差、tc4_status 復位路徑、backfill 逾時無 log、refetch unhandled rejection、snapshot 全量序列化、健檢時點、TICKS 不退訂、F: 空 state、parse 欄位字面、watchlist 啟動阻塞)— 無行為級急迫項,入 next-time"
+}

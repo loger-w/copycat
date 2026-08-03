@@ -1,0 +1,2 @@
+INFO copycat.data.label_events: label-events(five_tigers):{'labeled_hit': 2427, 'labeled_no_hit': 7406, 'uncovered': 38, 'already_labeled': 1029, 'verified_matched': 0, 'verified_mismatched': 0, 'verified_uncovered': 0}
+標籤完成:命中 2427、無命中 7406、無分點檔 38、既有標籤 1029

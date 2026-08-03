@@ -1,0 +1,96 @@
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 200/10900(skipped=2 empty=0)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 400/10900(skipped=2 empty=0)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 600/10900(skipped=2 empty=0)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 800/10900(skipped=2 empty=0)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 1000/10900(skipped=2 empty=0)
+WARNING copycat.data.backfill_brokers: brokers 1780 2026-06-17 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 1200/10900(skipped=2 empty=1)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 1400/10900(skipped=2 empty=1)
+WARNING copycat.data.backfill_brokers: brokers 3158 2025-11-17 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 1600/10900(skipped=2 empty=2)
+WARNING copycat.data.backfill_brokers: brokers 3485 2026-05-06 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 1800/10900(skipped=2 empty=3)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 2000/10900(skipped=2 empty=3)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 2200/10900(skipped=2 empty=3)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 2400/10900(skipped=2 empty=3)
+WARNING copycat.data.backfill_brokers: brokers 5547 2026-02-03 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6028 2026-03-30 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 2600/10900(skipped=2 empty=5)
+WARNING copycat.data.backfill_brokers: brokers 6474 2025-11-25 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 2800/10900(skipped=2 empty=6)
+WARNING copycat.data.backfill_brokers: brokers 6725 2025-12-30 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6730 2025-12-10 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6831 2026-05-11 ¥¢±Ñ(²Ä 1/3 ¦¸): TimeoutError
+WARNING copycat.data.backfill_brokers: brokers 6884 2025-12-17 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6907 2026-01-29 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6910 2025-12-11 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 3000/10900(skipped=2 empty=11)
+WARNING copycat.data.backfill_brokers: brokers 6961 2026-01-22 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6971 2025-10-02 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6983 2026-05-25 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 6983 2026-05-26 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7547 2025-07-29 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7716 2025-10-28 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7717 2025-11-17 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7717 2025-11-18 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7738 2025-10-16 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7751 2025-08-26 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7753 2025-08-11 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7757 2025-10-20 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7767 2025-12-10 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7772 2025-09-02 ¥¢±Ñ(²Ä 1/3 ¦¸): TimeoutError
+WARNING copycat.data.backfill_brokers: brokers 7777 2025-12-22 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7792 2026-01-28 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7794 2026-04-20 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7805 2025-12-22 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7810 2025-12-23 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7820 2026-04-27 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7828 2026-04-22 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7839 2026-06-15 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 7842 2026-05-11 ªÅ¦^À³,¤£¶i manifest
+WARNING copycat.data.backfill_brokers: brokers 8102 2025-12-22 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 3400/10900(skipped=2 empty=34)
+WARNING copycat.data.backfill_brokers: brokers 8497 2026-06-17 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 3600/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 3800/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 4000/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 4200/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 4400/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 4600/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 4800/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 5000/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 5200/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 5400/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 5600/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 5800/10900(skipped=2 empty=35)
+WARNING copycat.data.backfill_brokers: brokers 3308 2026-04-21 ¥¢±Ñ(²Ä 1/3 ¦¸): TimeoutError
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 6000/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 6200/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 6400/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 6600/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 6800/10900(skipped=2 empty=35)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 7000/10900(skipped=2 empty=35)
+WARNING copycat.data.backfill_brokers: brokers 4725 2026-06-17 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 7200/10900(skipped=2 empty=36)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 7400/10900(skipped=2 empty=36)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 7600/10900(skipped=2 empty=36)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 7800/10900(skipped=2 empty=36)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 8000/10900(skipped=2 empty=36)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 8200/10900(skipped=2 empty=36)
+WARNING copycat.data.backfill_brokers: brokers 6172 2026-06-17 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 8400/10900(skipped=2 empty=37)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 8600/10900(skipped=2 empty=37)
+WARNING copycat.data.backfill_brokers: brokers 6423 2026-01-22 ªÅ¦^À³,¤£¶i manifest
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 8800/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 9000/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 9200/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 9400/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 9600/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 9800/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 10000/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 10200/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 10400/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 10600/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers ¶i«× 10800/10900(skipped=2 empty=38)
+INFO copycat.data.backfill_brokers: backfill-brokers §¹¦¨:fetched=10898 skipped=2 empty=38 targets=10900
+åˆ†é»æ—¥å ±å›è£œå®Œæˆ:fetch 10898ã€è·³é 2ã€ç©ºå›æ‡‰ 38ã€ç›®æ¨™ 10900 ç­†

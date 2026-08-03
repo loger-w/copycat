@@ -1,0 +1,25 @@
+{
+  "slug": "stock-terminal",
+  "start_sha": "ad95bc7f64d09599347591dbb97f7c9109dc196b",
+  "branch": "feat/stock-terminal",
+  "worktree_path": null,
+  "current_phase": 8.5,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 8.5],
+  "phase_note": "DONE:Phase 7 表格全綠;Phase 8 tag PASS(16 對 + 2 豁免 b)+ local ff merge(無 remote fallback)master fd94303;8.5 沉澱:CLAUDE.md §8 兩條 + inbox 兩條 + memory 更新",
+  "scope": "L",
+  "phase_2_mode": "condensed",
+  "pending_review_rounds": { "phase_1": 0, "phase_2": 0, "phase_4": 0 },
+  "blockers": [],
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-07-21T05:58:00Z",
+  "project_shape": "python-backend + react-frontend (copycat)",
+  "last_commit_sha": "e294aa8",
+  "final_merge_sha": "fd94303",
+  "self_review_head": "d474cf0",
+  "artifact_commit": "skipped (.claude/ gitignored)",
+  "sc_cycle_counts": {
+    "_unscoped": { "phase_1": 0, "phase_2": 0, "phase_3": 0, "phase_4": 0, "phase_5": 0, "phase_6": 0, "phase_7": 0, "total": 0 }
+  },
+  "paused": null
+}

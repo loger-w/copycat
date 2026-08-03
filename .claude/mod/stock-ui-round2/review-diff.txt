@@ -1,0 +1,2947 @@
+diff --git a/frontend/src/components/chart/ChartReadout.test.tsx b/frontend/src/components/chart/ChartReadout.test.tsx
+new file mode 100644
+index 0000000..90c27ef
+--- /dev/null
++++ b/frontend/src/components/chart/ChartReadout.test.tsx
+@@ -0,0 +1,77 @@
++/** @vitest-environment jsdom */
++import { cleanup, render, screen } from "@testing-library/react";
++import { afterEach, describe, expect, it } from "vitest";
++
++import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
++
++afterEach(cleanup);
++
++const FIELDS: ReadoutField[] = [
++  { label: "", value: "09:31" },
++  { label: "", value: "232.5", tone: "bull" },
++  { label: "", value: "+1.20%", tone: "bull" },
++  { label: "量", value: "1234" },
++  { label: "外", value: "800", tone: "bull" },
++  { label: "內", value: "434", tone: "bear" },
++];
++
++describe("ChartReadout", () => {
++  it("依序渲染所有欄位,順序與數量不變", () => {
++    const { container } = render(<ChartReadout fields={FIELDS} hovering={false} />);
++    const spans = [...container.querySelectorAll("[data-testid='chart-readout'] > span")];
++    expect(spans.length).toBe(6);
++    expect(spans[0]!.textContent).toBe("09:31");
++    expect(spans[3]!.textContent).toBe("量 1234");
++  });
++
++  it("tone 對應 class:bull 紅 / bear 綠 / muted 灰 / 未給則 ink", () => {
++    const { container } = render(
++      <ChartReadout
++        fields={[
++          { label: "", value: "t" },
++          { label: "", value: "a", tone: "bull" },
++          { label: "", value: "b", tone: "bear" },
++          { label: "", value: "c", tone: "muted" },
++          { label: "", value: "d" },
++        ]}
++        hovering={false}
++      />,
++    );
++    const spans = [...container.querySelectorAll("[data-testid='chart-readout'] > span")];
++    expect(spans[1]!.className).toContain("text-bull");
++    expect(spans[2]!.className).toContain("text-bear");
++    expect(spans[3]!.className).toContain("text-ink-dim");
++    expect(spans[4]!.className).toContain("text-ink");
++  });
++
++  it("hovering 時第一欄轉 accent、否則 ink-muted(零位移的態提示)", () => {
++    const { container, rerender } = render(<ChartReadout fields={FIELDS} hovering={false} />);
++    const first = () => container.querySelector("[data-testid='chart-readout'] > span")!;
++    expect(first().className).toContain("text-ink-muted");
++    expect(first().className).not.toContain("text-accent");
++    rerender(<ChartReadout fields={FIELDS} hovering />);
++    expect(first().className).toContain("text-accent");
++  });
++
++  it("缺值以 '-' 佔位,欄位不消失(防寬度跳動)", () => {
++    render(
++      <ChartReadout
++        fields={[
++          { label: "", value: "-" },
++          { label: "量", value: "-" },
++        ]}
++        hovering={false}
++      />,
++    );
++    const row = screen.getByTestId("chart-readout");
++    expect(row.children.length).toBe(2);
++    expect(row.textContent).toContain("量 -");
++  });
++
++  it("hovering 狀態暴露在 data 屬性上(供元件測試斷言)", () => {
++    const { rerender } = render(<ChartReadout fields={FIELDS} hovering={false} />);
++    expect(screen.getByTestId("chart-readout").getAttribute("data-hovering")).toBe("false");
++    rerender(<ChartReadout fields={FIELDS} hovering />);
++    expect(screen.getByTestId("chart-readout").getAttribute("data-hovering")).toBe("true");
++  });
++});
+diff --git a/frontend/src/components/chart/ChartReadout.tsx b/frontend/src/components/chart/ChartReadout.tsx
+new file mode 100644
+index 0000000..5a3b554
+--- /dev/null
++++ b/frontend/src/components/chart/ChartReadout.tsx
+@@ -0,0 +1,54 @@
++import { cn } from "@/lib/utils";
++
++/** 圖表頂列資訊條(江波圖 / K 線共用;純 presentational,無資料依賴)。
++ *
++ * 取代原本「跟著游標跑的浮窗」:固定停靠、零遮圖、零抖動。**沒 hover 時顯示即時資料**
++ * (江波圖 = 最新分鐘、K 線 = 最後一根),不是空白 —— 預設態有內容才不會閃爍。
++ *
++ * 欄位順序與數量由呼叫端固定給,缺值給 "-" 而非移除欄位(防寬度跳動)。
++ * 高度由外層容器決定(B8 的 chrome 對稱要求:兩張圖頂列同為 h-[1.375rem])。 */
++
++export type ReadoutTone = "bull" | "bear" | "muted";
++
++export interface ReadoutField {
++  /** 前綴標籤;空字串 = 只顯示值(時間欄用) */
++  label: string;
++  value: string;
++  tone?: ReadoutTone;
++}
++
++function toneClass(tone: ReadoutTone | undefined): string {
++  if (tone === "bull") return "text-bull";
++  if (tone === "bear") return "text-bear";
++  if (tone === "muted") return "text-ink-dim";
++  return "text-ink";
++}
++
++interface Props {
++  fields: ReadoutField[];
++  /** 十字線在場 → 第一欄(時間)轉 accent,作為「hover 態 vs 即時態」的零位移提示 */
++  hovering: boolean;
++}
++
++export function ChartReadout({ fields, hovering }: Props) {
++  return (
++    <div
++      data-testid="chart-readout"
++      data-hovering={hovering ? "true" : "false"}
++      className="flex min-w-0 items-center gap-x-3 overflow-hidden font-mono text-xs"
++    >
++      {fields.map((f, i) => (
++        <span
++          key={f.label !== "" ? f.label : `f-${i}`}
++          className={cn(
++            "whitespace-nowrap",
++            i === 0 ? (hovering ? "text-accent" : "text-ink-muted") : toneClass(f.tone),
++          )}
++        >
++          {f.label !== "" ? <span className="text-ink-dim">{f.label} </span> : null}
++          {f.value}
++        </span>
++      ))}
++    </div>
++  );
++}
+diff --git a/frontend/src/components/stock/CandleChart.test.tsx b/frontend/src/components/stock/CandleChart.test.tsx
+index 4fb6427..da35928 100644
+--- a/frontend/src/components/stock/CandleChart.test.tsx
++++ b/frontend/src/components/stock/CandleChart.test.tsx
+@@ -35,24 +35,26 @@ describe("CandleChart(SC-7)", () => {
+     expect(bodies[1]!.getAttribute("class")).toContain("bear"); // 108000 → 105000 跌
+   });
+ 
+-  it("超過上限只畫最後 N 根(maxBars)", () => {
++  // 🔴 SC-6.3:maxBars prop 移除,可視範圍改由 viewport(initBars + 滾輪縮放)決定
++  it("初始只畫最後 initBars 根(viewport 取代 maxBars)", () => {
+     const many = Array.from({ length: 200 }, (_, i) =>
+       bar(`2026-01-${String((i % 28) + 1).padStart(2, "0")}`, 100, 100, 100, 100),
+     );
+-    const { container } = render(<CandleChart bars={many} maxBars={120} />);
++    const { container } = render(<CandleChart bars={many} initBars={120} />);
+     expect(container.querySelectorAll("[data-testid='candle-body']").length).toBe(120);
+   });
+ 
+-  it("疊 MA5 / MA20:資料足夠時各畫一條 polyline", () => {
++  // 🔴 SC-6.5:showMa prop 移除,MA 在所有 K 線模式都畫
++  it("MA5 / MA20 無條件畫(資料足夠時)", () => {
+     const many = Array.from({ length: 30 }, (_, i) =>
+       bar(`2026-01-${String(i + 1).padStart(2, "0")}`, 100_000 + i, 100_000 + i, 100_000 + i, 100_000 + i),
+     );
+-    const { container } = render(<CandleChart bars={many} showMa />);
++    const { container } = render(<CandleChart bars={many} />);
+     expect(container.querySelector("[data-testid='ma-5']")).toBeTruthy();
+     expect(container.querySelector("[data-testid='ma-20']")).toBeTruthy();
+   });
+ 
+-  it("showMa 關閉時不畫 MA", () => {
++  it("資料不足 5 根 → 連 MA5 都不畫(不是靠 prop 關掉)", () => {
+     const { container } = render(<CandleChart bars={BARS} />);
+     expect(container.querySelector("[data-testid='ma-5']")).toBeNull();
+   });
+@@ -61,19 +63,67 @@ describe("CandleChart(SC-7)", () => {
+     const few = Array.from({ length: 8 }, (_, i) =>
+       bar(`2026-01-0${i + 1}`, 100_000, 100_000, 100_000, 100_000),
+     );
+-    const { container } = render(<CandleChart bars={few} showMa />);
++    const { container } = render(<CandleChart bars={few} />);
+     expect(container.querySelector("[data-testid='ma-5']")).toBeTruthy();
+     expect(container.querySelector("[data-testid='ma-20']")).toBeNull();
+   });
+ 
+-  it("hover 顯示該根 OHLC tooltip;移出清除", () => {
++  // 🔴 SC-7.6:圖下方的浮動 tooltip 改成圖上方常駐資訊列 —— 沒 hover 時顯示最後一根,
++  // 不是空白。固定停靠、零遮圖、零版面跳動。
++  it("資訊列:預設顯示最後一根(即時態),hover 時切換為游標所在根", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    const readout = () => screen.getByTestId("chart-readout");
++    expect(screen.queryByTestId("candle-tooltip")).toBeNull(); // 舊 tooltip 已移除
++    expect(readout().textContent).toContain("2026-07-28"); // 即時態 = 最後一根
++    expect(readout().getAttribute("data-hovering")).toBe("false");
++
++    const svg = container.querySelector("svg")!;
++    // jsdom 的 getBoundingClientRect 恆 0 寬 → x 直接當 viewBox 座標,x=5 落在第一根
++    fireEvent.mouseMove(svg, { clientX: 5, clientY: 100 });
++    expect(readout().textContent).toContain("2026-07-24");
++    expect(readout().getAttribute("data-hovering")).toBe("true");
++
++    fireEvent.mouseLeave(svg);
++    expect(readout().textContent).toContain("2026-07-28");
++    expect(readout().getAttribute("data-hovering")).toBe("false");
++  });
++
++  // 🔴 SC-7.2:K 線原本只有垂直線,現在兩軸都有,且水平線跟滑鼠 y(當量尺)不是鎖收盤價
++  it("十字線:垂直線 snap 蠟燭、水平線跟滑鼠 y", () => {
+     const { container } = render(<CandleChart bars={BARS} />);
+     const svg = container.querySelector("svg")!;
+-    fireEvent.mouseMove(svg, { clientX: 5, clientY: 5 });
+-    // jsdom 的 getBoundingClientRect 恆 0 寬 → x=0 落在第一根
+-    expect(screen.getByTestId("candle-tooltip").textContent).toContain("2026-07-24");
++    fireEvent.mouseMove(svg, { clientX: 5, clientY: 120 });
++    const h = container.querySelector("[data-testid='crosshair-h']")!;
++    expect(h).toBeTruthy();
++    expect(Number(h.getAttribute("y1"))).toBe(120);
++    fireEvent.mouseMove(svg, { clientX: 5, clientY: 200 });
++    expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(200);
++    expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
+     fireEvent.mouseLeave(svg);
+-    expect(screen.queryByTestId("candle-tooltip")).toBeNull();
++    expect(container.querySelector("[data-testid='crosshair-h']")).toBeNull();
++    expect(container.querySelector("[data-testid='crosshair-v']")).toBeNull();
++  });
++
++  // 🟢 SC-7.3:左緣顯示滑鼠所在價位(snap 到合法 tick、夾制在資料值域內)
++  it("左價標:顯示滑鼠所在價位,量區的 y 夾制在最低價不出負值", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    const svg = container.querySelector("svg")!;
++    const tagText = () => container.querySelector("[data-testid='price-tag-text']")!.textContent;
++    fireEvent.mouseMove(svg, { clientX: 5, clientY: 10 });
++    expect(Number(tagText())).toBeLessThanOrEqual(118); // ≤ 全域最高 118
++    fireEvent.mouseMove(svg, { clientX: 5, clientY: 999 }); // 遠低於量區
++    expect(Number(tagText())).toBe(95); // 夾制在全域最低 95
++  });
++
++  // 🟢 SC-7.5:底部時間標籤,且不被 viewBox 上下緣裁切
++  it("底部時間標:顯示 hover 根的時間,矩形底邊不超出 viewBox", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    const svg = container.querySelector("svg")!;
++    fireEvent.mouseMove(svg, { clientX: 5, clientY: 100 });
++    const rect = container.querySelector("[data-testid='time-tag']")!;
++    const vbH = Number(svg.getAttribute("viewBox")!.split(" ")[3]);
++    expect(Number(rect.getAttribute("y")) + Number(rect.getAttribute("height"))).toBeLessThanOrEqual(vbH);
++    expect(container.querySelector("[data-testid='time-tag-text']")!.textContent).toBe("07/24");
+   });
+ 
+   it("圖表有可辨識的 aria-label", () => {
+@@ -87,3 +137,116 @@ describe("CandleChart(SC-7)", () => {
+     expect(container.querySelector("figure")?.className).toContain("select-none");
+   });
+ });
++
++// 🟢 SC-6.3 / 6.4:滾輪縮放 + 拖曳平移(取代「往前」鈕的分頁載入)
++describe("CandleChart 縮放與平移(SC-6.3/6.4)", () => {
++  const MANY = Array.from({ length: 600 }, (_, i) =>
++    bar(`2026-07-28 ${String(9 + Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}`,
++      100_000 + i, 100_100 + i, 99_900 + i, 100_000 + i),
++  );
++  const bodies = (c: HTMLElement) => c.querySelectorAll("[data-testid='candle-body']").length;
++
++  it("滾輪往下(deltaY > 0)看更多根、往上看更少根", () => {
++    const { container } = render(<CandleChart bars={MANY} initBars={240} />);
++    expect(bodies(container)).toBe(240);
++    const svg = container.querySelector("svg")!;
++    fireEvent.wheel(svg, { deltaY: 100, clientX: 700 });
++    expect(bodies(container)).toBeGreaterThan(240);
++    fireEvent.wheel(svg, { deltaY: -100, clientX: 700 });
++    fireEvent.wheel(svg, { deltaY: -100, clientX: 700 });
++    expect(bodies(container)).toBeLessThan(240);
++  });
++
++  it("縮放下限 20 根、上限 min(total, 700) 根", () => {
++    const { container } = render(<CandleChart bars={MANY} initBars={240} />);
++    const svg = container.querySelector("svg")!;
++    for (let i = 0; i < 40; i += 1) fireEvent.wheel(svg, { deltaY: -100, clientX: 700 });
++    expect(bodies(container)).toBe(20);
++    for (let i = 0; i < 60; i += 1) fireEvent.wheel(svg, { deltaY: 100, clientX: 700 });
++    expect(bodies(container)).toBe(600); // total < MAX_VISIBLE(700)
++  });
++
++  it("拖曳往右平移看更早的資料;拖到左端點即停", () => {
++    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
++    const svg = container.querySelector("svg")!;
++    const firstStamp = () =>
++      container.querySelector("[data-testid='candle-figure']")?.getAttribute("data-first");
++    const before = firstStamp();
++    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
++    fireEvent.mouseMove(window, { clientX: 1100 });
++    fireEvent.mouseUp(window, { clientX: 1100 });
++    expect(firstStamp()).not.toBe(before);
++    // 一路拖到底 → 停在第一根
++    for (let i = 0; i < 20; i += 1) {
++      fireEvent.mouseDown(svg, { clientX: 100, button: 0 });
++      fireEvent.mouseMove(window, { clientX: 1300 });
++      fireEvent.mouseUp(window, { clientX: 1300 });
++    }
++    expect(firstStamp()).toBe(MANY[0]!.t);
++  });
++
++  it("資料延伸時:原本貼右緣 → 跟進;已平移 → 不被拉回(R10)", () => {
++    const { container, rerender } = render(<CandleChart bars={MANY} initBars={100} />);
++    const firstStamp = () =>
++      container.querySelector("[data-testid='candle-figure']")!.getAttribute("data-first");
++    const extended = [...MANY, bar("2026-07-28 19:00", 200_000, 200_000, 200_000, 200_000)];
++    // (a) 貼右緣 → 視窗跟著往右
++    const atRightBefore = firstStamp();
++    rerender(<CandleChart bars={extended} initBars={100} />);
++    expect(firstStamp()).not.toBe(atRightBefore);
++    // (b) 平移後再延伸 → start 不動
++    const svg = container.querySelector("svg")!;
++    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
++    fireEvent.mouseMove(window, { clientX: 1100 });
++    fireEvent.mouseUp(window, { clientX: 1100 });
++    const pannedTo = firstStamp();
++    rerender(<CandleChart bars={[...extended, bar("2026-07-28 19:01", 1, 1, 1, 1)]} initBars={100} />);
++    expect(firstStamp()).toBe(pannedTo);
++  });
++});
++
++// 🟢 SC-6.6:布林通道
++describe("CandleChart 布林通道(SC-6.6)", () => {
++  const MANY = Array.from({ length: 40 }, (_, i) =>
++    bar(`2026-01-${String(i + 1).padStart(2, "0")}`, 100_000 + i * 137, 100_000 + i * 137, 100_000 + i * 137, 100_000 + i * 137),
++  );
++
++  it("showBb 關(預設)→ 不畫布林", () => {
++    const { container } = render(<CandleChart bars={MANY} />);
++    expect(container.querySelector("[data-testid='bb-upper']")).toBeNull();
++    expect(container.querySelector("[data-testid='bb-lower']")).toBeNull();
++  });
++
++  it("showBb 開 → 上下軌各一條 + 通道填色", () => {
++    const { container } = render(<CandleChart bars={MANY} showBb />);
++    expect(container.querySelector("[data-testid='bb-upper']")).toBeTruthy();
++    expect(container.querySelector("[data-testid='bb-lower']")).toBeTruthy();
++    expect(container.querySelector("[data-testid='bb-band']")).toBeTruthy();
++  });
++
++  // R9:BB 上下軌常超出 o/h/l/c 值域,y 域沒納入就會被畫到圖框外
++  it("上軌超出全域最高價時仍落在圖框內(y 域納入 extraSeries)", () => {
++    // 需 ≥21 根才有 2 個以上 band 點(polyline 至少兩點才畫);末根急殺撐大 σ
++    const spiky = [
++      ...Array.from({ length: 24 }, (_, i) => bar(`2026-02-${String(i + 1).padStart(2, "0")}`, 300_000, 300_000, 300_000, 300_000)),
++      bar("2026-02-25", 100_000, 100_000, 100_000, 100_000),
++    ];
++    const { container } = render(<CandleChart bars={spiky} showBb />);
++    const vbH = Number(container.querySelector("svg")!.getAttribute("viewBox")!.split(" ")[3]);
++    const upper = container.querySelector("[data-testid='bb-upper']")!;
++    const ys = upper.getAttribute("points")!.split(" ").map((p) => Number(p.split(",")[1]));
++    for (const y of ys) {
++      expect(y).toBeGreaterThanOrEqual(0);
++      expect(y).toBeLessThanOrEqual(vbH);
++    }
++  });
++
++  it("BB 鈕在圖表頂列,點擊回呼 onToggleBb", () => {
++    const calls: boolean[] = [];
++    render(<CandleChart bars={MANY} showBb={false} onToggleBb={(v) => calls.push(v)} />);
++    const btn = screen.getByRole("button", { name: "BB" });
++    expect(btn.getAttribute("aria-pressed")).toBe("false");
++    fireEvent.click(btn);
++    expect(calls).toEqual([true]);
++  });
++});
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index cdd8a2c..a528fe1 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -1,18 +1,37 @@
+-import { memo, useMemo, useState } from "react";
++import { memo, useEffect, useMemo, useRef, useState } from "react";
+ 
++import { bandSeries, bollinger, type Band } from "@/lib/bollinger";
+ import {
+   buildCandleGeometry,
+   movingAverage,
+   type Bar,
+   type CandleGeometry,
+ } from "@/lib/candle";
++import {
++  initialViewport,
++  onTotalChange,
++  panBy,
++  zoomAt,
++  type Viewport,
++} from "@/lib/candle-viewport";
++import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
++import { snapDown } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
++import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+ 
+-/** K 線圖(SC-7)。幾何全在 lib/candle.ts,本檔只掛 DOM。
++/** K 線圖(SC-6/SC-7)。幾何全在 lib/candle.ts + lib/candle-viewport.ts,本檔只掛 DOM。
+  *  台股慣例:紅漲(bull)/ 綠跌(bear)。 */
+ 
+-const DIMS = { width: 1400, height: 320 };
++/** height 578 = 1400 × (江波圖 260+70)/800 —— 讓兩張圖的 svg 佔容器寬比例相同。
++ *  再加上兩個 figure 的框外 chrome 逐項對稱(頂列 h-[1.375rem]+mb-1、底列 mt-1+h-4),
++ *  切換模式時圖表區塊高度才不會跳(SC-6.7)。殘差 0.5px @ 容器寬 1400。 */
++const DIMS = { width: 1400, height: 578 };
+ const X_LABEL_H = 14;
++/** 滾輪每一格的縮放倍率 */
++const ZOOM_STEP = 1.15;
++/** 軸標籤尺寸;time tag 的 y = height − boxH,底邊恰貼 viewBox 底不被裁 */
++const PRICE_TAG = { w: 56, h: 16 };
++const TIME_TAG = { w: 48, h: 14 };
+ 
+ const BODY_CLASS = {
+   up: "fill-bull stroke-bull",
+@@ -42,20 +61,41 @@ function pts(line: { x: number; y: number }[]): string {
+   return line.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+ }
+ 
++/** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
++const EMPTY_LINE: { x: number; y: number }[] = [];
++
++/** 值序列 → 折線點。**必須在元件外**且結果包 useMemo:
++ *  hover 每個 mousemove 都會 re-render 父層,若線的 array identity 每次都變,
++ *  memo 過的 ChartStatic 仍會每次重建(最多 700 根蠟燭 × 3 個節點)。 */
++function seriesLine(
++  values: readonly (number | null)[],
++  g: CandleGeometry,
++): { x: number; y: number }[] {
++  const line: { x: number; y: number }[] = [];
++  values.forEach((v, i) => {
++    const c = g.candles[i];
++    if (v !== null && c !== undefined) line.push({ x: c.cx, y: g.toY(v) });
++  });
++  return line;
++}
+ 
+ /** 靜態圖層 memo:hover 每 mousemove re-render 父層,蠟燭/量/標籤層不可每次重建
+- *  (分 K 可達數千根;對齊 StockIntradayChart 的 ChartStatic 慣例 — review P1-1)。 */
++ *  (分 K 可達數百根;對齊 StockIntradayChart 的 ChartStatic 慣例 — review P1-1)。 */
+ const ChartStatic = memo(function ChartStatic({
+   g,
+   shown,
+   ma5Line,
+   ma20Line,
++  bbUpperLine,
++  bbLowerLine,
+   labelStep,
+ }: {
+   g: CandleGeometry;
+   shown: Bar[];
+   ma5Line: { x: number; y: number }[];
+   ma20Line: { x: number; y: number }[];
++  bbUpperLine: { x: number; y: number }[];
++  bbLowerLine: { x: number; y: number }[];
+   labelStep: number;
+ }) {
+   return (
+@@ -77,6 +117,33 @@ const ChartStatic = memo(function ChartStatic({
+           </text>
+         </g>
+       ))}
++      {/* 布林通道:先畫帶狀填色再畫上下軌,才不會蓋掉蠟燭 */}
++      {bbUpperLine.length > 1 && bbLowerLine.length > 1 ? (
++        <>
++          <polygon
++            data-testid="bb-band"
++            points={pts([...bbUpperLine, ...[...bbLowerLine].reverse()])}
++            className="fill-ink-muted"
++            fillOpacity="0.07"
++          />
++          <polyline
++            data-testid="bb-upper"
++            points={pts(bbUpperLine)}
++            fill="none"
++            className="stroke-ink-muted"
++            strokeWidth={0.8}
++            strokeDasharray="3 2"
++          />
++          <polyline
++            data-testid="bb-lower"
++            points={pts(bbLowerLine)}
++            fill="none"
++            className="stroke-ink-muted"
++            strokeWidth={0.8}
++            strokeDasharray="3 2"
++          />
++        </>
++      ) : null}
+       {/* 量 bar */}
+       {g.volBars.map((b, i) => (
+         <rect
+@@ -149,102 +216,303 @@ const ChartStatic = memo(function ChartStatic({
+ 
+ interface Props {
+   bars: Bar[];
+-  /** 只畫最後 N 根(SC-7 日K 上限);未給 = 全畫 */
+-  maxBars?: number;
+-  showMa?: boolean;
++  /** 初始可視根數(日 K 120 / 分 K 240);之後由滾輪縮放與拖曳平移控制 */
++  initBars?: number;
++  /** 布林通道開關。狀態由 StockChart 持有(useChartToggles 是每 instance 各一份,
++   *  本元件不自呼叫該 hook,否則按鈕與圖會各管各的) */
++  showBb?: boolean;
++  onToggleBb?: (value: boolean) => void;
+ }
+ 
+-export function CandleChart({ bars, maxBars, showMa = false }: Props) {
+-  const [hover, setHover] = useState<number | null>(null);
+-
+-  const { shown, g, ma5, ma20 } = useMemo(() => {
+-    const start = maxBars !== undefined && bars.length > maxBars ? bars.length - maxBars : 0;
+-    const shownBars = bars.slice(start);
+-    const geo = buildCandleGeometry(shownBars, DIMS);
+-    // MA 以完整序列計算後再裁切,左緣才不會斷頭
+-    const m5 = movingAverage(bars, 5).slice(start);
+-    const m20 = movingAverage(bars, 20).slice(start);
+-    return { shown: shownBars, g: geo, ma5: m5, ma20: m20 };
+-  }, [bars, maxBars]);
+-
+-  if (shown.length === 0) {
+-    return (
+-      <div className="flex h-64 items-center justify-center rounded-md border border-line bg-surface">
+-        <p className="text-sm text-ink-muted">無 K 線資料</p>
+-      </div>
+-    );
++/** 一根 bar → 資訊列欄位。`prev` 用來算漲跌%(K 線跨多日,沒有「昨收」可比)。 */
++function readoutFields(b: Bar | undefined, prev: Bar | undefined): ReadoutField[] {
++  if (b === undefined) {
++    return [
++      { label: "", value: "-" },
++      { label: "開", value: "-" },
++      { label: "高", value: "-" },
++      { label: "低", value: "-" },
++      { label: "收", value: "-" },
++      { label: "漲跌", value: "-" },
++      { label: "量", value: "-" },
++    ];
+   }
++  const tone = b.c > b.o ? "bull" : b.c < b.o ? "bear" : undefined;
++  const pct = prev !== undefined && prev.c > 0 ? ((b.c - prev.c) / prev.c) * 100 : null;
++  return [
++    { label: "", value: b.t },
++    { label: "開", value: fmt(b.o) },
++    { label: "高", value: fmt(b.h) },
++    { label: "低", value: fmt(b.l) },
++    { label: "收", value: fmt(b.c), tone },
++    {
++      label: "漲跌",
++      value: pct === null ? "-" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`,
++      tone: pct === null ? "muted" : pct > 0 ? "bull" : pct < 0 ? "bear" : "muted",
++    },
++    { label: "量", value: String(b.v) },
++  ];
++}
+ 
+-  function maLine(values: (number | null)[]): { x: number; y: number }[] {
+-    const line: { x: number; y: number }[] = [];
+-    values.forEach((v, i) => {
+-      const c = g.candles[i];
+-      if (v !== null && c !== undefined) line.push({ x: c.cx, y: g.toY(v) });
+-    });
+-    return line;
++export function CandleChart({ bars, initBars = 120, showBb = false, onToggleBb }: Props) {
++  // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不是鎖在收盤價 —— 盤中最常做的事是
++  // 量距離(現價到某價位差幾%),鎖收盤價的水平線與蠟燭重合、資訊冗餘。
++  const [hover, setHover] = useState<{ index: number | null; y: number } | null>(null);
++  const [viewport, setViewport] = useState<Viewport>(() => initialViewport(bars.length, initBars));
++  const [prevTotal, setPrevTotal] = useState(bars.length);
++  const svgRef = useRef<SVGSVGElement | null>(null);
++
++  // 序列延伸(分 K 每 60s refetch 追加新 bar)時調整窗口。用 render 期間調整 state 的
++  // 官方 pattern,不用 effect —— 專案有 react-you-might-not-need-an-effect lint。
++  // ⚠ 只處理「同一 code+mode 的延伸」;換股/換模式由 StockChart 給的 key 強制重掛。
++  if (prevTotal !== bars.length) {
++    setPrevTotal(bars.length);
++    setViewport((v) => onTotalChange(v, prevTotal, bars.length));
+   }
+ 
+-  const ma5Line = showMa ? maLine(ma5) : [];
+-  const ma20Line = showMa ? maLine(ma20) : [];
++  const { shown, g, ma5, ma20, bands } = useMemo(() => {
++    const start = viewport.start;
++    const shownBars = bars.slice(start, start + viewport.count);
++    // MA / BB 以完整序列計算後再裁切,左緣才不會斷頭;裁切區間必須與 shown 對齊,
++    // 否則 y 域會被視窗外的極值撐開、圖被壓扁而且不會報錯。
++    const m5 = movingAverage(bars, 5).slice(start, start + viewport.count);
++    const m20 = movingAverage(bars, 20).slice(start, start + viewport.count);
++    const bb: (Band | null)[] = showBb
++      ? bollinger(bars, 20).slice(start, start + viewport.count)
++      : [];
++    const extra = showBb ? [bandSeries(bb, "upper"), bandSeries(bb, "lower")] : undefined;
++    return {
++      shown: shownBars,
++      g: buildCandleGeometry(shownBars, DIMS, extra),
++      ma5: m5,
++      ma20: m20,
++      bands: bb,
++    };
++  }, [bars, viewport, showBb]);
+ 
+-  // x 軸標籤:等距取至多 6 個
+-  const labelStep = Math.max(1, Math.ceil(shown.length / 6));
+-  const hoverBar = hover !== null ? shown[hover] : undefined;
+-  const hoverCandle = hover !== null ? g.candles[hover] : undefined;
++  const ma5Line = useMemo(() => seriesLine(ma5, g), [ma5, g]);
++  const ma20Line = useMemo(() => seriesLine(ma20, g), [ma20, g]);
++  const bbUpperLine = useMemo(
++    () => (showBb ? seriesLine(bandSeries(bands, "upper"), g) : EMPTY_LINE),
++    [showBb, bands, g],
++  );
++  const bbLowerLine = useMemo(
++    () => (showBb ? seriesLine(bandSeries(bands, "lower"), g) : EMPTY_LINE),
++    [showBb, bands, g],
++  );
++
++  const total = bars.length;
++
++  // 滾輪縮放。**必須掛原生 listener 且 passive: false** —— React 的 onWheel 綁在 root
++  // 且為 passive,preventDefault() 無效,頁面會跟著一起捲。
++  useEffect(() => {
++    const el = svgRef.current;
++    if (el === null) return;
++    const onWheel = (e: WheelEvent): void => {
++      e.preventDefault();
++      const rect = el.getBoundingClientRect();
++      const { x } = toSvgPoint(e, rect, DIMS);
++      const ratio = DIMS.width > 0 ? x / DIMS.width : 0.5;
++      const factor = e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
++      setViewport((v) => zoomAt(v, total, factor, ratio));
++    };
++    el.addEventListener("wheel", onWheel, { passive: false });
++    return () => el.removeEventListener("wheel", onWheel);
++  }, [total]);
+ 
+   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
+     const rect = e.currentTarget.getBoundingClientRect();
+-    // jsdom / 未佈局時 rect.width = 0 → scale 1(不 early-return,測試與真環境同路徑)
++    const { x, y } = toSvgPoint(e, rect, DIMS);
++    const index = g.indexOf(x);
++    const ry = Math.round(y);
++    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
++    setHover((p) => (p !== null && p.index === index && p.y === ry ? p : { index, y: ry }));
++  }
++
++  /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
++   *  維持 mouse 事件模型 —— 專案慣例是觸控靠 tap 的 synthetic mousemove,改 pointer 會破。 */
++  function onDragStart(e: React.MouseEvent<SVGSVGElement>): void {
++    if (e.button !== 0) return;
++    const el = svgRef.current;
++    if (el === null) return;
++    const rect = el.getBoundingClientRect();
+     const scale = rect.width > 0 ? DIMS.width / rect.width : 1;
+-    setHover(g.indexOf((e.clientX - rect.left) * scale));
++    const startX = e.clientX;
++    let startVp: Viewport | null = null;
++    setViewport((v) => {
++      startVp = v;
++      return v;
++    });
++    const move = (ev: MouseEvent): void => {
++      const slot = DIMS.width / Math.max(1, startVp?.count ?? viewport.count);
++      // 往右拖 = 看更早的資料 → start 往左
++      const deltaBars = -Math.round(((ev.clientX - startX) * scale) / slot);
++      const base = startVp ?? viewport;
++      setViewport(panBy(base, total, deltaBars));
++      setHover(null); // 拖曳中不更新十字線,避免抖動
++    };
++    const up = (): void => {
++      window.removeEventListener("mousemove", move);
++      window.removeEventListener("mouseup", up);
++    };
++    window.addEventListener("mousemove", move);
++    window.addEventListener("mouseup", up);
+   }
+ 
++  const labelStep = Math.max(1, Math.ceil(Math.max(1, shown.length) / 6));
++  const hoverIdx = hover?.index ?? null;
++  const hoverBar = hoverIdx !== null ? shown[hoverIdx] : undefined;
++  const hoverCandle = hoverIdx !== null ? g.candles[hoverIdx] : undefined;
++  // 資訊列:沒 hover 顯示最後一根(即時態),不是空白
++  const shownIdx = hoverBar !== undefined ? hoverIdx! : shown.length - 1;
++  const fields = readoutFields(shown[shownIdx], shown[shownIdx - 1]);
++  const plotBottom = DIMS.height - X_LABEL_H;
++  const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
++  const windowHigh = shown.length > 0 ? Math.max(...shown.map((b) => b.h)) : 0;
++  const windowLow = shown.length > 0 ? Math.min(...shown.map((b) => b.l)) : 0;
++  const windowPct =
++    shown.length > 1 && shown[0]!.c > 0
++      ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
++      : null;
++
+   return (
+     // select-none:SVG 的 <text>(價位刻度 / 日期標籤)預設可選,在圖上拖曳會整片反白(SC-4)。
+     // 不影響 hover — user-select 只管選取,mouse 事件照舊(W-10)。
+-    <figure className="select-none rounded-md border border-line bg-surface p-4">
+-      <svg
+-        viewBox={`0 0 ${DIMS.width} ${DIMS.height}`}
+-        className="w-full"
+-        role="img"
+-        aria-label="K 線圖"
+-        onMouseMove={onMove}
+-        onMouseLeave={() => setHover(null)}
+-      >
+-        <ChartStatic g={g} shown={shown} ma5Line={ma5Line} ma20Line={ma20Line} labelStep={labelStep} />
+-        {/* hover 十字 */}
+-        {hoverCandle !== undefined ? (
+-          <line
+-            x1={hoverCandle.cx}
+-            x2={hoverCandle.cx}
+-            y1={0}
+-            y2={DIMS.height - X_LABEL_H}
+-            className="stroke-ink-muted"
+-            strokeDasharray="2 2"
+-            strokeWidth={0.7}
+-            pointerEvents="none"
++    <figure
++      data-testid="candle-figure"
++      data-first={shown[0]?.t ?? ""}
++      data-count={shown.length}
++      className="select-none rounded-md border border-line bg-surface p-4"
++    >
++      {/* 頂列:左側留給資訊條、右側指標 toggle。高度以 rem 固定(root font-size 縮放才等比) */}
++      <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
++        <ChartReadout fields={fields} hovering={hoverBar !== undefined} />
++        <button
++          type="button"
++          aria-pressed={showBb}
++          onClick={() => onToggleBb?.(!showBb)}
++          className={cn(
++            "rounded border px-2 py-0.5 text-xs",
++            showBb ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++          )}
++        >
++          BB
++        </button>
++      </div>
++      {shown.length === 0 ? (
++        <div className="flex h-64 items-center justify-center">
++          <p className="text-sm text-ink-muted">無 K 線資料</p>
++        </div>
++      ) : (
++        <svg
++          ref={svgRef}
++          viewBox={`0 0 ${DIMS.width} ${DIMS.height}`}
++          className="w-full"
++          style={{ touchAction: "pan-y" }}
++          role="img"
++          aria-label="K 線圖"
++          onMouseMove={onMove}
++          onMouseLeave={() => setHover(null)}
++          onMouseDown={onDragStart}
++        >
++          <ChartStatic
++            g={g}
++            shown={shown}
++            ma5Line={ma5Line}
++            ma20Line={ma20Line}
++            bbUpperLine={bbUpperLine}
++            bbLowerLine={bbLowerLine}
++            labelStep={labelStep}
+           />
+-        ) : null}
+-      </svg>
+-      {hoverBar !== undefined ? (
+-        <figcaption
+-          data-testid="candle-tooltip"
+-          className="mt-1 flex flex-wrap gap-x-3 font-mono text-xs text-ink-dim"
++          {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
++          {hover !== null ? (
++            <g pointerEvents="none">
++              {hoverCandle !== undefined ? (
++                <line
++                  data-testid="crosshair-v"
++                  x1={hoverCandle.cx}
++                  x2={hoverCandle.cx}
++                  y1={0}
++                  y2={plotBottom}
++                  className="stroke-ink-muted"
++                  strokeDasharray="2 2"
++                  strokeWidth={0.7}
++                />
++              ) : null}
++              <line
++                data-testid="crosshair-h"
++                x1={0}
++                x2={DIMS.width}
++                y1={hover.y}
++                y2={hover.y}
++                className="stroke-ink-muted"
++                strokeDasharray="2 2"
++                strokeWidth={0.7}
++              />
++              {/* 左緣價位標籤:滑鼠所在價位 snap 到合法 tick(顯示的價位要「可下單」) */}
++              <g transform={`translate(0, ${clampTagY(hover.y, PRICE_TAG.h, plotBottom)})`}>
++                <rect
++                  data-testid="price-tag"
++                  width={PRICE_TAG.w}
++                  height={PRICE_TAG.h}
++                  rx={2}
++                  className="fill-bg-deep stroke-line"
++                />
++                <text
++                  data-testid="price-tag-text"
++                  x={4}
++                  y={PRICE_TAG.h - 5}
++                  className="fill-ink"
++                  fontSize="0.625rem"
++                >
++                  {hoverPrice !== null ? fmt(hoverPrice) : ""}
++                </text>
++              </g>
++              {/* 底部時間標籤:x 軸標籤是每 labelStep 根才一個,hover 讀不到精確時間 */}
++              {hoverCandle !== undefined && hoverBar !== undefined ? (
++                <g
++                  transform={`translate(${clampTagX(hoverCandle.cx, TIME_TAG.w, DIMS.width)}, ${
++                    DIMS.height - TIME_TAG.h
++                  })`}
++                >
++                  <rect
++                    data-testid="time-tag"
++                    y={0}
++                    width={TIME_TAG.w}
++                    height={TIME_TAG.h}
++                    rx={2}
++                    className="fill-bg-deep stroke-line"
++                  />
++                  <text
++                    data-testid="time-tag-text"
++                    x={TIME_TAG.w / 2}
++                    y={TIME_TAG.h - 4}
++                    textAnchor="middle"
++                    className="fill-ink"
++                    fontSize="0.625rem"
++                  >
++                    {shortStamp(hoverBar.t)}
++                  </text>
++                </g>
++              ) : null}
++            </g>
++          ) : null}
++        </svg>
++      )}
++      {/* 底列:視窗摘要。與江波圖底部 figcaption 同結構同高度 —— 兩個 figure 的框外
++          chrome 逐項對稱,SC-6.7 的「切模式不跳高」才成立。 */}
++      <figcaption className="mt-1 flex h-4 items-center gap-x-3 font-mono text-xs text-ink-dim">
++        <span>{shown.length} 根</span>
++        <span>高 {fmt(windowHigh)}</span>
++        <span>低 {fmt(windowLow)}</span>
++        <span
++          className={cn(
++            windowPct === null ? "" : windowPct > 0 ? "text-bull" : windowPct < 0 ? "text-bear" : "",
++          )}
+         >
+-          <span className="text-ink">{hoverBar.t}</span>
+-          <span>開 {fmt(hoverBar.o)}</span>
+-          <span>高 {fmt(hoverBar.h)}</span>
+-          <span>低 {fmt(hoverBar.l)}</span>
+-          <span
+-            className={cn(
+-              hoverBar.c > hoverBar.o ? "text-bull" : hoverBar.c < hoverBar.o ? "text-bear" : "",
+-            )}
+-          >
+-            收 {fmt(hoverBar.c)}
+-          </span>
+-          <span>量 {hoverBar.v}</span>
+-        </figcaption>
+-      ) : null}
++          期間 {windowPct === null ? "-" : `${windowPct > 0 ? "+" : ""}${windowPct.toFixed(2)}%`}
++        </span>
++      </figcaption>
+     </figure>
+   );
+ }
+diff --git a/frontend/src/components/stock/StockChart.test.tsx b/frontend/src/components/stock/StockChart.test.tsx
+index d9b9160..51153bc 100644
+--- a/frontend/src/components/stock/StockChart.test.tsx
++++ b/frontend/src/components/stock/StockChart.test.tsx
+@@ -63,10 +63,24 @@ function chart() {
+ }
+ 
+ describe("StockChart 模式切換(SC-7)", () => {
+-  it("四顆鈕文字依序為 江波圖 / 1分K / 5分K / 日K", () => {
++  // 🔴 SC-6.1:分 K 由 1/5 兩顆擴為 1–10 連續十顆,共 12 顆模式鈕
++  it("模式鈕共 12 顆:江波圖 + 1分K…10分K + 日K", () => {
+     chart();
+-    const labels = ["江波圖", "1分K", "5分K", "日K"];
++    const labels = ["江波圖", ...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"];
+     for (const l of labels) expect(screen.getByRole("button", { name: l })).toBeTruthy();
++    // 只數模式鈕 —— 江波圖自己的 均價/CDP/MA toggle 也帶 aria-pressed,不能一起數
++    const modeButtons = screen
++      .getAllByRole("button")
++      .filter((b) => /^(江波圖|日K|\d+分K)$/.test(b.textContent ?? ""));
++    expect(modeButtons.length).toBe(12);
++  });
++
++  it("3分K / 7分K 等新模式可切換且寫入 localStorage", async () => {
++    chart();
++    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
++    expect(window.localStorage.getItem("copycat-chart-mode")).toBe("m7");
++    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
++    expect(screen.getByRole("button", { name: "7分K" }).getAttribute("aria-pressed")).toBe("true");
+   });
+ 
+   it("預設江波圖:選中者 aria-pressed=true 且外框 border-accent", () => {
+@@ -105,31 +119,33 @@ describe("StockChart 模式切換(SC-7)", () => {
+     expect(screen.getByRole("button", { name: "5分K" }).getAttribute("aria-pressed")).toBe("true");
+   });
+ 
+-  it("分K 模式才有「往前」鈕,每次 +5 日並重新取數(D-10)", async () => {
++  // 🔴 SC-6.2:「往前」鈕與「近 N 日」文字移除,分 K 一次就載滿 30 日(縮放/平移取代分頁載入)
++  it("分K 直接載 30 日,無「往前」鈕與「近 N 日」文字", async () => {
+     chart();
+-    expect(screen.queryByRole("button", { name: "往前" })).toBeNull(); // 江波圖無
+     fireEvent.click(screen.getByRole("button", { name: "1分K" }));
+-    await waitFor(() => expect(barsUrls.some((u) => u.includes("days=5"))).toBe(true));
+-    expect(screen.getByText("近 5 日")).toBeTruthy();
+-    fireEvent.click(screen.getByRole("button", { name: "往前" }));
+-    await waitFor(() => expect(barsUrls.some((u) => u.includes("days=10"))).toBe(true));
+-    expect(screen.getByText("近 10 日")).toBeTruthy();
++    await waitFor(() => expect(barsUrls.some((u) => u.includes("days=30"))).toBe(true));
++    expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
++    expect(screen.queryByText(/近 \d+ 日/)).toBeNull();
++    // 只打一次,不再有 5→10→…→30 的階梯式重取
++    expect(barsUrls.filter((u) => u.includes("tf=1")).length).toBe(1);
+   });
+ 
+-  it("日K 模式無「往前」鈕", async () => {
++  it("日K 走 tf=D 且 query 不帶 days(D-15)", async () => {
+     chart();
+     fireEvent.click(screen.getByRole("button", { name: "日K" }));
+-    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
++    await waitFor(() => expect(barsUrls.some((u) => u.includes("tf=D"))).toBe(true));
++    expect(barsUrls.find((u) => u.includes("tf=D"))).not.toContain("days=");
+     expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
+   });
+ 
+-  it("往前到上限 30 日後鈕 disabled", async () => {
++  it("2–10 分K 共用同一份 tf=1 資料(前端聚合,切模式不重打)", async () => {
+     chart();
+     fireEvent.click(screen.getByRole("button", { name: "1分K" }));
+-    const back = () => screen.getByRole("button", { name: "往前" });
+-    for (let i = 0; i < 5; i += 1) fireEvent.click(back());
+-    await waitFor(() => expect(screen.getByText("近 30 日")).toBeTruthy());
+-    expect(back().hasAttribute("disabled")).toBe(true);
++    await waitFor(() => expect(barsUrls.length).toBeGreaterThan(0));
++    const before = barsUrls.length;
++    fireEvent.click(screen.getByRole("button", { name: "3分K" }));
++    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
++    expect(barsUrls.length).toBe(before);
+   });
+ 
+   // 🔴 SC-3:失敗態與「真的沒資料」原本共用同一句「無 K 線資料」,害 2026-07-29 那次
+diff --git a/frontend/src/components/stock/StockChart.tsx b/frontend/src/components/stock/StockChart.tsx
+index b22b946..5de9d16 100644
+--- a/frontend/src/components/stock/StockChart.tsx
++++ b/frontend/src/components/stock/StockChart.tsx
+@@ -2,55 +2,57 @@ import { useMemo, useState } from "react";
+ 
+ import { CandleChart } from "@/components/stock/CandleChart";
+ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+-import { DAYS_MAX, DAYS_STEP, useStockBars, type ChartMode } from "@/hooks/useStockBars";
++import { useChartToggles } from "@/hooks/useChartToggles";
++import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
+ import { aggregateBars } from "@/lib/candle";
+ import type { StockAccum } from "@/lib/stock-accum";
+ import { cn } from "@/lib/utils";
+ 
+-/** 圖表模式切換容器(SC-7):江波圖 / 1分K / 5分K / 日K。
+- *  江波圖走既有即時 accum;K 線走 /api/stock/bars。5 分 K 由 1 分前端聚合(D-8)。 */
++/** 圖表模式切換容器(SC-6):江波圖 / 1–10 分K / 日K。
++ *  江波圖走既有即時 accum;K 線走 /api/stock/bars。2–10 分 K 全由 1 分前端聚合(D-8)。 */
+ 
+ const MODE_KEY = "copycat-chart-mode";
+-const DAILY_MAX_BARS = 120;
+-// 分 K 根數上限:1400px viewBox 下超過 ~700 根蠟燭寬度就被壓到 <2px,再多只是把
+-// 圖畫成色塊並拖慢 hover。往前翻仍可載更多天,只是畫最近的 N 根(review P1-1)。
+-const MINUTE_MAX_BARS = { m1: 700, m5: 400 } as const;
++// 初始可視根數(之後由滾輪縮放/拖曳平移控制)。分 K 240 ≈ 一個交易日的 1 分 K 全長 ——
++// 切進去先看今天,再往左縮放/平移看更早。可視上限的 ≥2px 保護移交
++// candle-viewport 的 MAX_VISIBLE(700 = viewBox 寬 1400 ÷ 2px)。
++const DAILY_INIT_BARS = 120;
++const MINUTE_INIT_BARS = 240;
+ 
+-const MODES = [
++const MODE_LABELS: [ChartMode, string][] = [
+   ["intraday", "江波圖"],
+-  ["m1", "1分K"],
+-  ["m5", "5分K"],
++  ...(Array.from({ length: 10 }, (_, i) => [`m${i + 1}`, `${i + 1}分K`]) as [ChartMode, string][]),
+   ["day", "日K"],
+-] as const;
++];
++
++const VALID_MODE = /^(intraday|day|m([1-9]|10))$/;
+ 
+ function initialMode(): ChartMode {
+   const saved = window.localStorage.getItem(MODE_KEY);
+-  return saved === "m1" || saved === "m5" || saved === "day" ? saved : "intraday";
++  return saved !== null && VALID_MODE.test(saved) ? (saved as ChartMode) : "intraday";
+ }
+ 
+ export function StockChart({ accum, code }: { accum: StockAccum; code: string }) {
+   const [mode, setMode] = useState<ChartMode>(initialMode);
+-  const [days, setDays] = useState(DAYS_STEP);
+-  const { data, isPending, isError, error } = useStockBars(code, mode, days);
++  const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS);
++  // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
++  const { toggles, set } = useChartToggles();
+ 
+   function selectMode(next: ChartMode): void {
+     setMode(next);
+     window.localStorage.setItem(MODE_KEY, next);
+   }
+ 
+-  const bars = useMemo(
+-    () => (mode === "m5" ? aggregateBars(data ?? [], 5) : (data ?? [])),
+-    [data, mode],
+-  );
++  // n=1 時 aggregateBars 原樣回傳,不必特判
++  const bars = useMemo(() => aggregateBars(data ?? [], minutesOf(mode)), [data, mode]);
+ 
+-  const isMinute = mode === "m1" || mode === "m5";
++  const isMinute = mode !== "intraday" && mode !== "day";
+ 
+   return (
+     // shrink-0:圖表維持 viewBox 決定的自然高度。少了它,負剩餘空間時本容器會被壓縮,
+     // 而內部固定高度的 svg 不跟著縮 → 溢出並與下半列重疊(SC-6 / W-17)。
+     <div className="flex shrink-0 flex-col">
+-      <div className="mb-1 flex items-center gap-1">
+-        {MODES.map(([id, label]) => (
++      <div className="mb-1 flex flex-wrap items-center gap-1">
++        {MODE_LABELS.map(([id, label]) => (
+           <button
+             key={id}
+             type="button"
+@@ -64,17 +66,6 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
+             {label}
+           </button>
+         ))}
+-        {isMinute ? (
+-          <button
+-            type="button"
+-            disabled={days >= DAYS_MAX}
+-            onClick={() => setDays((d) => Math.min(DAYS_MAX, d + DAYS_STEP))}
+-            className="ml-2 rounded border border-line px-2 py-0.5 text-xs text-ink-dim hover:text-ink disabled:opacity-40"
+-          >
+-            往前
+-          </button>
+-        ) : null}
+-        {isMinute ? <span className="text-xs text-ink-dim">近 {days} 日</span> : null}
+       </div>
+       {mode === "intraday" ? (
+         <StockIntradayChart accum={accum} />
+@@ -91,10 +82,14 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
+           <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
+         </div>
+       ) : (
++        // key:換股或換模式時強制重掛,viewport 回到初始式。換模式會讓 total 由
++        // ~5,900 變 ~590,沿用舊 index 沒有意義(onTotalChange 只處理同序列的延伸)。
+         <CandleChart
++          key={`${code}-${mode}`}
+           bars={bars}
+-          maxBars={mode === "day" ? DAILY_MAX_BARS : MINUTE_MAX_BARS[mode]}
+-          showMa={mode === "day"}
++          initBars={isMinute ? MINUTE_INIT_BARS : DAILY_INIT_BARS}
++          showBb={toggles.bb}
++          onToggleBb={(v) => set("bb", v)}
+         />
+       )}
+     </div>
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index af84735..316a065 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -61,11 +61,60 @@ describe("StockIntradayChart", () => {
+   it("渲染價線/VWAP/內外盤副圖", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const polylines = container.querySelectorAll("polyline");
+-    expect(polylines.length).toBeGreaterThanOrEqual(2); // 價線 + VWAP
++    expect(polylines.length).toBeGreaterThanOrEqual(2);
+     expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(1);
+     expect(screen.getByText(/累積外盤/)).toBeTruthy();
+   });
+ 
++  // 🔴 SC-2:走勢線平盤上紅、平盤下綠(clipPath 切上下兩段),線與平盤之間填半透明色塊
++  it("價線雙色 + 平盤填色:bull/bear 各一條 polyline 與一個 polygon", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelector('polyline[class*="stroke-bull"]')).toBeTruthy();
++    expect(container.querySelector('polyline[class*="stroke-bear"]')).toBeTruthy();
++    const up = container.querySelector('polygon[class*="fill-bull"]');
++    const down = container.querySelector('polygon[class*="fill-bear"]');
++    expect(up).toBeTruthy();
++    expect(down).toBeTruthy();
++    expect(up!.getAttribute("fill-opacity")).toBe("0.15");
++    expect(down!.getAttribute("fill-opacity")).toBe("0.15");
++  });
++
++  it("clipPath id 互異、只含識別字元,且被對應元素以 url(#…) 引用", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const clips = [...container.querySelectorAll("clipPath")];
++    expect(clips.length).toBe(2);
++    const ids = clips.map((c) => c.getAttribute("id")!);
++    expect(new Set(ids).size).toBe(2);
++    // React 19 的 useId 產出 «r0» 形態,含非識別字元;必須過濾後才拼進 url(#…)
++    for (const id of ids) expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
++    for (const id of ids) {
++      expect(container.querySelector(`[clip-path="url(#${id})"]`)).toBeTruthy();
++    }
++  });
++
++  it("無昨收(meta.ref 缺)→ 單條 accent 價線、無填色無 clipPath,且與白色 VWAP 可區分", () => {
++    const noRef = fromSnapshot({
++      code: "2330", seq: 1,
++      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
++      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
++      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
++      ticks: [], book: null,
++      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
++    });
++    const { container } = wrap(<StockIntradayChart accum={noRef} />);
++    expect(container.querySelectorAll("clipPath").length).toBe(0);
++    expect(container.querySelectorAll("polygon").length).toBe(0);
++    expect(container.querySelector('polyline[class*="stroke-accent"]')).toBeTruthy();
++    expect(container.querySelector('polyline[class*="stroke-ink"]')).toBeTruthy(); // VWAP
++  });
++
++  // 🔴 SC-2.3:均價線由琥珀金 profit 改白色 ink
++  it("VWAP 線為 stroke-ink,全圖不再出現 stroke-profit", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelector('polyline[class*="stroke-profit"]')).toBeNull();
++    expect(container.querySelector('polyline[class*="stroke-ink"]')).toBeTruthy();
++  });
++
+   it("無分鐘資料顯示等待提示", () => {
+     const empty = fromSnapshot({
+       code: "2330", seq: 0, last: null, vwap: null, cum_inner: 0, cum_outer: 0,
+@@ -75,12 +124,12 @@ describe("StockIntradayChart", () => {
+     expect(screen.getByText("尚無成交")).toBeTruthy();
+   });
+ 
+-  it("toggle 列:均價/CDP/MA 三鈕,均價預設開(SC-4)", () => {
++  // 🔴 SC-3:CDP 改為預設開
++  it("toggle 列:均價/CDP/MA 三鈕,均價與 CDP 預設開(SC-3)", () => {
+     wrap(<StockIntradayChart accum={ACCUM} />);
+-    const vwap = screen.getByRole("button", { name: "均價" });
+-    expect(vwap.getAttribute("aria-pressed")).toBe("true");
+-    expect(screen.getByRole("button", { name: "CDP" }).getAttribute("aria-pressed")).toBe("false");
+-    expect(screen.getByRole("button", { name: "MA" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "均價" }).getAttribute("aria-pressed")).toBe("true");
++    expect(screen.getByRole("button", { name: "CDP" }).getAttribute("aria-pressed")).toBe("true");
++    expect(screen.getByRole("button", { name: "MA" }).getAttribute("aria-pressed")).toBe("false");
+   });
+ 
+   it("均價 toggle 關 → VWAP 線消失", () => {
+@@ -90,14 +139,21 @@ describe("StockIntradayChart", () => {
+     expect(container.querySelectorAll("polyline").length).toBe(before - 1);
+   });
+ 
+-  it("CDP toggle 開 → overlay 線與 label 出現(SC-4)", async () => {
++  it("CDP 預設開 → overlay 線與 label 直接出現(SC-3)", async () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+-    fireEvent.click(screen.getByRole("button", { name: "CDP" }));
+     await waitFor(() => expect(screen.getByText("CDP", { selector: "text" })).toBeTruthy());
+     expect(screen.getByText("AH", { selector: "text" })).toBeTruthy();
+     expect(container.querySelectorAll("line").length).toBeGreaterThan(5);
+   });
+ 
++  it("CDP toggle 關 → overlay 線與 label 消失(toggle 行為仍在)", async () => {
++    wrap(<StockIntradayChart accum={ACCUM} />);
++    await waitFor(() => expect(screen.getByText("CDP", { selector: "text" })).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "CDP" }));
++    expect(screen.queryByText("CDP", { selector: "text" })).toBeNull();
++    expect(screen.queryByText("AH", { selector: "text" })).toBeNull();
++  });
++
+   it("overlay 全 null → CDP/MA 反灰 disabled + title 無日線資料(SC-4/R8)", async () => {
+     overlayResponse = { cdp: null, ma5: null, ma20: null, date: null };
+     wrap(<StockIntradayChart accum={ACCUM} />);
+@@ -111,37 +167,87 @@ describe("StockIntradayChart", () => {
+     expect(btn.getAttribute("aria-pressed")).toBe("false"); // 自動置 off,不卡開著關不掉
+   });
+ 
+-  it("Y 軸刻度:左緣價位、右緣 %(SC-2)", () => {
+-    wrap(<StockIntradayChart accum={ACCUM} />);
++  // 🔴 SC-4:刻度由 5 條(以 5% 為分隔)改為 11 條(0/±2/±4/±6/±8/±10%)
++  it("Y 軸刻度:左緣 11 個價位、右緣 11 個 %,含 ±2% 階(SC-4)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    // 端點 = 漲跌停原值
+     expect(screen.getByText("2090", { selector: "text" })).toBeTruthy();
+     expect(screen.getByText("2550", { selector: "text" })).toBeTruthy();
+     expect(screen.getByText("+9.9%", { selector: "text" })).toBeTruthy();
+     expect(screen.getByText("0%", { selector: "text" })).toBeTruthy();
++    // ±2% 階:ref 2320 → snapDown(2366.4) = 2365 / snapDown(2273.6) = 2270
++    expect(screen.getByText("2365", { selector: "text" })).toBeTruthy();
++    expect(screen.getByText("2270", { selector: "text" })).toBeTruthy();
++    // 左緣價位刻度共 11 個(不能用 x="2" 選 —— 會撞到 09:00 的時間軸標籤 toX(540)+2)
++    expect(container.querySelectorAll('[data-testid="y-tick-price"]').length).toBe(11);
++    expect(container.querySelectorAll('text[text-anchor="end"]').length).toBe(11); // 右緣 %
+   });
+ 
+-  it("量 bar 依分鐘漲跌著色(SC-3)", () => {
++  // 🔴 SC-5:主圖底部量 bar 移除,只留內外盤能量副圖
++  it("主圖不再有量 bar;內外盤能量副圖仍在(SC-5)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+-    // 541 首分鐘 flat、542 收高於 541 → up(fill-bull)
+-    expect(container.querySelector('rect[class*="fill-bull"]')).toBeTruthy();
+-    expect(container.querySelector('rect[class*="fill-ink-dim"]')).toBeTruthy();
++    const svgs = [...container.querySelectorAll("svg")];
++    const main = svgs.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!;
++    const sub = svgs.find((s) => s.getAttribute("aria-label") === "內外盤能量")!;
++    // defs 內的 rect 是 clipPath 的裁切框、不是畫面元素,要排除
++    const drawnRects = [...main.querySelectorAll("rect")].filter((r) => r.closest("defs") === null);
++    expect(drawnRects.length).toBe(0);
++    expect(sub.querySelectorAll("rect").length).toBeGreaterThan(0);
+   });
+ 
+-  it("hover 顯示十字與 tooltip、移出消失(SC-1)", () => {
++  // 🔴 SC-7:SVG 內浮動 tooltip 移除,改圖上方常駐資訊列;水平線改跟滑鼠 y 當量尺
++  it("資訊列:預設顯示最新分鐘(即時態),hover 時切換為游標所在分鐘", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const readout = () => screen.getByTestId("chart-readout");
++    expect(readout().textContent).toContain("09:02"); // 最新分鐘 = 542
++    expect(readout().getAttribute("data-hovering")).toBe("false");
+     const svg = container.querySelector("svg")!;
+     // width 800、x 域 540..810 分鐘 → 541 分在 x = 1/270*800 ≈ 2.96px
+     fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
+-    expect(screen.getByText(/09:01/, { selector: "text" })).toBeTruthy();
+-    expect(screen.getByText(/2380/, { selector: "text" })).toBeTruthy();
++    expect(readout().textContent).toContain("09:01");
++    expect(readout().getAttribute("data-hovering")).toBe("true");
++    fireEvent.mouseLeave(svg);
++    expect(readout().getAttribute("data-hovering")).toBe("false");
++    expect(readout().textContent).toContain("09:02");
++  });
++
++  it("資訊列含每分鐘內外盤(本專案核心訊號,原 tooltip 沒顯示)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const svg = container.querySelector("svg")!;
++    fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
++    const text = screen.getByTestId("chart-readout").textContent ?? "";
++    expect(text).toContain("外 10");
++    expect(text).toContain("內 0");
++  });
++
++  it("十字線:垂直線 snap 分鐘、水平線跟滑鼠 y(不再鎖該分鐘收盤價)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const svg = container.querySelector("svg")!;
++    fireEvent.mouseMove(svg, { clientX: 3, clientY: 120 });
++    expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(120);
++    fireEvent.mouseMove(svg, { clientX: 3, clientY: 60 });
++    expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(60);
++    expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
+     fireEvent.mouseLeave(svg);
+-    expect(screen.queryByText(/09:01/, { selector: "text" })).toBeNull();
++    expect(container.querySelector("[data-testid='crosshair-h']")).toBeNull();
+   });
+ 
+-  it("hover 無資料分鐘不顯示 tooltip(edge 7)", () => {
++  // 🟢 SC-7.8:量尺不依賴資料 —— 無成交分鐘仍要能量價位,只是沒有 bar 可指
++  it("hover 無資料分鐘:垂直線與 hover 資訊列不出現,水平線與左價標仍在(分解退化)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const svg = container.querySelector("svg")!;
+     fireEvent.mouseMove(svg, { clientX: 400, clientY: 100 }); // ~11:15 無資料
+-    expect(screen.queryByText(/11:1/)).toBeNull();
++    expect(container.querySelector("[data-testid='crosshair-v']")).toBeNull();
++    expect(screen.getByTestId("chart-readout").getAttribute("data-hovering")).toBe("false");
++    expect(container.querySelector("[data-testid='crosshair-h']")).toBeTruthy();
++    expect(container.querySelector("[data-testid='price-tag-text']")).toBeTruthy();
++  });
++
++  // 🟢 SC-7.4:右緣 % 標籤(江波圖獨有;K 線跨多日無「相對昨收」語意)
++  it("右 % 標:顯示滑鼠價位相對昨收的百分比,無 ref 時不出現", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 3, clientY: 100 });
++    expect(container.querySelector("[data-testid='pct-tag-text']")!.textContent).toMatch(/^[+-]?\d/);
+   });
+ 
+   // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把時間軸 / 價位刻度 / 內外盤文字反白
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index cbd297b..9bc4ac6 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -1,13 +1,18 @@
+-import { memo, useMemo, useState } from "react";
++import { memo, useId, useMemo, useState } from "react";
+ 
++import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+ import { useChartToggles } from "@/hooks/useChartToggles";
++import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
++import { snapDown } from "@/lib/stock-tick";
+ import { useStockOverlay } from "@/hooks/useStockOverlay";
+ import type { StockAccum } from "@/lib/stock-accum";
+ import {
+   buildIntradayGeometry,
+   overlayLines,
+   X_END_MIN,
++  X_LABEL_H,
+   X_START_MIN,
++  type EnergyBar,
+   type IntradayGeometry,
+   type OverlayLine,
+ } from "@/lib/stock-intraday-svg";
+@@ -15,6 +20,14 @@ import { cn } from "@/lib/utils";
+ 
+ const MAIN = { width: 800, height: 260 };
+ const SUB = { width: 800, height: 70 };
++/** 軸標籤尺寸;time tag 的 y = MAIN.height − boxH,底邊恰貼 viewBox 底不被裁 */
++const PRICE_TAG = { w: 46, h: 14 };
++const PCT_TAG = { w: 46, h: 14 };
++const TIME_TAG = { w: 34, h: 13 };
++
++function hhmm(minute: number): string {
++  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
++}
+ 
+ function fmt(milli: number): string {
+   const v = milli / 1000;
+@@ -41,24 +54,41 @@ function toX(minute: number): number {
+ 
+ const BAR_W = Math.max(1, MAIN.width / (X_END_MIN - X_START_MIN) - 0.4);
+ 
+-const DIR_CLASS = {
+-  up: "fill-bull/50",
+-  down: "fill-bear/50",
+-  flat: "fill-ink-dim/40",
+-} as const;
+-
+-/** 靜態圖層 memo:hover 每 mousemove re-render 父層,量 bar/線層不可每次重建(SC-1)。 */
++/** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
+ const ChartStatic = memo(function ChartStatic({
+   g,
+   showVwap,
+   oLines,
++  clipAbove,
++  clipBelow,
+ }: {
+   g: IntradayGeometry;
+   showVwap: boolean;
+   oLines: OverlayLine[];
++  clipAbove: string;
++  clipBelow: string;
+ }) {
+   return (
+     <g>
++      {/* 平盤上下的填色與雙色價線共用這兩個 clip(SC-2)。
++          id 必須全域唯一(SVG id 是 document 範圍),且只含識別字元 ——
++          React 19 的 useId 產出 «r0» 形態,直接拼進 url(#…) 的解析行為未實測,
++          解析失敗時 SVG 規範下該元素**不會被繪製**,是完全靜默的失敗。 */}
++      {g.hasRef ? (
++        <defs>
++          <clipPath id={clipAbove}>
++            <rect x={0} y={0} width={MAIN.width} height={Math.max(0, g.refY)} />
++          </clipPath>
++          <clipPath id={clipBelow}>
++            <rect
++              x={0}
++              y={g.refY}
++              width={MAIN.width}
++              height={Math.max(0, MAIN.height - X_LABEL_H - g.refY)}
++            />
++          </clipPath>
++        </defs>
++      ) : null}
+       {g.upperY !== null ? (
+         <line x1={0} x2={MAIN.width} y1={g.upperY} y2={g.upperY} className="stroke-bull" strokeDasharray="4 3" strokeWidth={0.8} />
+       ) : null}
+@@ -77,7 +107,13 @@ const ChartStatic = memo(function ChartStatic({
+       {/* Y 軸刻度:左價位、右 %(SC-2) */}
+       {g.yTicks.map((t) => (
+         <g key={`yt-${t.priceMilli}`}>
+-          <text x={2} y={Math.min(Math.max(t.y - 2, 8), MAIN.height - 16)} className="fill-ink-dim" fontSize="0.625rem">
++          <text
++            data-testid="y-tick-price"
++            x={2}
++            y={Math.min(Math.max(t.y - 2, 8), MAIN.height - 16)}
++            className="fill-ink-dim"
++            fontSize="0.625rem"
++          >
+             {fmt(t.priceMilli)}
+           </text>
+           {t.pct !== null ? (
+@@ -93,17 +129,23 @@ const ChartStatic = memo(function ChartStatic({
+           ) : null}
+         </g>
+       ))}
+-      {/* 量 bar(底部 1/4 高;依分鐘漲跌著色 — SC-3) */}
+-      {g.volumeBars.map((b) => (
+-        <rect
+-          key={`v-${b.x}`}
+-          x={b.x}
+-          y={MAIN.height - 14 - (b.h / MAIN.height) * (MAIN.height / 4)}
+-          width={BAR_W}
+-          height={(b.h / MAIN.height) * (MAIN.height / 4)}
+-          className={DIR_CLASS[b.dir]}
+-        />
+-      ))}
++      {/* 平盤與走勢線之間的填色(SC-3):同一個封閉多邊形,用 clip 切上下兩半分別塗色 */}
++      {g.hasRef && g.areaPolygon !== "" ? (
++        <>
++          <polygon
++            points={g.areaPolygon}
++            className="fill-bull"
++            fillOpacity="0.15"
++            clipPath={`url(#${clipAbove})`}
++          />
++          <polygon
++            points={g.areaPolygon}
++            className="fill-bear"
++            fillOpacity="0.15"
++            clipPath={`url(#${clipBelow})`}
++          />
++        </>
++      ) : null}
+       {/* 疊線(CDP/MA)+ 右緣 label(SC-4) */}
+       {oLines.map((l) => (
+         <g key={`o-${l.label}`}>
+@@ -124,9 +166,53 @@ const ChartStatic = memo(function ChartStatic({
+         </g>
+       ))}
+       {showVwap ? (
+-        <polyline points={pts(g.vwapLine)} fill="none" className="stroke-profit" strokeWidth={1.2} />
++        // 均價線白色(SC-2.3);原本是琥珀金 profit,與新的紅綠雙色價線對比不足
++        <polyline points={pts(g.vwapLine)} fill="none" className="stroke-ink" strokeWidth={1.2} />
+       ) : null}
+-      <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
++      {/* 主價線(SC-2):有昨收 → clip 切上下兩段,平盤上紅、平盤下綠;
++          無昨收 → 沒有「平盤」可言,退回單條 accent 桃紅(不是白 —— 會跟 VWAP 同色) */}
++      {g.hasRef ? (
++        <>
++          <polyline
++            points={pts(g.priceLine)}
++            fill="none"
++            className="stroke-bull"
++            strokeWidth={1.6}
++            clipPath={`url(#${clipAbove})`}
++          />
++          <polyline
++            points={pts(g.priceLine)}
++            fill="none"
++            className="stroke-bear"
++            strokeWidth={1.6}
++            clipPath={`url(#${clipBelow})`}
++          />
++        </>
++      ) : (
++        <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
++      )}
++    </g>
++  );
++});
++
++/** 內外盤能量副圖的 bar 層。**必須 memo**:hover 每個 mousemove 都 re-render 父層,
++ *  這層最多 270 組 × 2 = 540 個 `<rect>`,不可每次重建(對齊 ChartStatic 的慣例)。
++ *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
++const EnergySub = memo(function EnergySub({ bars }: { bars: EnergyBar[] }) {
++  return (
++    <g>
++      {bars.map((b) => (
++        <g key={`e-${b.x}`}>
++          <rect x={b.x} y={SUB.height - b.outerH} width={BAR_W / 2} height={b.outerH} className="fill-bull" />
++          <rect
++            x={b.x + BAR_W / 2}
++            y={SUB.height - b.innerH}
++            width={BAR_W / 2}
++            height={b.innerH}
++            className="fill-bear"
++          />
++        </g>
++      ))}
+     </g>
+   );
+ });
+@@ -134,7 +220,13 @@ const ChartStatic = memo(function ChartStatic({
+ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
+   const { toggles, set } = useChartToggles();
+   const overlayQ = useStockOverlay(accum.code || null, toggles.cdp || toggles.ma);
+-  const [hoverMin, setHoverMin] = useState<number | null>(null);
++  // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
++  // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
++  const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
++  // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
++  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
++  const clipAbove = `${uid}-above`;
++  const clipBelow = `${uid}-below`;
+ 
+   const g = useMemo(
+     () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, MAIN),
+@@ -177,20 +269,54 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
+   const total = accum.cumInner + accum.cumOuter;
+   const outerPct = total > 0 ? ((accum.cumOuter / total) * 100).toFixed(1) : "-";
+ 
++  const hoverMin = hover?.min ?? null;
+   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
+   const ref = accum.meta?.ref ?? null;
+-  const hoverChg =
+-    hoverAgg && ref ? (((hoverAgg.c - ref) / ref) * 100).toFixed(2) : null;
+-  const hoverLabel =
+-    hoverMin !== null
+-      ? `${String(Math.floor(hoverMin / 60)).padStart(2, "0")}:${String(hoverMin % 60).padStart(2, "0")}`
+-      : "";
++  const plotBottom = MAIN.height - X_LABEL_H;
++
++  // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
++  const lastPt = g.priceLine[g.priceLine.length - 1];
++  const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
++  const shownAgg = shownMin !== null ? accum.minutes.get(shownMin) : undefined;
++  const shownChg =
++    shownAgg !== undefined && ref ? ((shownAgg.c - ref) / ref) * 100 : null;
++  const fields: ReadoutField[] =
++    shownAgg === undefined || shownMin === null
++      ? [
++          { label: "", value: "-" },
++          { label: "", value: "-" },
++          { label: "", value: "-" },
++          { label: "量", value: "-" },
++          { label: "外", value: "-" },
++          { label: "內", value: "-" },
++        ]
++      : [
++          { label: "", value: hhmm(shownMin) },
++          {
++            label: "",
++            value: fmt(shownAgg.c),
++            tone: shownChg === null ? undefined : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : undefined,
++          },
++          {
++            label: "",
++            value: shownChg === null ? "-" : `${shownChg > 0 ? "+" : ""}${shownChg.toFixed(2)}%`,
++            tone: shownChg === null ? "muted" : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : "muted",
++          },
++          { label: "量", value: String(shownAgg.v) },
++          { label: "外", value: String(shownAgg.o), tone: "bull" },
++          { label: "內", value: String(shownAgg.i), tone: "bear" },
++        ];
++
++  const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
++  const hoverPct = hoverPrice !== null && ref ? ((hoverPrice - ref) / ref) * 100 : null;
+ 
+   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
+     const rect = e.currentTarget.getBoundingClientRect();
+-    if (rect.width <= 0) return;
+-    const x = ((e.clientX - rect.left) / rect.width) * MAIN.width;
+-    setHoverMin(g.minuteOf(x));
++    const { x, y } = toSvgPoint(e, rect, MAIN);
++    const min = g.minuteOf(x);
++    const ry = Math.round(y);
++    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
++    setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
+   }
+ 
+   const toggleDefs: { key: "vwap" | "cdp" | "ma"; label: string; available: boolean }[] = [
+@@ -203,7 +329,10 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
+     // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
+     // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
+     <figure className="select-none rounded-md border border-line bg-surface p-4">
+-      <div className="mb-1 flex justify-end gap-1">
++      {/* 頂列:左資訊條、右 toggle。高度以 rem 固定,與 K 線頂列逐項對稱(SC-6.7) */}
++      <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
++        <ChartReadout fields={fields} hovering={hoverAgg !== undefined} />
++        <div className="flex shrink-0 gap-1">
+         {toggleDefs.map(({ key, label, available }) => (
+           <button
+             key={key}
+@@ -223,60 +352,148 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
+             {label}
+           </button>
+         ))}
++        </div>
+       </div>
+       <svg
+         viewBox={`0 0 ${MAIN.width} ${MAIN.height}`}
+         className="w-full"
++        style={{ touchAction: "pan-y" }}
+         role="img"
+         aria-label="分時走勢圖"
+         onMouseMove={onMove}
+-        onMouseLeave={() => setHoverMin(null)}
++        onMouseLeave={() => setHover(null)}
+       >
+-        <ChartStatic g={g} showVwap={toggles.vwap} oLines={oLines} />
+-        {/* hover 十字 + tooltip(SC-1) */}
+-        {hoverMin !== null && hoverAgg ? (
++        <ChartStatic
++          g={g}
++          showVwap={toggles.vwap}
++          oLines={oLines}
++          clipAbove={clipAbove}
++          clipBelow={clipBelow}
++        />
++        {/* hover 十字 + 軸標籤(SC-7)。
++            分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
++            垂直線與資料點需要資料,缺就不畫(白名單 2:minuteOf 不 snap 最近)。 */}
++        {hover !== null ? (
+           <g pointerEvents="none">
++            {hoverMin !== null && hoverAgg ? (
++              <>
++                <line
++                  data-testid="crosshair-v"
++                  x1={toX(hoverMin)}
++                  x2={toX(hoverMin)}
++                  y1={0}
++                  y2={plotBottom}
++                  className="stroke-ink-muted"
++                  strokeDasharray="2 2"
++                  strokeWidth={0.7}
++                />
++                {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
++                <circle cx={toX(hoverMin)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
++              </>
++            ) : null}
+             <line
+-              x1={toX(hoverMin)}
+-              x2={toX(hoverMin)}
+-              y1={0}
+-              y2={MAIN.height - 14}
+-              className="stroke-ink-muted"
+-              strokeDasharray="2 2"
+-              strokeWidth={0.7}
+-            />
+-            <line
++              data-testid="crosshair-h"
+               x1={0}
+               x2={MAIN.width}
+-              y1={g.toY(hoverAgg.c)}
+-              y2={g.toY(hoverAgg.c)}
++              y1={hover.y}
++              y2={hover.y}
+               className="stroke-ink-muted"
+               strokeDasharray="2 2"
+               strokeWidth={0.7}
+             />
+-            <g transform={`translate(${Math.min(toX(hoverMin) + 8, MAIN.width - 130)}, 10)`}>
+-              <rect width={122} height={34} rx={3} className="fill-bg-deep/90 stroke-line" />
+-              <text x={6} y={13} className="fill-ink" fontSize="0.625rem">
+-                {hoverLabel} · {fmt(hoverAgg.c)}
+-              </text>
+-              <text x={6} y={27} className="fill-ink-dim" fontSize="0.625rem">
+-                {hoverChg !== null ? `${Number(hoverChg) > 0 ? "+" : ""}${hoverChg}%` : "-"} · 量{" "}
+-                {hoverAgg.v}
++            {/* 左緣價位標籤(snap 到合法 tick:顯示的價位要「可下單」) */}
++            <g transform={`translate(0, ${clampTagY(hover.y, PRICE_TAG.h, plotBottom)})`}>
++              <rect
++                data-testid="price-tag"
++                width={PRICE_TAG.w}
++                height={PRICE_TAG.h}
++                rx={2}
++                className="fill-bg-deep stroke-line"
++              />
++              <text
++                data-testid="price-tag-text"
++                x={4}
++                y={PRICE_TAG.h - 4}
++                className="fill-ink"
++                fontSize="0.625rem"
++              >
++                {hoverPrice !== null ? fmt(hoverPrice) : ""}
+               </text>
+             </g>
++            {/* 右緣 % 標籤(江波圖獨有:K 線跨多日沒有「相對昨收」語意) */}
++            {hoverPct !== null ? (
++              <g
++                transform={`translate(${MAIN.width - PCT_TAG.w}, ${clampTagY(hover.y, PCT_TAG.h, plotBottom)})`}
++              >
++                <rect
++                  data-testid="pct-tag"
++                  width={PCT_TAG.w}
++                  height={PCT_TAG.h}
++                  rx={2}
++                  className="fill-bg-deep stroke-line"
++                />
++                <text
++                  data-testid="pct-tag-text"
++                  x={PCT_TAG.w - 4}
++                  y={PCT_TAG.h - 4}
++                  textAnchor="end"
++                  className={cn(
++                    hoverPct > 0 ? "fill-bull" : hoverPct < 0 ? "fill-bear" : "fill-ink-dim",
++                  )}
++                  fontSize="0.625rem"
++                >
++                  {`${hoverPct > 0 ? "+" : ""}${hoverPct.toFixed(1)}%`}
++                </text>
++              </g>
++            ) : null}
++            {/* 底部時間標籤 */}
++            {hoverMin !== null ? (
++              <g
++                transform={`translate(${clampTagX(toX(hoverMin), TIME_TAG.w, MAIN.width)}, ${
++                  MAIN.height - TIME_TAG.h
++                })`}
++              >
++                <rect
++                  data-testid="time-tag"
++                  width={TIME_TAG.w}
++                  height={TIME_TAG.h}
++                  rx={2}
++                  className="fill-bg-deep stroke-line"
++                />
++                <text
++                  data-testid="time-tag-text"
++                  x={TIME_TAG.w / 2}
++                  y={TIME_TAG.h - 3.5}
++                  textAnchor="middle"
++                  className="fill-ink"
++                  fontSize="0.625rem"
++                >
++                  {hhmm(hoverMin)}
++                </text>
++              </g>
++            ) : null}
+           </g>
+         ) : null}
+       </svg>
+-      {/* 內外盤能量副圖 */}
+-      <svg viewBox={`0 0 ${SUB.width} ${SUB.height}`} className="mt-1 w-full" role="img" aria-label="內外盤能量">
+-        {subGeo.energyBars.map((b) => (
+-          <g key={`e-${b.x}`}>
+-            <rect x={b.x} y={SUB.height - b.outerH} width={BAR_W / 2} height={b.outerH} className="fill-bull" />
+-            <rect x={b.x + BAR_W / 2} y={SUB.height - b.innerH} width={BAR_W / 2} height={b.innerH} className="fill-bear" />
+-          </g>
+-        ))}
++      {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
++          多出的固定 4px 會讓比例隨容器寬漂移。 */}
++      <svg viewBox={`0 0 ${SUB.width} ${SUB.height}`} className="w-full" role="img" aria-label="內外盤能量">
++        <EnergySub bars={subGeo.energyBars} />
++        {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
++        {hoverMin !== null ? (
++          <line
++            x1={toX(hoverMin)}
++            x2={toX(hoverMin)}
++            y1={0}
++            y2={SUB.height}
++            className="stroke-ink-muted"
++            strokeDasharray="2 2"
++            strokeWidth={0.7}
++            pointerEvents="none"
++          />
++        ) : null}
+       </svg>
+-      <figcaption className="mt-1 flex justify-between font-mono text-xs text-ink-dim">
++      <figcaption className="mt-1 flex h-4 items-center justify-between font-mono text-xs text-ink-dim">
+         <span>
+           累積外盤 <span className="text-bull">{accum.cumOuter}</span> · 內盤{" "}
+           <span className="text-bear">{accum.cumInner}</span> · 外盤比 {outerPct}%
+diff --git a/frontend/src/hooks/useChartToggles.test.ts b/frontend/src/hooks/useChartToggles.test.ts
+index c06ec21..148513b 100644
+--- a/frontend/src/hooks/useChartToggles.test.ts
++++ b/frontend/src/hooks/useChartToggles.test.ts
+@@ -12,28 +12,49 @@ beforeEach(() => {
+ 
+ afterEach(cleanup);
+ 
++const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: false };
++
+ describe("useChartToggles", () => {
+-  it("預設 vwap 開、cdp/ma 關", () => {
++  // 🔴 SC-3:CDP 由預設關改為預設開(user 拍板);同時新增 bb(布林,預設關)
++  it("預設 vwap/cdp 開、ma/bb 關", () => {
+     const hook = renderHook(() => useChartToggles());
+-    expect(hook.result.current.toggles).toEqual({ vwap: true, cdp: false, ma: false });
++    expect(hook.result.current.toggles).toEqual(DEFAULTS);
+   });
+ 
+   it("set 更新並持久化 localStorage", () => {
+     const hook = renderHook(() => useChartToggles());
+-    act(() => hook.result.current.set("cdp", true));
+-    expect(hook.result.current.toggles.cdp).toBe(true);
+-    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({
+-      vwap: true,
+-      cdp: true,
+-      ma: false,
+-    });
++    act(() => hook.result.current.set("cdp", false));
++    expect(hook.result.current.toggles.cdp).toBe(false);
++    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({ ...DEFAULTS, cdp: false });
+     const hook2 = renderHook(() => useChartToggles());
+-    expect(hook2.result.current.toggles.cdp).toBe(true);
++    expect(hook2.result.current.toggles.cdp).toBe(false);
+   });
+ 
+   it("localStorage 壞 JSON → 回預設不炸", () => {
+     window.localStorage.setItem(KEY, "{oops");
+     const hook = renderHook(() => useChartToggles());
+-    expect(hook.result.current.toggles).toEqual({ vwap: true, cdp: false, ma: false });
++    expect(hook.result.current.toggles).toEqual(DEFAULTS);
++  });
++
++  it("既有使用者的存檔不被新預設覆蓋(cdp 曾關過就維持關)", () => {
++    window.localStorage.setItem(KEY, JSON.stringify({ vwap: true, cdp: false, ma: false }));
++    const hook = renderHook(() => useChartToggles());
++    expect(hook.result.current.toggles.cdp).toBe(false);
++    expect(hook.result.current.toggles.bb).toBe(false); // 新 key 由 DEFAULTS 補
++  });
++
++  // 🔴 R21:StockChart(持有 bb)與 StockIntradayChart(持有 vwap/cdp/ma)是兩個 instance,
++  // set 若用自己那份 stale prev 整包寫回,後寫的一方會回滾對方剛做的變更。
++  it("兩個 instance 交替 set 不互相覆蓋(set 先重讀 localStorage 再 merge)", () => {
++    const a = renderHook(() => useChartToggles());
++    const b = renderHook(() => useChartToggles()); // b 的 prev 停在 mount 當下
++    act(() => a.result.current.set("cdp", false));
++    act(() => b.result.current.set("bb", true));
++    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({
++      vwap: true,
++      cdp: false, // ← 沒有被 b 的 stale prev 還原成 true
++      ma: false,
++      bb: true,
++    });
+   });
+ });
+diff --git a/frontend/src/hooks/useChartToggles.ts b/frontend/src/hooks/useChartToggles.ts
+index e21839e..5d56cee 100644
+--- a/frontend/src/hooks/useChartToggles.ts
++++ b/frontend/src/hooks/useChartToggles.ts
+@@ -6,9 +6,13 @@ export interface ChartToggles {
+   vwap: boolean;
+   cdp: boolean;
+   ma: boolean;
++  /** 布林通道(K 線專用) */
++  bb: boolean;
+ }
+ 
+-const DEFAULTS: ChartToggles = { vwap: true, cdp: false, ma: false };
++/** `cdp` 預設開(SC-3,user 拍板)。已寫入 localStorage 的使用者維持自己的選擇 ——
++ *  `load()` 的 `{...DEFAULTS, ...saved}` 讓存檔覆蓋預設,刻意不做強制升級。 */
++const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: false };
+ 
+ function load(): ChartToggles {
+   try {
+@@ -23,12 +27,14 @@ function load(): ChartToggles {
+ export function useChartToggles() {
+   const [toggles, setToggles] = useState<ChartToggles>(load);
+ 
++  // merge 的基底必須是**重讀的 localStorage**,不是自己那份 prev:本 hook 是純 useState,
++  // 每個呼叫端各持一份。StockChart(管 bb)與 StockIntradayChart(管 vwap/cdp/ma)同時
++  // 存活,用 stale prev 整包寫回會讓後寫的一方回滾對方剛做的變更 ——
++  // 實際症狀是「江波圖把 CDP 關掉、去 K 線按了 BB、切回來 CDP 自己亮回來」。
+   function set(key: keyof ChartToggles, value: boolean): void {
+-    setToggles((prev) => {
+-      const next = { ...prev, [key]: value };
+-      window.localStorage.setItem(KEY, JSON.stringify(next));
+-      return next;
+-    });
++    const next = { ...load(), [key]: value };
++    window.localStorage.setItem(KEY, JSON.stringify(next));
++    setToggles(next);
+   }
+ 
+   return { toggles, set };
+diff --git a/frontend/src/hooks/useStockBars.test.tsx b/frontend/src/hooks/useStockBars.test.tsx
+index 0b7e321..6765fbb 100644
+--- a/frontend/src/hooks/useStockBars.test.tsx
++++ b/frontend/src/hooks/useStockBars.test.tsx
+@@ -4,7 +4,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
+ import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+-import { DAYS_MAX, DAYS_STEP, inTradingHours, useStockBars } from "@/hooks/useStockBars";
++import { inTradingHours, MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+ 
+@@ -82,16 +82,24 @@ describe("useStockBars 取數條件", () => {
+     expect(urls()[before]).toContain("tf=1");
+   });
+ 
+-  it("days 改變會重新取數(D-10 往前鈕靠 query key;review R2-3)", async () => {
++  // days 已固定為 MINUTE_DAYS(往前鈕移除),但 query key 仍含 days —— 這條保住
++  // 「days 進 key」的契約,之後若要恢復可變天數不會靜默失效
++  it("days 改變會重新取數(query key 含 days)", async () => {
+     const { rerender } = renderHook(({ d }: { d: number }) => useStockBars("2330", "m1", d), {
+       wrapper,
+-      initialProps: { d: DAYS_STEP },
++      initialProps: { d: 5 },
+     });
+-    await waitFor(() => expect(urls().some((u) => u.includes(`days=${DAYS_STEP}`))).toBe(true));
+-    rerender({ d: DAYS_STEP * 2 });
+-    await waitFor(() =>
+-      expect(urls().some((u) => u.includes(`days=${DAYS_STEP * 2}`))).toBe(true),
+-    );
++    await waitFor(() => expect(urls().some((u) => u.includes("days=5"))).toBe(true));
++    rerender({ d: 10 });
++    await waitFor(() => expect(urls().some((u) => u.includes("days=10"))).toBe(true));
++  });
++
++  it("m2…m10 一律走 tf=1(前端聚合,不打新 endpoint)", async () => {
++    renderHook(() => useStockBars("2330", "m7", MINUTE_DAYS), { wrapper });
++    await waitFor(() => expect(urls().some((u) => u.includes("/api/stock/bars"))).toBe(true));
++    const url = urls().find((u) => u.includes("/api/stock/bars"))!;
++    expect(url).toContain("tf=1");
++    expect(url).toContain(`days=${MINUTE_DAYS}`);
+   });
+ 
+   it("錯誤碼依專案契約自 detail.error 解析", async () => {
+@@ -104,7 +112,7 @@ describe("useStockBars 取數條件", () => {
+     expect(result.current.error?.message).toBe("BAD_TF");
+   });
+ 
+-  it("DAYS_MAX 為 30(與後端 clamp 一致)", () => {
+-    expect(DAYS_MAX).toBe(30);
++  it("MINUTE_DAYS 為 30(與後端 clamp 一致;分K 一次載滿不再分頁)", () => {
++    expect(MINUTE_DAYS).toBe(30);
+   });
+ });
+diff --git a/frontend/src/hooks/useStockBars.ts b/frontend/src/hooks/useStockBars.ts
+index 837ce63..ca284ab 100644
+--- a/frontend/src/hooks/useStockBars.ts
++++ b/frontend/src/hooks/useStockBars.ts
+@@ -5,14 +5,30 @@ import type { Bar } from "@/lib/candle";
+ /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
+  *  - `D`:當日內不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
+  *  - `1`:交易時段每 60s 重取(D-9)。成本控制在後端 —— 歷史日走永久 memo,
+- *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。 */
++ *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。
++ *
++ *  2–10 分 K **共用同一份 `tf=1` 原料**,由前端 `aggregateBars` 聚合;後端 `tf` 值域
++ *  仍只有 `D` / `1`,不需要改(app.py:399 的 BAD_TF 白名單)。 */
+ 
+-export type ChartMode = "intraday" | "m1" | "m5" | "day";
++/** 分 K 由 1/5 兩檔擴為 1–10 連續(SC-6.1)。union 展開而非 template literal 型別 ——
++ *  後者在 noUncheckedIndexedAccess 下的推導比較難駕馭,而這裡只有十個值。 */
++export type MinuteMode =
++  | "m1" | "m2" | "m3" | "m4" | "m5"
++  | "m6" | "m7" | "m8" | "m9" | "m10";
++export type ChartMode = "intraday" | "day" | MinuteMode;
+ 
+-export const DAYS_STEP = 5;
+-export const DAYS_MAX = 30;
++/** 分 K 一次載滿的天數。原本是「往前」鈕每次 +5 的上限,現在是固定值 ——
++ *  user 要求不必再點往前才能看 30 日,改由圖上縮放/平移取用(SC-6.2)。 */
++export const MINUTE_DAYS = 30;
+ const POLL_MS = 60_000;
+ 
++/** `m7` → 7;非分 K 模式回 1(不聚合)。 */
++export function minutesOf(mode: ChartMode): number {
++  if (mode === "intraday" || mode === "day") return 1;
++  const n = Number(mode.slice(1));
++  return Number.isFinite(n) && n >= 1 ? n : 1;
++}
++
+ /** 台北交易時段(本機時區 = 台北,部署綁本機)。
+  *
+  * 週末必須擋掉:少了星期判定,週六日整個上午都會每 60s 打一次當日段,而當日段恆空
+diff --git a/frontend/src/lib/bollinger.test.ts b/frontend/src/lib/bollinger.test.ts
+new file mode 100644
+index 0000000..e864b16
+--- /dev/null
++++ b/frontend/src/lib/bollinger.test.ts
+@@ -0,0 +1,85 @@
++import { describe, expect, it } from "vitest";
++
++import { bandSeries, bollinger } from "@/lib/bollinger";
++import { movingAverage, type Bar } from "@/lib/candle";
++
++function bar(c: number, i = 0): Bar {
++  return { t: `2026-01-${String(i + 1).padStart(2, "0")}`, o: c, h: c, l: c, c, v: 1 };
++}
++
++/** 收盤序列 → bars */
++function bars(closes: number[]): Bar[] {
++  return closes.map((c, i) => bar(c, i));
++}
++
++describe("bollinger", () => {
++  it("前 n−1 根為 null,第 n 根起有值", () => {
++    const out = bollinger(bars([1, 2, 3, 4, 5].map((x) => x * 1000)), 3);
++    expect(out[0]).toBeNull();
++    expect(out[1]).toBeNull();
++    expect(out[2]).not.toBeNull();
++    expect(out[4]).not.toBeNull();
++  });
++
++  it("資料不足 n 根 → 全 null", () => {
++    expect(bollinger(bars([1000, 2000]), 20).every((b) => b === null)).toBe(true);
++  });
++
++  it("空輸入 → 空陣列,不崩", () => {
++    expect(bollinger([], 20)).toEqual([]);
++  });
++
++  it("中軌逐根等於同期 movingAverage(圖上「中軌 = MA20」必須是同一條線)", () => {
++    const b = bars(Array.from({ length: 40 }, (_, i) => 100_000 + i * 137));
++    const bands = bollinger(b, 20);
++    const ma = movingAverage(b, 20);
++    for (let i = 0; i < b.length; i += 1) {
++      if (bands[i] === null) {
++        expect(ma[i]).toBeNull();
++      } else {
++        expect(bands[i]!.mid).toBe(ma[i]);
++      }
++    }
++  });
++
++  it("全平盤 σ=0 → 三線重合", () => {
++    const out = bollinger(bars(Array.from({ length: 25 }, () => 100_000)), 20);
++    const last = out[24]!;
++    expect(last.upper).toBe(100_000);
++    expect(last.lower).toBe(100_000);
++    expect(last.mid).toBe(100_000);
++  });
++
++  it("upper > mid > lower 且對稱(k=2)", () => {
++    const out = bollinger(bars([1, 5, 2, 8, 3, 9, 4, 7, 6, 10].map((x) => x * 10_000)), 5);
++    const b = out[9]!;
++    expect(b.upper).toBeGreaterThan(b.mid);
++    expect(b.lower).toBeLessThan(b.mid);
++    // 上下軌對中軌對稱(容 1 毫元的 floor/round 差)
++    expect(Math.abs(b.upper - b.mid - (b.mid - b.lower))).toBeLessThanOrEqual(2);
++  });
++
++  // R9:高檔盤整後一根急殺 → 均值仍貼近高檔、σ 被那根撐大 → 上軌衝出視窗最高價。
++  // (低檔的鏡像同理會讓下軌衝破最低價。)這證明 y 域不納入 BB 就會把軌線畫到圖框外。
++  it("上軌可以超出全域最高價(R9:所以 y 域必須納入,否則會被裁到圖外)", () => {
++    const closes = [30, 30, 30, 30, 30, 30, 30, 30, 30, 10].map((x) => x * 10_000);
++    const out = bollinger(bars(closes), 10);
++    const b = out[9]!;
++    expect(b.upper).toBeGreaterThan(Math.max(...closes));
++  });
++
++  it("下軌可以低於全域最低價(鏡像情形)", () => {
++    const closes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 30].map((x) => x * 10_000);
++    const out = bollinger(bars(closes), 10);
++    expect(out[9]!.lower).toBeLessThan(Math.min(...closes));
++  });
++
++  it("bandSeries 抽出單一數列並保留 null 位置", () => {
++    const out = bollinger(bars([1, 2, 3, 4, 5].map((x) => x * 1000)), 3);
++    const upper = bandSeries(out, "upper");
++    expect(upper.length).toBe(5);
++    expect(upper[0]).toBeNull();
++    expect(upper[1]).toBeNull();
++    expect(typeof upper[2]).toBe("number");
++  });
++});
+diff --git a/frontend/src/lib/bollinger.ts b/frontend/src/lib/bollinger.ts
+new file mode 100644
+index 0000000..4986a4b
+--- /dev/null
++++ b/frontend/src/lib/bollinger.ts
+@@ -0,0 +1,47 @@
++/** 布林通道純函式(毫元整數運算;無 React 依賴,元件只負責掛 DOM)。
++ *
++ * 中軌刻意用 `Math.floor(mean)` 而非 `Math.round` —— 要與 `candle.ts::movingAverage`
++ * 逐根相等,圖上「中軌 = MA20」才是同一條線而不是差一毫元的兩條(change-spec SC-6.6)。
++ *
++ * 標準差走「先算均值再逐根取差」的直算法,不用 Σx²−(Σx)²/n 的一趟法:視窗只有 20 根、
++ * 成本可忽略,而毫元價位平方後量級到 1e11,一趟法在低波動盤整段會有災難性抵銷。 */
++
++import type { Bar } from "@/lib/candle";
++
++export interface Band {
++  /** 中軌 = n 期收盤簡單均線(與 movingAverage 同值) */
++  mid: number;
++  upper: number;
++  lower: number;
++}
++
++/** 前 n−1 根為 null(樣本不足)。 */
++export function bollinger(bars: readonly Bar[], n = 20, k = 2): (Band | null)[] {
++  const out: (Band | null)[] = [];
++  for (let i = 0; i < bars.length; i += 1) {
++    if (i < n - 1) {
++      out.push(null);
++      continue;
++    }
++    let sum = 0;
++    for (let j = i - n + 1; j <= i; j += 1) sum += bars[j]!.c;
++    const mean = sum / n;
++    let sq = 0;
++    for (let j = i - n + 1; j <= i; j += 1) {
++      const d = bars[j]!.c - mean;
++      sq += d * d;
++    }
++    const sd = Math.sqrt(sq / n);
++    out.push({
++      mid: Math.floor(mean),
++      upper: Math.round(mean + k * sd),
++      lower: Math.round(mean - k * sd),
++    });
++  }
++  return out;
++}
++
++/** Band 序列 → 單一數列(給 buildCandleGeometry 的 extraSeries 用)。 */
++export function bandSeries(bands: readonly (Band | null)[], key: keyof Band): (number | null)[] {
++  return bands.map((b) => (b === null ? null : b[key]));
++}
+diff --git a/frontend/src/lib/candle-viewport.test.ts b/frontend/src/lib/candle-viewport.test.ts
+new file mode 100644
+index 0000000..971fe56
+--- /dev/null
++++ b/frontend/src/lib/candle-viewport.test.ts
+@@ -0,0 +1,137 @@
++import { describe, expect, it } from "vitest";
++
++import {
++  clampViewport,
++  initialViewport,
++  MAX_VISIBLE,
++  MIN_BARS,
++  onTotalChange,
++  panBy,
++  zoomAt,
++} from "@/lib/candle-viewport";
++
++describe("clampViewport", () => {
++  it("count 上限 = min(total, MAX_VISIBLE)", () => {
++    expect(clampViewport({ start: 0, count: 9999 }, 5000).count).toBe(MAX_VISIBLE);
++    expect(clampViewport({ start: 0, count: 9999 }, 300).count).toBe(300);
++  });
++
++  it("count 下限 = MIN_BARS(資料足夠時)", () => {
++    expect(clampViewport({ start: 0, count: 3 }, 500).count).toBe(MIN_BARS);
++  });
++
++  // R31:2–8 根正是既有元件測試的常態,夾制次序寫反會得到 count > total 與負的 start
++  it("total < MIN_BARS 時不強拉:count = total、start = 0", () => {
++    for (const total of [1, 2, 3, 8, 19]) {
++      const vp = clampViewport({ start: 0, count: 240 }, total);
++      expect(vp.count).toBe(total);
++      expect(vp.start).toBe(0);
++    }
++  });
++
++  it("total = 0 → 空窗口,不回負值", () => {
++    expect(clampViewport({ start: 5, count: 240 }, 0)).toEqual({ start: 0, count: 0 });
++  });
++
++  it("start 夾在 [0, total − count]", () => {
++    expect(clampViewport({ start: -10, count: 50 }, 500).start).toBe(0);
++    expect(clampViewport({ start: 9999, count: 50 }, 500).start).toBe(450);
++  });
++});
++
++describe("initialViewport", () => {
++  it("貼右緣顯示最後 initBars 根", () => {
++    expect(initialViewport(5900, 240)).toEqual({ start: 5660, count: 240 });
++  });
++
++  it("資料少於 initBars → 全顯示", () => {
++    expect(initialViewport(80, 240)).toEqual({ start: 0, count: 80 });
++  });
++
++  it("資料少於 MIN_BARS 也不崩", () => {
++    expect(initialViewport(3, 120)).toEqual({ start: 0, count: 3 });
++  });
++});
++
++describe("zoomAt", () => {
++  const total = 2000;
++
++  it("錨點守恆:游標所指的 bar 在縮放前後落在同一比例位置", () => {
++    const vp = { start: 800, count: 400 };
++    const r = 0.25; // 游標指向 index 800 + 100 = 900
++    const anchorBefore = vp.start + r * vp.count;
++    for (const factor of [0.5, 0.8, 1.25, 2]) {
++      const next = zoomAt(vp, total, factor, r);
++      const anchorAfter = next.start + r * next.count;
++      expect(Math.abs(anchorAfter - anchorBefore)).toBeLessThanOrEqual(1);
++    }
++  });
++
++  it("factor > 1 看更多根、factor < 1 看更少根(未撞上下限時)", () => {
++    const vp = { start: 800, count: 200 };
++    expect(zoomAt(vp, total, 2, 0.5).count).toBe(400);
++    expect(zoomAt(vp, total, 0.5, 0.5).count).toBe(100);
++  });
++
++  // 這條是 zoomAt 曾經真的錯過的地方:用未夾制的 count 去推 start,撞上限時錨點漂 25 根
++  it("錨點守恆在撞 MAX_VISIBLE 上限時仍成立", () => {
++    const vp = { start: 800, count: 400 };
++    const r = 0.25;
++    const next = zoomAt(vp, total, 2, r); // 400×2 = 800 → 夾到 700
++    expect(next.count).toBe(MAX_VISIBLE);
++    expect(Math.abs(next.start + r * next.count - (vp.start + r * vp.count))).toBeLessThanOrEqual(1);
++  });
++
++  it("縮小到底夾在 min(total, MAX_VISIBLE)", () => {
++    expect(zoomAt({ start: 0, count: 600 }, 5000, 10, 0.5).count).toBe(MAX_VISIBLE);
++  });
++
++  it("放大到底夾在 MIN_BARS", () => {
++    expect(zoomAt({ start: 800, count: 400 }, total, 0.01, 0.5).count).toBe(MIN_BARS);
++  });
++
++  it("anchorRatio 超界自動夾到 [0,1]", () => {
++    expect(zoomAt({ start: 800, count: 400 }, total, 0.5, 5).start).toBe(
++      zoomAt({ start: 800, count: 400 }, total, 0.5, 1).start,
++    );
++  });
++
++  it("total = 0 不崩", () => {
++    expect(zoomAt({ start: 0, count: 0 }, 0, 2, 0.5)).toEqual({ start: 0, count: 0 });
++  });
++});
++
++describe("panBy", () => {
++  it("往左往右都移動 count 不變", () => {
++    expect(panBy({ start: 500, count: 200 }, 2000, -100)).toEqual({ start: 400, count: 200 });
++    expect(panBy({ start: 500, count: 200 }, 2000, 100)).toEqual({ start: 600, count: 200 });
++  });
++
++  it("拖到左端點即停,不空捲", () => {
++    expect(panBy({ start: 50, count: 200 }, 2000, -999).start).toBe(0);
++  });
++
++  it("拖到右端點即停,不空捲", () => {
++    expect(panBy({ start: 1000, count: 200 }, 2000, 9999).start).toBe(1800);
++  });
++});
++
++describe("onTotalChange", () => {
++  // R10:無條件貼右緣會讓盤中平移最多 60 秒就被 refetchInterval 拉回
++  it("原本貼右緣 → 跟進新資料(仍貼右緣)", () => {
++    const vp = { start: 1800, count: 200 }; // 1800+200 = 2000 = prevTotal
++    expect(onTotalChange(vp, 2000, 2050)).toEqual({ start: 1850, count: 200 });
++  });
++
++  it("原本已平移到左邊 → start 不動,不被拉回右緣", () => {
++    const vp = { start: 300, count: 200 };
++    expect(onTotalChange(vp, 2000, 2050)).toEqual({ start: 300, count: 200 });
++  });
++
++  it("資料變少(異常回傳)仍夾制在合法範圍", () => {
++    const vp = { start: 1800, count: 200 };
++    const next = onTotalChange(vp, 2000, 100);
++    expect(next.start).toBe(0);
++    expect(next.count).toBe(100);
++  });
++});
+diff --git a/frontend/src/lib/candle-viewport.ts b/frontend/src/lib/candle-viewport.ts
+new file mode 100644
+index 0000000..339c3c6
+--- /dev/null
++++ b/frontend/src/lib/candle-viewport.ts
+@@ -0,0 +1,70 @@
++/** K 線可視窗口(縮放 / 平移)純函式;無 React 依賴,元件只持有 state。
++ *
++ * 窗口以 bar index 表示:`[start, start + count)`。
++ *
++ * `MAX_VISIBLE` 承接舊 `MINUTE_MAX_BARS.m1 = 700` 的保護 —— viewBox 寬 1400 ÷ 700 = 2px/根,
++ * 再多就只剩色塊且拖慢 hover(舊常數註解已載明)。刪掉舊上限改走縮放後,保護必須換這裡續存。 */
++
++export interface Viewport {
++  start: number;
++  count: number;
++}
++
++export const MIN_BARS = 20;
++export const MAX_VISIBLE = 700;
++
++/** 夾制次序寫死:先 min(不超過資料量與上限)後條件式 max(資料本來就不足 20 根 → 不強拉)。
++ *  次序寫反會得到 count > total 與負的 start,而 2–8 根正是既有元件測試的常態。 */
++export function clampCount(count: number, total: number): number {
++  let c = Math.max(1, Math.min(count, total, MAX_VISIBLE));
++  if (total >= MIN_BARS) c = Math.max(c, MIN_BARS);
++  return c;
++}
++
++export function clampViewport(vp: Viewport, total: number): Viewport {
++  if (total <= 0) return { start: 0, count: 0 };
++  const count = clampCount(vp.count, total);
++  const start = Math.max(0, Math.min(Math.round(vp.start), total - count));
++  return { start, count };
++}
++
++/** 初始窗口:貼右緣顯示最後 initBars 根。 */
++export function initialViewport(total: number, initBars: number): Viewport {
++  return clampViewport({ start: Math.max(0, total - initBars), count: initBars }, total);
++}
++
++/** 以游標為錨縮放。`anchorRatio` = 游標在窗口內的比例(0=左緣, 1=右緣)。
++ *  `factor > 1` = 看更多根(縮小);`factor < 1` = 放大。
++ *  錨點守恆:游標所指的那根 bar 在縮放前後仍落在同一個 anchorRatio 位置(未被邊界夾制時)。 */
++export function zoomAt(
++  vp: Viewport,
++  total: number,
++  factor: number,
++  anchorRatio: number,
++): Viewport {
++  if (total <= 0) return { start: 0, count: 0 };
++  const r = Math.min(Math.max(anchorRatio, 0), 1);
++  const anchorIndex = vp.start + r * vp.count;
++  // ⚠ count 必須**先**夾制再拿去算 start:用未夾制的 count 推 start,縮放撞到 MAX_VISIBLE
++  // 或 MIN_BARS 時錨點會漂(實測 factor=2 撞 700 上限時漂 25 根)。
++  const count = clampCount(Math.round(vp.count * factor), total);
++  return clampViewport({ start: anchorIndex - r * count, count }, total);
++}
++
++/** 平移 deltaBars 根(正 = 往右/往新);夾在資料端點,不空捲。 */
++export function panBy(vp: Viewport, total: number, deltaBars: number): Viewport {
++  return clampViewport({ start: vp.start + deltaBars, count: vp.count }, total);
++}
++
++/** 資料序列**延伸**時的窗口處置(同一 code + mode 的 60s refetch 追加新 bar)。
++ *
++ * 只有「改動前已貼右緣」才跟進新資料;否則保持 start 不動。無條件貼右緣會讓使用者在盤中
++ * 平移到早盤研究時,最多 60 秒就被 refetchInterval 拉回最右(useStockBars.ts refetchInterval)。
++ *
++ * ⚠ 換股與換模式**不走這條路徑** —— 那兩者由元件 key 強制重掛回 initialViewport。
++ * 換模式時 total 會由 ~5,900 變 ~590,沿用舊 index 沒有意義。 */
++export function onTotalChange(vp: Viewport, prevTotal: number, nextTotal: number): Viewport {
++  const wasAtRight = vp.start + vp.count >= prevTotal;
++  const start = wasAtRight ? nextTotal - vp.count : vp.start;
++  return clampViewport({ start, count: vp.count }, nextTotal);
++}
+diff --git a/frontend/src/lib/candle.test.ts b/frontend/src/lib/candle.test.ts
+index adcf437..0f15b97 100644
+--- a/frontend/src/lib/candle.test.ts
++++ b/frontend/src/lib/candle.test.ts
+@@ -177,3 +177,82 @@ describe("buildCandleGeometry 密集/異常值韌性(phase5 review)", () => {
+     expect(c.bodyTop + c.bodyH).toBeLessThanOrEqual(size.height);
+   });
+ });
++
++// 🔵 R2a:priceAtY 是 toY 的逆函數,SC-7 的「左緣顯示滑鼠所在價位」全靠它。
++// round-trip 是唯一能抓到「公式與 toY 不同步」的測試(中間點永遠正確,只有兩端偏移)。
++describe("buildCandleGeometry.priceAtY(R2a)", () => {
++  const size = { width: 400, height: 200 };
++  const bars = [
++    bar("2026-07-27", 100_000, 110_000, 90_000, 105_000, 10),
++    bar("2026-07-28", 105_000, 120_000, 100_000, 102_000, 20),
++  ];
++
++  it("round-trip:域內價位經 toY 再 priceAtY 回到原值(±1 毫元)", () => {
++    const g = buildCandleGeometry(bars, size);
++    for (const p of [90_000, 97_500, 105_000, 112_500, 120_000]) {
++      expect(Math.abs(g.priceAtY(g.toY(p)) - p)).toBeLessThanOrEqual(1);
++    }
++  });
++
++  it("底部量區的 y 被夾制在 lo,不產生低於最低價或負數的價位", () => {
++    const g = buildCandleGeometry(bars, size);
++    // 量區在 priceBottom 之下,一路到 size.height 都不該反演出 < lo
++    for (const y of [size.height - 20, size.height, size.height * 2]) {
++      expect(g.priceAtY(y)).toBe(90_000);
++    }
++  });
++
++  it("上緣越界夾制在 hi", () => {
++    const g = buildCandleGeometry(bars, size);
++    expect(g.priceAtY(-50)).toBe(120_000);
++  });
++
++  it("全平盤(span=0)回 hi,不產生 NaN/Infinity", () => {
++    const g = buildCandleGeometry([bar("d", 100_000, 100_000, 100_000, 100_000)], size);
++    expect(g.priceAtY(10)).toBe(100_000);
++    expect(Number.isFinite(g.priceAtY(150))).toBe(true);
++  });
++
++  it("空幾何有 priceAtY 可呼叫(不是 undefined)", () => {
++    const g = buildCandleGeometry([], size);
++    expect(typeof g.priceAtY).toBe("function");
++    expect(g.priceAtY(50)).toBe(0);
++  });
++});
++
++// 🔵 R4:extraSeries 讓布林上下軌參與 y 域,否則超出 o/h/l/c 值域的軌線會被畫到圖框外。
++describe("buildCandleGeometry.extraSeries(R4)", () => {
++  const size = { width: 400, height: 200 };
++  const bars = [
++    bar("2026-07-27", 100_000, 110_000, 90_000, 105_000, 10),
++    bar("2026-07-28", 105_000, 120_000, 100_000, 102_000, 20),
++  ];
++
++  it("不傳時 y 域與現況相同(向後相容)", () => {
++    const a = buildCandleGeometry(bars, size);
++    const b = buildCandleGeometry(bars, size, []);
++    expect(b.toY(120_000)).toBeCloseTo(a.toY(120_000), 9);
++    expect(b.toY(90_000)).toBeCloseTo(a.toY(90_000), 9);
++  });
++
++  it("超出 o/h/l/c 值域的序列被納入 y 域,toY 落在繪圖區內", () => {
++    const upper = [140_000, 145_000];
++    const lower = [70_000, 72_000];
++    const g = buildCandleGeometry(bars, size, [upper, lower]);
++    const priceBottom = (size.height - 14) * (1 - 0.22);
++    for (const v of [...upper, ...lower]) {
++      expect(g.toY(v)).toBeGreaterThanOrEqual(0);
++      expect(g.toY(v)).toBeLessThanOrEqual(priceBottom);
++    }
++    // 未納入時 145000 會被畫到 y < 0
++    expect(buildCandleGeometry(bars, size).toY(145_000)).toBeLessThan(0);
++  });
++
++  it("null 元素略過,不汙染 y 域", () => {
++    const withNulls = [null, null, 145_000];
++    const g = buildCandleGeometry(bars, size, [withNulls]);
++    expect(g.toY(145_000)).toBeGreaterThanOrEqual(0);
++    // yTicks 仍以最終 hi/lo 產生,不出現 null 造成的 NaN
++    for (const t of g.yTicks) expect(Number.isFinite(t.priceMilli)).toBe(true);
++  });
++});
+diff --git a/frontend/src/lib/candle.ts b/frontend/src/lib/candle.ts
+index d13d25f..56c592f 100644
+--- a/frontend/src/lib/candle.ts
++++ b/frontend/src/lib/candle.ts
+@@ -111,6 +111,9 @@ export interface CandleGeometry {
+   yTicks: { y: number; priceMilli: number }[];
+   /** 毫元 → y 像素(反向) */
+   toY: (priceMilli: number) => number;
++  /** y 像素 → 毫元(`toY` 的逆函數);回傳前夾制進 [lo, hi]。
++   *  夾制是必要的:滑鼠移到底部量區(佔 VOL_RATIO)時原式會反演出低於 lo 甚至負的價格。 */
++  priceAtY: (y: number) => number;
+   /** x 像素 → bar index(hover 用);超界回 null */
+   indexOf: (x: number) => number | null;
+ }
+@@ -126,8 +129,16 @@ const MIN_BODY_H = 1; // 開收同價仍要看得見
+ const VOL_RATIO = 0.22; // 量區佔價圖高度比例
+ const Y_TICKS = 5;
+ 
+-/** bars(升冪)→ 蠟燭幾何。空輸入回空幾何(不崩)。 */
+-export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeometry {
++/** bars(升冪)→ 蠟燭幾何。空輸入回空幾何(不崩)。
++ *
++ * `extraSeries`(選用)= 額外要納入 y 域的序列(布林上下軌等)。不傳 = 行為與未加參數前
++ * 完全相同。**呼叫端必須先把序列 slice 成與 `bars` 同一視窗**,否則 y 域會被視窗外的
++ * 極值撐開、圖被壓扁且不會報錯(change-spec R4/R20)。 */
++export function buildCandleGeometry(
++  bars: readonly Bar[],
++  size: Size,
++  extraSeries?: readonly (readonly (number | null)[])[],
++): CandleGeometry {
+   const bottom = size.height - X_LABEL_H;
+   const volH = bottom * VOL_RATIO;
+   const priceBottom = bottom - volH;
+@@ -138,6 +149,7 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
+       volBars: [],
+       yTicks: [],
+       toY: () => priceBottom,
++      priceAtY: () => 0,
+       indexOf: () => null,
+     };
+   }
+@@ -156,10 +168,23 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
+     if (b.c < lo) lo = b.c;
+     if (b.v > maxVol) maxVol = b.v;
+   }
++  for (const series of extraSeries ?? []) {
++    for (const v of series) {
++      if (v === null) continue;
++      if (v > hi) hi = v;
++      if (v < lo) lo = v;
++    }
++  }
+   const span = hi - lo;
+   const usable = Math.max(1, priceBottom - PAD_Y * 2);
+   const toY = (priceMilli: number): number =>
+     span <= 0 ? PAD_Y + usable / 2 : PAD_Y + ((hi - priceMilli) / span) * usable;
++  // toY 的逆函數。span<=0(全平盤)時 toY 是常數函數、無逆可言 → 回 hi。
++  const priceAtY = (y: number): number => {
++    if (span <= 0) return hi;
++    const raw = hi - ((y - PAD_Y) / usable) * span;
++    return Math.min(hi, Math.max(lo, Math.round(raw)));
++  };
+ 
+   const slot = size.width / bars.length;
+   // 夾在 slot 內:bars 多到 slot < 1.43 時,max(1, …) 會讓 w > slot 而互相重疊(review P1-1)
+@@ -206,5 +231,5 @@ export function buildCandleGeometry(bars: readonly Bar[], size: Size): CandleGeo
+     return i >= 0 && i < bars.length ? i : null;
+   };
+ 
+-  return { candles, volBars, yTicks, toY, indexOf };
++  return { candles, volBars, yTicks, toY, priceAtY, indexOf };
+ }
+diff --git a/frontend/src/lib/chart-crosshair.test.ts b/frontend/src/lib/chart-crosshair.test.ts
+new file mode 100644
+index 0000000..7f37292
+--- /dev/null
++++ b/frontend/src/lib/chart-crosshair.test.ts
+@@ -0,0 +1,70 @@
++import { describe, expect, it } from "vitest";
++
++import { clampTagX, clampTagY, toSvgPoint } from "@/lib/chart-crosshair";
++
++describe("clampTagY", () => {
++  it("中段:標籤垂直置中於 y", () => {
++    expect(clampTagY(100, 14, 246)).toBe(93);
++  });
++
++  it("貼上緣:不回負值", () => {
++    expect(clampTagY(2, 14, 246)).toBe(0);
++    expect(clampTagY(-50, 14, 246)).toBe(0);
++  });
++
++  it("貼下緣:底邊不超過 plotBottom", () => {
++    expect(clampTagY(246, 14, 246)).toBe(232);
++    expect(clampTagY(999, 14, 246)).toBe(232);
++  });
++
++  it("容器比標籤還小的退化情形回 0,不回負值", () => {
++    expect(clampTagY(50, 40, 10)).toBe(0);
++  });
++});
++
++describe("clampTagX", () => {
++  it("中段:標籤水平置中於 x", () => {
++    expect(clampTagX(400, 34, 800)).toBe(383);
++  });
++
++  it("貼左緣 / 右緣皆夾制", () => {
++    expect(clampTagX(2, 34, 800)).toBe(0);
++    expect(clampTagX(800, 34, 800)).toBe(766);
++  });
++
++  it("width 小於 boxW 的退化情形回 0", () => {
++    expect(clampTagX(5, 50, 20)).toBe(0);
++  });
++});
++
++describe("toSvgPoint", () => {
++  it("螢幕座標依 rect/viewBox 比例換算", () => {
++    const p = toSvgPoint(
++      { clientX: 600, clientY: 130 },
++      { left: 0, top: 0, width: 1200, height: 390 },
++      { width: 800, height: 260 },
++    );
++    expect(p.x).toBeCloseTo(400, 6);
++    expect(p.y).toBeCloseTo(86.667, 3);
++  });
++
++  it("扣掉 rect 位移", () => {
++    const p = toSvgPoint(
++      { clientX: 100, clientY: 60 },
++      { left: 50, top: 10, width: 800, height: 260 },
++      { width: 800, height: 260 },
++    );
++    expect(p.x).toBe(50);
++    expect(p.y).toBe(50);
++  });
++
++  it("jsdom 恆 0 的 rect → 退回 1:1(測試與真環境同一條路徑)", () => {
++    const p = toSvgPoint(
++      { clientX: 3, clientY: 100 },
++      { left: 0, top: 0, width: 0, height: 0 },
++      { width: 800, height: 260 },
++    );
++    expect(p.x).toBe(3);
++    expect(p.y).toBe(100);
++  });
++});
+diff --git a/frontend/src/lib/chart-crosshair.ts b/frontend/src/lib/chart-crosshair.ts
+new file mode 100644
+index 0000000..e1b68b5
+--- /dev/null
++++ b/frontend/src/lib/chart-crosshair.ts
+@@ -0,0 +1,33 @@
++/** 十字線軸標籤的夾制純函式(兩張圖共用;無 React 依賴)。
++ *
++ * 回傳的是標籤矩形的左上角座標,不是中心 —— 呼叫端直接餵給 `<rect x/y>`。
++ * 兩個函式都對「容器比標籤還小」的退化情形回 0(不回負值把標籤推出畫布)。 */
++
++function clamp(v: number, lo: number, hi: number): number {
++  return Math.min(Math.max(v, lo), hi);
++}
++
++/** 垂直置中於 `ySvg`,夾在 [0, plotBottom − boxH]。 */
++export function clampTagY(ySvg: number, boxH: number, plotBottom: number): number {
++  return clamp(ySvg - boxH / 2, 0, Math.max(0, plotBottom - boxH));
++}
++
++/** 水平置中於 `xSvg`,夾在 [0, width − boxW]。 */
++export function clampTagX(xSvg: number, boxW: number, width: number): number {
++  return clamp(xSvg - boxW / 2, 0, Math.max(0, width - boxW));
++}
++
++/** 螢幕座標 → SVG viewBox 座標。
++ *
++ * 這條線性映射成立的前提是 svg 的實際高寬比由 viewBox 決定(現況兩張圖都是
++ * `className="w-full"` 且無高度 class)。若日後有人加固定高度 class,y 就會失真。
++ * jsdom 下 rect 恆 0 → 退回 1:1(測試與真環境同一條路徑,不 early-return)。 */
++export function toSvgPoint(
++  e: { clientX: number; clientY: number },
++  rect: { left: number; top: number; width: number; height: number },
++  vb: { width: number; height: number },
++): { x: number; y: number } {
++  const sx = rect.width > 0 ? vb.width / rect.width : 1;
++  const sy = rect.height > 0 ? vb.height / rect.height : 1;
++  return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
++}
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index 93b8c46..9bc3c1d 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -24,26 +24,63 @@ describe("buildIntradayGeometry", () => {
+     expect(X_END_MIN).toBe(810);
+   });
+ 
+-  it("price line spans minutes;有漲跌停 → 漲跌停域(SC-2,該變:原 ref 置中斷言)", () => {
++  it("price line spans minutes;有漲跌停 → 域**恰為**漲跌停(SC-4,該變:原 ×1.02/×0.98 留邊)", () => {
+     const g = buildIntradayGeometry(
+       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
+       { width: 810 - 540, height: 100 },
+     );
+     expect(g.priceLine.length).toBe(2);
+-    // 漲跌停域:yTop = upper×1.02、yBottom = lower×0.98(design v2 SC-2)
+-    expect(g.yDomain[1]).toBeCloseTo(2_550_000 * 1.02, 3);
+-    expect(g.yDomain[0]).toBeCloseTo(2_090_000 * 0.98, 3);
++    // 🔴 SC-4:區間就是漲停/跌停,不再多留 2% 邊
++    expect(g.yDomain[1]).toBe(2_550_000);
++    expect(g.yDomain[0]).toBe(2_090_000);
+     expect(g.priceLine[1]!.y).toBeLessThan(g.priceLine[0]!.y);
+-    // 漲跌停線恆在域內(貼近上下緣)
++    // 域端點落在幾何留邊上(PAD_Y=4、X_LABEL_H=14):走勢線在漲跌停時不被圖框裁掉半條 stroke
+     expect(g.upperY).not.toBeNull();
+     expect(g.lowerY).not.toBeNull();
+-    expect(g.upperY!).toBeGreaterThan(0);
+-    expect(g.lowerY!).toBeLessThan(100);
++    expect(g.upperY!).toBeCloseTo(4, 6);
++    expect(g.lowerY!).toBeCloseTo(100 - 14 - 4, 6);
+     // x:每分鐘 1px(width = 分鐘數)
+     expect(g.priceLine[0]!.x).toBeCloseTo(0, 5);
+     expect(g.priceLine[1]!.x).toBeCloseTo(1, 5);
+   });
+ 
++  // 🔴 SC-4 / R1:priceAtY 必須是改動後 toY 的逆函數。中間點在任何公式下都剛好正確,
++  // 只有兩端會偏 —— round-trip 是唯一抓得到「公式沒跟著 toY 改」的測試。
++  it("priceAtY 是 toY 的逆函數(域內 round-trip ±1 毫元),超界夾制", () => {
++    const g = buildIntradayGeometry(
++      { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
++      { width: 270, height: 100 },
++    );
++    for (const p of [2_090_000, 2_205_000, 2_320_000, 2_435_000, 2_550_000]) {
++      expect(Math.abs(g.priceAtY(g.toY(p)) - p)).toBeLessThanOrEqual(1);
++    }
++    expect(g.priceAtY(-99)).toBe(2_550_000);
++    expect(g.priceAtY(9999)).toBe(2_090_000);
++  });
++
++  // 🔴 SC-2:走勢線與平盤之間的封閉多邊形(起點x,refY → 各點 → 終點x,refY)
++  it("areaPolygon 以 refY 封閉且首尾點貼齊平盤", () => {
++    const g = buildIntradayGeometry(
++      { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
++      { width: 270, height: 100 },
++    );
++    const pts = g.areaPolygon.split(" ");
++    expect(pts.length).toBe(4); // 起點 + 2 個資料點 + 終點
++    expect(pts[0]).toBe(`0.0,${g.refY.toFixed(1)}`);
++    expect(pts[3]).toBe(`1.0,${g.refY.toFixed(1)}`);
++  });
++
++  it("無 ref 時 areaPolygon 為空字串(fallback 走單色線、不填色)", () => {
++    const g = buildIntradayGeometry(
++      {
++        minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
++        meta: { ...META, ref: null, upper: null, lower: null },
++      },
++      { width: 270, height: 100 },
++    );
++    expect(g.areaPolygon).toBe("");
++  });
++
+   it("upper/lower 缺 → 沿用對稱 autofit 域(edge 1)", () => {
+     const g = buildIntradayGeometry(
+       {
+@@ -57,20 +94,42 @@ describe("buildIntradayGeometry", () => {
+     expect((lo + hi) / 2).toBeCloseTo(2_320_000, -2);
+   });
+ 
+-  it("yTicks:有漲跌停 → 5 點(端點+昨收+snap 中點)含 pct;缺 → 3 點 pct null(SC-2)", () => {
++  // 🔴 SC-4:刻度由「以 5% 為分隔的 5 點」改為 ±2/4/6/8/10% 的 11 點(2330 tick 5 元,不去重)
++  it("yTicks:有漲跌停 → 11 點(0/±2/±4/±6/±8/±10%),全為合法 tick 且由上而下遞減", () => {
+     const g = buildIntradayGeometry(
+       { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
+       { width: 270, height: 100 },
+     );
+-    expect(g.yTicks).toHaveLength(5);
+-    expect(g.yTicks[0]!.priceMilli).toBe(2_090_000);
+-    expect(g.yTicks[2]!.priceMilli).toBe(2_320_000);
+-    expect(g.yTicks[4]!.priceMilli).toBe(2_550_000);
+-    expect(g.yTicks[0]!.pct).toBeCloseTo(-9.9, 1);
+-    expect(g.yTicks[2]!.pct).toBe(0);
+-    // 中點 snap 到合法 tick(2435 已對齊 5 元 tick)
+-    expect(g.yTicks[3]!.priceMilli % 5_000).toBe(0);
++    expect(g.yTicks).toHaveLength(11);
++    // 端點用 upper/lower 原值、中央用 ref 原值(不經 snap,避免與域端點差一個 tick)
++    expect(g.yTicks[0]!.priceMilli).toBe(2_550_000);
++    expect(g.yTicks[5]!.priceMilli).toBe(2_320_000);
++    expect(g.yTicks[10]!.priceMilli).toBe(2_090_000);
++    expect(g.yTicks[5]!.pct).toBe(0);
++    expect(g.yTicks[0]!.pct).toBeCloseTo(9.9, 1);
++    expect(g.yTicks[10]!.pct).toBeCloseTo(-9.9, 1);
++    // ±2% 的價位 = snapDown(ref×1.02) = snapDown(2366400) = 2365000(5 元 tick)
++    expect(g.yTicks[4]!.priceMilli).toBe(2_365_000);
++    for (const t of g.yTicks) expect(t.priceMilli % 5_000).toBe(0);
++    // 由上而下:價位遞減、y 遞增
++    for (let i = 1; i < g.yTicks.length; i += 1) {
++      expect(g.yTicks[i]!.priceMilli).toBeLessThan(g.yTicks[i - 1]!.priceMilli);
++      expect(g.yTicks[i]!.y).toBeGreaterThan(g.yTicks[i - 1]!.y);
++    }
++  });
++
++  // 低價股 tick 粗 → 相鄰 pct snap 到同價;去重後少於 11 點屬正常(SC-4.2)
++  it("yTicks:低價股相鄰檔位 snap 到同價時去重,不產生重複 priceMilli", () => {
++    const g = buildIntradayGeometry(
++      { minutes: minutes([[540, { c: 10_000, v: 1 }]]), meta: { ...META, ref: 10_000, upper: 11_000, lower: 9_000 } },
++      { width: 270, height: 100 },
++    );
++    const prices = g.yTicks.map((t) => t.priceMilli);
++    expect(new Set(prices).size).toBe(prices.length);
++    expect(prices.length).toBeLessThanOrEqual(11);
++  });
+ 
++  it("yTicks:缺漲跌停 → 沿用 3 點 pct null 的 fallback(白名單 11,不套 11 點)", () => {
+     const g2 = buildIntradayGeometry(
+       {
+         minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
+@@ -94,21 +153,7 @@ describe("buildIntradayGeometry", () => {
+     expect(g.minuteOf(999)).toBeNull();
+   });
+ 
+-  it("volume bar dir:比前一有效分鐘 c(首分鐘 flat)(SC-3)", () => {
+-    const g = buildIntradayGeometry(
+-      {
+-        minutes: minutes([
+-          [540, { c: 2_320_000, v: 1 }],
+-          [541, { c: 2_330_000, v: 1 }],
+-          [542, { c: 2_310_000, v: 1 }],
+-          [543, { c: 2_310_000, v: 1 }],
+-        ]),
+-        meta: META,
+-      },
+-      { width: 270, height: 100 },
+-    );
+-    expect(g.volumeBars.map((b) => b.dir)).toEqual(["flat", "up", "down", "flat"]);
+-  });
++  // 🔴 SC-5:主圖底部量 bar 已移除(user 拍板留內外盤能量副圖),volumeBars 不再存在
+ 
+   it("overlayLines:域內才給、含 label 與 kind(SC-4)", () => {
+     const g = buildIntradayGeometry(
+@@ -134,7 +179,28 @@ describe("buildIntradayGeometry", () => {
+     );
+   });
+ 
+-  it("volume and energy bars per minute", () => {
++  // 🔴 SC-4 收窄 yDomain 的連帶語意(review R6):落在 upper..upper×1.02 那 2% 夾層的疊線
++  // 由「有畫」變成「不畫」。刻意接受 —— 超出漲停的價位當日不可能成交,畫出來是雜訊。
++  it("overlayLines:介於 upper 與舊域上緣(upper×1.02)之間的線不再給(域收窄後的新語意)", () => {
++    const g = buildIntradayGeometry(
++      { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
++      { width: 270, height: 100 },
++    );
++    // 2_570_000 > upper(2_550_000) 但 < 舊上緣 2_601_000
++    const overlay = {
++      cdp: null,
++      ma5: 2_570_000,
++      ma20: 2_060_000, // < lower(2_090_000) 但 > 舊下緣 2_048_200
++      date: "2026-07-25",
++    };
++    expect(overlayLines(overlay, g, { cdp: false, ma: true })).toEqual([]);
++    // 域內的照給
++    expect(
++      overlayLines({ ...overlay, ma5: 2_540_000 }, g, { cdp: false, ma: true }).map((l) => l.label),
++    ).toEqual(["MA5"]);
++  });
++
++  it("energy bars per minute(SC-5:只剩內外盤能量,主圖量 bar 已移除)", () => {
+     const g = buildIntradayGeometry(
+       {
+         minutes: minutes([
+@@ -145,13 +211,12 @@ describe("buildIntradayGeometry", () => {
+       },
+       { width: 270, height: 100 },
+     );
+-    expect(g.volumeBars.length).toBe(2);
+-    expect(g.volumeBars[0]!.v).toBe(10);
+     expect(g.energyBars.length).toBe(2);
+     expect(g.energyBars[0]!.outer).toBe(7);
+     expect(g.energyBars[0]!.inner).toBe(3);
+-    // 量 bar 高度正規化:最大分鐘量 = 滿高
+-    expect(g.volumeBars[0]!.h).toBeGreaterThan(g.volumeBars[1]!.h);
++    // 高度依「該分鐘內外盤較大側」正規化
++    expect(g.energyBars[0]!.outerH).toBeGreaterThan(g.energyBars[1]!.outerH);
++    expect("volumeBars" in g).toBe(false);
+   });
+ 
+   it("vwap line approximates running average from minutes", () => {
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index 3a28590..2f6bcf9 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -1,7 +1,13 @@
+ /** 江波圖幾何純函數(零 React 依賴;design v4 §3 + stock-ui-upgrade SC-1..4)。
+ 
+-Y 域:有漲跌停 → 漲跌停域(上下緣 = upper×1.02 / lower×0.98,僅作縮放允許非整數);
+-缺 → 對稱 autofit(以參考價置中,無漲跌幅商品 fallback)。
++Y 域(stock-ui-round2 SC-4):有漲跌停 → **域恰為 [lower, upper]**(不再多留 2% 邊);
++缺 → 對稱 autofit(以參考價置中,無漲跌幅商品 fallback,白名單 11 不動)。
++上下不被裁掉半條 stroke 靠的是 `PAD_Y` 幾何留邊 —— 那是**像素留邊不是價格域放寬**,
++所以漲停時走勢線確實貼在最上面那條刻度上。
++
++`toY` 與 `priceAtY` 必須共用同一組 `PAD_Y` / `X_LABEL_H`:兩者各自硬編過一次的話,
++反演在域中央仍剛好正確、只在兩端偏移(實測 ±0.3% / ±1.4%),目視幾乎抓不到。
++
+ VWAP 線由分鐘序列 running 近似(Σ close×vol / Σ vol),與後端逐筆 VWAP 誤差
+ 在分鐘粒度內可忽略。 */
+ 
+@@ -11,18 +17,18 @@ import { snapDown } from "@/lib/stock-tick";
+ export const X_START_MIN = 9 * 60; // 09:00
+ export const X_END_MIN = 13 * 60 + 30; // 13:30
+ 
++/** 底部時間標籤帶;繪圖區 = [PAD_Y, height − X_LABEL_H − PAD_Y] */
++export const X_LABEL_H = 14;
++export const PAD_Y = 4;
++
++/** 左緣刻度的百分比階(SC-4:由上而下)。±10 直接用 upper/lower 原值、0 用 ref 原值。 */
++const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
++
+ export interface Pt {
+   x: number;
+   y: number;
+ }
+ 
+-export interface VolumeBar {
+-  x: number;
+-  h: number;
+-  v: number;
+-  dir: "up" | "down" | "flat";
+-}
+-
+ export interface EnergyBar {
+   x: number;
+   outer: number;
+@@ -42,14 +48,20 @@ export interface IntradayGeometry {
+   priceLine: (Pt & { minute: number })[];
+   vwapLine: (Pt & { vwap: number })[];
+   refY: number;
++  /** meta 真的有昨收(不是拿首筆成交當 fallback)。false → 無「平盤」可言,
++   *  走勢線走單色、不填色(SC-2.4) */
++  hasRef: boolean;
++  /** 走勢線與平盤之間的封閉多邊形點串;`hasRef` 為 false 或無資料時為空字串 */
++  areaPolygon: string;
+   upperY: number | null;
+   lowerY: number | null;
+   yDomain: [number, number]; // 毫元
+   yTicks: YTick[];
+-  volumeBars: VolumeBar[];
+   energyBars: EnergyBar[];
+   /** 價格 → y 座標(overlay 線共用同一縮放) */
+   toY: (priceMilli: number) => number;
++  /** y 座標 → 價格(`toY` 的逆函數);回傳前夾制進 yDomain */
++  priceAtY: (y: number) => number;
+   /** X 座標反演到分鐘 bucket;bucket 無資料 → null(SC-1/R6,不 snap 最近) */
+   minuteOf: (xPx: number) => number | null;
+ }
+@@ -90,9 +102,9 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+   let yTop: number;
+   let yBottom: number;
+   if (upper !== null && lower !== null) {
+-    // 漲跌停域(SC-2):上下緣貼近漲跌停;僅縮放用,允許非整數(design R7)
+-    yTop = upper * 1.02;
+-    yBottom = lower * 0.98;
++    // 漲跌停域(SC-4):域**恰為**漲跌停,不留 2% 邊。上下緣的呼吸空間改由 PAD_Y 出。
++    yTop = upper;
++    yBottom = lower;
+   } else {
+     // 對稱域 fallback:以 ref 為中心,半幅 = max 偏離 × 1.1(最少 1% 防平線貼邊)
+     const hi = Math.max(ref, ...prices);
+@@ -101,7 +113,14 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+     yTop = ref + half;
+     yBottom = ref - half;
+   }
+-  const toY = (p: number): number => ((yTop - p) / (yTop - yBottom)) * size.height;
++  // 繪圖區高度(扣掉底部時間帶與上下留邊);至少 1 避免除以零
++  const plotH = Math.max(1, size.height - X_LABEL_H - PAD_Y * 2);
++  const ySpan = yTop - yBottom || 1;
++  const toY = (p: number): number => PAD_Y + ((yTop - p) / ySpan) * plotH;
++  const priceAtY = (y: number): number => {
++    const raw = yTop - ((y - PAD_Y) / plotH) * ySpan;
++    return Math.min(yTop, Math.max(yBottom, Math.round(raw)));
++  };
+   const toX = (minute: number): number =>
+     ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * size.width;
+ 
+@@ -119,14 +138,6 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+     }
+   }
+ 
+-  const maxVol = Math.max(1, ...entries.map(([, m]) => m.v));
+-  let prevC = 0;
+-  const volumeBars: VolumeBar[] = entries.map(([minute, m]) => {
+-    let dir: VolumeBar["dir"] = "flat";
+-    if (m.c > 0 && prevC > 0) dir = m.c > prevC ? "up" : m.c < prevC ? "down" : "flat";
+-    if (m.c > 0) prevC = m.c;
+-    return { x: toX(minute), h: (m.v / maxVol) * size.height, v: m.v, dir };
+-  });
+   const maxSide = Math.max(1, ...entries.map(([, m]) => Math.max(m.o, m.i)));
+   const energyBars = entries.map(([minute, m]) => ({
+     x: toX(minute),
+@@ -140,13 +151,18 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+   const pctOf = (p: number): number | null =>
+     ref > 0 ? (p === ref ? 0 : ((p - ref) / ref) * 100) : null;
+   if (upper !== null && lower !== null && ref > 0) {
+-    const midLow = snapDown(Math.round((lower + ref) / 2));
+-    const midHigh = snapDown(Math.round((ref + upper) / 2));
+-    for (const p of [lower, midLow, ref, midHigh, upper]) {
++    // SC-4:由上而下 +10/+8/…/0/…/−8/−10%。端點與中央用原值,其餘 snap 到合法 tick。
++    // 去重:低價股 tick 粗時相鄰檔位會 snap 到同價,重複的 priceMilli 會撞 React key。
++    const seen = new Set<number>();
++    for (const pct of TICK_PCTS) {
++      const p =
++        pct === 10 ? upper : pct === -10 ? lower : pct === 0 ? ref : snapDown(Math.round(ref * (1 + pct / 100)));
++      if (seen.has(p)) continue;
++      seen.add(p);
+       yTicks.push({ y: toY(p), priceMilli: p, pct: pctOf(p) });
+     }
+   } else {
+-    for (const p of [yBottom, ref, yTop]) {
++    for (const p of [yTop, ref, yBottom]) {
+       yTicks.push({ y: toY(p), priceMilli: Math.round(p), pct: null });
+     }
+   }
+@@ -158,17 +174,32 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+     return haveMinutes.has(m) ? m : null;
+   };
+ 
++  // 「真的有昨收」才有平盤可言 —— ref 的 fallback 是首筆成交價,拿它當平盤畫紅綠填色
++  // 會把「開盤後漲跌」誤指為「相對昨收漲跌」(SC-2.4)。
++  const hasRef = (input.meta?.ref ?? 0) > 0;
++  const refY = toY(ref);
++  const areaPolygon =
++    hasRef && priceLine.length > 0
++      ? [
++          `${priceLine[0]!.x.toFixed(1)},${refY.toFixed(1)}`,
++          ...priceLine.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`),
++          `${priceLine[priceLine.length - 1]!.x.toFixed(1)},${refY.toFixed(1)}`,
++        ].join(" ")
++      : "";
++
+   return {
+     priceLine,
+     vwapLine,
+-    refY: toY(ref),
++    refY,
++    hasRef,
++    areaPolygon,
+     upperY: upper != null && upper <= yTop ? toY(upper) : null,
+     lowerY: lower != null && lower >= yBottom ? toY(lower) : null,
+     yDomain: [yBottom, yTop],
+     yTicks,
+-    volumeBars,
+     energyBars,
+     toY,
++    priceAtY,
+     minuteOf,
+   };
+ }

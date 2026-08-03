@@ -1,0 +1,63 @@
+{
+  "round": 2,
+  "type": "限縮輪(round 1 有 accepted P0 → 加審一輪,只審 [amendment] 段落是否改出新矛盾)",
+  "reviewer": "change-spec-reviewer",
+  "summary": { "P0": 0, "P1": 2, "P2": 7, "accepted": 9, "rejected_with_reason": 0, "needs_more_context": 0 },
+  "exit": "無 P0,P1 逐條修復 → /mod Phase 3 退出條件達成,不再加輪。",
+  "findings": [
+    {
+      "id": "R16", "severity": "P1", "disposition": "accepted",
+      "claim": "R6/R3 的修復交叉造成新缺口:「新增」按鈕(W-4 的兩條路徑之一)在新結構裡沒有落點,而唯一覆蓋它的兩支既有測試本輪都被判該紅改寫 → 按鈕消失不會有任何測試發現。",
+      "verification": "CONFIRMED。WatchlistSidebar.tsx:235-241 的「新增」鈕在移除清單內;新草圖與 SC-2b 只提 Enter 與提示列。",
+      "resolution": "每組搜尋框與零群組 fallback 搜尋框右側都保留文案「新增」的按鈕(與 Enter 同 handler);改寫 :86-100 / :102-110 時明訂仍以點「新增」觸發,W-4 兩條路徑都留測試覆蓋。"
+    },
+    {
+      "id": "R17", "severity": "P1", "disposition": "accepted",
+      "claim": "R9 的 bounds 沒說從哪來;jsdom rect 恆 0 會讓 SC-4c 的護欄測試恆綠(假綠),同時讓跨組拖曳測試因所有 section rect 相等而無法指定目標組。",
+      "verification": "CONFIRMED。專案已有 stub rect 的先例(StockIntradayChart.test.tsx:30-33)。",
+      "resolution": "🔴-12 明訂 asideRef,每次 pointermove 連同 zones 一併重取 aside rect 當 bounds;測試段明訂 stub 各 section 與 aside 的 getBoundingClientRect,且 SC-4c 的負向測試必附一支『同座標序列但落在側欄內會發 PUT』的對照,證明護欄不是恆真。"
+    },
+    {
+      "id": "R18", "severity": "P2", "disposition": "accepted",
+      "claim": "Esc 取消只寫「移除 window listener」,沒釘 pointermove/pointerup 一併失效;漏網的 pointerup 照樣會 mutate 搬組。",
+      "verification": "CONFIRMED。",
+      "resolution": "Esc 走與 pointerup 相同的完整 teardown + `cancelled` 旗標讓後續 pointerup 早退;測試序列固定 pointerdown → pointermove(落別組) → Escape → **pointerup(同座標)** → 斷言零 PUT。"
+    },
+    {
+      "id": "R19", "severity": "P2", "disposition": "accepted",
+      "claim": "R3 指定 fetchMock 的 /api/stock/names 回空表,與同節「名稱命中」新測試及 SC-1a 互斥。",
+      "verification": "CONFIRMED。",
+      "resolution": "預設 mock 改回小 fixture(2330 台積電 / 2317 鴻海);「表為空 → 提示列不出現、Enter 直接加入」由單獨一支以 mockImplementation 覆寫的測試驗。"
+    },
+    {
+      "id": "R20", "severity": "P2", "disposition": "accepted",
+      "claim": "spec 寫 fill-bg-deep 底,但容器背景是 bg-surface(#10161f vs #060910)→ 照做會畫出錯色光暈;已落地實作用的是 stroke-surface,spec 與 code 分岔。另 EnergySub 內『bar 從 Y_AXIS_W 起,不會壓到右緣數字』註解與 SC-7 的『盤中右緣恆有 bar』互相打臉。",
+      "verification": "CONFIRMED 兩點。那句錯註解是本輪 commit 5b6253b 自己寫的。",
+      "resolution": "spec 改寫為 paintOrder=stroke + stroke-surface(對齊容器 bg-surface);同時修掉 StockIntradayChart.tsx 內那句自相矛盾的註解。"
+    },
+    {
+      "id": "R21", "severity": "P2", "disposition": "accepted",
+      "claim": "守門 3 以精確段名「股票」為鍵,與 auto-default 的理由(允許清單會在改段名時失效)自相矛盾;守門 2 措辭『該段 > 5,000』逐段讀,權證若拆成認購/認售兩段會誤觸,而實作取的是跨 URL 合計。",
+      "verification": "CONFIRMED。",
+      "resolution": "spec 與實作同步改集合式 substring 語意:段名**含**「權證」者剔除列數**合計** > 5,000;段名**含**「股票」者收錄筆數**合計** > 500。"
+    },
+    {
+      "id": "R22", "severity": "P2", "disposition": "accepted",
+      "claim": "amendment 新增的守門與注入需求,上方未修訂的函式簽名區塊(parse_isin_html(html) -> dict / refresh(path, urls))做不到,spec 與 code 已分岔。",
+      "verification": "CONFIRMED。",
+      "resolution": "簽名區塊補 ParseStats、parse_isin_html_with_stats、refresh(..., fetcher)。注:reviewer 看到的是中途版本的 `with_stats` kwarg,最終實作已改為**兩支函式**(union 回傳型別 pyright 無法窄化,只能靠 assert isinstance 補 = 把型別檢查推回 runtime),spec 記最終形狀。"
+    },
+    {
+      "id": "R23", "severity": "P2", "disposition": "accepted",
+      "claim": "捲動容器搬到 aside 後,⊞ checkbox 面板留在所有 section 之後會落到側欄底部、常在可視範圍外 → W-1 名義保留但實際難以到達,jsdom 測試抓不到。",
+      "verification": "CONFIRMED(現況 :312-327 的位置是在只顯示一組的前提下才合理)。",
+      "resolution": "⊞ 面板改渲染在**該列正下方**;SC-3 補一條畫面可指認條件。"
+    },
+    {
+      "id": "R24", "severity": "P2", "disposition": "accepted",
+      "claim": "amendment 寫 57,322 bytes,但被指名為出處的 probe-evidence.md 寫 57,363,修數字的 fix 又引入無出處的數字。",
+      "verification": "CONFIRMED。57,363 是 big5 版 probe;57,322 是 cp950 重跑版;而**實際落檔的 copycat/stock_names.json 是 59,727 bytes**(write_names 用 indent=1 + sort_keys,與 probe 的 dumps 參數不同)。三個數字都真,但出處沒對齊。",
+      "resolution": "probe-evidence.md 補記 cp950 重跑那次量測(指令 + 輸出)與實際落檔大小;spec 引用改為落檔實測值 59,727 bytes(前端載入成本的真正基準)。"
+    }
+  ]
+}

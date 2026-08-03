@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "phase": "/mod Phase 5 自評",
+  "level": "medium",
+  "date": "2026-07-29",
+  "diff": ".claude/mod/stock-ui-fixes/review-diff.txt (6c5f56c..HEAD, 609 行)",
+  "lenses": [
+    {"name": "correctness", "model": "sonnet", "findings": 0,
+     "note": "逐項排除:Math.max(1,...) 除零、last?.p null 鏈、買賣對稱性、aria-label 格式、useStockBars 錯誤碼鏈、flex 高度解析、select-none 不碰 pointer events。回 []。"},
+    {"name": "白名單對照(雙焦點 b)", "model": "sonnet", "findings": 0,
+     "note": "W-1~W-17 逐條查證附檔案:行號證據,17/17 = kept。finder prompt 顯式帶 change-spec.md 第 164-194 行(白名單節),非按需開檔。"},
+    {"name": "test-coverage", "model": "sonnet", "findings": 4}
+  ],
+  "screening": "main agent 機械快篩:C2 的 FastAPI 404 body shape 主張經查證成立({\"detail\":\"Not Found\"} 的 detail 是字串 → .error undefined → HTTP_404);C1/C3/C4 為可直接讀檔核對的 class/斷言缺口。4 條全 CONFIRMED,0 REFUTED。",
+  "findings": [
+    {"id":"C1","severity":"P1","category":"test-coverage","file":"frontend/src/components/stock/OrderBook.tsx","claim":"標題列漲跌色三分支(bull/bear/ink)無 className 斷言,且只有『漲』被 render 過","verdict":"CONFIRMED","resolution":"accepted","fix":"新增漲/跌/平盤三態 case,直接斷言 className 含 text-bull / text-bear / text-ink。台股紅漲綠跌與美股相反,是最容易寫反的方向。"},
+    {"id":"C2","severity":"P1","category":"test-coverage","file":"frontend/src/components/stock/StockChart.test.tsx","claim":"錯誤碼取值鏈的 HTTP_<status> fallback 無覆蓋,而那正是本輪 item 2 的真實事故路徑","verdict":"CONFIRMED","resolution":"accepted","fix":"新增 404 + {\"detail\":\"Not Found\"} 的 case,斷言顯示 HTTP_404。"},
+    {"id":"C3","severity":"P1","category":"test-coverage","file":"frontend/src/components/stock/StockChart.tsx","claim":"SC-6 的 shrink-0 是同輪唯一沒有 regression lock 的版面 class","verdict":"CONFIRMED","resolution":"accepted","fix":"斷言 StockChart root className 含 shrink-0。"},
+    {"id":"C4","severity":"P2","category":"test-coverage","file":"frontend/src/components/stock/StockPage.tsx","claim":"五檔 wrapper 的 self-start 無 regression lock","verdict":"CONFIRMED","resolution":"accepted","fix":"併入既有 stock-lower-row lock,斷言第一個子元素 className 含 self-start。"}
+  ],
+  "exit": "無 P0;P1 3 條全部 accepted 並修復;P2 1 條 accepted 並修復。frontend 395 tests 全綠 / tsc 0 / eslint 0。"
+}

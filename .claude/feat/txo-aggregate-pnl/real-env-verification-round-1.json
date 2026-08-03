@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "shape": "web(FastAPI + React)+ 真實 TC4(達錢 4 常駐,週六休市)",
+  "steps": [
+    { "sc": "SC-1", "check": "server 對真實 TC4 全鏈啟動:登入 50774、序列查詢、TX4.202607 訂閱 281 檔、週五(07-17)全日回補 22,935 ticks/187 檔有成交;回補提速實測 舊 ~10 分 → 新 ~2 分", "result": "PASS(live 流/heartbeat 遞延週一,infra 降級)" },
+    { "sc": "SC-3", "check": "REST happy:GET /api/txo/snapshot(curve 138 點/BEP 42632.9/totals 齊)、GET /api/txo/series(5 序列);edge:select 未知序列 → 400 UNKNOWN_SERIES、未知路徑 → 404;WS 推播(瀏覽器實連)", "result": "PASS(證據 evidence/SC-3_snapshot.json + curl 輸出)" },
+    { "sc": "SC-4", "check": "DevTools 截圖:曲線獲利/虧損分區著色、BEP 金點 + 標籤、指標卡列、序列選單、即時連線徽章、繁中 UI;console 0 errors(1 warn 為 server 重啟窗口重連殘影)", "result": "PASS(docs/specs/txo-aggregate-pnl/screenshots/SC-4_main-view.png)" }
+  ],
+  "findings_fixed_in_phase": [
+    "accumulated_from 顯示 UTC 未 +8(紅先行修 _fmt_precise_time)",
+    "TXF 休市 snapshot TradeQuantity=0 被濾 → 現價永遠 None(parse_realtime TC.F.* 放寬)",
+    "純 uvicorn 無 websocket protocol → WS upgrade 404(uvicorn[standard])",
+    "MetricsBar xl 9 欄截斷(改 5 欄兩列)"
+  ],
+  "infra_degraded": "週六休市:live tick 流動、TXF spot 推播(實測休市日 TC4 對 FITX 不推 snapshot,選擇權有推)、heartbeat/斷線重連行為 — 遞延 2026-07-20 盤中,對應 state.json phase_6_blocked_reason;UI 對 spot null 已優雅降級(現價線隱藏/指標卡 —)"
+}

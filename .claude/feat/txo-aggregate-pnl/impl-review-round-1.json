@@ -1,0 +1,13 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (sonnet, condensed 單發)",
+  "summary": { "p0": 0, "p1": 2, "p2": 3 },
+  "findings": [
+    { "id": "IR-1", "severity": "P1", "claim": "queue_dropped 在 aggregator Totals 內卻由 engine 遞增,無寫入路徑", "resolution": "accepted — Totals 移除該欄;snapshot(queue_dropped: int = 0) 參數注入,engine 持有計數" },
+    { "id": "IR-2", "severity": "P1", "claim": "Protocol 多出 status_hint() 但無實作對應", "resolution": "accepted — YAGNI 移除;status 由 engine 狀態機管理" },
+    { "id": "IR-3", "severity": "P2", "claim": "port 8000(design)vs 8721(PLAN/proxy)不一致", "resolution": "accepted — 統一 8721,design §4 回寫 canonical 啟動指令" },
+    { "id": "IR-4", "severity": "P2", "claim": "edge 1 空狀態無對應失敗測試", "resolution": "accepted — aggregate 測試清單補空狀態案例" },
+    { "id": "IR-5", "severity": "P2", "claim": "序列顯示名漏 EndDate(spike §4.4 建議)", "resolution": "accepted — name 補 EndDate,清單不可得時 fallback 純 expiry 並註記" }
+  ],
+  "exit": "round 1 無 P0 且 P1=2 ≤ 2 → 退出;5 條全修入 PLAN/design,未 park"
+}

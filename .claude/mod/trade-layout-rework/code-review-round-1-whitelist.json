@@ -1,0 +1,35 @@
+{
+  "round": 1,
+  "focus": "(b) 白名單對照",
+  "model": "opus",
+  "summary": {
+    "held": 28,
+    "broken": 0,
+    "unclear": 0,
+    "p0": 0,
+    "p1": 0,
+    "p2": 3
+  },
+  "verdict": "W-A1..A12 / W-B1..B5 / W-C1..C7 / W-D1..D4 全 28 條 held,0 broken",
+  "findings": [
+    {
+      "id": "P2-1",
+      "whitelist_id": "W-C6 相鄰",
+      "claim": "新 key 名稱與 spec 不一致(spec: stock-chart-mode / 實作: copycat-chart-mode)",
+      "disposition": "accepted → 改 spec(實作用 copycat- 前綴,對齊 next-time 收斂方向)"
+    },
+    {
+      "id": "P2-2",
+      "whitelist_id": "W-C2",
+      "claim": "ladder 條件 render 後 follow 重置、且重掛載會重放過期 centerRequest",
+      "disposition": "accepted → 切離閃電 tab / 換標的時清 centerRequest;follow 重置寫成刻意行為並註解"
+    },
+    {
+      "id": "P2-3",
+      "whitelist_id": "W-B2 相鄰",
+      "claim": "useStockStream 上提後 /ws/stock 恆連、watchlist setState 落在 App 層 → 每秒重繪整棵樹",
+      "disposition": "accepted(判定可接受)→ App.tsx 寫明取捨與日後優化路徑(enabled 參數)"
+    }
+  ],
+  "notes": "被刪測試皆有等價落點且斷言未放寬;FuturesLadder.test 整檔零改動"
+}

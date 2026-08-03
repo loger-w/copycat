@@ -1,0 +1,2 @@
+INFO copycat.backtest.fade_diagnose: diagnose_pool_fade cutoff=2026-07-09 tiger n=1542 verdict=False
+三池複驗報告 → out\fade_diagnose\uc_pool_fade_2026-07-15.md

@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "source": ".claude/harness.json verify 陣列 + 專案 CLAUDE.md §1(validate、frontend 追加)",
+  "steps": [
+    { "step": "pytest", "command": ".venv\\Scripts\\python -m pytest -q", "exit_code": 0, "result": "503 passed" },
+    { "step": "ruff", "command": ".venv\\Scripts\\python -m ruff check copycat tests", "exit_code": 0, "result": "All checks passed" },
+    { "step": "pyright", "command": ".venv\\Scripts\\python -m pyright", "exit_code": 0, "result": "0 errors" },
+    { "step": "validate", "command": ".venv\\Scripts\\python -m copycat validate", "exit_code": 0, "result": "42/42 PASS" },
+    { "step": "tsc", "command": "npx tsc -b (frontend/)", "exit_code": 0, "result": "0 errors" },
+    { "step": "vitest", "command": "npx vitest run (frontend/)", "exit_code": 0, "result": "19 passed (6 files)" },
+    { "step": "eslint", "command": "npx eslint src (frontend/)", "exit_code": 0, "result": "0 problems" },
+    { "step": "build", "command": "npm run build (frontend/)", "exit_code": 0, "result": "dist built (gzip js 86KB)" }
+  ],
+  "note": "指令皆未接管線後綴(§8 教訓);log 落 evidence_*.log。e2e:專案無 Playwright,條件 gate 不適用。"
+}

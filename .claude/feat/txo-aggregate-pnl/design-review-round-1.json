@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (sonnet)",
+  "summary": { "p0": 1, "p1": 4, "p2": 4 },
+  "findings": [
+    { "id": "DR-1", "severity": "P0", "claim": "回補↔live 交接順序未定義,cum_volume stale-drop 在交接處產生誤刪或漏收", "resolution": "accepted — design v2 §2.3 交接協定(訂閱 buffer → 回補 → 排序灌入 → flush 放行 cum_volume 較大者 → live);§7 補三情境整合測試" },
+    { "id": "DR-2", "severity": "P1", "claim": "WS 契約偏離 brainstorm SC-3 原文(?series= 重連 vs REST select)未標記", "resolution": "accepted — design v2 §4 補偏離理由;brainstorm SC-3 同步 amend(單人工具全域 active 序列較簡)" },
+    { "id": "DR-3", "severity": "P1", "claim": "序列切換時 aggregator 狀態重置契約未在主設計規範", "resolution": "accepted — design v2 §2.3 具名 reset(contracts) 契約 + §4 select 流程定呼叫時機" },
+    { "id": "DR-4", "severity": "P1", "claim": "休市日降級實質繞過 SC-1『擋在實作前』,REALTIME 欄位未驗即動工", "resolution": "accepted(scoped)— REALTIME 對映收斂 parse_realtime 單函數隔離改動半徑;SC-1(b) 遞延至 2026-07-20 盤中,Phase 7 記 infra 降級不默認通過;brainstorm SC-1 amend" },
+    { "id": "DR-5", "severity": "P1", "claim": "fallback ts==T_b 接受 = 接受重複,會雙計", "resolution": "accepted — design v2 §2.3 邊界內容 multiset 去重;殘存風險列 Known Risk 3(overlap_risk_ticks 僅觀測)" },
+    { "id": "DR-6", "severity": "P2", "claim": "unclassified_ticks(brainstorm)vs unclassified_qty(design)單位不一致", "resolution": "accepted — snapshot 雙欄位;brainstorm edge 2 amend" },
+    { "id": "DR-7", "severity": "P2", "claim": "tick queue 無界,backpressure 未定義", "resolution": "accepted — maxsize 10_000,滿載丟棄+queue_dropped 計數+log;§7 補測試" },
+    { "id": "DR-8", "severity": "P2", "claim": "SC-1(a) ≥30 檔門檻未落為 spike 腳本斷言", "resolution": "accepted — spike 斷言 contracts_count ≥ 30,未達標 exit 非 0" },
+    { "id": "DR-9", "severity": "P2", "claim": "TXF/TXO 混流路由規則未定義", "resolution": "accepted — design v2 §2.2 分流規則(TC.F → spot only;TC.O active → 累積;其他丟棄+計數);§7 補混流測試" }
+  ]
+}

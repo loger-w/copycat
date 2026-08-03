@@ -1,0 +1,99 @@
+{
+  "_note": "Phase 5 自評 code review(opus,medium 檔位,雙焦點:implementation bug + 白名單對照)。轉錄自 agent 回傳;`disposition` 是主 session 依 receiving-code-review 的裁決,非 reviewer 原文。",
+  "phase": "5",
+  "base": "2f8c188",
+  "head_at_review": "cc1a5ed",
+  "whitelist_check": "W-1 ~ W-28 逐條核過,28 條全數守住。唯一 nuance:W-28 的刻度文字位置未變(x = Y_AXIS_W − 4),但新增的亮燈色塊右緣在 Y_AXIS_W − 2,文字距色塊右緣只剩 2px,屬外觀而非契約。",
+  "summary": { "P0": 0, "P1": 1, "P2": 9 },
+  "findings": [
+    {
+      "severity": "P1",
+      "file": "copycat/live/stock_state.py",
+      "line": 93,
+      "problem": "relabel 的依據綁在 self.meta 上,但 apply_backfill 執行時 meta 不保證存在、也不保證與回補 tick 同一交易日。(a) meta is None:set_main 訂閱後立刻把回補入列,而 meta 只有收到 REALTIME 才寫入 → server 冷啟動後第一次開一檔鎖停股時回補可能先跑完,補判整段跳過且之後沒有任何重跑點。(b) meta 是昨日的:_rollover_stage2 對每個 state reset() 而 reset() 刻意保留 meta;主檔若不是觸發 rollover 的那一檔,會拿昨日 upper/lower 比對今日 tick —— 該補的不補,且若今日某筆成交價恰等於昨日漲停價又缺 ask 會被誤標 inner。兩種失效都零錯誤訊號。",
+      "disposition": "accepted-fixed",
+      "resolution": "stock_engine._handle_quote 偵測「漲跌停值變化」就把主檔回補重新入列 —— 冷啟動是 None→有值、跨日是舊值→新值,一次涵蓋兩者;值沒變不重跑避免每則 REALTIME 排隊。另 apply_backfill 在 meta 缺席且有 neutral tick 時 logger.warning,不再靜默。commit 14ea35d。"
+    },
+    {
+      "severity": "P2",
+      "file": "copycat/live/stock_state.py",
+      "line": 95,
+      "problem": "只 map 回補列,survivors(回補期間已 ingest 的 live tick)原樣重放不補判 → 同一天同一價位的成交會因為「從 live 進來還是從回補進來」被判成不同 side。",
+      "disposition": "rejected",
+      "resolution": "survivors 走 REALTIME 路徑,_best_limit_price 有五檔可退已判得出來(鎖漲停時 bids[1] 就是漲停價),不是巧合一致而是機制上就會判出。docstring 補說明為何兩者可以不同。reviewer 舉的例外(TC4 只推市價佇列那一檔、無任何限價檔)未實測到,列為觀察。"
+    },
+    {
+      "severity": "P2",
+      "file": "copycat/live/stock_models.py",
+      "line": 128,
+      "problem": "第 4 道閘用 `ask_milli is None` 當「鎖住了」的代理,但 ask 欄空不等於鎖住。「首次攻上漲停、把賣方掛單一次吃光」的那一筆,成交後簿的 ask 側就是空的 → 該筆實際是主動買(outer)卻被 relabel 成 inner。docstring 寫「這不是猜測,是恆等式」對這一筆不成立。量小但方向偏誤固定(系統性低估攻擊方),而項 2 的整個目的就是把外盤比算對。",
+      "disposition": "accepted-fixed",
+      "resolution": "補第 5 道閘:兩側都不可得(bid 與 ask 皆 None)才算鎖死。真鎖停時歷史 row 的 Bid 是市價佇列 0(已歸零成 None),首攻那筆的 Bid 通常有值 → 兩者可分。已加測試 test_first_touch_of_limit_is_not_relabelled。"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx",
+      "line": 423,
+      "problem": "hatch tile 的斜線畫在 3×3 tile 的左邊界(x1=x2=0,strokeWidth 1.4)。pattern 會把 tile 外的內容裁掉且不 wrap 到對邊,x ∈ [−0.7, 0) 那一半直接消失 → 實際只有 0.7px 寬的斜線,墨量只有設計值的一半。Known Risks #1 因此比評估的更嚴重。",
+      "disposition": "accepted-fixed",
+      "resolution": "線移到 tile 中心(x1=x2=1.5)。(round6c 後整個 pattern 已移除。)"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx",
+      "line": 185,
+      "problem": "亮燈色塊的 y 做了 clamp 但刻度文字沒有,兩格表現不對稱。最上格 t.y=4 → clamp 成 0,色塊中心 6 而文字中心仍在 4 → 文字在紅底裡偏上 2px;最下格色塊下緣越過繪圖區底 2px 伸進時間標籤帶。",
+      "disposition": "accepted-fixed",
+      "resolution": "TICK_LAMP_H 由 12 改 8(≤ 2×PAD_Y),兩端都不必夾制、與文字自然同心。真瀏覽器複驗:色塊中心與文字 y 完全重合(上 4/4、下 282/282),下緣 286 恰貼繪圖區底。"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/components/stock/OrderBook.tsx",
+      "line": 81,
+      "problem": "市價列改成 <div> 後 aria-label 掛在沒有 role 的 generic 元素上。ARIA 規範禁止 generic role 從 author 取 accessible name,主流 AT 不會朗讀 → SC-4.5 實際上只在測試裡成立(RTL 的 getByLabelText 只讀屬性不做 role 檢查)。改成 <div> 之前它是 <button>(role=button,aria-label 有效),所以這是本輪造成的可及性回歸。",
+      "disposition": "accepted-fixed",
+      "resolution": "補 role=\"group\"(group 可從 author 取 accessible name)。"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx",
+      "line": 831,
+      "problem": "figcaption 左段由 ~33 字元變成 ~46 字元(實測 2317 資料下 ~330px),而容器是固定 h-4(16px)且兩個 span 都沒有 min-w-0 / truncate / whitespace-nowrap → 窄容器時文字換行,第二行直接溢出壓到下方元素。jsdom 測不到。",
+      "disposition": "accepted-fixed",
+      "resolution": "左段加 min-w-0 truncate whitespace-nowrap、右段加 shrink-0 whitespace-nowrap,容器加 gap-2。"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/components/stock/PriceLadder.tsx",
+      "line": 334,
+      "problem": "buildLadder 刻意讓兩個早退路徑仍帶出 marketBidQty/marketAskQty,測試還宣稱守的是「否則鎖停 + 無 ref 時數字憑空消失」—— 但元件在 rows.length === 0 時直接印「無資料」並跳過整個階梯容器,市價列從來不會被渲染。測試的理由不成立(綠燈但不保護任何真實行為)。",
+      "disposition": "accepted-fixed",
+      "resolution": "採 reviewer 選項 (b):改寫測試名與註解成它真正守的東西(lib 層契約完整,早退不代表資訊要一起丟),不改元件行為。"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/components/stock/OrderBook.tsx",
+      "line": 145,
+      "problem": "維持 maxQty / bidTotal / askTotal 含市價量的決定,數字本身沒錯,但同一個「委買總量」欄位在鎖停日與平常日的定義不同:市價偽檔位吃掉 DEPTH=5 的其中一格,鎖停日是「市價量 + 4 檔限價量」而平常日是「5 檔限價量」,跨日 / 跨股比較會失真且畫面零提示。不是 bug,屬可接受但可改善的呈現。",
+      "disposition": "accepted-fixed",
+      "resolution": "計算維持不變(本輪刻意決定,見 change-spec Known Risks #5);有市價量時總量列掛 title「含市價委託 N 張」。"
+    },
+    {
+      "severity": "P2",
+      "file": "frontend/src/lib/chart-extreme.ts",
+      "line": 22,
+      "problem": "檔頭註解與 markOuterRadius 的函式註解對「夾制該用哪個半徑」互相矛盾。實作與測試鎖的是後者;下一個改這個檔的人若照檔頭那段改,測試會紅但他會以為是測試過期。",
+      "disposition": "accepted-fixed",
+      "resolution": "檔頭改寫成與 markOuterRadius 一致(底環是背景色墊片,溢出無視覺後果,故夾制只算墨色外緣)。"
+    }
+  ],
+  "reviewer_answers": {
+    "_best_limit_price 與 relabel_locked_side 是否打架": "不會。前者只改餵給 derive_side 的取值,後者只補 side == neutral 的 tick,順序無關且 relabel 冪等(已判定即早退)。真正的問題不在互相打架,而在 relabel 的依據(self.meta)與 tick 不同源 —— 見 P1。",
+    "reset() 後的重放順序": "未被改變。relabel 在 reset() 之前對 list 做純函數 map,backfill_max / survivors 的計算與重放次序一字未動。",
+    "sideSummary 換掉 cum_* 後的遺留來源": "grep 全 frontend/src 確認 cumOuter/cumInner 只剩 stock-accum.ts 的累算與測試 fixture,沒有任何顯示點還在用舊來源。後端 cum_outer/cum_inner payload 仍在(W-25 保住)。",
+    "hatch 的 memo 與 id": "hatchId 是純量 string prop,EnergySub 的 memo 未被打穿;id 走 useId() 過濾後的 uid 加後綴,與 clipAbove/clipBelow 不撞,同頁多實例也不撞(W-10 / W-11 皆守住)。",
+    "buildLadder 型別改變的呼叫點": "只有 PriceLadder.tsx 與 stock-tick.test.ts,兩處都改到;futures-ladder.ts 是獨立實作不受影響。",
+    "極值標記上移後的圖層": "安全。last-dot 與 hover 十字線都渲染在 <ChartStatic> 之外,仍在標記之上;CandleChart 同構。標記唯一新蓋住的是 CDP/MA 疊線與其右緣標,屬預期。",
+    "漲跌停 === 的浮點 / 型別風險": "無。to_milli 走 int(Decimal(raw) * 1000),upper / lower / last.p 全程是整數毫元、同一條 JSON 路徑。"
+  }
+}

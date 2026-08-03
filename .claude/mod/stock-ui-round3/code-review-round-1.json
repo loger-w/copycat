@@ -1,0 +1,97 @@
+{
+  "round": 1,
+  "phase": "/mod Phase 5 自評",
+  "level": "medium",
+  "diff": ".claude/mod/stock-ui-round3/review-diff.txt",
+  "base": "3e891f1",
+  "lenses": [
+    {
+      "name": "whitelist-regression",
+      "model": "sonnet",
+      "focus": "(b) 白名單對照 — change-spec.md 第 45-72 行 W-1~W-18 逐條",
+      "result": "18/18 held,零 finding"
+    },
+    {
+      "name": "correctness + test-coverage",
+      "model": "sonnet",
+      "focus": "(a) implementation bug + 測試缺口",
+      "result": "1 P0 / 1 P1 / 2 P2"
+    }
+  ],
+  "whitelist_check": {
+    "verdict": "all_held",
+    "notable": [
+      "W-5 memo 邊界:逐一追蹤新增的 w/h props 來源 —— 全為純量(模組常數 / prop ?? 常數 / svgBox 算出的數字),無新建 object/array/inline 函式跨越 memo 邊界",
+      "W-12 切模式高度不跳:手算 CHART_FRAME chrome = 32+2+26+20 = 80 與兩元件實際 DOM 逐項對應無漏項;svgBox 的 renderPx 不依賴 viewBoxWidth(測試明確驗 800 與 1400 得同值),subH 用減法保證相加恰等於總高。1200×600 下兩模式總高差 ≈0.6px,優於改動前的 0.5px 殘差容忍",
+      "W-15:test_empty_ttl_expiry_recovers 驗證過期後真的重抓,可恢復性質保留",
+      "W-17:新的退避輪詢迴圈沒有新增 try/except,_req 的 ConnectionError 仍原樣往上冒"
+    ]
+  },
+  "findings": [
+    {
+      "id": "B1",
+      "severity": "P0",
+      "category": "correctness",
+      "file": "frontend/src/lib/candle.ts",
+      "line": 239,
+      "title": "K 線窄域保底刻度未 snap,自己違反 SC-10「全部合法檔位」",
+      "failure_scenario": "域 [1000100, 1003000] 毫元、tick 5000:5 個等分候選 snap 後 4 個變 1000000(< lo)、1 個變 1005000(> hi),全被域外過濾 → 保底 mid = round((1000100+1003000)/2) = 1001550,1001550 % 5000 = 1550 → 畫面顯示 1001.55 元。真實觸發條件 = 高價股(tick 5 元)盤整期把 K 線縮到波動 < 一個 tick",
+      "mechanical_screen": "CONFIRMED — node 驗算逐 i 復現,見 commit b4a2c9d 的測試",
+      "resolution": "accepted",
+      "fix": "snapNearest(mid) + y 夾回 [PAD_Y, PAD_Y+usable](窄域裡唯一的合法檔位必然落域外,不夾會畫進量區);T-3 補合法性與 y 範圍斷言。**change-spec 的 R-7 也寫錯同一處,已標 amendment**",
+      "commits": ["b4a2c9d", "8961bf3"]
+    },
+    {
+      "id": "B2",
+      "severity": "P1",
+      "category": "efficiency",
+      "file": "copycat/server/bars.py",
+      "line": 202,
+      "title": "今日零成交但歷史有資料的股票,當日段每次請求都重付 TC4 首頁等待",
+      "failure_scenario": "2317 有 30 天歷史 1K 但今日尚未成交:歷史段命中 memo(免費)、當日段回 [] → today_put 因空不存 → out 因歷史非空 → empty_clear(永不 mark)。下次請求 today_get 仍回 None → 再等一次 _BARS_POLL_DEADLINE(10s)。SC-9(b) 對這類股票不成立;原測試全是「兩段都空」的模型抓不到",
+      "mechanical_screen": "CONFIRMED — 讀 build_minute 控制流即可確認;改前為 30s/次,改後 10s/次(已改善但未關閉)",
+      "resolution": "accepted",
+      "fix": "today_put 空結果也存,today_get 對空 entry 用 min(ttl, EMPTY_TTL_SECS)。15s 內重複請求免費,過期即重抓(該股開始成交看得到)",
+      "residual": "背景 60s 輪詢仍各付一次 10s。判定可接受:TanStack Query 在背景 refetch 期間維持前次資料,非使用者可見延遲;且已比改前 30s 快 3×",
+      "commits": ["b4a2c9d", "8961bf3"]
+    },
+    {
+      "id": "B3",
+      "severity": "P2",
+      "category": "test-coverage",
+      "file": "frontend/src/lib/chart-frame.test.ts",
+      "title": "svgBox 的 svgWidth<=0 guard 無測試覆蓋",
+      "failure_scenario": "svgBox({width:20, height:600}, 800):svgWidth = 20-32-2 = -14。guard 目前正確回 usable:false,但若日後被誤改成只檢查 wrapper.width<=0,s 會是負值 → viewBox=\"0 0 800 -N\" 不合法屬性,而測試矩陣沒有一格會變紅",
+      "mechanical_screen": "CONFIRMED",
+      "resolution": "accepted",
+      "fix": "加 regression lock(加了即綠 —— guard 本來就在)",
+      "commits": ["b4a2c9d"]
+    },
+    {
+      "id": "B4",
+      "severity": "P2",
+      "category": "test-coverage",
+      "file": "frontend/src/components/stock/StockIntradayChart.test.tsx",
+      "title": "CDP 元件測試的 mock 值天然對齊 tick,沒走 fmtTickPrice 的 snap 路徑",
+      "failure_scenario": "mock 的 2400/2360/2320 元都是 5 元 tick 的倍數,就算 levelText 繞過 fmtTickPrice 直接 toFixed(1) 也不會變紅 → SC-3 的元件層保護實際為零。後端 CDP 公式不保證對齊 tick,那正是顯示層要 fmtTickPrice 的理由",
+      "mechanical_screen": "CONFIRMED",
+      "resolution": "accepted",
+      "fix": "mock 改 ah=2401237 / nh=2357800(非合法檔位),斷言顯示 2400* / 2360* 且原值不出現。順帶鎖住「snap 取最近不是一律向下」—— nh 2357.8 的最近檔位是 2360(向上 2.2 < 向下 2.8)",
+      "commits": ["b4a2c9d", "8961bf3"]
+    }
+  ],
+  "gates_after_fix": {
+    "pytest": "1199 passed",
+    "ruff": "All checks passed",
+    "pyright": "0 errors, 0 warnings",
+    "vitest": "53 files / 514 tests passed",
+    "tsc": "0",
+    "eslint": "0",
+    "vite build": "ok"
+  },
+  "exit": {
+    "p0_remaining": 0,
+    "p1_remaining": 0,
+    "note": "P0/P1 皆已修復並附紅→綠 commit。另發一輪限縮對抗驗證(只審這兩個修復是否真的關閉原問題、有無改出新問題),結果見 code-review-round-2.json"
+  }
+}

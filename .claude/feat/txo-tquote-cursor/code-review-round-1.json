@@ -1,0 +1,55 @@
+{
+  "round": 1,
+  "mode": "medium(8 finder angles, sonnet)+ main-agent 機械快篩(全候選皆可 grep/Read 直接查證,未 dispatch verifier)",
+  "findings": [
+    {
+      "id": "CR-1", "severity": "P1", "source": "angle A", "verdict": "CONFIRMED",
+      "file": "frontend/src/components/PnlChart.tsx",
+      "claim": "游標 readout 的 pnl 存進 state 後不隨 WS 新 snapshot 失效 — 滑鼠靜止時曲線更新,readout 顯示舊曲線損益(誤導盤中決策)",
+      "resolution": "accepted — state 只存 xMillipts,pnl 改 render 時由當前 curve 派生(interpCurve);曲線更新自動重算,超出新 domain 自動隱藏。紅測試先行(rerender 換 curve → readout 應更新)"
+    },
+    {
+      "id": "CR-2", "severity": "P1", "source": "angle altitude", "verdict": "CONFIRMED",
+      "file": "copycat/live/aggregate.py",
+      "claim": "非整數 strike warning 放在 _contract_rows()(每次 snapshot 觸發)→ 盤中 ~1/s 洗版重複 warning",
+      "resolution": "accepted — 驗證移到 reset()(合約集合載入時一次一檔);測試先改(caplog 包 constructor)轉紅再修"
+    },
+    {
+      "id": "CR-3", "severity": "P2", "source": "angle conventions", "verdict": "CONFIRMED",
+      "file": "tests/fixtures/txo_golden/regen.py",
+      "claim": "print 違反專案 CLAUDE.md §2「禁止 print」;docstring 自稱的 spikes 慣例例外並非 CLAUDE.md 授予(spikes/ 不在 ruff/測試樹,tests/ 在)",
+      "resolution": "accepted — 改 logger + basicConfig(stream=stdout),報告語意不變"
+    },
+    {
+      "id": "CR-4", "severity": "P2", "source": "angle reuse", "verdict": "REFUTED",
+      "file": "copycat/live/aggregate.py",
+      "claim": "_contract_rows 重複排序,應依賴 SeriesInfo.contracts 既有排序",
+      "resolution": "rejected_with_reason — 依賴 dict 插入順序 = 隱性耦合 tc4 排序;測試/replay 直接以未排序 list 建構 ChainAggregator,顯式排序是必要的;golden 已鎖排序"
+    },
+    {
+      "id": "CR-5", "severity": "P2", "source": "angle altitude", "verdict": "REFUTED",
+      "file": "copycat/live/aggregate.py",
+      "claim": "backend 送 ever-ticked、frontend 濾 volume>0,兩套 active 定義會出現零成交殘留列",
+      "resolution": "rejected_with_reason — 機械反證:_pos entry 僅在 qty>0 ingest 時建立(models.py:65,92 擋 qty<=0),volume 恆 ≥1,前端 filter 是防禦性 no-op,情境不可能發生"
+    },
+    {
+      "id": "CR-6", "severity": "P2", "source": "angle efficiency", "verdict": "REFUTED(against diff)",
+      "claim": "per-WS client 各自重建 contracts 列表",
+      "resolution": "rejected_with_reason — per-client latest_snapshot() 是既有架構非本 diff 引入;單一使用者本機工具(design 定位),~百檔 × 1Hz 為 sub-ms 成本"
+    },
+    {
+      "id": "CR-7", "severity": "P2", "source": "angle altitude+simplification(dedup)", "verdict": "PLAUSIBLE",
+      "file": "frontend/src/components/QuoteTable.tsx",
+      "claim": "SideCells reverse() 鏡像與手寫 thead 無共同 column 定義,未來加欄可能 desync;netTone 色彩判定散兩處",
+      "resolution": "rejected_with_reason(本輪)— 欄位集合 user 拍板固定、無擴充計畫;記 docs/next-time.md(加欄前抽 column def)"
+    },
+    {
+      "id": "CR-8", "severity": "P2", "source": "angle altitude", "verdict": "PLAUSIBLE",
+      "file": "copycat/live/aggregate.py",
+      "claim": "snapshot() 的 curve rows 與 _contract_rows 兩條獨立讀 _pos 的路徑可能漂移",
+      "resolution": "rejected_with_reason — 語意本不同(curve 用 active 部位過濾、表格用全部有成交檔);golden 同時鎖兩者,同源漂移會被全等比對抓到"
+    }
+  ],
+  "p2_summary": "8 角度共 10 候選(dedup 後 8);accepted 3(CR-1/2/3)、refuted 3、rejected 2(1 條記 next-time)",
+  "exit": "accepted 3 ≤ 5 且無 P0 → fix 後測試全綠即單輪退場"
+}

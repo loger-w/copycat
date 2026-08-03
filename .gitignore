@@ -9,7 +9,13 @@ __pycache__/
 spikes/TCPY/
 spikes/catalog_dump/
 spikes/.ruff_cache/
-.claude/
+.claude/*
+!.claude/feat/
+!.claude/mod/
+!.claude/bug/
+!.claude/refactor/
+!.claude/perf/
+.claude/**/*.log
 .env
 spikes/out/
 frontend/node_modules/

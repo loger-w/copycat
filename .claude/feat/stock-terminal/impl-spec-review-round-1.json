@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer",
+  "verdict": "1 P0 / 2 P1 / 4 P2",
+  "findings": [
+    {"id": "F1", "severity": "P0", "file": "§1 stock_models", "summary": "parse_stock_realtime 回傳型別與 design 不一致(book/meta 被 Optional 化)", "resolution": "accepted — PLAN 改回 design 版 tuple[StockTick | None, StockBook, StockMeta]"},
+    {"id": "F2", "severity": "P1", "file": "§7 stkfut_map", "summary": "對映檔路徑 PLAN/design 矛盾且 design 原路徑撞 gitignore", "resolution": "accepted — 定案 copycat/stkfut_map.json(package data,與 watchlist.py/market.py 同層慣例);design changelog 補記;模組 copycat/stkfut_map.py 維持"},
+    {"id": "F3", "severity": "P1", "file": "§4 stock_engine", "summary": "TC4 斷線 status 推播 + 自癒交接缺席", "resolution": "accepted — PLAN §4 補 status 事件 + 自癒 + 測試;§11 補前端 status 處理"},
+    {"id": "F4", "severity": "P2", "file": "§4", "summary": "rollover 指名 stale-drop 測試未列", "resolution": "accepted — 補測試案例"},
+    {"id": "F5", "severity": "P2", "file": "§1", "summary": "StockMeta 缺 open_time/close_time", "resolution": "accepted — 補齊"},
+    {"id": "F6", "severity": "P2", "file": "§3/§4", "summary": "健檢歸屬層 source vs engine 不一致", "resolution": "accepted — 照 design:source 偵測 + callback,engine 標狀態"},
+    {"id": "F7", "severity": "P2", "file": "§4/§7", "summary": "SecurityName 交叉核對無實作/測試條目", "resolution": "accepted — §4 補一行 + caplog 測試"}
+  ],
+  "p2_summary": "4 條 P2 皆動工前一行補齊"
+}

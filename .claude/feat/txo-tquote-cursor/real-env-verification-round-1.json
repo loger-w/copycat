@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "date": "2026-07-18",
+  "env": "Windows + 達錢 4(Touchance 4.0)常駐;TXO_BACKFILL_DATE=2026-07-17(今日週六休市);server :8721 + vite dev :5174;chrome-devtools MCP",
+  "notes": [
+    "首啟未帶回補 env → 週六當日 0 ticks(自行發現後改帶 2026-07-17 重啟,非 code 問題)",
+    "chrome-devtools MCP profile 被前 session 殘留 chrome 鎖住 → 終止該 profile 的殘留 process 後恢復",
+    "設計精修 pass(user 中途要求補跑 frontend-design + bencium skills)在本 phase 內完成並重截圖,commit efb17e4"
+  ],
+  "checks": [
+    {"sc": "SC-1", "how": "GET /api/txo/snapshot(真 TC4 回補 22,935 ticks / 190 檔)", "result": "PASS — contracts 欄位存在;逐列不變量 net==outer−inner、volume≥outer+inner 全成立;舊欄位(curve 138 點/beps/totals)shape 不變", "evidence": "回補後 snapshot 程式化驗證(對話紀錄)+ evidence/SC-4_layout.png 指標卡"},
+    {"sc": "SC-2", "how": "頁面渲染 91 列 T 字表(a11y snapshot + 截圖)", "result": "PASS — 每履約價一列、Call 左 Put 右鏡像、內外盤比/成交量/淨部位/能量條齊;單側無成交顯示 —;深 OTM 與 ATM 區均正確", "evidence": "evidence/SC-2_tquote-table.png"},
+    {"sc": "SC-3 happy", "how": "真實 DOM mousemove 於曲線中段", "result": "PASS — crosshair + 曲線錨點 + 右上 readout『46,592.9 ▸ -NT$ 3.18億』;插值與曲線一致", "evidence": "evidence/SC-3_cursor-readout.png"},
+    {"sc": "SC-3 edge1", "how": "游標移至 pad 外(圖表左緣 2px)", "result": "PASS — readout 不顯示", "evidence": "evaluate_script 回傳 padOutside=false(對話紀錄)"},
+    {"sc": "SC-3 edge2", "how": "真實滑鼠移出(hover 表格標題 + mouseout relatedTarget 外部)", "result": "PASS — readout 清除。註:程序派發 mouseleave 事件不觸發 React leave(React 由 mouseout 合成),為測試手法假陰性非 bug", "evidence": "evaluate_script readoutAfterMouseOut=false(對話紀錄)"},
+    {"sc": "SC-4", "how": "全頁截圖(1440×full)", "result": "PASS — 指標卡 → 曲線 → T 字表上下排版,互不遮擋", "evidence": "evidence/SC-4_layout.png"},
+    {"sc": "regression-1", "how": "MetricsBar 指標卡(未改元件)", "result": "PASS — 最大獲利/虧損/BEP/淨口數/覆蓋率照常渲染(a11y snapshot)", "evidence": "SC-4 截圖"},
+    {"sc": "regression-2", "how": "PnlChart 既有渲染(BEP 標記/獲利虧損分區/序列選單 REST)", "result": "PASS — BEP 42,632.9 標記與 legend 正常;/api/txo/series 200;WS 流持續更新 footer 時間", "evidence": "SC-3/SC-4 截圖 + network log"}
+  ],
+  "console": "1 warn(WS 首掛 StrictMode 斷開暫態,連線實際存活)+ 1 error(favicon.ico 404,專案無 favicon,pre-existing 非本 feature)— 均非本 diff 引入,無 feature 相關 error",
+  "known_limitation": "ATM 分隔線在真實環境未見(週六 TXF 不推 snapshot → spot=None → 依 DR-8 不畫,行為正確);分隔線渲染由 vitest td 斷言覆蓋,盤中視覺待 2026-07-20 順帶確認(非 blocker)"
+}

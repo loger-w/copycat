@@ -1,0 +1,99 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer",
+  "spec": ".claude/mod/stock-ui-round4/change-spec.md",
+  "summary": { "P0": 1, "P1": 8, "P2": 6, "accepted": 15, "rejected_with_reason": 0, "needs_more_context": 0 },
+  "note": "機械快篩:15 條全部可查證且成立,零 REFUTED。R1/R2/R8/R10 在 reviewer 回覆前已於實作中自行撞到並修掉(commit 9897d1c/5b6253b),仍逐條記錄以免 spec 與 code 漂移。",
+  "findings": [
+    {
+      "id": "R1", "severity": "P0", "disposition": "accepted",
+      "claim": "StockIntradayChart.test.tsx 5-6 支以 clientX:3 觸發 hover 的測試必紅(x=3 落進 46px gutter → minuteOf 回 null),spec 卻標『不該紅 → 打到不該動的東西』,會誤導實作者回頭破壞 W-6。",
+      "verification": "CONFIRMED。實跑:改 gutter 前後,6 處 `clientX: 3,` 全部命中;minute 541 的新 x = 46 + (1/270)×754 ≈ 48.8。",
+      "resolution": "spec 🔴-4 表新增該列並標 🔴 該紅(座標平移);實作已把 6 處改為 clientX: 49,斷言語意一字未動;clientX: 400(無成交分鐘)那支維持不動 —— 新座標下 minuteOf(400)=667 仍無資料,W-6 分解退化仍被鎖住。commit 9897d1c。"
+    },
+    {
+      "id": "R2", "severity": "P1", "disposition": "accepted",
+      "claim": "useChartToggles.test.ts:48-59 以整包 toEqual 斷言 localStorage,新增 v:2 必紅,spec 標不該紅會誤導去改 W-10 的保護點。",
+      "verification": "CONFIRMED(與同表 :24-31 同因)。",
+      "resolution": "spec 改標『🔴 該紅(僅期望值多 v:2)』並註明凡整包 toEqual localStorage 者皆該紅;實作的新測試已把期望改為 {vwap,cdp,ma,bb,v:2},且『cdp:false 不被 b 還原』語意保留為該測試的真正斷言。"
+    },
+    {
+      "id": "R3", "severity": "P1", "disposition": "accepted",
+      "claim": "WatchlistSidebar.test.tsx 三支標成不該紅但必紅:(a) :78-84 getByText('2330') 在全群組同列後有 2 個節點;(b)(c) :126-133 / :135-140 的 waitFor(getByRole('tab')) 前置守衛在 tablist 移除後 timeout。另 fetchMock 未涵蓋 /api/stock/names。",
+      "verification": "CONFIRMED。GROUPS 的 2330 同屬主力與觀察;role=tablist 整段移除。",
+      "resolution": "spec 三支改標 🔴 該紅並指定改法(getAllByText[0] 或 within(group section);守衛換 getByTestId('wl-group-…'));測試欄新增『fetchMock 需加 /api/stock/names → {names:[],count:0} 分支』。"
+    },
+    {
+      "id": "R4", "severity": "P1", "disposition": "accepted",
+      "claim": "dropTargetFromPointer 折疊分支自相矛盾:listTop=bottom 且 y<bottom → round(負)→ clamp 成 0(prepend),但註解與 spec 指定的新測試要求 index=count。",
+      "verification": "CONFIRMED(純算術)。",
+      "resolution": "DropZone 增 collapsed: boolean 明確分支,折疊時直接回 index=count 不走 rowHeight 公式;新測試同時鎖『折疊 → count』與『展開空群組(count=0)→ 0』。"
+    },
+    {
+      "id": "R5", "severity": "P1", "disposition": "accepted",
+      "claim": "zone 幾何只在 pointerdown 算一次所依賴的『拖曳中 DOM 不重排』無任何約束保證:側欄捲動、save.error/error 文案出現、落點高亮若插入元素都會讓 rect 失效;現行實作每次 pointermove 重讀 rect,新做法是退步。",
+      "verification": "CONFIRMED(WatchlistSidebar.tsx:140,146 每次 move/up 都重讀 getBoundingClientRect)。",
+      "resolution": "改為每次 pointermove 重算 zones(N = 群組數,成本可忽略,對捲動與版面變動天然免疫);並明訂捲動容器 = <aside>、落點高亮只能用不影響版面的樣式(border/outline),禁止插入佔位元素。"
+    },
+    {
+      "id": "R6", "severity": "P1", "disposition": "accepted",
+      "claim": "移除「全部」與頂部輸入框後,零群組(冷啟動 load_watchlist_groups 回 [])沒有任何新增股票入口;既有『「全部」下新增 → 自動建「自選」』被靜默拿掉,未進白名單也未記 auto-default。",
+      "verification": "CONFIRMED。stock_watchlist.py:39-41 檔不存在回 [];新結構草圖只有空群組提示,無零群組分支。",
+      "resolution": "採 reviewer 建議 (a):groups.length===0 時渲染 fallback 區塊(沿用文案「尚無自選,輸入股號新增」+ 搜尋框),送出時自動建立 DEFAULT_GROUP=「自選」—— 把既有 :102-110 的語意從「全部」搬到空狀態而非刪除;新增 SC-2b 與白名單 W-16。"
+    },
+    {
+      "id": "R7", "severity": "P1", "disposition": "accepted",
+      "claim": "refresh 只有下界防線(<2000 拋錯)。段標題偵測若因 colspan/空 td 失效,權證段整批被收進表(~42,000 筆)遠大於 2000 → 守門不觸發、靜默覆寫版控檔,SC-10 照樣 PASS。",
+      "verification": "CONFIRMED。單一 <td> 是唯一的段落判準,失效方向恰好是『多』。",
+      "resolution": "守門改雙側 + 語意檢查:總數不在 [1800, 6000] → 拋錯;且必須偵測到至少一個含「權證」的段且該段列數 > 5000,否則視為解析失效保留舊檔。SC-10 同步改寫。"
+    },
+    {
+      "id": "R8", "severity": "P1", "disposition": "accepted",
+      "claim": "spec 兩處「排除權證後 ~3.4k」與自列的分段實測(上市 1,378 + 上櫃 1,023 = 2,401)矛盾約 40%,會讓正確結果被誤判成解析漏收。",
+      "verification": "CONFIRMED,且本輪 probe 實跑 = 2,401(見 probe-evidence.md)。",
+      "resolution": "spec 全部數字改為實測值:2,401(上市 1,378 / 上櫃 1,023)、JSON 57,322 bytes、權證剔除 39,999 列;門檻改雙側區間(見 R7)。"
+    },
+    {
+      "id": "R9", "severity": "P1", "disposition": "accepted",
+      "claim": "dropTargetFromPointer 只吃 y 且『縫隙取最近 zone』,pointerup 一律 mutate → 在 K 線圖或右欄放開只要 y 同高就會把股票搬組;移動語意不可逆,且無 Esc / undo。",
+      "verification": "CONFIRMED(spec 的函式簽名確實無 x 參數)。",
+      "resolution": "加護欄並列入 SC-4c:pointer 必須落在 <aside> 水平範圍內(±16px 寬容)才接受落點,否則整個拖曳作廢不發 PUT;綁 keydown Escape 取消;『取最近 zone』只在側欄內縫隙生效。新測試:落側欄外 → 回 null 且零 PUT。"
+    },
+    {
+      "id": "R10", "severity": "P2", "disposition": "accepted",
+      "claim": "🔴-3 該紅清單漏了 areaPolygon 首尾點字串斷言(pts[0]==='0.0,…');且『width = 分鐘數 → 1px/分』的註解前提失效。",
+      "verification": "CONFIRMED — 實作時正是這支最後一個轉紅。",
+      "resolution": "spec 補『凡以字串比對座標的斷言(areaPolygon / pts())一律該紅』;實作已改期望為 Y_AXIS_W 起算並更新註解。commit 9897d1c。"
+    },
+    {
+      "id": "R11", "severity": "P2", "disposition": "accepted",
+      "claim": "SC-5 的絕對句『沒有任何價位文字壓在線上』與 out-of-scope『右緣 CDP/MA 價位標不動』衝突 —— 右緣標籤(x=w−32,內容是價位)本來就畫在繪圖區內。",
+      "verification": "CONFIRMED(StockIntradayChart.tsx 疊線 text x={w-32})。",
+      "resolution": "SC-5 收斂為『左緣 y 軸價位數字全部落在 gutter 內,線/填色/格線/疊線左端一律自 x=46 起;右緣 CDP/MA 價位標不在本 SC 範圍』。"
+    },
+    {
+      "id": "R12", "severity": "P2", "disposition": "accepted",
+      "claim": "(1) big5 + errors=replace 會把 Big5 標準碼位外的字元靜默換成 U+FFFD;(2) load_names 對壞 JSON 會拋 → endpoint 500,與『不 500』承諾不一致;(3) load_stock_names / load_names 命名不一致且無注入點,『空表』案例無法製造。",
+      "verification": "CONFIRMED,且 (1) 有硬證據:同一份上市 HTML,big5 解出 447 個 U+FFFD,cp950 解出 0 個。",
+      "resolution": "(1) 改 cp950(Big5 超集)保留 errors=replace,並在 refresh 對 U+FFFD 筆數 log warning;(2) load_names 對壞 JSON / 缺 names 鍵回 {} + logger.warning;(3) 統一函式名 load_names,create_app 加 stock_names_path 注入點讓空表/壞檔可測。"
+    },
+    {
+      "id": "R13", "severity": "P2", "disposition": "accepted",
+      "claim": "全形空格 split 未指定 maxsplit(名稱含全形空格會被切碎);重複 code 的 warning 未定可接受筆數。",
+      "verification": "CONFIRMED 為規則留白。實測上市段 split 後 >2 段者 0 筆,故目前無實害,但版控產物的差異會進 diff。",
+      "resolution": "明訂 split(\"\\u3000\", 1) + name strip;重複 code 筆數 > 0 時 refresh log 印出清單(不只計數)。新測試補『name 含全形空格 → 切分正確』。"
+    },
+    {
+      "id": "R14", "severity": "P2", "disposition": "accepted",
+      "claim": "W-3 在 activeGroup 消失後失去實體(『兩組 section 仍在』在任何實作下都成立);collapsed Set 以群組名為鍵,removeGroup 後未清理 → localStorage 累積孤兒名,同名群組重建時意外呈折疊。",
+      "verification": "CONFIRMED。",
+      "resolution": "W-3 改寫為有實體的斷言:『PUT 4xx → 錯誤文案出現、沒有發第二次 PUT、該組折疊狀態與展開中的搜尋框(adding)不變』;removeGroup 的 onSuccess 收斂 collapsed(刪該名)與 adding(等於該名則清空)。"
+    },
+    {
+      "id": "R15", "severity": "P2", "disposition": "accepted",
+      "claim": "(a) 量刻度中線數字移到右緣後會與右緣最新分鐘的 bar 重疊(頂端數字有 SUB_TOP_PAD 保護,中線沒有),SC-7 驗不到可讀性;(b) Y_AXIS_W(lib)與 PRICE_TAG.w(元件)是兩份 46,任一改動就讓 hover 價位標壓線復發且無測試鎖住。",
+      "verification": "CONFIRMED。",
+      "resolution": "(a) 中線數字改畫在中線上方且加 fill-bg-deep 底,SC-7 補『中線數字不被 bar 覆蓋』;(b) 元件改 PRICE_TAG = { w: Y_AXIS_W, h: 14 } 直接 import,並加測試鎖 price-tag 寬度 === Y_AXIS_W。"
+    }
+  ]
+}

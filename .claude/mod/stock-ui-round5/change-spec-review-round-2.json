@@ -1,0 +1,97 @@
+{
+  "_note": "Phase 3 限縮加輪(只審 round 1 的 [amendment] 段落與其新矛盾)。全 10 條 accepted,change-spec.md 已就地修復並標 [amendment 2026-07-30: review SN]。",
+  "summary": { "P0": 1, "P1": 5, "P2": 4, "accepted": 10, "rejected": 0 },
+  "process_note": "/mod Phase 3 的字面規則是「限縮輪後仍有 P0 → 停下回報 user 三選一」。S1 判定為『修復自身引入的實作級瑕疵,換一行 effect 寫法即可,不動 SC / 對外契約 / scope』→ 依 /auto 自動核准範圍(實作選擇)推進並標記,未佔用 user 停等。已在回覆中明白告知此判斷。",
+  "findings": [
+    {
+      "id": "S1", "severity": "P0", "status": "accepted",
+      "where": "auto-default(Dialog)+ §🟢-10 程式碼片段(修復 R1 時引入)",
+      "claim": "<dialog open={open}> 與 feature-detect 的 showModal() 並用,在真瀏覽器必然拋 InvalidStateError —— 兩個修復互相打架",
+      "evidence": "React 在 commit 階段先寫入 open=\"\",effect 才跑;HTML 標準 showModal() 步驟 2 =『已有 open 屬性 → throw InvalidStateError』。反向:showModal() 成功後 React 把 open 設回 false 只移除屬性,依標準不會移出 top layer,::backdrop 留著擋整頁",
+      "impact": "jsdom 測試全綠(無 showModal → feature-detect 跳過),真瀏覽器第一次點「管理」就在 effect 拋未捕捉例外 → React 卸載整棵樹 = 個股頁白畫面。自動化守門看不到",
+      "fix": "不把 open 傳給 <dialog>;effect 內單一路徑 + !el.open 守衛;jsdom 走 setAttribute/removeAttribute",
+      "applied": "auto-default 改寫 + §🟢-10 程式碼片段與 effect 段改寫"
+    },
+    {
+      "id": "S2", "severity": "P1", "status": "accepted",
+      "where": "§🟢-7 slot 語意段 + detachFromGroups(修復 R2/R3/R18 時引入)",
+      "claim": "共用的 off-by-one 公式對 detachFromGroups 不成立;且『三個插入型函數』與實際吃 slot 的四個對不上",
+      "evidence": "detachFromGroups 的目標清單是未分組衍生清單(不含被拖 code → at = -1 → 不補償),但被改寫的是 wl.codes(含該 code)。反例 codes=[X,C,Y]、未分組=[X,Y],C 拖到槽 1 → 得 [X,Y,C] 而非 [X,C,Y];新測試只驗集合不驗位置",
+      "impact": "SC-12(c) 位置永遠錯,且沒有測試會紅 —— 與 R3 要防的失效樣態相同,只是換一個函數",
+      "fix": "明訂兩種索引空間(群組 / 未分組)與換算;新測試補位置斷言",
+      "applied": "§🟢-7 slot 語意段重寫(兩種索引空間表 + 反例)+ 新測試清單加位置斷言"
+    },
+    {
+      "id": "S3", "severity": "P1", "status": "accepted",
+      "where": "§🔴-9 既有測試逐一標(修復 R4/R16 時仍不窮舉)",
+      "claim": "實檔 30 支不是 29;3 支完全沒列;過半行號指向別的測試",
+      "evidence": "rg '^  it\\(' 得 30 筆。未列:':390' 貼側欄右緣寬容內照樣搬組、':397' 剛超出寬容零 PUT、':458' 空群組 placeholder。行號錯位::50→77、:59→86、:78→105、:86→165、:102→324、:112→280、:126/:135/:142→235/244/262、:165→294、:236→122+132、:390/:458 實為 427/435;fetchMock GET 在 :32",
+      "impact": "':390' 讀 putBodies[0]?.[1]?.codes 可能無預警紅;':458' 兩種實作都合 spec;行號錯位重演 R16",
+      "fix": "以測試描述為主鍵、行號僅供定位;補標 3 支;更正為 30 支",
+      "applied": "§🔴-9 逐一標整表重寫(26 列,含 fetchMock 與 rect stub)"
+    },
+    {
+      "id": "S4", "severity": "P1", "status": "accepted",
+      "where": "§🔴-9 折疊孤兒清理 + §🟢-10 新測試(修復 R4 時)",
+      "claim": "W-20 的接線兩邊都寫了,但它守的行為(localStorage 不留孤兒)搬家後沒有任何測試守得到",
+      "evidence": "collapsed state 與 localStorage 住在側欄;Dialog 新測試只有『onGroupDeleted 被呼叫』;§🔴-9 新測試沒有任何一條驗 dropCollapsed",
+      "impact": "接錯線或忘了寫 localStorage 那半,全部測試照樣綠 —— 與 R4 的洞相同,從『沒寫』變成『寫了但沒人驗』",
+      "fix": "側欄層補一條:預置 COLLAPSED_KEY → 開 Dialog 刪群組 → 斷言 localStorage 內容",
+      "applied": "§🔴-9 新測試補該條;逐一標把 :251 標為「例外,見新測試」"
+    },
+    {
+      "id": "S5", "severity": "P1", "status": "accepted",
+      "where": "§🔴-9 拖曳分支表(修復 R2/R18 時引入)",
+      "claim": "五分支表漏掉既有的『放回原位 → 零 PUT』早退",
+      "evidence": "WatchlistSidebar.tsx:198 的早退;W-6 只涵蓋側欄外/Esc;既有測試 :444 不落在早退條件內",
+      "impact": "拖起來放回原位 → 送內容相同的 PUT → app.py:452 重設整個訂閱池(TC4 全量 UNSUB/SUB),無錯誤訊號無測試會紅",
+      "fix": "分支表加第六列 + 新測試;改判『next 與現況深度相等 → 不 mutate』",
+      "applied": "拖曳分支表加列 + W-22 入白名單 + 新測試"
+    },
+    {
+      "id": "S6", "severity": "P1", "status": "accepted",
+      "where": "§🟢-1 / §🟢-3 的 h/l 來源(修復 R5 時)",
+      "claim": "state.meta 每則 REALTIME 被整包替換,spec 沒規定當日高低的保留語意",
+      "evidence": "stock_engine.py:325 每則 update_meta;stock_state.py:92-93 無條件覆蓋;parse_stock_realtime:119-128 每則重建整個 StockMeta;對照 index_engine.py:231-232 刻意用 `or s.high` 保留",
+      "impact": "一則不帶 HighPrice 就把當日高低打成 None → 線盤中閃掉、snapshot 也 null(重載後線不見),比 R5 原要修的更難察覺",
+      "fix": "update_meta 做欄位級保留(只有 high/low),parse 層保持無狀態;補『第二則不帶 → 維持前值』測試",
+      "applied": "§🟢-1 新增保留語意段 + 程式碼 + 新測試;W-23 入白名單"
+    },
+    {
+      "id": "S7", "severity": "P2", "status": "accepted",
+      "where": "§🔴-11 applyTick(修復 R5 時)",
+      "claim": "acc.meta 可能是 null,spec 沒定義該分支",
+      "evidence": "stock-accum.ts:52 meta: StockMeta | null;stock_state.py:139-148 在 meta 為 None 時 snapshot 回 null",
+      "impact": "TS strict 下實作者被迫二選一,兩種都沒被指定(就地造殘缺 meta 會污染 header 與明細判色基準)",
+      "fix": "明寫 meta === null 時忽略 h/l,不就地造 meta",
+      "applied": "§🔴-11 applyTick 段補明"
+    },
+    {
+      "id": "S8", "severity": "P2", "status": "accepted",
+      "where": "SC-1 量法(修復 R5 時)",
+      "claim": "量法單位對不上:meta.high 是毫元,畫面標籤是元",
+      "evidence": "§三『加 high/low(毫元 or null)』vs fmtPrice = milli/1000(WatchlistSidebar.tsx:17-21)",
+      "impact": "人工驗收必然對不上或被含糊帶過",
+      "fix": "改成 meta.high / 1000",
+      "applied": "SC-1 改寫"
+    },
+    {
+      "id": "S9", "severity": "P2", "status": "accepted",
+      "where": "§三 WS tick 列的連帶影響(修復 R5 時)",
+      "claim": "被引為證據的 useStockStream.ts:5 檔頭註解會就地變假,spec 沒列進要改的檔",
+      "evidence": "該行寫『engine 不發 meta WS 型別』,正是 §🟢-3 的論證依據;本 repo 剛出過 3ea8dca 修同類自相矛盾註解",
+      "impact": "下一輪讀 code 的人照它推論『meta 盤中不會變』,重演 R5",
+      "fix": "同輪更新該檔頭",
+      "applied": "§🔴-11 補明"
+    },
+    {
+      "id": "S10", "severity": "P2", "status": "accepted",
+      "where": "§🔴-6 既有測試判定(修復 R9 時)",
+      "claim": "逐一標只涵蓋回傳型別,漏了同檔對 request body 的斷言",
+      "evidence": "useStockWatchlist.test.tsx:57 toEqual({ groups: next });該檔全檔僅 2 支且無錯誤解析測試",
+      "impact": "PUT body 契約改動未事前標為該變,會以『順手改 assertion』形式被改掉(鐵則 E 灰區)",
+      "fix": "逐支列出,body 斷言事前標為該變",
+      "applied": "§🔴-6 逐一標改為兩列表"
+    }
+  ]
+}

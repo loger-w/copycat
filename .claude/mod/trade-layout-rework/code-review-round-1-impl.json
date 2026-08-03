@@ -1,0 +1,61 @@
+{
+  "round": 1,
+  "focus": "(a) implementation bug",
+  "model": "opus",
+  "summary": {
+    "p0": 0,
+    "p1": 3,
+    "p2": 6
+  },
+  "findings": [
+    {
+      "id": "P1-1",
+      "file": "lib/candle.ts / CandleChart / StockChart",
+      "claim": "分K 無根數上限且 w=max(1,slot*0.7) 在 slot<1.43 時 > slot → days=10 重疊 1.4×、days=30 重疊 4×;CandleChart 無靜態層 memo,hover 重建數千節點",
+      "disposition": "accepted → w 夾在 slot 內 + 分K maxBars(m1=700/m5=400)+ ChartStatic memo;加密集度 regression 測試"
+    },
+    {
+      "id": "P1-2",
+      "file": "server/bars.py",
+      "claim": "put_hist_range 無條件把整段寫負向快取;TC4 分頁截斷時缺的日子被永久釘成空,只能重啟 server",
+      "disposition": "accepted → 負向快取只寫到有證據掃過的最後一天 + 不以空值覆寫既有非空值;加截斷 regression 測試"
+    },
+    {
+      "id": "P1-3",
+      "file": "hooks/useStockBars.ts",
+      "claim": "inTradingHours 無星期判定 → 週末每 60s 空打 TC4(單次 ~30s / ~30 REQ),違反 SC-10",
+      "disposition": "accepted → 補週末判定、起點改 09:01;加週末 regression 測試"
+    },
+    {
+      "id": "P2-4",
+      "claim": "refetchInterval 值形式只在 render 求值",
+      "disposition": "accepted → 改函式形式"
+    },
+    {
+      "id": "P2-5",
+      "claim": "BarsCache 三個 dict 無 evict,日期維度不封頂",
+      "disposition": "accepted → 加 prune(視窗外剪除)"
+    },
+    {
+      "id": "P2-6",
+      "claim": "days=abc 回 FastAPI 422 list 形 detail,不符 W-D3",
+      "disposition": "accepted → 自行解析 + 400 BAD_DAYS"
+    },
+    {
+      "id": "P2-7",
+      "claim": "futExchangeContract 移進 App render body 會 throw → 白屏整個 App",
+      "disposition": "accepted → try/catch 回 null(= W-A6 既有安全狀態)"
+    },
+    {
+      "id": "P2-8",
+      "claim": "蠟燭值域只取 h/l,o/c 越界會畫到框外",
+      "disposition": "accepted → 值域一併吃 o/c"
+    },
+    {
+      "id": "P2-9",
+      "claim": "彙總 6 條(key 名 / _today 跨午夜 / qty updater / DepthBar 假 button / inflight dedup / centerRequest 重置)",
+      "disposition": "5 條 accepted 並修;inflight dedup deferred 至 docs/next-time.md"
+    }
+  ],
+  "excluded": "跨日換日、splitStamp/bucketEnd、indexOf 邊界、maxBars 與 MA 對齊、ctx 新物件不致 remount、切檔一幀 skew(既有)、DepthBar maxVol、fetch_bars_range 非法日期(端點不可達)—— 皆有 code 佐證排除"
+}

@@ -1,0 +1,2 @@
+INFO copycat.data.label_events: label-events(five_tigers):{'labeled_hit': 0, 'labeled_no_hit': 0, 'uncovered': 0, 'already_labeled': 0, 'verified_matched': 1029, 'verified_mismatched': 0, 'verified_uncovered': 0}
+標籤一致率 100.00%(1029/1029;無分點檔 0 筆)

@@ -1,0 +1,51 @@
+{
+  "slug": "txo-aggregate-pnl",
+  "start_sha": "53a6061d2df0ac824ba36d0423abe9feef96b69c",
+  "branch": "feat/txo-aggregate-pnl",
+  "worktree_path": null,
+  "current_phase": 8.5,
+  "completed_phases": [
+    -1,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "scope": "L",
+  "phase_2_mode": "condensed",
+  "pending_review_rounds": {
+    "phase_1": 0,
+    "phase_2": 0,
+    "phase_4": 0
+  },
+  "blockers": [],
+  "phase_6_blocked_reason": "週六休市 infra 降級:live tick 流/TXF spot 推播/heartbeat 重連實測遞延 2026-07-20 盤中(REALTIME 對映已隔離 parse_realtime 單函數,改動半徑受控)",
+  "scope_overrides": {
+    "goal_efficiency_mode": true
+  },
+  "last_updated": "2026-07-18T18:30:00+08:00",
+  "project_shape": "python-live+fastapi+react",
+  "last_commit_sha": "5e4efdc",
+  "final_merge_sha": "5e4efdc",
+  "self_review_head": "5ece7a8",
+  "artifact_commit": "skipped (.claude/ gitignored)",
+  "sc_cycle_counts": {
+    "_unscoped": {
+      "phase_1": 0,
+      "phase_2": 0,
+      "phase_3": 0,
+      "phase_4": 0,
+      "phase_5": 0,
+      "phase_6": 0,
+      "phase_7": 0,
+      "total": 0
+    }
+  },
+  "paused": null,
+  "notes": "goal: 台指選擇權全市場即時綜合損益圖(參考外部文章截圖)。user 已拍板本輪只做看盤子專案;下單系統(個股+期貨)另開流程。.claude/ 在 .gitignore → Phase 8 artifact commit 預期 skip。repo 無遠端 → 收尾走離線 fallback。Phase 0 brainstorm 進行中,已拍板:MVP=曲線+指標(T字表/游標試算下輪)、部位推估=當日內外盤累積、單一到期序列選單(預設近週選)、平台=FastAPI+React+Touchance ZMQ;UI/UX 用 frontend-design + bencium-controlled-ux-designer(user mid-turn 指示);方案 A(backend 聚合、前端薄)已提出待 user 確認,前置 spike=TXO 鏈訂閱驗證。 | Phase 8 完成:tag 驗證 PASS(wave 模式)、增量 review 0 findings、離線 fallback ff merge 入 master(5e4efdc)分支已刪。遺留:2026-07-20 盤中驗證(live 流/TXF spot/heartbeat)。"
+}

@@ -1,0 +1,13 @@
+{
+  "round": 3,
+  "reviewer": "design-reviewer",
+  "verdict": "0 P0 / 2 P1 / 3 P2 — 達退出門檻(無 P0 且 P1 ≤ 2),兩條 P1 就地修入 v4 而非入 Known Risks",
+  "findings": [
+    {"id": "F1", "severity": "P1", "section": "§2.4", "summary": "rollover 兩條觸發腿各依賴未成立前提(過期窗推播行為、交易日曆來源)", "resolution": "accepted — v4 改保守順序:08:00 檢查點(週一~五候選日)先以新日窗重掛,等首筆新日推播確認才 reset(非交易日無推播天然不清空,免引入假日表);腿 A 保留為快路徑;觸發 tick reset 後重新 ingest;過期窗跨日推播行為列 R6 盤前 probe"},
+    {"id": "F2", "severity": "P1", "section": "§2.2/§4", "summary": "回補完成無前端通知通道;「前端不重算」與無 minute WS 型別矛盾,SC-3/SC-6 即時性斷鏈", "resolution": "accepted — v4 回補套用 = 原子重建 + seq bump(前端跳號規則自然觸發全量 refetch)+ hooks 測試;§4 改寫:refetch 以 snapshot 為基底,之後前端從 tick(p/q/side)增量累算分鐘/VWAP/內外盤;§6 加前後端等值對照測試"},
+    {"id": "F3", "severity": "P2", "section": "§2.6", "summary": "stkfut 訊息 parser 與時段(08:45–13:45)未指明", "resolution": "accepted — v4 註明 stkfut 繞過 StockDayState,輕量 parser 只取現價/漲跌直送 WS(spike 樣本證實欄位同構)"},
+    {"id": "F4", "severity": "P2", "section": "§4", "summary": "book/meta 無 seq,掉失靠下一則全量自癒", "resolution": "accepted — v4 註記此為刻意設計(book/meta 每則自足)"},
+    {"id": "F5", "severity": "P2", "section": "§2.5", "summary": "watchlist PUT last-write-wins,多 tab 併發覆寫", "resolution": "accepted — 單人工具可接受,v4 註記"}
+  ],
+  "p2_summary": "round 2 的 F2/F3/F4/F5 核實真閉合;F1/F6 殘洞併入本輪 F1 已修"
+}

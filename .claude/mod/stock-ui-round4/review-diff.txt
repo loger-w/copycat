@@ -1,0 +1,2780 @@
+diff --git a/copycat/cli.py b/copycat/cli.py
+index 7d355a1..21f5b90 100644
+--- a/copycat/cli.py
++++ b/copycat/cli.py
+@@ -136,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
+ 
+     sub.add_parser("refresh-stkfut-map", help="重抓期交所股票期貨對映(期現對照用)")
+ 
++    sub.add_parser("refresh-stock-names", help="重抓 TWSE ISIN 全市場股票名稱表(搜尋提示用)")
++
+     p_nt = sub.add_parser("notify-test", help="Discord webhook 實發測試")
+     p_nt.add_argument("--message", default="copycat notify-test")
+     p_nt.add_argument("--title", default=None)
+@@ -347,6 +349,12 @@ def main(argv: list[str] | None = None) -> int:
+         mapping = refresh()
+         sys.stdout.write(f"stkfut map 更新完成:{len(mapping)} 檔\n")
+         return 0
++    if args.command == "refresh-stock-names":
++        from copycat.stock_names import refresh as refresh_names
++
++        names = refresh_names()
++        sys.stdout.write(f"股票名稱表更新完成:{len(names)} 檔\n")
++        return 0
+     return 1
+ 
+ 
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 5a99819..7be52b9 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -43,6 +43,8 @@ from copycat.stock_watchlist import (
+     validate_code,
+ )
+ from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
++from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
++from copycat.stock_names import load_names as load_stock_names
+ from copycat.server.trade import (
+     ConfirmRequiredError,
+     InvalidOrderError,
+@@ -133,10 +135,13 @@ def create_app(
+     corr_source: CorrSource | object | None = None,
+     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
+     stock_watchlist_path: Path | None = None,
++    stock_names_path: Path | None = None,
+     throttle_secs: float = 1.0,
+     queue_maxsize: int = 10_000,
+ ) -> FastAPI:
+     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
++    # 名稱表是版控檔(必然存在)→ 沒有注入點的話「表不可用」這條降級路徑無法測
++    names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
+     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
+     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
+     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
+@@ -413,6 +418,16 @@ def create_app(
+             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+         return stock
+ 
++    @app.get("/api/stock/names")
++    async def stock_names() -> dict:
++        """全市場代號↔名稱(搜尋提示列用)。**刻意不過 `_stock()` 閘** —— 名稱表與 TC4
++        連線無關,達錢 4 沒開時也該能搜尋。表不存在 / 壞檔 → 空陣列(不 500)。"""
++        names = load_stock_names(names_path)
++        return {
++            "names": [{"code": code, "name": name} for code, name in names.items()],
++            "count": len(names),
++        }
++
+     @app.get("/api/stock/watchlist")
+     async def stock_watchlist_get(request: Request) -> dict:
+         _stock(request)
+diff --git a/copycat/stock_names.py b/copycat/stock_names.py
+new file mode 100644
+index 0000000..ec7397a
+--- /dev/null
++++ b/copycat/stock_names.py
+@@ -0,0 +1,211 @@
++"""全市場股票代號 ↔ 名稱表(個股搜尋提示列用;change-spec stock-ui-round4 🟢-6)。
++
++資料源 = 證交所 ISIN 公開查詢頁(`strMode=2` 上市 / `strMode=4` 上櫃)。內建**版控**檔
++`copycat/stock_names.json`,`python -m copycat refresh-stock-names` 重抓(失敗保留舊檔)——
++形狀完全比照 `copycat/stkfut_map.py`。落版控而非 `data/` 是刻意的:名稱表要在 clone
++之後、還沒跑任何 CLI 之前就可用。
++
++**解碼一定用 `cp950` 不是 `big5`**:2026-07-30 實測同一份上市頁,`big5` +
++`errors="replace"` 解出 **447 個 U+FFFD**,`cp950`(Big5 超集)解出 **0 個**。名稱表的
++唯一用途是給人看/搜,靜默毀字不可接受。
++
++分類過濾用**排除法**(段名含「權證」者剔除),不用允許清單 —— 權證是唯一巨量段
++(2026-07-30 實測上市 30,561 + 上櫃 9,438 = 39,999 列),而允許清單會在 TWSE 改段名時
++靜默漏掉「股票」段。實測收錄 2,401 檔(上市 1,378 / 上櫃 1,023)。
++
++守門是**雙側 + 語意檢查**而不只是下界:段標題偵測靠「單一 `<td>` 的列」,一旦 TWSE 改成
++`colspan` + 空 `<td>`,段名就永遠不更新 → 「含權證 → 略過」整條失效 → 39,999 筆權證全部
++收進表,總數約 42,000 **遠大於**任何下界,單側門檻完全不觸發而靜默覆寫版控檔。
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++import re
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Callable
++from urllib.request import Request, urlopen
++
++from copycat.fileio import atomic_write_text
++from copycat.stock_watchlist import validate_code
++
++logger = logging.getLogger(__name__)
++
++_CACHE_VERSION = 1
++DEFAULT_PATH = Path(__file__).resolve().parent / "stock_names.json"
++
++ISIN_URLS = (
++    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",  # 上市
++    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",  # 上櫃
++)
++_TIMEOUT = 60.0  # 實測 7.5 MB + 2.5 MB
++
++# 守門門檻(實測基準:總 2,401;權證段 30,561 / 9,438;股票段 1,054 / 890)
++_MIN_TOTAL = 1_800
++_MAX_TOTAL = 6_000
++_MIN_WARRANT_ROWS = 5_000
++_MIN_STOCK_ROWS = 500
++
++_ROW_RE = re.compile(r"<tr>(.*?)</tr>", re.DOTALL)
++_TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL)
++_TAG_RE = re.compile(r"<[^>]+>")
++_FULLWIDTH_SPACE = "　"
++_REPLACEMENT = "�"
++
++
++@dataclass
++class ParseStats:
++    """逐段筆數與剔除計數 —— refresh 要 log 出來,格式漂移才看得見(禁止靜默截斷)。"""
++
++    per_section: dict[str, int] = field(default_factory=dict)
++    warrant_rows: int = 0
++    dropped: dict[str, int] = field(default_factory=dict)
++    duplicates: list[str] = field(default_factory=list)
++
++    def drop(self, reason: str) -> None:
++        self.dropped[reason] = self.dropped.get(reason, 0) + 1
++
++
++def _text(cell: str) -> str:
++    return _TAG_RE.sub("", cell).replace("&nbsp;", " ").strip()
++
++
++def parse_isin_html(html: str) -> dict[str, str]:
++    """ISIN 頁 → {股號: 名稱}。段名含「權證」的整段剔除;重複代號保留先出現者。"""
++    return parse_isin_html_with_stats(html)[0]
++
++
++def parse_isin_html_with_stats(html: str) -> tuple[dict[str, str], ParseStats]:
++    """同 `parse_isin_html`,另回逐段筆數與剔除計數(`refresh` 的守門與 log 靠它)。
++
++    刻意做成兩支函式而不是一個 `with_stats` flag —— union 回傳型別在呼叫端無法窄化,
++    只能靠 `assert isinstance` 補,那是把型別檢查推回 runtime。
++    """
++    names: dict[str, str] = {}
++    stats = ParseStats()
++    section = ""
++    for row_match in _ROW_RE.finditer(html):
++        cells = [_text(c) for c in _TD_RE.findall(row_match.group(1))]
++        if len(cells) == 1:
++            section = cells[0]
++            continue
++        if "權證" in section:
++            stats.warrant_rows += 1
++            continue
++        if len(cells) < 4:
++            stats.drop("cells")
++            continue
++        # maxsplit=1:名稱本身可能含全形空格(實測上市段目前 0 筆,但不能靠這個)
++        parts = cells[0].split(_FULLWIDTH_SPACE, 1)
++        if len(parts) < 2:
++            stats.drop("no_separator")
++            continue
++        code = parts[0].strip()
++        name = parts[1].strip()
++        # 只收「加得進自選」的代碼 —— 提示列點了才被後端 400 打回是最差體驗
++        if not validate_code(code):
++            stats.drop("bad_code")
++            continue
++        if not name:
++            stats.drop("empty_name")
++            continue
++        if code in names:
++            stats.duplicates.append(code)
++            continue
++        names[code] = name
++        stats.per_section[section] = stats.per_section.get(section, 0) + 1
++    return names, stats
++
++
++def load_names(path: Path = DEFAULT_PATH) -> dict[str, str]:
++    """讀名稱表。**任何讀取/格式問題都回 `{}`**(`/api/stock/names` 承諾不 500)。"""
++    if not path.exists():
++        return {}
++    try:
++        payload = json.loads(path.read_text(encoding="utf-8"))
++        raw = payload["names"]
++        return {str(k): str(v) for k, v in raw.items()}
++    except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as e:
++        logger.warning("股票名稱表讀取失敗(視為空表):%s", e)
++        return {}
++
++
++def write_names(path: Path, names: dict[str, str]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    atomic_write_text(
++        path,
++        json.dumps(
++            {"_cache_version": _CACHE_VERSION, "names": names},
++            ensure_ascii=False,
++            indent=1,
++            sort_keys=True,
++        ),
++    )
++
++
++def _default_fetcher(url: str, timeout: float) -> bytes:
++    req = Request(url, headers={"User-Agent": "copycat/stock-names"})
++    with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — 固定的證交所 https URL
++        return bytes(resp.read())
++
++
++def refresh(
++    path: Path = DEFAULT_PATH,
++    urls: tuple[str, ...] = ISIN_URLS,
++    fetcher: Callable[[str, float], bytes] = _default_fetcher,
++) -> dict[str, str]:
++    """抓 ISIN 頁重生名稱表;守門任一條不成立 → 拋 `ValueError` 保留舊檔。"""
++    merged: dict[str, str] = {}
++    warrant_rows = 0
++    stock_section_rows = 0
++    for url in urls:
++        html = fetcher(url, _TIMEOUT).decode("cp950", errors="replace")
++        names, stats = parse_isin_html_with_stats(html)
++        warrant_rows += stats.warrant_rows
++        # substring 比對 + 跨 URL 合計:精確段名比對會在 TWSE 把「股票」改成「上市股票」
++        # 這種無害微調後讓 CLI 整條死掉,而 auto-default 選排除法的理由正是要避開段名耦合
++        stock_section_rows += sum(n for sec, n in stats.per_section.items() if "股票" in sec)
++        logger.info(
++            "ISIN %s:收 %d 筆,逐段 %s,權證剔除 %d 列,其他剔除 %s",
++            url,
++            len(names),
++            stats.per_section,
++            stats.warrant_rows,
++            stats.dropped or "{}",
++        )
++        if stats.duplicates:
++            logger.warning("ISIN %s 段內重複代號 %s", url, sorted(set(stats.duplicates)))
++        cross = [code for code in names if code in merged]
++        if cross:
++            logger.warning("跨市場重複代號(保留先出現者)%s", sorted(cross))
++        for code, name in names.items():
++            merged.setdefault(code, name)
++
++    # 語意檢查先於數量:段標題偵測活著,才輪得到討論筆數合不合理
++    if warrant_rows < _MIN_WARRANT_ROWS:
++        raise ValueError(
++            f"權證段只剔除 {warrant_rows} 列(< {_MIN_WARRANT_ROWS})—— "
++            "段標題偵測可能失效,保留舊檔"
++        )
++    if stock_section_rows < _MIN_STOCK_ROWS:
++        raise ValueError(
++            f"「股票」段只收到 {stock_section_rows} 筆(< {_MIN_STOCK_ROWS})—— "
++            "段名或欄位格式可能變動,保留舊檔"
++        )
++    if not _MIN_TOTAL <= len(merged) <= _MAX_TOTAL:
++        raise ValueError(
++            f"名稱表 {len(merged)} 筆不在 [{_MIN_TOTAL}, {_MAX_TOTAL}] —— "
++            "格式可能變動(過多常代表段標題偵測失效把權證收進來),保留舊檔"
++        )
++    mangled = [code for code, name in merged.items() if _REPLACEMENT in name]
++    if mangled:
++        logger.warning("名稱含無法解碼字元的 %d 筆:%s", len(mangled), sorted(mangled)[:20])
++    write_names(path, merged)
++    logger.info("股票名稱表更新完成:%d 檔(權證剔除 %d 列)", len(merged), warrant_rows)
++    return merged
++
++
++
++
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index b60954f..b3613ee 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+ import { fromSnapshot } from "@/lib/stock-accum";
++import { Y_AXIS_W } from "@/lib/stock-intraday-svg";
+ 
+ const OVERLAY = {
+   // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
+@@ -233,7 +234,7 @@ describe("StockIntradayChart", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const nine = screen.getByText("09:00", { selector: "text" });
+     expect(nine.getAttribute("class")).toContain("fill-time");
+-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 3, clientY: 100 });
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
+     expect(
+       container.querySelector("[data-testid='time-tag-text']")!.getAttribute("class"),
+     ).toContain("fill-time");
+@@ -270,8 +271,9 @@ describe("StockIntradayChart", () => {
+     expect(readout().textContent).toContain("09:02"); // 最新分鐘 = 542
+     expect(readout().getAttribute("data-hovering")).toBe("false");
+     const svg = container.querySelector("svg")!;
+-    // width 800、x 域 540..810 分鐘 → 541 分在 x = 1/270*800 ≈ 2.96px
+-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
++    // 🔴 round4 項 3:繪圖區起於左緣價位帶右側(Y_AXIS_W=46),541 分在
++    // x = 46 + 1/270*(800-46) ≈ 48.8px;舊的 x≈3 現在落在價位帶內 → 不對應任何分鐘
++    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
+     expect(readout().textContent).toContain("09:01");
+     expect(readout().getAttribute("data-hovering")).toBe("true");
+     fireEvent.mouseLeave(svg);
+@@ -282,7 +284,7 @@ describe("StockIntradayChart", () => {
+   it("資訊列含每分鐘內外盤(本專案核心訊號,原 tooltip 沒顯示)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const svg = container.querySelector("svg")!;
+-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 100 });
++    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
+     const text = screen.getByTestId("chart-readout").textContent ?? "";
+     expect(text).toContain("外 10");
+     expect(text).toContain("內 0");
+@@ -291,9 +293,9 @@ describe("StockIntradayChart", () => {
+   it("十字線:垂直線 snap 分鐘、水平線跟滑鼠 y(不再鎖該分鐘收盤價)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const svg = container.querySelector("svg")!;
+-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 120 });
++    fireEvent.mouseMove(svg, { clientX: 49, clientY: 120 });
+     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(120);
+-    fireEvent.mouseMove(svg, { clientX: 3, clientY: 60 });
++    fireEvent.mouseMove(svg, { clientX: 49, clientY: 60 });
+     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(60);
+     expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
+     fireEvent.mouseLeave(svg);
+@@ -314,7 +316,7 @@ describe("StockIntradayChart", () => {
+   // 🔴 round3 SC-1:hover 右緣 % 標整個移除(左緣價位標與底部時間標照舊)
+   it("hover 右緣不再浮出 % 標,左價標與時間標仍在(SC-1)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 3, clientY: 100 });
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
+     expect(container.querySelector("[data-testid='pct-tag']")).toBeNull();
+     expect(container.querySelector("[data-testid='pct-tag-text']")).toBeNull();
+     expect(container.querySelector("[data-testid='price-tag-text']")).toBeTruthy();
+@@ -369,3 +371,82 @@ describe("StockIntradayChart 高度 prop(SC-6 / T-10b)", () => {
+     expect(main.getAttribute("viewBox")).toBe("0 0 800 260");
+   });
+ });
++
++// 🔴 round4 項 3/4/5:左緣價位不再壓線、價位有對應水平線、量刻度改靠右
++describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
++  function svgs(container: HTMLElement) {
++    const all = [...container.querySelectorAll("svg")];
++    return {
++      main: all.find((s) => s.getAttribute("aria-label") === "分時走勢圖")!,
++      sub: all.find((s) => s.getAttribute("aria-label") === "內外盤能量")!,
++    };
++  }
++
++  it("項 3:繪圖區元素一律從價位帶右緣起,價位文字仍在帶內(不重疊)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const { main } = svgs(container);
++    // 走勢線第一點的 x 就是繪圖區左界
++    const priceLine = main.querySelector('polyline[class*="stroke-bull"]')!;
++    const firstX = Number(priceLine.getAttribute("points")!.split(" ")[0]!.split(",")[0]);
++    expect(firstX).toBeGreaterThanOrEqual(Y_AXIS_W);
++    // 平盤線 / 水平十字線 / 疊線都不得越界進價位帶
++    const refLine = [...main.querySelectorAll("line")].find(
++      (l) => (l.getAttribute("stroke-dasharray") ?? "") === "2 3" && l.getAttribute("stroke-width") === "1",
++    )!;
++    expect(Number(refLine.getAttribute("x1"))).toBe(Y_AXIS_W);
++    // 價位文字仍畫在帶內(x < Y_AXIS_W)
++    for (const t of main.querySelectorAll('[data-testid="y-tick-price"]')) {
++      expect(Number(t.getAttribute("x"))).toBeLessThan(Y_AXIS_W);
++    }
++  });
++
++  it("項 3:hover 水平線起於價位帶右緣(不穿過價位文字)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
++    const h = container.querySelector("[data-testid='crosshair-h']")!;
++    expect(Number(h.getAttribute("x1"))).toBe(Y_AXIS_W);
++  });
++
++  it("項 4:每個左緣價位都有一條對應的水平格線,與整點垂直線同色系", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const { main } = svgs(container);
++    const ticks = main.querySelectorAll('[data-testid="y-tick-price"]').length;
++    const grids = [...main.querySelectorAll('[data-testid="y-grid"]')];
++    expect(ticks).toBeGreaterThan(0);
++    expect(grids.length).toBe(ticks);
++    for (const g of grids) {
++      expect(g.getAttribute("class")).toContain("stroke-line");
++      expect(Number(g.getAttribute("x1"))).toBe(Y_AXIS_W);
++      expect(Number(g.getAttribute("x2"))).toBe(800);
++      // 水平線:y1 === y2
++      expect(g.getAttribute("y1")).toBe(g.getAttribute("y2"));
++    }
++  });
++
++  it("項 5:內外盤量刻度兩個數字靠右緣、左緣不再有數字", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const { sub } = svgs(container);
++    const texts = [...sub.querySelectorAll("text")];
++    expect(texts.length).toBe(2); // 頂端 = 單邊最大張數、中線 = 其半
++    for (const t of texts) {
++      expect(t.getAttribute("text-anchor")).toBe("end");
++      expect(Number(t.getAttribute("x"))).toBe(800 - 2);
++    }
++  });
++
++  // review R15a:中線數字沒有 SUB_TOP_PAD 那種空白保護,盤中右緣恆有 bar
++  it("項 5:中線量刻度有同底色描邊,不會被右緣 bar 蓋掉", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const mid = container.querySelector('[data-testid="vol-tick-mid"]')!;
++    expect(mid.getAttribute("class")).toContain("stroke-surface");
++    expect(mid.getAttribute("paint-order")).toBe("stroke");
++  });
++
++  // review R15b:兩份 46 靠註解維持相等 → 任一方改動就讓 hover 價位標壓線復發
++  it("hover 價位標寬度恰等於價位帶寬度(不得各寫一份 46)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
++    const tag = container.querySelector('[data-testid="price-tag"]')!;
++    expect(Number(tag.getAttribute("width"))).toBe(Y_AXIS_W);
++  });
++});
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 4acb3e2..f3e3997 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -8,11 +8,14 @@ import { useStockOverlay } from "@/hooks/useStockOverlay";
+ import type { StockAccum } from "@/lib/stock-accum";
+ import {
+   buildIntradayGeometry,
++  minuteToX,
+   overlayLines,
++  plotWidth,
+   X_END_MIN,
+   X_LABEL_H,
+   SUB_TOP_PAD,
+   X_START_MIN,
++  Y_AXIS_W,
+   type EnergyBar,
+   type IntradayGeometry,
+   type OverlayLevel,
+@@ -22,8 +25,10 @@ import { cn } from "@/lib/utils";
+ 
+ const MAIN = { width: 800, height: 260 };
+ const SUB = { width: 800, height: 70 };
+-/** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁 */
+-const PRICE_TAG = { w: 46, h: 14 };
++/** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁。
++ *  寬度**直接取 `Y_AXIS_W`** 不另寫一份數字:兩份靠註解維持相等的話,任一方改動就讓
++ *  「hover 價位標壓在走勢線上」這個本輪要修的症狀復發,而且沒有測試會發現。 */
++const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
+ const TIME_TAG = { w: 34, h: 13 };
+ 
+ function hhmm(minute: number): string {
+@@ -44,14 +49,8 @@ const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
+   label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
+ }));
+ 
+-/** 分鐘 → x 座標。**吃 width 參數**(不再閉包模組常數):viewBox 高度改為可變後,
+- *  memo 子元件必須經 props 拿尺寸,模組級純函數也一併參數化以免兩套來源漂移。 */
+-function toX(minute: number, width: number): number {
+-  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * width;
+-}
+-
+ function barW(width: number): number {
+-  return Math.max(1, width / (X_END_MIN - X_START_MIN) - 0.4);
++  return Math.max(1, plotWidth(width) / (X_END_MIN - X_START_MIN) - 0.4);
+ }
+ 
+ /** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
+@@ -125,21 +124,33 @@ const ChartStatic = memo(function ChartStatic({
+       ) : null}
+       {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
+           上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
+-      <line x1={0} x2={w} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
++      <line x1={Y_AXIS_W} x2={w} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
+       {X_LABELS.map(({ minute }) => (
+         <line
+           key={minute}
+-          x1={toX(minute, w)}
+-          x2={toX(minute, w)}
++          x1={minuteToX(minute, w)}
++          x2={minuteToX(minute, w)}
+           y1={0}
+           y2={h - X_LABEL_H}
+           className="stroke-line"
+           strokeWidth={0.4}
+         />
+       ))}
+-      {/* Y 軸刻度:只剩左緣價位(round3 SC-1:右緣 % 欄移除,讓位給 CDP 價位標) */}
++      {/* Y 軸刻度:左緣價位(round3 SC-1:右緣 % 欄移除,讓位給 CDP 價位標)
++          + 對應水平格線(round4 項 4)。線起於價位帶右緣,不穿過價位文字;
++          風格與 K 線圖的 y 軸格線一致(stroke-line / 2 3 / 0.5)。 */}
+       {g.yTicks.map((t) => (
+         <g key={`yt-${t.priceMilli}`}>
++          <line
++            data-testid="y-grid"
++            x1={Y_AXIS_W}
++            x2={w}
++            y1={t.y}
++            y2={t.y}
++            className="stroke-line"
++            strokeDasharray="2 3"
++            strokeWidth={0.5}
++          />
+           <text
+             data-testid="y-tick-price"
+             x={2}
+@@ -173,7 +184,7 @@ const ChartStatic = memo(function ChartStatic({
+         // key 用 level 不用文字:文字現在是價位,兩條線同價時會撞 key
+         <g key={`o-${l.level}`}>
+           <line
+-            x1={0}
++            x1={Y_AXIS_W}
+             x2={w - 34}
+             y1={l.y}
+             y2={l.y}
+@@ -236,7 +247,7 @@ function XAxisLabels({
+   return (
+     <g>
+       {X_LABELS.map(({ minute, label }) => {
+-        const x = toX(minute, w) + 2;
++        const x = minuteToX(minute, w) + 2;
+         if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
+         return (
+           <text key={minute} x={x} y={h - 3} className="fill-time" fontSize="0.625rem">
+@@ -267,13 +278,36 @@ const EnergySub = memo(function EnergySub({
+   const midY = h - (h - SUB_TOP_PAD) / 2;
+   return (
+     <g>
+-      {/* 量刻度(SC-8):中線淡橫線 + 左緣兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
+-          頂端那根不會蓋住刻度文字。 */}
+-      <line x1={0} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
+-      <text x={2} y={SUB_TOP_PAD - 2} className="fill-ink-dim" fontSize="0.5rem">
++      {/* 量刻度(SC-8):中線淡橫線 + 兩個值。bar 的高度分母已扣掉 SUB_TOP_PAD,
++          頂端那根不會蓋住頂端的刻度文字。
++          round4 項 5:兩個值移到**右緣**(textAnchor="end")—— 左緣讓給主圖的價位帶,
++          兩張圖的左界對齊。⚠ bar 一路畫到右緣,**右緣數字必然與 bar 同區域**
++          (盤中最新分鐘就在那裡),所以兩個數字都要靠描邊拉對比,見下。 */}
++      <line x1={Y_AXIS_W} x2={w} y1={midY} y2={midY} className="stroke-line" strokeWidth={0.4} />
++      {/* 兩個數字都加同底色描邊(paintOrder="stroke" 讓描邊畫在字下面)。頂端那個有
++          SUB_TOP_PAD 清出的空白可靠,**中線那個沒有** —— 盤中右緣恆有 bar,不加對比
++          就會被 bar 蓋掉(SC-7)。 */}
++      <text
++        x={w - 2}
++        y={SUB_TOP_PAD - 2}
++        textAnchor="end"
++        className="fill-ink-dim stroke-surface"
++        strokeWidth={2.5}
++        paintOrder="stroke"
++        fontSize="0.5rem"
++      >
+         {maxSide}
+       </text>
+-      <text x={2} y={midY - 2} className="fill-ink-dim" fontSize="0.5rem">
++      <text
++        data-testid="vol-tick-mid"
++        x={w - 2}
++        y={midY - 2}
++        textAnchor="end"
++        className="fill-ink-dim stroke-surface"
++        strokeWidth={2.5}
++        paintOrder="stroke"
++        fontSize="0.5rem"
++      >
+         {Math.round(maxSide / 2)}
+       </text>
+       {bars.map((b) => (
+@@ -397,7 +431,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+         ];
+ 
+   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
+-  const timeTagX = hoverMin !== null ? clampTagX(toX(hoverMin, mainW), TIME_TAG.w, mainW) : null;
++  const timeTagX = hoverMin !== null ? clampTagX(minuteToX(hoverMin, mainW), TIME_TAG.w, mainW) : null;
+   const timeTagSpan: [number, number] | null =
+     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
+ 
+@@ -473,8 +507,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+               <>
+                 <line
+                   data-testid="crosshair-v"
+-                  x1={toX(hoverMin, mainW)}
+-                  x2={toX(hoverMin, mainW)}
++                  x1={minuteToX(hoverMin, mainW)}
++                  x2={minuteToX(hoverMin, mainW)}
+                   y1={0}
+                   y2={plotBottom}
+                   className="stroke-ink-muted"
+@@ -482,12 +516,12 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+                   strokeWidth={0.7}
+                 />
+                 {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
+-                <circle cx={toX(hoverMin, mainW)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
++                <circle cx={minuteToX(hoverMin, mainW)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
+               </>
+             ) : null}
+             <line
+               data-testid="crosshair-h"
+-              x1={0}
++              x1={Y_AXIS_W}
+               x2={mainW}
+               y1={hover.y}
+               y2={hover.y}
+@@ -546,8 +580,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
+         {hoverMin !== null ? (
+           <line
+-            x1={toX(hoverMin, mainW)}
+-            x2={toX(hoverMin, mainW)}
++            x1={minuteToX(hoverMin, mainW)}
++            x2={minuteToX(hoverMin, mainW)}
+             y1={0}
+             y2={subH}
+             className="stroke-ink-muted"
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index a79f464..283bda1 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -1,6 +1,6 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+@@ -15,16 +15,33 @@ const GROUPS: Group[] = [
+   { name: "觀察", codes: ["3231", "2330"] },
+ ];
+ 
++const NAMES = {
++  names: [
++    { code: "2330", name: "台積電" },
++    { code: "2317", name: "鴻海" },
++    { code: "2331", name: "精英" },
++  ],
++  count: 3,
++};
++
++const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
++
++/** 名稱表分支不能回空表 —— 空表下「名稱命中」的提示列永遠不可能成立(review R19)。 */
++function respond(url: string, groups: Group[] = GROUPS): Response {
++  if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
++  return new Response(JSON.stringify({ groups }));
++}
++
+ beforeEach(() => {
+-  window.localStorage.removeItem("stock-wl-group");
++  window.localStorage.removeItem(COLLAPSED_KEY);
+   putBodies = [];
+-  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
++  fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+     if (init?.method === "PUT") {
+       const body = JSON.parse(String(init.body)) as { groups: Group[] };
+       putBodies.push(body.groups);
+       return new Response(JSON.stringify({ groups: body.groups }));
+     }
+-    return new Response(JSON.stringify({ groups: GROUPS }));
++    return respond(url);
+   });
+   vi.stubGlobal("fetch", fetchMock);
+ });
+@@ -32,6 +49,7 @@ beforeEach(() => {
+ afterEach(() => {
+   cleanup();
+   vi.unstubAllGlobals();
++  vi.restoreAllMocks();
+ });
+ 
+ function wrap(ui: ReactNode) {
+@@ -45,50 +63,109 @@ const QUOTES = {
+   "3231": { p: 100_000, chg_pct: 0.5, vol: 10, no_data: false },
+ };
+ 
++function sidebar() {
++  return wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
++}
++
++async function waitGroups(): Promise<void> {
++  await waitFor(() => expect(screen.getByTestId("wl-group-主力")).toBeTruthy());
++}
++
+ // 🔴 round3 SC-5:自選側欄與中間主區之間要有可見分隔線
+ describe("WatchlistSidebar 版面(round3 SC-5)", () => {
+   it("aside 右緣有 border 與中間區隔", () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
++    sidebar();
+     const aside = screen.getByRole("complementary", { name: "自選清單" });
+     expect(aside.className).toContain("border-r");
+     expect(aside.className).toContain("border-line");
+   });
+ });
+ 
+-describe("WatchlistSidebar(SC-6 群組)", () => {
+-  it("群組 tab 列:全部 + 各群組;預設全部顯示聯集(去重)與即時報價", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
+-    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+-    expect(screen.getByRole("tab", { name: "全部" }).getAttribute("aria-selected")).toBe("true");
+-    expect(screen.getAllByText("2330")).toHaveLength(1); // 跨群組去重
+-    expect(screen.getByText("5483")).toBeTruthy();
+-    expect(screen.getByText("3231")).toBeTruthy();
+-    expect(screen.getByText("2380")).toBeTruthy();
+-    expect(screen.getByText("無資料")).toBeTruthy();
++// 🔴 round4 項 2:tab 制改成「所有群組各成一段」
++describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
++  it("所有群組同時可見,沒有 tab 列也沒有「全部」", async () => {
++    sidebar();
++    await waitGroups();
++    expect(screen.getByTestId("wl-group-觀察")).toBeTruthy();
++    expect(screen.queryAllByRole("tab")).toHaveLength(0);
++    expect(screen.queryByText("全部")).toBeNull();
+   });
+ 
+-  it("點群組 tab 只顯示該群組股票", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
+-    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+-    fireEvent.click(screen.getByRole("tab", { name: "主力" }));
+-    expect(screen.getByText("2330")).toBeTruthy();
+-    expect(screen.queryByText("3231")).toBeNull();
++  it("一檔多組 → 該檔在兩組各出現一次(不再跨組去重)", async () => {
++    sidebar();
++    await waitGroups();
++    expect(screen.getAllByText("2330")).toHaveLength(2);
++    expect(within(screen.getByTestId("wl-group-主力")).getByText("5483")).toBeTruthy();
++    expect(within(screen.getByTestId("wl-group-觀察")).getByText("3231")).toBeTruthy();
++    // 2330 的報價在兩組各出現一次(同一份 quotes 餵兩處)
++    expect(screen.getAllByText("2380")).toHaveLength(2); // 即時報價仍在
++    expect(screen.getByText("無資料")).toBeTruthy(); // 5483 只在主力
+   });
+ 
+   it("點列觸發 onSelect", async () => {
+     const onSelect = vi.fn();
+     wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+-    await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
+-    fireEvent.click(screen.getByText("2330"));
++    await waitGroups();
++    // 2330 同屬兩組 → 必須指定組別,不能用 getByText(review R3)
++    fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByText("2330"));
+     expect(onSelect).toHaveBeenCalledWith("2330");
+   });
+ 
+-  it("群組下新增 → 只加進該群組(R4)", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
+-    fireEvent.click(screen.getByRole("tab", { name: "主力" }));
+-    fireEvent.change(screen.getByPlaceholderText("輸入股號"), { target: { value: "2317" } });
+-    fireEvent.click(screen.getByText("新增"));
++  it("每組每列都有拖拉握把(不再有「全部」停用拖拉的狀態)", async () => {
++    sidebar();
++    await waitGroups();
++    expect(screen.getAllByLabelText(/拖拉/)).toHaveLength(4); // 2+2
++  });
++});
++
++describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
++  it("點折疊 → 該組列隱藏、標題仍在、其他組不受影響", async () => {
++    sidebar();
++    await waitGroups();
++    fireEvent.click(screen.getByLabelText("折疊 主力"));
++    expect(screen.getByTestId("wl-group-主力")).toBeTruthy();
++    expect(screen.queryByTestId("wl-list-主力")).toBeNull();
++    expect(screen.getByTestId("wl-list-觀察")).toBeTruthy();
++    expect(screen.getByLabelText("展開 主力")).toBeTruthy();
++  });
++
++  it("折疊狀態落 localStorage 且重新掛載後維持", async () => {
++    sidebar();
++    await waitGroups();
++    fireEvent.click(screen.getByLabelText("折疊 主力"));
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]);
++    cleanup();
++    sidebar();
++    await waitGroups();
++    expect(screen.queryByTestId("wl-list-主力")).toBeNull();
++  });
++});
++
++describe("WatchlistSidebar 搜尋提示列(round4 項 1)", () => {
++  async function openAdd(group: string): Promise<void> {
++    sidebar();
++    await waitGroups();
++    fireEvent.click(screen.getByLabelText(`新增到 ${group}`));
++  }
++
++  it("輸入名稱 → 提示列出現該檔代碼與名稱", async () => {
++    await openAdd("主力");
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "鴻海" } });
++    const suggest = screen.getByTestId("stock-suggest");
++    expect(within(suggest).getByText("2317")).toBeTruthy();
++    expect(within(suggest).getByText("鴻海")).toBeTruthy();
++  });
++
++  it("輸入代碼 → 提示列出現同一檔", async () => {
++    await openAdd("主力");
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
++    expect(within(screen.getByTestId("stock-suggest")).getByText("鴻海")).toBeTruthy();
++  });
++
++  it("點提示列 → 加入該群組(不是別組)", async () => {
++    await openAdd("主力");
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "鴻海" } });
++    fireEvent.click(screen.getByLabelText("加入 2317 鴻海"));
+     await waitFor(() =>
+       expect(putBodies).toEqual([
+         [
+@@ -99,73 +176,105 @@ describe("WatchlistSidebar(SC-6 群組)", () => {
+     );
+   });
+ 
+-  it("「全部」下新增 → 自動建「自選」群組(R4)", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
+-    fireEvent.change(screen.getByPlaceholderText("輸入股號"), { target: { value: "2317" } });
++  it("點「新增」鈕加入(W-4 的兩條路徑之一,不能只留 Enter)", async () => {
++    await openAdd("主力");
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
+     fireEvent.click(screen.getByText("新增"));
+-    await waitFor(() =>
+-      expect(putBodies).toEqual([[...GROUPS, { name: "自選", codes: ["2317"] }]]),
+-    );
++    await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
+   });
+ 
+-  it("「全部」下移除 = 從所有群組移除(R4)", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
+-    fireEvent.click(screen.getByLabelText("移除 2330"));
+-    await waitFor(() =>
+-      expect(putBodies).toEqual([
+-        [
+-          { name: "主力", codes: ["5483"] },
+-          { name: "觀察", codes: ["3231"] },
+-        ],
+-      ]),
+-    );
++  it("Enter + 提示列無命中 → 原樣當股號加入(W-4 / SC-1c)", async () => {
++    await openAdd("主力");
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "9958" } });
++    expect(screen.queryByTestId("stock-suggest")).toBeNull();
++    fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Enter" });
++    await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "9958"]));
+   });
+ 
+-  it("新增群組:+ 鈕 → 輸入名稱 → PUT 帶新空群組", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByRole("tab", { name: "主力" })).toBeTruthy());
++  it("名稱表不可用(空表)→ 提示列不出現,直接打股號仍可加入", async () => {
++    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
++      if (init?.method === "PUT") {
++        const body = JSON.parse(String(init.body)) as { groups: Group[] };
++        putBodies.push(body.groups);
++        return new Response(JSON.stringify({ groups: body.groups }));
++      }
++      if (url.includes("/api/stock/names")) {
++        return new Response(JSON.stringify({ names: [], count: 0 }));
++      }
++      return new Response(JSON.stringify({ groups: GROUPS }));
++    });
++    await openAdd("主力");
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
++    expect(screen.queryByTestId("stock-suggest")).toBeNull();
++    fireEvent.keyDown(screen.getByPlaceholderText("股號或名稱"), { key: "Enter" });
++    await waitFor(() => expect(putBodies[0]?.[0]?.codes).toEqual(["2330", "5483", "2317"]));
++  });
++});
++
++describe("WatchlistSidebar 群組增刪(既有行為)", () => {
++  it("新增群組:+ 群組 → 輸入名稱 → PUT 帶新空群組", async () => {
++    sidebar();
++    await waitGroups();
+     fireEvent.click(screen.getByLabelText("新增群組"));
+     fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "當沖" } });
+     fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
+     await waitFor(() => expect(putBodies).toEqual([[...GROUPS, { name: "當沖", codes: [] }]]));
+   });
+ 
+-  it("刪除群組:tab 的 × → PUT 不含該群組(股票留在其他群組)", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByRole("tab", { name: "觀察" })).toBeTruthy());
++  it("刪除群組:標題列的 × → PUT 不含該群組(股票留在其他群組)", async () => {
++    sidebar();
++    await waitGroups();
+     fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+     await waitFor(() => expect(putBodies).toEqual([[{ name: "主力", codes: ["2330", "5483"] }]]));
+   });
+ 
+-  it("刪除群組失敗(PUT 4xx)→ active tab 不切走(review A2)", async () => {
+-    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
++  it("刪除群組成功 → localStorage 折疊清單不留該組名(不累積孤兒)", async () => {
++    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
++    sidebar();
++    await waitGroups();
++    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
++    await waitFor(() =>
++      expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]),
++    );
++  });
++
++  // W-3:失敗時 cache 未動 → UI 不該先跳。改寫成有實體的斷言(review R14)
++  it("刪除群組失敗(PUT 4xx)→ 錯誤文案出現、不發第二次 PUT、折疊狀態不變", async () => {
++    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察"]));
++    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+       if (init?.method === "PUT") {
++        putBodies.push([]);
+         return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
+       }
+-      return new Response(JSON.stringify({ groups: GROUPS }));
++      return respond(url);
+     });
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByRole("tab", { name: "觀察" })).toBeTruthy());
+-    fireEvent.click(screen.getByRole("tab", { name: "觀察" }));
++    sidebar();
++    await waitGroups();
+     fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+     await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+-    expect(screen.getByRole("tab", { name: "觀察" }).getAttribute("aria-selected")).toBe("true");
++    expect(putBodies).toHaveLength(1);
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["觀察"]);
++    expect(screen.getByTestId("wl-group-觀察")).toBeTruthy();
+   });
+ 
+-  it("「全部」下停用拖拉、群組下可拖拉", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByText("2330")).toBeTruthy());
+-    expect(screen.queryByLabelText(/拖拉/)).toBeNull();
+-    fireEvent.click(screen.getByRole("tab", { name: "主力" }));
+-    expect(screen.getAllByLabelText(/拖拉/).length).toBe(2);
++  it("該組的 × 只從該組移除,另一組保留(不再有「全部」的跨組移除)", async () => {
++    sidebar();
++    await waitGroups();
++    fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移除 2330"));
++    await waitFor(() =>
++      expect(putBodies).toEqual([
++        [
++          { name: "主力", codes: ["5483"] },
++          { name: "觀察", codes: ["3231", "2330"] },
++        ],
++      ]),
++    );
+   });
+ 
+-  it("移組選單:checkbox 切換股票所屬群組", async () => {
+-    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />);
+-    await waitFor(() => expect(screen.getByText("5483")).toBeTruthy());
+-    fireEvent.click(screen.getByLabelText("移組 5483"));
++  it("移組選單:checkbox 切換股票所屬群組(W-1 一檔多組)", async () => {
++    sidebar();
++    await waitGroups();
++    fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByLabelText("移組 5483"));
+     const checkbox = screen.getByRole("checkbox", { name: "觀察" });
+     expect((checkbox as HTMLInputElement).checked).toBe(false);
+     fireEvent.click(checkbox);
+@@ -179,3 +288,118 @@ describe("WatchlistSidebar(SC-6 群組)", () => {
+     );
+   });
+ });
++
++describe("WatchlistSidebar 零群組(SC-2b / W-16)", () => {
++  beforeEach(() => {
++    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
++      if (init?.method === "PUT") {
++        const body = JSON.parse(String(init.body)) as { groups: Group[] };
++        putBodies.push(body.groups);
++        return new Response(JSON.stringify({ groups: body.groups }));
++      }
++      return respond(url, []);
++    });
++  });
++
++  it("顯示空狀態文案 + 搜尋框,加入後自動建「自選」組", async () => {
++    sidebar();
++    await waitFor(() => expect(screen.getByText("尚無自選,輸入股號新增")).toBeTruthy());
++    fireEvent.change(screen.getByPlaceholderText("股號或名稱"), { target: { value: "2317" } });
++    fireEvent.click(screen.getByText("新增"));
++    await waitFor(() => expect(putBodies).toEqual([[{ name: "自選", codes: ["2317"] }]]));
++  });
++});
++
++// 🟢 round4 SC-4:跨群組拖曳。jsdom 的 getBoundingClientRect 恆 0 → 不 stub 的話
++// 護欄退化成「clientX > 16 一律回 null」,負向測試會恆綠(假綠,review R17)。
++describe("WatchlistSidebar 跨群組拖曳(SC-4)", () => {
++  const RECTS: Record<string, [number, number]> = {
++    "wl-group-主力": [0, 120],
++    "wl-list-主力": [24, 120],
++    "wl-group-觀察": [130, 250],
++    "wl-list-觀察": [154, 250],
++  };
++
++  function stubRects(): void {
++    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
++      this: Element,
++    ) {
++      const box = (top: number, bottom: number): DOMRect =>
++        ({
++          left: 0, right: 240, top, bottom, width: 240, height: bottom - top,
++          x: 0, y: top, toJSON: () => ({}),
++        }) as DOMRect;
++      if (this.tagName === "ASIDE") return box(0, 600);
++      const id = this.getAttribute("data-testid") ?? "";
++      const span = RECTS[id];
++      return span ? box(span[0], span[1]) : box(0, 0);
++    });
++  }
++
++  function ptr(type: string, x: number, y: number): MouseEvent {
++    // jsdom 沒有 PointerEvent;MouseEvent 帶 clientX/clientY 且 type 對得上即可
++    return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
++  }
++
++  async function startDrag(): Promise<void> {
++    sidebar();
++    await waitGroups();
++    stubRects();
++    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
++    fireEvent(handle, ptr("pointerdown", 10, 80));
++  }
++
++  it("拖到別組放開 → 從來源組移除、插入目標組(移動語意)", async () => {
++    await startDrag();
++    fireEvent(window, ptr("pointermove", 100, 160));
++    fireEvent(window, ptr("pointerup", 100, 160));
++    await waitFor(() =>
++      expect(putBodies).toEqual([
++        [
++          { name: "主力", codes: ["2330"] },
++          { name: "觀察", codes: ["5483", "3231", "2330"] },
++        ],
++      ]),
++    );
++  });
++
++  it("拖到側欄外放開 → 零 PUT(不可逆搬組的護欄)", async () => {
++    await startDrag();
++    fireEvent(window, ptr("pointermove", 900, 160));
++    fireEvent(window, ptr("pointerup", 900, 160));
++    await new Promise((r) => setTimeout(r, 30));
++    expect(putBodies).toEqual([]);
++  });
++
++  it("拖曳中按 Esc → 之後放開手指也零 PUT(取消要涵蓋漏網的 pointerup)", async () => {
++    await startDrag();
++    fireEvent(window, ptr("pointermove", 100, 160));
++    fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
++    fireEvent(window, ptr("pointerup", 100, 160));
++    await new Promise((r) => setTimeout(r, 30));
++    expect(putBodies).toEqual([]);
++  });
++
++  it("同組內拖曳 = 排序(組別不變)", async () => {
++    await startDrag();
++    fireEvent(window, ptr("pointermove", 100, 24));
++    fireEvent(window, ptr("pointerup", 100, 24));
++    await waitFor(() =>
++      expect(putBodies).toEqual([
++        [
++          { name: "主力", codes: ["5483", "2330"] },
++          { name: "觀察", codes: ["3231", "2330"] },
++        ],
++      ]),
++    );
++  });
++
++  it("空群組顯示「拖曳股票到此」(否則沒有高度 = 拖不進去的死組)", async () => {
++    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
++      if (init?.method === "PUT") return new Response(JSON.stringify({ groups: [] }));
++      return respond(url, [{ name: "空組", codes: [] }]);
++    });
++    sidebar();
++    await waitFor(() => expect(screen.getByText("拖曳股票到此")).toBeTruthy());
++  });
++});
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 94aeb11..258e499 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -1,13 +1,18 @@
+-import { useEffect, useRef, useState } from "react";
++import { useRef, useState } from "react";
+ 
+ import { useSaveWatchlist, useStockWatchlist, type Group } from "@/hooks/useStockWatchlist";
++import { useStockNames } from "@/hooks/useStockNames";
+ import type { WatchlistQuote } from "@/hooks/useStockStream";
+-import { insertIndexFromPointer, reorder } from "@/lib/list-drag";
++import { dropTargetFromPointer, moveCode, type DropZone } from "@/lib/list-drag";
++import { searchStocks } from "@/lib/stock-search";
+ import { cn } from "@/lib/utils";
+ 
+ const ROW_H = 44;
+-const GROUP_KEY = "stock-wl-group";
++/** 折疊中的群組名(round4 項 2)。前綴沿用 `copycat-`(docs/next-time.md 的 key 收斂方向) */
++const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+ const DEFAULT_GROUP = "自選";
++/** 提示列筆數:多過這個高度就開始擠掉股票列 */
++const SUGGEST_LIMIT = 8;
+ 
+ function fmtPrice(milli: number | null): string {
+   if (milli === null) return "-";
+@@ -15,16 +20,6 @@ function fmtPrice(milli: number | null): string {
+   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+ }
+ 
+-function unionCodes(groups: Group[]): string[] {
+-  const seen: string[] = [];
+-  for (const g of groups) {
+-    for (const code of g.codes) {
+-      if (!seen.includes(code)) seen.push(code);
+-    }
+-  }
+-  return seen;
+-}
+-
+ function errText(message: string): string {
+   if (message === "WATCHLIST_FULL") return "自選已達 30 檔上限";
+   if (message === "BAD_CODE") return "股號格式不正確";
+@@ -32,6 +27,21 @@ function errText(message: string): string {
+   return "儲存失敗";
+ }
+ 
++function loadCollapsed(): Set<string> {
++  try {
++    const raw = window.localStorage.getItem(COLLAPSED_KEY);
++    if (!raw) return new Set();
++    const parsed = JSON.parse(raw) as unknown;
++    return new Set(Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === "string") : []);
++  } catch {
++    return new Set();
++  }
++}
++
++function persistCollapsed(names: Set<string>): void {
++  window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...names]));
++}
++
+ interface Props {
+   active: string | null;
+   onSelect: (code: string) => void;
+@@ -40,66 +50,62 @@ interface Props {
+ 
+ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   const { data: groups = [], error } = useStockWatchlist();
++  const { data: names = [] } = useStockNames();
+   const save = useSaveWatchlist();
++  /** 哪一組展開了搜尋框;`""` = 零群組時的 fallback 搜尋框 */
++  const [adding, setAdding] = useState<string | null>(null);
+   const [input, setInput] = useState("");
+-  // activeGroup = null → 「全部」(union 顯示、停用拖拉 — design SC-6)
+-  const [activeGroup, setActiveGroup] = useState<string | null>(
+-    () => window.localStorage.getItem(GROUP_KEY) || null,
+-  );
+   const [addingGroup, setAddingGroup] = useState(false);
+   const [groupInput, setGroupInput] = useState("");
+   const [movingCode, setMovingCode] = useState<string | null>(null);
+-  const [dragFrom, setDragFrom] = useState<number | null>(null);
+-  const [dragTo, setDragTo] = useState<number | null>(null);
+-  const listRef = useRef<HTMLUListElement | null>(null);
+-
+-  useEffect(() => {
+-    if (activeGroup) window.localStorage.setItem(GROUP_KEY, activeGroup);
+-    else window.localStorage.removeItem(GROUP_KEY);
+-  }, [activeGroup]);
++  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
++  const [drag, setDrag] = useState<{ code: string; from: string; to: string; index: number } | null>(
++    null,
++  );
++  const asideRef = useRef<HTMLElement | null>(null);
++  const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
++  const listRefs = useRef<Map<string, HTMLElement>>(new Map());
+ 
+-  const currentGroup = activeGroup !== null ? groups.find((g) => g.name === activeGroup) : undefined;
+-  const codes = currentGroup ? [...currentGroup.codes] : unionCodes(groups);
+-  const displayed = dragFrom !== null && dragTo !== null ? reorder(codes, dragFrom, dragTo) : codes;
++  const suggestions = searchStocks(input, names, SUGGEST_LIMIT);
+ 
+   function mutateGroups(next: Group[]): void {
+     save.mutate(next);
+   }
+ 
+-  function add(): void {
+-    const code = input.trim().toUpperCase();
+-    if (!code || codes.includes(code)) return;
+-    if (currentGroup) {
+-      mutateGroups(
+-        groups.map((g) =>
+-          g.name === currentGroup.name ? { ...g, codes: [...g.codes, code] } : g,
+-        ),
+-      );
+-    } else {
+-      // 「全部」下新增 → 加入「自選」群組,不存在自動建立(impl-spec R4)
+-      const target = groups.find((g) => g.name === DEFAULT_GROUP);
+-      mutateGroups(
+-        target
+-          ? groups.map((g) =>
+-              g.name === DEFAULT_GROUP ? { ...g, codes: [...g.codes, code] } : g,
+-            )
+-          : [...groups, { name: DEFAULT_GROUP, codes: [code] }],
+-      );
+-    }
+-    setInput("");
++  function toggleCollapsed(name: string): void {
++    setCollapsed((prev) => {
++      const next = new Set(prev);
++      if (next.has(name)) next.delete(name);
++      else next.add(name);
++      persistCollapsed(next);
++      return next;
++    });
+   }
+ 
+-  function remove(code: string): void {
+-    if (currentGroup) {
+-      mutateGroups(
+-        groups.map((g) =>
+-          g.name === currentGroup.name ? { ...g, codes: g.codes.filter((c) => c !== code) } : g,
+-        ),
+-      );
+-    } else {
+-      // 「全部」下移除 = 從所有群組移除(impl-spec R4)
+-      mutateGroups(groups.map((g) => ({ ...g, codes: g.codes.filter((c) => c !== code) })));
++  /** 加入指定群組;`group` 不在 `groups` 內(零群組 fallback)→ 自動建立該組。 */
++  function addTo(group: string, rawCode: string): void {
++    const code = rawCode.trim().toUpperCase();
++    setAdding(null);
++    setInput("");
++    if (!code) return;
++    const target = groups.find((g) => g.name === group);
++    if (target) {
++      if (target.codes.includes(code)) return;
++      mutateGroups(groups.map((g) => (g.name === group ? { ...g, codes: [...g.codes, code] } : g)));
++      return;
+     }
++    mutateGroups([...groups, { name: group, codes: [code] }]);
++  }
++
++  /** Enter / 點「新增」:提示列有命中取第一筆,無命中則原樣當股號(白名單 W-4)。 */
++  function submitAdd(group: string): void {
++    addTo(group, suggestions[0]?.code ?? input);
++  }
++
++  function remove(group: string, code: string): void {
++    mutateGroups(
++      groups.map((g) => (g.name === group ? { ...g, codes: g.codes.filter((c) => c !== code) } : g)),
++    );
+   }
+ 
+   function addGroup(): void {
+@@ -111,10 +117,22 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   }
+ 
+   function removeGroup(name: string): void {
+-    // mutation 成功才切走 active tab(review A2:失敗時 cache 未動,tab 不該先跳)
++    // mutation 成功才收斂衍生狀態(review A2:失敗時 cache 未動,UI 不該先跳)。
++    // 折疊清單必須清掉該組名,否則 localStorage 累積孤兒名,日後建同名群組會意外呈折疊。
+     save.mutate(
+       groups.filter((g) => g.name !== name),
+-      { onSuccess: () => setActiveGroup((cur) => (cur === name ? null : cur)) },
++      {
++        onSuccess: () => {
++          setCollapsed((prev) => {
++            if (!prev.has(name)) return prev;
++            const next = new Set(prev);
++            next.delete(name);
++            persistCollapsed(next);
++            return next;
++          });
++          setAdding((cur) => (cur === name ? null : cur));
++        },
++      },
+     );
+   }
+ 
+@@ -129,203 +147,313 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     );
+   }
+ 
+-  function onHandleDown(index: number, e: React.PointerEvent): void {
+-    if (!currentGroup) return; // 「全部」停用拖拉
++  /** 落點幾何。**每次 pointermove 重算** —— 只在 pointerdown 算一次的話,側欄捲動或
++   *  錯誤文案出現消失都會讓 rect 失效,而失效樣態是「拖到別組結果落錯組」= 靜默改資料。 */
++  function zonesNow(): { zones: DropZone[]; bounds: { left: number; right: number } } {
++    const zones: DropZone[] = [];
++    for (const g of groups) {
++      const section = sectionRefs.current.get(g.name);
++      if (section === undefined) continue;
++      const box = section.getBoundingClientRect();
++      const list = listRefs.current.get(g.name);
++      const isCollapsed = collapsed.has(g.name) || list === undefined;
++      zones.push({
++        group: g.name,
++        top: box.top,
++        bottom: box.bottom,
++        listTop: isCollapsed ? box.bottom : list.getBoundingClientRect().top,
++        count: g.codes.length,
++        collapsed: isCollapsed,
++      });
++    }
++    const aside = asideRef.current?.getBoundingClientRect();
++    return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 } };
++  }
++
++  function onHandleDown(group: string, code: string, e: React.PointerEvent): void {
+     e.preventDefault();
+-    setDragFrom(index);
+-    setDragTo(index);
+-    const list = listRef.current;
+-    const groupName = currentGroup.name;
++    setDrag({ code, from: group, to: group, index: groups.find((g) => g.name === group)?.codes.indexOf(code) ?? 0 });
++    let cancelled = false;
++    const teardown = (): void => {
++      window.removeEventListener("pointermove", move);
++      window.removeEventListener("pointerup", up);
++      window.removeEventListener("keydown", onKey);
++      setDrag(null);
++    };
+     const move = (ev: PointerEvent): void => {
+-      const top = list?.getBoundingClientRect().top ?? 0;
+-      setDragTo(insertIndexFromPointer(ev.clientY - top, ROW_H, codes.length));
++      const { zones, bounds } = zonesNow();
++      const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
++      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group, index: target.index }));
+     };
+     const up = (ev: PointerEvent): void => {
+-      window.removeEventListener("pointermove", move);
+-      window.removeEventListener("pointerup", up);
+-      const top = list?.getBoundingClientRect().top ?? 0;
+-      const to = insertIndexFromPointer(ev.clientY - top, ROW_H, codes.length);
+-      setDragFrom(null);
+-      setDragTo(null);
+-      if (to !== index) {
+-        mutateGroups(
+-          groups.map((g) =>
+-            g.name === groupName ? { ...g, codes: reorder(g.codes, index, to) } : g,
+-          ),
+-        );
+-      }
++      // Esc 取消後放開手指仍會走到這裡 —— 沒有這個早退,取消等於沒取消
++      if (cancelled) return;
++      const { zones, bounds } = zonesNow();
++      const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
++      teardown();
++      if (target === null) return; // 側欄外放開 → 整個作廢(移動語意不可逆)
++      const source = groups.find((g) => g.name === group);
++      const at = source?.codes.indexOf(code) ?? -1;
++      if (target.group === group && (target.index === at || target.index === at + 1)) return;
++      mutateGroups(moveCode(groups, code, group, target.group, target.index));
++    };
++    const onKey = (ev: KeyboardEvent): void => {
++      if (ev.key !== "Escape") return;
++      cancelled = true;
++      teardown();
+     };
+     window.addEventListener("pointermove", move);
+     window.addEventListener("pointerup", up);
++    window.addEventListener("keydown", onKey);
+   }
+ 
+-  return (
+-    // border-r:與中間主區的視覺分隔(round3 項 5);pr-3 讓內容不貼線
+-    <aside
+-      className="flex w-60 shrink-0 flex-col gap-2 border-r border-line pr-3"
+-      aria-label="自選清單"
+-    >
+-      {/* 群組 tab 列(SC-6) */}
+-      <div className="flex flex-wrap items-center gap-1 border-b border-line pb-1" role="tablist" aria-label="自選群組">
+-        <button
+-          type="button"
+-          role="tab"
+-          aria-selected={activeGroup === null}
+-          onClick={() => setActiveGroup(null)}
+-          className={cn(
+-            "rounded px-1.5 py-0.5 text-xs",
+-            activeGroup === null ? "bg-bg-deep text-ink" : "text-ink-dim hover:text-ink",
+-          )}
+-        >
+-          全部
+-        </button>
+-        {groups.map((g) => (
+-          <span key={g.name} className="group/tab relative">
+-            <button
+-              type="button"
+-              role="tab"
+-              aria-selected={activeGroup === g.name}
+-              onClick={() => setActiveGroup(g.name)}
+-              className={cn(
+-                "rounded px-1.5 py-0.5 text-xs",
+-                activeGroup === g.name ? "bg-bg-deep text-ink" : "text-ink-dim hover:text-ink",
+-              )}
+-            >
+-              {g.name}
+-            </button>
+-            <button
+-              type="button"
+-              aria-label={`刪除群組 ${g.name}`}
+-              onClick={() => removeGroup(g.name)}
+-              className="invisible absolute -right-1 -top-1 text-xs text-ink-dim hover:text-bear group-hover/tab:visible"
+-            >
+-              ×
+-            </button>
+-          </span>
+-        ))}
+-        {addingGroup ? (
++  function searchBox(group: string): React.ReactElement {
++    return (
++      <div className="px-1 py-1">
++        <div className="flex gap-1">
+           <input
+             autoFocus
+-            value={groupInput}
+-            onChange={(e) => setGroupInput(e.target.value)}
+-            onKeyDown={(e) => e.key === "Enter" && addGroup()}
+-            onBlur={addGroup}
+-            placeholder="群組名稱"
+-            className="w-16 rounded border border-line bg-bg px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
++            value={input}
++            onChange={(e) => setInput(e.target.value)}
++            onKeyDown={(e) => {
++              if (e.key === "Enter") submitAdd(group);
++              if (e.key === "Escape") {
++                setAdding(null);
++                setInput("");
++              }
++            }}
++            placeholder="股號或名稱"
++            className="w-full rounded border border-line bg-bg px-2 py-1 font-mono text-sm text-ink outline-none focus:border-accent"
+           />
+-        ) : (
+           <button
+             type="button"
+-            aria-label="新增群組"
+-            onClick={() => setAddingGroup(true)}
+-            className="rounded px-1 text-xs text-ink-dim hover:text-ink"
++            onClick={() => submitAdd(group)}
++            className="shrink-0 rounded border border-line px-2 py-1 text-sm text-ink hover:border-accent"
+           >
+-            +
++            新增
+           </button>
+-        )}
+-      </div>
+-      <div className="flex gap-1">
+-        <input
+-          value={input}
+-          onChange={(e) => setInput(e.target.value)}
+-          onKeyDown={(e) => e.key === "Enter" && add()}
+-          placeholder="輸入股號"
+-          className="w-full rounded border border-line bg-bg px-2 py-1 font-mono text-sm text-ink outline-none focus:border-accent"
+-        />
+-        <button
+-          type="button"
+-          onClick={add}
+-          className="shrink-0 rounded border border-line px-2 py-1 text-sm text-ink hover:border-accent"
+-        >
+-          新增
+-        </button>
++        </div>
++        {suggestions.length > 0 ? (
++          <ul data-testid="stock-suggest" className="mt-1 rounded border border-line bg-bg-deep">
++            {suggestions.map((s) => (
++              <li key={s.code}>
++                <button
++                  type="button"
++                  aria-label={`加入 ${s.code} ${s.name}`}
++                  onClick={() => addTo(group, s.code)}
++                  className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface"
++                >
++                  <span className="w-14 font-mono text-ink">{s.code}</span>
++                  <span className="truncate text-ink-muted">{s.name}</span>
++                </button>
++              </li>
++            ))}
++          </ul>
++        ) : null}
+       </div>
++    );
++  }
++
++  return (
++    // overflow-y-auto 掛在 aside(不是單一 ul):群組全列出後側欄高度不再受單組限制。
++    // border-r:與中間主區的視覺分隔(round3 項 5);pr-3 讓內容不貼線
++    <aside
++      ref={asideRef}
++      className="flex w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-line pr-3"
++      aria-label="自選清單"
++    >
+       {save.error ? <p className="text-xs text-bear">{errText(save.error.message)}</p> : null}
+       {error ? <p className="text-xs text-bear">自選清單載入失敗</p> : null}
+-      <ul ref={listRef} className="flex flex-col overflow-y-auto">
+-        {displayed.map((code) => {
+-          const q = quotes[code];
+-          const index = codes.indexOf(code);
+-          return (
+-            <li
+-              key={code}
+-              className={cn(
+-                "group flex h-11 cursor-pointer items-center gap-2 border-b border-line px-1",
+-                active === code && "bg-bg-deep",
+-                dragFrom !== null && displayed[dragTo ?? -1] === code && "border-accent",
+-              )}
+-              onClick={() => onSelect(code)}
+-            >
+-              {currentGroup ? (
+-                <span
+-                  role="button"
+-                  aria-label={`拖拉 ${code}`}
+-                  className="cursor-grab select-none text-ink-dim"
+-                  onPointerDown={(e) => onHandleDown(index, e)}
+-                  onClick={(e) => e.stopPropagation()}
+-                >
+-                  ⋮⋮
+-                </span>
+-              ) : null}
+-              <span className="w-14 font-mono text-sm text-ink">{code}</span>
+-              {q?.no_data ? (
+-                <span className="flex-1 text-right text-xs text-ink-dim">無資料</span>
+-              ) : (
+-                <span className="flex flex-1 items-baseline justify-end gap-2 font-mono text-xs">
+-                  <span className="text-sm text-ink">{fmtPrice(q?.p ?? null)}</span>
+-                  <span
+-                    className={cn(
+-                      "w-14 text-right",
+-                      (q?.chg_pct ?? 0) > 0 ? "text-bull" : (q?.chg_pct ?? 0) < 0 ? "text-bear" : "text-ink-dim",
+-                    )}
+-                  >
+-                    {q?.chg_pct != null ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%` : "-"}
+-                  </span>
+-                </span>
+-              )}
++
++      {groups.map((g) => {
++        const isCollapsed = collapsed.has(g.name);
++        return (
++          <section
++            key={g.name}
++            data-testid={`wl-group-${g.name}`}
++            ref={(el) => {
++              if (el) sectionRefs.current.set(g.name, el);
++              else sectionRefs.current.delete(g.name);
++            }}
++            className={cn(
++              "rounded border border-transparent",
++              drag !== null && drag.to === g.name && "border-accent",
++            )}
++          >
++            <header className="group/hdr flex items-center gap-1 border-b border-line px-1 py-0.5">
+               <button
+                 type="button"
+-                aria-label={`移組 ${code}`}
+-                className="invisible text-ink-dim hover:text-accent group-hover:visible"
+-                onClick={(e) => {
+-                  e.stopPropagation();
+-                  setMovingCode(movingCode === code ? null : code);
+-                }}
++                aria-label={`${isCollapsed ? "展開" : "折疊"} ${g.name}`}
++                onClick={() => toggleCollapsed(g.name)}
++                className="w-3 shrink-0 text-xs text-ink-dim hover:text-ink"
+               >
+-                ⊞
++                {isCollapsed ? "▸" : "▾"}
+               </button>
++              <span className="min-w-0 flex-1 truncate text-xs text-ink">{g.name}</span>
++              <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{g.codes.length}</span>
+               <button
+                 type="button"
+-                aria-label={`移除 ${code}`}
+-                className="invisible text-ink-dim hover:text-bear group-hover:visible"
+-                onClick={(e) => {
+-                  e.stopPropagation();
+-                  remove(code);
++                aria-label={`新增到 ${g.name}`}
++                onClick={() => {
++                  setAdding((cur) => (cur === g.name ? null : g.name));
++                  setInput("");
+                 }}
++                className="shrink-0 px-0.5 text-xs text-ink-dim hover:text-ink"
++              >
++                +
++              </button>
++              <button
++                type="button"
++                aria-label={`刪除群組 ${g.name}`}
++                onClick={() => removeGroup(g.name)}
++                className="invisible shrink-0 px-0.5 text-xs text-ink-dim hover:text-bear group-hover/hdr:visible"
+               >
+                 ×
+               </button>
+-            </li>
+-          );
+-        })}
+-      </ul>
+-      {movingCode !== null ? (
+-        <div className="rounded border border-line bg-bg-deep p-2">
+-          <p className="mb-1 font-mono text-xs text-ink-dim">{movingCode} 所屬群組</p>
+-          {groups.map((g) => (
+-            <label key={g.name} className="flex items-center gap-1 py-0.5 text-xs text-ink">
+-              <input
+-                type="checkbox"
+-                aria-label={g.name}
+-                checked={g.codes.includes(movingCode)}
+-                onChange={() => toggleMembership(movingCode, g.name)}
+-              />
+-              {g.name}
+-            </label>
+-          ))}
++            </header>
++
++            {adding === g.name ? searchBox(g.name) : null}
++
++            {isCollapsed ? null : (
++              <ul
++                data-testid={`wl-list-${g.name}`}
++                ref={(el) => {
++                  if (el) listRefs.current.set(g.name, el);
++                  else listRefs.current.delete(g.name);
++                }}
++                className="flex flex-col"
++              >
++                {g.codes.map((code) => {
++                  const q = quotes[code];
++                  return (
++                    <li key={code}>
++                      <div
++                        className={cn(
++                          "group flex h-11 cursor-pointer items-center gap-2 border-b border-line px-1",
++                          active === code && "bg-bg-deep",
++                          drag?.code === code && "opacity-50",
++                        )}
++                        onClick={() => onSelect(code)}
++                      >
++                        <span
++                          role="button"
++                          aria-label={`拖拉 ${code}`}
++                          className="cursor-grab select-none text-ink-dim"
++                          onPointerDown={(e) => onHandleDown(g.name, code, e)}
++                          onClick={(e) => e.stopPropagation()}
++                        >
++                          ⋮⋮
++                        </span>
++                        <span className="w-14 font-mono text-sm text-ink">{code}</span>
++                        {q?.no_data ? (
++                          <span className="flex-1 text-right text-xs text-ink-dim">無資料</span>
++                        ) : (
++                          <span className="flex flex-1 items-baseline justify-end gap-2 font-mono text-xs">
++                            <span className="text-sm text-ink">{fmtPrice(q?.p ?? null)}</span>
++                            <span
++                              className={cn(
++                                "w-14 text-right",
++                                (q?.chg_pct ?? 0) > 0
++                                  ? "text-bull"
++                                  : (q?.chg_pct ?? 0) < 0
++                                    ? "text-bear"
++                                    : "text-ink-dim",
++                              )}
++                            >
++                              {q?.chg_pct != null
++                                ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
++                                : "-"}
++                            </span>
++                          </span>
++                        )}
++                        <button
++                          type="button"
++                          aria-label={`移組 ${code}`}
++                          className="invisible text-ink-dim hover:text-accent group-hover:visible"
++                          onClick={(e) => {
++                            e.stopPropagation();
++                            setMovingCode(movingCode === code ? null : code);
++                          }}
++                        >
++                          ⊞
++                        </button>
++                        <button
++                          type="button"
++                          aria-label={`移除 ${code}`}
++                          className="invisible text-ink-dim hover:text-bear group-hover:visible"
++                          onClick={(e) => {
++                            e.stopPropagation();
++                            remove(g.name, code);
++                          }}
++                        >
++                          ×
++                        </button>
++                      </div>
++                      {/* ⊞ 面板渲染在**該列正下方**:捲動容器搬到 aside 且群組全列出後,
++                          放在所有 section 之後會落到側欄底部、常在可視範圍外(W-1 名義
++                          保留但實際到不了)。 */}
++                      {movingCode === code ? (
++                        <div className="rounded border border-line bg-bg-deep p-2">
++                          <p className="mb-1 font-mono text-xs text-ink-dim">{code} 所屬群組</p>
++                          {groups.map((other) => (
++                            <label
++                              key={other.name}
++                              className="flex items-center gap-1 py-0.5 text-xs text-ink"
++                            >
++                              <input
++                                type="checkbox"
++                                aria-label={other.name}
++                                checked={other.codes.includes(code)}
++                                onChange={() => toggleMembership(code, other.name)}
++                              />
++                              {other.name}
++                            </label>
++                          ))}
++                        </div>
++                      ) : null}
++                    </li>
++                  );
++                })}
++                {g.codes.length === 0 ? (
++                  <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
++                    拖曳股票到此
++                  </li>
++                ) : null}
++              </ul>
++            )}
++          </section>
++        );
++      })}
++
++      {/* 零群組(冷啟動 / 全刪):既有「全部下新增自動建自選」的語意搬到這裡,
++          否則側欄只剩「+ 群組」一條隱性前提 = 死路(白名單 W-16)。 */}
++      {groups.length === 0 ? (
++        <div>
++          <p className="px-1 text-xs text-ink-dim">尚無自選,輸入股號新增</p>
++          {searchBox(DEFAULT_GROUP)}
+         </div>
+       ) : null}
+-      {displayed.length === 0 ? <p className="text-xs text-ink-dim">尚無自選,輸入股號新增</p> : null}
++
++      {addingGroup ? (
++        <input
++          autoFocus
++          value={groupInput}
++          onChange={(e) => setGroupInput(e.target.value)}
++          onKeyDown={(e) => e.key === "Enter" && addGroup()}
++          onBlur={addGroup}
++          placeholder="群組名稱"
++          className="mx-1 rounded border border-line bg-bg px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
++        />
++      ) : (
++        <button
++          type="button"
++          aria-label="新增群組"
++          onClick={() => setAddingGroup(true)}
++          className="mx-1 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:text-ink"
++        >
++          + 群組
++        </button>
++      )}
+     </aside>
+   );
+ }
+diff --git a/frontend/src/hooks/useChartToggles.test.ts b/frontend/src/hooks/useChartToggles.test.ts
+index 148513b..b249245 100644
+--- a/frontend/src/hooks/useChartToggles.test.ts
++++ b/frontend/src/hooks/useChartToggles.test.ts
+@@ -12,11 +12,17 @@ beforeEach(() => {
+ 
+ afterEach(cleanup);
+ 
+-const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: false };
++// 🔴 round4 項 6:bb 由預設關改為預設開(user 拍板「K 線圖都要顯示布林通道到 5ma 20ma」)
++const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true };
++/** 存檔 schema 版本(storage-only 欄位,不屬 ChartToggles) */
++const V = 2;
++
++function stored(): Record<string, unknown> {
++  return JSON.parse(window.localStorage.getItem(KEY)!) as Record<string, unknown>;
++}
+ 
+ describe("useChartToggles", () => {
+-  // 🔴 SC-3:CDP 由預設關改為預設開(user 拍板);同時新增 bb(布林,預設關)
+-  it("預設 vwap/cdp 開、ma/bb 關", () => {
++  it("預設 vwap/cdp/bb 開、ma 關", () => {
+     const hook = renderHook(() => useChartToggles());
+     expect(hook.result.current.toggles).toEqual(DEFAULTS);
+   });
+@@ -25,7 +31,7 @@ describe("useChartToggles", () => {
+     const hook = renderHook(() => useChartToggles());
+     act(() => hook.result.current.set("cdp", false));
+     expect(hook.result.current.toggles.cdp).toBe(false);
+-    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({ ...DEFAULTS, cdp: false });
++    expect(stored()).toEqual({ ...DEFAULTS, cdp: false, v: V });
+     const hook2 = renderHook(() => useChartToggles());
+     expect(hook2.result.current.toggles.cdp).toBe(false);
+   });
+@@ -36,11 +42,43 @@ describe("useChartToggles", () => {
+     expect(hook.result.current.toggles).toEqual(DEFAULTS);
+   });
+ 
++  it("v 欄位不得洩進 toggles 物件(storage-only)", () => {
++    window.localStorage.setItem(KEY, JSON.stringify({ ...DEFAULTS, v: V }));
++    const hook = renderHook(() => useChartToggles());
++    expect(hook.result.current.toggles).toEqual(DEFAULTS);
++    expect("v" in hook.result.current.toggles).toBe(false);
++  });
++
+   it("既有使用者的存檔不被新預設覆蓋(cdp 曾關過就維持關)", () => {
+     window.localStorage.setItem(KEY, JSON.stringify({ vwap: true, cdp: false, ma: false }));
+     const hook = renderHook(() => useChartToggles());
+     expect(hook.result.current.toggles.cdp).toBe(false);
+-    expect(hook.result.current.toggles.bb).toBe(false); // 新 key 由 DEFAULTS 補
++  });
++
++  // 🔴 round4 項 6:舊存檔的 bb:false 是「當時的預設」不是「使用者選了關」——
++  // {...DEFAULTS, ...saved} 會讓它蓋掉新預設,user 的畫面永遠不會變。做一次性升級。
++  describe("bb 預設開的一次性升級(v<2 → 開一次)", () => {
++    it("無版本號的舊存檔:bb 被打開,其餘選擇不動,且升級後立刻落檔", () => {
++      window.localStorage.setItem(KEY, JSON.stringify({ vwap: false, cdp: false, ma: true, bb: false }));
++      const hook = renderHook(() => useChartToggles());
++      expect(hook.result.current.toggles.bb).toBe(true);
++      expect(hook.result.current.toggles.vwap).toBe(false);
++      expect(hook.result.current.toggles.cdp).toBe(false);
++      expect(hook.result.current.toggles.ma).toBe(true);
++      // 沒落檔的話下次 load 會再打開一次 → 使用者關不掉(白名單 W-11)
++      expect(stored().v).toBe(V);
++      expect(stored().bb).toBe(true);
++    });
++
++    it("升級後使用者手動關掉 BB → 重新 mount 維持關(升級只做一次)", () => {
++      window.localStorage.setItem(KEY, JSON.stringify({ vwap: true, cdp: true, ma: false, bb: false }));
++      const first = renderHook(() => useChartToggles());
++      expect(first.result.current.toggles.bb).toBe(true); // 升級生效
++      act(() => first.result.current.set("bb", false)); // user 明確關掉
++      cleanup();
++      const second = renderHook(() => useChartToggles());
++      expect(second.result.current.toggles.bb).toBe(false);
++    });
+   });
+ 
+   // 🔴 R21:StockChart(持有 bb)與 StockIntradayChart(持有 vwap/cdp/ma)是兩個 instance,
+@@ -49,12 +87,13 @@ describe("useChartToggles", () => {
+     const a = renderHook(() => useChartToggles());
+     const b = renderHook(() => useChartToggles()); // b 的 prev 停在 mount 當下
+     act(() => a.result.current.set("cdp", false));
+-    act(() => b.result.current.set("bb", true));
+-    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({
++    act(() => b.result.current.set("bb", false));
++    expect(stored()).toEqual({
+       vwap: true,
+       cdp: false, // ← 沒有被 b 的 stale prev 還原成 true
+       ma: false,
+-      bb: true,
++      bb: false,
++      v: V,
+     });
+   });
+ });
+diff --git a/frontend/src/hooks/useChartToggles.ts b/frontend/src/hooks/useChartToggles.ts
+index 5d56cee..a571be8 100644
+--- a/frontend/src/hooks/useChartToggles.ts
++++ b/frontend/src/hooks/useChartToggles.ts
+@@ -10,18 +10,45 @@ export interface ChartToggles {
+   bb: boolean;
+ }
+ 
+-/** `cdp` 預設開(SC-3,user 拍板)。已寫入 localStorage 的使用者維持自己的選擇 ——
+- *  `load()` 的 `{...DEFAULTS, ...saved}` 讓存檔覆蓋預設,刻意不做強制升級。 */
+-const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: false };
++/** 存檔 schema 版本。**storage-only,不屬 `ChartToggles`** —— 洩進 toggles 物件會讓
++ *  「整包比對」的測試與 memo 比較多一個非布林欄位。 */
++const TOGGLES_VERSION = 2;
++
++/** `cdp` 預設開(SC-3,user 拍板);`bb` 預設開(round4 項 6,user 拍板)。
++ *
++ *  `load()` 的 `{...DEFAULTS, ...saved}` 讓存檔覆蓋預設 —— 對「使用者選過」的項目是
++ *  對的,但對**新改的預設**是錯的:舊存檔裡的 `bb: false` 是「當時的預設」而不是
++ *  「使用者選了關」,照樣覆蓋的話 user 的畫面永遠不會變成新預設。
++ *  故只對 `bb` 做一次性升級(見 `load`),其餘欄位維持「存檔優先、不強制升級」。 */
++const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true };
++
++interface Stored extends Partial<ChartToggles> {
++  v?: number;
++}
++
++function persist(toggles: ChartToggles): void {
++  window.localStorage.setItem(KEY, JSON.stringify({ ...toggles, v: TOGGLES_VERSION }));
++}
+ 
+ function load(): ChartToggles {
++  let saved: Stored;
+   try {
+     const raw = window.localStorage.getItem(KEY);
+     if (!raw) return DEFAULTS;
+-    return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<ChartToggles>) };
++    saved = JSON.parse(raw) as Stored;
+   } catch {
+     return DEFAULTS;
+   }
++  const { v, ...flags } = saved;
++  const merged: ChartToggles = { ...DEFAULTS, ...flags };
++  if ((v ?? 1) < TOGGLES_VERSION) {
++    // 一次性升級。**必須立刻落檔**:只回傳不寫回的話,使用者升級後把 BB 關掉,
++    // 下次 load 又看到 v<2 而再打開一次 —— 變成「關不掉」(白名單 W-11)。
++    const upgraded: ChartToggles = { ...merged, bb: true };
++    persist(upgraded);
++    return upgraded;
++  }
++  return merged;
+ }
+ 
+ export function useChartToggles() {
+@@ -33,7 +60,7 @@ export function useChartToggles() {
+   // 實際症狀是「江波圖把 CDP 關掉、去 K 線按了 BB、切回來 CDP 自己亮回來」。
+   function set(key: keyof ChartToggles, value: boolean): void {
+     const next = { ...load(), [key]: value };
+-    window.localStorage.setItem(KEY, JSON.stringify(next));
++    persist(next);
+     setToggles(next);
+   }
+ 
+diff --git a/frontend/src/hooks/useStockNames.test.tsx b/frontend/src/hooks/useStockNames.test.tsx
+new file mode 100644
+index 0000000..5ace271
+--- /dev/null
++++ b/frontend/src/hooks/useStockNames.test.tsx
+@@ -0,0 +1,54 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { useStockNames } from "@/hooks/useStockNames";
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function wrap({ children }: { children: ReactNode }) {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++}
++
++describe("useStockNames", () => {
++  it("回傳 names 陣列", async () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(
++        async () =>
++          new Response(
++            JSON.stringify({ names: [{ code: "2330", name: "台積電" }], count: 1 }),
++          ),
++      ),
++    );
++    const hook = renderHook(() => useStockNames(), { wrapper: wrap });
++    await waitFor(() => expect(hook.result.current.data).toBeTruthy());
++    expect(hook.result.current.data).toEqual([{ code: "2330", name: "台積電" }]);
++  });
++
++  it("names 欄位缺失 → 空陣列不炸(提示列不出現,直接打股號仍可用)", async () => {
++    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ count: 0 }))));
++    const hook = renderHook(() => useStockNames(), { wrapper: wrap });
++    await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
++    expect(hook.result.current.data).toEqual([]);
++  });
++
++  it("404 → error 態帶錯誤碼", async () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(
++        async () =>
++          new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 404 }),
++      ),
++    );
++    const hook = renderHook(() => useStockNames(), { wrapper: wrap });
++    await waitFor(() => expect(hook.result.current.isError).toBe(true), { timeout: 5000 });
++    expect((hook.result.current.error as Error).message).toBe("NOT_READY");
++  });
++});
+diff --git a/frontend/src/hooks/useStockNames.ts b/frontend/src/hooks/useStockNames.ts
+new file mode 100644
+index 0000000..d27667f
+--- /dev/null
++++ b/frontend/src/hooks/useStockNames.ts
+@@ -0,0 +1,29 @@
++import { useQuery } from "@tanstack/react-query";
++
++import type { StockName } from "@/lib/stock-search";
++
++/** 全市場代號↔名稱表(搜尋提示列用;round4 項 1)。
++ *
++ *  表是**版控靜態檔**(`copycat/stock_names.json`,實測 2,401 檔 / 約 58 KB),盤中不會變 →
++ *  `staleTime: Infinity` 一次載入就好,不需要 refresh 慣例的 `?refresh=true`。 */
++async function fetchStockNames(): Promise<StockName[]> {
++  const res = await fetch("/api/stock/names");
++  if (!res.ok) {
++    const body = (await res.json().catch(() => ({}))) as { detail?: { error?: string } };
++    throw new Error(body.detail?.error ?? `HTTP_${res.status}`);
++  }
++  const body = (await res.json()) as { names?: StockName[] };
++  // 後端表不可用時回空陣列(不 500);欄位缺失也一律當空表 —— 提示列不出現,
++  // 但「直接打完整股號 Enter 新增」那條路徑照樣可用(白名單 W-4)
++  return Array.isArray(body.names) ? body.names : [];
++}
++
++export function useStockNames() {
++  return useQuery({
++    queryKey: ["stock-names"],
++    queryFn: fetchStockNames,
++    staleTime: Infinity,
++    gcTime: Infinity,
++    retry: 1,
++  });
++}
+diff --git a/frontend/src/lib/list-drag.test.ts b/frontend/src/lib/list-drag.test.ts
+index a55e686..2b80d0a 100644
+--- a/frontend/src/lib/list-drag.test.ts
++++ b/frontend/src/lib/list-drag.test.ts
+@@ -1,6 +1,12 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { insertIndexFromPointer, reorder } from "@/lib/list-drag";
++import {
++  dropTargetFromPointer,
++  insertIndexFromPointer,
++  moveCode,
++  reorder,
++  type DropZone,
++} from "@/lib/list-drag";
+ 
+ describe("reorder", () => {
+   it("moves item forward and backward", () => {
+@@ -29,3 +35,129 @@ describe("insertIndexFromPointer", () => {
+     expect(insertIndexFromPointer(9999, 40, 5)).toBe(4);
+   });
+ });
++
++// 🟢 round4 項 2:群組全列出後可跨群組拖曳(user 拍板「移動」語意 — 來源移除)
++const ROW = 44;
++const BOUNDS = { left: 0, right: 240 };
++
++/** 主力(2 檔,展開)/ 觀察(1 檔,折疊)/ 空組(0 檔,展開) */
++const ZONES: DropZone[] = [
++  { group: "主力", top: 0, bottom: 120, listTop: 32, count: 2, collapsed: false },
++  { group: "觀察", top: 130, bottom: 160, listTop: 160, count: 1, collapsed: true },
++  { group: "空組", top: 170, bottom: 220, listTop: 202, count: 0, collapsed: false },
++];
++
++describe("dropTargetFromPointer", () => {
++  it("命中所在群組,index 依列高換算(上界是 count 不是 count−1,跨組要能 append)", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 32 }, ZONES, ROW, BOUNDS)).toEqual({
++      group: "主力",
++      index: 0,
++    });
++    expect(dropTargetFromPointer({ x: 100, y: 32 + ROW }, ZONES, ROW, BOUNDS)).toEqual({
++      group: "主力",
++      index: 1,
++    });
++    // 落在最後一列下半 → append 到尾(index === count)
++    expect(dropTargetFromPointer({ x: 100, y: 119 }, ZONES, ROW, BOUNDS)).toEqual({
++      group: "主力",
++      index: 2,
++    });
++  });
++
++  it("折疊的群組仍是落點,index 恆為 count(append 到尾)", () => {
++    // ⚠ 這條是 review R4:若沿用 listTop = bottom 的算式,y − listTop 為負 → clamp 成 0
++    // (prepend),與語意相反。折疊必須是明確分支。
++    expect(dropTargetFromPointer({ x: 100, y: 140 }, ZONES, ROW, BOUNDS)).toEqual({
++      group: "觀察",
++      index: 1,
++    });
++  });
++
++  it("展開的空群組 → index 0", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 200 }, ZONES, ROW, BOUNDS)).toEqual({
++      group: "空組",
++      index: 0,
++    });
++  });
++
++  it("落在群組之間的縫隙 → 取最近的群組(拖到標題列間不失敗)", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 122 }, ZONES, ROW, BOUNDS)?.group).toBe("主力");
++    expect(dropTargetFromPointer({ x: 100, y: 129 }, ZONES, ROW, BOUNDS)?.group).toBe("觀察");
++  });
++
++  it("x 落在側欄水平範圍外 → null(不可逆的搬組不能因為 y 剛好同高就發生)", () => {
++    expect(dropTargetFromPointer({ x: 900, y: 32 }, ZONES, ROW, BOUNDS)).toBeNull();
++    expect(dropTargetFromPointer({ x: -100, y: 32 }, ZONES, ROW, BOUNDS)).toBeNull();
++    // ±16px 寬容:貼著側欄邊緣放開仍算有效
++    expect(dropTargetFromPointer({ x: 250, y: 32 }, ZONES, ROW, BOUNDS)?.group).toBe("主力");
++  });
++
++  it("沒有任何 zone → null", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 32 }, [], ROW, BOUNDS)).toBeNull();
++  });
++});
++
++describe("moveCode", () => {
++  const GROUPS = [
++    { name: "主力", codes: ["2330", "5483"] },
++    { name: "觀察", codes: ["3231"] },
++    { name: "旁觀", codes: ["1101"] },
++  ];
++
++  it("跨組 = 移動:來源移除、目標依 index 插入", () => {
++    expect(moveCode(GROUPS, "2330", "主力", "觀察", 0)).toEqual([
++      { name: "主力", codes: ["5483"] },
++      { name: "觀察", codes: ["2330", "3231"] },
++      { name: "旁觀", codes: ["1101"] },
++    ]);
++  });
++
++  it("跨組 append(index === count)", () => {
++    expect(moveCode(GROUPS, "2330", "主力", "觀察", 1)[1]).toEqual({
++      name: "觀察",
++      codes: ["3231", "2330"],
++    });
++  });
++
++  it("同組 = 重排(不重複、不消失)", () => {
++    expect(moveCode(GROUPS, "2330", "主力", "主力", 2)[0]).toEqual({
++      name: "主力",
++      codes: ["5483", "2330"],
++    });
++  });
++
++  it("目標組已含該 code → 不重複(移動到已存在的組等於只從來源移除)", () => {
++    const groups = [
++      { name: "主力", codes: ["2330", "5483"] },
++      { name: "觀察", codes: ["2330"] },
++    ];
++    expect(moveCode(groups, "2330", "主力", "觀察", 0)).toEqual([
++      { name: "主力", codes: ["5483"] },
++      { name: "觀察", codes: ["2330"] },
++    ]);
++  });
++
++  it("index 溢出 → 夾制", () => {
++    expect(moveCode(GROUPS, "2330", "主力", "觀察", 99)[1]!.codes).toEqual(["3231", "2330"]);
++    expect(moveCode(GROUPS, "2330", "主力", "觀察", -5)[1]!.codes).toEqual(["2330", "3231"]);
++  });
++
++  it("不影響第三組(一檔多組的其他歸屬保留)", () => {
++    const groups = [
++      { name: "主力", codes: ["2330"] },
++      { name: "觀察", codes: ["3231"] },
++      { name: "旁觀", codes: ["2330"] },
++    ];
++    expect(moveCode(groups, "2330", "主力", "觀察", 0)[2]).toEqual({
++      name: "旁觀",
++      codes: ["2330"],
++    });
++  });
++
++  it("來源組不存在該 code → 其他組不被破壞", () => {
++    expect(moveCode(GROUPS, "9999", "主力", "觀察", 0)[0]).toEqual({
++      name: "主力",
++      codes: ["2330", "5483"],
++    });
++  });
++});
+diff --git a/frontend/src/lib/list-drag.ts b/frontend/src/lib/list-drag.ts
+index e8b7940..f7a379a 100644
+--- a/frontend/src/lib/list-drag.ts
++++ b/frontend/src/lib/list-drag.ts
+@@ -9,8 +9,80 @@ export function reorder<T>(list: T[], from: number, to: number): T[] {
+   return next;
+ }
+ 
+-/** pointer 相對清單頂端的 y → 目標插入 index(過半行高進位)。 */
++/** pointer 相對清單頂端的 y → 目標插入 index(過半行高進位)。
++ *
++ *  上界是 `count − 1`(同組重排:只能換到既有位置)。跨組落點請用
++ *  `dropTargetFromPointer`,它的上界是 `count`(要能 append 到尾)—— 兩者語意刻意不同。 */
+ export function insertIndexFromPointer(y: number, rowHeight: number, count: number): number {
+   const idx = Math.round(y / rowHeight);
+   return Math.max(0, Math.min(count - 1, idx));
+ }
++
++/** 一個群組 section 的落點幾何(round4 項 2)。**每次 pointermove 重算** ——
++ *  只在 pointerdown 算一次的話,側欄捲動、錯誤文案出現消失都會讓 rect 失效,
++ *  而失效的樣態是「拖到別組結果落錯組」= 靜默改資料。 */
++export interface DropZone {
++  group: string;
++  /** section 外框上下緣(含標題列;折疊時只有標題列) */
++  top: number;
++  bottom: number;
++  /** 股票列第一列的上緣。**折疊時不使用**(見 `collapsed`) */
++  listTop: number;
++  count: number;
++  /** 折疊中 → 一律 append 到尾,不走 rowHeight 換算 */
++  collapsed: boolean;
++}
++
++const EDGE_TOLERANCE = 16;
++
++/** pointer 座標 → 落點群組 + 插入 index;不接受的落點回 `null`(呼叫端據此整個作廢)。
++ *
++ *  **x 必須驗**:只看 y 的話,在中間 K 線圖上放開只要 y 恰好與某群組同高就會把股票搬組,
++ *  而「移動」語意是不可逆的(來源會被移除),舊行為最壞只是同組換位。
++ *  y 落在 zone 之間的縫隙(標題列之間)→ 取最近的 zone,拖到縫隙不失敗。 */
++export function dropTargetFromPointer(
++  p: { x: number; y: number },
++  zones: readonly DropZone[],
++  rowHeight: number,
++  bounds: { left: number; right: number },
++): { group: string; index: number } | null {
++  if (zones.length === 0) return null;
++  if (p.x < bounds.left - EDGE_TOLERANCE || p.x > bounds.right + EDGE_TOLERANCE) return null;
++  let best: DropZone | null = null;
++  let bestDist = Infinity;
++  for (const z of zones) {
++    const dist = p.y < z.top ? z.top - p.y : p.y >= z.bottom ? p.y - z.bottom + 1 : 0;
++    if (dist < bestDist) {
++      best = z;
++      bestDist = dist;
++    }
++  }
++  if (best === null) return null;
++  const index = best.collapsed
++    ? best.count
++    : Math.max(0, Math.min(best.count, Math.round((p.y - best.listTop) / rowHeight)));
++  return { group: best.group, index };
++}
++
++/** 把 `code` 從 `fromGroup` 移到 `toGroup` 的 `index`(`from === to` 時等價於同組重排)。
++ *
++ *  **移動語意**(user 2026-07-30 拍板):來源組移除。其他群組完全不動 —— 一檔多組的
++ *  其他歸屬照樣保留,要改那些走每列的 `⊞` 面板。 */
++export function moveCode<G extends { name: string; codes: string[] }>(
++  groups: readonly G[],
++  code: string,
++  fromGroup: string,
++  toGroup: string,
++  index: number,
++): G[] {
++  return groups.map((g) => {
++    if (g.name === toGroup) {
++      // 先 filter 再插入:`from === to` 時這一步同時完成移除與插入
++      const base = g.codes.filter((c) => c !== code);
++      const at = Math.max(0, Math.min(base.length, index));
++      return { ...g, codes: [...base.slice(0, at), code, ...base.slice(at)] };
++    }
++    if (g.name === fromGroup) return { ...g, codes: g.codes.filter((c) => c !== code) };
++    return g;
++  });
++}
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index b1faae5..5354ccb 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
+ import type { MinuteAgg } from "@/lib/stock-accum";
+ import {
+   buildIntradayGeometry,
++  minuteToX,
+   overlayLines,
++  plotWidth,
+   SUB_TOP_PAD,
+   X_END_MIN,
+   X_START_MIN,
++  Y_AXIS_W,
+ } from "@/lib/stock-intraday-svg";
+ 
+ function minutes(entries: [number, Partial<MinuteAgg>][]): Map<number, MinuteAgg> {
+@@ -33,7 +36,7 @@ describe("buildIntradayGeometry", () => {
+   it("price line spans minutes;有漲跌停 → 域**恰為**漲跌停(SC-4,該變:原 ×1.02/×0.98 留邊)", () => {
+     const g = buildIntradayGeometry(
+       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
+-      { width: 810 - 540, height: 100 },
++      { width: Y_AXIS_W + 810 - 540, height: 100 },
+     );
+     expect(g.priceLine.length).toBe(2);
+     // 🔴 SC-4:區間就是漲停/跌停,不再多留 2% 邊
+@@ -45,9 +48,59 @@ describe("buildIntradayGeometry", () => {
+     expect(g.lowerY).not.toBeNull();
+     expect(g.upperY!).toBeCloseTo(4, 6);
+     expect(g.lowerY!).toBeCloseTo(100 - 14 - 4, 6);
+-    // x:每分鐘 1px(width = 分鐘數)
+-    expect(g.priceLine[0]!.x).toBeCloseTo(0, 5);
+-    expect(g.priceLine[1]!.x).toBeCloseTo(1, 5);
++    // 🔴 round4 項 3:繪圖區改從左緣價位帶右側起算,x 不再從 0 開始
++    // (width = Y_AXIS_W + 分鐘數 → 繪圖區仍是每分鐘 1px)
++    expect(g.priceLine[0]!.x).toBeCloseTo(Y_AXIS_W, 5);
++    expect(g.priceLine[1]!.x).toBeCloseTo(Y_AXIS_W + 1, 5);
++  });
++
++  // 🔴 round4 項 3:價位文字原本畫在 x=2 而繪圖區從 x=0 起,文字直接壓在走勢線上。
++  // 左緣讓出 Y_AXIS_W 寬的價位帶後,`minuteToX` / `minuteOf` 必須**共用**同一組常數,
++  // 否則反演只在兩端偏移(同 toY / priceAtY 共用 PAD_Y 的理由)。
++  describe("左緣價位帶(gutter)", () => {
++    const W = Y_AXIS_W + 270;
++
++    it("Y_AXIS_W 等於 hover 價位標寬度(標籤恰好整格塞進價位帶,不再壓線)", () => {
++      expect(Y_AXIS_W).toBe(46);
++    });
++
++    it("繪圖區起於價位帶右緣、迄於圖右緣", () => {
++      expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
++      expect(minuteToX(X_END_MIN, W)).toBeCloseTo(W, 6);
++      expect(plotWidth(W)).toBeCloseTo(270, 6);
++    });
++
++    it("minuteOf ↔ minuteToX 互逆(每個有成交分鐘往返守恆)", () => {
++      const ms = [540, 600, 661, 720, 809];
++      const g = buildIntradayGeometry(
++        { minutes: minutes(ms.map((m) => [m, { c: 2_320_000, v: 1 }])), meta: META },
++        { width: W, height: 100 },
++      );
++      for (const m of ms) {
++        expect(g.minuteOf(minuteToX(m, W))).toBe(m);
++      }
++    });
++
++    it("價位帶內的 x 不對應任何分鐘(不會被誤讀成 09:00)", () => {
++      const g = buildIntradayGeometry(
++        { minutes: minutes([[540, { c: 2_320_000, v: 1 }]]), meta: META },
++        { width: W, height: 100 },
++      );
++      expect(g.minuteOf(Y_AXIS_W)).toBe(540);
++      expect(g.minuteOf(Y_AXIS_W - 1)).toBeNull();
++      expect(g.minuteOf(0)).toBeNull();
++    });
++
++    it("副圖 bar 與主圖價點同 x(同 width 下對位守恆;hover 直線貫穿兩圖要對準)", () => {
++      const input = {
++        minutes: minutes([[540, { c: 2_320_000, v: 1, o: 1, i: 1 }], [600, { c: 2_330_000, v: 1, o: 2, i: 1 }]]),
++        meta: META,
++      };
++      const main = buildIntradayGeometry(input, { width: W, height: 260 });
++      const sub = buildIntradayGeometry(input, { width: W, height: 70 });
++      expect(sub.energyBars[0]!.x).toBeCloseTo(Y_AXIS_W, 6);
++      expect(sub.energyBars.map((b) => b.x)).toEqual(main.priceLine.map((p) => p.x));
++    });
+   });
+ 
+   // 🔴 SC-4 / R1:priceAtY 必須是改動後 toY 的逆函數。中間點在任何公式下都剛好正確,
+@@ -68,12 +121,13 @@ describe("buildIntradayGeometry", () => {
+   it("areaPolygon 以 refY 封閉且首尾點貼齊平盤", () => {
+     const g = buildIntradayGeometry(
+       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [541, { c: 2_436_000, v: 2 }]]), meta: META },
+-      { width: 270, height: 100 },
++      { width: Y_AXIS_W + 270, height: 100 },
+     );
+     const pts = g.areaPolygon.split(" ");
+     expect(pts.length).toBe(4); // 起點 + 2 個資料點 + 終點
+-    expect(pts[0]).toBe(`0.0,${g.refY.toFixed(1)}`);
+-    expect(pts[3]).toBe(`1.0,${g.refY.toFixed(1)}`);
++    // 🔴 round4 項 3:填色多邊形一併右移到繪圖區內(否則會延伸進左緣價位帶)
++    expect(pts[0]).toBe(`${Y_AXIS_W.toFixed(1)},${g.refY.toFixed(1)}`);
++    expect(pts[3]).toBe(`${(Y_AXIS_W + 1).toFixed(1)},${g.refY.toFixed(1)}`);
+   });
+ 
+   it("無 ref 時 areaPolygon 為空字串(fallback 走單色線、不填色)", () => {
+@@ -188,11 +242,11 @@ describe("buildIntradayGeometry", () => {
+   it("minuteOf:bucket 有資料回分鐘、無資料回 null(SC-1/R6)", () => {
+     const g = buildIntradayGeometry(
+       { minutes: minutes([[540, { c: 2_320_000, v: 1 }], [600, { c: 2_330_000, v: 1 }]]), meta: META },
+-      { width: 270, height: 100 },
++      { width: Y_AXIS_W + 270, height: 100 },
+     );
+-    expect(g.minuteOf(0)).toBe(540); // x=0 → 09:00
+-    expect(g.minuteOf(60)).toBe(600); // x=60px → 10:00(width=270 → 1px/分)
+-    expect(g.minuteOf(30)).toBeNull(); // 09:30 無資料
++    expect(g.minuteOf(Y_AXIS_W)).toBe(540); // 繪圖區起點 → 09:00
++    expect(g.minuteOf(Y_AXIS_W + 60)).toBe(600); // +60px → 10:00(繪圖區 270 → 1px/分)
++    expect(g.minuteOf(Y_AXIS_W + 30)).toBeNull(); // 09:30 無資料
+     expect(g.minuteOf(-5)).toBeNull();
+     expect(g.minuteOf(999)).toBeNull();
+   });
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index 3776fb4..d961ae9 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -28,6 +28,25 @@ export const SUB_TOP_PAD = 10;
+ /** 左緣刻度的百分比階(SC-4:由上而下)。±10 直接用 upper/lower 原值、0 用 ref 原值。 */
+ const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
+ 
++/** 左緣價位帶寬度(round4 項 3)。價位文字原本畫在 `x=2` 而繪圖區從 `x=0` 起,
++ *  文字直接壓在走勢線與紅綠填色上。讓出這條帶後繪圖區改為 `[Y_AXIS_W, width]`。
++ *
++ *  取 46 = 元件的 `PRICE_TAG.w`:hover 價位標(左上角固定在 x=0)恰好整格塞進帶內,
++ *  不必再為它另留空間;價位文字本身只需 ~24px。 */
++export const Y_AXIS_W = 46;
++
++/** 繪圖區寬度(扣掉左緣價位帶);至少 1 避免除以零。 */
++export function plotWidth(width: number): number {
++  return Math.max(1, width - Y_AXIS_W);
++}
++
++/** 分鐘 → x 座標。**幾何與元件共用這一份** —— 兩邊各寫一次的話,任何 x 軸幾何改動
++ *  都得同時改對兩處,而漂移的症狀是「線與刻度差幾 px」,目視幾乎抓不到
++ *  (同 `toY` / `priceAtY` 必須共用 `PAD_Y` 的理由)。 */
++export function minuteToX(minute: number, width: number): number {
++  return Y_AXIS_W + ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * plotWidth(width);
++}
++
+ export interface Pt {
+   x: number;
+   y: number;
+@@ -135,8 +154,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+     const raw = yTop - ((y - PAD_Y) / plotH) * ySpan;
+     return Math.min(yTop, Math.max(yBottom, Math.round(raw)));
+   };
+-  const toX = (minute: number): number =>
+-    ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * size.width;
++  const toX = (minute: number): number => minuteToX(minute, size.width);
+ 
+   const priceLine = entries.map(([minute, m]) => ({ minute, x: toX(minute), y: toY(m.c) }));
+ 
+@@ -187,8 +205,13 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+ 
+   const haveMinutes = new Set(entries.map(([k]) => k));
+   const minuteOf = (xPx: number): number | null => {
+-    if (xPx < 0 || xPx > size.width) return null;
+-    const m = Math.round((xPx / size.width) * (X_END_MIN - X_START_MIN)) + X_START_MIN;
++    // 價位帶內(x < Y_AXIS_W)不對應任何分鐘 —— 不夾制成 09:00,否則滑過左緣價位文字時
++    // 十字線會憑空指到開盤那一分鐘。必須與 `minuteToX` 共用 Y_AXIS_W / plotWidth,
++    // 各自硬編會讓反演只在兩端偏移(同 toY / priceAtY 的教訓)。
++    if (xPx < Y_AXIS_W || xPx > size.width) return null;
++    const m =
++      Math.round(((xPx - Y_AXIS_W) / plotWidth(size.width)) * (X_END_MIN - X_START_MIN)) +
++      X_START_MIN;
+     return haveMinutes.has(m) ? m : null;
+   };
+ 
+diff --git a/frontend/src/lib/stock-search.test.ts b/frontend/src/lib/stock-search.test.ts
+new file mode 100644
+index 0000000..96c7a18
+--- /dev/null
++++ b/frontend/src/lib/stock-search.test.ts
+@@ -0,0 +1,63 @@
++import { describe, expect, it } from "vitest";
++
++import { searchStocks, type StockName } from "@/lib/stock-search";
++
++const TABLE: StockName[] = [
++  { code: "2330", name: "台積電" },
++  { code: "2331", name: "精英" },
++  { code: "2317", name: "鴻海" },
++  { code: "3231", name: "緯創" },
++  { code: "00679B", name: "元大美債20年" },
++  { code: "6547", name: "高端疫苗" },
++  { code: "1101", name: "台泥" },
++];
++
++describe("searchStocks", () => {
++  it("空字串 / 全空白 → 不提示(不是回整張表)", () => {
++    expect(searchStocks("", TABLE)).toEqual([]);
++    expect(searchStocks("   ", TABLE)).toEqual([]);
++  });
++
++  it("完整代碼 → 該檔在第一列", () => {
++    expect(searchStocks("2330", TABLE)[0]).toEqual({ code: "2330", name: "台積電" });
++  });
++
++  it("代碼前綴 → 多筆命中且按代碼升序", () => {
++    expect(searchStocks("23", TABLE).map((s) => s.code)).toEqual(["2317", "2330", "2331"]);
++  });
++
++  it("名稱片段 → 命中(中文不做大小寫轉換)", () => {
++    expect(searchStocks("台積", TABLE)).toEqual([{ code: "2330", name: "台積電" }]);
++    expect(searchStocks("疫苗", TABLE).map((s) => s.code)).toEqual(["6547"]);
++  });
++
++  it("代碼命中排在名稱命中之前(打 1101 不該先跳出名稱含 1101 的東西)", () => {
++    const table: StockName[] = [
++      { code: "9999", name: "測試1101公司" },
++      { code: "1101", name: "台泥" },
++    ];
++    expect(searchStocks("1101", table).map((s) => s.code)).toEqual(["1101", "9999"]);
++  });
++
++  it("代碼比對大小寫不敏感(字母尾碼 ETF)", () => {
++    expect(searchStocks("00679b", TABLE).map((s) => s.code)).toEqual(["00679B"]);
++    expect(searchStocks("00679B", TABLE).map((s) => s.code)).toEqual(["00679B"]);
++  });
++
++  it("兩段命中的同一檔只出現一次", () => {
++    const table: StockName[] = [{ code: "2330", name: "2330控股" }];
++    expect(searchStocks("2330", table)).toEqual([{ code: "2330", name: "2330控股" }]);
++  });
++
++  it("limit 生效", () => {
++    expect(searchStocks("2", TABLE, 2).length).toBe(2);
++  });
++
++  it("查無命中 → 空陣列(呼叫端據此走「原樣代碼加入」)", () => {
++    expect(searchStocks("zzzz", TABLE)).toEqual([]);
++  });
++
++  it("空表 → 空陣列(名稱表未載入 / 壞檔的降級)", () => {
++    expect(searchStocks("2330", [])).toEqual([]);
++  });
++});
+diff --git a/frontend/src/lib/stock-search.ts b/frontend/src/lib/stock-search.ts
+new file mode 100644
+index 0000000..976583f
+--- /dev/null
++++ b/frontend/src/lib/stock-search.ts
+@@ -0,0 +1,32 @@
++/** 個股搜尋提示列的過濾純函數(round4 項 1)。
++ *
++ *  名稱表整包由 `GET /api/stock/names` 一次載入(實測 2,401 檔 / 約 58 KB),過濾在前端做:
++ *  提示列零延遲,且這條邏輯可單測 —— 換成 server-side `?q=` 就變成每按一鍵打一次 API。
++ */
++
++export interface StockName {
++  code: string;
++  name: string;
++}
++
++/** 代碼前綴命中優先於名稱片段命中,各段內按代碼升序;合併去重後取前 `limit` 筆。
++ *
++ *  代碼比對轉大寫(字母尾碼 ETF 如 `00679B`,使用者不會特意按 shift);
++ *  名稱比對**不轉大小寫** —— 中文沒有 case,轉了只是白花 CPU。 */
++export function searchStocks(
++  query: string,
++  table: readonly StockName[],
++  limit = 20,
++): StockName[] {
++  const trimmed = query.trim();
++  if (trimmed === "") return [];
++  const upper = trimmed.toUpperCase();
++  const byCode: StockName[] = [];
++  const byName: StockName[] = [];
++  for (const row of table) {
++    if (row.code.toUpperCase().startsWith(upper)) byCode.push(row);
++    else if (row.name.includes(trimmed)) byName.push(row);
++  }
++  const asc = (a: StockName, b: StockName): number => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0);
++  return [...byCode.sort(asc), ...byName.sort(asc)].slice(0, limit);
++}
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 9fe087a..bd955fb 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -76,17 +76,54 @@ class FakeStockSource:
+         pass
+ 
+ 
+-def make_client(tmp_path: Path) -> tuple[TestClient, FakeStockSource]:
++def make_client(
++    tmp_path: Path, *, names_path: Path | None = None
++) -> tuple[TestClient, FakeStockSource]:
+     fake = FakeStockSource()
+     app = create_app(
+         FakeTxoSource(),
+         stock_source=fake,
+         stock_watchlist_path=tmp_path / "watchlist.json",
++        stock_names_path=names_path,
+         throttle_secs=0.01,
+     )
+     return TestClient(app, raise_server_exceptions=False), fake
+ 
+ 
++class TestStockNamesRoute:
++    """搜尋提示列的名稱表(round4 項 1)。表是版控檔 → 降級路徑必須靠注入點才測得到。"""
++
++    def test_returns_versioned_table(self, tmp_path: Path) -> None:
++        client, _ = make_client(tmp_path)  # names_path=None → 用版控檔
++        with client:
++            body = client.get("/api/stock/names").json()
++        assert body["count"] == len(body["names"])
++        assert body["count"] > 1_800  # 版控檔實測 2,401
++        assert {"code": "2330", "name": "台積電"} in body["names"]
++
++    def test_missing_table_returns_empty_not_500(self, tmp_path: Path) -> None:
++        client, _ = make_client(tmp_path, names_path=tmp_path / "nope.json")
++        with client:
++            r = client.get("/api/stock/names")
++        assert r.status_code == 200
++        assert r.json() == {"names": [], "count": 0}
++
++    def test_corrupt_table_returns_empty_not_500(self, tmp_path: Path) -> None:
++        bad = tmp_path / "bad.json"
++        bad.write_text("{oops", encoding="utf-8")
++        client, _ = make_client(tmp_path, names_path=bad)
++        with client:
++            r = client.get("/api/stock/names")
++        assert r.status_code == 200
++        assert r.json() == {"names": [], "count": 0}
++
++    def test_available_without_tc4(self, tmp_path: Path) -> None:
++        """名稱表與 TC4 連線無關:達錢 4 沒開(stock engine 未就緒)也要能搜尋。"""
++        app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
++        with TestClient(app, raise_server_exceptions=False) as client:
++            assert client.get("/api/stock/names").status_code == 200
++
++
+ class TestWatchlistRoutes:
+     """groups shape(stock-ui-upgrade SC-6);舊 codes shape 斷言隨 API 契約同輪遷移."""
+ 
+diff --git a/tests/test_stock_names.py b/tests/test_stock_names.py
+new file mode 100644
+index 0000000..8764567
+--- /dev/null
++++ b/tests/test_stock_names.py
+@@ -0,0 +1,177 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from copycat.stock_names import (
++    ISIN_URLS,
++    load_names,
++    parse_isin_html,
++    parse_isin_html_with_stats,
++    refresh,
++    write_names,
++)
++
++# 段標題列 = 單一 <td>(colspan);資料列 cells[0] = "<code>　<name>"(全形空格)。
++# 實測欄位順序:code+name / ISIN / 上市日 / 市場別 / 產業別 / CFICode。
++FIXTURE_HTML = """
++<table><tbody>
++<tr><td colspan="7">股票</td></tr>
++<tr><td>2330　台積電</td><td>TW0002330008</td><td>1994/09/05</td><td>上市</td><td>半導體業</td></tr>
++<tr><td>6547　高端疫苗</td><td>TW0006547005</td><td>2018/06/25</td><td>上櫃</td><td>生技醫療</td></tr>
++<tr><td>2801A　彰銀甲特</td><td>TW0002801A08</td><td>2019/01/01</td><td>上市</td><td>金融業</td></tr>
++<tr><td>999　太短</td><td>TWX</td><td>2020/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td>ABCD　無數字</td><td>TWY</td><td>2020/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td>1234　</td><td>TWZ</td><td>2020/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td>5678沒有分隔</td><td>TWW</td><td>2020/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td>8888　名稱 含　全形空格</td><td>TWV</td><td>2020/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td>欄數不足</td><td>只有兩欄</td></tr>
++<tr><td colspan="7">上市認購(售)權證</td></tr>
++<tr><td>030001　元大台積購01</td><td>TWW0300010</td><td>2025/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td>030002　凱基聯電購02</td><td>TWW0300028</td><td>2025/01/01</td><td>上市</td><td>x</td></tr>
++<tr><td colspan="7">ETF</td></tr>
++<tr><td>00679B　元大美債20年</td><td>TW00679B004</td><td>2017/01/17</td><td>上市</td><td>x</td></tr>
++<tr><td>2330　重複代號</td><td>TW0002330008</td><td>1994/09/05</td><td>上市</td><td>x</td></tr>
++</tbody></table>
++"""
++
++# 段標題偵測失效的樣態:TWSE 把段標題改成 colspan + 空 td(兩個 cell)→ 段名永遠不更新,
++# 「含權證 → 略過」整條失效。守門必須擋住這種「收太多」。
++BROKEN_SECTION_HTML = """
++<table><tbody>
++<tr><td colspan="6">上市認購(售)權證</td><td></td></tr>
++<tr><td>030001　元大台積購01</td><td>TWW0300010</td><td>2025/01/01</td><td>上市</td><td>x</td></tr>
++</tbody></table>
++"""
++
++
++class TestParseIsinHtml:
++    def test_keeps_stock_and_etf_sections(self) -> None:
++        result = parse_isin_html(FIXTURE_HTML)
++        assert result["2330"] == "台積電"
++        assert result["6547"] == "高端疫苗"
++        assert result["00679B"] == "元大美債20年"
++        # 特別股(5 碼含字母尾)通過 validate_code
++        assert result["2801A"] == "彰銀甲特"
++
++    def test_warrant_section_excluded(self) -> None:
++        result = parse_isin_html(FIXTURE_HTML)
++        assert "030001" not in result
++        assert "030002" not in result
++
++    def test_invalid_codes_dropped(self) -> None:
++        result = parse_isin_html(FIXTURE_HTML)
++        assert "999" not in result  # 太短
++        assert "ABCD" not in result  # 無數字
++        assert "1234" not in result  # 名稱空
++        assert "5678沒有分隔" not in result
++
++    def test_name_may_contain_fullwidth_space(self) -> None:
++        """split 必須 maxsplit=1,否則名稱含全形空格的列會被切碎或誤剔。"""
++        assert parse_isin_html(FIXTURE_HTML)["8888"] == "名稱 含　全形空格"
++
++    def test_duplicate_code_keeps_first(self) -> None:
++        assert parse_isin_html(FIXTURE_HTML)["2330"] == "台積電"
++
++    def test_malformed_rows_do_not_raise(self) -> None:
++        assert parse_isin_html("<tr><td>x</td></tr><tr></tr><tr><td>a</td><td>b</td></tr>") == {}
++
++    def test_section_counts_exposed_for_drift_visibility(self) -> None:
++        """refresh 要能 log 逐段筆數 + 被剔除的權證列數,漂移才看得見。"""
++        result, stats = parse_isin_html_with_stats(FIXTURE_HTML)
++        assert result["2330"] == "台積電"
++        assert stats.per_section["股票"] == 4  # 2330 / 6547 / 2801A / 8888
++        assert stats.per_section["ETF"] == 1  # 00679B(2330 重複不計)
++        assert stats.warrant_rows == 2
++
++
++class TestLoadWrite:
++    def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
++        assert load_names(tmp_path / "nope.json") == {}
++
++    def test_round_trip(self, tmp_path: Path) -> None:
++        path = tmp_path / "names.json"
++        write_names(path, {"2330": "台積電"})
++        assert load_names(path) == {"2330": "台積電"}
++        assert json.loads(path.read_text(encoding="utf-8"))["_cache_version"] == 1
++
++    def test_corrupt_json_returns_empty(self, tmp_path: Path) -> None:
++        """endpoint 承諾「表不可用 → 空陣列不 500」,韌性必須在這一層。"""
++        path = tmp_path / "names.json"
++        path.write_text("{oops", encoding="utf-8")
++        assert load_names(path) == {}
++
++    def test_missing_names_key_returns_empty(self, tmp_path: Path) -> None:
++        path = tmp_path / "names.json"
++        path.write_text(json.dumps({"_cache_version": 1}), encoding="utf-8")
++        assert load_names(path) == {}
++
++
++def _fetcher(pages: dict[str, str]):
++    def fetch(url: str, _timeout: float) -> bytes:
++        return pages[url].encode("cp950", errors="replace")
++
++    return fetch
++
++
++class TestRefreshGuards:
++    """守門必須雙側 + 語意檢查:只防「收太少」的話,段標題偵測失效(收進 4 萬筆權證)
++    完全不觸發,靜默覆寫版控檔。"""
++
++    def _existing(self, tmp_path: Path) -> Path:
++        path = tmp_path / "names.json"
++        write_names(path, {"9999": "舊檔"})
++        return path
++
++    def test_too_few_raises_and_keeps_old_file(self, tmp_path: Path) -> None:
++        path = self._existing(tmp_path)
++        pages = {url: FIXTURE_HTML for url in ISIN_URLS}
++        with pytest.raises(ValueError):
++            refresh(path, fetcher=_fetcher(pages))
++        assert load_names(path) == {"9999": "舊檔"}
++
++    def test_warrant_section_not_detected_raises(self, tmp_path: Path) -> None:
++        """段標題偵測失效 → 沒有任何段名含「權證」→ 視為解析失敗。"""
++        path = self._existing(tmp_path)
++        pages = {url: BROKEN_SECTION_HTML for url in ISIN_URLS}
++        with pytest.raises(ValueError):
++            refresh(path, fetcher=_fetcher(pages))
++        assert load_names(path) == {"9999": "舊檔"}
++
++    def test_too_many_raises(self, tmp_path: Path) -> None:
++        """上界:段落偵測失效但仍有權證段名時,筆數會暴增到上萬。"""
++        path = self._existing(tmp_path)
++        rows = "\n".join(
++            f"<tr><td>{3000 + i}　權證{i}</td><td>TW{i}</td><td>d</td><td>上市</td><td>x</td></tr>"
++            for i in range(6100)
++        )
++        big = (
++            "<table><tbody><tr><td colspan='7'>上市認購(售)權證</td></tr>"
++            + "<tr><td>030001　權證A</td><td>TW</td><td>d</td><td>上市</td><td>x</td></tr>" * 5001
++            + "<tr><td colspan='7'>股票</td></tr>"
++            + rows
++            + "</tbody></table>"
++        )
++        with pytest.raises(ValueError):
++            refresh(path, fetcher=_fetcher({url: big for url in ISIN_URLS}))
++        assert load_names(path) == {"9999": "舊檔"}
++
++    def test_healthy_payload_writes(self, tmp_path: Path) -> None:
++        path = tmp_path / "names.json"
++        rows = "\n".join(
++            f"<tr><td>{2000 + i}　股票{i}</td><td>TW{i}</td><td>d</td><td>上市</td><td>x</td></tr>"
++            for i in range(1900)
++        )
++        html = (
++            "<table><tbody><tr><td colspan='7'>上市認購(售)權證</td></tr>"
++            + "<tr><td>030001　權證A</td><td>TW</td><td>d</td><td>上市</td><td>x</td></tr>" * 5001
++            + "<tr><td colspan='7'>股票</td></tr>"
++            + rows
++            + "</tbody></table>"
++        )
++        # 兩個 URL 同內容 → 第二份全是重複 code,總數仍為 1900(落在 [1800, 6000])
++        names = refresh(path, fetcher=_fetcher({url: html for url in ISIN_URLS}))
++        assert len(names) == 1900
++        assert load_names(path) == names

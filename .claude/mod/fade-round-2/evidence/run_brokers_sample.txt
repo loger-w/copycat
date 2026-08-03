@@ -1,0 +1,2 @@
+INFO copycat.data.backfill_brokers: backfill-brokers ����:fetched=2 skipped=0 empty=0 targets=10900
+分點日報回補完成:fetch 2、跳過 0、空回應 0、目標 10900 筆

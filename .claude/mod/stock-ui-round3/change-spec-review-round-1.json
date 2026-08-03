@@ -1,0 +1,35 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer",
+  "spec": ".claude/mod/stock-ui-round3/change-spec.md",
+  "summary": { "P0": 2, "P1": 8, "P2": 5, "accepted": 15, "rejected": 0, "needs_more_context": 0 },
+  "mechanical_screen": {
+    "note": "main agent 對可查證 claim 先反證,無誤報",
+    "verified": [
+      "tests/server/test_bars.py 與 tests/live/test_stock_bars.py / test_stock_source.py 路徑正確(spec 原寫 tests/test_bars.py 為錯)",
+      "tests/live/test_stock_bars.py:37 確為 poll_wait_secs=0.0 → busy loop 風險成立",
+      "frontend/src/lib/stock-intraday-svg.test.ts:212 與 :241 皆用 l.label",
+      "stock_source.py fetch_bars_range 內確為三處 _collect_history(:442/:444/:452)",
+      "OrderBook.tsx:120 <section> 無 h-full",
+      "StockIntradayChart.tsx:358 與 CandleChart.tsx:418 頂列皆有 mb-1(原 spec 漏扣 4px)",
+      "TickTape.tsx:28-31 根節點 flex h-full flex-col overflow-y-auto"
+    ]
+  },
+  "findings": [
+    { "id": "R1", "severity": "P0", "title": "下半列改 shrink-0 會讓 TickTape 失去確定高度父層,撐爆版面並打穿 W-11", "resolution": "accepted", "fix": "R-6a 改 h-56 shrink-0(固定高)+ 子 wrapper min-h-0;新增 W-11b 記錄隱性前置條件;新增 SC-6b(連點 3 次載入更多不得溢出)" },
+    { "id": "R2", "severity": "P0", "title": "MAIN/SUB/DIMS 動態化未交代 memo props 化與幾何 useMemo deps,會靜默錯位並打穿 W-5", "resolution": "accepted", "fix": "新增 R-6c 逐點列出要 props 化的 memo 子元件與模組級 toX/BAR_W;明列要加進 deps 的尺寸值;新增 T-10 在純函數層鎖住『不同高度 → toY 不同』" },
+    { "id": "R3", "severity": "P1", "title": "被量測 wrapper 的高度若由內容決定會形成回饋迴圈,SC-6 靜默失效", "resolution": "accepted", "fix": "R-2 docstring 寫死呼叫端契約(高度必須由外層 flex 指派)+ 1px 去抖;R-6b 明寫該 wrapper class" },
+    { "id": "R4", "severity": "P1", "title": "尺寸換算漏扣 figure padding/border(比例高估 2.4%)與頂列 mb-1(4px)", "resolution": "accepted", "fix": "新增 R-2b lib/chart-frame.ts 共用常數 + svgBox();floor 後再減 2px 安全邊;W-12 由建構保證" },
+    { "id": "R5", "severity": "P1", "title": "test_empty_history_not_negatively_cached / test_today_empty_not_cached 被錯標為不該紅", "resolution": "accepted", "fix": "移進『該紅』並註明正確修法 = 注入 clock 推進 >15s 後斷言可恢復;不該紅改為精確的兩個 truncated/overwrite 案" },
+    { "id": "R6", "severity": "P1", "title": "poll_wait=0 時固定 10s budget 變 busy loop;tests/live/test_stock_bars.py 未進 caller map;測試路徑錯誤", "resolution": "accepted", "fix": "R-10 加 wait<=0 即單次探測回傳;測試分類表補該檔;全數修正路徑" },
+    { "id": "R7", "severity": "P1", "title": "fetch_bars_range 實為三處 _collect_history,漏 :452 讓 tf=D 無資料仍 40s 且無 SC 覆蓋", "resolution": "accepted", "fix": "R-10 改三處全傳;SC-9 增列 (d) tf=D ≤25s" },
+    { "id": "R8", "severity": "P1", "title": "移除 self-start 只拉伸 wrapper,OrderBook <section> 無 h-full 仍不貼底;補 h-full 則推翻既有取捨", "resolution": "accepted", "fix": "R-6a 明寫加 h-full 並記為對既有 self-start 決策的刻意推翻;Known Risks 3 記下 24px 留白代價" },
+    { "id": "R9", "severity": "P1", "title": "label 刪除的 consumer 盤點不全(:161 判色、MA 文字來源、svg test 兩處)", "resolution": "accepted", "fix": "R-4 補 :161 改 l.level===\"ma20\";新增 LEVEL_TEXT 映射定義;測試分類表補 :212/:241" },
+    { "id": "R10", "severity": "P1", "title": "拆掉 <main> 捲軸逃生口後矮視窗變靜默裁切,W-11 措辭涵蓋所有高度", "resolution": "accepted", "fix": "R-6a 維持 overflow-y-auto(正常尺寸下本就不會出現捲軸);SC-6 補 1366×768 量點" },
+    { "id": "R11", "severity": "P2", "title": "snap 後全部落域外時 yTicks 可能為空,與 T-3 斷言衝突", "resolution": "accepted", "fix": "R-7 加保底 push 中點;SC-10 補『刻度數 ≥1』" },
+    { "id": "R12", "severity": "P2", "title": "SC-2 示例 1188.0* 與 SC-3 自相矛盾;SC-1 斷言範圍過寬會誤判 figcaption 的 %", "resolution": "accepted", "fix": "示例改 188.5*;SC-1/T-5 限定為主圖 svg 右側 60 單位內的 text 並明列排除項" },
+    { "id": "R13", "severity": "P2", "title": "10s 逾時 + 15s 負向快取疊加後畫面用肯定語氣說『無 K 線資料』", "resolution": "accepted", "fix": "新增 R-12 逾時態誠實化(response 加 stale 欄位 + 前端分兩態文案);Known Risks 1 記殘餘風險" },
+    { "id": "R14", "severity": "P2", "title": "R-1/R-2 標 🔵 但帶新測試,與『🔵 = 測試不該變』定義衝突;純測試 commit 違反 TDD", "resolution": "accepted", "fix": "R-1/R-2/R-2b 改標 🟢;commit 表把測試併入各自 commit,刪除末尾純測試 commit" },
+    { "id": "R15", "severity": "P2", "title": "EnergySub 最高 bar 佔滿全高必蓋住頂端刻度文字;負向快取 key 缺 days", "resolution": "accepted", "fix": "R-3 加 SUB_TOP_PAD=10 縮 bar 分母;SC-8 補『不被蓋住』;R-11 key 改 (code, tf, days)" }
+  ]
+}

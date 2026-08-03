@@ -1,0 +1,8 @@
+{
+  "fee_discount": 0.84,
+  "universe_daytrade_filter": true,
+  "diagnose_perm_iters": 2000,
+  "diagnose_perm_seed": 42,
+  "diagnose_min_edge_pp": 0.003,
+  "diagnose_p_threshold": 0.05
+}

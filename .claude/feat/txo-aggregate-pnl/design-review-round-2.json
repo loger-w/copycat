@@ -1,0 +1,14 @@
+{
+  "round": 2,
+  "reviewer": "design-reviewer (sonnet, resumed round-1 agent)",
+  "summary": { "p0": 0, "p1": 2, "p2": 2 },
+  "verified_resolutions": "DR-1~9 resolved(DR-7 not_resolved → 併入 DR-10 處理)",
+  "findings": [
+    { "id": "DR-10", "severity": "P1", "claim": "queue 滿載丟棄是永久遺失,『cum_volume 去重可補救』說法不成立", "resolution": "accepted — design v3 §4:誠實改寫 + 自癒機制(queue_dropped 新增且壓力解除 → 觸發交接協定重跑補回遺失段);§7 補滿載+自癒測試" },
+    { "id": "DR-11", "severity": "P1", "claim": "交接 buffer 與穩態有界 queue 若共用,backfill 期間溢出重現 DR-1 race", "resolution": "accepted — design v3 §2.3:handover buffer 獨立純 list(容量 200,000),溢出 → 重跑協定;不與穩態 queue 共用" },
+    { "id": "DR-12", "severity": "P2", "claim": "fallback 模式下交接 step 3/4 字面不適用,替換規則要讀者自行拼湊", "resolution": "accepted — design v3 §2.3:顯式 (3')(4') 替換步驟" },
+    { "id": "DR-13", "severity": "P2", "claim": "select 切換是否連 TXF 訂閱一併退訂未定義", "resolution": "accepted — design v3 §4:TXF 訂閱獨立於序列選單,select 不碰" }
+  ],
+  "spike_feedback": "SC-1 spike 全綠(docs/research/2026-07-18-txo-chain-probe.md);design v3 併入:混合去重制(回補重建 cum + live TradeVolume)、SubQuoteRT 時間窗、REALTIME 欄位表定案、Known Risk 1 縮小為週一盤中三項",
+  "exit": "round 2 無 P0 且 P1=2 ≤ 2 → 退出條件成立;P1/P2 全數已修入 v3(未 park Known Risks)"
+}

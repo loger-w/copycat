@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer agent (af1fa9d1934c69bcb)",
+  "verdict": "exit condition met at round 1 (0 P0, 0 P1, 9 P2)",
+  "findings": [
+    {"id": "DR-1", "severity": "P2", "claim": "tquote lib 簽名不全(條寬/ATM 判定/props 未定義)", "resolution": "accepted — v2 §3.2 補 energyWidth/atmBoundaryIndex 簽名 + §3.3 props 定義,測試表同步"},
+    {"id": "DR-2", "severity": "P2", "claim": "invertX 與 buildScales domain 重複推導,單邊修改會靜默破互逆", "resolution": "accepted — v2 抽共用 xDomain(curve),兩函數同源"},
+    {"id": "DR-3", "severity": "P2", "claim": "座標換算隱含 w-full 等比假設", "resolution": "accepted — v2 §4.2 註明假設 + 實作留註解綁定 w-full 前提(不採 getScreenCTM:jsdom 不支援,測試成本高於收益)"},
+    {"id": "DR-4", "severity": "P2", "claim": "golden 重生程序不落地不可重現", "resolution": "accepted — v2 §2.3 定案 regen 腳本落地 tests/fixtures/txo_golden/regen.py,輸出含舊 key 子集 diff 報告"},
+    {"id": "DR-5", "severity": "P2", "claim": "strike 整除是靜默截斷非防呆", "resolution": "accepted — v2 §2.2 餘數非零 logger.warning 後整除,測試補 warning 斷言"},
+    {"id": "DR-6", "severity": "P2", "claim": "readout 與現價標籤頂部互疊", "resolution": "accepted — v2 §4.2 readout 固定右上角(不隨游標移動),與現價標籤(隨 spotX)空間分離"},
+    {"id": "DR-7", "severity": "P2", "claim": "per-contract 不變量照字面寫測試無欄位可取", "resolution": "accepted — v2 §2.1 改寫為 volume−outer−inner≥0(per-contract)+ Σ(volume−outer−inner)==totals.unclassified_qty(全域)兩條推導式"},
+    {"id": "DR-8", "severity": "P2", "claim": "ATM 分隔線未定義 spot 超出列集合範圍行為", "resolution": "accepted — v2 §3.2 atmBoundaryIndex 範圍外回 null(與 spot 缺同分支),測試釘死"},
+    {"id": "DR-9", "severity": "P2", "claim": "real-env 截圖取得路徑(休市日回補 env)未寫進 design", "resolution": "accepted — v2 §5 加 real-env 列:TXO_BACKFILL_DATE 啟動指令 + 三張截圖檔名"}
+  ],
+  "p2_note": "9 條全 accepted:皆為文件精度/可測性補強,零架構變動,不觸發重跑 review(退出條件已於本輪達成)。"
+}

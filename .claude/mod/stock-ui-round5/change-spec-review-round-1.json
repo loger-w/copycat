@@ -1,0 +1,168 @@
+{
+  "_note": "Phase 3 round 1 對抗式 review。全 18 條 accepted,change-spec.md 已就地修復並標 [amendment 2026-07-30: review RN]。evidence 欄保留關鍵 file:line(完整摘錄見當時 agent 回傳,修復理由已寫進 spec 的 amendment 標記)。",
+  "summary": { "P0": 5, "P1": 8, "P2": 5, "accepted": 18, "rejected": 0 },
+  "findings": [
+    {
+      "id": "R1", "severity": "P0", "status": "accepted",
+      "where": "auto-default(<dialog> showModal)、§🟢-10、SC-13/14",
+      "claim": "jsdom 26.1.0 的 HTMLDialogElement 是空實作,沒有 showModal()/close()/Esc 行為 → Dialog 測試在任何實作下都跑不起來",
+      "evidence": "frontend/node_modules/jsdom/package.json:3 = 26.1.0;jsdom/lib/jsdom/living/nodes/HTMLDialogElement-impl.js:5 全檔只有空 class;generated/HTMLDialogElement.js:100-144 只反射 open 屬性;frontend/vite.config.ts:20-23 無 setupFiles",
+      "impact": "SC-13/14 零自動化守門;W-1(一檔多組)與 W-3(刪除失敗紀律)搬進 Dialog 後一起失守",
+      "fix": "open 屬性驅動 + 自寫 Escape handler;showModal()/close() 只在 feature-detect 通過時呼叫",
+      "applied": "auto-default 新增一條 + §🟢-10 改寫"
+    },
+    {
+      "id": "R2", "severity": "P0", "status": "accepted",
+      "where": "§🔴-9 拖曳條 + §🟢-7 assignToGroup",
+      "claim": "跨群組拖曳語意被靜默從『移動』改成『複製』,而移動是 round 4 user 明確拍板過的",
+      "evidence": "list-drag.ts:76-77 註解『移動語意(user 2026-07-30 拍板):來源組移除』;:94 filter 掉來源;WatchlistSidebar.test.tsx:372-384 斷言主力 codes:[\"2330\"];list-drag.test.ts:159-165",
+      "impact": "拍板行為反轉且守門測試被改成背書新語意 = 鐵則 E 的改 assertion 讓它過",
+      "fix": "群組→群組走 moveToGroup(來源移除);未分組→群組才走 assignToGroup",
+      "applied": "§🟢-7 新增 moveToGroup;§🔴-9 拖曳分支表;SC-12 改寫;W-19 入白名單"
+    },
+    {
+      "id": "R3", "severity": "P0", "status": "accepted",
+      "where": "§🟢-7 assignToGroup / §🔴-8 moveCode 移除",
+      "claim": "assignToGroup 無 slot off-by-one 補償且不 filter 既有 → 同組排序退化成 no-op 或重複項,而 spec 又要刪掉守門的 5 支測試",
+      "evidence": "list-drag.ts:70-92(at/slot-1 補償 + filter);list-drag.test.ts:103-149(5 支);WatchlistSidebar.test.tsx:444-456 期望 [\"5483\",\"2330\"];stock_watchlist.py:71-76 去重保留首見 → 重複插入看起來像沒動",
+      "impact": "同組拖曳排序靜默失效且無測試會紅",
+      "fix": "明訂 slot 語意(移除前的渲染索引)+ 補償公式;5 個 case 逐條抄進 watchlist-model.test.ts",
+      "applied": "§🟢-7 slot 語意段 + 新測試清單;W-19 入白名單"
+    },
+    {
+      "id": "R4", "severity": "P0", "status": "accepted",
+      "where": "§🔴-9 既有測試逐一標",
+      "claim": "實檔 466 行 / 29 支,表只列 15 條;至少 8 支必紅未列,其中 W-4「新增」鈕路徑與刪群組折疊孤兒清理在新設計中沒有新家",
+      "evidence": "未列必紅:WatchlistSidebar.test.tsx:151,159,179,186,196,205,214(全走 openAdd → getByLabelText('新增到 主力'),該鈕被移除即 throw)、:251(折疊孤兒,對應 WatchlistSidebar.tsx:119-137)、:94,:114,:407,:444",
+      "impact": "大批未預告的紅 → 鐵則 C 預設判讀為『動到不該動的』;兩個既有行為無人察覺地消失",
+      "fix": "重掃 29 支逐條標;保留頂部「新增」鈕;Dialog 刪群組成功回呼側欄清折疊孤兒",
+      "applied": "§🔴-9 逐一標重寫(23 列);W-20 / W-21 入白名單"
+    },
+    {
+      "id": "R5", "severity": "P0", "status": "accepted",
+      "where": "auto-default(meta.high/low)、§三 snapshot meta、SC-1",
+      "claim": "meta 只走 REST snapshot、engine 不發 meta 型別 WS 訊息 → 當日高低線盤中永不更新",
+      "evidence": "useStockStream.ts:5 檔頭『engine 不發 meta WS 型別』;stock_engine.py:337-352 只發 tick/book;:448 只發 watchlist_quote;snapshot refetch 只在換檔/seq 跳號/回補完成/重連",
+      "impact": "盤中創新高後線仍在舊高,價格線穿到它上面 = 一條指著錯價位的『當日最高』",
+      "fix": "WS tick payload 一併帶 h/l;applyTick 據此更新 meta;SC-1 改成可指認的量法",
+      "applied": "§🟢-3 加 h/l + 新測試;§🔴-11 applyTick;SC-1 改寫;§三 WS 列改寫"
+    },
+    {
+      "id": "R6", "severity": "P1", "status": "accepted",
+      "where": "§🔴-4 既有測試逐一標",
+      "claim": "移除三個匯出名後該檔在 import 期整包爆,全 11 支紅,不是只有 4 類",
+      "evidence": "tests/test_stock_watchlist.py:8-16 top-level import 含 load_watchlist_groups/save_watchlist_groups/union;:72-76 本體同時用兩者;:56 斷言 _cache_version == 2",
+      "impact": "紅/綠失去判斷力;_cache_version 斷言的改動未事前標為該變(鐵則 E)",
+      "fix": "改標『全檔 🔴 該紅(import 期失敗)』並逐支列出,_cache_version 事前標為該變",
+      "applied": "§🔴-4 逐一標重寫(6 列)"
+    },
+    {
+      "id": "R7", "severity": "P1", "status": "accepted",
+      "where": "§🟢-1 既有測試判定",
+      "claim": "新 dataclass 欄位沒有 default,關鍵字建構一樣會 TypeError",
+      "evidence": "StockTick 是 frozen dataclass(stock_models.py:42-52);建構點 tests/live/test_stock_state.py:16-26、tests/server/test_stock_engine.py:143-146,160-163",
+      "impact": "被宣告不該紅的測試會紅,實作者可能回頭拆掉欄位",
+      "fix": "四個新欄位一律 = None",
+      "applied": "§🟢-1 加 default + 說明"
+    },
+    {
+      "id": "R8", "severity": "P1", "status": "accepted",
+      "where": "§🔴-11 TickRow/StockMeta 型別、§🟢-12",
+      "claim": "新欄位設必填會讓 10 個既有 fixture 的物件字面量型別失敗;npm test 綠但 tsc -b 紅",
+      "evidence": "StockMeta 字面量:stock-accum.test.ts:15、stock-intraday-svg.test.ts:26-27、useStockStream.test.ts:41、StockChart.test.tsx:22、StockIntradayChart.test.tsx:61,106、StockPage.test.tsx:30-31、PriceLadder.test.tsx:16-17、RightRail.test.tsx:15-16;TickRow:stock-accum.test.ts:13、TickTape.test.tsx:14-15,36",
+      "impact": "SC-16 型別 gate 在一堆無關檔案上紅,易被誤判成打壞別的東西",
+      "fix": "宣告為選填(b?/a?/high?/low?),消費端一律 ?? null",
+      "applied": "auto-default 新增一條;§🔴-11 型別段"
+    },
+    {
+      "id": "R9", "severity": "P1", "status": "accepted",
+      "where": "§🔴-5 / §三 PUT 列 / §🔴-6",
+      "claim": "PUT 的回應 shape 未規定;沿用 {groups} 會讓 mutation onSuccess 寫進 cache 的 Watchlist 缺 codes,下次 render 崩",
+      "evidence": "app.py:453 return {\"groups\": saved};useStockWatchlist.ts:38-42 直接 setQueryData;tests/server/test_stock_routes.py:140 釘死回應形狀;WatchlistSidebar.test.tsx:42 PUT mock 回 {groups}",
+      "impact": "每次存檔成功後側欄白畫面,且是『成功之後』才炸最難察覺",
+      "fix": "PUT 回應與 GET 同形;前端對缺 codes 的舊回應以 union 補;補測試逐一標與 mock",
+      "applied": "§🔴-5 回傳 + 逐一標;§三 新增 PUT 回應列;§🔴-6"
+    },
+    {
+      "id": "R10", "severity": "P1", "status": "accepted",
+      "where": "§🔴-4 vs §🔴-5 / §三",
+      "claim": "宣告移除 union 卻在兩處呼叫它,自相矛盾",
+      "evidence": "§🔴-4『union 移除』vs §🔴-5『else union(groups)』vs §三 v2 遷移『codes = union(groups)』",
+      "impact": "實作者無從判斷該刪還是保留",
+      "fix": "union 保留(兩個真 caller),既有測試不刪",
+      "applied": "§🔴-4 簽名段 + 逐一標最後一列改『不該紅』"
+    },
+    {
+      "id": "R11", "severity": "P1", "status": "accepted",
+      "where": "§🔴-11 既有測試逐一標(TickTape.test.tsx)",
+      "claim": "四列有三列與實檔對不上:分頁測試根本不存在;列序與顏色是同一支(必紅);h-full 那支未列",
+      "evidence": "TickTape.test.tsx 全檔 3 支(:10 混合列序+顏色、:27 空態、:35 h-full);grep 『載入更多』無任何測試命中",
+      "impact": "W-13 分頁零守門而 spec 以為有;W-14 的斷言住在必紅測試裡可能被順手丟掉",
+      "fix": "改成三列;:10 拆兩支;新測試補分頁",
+      "applied": "§🔴-11 逐一標重寫 + 新測試;W-13 加註『分頁目前零測試覆蓋』"
+    },
+    {
+      "id": "R12", "severity": "P1", "status": "accepted",
+      "where": "§🟢-12 當日高低線",
+      "claim": "沒有域外不畫的處置,而同檔慣例是域外必跳過;新測試用同一個 toY 對答案 = 恆真空斷言",
+      "evidence": "stock-intraday-svg.ts:260-262 overlayLines 的域檢查;:192-195 yTicks 域外跳過;:135-142 autofit 半幅由分鐘收盤極值 ×1.1 決定,裝不下逐筆極值",
+      "impact": "無漲跌停商品線會壓在時間軸上,而測試恆綠",
+      "fix": "highY/lowY 域外回 null;補一條『high 高於 yDomain[1] → 不渲染』測試",
+      "applied": "auto-default 改寫 + §🟢-12 域外段 + 新測試"
+    },
+    {
+      "id": "R13", "severity": "P1", "status": "accepted",
+      "where": "§🔴-9 結構(Dialog 常駐)+ §🟢-10 內容",
+      "claim": "Dialog 常駐渲染會撞兩支計數型既有測試(getAllByText 不過濾隱藏元素,jsdom 無 dialog 隱藏行為)",
+      "evidence": "WatchlistSidebar.test.tsx:94-103 getAllByText('2330') toHaveLength(2)、:114-118 getAllByLabelText(/拖拉/) toHaveLength(4)",
+      "impact": "兩支預期為綠的測試變 3/6,實作者會以為打壞了 W-1 或握把",
+      "fix": "Dialog 關閉時不渲染內容;Dialog 內握把 aria-label 不用『拖拉』前綴",
+      "applied": "auto-default 新增一條;§🟢-10 結構;§🔴-9 逐一標 :94/:114 兩列"
+    },
+    {
+      "id": "R14", "severity": "P2", "status": "accepted",
+      "where": "§三 TickTape props vs §🔴-11",
+      "claim": "同一 prop 兩節分別叫 ref 與 ref_;叫 ref 在 React 19 會被當 ref 轉發",
+      "evidence": "專案慣例 StockPage.tsx:100 的 OrderBook ref_",
+      "impact": "命名歧義 → 型別錯或拿不到值",
+      "fix": "統一 ref_ 並註明不可用 ref",
+      "applied": "§三 該列改寫"
+    },
+    {
+      "id": "R15", "severity": "P2", "status": "accepted",
+      "where": "§🔴-8 既有測試判定",
+      "claim": "標成該紅但其實不會紅 —— group: string → string|null 是型別擴充,既有斷言全數通過",
+      "evidence": "list-drag.test.ts:44-48 ZONES 全給 string;:50-97 六支斷言不涉 null",
+      "impact": "誘使實作者為了讓它紅而去動通過中的行為斷言(鐵則 E)",
+      "fix": "改成不該紅,只補一條 null zone 的新測試",
+      "applied": "§🔴-8 逐一標改寫"
+    },
+    {
+      "id": "R16", "severity": "P2", "status": "accepted",
+      "where": "§🟢-1、§🔴-5、§🔴-9 表頭",
+      "claim": "三處識別字/事實與實碼不符,grep 不到目標",
+      "evidence": "實際是 parse_hist_tick(stock_models.py:155-177)不是 parse_stock_ticks;GroupsBody(app.py:448)不是 WatchlistBody;WatchlistSidebar.test.tsx 是 466 行 29 支不是 427 行",
+      "impact": "diff 級 spec 的對位價值失效",
+      "fix": "逐處更正",
+      "applied": "三處已更正"
+    },
+    {
+      "id": "R17", "severity": "P2", "status": "accepted",
+      "where": "SC-2 vs §🟢-12;§🟢-10 錯誤文案",
+      "claim": "SC-2 用『昨收』當判色基準但實作用 meta.ref(除權息日不同);errText 未匯出會被複製一份而漂移",
+      "evidence": "StockMeta 同時有 ref 與 y_close(stock-accum.ts:30-33);errText 是 WatchlistSidebar.tsx:23-28 的私有函式",
+      "impact": "驗收基準不一致;W-2 只釘文案不變,兩份實作會漂",
+      "fix": "SC-2 改『參考價 meta.ref』;errText 抽到 useStockWatchlist.ts 並 export 共用",
+      "applied": "SC-2 改寫;§🔴-6 加 errText 匯出;§🟢-10 註明 import 不複製"
+    },
+    {
+      "id": "R18", "severity": "P2", "status": "accepted",
+      "where": "§🔴-9『落點是未分組但來源是某群組 → removeFromGroup』",
+      "claim": "一檔多組的股票拖進未分組會『看起來什麼都沒發生』,且落點 index 被丟棄",
+      "evidence": "未分組是衍生集合;既有 fixture WatchlistSidebar.test.tsx:13-16 的 2330 正是同屬兩組;removeFromGroup 簽名不吃 index",
+      "impact": "從來源組消失卻不出現在未分組 = 像資料被吃掉",
+      "fix": "定義為從所有群組移除(detachFromGroups)並補測試",
+      "applied": "auto-default 新增一條;§🟢-7 detachFromGroups;§🔴-9 拖曳分支表;SC-12c"
+    }
+  ]
+}

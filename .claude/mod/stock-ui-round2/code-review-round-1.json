@@ -1,0 +1,100 @@
+{
+  "round": 1,
+  "phase": "/mod Phase 5 自評(review-protocol B 節,medium 檔位)",
+  "date": "2026-07-29",
+  "diff": ".claude/mod/stock-ui-round2/review-diff.txt (master..baf5509, 22 檔 / +1915 −326)",
+  "lenses": [
+    {
+      "name": "whitelist-regression",
+      "model": "sonnet",
+      "findings": 0,
+      "note": "逐條對照 change-spec.md:144-174 的 13 條白名單。全部逐項驗證通過(RightRail 未出現在 diff、minuteOf 邏輯位元組不變、hover state 未進 ChartStatic/EnergySub props、tf=D query key 不含 days、失敗態與空資料態仍在不同分支、shrink-0/min-h-56 未動、select-none 在、index.css 未動、aggregateBars 未動、overlay 降級三元式位元組不變、fallback 對稱域未動、X 域常數未動、事件模型仍是 mouse)。"
+    },
+    {
+      "name": "correctness-bugs",
+      "model": "sonnet",
+      "findings": 4
+    },
+    {
+      "name": "pure-function-math",
+      "model": "sonnet",
+      "findings": 4
+    }
+  ],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "P1",
+      "resolution": "no_change_needed",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx",
+      "claim": "靜態 X 軸時間標籤與 hover 底部時間標無重疊避讓,會露出半截殘字",
+      "note": "**finder 讀的是修復前的 diff**。main agent 已於 real-env 截圖時獨立發現同一問題並於 commit 98aa89a 修畢,修法與 finder 的 suggested_fix 完全一致(抽出 XAxisLabels + overlaps 判定,而非加寬標籤)。無需再動。"
+    },
+    {
+      "id": "C2",
+      "severity": "P1",
+      "resolution": "no_change_needed",
+      "file": "frontend/src/components/stock/CandleChart.tsx",
+      "claim": "同 C1,K 線側",
+      "note": "同 C1,已於 98aa89a 一併修畢。"
+    },
+    {
+      "id": "C3",
+      "severity": "P1",
+      "resolution": "fixed",
+      "file": "frontend/src/components/stock/CandleChart.tsx",
+      "claim": "hover 存的是對可視窗口 shown 的索引;滾輪縮放與資料延伸改變 viewport.start 後,同一索引指到別根 bar。拖曳路徑有 setHover(null),縮放路徑漏了",
+      "verification": "main agent 寫紅測試證實:600 根、initBars=240、游標固定在 x=700,滾輪縮放一格後十字線垂直線跑到 x=807 —— 偏離 107px,而該縮放層級的 slot 只有 6.7px。",
+      "action": "採比 finder 建議(setHover(null))更根本的修法:**hover state 由 bar index 改存 viewBox 座標 {x,y}**,每次 render 用當下的 g 反查 indexOf(hover.x)。viewport 一變就自動重新對位,且錨點守恆的縮放天然維持「指著同一根」——不必讓十字線消失。新增不變式測試:十字線必須落在游標 ±1 slot 內,縮放前後皆成立。"
+    },
+    {
+      "id": "C4",
+      "severity": "P2",
+      "resolution": "fixed",
+      "file": "frontend/src/components/stock/CandleChart.tsx",
+      "claim": "readoutFields 的 prev 取自 shown[idx-1](視窗切片),視窗最左那根恆為 undefined → 漲跌% 恆顯示 '-',即使完整序列有前一根",
+      "action": "改為 bars[viewport.start + shownIdx - 1],從完整序列取 —— 與同檔 MA/BB 已採用的『完整序列算完再切片以免斷頭』同源。新增測試:平移後 hover 視窗最左一根,漲跌% 必須是數值不是佔位符。"
+    },
+    {
+      "id": "M1",
+      "severity": "P1",
+      "resolution": "fixed",
+      "file": "frontend/src/lib/stock-intraday-svg.ts",
+      "claim": "`ySpan = yTop − yBottom || 1` 只擋除以零,退化域(upper===lower)下 toY 仍是無界線性函數,而 priceAtY 有 clamp 收斂成常數 → 兩者不再互逆",
+      "verification": "紅測試:height=70、upper=lower=5000 時 toY(4990) 算出 484(viewBox 只有 70)",
+      "action": "比照 candle.ts 的 span<=0 分支,toY 也特判回常數 PAD_Y+plotH/2;priceAtY 同步回 yTop"
+    },
+    {
+      "id": "M2",
+      "severity": "P1",
+      "resolution": "fixed",
+      "file": "frontend/src/lib/stock-intraday-svg.ts",
+      "claim": "11 條刻度的 ±10% 取 upper/lower 原值、±2/4/6/8% 拿 ref 獨立算,兩者無互相校驗;漲跌幅非 ±10% 的商品會讓中間刻度落到 [lower, upper] 之外",
+      "verification": "紅測試:ref=5000、漲跌停 ±3% 時「+8%」算出 5400 > 漲停 5150 → toY 變負、刻度次序反轉。自選碼規則明文支援 00637L 這類槓桿/反向 ETF(±20%),此類商品確實存在於 scope 內",
+      "action": "域外的中間刻度直接 skip(端點 upper/lower/ref 恆在域內不受影響);新增測試涵蓋 ±3% 與 ±20% 兩種商品"
+    },
+    {
+      "id": "M3",
+      "severity": "P2",
+      "resolution": "rejected_with_reason",
+      "file": "frontend/src/lib/candle.ts",
+      "claim": "indexOf 在 x 恰等於 size.width 時回 null,該像素理應對應最後一根",
+      "action": "**駁回不修**:那是既有行為,本輪未動該行(diff 可查),依鐵則 B『看到順手想改的寫進下次處理清單,不在這次動』。已記入 docs/next-time.md 並附兩種修法。"
+    },
+    {
+      "id": "M4",
+      "severity": "P2",
+      "resolution": "fixed",
+      "file": "frontend/src/lib/candle-viewport.ts",
+      "claim": "clampCount 自述 c<=total 卻在 total=0 時回 1;現有三個內部呼叫端都先擋掉 total<=0,但它是 exported 函式",
+      "action": "函式內加 `if (total <= 0) return 0`,契約由自己滿足;新增 property 式測試掃 total × want 組合斷言 c<=total"
+    }
+  ],
+  "self_dispatched_fix": {
+    "id": "S1",
+    "severity": "P2",
+    "note": "main agent 自查(非 finder 提出):拖曳 handler 原本用 `setViewport(v => { startVp = v; return v; })` 的 side effect 讀當前值。React 不保證 updater 同步執行,讀不到就得 fallback,而那個 fallback 本來就是對的 → 直接取 closure 的 viewport。commit bafd09c,行為零改變。"
+  },
+  "p2_summary": "無風格/慣例類 P2 需彙總 —— 兩個 lens 的排除清單自檢皆未產生此類 candidate。",
+  "exit": "P0 = 0。P1 五條(C1/C2 已於 98aa89a 修畢、C3 / M1 / M2 已修)、P2 三條(C4 / M4 已修;M3 rejected_with_reason 並記入 next-time)全部逐條處置完畢。三個 lens 角度真差異化(白名單對照 / 元件狀態機正確性 / 純函式數學),白名單 lens 0 findings、另兩個共 8 findings。"
+}

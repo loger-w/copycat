@@ -1,0 +1,13 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer agent (aa360f1d685d9c885)",
+  "verdict": "exit condition met at round 1 (0 P0, 1 P1, 5 P2);P1 直接修復不入 Known Risks",
+  "findings": [
+    {"id": "IR-1", "severity": "P1", "claim": "DR-9 real-env 截圖驗證未落 PLAN(SC-4 只有截圖能驗)", "resolution": "accepted — PLAN §10 補 real-env 段(TXO_BACKFILL_DATE server + npm run dev + DevTools MCP 三截圖)"},
+    {"id": "IR-2", "severity": "P2", "claim": "PnlChart 互動測試未指明含曲線 fixture 與座標", "resolution": "accepted — §8 指明沿用既有曲線 fixture、clientX=480、預期含 formatPts(43500)"},
+    {"id": "IR-3", "severity": "P2", "claim": "regen diff 未指明 JSON round-trip 正規化(tuple vs list 誤報)", "resolution": "accepted — §3 明寫 json.loads(json.dumps(snap)) 後再 pop contracts 比對"},
+    {"id": "IR-4", "severity": "P2", "claim": "atmBoundaryIndex 漏 spotPts=null 測項", "resolution": "accepted — §5 簽名補 number|null + null 測例"},
+    {"id": "IR-5", "severity": "P2", "claim": "隨機序列不變量測試無固定 seed 有 flaky 風險", "resolution": "accepted — §2 改手寫固定序列覆蓋三分支(不用 random)"},
+    {"id": "IR-6", "severity": "P2", "claim": "tr border-b 在 table 渲染不穩", "resolution": "accepted — §7 分隔線改掛該列每個 td,jsdom 斷言 td class"}
+  ]
+}

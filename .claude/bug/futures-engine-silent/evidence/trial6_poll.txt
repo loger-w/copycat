@@ -1,0 +1,18 @@
+21:03:32 futures ERROR URLError: <urlopen error [WinError 10061] 無法連線，因為目標電腦拒絕連線。> || corr seq=0 base_mid=None stale=True
+21:03:45 futures seq=255 MXF:p=40968000,t=21:03:44.193 TMF:p=40960000,t=21:03:44.193 TXF:p=40960000,t=21:03:44.193 || corr seq=10 base_mid=40962000 stale=False
+21:03:55 futures seq=549 MXF:p=40979000,t=21:03:54.193 TMF:p=40971000,t=21:03:54.193 TXF:p=40980000,t=21:03:54.193 || corr seq=20 base_mid=40976000 stale=False
+21:04:05 futures seq=807 MXF:p=40973000,t=21:04:04.068 TMF:p=40970000,t=21:04:04.193 TXF:p=40974000,t=21:04:04.193 || corr seq=30 base_mid=40975000 stale=False
+21:04:15 futures seq=1025 MXF:p=40958000,t=21:04:14.318 TMF:p=40959000,t=21:04:14.193 TXF:p=40969000,t=21:04:14.318 || corr seq=40 base_mid=40957000 stale=False
+21:04:25 futures seq=1271 MXF:p=40970000,t=21:04:24.318 TMF:p=40967000,t=21:04:24.318 TXF:p=40973000,t=21:04:24.318 || corr seq=50 base_mid=40970000 stale=False
+21:04:35 futures seq=1490 MXF:p=40974000,t=21:04:34.318 TMF:p=40973000,t=21:04:34.318 TXF:p=40974000,t=21:04:34.318 || corr seq=60 base_mid=40975500 stale=False
+21:04:45 futures seq=1716 MXF:p=40970000,t=21:04:44.443 TMF:p=40967000,t=21:04:44.318 TXF:p=40966000,t=21:04:44.318 || corr seq=69 base_mid=40969000 stale=False
+21:04:55 futures seq=1922 MXF:p=40965000,t=21:04:54.443 TMF:p=40968000,t=21:04:54.443 TXF:p=40966000,t=21:04:54.443 || corr seq=79 base_mid=40968000 stale=False
+21:05:05 futures seq=2104 MXF:p=40967000,t=21:05:04.443 TMF:p=40970000,t=21:05:04.443 TXF:p=40970000,t=21:05:04.443 || corr seq=89 base_mid=40970500 stale=False
+21:05:15 futures seq=2321 MXF:p=40976000,t=21:05:14.568 TMF:p=40975000,t=21:05:14.443 TXF:p=40978000,t=21:05:14.443 || corr seq=99 base_mid=40973000 stale=False
+21:05:25 futures seq=2586 MXF:p=40988000,t=21:05:24.568 TMF:p=40985000,t=21:05:24.568 TXF:p=40987000,t=21:05:24.318 || corr seq=109 base_mid=40986000 stale=False
+21:05:35 futures seq=2818 MXF:p=40989000,t=21:05:34.568 TMF:p=40987000,t=21:05:34.568 TXF:p=40988000,t=21:05:34.568 || corr seq=119 base_mid=40987000 stale=False
+21:05:45 futures seq=3139 MXF:p=40994000,t=21:05:44.568 TMF:p=40989000,t=21:05:44.568 TXF:p=40991000,t=21:05:44.568 || corr seq=129 base_mid=40989500 stale=False
+21:05:55 futures seq=3352 MXF:p=40989000,t=21:05:54.627 TMF:p=40990000,t=21:05:54.693 TXF:p=40990000,t=21:05:54.193 || corr seq=139 base_mid=40988500 stale=False
+21:06:05 futures seq=3970 MXF:p=41005000,t=21:06:04.443 TMF:p=41002000,t=21:06:04.568 TXF:p=41003000,t=21:06:04.443 || corr seq=149 base_mid=41002500 stale=False
+21:06:15 futures seq=4281 MXF:p=40991000,t=21:06:14.693 TMF:p=40985000,t=21:06:14.693 TXF:p=40995000,t=21:06:14.693 || corr seq=159 base_mid=40990000 stale=False
+21:06:25 futures seq=4568 MXF:p=40985000,t=21:06:24.693 TMF:p=40978000,t=21:06:24.693 TXF:p=40986000,t=21:06:24.693 || corr seq=169 base_mid=40984000 stale=False

@@ -1,0 +1,63 @@
+{
+  "round": 2,
+  "type": "限縮對抗驗證(只審 round 1 的 P0 / P1 修復)",
+  "model": "opus",
+  "target_commits": { "red": "b4a2c9d", "green": "8961bf3" },
+  "fix_1": {
+    "id": "B1",
+    "target": "frontend/src/lib/candle.ts 窄域保底刻度未 snap(原 P0)",
+    "verdict": "closed",
+    "how_verified": [
+      "snapNearest 冪等暴力掃描 p=0..1,200,000(1,200,001 點)→ 違反 0",
+      "8 個價位帶界 ±20,000 密集掃描 → 違反 0",
+      "19,437 個 lo × 多種 span(0/1/2/…/2.5×tick/5×/20×/123456)× 3 尺寸 = 175,943,319 組,其中 35,001,666 組實際走保底分支 → 非法檔位 0、y 出界 0",
+      "臨時 vitest 匯入真 buildCandleGeometry 交叉驗證 10,044 組(保底命中 2,652)→ 違反 0",
+      "原 P0 實例重現:域 [1000100,1003000] tick 5000 → 修復前 mid=1001550(%5000=1550 非法),修復後 p=1000000(合法)、y=433.92 ≤ priceBottom=439.92"
+    ],
+    "structural_reason": "snapNearest 的輸出恆合法是結構性的:TICK_TABLE 每個帶底(1_000_000 / 500_000 / 100_000 / 50_000 / 10_000 / 0)都是「下方較細 tick」的倍數,所以 up = snapDown(p) + tickOf(p) 最多剛好落在帶底上,不可能越過帶界落到粗帶的非法偏移",
+    "consumer_check": "yTicks 的唯一 consumer 是 CandleChart.tsx:103-120(虛線 + 文字),純顯示。IndexPage.tsx:78 與 StockIntradayChart.tsx:141 讀的是各自模組的 yTicks 不經本函式。priceAtY / candle.wickTop / wickBottom 完全不讀 yTicks → y 夾制只影響顯示位置",
+    "scope_check": "PAD_Y 是 candle.ts:129 唯一 module const;usable 是同函式內唯一宣告(grep 無 shadowing);PAD_Y+usable=433.92 ≤ priceBottom=439.92 → 夾制目標確實在價圖區內、量區上方",
+    "span_le_0_branch": "不需同樣處理 —— toY 在 span<=0 時是常數(回 PAD_Y+usable/2),y 恆在圖正中不可能出界;snapNearest(hi) 也恆合法(19,437 個平盤價掃描違反 0)",
+    "honest_note": "本保底分支實務上不可達:stock_source.py 的價格取自 TC4 成交價(`round(float(raw)*1000)`),o/h/l/c 一律是合法檔位,於是 i=0 候選(raw=lo)必然通過過濾;extraSeries 只會撐開域不會收窄。原 P0 屬防禦分支的正確性瑕疵 —— 修復正確且測試已鎖住,但不是使用者當下會看到的症狀"
+  },
+  "fix_2": {
+    "id": "B2",
+    "target": "copycat/server/bars.py today_put / today_get 短 TTL(原 P1)",
+    "verdict": "closed",
+    "how_verified": [
+      "SC-10(盤中最後一根前進)未失效:非空路徑逐字未動,實測 t=29(ttl 30 內)不重抓、t=30 重抓且最後一根前進到 09:02",
+      "空→非空轉換最壞延遲 = EMPTY_TTL_SECS 15s < POLL_MS 60s → 穩態輪詢路徑無差別",
+      "省下的成本:40 次逐秒請求由 41 次 TC4 呼叫降到 3 次",
+      "ttl=0.0 語意保持:min(0.0,15.0)=0.0,判斷式 `>=` 讓 Δ=0 即過期;build_minute ×2 仍 3 次呼叫",
+      "跨午夜 key 仍成立:昨日的空 entry 對 today_get(今日) 回 None,不會冒充今日的空",
+      "prune 按日期清得掉:1000 筆(昨日 500 + 今日 500)→ prune 後 500"
+    ],
+    "honest_note": "因為 15s < 60s,本修復對「每 60s 背景輪詢」這條主路徑零收益;收益集中在 15 秒內的重複請求(minute bars 是 staleTime: 0,換股 A→B→A、多開 tab、mount/focus refetch 都會打)。docstring 寫的是「15 秒內的重複請求免費」,未誇大",
+    "doc_drift": "檔頭「空結果一律不 cache」的漂移在 8961bf3 當下確實存在,已由 0c46523 修掉(bars.py 檔頭改為分兩層描述並明寫 daily_put 維持 don't-cache-empty)"
+  },
+  "new_findings": [
+    {
+      "id": "C1",
+      "severity": "P2",
+      "file": "copycat/server/bars.py",
+      "line": 152,
+      "title": "_today 開始存空 entry 後,同日內過期的 entry 只能等跨日才清 —— 與 prune docstring 的「股號維度受 watchlist 約束」前提矛盾",
+      "failure_scenario": "server 09:00 啟動,對 /api/stock/bars/{code}?tf=1&days=5 依序請求 10,000 個合法格式股號(typo 逐試 / 腳本掃號 / 前端 bug 迴圈),多數 TC4 查無資料 → 每個都經 today_put(code, today, []) 寫入 _today。15s TTL 過期後 today_get 正確回 None,但 entry 留在 dict 直到跨日 → _today 長到 10,000 筆(≈4 MB)。實測等價證據:塞 500 筆今日空 entry、clock 推到 t=10000 再 prune(TODAY),_today 仍是 500;同條件 _empty 的 500 筆被清成 0。修復前同一批請求在 _today 留 0 筆",
+      "mechanical_screen": "CONFIRMED — prune 對 _today 只有 `k[1] != today_iso` 判斷,無 TTL evict;_empty 有",
+      "resolution": "accepted",
+      "fix": "TTL 規則抽成 `_today_ttl()` 由 today_get 與 prune 共用(各寫一份必然漂移);prune 對 _today 加 TTL evict。prune docstring 同步說明為什麼 _today 需要而 _hist / _daily 不需要",
+      "commits": ["e2f9c0c(red)", "0f23f0b(green)"]
+    }
+  ],
+  "exit": {
+    "p0_remaining": 0,
+    "p1_remaining": 0,
+    "note": "兩個原始修復皆判定 closed 且附掃描證據;新增的唯一 P2 已修復並附紅→綠。review loop 於 round 2 收斂(鐵則 G 退出條件:無 P0/P1)"
+  },
+  "gates_after": {
+    "pytest": "1200 passed",
+    "ruff": "All checks passed",
+    "pyright": "0 errors, 0 warnings",
+    "check_feat_tags": "PASS (flow=mod, 19 commits)"
+  }
+}

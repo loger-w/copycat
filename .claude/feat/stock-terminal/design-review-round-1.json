@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer",
+  "verdict": "2 P0 / 3 P1 / 4 P2",
+  "findings": [
+    {"id": "F1", "severity": "P0", "section": "§2.2/§2.3/§2.4", "summary": "跨日 rollover 未設計:cum_vol 去重+時窗+狀態機無日界 reset", "resolution": "accepted — v2 §2.4 加交易日界偵測:reset 狀態機 + 新日窗全量重掛 + 主圖重跑交接 + 測試(昨 cum 大→今 cum 小不得丟)"},
+    {"id": "F2", "severity": "P0", "section": "§2.3/§2.4", "summary": "主圖快速切換回補併發未序列化(單 REQ socket race,TXO 62bd37d 同款)", "resolution": "accepted — v2 §2.3 明定單 worker queue、切換取消 in-flight、套用前檢查仍為 main owner + fake-source 測試"},
+    {"id": "F3", "severity": "P1", "section": "§3", "summary": "user 拍板「拖拉排序」被降級為按鈕", "resolution": "accepted — v2 用原生 pointer events 手寫拖拉(30 列成本低,不引 dnd-kit),SC-1 照原文驗"},
+    {"id": "F4", "severity": "P1", "section": "§2.1/§2.2", "summary": "試撮窗界端點與 cum_vol max 互動未定義(13:30:00 收盤撮合會被誤丟)", "resolution": "accepted — v2 明定 [08:30,09:00)/[13:25,13:30) 端點不含、is_trial 在 dedup 前短路且不觸 _last_cum + 端點測試"},
+    {"id": "F5", "severity": "P1", "section": "§2.2/§2.4/§4", "summary": "WS 掉訊息無復原協定;delta(since_seq) 無人用", "resolution": "accepted — v2 seq gap → refetch 全量 snapshot;刪 delta(since_seq)(YAGNI)"},
+    {"id": "F6", "severity": "P2", "section": "§2.5", "summary": "股號驗證擋掉字母尾碼 ETF(00637L 等)", "resolution": "accepted — 放寬 4-6 位英數(至少一位數字),存在性交給推播健檢"},
+    {"id": "F7", "severity": "P2", "section": "§4", "summary": "WS 範例時間是 UTC 裸值,與台北時區規則矛盾", "resolution": "accepted — 範例改 09:57:51.000,§2.1 註明 parse 層完成 UTC→台北"},
+    {"id": "F8", "severity": "P2", "section": "§2.2/§2.4", "summary": "deque 6000 < 實測 6.2k;backfilling 無 symbol;flag 同名異義", "resolution": "accepted — maxlen 20000、status 帶 code、StockTick.buy_sell_flag / WS side"},
+    {"id": "F9", "severity": "P2", "section": "§2.3", "summary": "10s 健檢與休市 snapshot 假設對個股未實測", "resolution": "accepted — 今日收盤後補盤後 probe;健檢僅交易時段生效,盤外顯示昨收靜態值(設計先保守)"}
+  ],
+  "p2_summary": "4 條 P2 全低成本,v2 一併收"
+}

@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "mode": "medium(8 finder haiku 並行 + main agent 機械快篩;鐵則 G 最小模型,快篩把關在 main)",
+  "candidates_total": 21,
+  "accepted": [
+    { "id": "C-1", "severity": "P1", "claim": "engine 未就緒 minimal snapshot totals:{} → 前端 truthy guard 失效印 NaN", "resolution": "fixed — totals: None + test_not_ready_snapshot_totals_is_none(紅→綠)" },
+    { "id": "Alt-3", "severity": "P1", "claim": "重連自癒只在 queue timeout 分支,盤中連續 tick 下餓死", "resolution": "fixed — 主迴圈每輪檢查 _force_heal 且 force 不等 queue 清空;test_reconnect_self_heal_fires_under_continuous_ticks(持續 feeder 紅→綠)" },
+    { "id": "B-4", "severity": "P2(慣例)", "claim": "tc4.close broad except Exception 違 §2 catch 要具體", "resolution": "fixed — 收斂 (zmq.ZMQError, ConnectionError, OSError, JSONDecodeError)" },
+    { "id": "Alt-4", "severity": "P2", "claim": "重連重訂漏 UNSUBQUOTE,與 subscribe 路徑不一致", "resolution": "fixed — 重連迴圈補 UNSUB" },
+    { "id": "SELF-1", "severity": "P2(實測)", "claim": "回補逐檔 Sub→sleep(1)→收,280 檔實測 ~10 分鐘啟動", "resolution": "fixed — 全鏈先 SubHistory 再收割 + 輪詢間隔 ×0.3(main agent 實測自增;efficiency finder 誤判不痛)" }
+  ],
+  "rejected": [
+    { "id": "Alt-1", "reason": "close break 後 Disconnect() 在迴圈外必執行,§0a 不受影響;連線死時續退訂必然全失敗,break 合理" },
+    { "id": "Alt-2", "reason": "finder 誤讀 — `if SPOT_SYMBOL not in self._subscribed` 已擋重訂,select 切換不碰 TXF(引 tc4.subscribe 行)" },
+    { "id": "B-1", "reason": "WS 為 TCP 單流有序,重連即收最新 snapshot;§7 stale-drop 適用 tick 層且已以 cum_volume 實作" },
+    { "id": "B-3", "reason": "dev 走 vite proxy 同源,CORS 非必要;FRONTEND_ORIGIN 為選配非行為 bug" },
+    { "id": "A-2", "reason": "_fmt_precise_time 為修飾性標籤,TC4 欄位格式固定;防禦分支無實際觸發路徑" },
+    { "id": "CONV-1", "reason": "useTxoSnapshot 手寫 hook 為 design.md §5 已文件化的刻意偏離 — §3 禁的是 useEffect+fetch+seqRef 的 request/response 債,WS push 訂閱是正當 effect,TQ 不建模 server-push" }
+  ],
+  "p2_summary": {
+    "count": 10,
+    "themes": "simplification ×5(雙迴圈合併/對映表合併/path 格式化同構/mark_changed 集中/null 檢查散布)、reuse ×2(TC4 憑證常數與 QryIndex 分頁迴圈與 backfill_tc4 重複)、觀測性 ×2(handover buffer 溢出無計數欄位、前端 WS 無 heartbeat 判停)、結構 ×1(subscribe 重試不對稱)— 全數入 docs/next-time.md,不逐條 receiving"
+  },
+  "exit": "round 1 accepted 5 ≤ 5 且無 P0 且 fix 後 pytest/ruff/pyright 全綠 → 單輪退場"
+}

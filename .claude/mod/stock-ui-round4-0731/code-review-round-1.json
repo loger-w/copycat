@@ -1,0 +1,132 @@
+{
+  "round": 1,
+  "gear": "medium",
+  "date": "2026-07-31",
+  "base": "master..HEAD",
+  "lenses": ["whitelist", "correctness", "test_coverage"],
+  "summary": { "P0": 0, "P1": 6, "P2": 5, "accepted": 10, "rejected": 1 },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "P1",
+      "lens": "whitelist + test_coverage",
+      "title": "Dialog 的 commit() 沒有深度比對的零 PUT 守衛 —— W-9「三處」只做了兩處",
+      "where": "frontend/src/components/stock/WatchlistManagerDialog.tsx:83-87",
+      "claim": "§2 W-9(amendment R16)明文要求側欄 / Dialog / StockPage 三處都要有零 PUT 早退,但 Dialog 仍只有 `next === wl` 參考比較。而本輪新增的 addStock 走 assignToGroup(恆回新陣列),內容相同也會送 PUT → 後端 TC4 全量 UNSUB/SUB。",
+      "verify": "CONFIRMED(開檔核對:Sidebar:103 與 StockPage:44 都有 JSON.stringify 深度比對,Dialog:84 沒有)",
+      "resolution": "accepted",
+      "fix_applied": "commit() 補深度比對(對齊 W-9 三處)。**但 finding 敘述的失效情境經實測不成立**:PUT pending 期間 `wl` 仍是舊值,算出來的 next 與舊 wl 內容確實不同 → 深度比對擋不住重複送出。真正的防線是 `save.isPending` 停用建議列 / 群組鈕,已一併補上(Dialog 建議列 + StockPage 群組鈕與未分組鈕;StockPage 觸發鈕本來就有)。測試改成斷言「pending 期間鈕為 disabled 且 putBodies 仍只有一筆」",
+      "note": "深度比對本身在 Dialog 屬 defense-in-depth(可達路徑已被 disabled 擋掉),保留是為了三處一致"
+    },
+    {
+      "id": "F2",
+      "severity": "P1",
+      "lens": "correctness",
+      "title": "K 線視窗高低三角在窄 slot + 極值落在首/末根時超出 viewBox 被裁",
+      "where": "frontend/src/components/stock/CandleChart.tsx:503-512;frontend/src/lib/chart-extreme.ts:42-49",
+      "claim": "文字有 clampLabelX,三角的 cx 沒有。分 K 預設 initBars=240 → slot=1400/240≈5.83、首根 cx≈2.92,CANDLE_MARK.half=5 → 左翼 x≈−2.08 被裁。新增的『三角落在 viewBox 內』測試只用 3 根 bar 的 fixture(slot≈466),給了錯誤的安全感。",
+      "verify": "CONFIRMED(依 buildCandleGeometry 的 slot / x / cx 算式手算複核;分時圖不受影響 —— 首點 x=Y_AXIS_W=36 > half 3.5)",
+      "resolution": "accepted",
+      "fix_applied": "`trianglePoints` 加選填 `bounds`,**整個三角一起平移**(不是只夾兩翼,否則形狀變形)。夾制界取 **viewBox** 不是繪圖區 —— 這條夾制是防裁切不是把標記趕出價位帶,取繪圖區會讓分時圖 09:00 附近的極值被推開 3.5px 而標記 x 承載的是「哪一分鐘」的語意(SC-1.2)。補 240 根 + 極值落首/末根的回歸測試 + chart-extreme 的 bounds 四分支測試"
+    },
+    {
+      "id": "F3",
+      "severity": "P1",
+      "lens": "correctness",
+      "title": "切股票時 StockPage 的『加入自選』面板不會關閉,可能把錯的股票加進群組",
+      "where": "frontend/src/components/stock/StockPage.tsx:32",
+      "claim": "pickerOpen 是 local state,App 渲染 StockPage 沒帶 key、也沒有隨 code 重置的邏輯。展開面板後從側欄切到另一檔非自選股,面板仍展開且按鈕已綁到新 code → 誤觸就靜默加錯股票。",
+      "verify": "CONFIRMED(App.tsx:168 無 key;StockPage 無 code 相關的重置)",
+      "resolution": "accepted",
+      "fix_applied": "比照 Dialog 的 prevOpen pattern,依 code 變化在 render 期間關閉面板 + 回歸測試"
+    },
+    {
+      "id": "F4",
+      "severity": "P1",
+      "lens": "test_coverage",
+      "title": "useStockStream 新增的 ref 欄位解析零覆蓋",
+      "where": "frontend/src/hooks/useStockStream.ts:156",
+      "claim": "下游的參考價測試全是把 quotes 當 props 直接餵元件,繞過 WS 解析。把該行改成 `ref: null` 全部測試仍綠,而真實效果是盤後永遠顯示 `-`。",
+      "verify": "CONFIRMED(useStockStream.test.ts 的 watchlist_quote 訊息沒有 ref 欄位,全檔無 ref 斷言)",
+      "resolution": "accepted",
+      "fix_applied": "補 hook 層測試:帶 ref 的訊息 → ref 正確;不帶 ref 的舊格式 → 降級 null"
+    },
+    {
+      "id": "F5",
+      "severity": "P1",
+      "lens": "test_coverage",
+      "title": "StockPage 零 PUT 早退(R16 指名的連點兩下場景)沒有回歸測試",
+      "where": "frontend/src/components/stock/StockPage.tsx:44",
+      "claim": "新增的 6 支測試都只點一次。把深度比對拿掉,測試仍全綠 —— 正是 R16 要守的那條不變式沒被守住。",
+      "verify": "CONFIRMED",
+      "resolution": "accepted",
+      "fix_applied": "補「PUT pending 期間重複選同一組 → putBodies 仍只有一筆」測試"
+    },
+    {
+      "id": "F6",
+      "severity": "P2",
+      "lens": "correctness",
+      "title": "Dialog 未分組視圖的『已在此群組』判斷漏掉已屬別組的股票 → 點了無效卻清空搜尋框",
+      "where": "frontend/src/components/stock/WatchlistManagerDialog.tsx:311-332",
+      "claim": "未分組視圖的 rows = ungroupedCodes(wl),不含『在自選但屬別組』的檔。這類檔在建議列顯示為可加入,點下去 addCode 回原物件 → 零 PUT 早退,唯一可見變化是搜尋框被清空 = 看起來成功實際沒事發生。",
+      "verify": "CONFIRMED",
+      "resolution": "accepted",
+      "fix_applied": "未分組視圖改用 `wl.codes.includes` 判定停用,文案改「已在自選」"
+    },
+    {
+      "id": "F7",
+      "severity": "P2",
+      "lens": "correctness",
+      "title": "_handle_no_data 改走共用 builder 後不再清空舊價格(未登記的契約變更)",
+      "where": "copycat/server/stock_engine.py:299-302, 423-448",
+      "claim": "舊碼硬編 p/chg_pct/vol = None;新碼一律取 state.last。現況前端先判 no_data 所以不顯示錯價,但訊息本身變成「no_data=True 卻帶最後成交價」,任何沒有同款判斷順序的消費端會誤讀。",
+      "verify": "CONFIRMED(對照 diff 的舊 dict 與新 _quote_payload)",
+      "resolution": "accepted",
+      "fix_applied": "_quote_payload 對 no_data 特判清空 p/chg_pct/vol/ref,恢復舊契約 + 回歸測試"
+    },
+    {
+      "id": "F8",
+      "severity": "P2",
+      "lens": "test_coverage",
+      "title": "Dialog open 轉態重置只驗 selected,renaming / stockInput / localError 三項形同虛設",
+      "where": "frontend/src/components/stock/WatchlistManagerDialog.tsx:70-79",
+      "claim": "刪掉那三行測試仍全綠。使用者關閉再開會看到殘留的改名輸入框 / 搜尋文字 / 舊錯誤文案。",
+      "verify": "CONFIRMED",
+      "resolution": "accepted",
+      "fix_applied": "既有的『關閉再開』測試擴充三條斷言"
+    },
+    {
+      "id": "F9",
+      "severity": "P2",
+      "lens": "test_coverage",
+      "title": "_quote_payload 的 p/ref 互斥只驗了單向",
+      "where": "tests/server/test_stock_engine.py:311-325",
+      "claim": "有成交時 ref 必為 None 這個方向沒有斷言;把 ref 改成無條件回傳 meta.ref_milli 測試仍全綠。",
+      "verify": "CONFIRMED",
+      "resolution": "accepted",
+      "fix_applied": "種子測試補 `assert seeds[0][\"ref\"] is None`"
+    },
+    {
+      "id": "F10",
+      "severity": "P2",
+      "lens": "test_coverage",
+      "title": "trianglePoints 只驗方向與 apex,底邊的精確幾何(±half / height)未鎖",
+      "where": "frontend/src/lib/chart-extreme.test.ts",
+      "claim": "把 half 或 height 改壞(三角變歪斜 / 過高)測試仍全綠。",
+      "verify": "CONFIRMED",
+      "resolution": "accepted",
+      "fix_applied": "補完整 points 字串的精確斷言"
+    },
+    {
+      "id": "F11",
+      "severity": "P2",
+      "lens": "test_coverage",
+      "title": "CandleChart 的 highMark/lowMark useMemo 穩定性沒有測試(拿掉 useMemo 不會紅)",
+      "where": "frontend/src/components/stock/CandleChart.tsx:503-511",
+      "claim": "memo 是否被打穿只靠註解自律。",
+      "verify": "CONFIRMED(claim 屬實)",
+      "resolution": "rejected_with_reason",
+      "reason": "本 repo 對「memo 是否被打穿」**全域零測試 pattern**(StockIntradayChart 的 ChartStatic / EnergySub、CandleChart 的 ChartStatic 同樣零覆蓋,W-3 一直是靠 code review 守)。只為本輪新增的兩個 props 發明一套 render-count 測試基建,等於在這一輪引入一個沒有先例、之後沒人維護的測試風格,而且它守的是效能不是正確性。改動本身已依既有慣例(props 純量 / useMemo + 註解)落實。→ 寫進 docs/next-time.md 作為「memo 覆蓋 pattern」的獨立議題。"
+    }
+  ]
+}

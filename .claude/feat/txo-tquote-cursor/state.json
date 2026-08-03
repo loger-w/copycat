@@ -1,0 +1,28 @@
+{
+  "slug": "txo-tquote-cursor",
+  "start_sha": "48f5892b48d5751218d1c05f9e6108dbae005e2a",
+  "branch": "feat/txo-tquote-cursor",
+  "worktree_path": null,
+  "current_phase": "done",
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 8.5],
+  "scope": "L",
+  "phase_2_mode": "condensed",
+  "phase_3_impl_mode": "[auto-default] main agent TDD(前後端契約串連,檔案非獨立)",
+  "pending_review_rounds": { "phase_1": 0, "phase_2": 0, "phase_4": 0 },
+  "blockers": [],
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-07-18T21:10:00+08:00",
+  "phase_8_5": "skill frontend-conventions +2 條(twMerge conflict group / React leave 事件驗證法)、memory txo-live-pnl-shipped 翻新(GC)、feat-improvements.md +2 條(P1 跨輪指示遺失 / P2 ReportFindings 誤用)、meta-review 檢查:未結 5 條無聚集",
+  "project_shape": "python-backend + react-frontend",
+  "last_commit_sha": "9a231c2269dcce75d9b915b94ee9809cf6a570e3",
+  "final_merge_sha": "9a231c2269dcce75d9b915b94ee9809cf6a570e3 (offline fallback ff-merge to master;無遠端)",
+  "closeout_review": "closeout-review.json(增量 1 P1 accepted 已修)",
+  "self_review_head": "284977b8492a1af1059aaa2351f1377a36920fb6",
+  "artifact_commit": "skipped (.claude/ gitignored,2026-07-11 專案前例)",
+  "sc_cycle_counts": {
+    "_unscoped": { "phase_1": 0, "phase_2": 0, "phase_3": 0, "phase_4": 0, "phase_5": 0, "phase_6": 0, "phase_7": 0, "total": 0 }
+  },
+  "paused": null,
+  "auto_mode": { "exit_condition": "Phase 8.5 完成", "source": "/auto 2026-07-18, 規格 user 拍板於 prompt" }
+}

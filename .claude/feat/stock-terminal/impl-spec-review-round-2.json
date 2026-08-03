@@ -1,0 +1,11 @@
+{
+  "round": 2,
+  "reviewer": "impl-spec-reviewer",
+  "verdict": "0 P0 / 0 P1 / 3 P2 — 退出;round 1 全 7 條核實閉合",
+  "findings": [
+    {"id": "R2-1", "severity": "P2", "summary": "backfill worker queue 層歸屬 source vs engine 未定案", "resolution": "accepted — PLAN 明定 engine 持有 worker queue 與 guard,source 只提供同步 backfill()"},
+    {"id": "R2-2", "severity": "P2", "summary": "status 前端處理無測試", "resolution": "accepted — §11 補 status down/up 測試"},
+    {"id": "R2-3", "severity": "P2", "summary": "lib/stock-accum.ts 不在 design 檔案清單", "resolution": "accepted — design §3 補一行"}
+  ],
+  "p2_summary": "全部一行閉合後進 Phase 3"
+}

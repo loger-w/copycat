@@ -1,0 +1,112 @@
+{
+  "round": 1,
+  "phase": "/mod Phase 5 自評",
+  "tier": "medium",
+  "diff": ".claude/mod/stock-ui-round4/review-diff.txt",
+  "diff_base": "cb9b43b",
+  "lenses": [
+    { "name": "whitelist-regression", "model": "sonnet", "findings": 0 },
+    { "name": "correctness-edge-case", "model": "sonnet", "findings": 4 },
+    { "name": "test-coverage", "model": "sonnet", "findings": 9, "note": "82 tool calls / 20 分鐘;自行做了 mutation test。5 條(MC-1/2/3/4 + FG-2)與 correctness lens 及主 agent 的結論撞在一起(獨立佐證),已在 ea673b9/b335ee3 修掉;另 4 條(FG-1/FG-3/MC-5/MC-6)+ 3 條 P2(MC-7/8/9)是它獨有的發現。" }
+  ],
+  "summary": { "P0": 1, "P1": 6, "P2": 5, "accepted": 12, "rejected_with_reason": 0, "needs_more_context": 0 },
+  "focus_b_whitelist": "W-1 ~ W-16 逐條核對,**全數 preserved**。lens 讀完整份 diff + 對 StockIntradayChart.tsx / WatchlistSidebar.tsx 讀全檔補 diff 未涵蓋的周邊 context;user 特別指定查證的 W-1 / W-5 / W-6 / W-8 / W-9 / W-10 / W-11 / W-13 / W-15 皆附證據。W-13 / W-15 對應的 CandleChart.tsx 與 StockChart.tsx 完全未出現在本輪 diff(零改動)。",
+  "findings": [
+    {
+      "id": "SR-0", "severity": "P1", "disposition": "accepted",
+      "source": "main agent(自行 mutation test,非 lens)",
+      "file": "frontend/src/components/stock/WatchlistSidebar.tsx",
+      "claim": "「拖曳中按 Esc → 零 PUT」那支測試是**假綠**:把 `up()` 開頭的 `cancelled` 早退停用成 `if (false && cancelled)` 後,25 條測試全部照樣通過。",
+      "verification": "CONFIRMED(實跑 mutation)。原因:`onKey` 呼叫的 `teardown()` 已把 `pointerup` listener 移除,後續 pointerup 根本進不到 `up` → `cancelled` 在任何路徑下不可達。**反向 mutation**(讓 teardown 不移除 pointerup)則**只有那一支** Esc 測試轉紅 → 該測試驗的是真機制,假綠只在旗標。",
+      "resolution": "移除 `cancelled` 旗標(不可達 = 沒有測試覆蓋的死碼),並在 teardown 註解記下取消的真正機制與這次 mutation 結論,避免下一輪有人「補回防禦」。測試不動 —— 它本來就鎖對了東西。"
+    },
+    {
+      "id": "R4-1", "severity": "P1", "disposition": "accepted",
+      "source": "correctness lens(main agent 亦獨立找到同一條)",
+      "file": "frontend/src/lib/list-drag.ts:78-87 + WatchlistSidebar.tsx:188-198",
+      "claim": "`dropTargetFromPointer` 回的 index 是相對**渲染清單**的插入槽(`zonesNow` 的 count = `codes.length`,不因正在拖曳而扣掉被拖那列),`moveCode` 卻插入到**濾掉該檔之後**的清單 → 往下拖差一格,且靜默 PUT 進後端。",
+      "verification": "CONFIRMED,手算 + python model 雙驗:`[A,B,C,D]` 拖 A 到槽 3 得 `BCDA` 而非 `BCAD`。main agent 另補一層 lens 沒指出的:**該檔已在目標組**時(W-1 一檔多組的既有能力)跨組也中 —— `[A,X,B,C]` 拖 X 到槽 3 得 `ABCX` 而非 `ABXC`。既有測試只覆蓋往上拖與拖到最尾兩個剛好不觸發的 case。",
+      "resolution": "換算收在 `moveCode` 內(唯一同時看得到 `toGroup.codes` 與 `code` 的地方):`at = codes.indexOf(code)`,`at >= 0 && slot > at → slot - 1`。呼叫端的 `slot === at || slot === at + 1` 早退在槽位語意下本來就正確,不動。5 條新測試涵蓋同組上/下拖、拖到最尾、跨組(目標有/沒有該檔)。"
+    },
+    {
+      "id": "R4-2", "severity": "P1", "disposition": "accepted",
+      "source": "correctness lens",
+      "file": "frontend/src/hooks/useChartToggles.ts:33-52",
+      "claim": "`load()` 的 try/catch 沒包住一次性升級分支裡的 `persist(upgraded)`。那是**本輪新增的寫入路徑**(舊 `load()` 只讀不寫),而 `v ?? 1 < 2` 對**所有既有使用者**第一次載入恆為真 → setItem 在 Safari 私密視窗 / storage 被政策鎖時拋 `QuotaExceededError` → `useState(load)` 的 initializer 拋錯 → 圖表元件首次 render 就掛(白畫面),且之後每次按 toggle 會再炸。",
+      "verification": "CONFIRMED(讀 code:`persist` 呼叫確實在 try 之外;`set()` 也走同一個 persist)。",
+      "resolution": "`persist` 內的 setItem 包 try/catch 吞掉寫入失敗,記憶體狀態照常生效。新測試以 `vi.spyOn(localStorage, 'setItem')` 拋 DOMException 驗「升級值仍生效 + set 不炸」。"
+    },
+    {
+      "id": "R4-3", "severity": "P2", "disposition": "accepted",
+      "source": "correctness lens",
+      "file": "frontend/src/hooks/useChartToggles.ts:42",
+      "claim": "`JSON.parse(\"null\")` 成功回 `null`(不拋),而 `const { v, ...flags } = saved` 在 try 之外 → 對 null 解構是 TypeError,同樣炸掉 initializer。",
+      "verification": "CONFIRMED。",
+      "resolution": "在 try 內對 parse 結果做 `null / typeof !== object / Array.isArray` 檢查,三種都回 DEFAULTS。新增兩支測試(`null` / 陣列 / 字串)。"
+    },
+    {
+      "id": "R4-4", "severity": "P2", "disposition": "accepted",
+      "source": "correctness lens",
+      "file": "frontend/src/lib/stock-intraday-svg.ts:39-48,207-216",
+      "claim": "`width <= Y_AXIS_W`(46)時 `plotWidth` 被 clamp 成 1,`minuteToX` 最大回 47 > width,而 `minuteOf` 的上界用 `size.width` 擋 → 兩支 export 的公開純函數不再互逆,違反本檔明文強調的不變量。現行唯一呼叫端寫死 800 不會踩到。",
+      "verification": "CONFIRMED(算術)。屬 latent:UI 現在不觸發,但公開純函數的不變量該自洽。",
+      "resolution": "`minuteOf` 上界改 `Y_AXIS_W + plotWidth(size.width)` —— 正常寬度數值上完全等價,退化寬度才與 `minuteToX` 一致。新測試在 `width === Y_AXIS_W` 驗往返。"
+    }
+  ],
+  "coverage_lens_findings": [
+    {
+      "id": "FG-3", "severity": "P0", "kind": "false_green", "disposition": "accepted",
+      "file": "tests/test_stock_names.py",
+      "claim": "`test_too_few_raises_and_keeps_old_file` 名稱寫「下界不足」,實際從未到達 `_MIN_TOTAL` —— FIXTURE_HTML 只有 2 列權證,先撞權證守門就拋了 → **總筆數下界那條零覆蓋**。",
+      "verification": "CONFIRMED,主 agent 直接跑 refresh 印出訊息複驗:兩支守門測試都回「權證段只剔除 N 列(< 5000)」,同源不同 N。lens 另用 `_MIN_TOTAL = 0` monkeypatch 證明停用下界後那支仍綠。",
+      "resolution": "抽 `_build_html(warrant_rows, stock_rows)` 讓三條守門可分別觸發(權證 5001 過關 + 股票 600 過關 + 總數 600 不過);**每支守門測試都改成斷言錯誤訊息**(`match=r\"\\[1800, 6000\\]\"` / `match=\"權證段\"` / `match=\"「股票」段\"`),否則三支可以全部撞同一條而名稱看起來都對。順帶補「股票段收不到」的專屬測試。"
+    },
+    {
+      "id": "FG-1", "severity": "P1", "kind": "false_green", "disposition": "accepted",
+      "file": "frontend/src/components/stock/WatchlistSidebar.test.tsx",
+      "claim": "「拖到側欄外放開 → 零 PUT」用 clientX=900,那個 x 同時超出真實 bounds(right=240)與 asideRef 沒接上時的退化 bounds(right=0)→ 測不出 bounds 是否真來自 aside rect。",
+      "verification": "CONFIRMED(lens 把 bounds 寫死 {0,0} 後該支仍綠)。",
+      "resolution": "改成一對邊界測試:250(240+16 寬容內)要成立、270 要作廢。主 agent 複驗 mutation:bounds 寫死 {0,0} 會讓正向拖曳測試紅 → 新測試真的把右邊界釘在 aside 實際寬度上。"
+    },
+    {
+      "id": "MC-5", "severity": "P1", "kind": "missing_coverage", "disposition": "accepted",
+      "file": "copycat/cli.py",
+      "claim": "`refresh-stock-names` 子命令 dispatch 零測試,`tests/test_cli.py` 根本不存在 —— 直接違反 change-spec 🟢-7 明文要求的新測試。",
+      "verification": "CONFIRMED(`ls tests/test_cli.py` 不存在)。",
+      "resolution": "新建 `tests/test_cli.py`:monkeypatch `copycat.stock_names.refresh` 驗 exit 0 + stdout 含檔數 + 守門拋錯會往外傳;順帶鎖同形狀的 `refresh-stkfut-map` 與 `notify-test` 無 webhook 回 1。子命令字串或 import 路徑打錯現在會被抓到。"
+    },
+    {
+      "id": "MC-6", "severity": "P1", "kind": "missing_coverage", "disposition": "accepted",
+      "file": "frontend/src/components/stock/WatchlistSidebar.tsx",
+      "claim": "`addTo` 的「該組已有該檔 → 不動作」早退零覆蓋(停用後 25 條全綠)→ 重複 code 會被送進 PUT body。",
+      "verification": "CONFIRMED(主 agent 複驗:停用該早退後,新加的那支測試是唯一轉紅的)。",
+      "resolution": "加「該組已有的股票再加一次 → 零 PUT」測試。"
+    },
+    {
+      "id": "MC-7", "severity": "P2", "kind": "missing_coverage", "disposition": "accepted",
+      "claim": "拖進**折疊中**的群組只有純函數層(合成 DropZone)驗過,元件層 `collapsed.has(name) || list === undefined` → `listTop = box.bottom` 的接線沒驗過。",
+      "resolution": "加元件層測試:先折疊「觀察」→ 拖 5483 進去 → PUT append 到該組尾端。"
+    },
+    {
+      "id": "MC-8", "severity": "P2", "kind": "missing_coverage", "disposition": "accepted",
+      "claim": "搜尋框自己的 `Escape`(與拖曳取消的 window keydown 是兩個不同 handler)零覆蓋。",
+      "resolution": "加「搜尋框按 Esc → 收起輸入框且零 PUT」測試。"
+    },
+    {
+      "id": "MC-9", "severity": "P2", "kind": "missing_coverage", "disposition": "accepted",
+      "claim": "跨市場同號取先出現者(`merged.setdefault`)只存在註解裡 —— 三支 refresh 測試都餵同一份 HTML 給兩個 URL,永遠碰不到衝突。",
+      "resolution": "加測試:兩個 URL 餵不同 payload,同號不同名 → 斷言保留上市(第一個 URL)那份。"
+    }
+  ],
+  "p2_aggregate": "correctness lens 明確回報「未發現具體反例」的面:stock-search 的 else-if 分支 / limit / 排序 / 特殊字元;stock_names.py 的段落狀態機、refresh 守門順序、setdefault 合併、load_names 例外集合;WatchlistSidebar 的 sectionRefs/listRefs 清理、adding/input 切組殘留、suggestions[0] 資料競態。無風格類 P2 需彙總。",
+  "fix_commits": ["ea673b9(red)", "b335ee3(green,四個真 bug + 移除不可達旗標)", "b67565e(覆蓋缺口 + 守門假綠)"],
+  "post_fix_gates": {
+    "backend": "1293 passed, 1 skipped",
+    "frontend": "58 files / 600 tests passed",
+    "ruff": "All checks passed",
+    "pyright": "0 errors",
+    "tsc": "exit 0",
+    "eslint": "exit 0",
+    "check_feat_tags": "PASS"
+  }
+}

@@ -1,0 +1,3479 @@
+﻿diff --git a/CLAUDE.md b/CLAUDE.md
+index 252b547..f0d9614 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -277,7 +277,6 @@ WebSocket / 即時 Stream 紀律:
+ - **同 symbol 的歷史一律從「持有該 symbol REALTIME 訂閱的那條 session」問(2026-07-30 升為通則)**:先前只記了台指 `TC.F.TWF.TXF.HOT` 一例(`river_backfill` 檔頭)。加權 `IX0001` 同理 —— 它的 REALTIME 訂閱與當日 1K 回補都在 **index session**(`app.py` `_default_index_source()` 是獨立 session),從個股 session 問同一檔有把推播搶走的風險,而失效樣態是「訂閱成功但零推播」零錯誤訊號:右上角加權、大盤分時線、`/ws/index` 的 `last_minute`、watchdog stale 會同時安靜失效。新增任何歷史取用點前先問「這個 symbol 的 REALTIME 訂閱在誰手上」。(Trigger:新增任何 SubHistory 取用點)
+ - **群益 SKCOM 關鍵事實(2026-07-28,capital-order;詳 docs/research/2026-07-28-skcom-typelib.md)**:(a) 期權下單共用 `FUTUREORDER` struct(`SendFutureOrder`/`SendOptionOrder` 同簽名,無 OPTIONORDER);刪改減共用證券 BySeqNo 家族(帳號換期貨戶)。(b) **test 沙盒(SetAuthority(2))此帳號未開通**,登入恆 1097 — 送單面驗證只能 FakeCom 測試 + prod 安全首單(遠價 1 單位 → APP 核對 → 刪單)。(c) nQty:證券=張(treading-king prod 實戰實證)/期貨=口。(d) 期交所市價單限 IOC/FOK(ROD+市價會退單);市價 literal M 未實測,期貨平倉走限價貼漲跌停+IOC。(e) OnAccount/OnOpenInterest 欄序為未實測假定,首次 prod 登入要核對。(Trigger:碰 copycat/capital、群益送單欄位、或評估群益驗證方式)
+ - **worktree 內的 gitignored 依賴要「複製」不要「junction」**(2026-07-30 真踩到):`frontend/node_modules` 與 `spikes/TCPY` 都被 gitignore,worktree 一開出來就缺(前者前端跑不動、後者 `test_tc4.py` / `test_tc4_trade.py` 直接紅)。用 Windows junction 連回主 tree 雖然當下可用,但**收尾 `git worktree remove --force` 會沿著 junction 把主 tree 的目標內容一起刪掉** —— 實測主 tree 的 `node_modules`(195 項)與 `spikes/TCPY`(TC4 官方 wrapper + 2026-07-06 的 Disconnect 修補,且**不在版控**)雙雙被清空。復原路徑:`npm ci` 重建前端依賴;TCPY 從另一個 worktree / `C:\side-project\neigui\backend\data\research\five-tigers\tcoreapi_mq.py`(同 hash)/ `C:\Users\USER\Downloads\tc4_python_api_2407\` 複製回來。**正確做法 = `Copy-Item -Recurse`**(TCPY 才 22 MB;node_modules 走 `npm ci`),或先 `Remove-Item` junction 本身再 remove worktree。(Trigger:開 worktree 做前端/TC4 相關工作,或收尾清 worktree 前)
+-- **`git worktree remove` 會把 `.claude/mod/<slug>/` 的 artifact 一起刪掉(2026-07-30 真踩到)**:`.claude/` 是 gitignored,worktree 內產出的 `change-spec.md` / `current-state.md` / review JSON **從未進版控**,收尾移除 worktree 時連同消失 —— 其他每一輪都留在主 tree,只有這輪事後才發現缺口(靠對話記錄重建,逐字排版已失真)。**在 worktree 做 /feat /mod 時,artifact 一開始就寫到主 tree 的 `.claude/<flow>/<slug>/`**(reviewer dispatch 吃絕對路徑,寫哪邊都一樣),或至少在 `git worktree remove` 前 `Copy-Item -Recurse` 出來。同理適用任何 gitignored 的產出(截圖若放 `docs/specs/` 有版控則安全)。(Trigger:在 worktree 跑流程 command、或收尾清 worktree 前)
+ - **worktree 內直跑腳本會靜默 import 到主 tree 的 code**(2026-07-30 真踩到):venv 裝的是 editable copycat(`__editable__.copycat-0.1.0.pth` 釘死 `C:\side-project\copycat`)。`pytest` 不受影響(pyproject `pythonpath=["."]` 讓 cwd 優先)、`python -c` 也不受影響(`sys.path[0]` = cwd);但 **`python <dir>/script.py` 的 `sys.path[0]` 是「腳本所在目錄」**,worktree 內的 probe / repro 腳本因此 import 到**主 tree** 的 `copycat`。失效樣態極安靜:腳本正常跑完、只是驗的是別份 code —— 本輪據此一度誤判「修好的 code 沒生效」。worktree 內任何直跑腳本開頭都要 `sys.path.insert(0, <repo root>)`。另:`git worktree remove` 若有 process 還開著 worktree 內的檔案(例:server stdout 導向那裡)會以 `Invalid argument` 失敗,且**會先刪掉 `.git/worktrees/<name>` 中繼資料再失敗** → 收尾要 `git worktree prune` + 手動 rmdir。(Trigger:在 worktree 寫直跑腳本、或收尾清 worktree)
+ - **server 不載 dotenv 檔**:runtime 讀設定一律「`name in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 repo root .env」逐 key fallback(capital/factory 慣例;cli/notify 舊慣例是「僅未設才 fallback」,下單開關類安全 key 必須用新語意)。讀 .env 用 `utf-8-sig` + never-raise(Windows BOM 會讓首 key 靜默失效 — 真踩過)。測試側 `tests/conftest.py` 全域中和 dotenv + delenv CAPITAL_*(否則開發機真憑證流入測試,最壞載真 SKCOM DLL → segfault,實測過)。(2026-07-28,Trigger:新增任何 env 設定讀取或 env 相依測試)
+ 
+diff --git a/copycat/live/stock_state.py b/copycat/live/stock_state.py
+index 147f669..59e8e35 100644
+--- a/copycat/live/stock_state.py
++++ b/copycat/live/stock_state.py
+@@ -23,6 +23,12 @@ class MinuteAgg:
+     inner: int = 0
+     outer: int = 0
+     unch: int = 0
++    # 分鐘內高低(round4 項 1)。分時圖要把當日高低標在「摸到的那一分鐘」上,而
++    # top-level high/low 只有值沒有時間歸屬 —— 前端靠 `minute.h == accum.high` 等值反查
++    # 定位,那條等式由 `_apply` 同源維護建構保證(day high = max(minute highs))。
++    # **預設必須是 None 不是 0**:`min(0, price)` 會把最低價永久卡在 0,而且是靜默錯值。
++    high_milli: int | None = None
++    low_milli: int | None = None
+ 
+ 
+ @dataclass
+@@ -114,6 +120,13 @@ class StockDayState:
+         minute_key = int(tick.time[:2]) * 60 + int(tick.time[3:5])
+         agg = self.minutes.setdefault(minute_key, MinuteAgg())
+         agg.close_milli = tick.price_milli
++        # 與 top-level high/low 同一批維護 → day high == max(minute highs) 由建構保證
++        agg.high_milli = (
++            tick.price_milli if agg.high_milli is None else max(agg.high_milli, tick.price_milli)
++        )
++        agg.low_milli = (
++            tick.price_milli if agg.low_milli is None else min(agg.low_milli, tick.price_milli)
++        )
+         agg.volume += tick.qty
+         if tick.side == "outer":
+             agg.outer += tick.qty
+@@ -147,6 +160,10 @@ class StockDayState:
+                     "i": m.inner,
+                     "o": m.outer,
+                     "u": m.unch,
++                    # additive(round4 項 1):舊前端忽略未知 key;新前端缺 key 時填 null
++                    # 而不是拿 c 頂替 —— 頂替會讓等值反查命中錯的分鐘 = 靜默標錯位置
++                    "h": m.high_milli,
++                    "l": m.low_milli,
+                 }
+                 for k, m in sorted(self.minutes.items())
+             },
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index b933c2e..aaf68f9 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -142,6 +142,12 @@ class StockEngine:
+             # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
+             added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
+             removed = [c for c in self._watchlist if c not in codes]
++            # **名單先指派再訂閱**(round4 項 4):每個 `await to_thread` 都讓出 loop,而 TC4
++            # 在 SUB 回來後幾乎立刻推第一則 REALTIME。名單留到最後才指派的話,那一則會在
++            # `code not in self._watchlist` 的窗內進 `_handle_quote` → meta 轉態補推被擋掉;
++            # 盤後沒有後續 tick、flush 又只推 dirty,該檔就卡在 `-` 直到使用者重整。
++            # 名單是「意圖」、訂閱是副作用;最終狀態與舊順序等價(舊碼也是不論成敗都指派)。
++            self._watchlist = list(codes)
+             for code in added:
+                 try:
+                     await asyncio.to_thread(self._acquire, code, "watchlist")
+@@ -150,7 +156,11 @@ class StockEngine:
+             for code in removed:
+                 await asyncio.to_thread(self._release, code, "watchlist")
+                 self._no_data.discard(code)
+-            self._watchlist = list(codes)
++            # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
++            # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
++            # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
++            for code in added:
++                self._publish(self._quote_payload(code))
+ 
+     async def set_main(self, code: str) -> None:
+         async with self._pool_lock:  # CR2
+@@ -288,16 +298,8 @@ class StockEngine:
+ 
+     def _handle_no_data(self, code: str) -> None:
+         self._no_data.add(code)
+-        self._publish(
+-            {
+-                "type": "watchlist_quote",
+-                "code": code,
+-                "p": None,
+-                "chg_pct": None,
+-                "vol": None,
+-                "no_data": True,
+-            }
+-        )
++        # 走共用 builder(`no_data` 由 `_no_data` 實況決定,上一行剛加進去)
++        self._publish(self._quote_payload(code))
+ 
+     def _handle_reconnect(self) -> None:
+         """TC4 重連:status 推播 + 主圖自癒重回補(design §2.4)。"""
+@@ -316,7 +318,11 @@ class StockEngine:
+         state = self._states.get(code)
+         if state is None:
+             return
++        # 「無資料」復原:**命中才推**。寫成無條件 discard + publish 會變成每 tick 廣播,
++        # 直接打穿 1s 節流(W-17)。
++        recovered = code in self._no_data
+         self._no_data.discard(code)
++        was_meta_none = state.meta is None
+         state.update_book(book)
+         state.update_meta(meta)
+         if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
+@@ -352,6 +358,12 @@ class StockEngine:
+                     }
+                 )
+             self._dirty_watchlist.add(code)
++        # 轉態補推(round4 項 4):meta 由 None → 有值 = 這一檔第一次拿到參考價;
++        # 「無資料」復原同理。冷門股整天可能只有簿更新、盤後更是零成交,
++        # `_dirty_watchlist` 永遠不會被加進去 → 不補推就永遠是 `-`。
++        # 放在 ingest **之後**:同一則若也帶成交,推出去的就是新價而不是空值。
++        if (recovered or was_meta_none) and code in self._watchlist:
++            self._publish(self._quote_payload(code))
+         if code == self._main:
+             self._publish({"type": "book", "code": code, "bids": book.bids, "asks": book.asks})
+ 
+@@ -408,9 +420,47 @@ class StockEngine:
+ 
+     # ---- 廣播 ----
+ 
++    def _quote_payload(self, code: str) -> dict:
++        """`watchlist_quote` 的**唯一** payload builder(round4 項 4)。
++
++        四個產出點(連線種子 / set_watchlist 新增 / 轉態補推 / 1s flush)共用這一份,
++        否則同一個訊息型別會長出多種形狀,而消費端只會在缺欄位那一刻靜默降級。
++
++        尚無成交時參考價走**獨立欄位 `ref`**,絕不塞進 `p` —— 塞進 `p` 會讓新舊 client
++        都把昨收讀成今價。取 `meta.ref_milli` 而不是 `y_close`:`chg_pct` 的分母就是它,
++        除權息日拿昨收顯示、漲幅卻對 ref 算會做出自相矛盾的側欄。
++        """
++        state = self._states.get(code)
++        last = state.last if state is not None else None
++        meta = state.meta if state is not None else None
++        chg_pct: float | None = None
++        if last is not None and meta is not None and meta.ref_milli:
++            chg_pct = round((last.price_milli - meta.ref_milli) / meta.ref_milli * 100, 2)
++        return {
++            "type": "watchlist_quote",
++            "code": code,
++            "p": last.price_milli if last is not None else None,
++            "chg_pct": chg_pct,
++            "vol": last.cum_vol if last is not None else None,
++            "ref": None if last is not None else (meta.ref_milli if meta is not None else None),
++            # `no_data` 讀實況不硬寫 False:否則轉態補推會把「無資料」洗回價格列
++            "no_data": code in self._no_data,
++        }
++
+     def stream(self) -> AsyncGenerator[dict, None]:
+         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
+         self._clients.add(queue)
++        # 連線先送一輪自選種子(round4 項 4)。側欄開頁 / 盤後全是 `-` 的根因是
++        # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
++        # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
++        # 「連線先送快照」的既成慣例一致)。
++        # **不可借用 `_publish`**(那會打到所有 client);同步區間無 await,對 event loop
++        # 原子,不會與其它推播交錯。30 檔對 queue maxsize 安全。
++        for code in self._watchlist:
++            try:
++                queue.put_nowait(self._quote_payload(code))
++            except asyncio.QueueFull:  # pragma: no cover - 種子數遠小於 queue 上限
++                break
+ 
+         async def _gen() -> AsyncGenerator[dict, None]:
+             try:
+@@ -444,21 +494,7 @@ class StockEngine:
+                 state = self._states.get(code)
+                 if state is None or state.last is None:
+                     continue
+-                last = state.last
+-                meta = state.meta
+-                chg_pct: float | None = None
+-                if meta is not None and meta.ref_milli:
+-                    chg_pct = round((last.price_milli - meta.ref_milli) / meta.ref_milli * 100, 2)
+-                self._publish(
+-                    {
+-                        "type": "watchlist_quote",
+-                        "code": code,
+-                        "p": last.price_milli,
+-                        "chg_pct": chg_pct,
+-                        "vol": last.cum_vol,
+-                        "no_data": False,
+-                    }
+-                )
++                self._publish(self._quote_payload(code))
+ 
+ 
+ # 型別匯出(routes 注入用)
+diff --git a/frontend/src/components/stock/CandleChart.test.tsx b/frontend/src/components/stock/CandleChart.test.tsx
+index 12719ce..cf9d6c0 100644
+--- a/frontend/src/components/stock/CandleChart.test.tsx
++++ b/frontend/src/components/stock/CandleChart.test.tsx
+@@ -317,60 +317,153 @@ describe("CandleChart 高度 prop(SC-6 / T-10b)", () => {
+     expect(probe().viewBox).toBe("0 0 1400 578");
+   });
+ });
+-
+-// 🟢 round5 SC-3:視窗高低標(數字與 figcaption 同源 → 縮放後必然同步)
+-describe("CandleChart 視窗高低標", () => {
+-  const capOf = (container: HTMLElement): string =>
+-    container.querySelector("figcaption")!.textContent ?? "";
+-
+-  it("兩條線 + 價位標,數字等於 figcaption 的高 / 低", () => {
+-    const { container } = render(<CandleChart bars={BARS} />);
+-    expect(container.querySelector("[data-testid='window-high']")).toBeTruthy();
+-    expect(container.querySelector("[data-testid='window-low']")).toBeTruthy();
+-    expect(screen.getByTestId("window-high-label").textContent).toBe("118");
+-    expect(screen.getByTestId("window-low-label").textContent).toBe("95");
+-    expect(capOf(container)).toContain("高 118");
+-    expect(capOf(container)).toContain("低 95");
+-  });
+-
+-  it("滾輪縮放改變可視範圍後,價位標與 figcaption 仍相等", () => {
+-    const many = Array.from({ length: 300 }, (_, i) =>
+-      bar(`2026-01-${String((i % 28) + 1).padStart(2, "0")}`,
+-        100_000 + i, 100_100 + i, 99_900 + i, 100_000 + i),
+-    );
+-    const { container } = render(<CandleChart bars={many} initBars={240} />);
+-    const svg = container.querySelector("svg")!;
+-    for (let i = 0; i < 5; i += 1) fireEvent.wheel(svg, { deltaY: -100, clientX: 700 });
+-    const high = screen.getByTestId("window-high-label").textContent!;
+-    const low = screen.getByTestId("window-low-label").textContent!;
+-    expect(capOf(container)).toContain(`高 ${high}`);
+-    expect(capOf(container)).toContain(`低 ${low}`);
+-  });
+-
+-  it("無可視 bar → 不渲染", () => {
+-    const { container } = render(<CandleChart bars={[]} />);
+-    expect(container.querySelector("[data-testid='window-high']")).toBeNull();
++
++// 🟢 round5 SC-3:視窗高低標(數字與 figcaption 同源 → 縮放後必然同步)
++describe("CandleChart 視窗高低標", () => {
++  const capOf = (container: HTMLElement): string =>
++    container.querySelector("figcaption")!.textContent ?? "";
++
++  it("兩條線 + 價位標,數字等於 figcaption 的高 / 低", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    expect(container.querySelector("[data-testid='window-high']")).toBeTruthy();
++    expect(container.querySelector("[data-testid='window-low']")).toBeTruthy();
++    expect(screen.getByTestId("window-high-label").textContent).toBe("118");
++    expect(screen.getByTestId("window-low-label").textContent).toBe("95");
++    expect(capOf(container)).toContain("高 118");
++    expect(capOf(container)).toContain("低 95");
++  });
++
++  it("滾輪縮放改變可視範圍後,價位標與 figcaption 仍相等", () => {
++    const many = Array.from({ length: 300 }, (_, i) =>
++      bar(`2026-01-${String((i % 28) + 1).padStart(2, "0")}`,
++        100_000 + i, 100_100 + i, 99_900 + i, 100_000 + i),
++    );
++    const { container } = render(<CandleChart bars={many} initBars={240} />);
++    const svg = container.querySelector("svg")!;
++    for (let i = 0; i < 5; i += 1) fireEvent.wheel(svg, { deltaY: -100, clientX: 700 });
++    const high = screen.getByTestId("window-high-label").textContent!;
++    const low = screen.getByTestId("window-low-label").textContent!;
++    expect(capOf(container)).toContain(`高 ${high}`);
++    expect(capOf(container)).toContain(`低 ${low}`);
++  });
++
++  it("無可視 bar → 不渲染", () => {
++    const { container } = render(<CandleChart bars={[]} />);
++    expect(container.querySelector("[data-testid='window-high']")).toBeNull();
+     expect(container.querySelector("[data-testid='window-low']")).toBeNull();
+   });
+ });
+ 
+-describe("CandleChart 量副圖(index-board W-1 pin)", () => {
+-  const bars = [
+-    { t: "2026-07-28", o: 100, h: 110, l: 90, c: 105, v: 12 },
+-    { t: "2026-07-29", o: 105, h: 115, l: 100, c: 112, v: 34 },
+-  ];
+-
+-  it("未傳 showVolume → 量柱存在(個股頁既有行為的唯一保護)", () => {
+-    const { container } = render(<CandleChart bars={bars} />);
+-    expect(container.querySelectorAll('rect[class*="fill-bull"], rect[class*="fill-bear"]').length)
+-      .toBeGreaterThan(0);
+-    expect(screen.queryByText("無量資料")).toBeNull();
+-  });
+-
+-  it("showVolume=false → 不畫量柱,改印「無量資料」,資訊列量欄為「—」", () => {
+-    render(<CandleChart bars={bars} showVolume={false} />);
+-    expect(screen.getByText("無量資料")).toBeTruthy();
+-    expect(screen.getByText("—")).toBeTruthy();
+-    expect(screen.queryByText("34")).toBeNull();
+-  });
+-});
++describe("CandleChart 量副圖(index-board W-1 pin)", () => {
++  const bars = [
++    { t: "2026-07-28", o: 100, h: 110, l: 90, c: 105, v: 12 },
++    { t: "2026-07-29", o: 105, h: 115, l: 100, c: 112, v: 34 },
++  ];
++
++  it("未傳 showVolume → 量柱存在(個股頁既有行為的唯一保護)", () => {
++    const { container } = render(<CandleChart bars={bars} />);
++    expect(container.querySelectorAll('rect[class*="fill-bull"], rect[class*="fill-bear"]').length)
++      .toBeGreaterThan(0);
++    expect(screen.queryByText("無量資料")).toBeNull();
++  });
++
++  it("showVolume=false → 不畫量柱,改印「無量資料」,資訊列量欄為「—」", () => {
++    render(<CandleChart bars={bars} showVolume={false} />);
++    expect(screen.getByText("無量資料")).toBeTruthy();
++    expect(screen.getByText("—")).toBeTruthy();
++    expect(screen.queryByText("34")).toBeNull();
++  });
++});
++
++// 🔴 round4 項 1(B-2):視窗高低由橫貫左右的虛線改成標在該根蠟燭上的三角 + 價位文字。
++// 現況零測試覆蓋(grep 全 frontend/src,window-high/low 只出現在元件自身)→ 先寫新版紅測試。
++describe("CandleChart 視窗高低標記(round4 項 1)", () => {
++  function apex(container: HTMLElement, id: string): [number, number] {
++    const pts = container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!;
++    const [x, y] = pts.split(" ")[0]!.split(",").map(Number);
++    return [x!, y!];
++  }
++
++  it("高低各一個三角標記 + 價位文字,文字與底列 figcaption 同值", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    expect(container.querySelector('polygon[data-testid="window-high"]')).toBeTruthy();
++    expect(container.querySelector('polygon[data-testid="window-low"]')).toBeTruthy();
++    // BARS 視窗高 118_000 → "118";低 95_000 → "95"
++    expect(screen.getByTestId("window-high-label").textContent).toBe("118");
++    expect(screen.getByTestId("window-low-label").textContent).toBe("95");
++    expect(screen.getByText("高 118")).toBeTruthy();
++    expect(screen.getByText("低 95")).toBeTruthy();
++  });
++
++  it("不再有橫貫左右的高低虛線(4 3 / 0.8)", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    const dashed = [...container.querySelectorAll("line")].filter(
++      (l) => l.getAttribute("stroke-dasharray") === "4 3",
++    );
++    expect(dashed.length).toBe(0);
++  });
++
++  it("標記落在造成該高 / 低的那一根蠟燭上(取最早出現的)", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    const bodies = [...container.querySelectorAll("[data-testid='candle-body']")];
++    const cxOf = (i: number) => {
++      const el = bodies[i]!;
++      return Number(el.getAttribute("x")) + Number(el.getAttribute("width")) / 2;
++    };
++    expect(apex(container, "window-high")[0]).toBeCloseTo(cxOf(2), 5); // 118_000 在第 3 根
++    expect(apex(container, "window-low")[0]).toBeCloseTo(cxOf(0), 5); // 95_000 在第 1 根
++  });
++
++  it("三角 apex 貼在影線端點(高 = 該根 wickTop、低 = 該根 wickBottom)", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    const wicks = [...container.querySelectorAll("svg line")].filter(
++      (l) => l.getAttribute("stroke-dasharray") === null && l.getAttribute("stroke-width") === "1",
++    );
++    const highY = apex(container, "window-high")[1];
++    const lowY = apex(container, "window-low")[1];
++    // 最高點的 y 是全圖最小 y、最低點是最大(價格區內)
++    for (const w of wicks) expect(Number(w.getAttribute("y1"))).toBeGreaterThanOrEqual(highY - 0.01);
++    for (const w of wicks) expect(Number(w.getAttribute("y2"))).toBeLessThanOrEqual(lowY + 0.01);
++  });
++
++  it("三角三個頂點都落在 viewBox 內(body 朝圖內,不被裁)", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    for (const id of ["window-high", "window-low"]) {
++      const pts = container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!;
++      for (const p of pts.split(" ")) {
++        const [x, y] = p.split(",").map(Number);
++        expect(x!).toBeGreaterThanOrEqual(0);
++        expect(y!).toBeGreaterThanOrEqual(0);
++        expect(y!).toBeLessThanOrEqual(578);
++      }
++    }
++  });
++
++  it("常態(BB 關閉):高標文字翻到三角下方、低標文字翻到三角上方", () => {
++    // toY(windowHigh) === PAD_Y === 6 → 文字畫在上方會被裁;
++    // toY(windowLow) 貼價格區底 → 文字畫在下方會落進成交量區
++    const { container } = render(<CandleChart bars={BARS} />);
++    expect(Number(screen.getByTestId("window-high-label").getAttribute("y"))).toBeGreaterThan(
++      apex(container, "window-high")[1],
++    );
++    expect(Number(screen.getByTestId("window-low-label").getAttribute("y"))).toBeLessThan(
++      apex(container, "window-low")[1],
++    );
++  });
++
++  it("平移視窗後標記跟著換根(視窗高低是「當下視野」不是全序列)", () => {
++    const many = Array.from({ length: 40 }, (_, i) =>
++      bar(`2026-01-${String((i % 28) + 1).padStart(2, "0")}`, 100_000, 100_000 + i * 100, 100_000 - i * 100, 100_000),
++    );
++    const { container, rerender } = render(<CandleChart bars={many} initBars={10} />);
++    // 初始視窗 = 最後 10 根 → 高 = 第 40 根的 h = 103_900
++    expect(screen.getByTestId("window-high-label").textContent).toBe("103.9");
++    rerender(<CandleChart key="x" bars={many.slice(0, 10)} initBars={10} />);
++    cleanup();
++    const r2 = render(<CandleChart bars={many.slice(0, 10)} initBars={10} />);
++    // 換成前 10 根 → 高 = 第 10 根的 h = 100_900
++    expect(screen.getByTestId("window-high-label").textContent).toBe("100.9");
++    expect(r2.container.querySelector('polygon[data-testid="window-high"]')).toBeTruthy();
++    expect(container).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index 6a07e4e..2d70d96 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -15,6 +15,12 @@ import {
+   type Viewport,
+ } from "@/lib/candle-viewport";
+ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
++import {
++  CANDLE_MARK,
++  clampLabelX,
++  markLabelY,
++  trianglePoints,
++} from "@/lib/chart-extreme";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+@@ -64,6 +70,17 @@ function pts(line: { x: number; y: number }[]): string {
+ /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
+ const EMPTY_LINE: { x: number; y: number }[] = [];
+ 
++/** 視窗高低標記(round4 項 1)。`cx` = 造成該極值那根蠟燭的中心 x。 */
++interface WindowMark {
++  cx: number;
++  y: number;
++  text: string;
++}
++
++/** 極值文字的 baseline 上界(字級 0.625rem ≈ 10px,再留 1px)與左右夾制留邊 */
++const MARK_LABEL_TOP = 11;
++const MARK_LABEL_PAD_X = 20;
++
+ /** 值序列 → 折線點。**必須在元件外**且結果包 useMemo:
+  *  hover 每個 mousemove 都會 re-render 父層,若線的 array identity 每次都變,
+  *  memo 過的 ChartStatic 仍會每次重建(最多 700 根蠟燭 × 3 個節點)。 */
+@@ -88,10 +105,8 @@ const ChartStatic = memo(function ChartStatic({
+   ma20Line,
+   bbUpperLine,
+   bbLowerLine,
+-  highY,
+-  lowY,
+-  highText,
+-  lowText,
++  highMark,
++  lowMark,
+   showVolume,
+ }: {
+   g: CandleGeometry;
+@@ -101,45 +116,49 @@ const ChartStatic = memo(function ChartStatic({
+   ma20Line: { x: number; y: number }[];
+   bbUpperLine: { x: number; y: number }[];
+   bbLowerLine: { x: number; y: number }[];
+-  /** 可視視窗的最高 / 最低與其 y;**文字與 figcaption 是同一個字串**(SC-3 由建構保證) */
+-  highY: number | null;
+-  lowY: number | null;
+-  highText: string;
+-  lowText: string;
++  /** 可視視窗的最高 / 最低標記(落在造成該極值的那根蠟燭上)。
++   *  **文字與 figcaption 是同一個字串**(SC-3 由建構保證);
++   *  物件必須由呼叫端 useMemo 穩定 identity,否則打穿本 memo(W-3) */
++  highMark: WindowMark | null;
++  lowMark: WindowMark | null;
+   /** false = 該資料源沒有量(如櫃買 MIS 取樣合成)→ 量區改印說明,不畫一排 0 柱 */
+   showVolume: boolean;
+ }) {
+   return (
+     <g>
+-      {/* 視窗高低(SC-3)。與江波圖當日高低同款樣式(4 3 / 0.8),
+-          與 y 軸格線(2 3 / 0.5)可區分 */}
++      {/* 視窗高低(round4 項 1)。橫貫左右的虛線已移除 —— 它把整條價位軸都染上
++          「這個視窗的高」這個語意,而使用者要的只是「最高那根在哪、多少錢」。
++          改成標在造成該極值的那根蠟燭影線端點上的三角 + 就地價位文字(與分時圖同語言,
++          幾何規則共用 lib/chart-extreme,尺寸依 viewBox 各帶一份)。 */}
+       {([
+-        ["window-high", highY, highText],
+-        ["window-low", lowY, lowText],
+-      ] as const).map(([id, y, text]) =>
+-        y === null ? null : (
++        ["window-high", highMark, "up"],
++        ["window-low", lowMark, "down"],
++      ] as const).map(([id, mark, dir]) =>
++        mark === null ? null : (
+           <g key={id}>
+-            <line
++            <polygon
+               data-testid={id}
+-              x1={0}
+-              x2={w}
+-              y1={y}
+-              y2={y}
+-              className="stroke-ink-muted"
+-              strokeDasharray="4 3"
+-              strokeWidth={0.8}
++              points={trianglePoints(mark.cx, mark.y, dir, CANDLE_MARK)}
++              className="fill-ink-muted stroke-surface"
++              strokeWidth={1}
++              paintOrder="stroke"
+             />
+             <text
+               data-testid={`${id}-label`}
+-              x={w - 2}
+-              y={y - 2}
+-              textAnchor="end"
++              x={clampLabelX(mark.cx, MARK_LABEL_PAD_X, w - MARK_LABEL_PAD_X)}
++              y={markLabelY(mark.y, dir, CANDLE_MARK, {
++                top: MARK_LABEL_TOP,
++                // 文字翻面以**價格區**底為界,不是整張圖底 —— 用圖底的話低標文字永遠
++                // 不會翻面、直接落進成交量柱上(常態路徑)
++                bottom: g.priceBottom - 2,
++              })}
++              textAnchor="middle"
+               className="fill-ink-muted stroke-surface"
+               strokeWidth={2}
+               paintOrder="stroke"
+               fontSize="0.625rem"
+             >
+-              {text}
++              {mark.text}
+             </text>
+           </g>
+         ),
+@@ -479,6 +498,18 @@ export function CandleChart({
+   // 不靠兩處各自格式化後恰好一樣
+   const highText = fmt(windowHigh);
+   const lowText = fmt(windowLow);
++  // 標記落在造成該極值的那根蠟燭上(**取最早出現的** —— 先到者才是「當時創的高」)。
++  // useMemo:物件 identity 每次 render 變會打穿 ChartStatic 的 memo(W-3)。
++  const highMark = useMemo<WindowMark | null>(() => {
++    if (shown.length === 0) return null;
++    const cx = g.candles[shown.findIndex((b) => b.h === windowHigh)]?.cx;
++    return cx === undefined ? null : { cx, y: g.toY(windowHigh), text: highText };
++  }, [shown, g, windowHigh, highText]);
++  const lowMark = useMemo<WindowMark | null>(() => {
++    if (shown.length === 0) return null;
++    const cx = g.candles[shown.findIndex((b) => b.l === windowLow)]?.cx;
++    return cx === undefined ? null : { cx, y: g.toY(windowLow), text: lowText };
++  }, [shown, g, windowLow, lowText]);
+   const windowPct =
+     shown.length > 1 && shown[0]!.c > 0
+       ? ((shown[shown.length - 1]!.c - shown[0]!.c) / shown[0]!.c) * 100
+@@ -535,10 +566,8 @@ export function CandleChart({
+             ma20Line={ma20Line}
+             bbUpperLine={bbUpperLine}
+             bbLowerLine={bbLowerLine}
+-            highY={shown.length > 0 ? g.toY(windowHigh) : null}
+-            lowY={shown.length > 0 ? g.toY(windowLow) : null}
+-            highText={highText}
+-            lowText={lowText}
++            highMark={highMark}
++            lowMark={lowMark}
+             showVolume={showVolume}
+           />
+           <XAxisLabels g={g} h={dimH} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index 4372f1f..61a19df 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -53,8 +53,10 @@ const ACCUM = fromSnapshot({
+   cum_inner: 2,
+   cum_outer: 10,
+   minutes: {
+-    "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 },
+-    "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0 },
++    // round4 項 1:per-minute h/l 是當日高低標記的定位依據 —— 標記畫在「摸到極值的
++    // 那一分鐘」上,而 541 的高(2_395_000)高於任何一分鐘的收盤,正是「摸到就算」的樣態
++    "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 },
++    "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_385_000 },
+   },
+   ticks: [],
+   book: null,
+@@ -234,7 +236,7 @@ describe("StockIntradayChart", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const nine = screen.getByText("09:00", { selector: "text" });
+     expect(nine.getAttribute("class")).toContain("fill-time");
+-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 100 });
+     expect(
+       container.querySelector("[data-testid='time-tag-text']")!.getAttribute("class"),
+     ).toContain("fill-time");
+@@ -271,9 +273,9 @@ describe("StockIntradayChart", () => {
+     expect(readout().textContent).toContain("09:02"); // 最新分鐘 = 542
+     expect(readout().getAttribute("data-hovering")).toBe("false");
+     const svg = container.querySelector("svg")!;
+-    // 🔴 round4 項 3:繪圖區起於左緣價位帶右側(Y_AXIS_W=46),541 分在
+-    // x = 46 + 1/270*(800-46) ≈ 48.8px;舊的 x≈3 現在落在價位帶內 → 不對應任何分鐘
+-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
++    // 🔴 round4 項 3 / 項 6:繪圖區起於左緣價位帶右側(Y_AXIS_W=36),541 分在
++    // x = 36 + 1/270*(800-36-40) ≈ 38.7px;x≈3 落在價位帶內 → 不對應任何分鐘
++    fireEvent.mouseMove(svg, { clientX: 39, clientY: 100 });
+     expect(readout().textContent).toContain("09:01");
+     expect(readout().getAttribute("data-hovering")).toBe("true");
+     fireEvent.mouseLeave(svg);
+@@ -284,7 +286,7 @@ describe("StockIntradayChart", () => {
+   it("資訊列含每分鐘內外盤(本專案核心訊號,原 tooltip 沒顯示)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const svg = container.querySelector("svg")!;
+-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 100 });
++    fireEvent.mouseMove(svg, { clientX: 39, clientY: 100 });
+     const text = screen.getByTestId("chart-readout").textContent ?? "";
+     expect(text).toContain("外 10");
+     expect(text).toContain("內 0");
+@@ -293,9 +295,9 @@ describe("StockIntradayChart", () => {
+   it("十字線:垂直線 snap 分鐘、水平線跟滑鼠 y(不再鎖該分鐘收盤價)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     const svg = container.querySelector("svg")!;
+-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 120 });
++    fireEvent.mouseMove(svg, { clientX: 39, clientY: 120 });
+     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(120);
+-    fireEvent.mouseMove(svg, { clientX: 49, clientY: 60 });
++    fireEvent.mouseMove(svg, { clientX: 39, clientY: 60 });
+     expect(Number(container.querySelector("[data-testid='crosshair-h']")!.getAttribute("y1"))).toBe(60);
+     expect(container.querySelector("[data-testid='crosshair-v']")).toBeTruthy();
+     fireEvent.mouseLeave(svg);
+@@ -316,7 +318,7 @@ describe("StockIntradayChart", () => {
+   // 🔴 round3 SC-1:hover 右緣 % 標整個移除(左緣價位標與底部時間標照舊)
+   it("hover 右緣不再浮出 % 標,左價標與時間標仍在(SC-1)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 100 });
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 100 });
+     expect(container.querySelector("[data-testid='pct-tag']")).toBeNull();
+     expect(container.querySelector("[data-testid='pct-tag-text']")).toBeNull();
+     expect(container.querySelector("[data-testid='price-tag-text']")).toBeTruthy();
+@@ -402,7 +404,7 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
+ 
+   it("項 3:hover 水平線起於價位帶右緣(不穿過價位文字)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 120 });
+     const h = container.querySelector("[data-testid='crosshair-h']")!;
+     expect(Number(h.getAttribute("x1"))).toBe(Y_AXIS_W);
+   });
+@@ -444,14 +446,134 @@ describe("江波圖左緣價位帶與量刻度(round4 項 3/4/5)", () => {
+   });
+ 
+   // review R15b:兩份 46 靠註解維持相等 → 任一方改動就讓 hover 價位標壓線復發
+-  it("hover 價位標寬度恰等於價位帶寬度(不得各寫一份 46)", () => {
++  it("hover 價位標寬度恰等於價位帶寬度(不得各寫一份字面值)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+-    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 49, clientY: 120 });
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 120 });
+     const tag = container.querySelector('[data-testid="price-tag"]')!;
+     expect(Number(tag.getAttribute("width"))).toBe(Y_AXIS_W);
+   });
+ });
+ 
++// 🟢 round4 項 3:底部 hover 標籤在時間下方多一行「該分鐘成交價」
++describe("StockIntradayChart hover 底部標籤(round4 項 3)", () => {
++  function hover(container: HTMLElement, clientX = 39): void {
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX, clientY: 100 });
++  }
++
++  it("時間標下方多一行價位,值 = 該分鐘收盤(與資訊列同源同格式)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    hover(container);
++    expect(screen.getByTestId("time-tag-text").textContent).toBe("09:01");
++    // 541 分收盤 2_380_000 → "2380"(資訊列同值)
++    expect(screen.getByTestId("time-tag-price").textContent).toBe("2380");
++    expect(screen.getByTestId("chart-readout").textContent).toContain("2380");
++  });
++
++  it("兩行都置中對齊、盒子仍貼齊 viewBox 底邊(往上長不往下溢出)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    hover(container);
++    const rect = container.querySelector('[data-testid="time-tag"]')!;
++    const h = Number(rect.getAttribute("height"));
++    expect(h).toBe(24);
++    const g = rect.parentElement!;
++    // translate(x, mainH − h):底邊恰貼 viewBox 底(mainH 預設 260)
++    expect(g.getAttribute("transform")).toContain(`, ${260 - h})`);
++    expect(screen.getByTestId("time-tag-text").getAttribute("text-anchor")).toBe("middle");
++    expect(screen.getByTestId("time-tag-price").getAttribute("text-anchor")).toBe("middle");
++  });
++
++  it("價位行相對昨收上色:高於 → bull、低於 → bear", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />); // 2380 > ref 2320
++    hover(container);
++    expect(screen.getByTestId("time-tag-price").getAttribute("class")).toContain("fill-bull");
++    cleanup();
++
++    const bear = {
++      ...ACCUM,
++      minutes: new Map([[541, { c: 2_300_000, v: 10, i: 0, o: 10, u: 0, h: 2_300_000, l: 2_300_000 }]]),
++    };
++    const r2 = wrap(<StockIntradayChart accum={bear} />);
++    hover(r2.container);
++    expect(screen.getByTestId("time-tag-price").getAttribute("class")).toContain("fill-bear");
++  });
++
++  it("無昨收(meta.ref 為 null)→ 中性白,不得因 null 被當 0 而塗紅(W-6)", () => {
++    const noRef = fromSnapshot({
++      code: "2330", seq: 1,
++      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
++      vwap: 2_380_000, cum_inner: 0, cum_outer: 10,
++      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 } },
++      ticks: [], book: null,
++      meta: { name: "台積電", ref: null, upper: null, lower: null, y_close: null, y_vol: 100 },
++    });
++    const { container } = wrap(<StockIntradayChart accum={noRef} />);
++    hover(container);
++    const cls = screen.getByTestId("time-tag-price").getAttribute("class")!;
++    expect(cls).toContain("fill-ink");
++    expect(cls).not.toContain("fill-bull");
++    expect(cls).not.toContain("fill-bear");
++  });
++
++  it("時間行維持 fill-time(黃),與價格語意分色", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    hover(container);
++    expect(screen.getByTestId("time-tag-text").getAttribute("class")).toContain("fill-time");
++  });
++
++  it("滑到沒有成交的分鐘 → 整個底部標籤不出現(W-1 回歸)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 400, clientY: 100 });
++    expect(container.querySelector('[data-testid="time-tag"]')).toBeNull();
++    expect(container.querySelector('[data-testid="time-tag-price"]')).toBeNull();
++  });
++});
++
++// 🔴 round4 項 6:價位帶內縮 + 刻度右對齊 + 垂直置中 + 縮字
++describe("StockIntradayChart 左緣價位帶(round4 項 6)", () => {
++  it("價位帶內縮(繪圖區左界更靠左)", () => {
++    // 46 → 36:右對齊之後帶內只需容納數字本身,不必再為左對齊的參差留空間
++    expect(Y_AXIS_W).toBe(36);
++  });
++
++  it("刻度數字右對齊成一直欄,右緣距繪圖區左界 4px", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const ticks = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
++    expect(ticks.length).toBeGreaterThan(0);
++    for (const t of ticks) {
++      expect(t.getAttribute("text-anchor")).toBe("end");
++      expect(Number(t.getAttribute("x"))).toBe(Y_AXIS_W - 4);
++    }
++  });
++
++  it("刻度數字垂直中心壓在對應格線上(不再整體浮在線上方、不再夾制)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const grids = [...container.querySelectorAll('[data-testid="y-grid"]')];
++    const ticks = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
++    expect(ticks.length).toBe(grids.length);
++    ticks.forEach((t, i) => {
++      // baseline 直接取格線 y,視覺置中靠 dy(em 單位 → root font-size 放大時等比)
++      expect(Number(t.getAttribute("y"))).toBeCloseTo(Number(grids[i]!.getAttribute("y1")), 6);
++      expect(t.getAttribute("dy")).toBe("0.35em");
++    });
++  });
++
++  it("刻度字級縮到 0.5625rem(與右緣疊線價位標同級)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    for (const t of container.querySelectorAll('[data-testid="y-tick-price"]')) {
++      expect(t.getAttribute("font-size")).toBe("0.5625rem");
++    }
++  });
++
++  it("hover 價位標的數字與靜態刻度右緣對齊在同一條線上", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 39, clientY: 120 });
++    const tagText = container.querySelector('[data-testid="price-tag-text"]')!;
++    expect(tagText.getAttribute("text-anchor")).toBe("end");
++    expect(Number(tagText.getAttribute("x"))).toBe(Y_AXIS_W - 4);
++    expect(tagText.getAttribute("font-size")).toBe("0.5625rem");
++  });
++});
++
+ // 🟢 round5 SC-1 / SC-2:當日高低線 + 現價圈
+ describe("StockIntradayChart 當日高低與現價圈", () => {
+   const withHL = (high: number | null, low: number | null) => ({ ...ACCUM, high, low });
+@@ -468,28 +590,83 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
+     );
+   }
+ 
+-  it("域內的當日高低 → 兩條線 + 右緣價位標(數字 = top-level high/low 毫元轉元)", () => {
++  // 🔴 round4 項 1(B-1):橫虛線 → 三角標記 + 就地價位文字
++  it("域內的當日高低 → 三角標記 + 價位文字(數字 = top-level high/low 毫元轉元)", () => {
+     const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+-    expect(container.querySelector('[data-testid="day-high"]')).toBeTruthy();
+-    expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
++    expect(container.querySelector('polygon[data-testid="day-high"]')).toBeTruthy();
++    expect(container.querySelector('polygon[data-testid="day-low"]')).toBeTruthy();
+     expect(screen.getByTestId("day-high-label").textContent).toBe("2395");
+     expect(screen.getByTestId("day-low-label").textContent).toBe("2370");
+   });
+ 
+-  it("高低線的 y 對得上價格縮放(與疊線共用 toY)", () => {
++  it("整張圖不再有橫貫左右的高低虛線(4 3 / 0.8)", () => {
++    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
++    const dashed = [...container.querySelectorAll("line")].filter(
++      (l) => l.getAttribute("stroke-dasharray") === "4 3",
++    );
++    expect(dashed.length).toBe(0);
++  });
++
++  it("三角的尖端(apex)壓在極值價位上,body 朝圖內延伸", () => {
+     const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
+     const g = geometryOf(container);
+-    const high = container.querySelector('[data-testid="day-high"]')!;
+-    expect(Number(high.getAttribute("y1"))).toBeCloseTo(g.toY(2_395_000), 5);
++    const high = container.querySelector('polygon[data-testid="day-high"]')!;
++    const [apex, ...rest] = high.getAttribute("points")!.split(" ").map((p) => p.split(",").map(Number));
++    expect(apex![1]).toBeCloseTo(g.toY(2_395_000), 5);
++    // body 在 apex 下方(朝圖內),不會被 viewBox 頂端裁掉
++    for (const p of rest) expect(p[1]!).toBeGreaterThan(apex![1]!);
+   });
+ 
+-  // review R12:無漲跌停時 y 域由**分鐘收盤**極值決定,裝不下逐筆極值 → 線會畫到時間軸上
++  it("標記落在**摸到極值的那一分鐘**,不是最後一分鐘", () => {
++    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
++    const g = geometryOf(container);
++    // 高低都發生在 541 分(ACCUM fixture 的 per-minute h/l);最後一分鐘是 542
++    const expectedX = g.priceLine[0]!.x;
++    const lastX = g.priceLine[g.priceLine.length - 1]!.x;
++    const apexX = (id: string) =>
++      Number(
++        container.querySelector(`polygon[data-testid="${id}"]`)!.getAttribute("points")!
++          .split(" ")[0]!.split(",")[0],
++      );
++    expect(apexX("day-high")).toBeCloseTo(expectedX, 5);
++    expect(apexX("day-high")).not.toBeCloseTo(lastX, 1);
++    expect(apexX("day-low")).toBeCloseTo(expectedX, 5);
++  });
++
++  it("當日高 === 當日低(漲停鎖死)→ 只畫高標,不畫低標", () => {
++    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_395_000)} />);
++    expect(container.querySelector('polygon[data-testid="day-high"]')).toBeTruthy();
++    expect(container.querySelector('polygon[data-testid="day-low"]')).toBeNull();
++  });
++
++  // review R12:無漲跌停時 y 域由**分鐘收盤**極值決定,裝不下逐筆極值 → 標記會落到時間軸上
+   it("當日高超出 y 域 → 不畫(低點仍畫)", () => {
+     const { container } = wrap(<StockIntradayChart accum={withHL(2_600_000, 2_370_000)} />);
+     expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
+     expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
+   });
+ 
++  it("域內但沒有分鐘的 h 等於該值(反查落空)→ 不畫,不退而求其次挑別的分鐘", () => {
++    const { container } = wrap(<StockIntradayChart accum={withHL(2_392_000, 2_371_000)} />);
++    expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
++    expect(container.querySelector('[data-testid="day-low"]')).toBeNull();
++  });
++
++  it("minutes 缺 per-minute h/l(舊後端 snapshot)→ 不畫", () => {
++    const legacy = fromSnapshot({
++      code: "2330", seq: 2,
++      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
++      vwap: 2_380_000, cum_inner: 2, cum_outer: 10,
++      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
++      ticks: [], book: null,
++      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_close: 2_320_000, y_vol: 100 },
++      high: 2_380_000, low: 2_380_000,
++    });
++    const { container } = wrap(<StockIntradayChart accum={legacy} />);
++    expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
++    expect(container.querySelector('[data-testid="day-low"]')).toBeNull();
++  });
++
+   it("高低為 null(舊 snapshot / 尚無成交)→ 不畫", () => {
+     const { container } = wrap(<StockIntradayChart accum={withHL(null, null)} />);
+     expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
+@@ -505,12 +682,18 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
+     expect(Number(dot.getAttribute("cy"))).toBeCloseTo(lp.y, 5);
+   });
+ 
+-  it("現價圈與數字依現價 vs 參考價三態上色", () => {
++  // 🔴 round4 項 2(B-3):即時價位文字移除,只留圓點 —— 文字會與右緣疊線價位標重疊
++  it("走勢線末端只有圓點,沒有即時價位文字", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelector('[data-testid="last-dot"]')).toBeTruthy();
++    expect(container.querySelector('[data-testid="last-price"]')).toBeNull();
++  });
++
++  it("現價圈依現價 vs 參考價三態上色", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />); // 2380 > ref 2320
+     expect(container.querySelector('[data-testid="last-dot"]')!.getAttribute("class")).toContain(
+       "fill-bull",
+     );
+-    expect(screen.getByTestId("last-price").getAttribute("class")).toContain("fill-bull");
+     cleanup();
+ 
+     const bear = { ...ACCUM, last: { p: 2_300_000, t: "09:02:00.000", cum_vol: 12 } };
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index b7d95fc..3bcd844 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -1,6 +1,12 @@
+ import { memo, useId, useMemo, useState } from "react";
+ 
+ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
++import {
++  clampLabelX,
++  INTRADAY_MARK,
++  markLabelY,
++  trianglePoints,
++} from "@/lib/chart-extreme";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+@@ -31,7 +37,11 @@ const SUB = { width: 800, height: 70 };
+  *  寬度**直接取 `Y_AXIS_W`** 不另寫一份數字:兩份靠註解維持相等的話,任一方改動就讓
+  *  「hover 價位標壓在走勢線上」這個本輪要修的症狀復發,而且沒有測試會發現。 */
+ const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
+-const TIME_TAG = { w: 34, h: 13 };
++/** 底部 hover 標籤(round4 項 3:時間 + 該分鐘成交價兩行)。
++ *  高度**往上長**不往下溢出 —— 盒子底邊已貼死 viewBox 底,而圖高由 StockChart 量測後
++ *  指派,不能為了標籤加高。寬度 40 是常數不是 JSX 硬編:`XAxisLabels` 的「與 tag 重疊
++ *  就不畫」靠 `tagSpan` 判定,寫死在 JSX 會讓遮蔽判定與實際寬度脫鉤。 */
++const TIME_TAG = { w: 40, h: 24 };
+ 
+ function hhmm(minute: number): string {
+   return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+@@ -95,6 +105,9 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
+     : `${fmtTickPrice(priceMilli)}*`;
+ }
+ 
++/** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
++const MARK_LABEL_TOP = 9;
++
+ /** 靜態圖層 memo:hover 每 mousemove re-render 父層,線層不可每次重建(SC-1)。 */
+ const ChartStatic = memo(function ChartStatic({
+   g,
+@@ -105,10 +118,7 @@ const ChartStatic = memo(function ChartStatic({
+   oLines,
+   clipAbove,
+   clipBelow,
+-  highMilli,
+-  lowMilli,
+-  highY,
+-  lowY,
++  plotBottom,
+ }: {
+   g: IntradayGeometry;
+   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
+@@ -120,11 +130,8 @@ const ChartStatic = memo(function ChartStatic({
+   oLines: OverlayLine[];
+   clipAbove: string;
+   clipBelow: string;
+-  /** 當日高低(毫元)與其 y;**域外 / 缺值時 y 為 null → 不畫**。純量,memo 安全 */
+-  highMilli: number | null;
+-  lowMilli: number | null;
+-  highY: number | null;
+-  lowY: number | null;
++  /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
++  plotBottom: number;
+ }) {
+   return (
+     <g>
+@@ -176,12 +183,23 @@ const ChartStatic = memo(function ChartStatic({
+             strokeDasharray="2 3"
+             strokeWidth={0.5}
+           />
++          {/* 價位文字**右對齊**貼著繪圖區左界(round4 項 6):左對齊時數字長度不同會讓
++              右緣參差、且兩位數的刻度離走勢圖特別遠。
++              垂直用 `dy="0.35em"` 讓數字中心壓在格線上,不用 `dominantBaseline` ——
++              em 相對自身 font-size,root font-size media query 放大時偏移自動等比;
++              而各引擎對 `middle`(x-height 中點)/ `central`(em-box 中點)取值不同,
++              純數字會有 0.5~1px 的引擎差(本專案對「幾何自己算」已有明確立場)。
++              原本的 `clamp(t.y − 2, 8, h − 16)` 夾制整條移除:`toY` 值域恰為
++              `[PAD_Y, PAD_Y + plotH]`,置中後兩端都不會被裁,夾制反而讓最上 / 最下
++              兩根刻度「字沒對到線」= 本項要修的症狀本身。 */}
+           <text
+             data-testid="y-tick-price"
+-            x={2}
+-            y={Math.min(Math.max(t.y - 2, 8), h - 16)}
++            x={Y_AXIS_W - 4}
++            y={t.y}
++            dy="0.35em"
++            textAnchor="end"
+             className={tickTone(t.priceMilli, refMilli)}
+-            fontSize="0.625rem"
++            fontSize="0.5625rem"
+           >
+             {fmt(t.priceMilli)}
+           </text>
+@@ -227,34 +245,37 @@ const ChartStatic = memo(function ChartStatic({
+           </text>
+         </g>
+       ))}
+-      {/* 當日高低(SC-1)。虛線節奏 4 3 / 0.8 與 y 軸格線(2 3 / 0.5)刻意不同,
+-          肉眼可區分「這是今天的高低」而不是又一條格線 */}
++      {/* 當日高低(round4 項 1)。橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」
++          這個語意,而使用者要的只是「最高點在哪、多少錢」。改成標在**摸到極值的那一分鐘**
++          上的三角 + 就地價位文字(參考 treading-king 分時圖)。
++          用三角不用圓點:圓點會與現價圈(r=3)、hover 收盤錨(r=2.5)混淆,而 ▲/▼ 的方向
++          本身就帶「高 / 低」語意,單色下仍可辨。
++          顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
++          其日高仍低於昨收,塗紅等於假陳述。 */}
+       {([
+-        ["day-high", highY, highMilli],
+-        ["day-low", lowY, lowMilli],
+-      ] as const).map(([id, y, milli]) =>
+-        y === null || milli === null ? null : (
++        ["day-high", g.highMark, "up"],
++        ["day-low", g.lowMark, "down"],
++      ] as const).map(([id, mark, dir]) =>
++        mark === null ? null : (
+           <g key={id}>
+-            <line
++            <polygon
+               data-testid={id}
+-              x1={Y_AXIS_W}
+-              x2={w - R_AXIS_W}
+-              y1={y}
+-              y2={y}
+-              className="stroke-ink-muted"
+-              strokeDasharray="4 3"
+-              strokeWidth={0.8}
++              points={trianglePoints(mark.x, mark.y, dir, INTRADAY_MARK)}
++              className="fill-ink-muted stroke-surface"
++              strokeWidth={1}
++              paintOrder="stroke"
+             />
+             <text
+               data-testid={`${id}-label`}
+-              x={w - R_AXIS_W + 2}
+-              y={y - 2}
++              x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
++              y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
++              textAnchor="middle"
+               className="fill-ink-muted stroke-surface"
+               strokeWidth={2}
+               paintOrder="stroke"
+               fontSize="0.5625rem"
+             >
+-              {fmt(milli)}
++              {fmt(mark.priceMilli)}
+             </text>
+           </g>
+         ),
+@@ -422,10 +443,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+   const clipBelow = `${uid}-below`;
+ 
+   const g = useMemo(
+-    () => buildIntradayGeometry({ minutes: accum.minutes, meta: accum.meta }, { width: mainW, height: mainH }),
++    () =>
++      buildIntradayGeometry(
++        { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
++        { width: mainW, height: mainH },
++      ),
+     // mainW / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
+     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)
+-    [accum.minutes, accum.meta, mainW, mainH],
++    [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH],
+   );
+ 
+   const subGeo = useMemo(
+@@ -472,12 +497,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
+   const lastPt = lastPoint(g);
+ 
+-  // 當日高低(SC-1)。**域外不畫** —— 沿用 overlayLines 的規則:無漲跌停時 y 域由
+-  // 分鐘收盤極值決定,裝不下逐筆極值,線會畫到時間軸上。
+-  const inDomain = (p: number | null): number | null =>
+-    p === null || p < g.yDomain[0] || p > g.yDomain[1] ? null : g.toY(p);
+-  const dayHighY = inDomain(accum.high);
+-  const dayLowY = inDomain(accum.low);
++  // 當日高低標記已下沉進 geometry(`g.highMark` / `g.lowMark`):域外、等值反查落空、
++  // 舊後端缺 per-minute h/l 三種成因都收斂成 null = 不畫。
+   // 現價圈(SC-2):值每 tick 都變 → 畫在 ChartStatic 之外,不打穿 memo
+   const lastPrice = accum.last?.p ?? null;
+   const lastTone =
+@@ -586,26 +607,15 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+           oLines={oLines}
+           clipAbove={clipAbove}
+           clipBelow={clipBelow}
+-          highMilli={accum.high}
+-          lowMilli={accum.low}
+-          highY={dayHighY}
+-          lowY={dayLowY}
++          plotBottom={plotBottom}
+         />
+         <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} />
++        {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
++            會與右緣疊線價位標(R_AXIS_W 帶)重疊;現價本來就在資訊列與報價 header
++            各有一份,圈的作用是「線走到哪」而不是再報一次價。 */}
+         {lastPt !== null && lastPrice !== null ? (
+           <g pointerEvents="none">
+             <circle data-testid="last-dot" cx={lastPt.x} cy={lastPt.y} r={3} className={lastTone} />
+-            <text
+-              data-testid="last-price"
+-              x={lastPt.x + 5}
+-              y={lastPt.y - 4}
+-              className={cn(lastTone, "stroke-surface")}
+-              strokeWidth={2}
+-              paintOrder="stroke"
+-              fontSize="0.5625rem"
+-            >
+-              {fmt(lastPrice)}
+-            </text>
+           </g>
+         ) : null}
+         {/* hover 十字 + 軸標籤(SC-7)。
+@@ -648,18 +658,25 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+                 rx={2}
+                 className="fill-bg-deep stroke-line"
+               />
++              {/* 與靜態刻度同一條右對齊基準線(round4 項 6):視覺上像「價位軸在游標那一格
++                  亮起來」,而不是另一個飄出來的框 */}
+               <text
+                 data-testid="price-tag-text"
+-                x={4}
++                x={PRICE_TAG.w - 4}
+                 y={PRICE_TAG.h - 4}
++                textAnchor="end"
+                 className="fill-ink"
+-                fontSize="0.625rem"
++                fontSize="0.5625rem"
+               >
+                 {hoverPrice !== null ? fmt(hoverPrice) : ""}
+               </text>
+             </g>
+-            {/* 底部時間標籤 */}
+-            {timeTagX !== null && hoverMin !== null ? (
++            {/* 底部標籤:上行時間、下行該分鐘成交價(round4 項 3)。
++                價位取 `hoverAgg.c` 與資訊列同源 —— 左緣 price-tag 是「自由量尺」(滑鼠 y),
++                兩者語意分權:左緣 = 我想量的價,底部 = 該分鐘真實成交。
++                時間黃(與 x 軸標籤同色)、價位紅綠(與圖上每個價格輸出同規則),
++                一眼分辨上行是時間語意、下行是價格語意。 */}
++            {timeTagX !== null && hoverMin !== null && hoverAgg !== undefined ? (
+               <g transform={`translate(${timeTagX}, ${mainH - TIME_TAG.h})`}>
+                 <rect
+                   data-testid="time-tag"
+@@ -671,13 +688,33 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+                 <text
+                   data-testid="time-tag-text"
+                   x={TIME_TAG.w / 2}
+-                  y={TIME_TAG.h - 3.5}
++                  y={10}
+                   textAnchor="middle"
+                   className="fill-time"
+                   fontSize="0.625rem"
+                 >
+                   {hhmm(hoverMin)}
+                 </text>
++                <text
++                  data-testid="time-tag-price"
++                  x={TIME_TAG.w / 2}
++                  y={21}
++                  textAnchor="middle"
++                  // `ref` 的 null 檢查必須在最前面:`c > null` 會把 null 強轉 0,
++                  // 毫元恆 > 0 → 無昨收的商品被塗成紅色,打穿 hasRef 紀律(W-6)
++                  className={
++                    ref === null
++                      ? "fill-ink"
++                      : hoverAgg.c > ref
++                        ? "fill-bull"
++                        : hoverAgg.c < ref
++                          ? "fill-bear"
++                          : "fill-ink"
++                  }
++                  fontSize="0.625rem"
++                >
++                  {fmt(hoverAgg.c)}
++                </text>
+               </g>
+             ) : null}
+           </g>
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index a849ebc..2111e34 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -1,6 +1,6 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, render, screen, waitFor } from "@testing-library/react";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+ import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+@@ -144,3 +144,116 @@ describe("StockPage", () => {
+     expect(main.className).toContain("min-h-0");
+   });
+ });
++
++// 🟢 round4 項 4:搜尋改預覽後,「加入自選」的入口移到分時圖上方的報價 header
++describe("StockPage 加入自選(round4 項 4)", () => {
++  let putBodies: unknown[];
++
++  function mockApi(codes: string[], groups: { name: string; codes: string[] }[]): void {
++    putBodies = [];
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string, init?: RequestInit) => {
++        if (init?.method === "PUT") {
++          const body = JSON.parse(String(init.body)) as unknown;
++          putBodies.push(body);
++          return new Response(JSON.stringify(body));
++        }
++        if (String(url).includes("/api/stock/names")) {
++          return new Response(JSON.stringify({ names: [], count: 0 }));
++        }
++        if (String(url).includes("/api/stock/watchlist")) {
++          return new Response(JSON.stringify({ codes, groups }));
++        }
++        if (String(url).includes("/api/stock/bars")) return new Response(JSON.stringify({ bars: [] }));
++        if (String(url).includes("/api/stock/overlay")) {
++          return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
++        }
++        return new Response(JSON.stringify({}), { status: 404 });
++      }),
++    );
++  }
++
++  const GROUPS = [{ name: "主力", codes: ["2330"] }];
++
++  it("看非自選股 → header 出現「加入自選」;已在自選 → 不出現", async () => {
++    mockApi(["2330"], GROUPS);
++    const { rerender } = wrap(
++      <StockPage code="2317" onSelect={vi.fn()} stream={stream()} />,
++    );
++    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
++    cleanup();
++    mockApi(["2330"], GROUPS);
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.queryByText("台積電")).toBeTruthy());
++    expect(screen.queryByRole("button", { name: "加入自選" })).toBeNull();
++    expect(rerender).toBeTruthy();
++  });
++
++  it("點按鈕 → 展開群組清單 + 未分組", async () => {
++    mockApi(["2330"], GROUPS);
++    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
++    expect(screen.getByLabelText("加入 2317 到 主力")).toBeTruthy();
++    expect(screen.getByLabelText("加入 2317 到未分組")).toBeTruthy();
++  });
++
++  it("選群組 → **PUT 恰一筆**,codes 與該組同時含該檔", async () => {
++    mockApi(["2330"], GROUPS);
++    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
++    fireEvent.click(screen.getByLabelText("加入 2317 到 主力"));
++    await waitFor(() => expect(putBodies).toHaveLength(1));
++    const body = putBodies[0] as { codes: string[]; groups: { name: string; codes: string[] }[] };
++    expect(body.codes).toEqual(["2330", "2317"]);
++    expect(body.groups[0]!.codes).toEqual(["2330", "2317"]);
++  });
++
++  it("選「未分組」→ 只加進 codes,群組零改動", async () => {
++    mockApi(["2330"], GROUPS);
++    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
++    fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
++    await waitFor(() => expect(putBodies).toHaveLength(1));
++    const body = putBodies[0] as { codes: string[]; groups: { name: string; codes: string[] }[] };
++    expect(body.codes).toEqual(["2330", "2317"]);
++    expect(body.groups).toEqual(GROUPS);
++  });
++
++  it("自選尚未載入 → 按鈕不渲染(EMPTY_WL fallback 上按加入會把整份自選清空)", () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async () => new Promise<Response>(() => {})), // 永不 resolve
++    );
++    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
++    expect(screen.queryByRole("button", { name: "加入自選" })).toBeNull();
++  });
++
++  it("PUT 失敗 → header 顯示中文文案(上限 / 壞碼看得到)", async () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string, init?: RequestInit) => {
++        if (init?.method === "PUT") {
++          return new Response(JSON.stringify({ detail: { error: "WATCHLIST_FULL" } }), {
++            status: 400,
++          });
++        }
++        if (String(url).includes("/api/stock/names")) {
++          return new Response(JSON.stringify({ names: [], count: 0 }));
++        }
++        if (String(url).includes("/api/stock/watchlist")) {
++          return new Response(JSON.stringify({ codes: ["2330"], groups: GROUPS }));
++        }
++        return new Response(JSON.stringify({}), { status: 404 });
++      }),
++    );
++    wrap(<StockPage code="2317" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
++    fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
++    await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
++  });
++});
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 7d3f7b2..dc9bb54 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -1,9 +1,13 @@
++import { useState } from "react";
++
+ import { OrderBook } from "@/components/stock/OrderBook";
+ import { StockChart } from "@/components/stock/StockChart";
+ import { TickTape } from "@/components/stock/TickTape";
+ import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
++import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import type { StockStreamState } from "@/hooks/useStockStream";
+ import { cn } from "@/lib/utils";
++import { addCode, assignToGroup, type Watchlist } from "@/lib/watchlist-model";
+ 
+ /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
+  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
+@@ -21,11 +25,37 @@ interface Props {
+ 
+ export function StockPage({ code, onSelect, stream }: Props) {
+   const { accum, watchlist, status, stkfut, wsStatus } = stream;
++  // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
++  // 使用者先看到資料,再決定要不要收藏、收到哪一組。
++  const { data: wl } = useStockWatchlist();
++  const save = useSaveWatchlist();
++  const [pickerOpen, setPickerOpen] = useState(false);
+ 
+   const meta = accum?.meta ?? null;
+   const last = accum?.last ?? null;
+   const chg = last && meta?.ref ? ((last.p - meta.ref) / meta.ref) * 100 : null;
+ 
++  // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
++  // 靜默清空。這是新入口才有的 gate,不是既有行為。
++  const canAdd = wl !== undefined && code !== null && !wl.codes.includes(code);
++
++  /** 零 PUT 早退(W-9):`assignToGroup` 內部恆回新陣列,內容相同也會送出,
++   *  而內容相同的 PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB)。 */
++  function commit(next: Watchlist): void {
++    setPickerOpen(false);
++    if (wl === undefined) return;
++    if (next === wl || JSON.stringify(next) === JSON.stringify(wl)) return;
++    save.mutate(next);
++  }
++
++  /** 加自選 + 指派群組**合成單次 PUT**:分兩次會產出「在群組但不在 codes」的中間態。 */
++  function addTo(group: string | null): void {
++    if (wl === undefined || code === null) return;
++    const withCode = addCode(wl, code);
++    const g = group === null ? null : withCode.groups.find((x) => x.name === group);
++    commit(g === null || g === undefined ? withCode : assignToGroup(withCode, code, g.name, g.codes.length));
++  }
++
+   return (
+     <div className="flex min-h-0 flex-1 gap-4">
+       <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
+@@ -72,6 +102,51 @@ export function StockPage({ code, onSelect, stream }: Props) {
+                   ) : null}
+                 </span>
+               ) : null}
++              {/* 加入自選(round4 項 4)。只在「看的是非自選股」時出現 —— 已在自選的檔
++                  按了也沒有意義,按鈕本身就是狀態指示。
++                  面板照側欄 assigning 的裸 div + button 慣例(專案無 Radix)。 */}
++              {canAdd ? (
++                <span className="relative">
++                  <button
++                    type="button"
++                    aria-label="加入自選"
++                    aria-expanded={pickerOpen}
++                    disabled={save.isPending}
++                    onClick={() => setPickerOpen((v) => !v)}
++                    className="rounded border border-accent px-2 py-0.5 text-xs text-accent disabled:opacity-50"
++                  >
++                    加入自選
++                  </button>
++                  {pickerOpen ? (
++                    <span className="absolute top-full left-0 z-20 mt-1 flex w-max flex-wrap gap-1 rounded border border-line bg-bg-deep p-2">
++                      {wl.groups.map((g) => (
++                        <button
++                          key={g.name}
++                          type="button"
++                          aria-label={`加入 ${code} 到 ${g.name}`}
++                          onClick={() => addTo(g.name)}
++                          className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent"
++                        >
++                          {g.name}
++                        </button>
++                      ))}
++                      {/* 零群組的使用者唯一的路徑,不可省 */}
++                      <button
++                        type="button"
++                        aria-label={`加入 ${code} 到未分組`}
++                        onClick={() => addTo(null)}
++                        className="rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink"
++                      >
++                        未分組
++                      </button>
++                    </span>
++                  ) : null}
++                </span>
++              ) : null}
++              {/* 上限 / 壞碼的文案要看得見,否則點了像沒反應 */}
++              {save.error ? (
++                <span className="text-xs text-bear">{errText(save.error.message)}</span>
++              ) : null}
+               <span className="ml-auto font-mono text-xs text-ink-dim">
+                 總量 {last?.cum_vol ?? "-"} · 昨量 {meta?.y_vol ?? "-"}
+               </span>
+diff --git a/frontend/src/components/stock/WatchlistManagerDialog.test.tsx b/frontend/src/components/stock/WatchlistManagerDialog.test.tsx
+index b30e16b..5053194 100644
+--- a/frontend/src/components/stock/WatchlistManagerDialog.test.tsx
++++ b/frontend/src/components/stock/WatchlistManagerDialog.test.tsx
+@@ -21,8 +21,9 @@ const NAMES = {
+     { code: "2330", name: "台積電" },
+     { code: "5483", name: "中美晶" },
+     { code: "2317", name: "鴻海" },
++    { code: "2331", name: "精英" }, // 不在自選 —— 右欄搜尋要能加進來
+   ],
+-  count: 3,
++  count: 4,
+ };
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+@@ -62,13 +63,22 @@ function open(wl: Watchlist = WL) {
+ }
+ 
+ describe("WatchlistManagerDialog 開關(SC-13)", () => {
+-  it("開啟時標題與兩個區塊都在", () => {
++  it("開啟時標題與左右兩欄都在", () => {
+     open();
+     expect(screen.getByText("管理群組與股票")).toBeTruthy();
+     expect(screen.getByLabelText("群組")).toBeTruthy();
+     expect(screen.getByLabelText("股票")).toBeTruthy();
+   });
+ 
++  // 🔴 round4 項 4(B-8):Tailwind v4 的 preflight 把 `margin: 0` 套到所有元素(含
++  // dialog),覆蓋掉 UA stylesheet 給 modal dialog 的 `margin: auto` → 貼到左上角。
++  // jsdom 沒有版面引擎,這個 bug 只能用 class 守。
++  it("dialog 帶 m-auto(否則被 preflight 的 margin:0 釘在左上角)", () => {
++    open();
++    const dlg = screen.getByLabelText("管理群組與股票");
++    expect(dlg.className).toContain("m-auto");
++  });
++
+   it("關閉時內容不在 DOM(否則側欄的計數型斷言會被 Dialog 的重複文字打壞)", () => {
+     const onClose = vi.fn();
+     wrap(
+@@ -151,46 +161,174 @@ describe("WatchlistManagerDialog 群組管理(SC-14)", () => {
+   });
+ });
+ 
+-describe("WatchlistManagerDialog 股票管理(SC-14 / W-1)", () => {
+-  it("逐檔列出自選全體(含未分組)與名稱", async () => {
++// 🔴 round4 項 4(B-8):checkbox 矩陣(N 檔 × M 群組)改成「左選一組、右列該組股票」。
++// 矩陣在 3 組 20 檔時就是 60 個 checkbox,而且會橫向換行。
++describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
++  function stocks(): HTMLElement {
++    return screen.getByLabelText("股票");
++  }
++
++  it("畫面上沒有任何 checkbox(矩陣已移除)", () => {
++    const { container } = wrap(
++      <WatchlistManagerDialog open wl={WL} onClose={vi.fn()} onGroupDeleted={vi.fn()} />,
++    );
++    expect(container.querySelectorAll('input[type="checkbox"]').length).toBe(0);
++  });
++
++  it("預設選中「未分組」偽群組,右欄列出不屬任何群組的股票", async () => {
++    open();
++    expect(screen.getByRole("button", { name: "未分組" })).toBeTruthy();
++    expect(within(stocks()).getByText("2317")).toBeTruthy();
++    expect(within(stocks()).queryByText("5483")).toBeNull(); // 已屬主力
++    await waitFor(() => expect(within(stocks()).getByText("鴻海")).toBeTruthy());
++  });
++
++  it("「未分組」列沒有改名 / 刪除鈕(它不是真群組)", () => {
++    open();
++    expect(screen.queryByLabelText("改名 未分組")).toBeNull();
++    expect(screen.queryByLabelText("刪除群組 未分組")).toBeNull();
++  });
++
++  it("點左欄群組 → 右欄換成該組股票,並標示選中態", () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    expect(within(stocks()).getByText("5483")).toBeTruthy();
++    expect(within(stocks()).queryByText("2317")).toBeNull();
++    // 選中態的邊條掛在列的容器上(button 只承載名稱與點擊)
++    expect(screen.getByRole("button", { name: "主力" }).parentElement!.className).toContain(
++      "border-l-accent",
++    );
++  });
++
++  it("一檔多組 → 右欄標示它還屬於哪些別組(矩陣資訊不憑空消失)", () => {
+     open();
+-    const section = screen.getByLabelText("股票");
+-    expect(within(section).getByText("2317")).toBeTruthy(); // 未分組也要能管理
+-    // 名稱表是另一個 query,晚一拍才到
+-    await waitFor(() => expect(within(section).getByText("鴻海")).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    const row = within(stocks()).getByTestId("mgr-row-2330");
++    expect(within(row).getByText("觀察")).toBeTruthy();
+   });
+ 
+-  it("checkbox 反映一檔多組的現況(W-1)", () => {
++  it("右欄搜尋加入該組 → **PUT 恰一筆**,codes 與該組同時含該檔", async () => {
+     open();
+-    expect((screen.getByLabelText("2330 屬於 主力") as HTMLInputElement).checked).toBe(true);
+-    expect((screen.getByLabelText("2330 屬於 觀察") as HTMLInputElement).checked).toBe(true);
+-    expect((screen.getByLabelText("2317 屬於 主力") as HTMLInputElement).checked).toBe(false);
++    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy()); // 名冊載入
++    fireEvent.click(screen.getByRole("button", { name: "觀察" }));
++    const box = screen.getByPlaceholderText(/加入股票到/);
++    fireEvent.change(box, { target: { value: "5483" } });
++    fireEvent.click(screen.getByLabelText("加入 5483 到 觀察"));
++    await waitFor(() => expect(putBodies).toHaveLength(1));
++    expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "5483"]);
++    expect(putBodies[0]!.codes).toEqual(WL.codes); // 已在自選 → codes 不變
+   });
+ 
+-  it("勾選 → PUT 帶該組多出這檔(一檔可屬多組)", async () => {
++  it("加入非自選股 → codes 與群組同時多出該檔(單次 PUT)", async () => {
+     open();
+-    fireEvent.click(screen.getByLabelText("2317 屬於 觀察"));
++    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "觀察" }));
++    fireEvent.change(screen.getByPlaceholderText(/加入股票到/), { target: { value: "2331" } });
++    fireEvent.click(screen.getByLabelText("加入 2331 到 觀察"));
+     await waitFor(() => expect(putBodies).toHaveLength(1));
+-    expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "2317"]);
+-    expect(putBodies[0]!.groups[0]!.codes).toEqual(["2330", "5483"]); // 另一組不動
++    expect(putBodies[0]!.codes).toEqual([...WL.codes, "2331"]);
++    expect(putBodies[0]!.groups[1]!.codes).toEqual(["2330", "2331"]);
++  });
++
++  it("已在本組的候選為停用 + 尾綴說明", async () => {
++    open();
++    await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    fireEvent.change(screen.getByPlaceholderText(/加入股票到/), { target: { value: "2330" } });
++    const btn = screen.getByLabelText("加入 2330 到 主力") as HTMLButtonElement;
++    expect(btn.disabled).toBe(true);
++    expect(btn.textContent).toContain("已在此群組");
+   });
+ 
+-  it("取消勾選 → 只離開該組,code 留在 codes", async () => {
++  it("群組列的 − 只離開該組(code 留在 codes)", async () => {
+     open();
+-    fireEvent.click(screen.getByLabelText("2330 屬於 觀察"));
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    fireEvent.click(screen.getByLabelText("從 主力 移出 5483"));
+     await waitFor(() => expect(putBodies).toHaveLength(1));
+-    expect(putBodies[0]!.groups[1]!.codes).toEqual([]);
++    expect(putBodies[0]!.groups[0]!.codes).toEqual(["2330"]);
+     expect(putBodies[0]!.codes).toEqual(WL.codes);
+   });
+ 
+-  it("× → codes 與所有群組都少掉該檔", async () => {
++  // B-8 登記:舊版股票區列 wl.codes 全體、每列一顆「從自選移除」。改成分組視圖後
++  // 若真群組只有「移出本組」,已分組的股票就沒有任何一步刪除入口 = 功能退化。
++  it("群組列仍有「從自選移除」(一步刪除的入口不得消失)", async () => {
+     open();
+-    fireEvent.click(screen.getByLabelText("從自選移除 2330"));
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    fireEvent.click(screen.getByLabelText("從自選移除 5483"));
+     await waitFor(() => expect(putBodies).toHaveLength(1));
+-    expect(putBodies[0]!.codes).toEqual(["5483", "2317"]);
+-    expect(putBodies[0]!.groups).toEqual([
+-      { name: "主力", codes: ["5483"] },
+-      { name: "觀察", codes: [] },
+-    ]);
++    expect(putBodies[0]!.codes).toEqual(["2330", "2317"]);
++    expect(putBodies[0]!.groups[0]!.codes).toEqual(["2330"]);
++  });
++
++  it("未分組列的 × → codes 與所有群組都少掉該檔", async () => {
++    open();
++    fireEvent.click(screen.getByLabelText("從自選移除 2317"));
++    await waitFor(() => expect(putBodies).toHaveLength(1));
++    expect(putBodies[0]!.codes).toEqual(["2330", "5483"]);
++  });
++
++  it("空群組顯示引導文案", () => {
++    open({ codes: ["2330"], groups: [{ name: "空組", codes: [] }] });
++    fireEvent.click(screen.getByRole("button", { name: "空組" }));
++    expect(screen.getByText(/還沒有股票/)).toBeTruthy();
++  });
++
++  it("零自訂群組 → 左欄仍有未分組,並提示可在下方新增", () => {
++    open({ codes: ["2330"], groups: [] });
++    expect(screen.getByRole("button", { name: "未分組" })).toBeTruthy();
++    expect(screen.getByText("尚無群組,可在下方新增")).toBeTruthy();
++  });
++});
++
++describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
++  it("右欄用 derived 值渲染:改名失敗留下的懸空 selected 不會讓右欄空白", async () => {
++    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
++      if (init?.method === "PUT") {
++        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
++        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
++      }
++      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
++      return new Response(JSON.stringify(WL));
++    });
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    fireEvent.click(screen.getByLabelText("改名 主力"));
++    const input = screen.getByDisplayValue("主力");
++    fireEvent.change(input, { target: { value: "強勢" } });
++    fireEvent.keyDown(input, { key: "Enter" });
++    await waitFor(() => expect(putBodies).toHaveLength(1));
++    // PUT 失敗 → wl 仍是舊值 → 右欄照樣顯示主力的成員(不是空白)
++    await waitFor(() => expect(within(screen.getByLabelText("股票")).getByText("5483")).toBeTruthy());
++  });
++
++  it("「未分組」是保留名:新增同名群組 → 零 PUT + 錯誤文案", async () => {
++    open();
++    fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: "未分組" } });
++    fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
++    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
++    expect(putBodies).toEqual([]);
++  });
++
++  it("關閉再開 → selected 回到未分組(不殘留上次選的組)", async () => {
++    const onClose = vi.fn();
++    const { rerender } = wrap(
++      <WatchlistManagerDialog open wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />,
++    );
++    fireEvent.click(screen.getByRole("button", { name: "主力" }));
++    expect(within(screen.getByLabelText("股票")).getByText("5483")).toBeTruthy();
++    rerender(
++      <QueryClientProvider client={new QueryClient()}>
++        <WatchlistManagerDialog open={false} wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />
++      </QueryClientProvider>,
++    );
++    rerender(
++      <QueryClientProvider client={new QueryClient()}>
++        <WatchlistManagerDialog open wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />
++      </QueryClientProvider>,
++    );
++    await waitFor(() =>
++      expect(within(screen.getByLabelText("股票")).getByText("2317")).toBeTruthy(),
++    );
++    expect(within(screen.getByLabelText("股票")).queryByText("5483")).toBeNull();
+   });
+ });
+diff --git a/frontend/src/components/stock/WatchlistManagerDialog.tsx b/frontend/src/components/stock/WatchlistManagerDialog.tsx
+index e8c3ee4..2c13778 100644
+--- a/frontend/src/components/stock/WatchlistManagerDialog.tsx
++++ b/frontend/src/components/stock/WatchlistManagerDialog.tsx
+@@ -2,15 +2,27 @@ import { useEffect, useRef, useState } from "react";
+ 
+ import { errText, useSaveWatchlist } from "@/hooks/useStockWatchlist";
+ import { useStockNames } from "@/hooks/useStockNames";
++import { searchStocks } from "@/lib/stock-search";
++import { cn } from "@/lib/utils";
+ import {
++  addCode,
+   addGroup,
++  assignToGroup,
+   deleteGroup,
+   removeCode,
++  removeFromGroup,
+   renameGroup,
+-  setMembership,
++  ungroupedCodes,
++  type Group,
+   type Watchlist,
+ } from "@/lib/watchlist-model";
+ 
++/** 「未分組」是左欄第一列的**偽群組**,不是真的可以建的群組名 —— 兩者同名的話畫面上
++ *  無法區分(`selected === null` vs 一個真的叫「未分組」的群組)。 */
++const UNGROUPED_LABEL = "未分組";
++/** 右欄搜尋提示筆數(與側欄同一個量級) */
++const SUGGEST_LIMIT = 8;
++
+ interface Props {
+   open: boolean;
+   wl: Watchlist;
+@@ -28,6 +40,9 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+   const [renameInput, setRenameInput] = useState("");
+   /** 前端就擋下來的錯誤(撞名 → 零 PUT),與 mutation 錯誤共用同一份文案 */
+   const [localError, setLocalError] = useState<string | null>(null);
++  /** 左欄選中的群組名;`null` = 未分組偽群組。**只當意圖**,渲染一律走下面的 derived 值 */
++  const [selected, setSelected] = useState<string | null>(null);
++  const [stockInput, setStockInput] = useState("");
+ 
+   // 開關只走這一條路徑,`open` **不進 JSX** —— React 在 commit 階段寫入的 open 屬性會讓
+   // 之後的 showModal() 依標準拋 InvalidStateError,而 jsdom 沒有 showModal 會跳過
+@@ -48,6 +63,21 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+     else el.removeAttribute("open");
+   }, [open]);
+ 
++  // 本元件是**常駐掛載**(側欄只切 `open`)→ 每次開啟都要把暫態歸零,否則上次選的組 /
++  // 改名輸入 / 錯誤文案會殘留到下一次開啟。
++  // 用 render 期間調整 state 的官方 pattern,不用 effect —— 專案有
++  // react-you-might-not-need-an-effect lint(同 CandleChart 的 prevTotal 寫法)。
++  const [prevOpen, setPrevOpen] = useState(open);
++  if (prevOpen !== open) {
++    setPrevOpen(open);
++    if (open) {
++      setSelected(null);
++      setRenaming(null);
++      setStockInput("");
++      setLocalError(null);
++    }
++  }
++
+   /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
+    *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
+   function commit(next: Watchlist, onDone?: () => void): void {
+@@ -59,6 +89,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+   function submitAddGroup(): void {
+     const name = groupInput.trim();
+     if (name === "") return;
++    if (name === UNGROUPED_LABEL) {
++      setLocalError("BAD_GROUP"); // 保留名:與左欄的偽群組同名會無法區分
++      return;
++    }
+     const next = addGroup(wl, name);
+     if (next === wl) {
+       setLocalError("BAD_GROUP"); // 撞既有名 → 零 PUT + 文案
+@@ -69,17 +103,122 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+   }
+ 
+   function submitRename(from: string): void {
++    if (renameInput.trim() === UNGROUPED_LABEL) {
++      setLocalError("BAD_GROUP");
++      return;
++    }
+     const next = renameGroup(wl, from, renameInput);
+     if (next === wl) {
+       setLocalError("BAD_GROUP"); // 撞既有名 / 空白 → 保留輸入框讓使用者改
+       return;
+     }
+     setRenaming(null);
+-    commit(next);
++    // 改名成功前不要動 selected —— 樂觀更新在 PUT 失敗時會留下懸空的選取
++    commit(next, () => setSelected(renameInput.trim()));
++  }
++
++  // **右欄一律用 derived 值渲染**:`selected` 只是意圖。改名 / 刪除都是先 mutate 再更新
++  // UI,失敗時命令式的 setSelected 已經跑掉 → 指向不存在的組、右欄空白且無說明。
++  const activeGroup: Group | null =
++    selected === null ? null : (wl.groups.find((g) => g.name === selected) ?? null);
++  const ungrouped = ungroupedCodes(wl);
++  const rows = activeGroup === null ? ungrouped : activeGroup.codes;
++  const nameOf = (code: string): string => names.find((n) => n.code === code)?.name ?? "";
++  const suggestions = searchStocks(stockInput, names, SUGGEST_LIMIT);
++
++  /** 加進本組:`addCode` 與 `assignToGroup` **合成單次 PUT** ——
++   *  分兩次會產出「在群組但不在 codes」的中間態。 */
++  function addStock(code: string): void {
++    setStockInput("");
++    const withCode = addCode(wl, code);
++    commit(
++      activeGroup === null
++        ? withCode
++        : assignToGroup(withCode, code, activeGroup.name, activeGroup.codes.length),
++    );
+   }
+ 
+   const errorMessage = localError ?? (save.error ? save.error.message : null);
+ 
++  function groupRow(label: string, count: number, key: string | null): React.ReactElement {
++    const isSelected = selected === key;
++    const real = key !== null;
++    return (
++      <li key={key ?? "__ungrouped__"}>
++        {renaming === key && real ? (
++          <input
++            autoFocus
++            value={renameInput}
++            onChange={(e) => setRenameInput(e.target.value)}
++            onKeyDown={(e) => {
++              if (e.key === "Enter") submitRename(key);
++              if (e.key === "Escape") {
++                // 不讓它冒泡:取消改名不該順便關掉整個 Dialog
++                e.stopPropagation();
++                setRenaming(null);
++              }
++            }}
++            className="m-1 w-[calc(100%-0.5rem)] rounded border border-line bg-bg px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
++          />
++        ) : (
++          // border-l-2 兩態都在,選中不位移;用 side-specific 的 border-l-* 而不是全側
++          // border-*(twMerge 會把同 conflict group 的後者靜默吃掉)
++          <div
++            className={cn(
++              "group flex h-9 w-full items-center gap-2 border-l-2 px-2 text-xs",
++              isSelected
++                ? "border-l-accent bg-bg-deep text-ink"
++                : "border-l-transparent text-ink-muted hover:bg-surface hover:text-ink",
++            )}
++          >
++            <button
++              type="button"
++              onClick={() => setSelected(key)}
++              className="min-w-0 flex-1 truncate text-left"
++            >
++              {label}
++            </button>
++            <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{count}</span>
++            {real ? (
++              <>
++                <button
++                  type="button"
++                  aria-label={`改名 ${label}`}
++                  onClick={() => {
++                    setRenaming(key);
++                    setRenameInput(label);
++                  }}
++                  className={cn(
++                    "w-4 shrink-0 text-ink-dim hover:text-ink",
++                    isSelected ? "visible" : "invisible group-hover:visible",
++                  )}
++                >
++                  ✎
++                </button>
++                <button
++                  type="button"
++                  aria-label={`刪除群組 ${label}`}
++                  onClick={() =>
++                    commit(deleteGroup(wl, key), () => {
++                      onGroupDeleted(key);
++                      setSelected((cur) => (cur === key ? null : cur));
++                    })
++                  }
++                  className={cn(
++                    "w-4 shrink-0 text-ink-dim hover:text-bear",
++                    isSelected ? "visible" : "invisible group-hover:visible",
++                  )}
++                >
++                  ×
++                </button>
++              </>
++            ) : null}
++          </div>
++        )}
++      </li>
++    );
++  }
++
+   return (
+     <dialog
+       ref={dlgRef}
+@@ -87,13 +226,17 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+       onKeyDown={(e) => {
+         if (e.key === "Escape") onClose();
+       }}
+-      className="w-96 max-w-[90vw] rounded border border-line bg-bg p-3 text-ink backdrop:bg-black/50"
++      // **m-auto 不可省**:Tailwind v4 的 preflight 把 `margin: 0` 套到所有元素(含
++      // dialog),覆蓋掉 UA stylesheet 給 modal dialog 的 `margin: auto` → 貼在左上角。
++      // jsdom 沒有版面引擎,這個 bug 沒有任何測試看得到(同 showModal 的教訓)。
++      // 高度**固定**不是 max-h:切換群組時 dialog 不跳高,右欄自己捲。
++      className="m-auto flex h-[min(30rem,80vh)] w-[min(56rem,92vw)] flex-col overflow-hidden rounded border border-line bg-bg p-0 text-ink backdrop:bg-black/50"
+     >
+       {/* 關閉時不渲染內容:RTL 的 getAllBy* 不過濾隱藏元素,常駐渲染會讓側欄的計數型
+           斷言(2330 出現 2 次 / 握把 4 個)在 Dialog 掛上去之後莫名變 3 / 6 */}
+       {open ? (
+         <>
+-          <div className="mb-2 flex items-center justify-between">
++          <div className="flex h-10 shrink-0 items-center justify-between border-b border-line px-3">
+             <h2 className="text-sm text-ink">管理群組與股票</h2>
+             <button
+               type="button"
+@@ -106,122 +249,143 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+           </div>
+ 
+           {errorMessage !== null ? (
+-            <p className="mb-2 text-xs text-bear">{errText(errorMessage)}</p>
++            <p className="shrink-0 border-b border-line px-3 py-1 text-xs text-bear">
++              {errText(errorMessage)}
++            </p>
+           ) : null}
+ 
+-          <section aria-label="群組" className="mb-3">
+-            <h3 className="mb-1 text-xs text-ink-dim">群組</h3>
+-            <ul className="flex flex-col">
+-              {wl.groups.map((g) => (
+-                <li
+-                  key={g.name}
+-                  className="flex items-center gap-2 border-b border-line px-1 py-1 text-xs"
+-                >
+-                  {renaming === g.name ? (
+-                    <input
+-                      autoFocus
+-                      value={renameInput}
+-                      onChange={(e) => setRenameInput(e.target.value)}
+-                      onKeyDown={(e) => {
+-                        if (e.key === "Enter") submitRename(g.name);
+-                        if (e.key === "Escape") {
+-                          // 不讓它冒泡:取消改名不該順便關掉整個 Dialog
+-                          e.stopPropagation();
+-                          setRenaming(null);
+-                        }
+-                      }}
+-                      className="min-w-0 flex-1 rounded border border-line bg-bg px-1 py-0.5 text-ink outline-none focus:border-accent"
+-                    />
+-                  ) : (
+-                    <>
+-                      <span className="min-w-0 flex-1 truncate text-ink">{g.name}</span>
+-                      <span className="font-mono text-[0.625rem] text-ink-dim">
+-                        {g.codes.length}
+-                      </span>
+-                      <button
+-                        type="button"
+-                        aria-label={`改名 ${g.name}`}
+-                        onClick={() => {
+-                          setRenaming(g.name);
+-                          setRenameInput(g.name);
+-                        }}
+-                        className="px-0.5 text-ink-dim hover:text-ink"
+-                      >
+-                        ✎
+-                      </button>
+-                      <button
+-                        type="button"
+-                        aria-label={`刪除群組 ${g.name}`}
+-                        onClick={() => commit(deleteGroup(wl, g.name), () => onGroupDeleted(g.name))}
+-                        className="px-0.5 text-ink-dim hover:text-bear"
+-                      >
+-                        ×
+-                      </button>
+-                    </>
+-                  )}
+-                </li>
+-              ))}
+-            </ul>
+-            <div className="mt-1 flex gap-1">
+-              <input
+-                value={groupInput}
+-                onChange={(e) => setGroupInput(e.target.value)}
+-                onKeyDown={(e) => {
+-                  if (e.key === "Enter") submitAddGroup();
+-                }}
+-                placeholder="群組名稱"
+-                className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+-              />
+-              <button
+-                type="button"
+-                aria-label="新增群組"
+-                onClick={submitAddGroup}
+-                className="shrink-0 rounded border border-line px-2 py-1 text-xs text-ink hover:border-accent"
+-              >
+-                新增群組
+-              </button>
+-            </div>
+-          </section>
+-
+-          <section aria-label="股票">
+-            <h3 className="mb-1 text-xs text-ink-dim">股票</h3>
+-            <ul className="flex flex-col">
+-              {wl.codes.map((code) => (
+-                <li
+-                  key={code}
+-                  className="flex items-center gap-2 border-b border-line px-1 py-1 text-xs"
+-                >
+-                  <span className="w-14 shrink-0 font-mono text-ink">{code}</span>
+-                  <span className="w-16 shrink-0 truncate text-ink-muted">
+-                    {names.find((n) => n.code === code)?.name ?? ""}
+-                  </span>
+-                  <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+-                    {wl.groups.map((g) => (
+-                      <label key={g.name} className="flex items-center gap-1 text-ink">
+-                        <input
+-                          type="checkbox"
+-                          aria-label={`${code} 屬於 ${g.name}`}
+-                          checked={g.codes.includes(code)}
+-                          onChange={(e) =>
+-                            commit(setMembership(wl, code, g.name, e.target.checked))
+-                          }
+-                        />
+-                        {g.name}
+-                      </label>
+-                    ))}
+-                  </span>
++          <div className="flex min-h-0 flex-1">
++            {/* 左欄:群組。固定寬不用百分比 —— 內容(組名 + 計數 + 兩顆圖示鈕)寬度有
++                天花板,百分比會讓它在寬螢幕上白白變胖;要空間的是右欄。 */}
++            <section
++              aria-label="群組"
++              className="flex min-h-0 w-44 shrink-0 flex-col border-r border-line"
++            >
++              <ul className="flex-1 overflow-y-auto">
++                {/* 「未分組」固定置頂。**必須有** —— 舊版的 checkbox 矩陣列的是 codes 全體,
++                    是「從自選整個移除」的唯一入口;改成分組視圖後若左欄沒有未分組,
++                    未分組的股票在 Dialog 裡完全不可見也刪不掉 = 功能退化。
++                    順序也與側欄一致(未分組在上、群組在後),不必重新學。 */}
++                {groupRow(UNGROUPED_LABEL, ungrouped.length, null)}
++                {wl.groups.map((g) => groupRow(g.name, g.codes.length, g.name))}
++                {wl.groups.length === 0 ? (
++                  <li className="px-2 py-2 text-xs text-ink-dim">尚無群組,可在下方新增</li>
++                ) : null}
++              </ul>
++              <div className="shrink-0 border-t border-line p-2">
++                <div className="flex gap-1">
++                  <input
++                    value={groupInput}
++                    onChange={(e) => setGroupInput(e.target.value)}
++                    onKeyDown={(e) => {
++                      if (e.key === "Enter") submitAddGroup();
++                    }}
++                    placeholder="群組名稱"
++                    className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
++                  />
+                   <button
+                     type="button"
+-                    aria-label={`從自選移除 ${code}`}
+-                    onClick={() => commit(removeCode(wl, code))}
+-                    className="shrink-0 px-0.5 text-ink-dim hover:text-bear"
++                    aria-label="新增群組"
++                    onClick={submitAddGroup}
++                    className="shrink-0 rounded border border-line px-2 py-1 text-xs text-ink hover:border-accent"
+                   >
+-                    ×
++                    新增
+                   </button>
+-                </li>
+-              ))}
+-            </ul>
+-          </section>
++                </div>
++              </div>
++            </section>
++
++            {/* 右欄:目前選中群組的股票 */}
++            <section aria-label="股票" className="flex min-h-0 min-w-0 flex-1 flex-col">
++              <div className="shrink-0 border-b border-line px-3 py-2">
++                <input
++                  value={stockInput}
++                  onChange={(e) => setStockInput(e.target.value)}
++                  placeholder={
++                    activeGroup === null
++                      ? "加入自選 — 股號或名稱"
++                      : `加入股票到「${activeGroup.name}」— 股號或名稱`
++                  }
++                  className="w-full rounded border border-line bg-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
++                />
++                {suggestions.length > 0 ? (
++                  <ul className="mt-1 rounded border border-line bg-bg-deep">
++                    {suggestions.map((s) => {
++                      const already = rows.includes(s.code);
++                      return (
++                        <li key={s.code}>
++                          <button
++                            type="button"
++                            disabled={already}
++                            aria-label={`加入 ${s.code} 到 ${activeGroup?.name ?? UNGROUPED_LABEL}`}
++                            onClick={() => addStock(s.code)}
++                            className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface disabled:opacity-50 disabled:hover:bg-transparent"
++                          >
++                            <span className="w-14 font-mono text-ink">{s.code}</span>
++                            <span className="min-w-0 flex-1 truncate text-ink-muted">{s.name}</span>
++                            {already ? <span className="text-ink-dim">已在此群組</span> : null}
++                          </button>
++                        </li>
++                      );
++                    })}
++                  </ul>
++                ) : null}
++              </div>
++              <ul className="min-h-0 flex-1 overflow-y-auto px-1">
++                {rows.map((code) => (
++                  <li
++                    key={code}
++                    data-testid={`mgr-row-${code}`}
++                    className="flex h-9 items-center gap-2 border-b border-line px-2 text-xs"
++                  >
++                    <span className="w-14 shrink-0 font-mono text-ink">{code}</span>
++                    <span className="min-w-0 flex-1 truncate text-ink-muted">{nameOf(code)}</span>
++                    {/* 一檔多組是既有能力;矩陣拆掉後不標的話使用者會以為只能屬一組。
++                        唯讀,不可點 —— 免得跟左欄的選取語意打架。 */}
++                    <span className="flex shrink-0 gap-1 overflow-hidden whitespace-nowrap">
++                      {wl.groups
++                        .filter((g) => g.name !== activeGroup?.name && g.codes.includes(code))
++                        .map((g) => (
++                          <span
++                            key={g.name}
++                            className="rounded border border-line px-1 text-[0.625rem] text-ink-dim"
++                          >
++                            {g.name}
++                          </span>
++                        ))}
++                    </span>
++                    {activeGroup !== null ? (
++                      <button
++                        type="button"
++                        aria-label={`從 ${activeGroup.name} 移出 ${code}`}
++                        onClick={() => commit(removeFromGroup(wl, code, activeGroup.name))}
++                        className="w-4 shrink-0 text-ink-dim hover:text-ink"
++                      >
++                        −
++                      </button>
++                    ) : null}
++                    <button
++                      type="button"
++                      aria-label={`從自選移除 ${code}`}
++                      onClick={() => commit(removeCode(wl, code))}
++                      className="w-4 shrink-0 text-ink-dim hover:text-bear"
++                    >
++                      ×
++                    </button>
++                  </li>
++                ))}
++                {rows.length === 0 ? (
++                  <li className="px-2 py-3 text-xs text-ink-dim">
++                    {activeGroup !== null
++                      ? `「${activeGroup.name}」還沒有股票 —— 用上方搜尋加入`
++                      : wl.codes.length === 0
++                        ? "自選清單是空的 —— 用上方搜尋加入第一檔"
++                        : "所有自選股都已分組"}
++                  </li>
++                ) : null}
++              </ul>
++            </section>
++          </div>
+         </>
+       ) : null}
+     </dialog>
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index 97197fe..3809e34 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
+ import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+-import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
++import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+ import type { Group, Watchlist } from "@/lib/watchlist-model";
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+@@ -81,9 +81,9 @@ function wrap(ui: ReactNode) {
+ }
+ 
+ const QUOTES = {
+-  "2330": { p: 2_380_000, chg_pct: 2.59, vol: 12479, no_data: false },
+-  "5483": { p: null, chg_pct: null, vol: null, no_data: true },
+-  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, no_data: false },
++  "2330": { p: 2_380_000, chg_pct: 2.59, vol: 12479, ref: null, no_data: false },
++  "5483": { p: null, chg_pct: null, vol: null, ref: null, no_data: true },
++  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, ref: null, no_data: false },
+ };
+ 
+ function sidebar() {
+@@ -98,6 +98,18 @@ function search(): HTMLElement {
+   return screen.getByPlaceholderText("股號或名稱");
+ }
+ 
++/** 群組 / 未分組的標題列(round4 項 4:整條 header 是一顆 button)。
++ *  可及名稱由可見文字提供(組名 + 計數),不再是 `aria-label="折疊 X"` ——
++ *  有了 `aria-expanded` 之後把狀態寫進名稱會重複播報而且可能不同步。 */
++function groupHeader(name: string): HTMLElement {
++  return screen.getByRole("button", { name: new RegExp(name) });
++}
++
++/** jsdom 沒有 PointerEvent;MouseEvent 帶 clientX/clientY 且 type 對得上即可 */
++function ptrEvt(type: string, x: number, y: number): MouseEvent {
++  return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
++}
++
+ // 🔴 round3 SC-5:自選側欄與中間主區之間要有可見分隔線
+ describe("WatchlistSidebar 版面(round3 SC-5)", () => {
+   it("aside 右緣有 border 與中間區隔", () => {
+@@ -219,7 +231,7 @@ describe("WatchlistSidebar 未分組桶(SC-8~11)", () => {
+     mockWatchlist(GROUPS, [...CODES, "2317"]);
+     sidebar();
+     await waitGroups();
+-    fireEvent.click(screen.getByLabelText("折疊 未分組"));
++    fireEvent.click(groupHeader("未分組"));
+     expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
+     expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+     expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
+@@ -230,23 +242,78 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
+   it("點折疊 → 該組列隱藏、標題仍在、其他組不受影響", async () => {
+     sidebar();
+     await waitGroups();
+-    fireEvent.click(screen.getByLabelText("折疊 主力"));
++    fireEvent.click(groupHeader("主力"));
+     expect(screen.getByTestId("wl-group-主力")).toBeTruthy();
+     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+     expect(screen.getByTestId("wl-list-觀察")).toBeTruthy();
+-    expect(screen.getByLabelText("展開 主力")).toBeTruthy();
++    expect(groupHeader("主力").getAttribute("aria-expanded")).toBe("false");
+   });
+ 
+   it("折疊狀態落 localStorage 且重新掛載後維持", async () => {
+     sidebar();
+     await waitGroups();
+-    fireEvent.click(screen.getByLabelText("折疊 主力"));
++    fireEvent.click(groupHeader("主力"));
+     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]);
+     cleanup();
+     sidebar();
+     await waitGroups();
+     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+   });
++
++  // 🔴 round4 項 4(B-6):整條標題可點,不再只有 ▸/▾ 那個 3px 寬的按鈕
++  it("整條標題是一顆 button:點組名文字或計數同樣折疊", async () => {
++    sidebar();
++    await waitGroups();
++    const header = groupHeader("主力");
++    expect(header.tagName).toBe("BUTTON");
++    // 點的是 header 內的組名 <span>,事件冒泡到 button
++    fireEvent.click(within(header).getByText("主力"));
++    expect(screen.queryByTestId("wl-list-主力")).toBeNull();
++    fireEvent.click(within(header).getByText("2")); // 計數 badge
++    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
++  });
++
++  it("aria-expanded 反映展開狀態,aria-controls 指向該組清單且是合法 id token", async () => {
++    sidebar();
++    await waitGroups();
++    const header = groupHeader("主力");
++    expect(header.getAttribute("aria-expanded")).toBe("true");
++    const controls = header.getAttribute("aria-controls")!;
++    // 組名可含空白,不能拿來拼 id(ID token list 會被拆成兩個不存在的 token)
++    expect(controls).toMatch(/^[A-Za-z0-9_-]+$/);
++    expect(document.getElementById(controls)).toBe(screen.getByTestId("wl-list-主力"));
++    fireEvent.click(header);
++    expect(groupHeader("主力").getAttribute("aria-expanded")).toBe("false");
++  });
++
++  it("含空白的組名不會產生非法 id", async () => {
++    mockWatchlist([{ name: "主力 觀察", codes: ["2330"] }], ["2330"]);
++    sidebar();
++    await waitFor(() => expect(screen.getByTestId("wl-group-主力 觀察")).toBeTruthy());
++    const controls = groupHeader("主力 觀察").getAttribute("aria-controls")!;
++    expect(controls).toMatch(/^[A-Za-z0-9_-]+$/);
++    expect(document.getElementById(controls)).toBeTruthy();
++  });
++
++  it("▸/▾ 是 aria-hidden 的狀態指示,不再是獨立按鈕(避免 SR 重複播報)", async () => {
++    sidebar();
++    await waitGroups();
++    const header = groupHeader("主力");
++    expect(header.querySelectorAll("button").length).toBe(0); // 巢狀 button 是非法 HTML
++    const caret = within(header).getByText("▾");
++    expect(caret.getAttribute("aria-hidden")).toBe("true");
++    expect(screen.queryByLabelText("折疊 主力")).toBeNull();
++  });
++
++  it("拖曳中點到標題不折疊(放開瞬間的時序守衛)", async () => {
++    sidebar();
++    await waitGroups();
++    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
++    fireEvent(handle, ptrEvt("pointerdown", 10, 80));
++    fireEvent.click(groupHeader("主力"));
++    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
++    fireEvent(window, ptrEvt("pointerup", 10, 80));
++  });
+ });
+ 
+ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+@@ -254,7 +321,7 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+     mockWatchlist([], []);
+     sidebar();
+     await waitFor(() => expect(search()).toBeTruthy());
+-    expect(screen.getByText("新增")).toBeTruthy();
++    expect(screen.getByText("查看")).toBeTruthy();
+   });
+ 
+   it("輸入名稱 → 提示列出現該檔代碼與名稱", async () => {
+@@ -273,42 +340,50 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+     expect(within(screen.getByTestId("stock-suggest")).getByText("鴻海")).toBeTruthy();
+   });
+ 
+-  it("點提示列 → 進未分組(不進任何群組)", async () => {
+-    sidebar();
++  // 🔴 round4 項 4(B-5):搜尋三條路徑一律改成**預覽**,不再直接寫進自選。
++  // 「加入哪一組」交給分時圖上方的按鈕決定(StockPage)。
++  it("點提示列 → 只預覽該檔(onSelect),不寫進自選", async () => {
++    const onSelect = vi.fn();
++    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+     await waitGroups();
+     fireEvent.change(search(), { target: { value: "鴻海" } });
+-    fireEvent.click(screen.getByLabelText("加入 2317 鴻海"));
+-    await waitFor(() => expect(putBodies).toHaveLength(1));
+-    expect(putBodies[0]!.codes).toEqual([...CODES, "2317"]);
+-    expect(putBodies[0]!.groups).toEqual(GROUPS); // 群組零改動
+-    await waitFor(() =>
+-      expect(within(screen.getByTestId("wl-list-ungrouped")).getByText("2317")).toBeTruthy(),
+-    );
++    fireEvent.click(screen.getByLabelText("查看 2317 鴻海"));
++    expect(onSelect).toHaveBeenCalledWith("2317");
++    await new Promise((r) => setTimeout(r, 30));
++    expect(putBodies).toEqual([]);
++    expect(within(screen.getByTestId("wl-list-ungrouped")).queryByText("2317")).toBeNull();
+   });
+ 
+-  it("點「新增」鈕加入(W-4 的兩條路徑之一,不能只留 Enter)", async () => {
+-    sidebar();
++  it("點「查看」鈕 → 預覽提示列第一筆,零 PUT(W-4 兩條路徑之一)", async () => {
++    const onSelect = vi.fn();
++    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+     await waitGroups();
+     fireEvent.change(search(), { target: { value: "2317" } });
+-    fireEvent.click(screen.getByText("新增"));
+-    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "2317"]));
++    fireEvent.click(screen.getByText("查看"));
++    expect(onSelect).toHaveBeenCalledWith("2317");
++    await new Promise((r) => setTimeout(r, 30));
++    expect(putBodies).toEqual([]);
+   });
+ 
+-  it("Enter + 提示列無命中 → 原樣當股號加入(W-4)", async () => {
+-    sidebar();
++  it("Enter + 提示列無命中 → 原樣當股號預覽(W-4)", async () => {
++    const onSelect = vi.fn();
++    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+     await waitGroups();
+     fireEvent.change(search(), { target: { value: "9958" } });
+     expect(screen.queryByTestId("stock-suggest")).toBeNull();
+     fireEvent.keyDown(search(), { key: "Enter" });
+-    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "9958"]));
++    expect(onSelect).toHaveBeenCalledWith("9958");
++    await new Promise((r) => setTimeout(r, 30));
++    expect(putBodies).toEqual([]);
+   });
+ 
+-  // self-review MC-6:mutation test 證明停用早退後測試照樣全綠 → 重複 PUT 沒人發現
+-  it("已在自選的股票再加一次 → 零 PUT(不送重複)", async () => {
+-    sidebar();
++  it("已在自選的股票搜尋 → 一樣只預覽(零 PUT)", async () => {
++    const onSelect = vi.fn();
++    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+     await waitGroups();
+     fireEvent.change(search(), { target: { value: "2330" } });
+-    fireEvent.click(screen.getByText("新增"));
++    fireEvent.click(screen.getByText("查看"));
++    expect(onSelect).toHaveBeenCalledWith("2330");
+     await new Promise((r) => setTimeout(r, 30));
+     expect(putBodies).toEqual([]);
+   });
+@@ -339,12 +414,13 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+       // 這支刻意回**舊形狀**(只有 groups):守住「回應缺 codes → 前端用聯集補」的相容路徑
+       return new Response(JSON.stringify({ groups: GROUPS }));
+     });
+-    sidebar();
++    const onSelect = vi.fn();
++    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+     await waitGroups();
+     fireEvent.change(search(), { target: { value: "2317" } });
+     expect(screen.queryByTestId("stock-suggest")).toBeNull();
+     fireEvent.keyDown(search(), { key: "Enter" });
+-    await waitFor(() => expect(putBodies[0]?.codes).toEqual([...CODES, "2317"]));
++    expect(onSelect).toHaveBeenCalledWith("2317");
+   });
+ 
+   it("PUT 失敗 → 側欄顯示對應的中文文案", async () => {
+@@ -358,8 +434,8 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+     });
+     sidebar();
+     await waitGroups();
+-    fireEvent.change(search(), { target: { value: "2317" } });
+-    fireEvent.click(screen.getByText("新增"));
++    // 搜尋改成預覽後不再發 PUT → 用仍會 PUT 的路徑(群組列的 ×)驗錯誤文案
++    fireEvent.click(within(screen.getByTestId("wl-group-觀察")).getByLabelText("移除 3231"));
+     await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
+   });
+ });
+@@ -473,7 +549,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+   it("拖進折疊中的群組 → append 到該組尾端", async () => {
+     sidebar();
+     await waitGroups();
+-    fireEvent.click(screen.getByLabelText("折疊 觀察"));
++    fireEvent.click(groupHeader("觀察"));
+     expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
+     stubRects();
+     const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
+@@ -572,3 +648,66 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     await waitFor(() => expect(screen.getByText("拖曳股票到此")).toBeTruthy());
+   });
+ });
++
++// 🔴 round4 項 4(自選列)+ 項 5(字級)
++describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
++  it("列出股票名稱(名冊有的檔)", async () => {
++    sidebar();
++    await waitGroups();
++    // NAMES 有 2330 台積電;5483 / 3231 不在名冊 → 只顯示代號
++    expect(screen.getAllByText("台積電").length).toBeGreaterThan(0);
++  });
++
++  it("代號與現價放大到 text-base,名稱與漲幅維持 text-xs", async () => {
++    const { container } = sidebar();
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-2330"]')!;
++    expect(within(row as HTMLElement).getByText("2330").getAttribute("class")).toContain("text-base");
++    expect(within(row as HTMLElement).getByText("2380").getAttribute("class")).toContain("text-base");
++    expect(within(row as HTMLElement).getByText("台積電").getAttribute("class")).toContain("text-xs");
++    expect(within(row as HTMLElement).getByText("+2.59%").getAttribute("class")).toContain("text-xs");
++  });
++
++  it("列高由 ROW_H 單一真值推導(拖曳落點幾何的分母,不得與 class 各寫一份)", async () => {
++    const { container } = sidebar();
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
++    expect(row.style.height).toBe(`${ROW_H}px`);
++  });
++
++  it("尚無成交但有參考價 → 灰色參考價 + 灰字「參考」,不顯示 0.00%", async () => {
++    const quotes = {
++      ...QUOTES,
++      "3231": { p: null, chg_pct: null, vol: null, ref: 99_500, no_data: false },
++    };
++    const { container } = wrap(
++      <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
++    );
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-3231"]') as HTMLElement;
++    const price = within(row).getByText("99.5");
++    expect(price.getAttribute("class")).toContain("text-ink-dim");
++    expect(within(row).getByText("參考")).toBeTruthy();
++    expect(within(row).queryByText("0.00%")).toBeNull();
++  });
++
++  it("無參考價也無成交 → 維持 `-`(不憑空編值)", async () => {
++    const quotes = {
++      ...QUOTES,
++      "3231": { p: null, chg_pct: null, vol: null, ref: null, no_data: false },
++    };
++    const { container } = wrap(
++      <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
++    );
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-3231"]') as HTMLElement;
++    expect(within(row).getAllByText("-").length).toBeGreaterThan(0);
++    expect(within(row).queryByText("參考")).toBeNull();
++  });
++
++  it("no_data 仍優先顯示「無資料」(既有行為)", async () => {
++    sidebar();
++    await waitGroups();
++    expect(screen.getAllByText("無資料").length).toBeGreaterThan(0);
++  });
++});
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 8305807..c37f6ad 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -1,4 +1,4 @@
+-import { useRef, useState } from "react";
++import { useId, useMemo, useRef, useState } from "react";
+ 
+ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+@@ -8,7 +8,6 @@ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
+ import { searchStocks } from "@/lib/stock-search";
+ import { cn } from "@/lib/utils";
+ import {
+-  addCode,
+   assignToGroup,
+   detachFromGroups,
+   moveToGroup,
+@@ -19,7 +18,13 @@ import {
+   type Watchlist,
+ } from "@/lib/watchlist-model";
+ 
+-const ROW_H = 44;
++/** 列高(round4 項 4:44 → 52,兩行式)。
++ *
++ *  **同時是拖曳落點幾何的分母**(`dropTargetFromPointer`)—— 與畫面上的實際列高一旦
++ *  漂移,拖曳愈往下插入位置愈偏,而症狀是「放開後插到別的位置」= 靜默改資料、零錯誤訊號。
++ *  所以列高由這個常數用 inline style 指派,不寫 Tailwind class:jsdom 沒有版面引擎,
++ *  class 寫的高度沒有任何測試看得到。 */
++export const ROW_H = 52;
+ /** 折疊中的群組名(round4 項 2)。前綴沿用 `copycat-`(docs/next-time.md 的 key 收斂方向) */
+ const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+ /** 未分組區塊的折疊(`"1"` = 折疊);與群組折疊分開存,兩者互不影響 */
+@@ -82,12 +87,16 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     to: string | null;
+     index: number;
+   } | null>(null);
++  // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
++  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+   const asideRef = useRef<HTMLElement | null>(null);
+   // key = 群組名;`null` = 未分組區塊
+   const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());
+   const listRefs = useRef<Map<string | null, HTMLElement>>(new Map());
+ 
+   const suggestions = searchStocks(input, names, SUGGEST_LIMIT);
++  // 名冊 2,401 筆;每列 `names.find(...)` 是 O(列數 × 2401),而側欄每則 quote 都會 re-render
++  const nameOf = useMemo(() => new Map(names.map((n) => [n.code, n.name])), [names]);
+ 
+   /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
+    *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
+@@ -125,17 +134,22 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     });
+   }
+ 
+-  /** 加進自選(落未分組);已在自選 → `addCode` 回原物件 → 零 PUT(W-21)。 */
+-  function add(rawCode: string): void {
++  /** 搜尋命中 → **預覽**該檔(round4 項 4)。
++   *
++   *  舊行為是直接寫進自選(落未分組)。使用者的抱怨是「還沒看過就被塞進清單」——
++   *  現在改成只換主圖;要不要收藏、收藏到哪一組,由分時圖上方的「加入自選」按鈕決定。
++   *  非自選股照樣能訂閱看盤(`/api/stock/state/{code}` 內含 `set_main`),
++   *  所以「預覽」不需要任何新狀態,直接複用主檔選取。 */
++  function preview(rawCode: string): void {
+     const code = rawCode.trim().toUpperCase();
+     setInput("");
+     if (code === "") return;
+-    commit(addCode(wl, code));
++    onSelect(code);
+   }
+ 
+-  /** Enter / 點「新增」:提示列有命中取第一筆,無命中則原樣當股號(W-4 的兩條路徑)。 */
++  /** Enter / 點「查看」:提示列有命中取第一筆,無命中則原樣當股號(W-4 的兩條路徑)。 */
+   function submitAdd(): void {
+-    add(suggestions[0]?.code ?? input);
++    preview(suggestions[0]?.code ?? input);
+   }
+ 
+   /** 落點幾何。**每次 pointermove 重算** —— 只在 pointerdown 算一次的話,側欄捲動或
+@@ -215,13 +229,64 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     window.addEventListener("keydown", onKey);
+   }
+ 
++  /** 群組 / 未分組的標題列(round4 項 4)。**整條是一顆 `<button>`** ——
++   *  原本只有 3px 寬的 `▸/▾` 可點,而折疊是高頻操作。
++   *
++   *  用原生 button 不用 `role="button"` + tabIndex:免費得到鍵盤 Enter/Space、
++   *  focus ring 與正確的 SR 角色;`role` 版要自己補 `onKeyDown` 處理 Space(且預設會捲頁)。
++   *  `▸/▾` 降級成 `aria-hidden` 的狀態指示,狀態改由 `aria-expanded` 播報 ——
++   *  兩邊都講會重複播報,而且可能不同步。舊的 `aria-label="折疊 X"` 隨之移除,
++   *  可及名稱改由可見文字(組名 + 計數)提供。
++   *
++   *  `aria-controls` 的 id **不可拿組名拼**:組名是使用者自由輸入(`addGroup` 只 trim),
++   *  含空白的名字會產生含空白的 id,而 ID token list 會把它拆成兩個不存在的 token →
++   *  a11y 關聯靜默失效;叫 `ungrouped` 的群組還會撞未分組區塊的 id。 */
++  function sectionHeader(o: {
++    label: string;
++    count: number;
++    collapsed: boolean;
++    listId: string;
++    onToggle: () => void;
++  }): React.ReactElement {
++    return (
++      <button
++        type="button"
++        aria-expanded={!o.collapsed}
++        aria-controls={o.listId}
++        // 拖曳放開的瞬間 React 可能剛重繪、游標恰落在新的 header 上。天然防線是
++        // click 只在 pointerdown/up 的最近共同祖先派發(握把在列內,祖先是 section),
++        // 這行是針對時序邊角的顯式守衛。
++        onClick={() => {
++          if (drag !== null) return;
++          o.onToggle();
++        }}
++        className={cn(
++          "flex w-full items-center gap-1 border-b border-line px-1 py-1 text-left",
++          "focus-visible:border-b-accent focus-visible:outline-none",
++          // 拖曳中關掉 hover 亮色:否則會與落點高亮(border-accent)搶語意 ——
++          // 使用者分不清「這是可放的組」還是「這是可點的鈕」
++          drag === null && "hover:bg-surface",
++        )}
++      >
++        <span aria-hidden="true" className="w-3 shrink-0 text-xs text-ink-dim">
++          {o.collapsed ? "▸" : "▾"}
++        </span>
++        <span className="min-w-0 flex-1 truncate text-xs text-ink">{o.label}</span>
++        <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
++      </button>
++    );
++  }
++
+   function stockRow(code: string, group: string | null): React.ReactElement {
+     const q = quotes[code];
++    const name = nameOf.get(code);
+     return (
+       <li key={code}>
+         <div
++          data-testid={`wl-row-${code}`}
++          style={{ height: ROW_H }}
+           className={cn(
+-            "group flex h-11 cursor-pointer items-center gap-2 border-b border-line px-1",
++            "group flex cursor-pointer items-center gap-1.5 border-b border-line px-1",
+             active === code && "bg-bg-deep",
+             drag?.code === code && "opacity-50",
+           )}
+@@ -230,32 +295,58 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           <span
+             role="button"
+             aria-label={`拖拉 ${code}`}
+-            className="cursor-grab select-none text-ink-dim"
++            className="shrink-0 cursor-grab select-none text-ink-dim"
+             onPointerDown={(e) => onHandleDown(group, code, e)}
+             onClick={(e) => e.stopPropagation()}
+           >
+             ⋮⋮
+           </span>
+-          <span className="w-14 font-mono text-sm text-ink">{code}</span>
++          {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
++              放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是
++              主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
++              漲幅刻意不跟著放大:四個元素同權重反而更難掃。
++              `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
++          <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
++            <span className="font-mono text-base text-ink">{code}</span>
++            {name !== undefined ? (
++              <span className="truncate text-xs text-ink-muted">{name}</span>
++            ) : null}
++          </div>
+           {q?.no_data ? (
+-            <span className="flex-1 text-right text-xs text-ink-dim">無資料</span>
++            <span className="shrink-0 text-xs text-ink-dim">無資料</span>
+           ) : (
+-            <span className="flex flex-1 items-baseline justify-end gap-2 font-mono text-xs">
+-              <span className="text-sm text-ink">{fmtPrice(q?.p ?? null)}</span>
+-              <span
+-                className={cn(
+-                  "w-14 text-right",
+-                  (q?.chg_pct ?? 0) > 0
+-                    ? "text-bull"
+-                    : (q?.chg_pct ?? 0) < 0
+-                      ? "text-bear"
+-                      : "text-ink-dim",
+-                )}
+-              >
+-                {q?.chg_pct != null
+-                  ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
+-                  : "-"}
+-              </span>
++            <span className="flex shrink-0 flex-col items-end justify-center font-mono leading-tight">
++              {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
++                  參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
++              {q?.p != null ? (
++                <>
++                  <span className="text-base text-ink">{fmtPrice(q.p)}</span>
++                  <span
++                    className={cn(
++                      "text-xs",
++                      (q.chg_pct ?? 0) > 0
++                        ? "text-bull"
++                        : (q.chg_pct ?? 0) < 0
++                          ? "text-bear"
++                          : "text-ink-dim",
++                    )}
++                  >
++                    {q.chg_pct != null
++                      ? `${q.chg_pct > 0 ? "+" : ""}${q.chg_pct.toFixed(2)}%`
++                      : "-"}
++                  </span>
++                </>
++              ) : q?.ref != null ? (
++                <>
++                  <span className="text-base text-ink-dim">{fmtPrice(q.ref)}</span>
++                  <span className="text-xs text-ink-dim">參考</span>
++                </>
++              ) : (
++                <>
++                  <span className="text-base text-ink-dim">-</span>
++                  <span className="text-xs text-ink-dim">-</span>
++                </>
++              )}
+             </span>
+           )}
+           {group === null ? (
+@@ -339,7 +430,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+             onClick={submitAdd}
+             className="shrink-0 rounded border border-line px-2 py-1 text-sm text-ink hover:border-accent"
+           >
+-            新增
++            查看
+           </button>
+         </div>
+         {suggestions.length > 0 ? (
+@@ -348,8 +439,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+               <li key={s.code}>
+                 <button
+                   type="button"
+-                  aria-label={`加入 ${s.code} ${s.name}`}
+-                  onClick={() => add(s.code)}
++                  aria-label={`查看 ${s.code} ${s.name}`}
++                  onClick={() => preview(s.code)}
+                   className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface"
+                 >
+                   <span className="w-14 font-mono text-ink">{s.code}</span>
+@@ -375,22 +466,16 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           drag !== null && drag.to === null && "border-accent",
+         )}
+       >
+-        <header className="flex items-center gap-1 border-b border-line px-1 py-0.5">
+-          <button
+-            type="button"
+-            aria-label={`${ungroupedCollapsed ? "展開" : "折疊"} 未分組`}
+-            onClick={toggleUngroupedCollapsed}
+-            className="w-3 shrink-0 text-xs text-ink-dim hover:text-ink"
+-          >
+-            {ungroupedCollapsed ? "▸" : "▾"}
+-          </button>
+-          <span className="min-w-0 flex-1 truncate text-xs text-ink">未分組</span>
+-          <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">
+-            {ungrouped.length}
+-          </span>
+-        </header>
++        {sectionHeader({
++          label: "未分組",
++          count: ungrouped.length,
++          collapsed: ungroupedCollapsed,
++          listId: `${uid}-wl-list-ung`,
++          onToggle: toggleUngroupedCollapsed,
++        })}
+         {ungroupedCollapsed ? null : (
+           <ul
++            id={`${uid}-wl-list-ung`}
+             data-testid="wl-list-ungrouped"
+             ref={(el) => {
+               if (el) listRefs.current.set(null, el);
+@@ -400,7 +485,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           >
+             {ungrouped.map((code) => stockRow(code, null))}
+             {ungrouped.length === 0 ? (
+-              <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
++              <li style={{ minHeight: ROW_H }} className="flex items-center px-1 text-xs text-ink-dim">
+                 拖曳到此移出群組
+               </li>
+             ) : null}
+@@ -408,8 +493,9 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+         )}
+       </section>
+ 
+-      {groups.map((g) => {
++      {groups.map((g, i) => {
+         const isCollapsed = collapsed.has(g.name);
++        const listId = `${uid}-wl-list-${i}`;
+         return (
+           <section
+             key={g.name}
+@@ -423,23 +509,17 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+               drag !== null && drag.to === g.name && "border-accent",
+             )}
+           >
+-            <header className="flex items-center gap-1 border-b border-line px-1 py-0.5">
+-              <button
+-                type="button"
+-                aria-label={`${isCollapsed ? "展開" : "折疊"} ${g.name}`}
+-                onClick={() => toggleCollapsed(g.name)}
+-                className="w-3 shrink-0 text-xs text-ink-dim hover:text-ink"
+-              >
+-                {isCollapsed ? "▸" : "▾"}
+-              </button>
+-              <span className="min-w-0 flex-1 truncate text-xs text-ink">{g.name}</span>
+-              <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">
+-                {g.codes.length}
+-              </span>
+-            </header>
++            {sectionHeader({
++              label: g.name,
++              count: g.codes.length,
++              collapsed: isCollapsed,
++              listId,
++              onToggle: () => toggleCollapsed(g.name),
++            })}
+ 
+             {isCollapsed ? null : (
+               <ul
++                id={listId}
+                 data-testid={`wl-list-${g.name}`}
+                 ref={(el) => {
+                   if (el) listRefs.current.set(g.name, el);
+@@ -449,7 +529,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+               >
+                 {g.codes.map((code) => stockRow(code, g.name))}
+                 {g.codes.length === 0 ? (
+-                  <li className="flex min-h-11 items-center px-1 text-xs text-ink-dim">
++                  <li style={{ minHeight: ROW_H }} className="flex items-center px-1 text-xs text-ink-dim">
+                     拖曳股票到此
+                   </li>
+                 ) : null}
+diff --git a/frontend/src/hooks/useStockStream.ts b/frontend/src/hooks/useStockStream.ts
+index 5351266..00f5fbb 100644
+--- a/frontend/src/hooks/useStockStream.ts
++++ b/frontend/src/hooks/useStockStream.ts
+@@ -15,6 +15,9 @@ export interface WatchlistQuote {
+   p: number | null;
+   chg_pct: number | null;
+   vol: number | null;
++  /** 今日參考價(round4 項 4)。**只在尚無成交時才有值**,與 `p` 互斥 ——
++   *  參考價塞進 `p` 會讓畫面把昨收讀成今價。舊後端不發此欄 → null → 側欄維持 `-`。 */
++  ref: number | null;
+   no_data: boolean;
+ }
+ 
+@@ -150,6 +153,7 @@ export function useStockStream(code: string | null): StockStreamState {
+             p: (msg.p as number | null) ?? null,
+             chg_pct: (msg.chg_pct as number | null) ?? null,
+             vol: (msg.vol as number | null) ?? null,
++            ref: (msg.ref as number | null) ?? null,
+             no_data: Boolean(msg.no_data),
+           };
+           setWatchlist((prev) => ({ ...prev, [msg.code as string]: q }));
+diff --git a/frontend/src/lib/candle.ts b/frontend/src/lib/candle.ts
+index 4743e67..7eebc98 100644
+--- a/frontend/src/lib/candle.ts
++++ b/frontend/src/lib/candle.ts
+@@ -118,6 +118,13 @@ export interface CandleGeometry {
+   priceAtY: (y: number) => number;
+   /** x 像素 → bar index(hover 用);超界回 null */
+   indexOf: (x: number) => number | null;
++  /** 價格區底邊(= `height − X_LABEL_H` 再扣掉量區)。
++   *
++   *  極值標記的文字翻面要以**價格區**底為界,不是整張圖底 —— 拿整張圖底當界的話,
++   *  視窗最低點的文字永遠不會翻面、直接落進成交量柱上(常態路徑,BB 關閉時
++   *  `toY(windowLow)` 恰在 `priceBottom − PAD_Y`)。
++   *  由本函數回傳而不是讓元件端重算 `VOL_RATIO`:兩處各寫一份必漂移(同 W-4)。 */
++  priceBottom: number;
+ }
+ 
+ export interface Size {
+@@ -153,6 +160,7 @@ export function buildCandleGeometry(
+       toY: () => priceBottom,
+       priceAtY: () => 0,
+       indexOf: () => null,
++      priceBottom,
+     };
+   }
+ 
+@@ -252,5 +260,5 @@ export function buildCandleGeometry(
+     return i >= 0 && i < bars.length ? i : null;
+   };
+ 
+-  return { candles, volBars, yTicks, toY, priceAtY, indexOf };
++  return { candles, volBars, yTicks, toY, priceAtY, indexOf, priceBottom };
+ }
+diff --git a/frontend/src/lib/chart-extreme.test.ts b/frontend/src/lib/chart-extreme.test.ts
+new file mode 100644
+index 0000000..4bcd62e
+--- /dev/null
++++ b/frontend/src/lib/chart-extreme.test.ts
+@@ -0,0 +1,62 @@
++import { describe, expect, it } from "vitest";
++
++import {
++  CANDLE_MARK,
++  clampLabelX,
++  INTRADAY_MARK,
++  markLabelY,
++  trianglePoints,
++} from "@/lib/chart-extreme";
++
++describe("trianglePoints", () => {
++  it("apex 是第一個點且恰在價位上", () => {
++    const pts = trianglePoints(100, 50, "up", INTRADAY_MARK).split(" ").map((p) => p.split(",").map(Number));
++    expect(pts[0]).toEqual([100, 50]);
++  });
++
++  it("高標 body 朝下(圖內)、低標 body 朝上(圖內)—— 不會被 viewBox 裁掉", () => {
++    const up = trianglePoints(100, 50, "up", INTRADAY_MARK).split(" ").map((p) => p.split(",").map(Number));
++    for (const p of up.slice(1)) expect(p[1]!).toBeGreaterThan(50);
++    const down = trianglePoints(100, 50, "down", INTRADAY_MARK).split(" ").map((p) => p.split(",").map(Number));
++    for (const p of down.slice(1)) expect(p[1]!).toBeLessThan(50);
++  });
++
++  it("K 線的三角比分時圖大(viewBox 寬差 1.75×)", () => {
++    expect(CANDLE_MARK.half).toBeGreaterThan(INTRADAY_MARK.half);
++    expect(CANDLE_MARK.height).toBeGreaterThan(INTRADAY_MARK.height);
++  });
++});
++
++describe("markLabelY 翻面", () => {
++  const limits = { top: 9, bottom: 244 };
++
++  it("空間夠 → 高標文字在 apex 上方、低標在下方", () => {
++    expect(markLabelY(120, "up", INTRADAY_MARK, limits)).toBe(115);
++    expect(markLabelY(120, "down", INTRADAY_MARK, limits)).toBe(132);
++  });
++
++  it("高標頂到圖框 → 文字翻到三角下方", () => {
++    // y=4(漲停貼頂):4-5 = -1 < top 9 → 翻面
++    expect(markLabelY(4, "up", INTRADAY_MARK, limits)).toBe(19);
++  });
++
++  it("低標頂到圖底 → 文字翻到三角上方", () => {
++    // y=242(跌停貼底):242+12 = 254 > bottom 244 → 翻面
++    expect(markLabelY(242, "down", INTRADAY_MARK, limits)).toBe(232);
++  });
++
++  it("K 線常態(BB 關閉):高在 y 域頂、低在價格區底 → 兩個都翻面", () => {
++    // buildCandleGeometry:toY(windowHigh) === PAD_Y === 6;toY(windowLow) === priceBottom − PAD_Y
++    const k = { top: 11, bottom: 438 };
++    expect(markLabelY(6, "up", CANDLE_MARK, k)).toBe(25); // 6+19,不是 6−6=0(會被裁)
++    expect(markLabelY(434, "down", CANDLE_MARK, k)).toBe(422); // 434−12,不是 450(落進量區)
++  });
++});
++
++describe("clampLabelX", () => {
++  it("夾進可用範圍", () => {
++    expect(clampLabelX(10, 46, 760)).toBe(46);
++    expect(clampLabelX(900, 46, 760)).toBe(760);
++    expect(clampLabelX(400, 46, 760)).toBe(400);
++  });
++});
+diff --git a/frontend/src/lib/chart-extreme.ts b/frontend/src/lib/chart-extreme.ts
+new file mode 100644
+index 0000000..cf2e1ff
+--- /dev/null
++++ b/frontend/src/lib/chart-extreme.ts
+@@ -0,0 +1,71 @@
++/** 極值標記的幾何(分時圖當日高低 / K 線視窗高低共用;round4 項 1)。
++ *
++ *  兩張圖各寫一份的話,「三角尖端該貼在價位上」與「文字撞到圖框要翻面」這兩條規則
++ *  會各自漂移,而漂移的樣態是「標記被裁掉半截」或「文字壓在量柱上」—— 目視才抓得到,
++ *  沒有測試會紅(同 `toY` / `priceAtY` 必須共用 `PAD_Y` 的教訓)。
++ *
++ *  尺寸不共用:兩張圖的 viewBox 寬差 1.75×(800 vs 1400,同一容器寬),硬套同一組 px
++ *  會讓 K 線的標記只有分時圖的 57% 大。共用的是**規則**,各自帶自己的 style。 */
++
++export type ExtremeDir = "up" | "down";
++
++export interface ExtremeMarkStyle {
++  /** 三角半寬 */
++  half: number;
++  /** 三角高(apex → 底邊) */
++  height: number;
++  /** 高標文字:`out` = 畫在三角外側(apex 上方)的 baseline 距離;`flip` = 撞到圖框時翻到內側 */
++  labelUp: { out: number; flip: number };
++  /** 低標文字:`out` = 畫在三角外側(apex 下方);`flip` = 撞到圖框時翻到內側 */
++  labelDown: { out: number; flip: number };
++}
++
++/** 分時圖(viewBox 800 寬、字級 0.5625rem) */
++export const INTRADAY_MARK: ExtremeMarkStyle = {
++  half: 3.5,
++  height: 6,
++  labelUp: { out: 5, flip: 15 },
++  labelDown: { out: 12, flip: 10 },
++};
++
++/** K 線圖(viewBox 1400 寬、字級 0.625rem) */
++export const CANDLE_MARK: ExtremeMarkStyle = {
++  half: 5,
++  height: 8,
++  labelUp: { out: 6, flip: 19 },
++  labelDown: { out: 16, flip: 12 },
++};
++
++/** 三角形點串。**apex 貼在價位上、body 朝圖內延伸** ——
++ *  body 朝圖外的話,極值恰在 y 域端點時(K 線視窗高低是常態、分時圖漲跌停時)
++ *  三角會被 viewBox 裁掉半截。 */
++export function trianglePoints(
++  x: number,
++  y: number,
++  dir: ExtremeDir,
++  style: ExtremeMarkStyle,
++): string {
++  const dy = dir === "up" ? style.height : -style.height;
++  return `${x},${y} ${x - style.half},${y + dy} ${x + style.half},${y + dy}`;
++}
++
++/** 價位文字的 baseline。預設畫在三角外側,撞到圖框就翻到內側。
++ *  `limits.top` / `limits.bottom` 是文字 baseline 的可用範圍(呼叫端已把字高算進去)。 */
++export function markLabelY(
++  y: number,
++  dir: ExtremeDir,
++  style: ExtremeMarkStyle,
++  limits: { top: number; bottom: number },
++): number {
++  if (dir === "up") {
++    return y - style.labelUp.out < limits.top ? y + style.labelUp.flip : y - style.labelUp.out;
++  }
++  return y + style.labelDown.out > limits.bottom
++    ? y - style.labelDown.flip
++    : y + style.labelDown.out;
++}
++
++/** 文字的水平夾制:標記本身留在真 x,只夾文字(標記位置承載時間語意,不可位移)。 */
++export function clampLabelX(x: number, minX: number, maxX: number): number {
++  return Math.min(Math.max(x, minX), maxX);
++}
+diff --git a/frontend/src/lib/stock-accum.test.ts b/frontend/src/lib/stock-accum.test.ts
+index 362cdbb..c9579db 100644
+--- a/frontend/src/lib/stock-accum.test.ts
++++ b/frontend/src/lib/stock-accum.test.ts
+@@ -76,6 +76,45 @@ describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
+   });
+ });
+ 
++describe("per-minute 高低(round4 項 1)", () => {
++  it("snapshot 帶 h / l → 原樣進 minutes", () => {
++    const acc = fromSnapshot({
++      ...SNAP,
++      minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 } },
++    });
++    expect(acc.minutes.get(541)?.h).toBe(2_395_000);
++    expect(acc.minutes.get(541)?.l).toBe(2_370_000);
++  });
++
++  it("snapshot 缺 h / l(舊後端)→ null,**不拿 c 頂替**", () => {
++    // 頂替會讓「minute.h === accum.high」的等值反查命中錯的分鐘 = 靜默標錯位置;
++    // null 則讓反查落空 → 標記不畫(誠實降級)
++    const acc = fromSnapshot(SNAP);
++    expect(acc.minutes.get(541)?.h).toBeNull();
++    expect(acc.minutes.get(541)?.l).toBeNull();
++  });
++
++  it("applyTick 在同一分鐘內滾動 h / l", () => {
++    let acc = fromSnapshot({ ...SNAP, minutes: {}, ticks: [], last: null, vwap: null });
++    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:10.000", p: 2_380_000, q: 1, side: "outer", seq: 4 });
++    expect(acc.minutes.get(541)?.h).toBe(2_380_000);
++    expect(acc.minutes.get(541)?.l).toBe(2_380_000); // 單筆分鐘:高 = 低 = 該筆
++    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:30.000", p: 2_395_000, q: 1, side: "outer", seq: 5 });
++    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:50.000", p: 2_370_000, q: 1, side: "inner", seq: 6 });
++    expect(acc.minutes.get(541)?.h).toBe(2_395_000);
++    expect(acc.minutes.get(541)?.l).toBe(2_370_000);
++    expect(acc.minutes.get(541)?.c).toBe(2_370_000); // 收盤與高低分離
++  });
++
++  it("舊 snapshot 來的分鐘(h=null 且 v>0)再吃 tick → h 仍為 null", () => {
++    // 只用「本次載入後看到的 tick」算出來的高低不是整分鐘的高低,不可冒充
++    let acc = fromSnapshot(SNAP); // 541 有量、無 h/l
++    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:55.000", p: 2_390_000, q: 1, side: "outer", seq: 4 });
++    expect(acc.minutes.get(541)?.h).toBeNull();
++    expect(acc.minutes.get(541)?.l).toBeNull();
++  });
++});
++
+ describe("applyTick", () => {
+   it("accumulates minutes, vwap and inner/outer(與後端 StockDayState 等值)", () => {
+     // 後端 tests/live/test_stock_state.py::TestAggregation 同一組數字
+diff --git a/frontend/src/lib/stock-accum.ts b/frontend/src/lib/stock-accum.ts
+index a9ddcb9..bb9f666 100644
+--- a/frontend/src/lib/stock-accum.ts
++++ b/frontend/src/lib/stock-accum.ts
+@@ -23,6 +23,13 @@ export interface MinuteAgg {
+   i: number;
+   o: number;
+   u: number;
++  /** 分鐘內高 / 低(round4 項 1;與後端 `MinuteAgg.high_milli/low_milli` 等值)。
++   *
++   *  **選填且 `null` 有意義** —— `null` = 「這一分鐘的高低不可知」(舊後端 snapshot 沒給),
++   *  不是「等於收盤價」。拿 `c` 頂替會讓分時圖的等值反查(`minute.h === accum.high`)
++   *  命中錯的分鐘 → 標記畫在錯的時間點,而且完全靜默。 */
++  h?: number | null;
++  l?: number | null;
+ }
+ 
+ export interface TickRow {
+@@ -102,7 +109,7 @@ interface SnapshotShape {
+ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+   const minutes = new Map<number, MinuteAgg>();
+   for (const [k, v] of Object.entries(snap.minutes ?? {})) {
+-    minutes.set(Number(k), { ...v });
++    minutes.set(Number(k), { ...v, h: v.h ?? null, l: v.l ?? null });
+   }
+   const volume = snap.last?.cum_vol ?? 0;
+   return {
+@@ -131,12 +138,18 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
+   const key = minuteKey(msg.t);
+   const minutes = new Map(acc.minutes);
+   const prev = minutes.get(key) ?? { c: 0, v: 0, i: 0, o: 0, u: 0 };
++  // 分鐘高低三條路徑:新分鐘(v=0)→ 本筆;已知高低 → max/min;
++  // **高低不可知(舊 snapshot:h 為 null 但已有量)→ 維持 null** ——
++  // 只用「本次載入後看到的 tick」算出來的極值不是整分鐘的極值,不可冒充。
++  const unknown = prev.v > 0 && prev.h == null;
+   const agg: MinuteAgg = {
+     c: msg.p,
+     v: prev.v + msg.q,
+     i: prev.i + (msg.side === "inner" ? msg.q : 0),
+     o: prev.o + (msg.side === "outer" ? msg.q : 0),
+     u: prev.u + (msg.side === "neutral" ? msg.q : 0),
++    h: unknown ? null : Math.max(prev.h ?? msg.p, msg.p),
++    l: unknown ? null : Math.min(prev.l ?? msg.p, msg.p),
+   };
+   minutes.set(key, agg);
+   const amountMilli = acc.amountMilli + msg.p * msg.q;
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index 897d07a..c0895ba 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -55,14 +55,90 @@ describe("buildIntradayGeometry", () => {
+     expect(g.priceLine[1]!.x).toBeCloseTo(Y_AXIS_W + 1, 5);
+   });
+ 
++  // 🟢 round4 項 1:當日高低由橫虛線改成「標在摸到的那一分鐘上」的標記。
++  // 位置靠 per-minute h/l 與 top-level high 的**等值反查**取得。
++  describe("當日高低標記(highMark / lowMark)", () => {
++    const W = Y_AXIS_W + 270 + R_AXIS_W;
++    const MS = minutes([
++      [540, { c: 2_320_000, v: 1, h: 2_330_000, l: 2_310_000 }],
++      [545, { c: 2_380_000, v: 1, h: 2_395_000, l: 2_360_000 }],
++      [550, { c: 2_350_000, v: 1, h: 2_360_000, l: 2_300_000 }],
++    ]);
++
++    it("標記落在摸到極值的那一分鐘(不是收盤最高的分鐘、不是最後一分鐘)", () => {
++      const g = buildIntradayGeometry(
++        { minutes: MS, meta: META, high: 2_395_000, low: 2_300_000 },
++        { width: W, height: 100 },
++      );
++      expect(g.highMark).not.toBeNull();
++      expect(g.highMark!.priceMilli).toBe(2_395_000);
++      expect(g.highMark!.x).toBeCloseTo(minuteToX(545, W), 6);
++      expect(g.highMark!.y).toBeCloseTo(g.toY(2_395_000), 6);
++      // 低點在 550 分,而 550 的收盤(2_350_000)不是全日最低收盤 → 只有 per-minute l 找得到
++      expect(g.lowMark!.x).toBeCloseTo(minuteToX(550, W), 6);
++      expect(g.lowMark!.priceMilli).toBe(2_300_000);
++    });
++
++    it("high === low(漲停鎖死)→ 只給 highMark,lowMark 為 null", () => {
++      const flat = minutes([[540, { c: 2_550_000, v: 1, h: 2_550_000, l: 2_550_000 }]]);
++      const g = buildIntradayGeometry(
++        { minutes: flat, meta: META, high: 2_550_000, low: 2_550_000 },
++        { width: W, height: 100 },
++      );
++      expect(g.highMark).not.toBeNull();
++      expect(g.lowMark).toBeNull();
++    });
++
++    it("域外的極值不畫(沿用既有規則)", () => {
++      const g = buildIntradayGeometry(
++        { minutes: MS, meta: META, high: 9_999_000, low: 1_000 },
++        { width: W, height: 100 },
++      );
++      expect(g.highMark).toBeNull();
++      expect(g.lowMark).toBeNull();
++    });
++
++    it("域內但反查落空(沒有分鐘的 h 等於該值)→ 不畫,不退而求其次", () => {
++      const g = buildIntradayGeometry(
++        { minutes: MS, meta: META, high: 2_390_000, low: 2_305_000 },
++        { width: W, height: 100 },
++      );
++      expect(g.highMark).toBeNull();
++      expect(g.lowMark).toBeNull();
++    });
++
++    it("minutes 缺 h / l(舊後端降級)→ 不畫", () => {
++      const noHL = minutes([
++        [540, { c: 2_320_000, v: 1 }],
++        [545, { c: 2_395_000, v: 1 }],
++      ]);
++      const g = buildIntradayGeometry(
++        { minutes: noHL, meta: META, high: 2_395_000, low: 2_320_000 },
++        { width: W, height: 100 },
++      );
++      expect(g.highMark).toBeNull();
++      expect(g.lowMark).toBeNull();
++    });
++
++    it("high / low 未傳(呼叫端沒給)→ 兩者皆 null", () => {
++      const g = buildIntradayGeometry({ minutes: MS, meta: META }, { width: W, height: 100 });
++      expect(g.highMark).toBeNull();
++      expect(g.lowMark).toBeNull();
++    });
++  });
++
+   // 🔴 round4 項 3:價位文字原本畫在 x=2 而繪圖區從 x=0 起,文字直接壓在走勢線上。
+   // 左緣讓出 Y_AXIS_W 寬的價位帶後,`minuteToX` / `minuteOf` 必須**共用**同一組常數,
+   // 否則反演只在兩端偏移(同 toY / priceAtY 共用 PAD_Y 的理由)。
+   describe("左緣價位帶(gutter)", () => {
+     const W = Y_AXIS_W + 270 + R_AXIS_W;
+ 
+-    it("Y_AXIS_W 等於 hover 價位標寬度(標籤恰好整格塞進價位帶,不再壓線)", () => {
+-      expect(Y_AXIS_W).toBe(46);
++    // 🔴 round4 項 6:原本硬編 `expect(Y_AXIS_W).toBe(46)`,測的其實是「hover 價位標整格
++    // 塞得進價位帶」這個語意 —— 那條不變式屬於元件(PRICE_TAG.w === Y_AXIS_W),
++    // 在純函數測試裡只能退化成一個會隨帶寬改動而失效的字面值。改成守語意:
++    // 繪圖區左界必須恰是價位帶右緣(帶寬多少由元件與 UI 決定)。
++    it("繪圖區左界恰是價位帶右緣(帶寬本身不寫死)", () => {
++      expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
+     });
+ 
+     it("繪圖區起於價位帶右緣、迄於圖右緣", () => {
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index 706b362..29b4501 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -28,12 +28,18 @@ export const SUB_TOP_PAD = 10;
+ /** 左緣刻度的百分比階(SC-4:由上而下)。±10 直接用 upper/lower 原值、0 用 ref 原值。 */
+ const TICK_PCTS = [10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10] as const;
+ 
+-/** 左緣價位帶寬度(round4 項 3)。價位文字原本畫在 `x=2` 而繪圖區從 `x=0` 起,
+- *  文字直接壓在走勢線與紅綠填色上。讓出這條帶後繪圖區改為 `[Y_AXIS_W, width]`。
++/** 左緣價位帶寬度(round4 項 3 讓出、項 6 內縮)。價位文字原本畫在 `x=2` 而繪圖區從
++ *  `x=0` 起,文字直接壓在走勢線與紅綠填色上。讓出這條帶後繪圖區改為 `[Y_AXIS_W, width]`。
+  *
+- *  取 46 = 元件的 `PRICE_TAG.w`:hover 價位標(左上角固定在 x=0)恰好整格塞進帶內,
+- *  不必再為它另留空間;價位文字本身只需 ~24px。 */
+-export const Y_AXIS_W = 46;
++ *  **36(round4 項 6:原 46)**。「離走勢圖太遠」的根因是**左對齊**不是帶寬 ——
++ *  `123.5` 從 x=2 起排,右緣落在 ~27,離繪圖區還有 19px;兩位數更遠,而且數字長度不同
++ *  時右緣參差。改成右對齊(`x = Y_AXIS_W − 4`、`textAnchor="end"`)後所有刻度一律距
++ *  繪圖區 4px 且對齊成一欄,帶寬才有內縮的餘裕。
++ *
++ *  仍與元件的 `PRICE_TAG.w` 綁定:hover 價位標(左上角固定在 x=0)要整格塞進帶內。
++ *  最寬內容是 `snapDown` 後的合法檔位(≥1000 元級距 5 元 → 4 位整數;最長是
++ *  100–500 元帶的 `412.5`)@0.5625rem ≈ 25px,36 寬左右各留 4~5px。 */
++export const Y_AXIS_W = 36;
+ 
+ /** 右緣疊線標籤帶寬度(round5 D)。CDP/MA 的價位標原本畫在 `x = width − 32`,而繪圖區
+  *  一路到 `width` —— 標籤直接疊在走勢線上,與左緣價位帶當初的症狀是同一個。
+@@ -74,6 +80,13 @@ export interface YTick {
+   priceMilli: number;
+ }
+ 
++/** 當日極值標記(round4 項 1)。位置 = 摸到該價位的那一分鐘,值 = tick 級極值本身。 */
++export interface ExtremeMark {
++  x: number;
++  y: number;
++  priceMilli: number;
++}
++
+ export interface IntradayGeometry {
+   priceLine: (Pt & { minute: number })[];
+   vwapLine: (Pt & { vwap: number })[];
+@@ -87,6 +100,9 @@ export interface IntradayGeometry {
+   lowerY: number | null;
+   yDomain: [number, number]; // 毫元
+   yTicks: YTick[];
++  /** 當日高 / 低的標記(round4 項 1);域外、反查落空、缺 per-minute h/l 一律 null = 不畫 */
++  highMark: ExtremeMark | null;
++  lowMark: ExtremeMark | null;
+   energyBars: EnergyBar[];
+   /** 歸一分母 = 全日最大**總量**(外+內+未分類),即副圖頂端刻度值。
+    *  round5 E 之前是「單邊最大」,那讓資訊列的「量」在副圖上找不到對應高度。 */
+@@ -120,6 +136,9 @@ export interface OverlayLine {
+ interface Input {
+   minutes: Map<number, MinuteAgg>;
+   meta: StockMeta | null;
++  /** 當日 tick 級高 / 低(後端 running max/min)。未傳 → 不畫標記。 */
++  high?: number | null;
++  low?: number | null;
+ }
+ 
+ interface Size {
+@@ -247,12 +266,28 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
+         ].join(" ")
+       : "";
+ 
++  // 當日高低標記(round4 項 1)。**等值反查**:找出 per-minute h(或 l)恰等於當日極值的
++  // 那一分鐘,取它的 x。反查落空一律回 null(不畫)而不是退而求其次挑「收盤最接近的分鐘」——
++  // 位置錯就是資料錯,而且完全靜默。落空的三種成因(域外 / 無等值分鐘 / 舊後端缺 h,l)
++  // 都收斂到同一個安全結果。
++  const markFor = (target: number | null | undefined, pick: "h" | "l"): ExtremeMark | null => {
++    if (target == null) return null;
++    if (target < yBottom || target > yTop) return null; // 域外不畫(既有規則)
++    const hit = entries.find(([, m]) => (pick === "h" ? m.h : m.l) === target);
++    return hit === undefined ? null : { x: toX(hit[0]), y: toY(target), priceMilli: target };
++  };
++  const highMark = markFor(input.high, "h");
++  // 高 === 低(漲停鎖死 / 一字盤)時兩個標記會疊在同一點變成看不懂的黑塊 → 只留高標
++  const lowMark = input.low != null && input.low === input.high ? null : markFor(input.low, "l");
++
+   return {
+     priceLine,
+     vwapLine,
+     refY,
+     hasRef,
+     areaPolygon,
++    highMark,
++    lowMark,
+     upperY: upper != null && upper <= yTop ? toY(upper) : null,
+     lowerY: lower != null && lower >= yBottom ? toY(lower) : null,
+     yDomain: [yBottom, yTop],
+diff --git a/tests/live/test_stock_state.py b/tests/live/test_stock_state.py
+index 0080e0c..691f26b 100644
+--- a/tests/live/test_stock_state.py
++++ b/tests/live/test_stock_state.py
+@@ -80,6 +80,67 @@ class TestAggregation:
+         assert snap["minutes"]
+ 
+ 
++class TestMinuteHighLow:
++    """per-minute 高低(round4 項 1):分時圖要把當日高低標在**摸到的那一分鐘**上,
++    而 top-level high/low 只有值沒有時間歸屬。"""
++
++    def test_minute_high_low_tracks_intra_minute_swing(self) -> None:
++        st = StockDayState()
++        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
++        st.ingest(_tick(20, price=2_395_000, time="09:01:30.000"))
++        st.ingest(_tick(30, price=2_370_000, time="09:01:50.000"))
++        st.ingest(_tick(40, price=2_385_000, time="09:02:10.000"))
++        m1 = st.minutes[9 * 60 + 1]
++        assert m1.high_milli == 2_395_000
++        assert m1.low_milli == 2_370_000
++        assert m1.close_milli == 2_370_000  # 收盤仍是最後一筆,與高低分離
++        m2 = st.minutes[9 * 60 + 2]
++        assert m2.high_milli == 2_385_000
++        assert m2.low_milli == 2_385_000  # 單筆分鐘:高 = 低 = 該筆
++
++    def test_low_default_is_none_not_zero(self) -> None:
++        # 預設 0 會讓 min(0, p) 把最低價永久卡在 0(靜默錯值,畫面上就是標記黏在 0 元)
++        st = StockDayState()
++        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
++        assert st.minutes[9 * 60 + 1].low_milli == 2_380_000
++
++    def test_snapshot_minutes_carry_h_l(self) -> None:
++        st = StockDayState()
++        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
++        st.ingest(_tick(20, price=2_395_000, time="09:01:30.000"))
++        entry = st.snapshot()["minutes"]["541"]
++        assert entry["h"] == 2_395_000
++        assert entry["l"] == 2_380_000
++        assert entry["c"] == 2_395_000
++
++    def test_day_high_equals_max_of_minute_highs(self) -> None:
++        """前端靠 `minute.h === accum.high` 等值反查定位 —— 這條等式必須由建構保證,
++        否則標記會落空(或更糟:命中錯的分鐘)。"""
++        st = StockDayState()
++        st.ingest(_tick(10, price=2_380_000, time="09:01:10.000"))
++        st.ingest(_tick(20, price=2_395_000, time="09:03:30.000"))
++        st.ingest(_tick(30, price=2_370_000, time="09:05:50.000"))
++        assert st.high_milli == max(m.high_milli or 0 for m in st.minutes.values())
++        assert st.low_milli == min(m.low_milli or 0 for m in st.minutes.values())
++
++    def test_backfill_replay_equals_incremental_ingest(self) -> None:
++        """回補重放路徑也要維持等式(apply_backfill 走 _apply,不是另一條計算)。"""
++        ticks = [
++            _tick(10, price=2_380_000, time="09:01:10.000"),
++            _tick(20, price=2_395_000, time="09:01:30.000"),
++            _tick(30, price=2_370_000, time="09:01:50.000"),
++        ]
++        live = StockDayState()
++        for t in ticks:
++            live.ingest(t)
++        back = StockDayState()
++        back.apply_backfill(ticks)
++        key = 9 * 60 + 1
++        assert back.minutes[key].high_milli == live.minutes[key].high_milli == 2_395_000
++        assert back.minutes[key].low_milli == live.minutes[key].low_milli == 2_370_000
++        assert back.high_milli == max(m.high_milli or 0 for m in back.minutes.values())
++
++
+ class TestApplyBackfill:
+     def test_atomic_rebuild_and_seq_jump(self) -> None:
+         st = StockDayState()
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 6a7a382..9a37989 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -56,6 +56,7 @@ class FakeSource:
+         self.on_message: Callable[[dict], None] | None = None
+         self.on_no_data: Callable[[str], None] | None = None
+         self.on_reconnect: Callable[[], None] | None = None
++        self.on_subscribe: Callable[[str], None] | None = None
+ 
+     def subscribe_symbol(self, code: str) -> None:
+         if code in self.fail_subscribe:
+@@ -63,6 +64,10 @@ class FakeSource:
+         if self.subscribe_gate is not None:
+             self.subscribe_gate.wait(timeout=5)
+         self.subscribed.append(code)
++        # 真 TC4 在 SUB 回來後幾乎立刻推第一則 REALTIME。這個 hook 讓測試能重現
++        # 「報價在 set_watchlist 的 await 窗內到貨」的競態(round4 項 4 R7)。
++        if self.on_subscribe is not None:
++            self.on_subscribe(code)
+ 
+     def unsubscribe_symbol(self, code: str) -> None:
+         self.unsubscribed.append(code)
+@@ -289,6 +294,131 @@ class TestStreamAndStatus:
+         await engine.close()
+ 
+ 
++class TestWatchlistQuoteSeed:
++    """round4 項 4:側欄開頁 / 盤後全是 `-` 的根因 —— quote 只有 tick 驅動的生產點,
++    新 client 連上時沒有任何歷史訊息可收。修在 stream() 接點(開頁與重連天然自癒),
++    與 ws_corr / ws_river「連線先送快照」的既成慣例一致。"""
++
++    async def _collect(self, stream) -> list[dict]:
++        got: list[dict] = []
++        try:
++            while True:
++                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
++        except (TimeoutError, asyncio.TimeoutError):
++            pass
++        return got
++
++    async def test_stream_seeds_current_watchlist_quotes(self) -> None:
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        assert src.on_message is not None
++        src.on_message(_quote(cum=7, price="2400"))
++        await _drain(engine)
++        # 新 client 在成交之後才連上 → 沒有種子的話這一則永遠收不到
++        got = await self._collect(engine.stream())
++        seeds = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330"]
++        assert seeds, "連線時必須先送一輪 watchlist quote 種子"
++        assert seeds[0]["p"] == 2_400_000
++        assert seeds[0]["vol"] == 7
++        assert seeds[0]["no_data"] is False
++        await engine.close()
++
++    async def test_seed_uses_ref_field_never_p_when_no_trade(self) -> None:
++        """盤前 / 盤後尚無成交:參考價走**獨立欄位**,絕不塞進 p ——
++        塞進 p 會讓新舊 client 都把昨收讀成今價(資料誠實紅線)。"""
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        assert src.on_message is not None
++        # 只有報價沒有成交(TradeVolume 0 → 無 tick,但 meta 會更新)
++        quote = _quote(cum=0, qty="0")
++        src.on_message(quote)
++        await _drain(engine)
++        got = await self._collect(engine.stream())
++        seed = next(m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330")
++        assert seed["p"] is None
++        assert seed["chg_pct"] is None
++        assert seed["ref"] == 2_320_000
++        await engine.close()
++
++    async def test_seed_absent_when_watchlist_empty(self) -> None:
++        engine, _src = await _make()
++        got = await self._collect(engine.stream())
++        assert [m for m in got if m["type"] == "watchlist_quote"] == []
++        await engine.close()
++
++    async def test_set_watchlist_broadcasts_seed_for_added_codes(self) -> None:
++        engine, _src = await _make()
++        stream = engine.stream()
++        await engine.set_watchlist(["2330"])
++        await _drain(engine)
++        got = await self._collect(stream)
++        assert any(m["type"] == "watchlist_quote" and m["code"] == "2330" for m in got)
++        await engine.close()
++
++    async def test_meta_arriving_during_subscribe_still_pushes(self) -> None:
++        """`_watchlist` 若在 acquire 的 await 窗之後才指派,這一則會被 gate 擋掉:
++        TC4 在 SUB 後幾乎立刻推第一則 REALTIME,而每個 `await to_thread` 都讓出 loop
++        → 第一檔的報價會在名單還沒指派時就進 `_handle_quote`;盤後沒有後續 tick、
++        flush 只推 dirty → 該檔卡在 `-` 直到重整。"""
++        engine, src = await _make()
++        stream = engine.stream()
++
++        def _on_sub(code: str) -> None:
++            # 訂閱第二檔時,第一檔(_states 已建好)的報價到貨 —— 此刻 _watchlist 是否
++            # 已指派,決定 meta 轉態補推會不會被擋掉
++            if code == "5483":
++                assert src.on_message is not None
++                src.on_message(_quote(cum=0, qty="0"))
++
++        src.on_subscribe = _on_sub
++        await engine.set_watchlist(["2330", "5483"])
++        await _drain(engine)
++        got = await self._collect(stream)
++        quotes = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330"]
++        assert quotes, "meta 在訂閱 await 窗內到貨時仍要推播"
++        assert quotes[-1]["ref"] == 2_320_000
++        await engine.close()
++
++    async def test_no_data_recovery_pushes_once_not_every_tick(self) -> None:
++        """`no_data` 復原要補推,但**命中才推** —— 寫成無條件 publish 會變成每 tick 廣播,
++        直接打穿 1s 節流(W-17)。"""
++        # throttle 拉大到 60s:排除 1s flush loop 的貢獻,讓斷言只看轉態補推
++        src = FakeSource()
++        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=60, checkpoint=False)
++        await engine.start()
++        await engine.set_watchlist(["2330"])
++        assert src.on_no_data is not None and src.on_message is not None
++        src.on_no_data("2330")
++        await _drain(engine)
++        stream = engine.stream()
++        src.on_message(_quote(cum=1))
++        src.on_message(_quote(cum=2))
++        src.on_message(_quote(cum=3))
++        await _drain(engine)
++        got = await self._collect(stream)
++        # 首則是連線種子,復原補推只該有一則(不是三則)
++        recoveries = [
++            m
++            for m in got[1:]
++            if m["type"] == "watchlist_quote" and m["code"] == "2330" and not m["no_data"]
++        ]
++        assert len(recoveries) == 1
++        assert recoveries[0]["p"] == 2_380_000  # 補推在 ingest 之後 → 帶新價不是空值
++        await engine.close()
++
++    async def test_no_data_message_carries_ref_key(self) -> None:
++        """所有 watchlist_quote 產出點共用同一份 payload builder,形狀不得分歧。"""
++        engine, src = await _make()
++        await engine.set_watchlist(["9998"])
++        assert src.on_no_data is not None
++        stream = engine.stream()
++        src.on_no_data("9998")
++        await _drain(engine)
++        got = await self._collect(stream)
++        msg = next(m for m in got if m["type"] == "watchlist_quote" and m["no_data"])
++        assert "ref" in msg
++
++
+ class TestReviewFixes:
+     """Phase 4 round 1 accepted P1 的 regression lock(CR2~CR5)。"""
+ 

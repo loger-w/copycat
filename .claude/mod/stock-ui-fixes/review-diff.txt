@@ -1,0 +1,609 @@
+diff --git a/frontend/src/components/futures/FuturesPage.test.tsx b/frontend/src/components/futures/FuturesPage.test.tsx
+index 35327b5..edcc2c2 100644
+--- a/frontend/src/components/futures/FuturesPage.test.tsx
++++ b/frontend/src/components/futures/FuturesPage.test.tsx
+@@ -136,7 +136,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
+ // 🔴-5:閃電梯 / 委託 / 部位已移到常駐右欄。
+ // 「部位平倉:多單估價貼跌停,確認彈窗顯示閘用估價」已逐條搬入 RightRail.test.tsx。
+ describe("FuturesPage 中間主區(SC-5)", () => {
+-  it("渲染水平五檔(與個股共用 DepthBar)", () => {
++  it("渲染水平五檔(DepthBar)", () => {
+     render(<Harness />);
+     // 期貨頁不傳 onPriceClick(五檔點價置中是個股專屬)→ 格子非 button
+     expect(screen.getByLabelText("買1 22999")).toBeTruthy();
+diff --git a/frontend/src/components/quote/DepthBar.tsx b/frontend/src/components/quote/DepthBar.tsx
+index 9395318..23b1e63 100644
+--- a/frontend/src/components/quote/DepthBar.tsx
++++ b/frontend/src/components/quote/DepthBar.tsx
+@@ -1,6 +1,7 @@
+ import { cn } from "@/lib/utils";
+ 
+-/** 水平五檔(SC-4/D-5)—— 個股與期貨共用。
++/** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
++ * mod/stock-ui-fixes Q1 拍板「只改個股」;本檔刻意維持原樣)。
+  *
+  * 版式:買側由中央往左 買1→買5、賣側由中央往右 賣1→賣5,中央夾成交價 + 漲跌%。
+  * 每格內價量疊放(量在上、價在中、比例 bar 在下),欄位固定 10 格,檔位不足補「—」不塌陷。
+diff --git a/frontend/src/components/stock/CandleChart.test.tsx b/frontend/src/components/stock/CandleChart.test.tsx
+index 4378f56..4fb6427 100644
+--- a/frontend/src/components/stock/CandleChart.test.tsx
++++ b/frontend/src/components/stock/CandleChart.test.tsx
+@@ -80,4 +80,10 @@ describe("CandleChart(SC-7)", () => {
+     render(<CandleChart bars={BARS} />);
+     expect(screen.getByLabelText("K 線圖")).toBeTruthy();
+   });
++
++  // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把座標軸數字 / 日期標籤反白選起來
++  it("圖表容器禁止選字(拖曳不反白;SC-4)", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    expect(container.querySelector("figure")?.className).toContain("select-none");
++  });
+ });
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index 0643c3f..cdd8a2c 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -200,7 +200,9 @@ export function CandleChart({ bars, maxBars, showMa = false }: Props) {
+   }
+ 
+   return (
+-    <figure className="rounded-md border border-line bg-surface p-4">
++    // select-none:SVG 的 <text>(價位刻度 / 日期標籤)預設可選,在圖上拖曳會整片反白(SC-4)。
++    // 不影響 hover — user-select 只管選取,mouse 事件照舊(W-10)。
++    <figure className="select-none rounded-md border border-line bg-surface p-4">
+       <svg
+         viewBox={`0 0 ${DIMS.width} ${DIMS.height}`}
+         className="w-full"
+diff --git a/frontend/src/components/stock/OrderBook.test.tsx b/frontend/src/components/stock/OrderBook.test.tsx
+index 5055eda..53cd58b 100644
+--- a/frontend/src/components/stock/OrderBook.test.tsx
++++ b/frontend/src/components/stock/OrderBook.test.tsx
+@@ -1,5 +1,5 @@
+ /** @vitest-environment jsdom */
+-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+ import { afterEach, describe, expect, it } from "vitest";
+ 
+ import { OrderBook } from "@/components/stock/OrderBook";
+@@ -42,31 +42,45 @@ describe("OrderBook", () => {
+     window.removeEventListener("stock-price-click", handler);
+   });
+ 
+-  it("總量列:委買/委賣五檔加總(SC-5)", () => {
++  // 🔴-1:垂直雙欄(SC-1)後總量列改成「<千分位數字> 張」大字,不再有「委買 / 委賣」前綴。
++  // 「張」依 SC-1 是獨立小字 span,而 RTL 的 getNodeText 只取**直接** text node
++  // (element 子節點不算)→ getByText 不可能一次匹配「382張」。改以 testid 取整段
++  // textContent 斷言,數值 / 千分位 / 單位三者仍全鎖(review R16 的精確版)。
++  it("總量列:買賣五檔加總 + 張 + 千分位(SC-1)", () => {
+     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+-    expect(screen.getByText(/委買 382/)).toBeTruthy();
+-    expect(screen.getByText(/委賣 1033/)).toBeTruthy();
++    expect(screen.getByTestId("depth-total-bid").textContent).toBe("382張");
++    expect(screen.getByTestId("depth-total-ask").textContent).toBe("1,033張");
+   });
+ 
+-  // 🔴-2:直式改水平(SC-4)後 bar 由「左右生長」改為「格內高度」,原方向斷言已不適用。
+-  it("量 bar 改為格內高度、依最大量歸一(SC-4)", () => {
++  // 🔴-2:水平 10 格改垂直雙欄(SC-1)後,量 bar 由「格內垂直高度」改為「列背景水平寬度」。
++  it("量 bar 改為列背景寬度、依買賣共用最大量歸一(SC-1)", () => {
+     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+     // BOOK 最大量 = 賣2 的 572
+     const maxCell = screen.getByRole("button", { name: "賣2 2390" });
+-    expect(maxCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
++    expect(maxCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.width).toBe(
+       "100%",
+     );
+     // 買1 = 125 / 572 ≈ 22%
+     const bidCell = screen.getByRole("button", { name: "買1 2380" });
+-    expect(bidCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
++    expect(bidCell.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.width).toBe(
+       "22%",
+     );
+   });
+ 
+-  it("水平排列:買側由中央往左 買1→買5、賣側往右 賣1→賣5(SC-4)", () => {
++  // 🔴-3:買側 bar 由列右緣往左長、賣側由左緣往右長(SC-1)
++  it("量 bar 方向:買側靠右、賣側靠左(SC-1)", () => {
++    render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
++    const bid = screen.getByRole("button", { name: "買1 2380" });
++    const ask = screen.getByRole("button", { name: "賣1 2385" });
++    expect(bid.querySelector("[data-testid='depth-vol-bar']")?.className).toContain("right-0");
++    expect(ask.querySelector("[data-testid='depth-vol-bar']")?.className).toContain("left-0");
++  });
++
++  // 🔴-4:垂直雙欄 = 左欄買1→買5 由上而下、右欄賣1→賣5 由上而下(原水平版是買5..買1|賣1..賣5)
++  it("垂直雙欄排列:左欄 買1→買5、右欄 賣1→賣5(SC-1)", () => {
+     render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
+     const labels = screen.getAllByRole("button").map((el) => el.getAttribute("aria-label"));
+-    expect(labels).toEqual(["買2 2375", "買1 2380", "賣1 2385", "賣2 2390"]);
++    expect(labels).toEqual(["買1 2380", "買2 2375", "賣1 2385", "賣2 2390"]);
+   });
+ 
+   it("買一 = 漲停 → 鎖漲停 badge;賣一 = 跌停 → 鎖跌停(SC-5)", () => {
+@@ -103,4 +117,57 @@ describe("OrderBook", () => {
+     expect(screen.queryByText("鎖漲停")).toBeNull();
+     expect(screen.queryByText("鎖跌停")).toBeNull();
+   });
++
++  // 🟢 SC-1:badge 位置由中央成交價格移到標題列(既有的文字斷言與位置無關,故另立一條)
++  it("鎖停 badge 出現在標題列容器內(SC-1)", () => {
++    render(
++      <OrderBook
++        code="2330"
++        book={{ bids: [[2_552_000, 999]], asks: [] }}
++        last={{ p: 2_552_000, t: "09:10:00.000", cum_vol: 1 }}
++        ref_={2_320_000}
++        upper={2_552_000}
++      />,
++    );
++    const head = screen.getByTestId("depth-head");
++    expect(within(head).getByText("鎖漲停")).toBeTruthy();
++  });
++
++  // 🟢 SC-1:標題列右側成交價 + 漲跌%(auto-default:五檔區自足,不必回頭看頁面 header)
++  it("標題列右側顯示成交價 + 漲跌%(SC-1)", () => {
++    render(
++      <OrderBook code="2330" book={BOOK} last={{ p: 2_380_000, t: "10:57:51.000", cum_vol: 1 }} ref_={2_320_000} />,
++    );
++    const head = screen.getByTestId("depth-head");
++    expect(within(head).getByText("2380")).toBeTruthy();
++    // (2380000 - 2320000) / 2320000 = +2.586%
++    expect(within(head).getByText("+2.59%")).toBeTruthy();
++  });
++
++  // 🟢 review R7:重寫時最容易掉的除零保護(DepthBar.tsx:78 的 Math.max(1, ...))
++  it("book=null 與五檔全 0 量:不崩、bar 寬不出現 NaN", () => {
++    const { container, rerender } = render(
++      <OrderBook code="2330" book={null} last={null} ref_={null} />,
++    );
++    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
++    rerender(
++      <OrderBook
++        code="2330"
++        book={{ bids: [[2_380_000, 0]], asks: [[2_385_000, 0]] }}
++        last={null}
++        ref_={null}
++      />,
++    );
++    const bars = container.querySelectorAll<HTMLElement>("[data-testid='depth-vol-bar']");
++    expect(bars.length).toBeGreaterThan(0);
++    bars.forEach((b) => expect(b.style.width.includes("NaN")).toBe(false));
++  });
++
++  // 🟢 review R15:本元件的 last 是物件({p,t,cum_vol} | null),與 DepthBar 收 number 不同
++  it("last=null / ref_=null:成交價顯示 —、不出現 NaN%", () => {
++    const { container } = render(<OrderBook code="2330" book={BOOK} last={null} ref_={null} />);
++    const head = screen.getByTestId("depth-head");
++    expect(within(head).getByText("—")).toBeTruthy();
++    expect(container.textContent?.includes("NaN")).toBe(false);
++  });
+ });
+diff --git a/frontend/src/components/stock/OrderBook.tsx b/frontend/src/components/stock/OrderBook.tsx
+index d4c8525..736b36d 100644
+--- a/frontend/src/components/stock/OrderBook.tsx
++++ b/frontend/src/components/stock/OrderBook.tsx
+@@ -1,7 +1,17 @@
+-import { DepthBar } from "@/components/quote/DepthBar";
++import { cn } from "@/lib/utils";
+ 
+-/** 個股五檔 —— 水平版式與量 bar 全在 `DepthBar`(與期貨共用,SC-4/D-5)。
+- *  本檔只剩個股專屬接線:把點價轉成 `stock-price-click` CustomEvent。 */
++/** 個股五檔 —— 垂直雙欄版式(SC-1,參照 treading-king `QuoteBook.tsx`)。
++ *
++ * 版式:標題列(委買賣 五檔 / 鎖停 badge / 成交價+漲跌%)→ 總量列(左紅買、右綠賣,
++ * 大字 + 「張」)→ 左右兩欄各 5 列,量 bar 是列背景(買側貼右緣往左長、賣側貼左緣往右長)。
++ *
++ * 與期貨頁的差異是**刻意的**:期貨頁仍用共用的水平 `components/quote/DepthBar.tsx`
++ * (change-spec Q1 拍板「只改個股」)。兩者不再共用版式,但共用兩條規則:
++ * 檔位不足補「—」不塌陷、**不送單**(design §11:五檔誤觸面大,送單集中在閃電梯上)。
++ *
++ * 點價只發 `stock-price-click` CustomEvent → PriceLadder 把該價置中。 */
++
++const DEPTH = 5;
+ 
+ interface Props {
+   code: string;
+@@ -12,23 +22,158 @@ interface Props {
+   lower?: number | null;
+ }
+ 
++function fmt(milli: number): string {
++  const v = milli / 1000;
++  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
++}
++
++/** 千分位固定 en-US:不指定 locale 時分隔符隨執行環境 ICU 預設變動(非 en-US 會拿到
++ *  `1.033`),會讓斷言與畫面都變成環境相依(review R16)。 */
++function lots(n: number): string {
++  return n.toLocaleString("en-US");
++}
++
+ function emitPriceClick(priceMilli: number, side: "bid" | "ask", code: string): void {
+-  // PriceLadder 監聽 → 該價置中(不送單;design §11:五檔誤觸面大,送單集中在梯上)
++  // PriceLadder 監聽 → 該價置中(不送單;design §11)
+   window.dispatchEvent(
+     new CustomEvent("stock-price-click", { detail: { priceMilli, side, code } }),
+   );
+ }
+ 
++interface SideProps {
++  levels: [number, number][];
++  side: "bid" | "ask";
++  maxQty: number;
++  onPriceClick: (priceMilli: number, side: "bid" | "ask") => void;
++}
++
++/** 買賣兩欄共用一份:缺檔補位、bar 歸一、點價規則只寫一次,兩側不可漂移
++ *  (沿用 treading-king BookSide 的收斂理由)。 */
++function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
++  const isBid = side === "bid";
++  return (
++    <div>
++      {[...Array(DEPTH).keys()].map((i) => {
++        const entry = levels[i];
++        if (entry === undefined) {
++          // W-4:檔位不足不塌陷,維持 5 列
++          return (
++            <div
++              key={i}
++              className="grid h-[25px] grid-cols-2 items-center gap-2 border-b border-line px-2 font-mono text-sm text-ink-dim"
++            >
++              <span className={cn(isBid && "order-2 text-right")}>—</span>
++              <span className={cn(isBid && "order-1")} />
++            </div>
++          );
++        }
++        const [priceMilli, qty] = entry;
++        return (
++          <button
++            type="button"
++            key={i}
++            onClick={() => onPriceClick(priceMilli, side)}
++            aria-label={`${isBid ? "買" : "賣"}${i + 1} ${fmt(priceMilli)}`}
++            className="relative grid h-[25px] w-full grid-cols-2 items-center gap-2 border-b border-line px-2 font-mono text-sm hover:bg-bg-deep/60"
++          >
++            <span
++              data-testid="depth-vol-bar"
++              className={cn(
++                "pointer-events-none absolute inset-y-0",
++                isBid ? "right-0 bg-bull/15" : "left-0 bg-bear/15",
++              )}
++              style={{ width: `${Math.round((qty / maxQty) * 100)}%` }}
++            />
++            {isBid ? (
++              <>
++                <span className="relative z-[1] text-left text-ink-muted">{qty}</span>
++                <span className="relative z-[1] text-right text-bull">{fmt(priceMilli)}</span>
++              </>
++            ) : (
++              <>
++                <span className="relative z-[1] text-left text-bear">{fmt(priceMilli)}</span>
++                <span className="relative z-[1] text-right text-ink-muted">{qty}</span>
++              </>
++            )}
++          </button>
++        );
++      })}
++    </div>
++  );
++}
++
+ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }: Props) {
++  const b = (book?.bids ?? []).slice(0, DEPTH);
++  const a = (book?.asks ?? []).slice(0, DEPTH);
++  // `1` 不可省:五檔全 0 量(盤前 / 剛重啟未收 snapshot)時除零 → width "NaN%",
++  // React 靜默產生無效 style,只有盤中才看得到(review R7;對齊 DepthBar.tsx:78)
++  const maxQty = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
++  const bidTotal = b.reduce((s, [, v]) => s + v, 0);
++  const askTotal = a.reduce((s, [, v]) => s + v, 0);
++  // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
++  const lastMilli = last?.p ?? null;
++  const chg = lastMilli !== null && ref_ ? ((lastMilli - ref_) / ref_) * 100 : null;
++  const lockedUp = upper !== null && b[0]?.[0] === upper;
++  const lockedDown = lower !== null && a[0]?.[0] === lower;
++
+   return (
+-    <DepthBar
+-      bids={book?.bids ?? []}
+-      asks={book?.asks ?? []}
+-      last={last?.p ?? null}
+-      ref_={ref_}
+-      upper={upper}
+-      lower={lower}
+-      onPriceClick={(priceMilli, side) => emitPriceClick(priceMilli, side, code)}
+-    />
++    <section className="rounded-md border border-line bg-surface p-2.5">
++      {/* 標題列:鎖停 badge + 成交價(五檔區自足,不必回頭看頁面最上方的 header) */}
++      <div
++        data-testid="depth-head"
++        className="mb-1.5 flex items-center gap-2 border-b border-line pb-1.5"
++      >
++        <h3 className="text-sm font-bold text-ink">委買賣 五檔</h3>
++        {lockedUp ? (
++          <span className="rounded border border-bull/40 px-1.5 text-xs text-bull">鎖漲停</span>
++        ) : null}
++        {lockedDown ? (
++          <span className="rounded border border-bear/40 px-1.5 text-xs text-bear">鎖跌停</span>
++        ) : null}
++        <span className="ml-auto flex items-baseline gap-1 font-mono">
++          <span
++            className={cn(
++              "text-sm",
++              chg === null ? "text-ink" : chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink",
++            )}
++          >
++            {lastMilli !== null ? fmt(lastMilli) : "—"}
++          </span>
++          {chg !== null ? (
++            <span className={cn("text-xs", chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink-dim")}>
++              {`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}
++            </span>
++          ) : null}
++        </span>
++      </div>
++
++      {/* 總量列 */}
++      <div className="mb-1.5 flex items-baseline justify-between font-mono">
++        <span data-testid="depth-total-bid" className="text-base font-bold text-bull">
++          {lots(bidTotal)}
++          <span className="ml-1 text-xs font-normal text-bull/70">張</span>
++        </span>
++        <span data-testid="depth-total-ask" className="text-base font-bold text-bear">
++          {lots(askTotal)}
++          <span className="ml-1 text-xs font-normal text-bear/70">張</span>
++        </span>
++      </div>
++
++      {/* 本體:左欄買 1→5、右欄賣 1→5 */}
++      <div className="grid grid-cols-2 gap-4">
++        <BookSide
++          levels={b}
++          side="bid"
++          maxQty={maxQty}
++          onPriceClick={(p, s) => emitPriceClick(p, s, code)}
++        />
++        <BookSide
++          levels={a}
++          side="ask"
++          maxQty={maxQty}
++          onPriceClick={(p, s) => emitPriceClick(p, s, code)}
++        />
++      </div>
++    </section>
+   );
+ }
+diff --git a/frontend/src/components/stock/StockChart.test.tsx b/frontend/src/components/stock/StockChart.test.tsx
+index 5980959..a4dc591 100644
+--- a/frontend/src/components/stock/StockChart.test.tsx
++++ b/frontend/src/components/stock/StockChart.test.tsx
+@@ -132,7 +132,11 @@ describe("StockChart 模式切換(SC-7)", () => {
+     expect(back().hasAttribute("disabled")).toBe(true);
+   });
+ 
+-  it("取數失敗顯示「無 K 線資料」,不崩", async () => {
++  // 🔴 SC-3:失敗態與「真的沒資料」原本共用同一句「無 K 線資料」,害 2026-07-29 那次
++  // 舊 build 佔 port(endpoint 404)被誤讀成「這檔沒 K 線」。失敗態要看得出是失敗。
++  // 錯誤碼取值鏈:body 的 detail.error 優先 → 否則 HTTP_<status>(useStockBars.ts:35-44),
++  // 故本 case 的碼是 NOT_READY 而非 HTTP_503。
++  it("取數失敗顯示「K 線載入失敗」+ 錯誤碼,不崩", async () => {
+     vi.stubGlobal(
+       "fetch",
+       vi.fn(async (url: string) =>
+@@ -143,6 +147,24 @@ describe("StockChart 模式切換(SC-7)", () => {
+     );
+     chart();
+     fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
++    expect(screen.getByText("NOT_READY")).toBeTruthy();
++    expect(screen.queryByText("無 K 線資料")).toBeNull();
++  });
++
++  // 🟢 SC-3 反向:真的取到空陣列 → 仍是「無 K 線資料」,不可誤報成失敗(W-13)
++  it("取到空 bars 仍顯示「無 K 線資料」,不誤報失敗", async () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string) =>
++        String(url).includes("/api/stock/bars")
++          ? new Response(JSON.stringify({ bars: [] }))
++          : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
++      ),
++    );
++    chart();
++    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+     await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
++    expect(screen.queryByText("K 線載入失敗")).toBeNull();
+   });
+ });
+diff --git a/frontend/src/components/stock/StockChart.tsx b/frontend/src/components/stock/StockChart.tsx
+index 1898309..b22b946 100644
+--- a/frontend/src/components/stock/StockChart.tsx
++++ b/frontend/src/components/stock/StockChart.tsx
+@@ -31,7 +31,7 @@ function initialMode(): ChartMode {
+ export function StockChart({ accum, code }: { accum: StockAccum; code: string }) {
+   const [mode, setMode] = useState<ChartMode>(initialMode);
+   const [days, setDays] = useState(DAYS_STEP);
+-  const { data, isPending, isError } = useStockBars(code, mode, days);
++  const { data, isPending, isError, error } = useStockBars(code, mode, days);
+ 
+   function selectMode(next: ChartMode): void {
+     setMode(next);
+@@ -46,7 +46,9 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
+   const isMinute = mode === "m1" || mode === "m5";
+ 
+   return (
+-    <div className="flex flex-col">
++    // shrink-0:圖表維持 viewBox 決定的自然高度。少了它,負剩餘空間時本容器會被壓縮,
++    // 而內部固定高度的 svg 不跟著縮 → 溢出並與下半列重疊(SC-6 / W-17)。
++    <div className="flex shrink-0 flex-col">
+       <div className="mb-1 flex items-center gap-1">
+         {MODES.map(([id, label]) => (
+           <button
+@@ -81,8 +83,12 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
+           <p className="text-sm text-ink-muted">載入中…</p>
+         </div>
+       ) : isError ? (
+-        <div className="flex h-64 items-center justify-center rounded-md border border-line bg-surface">
+-          <p className="text-sm text-ink-muted">無 K 線資料</p>
++        // 失敗態必須與「真的沒資料」分得開:2026-07-29 舊 build 佔 port 讓 endpoint 回 404,
++        // 當時兩者共用「無 K 線資料」一句 → 被誤讀成「這檔沒 K 線」(SC-3)。
++        // 錯誤碼取值鏈見 useStockBars.ts:35-44(detail.error 優先 → HTTP_<status>)。
++        <div className="flex h-64 flex-col items-center justify-center gap-1 rounded-md border border-line bg-surface">
++          <p className="text-sm text-bear">K 線載入失敗</p>
++          <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
+         </div>
+       ) : (
+         <CandleChart
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index 47c2db5..af84735 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -143,4 +143,10 @@ describe("StockIntradayChart", () => {
+     fireEvent.mouseMove(svg, { clientX: 400, clientY: 100 }); // ~11:15 無資料
+     expect(screen.queryByText(/11:1/)).toBeNull();
+   });
++
++  // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把時間軸 / 價位刻度 / 內外盤文字反白
++  it("圖表容器禁止選字(拖曳不反白;SC-4)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelector("figure")?.className).toContain("select-none");
++  });
+ });
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index fc1664f..cbd297b 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -200,7 +200,9 @@ export function StockIntradayChart({ accum }: { accum: StockAccum }) {
+   ];
+ 
+   return (
+-    <figure className="rounded-md border border-line bg-surface p-4">
++    // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
++    // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
++    <figure className="select-none rounded-md border border-line bg-surface p-4">
+       <div className="mb-1 flex justify-end gap-1">
+         {toggleDefs.map(({ key, label, available }) => (
+           <button
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index f2190d4..05f69fa 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -97,13 +97,13 @@ describe("StockPage", () => {
+     expect(screen.getByText(/伺服器連線中斷,重連中…/)).toBeTruthy();
+   });
+ 
+-  it("選檔後中間主區 = 圖表切換 + 水平五檔 + 明細(SC-6/SC-7)", () => {
++  it("選檔後中間主區 = 圖表切換 + 五檔 + 明細(SC-6/SC-7)", () => {
+     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+     expect(screen.getByRole("button", { name: "江波圖" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "1分K" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "5分K" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "買1 2375" })).toBeTruthy(); // 水平五檔
++    expect(screen.getByRole("button", { name: "買1 2375" })).toBeTruthy(); // 五檔(W-16:aria-label 格式是定位鍵)
+     expect(screen.getByText("時間")).toBeTruthy(); // 明細表頭
+   });
+ 
+@@ -113,4 +113,18 @@ describe("StockPage", () => {
+     expect(screen.queryByText("委託")).toBeNull();
+     expect(screen.queryByText("部位")).toBeNull();
+   });
++
++  // 🔴 SC-6:最外圍不出現捲軸的機制 = 圖表維持自然高度、下半列吃剩餘空間。
++  // jsdom 沒有版面引擎量不到真實高度,只能鎖住產生該效果的 class 組合(真實溢出量測走
++  // Phase 7 真環境 scrollHeight/clientHeight)。
++  //   flex-1   → 吃掉圖表下方的剩餘空間(現況那片死白)
++  //   min-h-56 → 高度地板。flex-1 = `flex:1 1 0%`,basis 0 在負剩餘空間時分不到收縮額度
++  //              會被算成 0 高 → 明細與「載入更多」鈕整塊消失且 <main> 的捲軸救不到。
++  //              有地板才會真的把 <main> 撐出捲軸(逃生口),而不是靜默裁掉內容。
++  it("下半列吃剩餘高度且有高度地板(SC-6)", () => {
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    const row = screen.getByTestId("stock-lower-row");
++    expect(row.className).toContain("flex-1");
++    expect(row.className).toContain("min-h-56");
++  });
+ });
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 4cce8c1..936ea56 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -79,9 +79,16 @@ export function StockPage({ code, onSelect, stream }: Props) {
+             {accum ? (
+               <>
+                 <StockChart accum={accum} code={code} />
+-                {/* 下半:左五檔、右明細(SC-6) */}
+-                <div className="flex min-w-0 gap-3">
+-                  <div className="min-w-0 flex-[3]">
++                {/* 下半:左五檔、右明細(SC-6)。
++                    flex-1   → 吃掉圖表下方的剩餘空間,明細因此撐到視窗底(原本那裡是死白)。
++                    min-h-56 → 高度地板。flex-1 = `flex:1 1 0%`,basis 0 在負剩餘空間時分不到
++                               收縮額度會被算成 0 高,明細與「載入更多」鈕整塊消失、且 <main>
++                               的捲軸救不到(它是被壓縮不是撐出捲軸)。有地板才會真的把
++                               <main> 撐出捲軸當逃生口。
++                    items-stretch(預設)讓明細自然撐滿列高;五檔另加 self-start 維持自然高度,
++                    不被拉長成內部留白的空盒。 */}
++                <div data-testid="stock-lower-row" className="flex min-h-56 min-w-0 flex-1 gap-3">
++                  <div className="min-w-0 flex-[3] self-start">
+                     <OrderBook
+                       code={code}
+                       book={accum.book}
+diff --git a/frontend/src/components/stock/TickTape.test.tsx b/frontend/src/components/stock/TickTape.test.tsx
+index f766a64..2542093 100644
+--- a/frontend/src/components/stock/TickTape.test.tsx
++++ b/frontend/src/components/stock/TickTape.test.tsx
+@@ -28,4 +28,15 @@ describe("TickTape", () => {
+     render(<TickTape ticks={[]} />);
+     expect(screen.getByText("尚無成交")).toBeTruthy();
+   });
++
++  // 🔴 SC-6:明細改由下半列決定高度(h-full),不再是固定 320px 上限。這是「最外圍不出現
++  // 捲軸」機制的一半 —— 圖表維持自然高度,剩餘空間全給下半列,明細在其中自行內捲。
++  // 沒有這條護欄,日後誰把 h-full 換回 max-h-* 不會有任何測試變紅。
++  it("root 由下半列撐高(h-full),非固定 max-h-80(SC-6)", () => {
++    render(<TickTape ticks={[{ t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner" }]} />);
++    const root = screen.getByTestId("tick-tape");
++    expect(root.className).toContain("h-full");
++    expect(root.className).not.toContain("max-h-80");
++    expect(root.className).toContain("overflow-y-auto"); // 內捲不可拿掉(W-8 載入更多要可達)
++  });
+ });
+diff --git a/frontend/src/components/stock/TickTape.tsx b/frontend/src/components/stock/TickTape.tsx
+index 493b6d2..e63be68 100644
+--- a/frontend/src/components/stock/TickTape.tsx
++++ b/frontend/src/components/stock/TickTape.tsx
+@@ -23,7 +23,12 @@ export function TickTape({ ticks }: { ticks: TickRow[] }) {
+   }
+ 
+   return (
+-    <div className="flex max-h-80 flex-col overflow-y-auto rounded-md border border-line bg-surface p-3">
++    // h-full(非固定 max-h-80):高度由 StockPage 下半列決定 —— 圖表佔自然高度後,
++    // 剩下的全給下半列,明細因此撐到視窗底(SC-6)。內層 overflow-y-auto 不變。
++    <div
++      data-testid="tick-tape"
++      className="flex h-full flex-col overflow-y-auto rounded-md border border-line bg-surface p-3"
++    >
+       <table className="w-full border-collapse font-mono text-xs">
+         <thead>
+           <tr className="text-ink-dim">
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 9ab6c6a..a68ad8f 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -28,6 +28,18 @@ body,
+   height: 100%;
+ }
+ 
++/* 捲軸配色(SC-5)。預設 Chrome 捲軸是白底淺灰,在 --color-bg #0a0e14 的暗色盤面上
++   非常突兀(明細 / 閃電梯 / 自選清單三處都看得到)。
++
++   用標準屬性而非 ::-webkit-scrollbar:Chrome 121+ 兩者並存時標準屬性優先、webkit
++   規則會被整組忽略;標準屬性一條規則同時涵蓋 Chrome 與 Firefox,且會被子元素繼承,
++   不必逐個捲動容器掛 class。掛在 html 靠繼承生效於全站(含 TXO / 期貨 / 指數頁)——
++   這是刻意的統一,純視覺,不影響任何 scroll 事件(閃電梯的 onScroll 暫停跟隨照舊)。 */
++html {
++  scrollbar-width: thin;
++  scrollbar-color: var(--color-ink-dim) transparent;
++}
++
+ body {
+   background: var(--color-bg);
+   color: var(--color-ink);

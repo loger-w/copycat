@@ -1,0 +1,24 @@
+{
+  "round": 2,
+  "type": "限縮輪(round 1 accepted P0 觸發)",
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-07-29",
+  "scope": "只審 [amendment 2026-07-29: ...] 標記段落 + fix 是否改出新矛盾",
+  "screening": "main agent 機械快篩:R13 的 flex 機制以規範推導確認(flex:1 1 0% 在負剩餘空間時 shrink×basis=0 → 分不到收縮額度);R14 改用 devtools 實測取代估算;R15 逐行核對 OrderBook.test.tsx 的 last={null} case 數。7 條全部 CONFIRMED,0 條 REFUTED。",
+  "measurements": {
+    "note": "devtools 實測,2026-07-29 17:0x,2317,盤後",
+    "1440x800_intraday": {"main_clientH": 722, "main_scrollH": 814, "overflow": 92, "header": 30, "chart": 440, "gaps": 24, "lower_row_budget_if_flex1": 228},
+    "1440x800_dayK": {"main_clientH": 722, "main_scrollH": 722, "overflow": 0, "header": 30, "chart": 246, "lower_row_budget_if_flex1": 422},
+    "1920x1080_intraday": {"main_clientH": 1002, "main_scrollH": 1012, "overflow": 10, "lower_row_budget_if_flex1": 310}
+  },
+  "findings": [
+    {"id":"R13","severity":"P1","topic":"flex-1(basis 0)在負剩餘空間時下半列被算成 0 高,明細整塊消失","verdict":"CONFIRMED","resolution":"accepted","fix":"下半列 min-h-0 → min-h-56(224px 地板);StockChart root 加 shrink-0;SC-6 退化行為改寫為可驗證敘述。"},
+    {"id":"R14","severity":"P1","topic":"算術只驗 1920×1080,漏 1440×800 且未計入新五檔變高","verdict":"CONFIRMED","resolution":"accepted","fix":"算術表全改 devtools 實測四列;新增五檔高度預算節(≤210px,逐區塊拆解 = 207)。1440×800 江波圖預算 228px 為最緊格。"},
+    {"id":"R15","severity":"P1","topic":"last/ref_ null 防禦未寫,6/8 既有 case 會 TypeError 集體紅","verdict":"CONFIRMED","resolution":"accepted","fix":"§5.1 A 防禦性常數補 lastMilli = last?.p ?? null 與 chg 的 null 短路(對齊 DepthBar.tsx:81);§5.3 加對應 🟢 案例。"},
+    {"id":"R16","severity":"P2","topic":"『382 張』斷言與 markup 無空白不符 + toLocaleString locale 相依","verdict":"CONFIRMED","resolution":"accepted","fix":"斷言改 /^382\s*張$/ 正則;toLocaleString 固定 en-US。"},
+    {"id":"R17","severity":"P2","topic":"regression lock 缺選擇器,且 Option Z 另一半(TickTape h-full)無護欄","verdict":"CONFIRMED","resolution":"accepted","fix":"下半列加 data-testid=stock-lower-row、TickTape root 加 data-testid=tick-tape;§5.3 兩條 lock 分別鎖 flex-1+min-h-56 與 h-full/無 max-h-80。"},
+    {"id":"R18","severity":"P2","topic":"Out of scope 殘留 round 1 的 letterbox 敘述","verdict":"CONFIRMED","resolution":"accepted","fix":"改寫為『圖表不隨視窗高度變化,本身無防溢出機制』。"},
+    {"id":"R19","severity":"P2","topic":"W-16 位置指向保證不變的檔案;W-17 敘述字面永不成立","verdict":"CONFIRMED","resolution":"accepted","fix":"W-16 補改後實作點 + StockPage.test.tsx:106;W-17 改寫為『viewBox 水平完整填滿元素盒內容區,盒比 = viewBox 比』。"}
+  ],
+  "exit": "無 P0;P1 3 條全部 accepted 並就地修復;P2 4 條全部 accepted 並修復。退出條件達成,不再加輪。"
+}

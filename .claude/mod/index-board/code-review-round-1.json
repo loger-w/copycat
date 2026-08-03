@@ -1,0 +1,83 @@
+{
+  "_note": "事後重建(見 HANDOFF.md)。Phase 5 自評 review(medium 檔位,雙焦點:implementation bug + 白名單對照)。全數 accepted,無駁回。",
+  "round": 1,
+  "level": "medium",
+  "reviewed_head": "2be6e2c",
+  "counts": { "P0": 0, "P1": 6, "P2": 1 },
+  "findings": [
+    {
+      "id": "P1-1", "severity": "P1", "disposition": "accepted",
+      "file": "copycat/server/app.py",
+      "title": "meta.partial_last 是 tf 的常數而不是事實 —— 日K/分K 恆謊報「已收盤」、週/月K 恆謊報「未收盤」",
+      "why": "本輪設計主軸是「meta 不說謊」。盤中看日K 會以為今天已定案(最容易誤判的方向),週末看週K 會以為還在跑。tf=1 路徑更是完全不傳 partial_last。",
+      "fix": "由資料判定:D/1 比日期、M 比年月、W 比 ISO 年週;三條路徑共用同一 helper。",
+      "resolution": "已加 bars.is_partial_last();四條測試(當日 D → True、舊日 D → False、舊週 W → False、當週/當月 → True)。real-env 複驗:2026-07-30(交易日)D/W/M/1 皆 True、OTC 拒繪 False。"
+    },
+    {
+      "id": "P1-2", "severity": "P1", "disposition": "accepted",
+      "file": "copycat/server/index_engine.py",
+      "title": "spot 靜默告警只在 09:00–13:25 生效,完全避開了已實證的失效窗",
+      "why": "CLAUDE.md §8 記載的 futures_engine 整段零推播案例(2026-07-29 17:33 起跑到 00:50 全 p=null)發生在**夜盤**,完全落在 watchdog 窗之外 —— 為了收斂 spot 前綴而新增的唯一一道安全網,對它要偵測的那個 bug 時間上零覆蓋。",
+      "fix": "判定窗改為台指期交易時段(日盤 08:45–13:45 ∪ 夜盤 15:00–05:00),或去掉時間閘只靠節流。",
+      "resolution": "已新增 in_futures_session() 並改用之;非交易時段的 None 重置計時不累積。"
+    },
+    {
+      "id": "P1-3", "severity": "P1", "disposition": "accepted",
+      "file": "tests/server/test_market_routes.py",
+      "title": "/api/market/bars 的 tf=1 分派路徑(TWSE 與期指三檔)零後端測試 —— 那是 UI 最常走的一條",
+      "why": "SC-3 的 17 顆週期鈕裡有 13 顆走 tf=1。plain closure、build_minute 分支、days clamp、cache code、source fallback 全無測試碰過。",
+      "fix": "TestTwse / TestFutures 各補 tf=1 成功案例 + days clamp + 空回應轉 unavailable。",
+      "resolution": "已加 TestMinutePath 五條(含 cache key 隔離)。"
+    },
+    {
+      "id": "P1-4", "severity": "P1", "disposition": "accepted",
+      "file": "tests/server/test_market_routes.py",
+      "title": "OTC 分 K 的核心斷言包在 `if body[\"bars\"]:` 裡 —— route→engine 接線可能永遠沒被斷言(假綠)",
+      "why": "_mis_loop 是背景 task,時序不保證;bars 空時整段斷言被跳過而測試照樣綠。這正是專案已吃過虧的假綠樣態。",
+      "fix": "直接 _apply_otc 餵引擎再打 route,無條件斷言 bars 非空 / t 格式 / synth_since。",
+      "resolution": "已改為確定性斷言(含 o/h/l/c/v 逐欄比對與 synth_since == '10:17')。"
+    },
+    {
+      "id": "P1-5", "severity": "P1", "disposition": "accepted",
+      "file": "frontend/src/components/stock/CandleChart.test.tsx",
+      "title": "spec 測試清單 12 項只落地 8 項:降級/告警路徑與 W-1 的唯一 pin 全部沒測",
+      "why": "showVolume 預設值是 W-1「個股頁零行為變化」在這輪唯一的保證,而它沒有 pin —— 把預設改成 false 或條件寫反,個股頁量副圖會整片消失且全綠。另 FuturesEngine/IndexEngine 的 miss/ConnectionError 固定 log 是 3am frame 的核心可觀測性資產,亦無測試。",
+      "fix": "補三支:CandleChart showVolume 預設/關閉、FuturesEngine.bars_range 兩條降級 log(caplog)、useMarketBars queryKey 分岔與非交易時段不輪詢。",
+      "resolution": "已補 CandleChart 2 條、test_futures_engine TestBarsRangeProxy 2 條、useMarketBars.test.ts 6 條。"
+    },
+    {
+      "id": "P1-6", "severity": "P1", "disposition": "accepted",
+      "file": "copycat/server/app.py",
+      "title": "market 分 K 沿用裸 IX0001 當 cache key,與走 stock session 的 /api/stock/bars/IX0001 共用同一格",
+      "why": "validate_code 的 regex 接受 \"IX0001\" → 兩條 session 的結果互相覆寫,W-12 的保證在快取層被繞過;_empty 負向快取也會互相釘住(這正是長窗加 |L 的原始理由,只是漏了分鐘路徑)。",
+      "fix": "分鐘路徑比照加後綴 IX0001|M,並補測試。",
+      "resolution": "已加 |M 後綴 + test_minute_cache_key_isolated_from_stock_session。"
+    },
+    {
+      "id": "P2-1", "severity": "P2", "disposition": "partially-accepted", "count": 9,
+      "title": "彙總:慣例 / 死碼 / 重複 / 小瑕疵(9 項)",
+      "items": [
+        "(1) market 區塊註解位置錯位 → 已移到 route 上方",
+        "(2) SC-6 圖區拒繪文案在 UI 中不可達(鈕已 disabled)→ 保留為直接打 API 時的誠實回應,已於 spec 註明",
+        "(3) FUTURES_MINUTE_DOMAIN 放在個股模組 → 已移到 futures_source",
+        "(4) IndexPage / MarketChart 各複製一份 SIZE/X_LABELS/toX/pts/fmt → 記入 next-time,本輪不動(scope)",
+        "(5) 新 import 未依字母序 → 未改(ruff 未開 I 規則,非正確性)",
+        "(6) IndexPage 自訂 FuturesProductState 與 @/types 同名型別並存 → 記入 next-time",
+        "(7) 空 bars + volume=false 時「無量資料」y=0 畫到框外 → 已改用 DIMS.height * 0.85",
+        "(8) aggregate_period(bars, \"D\") 會落進 else 被當週處理 → _period_key 對非 W/M 回 None",
+        "(9) cache hit 時 daily_tag_get(...) or \"tc4_dk\" 會謊報來源 → 已改回 \"unavailable\""
+      ]
+    }
+  ],
+  "whitelist_check": {
+    "verdict": "W-1..W-13 逐條核對,全部未見破壞",
+    "notes": [
+      "W-1:CandleChart showVolume 預設 true / _collect_history 上提 / parse_1k_bars domain 預設 / inTradingHours re-export 皆為加法,個股測試全綠(預設值 pin 已於 P1-5 補上)",
+      "W-2:TxoPage 未受 visited 閘控,仍無條件 render",
+      "W-3:期貨 / 相關係數 tab 僅排序後移,copycat-fut-product 未被碰",
+      "W-7:_daily_tag 與 _daily 同鍵同 prune;build_daily 回復原簽名",
+      "W-10:OverlayCard 幾何與外觀逐行等價;基差計算保留",
+      "W-12:分派正確(分鐘路徑 cache key 已於 P1-6 補隔離)"
+    ]
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "_note": "Phase 3 change-spec-reviewer(opus)輸出,轉錄自 agent 回傳。`disposition` 是主 session 依 receiving-code-review 的裁決,非 reviewer 原文。",
+  "phase": "3",
+  "target": ".claude/mod/stock-ui-round6/change-spec.md",
+  "summary": { "P0": 1, "P1": 6, "P2": 7 },
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "P0",
+      "section": "R-1 後端:derive_side 的輸入跳過市價偽檔位 / SC-2.5",
+      "problem": "R-1 只確定改 parse_stock_realtime,歷史 row 路徑寫成「逐一確認」= 未定案,而那條路徑決定 SC-2.5 能否成立。apply_backfill 先 reset() 再用回補重放 → cum_* 與 minutes 幾乎完全由歷史 row 決定,live 判好的值只有 cum_vol > backfill_max 的倖存者能留下。歷史 TICKS row 只有單一 Bid/Ask 欄,鎖停時就是市價佇列的 0,沒有第二檔可退,_best_price 的簽名套不上去。照 spec 做完,鎖停股副圖仍會被回補洗成整片灰,而且每次切檔重演、完全靜默。",
+      "disposition": "accepted-fixed",
+      "resolution": "真環境已證實(2327 切檔後 cum_outer=cum_inner=0 回到原點)。新增 relabel_locked_side(),由 apply_backfill 呼叫;另在 stock_engine 偵測漲跌停值變化重新入列回補(涵蓋 meta 未到 / meta 為昨日兩種時序)。見 change-spec `[amendment 2026-07-31: R-1a]` 與 Phase 5 P1。"
+    },
+    {
+      "id": "R2",
+      "severity": "P1",
+      "section": "R-3 sideSummary 與 figcaption / SC-2.2、SC-2.3",
+      "problem": "figcaption 現況的外/內取自後端 running 值 cumOuter/cumInner,新增的 sideSummary 走 minutes,兩個來源混用且 outerPct 分母未定義。若順手把分母改成 total,外盤比語意會靜默改變(2317 會從 ~64.6% 變 ~54%),而白名單沒有任何一條護住它;即使公式不變,buildIntradayGeometry 有 [09:00,13:30] 窗過濾而 accum.minutes 沒有,窗外分鐘會讓「未分類 N」與副圖灰段總和對不上。",
+      "disposition": "accepted-fixed",
+      "resolution": "四個數字全部同源 sideSummary(accum.minutes);外盤比公式維持 outer/(outer+inner);窗與副圖一致。見 `[amendment 2026-07-31: R-3a]`。"
+    },
+    {
+      "id": "R3",
+      "severity": "P1",
+      "section": "R-2 / R-6 既有測試逐條標記",
+      "problem": "既有測試沒有逐一標「該紅 / 不該紅」,至少四處漏標:chart-extreme.test.ts 的 markLabelY 硬編數值、CANDLE_MARK.half/height 的編譯期依賴、stock-tick.test.ts 六處把 buildLadder 當陣列用、StockIntradayChart.test.tsx 的 apexX() 是 W-6/W-7 守門測試。另未給 labelUp/labelDown 的重算約束。",
+      "disposition": "accepted-fixed",
+      "resolution": "實作時逐檔確認,共 13 條既有測試該紅並改寫;x 位置的時間語意守門斷言原樣保留(apexX → cx),另補「空心 vs 實心」與「圖層順序」兩條新守門。"
+    },
+    {
+      "id": "R4",
+      "severity": "P1",
+      "section": "R-8 Dialog / SC-B.3",
+      "problem": "用 open prop 驅動 display 的前提是「prop 永遠等於元素真實狀態」,但群組改名輸入框對 Escape 只 stopPropagation 且不呼叫 onClose —— 那擋不掉瀏覽器對 modal dialog 的原生 cancel/close，元素 open 變 false 而 prop 仍為 true → class 停在 flex、內容仍渲染,同一個 bug 換形態復發。jsdom 沒有原生 dialog 行為,新測試也抓不到。",
+      "disposition": "accepted-fixed",
+      "resolution": "<dialog> 補 onClose 把 prop 拉回同步。"
+    },
+    {
+      "id": "R5",
+      "severity": "P1",
+      "section": "SC-2.5 / SC-3.5 / SC-4.x",
+      "problem": "5 條以上 SC 只有在「畫面上存在一檔鎖漲跌停且簿裡有 price=0 檔位」時才可指認,而實作必然跨過 13:30 收盤。spec 沒有為這些 SC 定義 fallback 驗收路徑,極可能出現「改完了但沒有人能驗收」,或更糟:拿單元測試綠燈當畫面驗收(鐵則 D 明禁)。",
+      "disposition": "accepted-partial",
+      "resolution": "盤中即時抓齊證據:live 截圖 after-2327-limitup-live.png + fixture-2327-limitup.json(107KB 全量 state,收盤後可離線重現)。後端根因改用回補重放路徑於收盤後複驗成功。"
+    },
+    {
+      "id": "R6",
+      "severity": "P1",
+      "section": "Known Risks 1 / R-3 hatch / SC-2.1",
+      "problem": "Known Risks 只寫了「斜線糊成淺灰」這個弱化樣態,漏掉更嚴重的相反樣態:userSpaceOnUse 的 tile 與 2.5px 寬 rect 沒有對齊保證,窄柱可能整根落在 tile 空白帶上而完全不含斜線 → 未分類段被畫成透明 = 看起來「這根沒有量」,與 W-1(分母含未分類)打架,柱高與頂端刻度對不上。",
+      "disposition": "accepted-fixed",
+      "resolution": "tile 內先鋪低透明度底色 rect 再疊斜線。(round6c 後整個 pattern 已移除。)"
+    },
+    {
+      "id": "R7",
+      "severity": "P1",
+      "section": "R-7 左緣漲跌停亮燈",
+      "problem": "R-7 標成 🟢 新功能,但它改的是既有輸出:端點兩格刻度文字原本由 tickTone 決定顏色,改動後變白字加底色 —— 這是既有元素的行為改動(🔴)。W-27 只護中間刻度,端點的色規則變更沒有白名單條目承接;三類混標會讓行為改動在 commit 歷史裡消失。",
+      "disposition": "accepted-fixed",
+      "resolution": "R-7 改標 🔴,commit 訊息明載。"
+    },
+    {
+      "id": "R8",
+      "severity": "P2",
+      "section": "R-7 / SC-5.6",
+      "problem": "SC-5.6 只夾水平方向,沒談垂直。最上格 t.y = PAD_Y = 4,置中色塊上緣落在 −1.5 被裁;最下格會壓進底部時間標籤帶。",
+      "disposition": "accepted-fixed",
+      "resolution": "先加 y 夾制;Phase 5 再收斂成 TICK_LAMP_H ≤ 2×PAD_Y 讓兩端都不必夾制、與文字同心。"
+    },
+    {
+      "id": "R9",
+      "severity": "P2",
+      "section": "R-7 kind 標記分支 / SC-5.4",
+      "problem": "kind 綁在 `upper && lower && ref > 0` 的 11 點分支上,但決定 y 域的條件是 `upper && lower`(不含 ref > 0)。有漲跌停但 ref 缺時會走 3 點 fallback,那條的 yTop/yBottom 仍然就是 upper/lower —— 畫的確實是漲跌停價卻不會亮,違反 SC-5.4「恆亮」。",
+      "disposition": "accepted-fixed",
+      "resolution": "kind 改成與 upper/lower 比值的統一後處理,不綁任何刻度分支,與 y 域條件天然對齊。已加測試覆蓋 ref 缺的分支。"
+    },
+    {
+      "id": "R10",
+      "severity": "P2",
+      "section": "R-8 新測試寫法",
+      "problem": "`toContain(\"flex\")` 會被同一串裡的 `flex-col` 命中 → 測試恆紅或被改成弱斷言;另 cn = twMerge(clsx),display 同 conflict group 取最後者,靜態字串若留 flex 會靜默吃掉 hidden。",
+      "disposition": "already-avoided",
+      "resolution": "測試實際用的是 classList.contains,不會誤命中 flex-col;實作也已把 flex 從靜態字串移除。"
+    },
+    {
+      "id": "R11",
+      "severity": "P2",
+      "section": "R-3 未分類 rect 改 hatch",
+      "problem": "SVG 的 fill 是 presentation attribute,優先權低於任何 CSS 宣告。只要 fill-* class 沒清乾淨(或日後有人補回一個當保險),Tailwind 的 fill 會蓋掉 pattern → 畫面退回實心灰而零錯誤訊號。",
+      "disposition": "accepted-fixed",
+      "resolution": "改 style={{ fill: url(#id) }} 且移除所有 fill-* class,並加測試鎖。(round6c 後 pattern 已移除。)"
+    },
+    {
+      "id": "R12",
+      "severity": "P2",
+      "section": "R-6 buildLadder 回傳型別",
+      "problem": "blast radius 描述停在「唯一 caller 同步改」,漏了兩處 return [] 早退、PriceLadder 的 rows.length === 0 守衛,以及市價列是否要進 rowRefs。",
+      "disposition": "accepted-fixed",
+      "resolution": "兩處早退回完整形狀(有測試)、守衛續用 ladder.rows.length、市價列不進 rowRefs 也不參與 isCenter/dimmed(W-15 語意不變)。"
+    },
+    {
+      "id": "R13",
+      "severity": "P2",
+      "section": "R-2 markCenterX",
+      "problem": "夾制量用 radius 而新標記的可見外緣是 radius + 底環 strokeWidth/2,底環仍會在 viewBox 邊界被裁一圈。",
+      "disposition": "accepted-modified",
+      "resolution": "夾制量改 radius + ring/2(墨色外緣),刻意不含 halo —— 底環是背景色墊片溢出無視覺後果,算進去會把分時圖的環壓到 radius 2.5 = hover 錨同尺寸,反而製造本輪要避免的混淆。見 `[amendment 2026-07-31: R-13a]`。"
+    },
+    {
+      "id": "R14",
+      "severity": "P2",
+      "section": "R-5 五檔 0 → 市價",
+      "problem": "沒對 maxQty(量 bar 歸一,W-14)與 bidTotal/askTotal 是否含市價量表態 → 實作者可能順手改(scope 滑動)或維持而 user 在畫面上看到說不出所以然的數字。",
+      "disposition": "accepted-fixed",
+      "resolution": "明訂維持既有計算;Phase 5 再補:有市價量時總量列掛 title 說明,避免同一欄位在鎖停日與平常日定義不同而畫面零提示。"
+    }
+  ]
+}

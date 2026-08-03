@@ -1,0 +1,106 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-07-29",
+  "target": ".claude/mod/stock-ui-round2/change-spec.md",
+  "counts": { "P0": 3, "P1": 9, "P2": 7, "total": 19 },
+  "prescreen": "main agent 機械快篩:R2(useStockBars.test.tsx 存在且 import DAYS_STEP/DAYS_MAX)、R4(useChartToggles.test.ts:18/:25/:37 皆 toEqual 全等)、R5(StockIntradayChart.test.tsx:61 僅斷言 polyline 數量無 class 選擇器)、R12(CandleChart.test.tsx:42/:50/:64 傳 maxBars/showMa)、R13b(:114 四個斷言在 11 刻度下仍成立,且無 getByText 多筆撞擊)、R15b(ChartMode 定義在 useStockBars.ts:10)、R16(useChartToggles 為純 useState 每 instance 一份)、R19b(VOL_RATIO 實算 (578-14)*0.22=124.08)—— 逐條開檔核對,零 REFUTED。",
+  "findings": [
+    {
+      "id": "R1", "severity": "P0", "resolution": "accepted",
+      "claim": "priceAtY 反演公式未跟隨 B1 的 toY padding 改動,且執行順序 🔵 先於 🔴",
+      "action": "江波圖 priceAtY 從 🔵 R2 移入 🔴 B1(與 toY 同一 bullet、共用 PAD_Y/X_LABEL_H 常數);K 線 priceAtY 留 🔵 R2a(其 toY 結構不變)。兩份各加 round-trip 單測。"
+    },
+    {
+      "id": "R2", "severity": "P0", "resolution": "accepted",
+      "claim": "§3/§4 B7 宣稱『DAYS_STEP/DAYS_MAX 只被 StockChart.tsx 引用』『useStockBars 無獨立測試檔』與 code 不符",
+      "action": "查證屬實(useStockBars.test.tsx:7 import、:88/:90/:91/:93 用 DAYS_STEP、:107 斷言 DAYS_MAX===30)。§3 caller 列更正、§5 新增該檔一整列。spec 中『已 grep 確認』措辭一併移除。"
+    },
+    {
+      "id": "R3", "severity": "P0", "resolution": "accepted",
+      "claim": "SC-6.7 只對齊 svg 高度,兩個 figure 的非 svg chrome 差約 26px;且用 viewBox 補固定 px 差額只能在單一容器寬成立",
+      "action": "main agent 於 review 回傳前已獨立推得同一結論(H_ideal = 1400×(0.4125+Δ/w),隨寬變動)。採 reviewer 建議 (a):兩個 figure 的 chrome 逐項對稱(頂列/底列同結構同顯式 rem 高度)使 Δ=0,再以 viewBox 對齊 svg 比例。SC-6.7 補量測對象、量測寬度與允差來源。"
+    },
+    {
+      "id": "R4", "severity": "P1", "resolution": "accepted",
+      "claim": "B5 會讓 useChartToggles.test.ts:21/:34 與 StockIntradayChart.test.tsx:93 變紅,但 §5 標為不該紅",
+      "action": "三處改列該紅並附改法。:93 拆成『預設即有 CDP 疊線』+『click 後消失』兩案例以保留 toggle 覆蓋。"
+    },
+    {
+      "id": "R5", "severity": "P1", "resolution": "accepted",
+      "claim": "SC-2(本輪最直觀訴求)零測試鎖;clipPath 唯一化理由(主圖/副圖兩 geometry)不成立",
+      "action": "§5 新增 SC-2 四條鎖(雙色 polyline/polygon、clipPath id 互異且被正確引用、ref=null fallback、VWAP 為 stroke-ink)。唯一化理由改為『SVG id 是 document 全域』,實作改用 React 19 useId()。"
+    },
+    {
+      "id": "R6", "severity": "P1", "resolution": "accepted",
+      "claim": "B1 收窄 yDomain 會讓落在漲跌停外 2% 的 CDP/MA 線靜默消失,Phase 1 已指認的 caller 影響在 spec 中消失",
+      "action": "採選項 (a) 接受隱藏 —— 追加理由:超出漲跌停的價位當日不可能成交,畫出來是雜訊。SC-3 表述補『且該線落在漲跌停域內』,加 lib 測試鎖新語意,§7 記 Known Risk。"
+    },
+    {
+      "id": "R7", "severity": "P1", "resolution": "accepted",
+      "claim": "刪 MINUTE_MAX_BARS 但未定義分 K 初始 viewport,且 zoom-out 上限 = total 會退回『蠟燭 <2px』的已知問題",
+      "action": "N6 補 INIT_BARS(日 K 120 / 分 K 240)與初始 viewport 公式;N2 補 MAX_VISIBLE=700(承接舊 m1 上限的 ≥2px 保護)。SC-6.3 改寫。§7 加 pan 期間重建成本風險 + rAF 節流緩解。"
+    },
+    {
+      "id": "R8", "severity": "P1", "resolution": "accepted",
+      "claim": "江波圖內外盤副圖(:271-278)不在任何 memo 內,B9 之後每次 mousemove 會重建最多 540 個 rect",
+      "action": "查證屬實(該段為 StockIntradayChart 內聯 JSX)。🔵 區新增 R3:抽 memo 化 EnergySub;白名單 3 補上該層。"
+    },
+    {
+      "id": "R9", "severity": "P1", "resolution": "accepted",
+      "claim": "布林上下軌常超出 buildCandleGeometry 由 o/h/l/c 算出的 [lo,hi],會被裁到圖外",
+      "action": "採選項 (a):buildCandleGeometry 新增選用參數 extraSeries 納入 y 域。順帶讓 §3『signature 新增選用參數』的 compat 承諾變成真的(見 R15a)。bollinger 測試補『上軌 > 全域最高價』案例。"
+    },
+    {
+      "id": "R10", "severity": "P1", "resolution": "accepted",
+      "claim": "分 K 每 60s refetch 產生新 bars identity,『保持貼右緣』規則會讓盤中平移最多 60 秒後被拉回",
+      "action": "規則改為條件式:僅當改動前已貼右緣(start+count >= prevTotal)才跟進;否則以 index 錨定不動。N2 測試改兩案例。"
+    },
+    {
+      "id": "R11", "severity": "P1", "resolution": "accepted",
+      "claim": "onMouseMove→onPointerMove 非等價:jsdom 無 PointerEvent,fireEvent.pointerMove 會丟失 clientX/clientY",
+      "action": "採更強的處置 —— **整條 pointer 遷移撤回**,hover 與拖曳平移全部走 mouse 事件。除 reviewer 指出的 jsdom 問題外,專案 frontend-conventions skill 另有明文:『overlay 是 onMouseMove + onClick 才成立,改 pointer event + pointerType 過濾就會破』,fable 為 fresh context 讀不到該慣例,其觸控理由在本專案剛好相反。免除 polyfill 需求。"
+    },
+    {
+      "id": "R12", "severity": "P1", "resolution": "accepted",
+      "claim": "maxBars/showMa prop 刪除是型別破壞,CandleChart.test.tsx:46/:60 被標不該紅但 tsc -b 會紅",
+      "action": "§5 CandleChart 列重寫:該紅 = :38/:46/:55/:60;補註『prop 刪除屬型別破壞,凡傳該 prop 的呼叫端與測試同步改』。"
+    },
+    {
+      "id": "R13", "severity": "P2", "resolution": "accepted",
+      "claim": "反向標記錯誤::61/:114/:119/:55 標了該紅但實際不會自動變紅;B4 對 :86 的標記與 §5 互相矛盾",
+      "action": "四處改標『需改寫/刪除(非自動變紅)』並各附改法;B4 的 :86 與 §5 對齊為不該紅。"
+    },
+    {
+      "id": "R14", "severity": "P2", "resolution": "accepted",
+      "claim": "SC-4.2/4.3 寫死『11 個』與 B1 的 snapDown 去重規則互斥;右緣 % 會出現非整 2% 階",
+      "action": "SC-4.2 改『至多 11 個、去重後不重複;高價股實測應為 11 個』並指名實測標的 2330;SC-4.3 改為『實際 %(snap 後可能非整階)』。"
+    },
+    {
+      "id": "R15", "severity": "P2", "resolution": "accepted",
+      "claim": "(a) §3 的 signature compat 承諾指向不存在的改動;(b) ChartMode 實際定義在 useStockBars.ts:10 卻掛在 B6 名下",
+      "action": "(a) 由 R9 的 extraSeries 使該承諾成真,並改寫為具體內容;(b) ChartMode 條目移入 B7(檔案 hooks/useStockBars.ts),註明 isDaily/enabled/tf 判斷對 m2..m10 仍成立。"
+    },
+    {
+      "id": "R16", "severity": "P2", "resolution": "accepted",
+      "claim": "useChartToggles 是每 instance 各自 useState,BB 鈕與 CandleChart 若各自呼叫會按了沒反應",
+      "action": "N6/N7 明寫資料流:StockChart 持有 useChartToggles,以 showBb prop 下傳;CandleChart 不自呼叫該 hook。測試以 prop 驅動。"
+    },
+    {
+      "id": "R17", "severity": "P2", "resolution": "accepted",
+      "claim": "priceAtY 無單測、空幾何分支未定義、K 線未 clamp(滑鼠移到量區會反演出負價)",
+      "action": "R2a/B1 各補三句:round-trip 單測、空幾何分支回傳定義、回傳前 clamp 進 [lo,hi]。clamp 是 fable 原文有寫但吸收時掉的。"
+    },
+    {
+      "id": "R18", "severity": "P2", "resolution": "accepted",
+      "claim": "VWAP 改 stroke-ink 後,SC-2.4 的 ref 缺失 fallback 會出現兩條同色白線無法分辨",
+      "action": "fallback 價線改維持 stroke-accent(桃紅);SC-2.4 補『兩線可區分』的可指認表述。"
+    },
+    {
+      "id": "R19", "severity": "P2", "resolution": "accepted",
+      "claim": "(a) 底部時間標 y=565 + h=14 = 579 > viewBox 578,底 1px 被裁(fable 原稿 off-by-one 照抄);(b) VOL_RATIO 註記 127 與實算 124 不符",
+      "action": "時間標 y 改綁定 height − X_LABEL_H(K 線 564、江波圖 247);B8 括號數字改 124 並改寫為公式。"
+    }
+  ],
+  "exit": "round 1 有 accepted P0(R1/R2/R3)→ 依 /mod Phase 3 觸發限縮加輪 1 次,只審 [amendment 2026-07-29] 標記段落。無 rejected、無 needs_more_context。"
+}

@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-07-29",
+  "spec": ".claude/mod/stock-ui-fixes/change-spec.md",
+  "screening": "main agent 機械快篩:逐條打開 OrderBook.test.tsx / StockChart.test.tsx / StockPage.test.tsx / CandleChart.test.tsx / StockIntradayChart.test.tsx / useStockBars.ts 核對。12 條全部 CONFIRMED,0 條 REFUTED。",
+  "findings": [
+    {"id":"R1","severity":"P0","topic":"SVG letterbox 破壞 hover 座標換算","verdict":"CONFIRMED","resolution":"accepted","fix":"改採 Option Z:圖表 SVG 完全不動(維持 w-full + 自然高度),改由下半列 flex-1 吸收剩餘空間;<main> 保留 overflow-y-auto。新增 W-17 護欄。"},
+    {"id":"R2","severity":"P1","topic":"§5.2 漏列 3 個必紅 case","verdict":"CONFIRMED","resolution":"accepted","fix":"§5.2 重寫為逐行對照實際檔案的 8 case 全表(45/52/66 行標 🔴 並給新斷言)。"},
+    {"id":"R3","severity":"P1","topic":"overflow-hidden 靜默裁掉內容無逃生口","verdict":"CONFIRMED","resolution":"accepted","fix":"保留 overflow-y-auto;SC-6 增訂『極端矮視窗退化成出現捲軸而非裁切』。"},
+    {"id":"R4","severity":"P1","topic":"新測試排在實作後 = test-after","verdict":"CONFIRMED","resolution":"accepted","fix":"§5.4 新測試全部前移併入 commit 2 (red);原 commit 7 取消。"},
+    {"id":"R5","severity":"P1","topic":"SC-3 是未標記的 scope 滑動","verdict":"CONFIRMED","resolution":"accepted","fix":"§0 新增 Q5 列,標 [auto-default] + reason + 註明未經 user 拍板可否決。"},
+    {"id":"R6","severity":"P2","topic":"2 條不會紅的被誤標該紅","verdict":"CONFIRMED","resolution":"accepted","fix":"15 行與 72 行改標 ⚪ 保留原樣;badge 新位置另開 🟢 案例。"},
+    {"id":"R7","severity":"P2","topic":"maxQty 除零 + book=null 未寫","verdict":"CONFIRMED","resolution":"accepted","fix":"§5.1 A 明寫 Math.max(1,...) 與 book?.bids ?? [];§5.3 加對應測試。"},
+    {"id":"R8","severity":"P2","topic":"SC-6 三處/四項自相矛盾","verdict":"CONFIRMED","resolution":"accepted","fix":"正文改「四處」與量法集合逐字對齊。"},
+    {"id":"R9","severity":"P2","topic":"SC-5 截圖取色非穩定 oracle","verdict":"CONFIRMED","resolution":"accepted","fix":"量法主證改 computed scrollbarColor/scrollbarWidth;截圖降為佐證;加註量測時機。"},
+    {"id":"R10","severity":"P2","topic":"標題列成交價的 auto-default reason 與原始碼牴觸","verdict":"CONFIRMED","resolution":"accepted","fix":"reason 改寫為精確版(header 有同資訊但距 ~700px,此為刻意重複)。"},
+    {"id":"R11","severity":"P2","topic":"錯誤碼來源寫錯(detail.error 優先)","verdict":"CONFIRMED","resolution":"accepted","fix":"SC-3 補取值鏈三段;§5.2 標明新斷言字串是 NOT_READY。"},
+    {"id":"R12","severity":"P2","topic":"過期命名漏列","verdict":"CONFIRMED","resolution":"accepted","fix":"commit 1 併入 StockPage.test.tsx:100/106 名稱與註解同步。"}
+  ],
+  "exit": "round 1 有 accepted P0 (R1) → 觸發限縮加輪 round 2(只審 [amendment] 段落)"
+}
