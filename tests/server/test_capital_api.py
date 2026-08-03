@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
 
 import copycat.capital.factory as factory_mod
 from copycat.capital.client import CapitalClient
-from copycat.server.capital_api import _CLIENT_QUEUE_MAX, WsBroadcaster
+from copycat.server.ws import CLIENT_QUEUE_MAX as _CLIENT_QUEUE_MAX
+from copycat.server.ws import WsBroadcaster
 from copycat.capital.models import Position
 from copycat.capital.safety import SafetyConfig
 from copycat.live.models import OptionContract, SeriesInfo, Tick

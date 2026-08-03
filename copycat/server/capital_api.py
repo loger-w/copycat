@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from typing import AsyncGenerator, Literal
+from typing import Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -39,46 +39,9 @@ from copycat.capital.models import (
     StockOrderRequest,
 )
 from copycat.server.futures_engine import FuturesEngine
+from copycat.server.ws import WsBroadcaster
 
 logger = logging.getLogger(__name__)
-
-_CLIENT_QUEUE_MAX = 500
-
-
-class WsBroadcaster:
-    """per-client 有界 queue fanout(index_engine 同款);publish 必須在 event loop 上呼叫。"""
-
-    def __init__(self) -> None:
-        self._clients: set[asyncio.Queue[dict]] = set()
-
-    def publish(self, msg: dict) -> None:
-        for queue in self._clients:
-            try:
-                queue.put_nowait(msg)
-            except asyncio.QueueFull:
-                # 慢連線丟最舊、保最新(行情/回報都是最新有意義)
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    queue.put_nowait(msg)
-                except asyncio.QueueFull:
-                    pass
-
-    def stream(self) -> AsyncGenerator[dict, None]:
-        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
-        self._clients.add(queue)
-
-        async def _gen() -> AsyncGenerator[dict, None]:
-            try:
-                while True:
-                    yield await queue.get()
-            finally:
-                self._clients.discard(queue)
-
-        return _gen()
-
 
 # ---------------------------------------------------------------------------
 # request body(server 層 pydantic → runtime dataclass)

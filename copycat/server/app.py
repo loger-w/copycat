@@ -26,7 +26,8 @@ from copycat.capital.client import CapitalClient
 from copycat.server import build_info
 from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
-from copycat.server.capital_api import WsBroadcaster, register_capital
+from copycat.server.capital_api import register_capital
+from copycat.server.ws import WsBroadcaster
 from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
