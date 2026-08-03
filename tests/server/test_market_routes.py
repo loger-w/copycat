@@ -89,7 +89,10 @@ class FakeIndexSource:
         self.calls.append((code, tf, start, end))
         if tf == "1":
             return [{"t": f"{_TODAY} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}], "tc4_1k"
-        return list(self._daily), self._tag
+        # 深拷貝:`_DEFAULT_DAILY` 是 module-level 共享的,`list()` 只換外層 list,
+        # 內層 dict 仍是同一批物件 —— 任何一條測試(或被測 route)改到 bar 的欄位,
+        # 都會滲進其後每一條測試。改前的 inline 字面值本來就是「每次呼叫新建 dict」。
+        return [dict(b) for b in self._daily], self._tag
 
 
 class NoHistoryIndexSource(FakeIndexSource):
