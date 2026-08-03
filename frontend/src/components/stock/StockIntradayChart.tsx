@@ -7,6 +7,7 @@ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshai
 import { fmt } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
+import { hhmm, HOUR_TICKS } from "@/lib/time-labels";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
@@ -41,15 +42,6 @@ const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
  *  指派,不能為了標籤加高。寬度 40 是常數不是 JSX 硬編:`XAxisLabels` 的「與 tag 重疊
  *  就不畫」靠 `tagSpan` 判定,寫死在 JSX 會讓遮蔽判定與實際寬度脫鉤。 */
 const TIME_TAG = { w: 40, h: 24 };
-
-function hhmm(minute: number): string {
-  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
-}
-
-const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
-  minute: m,
-  label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
-}));
 
 function barW(width: number): number {
   return Math.max(1, plotWidth(width) / (X_END_MIN - X_START_MIN) - 0.4);
@@ -155,7 +147,7 @@ const ChartStatic = memo(function ChartStatic({
       {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
           上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
       <line x1={Y_AXIS_W} x2={w - R_AXIS_W} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
-      {X_LABELS.map(({ minute }) => (
+      {HOUR_TICKS.map(({ minute }) => (
         <line
           key={minute}
           x1={minuteToX(minute, w)}
@@ -357,7 +349,7 @@ function XAxisLabels({
 }) {
   return (
     <g>
-      {X_LABELS.map(({ minute, label }) => {
+      {HOUR_TICKS.map(({ minute, label }) => {
         const x = minuteToX(minute, w) + 2;
         if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
         return (
