@@ -52,6 +52,17 @@ export function isMarketLevel(priceMilli: number): boolean {
   return priceMilli <= 0;
 }
 
+/** 簿的最佳**限價**檔位(往下找第一個非市價檔);全是市價佇列 / 空簿 → null。
+ *
+ *  後端同一件事的對應函式是 `live/stock_models.py::_best_limit_price`。鎖停判定要用它
+ *  而不是 `levels.some(([p]) => p === upper)`:badge 的語意是「最佳限價檔就掛在漲停價」,
+ *  `some` 則是「簿裡任何一檔碰到漲停價」—— 後者在畸形 / 過期的簿上會過度觸發,
+ *  而 `upper` 為 0(meta 缺值)時還會與市價偽檔位的 0 對上,在沒鎖停的股票亮起 badge。 */
+export function bestLimit(levels: [number, number][]): number | null {
+  for (const [p] of levels) if (!isMarketLevel(p)) return p;
+  return null;
+}
+
 /** 現價踩到漲停 / 跌停?兩者皆非(或漲跌停不可得)→ null。
  *
  *  `upper` / `lower` 為 null 的商品(無漲跌幅限制、舊後端)一律回 null —— 不猜。 */

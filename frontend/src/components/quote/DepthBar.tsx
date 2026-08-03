@@ -1,5 +1,5 @@
 import { chgPct, fmt, fmtPct } from "@/lib/format";
-import { isMarketLevel } from "@/lib/stock-tick";
+import { bestLimit, isMarketLevel } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
 /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
@@ -81,10 +81,12 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
   const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
   const chg = last !== null && ref_ ? chgPct(last, ref_) : null;
   // **不可用 `b[0]?.[0] === upper`**:鎖停時 `bids[0]` 是市價單佇列(價 0),漲停價被擠到
-  // `bids[1]` → 判定恆假、badge 靜默消失(2327 實測)。改看「該側有沒有掛在漲跌停價的
-  // 限價檔」,市價偽檔位再也打不穿它。
-  const lockedUp = upper !== null && limitB.some(([p]) => p === upper);
-  const lockedDown = lower !== null && limitA.some(([p]) => p === lower);
+  // `bids[1]` → 判定恆假、badge 靜默消失(2327 實測)。改看**最佳限價檔**是不是掛在
+  // 漲跌停價上 —— 市價偽檔位打不穿它,而語意仍是「排隊排到漲停價上」;用 `some`
+  // (簿裡任何一檔碰到漲停價)則會在畸形 / 過期的簿上過度觸發,且 upper 為 0
+  // (meta 缺值)時與市價檔的 0 對上,在沒鎖停的股票亮起 badge。
+  const lockedUp = upper !== null && bestLimit(b) === upper;
+  const lockedDown = lower !== null && bestLimit(a) === lower;
 
   // 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
   const bidSlots = [...Array(DEPTH).keys()].reverse();
