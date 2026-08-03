@@ -3,39 +3,13 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
-from typing import Any
 
 import pytest
 
 from copycat.live.corr_source import CorrQuoteSource, all_day_window
 from copycat.live.session import session_key, session_window
-
-
-class _JsonSocket:
-    def __init__(self, handler: Any) -> None:
-        self._handler = handler
-        self._resp = b""
-
-    def send_string(self, payload: str) -> None:
-        self._resp = self._handler(json.loads(payload))
-
-    def recv(self) -> bytes:
-        return self._resp
-
-
-class _FakeApi:
-    def __init__(self, handler: Any) -> None:
-        self.socket = _JsonSocket(handler)
-        self.lock = threading.Lock()
-
-    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
-        pass
-
-
-def _ok(payload: dict | None = None) -> bytes:
-    return (json.dumps({"Success": "OK", **(payload or {})}) + "\0").encode()
+from tests.helpers.tc4_fakes import FakeApi, ok
 
 
 def _fail() -> bytes:
@@ -63,9 +37,9 @@ class TestSubscribe:
 
         def handler(obj: dict) -> bytes:
             sent.append(obj)
-            return _ok()
+            return ok()
 
-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
         src.subscribe_raw("TC.F.CME.ES.HOT")
 
         assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
@@ -81,9 +55,9 @@ class TestSubscribe:
 
         def handler(obj: dict) -> bytes:
             sent.append(obj)
-            return _ok()
+            return ok()
 
-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
         for sym in (
             "TC.F.SGX.TWN.HOT",
             "TC.F.CBOT.YM.HOT",
@@ -102,9 +76,9 @@ class TestSubscribe:
 
     def test_failed_subscribe_raises_connection_error(self) -> None:
         def handler(obj: dict) -> bytes:
-            return _ok() if obj["Request"] == "UNSUBQUOTE" else _fail()
+            return ok() if obj["Request"] == "UNSUBQUOTE" else _fail()
 
-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
         with pytest.raises(ConnectionError):
             src.subscribe_raw("TC.F.CME.ES.HOT")
 
@@ -113,9 +87,9 @@ class TestSubscribe:
 
         def handler(obj: dict) -> bytes:
             sent.append(obj)
-            return _ok()
+            return ok()
 
-        src = CorrQuoteSource(api=_FakeApi(handler), session="s1")
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1")
         src.unsubscribe_raw("TC.F.CME.ES.HOT")  # 未訂閱 → no-op
         assert sent == []
 
@@ -123,7 +97,7 @@ class TestSubscribe:
 class TestHandleRaw:
     def test_realtime_quote_dispatched(self) -> None:
         got: list[dict] = []
-        src = CorrQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
+        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
         src.set_on_message(got.append)
 
         src.handle_raw('TOPIC:{"DataType":"REALTIME","Quote":{"Symbol":"TC.F.CME.ES.HOT"}}')
@@ -132,7 +106,7 @@ class TestHandleRaw:
 
     def test_non_realtime_ignored(self) -> None:
         got: list[dict] = []
-        src = CorrQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
+        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
         src.set_on_message(got.append)
 
         src.handle_raw('TOPIC:{"DataType":"PING"}')
@@ -141,7 +115,7 @@ class TestHandleRaw:
 
     def test_malformed_payload_ignored(self) -> None:
         got: list[dict] = []
-        src = CorrQuoteSource(api=_FakeApi(lambda o: _ok()), session="s1")
+        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
         src.set_on_message(got.append)
 
         src.handle_raw("no-colon-here")
