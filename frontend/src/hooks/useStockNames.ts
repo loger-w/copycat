@@ -19,12 +19,22 @@ async function fetchStockNames(): Promise<StockName[]> {
   return Array.isArray(body.names) ? body.names : [];
 }
 
+/** 尚未拿到名稱表時的自動重抓間隔。
+ *
+ *  server 啟動期 lifespan 阻塞(TXO 全鏈回補,常態數十秒~分鐘級)時 uvicorn 還沒 bind
+ *  socket,首載必然連線被拒 → `retry: 1` 兩次嘗試 1-2 秒內用完就落入 error 終態,提示列
+ *  與側欄股名要等 window refocus 才復原。拿到資料(哪怕空表)即停,穩態零成本。 */
+const NAMES_RETRY_INTERVAL_MS = 3000;
+
 export function useStockNames() {
   return useQuery({
     queryKey: ["stock-names"],
     queryFn: fetchStockNames,
     staleTime: Infinity,
     gcTime: Infinity,
+    // 保留 `retry: 1`:error 態要能浮現(404 / 舊 build 的錯誤碼契約靠它)
     retry: 1,
+    refetchInterval: (query) =>
+      query.state.data === undefined ? NAMES_RETRY_INTERVAL_MS : false,
   });
 }
