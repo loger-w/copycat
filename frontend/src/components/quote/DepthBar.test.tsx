@@ -112,3 +112,59 @@ describe("DepthBar 水平五檔(SC-4)", () => {
     expect(screen.getByLabelText("成交價").textContent).toContain("—");
   });
 });
+
+// 🔴 M6:鎖漲跌停時 TC4 會在簿的第一檔推「市價單佇列」,價格欄是 0
+// (CLAUDE.md §8「第四處」;OrderBook 已全套修過,本檔沿用同一套規則)
+describe("DepthBar 市價 0 價檔位(M6)", () => {
+  const LOCK_BIDS: [number, number][] = [
+    [0, 200], // 市價佇列(量可以是限價量的數倍)
+    [582_000, 12],
+    [581_000, 32],
+    [580_000, 15],
+    [579_000, 8],
+  ];
+  const LOCK_ASKS: [number, number][] = [
+    [0, 90],
+    [583_000, 5],
+    [584_000, 18],
+    [585_000, 9],
+    [586_000, 24],
+  ];
+
+  it("鎖漲停 badge:比對第一個限價檔而不是 bids[0](市價佇列不得打穿判定)", () => {
+    renderBar({ bids: LOCK_BIDS, upper: 582_000 });
+    expect(screen.getByText("鎖漲停")).toBeTruthy();
+  });
+
+  it("鎖跌停 badge:賣側對稱", () => {
+    renderBar({ asks: LOCK_ASKS, lower: 583_000 });
+    expect(screen.getByText("鎖跌停")).toBeTruthy();
+  });
+
+  it("總量只算限價檔(定義不隨鎖停日改變,可跨日跨股比)", () => {
+    renderBar({ bids: LOCK_BIDS, asks: LOCK_ASKS });
+    expect(screen.getByText(/委買/).textContent).toContain("67"); // 12+32+15+8,不含市價 200
+    expect(screen.getByText(/委賣/).textContent).toContain("56"); // 5+18+9+24,不含市價 90
+  });
+
+  it("0 價檔位顯示「市價」不印 0,量照列", () => {
+    renderBar({ bids: LOCK_BIDS });
+    const cell = screen.getByLabelText("買1 市價");
+    expect(cell.textContent).toContain("市價");
+    expect(cell.textContent).toContain("200");
+    expect(screen.queryByLabelText("買1 0")).toBeNull();
+  });
+
+  it("量 bar 歸一只看限價檔,市價列自己的 bar 夾制在 100%", () => {
+    renderBar({ bids: LOCK_BIDS, asks: LOCK_ASKS });
+    // 限價最大量 = 32(買3 581,市價佔掉買1 這格),不是市價的 200
+    const limitMax = screen.getByLabelText("買3 581");
+    expect(
+      limitMax.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height,
+    ).toBe("100%");
+    const market = screen.getByLabelText("買1 市價");
+    expect(market.querySelector<HTMLElement>("[data-testid='depth-vol-bar']")?.style.height).toBe(
+      "100%",
+    );
+  });
+});
