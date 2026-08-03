@@ -7,8 +7,6 @@
 /** 大盤標的鍵;與後端 `/api/market/bars/{key}` 的 `MARKET_KEYS` 同值域。 */
 export type MarketKey = "TWSE" | "OTC" | "TXF" | "MXF" | "TMF";
 
-export const FUT_KEYS = ["TXF", "MXF", "TMF"] as const satisfies readonly MarketKey[];
-
 export type MarketMode =
   | "intraday"
   | "m1" | "m2" | "m3" | "m4" | "m5"

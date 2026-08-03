@@ -75,9 +75,7 @@ export interface Pt {
 export interface EnergyBar {
   /** 該分鐘的中心 x(= 走勢線頂點與十字線的 x);bar 由元件以此為中心左右各畫半根 */
   x: number;
-  /** 該分鐘總量(外 + 內 + 未分類) */
-  total: number;
-  /** 依全日最大總量正規化後的高度 */
+  /** 依全日最大總量(外 + 內 + 未分類)正規化後的高度 */
   h: number;
 }
 
@@ -109,8 +107,6 @@ export interface IntradayGeometry {
   hasRef: boolean;
   /** 走勢線與平盤之間的封閉多邊形點串;`hasRef` 為 false 或無資料時為空字串 */
   areaPolygon: string;
-  upperY: number | null;
-  lowerY: number | null;
   yDomain: [number, number]; // 毫元
   yTicks: YTick[];
   /** 當日高 / 低的標記(round4 項 1);域外、反查落空、缺 per-minute h/l 一律 null = 不畫 */
@@ -151,7 +147,6 @@ export interface SideSummary {
   outer: number;
   inner: number;
   unch: number;
-  total: number;
   /** 外盤比 = 外 /(外 + 內)。**分母刻意排除未分類**(既有語意,不在本輪改);
    *  分母為 0 → `null` 而不是 0 —— `0%` 會被讀成「全部內盤」。 */
   outerPct: number | null;
@@ -182,7 +177,6 @@ export function sideSummary(minutes: Map<number, MinuteAgg>): SideSummary {
     outer,
     inner,
     unch,
-    total,
     outerPct: decided > 0 ? (outer / decided) * 100 : null,
     decidedPct: total > 0 ? (decided / total) * 100 : null,
   };
@@ -203,7 +197,6 @@ export interface OverlayLine {
   y: number;
   priceMilli: number;
   level: OverlayLevel;
-  kind: "cdp" | "ma";
 }
 
 interface Input {
@@ -281,7 +274,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   const energyH = Math.max(1, size.height - SUB_TOP_PAD);
   const energyBars = entries.map(([minute, m]) => {
     const total = m.o + m.i + m.u;
-    return { x: toX(minute), total, h: (total / maxTotal) * energyH };
+    return { x: toX(minute), h: (total / maxTotal) * energyH };
   });
 
   const yTicks: YTick[] = [];
@@ -367,8 +360,6 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     areaPolygon,
     highMark,
     lowMark,
-    upperY: upper != null && upper <= yTop ? toY(upper) : null,
-    lowerY: lower != null && lower >= yBottom ? toY(lower) : null,
     yDomain: [yBottom, yTop],
     yTicks,
     energyBars,
@@ -392,21 +383,21 @@ export function overlayLines(
 ): OverlayLine[] {
   const [yBottom, yTop] = g.yDomain;
   const lines: OverlayLine[] = [];
-  const push = (p: number | null | undefined, level: OverlayLevel, kind: OverlayLine["kind"]): void => {
+  const push = (p: number | null | undefined, level: OverlayLevel): void => {
     if (p == null || p < yBottom || p > yTop) return;
-    lines.push({ y: g.toY(p), priceMilli: p, level, kind });
+    lines.push({ y: g.toY(p), priceMilli: p, level });
   };
   if (toggles.cdp && overlay.cdp) {
     // 順序 = 由上而下,元件的配色表依賴這個語意(SC-2:名稱移除後靠顏色區分)
-    push(overlay.cdp.ah, "ah", "cdp");
-    push(overlay.cdp.nh, "nh", "cdp");
-    push(overlay.cdp.cdp, "cdp", "cdp");
-    push(overlay.cdp.nl, "nl", "cdp");
-    push(overlay.cdp.al, "al", "cdp");
+    push(overlay.cdp.ah, "ah");
+    push(overlay.cdp.nh, "nh");
+    push(overlay.cdp.cdp, "cdp");
+    push(overlay.cdp.nl, "nl");
+    push(overlay.cdp.al, "al");
   }
   if (toggles.ma) {
-    push(overlay.ma5, "ma5", "ma");
-    push(overlay.ma20, "ma20", "ma");
+    push(overlay.ma5, "ma5");
+    push(overlay.ma20, "ma20");
   }
   return lines;
 }

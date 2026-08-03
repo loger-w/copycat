@@ -11,7 +11,6 @@ import {
   removeFromGroup,
   renameGroup,
   reorderUngrouped,
-  setMembership,
   ungroupedCodes,
   type Watchlist,
 } from "@/lib/watchlist-model";
@@ -266,33 +265,6 @@ describe("addCode", () => {
   it("已在自選 → 原物件不動(呼叫端據此零 PUT,W-21)", () => {
     const w = wl(["2330"], []);
     expect(addCode(w, "2330")).toBe(w);
-  });
-});
-
-describe("setMembership", () => {
-  it("勾選 → 進該組尾端;可同時屬兩組(W-1)", () => {
-    const w = wl(
-      ["2330"],
-      [
-        { name: "主力", codes: ["2330"] },
-        { name: "觀察", codes: [] },
-      ],
-    );
-    const out = setMembership(w, "2330", "觀察", true);
-    expect(out.groups[0]!.codes).toEqual(["2330"]);
-    expect(out.groups[1]!.codes).toEqual(["2330"]);
-  });
-
-  it("取消勾選 → 離開該組,code 留在自選", () => {
-    const w = wl(["2330"], [{ name: "主力", codes: ["2330"] }]);
-    const out = setMembership(w, "2330", "主力", false);
-    expect(out.groups[0]!.codes).toEqual([]);
-    expect(out.codes).toEqual(["2330"]);
-  });
-
-  it("勾選已在該組的檔 → 原物件不動", () => {
-    const w = wl(["2330"], [{ name: "主力", codes: ["2330"] }]);
-    expect(setMembership(w, "2330", "主力", true)).toBe(w);
   });
 });
 
