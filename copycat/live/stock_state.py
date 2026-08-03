@@ -168,6 +168,12 @@ class StockDayState:
             if last
             else None,
             "vwap": self.vwap_milli,
+            # vwap 的**分母**(additive,M4)。前端要做增量 VWAP 就得先還原分子
+            # (vwap × 分母),而分母是這裡的 `_volume` = 去重剔試撮後的 Σqty ——
+            # **不是** `last.cum_vol`(TC4 的當日累積量)。兩者在有 tick 被去重
+            # 或試撮丟棄時就會岔開,拿錯的那個當分母不會報錯,只會讓 VWAP 靜默
+            # 偏移到下一次全量 refetch 為止。
+            "vol": self._volume,
             # 高低與 vwap 同層(top-level)不進 meta:meta 是 TC4 來的靜態盤別資料
             # (名稱 / 參考價 / 漲跌停),而高低是由成交推導的當日狀態。放這裡之後
             # meta 為 None(只跑過回補、未收 REALTIME)時高低照樣有值。
