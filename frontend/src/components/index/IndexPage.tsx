@@ -5,6 +5,7 @@ import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
 import { pts } from "@/lib/svg-points";
+import { HOUR_TICKS } from "@/lib/time-labels";
 import {
   coerceMode,
   isMarketKey,
@@ -24,10 +25,6 @@ const OVERLAY_STORE = "copycat-index-mode";
 const FUT_STORE = "copycat-market-fut";
 
 const SIZE = { width: 640, height: 220 };
-const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
-  minute: m,
-  label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
-}));
 
 type FutKey = "TXF" | "MXF" | "TMF";
 const FUT_LABELS: readonly (readonly [FutKey, string])[] = [
@@ -114,7 +111,7 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
         role="img"
         aria-label="指數重疊走勢"
       >
-        {X_LABELS.map(({ minute, label }) => (
+        {HOUR_TICKS.map(({ minute, label }) => (
           <g key={minute}>
             <line
               x1={toX(minute)}

@@ -6,13 +6,10 @@ import type { IndexSeries } from "@/hooks/useIndexStream";
 import { aggregateBars } from "@/lib/candle";
 import { buildIndexGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
 import { pts } from "@/lib/svg-points";
+import { HOUR_TICKS } from "@/lib/time-labels";
 import { type MarketKey, type MarketMode, marketMinutesOf } from "@/lib/timeframe";
 
 const SIZE = { width: 640, height: 220 };
-const X_LABELS = [540, 600, 660, 720, 780].map((m) => ({
-  minute: m,
-  label: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
-}));
 
 /** 資料源代碼 → 畫面文字。**必須逐一列舉**:未知碼原樣顯示(安全漂移),
  *  不要 fallback 成「TC4」之類的漂亮字 —— 那等於替沒把握的來源背書。 */
@@ -43,7 +40,7 @@ function IntradayChart({ name, s }: { name: string; s: IndexSeries }) {
       role="img"
       aria-label={`${name}分時走勢`}
     >
-      {X_LABELS.map(({ minute, label }) => (
+      {HOUR_TICKS.map(({ minute, label }) => (
         <g key={minute}>
           <line
             x1={toX(minute)}
