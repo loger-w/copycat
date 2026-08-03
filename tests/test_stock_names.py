@@ -8,7 +8,6 @@ import pytest
 from copycat.stock_names import (
     ISIN_URLS,
     load_names,
-    parse_isin_html,
     parse_isin_html_with_stats,
     refresh,
     write_names,
@@ -49,7 +48,7 @@ BROKEN_SECTION_HTML = """
 
 class TestParseIsinHtml:
     def test_keeps_stock_and_etf_sections(self) -> None:
-        result = parse_isin_html(FIXTURE_HTML)
+        result, _ = parse_isin_html_with_stats(FIXTURE_HTML)
         assert result["2330"] == "台積電"
         assert result["6547"] == "高端疫苗"
         assert result["00679B"] == "元大美債20年"
@@ -57,12 +56,12 @@ class TestParseIsinHtml:
         assert result["2801A"] == "彰銀甲特"
 
     def test_warrant_section_excluded(self) -> None:
-        result = parse_isin_html(FIXTURE_HTML)
+        result, _ = parse_isin_html_with_stats(FIXTURE_HTML)
         assert "030001" not in result
         assert "030002" not in result
 
     def test_invalid_codes_dropped(self) -> None:
-        result = parse_isin_html(FIXTURE_HTML)
+        result, _ = parse_isin_html_with_stats(FIXTURE_HTML)
         assert "999" not in result  # 太短
         assert "ABCD" not in result  # 無數字
         assert "1234" not in result  # 名稱空
@@ -70,13 +69,14 @@ class TestParseIsinHtml:
 
     def test_name_may_contain_fullwidth_space(self) -> None:
         """split 必須 maxsplit=1,否則名稱含全形空格的列會被切碎或誤剔。"""
-        assert parse_isin_html(FIXTURE_HTML)["8888"] == "名稱 含　全形空格"
+        assert parse_isin_html_with_stats(FIXTURE_HTML)[0]["8888"] == "名稱 含　全形空格"
 
     def test_duplicate_code_keeps_first(self) -> None:
-        assert parse_isin_html(FIXTURE_HTML)["2330"] == "台積電"
+        assert parse_isin_html_with_stats(FIXTURE_HTML)[0]["2330"] == "台積電"
 
     def test_malformed_rows_do_not_raise(self) -> None:
-        assert parse_isin_html("<tr><td>x</td></tr><tr></tr><tr><td>a</td><td>b</td></tr>") == {}
+        html = "<tr><td>x</td></tr><tr></tr><tr><td>a</td><td>b</td></tr>"
+        assert parse_isin_html_with_stats(html)[0] == {}
 
     def test_section_counts_exposed_for_drift_visibility(self) -> None:
         """refresh 要能 log 逐段筆數 + 被剔除的權證列數,漂移才看得見。"""

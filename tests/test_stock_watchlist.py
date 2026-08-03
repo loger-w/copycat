@@ -12,7 +12,6 @@ from copycat.stock_watchlist import (
     WatchlistError,
     load_watchlist,
     save_watchlist,
-    ungrouped,
     union,
     validate_code,
 )
@@ -76,7 +75,6 @@ class TestWatchlistPersistence:
             "codes": ["2330", "5483"],
             "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
         }
-        assert ungrouped(wl) == []
 
     def test_saved_file_is_v3(self, tmp_path: Path) -> None:
         path = tmp_path / "w.json"
@@ -157,26 +155,6 @@ class TestWatchlistPersistence:
             {"codes": ["2330"], "groups": [{"name": "a", "codes": ["5483", "3231"]}]},
         )
         assert saved["codes"] == ["2330", "5483", "3231"]
-
-
-class TestUngrouped:
-    def test_excludes_group_members_keeping_codes_order(self) -> None:
-        wl: Watchlist = {
-            "codes": ["2330", "5483", "3231", "2317"],
-            "groups": [{"name": "a", "codes": ["5483"]}, {"name": "b", "codes": ["2317"]}],
-        }
-        assert ungrouped(wl) == ["2330", "3231"]
-
-    def test_empty_when_every_code_grouped(self) -> None:
-        wl: Watchlist = {
-            "codes": ["2330", "5483"],
-            "groups": [{"name": "a", "codes": ["2330", "5483"]}],
-        }
-        assert ungrouped(wl) == []
-
-    def test_all_ungrouped_when_no_groups(self) -> None:
-        wl: Watchlist = {"codes": ["2330", "5483"], "groups": []}
-        assert ungrouped(wl) == ["2330", "5483"]
 
 
 class TestUnion:

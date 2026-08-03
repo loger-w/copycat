@@ -72,16 +72,10 @@ def _text(cell: str) -> str:
     return _TAG_RE.sub("", cell).replace("&nbsp;", " ").strip()
 
 
-def parse_isin_html(html: str) -> dict[str, str]:
-    """ISIN 頁 → {股號: 名稱}。段名含「權證」的整段剔除;重複代號保留先出現者。"""
-    return parse_isin_html_with_stats(html)[0]
-
-
 def parse_isin_html_with_stats(html: str) -> tuple[dict[str, str], ParseStats]:
-    """同 `parse_isin_html`,另回逐段筆數與剔除計數(`refresh` 的守門與 log 靠它)。
+    """ISIN 頁 → ({股號: 名稱}, 逐段筆數與剔除計數)。
 
-    刻意做成兩支函式而不是一個 `with_stats` flag —— union 回傳型別在呼叫端無法窄化,
-    只能靠 `assert isinstance` 補,那是把型別檢查推回 runtime。
+    段名含「權證」的整段剔除;重複代號保留先出現者。統計是 `refresh` 的守門與 log 依據。
     """
     names: dict[str, str] = {}
     stats = ParseStats()
