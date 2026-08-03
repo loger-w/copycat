@@ -507,9 +507,23 @@ class TestReviewFixes:
     async def test_worker_survives_unexpected_backfill_error(self) -> None:
         # CR4:非 ConnectionError 例外不得殺死 worker
         engine, src = await _make()
+        stream = engine.stream()
         src.backfill_error = ValueError("truncated payload")
         await engine.set_main("2330")
         await _drain(engine)
+        # 使用者看得到的那一半:畫面「回補中…」的唯一來源是 WS status 訊息(M3 之後
+        # snapshot 不再帶),例外路徑沒補推 backfilling=None 的話,徽章永遠掛著而內部態
+        # 早就清了(TQ-4)。斷言必須落在**第二次回補之前** —— 後面那次成功回補自己也會
+        # 推一則 None,收到最後才驗會變成無論例外路徑推不推都綠。
+        got: list[dict] = []
+        try:
+            while True:
+                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+        statuses = [m for m in got if m["type"] == "status"]
+        assert statuses, "回補期間必有 status 訊息"
+        assert statuses[-1]["backfilling"] is None
         src.backfill_error = None
         await engine.set_main("5483")
         await _drain(engine)
@@ -517,6 +531,7 @@ class TestReviewFixes:
         # backfilling 已退出 REST snapshot(M3),改讀 engine 內部態 —— 鎖的行為
         # (例外後 `_backfilling` 不會永久卡住)不變
         assert engine._backfilling is None  # 清乾淨
+        await engine.close()
 
     async def test_weekend_makeup_day_fast_path_rollover(self) -> None:
         # CR5:無 checkpoint(週六補市)下,新日 tick 直接觸發兩段式
@@ -557,11 +572,13 @@ class TestReviewFixes:
         await engine.set_main("2330")
         await _drain(engine)
         await engine._pool_lock.acquire()
-        before = asyncio.all_tasks()
+        n_before = len(engine._tasks)
         engine.rollover_stage1("2026-07-22")
-        created = asyncio.all_tasks() - before
-        assert len(created) == 1
-        resub = created.pop()
+        # 從 `_tasks` 取而不是 `asyncio.all_tasks()` 差集:差集抓到的是「這一刻多出來的
+        # 任何 task」,重掛 task 有沒有進 `_tasks`(唯一持有點 = 唯一取消點,漏掛就會
+        # 被中途 GC)完全沒被鎖住 —— 這樣取才順帶把那條行為變成顯式斷言(TQ-3)
+        assert len(engine._tasks) == n_before + 1
+        resub = engine._tasks[-1]
         await asyncio.sleep(0.05)  # 讓它跑到 pool_lock 卡住
         assert not resub.done()
         await engine.close()
