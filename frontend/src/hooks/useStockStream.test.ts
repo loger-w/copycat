@@ -33,8 +33,6 @@ function snap(seq: number, ticks: { t: string; p: number; q: number; side: strin
       ? { p: ticks[ticks.length - 1]!.p, t: ticks[ticks.length - 1]!.t, cum_vol: seq }
       : null,
     vwap: null,
-    cum_inner: 0,
-    cum_outer: 0,
     minutes: {},
     ticks,
     book: null,

@@ -7,8 +7,6 @@ const SNAP = {
   seq: 3,
   last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 10 },
   vwap: 2_380_000,
-  cum_inner: 0,
-  cum_outer: 10,
   minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
   ticks: [{ t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer" }],
   book: { bids: [[2_375_000, 5]] as [number, number][], asks: [[2_380_000, 7]] as [number, number][] },
@@ -25,7 +23,6 @@ describe("fromSnapshot", () => {
     expect(acc.seq).toBe(3);
     expect(acc.last?.p).toBe(2_380_000);
     expect(acc.vwap).toBe(2_380_000);
-    expect(acc.cumOuter).toBe(10);
     expect(acc.minutes.get(541)?.v).toBe(10);
     expect(acc.ticks.length).toBe(1);
     expect(acc.meta?.name).toBe("台積電");
@@ -118,7 +115,7 @@ describe("per-minute 高低(round4 項 1)", () => {
 describe("applyTick", () => {
   it("accumulates minutes, vwap and inner/outer(與後端 StockDayState 等值)", () => {
     // 後端 tests/live/test_stock_state.py::TestAggregation 同一組數字
-    let acc: StockAccum = fromSnapshot({ ...SNAP, seq: 1, minutes: {}, ticks: [], last: null, vwap: null, cum_outer: 0, cum_inner: 0 });
+    let acc: StockAccum = fromSnapshot({ ...SNAP, seq: 1, minutes: {}, ticks: [], last: null, vwap: null });
     acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer", seq: 2 });
     acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:59.000", p: 2_390_000, q: 4, side: "inner", seq: 3 });
     acc = applyTick(acc, { type: "tick", code: "2330", t: "09:02:10.000", p: 2_400_000, q: 6, side: "outer", seq: 4 });
@@ -127,8 +124,6 @@ describe("applyTick", () => {
     expect(m1?.v).toBe(14);
     expect(m1?.o).toBe(10);
     expect(m1?.i).toBe(4);
-    expect(acc.cumOuter).toBe(16);
-    expect(acc.cumInner).toBe(4);
     expect(acc.vwap).toBe(2_388_000);
     expect(acc.seq).toBe(4);
     expect(acc.last?.p).toBe(2_400_000);
