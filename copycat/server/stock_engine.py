@@ -100,13 +100,20 @@ class StockEngine:
             self._tasks.append(asyncio.create_task(self._checkpoint_loop()))
 
     async def close(self) -> None:
-        for task in self._tasks:
+        # 先斷 threadsafe callback 入口(比照 index_engine):close 期間 TC4 推播不得再
+        # `call_soon_threadsafe` 到即將關閉的 loop
+        self._loop = None
+        # 快照:cancel/await 期間 rollover 仍可能 append(`_tasks` 是唯一持有點),
+        # 迭代中被改動會漏取消或炸 RuntimeError
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
-        for task in self._tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        # `gather(return_exceptions=True)`:逐個 `await task` 會被「已帶例外結束的 task」
+        # 就地重拋 → 後面的 task 不被 await、`source.close()` 永不執行(ZMQ session 洩漏)。
+        # 關機是最後一棒,沒有人會再呼叫第二次,所以這裡吞例外但**留紀錄**。
+        for task, result in zip(tasks, await asyncio.gather(*tasks, return_exceptions=True)):
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                logger.exception("close: 背景 task %r 帶例外結束", task.get_name(), exc_info=result)
         await asyncio.to_thread(self._source.close)
 
     # ---- refcount 訂閱池 ----
