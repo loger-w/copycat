@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
 import { inTradingHours } from "@/lib/trading-hours";
 
@@ -37,16 +38,7 @@ export { inTradingHours } from "@/lib/trading-hours";
 async function fetchBars(code: string, tf: string, days: number): Promise<Bar[]> {
   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
   const res = await fetch(`/api/stock/bars/${code}?${qs}`);
-  if (!res.ok) {
-    let code_ = `HTTP_${res.status}`;
-    try {
-      const body = (await res.json()) as { detail?: { error?: string } };
-      code_ = body.detail?.error ?? code_;
-    } catch {
-      /* 非 JSON body:保留 HTTP_ 前綴碼 */
-    }
-    throw new Error(code_);
-  }
+  if (!res.ok) throw new Error(await parseError(res));
   return ((await res.json()) as { bars: Bar[] }).bars;
 }
 
