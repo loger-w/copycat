@@ -1,4 +1,4 @@
-import { fmt } from "@/lib/format";
+import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
@@ -75,7 +75,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
   const maxVol = Math.max(1, ...b.map(([, v]) => v), ...a.map(([, v]) => v));
   const bidTotal = b.reduce((s, [, v]) => s + v, 0);
   const askTotal = a.reduce((s, [, v]) => s + v, 0);
-  const chg = last !== null && ref_ ? ((last - ref_) / ref_) * 100 : null;
+  const chg = last !== null && ref_ ? chgPct(last, ref_) : null;
   const lockedUp = upper !== null && b[0]?.[0] === upper;
   const lockedDown = lower !== null && a[0]?.[0] === lower;
 
@@ -126,7 +126,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null, o
                 chg > 0 ? "text-bull" : chg < 0 ? "text-bear" : "text-ink-dim",
               )}
             >
-              {`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}
+              {fmtPct(chg)}
             </span>
           ) : null}
           {lockedUp ? (

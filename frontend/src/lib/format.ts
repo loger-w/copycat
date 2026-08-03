@@ -18,6 +18,17 @@ export function formatPts(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
 
+/** 漲跌百分比 → 顯示字串:正值帶 `+`,固定兩位小數。
+ *  null 的「-」留在呼叫端 —— 各處的空值文案與 tone 判定不同。 */
+export function fmtPct(v: number): string {
+  return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
+/** 相對參考價的漲跌百分比。`ref` 的合法性(null / 0)判定留在呼叫端。 */
+export function chgPct(v: number, ref: number): number {
+  return ((v - ref) / ref) * 100;
+}
+
 /** 毫元價格 → 顯示字串:整數不帶小數,否則兩位並去掉尾隨 0。 */
 export function fmt(milli: number): string {
   const v = milli / 1000;

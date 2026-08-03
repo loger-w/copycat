@@ -4,7 +4,7 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
 import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
-import { fmt } from "@/lib/format";
+import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
 import { hhmm, HOUR_TICKS } from "@/lib/time-labels";
@@ -543,7 +543,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   const shownMin = hoverAgg !== undefined ? hoverMin! : (lastPt?.minute ?? null);
   const shownAgg = shownMin !== null ? accum.minutes.get(shownMin) : undefined;
   const shownChg =
-    shownAgg !== undefined && ref ? ((shownAgg.c - ref) / ref) * 100 : null;
+    shownAgg !== undefined && ref ? chgPct(shownAgg.c, ref) : null;
   const fields: ReadoutField[] =
     shownAgg === undefined || shownMin === null
       ? [
@@ -563,7 +563,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           },
           {
             label: "",
-            value: shownChg === null ? "-" : `${shownChg > 0 ? "+" : ""}${shownChg.toFixed(2)}%`,
+            value: shownChg === null ? "-" : fmtPct(shownChg),
             tone: shownChg === null ? "muted" : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : "muted",
           },
           { label: "量", value: String(shownAgg.v) },

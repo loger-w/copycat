@@ -6,7 +6,7 @@ import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
-import { fmt } from "@/lib/format";
+import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
@@ -38,7 +38,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
 
   const meta = accum?.meta ?? null;
   const last = accum?.last ?? null;
-  const chg = last && meta?.ref ? ((last.p - meta.ref) / meta.ref) * 100 : null;
+  const chg = last && meta?.ref ? chgPct(last.p, meta.ref) : null;
   const limit = limitState(last?.p ?? null, meta?.upper ?? null, meta?.lower ?? null);
 
   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
@@ -96,7 +96,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
                 >
                   {fmt(last.p)}
                   {chg != null ? (
-                    <span className="ml-1 text-xs">{`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}</span>
+                    <span className="ml-1 text-xs">{fmtPct(chg)}</span>
                   ) : null}
                 </span>
               ) : null}
