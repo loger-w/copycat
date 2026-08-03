@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { fmt } from "@/lib/format";
 import type { TickRow } from "@/lib/stock-accum";
@@ -21,7 +21,10 @@ function volTone(side: string): string {
 
 export function TickTape({ ticks, ref_ }: { ticks: TickRow[]; ref_: number | null }) {
   const [limit, setLimit] = useState(PAGE);
-  const rows = [...ticks].reverse().slice(0, limit);
+  // reverse 吃整份 ticks(上限 200 筆),而 hover / 展開等純 UI state 變動也會 re-render
+  // —— 複製 + 反轉的成本與 ticks 綁定就好,不必跟著每次 render 重付。
+  const newestFirst = useMemo(() => [...ticks].reverse(), [ticks]);
+  const rows = newestFirst.slice(0, limit);
 
   if (rows.length === 0) {
     return (
