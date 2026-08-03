@@ -44,7 +44,6 @@ class StockTick:
     time: str  # 台北 HH:MM:SS.fff(parse 層已 +8)
     trade_date: str  # 台北 YYYY-MM-DD
     side: str  # "outer" | "inner" | "neutral"(成交當下對照 Bid/Ask)
-    buy_sell_flag: int | None
     is_trial: bool
     # 成交當下的最佳買賣價(= derive_side 的輸入,round5 明細欄位)。
     # 有 default 是必要的:既有建構點(tests/live/test_stock_state.py、
@@ -211,7 +210,6 @@ def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockM
         time=time_tp,
         trade_date=date_tp,
         side=derive_side(price, bid0, ask0),
-        buy_sell_flag=_to_int(msg.get("FlagOfBuySell", "")),
         is_trial=is_trial_window(time_tp),
         bid_milli=bid0,
         ask_milli=ask0,
@@ -243,7 +241,6 @@ def parse_hist_tick(code: str, row: dict) -> StockTick | None:
         time=time_tp,
         trade_date=date_tp,
         side=derive_side(price, bid, ask),
-        buy_sell_flag=None,
         is_trial=is_trial_window(time_tp),
         bid_milli=bid,
         ask_milli=ask,

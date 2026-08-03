@@ -23,7 +23,6 @@ def _tick(
         time=time,
         trade_date="2026-07-21",
         side=side,
-        buy_sell_flag=None,
         is_trial=trial,
         bid_milli=bid,
         ask_milli=ask,

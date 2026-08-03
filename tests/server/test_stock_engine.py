@@ -147,7 +147,7 @@ class TestBackfillGuard:
         src.backfill_result = [
             StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
                       time="09:01:00.000", trade_date="2026-07-21", side="outer",
-                      buy_sell_flag=None, is_trial=False)
+                      is_trial=False)
         ]
         await engine.set_main("2330")
         await engine.set_main("5483")  # A 回補中切 B
@@ -164,7 +164,7 @@ class TestBackfillGuard:
         src.backfill_result = [
             StockTick(code="2330", price_milli=2_380_000, qty=12000, cum_vol=12000,
                       time="09:01:00.000", trade_date="2026-07-21", side="outer",
-                      buy_sell_flag=None, is_trial=False)
+                      is_trial=False)
         ]
         await engine.set_main("2330")
         engine.rollover_stage1("2026-07-22")
