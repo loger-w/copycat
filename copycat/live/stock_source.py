@@ -276,7 +276,10 @@ def stock_symbol(code: str) -> str:
 
 
 def stock_window(trade_date: str) -> tuple[str, str]:
-    """台北交易日 YYYY-MM-DD → 日盤 UTC 窗(09:00–13:30 台北 = 01:00–05:30 UTC)。"""
+    """台北交易日 YYYY-MM-DD → 日盤 UTC 窗。
+
+    窗以**小時**為粒度(`YYYYMMDDHH`),實際回 UTC 00–06 = 台北 08:00–14:00 ——
+    比日盤 09:00–13:30 兩端各寬一些,涵蓋試撮與收盤補正,不是精準到分的 01–05:30。"""
     day = trade_date.replace("-", "")
     return f"{day}00", f"{day}06"
 

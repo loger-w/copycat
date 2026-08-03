@@ -15,7 +15,7 @@ import asyncio
 import logging
 from typing import AsyncGenerator, Callable, Protocol
 
-from copycat.live.stock_models import StockTick, parse_stock_realtime
+from copycat.live.stock_models import StockTick, parse_stock_realtime, to_milli
 from copycat.live.stock_source import Bar, DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.server.ws import WsBroadcaster
@@ -80,6 +80,8 @@ class StockEngine:
         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
         self._pool_lock = asyncio.Lock()
+        # 只為持有參照防 GC:asyncio 不強引用 task,不留著會被中途回收
+        # (關機時取消它是行為改動,未做 — 記 docs/next-time.md)
         self._resub_task: asyncio.Task[None] | None = None
         self.tc4_status = "up"
 
@@ -350,7 +352,6 @@ class StockEngine:
             and tick.trade_date == self._pending_date
         ):
             self._rollover_stage2(tick)
-            state = self._states[code]
         if tick is not None and state.ingest(tick):
             if code == self._main:
                 self._publish(
@@ -390,8 +391,6 @@ class StockEngine:
         name = str(quote.get("SecurityName", ""))
         if code not in name:
             logger.warning("stkfut 對映不符:%s 推播 SecurityName=%s(對映表過期?)", prod, name)
-        from copycat.live.stock_models import to_milli
-
         price = to_milli(str(quote.get("TradingPrice", "")))
         if price is None:
             return
