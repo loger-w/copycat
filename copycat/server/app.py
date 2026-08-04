@@ -8,19 +8,14 @@ import os
 from contextlib import asynccontextmanager
 from datetime import date as _date
 from pathlib import Path
-from typing import AsyncGenerator, Awaitable, Callable, Final, Literal, TypeVar, cast
+from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from copycat.live.trade_models import (
-    BrokerRejectedError,
-    OrderRequest,
-    TouchanceDownError,
-    millipts_from_price_str,
-)
+from copycat.live.trade_models import BrokerRejectedError
 from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
 from copycat.server import build_info
@@ -60,16 +55,6 @@ from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
 from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
 from copycat.stock_names import load_names as load_stock_names
 from copycat.tc4common import TC4_DEFAULT_PORT
-from copycat.server.trade import (
-    ConfirmRequiredError,
-    InvalidOrderError,
-    LiveBlockedError,
-    NotReadyError,
-    PreviewExpiredError,
-    SymbolNotAllowedError,
-    TradeRuntime,
-    TradeSource,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +101,8 @@ def _market_payload(
     }
 
 
-# sentinel:__main__ 傳 DEFAULT_TRADE = 正式啟動旗標(TradeRuntime 已停用,SC-11;
-# 現僅用於 futures 行情引擎的預設接線 — __main__ 不動,lifespan 見 futures 段)
-DEFAULT_TRADE: Final = object()
-DEFAULT_STOCK: Final = object()  # 同語意:__main__ 傳入才建真 StockQuoteSource
+# sentinel:__main__ 顯式傳入才建真 source(測試不傳 → None → 零連線)
+DEFAULT_STOCK: Final = object()  # __main__ 傳入才建真 StockQuoteSource
 DEFAULT_INDEX: Final = object()  # 同語意(index-board IR9)
 DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
 DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
@@ -137,18 +120,6 @@ class GroupBody(BaseModel):
 class GroupsBody(BaseModel):
     groups: list[GroupBody]
     codes: list[str] | None = None  # v3 自選全體;缺省 → union(groups)(舊 client 相容)
-
-
-class PreviewBody(BaseModel):
-    symbol: str
-    side: Literal["buy", "sell"]
-    kind: Literal["limit", "market"]
-    qty: int
-    price: str | None = None
-
-
-class SubmitBody(BaseModel):
-    preview_id: str
 
 
 class SignalsEnabledBody(BaseModel):
@@ -235,7 +206,6 @@ def _default_corr_source() -> CorrSource:
 def create_app(
     source: QuoteSource | None = None,
     *,
-    trade_source: TradeSource | object | None = None,
     stock_source: StockSource | object | None = None,
     index_source: IndexSource | object | None = None,
     futures_source: FuturesSource | object | None = None,
@@ -271,13 +241,6 @@ def create_app(
         )
         app.state.runtime = runtime
         await runtime.start()
-        # TradeRuntime 停用(deprecated 2026-07-28 群益接手,capital-order SC-11):
-        # /api/trade routes 與 _TRADE_ERROR_MAP 保留,state.trade=None → _trade() 的
-        # NotReadyError 路徑天然 503 TRADE_NOT_READY;trade_source 參數(含 DEFAULT_TRADE
-        # sentinel)不再啟動任何東西,僅剩「正式啟動旗標」語意(futures 接線用,見下);
-        # TXO_FAKE_TRADE 分支一併失效。舊路 code(trade.py/tc4_trade.py/fake_trade.py)
-        # 保留,刪除候選記 docs/next-time.md。
-        app.state.trade = None
 
         # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
         def _make_stock() -> StockEngine | None:
@@ -427,13 +390,10 @@ def create_app(
         )
         app.state.capital = capital
 
-        # futures 行情引擎(SC-8):__main__ 不改 — 正式啟動(trade_source=DEFAULT_TRADE,
-        # TradeRuntime 停用後該 sentinel 僅剩「正式啟動旗標」語意)即建真 source;
-        # 測試未傳(None)零連線;顯式 DEFAULT_FUTURES / source 實例亦可
+        # futures 行情引擎(SC-8):__main__ 顯式傳 DEFAULT_FUTURES 即建真 source;
+        # 測試未傳(None)零連線;source 實例亦可
         def _make_futures() -> FuturesEngine | None:
-            if futures_source is DEFAULT_FUTURES or (
-                futures_source is None and trade_source is DEFAULT_TRADE
-            ):
+            if futures_source is DEFAULT_FUTURES:
                 resolved_futures: FuturesSource | None = _default_futures_source()
             else:
                 resolved_futures = cast("FuturesSource | None", futures_source)
@@ -455,9 +415,8 @@ def create_app(
         # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
         # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
         def _make_corr() -> CorrelationEngine | None:
-            if corr_source is DEFAULT_CORR or (
-                corr_source is None and trade_source is DEFAULT_TRADE
-            ):
+            # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
+            if corr_source is DEFAULT_CORR:
                 resolved_corr: CorrSource | None = _default_corr_source()
             else:
                 resolved_corr = cast("CorrSource | None", corr_source)
@@ -492,7 +451,7 @@ def create_app(
         try:
             yield
         finally:
-            # 關機反序:signals → corr → futures → capital → index → stock → (trade) → runtime
+            # 關機反序:signals → corr → futures → capital → index → stock → runtime
             # (corr 依賴 futures.state(),必須先收;signals 最前 —— fanout worker 還活著時
             # 對已收攤的 stock engine publish 會炸在關機路徑上)
             if signals is not None:
@@ -898,28 +857,13 @@ def create_app(
         except WebSocketDisconnect:
             return
 
-    # ---- trade(§7 三道閘;錯誤分流 design §2.3/§2.5) ----
+    # ---- capital 沿用的例外映射(capital_api.py:7,270 明文依賴這兩個 handler) ----
+    # 舊 TC4 trade 路連同 _TRADE_ERROR_MAP 已整段除役;下列兩者由群益下單路徑 raise,
+    # 刪掉會讓退單/審計失敗被全域 handler 吞成 502 TC4_DOWN(靜默破壞錯誤契約)。
 
-    _TRADE_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
-        TouchanceDownError: (502, "TOUCHANCE_DOWN"),
-        NotReadyError: (503, "TRADE_NOT_READY"),
-        LiveBlockedError: (403, "LIVE_DISABLED"),
-        ConfirmRequiredError: (400, "CONFIRM_REQUIRED"),
-        PreviewExpiredError: (400, "PREVIEW_EXPIRED"),
-        InvalidOrderError: (400, "INVALID_ORDER"),
-        SymbolNotAllowedError: (400, "SYMBOL_NOT_ALLOWED"),
-        AuditWriteError: (500, "AUDIT_WRITE_FAILED"),
-    }
-
-    for exc_type, (status_code, code) in _TRADE_ERROR_MAP.items():
-
-        def _make_handler(sc: int, error_code: str):  # noqa: ANN202 - closure factory
-            async def _handler(request: Request, exc: Exception) -> JSONResponse:
-                return JSONResponse(status_code=sc, content={"detail": {"error": error_code}})
-
-            return _handler
-
-        app.add_exception_handler(exc_type, _make_handler(status_code, code))
+    @app.exception_handler(AuditWriteError)
+    async def _audit_write_failed(request: Request, exc: AuditWriteError) -> JSONResponse:
+        return JSONResponse(status_code=500, content={"detail": {"error": "AUDIT_WRITE_FAILED"}})
 
     @app.exception_handler(BrokerRejectedError)
     async def _broker_rejected(request: Request, exc: BrokerRejectedError) -> JSONResponse:
@@ -933,43 +877,5 @@ def create_app(
                 }
             },
         )
-
-    def _trade(request: Request) -> TradeRuntime:
-        trade: TradeRuntime | None = request.app.state.trade
-        if trade is None:
-            raise NotReadyError("trade source not configured")
-        return trade
-
-    @app.get("/api/trade/account")
-    async def trade_account(request: Request) -> dict:
-        return _trade(request).account_view()
-
-    @app.post("/api/trade/preview")
-    async def trade_preview(request: Request, body: PreviewBody) -> dict:
-        trade = _trade(request)
-        price_millipts: int | None = None
-        if body.kind == "limit":
-            if body.price is None:
-                raise InvalidOrderError("limit order requires price")
-            try:
-                price_millipts = millipts_from_price_str(body.price)
-            except ValueError:
-                raise InvalidOrderError(f"invalid price: {body.price!r}") from None
-        req = OrderRequest(
-            symbol=body.symbol,
-            side=body.side,
-            kind=body.kind,
-            qty=body.qty,
-            price_millipts=price_millipts,
-        )
-        return await trade.preview(req)
-
-    @app.post("/api/trade/orders")
-    async def trade_submit(request: Request, body: SubmitBody) -> dict:
-        return await _trade(request).submit(body.preview_id)
-
-    @app.get("/api/trade/orders")
-    async def trade_orders(request: Request) -> dict:
-        return _trade(request).orders_view()
 
     return app

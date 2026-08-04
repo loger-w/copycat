@@ -134,14 +134,12 @@ def make_client(
     *,
     capital: CapitalClient | None = None,
     futures_source: FakeFuturesSource | None = None,
-    trade_source: object | None = None,
 ) -> TestClient:
     monkeypatch.delenv("CAPITAL_USER_ID", raising=False)
     monkeypatch.setattr(factory_mod, "_client", capital)
     return TestClient(
         create_app(
             FakeQuoteSource(),
-            trade_source=trade_source,
             futures_source=futures_source,
             throttle_secs=0.01,
         ),
