@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copycat.market import limit_up_price, tick_size
+from copycat.market import limit_up_price, tick_size, tick_size_milli
 
 
 def test_tick_size_six_zones() -> None:
@@ -14,6 +14,18 @@ def test_tick_size_six_zones() -> None:
     assert tick_size(500.0) == 1.0
     assert tick_size(999.0) == 1.0
     assert tick_size(1000.0) == 5.0
+
+
+def test_tick_size_milli_zones() -> None:
+    assert tick_size_milli(9_990) == 10  # 9.99 元 → 0.01 元檔
+    assert tick_size_milli(23_450) == 50  # 23.45 元 → 0.05 元檔
+    assert tick_size_milli(123_450) == 500  # 123.45 元落 100–500 元段 → 0.5 元檔
+    assert tick_size_milli(1_500_000) == 5_000  # 1500 元 → 5 元檔
+
+
+def test_tick_size_milli_matches_float_version() -> None:
+    for price_milli in (9_990, 23_450, 123_450):
+        assert tick_size_milli(price_milli) == round(tick_size(price_milli / 1000) * 1000)
 
 
 def test_limit_up_known_cases() -> None:
