@@ -2,56 +2,12 @@ from __future__ import annotations
 
 import datetime as _dt
 from pathlib import Path
-from typing import Callable
 
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
+from tests.helpers.fake_sources import FakeStockSource
 from tests.helpers.fake_txo import FakeTxoSource
-
-
-class FakeStockSource:
-    """StockSource fake:全部 no-op,記錄呼叫(routes 測試不需要真行情)。"""
-
-    def __init__(self) -> None:
-        self.subscribed: list[str] = []
-        self.on_message: Callable[[dict], None] | None = None
-        self.daily_bars_result: list[dict] | Exception = []
-        self.bars_calls: list[tuple[str, str, str, str]] = []
-        self.bars_result: list[dict] = []
-
-    def fetch_bars_range(
-        self, code: str, tf: str, start_date: str, end_date: str
-    ) -> list:
-        """Protocol 新增方法(change-spec R2-1)。"""
-        self.bars_calls.append((code, tf, start_date, end_date))
-        return self.bars_result
-
-    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
-        if isinstance(self.daily_bars_result, Exception):
-            raise self.daily_bars_result
-        return self.daily_bars_result
-
-    def subscribe_symbol(self, code: str) -> None:
-        self.subscribed.append(code)
-
-    def unsubscribe_symbol(self, code: str) -> None:
-        pass
-
-    def backfill(self, code: str) -> list:
-        return []
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        self.on_message = cb
-
-    def set_on_no_data(self, cb: Callable[[str], None]) -> None:
-        pass
-
-    def set_trade_date(self, trade_date: str) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
 
 
 def make_client(
