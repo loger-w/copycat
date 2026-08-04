@@ -736,6 +736,18 @@ async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
     raise AssertionError("條件逾時未成立")
 
 
+# 恆失敗的自選檔:重試輪的**可觀察計數器**。用牆鐘 sleep 換輪數在 Windows 上是假的
+# (timer 解析度 15.6ms,`sleep(0.05)` 對 interval=0.01 實際只跑 ~3 輪),否定斷言的
+# 強度會比註解寫的低一半以上(review W-4)。
+_SENTINEL = "8888"
+
+
+async def _wait_rounds(src: _RetrySource, rounds: int, timeout: float = 2.0) -> None:
+    """等重試迴圈確實跑滿 `rounds` 輪(以哨兵檔被重試的次數計)。"""
+    base = src.attempts.count(_SENTINEL)
+    await _wait_until(lambda: src.attempts.count(_SENTINEL) >= base + rounds, timeout=timeout)
+
+
 async def _collect(stream) -> list[dict]:
     got: list[dict] = []
     try:
@@ -772,12 +784,12 @@ class TestWatchlistRetry:
 
     async def test_removed_code_is_not_retried(self) -> None:
         engine, src = await _make_retry()
-        src.fail_subscribe.add("9999")
-        await engine.set_watchlist(["9999"])
-        await engine.set_watchlist([])  # 使用者移除 → 重試判準應自然失效
-        n = len(src.attempts)
-        await asyncio.sleep(0.05)  # 5 個間隔
-        assert len(src.attempts) == n
+        src.fail_subscribe.update({"9999", _SENTINEL})
+        await engine.set_watchlist(["9999", _SENTINEL])
+        await engine.set_watchlist([_SENTINEL])  # 使用者移除 9999 → 判準應自然失效
+        n = src.attempts.count("9999")
+        await _wait_rounds(src, 5)
+        assert src.attempts.count("9999") == n
         assert "9999" not in src.subscribed
         await engine.close()
 
@@ -785,20 +797,21 @@ class TestWatchlistRetry:
         # 白名單 4:回滾語意不變 —— 現況唯一的手動復原路(重送同名單)仍要能修,
         # 且修好之後重試輪不得再真訂一次
         engine, src = await _make_retry()
-        src.fail_subscribe.add("9999")
-        await engine.set_watchlist(["9999"])
+        src.fail_subscribe.update({"9999", _SENTINEL})
+        await engine.set_watchlist(["9999", _SENTINEL])
         src.fail_subscribe.discard("9999")
-        await engine.set_watchlist(["9999"])  # 重送同名單 → added 以 refs 實況為準
-        await asyncio.sleep(0.05)  # 5 個間隔
+        await engine.set_watchlist(["9999", _SENTINEL])  # 重送 → added 以 refs 實況為準
+        await _wait_rounds(src, 5)
         assert src.subscribed.count("9999") == 1
         await engine.close()
 
     async def test_all_success_never_resubscribes(self) -> None:
         """SC-4(stock 側實鎖):判準寫錯最典型的失效 = 每輪重複真訂。"""
         engine, src = await _make_retry()
-        await engine.set_watchlist(["2330", "5483"])
+        src.fail_subscribe.add(_SENTINEL)  # 只為了數輪數,順帶證明壞檔不牽連好檔
+        await engine.set_watchlist(["2330", "5483", _SENTINEL])
         await engine.set_main("2330")
-        await asyncio.sleep(0.05)  # 5 個間隔
+        await _wait_rounds(src, 5)
         for code in ("2330", "5483", "F:CDF"):
             assert src.subscribed.count(code) == 1, code
         await engine.close()
@@ -817,16 +830,70 @@ class TestWatchlistRetry:
 
     async def test_failed_resub_pruned_when_code_unsubscribed(self) -> None:
         engine, src = await _make_retry()
+        src.fail_subscribe.add(_SENTINEL)
+        await engine.set_watchlist([_SENTINEL])  # 輪數哨兵(段 2 恆失敗)
         await engine.set_main("2330")
         src.fail_subscribe.add("2330")
         engine.rollover_stage1("2026-07-22")
         await _wait_until(lambda: "2330" in engine._failed_resubs)
         await engine.set_main("5483")  # 2330 last owner 退 → 已不在 _refs
         await _wait_until(lambda: not engine._failed_resubs)
-        n = len(src.attempts)
-        await asyncio.sleep(0.05)
-        assert len(src.attempts) == n  # 已退訂的檔不再被重試
+        n = src.attempts.count("2330")
+        await _wait_rounds(src, 5)
+        assert src.attempts.count("2330") == n  # 已退訂的檔不再被重試
         await engine.close()
+
+    async def test_head_of_line_failure_does_not_starve_same_section(self) -> None:
+        """C-1:段內迭代順序固定 + 首個 ConnectionError break = 排最前的恆失敗檔
+        永久餓死同段後面所有檔(段級 break 只解跨段餓死,段內的原封不動)。"""
+        engine, src = await _make_retry()
+        src.fail_subscribe.update({"9998", "9999"})
+        await engine.set_watchlist(["9998", "9999"])  # 9998 排在前面且恆失敗
+        src.fail_subscribe.discard("9999")  # 只修好排在後面的那檔
+        await _wait_until(lambda: "9999" in src.subscribed)
+        await engine.close()
+
+    async def test_head_of_line_failure_does_not_starve_failed_resubs(self) -> None:
+        """C-1 的段 3 對稱情境(pending_resubs 是 sorted,順序同樣固定)。"""
+        engine, src = await _make_retry()
+        await engine.set_watchlist(["9997", "9998"])  # 先真訂上 → owner 在 _refs
+        src.fail_subscribe.update({"9997", "9998"})
+        engine.rollover_stage1("2026-07-22")  # 全量重掛兩檔皆失敗
+        await _wait_until(lambda: engine._failed_resubs == {"9997", "9998"})
+        src.fail_subscribe.discard("9998")  # 只修 sorted 順序在後的那檔
+        await _wait_until(lambda: "9998" not in engine._failed_resubs)
+        await engine.close()
+
+    async def test_failed_resub_merge_waits_for_pool_lock(self) -> None:
+        """C-2:`_failed_resubs` 一律鎖內存取。
+
+        合併若不持鎖,會在段 3 的 `await` 窗內插進來 → 隨後那句成功 discard 把它抹掉,
+        該檔從此不再重掛。失效樣態:rollover 後那一檔整天零推播,而 log 只有換日當下
+        一行 warning。
+        """
+        src = _RetrySource(fail_delay=0.3)
+        engine, src = await _make_retry(interval=10.0, source=src)  # 重試迴圈不介入
+        await engine.set_main("2330")
+        src.fail_subscribe.add("2330")
+        engine.rollover_stage1("2026-07-22")
+        await _wait_until(lambda: src.attempts.count("2330") >= 2)  # 重掛已進到慢失敗窗
+        async with engine._pool_lock:
+            await asyncio.sleep(0.4)  # 慢失敗早已結束;合併必須還卡在鎖外
+            assert engine._failed_resubs == set()
+        await _wait_until(lambda: "2330" in engine._failed_resubs)  # 放鎖後才進帳
+        await engine.close()
+
+    async def test_close_stops_retry_loop(self) -> None:
+        """W-2:關機後重試不再新排(仿 corr test_close_stops_retry_loop)。"""
+        engine, src = await _make_retry()
+        src.fail_subscribe.add("9999")
+        await engine.set_watchlist(["9999"])
+        await _wait_until(lambda: src.attempts.count("9999") > 4)  # 迴圈確實在跑
+        await engine.close()
+        n = len(src.attempts)
+        # close 後沒有哨兵可數(整條迴圈就是被停掉的那個東西),誠實記帳:0.2s 遠超 interval
+        await asyncio.sleep(0.2)
+        assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
 
 
 class TestStkfutRetry:
@@ -848,11 +915,12 @@ class TestStkfutRetry:
 
     async def test_main_switched_away_stops_retry_without_leaking_owner(self) -> None:
         engine, src = await _make_retry()
-        src.fail_subscribe.add("F:CDF")
+        src.fail_subscribe.update({"F:CDF", _SENTINEL})
+        await engine.set_watchlist([_SENTINEL])  # 輪數哨兵
         await engine.set_main("2330")
         await engine.set_main("5483")  # 對映表無此檔 → 不該再為 2330 掛腿
         src.fail_subscribe.discard("F:CDF")
-        await asyncio.sleep(0.05)  # 5 個間隔
+        await _wait_rounds(src, 5)
         assert "F:CDF" not in src.subscribed
         assert all("stkfut:2330" not in owners for owners in engine._refs.values())
         await engine.close()
@@ -867,7 +935,7 @@ class TestRetryLoopStarvation:
         codes = [str(9000 + i) for i in range(12)]
         src.fail_subscribe.update(codes)
         await engine.set_watchlist(codes)
-        await asyncio.sleep(0.05)  # 重試迴圈已在跑
+        await _wait_until(lambda: len(src.attempts) > len(codes))  # 重試迴圈確實已在跑
         t0 = asyncio.get_running_loop().time()
         await engine.set_main("2330")
         elapsed = asyncio.get_running_loop().time() - t0

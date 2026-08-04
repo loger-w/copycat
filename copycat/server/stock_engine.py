@@ -26,6 +26,19 @@ logger = logging.getLogger(__name__)
 _CLIENT_QUEUE_MAX = 1000
 
 
+def _round_robin(items: list[str], round_no: int) -> list[str]:
+    """段內迭代起點逐輪輪轉(C-1)。
+
+    段級 break 只解跨段餓死;固定順序 + 首個失敗就 break,排最前的恆失敗檔會永久
+    餓死同段後面所有檔(head-of-line blocking)—— 而那些檔的失效同樣是靜默的。
+    輪轉不影響持鎖上界:每段仍至多一次失敗 subscribe。
+    """
+    if not items:
+        return items
+    k = round_no % len(items)
+    return items[k:] + items[:k]
+
+
 class _EngineClosing(Exception):
     """關機中的早退訊號(訂閱重試迴圈內部用)。
 
@@ -118,6 +131,7 @@ class StockEngine:
         # `_resubscribe_all` 的失敗檔:owner 還在 `_refs` 裡,只是 SUB 沒掛上 →
         # 「owner 缺席」的對帳判準涵蓋不到,得另記(P1-1)
         self._failed_resubs: set[str] = set()
+        self._retry_round_no = 0  # 段內輪轉起點(C-1);單調遞增,不回捲
         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
         # 引擎本體不得因它缺席而改變行為
         self._signal_hub: SignalSink | None = None
@@ -324,8 +338,11 @@ class StockEngine:
             return failed
 
         failed = await asyncio.to_thread(_do)
-        # 回 loop context 後才合併(這一行前後無 await → 無競態),不在 thread 內直寫
-        self._failed_resubs |= set(failed)
+        async with self._pool_lock:
+            # `_failed_resubs` 一律鎖內存取(C-2)。不持鎖合併的話,這一筆可能落在
+            # `_retry_round` 段 3 的 `await` 窗內 → 隨後那句成功 discard 直接把它抹掉,
+            # 該檔從此不再重掛,而 log 只有換日當下那一行 warning
+            self._failed_resubs |= set(failed)
 
     # ---- 訂閱失敗的對帳式重試(mod/subscribe-retry-recovery)----
 
@@ -351,7 +368,10 @@ class StockEngine:
         整輪持鎖會讓 `_pool_lock` 佔用率趨近 100% → set_main / PUT watchlist 卡死。
         每段遇到第一個 `ConnectionError` 就 `break` 出**該段**(不是整輪):`_resub` 對
         單一壞碼可穩定 raise(與連線健康無關),round 級早停會讓一檔壞碼永久餓死後面兩段。
+        段內另以 `_round_robin` 輪轉起點:段級 break 只解跨段餓死,固定迭代順序下
+        排最前的恆失敗檔會永久餓死**同段**後面所有檔(head-of-line blocking,C-1)。
         """
+        self._retry_round_no += 1
         try:
             async with self._pool_lock:
                 pending_wl = [
@@ -363,7 +383,7 @@ class StockEngine:
                 main = self._main
                 stkfut_pending = self._stkfut_owner_missing(main)
 
-            for code in pending_wl:
+            for code in _round_robin(pending_wl, self._retry_round_no):
                 async with self._pool_lock:
                     # 鎖內重驗:快照後使用者可能已移除該檔,或重送名單已把它修好
                     if code not in self._watchlist or "watchlist" in self._refs.get(code, set()):
@@ -378,9 +398,11 @@ class StockEngine:
                     # 不重呼 `signal_hub.on_watchlist` —— membership 在 set_watchlist 已全量設定
                     self._publish(self._quote_payload(code))
 
-            for code in pending_resubs:
+            for code in _round_robin(pending_resubs, self._retry_round_no):
                 async with self._pool_lock:
-                    # 後者防同輪內新的 rollover 失敗被這裡的 discard 抹掉
+                    # 快照是舊值:取鎖前該檔可能已被退訂(`_refs`),或已由並行的
+                    # `_resubscribe_all` 動過 `_failed_resubs`。C-2 之後那個集合一律鎖內
+                    # 存取,所以這裡重驗讀到的是最新值 —— 不會拿舊快照對已不需要的檔發 SUB
                     if code not in self._refs or code not in self._failed_resubs:
                         continue
                     try:
