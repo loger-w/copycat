@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
+import { purgeOrphanKeys } from "@/lib/constants";
 import { emitSignal } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 
@@ -244,8 +245,8 @@ describe("App 資料流上提(D-3 / D-16)", () => {
 });
 
 // 🟢 localStorage key 收斂:主圖標的 key 補上 `copycat-` 前綴後的遷移路徑,
-// 以及停用功能孤兒鍵的啟動清除。字面值刻意寫死(不 import constants)——
-// 這幾條測的就是「key 值本身」,跟著常數走會讓改錯 key 值時測試一起變綠。
+// 以及停用功能孤兒鍵的啟動清除。key 字面值刻意寫死(只 import 受測函式,不 import
+// key 常數)—— 這幾條測的就是「key 值本身」,跟著常數走會讓改錯 key 值時測試一起變綠。
 describe("App localStorage key 遷移 / 孤兒清除", () => {
   it("新 key 有值時優先採用,不被舊 key 的殘值蓋回去", async () => {
     window.localStorage.setItem("copycat-stock-main-code", "2454");
@@ -267,12 +268,22 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
     expect(window.localStorage.getItem("stock-main-code")).toBeNull();
   });
 
-  it("孤兒鍵(stock-ladder-open / stock-wl-group)在 App 模組載入後不存在", async () => {
+  it("新舊都有值 → 採新值,舊 key 照樣被清掉(雙分頁升版會把舊 key 寫回)", () => {
+    window.localStorage.setItem("copycat-stock-main-code", "2454");
+    window.localStorage.setItem("stock-main-code", "2330");
+    renderApp();
+    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("2454");
+    expect(window.localStorage.getItem("stock-main-code")).toBeNull();
+  });
+
+  // 孤兒清除是 module scope 的一次性副作用,直接單元測 `purgeOrphanKeys()` ——
+  // 用 `vi.resetModules()` + 動態 import 重跑 App 模組會讓這條依賴 module registry
+  // 的重置順序,脆得沒必要。「App.tsx 頂層有呼叫」這件事由該檔的一行呼叫負責,
+  // 行為則由本單元測試 + 真環境驗證共同守住。
+  it("purgeOrphanKeys 清掉孤兒鍵(stock-ladder-open / stock-wl-group)", () => {
     window.localStorage.setItem("stock-ladder-open", "1");
     window.localStorage.setItem("stock-wl-group", "科技股");
-    // 清除是 module scope 的一次性副作用(不隨 render 重跑)→ 只能重新載入模組來驗
-    vi.resetModules();
-    await import("@/App");
+    purgeOrphanKeys();
     expect(window.localStorage.getItem("stock-ladder-open")).toBeNull();
     expect(window.localStorage.getItem("stock-wl-group")).toBeNull();
   });
