@@ -53,10 +53,6 @@ KIND_SWITCH: dict[str, str] = {
 }
 SWITCH_KEYS: tuple[str, ...] = ("cdp_cross", "surge_crash", "vol_burst", "limit_lock")
 
-#: 鎖停 cooldown 的 kind 桶:lock 與 open 共用同一個 (code, direction) 桶(design §3.5),
-#: 避免「鎖上-打開-鎖上」的拍打式重複通知。
-_LIMIT_BUCKET = "limit"
-
 
 @dataclass(frozen=True)
 class SignalEvent:
@@ -449,7 +445,11 @@ class SignalDetector:
     ) -> SignalEvent | None:
         if KIND_SWITCH[kind] not in enabled:
             return None
-        bucket = (code, _LIMIT_BUCKET, direction)
+        # cooldown per (code, kind, direction) 分桶(design §3.5 amendment 2026-08-04):
+        # lock 自己 600s、open 自己 600s,互不干擾 —— 共用桶會吃掉「鎖上後 600s 內的
+        # 真打開」,而打開正是高價值訊號。flapping 上界 = 每 600s 一對 lock/open。
+        # `limit_cooldown_secs` 仍是兩者共用的門檻值。
+        bucket = (code, kind, direction)
         if self._cooling(bucket, mono):
             return None
         self._arm(bucket, mono, self._cfg.limit_cooldown_secs)
