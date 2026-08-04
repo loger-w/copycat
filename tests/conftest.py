@@ -15,6 +15,7 @@ import pytest
 
 import copycat.capital.factory as _capital_factory
 import copycat.server.discord_bot as _discord_bot
+from copycat.server.verify import CAPITAL_ENV_KEYS, DISCORD_ENV_KEYS
 
 # TC4 官方 wrapper(spikes/TCPY)不在版控(.gitignore:9)→ 乾淨 checkout 與新 worktree
 # 一律缺它。真的要 import 它的測試必須 skip 而非紅:紅會讓「環境沒裝」看起來像「程式壞了」。
@@ -26,22 +27,9 @@ requires_tcpy = pytest.mark.skipif(
     reason=f"TC4 官方 wrapper 不在版控,此環境未就緒:{TCPY_DIR}",
 )
 
-# factory 讀取的全部環境變數 key(test_factory._isolate import 同一清單,消除兩處漂移)
-CAPITAL_ENV_KEYS = (
-    "CAPITAL_USER_ID",
-    "CAPITAL_PASSWORD",
-    "CAPITAL_FULL_ACCOUNT",
-    "CAPITAL_ENV",
-    "CAPITAL_ORDER_ENABLED",
-    "CAPITAL_MAX_QTY",
-    "CAPITAL_MAX_AMOUNT",
-    "CAPITAL_DLL_DIR",
-    "CAPITAL_AUDIT_DIR",
-    "TXO_AUDIT_DIR",
-)
-
-
-DISCORD_ENV_KEYS = ("DISCORD_BOT_TOKEN", "SIGNALS_DISCORD_CHANNEL_ID")
+# key 清單的唯一一份住在 copycat/server/verify.py(--verify 模式的 env 壓制同一組;
+# 上面 import 即 re-export — test_factory._isolate 沿用 `from tests.conftest import` 不變)
+__all__ = ["CAPITAL_ENV_KEYS", "DISCORD_ENV_KEYS", "requires_tcpy"]
 
 
 @pytest.fixture(autouse=True)
