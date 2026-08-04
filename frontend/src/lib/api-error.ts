@@ -6,15 +6,20 @@ export interface ErrorDetail {
   err_code?: string;
 }
 
-/** 非 2xx 回應 → detail 物件(缺 / 解析失敗一律 `{}`,never-raise)。
+/** 非 2xx 回應 → detail 物件(缺 / 解析失敗 / 形狀不合一律 `{}`,never-raise)。
  *
  *  非 JSON body、或 body 形狀不合(存取 detail 就炸)一律退回空物件 ——
  *  這裡的產物是畫面文案的來源(errText / tradeErrorText),不可讓解析失敗
- *  變成拋出去的 TypeError。 */
+ *  變成拋出去的 TypeError。
+ *
+ *  detail 實際上不保證是物件:FastAPI 422 回 array、Starlette 404 回字串。
+ *  runtime 守門讓宣告的 `ErrorDetail` 誠實(否則字串 / array 會原樣外洩給
+ *  呼叫端,而型別上看起來是物件)。 */
 export async function parseErrorDetail(res: Response): Promise<ErrorDetail> {
   try {
-    const body = (await res.json()) as { detail?: ErrorDetail };
-    return body.detail ?? {};
+    const body = (await res.json()) as { detail?: unknown };
+    const d: unknown = body.detail;
+    return typeof d === "object" && d !== null && !Array.isArray(d) ? (d as ErrorDetail) : {};
   } catch {
     return {};
   }
