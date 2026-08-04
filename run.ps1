@@ -5,6 +5,8 @@
 #
 # 前置:達錢 4(Touchance 4.0)桌面 app 已開啟並登入,否則 TC4 訂閱拿不到推播。
 # Ctrl+C 一次同時收掉兩邊(finally 會補殺殘留的 node / python 子樹)。
+# backend 輸出除了印在本 shell,另由 python -m copycat.server 自己 tee 到
+# logs/server-YYYYMMDD-HHMM.log(手動起 server 也一樣落檔,不靠這支腳本重導向)。
 #
 # 本檔必須存成 UTF-8 with BOM —— Windows PowerShell 5.1 讀無 BOM 的 .ps1 會當 ANSI(CP950),
 # 中文會變亂碼且可能生出假引號讓整份 parse error(已踩過)。編輯器另存時注意編碼。
@@ -105,7 +107,7 @@ try {
     $null = $backend.Handle
     $null = $frontend.Handle
 
-    Write-Host '[run] 兩邊的輸出會交錯印在這個 shell;Ctrl+C 結束。' -ForegroundColor DarkGray
+    Write-Host '[run] 兩邊的輸出會交錯印在這個 shell(backend 另存 logs\server-*.log);Ctrl+C 結束。' -ForegroundColor DarkGray
 
     # 任一邊死掉就整組收掉 —— 只剩半套在跑比全掛還難察覺
     while ($true) {
