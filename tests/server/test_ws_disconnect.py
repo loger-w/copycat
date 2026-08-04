@@ -24,10 +24,11 @@ from typing import AsyncGenerator, Callable
 
 import pytest
 import uvicorn
+from fastapi import WebSocketDisconnect
 
 from copycat.live.models import SeriesInfo, Tick
 from copycat.server.app import create_app
-from copycat.server.ws import relay
+from copycat.server.ws import WsBroadcaster, relay
 from tests.helpers.fake_txo import C, FakeTxoSource
 
 #: asyncio 對「connection lost 後仍寫入」的警告字串(stdlib selector/proactor 兩實作同字)
@@ -132,9 +133,29 @@ class TestAbruptDisconnect:
             port = int(server.servers[0].sockets[0].getsockname()[1])
 
             sock = _ws_handshake(port, "/ws/txo-pnl")
-            pump.start()
             sock.settimeout(5)
+            # 初始 snapshot 在 relay 之外(accept 後直送)→ 先單獨收掉,不讓它充當
+            # 下面「relay 迴圈在跑」的證據
             assert sock.recv(4096), "連線後應收到至少一則 snapshot frame"
+
+            # 正向對照:tick → snapshot → relay send 這條鏈必須真的在跑。少了它,
+            # 上游任一環靜默斷掉(fake 沒被訂閱 / 版本沒 bump / 節流卡住)時,
+            # 「斷線後零警告」會 vacuous 綠 —— 沒寫過任何一次自然不會有警告。
+            pump.start()
+            batches = 0
+            sock.settimeout(0.5)
+            window_end = time.monotonic() + 0.5
+            while time.monotonic() < window_end:
+                try:
+                    chunk = sock.recv(65536)
+                except TimeoutError:
+                    break
+                assert chunk, "斷線前 server 就關了連線"
+                batches += 1
+            assert batches >= 3, (
+                f"斷線前只收到 {batches} 批 frame:上游 tick 流沒動,"
+                "本測試無法證明修復(relay 根本沒送過幾次)"
+            )
 
             _abort(sock)
             # 斷線後仍持續推 tick ≥1.5s:0.02s cadence 遠超 asyncio 的 5 次門檻,
@@ -150,6 +171,10 @@ class TestAbruptDisconnect:
             asyncio_logger.removeHandler(collector)
             server.should_exit = True
             thread.join(timeout=5)
+
+        # 契約的另一半:殭屍迴圈退場後 uvicorn 才收得掉。刻意放在 finally **之外** ——
+        # 主體失敗時不跑,免得這條把原始失敗訊息蓋掉。
+        assert not thread.is_alive(), "uvicorn 未能 graceful shutdown(WS 迴圈仍掛著)"
 
 
 class _FakeWebSocket:
@@ -168,6 +193,23 @@ class _FakeWebSocket:
     def disconnect(self) -> None:
         if not self.disconnected.done():
             self.disconnected.set_result({"type": "websocket.disconnect", "code": 1006})
+
+
+class _RaisingWebSocket(_FakeWebSocket):
+    """send 側炸掉的 WS;用來釘住 relay 的例外分流(吞 WebSocketDisconnect、其餘 re-raise)。"""
+
+    def __init__(self, exc: BaseException) -> None:
+        super().__init__()
+        self._exc = exc
+
+    async def send_json(self, data: dict) -> None:
+        raise self._exc
+
+
+async def _one_message() -> AsyncGenerator[dict, None]:
+    """產一則後掛住:讓 send 側必然呼叫一次 send_json,再由該次呼叫決定結局。"""
+    yield {"n": 0}
+    await asyncio.sleep(3600)
 
 
 async def _spin(times: int = 5) -> None:
@@ -213,9 +255,29 @@ class TestRelay:
         websocket.disconnect()
         await asyncio.wait_for(task, timeout=2)
 
+    async def test_broadcaster_client_is_deregistered(self) -> None:
+        """與真 `WsBroadcaster` 組合:斷線後該 client 的 queue 必須從 fanout 名單除名。
 
-@pytest.mark.parametrize("path", ["/ws/txo-pnl"])
-def test_paths_exist(path: str) -> None:
-    """route 表健檢:整合測試若因路徑打錯而握手失敗,錯誤訊息會很難讀。"""
-    app = create_app(FakeTxoSource())
-    assert any(getattr(r, "path", None) == path for r in app.routes)
+        直接讀 `_clients` private:除名是 `stream()` 的 finally 這條收尾路徑的**唯一**
+        外部可觀測結果(公開面沒有「還有幾個 client」的查詢),不讀它就只能測到
+        「relay 有返回」而測不到洩漏有沒有真的修掉。
+        """
+        websocket = _FakeWebSocket()
+        broadcaster = WsBroadcaster()
+        stream = broadcaster.stream()
+        assert len(broadcaster._clients) == 1
+
+        websocket.disconnect()
+        await asyncio.wait_for(relay(websocket, stream), timeout=2)
+        await _spin()
+        assert broadcaster._clients == set(), "斷線後 per-client queue 仍掛在 fanout 名單上"
+
+    async def test_send_error_propagates(self) -> None:
+        websocket = _RaisingWebSocket(RuntimeError("送出炸了"))
+        with pytest.raises(RuntimeError, match="送出炸了"):
+            await asyncio.wait_for(relay(websocket, _one_message()), timeout=2)
+
+    async def test_send_disconnect_is_swallowed(self) -> None:
+        """capital_api / app.py 的 endpoint 直接 await relay,斷線不該冒成 500。"""
+        websocket = _RaisingWebSocket(WebSocketDisconnect(code=1006))
+        await asyncio.wait_for(relay(websocket, _one_message()), timeout=2)
