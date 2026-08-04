@@ -1,0 +1,34 @@
+{
+  "flow": "chore",
+  "slug": "server-launch-wrapper",
+  "round": 1,
+  "date": "2026-08-04",
+  "diff": "review-diff.txt(master..41427ef)",
+  "lenses": [
+    {"lens": "runtime 行為正確性(tee / env 壓制 / 生命週期 / Windows)", "model": "opus", "findings": 7},
+    {"lens": "測試覆蓋與 vacuous gate", "model": "opus", "findings": 6}
+  ],
+  "findings": [
+    {"id": "R-1", "severity": "P2", "claim": "writelines/buffer 走 __getattr__ 委派繞過 sink,輸出不落檔且零訊號", "resolution": "accepted:writelines 改自寫迴圈;.buffer 洞 docstring 明寫(server 內無人走 binary 路)"},
+    {"id": "R-2", "severity": "P2", "claim": "__getattr__ 一般屬性存取查 _stream,未初始化實例(copy/deepcopy)RecursionError", "resolution": "accepted:改 object.__getattribute__,未初始化改拋 AttributeError(test_tee 上鎖)"},
+    {"id": "R-3", "severity": "P2", "claim": "except 只收 OSError;sink 被 close 是 ValueError,會從每筆 write 外拋", "resolution": "accepted:except (OSError, ValueError),降級語意不變(test_tee 上鎖)"},
+    {"id": "R-4", "severity": "P2", "claim": "flush() 不 flush sink,靠「write 每筆已 flush」的隱性耦合", "resolution": "accepted:flush() 一併 flush sink(test_tee 上鎖)"},
+    {"id": "R-5", "severity": "P2", "claim": "TXO_SERVER_PORT 殘留(run.ps1 留 8721)會讓 verify server 靜默佔 canonical port,vite proxy 打到整片 fake", "resolution": "accepted:verify 對 port==8721 直接 SystemExit 拒啟(wiring 測試上鎖)"},
+    {"id": "R-6", "severity": "P2", "claim": "DISCORD_WEBHOOK_URL / notify.py 不在壓制範圍,notify 是舊語意(空值也 fallback .env)+ 自有 cache,雙保險管不到", "resolution": "accepted:DISCORD_ENV_KEYS 加 webhook key + neutralize 把 notify cache 釘成已解析 None(test_verify 上鎖)"},
+    {"id": "R-7", "severity": "P2", "claim": "LOG_DIR cwd 相對 vs .gitignore /logs/ root 錨定不一致,子目錄起 server 長出未 ignore 的 logs/", "resolution": "accepted:LOG_DIR 改 Path(__file__) 錨定 repo root(build_info 同慣例)"},
+    {"id": "T-1", "severity": "P0", "claim": "test_dotenv_fallback_also_neutralized 完全 vacuous(conftest autouse 已設成同值;mutation 實測整段刪掉仍 4/4 綠)", "resolution": "accepted:restore point 先推回會回真值的 dotenv 實作再斷言清空;mutation 復測 → 紅"},
+    {"id": "T-2", "severity": "P1", "claim": "get_capital 測試被 CAPITAL_ENV=sentinel 在 _VALID_ENVS 閘先擋下,壓制 no-op 時照樣綠", "resolution": "accepted:值域受限 key 灌合法值(CAPITAL_ENV=prod 等);mutation 復測 → 3 紅含本條"},
+    {"id": "T-3", "severity": "P1", "claim": "_Tee 與 _setup_prod_log 零直接測試,唯一引用是 wiring 層把它 patch 掉", "resolution": "accepted:新增 tests/server/test_tee.py 8 條(寫入雙落地/writelines/flush/isatty/OSError 與 ValueError 降級/遞迴防護/真跑 _setup_prod_log 落檔 + StreamHandler 綁 _Tee)"},
+    {"id": "T-4", "severity": "P2", "claim": "neutralize 的模組清單與測試 restore point 兩處手抄會漂移", "resolution": "accepted(部分):verify.py 導出 DOTENV_MODULES,兩邊吃同一份;notify/_client 等零星 attr 仍顯式列(量小且穩定)"},
+    {"id": "T-5", "severity": "P2", "claim": "port 斷言不隔離 TXO_SERVER_PORT,開發機 export 時假紅", "resolution": "accepted:_Capture.install 加 delenv"},
+    {"id": "T-6", "severity": "P2", "claim": "unknown-arg 測試沒鎖「驗參數在落檔之前」", "resolution": "accepted:補 assert prod_log_calls == 0"}
+  ],
+  "verification": {
+    "pytest": "1651 passed",
+    "ruff": "pass",
+    "pyright": "0 errors",
+    "validate": "42/42 PASS(修正前跑;修正未動 engine/replay)",
+    "mutation": ["env 壓制 no-op → test_verify 3 failed(含 get_capital)", "dotenv patch no-op → test_dotenv_fallback failed"],
+    "real_env": "--verify server /api/health 200 @8722(修正前後各一次);tee 實跑 logging+print 皆落檔"
+  }
+}
