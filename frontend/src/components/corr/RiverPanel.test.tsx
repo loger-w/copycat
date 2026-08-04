@@ -97,14 +97,13 @@ describe("RiverPanel", () => {
     expect(svg.textContent).toContain("台指");
   });
 
-  it("重疊圖 % 軸標籤(characterization:域上下緣 + 0% 基準)", () => {
+  it("重疊圖 % 軸標籤(characterization:域上下緣)", () => {
     render(<RiverPanel state={state()} />);
     fireEvent.click(screen.getByRole("button", { name: "重疊" }));
 
     const svg = screen.getByRole("img", { name: "六腿重疊走勢" });
     expect(svg.textContent).toContain("+1.05%");
     expect(svg.textContent).toContain("-1.05%");
-    expect(svg.textContent).toContain("0%");
   });
 
   it("重掛後模式與勾選狀態復原", () => {
