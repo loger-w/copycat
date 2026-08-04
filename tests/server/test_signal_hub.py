@@ -24,6 +24,7 @@ from copycat.signals_config import SignalsConfig
 
 _DATE = "2026-08-04"
 _NEXT = "2026-08-05"
+_THIRD = "2026-08-06"
 # design §7 的 WS 訊號契約鍵集合(jsonl row 為本集合 + trade_date)
 _SIGNAL_KEYS = {
     "type",
@@ -59,6 +60,8 @@ def _bar(date: str, high: int, low: int, close: int) -> DailyBar:
 _BAR_A = _bar("2026-08-01", 80_000, 70_000, 75_000)
 # compute_cdp(95_000, 85_000, 90_000) → cdp 90_000 / ah 100_000 / nh 95_000 / nl 85_000 / al 80_000
 _BAR_B = _bar("2026-08-04", 95_000, 85_000, 90_000)
+# compute_cdp(125_000, 115_000, 120_000) → cdp 120_000 / nh 125_000(與 _BAR_B 的線完全不重疊)
+_BAR_C = _bar("2026-08-05", 125_000, 115_000, 120_000)
 
 
 def _tick(
@@ -512,6 +515,54 @@ class TestBasisWorker:
             h.hub.on_tick("2330", _tick(95_500, cum=2, trade_date=_NEXT), state)
             await h.settle()
             assert [m["levels"] for m in h.published] == [["nh"]]
+        finally:
+            await h.hub.close()
+
+    async def test_staged_basis_never_reused_across_days(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """MFS-2 + CC-4:stage1/stage2 同步連發(快路徑)兩輪,第二輪不得沿用第一輪基準。
+
+        劇本:`on_rollover_pending` 才剛把 job 排進佇列,`on_rollover` 就在同一輪 event
+        loop 到了 → 暫存區還是空的 → swap 失敗走重抓(可接受,只是多抓一次)。**但**
+        worker 隨後才把 stage1 的結果填進暫存區,那份就這樣留到下一輪換日 —— 下一次
+        swap 會回 True 並把**舊日**基準當成當日基準用一整天,而且完全沒有錯誤訊號。
+        """
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+
+            # 第一輪換日:pending 與 rollover 之間沒有讓 worker 跑的機會
+            h.bars.bars = [_BAR_A, _BAR_B]
+            h.hub.on_rollover_pending(_NEXT)
+            h.date = _NEXT
+            clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+            h.hub.on_rollover()
+            await h.settle()  # 此刻 worker 才消化 stage1 的 job → 暫存區被填上 08-05 基準
+
+            state = _state()
+            h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
+            h.hub.on_tick("2330", _tick(95_500, cum=2, trade_date=_NEXT), state)
+            await h.settle()
+            assert [m["levels"] for m in h.published] == [["nh"]]  # _BAR_B 的 nh = 95_000
+            h.published.clear()
+
+            # 第二輪換日:同樣的快路徑。基準必須換成 _BAR_C 的(nh = 125_000)
+            h.bars.bars = [_BAR_A, _BAR_B, _BAR_C]
+            h.hub.on_rollover_pending(_THIRD)
+            h.date = _THIRD
+            clock.now = _dt.datetime(2026, 8, 6, 10, 0, 0)
+            h.hub.on_rollover()
+            await h.settle()
+
+            state2 = _state()
+            h.hub.on_tick("2330", _tick(124_000, trade_date=_THIRD), state2)
+            h.hub.on_tick("2330", _tick(125_500, cum=2, trade_date=_THIRD), state2)
+            await h.settle()
+            assert [m["levels"] for m in h.published] == [["nh"]], "沿用了昨天的 CDP 基準"
+            assert h.published[0]["price"] == 125_500
         finally:
             await h.hub.close()
 
