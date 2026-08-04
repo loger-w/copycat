@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from typing import Callable
 
 from copycat.server.stock_engine import StockEngine
@@ -686,6 +687,210 @@ class FakeHub:
 
     def kinds(self, kind: str) -> list[tuple]:
         return [c for c in self.calls if c[0] == kind]
+
+
+class _RetrySource(FakeSource):
+    """記錄每次 `subscribe_symbol` 呼叫(含失敗)—— `subscribed` 只記成功,
+    測不到「重試了幾次」也測不到「已移除的檔還在被重試」。"""
+
+    def __init__(self, fail_delay: float = 0.0) -> None:
+        super().__init__()
+        self.attempts: list[str] = []
+        self._fail_delay = fail_delay
+
+    def subscribe_symbol(self, code: str) -> None:
+        self.attempts.append(code)
+        if self._fail_delay and code in self.fail_subscribe:
+            # TC4 斷線時單檔 SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10s)才失敗 —— 慢失敗
+            # 才是鎖飢餓的真實形狀,瞬間 raise 測不到持鎖時間
+            time.sleep(self._fail_delay)
+        super().subscribe_symbol(code)
+
+
+# 顯式對映表:不吃磁碟上的 `stkfut_map.json`(內容會隨期交所頁面重抓而變)
+_STKFUT_MAP = {"2330": {"prod": "CDF", "name": "台積電"}}
+
+
+async def _make_retry(
+    interval: float = 0.01, source: _RetrySource | None = None
+) -> tuple[StockEngine, _RetrySource]:
+    src = source if source is not None else _RetrySource()
+    engine = StockEngine(
+        src,
+        trade_date="2026-07-21",
+        throttle_secs=60,  # 排除 1s flush 對 watchlist_quote 計數的貢獻
+        checkpoint=False,
+        stkfut_map=_STKFUT_MAP,
+        resub_interval_secs=interval,
+    )
+    await engine.start()
+    return engine, src
+
+
+async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("條件逾時未成立")
+
+
+async def _collect(stream) -> list[dict]:
+    got: list[dict] = []
+    try:
+        while True:
+            got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
+    except (TimeoutError, asyncio.TimeoutError):
+        pass
+    return got
+
+
+class TestWatchlistRetry:
+    """自選訂閱失敗的背景重試(mod/subscribe-retry-recovery SC-2)。
+
+    `_acquire` 真訂失敗回滾出 `_refs` → rollover 的 `_resubscribe_all` 接不到、
+    flush 無 state 可推 → 該檔畫面永遠 `-`,唯一復原是使用者自己重送同一份名單。
+    """
+
+    async def test_failed_code_retried_and_seeded(self) -> None:
+        engine, src = await _make_retry()
+        stream = engine.stream()  # 名單仍空 → 無種子,之後收到的都是新產出
+        src.fail_subscribe.add("9999")
+        await engine.set_watchlist(["9999"])
+        assert "9999" not in src.subscribed
+        src.fail_subscribe.discard("9999")
+        await _wait_until(lambda: "9999" in src.subscribed)
+        await _drain(engine)
+        got = await _collect(stream)
+        quotes = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "9999"]
+        # 一則來自 set_watchlist 的 added 種子,一則來自重試成功(對齊 added 種子語意);
+        # 沒有後者的話這一檔在盤後完全沒有生產點
+        assert len(quotes) == 2
+        assert "watchlist" in engine._refs["9999"]
+        await engine.close()
+
+    async def test_removed_code_is_not_retried(self) -> None:
+        engine, src = await _make_retry()
+        src.fail_subscribe.add("9999")
+        await engine.set_watchlist(["9999"])
+        await engine.set_watchlist([])  # 使用者移除 → 重試判準應自然失效
+        n = len(src.attempts)
+        await asyncio.sleep(0.05)  # 5 個間隔
+        assert len(src.attempts) == n
+        assert "9999" not in src.subscribed
+        await engine.close()
+
+    async def test_manual_resend_repair_does_not_double_subscribe(self) -> None:
+        # 白名單 4:回滾語意不變 —— 現況唯一的手動復原路(重送同名單)仍要能修,
+        # 且修好之後重試輪不得再真訂一次
+        engine, src = await _make_retry()
+        src.fail_subscribe.add("9999")
+        await engine.set_watchlist(["9999"])
+        src.fail_subscribe.discard("9999")
+        await engine.set_watchlist(["9999"])  # 重送同名單 → added 以 refs 實況為準
+        await asyncio.sleep(0.05)  # 5 個間隔
+        assert src.subscribed.count("9999") == 1
+        await engine.close()
+
+    async def test_all_success_never_resubscribes(self) -> None:
+        """SC-4(stock 側實鎖):判準寫錯最典型的失效 = 每輪重複真訂。"""
+        engine, src = await _make_retry()
+        await engine.set_watchlist(["2330", "5483"])
+        await engine.set_main("2330")
+        await asyncio.sleep(0.05)  # 5 個間隔
+        for code in ("2330", "5483", "F:CDF"):
+            assert src.subscribed.count(code) == 1, code
+        await engine.close()
+
+    async def test_rollover_resubscribe_failure_retried_then_pruned(self) -> None:
+        """P1-1:`_resubscribe_all` 的失敗不動 `_refs` → 只看 owner 的對帳判準接不到。"""
+        engine, src = await _make_retry()
+        await engine.set_main("2330")
+        src.fail_subscribe.add("2330")
+        engine.rollover_stage1("2026-07-22")
+        await _wait_until(lambda: "2330" in engine._failed_resubs)
+        src.fail_subscribe.discard("2330")
+        await _wait_until(lambda: "2330" not in engine._failed_resubs)
+        assert src.subscribed.count("2330") >= 2  # 重掛真的發出去了
+        await engine.close()
+
+    async def test_failed_resub_pruned_when_code_unsubscribed(self) -> None:
+        engine, src = await _make_retry()
+        await engine.set_main("2330")
+        src.fail_subscribe.add("2330")
+        engine.rollover_stage1("2026-07-22")
+        await _wait_until(lambda: "2330" in engine._failed_resubs)
+        await engine.set_main("5483")  # 2330 last owner 退 → 已不在 _refs
+        await _wait_until(lambda: not engine._failed_resubs)
+        n = len(src.attempts)
+        await asyncio.sleep(0.05)
+        assert len(src.attempts) == n  # 已退訂的檔不再被重試
+        await engine.close()
+
+
+class TestStkfutRetry:
+    """個股期腿訂閱失敗的背景重試(SC-3)。
+
+    `_acquire_stkfut` 只在 `set_main` 呼叫,而 `set_main` 開頭 `old == code → return`
+    → 同檔重掛被擋,現況唯一復原是切走再切回。
+    """
+
+    async def test_failed_leg_retried_until_success(self) -> None:
+        engine, src = await _make_retry()
+        src.fail_subscribe.add("F:CDF")
+        await engine.set_main("2330")
+        assert "F:CDF" not in src.subscribed
+        src.fail_subscribe.discard("F:CDF")
+        await _wait_until(lambda: "F:CDF" in src.subscribed)
+        assert engine._refs["F:CDF"] == {"stkfut:2330"}
+        await engine.close()
+
+    async def test_main_switched_away_stops_retry_without_leaking_owner(self) -> None:
+        engine, src = await _make_retry()
+        src.fail_subscribe.add("F:CDF")
+        await engine.set_main("2330")
+        await engine.set_main("5483")  # 對映表無此檔 → 不該再為 2330 掛腿
+        src.fail_subscribe.discard("F:CDF")
+        await asyncio.sleep(0.05)  # 5 個間隔
+        assert "F:CDF" not in src.subscribed
+        assert all("stkfut:2330" not in owners for owners in engine._refs.values())
+        await engine.close()
+
+
+class TestRetryLoopStarvation:
+    async def test_slow_failing_subscribes_do_not_block_set_main(self) -> None:
+        """P0-1:TC4 斷線時單檔 SUBQUOTE 要 10s 才失敗,整輪一鎖會讓 `_pool_lock`
+        佔用率趨近 100% → set_main / PUT watchlist 卡死。持鎖上界必須與 N 檔無關。"""
+        src = _RetrySource(fail_delay=0.05)
+        engine, _ = await _make_retry(source=src)
+        codes = [str(9000 + i) for i in range(12)]
+        src.fail_subscribe.update(codes)
+        await engine.set_watchlist(codes)
+        await asyncio.sleep(0.05)  # 重試迴圈已在跑
+        t0 = asyncio.get_running_loop().time()
+        await engine.set_main("2330")
+        elapsed = asyncio.get_running_loop().time() - t0
+        # 整輪一鎖 = 12 × 0.05 = 0.6s;段級早停 = 至多一次失敗 subscribe 的持鎖
+        assert elapsed < 0.3, elapsed
+        await engine.close()
+
+    async def test_permanently_failing_code_does_not_starve_other_sections(self) -> None:
+        """P1-3:`tc4._resub` 對單一壞碼可穩定 raise(與連線健康無關),round 級早停
+        會讓一檔壞碼永久餓死 failed_resubs 與 stkfut 兩段。"""
+        engine, src = await _make_retry()
+        src.fail_subscribe.update({"9999", "F:CDF"})
+        await engine.set_watchlist(["9999"])  # 段 2 恆失敗
+        await engine.set_main("2330")  # 段 4 的 stkfut 腿失敗
+        src.fail_subscribe.add("2330")
+        engine.rollover_stage1("2026-07-22")  # 段 3 的 failed_resubs
+        await _wait_until(lambda: "2330" in engine._failed_resubs)
+        src.fail_subscribe.difference_update({"2330", "F:CDF"})  # 9999 仍恆失敗
+        await _wait_until(
+            lambda: "F:CDF" in src.subscribed and "2330" not in engine._failed_resubs
+        )
+        assert "9999" not in src.subscribed  # 前提:段 2 確實每輪都在失敗
+        await engine.close()
 
 
 class TestSignalHubHooks:
