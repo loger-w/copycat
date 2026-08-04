@@ -167,13 +167,17 @@ describe("useSignalAlerts — 音效與靜音", () => {
     expect(oscillators).toBe(1);
   });
 
-  it("靜音 → 不出聲也不發 Notification,但 toast 照出", () => {
+  // review MFS-1:原斷言是「靜音 → 也不發 Notification」,已裁決為事前已知該變 ——
+  // 靜音的語意是「不要出聲」,不是「不要通知」(design §8.3 / SC-10);背景分頁若連
+  // Notification 都被靜音關掉,人離開分頁就完全收不到訊號。
+  it("靜音 → 不出聲,但背景分頁的 Notification 照發,toast 也照出(review MFS-1)", () => {
     hidden = true;
     const hook = renderHook(() => useSignalAlerts());
     act(() => hook.result.current.setSoundOn(false));
-    act(() => emitSignal(sig("a")));
+    const s = sig("a");
+    act(() => emitSignal(s));
     expect(oscillators).toBe(0);
-    expect(notified).toEqual([]);
+    expect(notified).toEqual([formatToastText(s)]);
     expect(hook.result.current.toasts.length).toBe(1);
   });
 
