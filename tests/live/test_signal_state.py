@@ -362,18 +362,40 @@ class TestLimitLock:
         det = _det(clock)
         det.evaluate("2330", _tick(109_000), _ctx(upper=110_000), _ALL)
         det.evaluate("2330", _tick(110_000), _locked_up(), _ALL)
-        clock.advance(700)  # lock 與 open 共用 (code, direction) cooldown
+        # 該變的 assertion:原本 advance(700) 是為了繞開「lock/open 共用桶」才等過
+        # 600s;分桶後(design §3.5 amendment)open 有自己的桶,60s 就該發。
+        clock.advance(60)
         events = det.evaluate("2330", _tick(109_500), _ctx(upper=110_000), _ALL)
         assert len(events) == 1
         assert events[0].kind == "limit_open"
         assert events[0].direction == "up"
+
+    def test_lock_and_open_cooldown_buckets_are_separate(self) -> None:
+        """cooldown per (code, kind, direction) 分桶(design §3.5 amendment 2026-08-04):
+        鎖上後短窗內的打開不可被 lock 的冷卻吃掉;而各自的 600s 照樣擋重複。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.evaluate("2330", _tick(109_000), _ctx(upper=110_000), _ALL)
+        locked = det.evaluate("2330", _tick(110_000), _locked_up(), _ALL)
+        assert [e.kind for e in locked] == ["limit_lock"]
+
+        clock.advance(60)  # 遠短於 limit_cooldown_secs(600)
+        opened = det.evaluate("2330", _tick(109_500), _ctx(upper=110_000), _ALL)
+        assert [e.kind for e in opened] == ["limit_open"]
+        assert opened[0].touch_count == 1  # open 自己的計數,不跟 lock 混
+
+        clock.advance(60)  # 距首次 lock 120s → limit_lock 仍在自己的 600s 內
+        assert det.evaluate("2330", _tick(110_000), _locked_up(), _ALL) == []
+
+        clock.advance(60)  # 距首次 open 120s → limit_open 也仍在自己的 600s 內
+        assert det.evaluate("2330", _tick(109_500), _ctx(upper=110_000), _ALL) == []
 
     def test_limit_open_book_path_uses_now_fn(self) -> None:
         clock = _Clock()
         det = _det(clock)
         det.evaluate("2330", _tick(109_000), _ctx(upper=110_000), _ALL)
         det.evaluate("2330", _tick(110_000), _locked_up(), _ALL)
-        clock.advance(700)
+        # 原 advance(700) 為繞共用桶而設,分桶後多餘(下一行直接指定絕對時刻)
         clock.now = clock.now.replace(hour=13, minute=24, second=59, microsecond=250_000)
         events = det.evaluate_book("2330", _ctx(upper=110_000, ask_limit=True), _ALL)
         assert len(events) == 1
@@ -390,7 +412,7 @@ class TestLimitLock:
         off = frozenset({"cdp_cross", "surge_crash", "vol_burst"})
         det.evaluate("2330", _tick(109_000), _ctx(upper=110_000), _ALL)
         det.evaluate("2330", _tick(110_000), _locked_up(), _ALL)
-        clock.advance(700)
+        clock.advance(60)  # 分桶後 open 不受 lock 冷卻影響,這裡只驗 enabled 與 latch
         assert det.evaluate_book("2330", _ctx(upper=110_000, ask_limit=True), off) == []
         # latch 照常轉移 → 重開後不會補發
         assert det.evaluate_book("2330", _ctx(upper=110_000, ask_limit=True), _ALL) == []
@@ -400,7 +422,7 @@ class TestLimitLock:
         det = _det(clock)
         det.evaluate("2330", _tick(109_000), _ctx(upper=110_000), _ALL)
         det.evaluate("2330", _tick(110_000), _locked_up(), _ALL)
-        clock.advance(700)
+        clock.advance(60)
         assert det.evaluate_book("2330", _locked_up(), _ALL) == []
 
     def test_limit_down_symmetric(self) -> None:
@@ -411,7 +433,7 @@ class TestLimitLock:
         assert len(events) == 1
         assert events[0].kind == "limit_lock"
         assert events[0].direction == "down"
-        clock.advance(700)
+        clock.advance(60)  # 分桶後 open 有自己的桶,60s 即可發(原 700 為繞共用桶)
         opened = det.evaluate("2330", _tick(90_500), _ctx(lower=90_000), _ALL)
         assert [e.kind for e in opened] == ["limit_open"]
         assert opened[0].direction == "down"
