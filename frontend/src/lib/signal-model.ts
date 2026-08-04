@@ -90,10 +90,17 @@ export function formatToastText(sig: SignalMsg): string {
   return [sig.code, sig.name, kindLabel(sig), fmt(sig.price)].filter((x) => x !== "").join(" ");
 }
 
-/** live 訊號 + 當日 baseline 合併。
+/** live 訊號 + 當日 baseline 合併,輸出依 `time` 降冪(新在前)。
  *
  *  **兩份輸入都是「新在前」**(呼叫端負責把 jsonl 的舊在前反轉);同 id 取 live 那筆。
- *  重啟後同訊號會重發一次(cooldown/latch 不持久,design §9),去重就是靠 id。 */
+ *  重啟後同訊號會重發一次(cooldown/latch 不持久,design §9),去重就是靠 id。
+ *
+ *  **去重後一定要重排(review CC-3)**:單純「live 全前 + baseline 後」時,WS 重連
+ *  補回的訊號(baseline)會被埋在斷線前那堆較舊的 live 之下 —— 自癒有作用但畫面上
+ *  完全看不出來。`time` 是台北 `HH:MM:SS` 定寬字串,字典序即時序。
+ *
+ *  排序是**穩定**的(ES2019 起規範保證):同秒併列維持插入相對序,亦即 live 那筆在
+ *  baseline 之前。cap 在**排序之後**才套用,否則截掉的可能正是最新那幾則。 */
 export function mergeSignals(
   baseline: SignalMsg[],
   live: SignalMsg[],
@@ -105,9 +112,9 @@ export function mergeSignals(
     if (seen.has(sig.id)) continue;
     seen.add(sig.id);
     out.push(sig);
-    if (out.length >= cap) break;
   }
-  return out;
+  out.sort((a, b) => (a.time === b.time ? 0 : a.time > b.time ? -1 : 1));
+  return out.length > cap ? out.slice(0, cap) : out;
 }
 
 /** 依四鍵開關過濾。

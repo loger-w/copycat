@@ -91,11 +91,12 @@ export function useSignalAlerts() {
         key,
         window.setTimeout(() => dropRef.current(key), TTL_MS),
       );
-      // 靜音同時關掉音效與桌面通知(design §8.3);toast 不受靜音影響。
-      // bus 訂閱只做一次(deps []),故讀當下值而不是閉包捕捉的 soundOn
-      if (!getSoundOn()) return;
-      playBeep();
+      // 分頁在背景就發桌面通知,**不受靜音影響**(review MFS-1):靜音的語意是
+      // 「不要出聲」不是「不要通知」(design §8.3 / SC-10)—— 人離開分頁時桌面通知
+      // 是唯一的抵達路徑,被音效開關順帶關掉等於整條提示鏈斷掉。
       if (document.hidden) notifyDesktop(text, sig.id);
+      // 靜音只關音效。bus 訂閱只做一次(deps []),故讀當下值而不是閉包捕捉的 soundOn
+      if (getSoundOn()) playBeep();
     });
     const timers = timersRef.current;
     return () => {
