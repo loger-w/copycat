@@ -1,8 +1,12 @@
 /** @vitest-environment jsdom */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStockStream } from "@/hooks/useStockStream";
+import { onSignal, onWsOpen } from "@/lib/signal-bus";
+import type { SignalMsg } from "@/lib/signal-model";
 
 class FakeWS {
   static instances: FakeWS[] = [];
@@ -46,9 +50,17 @@ const T = (seq: number) => ({
 });
 
 let fetchMock: ReturnType<typeof vi.fn>;
+let queryClient: QueryClient;
+
+/** `.ts` 檔不能寫 JSX(impl-review R12:沿用本檔 fake WS harness 不新建 .tsx),
+ *  故 provider 用 createElement 包。hook 內 `useQueryClient()` 沒 provider 會直接拋。 */
+function wrapper({ children }: { children: ReactNode }) {
+  return createElement(QueryClientProvider, { client: queryClient }, children);
+}
 
 beforeEach(() => {
   FakeWS.instances = [];
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
   fetchMock = vi.fn(async () => new Response(JSON.stringify(snap(1, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]))));
   vi.stubGlobal("fetch", fetchMock);
@@ -57,10 +69,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 async function setup() {
-  const hook = renderHook(() => useStockStream("2330"));
+  const hook = renderHook(() => useStockStream("2330"), { wrapper });
   await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
   const ws = FakeWS.instances[0]!;
   return { hook, ws };
@@ -112,6 +125,7 @@ describe("useStockStream", () => {
     );
     const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
       initialProps: { c: "2330" },
+      wrapper,
     });
     // 2330 的 fetch in-flight 中切到 5483
     hook.rerender({ c: "5483" });
@@ -170,5 +184,44 @@ describe("useStockStream", () => {
     act(() => ws.emit({ type: "stkfut", code: "2330", prod: "CDF", p: 2_398_000, basis: 18_000 }));
     expect(hook.result.current.stkfut?.p).toBe(2_398_000);
     expect(hook.result.current.stkfut?.basis).toBe(18_000);
+  });
+
+  // SC-9/10:訊號分發。WS 只有這一條 —— 前端所有訊號消費端(rail / toast / 音效 /
+  // Notification)都掛在 bus 上,這層斷掉時它們全部靜默不動且沒有任何錯誤。
+  it("signal 訊息轉發訊號 bus(欄位原樣不轉譯)", async () => {
+    const got: SignalMsg[] = [];
+    const off = onSignal((s) => got.push(s));
+    const { ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "signal", id: "2026-08-04|2330|cdp_cross|ah|1", kind: "cdp_cross",
+        code: "2330", name: "台積電", price: 1_234_500, time: "09:15:03",
+        levels: ["ah"], direction: "from_below", pct: null, touch_count: 1,
+      }),
+    );
+    off();
+    expect(got.length).toBe(1);
+    expect(got[0]?.id).toBe("2026-08-04|2330|cdp_cross|ah|1");
+    expect(got[0]?.levels).toEqual(["ah"]);
+    expect(got[0]?.touch_count).toBe(1);
+  });
+
+  // SC-11:自選變更由 Discord /watch 觸發時,前端要自己重抓。invalidate 的註冊點
+  // **只有這裡一處**(design §8.1 / impl-review R10)—— 多處註冊會重複 refetch。
+  it("watchlist_changed 使自選 query 失效一次", async () => {
+    const { ws } = await setup();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    act(() => ws.emit({ type: "watchlist_changed" }));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["stock-watchlist"] });
+  });
+
+  it("WS onopen 發 ws-open 事件(斷線期間漏掉的訊號靠它自癒回補)", async () => {
+    let opened = 0;
+    const off = onWsOpen(() => (opened += 1));
+    const { ws } = await setup();
+    act(() => ws.onopen?.());
+    off();
+    expect(opened).toBe(1);
   });
 });
