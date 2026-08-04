@@ -188,6 +188,17 @@ class _Harness:
         self.hub.on_tick(code, _tick(110_000, code=code, cum=2), state)
 
 
+async def _wait_rows(h: _Harness, n: int, timeout: float = 2.0) -> None:
+    """等 jsonl 落到 n 筆(不碰私有佇列 —— 這裡驗的正是「哪條路徑卡不住哪條」)。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if len(h.rows()) >= n:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"jsonl 只落了 {len(h.rows())} 筆,等不到 {n} 筆")
+
+
 @pytest.fixture
 def clock() -> _Clock:
     return _Clock()
@@ -451,6 +462,36 @@ class TestDiscordFanout:
             await h.settle()
             assert len(h.fallback) == 1
         finally:
+            await h.hub.close()
+
+    async def test_slow_discord_does_not_starve_jsonl(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """CC-5:jsonl 是歷史真相源,不得被 Discord 這條「可丟」的路徑卡住。
+
+        單一 worker 把 jsonl→Discord 序列化,Discord 一卡住整條佇列就停;WS 已經送出去
+        的訊號進不了 jsonl,而重連 refetch 讀的正是 jsonl —— 缺角靜默且不可回復。
+        """
+        gate = asyncio.Event()
+
+        async def _stuck(text: str) -> bool:
+            await gate.wait()
+            return True
+
+        h = _Harness(tmp_path, clock)
+        h.hub.attach_discord(_stuck)
+        await h.hub.start()
+        try:
+            codes = [f"{9000 + i}" for i in range(3)]
+            h.hub.on_watchlist(codes)
+            await asyncio.wait_for(h.hub._basis_jobs.join(), 2)
+            for code in codes:
+                h.lock_up(_state(upper=110_000, locked_up=True), code=code)
+
+            await _wait_rows(h, 3)
+            assert len(h.published) == 3
+        finally:
+            gate.set()
             await h.hub.close()
 
     async def test_queue_full_drops_oldest(
