@@ -1,4 +1,4 @@
-"""capital routes/例外映射/futures 行情 REST+WS/舊 trade 路 503(SC-1..6/8/9/10/11)。
+"""capital routes/例外映射/futures 行情 REST+WS/舊 trade 路 404(SC-1..6/8/9/10/11)。
 
 治具:tests/capital/fake_com.py 的 FakeCom 配真 CapitalClient(app lifespan 走真
 start/close,COM 執行緒消化命令佇列);factory 單例以 monkeypatch _client 注入
@@ -564,16 +564,15 @@ class TestErrorMapping:
 
 
 # ---------------------------------------------------------------------------
-# 舊 trade 路 503(SC-11)
+# 舊 trade 路已除役 → 404(remove-tc4-trade-path SC-2)
 # ---------------------------------------------------------------------------
 
 
-class TestTradeRoutesDeprecated:
-    def test_trade_account_503_trade_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+class TestTradeRoutesRemoved:
+    def test_trade_account_404_route_gone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         with make_client(monkeypatch) as client:
             res = client.get("/api/trade/account")
-            assert res.status_code == 503
-            assert res.json()["detail"]["error"] == "TRADE_NOT_READY"
+            assert res.status_code == 404
 
 
 # ---------------------------------------------------------------------------
