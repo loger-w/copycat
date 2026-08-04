@@ -88,6 +88,7 @@
 - [ ] TXO snapshot 補推 per-contract last_price(OrderPanel 市價估價目前缺值全鎖,限價不受影響;ContractRow.last_price 前端欄位已預留)
 - [x] ~~app.py futures source 啟動旗標借用 trade_source is DEFAULT_TRADE(sentinel 語意耦合已註解;__main__ 顯式傳 DEFAULT_FUTURES 後可解耦)~~ **2026-08-04 同輪解耦**:`__main__` 顯式傳 DEFAULT_FUTURES + DEFAULT_CORR(corr 同款借用一併解),`trade_source` 參數與 DEFAULT_TRADE sentinel 刪除;`tests/server/test_main_wiring.py` 上鎖(kwargs 整份相等)
 - [ ] 期貨平倉「範圍市價 P + IOC」候選:prod 實測 bstrPrice="P"/"M" 可送性後,可從限價貼漲跌停切回(docs/research/2026-07-28-skcom-typelib.md)
+- [ ] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價
 - [ ] 選擇權閃電梯(本輪 out of scope,TXO 表單已群益化)
 - [ ] 群益回報自動重連(本輪拍板不做;做之前 store 聚合非冪等 → 必先 clear 再重播 backlog)
 - [ ] OnAccount / OnOpenInterest 欄序為 prod 未實測假定(com.py `_parse_account_row`、balance.py `parse_open_interest_line` docstring 已標)— 首次 prod 登入核對後校正

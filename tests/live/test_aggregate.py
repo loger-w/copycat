@@ -236,6 +236,8 @@ class TestContractsDetail:
                 "volume": 6,
                 "outer_qty": 2,
                 "inner_qty": 1,
+                # 時序最後一筆是未分類的 99.5pt → 成交價與內外盤分類無關(SC-3)
+                "last_price": 99.5,
             },
             {
                 "symbol": P44000.symbol,
@@ -245,6 +247,7 @@ class TestContractsDetail:
                 "volume": 4,
                 "outer_qty": 0,
                 "inner_qty": 4,
+                "last_price": 50.0,
             },
         ]
 
