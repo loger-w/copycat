@@ -15,9 +15,9 @@
   不該發生)。寫任何「起真 app 的驗證腳本」前先 `CAPITAL_USER_ID=""` 這類壓制。~~
   **2026-08-04 chore/server-launch-wrapper 完成**:`python -m copycat.server --verify`
   = fake TXO source + 其餘引擎不啟動 + `copycat/server/verify.py
-  neutralize_external_env()`(12 key 設空字串壓制 env 與 .env + 兩模組 `_dotenv_values`
-  patch 雙保險),port 預設 8722 錯開 prod。之後驗 HTTP 層一律用它,不再手寫 fake
-  server 腳本。
+  neutralize_external_env()`(13 key 設空字串壓制 env 與 .env + 兩模組 `_dotenv_values`
+  patch + notify webhook cache 釘死三層),port 預設 8722 錯開 prod(顯式設 8721 會
+  拒啟)。之後驗 HTTP 層一律用它,不再手寫 fake server 腳本。
 - [ ] 訊號 Discord 文案帶的是 tick 時刻(模擬/回補情境會顯示過去時刻)— 若 user 反映
   「太慢了」是指希望帶發送時刻或兩者並列,屬文案調整一行事。
 

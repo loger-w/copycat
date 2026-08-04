@@ -44,6 +44,9 @@ class _Capture:
         monkeypatch.setattr(
             main_mod, "neutralize_external_env", lambda: setattr(self, "neutralized", True)
         )
+        # 開發機 shell 可能 export 著 TXO_SERVER_PORT(正式設定 key),port 斷言要隔離
+        # (review T-5;test_verify_port_env_override 自己 setenv 不受影響)
+        monkeypatch.delenv("TXO_SERVER_PORT", raising=False)
 
     def _count_prod_log(self) -> None:
         self.prod_log_calls += 1
@@ -117,3 +120,18 @@ def test_unknown_arg_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         main_mod.main(["--verfy"])  # typo 不得靜默當 prod 起真連線
 
     assert cap.create_args is None and cap.create_kwargs is None
+    # 順序合約:驗參數在落檔之前 —— 打錯字不得先換掉整個 process 的 stdio(review T-6)
+    assert cap.prod_log_calls == 0
+
+
+def test_verify_refuses_canonical_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run.ps1 會在 operator 的 shell 留下 TXO_SERVER_PORT=8721;verify server 佔住
+    canonical port 的失效樣態是 vite proxy 打到整片 fake 而零錯誤訊號(review R-5)。"""
+    cap = _Capture()
+    cap.install(monkeypatch)
+    monkeypatch.setenv("TXO_SERVER_PORT", "8721")
+
+    with pytest.raises(SystemExit):
+        main_mod.main(["--verify"])
+
+    assert cap.create_args is None and cap.run_kwargs is None
