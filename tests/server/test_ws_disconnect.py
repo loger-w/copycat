@@ -216,19 +216,47 @@ class TestAbruptDisconnect:
 # ---------------------------------------------------------------------------
 
 
+#: 未在 `__exit__` 的 join 期限內收掉的 server(以 label 記)。殘留的殭屍廣播迴圈會繼續
+#: 往 **全域** asyncio logger 寫警告 → 其後每一條測試的 `connlost_count()` 都不再只反映
+#: 自己那一路。空著才代表計數可信;非空時由消費端測試開頭直接 fail 明示,免得一次真失敗
+#: 被演成連鎖數次的假失敗(review F4)。
+_HUNG_SERVERS: list[str] = []
+
+
 class _RunningServer:
     """真 uvicorn(port 0)+ 背景執行緒;離開 context 時 graceful shutdown 並 join。
 
     `thread` 在 `__exit__` 之後仍可查 `is_alive()` —— 「關得掉」的斷言刻意留在 context
     **外面**做,主體失敗時不跑,免得把原始失敗訊息蓋掉(同上面那條既有測試的理由)。
+
+    `graceful_timeout` 預設 **None(= uvicorn 預設的無上限)**:那正是
+    `TestGracefulShutdownWithLiveClient` 要驗的行為,設了上限等於讓被測的 bug
+    在期限到時被 uvicorn 強制收尾 → 那條測試對回歸失去敏感度。只有「關機不是題目、
+    但殘留會污染別人」的用法(六路突斷)才顯式給上限。
     """
 
-    def __init__(self, app: FastAPI, *, join_timeout: float = 10.0) -> None:
-        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", ws="auto")
+    def __init__(
+        self,
+        app: FastAPI,
+        *,
+        join_timeout: float = 10.0,
+        graceful_timeout: int | None = None,
+        label: str = "",
+    ) -> None:
+        config = uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=0,
+            log_level="warning",
+            ws="auto",
+            timeout_graceful_shutdown=graceful_timeout,
+        )
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.port = 0
+        self.hung = False
         self._join_timeout = join_timeout
+        self._label = label
 
     def __enter__(self) -> _RunningServer:
         self.thread.start()
@@ -246,6 +274,9 @@ class _RunningServer:
     def __exit__(self, *_exc: object) -> None:
         self.server.should_exit = True
         self.thread.join(timeout=self._join_timeout)
+        if self.thread.is_alive():
+            self.hung = True
+            _HUNG_SERVERS.append(self._label or "<unlabelled>")
 
 
 def _drain_frames(sock: socket.socket, *, want: int, timeout: float) -> int:
@@ -284,7 +315,7 @@ class TestGracefulShutdownWithLiveClient:
         接著 relay 就停在 `queue.get` 上 —— 正是要驗的那個狀態。
         """
         app = create_app(FakeTxoSource(), throttle_secs=0.02)
-        with _RunningServer(app) as srv:
+        with _RunningServer(app, label="graceful-shutdown") as srv:
             sock, rest = _ws_handshake_keep_rest(srv.port, "/ws/txo-pnl")
             sock.settimeout(5)
             assert rest or sock.recv(4096), "連線後應收到至少一則 snapshot frame(證明連線活著)"
@@ -293,9 +324,14 @@ class TestGracefulShutdownWithLiveClient:
             srv.server.should_exit = True
             srv.thread.join(timeout=10)
             elapsed = time.monotonic() - started
+            # **判決點在 `sock.close()` 之前**:context 的 `__exit__` 會再 join 一次,而
+            # client 一旦關掉,未修的 send-only 迴圈也會因為 transport 死掉而收尾 ——
+            # 拿 `__exit__` 之後的 `is_alive()` 當判準,實際驗到的是「允許 client 先斷」,
+            # 與本測試宣稱的場景(client 保持連線)不符(review F1)。
+            alive_while_connected = srv.thread.is_alive()
             sock.close()
 
-        assert not srv.thread.is_alive(), (
+        assert not alive_while_connected, (
             f"client 仍連著時 uvicorn 收不掉:{elapsed:.1f}s 後執行緒仍活著"
             "(WS 迴圈掛在 queue.get 上,察覺不到關機)"
         )
@@ -476,6 +512,10 @@ class _WsCase:
     path: str
     build: Callable[[Path, pytest.MonkeyPatch], tuple[FastAPI, Any]]
     pump: Callable[[FastAPI, Any, int], None]
+    #: route 在 relay **之外**、accept 後直送一則快照(app.py 的 `/ws/corr`、`/ws/river`;
+    #: 其餘四路 accept 後就直接進 relay)。True 時測試先把那則單獨收乾,之後數到的批數
+    #: 才全部出自 relay 迴圈本身。
+    pre_relay_snapshot: bool = False
 
 
 #: `create_app` 的 futures/corr/index/stock source 預設 None = 該引擎不建 → 每一路都要
@@ -484,8 +524,8 @@ _WS_CASES = [
     _WsCase("/ws/futures", _build_futures, _pump_source(_futures_quote)),
     _WsCase("/ws/index", _build_index, _pump_source(_index_quote)),
     _WsCase("/ws/stock", _build_stock, _pump_source(_stock_quote)),
-    _WsCase("/ws/corr", _build_corr, _pump_corr),
-    _WsCase("/ws/river", _build_corr, _pump_corr),
+    _WsCase("/ws/corr", _build_corr, _pump_corr, pre_relay_snapshot=True),
+    _WsCase("/ws/river", _build_corr, _pump_corr, pre_relay_snapshot=True),
     _WsCase("/ws/capital", _build_capital, _pump_capital),
 ]
 
@@ -493,49 +533,84 @@ _WS_CASES = [
 class TestBroadcastRouteDisconnect:
     """`/ws/txo-pnl` 之外的六條 relay 路,逐條過同一套劇本。
 
-    劇本 = 正向對照(收到 ≥4 批 frame,證明推播鏈真的在跑)→ RST 突斷 → 繼續推 1.5s
+    劇本 = 正向對照(收到足量 frame,證明推播鏈真的在跑)→ RST 突斷 → 繼續推 1.5s
     → asyncio 零 `socket.send() raised exception.` → server 收得掉。缺了正向對照那段,
     「斷線後零警告」在上游靜默斷掉時會 vacuous 綠(根本沒寫過,自然沒有警告)。
 
-    `want=4` 而不是 3:corr / river 在 relay **之外**先直送一則快照,門檻抓 4 保證
-    至少三批出自 relay 迴圈本身。
+    正向對照有兩截,缺一不可:
+    - **斷線前**:`_drain_frames` 數到門檻。有 pre-relay 快照的兩路先把那則單獨收乾,
+      門檻才只數 relay 迴圈的產出(`_drain_frames` 數的是 recv 回傳次數 —— 快照長大到
+      被 TCP 拆成數段時,四批可能全出自那一則,review F3)。
+    - **斷線後**:pump 執行緒必須真的還在推。它若靜默死掉,`count == 0` 同樣是
+      vacuous 綠 —— 對稱於斷線前那道保護(review F2)。
     """
 
     @pytest.mark.parametrize("case", _WS_CASES, ids=[c.path for c in _WS_CASES])
     def test_no_write_to_dead_transport(
         self, case: _WsCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # 前一路的 server 沒收乾淨時,它的殭屍迴圈仍在往全域 asyncio logger 寫警告 ——
+        # 本路的計數會混到別人的帳(review F4)。明示 fail 而不是讓它變成一串假失敗。
+        if _HUNG_SERVERS:
+            pytest.fail(f"前一路 server 未關乾淨({_HUNG_SERVERS}),本路計數不可信")
+
         app, ctx = case.build(tmp_path, monkeypatch)
         stop = threading.Event()
         collector = _Collector()
         asyncio_logger = logging.getLogger("asyncio")
+        pumped = 0
 
-        with _RunningServer(app) as srv:
+        # `graceful_timeout`:關機不是這條的題目(下面那句 `is_alive` 只是順帶的契約),
+        # 而殘留會污染其後每一路 → 給上限讓殘留有界。
+        with _RunningServer(app, graceful_timeout=5, label=case.path) as srv:
 
             def _pump() -> None:
+                nonlocal pumped
                 n = 0
                 while not stop.is_set():
                     n += 1
                     case.pump(app, ctx, n)
+                    pumped += 1
                     stop.wait(0.02)
 
             pump = threading.Thread(target=_pump, daemon=True)
             asyncio_logger.addHandler(collector)
             try:
                 sock, rest = _ws_handshake_keep_rest(srv.port, case.path)
-                pump.start()
-                # 握手殘留裡的那批也算(否則同 segment 到達時會白白少數一批)
-                seen = 1 if rest else 0
-                batches = seen + _drain_frames(sock, want=4 - seen, timeout=15)
-                assert batches >= 4, (
-                    f"{case.path} 斷線前只收到 {batches} 批 frame:推播鏈沒動,"
+                if case.pre_relay_snapshot:
+                    # pump 還沒起 → 線上只可能有 accept 後直送的那一則,單獨收乾
+                    if not rest:
+                        assert _drain_frames(sock, want=1, timeout=15) == 1, (
+                            f"{case.path}:連線後沒收到 relay 之外的快照"
+                        )
+                    pump.start()
+                    want = 3
+                    batches = _drain_frames(sock, want=want, timeout=15)
+                else:
+                    pump.start()
+                    # 握手殘留裡的那批也算(否則同 segment 到達時會白白少數一批)
+                    seen = 1 if rest else 0
+                    want = 4
+                    batches = seen + _drain_frames(sock, want=want - seen, timeout=15)
+                assert batches >= want, (
+                    f"{case.path} 斷線前只收到 {batches} 批 frame(門檻 {want}):推播鏈沒動,"
                     "本測試無法證明修復(relay 根本沒送過幾次)"
                 )
 
+                pumped_at_abort = pumped
                 _abort(sock)
                 # 0.02s cadence × 1.5s ≈ 75 次寫入,遠超 asyncio 的 5 次門檻:
                 # 未修時必然累積警告,修好後 watcher 毫秒級收尾。
                 time.sleep(1.5)
+
+                assert pump.is_alive(), (
+                    f"{case.path}:pump 執行緒在斷線後就死了 —— 沒人推,零警告不算證據"
+                )
+                pumped_after = pumped - pumped_at_abort
+                assert pumped_after >= 20, (
+                    f"{case.path}:斷線後只推了 {pumped_after} 次(遠低於 asyncio 的 5 次門檻的"
+                    "安全倍數),零警告不算證據"
+                )
 
                 count = collector.connlost_count()
                 assert count == 0, (

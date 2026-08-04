@@ -35,6 +35,9 @@ class FakeIndexSource:
     - `subscribe_error` 指派後 `subscribe_symbol` 拋(訂閱降級 / retry 路徑)。
     - `fetch_bars_range_tagged` 的 tag 與日 K 內容由建構子參數決定(market route 的
       「meta.source 必須是實際走到的分支」那組測試用)。
+    - `today` 決定 1K 治具那根的日期。消費端多半在 import 期就把「今天」算成模組常數
+      再拿去斷言,呼叫期重算會與它脫鉤(跨午夜的假紅路徑)→ 有斷言依賴它的測試一律
+      顯式傳入自己那份,不傳才退回呼叫期。
     """
 
     def __init__(
@@ -43,17 +46,23 @@ class FakeIndexSource:
         day_minutes: dict[str, int] | None = None,
         tag: str = "tc4_dk",
         daily_bars: list[dict] | None = None,
+        today: str | None = None,
     ) -> None:
         self.subscribed: list[str] = []
         self.unsubscribed: list[str] = []
         self.trade_dates: list[str] = []
-        self.day_minutes: dict[str, int] | Exception = {} if day_minutes is None else day_minutes
+        # 拷貝:module 常數當預設值傳進來時(同 `_daily` 的理由),被測 route 或測試
+        # 改到內容會滲進其後每一條測試
+        self.day_minutes: dict[str, int] | Exception = (
+            {} if day_minutes is None else dict(day_minutes)
+        )
         self.on_message: Callable[[dict], None] | None = None
         self.subscribe_error: Exception | None = None
         self.closed = False
         self.calls: list[tuple[str, str, str, str]] = []
         self._tag = tag
         self._daily = DEFAULT_DAILY if daily_bars is None else daily_bars
+        self._today = today
 
     def subscribe_symbol(self, code: str) -> None:
         if self.subscribe_error is not None:
@@ -82,7 +91,7 @@ class FakeIndexSource:
     ) -> tuple[list[dict], str]:
         self.calls.append((code, tf, start, end))
         if tf == "1":
-            today = f"{_dt.date.today():%Y-%m-%d}"
+            today = self._today or f"{_dt.date.today():%Y-%m-%d}"
             return [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}], "tc4_1k"
         # 深拷貝:`DEFAULT_DAILY` 是 module-level 共享的,`list()` 只換外層 list,內層 dict
         # 仍是同一批物件 —— 任何一條測試(或被測 route)改到 bar 的欄位,都會滲進其後

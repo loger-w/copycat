@@ -224,7 +224,9 @@ class TestMinutePath:
     """tf=1 是 UI 最常走的一條(17 顆週期鈕裡有 13 顆走它),原本零測試(review P1-3)。"""
 
     def test_twse_minute_hits_index_engine_with_tf1(self) -> None:
-        src = FakeIndexSource()
+        # `today=_TODAY`:下面那條斷言比的是 import 期算出的 `_TODAY`,治具若在呼叫期
+        # 自己重算,跨午夜跑就會兩邊不同日 → 與被測行為無關的假紅
+        src = FakeIndexSource(today=_TODAY)
         with make_client(index_source=src) as c:
             r = c.get("/api/market/bars/TWSE?tf=1&days=5")
         body = r.json()
