@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "date": "2026-08-04",
+  "head": "a5e0ef1",
+  "lenses": ["whitelist/correctness", "test-coverage"],
+  "whitelist_check": "1-9 全 pass(correctness lens 以 tailwind-merge 3.6.0 實跑三態 cn() 輸出驗證,class 集合完整保留;1280/1600 截圖確認 header 單列無捲軸)",
+  "findings": [
+    {"id": "P1-1", "severity": "P1", "source": ["T1", "F2"], "title": "SC-1 相對斷言 not.toContain('text-3xl') 只擋單一值,股名改 text-4xl/2xl 照樣綠", "resolution": "accepted — 改正向鎖 heading toContain('text-lg')(同時鎖白名單 6/9 字級現狀)"},
+    {"id": "P2-1", "severity": "P2", "source": ["F1"], "title": "% span 繼承父層新加的 font-semibold 一併變粗,spec 未載明且與 SC-2 拉開焦點的意圖反向", "resolution": "accepted — % span 補 font-normal 還原改前字重,並補 className 斷言(行為級 P2,逐條展開)"},
+    {"id": "P2-2", "severity": "P2", "source": ["T2"], "title": "SC-2 的「緊貼(ml-1)/ 同色(不自帶文字色)」子句無鎖;白名單 1 的「% 一起反白」靠繼承,testid 已可測", "resolution": "accepted — pct 測試補 toContain('ml-1') 與 not.toMatch(/text-(bull|bear|ink|white)/)"},
+    {"id": "P2-3", "severity": "P2", "source": ["T3", "F3"], "title": "SC-3 三態並存斷言只涵蓋漲停;跌停態 text-3xl+bg-bear 並存無鎖", "resolution": "accepted — 新增 atLimit(2_090_000) 跌停並存測試"},
+    {"id": "P2-4", "severity": "P2", "source": ["T4"], "title": "白名單 8 拍板的 px-1.5 / rounded 零斷言", "resolution": "accepted — 漲停/跌停兩條新測試補 toContain('px-1.5') + toContain('rounded')"},
+    {"id": "P2-5", "severity": "P2", "source": ["T5"], "title": "新 describe 複製 atLimit helper 但拿來傳未觸價價位,名實相反且雙份定義", "resolution": "accepted — 新 describe helper 改名 atPrice(不動既有 describe)"},
+    {"id": "P2-6", "severity": "P2", "source": ["T6"], "title": "白名單 5 後半(chg == null → % 不渲染)pre-existing 無測試,testid 加上後首次可測", "resolution": "accepted — 補一條 ref 缺值 → queryByTestId('page-quote-pct') 為 null(成本近零,直接鎖本輪白名單條款)"},
+    {"id": "P2-7", "severity": "P2", "source": ["F3"], "title": "漲跌停反白 + 大字的真環境截圖未拍(兩張截圖皆未觸價態)", "resolution": "accepted_with_limitation — 盤中自選內無鎖停股,無法真環境重現;以 jsdom 三態 class 集合斷言 + finder twMerge 實跑輸出為替代證據,記入 verification.md 限制節"},
+    {"id": "P2-8", "severity": "P2", "source": ["F4"], "title": "SC-4 驗證截圖 untracked 未進版控", "resolution": "accepted — chore commit 補進分支(收尾節本就要求證據檔不得 untracked)"}
+  ],
+  "summary": "無 P0;1 P1(兩 lens 交叉命中)+ 8 P2 全 accepted(P2-7 帶已記錄限制)。白名單全保留。"
+}

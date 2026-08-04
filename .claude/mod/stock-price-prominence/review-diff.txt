@@ -1,0 +1,80 @@
+﻿diff --git a/docs/next-time.md b/docs/next-time.md
+index ca9ede5..80a5306 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -488,3 +488,8 @@
+   數十秒~分鐘級,期間整個 HTTP 面不可用(真實量測:fake 延遲 12s → 12.6s 才首次 200)。
+   前端已能自癒,但若想根治「重啟後空窗」,得把 runtime.start 的回補段移到背景 task
+   (engines 的 app.state 時序假設要全部重審)— 獨立一輪的架構工作,勿順手。
++- [ ] **個股頁現價旁加漲跌額(絕對點數)**:本輪(mod/stock-price-prominence)只放大字級,
++  % 旁沒有漲跌額;要加時連同 fmtPct 慣例一起看(2026-08-04 change-spec out of scope)。
++- [ ] **三頁現價字級是否統一**:個股頁現價已改 text-3xl,期貨頁 FuturesPage.tsx L54 仍
++  text-lg、指數頁 IndexPage.tsx L178 仍 text-2xl;是否統一由獨立決策,不順手改
++  (2026-08-04 change-spec-review P2-4)。
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index ad54628..603e8e2 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -206,6 +206,40 @@ describe("StockPage 漲跌停亮燈(round6 項 3)", () => {
+   });
+ });
+ 
++// 🔴 mod/stock-price-prominence:header 現價要成為整列唯一視覺焦點。
++// jsdom 量不到字級,只能鎖住產生該效果的 class 組合(真實版面走截圖對照)。
++describe("StockPage 現價醒目化", () => {
++  const atLimit = (p: number) =>
++    stream({ accum: { ...ACCUM, last: { p, t: "09:00:01.000", cum_vol: 1 } } as StockAccum });
++
++  // SC-1:絕對字級 + **相對於股名**。只斷言 text-3xl 會在「股名也一起放大」時仍綠 = vacuous。
++  it("未觸價 → 現價 text-3xl + font-semibold,且字級大於股名(SC-1)", () => {
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
++    const cls = screen.getByTestId("page-quote").className;
++    expect(cls).toContain("text-3xl");
++    expect(cls).toContain("font-semibold");
++    expect(cls).toContain("font-mono"); // 數字字體不可因放大被換掉(白名單 4)
++    const heading = screen.getByRole("heading", { name: /台積電/ });
++    expect(heading.className).not.toContain("text-3xl");
++  });
++
++  // SC-2:% 同步放大一級(text-xs → text-sm),但刻意不與主數字等比
++  it("漲跌 % 放大為 text-sm(SC-2)", () => {
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
++    const cls = screen.getByTestId("page-quote-pct").className;
++    expect(cls).toContain("text-sm");
++  });
++
++  // SC-3:字級與反白是兩組獨立 class,twMerge 不可把任一方吃掉
++  it("漲停 → text-3xl 與反白底色白字並存(SC-3)", () => {
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_550_000)} />);
++    const cls = screen.getByTestId("page-quote").className;
++    expect(cls).toContain("text-3xl");
++    expect(cls).toContain("bg-bull");
++    expect(cls).toContain("text-white");
++  });
++});
++
+ describe("StockPage 加入自選(round4 項 4)", () => {
+   let putBodies: unknown[];
+ 
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 9f8c7ce..b9a7d6e 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -87,7 +87,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
+                 <span
+                   data-testid="page-quote"
+                   className={cn(
+-                    "font-mono text-lg",
++                    "font-mono text-3xl font-semibold",
+                     limit === "upper" && "rounded bg-bull px-1.5 text-white",
+                     limit === "lower" && "rounded bg-bear px-1.5 text-white",
+                     limit === null &&
+@@ -96,7 +96,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
+                 >
+                   {fmt(last.p)}
+                   {chg != null ? (
+-                    <span className="ml-1 text-xs">{fmtPct(chg)}</span>
++                    <span data-testid="page-quote-pct" className="ml-1 text-sm">{fmtPct(chg)}</span>
+                   ) : null}
+                 </span>
+               ) : null}
