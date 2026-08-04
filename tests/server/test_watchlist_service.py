@@ -177,6 +177,34 @@ class TestApply:
         assert len(engine.published) == 1
 
 
+class TestCurrent:
+    """Discord `/watch list` 的讀取入口(T5):唯讀,不落檔不廣播。"""
+
+    async def test_returns_canonical_snapshot(self, tmp_path: Path) -> None:
+        service, engine, _ = _service(tmp_path)
+        await service.add("2330", group="主力")
+        engine.published.clear()
+
+        assert await service.current() == {
+            "codes": ["2330"],
+            "groups": [{"name": "主力", "codes": ["2330"]}],
+        }
+        assert engine.published == []
+        assert engine.set_calls == [["2330"]]
+
+    async def test_missing_file_is_empty(self, tmp_path: Path) -> None:
+        service, _, path = _service(tmp_path)
+
+        assert await service.current() == {"codes": [], "groups": []}
+        assert not path.exists()
+
+    async def test_broken_file_degrades_to_empty(self, tmp_path: Path) -> None:
+        service, _, path = _service(tmp_path)
+        path.write_text(json.dumps({"codes": ["bad code"], "groups": []}), encoding="utf-8")
+
+        assert await service.current() == {"codes": [], "groups": []}
+
+
 class TestRejection:
     async def test_bad_code_raises_and_writes_nothing(self, tmp_path: Path) -> None:
         service, engine, path = _service(tmp_path)

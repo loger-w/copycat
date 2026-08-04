@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import copycat.capital.factory as _capital_factory
+import copycat.server.discord_bot as _discord_bot
 
 # TC4 官方 wrapper(spikes/TCPY)不在版控(.gitignore:9)→ 乾淨 checkout 與新 worktree
 # 一律缺它。真的要 import 它的測試必須 skip 而非紅:紅會讓「環境沒裝」看起來像「程式壞了」。
@@ -40,6 +41,9 @@ CAPITAL_ENV_KEYS = (
 )
 
 
+DISCORD_ENV_KEYS = ("DISCORD_BOT_TOKEN", "SIGNALS_DISCORD_CHANNEL_ID")
+
+
 @pytest.fixture(autouse=True)
 def _neutralize_capital_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in CAPITAL_ENV_KEYS:
@@ -47,3 +51,13 @@ def _neutralize_capital_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_capital_factory, "_client", None)
     monkeypatch.setattr(_capital_factory, "_dotenv_values", lambda: {})
     monkeypatch.setattr(_capital_factory, "_dotenv_cache", None)
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_discord_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CAPITAL_* 同型隔離(impl-review R5):開發機 shell 或 repo root .env 裡的真 bot
+    token 一旦流進測試,`create_bot` 的降級路徑會靜默走成「真的去登入 Discord」。"""
+    for key in DISCORD_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(_discord_bot, "_dotenv_values", lambda: {})
+    monkeypatch.setattr(_discord_bot, "_dotenv_cache", None)
