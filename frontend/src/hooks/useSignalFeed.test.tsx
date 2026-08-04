@@ -64,9 +64,11 @@ describe("useSignalFeed", () => {
     act(() => emitSignal(sig("live-1")));
     expect(ids(hook.result.current.signals)).toEqual(["live-1", "new", "mid", "old"]);
 
-    // 重啟後同訊號重發(id 決定性鍵)→ 去重,不是變兩列
+    // 重啟後同訊號重發(id 決定性鍵)→ 去重,不是變兩列。
+    // 重發者上浮到最前是刻意的:清單序 = 「最近收到」,live 那份贏 baseline 的位置。
     act(() => emitSignal(sig("new")));
-    expect(ids(hook.result.current.signals)).toEqual(["live-1", "new", "mid", "old"]);
+    expect(ids(hook.result.current.signals)).toEqual(["new", "live-1", "mid", "old"]);
+    expect(ids(hook.result.current.signals).filter((id) => id === "new").length).toBe(1);
   });
 
   it("ws-open → 重抓當日 baseline(斷線期間漏的訊號自癒補回)", async () => {
