@@ -1,4 +1,15 @@
 
+## 2026-08-05(txo-contract-last-price Phase 5 review 沉澱)
+
+- [ ] **TXO 市價估價的 reset 窗 UX**(review S-1,P1 判為 Known Risk 不擋本輪):
+  `last_price` 掛在會被 `reset()` 清空的累積狀態上 → 序列切換 / self-heal / rollover
+  後 `contracts` 會空到回補完成(數分鐘),期間市價鈕鎖回、**已開的確認框因
+  `premium != null` gate 靜默卸載、`handleConfirm` 靜默 return** —— 方向是 fail-safe
+  (估價消失 = 回到本輪前狀態,送單走 literal M 不受估價影響,不會送錯價),但
+  **零訊息**,user 只會看到「按了沒反應」。後端保留 last_price 跨 reset 無效(row 本身
+  隨 `_pos` 消失,單保價值救不回 row)。修法 = 前端獨立輪:dialog gate 拆分 +
+  `setSubmitError`,或 `status=backfilling` 時沿用上一份估價並標示「回補中」
+
 ## 2026-08-04(stock-signals Phase 6 沉澱)
 
 - [x] ~~🔴 **既有 bug:有 WS client 連著時 server graceful shutdown 卡死**~~
