@@ -135,6 +135,7 @@ class SignalHub:
         self._watch: set[str] = set()
         self._enabled: dict[str, bool] = self._load_enabled()
         self._enabled_set: frozenset[str] = self._as_set(self._enabled)
+        self._enabled_lock = asyncio.Lock()  # read-modify-write + 落檔的共同臨界區(CC-7)
         self._basis_jobs: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
         self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
         # 兩條獨立佇列 + 兩個 worker(CC-5):Discord 卡住時 jsonl 這條真相源要照走
@@ -476,14 +477,20 @@ class SignalHub:
         return dict(self._enabled)
 
     async def set_enabled(self, flags: dict[str, bool]) -> None:
-        """非法鍵 / 非 bool 值 → ValueError(route 轉 400 INVALID_SIGNALS_ENABLED)。"""
+        """非法鍵 / 非 bool 值 → ValueError(route 轉 400 INVALID_SIGNALS_ENABLED)。
+
+        read-modify-write **與落檔同一個臨界區**(CC-7):兩者拆開時,先算後寫的那次可能
+        最後才落地,磁碟停在舊快照 —— 記憶體是對的、重啟後開關自己跳回去,零錯誤訊號。
+        驗證刻意留在鎖外:非法輸入不該排在別人的落檔後面。
+        """
         for key, value in flags.items():
             if key not in SWITCH_KEYS or not isinstance(value, bool):
                 raise ValueError(f"非法訊號開關:{key}={value!r}")
-        merged = {**self._enabled, **flags}
-        self._enabled = merged
-        self._enabled_set = self._as_set(merged)
-        await asyncio.to_thread(self._write_enabled, merged)
+        async with self._enabled_lock:
+            merged = {**self._enabled, **flags}
+            self._enabled = merged
+            self._enabled_set = self._as_set(merged)
+            await asyncio.to_thread(self._write_enabled, merged)
 
     def _enabled_path(self) -> Path:
         return self._data_dir / _ENABLED_FILE
