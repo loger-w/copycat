@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import copycat.capital.factory as factory_mod
 from copycat.capital.client import CapitalClient
+from copycat.server.audit import AuditWriteError
 from copycat.server.ws import CLIENT_QUEUE_MAX as _CLIENT_QUEUE_MAX
 from copycat.server.ws import WsBroadcaster
 from copycat.capital.models import Position
@@ -134,17 +136,19 @@ def make_client(
     *,
     capital: CapitalClient | None = None,
     futures_source: FakeFuturesSource | None = None,
+    configure: Callable[[FastAPI], None] | None = None,
 ) -> TestClient:
+    """`configure` = 建 TestClient 前對 app 動手的鉤子(探針 route 用,見 TestErrorMapping)。"""
     monkeypatch.delenv("CAPITAL_USER_ID", raising=False)
     monkeypatch.setattr(factory_mod, "_client", capital)
-    return TestClient(
-        create_app(
-            FakeQuoteSource(),
-            futures_source=futures_source,
-            throttle_secs=0.01,
-        ),
-        raise_server_exceptions=False,
+    app = create_app(
+        FakeQuoteSource(),
+        futures_source=futures_source,
+        throttle_secs=0.01,
     )
+    if configure is not None:
+        configure(app)
+    return TestClient(app, raise_server_exceptions=False)
 
 
 _STOCK_BODY: dict[str, Any] = {"stock_no": "2330", "buy_sell": "buy", "price": 590.0, "qty": 1}
@@ -560,17 +564,57 @@ class TestErrorMapping:
             assert res.status_code == 502
             assert res.json()["detail"]["error"] == "CAPITAL_DOWN"
 
+    def test_audit_write_error_500_audit_write_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AuditWriteError → 500 AUDIT_WRITE_FAILED(WLR-1)。
+
+        真正的 raise 點在 CapitalClient 送單前置(審計寫失敗),從 route 觸發要造 IO 故障;
+        這裡受測的是 app.py 的 handler 註冊本身(本輪由 _TRADE_ERROR_MAP 迴圈改為獨立
+        @app.exception_handler),故用探針 route 直接 raise 鎖住契約 —— frontend
+        lib/trade-text.ts 依 AUDIT_WRITE_FAILED 這個字串顯示「單未送出」。
+        """
+
+        def _boom() -> None:
+            raise AuditWriteError("boom")
+
+        with make_client(
+            monkeypatch,
+            configure=lambda app: app.add_api_route("/api/_probe/audit-fail", _boom),
+        ) as client:
+            res = client.get("/api/_probe/audit-fail")
+            assert res.status_code == 500
+            assert res.json()["detail"]["error"] == "AUDIT_WRITE_FAILED"
+
 
 # ---------------------------------------------------------------------------
 # 舊 trade 路已除役 → 404(remove-tc4-trade-path SC-2)
 # ---------------------------------------------------------------------------
 
 
+_REMOVED_TRADE_ROUTES: list[tuple[str, str]] = [
+    ("GET", "/api/trade/account"),
+    ("POST", "/api/trade/preview"),
+    ("POST", "/api/trade/orders"),
+    ("GET", "/api/trade/orders"),
+]
+
+
 class TestTradeRoutesRemoved:
-    def test_trade_account_404_route_gone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize(("method", "url"), _REMOVED_TRADE_ROUTES)
+    def test_trade_route_404_route_gone(
+        self, method: str, url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # route 不存在時 404 先於 body 驗證,故 POST 帶空 json 也不會變 422
         with make_client(monkeypatch) as client:
-            res = client.get("/api/trade/account")
-            assert res.status_code == 404
+            res = client.request(method, url, json={})
+            assert res.status_code == 404, f"{method} {url}"
+
+    def test_known_route_not_404_anchors_the_above(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """對照錨:同一個 app 上已知存在的 route 非 404,證明上面四條 404 是
+        「這幾條沒了」而不是「app 根本沒建起來 / client 全打不到」。"""
+        with make_client(monkeypatch) as client:
+            assert client.get("/api/capital/status").status_code != 404
 
 
 # ---------------------------------------------------------------------------
