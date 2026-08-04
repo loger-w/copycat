@@ -15,6 +15,7 @@ import { useFuturesStream } from "@/hooks/useFuturesStream";
 import { useIndexStream } from "@/hooks/useIndexStream";
 import { useStockStream } from "@/hooks/useStockStream";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
+import { MAIN_CODE_KEY, PRODUCT_KEY, TAB_KEY } from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { cn } from "@/lib/utils";
 
@@ -24,9 +25,6 @@ const IndexPage = lazy(() => import("@/components/index/IndexPage"));
 const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
 
 type Tab = "txo" | "stock" | "futures" | "index" | "corr";
-const TAB_KEY = "copycat-tab";
-const MAIN_CODE_KEY = "stock-main-code";
-const PRODUCT_KEY = "copycat-fut-product";
 
 const FUT_PRODUCTS = [
   ["TXF", "大台"],

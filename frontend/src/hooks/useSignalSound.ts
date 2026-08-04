@@ -11,7 +11,7 @@
 
 import { useSyncExternalStore } from "react";
 
-const SOUND_KEY = "copycat-signal-sound";
+import { SOUND_KEY } from "@/lib/constants";
 
 const subscribers = new Set<() => void>();
 

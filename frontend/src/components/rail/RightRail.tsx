@@ -4,6 +4,7 @@ import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
 import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import { PriceLadder, type CenterRequest, type TradeKind } from "@/components/stock/PriceLadder";
+import { RAIL_TAB_KEY } from "@/lib/constants";
 import { futCloseEstimate } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
@@ -20,8 +21,6 @@ import type { FuturesProductState } from "@/types";
  * 相對地,交易別 / 數量由本元件持有(R2-10):它們沒有「誤觸即送單」的性質,
  * 靜默重置(融券 → 現股)反而是風險。 */
 
-const TAB_KEY = "copycat-rail-tab";
-
 const TABS = [
   ["flash", "閃電"],
   ["orders", "委託"],
@@ -30,7 +29,7 @@ const TABS = [
 type RailTab = (typeof TABS)[number][0];
 
 function initialTab(): RailTab {
-  const saved = window.localStorage.getItem(TAB_KEY);
+  const saved = window.localStorage.getItem(RAIL_TAB_KEY);
   return saved === "orders" || saved === "positions" ? saved : "flash";
 }
 
@@ -68,7 +67,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
 
   function selectTab(next: RailTab): void {
     setTab(next);
-    window.localStorage.setItem(TAB_KEY, next);
+    window.localStorage.setItem(RAIL_TAB_KEY, next);
     // 離開閃電 tab 就清掉置中請求:ladder 會 unmount,留著的話下次掛載時 effect 會拿
     // 舊 centerRequest 再捲一次到過期價位並關掉跟隨(review phase5 P2-2)。
     // 註:ladder 的 `follow` 也隨 unmount 回到預設 true(重新掛載即置中於現價)—— 這是
@@ -84,7 +83,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
       const detail = (e as CustomEvent<{ priceMilli?: number; code?: string }>).detail;
       if (!detail || detail.code !== stockCode || typeof detail.priceMilli !== "number") return;
       setTab("flash");
-      window.localStorage.setItem(TAB_KEY, "flash");
+      window.localStorage.setItem(RAIL_TAB_KEY, "flash");
       setCenterRequest((prev) => ({
         priceMilli: detail.priceMilli as number,
         nonce: (prev?.nonce ?? 0) + 1,
