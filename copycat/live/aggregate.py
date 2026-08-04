@@ -87,7 +87,11 @@ class ChainAggregator:
         pos.volume += tick.qty
         # 成交價與內外盤分類無關 → 放三分支之前(未分類 tick 也是成交,一樣更新);
         # stale-drop 已在上面早退,被丟的重複/重放 tick 不會蓋掉現價。
-        pos.last_price_millipts = tick.price_millipts
+        # `> 0` 是必要的閘:0 不是價格(CLAUDE.md §8 —— 鎖停時 TC4 於簿第一檔推市價佇列),
+        # 而前端的 `?? null` 是 nullish 閘擋不住 0 → 會顯示「預估權利金 0 元」。
+        # 只閘記價,量與內外盤分類照舊(白名單 1)。
+        if tick.price_millipts > 0:
+            pos.last_price_millipts = tick.price_millipts
         if tick.ask_millipts is not None and tick.price_millipts >= tick.ask_millipts:
             pos.net_qty += tick.qty
             pos.net_cost_millipts += tick.qty * tick.price_millipts
@@ -132,7 +136,7 @@ class ChainAggregator:
                     "volume": st.volume,
                     "outer_qty": st.outer_qty,
                     "inner_qty": st.inner_qty,
-                    # 點(對齊 spot.price 慣例);row 只在 _ingest 建 → 實務上恆非 None
+                    # 點(對齊 spot.price 慣例);None = 該檔尚無有效價(只收過 0 價 tick)
                     "last_price": (
                         st.last_price_millipts / 1000
                         if st.last_price_millipts is not None
