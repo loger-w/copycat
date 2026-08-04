@@ -27,7 +27,7 @@ from copycat.server import build_info
 from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.capital_api import register_capital
-from copycat.server.ws import WsBroadcaster
+from copycat.server.ws import WsBroadcaster, relay
 from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
@@ -521,8 +521,7 @@ def create_app(
         await websocket.accept()
         try:
             await websocket.send_json(runtime.latest_snapshot())
-            async for snap in runtime.snapshots():
-                await websocket.send_json(snap)
+            await relay(websocket, runtime.snapshots())
         except WebSocketDisconnect:
             return
 
@@ -719,8 +718,7 @@ def create_app(
         try:
             # 先送當前快照:client 不必等到下一個 tick 才有畫面
             await websocket.send_json(corr.state())
-            async for msg in corr_ws.stream():
-                await websocket.send_json(msg)
+            await relay(websocket, corr_ws.stream())
         except WebSocketDisconnect:
             return
 
@@ -743,8 +741,7 @@ def create_app(
         try:
             # 首則送全量 snapshot;之後每秒只送當前分鐘的 delta(全量每秒推 = 每分鐘數 MB)
             await websocket.send_json(corr.river_snapshot())
-            async for msg in river_ws.stream():
-                await websocket.send_json(msg)
+            await relay(websocket, river_ws.stream())
         except WebSocketDisconnect:
             return
 
@@ -756,8 +753,7 @@ def create_app(
             await websocket.close()
             return
         try:
-            async for msg in index.stream():
-                await websocket.send_json(msg)
+            await relay(websocket, index.stream())
         except WebSocketDisconnect:
             return
 
@@ -769,8 +765,7 @@ def create_app(
             await websocket.close()
             return
         try:
-            async for msg in stock.stream():
-                await websocket.send_json(msg)
+            await relay(websocket, stock.stream())
         except WebSocketDisconnect:
             return
 

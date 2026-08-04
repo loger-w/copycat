@@ -159,8 +159,8 @@ class _FakeWebSocket:
         self.sent: list[dict] = []
         self.disconnected: asyncio.Future[dict] = asyncio.Future()
 
-    async def send_json(self, msg: dict) -> None:
-        self.sent.append(msg)
+    async def send_json(self, data: dict) -> None:
+        self.sent.append(data)
 
     async def receive(self) -> dict:
         return await self.disconnected
