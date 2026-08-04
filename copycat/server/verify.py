@@ -19,6 +19,7 @@ import os
 from typing import Callable
 
 import copycat.capital.factory as _capital_factory
+import copycat.notify as _notify
 import copycat.server.discord_bot as _discord_bot
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 
@@ -37,28 +38,36 @@ CAPITAL_ENV_KEYS = (
     "TXO_AUDIT_DIR",
 )
 
-DISCORD_ENV_KEYS = ("DISCORD_BOT_TOKEN", "SIGNALS_DISCORD_CHANNEL_ID")
+DISCORD_ENV_KEYS = ("DISCORD_BOT_TOKEN", "SIGNALS_DISCORD_CHANNEL_ID", "DISCORD_WEBHOOK_URL")
+
+#: neutralize 會對其 `_dotenv_values` / `_dotenv_cache` 動手的模組。
+#: 測試的 restore point 吃同一份(review T-4:兩處手抄清單會漂移)。
+DOTENV_MODULES = (_capital_factory, _discord_bot)
 
 
 def neutralize_external_env() -> None:
-    """把外部 IO 憑證整批中和:群益(SKCOM DLL)與 Discord bot 都不得真的連出去。
+    """把外部 IO 憑證整批中和:群益(SKCOM DLL)、Discord bot、Discord webhook 都不得真連。
 
-    兩層雙保險(單靠 delenv 不夠 —— .env fallback 還在):
+    三層處置(單靠 delenv 不夠 —— .env fallback 還在):
 
-    1. 12 個 key 全設**空字串** —— capital/factory 與 discord_bot 的 `_getenv` 都是
+    1. 全部 key 設**空字串** —— capital/factory 與 discord_bot 的 `_getenv` 都是
        「`name in os.environ` 即用(含空字串)」的新語意,空字串 = 明確清空、壓制 .env。
     2. 兩個模組的 `_dotenv_values` patch 成空 + cache 復位 —— 防未來有 key 走回
        「僅未設才 fallback」的舊語意時,.env 值靜默復活。
+    3. notify.py 是第三條出口(webhook),且是**舊語意**(值空白也 fallback .env)+
+       自有 cache —— 空字串壓不住它,直接把 cache 釘成「已解析且為 None」(review R-6)。
 
     程序生命週期內不還原(verify server 整個 process 都不該碰真憑證);測試要呼叫它時
     自行先用 monkeypatch 登記還原點(tests/server/test_verify.py 示範)。
     """
     for key in (*CAPITAL_ENV_KEYS, *DISCORD_ENV_KEYS):
         os.environ[key] = ""
-    for mod in (_capital_factory, _discord_bot):
+    for mod in DOTENV_MODULES:
         setattr(mod, "_dotenv_values", lambda: {})
         setattr(mod, "_dotenv_cache", None)
     setattr(_capital_factory, "_client", None)
+    setattr(_notify, "_WEBHOOK_URL", None)
+    setattr(_notify, "_URL_RESOLVED", True)
 
 
 # ---- fake TXO source(verify 模式與 server route 測試共用的唯一一份)----
