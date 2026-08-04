@@ -22,7 +22,8 @@ export type SignalEnabled = Record<SignalSwitchKey, boolean>;
 
 export interface SignalMsg {
   type: "signal";
-  /** 決定性鍵(trade_date|code|kind|level|count):重啟後同訊號重發時靠它去重。 */
+  /** 決定性鍵 `trade_date-code-kind-(levels+ | direction | "-")-time_key`:
+   *  重啟後同訊號重發時靠它去重(後端 `signal_hub._event_id`)。 */
   id: string;
   kind: SignalKind;
   code: string;
