@@ -313,6 +313,7 @@ class _FlakySource(_FakeSource):
         super().__init__()
         self._left = dict(fail_times or {})
         self.attempts: list[str] = []
+        self.fetched: list[str] = []
 
     def subscribe_raw(self, symbol: str) -> None:
         self.attempts.append(symbol)
@@ -320,6 +321,31 @@ class _FlakySource(_FakeSource):
         if left > 0:
             self._left[symbol] = left - 1
             raise ConnectionError(f"SUBQUOTE fail {symbol}")
+        super().subscribe_raw(symbol)
+
+    def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
+        self.fetched.append(symbol)
+        return super().fetch_day_1k(symbol)
+
+
+class _BadRetrySource(_FakeSource):
+    """指定腿:首輪 ConnectionError(進 pending)→ 重試第一次丟**非連線類**例外 → 成功。"""
+
+    def __init__(self, symbol: str) -> None:
+        super().__init__()
+        self._symbol = symbol
+        self.attempts: list[str] = []
+
+    def subscribe_raw(self, symbol: str) -> None:
+        self.attempts.append(symbol)
+        if symbol != self._symbol:
+            super().subscribe_raw(symbol)
+            return
+        n = self.attempts.count(symbol)
+        if n == 1:
+            raise ConnectionError(f"SUBQUOTE fail {symbol}")
+        if n == 2:
+            raise ValueError("wrapper 內部型別錯")
         super().subscribe_raw(symbol)
 
 
@@ -377,11 +403,13 @@ class TestPendingResubscribe:
         )
         await eng.start()
         try:
-            await asyncio.sleep(0.05)  # 5 個間隔
-            # 訂閱全成功時行為與修復前完全相同(SC-4);不看 `asyncio.all_tasks()` 數量 ——
-            # start() 本來就會建 tick / backfill 兩個 task
+            # 沒有失敗腿 = 沒有哨兵可數輪數(review W-4),所以這裡誠實記帳:
+            # 0.2s 遠超 interval(Windows timer 解析度 15.6ms → 至少十餘輪的份量),
+            # 但真正的鎖是「`_resub_task` 根本沒被建出來」這條結構性斷言
+            await asyncio.sleep(0.2)
             assert eng._resub_task is None
             assert sorted(src.attempts) == ["TC.F.CME.NQ.HOT", "TC.F.TWF.SXF.HOT"]
+            assert sorted(src.fetched) == ["TC.F.CME.NQ.HOT", "TC.F.TWF.SXF.HOT"]  # 回補只跑一輪
         finally:
             await eng.close()
 
@@ -394,8 +422,42 @@ class TestPendingResubscribe:
         await _wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
         await eng.close()
         n = len(src.attempts)
-        await asyncio.sleep(0.05)  # 5 個間隔
+        # close 後沒有哨兵可數(整條迴圈就是被停掉的那個東西),誠實記帳:0.2s 遠超 interval
+        await asyncio.sleep(0.2)
         assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
+
+    async def test_retry_loop_survives_non_connection_error(self) -> None:
+        """C-3:非 ConnectionError 例外不得殺掉重試路徑。
+
+        迴圈死掉 = 復原路徑本身靜默失效,而 `close()` 的收尾又把 task 例外吞掉 ——
+        兩層靜默疊起來,那條腿整天沒行情且 log 只有首輪一行 warning。
+        """
+        src = _BadRetrySource("TC.F.CME.NQ.HOT")
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+        )
+        await eng.start()
+        try:
+            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+            assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 連線類 + 非連線類 + 成功
+        finally:
+            await eng.close()
+
+    async def test_retry_success_reruns_river_backfill(self) -> None:
+        """W-3:失敗窗內的江波圖分鐘只能靠回補補齊 —— 重訂成功必須補排一次回補。
+
+        沒有這條鎖,`_schedule_backfill` 整段刪掉照樣全綠,而畫面上的失效是
+        「那條腿的線從啟動缺到重訂成功為止」,沒有任何錯誤訊號。
+        """
+        src = _FlakySource({"TC.F.CME.NQ.HOT": 2})
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+        )
+        await eng.start()
+        try:
+            await _wait_until(lambda: src.fetched.count("TC.F.CME.NQ.HOT") >= 2)
+        finally:
+            await eng.close()
 
     async def test_base_leg_never_subscribed_by_retry(self) -> None:
         """白名單 1:base 腿(futures_engine 來源)永不 subscribe_raw。
