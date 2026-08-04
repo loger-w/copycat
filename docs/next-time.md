@@ -484,11 +484,18 @@
   `body.detail?.error`,body 為合法 JSON `null` 時 TypeError 逸出 queryFn(錯誤訊息變
   TypeError 文字)— 與 `lib/api-error.ts` parseError 產出不同,Track A4 因此跳過;
   修掉即可併入 parseError。
-- [ ] **範圍外重複遺留**(本輪只收個股頁):parseError 同鏈現況 = `lib/api-error.ts` 共用版
+- [x] ~~**範圍外重複遺留**(本輪只收個股頁):parseError 同鏈現況 = `lib/api-error.ts` 共用版
   + `useSeries.ts:5` 自有版(2026-08-04 校正:原記載「×3(useTrade / useCapital / useSeries)」
   已失準 — useTrade.ts 隨舊 trade 路刪除、useCapital 已無 parseError);fmtPct 同字串 × 5(IndexBar / IndexPage / FuturesPage / RiverCards /
   RiverOverlay,後兩者已各自包 pct());chgPct 大盤 2 處;CandleChart「期間漲跌」
-  (分母=視窗首根收盤)與「跨日漲跌」(分母=前一根收盤)是語意變體不可併 chgPct。
+  (分母=視窗首根收盤)與「跨日漲跌」(分母=前一根收盤)是語意變體不可併 chgPct。~~
+  **2026-08-04 refactor/frontend-dedupe-format 收畢**:useSeries 副本刪除、
+  `parseCapitalError` 改吃新 export `parseErrorDetail`(suffix 邏輯留 useCapital);
+  fmtPct 6 處(含 signal-model)/ chgPct 2 處全指回 `lib/format.ts`;CandleChart
+  語意變體與 IndexBar local `fmt`(實作不同)刻意不動。
+- [ ] `CapitalPositionsList.tsx:79` 損益額正號判 `pnl >= 0`(顯示 `+0`),與全站 pct 的
+  `> 0`(0 不帶號)不一致 — 是否對齊屬行為微調待拍板;對齊時順帶決定「整數損益額」
+  要不要也走共用 formatter(2026-08-04 frontend-dedupe-format 圈出,依三類分離不混入)。
 - [ ] **跳過的 JSX / 參數化抽取**(plan review 裁定語意分岔,抽了即改行為或淨可讀性負值):
   D-8 漲跌色 tone(中性態四種落點刻意不同)、D-10 ToggleButton(off 態 hover 分岔)、
   D-13 GroupPicker(容器/stopPropagation/disabled 全不同;**側欄群組鈕 stopPropagation

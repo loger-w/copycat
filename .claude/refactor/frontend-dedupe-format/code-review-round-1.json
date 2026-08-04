@@ -1,0 +1,26 @@
+{
+  "flow": "refactor",
+  "slug": "frontend-dedupe-format",
+  "round": 1,
+  "date": "2026-08-04",
+  "diff": "review-diff.txt(master..a6e4c38)",
+  "lenses": [
+    {"lens": "行為等價性(逐字元比對 + 邊界路徑)", "model": "opus", "findings": 3},
+    {"lens": "測試品質與 blast radius", "model": "opus", "findings": 4}
+  ],
+  "findings": [
+    {"id": "Q-1", "severity": "P1", "claim": "lib fmtPct/chgPct 收斂 15 個呼叫點後自身零直接測試;平盤 0 分支(0.00% 不帶號)全 repo 零正向斷言,而 >= 0 語意已在 CapitalPositionsList 並存", "resolution": "accepted:format.test.ts 補 fmtPct(1)/(-1)/(0) exact + chgPct closeTo"},
+    {"id": "Q-2/E-2", "severity": "P2", "claim": "RiverPanel characterization 的 toContain(\"0%\") 是裝飾性鬆斷言(0% 為 JSX 字面量不經 fmtPct,substring 對 +0.00% 也綠)", "resolution": "accepted:刪該行,標題收斂;±1.05% 兩條為有效網"},
+    {"id": "Q-3/E-1", "severity": "P2", "claim": "parseErrorDetail 對非物件 detail(FastAPI 422 array / Starlette 404 字串)原值外洩且型別謊言;現有兩消費者輸出零差異但新消費者不受保護", "resolution": "accepted:本分支新 export,merge 前加 runtime 守門(非物件 → {})+ 測試;對既有輸出零差異"},
+    {"id": "Q-4", "severity": "P2", "claim": "測試數帳確認 987 → 991(+4),無刪測/跳過;流程敘述勿沿用過期的 972", "resolution": "accepted:收尾文件統一 987 → 991(修復輪後 99x)"},
+    {"id": "E-3", "severity": "P2", "claim": "docs/next-time.md 的 Step C 更新仍在工作區未 commit", "resolution": "accepted:收尾以 chore commit 單獨入(三類分離)"}
+  ],
+  "equivalence_audit": "E lens 逐字元核對:fmtPct 四份行內/local 版與 lib 版含 0/-0 邊界同形;chgPct 算式同、null/0 gate 原樣留呼叫端;IndexPage 判色仍用 chgPts 非 pct;parseCapitalError 四路徑(非 JSON / detail null / error 缺 / reason・err_code 空字串)逐字節同輸出;characterization 值以舊算式手算覆核(+1.00% / -1594.27 (-3.65%) / +142.00 (+0.34%))且 commit 順序證明拍的是現況。",
+  "verification": {
+    "npm_test": "991 passed / 72 files(baseline 987 + 4 characterization;修復輪另加)",
+    "tsc": "exit 0",
+    "eslint": "exit 0",
+    "check_feat_tags": "PASS(🟢×1 + 🔵×2)",
+    "real_env": "vite dev → prod backend @8721(夜盤):IndexBar 櫃買 +3.35%、IndexPage 台指期 +733.00 (+1.69%)、FuturesPage 微台 +1.75%、RiverCards 六腿 ±x.xx% 全對,console 零 error;截圖 evidence/river-cards-fmtpct.png"
+  }
+}
