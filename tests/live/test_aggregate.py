@@ -259,6 +259,36 @@ class TestContractsDetail:
         snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
         assert snap["contracts"][0]["last_price"] == 97.5
 
+    def test_zero_price_tick_does_not_overwrite_last_price(self) -> None:
+        """S-2:`0` 不是價格(CLAUDE.md §8 鎖停市價佇列同款)—— 不得蓋掉真實現價。
+
+        會咬到的是前端:`contracts.find(...)?.last_price ?? null` 是 **nullish** 閘,
+        `0` 穿得過去 → 市價鈕解鎖、確認框顯示「預估權利金 0 元」。量與內外盤分類
+        完全不動(白名單 1),只有記價這條被閘住。
+        """
+        agg = make_agg()
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=2))
+        agg.route(tick(C44000.symbol, price=0, qty=1, bid=99_000, ask=100_000, cum=3))
+        row = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")["contracts"][
+            0
+        ]
+        assert row["last_price"] == 100.0
+        assert row["volume"] == 3  # 0 價 tick 照樣計量:改的只有記價
+
+    def test_zero_price_only_contract_reports_null_last_price(self) -> None:
+        """S-2 邊界:整檔只有 0 價 tick → `last_price` 為 null(不是 0.0)。
+
+        這也讓 `_contract_rows` 的 `else None` 分支從防禦性死碼變成可達路徑 ——
+        前端 `?? null` 於是正確鎖回市價鈕。
+        """
+        agg = make_agg()
+        agg.route(tick(C44000.symbol, price=0, qty=1, bid=99_000, ask=100_000, cum=1))
+        row = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")["contracts"][
+            0
+        ]
+        assert row["last_price"] is None
+        assert row["volume"] == 1
+
     def test_stale_dropped_tick_does_not_update_last_price(self) -> None:
         """SC-3:被 cum 序 stale-drop 的 tick 不得蓋掉現價(重複推播 / 重連重放 / 回補重疊)。
 
