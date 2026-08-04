@@ -36,8 +36,10 @@
 而「管理」入口未依載入狀態 gate → Dialog 拿 fallback 當真實狀態做整份取代的 PUT。
 commit 守衛 `isSameWatchlist(next, wl)` 的比較基準就是 fallback 自身,對此無保護力。
 
-- 驗證方式:紅測試直接走重現鏈(query error → 開 Dialog → 新增群組 → 斷言 PUT 發出
-  `{codes: [], …}`)。一次一變數:僅 stub GET 失敗,其餘與正常流程相同。
+- 驗證方式:紅測試鎖**入口**(query error / pending 兩態,斷言「管理」鈕與 Dialog 元素
+  皆不渲染 → 重現鏈第 3 步「開 Dialog」不可達)。一次一變數:僅 stub GET 失敗,其餘與
+  正常流程相同。清空 PUT 的行為本身**無獨立行為級測試** — gate 後 Dialog 於危險窗根本
+  不掛載,行為級測試無可達路徑(收尾 review round-1 F2 處置:修正本段敘述以符實際)。
 - 非根因排除:後端無樂觀鎖(K-4 域)是**放大器**不是根因 —— 即使有樂觀鎖,前端拿
   fallback 當基底本身就是錯的意圖。
 - TanStack Query 特性:query 一旦成功過,之後 refetch 失敗 `data` 仍保留舊值 →
