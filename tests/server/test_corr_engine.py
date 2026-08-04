@@ -89,6 +89,7 @@ def _engine(
     txf_state: Callable[[], dict],
     clock: _Clock,
     broadcast: Callable[[dict], None] | None = None,
+    resub_interval_secs: float = 10.0,
 ) -> CorrelationEngine:
     return CorrelationEngine(
         lambda: source,
@@ -98,6 +99,7 @@ def _engine(
         tick_secs=1.0,
         now_fn=clock,
         session_fn=lambda: NIGHT,
+        resub_interval_secs=resub_interval_secs,
     )
 
 
@@ -296,6 +298,120 @@ class TestBroadcastAndState:
                 eng.tick_once()
 
             assert eng.state()["pairs"]["NQ"]["w60"] is not None
+        finally:
+            await eng.close()
+
+
+class _FlakySource(_FakeSource):
+    """前 N 次 subscribe_raw raise ConnectionError,之後成功;attempts 記每次呼叫。
+
+    (仿 tests/server/test_futures_engine.py 的 `_FlakySource`:失敗次數本身是被鎖的行為,
+    `subscribed` 只記成功,測不到「重試了幾次」。)
+    """
+
+    def __init__(self, fail_times: dict[str, int] | None = None) -> None:
+        super().__init__()
+        self._left = dict(fail_times or {})
+        self.attempts: list[str] = []
+
+    def subscribe_raw(self, symbol: str) -> None:
+        self.attempts.append(symbol)
+        left = self._left.get(symbol, 0)
+        if left > 0:
+            self._left[symbol] = left - 1
+            raise ConnectionError(f"SUBQUOTE fail {symbol}")
+        super().subscribe_raw(symbol)
+
+
+async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("條件逾時未成立")
+
+
+class TestPendingResubscribe:
+    """腿訂閱失敗的**零重試路徑**(mod/subscribe-retry-recovery SC-1)。
+
+    corr 的 `_on_reconnect` 只重跑江波圖回補、不重訂閱 → 首輪 SUBQUOTE 失敗的腿整天
+    無相關係數也無 live 點,且沒有任何錯誤訊號。照抄 futures_engine 的 pending-resub 形狀。
+    """
+
+    async def test_failed_legs_retried_until_success(self) -> None:
+        src = _FlakySource({"TC.F.CME.NQ.HOT": 2})
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+        )
+        await eng.start()
+        assert src.subscribed == ["TC.F.TWF.SXF.HOT"]  # 首輪只有費半成功
+        try:
+            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+        finally:
+            await eng.close()
+        assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 失敗 2 次 + 成功 1 次
+        assert src.attempts.count("TC.F.TWF.SXF.HOT") == 1  # 成功腿不重訂
+
+    async def test_quote_flows_after_retry_success(self) -> None:
+        src = _FlakySource({"TC.F.CME.NQ.HOT": 1})
+        clock = _Clock()
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=clock, resub_interval_secs=0.01
+        )
+        await eng.start()
+        try:
+            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+            assert src.cb is not None
+            src.cb(_quote("TC.F.CME.NQ.HOT", 27_000_000, 27_002_000))
+            await asyncio.sleep(0)
+            eng.tick_once()
+            assert eng.state()["legs"]["NQ"]["mid"] == 27_001_000
+        finally:
+            await eng.close()
+
+    async def test_all_success_leaves_no_retry_task(self) -> None:
+        src = _FlakySource()
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+        )
+        await eng.start()
+        try:
+            await asyncio.sleep(0.05)  # 5 個間隔
+            # 訂閱全成功時行為與修復前完全相同(SC-4);不看 `asyncio.all_tasks()` 數量 ——
+            # start() 本來就會建 tick / backfill 兩個 task
+            assert eng._resub_task is None
+            assert sorted(src.attempts) == ["TC.F.CME.NQ.HOT", "TC.F.TWF.SXF.HOT"]
+        finally:
+            await eng.close()
+
+    async def test_close_stops_retry_loop(self) -> None:
+        src = _FlakySource({"TC.F.CME.NQ.HOT": 10_000, "TC.F.TWF.SXF.HOT": 10_000})
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+        )
+        await eng.start()
+        await _wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
+        await eng.close()
+        n = len(src.attempts)
+        await asyncio.sleep(0.05)  # 5 個間隔
+        assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
+
+    async def test_base_leg_never_subscribed_by_retry(self) -> None:
+        """白名單 1:base 腿(futures_engine 來源)永不 subscribe_raw。
+
+        重試佇列只收 `tc4_legs()` 的腿 —— base 腿本來就不進 `_subscribe_all` 迭代,
+        所以「失敗腿含 base」不可構造;這條鎖的是「重試迴圈不得自己去掃全部腿」。
+        """
+        src = _FlakySource({"TC.F.CME.NQ.HOT": 10_000})
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+        )
+        await eng.start()
+        try:
+            await _wait_until(lambda: src.attempts.count("TC.F.CME.NQ.HOT") >= 5)
+            assert "TC.F.TWF.TXF.HOT" not in src.attempts
+            assert "TC.F.TWF.TXF.HOT" not in src.subscribed
         finally:
             await eng.close()
 
