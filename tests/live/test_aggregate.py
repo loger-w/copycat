@@ -252,12 +252,22 @@ class TestContractsDetail:
         ]
 
     def test_last_price_is_latest_trade(self) -> None:
-        """SC-1:同一合約多筆成交 → last_price 取時序最後一筆(不是最高/最低/首筆)。"""
+        """SC-1:同一合約多筆成交 → last_price 取**抵達序**最後一筆,既非最高也非最低。
+
+        構造刻意讓最後一筆(99)夾在 100 與 97.5 之間 —— max() / min() / 首筆 三種
+        寫錯法都會被這條抓到(原構造 100 → 97.5 排除不了 min())。
+
+        **時序保證只在 backfill 路徑**(排序後才是時序,見
+        `test_backfill_last_price_follows_time_order_not_input_order`):live 的 `route`
+        根本不讀 `precise_time`,拿到什麼順序就記什麼順序 —— 故此處不放 `t=` 參數,
+        以免讀者誤以為 live 端有時序保證。
+        """
         agg = make_agg()
-        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=2, t=1))
-        agg.route(tick(C44000.symbol, price=97_500, qty=1, bid=97_000, ask=98_000, cum=3, t=2))
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=2))
+        agg.route(tick(C44000.symbol, price=97_500, qty=1, bid=97_000, ask=98_000, cum=3))
+        agg.route(tick(C44000.symbol, price=99_000, qty=1, bid=98_000, ask=100_000, cum=4))
         snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
-        assert snap["contracts"][0]["last_price"] == 97.5
+        assert snap["contracts"][0]["last_price"] == 99.0
 
     def test_zero_price_tick_does_not_overwrite_last_price(self) -> None:
         """S-2:`0` 不是價格(CLAUDE.md §8 鎖停市價佇列同款)—— 不得蓋掉真實現價。
