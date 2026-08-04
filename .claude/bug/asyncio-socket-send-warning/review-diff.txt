@@ -1,0 +1,491 @@
+﻿diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 39812db..688a927 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -27,7 +27,7 @@ from copycat.server import build_info
+ from copycat.server.audit import AuditWriteError
+ from copycat.corr_config import load_config as load_corr_config
+ from copycat.server.capital_api import register_capital
+-from copycat.server.ws import WsBroadcaster
++from copycat.server.ws import WsBroadcaster, relay
+ from copycat.server.corr_engine import CorrelationEngine, CorrSource
+ from copycat.server.engine import EngineRuntime, QuoteSource
+ from copycat.server.futures_engine import FuturesEngine, FuturesSource
+@@ -521,8 +521,7 @@ def create_app(
+         await websocket.accept()
+         try:
+             await websocket.send_json(runtime.latest_snapshot())
+-            async for snap in runtime.snapshots():
+-                await websocket.send_json(snap)
++            await relay(websocket, runtime.snapshots())
+         except WebSocketDisconnect:
+             return
+ 
+@@ -719,8 +718,7 @@ def create_app(
+         try:
+             # 先送當前快照:client 不必等到下一個 tick 才有畫面
+             await websocket.send_json(corr.state())
+-            async for msg in corr_ws.stream():
+-                await websocket.send_json(msg)
++            await relay(websocket, corr_ws.stream())
+         except WebSocketDisconnect:
+             return
+ 
+@@ -743,8 +741,7 @@ def create_app(
+         try:
+             # 首則送全量 snapshot;之後每秒只送當前分鐘的 delta(全量每秒推 = 每分鐘數 MB)
+             await websocket.send_json(corr.river_snapshot())
+-            async for msg in river_ws.stream():
+-                await websocket.send_json(msg)
++            await relay(websocket, river_ws.stream())
+         except WebSocketDisconnect:
+             return
+ 
+@@ -756,8 +753,7 @@ def create_app(
+             await websocket.close()
+             return
+         try:
+-            async for msg in index.stream():
+-                await websocket.send_json(msg)
++            await relay(websocket, index.stream())
+         except WebSocketDisconnect:
+             return
+ 
+@@ -769,8 +765,7 @@ def create_app(
+             await websocket.close()
+             return
+         try:
+-            async for msg in stock.stream():
+-                await websocket.send_json(msg)
++            await relay(websocket, stock.stream())
+         except WebSocketDisconnect:
+             return
+ 
+diff --git a/copycat/server/capital_api.py b/copycat/server/capital_api.py
+index 2bbb7b8..ba6761a 100644
+--- a/copycat/server/capital_api.py
++++ b/copycat/server/capital_api.py
+@@ -15,12 +15,11 @@
+ 
+ from __future__ import annotations
+ 
+-import asyncio
+ import dataclasses
+ import logging
+ from typing import Literal
+ 
+-from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
++from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket
+ from fastapi.responses import JSONResponse
+ from pydantic import BaseModel
+ 
+@@ -39,7 +38,7 @@ from copycat.capital.models import (
+     StockOrderRequest,
+ )
+ from copycat.server.futures_engine import FuturesEngine
+-from copycat.server.ws import WsBroadcaster
++from copycat.server.ws import WsBroadcaster, relay
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -221,53 +220,6 @@ async def capital_position_close(request: Request, body: PositionCloseBody) -> d
+     return dataclasses.asdict(await client.close_position(req))
+ 
+ 
+-def _consume_ws_task(task: "asyncio.Task[None]") -> None:
+-    """被取消的 send/recv 任務收尾:消費例外避免 unretrieved warning;
+-    task 取消同時會關閉 stream() generator → 該 client queue 除名。"""
+-    if task.cancelled():
+-        return
+-    exc = task.exception()
+-    if exc is not None and not isinstance(exc, WebSocketDisconnect):
+-        logger.warning("ws 任務收尾例外(已忽略): %r", exc)
+-
+-
+-async def _stream_to_ws(websocket: WebSocket, broadcaster: WsBroadcaster) -> None:
+-    """broadcast → WS 送出,並行 receive 偵測 client 斷線(review B3)。
+-
+-    無推播流量時 send 側永遠掛在 queue.get,察覺不到 client 斷線 →
+-    per-client queue 洩漏;receive task 在斷線時 raise WebSocketDisconnect 收尾。
+-    收尾路徑只做同步 cancel(不 await 子任務):endpoint 本身可能被外層
+-    cancel scope 取消(TestClient / server shutdown),收尾中再 await 會吸收
+-    重投的取消訊號,讓 task 以 cancelled 終結。
+-    """
+-
+-    async def _send() -> None:
+-        async for msg in broadcaster.stream():
+-            await websocket.send_json(msg)
+-
+-    async def _recv() -> None:
+-        while True:
+-            await websocket.receive_text()  # client 訊息忽略;斷線 raise 收尾
+-
+-    send_task = asyncio.ensure_future(_send())
+-    recv_task = asyncio.ensure_future(_recv())
+-    done: set[asyncio.Task[None]] = set()
+-    try:
+-        done, _pending = await asyncio.wait(
+-            {send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED
+-        )
+-    finally:
+-        for t in (send_task, recv_task):
+-            if not t.done():
+-                t.cancel()
+-                t.add_done_callback(_consume_ws_task)
+-    for t in done:
+-        if not t.cancelled():
+-            exc = t.exception()
+-            if exc is not None and not isinstance(exc, WebSocketDisconnect):
+-                raise exc
+-
+-
+ @router.websocket("/ws/capital")
+ async def ws_capital(websocket: WebSocket) -> None:
+     client: CapitalClient | None = websocket.app.state.capital
+@@ -276,7 +228,7 @@ async def ws_capital(websocket: WebSocket) -> None:
+         await websocket.close()
+         return
+     broadcaster: WsBroadcaster = websocket.app.state.capital_ws
+-    await _stream_to_ws(websocket, broadcaster)
++    await relay(websocket, broadcaster.stream())
+ 
+ 
+ # ---- futures 行情(SC-8;吃 app.state.futures)----
+@@ -298,7 +250,7 @@ async def ws_futures(websocket: WebSocket) -> None:
+         await websocket.close()
+         return
+     broadcaster: WsBroadcaster = websocket.app.state.futures_ws
+-    await _stream_to_ws(websocket, broadcaster)
++    await relay(websocket, broadcaster.stream())
+ 
+ 
+ # ---------------------------------------------------------------------------
+diff --git a/copycat/server/ws.py b/copycat/server/ws.py
+index c2e9d8c..c33e385 100644
+--- a/copycat/server/ws.py
++++ b/copycat/server/ws.py
+@@ -1,14 +1,23 @@
+-"""WS fanout 共用層:per-client 有界 queue。
++"""WS fanout 共用層:per-client 有界 queue + stream→WS 轉送(含斷線偵測)。
+ 
+ capital / futures / corr / river / stock / index 六路 WS 原本各抄一份同樣的
+ 「滿了丟最舊、保最新」邏輯(B-D5)。住 capital_api 會讓 stock_engine / index_engine
+ 逆向依賴 route 層,故獨立成檔。
++
++`relay` 是這六路唯一的送出路徑:send-only 迴圈察覺不到 client 斷線(uvicorn 的
++`connection_lost` 只把 `websocket.disconnect` 放進 receive queue,不設旗標),
++必須並行 receive 才收得到 —— 沒有它就是殭屍迴圈對死 transport 連寫。
+ """
+ 
+ from __future__ import annotations
+ 
+ import asyncio
+-from typing import AsyncGenerator, Iterable
++import logging
++from typing import Any, AsyncGenerator, Iterable, Mapping, Protocol
++
++from fastapi import WebSocketDisconnect
++
++logger = logging.getLogger(__name__)
+ 
+ #: 預設 per-client queue 上限(capital/futures/corr/river 沿用;engine 層各自傳值)
+ CLIENT_QUEUE_MAX = 500
+@@ -58,3 +67,71 @@ class WsBroadcaster:
+                 self._clients.discard(queue)
+ 
+         return _gen()
++
++
++class WsConnection(Protocol):
++    """`relay` 用到的 WebSocket 面。
++
++    用 Protocol 不用 `fastapi.WebSocket` 具體型別:relay 的合約只是「送 JSON + 收訊息」,
++    測試注入 fake 才能不起真 server(engine 層 QuoteSource / StockSource 同款)。
++    """
++
++    async def send_json(self, data: Any) -> None: ...
++
++    async def receive(self) -> Mapping[str, Any]: ...
++
++
++def _consume_ws_task(task: asyncio.Task[None]) -> None:
++    """被取消的 send/recv 任務收尾:消費例外避免 unretrieved warning;
++    task 取消同時會關閉 stream() generator → 該 client queue 除名。"""
++    if task.cancelled():
++        return
++    exc = task.exception()
++    if exc is not None and not isinstance(exc, WebSocketDisconnect):
++        logger.warning("ws 任務收尾例外(已忽略): %r", exc)
++
++
++async def relay(websocket: WsConnection, stream: AsyncGenerator[dict, None]) -> None:
++    """stream → WS 送出,並行 receive 偵測 client 斷線(review B3)。
++
++    無推播流量時 send 側永遠掛在 queue.get,察覺不到 client 斷線 →
++    per-client queue 洩漏;receive task 在斷線時收到 `websocket.disconnect` 收尾。
++    收尾路徑只做同步 cancel(不 await 子任務):endpoint 本身可能被外層
++    cancel scope 取消(TestClient / server shutdown),收尾中再 await 會吸收
++    重投的取消訊號,讓 task 以 cancelled 終結。
++
++    突斷(TCP RST,無 close frame)也走同一條:uvicorn 的 `connection_lost` 只把
++    disconnect 訊息放進 receive queue,send 側的 `transport.write()` 不會 raise
++    (sans-io state 仍 OPEN)—— 不 receive 就永遠不知道對面已經死了。
++    """
++
++    async def _send() -> None:
++        async for msg in stream:
++            await websocket.send_json(msg)
++
++    async def _recv() -> None:
++        while True:
++            message = await websocket.receive()
++            # client 送來的訊息一律忽略;收到 disconnect 即結束 → FIRST_COMPLETED 收尾。
++            # 用 `receive()` 不用 `receive_text()`:斷線在此是回傳值不是例外,而且
++            # client 送 binary frame 不該被當成錯誤炸掉整條連線。
++            if message.get("type") == "websocket.disconnect":
++                return
++
++    send_task = asyncio.ensure_future(_send())
++    recv_task = asyncio.ensure_future(_recv())
++    done: set[asyncio.Task[None]] = set()
++    try:
++        done, _pending = await asyncio.wait(
++            {send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED
++        )
++    finally:
++        for t in (send_task, recv_task):
++            if not t.done():
++                t.cancel()
++                t.add_done_callback(_consume_ws_task)
++    for t in done:
++        if not t.cancelled():
++            exc = t.exception()
++            if exc is not None and not isinstance(exc, WebSocketDisconnect):
++                raise exc
+diff --git a/tests/server/test_ws_disconnect.py b/tests/server/test_ws_disconnect.py
+new file mode 100644
+index 0000000..09f046b
+--- /dev/null
++++ b/tests/server/test_ws_disconnect.py
+@@ -0,0 +1,221 @@
++"""WS client 突斷(TCP RST,無 close frame)後不得對死 transport 續寫。
++
++行為合約:uvicorn 的 `connection_lost` 只把 `websocket.disconnect` 放進 receive queue,
++不設任何旗標;send-only 迴圈(`async for … await send_json`)因此永遠察覺不到斷線 →
++每個 tick 都對已死的 asyncio transport 寫一次,第 6 次起 asyncio 每寫一次就 log 一則
++`socket.send() raised exception.`(`LOG_THRESHOLD_FOR_CONNLOST_WRITES = 5`),而且殭屍
++廣播迴圈永不退場 → 警告無限累積。
++
++整合測試直接編碼那條鏈路(真 uvicorn + raw socket RST);`relay` 的單元測試則釘住
++收尾語意(receive watcher 勝出 → send 側被取消 → stream 的 finally 走到 = queue 除名)。
++"""
++
++from __future__ import annotations
++
++import asyncio
++import base64
++import logging
++import os
++import socket
++import struct
++import threading
++import time
++from typing import AsyncGenerator, Callable
++
++import pytest
++import uvicorn
++
++from copycat.live.models import SeriesInfo, Tick
++from copycat.server.app import create_app
++from copycat.server.ws import relay
++from tests.helpers.fake_txo import C, FakeTxoSource
++
++#: asyncio 對「connection lost 後仍寫入」的警告字串(stdlib selector/proactor 兩實作同字)
++CONNLOST_WARNING = "socket.send() raised exception."
++
++
++class _TickingSource(FakeTxoSource):
++    """捕捉 EngineRuntime 的 on_tick,讓測試執行緒能持續推 tick(TC4 亦由他執行緒推)。"""
++
++    def __init__(self) -> None:
++        self.on_tick: Callable[[Tick], None] | None = None
++
++    def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
++        self.on_tick = on_tick
++
++
++def _tick(cum: int) -> Tick:
++    return Tick(
++        symbol=C.symbol,
++        precise_time=cum,
++        price_millipts=23_500_000,
++        qty=1,
++        bid_millipts=23_499_000,
++        ask_millipts=23_500_000,
++        cum_volume=cum,  # 遞增 = 聚合層去重主鍵,每筆都算新成交
++    )
++
++
++class _Collector(logging.Handler):
++    def __init__(self) -> None:
++        super().__init__()
++        self.records: list[logging.LogRecord] = []
++
++    def emit(self, record: logging.LogRecord) -> None:
++        self.records.append(record)
++
++    def connlost_count(self) -> int:
++        return sum(1 for r in self.records if CONNLOST_WARNING in r.getMessage())
++
++
++def _ws_handshake(port: int, path: str) -> socket.socket:
++    """手寫 HTTP upgrade:要的是能發 RST 的裸 socket,任何 WS client library 都會替我們
++    好好地送 close frame —— 那正是本 bug 不會發生的路徑。"""
++    sock = socket.create_connection(("127.0.0.1", port), timeout=5)
++    key = base64.b64encode(os.urandom(16)).decode()
++    request = (
++        f"GET {path} HTTP/1.1\r\n"
++        f"Host: 127.0.0.1:{port}\r\n"
++        "Upgrade: websocket\r\n"
++        "Connection: Upgrade\r\n"
++        f"Sec-WebSocket-Key: {key}\r\n"
++        "Sec-WebSocket-Version: 13\r\n"
++        "\r\n"
++    )
++    sock.sendall(request.encode())
++    buf = b""
++    while b"\r\n\r\n" not in buf:
++        chunk = sock.recv(4096)
++        if not chunk:
++            raise AssertionError("握手期間連線被關閉")
++        buf += chunk
++    assert b" 101 " in buf.split(b"\r\n", 1)[0], buf[:200]
++    return sock
++
++
++def _abort(sock: socket.socket) -> None:
++    """SO_LINGER=(on, 0) → close 發 RST 而非 FIN:模擬分頁被殺 / 網路斷,無 close frame。"""
++    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
++    sock.close()
++
++
++class TestAbruptDisconnect:
++    def test_no_write_to_dead_transport(self) -> None:
++        source = _TickingSource()
++        app = create_app(source, throttle_secs=0.02)
++        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", ws="auto")
++        server = uvicorn.Server(config)
++        thread = threading.Thread(target=server.run, daemon=True)
++        thread.start()
++
++        stop = threading.Event()
++
++        def _pump() -> None:
++            cum = 0
++            while not stop.is_set():
++                cum += 1
++                callback = source.on_tick
++                if callback is not None:
++                    callback(_tick(cum))
++                stop.wait(0.02)
++
++        pump = threading.Thread(target=_pump, daemon=True)
++        collector = _Collector()
++        asyncio_logger = logging.getLogger("asyncio")
++        asyncio_logger.addHandler(collector)
++        try:
++            deadline = time.monotonic() + 10
++            while not server.started:
++                if time.monotonic() > deadline:
++                    raise AssertionError("uvicorn 未在時限內啟動")
++                time.sleep(0.01)
++            port = int(server.servers[0].sockets[0].getsockname()[1])
++
++            sock = _ws_handshake(port, "/ws/txo-pnl")
++            pump.start()
++            sock.settimeout(5)
++            assert sock.recv(4096), "連線後應收到至少一則 snapshot frame"
++
++            _abort(sock)
++            # 斷線後仍持續推 tick ≥1.5s:0.02s cadence 遠超 asyncio 的 5 次門檻,
++            # 未修時必然累積警告;修好後 watcher 毫秒級收尾,殘餘寫入不到門檻。
++            time.sleep(1.5)
++
++            count = collector.connlost_count()
++            assert count == 0, f"client 突斷後仍對死 transport 寫入 {count} 次(asyncio 警告)"
++        finally:
++            stop.set()
++            if pump.is_alive():
++                pump.join(timeout=5)
++            asyncio_logger.removeHandler(collector)
++            server.should_exit = True
++            thread.join(timeout=5)
++
++
++class _FakeWebSocket:
++    """只實作 relay 用到的兩個方法;`receive` 由 future 控制何時「斷線」。"""
++
++    def __init__(self) -> None:
++        self.sent: list[dict] = []
++        self.disconnected: asyncio.Future[dict] = asyncio.Future()
++
++    async def send_json(self, data: dict) -> None:
++        self.sent.append(data)
++
++    async def receive(self) -> dict:
++        return await self.disconnected
++
++    def disconnect(self) -> None:
++        if not self.disconnected.done():
++            self.disconnected.set_result({"type": "websocket.disconnect", "code": 1006})
++
++
++async def _spin(times: int = 5) -> None:
++    """讓被取消的子任務跑完 finally(同步 cancel 不 await,需要 loop 再轉幾圈)。"""
++    for _ in range(times):
++        await asyncio.sleep(0)
++
++
++class TestRelay:
++    async def test_disconnect_stops_stream_and_runs_cleanup(self) -> None:
++        websocket = _FakeWebSocket()
++        closed = False
++
++        async def _never_ending() -> AsyncGenerator[dict, None]:
++            nonlocal closed
++            try:
++                while True:
++                    await asyncio.sleep(3600)
++                    yield {}
++            finally:
++                closed = True
++
++        websocket.disconnect()  # client 已斷:relay 不該掛在永不產出的 stream 上
++        await asyncio.wait_for(relay(websocket, _never_ending()), timeout=2)
++        await _spin()
++        assert closed, "send 側被取消後,stream 的 finally(client queue 除名)必須走到"
++
++    async def test_forwards_messages_until_disconnect(self) -> None:
++        websocket = _FakeWebSocket()
++        gate = asyncio.Event()
++
++        async def _three_then_wait() -> AsyncGenerator[dict, None]:
++            for i in range(3):
++                yield {"n": i}
++            gate.set()
++            await asyncio.sleep(3600)
++
++        task = asyncio.ensure_future(relay(websocket, _three_then_wait()))
++        await asyncio.wait_for(gate.wait(), timeout=2)
++        assert websocket.sent == [{"n": 0}, {"n": 1}, {"n": 2}]
++        assert not task.done(), "receive 仍 pending 時 relay 不該提前收尾"
++
++        websocket.disconnect()
++        await asyncio.wait_for(task, timeout=2)
++
++
++@pytest.mark.parametrize("path", ["/ws/txo-pnl"])
++def test_paths_exist(path: str) -> None:
++    """route 表健檢:整合測試若因路徑打錯而握手失敗,錯誤訊息會很難讀。"""
++    app = create_app(FakeTxoSource())
++    assert any(getattr(r, "path", None) == path for r in app.routes)

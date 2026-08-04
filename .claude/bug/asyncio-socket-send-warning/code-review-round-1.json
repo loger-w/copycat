@@ -1,0 +1,51 @@
+{
+  "round": 1,
+  "stage": "closing-review (branch-lifecycle C 節, /bug 一輪 medium)",
+  "diff": "a012ee5..9bc5e58 (review-diff.txt)",
+  "lenses": [
+    {
+      "lens": "asyncio 併發正確性",
+      "model": "opus",
+      "findings": [],
+      "notes": "查證過的零:ClientDisconnected 是 OSError 子類 → starlette 轉 WebSocketDisconnect,relay 過濾接得住;uvicorn sansio writable 恆 set(無 pause_writing)→ send_json 非懸掛點,cancel 必打進 generator;asyncio.wait resume 時以 f.done() 重新分割,例外不漏;publish 呼叫點皆 call_soon_threadsafe,_clients 縮小無跨執行緒迭代風險。附註:若未來 uvicorn 加回 write flow control,「懸在 send_json 的 generator 遺棄」路徑變可達。"
+    },
+    {
+      "lens": "測試涵蓋 / flakiness",
+      "model": "opus",
+      "findings": [
+        {
+          "id": "T1", "severity": "P1",
+          "claim": "整合測試無正向對照:tick→snapshot 鏈靜默斷掉時 connlost_count()==0 照樣綠(vacuous)",
+          "evidence": "mutation 實跑:subscribe 不捕捉 on_tick → PASS(與修好無法區分);relay 換回 send-only → 44 則警告 FAIL",
+          "disposition": "accepted",
+          "resolution": "abort 前加訊息流正向斷言(pump 啟動後收到多則 frame 才准 abort)"
+        },
+        {
+          "id": "T2", "severity": "P2",
+          "claim": "未斷言殭屍迴圈退場;thread.join 逾時被丟棄(部分修復可僥倖綠)",
+          "disposition": "accepted",
+          "resolution": "finally 之後補 assert not thread.is_alive()"
+        },
+        {
+          "id": "T3", "severity": "P2",
+          "claim": "relay × 真 WsBroadcaster.stream() 的 client queue 除名組合無任何斷言",
+          "disposition": "accepted",
+          "resolution": "TestRelay 補組合測試:disconnect → relay 收尾 → b._clients 歸空"
+        },
+        {
+          "id": "T4", "severity": "P2",
+          "claim": "test_paths_exist 零資訊;其餘六路無突斷回歸守衛",
+          "disposition": "partial",
+          "resolution": "刪 test_paths_exist(T1 正向對照後路徑打錯必紅);/ws/futures 進 parametrize 拒:需 FuturesSource fake + trade_source 啟動旗標佈線,P2 邊際保護不抵複雜度,記 docs/next-time.md"
+        },
+        {
+          "id": "T5", "severity": "P2",
+          "claim": "relay 例外傳遞分支零覆蓋(吞例外 mutation 全綠)",
+          "disposition": "accepted",
+          "resolution": "TestRelay 補:非 WebSocketDisconnect 例外 re-raise;WebSocketDisconnect 吞掉"
+        }
+      ]
+    }
+  ],
+  "outcome": "P0=0 P1=1(accepted)P2=4(3 accepted / 1 partial);修復 = 純測試補強一 commit"
+}
