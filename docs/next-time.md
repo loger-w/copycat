@@ -1,20 +1,15 @@
 
 ## 2026-08-04(stock-signals Phase 6 沉澱)
 
-- [ ] 🔴 **既有 bug:有 WS client 連著時 server graceful shutdown 卡死**(`Waiting for
-  background tasks to complete.` 永久停住,只能 taskkill)。根因候選:`ws_stock` 等
-  WS route 形狀為 `async for msg in stream(): await send_json(msg)`,**從不 receive()**
-  → 對端斷線要等下一次 send 失敗才發現,收攤時無新訊息可送就永遠等。無 client 連著
-  時 shutdown 乾淨(對照實測)。`git diff master...HEAD -- copycat/server/app.py` WS
-  route 零改動,非 stock-signals 回歸。修法候選:每條 WS route 併一個 receive task
-  (gather, FIRST_COMPLETED)偵測斷線。
-  - **〔2026-08-04 查證:根因已被 relay 修掉,降級為補回歸測試〕**現版 7 條 WS route
-    (app.py 5 + capital_api.py 2)全走 `ws.py` relay,零裸 `async for … send_json`
-    殘留;relay 本身併 receive task + FIRST_COMPLETED(ws.py:112-127)= 上述修法候選
-    同形。uvicorn 兩種 websocket 實作 shutdown 都會餵 `websocket.disconnect` 給
-    receive → 依 code 判斷關機收得掉。缺口只剩證據:「client 連著時關機」無直接
-    回歸測試(test_ws_disconnect.py:177 是 client 先 RST 斷線後才 should_exit,
-    場景不同)。剩餘工作 = 真環境重現一次確認 + 補該場景整合回歸,完成即打勾。
+- [x] ~~🔴 **既有 bug:有 WS client 連著時 server graceful shutdown 卡死**~~
+  **2026-08-04 chore/ws-test-consolidation 關閉**:根因(send-only 迴圈不 receive)已由
+  relay 修掉(同日稍早查證確認,7 條 route 全走 ws.py relay);本輪補上缺的證據兩件 —
+  (a) 真環境重現確認:真 uvicorn + 真 socket 保持連線下 `should_exit` → **0.28s 關機
+  乾淨**(`TestGracefulShutdownWithLiveClient`),負向對照(monkeypatch relay 回
+  send-only)同測試紅、server 8s 關不掉;(b) 整合回歸
+  `test_shutdown_completes_while_client_stays_connected` 已入
+  `tests/server/test_ws_disconnect.py`。prod 級(真 TC4)關機驗證依「夜盤不重啟」
+  紀律待下次自然重啟窗口,回歸測試已足以守住此 bug 形狀。
 - [ ] 驗證 harness(fake server 腳本)應比照 `tests/conftest.py` 中和 CAPITAL_* /
   DISCORD_*:本輪 harness 首啟以真憑證打了一次群益登入(失敗降級零狀態改變,但
   不該發生)。寫任何「起真 app 的驗證腳本」前先 `CAPITAL_USER_ID=""` 這類壓制。
@@ -528,7 +523,7 @@
 
 ## 2026-08-04(asyncio-socket-send-warning 收尾留尾巴)
 
-- [ ] WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路(review T4 拒的那半):broadcaster 路由(`/ws/futures` 等)要進 parametrize 需 FuturesSource fake + `futures_source` 顯式佈線(2026-08-04 更正:`trade_source` 啟動旗標已隨舊 trade 路刪除,create_app 現收 `futures_source=DEFAULT_FUTURES` 或 fake 實例);共用 relay 已有單元守衛,補整合覆蓋時一併考慮。〔2026-08-04 查證:fake source 散落各測試檔且重複(FakeFuturesSource ×2:test_capital_api.py:48-70 / test_market_routes.py:85;FakeIndexSource ×3:test_index_engine.py:13 / test_index_routes.py:14 / test_market_routes.py:43;FakeCorrSource ×2:test_corr_routes.py:13 / test_river_routes.py:13;FakeStockSource ×1:test_stock_routes.py:13 — 增量 review F4 校正計數),前置 = 先提升 tests/helpers/ 再以 `(path, app_kwargs, pump_fn)` 三元組 parametrize;futures 路由需顯式傳 fake(create_app `futures_source` 預設 None = 零期貨引擎,make_client 樣板 test_capital_api.py:132-149;F3 校正:原寫 trade_source,該參數已刪);真 uvicorn 樣板 test_ws_disconnect.py:105-133〕
+- [x] ~~WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路:broadcaster 路由要進 parametrize 需 fake source 收斂 tests/helpers/ + 顯式佈線~~ **2026-08-04 chore/ws-test-consolidation 完成**:fake source 已收斂 `tests/helpers/fake_sources.py`(FakeFutures/Index/Corr/Stock 聯集定義,8 個消費檔改 import,特化變體留原檔);突斷 parametrize 六路全上(/ws/futures /ws/index /ws/stock 端到端 pump;/ws/corr /ws/river 引擎層 `tick_once` pump — 1 Hz 廣播推不滿 asyncio 5 次門檻故不走 source 層,讀 `engine._loop` private 有註明;/ws/capital 走 app.py 注入的 broadcast 邊界),零排除路由,mutation 驗證(relay 換 send-only)六路全紅非 vacuous。
 - [ ] prod server 啟動 log 落檔慣例不一致:00:54 的 instance 有 `logs/server-*.log`,09:26 重啟的沒有(console-only)— 這次 11:06 的 asyncio warning 差點無檔案證據可查;考慮統一啟動包裝(固定 stdout 轉存 logs/)
 - [ ] `relay` 收尾假設 uvicorn sansio 的 `writable` 恆 set(無 pause_writing → send_json 非懸掛點、cancel 必打進 generator):若未來 uvicorn 加回 write flow control,「懸在 send_json 的 generator 遺棄」路徑變可達,`_consume_ws_task` docstring 的「取消同時關閉 generator」不再成立(review async lens 附註)
 
@@ -538,3 +533,9 @@
 - [ ] `frontend/src/lib/trade-text.ts` 瘦身候選(review F3):`TRADE_ERROR_TEXT` 有 6 個無 producer 的 dead key(TOUCHANCE_DOWN / TRADE_NOT_READY / LIVE_DISABLED / CONFIRM_REQUIRED / PREVIEW_EXPIRED / SYMBOL_NOT_ALLOWED,一對一對應已刪的 _TRADE_ERROR_MAP)+ `orderStatusText` / `orderSideText` 已 test-only(唯一 production consumer 是被刪的 OrdersList/OrderConfirm)。**⚠ `INVALID_ORDER` 必留**(capital_api 仍回它);`tradeErrorText` / `shortSymbol` 是 useCapital 等現行 consumer 在用,不可整檔刪。`trade-text.test.ts:7-8` 對 dead key 的斷言一併清。
 - [ ] `tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` 是既有 timing flake(0.5s 收 frame 窗,全套負載下間歇紅;2026-08-04 雙跑對照:全套 1 failed/1620 → 重跑 1621 passed、單檔 6 passed)。放寬候選:時間窗改 deadline 迴圈。與 remove-tc4-trade-path 零因果。
 - [ ] 下次自然重啟 prod server 時,目視 futures / corr / river 三面板有值 —— sentinel 解耦(`__main__` 顯式傳 DEFAULT_FUTURES/DEFAULT_CORR)的 real-env 確認(自動化已由 `test_main_wiring.py` 守;2026-08-04 依「盤中/夜盤不重啟」紀律未做重啟驗證)。
+
+## 2026-08-04(ws-test-consolidation 收尾沉澱)
+
+- [ ] `test_no_write_to_dead_transport` 其實有**兩個**獨立 flake 源(本輪實測):(a) 既知的 0.5s 固定收 frame 窗(全套負載下漏窗);(b) 新發現 — `_ws_handshake` 讀到 `\r\n\r\n` 即停,101 回應與 server 第一則 frame 落同一 TCP segment 時該 frame 被握手緩衝吞掉 → `sock.recv` 等到 5s timeout,實測 6 跑掛 1(≈17%)。新測試已用 `_ws_handshake_keep_rest`(回傳殘留位元組)免疫;修既有測試需動 `assert sock.recv(4096)` 斷言,依紀律留待專輪 — 修時兩個源一起收(窗改 deadline 迴圈 + 換 keep_rest)。
+- [ ] `tests/conftest.py` 只中和 CAPITAL_* 與 DISCORD_BOT_TOKEN,**沒中和 `DISCORD_WEBHOOK_URL`** — 任何建 SignalHub 的測試(如 /ws/stock 整合路)在開發機 shell / .env 有該值時會真的對外發 Discord 訊息。本輪在該 case builder 內單點 monkeypatch 擋掉;建議升級成 conftest 全域中和(與既有 delenv CAPITAL_* 同型)。
+- [ ] corr/river 兩路突斷測試讀 `engine._loop` private(engine 無公開 loop 取用面;repo 已有 `broadcaster._clients` 先例):若日後 `create_app` 透出 `corr_tick_secs`(現寫死 1.0 不經參數),兩路可改回純 source-driven 端到端 pump,一併移除 private 讀取。
