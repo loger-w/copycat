@@ -120,27 +120,30 @@ class TestCdpCross:
         assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []
 
     def test_rearm_not_released_within_five_ticks(self) -> None:
-        """79.95 距 AH 0.05 元 < 0.5 元門檻 → suppressed 不解除(cooldown 已過亦不發)。"""
+        """AH=80.00 元 → tick 0.1 元、rearm 門檻 0.5 元;79.95 / 80.05 都在門檻內 →
+        suppressed 不解除,兩個方向的重觸皆不發(cooldown 已過,只剩 rearm 擋著)。"""
         clock = _Clock()
         det = _det(clock)
         det.set_basis("2330", _BASIS)
         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
         assert len(det.evaluate("2330", _tick(80_500), _ctx(), _ALL)) == 1
-        clock.advance(700)  # cooldown(600s)已過,只剩 rearm 擋著
-        assert det.evaluate("2330", _tick(79_950), _ctx(), _ALL) == []
-        assert det.evaluate("2330", _tick(80_500), _ctx(), _ALL) == []
+        clock.advance(700)
+        assert det.evaluate("2330", _tick(79_950), _ctx(), _ALL) == []  # 跌破,未解除
+        assert det.evaluate("2330", _tick(80_050), _ctx(), _ALL) == []  # 再穿回,仍未解除
 
     def test_rearm_released_at_five_ticks(self) -> None:
-        """79.50 距 AH 0.5 元 = 5 × 0.1 元 → 解除,再穿越發第 2 次。"""
+        """79.50 距 AH 0.5 元 = 5 × 0.1 元 → 解除。解除在同一筆 tick 生效,
+        故該筆跌破 AH 照發(方向過濾是獨立一層,from_above 本身就是有效訊號)。"""
         clock = _Clock()
         det = _det(clock)
         det.set_basis("2330", _BASIS)
         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
         det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
         clock.advance(700)
-        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []
-        events = det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
+        events = det.evaluate("2330", _tick(79_500), _ctx(), _ALL)
         assert len(events) == 1
+        assert events[0].levels == ("ah",)
+        assert events[0].direction == "from_above"
         assert events[0].touch_count == 2
 
     def test_cooldown_blocks_second_cross(self) -> None:
