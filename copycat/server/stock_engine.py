@@ -48,6 +48,25 @@ class StockSource(Protocol):
     def close(self) -> None: ...
 
 
+class SignalSink(Protocol):
+    """訊號層掛點(實作 = `copycat.server.signal_hub.SignalHub`;測試注入 fake)。
+
+    **全部同步方法**:engine 熱路徑不 await。例外由 hub 自己吞(`on_tick`/`on_book`
+    內已全包 try/except + log),engine 側不再包一層 —— 包兩層會讓「訊號層出錯」
+    在兩個地方各記一次,且掩蓋 hub 內的具體處理。
+    """
+
+    def on_tick(self, code: str, tick: StockTick, state: StockDayState) -> None: ...
+
+    def on_book(self, code: str, state: StockDayState) -> None: ...
+
+    def on_rollover_pending(self, new_date: str) -> None: ...
+
+    def on_rollover(self) -> None: ...
+
+    def on_watchlist(self, codes: list[str]) -> None: ...
+
+
 class StockEngine:
     def __init__(
         self,
@@ -83,7 +102,22 @@ class StockEngine:
         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
         self._pool_lock = asyncio.Lock()
+        # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
+        # 引擎本體不得因它缺席而改變行為
+        self._signal_hub: SignalSink | None = None
         self.tc4_status = "up"
+
+    @property
+    def trade_date(self) -> str:
+        """當前交易日(SignalHub 的 `trade_date_fn`)。
+
+        對外唯讀存取器而非讓 hub 讀 `_trade_date`:兩段式 rollover 期間這個值會在
+        stage2 才前進,語意由 engine 單一持有。
+        """
+        return self._trade_date
+
+    def attach_signal_hub(self, hub: SignalSink) -> None:
+        self._signal_hub = hub
 
     # ---- 生命週期 ----
 
@@ -171,6 +205,9 @@ class StockEngine:
             # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
             for code in added:
                 self._publish(self._quote_payload(code))
+            if self._signal_hub is not None:
+                # 全量替換 hub 的 membership(新增排 CDP 基準、移除逐出狀態)
+                self._signal_hub.on_watchlist(list(codes))
 
     async def set_main(self, code: str) -> None:
         async with self._pool_lock:  # CR2
@@ -244,6 +281,9 @@ class StockEngine:
         # 關機時一併被 close() 取消,且連跑兩次 rollover 不會互相覆寫掉參照
         self._tasks.append(asyncio.get_running_loop().create_task(self._resubscribe_all()))
         logger.info("rollover stage1 → %s (gen=%d)", new_date, self._generation)
+        if self._signal_hub is not None:
+            # 盤前預抓次日 CDP 基準進暫存區(stage2 只做 swap,開盤第一筆即可用)
+            self._signal_hub.on_rollover_pending(new_date)
 
     async def _resubscribe_all(self) -> None:
         """全量重掛(UNSUB→SUB 冪等,新日窗);ZMQ REQ 全程 to_thread,不佔 event loop。"""
@@ -270,6 +310,10 @@ class StockEngine:
         if self._main is not None:
             self._backfill_jobs.put_nowait((self._main, self._generation))
         logger.info("rollover stage2 → %s(首筆 %s)", self._trade_date, first_tick.code)
+        if self._signal_hub is not None:
+            # `_trade_date` 已前進、`_pending_date` 已清 → hub 的 reset_day + swap
+            # 拿到的都是新日別
+            self._signal_hub.on_rollover()
 
     async def _checkpoint_loop(self) -> None:
         import datetime as _dt
@@ -383,6 +427,10 @@ class StockEngine:
                     }
                 )
             self._dirty_watchlist.add(code)
+            if self._signal_hub is not None:
+                # 掛在 `ingest` 為真的分支內:試撮與重複 tick 已被短路,訊號層天然
+                # 不必重複判(回補重放走 `apply_backfill`,不經過這裡 — SC-5)
+                self._signal_hub.on_tick(code, tick, state)
         # 轉態補推(round4 項 4):meta 由 None → 有值 = 這一檔第一次拿到參考價;
         # 「無資料」復原同理。冷門股整天可能只有簿更新、盤後更是零成交,
         # `_dirty_watchlist` 永遠不會被加進去 → 不補推就永遠是 `-`。
@@ -391,6 +439,12 @@ class StockEngine:
             self._publish(self._quote_payload(code))
         if code == self._main:
             self._publish({"type": "book", "code": code, "bids": book.bids, "asks": book.asks})
+        # 簿路(鎖板打開的無成交觸發)掛在**函式尾端** — 兩段式 rollover 的快路徑與
+        # stage2 都在上面跑完,這裡看到的 `state` 與日別已是最終態。
+        # `_pending_date` 未清 = stage1 已觸發但新日首筆未到:此刻的簿是今日的、
+        # latch 還是昨日的,對照下去會誤發 `limit_open`(design R2-2)。
+        if self._signal_hub is not None and self._pending_date is None:
+            self._signal_hub.on_book(code, state)
 
     def _handle_stkfut(self, quote: dict) -> None:
         prod = str(quote.get("Security", ""))
