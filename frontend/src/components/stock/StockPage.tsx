@@ -95,8 +95,12 @@ export function StockPage({ code, onSelect, stream }: Props) {
                   )}
                 >
                   {fmt(last.p)}
+                  {/* font-normal 是**還原**不是新樣式:父層新加的 font-semibold 會繼承下來,
+                      % 跟著變粗是主數字放大的副作用,不在本輪 scope。 */}
                   {chg != null ? (
-                    <span data-testid="page-quote-pct" className="ml-1 text-sm">{fmtPct(chg)}</span>
+                    <span data-testid="page-quote-pct" className="ml-1 text-sm font-normal">
+                      {fmtPct(chg)}
+                    </span>
                   ) : null}
                 </span>
               ) : null}
