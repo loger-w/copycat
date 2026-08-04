@@ -8,6 +8,13 @@
   時 shutdown 乾淨(對照實測)。`git diff master...HEAD -- copycat/server/app.py` WS
   route 零改動,非 stock-signals 回歸。修法候選:每條 WS route 併一個 receive task
   (gather, FIRST_COMPLETED)偵測斷線。
+  - **〔2026-08-04 查證:根因已被 relay 修掉,降級為補回歸測試〕**現版 7 條 WS route
+    (app.py 5 + capital_api.py 2)全走 `ws.py` relay,零裸 `async for … send_json`
+    殘留;relay 本身併 receive task + FIRST_COMPLETED(ws.py:112-127)= 上述修法候選
+    同形。uvicorn 兩種 websocket 實作 shutdown 都會餵 `websocket.disconnect` 給
+    receive → 依 code 判斷關機收得掉。缺口只剩證據:「client 連著時關機」無直接
+    回歸測試(test_ws_disconnect.py:177 是 client 先 RST 斷線後才 should_exit,
+    場景不同)。剩餘工作 = 真環境重現一次確認 + 補該場景整合回歸,完成即打勾。
 - [ ] 驗證 harness(fake server 腳本)應比照 `tests/conftest.py` 中和 CAPITAL_* /
   DISCORD_*:本輪 harness 首啟以真憑證打了一次群益登入(失敗降級零狀態改變,但
   不該發生)。寫任何「起真 app 的驗證腳本」前先 `CAPITAL_USER_ID=""` 這類壓制。
@@ -54,7 +61,7 @@
 
 ## 2026-07-19(dq4-order-phase1 Phase 4 自評 P2 彙總,15 條聚類,shortSymbol/BLOCKED_REASON 已本輪吸收)
 
-- [ ] 錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:新增錯誤碼要動多處;若錯誤碼家族再擴,考慮 codegen 或 shared JSON(現況 frontend 未知碼原樣顯示 = 安全漂移)。〔2026-07-31 盤點:**「家族再擴」的條件已達成** —— `capital_api.py:345` 長出第二個 `_CAPITAL_ERROR_MAP`,這條從觀察升為可開工〕
+- [x] ~~錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:若錯誤碼家族再擴,考慮 codegen 或 shared JSON。〔2026-07-31 盤點:「家族再擴」的條件已達成 —— `capital_api.py:345` 長出第二個 `_CAPITAL_ERROR_MAP`〕~~ **2026-08-04 查證後關閉(不做)**:`capital_api.py` 全檔僅 290 行,`_CAPITAL_ERROR_MAP` 全 repo 只有定義 `:260`(3 entries)+ 消費 `:275` 各一處 —— 07-31「:345 第二個 map」是重構前的陳舊記載,升級條件不成立。且 `_TRADE_ERROR_MAP` 8 碼將隨舊 trade 路刪除消失(僅 AUDIT_WRITE_FAILED 需留存),剩餘重複量(3 個 capital 碼 + trade-text.ts 文字表)不值得 codegen;前端未知碼原樣顯示(trade-text.ts:24)= 安全漂移。
 - [ ] trade 效能微優化候選(手動單低頻,全部先不動;若未來策略自動下單高頻化再 /perf):orders_view 每 poll 重建 list、account_view 每呼叫 sorted、orderable_symbols 每呼叫重建 set
 - [ ] parse_execution_report 的 err_code 判定含 0/"0" 白名單,真值域(design §8 #3)整合實測後回頭校正
 
@@ -77,9 +84,9 @@
 
 ## 2026-07-28(capital-order Phase 3 順手清單)
 
-- [ ] 舊 TC4 trade 路刪除(server/trade.py、live/tc4_trade.py、fake_trade.py、frontend useTrade.ts/OrdersList.tsx/OrderConfirm.tsx + 測試;全部已標 @deprecated,/api/trade/* 恆 503)
+- [x] ~~舊 TC4 trade 路刪除(server/trade.py、live/tc4_trade.py、fake_trade.py、frontend useTrade.ts/OrdersList.tsx/OrderConfirm.tsx + 測試;/api/trade/* 恆 503)~~ **2026-08-04 /mod remove-tc4-trade-path 完成**:11 檔全刪、`/api/trade/*` → 404(四路 404 + 對照錨迴歸鎖)、AuditWriteError handler 改獨立註冊(+ 探針測試)。同日稍早另一 session 的查證註記所列必留物(trade_models / 兩 handler / corr 第二處 sentinel)全數命中並保留,見 `.claude/mod/remove-tc4-trade-path/`(change-spec + 兩輪 review JSON + verification)
 - [ ] TXO snapshot 補推 per-contract last_price(OrderPanel 市價估價目前缺值全鎖,限價不受影響;ContractRow.last_price 前端欄位已預留)
-- [ ] app.py futures source 啟動旗標借用 trade_source is DEFAULT_TRADE(sentinel 語意耦合已註解;__main__ 顯式傳 DEFAULT_FUTURES 後可解耦)
+- [x] ~~app.py futures source 啟動旗標借用 trade_source is DEFAULT_TRADE(sentinel 語意耦合已註解;__main__ 顯式傳 DEFAULT_FUTURES 後可解耦)~~ **2026-08-04 同輪解耦**:`__main__` 顯式傳 DEFAULT_FUTURES + DEFAULT_CORR(corr 同款借用一併解),`trade_source` 參數與 DEFAULT_TRADE sentinel 刪除;`tests/server/test_main_wiring.py` 上鎖(kwargs 整份相等)
 - [ ] 期貨平倉「範圍市價 P + IOC」候選:prod 實測 bstrPrice="P"/"M" 可送性後,可從限價貼漲跌停切回(docs/research/2026-07-28-skcom-typelib.md)
 - [ ] 選擇權閃電梯(本輪 out of scope,TXO 表單已群益化)
 - [ ] 群益回報自動重連(本輪拍板不做;做之前 store 聚合非冪等 → 必先 clear 再重播 backlog)
@@ -89,7 +96,7 @@
 
 - [ ] COM 卡死 stalled 心跳偵測(review B7):寫入 timeout 連發 / 幫浦圈停擺目前只靠 log,需心跳觀測基建(status 加 last_pump_ts + watchdog 降級);監控面非正確性,本輪 deferred
 - [ ] 期貨改價 `CorrectPriceBySeqNo` 末參數 nTradeType=0(ROD)對期權 IOC/FOK 單的影響 prod 首驗(review A6;test 沙盒未開通不可先驗)— 若群益端把改價後 TIF 重設為 ROD,IOC 單改價語意會變
-- [ ] 部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到
+- [ ] 部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到。〔2026-08-04 查證:dedupe 實際住在 `balance.py`(`dedupe_positions` :70-88 / `merge_fut_positions` :92-112,由 `client.py:348/:399` 寫入前套用),`store.py` 只是 `stock_no` 單鍵 dict(:74,:230)— 那兩個函式是單鍵設計的補償層(docstring 自承「寧少不錯」)。改造範圍 = store 鍵 + 移除 sec dedupe 補償 + 平倉 `req.key` 帶 kind(client.py:809/:824)+ REST 與前端 `CapitalPositionsList`(以 stock_no 找列)連動,含 wire 契約,比原記載大〕
 
 ## 2026-07-29(trade-layout-rework 順手清單)
 
@@ -176,7 +183,7 @@
   - **〔2026-07-31 15:47 第 7 次未重現,且涵蓋一個全新條件〕** 一台 13:20 起跑、**橫跨日盤 → 夜盤 session 轉換**的 server(先前 6 次全是單一盤別內的冷啟動),15:47 打 `/api/futures/state`:TXF/MXF/TMF **三品全有價 + 五檔俱全**,`resolved_contract=202608`,`seq=138718`。同一台的六腿江波圖與相關係數表(台指腿正是讀 `futures_engine.state()`)夜盤畫面全部有值。累計 **7/7 未重現**。判準不變:下次發生時先 grep server log 有沒有 `futures <p> subscribe ... failed`。
 - [x] ~~`test_index_engine.py::test_rollover_two_phase` 只在真實時鐘 ≥ 08:30 才會綠~~ **2026-07-30 修畢**:建構子補 `now_fn`(預設 `now_time()` = 真實牆鐘 → prod 行為零改變;`IndexEngine(` 只有 `app.py:210` 與測試兩個呼叫點)。另補 `test_rollover_gate_opens_at_0830` 覆蓋門檻本身(原本無測試 —— 唯一的時鐘讀取沒有注入點,寫不出來)。注入 00/08/10/23 皆綠;反向驗證 revert → 12 紅。
 - [x] ~~`test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`~~ **2026-07-30 修畢**:`tests/conftest.py` 出 `requires_tcpy` marker,兩個 class 整體 skip。**過程中抓到第三條(原記載未列)**:`test_check_stale_reconnect_loop_stoppable_when_app_dead` 在缺 wrapper 時是**假綠** —— 重連執行緒死於 `ModuleNotFoundError` 也滿足 `assert not worker.is_alive()`,等於沒驗到「迴圈可中斷」。雙向驗證:缺 TCPY → 3 skipped/37 passed;複製 TCPY 進 worktree → 40 passed/**0 skipped**(marker 不過度 skip)。
-- [ ] TCPY 路徑運算式 `Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"` 在 production 重複三處(`live/tc4.py:141`、`live/tc4_trade.py:91`、`data/backfill_tc4.py:104`),`tests/conftest.py` 的 `TCPY_DIR` 是第四處。本輪刻意不抽共用常數(P2 測試層 bug 不動 production 三檔)。**收斂條件**:出現第五處、或 `spikes/TCPY` 位置要改時,抽 `copycat/tc4common.py` 的 `TCPY_DIR` 單一定義,四處都引它。
+- [ ] TCPY 路徑運算式 `Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"` 在 production 重複兩處(`live/tc4.py:141`、`data/backfill_tc4.py:104`;原第三處 `live/tc4_trade.py` 已於 2026-08-04 隨舊 trade 路刪除),`tests/conftest.py` 的 `TCPY_DIR` 是第三處。當時刻意不抽共用常數(P2 測試層 bug 不動 production 檔)。**收斂條件**:出現第四處、或 `spikes/TCPY` 位置要改時,抽 `copycat/tc4common.py` 的 `TCPY_DIR` 單一定義,三處都引它。
 - [x] ~~realtime-correlation 的 SC-5 日盤補驗~~ **2026-07-30 10:24 已驗**:日盤六腿全部有中價且非 stale(TXF 40646 / TWN 3462.62 / YM 51909.5 / ES 7388.88 / NQ 27638 / SXF 10776),五對相關係數算出實值(TWN 0.590 / YM 0.147 / ES 0.336 / NQ 0.520;SXF 因整窗中價未動 → 標準差 0 正確回 null)。SC-6 同時驗過:60 秒收 61 則、間隔中位數 1.010s、seq 連續遞增。
 - [ ] realtime-correlation 訂閱窗的**反向**驗證仍未做:「沿用 `session_window` 會失效」是推論不是實證 —— 台指日盤窗(UTC 00–06)+ 夜盤窗(UTC 06–22)合計涵蓋 UTC 00–22,訂閱當下海外腿幾乎不會落窗外;真正的風險是「訂閱後跨過窗結束邊界(UTC 06 / 22)推播是否停止」。驗法:在 UTC 05:5x(台北 13:5x)前訂閱並持續監聽到 UTC 06:0x 之後,看推播是否中斷。全天窗實作本身已是防禦性選擇,此項只影響「基底 source 是否也該改」的判斷。
 - [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
@@ -268,6 +275,9 @@
   這個比較會失效成「永遠不相等」→ 悄悄退化回每次都送 PUT。要更穩就換成逐欄位比較。
   〔2026-07-31 盤點:**已擴散到三處**(`WatchlistSidebar.tsx:104` / `WatchlistManagerDialog.tsx:87`
   / `StockPage.tsx:57`),鍵序假設的曝險比原記載大〕
+  〔2026-08-04 查證:三處已收斂為單一函數 `watchlist-model.ts:25` `isSameWatchlist`
+  (三呼叫點皆 import 之),鍵序風險單點化 —「擴散」不再成立,殘項只剩「單點換
+  逐欄位比較」,價值低,降為條件觸發(真出現「永不相等 → 每次都送 PUT」退化再改)〕
 ## 2026-07-30(index-board 大盤看盤改造 順手清單)
 
 - [ ] **期指分時走勢**(本輪 out of scope):大盤頁選台指期時「分時」鈕 disabled,自動落到 1 分 K。
@@ -314,7 +324,7 @@
 ## 2026-07-31(stock-ui-round4 Phase 5 自評 P2 彙總)
 
 - [ ] **memo 是否被打穿沒有任何測試 pattern**(review F11,rejected_with_reason):`StockIntradayChart` 的 `ChartStatic` / `EnergySub`、`CandleChart` 的 `ChartStatic` 全域零覆蓋,W-3 一直只靠 code review + 註解自律。要補就該一次建立可重用的 render-count 觀測基建(而不是為單一 props 發明一套沒人維護的寫法);它守的是效能不是正確性,優先度依實測掉幀情況再定
-- [ ] 側欄的 `EMPTY_WL` fallback 在自選載入失敗時仍可能被寫入而把整份自選清空(change-spec K-3):本輪只在新入口 StockPage 加了 `wl !== undefined` gate,側欄既有入口(拖曳 / ×  / 加入群組)未動
+- [ ] 側欄的 `EMPTY_WL` fallback 在自選載入失敗時仍可能被寫入而把整份自選清空(change-spec K-3):本輪只在新入口 StockPage 加了 `wl !== undefined` gate,側欄既有入口(拖曳 / ×  / 加入群組)未動。〔2026-08-04 查證:**真破口在 `WatchlistManagerDialog` 不在側欄三入口** — 拖曳/×/加群組渲染自 `wl` 派生列,EMPTY_WL 下零列、入口實際不可達;但「管理」鈕在 error 態照樣渲染並把 EMPTY_WL 傳進 Dialog(`WatchlistSidebar.tsx:560-565`),Dialog 的新增群組 / 加入股票會以空自選為基底整份 PUT(`WatchlistManagerDialog.tsx:98,104,136-144`);`commit` 守衛 `isSameWatchlist(next, wl)` 比的就是 EMPTY_WL 自身,無保護力。修法對準 Dialog gate。另 K-4 確認:三處 mutation 全為整份 PUT last-write-wins,Sidebar 入口零 `save.isPending` 防護〕
 - [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);目前靠 `save.isPending` 停用各自的觸發點,跨元件並發未處理
 - [ ] 預覽非自選股後 `stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)
 - [ ] **驗證環境阻塞:達錢 4 未開時 server 起不來,錯誤訊息不指向根因**(2026-07-31 stock-ui-round4 Phase 7):`TC4 quote connect failed: Resource temporarily unavailable`(ZMQ REQ 的 EAGAIN)——實際成因是桌面程式沒開/沒登入,不是資源競爭。當時觀察序列:port 50774 有聽 + 舊 server 有真資料 → 舊 server 消失、port 仍聽但 LOGIN 逾時 → port 關閉。**「50774 有聽」不等於 OpenAPI 可用**,排查時先確認 app 已登入再看程式碼。另:兩個 server 同時連 TC4 是否可行本輪**未證實**(觀察被 app 關閉污染),別把「單一 session」當已知事實
@@ -495,6 +505,12 @@
   set_watchlist 才有機會重掛)、`stock_engine.py:226`(stkfut 個股期腿同款)。
   對照組:`index_engine` 已有 `_schedule_retry` backoff 是好樣板。若要收斂,考慮把
   futures_engine 的 pending-resub 形狀泛化(或至少 corr 腿先補 — 失效面最大)。
+  〔2026-08-04 查證:三處零重試仍成立,但語意本質不同、**勿硬泛化** — corr 與
+  futures 同構(一次性/無鎖),照抄 pending-resub 形狀即可;stock watchlist 是動態
+  集合,重試須與 `_watchlist`/`_refs` 對帳、進 `_tasks`、拿 `_pool_lock`,且失敗檔
+  被 rollback 出 `_refs`(stock_engine.py:163-170)→ 連 rollover 的
+  `_resubscribe_all`(迭代 `_refs`)都接不到,比原記載更死;stkfut 重試前須驗
+  `self._main` 仍同檔,否則替已不看的股票掛腿、owner refcount 洩漏〕
 - [ ] **啟動窗內其他 REST query 的失敗終態未盤點**:本輪只修 `useStockNames`
   (refetchInterval 無資料 3s 輪詢)。同窗口失敗的其他 query(watchlist GET、capital
   poll 類已有 interval 天然免疫;一次性 staleTime Infinity 類才有險)若 user 再回報
@@ -511,6 +527,13 @@
 
 ## 2026-08-04(asyncio-socket-send-warning 收尾留尾巴)
 
-- [ ] WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路(review T4 拒的那半):broadcaster 路由(`/ws/futures` 等)要進 parametrize 需 FuturesSource fake + trade_source 啟動旗標佈線;共用 relay 已有單元守衛,補整合覆蓋時一併考慮
+- [ ] WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路(review T4 拒的那半):broadcaster 路由(`/ws/futures` 等)要進 parametrize 需 FuturesSource fake + `futures_source` 顯式佈線(2026-08-04 更正:`trade_source` 啟動旗標已隨舊 trade 路刪除,create_app 現收 `futures_source=DEFAULT_FUTURES` 或 fake 實例);共用 relay 已有單元守衛,補整合覆蓋時一併考慮。〔2026-08-04 查證:fake source 散落各測試檔且重複(FakeFuturesSource ×2:test_capital_api.py:48-70 / test_market_routes.py:85;FakeIndexSource ×2、FakeCorrSource ×2、FakeStockSource ×1),前置 = 先提升 tests/helpers/ 再以 `(path, app_kwargs, pump_fn)` 三元組 parametrize;futures 路由需顯式傳 fake(create_app trade_source 預設 None = 零期貨引擎,make_client 樣板 test_capital_api.py:132-149);真 uvicorn 樣板 test_ws_disconnect.py:105-133〕
 - [ ] prod server 啟動 log 落檔慣例不一致:00:54 的 instance 有 `logs/server-*.log`,09:26 重啟的沒有(console-only)— 這次 11:06 的 asyncio warning 差點無檔案證據可查;考慮統一啟動包裝(固定 stdout 轉存 logs/)
 - [ ] `relay` 收尾假設 uvicorn sansio 的 `writable` 恆 set(無 pause_writing → send_json 非懸掛點、cancel 必打進 generator):若未來 uvicorn 加回 write flow control,「懸在 send_json 的 generator 遺棄」路徑變可達,`_consume_ws_task` docstring 的「取消同時關閉 generator」不再成立(review async lens 附註)
+
+## 2026-08-04(remove-tc4-trade-path 收尾沉澱)
+
+- [ ] `copycat/live/trade_models.py` 瘦身候選:capital 實際只用 `BrokerRejectedError`(`capital/client.py`);`OrderRequest` / `millipts_from_price_str` / `to_neworder_param` / `TouchanceDownError` 已零 production consumer(2026-08-04 舊 trade 路刪除後)。動它時 `tests/live/test_trade_models.py` 對應測試同步縮,且先 grep 確認 capital 端沒長出新引用。
+- [ ] `frontend/src/lib/trade-text.ts` 瘦身候選(review F3):`TRADE_ERROR_TEXT` 有 6 個無 producer 的 dead key(TOUCHANCE_DOWN / TRADE_NOT_READY / LIVE_DISABLED / CONFIRM_REQUIRED / PREVIEW_EXPIRED / SYMBOL_NOT_ALLOWED,一對一對應已刪的 _TRADE_ERROR_MAP)+ `orderStatusText` / `orderSideText` 已 test-only(唯一 production consumer 是被刪的 OrdersList/OrderConfirm)。**⚠ `INVALID_ORDER` 必留**(capital_api 仍回它);`tradeErrorText` / `shortSymbol` 是 useCapital 等現行 consumer 在用,不可整檔刪。`trade-text.test.ts:7-8` 對 dead key 的斷言一併清。
+- [ ] `tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` 是既有 timing flake(0.5s 收 frame 窗,全套負載下間歇紅;2026-08-04 雙跑對照:全套 1 failed/1620 → 重跑 1621 passed、單檔 6 passed)。放寬候選:時間窗改 deadline 迴圈。與 remove-tc4-trade-path 零因果。
+- [ ] 下次自然重啟 prod server 時,目視 futures / corr / river 三面板有值 —— sentinel 解耦(`__main__` 顯式傳 DEFAULT_FUTURES/DEFAULT_CORR)的 real-env 確認(自動化已由 `test_main_wiring.py` 守;2026-08-04 依「盤中/夜盤不重啟」紀律未做重啟驗證)。

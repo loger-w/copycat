@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus, fresh context)",
+  "date": "2026-08-04",
+  "verdict": "0 P0 / 2 P1 / 7 P2 — 無 P0,不觸發限縮加輪;P1 逐條處置",
+  "findings": [
+    {"id": "R1", "severity": "P1", "claim": "SC-1 grep 含 useTrade 但 useCapital.ts:9,83,87 有 production 註解提及,SC-1 恆 FAIL 或 scope 滑", "screen": "grep 屬實", "receiving": "accepted", "resolution": "Commit 2 加 useCapital.ts 註解校正;SC-1 grep 語意釐清為 production 符號引用"},
+    {"id": "R2", "severity": "P1", "claim": "WL-2(正式啟動接線等價)無可執行驗證;__main__ 無任何測試覆蓋,漏傳 DEFAULT_CORR 失效樣態安靜", "screen": "grep copycat.server.__main__ 零命中屬實", "receiving": "accepted", "resolution": "採建議 (a):新增 tests/server/test_main_wiring.py(🟢)斷言 create_app kwargs;不採 (b) real-env 重啟(夜盤時段不重啟跑著的 server,CLAUDE.md §8 紀律)"},
+    {"id": "R3", "severity": "P2", "claim": "刪 PreviewBody/SubmitBody 後 Literal unused → ruff F401 紅", "screen": "grep 屬實(僅 :11,:144,:145)", "receiving": "accepted", "resolution": "app.py 編輯清單補 Literal import 移除"},
+    {"id": "R4", "severity": "P2", "claim": "SC-2 量法照抄會建真 TC4 session(create_app() 無 source 走 _default_source)", "screen": "app.py:264-265 屬實", "receiving": "accepted", "resolution": "SC-2 量法改為 test_capital_api.make_client 路徑"},
+    {"id": "R5", "severity": "P2", "claim": "宣告「🔵 → 🔴」與 Commit 1(🔴)/Commit 2(🔵)順序矛盾", "screen": "屬實", "receiving": "accepted", "resolution": "宣告改「🔴 → 🔵」(🔵 內容全是描述被刪物件的註解,必須後行)"},
+    {"id": "R6", "severity": "P2", "claim": "test_trade_audit.py / test_audit_prefix.py 名稱相近但必留(WL-4 唯一覆蓋),處置表漏列", "screen": "兩檔存在屬實", "receiving": "accepted", "resolution": "處置表補兩列「留」;test_audit_prefix.py docstring 校正入 Commit 2"},
+    {"id": "R7", "severity": "P2", "claim": "trade-text.ts 的 orderStatusText/orderSideText 刪後成 test-only 死碼,未記 out of scope", "screen": "grep 屬實(唯一 production consumer 是被刪兩元件)", "receiving": "accepted", "resolution": "Out of scope 補條 + 收尾記 next-time"},
+    {"id": "R8", "severity": "P2", "claim": "next-time.md :514(trade_source 佈線描述)與 :179(tc4_trade 計數基準)會因本輪失準", "screen": "未逐行覆核,行號可信(reviewer 引原文)", "receiving": "accepted", "resolution": "收尾 chore 補兩條同步"},
+    {"id": "R9", "severity": "P2", "claim": "「不該紅」期望值無實數,純刪除任務無法數字對賬", "screen": "實測:backend 待刪 3 檔 = 44 tests;frontend 待刪 2 檔 = 9 tests", "receiving": "accepted", "resolution": "Baseline 補實數與目標數字"}
+  ]
+}

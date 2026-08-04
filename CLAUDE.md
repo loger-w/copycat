@@ -77,8 +77,8 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   corr_engine(即時相關係數,2026-07-30:每秒 pull 六腿中價 →
 │                         #   三窗滾動 Pearson;base 腿(台指)讀 futures_engine.state() 不自訂
 │                         #   TXF.HOT 避 symbol 衝突 — ⚠ 該上游目前零推播,見 §8 與 next-time;
-│                         #   REST /api/corr/state + WS /ws/corr);⚠ TC4 TradeRuntime 已停用
-│                         #   (trade.py/tc4_trade.py 保留 deprecated,/api/trade/* 恆 503,下輪清)
+│                         #   REST /api/corr/state + WS /ws/corr);TC4 trade 路已刪
+│                         #   (2026-08-04,/api/trade/* → 404;下單全走群益 capital)
 │                         #   訊號接線(2026-08-04):server/signal_hub(基準 worker/雙佇列 fanout:
 │                         #   jsonl 真相源+Discord 節流/enabled 持久化)、server/discord_bot(discord.py
 │                         #   bot 進 server,/watch slash 指令,模組層零 discord import、token 缺降級)、
@@ -144,7 +144,6 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
   `CAPITAL_DLL_DIR` / `CAPITAL_ORDER_ENABLED`(false=總開關全擋)/
   `CAPITAL_MAX_QTY` / `CAPITAL_MAX_AMOUNT`(未設/0 = 不限,user 拍板)/
   `CAPITAL_AUDIT_DIR`(選配,預設隨 TXO_AUDIT_DIR;審計檔 capital-YYYYMMDD.jsonl)。
-  `TXO_FAKE_TRADE` 已失效(TradeRuntime 停用)。
 
 ---
 
