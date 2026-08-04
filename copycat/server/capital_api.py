@@ -15,12 +15,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -39,7 +38,7 @@ from copycat.capital.models import (
     StockOrderRequest,
 )
 from copycat.server.futures_engine import FuturesEngine
-from copycat.server.ws import WsBroadcaster
+from copycat.server.ws import WsBroadcaster, relay
 
 logger = logging.getLogger(__name__)
 
@@ -221,53 +220,6 @@ async def capital_position_close(request: Request, body: PositionCloseBody) -> d
     return dataclasses.asdict(await client.close_position(req))
 
 
-def _consume_ws_task(task: "asyncio.Task[None]") -> None:
-    """被取消的 send/recv 任務收尾:消費例外避免 unretrieved warning;
-    task 取消同時會關閉 stream() generator → 該 client queue 除名。"""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None and not isinstance(exc, WebSocketDisconnect):
-        logger.warning("ws 任務收尾例外(已忽略): %r", exc)
-
-
-async def _stream_to_ws(websocket: WebSocket, broadcaster: WsBroadcaster) -> None:
-    """broadcast → WS 送出,並行 receive 偵測 client 斷線(review B3)。
-
-    無推播流量時 send 側永遠掛在 queue.get,察覺不到 client 斷線 →
-    per-client queue 洩漏;receive task 在斷線時 raise WebSocketDisconnect 收尾。
-    收尾路徑只做同步 cancel(不 await 子任務):endpoint 本身可能被外層
-    cancel scope 取消(TestClient / server shutdown),收尾中再 await 會吸收
-    重投的取消訊號,讓 task 以 cancelled 終結。
-    """
-
-    async def _send() -> None:
-        async for msg in broadcaster.stream():
-            await websocket.send_json(msg)
-
-    async def _recv() -> None:
-        while True:
-            await websocket.receive_text()  # client 訊息忽略;斷線 raise 收尾
-
-    send_task = asyncio.ensure_future(_send())
-    recv_task = asyncio.ensure_future(_recv())
-    done: set[asyncio.Task[None]] = set()
-    try:
-        done, _pending = await asyncio.wait(
-            {send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-    finally:
-        for t in (send_task, recv_task):
-            if not t.done():
-                t.cancel()
-                t.add_done_callback(_consume_ws_task)
-    for t in done:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None and not isinstance(exc, WebSocketDisconnect):
-                raise exc
-
-
 @router.websocket("/ws/capital")
 async def ws_capital(websocket: WebSocket) -> None:
     client: CapitalClient | None = websocket.app.state.capital
@@ -276,7 +228,7 @@ async def ws_capital(websocket: WebSocket) -> None:
         await websocket.close()
         return
     broadcaster: WsBroadcaster = websocket.app.state.capital_ws
-    await _stream_to_ws(websocket, broadcaster)
+    await relay(websocket, broadcaster.stream())
 
 
 # ---- futures 行情(SC-8;吃 app.state.futures)----
@@ -298,7 +250,7 @@ async def ws_futures(websocket: WebSocket) -> None:
         await websocket.close()
         return
     broadcaster: WsBroadcaster = websocket.app.state.futures_ws
-    await _stream_to_ws(websocket, broadcaster)
+    await relay(websocket, broadcaster.stream())
 
 
 # ---------------------------------------------------------------------------
