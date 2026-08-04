@@ -1,13 +1,25 @@
-"""verify 模式支援:fake TXO source + 外部 IO env key 清單(單一 source of truth)。
+"""verify 模式支援:fake TXO source + 外部 IO env 壓制(`python -m copycat.server --verify`)。
+
+盤中不可起第二台連 TC4 的後端(CLAUDE.md §8:同 symbol 跨 session 只推一邊,會靜默搶走
+prod 的推播)——驗 HTTP 層(route 形狀 / 非行情 endpoint)一律走本模組的 fake source +
+另一個 port,整條路不碰 ZMQ。
 
 **本模組刻意不 import fastapi / uvicorn**:tests/conftest.py 全域 import 這裡的 key 清單,
 不能因此把 [live] extras 變成整個測試套件的硬依賴;組 app 的那步留在 `__main__`。
+
+env 壓制的必要性(next-time 2026-08-04):app lifespan 無條件呼叫 `get_capital`,
+CAPITAL_USER_ID 有值(env 或 repo root .env)即載真 SKCOM DLL;DISCORD_BOT_TOKEN 有值
+即真登入 Discord。歷史事故:驗證腳本以真憑證打了一次群益登入(restart_trials.py 的
+Popen 無 env= 直接繼承)。
 """
 
 from __future__ import annotations
 
+import os
 from typing import Callable
 
+import copycat.capital.factory as _capital_factory
+import copycat.server.discord_bot as _discord_bot
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 
 #: capital/factory 讀取的全部環境變數 key。tests/conftest.py 與 test_factory 引用同一份
@@ -26,6 +38,27 @@ CAPITAL_ENV_KEYS = (
 )
 
 DISCORD_ENV_KEYS = ("DISCORD_BOT_TOKEN", "SIGNALS_DISCORD_CHANNEL_ID")
+
+
+def neutralize_external_env() -> None:
+    """把外部 IO 憑證整批中和:群益(SKCOM DLL)與 Discord bot 都不得真的連出去。
+
+    兩層雙保險(單靠 delenv 不夠 —— .env fallback 還在):
+
+    1. 12 個 key 全設**空字串** —— capital/factory 與 discord_bot 的 `_getenv` 都是
+       「`name in os.environ` 即用(含空字串)」的新語意,空字串 = 明確清空、壓制 .env。
+    2. 兩個模組的 `_dotenv_values` patch 成空 + cache 復位 —— 防未來有 key 走回
+       「僅未設才 fallback」的舊語意時,.env 值靜默復活。
+
+    程序生命週期內不還原(verify server 整個 process 都不該碰真憑證);測試要呼叫它時
+    自行先用 monkeypatch 登記還原點(tests/server/test_verify.py 示範)。
+    """
+    for key in (*CAPITAL_ENV_KEYS, *DISCORD_ENV_KEYS):
+        os.environ[key] = ""
+    for mod in (_capital_factory, _discord_bot):
+        setattr(mod, "_dotenv_values", lambda: {})
+        setattr(mod, "_dotenv_cache", None)
+    setattr(_capital_factory, "_client", None)
 
 
 # ---- fake TXO source(verify 模式與 server route 測試共用的唯一一份)----

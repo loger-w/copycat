@@ -10,9 +10,14 @@
   `test_shutdown_completes_while_client_stays_connected` 已入
   `tests/server/test_ws_disconnect.py`。prod 級(真 TC4)關機驗證依「夜盤不重啟」
   紀律待下次自然重啟窗口,回歸測試已足以守住此 bug 形狀。
-- [ ] 驗證 harness(fake server 腳本)應比照 `tests/conftest.py` 中和 CAPITAL_* /
+- [x] ~~驗證 harness(fake server 腳本)應比照 `tests/conftest.py` 中和 CAPITAL_* /
   DISCORD_*:本輪 harness 首啟以真憑證打了一次群益登入(失敗降級零狀態改變,但
-  不該發生)。寫任何「起真 app 的驗證腳本」前先 `CAPITAL_USER_ID=""` 這類壓制。
+  不該發生)。寫任何「起真 app 的驗證腳本」前先 `CAPITAL_USER_ID=""` 這類壓制。~~
+  **2026-08-04 chore/server-launch-wrapper 完成**:`python -m copycat.server --verify`
+  = fake TXO source + 其餘引擎不啟動 + `copycat/server/verify.py
+  neutralize_external_env()`(12 key 設空字串壓制 env 與 .env + 兩模組 `_dotenv_values`
+  patch 雙保險),port 預設 8722 錯開 prod。之後驗 HTTP 層一律用它,不再手寫 fake
+  server 腳本。
 - [ ] 訊號 Discord 文案帶的是 tick 時刻(模擬/回補情境會顯示過去時刻)— 若 user 反映
   「太慢了」是指希望帶發送時刻或兩者並列,屬文案調整一行事。
 
@@ -526,7 +531,7 @@
 ## 2026-08-04(asyncio-socket-send-warning 收尾留尾巴)
 
 - [x] ~~WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路:broadcaster 路由要進 parametrize 需 fake source 收斂 tests/helpers/ + 顯式佈線~~ **2026-08-04 chore/ws-test-consolidation 完成**:fake source 已收斂 `tests/helpers/fake_sources.py`(FakeFutures/Index/Corr/Stock 聯集定義,8 個消費檔改 import,特化變體留原檔);突斷 parametrize 六路全上(/ws/futures /ws/index /ws/stock 端到端 pump;/ws/corr /ws/river 引擎層 `tick_once` pump — 1 Hz 廣播推不滿 asyncio 5 次門檻故不走 source 層,讀 `engine._loop` private 有註明;/ws/capital 走 app.py 注入的 broadcast 邊界),零排除路由,mutation 驗證(relay 換 send-only)六路全紅非 vacuous。
-- [ ] prod server 啟動 log 落檔慣例不一致:00:54 的 instance 有 `logs/server-*.log`,09:26 重啟的沒有(console-only)— 這次 11:06 的 asyncio warning 差點無檔案證據可查;考慮統一啟動包裝(固定 stdout 轉存 logs/)
+- [x] ~~prod server 啟動 log 落檔慣例不一致:00:54 的 instance 有 `logs/server-*.log`,09:26 重啟的沒有(console-only)— 這次 11:06 的 asyncio warning 差點無檔案證據可查;考慮統一啟動包裝(固定 stdout 轉存 logs/)~~ **2026-08-04 chore/server-launch-wrapper 完成**:落檔搬進 `python -m copycat.server` 本體(`__main__._setup_prod_log` 把 sys.stdout/stderr tee 到 `logs/server-YYYYMMDD-HHMM.log`,每筆 write 即 flush、寫壞降級 console-only)— run.ps1 與手動起 server 同享,不再靠 operator 記得重導向。
 - [ ] `relay` 收尾假設 uvicorn sansio 的 `writable` 恆 set(無 pause_writing → send_json 非懸掛點、cancel 必打進 generator):若未來 uvicorn 加回 write flow control,「懸在 send_json 的 generator 遺棄」路徑變可達,`_consume_ws_task` docstring 的「取消同時關閉 generator」不再成立(review async lens 附註)
 
 ## 2026-08-04(remove-tc4-trade-path 收尾沉澱)
