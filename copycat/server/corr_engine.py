@@ -74,6 +74,7 @@ class CorrelationEngine:
         now_fn: Callable[[], float] = time.monotonic,
         session_fn: Callable[[], SessionKey] = session_key,
         taipei_time_fn: Callable[[], str] = _taipei_hhmmss,
+        resub_interval_secs: float = 10.0,
     ) -> None:
         self._source_factory = source_factory
         self._config = config
@@ -104,6 +105,11 @@ class CorrelationEngine:
         self._river_seq = 0
         self._backfill_task: asyncio.Task[None] | None = None
         self._backfill_inflight = False
+        # 訂閱失敗腿的唯一重試路徑(照抄 futures_engine 形狀):`_on_reconnect` 只重跑
+        # 江波圖回補、不重訂閱 → 首輪 SUBQUOTE 失敗的腿整天零推播且無錯誤訊號
+        self._resub_interval_secs = resub_interval_secs
+        self._pending_subs: set[str] = set()
+        self._resub_task: asyncio.Task[None] | None = None
 
     # ---- 生命週期 ----
 
@@ -112,6 +118,9 @@ class CorrelationEngine:
         self._source = self._source_factory()
         self._source.set_on_message(self._on_quote_threadsafe)
         await asyncio.to_thread(self._subscribe_all)
+        if self._pending_subs:
+            # 只有失敗腿才起這個 task —— 訂閱全成功時行為與修復前完全相同
+            self._resub_task = self._loop.create_task(self._resub_loop())
         self._task = self._loop.create_task(self._run())
         # 回補放背景:六腿各要 SubHistory + 分頁收割,阻塞 start 會讓整個 app 起動變慢,
         # 而畫面本來就可以先有 live 點再補歷史(design §3)
@@ -121,13 +130,49 @@ class CorrelationEngine:
             self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
 
     def _subscribe_all(self) -> None:
-        """只訂 source == tc4 的腿;單腿失敗降級續行(沿用 futures_engine 慣例)。"""
+        """只訂 source == tc4 的腿;單腿失敗降級續行,失敗品進 `_pending_subs` 由重試迴圈接手。
+
+        (寫入安全:start() 正 await 這個 to_thread,期間無並發讀寫;同 futures_engine 註解。)
+        """
         assert self._source is not None
         for leg in self._config.tc4_legs():
             try:
                 self._source.subscribe_raw(leg.symbol)
             except ConnectionError:
-                logger.warning("corr subscribe %s(%s)失敗,該腿停用", leg.key, leg.symbol)
+                logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
+                self._pending_subs.add(leg.symbol)
+
+    async def _resub_loop(self) -> None:
+        """pending 腿每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。
+
+        迭代 `tc4_legs()` 而非 `_pending_subs` 本身:base 腿(futures_engine 來源)因此
+        結構上不可能被重試訂閱 —— 重複訂 `TXF.HOT` 會讓其中一邊永久零推播(CLAUDE.md §8)。
+        """
+        while self._pending_subs:
+            await asyncio.sleep(self._resub_interval_secs)
+            source = self._source  # 每輪重讀:close 中會變 None
+            if source is None:
+                return
+            recovered = False
+            for leg in self._config.tc4_legs():
+                if leg.symbol not in self._pending_subs:
+                    continue
+                try:
+                    await asyncio.to_thread(source.subscribe_raw, leg.symbol)
+                except ConnectionError:
+                    # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
+                    logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
+                    continue
+                self._pending_subs.discard(leg.symbol)
+                logger.info("corr %s subscribe retry ok", leg.key)
+                recovered = True
+            if recovered:
+                # 失敗窗內漏掉的江波圖分鐘只能靠回補補齊。`_schedule_backfill` 在
+                # inflight 時是**丟棄**不是排隊 → 本輪定調 best-effort,被擋下時留一行
+                # 痕跡才追得到(排隊化屬 `_backfill_task` 覆寫孤兒那條 next-time 條目)
+                if self._backfill_inflight:
+                    logger.info("corr 重訂成功但回補進行中,本次補分鐘略過(best-effort)")
+                self._schedule_backfill()
 
     async def _run(self) -> None:
         while True:
@@ -144,7 +189,10 @@ class CorrelationEngine:
         self._loop = None
         tick_task, self._task = self._task, None
         backfill_task, self._backfill_task = self._backfill_task, None
-        for task in (tick_task, backfill_task):
+        resub_task, self._resub_task = self._resub_task, None
+        # 重試迴圈**排最前**:留著會在 source close 後繼續 subscribe → 重連 TC4
+        # (同 futures_engine close 的理由)
+        for task in (resub_task, tick_task, backfill_task):
             if task is None:
                 continue
             task.cancel()
