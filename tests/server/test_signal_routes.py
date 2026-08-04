@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 
 from copycat.server import app as app_mod
 from copycat.server.app import create_app
+from copycat.server.signal_hub import SignalHub
 from tests.helpers.fake_txo import FakeTxoSource
 from tests.server.test_stock_routes import FakeStockSource
 
@@ -143,6 +144,35 @@ class TestSignalsShutdownIsolation:
             assert app.state.discord_bot is None
             assert app.state.stock is not None  # 其他引擎不受波及
             assert app.state.stock._signal_hub is None
+
+    def test_hub_start_failure_isolates_signals_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TQ-7:訊號整段套 `_boot` 隔離 —— hub 起不來只讓訊號停用,其他引擎照常。
+
+        沒有這條的話,`_boot` 的邊界被改窄(或搬到 try 外)會讓整個 server 起不來,
+        而現有測試全部是「一切正常」的路徑,抓不到。
+        """
+
+        async def _boom(self: SignalHub) -> None:
+            raise RuntimeError("hub start 炸了")
+
+        monkeypatch.setattr(SignalHub, "start", _boom)
+        app, _ = make_app(tmp_path)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            assert app.state.signal_hub is None
+            assert app.state.discord_bot is None  # bot state 不得殘留
+            assert app.state.stock is not None  # 其他引擎不受波及
+            assert app.state.stock._signal_hub is None
+            assert client.get("/api/stock/watchlist").status_code == 200
+
+            for r in (
+                client.get("/api/stock/signals/today"),
+                client.get("/api/stock/signals/enabled"),
+                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
+            ):
+                assert r.status_code == 503
+                assert r.json()["detail"]["error"] == "NOT_READY"
 
     def test_shutdown_detaches_hub_from_engine(self, tmp_path: Path) -> None:
         """CC-2 後半:收攤後掛點要摘掉,關機序列後半不得再打到已收的 hub。"""
