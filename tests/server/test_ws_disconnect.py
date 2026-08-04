@@ -8,27 +8,45 @@
 
 整合測試直接編碼那條鏈路(真 uvicorn + raw socket RST);`relay` 的單元測試則釘住
 收尾語意(receive watcher 勝出 → send 側被取消 → stream 的 finally 走到 = queue 除名)。
+
+同一條合約的另外兩半也在本檔:
+- `TestGracefulShutdownWithLiveClient`:client **保持連線**時 server 仍要收得掉
+  (上面那條測的是「client 先 RST 之後」,涵蓋不到沒斷線的情形)。
+- `TestBroadcastRouteDisconnect`:六條 broadcaster 路由逐一過同一套突斷劇本 ——
+  `/ws/txo-pnl` 只是七條 relay 路的其中一條,其餘六條各有自己的接線。
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
+import datetime as _dt
+import json
 import logging
 import os
 import socket
 import struct
 import threading
 import time
-from typing import AsyncGenerator, Callable
+from pathlib import Path
+from typing import Any, AsyncGenerator, Callable
 
 import pytest
 import uvicorn
-from fastapi import WebSocketDisconnect
+from fastapi import FastAPI, WebSocketDisconnect
 
+import copycat.capital.factory as capital_factory
+import copycat.server.app as app_mod
 from copycat.live.models import SeriesInfo, Tick
 from copycat.server.app import create_app
 from copycat.server.ws import WsBroadcaster, relay
+from tests.helpers.fake_sources import (
+    FakeCorrSource,
+    FakeFuturesSource,
+    FakeIndexSource,
+    FakeStockSource,
+)
 from tests.helpers.fake_txo import C, FakeTxoSource
 
 #: asyncio 對「connection lost 後仍寫入」的警告字串(stdlib selector/proactor 兩實作同字)
@@ -69,9 +87,15 @@ class _Collector(logging.Handler):
         return sum(1 for r in self.records if CONNLOST_WARNING in r.getMessage())
 
 
-def _ws_handshake(port: int, path: str) -> socket.socket:
+def _ws_handshake_keep_rest(port: int, path: str) -> tuple[socket.socket, bytes]:
     """手寫 HTTP upgrade:要的是能發 RST 的裸 socket,任何 WS client library 都會替我們
-    好好地送 close frame —— 那正是本 bug 不會發生的路徑。"""
+    好好地送 close frame —— 那正是本 bug 不會發生的路徑。
+
+    **第二個回傳值 = header 之後那段殘留位元組**。101 回應與 server 主動送的第一則
+    frame 可能落在同一個 TCP segment,握手迴圈讀到 `\\r\\n\\r\\n` 就停,超出的那段還在
+    buf 裡 —— 丟掉它等於那則 frame 憑空消失,而下一次 recv 會一路等到 timeout
+    (現象:「連線後收不到 snapshot」,2026-08-04 實測約每五次一次)。
+    """
     sock = socket.create_connection(("127.0.0.1", port), timeout=5)
     key = base64.b64encode(os.urandom(16)).decode()
     request = (
@@ -91,6 +115,16 @@ def _ws_handshake(port: int, path: str) -> socket.socket:
             raise AssertionError("握手期間連線被關閉")
         buf += chunk
     assert b" 101 " in buf.split(b"\r\n", 1)[0], buf[:200]
+    return sock, buf.split(b"\r\n\r\n", 1)[1]
+
+
+def _ws_handshake(port: int, path: str) -> socket.socket:
+    """丟棄殘留的版本(既有測試沿用,行為與收斂前逐位元組相同)。
+
+    ⚠ 丟殘留 = 上面那個 flake 仍在。修它要動既有測試的斷言,不在本輪 scope(已記
+    next-time);**新測試一律用 `_ws_handshake_keep_rest`**。
+    """
+    sock, _rest = _ws_handshake_keep_rest(port, path)
     return sock
 
 
@@ -175,6 +209,347 @@ class TestAbruptDisconnect:
         # 契約的另一半:殭屍迴圈退場後 uvicorn 才收得掉。刻意放在 finally **之外** ——
         # 主體失敗時不跑,免得這條把原始失敗訊息蓋掉。
         assert not thread.is_alive(), "uvicorn 未能 graceful shutdown(WS 迴圈仍掛著)"
+
+
+# ---------------------------------------------------------------------------
+# 真 uvicorn 治具(以下新測試共用)
+# ---------------------------------------------------------------------------
+
+
+class _RunningServer:
+    """真 uvicorn(port 0)+ 背景執行緒;離開 context 時 graceful shutdown 並 join。
+
+    `thread` 在 `__exit__` 之後仍可查 `is_alive()` —— 「關得掉」的斷言刻意留在 context
+    **外面**做,主體失敗時不跑,免得把原始失敗訊息蓋掉(同上面那條既有測試的理由)。
+    """
+
+    def __init__(self, app: FastAPI, *, join_timeout: float = 10.0) -> None:
+        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", ws="auto")
+        self.server = uvicorn.Server(config)
+        self.thread = threading.Thread(target=self.server.run, daemon=True)
+        self.port = 0
+        self._join_timeout = join_timeout
+
+    def __enter__(self) -> _RunningServer:
+        self.thread.start()
+        deadline = time.monotonic() + 15
+        while not self.server.started:
+            if not self.thread.is_alive():
+                raise AssertionError("uvicorn 執行緒在啟動途中就結束了(lifespan 炸了?)")
+            if time.monotonic() > deadline:
+                self.server.should_exit = True
+                raise AssertionError("uvicorn 未在時限內啟動")
+            time.sleep(0.01)
+        self.port = int(self.server.servers[0].sockets[0].getsockname()[1])
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.server.should_exit = True
+        self.thread.join(timeout=self._join_timeout)
+
+
+def _drain_frames(sock: socket.socket, *, want: int, timeout: float) -> int:
+    """收滿 `want` 批(或到 deadline)為止,回實際收到的批數。
+
+    **deadline 迴圈而非固定時間窗**:固定窗(「收 0.5 秒然後數」)在全套負載下會因為
+    排程抖動間歇少收 → 假紅,既有 `test_no_write_to_dead_transport` 正是這樣 flake 的。
+    累積到目標就走、沒到才等滿,慢只會慢不會錯。
+    """
+    deadline = time.monotonic() + timeout
+    batches = 0
+    while batches < want:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        sock.settimeout(min(0.5, remaining))
+        try:
+            chunk = sock.recv(4096)
+        except TimeoutError:
+            continue
+        assert chunk, "server 提前關閉了連線"
+        batches += 1
+    return batches
+
+
+class TestGracefulShutdownWithLiveClient:
+    def test_shutdown_completes_while_client_stays_connected(self) -> None:
+        """client **不斷線**時 server 也要收得掉(2026-08-04 relay 回歸)。
+
+        未修時 send-only 迴圈掛在 `queue.get` 上永不返回,uvicorn 關機送的 close frame
+        只會進 receive queue 沒人收 —— `Server.shutdown()` 等連線收尾等到天荒地老
+        (`timeout_graceful_shutdown` 預設 None = 無上限)。上面那條既有測試在 client
+        已 RST 之後才驗關機,涵蓋不到這一半。
+
+        `/ws/txo-pnl` 且**不推任何 tick**:accept 後直送一則 snapshot 證明連線活著,
+        接著 relay 就停在 `queue.get` 上 —— 正是要驗的那個狀態。
+        """
+        app = create_app(FakeTxoSource(), throttle_secs=0.02)
+        with _RunningServer(app) as srv:
+            sock, rest = _ws_handshake_keep_rest(srv.port, "/ws/txo-pnl")
+            sock.settimeout(5)
+            assert rest or sock.recv(4096), "連線後應收到至少一則 snapshot frame(證明連線活著)"
+
+            started = time.monotonic()
+            srv.server.should_exit = True
+            srv.thread.join(timeout=10)
+            elapsed = time.monotonic() - started
+            sock.close()
+
+        assert not srv.thread.is_alive(), (
+            f"client 仍連著時 uvicorn 收不掉:{elapsed:.1f}s 後執行緒仍活著"
+            "(WS 迴圈掛在 queue.get 上,察覺不到關機)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 六條 broadcaster 路由的突斷覆蓋
+# ---------------------------------------------------------------------------
+
+
+class _FakeCapital:
+    """`app.state.capital` 的最小替身:只需要 lifespan 的三個接點 + broadcast 掛點。
+
+    真 `CapitalClient` + `FakeCom` 也走得通,但那條路要起 COM 執行緒與命令佇列,
+    對「WS 突斷」這件事是純噪音。`set_broadcast` 收到的 callback 就是 app.py 包好的
+    `loop.call_soon_threadsafe(capital_ws.publish, …)` —— 從 COM 執行緒邊界往下的
+    production 路徑一段沒少。
+    """
+
+    def __init__(self) -> None:
+        self.broadcast: Callable[[dict[str, object]], None] | None = None
+
+    def set_broadcast(self, cb: Callable[[dict[str, object]], None]) -> None:
+        self.broadcast = cb
+
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def _futures_quote(n: int) -> dict:
+    """TXF HOT REALTIME(欄位對照 test_capital_api `_fut_quote`)。
+
+    刻意不帶月份訊號(Symbol 尾是 HOT、無 EndDate、名稱無數字)→ `resolve_contract_ym`
+    回 None → 不觸發 leaf fallback 的計時器,測試只留突斷這一條變因。
+    """
+    return {
+        "Symbol": "TC.F.TWF.TXF.HOT",
+        "SecurityName": "臺股期貨",
+        "TradingPrice": str(23_500 + n % 7),
+        "TradeQuantity": "2",
+        "TradeVolume": str(1_000 + n),
+        "TradeDate": "20260728",
+        "PreciseTime": "020000000000",
+        "Bid": "23499",
+        "BidVolume": "10",
+        "Ask": "23500",
+        "AskVolume": "12",
+        "ReferencePrice": "23400",
+    }
+
+
+def _index_quote(n: int) -> dict:
+    """加權 IX0001 REALTIME;價每則不同 → `_dirty` 必被設起(否則廣播迴圈跳過)。"""
+    return {
+        "Security": "IX0001",
+        "TradingPrice": f"{42_039.92 + n:.2f}",
+        "ReferencePrice": "43634.19",
+        "HighPrice": "43221.93",
+        "LowPrice": "41815.78",
+        "FilledTime": "013015",
+    }
+
+
+_STOCK_CODE = "2330"
+
+
+def _stock_quote(n: int) -> dict:
+    """個股 REALTIME。
+
+    - `TradeDate` = 本機今日 + `PreciseTime` UTC 02:00(= 台北 10:00):既避開試撮窗
+      (13:25–13:30 會被 `ingest` 短路),也讓 `tick.trade_date` 等於 engine 的
+      `trade_date` —— 大一天就會踩 rollover 快路徑,那是另一個測試的題目。
+    - `TradeVolume` 遞增 = 去重主鍵,每則都算新成交 → 進 `_dirty_watchlist`,
+      由 1s(此處 0.02s)flush 迴圈廣播 `watchlist_quote`。
+    """
+    return {
+        "Symbol": f"TC.S.TWS.{_STOCK_CODE}",
+        "Security": _STOCK_CODE,
+        "SecurityName": "台積電",
+        "TradingPrice": "1000.0000",
+        "TradeQuantity": "1",
+        "TradeVolume": str(1_000 + n),
+        "TradeDate": f"{_dt.date.today():%Y%m%d}",
+        "PreciseTime": "020000000000",
+        "ReferencePrice": "1000.0000",
+        "UpperLimitPrice": "1100.0000",
+        "LowerLimitPrice": "900.0000",
+        "Bid": "999.0000",
+        "BidVolume": "5",
+        "Ask": "1000.0000",
+        "AskVolume": "5",
+    }
+
+
+def _build_futures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, Any]:
+    fake = FakeFuturesSource()
+    return create_app(FakeTxoSource(), futures_source=fake, throttle_secs=0.02), fake
+
+
+def _build_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, Any]:
+    fake = FakeIndexSource()
+    app = create_app(
+        FakeTxoSource(),
+        index_source=fake,
+        index_mis_fetch=lambda: None,
+        throttle_secs=0.02,
+    )
+    return app, fake
+
+
+def _build_corr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, Any]:
+    fake = FakeCorrSource()
+    return create_app(FakeTxoSource(), corr_source=fake, throttle_secs=0.02), fake
+
+
+def _build_stock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, Any]:
+    # 自選預先落檔:lifespan 會回填成訂閱池,`_handle_quote` 才有 state 收 tick
+    wl = tmp_path / "watchlist.json"
+    wl.write_text(json.dumps({"codes": [_STOCK_CODE], "groups": []}), encoding="utf-8")
+    # 訊號層的 fallback 通知走真 `notify_discord` —— 開發機 shell / repo root .env 有
+    # webhook 時測試會真的發訊息出去(conftest 只中和了 CAPITAL_* 與 DISCORD_BOT_TOKEN)
+    monkeypatch.setattr(app_mod, "notify_discord", lambda *_a, **_k: False)
+    fake = FakeStockSource()
+    app = create_app(
+        FakeTxoSource(),
+        stock_source=fake,
+        stock_watchlist_path=wl,
+        throttle_secs=0.02,
+    )
+    return app, fake
+
+
+def _build_capital(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, Any]:
+    fake = _FakeCapital()
+    monkeypatch.setattr(capital_factory, "get_capital", lambda: fake)
+    return create_app(FakeTxoSource(), throttle_secs=0.02), fake
+
+
+def _pump_source(build: Callable[[int], dict]) -> Callable[[FastAPI, Any, int], None]:
+    """source callback 直推:engine 的 `_on_*_threadsafe` 自己做 loop 轉發,
+    測試執行緒可以直接呼叫(TC4 真實情況也是他執行緒推進來)。"""
+
+    def _pump(app: FastAPI, ctx: Any, n: int) -> None:
+        cb = ctx.on_message
+        if cb is not None:
+            cb(build(n))
+
+    return _pump
+
+
+def _pump_corr(app: FastAPI, ctx: Any, n: int) -> None:
+    """corr / river 的廣播只出自每秒的 `tick_once`,而 `tick_secs` 不經 `create_app`
+    暴露 —— 1 Hz 推不出足以觸發 asyncio 門檻(連寫 5 次才 log)的密度,斷線後零警告
+    會變成 vacuous 綠。故直接以 threadsafe 方式敲 `tick_once`:從那裡往下
+    (state → broadcast → WsBroadcaster → relay)仍是完整的 production 路徑。
+
+    讀 `_loop` private:engine 沒有公開的 loop 取用面,而測試執行緒要進 loop 只有這條。
+    """
+    engine = app.state.corr
+    if engine is None:
+        return
+    loop = engine._loop
+    if loop is not None:
+        loop.call_soon_threadsafe(engine.tick_once)
+
+
+def _pump_capital(app: FastAPI, ctx: Any, n: int) -> None:
+    cb = ctx.broadcast
+    if cb is not None:
+        cb({"type": "status", "n": n})
+
+
+@dataclasses.dataclass(frozen=True)
+class _WsCase:
+    path: str
+    build: Callable[[Path, pytest.MonkeyPatch], tuple[FastAPI, Any]]
+    pump: Callable[[FastAPI, Any, int], None]
+
+
+#: `create_app` 的 futures/corr/index/stock source 預設 None = 該引擎不建 → 每一路都要
+#: 顯式注入對應的 fake,否則 route 會走「引擎缺席」分支直接關連線(vacuous 綠)。
+_WS_CASES = [
+    _WsCase("/ws/futures", _build_futures, _pump_source(_futures_quote)),
+    _WsCase("/ws/index", _build_index, _pump_source(_index_quote)),
+    _WsCase("/ws/stock", _build_stock, _pump_source(_stock_quote)),
+    _WsCase("/ws/corr", _build_corr, _pump_corr),
+    _WsCase("/ws/river", _build_corr, _pump_corr),
+    _WsCase("/ws/capital", _build_capital, _pump_capital),
+]
+
+
+class TestBroadcastRouteDisconnect:
+    """`/ws/txo-pnl` 之外的六條 relay 路,逐條過同一套劇本。
+
+    劇本 = 正向對照(收到 ≥4 批 frame,證明推播鏈真的在跑)→ RST 突斷 → 繼續推 1.5s
+    → asyncio 零 `socket.send() raised exception.` → server 收得掉。缺了正向對照那段,
+    「斷線後零警告」在上游靜默斷掉時會 vacuous 綠(根本沒寫過,自然沒有警告)。
+
+    `want=4` 而不是 3:corr / river 在 relay **之外**先直送一則快照,門檻抓 4 保證
+    至少三批出自 relay 迴圈本身。
+    """
+
+    @pytest.mark.parametrize("case", _WS_CASES, ids=[c.path for c in _WS_CASES])
+    def test_no_write_to_dead_transport(
+        self, case: _WsCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app, ctx = case.build(tmp_path, monkeypatch)
+        stop = threading.Event()
+        collector = _Collector()
+        asyncio_logger = logging.getLogger("asyncio")
+
+        with _RunningServer(app) as srv:
+
+            def _pump() -> None:
+                n = 0
+                while not stop.is_set():
+                    n += 1
+                    case.pump(app, ctx, n)
+                    stop.wait(0.02)
+
+            pump = threading.Thread(target=_pump, daemon=True)
+            asyncio_logger.addHandler(collector)
+            try:
+                sock, rest = _ws_handshake_keep_rest(srv.port, case.path)
+                pump.start()
+                # 握手殘留裡的那批也算(否則同 segment 到達時會白白少數一批)
+                seen = 1 if rest else 0
+                batches = seen + _drain_frames(sock, want=4 - seen, timeout=15)
+                assert batches >= 4, (
+                    f"{case.path} 斷線前只收到 {batches} 批 frame:推播鏈沒動,"
+                    "本測試無法證明修復(relay 根本沒送過幾次)"
+                )
+
+                _abort(sock)
+                # 0.02s cadence × 1.5s ≈ 75 次寫入,遠超 asyncio 的 5 次門檻:
+                # 未修時必然累積警告,修好後 watcher 毫秒級收尾。
+                time.sleep(1.5)
+
+                count = collector.connlost_count()
+                assert count == 0, (
+                    f"{case.path}:client 突斷後仍對死 transport 寫入 {count} 次(asyncio 警告)"
+                )
+            finally:
+                stop.set()
+                if pump.is_alive():
+                    pump.join(timeout=5)
+                asyncio_logger.removeHandler(collector)
+
+        assert not srv.thread.is_alive(), (
+            f"{case.path}:uvicorn 未能 graceful shutdown(WS 迴圈仍掛著)"
+        )
 
 
 class _FakeWebSocket:
