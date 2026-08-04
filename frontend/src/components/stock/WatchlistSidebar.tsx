@@ -551,23 +551,29 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
 
       {/* 自選還沒成功載入過(pending / 失敗)時 `wl` 是 EMPTY_WL —— Dialog 的新增群組 /
           加入股票不依賴既有列,會以空自選為基底整份 PUT(後端無樂觀鎖)把真實自選清空,
-          且 commit 守衛比的就是 EMPTY_WL 自身,沒有保護力 → 入口就擋掉。 */}
+          且 commit 守衛比的就是 EMPTY_WL 自身,沒有保護力 → 入口就擋掉。
+          Dialog 併進**同一個** gate(而非只擋按鈕):危險窗內連掛載都不給,
+          「拿得到 EMPTY_WL 的 Dialog 不存在」就成了本地可讀的不變式,不必追它內部
+          有沒有其他開啟路徑。data 一旦成功載入就不會退回 undefined,所以對 Dialog 自己的
+          open/close 循環而言它仍是常駐掛載 —— 不影響其 prevOpen 重置設計。 */}
       {data === undefined ? null : (
-        <button
-          type="button"
-          aria-label="管理群組與股票"
-          onClick={() => setDialogOpen(true)}
-          className="mx-1 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:text-ink"
-        >
-          管理
-        </button>
+        <>
+          <button
+            type="button"
+            aria-label="管理群組與股票"
+            onClick={() => setDialogOpen(true)}
+            className="mx-1 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:text-ink"
+          >
+            管理
+          </button>
+          <WatchlistManagerDialog
+            open={dialogOpen}
+            wl={wl}
+            onClose={() => setDialogOpen(false)}
+            onGroupDeleted={dropCollapsed}
+          />
+        </>
       )}
-      <WatchlistManagerDialog
-        open={dialogOpen}
-        wl={wl}
-        onClose={() => setDialogOpen(false)}
-        onGroupDeleted={dropCollapsed}
-      />
     </aside>
   );
 }
