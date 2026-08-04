@@ -42,6 +42,8 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   tc4(TC4QuoteSource,唯一碰 ZMQ 的模組)— extras [live] 才需 fastapi/pyzmq
 │                         #   個股看盤(2026-07-21):stock_models(REALTIME 對映/五檔位移歸一/試撮窗)、
 │                         #   stock_state(當日狀態機:去重/分鐘聚合/VWAP)、stock_source(繼承 TC4QuoteSource)
+│                         #   個股訊號(2026-08-04):signal_state(SignalDetector 零 IO:CDP 穿越/
+│                         #   爆拉跌/爆量/鎖板,三層去重+盤別/trade_date gate,staged basis 日別標記)
 │                         #   期貨行情(2026-07-28):futures_models(HOT 契約 YYYYMM 解析)、
 │                         #   futures_source(TXF/MXF/TMF HOT REALTIME)
 │                         #   即時相關係數(2026-07-30):corr_models(中價/對數報酬)、
@@ -77,7 +79,12 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   TXF.HOT 避 symbol 衝突 — ⚠ 該上游目前零推播,見 §8 與 next-time;
 │                         #   REST /api/corr/state + WS /ws/corr);⚠ TC4 TradeRuntime 已停用
 │                         #   (trade.py/tc4_trade.py 保留 deprecated,/api/trade/* 恆 503,下輪清)
-├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
+│                         #   訊號接線(2026-08-04):server/signal_hub(基準 worker/雙佇列 fanout:
+│                         #   jsonl 真相源+Discord 節流/enabled 持久化)、server/discord_bot(discord.py
+│                         #   bot 進 server,/watch slash 指令,模組層零 discord import、token 缺降級)、
+│                         #   server/watchlist_service(PUT/bot 同鎖 + canonical 零寫早退 + 廣播)
+├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算;tick_size_milli 毫元版)
+├── signals_config.py     #   訊號門檻(configs/signals.json 覆寫;檔缺=全預設、壞檔 raise)
 ├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
 │                         #   URL 未設 no-op、429 Retry-After 重試一次、never-raise;stdlib urllib。
 │                         #   訊號內容/觸發時機未定(待討論);CLI `notify-test` 實發驗證
@@ -126,6 +133,9 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
 `.env` 需要的 secret:
 - `FINMIND_TOKEN`(沿用 trash-cmoney,補期貨 / 選擇權 chip 用)
 - `DISCORD_WEBHOOK_URL`(Discord 通知,選配;未設時 notify 層 no-op。驗收:`python -m copycat notify-test`)
+- `DISCORD_BOT_TOKEN` + `SIGNALS_DISCORD_CHANNEL_ID`(2026-08-04 沿用 treading-king bot;
+  個股訊號推送 + `/watch` slash 指令。token 未設 → bot 降級不啟動,推送 fallback webhook。
+  同 application 的 command sync 會覆蓋 treading-king bot 舊指令 — 該 bot 已退役,可接受)
 - `FRONTEND_ORIGIN`(CORS)
 - Touchance 訂閱授權碼 / 帳號 — 實裝時補確切變數名
 - 群益 Capital(2026-07-28,沿用 treading-king 值):`CAPITAL_USER_ID` / `CAPITAL_PASSWORD` /
@@ -282,6 +292,7 @@ WebSocket / 即時 Stream 紀律:
 - **worktree 內直跑腳本會靜默 import 到主 tree 的 code**(2026-07-30 真踩到):venv 裝的是 editable copycat(`__editable__.copycat-0.1.0.pth` 釘死 `C:\side-project\copycat`)。`pytest` 不受影響(pyproject `pythonpath=["."]` 讓 cwd 優先)、`python -c` 也不受影響(`sys.path[0]` = cwd);但 **`python <dir>/script.py` 的 `sys.path[0]` 是「腳本所在目錄」**,worktree 內的 probe / repro 腳本因此 import 到**主 tree** 的 `copycat`。失效樣態極安靜:腳本正常跑完、只是驗的是別份 code —— 本輪據此一度誤判「修好的 code 沒生效」。worktree 內任何直跑腳本開頭都要 `sys.path.insert(0, <repo root>)`。另:`git worktree remove` 若有 process 還開著 worktree 內的檔案(例:server stdout 導向那裡)會以 `Invalid argument` 失敗,且**會先刪掉 `.git/worktrees/<name>` 中繼資料再失敗** → 收尾要 `git worktree prune` + 手動 rmdir。(Trigger:在 worktree 寫直跑腳本、或收尾清 worktree)
 - **server 不載 dotenv 檔**:runtime 讀設定一律「`name in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 repo root .env」逐 key fallback(capital/factory 慣例;cli/notify 舊慣例是「僅未設才 fallback」,下單開關類安全 key 必須用新語意)。讀 .env 用 `utf-8-sig` + never-raise(Windows BOM 會讓首 key 靜默失效 — 真踩過)。測試側 `tests/conftest.py` 全域中和 dotenv + delenv CAPITAL_*(否則開發機真憑證流入測試,最壞載真 SKCOM DLL → segfault,實測過)。(2026-07-28,Trigger:新增任何 env 設定讀取或 env 相依測試)
 
+- **rollover stage1/stage2 可在同一同步區塊內連發(快路徑),掛兩段通知的模組不能假設中間有 await(2026-08-04 stock-signals 實證)**:`_handle_quote` 的快路徑(週六補市日 / checkpoint 沒跑)會在同一則 quote 內接連跑 stage1 → stage2,任何「stage1 排非同步預備、stage2 消費」的設計在此路徑下預備必為空;更陰的是預備 job 事後完成的**殘留**會被下一次快路徑誤當有效 → 用日別標記(basis_date)驗證,不符即丟。訊號 CDP 基準的 staged swap 就是這樣修的(design review MFS-2)。(Trigger:掛 rollover 兩段通知、或任何 stage1 預備/stage2 消費的設計)
 - **盤中不要起第二台連 TC4 的後端(2026-07-31 升為紀律)**:同 symbol 跨 session 只推一邊(見上一條),第二台會靜默搶走跑著那台的推播 —— 失效樣態是「原本好好的面板突然全空,而兩邊都沒有錯誤訊息」。**驗前端改動只起 vite dev server**(proxy 已指 8721,零新增訂閱);**驗後端 HTTP 層(route 形狀 / 非行情 endpoint)則用 fake source + 另一個 port**,那條路完全不碰 ZMQ,盤中也安全(本輪驗 `/api/health` 即如此)。同理:**不要為了看新 code 就重啟跑著的 server** —— 櫃買當日序列是純 in-memory,重啟即歸零(§8 另有條目),真要重啟先確認那份資料不再需要。(Trigger:盤中要驗證任何後端改動)
 - **TC4 在鎖漲跌停時會於簿的第一檔推「市價單佇列」,價格欄是 `0`(2026-07-31 實證)**:`0` 不是價格,是「這些委託沒有限價」。它會**同時**打穿三處而且全部靜默:(a) `derive_side` —— 鎖漲停(ask 側空、`bids[0]=(0,N)`)時 `price <= 0` 恆假 → 每筆成交判 neutral,實測 2327 國巨全日 5450 張成交 `cum_outer = cum_inner = 0`、內外盤副圖整片灰、外盤比分母 0 算不出來;鎖跌停對稱地 `price >= 0` **恆真** → 一律判 outer(方向碰巧對但 bid 側判定被整條短路);(b) 任何 `bids[0][0] === upper` 形式的鎖停判定 → badge 永不出現;(c) 前端直接把 `0` 印在五檔上,看起來像有人掛 0 元。修法是**只在消費端過濾**(`_best_limit_price` 往下找第一個 `price > 0` 的檔位),簿本身要原樣保留 0 檔位 —— 五檔與閃電梯得把它顯示成「市價」。**另一個更隱蔽的層次**:歷史 TICKS row 只有單一 `Bid`/`Ask` 欄沒有第二檔可退,而 `StockDayState.apply_backfill` 會先 `reset()` 再用回補重放 → **live 期間判好的值每次切檔都被洗掉**;那層要靠 `relabel_locked_side`(鎖漲停 + 對手側整個不可得 → 內盤,鎖跌停 → 外盤;這是漲跌停制度下的恆等式不是猜測)。**還有第四處(2026-07-31 補)**:任何**對整份簿做聚合**的地方 —— 總量列、量 bar 的歸一分母。市價量混進去會讓同一個欄位「鎖停日 = 市價 + 4 檔限價、平常日 = 5 檔限價」(市價那格吃掉 `DEPTH` 的一格),定義隨日子變、跨日跨股比較**靜默失真**;量 bar 更慘,市價佇列可以是限價量的數倍,五根限價 bar 會一起被壓成看不見的短樁。修法同上(消費端過濾成 limit-only),但**市價量要獨立顯示不可只留 hover** —— 鎖板日「無限價排隊多少張」正是 §0a 鎖板品質的核心訊號。另注意排除市價後 `maxQty` 變小,市價列自己的 bar 需夾制(2327 實測算出 170%)。(Trigger:碰內外盤判定、五檔顯示、鎖停偵測、任何拿 `book.bids[0]` 當最佳價、或任何對整份簿做 sum/max 的地方)
 - **`derive_side` 與回測的內外盤是兩條獨立鏈路(2026-07-31 釐清)**:`derive_side` 只存在於 `copycat/live/stock_models.py`;回測(`backtest/fade_*.py`、`data/models.py`)用的是 TC4 **1K row** 的 `UpVolume`/`DownVolume`/`UnchVolume`(`Bar1K`),兩者無呼叫關係。改 live 的判定**不影響任何回測口徑** —— 本輪一度以「共用口徑」為由把修法判成 trap,grep 後推翻。(Trigger:評估改動 live 內外盤判定的 blast radius)
