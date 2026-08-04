@@ -276,14 +276,19 @@ class _FakeChannel:
 
 
 class _FakeClient:
-    def __init__(self, channel: _FakeChannel | None = None) -> None:
+    def __init__(
+        self, channel: _FakeChannel | None = None, *, start_error: Exception | None = None
+    ) -> None:
         self.channel = channel
         self.started: list[str] = []
         self.closed = False
+        self._start_error = start_error
         self._stop = asyncio.Event()
 
     async def start(self, token: str) -> None:
         self.started.append(token)
+        if self._start_error is not None:  # token 失效 → discord.py 在登入時拋
+            raise self._start_error
         await self._stop.wait()
 
     async def close(self) -> None:
@@ -331,6 +336,20 @@ class TestBotLifecycle:
         await bot.close()
 
         assert client.started == ["tok"]
+        assert client.closed is True
+
+    async def test_close_swallows_login_failure(self) -> None:
+        """CC-1:登入失敗(token 錯)讓背景 task 帶著例外結束 —— `close()` 不得把它往外拋。
+
+        `close()` 是關機序列的一環,拋出去會讓 `_close_signals` 的後半(hub.close)整段跳過。
+        """
+        client = _FakeClient(start_error=RuntimeError("LoginFailure"))
+        bot = _bot(client)
+
+        bot.start_bg()
+        await asyncio.sleep(0)
+        await bot.close()
+
         assert client.closed is True
 
     async def test_close_without_start_is_safe(self) -> None:
