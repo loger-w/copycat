@@ -29,7 +29,10 @@ export function useSignalFeed(): { signals: SignalMsg[] } {
   const today = useQuery({ queryKey: TODAY_KEY, queryFn: fetchToday, retry: 1 });
   const [live, setLive] = useState<SignalMsg[]>([]);
 
-  // 外部事件源訂閱(不是從 props/state 推導的值)—— effect 是正解
+  // 外部事件源訂閱(不是從 props/state 推導的值)—— effect 是正解。
+  // 新到的那筆當 `live` 參數(第二個)、已累積的當 `baseline`:`mergeSignals` 依 time
+  // 降冪重排,參數順序只決定**同秒併列**時誰在上,新到的在上與下方 signals 那次呼叫
+  // 「live 贏 baseline」的語意一致。
   useEffect(() => onSignal((sig) => setLive((prev) => mergeSignals(prev, [sig]))), []);
   useEffect(
     () => onWsOpen(() => void queryClient.invalidateQueries({ queryKey: TODAY_KEY })),
