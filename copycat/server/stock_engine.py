@@ -119,6 +119,10 @@ class StockEngine:
     def attach_signal_hub(self, hub: SignalSink) -> None:
         self._signal_hub = hub
 
+    def detach_signal_hub(self) -> None:
+        """摘掉掛點(hub 收攤前呼叫):對已收攤的 hub 繼續打熱路徑 = 訊號靜默全失。"""
+        self._signal_hub = None
+
     # ---- 生命週期 ----
 
     async def start(self) -> None:
