@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  emitSignal,
-  emitWatchlistChanged,
-  emitWsOpen,
-  onSignal,
-  onWatchlistChanged,
-  onWsOpen,
-} from "@/lib/signal-bus";
+import { emitSignal, emitWsOpen, onSignal, onWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 
 function sig(id: string): SignalMsg {
@@ -56,33 +49,22 @@ describe("signal-bus", () => {
     expect(two).toEqual(["a"]);
   });
 
-  it("watchlist_changed 與 ws_open 各自獨立事件(不互相觸發)", () => {
+  it("signal 與 ws_open 各自獨立事件(不互相觸發)", () => {
     let signals = 0;
-    let watchlist = 0;
     let wsOpen = 0;
-    const offs = [
-      onSignal(() => (signals += 1)),
-      onWatchlistChanged(() => (watchlist += 1)),
-      onWsOpen(() => (wsOpen += 1)),
-    ];
-    emitWatchlistChanged();
-    expect([signals, watchlist, wsOpen]).toEqual([0, 1, 0]);
+    const offs = [onSignal(() => (signals += 1)), onWsOpen(() => (wsOpen += 1))];
     emitWsOpen();
-    expect([signals, watchlist, wsOpen]).toEqual([0, 1, 1]);
+    expect([signals, wsOpen]).toEqual([0, 1]);
     emitSignal(sig("a"));
-    expect([signals, watchlist, wsOpen]).toEqual([1, 1, 1]);
+    expect([signals, wsOpen]).toEqual([1, 1]);
     for (const off of offs) off();
   });
 
-  it("watchlist_changed / ws_open 也可退訂", () => {
-    let watchlist = 0;
+  it("ws_open 也可退訂", () => {
     let wsOpen = 0;
-    const offWatchlist = onWatchlistChanged(() => (watchlist += 1));
     const offWsOpen = onWsOpen(() => (wsOpen += 1));
-    offWatchlist();
     offWsOpen();
-    emitWatchlistChanged();
     emitWsOpen();
-    expect([watchlist, wsOpen]).toEqual([0, 0]);
+    expect(wsOpen).toBe(0);
   });
 });

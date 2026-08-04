@@ -143,6 +143,21 @@ describe("SignalRail", () => {
     expect(onToggleSound.mock.calls).toEqual([[false]]);
   });
 
+  it("提示音 / 允許通知在獨立的「提示」區,不與四鍵同組(review MFS-5)", () => {
+    renderRail({ notifPermission: "default" });
+    const kinds = within(screen.getByTestId("signal-rail-kinds"));
+    const alerts = within(screen.getByTestId("signal-rail-alerts"));
+
+    expect(screen.getByTestId("signal-rail-alerts").textContent).toContain("提示");
+    // 提示音與允許通知都在提示區
+    expect(alerts.getByRole("switch", { name: /提示音/ })).toBeTruthy();
+    expect(alerts.getByText(/允許通知/)).toBeTruthy();
+    // 監聽訊號區只剩四鍵(提示音不在其中,否則會被讀成第五種訊號類型)
+    expect(kinds.getAllByRole("switch").length).toBe(4);
+    expect(kinds.queryByRole("switch", { name: /提示音/ })).toBeNull();
+    expect(kinds.queryByText(/允許通知/)).toBeNull();
+  });
+
   it("permission default 才出現允許通知鈕,點擊觸發 onRequestNotif", () => {
     const { onRequestNotif } = renderRail({ notifPermission: "default" });
     fireEvent.click(screen.getByText(/允許通知/));
