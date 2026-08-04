@@ -1,0 +1,37 @@
+=== stock-signals SC-1/SC-8 Discord bot 真實推送(fake server :8899,真 token)===
+# .env 的 DISCORD_BOT_TOKEN / SIGNALS_DISCORD_CHANNEL_ID 為真;bot 真的上線、訊號真的推。
+# 正式 server(:8721,master 74942ca)不含 discord_bot.py → 無同 token 雙 gateway 衝突。
+
+--- (1) hub / bot 狀態(GET /verify/state)---
+  discord_bot = True
+  discord_channel_id = 1487309833630908448
+  discord_ready = True
+  discord_sent_last_min = 3
+  dropped_discord = 0
+
+  discord_ready=True 的語意 = bot.on_ready 已跑完:fetch_channel 成功 + channel 已存進 bot._channel
+
+--- (2) guild 限定 slash 指令(bot on_ready 內 tree.sync 的實際結果,Discord REST 反查)---
+application = 台股機器人 (1512304996832645271)   guild = 1487309832930332674
+guild 限定指令 1 個:
+  /watch  desc='自選股管理'  子指令=['add', 'remove', 'list']
+
+--- (3) 訊號頻道最近訊息(Discord REST 反查,非 server 自述)---
+channel_id = 1487309833630908448   最近 8 則(新→舊)
+  [2026-08-04T06:38:11.234000+00:00] 台股機器人 (BOT): '🔔 鎖漲停｜台積電 2330｜1100.00｜09:30:00'
+  [2026-08-04T06:38:10.577000+00:00] 台股機器人 (BOT): '🔔 爆拉 +2.20%｜鴻海 2317｜51.10｜09:30:00'
+  [2026-08-04T06:38:07.123000+00:00] 6669._.: '😭'
+  [2026-08-04T06:38:04.495000+00:00] 6669._.: '太慢了'
+  [2026-08-04T06:37:55.878000+00:00] 台股機器人 (BOT): '🔔 突破 CDP AH(壓力・第1次)｜台積電 2330｜1022.00｜09:30:00'
+  [2026-07-22T15:20:44.306000+00:00] zhenggu.: ''
+  [2026-07-05T16:54:23.059000+00:00] 9zhenggu: ''
+  [2026-06-24T11:37:05.762000+00:00] TAIFEX Bot (BOT): ''
+
+--- (4) 文案格式(signal_hub.format_signal_text)---
+  🔔 <訊號文字>｜<名稱> <代號>｜<價格>｜<HH:MM:SS>
+  cdp_cross 另帶線名 + 支撐/壓力 + 第 N 次:「突破 CDP AH(壓力・第1次)」
+
+判定:PASS — bot 真的登入、/watch(add/remove/list)真的 sync 到 guild 1487309832930332674、
+      三則訊號(cdp_cross / surge / limit_lock)真的出現在頻道 1487309833630908448,
+      author 為 BOT「台股機器人」,文案與 format_signal_text 一致;webhook fallback 未被用到
+      (DISCORD_WEBHOOK_URL 未設,bot 全數送成功 → hub 不會走到 fallback)。

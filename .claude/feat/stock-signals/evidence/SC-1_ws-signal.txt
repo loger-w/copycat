@@ -1,0 +1,26 @@
+=== stock-signals SC-1 WS /ws/stock 訊號推播(fake server :8899)===
+# client:websockets(自動回 Pong,§8 教訓);ping_interval=None 只收不主動 ping
+# 期間:注入 seed→cdp(2330 穿 CDP AH)→surge(2317 +2.2%)→lock(2330 鎖漲停)
+
+# connected ws://127.0.0.1:8899/ws/stock
+{"type": "watchlist_quote", "code": "2330", "p": null, "chg_pct": null, "vol": null, "ref": null, "upper": null, "lower": null, "no_data": false}
+{"type": "watchlist_quote", "code": "2317", "p": null, "chg_pct": null, "vol": null, "ref": null, "upper": null, "lower": null, "no_data": false}
+{"type": "watchlist_quote", "code": "2330", "p": 1015000, "chg_pct": 1.5, "vol": 3, "ref": null, "upper": 1100000, "lower": 900000, "no_data": false}
+{"type": "watchlist_quote", "code": "2330", "p": 1015000, "chg_pct": 1.5, "vol": 3, "ref": null, "upper": 1100000, "lower": 900000, "no_data": false}
+{"type": "signal", "id": "2026-08-04-2330-cdp_cross-ah-09:30:00.000", "kind": "cdp_cross", "code": "2330", "name": "台積電", "price": 1022000, "time": "09:30:00", "levels": ["ah"], "direction": "from_below", "pct": null, "touch_count": 1}
+{"type": "watchlist_quote", "code": "2330", "p": 1022000, "chg_pct": 2.2, "vol": 6, "ref": null, "upper": 1100000, "lower": 900000, "no_data": false}
+{"type": "watchlist_quote", "code": "2317", "p": 50000, "chg_pct": 0.0, "vol": 2, "ref": null, "upper": 55000, "lower": 45000, "no_data": false}
+{"type": "watchlist_quote", "code": "2317", "p": 50700, "chg_pct": 1.4, "vol": 6, "ref": null, "upper": 55000, "lower": 45000, "no_data": false}
+{"type": "signal", "id": "2026-08-04-2317-surge---09:30:00.000", "kind": "surge", "code": "2317", "name": "鴻海", "price": 51100, "time": "09:30:00", "levels": [], "direction": null, "pct": 2.1999999999999997, "touch_count": 1}
+{"type": "watchlist_quote", "code": "2317", "p": 51100, "chg_pct": 2.2, "vol": 8, "ref": null, "upper": 55000, "lower": 45000, "no_data": false}
+{"type": "signal", "id": "2026-08-04-2330-limit_lock-up-09:30:00.000", "kind": "limit_lock", "code": "2330", "name": "台積電", "price": 1100000, "time": "09:30:00", "levels": [], "direction": "up", "pct": null, "touch_count": 1}
+{"type": "watchlist_quote", "code": "2330", "p": 1100000, "chg_pct": 10.0, "vol": 56, "ref": null, "upper": 1100000, "lower": 900000, "no_data": false}
+
+--- 只留 type=signal 三則 ---
+{"type": "signal", "id": "2026-08-04-2330-cdp_cross-ah-09:30:00.000", "kind": "cdp_cross", "code": "2330", "name": "台積電", "price": 1022000, "time": "09:30:00", "levels": ["ah"], "direction": "from_below", "pct": null, "touch_count": 1}
+{"type": "signal", "id": "2026-08-04-2317-surge---09:30:00.000", "kind": "surge", "code": "2317", "name": "鴻海", "price": 51100, "time": "09:30:00", "levels": [], "direction": null, "pct": 2.1999999999999997, "touch_count": 1}
+{"type": "signal", "id": "2026-08-04-2330-limit_lock-up-09:30:00.000", "kind": "limit_lock", "code": "2330", "name": "台積電", "price": 1100000, "time": "09:30:00", "levels": [], "direction": "up", "pct": null, "touch_count": 1}
+
+判定:PASS — 三則 {"type":"signal",...} 全部在 WS 上收到,欄位與 REST today 同形
+      (WS 版不含 trade_date,那是 jsonl 專屬欄 — 與 design §4.3 一致)。
+      watchlist_quote 的 ref=null 是既有契約(有成交價時 ref 與 p 互斥),非本輪缺陷。

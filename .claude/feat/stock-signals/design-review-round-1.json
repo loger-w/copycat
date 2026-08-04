@@ -1,0 +1,31 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-04",
+  "findings": [
+    {"id": "R1", "severity": "P0", "summary": "訊號 id 用 process-local seq,盤中重啟後與 jsonl baseline 碰撞 → 新訊號被前端去重靜默丟棄", "disposition": "accepted", "resolution": "id 改為決定性鍵 {trade_date}-{code}-{kind}-{level|dir}-{tick時刻};SC-7 補跨重啟 id 不碰撞測試"},
+    {"id": "R2", "severity": "P1", "summary": "enabled『不評估』與『狀態照常推進』自相矛盾,關爆拉會連帶廢爆量", "disposition": "accepted", "resolution": "切成無條件狀態推進 vs 事件產出兩段;SC-12 措辭改『不產生事件』"},
+    {"id": "R3", "severity": "P1", "summary": "rollover 後基準重抓是非同步排隊,窗內用 D-2 CDP 誤判開盤穿越", "disposition": "accepted", "resolution": "on_rollover 同步清空全部 basis(CDP 靜默停用至補回);basis 入 reset 狀態表"},
+    {"id": "R4", "severity": "P1", "summary": "rearm 用 tick_size(元版 float)配毫元價,門檻縮小 1000 倍形同不存在", "disposition": "accepted (機械查證屬實)", "resolution": "market.py 公開 tick_size_milli;rearm 全程毫元;SC-1 測試用真實價位"},
+    {"id": "R5", "severity": "P1", "summary": "掛點覆蓋所有 _states(含非自選主圖股),違背『全自選皆監聽』拍板", "disposition": "accepted", "resolution": "hub 自維護 watchlist 集合 membership gate;補非自選股零訊號測試"},
+    {"id": "R6", "severity": "P1", "summary": "lifespan 建立順序循環 / engine None 分支 / 關機順序未定義", "disposition": "accepted", "resolution": "§4.1 補明確 boot 序列與關機反序;stock None 時 hub/service/bot 全不啟動,route 回 NOT_READY"},
+    {"id": "R7", "severity": "P1", "summary": "無跨 kind/全域總量上限,開盤跳空多線齊發洗版", "disposition": "accepted", "resolution": "同 tick 多線合併單一事件 + 全域每分鐘上限(溢出丟棄計數)+ ToastStack 顯示上限 +N"},
+    {"id": "R8", "severity": "P1", "summary": "無 trade_date gate,盤中新增自選的 fresh subscribe 舊日 snapshot 會汙染 prev/window", "disposition": "accepted", "resolution": "第四道 gate:tick.trade_date != 當前交易日 → 不評估不推進狀態"},
+    {"id": "R9", "severity": "P1", "summary": "鎖停判定只用單側 ask 空,首攻吃光賣盤會誤 latch + 假 lock/open 對", "disposition": "accepted_modified", "resolution": "reviewer 建議的『bid 限價側也不可得』在真鎖停不成立(bid 側有限價排隊);改用複合簽名:price==upper 且 ask 無限價檔 且(bids[0] 為市價佇列 0 或 bids 最佳限價==upper);SC-4 補首攻反例測試"},
+    {"id": "R10", "severity": "P2", "summary": "爆量無絕對量地板,冷門股恆易觸發", "disposition": "absorbed", "resolution": "config 加 min_window_lots/min_day_lots AND 條件"},
+    {"id": "R11", "severity": "P2", "summary": "300s 窗的時間軸來源未定(wall-clock vs tick 時刻)", "disposition": "absorbed", "resolution": "窗與 elapsed 一律 now_fn;事件 time 欄用 tick 時刻(顯示用 ≠ 判定用)"},
+    {"id": "R12", "severity": "P2", "summary": "day_volume 口徑未定(cum_vol vs _volume),回補瞬間會塌", "disposition": "absorbed", "resolution": "用當筆 tick.cum_vol;缺值不評估 vol_burst"},
+    {"id": "R13", "severity": "P2", "summary": "jsonl 同步 IO 在 tick 熱路徑", "disposition": "absorbed", "resolution": "jsonl 併入佇列 worker(to_thread);WS 同步先送,jsonl/Discord 排隊"},
+    {"id": "R14", "severity": "P2", "summary": "新 route 未定義 503 閘與命名(config 名不符實)", "disposition": "absorbed", "resolution": "沿 _stock() 閘;端點改名 /api/stock/signals/enabled;brainstorm SC-12 同步 amendment"},
+    {"id": "R15", "severity": "P2", "summary": "invalidateQueries 用 v4 位置參數形", "disposition": "absorbed", "resolution": "改 v5 物件形"},
+    {"id": "R16", "severity": "P2", "summary": "weekday gate 會讓週六補市日整天零訊號", "disposition": "absorbed", "resolution": "拿掉 weekday 條件,只留時窗 + trade_date gate"},
+    {"id": "R17", "severity": "P2", "summary": "slash command 無 defer,3 秒限制會撞『沒有回應』", "disposition": "absorbed", "resolution": "handler 先 defer 再 followup;fake interaction 測試斷言 defer"},
+    {"id": "R18", "severity": "P2", "summary": "零寫早退比較基準未定,且是既有 PUT 行為改動", "disposition": "absorbed", "resolution": "canonical(正規化後)比較;明記行為改動 + 同內容 PUT 兩次測試"},
+    {"id": "R19", "severity": "P2", "summary": "WS 訊號訊息長欄名與既有短欄名慣例不一致", "disposition": "absorbed_documented", "resolution": "維持長欄名並記理由(訊號訊息同時是 jsonl row,事件型偏可讀)"},
+    {"id": "R20", "severity": "P2", "summary": "limit_open 只由成交觸發,簿上解鎖無成交時不發", "disposition": "absorbed", "resolution": "加 on_book 掛點只餵鎖板 kind(ask 限價檔重新出現 → open);§9 記限制"},
+    {"id": "R21", "severity": "P2", "summary": "touch_count key 三處定義不一致", "disposition": "absorbed", "resolution": "統一 (code, kind, level)"},
+    {"id": "R22", "severity": "P2", "summary": "Known Risks 空白;基準 worker 與回補搶 TC4、WS 丟訊自癒未記", "disposition": "absorbed", "resolution": "填 Known Risks 三項;前端 WS reconnect 時重打 today 自癒"}
+  ],
+  "p2_summary": "13 條 P2 全數吸收進 design v2(其中 R19 以記錄理由收案),無逐條 receiving 爭議",
+  "exit": "P0×1 P1×8 全 accepted 修入 v2;有 accepted P0 → 觸發限縮加輪(round 2 只審 changelog/amendment 段)"
+}

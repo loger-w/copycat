@@ -1,0 +1,9 @@
+﻿.venv\Scripts\python : INFO copycat.data.daily: DailyIndex: 2044 stocks, 11048 limitup events
+At line:1 char:506
++ ... TEXITCODE"; .venv\Scripts\python -m copycat replay --watchlist watchl ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO copycat.da... limitup events:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO copycat.replay.runner: replay 完成: {'watchlist': 'five_tigers', 'config_path': '(default)', 'n_events': 11048, 'n_tiger': 3437, 'n_control': 2482, 'n_excluded': 5129, 'missing_t': 4532, 'missing_t1': 88}
+replay 完成 → out\five_tigers

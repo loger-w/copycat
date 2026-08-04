@@ -1,0 +1,193 @@
+﻿
+> copycat-frontend@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 C:/side-project/copycat/frontend
+
+ ✓ src/hooks/useStockStream.test.ts (12 tests) 1040ms
+ ✓ src/hooks/useMarketBars.test.ts (6 tests) 1118ms
+   ✓ useMarketBars > HTTP 錯誤 → error 帶 detail.error 錯誤碼  1076ms
+ ✓ src/hooks/useStockBars.test.tsx (11 tests) 1192ms
+   ✓ useStockBars 取數條件 > 錯誤碼依專案契約自 detail.error 解析  1081ms
+ ✓ src/hooks/useSignalsConfig.test.tsx (3 tests) 1344ms
+   ✓ useSignalsConfig > 尚未載入 / 抓失敗 → 全開(fail-open,不會靜默清空整條訊號流)  1095ms
+ ✓ src/hooks/useIndexStream.test.ts (4 tests) 1440ms
+   ✓ useIndexStream > WS reconnect → refetch state 全量(F3)  1180ms
+ ✓ src/hooks/useSignalFeed.test.tsx (4 tests) 1419ms
+   ✓ useSignalFeed > today 抓失敗 → signals 空陣列(不 throw,live 訊號照樣進得來)  1101ms
+ ✓ src/components/stock/StockPage.test.tsx (26 tests) 1511ms
+ ✓ src/App.test.tsx (20 tests) 1874ms
+   ✓ App(index-board T9) > localStorage 記住 index tab,重載復原(review B8)  311ms
+   ✓ App(capital WS 唯一掛載 review B2) > App 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線  697ms
+ ✓ src/components/stock/WatchlistSidebar.test.tsx (53 tests) 2323ms
+ ✓ src/components/stock/CandleChart.test.tsx (39 tests) 2516ms
+   ✓ CandleChart 縮放與平移(SC-6.3/6.4) > 縮放下限 20 根、上限 min(total, 700) 根  1404ms
+ ✓ src/components/rail/RightRail.test.tsx (21 tests) 2605ms
+   ✓ RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13) > 個股武裝後切到期貨 context 再切回 → 鈕回到「武裝」  370ms
+   ✓ RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13) > 武裝後切右欄 tab 再切回閃電 → 鈕回到「武裝」  351ms
+   ✓ RightRail 交易別 / 數量不隨 tab 重置(R2-10) > 張數快捷值切 tab 後保留  350ms
+ ✓ src/components/stock/StockChart.test.tsx (13 tests) 2622ms
+   ✓ StockChart 模式切換(SC-7) > 取數失敗顯示「K 線載入失敗」+ 錯誤碼,不崩  1055ms
+   ✓ StockChart 模式切換(SC-7) > 錯誤碼 fallback:body 無 detail.error → 顯示 HTTP_<status>  1070ms
+node.exe : stderr | src/hooks/useRiver.test.ts > useRiver > 非 river 型別的訊息忽略,壞 JSON 不崩
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (stderr | src/ho...的訊息忽略,壞 JSON 不崩:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+river ws: 無法解析訊息 SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at FakeWS.ws.onmessage (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:135:28)
+    at C:\side-project\copycat\frontend\src\hooks\useRiver.test.ts:164:18
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act (C:\side-project\copycat\frontend\node_modules\react\cjs\react.development.js:814:22)
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:46:25
+    at C:\side-project\copycat\frontend\src\hooks\useRiver.test.ts:164:5
+    at file:///C:/side-project/copycat/frontend/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20
+
+ ✓ src/hooks/useRiver.test.ts (9 tests) 676ms
+ ✓ src/components/stock/WatchlistManagerDialog.test.tsx (32 tests) 1033ms
+ ✓ src/components/index/IndexPage.test.tsx (19 tests) 882ms
+ ✓ src/components/OrderPanel.test.tsx (11 tests) 706ms
+ ✓ src/components/capital/CapitalOrdersList.test.tsx (11 tests) 701ms
+ ✓ src/hooks/useFuturesStream.test.ts (11 tests) 505ms
+ ✓ src/components/stock/StockIntradayChart.test.tsx (76 tests) 1060ms
+stderr | src/hooks/useCorrelation.test.ts > useCorrelation > 壞 JSON 不讓 hook 崩潰
+corr ws: 無法解析訊息 SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at FakeWS.ws.onmessage (C:\side-project\copycat\frontend\src\hooks\useCorrelation.ts:63:28)
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.test.ts:105:18
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act (C:\side-project\copycat\frontend\node_modules\react\cjs\react.development.js:814:22)
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:46:25
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.test.ts:105:5
+    at file:///C:/side-project/copycat/frontend/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20
+
+stderr | src/hooks/useCorrelation.test.ts > useCorrelation > REST 失敗不拋,等推播補上
+corr: state 載入失敗 Error: boom
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.test.ts:122:13
+    at mockCall (file:///C:/side-project/copycat/frontend/node_modules/@vitest/spy/dist/index.js:96:15)
+    at spy (file:///C:/side-project/copycat/frontend/node_modules/tinyspy/dist/index.js:47:80)
+    at load (C:\side-project\copycat\frontend\src\hooks\useCorrelation.ts:41:27)
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.ts:51:10
+    at Object.react_stack_bottom_frame (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:25989:20)
+    at runWithFiberInDEV (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:874:13)
+    at commitHookEffectListMount (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:13249:29)
+    at commitHookPassiveMountEffects (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:13336:11)
+    at commitPassiveMountOnFiber (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:15484:13)
+
+ ✓ src/hooks/useCorrelation.test.ts (7 tests) 491ms
+ ✓ src/components/stock/OrderBook.test.tsx (30 tests) 322ms
+ ✓ src/hooks/useStockWatchlist.test.tsx (4 tests) 487ms
+ ✓ src/components/futures/FuturesLadder.test.tsx (12 tests) 4273ms
+   ✓ FuturesLadder 武裝直送(SC-8) > 武裝點價:1 次 API call;payload 帶 HOT symbol + day_trade 預設 false  397ms
+   ✓ FuturesLadder 武裝直送(SC-8) > product 變更自動解除武裝(symbol_changed)  330ms
+   ✓ FuturesLadder 武裝直送(SC-8) > capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)  455ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > idle 5 分鐘自動解除  459ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > 送單 400:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除  648ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > 200 但 ok:false(結果未知 code=-1)→ hint 顯示 message 且 failStreak 累積  597ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > qty 快捷「3」按兩下累加 → payload qty 6(review C4)  576ms
+ ✓ src/components/capital/CapitalPositionsList.test.tsx (7 tests) 267ms
+ ✓ src/components/stock/TickTape.test.tsx (9 tests) 221ms
+ ✓ src/components/corr/RiverPanel.test.tsx (11 tests) 231ms
+ ✓ src/components/stock/SignalRail.test.tsx (11 tests) 212ms
+ ✓ src/components/capital/CapitalConfirmDialog.test.tsx (2 tests) 85ms
+ ✓ src/components/quote/DepthBar.test.tsx (19 tests) 187ms
+ ✓ src/components/PnlChart.test.tsx (5 tests) 106ms
+ ✓ src/components/futures/FuturesPage.test.tsx (10 tests) 176ms
+ ✓ src/hooks/useStockOverlay.test.tsx (2 tests) 162ms
+stderr | src/components/corr/CorrPage.test.tsx > CorrPage > 把 hook 的 state 傳進面板
+river: state 載入失敗 TypeError: Failed to parse URL from /api/river/state
+    at node:internal/deps/undici/undici:16416:13
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:100:21) {
+  [cause]: TypeError: Invalid URL: /api/river/state
+      at new URLImpl (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL-impl.js:20:13)
+      at Object.exports.setup (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:54:12)
+      at new URL (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:115:22)
+      at new Request (node:internal/deps/undici/undici:10971:25)
+      at fetch (node:internal/deps/undici/undici:11891:25)
+      at fetch (node:internal/deps/undici/undici:16414:10)
+      at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)
+      at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:100:27)
+      at C:\side-project\copycat\frontend\src\hooks\useRiver.ts:110:10
+      at Object.react_stack_bottom_frame (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:25989:20)
+}
+
+stderr | src/components/corr/CorrPage.test.tsx > CorrPage > hook 尚未取得資料時顯示載入中
+river: state 載入失敗 TypeError: Failed to parse URL from /api/river/state
+    at node:internal/deps/undici/undici:16416:13
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:100:21) {
+  [cause]: TypeError: Invalid URL: /api/river/state
+      at new URLImpl (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL-impl.js:20:13)
+      at Object.exports.setup (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:54:12)
+      at new URL (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:115:22)
+      at new Request (node:internal/deps/undici/undici:10971:25)
+      at fetch (node:internal/deps/undici/undici:11891:25)
+      at fetch (node:internal/deps/undici/undici:16414:10)
+      at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)
+      at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:100:27)
+      at C:\side-project\copycat\frontend\src\hooks\useRiver.ts:110:10
+      at Object.react_stack_bottom_frame (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:25989:20)
+}
+
+ ✓ src/components/corr/CorrPage.test.tsx (2 tests) 87ms
+ ✓ src/components/OrderConfirm.test.tsx (4 tests) 58ms
+ ✓ src/components/MetricsBar.test.tsx (3 tests) 55ms
+ ✓ src/components/QuoteTable.test.tsx (5 tests) 81ms
+ ✓ src/components/corr/CorrPanel.test.tsx (10 tests) 78ms
+ ✓ src/components/OrdersList.test.tsx (5 tests) 49ms
+ ✓ src/lib/stock-tick.test.ts (25 tests) 9ms
+ ✓ src/components/stock/PriceLadder.test.tsx (24 tests) 6159ms
+   ✓ PriceLadder 武裝直送(SC-7) > code 變更自動解除武裝(symbol_changed)  454ms
+   ✓ PriceLadder 武裝直送(SC-7) > Esc 鍵解除武裝  332ms
+   ✓ PriceLadder 武裝直送(SC-7) > capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)  509ms
+   ✓ PriceLadder 武裝直送(SC-7) > idle 5 分鐘自動解除  343ms
+   ✓ PriceLadder 武裝直送(SC-7) > qty 快捷同鍵累加 + 手動輸入重置;payload 帶累加後張數  1184ms
+   ✓ PriceLadder 武裝直送(SC-7) > 送單失敗:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除  815ms
+ ✓ src/lib/stock-intraday-svg.test.ts (47 tests) 15ms
+ ✓ src/lib/candle.test.ts (42 tests) 75ms
+ ✓ src/hooks/useStockNames.test.tsx (5 tests) 6379ms
+   ✓ useStockNames > 404 → error 態帶錯誤碼  1082ms
+   ✓ useStockNames > 啟動窗內連續失敗後應自動復原(不需 focus / remount)  4051ms
+   ✓ useStockNames > body 為合法 JSON null → 退回 HTTP_<status>,不讓 TypeError 逸出  1087ms
+ ✓ src/components/IndexBar.test.tsx (5 tests) 51ms
+ ✓ src/components/chart/ChartReadout.test.tsx (5 tests) 58ms
+ ✓ src/lib/river-chart-svg.test.ts (23 tests) 10ms
+ ✓ src/lib/futures-ladder.test.ts (16 tests) 8ms
+ ✓ src/components/ToastStack.test.tsx (4 tests) 37ms
+ ✓ src/hooks/useSignalAlerts.test.tsx (13 tests) 41ms
+ ✓ src/components/ConnectionBadge.test.tsx (5 tests) 39ms
+ ✓ src/hooks/useChartToggles.test.ts (11 tests) 33ms
+ ✓ src/lib/watchlist-model.test.ts (31 tests) 8ms
+ ✓ src/hooks/useCapital.test.tsx (14 tests) 48ms
+ ✓ src/lib/stock-accum.test.ts (15 tests) 5ms
+ ✓ src/lib/candle-viewport.test.ts (23 tests) 6ms
+ ✓ src/lib/signal-model.test.ts (24 tests) 8ms
+ ✓ src/lib/pnl-svg.test.ts (9 tests) 6ms
+ ✓ src/lib/api-error.test.ts (3 tests) 5ms
+ ✓ src/lib/chart-extreme.test.ts (16 tests) 5ms
+ ✓ src/lib/stock-search.test.ts (10 tests) 5ms
+ ✓ src/lib/index-chart-svg.test.ts (5 tests) 5ms
+ ✓ src/lib/bollinger.test.ts (9 tests) 5ms
+ ✓ src/lib/tquote.test.ts (11 tests) 5ms
+ ✓ src/lib/signal-bus.test.ts (5 tests) 4ms
+ ✓ src/lib/trade-text.test.ts (7 tests) 4ms
+ ✓ src/hooks/useTxoSnapshot.test.ts (3 tests) 23ms
+ ✓ src/lib/list-drag.test.ts (7 tests) 4ms
+ ✓ src/lib/flash-arm.test.ts (6 tests) 4ms
+ ✓ src/lib/format.test.ts (5 tests) 3ms
+ ✓ src/lib/qty-quick.test.ts (6 tests) 3ms
+ ✓ src/lib/chart-frame.test.ts (7 tests) 3ms
+ ✓ src/lib/chart-crosshair.test.ts (10 tests) 3ms
+ ✓ src/hooks/useSignalSound.test.tsx (3 tests) 18ms
+ ✓ src/hooks/useContainerSize.test.tsx (1 test) 13ms
+
+ Test Files  74 passed (74)
+      Tests  994 passed (994)
+   Start at  14:24:34
+   Duration  9.06s (transform 2.48s, setup 0ms, collect 19.94s, tests 47.30s, environment 41.69s, prepare 7.97s)
+

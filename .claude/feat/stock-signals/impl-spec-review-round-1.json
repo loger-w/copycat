@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "date": "2026-08-04",
+  "findings": [
+    {"id": "R1", "severity": "P0", "summary": "tick_size_milli 範例算錯檔位(123_450→500 非 50),紅測試永遠轉不了綠且與 property 斷言互斥", "disposition": "accepted", "resolution": "範例改 23_450==50 與 123_450==500,docstring 更正"},
+    {"id": "R2", "severity": "P0", "summary": "rearm 紅測試價位跨 tick 段邊界且解除點算錯(99.75 距 0.25 元 < 門檻 0.5)", "disposition": "accepted", "resolution": "改用 AH=80.00(tick 0.1、rearm 0.5):79.95 不解除、79.50 解除,註記門檻取當下價 tick 段"},
+    {"id": "R3", "severity": "P1", "summary": "lifespan 順序 service 建立晚於 signals _boot 會 NameError 且被 _boot 吞成靜默降級", "disposition": "accepted", "resolution": "service 先建掛 app.state 再跑 signals _boot;補『stock 就緒時 signal_hub 不為 None』測試"},
+    {"id": "R4", "severity": "P1", "summary": "discord.py 缺席整檔 skip = SC-8 vacuous gate(dev venv 沒裝 extras)", "disposition": "accepted", "resolution": "handler 邏輯不 import discord(fake interaction protocol 直測);create_bot 函式內 lazy import;僅接線測試 skipif;收尾證據附 passed 數"},
+    {"id": "R5", "severity": "P1", "summary": "conftest 未中和 DISCORD_*,真 token 流入測試(CAPITAL_* 同型事故前科)", "disposition": "accepted", "resolution": "conftest autouse delenv DISCORD_BOT_TOKEN/SIGNALS_DISCORD_CHANNEL_ID + 中和 .env reader"},
+    {"id": "R6", "severity": "P1", "summary": "CDP 基準 worker(design §4.2)在 PLAN 無敘述無測試", "disposition": "accepted", "resolution": "hub 節補 staged 預抓/swap/fallback/失敗 set_basis(None)/on_watchlist 排程與測試"},
+    {"id": "R7", "severity": "P1", "summary": "SC-1 只有 detector 單元層,WS payload 契約(§7)無整合測試釘住", "disposition": "accepted", "resolution": "hub 補整合案例:穿越 tick → publish dict 鍵集完全等於 §7 契約 + jsonl 同形 + sender 呼叫數"},
+    {"id": "R8", "severity": "P1", "summary": "試撮 tick 不進 hub 靠掛點位置保證,無測試鎖死", "disposition": "accepted", "resolution": "engine 補紅測試:is_trial quote → on_tick 0 次、on_book 照常"},
+    {"id": "R9", "severity": "P2", "summary": "ctor 多出 pending_fn(與 R2-2 engine 端 gate 重複真相源);trade_date 存取器未列", "disposition": "absorbed", "resolution": "刪 pending_fn;engine 節補 trade_date 存取器;_pending_date 欄位名已證實"},
+    {"id": "R10", "severity": "P2", "summary": "watchlist invalidate 註冊點兩節矛盾(useSignalFeed vs App)", "disposition": "absorbed", "resolution": "回歸 design §8.1:useStockStream 內 useQueryClient 直接 invalidate,單一註冊點"},
+    {"id": "R11", "severity": "P2", "summary": "signal-bus.ts 不在 design §2 檔案清單", "disposition": "absorbed", "resolution": "design §2 補列(v3 amendment)"},
+    {"id": "R12", "severity": "P2", "summary": "useStockStream 測試檔名是 .ts 非 .tsx", "disposition": "absorbed", "resolution": "改 .test.ts 沿用既有 harness"},
+    {"id": "R13", "severity": "P2", "summary": "evaluate_book 未帶 enabled,關 limit_lock 簿路仍發", "disposition": "absorbed", "resolution": "evaluate_book(code, ctx, enabled);SC-12 測試補簿路案例"},
+    {"id": "R14", "severity": "P2", "summary": "fanout 佇列滿丟最舊語意 asyncio.Queue 沒有,無 spec 無測試", "disposition": "absorbed", "resolution": "明寫 put_nowait→QueueFull 時 get_nowait 丟最舊 + dropped 計數;補測試"},
+    {"id": "R15", "severity": "P2", "summary": "brainstorm edge 6 與 design §9 對重啟後鎖停重發語意相反", "disposition": "absorbed", "resolution": "拍板採 design §9(重啟後重發一次 = 已接受代價);brainstorm edge 6 amendment;SC-4 補測試表態"}
+  ],
+  "exit": "P0×2 P1×6 P2×7 全修入 PLAN(+design §2 / brainstorm edge 6 兩處上游 amendment),固定 1 輪不重跑 → Phase 2 完成"
+}

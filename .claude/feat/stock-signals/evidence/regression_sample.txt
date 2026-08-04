@@ -1,0 +1,14 @@
+=== stock-signals regression 抽驗(fake server :8899;既有 endpoint 未被本輪打壞)===
+# 時間:2026-08-04 14:50:29
+
+--- (1) GET /api/health ---
+{"git_sha":"7021055","git_dirty":true,"started_at":"2026-08-04T14:43:16"}
+HTTP 200
+
+--- (2) GET /api/stock/names(形狀 + 筆數,只印前 3 筆)---
+  keys  = ['count', 'names']
+  count = 2401 (len(names) = 2401 )
+  head  = [{'code': '00400A', 'name': '主動國泰動能高息'}, {'code': '00401A', 'name': '主動摩根台灣鑫收'}, {'code': '00402A', 'name': '主動安聯美國科技'}]
+
+判定:PASS — /api/health 回 {git_sha, git_dirty, started_at} 200;
+      /api/stock/names 回 {names:[{code,name}], count} 200 且 count == len(names)。

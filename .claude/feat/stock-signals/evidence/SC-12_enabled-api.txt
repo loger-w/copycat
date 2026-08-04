@@ -1,0 +1,72 @@
+=== stock-signals SC-12 訊號開關 /api/stock/signals/enabled(fake server :8899)===
+# 時間:2026-08-04 14:41:14
+
+--- (1) GET enabled(四鍵全開)---
+{"enabled":{"cdp_cross":true,"surge_crash":true,"vol_burst":true,"limit_lock":true}}
+
+--- (2) PUT {"enabled":{"surge_crash":false}}(部分更新 → 回傳合併後完整四鍵)---
+{"enabled":{"cdp_cross":true,"surge_crash":false,"vol_burst":true,"limit_lock":true}}
+
+--- (3) GET 確認落地 ---
+{"enabled":{"cdp_cross":true,"surge_crash":false,"vol_burst":true,"limit_lock":true}}
+    磁碟落檔 C:\Users\USER\AppData\Local\Temp\copycat-signal-e2e-iqrm7zts/signals_enabled.json:
+{
+  "cdp_cross": true,
+  "surge_crash": false,
+  "vol_burst": true,
+  "limit_lock": true
+}
+
+--- (4) PUT 非法鍵 {"enabled":{"bogus_key":true}} ---
+{"detail":{"error":"INVALID_SIGNALS_ENABLED"}}
+HTTP 400
+
+--- (4b) PUT 非 bool 值 {"enabled":{"surge_crash":"yes"}}(pydantic 寬鬆轉型不得放行)---
+{"detail":{"error":"INVALID_SIGNALS_ENABLED"}}
+HTTP 400
+
+--- (4c) 兩次非法 PUT 之後 GET:狀態未被汙染 ---
+{"enabled":{"cdp_cross":true,"surge_crash":false,"vol_burst":true,"limit_lock":true}}
+
+--- (5) 關掉爆拉爆跌後注入同一組爆拉序列(2317 窗內 +2.20%)---
+    先把注入時鐘前進 2000s:SC-2 那次爆拉的 per-(code,kind) 冷卻是 1800s,
+    不跨過它的話「沒有新訊號」會分不清是開關擋的還是冷卻擋的(vacuous)。
+{"now":"11:13:54","offset_secs":-12464.580375}
+{"scenario":"surge","clock":"11:13:55","new":[],"total":3}
+    ^ new=[] 且 total 未增 = 後端根本不產生(不是前端過濾)
+
+--- (6) PUT 開回 surge_crash → 立刻注入同一組序列(反證非 vacuous)---
+{"enabled":{"cdp_cross":true,"surge_crash":true,"vol_burst":true,"limit_lock":true}}
+{"scenario":"surge","clock":"11:13:56","new":[{"type":"signal","id":"2026-08-04-2317-surge---09:30:00.000","kind":"surge","code":"2317","name":"鴻海","price":51100,"time":"09:30:00","levels":[],"direction":null,"pct":2.1999999999999997,"touch_count":2,"trade_date":"2026-08-04"}],"total":4}
+    ^ 同樣的注入序列、同樣的時鐘窗,只差開關 → 這次產出 surge = 步驟 (5) 的空結果
+      確實由開關造成。另注意:停用期間 _prev/_window 照常推進(design R2),
+      所以開回後不需要暖機就能立刻判定。
+
+判定:PASS — 四鍵全開預設、部分更新、磁碟落檔、非法鍵/非法值皆 400 INVALID_SIGNALS_ENABLED
+      且不汙染狀態;關閉後後端不產生該類事件,開回後同序列立刻復發(非 vacuous)。
+
+==================================================================
+--- (7) UI 層(vite :5199 → fake server :8899,1600x900,全程未重整)---
+  a) 起始:訊號欄四鍵全開,清單 4 列
+     ["11:22 2330 台積電 突破 CDP AH 1022",
+      "09:30 2317 鴻海 爆拉 +2.20% 51.1",
+      "09:30 2330 台積電 鎖漲停 1100",
+      "09:30 2330 台積電 突破 CDP AH 1022"]
+
+  b) 點「爆拉爆跌」toggle 關 → 後端 GET enabled 立即為
+     {"cdp_cross":true,"surge_crash":false,"vol_burst":true,"limit_lock":true}
+     (前端樂觀更新 + PUT 落地,兩邊一致)
+
+  c) 關閉狀態下注入與 SC-2 完全相同的爆拉序列(2317 窗內 +2.20%):
+     POST /verify/push → {"new":[],"total":5}   ← 後端零產出
+     畫面清單同時只剩 3 列(既有的 09:30 爆拉列也被顯示端過濾掉):
+     ["11:22 2330 台積電 突破 CDP AH 1022",
+      "09:30 2330 台積電 鎖漲停 1100",
+      "09:30 2330 台積電 突破 CDP AH 1022"]
+     截圖:SC-12_toggle-off.png(左下「爆拉爆跌 關」、清單無爆拉列)
+
+  d) 再把 toggle 開回 → 清單立刻回到 4 列(爆拉列復現),四鍵回全開。
+     這一步證明 (c) 的消失是開關造成的,不是列本身不見了。
+
+判定(UI 部分):PASS — toggle 三處一致(前端顯示過濾 / 後端 enabled 落地 / 後端不再產生),
+      關閉期間注入零產出、開回後既有列復現。
