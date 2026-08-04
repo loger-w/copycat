@@ -42,13 +42,17 @@ from copycat.server.bars import (
     clamp_days,
     is_partial_last,
 )
+from copycat.notify import notify_discord
+from copycat.server.discord_bot import Bot, create_bot
 from copycat.server.overlay import OverlayCache, build_overlay
+from copycat.server.signal_hub import SignalHub
 from copycat.server.stock_engine import StockEngine, StockSource
+from copycat.server.watchlist_service import WatchlistService
+from copycat.signals_config import load_signals_config
 from copycat.stock_watchlist import (
     Group,
     WatchlistError,
     load_watchlist,
-    save_watchlist,
     union,
     validate_code,
 )
@@ -145,6 +149,13 @@ class PreviewBody(BaseModel):
 
 class SubmitBody(BaseModel):
     preview_id: str
+
+
+class SignalsEnabledBody(BaseModel):
+    #: 值刻意宣告成 `object` 而非 `bool`:pydantic v2 的寬鬆模式會把 "yes"/"1" 轉成 True,
+    #: 打錯的值就會被靜默接受成「開啟」。四鍵與型別一律由 `hub.set_enabled` 驗
+    #: (ValueError → 400 INVALID_SIGNALS_ENABLED),驗證規則單一定義在 hub。
+    enabled: dict[str, object]
 
 
 def _tc4_port() -> str:
@@ -302,6 +313,61 @@ def create_app(
         )
         app.state.stock = stock
 
+        # 自選複合操作(design §6):落檔 + 訂閱池 + 廣播三件事的單一定義,前端 PUT 與
+        # Discord `/watch` 共用同一把 lock。**必須先於 signals `_boot`**(impl-review R3):
+        # 它是 `_start_signals` closure 的自由變數,順序反了會是 NameError,而 `_boot` 的
+        # except 會把它吞成「訊號功能靜默停用」—— 從畫面上只看得到「今天都沒訊號」。
+        service = WatchlistService(wl_path, stock) if stock is not None else None
+        app.state.watchlist_service = service
+
+        # 訊號引擎(design §4.5):整段套 `_boot` 隔離 —— discord 登入失敗 / 壞自選檔
+        # 只讓訊號停用,不波及其他引擎。bot 由 start 建立、close 收攤(成對)。
+        bot: Bot | None = None
+
+        def _make_signals() -> SignalHub | None:
+            if stock is None:
+                return None
+            engine = stock
+            return SignalHub(
+                load_signals_config(),
+                publish=engine._publish,
+                daily_bars=engine.daily_bars,
+                notify_fallback=notify_discord,
+                # 自選檔所在目錄 = 本專案的 data 根(`data/stock_watchlist.json`)→
+                # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
+                data_dir=wl_path.parent,
+                # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
+                trade_date_fn=lambda: engine.trade_date,
+            )
+
+        async def _start_signals(hub: SignalHub) -> None:
+            nonlocal bot
+            await hub.start()
+            if stock is not None:  # `_make_signals` 已保證;narrowing 用
+                stock.attach_signal_hub(hub)
+            # membership 種子:沒有這一步,開機後所有 tick 都被 hub 的 membership gate 擋掉
+            hub.on_watchlist(load_watchlist(wl_path)["codes"])
+            bot = create_bot(service, hub)  # token 未設 / extras 未裝 → None(SC-8 降級)
+            if bot is not None:
+                bot.start_bg()
+                hub.attach_discord(bot.send_signal)
+
+        async def _close_signals(hub: SignalHub) -> None:
+            if bot is not None:
+                await bot.close()
+            await hub.close()
+
+        signals = await _boot(
+            "signals",
+            "訊號引擎啟動失敗,訊號功能停用(其餘不受影響)",
+            _make_signals,
+            _start_signals,
+            _close_signals,
+        )
+        app.state.signal_hub = signals
+        # 啟動失敗時 `_boot` 已呼叫 `_close_signals`(bot 也收了)→ 不對外暴露死掉的 bot
+        app.state.discord_bot = bot if signals is not None else None
+
         # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
         def _make_index() -> IndexEngine | None:
             resolved_index = (
@@ -417,8 +483,14 @@ def create_app(
         try:
             yield
         finally:
-            # 關機反序:corr → futures → capital → index → stock → (trade) → runtime
-            # (corr 依賴 futures.state(),必須先收)
+            # 關機反序:signals → corr → futures → capital → index → stock → (trade) → runtime
+            # (corr 依賴 futures.state(),必須先收;signals 最前 —— fanout worker 還活著時
+            # 對已收攤的 stock engine publish 會炸在關機路徑上)
+            if signals is not None:
+                try:
+                    await _close_signals(signals)  # bot 先於 hub(hub 的 sender 指向 bot)
+                except Exception:
+                    logger.exception("signals close 失敗(關機續行)")
             if corr is not None:
                 try:
                     await corr.close()
@@ -537,6 +609,22 @@ def create_app(
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
         return stock
 
+    def _watchlist_service(request: Request) -> WatchlistService:
+        _stock(request)  # 引擎未就緒的 503 優先(既有 PUT 行為)
+        service: WatchlistService | None = request.app.state.watchlist_service
+        if service is None:
+            raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+        return service
+
+    def _signals(request: Request) -> SignalHub:
+        """訊號 route 的共同閘(design §7):先 `_stock()` 再 hub —— 兩者皆 503 NOT_READY,
+        但順序決定「達錢 4 沒開」與「訊號層單獨降級」在 log 上的可分辨性。"""
+        _stock(request)
+        hub: SignalHub | None = request.app.state.signal_hub
+        if hub is None:
+            raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+        return hub
+
     def _valid_code(code: str) -> None:
         """個股代號閘。**必須在 `_stock(request)` 之後呼叫** —— 「引擎沒起來 + 代號非法」
         現況回 503 不是 400,那個優先序是既有行為(做成 Depends 會被 FastAPI 提前跑)。"""
@@ -561,11 +649,16 @@ def create_app(
 
     @app.put("/api/stock/watchlist")
     async def stock_watchlist_put(request: Request, body: GroupsBody) -> dict:
-        stock = _stock(request)
+        """整份取代。**改走 `WatchlistService`**(design §6):落檔 + 訂閱池 + 廣播三件事
+        與 Discord `/watch` 共用同一把 lock,兩邊同時改自選不再互相覆蓋。
+
+        對外形狀不變,但**同內容 PUT 現在是 no-op**(🔴):舊碼照樣跑一輪 `set_watchlist`
+        對整份名單 UNSUB/SUB,盤中存個檔就讓所有自選股斷訂一次。
+        """
+        service = _watchlist_service(request)
         groups: list[Group] = [{"name": g.name, "codes": g.codes} for g in body.groups]
         codes = body.codes if body.codes is not None else union(groups)
-        saved = save_watchlist(wl_path, {"codes": codes, "groups": groups})  # 400 由 handler
-        await stock.set_watchlist(saved["codes"])  # 未分組也要進訂閱池
+        saved = await service.apply({"codes": codes, "groups": groups})  # 400 由 handler
         return {"codes": saved["codes"], "groups": saved["groups"]}
 
     @app.get("/api/stock/overlay/{code}")
@@ -603,6 +696,33 @@ def create_app(
                 raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
             bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days_n), today)
         return {"code": code, "tf": tf, "bars": bars}
+
+    # ---- stock signals(stock-signals design §7)----
+
+    @app.get("/api/stock/signals/today")
+    async def stock_signals_today(request: Request) -> dict:
+        """當日訊號歷史(SC-7):讀 hub 的 jsonl,壞行跳過。
+
+        前端 reconnect 後拿它當 baseline 自癒 —— WS 斷線期間丟掉的訊號由這裡補回。
+        """
+        return {"signals": _signals(request).today_signals()}
+
+    @app.get("/api/stock/signals/enabled")
+    async def stock_signals_enabled(request: Request) -> dict:
+        return {"enabled": _signals(request).enabled()}
+
+    @app.put("/api/stock/signals/enabled")
+    async def stock_signals_enabled_put(request: Request, body: SignalsEnabledBody) -> dict:
+        """部分更新(只送要改的鍵);回傳合併後的完整四鍵狀態。"""
+        hub = _signals(request)
+        try:
+            # 值型別由 hub 驗(見 SignalsEnabledBody);cast 只是把驗證責任交出去
+            await hub.set_enabled(cast("dict[str, bool]", body.enabled))
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail={"error": "INVALID_SIGNALS_ENABLED"}
+            ) from None
+        return {"enabled": hub.enabled()}
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:
