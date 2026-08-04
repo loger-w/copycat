@@ -206,6 +206,40 @@ describe("StockPage 漲跌停亮燈(round6 項 3)", () => {
   });
 });
 
+// 🔴 mod/stock-price-prominence:header 現價要成為整列唯一視覺焦點。
+// jsdom 量不到字級,只能鎖住產生該效果的 class 組合(真實版面走截圖對照)。
+describe("StockPage 現價醒目化", () => {
+  const atLimit = (p: number) =>
+    stream({ accum: { ...ACCUM, last: { p, t: "09:00:01.000", cum_vol: 1 } } as StockAccum });
+
+  // SC-1:絕對字級 + **相對於股名**。只斷言 text-3xl 會在「股名也一起放大」時仍綠 = vacuous。
+  it("未觸價 → 現價 text-3xl + font-semibold,且字級大於股名(SC-1)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
+    const cls = screen.getByTestId("page-quote").className;
+    expect(cls).toContain("text-3xl");
+    expect(cls).toContain("font-semibold");
+    expect(cls).toContain("font-mono"); // 數字字體不可因放大被換掉(白名單 4)
+    const heading = screen.getByRole("heading", { name: /台積電/ });
+    expect(heading.className).not.toContain("text-3xl");
+  });
+
+  // SC-2:% 同步放大一級(text-xs → text-sm),但刻意不與主數字等比
+  it("漲跌 % 放大為 text-sm(SC-2)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
+    const cls = screen.getByTestId("page-quote-pct").className;
+    expect(cls).toContain("text-sm");
+  });
+
+  // SC-3:字級與反白是兩組獨立 class,twMerge 不可把任一方吃掉
+  it("漲停 → text-3xl 與反白底色白字並存(SC-3)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_550_000)} />);
+    const cls = screen.getByTestId("page-quote").className;
+    expect(cls).toContain("text-3xl");
+    expect(cls).toContain("bg-bull");
+    expect(cls).toContain("text-white");
+  });
+});
+
 describe("StockPage 加入自選(round4 項 4)", () => {
   let putBodies: unknown[];
 
