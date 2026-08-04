@@ -209,34 +209,65 @@ describe("StockPage 漲跌停亮燈(round6 項 3)", () => {
 // 🔴 mod/stock-price-prominence:header 現價要成為整列唯一視覺焦點。
 // jsdom 量不到字級,只能鎖住產生該效果的 class 組合(真實版面走截圖對照)。
 describe("StockPage 現價醒目化", () => {
-  const atLimit = (p: number) =>
+  const atPrice = (p: number) =>
     stream({ accum: { ...ACCUM, last: { p, t: "09:00:01.000", cum_vol: 1 } } as StockAccum });
 
-  // SC-1:絕對字級 + **相對於股名**。只斷言 text-3xl 會在「股名也一起放大」時仍綠 = vacuous。
+  // SC-1:絕對字級 + **相對於股名**。只斷言 text-3xl 會在「股名也一起放大」時仍綠 = vacuous;
+  // 正向鎖住股名維持 text-lg 才真的鎖到「現價 > 股名」這個相對關係(反向 not 斷言在
+  // 股名被改成 text-2xl 之類時同樣抓不到)。
   it("未觸價 → 現價 text-3xl + font-semibold,且字級大於股名(SC-1)", () => {
-    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atPrice(2_380_000)} />);
     const cls = screen.getByTestId("page-quote").className;
     expect(cls).toContain("text-3xl");
     expect(cls).toContain("font-semibold");
     expect(cls).toContain("font-mono"); // 數字字體不可因放大被換掉(白名單 4)
     const heading = screen.getByRole("heading", { name: /台積電/ });
+    expect(heading.className).toContain("text-lg");
     expect(heading.className).not.toContain("text-3xl");
   });
 
-  // SC-2:% 同步放大一級(text-xs → text-sm),但刻意不與主數字等比
-  it("漲跌 % 放大為 text-sm(SC-2)", () => {
-    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_380_000)} />);
+  // SC-2:% 同步放大一級(text-xs → text-sm),但刻意不與主數字等比;
+  // font-normal 抵銷父層繼承的 semibold;顏色一律繼承父層(自帶顏色會在反白時脫鉤)
+  it("漲跌 % 放大為 text-sm、字重還原、顏色純繼承(SC-2)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atPrice(2_380_000)} />);
     const cls = screen.getByTestId("page-quote-pct").className;
     expect(cls).toContain("text-sm");
+    expect(cls).toContain("ml-1"); // 緊貼主數字右側的間距
+    expect(cls).toContain("font-normal");
+    expect(cls).not.toMatch(/text-(bull|bear|ink|white)/);
   });
 
-  // SC-3:字級與反白是兩組獨立 class,twMerge 不可把任一方吃掉
+  // SC-3:字級與反白是兩組獨立 class,twMerge 不可把任一方吃掉;
+  // px-1.5 / rounded 是反白塊的形狀,放大後仍須原樣保留(白名單 8)
   it("漲停 → text-3xl 與反白底色白字並存(SC-3)", () => {
-    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atLimit(2_550_000)} />);
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atPrice(2_550_000)} />);
     const cls = screen.getByTestId("page-quote").className;
     expect(cls).toContain("text-3xl");
     expect(cls).toContain("bg-bull");
     expect(cls).toContain("text-white");
+    expect(cls).toContain("px-1.5");
+    expect(cls).toContain("rounded");
+  });
+
+  it("跌停 → text-3xl 與反白底色白字並存(SC-3)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={atPrice(2_090_000)} />);
+    const cls = screen.getByTestId("page-quote").className;
+    expect(cls).toContain("text-3xl");
+    expect(cls).toContain("bg-bear");
+    expect(cls).toContain("text-white");
+    expect(cls).toContain("px-1.5");
+    expect(cls).toContain("rounded");
+  });
+
+  // 白名單 5:chg 算不出來(無參考價)時只是不渲染 %,主數字照放大照顯示 ——
+  // 新加的 testid 讓「% 恆存在」變成很容易寫進去的錯誤假設
+  it("無參考價 → 不渲染 %,主數字仍放大顯示(白名單 5)", () => {
+    const noRef = stream({
+      accum: { ...ACCUM, meta: { ...ACCUM.meta!, ref: null } } as StockAccum,
+    });
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={noRef} />);
+    expect(screen.queryByTestId("page-quote-pct")).toBeNull();
+    expect(screen.getByTestId("page-quote").className).toContain("text-3xl");
   });
 });
 
