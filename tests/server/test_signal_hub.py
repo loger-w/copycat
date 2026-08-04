@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import logging
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -142,6 +143,11 @@ class _Harness:
         self.fallback: list[str] = []
         self.bot: list[str] = []
         self.bot_fails = False
+        #: bot 未 ready(channel 還沒取到)→ `send_signal` 回 False。這是**生產預設態**
+        #: (token 未設 / 頻道未設 / 剛啟動),不是例外路徑。
+        self.bot_ready = True
+        #: webhook 未設 URL 時 `notify_discord` 回 False(never-raise)
+        self.notify_ok = True
         self.date = _DATE
         self.data_dir = tmp_path
         self.bars = bars if bars is not None else _FakeBars([_BAR_A])
@@ -158,11 +164,13 @@ class _Harness:
 
     def _notify(self, text: str) -> bool:
         self.fallback.append(text)
-        return True
+        return self.notify_ok
 
     async def _send(self, text: str) -> bool:
         if self.bot_fails:
             raise RuntimeError("discord bot 斷線")
+        if not self.bot_ready:
+            return False
         self.bot.append(text)
         return True
 
@@ -188,6 +196,13 @@ class _Harness:
     def lock_up(self, state: StockDayState, code: str = "2330") -> None:
         self.hub.on_tick(code, _tick(109_000, code=code), state)
         self.hub.on_tick(code, _tick(110_000, code=code, cum=2), state)
+
+
+def _drain(queue: asyncio.Queue[dict]) -> list[dict]:
+    rows: list[dict] = []
+    while not queue.empty():
+        rows.append(queue.get_nowait())
+    return rows
 
 
 async def _wait_rows(h: _Harness, n: int, timeout: float = 2.0) -> None:
@@ -487,6 +502,55 @@ class TestDiscordFanout:
         finally:
             await h.hub.close()
 
+    async def test_bot_not_ready_returns_false_and_falls_back(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """TQ-1:bot 沒 ready 的真實樣態是 `send_signal` **回 False**,不是丟例外。
+
+        頻道未設 / on_ready 還沒跑完 = 生產預設態,這條降級路徑必須有覆蓋。
+        """
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        h.bot_ready = False
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+
+            assert h.bot == []
+            assert len(h.fallback) == 1
+            assert "2330" in h.fallback[0]
+            assert len(h.rows()) == 1
+            assert len(h.published) == 1
+        finally:
+            await h.hub.close()
+
+    async def test_webhook_returning_false_is_not_an_error_path(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """TQ-1:兩層皆未送出(webhook URL 未設 → notify 回 False)。
+
+        「沒送出去」是可接受的降級,不是例外 —— worker 不得記 ERROR、jsonl 與 WS 照常。
+        """
+        h = _Harness(tmp_path, clock)
+        h.notify_ok = False
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
+                h.hub.on_watchlist(["2330"])
+                await h.settle()
+                h.cross_nh(_state())
+                await h.settle()
+
+            assert len(h.fallback) == 1
+            assert len(h.rows()) == 1
+            assert len(h.published) == 1
+            assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+        finally:
+            await h.hub.close()
+
     async def test_no_bot_attached_uses_webhook(self, tmp_path: Path, clock: _Clock) -> None:
         h = _Harness(tmp_path, clock)
         await h.hub.start()
@@ -543,8 +607,56 @@ class TestDiscordFanout:
         assert len(h.published) == 5  # WS 不受佇列影響
         assert h.hub.dropped_jsonl == 3
         assert h.hub.dropped_discord == 3
-        assert h.hub._jsonl_queue.qsize() == 2
-        assert h.hub._discord_queue.qsize() == 2
+        # TQ-2:只數 qsize 分不出「丟最舊」與「丟最新」—— 留下的必須是最新兩則
+        assert [r["code"] for r in _drain(h.hub._jsonl_queue)] == ["9003", "9004"]
+        assert [r["code"] for r in _drain(h.hub._discord_queue)] == ["9003", "9004"]
+
+    async def test_close_flushes_pending_jsonl_and_abandons_discord(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """TQ-3:關機盡力落檔 —— jsonl 是真相源要寫完,Discord 這時不再送。"""
+        h = _Harness(tmp_path, clock)  # 刻意不 start:兩則都還躺在佇列裡
+        h.attach_bot()
+        h.hub.on_watchlist(["2330", "2317"])
+        h.lock_up(_state(upper=110_000, locked_up=True), code="2330")
+        h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
+        assert h.rows() == []
+
+        await h.hub.close()
+
+        assert [r["code"] for r in h.rows()] == ["2330", "2317"]
+        assert h.bot == []
+        assert h.fallback == []
+
+    async def test_jsonl_write_failure_does_not_kill_worker(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """TQ-4:落檔炸掉(磁碟滿 / 權限)只該丟掉那一筆,worker 死掉 = 之後整天無聲。"""
+        h = _Harness(tmp_path, clock)
+        real = h.hub._append_jsonl
+        seen: list[dict] = []
+
+        def flaky(row: dict) -> None:
+            seen.append(row)
+            if len(seen) == 1:
+                raise OSError("磁碟滿了")
+            real(row)
+
+        h.hub._append_jsonl = flaky  # type: ignore[method-assign]
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+
+            h.lock_up(_state(upper=110_000, locked_up=True), code="2330")
+            await h.settle()  # 不得往外拋
+            assert h.rows() == []
+
+            h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
+            await h.settle()
+            assert [r["code"] for r in h.rows()] == ["2317"]  # worker 還活著
+        finally:
+            await h.hub.close()
 
 
 class TestBasisWorker:
