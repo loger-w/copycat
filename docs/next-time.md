@@ -509,7 +509,12 @@
 
 ## 2026-08-04(startup-names-futures-resub /bug 收尾留尾巴)
 
-- [ ] **「訂閱失敗零重試」同結構還有三處**(本輪只修 futures_engine,鐵則 B 不順手擴):
+- [x] ~~**「訂閱失敗零重試」同結構還有三處**~~ **2026-08-05 修畢(mod/subscribe-retry-recovery)**:
+  corr 照抄 futures pending-resub 形狀(log 判準:`corr subscribe %s(%s)失敗,進重試佇列` /
+  `corr %s subscribe retry ok`);stock 單一對帳式常駐重試迴圈涵蓋 watchlist + rollover
+  `_resubscribe_all` 失敗(新 `_failed_resubs`)+ stkfut(短鎖逐項 + 段級 break +
+  round-robin 防餓死);全成功路徑 subscribe 序列不變有測試鎖。原記載三處 + review 挖出的
+  rollover 重掛失敗共四條路都有復原。(原條目:本輪只修 futures_engine,鐵則 B 不順手擴):
   `corr_engine.py:129`(腿訂閱失敗「該腿停用」— 整天沒該腿的相關係數與江波圖線)、
   `stock_engine.py:164`(自選逐檔 watchlist subscribe 失敗 — 該檔沒行情,直到下次
   set_watchlist 才有機會重掛)、`stock_engine.py:226`(stkfut 個股期腿同款)。
