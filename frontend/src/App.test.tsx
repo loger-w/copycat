@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
+import { emitSignal } from "@/lib/signal-bus";
+import type { SignalMsg } from "@/lib/signal-model";
 
 function renderApp() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -238,5 +240,47 @@ describe("App 資料流上提(D-3 / D-16)", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "小台" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "小台" }));
     expect(window.localStorage.getItem("copycat-fut-product")).toBe("MXF");
+  });
+});
+
+// 🟢 stock-signals T11(SC-10):toast 掛在 App 層,與當前 tab 無關 ——
+// 訊號涵蓋整個自選池,人在看大盤 / 期貨時個股鎖漲停一樣要跳出來。
+describe("App 訊號 toast(SC-10)", () => {
+  function sig(id: string, code: string): SignalMsg {
+    return {
+      type: "signal",
+      id,
+      kind: "limit_lock",
+      code,
+      name: "國巨",
+      price: 5_000_000,
+      time: "10:03:11",
+      levels: [],
+      direction: "up",
+      pct: null,
+      touch_count: 1,
+    };
+  }
+
+  it("預設 tab(大盤)收到訊號 → toast 出現", async () => {
+    renderApp();
+    act(() => emitSignal(sig("a", "2327")));
+    const stack = await screen.findByTestId("toast-stack");
+    expect(stack.textContent).toContain("2327");
+    expect(stack.textContent).toContain("鎖漲停");
+  });
+
+  it("切到期貨 tab 後照樣跳 toast(跨 tab 常駐)", async () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    act(() => emitSignal(sig("b", "2327")));
+    const stack = await screen.findByTestId("toast-stack");
+    expect(stack.textContent).toContain("鎖漲停");
+  });
+
+  it("沒有訊號時不掛空容器(fixed 空盒子會壓住右上角元件)", () => {
+    renderApp();
+    expect(screen.queryByTestId("toast-stack")).toBeNull();
   });
 });
