@@ -103,6 +103,7 @@ class SignalDetector:
         self._now_fn = now_fn
         self._basis: dict[str, dict[str, int] | None] = {}
         self._staged: dict[str, dict[str, int] | None] = {}
+        self._staged_date: str | None = None  # 暫存區的基準日(MFS-2:跨日殘渣的唯一辨識)
         self._prev: dict[str, int] = {}
         self._window: dict[str, deque[tuple[float, int, int]]] = {}
         self._suppressed: set[tuple[str, str]] = set()
@@ -116,16 +117,34 @@ class SignalDetector:
         """None = 該檔基準不可得(抓取失敗),CDP 跳過、其他 kind 照常。"""
         self._basis[code] = dict(cdp) if cdp else None
 
-    def stage_basis(self, code: str, cdp: dict[str, int] | None) -> None:
-        """換日 stage1 預抓:寫暫存區,`swap_staged_basis` 才生效(design R2-4)。"""
+    def stage_basis(self, code: str, cdp: dict[str, int] | None, basis_date: str) -> None:
+        """換日 stage1 預抓:寫暫存區,`swap_staged_basis` 才生效(design R2-4)。
+
+        `basis_date` 是這份暫存的**基準日**;換一個日別即整批作廢(暫存區只服務一個
+        換日,混著兩天的內容沒有正確語意)。
+        """
+        if basis_date != self._staged_date:
+            self._staged = {}
+            self._staged_date = basis_date
         self._staged[code] = dict(cdp) if cdp else None
 
-    def swap_staged_basis(self) -> bool:
-        """暫存區整批換上;無暫存 → False,讓 hub 走「清空 + 重抓」fallback。"""
-        if not self._staged:
+    def clear_staged(self) -> None:
+        """丟掉暫存區(stage1 開始前呼叫:上一輪的殘渣不得參與這一輪)。"""
+        self._staged = {}
+        self._staged_date = None
+
+    def swap_staged_basis(self, expected_date: str) -> bool:
+        """暫存區整批換上;空或**日別不符** → False 並清空,讓 hub 走「重抓」fallback。
+
+        日別檢查是 MFS-2 的核心:上一輪換日的殘渣沿用起來沒有任何錯誤訊號,只是整天
+        用昨天的 CDP 基準。清空是必要的 —— 留著下一輪又會撞上同一份。
+        """
+        if not self._staged or self._staged_date != expected_date:
+            self.clear_staged()
             return False
         self._basis = self._staged
         self._staged = {}
+        self._staged_date = None
         return True
 
     def clear_all_basis(self) -> None:
