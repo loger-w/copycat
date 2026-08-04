@@ -153,26 +153,35 @@ class CorrelationEngine:
             source = self._source  # 每輪重讀:close 中會變 None
             if source is None:
                 return
-            recovered = False
-            for leg in self._config.tc4_legs():
-                if leg.symbol not in self._pending_subs:
-                    continue
-                try:
-                    await asyncio.to_thread(source.subscribe_raw, leg.symbol)
-                except ConnectionError:
-                    # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
-                    logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
-                    continue
-                self._pending_subs.discard(leg.symbol)
-                logger.info("corr %s subscribe retry ok", leg.key)
-                recovered = True
-            if recovered:
-                # 失敗窗內漏掉的江波圖分鐘只能靠回補補齊。`_schedule_backfill` 在
-                # inflight 時是**丟棄**不是排隊 → 本輪定調 best-effort,被擋下時留一行
-                # 痕跡才追得到(排隊化屬 `_backfill_task` 覆寫孤兒那條 next-time 條目)
-                if self._backfill_inflight:
-                    logger.info("corr 重訂成功但回補進行中,本次補分鐘略過(best-effort)")
-                self._schedule_backfill()
+            try:
+                await self._resub_round(source)
+            except Exception:
+                # 非 ConnectionError 的例外(壞電文 / wrapper 內部型別錯)不得殺掉迴圈:
+                # 死掉 = 復原路徑本身靜默失效,而 close() 的收尾又會把 task 例外吞掉
+                # (同 corr `_run` 的 rationale)。CancelledError 是 BaseException,不被接住
+                logger.exception("corr 訂閱重試輪失敗(續行)")
+
+    async def _resub_round(self, source: CorrSource) -> None:
+        recovered = False
+        for leg in self._config.tc4_legs():
+            if leg.symbol not in self._pending_subs:
+                continue
+            try:
+                await asyncio.to_thread(source.subscribe_raw, leg.symbol)
+            except ConnectionError:
+                # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
+                logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
+                continue
+            self._pending_subs.discard(leg.symbol)
+            logger.info("corr %s subscribe retry ok", leg.key)
+            recovered = True
+        if recovered:
+            # 失敗窗內漏掉的江波圖分鐘只能靠回補補齊。`_schedule_backfill` 在
+            # inflight 時是**丟棄**不是排隊 → 本輪定調 best-effort,被擋下時留一行
+            # 痕跡才追得到(排隊化屬 `_backfill_task` 覆寫孤兒那條 next-time 條目)
+            if self._backfill_inflight:
+                logger.info("corr 重訂成功但回補進行中,本次補分鐘略過(best-effort)")
+            self._schedule_backfill()
 
     async def _run(self) -> None:
         while True:
