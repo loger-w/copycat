@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "phase": "chore 收尾 review(C 節一輪 medium;雙 lens:新測試有效性 / refactor 行為不變 + scope;opus finder x2)",
+  "date": "2026-08-04",
+  "head_at_review": "deefa0e",
+  "verdict": "0 P0 / 0 P1 / 7 P2;mutation 驗證由 lens 獨立重跑成立(relay 換 send-only → 六路全紅且斷在 count==0、shutdown 測試紅;跑完已還原 ws.py);六路推播鏈逐路查證非 vacuous;隔離面乾淨(webhook 單一消費點被 patch、jsonl 落 tmp、capital factory 重置)",
+  "findings": [
+    {"id": "F1", "severity": "P2", "lens": "validity", "claim": "shutdown 測試判決點落在 sock.close() 後 + __exit__ 第二次 join — 實判「20s 內且允許 client 斷後才收掉」,與宣稱場景不符(mutation 實測 20.10s 才 FAIL)", "disposition": "accepted → 修(sock.close 前存 alive_while_connected,context 外斷言該變數)"},
+    {"id": "F2", "severity": "P2", "lens": "validity", "claim": "斷線後 1.5s 固定窗無正向對照:pump 執行緒靜默死掉時 count==0 vacuous 綠(與斷線前 batches>=4 的保護不對稱)", "disposition": "accepted → 修(pump 圈數計數 + assert pump.is_alive() + pumped >= 20)"},
+    {"id": "F3", "severity": "P2", "lens": "validity", "claim": "_drain_frames 數 recv 回傳次數非 frame 數;corr/river 的 pre-relay 快照變大時四批可能全出自單一則 → vacuous 綠(現靠治具內容巧合)", "disposition": "accepted → 修(corr/river 先單獨收乾 pre-relay 快照再以 want=3 數 relay 產出,同 TestAbruptDisconnect 對 snapshot 的做法)"},
+    {"id": "F4", "severity": "P2", "lens": "validity", "claim": "_RunningServer.__exit__ join 逾時無觀測狀態;corr/river 有自走推播源,前一路殘留殭屍會污染其後路的全域 asyncio logger 計數(一次真失敗連鎖六次)", "disposition": "accepted → 修(__exit__ 記 hung 旗標 + 下一 case 開頭偵測即 fail 明示;並設 timeout_graceful_shutdown 上限)"},
+    {"id": "R-1", "severity": "P2", "lens": "refactor", "claim": "FakeIndexSource.day_minutes 參照存入,與同檔 _daily 深拷貝防護不一致(module 常數跨測試共享面)", "disposition": "accepted → 修(dict(day_minutes))"},
+    {"id": "R-2", "severity": "P2", "lens": "refactor", "claim": "fetch_bars_range_tagged 的 today 從 import 期常數改呼叫期重算,與消費端斷言取值時點脫鉤 → 跨午夜假紅路徑", "disposition": "accepted → 修(today 改建構參數,test_market_routes 顯式傳 _TODAY)"},
+    {"id": "R-3", "severity": "P2", "lens": "refactor", "claim": "🟢 commit 混入 _ws_handshake 等價抽取(應屬 🔵);行為零差異、斷言零改動", "disposition": "accepted(記帳)→ 不重寫歷史;下次前置抽取歸 🔵"}
+  ],
+  "notes": "reviewer 曾對 working tree 的 copycat/server/ws.py 做暫時 mutation(標記註解),完成後已 git checkout 還原,main session 以 git status 複核乾淨。",
+  "fix_commit": "9869490 — F1/F2/F3/F4/R-1/R-2 全落地;F2 附 margin 量測(pumped_after=47 vs 門檻 20);F4 的 timeout_graceful_shutdown 只加六路不加 shutdown 測試(加了會讓被測 bug 永遠綠,docstring 記明);×6 唯二失敗為既有 handshake flake(HEAD 前版本對照重現,非本輪)"
+}
