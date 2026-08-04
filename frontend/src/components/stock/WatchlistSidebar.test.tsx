@@ -525,6 +525,28 @@ describe("WatchlistSidebar 管理入口(SC-13 / SC-15)", () => {
     expect(screen.getByText("管理群組與股票")).toBeTruthy();
   });
 
+  // 🔴 自選未載入時 `wl` 是 EMPTY_WL fallback,而 Dialog 的「新增群組」/「加入股票」
+  // 不依賴既有列(空清單上照樣能按)→ 會以空自選為基底整份 PUT(後端無樂觀鎖),
+  // 真實自選被清空。入口 gate 掉是唯一保護點:commit 守衛比的就是 EMPTY_WL 自身。
+  it("載入失敗 → 管理鈕不渲染(EMPTY_WL 上開 Dialog 新增群組會整份 PUT 清空自選)", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response("boom", { status: 500 });
+    });
+    sidebar();
+    // hook 是 retry: 1(覆寫 wrap 的 retry:false),error 終態要等退避跑完
+    await waitFor(() => expect(screen.getByText("自選清單載入失敗")).toBeTruthy(), {
+      timeout: 5000,
+    });
+    expect(screen.queryByRole("button", { name: "管理群組與股票" })).toBeNull();
+  });
+
+  it("自選尚未載入(pending)→ 管理鈕不渲染", () => {
+    fetchMock.mockImplementation(async () => new Promise<Response>(() => {})); // 永不 resolve
+    sidebar();
+    expect(screen.queryByRole("button", { name: "管理群組與股票" })).toBeNull();
+  });
+
   // W-20:collapsed state 與 localStorage 住在側欄,Dialog 測試觀察不到 → 必須在這一層驗
   it("在 Dialog 刪除群組成功 → localStorage 折疊清單不留該組名", async () => {
     window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
