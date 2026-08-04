@@ -19,6 +19,21 @@ export const LEGACY_MAIN_CODE_KEY = "stock-main-code";
  *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)。App 啟動時清除,
  *  避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
 export const ORPHAN_STORAGE_KEYS = ["stock-ladder-open", "stock-wl-group"] as const;
+
+/** 清除孤兒鍵。冪等(removeItem 對不存在的 key 是 no-op),由 App.tsx 的 module scope
+ *  呼叫一次 —— 它與元件生命週期無關,也不該隨 re-render 重跑。
+ *
+ *  **整段包 try/catch**:呼叫點在 App module 的頂層求值期,localStorage 在 Safari 私密
+ *  視窗 / storage 被政策鎖時光是存取就會拋 —— 拋出去就是整個 App chunk 求值失敗 = 白屏。
+ *  清不掉遠好於白屏(同 `hooks/useChartToggles.ts` 的 `persist()` 慣例)。 */
+export function purgeOrphanKeys(): void {
+  try {
+    for (const key of ORPHAN_STORAGE_KEYS) window.localStorage.removeItem(key);
+  } catch {
+    // 清不掉就算了 —— 殘值只是佔位,沒人讀
+  }
+}
+
 /** 期貨 tab 的商品(TXF / MXF / TMF)— App.tsx */
 export const PRODUCT_KEY = "copycat-fut-product";
 

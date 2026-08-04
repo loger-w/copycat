@@ -18,8 +18,8 @@ import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
 import {
   LEGACY_MAIN_CODE_KEY,
   MAIN_CODE_KEY,
-  ORPHAN_STORAGE_KEYS,
   PRODUCT_KEY,
+  purgeOrphanKeys,
   TAB_KEY,
 } from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
@@ -56,20 +56,36 @@ function initialProduct(): FutProduct {
 /** 主圖標的初始值 + 舊 key 一次性遷移(`stock-main-code` → `copycat-stock-main-code`)。
  *
  *  新舊都有值時取**新**的:新 key 只可能由改版後的 code 寫入,必定較新。
- *  搬完就刪舊 key,所以整段對同一個瀏覽器只會實際搬一次(之後恆走第一條 return)。 */
+ *  搬完就刪舊 key,所以整段對同一個瀏覽器只會實際搬一次(之後恆走第一條 return)。
+ *
+ *  寫入一律包 try/catch(同 `hooks/useChartToggles.ts` 的 `persist()` 慣例):本函式是
+ *  `useState` 的 initializer,setItem 在 Safari 私密視窗 / storage 被政策鎖時會拋
+ *  `QuotaExceededError`,拋出去就是首次 render 白畫面。這次沒落檔照樣回傳值,
+ *  記憶體內的主圖標的正常;順序維持「setItem 成功後才 removeItem」不變。 */
 function initialStockCode(): string | null {
   const current = window.localStorage.getItem(MAIN_CODE_KEY);
-  if (current) return current;
+  if (current) {
+    // 新舊同時有值也要清舊 key:雙分頁升版時舊 bundle 會把舊 key 寫回,
+    // 新 bundle 每次啟動清一次才收斂(否則殘值永久留著)。
+    try {
+      window.localStorage.removeItem(LEGACY_MAIN_CODE_KEY);
+    } catch {
+      // 清不掉就算了 —— 新 key 已優先,舊值不影響行為
+    }
+    return current;
+  }
   const legacy = window.localStorage.getItem(LEGACY_MAIN_CODE_KEY);
   if (!legacy) return null;
-  window.localStorage.setItem(MAIN_CODE_KEY, legacy);
-  window.localStorage.removeItem(LEGACY_MAIN_CODE_KEY);
+  try {
+    window.localStorage.setItem(MAIN_CODE_KEY, legacy);
+    window.localStorage.removeItem(LEGACY_MAIN_CODE_KEY);
+  } catch {
+    // 搬不動就下次再搬 —— 不落檔遠好於白畫面
+  }
   return legacy;
 }
 
-// 停用功能留下的孤兒鍵在啟動時清除(冪等:removeItem 對不存在的 key 是 no-op)。
-// 放 module scope 而非 effect —— 它與元件生命週期無關,且不該隨 re-render 重跑。
-for (const key of ORPHAN_STORAGE_KEYS) window.localStorage.removeItem(key);
+purgeOrphanKeys();
 
 export default function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
