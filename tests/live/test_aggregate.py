@@ -251,6 +251,42 @@ class TestContractsDetail:
             },
         ]
 
+    def test_last_price_is_latest_trade(self) -> None:
+        """SC-1:同一合約多筆成交 → last_price 取時序最後一筆(不是最高/最低/首筆)。"""
+        agg = make_agg()
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=2, t=1))
+        agg.route(tick(C44000.symbol, price=97_500, qty=1, bid=97_000, ask=98_000, cum=3, t=2))
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["contracts"][0]["last_price"] == 97.5
+
+    def test_stale_dropped_tick_does_not_update_last_price(self) -> None:
+        """SC-3:被 cum 序 stale-drop 的 tick 不得蓋掉現價(重複推播 / 重連重放 / 回補重疊)。
+
+        `totals.ticks == 1` 是「drop 真的發生了」的證據 —— 少了它,價格相同也可能
+        只是因為兩筆碰巧同價,測試會空轉。
+        """
+        agg = make_agg()
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=10))
+        # cum 未推進(重複推播)+ cum 倒退(重連重放)—— 兩種 stale 樣態,價格都不同
+        agg.route(tick(C44000.symbol, price=99_000, qty=2, bid=99_000, ask=100_000, cum=10))
+        agg.route(tick(C44000.symbol, price=98_000, qty=1, bid=97_000, ask=98_000, cum=9))
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["contracts"][0]["last_price"] == 100.0
+        assert snap["totals"]["ticks"] == 1  # 後兩筆確實被丟
+
+    def test_backfill_last_price_follows_time_order_not_input_order(self) -> None:
+        """SC-4:回補按 (symbol, precise_time, seq) 排序 → last_price 取時序較後那筆,
+        與輸入順序無關(TC4 收割分頁不保證時序)。"""
+        agg = make_agg()
+        agg.ingest_backfill(
+            [
+                tick(C44000.symbol, price=100_000, qty=1, bid=99_000, ask=100_000, t=2),
+                tick(C44000.symbol, price=99_000, qty=1, bid=99_000, ask=100_000, t=1),
+            ]
+        )
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["contracts"][0]["last_price"] == 100.0
+
     def test_contracts_invariants(self) -> None:
         # 手寫固定序列覆蓋外/內/未分類三分支(IR-5:不用 random)
         c43 = OptionContract(
