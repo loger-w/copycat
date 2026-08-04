@@ -1,10 +1,12 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockPage } from "@/components/stock/StockPage";
 import type { StockStreamState } from "@/hooks/useStockStream";
+import { emitSignal } from "@/lib/signal-bus";
+import type { SignalMsg } from "@/lib/signal-model";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
 
@@ -434,5 +436,47 @@ describe("StockPage 加入自選(round4 項 4)", () => {
     fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
     fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
     await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
+  });
+});
+
+// 🟢 stock-signals T11(SC-9):訊號欄進版面最左。
+// 訊號不用 mock hook 餵 —— 直接發 bus 事件走 useSignalFeed 的 live 路徑,
+// 測到的是「WS 收到訊號 → 列表出現 → 點了切主檔」整條真實接線(mock 掉 feed
+// 只會鎖住 props 傳遞,rail 沒接上 hook 也照樣綠)。
+describe("StockPage 訊號欄(SC-9)", () => {
+  function sig(over: Partial<SignalMsg> = {}): SignalMsg {
+    return {
+      type: "signal",
+      id: "sig-1",
+      kind: "surge",
+      code: "2317",
+      name: "鴻海",
+      price: 2_000_000,
+      time: "09:15:03",
+      levels: [],
+      direction: null,
+      pct: 2.5,
+      touch_count: 1,
+      ...over,
+    };
+  }
+
+  it("SignalRail 渲染在自選側欄「之前」(最左欄)", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    const rail = screen.getByTestId("signal-rail");
+    const sidebar = screen.getByLabelText("自選清單");
+    // 位置關係要正向鎖:只斷言「rail 存在」會在它被塞到最右邊時照樣綠
+    expect(
+      rail.compareDocumentPosition(sidebar) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("WS 訊號進來 → 列出;點該列切換主檔(onSelect)", async () => {
+    const onSelect = vi.fn();
+    wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
+    act(() => emitSignal(sig()));
+    const label = await screen.findByText("爆拉 +2.50%");
+    fireEvent.click(label.closest("button")!);
+    expect(onSelect).toHaveBeenCalledWith("2317");
   });
 });
