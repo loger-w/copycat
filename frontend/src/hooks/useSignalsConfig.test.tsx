@@ -53,8 +53,15 @@ describe("useSignalsConfig", () => {
       async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
     );
     const hook = renderHook(() => useSignalsConfig(), { wrapper });
-    expect(hook.result.current.enabled).toEqual(ALL_ON);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(hook.result.current.enabled).toEqual(ALL_ON); // 載入中
+    // hook 自帶 retry: 1(壓過 client 的 retry: false)→ 等第二次 fetch 發出才是 error
+    // 終態;只等「呼叫過」會落在 retry pending 窗,那時的全開來自「還沒 settle」而不是
+    // fail-open,實作把 fallback 拿掉照樣綠(review TQ-5)。retryDelay 預設 1s,waitFor
+    // 的 1s 預設 timeout 抓不到 → 給 5s。
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+    await waitFor(() =>
+      expect(client.getQueryState(["stock-signals-enabled"])?.status).toBe("error"),
+    );
     expect(hook.result.current.enabled).toEqual(ALL_ON);
   });
 
