@@ -133,7 +133,7 @@ export function SignalRail({
         </ul>
       </div>
 
-      <div className="shrink-0 border-t border-line pt-1">
+      <div data-testid="signal-rail-kinds" className="shrink-0 border-t border-line pt-1">
         <h3 className="px-1 py-1 text-xs text-ink-dim">監聽訊號</h3>
         {TOGGLES.map(([key, label]) => (
           <Toggle
@@ -143,6 +143,12 @@ export function SignalRail({
             onChange={(value) => onToggle(key, value)}
           />
         ))}
+      </div>
+
+      {/* 提示音與通知另立一區(review MFS-5):與上面四鍵同組時「提示音」會被讀成
+          第五種訊號類型,但它管的是抵達方式不是監聽什麼。 */}
+      <div data-testid="signal-rail-alerts" className="shrink-0 border-t border-line pt-1">
+        <h3 className="px-1 py-1 text-xs text-ink-dim">提示</h3>
         <Toggle label="提示音" checked={soundOn} onChange={onToggleSound} />
         {/* 權限只有 default 能問:granted 不必問,denied 再呼叫也只會被瀏覽器靜默拒絕
             (要使用者自己去網站設定改),留一顆點了沒反應的鈕更糟 */}
