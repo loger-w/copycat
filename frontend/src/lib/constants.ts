@@ -10,7 +10,15 @@
 /** 主 tab(txo / stock / futures / index / corr)— App.tsx */
 export const TAB_KEY = "copycat-tab";
 /** 主圖個股代號 — App.tsx */
-export const MAIN_CODE_KEY = "stock-main-code";
+export const MAIN_CODE_KEY = "copycat-stock-main-code";
+/** `MAIN_CODE_KEY` 的舊名(唯一漏前綴的 key)。App 初始化時一次性搬遷後刪除,
+ *  搬遷邏輯不可拿掉 —— 拿掉的代價是使用者的主圖標的在改版後靜默回到未選狀態。 */
+export const LEGACY_MAIN_CODE_KEY = "stock-main-code";
+
+/** 已停用功能留下的孤兒鍵:`stock-ladder-open`(2026-07-29 閃電梯改條件 render 後零讀寫)、
+ *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)。App 啟動時清除,
+ *  避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
+export const ORPHAN_STORAGE_KEYS = ["stock-ladder-open", "stock-wl-group"] as const;
 /** 期貨 tab 的商品(TXF / MXF / TMF)— App.tsx */
 export const PRODUCT_KEY = "copycat-fut-product";
 

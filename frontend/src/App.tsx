@@ -15,7 +15,13 @@ import { useFuturesStream } from "@/hooks/useFuturesStream";
 import { useIndexStream } from "@/hooks/useIndexStream";
 import { useStockStream } from "@/hooks/useStockStream";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
-import { MAIN_CODE_KEY, PRODUCT_KEY, TAB_KEY } from "@/lib/constants";
+import {
+  LEGACY_MAIN_CODE_KEY,
+  MAIN_CODE_KEY,
+  ORPHAN_STORAGE_KEYS,
+  PRODUCT_KEY,
+  TAB_KEY,
+} from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +53,24 @@ function initialProduct(): FutProduct {
   return saved === "MXF" || saved === "TMF" ? saved : "TXF";
 }
 
+/** 主圖標的初始值 + 舊 key 一次性遷移(`stock-main-code` → `copycat-stock-main-code`)。
+ *
+ *  新舊都有值時取**新**的:新 key 只可能由改版後的 code 寫入,必定較新。
+ *  搬完就刪舊 key,所以整段對同一個瀏覽器只會實際搬一次(之後恆走第一條 return)。 */
+function initialStockCode(): string | null {
+  const current = window.localStorage.getItem(MAIN_CODE_KEY);
+  if (current) return current;
+  const legacy = window.localStorage.getItem(LEGACY_MAIN_CODE_KEY);
+  if (!legacy) return null;
+  window.localStorage.setItem(MAIN_CODE_KEY, legacy);
+  window.localStorage.removeItem(LEGACY_MAIN_CODE_KEY);
+  return legacy;
+}
+
+// 停用功能留下的孤兒鍵在啟動時清除(冪等:removeItem 對不存在的 key 是 no-op)。
+// 放 module scope 而非 effect —— 它與元件生命週期無關,且不該隨 re-render 重跑。
+for (const key of ORPHAN_STORAGE_KEYS) window.localStorage.removeItem(key);
+
 export default function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   // 首次進入才 mount(lazy:重元件延後載入);之後 hidden 保留 DOM(§3 慣例)。
@@ -61,9 +85,7 @@ export default function App() {
     corr: tab === "corr",
   });
   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
-  const [stockCode, setStockCode] = useState<string | null>(
-    () => window.localStorage.getItem(MAIN_CODE_KEY) || null,
-  );
+  const [stockCode, setStockCode] = useState<string | null>(initialStockCode);
   const [product, setProduct] = useState<FutProduct>(initialProduct);
 
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
