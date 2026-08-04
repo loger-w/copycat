@@ -1,7 +1,7 @@
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { DepthBar } from "@/components/quote/DepthBar";
 import type { WsStatus } from "@/hooks/useFuturesStream";
-import { fmt } from "@/lib/format";
+import { fmt, fmtPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
 
@@ -57,7 +57,7 @@ export function FuturesPage({ products, product, onProduct, state, resolvedYm, w
               <span className="text-xs">{`${diff > 0 ? "+" : ""}${fmt(diff)}`}</span>
             ) : null}
             {chg !== null ? (
-              <span className="text-xs">{`${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`}</span>
+              <span className="text-xs">{fmtPct(chg)}</span>
             ) : null}
           </span>
         ) : null}

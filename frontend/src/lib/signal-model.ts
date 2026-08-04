@@ -5,7 +5,7 @@
  *
  *  全部純函數,無 React 依賴。 */
 
-import { fmt } from "@/lib/format";
+import { fmt, fmtPct } from "@/lib/format";
 
 export type SignalKind =
   | "cdp_cross"
@@ -75,7 +75,7 @@ export function kindLabel(sig: SignalMsg): string {
   if (kind === "surge" || kind === "crash") {
     const name = kind === "surge" ? "爆拉" : "爆跌";
     // pct 缺值不印 NaN:壞行 / 舊後端的訊號寧可少一段數字也不要顯示 "爆拉 NaN%"
-    return sig.pct === null ? name : `${name} ${sig.pct > 0 ? "+" : ""}${sig.pct.toFixed(2)}%`;
+    return sig.pct === null ? name : `${name} ${fmtPct(sig.pct)}`;
   }
   if (kind === "vol_burst") {
     return sig.pct === null ? "爆量" : `爆量 ${sig.pct.toFixed(1)} 倍`;
