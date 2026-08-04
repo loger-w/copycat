@@ -533,18 +533,21 @@ describe("WatchlistSidebar 管理入口(SC-13 / SC-15)", () => {
       if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
       return new Response("boom", { status: 500 });
     });
-    sidebar();
+    const { container } = sidebar();
     // hook 是 retry: 1(覆寫 wrap 的 retry:false),error 終態要等退避跑完
     await waitFor(() => expect(screen.getByText("自選清單載入失敗")).toBeTruthy(), {
       timeout: 5000,
     });
     expect(screen.queryByRole("button", { name: "管理群組與股票" })).toBeNull();
+    // Dialog 與按鈕同一個 gate:危險窗內連掛載都沒有(aria-label 兩者同名,改用元素選)
+    expect(container.querySelector("dialog")).toBeNull();
   });
 
   it("自選尚未載入(pending)→ 管理鈕不渲染", () => {
     fetchMock.mockImplementation(async () => new Promise<Response>(() => {})); // 永不 resolve
-    sidebar();
+    const { container } = sidebar();
     expect(screen.queryByRole("button", { name: "管理群組與股票" })).toBeNull();
+    expect(container.querySelector("dialog")).toBeNull();
   });
 
   // W-20:collapsed state 與 localStorage 住在側欄,Dialog 測試觀察不到 → 必須在這一層驗
