@@ -19,6 +19,15 @@ def _tick_milli(price_milli: int) -> int:
     return 5_000
 
 
+def tick_size_milli(price_milli: int) -> int:
+    """毫元版 tick:`tick_size_milli(23_450) == 50`(23.45 元 → 0.05 元檔)、
+    `tick_size_milli(123_450) == 500`(123.45 元落 100–500 元段 → 0.5 元檔)。
+
+    訊號層的 rearm 門檻全走毫元整數比較,不繞道 float `tick_size`。
+    """
+    return _tick_milli(price_milli)
+
+
 def tick_size(price: float) -> float:
     return _tick_milli(round(price * 1000)) / 1000
 
