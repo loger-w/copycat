@@ -11,6 +11,7 @@ from copycat.stock_watchlist import (
     Watchlist,
     WatchlistError,
     load_watchlist,
+    normalize,
     save_watchlist,
     union,
     validate_code,
@@ -155,6 +156,42 @@ class TestWatchlistPersistence:
             {"codes": ["2330"], "groups": [{"name": "a", "codes": ["5483", "3231"]}]},
         )
         assert saved["codes"] == ["2330", "5483", "3231"]
+
+
+class TestNormalize:
+    """純函數版正規化(save_watchlist 內部同一份;零寫早退的比較基準)."""
+
+    def test_idempotent(self) -> None:
+        wl: Watchlist = {
+            "codes": ["2330", "2330"],
+            "groups": [{"name": " 主力 ", "codes": ["5483", "5483", "3231"]}],
+        }
+        once = normalize(wl)
+        assert once == {
+            "codes": ["2330", "5483", "3231"],
+            "groups": [{"name": "主力", "codes": ["5483", "3231"]}],
+        }
+        assert normalize(once) == once
+
+    def test_group_members_appended_to_codes(self) -> None:
+        assert normalize({"codes": [], "groups": [{"name": "a", "codes": ["2330"]}]})["codes"] == [
+            "2330"
+        ]
+
+    def test_rejects_bad_input_without_touching_disk(self) -> None:
+        with pytest.raises(WatchlistError, match="BAD_CODE"):
+            normalize({"codes": ["bad code"], "groups": []})
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):
+            normalize({"codes": [], "groups": [{"name": " ", "codes": []}]})
+        with pytest.raises(WatchlistError, match="WATCHLIST_FULL"):
+            normalize({"codes": [f"{1000 + i}" for i in range(WATCHLIST_LIMIT + 1)], "groups": []})
+
+    def test_matches_save_watchlist_result(self, tmp_path: Path) -> None:
+        wl: Watchlist = {
+            "codes": ["2330"],
+            "groups": [{"name": "a", "codes": ["5483", "2330"]}],
+        }
+        assert normalize(wl) == save_watchlist(tmp_path / "w.json", wl)
 
 
 class TestUnion:

@@ -69,8 +69,13 @@ def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
     return {"codes": union(groups), "groups": groups}  # v2 遷移
 
 
-def save_watchlist(path: Path, wl: Watchlist) -> Watchlist:
-    """驗證(群組名 / code)+ 去重保序 + 群組成員補進 codes + 上限 + atomic 寫 v3。"""
+def normalize(wl: Watchlist) -> Watchlist:
+    """驗證(群組名 / code)+ 去重保序 + 群組成員補進 codes + 上限 —— 純函數,零 IO。
+
+    抽出來是為了讓「請求的 canonical 形」與「現況的 canonical 形」可比較而不落檔
+    (`server/watchlist_service.py` 的零寫早退);正規化規則只有這一份定義,
+    `save_watchlist` 內部也走它。冪等:`normalize(normalize(x)) == normalize(x)`。
+    """
     cleaned: list[Group] = []
     names: set[str] = set()
     for g in wl["groups"]:
@@ -97,13 +102,23 @@ def save_watchlist(path: Path, wl: Watchlist) -> Watchlist:
             codes.append(code)
     if len(codes) > WATCHLIST_LIMIT:
         raise WatchlistError("WATCHLIST_FULL")
+    return {"codes": codes, "groups": cleaned}
+
+
+def save_watchlist(path: Path, wl: Watchlist) -> Watchlist:
+    """normalize(見上)+ atomic 寫 v3。"""
+    canonical = normalize(wl)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         path,
         json.dumps(
-            {"_cache_version": _CACHE_VERSION, "codes": codes, "groups": cleaned},
+            {
+                "_cache_version": _CACHE_VERSION,
+                "codes": canonical["codes"],
+                "groups": canonical["groups"],
+            },
             ensure_ascii=False,
             indent=1,
         ),
     )
-    return {"codes": codes, "groups": cleaned}
+    return canonical
