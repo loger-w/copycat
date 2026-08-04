@@ -1,0 +1,27 @@
+{
+  "flow": "refactor",
+  "slug": "frontend-localstorage-keys",
+  "round": 1,
+  "date": "2026-08-04",
+  "diff": "review-diff.txt(master..382222a 原三 commit;修復輪 1c7212d 後補)",
+  "lenses": [
+    {"lens": "key 等值性與遷移正確性", "model": "opus", "findings": 3},
+    {"lens": "測試品質與 blast radius", "model": "opus", "findings": 4}
+  ],
+  "findings": [
+    {"id": "K-1", "severity": "P2", "claim": "新舊 key 同時有值的早退路徑永不清 legacy(雙分頁升版情境舊 bundle 會寫回舊 key → 永久殘留)", "resolution": "accepted:if (current) 分支補 removeItem(LEGACY)+ 測試;真環境驗證新值勝出且 legacy 清除"},
+    {"id": "K-2/S-1", "severity": "P2", "claim": "遷移 setItem 與 module scope 孤兒清除裸露無 try/catch,違反 useChartToggles「持久化失敗不得炸畫面」慣例;module eval 期 throw = 白屏且無 boundary 可接", "resolution": "accepted:兩處包 try/catch(catch 回退不落檔 / 靜默略過),註解引用既有慣例"},
+    {"id": "K-3/S-2", "severity": "P2", "claim": "孤兒清除測試用 vi.resetModules + 動態 import 驗 module 副作用,複製第二份 module graph,順序敏感、日後任一模組長出 module scope 副作用即產生安靜的跨測試干擾", "resolution": "accepted:清除抽成 constants.purgeOrphanKeys() 具名函式,測試直接單元測(不再 resetModules);App.tsx 頂層一行呼叫"},
+    {"id": "S-3", "severity": "P2", "claim": "Step B commit 標 🔵 但含使用者狀態單向變更(revert 不還原使用者 localStorage → 回退版讀不到主圖偏好),非零風險回退", "resolution": "accepted:分支未 push,cherry-pick 重建改標 🔴 並在 message 記回退風險;refactor-plan 風險註記同步"},
+    {"id": "S-4", "severity": "P2", "claim": "docs/next-time.md K-1 條目仍寫舊 key 名 stock-main-code(已成只存在於 LEGACY 常數的死名),grep 會被誤導", "resolution": "accepted:條目改 copycat-stock-main-code 並註明真正持久化點"}
+  ],
+  "no_finding_checks": "15 key 機械 diff 法零錯置零值變;46 處 storage 呼叫點全具名常數零動態組 key;舊 local 常數名 src 側零殘留;字面值守護網每 key ≥1 處;constants.ts 無 frontend 外引用;999→1000 帳目相符零 skip;新測試 mutation 全殺(4 條網逐條驗)",
+  "verification": {
+    "npm_test": "1000 passed / 72 files",
+    "tsc": "exit 0",
+    "eslint": "exit 0",
+    "check_feat_tags": "PASS",
+    "real_env": "vite dev(夜盤):只有舊 key 與新舊並存兩情境的遷移/清除/UI 偏好保留皆驗證;console 零 error;截圖 evidence/migration-main-code-preserved.png"
+  },
+  "incident_note": "S-3 history 手術(reset --hard)洗掉了工作區未 commit 的 docs/next-time.md 打勾編輯,當場發現重做,零遺失 — 教訓:history 手術前先 commit/stash 工作區"
+}
