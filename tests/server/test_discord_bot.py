@@ -385,7 +385,7 @@ class TestBotLifecycle:
 @pytest.mark.skipif(not _HAS_DISCORD, reason="extras [discord] 未安裝(降級路徑另有測試)")
 class TestRealDiscordWiring:
     def test_create_bot_builds_client_and_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import discord
+        discord = importlib.import_module("discord")
 
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
         monkeypatch.setenv("SIGNALS_DISCORD_CHANNEL_ID", "42")

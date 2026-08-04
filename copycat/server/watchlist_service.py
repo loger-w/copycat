@@ -83,6 +83,15 @@ class WatchlistService:
             codes = [c for c in current["codes"] if c != code]
             return await self._commit({"codes": codes, "groups": groups})
 
+    async def current(self) -> Watchlist:
+        """現況(canonical 形);壞檔回空清單。Discord `/watch list` 的讀取入口。
+
+        持同一把 lock:讀到寫到一半的中間態雖不可能(落檔是 atomic),但讀跟改共用一把
+        鎖才不會出現「list 顯示的是 add 尚未完成前的樣子」這種讓人困惑的交錯。
+        """
+        async with self._lock:
+            return self._current_canonical() or {"codes": [], "groups": []}
+
     async def _commit(self, wl: Watchlist) -> Watchlist:
         """持 lock 呼叫。正規化 → 與現況比對 → 落檔 + 訂閱 + 廣播。"""
         desired = normalize(wl)  # 非法碼 / 超上限在此拋,尚未落檔
