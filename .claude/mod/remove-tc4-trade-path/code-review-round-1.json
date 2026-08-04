@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "phase": "Phase 5 自評(medium;雙 lens:刪除完整性 / 白名單對照;opus finder x2)",
+  "date": "2026-08-04",
+  "head_at_review": "9195e74",
+  "verdict": "0 P0 / 0 P1 / 6 P2;白名單 WL-1~WL-6 全 PASS(lens B 附實證 probe:AuditWriteError→500 AUDIT_WRITE_FAILED、BrokerRejected→400 含 err_code/err_msg)",
+  "key_verifications": [
+    "11 檔全數 D;production grep 全滅(含動態用法:importlib/字串路由/config 零命中)",
+    "接線四種傳參組合逐一推演等價;舊 fallback 唯一觸發者是舊 __main__",
+    "test_main_wiring monkeypatch 目標正確(__main__ namespace 綁定),kwargs 整份相等斷言,revert 必紅",
+    "三 commit 內容分離乾淨(🔵 零可執行語句改動)",
+    "test_capital_api 除授權的一根 503→404 + make_client 簽名 + docstring 文字外零觸碰"
+  ],
+  "findings": [
+    {"id": "F1", "severity": "P2", "class": "行為級護欄", "claim": "404 迴歸只鎖 4 條被刪 route 中的 1 條", "disposition": "accepted → 修(parametrize 四條)"},
+    {"id": "F2", "severity": "P2", "class": "行為級護欄", "claim": "404 斷言無「app 有建起來」對照錨定,無法區分 route 刪除 vs 整 app 空白", "disposition": "accepted → 修(同測試補 /api/capital/status != 404 對照)"},
+    {"id": "WLR-1", "severity": "P2", "class": "行為級護欄", "claim": "AuditWriteError→500 handler 零自動化覆蓋,而本輪正是唯一動過其註冊機制的一輪(既有缺口)", "disposition": "accepted → 修(探針 route 斷言 500 + AUDIT_WRITE_FAILED)"},
+    {"id": "F3", "severity": "P2", "class": "記帳", "claim": "trade-text.ts 的 TRADE_ERROR_TEXT 留 6 個無 producer 的 dead entry + test 上鎖;INVALID_ORDER 必留(capital 在用)", "disposition": "accepted → 收尾 chore 記入 next-time 瘦身候選(明列 6 key + INVALID_ORDER 警語)"},
+    {"id": "F4", "severity": "P2", "class": "記帳", "claim": "spec R5 amendment 宣告「🔴 → 🟢 → 🔵」與實際(正確的)🟢[red] → 🔴[green] → 🔵 相反", "disposition": "accepted → 修 spec 文字(artifact)"},
+    {"id": "WLR-2", "severity": "P2", "class": "既有 flake 記帳", "claim": "test_ws_disconnect::test_no_write_to_dead_transport 全套負載下間歇紅(0.5s 時間窗),與本輪零因果(雙跑對照:1 failed/1620 → 1621 passed;單檔 6 passed)", "disposition": "accepted → 不動 code(out of scope);收尾證據註明 + next-time 記放寬時間窗候選"}
+  ]
+}
