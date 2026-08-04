@@ -519,6 +519,19 @@ class TestLifecycle:
         det = _det(_Clock())
         assert det.swap_staged_basis() is False
 
+    def test_swap_rejects_stale_staged_date(self) -> None:
+        """MFS-2:暫存區帶基準日 —— 日別不符 = 上一輪換日留下的殘渣。
+
+        沿用它不會有任何錯誤訊號,只是整天用昨天的 CDP 基準;所以要回 False(讓 hub 走
+        「清空重抓」fallback)並且**把殘渣清掉**,否則下一輪又會撞上同一份。
+        """
+        det = _det(_Clock())
+        det.stage_basis("2330", _BASIS, "2026-08-05")
+        det.reset_day()
+
+        assert det.swap_staged_basis("2026-08-06") is False
+        assert det.swap_staged_basis("2026-08-05") is False
+
     def test_clear_all_basis(self) -> None:
         clock = _Clock()
         det = _det(clock)
