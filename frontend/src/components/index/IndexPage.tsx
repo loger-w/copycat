@@ -3,6 +3,7 @@ import { useState } from "react";
 import { MarketChart } from "@/components/index/MarketChart";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+import { chgPct, fmtPct } from "@/lib/format";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
 import { pts } from "@/lib/svg-points";
 import { HOUR_TICKS } from "@/lib/time-labels";
@@ -172,18 +173,18 @@ function Quote({
   low?: number | null;
 }) {
   const chgPts = p !== null && ref_ !== null ? (p - ref_) / 1000 : null;
-  const chgPct = p !== null && ref_ ? ((p - ref_) / ref_) * 100 : null;
+  const pctChg = p !== null && ref_ ? chgPct(p, ref_) : null;
   return (
     <>
       <span className="font-mono text-2xl text-ink">{p !== null ? fmt(p) : "-"}</span>
-      {chgPts !== null && chgPct !== null ? (
+      {chgPts !== null && pctChg !== null ? (
         <span
           className={cn(
             "font-mono text-sm",
             chgPts > 0 ? "text-bull" : chgPts < 0 ? "text-bear" : "text-ink",
           )}
         >
-          {`${chgPts > 0 ? "+" : ""}${chgPts.toFixed(2)} (${chgPct > 0 ? "+" : ""}${chgPct.toFixed(2)}%)`}
+          {`${chgPts > 0 ? "+" : ""}${chgPts.toFixed(2)} (${fmtPct(pctChg)})`}
         </span>
       ) : null}
       <span className="font-mono text-xs text-ink-dim">

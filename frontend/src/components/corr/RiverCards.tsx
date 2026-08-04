@@ -3,6 +3,7 @@
  * 每腿 y 域各自 autofit —— 六腿價格量級差 15 倍(富台 3462 vs 道瓊 51909),共用域會讓
  * 低價腿壓成一條直線。跨腿比較走「重疊」模式(那邊才正規化成 %)。
  */
+import { fmtPct } from "@/lib/format";
 import { buildLegGeometry, timeTicks, type RiverSize } from "@/lib/river-chart-svg";
 import { pts } from "@/lib/svg-points";
 import { cn } from "@/lib/utils";
@@ -14,10 +15,6 @@ const SIZE: RiverSize = { width: 320, height: 120 };
 
 function fmtPrice(millipts: number): string {
   return (millipts / 1000).toFixed(2);
-}
-
-function fmtPct(pct: number): string {
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
 
 interface CardProps {

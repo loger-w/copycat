@@ -1,6 +1,7 @@
 /** 重疊模式:六腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
 import { useState } from "react";
 
+import { fmtPct } from "@/lib/format";
 import {
   buildOverlayGeometry,
   offsetAtX,
@@ -19,10 +20,6 @@ const SIZE: RiverSize = { width: 960, height: 340 };
 /** base 腿(序位 0)畫粗線,其餘細線 */
 const BASE_STROKE_W = 2;
 const LEG_STROKE_W = 1.2;
-
-function fmtPct(pct: number): string {
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
-}
 
 function hhmm(minuteOfDay: number): string {
   const m = ((minuteOfDay % 1440) + 1440) % 1440;

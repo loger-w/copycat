@@ -1,4 +1,5 @@
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+import { chgPct as libChgPct, fmtPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function fmt(millipts: number): string {
@@ -8,7 +9,7 @@ function fmt(millipts: number): string {
 
 function chgPct(s: IndexSeries): number | null {
   if (s.p === null || s.ref === null || s.ref === 0) return null;
-  return ((s.p - s.ref) / s.ref) * 100;
+  return libChgPct(s.p, s.ref);
 }
 
 function IndexCell({ label, s }: { label: string; s: IndexSeries | null }) {
@@ -23,7 +24,7 @@ function IndexCell({ label, s }: { label: string; s: IndexSeries | null }) {
           chg !== null && chg > 0 ? "text-bull" : chg !== null && chg < 0 ? "text-bear" : "text-ink-dim",
         )}
       >
-        {chg !== null ? `${chg > 0 ? "+" : ""}${chg.toFixed(2)}%` : "-"}
+        {chg !== null ? fmtPct(chg) : "-"}
       </span>
     </span>
   );
