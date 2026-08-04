@@ -507,17 +507,17 @@ class TestLifecycle:
     def test_stage_and_swap_basis(self) -> None:
         clock = _Clock()
         det = _det(clock)
-        det.stage_basis("2330", _BASIS)
+        det.stage_basis("2330", _BASIS, "2026-08-05")
         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
         assert det.evaluate("2330", _tick(80_500), _ctx(), _ALL) == []  # 暫存未生效
         det.reset_day()
-        assert det.swap_staged_basis() is True
+        assert det.swap_staged_basis("2026-08-05") is True
         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
         assert len(det.evaluate("2330", _tick(80_500), _ctx(), _ALL)) == 1
 
     def test_swap_without_staged_returns_false(self) -> None:
         det = _det(_Clock())
-        assert det.swap_staged_basis() is False
+        assert det.swap_staged_basis("2026-08-05") is False
 
     def test_swap_rejects_stale_staged_date(self) -> None:
         """MFS-2:暫存區帶基準日 —— 日別不符 = 上一輪換日留下的殘渣。

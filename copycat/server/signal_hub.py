@@ -124,6 +124,7 @@ class SignalHub:
         self._enabled: dict[str, bool] = self._load_enabled()
         self._enabled_set: frozenset[str] = self._as_set(self._enabled)
         self._basis_jobs: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
+        self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
         self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         self._tasks: list[asyncio.Task[None]] = []
         self._discord_sender: Callable[[str], Any] | None = None
@@ -176,12 +177,20 @@ class SignalHub:
             logger.exception("簿更新訊號評估失敗(丟棄):%s", code)
 
     def on_rollover_pending(self, new_date: str) -> None:
-        """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 swap。"""
+        """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 swap。
+
+        **先清暫存區**(MFS-2):快路徑(pending 與 stage2 同一輪 loop 連發)會讓 stage1
+        的 job 在 swap 之後才被 worker 消化,結果留在暫存區到下一輪換日;不清掉的話
+        下一次 swap 會回 True 並把舊日基準當當日基準用一整天,零錯誤訊號。
+        """
+        self._detector.clear_staged()
+        self._staged_date = new_date
         self.request_basis(sorted(self._watch), basis_date=new_date, staged=True)
 
     def on_rollover(self) -> None:
+        expected = self._trade_date_fn()  # engine 已前進到新日別(stage2 契約)
         self._detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 swap
-        if not self._detector.swap_staged_basis():
+        if not self._detector.swap_staged_basis(expected):
             # stage1 沒跑過(週六補市日 / server 盤中才啟動)→ 重抓;該窗 CDP 停用
             logger.info("換日無預抓基準,清空重抓(design §4.2 fallback)")
             self.request_basis(sorted(self._watch))
@@ -237,7 +246,12 @@ class SignalHub:
         else:
             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
         if staged:
-            self._detector.stage_basis(code, cdp)
+            if basis_date != self._staged_date:
+                # 這則是上一輪 stage1 排的、在 `clear_staged` 之後才跑完的 in-flight job;
+                # 放進去等於把殘渣重新種回暫存區(MFS-2)
+                logger.info("捨棄過期的 staged 基準:%s(%s)", code, basis_date)
+                return
+            self._detector.stage_basis(code, cdp, basis_date)
         else:
             self._detector.set_basis(code, cdp)
 
