@@ -222,6 +222,15 @@ def _format_watchlist(wl: Watchlist) -> str:
 # ---- Bot ----
 
 
+def _log_login_failure(task: asyncio.Task[None]) -> None:
+    """背景登入 task 的結束回呼(CC-6):非取消例外 = 登入失敗,當下就要留下真因。"""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Discord bot 登入失敗,訊號改走 webhook: %s", exc)
+
+
 class Bot:
     """discord client 的薄殼:起停 + guild 限定指令同步 + 訊號頻道推送。
 
@@ -250,9 +259,15 @@ class Bot:
         self._task: asyncio.Task[None] | None = None
 
     def start_bg(self) -> None:
-        """背景登入;登入本身可能失敗(token 錯 / 斷網),失敗只影響 Discord 這條路。"""
+        """背景登入;登入本身可能失敗(token 錯 / 斷網),失敗只影響 Discord 這條路。
+
+        `add_done_callback` 是唯一**當下**說得出真因的地方(CC-6):沒有它,線索只剩第一則
+        訊號走 fallback 時的「bot 未送出,改走 webhook」,而那行看不出是 token 錯還是斷網;
+        asyncio 的「Task exception was never retrieved」則要等 GC 才印。
+        """
         if self._task is None:
             self._task = asyncio.create_task(self.client.start(self._token))
+            self._task.add_done_callback(_log_login_failure)
 
     async def close(self) -> None:
         await self.client.close()

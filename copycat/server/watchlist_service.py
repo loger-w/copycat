@@ -103,12 +103,17 @@ class WatchlistService:
         return saved
 
     def _current_canonical(self) -> Watchlist | None:
-        """現況的 canonical 形;檔內容不合法時回 None(= 一定不相等 → 照常落檔覆蓋)。
+        """現況的 canonical 形;檔**不可用**時回 None(= 一定不相等 → 照常落檔覆蓋)。
 
         壞檔不該讓一份合法的新名單被拒 —— 請求自己的合法性由 `_commit` 先驗過了。
+
+        「不可用」不只是 `WatchlistError`(MFS-3):半寫入 / 手改壞的檔會在 `load_watchlist`
+        就炸 —— 非 JSON 是 `ValueError`、群組缺鍵是 `KeyError`、`codes` 不是 list 是
+        `TypeError`、讀不到是 `OSError`。這些穿出去會讓 PUT 變 500,而**自癒的唯一路徑
+        正是那個 PUT**:檔壞了就再也修不好,只能手動刪檔。
         """
         try:
             return normalize(load_watchlist(self._path))
-        except WatchlistError:
-            logger.warning("watchlist 現況不符正規化規則,視為需覆寫:%s", self._path)
+        except (WatchlistError, ValueError, KeyError, TypeError, OSError) as e:
+            logger.warning("watchlist 現況不可用,視為需覆寫(%s):%s", self._path, e)
             return None
