@@ -281,6 +281,19 @@ class TestWatchlistPutGoesThroughService:
                 {"type": "watchlist_changed"}
             ]
 
+    def test_broken_watchlist_file_still_accepts_put(self, tmp_path: Path) -> None:
+        """MFS-3:自選檔壞掉(半寫入 / 手改壞)時,存一份合法名單必須是 200 + 檔被修正。"""
+        app, _ = make_app(tmp_path)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            (tmp_path / "watchlist.json").write_text("{壞掉的 json", encoding="utf-8")
+
+            r = client.put("/api/stock/watchlist", json=self.BODY)
+
+            assert r.status_code == 200
+            assert r.json() == self.BODY
+            saved = json.loads((tmp_path / "watchlist.json").read_text(encoding="utf-8"))
+            assert saved["codes"] == ["2330"]
+
     def test_bad_code_still_400(self, tmp_path: Path) -> None:
         """改走 service 之後,WatchlistError → 400 的既有契約不得改變。"""
         app, _ = make_app(tmp_path)

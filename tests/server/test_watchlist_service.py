@@ -204,6 +204,39 @@ class TestCurrent:
 
         assert await service.current() == {"codes": [], "groups": []}
 
+    async def test_unparseable_json_degrades_to_empty(self, tmp_path: Path) -> None:
+        """MFS-3:壞的不只是「內容不合規則」,還有「根本不是 JSON」(半寫入 / 手改壞)。"""
+        service, _, path = _service(tmp_path)
+        path.write_text("{壞掉的 json", encoding="utf-8")
+
+        assert await service.current() == {"codes": [], "groups": []}
+
+
+class TestSelfHealing:
+    """MFS-3:壞檔不得讓「用一份合法名單覆蓋掉它」這條自癒路徑失效。"""
+
+    async def test_unparseable_json_is_overwritten_by_valid_apply(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        path.write_text("{壞掉的 json", encoding="utf-8")
+
+        result = await service.apply({"codes": ["2330"], "groups": []})
+
+        assert result == {"codes": ["2330"], "groups": []}
+        assert load_watchlist(path) == result
+        assert engine.set_calls == [["2330"]]
+        assert engine.published == [{"type": "watchlist_changed"}]
+
+    async def test_wrong_shaped_json_is_overwritten_by_valid_apply(self, tmp_path: Path) -> None:
+        """群組缺 name / codes 不是 list → KeyError / TypeError,同樣不得穿出去。"""
+        service, _, path = _service(tmp_path)
+        path.write_text(json.dumps({"groups": [{"codes": "2330"}]}), encoding="utf-8")
+
+        assert await service.apply({"codes": ["2330"], "groups": []}) == {
+            "codes": ["2330"],
+            "groups": [],
+        }
+        assert load_watchlist(path)["codes"] == ["2330"]
+
 
 class TestRejection:
     async def test_bad_code_raises_and_writes_nothing(self, tmp_path: Path) -> None:

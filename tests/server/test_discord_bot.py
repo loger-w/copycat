@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 from typing import Any
 
 import pytest
@@ -337,6 +338,24 @@ class TestBotLifecycle:
 
         assert client.started == ["tok"]
         assert client.closed is True
+
+    async def test_start_bg_logs_login_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        """CC-6:登入失敗全程無聲。
+
+        沒有 done callback 時,唯一的線索是第一則訊號走 fallback 留下的
+        「bot 未送出,改走 webhook」—— 那行看不出是 token 錯還是斷網,而 asyncio 的
+        「Task exception was never retrieved」要等 GC 才印。
+        """
+        client = _FakeClient(start_error=RuntimeError("Improper token"))
+        bot = _bot(client)
+
+        with caplog.at_level(logging.ERROR, logger="copycat.server.discord_bot"):
+            bot.start_bg()
+            await asyncio.sleep(0.01)
+
+        assert any("登入失敗" in r.getMessage() for r in caplog.records)
+        assert any("Improper token" in r.getMessage() for r in caplog.records)
+        await bot.close()
 
     async def test_close_swallows_login_failure(self) -> None:
         """CC-1:登入失敗(token 錯)讓背景 task 帶著例外結束 —— `close()` 不得把它往外拋。
