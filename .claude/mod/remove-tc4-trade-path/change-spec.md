@@ -161,8 +161,10 @@
 ## Commit 2(🟢 新測試):`tests/server/test_main_wiring.py`
 
 - [amendment 2026-08-04: R2] 先紅(現行 `__main__.py` 傳 trade_source、未傳
-  futures/corr → 斷言 fail)→ Commit 1 的 `__main__.py` 改動使其綠。實作順序上與
-  Commit 1 同輪 TDD(紅測試先寫,實際 commit 順序 🔴 → 🟢 分開)。
+  futures/corr → 斷言 fail)→ 刪除+解耦 commit 的 `__main__.py` 改動使其綠。實際
+  commit 順序 🟢[red] → 🔴[green] 分開 [amendment 2026-08-04: 增量 review AC-1 —
+  原句「🔴 → 🟢」與 git 相反;本檔「Commit N」標號 = 內容分類,非落地順序,
+  實際順序見 Diff 級 spec 開頭宣告]。
 - 內容:monkeypatch `uvicorn.run`(no-op 捕 app)與 `copycat.server.app.create_app`
   (spy 捕 kwargs),呼叫 `main()`,斷言 kwargs 恰為
   stock/index/futures/corr 四個 DEFAULT_* 且無 `trade_source` 鍵。

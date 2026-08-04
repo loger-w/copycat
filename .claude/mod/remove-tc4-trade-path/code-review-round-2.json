@@ -1,0 +1,23 @@
+{
+  "round": 2,
+  "phase": "branch-lifecycle 收尾協定 C 節增量 review(dc9af14 docs/artifacts-only diff;雙 lens:文件事實正確性 / artifacts 內部一致性;opus finder x2)",
+  "date": "2026-08-04",
+  "head_at_review": "dc9af14",
+  "verdict": "0 P0 / 0 P1 / 10 P2 — 全 accepted 修畢(docs 事實校正 7 + artifacts 一致性 3);code commit(cccd4a0..b20356f)增量零,已由 round 1 覆蓋",
+  "findings": [
+    {"id": "F1", "severity": "P2", "claim": "next-time 錯誤碼條目寫「僅 AUDIT_WRITE_FAILED 需留存」與同 commit :537 的 INVALID_ORDER 必留矛盾", "disposition": "accepted → 修(三碼留存:AUDIT_WRITE_FAILED/BROKER_REJECTED/INVALID_ORDER)"},
+    {"id": "F2", "severity": "P2", "claim": "TCPY 條目行號 live/tc4.py:141 應為 :148", "disposition": "accepted → 修"},
+    {"id": "F3", "severity": "P2", "claim": "WS 突斷查證註記沿用已刪的 trade_source 參數名", "disposition": "accepted → 修(futures_source)"},
+    {"id": "F4", "severity": "P2", "claim": "FakeIndexSource 計數 ×2 實為 ×3(test_index_engine/test_index_routes/test_market_routes)", "disposition": "accepted → 修(附三檔位置;其餘計數皆核實)"},
+    {"id": "F5", "severity": "P2", "claim": "trade_models 瘦身清單不完整 — 實況是僅 BrokerRejectedError 與 mask_account 有 production consumer,其餘 11 符號全死", "disposition": "accepted → 修(全符號盤點寫入)"},
+    {"id": "F6", "severity": "P2", "claim": "CLAUDE.md §8 worktree 教訓仍指向已刪的 test_tc4_trade.py", "disposition": "accepted → 修(加已刪註記)"},
+    {"id": "F7", "severity": "P2", "claim": "next-time :485 parseError ×3(useTrade/useCapital/useSeries)已失準 — 現況 lib/api-error.ts 共用版 + useSeries 自有版", "disposition": "accepted → 修"},
+    {"id": "AC-1", "severity": "P2", "claim": "change-spec Commit 2 內文「實際 commit 順序 🔴 → 🟢」與 git(🟢[red] 先行)相反,與開頭宣告矛盾", "disposition": "accepted → 修(句子改正 + 標號=分類非順序註記)"},
+    {"id": "AC-2", "severity": "P2", "claim": "verification.md 指向 code-review-round-1.json 不存在的 whitelist_check 欄位", "disposition": "accepted → 修(採 (a):JSON 補 whitelist_check 六筆逐條落檔)"},
+    {"id": "AC-3", "severity": "P2", "claim": "progress「兩勾銷」vs dc9af14 實際三條 [x](第三條為另一 session 關閉),歸屬無記錄", "disposition": "accepted → 修(progress 補歸屬註記)"}
+  ],
+  "key_verifications_by_lens": [
+    "lens 事實:11 檔全刪、四路 404 + 對照錨(test_capital_api.py:595-618)、AuditWriteError 獨立註冊 + 探針(app.py:864-866 / test_capital_api.py:567-587)、7 條 WS route 全走 relay、trade-text 6 dead key + INVALID_ORDER 必留、另一 session 查證註記行號抽驗全命中",
+    "lens artifacts:pytest 1626 / validate 42/42 / frontend 72 檔 985 全數重跑核實;對賬式 1664−44+1+5=1626、994−9=985 成立;44 個 def test_ 實數、b20356f 淨 +5 逐檔核實;兩 JSON parse 乾淨;self_review_head 指向真 commit"
+  ]
+}

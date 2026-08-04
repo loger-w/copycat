@@ -39,8 +39,8 @@
   `TestTradeRoutesRemoved` parametrize 四路 404 + `/api/capital/status` 非 404 對照錨
   (commit b20356f);`__main__.py:22-28` 顯式四 sentinel;grep `DEFAULT_TRADE|trade_source`
   production 零命中(僅 test_main_wiring 負向斷言)。
-- 白名單逐條:WL-1~WL-6 全 PASS(lens B 逐條打勾 + 證據,見 code-review-round-1.json 與
-  其 whitelist_check;WL-1 另補自動化探針測試堵缺口)。
+- 白名單逐條:WL-1~WL-6 全 PASS(lens B 逐條打勾 + 證據,見 code-review-round-1.json 的
+  `whitelist_check` 陣列 — 增量 review AC-2 後補齊落檔;WL-1 另補自動化探針測試堵缺口)。
 - Migration 可逆性:純刪除 + 接線改寫,`git revert` 四 commit 即整段還原;無資料 migration。
 - 三類 commit:cccd4a0 🟢[red] / 2fd6691 🔴[green] / 9195e74 🔵 / b20356f 🟢[lock],無混類
   (lens A 逐 commit 核過)。

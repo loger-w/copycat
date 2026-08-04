@@ -4,6 +4,14 @@
   "date": "2026-08-04",
   "head_at_review": "9195e74",
   "verdict": "0 P0 / 0 P1 / 6 P2;白名單 WL-1~WL-6 全 PASS(lens B 附實證 probe:AuditWriteError→500 AUDIT_WRITE_FAILED、BrokerRejected→400 含 err_code/err_msg)",
+  "whitelist_check": [
+    {"id": "WL-1", "verdict": "PASS", "evidence": "BrokerRejectedError handler diff 前後逐字相同;AuditWriteError 由 map 迴圈改 @app.exception_handler 裝飾器,回傳 JSONResponse(500, AUDIT_WRITE_FAILED) 一致;實證 probe:audit→500 AUDIT_WRITE_FAILED、broker→400 含 err_code/err_msg;capital_api 沿用依賴仍成立"},
+    {"id": "WL-2", "verdict": "PASS", "evidence": "__main__ 四 sentinel 逐步推演各走 _default_*_source();舊 fallback 唯一觸發者是舊 __main__;全 None 測試路徑零連線;test_main_wiring kwargs 整份相等"},
+    {"id": "WL-3", "verdict": "PASS", "evidence": "trade_models.py / test_trade_models.py / test_trade_audit.py 三檔零觸碰;test_audit_prefix.py 僅 module docstring 文字,零 assert 變動"},
+    {"id": "WL-4", "verdict": "PASS", "evidence": "audit.py 7 行改動全為 docstring/註解;audit_path 簽名與預設值、append_audit、AuditWriteError、lock 一字未動"},
+    {"id": "WL-5", "verdict": "PASS", "evidence": "全域 Exception→502 TC4_DOWN 零改動;capital_api 整檔零出現;route 刪除僅限 4 條 /api/trade/*,其餘 route 與 /ws/* 無 hunk"},
+    {"id": "WL-6", "verdict": "PASS", "evidence": "frontend 僅 useCapital.ts 三處註解 + types.ts 純刪 trade 區段;RightRail/OrderPanel/CapitalOrdersList 未出現在任何 commit;殘留引用 grep 全滅;tsc -b exit 0;npm test 985 = 994−9"}
+  ],
   "key_verifications": [
     "11 檔全數 D;production grep 全滅(含動態用法:importlib/字串路由/config 零命中)",
     "接線四種傳參組合逐一推演等價;舊 fallback 唯一觸發者是舊 __main__",

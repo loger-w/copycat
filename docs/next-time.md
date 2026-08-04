@@ -61,7 +61,7 @@
 
 ## 2026-07-19(dq4-order-phase1 Phase 4 自評 P2 彙總,15 條聚類,shortSymbol/BLOCKED_REASON 已本輪吸收)
 
-- [x] ~~錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:若錯誤碼家族再擴,考慮 codegen 或 shared JSON。〔2026-07-31 盤點:「家族再擴」的條件已達成 —— `capital_api.py:345` 長出第二個 `_CAPITAL_ERROR_MAP`〕~~ **2026-08-04 查證後關閉(不做)**:`capital_api.py` 全檔僅 290 行,`_CAPITAL_ERROR_MAP` 全 repo 只有定義 `:260`(3 entries)+ 消費 `:275` 各一處 —— 07-31「:345 第二個 map」是重構前的陳舊記載,升級條件不成立。且 `_TRADE_ERROR_MAP` 8 碼將隨舊 trade 路刪除消失(僅 AUDIT_WRITE_FAILED 需留存),剩餘重複量(3 個 capital 碼 + trade-text.ts 文字表)不值得 codegen;前端未知碼原樣顯示(trade-text.ts:24)= 安全漂移。
+- [x] ~~錯誤碼三層對照(backend _TRADE_ERROR_MAP / frontend TRADE_ERROR_TEXT / 測試字面值)無單一 source:若錯誤碼家族再擴,考慮 codegen 或 shared JSON。〔2026-07-31 盤點:「家族再擴」的條件已達成 —— `capital_api.py:345` 長出第二個 `_CAPITAL_ERROR_MAP`〕~~ **2026-08-04 查證後關閉(不做)**:`capital_api.py` 全檔僅 290 行,`_CAPITAL_ERROR_MAP` 全 repo 只有定義 `:260`(3 entries)+ 消費 `:275` 各一處 —— 07-31「:345 第二個 map」是重構前的陳舊記載,升級條件不成立。且 `_TRADE_ERROR_MAP` 8 碼將隨舊 trade 路刪除消失(AUDIT_WRITE_FAILED / BROKER_REJECTED / INVALID_ORDER 三碼留存 — 前二為 app.py 獨立 handler,後者為 capital_api route 邊界;2026-08-04 增量 review F1 校正),剩餘重複量(3 個 capital 碼 + trade-text.ts 文字表)不值得 codegen;前端未知碼原樣顯示(trade-text.ts:24)= 安全漂移。
 - [ ] trade 效能微優化候選(手動單低頻,全部先不動;若未來策略自動下單高頻化再 /perf):orders_view 每 poll 重建 list、account_view 每呼叫 sorted、orderable_symbols 每呼叫重建 set
 - [ ] parse_execution_report 的 err_code 判定含 0/"0" 白名單,真值域(design §8 #3)整合實測後回頭校正
 
@@ -183,7 +183,7 @@
   - **〔2026-07-31 15:47 第 7 次未重現,且涵蓋一個全新條件〕** 一台 13:20 起跑、**橫跨日盤 → 夜盤 session 轉換**的 server(先前 6 次全是單一盤別內的冷啟動),15:47 打 `/api/futures/state`:TXF/MXF/TMF **三品全有價 + 五檔俱全**,`resolved_contract=202608`,`seq=138718`。同一台的六腿江波圖與相關係數表(台指腿正是讀 `futures_engine.state()`)夜盤畫面全部有值。累計 **7/7 未重現**。判準不變:下次發生時先 grep server log 有沒有 `futures <p> subscribe ... failed`。
 - [x] ~~`test_index_engine.py::test_rollover_two_phase` 只在真實時鐘 ≥ 08:30 才會綠~~ **2026-07-30 修畢**:建構子補 `now_fn`(預設 `now_time()` = 真實牆鐘 → prod 行為零改變;`IndexEngine(` 只有 `app.py:210` 與測試兩個呼叫點)。另補 `test_rollover_gate_opens_at_0830` 覆蓋門檻本身(原本無測試 —— 唯一的時鐘讀取沒有注入點,寫不出來)。注入 00/08/10/23 皆綠;反向驗證 revert → 12 紅。
 - [x] ~~`test_tc4.py::TestConnectInterruptible` 與 `test_tc4_trade.py::TestFailedConnectGcSafety` 依賴未進版控的 `spikes/TCPY/`~~ **2026-07-30 修畢**:`tests/conftest.py` 出 `requires_tcpy` marker,兩個 class 整體 skip。**過程中抓到第三條(原記載未列)**:`test_check_stale_reconnect_loop_stoppable_when_app_dead` 在缺 wrapper 時是**假綠** —— 重連執行緒死於 `ModuleNotFoundError` 也滿足 `assert not worker.is_alive()`,等於沒驗到「迴圈可中斷」。雙向驗證:缺 TCPY → 3 skipped/37 passed;複製 TCPY 進 worktree → 40 passed/**0 skipped**(marker 不過度 skip)。
-- [ ] TCPY 路徑運算式 `Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"` 在 production 重複兩處(`live/tc4.py:141`、`data/backfill_tc4.py:104`;原第三處 `live/tc4_trade.py` 已於 2026-08-04 隨舊 trade 路刪除),`tests/conftest.py` 的 `TCPY_DIR` 是第三處。當時刻意不抽共用常數(P2 測試層 bug 不動 production 檔)。**收斂條件**:出現第四處、或 `spikes/TCPY` 位置要改時,抽 `copycat/tc4common.py` 的 `TCPY_DIR` 單一定義,三處都引它。
+- [ ] TCPY 路徑運算式 `Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"` 在 production 重複兩處(`live/tc4.py:148`、`data/backfill_tc4.py:104`;原第三處 `live/tc4_trade.py` 已於 2026-08-04 隨舊 trade 路刪除),`tests/conftest.py` 的 `TCPY_DIR` 是第三處。當時刻意不抽共用常數(P2 測試層 bug 不動 production 檔)。**收斂條件**:出現第四處、或 `spikes/TCPY` 位置要改時,抽 `copycat/tc4common.py` 的 `TCPY_DIR` 單一定義,三處都引它。
 - [x] ~~realtime-correlation 的 SC-5 日盤補驗~~ **2026-07-30 10:24 已驗**:日盤六腿全部有中價且非 stale(TXF 40646 / TWN 3462.62 / YM 51909.5 / ES 7388.88 / NQ 27638 / SXF 10776),五對相關係數算出實值(TWN 0.590 / YM 0.147 / ES 0.336 / NQ 0.520;SXF 因整窗中價未動 → 標準差 0 正確回 null)。SC-6 同時驗過:60 秒收 61 則、間隔中位數 1.010s、seq 連續遞增。
 - [ ] realtime-correlation 訂閱窗的**反向**驗證仍未做:「沿用 `session_window` 會失效」是推論不是實證 —— 台指日盤窗(UTC 00–06)+ 夜盤窗(UTC 06–22)合計涵蓋 UTC 00–22,訂閱當下海外腿幾乎不會落窗外;真正的風險是「訂閱後跨過窗結束邊界(UTC 06 / 22)推播是否停止」。驗法:在 UTC 05:5x(台北 13:5x)前訂閱並持續監聽到 UTC 06:0x 之後,看推播是否中斷。全天窗實作本身已是防禦性選擇,此項只影響「基底 source 是否也該改」的判斷。
 - [ ] `corr_state.correlations()` 每腿每次重建 `leg_by_ts` dict(1800 entries)、每窗各過濾一次。實測滿窗 tick 6.43 ms(門檻 200 ms)不構成問題;若日後窗長或腿數放大再看。
@@ -482,8 +482,9 @@
   `body.detail?.error`,body 為合法 JSON `null` 時 TypeError 逸出 queryFn(錯誤訊息變
   TypeError 文字)— 與 `lib/api-error.ts` parseError 產出不同,Track A4 因此跳過;
   修掉即可併入 parseError。
-- [ ] **範圍外重複遺留**(本輪只收個股頁):parseError 同鏈 × 3(useTrade / useCapital /
-  useSeries);fmtPct 同字串 × 5(IndexBar / IndexPage / FuturesPage / RiverCards /
+- [ ] **範圍外重複遺留**(本輪只收個股頁):parseError 同鏈現況 = `lib/api-error.ts` 共用版
+  + `useSeries.ts:5` 自有版(2026-08-04 校正:原記載「×3(useTrade / useCapital / useSeries)」
+  已失準 — useTrade.ts 隨舊 trade 路刪除、useCapital 已無 parseError);fmtPct 同字串 × 5(IndexBar / IndexPage / FuturesPage / RiverCards /
   RiverOverlay,後兩者已各自包 pct());chgPct 大盤 2 處;CandleChart「期間漲跌」
   (分母=視窗首根收盤)與「跨日漲跌」(分母=前一根收盤)是語意變體不可併 chgPct。
 - [ ] **跳過的 JSX / 參數化抽取**(plan review 裁定語意分岔,抽了即改行為或淨可讀性負值):
@@ -527,13 +528,13 @@
 
 ## 2026-08-04(asyncio-socket-send-warning 收尾留尾巴)
 
-- [ ] WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路(review T4 拒的那半):broadcaster 路由(`/ws/futures` 等)要進 parametrize 需 FuturesSource fake + `futures_source` 顯式佈線(2026-08-04 更正:`trade_source` 啟動旗標已隨舊 trade 路刪除,create_app 現收 `futures_source=DEFAULT_FUTURES` 或 fake 實例);共用 relay 已有單元守衛,補整合覆蓋時一併考慮。〔2026-08-04 查證:fake source 散落各測試檔且重複(FakeFuturesSource ×2:test_capital_api.py:48-70 / test_market_routes.py:85;FakeIndexSource ×2、FakeCorrSource ×2、FakeStockSource ×1),前置 = 先提升 tests/helpers/ 再以 `(path, app_kwargs, pump_fn)` 三元組 parametrize;futures 路由需顯式傳 fake(create_app trade_source 預設 None = 零期貨引擎,make_client 樣板 test_capital_api.py:132-149);真 uvicorn 樣板 test_ws_disconnect.py:105-133〕
+- [ ] WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路(review T4 拒的那半):broadcaster 路由(`/ws/futures` 等)要進 parametrize 需 FuturesSource fake + `futures_source` 顯式佈線(2026-08-04 更正:`trade_source` 啟動旗標已隨舊 trade 路刪除,create_app 現收 `futures_source=DEFAULT_FUTURES` 或 fake 實例);共用 relay 已有單元守衛,補整合覆蓋時一併考慮。〔2026-08-04 查證:fake source 散落各測試檔且重複(FakeFuturesSource ×2:test_capital_api.py:48-70 / test_market_routes.py:85;FakeIndexSource ×3:test_index_engine.py:13 / test_index_routes.py:14 / test_market_routes.py:43;FakeCorrSource ×2:test_corr_routes.py:13 / test_river_routes.py:13;FakeStockSource ×1:test_stock_routes.py:13 — 增量 review F4 校正計數),前置 = 先提升 tests/helpers/ 再以 `(path, app_kwargs, pump_fn)` 三元組 parametrize;futures 路由需顯式傳 fake(create_app `futures_source` 預設 None = 零期貨引擎,make_client 樣板 test_capital_api.py:132-149;F3 校正:原寫 trade_source,該參數已刪);真 uvicorn 樣板 test_ws_disconnect.py:105-133〕
 - [ ] prod server 啟動 log 落檔慣例不一致:00:54 的 instance 有 `logs/server-*.log`,09:26 重啟的沒有(console-only)— 這次 11:06 的 asyncio warning 差點無檔案證據可查;考慮統一啟動包裝(固定 stdout 轉存 logs/)
 - [ ] `relay` 收尾假設 uvicorn sansio 的 `writable` 恆 set(無 pause_writing → send_json 非懸掛點、cancel 必打進 generator):若未來 uvicorn 加回 write flow control,「懸在 send_json 的 generator 遺棄」路徑變可達,`_consume_ws_task` docstring 的「取消同時關閉 generator」不再成立(review async lens 附註)
 
 ## 2026-08-04(remove-tc4-trade-path 收尾沉澱)
 
-- [ ] `copycat/live/trade_models.py` 瘦身候選:capital 實際只用 `BrokerRejectedError`(`capital/client.py`);`OrderRequest` / `millipts_from_price_str` / `to_neworder_param` / `TouchanceDownError` 已零 production consumer(2026-08-04 舊 trade 路刪除後)。動它時 `tests/live/test_trade_models.py` 對應測試同步縮,且先 grep 確認 capital 端沒長出新引用。
+- [ ] `copycat/live/trade_models.py` 瘦身候選:僅 `BrokerRejectedError` 與 `mask_account` 有 production consumer(皆 `capital/client.py`;2026-08-04 增量 review F5 全符號盤點)— 其餘全數零引用:`OrderRequest` / `millipts_from_price_str` / `price_str_from_millipts` / `to_neworder_param` / `TouchanceDownError` / `AccountInfo` / `OrderReport` / `parse_accounts` / `parse_execution_report` / `parse_fill_report` / `classify_is_sim`。動它時 `tests/live/test_trade_models.py` 對應測試同步縮,且先 grep 確認 capital 端沒長出新引用。
 - [ ] `frontend/src/lib/trade-text.ts` 瘦身候選(review F3):`TRADE_ERROR_TEXT` 有 6 個無 producer 的 dead key(TOUCHANCE_DOWN / TRADE_NOT_READY / LIVE_DISABLED / CONFIRM_REQUIRED / PREVIEW_EXPIRED / SYMBOL_NOT_ALLOWED,一對一對應已刪的 _TRADE_ERROR_MAP)+ `orderStatusText` / `orderSideText` 已 test-only(唯一 production consumer 是被刪的 OrdersList/OrderConfirm)。**⚠ `INVALID_ORDER` 必留**(capital_api 仍回它);`tradeErrorText` / `shortSymbol` 是 useCapital 等現行 consumer 在用,不可整檔刪。`trade-text.test.ts:7-8` 對 dead key 的斷言一併清。
 - [ ] `tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` 是既有 timing flake(0.5s 收 frame 窗,全套負載下間歇紅;2026-08-04 雙跑對照:全套 1 failed/1620 → 重跑 1621 passed、單檔 6 passed)。放寬候選:時間窗改 deadline 迴圈。與 remove-tc4-trade-path 零因果。
 - [ ] 下次自然重啟 prod server 時,目視 futures / corr / river 三面板有值 —— sentinel 解耦(`__main__` 顯式傳 DEFAULT_FUTURES/DEFAULT_CORR)的 real-env 確認(自動化已由 `test_main_wiring.py` 守;2026-08-04 依「盤中/夜盤不重啟」紀律未做重啟驗證)。
