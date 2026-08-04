@@ -1,7 +1,7 @@
 """下單審計 JSONL(§7 閘三):append-only、跨執行緒序列化、失敗拋 AuditWriteError。
 
-寫者有二:TradeRuntime 的 to_thread(preview/submit/result)與 TC4TradeSource listener
-thread(report 筆)— module-level lock 序列化避免 Windows 並發 append 撕裂行(design R2-4)。
+寫者 = 群益 CapitalClient(送單前後兩段 + COM 回報執行緒的 reply 筆)— module-level
+lock 序列化避免 Windows 並發 append 撕裂行(design R2-4)。
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ class AuditWriteError(Exception):
 
 
 def audit_path(base: Path, when: date, *, prefix: str = "orders") -> Path:
-    # prefix 分檔:TC4 trade 走預設 orders-*,群益 CapitalClient 傳 capital-*(同 base 不混檔)
+    # prefix 分檔:群益 CapitalClient 傳 capital-*;預設 orders-* 是舊 TC4 trade 路留下的
+    # 值(該路已除役,現無 production caller —— 僅測試在覆蓋預設分支)
     return base / f"{prefix}-{when:%Y%m%d}.jsonl"
 
 

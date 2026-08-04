@@ -18,7 +18,7 @@ import copycat.server.discord_bot as _discord_bot
 
 # TC4 官方 wrapper(spikes/TCPY)不在版控(.gitignore:9)→ 乾淨 checkout 與新 worktree
 # 一律缺它。真的要 import 它的測試必須 skip 而非紅:紅會讓「環境沒裝」看起來像「程式壞了」。
-# 路徑與 live/tc4.py / tc4_trade.py 的 sys.path.insert 指向同一處(repo_root/spikes/TCPY)。
+# 路徑與 live/tc4.py 的 sys.path.insert 指向同一處(repo_root/spikes/TCPY)。
 TCPY_DIR = Path(__file__).resolve().parent.parent / "spikes" / "TCPY"
 
 requires_tcpy = pytest.mark.skipif(
