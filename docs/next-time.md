@@ -553,3 +553,15 @@
 - [ ] `test_no_write_to_dead_transport` 其實有**兩個**獨立 flake 源(本輪實測):(a) 既知的 0.5s 固定收 frame 窗(全套負載下漏窗);(b) 新發現 — `_ws_handshake` 讀到 `\r\n\r\n` 即停,101 回應與 server 第一則 frame 落同一 TCP segment 時該 frame 被握手緩衝吞掉 → `sock.recv` 等到 5s timeout,實測 6 跑掛 1(≈17%)。新測試已用 `_ws_handshake_keep_rest`(回傳殘留位元組)免疫;修既有測試需動 `assert sock.recv(4096)` 斷言,依紀律留待專輪 — 修時兩個源一起收(窗改 deadline 迴圈 + 換 keep_rest)。
 - [ ] `tests/conftest.py` 只中和 CAPITAL_* 與 DISCORD_BOT_TOKEN,**沒中和 `DISCORD_WEBHOOK_URL`** — 任何建 SignalHub 的測試(如 /ws/stock 整合路)在開發機 shell / .env 有該值時會真的對外發 Discord 訊息。本輪在該 case builder 內單點 monkeypatch 擋掉;建議升級成 conftest 全域中和(與既有 delenv CAPITAL_* 同型)。
 - [ ] corr/river 兩路突斷測試讀 `engine._loop` private(engine 無公開 loop 取用面;repo 已有 `broadcaster._clients` 先例):若日後 `create_app` 透出 `corr_tick_secs`(現寫死 1.0 不經參數),兩路可改回純 source-driven 端到端 pump,一併移除 private 讀取。
+
+## 2026-08-04(subscribe-retry-recovery 收尾沉澱)
+
+- [ ] corr 腿重試成功時的補分鐘是 **best-effort**:`_schedule_backfill` 在 inflight 時是丟棄
+  不是排隊(`corr_engine.py:298-302`),重試恰好撞上 start() 那次回補未完 → 失敗窗內的
+  江波圖分鐘就此缺一段(本輪只加一行 info 留痕)。要真正補齊得讓 `_schedule_backfill`
+  可排隊,與上面第 212 行「覆寫 `_backfill_task` 參照的孤兒 task」同一次收(同一個函式)。
+- [ ] 三處重試迴圈都是**固定間隔無 backoff**(corr 10s / stock 10s / futures 10s,
+  index_engine 另有 `_schedule_retry` 的 backoff)。TC4 長時間斷線時單檔 SUBQUOTE 要等
+  `_REQ_TIMEOUT_MS`(10s)才失敗,實質退化成「每輪一次慢失敗」的串行慢輪 —— 不會打爆
+  TC4,但 log 會持續刷同一行 warning。要不要加 backoff / 降頻,等真實斷線一次再看
+  (現在改是猜)。與既有「index_engine `_schedule_retry` backoff 收斂統一」條目同批處理。

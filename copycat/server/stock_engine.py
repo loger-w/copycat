@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 _CLIENT_QUEUE_MAX = 1000
 
 
+class _EngineClosing(Exception):
+    """關機中的早退訊號(訂閱重試迴圈內部用)。
+
+    刻意**不是** `ConnectionError`:那會被重試段的 except 接住,打出與「TC4 訂閱失敗」
+    一模一樣的 warning,污染 `grep 'subscribe .* failed'` 這條運維判準。
+    """
+
+
 class StockSource(Protocol):
     """個股行情來源抽象;TC4 實作在 copycat.live.stock_source,測試注入 fake。"""
 
@@ -76,6 +84,7 @@ class StockEngine:
         throttle_secs: float = 1.0,
         checkpoint: bool = True,
         stkfut_map: dict[str, dict] | None = None,
+        resub_interval_secs: float = 10.0,
     ) -> None:
         self._source = source
         self._trade_date = trade_date
@@ -102,6 +111,13 @@ class StockEngine:
         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
         self._pool_lock = asyncio.Lock()
+        # 訂閱失敗的復原路徑(mod/subscribe-retry-recovery):三處失敗各自靜默 ——
+        # watchlist 檔回滾出 `_refs` 後畫面永遠 `-`、stkfut 腿要切走再切回才會重掛、
+        # rollover 重掛失敗更是連 `_refs` 都不動,對帳判準看不到
+        self._resub_interval_secs = resub_interval_secs
+        # `_resubscribe_all` 的失敗檔:owner 還在 `_refs` 裡,只是 SUB 沒掛上 →
+        # 「owner 缺席」的對帳判準涵蓋不到,得另記(P1-1)
+        self._failed_resubs: set[str] = set()
         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
         # 引擎本體不得因它缺席而改變行為
         self._signal_hub: SignalSink | None = None
@@ -134,6 +150,7 @@ class StockEngine:
             self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
         self._tasks.append(asyncio.create_task(self._backfill_worker()))
         self._tasks.append(asyncio.create_task(self._flush_watchlist_loop()))
+        self._tasks.append(asyncio.create_task(self._retry_subscribe_loop()))
         if self._checkpoint_enabled:
             self._tasks.append(asyncio.create_task(self._checkpoint_loop()))
 
@@ -294,14 +311,124 @@ class StockEngine:
         async with self._pool_lock:
             codes = list(self._refs)
 
-        def _do() -> None:
+        def _do() -> list[str]:
+            failed: list[str] = []
             for code in codes:
                 try:
                     self._source.subscribe_symbol(code)
                 except ConnectionError:
+                    # 只收 ConnectionError:其他例外照舊往外拋(壞電文那類要能穿到
+                    # close() 的收尾記錄,test_close_completes_even_if_a_task_died_with_exception)
                     logger.warning("rollover resubscribe %s failed", code)
+                    failed.append(code)
+            return failed
 
-        await asyncio.to_thread(_do)
+        failed = await asyncio.to_thread(_do)
+        # 回 loop context 後才合併(這一行前後無 await → 無競態),不在 thread 內直寫
+        self._failed_resubs |= set(failed)
+
+    # ---- 訂閱失敗的對帳式重試(mod/subscribe-retry-recovery)----
+
+    async def _retry_subscribe_loop(self) -> None:
+        """常駐迴圈:每輪對帳「該訂而沒訂上的」並補訂。
+
+        與 futures/corr 的 pending-resub 不同,這裡的重試項目是**動態集合**(使用者
+        隨時增刪自選、切主圖),所以不留待辦清單、每輪重新對帳 —— 清單式會在
+        「使用者已移除該檔」時替不看的股票掛訂閱。
+        """
+        while True:
+            await asyncio.sleep(self._resub_interval_secs)
+            try:
+                await self._retry_round()
+            except Exception:
+                # 迴圈死掉 = 復原路徑本身靜默失效(同 corr `_run` 的 rationale)
+                logger.exception("訂閱重試輪失敗(續行)")
+
+    async def _retry_round(self) -> None:
+        """一輪對帳:快照判準(短鎖)→ 三段重試,每項各自重拿鎖重驗。
+
+        **不是整輪一鎖**:TC4 斷線時單檔 SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10s)才失敗,
+        整輪持鎖會讓 `_pool_lock` 佔用率趨近 100% → set_main / PUT watchlist 卡死。
+        每段遇到第一個 `ConnectionError` 就 `break` 出**該段**(不是整輪):`_resub` 對
+        單一壞碼可穩定 raise(與連線健康無關),round 級早停會讓一檔壞碼永久餓死後面兩段。
+        """
+        try:
+            async with self._pool_lock:
+                pending_wl = [
+                    c for c in self._watchlist if "watchlist" not in self._refs.get(c, set())
+                ]
+                # prune:已退訂的檔不再重掛(owner 都沒了,重掛等於訂閱不看的股票)
+                self._failed_resubs &= set(self._refs)
+                pending_resubs = sorted(self._failed_resubs)
+                main = self._main
+                stkfut_pending = self._stkfut_owner_missing(main)
+
+            for code in pending_wl:
+                async with self._pool_lock:
+                    # 鎖內重驗:快照後使用者可能已移除該檔,或重送名單已把它修好
+                    if code not in self._watchlist or "watchlist" in self._refs.get(code, set()):
+                        continue
+                    try:
+                        await asyncio.to_thread(self._retry_acquire, code, "watchlist")
+                    except ConnectionError:
+                        logger.warning("watchlist subscribe %s failed", code)
+                        break
+                    # 對齊 set_watchlist added 的種子:冷門股整天可能只有簿更新,
+                    # 沒有這一則就要等下一筆成交才看得到值。
+                    # 不重呼 `signal_hub.on_watchlist` —— membership 在 set_watchlist 已全量設定
+                    self._publish(self._quote_payload(code))
+
+            for code in pending_resubs:
+                async with self._pool_lock:
+                    # 後者防同輪內新的 rollover 失敗被這裡的 discard 抹掉
+                    if code not in self._refs or code not in self._failed_resubs:
+                        continue
+                    try:
+                        await asyncio.to_thread(self._retry_resubscribe, code)
+                    except ConnectionError:
+                        logger.warning("rollover resubscribe %s failed", code)
+                        break
+                    self._failed_resubs.discard(code)
+
+            if main is not None and stkfut_pending:
+                async with self._pool_lock:
+                    # 主圖切走後不得補掛:替已不看的股票掛腿 + owner refcount 洩漏
+                    if self._main == main and self._stkfut_owner_missing(main):
+                        entry = self._map[main]
+                        try:
+                            await asyncio.to_thread(
+                                self._retry_acquire, f"F:{entry['prod']}", f"stkfut:{main}"
+                            )
+                        except ConnectionError:
+                            logger.warning("stkfut subscribe %s failed", entry["prod"])
+        except _EngineClosing:
+            return  # 關機:靜默結束該輪(不得偽裝成 TC4 訂閱失敗的 warning)
+
+    def _stkfut_owner_missing(self, code: str | None) -> bool:
+        """該主圖檔有個股期對映、但期貨鍵上沒掛它的 owner(= 這一腿沒訂上)。"""
+        if code is None:
+            return False
+        entry = self._map.get(code)
+        if entry is None:
+            return False
+        return f"stkfut:{code}" not in self._refs.get(f"F:{entry['prod']}", set())
+
+    def _retry_acquire(self, code: str, owner: str) -> None:
+        """executor thread:關機中早退,縮小「close 後 source 再被呼叫」的窗。
+
+        cancel 一個正 await `to_thread` 的 task 時 asyncio 側立即回(executor future
+        無法中斷),orphan thread 可能跨過 `source.close()` 再 subscribe → TC4 重連
+        session 洩漏。此暴露與已出貨的 futures `_resub_loop` 同款,以檢查縮窗即可。
+        """
+        if self._loop is None:
+            raise _EngineClosing
+        self._acquire(code, owner)
+
+    def _retry_resubscribe(self, code: str) -> None:
+        """executor thread:owner 已在池內,只需重掛 SUB(UNSUB→SUB 冪等)。"""
+        if self._loop is None:
+            raise _EngineClosing
+        self._source.subscribe_symbol(code)
 
     def _rollover_stage2(self, first_tick: StockTick) -> None:
         """階段二:首筆新日 tick 確認 → reset 全部狀態,觸發 tick 重新 ingest。"""
