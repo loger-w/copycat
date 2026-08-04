@@ -4,6 +4,7 @@ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialo
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
+import { WL_COLLAPSED_KEY, WL_UNGROUPED_KEY } from "@/lib/constants";
 import { fmt, fmtPct } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
@@ -28,10 +29,6 @@ import {
  *  所以列高由這個常數用 inline style 指派,不寫 Tailwind class:jsdom 沒有版面引擎,
  *  class 寫的高度沒有任何測試看得到。 */
 export const ROW_H = 52;
-/** 折疊中的群組名(round4 項 2)。前綴沿用 `copycat-`(docs/next-time.md 的 key 收斂方向) */
-const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
-/** 未分組區塊的折疊(`"1"` = 折疊);與群組折疊分開存,兩者互不影響 */
-const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 const EMPTY_WL: Watchlist = { codes: [], groups: [] };
 
 function fmtPrice(milli: number | null): string {
@@ -41,7 +38,7 @@ function fmtPrice(milli: number | null): string {
 
 function loadCollapsed(): Set<string> {
   try {
-    const raw = window.localStorage.getItem(COLLAPSED_KEY);
+    const raw = window.localStorage.getItem(WL_COLLAPSED_KEY);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw) as unknown;
     return new Set(Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === "string") : []);
@@ -51,12 +48,12 @@ function loadCollapsed(): Set<string> {
 }
 
 function persistCollapsed(names: Set<string>): void {
-  window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...names]));
+  window.localStorage.setItem(WL_COLLAPSED_KEY, JSON.stringify([...names]));
 }
 
 function loadUngroupedCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(UNGROUPED_KEY) === "1";
+    return window.localStorage.getItem(WL_UNGROUPED_KEY) === "1";
   } catch {
     return false;
   }
@@ -117,7 +114,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   function toggleUngroupedCollapsed(): void {
     setUngroupedCollapsed((prev) => {
       const next = !prev;
-      window.localStorage.setItem(UNGROUPED_KEY, next ? "1" : "0");
+      window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
       return next;
     });
   }

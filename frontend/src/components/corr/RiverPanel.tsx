@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 
+import { RIVER_MODE_KEY, RIVER_OFF_KEY } from "@/lib/constants";
 import type { OverlayEntry } from "@/lib/river-chart-svg";
 import { cn } from "@/lib/utils";
 import type { RiverState } from "@/types";
@@ -13,19 +14,16 @@ import { RiverCards } from "./RiverCards";
 import { RIVER_TEXTS } from "./river-colors";
 import { RiverOverlay } from "./RiverOverlay";
 
-const MODE_KEY = "copycat-river-mode";
-/** 存「**關掉**哪些腿」而非「開哪些」:設定檔日後加第七腿時,舊值不會讓新腿默默隱形。 */
-const OFF_KEY = "copycat-river-legs";
-
 type Mode = "side" | "overlay";
 
 function initialMode(): Mode {
-  return window.localStorage.getItem(MODE_KEY) === "overlay" ? "overlay" : "side";
+  return window.localStorage.getItem(RIVER_MODE_KEY) === "overlay" ? "overlay" : "side";
 }
 
+/** 存「**關掉**哪些腿」而非「開哪些」:設定檔日後加第七腿時,舊值不會讓新腿默默隱形。 */
 function initialOff(): string[] {
   try {
-    const raw = window.localStorage.getItem(OFF_KEY);
+    const raw = window.localStorage.getItem(RIVER_OFF_KEY);
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
@@ -44,13 +42,13 @@ export function RiverPanel({ state }: Props) {
 
   function switchMode(next: Mode): void {
     setMode(next);
-    window.localStorage.setItem(MODE_KEY, next);
+    window.localStorage.setItem(RIVER_MODE_KEY, next);
   }
 
   function toggleLeg(key: string): void {
     const next = off.includes(key) ? off.filter((k) => k !== key) : [...off, key];
     setOff(next);
-    window.localStorage.setItem(OFF_KEY, JSON.stringify(next));
+    window.localStorage.setItem(RIVER_OFF_KEY, JSON.stringify(next));
   }
 
   if (state === null) {

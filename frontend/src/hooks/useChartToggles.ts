@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const KEY = "copycat-chart-toggles";
+import { CHART_TOGGLES_KEY } from "@/lib/constants";
 
 export interface ChartToggles {
   vwap: boolean;
@@ -32,7 +32,10 @@ interface Stored extends Partial<ChartToggles> {
  *  記憶體內的 toggles 照常生效,只是這次沒落檔。 */
 function persist(toggles: ChartToggles): void {
   try {
-    window.localStorage.setItem(KEY, JSON.stringify({ ...toggles, v: TOGGLES_VERSION }));
+    window.localStorage.setItem(
+      CHART_TOGGLES_KEY,
+      JSON.stringify({ ...toggles, v: TOGGLES_VERSION }),
+    );
   } catch {
     // 存不進去就算了 —— 偏好設定不落檔遠好於整個看盤畫面崩掉
   }
@@ -41,7 +44,7 @@ function persist(toggles: ChartToggles): void {
 function load(): ChartToggles {
   let saved: Stored;
   try {
-    const raw = window.localStorage.getItem(KEY);
+    const raw = window.localStorage.getItem(CHART_TOGGLES_KEY);
     if (!raw) return DEFAULTS;
     const parsed: unknown = JSON.parse(raw);
     // `JSON.parse("null")` 成功且回 null;陣列 / 字串同樣是合法 JSON。
