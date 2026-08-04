@@ -14,13 +14,11 @@ from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
+from tests.helpers.fake_sources import FakeFuturesSource, FakeIndexSource
+from tests.helpers.fake_sources import dbar as _dbar
 from tests.helpers.fake_txo import FakeTxoSource
 
 _TODAY = f"{_dt.date.today():%Y-%m-%d}"
-
-
-def _dbar(t: str, c: int) -> dict:
-    return {"t": t, "o": c, "h": c + 1000, "l": c - 1000, "c": c, "v": 10}
 
 
 def _this_week_days(n: int) -> list[str]:
@@ -33,80 +31,10 @@ def _this_week_days(n: int) -> list[str]:
     return [(monday + _dt.timedelta(days=i)).isoformat() for i in range(n)]
 
 
-_DEFAULT_DAILY = [
-    _dbar("2026-07-27", 23_000_000),
-    _dbar("2026-07-28", 23_100_000),
-    _dbar("2026-07-29", 23_200_000),
-]
-
-
-class FakeIndexSource:
-    def __init__(self, *, tag: str = "tc4_dk", daily_bars: list[dict] | None = None) -> None:
-        self.calls: list[tuple[str, str, str, str]] = []
-        self._tag = tag
-        self._daily = _DEFAULT_DAILY if daily_bars is None else daily_bars
-
-    def subscribe_symbol(self, code: str) -> None:
-        pass
-
-    def unsubscribe_symbol(self, code: str) -> None:
-        pass
-
-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
-        return {}
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        pass
-
-    def set_trade_date(self, trade_date: str) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-    def fetch_bars_range_tagged(
-        self, code: str, tf: str, start: str, end: str
-    ) -> tuple[list[dict], str]:
-        self.calls.append((code, tf, start, end))
-        if tf == "1":
-            return [{"t": f"{_TODAY} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}], "tc4_1k"
-        # 深拷貝:`_DEFAULT_DAILY` 是 module-level 共享的,`list()` 只換外層 list,
-        # 內層 dict 仍是同一批物件 —— 任何一條測試(或被測 route)改到 bar 的欄位,
-        # 都會滲進其後每一條測試。改前的 inline 字面值本來就是「每次呼叫新建 dict」。
-        return [dict(b) for b in self._daily], self._tag
-
-
 class NoHistoryIndexSource(FakeIndexSource):
     """沒有 `fetch_bars_range_tagged` 的來源(舊 source / TC4 不可用的替身)。"""
 
     fetch_bars_range_tagged = None  # type: ignore[assignment]
-
-
-class FakeFuturesSource:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str, str]] = []
-
-    def subscribe_symbol(self, product: str) -> None:
-        pass
-
-    def subscribe_leaf(self, product: str, ym: str) -> None:
-        pass
-
-    def unsubscribe_symbol(self, product: str) -> None:
-        pass
-
-    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
-        return []
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-    def fetch_bars_range(self, product: str, tf: str, start: str, end: str) -> list[dict]:
-        self.calls.append((product, tf, start, end))
-        return [_dbar("2026-07-29", 23_200_000)]
 
 
 def _mis() -> OtcSnap | None:

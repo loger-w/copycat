@@ -2,34 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Callable
-
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
+from tests.helpers.fake_sources import FakeCorrSource
 from tests.helpers.fake_txo import FakeTxoSource
-
-
-class FakeCorrSource:
-    def __init__(self) -> None:
-        self.subscribed: list[str] = []
-        self.cb: Callable[[dict], None] | None = None
-
-    def subscribe_raw(self, symbol: str) -> None:
-        self.subscribed.append(symbol)
-
-    def unsubscribe_raw(self, symbol: str) -> None:
-        if symbol in self.subscribed:
-            self.subscribed.remove(symbol)
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        self.cb = cb
-
-    def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
-        return []  # 江波圖回補的路由測試在 test_river_routes.py
-
-    def close(self) -> None:
-        return None
 
 
 def _client(corr_source: object | None) -> TestClient:

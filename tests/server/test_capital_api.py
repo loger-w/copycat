@@ -25,6 +25,7 @@ from copycat.capital.safety import SafetyConfig
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.app import create_app
 from tests.capital.fake_com import FakeCom, RejectingCom
+from tests.helpers.fake_sources import FakeFuturesSource
 
 C23000 = OptionContract(symbol="TC.O.TWF.TXO.202607.C.23000", cp="C", strike_millipts=23_000_000)
 SERIES = SeriesInfo(series_id="TXO.202607", name="TXO 202607", expiry="202607", contracts=(C23000,))
@@ -45,31 +46,6 @@ class FakeQuoteSource:
 
     def close(self) -> None:
         return None
-
-
-class FakeFuturesSource:
-    def __init__(self) -> None:
-        self.subscribed: list[str] = []
-        self.closed = False
-        self.on_message: Callable[[dict], None] | None = None
-
-    def subscribe_symbol(self, product: str) -> None:
-        self.subscribed.append(product)
-
-    def unsubscribe_symbol(self, product: str) -> None:
-        return None
-
-    def subscribe_leaf(self, product: str, ym: str) -> None:
-        return None
-
-    def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
-        return []  # 江波圖回補在本檔不受測(FuturesSource Protocol 對齊用)
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        self.on_message = cb
-
-    def close(self) -> None:
-        self.closed = True
 
 
 def _fut_quote(**over: object) -> dict:

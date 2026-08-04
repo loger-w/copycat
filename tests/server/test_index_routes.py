@@ -2,38 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Callable
-
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
+from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.fake_txo import FakeTxoSource
 
-
-class FakeIndexSource:
-    def __init__(self) -> None:
-        self.subscribed: list[str] = []
-        self.closed = False
-        self.on_message: Callable[[dict], None] | None = None
-
-    def subscribe_symbol(self, code: str) -> None:
-        self.subscribed.append(code)
-
-    def unsubscribe_symbol(self, code: str) -> None:
-        pass
-
-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
-        return {"0901": 43_000_000}
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        self.on_message = cb
-
-    def set_trade_date(self, trade_date: str) -> None:
-        pass
-
-    def close(self) -> None:
-        self.closed = True
+#: 本檔的當日回補固定給一根分鐘 —— `/api/index/state` 與 `/ws/index` 都靠它斷言接線
+_DAY_MINUTES = {"0901": 43_000_000}
 
 
 def _mis() -> OtcSnap | None:
@@ -52,7 +29,7 @@ def make_client(index_source: FakeIndexSource | None) -> tuple[TestClient, FakeI
 
 class TestIndexState:
     def test_state_shape_200(self) -> None:
-        client, fake = make_client(FakeIndexSource())
+        client, fake = make_client(FakeIndexSource(day_minutes=_DAY_MINUTES))
         with client:
             r = client.get("/api/index/state")
             assert r.status_code == 200
@@ -70,7 +47,7 @@ class TestIndexState:
             assert r.json()["detail"]["error"] == "NOT_READY"
 
     def test_ws_streams_index_payload(self) -> None:
-        client, fake = make_client(FakeIndexSource())
+        client, fake = make_client(FakeIndexSource(day_minutes=_DAY_MINUTES))
         with client:
             assert fake is not None and fake.on_message is not None
             with client.websocket_connect("/ws/index") as ws:

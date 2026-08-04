@@ -8,39 +8,7 @@ from typing import Any, Callable
 
 from copycat.server.index_engine import IndexEngine, minute_key
 from copycat.server.mis import OtcSnap
-
-
-class FakeIndexSource:
-    def __init__(self) -> None:
-        self.subscribed: list[str] = []
-        self.unsubscribed: list[str] = []
-        self.trade_dates: list[str] = []
-        self.day_minutes: dict[str, int] | Exception = {}
-        self.on_message: Callable[[dict], None] | None = None
-        self.subscribe_error: Exception | None = None
-        self.closed = False
-
-    def subscribe_symbol(self, code: str) -> None:
-        if self.subscribe_error is not None:
-            raise self.subscribe_error
-        self.subscribed.append(code)
-
-    def unsubscribe_symbol(self, code: str) -> None:
-        self.unsubscribed.append(code)
-
-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
-        if isinstance(self.day_minutes, Exception):
-            raise self.day_minutes
-        return dict(self.day_minutes)
-
-    def set_on_message(self, cb: Callable[[dict], None]) -> None:
-        self.on_message = cb
-
-    def set_trade_date(self, trade_date: str) -> None:
-        self.trade_dates.append(trade_date)
-
-    def close(self) -> None:
-        self.closed = True
+from tests.helpers.fake_sources import FakeIndexSource
 
 
 def _quote(price: str = "42039.92", filled: str = "13015") -> dict:
