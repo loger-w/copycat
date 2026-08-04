@@ -87,7 +87,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
                 <span
                   data-testid="page-quote"
                   className={cn(
-                    "font-mono text-lg",
+                    "font-mono text-3xl font-semibold",
                     limit === "upper" && "rounded bg-bull px-1.5 text-white",
                     limit === "lower" && "rounded bg-bear px-1.5 text-white",
                     limit === null &&
@@ -96,7 +96,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
                 >
                   {fmt(last.p)}
                   {chg != null ? (
-                    <span className="ml-1 text-xs">{fmtPct(chg)}</span>
+                    <span data-testid="page-quote-pct" className="ml-1 text-sm">{fmtPct(chg)}</span>
                   ) : null}
                 </span>
               ) : null}
