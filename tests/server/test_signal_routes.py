@@ -17,9 +17,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from copycat.server import app as app_mod
 from copycat.server.app import create_app
 from tests.helpers.fake_txo import FakeTxoSource
 from tests.server.test_stock_routes import FakeStockSource
@@ -88,6 +90,66 @@ class TestLifespanWiring:
         with TestClient(app, raise_server_exceptions=False):
             assert app.state.signal_hub is None
             assert app.state.watchlist_service is None
+
+
+class _ExplodingBot:
+    """close 會拋的假 bot(真實對應:token 失效 → discord.py 在收攤路徑上拋)。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def start_bg(self) -> None:
+        return None
+
+    async def send_signal(self, text: str) -> bool:
+        return True
+
+    async def close(self) -> None:
+        self.closed = True
+        raise RuntimeError("discord close 炸了")
+
+
+class TestSignalsShutdownIsolation:
+    """關機/啟動失敗路徑的隔離(CC-1 / CC-2)—— 失效樣態全是靜默的。"""
+
+    def test_bot_close_failure_still_closes_hub(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CC-1:bot.close 拋不得讓 hub.close 整段跳過(worker 洩漏 + 關機落檔不跑)。"""
+        bot = _ExplodingBot()
+        monkeypatch.setattr(app_mod, "create_bot", lambda service, hub: bot)
+        app, _ = make_app(tmp_path)
+        with TestClient(app, raise_server_exceptions=False):
+            hub = app.state.signal_hub
+            assert hub is not None
+        assert bot.closed is True
+        assert hub._tasks == [], "hub 的 worker 沒被收掉 = 洩漏一整天"
+
+    def test_start_failure_leaves_no_zombie_hub_on_engine(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CC-2:`_start_signals` 中途炸掉 → engine 不得留著已收攤的 hub 在熱路徑上。
+
+        殭屍 hub 的樣態:WS 照樣有訊號、jsonl 與 `signals/today` 全空(worker 已死)。
+        """
+
+        def _boom(service: object, hub: object) -> object:
+            raise RuntimeError("bot 建構炸了")
+
+        monkeypatch.setattr(app_mod, "create_bot", _boom)
+        app, _ = make_app(tmp_path)
+        with TestClient(app, raise_server_exceptions=False):
+            assert app.state.signal_hub is None
+            assert app.state.discord_bot is None
+            assert app.state.stock is not None  # 其他引擎不受波及
+            assert app.state.stock._signal_hub is None
+
+    def test_shutdown_detaches_hub_from_engine(self, tmp_path: Path) -> None:
+        """CC-2 後半:收攤後掛點要摘掉,關機序列後半不得再打到已收的 hub。"""
+        app, _ = make_app(tmp_path)
+        with TestClient(app, raise_server_exceptions=False):
+            assert app.state.stock._signal_hub is app.state.signal_hub
+        assert app.state.stock._signal_hub is None
 
 
 class TestSignalsTodayRoute:
