@@ -1,0 +1,26 @@
+{
+  "round": 1,
+  "date": "2026-08-04(盤後 14:2x–14:5x)",
+  "method": "fake source(零 ZMQ)+ create_app 注入 temp watchlist + 注入時鐘(detector now_fn=今日 10:30 起走)於 :8899;臨時 vite config 指 8899 於 :5199;正式 :8721 全程未碰(前後 /api/health started_at 同值佐證);repo data/ 零觸碰。此即 brainstorm 各 SC 標定的盤後降級策略。",
+  "results": [
+    {"sc": "SC-1", "verdict": "PASS", "evidence": ["evidence/SC-1_ws-signal.txt", "evidence/SC-1_discord-push.txt"], "note": "WS 即收 cdp_cross levels=[ah] from_below;Discord 真頻道出現文案「🔔 突破 CDP AH(壓力・第1次)｜台積電 2330｜1022.00｜09:30:00」"},
+    {"sc": "SC-2", "verdict": "PASS", "evidence": ["evidence/SC-2_SC-4_detector.txt", "evidence/SC-7_today-api.txt"]},
+    {"sc": "SC-3", "verdict": "PASS(pytest 層;E2E 未點火屬設計 — brainstorm 驗證方式即 pytest)", "evidence": ["evidence/pytest-final.txt"]},
+    {"sc": "SC-4", "verdict": "PASS", "evidence": ["evidence/SC-2_SC-4_detector.txt"], "note": "複合簽名含市價佇列 0 檔位路徑"},
+    {"sc": "SC-5/SC-6", "verdict": "PASS(結構保證 + pytest 鎖死;real-env N/A by design)", "evidence": ["evidence/pytest-final.txt"]},
+    {"sc": "SC-7", "verdict": "PASS", "evidence": ["evidence/SC-7_today-api.txt"]},
+    {"sc": "SC-8", "verdict": "PASS(bot 上線 + /watch 指令 sync 至 guild + 訊號真推;slash 指令實發需人手 → 留 user 過目項)", "evidence": ["evidence/SC-1_discord-push.txt"]},
+    {"sc": "SC-9", "verdict": "PASS", "evidence": ["evidence/SC-9_signal-rail.png", "evidence/SC-9_click-switch.png", "evidence/SC-9_ui-verdict.txt", "evidence/SC-9_console.txt"]},
+    {"sc": "SC-10", "verdict": "PASS", "evidence": ["evidence/SC-10_toast.png"]},
+    {"sc": "SC-11", "verdict": "PASS", "evidence": ["evidence/SC-11_watchlist-sync.png", "evidence/SC-11_watchlist-sync.txt"]},
+    {"sc": "SC-12", "verdict": "PASS(含關閉零產出/冷卻先跨過的反證設計)", "evidence": ["evidence/SC-12_enabled-api.txt", "evidence/SC-12_toggle-off.png"]},
+    {"sc": "regression", "verdict": "PASS", "evidence": ["evidence/regression_sample.txt"], "note": "/api/health + /api/stock/names 抽 2"}
+  ],
+  "env_changes": [".venv 補裝 discord.py 2.7.1(pyproject extras 已宣告;裝後 pytest 1658 passed 0 skipped,見 evidence/pytest-with-discord-extra.txt)"],
+  "found_preexisting": [
+    "WS client 連線中時 server graceful shutdown 卡死(ws route 從不 receive,對端斷線偵測不到)— git diff 證實非本輪改動,入 docs/next-time.md",
+    "驗證 harness 首啟曾以真憑證嘗試群益登入(失敗降級,零狀態改變)— harness 應比照 tests/conftest 中和 CAPITAL_*,入 next-time"
+  ],
+  "user_live_feedback": "user 於 Discord 頻道即時看到測試訊號並回「太慢了」— 測試訊號帶 09:30 模擬時刻於盤後發出;收尾報告需說明並確認是否另有延遲疑慮",
+  "all_pass": true
+}

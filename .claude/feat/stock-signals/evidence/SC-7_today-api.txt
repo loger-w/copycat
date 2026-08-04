@@ -1,0 +1,66 @@
+=== stock-signals SC-7 /api/stock/signals/today 驗證(fake server :8899,注入時鐘) ===
+# 時間:2026-08-04 14:37:44
+
+--- (1) 注入任何訊號前 GET /api/stock/signals/today ---
+{"signals":[]}
+
+--- (2) 設注入時鐘 = 今日 10:30(盤中;真實牆鐘是盤後 14:xx) ---
+{"now":"10:30:00","offset_secs":-14864.580375}
+
+--- (3) 依序注入 seed→cdp→surge→lock 後 GET /api/stock/signals/today ---
+{
+    "signals": [
+        {
+            "type": "signal",
+            "id": "2026-08-04-2330-cdp_cross-ah-09:30:00.000",
+            "kind": "cdp_cross",
+            "code": "2330",
+            "name": "台積電",
+            "price": 1022000,
+            "time": "09:30:00",
+            "levels": [
+                "ah"
+            ],
+            "direction": "from_below",
+            "pct": null,
+            "touch_count": 1,
+            "trade_date": "2026-08-04"
+        },
+        {
+            "type": "signal",
+            "id": "2026-08-04-2317-surge---09:30:00.000",
+            "kind": "surge",
+            "code": "2317",
+            "name": "鴻海",
+            "price": 51100,
+            "time": "09:30:00",
+            "levels": [],
+            "direction": null,
+            "pct": 2.1999999999999997,
+            "touch_count": 1,
+            "trade_date": "2026-08-04"
+        },
+        {
+            "type": "signal",
+            "id": "2026-08-04-2330-limit_lock-up-09:30:00.000",
+            "kind": "limit_lock",
+            "code": "2330",
+            "name": "台積電",
+            "price": 1100000,
+            "time": "09:30:00",
+            "levels": [],
+            "direction": "up",
+            "pct": null,
+            "touch_count": 1,
+            "trade_date": "2026-08-04"
+        }
+    ]
+}
+
+--- (4) jsonl 落檔(hub 的歷史真相源;data_dir = 注入的 temp watchlist 所在目錄)---
+jsonl = C:\Users\USER\AppData\Local\Temp\copycat-signal-e2e-iqrm7zts\signals\20260804.jsonl
+dropped_jsonl = 0  dropped_discord = 0
+
+判定:PASS — cdp_cross(levels=[ah]/direction=from_below/touch_count=1)、
+      surge(pct=+2.20)、limit_lock(direction=up/price=1100000 毫元)三 kind 齊全,
+      每筆含 id/kind/code/name/price/time/levels/direction/pct/touch_count 全欄位。

@@ -1,0 +1,23 @@
+=== stock-signals SC-11 自選變更即時同步(fake server :8899;前端全程未重整)===
+# 時間:2026-08-04 14:48:42
+
+--- (1) 變更前 GET /api/stock/watchlist ---
+{"codes":["2330","2317"],"groups":[{"name":"驗證組","codes":["2330"]}]}
+
+--- (2) PUT /api/stock/watchlist(加入 2454 到未分組;body 走 UTF-8 檔避開 Windows
+        console 編碼 — 直接在 Git Bash 內嵌中文會被轉成 cp950 而 parse 失敗)---
+    request : {"codes": ["2330", "2317", "2454"], "groups": [{"name": "驗證組", "codes": ["2330"]}]}
+    response: {"codes":["2330","2317","2454"],"groups":[{"name":"驗證組","codes":["2330"]}]}
+
+--- (3) 變更後 hub membership + 訂閱池 + CDP 基準(GET /verify/state)---
+  hub._watch    = ['2317', '2330', '2454']
+  subscribed    = ['2330', '2317', 'F:DHF', '2454']   # F:DHF = 2317 的個股期(set_main 帶的)
+  CDP 基準已補抓 = ['2317', '2330', '2454']
+
+--- (4) 前端側欄(未重整;直接讀 DOM innerText)---
+  變更前:未分組 1 [2317] / 驗證組 1 [2330]
+  變更後:未分組 2 [2317 鴻海 51.1 +2.20% / 2454 聯發科 - -] / 驗證組 1 [2330 台積電 1022 +2.20%]
+  截圖:SC-11_watchlist-sync.png
+
+判定:PASS — REST PUT 後前端側欄自動出現 2454(無重整)、hub membership 同步擴充到
+      三檔、engine 訂閱池補訂 2454、CDP 基準 worker 自動為新檔補抓基準。

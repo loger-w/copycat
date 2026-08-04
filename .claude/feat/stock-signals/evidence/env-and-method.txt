@@ -1,0 +1,36 @@
+=== Phase 6 真實環境驗證:環境與方法(fake server + 注入時鐘)===
+# 日期:2026-08-04(週一)盤後;真實牆鐘 14:2x–14:5x
+
+[為什麼不用真環境的 TC4]
+  1. detector 的盤別 gate 讀真實台北牆鐘(09:00–13:30),盤後跑一定回 [] → 什麼都驗不到。
+  2. CLAUDE.md §8:「盤中不要起第二台連 TC4 的後端」/「不要為了看新 code 就重啟跑著的
+     server」。:8721 的正式 server(master 74942ca,09:26:23 啟動)全程未被碰過 ——
+     驗證前後各查一次 /api/health,started_at 一致。
+  → 解法:全部 source 用 fake(零 ZMQ)、時鐘注入 detector。
+
+[harness]
+  C:\Users\USER\AppData\Local\Temp\claude\...\scratchpad\signal_e2e_server.py
+    - create_app(FakeTxoSource(), stock_source=FakeStockSource(),
+                 stock_watchlist_path=<temp>/stock_watchlist.json,
+                 index_source=None, futures_source=None, corr_source=None, trade_source=None)
+    - uvicorn port 8899;cwd = repo root(create_bot 的 .env fallback 是相對路徑)
+    - 時鐘:app.state.signal_hub._detector._now_fn ← 注入(私有存取,harness 專用)
+    - /verify/clock(設時刻 / 前進秒數)、/verify/push(情境注入)、/verify/state、
+      /verify/shutdown
+  ws_client.py(websockets,自動回 Pong)、discord_read.py / discord_cmds.py
+  (Discord REST 反查,不開第二條 gateway)
+  data_dir = <temp>\copycat-signal-e2e(jsonl / signals_enabled.json 全落在系統 temp,
+  **完全沒有碰 repo 的 data/**)
+
+  前端:frontend/vite.verify.config.ts(BACKEND=127.0.0.1:8899,另加 /verify proxy)
+  port 5199 —— 驗完已刪除,git status 無殘留。
+
+[環境變更(需知會)]
+  1. `.venv` 安裝了 `discord.py 2.7.1`(+ aiohttp 等相依)—— 這是 pyproject 已宣告的
+     extras `[discord]`,沒有它 create_bot 走降級回 None,SC-8 的 Discord 路徑根本驗不到。
+     裝完重跑 gate:**1658 passed(原 1657 passed + 1 skipped)** —— 多的那個正是
+     `TestRealDiscordWiring::test_create_bot_builds_client_and_tree`(原本因 extras 未裝
+     被 skip)。無任何測試因此變紅。證據:pytest-with-discord-extra.txt
+  2. 第一次啟動 fake server 時,.env 的真 CAPITAL_* 讓 capital client 真的去登入群益,
+     失敗於 `SK_ERROR_TELNET_LOGINSERVER_FAIL`(降級 status=error,無下單、無狀態改變)。
+     harness 之後加了 `CAPITAL_USER_ID=""` 壓制,第二次啟動起不再嘗試。

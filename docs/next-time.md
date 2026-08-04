@@ -1,4 +1,19 @@
 
+## 2026-08-04(stock-signals Phase 6 沉澱)
+
+- [ ] 🔴 **既有 bug:有 WS client 連著時 server graceful shutdown 卡死**(`Waiting for
+  background tasks to complete.` 永久停住,只能 taskkill)。根因候選:`ws_stock` 等
+  WS route 形狀為 `async for msg in stream(): await send_json(msg)`,**從不 receive()**
+  → 對端斷線要等下一次 send 失敗才發現,收攤時無新訊息可送就永遠等。無 client 連著
+  時 shutdown 乾淨(對照實測)。`git diff master...HEAD -- copycat/server/app.py` WS
+  route 零改動,非 stock-signals 回歸。修法候選:每條 WS route 併一個 receive task
+  (gather, FIRST_COMPLETED)偵測斷線。
+- [ ] 驗證 harness(fake server 腳本)應比照 `tests/conftest.py` 中和 CAPITAL_* /
+  DISCORD_*:本輪 harness 首啟以真憑證打了一次群益登入(失敗降級零狀態改變,但
+  不該發生)。寫任何「起真 app 的驗證腳本」前先 `CAPITAL_USER_ID=""` 這類壓制。
+- [ ] 訊號 Discord 文案帶的是 tick 時刻(模擬/回補情境會顯示過去時刻)— 若 user 反映
+  「太慢了」是指希望帶發送時刻或兩者並列,屬文案調整一行事。
+
 ## 2026-07-07(tday-join-ga-backtest 收尾沉澱)
 
 - [ ] simulate 完整 derived-series 預計算重構(review F2 只做了 anchor 網格限定;若 Phase B 全量變慢再做)

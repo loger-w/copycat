@@ -1,0 +1,14 @@
+{
+  "round": 1,
+  "date": "2026-08-04",
+  "steps": [
+    {"step": "pytest", "command": ".venv\\Scripts\\python -m pytest -q", "exit_code": 0, "result": "1657 passed, 1 skipped", "evidence": "evidence/pytest-final.txt"},
+    {"step": "vitest", "command": "npm test (frontend/)", "exit_code": 0, "result": "994 passed / 74 files", "evidence": "evidence/vitest-final.txt"},
+    {"step": "ruff", "command": ".venv\\Scripts\\python -m ruff check copycat tests", "exit_code": 0, "result": "All checks passed"},
+    {"step": "pyright", "command": ".venv\\Scripts\\python -m pyright", "exit_code": 0, "result": "0 errors 0 warnings", "evidence": "evidence/pyright-final.txt"},
+    {"step": "tsc", "command": "npx tsc -b (frontend/)", "exit_code": 0, "result": "clean"},
+    {"step": "eslint", "command": "npx eslint src (frontend/)", "exit_code": 0, "result": "clean"},
+    {"step": "replay+validate", "command": "copycat replay four/five + copycat validate", "exit_code": 0, "result": "42/42 PASS", "evidence": "evidence/validate-final.txt"}
+  ],
+  "all_green": true
+}

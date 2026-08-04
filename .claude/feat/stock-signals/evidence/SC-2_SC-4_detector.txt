@@ -1,0 +1,29 @@
+=== stock-signals SC-2(爆拉)/ SC-4(鎖漲停)偵測構造與判定 ===
+# fake server :8899;注入時鐘今日 10:30 起(盤後跑,真實牆鐘 14:xx 會被盤別 gate 擋掉)
+
+[SC-2] 爆拉 —— 2317,300s 滾動窗內 +2.20%(門檻 surge_pct=2.0)
+  注入序列(每筆 qty=2):50.00 → 50.30 → 50.70 → 51.10
+    - 第 1 筆:code 首次進 detector,只初始化 _prev / _window,不評估(無前值可比)
+    - 第 4 筆:窗內最舊 50.00 → pct = (51.10-50.00)/50.00 = +2.20% ≥ 2.0 → surge
+  產出:{"kind":"surge","code":"2317","price":51100,"pct":2.1999999999999997,"touch_count":1}
+  刻意避開其他 kind:qty=2 → 窗內量 8 張 < vol_min_window_lots=100(不觸爆量);
+    2317 的 CDP 基準(H=30.5/L=29.5/C=30 → 29~31 元)遠低於注入價位(不觸 CDP 穿越)。
+  判定:PASS
+
+[SC-4] 鎖漲停 —— 2330,複合簽名(design §3.5)
+  注入的 REALTIME(關鍵欄位):
+    TradingPrice = 1100        UpperLimitPrice = 1100     ← 成交價 == 漲停價
+    Bid = "0", BidVolume = 900                            ← 市價單佇列(價格欄 0)
+    (完全沒有 Ask* 欄位)                                  ← ask 側整個不可得
+  → _locked_up 三項全中:price == upper ∧ ask 無限價檔 ∧ bids0_is_market
+  產出:{"kind":"limit_lock","code":"2330","direction":"up","price":1100000,"touch_count":1}
+  刻意避開其他 kind:注入前把時鐘前進 400s 清空 300s 滾動窗,否則 1022→1100 這一跳
+    (+7.6%)會同時觸發爆拉;qty=50 < 100 張窗底(不觸爆量);
+    prev=1022 已在 AH=1020 之上,五條 CDP 線都不會被穿越。
+  註:這條驗的正是 CLAUDE.md §8「TC4 鎖停時在第一檔推市價單佇列、價格欄是 0」那個坑 ——
+      detector 吃的是 TickContext.bids0_is_market / best_bid_limit_milli
+      (由 _best_limit_price 過濾),而不是直接把 0 當價格比較。
+  判定:PASS
+
+證據出處:SC-7_today-api.txt(REST today 全欄位)、SC-1_ws-signal.txt(WS 即時)、
+        SC-1_discord-push.txt(Discord 頻道實際文案)。

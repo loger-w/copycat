@@ -1,0 +1,19 @@
+{
+  "round": 2,
+  "type": "限縮加輪(round 1 有 accepted P0)",
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-04",
+  "findings": [
+    {"id": "R2-1", "severity": "P1", "summary": "決定性 id 要毫秒但 SignalEvent 只有秒級 time;簿路事件無時刻來源;簿路 day_volume 無值", "disposition": "accepted", "resolution": "SignalEvent 加 time_key(HH:MM:SS.fff;tick 路=tick.time、簿路=now_fn);id 改用 time_key;簿路 day_volume=0(只評鎖板用不到)"},
+    {"id": "R2-2", "severity": "P1", "summary": "on_book 在 update_book 之後、rollover 判斷之前 → 換日首則簿更新對昨日 latch 誤發 limit_open;§3.5 的日別擋是懸空引用", "disposition": "accepted", "resolution": "on_book 移 _handle_quote 尾端(rollover 之後),換日 pending 期間跳過;§3.5 改引用此具體條件"},
+    {"id": "R2-3", "severity": "P1", "summary": "lifespan 裸序列未套 _boot 隔離,discord.py 登入失敗會炸整台 server", "disposition": "accepted", "resolution": "hub/bot 整段包 _boot(make/start/close),失敗降級 None → route 503,不波及其他引擎"},
+    {"id": "R2-4", "severity": "P1", "summary": "stage2 清基準 + 單工重抓 → 每天開盤後數十秒 CDP 停用,正是跳空訊號最有價值的窗", "disposition": "accepted", "resolution": "stage1 加 on_rollover_pending 盤前預抓暫存 basis,stage2 只 swap;stage1 未跑(補市日)fallback 清空重抓,入 Known Risk 5"},
+    {"id": "R2-5", "severity": "P2", "summary": "TickContext 缺跌停對稱欄位", "disposition": "absorbed", "resolution": "補 asks0_is_market / best_ask_limit_milli 進 dataclass 定義"},
+    {"id": "R2-6", "severity": "P2", "summary": "合併事件的 touch_count 推進範圍歧義", "disposition": "absorbed", "resolution": "每條線各 +1,事件欄取 levels[0] 計數,三處同措辭"},
+    {"id": "R2-7", "severity": "P2", "summary": "levels『依穿越順序』無客觀序,id 決定性前提未釘住", "disposition": "absorbed", "resolution": "固定序:from_below 線價低→高、from_above 高→低"},
+    {"id": "R2-8", "severity": "P2", "summary": "全域節流丟棄已消耗 cooldown 且 jsonl 無記錄,自癒補不回", "disposition": "absorbed", "resolution": "節流改只作用 Discord;WS/jsonl 不節流 → cooldown 免回滾、自癒語意完整"},
+    {"id": "R2-9", "severity": "P2", "summary": "『五道閘同源』說法與實際判準相反,會誤導抄 is None 條件致鎖板整條不發", "disposition": "absorbed", "resolution": "改寫為『同一恆等式、判準因資料形相反』並明文禁抄"},
+    {"id": "R2-10", "severity": "P2", "summary": "零寫早退分支回傳值未定,回應形狀與落檔路徑分歧", "disposition": "absorbed", "resolution": "早退回現況 canonical 形;測試斷言兩次 PUT body 相同"}
+  ],
+  "exit": "0 P0 / 4 P1 全修入 v3 / 6 P2 全吸收 → 退出條件成立(無 P0、P1 餘 0),Phase 1 完成"
+}

@@ -1,0 +1,45 @@
+=== stock-signals SC-9 前端 console(fake server :8899 + vite :5199,1600x900)===
+# 時間:2026-08-04 14:50:16;reload 後累積
+
+--- 全部 console 訊息 ---
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[info]  Download the React DevTools for a better development experience
+[warn]  WebSocket connection to 'ws://localhost:5199/ws/index' failed: closed before established
+[warn]  WebSocket connection to 'ws://localhost:5199/ws/capital' failed: closed before established
+[warn]  WebSocket connection to 'ws://localhost:5199/ws/stock' failed: closed before established
+[warn]  WebSocket connection to 'ws://localhost:5199/ws/futures' failed: closed before established
+[warn]  WebSocket connection to 'ws://localhost:5199/ws/txo-pnl' failed: closed before established
+[error] Failed to load resource: 503 (Service Unavailable)  [6 times]
+[issue] A form field element should have an id or name attribute (count: 4)
+[error] Failed to load resource: 503 (Service Unavailable)  [66 times]
+[error] Failed to load resource: 404 (Not Found)            [1 time]
+[error] Failed to load resource: 503 (Service Unavailable)  [278 times]
+
+--- 逐條歸因(實測 fetch 各 endpoint 的狀態碼)---
+  /api/health              200      /api/stock/signals/today    200
+  /api/stock/names         200      /api/stock/signals/enabled  200
+  /api/capital/status      200      /api/stock/watchlist        200
+  /api/txo/series          200      /api/stock/state/2317       200
+  /api/txo/contracts       200      /api/stock/overlay/2317     200
+  /api/index/state         503      /api/futures/state          503
+  /api/corr/state          503      /api/river/state            503
+  /api/capital/orders      503
+
+  503 全部來自 harness 刻意不啟動的引擎(create_app 傳 index_source=None /
+  futures_source=None / corr_source=None / trade_source=None,零 TC4 連線 —— 這是
+  「盤中不要起第二台連 TC4 的後端」那條紀律的必要條件)。**訊號相關的四個 endpoint
+  全部 200**。
+
+  404 那一則是本次驗證自己打的探針 `/api/series`(我杜撰的路徑,用來確認 404 的來源);
+  performance resource timing 顯示頁面實際請求過的 /api/* 只有上表那些,無任何 404。
+
+  WS「closed before established」5 則發生在 reload 當下 —— vite dev server 因為
+  vite.verify.config.ts 被改(加 /verify proxy)自動重啟,舊 ws proxy socket 被切斷。
+  之後 /ws/stock 已重連成功:11:22 的 cdp_cross 是 reload 之後才注入的,經 WS 即時
+  抵達(toast 浮出 + 置頂列),頁面上也沒有「伺服器連線中斷,重連中…」紅色 banner。
+
+  [issue] form field 缺 id/name 是既有的 a11y 提示(閃電梯張數 spinbutton 等),
+  非本輪新增,也不是 console error。
+
+判定:PASS(無本輪新增的 console error)

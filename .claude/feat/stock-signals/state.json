@@ -1,0 +1,19 @@
+{
+  "slug": "stock-signals",
+  "start_sha": "a012ee5",
+  "branch": "feat/stock-signals",
+  "worktree_path": null,
+  "current_phase": 8,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7],
+  "scope": "L",
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-08-04T17:40:00+08:00",
+  "project_shape": null,
+  "last_commit_sha": "7021055",
+  "final_merge_sha": null,
+  "self_review_head": "7021055",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}

@@ -1,0 +1,34 @@
+{
+  "round": 1,
+  "lenses": ["正確性/併發 (CC)", "spec 對照 (MFS)", "測試品質 (TQ)"],
+  "model": "opus x3",
+  "date": "2026-08-04",
+  "p0": [],
+  "p1": [
+    {"id": "CC-1", "summary": "_close_signals 無 try/finally:bot.close 拋(token 錯→LoginFailure)→ hub.close 跳過 → worker 洩漏 + flush 不跑", "disposition": "accepted", "fix": "try/finally + Bot.close 內接非 CancelledError 例外 log"},
+    {"id": "CC-2", "summary": "attach_signal_hub 過早:_start_signals 後續步驟拋 → 殭屍 hub 掛熱路徑一整天(WS 有訊號但 jsonl/today 全失)", "disposition": "accepted", "fix": "attach 移最後一行 + StockEngine.detach_signal_hub() 在 close finally 呼叫"},
+    {"id": "CC-3", "summary": "mergeSignals = live 全前 + baseline 後:重連補回的訊號被埋在舊 live 之下,自癒不可見", "disposition": "accepted", "fix": "去重後依 time 降冪穩定排序再 cap"},
+    {"id": "MFS-1", "summary": "靜音 toggle 同時關掉桌面 Notification,違反 SC-10/design §8.3(toggle 只該管音效);背景分頁收不到通知", "disposition": "accepted", "fix": "Notification 移出靜音閘;test 斷言屬事前已知該變"},
+    {"id": "MFS-2+CC-4", "summary": "快路徑換日 stage1/stage2 同步連發:staged 空→swap False→雙倍抓;staged 殘留下次快路徑 swap True → 整天用舊日 CDP 基準(靜默)", "disposition": "accepted", "fix": "staged 帶 basis_date 標記;on_rollover_pending 先清 staged;swap 驗日別不符即 False 並清;補測試"},
+    {"id": "TQ-1", "summary": "Discord 降級真實路徑(sender 回 False / webhook 回 False)零覆蓋 — 生產預設態沒測試", "disposition": "accepted", "fix": "harness 加 bot_ready=False 與 notify False 模式各一測"},
+    {"id": "TQ-2", "summary": "丟最舊測試分不出丟最新(斷言只數 count)", "disposition": "accepted", "fix": "斷言佇列殘留 = 最新兩則"}
+  ],
+  "p2_expanded": [
+    {"id": "CC-5", "summary": "單 worker jsonl+Discord 序列:Discord 卡住 → 佇列滿 → jsonl 真相源缺角;close 漏手上一則", "disposition": "accepted", "fix": "拆兩條佇列/worker(jsonl 為不丟真相源,Discord 有界丟最舊)"},
+    {"id": "CC-6", "summary": "start_bg 無 done callback,登入失敗全程無聲(log 只有 fallback warning 無真因)", "disposition": "accepted", "fix": "add_done_callback 取例外 logger.error"},
+    {"id": "CC-7", "summary": "set_enabled 記憶體先改、落檔後 await,併發 PUT 磁碟停舊值", "disposition": "accepted", "fix": "asyncio.Lock 包 read-modify-write+落檔"},
+    {"id": "MFS-3", "summary": "_current_canonical 只 catch WatchlistError,壞 JSON 穿出 → PUT 500 且自癒回歸", "disposition": "accepted", "fix": "except 擴 (WatchlistError, ValueError, KeyError, TypeError, OSError) + 壞檔覆寫測試"},
+    {"id": "MFS-4", "summary": "brainstorm SC-1 仍寫舊 level 單數契約(R7 已改 levels)", "disposition": "accepted", "fix": "main session 補 amendment"},
+    {"id": "MFS-5", "summary": "提示音 toggle 與四個監聽 toggle 同組,讀成第五種訊號類型", "disposition": "accepted", "fix": "分隔為獨立小區(提示)"},
+    {"id": "MFS-6", "summary": "signal-bus 的 watchlist_changed 事件對是死 API + vacuous 測試", "disposition": "accepted", "fix": "刪除該對與測試"},
+    {"id": "MFS-7", "summary": "PUT 自我廣播回彈:多一趟 GET;連編有短暫回捲抖動", "disposition": "accepted_documented", "fix": "寫入 design Known Risks + next-time,不改 code"},
+    {"id": "TQ-3", "summary": "close 盡力落檔 _flush_pending 零覆蓋", "disposition": "accepted", "fix": "補測試"},
+    {"id": "TQ-4", "summary": "jsonl 寫失敗 / worker 不死 路徑零覆蓋", "disposition": "accepted", "fix": "補測試"},
+    {"id": "TQ-5", "summary": "前端 fail-open 測試斷言落在 retry pending 窗,非 error 終態", "disposition": "accepted", "fix": "等 fetch 兩次(retry:1)再斷言"},
+    {"id": "TQ-6", "summary": "SC-7 amendment 的「跨重啟新訊號 id 不碰撞」沒測(現測是反命題);前端 id 註解格式錯", "disposition": "accepted", "fix": "補測試 + 修註解"},
+    {"id": "TQ-7", "summary": "signals _boot 失敗隔離零覆蓋(bot state 殘留/其他引擎不受影響/route 503)", "disposition": "accepted", "fix": "補測試"}
+  ],
+  "p2_summary": "13 條 P2:12 修復(含 6 條測試補強)、1 條 documented(MFS-7);另各 finder 附共 11 項已查證無問題面向(cooldown 時鐘/佇列 FIFO/lock 覆蓋面/前端訂閱清理等),不再重查",
+  "dedupe": "CC-4 併入 MFS-2(同根因,MFS-2 的 stale swap 後果更完整)",
+  "plan": "backend fix task(CC-1/2/5/6/7、MFS-2、MFS-3、TQ-1/2/3/4/6/7)→ frontend fix task(CC-3、MFS-1、MFS-5、MFS-6、TQ-5)→ docs(MFS-4、MFS-7)main session 自改"
+}
