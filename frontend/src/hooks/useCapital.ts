@@ -6,12 +6,13 @@
  * 單一 timer per queryKey,多元件用 orders/positions hooks 也不重複 invalidate)。
  * orders/positions hooks 只剩 TQ 輪詢 + 被動吃 invalidate;wsStatus 走 module store
  * (useCapitalWsStatus 任何元件可讀)。
- * fetch helper 是本檔自持的最小版(ORDER_BLOCKED 帶 reason 以 ":" 後綴進 Error
- * message,trade-text 解析)。
+ * fetch helper 的 detail 解析共用 lib/api-error,本檔只留 capital 專屬語意
+ * (ORDER_BLOCKED 帶 reason 以 ":" 後綴進 Error message,trade-text 解析)。
  */
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
 
+import { parseErrorDetail } from "@/lib/api-error";
 import type {
   CapitalCancelBody,
   CapitalCloseBody,
@@ -80,27 +81,21 @@ export function useCapitalWsStatus(): WsStatus {
 }
 
 // ---------------------------------------------------------------------------
-// fetch helper(本檔自持;error contract {detail:{error, reason?}})
+// fetch helper(detail 解析走 lib/api-error;本檔只留 capital 的 ":" 後綴語意)
 // ---------------------------------------------------------------------------
 
 /** 非 2xx body → 錯誤碼字串;ORDER_BLOCKED 附 reason、BROKER_REJECTED 附 err_code,
  *  皆走 ":" 後綴(trade-text 契約)。 */
 export async function parseCapitalError(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as {
-      detail?: { error?: string; reason?: string; err_code?: string };
-    };
-    const code = body.detail?.error ?? `HTTP_${res.status}`;
-    if (code === "ORDER_BLOCKED" && body.detail?.reason) {
-      return `${code}:${body.detail.reason}`;
-    }
-    if (code === "BROKER_REJECTED" && body.detail?.err_code) {
-      return `${code}:${body.detail.err_code}`;
-    }
-    return code;
-  } catch {
-    return `HTTP_${res.status}`;
+  const detail = await parseErrorDetail(res);
+  const code = detail.error ?? `HTTP_${res.status}`;
+  if (code === "ORDER_BLOCKED" && detail.reason) {
+    return `${code}:${detail.reason}`;
   }
+  if (code === "BROKER_REJECTED" && detail.err_code) {
+    return `${code}:${detail.err_code}`;
+  }
+  return code;
 }
 
 async function fetchJson<T>(url: string, body?: unknown): Promise<T> {

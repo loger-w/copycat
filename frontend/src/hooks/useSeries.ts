@@ -1,15 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { parseError } from "@/lib/api-error";
 import type { SeriesItem, Snapshot } from "@/types";
-
-async function parseError(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { detail?: { error?: string } };
-    return body.detail?.error ?? `HTTP_${res.status}`;
-  } catch {
-    return `HTTP_${res.status}`;
-  }
-}
 
 async function fetchSeries(): Promise<SeriesItem[]> {
   const res = await fetch("/api/txo/series");
