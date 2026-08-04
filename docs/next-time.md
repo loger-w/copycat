@@ -493,3 +493,9 @@
 - [ ] **三頁現價字級是否統一**:個股頁現價已改 text-3xl,期貨頁 FuturesPage.tsx L54 仍
   text-lg、指數頁 IndexPage.tsx L178 仍 text-2xl;是否統一由獨立決策,不順手改
   (2026-08-04 change-spec-review P2-4)。
+
+## 2026-08-04(asyncio-socket-send-warning 收尾留尾巴)
+
+- [ ] WS 突斷整合覆蓋只有 `/ws/txo-pnl` 一路(review T4 拒的那半):broadcaster 路由(`/ws/futures` 等)要進 parametrize 需 FuturesSource fake + trade_source 啟動旗標佈線;共用 relay 已有單元守衛,補整合覆蓋時一併考慮
+- [ ] prod server 啟動 log 落檔慣例不一致:00:54 的 instance 有 `logs/server-*.log`,09:26 重啟的沒有(console-only)— 這次 11:06 的 asyncio warning 差點無檔案證據可查;考慮統一啟動包裝(固定 stdout 轉存 logs/)
+- [ ] `relay` 收尾假設 uvicorn sansio 的 `writable` 恆 set(無 pause_writing → send_json 非懸掛點、cancel 必打進 generator):若未來 uvicorn 加回 write flow control,「懸在 send_json 的 generator 遺棄」路徑變可達,`_consume_ws_task` docstring 的「取消同時關閉 generator」不再成立(review async lens 附註)
