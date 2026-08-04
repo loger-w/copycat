@@ -5,9 +5,12 @@
 - **membership gate**:`_watch` 由 `on_watchlist` 全量替換。主圖臨時看的非自選股
   照樣會走 engine 的 `_handle_quote`,但不評估、不發任何訊號。
 - **熱路徑只做純計算 + 入佇列**:`on_tick` 同步算完 → WS `publish` 同步送出
-  (前端要即時),jsonl 與 Discord 一律丟進**有界**佇列由 worker 消化。
+  (前端要即時),jsonl 與 Discord 各自丟進一條**有界**佇列由**各自的** worker 消化。
   佇列滿時**丟最舊**再放入(design R14)—— 不 `await put`,熱路徑零反壓;
-  丟棄有 `dropped` 計數與節流 log,不是靜默吞掉。
+  丟棄有 `dropped_jsonl` / `dropped_discord` 計數與節流 log,不是靜默吞掉。
+- **兩條佇列不可合併**(CC-5):jsonl 是歷史真相源(重連 refetch 讀它),Discord 是
+  可丟的通知路。共用一條時 Discord 一卡住 jsonl 就跟著缺角,而缺角靜默且不可回復。
+  關機時 jsonl 佇列要排空(含 worker 手上那則),Discord 佇列直接放棄。
 - **訊號 id 是決定性鍵**(`trade_date-code-kind-levels|direction-time_key`):
   不依賴 process 記憶,重啟後重發同一事件會得到同一個 id,前端與 jsonl 都據此去重。
 - **Discord 節流只擋 Discord**:WS 與 jsonl 是歷史真相源,節流它們會讓
@@ -50,10 +53,19 @@ from copycat.signals_config import SignalsConfig
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["QUEUE_MAXSIZE", "SignalHub", "format_signal_text"]
+__all__ = [
+    "DISCORD_QUEUE_MAXSIZE",
+    "JSONL_QUEUE_MAXSIZE",
+    "SignalHub",
+    "format_signal_text",
+]
 
-#: fanout 佇列上限(design §4.3);測試以 monkeypatch 縮小驗滿載策略。
-QUEUE_MAXSIZE = 100
+#: jsonl 佇列上限(CC-5):真相源,給大得多的緩衝;測試以 monkeypatch 縮小驗滿載策略。
+JSONL_QUEUE_MAXSIZE = 1000
+#: Discord 佇列上限(design §4.3):可丟的路徑,滿了丟最舊。
+DISCORD_QUEUE_MAXSIZE = 100
+#: 關機時等 jsonl worker 把手上與佇列中的訊號寫完的上限
+_CLOSE_FLUSH_TIMEOUT = 5.0
 _ENABLED_FILE = "signals_enabled.json"
 _SIGNAL_DIR = "signals"
 _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
@@ -125,29 +137,53 @@ class SignalHub:
         self._enabled_set: frozenset[str] = self._as_set(self._enabled)
         self._basis_jobs: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
         self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
-        self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
+        # 兩條獨立佇列 + 兩個 worker(CC-5):Discord 卡住時 jsonl 這條真相源要照走
+        self._jsonl_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=JSONL_QUEUE_MAXSIZE)
+        self._discord_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=DISCORD_QUEUE_MAXSIZE)
         self._tasks: list[asyncio.Task[None]] = []
+        self._jsonl_task: asyncio.Task[None] | None = None
+        self._closing = False
         self._discord_sender: Callable[[str], Any] | None = None
         self._discord_sent: deque[_dt.datetime] = deque()
-        self.dropped = 0
+        self.dropped_jsonl = 0
+        self.dropped_discord = 0
+
+    @property
+    def dropped(self) -> int:
+        return self.dropped_jsonl + self.dropped_discord
 
     # ---- 生命週期 ----
 
     async def start(self) -> None:
         if self._tasks:
             return
+        self._jsonl_task = asyncio.create_task(self._jsonl_worker())
         self._tasks.append(asyncio.create_task(self._basis_worker()))
-        self._tasks.append(asyncio.create_task(self._fanout_worker()))
+        self._tasks.append(self._jsonl_task)
+        self._tasks.append(asyncio.create_task(self._discord_worker()))
 
     async def close(self) -> None:
+        """先停收件 → 等 jsonl 佇列排空 → 才取消 worker;Discord 佇列直接放棄。
+
+        `join()` 先於 `cancel()` 是零漏的關鍵(CC-5):worker 手上那一則已經 `get()` 出來
+        但還沒寫完,先取消就沒有任何地方找得回它(`_flush_pending` 只掃得到還在佇列裡的)。
+        """
+        self._closing = True
+        jsonl_task = self._jsonl_task
+        if jsonl_task is not None and not jsonl_task.done():
+            try:
+                await asyncio.wait_for(self._jsonl_queue.join(), _CLOSE_FLUSH_TIMEOUT)
+            except TimeoutError:
+                logger.error("關機落檔逾時,剩餘 %d 筆改走盡力落檔", self._jsonl_queue.qsize())
         tasks = list(self._tasks)
         self._tasks.clear()
+        self._jsonl_task = None
         for task in tasks:
             task.cancel()
         for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        await self._flush_pending()
+        await self._flush_pending()  # worker 沒起來(或逾時)時的保底
 
     def attach_discord(self, sender: Callable[[str], Any]) -> None:
         """sender 可為同步或 async(`bot.send_signal`);回傳 falsy = 未送出。"""
@@ -296,41 +332,51 @@ class SignalHub:
         self._enqueue({**payload, "trade_date": trade_date})
 
     def _enqueue(self, row: dict) -> None:
-        try:
-            self._queue.put_nowait(row)
+        if self._closing:  # 關機已開始:再收件就永遠不會被寫出去
             return
-        except asyncio.QueueFull:
-            pass
-        with contextlib.suppress(asyncio.QueueEmpty):
-            self._queue.get_nowait()  # 丟最舊:新訊號比舊訊號值錢,且熱路徑不可反壓
-            self._queue.task_done()
-        self.dropped += 1
-        if self.dropped % _DROP_LOG_EVERY == 1:
-            logger.warning("訊號 fanout 佇列滿,已丟棄 %d 筆(WS 不受影響)", self.dropped)
-        try:
-            self._queue.put_nowait(row)
-        except asyncio.QueueFull:
-            logger.error("訊號 fanout 佇列騰位失敗,丟棄 %s", row.get("id"))
+        if _put_drop_oldest(self._jsonl_queue, row):
+            self.dropped_jsonl += 1
+            if self.dropped_jsonl % _DROP_LOG_EVERY == 1:
+                logger.warning(
+                    "訊號 jsonl 佇列滿,已丟棄 %d 筆(WS 不受影響)", self.dropped_jsonl
+                )
+        if _put_drop_oldest(self._discord_queue, row):
+            self.dropped_discord += 1
+            if self.dropped_discord % _DROP_LOG_EVERY == 1:
+                logger.warning(
+                    "Discord 佇列滿,已丟棄 %d 筆(WS/jsonl 不受影響)", self.dropped_discord
+                )
 
-    async def _fanout_worker(self) -> None:
+    async def _jsonl_worker(self) -> None:
         while True:
-            row = await self._queue.get()
+            row = await self._jsonl_queue.get()
             try:
                 await asyncio.to_thread(self._append_jsonl, row)
-                await self._send_discord(row)
             except asyncio.CancelledError:
                 raise  # finally 仍會 task_done
             except Exception:
-                logger.exception("訊號 fanout 失敗(worker 續行):%s", row.get("id"))
+                logger.exception("訊號 jsonl 落檔失敗(worker 續行):%s", row.get("id"))
             finally:
-                self._queue.task_done()
+                self._jsonl_queue.task_done()
+
+    async def _discord_worker(self) -> None:
+        while True:
+            row = await self._discord_queue.get()
+            try:
+                await self._send_discord(row)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Discord 發送失敗(worker 續行):%s", row.get("id"))
+            finally:
+                self._discord_queue.task_done()
 
     async def _flush_pending(self) -> None:
         """關機盡力落檔:jsonl 是歷史真相源,Discord 這時不再送。"""
         rows: list[dict] = []
         while True:
             try:
-                rows.append(self._queue.get_nowait())
+                rows.append(self._jsonl_queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
         for row in rows:
@@ -468,6 +514,23 @@ class SignalHub:
             atomic_write_text(path, json.dumps(flags, ensure_ascii=False, indent=2))
         except OSError as e:
             logger.error("訊號開關檔寫入失敗(%s):%s", path, e)
+
+
+def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
+    """有界佇列滿載策略(design R14):丟最舊再放入,熱路徑零反壓。回傳「是否丟了一筆」。"""
+    try:
+        queue.put_nowait(row)
+        return False
+    except asyncio.QueueFull:
+        pass
+    with contextlib.suppress(asyncio.QueueEmpty):
+        queue.get_nowait()  # 新訊號比舊訊號值錢
+        queue.task_done()
+    try:
+        queue.put_nowait(row)
+    except asyncio.QueueFull:
+        logger.error("訊號佇列騰位失敗,丟棄 %s", row.get("id"))
+    return True
 
 
 def _event_id(trade_date: str, event: SignalEvent) -> str:
