@@ -7,7 +7,13 @@ import os
 
 import uvicorn
 
-from copycat.server.app import DEFAULT_INDEX, DEFAULT_STOCK, DEFAULT_TRADE, create_app
+from copycat.server.app import (
+    DEFAULT_CORR,
+    DEFAULT_FUTURES,
+    DEFAULT_INDEX,
+    DEFAULT_STOCK,
+    create_app,
+)
 
 
 def main() -> None:
@@ -15,7 +21,10 @@ def main() -> None:
     port = int(os.environ.get("TXO_SERVER_PORT", "8721"))
     uvicorn.run(
         create_app(
-            trade_source=DEFAULT_TRADE, stock_source=DEFAULT_STOCK, index_source=DEFAULT_INDEX
+            stock_source=DEFAULT_STOCK,
+            index_source=DEFAULT_INDEX,
+            futures_source=DEFAULT_FUTURES,
+            corr_source=DEFAULT_CORR,
         ),
         host="127.0.0.1",
         port=port,

@@ -53,57 +53,6 @@ export interface SeriesItem {
   expiry: string;
 }
 
-// ---- trade(對應 backend copycat/server/trade.py 視圖) ----
-
-export interface TradeAccount {
-  status: "ready" | "touchance_down" | "no_account" | "live_blocked" | (string & {});
-  mode: "sim" | "live" | null;
-  account_masked: string | null;
-  broker_id: string | null;
-  audit_degraded: boolean;
-  orderable_symbols: string[];
-}
-
-export interface OrderPreviewBody {
-  symbol: string;
-  side: "buy" | "sell";
-  kind: "limit" | "market";
-  qty: number;
-  price: string | null;
-}
-
-export interface OrderPreviewResult {
-  preview_id: string;
-  request_id: string;
-  param: Record<string, string>;
-  account_masked: string;
-  mode: "sim" | "live";
-}
-
-export interface SubmitResult {
-  request_id: string;
-  result: Record<string, unknown>;
-}
-
-export interface OrderRow {
-  report_id: string;
-  symbol: string;
-  side: string;
-  status_raw: string;
-  price: string;
-  qty: string;
-  filled_qty: string;
-  err_code: string | null;
-  err_msg: string | null;
-}
-
-export interface OrdersView {
-  orders: OrderRow[];
-  fills: OrderRow[];
-  degraded: boolean;
-  audit_degraded: boolean;
-}
-
 // ---- capital(群益;對應 backend copycat/capital/models.py + client.status_view)----
 
 /** GET /api/capital/status;未啟用時只有 {status:"disabled"},其餘欄位 optional。 */
