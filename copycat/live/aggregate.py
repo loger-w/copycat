@@ -37,6 +37,7 @@ class _PosState:
     volume: int = 0
     outer_qty: int = 0
     inner_qty: int = 0
+    last_price_millipts: int | None = None
 
 
 class ChainAggregator:
@@ -84,6 +85,9 @@ class ChainAggregator:
         self.totals.ticks += 1
         pos = self._pos.setdefault(tick.symbol, _PosState())
         pos.volume += tick.qty
+        # 成交價與內外盤分類無關 → 放三分支之前(未分類 tick 也是成交,一樣更新);
+        # stale-drop 已在上面早退,被丟的重複/重放 tick 不會蓋掉現價。
+        pos.last_price_millipts = tick.price_millipts
         if tick.ask_millipts is not None and tick.price_millipts >= tick.ask_millipts:
             pos.net_qty += tick.qty
             pos.net_cost_millipts += tick.qty * tick.price_millipts
@@ -128,6 +132,12 @@ class ChainAggregator:
                     "volume": st.volume,
                     "outer_qty": st.outer_qty,
                     "inner_qty": st.inner_qty,
+                    # 點(對齊 spot.price 慣例);row 只在 _ingest 建 → 實務上恆非 None
+                    "last_price": (
+                        st.last_price_millipts / 1000
+                        if st.last_price_millipts is not None
+                        else None
+                    ),
                 }
             )
         rows.sort(key=lambda r: (r["strike"], r["cp"]))
