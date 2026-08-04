@@ -343,19 +343,28 @@ def create_app(
         async def _start_signals(hub: SignalHub) -> None:
             nonlocal bot
             await hub.start()
-            if stock is not None:  # `_make_signals` 已保證;narrowing 用
-                stock.attach_signal_hub(hub)
             # membership 種子:沒有這一步,開機後所有 tick 都被 hub 的 membership gate 擋掉
             hub.on_watchlist(load_watchlist(wl_path)["codes"])
             bot = create_bot(service, hub)  # token 未設 / extras 未裝 → None(SC-8 降級)
             if bot is not None:
                 bot.start_bg()
                 hub.attach_discord(bot.send_signal)
+            # **必須是最後一行**(CC-2):attach 之後這個 hub 就在 engine 熱路徑上了,
+            # 而 `_boot` 的 except 只會把它 close 掉、不會從 engine 摘下來 —— 提早 attach
+            # 再讓後面任何一步拋,留下的是「WS 有訊號、jsonl 與 today 全空」的殭屍。
+            if stock is not None:  # `_make_signals` 已保證;narrowing 用
+                stock.attach_signal_hub(hub)
 
         async def _close_signals(hub: SignalHub) -> None:
-            if bot is not None:
-                await bot.close()
-            await hub.close()
+            # try/finally(CC-1):bot.close 拋(token 失效)不得讓 hub 的 worker 洩漏、
+            # 也不得跳過關機盡力落檔
+            try:
+                if bot is not None:
+                    await bot.close()
+            finally:
+                if stock is not None:
+                    stock.detach_signal_hub()  # 先摘掛點:hub 收攤後熱路徑不得再打到它
+                await hub.close()
 
         signals = await _boot(
             "signals",

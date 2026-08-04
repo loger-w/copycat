@@ -259,7 +259,12 @@ class Bot:
         task, self._task = self._task, None
         if task is not None:
             with contextlib.suppress(asyncio.CancelledError):
-                await task
+                try:
+                    await task
+                except Exception:
+                    # 登入失敗的例外在這裡才被 await 到;往外拋會讓關機序列的後半
+                    # (hub.close → worker 收攤 + 盡力落檔)整段跳過(CC-1)
+                    logger.exception("Discord bot 背景 task 以例外結束(關機續行)")
 
     async def on_ready(self) -> None:
         """取訊號頻道 → 對它的 guild 註冊並 sync 指令(guild 限定 = 即時生效且僅該 guild)。
