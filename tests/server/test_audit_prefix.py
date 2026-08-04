@@ -1,6 +1,7 @@
-"""SC-9:審計 prefix 分檔 — orders-*(TC4 trade)與 capital-*(群益)同 base 不同檔。
+"""SC-9:審計 prefix 分檔 — 預設 orders-* 與 capital-*(群益)同 base 不同檔。
 
-既有 caller 零改動:prefix 預設 "orders",tests/server/test_trade_audit.py 不動即綠。
+prefix 預設 "orders" 是舊 TC4 trade 路留下的值(該路已除役);預設分支的覆蓋
+由本檔與 tests/server/test_trade_audit.py 承擔。
 """
 
 from __future__ import annotations

@@ -6,8 +6,8 @@
  * 單一 timer per queryKey,多元件用 orders/positions hooks 也不重複 invalidate)。
  * orders/positions hooks 只剩 TQ 輪詢 + 被動吃 invalidate;wsStatus 走 module store
  * (useCapitalWsStatus 任何元件可讀)。
- * fetch helper 複製 useTrade.ts 最小版(不動其本體;ORDER_BLOCKED 帶 reason 以 ":"
- * 後綴進 Error message,trade-text 解析)。
+ * fetch helper 是本檔自持的最小版(ORDER_BLOCKED 帶 reason 以 ":" 後綴進 Error
+ * message,trade-text 解析)。
  */
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
@@ -80,11 +80,11 @@ export function useCapitalWsStatus(): WsStatus {
 }
 
 // ---------------------------------------------------------------------------
-// fetch helper(useTrade.ts 最小複製;error contract {detail:{error, reason?}})
+// fetch helper(本檔自持;error contract {detail:{error, reason?}})
 // ---------------------------------------------------------------------------
 
 /** 非 2xx body → 錯誤碼字串;ORDER_BLOCKED 附 reason、BROKER_REJECTED 附 err_code,
- *  皆走 ":" 後綴(trade-text 契約;useTrade parseError 同款)。 */
+ *  皆走 ":" 後綴(trade-text 契約)。 */
 export async function parseCapitalError(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as {
