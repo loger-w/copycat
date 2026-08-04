@@ -78,7 +78,7 @@
 
 ## 2026-07-28(stock-ui-upgrade Phase 4 review P2 彙總)
 
-- [ ] frontend localStorage key 無統一前綴(copycat-tab / stock-main-code / copycat-chart-toggles / stock-ladder-open / stock-wl-group)— 下次新增 key 時考慮收斂 `copycat-` 前綴 + lib/constants.ts 集中
+- [x] ~~frontend localStorage key 無統一前綴(copycat-tab / stock-main-code / copycat-chart-toggles / stock-ladder-open / stock-wl-group)— 下次新增 key 時考慮收斂 `copycat-` 前綴 + lib/constants.ts 集中~~ **2026-08-04 refactor/frontend-localstorage-keys 完成**:15 個 key 全集中 `lib/constants.ts`(值不變);`stock-main-code` 改名 `copycat-stock-main-code` 含一次性讀舊寫新 migration;孤兒鍵啟動清除。之後新增 storage key 一律進 constants.ts。
 - [ ] PriceLadder 全域 rows(最壞 ~200 列)無上限 lock 測試;若低價股(tick 10 毫元、±10% = 2000 列)出現效能問題再虛擬化
 - [x] ~~stock-ui-upgrade real-env 真截圖待補(TC4 離線 infra_fail)~~ **2026-07-31 盤點:已補畢** — `.claude/feat/stock-ui-upgrade/real-env-verification-round-2.json` 記「2026-07-28 10:00-10:05 盤中(大跌日,5483 -6.6%),達錢 4 開啟後補驗(round 1 infra_fail 解除)」,`evidence/` 下 5 張截圖齊備(SC-1 hover / SC-2,3,5,6 stock-page-live / SC-4 cdp-ma-overlay / SC-6 group-tab / SC-7 ladder)
 
@@ -100,7 +100,7 @@
 
 ## 2026-07-29(trade-layout-rework 順手清單)
 
-- [ ] `stock-ladder-open` localStorage key 已停用(閃電梯摺疊機制隨右欄 tab 取代):舊值殘留無害,未做清除 migration;若之後做 key 收斂(見 2026-07-28 條)一併清掉
+- [x] ~~`stock-ladder-open` localStorage key 已停用(閃電梯摺疊機制隨右欄 tab 取代):舊值殘留無害,未做清除 migration;若之後做 key 收斂(見 2026-07-28 條)一併清掉~~ **2026-08-04 已清**(`ORPHAN_STORAGE_KEYS` 啟動 removeItem,見 lib/constants.ts)。
 - [x] ~~`/api/stock/bars` 的真實環境驗證待補~~ **(a)(b)(d) 已於 2026-07-29 18:00 盤後驗畢**(mod/stock-ui-fixes;重啟 server 後實打 2317):(a) `tf=D` → **116 根**,落在 100–120 ✅;(b) **DK 的 `Open`/`Volume` 欄位名假定成立**,`o=240000` / `v=81973` 皆真值且 `v` 與畫面表頭總量一致,server log 無「DK rows 解析略過」warning ✅;(d) 當日段耗時 `tf=D` 1.1s / `tf=1&days=5` 2.1s(810 根 / 3 交易日),遠低於 5s 門檻 ✅
   - [ ] **(c) 仍待盤中驗**:分K 停留 ≥2 分鐘看最後一根 `t` 前進(SC-10)—— 需交易時段,盤後當日段不會再前進
 - [x] ~~`BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除~~ **2026-07-31 盤點:已由後續輪次順手解掉** — `server/bars.py:158-183` 有 `prune(today)`:`_hist` 按 `today - DAYS_MAX*2` 刪、`_daily`/`_daily_tag` 非今日即刪、`_today` 按日期 + TTL evict、`_empty` 過期即刪;三個呼叫點(bars.py:207/312/337)在每次 `build_*` 開頭。註解記來源為「review P2-5」「self-review round2 P2」
@@ -245,7 +245,7 @@
 
 ## 2026-07-30(stock-ui-round4 自評 review 沉澱)
 
-- [ ] localStorage key 收斂:`stock-wl-group`(舊 activeGroup)在本輪後已成**孤兒鍵**(讀取端移除,刻意不清);新增的 `copycat-stock-wl-collapsed` 已用 `copycat-` 前綴。做 `lib/constants.ts` 集中時一併清掉孤兒鍵
+- [x] ~~localStorage key 收斂:`stock-wl-group`(舊 activeGroup)在本輪後已成**孤兒鍵**(讀取端移除,刻意不清);新增的 `copycat-stock-wl-collapsed` 已用 `copycat-` 前綴。做 `lib/constants.ts` 集中時一併清掉孤兒鍵~~ **2026-08-04 已清**(refactor/frontend-localstorage-keys,`ORPHAN_STORAGE_KEYS` 啟動 removeItem)。
 - [ ] 股票名稱表(`copycat/stock_names.json`)無自動更新:新上市 / 改名要手動 `python -m copycat refresh-stock-names`。若要自動化,考慮 server 啟動時檢查檔案 mtime > N 天才背景重抓(**不要**放進 request path,ISIN 頁 10 MB)
 - [x] ~~worktree 陷阱:`spikes/TCPY/` 在 .gitignore 內 → 新 worktree 缺它會讓 `test_tc4.py::…dead_port…` 與 `test_tc4_trade.py::…gc…` 兩支以 `ModuleNotFoundError` 紅~~ **2026-07-31 盤點:測試變紅的前提已解除** — `tests/conftest.py:21-25` 出 `requires_tcpy` marker(wrapper 不在時整 class skip),同檔 2026-07-30 條已記雙向驗證(缺 TCPY → 3 skipped/37 passed;補 TCPY → 40 passed/0 skipped)。殘留事實:`.gitignore` 仍排除 `spikes/TCPY/`,worktree 仍需 `Copy-Item` 帶過去(那是 CLAUDE.md §8 的 worktree 教訓,不是本條)
 - [x] ~~**盤中不要起第二台後端**:TC4 同 symbol 跨 session 只推一邊,驗證用途只起前端 dev server。本輪踩過一次(約 90 秒),值得考慮寫進 CLAUDE.md §8~~ **2026-07-31 已寫進 CLAUDE.md §8**(連同「若非驗行情則用 fake source + 另一個 port」這條繞法)
@@ -328,7 +328,7 @@
 - [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);pending 防護現況(2026-08-04 收尾 review F3 實測更正):StockPage 3 處有 `save.isPending` 防護、Dialog 僅「加入股票」建議列一處(:354),**Sidebar 零防護**(`commit()` 無 pending 檢查,拖曳 / × / 加入群組全裸)— 除跨元件並發外,同元件內連點 / 拖曳期間重複 PUT 亦未防〔2026-08-04 /bug 輪評估:與 K-3(fallback 狀態混淆)**非同根因**,修法域也不同(pending 防護 / 後端版本戳 vs 入口 gate),未併入該輪,維持本條待處理〕
 - [ ] EMPTY_WL 危險窗封閉的成立條件是跨檔不變式(2026-08-04 收尾 review F1,`commit()` 早退 rejected_with_reason):現況全 repo 無 `resetQueries` / `removeQueries`、StockPage 永不卸載(App visited+hidden)→ watchlist query data 成功後不會退回 undefined,入口 + Dialog 同 gate 已涵蓋;**若日後**對 `stock-watchlist` 改用 resetQueries / 改 queryKey / 讓 StockPage 可卸載(gcTime 回收),危險窗會重開且測試零訊號 — 屆時再補 `commit()` 的 `data === undefined` 早退(repo 精神:不可達防禦 = 沒有測試覆蓋的死碼,見 WatchlistSidebar.tsx 拖曳 teardown 註解,現在不加)
 - [ ] 自選載入失敗態側欄仍渲染空「未分組」區塊 +「拖曳到此移出群組」提示(2026-08-04 /bug 輪 Phase 7 截圖觀察):無寫入風險(無列可拖),純視覺突兀 — error 態可考慮整段收起只留錯誤文案
-- [ ] 預覽非自選股後 `stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)
+- [ ] 預覽非自選股後 `copycat-stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)。〔2026-08-04 更名同步:key 已改 `copycat-stock-main-code`(`lib/constants.ts` MAIN_CODE_KEY);真正持久化點在 App.tsx 的 setItem useEffect,別被 LEGACY 遷移常數誤導〕
 - [ ] **驗證環境阻塞:達錢 4 未開時 server 起不來,錯誤訊息不指向根因**(2026-07-31 stock-ui-round4 Phase 7):`TC4 quote connect failed: Resource temporarily unavailable`(ZMQ REQ 的 EAGAIN)——實際成因是桌面程式沒開/沒登入,不是資源競爭。當時觀察序列:port 50774 有聽 + 舊 server 有真資料 → 舊 server 消失、port 仍聽但 LOGIN 逾時 → port 關閉。**「50774 有聽」不等於 OpenAPI 可用**,排查時先確認 app 已登入再看程式碼。另:兩個 server 同時連 TC4 是否可行本輪**未證實**(觀察被 app 關閉污染),別把「單一 session」當已知事實
 
 ## 2026-07-31(stock-ui-round6:市價偽檔位 / 內外盤判定)
