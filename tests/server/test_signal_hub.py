@@ -374,6 +374,44 @@ class TestHistoryAndId:
         finally:
             await second.hub.close()
 
+    async def test_restart_new_signal_id_does_not_collide_with_old(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """SC-7 amendment 的另一半:上一條釘的是「同一事件 → 同 id」(去重要的);
+        這條釘反命題 —— 重啟後的**新**事件不得撞上重啟前任一則的 id。
+
+        撞到的話前端會把新訊號當重複丟掉,而畫面上只是「這則沒出現」。
+        """
+        first = _Harness(tmp_path, clock)
+        await first.hub.start()
+        try:
+            first.hub.on_watchlist(["2330"])
+            await first.settle()
+            first.cross_nh(_state())
+            await first.settle()
+            before = {m["id"] for m in first.published}
+            assert before
+        finally:
+            await first.hub.close()
+
+        clock.now = _dt.datetime(2026, 8, 4, 10, 30, 0)
+        second = _Harness(tmp_path, clock)
+        await second.hub.start()
+        try:
+            second.hub.on_watchlist(["2330"])
+            await second.settle()
+            state = _state()  # 重啟後另一次穿越(同一條線、不同時刻與方向)
+            second.hub.on_tick("2330", _tick(81_000, time="10:30:00.500"), state)
+            second.hub.on_tick("2330", _tick(79_500, cum=2, time="10:30:01.100"), state)
+            await second.settle()
+
+            after = {m["id"] for m in second.published}
+            assert after
+            assert not (after & before)
+            assert len({r["id"] for r in second.rows()}) == 2
+        finally:
+            await second.hub.close()
+
     async def test_today_signals_skips_broken_lines(self, tmp_path: Path, clock: _Clock) -> None:
         h = _Harness(tmp_path, clock)
         await h.hub.start()
