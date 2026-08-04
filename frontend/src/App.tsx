@@ -8,7 +8,9 @@ import { PnlChart } from "@/components/PnlChart";
 import { QuoteTable } from "@/components/QuoteTable";
 import { RightRail, type RailContext } from "@/components/rail/RightRail";
 import { SeriesSelect } from "@/components/SeriesSelect";
+import { ToastStack } from "@/components/ToastStack";
 import { useCapitalStream } from "@/hooks/useCapital";
+import { useSignalAlerts } from "@/hooks/useSignalAlerts";
 import { useFuturesStream } from "@/hooks/useFuturesStream";
 import { useIndexStream } from "@/hooks/useIndexStream";
 import { useStockStream } from "@/hooks/useStockStream";
@@ -70,6 +72,10 @@ export default function App() {
   const { twse, otc, txf } = useIndexStream();
   // capital 下單 WS 常駐 App 層:唯一連線 + 唯一 invalidate 接線(review B2/B4)
   useCapitalStream();
+  // 訊號提示常駐 App 層(design §8.3):訊號涵蓋整個自選池,人在看期貨頁時個股鎖漲停
+  // 一樣要跳出來 —— 掛在個股頁內就只有停在該 tab 時才收得到。**唯一**的 bus 訂閱點,
+  // 多掛一份會重複發聲與重複桌面通知。
+  const alerts = useSignalAlerts();
   // D-16:沒訪問過個股 tab 時傳 null —— /api/stock/state/{code} 內含 set_main,
   // 會觸發訂閱池變更 + 當日 tick 全量回補,不該只因開了 TXO 頁就發生。
   //
@@ -211,6 +217,8 @@ export default function App() {
         </div>
         <RightRail ctx={railCtx} />
       </div>
+      {/* fixed 定位 → 不受上面 tab 的 hidden 影響,放在版面樹尾端只是為了疊在最上層 */}
+      <ToastStack toasts={alerts.toasts} overflow={alerts.overflow} onDismiss={alerts.dismiss} />
     </div>
   );
 }

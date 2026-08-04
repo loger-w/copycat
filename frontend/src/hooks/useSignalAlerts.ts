@@ -5,13 +5,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { getSoundOn, useSignalSound } from "@/hooks/useSignalSound";
 import { onSignal } from "@/lib/signal-bus";
 import { formatToastText, type SignalMsg } from "@/lib/signal-model";
 
 /** 同時顯示上限(design R7):再多就疊成一片沒人讀得完,其餘走「+N」計數。 */
 const VISIBLE = 4;
 const TTL_MS = 5_000;
-const SOUND_KEY = "copycat-signal-sound";
 
 export interface SignalToast {
   /** React key。**不是 `sig.id`** —— 重啟後 cooldown 不持久,同 id 會重發,
@@ -60,23 +60,14 @@ function notifyDesktop(text: string, tag: string): void {
   }
 }
 
-function loadSoundOn(): boolean {
-  try {
-    return window.localStorage.getItem(SOUND_KEY) !== "off";
-  } catch {
-    return true; // 預設開;storage 被鎖時偏好設定不落檔,不是關掉音效
-  }
-}
-
 export function useSignalAlerts() {
   const [queue, setQueue] = useState<SignalToast[]>([]);
-  const [soundOn, setSoundOnState] = useState<boolean>(loadSoundOn);
+  // 開關的真值在 `useSignalSound`(localStorage 直讀)—— SignalRail 的切換鈕與這裡是
+  // 不同元件樹的兩個訂閱者,各自 useState 會漂(關掉後這裡照嗶)
+  const { soundOn, setSoundOn } = useSignalSound();
 
   const seqRef = useRef(0);
   const timersRef = useRef(new Map<string, number>());
-  // bus 訂閱只做一次(見下方 effect),靜音狀態靠 ref 讀當下值而不是重訂閱
-  const soundOnRef = useRef(soundOn);
-  soundOnRef.current = soundOn;
 
   function drop(key: string): void {
     const timer = timersRef.current.get(key);
@@ -100,8 +91,9 @@ export function useSignalAlerts() {
         key,
         window.setTimeout(() => dropRef.current(key), TTL_MS),
       );
-      // 靜音同時關掉音效與桌面通知(design §8.3);toast 不受靜音影響
-      if (!soundOnRef.current) return;
+      // 靜音同時關掉音效與桌面通知(design §8.3);toast 不受靜音影響。
+      // bus 訂閱只做一次(deps []),故讀當下值而不是閉包捕捉的 soundOn
+      if (!getSoundOn()) return;
       playBeep();
       if (document.hidden) notifyDesktop(text, sig.id);
     });
@@ -112,16 +104,6 @@ export function useSignalAlerts() {
       timers.clear();
     };
   }, []);
-
-  function setSoundOn(next: boolean): void {
-    soundOnRef.current = next;
-    setSoundOnState(next);
-    try {
-      window.localStorage.setItem(SOUND_KEY, next ? "on" : "off");
-    } catch {
-      // 存不進去就算了 —— 本次 session 仍照設定走
-    }
-  }
 
   const toasts = useMemo(() => queue.slice(0, VISIBLE), [queue]);
   return {

@@ -1,18 +1,24 @@
 import { useState } from "react";
 
 import { OrderBook } from "@/components/stock/OrderBook";
+import { SignalRail } from "@/components/stock/SignalRail";
 import { StockChart } from "@/components/stock/StockChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { useSignalFeed } from "@/hooks/useSignalFeed";
+import { useSignalsConfig } from "@/hooks/useSignalsConfig";
+import { useSignalSound } from "@/hooks/useSignalSound";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
+import type { SignalEnabled, SignalSwitchKey } from "@/lib/signal-model";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
- *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。 */
+ *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。
+ *  最左為訊號欄(stock-signals SC-9),接線在本層 —— SignalRail 是純展示元件。 */
 
 interface Props {
   code: string | null;
@@ -20,8 +26,24 @@ interface Props {
   stream: StockStreamState;
 }
 
+/** jsdom 與不支援 Notification 的瀏覽器沒有這個全域 → 一律當「已拒絕」降級:
+ *  rail 只在 `default` 時顯示「允許通知」鈕,denied 就是不出現那顆鈕。 */
+function currentPermission(): NotificationPermission {
+  try {
+    return globalThis.Notification?.permission ?? "denied";
+  } catch {
+    return "denied";
+  }
+}
+
 export function StockPage({ code, onSelect, stream }: Props) {
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
+  // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 四鍵開關(後端 configs)/
+  // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
+  const { signals } = useSignalFeed();
+  const { enabled, save: saveEnabled } = useSignalsConfig();
+  const { soundOn, setSoundOn } = useSignalSound();
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
   const { data: wl } = useStockWatchlist();
@@ -62,8 +84,41 @@ export function StockPage({ code, onSelect, stream }: Props) {
     commit(g === null || g === undefined ? withCode : assignToGroup(withCode, code, g.name, g.codes.length));
   }
 
+  /** 只送被切的那一鍵(部分更新):PUT 失敗時 query data 不動 → 開關停在原位,
+   *  使用者看得出「沒切成功」;`mutate` 的錯誤留在 `saveEnabled.error`,不另吞。 */
+  function toggleKind(key: SignalSwitchKey, value: boolean): void {
+    const patch: Partial<SignalEnabled> = { [key]: value };
+    saveEnabled.mutate(patch);
+  }
+
+  /** 權限狀態不是 React state 的衍生值,要主動回寫 —— 使用者按完瀏覽器提示後,
+   *  只有這裡更新才會讓「允許通知」鈕收起來。 */
+  function requestNotif(): void {
+    try {
+      const Ctor = globalThis.Notification as typeof Notification | undefined;
+      if (Ctor === undefined) return;
+      void Ctor.requestPermission().then(
+        (result) => setNotifPermission(result),
+        // 舊瀏覽器是 callback 版、iframe 內會被擋:問不到就維持現值(鈕留著)
+        () => setNotifPermission(currentPermission()),
+      );
+    } catch {
+      setNotifPermission(currentPermission());
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 gap-4">
+      <SignalRail
+        signals={signals}
+        enabled={enabled}
+        onToggle={toggleKind}
+        onSelect={onSelect}
+        notifPermission={notifPermission}
+        onRequestNotif={requestNotif}
+        soundOn={soundOn}
+        onToggleSound={setSoundOn}
+      />
       <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
         {status.tc4 === "down" || wsStatus === "closed" ? (
