@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from copycat.live.stock_models import StockBook, StockMeta, StockTick
+from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub
@@ -50,8 +51,8 @@ class _Clock:
         self.now += _dt.timedelta(seconds=secs)
 
 
-def _bar(date: str, high: int, low: int, close: int) -> dict:
-    return {"date": date, "high": high, "low": low, "close": close}
+def _bar(date: str, high: int, low: int, close: int) -> DailyBar:
+    return DailyBar(date=date, high=high, low=low, close=close)
 
 
 # compute_cdp(80_000, 70_000, 75_000) → cdp 75_000 / ah 85_000 / nh 80_000 / nl 70_000 / al 65_000
@@ -113,12 +114,12 @@ def _state(
 class _FakeBars:
     """engine.daily_bars 的替身;`bars` 可中途換掉以模擬換日新增一根。"""
 
-    def __init__(self, bars: list[dict] | None = None, *, error: bool = False) -> None:
+    def __init__(self, bars: list[DailyBar] | None = None, *, error: bool = False) -> None:
         self.bars = list(bars or [])
         self.error = error
         self.calls: list[tuple[str, int]] = []
 
-    async def __call__(self, code: str, n: int = 25) -> list[dict]:
+    async def __call__(self, code: str, n: int = 25) -> list[DailyBar]:
         self.calls.append((code, n))
         if self.error:
             raise ConnectionError("TC4 不可用")
