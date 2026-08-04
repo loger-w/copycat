@@ -33,6 +33,14 @@ describe("IndexBar(SC-1)", () => {
     expect(screen.getByText(/台指/).textContent).toContain("+102.08");
   });
 
+  it("漲幅帶 + 前綴(characterization:正號分支)", () => {
+    render(<IndexBar twse={series({ p: 40_400_000, ref: 40_000_000 })} otc={OTC} txf={TXF} />);
+    const twse = screen.getByText(/加權/);
+    expect(twse.textContent).toContain("40400");
+    expect(twse.textContent).toContain("+1.00%");
+    expect(twse.innerHTML).toContain("text-bull");
+  });
+
   it("跌幅紅綠依台股慣例(跌 = bear 綠)", () => {
     render(<IndexBar twse={series()} otc={OTC} txf={TXF} />);
     const twse = screen.getByText(/加權/);

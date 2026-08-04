@@ -103,6 +103,17 @@ describe("IndexPage 標的列(SC-2)", () => {
     expect(screen.getByText(/昨收 43634\.19/)).toBeTruthy();
   });
 
+  it("Quote 漲跌整串:跌用負號(characterization)", () => {
+    renderPage();
+    expect(screen.getByText("-1594.27 (-3.65%)")).toBeTruthy();
+  });
+
+  it("Quote 漲跌整串:漲帶 + 前綴(characterization;台指期)", () => {
+    renderPage();
+    fireEvent.click(btn("台指期"));
+    expect(screen.getByText("+142.00 (+0.34%)")).toBeTruthy();
+  });
+
   it("點台指期才出現大台/小台/微台三選一;選微台後標題換料", () => {
     renderPage();
     expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
