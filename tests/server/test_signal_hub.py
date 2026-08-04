@@ -170,7 +170,8 @@ class _Harness:
 
     async def settle(self) -> None:
         await asyncio.wait_for(self.hub._basis_jobs.join(), 2)
-        await asyncio.wait_for(self.hub._queue.join(), 2)
+        await asyncio.wait_for(self.hub._jsonl_queue.join(), 2)
+        await asyncio.wait_for(self.hub._discord_queue.join(), 2)
 
     def rows(self, date: str = _DATE) -> list[dict]:
         path = self.data_dir / "signals" / f"{date.replace('-', '')}.jsonl"
@@ -498,15 +499,18 @@ class TestDiscordFanout:
         self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """滿載策略(design R14):丟最舊 + dropped 計數,熱路徑不反壓。"""
-        monkeypatch.setattr(hub_mod, "QUEUE_MAXSIZE", 2)
+        monkeypatch.setattr(hub_mod, "JSONL_QUEUE_MAXSIZE", 2)
+        monkeypatch.setattr(hub_mod, "DISCORD_QUEUE_MAXSIZE", 2)
         h = _Harness(tmp_path, clock)  # 刻意不 start:worker 不消化,佇列必滿
         codes = [f"{9000 + i}" for i in range(5)]
         h.hub.on_watchlist(codes)
         for code in codes:
             h.lock_up(_state(upper=110_000, locked_up=True), code=code)
         assert len(h.published) == 5  # WS 不受佇列影響
-        assert h.hub.dropped == 3
-        assert h.hub._queue.qsize() == 2
+        assert h.hub.dropped_jsonl == 3
+        assert h.hub.dropped_discord == 3
+        assert h.hub._jsonl_queue.qsize() == 2
+        assert h.hub._discord_queue.qsize() == 2
 
 
 class TestBasisWorker:
