@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -407,6 +408,39 @@ class TestEnabled:
         again = _Harness(tmp_path, clock)
         assert again.hub.enabled()["cdp_cross"] is False
         assert again.hub.enabled()["limit_lock"] is True
+
+    async def test_concurrent_set_enabled_lands_memory_state_on_disk(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """CC-7:read-modify-write 與落檔沒有共同臨界區 → 慢的那次寫入覆蓋在後。
+
+        記憶體是對的、磁碟停在舊值,重啟後開關「自己跳回去」而當下零錯誤訊號。
+        """
+        h = _Harness(tmp_path, clock)
+        real = h.hub._write_enabled
+
+        def slow_stale_write(flags: dict[str, bool]) -> None:
+            # 舊快照(vol_burst 還是 True 的那次)刻意寫得慢 → 無 lock 時它最後落地
+            if flags["vol_burst"]:
+                time.sleep(0.05)
+            real(flags)
+
+        h.hub._write_enabled = slow_stale_write  # type: ignore[method-assign]
+
+        await asyncio.gather(
+            h.hub.set_enabled({"cdp_cross": False}),
+            h.hub.set_enabled({"vol_burst": False}),
+        )
+
+        expected = {
+            "cdp_cross": False,
+            "surge_crash": True,
+            "vol_burst": False,
+            "limit_lock": True,
+        }
+        assert h.hub.enabled() == expected
+        on_disk = json.loads((tmp_path / "signals_enabled.json").read_text(encoding="utf-8"))
+        assert on_disk == expected, "磁碟停在舊快照 = 重啟後開關自己跳回去"
 
     async def test_set_enabled_rejects_unknown_key(self, tmp_path: Path, clock: _Clock) -> None:
         h = _Harness(tmp_path, clock)
