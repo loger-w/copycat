@@ -96,8 +96,27 @@ describe("mergeSignals", () => {
   const b = sig({ id: "b" });
   const c = sig({ id: "c" });
 
-  it("live 在前、baseline 在後", () => {
+  it("同 time 併列時 live 在前、baseline 在後(穩定排序保留插入序)", () => {
     expect(mergeSignals([b, c], [a]).map((s) => s.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("斷線自癒:baseline 補回的較新訊號排在既有 live 之上(review CC-3)", () => {
+    // live = 斷線前收到的 50 則舊訊號(新在前);baseline = 重抓 jsonl 補回的兩則較新訊號。
+    // 若只做「live 全前 + baseline 後」,補回的訊號會被埋在 50 則舊訊號底下看不見。
+    const live = Array.from({ length: 50 }, (_, i) =>
+      sig({ id: `live${i}`, time: `09:${String(10 + i).padStart(2, "0")}:00` }),
+    ).reverse();
+    const missed = [sig({ id: "m2", time: "10:05:00" }), sig({ id: "m1", time: "10:00:00" })];
+
+    const merged = mergeSignals(missed, live);
+    expect(merged.length).toBe(52);
+    expect(merged.slice(0, 3).map((s) => s.id)).toEqual(["m2", "m1", "live49"]);
+  });
+
+  it("cap 在排序之後才截斷(留下的是最新那些,不是先到的)", () => {
+    const older = sig({ id: "older", time: "09:00:00" });
+    const newer = sig({ id: "newer", time: "13:00:00" });
+    expect(mergeSignals([newer], [older], 1).map((s) => s.id)).toEqual(["newer"]);
   });
 
   it("同 id 只留一筆(WS 已收 + jsonl baseline 重疊)", () => {
