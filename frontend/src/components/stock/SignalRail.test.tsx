@@ -1,9 +1,12 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SignalRail } from "@/components/stock/SignalRail";
 import type { SignalEnabled, SignalMsg } from "@/lib/signal-model";
+
+type Props = ComponentProps<typeof SignalRail>;
 
 afterEach(cleanup);
 
@@ -31,20 +34,27 @@ function sig(o: Partial<SignalMsg> = {}): SignalMsg {
   };
 }
 
-function renderRail(o: Partial<React.ComponentProps<typeof SignalRail>> = {}) {
-  const props = {
-    signals: [] as SignalMsg[],
-    enabled: ALL_ON,
-    onToggle: vi.fn(),
-    onSelect: vi.fn(),
-    notifPermission: "granted" as NotificationPermission,
-    onRequestNotif: vi.fn(),
-    soundOn: true,
-    onToggleSound: vi.fn(),
-    ...o,
+/** 資料 props 可覆寫;四個回呼固定是 spy(覆寫回呼的話回傳的就不是實際掛上去的那顆)。 */
+function renderRail(
+  o: Partial<Pick<Props, "signals" | "enabled" | "notifPermission" | "soundOn">> = {},
+) {
+  const spies = {
+    onToggle: vi.fn<Props["onToggle"]>(),
+    onSelect: vi.fn<Props["onSelect"]>(),
+    onRequestNotif: vi.fn<Props["onRequestNotif"]>(),
+    onToggleSound: vi.fn<Props["onToggleSound"]>(),
   };
-  render(<SignalRail {...props} />);
-  return props;
+  render(
+    <SignalRail
+      signals={[]}
+      enabled={ALL_ON}
+      notifPermission="granted"
+      soundOn
+      {...spies}
+      {...o}
+    />,
+  );
+  return spies;
 }
 
 function rowTexts(): string[] {
@@ -103,8 +113,10 @@ describe("SignalRail", () => {
         sig({ id: "b", kind: "crash", direction: null, pct: -1.2 }),
       ],
     });
-    expect(screen.getByText(/爆拉/).className).toContain("text-bull");
-    expect(screen.getByText(/爆跌/).className).toContain("text-bear");
+    // scope 收在清單內:下半的「爆拉爆跌」toggle 標籤同樣含這兩個詞
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText(/爆拉/).className).toContain("text-bull");
+    expect(list.getByText(/爆跌/).className).toContain("text-bear");
   });
 
   it("空態顯示尚無訊號", () => {
