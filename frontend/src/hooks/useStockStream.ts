@@ -5,8 +5,11 @@ refetch 期間交錯的 tick 進 pending buffer,snapshot(seq=S)套用後丟 seq 
 依序 append seq > S。meta 基底走 snapshot(engine 不發 meta WS 型別,book 每則自足);
 **當日高低由 tick 的 `h`/`l` 增量更新** —— 盤中不重抓 snapshot,掛 meta 上會停在舊值。 */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
+import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
+import type { SignalMsg } from "@/lib/signal-model";
 import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -49,6 +52,9 @@ interface WsMsg {
 }
 
 export function useStockStream(code: string | null): StockStreamState {
+  // WS 是全站唯一一條 → 自選失效的註冊點也只在這裡一處(design §8.1 / impl-review R10)。
+  // 多處註冊(App + feed hook)會對同一則 watchlist_changed 重複 refetch。
+  const queryClient = useQueryClient();
   const [accum, setAccum] = useState<StockAccum | null>(null);
   const [watchlist, setWatchlist] = useState<Record<string, WatchlistQuote>>({});
   const [status, setStatus] = useState<{ tc4: string; backfilling: string | null }>({
@@ -188,6 +194,16 @@ export function useStockStream(code: string | null): StockStreamState {
           });
           return;
         }
+        case "signal": {
+          // 不過濾 code:訊號涵蓋整個自選池,主圖看的是哪一檔與要不要提示無關
+          emitSignal(msg as unknown as SignalMsg);
+          return;
+        }
+        case "watchlist_changed": {
+          // Discord /watch 改了自選 → 重抓(內容不隨訊息帶,避免兩份來源不一致)
+          void queryClient.invalidateQueries({ queryKey: ["stock-watchlist"] });
+          return;
+        }
         default:
           return;
       }
@@ -201,6 +217,7 @@ export function useStockStream(code: string | null): StockStreamState {
         backoff = BACKOFF_START_MS;
         setWsStatus("open");
         void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
+        emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
       };
       ws.onmessage = (ev: MessageEvent<string>) => {
         try {
