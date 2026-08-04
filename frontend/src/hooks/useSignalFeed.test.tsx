@@ -88,7 +88,13 @@ describe("useSignalFeed", () => {
       async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
     );
     const hook = renderHook(() => useSignalFeed(), { wrapper });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // hook 自帶 retry: 1(壓過 client 的 retry: false)→ 等第二次 fetch 發出才是 error
+    // 終態;只等「呼叫過」會落在 retry pending 窗,那時的空清單來自「還沒 settle」而不是
+    // 失敗降級(review TQ-5)。retryDelay 預設 1s,waitFor 預設 timeout 1s 抓不到 → 給 5s。
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+    await waitFor(() =>
+      expect(client.getQueryState(["stock-signals-today"])?.status).toBe("error"),
+    );
     expect(hook.result.current.signals).toEqual([]);
     act(() => emitSignal(sig("live-1")));
     expect(ids(hook.result.current.signals)).toEqual(["live-1"]);
