@@ -661,3 +661,128 @@ class TestStkfut:
             await _drain(engine)
         assert any("stkfut" in r.message for r in caplog.records)
         await engine.close()
+
+
+class FakeHub:
+    """SignalSink stub:只記錄呼叫序列(順序本身是被鎖的行為)。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def on_tick(self, code: str, tick, state) -> None:
+        self.calls.append(("tick", code, tick.cum_vol))
+
+    def on_book(self, code: str, state) -> None:
+        self.calls.append(("book", code))
+
+    def on_rollover_pending(self, new_date: str) -> None:
+        self.calls.append(("pending", new_date))
+
+    def on_rollover(self) -> None:
+        self.calls.append(("rollover",))
+
+    def on_watchlist(self, codes: list[str]) -> None:
+        self.calls.append(("watchlist", list(codes)))
+
+    def kinds(self, kind: str) -> list[tuple]:
+        return [c for c in self.calls if c[0] == kind]
+
+
+class TestSignalHubHooks:
+    """SC-5 / SC-6:訊號掛點只長在 live 路徑上,回補重放與換日 pending 期間不得誤觸。"""
+
+    async def test_live_tick_notifies_hub_including_non_main_watchlist_code(self) -> None:
+        # 掛點不限主圖:自選檔即使沒開主圖也要評估(membership gate 在 hub 內)
+        engine, src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        await engine.set_watchlist(["2330"])
+        assert engine._main != "2330"
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert hub.kinds("tick") == [("tick", "2330", 1)]
+        assert hub.kinds("book") == [("book", "2330")]
+        await engine.close()
+
+    async def test_backfill_replay_never_reaches_hub(self) -> None:
+        """SC-5:`apply_backfill` 路徑零接觸 —— 回補是重放歷史,發訊號等於對著
+        已成過去的價位重新示警。結構隔離(掛點只在 `_handle_quote`)+ 本測試鎖死。"""
+        engine, src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        from copycat.live.stock_models import StockTick
+
+        src.backfill_result = [
+            StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
+                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                      is_trial=False),
+            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=8,
+                      time="09:02:00.000", trade_date="2026-07-21", side="outer",
+                      is_trial=False),
+        ]
+        await engine.set_main("2330")
+        await _drain(engine)
+        # 前提:回補確實跑完並落地(否則這條測不到東西)
+        assert len(engine.snapshot("2330")["ticks"]) == 2
+        assert hub.calls == []
+        await engine.close()
+
+    async def test_trial_quote_skips_on_tick_but_still_on_book(self) -> None:
+        """SC-6 後半:試撮期(13:25–13:30)`ingest` 回 False → 不評估成交路;
+        但簿仍在更新(鎖板打開的簿路要抓得到),`on_book` 照常。"""
+        engine, src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        # PreciseTime 05:26:00 UTC → 台北 13:26:00 = 試撮窗
+        src.on_message(_quote(cum=1) | {"PreciseTime": "52600000000", "FilledTime": "52600"})
+        await _drain(engine)
+        assert hub.kinds("tick") == []
+        assert hub.kinds("book") == [("book", "2330")]
+        await engine.close()
+
+    async def test_on_book_skipped_while_rollover_pending(self) -> None:
+        """stage1 已觸發、stage2 未完成時跳過簿路:否則跨日後第一則簿更新會拿今日簿
+        對照昨日 latch 誤發 `limit_open`(design R2-2)。"""
+        engine, src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        await engine.set_watchlist(["2330"])
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 仍是舊日 tick → 不進 stage2,pending 未解
+        await _drain(engine)
+        assert hub.kinds("book") == []
+        await engine.close()
+
+    async def test_rollover_two_stages_notify_in_order(self) -> None:
+        engine, src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=12000))
+        await _drain(engine)
+        engine.rollover_stage1("2026-07-22")
+        src.on_message(_quote(cum=50, date="20260722"))
+        await _drain(engine)
+        stages = [c for c in hub.calls if c[0] in ("pending", "rollover")]
+        assert stages == [("pending", "2026-07-22"), ("rollover",)]
+        # stage2 之後 pending 解除 → 簿路恢復;hub 的 trade_date_fn 讀得到新日
+        assert engine.trade_date == "2026-07-22"
+        assert hub.kinds("book")[-1] == ("book", "2330")
+        await engine.close()
+
+    async def test_set_watchlist_notifies_hub(self) -> None:
+        engine, _src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        await engine.set_watchlist(["2330", "5483"])
+        await engine.set_watchlist(["5483"])
+        assert hub.kinds("watchlist") == [
+            ("watchlist", ["2330", "5483"]),
+            ("watchlist", ["5483"]),
+        ]
+        await engine.close()
