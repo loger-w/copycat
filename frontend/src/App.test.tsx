@@ -243,6 +243,41 @@ describe("App 資料流上提(D-3 / D-16)", () => {
   });
 });
 
+// 🟢 localStorage key 收斂:主圖標的 key 補上 `copycat-` 前綴後的遷移路徑,
+// 以及停用功能孤兒鍵的啟動清除。字面值刻意寫死(不 import constants)——
+// 這幾條測的就是「key 值本身」,跟著常數走會讓改錯 key 值時測試一起變綠。
+describe("App localStorage key 遷移 / 孤兒清除", () => {
+  it("新 key 有值時優先採用,不被舊 key 的殘值蓋回去", async () => {
+    window.localStorage.setItem("copycat-stock-main-code", "2454");
+    window.localStorage.setItem("stock-main-code", "2330");
+    renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "個股(期)" }));
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
+        String(c[0]),
+      );
+      expect(calls.some((u) => u.includes("/api/stock/state/2454"))).toBe(true);
+    });
+  });
+
+  it("只有舊 key 有值 → 搬到新 key 且舊 key 被移除(一次性遷移)", () => {
+    window.localStorage.setItem("stock-main-code", "2330");
+    renderApp();
+    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("2330");
+    expect(window.localStorage.getItem("stock-main-code")).toBeNull();
+  });
+
+  it("孤兒鍵(stock-ladder-open / stock-wl-group)在 App 模組載入後不存在", async () => {
+    window.localStorage.setItem("stock-ladder-open", "1");
+    window.localStorage.setItem("stock-wl-group", "科技股");
+    // 清除是 module scope 的一次性副作用(不隨 render 重跑)→ 只能重新載入模組來驗
+    vi.resetModules();
+    await import("@/App");
+    expect(window.localStorage.getItem("stock-ladder-open")).toBeNull();
+    expect(window.localStorage.getItem("stock-wl-group")).toBeNull();
+  });
+});
+
 // 🟢 stock-signals T11(SC-10):toast 掛在 App 層,與當前 tab 無關 ——
 // 訊號涵蓋整個自選池,人在看大盤 / 期貨時個股鎖漲停一樣要跳出來。
 describe("App 訊號 toast(SC-10)", () => {
