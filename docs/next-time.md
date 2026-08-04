@@ -488,3 +488,8 @@
   數十秒~分鐘級,期間整個 HTTP 面不可用(真實量測:fake 延遲 12s → 12.6s 才首次 200)。
   前端已能自癒,但若想根治「重啟後空窗」,得把 runtime.start 的回補段移到背景 task
   (engines 的 app.state 時序假設要全部重審)— 獨立一輪的架構工作,勿順手。
+- [ ] **個股頁現價旁加漲跌額(絕對點數)**:本輪(mod/stock-price-prominence)只放大字級,
+  % 旁沒有漲跌額;要加時連同 fmtPct 慣例一起看(2026-08-04 change-spec out of scope)。
+- [ ] **三頁現價字級是否統一**:個股頁現價已改 text-3xl,期貨頁 FuturesPage.tsx L54 仍
+  text-lg、指數頁 IndexPage.tsx L178 仍 text-2xl;是否統一由獨立決策,不順手改
+  (2026-08-04 change-spec-review P2-4)。
