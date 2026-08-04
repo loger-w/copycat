@@ -1,0 +1,44 @@
+{
+  "round": 1,
+  "date": "2026-08-04",
+  "stage": "branch-lifecycle 收尾節 C(/bug 一輪 medium)",
+  "diff": "master...HEAD(fix b670a45 + chore 441c6d7)",
+  "lenses": ["correctness-boundary", "consistency-docs"],
+  "model": "opus x2, effort high",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "P2",
+      "lenses": ["correctness-boundary", "consistency-docs"],
+      "file": "frontend/src/components/stock/WatchlistSidebar.tsx",
+      "claim": "gate 只擋入口:Dialog 仍常駐掛載吃 EMPTY_WL、commit() 無 data undefined 早退;不變式(dialogOpen 只能由被 gate 的鈕設 true / data 成功後不退回 undefined)跨檔且無測試釘住。兩個 lens 皆窮舉證實現況無可達反例(全 repo 無 resetQueries/removeQueries、StockPage 永不卸載、useSaveWatchlist 寫回恆 defined)。",
+      "resolution": "partial_accepted",
+      "resolution_detail": "Dialog 併入同一 gate(單一條件包 button + Dialog fragment,危險窗內不掛載 = 不變式本地化,且可測 — 兩條 gate 測試補 dialog 元素不在 DOM 斷言)→ commit d76f4b3。commit() 早退 rejected_with_reason:兩 lens 證明不可達,repo 明文精神「不可達防禦 = 沒有測試覆蓋的死碼」(WatchlistSidebar.tsx 拖曳 teardown 註解,mutation test 移除前例);重開條件記入 docs/next-time.md trigger 條目。"
+    },
+    {
+      "id": "F2",
+      "severity": "P1",
+      "lenses": ["consistency-docs", "correctness-boundary"],
+      "file": ".claude/bug/watchlist-empty-wl-clobber/repro.md",
+      "claim": "Phase 2「驗證方式」宣稱紅測試走完整重現鏈並斷言 PUT {codes:[]},實際落地為入口級測試(按鈕不渲染),行為級零覆蓋 — 敘述誤導後續讀者。",
+      "resolution": "accepted",
+      "resolution_detail": "repro.md 該段改寫為與實際一致(入口 gate 兩態 + dialog 元素斷言;行為級無可達路徑的原因註明)。"
+    },
+    {
+      "id": "F3",
+      "severity": "P1",
+      "lenses": ["consistency-docs"],
+      "file": "docs/next-time.md",
+      "claim": "K-4 條目留下錯誤現況「目前靠 save.isPending 停用各自的觸發點」且刪掉了正確事實(Sidebar 零防護);實測:StockPage 3 處、Dialog 僅加入股票 1 處(:354)、Sidebar 0 處。",
+      "resolution": "accepted",
+      "resolution_detail": "K-4 條目改寫為實測現況,補「同元件內連點/拖曳期間重複 PUT 亦未防」。"
+    }
+  ],
+  "refuted": [],
+  "post_fix_gates": {
+    "vitest": "72 files / 987 passed(WatchlistSidebar 55/55)",
+    "tsc": 0,
+    "eslint": 0
+  },
+  "exit": "無 P0;P1 兩條(皆文件)已修;P2 部分 accepted 已修 + rejected_with_reason 記 next-time。"
+}
