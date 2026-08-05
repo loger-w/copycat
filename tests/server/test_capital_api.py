@@ -226,6 +226,25 @@ class TestOrdersPositions:
             assert [p["stock_no"] for p in positions] == ["2330"]
             assert positions[0]["market"] == "sec"
 
+    def test_positions_keep_both_kinds_of_same_stock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 複合鍵:同檔資+集保並存回兩列(舊 dedupe 只留張數大者,被捨棄種類平倉鍵不到)
+        cap, _com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions(
+                [
+                    Position(market="sec", stock_no="2330", qty=1, kind="cash"),
+                    Position(market="sec", stock_no="2330", qty=3, kind="margin"),
+                ]
+            )
+            positions = client.get("/api/capital/positions").json()["positions"]
+            assert [(p["stock_no"], p["kind"], p["qty"]) for p in positions] == [
+                ("2330", "cash", 1),
+                ("2330", "margin", 3),
+            ]
+
 
 # ---------------------------------------------------------------------------
 # order/stock(SC-2)
@@ -445,6 +464,50 @@ class TestPositionClose:
             assert isinstance(fields, dict)
             assert fields["sBuySell"] == 1  # 現股多 → 反向賣
             assert fields["nQty"] == 2
+
+    def test_close_body_kind_selects_row(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # body 的 kind 透傳到 client:同檔資+集保並存時精確鍵到融資列(送融資賣)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions(
+                [
+                    Position(market="sec", stock_no="2330", qty=2, kind="cash"),
+                    Position(market="sec", stock_no="2330", qty=5, kind="margin"),
+                ]
+            )
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "sec", "key": "2330", "price": 590.0, "kind": "margin"},
+            )
+            assert res.status_code == 200
+            fields = _sent(com, "stock")[0][1]
+            assert isinstance(fields, dict)
+            assert fields["sFlag"] == 1 and fields["nQty"] == 5  # 融資賣、融資列張數
+
+    def test_close_without_kind_ambiguous_403(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions(
+                [
+                    Position(market="sec", stock_no="2330", qty=2, kind="cash"),
+                    Position(market="sec", stock_no="2330", qty=5, kind="margin"),
+                ]
+            )
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "sec", "key": "2330", "price": 590.0},
+            )
+            assert res.status_code == 403
+            detail = res.json()["detail"]
+            assert detail["error"] == "ORDER_BLOCKED"
+            assert "請指定種類" in detail["reason"]
+            assert _sent(com, "stock") == []  # 猜錯種類 = 送錯單種,寧可不送
 
 
 # ---------------------------------------------------------------------------
