@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from copycat.stock_watchlist import (
+    UNGROUPED_NAME,
     WATCHLIST_LIMIT,
     Group,
     Watchlist,
@@ -157,6 +158,51 @@ class TestWatchlistPersistence:
         )
         assert saved["codes"] == ["2330", "5483", "3231"]
 
+    def test_load_drops_reserved_group_and_keeps_codes(self, tmp_path: Path) -> None:
+        """SC-6 讀時遷移:保留名群組丟棄(v3 / v2 兩形),成員落回未分組衍生桶."""
+        v3 = tmp_path / "v3.json"
+        v3.write_text(
+            json.dumps(
+                {
+                    "_cache_version": 3,
+                    "codes": ["2330"],
+                    "groups": [{"name": UNGROUPED_NAME, "codes": ["2330"]}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        assert load_watchlist(v3) == {"codes": ["2330"], "groups": []}
+
+        v2 = tmp_path / "v2.json"  # strip 後同名亦丟
+        v2.write_text(
+            json.dumps(
+                {
+                    "_cache_version": 2,
+                    "groups": [{"name": f" {UNGROUPED_NAME} ", "codes": ["2330"]}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        assert load_watchlist(v2) == {"codes": ["2330"], "groups": []}
+
+    def test_load_drops_reserved_group_keeps_orphan_code(self, tmp_path: Path) -> None:
+        """手改 v3 檔的保留名組可能含 codes 外股號 —— 丟組前先 union 進 codes,不流失."""
+        path = tmp_path / "w.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "_cache_version": 3,
+                    "codes": ["2330"],
+                    "groups": [{"name": UNGROUPED_NAME, "codes": ["2317"]}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        assert load_watchlist(path) == {"codes": ["2330", "2317"], "groups": []}
+
 
 class TestNormalize:
     """純函數版正規化(save_watchlist 內部同一份;零寫早退的比較基準)."""
@@ -185,6 +231,20 @@ class TestNormalize:
             normalize({"codes": [], "groups": [{"name": " ", "codes": []}]})
         with pytest.raises(WatchlistError, match="WATCHLIST_FULL"):
             normalize({"codes": [f"{1000 + i}" for i in range(WATCHLIST_LIMIT + 1)], "groups": []})
+
+    def test_rejects_reserved_group_name(self) -> None:
+        """SC-6:保留名「未分組」= codes − ∪groups 的衍生桶,不得存在同名真群組."""
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):
+            normalize({"codes": ["2330"], "groups": [{"name": UNGROUPED_NAME, "codes": ["2330"]}]})
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):  # strip 後同名亦拒
+            normalize(
+                {"codes": ["2330"], "groups": [{"name": f"  {UNGROUPED_NAME} ", "codes": []}]}
+            )
+
+    def test_keeps_empty_groups(self) -> None:
+        """空群組全程保留(SC-1 依賴:/watch groups 要列出 0 檔群組)."""
+        wl: Watchlist = {"codes": ["2330"], "groups": [{"name": "空組", "codes": []}]}
+        assert normalize(wl) == {"codes": ["2330"], "groups": [{"name": "空組", "codes": []}]}
 
     def test_matches_save_watchlist_result(self, tmp_path: Path) -> None:
         wl: Watchlist = {
