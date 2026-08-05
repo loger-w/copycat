@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.app import create_app
 
+from tests.helpers.boot import BootedClient
+
 C44000 = OptionContract(symbol="TC.O.TWF.TX4.202607.C.44000", cp="C", strike_millipts=44_000_000)
 SERIES_A = SeriesInfo(
     series_id="TX4.202607", name="TX4 202607", expiry="202607", contracts=(C44000,)
@@ -53,7 +55,7 @@ def make_client(fake: FakeQuoteSource | None = None) -> tuple[TestClient, FakeQu
     fake = fake or FakeQuoteSource()
     app = create_app(fake, throttle_secs=0.01)
     # raise_server_exceptions=False:讓全域 exception handler 的 502 回應可被斷言
-    return TestClient(app, raise_server_exceptions=False), fake
+    return BootedClient(app, raise_server_exceptions=False), fake
 
 
 class TestSeriesRoute:

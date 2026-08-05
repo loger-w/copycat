@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
+from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeStockSource
 from tests.helpers.fake_txo import FakeTxoSource
 
@@ -21,7 +22,7 @@ def make_client(
         stock_names_path=names_path,
         throttle_secs=0.01,
     )
-    return TestClient(app, raise_server_exceptions=False), fake
+    return BootedClient(app, raise_server_exceptions=False), fake
 
 
 class _FailingStartStockSource(FakeStockSource):
@@ -64,7 +65,7 @@ class TestEngineStartFailureDegrades:
             stock_watchlist_path=tmp_path / "watchlist.json",
             throttle_secs=0.01,
         )
-        client = TestClient(app, raise_server_exceptions=False)
+        client = BootedClient(app, raise_server_exceptions=False)
         with client:
             r = client.get("/api/stock/watchlist")
         assert r.status_code == 503
@@ -86,7 +87,7 @@ class TestEngineStartFailureDegrades:
             stock_watchlist_path=tmp_path / "watchlist.json",
             throttle_secs=0.01,
         )
-        client = TestClient(app, raise_server_exceptions=False)
+        client = BootedClient(app, raise_server_exceptions=False)
         with client:
             r = client.get("/api/stock/watchlist")
         assert r.status_code == 503
@@ -124,7 +125,7 @@ class TestStockNamesRoute:
     def test_available_without_tc4(self, tmp_path: Path) -> None:
         """名稱表與 TC4 連線無關:達錢 4 沒開(stock engine 未就緒)也要能搜尋。"""
         app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with BootedClient(app, raise_server_exceptions=False) as client:
             assert client.get("/api/stock/names").status_code == 200
 
 
@@ -306,7 +307,7 @@ class TestStateRoute:
         優先序會靜默翻成 400,前端就把「達錢 4 沒開」誤顯示成「代號打錯」。
         """
         app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with BootedClient(app, raise_server_exceptions=False) as client:
             r = client.get("/api/stock/state/@@@")
         assert r.status_code == 503
         assert r.json()["detail"]["error"] == "NOT_READY"

@@ -12,11 +12,12 @@ from fastapi.testclient import TestClient
 
 from copycat.server import build_info
 from copycat.server.app import create_app
+from tests.helpers.boot import BootedClient
 from tests.helpers.fake_txo import FakeTxoSource
 
 
 def _client() -> TestClient:
-    return TestClient(create_app(FakeTxoSource()))
+    return BootedClient(create_app(FakeTxoSource()))
 
 
 class TestHealthRoute:
