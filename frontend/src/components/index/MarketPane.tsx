@@ -205,8 +205,9 @@ function Quote({
 }
 
 interface Props {
-  /** 版面位置。唯一用途是 `data-testid="market-pane-<paneId>"` —— 兩個 pane 的按鈕文字
-   *  完全相同,測試沒有這個錨點就只能裸 `getByRole` 撞 ambiguous。 */
+  /** 版面位置。用途是 `data-testid="market-pane-<paneId>"` 與根節點的 `aria-label`
+   *  —— 兩個 pane 的按鈕文字完全相同,測試沒有這個錨點就只能裸 `getByRole` 撞
+   *  ambiguous,a11y 樹同理(兩 pane 選同標的同週期時無法區分,review F3)。 */
   paneId: "left" | "right";
   twse: IndexSeries | null;
   otc: IndexSeries | null;
@@ -267,10 +268,12 @@ export function MarketPane({
     setMarketKeyState(next);
     window.localStorage.setItem(stores.key, next);
     const coerced = coerceMode(next, mode);
-    if (coerced !== mode) {
-      setModeState(coerced);
-      window.localStorage.setItem(stores.mode, coerced);
-    }
+    if (coerced !== mode) setModeState(coerced);
+    // **寫入不可條件化**:mount initializer 的 coerce 結果沒回寫 storage,storage 可能留著
+    // 已被畫面 coerce 掉的殘值(key=OTC + mode=day)。若這裡也只在 coerced !== mode 時寫,
+    // 一次 no-op coerce 的切換(切回加權)就只寫 key → storage 湊成 TWSE+day 這組
+    // 「合法但使用者沒選過」的組合,下次重載直接跳日K。任何標的切換都沖成當下有效值。
+    window.localStorage.setItem(stores.mode, coerced);
   }
 
   function selectMode(next: MarketMode): void {
@@ -296,7 +299,12 @@ export function MarketPane({
   const futState = isFut ? (futures?.[marketKey] ?? null) : null;
 
   return (
-    <section data-testid={`market-pane-${paneId}`} className="flex min-w-0 flex-col gap-3">
+    <section
+      data-testid={`market-pane-${paneId}`}
+      role="group"
+      aria-label={paneId === "left" ? "左圖" : "右圖"}
+      className="flex min-w-0 flex-col gap-3"
+    >
       {/* 標的列(SC-2) */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1">
