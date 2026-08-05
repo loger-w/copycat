@@ -239,6 +239,11 @@ describe("StockChart 空態三分態文案(N-7)", () => {
     expect(screen.getByText("等待 TC4 回應中…(自動重試)").className).toContain("text-ink-muted");
     expect(screen.queryByText("無 K 線資料")).toBeNull();
     expect(screen.queryByText("K 線載入失敗")).toBeNull();
+    // WL-COV-2:佔位框「同載入中樣式」是 user 拍板的刻意選擇(不是隨手撿的 class),
+    // 要有測試釘住,否則改樣式時無訊號。
+    const box = screen.getByText("等待 TC4 回應中…(自動重試)").closest("div")!;
+    expect(box.className).toContain("border-line");
+    expect(box.className).toContain("bg-surface");
   });
 
   it("status=disconnected + 空 bars → 紅字「TC4 連線中斷,K 線暫不可用(自動重試中)」", async () => {
@@ -269,6 +274,23 @@ describe("StockChart 空態三分態文案(N-7)", () => {
     await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
     expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
     expect(screen.queryByText("TC4 連線中斷,K 線暫不可用(自動重試中)")).toBeNull();
+  });
+
+  // F1/WL-COV-1:bars 欄位缺(payload drift / 版本落差 —— 與 status 缺同一個理由)。
+  // 未正規化時 `data.bars.length` 會丟 TypeError,而專案無 ErrorBoundary → 整頁白畫面
+  // (比舊碼的 TanStack error 態更糟)。正規化後 bars 視為空,status 照樣分態。
+  it("回應缺 bars 欄位 + status=timeout → 顯示等待句,不崩", async () => {
+    await daily({ status: "timeout" });
+    await waitFor(() => expect(screen.getByText("等待 TC4 回應中…(自動重試)")).toBeTruthy(), {
+      timeout: 5000,
+    });
+    expect(screen.queryByText("K 線載入失敗")).toBeNull();
+  });
+
+  it("回應為空物件(bars 與 status 皆缺)→ 回歸「無 K 線資料」,不崩", async () => {
+    await daily({});
+    await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByText("K 線載入失敗")).toBeNull();
   });
 
   // bars 非空時不分態(Out of scope 3):當日段降級但有歷史資料 → 照常畫圖
