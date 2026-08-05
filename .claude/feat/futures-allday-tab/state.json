@@ -1,0 +1,19 @@
+{
+  "slug": "futures-allday-tab",
+  "start_sha": "a858dec",
+  "branch": "feat/futures-allday-tab",
+  "worktree_path": "C:/side-project/copycat/.claude/worktrees/feat-futures-allday",
+  "current_phase": 8,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7],
+  "scope": "L",
+  "phase_6_blocked_reason": "SC-3 真 TC4 量法 + 日K口徑/Date 欄語意實測:夜盤進行中不可起第二台 TC4 後端;fallback = fake rows 全覆蓋 + merge 後 prod 自然重啟跑量法 curl + user 過目",
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-08-05T22:10:00+08:00",
+  "project_shape": "python-backend+react-frontend",
+  "last_commit_sha": "516dd0e",
+  "final_merge_sha": null,
+  "self_review_head": "516dd0e",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}

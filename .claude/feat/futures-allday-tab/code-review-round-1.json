@@ -1,0 +1,26 @@
+{
+  "round": 1,
+  "type": "Phase 4 自評(medium;3 lens:時序/快取、測試覆蓋 mutation、spec 對照/白名單)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "TC-1", "severity": "P1", "lens": "coverage", "summary": "FUTURES_ALLDAY_DOMAIN 真常數零測試鎖定(mutation 段界/clamp 改壞全綠)", "disposition": "accepted → 後端 fix 波"},
+    {"id": "TC-2", "severity": "P1", "lens": "coverage", "summary": "分時模式 overlay(均價/OI 線)零覆蓋(mutation 拿掉 hlines 全綠)", "disposition": "accepted → 前端 fix 波"},
+    {"id": "TC-3", "severity": "P1", "lens": "coverage", "summary": "live 錨定日 gate 被 tail.index 守衛遮蔽,mutation 短路全綠", "disposition": "accepted → 前端 fix 波"},
+    {"id": "LF-1", "severity": "P1", "lens": "spec", "summary": "一鍵平倉送單結果零回饋(失敗/擋單/拒單全靜默;對照 clickPrice 有 hint)", "disposition": "accepted → 前端 fix 波(紅先行)"},
+    {"id": "TZ-1", "severity": "P2", "lens": "time", "summary": "allday 窗前移的註解與 design 把「多收方向」講反(防線正確、理由錯)", "disposition": "accepted → 後端 fix 波(註解+design+fixture 註解)"},
+    {"id": "TZ-2", "severity": "P2", "lens": "time", "summary": "跨午夜瞬間昨日 memo 永久化競態:23:5x 尾根若 TC4 未落盤即永久缺洞", "disposition": "accepted → 後端 fix 波(午夜緩衝 guard + 測試)"},
+    {"id": "TZ-3", "severity": "P2", "lens": "time", "summary": "結算日假日順延時 T-0 警示整個消失(today>settle→null 方向性失效)", "disposition": "accepted → 前端 fix 波(today>settle→0 直到換月;測試斷言事前標記為該變)"},
+    {"id": "TC-4", "severity": "P2", "lens": "coverage", "summary": "±10% 帶界端點測試兩端都沒真驗到(mutation 排除端點全綠)", "disposition": "accepted → 前端 fix 波"},
+    {"id": "TC-5", "severity": "P2", "lens": "coverage", "summary": "resolve_token 零覆蓋(env→.env/BOM/空字串語意)+ _dotenv_cache 未納 fixture 重置", "disposition": "accepted → 後端 fix 波"},
+    {"id": "TC-6", "severity": "P2", "lens": "coverage", "summary": "asyncio 單飛鎖無並發測試", "disposition": "accepted → 後端 fix 波"},
+    {"id": "TC-7", "severity": "P2", "lens": "coverage", "summary": "uv/dv 的 route→cache→payload 直通性無 API shape 斷言", "disposition": "accepted → 後端 fix 波"},
+    {"id": "TC-8", "severity": "P2", "lens": "coverage", "summary": "close-order 同形測試首斷言恆真(自己比自己)", "disposition": "accepted → 前端 fix 波"},
+    {"id": "LF-2", "severity": "P2", "lens": "spec", "summary": "期貨 tab hidden 不 unmount → allday 輪詢背景跑 ~19h/日打 TC4 REQ", "disposition": "accepted → 前端 fix 波(active gate:tab!==futures 停輪詢)"},
+    {"id": "LF-3", "severity": "P2", "lens": "spec", "summary": "OI 10 日窗 ≈7 萬列無觀測;截斷退化為舊日期會靜默", "disposition": "accepted → 後端 fix 波(成功路徑 log + stale warning)"},
+    {"id": "LF-4", "severity": "P2", "lens": "spec", "summary": "FinMind 成為第四條外部 IO 出口但未納 conftest 憑證中和清單", "disposition": "accepted → 後端 fix 波(conftest 第三支 autouse + verify.py docstring 註記)"},
+    {"id": "LF-5", "severity": "P2", "lens": "spec", "summary": "30/60 分桶終點落死區標 14:00", "disposition": "rejected_with_reason:既有行為(大盤 tab m30/m60 對期指日盤資料今天就產出 14:00 桶;540+ceil(285/30)*30=840 驗算屬實),白名單禁改大盤行為 → 記 docs/next-time.md,design §4.3 補 known limitation"},
+    {"id": "LF-6", "severity": "P2", "lens": "spec", "summary": "個股/大盤 bars payload 因 uv/dv 多兩欄(渲染不變但形狀變)", "disposition": "accepted(記帳型)→ design 白名單附註,不改 code"}
+  ],
+  "p2_summary": "P2 x13:全數展開處理(多為行為級/安全級;風格類 0 條)",
+  "exit": "accepted 修完 + 測試綠 → 出場;fix 波及檔案由 main agent 機械快篩"
+}

@@ -1,0 +1,65 @@
+Phase 6 UI 截圖驗證的 DOM 硬證據(fixture server :8723 + vite :5175,零 TC4/ZMQ)
+時間:2026-08-05 22:20–22:34(夜盤進行中;prod :8721 未動)
+
+== SC-1 近全時段分時圖 ==
+svg[aria-label="期貨近全時段分時走勢"]:
+  x 軸標籤 = ["09:00","11:00","13:00","15:00","18:00","21:00","00:00","03:00","05:00"]
+  polyline[data-testid=allday-line] 點數 = 745,x 範圍 0..746
+  index 299(13:45)與 index 300(15:01)在點陣列中相鄰(adjacent=true)→ 死區無空洞
+  參考價虛線(stroke-dasharray)= 1 條
+  live 點 [data-testid=allday-live] 存在
+
+== SC-2 週期切換 + 保留 ==
+模式鈕 aria-pressed(reload 後):
+  分時:false 1分:false 5分:true 15分:false 30分:false 60分:false 日K:false
+  localStorage: copycat-fut-chart-mode=m5
+  candle-body 數 = 240、allday-line 數 = 0(確為蠟燭圖)
+
+== SC-4 商品切換 ==
+點「小台」後 fixture server log:
+  fixture bars_range MXF tf=1 2026-08-01..2026-08-04 session=allday
+  fixture bars_range MXF tf=1 2026-08-05..2026-08-05 session=allday
+右欄閃電梯 header 由 "TXF TXFH6" → "MXF MXFH6",階梯中心價同步換到 MXF
+
+== SC-5 期現價差 ==
+[data-testid=fut-spread] = "價差 —"(夜間非現貨時段 → inTwseSessionNow() false,正確降級)
+
+== SC-6 結算倒數 ==
+[data-testid=fut-settlement] = "結算 T-10"
+獨立核算:契約 202608 → 第三個週三 = 2026-08-19;今天 2026-08-05,
+自 8/6 起數到 8/19 的平日 = 6,7,10,11,12,13,14,17,18,19 = 10 → T-10 ✓
+
+== SC-7 均價線(以頁面 fetch override 注入假部位) ==
+注入 /api/capital/positions = [{market:"fut",stock_no:"TXFH6",qty:2,avg_price:43850,...}]
+hlines:
+  {label:"均 43850 多2口"}
+  {label:"壓 47000", title:"壓 47000・OI 1290口・2026-08-05"}
+  {label:"撐 40000", title:"撐 40000・OI 1941口・2026-08-05"}
+(無部位時只有後兩條 → 不畫均價線的降級正確)
+
+== SC-8 內外盤雙柱 ==
+5分模式下:vol-delta-outer = 240 個、vol-delta-inner = 240 個 rect
+(rect class 值域含 fill-bull/40 與 fill-bear/40 → 紅綠並列)
+
+== SC-10 全撤 / 平倉 ==
+無部位無掛單(capital 已中和):
+  {t:"全撤", disabled:true, title:"無本契約活單"}
+  {t:"平倉", disabled:true, title:"無本契約部位"}
+正向對照(注入 TXFH6 部位後):
+  {t:"全撤", disabled:true}  {t:"平倉", disabled:false}
+→ disabled 是資料驅動,不是死鈕
+
+== SC-11 OI 撐壓(真 FinMind)==
+GET /api/futures/oi-levels(fixture server 真打 FinMind):
+  date=2026-08-05 contract=202608 strikes=238
+  現價 ±10% 帶(39400..48200)內 115 檔:max call = 47000/1290口、max put = 40000/1941口
+畫面(日K 模式)hline title 與上述數值逐字一致。
+註:分時 / 分 K 的 y 視窗是現價 ±0.3%,47000 / 40000 超窗 → 依設計不畫(非 bug)。
+
+== console ==
+唯一錯誤類別:React "Encountered two children with the same key, `0`"(約 3.5 次/秒)。
+來源 = svg[aria-label="加權指數分時走勢"](大盤頁常駐掛載)在**無資料**時
+y-tick 三個標籤全是 "0" → MarketChart.tsx:69 `key={t.priceMilli}` 重複。
+本輪 fixture 的 index source 不推播才觸發;prod 加權有真資料。與 futures-allday
+改動無關(FuturesChart 的同款 `key={t.priceMilli}` 走不到 —— series 空時先回
+「無分時資料」文案,不渲染 svg)。除此之外零 console error。

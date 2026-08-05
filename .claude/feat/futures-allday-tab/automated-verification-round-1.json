@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "date": "2026-08-05",
+  "head": "1b95d89",
+  "steps": [
+    {"step": "pytest", "command": ".venv pytest -q(worktree root)", "exit_code": 0, "result": "1795 passed, 1 warning(自評後 HEAD 複跑)"},
+    {"step": "ruff", "command": "ruff check copycat tests", "exit_code": 0, "result": "All checks passed"},
+    {"step": "pyright", "command": "pyright", "exit_code": 0, "result": "0 errors 0 warnings"},
+    {"step": "vitest", "command": "npm test(frontend/)", "exit_code": 0, "result": "87 files / 1290 tests passed"},
+    {"step": "tsc", "command": "npx tsc -b", "exit_code": 0, "result": "OK"},
+    {"step": "eslint", "command": "npx eslint src", "exit_code": 0, "result": "OK"},
+    {"step": "replay x2", "command": "copycat replay four/five_tigers(data/ 自主 tree 複製 697MB)", "exit_code": 0, "result": "exit 0 / exit 0(evidence/replay-*.log)"},
+    {"step": "validate", "command": "copycat validate", "exit_code": 0, "result": "42/42 PASS(evidence/validate.log)"}
+  ],
+  "all_green": true
+}

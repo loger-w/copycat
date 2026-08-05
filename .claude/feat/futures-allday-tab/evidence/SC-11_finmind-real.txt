@@ -1,0 +1,4 @@
+token resolved: yes
+date: 2026-08-05 | contract: 202608 | strikes: 238
+sample first/last: {'strike': 33900, 'call_oi': 0, 'put_oi': 1243} {'strike': 55000, 'call_oi': 3277, 'put_oi': 0}
+band empty at spot=24000 assumption; full strike range: 33900 - 55000

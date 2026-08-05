@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "verdict_summary": "P0 x0, P1 x6, P2 x10 — 全數 accepted 修入 PLAN.md(Phase 2 固定 1 輪,不重跑)",
+  "dispositions": [
+    {"id": "R1", "severity": "P1", "resolution": "accepted — register_oi(app) + request.app.state.futures;None/未解析 → 200 空 shape"},
+    {"id": "R2", "severity": "P1", "resolution": "accepted — §3/§5 補 tests/server/test_futures_engine.py 內嵌 Boom fake 同步升級"},
+    {"id": "R3", "severity": "P1", "resolution": "accepted — oi route 整合測試三條(正常/未解析/engine None)"},
+    {"id": "R4", "severity": "P1", "resolution": "accepted — OiLine 型別含 title;CandleChart hlines 加 title? 渲染 <title>;斷言含口數與日期"},
+    {"id": "R5", "severity": "P1", "resolution": "accepted — sliceCurrentAllday 週末跨越兩測例(週六 05:00 → anchor 週五;週一首根切錨)"},
+    {"id": "R6", "severity": "P1", "resolution": "accepted — 平倉 gate:任一估價 null → disabled + title;closeBodyOf 簽名收斂為 (pos, price)"},
+    {"id": "R7", "severity": "P2", "resolution": "accepted — cache key 敘述精確化:僅 build_minute 三處;build_daily/build_period 不動"},
+    {"id": "R8", "severity": "P2", "resolution": "accepted — 複合鍵僅查表處組出,fetch 首引數維持原 code + 紅測試"},
+    {"id": "R9", "severity": "P2", "resolution": "accepted — 08:45 列拍板丟棄(與既有域同語意),刪自問自答"},
+    {"id": "R10", "severity": "P2", "resolution": "accepted — _merge_into(bar, k: _RawK);多段判別 isinstance(domain[0], str)"},
+    {"id": "R11", "severity": "P2", "resolution": "accepted — deltaVol 併入 buildCandleGeometry 輸出(同索引對位);date+1 實作指名;跨月/跨年測例"},
+    {"id": "R12", "severity": "P2", "resolution": "accepted — qty 由 helper 內部給,兩呼叫端同形,不開參數"},
+    {"id": "R13", "severity": "P2", "resolution": "accepted — kindOf + 值域常數移入 lib/close-order.ts,單一定義"},
+    {"id": "R14", "severity": "P2", "resolution": "accepted — useOiLevels hook 降級測試補上"},
+    {"id": "R15", "severity": "P2", "resolution": "accepted — 日 K 量口徑 meta 註記本輪不做,(b) 分支記 next-time"},
+    {"id": "R16", "severity": "P2", "resolution": "accepted — 指名 tests/live/test_futures_bars.py;SubHistory 窗字串直接斷言(含跨月/跨年)"}
+  ],
+  "exit": "P0=0 → 修入即進 Phase 3(固定 1 輪不重跑)"
+}

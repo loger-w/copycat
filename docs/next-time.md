@@ -718,3 +718,23 @@
   `_REQ_TIMEOUT_MS`(10s)才失敗,實質退化成「每輪一次慢失敗」的串行慢輪 —— 不會打爆
   TC4,但 log 會持續刷同一行 warning。要不要加 backoff / 降頻,等真實斷線一次再看
   (現在改是猜)。與既有「index_engine `_schedule_retry` backoff 收斂統一」條目同批處理。
+
+## 2026-08-05(futures-allday-tab 收尾留尾巴)
+
+- [ ] **SC-3 真 TC4 量法待 prod 重啟後補**:merge 後 user 自然重啟 prod(新 code),跑
+  `curl -s "localhost:8721/api/market/bars/TXF?tf=1&days=5&session=allday"` 數 bars
+  (單交易日 ≈300 日盤 + ≈840 夜盤)、抽查 15:01 與 00:0x bar、13:45/15:01 相鄰;
+  順帶補 design §1.2 的日 K 口徑實測(DK v 對照 1K 日盤+夜盤量)與 §1.1 Date 欄語意
+  真資料核對。畫面同時 user 過目分時圖夜盤段是否前進。
+- [ ] **OI 撐壓線在分時/分 K 模式幾乎恆在 y 窗外**(現價 ±0.3% 域 vs 撐壓 ±7%),實際
+  只在日 K 看得到 —— 超窗不畫是 design 拍板(clamp 會誤導價位),但若實用上想在分 K
+  看,候選解 = y 域 opt-in 擴展或圖緣方向指示箭頭。
+- [ ] **30/60 分 K 桶終點落死區標 14:00**(review LF-5,既有大盤 tab 行為同款,白名單
+  未動):桶涵蓋 13:01–13:45 卻自稱 14:00,要修需大盤/期貨兩頁一起(夾回段末 13:45)。
+- [ ] **平倉確認彈窗補 danger 紅底**(review T6 偏離 1):prod 送單面,CapitalPositionsList
+  有、ladder 沒有;引入 useCapitalStatus 需補既有測試的 status mock。
+- [ ] `todayOf` 私有函式在 FuturesPage/FuturesLadder 各一份(4 行),收斂進 settlement.ts。
+- [ ] **MarketChart 無資料時 y-tick 全 0 → React duplicate key console error**(Phase 6
+  fixture 實測 3.5 次/秒;prod 有真資料不觸發):`key={t.priceMilli}` 改帶 index 即根除。
+- [ ] days=5 下 30/60 分 K 無歷史回看(初始視窗即全部;design Known Risk):要支援回看
+  可對 n≥30 另發長窗 query。

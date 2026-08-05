@@ -1,0 +1,12 @@
+== /api/health ==
+{"git_sha":"1b95d89","git_dirty":true,"started_at":"2026-08-05T22:14:06"}
+== TXF tf=1 session=allday(futures engine 未啟動 → 降級形狀)==
+{"detail":{"error":"NOT_READY"}}
+== TWSE + allday → 400 INVALID_SESSION ==
+{"detail":{"error":"INVALID_SESSION"}} [http 400]
+== session=xxx → 400 ==
+{"detail":{"error":"INVALID_SESSION"}} [http 400]
+== 無 session(既有 day 路徑不受影響)==
+{"detail":{"error":"NOT_READY"}}
+== /api/futures/oi-levels(engine None → 200 空 shape)==
+{"date":null,"contract":null,"strikes":[]} [http 200]

@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-05",
+  "verdict_summary": "P0 x3, P1 x7, P2 x6 — 全數 accepted(main agent 機械查核:D1 _taipei_minute_key +8%24 屬實、D5 bucketEnd 1440→24:00 屬實、D3 stale 僅 09:00-13:25 watch 窗屬實;D9 以 FinMind 實打真樣本證實 trading_session 維度存在)",
+  "dispositions": [
+    {"id": "D1", "severity": "P0", "resolution": "accepted — v2 §1.1 改為完整 UTC datetime 轉換(Date+Time 視為 UTC,+8h datetime 運算得台北 date/time),廢除 key==2400 觸發;Date 欄語意實測列入 Phase 3 紅測試 + Phase 6 真資料核對"},
+    {"id": "D2", "severity": "P0", "resolution": "accepted — v2 §1.2/§1.4:allday 取數窗前移一日(前一日 UTC16 起),parse 後以台北日期 filter 到 [start,end];bars.py 兩段式鍵維持台北日曆日,不變式重新論證"},
+    {"id": "D3", "severity": "P0", "resolution": "accepted — v2 §6.1:價差 gate = 現貨時段(週一至五 09:00-13:33)且 !stale 且 p 非 null;vitest 補夜間假價差案例"},
+    {"id": "D4", "severity": "P1", "resolution": "accepted — v2 §1.4 三層簽名寫齊(route closure / futures_engine.bars_range / source keyword-only session);檔案清單補 futures_engine.py + tests/helpers/fake_sources.py"},
+    {"id": "D5", "severity": "P1", "resolution": "accepted — v2 §4.3:aggregateBars 桶 minute>=1440 正規化為次日 00:00 並可與次日序列合併;candle.ts 入檔案清單;vitest 23:56-00:03 案例"},
+    {"id": "D6", "severity": "P1", "resolution": "accepted — v2 §1.3/§5:aggregateBars 累加 uv/dv;歸一分母 max(uv+dv);ChartStatic 新 prop 由父層 useMemo 穩定 identity;candle.ts 幾何入清單"},
+    {"id": "D7", "severity": "P1", "resolution": "accepted — v2 §4.2:星期維度規則(Mon-Fri 日盤+夜盤前半;Tue-Sat 凌晨後半;Sun 全 false);SC-12 測點改 (星期,時刻) 對,brainstorm 同步 amendment"},
+    {"id": "D8", "severity": "P1", "resolution": "accepted(取捨型)— v2 §1.4 明文:market bars 路徑本無三態,本輪沿用 meta.source=unavailable 單一表述,不引入三態;brainstorm edge case 3 amendment 記已知取捨"},
+    {"id": "D9", "severity": "P1", "resolution": "accepted — 已實打 FinMind 真樣本(2026-08-04,6972 rows):trading_session ∈ {position, after_market},OI 在 position 列;contract_date ∈ {202608, 202608W1/W2, 202608F1/F2, 202609…} → 精確等值濾月契約成立。v2 §2 寫入真樣本 + position 過濾;另發現全域 max OI 會選深度價外(call max @55000),v2 改為回傳 per-strike 陣列、前端以現價 ±10% 帶內取 max"},
+    {"id": "D10", "severity": "P1", "resolution": "accepted — v2 §4.1:allday days=30 降為 days=5;payload 預算寫明(≈4×1140 bar ≈ 400KB);與大盤 tab 雙份 cache 取捨記錄;Phase 6 量測項"},
+    {"id": "D11", "severity": "P2", "resolution": "accepted — v2 §3.1:軸標籤用段起點 index 映射(15:00 → 夜盤段 index 300),vitest 斷言全部 ticks 有有效 x"},
+    {"id": "D12", "severity": "P2", "resolution": "accepted — v2 §3.2:live 點 key = 當前分鐘+1(終點標記);vitest 固定時鐘案例"},
+    {"id": "D13", "severity": "P2", "resolution": "accepted — brainstorm SC-3 量法 amendment(補 &session=allday 與預期根數);v2 §1.2 寫 DK 口徑兩種結果的分歧處理"},
+    {"id": "D14", "severity": "P2", "resolution": "accepted — v2 §5.1 刪「前 3 碼」保留完整字串相等;§7 close body 欄位來源寫齊並與 CapitalPositionsList 共用 helper"},
+    {"id": "D15", "severity": "P2", "resolution": "accepted — v2 §2:回退改單次 range 查詢(start=today-10)取 max(date);in-memory-only 的理由與 402 負向快取明文化"},
+    {"id": "D16", "severity": "P2", "resolution": "accepted — v2 §3.1:sliceCurrentAllday 改錨定日推導(最後一根 bar 反推交易錨定日,slice t >= anchor 08:46),不依賴特定 bar 存在;vitest 缺 08:46 案例"}
+  ]
+}
