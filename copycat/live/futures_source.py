@@ -113,10 +113,10 @@ class FuturesQuoteSource(TC4QuoteSource):
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
             return parse_1k_bars(
-                self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE),
+                self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows,
                 FUTURES_MINUTE_DOMAIN,
             )
-        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
+        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
 

@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 import zmq
 
@@ -41,6 +41,18 @@ BARS_POLL_DEADLINE = 10.0
 #: 歷史收割的退避輪詢起點;逐次加倍到 poll_wait 封頂(隨 _collect_history 自
 #: stock_source 上提 — index-board R-3)
 _POLL_BACKOFF_START = 0.15
+
+class HistoryResult(NamedTuple):
+    """`_collect_history` 的回傳:rows + 「是否等滿 deadline 仍未備妥」。
+
+    TC4 的 GETHISDATA 空頁無法區分「未備妥」與「無資料」(檔頭),所以 `rows == []`
+    這一件事本身沒有原因;`timed_out` 是**唯一**能從協定側正面取得的區分訊號
+    —— 逾時路徑之外的空,至少代表首頁備妥、收割跑完了。
+    """
+
+    rows: list[dict]
+    timed_out: bool
+
 
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
@@ -341,7 +353,7 @@ class TC4QuoteSource:
         start: str,
         end: str,
         deadline_secs: float | None = None,
-    ) -> list[dict]:
+    ) -> HistoryResult:
         """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。
 
         `deadline_secs` = 首頁備妥的等待預算。預設沿用舊值(`poll_wait*30` ≈ 30s),
@@ -353,6 +365,9 @@ class TC4QuoteSource:
         舊制固定睡滿 1.0s,讓所有冷載入無條件多等約 0.9 秒。
 
         `poll_wait == 0` 是測試組態,語意 = 不等待 → 探測一次就回,不 busy loop。
+
+        回 `HistoryResult(rows, timed_out)`:逾時路徑的空與「首頁備妥但 0 rows」是
+        不同的事,呼叫端要能分(bars 三態 status)。
         """
         self._sub_history(sym, start, end, data_type)
         budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
@@ -367,7 +382,7 @@ class TC4QuoteSource:
                 logger.info(
                     "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
                 )
-                return []
+                return HistoryResult([], True)
             # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
             time.sleep(min(wait, remaining))
             wait = min(wait * 2, self._poll_wait)
@@ -378,7 +393,7 @@ class TC4QuoteSource:
         rows: list[dict] = []
         for page in iter_qry_pages(_page):
             rows.extend(page)
-        return rows
+        return HistoryResult(rows, False)
 
     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
         # 單發:首頁空即回空(未備妥的重試由 fetch_backfill 的 round 制統籌,不逐檔等)
