@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "date": "2026-08-06 21:3x(夜盤)",
+  "env": "localhost:5173 vite dev(serve 本分支)→ proxy 8721 prod server(未重啟;前後端版本落差膠囊亮 = 預期,後端 587bcd7 舊於分支)",
+  "browser": "claude-in-chrome(chrome-devtools MCP 因 profile 佔用不可用,fallback)",
+  "sc_results": {
+    "SC-1": {"verdict": "PASS", "evidence": "evidence/SC-1_tabs.png", "note": "四顆 tab 依序正確,無相關係數;DOM 交叉確認 tablist"},
+    "SC-2": {"verdict": "PASS", "evidence": "evidence/SC-2_dual-pane.png", "note": "並排雙圖;右圖預設櫃買(新 key)、左圖沿舊存檔加權;互動驗證左點日K右不動,DOM aria-pressed 佐證;驗後已還原"},
+    "SC-3": {"verdict": "PASS(窗口降級)", "evidence": "evidence/SC-3_basis.png", "note": "元素存在+「價差 -」fallback 正確(夜盤加權 p=null 屬後端資料現實);色標方向為盤中限定 → 降級策略 = vitest 色標三態 fixture 案例(IndexPage.test (c3),Phase 5 已綠);日盤 user 過目時可順眼補看"},
+    "SC-4": {"verdict": "PASS", "evidence": "evidence/SC-4_corr-collapsed.png + SC-4_corr-expanded.png", "note": "預設收合(aria-expanded=false)、展開見六腿江波圖真實資料、收合恢復;「展開」提示字位置貼標題右側(design 未指定位置,功能無誤,留 user 過目)"}
+  },
+  "console": {
+    "new_errors_from_this_round": 0,
+    "pre_existing": "Encountered two children with the same key '0' — MarketChart.tsx:69 y 刻度 key={t.priceMilli},空資料三刻度全 0;MarketChart 對 master 零 diff 且 master 夜盤同樣觸發(index 恆掛載)→ 既有 bug,記 docs/next-time.md,鐵則 B 不順手修"
+  },
+  "regression_spot_check": "選擇權 / 期貨 tab 切換正常(subagent 操作路徑經過);corr 展開資料流(六腿江波圖)在新掛載點正常 = 原 corr tab 功能遷移後無損"
+}

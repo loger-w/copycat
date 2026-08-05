@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "date": "2026-08-06",
+  "source": ".claude/harness.json verify + CLAUDE.md §1(validate + frontend 三件)",
+  "steps": [
+    {"step": "pytest", "command": ".venv\\Scripts\\python -m pytest -q", "exit_code": 0, "result": "1731 passed, 1 warning in 82.44s", "evidence": "evidence/phase5_pytest.txt"},
+    {"step": "ruff", "command": ".venv\\Scripts\\python -m ruff check copycat tests", "exit_code": 0, "result": "All checks passed!"},
+    {"step": "pyright", "command": ".venv\\Scripts\\python -m pyright", "exit_code": 0, "result": "0 errors, 0 warnings, 0 informations", "evidence": "evidence/phase5_pyright.txt"},
+    {"step": "validate", "command": ".venv\\Scripts\\python -m copycat validate", "exit_code": 0, "result": "42/42 PASS"},
+    {"step": "vitest", "command": "npx vitest run (frontend/)", "exit_code": 0, "result": "1157 passed (80 files)", "evidence": "evidence/phase5_vitest.txt"},
+    {"step": "tsc", "command": "npx tsc -b (frontend/)", "exit_code": 0, "result": "0 errors"},
+    {"step": "eslint", "command": "npx eslint src (frontend/)", "exit_code": 0, "result": "0 issues"}
+  ],
+  "all_green": true,
+  "note": "T4 完成當下 classifier 中斷未能 main 重跑的全套,本輪補驗完成(1157 前端全綠)"
+}

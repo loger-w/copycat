@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "reviewed": "design.md v1",
+  "verdict": "0 P0 / 2 P1 / 6 P2",
+  "dispositions": {
+    "R1": {"severity": "P1", "summary": "既有測試破壞面低估 + 無 pane 選取錨點", "disposition": "accepted — v2 加 paneId data-testid + 測試歸屬表 + App.test 改動明細"},
+    "R2": {"severity": "P1", "summary": "lazy 遮蔽使 SC-4 四案例可 vacuous pass", "disposition": "accepted — v2 閘門測試 vi.mock 同步 stub、lazy 真身獨立案例(六腿走勢錨點)"},
+    "R3": {"severity": "P2", "summary": "fmt 有 BasisRow consumer、FuturesProductState 歸屬未定", "disposition": "accepted — fmt 兩檔各留一份(既有慣例);型別遷 MarketPane + IndexPage re-export"},
+    "R4": {"severity": "P2", "summary": "corr open 持久化後 App 啟動即建 WS(停在他 tab 也建)", "disposition": "accepted-as-risk — KR-4,opt-in 語意可接受,不加 active prop(會引入切 tab 斷線/重連)"},
+    "R5": {"severity": "P2", "summary": "readStorage 不存在 + fallback 文字與 CorrPanel 空狀態撞名", "disposition": "accepted — 直接 getItem + fallback 改「相關係數載入中…」"},
+    "R6": {"severity": "P2", "summary": "mode initializer 第二個 TWSE fallback 漏改 → 複製 P1-5 bug 到右 pane", "disposition": "accepted — 兩處 fallback 同源 defaultKey + 測試案例 (f)"},
+    "R7": {"severity": "P2", "summary": "右 pane 開重疊 = 兩張相同圖 + aria-label 重複", "disposition": "accepted — 重疊鈕僅左 pane(stores.overlay optional),MARKET2_OVERLAY_STORE 取消"},
+    "R8": {"severity": "P2", "summary": "SC-5 白名單字面與新增測試檔矛盾 + CorrPage 過時註解", "disposition": "accepted — 判讀規則明文化;CorrPage 註解單獨 🔵 commit 納白名單例外"}
+  },
+  "exit": "無 P0、P1 全數修入 v2 → 退出條件達成,不觸發限縮加輪(加輪條件 = accepted P0)"
+}

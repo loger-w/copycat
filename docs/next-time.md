@@ -1,13 +1,30 @@
 
+## 2026-08-06(market-overview-r1-tab Phase 6 real-env 沉澱)
+
+- [ ] **既有 bug:React duplicate key(key=0)每 5 秒刷 console — 根因已定位:
+  `MarketChart.tsx:69` y 軸刻度 `key={t.priceMilli}` 在無資料時三刻度全 0**
+  (夜盤加權 p=null 即觸發;master 同樣會刷,非 R1 引入 — 但雙 pane + index 恆掛載後
+  更常駐可見)。〔同日 intraday-volume-profile 題2 也記到此症狀:隔離實驗證明與 VP
+  無關、5s 節奏 = 指數推播 re-render — 兩條同根因,併此一條〕修法一行:key 加索引
+  (`` key={`${t.priceMilli}-${i}`} ``)或空資料時不畫刻度。修時補 lock test(空 series
+  三刻度 key 唯一)。
+- [ ] `MarketPane.tsx` 七個 localStorage 呼叫點裸奔無 try/catch(review SI-2,
+  rejected — design 明文「照抄現邏輯」):storage 被政策鎖時預設頁首 render 即白屏,
+  且全 frontend 零 ErrorBoundary。要修就把 `CorrSection.tsx:18-34` 那對守衛抽
+  `@/lib/storage`(readKey/writeKey)供兩處共用,順帶收斂 App.tsx / useChartToggles
+  的同型 try/catch。
+- [ ] 舊存檔 `copycat-market-key="OTC"` 的使用者升版首載左右兩張都櫃買(review SI-3,
+  rejected — 點一下左圖「加權」即永久自癒):若真嫌,IndexPage 做一次性 seed
+  (MARKET2_KEY_STORE 未設時依左值選互補標的),冪等不引入持續耦合。
+
 ## 2026-08-05(intraday-volume-profile 題2 收尾留尾巴)
 
 - [ ] **VP 畫面待 user 過目**(PR #22 試用指引):個股頁分時圖左緣水平量條 +「量分佈」toggle。
   AI 截圖三張已入 `.claude/feat/intraday-volume-profile/evidence/`。
 - [ ] **外內盤分色 VP 未做**(quintet 拍板選配):`VpCell` 已帶 o/i 資料,渲染層與 toggle 未接線;
   做之前留意鎖停日 side 判定品質(LOW_DECIDED_PCT 議題)。
-- [ ] **既有 console error:React duplicate key(key=0)每 5 秒一則** — Phase 6 隔離實驗證明與
-  VP 無關(關掉 VP 仍續發,5s 節奏疑似櫃買 MIS poll 或某定時清單 render)。開個股頁看
-  console 即重現;找到那個 map 的 key 來源修掉。
+- [x] ~~既有 console error:React duplicate key(key=0)每 5 秒一則 — 找到那個 map 的
+  key 來源修掉~~ **根因已由 market-overview-r1-tab Phase 6 定位,併入 2026-08-06 節首條**
 
 ## 2026-08-05(discord-watchlist 題4 收尾留尾巴)
 
@@ -19,6 +36,7 @@
 - [ ] **讀時遷移 orphan union 理論可推破 30 上限**(design Known Risks):該態下群組操作
   大聲拒絕(`WATCHLIST_UNAVAILABLE`)、自癒 = 前端整份 apply;僅手改檔可達,不加遷移端 cap。
 
+## 2026-08-05(bars-tristate-status 收尾留尾巴)
 
 - [ ] `StockChart.tsx` 的 isPending / emptyNote(timeout/disconnected)/ isError 三個
   佔位框 class 字串幾乎相同(僅文字與色差),可抽 `<ChartNotice tone text sub?>`;

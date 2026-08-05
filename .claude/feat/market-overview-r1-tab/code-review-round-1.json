@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "mode": "medium, 2 lens (state-interaction / spec+test-coverage), opus finders",
+  "diff": "review-diff.txt (a858dec..5edb91d, frontend only, 2055 行)",
+  "findings": {
+    "F1": {"severity": "P1", "lens": "coverage", "summary": "收合→hook cleanup 斷線在測試層零把關(design §7 委派的『既有 hook 測試』不存在:useCorrelation/useRiver.test 從未斷言 unmount close;lazy.test FakeWS.close 空實作)", "quick_check": "grep 證實:useCorrelation.test.ts 僅 :110 wsStatus 案例,無 closed 斷言", "receiving": "accepted(test-gap)", "resolution": "CorrSection.lazy.test.tsx 補收合斷線 lock test(FakeWS.closed + 展開前 instances 空),mutation 抽驗,[lock] tag;design §7 (d) 註解回寫"},
+    "SI-1": {"severity": "P2(行為級,展開)", "lens": "state", "summary": "mount coerce 不回寫 + selectKey 條件寫 → 非法殘值可在 no-op coerce 後復活成合法組合(下次重載跳到使用者沒選過的週期)", "receiving": "accepted(照抄進新檔的既有隱疾,修復低風險)", "resolution": "selectKey 一律 setItem(stores.mode, coerced) + 紅測試(殘值治癒斷言,對現實作真紅)"},
+    "SI-2": {"severity": "P2", "lens": "state", "summary": "MarketPane 裸 localStorage 無 try/catch(白屏風險;CorrSection 有守但 render 順序在後 = 假安全感)", "receiving": "rejected_with_reason — design §2 明文『照抄現邏輯』,既有機率未上升;守衛化屬行為強化非本輪 SC", "resolution": "docs/next-time.md 記候選(抽 @/lib/storage 守衛共用)"},
+    "SI-3": {"severity": "P2", "lens": "state", "summary": "舊存檔=OTC 的使用者升版首載左右兩張都櫃買(右 pane 無 seed)", "receiving": "rejected_with_reason — 單使用者工具,點一下左圖加權即永久自癒;一次性 seed 遷移碼複雜度不值", "resolution": "docs/next-time.md 一行備查"},
+    "F2": {"severity": "P2", "lens": "coverage", "summary": "corr/ 實際新增三檔(lazy.test 拆檔),design §7 R8 白名單寫兩檔未回寫", "receiving": "accepted(文件同步)", "resolution": "design.md §7 amendment:白名單三檔 + 拆檔理由(vi.mock 檔案級 hoist)"},
+    "F3": {"severity": "P2", "lens": "coverage", "summary": "edge case 1(兩 pane 同標的)/ 雙 K 線下 aria-label 與 market-meta testid 重複,a11y 樹無法區分", "receiving": "accepted(最小修,不動白名單內的 MarketChart/CandleChart)", "resolution": "MarketPane section 加 role=group + aria-label 左圖/右圖 + 測試斷言"}
+  },
+  "p2_summary": "6 條中 4 展開(行為級/已裁決),無純風格條目",
+  "exit": "accepted 修完 + 測試綠即出場,不重跑全量"
+}

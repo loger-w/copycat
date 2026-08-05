@@ -1,0 +1,2055 @@
+﻿diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index ebd81cc..7805dee 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -75,9 +75,11 @@ afterEach(() => {
+ });
+ 
+ describe("App(index-board T9)", () => {
+-  it("無 localStorage 時預設停在「大盤」(index-board SC-1)", () => {
++  it("無 localStorage 時預設停在「台股綜合」(index-board SC-1)", () => {
+     renderApp();
+-    expect(screen.getByRole("tab", { name: "大盤" }).getAttribute("aria-selected")).toBe("true");
++    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
++      "true",
++    );
+   });
+ 
+   it("舊 localStorage 值 txo 仍還原到「選擇權」(backward compat)", () => {
+@@ -86,9 +88,9 @@ describe("App(index-board T9)", () => {
+     expect(screen.getByRole("tab", { name: "選擇權" }).getAttribute("aria-selected")).toBe("true");
+   });
+ 
+-  it("nav 有「大盤」tab 且 IndexBar 常駐(切到選擇權 tab 仍可見)", async () => {
++  it("nav 有「台股綜合」tab 且 IndexBar 常駐(切到選擇權 tab 仍可見)", async () => {
+     renderApp();
+-    expect(screen.getByRole("tab", { name: "大盤" })).toBeTruthy();
++    expect(screen.getByRole("tab", { name: "台股綜合" })).toBeTruthy();
+     fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
+     await waitFor(() => expect(screen.getByText(/加權/).textContent).toContain("42039.92"));
+     expect(screen.getByText(/櫃買/).textContent).toContain("359.8");
+@@ -101,18 +103,42 @@ describe("App(index-board T9)", () => {
+   it("localStorage 記住 index tab,重載復原(review B8)", async () => {
+     window.localStorage.setItem("copycat-tab", "index");
+     renderApp();
+-    expect(screen.getByRole("tab", { name: "大盤" }).getAttribute("aria-selected")).toBe("true");
++    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
++      "true",
++    );
+     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
+   });
+ 
+-  it("切到大盤 tab 顯示 IndexPage(標的列 + 週期列)", async () => {
++  it("切到台股綜合 tab 顯示 IndexPage(標的列 + 週期列)", async () => {
+     renderApp();
+-    fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
+-    // 版面自 index-board SC-2/3 起由「兩張並排卡」改為「標的切換 + 單一主圖」
+-    await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
+-    expect(screen.getByRole("button", { name: "櫃買" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "台指期" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
++    fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
++    // 版面自 index-board SC-2/3 起由「兩張並排卡」改為「標的切換 + 單一主圖」;
++    // 台股綜合 R1 起是**雙 pane** —— 兩張圖的按鈕文字完全相同,裸 getByRole 會撞
++    // ambiguous,收斂到左 pane 查(斷言意圖不變:大盤頁有標的列 + 週期列)。
++    await waitFor(() => expect(screen.getByTestId("market-pane-left")).toBeTruthy());
++    const left = within(screen.getByTestId("market-pane-left"));
++    expect(left.getByText("加權指數")).toBeTruthy();
++    expect(left.getByRole("button", { name: "櫃買" })).toBeTruthy();
++    expect(left.getByRole("button", { name: "台指期" })).toBeTruthy();
++    expect(left.getByRole("button", { name: "日K" })).toBeTruthy();
++  });
++});
++
++// 🟢 台股綜合 R1(SC-1):corr tab 併入台股綜合頁 → nav 少一顆,
++// localStorage 值域縮減一項(舊值 "corr" 刻意 fallback 到 index)。
++describe("App 台股綜合 tab 整併(SC-1)", () => {
++  it("舊 localStorage 值 corr 落到「台股綜合」(值域縮減的刻意遷移)", () => {
++    window.localStorage.setItem("copycat-tab", "corr");
++    renderApp();
++    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
++      "true",
++    );
++  });
++
++  it("nav 不再有「相關係數」tab", () => {
++    renderApp();
++    const nav = within(screen.getByRole("tablist", { name: "主要分頁" }));
++    expect(nav.queryByRole("tab", { name: "相關係數" })).toBeNull();
+   });
+ });
+ 
+@@ -131,15 +157,15 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
+ });
+ 
+ describe("App(期貨 tab T15)", () => {
+-  it("nav tab 順序 = 大盤 / 個股(期) / 選擇權 / 期貨 / 相關係數", () => {
++  it("nav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨", () => {
+     renderApp();
+     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
+-    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變,只有順序與標籤依
+-    // index-board SC-1 改動(期貨 / 相關係數保留,只是排序在後)。
++    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;台股綜合 R1(SC-1)起
++    // 「相關係數」併入首顆分頁內的收合區塊,不再是獨立 tab。
+     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
+       .getAllByRole("tab")
+       .map((el) => el.textContent);
+-    expect(labels).toEqual(["大盤", "個股(期)", "選擇權", "期貨", "相關係數"]);
++    expect(labels).toEqual(["台股綜合", "個股(期)", "選擇權", "期貨"]);
+   });
+ 
+   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
+@@ -189,7 +215,7 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
+     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+     await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+     expectRail();
+-    fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
++    fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
+     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
+     expectRail();
+   });
+@@ -199,11 +225,11 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
+     expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
+   });
+ 
+-  it("nav 有 5 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
++  it("nav 有 4 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
+     renderApp();
+-    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 4 → 5 是 realtime-correlation SC-7
+-    // 新增「相關係數」分頁的預期行為改變,右欄三顆不受影響。
+-    expect(navTabs().length).toBe(5);
++    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 5 → 4 是台股綜合 R1(SC-1)
++    // 把「相關係數」分頁併入台股綜合頁的預期行為改變,右欄三顆不受影響。
++    expect(navTabs().length).toBe(4);
+     expect(railTabs().length).toBe(3);
+   });
+ });
+@@ -339,7 +365,7 @@ describe("App 版本落差膠囊落點(SC-4)", () => {
+ });
+ 
+ // 🟢 stock-signals T11(SC-10):toast 掛在 App 層,與當前 tab 無關 ——
+-// 訊號涵蓋整個自選池,人在看大盤 / 期貨時個股鎖漲停一樣要跳出來。
++// 訊號涵蓋整個自選池,人在看台股綜合 / 期貨時個股鎖漲停一樣要跳出來。
+ describe("App 訊號 toast(SC-10)", () => {
+   function sig(id: string, code: string): SignalMsg {
+     return {
+@@ -357,7 +383,7 @@ describe("App 訊號 toast(SC-10)", () => {
+     };
+   }
+ 
+-  it("預設 tab(大盤)收到訊號 → toast 出現", async () => {
++  it("預設 tab(台股綜合)收到訊號 → toast 出現", async () => {
+     renderApp();
+     act(() => emitSignal(sig("a", "2327")));
+     const stack = await screen.findByTestId("toast-stack");
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 91dd127..3fe91e9 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -29,9 +29,8 @@ import { cn } from "@/lib/utils";
+ const StockPage = lazy(() => import("@/components/stock/StockPage"));
+ const FuturesPage = lazy(() => import("@/components/futures/FuturesPage"));
+ const IndexPage = lazy(() => import("@/components/index/IndexPage"));
+-const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
+ 
+-type Tab = "txo" | "stock" | "futures" | "index" | "corr";
++type Tab = "txo" | "stock" | "futures" | "index";
+ 
+ const FUT_PRODUCTS = [
+   ["TXF", "大台"],
+@@ -40,13 +39,13 @@ const FUT_PRODUCTS = [
+ ] as const;
+ export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
+ 
+-/** localStorage 值域**不變**(五個舊值全數仍還原到對應 tab);只有「無值」時的 fallback
+- *  由 `txo` 改 `index` —— 大盤自 index-board SC-1 起排第一顆。 */
++/** localStorage 值域**縮減一項**:`corr` 自台股綜合 R1(SC-1)起移出合法清單 ——
++ *  相關係數併入台股綜合頁的收合區塊,舊值因此自然 fallback 到 `index`(刻意遷移,
++ *  不寫搬移碼)。其餘舊值仍各自還原到對應 tab;「無值」時的 fallback 同樣是
++ *  `index` —— 該頁自 index-board SC-1 起排第一顆。 */
+ function initialTab(): Tab {
+   const saved = window.localStorage.getItem(TAB_KEY);
+-  return saved === "stock" || saved === "futures" || saved === "txo" || saved === "corr"
+-    ? saved
+-    : "index";
++  return saved === "stock" || saved === "futures" || saved === "txo" ? saved : "index";
+ }
+ 
+ function initialProduct(): FutProduct {
+@@ -99,7 +98,6 @@ export default function App() {
+     txo: true,
+     stock: tab === "stock",
+     futures: tab === "futures",
+-    corr: tab === "corr",
+   });
+   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
+   const [stockCode, setStockCode] = useState<string | null>(initialStockCode);
+@@ -174,11 +172,10 @@ export default function App() {
+       <nav className="flex items-baseline gap-1 border-b border-line" role="tablist" aria-label="主要分頁">
+         {(
+           [
+-            ["index", "大盤"],
++            ["index", "台股綜合"],
+             ["stock", "個股(期)"],
+             ["txo", "選擇權"],
+             ["futures", "期貨"],
+-            ["corr", "相關係數"],
+           ] as [Tab, string][]
+         ).map(([id, label]) => (
+           <button
+@@ -247,15 +244,6 @@ export default function App() {
+               </Suspense>
+             </div>
+           ) : null}
+-          {visited.corr ? (
+-            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
+-              <Suspense
+-                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+-              >
+-                <CorrPage />
+-              </Suspense>
+-            </div>
+-          ) : null}
+         </div>
+         <RightRail ctx={railCtx} />
+       </div>
+diff --git a/frontend/src/components/corr/CorrPage.tsx b/frontend/src/components/corr/CorrPage.tsx
+index fe4be06..0efcce7 100644
+--- a/frontend/src/components/corr/CorrPage.tsx
++++ b/frontend/src/components/corr/CorrPage.tsx
+@@ -3,7 +3,8 @@ import { RiverPanel } from "@/components/corr/RiverPanel";
+ import { useCorrelation } from "@/hooks/useCorrelation";
+ import { useRiver } from "@/hooks/useRiver";
+ 
+-/** 相關係數分頁:兩條 WS 都在此建立 —— 沒開過這個 tab 就不會有每秒推播的流量。
++/** 台股綜合頁 CorrSection 收合區塊的 lazy body:兩條 WS 都在此建立 —— 收合狀態下
++ * 本元件不 mount,就不會有每秒推播的流量(gate 在 CorrSection 的展開狀態)。
+  *
+  * 版面:上半 六腿江波圖(方向與時點)/ 下半 相關係數表(連動強度)。兩者互補 ——
+  * 係數是數字,看不出哪條腿先動;圖看得出時點,看不出強度。
+diff --git a/frontend/src/components/corr/CorrSection.lazy.test.tsx b/frontend/src/components/corr/CorrSection.lazy.test.tsx
+new file mode 100644
+index 0000000..1a4da3c
+--- /dev/null
++++ b/frontend/src/components/corr/CorrSection.lazy.test.tsx
+@@ -0,0 +1,58 @@
++/** @vitest-environment jsdom */
++/** (b) lazy 真身:**不** mock CorrPage —— 證明 `CorrSection.test.tsx` 的 stub 沒把整條
++ *  lazy 路徑架空(vi.mock 是檔案級 + hoisted,故獨立成檔)。
++ *
++ *  錨點取 RiverPanel 無資料時的「等待六腿資料…」:它只有真的 CorrPage mount 才會出現,
++ *  與 Suspense fallback 的「相關係數載入中…」逐字可區分(CorrPanel 空狀態是「載入中…」,
++ *  刻意不拿它當錨點)。 */
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { CorrSection } from "@/components/corr/CorrSection";
++
++class FakeWS {
++  static instances: FakeWS[] = [];
++  onopen: (() => void) | null = null;
++  onmessage: ((ev: { data: string }) => void) | null = null;
++  onclose: (() => void) | null = null;
++  onerror: (() => void) | null = null;
++
++  constructor(public url: string) {
++    FakeWS.instances.push(this);
++  }
++
++  close(): void {}
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  FakeWS.instances = [];
++  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
++  // 兩支 hook 的初載 REST 都回 404 → state 維持 null(引擎未就緒的正常降級路徑)
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("CorrSection(lazy 真身)", () => {
++  it("(b) 展開後真的 mount CorrPage,不是停在 Suspense fallback", async () => {
++    render(<CorrSection />);
++    expect(screen.queryByText("等待六腿資料…")).toBeNull();
++
++    fireEvent.click(screen.getByRole("button", { name: /相關係數/ }));
++
++    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
++    expect(screen.queryByText("相關係數載入中…")).toBeNull();
++    // 展開才建線:corr + river 各一條
++    expect(FakeWS.instances.map((w) => w.url.replace(/^ws:\/\/[^/]+/, ""))).toEqual([
++      "/ws/corr",
++      "/ws/river",
++    ]);
++  });
++});
+diff --git a/frontend/src/components/corr/CorrSection.test.tsx b/frontend/src/components/corr/CorrSection.test.tsx
+new file mode 100644
+index 0000000..e5a94a3
+--- /dev/null
++++ b/frontend/src/components/corr/CorrSection.test.tsx
+@@ -0,0 +1,96 @@
++/** @vitest-environment jsdom */
++/** 閘門行為(展開/收合/持久化)—— CorrPage 換成同步 stub,測的是殼本身。
++ *
++ *  **為什麼要 stub 計數而不是 query DOM 就好**:lazy + Suspense 的失敗樣態是「永遠停在
++ *  fallback」,而 `queryByTestId(...) === null` 對「沒 render」與「還在 suspend」是同一個
++ *  答案 —— 斷言會 vacuously pass。故 (c)(d) 一律先 `findByTestId` 等 stub 真的 mount,
++ *  收合則斷言 unmount **計數 +1**(不是查不到)。
++ *  lazy 真身(確認 mock 沒把整條路徑架空)另在 `CorrSection.lazy.test.tsx`。 */
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { CorrSection } from "@/components/corr/CorrSection";
++import { CORR_OPEN_KEY } from "@/lib/constants";
++
++const counts = vi.hoisted(() => ({ mount: 0, unmount: 0 }));
++
++// factory 回 `{ default: Stub }` —— CorrPage 是 default export,漏了 lazy 解析直接炸。
++// react 走 factory 內動態 import:vi.mock 被提升到 import 之上,直接引用檔頂的 binding
++// 會在初始化前存取。
++vi.mock("@/components/corr/CorrPage", async () => {
++  const React = await import("react");
++  function Stub() {
++    React.useEffect(() => {
++      counts.mount += 1;
++      return () => {
++        counts.unmount += 1;
++      };
++    }, []);
++    return React.createElement("div", { "data-testid": "corr-stub" });
++  }
++  return { default: Stub };
++});
++
++const wsSpy = vi.fn();
++
++beforeEach(() => {
++  window.localStorage.clear();
++  counts.mount = 0;
++  counts.unmount = 0;
++  wsSpy.mockClear();
++  vi.stubGlobal("WebSocket", wsSpy);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function header(): HTMLElement {
++  return screen.getByRole("button", { name: /相關係數/ });
++}
++
++describe("CorrSection", () => {
++  it("(a) 預設收合:CorrPage 零 mount、零 WebSocket 建構", async () => {
++    render(<CorrSection />);
++    await act(async () => {});
++
++    expect(header().getAttribute("aria-expanded")).toBe("false");
++    expect(header().textContent).toContain("展開");
++    expect(counts.mount).toBe(0);
++    expect(wsSpy.mock.calls.length).toBe(0);
++    expect(screen.queryByTestId("corr-stub")).toBeNull();
++  });
++
++  it("(c) 展開寫入 localStorage,重新 mount 仍展開", async () => {
++    render(<CorrSection />);
++    fireEvent.click(header());
++
++    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
++    expect(counts.mount).toBe(1);
++    expect(window.localStorage.getItem(CORR_OPEN_KEY)).toBe("1");
++    expect(header().getAttribute("aria-expanded")).toBe("true");
++    expect(header().textContent).toContain("收合");
++
++    cleanup();
++    render(<CorrSection />);
++
++    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
++    expect(header().getAttribute("aria-expanded")).toBe("true");
++  });
++
++  it("(d) 收合把 CorrPage unmount(hook cleanup 才會斷線)", async () => {
++    render(<CorrSection />);
++    fireEvent.click(header());
++    await screen.findByTestId("corr-stub");
++    expect(counts.unmount).toBe(0);
++
++    fireEvent.click(header());
++    await act(async () => {});
++
++    expect(counts.unmount).toBe(1);
++    expect(screen.queryByTestId("corr-stub")).toBeNull();
++    expect(window.localStorage.getItem(CORR_OPEN_KEY)).toBe("0");
++    expect(header().getAttribute("aria-expanded")).toBe("false");
++  });
++});
+diff --git a/frontend/src/components/corr/CorrSection.tsx b/frontend/src/components/corr/CorrSection.tsx
+new file mode 100644
+index 0000000..b21f567
+--- /dev/null
++++ b/frontend/src/components/corr/CorrSection.tsx
+@@ -0,0 +1,60 @@
++/** 台股綜合頁尾的相關係數收合區塊(SC-4)。
++ *
++ *  **收合 = unmount,不是 `hidden`**:corr / river 兩條 WS 活在 `CorrPage` 內,不 render
++ *  就沒有 hook、沒有連線 —— 這個區塊在預設頁常駐,若用專案慣例的 `hidden` 保 DOM,
++ *  等於所有人開站就吃兩條每秒推播。代價是重展開有 lazy 載入 + WS 重連的短暫空窗
++ *  (design Known Risks KR-2,判定可接受:corr 是即時推播資料,重建即恢復)。
++ *
++ *  lazy chunk 邊界不變 —— 原本在 App 層的 `lazy(() => import("./CorrPage"))` 只是移到這裡。 */
++import { lazy, Suspense, useState } from "react";
++
++import { CORR_OPEN_KEY } from "@/lib/constants";
++
++const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
++
++export function CorrSection() {
++  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
++  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(同 useChartToggles 慣例)。
++  const [open, setOpen] = useState<boolean>(() => {
++    try {
++      return window.localStorage.getItem(CORR_OPEN_KEY) === "1";
++    } catch {
++      return false;
++    }
++  });
++
++  function toggle(): void {
++    const next = !open;
++    setOpen(next);
++    try {
++      window.localStorage.setItem(CORR_OPEN_KEY, next ? "1" : "0");
++    } catch {
++      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
++    }
++  }
++
++  return (
++    <section className="rounded-md border border-line bg-surface">
++      <button
++        type="button"
++        aria-expanded={open}
++        onClick={toggle}
++        className="flex w-full items-center gap-2 px-4 py-2 text-left"
++      >
++        <span className="text-sm font-bold text-ink">相關係數</span>
++        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
++      </button>
++      {open ? (
++        <div className="px-4 pb-4">
++          {/* fallback 文字刻意不用「載入中…」(CorrPanel 空狀態就是那句)—— 測試要能
++              逐字區分「仍 suspend」與「CorrPage 已 mount」,同字串會讓斷言失去鑑別力。 */}
++          <Suspense
++            fallback={<p className="py-6 text-center text-sm text-ink-muted">相關係數載入中…</p>}
++          >
++            <CorrPage />
++          </Suspense>
++        </div>
++      ) : null}
++    </section>
++  );
++}
+diff --git a/frontend/src/components/index/IndexPage.test.tsx b/frontend/src/components/index/IndexPage.test.tsx
+index a24f63a..84544e0 100644
+--- a/frontend/src/components/index/IndexPage.test.tsx
++++ b/frontend/src/components/index/IndexPage.test.tsx
+@@ -1,10 +1,18 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { IndexPage } from "@/components/index/IndexPage";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
++import {
++  MARKET2_FUT_STORE,
++  MARKET2_KEY_STORE,
++  MARKET2_MODE_STORE,
++  MARKET_FUT_STORE,
++  MARKET_KEY_STORE,
++  MARKET_MODE_STORE,
++} from "@/lib/constants";
+ 
+ function series(over: Partial<IndexSeries> = {}): IndexSeries {
+   return {
+@@ -86,223 +94,122 @@ function renderPage(txf: TxfQuote | null = TXF) {
+   );
+ }
+ 
+-function btn(name: string): HTMLButtonElement {
+-  return screen.getByRole("button", { name }) as HTMLButtonElement;
++/** 兩個 pane 的按鈕文字**完全相同**(加權 / 櫃買 / 日K …)——本檔一律先收斂到 pane
++ *  再查,裸 `screen.getByRole` 必撞 ambiguous。 */
++function pane(id: "left" | "right") {
++  return within(screen.getByTestId(`market-pane-${id}`));
+ }
+ 
+-describe("IndexPage 標的列(SC-2)", () => {
+-  it("三顆標的鈕;預設選加權,現值/漲跌/高低昨收顯示於標題列", () => {
++describe("IndexPage 雙 pane 容器(SC-2)", () => {
++  it("(a) 兩個 pane 同屏:左加權、右櫃買", () => {
+     renderPage();
+-    expect(btn("加權").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("櫃買")).toBeTruthy();
+-    expect(btn("台指期")).toBeTruthy();
+-    expect(screen.getByText("加權指數")).toBeTruthy();
+-    expect(screen.getByText("42039.92")).toBeTruthy();
+-    expect(screen.getByText(/-1594\.27/)).toBeTruthy();
+-    expect(screen.getByText(/高 43221\.93/)).toBeTruthy();
+-    expect(screen.getByText(/昨收 43634\.19/)).toBeTruthy();
++    expect(pane("left").getByText("加權指數")).toBeTruthy();
++    expect(pane("right").getByText("櫃買指數")).toBeTruthy();
++    expect(pane("left").queryByText("櫃買指數")).toBeNull();
++    expect(pane("right").queryByText("加權指數")).toBeNull();
+   });
+ 
+-  it("Quote 漲跌整串:跌用負號(characterization)", () => {
++  it("(b) 兩 pane 週期彼此獨立:左切日K,右仍停在分時", () => {
+     renderPage();
+-    expect(screen.getByText("-1594.27 (-3.65%)")).toBeTruthy();
+-  });
+-
+-  it("Quote 漲跌整串:漲帶 + 前綴(characterization;台指期)", () => {
+-    renderPage();
+-    fireEvent.click(btn("台指期"));
+-    expect(screen.getByText("+142.00 (+0.34%)")).toBeTruthy();
+-  });
+-
+-  it("點台指期才出現大台/小台/微台三選一;選微台後標題換料", () => {
+-    renderPage();
+-    expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
+-    fireEvent.click(btn("台指期"));
+-    expect(btn("大台").getAttribute("aria-pressed")).toBe("true");
+-    fireEvent.click(btn("微台"));
+-    expect(screen.getByText("台指期(微台)")).toBeTruthy();
+-    expect(btn("微台").getAttribute("aria-pressed")).toBe("true");
+-  });
+-
+-  it("期指商品用獨立 localStorage key,不碰期貨 tab 的 copycat-fut-product(W-13)", () => {
+-    renderPage();
+-    fireEvent.click(btn("台指期"));
+-    fireEvent.click(btn("小台"));
+-    expect(window.localStorage.getItem("copycat-market-key")).toBe("MXF");
+-    expect(window.localStorage.getItem("copycat-market-fut")).toBe("MXF");
+-    expect(window.localStorage.getItem("copycat-fut-product")).toBeNull();
+-  });
+-
+-  it("台指期基差列(相對加權)+ 更新時刻", () => {
+-    renderPage();
+-    const row = screen.getByTestId("basis-row");
+-    expect(row.textContent).toContain("42142");
+-    expect(row.textContent).toContain("+102.08");
+-    expect(row.textContent).toContain("10:16");
+-  });
+-
+-  it("txf null → 價差顯示「-」", () => {
+-    renderPage(null);
+-    expect(screen.getByText(/價差 -/)).toBeTruthy();
+-  });
+-});
+-
+-describe("IndexPage 週期列(SC-3)", () => {
+-  it("十七顆週期鈕,順序 = 分時 / 1-10分 / 30 / 60 / 90 / 日 / 週 / 月", () => {
+-    renderPage();
+-    const labels = [
+-      "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
+-      "30分", "60分", "90分", "日K", "週K", "月K",
+-    ];
+-    const nodes = labels.map((l) => btn(l));
+-    for (let i = 1; i < nodes.length; i += 1) {
+-      // DOM 順序 = 畫面由左至右
+-      expect(nodes[i - 1]!.compareDocumentPosition(nodes[i]!) & Node.DOCUMENT_POSITION_FOLLOWING)
+-        .toBeTruthy();
+-    }
+-  });
+-
+-  it("預設分時;切日K 後打 /api/market/bars 並持久化", async () => {
+-    renderPage();
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+-    fireEvent.click(btn("日K"));
+-    expect(window.localStorage.getItem("copycat-market-tf")).toBe("day");
+-    await waitFor(() =>
+-      expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=D"))).toBe(true),
++    fireEvent.click(pane("left").getByRole("button", { name: "日K" }));
++    expect(pane("left").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
++      "true",
+     );
+-  });
+-
+-  it("分 K 走 tf=1 共用原料(30/60/90 由前端聚合)", async () => {
+-    renderPage();
+-    fireEvent.click(btn("90分"));
+-    await waitFor(() =>
+-      expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=1&days=30"))).toBe(true),
++    expect(pane("right").getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe(
++      "true",
++    );
++    expect(pane("right").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
++      "false",
+     );
+   });
+-});
+ 
+-describe("IndexPage 櫃買降級(SC-6)", () => {
+-  it("日/週/月 K 鈕 disabled,分 K 仍可點", () => {
++  it("(b2) 兩 pane 標的彼此獨立:右切加權,左仍是加權且右不影響左標題", () => {
+     renderPage();
+-    fireEvent.click(btn("櫃買"));
+-    for (const label of ["日K", "週K", "月K"]) {
+-      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
+-      expect(btn(label).disabled).toBe(true);
+-    }
+-    expect(btn("30分").disabled).toBe(false);
++    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
++    expect(pane("right").getByText("加權指數")).toBeTruthy();
++    expect(pane("left").getByText("加權指數")).toBeTruthy();
++    expect(pane("left").getByRole("button", { name: "加權" }).getAttribute("aria-pressed")).toBe(
++      "true",
++    );
+   });
+ 
+-  it("從加權(日K)切到櫃買 → 自動落回分時,不停在 disabled 模式", () => {
++  it("(d) 右 pane 寫 market2 三支 key,左 pane 的舊 key 不動", async () => {
+     renderPage();
+-    fireEvent.click(btn("日K"));
+-    fireEvent.click(btn("櫃買"));
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
++    fireEvent.click(pane("right").getByRole("button", { name: "日K" }));
++    await waitFor(() => expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("day"));
++    expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("TWSE");
++    expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBeNull();
++    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBeNull();
+   });
+ 
+-  it("後端回 refusal → 圖區顯示明確理由,不畫假圖", async () => {
+-    stubFetch({
+-      key: "OTC",
+-      tf: "D",
+-      bars: [],
+-      meta: {
+-        source: "none",
+-        coverage_from: null,
+-        coverage_to: null,
+-        partial_last: false,
+-        volume: false,
+-        refusal: "NO_HISTORICAL_SOURCE",
+-        synth_since: null,
+-      },
+-    });
++  it("(d2) 左 pane 寫舊 key,market2 三支不動", async () => {
+     renderPage();
+-    fireEvent.click(btn("日K"));
+-    await waitFor(() =>
+-      expect(screen.getByText("達錢 4 未提供櫃買指數,無歷史 K 線資料源")).toBeTruthy(),
+-    );
++    fireEvent.click(pane("left").getByRole("button", { name: "台指期" }));
++    fireEvent.click(pane("left").getByRole("button", { name: "小台" }));
++    await waitFor(() => expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF"));
++    expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
++    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("m1");
++    expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBeNull();
++    expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBeNull();
++    expect(window.localStorage.getItem(MARKET2_FUT_STORE)).toBeNull();
+   });
+ 
+-  it("localStorage 存著非法組合(櫃買 + 日K)重載後落回分時", () => {
+-    window.localStorage.setItem("copycat-market-key", "OTC");
+-    window.localStorage.setItem("copycat-market-tf", "day");
++  it("(d3) 重疊鈕只在左 pane(右 pane 開了會畫出第二張同樣的加權 vs 櫃買)", () => {
+     renderPage();
+-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+-  });
+-
+-  it("期指沒有分時 → 分時鈕 disabled,由加權切過去自動落到 1分", () => {
+-    renderPage();
+-    fireEvent.click(btn("台指期"));
+-    expect(btn("分時").disabled).toBe(true);
+-    expect(btn("1分").getAttribute("aria-pressed")).toBe("true");
++    expect(pane("left").getByRole("button", { name: "重疊" })).toBeTruthy();
++    expect(pane("right").queryByRole("button", { name: "重疊" })).toBeNull();
+   });
+ });
+ 
+-describe("IndexPage 重疊(SC-7 既有能力保留)", () => {
+-  it("分時下有重疊 toggle,開啟後顯示加權 vs 櫃買疊線並持久化", () => {
++describe("IndexPage 基差列(SC-3)", () => {
++  it("(c) 基差列在雙 pane 之外只有一份,含台指期價 / 價差 / 更新時刻", () => {
+     renderPage();
+-    fireEvent.click(btn("重疊"));
+-    expect(screen.getByText("加權 vs 櫃買(相對昨收 %)")).toBeTruthy();
+-    expect(screen.getByLabelText("指數重疊走勢")).toBeTruthy();
+-    expect(window.localStorage.getItem("copycat-index-mode")).toBe("overlay");
++    const rows = screen.getAllByTestId("basis-row");
++    expect(rows.length).toBe(1);
++    const row = rows[0]!;
++    expect(row.textContent).toContain("42142");
++    expect(row.textContent).toContain("+102.08");
++    expect(row.textContent).toContain("10:16");
++    // 不屬於任一 pane
++    expect(pane("left").queryByTestId("basis-row")).toBeNull();
++    expect(pane("right").queryByTestId("basis-row")).toBeNull();
+   });
+ 
+-  it("舊 localStorage 值 overlay 讀時遷移(backward compat)", () => {
+-    window.localStorage.setItem("copycat-index-mode", "overlay");
++  it("(c2) 基差列位於雙 pane 之上", () => {
+     renderPage();
+-    expect(screen.getByText("加權 vs 櫃買(相對昨收 %)")).toBeTruthy();
++    const row = screen.getByTestId("basis-row");
++    const left = screen.getByTestId("market-pane-left");
++    expect(row.compareDocumentPosition(left) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   });
+ 
+-  it("切到 K 線週期後不再顯示重疊圖", () => {
+-    window.localStorage.setItem("copycat-index-mode", "overlay");
++  it("(c3) 正價差用 text-bull,負價差用 text-bear", () => {
+     renderPage();
+-    fireEvent.click(btn("日K"));
+-    expect(screen.queryByLabelText("指數重疊走勢")).toBeNull();
++    const up = screen.getByText(/價差 \+102\.08/);
++    expect(up.className).toContain("text-bull");
++    cleanup();
++    renderPage({ p: 41_000_000, time: "10:16:10" });
++    const down = screen.getByText(/價差 -1039\.92/);
++    expect(down.className).toContain("text-bear");
+   });
+-});
+ 
+-describe("IndexPage meta 行(SC-4:來源 / 涵蓋期間)", () => {
+-  it("顯示資料源中文與涵蓋期間", async () => {
+-    renderPage();
+-    fireEvent.click(btn("日K"));
+-    const meta = await screen.findByTestId("market-meta");
+-    expect(meta.textContent).toContain("達錢 4 日K");
+-    expect(meta.textContent).toContain("2026-07-27 ~ 2026-07-29");
++  it("(c4) txf null → 價差顯示「-」", () => {
++    renderPage(null);
++    expect(screen.getByText(/價差 -/)).toBeTruthy();
+   });
++});
+ 
+-  it("fallback 分支要說實話(tc4_dk_1k_agg),partial_last 標未收盤", async () => {
+-    stubFetch({
+-      ...DK_BODY,
+-      meta: { ...DK_BODY.meta, source: "tc4_dk_1k_agg", partial_last: true },
+-    });
++describe("IndexPage 相關係數區塊(SC-4)", () => {
++  it("(e) 尾端有相關係數收合鈕,預設收合", () => {
+     renderPage();
+-    fireEvent.click(btn("週K"));
+-    const meta = await screen.findByTestId("market-meta");
+-    expect(meta.textContent).toContain("達錢 4 1分K 聚合(日K 無資料)");
+-    expect(meta.textContent).toContain("最後一根未收盤");
++    const toggle = screen.getByRole("button", { name: /相關係數/ });
++    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+   });
+ 
+-  it("本機合成標明來源與起始時刻;無量資料不畫 0 柱、量欄顯示「—」", async () => {
+-    stubFetch({
+-      key: "OTC",
+-      tf: "1",
+-      bars: [{ t: "2026-07-30 10:17", o: 359_800, h: 359_900, l: 359_700, c: 359_800, v: 0 }],
+-      meta: {
+-        source: "mis_poll_synth",
+-        coverage_from: "2026-07-30",
+-        coverage_to: "2026-07-30",
+-        partial_last: false,
+-        volume: false,
+-        refusal: null,
+-        synth_since: "10:17",
+-      },
+-    });
++  it("(e2) 相關係數區塊位於基差列之後", () => {
+     renderPage();
+-    fireEvent.click(btn("櫃買"));
+-    fireEvent.click(btn("1分"));
+-    const meta = await screen.findByTestId("market-meta");
+-    expect(meta.textContent).toContain("本機合成(MIS 5秒取樣)");
+-    expect(meta.textContent).toContain("自 10:17 起");
+-    expect(screen.getByText("無量資料")).toBeTruthy();
+-    expect(screen.getByText("—")).toBeTruthy(); // 資訊列的量欄
++    const row = screen.getByTestId("basis-row");
++    const toggle = screen.getByRole("button", { name: /相關係數/ });
++    expect(row.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   });
+ });
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index efc44bd..ea56dde 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -1,197 +1,67 @@
+-import { useState } from "react";
+-
+-import { MarketChart } from "@/components/index/MarketChart";
++/** 台股綜合頁的薄容器:基差列 + 兩張並排指數圖 + 相關係數收合區塊。
++ *
++ *  單圖的狀態邏輯與版面全在 `MarketPane`(本檔只決定「哪個 pane 用哪組 localStorage key、
++ *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
++ *  「同一段程式碼寫兩遍」。 */
++import { CorrSection } from "@/components/corr/CorrSection";
++import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+ import {
+   INDEX_OVERLAY_STORE,
++  MARKET2_FUT_STORE,
++  MARKET2_KEY_STORE,
++  MARKET2_MODE_STORE,
+   MARKET_FUT_STORE,
+   MARKET_KEY_STORE,
+   MARKET_MODE_STORE,
+ } from "@/lib/constants";
+-import { chgPct, fmtPct } from "@/lib/format";
+-import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+-import { pts } from "@/lib/svg-points";
+-import { HOUR_TICKS } from "@/lib/time-labels";
+-import {
+-  coerceMode,
+-  isMarketKey,
+-  isMarketMode,
+-  isModeAvailable,
+-  MARKET_MODES,
+-  type MarketKey,
+-  type MarketMode,
+-} from "@/lib/timeframe";
+ import { cn } from "@/lib/utils";
+ 
+-const SIZE = { width: 640, height: 220 };
+-
+-type FutKey = "TXF" | "MXF" | "TMF";
+-const FUT_LABELS: readonly (readonly [FutKey, string])[] = [
+-  ["TXF", "大台"],
+-  ["MXF", "小台"],
+-  ["TMF", "微台"],
+-];
+-const NAMES: Record<MarketKey, string> = {
+-  TWSE: "加權指數",
+-  OTC: "櫃買指數",
+-  TXF: "台指期(大台)",
+-  MXF: "台指期(小台)",
+-  TMF: "台指期(微台)",
++/** 左圖沿用改版前那四支 key —— 舊使用者的標的 / 週期 / 期指商品 / 重疊開關零丟失。 */
++const LEFT_STORES: PaneStores = {
++  key: MARKET_KEY_STORE,
++  mode: MARKET_MODE_STORE,
++  fut: MARKET_FUT_STORE,
++  overlay: INDEX_OVERLAY_STORE,
++};
++/** 右圖三支新 key,**沒有 overlay** —— 重疊圖畫的固定是加權 vs 櫃買,右圖也開會出現
++ *  兩張一模一樣的圖(`MarketPane` 靠 `stores.overlay === undefined` 收掉那顆鈕)。 */
++const RIGHT_STORES: PaneStores = {
++  key: MARKET2_KEY_STORE,
++  mode: MARKET2_MODE_STORE,
++  fut: MARKET2_FUT_STORE,
+ };
+ 
+-/** 期貨引擎的 per-product 狀態(App 層 `useFuturesStream` 下傳;頁面不自建 WS —— D-3)。 */
+-export interface FuturesProductState {
+-  p: number | null;
+-  ref: number | null;
+-}
+-
++/** `MarketPane` 內有同名的一份。刻意複製而不抽 `@/lib/format`:MarketChart / CandleChart
++ *  本來就各留一份,這是既有慣例。 */
+ function fmt(millipts: number): string {
+   const v = millipts / 1000;
+   return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+ }
+ 
+-function toX(minute: number): number {
+-  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
+-}
+-
+-function Btn({
+-  label,
+-  active,
+-  disabled,
+-  onClick,
+-}: {
+-  label: string;
+-  active: boolean;
+-  disabled?: boolean;
+-  onClick: () => void;
+-}) {
+-  return (
+-    <button
+-      type="button"
+-      onClick={onClick}
+-      disabled={disabled}
+-      aria-pressed={active}
+-      aria-disabled={disabled ? "true" : undefined}
+-      className={cn(
+-        "rounded border px-2 py-0.5 text-xs",
+-        disabled
+-          ? "cursor-not-allowed border-line text-ink-muted opacity-40"
+-          : active
+-            ? "border-accent text-accent"
+-            : "border-line text-ink-dim hover:text-ink",
+-      )}
+-    >
+-      {label}
+-    </button>
+-  );
+-}
+-
+-/** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。 */
+-function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+-  const g = buildOverlayGeometry(
+-    [
+-      { minutes: twse.minutes, ref: twse.ref },
+-      { minutes: otc.minutes, ref: otc.ref },
+-    ],
+-    SIZE,
+-  );
+-  const colors = ["stroke-profit", "stroke-idx-otc"];
+-  const labels = ["加權", "櫃買"];
+-  return (
+-    <figure className="rounded-md border border-line bg-surface p-4">
+-      <div className="flex items-baseline gap-4">
+-        <h3 className="text-sm font-bold text-ink">加權 vs 櫃買(相對昨收 %)</h3>
+-        <span className="font-mono text-xs text-profit">─ 加權</span>
+-        <span className="font-mono text-xs text-idx-otc">─ 櫃買</span>
+-      </div>
+-      <svg
+-        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
+-        className="mt-2 w-full"
+-        role="img"
+-        aria-label="指數重疊走勢"
+-      >
+-        {HOUR_TICKS.map(({ minute, label }) => (
+-          <g key={minute}>
+-            <line
+-              x1={toX(minute)}
+-              x2={toX(minute)}
+-              y1={0}
+-              y2={SIZE.height - 12}
+-              className="stroke-line"
+-              strokeWidth={0.4}
+-            />
+-            <text
+-              x={toX(minute) + 2}
+-              y={SIZE.height - 2}
+-              className="fill-ink-dim"
+-              fontSize="0.625rem"
+-            >
+-              {label}
+-            </text>
+-          </g>
+-        ))}
+-        <line
+-          x1={0}
+-          x2={SIZE.width}
+-          y1={g.zeroY}
+-          y2={g.zeroY}
+-          className="stroke-line"
+-          strokeDasharray="2 3"
+-          strokeWidth={1}
+-        />
+-        {g.lines.map((l, i) => (
+-          <g key={labels[i]}>
+-            <polyline points={pts(l.pts)} fill="none" className={colors[i]} strokeWidth={1.4} />
+-            {l.pts.length > 0 ? (
+-              <text
+-                x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
+-                y={l.pts[l.pts.length - 1]!.y + 3}
+-                className={colors[i]!.replace("stroke-", "fill-")}
+-                fontSize="0.625rem"
+-              >
+-                {labels[i]}
+-              </text>
+-            ) : null}
+-          </g>
+-        ))}
+-      </svg>
+-    </figure>
+-  );
+-}
+-
+-function Quote({
+-  p,
+-  ref_,
+-  high,
+-  low,
+-}: {
+-  p: number | null;
+-  ref_: number | null;
+-  high?: number | null;
+-  low?: number | null;
+-}) {
+-  const chgPts = p !== null && ref_ !== null ? (p - ref_) / 1000 : null;
+-  const pctChg = p !== null && ref_ ? chgPct(p, ref_) : null;
++/** 台指期 vs 加權的基差。**不在 pane 內**:它與 pane 選什麼標的無關,放進去等於兩張圖
++ *  各印一份相同數字。計算與呈現與改版前逐字相同(正紅 / 負綠 / 缺值「價差 -」)。 */
++function BasisRow({ txf, twse }: { txf: TxfQuote | null; twse: IndexSeries | null }) {
++  const basis = txf !== null && twse?.p != null ? (txf.p - twse.p) / 1000 : null;
+   return (
+-    <>
+-      <span className="font-mono text-2xl text-ink">{p !== null ? fmt(p) : "-"}</span>
+-      {chgPts !== null && pctChg !== null ? (
++    <div className="flex flex-wrap items-center gap-3">
++      <span data-testid="basis-row" className="font-mono text-xs text-ink-dim">
++        台指期 <span className="text-ink">{txf !== null ? fmt(txf.p) : "-"}</span>{" "}
+         <span
+           className={cn(
+-            "font-mono text-sm",
+-            chgPts > 0 ? "text-bull" : chgPts < 0 ? "text-bear" : "text-ink",
++            basis !== null && basis > 0
++              ? "text-bull"
++              : basis !== null && basis < 0
++                ? "text-bear"
++                : "text-ink-dim",
+           )}
+         >
+-          {`${chgPts > 0 ? "+" : ""}${chgPts.toFixed(2)} (${fmtPct(pctChg)})`}
++          {basis !== null ? `價差 ${basis > 0 ? "+" : ""}${basis.toFixed(2)}` : "價差 -"}
+         </span>
+-      ) : null}
+-      <span className="font-mono text-xs text-ink-dim">
+-        {`高 ${high != null ? fmt(high) : "-"} 低 ${low != null ? fmt(low) : "-"} 昨收 ${
+-          ref_ !== null ? fmt(ref_) : "-"
+-        }`}
++        {txf?.time ? <span className="ml-2 text-ink-dim">至 {txf.time.slice(0, 5)}</span> : null}
+       </span>
+-    </>
++    </div>
+   );
+ }
+ 
+@@ -200,147 +70,41 @@ interface Props {
+   otc: IndexSeries | null;
+   txf: TxfQuote | null;
+   /** 期貨三檔即時狀態(App 層 `useFuturesStream` 下傳;review P1-6)。 */
+-  futures?: Record<string, FuturesProductState> | null;
++  futures?: Record<string, PaneFutState> | null;
+ }
+ 
+ export function IndexPage({ twse, otc, txf, futures }: Props) {
+-  const [futKey, setFutKey] = useState<FutKey>(() => {
+-    const saved = window.localStorage.getItem(MARKET_FUT_STORE);
+-    return saved === "MXF" || saved === "TMF" ? saved : "TXF";
+-  });
+-  const [marketKey, setMarketKeyState] = useState<MarketKey>(() => {
+-    const saved = window.localStorage.getItem(MARKET_KEY_STORE);
+-    return isMarketKey(saved) ? saved : "TWSE";
+-  });
+-  // mount 初始化也要過 coerceMode:兩個 key 各自持久化,重載後可能復原成
+-  // 「櫃買 + 日K」這種非法組合(review P1-5)
+-  const [mode, setModeState] = useState<MarketMode>(() => {
+-    const savedMode = window.localStorage.getItem(MARKET_MODE_STORE);
+-    const savedKey = window.localStorage.getItem(MARKET_KEY_STORE);
+-    return coerceMode(
+-      isMarketKey(savedKey) ? savedKey : "TWSE",
+-      isMarketMode(savedMode) ? savedMode : "intraday",
+-    );
+-  });
+-  // 舊值 "overlay" / "side" 讀時遷移為布林(§4 backward compat)
+-  const [overlay, setOverlay] = useState<boolean>(
+-    () => window.localStorage.getItem(INDEX_OVERLAY_STORE) === "overlay",
+-  );
++  // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
++  // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
+   const { toggles, set } = useChartToggles();
+ 
+-  function selectKey(next: MarketKey): void {
+-    setMarketKeyState(next);
+-    window.localStorage.setItem(MARKET_KEY_STORE, next);
+-    const coerced = coerceMode(next, mode);
+-    if (coerced !== mode) {
+-      setModeState(coerced);
+-      window.localStorage.setItem(MARKET_MODE_STORE, coerced);
+-    }
+-  }
+-
+-  function selectMode(next: MarketMode): void {
+-    setModeState(next);
+-    window.localStorage.setItem(MARKET_MODE_STORE, next);
+-  }
+-
+-  function selectFut(next: FutKey): void {
+-    setFutKey(next);
+-    window.localStorage.setItem(MARKET_FUT_STORE, next);
+-    selectKey(next);
+-  }
+-
+-  function toggleOverlay(): void {
+-    const next = !overlay;
+-    setOverlay(next);
+-    window.localStorage.setItem(INDEX_OVERLAY_STORE, next ? "overlay" : "side");
+-  }
+-
+-  const isFut = marketKey === "TXF" || marketKey === "MXF" || marketKey === "TMF";
+-  const series = marketKey === "TWSE" ? twse : marketKey === "OTC" ? otc : null;
+-  const futState = isFut ? (futures?.[marketKey] ?? null) : null;
+-  const basis = txf !== null && twse?.p != null ? (txf.p - twse.p) / 1000 : null;
+-
+   return (
+     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+-      {/* 標的列(SC-2) */}
+-      <div className="flex flex-wrap items-center gap-3">
+-        <div className="flex gap-1">
+-          <Btn label="加權" active={marketKey === "TWSE"} onClick={() => selectKey("TWSE")} />
+-          <Btn label="櫃買" active={marketKey === "OTC"} onClick={() => selectKey("OTC")} />
+-          <Btn label="台指期" active={isFut} onClick={() => selectKey(futKey)} />
+-        </div>
+-        {isFut ? (
+-          <div className="flex gap-1">
+-            {FUT_LABELS.map(([id, label]) => (
+-              <Btn key={id} label={label} active={marketKey === id} onClick={() => selectFut(id)} />
+-            ))}
+-          </div>
+-        ) : null}
+-        <span data-testid="basis-row" className="font-mono text-xs text-ink-dim">
+-          台指期 <span className="text-ink">{txf !== null ? fmt(txf.p) : "-"}</span>{" "}
+-          <span
+-            className={cn(
+-              basis !== null && basis > 0
+-                ? "text-bull"
+-                : basis !== null && basis < 0
+-                  ? "text-bear"
+-                  : "text-ink-dim",
+-            )}
+-          >
+-            {basis !== null ? `價差 ${basis > 0 ? "+" : ""}${basis.toFixed(2)}` : "價差 -"}
+-          </span>
+-          {txf?.time ? <span className="ml-2 text-ink-dim">至 {txf.time.slice(0, 5)}</span> : null}
+-        </span>
+-      </div>
+-
+-      {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6) */}
+-      <div className="flex flex-wrap items-center gap-1">
+-        {MARKET_MODES.map(([id, label]) => (
+-          <Btn
+-            key={id}
+-            label={label}
+-            active={mode === id}
+-            disabled={!isModeAvailable(marketKey, id)}
+-            onClick={() => selectMode(id)}
+-          />
+-        ))}
+-        {mode === "intraday" && !isFut ? (
+-          <span className="ml-2">
+-            <Btn label="重疊" active={overlay} onClick={toggleOverlay} />
+-          </span>
+-        ) : null}
++      <BasisRow txf={txf} twse={twse} />
++      {/* auto-fit + minmax:寬視窗並排,窄視窗自動疊成單欄,不必 JS 判斷斷點 */}
++      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(480px,1fr))]">
++        <MarketPane
++          paneId="left"
++          twse={twse}
++          otc={otc}
++          futures={futures}
++          stores={LEFT_STORES}
++          defaultKey="TWSE"
++          toggles={toggles}
++          onToggle={set}
++        />
++        <MarketPane
++          paneId="right"
++          twse={twse}
++          otc={otc}
++          futures={futures}
++          stores={RIGHT_STORES}
++          defaultKey="OTC"
++          toggles={toggles}
++          onToggle={set}
++        />
+       </div>
+-
+-      <figure className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-surface p-4">
+-        <figcaption className="flex flex-wrap items-baseline gap-3">
+-          <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
+-          {isFut ? (
+-            <Quote p={futState?.p ?? null} ref_={futState?.ref ?? null} />
+-          ) : (
+-            <Quote
+-              p={series?.p ?? null}
+-              ref_={series?.ref ?? null}
+-              high={series?.high ?? null}
+-              low={series?.low ?? null}
+-            />
+-          )}
+-          {series?.stale ? <span className="text-xs text-ink-dim">資料中斷</span> : null}
+-        </figcaption>
+-        <div className="mt-2 flex min-h-0 flex-1 flex-col">
+-          {overlay && mode === "intraday" && twse !== null && otc !== null ? (
+-            <OverlayCard twse={twse} otc={otc} />
+-          ) : (
+-            <MarketChart
+-              marketKey={marketKey}
+-              mode={mode}
+-              name={NAMES[marketKey]}
+-              series={series}
+-              showBb={toggles.bb}
+-              onToggleBb={(v) => set("bb", v)}
+-            />
+-          )}
+-        </div>
+-      </figure>
++      <CorrSection />
+     </div>
+   );
+ }
+diff --git a/frontend/src/components/index/MarketPane.test.tsx b/frontend/src/components/index/MarketPane.test.tsx
+new file mode 100644
+index 0000000..59265e1
+--- /dev/null
++++ b/frontend/src/components/index/MarketPane.test.tsx
+@@ -0,0 +1,420 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import type { IndexSeries } from "@/hooks/useIndexStream";
++import {
++  INDEX_OVERLAY_STORE,
++  MARKET2_FUT_STORE,
++  MARKET2_KEY_STORE,
++  MARKET2_MODE_STORE,
++  MARKET_FUT_STORE,
++  MARKET_KEY_STORE,
++  MARKET_MODE_STORE,
++} from "@/lib/constants";
++import type { MarketKey } from "@/lib/timeframe";
++
++function series(over: Partial<IndexSeries> = {}): IndexSeries {
++  return {
++    p: 42_039_920,
++    ref: 43_634_190,
++    high: 43_221_930,
++    low: 41_815_780,
++    stale: false,
++    minutes: { "0901": 43_000_000, "0930": 42_039_920 },
++    ...over,
++  };
++}
++
++const OTC = series({
++  p: 359_800,
++  ref: 378_090,
++  high: 373_420,
++  low: 358_430,
++  minutes: { "1017": 359_800 },
++});
++const FUTURES: Record<string, PaneFutState> = { TXF: { p: 42_142_000, ref: 42_000_000 } };
++const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true };
++
++const LEFT_STORES: PaneStores = {
++  key: MARKET_KEY_STORE,
++  mode: MARKET_MODE_STORE,
++  fut: MARKET_FUT_STORE,
++  overlay: INDEX_OVERLAY_STORE,
++};
++const RIGHT_STORES: PaneStores = {
++  key: MARKET2_KEY_STORE,
++  mode: MARKET2_MODE_STORE,
++  fut: MARKET2_FUT_STORE,
++};
++
++function bars(n = 3) {
++  return Array.from({ length: n }, (_, i) => ({
++    t: `2026-07-2${7 + i}`,
++    o: 100,
++    h: 110,
++    l: 90,
++    c: 105,
++    v: 10,
++  }));
++}
++
++let lastUrls: string[] = [];
++
++function stubFetch(body: unknown) {
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      lastUrls.push(String(url));
++      return new Response(JSON.stringify(body));
++    }),
++  );
++}
++
++const DK_BODY = {
++  key: "TWSE",
++  tf: "D",
++  bars: bars(),
++  meta: {
++    source: "tc4_dk",
++    coverage_from: "2026-07-27",
++    coverage_to: "2026-07-29",
++    partial_last: false,
++    volume: true,
++    refusal: null,
++    synth_since: null,
++  },
++};
++
++beforeEach(() => {
++  window.localStorage.clear();
++  lastUrls = [];
++  stubFetch(DK_BODY);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++interface RenderOver {
++  paneId?: "left" | "right";
++  stores?: PaneStores;
++  defaultKey?: MarketKey;
++  futures?: Record<string, PaneFutState> | null;
++  onToggle?: (key: keyof ChartToggles, value: boolean) => void;
++}
++
++function renderPane(over: RenderOver = {}) {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <MarketPane
++        paneId={over.paneId ?? "left"}
++        twse={series()}
++        otc={OTC}
++        futures={over.futures === undefined ? FUTURES : over.futures}
++        stores={over.stores ?? LEFT_STORES}
++        defaultKey={over.defaultKey ?? "TWSE"}
++        toggles={TOGGLES}
++        onToggle={over.onToggle ?? (() => {})}
++      />
++    </QueryClientProvider>,
++  );
++}
++
++function btn(name: string): HTMLButtonElement {
++  return screen.getByRole("button", { name }) as HTMLButtonElement;
++}
++
++describe("MarketPane 參數化(SC-2)", () => {
++  it("(a) 無 storage 時尊重 defaultKey:右 pane 預設櫃買", () => {
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
++    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
++    expect(btn("加權").getAttribute("aria-pressed")).toBe("false");
++    expect(screen.getByText("櫃買指數")).toBeTruthy();
++  });
++
++  it("(a2) 根節點 data-testid 依 paneId", () => {
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
++    const pane = screen.getByTestId("market-pane-right");
++    expect(pane).toBeTruthy();
++    expect(within(pane).getByText("櫃買指數")).toBeTruthy();
++    expect(screen.queryByTestId("market-pane-left")).toBeNull();
++  });
++
++  it("(b) storage keys 注入生效:寫入指定 key,舊 key 不動", () => {
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
++    fireEvent.click(btn("台指期"));
++    fireEvent.click(btn("小台"));
++    expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("MXF");
++    expect(window.localStorage.getItem(MARKET2_FUT_STORE)).toBe("MXF");
++    expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("m1");
++    expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBeNull();
++    expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBeNull();
++    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBeNull();
++  });
++
++  it("(b2) 讀取也走注入的 key:market2 殘值生效、舊 key 殘值被忽略", () => {
++    window.localStorage.setItem(MARKET2_KEY_STORE, "OTC");
++    window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "TWSE" });
++    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
++  });
++
++  it("(c) OTC 時日/週/月 disabled,分 K 仍可點", () => {
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
++    for (const label of ["日K", "週K", "月K"]) {
++      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
++      expect(btn(label).disabled).toBe(true);
++    }
++    expect(btn("30分").disabled).toBe(false);
++  });
++
++  it("(d) 殘值「日K + 櫃買」重載後經 coerce 落回分時", () => {
++    window.localStorage.setItem(MARKET2_KEY_STORE, "OTC");
++    window.localStorage.setItem(MARKET2_MODE_STORE, "day");
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "TWSE" });
++    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
++    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++  });
++
++  it("(e) 期指子鈕切換:點台指期才出現三選一,選微台後標題換料", () => {
++    renderPane();
++    expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
++    fireEvent.click(btn("台指期"));
++    expect(btn("大台").getAttribute("aria-pressed")).toBe("true");
++    fireEvent.click(btn("微台"));
++    expect(screen.getByText("台指期(微台)")).toBeTruthy();
++    expect(btn("微台").getAttribute("aria-pressed")).toBe("true");
++  });
++
++  it("(f) 只寫 mode=day 不寫 key → defaultKey=OTC 落分時,無 disabled 模式被選中", () => {
++    window.localStorage.setItem(MARKET2_MODE_STORE, "day");
++    renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
++    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
++    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    expect(btn("日K").getAttribute("aria-pressed")).toBe("false");
++    // 沒有任何 disabled 鈕處於選中狀態
++    const pressed = screen
++      .getAllByRole("button")
++      .filter((b) => b.getAttribute("aria-pressed") === "true");
++    expect(pressed.length).toBeGreaterThan(0);
++    for (const b of pressed) expect(b.getAttribute("aria-disabled")).toBeNull();
++  });
++
++  it("(g) stores.overlay undefined → 無「重疊」鈕;有 overlay key 才有", () => {
++    const { unmount } = renderPane({
++      paneId: "right",
++      stores: RIGHT_STORES,
++      defaultKey: "TWSE",
++    });
++    expect(screen.queryByRole("button", { name: "重疊" })).toBeNull();
++    unmount();
++    cleanup();
++    renderPane();
++    expect(screen.getByRole("button", { name: "重疊" })).toBeTruthy();
++  });
++});
++
++describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
++  it("三顆標的鈕;預設選加權,現值/漲跌/高低昨收顯示於標題列", () => {
++    renderPane();
++    expect(btn("加權").getAttribute("aria-pressed")).toBe("true");
++    expect(btn("櫃買")).toBeTruthy();
++    expect(btn("台指期")).toBeTruthy();
++    expect(screen.getByText("加權指數")).toBeTruthy();
++    expect(screen.getByText("42039.92")).toBeTruthy();
++    expect(screen.getByText(/-1594\.27/)).toBeTruthy();
++    expect(screen.getByText(/高 43221\.93/)).toBeTruthy();
++    expect(screen.getByText(/昨收 43634\.19/)).toBeTruthy();
++  });
++
++  it("Quote 漲跌整串:跌用負號(characterization)", () => {
++    renderPane();
++    expect(screen.getByText("-1594.27 (-3.65%)")).toBeTruthy();
++  });
++
++  it("Quote 漲跌整串:漲帶 + 前綴(characterization;台指期)", () => {
++    renderPane();
++    fireEvent.click(btn("台指期"));
++    expect(screen.getByText("+142.00 (+0.34%)")).toBeTruthy();
++  });
++
++  it("期指商品用獨立 localStorage key,不碰期貨 tab 的 copycat-fut-product(W-13)", () => {
++    renderPane();
++    fireEvent.click(btn("台指期"));
++    fireEvent.click(btn("小台"));
++    expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
++    expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF");
++    expect(window.localStorage.getItem("copycat-fut-product")).toBeNull();
++  });
++
++  it("basis 列不屬 pane(留在 IndexPage)", () => {
++    renderPane();
++    expect(screen.queryByTestId("basis-row")).toBeNull();
++  });
++});
++
++describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
++  it("十七顆週期鈕,順序 = 分時 / 1-10分 / 30 / 60 / 90 / 日 / 週 / 月", () => {
++    renderPane();
++    const labels = [
++      "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
++      "30分", "60分", "90分", "日K", "週K", "月K",
++    ];
++    const nodes = labels.map((l) => btn(l));
++    for (let i = 1; i < nodes.length; i += 1) {
++      // DOM 順序 = 畫面由左至右
++      expect(nodes[i - 1]!.compareDocumentPosition(nodes[i]!) & Node.DOCUMENT_POSITION_FOLLOWING)
++        .toBeTruthy();
++    }
++  });
++
++  it("預設分時;切日K 後打 /api/market/bars 並持久化", async () => {
++    renderPane();
++    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    fireEvent.click(btn("日K"));
++    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("day");
++    await waitFor(() =>
++      expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=D"))).toBe(true),
++    );
++  });
++
++  it("分 K 走 tf=1 共用原料(30/60/90 由前端聚合)", async () => {
++    renderPane();
++    fireEvent.click(btn("90分"));
++    await waitFor(() =>
++      expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=1&days=30"))).toBe(true),
++    );
++  });
++});
++
++describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
++  it("日/週/月 K 鈕 disabled,分 K 仍可點", () => {
++    renderPane();
++    fireEvent.click(btn("櫃買"));
++    for (const label of ["日K", "週K", "月K"]) {
++      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
++      expect(btn(label).disabled).toBe(true);
++    }
++    expect(btn("30分").disabled).toBe(false);
++  });
++
++  it("從加權(日K)切到櫃買 → 自動落回分時,不停在 disabled 模式", () => {
++    renderPane();
++    fireEvent.click(btn("日K"));
++    fireEvent.click(btn("櫃買"));
++    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++  });
++
++  it("後端回 refusal → 圖區顯示明確理由,不畫假圖", async () => {
++    stubFetch({
++      key: "OTC",
++      tf: "D",
++      bars: [],
++      meta: {
++        source: "none",
++        coverage_from: null,
++        coverage_to: null,
++        partial_last: false,
++        volume: false,
++        refusal: "NO_HISTORICAL_SOURCE",
++        synth_since: null,
++      },
++    });
++    renderPane();
++    fireEvent.click(btn("日K"));
++    await waitFor(() =>
++      expect(screen.getByText("達錢 4 未提供櫃買指數,無歷史 K 線資料源")).toBeTruthy(),
++    );
++  });
++
++  it("localStorage 存著非法組合(櫃買 + 日K)重載後落回分時", () => {
++    window.localStorage.setItem(MARKET_KEY_STORE, "OTC");
++    window.localStorage.setItem(MARKET_MODE_STORE, "day");
++    renderPane();
++    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
++    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++  });
++
++  it("期指沒有分時 → 分時鈕 disabled,由加權切過去自動落到 1分", () => {
++    renderPane();
++    fireEvent.click(btn("台指期"));
++    expect(btn("分時").disabled).toBe(true);
++    expect(btn("1分").getAttribute("aria-pressed")).toBe("true");
++  });
++});
++
++describe("MarketPane 重疊(自 IndexPage 搬遷;左 pane 形態)", () => {
++  it("分時下有重疊 toggle,開啟後顯示加權 vs 櫃買疊線並持久化", () => {
++    renderPane();
++    fireEvent.click(btn("重疊"));
++    expect(screen.getByText("加權 vs 櫃買(相對昨收 %)")).toBeTruthy();
++    expect(screen.getByLabelText("指數重疊走勢")).toBeTruthy();
++    expect(window.localStorage.getItem(INDEX_OVERLAY_STORE)).toBe("overlay");
++  });
++
++  it("舊 localStorage 值 overlay 讀時遷移(backward compat)", () => {
++    window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
++    renderPane();
++    expect(screen.getByText("加權 vs 櫃買(相對昨收 %)")).toBeTruthy();
++  });
++
++  it("切到 K 線週期後不再顯示重疊圖", () => {
++    window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
++    renderPane();
++    fireEvent.click(btn("日K"));
++    expect(screen.queryByLabelText("指數重疊走勢")).toBeNull();
++  });
++});
++
++describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
++  it("顯示資料源中文與涵蓋期間", async () => {
++    renderPane();
++    fireEvent.click(btn("日K"));
++    const meta = await screen.findByTestId("market-meta");
++    expect(meta.textContent).toContain("達錢 4 日K");
++    expect(meta.textContent).toContain("2026-07-27 ~ 2026-07-29");
++  });
++
++  it("fallback 分支要說實話(tc4_dk_1k_agg),partial_last 標未收盤", async () => {
++    stubFetch({
++      ...DK_BODY,
++      meta: { ...DK_BODY.meta, source: "tc4_dk_1k_agg", partial_last: true },
++    });
++    renderPane();
++    fireEvent.click(btn("週K"));
++    const meta = await screen.findByTestId("market-meta");
++    expect(meta.textContent).toContain("達錢 4 1分K 聚合(日K 無資料)");
++    expect(meta.textContent).toContain("最後一根未收盤");
++  });
++
++  it("本機合成標明來源與起始時刻;無量資料不畫 0 柱、量欄顯示「—」", async () => {
++    stubFetch({
++      key: "OTC",
++      tf: "1",
++      bars: [{ t: "2026-07-30 10:17", o: 359_800, h: 359_900, l: 359_700, c: 359_800, v: 0 }],
++      meta: {
++        source: "mis_poll_synth",
++        coverage_from: "2026-07-30",
++        coverage_to: "2026-07-30",
++        partial_last: false,
++        volume: false,
++        refusal: null,
++        synth_since: "10:17",
++      },
++    });
++    renderPane();
++    fireEvent.click(btn("櫃買"));
++    fireEvent.click(btn("1分"));
++    const meta = await screen.findByTestId("market-meta");
++    expect(meta.textContent).toContain("本機合成(MIS 5秒取樣)");
++    expect(meta.textContent).toContain("自 10:17 起");
++    expect(screen.getByText("無量資料")).toBeTruthy();
++    expect(screen.getByText("—")).toBeTruthy(); // 資訊列的量欄
++  });
++});
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+new file mode 100644
+index 0000000..7731f71
+--- /dev/null
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -0,0 +1,370 @@
++import { useState } from "react";
++
++import { MarketChart } from "@/components/index/MarketChart";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import type { IndexSeries } from "@/hooks/useIndexStream";
++import { chgPct, fmtPct } from "@/lib/format";
++import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
++import { pts } from "@/lib/svg-points";
++import { HOUR_TICKS } from "@/lib/time-labels";
++import {
++  coerceMode,
++  isMarketKey,
++  isMarketMode,
++  isModeAvailable,
++  MARKET_MODES,
++  type MarketKey,
++  type MarketMode,
++} from "@/lib/timeframe";
++import { cn } from "@/lib/utils";
++
++const SIZE = { width: 640, height: 220 };
++
++type FutKey = "TXF" | "MXF" | "TMF";
++const FUT_LABELS: readonly (readonly [FutKey, string])[] = [
++  ["TXF", "大台"],
++  ["MXF", "小台"],
++  ["TMF", "微台"],
++];
++const NAMES: Record<MarketKey, string> = {
++  TWSE: "加權指數",
++  OTC: "櫃買指數",
++  TXF: "台指期(大台)",
++  MXF: "台指期(小台)",
++  TMF: "台指期(微台)",
++};
++
++/** 一個 pane 的 localStorage key 組。**每個 pane 一組**,不共用 —— 兩張圖各自記自己的
++ *  標的 / 週期 / 期指商品,共用等於右圖跟著左圖動。
++ *
++ *  `overlay` 是 optional:重疊圖畫的固定是「加權 vs 櫃買」,右 pane 也開的話畫面會出現
++ *  兩張一模一樣的圖(連 `aria-label` 都重複)→ 不傳 = 不渲染重疊鈕、不建 overlay state。 */
++export interface PaneStores {
++  key: string;
++  mode: string;
++  fut: string;
++  overlay?: string;
++}
++
++/** 期貨引擎的 per-product 狀態(App 層 `useFuturesStream` 下傳;頁面不自建 WS —— D-3)。
++ *
++ *  **刻意不叫 `FuturesProductState`**:`@/types` 已有同名的 13 欄完整型別,同名兩份會讓
++ *  import 來源變成得逐檔確認的事。這裡只吃現價 / 昨收兩欄。 */
++export interface PaneFutState {
++  p: number | null;
++  ref: number | null;
++}
++
++function fmt(millipts: number): string {
++  const v = millipts / 1000;
++  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
++}
++
++function toX(minute: number): number {
++  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
++}
++
++function Btn({
++  label,
++  active,
++  disabled,
++  onClick,
++}: {
++  label: string;
++  active: boolean;
++  disabled?: boolean;
++  onClick: () => void;
++}) {
++  return (
++    <button
++      type="button"
++      onClick={onClick}
++      disabled={disabled}
++      aria-pressed={active}
++      aria-disabled={disabled ? "true" : undefined}
++      className={cn(
++        "rounded border px-2 py-0.5 text-xs",
++        disabled
++          ? "cursor-not-allowed border-line text-ink-muted opacity-40"
++          : active
++            ? "border-accent text-accent"
++            : "border-line text-ink-dim hover:text-ink",
++      )}
++    >
++      {label}
++    </button>
++  );
++}
++
++/** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。 */
++function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
++  const g = buildOverlayGeometry(
++    [
++      { minutes: twse.minutes, ref: twse.ref },
++      { minutes: otc.minutes, ref: otc.ref },
++    ],
++    SIZE,
++  );
++  const colors = ["stroke-profit", "stroke-idx-otc"];
++  const labels = ["加權", "櫃買"];
++  return (
++    <figure className="rounded-md border border-line bg-surface p-4">
++      <div className="flex items-baseline gap-4">
++        <h3 className="text-sm font-bold text-ink">加權 vs 櫃買(相對昨收 %)</h3>
++        <span className="font-mono text-xs text-profit">─ 加權</span>
++        <span className="font-mono text-xs text-idx-otc">─ 櫃買</span>
++      </div>
++      <svg
++        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
++        className="mt-2 w-full"
++        role="img"
++        aria-label="指數重疊走勢"
++      >
++        {HOUR_TICKS.map(({ minute, label }) => (
++          <g key={minute}>
++            <line
++              x1={toX(minute)}
++              x2={toX(minute)}
++              y1={0}
++              y2={SIZE.height - 12}
++              className="stroke-line"
++              strokeWidth={0.4}
++            />
++            <text
++              x={toX(minute) + 2}
++              y={SIZE.height - 2}
++              className="fill-ink-dim"
++              fontSize="0.625rem"
++            >
++              {label}
++            </text>
++          </g>
++        ))}
++        <line
++          x1={0}
++          x2={SIZE.width}
++          y1={g.zeroY}
++          y2={g.zeroY}
++          className="stroke-line"
++          strokeDasharray="2 3"
++          strokeWidth={1}
++        />
++        {g.lines.map((l, i) => (
++          <g key={labels[i]}>
++            <polyline points={pts(l.pts)} fill="none" className={colors[i]} strokeWidth={1.4} />
++            {l.pts.length > 0 ? (
++              <text
++                x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
++                y={l.pts[l.pts.length - 1]!.y + 3}
++                className={colors[i]!.replace("stroke-", "fill-")}
++                fontSize="0.625rem"
++              >
++                {labels[i]}
++              </text>
++            ) : null}
++          </g>
++        ))}
++      </svg>
++    </figure>
++  );
++}
++
++function Quote({
++  p,
++  ref_,
++  high,
++  low,
++}: {
++  p: number | null;
++  ref_: number | null;
++  high?: number | null;
++  low?: number | null;
++}) {
++  const chgPts = p !== null && ref_ !== null ? (p - ref_) / 1000 : null;
++  const pctChg = p !== null && ref_ ? chgPct(p, ref_) : null;
++  return (
++    <>
++      <span className="font-mono text-2xl text-ink">{p !== null ? fmt(p) : "-"}</span>
++      {chgPts !== null && pctChg !== null ? (
++        <span
++          className={cn(
++            "font-mono text-sm",
++            chgPts > 0 ? "text-bull" : chgPts < 0 ? "text-bear" : "text-ink",
++          )}
++        >
++          {`${chgPts > 0 ? "+" : ""}${chgPts.toFixed(2)} (${fmtPct(pctChg)})`}
++        </span>
++      ) : null}
++      <span className="font-mono text-xs text-ink-dim">
++        {`高 ${high != null ? fmt(high) : "-"} 低 ${low != null ? fmt(low) : "-"} 昨收 ${
++          ref_ !== null ? fmt(ref_) : "-"
++        }`}
++      </span>
++    </>
++  );
++}
++
++interface Props {
++  /** 版面位置。唯一用途是 `data-testid="market-pane-<paneId>"` —— 兩個 pane 的按鈕文字
++   *  完全相同,測試沒有這個錨點就只能裸 `getByRole` 撞 ambiguous。 */
++  paneId: "left" | "right";
++  twse: IndexSeries | null;
++  otc: IndexSeries | null;
++  /** 期貨三檔即時狀態(App 層 `useFuturesStream` 下傳;review P1-6)。 */
++  futures?: Record<string, PaneFutState> | null;
++  stores: PaneStores;
++  /** 無存檔時的標的。**兩處 fallback 都吃它**(見下方 state initializer)。 */
++  defaultKey: MarketKey;
++  /** `useChartToggles` 由 IndexPage 上提後下傳 —— 兩 pane 共用同一份 bb 開關
++   *  (與改版前的全域單開關行為一致)。 */
++  toggles: ChartToggles;
++  onToggle: (key: keyof ChartToggles, value: boolean) => void;
++}
++
++/** 台股綜合的單張指數圖(標的列 + 週期列 + 圖)。
++ *
++ *  基差列**不在這裡** —— 它與 pane 選什麼標的無關(永遠是台指期 vs 加權),
++ *  放進來會在雙 pane 版面下出現兩份相同數字。 */
++export function MarketPane({
++  paneId,
++  twse,
++  otc,
++  futures,
++  stores,
++  defaultKey,
++  toggles,
++  onToggle,
++}: Props) {
++  const [futKey, setFutKey] = useState<FutKey>(() => {
++    const saved = window.localStorage.getItem(stores.fut);
++    return saved === "MXF" || saved === "TMF" ? saved : "TXF";
++  });
++  const [marketKey, setMarketKeyState] = useState<MarketKey>(() => {
++    const saved = window.localStorage.getItem(stores.key);
++    return isMarketKey(saved) ? saved : defaultKey;
++  });
++  // mount 初始化也要過 coerceMode:兩個 key 各自持久化,重載後可能復原成
++  // 「櫃買 + 日K」這種非法組合(review P1-5)。
++  // **這裡的 savedKey fallback 必須跟上面同源 `defaultKey`**:寫死 "TWSE" 的話,
++  // 右 pane(defaultKey=OTC)在「只有 mode 存檔、沒有 key 存檔」時會拿 TWSE 去
++  // coerce → 保留 day,而實際標的是 OTC → 開場就停在一顆 disabled 的週期鈕上。
++  const [mode, setModeState] = useState<MarketMode>(() => {
++    const savedMode = window.localStorage.getItem(stores.mode);
++    const savedKey = window.localStorage.getItem(stores.key);
++    return coerceMode(
++      isMarketKey(savedKey) ? savedKey : defaultKey,
++      isMarketMode(savedMode) ? savedMode : "intraday",
++    );
++  });
++  // 舊值 "overlay" / "side" 讀時遷移為布林(§4 backward compat);無 overlay key = 恆關
++  const [overlay, setOverlay] = useState<boolean>(() =>
++    stores.overlay === undefined
++      ? false
++      : window.localStorage.getItem(stores.overlay) === "overlay",
++  );
++
++  function selectKey(next: MarketKey): void {
++    setMarketKeyState(next);
++    window.localStorage.setItem(stores.key, next);
++    const coerced = coerceMode(next, mode);
++    if (coerced !== mode) {
++      setModeState(coerced);
++      window.localStorage.setItem(stores.mode, coerced);
++    }
++  }
++
++  function selectMode(next: MarketMode): void {
++    setModeState(next);
++    window.localStorage.setItem(stores.mode, next);
++  }
++
++  function selectFut(next: FutKey): void {
++    setFutKey(next);
++    window.localStorage.setItem(stores.fut, next);
++    selectKey(next);
++  }
++
++  function toggleOverlay(): void {
++    if (stores.overlay === undefined) return;
++    const next = !overlay;
++    setOverlay(next);
++    window.localStorage.setItem(stores.overlay, next ? "overlay" : "side");
++  }
++
++  const isFut = marketKey === "TXF" || marketKey === "MXF" || marketKey === "TMF";
++  const series = marketKey === "TWSE" ? twse : marketKey === "OTC" ? otc : null;
++  const futState = isFut ? (futures?.[marketKey] ?? null) : null;
++
++  return (
++    <section data-testid={`market-pane-${paneId}`} className="flex min-w-0 flex-col gap-3">
++      {/* 標的列(SC-2) */}
++      <div className="flex flex-wrap items-center gap-3">
++        <div className="flex gap-1">
++          <Btn label="加權" active={marketKey === "TWSE"} onClick={() => selectKey("TWSE")} />
++          <Btn label="櫃買" active={marketKey === "OTC"} onClick={() => selectKey("OTC")} />
++          <Btn label="台指期" active={isFut} onClick={() => selectKey(futKey)} />
++        </div>
++        {isFut ? (
++          <div className="flex gap-1">
++            {FUT_LABELS.map(([id, label]) => (
++              <Btn key={id} label={label} active={marketKey === id} onClick={() => selectFut(id)} />
++            ))}
++          </div>
++        ) : null}
++      </div>
++
++      {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6) */}
++      <div className="flex flex-wrap items-center gap-1">
++        {MARKET_MODES.map(([id, label]) => (
++          <Btn
++            key={id}
++            label={label}
++            active={mode === id}
++            disabled={!isModeAvailable(marketKey, id)}
++            onClick={() => selectMode(id)}
++          />
++        ))}
++        {stores.overlay !== undefined && mode === "intraday" && !isFut ? (
++          <span className="ml-2">
++            <Btn label="重疊" active={overlay} onClick={toggleOverlay} />
++          </span>
++        ) : null}
++      </div>
++
++      {/* 高度由 SVG viewBox 比例驅動(`w-full`),**不 `flex-1` 撐滿頁高** ——
++          雙 pane 並排且下方還接相關係數區塊,撐滿會把另外兩塊擠出視窗 */}
++      <figure className="flex flex-col rounded-md border border-line bg-surface p-4">
++        <figcaption className="flex flex-wrap items-baseline gap-3">
++          <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
++          {isFut ? (
++            <Quote p={futState?.p ?? null} ref_={futState?.ref ?? null} />
++          ) : (
++            <Quote
++              p={series?.p ?? null}
++              ref_={series?.ref ?? null}
++              high={series?.high ?? null}
++              low={series?.low ?? null}
++            />
++          )}
++          {series?.stale ? <span className="text-xs text-ink-dim">資料中斷</span> : null}
++        </figcaption>
++        <div className="mt-2 flex min-h-0 flex-1 flex-col">
++          {overlay && mode === "intraday" && twse !== null && otc !== null ? (
++            <OverlayCard twse={twse} otc={otc} />
++          ) : (
++            <MarketChart
++              marketKey={marketKey}
++              mode={mode}
++              name={NAMES[marketKey]}
++              series={series}
++              showBb={toggles.bb}
++              onToggleBb={(v) => onToggle("bb", v)}
++            />
++          )}
++        </div>
++      </figure>
++    </section>
++  );
++}
++
++export default MarketPane;
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index cf1ba8e..493b1c3 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -7,7 +7,7 @@
+  *  命名前綴一律 `copycat-`:localStorage 是 origin 級共用空間,無前綴的 key 與他站撞名
+  *  且清 site data 時難對照。 */
+ 
+-/** 主 tab(txo / stock / futures / index / corr)— App.tsx */
++/** 主 tab(txo / stock / futures / index)— App.tsx */
+ export const TAB_KEY = "copycat-tab";
+ /** 主圖個股代號 — App.tsx */
+ export const MAIN_CODE_KEY = "copycat-stock-main-code";
+@@ -37,16 +37,29 @@ export function purgeOrphanKeys(): void {
+ /** 期貨 tab 的商品(TXF / MXF / TMF)— App.tsx */
+ export const PRODUCT_KEY = "copycat-fut-product";
+ 
+-/** 大盤頁選中的指數(TWSE / OTC / TXF …)— components/index/IndexPage.tsx */
++/** 台股綜合**左圖**選中的指數(TWSE / OTC / TXF …)— components/index/IndexPage.tsx */
+ export const MARKET_KEY_STORE = "copycat-market-key";
+-/** 大盤頁的週期 / 模式(分時 / 日K …)— components/index/IndexPage.tsx */
++/** 台股綜合**左圖**的週期 / 模式(分時 / 日K …)— components/index/IndexPage.tsx */
+ export const MARKET_MODE_STORE = "copycat-market-tf";
+-/** 大盤頁的期現疊圖開關(舊值 "overlay" / "side")— components/index/IndexPage.tsx */
++/** 台股綜合**左圖**的期現疊圖開關(舊值 "overlay" / "side")— components/index/IndexPage.tsx。
++ *  重疊圖畫的固定是加權 vs 櫃買,右圖開它會出現兩張相同的圖 → 右圖不給重疊鈕,
++ *  因此**沒有** `MARKET2_OVERLAY_STORE` 這支 key。 */
+ export const INDEX_OVERLAY_STORE = "copycat-index-mode";
+-/** 大盤頁的期貨商品,**刻意不與 `PRODUCT_KEY` 共用**:共用會讓大盤頁選微台時,期貨 tab
+- *  與右欄閃電梯的武裝語境一起被換掉 — components/index/IndexPage.tsx */
++/** 台股綜合**左圖**的期貨商品,**刻意不與 `PRODUCT_KEY` 共用**:共用會讓大盤頁選微台時,
++ *  期貨 tab 與右欄閃電梯的武裝語境一起被換掉 — components/index/IndexPage.tsx */
+ export const MARKET_FUT_STORE = "copycat-market-fut";
+ 
++/** 台股綜合**右圖**選中的指數(左圖沿用 `MARKET_KEY_STORE`,舊使用者狀態零丟失)
++ *  — components/index/IndexPage.tsx */
++export const MARKET2_KEY_STORE = "copycat-market2-key";
++/** 台股綜合**右圖**的週期 / 模式 — components/index/IndexPage.tsx */
++export const MARKET2_MODE_STORE = "copycat-market2-tf";
++/** 台股綜合**右圖**的期貨商品 — components/index/IndexPage.tsx */
++export const MARKET2_FUT_STORE = "copycat-market2-fut";
++
++/** 相關係數收合區塊的展開狀態("1" = 展開)— components/corr/CorrSection.tsx */
++export const CORR_OPEN_KEY = "copycat-corr-open";
++
+ /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
+ export const RAIL_TAB_KEY = "copycat-rail-tab";
+ 

@@ -1,0 +1,20 @@
+{
+  "slug": "market-overview-r1-tab",
+  "start_sha": "a858decf2be7920e7deec236048c7cb712331685",
+  "branch": "feat/market-overview-r1-tab",
+  "worktree_path": null,
+  "current_phase": 8,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7],
+  "scope": "L",
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-08-06T09:00:00+08:00",
+  "phase_3_progress": "T1-T4 done (135a291/e63cfa4 constants+MarketPane; c5d659a/b8e768c CorrSection; fa23c06/f53eefa IndexPage). T5 App tab / T6 CorrPage comment pending.",
+  "project_shape": null,
+  "last_commit_sha": null,
+  "final_merge_sha": null,
+  "self_review_head": "ed018fd4d6c6714027e0d2ed492113dd64b07a42",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}
