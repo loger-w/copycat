@@ -31,11 +31,28 @@ export function minutesOf(mode: ChartMode): number {
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
-async function fetchBars(code: string, tf: string, days: number): Promise<Bar[]> {
+/** 空 bars 的三種來源(後端 /api/stock/bars 的 `status` 欄位):
+ *  - `ok`:TC4 有回應但窗內無 bar(= 真無資料的最接近表述)
+ *  - `timeout`:等滿 deadline 沒等到首頁備妥(慢**或**查無,TC4 協定不可分)
+ *  - `disconnected`:TC4 連線中斷(engine 層 ConnectionError) */
+export type BarsStatus = "ok" | "timeout" | "disconnected";
+export type BarsPayload = { bars: Bar[]; status: BarsStatus };
+
+const STATUSES: readonly string[] = ["ok", "timeout", "disconnected"];
+
+/** status 正規化**只在這一處**:欄位缺(舊後端,§3 backward compat)或值不在白名單
+ *  一律當 `"ok"` = 現況行為。未知值若放行,`barsPollInterval` 會因 `!== "ok"` 開始
+ *  輪詢、StockChart 卻落回「無 K 線資料」,形成零訊號的矛盾態(review R6)。 */
+async function fetchBars(code: string, tf: string, days: number): Promise<BarsPayload> {
   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
   const res = await fetch(`/api/stock/bars/${code}?${qs}`);
   if (!res.ok) throw new Error(await parseError(res));
-  return ((await res.json()) as { bars: Bar[] }).bars;
+  const body = (await res.json()) as { bars: Bar[]; status?: string };
+  const status = body.status;
+  return {
+    bars: body.bars,
+    status: status !== undefined && STATUSES.includes(status) ? (status as BarsStatus) : "ok",
+  };
 }
 
 export function useStockBars(code: string | null, mode: ChartMode, days: number) {
