@@ -1,4 +1,14 @@
 
+## 2026-08-05(intraday-volume-profile 題2 收尾留尾巴)
+
+- [ ] **VP 畫面待 user 過目**(PR #22 試用指引):個股頁分時圖左緣水平量條 +「量分佈」toggle。
+  AI 截圖三張已入 `.claude/feat/intraday-volume-profile/evidence/`。
+- [ ] **外內盤分色 VP 未做**(quintet 拍板選配):`VpCell` 已帶 o/i 資料,渲染層與 toggle 未接線;
+  做之前留意鎖停日 side 判定品質(LOW_DECIDED_PCT 議題)。
+- [ ] **既有 console error:React duplicate key(key=0)每 5 秒一則** — Phase 6 隔離實驗證明與
+  VP 無關(關掉 VP 仍續發,5s 節奏疑似櫃買 MIS poll 或某定時清單 render)。開個股頁看
+  console 即重現;找到那個 map 的 key 來源修掉。
+
 ## 2026-08-05(discord-watchlist 題4 收尾留尾巴)
 
 - [ ] **SC-4 Discord 實發待 user 過目**(prod 重啟後,試用指引見 PR #21):`/watch add` 的
