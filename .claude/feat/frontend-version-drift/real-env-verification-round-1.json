@@ -1,0 +1,13 @@
+{
+  "round": 1,
+  "date": "2026-08-05",
+  "channel": "vite dev(5174)+ 真後端(8721,sha 8ef1346)+ claude-in-chrome;盤中紀律遵守(零新增 TC4 訂閱)",
+  "checks": [
+    {"sc": "SC-6/R2", "result": "PASS", "evidence": "curl /__build/sha?since=8ef1346 → {git_sha: ba31a8e, behind: false}(其後零 copycat commit);since=4625d91 → behind: true;注入字串(;echo pwn)→ behind: null。middleware 每請求現算前輪已用 detach-HEAD 判別式實證(gate-output.md)"},
+    {"sc": "SC-4 健康態", "result": "PASS", "evidence": "真後端(8ef1346)+ HEAD ba31a8e:sha 不同但 behind:false → 膠囊不亮(DOM 查證 badge=false + nav 截圖 evidence/SC-4_healthy-nav-no-badge.png)。此即 C3 語意勝出:v1 等值比對在此天然情境會誤亮"},
+    {"sc": "SC-4 drift 態", "result": "PASS(截圖部分)", "evidence": "fetch override health → 4625d91 + visibility 轉換 refetch → badge 出現,text『版本落差』、title 逐字 = 定案文案、wrapper class ml-auto flex items-baseline gap-3、座標 x=1062 緊鄰 IndexBar(右緣 1542,IndexBar 有加權/櫃買/台指內容)。像素級截圖因 Chrome 視窗被縮至 60px 高 + renderer 凍結而不完整(evidence/SC-4_drift-state-page.jpg 為全頁圖);依紀律不重試,user 過目時可自然複現(後端跑舊 copycat sha 時必亮)"},
+    {"sc": "SC-5", "result": "測試層覆蓋", "evidence": "warn 文案/去重(含載重路徑)由單元測試守;真環境 title 已逐字驗證同一 driftMessage 來源"}
+  ],
+  "findings": [],
+  "notes": "focusManager 只認 visibilitychange 的狀態轉換 — 假造 visible 後需先轉 hidden 再轉 visible 才觸發 refetch(memory ui-testing-claude-in-chrome 已記背景分頁陷阱,此為補充)。"
+}
