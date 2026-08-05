@@ -101,7 +101,7 @@ describe("buildVpBars", () => {
       // 250 元帶 tick = 0.5 元(500 毫元);200 檔 = 100_000 毫元域寬
       const yBottom = 200_000;
       const yTop = 300_000;
-      const g = geom(yBottom, yTop, 256); // plotH = 256 − 14 − 8 = 238
+      const g = geom(yBottom, yTop, 260); // plotH = 260 − X_LABEL_H 14 − PAD_Y×2 8 = 238
       expect(g.plotH).toBe(238);
       const dist = (500 / (yTop - yBottom)) * g.plotH;
       expect(dist).toBeCloseTo(1.19, 6);
