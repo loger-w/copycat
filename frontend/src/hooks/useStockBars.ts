@@ -40,17 +40,21 @@ export type BarsPayload = { bars: Bar[]; status: BarsStatus };
 
 const STATUSES: readonly string[] = ["ok", "timeout", "disconnected"];
 
-/** status 正規化**只在這一處**:欄位缺(舊後端,§3 backward compat)或值不在白名單
- *  一律當 `"ok"` = 現況行為。未知值若放行,`barsPollInterval` 會因 `!== "ok"` 開始
- *  輪詢、StockChart 卻落回「無 K 線資料」,形成零訊號的矛盾態(review R6)。 */
+/** payload 正規化**只在這一處**。
+ *  - status:欄位缺(舊後端,§3 backward compat)或值不在白名單一律當 `"ok"` = 現況
+ *    行為。未知值若放行,`barsPollInterval` 會因 `!== "ok"` 開始輪詢、StockChart 卻落回
+ *    「無 K 線資料」,形成零訊號的矛盾態(review R6)。
+ *  - bars:同一個理由(payload drift / 版本落差)也可能整個欄位缺。不兜住的話
+ *    `data.bars.length` 會丟 TypeError,而專案沒有 ErrorBoundary → 整頁白畫面,
+ *    比舊碼的 TanStack error 態更糟(review F1)。 */
 async function fetchBars(code: string, tf: string, days: number): Promise<BarsPayload> {
   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
   const res = await fetch(`/api/stock/bars/${code}?${qs}`);
   if (!res.ok) throw new Error(await parseError(res));
-  const body = (await res.json()) as { bars: Bar[]; status?: string };
+  const body = (await res.json()) as { bars?: Bar[]; status?: string };
   const status = body.status;
   return {
-    bars: body.bars,
+    bars: Array.isArray(body.bars) ? body.bars : [],
     status: status !== undefined && STATUSES.includes(status) ? (status as BarsStatus) : "ok",
   };
 }
