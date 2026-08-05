@@ -18,6 +18,9 @@ export type RuleKind = (typeof RULE_KINDS)[number];
  *  不用使用者的點擊序(後端會正規化,前後端不同序會讓 diff 看起來一直有變動)。 */
 export const CDP_LEVELS = ["ah", "nh", "cdp", "nl", "al"] as const;
 
+/** 與後端 `signal_rules.MAX_RULES` 同值:超過只會拿到一句 INVALID_RULE,前端先擋。 */
+export const MAX_RULES = 30;
+
 export interface SignalRule {
   id: string;
   name: string;
@@ -63,9 +66,12 @@ export function useSaveRule() {
     /** 有 id → PUT 到該 id(**path 為準**,後端對 body 帶不一致 id 回 400);
      *  無 id → POST 新增。單一入口讓「切開關」與「編輯表單」走同一條路。 */
     mutationFn: async (rule: RuleDraft): Promise<SignalRule> => {
-      const editing = rule.id !== undefined;
-      const res = await fetch(editing ? `${RULES_URL}/${rule.id}` : RULES_URL, {
-        method: editing ? "PUT" : "POST",
+      const { id } = rule;
+      // id 由後端配(`r-<epoch>-<seq>`)但仍要 `encodeURIComponent`:id 規則哪天變寬
+      // (或手改過規則檔)時,未編碼的片段會靜默打到別的 route,而不是回一個看得見的 404
+      const url = id === undefined ? RULES_URL : `${RULES_URL}/${encodeURIComponent(id)}`;
+      const res = await fetch(url, {
+        method: id === undefined ? "POST" : "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rule),
       });
@@ -82,7 +88,7 @@ export function useDeleteRule() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (ruleId: string): Promise<void> => {
-      const res = await fetch(`${RULES_URL}/${ruleId}`, { method: "DELETE" });
+      const res = await fetch(`${RULES_URL}/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await parseError(res));
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: RULES_KEY }),

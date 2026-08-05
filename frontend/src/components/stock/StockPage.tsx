@@ -41,7 +41,9 @@ export function StockPage({ code, onSelect, stream }: Props) {
   // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
   const { signals } = useSignalFeed();
-  const { data: rules = [] } = useSignalRules();
+  // `isError` 要一路帶到畫面:退回 `[]` 之後,「載入失敗」與「零規則」在 rail 與
+  // Dialog 上長得一模一樣,而後者會讓使用者照著空態去新增(只會撞名失敗)。
+  const { data: rules = [], isError: rulesError } = useSignalRules();
   const saveRule = useSaveRule();
   const [rulesOpen, setRulesOpen] = useState(false);
   const { soundOn, setSoundOn } = useSignalSound();
@@ -114,6 +116,8 @@ export function StockPage({ code, onSelect, stream }: Props) {
       <SignalRail
         signals={signals}
         rules={rules}
+        rulesError={rulesError}
+        toggleError={saveRule.error?.message ?? null}
         onToggleRule={toggleRule}
         onOpenManager={() => setRulesOpen(true)}
         onSelect={onSelect}
@@ -123,7 +127,12 @@ export function StockPage({ code, onSelect, stream }: Props) {
         onToggleSound={setSoundOn}
       />
       {/* 常駐掛載、只切 open(dialog 樣板慣例);規則清單由本層餵,Dialog 不自己抓 */}
-      <SignalRulesDialog open={rulesOpen} rules={rules} onClose={() => setRulesOpen(false)} />
+      <SignalRulesDialog
+        open={rulesOpen}
+        rules={rules}
+        rulesError={rulesError}
+        onClose={() => setRulesOpen(false)}
+      />
       <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
         {status.tc4 === "down" || wsStatus === "closed" ? (
