@@ -286,6 +286,26 @@ class TestSignalsEnabledRoute:
             assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
 
 
+class TestLegacyEnabledRouteGone:
+    """SC-4:四鍵開關家族退役 —— 規則自帶 `enabled`,兩套開關並存會互相蓋掉。
+
+    hub **就緒**下仍是 404(不是 503):503 代表「暫時不可用、待會再試」,前端會
+    留著舊 UI 等它回來;退役的東西要回 404 才說得清楚「這條路沒了」。
+    """
+
+    def test_legacy_enabled_route_gone(self, tmp_path: Path) -> None:
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            assert app.state.signal_hub is not None  # hub 就緒 → 404 不是降級造成的
+
+            responses = [
+                client.get("/api/stock/signals/enabled"),
+                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
+            ]
+
+        assert [r.status_code for r in responses] == [404, 404]
+
+
 class TestSignalRulesRoutes:
     """SC-4/6:規則 CRUD 是訊號設定的唯一入口 —— 這層壞掉 = 只能手改檔案 + 重啟 server。
 
