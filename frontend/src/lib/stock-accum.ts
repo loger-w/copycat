@@ -1,5 +1,8 @@
 /** 個股前端累算:snapshot 為基底 + tick 增量(design v4 §4;與後端 StockDayState 等值)。 */
 
+import { X_END_MIN, X_START_MIN } from "@/lib/stock-intraday-svg";
+import { snapDown } from "@/lib/stock-tick";
+
 export interface StockTickMsg {
   type: "tick";
   code: string;
@@ -55,6 +58,16 @@ export interface StockBook {
   asks: [number, number][];
 }
 
+/** 一個價位檔位的當日成交量:總張 / 外盤 / 內盤。
+ *
+ *  `t` 不等於 `o + i` —— 未分類(neutral,開盤集合競價無 Bid/Ask 可比)只進 `t`,
+ *  與 `MinuteAgg` 的 `u` 同一語意。 */
+export interface VpCell {
+  t: number;
+  o: number;
+  i: number;
+}
+
 export interface StockAccum {
   code: string;
   seq: number;
@@ -62,6 +75,11 @@ export interface StockAccum {
   vwap: number | null;
   minutes: Map<number, MinuteAgg>;
   ticks: TickRow[];
+  /** 價位別成交量(key = `snapDown` 後的毫元檔位)。**必填** —— 硬轉 fixture 漏建時
+   *  要在消費端炸掉,不要用 `?? new Map()` 吞成靜默空圖。
+   *
+   *  來源是 tick 全量(`ticks` 的 200 筆上限是 tape 顯示需求,與這裡無關)。 */
+  vp: Map<number, VpCell>;
   book: StockBook | null;
   meta: StockMeta | null;
   noData: boolean;
@@ -79,6 +97,34 @@ const TAPE_MAX = 200;
 
 export function minuteKey(t: string): number {
   return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+}
+
+/** 把一筆成交折進價位別直方圖(就地寫入傳入的 map;呼叫端負責先淺拷)。
+ *
+ *  兩道過濾都是「與畫面其他數字對得上」的必要條件,不是防禦性補丁:
+ *  - `p <= 0`:鎖漲跌停時 TC4 會在簿的第一檔推市價佇列,價格欄是 `0`。`snapDown(0)` 是
+ *    合法運算,會憑空長出一個 0 元檔位(規則同 `stock-tick.ts::isMarketLevel`)。
+ *  - `[X_START_MIN, X_END_MIN]` 窗:與 `windowedEntries` / `sideSummary` 同一把尺,
+ *    所以「VP 全部 bar 的總張 = 說明列 外+內+未分類 三數之和」恆成立(可互驗)。
+ *
+ *  cell 一律重建不就地改:memo 比較與時間旅行安全。 */
+function foldVp(
+  vp: Map<number, VpCell>,
+  t: string,
+  p: number,
+  q: number,
+  side: string,
+): void {
+  if (p <= 0) return;
+  const m = minuteKey(t);
+  if (m < X_START_MIN || m > X_END_MIN) return;
+  const key = snapDown(p);
+  const cell = vp.get(key) ?? { t: 0, o: 0, i: 0 };
+  vp.set(key, {
+    t: cell.t + q,
+    o: cell.o + (side === "outer" ? q : 0),
+    i: cell.i + (side === "inner" ? q : 0),
+  });
 }
 
 interface SnapshotShape {
@@ -109,13 +155,19 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
   // 就會岔開,拿錯的當分母不會報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
   // `?? cum_vol` 是舊後端(還沒送 vwap_vol)的相容路徑。
   const volume = snap.vwap_vol ?? snap.last?.cum_vol ?? 0;
+  // VP fold 走**原始全量** ticks —— 在 `slice(-TAPE_MAX)` 之前。tape 的 200 筆上限是
+  // 逐筆明細的顯示需求,VP 要的是「全日」,兩者共用來源但截斷點不同。
+  const srcTicks = snap.ticks ?? [];
+  const vp = new Map<number, VpCell>();
+  for (const row of srcTicks) foldVp(vp, row.t, row.p, row.q, row.side);
   return {
     code: snap.code ?? "",
     seq: snap.seq,
     last: snap.last,
     vwap: snap.vwap,
     minutes,
-    ticks: [...(snap.ticks ?? [])].slice(-TAPE_MAX),
+    ticks: [...srcTicks].slice(-TAPE_MAX),
+    vp,
     book: snap.book,
     meta: snap.meta,
     high: snap.high ?? null,
@@ -150,6 +202,9 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
     ...acc.ticks,
     { t: msg.t, p: msg.p, q: msg.q, side: msg.side, b: msg.b ?? null, a: msg.a ?? null },
   ].slice(-TAPE_MAX);
+  // 淺拷後折本筆(O(價位數) ≤ 域內檔位數 ~200);cell 由 foldVp 重建不就地改
+  const vp = new Map(acc.vp);
+  foldVp(vp, msg.t, msg.p, msg.q, msg.side);
   return {
     ...acc,
     seq: msg.seq,
@@ -157,6 +212,7 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
     vwap: volume > 0 ? Math.round(amountMilli / volume) : null,
     minutes,
     ticks,
+    vp,
     // 缺欄位 → 保留原值(舊後端不發 h/l 時,線不該閃掉)
     high: msg.h ?? acc.high,
     low: msg.l ?? acc.low,
