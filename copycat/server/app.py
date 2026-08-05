@@ -173,7 +173,11 @@ async def _boot(
             # CancelledError 交還關機路徑(shield 救不了 —— 孤兒 close task 一樣沒人 await)
             try:
                 await close(obj)
-            except BaseException:
+            except asyncio.CancelledError:
+                # 預期路徑(二次 cancel 打斷 close),不是錯誤 → 不吐 ERROR traceback,
+                # 分法與 lifespan finally 的 CancelledError / Exception 兩分一致
+                logger.info("%s close 被二次 cancel 中斷(關機續行)", name)
+            except Exception:
                 logger.exception("%s close 失敗(關機中斷 boot,忽略)", name)
         raise
     except Exception:
@@ -553,7 +557,15 @@ def create_app(
             try:
                 await boot_task
             except asyncio.CancelledError:
-                logger.info("boot 序列被關機中斷(已建物件由 _boot 的 cancel 分支收掉)")
+                # 同一個 CancelledError 有兩種來源,指向的問題完全不同:
+                # `boot_task.cancelled()` True = 上面那行 cancel 生效(預期關機路徑);
+                # False = **lifespan 自己**被外部 cancel(uvicorn graceful timeout 等),
+                # `await` 就地拋、boot task 還在跑 —— 下面的反序 close 也可能被下一次
+                # cancel 打斷。續行語意兩者相同,只有 log 要分得開。
+                if boot_task.cancelled():
+                    logger.info("boot 序列被關機中斷(已建物件由 _boot 的 cancel 分支收掉)")
+                else:
+                    logger.warning("關機路徑自身被 cancel,反序 close 可能不完整")
             except BaseException:
                 # **絕不能讓它跳過下面的反序 close**:裸 await 會把 boot task 的例外
                 # 就地重拋 → 六段 close + runtime.close 全部不執行,TC4 session /

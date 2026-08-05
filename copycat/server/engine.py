@@ -225,6 +225,13 @@ class EngineRuntime:
                 self._buffer = None
                 self._set_status("degraded")
                 raise
+            except asyncio.CancelledError:
+                # 對稱分支:cancel 一樣會穿過上面兩個 to_thread,孤兒 buffer 留著的話
+                # 之後每一則 tick 都被塞進沒人 flush 的 buffer(totals 靜默凍結)。
+                # **不設 degraded**:現況 cancel 只來自關機(lifespan 收 engine),
+                # 那不是「來源壞掉」;新增別的 cancel 來源時要一併回頭想狀態語意。
+                self._buffer = None
+                raise
             backfill_secs = time.monotonic() - t0
             buffer = self._buffer
             self._buffer = None
