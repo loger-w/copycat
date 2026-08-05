@@ -395,7 +395,7 @@ class StockQuoteSource(TC4QuoteSource):
         self._ensure_connected()
         sym = stock_symbol(code)
         start, end = stock_window(self._trade_date)
-        rows = self._collect_history(sym, "1K", start, end)
+        rows = self._collect_history(sym, "1K", start, end).rows
         minutes: dict[str, int] = {}
         skipped = 0
         for r in rows:
@@ -438,10 +438,10 @@ class StockQuoteSource(TC4QuoteSource):
         start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
+            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows
             return parse_1k_bars(rows), "tc4_1k"
 
-        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
+        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
         if bars:
             return bars, "tc4_dk"
         fb_start = max(
@@ -451,7 +451,7 @@ class StockQuoteSource(TC4QuoteSource):
         logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
         # fallback 也要傳短 budget:漏傳的話 tf=D 無資料標的變成 10 + 30 = 40s
         fb = aggregate_1k_to_daily(
-            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE)
+            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE).rows
         )
         return fb, "tc4_dk_1k_agg"
 
@@ -464,10 +464,10 @@ class StockQuoteSource(TC4QuoteSource):
         end_d = _dt.date.today()
         start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
-        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end))
+        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end).rows)
         if not bars:
             logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
-            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end))
+            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end).rows)
         return bars[-n:]
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑)----
