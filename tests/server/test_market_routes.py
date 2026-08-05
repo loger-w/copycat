@@ -196,6 +196,55 @@ class TestFutures:
         assert len(txf["bars"]) == 1
 
 
+class TestSessionParam:
+    """SC-3:`?session=allday` 三層貫通 + 值域驗證(futures-allday §1.4)。"""
+
+    def test_allday_forwarded_to_source_and_returns_night_bars(self) -> None:
+        fut = FakeFuturesSource(today=_TODAY)
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TXF?tf=1&days=2&session=allday")
+        assert r.status_code == 200
+        assert set(fut.sessions) == {"allday"}
+        assert [b["t"] for b in r.json()["bars"]] == [f"{_TODAY} 09:01", f"{_TODAY} 15:01"]
+
+    def test_default_session_is_day(self) -> None:
+        """無 session 參數 = 既有行為(既有 caller / 大盤 tab 零影響)。"""
+        fut = FakeFuturesSource(today=_TODAY)
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TXF?tf=1&days=2")
+        assert set(fut.sessions) == {"day"}
+        assert [b["t"] for b in r.json()["bars"]] == [f"{_TODAY} 09:01"]
+
+    def test_session_isolated_in_cache_across_requests(self) -> None:
+        """先 day 後 allday(同一個 client / 同一份 cache):近全那次必須真的拿到夜盤根。"""
+        fut = FakeFuturesSource(today=_TODAY)
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            c.get("/api/market/bars/TXF?tf=1&days=2")
+            r = c.get("/api/market/bars/TXF?tf=1&days=2&session=allday")
+        assert [b["t"] for b in r.json()["bars"]] == [f"{_TODAY} 09:01", f"{_TODAY} 15:01"]
+
+    def test_allday_on_non_futures_key_is_400(self) -> None:
+        """近全段是期指專屬:加權 / 櫃買沒有夜盤,靜默當 day 處理會讓前端以為有。"""
+        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
+            r = c.get("/api/market/bars/TWSE?tf=1&session=allday")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "INVALID_SESSION"
+
+    def test_unknown_session_value_is_400(self) -> None:
+        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
+            r = c.get("/api/market/bars/TXF?tf=1&session=xxx")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "INVALID_SESSION"
+
+    def test_daily_ignores_session(self) -> None:
+        """tf=D 無 session 維度(D-15):不轉給 source、也不進 cache 鍵。"""
+        fut = FakeFuturesSource(today=_TODAY)
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TXF?tf=D&session=allday")
+        assert r.status_code == 200
+        assert set(fut.sessions) == {"day"}
+
+
 class TestVolumeMeta:
     """`volume` 由資料判定(2026-07-30 real-env 抓到:加權 DK 的 v 全為 0)。
 
