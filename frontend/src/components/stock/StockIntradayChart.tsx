@@ -30,6 +30,7 @@ import {
   type OverlayLevel,
   type OverlayLine,
 } from "@/lib/stock-intraday-svg";
+import { buildVpBars, VP_FILL_OPACITY, type VpBar } from "@/lib/volume-profile";
 import { cn, safeIdToken } from "@/lib/utils";
 
 const MAIN = { width: 800, height: 260 };
@@ -107,6 +108,7 @@ const ChartStatic = memo(function ChartStatic({
   refMilli,
   showVwap,
   oLines,
+  vpBars,
   clipAbove,
   clipBelow,
   plotBottom,
@@ -119,6 +121,8 @@ const ChartStatic = memo(function ChartStatic({
   refMilli: number | null;
   showVwap: boolean;
   oLines: OverlayLine[];
+  /** 價位別成交量長條;關掉 toggle 時為空陣列。**必經呼叫端 useMemo**(identity 穩定) */
+  vpBars: VpBar[];
   clipAbove: string;
   clipBelow: string;
   /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
@@ -214,6 +218,26 @@ const ChartStatic = memo(function ChartStatic({
           </text>
         </g>
       ))}
+      {/* 價位別成交量(SC-3)。水平長條自繪圖區左緣向右,長度 = 該價位當日成交張數比例。
+          **位置在 y 格線之後、平盤填色之前**:svg 沒有 z-index,圖層完全由文件順序決定,
+          而這組長條是背景參考 —— 排到紅綠填色或走勢線之後就把主資訊蓋掉,畫面上卻照樣
+          「有東西」,沒有任何錯誤訊號。
+          `x` 恆為 `Y_AXIS_W`(幾何層只出 y/h/w,左界屬版面決策留在元件端);顏色與量副圖
+          同一個 `fill-ink-muted` token,透明度收在 lib 常數不在這裡寫 magic number。 */}
+      <g data-testid="vp-bars">
+        {vpBars.map((b) => (
+          <rect
+            key={b.priceMilli}
+            data-testid="vp-bar"
+            x={Y_AXIS_W}
+            y={b.y}
+            width={b.w}
+            height={b.h}
+            className="fill-ink-muted"
+            fillOpacity={VP_FILL_OPACITY}
+          />
+        ))}
+      </g>
       {/* 平盤與走勢線之間的填色(SC-3):同一個封閉多邊形,用 clip 切上下兩半分別塗色 */}
       {g.hasRef && g.areaPolygon !== "" ? (
         <>
@@ -492,6 +516,16 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
     [accum.minutes, subW, subH],
   );
 
+  // 價位別成交量(SC-3)。**必經 useMemo**:hover 每個 mousemove 都 re-render 本元件,
+  // 陣列每次新 identity 會打穿 ChartStatic 的 memo,整層線圖跟著重建。
+  // 關掉時回**同一個空陣列語意**的重算即可 —— 依賴沒變就不會重算,不需要另設常數。
+  // `mainW` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
+  // 幾何與長條會各自依據不同的畫布寬算,bar 的滿寬比例靜默漂掉。
+  const vpBars = useMemo(
+    () => (toggles.vp ? buildVpBars(accum.vp, g, mainW) : []),
+    [accum.vp, g, toggles.vp, mainW],
+  );
+
   const overlay = overlayQ.data ?? null;
   // 可用性:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰 + 顯示 off
   const cdpAvailable = overlayQ.isError ? false : overlay ? overlay.cdp !== null : true;
@@ -587,10 +621,12 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
     setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
   }
 
-  const toggleDefs: { key: "vwap" | "cdp" | "ma"; label: string; available: boolean }[] = [
+  const toggleDefs: { key: "vwap" | "cdp" | "ma" | "vp"; label: string; available: boolean }[] = [
     { key: "vwap", label: "均價", available: true },
     { key: "cdp", label: "CDP", available: cdpAvailable },
     { key: "ma", label: "MA", available: maAvailable },
+    // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),恆可用
+    { key: "vp", label: "量分佈", available: true },
   ];
 
   return (
@@ -638,6 +674,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           refMilli={ref}
           showVwap={toggles.vwap}
           oLines={oLines}
+          vpBars={vpBars}
           clipAbove={clipAbove}
           clipBelow={clipBelow}
           plotBottom={plotBottom}
