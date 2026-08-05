@@ -153,13 +153,9 @@ describe("CapitalPositionsList", () => {
     expect(screen.getByText("23000")).toBeTruthy();
     fireEvent.click(screen.getByText("確認"));
     await waitFor(() => expect(bodies.length).toBe(1));
-    expect(bodies[0]).toEqual({
-      market: "fut",
-      key: "TXFI6",
-      price: 23000,
-      qty: 2,
-      kind: "cash",
-    });
+    // fut 不送 kind:OI 列沒有庫存種類這一維,送 "cash" 會讓每筆期貨平倉的審計多一個
+    // 看起來像「現股」的誤導欄位(後端本來就忽略它)
+    expect(bodies[0]).toEqual({ market: "fut", key: "TXFI6", price: 23000, qty: 2 });
     await waitFor(() => expect(screen.queryByText("確認平倉")).toBeNull());
   });
 
@@ -181,7 +177,9 @@ describe("CapitalPositionsList", () => {
     });
     renderList("sec", () => 985);
     await screen.findAllByText(/2330/);
-    // 代號文字節點不變(RTL getNodeText 只取直接文字子節點),種類是獨立子元素
+    // ⚠ 這行是「種類標籤不得併入代號文字節點」的唯一守門:RTL 的 getNodeText 只取直接
+    // 文字子節點,標籤一旦併進代號字串就變成 "2330 台積電資" → 這裡紅(RightRail 的
+    // 精確字串斷言是委託列,守不到部位列)
     expect(screen.getAllByText("2330 台積電").length).toBe(2);
     expect(screen.getByText("現")).toBeTruthy();
     expect(screen.getByText("資")).toBeTruthy();

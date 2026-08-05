@@ -7,10 +7,10 @@ from __future__ import annotations
 import pytest
 
 from copycat.capital.close import build_close_order, build_future_close_order
-from copycat.capital.models import Position, PositionCloseRequest
+from copycat.capital.models import Position, PositionCloseRequest, TradeKind
 
 
-def _pos(qty: int, kind: str = "cash") -> Position:
+def _pos(qty: int, kind: TradeKind = "cash") -> Position:
     return Position(market="sec", stock_no="2330", qty=qty, avg_price=500.0, kind=kind)
 
 
