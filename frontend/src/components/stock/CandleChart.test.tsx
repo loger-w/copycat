@@ -496,3 +496,119 @@ describe("CandleChart 視窗高低標記(round4 項 1)", () => {
     expect(container).toBeTruthy();
   });
 });
+
+// 🟢 futures-allday SC-7/SC-11:水平 overlay 線(持倉均價 / OI 撐壓)
+describe("CandleChart 水平線 overlay(futures-allday SC-7/SC-11)", () => {
+  const hlines = (c: HTMLElement) => [...c.querySelectorAll("[data-testid='chart-hline']")];
+
+  it("未傳 hlines → 一條都不畫(個股 / 大盤頁零行為變化)", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    expect(hlines(container).length).toBe(0);
+  });
+
+  it("視窗值域內的線畫出來:線 + 標籤 + hover title", () => {
+    const { container } = render(
+      <CandleChart
+        bars={BARS}
+        hlines={[
+          { priceMilli: 100_000, label: "均 100 多1口", className: "stroke-accent" },
+          { priceMilli: 110_000, label: "壓 110", className: "stroke-bear", title: "壓 110・OI 14000口・2026-08-04" },
+        ]}
+      />,
+    );
+    const gs = hlines(container);
+    expect(gs.length).toBe(2);
+    // 線橫貫整個 viewBox 寬,y 落在價格區內
+    const line = gs[0]!.querySelector("line")!;
+    expect(Number(line.getAttribute("x1"))).toBe(0);
+    expect(Number(line.getAttribute("x2"))).toBe(1400);
+    expect(Number(line.getAttribute("y1"))).toBeGreaterThan(0);
+    expect(line.getAttribute("class")).toContain("stroke-accent");
+    // 標籤文字
+    expect(screen.getByText("均 100 多1口")).toBeTruthy();
+    expect(screen.getByText("壓 110")).toBeTruthy();
+    // title 只掛在有帶的那條(SVG hover 提示 = <title> 子節點)
+    expect(gs[0]!.querySelector("title")).toBeNull();
+    expect(gs[1]!.querySelector("title")!.textContent).toBe("壓 110・OI 14000口・2026-08-04");
+  });
+
+  it("超出當前 y 視窗的線不畫(clamp 到邊緣會把圖外價位講成圖緣價位)", () => {
+    const { container } = render(
+      <CandleChart
+        bars={BARS}
+        hlines={[
+          { priceMilli: 500_000, label: "壓 500", className: "stroke-bear" }, // 遠高於視窗高 118
+          { priceMilli: 1_000, label: "撐 1", className: "stroke-bull" }, // 遠低於視窗低 95
+          { priceMilli: 105_000, label: "均 105", className: "stroke-accent" },
+        ]}
+      />,
+    );
+    expect(hlines(container).length).toBe(1);
+    expect(screen.getByText("均 105")).toBeTruthy();
+    expect(screen.queryByText("壓 500")).toBeNull();
+    expect(screen.queryByText("撐 1")).toBeNull();
+  });
+
+  it("無可視 bar → 不畫線(空幾何無值域可言)", () => {
+    const { container } = render(
+      <CandleChart bars={[]} hlines={[{ priceMilli: 100_000, label: "均 100", className: "stroke-accent" }]} />,
+    );
+    expect(hlines(container).length).toBe(0);
+  });
+});
+
+// 🟢 futures-allday SC-8:量區改畫內外盤雙柱
+describe("CandleChart 內外盤量副圖(futures-allday SC-8)", () => {
+  const DELTA_BARS: Bar[] = [
+    { t: "2026-08-05 09:01", o: 100_000, h: 101_000, l: 99_000, c: 100_500, v: 30, uv: 20, dv: 10 },
+    { t: "2026-08-05 09:02", o: 100_500, h: 102_000, l: 100_000, c: 101_000, v: 20, uv: 5, dv: 15 },
+  ];
+  const count = (c: HTMLElement, id: string) => c.querySelectorAll(`[data-testid='${id}']`).length;
+
+  it("未傳 volumeDelta → 既有量柱(個股 / 大盤頁零行為變化)", () => {
+    const { container } = render(<CandleChart bars={DELTA_BARS} />);
+    expect(count(container, "vol-bar")).toBe(2);
+    expect(count(container, "vol-delta-outer")).toBe(0);
+    expect(count(container, "vol-delta-inner")).toBe(0);
+  });
+
+  it("volumeDelta 但視窗內無 uv/dv(日 K 路徑)→ 回退既有量柱", () => {
+    const { container } = render(<CandleChart bars={BARS} volumeDelta />);
+    expect(count(container, "vol-bar")).toBe(3);
+    expect(count(container, "vol-delta-outer")).toBe(0);
+  });
+
+  it("volumeDelta 且有 uv/dv → 每根一組外盤 / 內盤半寬柱,主量柱不並存", () => {
+    const { container } = render(<CandleChart bars={DELTA_BARS} volumeDelta />);
+    expect(count(container, "vol-bar")).toBe(0);
+    expect(count(container, "vol-delta-outer")).toBe(2);
+    expect(count(container, "vol-delta-inner")).toBe(2);
+
+    const outer = [...container.querySelectorAll("[data-testid='vol-delta-outer']")];
+    const inner = [...container.querySelectorAll("[data-testid='vol-delta-inner']")];
+    const h = (el: Element) => Number(el.getAttribute("height"));
+    // 第 1 根外盤 20 > 內盤 10;第 2 根內盤 15 > 外盤 5(色與量對得上,不是畫反)
+    expect(h(outer[0]!)).toBeGreaterThan(h(inner[0]!));
+    expect(h(inner[1]!)).toBeGreaterThan(h(outer[1]!));
+    // 歸一分母 = 視窗內 max(uv+dv) = 30 → 第 1 根兩柱高度和 = 量區滿格
+    expect(h(outer[0]!) + h(inner[0]!)).toBeGreaterThan(h(outer[1]!) + h(inner[1]!));
+    // 外盤紅(bull)、內盤綠(bear)
+    expect(outer[0]!.getAttribute("class")).toContain("bull");
+    expect(inner[0]!.getAttribute("class")).toContain("bear");
+    // 兩根並列在同一根 bar 的半寬上,底邊齊平
+    const bottom = (el: Element) => Number(el.getAttribute("y")) + h(el);
+    expect(bottom(outer[0]!)).toBeCloseTo(bottom(inner[0]!), 5);
+    expect(Number(inner[0]!.getAttribute("x"))).toBeGreaterThan(Number(outer[0]!.getAttribute("x")));
+    expect(Number(outer[0]!.getAttribute("width"))).toBeCloseTo(
+      Number(inner[0]!.getAttribute("width")),
+      5,
+    );
+  });
+
+  it("showVolume=false 勝過 volumeDelta(無量資料就是無量資料)", () => {
+    const { container } = render(<CandleChart bars={DELTA_BARS} volumeDelta showVolume={false} />);
+    expect(screen.getByText("無量資料")).toBeTruthy();
+    expect(count(container, "vol-delta-outer")).toBe(0);
+    expect(count(container, "vol-bar")).toBe(0);
+  });
+});
