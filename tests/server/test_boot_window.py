@@ -238,6 +238,52 @@ class TestSelectDuringHandover:
             assert again.status_code == 200, "交接完成後同一個請求必須成功"
 
 
+class TestReadyProbe:
+    """`/api/ready` = 就緒的唯一對外管道(D4)。
+
+    刻意**不動 `/api/health`**:它的 docstring 明文「不含引擎健康度」,build 身分要在
+    引擎全壞時也答得出來 —— 混進就緒狀態會讓「這台是哪一版」在最需要它的時候失效。
+    """
+
+    def test_ready_flips_false_to_true(self) -> None:
+        fake = BlockingTxoSource()
+        app = create_app(fake, throttle_secs=0.01)
+        client = TestClient(app, raise_server_exceptions=False)
+        with client:
+            assert fake.entered.wait(5), "boot 沒真的在跑,窗內 false 不算數"
+            assert client.get("/api/ready").json() == {"ready": False, "error": None}
+
+            fake.gate.set()  # 放行必須在 exit 之前(見 TestBootWindowIsOpen 的註解)
+            wait_boot(app)
+            assert client.get("/api/ready").json() == {"ready": True, "error": None}
+
+    def test_ready_reports_boot_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """序列未走完即中止:ready 仍是 true(序列結束了),但 error 必須有值。
+
+        兩欄合起來才分得出「正常起完」與「起到一半炸了」—— 只有 ready 的話,最壞的
+        失效樣態(後續引擎全部靜默不啟動)在 probe 上看起來一切正常。
+        """
+
+        def _boom(*_a: object, **_k: object) -> object:
+            raise RuntimeError("watchlist service 建構炸了")
+
+        monkeypatch.setattr(app_mod, "WatchlistService", _boom)
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=FakeStockSource(),
+            stock_watchlist_path=_watchlist(tmp_path, []),
+            throttle_secs=0.01,
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            wait_boot(app, allow_error=True)
+            body = client.get("/api/ready").json()
+            assert body["ready"] is True
+            assert body["error"] is not None
+            assert "watchlist service 建構炸了" in body["error"]
+
+
 class TestBootSequenceException:
     def test_boot_sequence_exception_surfaces_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
