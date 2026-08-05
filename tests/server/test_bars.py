@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+import copycat.server.bars as bars_mod
 from copycat.live.stock_source import Bar, BarsStatus
 from copycat.server.bars import (
     DAILY_MAX_BARS,
@@ -570,3 +571,78 @@ class TestUnknownStatusCoerced:
             [],
             "disconnected",
         )
+
+
+class TestMidnightMemoRace:
+    """TZ-2:台北剛過午夜的第一個請求會把「昨日」永久化(近全模式最痛)。
+
+    夜盤到 05:00 才收,`yesterday` 在 00:0x 時仍是**當前這個交易日**的一部分,而
+    TC4 的 1K 分頁不保證此刻已把 23:5x 的尾根寫進去。歷史段的 memo 是**永久**的
+    (`_hist` 沒有 TTL、且只有非空才覆寫),一旦這一刻寫下去,那幾根就永遠缺 ——
+    自癒路徑只剩重啟 server,而畫面上就只是「昨晚最後幾分鐘不見了」,零錯誤訊號。
+
+    修法 = 緩衝窗(< `MIDNIGHT_BUFFER_END`)內**不永久化 yesterday**,fetch 到的照樣
+    併進回應。時刻讀取收在 `bars._now_time`,測試凍結它。
+    """
+
+    TODAY = _dt.date(2026, 7, 29)
+    YESTERDAY = _dt.date(2026, 7, 28)
+    CK = "F:TXF:allday"
+
+    @staticmethod
+    def _freeze(monkeypatch: pytest.MonkeyPatch, hh: int, mm: int) -> None:
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(hh, mm))
+
+    async def _run(self, days: int, hist: list[Bar]) -> tuple[BarsCache, list[Bar]]:
+        cache = BarsCache(ttl=999.0)
+        out, _ = await build_minute(
+            _Fetcher([hist, []]), cache, "F:TXF", days, self.TODAY, session="allday"
+        )
+        return cache, out
+
+    async def test_inside_buffer_yesterday_not_persisted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """00:03 —— 昨日不入 memo(下一輪會重抓),但這一輪的回應不因此變少。"""
+        self._freeze(monkeypatch, 0, 3)
+        cache, out = await self._run(2, [bar("2026-07-28 23:59")])
+        assert [b["t"] for b in out] == ["2026-07-28 23:59"]
+        assert cache.hist_missing(self.CK, self.YESTERDAY, self.YESTERDAY) == [self.YESTERDAY]
+
+    async def test_after_buffer_yesterday_persisted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """00:15 —— 緩衝過了就照常永久化(否則等於把歷史 memo 整個關掉)。"""
+        self._freeze(monkeypatch, 0, 15)
+        cache, out = await self._run(2, [bar("2026-07-28 23:59")])
+        assert [b["t"] for b in out] == ["2026-07-28 23:59"]
+        assert cache.hist_missing(self.CK, self.YESTERDAY, self.YESTERDAY) == []
+
+    async def test_daytime_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """盤中(10:00)是絕大多數請求走的路 —— 緩衝不得波及。"""
+        self._freeze(monkeypatch, 10, 0)
+        cache, _ = await self._run(2, [bar("2026-07-28 23:59")])
+        assert cache.hist_missing(self.CK, self.YESTERDAY, self.YESTERDAY) == []
+
+    async def test_inside_buffer_older_days_still_persisted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """緩衝只保護 yesterday:更早的日子早已定案,跟著重抓純粹是白付 TC4 往返。"""
+        self._freeze(monkeypatch, 0, 3)
+        older = _dt.date(2026, 7, 27)
+        hist = [bar("2026-07-27 23:59"), bar("2026-07-28 23:59")]
+        cache, out = await self._run(3, hist)
+        assert [b["t"] for b in out] == ["2026-07-27 23:59", "2026-07-28 23:59"]
+        assert cache.hist_missing(self.CK, older, older) == []
+        assert cache.hist_missing(self.CK, self.YESTERDAY, self.YESTERDAY) == [self.YESTERDAY]
+
+    async def test_inside_buffer_refetches_on_next_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """洞要能自癒:緩衝內的第二個請求必須真的再問一次 TC4,並拿到補齊後的尾根。"""
+        self._freeze(monkeypatch, 0, 3)
+        partial = [bar("2026-07-28 23:58")]
+        full = [bar("2026-07-28 23:58"), bar("2026-07-28 23:59")]
+        fetch = _Fetcher([partial, [], full, []])
+        cache = BarsCache(ttl=999.0)
+        await build_minute(fetch, cache, "F:TXF", 2, self.TODAY, session="allday")
+        out, _ = await build_minute(fetch, cache, "F:TXF", 2, self.TODAY, session="allday")
+        assert [b["t"] for b in out] == ["2026-07-28 23:58", "2026-07-28 23:59"]
