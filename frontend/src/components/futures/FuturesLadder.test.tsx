@@ -456,6 +456,70 @@ describe("FuturesLadder 一鍵平倉(SC-10)", () => {
     expect(screen.queryByText("確認平倉")).toBeNull();
   });
 
+  // 送出後的回饋:與同檔 clickPrice 同型(mutateAsync + then/catch → hint)。
+  // 平倉失敗若靜默,畫面上「部位還在」與「送出去被拒」長得一模一樣。
+  it("平倉 200 但 ok:false → hint 顯示後端 message", async () => {
+    mockFetch({
+      "/api/capital/position/close": () =>
+        json({ ok: false, code: -1, message: "結果未知(逾時)", seq_no: null }),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(screen.getByText("結果未知(逾時)")).toBeTruthy());
+  });
+
+  it("平倉 400 → hint 顯示 tradeErrorText 產物(不是原始錯誤碼)", async () => {
+    mockFetch({
+      "/api/capital/position/close": () =>
+        json({ detail: { error: "BROKER_REJECTED", err_code: "1097", err_msg: "廢單" } }, 400),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(screen.getByText("券商拒單(1097)")).toBeTruthy());
+  });
+
+  it("平倉成功 → hint 顯示已送出(含契約與口數)", async () => {
+    mockFetch({
+      "/api/capital/position/close": () =>
+        json({ ok: true, code: 0, message: "ok", seq_no: "C01" }),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(screen.getByText("已送平倉 TXFI6 × 2 口")).toBeTruthy());
+  });
+
+  it("平倉失敗不動武裝狀態(平倉不是武裝路徑)", async () => {
+    mockFetch({
+      "/api/capital/position/close": () =>
+        json({ ok: false, code: -1, message: "結果未知(逾時)", seq_no: null }),
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    armUp();
+    fireEvent.click(btn);
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(screen.getByText("結果未知(逾時)")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+  });
+
   it("有部位但估價 null(漲跌停缺)→ disabled + title「無行情估價」", async () => {
     mockFetch({
       "/api/capital/orders": () => json({ orders: [] }),
