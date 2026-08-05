@@ -226,6 +226,8 @@ export default function App() {
                   state={futProd}
                   resolvedYm={resolvedYm}
                   wsStatus={futuresStream.wsStatus}
+                  // 期現價差的現貨腿(SC-5);App 已持有,傳進去即可
+                  twse={twse}
                 />
               </Suspense>
             </div>
