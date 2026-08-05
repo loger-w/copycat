@@ -548,9 +548,11 @@ describe("StockPage 訊號規則(signal-rules SC-7)", () => {
     mockRules();
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "管理訊號規則" })).toBeTruthy());
-    expect(screen.getByTestId("signal-rules-dialog").className).toContain("hidden");
+    // 逐 token 比對:`flex-col` 恆在 class 上,子字串斷言鎖不到 display 的切換
+    const cls = () => (screen.getByTestId("signal-rules-dialog").className ?? "").split(/\s+/);
+    expect(cls()).toContain("hidden");
     fireEvent.click(screen.getByRole("button", { name: "管理訊號規則" }));
-    expect(screen.getByTestId("signal-rules-dialog").className).toContain("flex");
+    expect(cls()).toContain("flex");
     expect(within(screen.getByTestId("signal-rules-dialog")).getByText("我的爆量")).toBeTruthy();
   });
 });
