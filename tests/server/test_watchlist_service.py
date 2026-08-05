@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 
 from copycat.server.watchlist_service import WatchlistService
-from copycat.stock_watchlist import WATCHLIST_LIMIT, Watchlist, WatchlistError, load_watchlist
+from copycat.stock_watchlist import (
+    UNGROUPED_NAME,
+    WATCHLIST_LIMIT,
+    Watchlist,
+    WatchlistError,
+    load_watchlist,
+)
 
 
 class _FakeEngine:
@@ -294,3 +300,219 @@ class TestConcurrency:
         assert json.loads(path.read_text(encoding="utf-8"))["codes"] == ["2330"]
         assert len(engine.set_calls) == 1
         assert len(engine.published) == 1
+
+
+class TestCreateGroup:
+    """SC-2:建空群組;同名(strip 後)= no-op 不是錯誤;保留名 / 空名照 normalize 拒。"""
+
+    async def test_create_group_empty_and_duplicate_noop(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+
+        wl, changed = await service.create_group("主力")
+
+        assert changed is True
+        assert wl == {"codes": [], "groups": [{"name": "主力", "codes": []}]}
+        assert load_watchlist(path) == wl
+        mtime = path.stat().st_mtime_ns
+
+        again, changed_again = await service.create_group("主力 ")  # strip 後同名
+
+        assert changed_again is False
+        assert again == wl
+        assert path.stat().st_mtime_ns == mtime  # 沒落檔
+        assert len(engine.set_calls) == 1
+
+    async def test_create_group_blank_name_raises(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):
+            await service.create_group("   ")
+
+        assert not path.exists()
+        assert engine.set_calls == []
+
+    async def test_create_group_reserved_name_raises(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):
+            await service.create_group(UNGROUPED_NAME)
+
+        assert not path.exists()
+        assert engine.set_calls == []
+
+    async def test_group_only_change_reissues_same_codes(self, tmp_path: Path) -> None:
+        """R9:group-only 變更照樣 set_watchlist,codes 相同(引擎端零 SUB/UNSUB,
+        守門測試在 tests/server/test_stock_engine.py)。"""
+        service, engine, _ = _service(tmp_path)
+        await service.apply({"codes": ["2330", "5483"], "groups": []})
+
+        _, changed = await service.create_group("觀察")
+
+        assert changed is True
+        assert len(engine.set_calls) == 2
+        assert engine.set_calls[-1] == ["2330", "5483"]  # codes 未變,仍重送一次
+
+
+class TestDeleteGroup:
+    async def test_delete_group_keeps_codes(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.apply(
+            {"codes": ["2330", "5483"], "groups": [{"name": "主力", "codes": ["2330"]}]}
+        )
+
+        wl, changed = await service.delete_group(" 主力 ")  # strip 後比對
+
+        assert changed is True
+        assert wl == {"codes": ["2330", "5483"], "groups": []}  # 成員落回未分組衍生桶
+        assert load_watchlist(path) == wl
+        assert engine.set_calls[-1] == ["2330", "5483"]
+
+    async def test_delete_group_missing_raises(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.add("2330")
+        before = path.read_text(encoding="utf-8")
+        engine.set_calls.clear()
+
+        with pytest.raises(WatchlistError, match="GROUP_NOT_FOUND"):
+            await service.delete_group("不存在")
+
+        assert path.read_text(encoding="utf-8") == before
+        assert engine.set_calls == []
+
+
+class TestRenameGroup:
+    async def test_rename_group_basic(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.apply({"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]})
+
+        wl, changed = await service.rename_group("主力", " 觀察 ")
+
+        assert changed is True
+        assert wl == {"codes": ["2330"], "groups": [{"name": "觀察", "codes": ["2330"]}]}
+        assert load_watchlist(path) == wl
+        assert engine.set_calls[-1] == ["2330"]
+
+    async def test_rename_group_collision_bad_group(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.apply(
+            {
+                "codes": ["2330", "5483"],
+                "groups": [{"name": "主力", "codes": ["2330"]}, {"name": "觀察", "codes": []}],
+            }
+        )
+        before = path.read_text(encoding="utf-8")
+        engine.set_calls.clear()
+
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):
+            await service.rename_group("主力", "觀察")
+
+        assert path.read_text(encoding="utf-8") == before
+        assert engine.set_calls == []
+
+    async def test_rename_group_same_after_strip_noop(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        first = await service.apply(
+            {"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]}
+        )
+        mtime = path.stat().st_mtime_ns
+
+        wl, changed = await service.rename_group("主力", " 主力 ")
+
+        assert changed is False
+        assert wl == first
+        assert path.stat().st_mtime_ns == mtime
+        assert len(engine.set_calls) == 1
+
+    async def test_rename_group_missing_raises(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.add("2330")
+        before = path.read_text(encoding="utf-8")
+        engine.set_calls.clear()
+
+        with pytest.raises(WatchlistError, match="GROUP_NOT_FOUND"):
+            await service.rename_group("不存在", "新名")
+
+        assert path.read_text(encoding="utf-8") == before
+        assert engine.set_calls == []
+
+
+class TestUngroup:
+    async def test_ungroup_removes_membership_keeps_code(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.apply(
+            {"codes": ["2330", "5483"], "groups": [{"name": "主力", "codes": ["2330", "5483"]}]}
+        )
+
+        wl, changed = await service.ungroup("2330", " 主力 ")
+
+        assert changed is True
+        assert wl == {
+            "codes": ["2330", "5483"],
+            "groups": [{"name": "主力", "codes": ["5483"]}],
+        }  # 仍在自選
+        assert load_watchlist(path) == wl
+        assert engine.set_calls[-1] == ["2330", "5483"]
+
+    async def test_ungroup_noop_when_absent(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        first = await service.apply(
+            {"codes": ["2330", "5483"], "groups": [{"name": "主力", "codes": ["2330"]}]}
+        )
+        mtime = path.stat().st_mtime_ns
+
+        wl, changed = await service.ungroup("5483", "主力")
+
+        assert changed is False
+        assert wl == first
+        assert path.stat().st_mtime_ns == mtime
+        assert len(engine.set_calls) == 1
+
+    async def test_ungroup_missing_group_raises(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.add("2330")
+        before = path.read_text(encoding="utf-8")
+        engine.set_calls.clear()
+
+        with pytest.raises(WatchlistError, match="GROUP_NOT_FOUND"):
+            await service.ungroup("2330", "不存在")
+
+        assert path.read_text(encoding="utf-8") == before
+        assert engine.set_calls == []
+
+
+class TestChangedFlag:
+    async def test_add_remove_return_changed_flag(self, tmp_path: Path) -> None:
+        service, _, _ = _service(tmp_path)
+
+        wl, changed = await service.add("2330")
+        assert changed is True
+        assert wl["codes"] == ["2330"]
+
+        _, changed_again = await service.add("2330")
+        assert changed_again is False
+
+        _, removed = await service.remove("2330")
+        assert removed is True
+
+        _, removed_again = await service.remove("2330")
+        assert removed_again is False
+
+
+class TestReservedGroupGate:
+    """SC-6 R5:保留名 gate 的唯一端到端證明(bot 自動建群那條路打得到)。"""
+
+    async def test_add_with_reserved_group_raises_bad_group_and_writes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.add("5483")
+        before = path.read_text(encoding="utf-8")
+        engine.set_calls.clear()
+        engine.published.clear()
+
+        with pytest.raises(WatchlistError, match="BAD_GROUP"):
+            await service.add("2330", group=UNGROUPED_NAME)
+
+        assert path.read_text(encoding="utf-8") == before  # 檔未變
+        assert engine.set_calls == []
+        assert engine.published == []

@@ -145,6 +145,22 @@ class TestRefcountPool:
         assert src.subscribed.count("9999") == 1
         await engine.close()
 
+    async def test_same_codes_resubscribe_is_a_noop_for_the_source(self) -> None:
+        """group-only 變更(建群 / 改名 / 移出群組)會以**相同 codes** 再呼叫一次
+        `set_watchlist`(watchlist_service R9 的前提)。那條路一旦產生 UNSUB/SUB,
+        盤中改個群組就會讓整份自選斷訂重訂 —— 畫面是一排「-」而且沒有任何錯誤訊號。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "2317"])
+        subscribed = len(src.subscribed)
+        unsubscribed = len(src.unsubscribed)
+
+        await engine.set_watchlist(["2330", "2317"])
+
+        assert len(src.subscribed) == subscribed
+        assert len(src.unsubscribed) == unsubscribed
+        await engine.close()
+
 
 class TestBackfillGuard:
     async def test_stale_backfill_not_applied_after_main_switch(self) -> None:
