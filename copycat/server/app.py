@@ -31,6 +31,8 @@ from copycat.live.stock_source import Bar
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.bars import (
     BarsCache,
+    BarsResult,
+    TaggedBars,
     build_daily,
     build_minute,
     build_period,
@@ -654,7 +656,7 @@ def create_app(
         if tf == "D":
             # days 在日線路徑完全不參與(不進 cache/query key,D-15)→ 連驗都不驗:
             # 對忽略的參數回 400 會讓「多帶一個沒用的 query」變成擋下日 K 的理由(M1)
-            bars = await build_daily(stock.bars_range, bars_cache, code, today)
+            bars, status = await build_daily(stock.bars_range, bars_cache, code, today)
         else:
             # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
             # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
@@ -662,8 +664,12 @@ def create_app(
                 days_n = int(days)
             except ValueError:
                 raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
-            bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days_n), today)
-        return {"code": code, "tf": tf, "bars": bars}
+            bars, status = await build_minute(
+                stock.bars_range, bars_cache, code, clamp_days(days_n), today
+            )
+        # status:空的三種來源(逾時 / 真無資料 / 斷線)原本在前端收斂成同一句
+        # 「無 K 線資料」。加欄位 = 向後相容(舊前端忽略,新前端對缺欄位 default "ok")
+        return {"code": code, "tf": tf, "bars": bars, "status": status}
 
     # ---- stock signals(stock-signals design §7)----
 
@@ -755,20 +761,23 @@ def create_app(
         if key == "TWSE":
             index = _index(request)
 
-            async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
-                return await index.bars_range(tf_, s, e)
+            async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
+                return TaggedBars(*await index.bars_range(tf_, s, e))
         else:
             futures: FuturesEngine | None = request.app.state.futures
             if futures is None:
                 raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
 
-            async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
+            async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
                 # 期指沒有 DK→1K 的 fallback 分支,tag 恆定;回空 = 借不到(engine 已 log)
                 got = await futures.bars_range(key, tf_, s, e)
-                return got, ("tc4_dk" if got else "unavailable")
+                return TaggedBars(got, "tc4_dk" if got else "unavailable")
 
-        async def plain(c: str, tf_: str, s: str, e: str) -> list[Bar]:
-            return (await tagged(c, tf_, s, e))[0]
+        # 兩個閉包的第二元素語意不同(source tag vs 三態 status)且同為 str ——
+        # 名字必須隔開,否則接錯的表現是 meta.source 靜默變成 "ok"(spec R5)
+        async def plain_with_status(c: str, tf_: str, s: str, e: str) -> BarsResult:
+            # 大盤路徑本輪不做三態(out of scope):固定 "ok",空態仍由 source tag 表述
+            return BarsResult((await tagged_source(c, tf_, s, e)).bars, "ok")
 
         # 分鐘路徑的 cache code 加 |M 後綴:裸 "IX0001" 會與 /api/stock/bars/IX0001
         # (走 **stock** session)共用 `_hist` / `_today` / `_empty` 同一格 —— 那會讓
@@ -776,7 +785,7 @@ def create_app(
         # 長窗路徑的 |L 後綴同理(review P2-1)。期指的 F: 前綴含冒號,本來就撞不到。
         code = ("IX0001|M" if tf == "1" else "IX0001") if key == "TWSE" else f"F:{key}"
         if tf == "1":
-            bars = await build_minute(plain, bars_cache, code, days_n, today)
+            bars, _ = await build_minute(plain_with_status, bars_cache, code, days_n, today)
             return _market_payload(
                 key,
                 tf,
@@ -784,7 +793,7 @@ def create_app(
                 source="tc4_1k" if bars else "unavailable",
                 partial_last=is_partial_last(bars, tf, today),
             )
-        bars, tag = await build_period(tagged, bars_cache, code, today, tf)
+        bars, tag = await build_period(tagged_source, bars_cache, code, today, tf)
         return _market_payload(
             key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)
         )

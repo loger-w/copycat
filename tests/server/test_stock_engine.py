@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Callable
 
+from copycat.live.stock_source import Bar, BarsStatus
 from copycat.server.stock_engine import StockEngine
 
 
@@ -89,7 +90,7 @@ class FakeSource:
 
     def fetch_bars_range(
         self, code: str, tf: str, start_date: str, end_date: str
-    ) -> tuple[list, str]:
+    ) -> tuple[list[Bar], BarsStatus]:
         """Protocol 新增方法(change-spec R2-1);既有斷言不依賴,回空即可。"""
         return [], "ok"
 
@@ -629,7 +630,9 @@ class TestBarsRangeStatus:
     async def test_connection_error_reports_disconnected(self) -> None:
         engine, src = await _make()
 
-        def boom(code: str, tf: str, start_date: str, end_date: str) -> tuple[list, str]:
+        def boom(
+            code: str, tf: str, start_date: str, end_date: str
+        ) -> tuple[list[Bar], BarsStatus]:
             raise ConnectionError("tc4 down")
 
         src.fetch_bars_range = boom  # type: ignore[method-assign]
@@ -642,7 +645,9 @@ class TestBarsRangeStatus:
     async def test_source_status_passed_through(self) -> None:
         engine, src = await _make()
 
-        def slow(code: str, tf: str, start_date: str, end_date: str) -> tuple[list, str]:
+        def slow(
+            code: str, tf: str, start_date: str, end_date: str
+        ) -> tuple[list[Bar], BarsStatus]:
             return [], "timeout"
 
         src.fetch_bars_range = slow  # type: ignore[method-assign]

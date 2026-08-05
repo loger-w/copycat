@@ -77,10 +77,12 @@ class TestFetchBarsRangeDaily:
             },
         }
         src = _src(_pager(pages))
-        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == (
-            [{"t": "2026-07-24", "o": 100_000, "h": 102_000, "l": 99_000, "c": 101_000, "v": 15}],
-            "ok",
-        )
+        # status 不在這條的意圖內:DK 首頁空 = 等滿(poll_wait=0)預算 → 必然 timeout,
+        # 那條語意由 TestBarsStatus 專門鎖。這裡只驗 fallback 真的聚出了 bar。
+        bars, _ = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+        assert bars == [
+            {"t": "2026-07-24", "o": 100_000, "h": 102_000, "l": 99_000, "c": 101_000, "v": 15}
+        ]
 
     def test_sorted_ascending(self) -> None:
         pages = {
