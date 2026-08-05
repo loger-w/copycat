@@ -1,0 +1,20 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "reviewed": "implementation/PLAN.md v1",
+  "verdict": "0 P0 / 5 P1 / 6 P2",
+  "dispositions": {
+    "R1": {"severity": "P1", "summary": "T3 依賴 T4 的 CorrSection(反向依賴)", "disposition": "accepted — task 順序改 T3=CorrSection、T4=IndexPage"},
+    "R2": {"severity": "P1", "summary": "App.test.tsx:108-116 裸 getByRole 在 T3(IndexPage 改後)即紅", "disposition": "accepted — 移入 T4 一併 within() 化"},
+    "R3": {"severity": "P1", "summary": "「六腿走勢」錨點需 river 資料,無 fixture 恆紅", "disposition": "accepted — 改「等待六腿資料…」錨點 + stub fetch/WebSocket"},
+    "R4": {"severity": "P1", "summary": "IndexPage 餵 pane 的 stores key 集合接線未驗(重整保留 SC 無測試)", "disposition": "accepted — T4 (d) market2 寫入/舊 key 不變雙向案例"},
+    "R5": {"severity": "P1", "summary": "SC-4 缺整合層(IndexPage 掛 CorrSection 未驗)", "disposition": "accepted — T4 (e) 相關係數鈕存在 + aria-expanded + 位置"},
+    "R6": {"severity": "P2", "summary": "App.test 改動清單數字錯(7 處 → 實際 5 處 name + 標題/陣列/計數)", "disposition": "accepted — 落點清單照 reviewer 實查行號"},
+    "R7": {"severity": "P2", "summary": "T2 抽取行號 206-346 與符號不符且會把 basis 一起搬走", "disposition": "accepted — helper 27-196 + 本體除 basis span 279-293"},
+    "R8": {"severity": "P2", "summary": "vi.mock 需回 {default};lazy 即使 mock 仍非同步,(c)(d) 可 vacuous", "disposition": "accepted — factory {default: Stub}、先 findByTestId(corr-stub) 再斷言、unmount 記數"},
+    "R9": {"severity": "P2", "summary": "App.tsx:43 initialTab「值域不變」註解成錯敘述", "disposition": "accepted — T5 註解更新"},
+    "R10": {"severity": "P2", "summary": "FuturesProductState re-export 是死 API 且與 @/types 同名擴散", "disposition": "accepted — 改 PaneFutState、IndexPage 舊 export 刪除(Phase 3 grep 確認零使用點)"},
+    "R11": {"severity": "P2", "summary": "design §0 殘留「右 pane 4 key」與 PLAN 3 key 不一致", "disposition": "accepted — design §0 修正"}
+  },
+  "exit": "0 P0;P1 全修入 PLAN v2 → 進 Phase 3(Phase 2 固定 1 輪不重跑)"
+}
