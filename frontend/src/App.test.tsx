@@ -51,9 +51,10 @@ beforeEach(() => {
   vi.stubGlobal("fetch", appFetch());
 });
 
-/** 版本落差偵測的兩條路由預設回 `git_sha: null` = 「不可得」→ 全域無膠囊、無 warn。
- *  傳 sha 進來即成落差 fixture。 */
-function appFetch(sha?: { fe: string | null; be: string | null }) {
+/** 版本落差偵測的兩條路由預設回 `git_sha: null` = 「不可得」→ 全域無膠囊、無 warn
+ *  (後端 sha 為 null 時 badge 連 /__build/sha 都不會問)。
+ *  傳 `{fe, be, behind}` 進來即成 dev range 判別的 fixture(design C3)。 */
+function appFetch(sha?: { fe: string | null; be: string | null; behind: boolean | null }) {
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
@@ -61,7 +62,7 @@ function appFetch(sha?: { fe: string | null; be: string | null }) {
       return new Response(JSON.stringify({ git_sha: sha?.be ?? null, git_dirty: false }));
     }
     if (u.includes("/__build/sha")) {
-      return new Response(JSON.stringify({ git_sha: sha?.fe ?? null }));
+      return new Response(JSON.stringify({ git_sha: sha?.fe ?? null, behind: sha?.behind ?? null }));
     }
     return new Response(JSON.stringify({}), { status: 404 });
   });
@@ -70,6 +71,7 @@ function appFetch(sha?: { fe: string | null; be: string | null }) {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("App(index-board T9)", () => {
@@ -304,18 +306,22 @@ describe("App 版本落差膠囊落點(SC-4)", () => {
     return screen.getByRole("tablist", { name: "主要分頁" });
   }
 
-  it("落差態:膠囊在 nav 內,且緊鄰 IndexBar 左側", async () => {
+  it("落差態:膠囊在 nav 內、與 IndexBar 同在單一 ml-auto 容器,且排在其左", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "bbbbbbb" }));
+    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "bbbbbbb", behind: true }));
     renderApp();
     const badge = await within(nav()).findByTestId("version-drift-badge");
-    expect(nav().contains(badge)).toBe(true);
+    // R4:推到右側的 ml-auto 必須在**共用 wrapper** 上,不能膠囊自己帶一個 ——
+    // 兩個 ml-auto 會平分剩餘空間,把膠囊卡在 nav 中段。
+    const wrapper = badge.parentElement!;
+    expect(wrapper).not.toBe(nav());
+    expect(wrapper.className).toContain("ml-auto");
+    expect(badge.className).not.toContain("ml-auto");
     expect(badge.nextElementSibling?.textContent).toContain("加權");
-    vi.restoreAllMocks();
   });
 
-  it("健康態(兩邊同 sha):nav 內零膠囊", async () => {
-    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "aaaaaaa" }));
+  it("健康態(behind=false):nav 內零膠囊", async () => {
+    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "aaaaaaa", behind: false }));
     renderApp();
     // 負例 settle 點:等 health 真的打過再把 promise chain 排乾
     await waitFor(() =>
