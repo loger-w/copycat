@@ -27,10 +27,15 @@ export function thirdWednesday(ym: string): string {
   return `${year}-${pad2(month)}-${pad2(1 + offset + 14)}`;
 }
 
-/** 今天到結算日之間的**交易日(週一〜五)**天數;結算當日 = 0、已過 = null。
+/** 今天到結算日之間的**交易日(週一〜五)**天數;結算當日 = 0、已過也 = 0。
  *
- * 已過回 null 而不是負數:HOT 契約在結算日盤後才換月,那段空窗期用舊 ym 算出來的
+ * 已過**不回負數**:HOT 契約在結算日盤後才換月,那段空窗期用舊 ym 算出來的
  * 「T-(−3)」比不顯示更難懂(design §6.2)。
+ *
+ * 已過**也不回 null**(review TZ-3 拍板,取代原設計):本支是純日曆推算,不含國定
+ * 假日行事曆 —— 結算日遇假日順延時 `today > settle` 會在**真結算日當天**就成立,
+ * 回 null 等於 T-0 警示在最該亮的那天整個消失。回 0 讓警示留著,換月後 ym 更新
+ * 自然收斂;誤留倉到現金結算的代價遠大於警示多留一兩天。
  *
  * **never-throw**:呼叫點在 render path,壞輸入白屏的代價遠大於少一顆 badge。 */
 export function settlementCountdown(ym: string, today: string): number | null {
@@ -41,8 +46,7 @@ export function settlementCountdown(ym: string, today: string): number | null {
   } catch {
     return null;
   }
-  if (today > settle) return null;
-  if (today === settle) return 0;
+  if (today >= settle) return 0;
 
   const end = new Date(`${settle}T00:00:00Z`);
   const cur = new Date(`${today}T00:00:00Z`);
