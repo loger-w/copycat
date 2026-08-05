@@ -15,12 +15,15 @@ ConnectByID 啟動重播 + 即時推送,天然唯一)。未來若加回報斷線
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 from dataclasses import dataclass
 
 from copycat.capital.balance import ProfitRow
-from copycat.capital.models import OrderRecord, Position
+from copycat.capital.models import Market, OrderRecord, Position, PositionKind
 from copycat.capital.reply import ReplyRecord
+
+logger = logging.getLogger(__name__)
 
 _SEC_LOT_MARKETS = {"TS", "TA", "TP"}  # 整股:股 → 張(÷1000)
 _FUT_MARKETS = {"TF", "TO", "OF", "OO"}  # 口
@@ -218,10 +221,15 @@ class CapitalStore:
             self._order_seq.clear()
 
     def set_positions(self, positions: list[Position]) -> None:
+        """全量替換。同 (股號, 種類) 重複列 = 後到者勝並留 warning:
+        複合鍵下重複鍵是上游異常訊號(對照 merge_fut_positions 的淨額合併 warning),
+        靜默 last-wins 會讓丟掉的張數無跡可尋 — 但不在此做去重補償,寧可讓訊號浮出來。"""
         with self._lock:
             old = self._positions
+            new: dict[tuple[str, str], Position] = {}
             for p in positions:
-                prev = old.get((p.stock_no, p.kind))
+                key = (p.stock_no, p.kind)
+                prev = old.get(key)
                 # 損益查詢回來前沿用既有均價/損益基底(鍵已含 kind,天然只沿用同種類 —
                 # 資/券成本基礎不同,異種類是另一列不是同一列的續命)
                 if p.avg_price is None and prev is not None:
@@ -229,7 +237,17 @@ class CapitalStore:
                     p.pnl_base = prev.pnl_base
                     p.pnl_base_price = prev.pnl_base_price
                     p.pnl_cost = prev.pnl_cost
-            self._positions = {(p.stock_no, p.kind): p for p in positions}
+                dup = new.get(key)
+                if dup is not None:
+                    logger.warning(
+                        "同 (股號, 種類) 重複列 %s/%s: %+d + %+d — 後到者勝(上游回報異常)",
+                        p.stock_no,
+                        p.kind,
+                        dup.qty,
+                        p.qty,
+                    )
+                new[key] = p
+            self._positions = new
 
     def apply_profit_rows(self, rows: list[ProfitRow]) -> None:
         """損益試算回填(均價+含費稅息損益基底);查無 (股號, 種類) 忽略
@@ -256,11 +274,22 @@ class CapitalStore:
         with self._lock:
             return list(self._positions.values())
 
-    def position_for(self, stock_no: str, kind: str | None = None) -> Position | None:
+    def position_for(
+        self, stock_no: str, kind: PositionKind | None = None, *, market: Market | None = None
+    ) -> Position | None:
         """平倉查找。kind 有值 = 精確鍵;kind=None = 同股號恰一列才回傳,
-        多列(同檔資+集保並存)回 None — 平倉種類猜錯會送錯單種,寧可讓 caller 阻擋。"""
+        多列(同檔資+集保並存)回 None — 平倉種類猜錯會送錯單種,寧可讓 caller 阻擋。
+
+        market 收斂唯一匹配的掃描母體:證券股號與期交所契約碼是兩套獨立代碼,
+        「不會撞字串」是隱形不變量不是保證(個股期契約碼隨期交所異動);不帶 market
+        時一個巧合的同名列就會讓另一邊誤判成歧義 → fut 平倉靜默「無部位可平」。"""
         with self._lock:
             if kind is not None:
-                return self._positions.get((stock_no, kind))
-            hits = [p for (no, _kind), p in self._positions.items() if no == stock_no]
+                p = self._positions.get((stock_no, kind))
+                return p if p is not None and (market is None or p.market == market) else None
+            hits = [
+                p
+                for (no, _kind), p in self._positions.items()
+                if no == stock_no and (market is None or p.market == market)
+            ]
             return hits[0] if len(hits) == 1 else None

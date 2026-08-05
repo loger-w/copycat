@@ -15,6 +15,10 @@ PriceType = Literal["limit", "market"]
 TimeInForce = Literal["ROD", "IOC", "FOK"]
 TradeKind = Literal["cash", "margin", "short", "daytrade_sell"]
 Market = Literal["sec", "fut"]
+# 即時庫存種類(OnRealBalanceReport 的 T集保/C融資/L融券)— wire 與查找鍵的值域。
+# 比 TradeKind 少 daytrade_sell:那是「無券當沖空單」的部位狀態,平倉映射(_CLOSE_MAP)
+# 支援但沒有任何回報路徑會產生它,使用者也點不到 → 不進 wire。
+PositionKind = Literal["cash", "margin", "short"]
 
 
 class CapitalDisabledError(Exception):
@@ -89,9 +93,9 @@ class PositionCloseRequest:
     qty: int | None = None  # None=全部
     price_type: PriceType = "market"
     source: str = "panel"
-    # sec 庫存種類 cash/margin/short(同檔資+集保並存時的第二把鍵);
+    # sec 庫存種類(同檔資+集保並存時的第二把鍵);
     # None = 舊 body:同檔唯一列才成立,多列一律阻擋不猜。fut 忽略此欄。
-    kind: str | None = None
+    kind: PositionKind | None = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +139,10 @@ class Position:
     qty: int  # 張/口(空方為負)
     name: str = ""
     avg_price: float | None = None  # 損益試算[10]平均買進成本(OnRealBalanceReport 無此欄)
-    kind: str = "cash"  # cash(T集保)/margin(C融資)/short(L融券) — 平倉反向映射用
+    # 部位種類:值域用 TradeKind 而非 PositionKind — _CLOSE_MAP 另支援 daytrade_sell
+    # (無券空單回補=現股買進),雖無回報路徑產生但屬合法部位狀態(test_close 有覆蓋)。
+    # fut 列恆 "cash"(OI 不帶種類)。
+    kind: TradeKind = "cash"
     pnl_base: float | None = None  # 損益試算[9]含費稅息淨損益(報告市價時點)— 前端平移基底
     pnl_base_price: float | None = None  # 損益試算[5]報告市價(平移基準)
     pnl_cost: float | None = None  # 損益試算[12]成交價金(% 分母,同報告[21]口徑)

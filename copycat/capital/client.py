@@ -827,6 +827,7 @@ class CapitalClient:
         """sec 查不到部位的兩種成因分流:req 沒帶 kind 且同檔多列 = 歧義,阻擋不猜
         (猜錯種類 = 送錯單種)。position_for 與這次計數之間的競態只影響文案,可接受。"""
         if req.kind is None:
+            # 母體與 position_for(market="sec") 的掃描母體對齊,兩處判別不得各自為政
             same = [
                 p for p in self.store.positions() if p.market == "sec" and p.stock_no == req.key
             ]
@@ -837,7 +838,7 @@ class CapitalClient:
     async def close_position(self, req: PositionCloseRequest) -> OrderResult:
         if req.market == "sec":
             # kind 有值 → 精確鍵;None → 唯一列 fallback(舊 body 相容),多列則歧義阻擋
-            pos = self.store.position_for(req.key, req.kind)
+            pos = self.store.position_for(req.key, req.kind, market="sec")
             if pos is None or pos.qty == 0 or pos.market != "sec":
                 raise await self._close_blocked(req, self._sec_no_position_reason(req))
             try:
@@ -853,9 +854,9 @@ class CapitalClient:
                 req, inflight_key, lambda: self.submit_stock_order(order, action="close")
             )
 
-        # fut:kind 忽略(OI 列不帶種類),唯一匹配即可 — 不寫死 "cash",
+        # fut:kind 忽略(OI 列不帶種類),market 內唯一匹配即可 — 不寫死 "cash",
         # 免得 OnOpenInterest 欄序 prod 校正時順手設了 kind 就靜默「無部位可平」
-        pos = self.store.position_for(req.key)
+        pos = self.store.position_for(req.key, market="fut")
         if pos is None or pos.qty == 0 or pos.market != "fut":
             raise await self._close_blocked(req, f"{req.key} 無部位可平")
         try:

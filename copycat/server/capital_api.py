@@ -35,6 +35,7 @@ from copycat.capital.models import (
     DecreaseQtyRequest,
     FutureOrderRequest,
     PositionCloseRequest,
+    PositionKind,
     StockOrderRequest,
 )
 from copycat.server.futures_engine import FuturesEngine
@@ -98,7 +99,9 @@ class PositionCloseBody(BaseModel):
     qty: int | None = None
     price_type: _PriceType = "market"
     source: str = "panel"
-    kind: str | None = None  # sec 庫存種類 cash/margin/short;未帶 = 同檔唯一列才成立
+    # sec 庫存種類;未帶 = 同檔唯一列才成立。列舉不是自由字串:錯值在 wire 層 422,
+    # 否則會降級成誤導的 403「無部位可平」(查不到是因為拼錯,不是因為沒庫存)
+    kind: PositionKind | None = None
 
 
 # ---------------------------------------------------------------------------

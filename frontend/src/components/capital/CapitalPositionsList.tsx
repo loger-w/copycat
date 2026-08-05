@@ -4,7 +4,7 @@ import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog"
 import { useCapitalPositions, useCapitalStatus, useClosePosition } from "@/hooks/useCapital";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
-import type { CapitalMarket, CapitalPosition } from "@/types";
+import type { CapitalMarket, CapitalPosition, PositionKind } from "@/types";
 
 interface CapitalPositionsListProps {
   market: CapitalMarket;
@@ -15,11 +15,17 @@ interface CapitalPositionsListProps {
 const GRID = "grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-baseline gap-x-3";
 
 /** sec 庫存種類標籤(列內小字 / 確認彈窗全稱);fut 不顯示(OI 列無種類)。 */
-const KIND_TEXT: Record<string, { short: string; full: string }> = {
+const KIND_TEXT: Record<PositionKind, { short: string; full: string }> = {
   cash: { short: "現", full: "現股" },
   margin: { short: "資", full: "融資" },
   short: { short: "券", full: "融券" },
 };
+
+/** 後端 Position.kind 值域比 PositionKind 寬(daytrade_sell)— 認不得就不標也不送 kind
+ *  (退回「同檔唯一列」語意;真有多列後端會擋,不會猜錯種類)。 */
+function kindOf(p: CapitalPosition): PositionKind | null {
+  return p.kind in KIND_TEXT ? (p.kind as PositionKind) : null;
+}
 
 /** 部位列鍵 = 後端 store 的複合鍵:同檔資+集保並存時兩列才分得開。 */
 function rowKeyOf(p: CapitalPosition): string {
@@ -41,6 +47,8 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
   const closing =
     closingKey !== null ? positions.find((p) => rowKeyOf(p) === closingKey) : undefined;
   const estimate = closing !== undefined ? (closePriceOf?.(closing) ?? null) : null;
+  const closingKind = closing !== undefined && market === "sec" ? kindOf(closing) : null;
+  const closingKindText = closingKind !== null ? KIND_TEXT[closingKind] : undefined;
 
   if (positions.length === 0) {
     return <p className="py-3 text-center text-xs text-ink-dim">無部位</p>;
@@ -48,12 +56,14 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
 
   function confirm(): void {
     if (closing === undefined || estimate === null) return;
+    // kind 只在證券送:fut 的 OI 列沒有庫存種類這一維,硬送 "cash" 會讓每筆期貨平倉的
+    // 審計多一個看起來像「現股」的欄位(後端也只在 sec 分支讀它)
     closePosition.mutate({
       market,
       key: closing.stock_no,
       price: estimate,
       qty: Math.abs(closing.qty),
-      kind: closing.kind, // 同檔多種庫存時後端靠它精確鍵到(未帶且多列會被阻擋)
+      ...(closingKind !== null ? { kind: closingKind } : {}),
     });
     setClosingKey(null);
   }
@@ -78,7 +88,8 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
         const isLong = p.qty > 0;
         const est = closePriceOf?.(p) ?? null;
         const pnl = p.pnl_base;
-        const kindText = market === "sec" ? KIND_TEXT[p.kind] : undefined;
+        const rowKind = market === "sec" ? kindOf(p) : null;
+        const kindText = rowKind !== null ? KIND_TEXT[rowKind] : undefined;
         return (
           <li
             key={rowKeyOf(p)}
@@ -120,8 +131,8 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
           rows={[
             { label: codeLabel, value: `${closing.stock_no} ${closing.name}`.trim() },
             // 種類只在證券成立(fut 的 OI 列無種類);同檔兩列時這是唯一的分辨依據
-            ...(market === "sec" && KIND_TEXT[closing.kind] !== undefined
-              ? [{ label: "種類", value: KIND_TEXT[closing.kind]!.full }]
+            ...(closingKindText !== undefined
+              ? [{ label: "種類", value: closingKindText.full }]
               : []),
             {
               label: "部位",

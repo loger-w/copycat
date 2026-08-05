@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from copycat.capital.models import Position
+from copycat.capital.models import Position, PositionKind
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ _IDX_STOCK_NO = 0
 _IDX_KIND = 1
 _IDX_SHARES = 14  # 即時庫存(股)
 _MIN_FIELDS = 15
-_KIND = {"T": "cash", "C": "margin", "L": "short"}
+_KIND: dict[str, PositionKind] = {"T": "cash", "C": "margin", "L": "short"}
 
 
 def parse_balance_line(raw: str) -> Position | None:
@@ -141,7 +141,7 @@ _PNL_IDX_PNL = 9  # 損益(含費稅息,與群益 App 同源)
 _PNL_IDX_AVG = 10  # 平均買進(券賣)成本(4-2-p 未實現-彙總)
 _PNL_IDX_COST = 12  # 成交價金(報酬率分母 — 實測同報告[21]口徑)
 _PNL_MIN_FIELDS = 11
-_PNL_KIND = {"現股": "cash", "融資": "margin", "融券": "short"}
+_PNL_KIND: dict[str, PositionKind] = {"現股": "cash", "融資": "margin", "融券": "short"}
 
 
 class ProfitRow(NamedTuple):
@@ -150,7 +150,7 @@ class ProfitRow(NamedTuple):
     pnl: float | None  # 含費稅息淨損益(報告市價時點)
     price: float | None  # 報告市價
     cost: float | None  # 成交價金(% 分母)
-    kind: str | None = None  # cash/margin/short;None=未知標籤(回填端視為不符、略過)
+    kind: PositionKind | None = None  # None=未知標籤(回填端視為不符、略過)
 
 
 def _opt_float(parts: list[str], i: int) -> float | None:

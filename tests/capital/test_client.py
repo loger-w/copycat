@@ -869,6 +869,33 @@ async def test_close_sec_with_kind_hits_exact_row(tmp_path: Path) -> None:
     fields = _sent_fields(com.sent[0])
     assert fields["sBuySell"] == 1 and fields["sFlag"] == 1  # 融資多 → 融資賣
     assert fields["nQty"] == 3  # 融資列的張數,不是集保列的 1
+    # §7 可重建性(review A-5)。審計兩條路各釘一次:
+    # 成功路徑記的是實際送出的委託(close 請求已轉成 StockOrderRequest)→ 種類看 trade_kind
+    assert _audit_lines(client)[-1]["req"]["trade_kind"] == "margin"
+    with pytest.raises(CapitalGateBlockedError):  # 拒單路徑記的才是 close 請求原貌
+        await client.close_position(req)
+    assert _audit_lines(client)[-1]["req"]["kind"] == "margin"
+
+
+async def test_close_sec_unaffected_by_same_named_fut_position(tmp_path: Path) -> None:
+    """唯一匹配的掃描母體以 market 收斂(review A-2):同 stock_no 的他市場列不得
+    讓本市場的唯一列被誤判成歧義。母體不對齊時失效樣態還會自相矛盾 —— position_for
+    看到兩列回 None,而 _sec_no_position_reason 只數 sec 列(1 列)→ 擋單理由變成
+    誤導的「無部位可平」(實際上部位就在那裡)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(
+        [
+            Position(market="sec", stock_no="2330", qty=2, kind="margin"),
+            Position(market="fut", stock_no="2330", qty=1, avg_price=590.0),
+        ]
+    )
+    req = PositionCloseRequest(market="sec", key="2330", price=590.0)  # 舊 body:不帶 kind
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    fields = _sent_fields(com.sent[0])
+    assert com.sent[0][0] == "stock" and fields["sFlag"] == 1  # 鍵到 sec 融資列
 
 
 async def test_close_sec_without_kind_blocks_ambiguous_but_allows_unique(tmp_path: Path) -> None:

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from copycat.capital.reply import ReplyRecord, parse_onnewdata
 from copycat.capital.store import CapitalStore
 
@@ -343,6 +345,64 @@ def test_position_for_kind_exact_unique_and_ambiguous() -> None:
     only = s.position_for("2330")
     assert only is not None and only.qty == 2  # 唯一列 → fallback 成立
     assert s.position_for("9999") is None
+
+
+def test_position_for_market_filters_scan_scope() -> None:
+    """唯一匹配的掃描母體以 market 收斂:sec 股號與期交所契約碼碰巧同字串時,
+    兩邊各自仍是「唯一列」— 不靠「兩套代碼不重疊」這個隱形不變量(review A-2)。"""
+    from copycat.capital.models import Position
+
+    s = CapitalStore()
+    s.set_positions(
+        [
+            Position(market="sec", stock_no="2330", qty=2, kind="margin"),
+            Position(market="fut", stock_no="2330", qty=-1, kind="cash"),
+        ]
+    )
+    assert s.position_for("2330") is None  # 不分 market:兩列 → 歧義
+    f = s.position_for("2330", market="fut")
+    assert f is not None and f.market == "fut" and f.qty == -1
+    e = s.position_for("2330", market="sec")
+    assert e is not None and e.market == "sec" and e.qty == 2
+    # 精確鍵也受 market 約束(否則 fut 列會被當成 sec 的 cash 列鍵到)
+    assert s.position_for("2330", "cash", market="sec") is None
+
+
+def test_set_positions_warns_on_duplicate_composite_key(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """同 (股號, 種類) 重複列 = last-wins 靜默丟資料;fut 側的淨額合併有 warning 對照,
+    sec 側也要留痕(review A-3)。不恢復 dedupe:重複鍵本身是上游異常訊號。"""
+    from copycat.capital.models import Position
+
+    s = CapitalStore()
+    with caplog.at_level("WARNING"):
+        s.set_positions(
+            [
+                Position(market="sec", stock_no="2330", qty=1, kind="cash"),
+                Position(market="sec", stock_no="2330", qty=4, kind="cash"),
+                Position(market="sec", stock_no="2330", qty=3, kind="margin"),
+            ]
+        )
+    assert len(s.positions()) == 2  # cash 一列(後到者)+ margin 一列
+    p = s.position_for("2330", "cash")
+    assert p is not None and p.qty == 4
+    assert any("重複" in r.message for r in caplog.records)
+
+
+def test_set_positions_quiet_without_duplicate_keys(caplog: pytest.LogCaptureFixture) -> None:
+    # 資+集保並存是穩定狀態(每 60s 都會走到)— 不同種類不得誤報,否則 warning 洗版
+    from copycat.capital.models import Position
+
+    s = CapitalStore()
+    with caplog.at_level("WARNING"):
+        s.set_positions(
+            [
+                Position(market="sec", stock_no="2330", qty=1, kind="cash"),
+                Position(market="sec", stock_no="2330", qty=3, kind="margin"),
+            ]
+        )
+    assert caplog.records == []
 
 
 def test_fut_position_keyed_by_contract() -> None:

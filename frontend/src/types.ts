@@ -88,6 +88,9 @@ export interface CapitalOrder {
   raw: string;
 }
 
+/** 即時庫存種類(平倉可指定的值域)。後端 PositionKind 同字彙。 */
+export type PositionKind = "cash" | "margin" | "short";
+
 /** Position asdict(sec=股號;fut=期交所契約碼;空方 qty 為負)。 */
 export interface CapitalPosition {
   market: string; // sec/fut
@@ -95,7 +98,8 @@ export interface CapitalPosition {
   qty: number;
   name: string;
   avg_price: number | null;
-  kind: string; // cash/margin/short
+  // 後端 Position.kind 值域是 TradeKind(另含 daytrade_sell 無券空單),比 PositionKind 寬
+  kind: string;
   pnl_base: number | null;
   pnl_base_price: number | null;
   pnl_cost: number | null;
@@ -157,8 +161,8 @@ export interface CapitalCloseBody {
   qty?: number | null; // null=全部
   price_type?: "limit" | "market";
   source?: string;
-  /** sec 庫存種類 cash/margin/short — 同檔資+集保並存時的第二把鍵(未帶且多列 → 後端阻擋)。 */
-  kind?: string;
+  /** sec 庫存種類 — 同檔資+集保並存時的第二把鍵(未帶且多列 → 後端阻擋);fut 不送。 */
+  kind?: PositionKind;
 }
 
 // ---- futures 行情(對應 copycat/server/futures_engine.py state())----

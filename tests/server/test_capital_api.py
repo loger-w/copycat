@@ -509,6 +509,21 @@ class TestPositionClose:
             assert "請指定種類" in detail["reason"]
             assert _sent(com, "stock") == []  # 猜錯種類 = 送錯單種,寧可不送
 
+    def test_close_body_rejects_unknown_kind_422(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # kind 是列舉不是自由字串:錯值該在 wire 層擋(422),不可降級成誤導的「無部位可平」
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions([Position(market="sec", stock_no="2330", qty=2, kind="cash")])
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "sec", "key": "2330", "price": 590.0, "kind": "Margin"},
+            )
+            assert res.status_code == 422
+            assert _sent(com, "stock") == []
+
 
 # ---------------------------------------------------------------------------
 # 群益拒單透傳 400 BROKER_REJECTED(review A2/C1/C2)
