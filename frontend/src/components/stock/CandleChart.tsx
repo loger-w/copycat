@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { bandSeries, bollinger, type Band } from "@/lib/bollinger";
 import {
   buildCandleGeometry,
+  hlineYOf,
   movingAverage,
   X_LABEL_H,
   type Bar,
@@ -58,6 +59,23 @@ function shortStamp(t: string): string {
 /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
 const EMPTY_LINE: { x: number; y: number }[] = [];
 
+/** 水平 overlay 線(持倉均價 / OI 撐壓;futures-allday SC-7/SC-11)。
+ *
+ *  `className` 是 **stroke-\* 家族**(線的顏色語意),不套到標籤文字上 —— 套上去
+ *  文字會被描邊而不是填色。標籤一律中性 ink + 底色描邊,方向語意由線本身承載。 */
+export interface ChartHLine {
+  priceMilli: number;
+  label: string;
+  className: string;
+  /** hover 提示(SVG `<title>` 子節點)。線上只寫得下價位,證據(OI 口數 / 資料日 /
+   *  部位口數)掛這裡。 */
+  title?: string;
+}
+
+/** 同 `EMPTY_LINE` 的理由:預設值寫 `hlines = []` 會讓每次 render 產生新 array,
+ *  打穿 ChartStatic 的 memo —— 而且是**所有既有頁面**(個股 / 大盤)都被打穿。 */
+const EMPTY_HLINES: readonly ChartHLine[] = [];
+
 /** 視窗高低標記(round4 項 1)。`cx` = 造成該極值那根蠟燭的中心 x。 */
 interface WindowMark {
   cx: number;
@@ -96,6 +114,8 @@ const ChartStatic = memo(function ChartStatic({
   highMark,
   lowMark,
   showVolume,
+  volumeDelta,
+  hlines,
 }: {
   g: CandleGeometry;
   /** viewBox 寬。**純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -111,7 +131,13 @@ const ChartStatic = memo(function ChartStatic({
   lowMark: WindowMark | null;
   /** false = 該資料源沒有量(如櫃買 MIS 取樣合成)→ 量區改印說明,不畫一排 0 柱 */
   showVolume: boolean;
+  /** true 且幾何有 `deltaVol` → 量區改畫內外盤雙柱(SC-8);幾何為 null = 該視窗
+   *  沒有 uv/dv(日 K 路徑 / 零成交)→ 回退主量柱 */
+  volumeDelta: boolean;
+  /** 水平 overlay 線。**呼叫端必須 useMemo 穩定 identity**,否則打穿本 memo(同 W-3) */
+  hlines: readonly ChartHLine[];
 }) {
+  const deltaBars = volumeDelta ? g.deltaVol : null;
   return (
     <g>
       {/* y 軸格線 + 價位刻度 */}
@@ -163,16 +189,48 @@ const ChartStatic = memo(function ChartStatic({
       {/* 量 bar。無量資料時不畫 0 柱 —— 一排貼底的 0 高柱與「真的零成交」
           在畫面上無法區分,正是本輪要避免的假造零(index-board SC-6)。 */}
       {showVolume ? (
-        g.volBars.map((b, i) => (
-          <rect
-            key={`v-${i}`}
-            x={b.x}
-            y={b.y}
-            width={b.w}
-            height={b.h}
-            className={VOL_CLASS[b.dir]}
-          />
-        ))
+        deltaBars !== null ? (
+          // 內外盤雙柱(SC-8):同一根 bar 的兩根半寬柱,外盤(uv)紅、內盤(dv)綠。
+          // x / 柱寬 / 底邊全部沿用同索引的 `VolBar` —— 幾何來源單一,這裡不重算 slot。
+          g.volBars.map((b, i) => {
+            const d = deltaBars[i];
+            if (d === undefined) return null;
+            const bottom = b.y + b.h; // = 量區底邊(volBars 的 y 恆為 bottom − h)
+            const hw = b.w / 2;
+            return (
+              <g key={`vd-${i}`}>
+                <rect
+                  data-testid="vol-delta-outer"
+                  x={b.x}
+                  y={bottom - d.uvH}
+                  width={hw}
+                  height={d.uvH}
+                  className="fill-bull/40"
+                />
+                <rect
+                  data-testid="vol-delta-inner"
+                  x={b.x + hw}
+                  y={bottom - d.dvH}
+                  width={hw}
+                  height={d.dvH}
+                  className="fill-bear/40"
+                />
+              </g>
+            );
+          })
+        ) : (
+          g.volBars.map((b, i) => (
+            <rect
+              key={`v-${i}`}
+              data-testid="vol-bar"
+              x={b.x}
+              y={b.y}
+              width={b.w}
+              height={b.h}
+              className={VOL_CLASS[b.dir]}
+            />
+          ))
+        )
       ) : (
         <text x={4} y={g.volBars[0]?.y ?? DIMS.height * 0.85} className="fill-ink-muted" fontSize="0.625rem">
           無量資料
@@ -254,6 +312,40 @@ const ChartStatic = memo(function ChartStatic({
           </text>
         ),
       )}
+      {/* 水平 overlay 線(SC-7 持倉均價 / SC-11 OI 撐壓)。**超出當前 y 視窗的線不畫**
+          —— clamp 到邊緣會把「圖外的價位」講成「圖緣的價位」,均價線貼在圖頂時看起來
+          像剛好在最高點,實際可能差好幾百點(判定在 `hlineYOf`)。
+          與視窗高低標同理畫在最後:被蠟燭 / MA 蓋住等於沒畫。 */}
+      {hlines.map((ln, i) => {
+        const y = hlineYOf(ln.priceMilli, g);
+        if (y === null) return null;
+        return (
+          <g key={`hl-${i}-${ln.priceMilli}`} data-testid="chart-hline">
+            {/* SVG 的 hover 提示 = `<title>` 子節點(不是 title 屬性) */}
+            {ln.title === undefined ? null : <title>{ln.title}</title>}
+            <line
+              x1={0}
+              x2={w}
+              y1={y}
+              y2={y}
+              className={ln.className}
+              strokeWidth={1}
+              strokeDasharray="5 3"
+            />
+            <text
+              x={w - 4}
+              y={y - 3}
+              textAnchor="end"
+              className="fill-ink stroke-surface"
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.625rem"
+            >
+              {ln.label}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 });
@@ -313,6 +405,15 @@ interface Props {
   /** 資料源有無成交量。預設 `true` = 既有行為(個股頁零變化);`false` 時量區印
    *  「無量資料」、資訊列的量欄顯示 `—`(index-board SC-6)。 */
   showVolume?: boolean;
+  /** 水平 overlay 線(持倉均價 / OI 撐壓;futures-allday SC-7/SC-11)。
+   *
+   *  **父層必須以 `useMemo` 穩定陣列 identity** —— 每次 render 給新 array 會打穿
+   *  ChartStatic 的 memo(最多 700 根蠟燭 × 3 個節點跟著重建)。未傳 = 現狀。 */
+  hlines?: readonly ChartHLine[];
+  /** 量區改畫內外盤雙柱(futures-allday SC-8)。預設 false = 既有量柱。
+   *  傳 true 但視窗內沒有任何 uv/dv(日 K 路徑 / 零成交)→ 自動回退既有量柱,
+   *  不畫一排 0 高的雙柱(同 `showVolume=false` 的「不假造零」原則)。 */
+  volumeDelta?: boolean;
 }
 
 /** 一根 bar → 資訊列欄位。`prev` 用來算漲跌%(K 線跨多日,沒有「昨收」可比)。 */
@@ -356,6 +457,8 @@ export function CandleChart({
   onToggleBb,
   height,
   showVolume = true,
+  hlines = EMPTY_HLINES,
+  volumeDelta = false,
 }: Props) {
   const dimW = DIMS.width;
   const dimH = height ?? DIMS.height;
@@ -565,6 +668,8 @@ export function CandleChart({
             highMark={highMark}
             lowMark={lowMark}
             showVolume={showVolume}
+            volumeDelta={volumeDelta}
+            hlines={hlines}
           />
           <XAxisLabels g={g} h={dimH} shown={shown} labelStep={labelStep} tagSpan={timeTagSpan} />
           {/* hover 十字 + 軸標籤(SC-7)。垂直線 snap 蠟燭(資料錨)、水平線跟滑鼠(量尺)。 */}
