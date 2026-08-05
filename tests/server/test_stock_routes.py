@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import datetime as _dt
 from pathlib import Path
+from typing import cast
 
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
+from copycat.server.signal_hub import SignalHub
+from copycat.server.stock_engine import StockEngine
+from copycat.stock_watchlist import save_watchlist
 from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeStockSource
 from tests.helpers.fake_txo import FakeTxoSource
@@ -311,6 +315,94 @@ class TestStateRoute:
             r = client.get("/api/stock/state/@@@")
         assert r.status_code == 503
         assert r.json()["detail"]["error"] == "NOT_READY"
+
+
+class TestGroupStateRoute:
+    """群組檢視的唯讀 batch(group-grid SC-4)。
+
+    **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 30 檔各要一次
+    狀態,重用 `/api/stock/state/{code}` 等於每分鐘把主圖搶走 30 次 → 主圖分時線凍結,
+    而畫面上只表現為「圖不動了」,沒有任何錯誤。所以 `_main` 的斷言是本組的核心。
+    """
+
+    def _put(self, client: TestClient, codes: list[str]) -> None:
+        r = client.put("/api/stock/watchlist", json={"codes": codes, "groups": []})
+        assert r.status_code == 200
+
+    def test_batch_shape_and_never_sets_main(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            self._put(client, ["2330", "2317"])
+            r = client.get("/api/stock/group-state", params={"codes": "2330,2317"})
+            assert r.status_code == 200
+            states = r.json()["states"]
+            assert set(states) == {"2330", "2317"}
+            # payload 形寫死:ticks 不得混進來(30 檔 × 數千筆 = 頻寬炸彈)
+            assert set(states["2330"]) == {"minutes", "meta", "no_data", "backfilling"}
+            assert states["2330"]["no_data"] is False
+            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+            assert stock._main is None, "群組 batch 不得 set_main(會把主圖搶走)"
+
+    def test_empty_codes_returns_empty_states(self, tmp_path: Path) -> None:
+        """空群組 → 前端 hook 是 enabled=false 零請求;真的打到也必須是 200 空表。"""
+        client, _ = make_client(tmp_path)
+        with client:
+            assert client.get("/api/stock/group-state").json() == {"states": {}}
+            r = client.get("/api/stock/group-state", params={"codes": ""})
+            assert r.status_code == 200
+            assert r.json() == {"states": {}}
+
+    def test_unknown_code_is_no_data_not_404(self, tmp_path: Path) -> None:
+        """未訂閱 / 查無此檔對卡片是同一件事(「這格畫不出東西」)→ 無 404 路徑。"""
+        client, _ = make_client(tmp_path)
+        with client:
+            states = client.get("/api/stock/group-state", params={"codes": "9999"}).json()["states"]
+            assert states["9999"]["no_data"] is True
+            assert states["9999"]["minutes"] == {}
+            assert states["9999"]["meta"] is None
+
+    def test_too_many_codes_400(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            codes = ",".join(f"{9000 + i}" for i in range(31))  # 自選上限 30
+            r = client.get("/api/stock/group-state", params={"codes": codes})
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_CODES"
+
+    def test_bad_code_400(self, tmp_path: Path) -> None:
+        client, _ = make_client(tmp_path)
+        with client:
+            r = client.get("/api/stock/group-state", params={"codes": "2330,bad!"})
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_CODE"
+
+    def test_engine_missing_503(self) -> None:
+        app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            r = client.get("/api/stock/group-state", params={"codes": "@@@"})
+        assert r.status_code == 503
+        assert r.json()["detail"]["error"] == "NOT_READY"
+
+
+class TestSignalHubGroupWiring:
+    """接線防呆(group-grid R7):`groups_fn` / `quotes_fn` 預設 None = 靜默停用摘要。
+
+    忘了在 `create_app` 接上去的失效樣態是「Discord 通知少了一段尾巴」—— 沒有例外、
+    沒有 log、hub 單元測試全綠。只有從 booted app 這一端看才抓得到。
+    """
+
+    def test_boot_injects_groups_and_quotes(self, tmp_path: Path) -> None:
+        save_watchlist(
+            tmp_path / "watchlist.json",
+            {"codes": ["2330", "2317"], "groups": [{"name": "半導體", "codes": ["2330", "2317"]}]},
+        )
+        client, _ = make_client(tmp_path)
+        with client:
+            hub = cast("SignalHub", client.app.state.signal_hub)  # type: ignore[attr-defined]
+            assert hub is not None
+            assert hub._groups == [{"name": "半導體", "codes": ["2330", "2317"]}]
+            # quotes_fn 也接上了才產得出成員列(缺行情時是 `-`,但不會是空字串)
+            assert hub._group_suffix({"code": "2330"}).startswith("｜同群 半導體:2317")
 
 
 class TestStockWs:
