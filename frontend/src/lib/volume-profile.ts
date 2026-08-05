@@ -15,12 +15,13 @@ export const VP_MAX_W_RATIO = 0.22;
 export const VP_FILL_OPACITY = 0.25;
 
 export interface VpBar {
-  /** 價位帶頂端的 y(svg 座標,愈小愈上) */
+  /** 價位帶頂端的 y(svg 座標,愈小愈上);帶以成交價置中並 clamp 進 y 域 */
   y: number;
   h: number;
   w: number;
   priceMilli: number;
-  /** 該檔位當日總張(未歸一;hover / debug 用) */
+  /** 該檔位當日總張(未歸一)。**本輪未接線** —— 留給後續的分色 / hover 用;
+   *  現在只有 `w` 上得了畫面,這個欄位是 debug 與下一步的接點。 */
   total: number;
 }
 
@@ -48,9 +49,22 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
   const maxW = plotWidth(width) * VP_MAX_W_RATIO;
 
   const bars = inDomain.map(([priceMilli, cell]): VpBar => {
-    // 價位帶 = [p, p + tickOf(p));頂端夾進 y 域上界,最上緣那一檔不外溢畫布
-    const top = g.toY(Math.min(priceMilli + tickOf(priceMilli), yTop));
-    const dist = g.toY(priceMilli) - top;
+    // 價位帶 = **以成交價置中** `[p − tick/2, p + tick/2]`,兩端各自 clamp 進 y 域
+    // (review A1/A2/B2;design v2 amendment 2026-08-05)。
+    //
+    // 舊版是「向上一個 tick」`[p, p + tick)`,兩個症狀:(a) 整組 bar 相對走勢線上偏
+    // 半檔 —— 長條與價線指的是同一個價位,對不上就沒有比對價值;(b) 漲停(或跌停)
+    // 那一檔的帶整段落在域外,clamp 後 dist = 0 → h 被壓成 1px 髮絲,而鎖停日量最大
+    // 的正是那一檔(§0a 鎖板品質的核心觀察對象)反而看不見。置中之後端點檔位的帶
+    // 有一半在域內,拿得到半帶高。
+    //
+    // `y = top` 而不是把 bar 再置中進帶內:0.15 的縫必須全由下緣吃掉,否則端點檔位
+    // 的 bar 會往上溢出畫布(它的 top 已經**就是**域邊界)。代價是中心與價線差
+    // 0.075 × dist(半條縫),遠小於舊語意的半個 tick。
+    const half = tickOf(priceMilli) / 2;
+    const top = Math.max(g.toY(yTop), g.toY(priceMilli + half));
+    const bottom = Math.min(g.toY(yBottom), g.toY(priceMilli - half));
+    const dist = bottom - top;
     return {
       y: top,
       // 比例縫(0.85):高密度域(dist ≈ 1px)時退化成近連續帶而相鄰不重疊;

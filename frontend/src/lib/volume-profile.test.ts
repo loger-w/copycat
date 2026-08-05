@@ -1,21 +1,34 @@
 import { describe, expect, it } from "vitest";
 
 import type { VpCell } from "@/lib/stock-accum";
-import { PAD_Y, plotWidth, X_LABEL_H } from "@/lib/stock-intraday-svg";
+import { buildIntradayGeometry, plotWidth } from "@/lib/stock-intraday-svg";
 import { tickOf } from "@/lib/stock-tick";
 import { buildVpBars, VP_MAX_W_RATIO } from "@/lib/volume-profile";
 
 const WIDTH = 800;
 
-/** 與 `buildIntradayGeometry` 同式的線性 toY(不依賴整份幾何,只給 VP 需要的兩個欄位)。 */
+/** 薄包 `buildIntradayGeometry`,只取 VP 需要的 `toY` / `yDomain`(review A4)。
+ *
+ *  原本這裡是一份「與 buildIntradayGeometry 同式」的**影子公式**。影子的問題不是它當下
+ *  算錯,是它與真幾何各漂各的:真的 `toY` 改了(PAD_Y / X_LABEL_H / 退化域分支),這份
+ *  測試照樣全綠,而畫面上的 bar 與價線已經對不上。
+ *
+ *  `minutes` 給空 map:VP 的幾何只吃 y 域,價線 / VWAP / 極值反查都與它無關。
+ *  y 域由 `upper` / `lower` 決定(有漲跌停 → 域恰為 [lower, upper]),所以
+ *  `upper === lower` 就是真幾何自己的**退化分支**(`flat`),不必另外假造常數 toY。 */
 function geom(yBottom: number, yTop: number, height = 256) {
-  const plotH = Math.max(1, height - X_LABEL_H - PAD_Y * 2);
-  const span = yTop - yBottom;
-  const flat = span <= 0;
+  const g = buildIntradayGeometry(
+    {
+      minutes: new Map(),
+      meta: { name: "", ref: yBottom, upper: yTop, lower: yBottom, y_vol: null },
+    },
+    { width: WIDTH, height },
+  );
   return {
-    plotH,
-    toY: (p: number): number => (flat ? PAD_Y + plotH / 2 : PAD_Y + ((yTop - p) / span) * plotH),
-    yDomain: [yBottom, yTop] as [number, number],
+    // 由真幾何反推繪圖區高度(域寬對應滿高);退化域下為 0,那幾條測試也不用它
+    plotH: g.toY(g.yDomain[0]) - g.toY(g.yDomain[1]),
+    toY: g.toY,
+    yDomain: g.yDomain,
   };
 }
 
@@ -97,12 +110,14 @@ describe("buildVpBars", () => {
     // 成交價的 y 落在 bar 之內 —— 舊語意下 toY(p) 恰好貼在 bar 的下緣**之外**
     expect(g.toY(p)).toBeGreaterThan(bars[0]!.y);
     expect(g.toY(p)).toBeLessThan(bars[0]!.y + bars[0]!.h);
-    // R6 的 0.15 縫全由下緣吃掉(`y = top` 是端點 clamp 所必需,見下兩條)→ 中心與
-    // 價線只差半條縫(0.075 × dist),對比舊語意差的是整整半個 tick。
-    expect(bars[0]!.y + bars[0]!.h / 2 - g.toY(p)).toBeCloseTo((bottom - top) * 0.075, 6);
+    // R6 的 0.15 縫全由**下緣**吃掉(`y = top` 是端點 clamp 所必需,見下兩條)→ bar 中心
+    // 落在價線上方半條縫處(0.075 × dist,svg 的 y 愈小愈上),對比舊語意差的是整整
+    // 半個 tick。
+    expect(g.toY(p) - (bars[0]!.y + bars[0]!.h / 2)).toBeCloseTo((bottom - top) * 0.075, 6);
   });
 
-  it("退化域(toY 常數)→ dist 0,h clamp 到 1", () => {
+  // 退化域 = 真幾何的 `flat` 分支(upper === lower,toY 恆為繪圖區中線),不是假造的常數
+  it("退化域(upper === lower → toY 常數)→ dist 0,h clamp 到 1", () => {
     const g = geom(2_350_000, 2_350_000);
     const bars = buildVpBars(cells([[2_350_000, 5]]), g, WIDTH);
     expect(bars.length).toBe(1);

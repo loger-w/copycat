@@ -25,7 +25,9 @@ function stored(): Record<string, unknown> {
 }
 
 describe("useChartToggles", () => {
-  it("預設 vwap/cdp/bb 開、ma 關", () => {
+  // 🟢 SC-3:測試名補上 `vp`(事前標記的預期變更)—— 名字沒跟上時,整包 toEqual 明明
+  // 也在驗 vp,讀測試清單的人卻以為 vp 沒有預設值的覆蓋
+  it("預設 vwap/cdp/bb/vp 開、ma 關", () => {
     const hook = renderHook(() => useChartToggles());
     expect(hook.result.current.toggles).toEqual(DEFAULTS);
   });
