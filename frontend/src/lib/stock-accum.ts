@@ -153,11 +153,23 @@ interface SnapshotShape {
   no_data?: boolean;
 }
 
-export function fromSnapshot(snap: SnapshotShape): StockAccum {
+/** 後端 minutes(JSON 物件,key 是分鐘字串)→ 前端 Map。
+ *
+ *  **兩份消費者共用這一份**:`fromSnapshot`(主圖 `/api/stock/state/{code}`)與群組檢視的
+ *  batch(`/api/stock/group-state`)。各自寫一次的話漂移的樣態是「其中一邊的 `h`/`l`
+ *  沒有正規化成 `null`」——`undefined` 與 `null` 在 `?? null` 之後才等價,而
+ *  `buildIntradayGeometry` 的極值等值反查(`m.h === target`)對兩者都是 false,
+ *  結果是標記靜默消失,沒有任何測試會紅。 */
+export function minutesFromRecord(rec: Record<string, MinuteAgg> | undefined | null): Map<number, MinuteAgg> {
   const minutes = new Map<number, MinuteAgg>();
-  for (const [k, v] of Object.entries(snap.minutes ?? {})) {
+  for (const [k, v] of Object.entries(rec ?? {})) {
     minutes.set(Number(k), { ...v, h: v.h ?? null, l: v.l ?? null });
   }
+  return minutes;
+}
+
+export function fromSnapshot(snap: SnapshotShape): StockAccum {
+  const minutes = minutesFromRecord(snap.minutes);
   // vwap 的分子要由 `vwap × 分母` 還原,分母是後端的 `vwap_vol`(去重剔試撮後的 Σqty)
   // —— **不是** `last.cum_vol`(TC4 當日累積量)。兩者在有 tick 被去重或試撮丟棄時
   // 就會岔開,拿錯的當分母不會報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
