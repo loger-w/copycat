@@ -1,4 +1,19 @@
 
+## 2026-08-05(bars-tristate-status 收尾留尾巴)
+
+- [ ] `StockChart.tsx` 的 isPending / emptyNote(timeout/disconnected)/ isError 三個
+  佔位框 class 字串幾乎相同(僅文字與色差),可抽 `<ChartNotice tone text sub?>`;
+  本輪為守「畫面零變」白名單未動(自評順手項)。
+- [ ] `StockEngine.daily_bars`(overlay 路徑)與 `futures_engine.bars_range` /
+  `index_engine.bars_range` 仍把 ConnectionError 吞成空且無原因 —— 與本輪修的是同一類病;
+  market 頁三態誠實化已列本輪 change-spec Out of scope 1,做的時候 `BarsStatus` /
+  `worst_status` / `_coerce_status` 基建都在 `server/bars.py` 可直接沿用。
+- [ ] 本輪 Known Risks 1:TC4 查無此檔(常態表現 = timeout)前端會顯示「等待 TC4 回應中…」
+  並每 20s 重試不收斂 —— 誠實但不收斂,若實用上煩人,候選解 = 連續 N 輪 timeout 後
+  降級弱提示(「多次未回應,可能查無此檔」)。
+- [ ] 後端 commit `8f7d44b` 的 message 漏了 ` [green]` TDD tag(implementer 筆誤;
+  check_feat_tags 為 warning 模式,未 amend 保 sha 穩定)。
+
 ## 2026-08-05(ladder-position-pnl 收尾留尾巴)
 
 - [ ] **真持倉部位條畫面待 user 盤中過目**:本輪 SC-1/SC-4 的畫面驗證以 fake positions
@@ -277,14 +292,16 @@
 
 ## 2026-07-30(stock-ui-round3 順手清單)
 
-- [ ] 🔴 **「有資料但 TC4 慢」會顯示肯定語氣的錯誤結論**(change-spec Known Risks 1):
+- [x] ~~🔴 **「有資料但 TC4 慢」會顯示肯定語氣的錯誤結論**(change-spec Known Risks 1):
   `_BARS_POLL_DEADLINE=10s` 誤判為空 + 15s 負向快取 → `CandleChart` 顯示「無 K 線資料」
-  而非「還在等」。這是**既有行為**(現況等滿 60s 後顯示同一句話),本輪只讓它更快抵達。
-  要真正修好必須把「逾時 / 真無資料 / TC4 斷線」沿
-  `_collect_history → fetch_bars_range → bars_range → BarsFetcher` 整條型別鏈區分開
-  (`stock_engine.bars_range` 連 `ConnectionError` 都吞成 `[]`),外加 response 加欄位 +
-  前端文案分態 + `tests/server/test_bars.py` 20 個 call site 與 `test_stock_routes.py`
-  的精確相等契約要一起改 —— round3 spec review 評估後判定為獨立一輪的工作,已撤回。
+  而非「還在等」。~~ **2026-08-05 已修**(mod/bars-tristate-status):三態
+  `status ∈ {ok, timeout, disconnected}` 沿 `_collect_history`(HistoryResult)→
+  `fetch_bars_range(_tagged)` → `bars_range` → `BarsFetcher`(BarsResult NamedTuple)→
+  response 傳遞;負向快取與 `_today` cache 連 status 一起存(不洗白);前端 timeout =
+  灰字「等待 TC4 回應中…(自動重試)」、disconnected = 紅字、ok+空維持「無 K 線資料」,
+  非 ok 空態每 20s 自動重試(> 15s 負向快取)。**注意語意界線:TC4 查無此檔的常態表現
+  是 timeout 不是 ok+空**(GETHISDATA 空頁無法區分未備妥/無資料,協定限制)。
+  當年估的「20 個 call site」實數 32。
 - [ ] 大螢幕明細列數不再隨視窗變高(下半列固定 224px ≈ 7 列)。1920×1080 上明細與
   1440×900 一樣多,這是「圖表吃剩餘高度 + 兩塊卡片貼底」的直接代價(Known Risks 2)。
   若之後嫌明細太短,考慮把下半列改成 `flex-1 max-h-72 min-h-56`(需重驗 SC-6)。
