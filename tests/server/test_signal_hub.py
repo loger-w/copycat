@@ -12,7 +12,6 @@ import asyncio
 import datetime as _dt
 import json
 import logging
-import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -525,7 +524,7 @@ class TestEnabled:
 
         事前標記的契約改寫(design R8「既有測試遷移」表):原
         `test_disabled_kind_emits_nothing_and_persists` 釘的是 `set_enabled` 四鍵開關,
-        該家族已不參與評估(評估只讀 slots),T3b 整組退役。
+        該家族已不參與評估(評估只讀 slots),本輪整組退役。
         """
         _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
         h = _Harness(tmp_path, clock)
@@ -547,46 +546,6 @@ class TestEnabled:
         again = _Harness(tmp_path, clock)
         by_id = {r["id"]: r["enabled"] for r in again.hub.rules()}
         assert by_id == {"r-1-000": False, "r-1-001": True}
-
-    async def test_concurrent_set_enabled_lands_memory_state_on_disk(
-        self, tmp_path: Path, clock: _Clock
-    ) -> None:
-        """CC-7:read-modify-write 與落檔沒有共同臨界區 → 慢的那次寫入覆蓋在後。
-
-        記憶體是對的、磁碟停在舊值,重啟後開關「自己跳回去」而當下零錯誤訊號。
-        """
-        h = _Harness(tmp_path, clock)
-        real = h.hub._write_enabled
-
-        def slow_stale_write(flags: dict[str, bool]) -> None:
-            # 舊快照(vol_burst 還是 True 的那次)刻意寫得慢 → 無 lock 時它最後落地
-            if flags["vol_burst"]:
-                time.sleep(0.05)
-            real(flags)
-
-        h.hub._write_enabled = slow_stale_write  # type: ignore[method-assign]
-
-        await asyncio.gather(
-            h.hub.set_enabled({"cdp_cross": False}),
-            h.hub.set_enabled({"vol_burst": False}),
-        )
-
-        expected = {
-            "cdp_cross": False,
-            "surge_crash": True,
-            "vol_burst": False,
-            "limit_lock": True,
-        }
-        assert h.hub.enabled() == expected
-        on_disk = json.loads((tmp_path / "signals_enabled.json").read_text(encoding="utf-8"))
-        assert on_disk == expected, "磁碟停在舊快照 = 重啟後開關自己跳回去"
-
-    async def test_set_enabled_rejects_unknown_key(self, tmp_path: Path, clock: _Clock) -> None:
-        h = _Harness(tmp_path, clock)
-        with pytest.raises(ValueError):
-            await h.hub.set_enabled({"nope": True})
-        with pytest.raises(ValueError):
-            await h.hub.set_enabled({"cdp_cross": "yes"})  # type: ignore[dict-item]
 
 
 class TestDiscordFanout:
