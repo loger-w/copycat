@@ -619,10 +619,32 @@
   (refetchInterval 無資料 3s 輪詢)。同窗口失敗的其他 query(watchlist GET、capital
   poll 類已有 interval 天然免疫;一次性 staleTime Infinity 類才有險)若 user 再回報
   「某面板初載空、用一陣子才出現」,先套同款 refetchInterval 再查別的。
-- [ ] **lifespan 阻塞本身**(root 條件):TXO 全鏈回補 `await` 在 yield 前,啟動窗常態
+  〔2026-08-05 mod/startup-http-window 盤點補充:窗內落 error 終態且無 interval 的
+  一次性 query 至少四條 — useSeries / useStockWatchlist / useSignalFeed today /
+  useSignalsConfig enabled(皆 retry:1),需視窗重聚焦或重載才回復;lifespan 背景化後
+  窗形狀從「連線被拒」變「503」,終態問題本身不變。另:窗內誤按序列切換會看到原始碼
+  字串「切換失敗:HANDOVER_BUSY」(SeriesSelect.tsx:33 原樣印 error.message),中文
+  文案候選與此條同批處理〕
+- [x] ~~**lifespan 阻塞本身**(root 條件):TXO 全鏈回補 `await` 在 yield 前,啟動窗常態
   數十秒~分鐘級,期間整個 HTTP 面不可用(真實量測:fake 延遲 12s → 12.6s 才首次 200)。
   前端已能自癒,但若想根治「重啟後空窗」,得把 runtime.start 的回補段移到背景 task
-  (engines 的 app.state 時序假設要全部重審)— 獨立一輪的架構工作,勿順手。
+  (engines 的 app.state 時序假設要全部重審)— 獨立一輪的架構工作,勿順手。~~
+  **2026-08-05 修畢(mod/startup-http-window)**:整段引擎啟動序列(runtime.start +
+  六段 `_boot`)搬進單一背景 task(保序),lifespan 立即 yield;同 fake 12s 延遲量測
+  首次 200 = **0.037s**(原 12.6s)。窗內對外形狀 = 既有降級語意(503 NOT_READY /
+  WS close / `/api/stock/names` 照常 200);新增 `/api/ready` readiness probe
+  (`{ready, error}`);TXO source start 失敗改「txo 面降級不炸 server」;activate 交接
+  重入 guard(select during handover → 503 `HANDOVER_BUSY`,連舊的
+  select-during-rollover 並發洞一起關);關機中斷 boot 有 CancelledError 清理協定。
+  測試側 `BootedClient`/`wait_boot`(tests/helpers/boot.py)取代裸 TestClient(進
+  context = 等到 boot 完成,語意同舊)。**prod 自然重啟後待目視**:啟動窗降級形狀 +
+  `/api/ready` 翻轉;窗內 `/api/capital/status` 回 disabled(組態語意誤讀窗,10s 自癒)
+  屬預期。
+- [ ] **`test_index_routes::test_ws_streams_index_payload` 既有 flake 窗被 boot 背景化
+  略微放寬**(2026-08-05 觀測一次,全套 ×3 + 單檔 ×3 重跑皆綠):index 引擎 boot 回補設
+  `_dirty` 後 `_broadcast_loop` 會推一則 `p=None` payload,ws client 若在該 flush 前
+  註冊就收到它當首則。master 本就有同一 race,靠時序運氣繞過。修法方向:測試改吃「第一
+  則非 None 的 payload」或 engine 對 `p=None` 的首推抑制;修時勿加 sleep 掩蓋。
 - [ ] **個股頁現價旁加漲跌額(絕對點數)**:本輪(mod/stock-price-prominence)只放大字級,
   % 旁沒有漲跌額;要加時連同 fmtPct 慣例一起看(2026-08-04 change-spec out of scope)。
 - [ ] **三頁現價字級是否統一**:個股頁現價已改 text-3xl,期貨頁 FuturesPage.tsx L54 仍
