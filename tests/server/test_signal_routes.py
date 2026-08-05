@@ -74,8 +74,12 @@ def _signal_row(trade_date: str) -> dict:
     }
 
 
-def _rule_body(kind: str, name: str, **over: object) -> dict:
-    """合法 RuleBody(參數取 SignalsConfig 預設值域內的值);`over` 覆寫任一欄以造非法輸入。"""
+def _rule_body(kind: str, name: str, /, **over: object) -> dict:
+    """合法 RuleBody(參數取 SignalsConfig 預設值域內的值);`over` 覆寫任一欄以造非法輸入。
+
+    `kind` / `name` 宣告成 positional-only:`over` 要能覆寫這兩欄(非法 kind / 撞名案例),
+    同名關鍵字否則會撞成 TypeError。
+    """
     body: dict = {
         "name": name,
         "kind": kind,
