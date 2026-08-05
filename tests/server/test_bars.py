@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import logging
+from typing import cast
+
+import pytest
 
 from copycat.live.stock_source import Bar, BarsStatus
 from copycat.server.bars import (
@@ -24,12 +28,16 @@ class _Fetcher:
 
     `statuses` 逐次對應 `by_call`(超出長度 → "ok"),讓「哪一段逾時」可以精確注入
     —— 三態的重點正是兩段各自的來源不同(SC-6 worst 合併)。
+
+    型別刻意收成 `list[str]` 而非 `list[BarsStatus]`:`BarsStatus` 是 Literal,
+    只在 pyright 期生效,**runtime 進來的就是裸 str**(source 是 fake / 未來可能是
+    別的實作)。域外值要測得到,替身就不能先幫真實世界把它擋掉。
     """
 
     def __init__(
         self,
         by_call: list[list[Bar]] | None = None,
-        statuses: list[BarsStatus] | None = None,
+        statuses: list[str] | None = None,
     ) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
         self._by_call = by_call
@@ -41,10 +49,10 @@ class _Fetcher:
         bars: list[Bar] = []
         if self._by_call is not None and idx < len(self._by_call):
             bars = self._by_call[idx]
-        status: BarsStatus = "ok"
+        status = "ok"
         if self._statuses is not None and idx < len(self._statuses):
             status = self._statuses[idx]
-        return BarsResult(bars, status)
+        return BarsResult(bars, cast("BarsStatus", status))
 
 
 class TestClampDays:
@@ -449,3 +457,59 @@ class TestEmptyMarkStatusFidelity:
         clock["t"] = EMPTY_TTL_SECS + 1.0
         assert (await build_daily(fetch, cache, "9999", today)) == ([], "ok")
         assert len(fetch.calls) == 2
+
+
+class TestUnknownStatusCoerced:
+    """域外 status 字串的收斂點(review F2 / WL-COV-3)。
+
+    `BarsStatus` 是 Literal —— **只在 pyright 期生效**,runtime 攔不住任何東西。
+    注入面是實在的:`FakeStockSource.bars_status` 是裸 str,未來換 source 實作
+    或欄位打錯字同理。而兩條 build_* 對未知值的反應原本剛好相反:
+    `build_minute` 走 `worst_status` 的嚴格查表 → KeyError → 整條 route 500;
+    `build_daily` 不經它 → 未知值原封寫進 `_empty` 再塞進 response,前端拿到一個
+    不在白名單裡的字。前者太吵、後者太安靜,兩種都不對。
+
+    裁定:一律收斂成 `"ok"` + warning log —— **與前端 `fetchBars` 的白名單正規化
+    同語意**(未知 → ok)。不用 `"timeout"`:那會讓一個打錯字的欄位在畫面上長出
+    「等待 TC4 回應中…」並每 20s 重試,把設定錯誤偽裝成基礎設施問題。
+    """
+
+    async def test_build_daily_coerces_unknown_status(self, caplog: pytest.LogCaptureFixture) -> None:
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[]], ["weird"])
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            assert await build_daily(fetch, BarsCache(), "2330", today) == ([], "ok")
+        assert any("weird" in r.message % r.args for r in caplog.records)
+
+    async def test_build_minute_coerces_unknown_status(self, caplog: pytest.LogCaptureFixture) -> None:
+        """原本這條會 KeyError → 500(`worst_status` 直接查表)。"""
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[], []], ["weird", "bogus"])
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            assert await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today) == ([], "ok")
+        assert any("weird" in r.message % r.args for r in caplog.records)
+
+    async def test_unknown_status_not_persisted_into_empty_mark(self) -> None:
+        """域外值不得繞過收斂點滲進負向快取 —— 15s 內的重播會把它再送出去一次。"""
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        await build_daily(_Fetcher([[]], ["weird"]), cache, "9999", today)
+        assert cache.empty_status("9999", "D", 0) == "ok"
+
+    async def test_unknown_status_not_persisted_into_today_cache(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        cache = BarsCache(ttl=999.0)
+        await build_minute(_Fetcher([[], []], ["ok", "weird"]), cache, "2330", 2, today)
+        entry = cache.today_get("2330", today.isoformat())
+        assert entry is not None
+        assert entry[1] == "ok"
+
+    async def test_known_statuses_untouched(self) -> None:
+        """收斂點不得把三態本身也一起壓平。"""
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[], []], ["timeout", "disconnected"])
+        assert (await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)) == (
+            [],
+            "disconnected",
+        )
