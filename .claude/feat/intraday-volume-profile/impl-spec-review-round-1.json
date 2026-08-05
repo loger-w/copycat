@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "verdict": "0 P0 / 4 P1 / 4 P2 — 全 accepted",
+  "dispositions": {
+    "R1": "accepted — useChartToggles.test.ts 明列遷移(8 條 assertion 事前標『該變』,鐵則 E 合規);刪錯誤前提句",
+    "R2": "accepted — VP 元件測試獨立 fixture(fromSnapshot + 域內 ticks)不動共用 ACCUM;rect 加 data-testid=vp-bar;SC-5 drawnRects 不受影響註明",
+    "R3": "accepted — 補 Σvp.t === sideSummary 三數和一致性測試(R5 驗收 + R4 20k 截斷偵測器)",
+    "R4": "accepted — 刪循環 import contingency(實查無環:import type 抹除、鏈無環);不授權新檔",
+    "R5": "accepted — fixture 站點精確到行:StockChart.test.tsx:22 / StockPage.test.tsx:33 / :154;spread 三處不必動",
+    "R6": "accepted — 高密度測試改兩段式(dist≥1.176 斷 h≤dist 且 ≥0.8×dist;dist<1 斷 h===1 重疊接受)",
+    "R7": "accepted — toggleDefs 物件形狀 + key 聯集擴 vp",
+    "R8": "accepted — maxTotal = Math.max(1, ...) + NaN 防禦測試"
+  },
+  "exit": "P1 修入 PLAN v2 → 固定 1 輪 → Phase 3"
+}

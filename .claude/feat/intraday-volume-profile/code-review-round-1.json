@@ -1,0 +1,20 @@
+{
+  "round": 1,
+  "lenses": ["rendering-correctness+perf (opus)", "missing-from-spec+test-coverage (opus)"],
+  "verdict": "1 P1(A1)+ 9 P2(A2-A5、B1-B5;A1/A2/B2 同根因)",
+  "findings": {
+    "A1+A2+B2": {
+      "severity": "P1", "disposition": "accepted(spec 變更,回 design v3)",
+      "claim": "頂端 band clamp → 漲停價 bar 恆 1px;bar 整體上偏一檔(band 錨在 [p, p+tick) 而量全在 p 點)",
+      "resolution": "價位帶改置中 [p−tick/2, p+tick/2] 兩端各 clamp 進域;兩條既有斷言(h===1、top=toY(p+tick))事前標『該變』,紅先行"
+    },
+    "A3": { "disposition": "accepted — 窗過濾改正向條件(NaN 排除,與 windowedEntries 同形)+ 畸形時間戳測試" },
+    "A4": { "disposition": "accepted — 測試 geom() 影子公式改薄包真 buildIntradayGeometry;退化域走 upper===lower 真分支" },
+    "A5": { "disposition": "accepted(a/b)— total/o/i doc 註明本輪未接線;O() 註解改『當日成交過的檔位數』;(c) 空 g 保留(無害)" },
+    "B1": { "disposition": "accepted(選 a)— 補 fromSnapshot 截斷 characterization(minutes 完整、ticks 尾段 → Σvp < 三數和)兼補 fromSnapshot 一致性覆蓋" },
+    "B3": { "disposition": "accepted — SC-5 drawnRects filter 排除 vp-bar + 註解" },
+    "B4": { "disposition": "accepted — foldVp 改用 isMarketLevel(單一定義);design/註解恆等式措辭改條件式" },
+    "B5": { "disposition": "accepted — vp 預設開來源更正為 auto-default;測試名補 vp(事前標記)" },
+    "refuted_or_cleared": "效能實測無 P1(20k fold 1.53ms / tick 4.7µs);memo 路徑、SVG 屬性優先權、snapDown 跨級距鋪滿、雙路一致性皆查證通過"
+  }
+}

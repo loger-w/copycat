@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "shape": "web UI(AI 截圖對照 subagent + user 過目雙層;vite dev :5175 → prod 後端 :8721 今日全日資料;零新增 TC4 訂閱)",
+  "target": "5483 中美晶 分時圖",
+  "results": {
+    "SC-3.1 長條": "PASS — 41 根 rect x=36 起、寬 0.3~159.3 ∝ 量、fill rgb(139,150,168) opacity 0.25;層次實證 VP(doc idx 48-88)< 填色(89/90)< 走勢線(109-111)",
+    "SC-3.2 量分佈鈕": "PASS — 工具列第四顆、aria-pressed=true、亮起樣式與其他一致",
+    "SC-3.3 toggle": "PASS — 關:41→0 rect、線不動(points 長度不變);開:恢復",
+    "SC-3.4 窄寬": "留證 — 900px 中央圖表欄塌縮為既有四欄版面行為(與 VP 無關);1280px 實測被截斷的是資訊列首欄(外盤/內盤統計)非尾欄,design R7 記載方向相反已更正",
+    "SC-3.5 console": "無 VP 新增 error;既有 duplicate-key(key=0)error 每 5s 一則,隔離實驗(VP 關閉後仍續發)證明與 VP 無關 → 記 next-time"
+  },
+  "evidence": [
+    "evidence/SC-3_vp-default-on.jpg",
+    "evidence/SC-3_vp-toggled-off.jpg",
+    "evidence/SC-3_vp-narrow.png"
+  ],
+  "deferred_to_user": "user 過目(雙層驗收的第二層):個股頁分時圖看長條與「量分佈」toggle"
+}
