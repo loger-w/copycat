@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
 import { ARM_IDLE_MS } from "@/lib/flash-arm";
-import type { CapitalOrder, FuturesProductState } from "@/types";
+import type { CapitalOrder, CapitalPosition, FuturesProductState } from "@/types";
 
 const TXF_STATE: FuturesProductState = {
   product: "TXF",
@@ -72,6 +72,21 @@ function futOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
     error_msg: null,
     actionable: true,
     raw: "",
+    ...overrides,
+  };
+}
+
+function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+  return {
+    market: "fut",
+    stock_no: "TXFI6",
+    qty: -2,
+    name: "臺股期貨",
+    avg_price: 23_200,
+    kind: "cash",
+    pnl_base: -800,
+    pnl_base_price: 23_000,
+    pnl_cost: null,
     ...overrides,
   };
 }
@@ -319,5 +334,180 @@ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
       { seq_no: "F01", market: "fut" },
       { seq_no: "F02", market: "fut" },
     ]);
+  });
+});
+
+describe("FuturesLadder 全撤(SC-10)", () => {
+  it("無本契約活單 → 全撤鈕 disabled", async () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [futOrder({ stock_no: "MXFI6" })] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    await screen.findByLabelText("買 22999");
+    const btn = screen.getByRole("button", { name: "全撤" });
+    expect(btn.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("全撤:所有價位的 seq 逐筆送 cancel(market=fut,無彈窗)", async () => {
+    const cancelBodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/order/cancel": (init) => {
+        cancelBodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            futOrder({ seq_no: "F01", price: 23_000, order_qty: 2, filled_qty: 0 }),
+            futOrder({ seq_no: "F02", price: 23_000, order_qty: 3, filled_qty: 1 }),
+            futOrder({ seq_no: "F03", price: 22_999, order_qty: 1, filled_qty: 0 }),
+            futOrder({ seq_no: "F04", stock_no: "MXFI6", price: 22_998 }), // 他契約不撤
+          ],
+        }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "全撤" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    await waitFor(() => expect(cancelBodies.length).toBe(3));
+    expect(cancelBodies).toMatchObject([
+      { seq_no: "F01", market: "fut" },
+      { seq_no: "F02", market: "fut" },
+      { seq_no: "F03", market: "fut" },
+    ]);
+    expect(screen.queryByText("確認平倉")).toBeNull(); // 全撤不走彈窗
+  });
+});
+
+describe("FuturesLadder 一鍵平倉(SC-10)", () => {
+  it("本契約部位 → 彈窗列出方向/口數/估價,確認後送 closeBodyOf 形狀", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/position/close": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ ok: true, code: 0, message: "ok", seq_no: "C01" });
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    expect(screen.getByText("確認平倉")).toBeTruthy();
+    expect(screen.getByText("TXFI6")).toBeTruthy();
+    // 空單平倉貼漲停(25080 = upper/1000);方向/口數/估價同列
+    expect(screen.getByText("空 2 口 · 估價 25080")).toBeTruthy();
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    // fut 不送 kind(closeBodyOf 契約);key = stock_no 非複合鍵
+    expect(bodies[0]).toEqual({ market: "fut", key: "TXFI6", price: 25_080, qty: 2 });
+    await waitFor(() => expect(screen.queryByText("確認平倉")).toBeNull());
+  });
+
+  it("多筆本契約部位 → 確認後逐筆送出", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/position/close": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ ok: true, code: 0, message: "ok", seq_no: "C01" });
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () =>
+        json({
+          positions: [
+            futPos({ qty: -2 }),
+            futPos({ kind: "margin", qty: 3 }), // 多單平倉貼跌停
+          ],
+        }),
+    });
+    render(ladder());
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    expect(screen.getByText("空 2 口 · 估價 25080")).toBeTruthy();
+    expect(screen.getByText("多 3 口 · 估價 20520")).toBeTruthy();
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies).toEqual([
+      { market: "fut", key: "TXFI6", price: 25_080, qty: 2 },
+      { market: "fut", key: "TXFI6", price: 20_520, qty: 3 },
+    ]);
+  });
+
+  it("他契約 / 他市場部位不入清單 → 平倉鈕 disabled 且點擊不開彈窗", async () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () =>
+        json({
+          positions: [
+            futPos({ stock_no: "MXFI6" }), // 他契約
+            futPos({ market: "sec", stock_no: "2330" }), // 他市場
+          ],
+        }),
+    });
+    render(ladder());
+    await screen.findByLabelText("買 22999");
+    const btn = screen.getByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(true));
+    fireEvent.click(btn);
+    expect(screen.queryByText("確認平倉")).toBeNull();
+  });
+
+  it("有部位但估價 null(漲跌停缺)→ disabled + title「無行情估價」", async () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos({ qty: 2 })] }),
+    });
+    // 多單平倉貼跌停 → lower 缺 = 估不出價;upper 保留讓階梯照常渲染
+    render(ladder({ ...TXF_STATE, lower: null }));
+    await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => {
+      const btn = screen.getByRole("button", { name: "平倉" });
+      expect(btn.hasAttribute("disabled")).toBe(true);
+      expect(btn.getAttribute("title")).toBe("無行情估價");
+    });
+  });
+});
+
+describe("FuturesLadder 結算 T-0 警示(SC-6)", () => {
+  it("結算當日 → 武裝列上方出現「⚠ 今日結算」amber 列", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 16)); // 2026-09-16 = 202609 第三個週三
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    const warn = screen.getByText("⚠ 今日結算");
+    expect(warn).toBeTruthy();
+    expect(warn.className).toContain("amber");
+    // 位置:在武裝鈕之前(DOM 順序 = 視覺在武裝列上方)
+    const arm = screen.getByRole("button", { name: "武裝" });
+    expect(warn.compareDocumentPosition(arm) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("非結算日 → 不顯示警示列", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 15)); // T-1
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    expect(screen.queryByText("⚠ 今日結算")).toBeNull();
+  });
+
+  it("resolved_contract null → 不顯示警示列(合約未解析)", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 16));
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder({ ...TXF_STATE, resolved_contract: null }));
+    expect(screen.queryByText("⚠ 今日結算")).toBeNull();
   });
 });
