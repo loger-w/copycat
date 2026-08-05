@@ -625,6 +625,22 @@ def create_app(
         """
         return request.app.state.build.as_dict()
 
+    @app.get("/api/ready")
+    async def ready(request: Request) -> dict:
+        """readiness probe:`ready` = boot 序列已結束(啟動窗已關)。
+
+        **不是**「所有引擎都健康」—— 個別引擎的好壞由各 route 的 503 表述,那是另一個
+        問題(混進來會讓這條在任一引擎降級時就恆 false,失去「窗關了沒」的用途)。
+        `error` 非 null = 序列未走完即中止(傘外一步拋例外),後續引擎根本沒啟動。
+
+        `getattr` 帶 default:lifespan 之外(單元測試直接打 app)也要答得出來。
+        """
+        state = request.app.state
+        return {
+            "ready": bool(getattr(state, "boot_done", False)),
+            "error": getattr(state, "boot_error", None),
+        }
+
     def _runtime(request: Request) -> EngineRuntime:
         return request.app.state.runtime
 
