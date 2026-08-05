@@ -203,8 +203,10 @@ class TestNormalizeFields:
 
     @pytest.mark.parametrize("field", ["enabled", "notify_discord"])
     def test_non_bool_flags_rejected(self, field: str) -> None:
+        rule = make()
+        rule[field] = 1
         with pytest.raises(RuleError, match="INVALID_RULE"):
-            normalize_rule(make(**{field: 1}), {})
+            normalize_rule(rule, {})
 
     @pytest.mark.parametrize("bad", [59, 86_401, True, 600.5, "600"])
     def test_cooldown_out_of_domain_rejected(self, bad: object) -> None:
