@@ -396,7 +396,10 @@ export function PriceLadder({
                 if (v !== null) persistDiscount(v);
               }}
               className={cn(
-                "w-10 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
+                // w-12 不是隨手選的:Chrome 的 number input 右側恆留 spinner 空間,
+                // w-10 時「1.8」的 8 會被裁掉(真環境實測),使用者讀不到自己設的折數。
+                // 與張數框同寬 —— 那一格實證不截字。
+                "w-12 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
                 discountInvalid ? "border-loss" : "border-line",
               )}
             />
