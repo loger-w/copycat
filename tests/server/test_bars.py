@@ -479,7 +479,7 @@ class TestUnknownStatusCoerced:
         fetch = _Fetcher([[]], ["weird"])
         with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
             assert await build_daily(fetch, BarsCache(), "2330", today) == ([], "ok")
-        assert any("weird" in r.message % r.args for r in caplog.records)
+        assert any("weird" in r.getMessage() for r in caplog.records)
 
     async def test_build_minute_coerces_unknown_status(self, caplog: pytest.LogCaptureFixture) -> None:
         """原本這條會 KeyError → 500(`worst_status` 直接查表)。"""
@@ -487,7 +487,7 @@ class TestUnknownStatusCoerced:
         fetch = _Fetcher([[], []], ["weird", "bogus"])
         with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
             assert await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today) == ([], "ok")
-        assert any("weird" in r.message % r.args for r in caplog.records)
+        assert any("weird" in r.getMessage() for r in caplog.records)
 
     async def test_unknown_status_not_persisted_into_empty_mark(self) -> None:
         """域外值不得繞過收斂點滲進負向快取 —— 15s 內的重播會把它再送出去一次。"""

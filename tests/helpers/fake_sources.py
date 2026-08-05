@@ -15,6 +15,8 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Callable
 
+from copycat.live.stock_source import BarsStatus
+
 
 def dbar(t: str, c: int) -> dict:
     """日 K bar 治具(毫點;h/l 各 ±1000,v 固定 10)。"""
@@ -176,12 +178,14 @@ class FakeStockSource:
         self.daily_bars_result: list[dict] | Exception = []
         self.bars_calls: list[tuple[str, str, str, str]] = []
         self.bars_result: list[dict] = []
-        #: 三態 status 的注入點(bars-tristate-status);預設 "ok" = 現況等價
-        self.bars_status: str = "ok"
+        #: 三態 status 的注入點(bars-tristate-status);預設 "ok" = 現況等價。
+        #: 標 `BarsStatus` 讓「隨手指派一個域外字串」在 pyright 期就被擋下 ——
+        #: runtime 的那道防線在 `bars._coerce_status`,兩道各管一半。
+        self.bars_status: BarsStatus = "ok"
 
     def fetch_bars_range(
         self, code: str, tf: str, start_date: str, end_date: str
-    ) -> tuple[list, str]:
+    ) -> tuple[list, BarsStatus]:
         """Protocol 新增方法(change-spec R2-1);三態 status 隨 bars 一起回。"""
         self.bars_calls.append((code, tf, start_date, end_date))
         return self.bars_result, self.bars_status
