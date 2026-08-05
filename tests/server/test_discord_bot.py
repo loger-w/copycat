@@ -223,6 +223,41 @@ class TestAddCommand:
 
         assert it.sent == "已加入自選:9999(查無此檔名稱,請確認代碼)"
 
+    async def test_noop_unknown_code_keeps_both_clauses(self) -> None:
+        """no-op 與「查無名稱」是兩件獨立的事,同時成立時兩句都要在(逐字鎖)。"""
+        it = FakeInteraction()
+
+        await handle_add(FakeService(changed=False), it, "9999")
+
+        assert it.sent == "已在自選:9999(無變更)(查無此檔名稱,請確認代碼)"
+
+    async def test_noop_with_group_omits_group_suffix(self) -> None:
+        """no-op 代表「群組關係也沒動」—— 印出「(群組:X)」會讓人以為剛剛入了群。"""
+        it = FakeInteraction()
+
+        await handle_add(FakeService(changed=False), it, "2330", "主力")
+
+        assert it.sent == "已在自選:2330 台積電(無變更)"
+
+    async def test_group_name_is_stripped_before_service_and_reply(self) -> None:
+        """v3 A3:判定 / service 呼叫 / 回覆三者同基準 —— 否則回覆印的是使用者手滑打的
+        「主力 」,而實際入的是「主力」,兩邊對不上。"""
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_add(service, it, "2330", " 主力 ")
+
+        assert service.added == [("2330", "主力")]
+        assert it.sent == "已加入自選:2330 台積電(群組:主力)"
+
+    async def test_watchlist_unavailable_text(self) -> None:
+        service = FakeService(error=WatchlistError("WATCHLIST_UNAVAILABLE"))
+        it = FakeInteraction()
+
+        await handle_add(service, it, "2330")
+
+        assert it.sent == "自選檔目前不可用,請自前端存檔修復"
+
 
 class TestRemoveCommand:
     async def test_success(self) -> None:
@@ -400,6 +435,24 @@ class TestGroupAddCommand:
 
         assert it.sent == "群組名稱不合法"
 
+    async def test_name_is_stripped_before_service_and_reply(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_add(service, it, " 主力 ")
+
+        assert service.created == ["主力"]
+        assert it.sent == "已建立群組:主力"
+
+    async def test_watchlist_unavailable_text(self) -> None:
+        """v3 A1:壞檔下 create_group 零寫並拋 —— 文案要指出自癒路徑(前端存檔)。"""
+        service = FakeService(error=WatchlistError("WATCHLIST_UNAVAILABLE"))
+        it = FakeInteraction()
+
+        await handle_group_add(service, it, "主力")
+
+        assert it.sent == "自選檔目前不可用,請自前端存檔修復"
+
     async def test_service_none(self) -> None:
         it = FakeInteraction()
 
@@ -435,6 +488,23 @@ class TestGroupRemoveCommand:
 
         assert it.sent == _RESERVED_BLOCKED
         assert service.deleted == []
+
+    async def test_name_is_stripped_before_service_and_reply(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_remove(service, it, " 主力 ")
+
+        assert service.deleted == ["主力"]
+        assert it.sent == "已刪除群組:主力(成員移至未分組)"
+
+    async def test_watchlist_unavailable_text(self) -> None:
+        service = FakeService(error=WatchlistError("WATCHLIST_UNAVAILABLE"))
+        it = FakeInteraction()
+
+        await handle_group_remove(service, it, "主力")
+
+        assert it.sent == "自選檔目前不可用,請自前端存檔修復"
 
     async def test_service_none(self) -> None:
         it = FakeInteraction()
@@ -487,6 +557,33 @@ class TestGroupRenameCommand:
 
         assert it.sent == "群組名稱不合法"
 
+    async def test_names_are_stripped_before_service_and_reply(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, " 主力 ", " 核心 ")
+
+        assert service.renamed == [("主力", "核心")]
+        assert it.sent == "已改名:主力 → 核心"
+
+    async def test_noop_text_uses_stripped_new_name(self) -> None:
+        """padding-only 改名是 no-op:文案印 strip 後的新名(印原字串會出現詭異空白)。"""
+        service = FakeService(changed=False)
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, " 主力 ", "主力")
+
+        assert service.renamed == [("主力", "主力")]
+        assert it.sent == "名稱未變:主力"
+
+    async def test_watchlist_unavailable_text(self) -> None:
+        service = FakeService(error=WatchlistError("WATCHLIST_UNAVAILABLE"))
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, "主力", "核心")
+
+        assert it.sent == "自選檔目前不可用,請自前端存檔修復"
+
     async def test_service_none(self) -> None:
         it = FakeInteraction()
 
@@ -530,12 +627,89 @@ class TestUngroupCommand:
         assert it.sent == _RESERVED_BLOCKED
         assert service.ungrouped == []
 
+    async def test_group_is_stripped_before_service_and_reply(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_ungroup(service, it, "2330", " 主力 ")
+
+        assert service.ungrouped == [("2330", "主力")]
+        assert it.sent == "已自群組 主力 移出:2330 台積電(仍在自選)"
+
+    async def test_noop_text_uses_stripped_group(self) -> None:
+        it = FakeInteraction()
+
+        await handle_ungroup(FakeService(changed=False), it, "2330", " 主力 ")
+
+        assert it.sent == "2330 台積電 不在群組 主力"
+
+    async def test_watchlist_unavailable_text(self) -> None:
+        service = FakeService(error=WatchlistError("WATCHLIST_UNAVAILABLE"))
+        it = FakeInteraction()
+
+        await handle_ungroup(service, it, "2330", "主力")
+
+        assert it.sent == "自選檔目前不可用,請自前端存檔修復"
+
     async def test_service_none(self) -> None:
         it = FakeInteraction()
 
         await handle_ungroup(None, it, "2330", "主力")
 
         assert it.sent == "服務未就緒"
+
+
+class _RaisingFollowup:
+    """`followup.send` 拋 —— Discord 側 5xx / 訊息被拒(超長、權限)都是這個形。"""
+
+    def __init__(self, log: list[tuple[str, Any]]) -> None:
+        self._log = log
+
+    async def send(self, content: str) -> None:
+        self._log.append(("send", content))
+        raise RuntimeError("discord 503")
+
+
+class RaisingInteraction(FakeInteraction):
+    def __init__(self) -> None:
+        super().__init__()
+        self.followup = _RaisingFollowup(self.calls)  # type: ignore[assignment]
+
+
+class TestReplyGuards:
+    """v3 A2:`_run` 是所有指令的唯一出口,它拋出去 = 使用者永遠停在「思考中」。"""
+
+    async def test_over_long_reply_is_truncated(self) -> None:
+        """Discord 訊息上限 2000 字;群組名是自由文字,`/watch groups` 可以輕易超過。
+        超長訊息會被 Discord 直接拒收 → 已 defer 的互動永遠等不到回覆。"""
+        service = FakeService({"codes": [], "groups": [{"name": "長" * 3000, "codes": []}]})
+        it = FakeInteraction()
+
+        text = await handle_groups(service, it)
+
+        assert text.endswith("…(截斷)")
+        assert len(text) == 1900 + len("…(截斷)")
+        assert it.sent == text  # 回傳值 = 實際送出的那份
+
+    async def test_normal_reply_is_untouched(self) -> None:
+        it = FakeInteraction()
+
+        text = await handle_groups(FakeService(), it)
+
+        assert text == "尚無群組"
+
+    async def test_send_failure_is_logged_not_raised(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """送出失敗往外拋只會被 discord.py 記在它自己的 log(且指令 callback 沒有其他
+        接手處);轉成 `logger.exception` 才留得下真因。"""
+        it = RaisingInteraction()
+
+        with caplog.at_level(logging.ERROR, logger="copycat.server.discord_bot"):
+            text = await handle_add(FakeService(), it, "2330")
+
+        assert text == "已加入自選:2330 台積電"
+        assert any("回覆送出失敗" in r.getMessage() for r in caplog.records)
 
 
 class _HangingService(FakeService):
@@ -584,6 +758,19 @@ class TestGroupChoices:
 
         assert result == ["主力"]
         assert any("100" in r.getMessage() for r in caplog.records)
+
+    async def test_filtered_out_long_name_is_not_warned(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """warning 要在 needle 過濾**之後** —— autocomplete 每一鍵都呼叫一次,擺在
+        過濾前會讓一個超長群組名把 log 洗成每按一鍵一行。"""
+        service = self._service(["x" * 101, "主力"])
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.discord_bot"):
+            result = await group_choices(service, "主力")
+
+        assert result == ["主力"]
+        assert caplog.records == []
 
     async def test_capped_at_25(self) -> None:
         service = self._service([f"g{i}" for i in range(30)])

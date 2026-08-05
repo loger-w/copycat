@@ -322,6 +322,35 @@ class TestMembership:
             await h.hub.close()
 
 
+    async def test_same_codes_again_drops_nothing_and_refetches_no_basis(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """group-only 變更(建群 / 改名 / 移出群組)會以**相同 codes** 再走一次
+        `set_watchlist` → hub 也收到同一份名單(watchlist_service R9 的另一半前提)。
+
+        差集若失守,盤中改個群組就會把每檔的 CDP 基準 drop 掉再重抓 —— 那條路要打 TC4
+        日 K,重抓期間 CDP 訊號整段停用,而畫面與 log 都不會有任何異狀。
+        """
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+            fetched = [c for c, _n in h.bars.calls]
+            assert fetched == ["2317", "2330"]  # 基準非零:第一次真的抓了(request_basis 排序)
+
+            dropped: list[str] = []
+            h.hub._detector.drop_code = dropped.append  # type: ignore[method-assign]
+
+            h.hub.on_watchlist(["2317", "2330"])  # 同集合(順序不同)
+            await h.settle()
+
+            assert dropped == []
+            assert [c for c, _n in h.bars.calls] == fetched  # 零重抓
+        finally:
+            await h.hub.close()
+
+
 class TestBackfillIsolation:
     async def test_apply_backfill_replay_does_not_reach_hub(
         self, tmp_path: Path, clock: _Clock
