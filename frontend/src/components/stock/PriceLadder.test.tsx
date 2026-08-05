@@ -233,6 +233,19 @@ describe("PriceLadder(既有顯示行為)", () => {
   });
 });
 
+// characterization:反灰(±5% 外)的淡化落在哪一層。SC-4 的梯內標記必須**不受**
+// 淡化影響(遠離現價的打平標記正是最需要看見的),而 opacity 套在 row 容器上時
+// 子元素無法「反淡」→ 下一步會把 opacity 移到三個 grid 欄。先鎖現況。
+describe("PriceLadder 反灰列的淡化落點", () => {
+  it("±5% 外的列整條淡化 —— opacity-35 掛在 row 容器上", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const row = screen.getByLabelText("買 110").closest("div.grid");
+    expect(row).toBeTruthy();
+    expect(row!.className).toContain("opacity-35");
+  });
+});
+
 describe("PriceLadder 武裝直送(SC-7)", () => {
   it("武裝點價:1 次 API call + payload 斷言;鈕轉「解除」紅底", async () => {
     const bodies: unknown[] = [];
