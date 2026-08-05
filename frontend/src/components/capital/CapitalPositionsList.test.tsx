@@ -153,8 +153,50 @@ describe("CapitalPositionsList", () => {
     expect(screen.getByText("23000")).toBeTruthy();
     fireEvent.click(screen.getByText("確認"));
     await waitFor(() => expect(bodies.length).toBe(1));
-    expect(bodies[0]).toMatchObject({ market: "fut", key: "TXFI6", price: 23000, qty: 2 });
+    expect(bodies[0]).toEqual({
+      market: "fut",
+      key: "TXFI6",
+      price: 23000,
+      qty: 2,
+      kind: "cash",
+    });
     await waitFor(() => expect(screen.queryByText("確認平倉")).toBeNull());
+  });
+
+  it("同檔資+集保並存 → 兩列各帶種類標籤,平倉各自送出自己的 kind", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/status": () => json(STATUS),
+      "/api/capital/position/close": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ ok: true, code: 0, message: "ok", seq_no: "006" });
+      },
+      "/api/capital/positions": () =>
+        json({
+          positions: [
+            pos({ kind: "cash", qty: 1 }),
+            pos({ kind: "margin", qty: 3, avg_price: 980 }),
+          ],
+        }),
+    });
+    renderList("sec", () => 985);
+    await screen.findAllByText(/2330/);
+    // 代號文字節點不變(RTL getNodeText 只取直接文字子節點),種類是獨立子元素
+    expect(screen.getAllByText("2330 台積電").length).toBe(2);
+    expect(screen.getByText("現")).toBeTruthy();
+    expect(screen.getByText("資")).toBeTruthy();
+
+    fireEvent.click(screen.getAllByText("平倉")[0]!);
+    expect(screen.getByText("現股")).toBeTruthy(); // 確認彈窗種類列
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+
+    fireEvent.click(screen.getAllByText("平倉")[1]!);
+    expect(screen.getByText("融資")).toBeTruthy();
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies[0]).toEqual({ market: "sec", key: "2330", price: 985, qty: 1, kind: "cash" });
+    expect(bodies[1]).toEqual({ market: "sec", key: "2330", price: 985, qty: 3, kind: "margin" });
   });
 
   it("平倉 400 BROKER_REJECTED → 錯誤列繁中顯示(review A2)", async () => {
