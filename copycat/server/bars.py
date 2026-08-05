@@ -53,6 +53,17 @@ DAILY_MAX_BARS = 120
 DAILY_LONG_WINDOW_DAYS = 1825
 DAILY_LONG_MAX_BARS = 1500  # 不截斷 5 年(留餘裕);上限只為防呆
 
+#: 午夜緩衝窗的**結束時刻**(台北牆鐘)。這段期間內不把 `yesterday` 寫進永久 memo。
+#: 10 分鐘 = 「TC4 把上一個台北日的尾根寫進 1K 分頁」的寬限;比它更長只是多付幾次
+#: 歷史段往返(而且午夜本來就沒什麼人在看盤),更短則救不到真正晚寫的那幾根(TZ-2)。
+MIDNIGHT_BUFFER_END = _dt.time(0, 10)
+
+
+def _now_time() -> _dt.time:
+    """本機牆鐘時刻(server 跑在台北)。**獨立成 module 級函式 = 測試唯一的凍結點**
+    —— 內嵌 `datetime.now()` 的話這條競態就只能靠真的跑到半夜才驗得到。"""
+    return _dt.datetime.now().time()
+
 
 class BarsResult(NamedTuple):
     """bars + 空結果的原因(`BarsStatus`)。
@@ -434,6 +445,9 @@ async def build_minute(
 
     `tf="D"` 的兩條(`build_daily` / `build_period`)不帶 session:日 K 無盤別維度,
     忽略的參數不進 cache 鍵(D-15)。
+
+    **午夜緩衝**(`MIDNIGHT_BUFFER_END`,TZ-2):台北 00:00–00:10 內不把 `yesterday`
+    寫進永久 memo —— 見下方註解。回應內容不受影響,只有「要不要記住」被延後。
     """
     cache.prune(today)
     ck = f"{code}:{session}"
@@ -445,6 +459,7 @@ async def build_minute(
 
     statuses: list[BarsStatus] = []
     out: list[Bar] = []
+    deferred: list[Bar] = []
     if start <= yesterday:
         missing = cache.hist_missing(ck, start, yesterday)
         if missing:
@@ -453,11 +468,23 @@ async def build_minute(
             fetched, hist_status = await fetch(code, "1", lo.isoformat(), hi.isoformat())
             statuses.append(_coerce_status(hist_status))
             if fetched:
-                cache.put_hist_range(ck, lo, hi, fetched)
+                hold = hi == yesterday and _now_time() < MIDNIGHT_BUFFER_END
+                # 午夜緩衝(TZ-2):台北剛過午夜時 `yesterday` 仍屬當前交易日(夜盤到
+                # 05:00 才收),TC4 不保證此刻已把 23:5x 尾根寫進 1K 分頁。歷史 memo 是
+                # **永久**的 —— 這一刻寫下去,那幾根就永遠缺(重啟 server 才會消失),
+                # 而畫面上只是「昨晚最後幾分鐘不見了」,零錯誤訊號。
+                # 只延後**永久化**:fetch 到的照樣併進本輪回應(下面的 `deferred`)。
+                put_hi = yesterday - _dt.timedelta(days=1) if hold else hi
+                if lo <= put_hi:
+                    cache.put_hist_range(ck, lo, put_hi, fetched)
+                if hold:
+                    deferred = [b for b in fetched if b["t"][:10] == yesterday.isoformat()]
             else:
                 # 全空:可能是 TC4 失敗,不寫負向快取(否則整段被永久釘成空)
                 logger.info("bars %s: 歷史段 %s..%s 回空,不入 memo", ck, lo, hi)
         out.extend(cache.hist_range(ck, start, yesterday))
+        # yesterday 是歷史段的最後一天 → 接在 memo 之後仍是時序遞增
+        out.extend(deferred)
 
     entry = cache.today_get(ck, today.isoformat())
     if entry is None:
