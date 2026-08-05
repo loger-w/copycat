@@ -281,6 +281,72 @@ class StockEngine:
         # stkfut_prod 同理零讀者(期現價差走 WS `stkfut` 訊息的 prod)。
         return snap
 
+    def quotes(self) -> dict[str, tuple[str, float | None]]:
+        """自選各檔的 `(名稱, 漲跌幅%)`(SC-2:同群摘要的資料面)。
+
+        名稱來源只有 `state.meta.name` —— 摘要要印成員名,而 `watchlist_quote` 沒帶。
+        缺 meta(盤前 / 冷啟動)回空字串、缺行情回 None,但**該檔仍在字典裡**:
+        整檔缺席會讓「群組有幾檔」跟著行情波動。
+
+        名單先取 local 參照(R16):`_watchlist` 以**整份重新指派**更新,所以這一份
+        是一致快照。刻意不對 `_states` 做 dict 迭代 —— 那會在並行 `set_watchlist`
+        寫入新 state 時炸 RuntimeError(size changed),而本方法是在 Discord worker
+        呼叫的,盤中隨時可能交錯。走 `_watchlist` 也天然排除 `F:` 期貨偽鍵
+        (`_states` 兩種鍵都有)。
+
+        `chg_pct` 一律走 `_quote_payload` 這個唯一定義,不自己再算一次 —— 除權息日
+        的分母是 `meta.ref_milli` 而不是昨收,兩份算式遲早會岔開。
+        """
+        codes = self._watchlist
+        out: dict[str, tuple[str, float | None]] = {}
+        for code in codes:
+            state = self._states.get(code)
+            meta = state.meta if state is not None else None
+            name = meta.name if meta is not None else ""
+            out[code] = (name, self._quote_payload(code)["chg_pct"])
+        return out
+
+    def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
+        """群組檢視的唯讀 batch(SC-4)。**不 set_main、不改訂閱池。**
+
+        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 30 次
+        會把主圖搶走 → 主圖分時線凍結。
+
+        payload 只挑 minutes/meta 兩鍵(+ 兩個旗標):`ticks` 是數千筆,30 檔一起送
+        等於把 batch 端點變成頻寬炸彈;而鍵名沿 `StockDayState.snapshot()` 的單一
+        對映(直接丟 dataclass 會讓前端 `meta.ref` undefined → hasRef=false →
+        紅綠面積靜默消失)。
+
+        ⚠ `no_data` 的推導式**刻意與別處不同**:這裡把「未訂閱」也算 no_data。
+        `StockDayState.snapshot()` 根本沒這個鍵,而 `engine.snapshot()` 對未知 code
+        回 `False`(語意 = 「TC4 說查無此檔」)—— 群組卡片要答的是「這格畫不畫得出
+        東西」,未訂閱與查無此檔對它是同一件事。
+
+        順帶把「今日還沒回補」的**已訂閱**成員入列(R12):群組成員多半不是主圖,
+        沒有這個入列點就只有當日 live tick、開盤前的分鐘全缺。未訂閱的不入列 ——
+        那等於替不在訂閱池的股票發 SubHistory。queue put 不是訂閱變更,前一段的
+        「不改訂閱池」仍成立。
+        """
+        out: dict[str, dict] = {}
+        for code in codes:
+            state = self._states.get(code)
+            snap = state.snapshot() if state is not None else StockDayState().snapshot()
+            if (
+                state is not None
+                and code not in self._backfilled
+                and code not in self._backfill_pending
+            ):
+                # 先入列再讀旗標:順序反了的話第一次請求會回 backfilling=False,
+                # 卡片顯示「無資料」而不是「回補中…」,而下一輪(60s 後)才會更正
+                self._enqueue_backfill(code)
+            out[code] = {
+                "minutes": snap["minutes"],
+                "meta": snap["meta"],
+                "no_data": code in self._no_data or code not in self._states,
+                "backfilling": code in self._backfill_pending,
+            }
+        return out
+
     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
         try:
