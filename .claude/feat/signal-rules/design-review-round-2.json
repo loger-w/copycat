@@ -1,0 +1,17 @@
+{
+  "round": 2,
+  "type": "限縮輪(round 1 P0 觸發)",
+  "verdict": "0 P0 / 4 P1 / 6 P2 — 全 accepted,修畢 P1 歸零出場",
+  "dispositions": {
+    "R16": "rules 檔 = self._data_dir / _RULES_FILE(_ENABLED_FILE 同款);DEFAULT_PATH 刪",
+    "R17": "_seed_slot 明文(cache 掃描 + 日別 guard + levels 過濾);順序 = save 成功 → 同一同步區塊 swap+seed",
+    "R18": "日別不符改丟棄 log(與 staged MFS-2 同語意),不餵 None 不洗正確基準",
+    "R19": "rule_config 映射表與四條 route 表原文內嵌(不再指向 v1)",
+    "R20": "版本不符 → raise(future bump 須附轉換);load 規則數 > MAX_RULES → raise",
+    "R21": "落檔失敗 → 500 {detail:{error: RULE_SAVE_FAILED}} 入錯誤碼清單",
+    "R22": "brainstorm edge 5 同步 R9 語意",
+    "R23": "測試遷移拆兩類:純刪除 = 清理 commit;改寫新契約 = [red] 紅測試",
+    "R24": "遷移表補 StockPage.test.tsx fetch stub",
+    "R25": "int 欄位鍵(rearm_ticks/min_*_lots)normalize 拒非整數 + rule_config int() 標明"
+  }
+}

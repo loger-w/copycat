@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "lenses": ["concurrency+state-machine (opus)", "missing-from-spec+test-coverage (opus)"],
+  "verdict": "0 P0 / 3 P1(A1+B2 同根因、A2、B1)/ P2 多數摺入修復",
+  "accepted_fixes": {
+    "A1+B2(P1)": "_basis_worker outer except 收斂單一入口:staged → 日別符才 _staged_cache[code]=None;非 staged → 日別符才 cache=(date,None)+_distribute;不符只 log。不再繞過 cache 直摸 detector",
+    "A2(P1)": "stage2 promote 後差集重抓(watch − cache);on_watchlist 於 _staged_date 非 None 時對 added 加排 staged job",
+    "B1(P1)": "feed 副標改並列:kindLabel 主文 + rule_name 小字截斷;兩條測試改斷共存/fallback",
+    "A3": "日別 staleness 判斷提前至 _daily_bars 之前;丟棄路徑不付 gap sleep",
+    "A4": "per-rule log 帶 id+name;_emit 拆出 evaluate 的 try(fanout 失敗獨立 log)",
+    "A5": "rules GET 失敗態:規則區/Dialog 顯示「規則載入失敗」非「尚無規則」",
+    "A6(1)(2)(4)(5)": "RuleBody.id 改 object 欄自驗;encodeURIComponent×2;Dialog params functional updater;日別 guard 下沉 _distribute(冪等)",
+    "B3": "非 staged 過期丟棄測試(promote 後舊 job settle 不覆蓋)",
+    "B5": "PARAM_SPECS 字面鎖(dict 相等)",
+    "B6": "submit cooldown 界檢文案 + rules≥30 新增鈕 disabled",
+    "B7": "rail 開關失敗 errText 一行",
+    "B8": "缺欄 → 400 INVALID_RULE 測試一格",
+    "B9": "route 參數化該格改 cdp_levels:[\"ah\"]",
+    "B10": "next-time 該行改指 useSignalRules",
+    "B4(部分)": "signal_state docstring 註記 staged 家族已移交 hub(真移除 = 🔵 記 next-time)"
+  },
+  "not_fixed": ["A6(3) default_rules time.time 一致性(僅測試可觀察)", "A6(6) 30 規則熱路徑成本(design 已知)", "B4 detector staged 家族真移除(🔵 next-time)"]
+}

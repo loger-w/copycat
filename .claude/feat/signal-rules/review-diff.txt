@@ -1,0 +1,4455 @@
+﻿diff --git a/copycat/server/app.py b/copycat/server/app.py
+index e0276d7..aa9d39c 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -12,7 +12,7 @@ from datetime import date as _date
+ from pathlib import Path
+ from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
+ 
+-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
++from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.responses import JSONResponse
+ from pydantic import BaseModel
+@@ -47,6 +47,7 @@ from copycat.server.overlay import OverlayCache, build_overlay
+ from copycat.server.signal_hub import SignalHub
+ from copycat.server.stock_engine import StockEngine, StockSource
+ from copycat.server.watchlist_service import WatchlistService
++from copycat.signal_rules import Rule, RuleError
+ from copycat.signals_config import load_signals_config
+ from copycat.stock_watchlist import (
+     Group,
+@@ -126,11 +127,29 @@ class GroupsBody(BaseModel):
+     codes: list[str] | None = None  # v3 自選全體;缺省 → union(groups)(舊 client 相容)
+ 
+ 
+-class SignalsEnabledBody(BaseModel):
+-    #: 值刻意宣告成 `object` 而非 `bool`:pydantic v2 的寬鬆模式會把 "yes"/"1" 轉成 True,
+-    #: 打錯的值就會被靜默接受成「開啟」。四鍵與型別一律由 `hub.set_enabled` 驗
+-    #: (ValueError → 400 INVALID_SIGNALS_ENABLED),驗證規則單一定義在 hub。
+-    enabled: dict[str, object]
++class RuleBody(BaseModel):
++    """訊號規則的**形狀**層;語意(值域 / 唯一名 / levels / kind)單一定義在 `normalize_rule`。
++
++    每個欄位都宣告成 `object` 且給 None 預設,兩個理由都是為了守住錯誤契約:
++    宣告成 `bool`/`int` 會讓 pydantic 把 "yes"/"3" 寬鬆轉型、把打錯的值靜默收下;
++    宣告成必填則缺欄回 422 + list 形 detail,不符全站 `{"detail": {"error": code}}`
++    ——缺欄要走 400 INVALID_RULE(signal-rules R10)。
++    """
++
++    #: 只有 id 是真的 `str | None`:PUT 拿它跟 path 比對(不一致 → 400,R6);
++    #: POST 不看(id 由 hub 配)。
++    id: str | None = None
++    name: object = None
++    kind: object = None
++    enabled: object = None
++    notify_discord: object = None
++    cooldown_secs: object = None
++    params: object = None
++    cdp_levels: object = None
++
++    def payload(self) -> dict:
++        """送進 hub 的規則欄位(去掉 id — 那由 route 的 path / hub 決定)。"""
++        return self.model_dump(exclude={"id"})
+ 
+ 
+ def _tc4_port() -> str:
+@@ -711,6 +730,17 @@ def create_app(
+     async def _watchlist_error(request: Request, exc: WatchlistError) -> JSONResponse:
+         return JSONResponse(status_code=400, content={"detail": {"error": str(exc)}})
+ 
++    @app.exception_handler(RuleError)
++    async def _rule_error(request: Request, exc: RuleError) -> JSONResponse:
++        """`RuleError` 的值域只有兩碼(signal_rules R10):找不到 → 404,其餘 → 400。
++
++        未知碼收斂成 400 而非 500:新增碼忘了在這裡對照時,前端至少拿得到 `detail.error`
++        原文,而不是被全域 handler 轉成 502 TC4_DOWN(那條訊息與真因完全無關)。
++        """
++        code = str(exc)
++        status = 404 if code == "RULE_NOT_FOUND" else 400
++        return JSONResponse(status_code=status, content={"detail": {"error": code}})
++
+     def _stock(request: Request) -> StockEngine:
+         stock: StockEngine | None = request.app.state.stock
+         if stock is None:
+@@ -819,22 +849,46 @@ def create_app(
+         """
+         return {"signals": _signals(request).today_signals()}
+ 
+-    @app.get("/api/stock/signals/enabled")
+-    async def stock_signals_enabled(request: Request) -> dict:
+-        return {"enabled": _signals(request).enabled()}
++    # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
++
++    async def _save_rule(hub: SignalHub, body: RuleBody, rule_id: str | None) -> Rule:
++        """POST / PUT 的共同落點。**OSError 必須在這裡轉 500**:全域 handler 會把它
++        收成 502 TC4_DOWN,而落檔失敗跟達錢 4 一點關係都沒有(排查會被帶到反方向)。
++        """
++        try:
++            return await hub.upsert_rule(body.payload(), rule_id=rule_id)
++        except OSError:
++            logger.exception("訊號規則落檔失敗(記憶體未變更):%s", rule_id)
++            raise HTTPException(status_code=500, detail={"error": "RULE_SAVE_FAILED"}) from None
++
++    @app.get("/api/stock/signals/rules")
++    async def stock_signals_rules(request: Request) -> dict:
++        return {"rules": _signals(request).rules()}
++
++    @app.post("/api/stock/signals/rules", status_code=201)
++    async def stock_signals_rules_post(request: Request, body: RuleBody) -> Rule:
++        """新增。body 的 `id` 一律忽略 —— id 由 hub 的單調計數配(R12),客戶端指定
++        會讓已存 jsonl 的舊 id 被重用,前端去重就把新規則的訊號吃掉。"""
++        return await _save_rule(_signals(request), body, None)
++
++    @app.put("/api/stock/signals/rules/{rule_id}")
++    async def stock_signals_rules_put(request: Request, rule_id: str, body: RuleBody) -> Rule:
++        """編輯。**path 的 id 為準**;body 帶了不一致的 id → 400(R6):兩者不一致時
++        猜哪一個都可能改到使用者沒看著的那條規則。"""
++        hub = _signals(request)
++        if body.id is not None and body.id != rule_id:
++            raise HTTPException(status_code=400, detail={"error": "INVALID_RULE"})
++        return await _save_rule(hub, body, rule_id)
+ 
+-    @app.put("/api/stock/signals/enabled")
+-    async def stock_signals_enabled_put(request: Request, body: SignalsEnabledBody) -> dict:
+-        """部分更新(只送要改的鍵);回傳合併後的完整四鍵狀態。"""
++    @app.delete("/api/stock/signals/rules/{rule_id}", status_code=204)
++    async def stock_signals_rules_delete(request: Request, rule_id: str) -> Response:
+         hub = _signals(request)
+         try:
+-            # 值型別由 hub 驗(見 SignalsEnabledBody);cast 只是把驗證責任交出去
+-            await hub.set_enabled(cast("dict[str, bool]", body.enabled))
+-        except ValueError:
+-            raise HTTPException(
+-                status_code=400, detail={"error": "INVALID_SIGNALS_ENABLED"}
+-            ) from None
+-        return {"enabled": hub.enabled()}
++            await hub.delete_rule(rule_id)
++        except OSError:
++            logger.exception("訊號規則落檔失敗(記憶體未變更):%s", rule_id)
++            raise HTTPException(status_code=500, detail={"error": "RULE_SAVE_FAILED"}) from None
++        return Response(status_code=204)
+ 
+     @app.get("/api/stock/state/{code}")
+     async def stock_state(request: Request, code: str) -> dict:
+diff --git a/copycat/server/signal_hub.py b/copycat/server/signal_hub.py
+index dd183a0..b4b3153 100644
+--- a/copycat/server/signal_hub.py
++++ b/copycat/server/signal_hub.py
+@@ -11,15 +11,28 @@
+ - **兩條佇列不可合併**(CC-5):jsonl 是歷史真相源(重連 refetch 讀它),Discord 是
+   可丟的通知路。共用一條時 Discord 一卡住 jsonl 就跟著缺角,而缺角靜默且不可回復。
+   關機時 jsonl 佇列要排空(含 worker 手上那則),Discord 佇列直接放棄。
+-- **訊號 id 是決定性鍵**(`trade_date-code-kind-levels|direction-time_key`):
++- **訊號 id 是決定性鍵**(`trade_date-rule_id-code-kind-levels|direction-time_key`):
+   不依賴 process 記憶,重啟後重發同一事件會得到同一個 id,前端與 jsonl 都據此去重。
++  規則 id 是其中一段(signal-rules R13):同 kind 兩條規則同一 tick 各發一則,沒有
++  這一段兩則會撞成同一個 id 被前端當重複丟掉。
+ - **Discord 節流只擋 Discord**:WS 與 jsonl 是歷史真相源,節流它們會讓
+   「reconnect refetch today」自癒語意破掉(design §4.3 R2-8)。
+ 
+-換日順序契約(design §4.1 stage2):`on_rollover` **先 `reset_day()` 再
+-`swap_staged_basis()`** —— 反了會把剛換上的當日基準洗掉(見 signal_state 模組
++規則引擎(signal-rules design「SC-2/3/5 hub」):**每條規則一顆未改動的
++`SignalDetector`**(per-rule `SignalsConfig`,`rule_config()` 映射)。hub 持:
++
++- `_slots`:熱路徑唯一讀取點。CRUD 在鎖內組好完整新 dict,**落檔成功後**才以單一
++  賦值替換(dict 賦值原子)—— 任何時刻熱路徑看到的都是自洽快照,落檔失敗則記憶體
++  零變更(畫面有、重啟後沒有,是最難查的一種不一致)。
++- `_basis_cache` / `_staged_cache`:CDP 基準的**唯一**快照(帶基準日),由 hub 依
++  各規則的 `cdp_levels` 過濾後餵給該規則的 detector。基準日不符一律**丟棄**(不寫
++  cache、不分發、不餵 None)—— 餵 None 會把 rollover 已 promote 的正確基準洗掉,
++  而且不會自癒。
++
++換日順序契約(design §4.1 stage2):`on_rollover` **先逐 slot `reset_day()` 再
++promote 暫存區** —— 反了會把剛換上的當日基準洗掉(見 signal_state 模組
+ docstring)。stage1 (`on_rollover_pending`) 在盤前把次日基準抓進暫存區,
+-stage2 只做 swap,開盤第一筆 tick 起 CDP 即用當日正確基準。
++stage2 只做 promote,開盤第一筆 tick 起 CDP 即用當日正確基準。
+ """
+ 
+ from __future__ import annotations
+@@ -32,10 +45,10 @@ import json
+ import logging
+ from collections import deque
+ from collections.abc import Awaitable, Callable
++from dataclasses import dataclass
+ from pathlib import Path
+-from typing import Any
++from typing import Any, cast
+ 
+-from copycat.fileio import atomic_write_text
+ from copycat.live.signal_state import (
+     SWITCH_KEYS,
+     SignalDetector,
+@@ -49,6 +62,17 @@ from copycat.live.stock_models import StockTick, _best_limit_price
+ from copycat.live.stock_source import DailyBar
+ from copycat.live.stock_state import StockDayState
+ from copycat.server.overlay import compute_cdp
++from copycat.signal_rules import (
++    MAX_RULES,
++    Rule,
++    RuleError,
++    default_rules,
++    load_rules,
++    new_rule_id,
++    normalize_rule,
++    rule_config,
++    save_rules,
++)
+ from copycat.signals_config import SignalsConfig
+ 
+ logger = logging.getLogger(__name__)
+@@ -67,6 +91,7 @@ DISCORD_QUEUE_MAXSIZE = 100
+ #: 關機時等 jsonl worker 把手上與佇列中的訊號寫完的上限
+ _CLOSE_FLUSH_TIMEOUT = 5.0
+ _ENABLED_FILE = "signals_enabled.json"
++_RULES_FILE = "signal_rules.json"
+ _SIGNAL_DIR = "signals"
+ _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
+ _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
+@@ -105,11 +130,46 @@ def _kind_text(row: dict[str, Any]) -> str:
+ 
+ 
+ def format_signal_text(row: dict[str, Any]) -> str:
+-    """Discord 文案(bot 與 webhook 同一段,design §4.3)。"""
++    """Discord 文案(bot 與 webhook 同一段,design §4.3)。
++
++    有 `rule_name` 才在文末附規則名(R14b):同 kind 多規則在 Discord 靠它辨識來源;
++    升級當日的舊 jsonl row 沒有這個鍵,不得因此留下一個空的分隔符。
++    """
+     price = row.get("price")
+     price_text = f"{price / 1000:.2f}" if isinstance(price, int) else "-"
+     who = f"{row.get('name') or ''} {row.get('code', '')}".strip()
+-    return f"🔔 {_kind_text(row)}｜{who}｜{price_text}｜{row.get('time', '')}"
++    text = f"🔔 {_kind_text(row)}｜{who}｜{price_text}｜{row.get('time', '')}"
++    rule_name = row.get("rule_name")
++    return f"{text}｜{rule_name}" if rule_name else text
++
++
++@dataclass(frozen=True)
++class _RuleSlot:
++    """規則 / detector / 開關集合是**不可分割**的一組(R2)。
++
++    拆成三個平行 dict 時,熱路徑可能讀到「新規則配舊 detector」的混血快照;
++    綁成一顆 frozen slot 之後,替換永遠是整顆換掉。
++    """
++
++    rule: Rule
++    detector: SignalDetector
++    enabled: frozenset[str]  # rule.enabled ? {rule.kind} : frozenset()
++
++
++def _copy_rule(rule: Rule) -> Rule:
++    """對外回傳的規則一律是副本 —— 呼叫端改到的不能是熱路徑正在讀的那份。"""
++    out = cast("Rule", dict(rule))
++    out["params"] = dict(rule["params"])
++    out["cdp_levels"] = list(rule["cdp_levels"])
++    return out
++
++
++def _filter_levels(cdp: dict[str, int] | None, levels: list[str]) -> dict[str, int] | None:
++    """規則只訂閱部分 CDP 線 → 只餵那幾條(detector 只認得被餵進去的線)。"""
++    if not cdp:
++        return None
++    picked = {name: cdp[name] for name in levels if name in cdp}
++    return picked or None
+ 
+ 
+ class SignalHub:
+@@ -131,12 +191,18 @@ class SignalHub:
+         self._data_dir = Path(data_dir)
+         self._trade_date_fn = trade_date_fn
+         self._now_fn = now_fn
+-        self._detector = SignalDetector(cfg, now_fn=now_fn)
++        self._rules_path = self._data_dir / _RULES_FILE
++        # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
++        # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
++        self._slots: dict[str, _RuleSlot] = {}
++        self._rule_seq = 0  # id 單調計數(R12):刪掉的 id 不回收
++        self._load_or_migrate_rules()
++        self._rules_lock = asyncio.Lock()  # CRUD 的驗證 + 落檔 + swap 共同臨界區
+         self._watch: set[str] = set()
+-        self._enabled: dict[str, bool] = self._load_enabled()
+-        self._enabled_set: frozenset[str] = self._as_set(self._enabled)
+-        self._enabled_lock = asyncio.Lock()  # read-modify-write + 落檔的共同臨界區(CC-7)
+         self._basis_jobs: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
++        #: CDP 基準的唯一快照:code → (基準日, cdp);日別是丟棄過期結果的判準(R3)
++        self._basis_cache: dict[str, tuple[str, dict[str, int] | None]] = {}
++        self._staged_cache: dict[str, dict[str, int] | None] = {}
+         self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
+         # 兩條獨立佇列 + 兩個 worker(CC-5):Discord 卡住時 jsonl 這條真相源要照走
+         self._jsonl_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=JSONL_QUEUE_MAXSIZE)
+@@ -153,6 +219,96 @@ class SignalHub:
+     def dropped(self) -> int:
+         return self.dropped_jsonl + self.dropped_discord
+ 
++    # ---- 規則(SC-2)----
++
++    def _load_or_migrate_rules(self) -> None:
++        """三態(`load_rules`):缺檔 → 由既有全域設定 + 舊開關檔生成預設並落檔;
++        合法(含空陣列)→ 照用(使用者刪光規則不得復活預設);壞檔 → 往外拋。
++        """
++        rules = load_rules(self._rules_path)
++        if rules is None:
++            rules = default_rules(self._cfg, self._legacy_flags())
++            save_rules(self._rules_path, rules)  # OSError 往外拋:記憶體不得先於落檔
++            logger.info("訊號規則檔不存在,已由現行設定生成 %d 條預設規則", len(rules))
++        self._slots = {rule["id"]: self._make_slot(rule) for rule in rules}
++        self._rule_seq = len(rules)
++
++    def _make_slot(self, rule: Rule) -> _RuleSlot:
++        """建 detector 的**唯一**入口(R5):初始化 / 遷移 / upsert 三處同式,
++        漏帶 `now_fn` 的那一顆會偷用真實時鐘,而測試與盤後重放都看不出來。
++        """
++        return _RuleSlot(
++            rule=rule,
++            detector=SignalDetector(rule_config(rule, self._cfg), now_fn=self._now_fn),
++            enabled=frozenset({rule["kind"]}) if rule["enabled"] else frozenset(),
++        )
++
++    def rules(self) -> list[Rule]:
++        return [_copy_rule(slot.rule) for slot in self._slots.values()]
++
++    async def upsert_rule(self, payload: dict[str, Any], rule_id: str | None = None) -> Rule:
++        """`rule_id` None = 新增(配新 id),否則 = 編輯(缺 → RULE_NOT_FOUND)。
++
++        順序(R17):鎖內驗證 → 落檔 → **同一個不含 await 的同步區塊**內 swap `_slots`
++        並 seed 新 slot。seed 與 swap 之間插不進 basis worker,新 slot 必帶最新快照;
++        落檔失敗則記憶體零變更、例外往外拋(route 轉 500 RULE_SAVE_FAILED)。
++        """
++        async with self._rules_lock:
++            current = {rid: slot.rule for rid, slot in self._slots.items()}
++            seq = self._rule_seq
++            if rule_id is None:
++                if len(current) >= MAX_RULES:
++                    logger.warning("規則數已達上限 %d,拒絕新增", MAX_RULES)
++                    raise RuleError("INVALID_RULE")
++                epoch = int(self._now_fn().timestamp())
++                target = new_rule_id(epoch, seq)
++                while target in current:  # 同秒多次新增 / 匯入過的 id:單調往前找
++                    seq += 1
++                    target = new_rule_id(epoch, seq)
++            elif rule_id not in current:
++                raise RuleError("RULE_NOT_FOUND")
++            else:
++                target = rule_id
++            others = {rid: r for rid, r in current.items() if rid != target}
++            rule = normalize_rule(cast("Rule", {**payload, "id": target}), others)
++            slot = self._make_slot(rule)
++
++            merged = dict(current)
++            merged[target] = rule
++            await asyncio.to_thread(save_rules, self._rules_path, list(merged.values()))
++
++            slots = dict(self._slots)
++            slots[target] = slot
++            self._slots = slots
++            if rule_id is None:
++                self._rule_seq = seq + 1
++            self._seed_slot(slot)
++            return _copy_rule(rule)
++
++    async def delete_rule(self, rule_id: str) -> None:
++        async with self._rules_lock:
++            if rule_id not in self._slots:
++                raise RuleError("RULE_NOT_FOUND")
++            remaining = [slot.rule for rid, slot in self._slots.items() if rid != rule_id]
++            await asyncio.to_thread(save_rules, self._rules_path, remaining)
++            slots = dict(self._slots)
++            slots.pop(rule_id, None)
++            self._slots = slots
++
++    def _seed_slot(self, slot: _RuleSlot) -> None:
++        """upsert 的反向軸(R17):新 detector 補上已在手的當日基準。
++
++        沒有這一步,盤中編輯規則等於把該規則的 CDP 停到隔天 —— 而畫面只會顯示
++        「這條規則今天都沒發」,沒有任何錯誤訊號。
++        """
++        if slot.rule["kind"] != "cdp_cross":
++            return
++        today = self._trade_date_fn()
++        for code, (basis_date, cdp) in self._basis_cache.items():
++            if basis_date != today:
++                continue
++            slot.detector.set_basis(code, _filter_levels(cdp, slot.rule["cdp_levels"]))
++
+     # ---- 生命週期 ----
+ 
+     async def start(self) -> None:
+@@ -196,41 +352,60 @@ class SignalHub:
+         if code not in self._watch:
+             return
+         try:
+-            ctx = self._context(state, tick.cum_vol)
+-            for event in self._detector.evaluate(code, tick, ctx, self._enabled_set):
+-                self._emit(event, state)
++            ctx = self._context(state, tick.cum_vol)  # ctx 每 tick 一次,全規則共用
+         except Exception:
+             # engine 熱路徑不可被訊號層汙染:丟棄這一筆評估,tick 本身照常走完
+-            logger.exception("訊號評估失敗(丟棄該 tick):%s", code)
++            logger.exception("訊號 ctx 組建失敗(丟棄該 tick):%s", code)
++            return
++        for slot in self._slots.values():
++            try:
++                for event in slot.detector.evaluate(code, tick, ctx, slot.enabled):
++                    self._emit(event, slot.rule, state)
++            except Exception:
++                # per-rule 隔離(R1):一條規則炸掉只跳過它自己這一 tick,其餘照評
++                logger.exception("訊號規則評估失敗(丟棄):%s / %s", code, slot.rule["name"])
+ 
+     def on_book(self, code: str, state: StockDayState) -> None:
+         if code not in self._watch:
+             return
+         try:
+             ctx = self._context(state, 0)  # 簿路只評估鎖板 kind,不會用到 day_volume
+-            for event in self._detector.evaluate_book(code, ctx, self._enabled_set):
+-                self._emit(event, state)
+         except Exception:
+-            logger.exception("簿更新訊號評估失敗(丟棄):%s", code)
++            logger.exception("簿更新 ctx 組建失敗(丟棄):%s", code)
++            return
++        for slot in self._slots.values():
++            try:
++                for event in slot.detector.evaluate_book(code, ctx, slot.enabled):
++                    self._emit(event, slot.rule, state)
++            except Exception:
++                logger.exception("簿更新規則評估失敗(丟棄):%s / %s", code, slot.rule["name"])
+ 
+     def on_rollover_pending(self, new_date: str) -> None:
+-        """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 swap。
++        """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 promote。
+ 
+         **先清暫存區**(MFS-2):快路徑(pending 與 stage2 同一輪 loop 連發)會讓 stage1
+-        的 job 在 swap 之後才被 worker 消化,結果留在暫存區到下一輪換日;不清掉的話
+-        下一次 swap 會回 True 並把舊日基準當當日基準用一整天,零錯誤訊號。
++        的 job 在 promote 之後才被 worker 消化,結果留在暫存區到下一輪換日;不清掉的話
++        下一次 promote 會成立並把舊日基準當當日基準用一整天,零錯誤訊號。
+         """
+-        self._detector.clear_staged()
++        self._staged_cache.clear()
+         self._staged_date = new_date
+         self.request_basis(sorted(self._watch), basis_date=new_date, staged=True)
+ 
+     def on_rollover(self) -> None:
+         expected = self._trade_date_fn()  # engine 已前進到新日別(stage2 契約)
+-        self._detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 swap
+-        if not self._detector.swap_staged_basis(expected):
++        for slot in self._slots.values():
++            slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
++        if self._staged_cache and self._staged_date == expected:
++            self._basis_cache = {code: (expected, cdp) for code, cdp in self._staged_cache.items()}
++            for code in self._basis_cache:
++                self._distribute(code)
++        else:
+             # stage1 沒跑過(週六補市日 / server 盤中才啟動)→ 重抓;該窗 CDP 停用
+             logger.info("換日無預抓基準,清空重抓(design §4.2 fallback)")
++            self._basis_cache.clear()
+             self.request_basis(sorted(self._watch))
++        self._staged_cache.clear()
++        self._staged_date = None
+ 
+     def on_watchlist(self, codes: list[str]) -> None:
+         new = set(codes)
+@@ -238,10 +413,19 @@ class SignalHub:
+         removed = self._watch - new
+         self._watch = new
+         for code in sorted(removed):
+-            self._detector.drop_code(code)
++            self._drop_code(code)
+         if added:
+             self.request_basis(sorted(added))
+ 
++    def _drop_code(self, code: str) -> None:
++        """SC-5:逐 slot 丟 + 雙 cache pop —— 漏掉 cache 的話重新加入時
++        `_seed_slot` 會拿舊快照當當日基準,而那份可能已經是別天的。
++        """
++        for slot in self._slots.values():
++            slot.detector.drop_code(code)
++        self._basis_cache.pop(code, None)
++        self._staged_cache.pop(code, None)
++
+     # ---- CDP 基準 ----
+ 
+     def request_basis(
+@@ -261,7 +445,9 @@ class SignalHub:
+             except Exception:
+                 # worker 死掉 = 之後所有基準靜默停用(stock_engine._backfill_worker CR4 同款)
+                 logger.exception("CDP 基準解析未預期失敗,%s 停用 CDP", code)
+-                self._detector.set_basis(code, None)
++                for slot in self._slots.values():
++                    if slot.rule["kind"] == "cdp_cross":
++                        slot.detector.set_basis(code, None)
+             finally:
+                 self._basis_jobs.task_done()
+             if self._cfg.basis_gap_secs > 0:
+@@ -284,13 +470,30 @@ class SignalHub:
+             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
+         if staged:
+             if basis_date != self._staged_date:
+-                # 這則是上一輪 stage1 排的、在 `clear_staged` 之後才跑完的 in-flight job;
++                # 這則是上一輪 stage1 排的、在暫存區清空之後才跑完的 in-flight job;
+                 # 放進去等於把殘渣重新種回暫存區(MFS-2)
+                 logger.info("捨棄過期的 staged 基準:%s(%s)", code, basis_date)
+                 return
+-            self._detector.stage_basis(code, cdp, basis_date)
+-        else:
+-            self._detector.set_basis(code, cdp)
++            self._staged_cache[code] = cdp
++            return
++        if basis_date != self._trade_date_fn():
++            # 換日已經走完 promote,這則是舊日別的 in-flight job → **丟棄**(R18)。
++            # 餵 None 會把剛 promote 的正確基準洗掉,而且整天不會自癒。
++            logger.info("捨棄過期的當日基準:%s(%s)", code, basis_date)
++            return
++        self._basis_cache[code] = (basis_date, cdp)
++        self._distribute(code)
++
++    def _distribute(self, code: str) -> None:
++        """把快照餵給每條 CDP 規則(只做 levels 過濾;日別比對在 `_resolve_basis`)。"""
++        entry = self._basis_cache.get(code)
++        if entry is None:
++            return
++        cdp = entry[1]
++        for slot in self._slots.values():
++            if slot.rule["kind"] != "cdp_cross":
++                continue
++            slot.detector.set_basis(code, _filter_levels(cdp, slot.rule["cdp_levels"]))
+ 
+     # ---- 事件 fanout ----
+ 
+@@ -314,11 +517,13 @@ class SignalHub:
+             day_volume=day_volume,
+         )
+ 
+-    def _emit(self, event: SignalEvent, state: StockDayState) -> None:
++    def _emit(self, event: SignalEvent, rule: Rule, state: StockDayState) -> None:
+         trade_date = self._trade_date_fn()
+         payload = {
+             "type": "signal",
+-            "id": _event_id(trade_date, event),
++            "id": _event_id(trade_date, rule["id"], event),
++            "rule_id": rule["id"],
++            "rule_name": rule["name"],
+             "kind": event.kind,
+             "code": event.code,
+             "name": state.meta.name if state.meta is not None else "",
+@@ -330,9 +535,10 @@ class SignalHub:
+             "touch_count": event.touch_count,
+         }
+         self._publish(payload)  # WS 同步先送(前端要即時)
+-        self._enqueue({**payload, "trade_date": trade_date})
++        self._enqueue({**payload, "trade_date": trade_date}, notify=rule["notify_discord"])
+ 
+-    def _enqueue(self, row: dict) -> None:
++    def _enqueue(self, row: dict, *, notify: bool) -> None:
++        """`notify` 只擋 Discord:jsonl 是歷史真相源,關通知不等於不留紀錄。"""
+         if self._closing:  # 關機已開始:再收件就永遠不會被寫出去
+             return
+         if _put_drop_oldest(self._jsonl_queue, row):
+@@ -341,6 +547,8 @@ class SignalHub:
+                 logger.warning(
+                     "訊號 jsonl 佇列滿,已丟棄 %d 筆(WS 不受影響)", self.dropped_jsonl
+                 )
++        if not notify:
++            return
+         if _put_drop_oldest(self._discord_queue, row):
+             self.dropped_discord += 1
+             if self.dropped_discord % _DROP_LOG_EVERY == 1:
+@@ -467,35 +675,18 @@ class SignalHub:
+         if not ok:
+             logger.warning("Discord 兩層皆未送出 %s(WS/jsonl 不受影響)", row.get("id"))
+ 
+-    # ---- enabled 開關(SC-12)----
+-
+-    @staticmethod
+-    def _as_set(flags: dict[str, bool]) -> frozenset[str]:
+-        return frozenset(key for key, value in flags.items() if value)
+-
+-    def enabled(self) -> dict[str, bool]:
+-        return dict(self._enabled)
+-
+-    async def set_enabled(self, flags: dict[str, bool]) -> None:
+-        """非法鍵 / 非 bool 值 → ValueError(route 轉 400 INVALID_SIGNALS_ENABLED)。
+-
+-        read-modify-write **與落檔同一個臨界區**(CC-7):兩者拆開時,先算後寫的那次可能
+-        最後才落地,磁碟停在舊快照 —— 記憶體是對的、重啟後開關自己跳回去,零錯誤訊號。
+-        驗證刻意留在鎖外:非法輸入不該排在別人的落檔後面。
+-        """
+-        for key, value in flags.items():
+-            if key not in SWITCH_KEYS or not isinstance(value, bool):
+-                raise ValueError(f"非法訊號開關:{key}={value!r}")
+-        async with self._enabled_lock:
+-            merged = {**self._enabled, **flags}
+-            self._enabled = merged
+-            self._enabled_set = self._as_set(merged)
+-            await asyncio.to_thread(self._write_enabled, merged)
++    # ---- 舊四鍵開關檔(**唯讀**的遷移來源)----
+ 
+     def _enabled_path(self) -> Path:
+         return self._data_dir / _ENABLED_FILE
+ 
+-    def _load_enabled(self) -> dict[str, bool]:
++    def _legacy_flags(self) -> dict[str, bool]:
++        """舊四鍵開關檔(遷移專用來源;fail-open 全開)。
++
++        規則化之後這份**只在「規則檔不存在」時被讀一次**,用來決定四條種子規則的
++        `enabled`;之後永遠不再回頭讀它。setter 與 route 已隨開關家族退役,這個檔
++        從此唯讀 —— 留著只為了讓既有部署的關閉態能跟著遷移過來。
++        """
+         flags = dict.fromkeys(SWITCH_KEYS, True)  # 缺檔 = 全開
+         path = self._enabled_path()
+         if not path.exists():
+@@ -514,14 +705,6 @@ class SignalHub:
+                 flags[key] = value
+         return flags
+ 
+-    def _write_enabled(self, flags: dict[str, bool]) -> None:
+-        path = self._enabled_path()
+-        try:
+-            path.parent.mkdir(parents=True, exist_ok=True)
+-            atomic_write_text(path, json.dumps(flags, ensure_ascii=False, indent=2))
+-        except OSError as e:
+-            logger.error("訊號開關檔寫入失敗(%s):%s", path, e)
+-
+ 
+ def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
+     """有界佇列滿載策略(design R14):丟最舊再放入,熱路徑零反壓。回傳「是否丟了一筆」。"""
+@@ -540,7 +723,11 @@ def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
+     return True
+ 
+ 
+-def _event_id(trade_date: str, event: SignalEvent) -> str:
+-    """決定性鍵(design §4.3 R1):不依賴 process 記憶 → 重啟後同一事件同 id。"""
++def _event_id(trade_date: str, rule_id: str, event: SignalEvent) -> str:
++    """決定性鍵(design §4.3 R1):不依賴 process 記憶 → 重啟後同一事件同 id。
++
++    `rule_id` 是必要的一段:同 kind 兩條規則同一 tick 各發一則,少了它兩則同 id,
++    前端去重會把第二則整個吃掉(signal-rules 邊界 2)。
++    """
+     tag = "+".join(event.levels) or event.direction or "-"
+-    return f"{trade_date}-{event.code}-{event.kind}-{tag}-{event.time_key}"
++    return f"{trade_date}-{rule_id}-{event.code}-{event.kind}-{tag}-{event.time_key}"
+diff --git a/copycat/signal_rules.py b/copycat/signal_rules.py
+new file mode 100644
+index 0000000..e0edc78
+--- /dev/null
++++ b/copycat/signal_rules.py
+@@ -0,0 +1,367 @@
++"""訊號規則模型(signal-rules design v2.1「SC-1 規則模型」)— 值域驗證 / 三態存取 / config 映射.
++
++一條規則 = 一顆未改動的 `SignalDetector` 的參數來源:`rule_config()` 把規則攤成
++per-rule `SignalsConfig`,所以「調參數」永遠只是換一份 config,detector 本身零改動。
++
++**路徑由呼叫端傳入**(hub = `self._data_dir / "signal_rules.json"`,`_ENABLED_FILE` 同款):
++本模組刻意不設 CWD 相對的 DEFAULT_PATH —— 測試 harness 注入 tmp_path 才不會污染真檔(R16)。
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++import time
++from dataclasses import replace
++from pathlib import Path
++from typing import Any, TypedDict, cast
++
++from copycat.fileio import atomic_write_text
++from copycat.signals_config import SignalsConfig
++
++logger = logging.getLogger(__name__)
++
++__all__ = [
++    "CDP_LEVELS",
++    "COOLDOWN_MAX",
++    "COOLDOWN_MIN",
++    "INT_PARAM_KEYS",
++    "MAX_RULES",
++    "PARAM_SPECS",
++    "RULE_KINDS",
++    "Rule",
++    "RuleError",
++    "default_rules",
++    "load_rules",
++    "new_rule_id",
++    "normalize_rule",
++    "rule_config",
++    "save_rules",
++]
++
++RULE_KINDS: tuple[str, ...] = ("cdp_cross", "surge_crash", "vol_burst", "limit_lock")
++CDP_LEVELS: tuple[str, ...] = ("ah", "nh", "cdp", "nl", "al")
++COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
++#: REST 可寫入的無界量要有上限(R11)—— 熱路徑是 per-tick N × evaluate。
++MAX_RULES = 30
++_CACHE_VERSION = 1
++
++#: 逐 kind 的 params 鍵集合與閉區間值域(R1)。鍵集合是**精確集合**:多鍵 / 缺鍵同樣是
++#: INVALID_RULE —— 多鍵放行等於使用者以為調到的參數其實沒接上,缺鍵則會靜默套 detector 預設。
++PARAM_SPECS: dict[str, dict[str, tuple[float, float]]] = {
++    "cdp_cross": {"rearm_ticks": (0, 50)},
++    "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
++    "vol_burst": {
++        "ratio": (1, 100),
++        "window_secs": (10, 3600),
++        "min_elapsed_min": (0, 240),
++        "min_window_lots": (0, 1e6),
++        "min_day_lots": (0, 1e7),
++    },
++    "limit_lock": {},
++}
++
++#: 這些鍵在 `SignalsConfig` 是 int 欄位 —— 2.5 個 tick / 半張都不存在,非整數值拒收(R25)。
++#: 不擋的話 `int()` 會靜默截尾,使用者填 2.9 拿到 2。
++INT_PARAM_KEYS: frozenset[str] = frozenset({"rearm_ticks", "min_window_lots", "min_day_lots"})
++
++_DEFAULT_NAMES: dict[str, str] = {
++    "cdp_cross": "CDP 穿越",
++    "surge_crash": "爆拉爆跌",
++    "vol_burst": "爆量",
++    "limit_lock": "鎖漲跌停",
++}
++
++
++class RuleError(ValueError):
++    """error code 進 HTTPException detail.error(跨檔契約)。
++
++    值域僅 {"INVALID_RULE", "RULE_NOT_FOUND"}(R10)—— route handler 逐碼對照,
++    多一個碼就是前端拿不到對應文案。本模組只產出 INVALID_RULE。
++    """
++
++
++class Rule(TypedDict):
++    id: str
++    name: str
++    kind: str
++    enabled: bool
++    notify_discord: bool
++    cooldown_secs: int
++    params: dict[str, float]
++    cdp_levels: list[str]
++
++
++def _bad() -> RuleError:
++    return RuleError("INVALID_RULE")
++
++
++def _as_int(value: object) -> int | None:
++    """int 或整數值 float → int;bool / 非整數 / 非數字 → None(呼叫端轉 INVALID_RULE)。
++
++    bool 必須先擋:它是 int 子類,不擋的話 `True` 會被當成 1 靜默通過。
++    """
++    if isinstance(value, bool):
++        return None
++    if isinstance(value, int):
++        return value
++    if isinstance(value, float) and value.is_integer():
++        return int(value)
++    return None
++
++
++def _normalize_params(kind: str, raw: object) -> dict[str, float]:
++    spec = PARAM_SPECS[kind]
++    if not isinstance(raw, dict):
++        raise _bad()
++    if set(cast(dict[Any, Any], raw)) != set(spec):
++        raise _bad()
++    out: dict[str, float] = {}
++    for key, (lo, hi) in spec.items():
++        value = cast(dict[Any, Any], raw)[key]
++        if isinstance(value, bool) or not isinstance(value, (int, float)):
++            raise _bad()
++        number = float(value)
++        if key in INT_PARAM_KEYS and not number.is_integer():
++            raise _bad()
++        if not lo <= number <= hi:  # NaN 走這條(比較恆 False)
++            raise _bad()
++        out[key] = number
++    return out
++
++
++def _normalize_levels(kind: str, raw: object) -> list[str]:
++    """cdp_cross 必須非空且 ⊆ 五線(保序去重);其他 kind 必須是空 list。"""
++    if not isinstance(raw, list):
++        raise _bad()
++    levels: list[str] = []
++    for item in cast(list[Any], raw):
++        if not isinstance(item, str) or item not in CDP_LEVELS:
++            raise _bad()
++        if item not in levels:
++            levels.append(item)
++    if kind == "cdp_cross":
++        if not levels:
++            raise _bad()
++    elif levels:
++        # 非 cdp 規則帶線 = 使用者以為有過濾效果,實際上 detector 根本不看 —— 直接拒。
++        raise _bad()
++    return levels
++
++
++def normalize_rule(rule: Rule, others: dict[str, Rule]) -> Rule:
++    """驗證 + 正規化成 canonical 形;任何違規一律 `RuleError("INVALID_RULE")`。
++
++    `others` = 規則全集合**排除自身 id**(R6)—— 編輯規則但不改名不該被自己撞掉。
++    冪等:`normalize_rule(normalize_rule(x, o), o) == normalize_rule(x, o)`。
++    """
++    raw: dict[str, Any] = dict(rule)
++
++    rule_id = raw.get("id")
++    if not isinstance(rule_id, str) or not rule_id:
++        raise _bad()
++
++    kind = raw.get("kind")
++    if not isinstance(kind, str) or kind not in RULE_KINDS:
++        raise _bad()
++
++    name = raw.get("name")
++    if not isinstance(name, str):
++        raise _bad()
++    name = name.strip()
++    if not name:
++        raise _bad()
++    if any(other["name"].strip() == name for other in others.values()):
++        raise _bad()
++
++    flags: dict[str, bool] = {}
++    for key in ("enabled", "notify_discord"):
++        value = raw.get(key)
++        if not isinstance(value, bool):
++            raise _bad()
++        flags[key] = value
++
++    cooldown = _as_int(raw.get("cooldown_secs"))
++    if cooldown is None or not COOLDOWN_MIN <= cooldown <= COOLDOWN_MAX:
++        raise _bad()
++
++    return {
++        "id": rule_id,
++        "name": name,
++        "kind": kind,
++        "enabled": flags["enabled"],
++        "notify_discord": flags["notify_discord"],
++        "cooldown_secs": cooldown,
++        "params": _normalize_params(kind, raw.get("params")),
++        "cdp_levels": _normalize_levels(kind, raw.get("cdp_levels")),
++    }
++
++
++def new_rule_id(epoch: int, seq: int) -> str:
++    """`r-<epoch>-<seq>`;seq = hub 的單調計數(R12),不是 len(rules)——刪除後不得回收 id。"""
++    return f"r-{epoch}-{seq:03d}"
++
++
++def _clamp(label: str, value: float, lo: float, hi: float) -> float:
++    """遷移專用夾制:`configs/signals.json` 的值域比規則寬,超界不該讓冷啟動整個炸掉。
++
++    只用在 `default_rules`(從既有全域設定生成種子規則);使用者輸入一律走
++    `normalize_rule` 的 raise —— 使用者填錯要當面拒絕,不是默默改成別的數字。
++    """
++    clamped = max(lo, min(hi, value))
++    if clamped != value:
++        logger.warning(
++            "訊號設定 %s=%s 在規則值域 [%s, %s] 外,遷移時夾制成 %s", label, value, lo, hi, clamped
++        )
++    return clamped
++
++
++def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
++    raw: dict[str, float] = {}
++    if kind == "cdp_cross":
++        raw = {"rearm_ticks": float(cfg.cdp_rearm_ticks)}
++    elif kind == "surge_crash":
++        raw = {"pct": float(cfg.surge_pct), "window_secs": float(cfg.surge_window_secs)}
++    elif kind == "vol_burst":
++        raw = {
++            "ratio": float(cfg.vol_ratio),
++            # SignalsConfig 無 vol_window_secs —— 爆量的滾動窗一直是借 surge_window_secs
++            "window_secs": float(cfg.surge_window_secs),
++            "min_elapsed_min": float(cfg.vol_min_elapsed_min),
++            "min_window_lots": float(cfg.vol_min_window_lots),
++            "min_day_lots": float(cfg.vol_min_day_lots),
++        }
++    spec = PARAM_SPECS[kind]
++    return {key: _clamp(f"{kind}.{key}", value, *spec[key]) for key, value in raw.items()}
++
++
++def _seed_cooldown(kind: str, cfg: SignalsConfig) -> int:
++    source = {
++        "cdp_cross": cfg.cdp_cooldown_secs,
++        "surge_crash": cfg.surge_cooldown_secs,
++        "vol_burst": cfg.vol_cooldown_secs,
++        "limit_lock": cfg.limit_cooldown_secs,
++    }[kind]
++    return int(_clamp(f"{kind}.cooldown_secs", float(int(source)), COOLDOWN_MIN, COOLDOWN_MAX))
++
++
++def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rule]:
++    """遷移種子:每 kind 一條,參數 / 冷卻取自現行全域 `SignalsConfig`。
++
++    `legacy_flags` = 舊 `signals_enabled.json` 的四鍵;**缺鍵 = True**(fail-open,
++    與舊 `_load_enabled` 的「缺檔全開」同語意 —— 遷移不該悄悄把訊號關掉)。
++    """
++    epoch = int(time.time())
++    rules: list[Rule] = []
++    for seq, kind in enumerate(RULE_KINDS):
++        rules.append(
++            {
++                "id": new_rule_id(epoch, seq),
++                "name": _DEFAULT_NAMES[kind],
++                "kind": kind,
++                "enabled": legacy_flags.get(kind, True),
++                "notify_discord": True,
++                "cooldown_secs": _seed_cooldown(kind, cfg),
++                "params": _seed_params(kind, cfg),
++                "cdp_levels": list(CDP_LEVELS) if kind == "cdp_cross" else [],
++            }
++        )
++    return rules
++
++
++def load_rules(path: Path) -> list[Rule] | None:
++    """三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。
++
++    「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活四條預設。
++    壞檔 / 驗證失敗 / 版本不符 / 超過 MAX_RULES 一律 raise —— 靜默套預設會在盤中
++    無預警地改變推播行為;raise 走 `_boot` 傘 → hub None → routes 503,大聲。
++    """
++    if not path.exists():
++        return None
++    try:
++        payload = json.loads(path.read_text(encoding="utf-8"))
++    except ValueError as e:
++        logger.error("訊號規則檔非合法 JSON(%s):%s", path, e)
++        raise _bad() from e
++    if not isinstance(payload, dict):
++        logger.error("訊號規則檔格式非物件:%s", path)
++        raise _bad()
++    obj = cast(dict[str, Any], payload)
++    if obj.get("_cache_version") != _CACHE_VERSION:
++        # 版本 bump 屬開發期動作,屆時必須同時寫轉換 —— 沒寫就該在啟動時被發現。
++        logger.error("訊號規則檔版本不符(%s):%r", path, obj.get("_cache_version"))
++        raise _bad()
++    raw = obj.get("rules")
++    if not isinstance(raw, list):
++        logger.error("訊號規則檔缺 rules 陣列:%s", path)
++        raise _bad()
++    items = cast(list[Any], raw)
++    if len(items) > MAX_RULES:
++        logger.error("訊號規則檔 %s 條超過上限 %s:%s", len(items), MAX_RULES, path)
++        raise _bad()
++    rules: dict[str, Rule] = {}
++    for item in items:
++        if not isinstance(item, dict):
++            raise _bad()
++        rule = normalize_rule(cast(Rule, item), rules)  # others = 已收的前綴(不含自身)
++        if rule["id"] in rules:
++            logger.error("訊號規則檔含重複 id:%s", rule["id"])
++            raise _bad()
++        rules[rule["id"]] = rule
++    return list(rules.values())
++
++
++def save_rules(path: Path, rules: list[Rule]) -> None:
++    """atomic 落檔;**OSError 往外拋**(R12/R21)—— route 轉 500 RULE_SAVE_FAILED。
++
++    吞掉這裡的失敗會讓畫面顯示新規則、重啟後跳回舊的(記憶體不得先於落檔更新)。
++    """
++    path.parent.mkdir(parents=True, exist_ok=True)
++    atomic_write_text(
++        path,
++        json.dumps(
++            {"_cache_version": _CACHE_VERSION, "rules": list(rules)},
++            ensure_ascii=False,
++            indent=1,
++        ),
++    )
++
++
++def rule_config(rule: Rule, base: SignalsConfig) -> SignalsConfig:
++    """規則 → per-rule `SignalsConfig`(`dataclasses.replace`,base 不動)。
++
++    `cooldown_secs` 依 kind 落到對應 `*_cooldown_secs` —— 漏映射 = per-rule 冷卻
++    靜默套全域值(改了沒反應,而且沒有任何錯誤訊號)。
++    vol_burst 的滾動窗映到 `surge_window_secs`:`SignalsConfig` 沒有
++    `vol_window_secs`,detector 的窗一直是這個共用欄 —— per-rule detector
++    讓「爆量的窗」與「爆拉的窗」得以各自獨立。
++    """
++    params = rule["params"]
++    cooldown = float(rule["cooldown_secs"])
++    kind = rule["kind"]
++    if kind == "cdp_cross":
++        return replace(
++            base,
++            cdp_rearm_ticks=int(params["rearm_ticks"]),
++            cdp_cooldown_secs=cooldown,
++        )
++    if kind == "surge_crash":
++        return replace(
++            base,
++            surge_pct=params["pct"],
++            surge_window_secs=params["window_secs"],
++            surge_cooldown_secs=cooldown,
++        )
++    if kind == "vol_burst":
++        return replace(
++            base,
++            vol_ratio=params["ratio"],
++            surge_window_secs=params["window_secs"],
++            vol_min_elapsed_min=params["min_elapsed_min"],
++            vol_min_window_lots=int(params["min_window_lots"]),
++            vol_min_day_lots=int(params["min_day_lots"]),
++            vol_cooldown_secs=cooldown,
++        )
++    if kind == "limit_lock":
++        return replace(base, limit_cooldown_secs=cooldown)
++    raise _bad()  # normalize_rule 把關後不可達;新增 kind 忘了映射時在此炸出來
+diff --git a/frontend/src/components/stock/SignalRail.test.tsx b/frontend/src/components/stock/SignalRail.test.tsx
+index 39b397b..596fab1 100644
+--- a/frontend/src/components/stock/SignalRail.test.tsx
++++ b/frontend/src/components/stock/SignalRail.test.tsx
+@@ -4,23 +4,17 @@ import type { ComponentProps } from "react";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+ import { SignalRail } from "@/components/stock/SignalRail";
+-import type { SignalEnabled, SignalMsg } from "@/lib/signal-model";
++import type { SignalRule } from "@/hooks/useSignalRules";
++import type { SignalMsg } from "@/lib/signal-model";
+ 
+ type Props = ComponentProps<typeof SignalRail>;
+ 
+ afterEach(cleanup);
+ 
+-const ALL_ON: SignalEnabled = {
+-  cdp_cross: true,
+-  surge_crash: true,
+-  vol_burst: true,
+-  limit_lock: true,
+-};
+-
+ function sig(o: Partial<SignalMsg> = {}): SignalMsg {
+   return {
+     type: "signal",
+-    id: "2026-08-04|2330|limit_lock|up|1",
++    id: "2026-08-04|r-1-000|2330|limit_lock|up|1",
+     kind: "limit_lock",
+     code: "2330",
+     name: "台積電",
+@@ -34,12 +28,27 @@ function sig(o: Partial<SignalMsg> = {}): SignalMsg {
+   };
+ }
+ 
+-/** 資料 props 可覆寫;四個回呼固定是 spy(覆寫回呼的話回傳的就不是實際掛上去的那顆)。 */
++function rule(o: Partial<SignalRule> = {}): SignalRule {
++  return {
++    id: "r-1-000",
++    name: "鎖漲跌停",
++    kind: "limit_lock",
++    enabled: true,
++    notify_discord: true,
++    cooldown_secs: 300,
++    params: {},
++    cdp_levels: [],
++    ...o,
++  };
++}
++
++/** 資料 props 可覆寫;回呼固定是 spy(覆寫回呼的話回傳的就不是實際掛上去的那顆)。 */
+ function renderRail(
+-  o: Partial<Pick<Props, "signals" | "enabled" | "notifPermission" | "soundOn">> = {},
++  o: Partial<Pick<Props, "signals" | "rules" | "notifPermission" | "soundOn">> = {},
+ ) {
+   const spies = {
+-    onToggle: vi.fn<Props["onToggle"]>(),
++    onToggleRule: vi.fn<Props["onToggleRule"]>(),
++    onOpenManager: vi.fn<Props["onOpenManager"]>(),
+     onSelect: vi.fn<Props["onSelect"]>(),
+     onRequestNotif: vi.fn<Props["onRequestNotif"]>(),
+     onToggleSound: vi.fn<Props["onToggleSound"]>(),
+@@ -47,7 +56,7 @@ function renderRail(
+   render(
+     <SignalRail
+       signals={[]}
+-      enabled={ALL_ON}
++      rules={[]}
+       notifPermission="granted"
+       soundOn
+       {...spies}
+@@ -63,7 +72,7 @@ function rowTexts(): string[] {
+   );
+ }
+ 
+-describe("SignalRail", () => {
++describe("SignalRail 訊號列", () => {
+   it("列格式:HH:MM 代號 名稱 + 訊號中文名 價格", () => {
+     renderRail({ signals: [sig()] });
+     const [text = ""] = rowTexts();
+@@ -75,6 +84,18 @@ describe("SignalRail", () => {
+     expect(text).toContain("1050");
+   });
+ 
++  it("帶 rule_name 的列副標顯示規則名(同 kind 多規則靠它辨識來源)", () => {
++    renderRail({ signals: [sig({ rule_id: "r-1-002", rule_name: "早盤鎖板" })] });
++    const [text = ""] = rowTexts();
++    expect(text).toContain("早盤鎖板");
++  });
++
++  it("rule_name 缺值(升級當日的舊 jsonl)→ 退回既有 kind 文案", () => {
++    renderRail({ signals: [sig({ kind: "surge", direction: null, pct: 2.5 })] });
++    const [text = ""] = rowTexts();
++    expect(text).toContain("爆拉 +2.50%");
++  });
++
+   it("最新在上:signals 的順序即 DOM 序", () => {
+     renderRail({
+       signals: [
+@@ -93,17 +114,19 @@ describe("SignalRail", () => {
+     expect(onSelect.mock.calls).toEqual([["2317"]]);
+   });
+ 
+-  it("停用的 kind 不入列(SC-9)", () => {
++  // 🔴 R14a:filterKinds 移除的行為改動。關掉規則後**不再**隱藏它今天已經發過的列
++  // (那些列帶規則名,來源可辨識);原本的隱藏語意取消。
++  it("關閉規則的歷史列仍顯示(R14a 行為改動)", () => {
+     renderRail({
+       signals: [
+-        sig({ id: "a", kind: "limit_lock", code: "2330" }),
++        sig({ id: "a", kind: "limit_lock", code: "2330", rule_name: "鎖漲跌停" }),
+         sig({ id: "b", kind: "vol_burst", code: "2317", pct: 3.5, direction: null }),
+       ],
+-      enabled: { ...ALL_ON, limit_lock: false },
++      rules: [rule({ enabled: false })],
+     });
+     const texts = rowTexts();
+-    expect(texts.length).toBe(1);
+-    expect(texts[0]).toContain("2317");
++    expect(texts.length).toBe(2);
++    expect(texts[0]).toContain("2330");
+   });
+ 
+   it("訊號漲跌方向著色(bull / bear)", () => {
+@@ -113,7 +136,7 @@ describe("SignalRail", () => {
+         sig({ id: "b", kind: "crash", direction: null, pct: -1.2 }),
+       ],
+     });
+-    // scope 收在清單內:下半的「爆拉爆跌」toggle 標籤同樣含這兩個詞
++    // scope 收在清單內:規則區的規則名同樣可能含這些詞
+     const list = within(screen.getByTestId("signal-rail-list"));
+     expect(list.getByText(/爆拉/).className).toContain("text-bull");
+     expect(list.getByText(/爆跌/).className).toContain("text-bear");
+@@ -123,39 +146,67 @@ describe("SignalRail", () => {
+     renderRail({ signals: [] });
+     expect(screen.getByText("尚無訊號")).toBeTruthy();
+   });
++});
++
++describe("SignalRail 規則區", () => {
++  const RULES = [
++    rule({ id: "r1", name: "CDP 穿越", kind: "cdp_cross", cdp_levels: ["ah"] }),
++    rule({ id: "r2", name: "我的爆量", kind: "vol_burst", enabled: false }),
++  ];
++
++  it("每條規則一列:規則名 + 開關(反映 enabled)", () => {
++    renderRail({ rules: RULES });
++    const rules = within(screen.getByTestId("signal-rail-rules"));
++    expect(rules.getAllByRole("switch").length).toBe(2);
++    expect(rules.getByRole("switch", { name: /CDP 穿越/ }).getAttribute("aria-checked")).toBe(
++      "true",
++    );
++    expect(rules.getByRole("switch", { name: /我的爆量/ }).getAttribute("aria-checked")).toBe(
++      "false",
++    );
++  });
++
++  it("點規則開關 → onToggleRule(整條規則)", () => {
++    const { onToggleRule } = renderRail({ rules: RULES });
++    const rules = within(screen.getByTestId("signal-rail-rules"));
++    fireEvent.click(rules.getByRole("switch", { name: /我的爆量/ }));
++    expect(onToggleRule.mock.calls).toEqual([[RULES[1]]]);
++  });
+ 
+-  it("四個 toggle 各自呼叫 onToggle(鍵, 反轉值)", () => {
+-    const { onToggle } = renderRail({ enabled: { ...ALL_ON, vol_burst: false } });
+-    for (const label of ["CDP 穿越", "爆拉爆跌", "爆量", "鎖漲跌停"]) {
+-      fireEvent.click(screen.getByRole("switch", { name: new RegExp(label) }));
+-    }
+-    expect(onToggle.mock.calls).toEqual([
+-      ["cdp_cross", false],
+-      ["surge_crash", false],
+-      ["vol_burst", true],
+-      ["limit_lock", false],
+-    ]);
++  it("欄頂「規則」鈕 → onOpenManager", () => {
++    const { onOpenManager } = renderRail({ rules: RULES });
++    fireEvent.click(screen.getByRole("button", { name: "管理訊號規則" }));
++    expect(onOpenManager.mock.calls.length).toBe(1);
+   });
+ 
++  it("零規則 → 空態文案(不是空白區塊)", () => {
++    renderRail({ rules: [] });
++    expect(within(screen.getByTestId("signal-rail-rules")).getByText("尚無規則")).toBeTruthy();
++  });
++});
++
++describe("SignalRail 提示區", () => {
+   it("音效 toggle 反轉 soundOn", () => {
+     const { onToggleSound } = renderRail({ soundOn: true });
+     fireEvent.click(screen.getByRole("switch", { name: /提示音/ }));
+     expect(onToggleSound.mock.calls).toEqual([[false]]);
+   });
+ 
+-  it("提示音 / 允許通知在獨立的「提示」區,不與四鍵同組(review MFS-5)", () => {
+-    renderRail({ notifPermission: "default" });
+-    const kinds = within(screen.getByTestId("signal-rail-kinds"));
++  it("提示音 / 允許通知在獨立的「提示」區,不與規則同組(review MFS-5)", () => {
++    renderRail({
++      notifPermission: "default",
++      rules: [rule({ id: "r1", name: "CDP 穿越", kind: "cdp_cross", cdp_levels: ["ah"] })],
++    });
++    const rules = within(screen.getByTestId("signal-rail-rules"));
+     const alerts = within(screen.getByTestId("signal-rail-alerts"));
+ 
+     expect(screen.getByTestId("signal-rail-alerts").textContent).toContain("提示");
+-    // 提示音與允許通知都在提示區
+     expect(alerts.getByRole("switch", { name: /提示音/ })).toBeTruthy();
+     expect(alerts.getByText(/允許通知/)).toBeTruthy();
+-    // 監聽訊號區只剩四鍵(提示音不在其中,否則會被讀成第五種訊號類型)
+-    expect(kinds.getAllByRole("switch").length).toBe(4);
+-    expect(kinds.queryByRole("switch", { name: /提示音/ })).toBeNull();
+-    expect(kinds.queryByText(/允許通知/)).toBeNull();
++    // 規則區只剩規則列(提示音不在其中,否則會被讀成第五條規則)
++    expect(rules.getAllByRole("switch").length).toBe(1);
++    expect(rules.queryByRole("switch", { name: /提示音/ })).toBeNull();
++    expect(rules.queryByText(/允許通知/)).toBeNull();
+   });
+ 
+   it("permission default 才出現允許通知鈕,點擊觸發 onRequestNotif", () => {
+diff --git a/frontend/src/components/stock/SignalRail.tsx b/frontend/src/components/stock/SignalRail.tsx
+index be0794c..f2cbf95 100644
+--- a/frontend/src/components/stock/SignalRail.tsx
++++ b/frontend/src/components/stock/SignalRail.tsx
+@@ -1,32 +1,21 @@
+-/** 左側訊號欄(design §8.2;SC-9)。
++/** 左側訊號欄(design §8.2;SC-9 / signal-rules SC-7)。
+  *
+- *  **純展示元件**:feed / 開關 / 音效狀態全由呼叫端(StockPage)以 props 餵進來 ——
+- *  元件內不呼叫 `useSignalFeed` / `useSignalsConfig`,免得每個測試都要架 TQ provider,
+- *  也讓 toggle 的樂觀更新只有一個註冊點。 */
++ *  **純展示元件**:feed / 規則 / 音效狀態全由呼叫端(StockPage)以 props 餵進來 ——
++ *  元件內不呼叫 `useSignalFeed` / `useSignalRules`,免得每個測試都要架 TQ provider,
++ *  也讓規則切換的送出只有一個註冊點。 */
+ 
++import type { SignalRule } from "@/hooks/useSignalRules";
+ import { fmt } from "@/lib/format";
+-import {
+-  filterKinds,
+-  kindLabel,
+-  type SignalEnabled,
+-  type SignalMsg,
+-  type SignalSwitchKey,
+-} from "@/lib/signal-model";
++import { kindLabel, type SignalMsg } from "@/lib/signal-model";
+ import { cn } from "@/lib/utils";
+ 
+-/** 四鍵開關的顯示名(與 `signal-model.KIND_SWITCH` 同一組鍵)。 */
+-const TOGGLES: readonly (readonly [SignalSwitchKey, string])[] = [
+-  ["cdp_cross", "CDP 穿越"],
+-  ["surge_crash", "爆拉爆跌"],
+-  ["vol_burst", "爆量"],
+-  ["limit_lock", "鎖漲跌停"],
+-];
+-
+ interface Props {
+   /** 已是「新在前」(`useSignalFeed` 的合併輸出),本元件不再排序。 */
+   signals: SignalMsg[];
+-  enabled: SignalEnabled;
+-  onToggle: (key: SignalSwitchKey, value: boolean) => void;
++  /** 後端規則全集(含停用的)—— 停用的也要列出來,否則使用者找不到地方開回來。 */
++  rules: SignalRule[];
++  onToggleRule: (rule: SignalRule) => void;
++  onOpenManager: () => void;
+   onSelect: (code: string) => void;
+   notifPermission: NotificationPermission;
+   onRequestNotif: () => void;
+@@ -72,7 +61,7 @@ function Toggle({
+       onClick={() => onChange(!checked)}
+       className="flex w-full items-center justify-between gap-1 px-1 py-1 text-left text-xs hover:bg-surface"
+     >
+-      <span className={checked ? "text-ink" : "text-ink-dim"}>{label}</span>
++      <span className={cn("min-w-0 truncate", checked ? "text-ink" : "text-ink-dim")}>{label}</span>
+       <span className={cn("shrink-0 font-mono", checked ? "text-accent" : "text-ink-dim")}>
+         {checked ? "開" : "關"}
+       </span>
+@@ -82,18 +71,15 @@ function Toggle({
+ 
+ export function SignalRail({
+   signals,
+-  enabled,
+-  onToggle,
++  rules,
++  onToggleRule,
++  onOpenManager,
+   onSelect,
+   notifPermission,
+   onRequestNotif,
+   soundOn,
+   onToggleSound,
+ }: Props) {
+-  // 顯示端也過濾一次(SC-9):後端關掉開關後不再產生新事件,但 baseline jsonl 與
+-  // live 清單裡仍留著關掉前發過的那些 —— 不過濾的話「關掉類型」在畫面上像沒生效。
+-  const visible = filterKinds(signals, enabled);
+-
+   return (
+     // border-r:與中間主區的視覺分隔(同 WatchlistSidebar 慣例)
+     <aside
+@@ -103,8 +89,11 @@ export function SignalRail({
+     >
+       <div className="flex min-h-0 flex-1 flex-col">
+         <h3 className="shrink-0 border-b border-line px-1 py-1 text-xs text-ink-dim">今日訊號</h3>
++        {/* **關掉規則不再隱藏它今天已發過的列**(signal-rules R14a,🔴 行為改動):
++            那些列帶規則名、來源可辨識,而原本的隱藏語意會讓「剛剛看到的訊號」
++            在關掉規則的瞬間整批消失,看起來像資料掉了。 */}
+         <ul data-testid="signal-rail-list" className="min-h-0 flex-1 overflow-y-auto">
+-          {visible.map((sig) => (
++          {signals.map((sig) => (
+             <li key={sig.id}>
+               <button
+                 type="button"
+@@ -112,41 +101,63 @@ export function SignalRail({
+                 className="flex w-full flex-col gap-0.5 border-b border-line px-1 py-1 text-left leading-tight hover:bg-surface"
+               >
+                 {/* 兩行式:200px 欄寬一行塞不下時間 + 代號 + 名稱 + 訊號名 + 價格。
+-                    第一行是「誰、幾點」,第二行是「發生什麼、在什麼價位」。 */}
++                    第一行是「誰、幾點」,第二行是「哪條規則發的、在什麼價位」。 */}
+                 <span className="flex w-full items-baseline gap-1">
+                   <span className="shrink-0 font-mono text-xs text-ink-dim">{hhmm(sig.time)}</span>
+                   <span className="shrink-0 font-mono text-sm text-ink">{sig.code}</span>
+                   <span className="min-w-0 truncate text-xs text-ink-muted">{sig.name}</span>
+                 </span>
+                 <span className="flex w-full items-baseline justify-between gap-1">
+-                  <span className={cn("min-w-0 truncate text-xs", toneOf(sig))}>
+-                    {kindLabel(sig)}
++                  {/* 規則名優先(同 kind 多規則靠它辨識來源);缺值 = 升級當日的舊
++                      jsonl 行 → 退回 kind 文案,不顯示空白。事件細節(漲跌幅 / 穿越
++                      的線)在規則名蓋掉時仍可 hover 看到 —— 窄欄放不下兩者。 */}
++                  <span
++                    title={kindLabel(sig)}
++                    className={cn("min-w-0 truncate text-xs", toneOf(sig))}
++                  >
++                    {sig.rule_name !== undefined && sig.rule_name !== ""
++                      ? sig.rule_name
++                      : kindLabel(sig)}
+                   </span>
+                   <span className="shrink-0 font-mono text-xs text-ink">{fmt(sig.price)}</span>
+                 </span>
+               </button>
+             </li>
+           ))}
+-          {visible.length === 0 ? (
++          {signals.length === 0 ? (
+             <li className="px-1 py-2 text-xs text-ink-dim">尚無訊號</li>
+           ) : null}
+         </ul>
+       </div>
+ 
+-      <div data-testid="signal-rail-kinds" className="shrink-0 border-t border-line pt-1">
+-        <h3 className="px-1 py-1 text-xs text-ink-dim">監聽訊號</h3>
+-        {TOGGLES.map(([key, label]) => (
+-          <Toggle
+-            key={key}
+-            label={label}
+-            checked={enabled[key]}
+-            onChange={(value) => onToggle(key, value)}
+-          />
+-        ))}
++      <div data-testid="signal-rail-rules" className="shrink-0 border-t border-line pt-1">
++        <div className="flex items-center justify-between gap-1 px-1 py-1">
++          <h3 className="text-xs text-ink-dim">監聽規則</h3>
++          <button
++            type="button"
++            aria-label="管理訊號規則"
++            onClick={onOpenManager}
++            className="rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink"
++          >
++            規則
++          </button>
++        </div>
++        {/* 規則多了會把清單擠光 —— 這一區自己捲,訊號列表的高度不受影響 */}
++        <div className="max-h-40 overflow-y-auto">
++          {rules.map((rule) => (
++            <Toggle
++              key={rule.id}
++              label={rule.name}
++              checked={rule.enabled}
++              onChange={() => onToggleRule(rule)}
++            />
++          ))}
++          {rules.length === 0 ? <p className="px-1 py-1 text-xs text-ink-dim">尚無規則</p> : null}
++        </div>
+       </div>
+ 
+-      {/* 提示音與通知另立一區(review MFS-5):與上面四鍵同組時「提示音」會被讀成
+-          第五種訊號類型,但它管的是抵達方式不是監聽什麼。 */}
++      {/* 提示音與通知另立一區(review MFS-5):與規則同組時「提示音」會被讀成
++          第五條規則,但它管的是抵達方式不是監聽什麼。 */}
+       <div data-testid="signal-rail-alerts" className="shrink-0 border-t border-line pt-1">
+         <h3 className="px-1 py-1 text-xs text-ink-dim">提示</h3>
+         <Toggle label="提示音" checked={soundOn} onChange={onToggleSound} />
+diff --git a/frontend/src/components/stock/SignalRulesDialog.test.tsx b/frontend/src/components/stock/SignalRulesDialog.test.tsx
+new file mode 100644
+index 0000000..4a4d79b
+--- /dev/null
++++ b/frontend/src/components/stock/SignalRulesDialog.test.tsx
+@@ -0,0 +1,284 @@
++/** @vitest-environment jsdom */
++import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
++import type { SignalRule } from "@/hooks/useSignalRules";
++import { wrap } from "@/test-utils";
++
++const CDP: SignalRule = {
++  id: "r1",
++  name: "我的 CDP",
++  kind: "cdp_cross",
++  enabled: true,
++  notify_discord: true,
++  cooldown_secs: 300,
++  params: { rearm_ticks: 2 },
++  cdp_levels: ["ah", "nl"],
++};
++
++const VOL: SignalRule = {
++  id: "r2",
++  name: "開盤爆量",
++  kind: "vol_burst",
++  enabled: false,
++  notify_discord: false,
++  cooldown_secs: 600,
++  params: {
++    ratio: 3,
++    window_secs: 60,
++    min_elapsed_min: 5,
++    min_window_lots: 100,
++    min_day_lots: 500,
++  },
++  cdp_levels: [],
++};
++
++let calls: { url: string; init: RequestInit }[];
++
++beforeEach(() => {
++  calls = [];
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string, init?: RequestInit) => {
++      calls.push({ url: String(url), init: init ?? {} });
++      if (init?.method === "DELETE") return new Response(null, { status: 204 });
++      if (init?.method === "POST" || init?.method === "PUT") {
++        return new Response(String(init.body));
++      }
++      return new Response(JSON.stringify({ rules: [CDP, VOL] }));
++    }),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function open(rules: SignalRule[] = [CDP, VOL], isOpen = true) {
++  return wrap(<SignalRulesDialog open={isOpen} rules={rules} onClose={vi.fn()} />);
++}
++
++/** 寫入型呼叫(GET 不算)—— 「零送出」斷言要排除清單重抓那些。 */
++function writes(): { url: string; init: RequestInit }[] {
++  return calls.filter((c) => c.init.method !== undefined);
++}
++
++/** **逐 token 比對不用子字串**:`flex-col` 恆在 class 上,`toContain("flex")`
++ *  在關閉狀態下同樣為真 —— 那條斷言鎖不到 display 是否跟著 `open` 切。 */
++function displayClasses(): string[] {
++  return (screen.getByTestId("signal-rules-dialog").className ?? "").split(/\s+/);
++}
++
++describe("SignalRulesDialog 開關", () => {
++  it("open=false → display 是 hidden 且內容不渲染", () => {
++    open([CDP], false);
++    expect(displayClasses()).toContain("hidden");
++    expect(displayClasses()).not.toContain("flex");
++    expect(screen.queryByText("我的 CDP")).toBeNull();
++  });
++
++  it("open=true → display 是 flex", () => {
++    open();
++    expect(displayClasses()).toContain("flex");
++    expect(displayClasses()).not.toContain("hidden");
++  });
++
++  it("關閉鈕呼叫 onClose", () => {
++    const onClose = vi.fn();
++    wrap(<SignalRulesDialog open rules={[CDP]} onClose={onClose} />);
++    fireEvent.click(screen.getByLabelText("關閉"));
++    expect(onClose.mock.calls.length).toBe(1);
++  });
++});
++
++describe("SignalRulesDialog 列表", () => {
++  it("每列 = 規則名 + 種類中文 + 一行摘要", () => {
++    open();
++    const row = within(screen.getByTestId("rule-row-r1"));
++    expect(row.getByText("我的 CDP")).toBeTruthy();
++    expect(row.getByText("CDP 穿越")).toBeTruthy();
++    const text = screen.getByTestId("rule-row-r1").textContent ?? "";
++    expect(text).toContain("AH+NL"); // 監看線
++    expect(text).toContain("重新武裝 2 tick");
++    expect(text).toContain("冷卻 300 秒");
++  });
++
++  it("爆量列摘要含倍率 / 窗長", () => {
++    open();
++    const text = screen.getByTestId("rule-row-r2").textContent ?? "";
++    expect(text).toContain("爆量");
++    expect(text).toContain("3 倍");
++    expect(text).toContain("60 秒");
++  });
++
++  it("零規則 → 空態文案", () => {
++    open([]);
++    expect(screen.getByText("尚無規則 —— 用下方「新增規則」建立第一條")).toBeTruthy();
++  });
++});
++
++describe("SignalRulesDialog 刪除", () => {
++  it("刪除要二次確認,確認後才 DELETE", async () => {
++    open();
++    fireEvent.click(screen.getByLabelText("刪除 開盤爆量"));
++    expect(writes()).toHaveLength(0); // 第一下只是問
++    fireEvent.click(screen.getByLabelText("確定刪除 開盤爆量"));
++    await waitFor(() => expect(writes()).toHaveLength(1));
++    expect(writes()[0]?.url).toBe("/api/stock/signals/rules/r2");
++    expect(writes()[0]?.init.method).toBe("DELETE");
++  });
++
++  it("取消刪除 → 零送出", async () => {
++    open();
++    fireEvent.click(screen.getByLabelText("刪除 開盤爆量"));
++    fireEvent.click(screen.getByLabelText("取消刪除 開盤爆量"));
++    expect(screen.queryByLabelText("確定刪除 開盤爆量")).toBeNull();
++    await new Promise((r) => setTimeout(r, 20));
++    expect(writes()).toHaveLength(0);
++  });
++});
++
++describe("SignalRulesDialog 編輯表單", () => {
++  it("新增規則 → 表單出現,種類 select 四類中文", () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    const select = screen.getByLabelText("種類") as HTMLSelectElement;
++    expect([...select.options].map((o) => o.textContent)).toEqual([
++      "CDP 穿越",
++      "爆拉爆跌",
++      "爆量",
++      "鎖漲跌停",
++    ]);
++    expect(screen.getByLabelText("名稱")).toBeTruthy();
++    expect(screen.getByLabelText("冷卻秒數")).toBeTruthy();
++    expect(screen.getByLabelText("Discord 通知")).toBeTruthy();
++  });
++
++  it("冷卻秒數輸入框帶後端值域(min 60 / max 86400)", () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    const input = screen.getByLabelText("冷卻秒數") as HTMLInputElement;
++    expect(input.getAttribute("min")).toBe("60");
++    expect(input.getAttribute("max")).toBe("86400");
++  });
++
++  it("kind 專屬數字欄位隨種類切換(爆量五欄 / 鎖漲跌停零欄)", () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    const select = screen.getByLabelText("種類");
++
++    fireEvent.change(select, { target: { value: "vol_burst" } });
++    expect(screen.getByLabelText("量能倍率")).toBeTruthy();
++    expect(screen.getByLabelText("時間窗(秒)")).toBeTruthy();
++    expect(screen.getByLabelText("開盤後最少分鐘")).toBeTruthy();
++    expect(screen.getByLabelText("窗內最少張數")).toBeTruthy();
++    expect(screen.getByLabelText("當日最少張數")).toBeTruthy();
++
++    fireEvent.change(select, { target: { value: "limit_lock" } });
++    expect(screen.queryByLabelText("量能倍率")).toBeNull();
++    expect(screen.queryByLabelText("時間窗(秒)")).toBeNull();
++  });
++
++  it("CDP 五線勾選只在 cdp_cross 顯示", () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    for (const label of ["監看 AH", "監看 NH", "監看 中軸", "監看 NL", "監看 AL"]) {
++      expect(screen.getByLabelText(label)).toBeTruthy();
++    }
++    fireEvent.change(screen.getByLabelText("種類"), { target: { value: "surge_crash" } });
++    expect(screen.queryByLabelText("監看 AH")).toBeNull();
++  });
++
++  it("編輯既有規則 → 欄位帶入現值,儲存送 PUT 到該 id", async () => {
++    open();
++    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
++    expect((screen.getByLabelText("名稱") as HTMLInputElement).value).toBe("我的 CDP");
++    expect((screen.getByLabelText("冷卻秒數") as HTMLInputElement).value).toBe("300");
++    expect((screen.getByLabelText("監看 AH") as HTMLInputElement).checked).toBe(true);
++    expect((screen.getByLabelText("監看 NH") as HTMLInputElement).checked).toBe(false);
++
++    fireEvent.change(screen.getByLabelText("名稱"), { target: { value: "改名後" } });
++    fireEvent.click(screen.getByLabelText("監看 NH"));
++    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
++
++    await waitFor(() => expect(writes()).toHaveLength(1));
++    const put = writes()[0]!;
++    expect(put.url).toBe("/api/stock/signals/rules/r1");
++    expect(put.init.method).toBe("PUT");
++    const body = JSON.parse(String(put.init.body)) as SignalRule;
++    expect(body.name).toBe("改名後");
++    expect(body.cdp_levels).toEqual(["ah", "nh", "nl"]); // 固定序,不是點擊序
++  });
++
++  it("新增後儲存送 POST(無 id),數字欄位轉成 number", async () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    fireEvent.change(screen.getByLabelText("種類"), { target: { value: "surge_crash" } });
++    fireEvent.change(screen.getByLabelText("名稱"), { target: { value: "急拉" } });
++    fireEvent.change(screen.getByLabelText("漲跌幅 %"), { target: { value: "2.5" } });
++    fireEvent.change(screen.getByLabelText("時間窗(秒)"), { target: { value: "90" } });
++    fireEvent.change(screen.getByLabelText("冷卻秒數"), { target: { value: "600" } });
++    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
++
++    await waitFor(() => expect(writes()).toHaveLength(1));
++    const post = writes()[0]!;
++    expect(post.url).toBe("/api/stock/signals/rules");
++    expect(post.init.method).toBe("POST");
++    const body = JSON.parse(String(post.init.body)) as Record<string, unknown>;
++    expect(body.id).toBeUndefined();
++    expect(body.name).toBe("急拉");
++    expect(body.kind).toBe("surge_crash");
++    expect(body.cooldown_secs).toBe(600);
++    expect(body.params).toEqual({ pct: 2.5, window_secs: 90 });
++    expect(body.cdp_levels).toEqual([]);
++  });
++
++  it("名稱空白 / 數字欄位非數字 → 零送出並顯示文案", async () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    fireEvent.click(screen.getByRole("button", { name: "儲存" })); // 名稱空
++    expect(screen.getByText("規則設定不合法")).toBeTruthy();
++
++    fireEvent.change(screen.getByLabelText("名稱"), { target: { value: "壞數字" } });
++    fireEvent.change(screen.getByLabelText("冷卻秒數"), { target: { value: "abc" } });
++    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
++    await new Promise((r) => setTimeout(r, 20));
++    expect(writes()).toHaveLength(0);
++  });
++
++  it("後端 400 INVALID_RULE → 顯示中文文案(點了不能像沒反應)", async () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (_url: string, init?: RequestInit) => {
++        if (init?.method !== undefined) {
++          return new Response(JSON.stringify({ detail: { error: "INVALID_RULE" } }), {
++            status: 400,
++          });
++        }
++        return new Response(JSON.stringify({ rules: [CDP] }));
++      }),
++    );
++    open([CDP]);
++    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
++    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
++    await waitFor(() => expect(screen.getByText("規則設定不合法")).toBeTruthy());
++  });
++
++  it("儲存成功 → 收起表單回到列表", async () => {
++    open();
++    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
++    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
++    await waitFor(() => expect(screen.queryByLabelText("名稱")).toBeNull());
++  });
++
++  it("取消 → 收起表單且零送出", async () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    fireEvent.click(screen.getByRole("button", { name: "取消" }));
++    expect(screen.queryByLabelText("名稱")).toBeNull();
++    await new Promise((r) => setTimeout(r, 20));
++    expect(writes()).toHaveLength(0);
++  });
++});
+diff --git a/frontend/src/components/stock/SignalRulesDialog.tsx b/frontend/src/components/stock/SignalRulesDialog.tsx
+new file mode 100644
+index 0000000..933ae83
+--- /dev/null
++++ b/frontend/src/components/stock/SignalRulesDialog.tsx
+@@ -0,0 +1,526 @@
++/** 訊號規則管理 Dialog(signal-rules SC-7)。
++ *
++ *  dialog 樣板逐條沿用 `WatchlistManagerDialog`(showModal effect / display 隨 open 切 /
++ *  原生 close 拉回 prop / m-auto)—— 那三個坑都是真瀏覽器實測踩出來的,見該檔註解。 */
++
++import { useEffect, useRef, useState } from "react";
++
++import {
++  CDP_LEVELS,
++  RULE_KINDS,
++  errText,
++  useDeleteRule,
++  useSaveRule,
++  type RuleDraft,
++  type RuleKind,
++  type SignalRule,
++} from "@/hooks/useSignalRules";
++import { cn } from "@/lib/utils";
++
++const KIND_LABEL: Record<RuleKind, string> = {
++  cdp_cross: "CDP 穿越",
++  surge_crash: "爆拉爆跌",
++  vol_burst: "爆量",
++  limit_lock: "鎖漲跌停",
++};
++
++/** CDP 線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 與 `signal-model.LEVEL_LABEL` 同款。 */
++const LEVEL_LABEL: Record<string, string> = {
++  ah: "AH",
++  nh: "NH",
++  cdp: "中軸",
++  nl: "NL",
++  al: "AL",
++};
++
++interface ParamField {
++  key: string;
++  label: string;
++  step: string;
++}
++
++/** 逐 kind 的參數欄位 —— 鍵集必須與後端 `PARAM_SPECS` **完全相同**(多鍵 / 缺鍵
++ *  同樣是 INVALID_RULE)。`vol_burst.window_secs` 對到後端的 `surge_window_secs`,
++ *  那是 detector 的共用欄,per-rule detector 讓兩者得以各自獨立。 */
++const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
++  cdp_cross: [{ key: "rearm_ticks", label: "重新武裝 tick 數", step: "1" }],
++  surge_crash: [
++    { key: "pct", label: "漲跌幅 %", step: "0.1" },
++    { key: "window_secs", label: "時間窗(秒)", step: "1" },
++  ],
++  vol_burst: [
++    { key: "ratio", label: "量能倍率", step: "0.1" },
++    { key: "window_secs", label: "時間窗(秒)", step: "1" },
++    { key: "min_elapsed_min", label: "開盤後最少分鐘", step: "1" },
++    { key: "min_window_lots", label: "窗內最少張數", step: "1" },
++    { key: "min_day_lots", label: "當日最少張數", step: "1" },
++  ],
++  limit_lock: [],
++};
++
++const PARAM_DEFAULTS: Record<RuleKind, Record<string, string>> = {
++  cdp_cross: { rearm_ticks: "2" },
++  surge_crash: { pct: "1.5", window_secs: "60" },
++  vol_burst: {
++    ratio: "3",
++    window_secs: "60",
++    min_elapsed_min: "5",
++    min_window_lots: "100",
++    min_day_lots: "500",
++  },
++  limit_lock: {},
++};
++
++const COOLDOWN_MIN = 60;
++const COOLDOWN_MAX = 86_400;
++
++/** 數字欄位一律以**字串**存在表單裡:存 number 的話「清空欄位重打」會在中途變成
++ *  0 或 NaN,使用者看到的值跳來跳去;轉型與值域檢查全收在送出那一刻。 */
++interface FormState {
++  id?: string;
++  name: string;
++  kind: RuleKind;
++  enabled: boolean;
++  notify_discord: boolean;
++  cooldown: string;
++  params: Record<string, string>;
++  levels: string[];
++}
++
++function blankForm(): FormState {
++  return {
++    name: "",
++    kind: "cdp_cross",
++    enabled: true,
++    notify_discord: true,
++    cooldown: "300",
++    params: { ...PARAM_DEFAULTS.cdp_cross },
++    levels: [...CDP_LEVELS],
++  };
++}
++
++function toForm(rule: SignalRule): FormState {
++  const params: Record<string, string> = {};
++  for (const field of PARAM_FIELDS[rule.kind]) {
++    params[field.key] = String(rule.params[field.key] ?? PARAM_DEFAULTS[rule.kind][field.key] ?? "");
++  }
++  return {
++    id: rule.id,
++    name: rule.name,
++    kind: rule.kind,
++    enabled: rule.enabled,
++    notify_discord: rule.notify_discord,
++    cooldown: String(rule.cooldown_secs),
++    params,
++    levels: [...rule.cdp_levels],
++  };
++}
++
++function num(value: number | undefined): string {
++  return value === undefined ? "-" : String(value);
++}
++
++/** 列表用的一行摘要:規則之間的差別幾乎都在參數上,只印名稱與種類等於看不出差異。 */
++function ruleSummary(rule: SignalRule): string {
++  const cooldown = `冷卻 ${rule.cooldown_secs} 秒`;
++  const p = rule.params;
++  if (rule.kind === "cdp_cross") {
++    const levels = rule.cdp_levels.map((x) => LEVEL_LABEL[x] ?? x.toUpperCase()).join("+");
++    return `${levels} · 重新武裝 ${num(p.rearm_ticks)} tick · ${cooldown}`;
++  }
++  if (rule.kind === "surge_crash") {
++    return `±${num(p.pct)}% / ${num(p.window_secs)} 秒 · ${cooldown}`;
++  }
++  if (rule.kind === "vol_burst") {
++    return `${num(p.ratio)} 倍 / ${num(p.window_secs)} 秒 · 開盤後 ${num(p.min_elapsed_min)} 分 · ${cooldown}`;
++  }
++  return cooldown;
++}
++
++interface Props {
++  open: boolean;
++  rules: SignalRule[];
++  onClose: () => void;
++}
++
++export function SignalRulesDialog({ open, rules, onClose }: Props) {
++  const save = useSaveRule();
++  const del = useDeleteRule();
++  const dlgRef = useRef<HTMLDialogElement | null>(null);
++  /** null = 顯示列表;非 null = 顯示編輯表單(新增或編輯) */
++  const [form, setForm] = useState<FormState | null>(null);
++  /** 二次確認中的規則 id —— 刪除規則不可逆(cooldown/latch 也一併沒了) */
++  const [confirming, setConfirming] = useState<string | null>(null);
++  /** 前端就擋下來的錯誤(零送出),與 mutation 錯誤共用同一份文案 */
++  const [localError, setLocalError] = useState<string | null>(null);
++
++  // 開關只走這一條路徑,`open` **不進 JSX**(React 在 commit 階段寫入的 open 屬性會讓
++  // 之後的 showModal() 依標準拋 InvalidStateError,而 jsdom 沒有 showModal 會跳過
++  // feature-detect → 測試全綠、真瀏覽器第一次點就白畫面)。見 WatchlistManagerDialog。
++  useEffect(() => {
++    const el = dlgRef.current;
++    if (el === null) return;
++    if (typeof el.showModal === "function") {
++      if (open) {
++        if (!el.open) el.showModal();
++      } else {
++        el.close();
++      }
++      return;
++    }
++    if (open) el.setAttribute("open", "");
++    else el.removeAttribute("open");
++  }, [open]);
++
++  // 常駐掛載(呼叫端只切 `open`)→ 每次開啟都要把暫態歸零,否則上次編輯到一半的
++  // 表單 / 刪除確認 / 錯誤文案會殘留到下一次開啟。render 期間調整 state 的官方
++  // pattern,不用 effect(專案有 react-you-might-not-need-an-effect lint)。
++  const [prevOpen, setPrevOpen] = useState(open);
++  if (prevOpen !== open) {
++    setPrevOpen(open);
++    if (open) {
++      setForm(null);
++      setConfirming(null);
++      setLocalError(null);
++    }
++  }
++
++  function patch(next: Partial<FormState>): void {
++    setForm((cur) => (cur === null ? cur : { ...cur, ...next }));
++  }
++
++  /** 換種類 = 換一整組參數鍵:沿用舊 kind 的 params 會讓後端以「多鍵 / 缺鍵」拒收,
++   *  而畫面上完全看不出來是哪個欄位的錯。 */
++  function changeKind(kind: RuleKind): void {
++    patch({
++      kind,
++      params: { ...PARAM_DEFAULTS[kind] },
++      levels: kind === "cdp_cross" ? [...CDP_LEVELS] : [],
++    });
++  }
++
++  function toggleLevel(level: string): void {
++    setForm((cur) =>
++      cur === null
++        ? cur
++        : {
++            ...cur,
++            levels: cur.levels.includes(level)
++              ? cur.levels.filter((x) => x !== level)
++              : [...cur.levels, level],
++          },
++    );
++  }
++
++  /** 送出前在本地擋掉「空欄 / 非數字」:那些送出去只會拿到一句 INVALID_RULE,
++   *  使用者不知道是哪一格。值域(60–86400 等)仍以後端為準,前端不重抄一份會漂的表。 */
++  function submit(): void {
++    if (form === null) return;
++    const name = form.name.trim();
++    const fields = PARAM_FIELDS[form.kind];
++    const params: Record<string, number> = {};
++    let bad = name === "";
++
++    const cooldown = Number(form.cooldown);
++    if (form.cooldown.trim() === "" || !Number.isFinite(cooldown)) bad = true;
++    for (const field of fields) {
++      const raw = form.params[field.key] ?? "";
++      const value = Number(raw);
++      if (raw.trim() === "" || !Number.isFinite(value)) bad = true;
++      else params[field.key] = value;
++    }
++    // cdp_cross 一條線都沒勾 = 這條規則永遠不會發 —— 後端也拒
++    if (form.kind === "cdp_cross" && form.levels.length === 0) bad = true;
++
++    if (bad) {
++      setLocalError("INVALID_RULE");
++      return;
++    }
++    setLocalError(null);
++    const draft: RuleDraft = {
++      ...(form.id === undefined ? {} : { id: form.id }),
++      name,
++      kind: form.kind,
++      enabled: form.enabled,
++      notify_discord: form.notify_discord,
++      cooldown_secs: cooldown,
++      params,
++      // 固定序(後端 CDP_LEVELS 同序),不是使用者的點擊序
++      cdp_levels: form.kind === "cdp_cross" ? CDP_LEVELS.filter((x) => form.levels.includes(x)) : [],
++    };
++    save.mutate(draft, { onSuccess: () => setForm(null) });
++  }
++
++  const errorMessage = localError ?? save.error?.message ?? del.error?.message ?? null;
++
++  function numberField(label: string, value: string, step: string, onChange: (v: string) => void) {
++    return (
++      <label key={label} className="flex items-center gap-1 text-xs text-ink-muted">
++        <span className="shrink-0">{label}</span>
++        <input
++          type="number"
++          step={step}
++          aria-label={label}
++          value={value}
++          onChange={(e) => onChange(e.target.value)}
++          className="w-24 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink outline-none focus:border-accent"
++        />
++      </label>
++    );
++  }
++
++  return (
++    <dialog
++      ref={dlgRef}
++      data-testid="signal-rules-dialog"
++      aria-label="訊號規則"
++      onKeyDown={(e) => {
++        if (e.key === "Escape") onClose();
++      }}
++      // 原生 close 一定要拉回 prop:`display` 由 `open` prop 選,前提是「prop 永遠等於
++      // 元素真實狀態」;瀏覽器對 modal dialog 的原生 cancel/close 擋不掉(見
++      // WatchlistManagerDialog 的長註解)。
++      onClose={() => {
++        if (open) onClose();
++      }}
++      className={cn(
++        open ? "flex" : "hidden",
++        "m-auto h-[min(30rem,80vh)] w-[min(48rem,92vw)] flex-col overflow-hidden rounded border border-line bg-bg p-0 text-ink backdrop:bg-black/50",
++      )}
++    >
++      {/* 關閉時不渲染內容:RTL 的 getAllBy* 不過濾隱藏元素,常駐渲染會讓呼叫端
++          (訊號欄)的計數型斷言在 Dialog 掛上去之後莫名變多 */}
++      {open ? (
++        <>
++          <div className="flex h-10 shrink-0 items-center justify-between border-b border-line px-3">
++            <h2 className="text-sm text-ink">訊號規則</h2>
++            <button
++              type="button"
++              aria-label="關閉"
++              onClick={onClose}
++              className="px-1 text-xs text-ink-dim hover:text-ink"
++            >
++              ×
++            </button>
++          </div>
++
++          {errorMessage !== null ? (
++            <p className="shrink-0 border-b border-line px-3 py-1 text-xs text-bear">
++              {errText(errorMessage)}
++            </p>
++          ) : null}
++
++          {form === null ? (
++            <div className="flex min-h-0 flex-1 flex-col">
++              <ul className="min-h-0 flex-1 overflow-y-auto">
++                {rules.map((rule) => (
++                  <li
++                    key={rule.id}
++                    data-testid={`rule-row-${rule.id}`}
++                    className="flex items-center gap-2 border-b border-line px-3 py-2 text-xs"
++                  >
++                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
++                      <span className="flex items-baseline gap-2">
++                        <span className={cn("truncate", rule.enabled ? "text-ink" : "text-ink-dim")}>
++                          {rule.name}
++                        </span>
++                        <span className="shrink-0 rounded border border-line px-1 text-[0.625rem] text-ink-dim">
++                          {KIND_LABEL[rule.kind]}
++                        </span>
++                        {rule.enabled ? null : (
++                          <span className="shrink-0 text-[0.625rem] text-ink-dim">已停用</span>
++                        )}
++                        {rule.notify_discord ? (
++                          <span className="shrink-0 text-[0.625rem] text-ink-dim">Discord</span>
++                        ) : null}
++                      </span>
++                      <span className="truncate font-mono text-[0.625rem] text-ink-muted">
++                        {ruleSummary(rule)}
++                      </span>
++                    </span>
++                    {confirming === rule.id ? (
++                      <>
++                        <button
++                          type="button"
++                          aria-label={`確定刪除 ${rule.name}`}
++                          onClick={() => {
++                            setConfirming(null);
++                            setLocalError(null);
++                            del.mutate(rule.id);
++                          }}
++                          className="shrink-0 rounded border border-bear px-1 py-0.5 text-xs text-bear"
++                        >
++                          確定刪除
++                        </button>
++                        <button
++                          type="button"
++                          aria-label={`取消刪除 ${rule.name}`}
++                          onClick={() => setConfirming(null)}
++                          className="shrink-0 rounded border border-line px-1 py-0.5 text-xs text-ink-dim"
++                        >
++                          取消
++                        </button>
++                      </>
++                    ) : (
++                      <>
++                        <button
++                          type="button"
++                          aria-label={`編輯 ${rule.name}`}
++                          onClick={() => {
++                            setLocalError(null);
++                            setConfirming(null);
++                            setForm(toForm(rule));
++                          }}
++                          className="shrink-0 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink"
++                        >
++                          編輯
++                        </button>
++                        <button
++                          type="button"
++                          aria-label={`刪除 ${rule.name}`}
++                          onClick={() => setConfirming(rule.id)}
++                          className="shrink-0 rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-bear hover:text-bear"
++                        >
++                          ×
++                        </button>
++                      </>
++                    )}
++                  </li>
++                ))}
++                {rules.length === 0 ? (
++                  <li className="px-3 py-3 text-xs text-ink-dim">
++                    尚無規則 —— 用下方「新增規則」建立第一條
++                  </li>
++                ) : null}
++              </ul>
++              <div className="shrink-0 border-t border-line p-2">
++                <button
++                  type="button"
++                  onClick={() => {
++                    setLocalError(null);
++                    setConfirming(null);
++                    setForm(blankForm());
++                  }}
++                  className="rounded border border-line px-2 py-1 text-xs text-ink hover:border-accent"
++                >
++                  新增規則
++                </button>
++              </div>
++            </div>
++          ) : (
++            <div className="flex min-h-0 flex-1 flex-col">
++              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
++                <label className="flex items-center gap-1 text-xs text-ink-muted">
++                  <span className="shrink-0">名稱</span>
++                  <input
++                    aria-label="名稱"
++                    value={form.name}
++                    onChange={(e) => patch({ name: e.target.value })}
++                    className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
++                  />
++                </label>
++
++                <label className="flex items-center gap-1 text-xs text-ink-muted">
++                  <span className="shrink-0">種類</span>
++                  <select
++                    aria-label="種類"
++                    value={form.kind}
++                    onChange={(e) => changeKind(e.target.value as RuleKind)}
++                    className="rounded border border-line bg-bg px-1 py-1 text-xs text-ink outline-none focus:border-accent"
++                  >
++                    {RULE_KINDS.map((kind) => (
++                      <option key={kind} value={kind}>
++                        {KIND_LABEL[kind]}
++                      </option>
++                    ))}
++                  </select>
++                </label>
++
++                <div className="flex flex-wrap gap-3">
++                  {PARAM_FIELDS[form.kind].map((field) =>
++                    numberField(field.label, form.params[field.key] ?? "", field.step, (v) =>
++                      patch({ params: { ...form.params, [field.key]: v } }),
++                    ),
++                  )}
++                </div>
++
++                {form.kind === "cdp_cross" ? (
++                  <div className="flex flex-wrap items-center gap-3 text-xs text-ink-muted">
++                    <span className="shrink-0">監看線</span>
++                    {CDP_LEVELS.map((level) => (
++                      <label key={level} className="flex items-center gap-1">
++                        <input
++                          type="checkbox"
++                          aria-label={`監看 ${LEVEL_LABEL[level]}`}
++                          checked={form.levels.includes(level)}
++                          onChange={() => toggleLevel(level)}
++                        />
++                        <span>{LEVEL_LABEL[level]}</span>
++                      </label>
++                    ))}
++                  </div>
++                ) : null}
++
++                <label className="flex items-center gap-1 text-xs text-ink-muted">
++                  <span className="shrink-0">冷卻秒數</span>
++                  <input
++                    type="number"
++                    aria-label="冷卻秒數"
++                    min={COOLDOWN_MIN}
++                    max={COOLDOWN_MAX}
++                    step="1"
++                    value={form.cooldown}
++                    onChange={(e) => patch({ cooldown: e.target.value })}
++                    className="w-24 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink outline-none focus:border-accent"
++                  />
++                </label>
++
++                <div className="flex flex-wrap gap-4 text-xs text-ink-muted">
++                  <label className="flex items-center gap-1">
++                    <input
++                      type="checkbox"
++                      aria-label="啟用"
++                      checked={form.enabled}
++                      onChange={(e) => patch({ enabled: e.target.checked })}
++                    />
++                    <span>啟用</span>
++                  </label>
++                  <label className="flex items-center gap-1">
++                    <input
++                      type="checkbox"
++                      aria-label="Discord 通知"
++                      checked={form.notify_discord}
++                      onChange={(e) => patch({ notify_discord: e.target.checked })}
++                    />
++                    <span>Discord 通知</span>
++                  </label>
++                </div>
++              </div>
++
++              <div className="flex shrink-0 gap-2 border-t border-line p-2">
++                <button
++                  type="button"
++                  disabled={save.isPending}
++                  onClick={submit}
++                  className="rounded border border-accent px-2 py-1 text-xs text-accent disabled:opacity-50"
++                >
++                  儲存
++                </button>
++                <button
++                  type="button"
++                  onClick={() => {
++                    setForm(null);
++                    setLocalError(null);
++                  }}
++                  className="rounded border border-line px-2 py-1 text-xs text-ink-dim hover:text-ink"
++                >
++                  取消
++                </button>
++              </div>
++            </div>
++          )}
++        </>
++      ) : null}
++    </dialog>
++  );
++}
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index 998d8ec..6c2dcdd 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -1,6 +1,6 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StockPage } from "@/components/stock/StockPage";
+@@ -60,6 +60,9 @@ beforeEach(() => {
+       if (String(url).includes("/api/stock/overlay")) {
+         return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+       }
++      if (String(url).includes("/api/stock/signals/rules")) {
++        return new Response(JSON.stringify({ rules: [] }));
++      }
+       return new Response(JSON.stringify({}), { status: 404 });
+     }),
+   );
+@@ -302,6 +305,9 @@ describe("StockPage 加入自選(round4 項 4)", () => {
+         if (String(url).includes("/api/stock/overlay")) {
+           return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+         }
++        if (String(url).includes("/api/stock/signals/rules")) {
++          return new Response(JSON.stringify({ rules: [] }));
++        }
+         return new Response(JSON.stringify({}), { status: 404 });
+       }),
+     );
+@@ -486,3 +492,67 @@ describe("StockPage 訊號欄(SC-9)", () => {
+     expect(onSelect).toHaveBeenCalledWith("2317");
+   });
+ });
++
++// 🟢 signal-rules SC-7:四鍵開關退場 → 規則列 + 規則 Dialog。
++// 接線在本層(SignalRail / SignalRulesDialog 都不自己抓 rules)。
++describe("StockPage 訊號規則(signal-rules SC-7)", () => {
++  const RULE = {
++    id: "r-1-000",
++    name: "我的爆量",
++    kind: "vol_burst",
++    enabled: true,
++    notify_discord: true,
++    cooldown_secs: 300,
++    params: { ratio: 3, window_secs: 60, min_elapsed_min: 5, min_window_lots: 100, min_day_lots: 500 },
++    cdp_levels: [],
++  };
++
++  let writes: { url: string; init: RequestInit }[];
++
++  function mockRules(): void {
++    writes = [];
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string, init?: RequestInit) => {
++        if (init?.method !== undefined) {
++          writes.push({ url: String(url), init });
++          return new Response(String(init.body ?? "{}"));
++        }
++        if (String(url).includes("/api/stock/signals/rules")) {
++          return new Response(JSON.stringify({ rules: [RULE] }));
++        }
++        if (String(url).includes("/api/stock/watchlist")) {
++          return new Response(JSON.stringify({ codes: ["2330"], groups: [] }));
++        }
++        if (String(url).includes("/api/stock/names")) {
++          return new Response(JSON.stringify({ names: [], count: 0 }));
++        }
++        return new Response(JSON.stringify({}), { status: 404 });
++      }),
++    );
++  }
++
++  it("規則列顯示規則名;點開關 → PUT 該規則、enabled 反轉", async () => {
++    mockRules();
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    const rules = screen.getByTestId("signal-rail-rules");
++    await waitFor(() => expect(within(rules).getByRole("switch", { name: /我的爆量/ })).toBeTruthy());
++    fireEvent.click(within(rules).getByRole("switch", { name: /我的爆量/ }));
++    await waitFor(() => expect(writes).toHaveLength(1));
++    expect(writes[0]?.url).toBe("/api/stock/signals/rules/r-1-000");
++    expect(writes[0]?.init.method).toBe("PUT");
++    expect((JSON.parse(String(writes[0]?.init.body)) as { enabled: boolean }).enabled).toBe(false);
++  });
++
++  it("點「規則」鈕 → 規則 Dialog 開啟(列出該規則)", async () => {
++    mockRules();
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.getByRole("button", { name: "管理訊號規則" })).toBeTruthy());
++    // 逐 token 比對:`flex-col` 恆在 class 上,子字串斷言鎖不到 display 的切換
++    const cls = () => (screen.getByTestId("signal-rules-dialog").className ?? "").split(/\s+/);
++    expect(cls()).toContain("hidden");
++    fireEvent.click(screen.getByRole("button", { name: "管理訊號規則" }));
++    expect(cls()).toContain("flex");
++    expect(within(screen.getByTestId("signal-rules-dialog")).getByText("我的爆量")).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index be6daf8..1733f19 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -2,16 +2,16 @@ import { useState } from "react";
+ 
+ import { OrderBook } from "@/components/stock/OrderBook";
+ import { SignalRail } from "@/components/stock/SignalRail";
++import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
+ import { StockChart } from "@/components/stock/StockChart";
+ import { TickTape } from "@/components/stock/TickTape";
+ import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+ import { useSignalFeed } from "@/hooks/useSignalFeed";
+-import { useSignalsConfig } from "@/hooks/useSignalsConfig";
++import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
+ import { useSignalSound } from "@/hooks/useSignalSound";
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import type { StockStreamState } from "@/hooks/useStockStream";
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
+-import type { SignalEnabled, SignalSwitchKey } from "@/lib/signal-model";
+ import { limitState } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+ import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
+@@ -38,10 +38,12 @@ function currentPermission(): NotificationPermission {
+ 
+ export function StockPage({ code, onSelect, stream }: Props) {
+   const { accum, watchlist, status, stkfut, wsStatus } = stream;
+-  // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 四鍵開關(後端 configs)/
++  // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
+   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
+   const { signals } = useSignalFeed();
+-  const { enabled, save: saveEnabled } = useSignalsConfig();
++  const { data: rules = [] } = useSignalRules();
++  const saveRule = useSaveRule();
++  const [rulesOpen, setRulesOpen] = useState(false);
+   const { soundOn, setSoundOn } = useSignalSound();
+   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
+   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
+@@ -84,11 +86,11 @@ export function StockPage({ code, onSelect, stream }: Props) {
+     commit(g === null || g === undefined ? withCode : assignToGroup(withCode, code, g.name, g.codes.length));
+   }
+ 
+-  /** 只送被切的那一鍵(部分更新):PUT 失敗時 query data 不動 → 開關停在原位,
+-   *  使用者看得出「沒切成功」;`mutate` 的錯誤留在 `saveEnabled.error`,不另吞。 */
+-  function toggleKind(key: SignalSwitchKey, value: boolean): void {
+-    const patch: Partial<SignalEnabled> = { [key]: value };
+-    saveEnabled.mutate(patch);
++  /** 規則開關 = 整條規則 PUT(只翻 `enabled`)。PUT 失敗時 query data 不動 →
++   *  開關停在原位,使用者看得出「沒切成功」;錯誤留在 `saveRule.error`,不另吞。
++   *  送整條而不是部分更新:後端 PUT 是全量取代,少帶欄位會被判 INVALID_RULE。 */
++  function toggleRule(rule: SignalRule): void {
++    saveRule.mutate({ ...rule, enabled: !rule.enabled });
+   }
+ 
+   /** 權限狀態不是 React state 的衍生值,要主動回寫 —— 使用者按完瀏覽器提示後,
+@@ -111,14 +113,17 @@ export function StockPage({ code, onSelect, stream }: Props) {
+     <div className="flex min-h-0 flex-1 gap-4">
+       <SignalRail
+         signals={signals}
+-        enabled={enabled}
+-        onToggle={toggleKind}
++        rules={rules}
++        onToggleRule={toggleRule}
++        onOpenManager={() => setRulesOpen(true)}
+         onSelect={onSelect}
+         notifPermission={notifPermission}
+         onRequestNotif={requestNotif}
+         soundOn={soundOn}
+         onToggleSound={setSoundOn}
+       />
++      {/* 常駐掛載、只切 open(dialog 樣板慣例);規則清單由本層餵,Dialog 不自己抓 */}
++      <SignalRulesDialog open={rulesOpen} rules={rules} onClose={() => setRulesOpen(false)} />
+       <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
+       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
+         {status.tc4 === "down" || wsStatus === "closed" ? (
+diff --git a/frontend/src/hooks/useSignalRules.test.tsx b/frontend/src/hooks/useSignalRules.test.tsx
+new file mode 100644
+index 0000000..699680a
+--- /dev/null
++++ b/frontend/src/hooks/useSignalRules.test.tsx
+@@ -0,0 +1,165 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import {
++  errText,
++  useDeleteRule,
++  useSaveRule,
++  useSignalRules,
++  type RuleDraft,
++  type SignalRule,
++} from "@/hooks/useSignalRules";
++
++function rule(o: Partial<SignalRule> = {}): SignalRule {
++  return {
++    id: "r-1-000",
++    name: "CDP 穿越",
++    kind: "cdp_cross",
++    enabled: true,
++    notify_discord: true,
++    cooldown_secs: 300,
++    params: { rearm_ticks: 2 },
++    cdp_levels: ["ah", "nh", "cdp", "nl", "al"],
++    ...o,
++  };
++}
++
++let fetchMock: ReturnType<typeof vi.fn>;
++let client: QueryClient;
++
++beforeEach(() => {
++  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
++    if (init?.method === "DELETE") return new Response(null, { status: 204 });
++    if (init?.method === "POST" || init?.method === "PUT") {
++      return new Response(String(init.body));
++    }
++    return new Response(JSON.stringify({ rules: [rule()] }));
++  });
++  vi.stubGlobal("fetch", fetchMock);
++  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function wrapper({ children }: { children: ReactNode }) {
++  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++}
++
++/** 每個回呼固定用同一份 method + url 取法:mock.calls 的元素型別是 unknown[]。 */
++function lastCall(): { url: string; init: RequestInit } {
++  const call = fetchMock.mock.calls.at(-1) as [string, RequestInit | undefined];
++  return { url: call[0], init: call[1] ?? {} };
++}
++
++describe("useSignalRules", () => {
++  it("GET /api/stock/signals/rules → rules 陣列", async () => {
++    const hook = renderHook(() => useSignalRules(), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toEqual([rule()]));
++    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/stock/signals/rules");
++  });
++
++  it("缺 rules 欄(舊後端 / 壞回應)→ 空陣列而非 undefined", async () => {
++    fetchMock.mockImplementation(async () => new Response(JSON.stringify({})));
++    const hook = renderHook(() => useSignalRules(), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toEqual([]));
++  });
++});
++
++describe("useSaveRule", () => {
++  it("無 id → POST /api/stock/signals/rules(新增)", async () => {
++    const hook = renderHook(() => useSaveRule(), { wrapper });
++    const full = rule();
++    const draft: RuleDraft = {
++      name: full.name,
++      kind: full.kind,
++      enabled: full.enabled,
++      notify_discord: full.notify_discord,
++      cooldown_secs: full.cooldown_secs,
++      params: full.params,
++      cdp_levels: full.cdp_levels,
++    };
++    await act(async () => {
++      await hook.result.current.mutateAsync(draft);
++    });
++    const { url, init } = lastCall();
++    expect(url).toBe("/api/stock/signals/rules");
++    expect(init.method).toBe("POST");
++    expect(JSON.parse(String(init.body))).toEqual(draft);
++  });
++
++  it("有 id → PUT /api/stock/signals/rules/{id}(編輯,id 進 path)", async () => {
++    const hook = renderHook(() => useSaveRule(), { wrapper });
++    await act(async () => {
++      await hook.result.current.mutateAsync(rule({ id: "r-9-007", enabled: false }));
++    });
++    const { url, init } = lastCall();
++    expect(url).toBe("/api/stock/signals/rules/r-9-007");
++    expect(init.method).toBe("PUT");
++    expect((JSON.parse(String(init.body)) as SignalRule).enabled).toBe(false);
++  });
++
++  it("成功後 invalidate [\"signal-rules\"] → 清單重抓", async () => {
++    const hook = renderHook(
++      () => ({ list: useSignalRules(), save: useSaveRule() }),
++      { wrapper },
++    );
++    await waitFor(() => expect(hook.result.current.list.data).toBeTruthy());
++    const before = fetchMock.mock.calls.length;
++    await act(async () => {
++      await hook.result.current.save.mutateAsync(rule({ enabled: false }));
++    });
++    // PUT 一次 + invalidate 觸發的 GET 一次
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(before + 2));
++    expect(lastCall().init.method).toBeUndefined(); // 最後一發是 GET
++  });
++
++  it("400 INVALID_RULE → error.message 是 detail.error", async () => {
++    fetchMock.mockImplementation(
++      async () =>
++        new Response(JSON.stringify({ detail: { error: "INVALID_RULE" } }), { status: 400 }),
++    );
++    const hook = renderHook(() => useSaveRule(), { wrapper });
++    await expect(hook.result.current.mutateAsync(rule())).rejects.toThrow("INVALID_RULE");
++  });
++});
++
++describe("useDeleteRule", () => {
++  it("DELETE /api/stock/signals/rules/{id} + invalidate", async () => {
++    const hook = renderHook(
++      () => ({ list: useSignalRules(), del: useDeleteRule() }),
++      { wrapper },
++    );
++    await waitFor(() => expect(hook.result.current.list.data).toBeTruthy());
++    const before = fetchMock.mock.calls.length;
++    await act(async () => {
++      await hook.result.current.del.mutateAsync("r-1-000");
++    });
++    expect(fetchMock.mock.calls[before]?.[0]).toBe("/api/stock/signals/rules/r-1-000");
++    expect((fetchMock.mock.calls[before]?.[1] as RequestInit).method).toBe("DELETE");
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(before + 2));
++  });
++
++  it("404 RULE_NOT_FOUND → error.message 是 detail.error", async () => {
++    fetchMock.mockImplementation(
++      async () =>
++        new Response(JSON.stringify({ detail: { error: "RULE_NOT_FOUND" } }), { status: 404 }),
++    );
++    const hook = renderHook(() => useDeleteRule(), { wrapper });
++    await expect(hook.result.current.mutateAsync("nope")).rejects.toThrow("RULE_NOT_FOUND");
++  });
++});
++
++describe("errText", () => {
++  it("三個錯誤碼各有中文文案,其餘退回通用文案", () => {
++    expect(errText("INVALID_RULE")).toBe("規則設定不合法");
++    expect(errText("RULE_NOT_FOUND")).toBe("找不到該規則");
++    expect(errText("RULE_SAVE_FAILED")).toBe("規則儲存失敗");
++    expect(errText("HTTP_503")).toBe("儲存失敗");
++  });
++});
+diff --git a/frontend/src/hooks/useSignalRules.ts b/frontend/src/hooks/useSignalRules.ts
+new file mode 100644
+index 0000000..381e28b
+--- /dev/null
++++ b/frontend/src/hooks/useSignalRules.ts
+@@ -0,0 +1,90 @@
++/** 訊號規則 CRUD(signal-rules design SC-7)。
++ *
++ *  真值在後端 `signal_rules.json`(重啟保留),前端只讀寫不快取到 localStorage ——
++ *  規則同時管 Discord 推播與盤中評估,兩份來源會漂。
++ *
++ *  四鍵開關(`useSignalsConfig`)已退役:一條規則就是一顆 detector,開關 = 該條的
++ *  `enabled`。「切開關」與「改參數」因此走同一條 PUT,不再有部分更新的第二條路。 */
++
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++
++import { parseError } from "@/lib/api-error";
++
++/** 與後端 `signal_rules.RULE_KINDS` 逐字對應(改一邊要改兩邊)。 */
++export const RULE_KINDS = ["cdp_cross", "surge_crash", "vol_burst", "limit_lock"] as const;
++export type RuleKind = (typeof RULE_KINDS)[number];
++
++/** 與後端 `signal_rules.CDP_LEVELS` 同序 —— 送出的 `cdp_levels` 依此固定序,
++ *  不用使用者的點擊序(後端會正規化,前後端不同序會讓 diff 看起來一直有變動)。 */
++export const CDP_LEVELS = ["ah", "nh", "cdp", "nl", "al"] as const;
++
++export interface SignalRule {
++  id: string;
++  name: string;
++  kind: RuleKind;
++  enabled: boolean;
++  notify_discord: boolean;
++  cooldown_secs: number;
++  /** 鍵集依 kind(後端 `PARAM_SPECS`):多鍵 / 缺鍵一律 INVALID_RULE。 */
++  params: Record<string, number>;
++  /** cdp_cross 非空 ⊆ 五線;其他 kind 必空。 */
++  cdp_levels: string[];
++}
++
++/** 送出用:新增沒有 id(由後端的單調計數配),編輯才有。 */
++export type RuleDraft = Omit<SignalRule, "id"> & { id?: string };
++
++const RULES_KEY = ["signal-rules"];
++const RULES_URL = "/api/stock/signals/rules";
++
++/** 錯誤碼中文文案(跨檔契約)。Dialog 與呼叫端共用**同一份**,複製兩份會漂。 */
++export function errText(message: string): string {
++  if (message === "INVALID_RULE") return "規則設定不合法";
++  if (message === "RULE_NOT_FOUND") return "找不到該規則";
++  if (message === "RULE_SAVE_FAILED") return "規則儲存失敗";
++  return "儲存失敗";
++}
++
++async function fetchRules(): Promise<SignalRule[]> {
++  const res = await fetch(RULES_URL);
++  if (!res.ok) throw new Error(await parseError(res));
++  // 缺 `rules` 欄退回空陣列而不是 undefined:消費端(rail / dialog)一律 `.map`,
++  // 少了這步「成功之後才炸」——最難察覺的那種。
++  return ((await res.json()) as { rules?: SignalRule[] }).rules ?? [];
++}
++
++export function useSignalRules() {
++  return useQuery({ queryKey: RULES_KEY, queryFn: fetchRules, retry: 1 });
++}
++
++export function useSaveRule() {
++  const queryClient = useQueryClient();
++  return useMutation({
++    /** 有 id → PUT 到該 id(**path 為準**,後端對 body 帶不一致 id 回 400);
++     *  無 id → POST 新增。單一入口讓「切開關」與「編輯表單」走同一條路。 */
++    mutationFn: async (rule: RuleDraft): Promise<SignalRule> => {
++      const editing = rule.id !== undefined;
++      const res = await fetch(editing ? `${RULES_URL}/${rule.id}` : RULES_URL, {
++        method: editing ? "PUT" : "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(rule),
++      });
++      if (!res.ok) throw new Error(await parseError(res));
++      return (await res.json()) as SignalRule;
++    },
++    // invalidate 而非 setQueryData:POST 的 id 是後端配的,PUT 也可能被正規化
++    // (名稱 strip / levels 去重),回寫自己那份會讓畫面與真值悄悄分岔。
++    onSuccess: () => void queryClient.invalidateQueries({ queryKey: RULES_KEY }),
++  });
++}
++
++export function useDeleteRule() {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: async (ruleId: string): Promise<void> => {
++      const res = await fetch(`${RULES_URL}/${ruleId}`, { method: "DELETE" });
++      if (!res.ok) throw new Error(await parseError(res));
++    },
++    onSuccess: () => void queryClient.invalidateQueries({ queryKey: RULES_KEY }),
++  });
++}
+diff --git a/frontend/src/hooks/useSignalsConfig.test.tsx b/frontend/src/hooks/useSignalsConfig.test.tsx
+deleted file mode 100644
+index 1456dc9..0000000
+--- a/frontend/src/hooks/useSignalsConfig.test.tsx
++++ /dev/null
+@@ -1,83 +0,0 @@
+-/** @vitest-environment jsdom */
+-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+-import type { ReactNode } from "react";
+-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+-
+-import { useSignalsConfig } from "@/hooks/useSignalsConfig";
+-import type { SignalEnabled } from "@/lib/signal-model";
+-
+-const ALL_ON: SignalEnabled = {
+-  cdp_cross: true,
+-  surge_crash: true,
+-  vol_burst: true,
+-  limit_lock: true,
+-};
+-
+-let stored: SignalEnabled;
+-let fetchMock: ReturnType<typeof vi.fn>;
+-let client: QueryClient;
+-
+-beforeEach(() => {
+-  stored = { ...ALL_ON, vol_burst: false };
+-  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+-    if (init?.method === "PUT") {
+-      // 後端是部分更新:合併後回完整四鍵
+-      const body = JSON.parse(String(init.body)) as { enabled: Partial<SignalEnabled> };
+-      stored = { ...stored, ...body.enabled };
+-    }
+-    return new Response(JSON.stringify({ enabled: stored }));
+-  });
+-  vi.stubGlobal("fetch", fetchMock);
+-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-});
+-
+-afterEach(() => {
+-  cleanup();
+-  vi.unstubAllGlobals();
+-});
+-
+-function wrapper({ children }: { children: ReactNode }) {
+-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+-}
+-
+-describe("useSignalsConfig", () => {
+-  it("GET 往返四鍵開關", async () => {
+-    const hook = renderHook(() => useSignalsConfig(), { wrapper });
+-    await waitFor(() => expect(hook.result.current.enabled).toEqual(stored));
+-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/stock/signals/enabled");
+-  });
+-
+-  it("尚未載入 / 抓失敗 → 全開(fail-open,不會靜默清空整條訊號流)", async () => {
+-    fetchMock.mockImplementation(
+-      async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
+-    );
+-    const hook = renderHook(() => useSignalsConfig(), { wrapper });
+-    expect(hook.result.current.enabled).toEqual(ALL_ON); // 載入中
+-    // hook 自帶 retry: 1(壓過 client 的 retry: false)→ 等第二次 fetch 發出才是 error
+-    // 終態;只等「呼叫過」會落在 retry pending 窗,那時的全開來自「還沒 settle」而不是
+-    // fail-open,實作把 fallback 拿掉照樣綠(review TQ-5)。retryDelay 預設 1s,waitFor
+-    // 的 1s 預設 timeout 抓不到 → 給 5s。
+-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+-    await waitFor(() =>
+-      expect(client.getQueryState(["stock-signals-enabled"])?.status).toBe("error"),
+-    );
+-    expect(hook.result.current.enabled).toEqual(ALL_ON);
+-  });
+-
+-  it("save 只 PUT 要改的鍵,成功後直接回寫 cache(不必再 GET 一次)", async () => {
+-    const hook = renderHook(() => useSignalsConfig(), { wrapper });
+-    await waitFor(() => expect(hook.result.current.enabled.vol_burst).toBe(false));
+-
+-    await act(async () => {
+-      await hook.result.current.save.mutateAsync({ vol_burst: true });
+-    });
+-
+-    const put = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+-    expect(put).toBeTruthy();
+-    expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ enabled: { vol_burst: true } });
+-    await waitFor(() => expect(hook.result.current.enabled).toEqual(ALL_ON));
+-    // GET 一次 + PUT 一次:回寫 cache 而非 invalidate
+-    expect(fetchMock).toHaveBeenCalledTimes(2);
+-  });
+-});
+diff --git a/frontend/src/hooks/useSignalsConfig.ts b/frontend/src/hooks/useSignalsConfig.ts
+deleted file mode 100644
+index 4b4ff41..0000000
+--- a/frontend/src/hooks/useSignalsConfig.ts
++++ /dev/null
+@@ -1,56 +0,0 @@
+-/** 四鍵訊號開關(design §8.2;SC-12)。
+- *
+- *  真值在後端 configs(重啟保留),前端只讀寫不快取到 localStorage —— 開關同時管
+- *  Discord 推播,兩份來源會漂。 */
+-
+-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+-
+-import { parseError } from "@/lib/api-error";
+-import type { SignalEnabled } from "@/lib/signal-model";
+-
+-const ENABLED_KEY = ["stock-signals-enabled"];
+-
+-/** **fail-open**:載入中 / hub 未就緒時當全開,與 `filterKinds` 同一條理由 ——
+- *  誤判成全關會讓整條訊號流靜默清空,比多顯示幾則難察覺得多。 */
+-const ALL_ON: SignalEnabled = {
+-  cdp_cross: true,
+-  surge_crash: true,
+-  vol_burst: true,
+-  limit_lock: true,
+-};
+-
+-/** 缺鍵(舊後端 / 新增類型)補全開,理由同上。 */
+-function toEnabled(body: { enabled?: Partial<SignalEnabled> }): SignalEnabled {
+-  return { ...ALL_ON, ...(body.enabled ?? {}) };
+-}
+-
+-async function fetchEnabled(): Promise<SignalEnabled> {
+-  const res = await fetch("/api/stock/signals/enabled");
+-  if (!res.ok) throw new Error(await parseError(res));
+-  return toEnabled((await res.json()) as { enabled?: Partial<SignalEnabled> });
+-}
+-
+-export function useSignalsConfig() {
+-  const queryClient = useQueryClient();
+-  const query = useQuery({ queryKey: ENABLED_KEY, queryFn: fetchEnabled, retry: 1 });
+-
+-  const save = useMutation({
+-    // 部分更新:只送被切的那一鍵。整包送會把「別的 client 剛改的鍵」用自己這份
+-    // 可能已過期的快取蓋回去。
+-    mutationFn: async (patch: Partial<SignalEnabled>): Promise<SignalEnabled> => {
+-      const res = await fetch("/api/stock/signals/enabled", {
+-        method: "PUT",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ enabled: patch }),
+-      });
+-      if (!res.ok) throw new Error(await parseError(res));
+-      return toEnabled((await res.json()) as { enabled?: Partial<SignalEnabled> });
+-    },
+-    // 回應本身就是合併後的完整四鍵 → 直接回寫,不必再 GET 一次
+-    onSuccess: (enabled) => {
+-      queryClient.setQueryData(ENABLED_KEY, enabled);
+-    },
+-  });
+-
+-  return { enabled: query.data ?? ALL_ON, save };
+-}
+diff --git a/frontend/src/lib/signal-model.test.ts b/frontend/src/lib/signal-model.test.ts
+index 67f41b9..2913ae4 100644
+--- a/frontend/src/lib/signal-model.test.ts
++++ b/frontend/src/lib/signal-model.test.ts
+@@ -1,13 +1,6 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import {
+-  filterKinds,
+-  formatToastText,
+-  kindLabel,
+-  mergeSignals,
+-  type SignalEnabled,
+-  type SignalMsg,
+-} from "@/lib/signal-model";
++import { formatToastText, kindLabel, mergeSignals, type SignalMsg } from "@/lib/signal-model";
+ 
+ function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
+   return {
+@@ -26,13 +19,6 @@ function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
+   };
+ }
+ 
+-const ALL_ON: SignalEnabled = {
+-  cdp_cross: true,
+-  surge_crash: true,
+-  vol_burst: true,
+-  limit_lock: true,
+-};
+-
+ describe("kindLabel", () => {
+   it("CDP 由下往上穿越 = 突破,線名大寫", () => {
+     expect(kindLabel(sig({ kind: "cdp_cross", levels: ["ah"], direction: "from_below", pct: null })))
+@@ -137,40 +123,3 @@ describe("mergeSignals", () => {
+     expect(mergeSignals([], [])).toEqual([]);
+   });
+ });
+-
+-describe("filterKinds", () => {
+-  it("全開時原樣", () => {
+-    const list = [sig({ id: "1", kind: "surge" }), sig({ id: "2", kind: "cdp_cross" })];
+-    expect(filterKinds(list, ALL_ON).length).toBe(2);
+-  });
+-
+-  it("surge 與 crash 共用 surge_crash 開關", () => {
+-    const list = [sig({ id: "1", kind: "surge" }), sig({ id: "2", kind: "crash" })];
+-    expect(filterKinds(list, { ...ALL_ON, surge_crash: false })).toEqual([]);
+-  });
+-
+-  it("limit_lock 與 limit_open 共用 limit_lock 開關", () => {
+-    const list = [sig({ id: "1", kind: "limit_lock" }), sig({ id: "2", kind: "limit_open" })];
+-    expect(filterKinds(list, { ...ALL_ON, limit_lock: false })).toEqual([]);
+-  });
+-
+-  it("cdp_cross / vol_burst 各自獨立開關", () => {
+-    const list = [
+-      sig({ id: "1", kind: "cdp_cross" }),
+-      sig({ id: "2", kind: "vol_burst" }),
+-      sig({ id: "3", kind: "surge" }),
+-    ];
+-    expect(filterKinds(list, { ...ALL_ON, cdp_cross: false }).map((s) => s.id)).toEqual(["2", "3"]);
+-    expect(filterKinds(list, { ...ALL_ON, vol_burst: false }).map((s) => s.id)).toEqual(["1", "3"]);
+-  });
+-
+-  it("未知 kind 不被吃掉(前端舊 / 後端新增類型時 fail-open)", () => {
+-    const list = [sig({ id: "1", kind: "brand_new" as SignalMsg["kind"] })];
+-    expect(filterKinds(list, { ...ALL_ON, surge_crash: false }).map((s) => s.id)).toEqual(["1"]);
+-  });
+-
+-  it("enabled 缺鍵(舊後端)當開啟,不靜默清空整條訊號流", () => {
+-    const list = [sig({ id: "1", kind: "surge" })];
+-    expect(filterKinds(list, {} as SignalEnabled).map((s) => s.id)).toEqual(["1"]);
+-  });
+-});
+diff --git a/frontend/src/lib/signal-model.ts b/frontend/src/lib/signal-model.ts
+index 33c8231..4344972 100644
+--- a/frontend/src/lib/signal-model.ts
++++ b/frontend/src/lib/signal-model.ts
+@@ -15,15 +15,13 @@ export type SignalKind =
+   | "limit_lock"
+   | "limit_open";
+ 
+-/** 四鍵開關(後端 `SWITCH_KEYS`)—— 六個 kind 併成四個使用者可理解的類型。 */
+-export type SignalSwitchKey = "cdp_cross" | "surge_crash" | "vol_burst" | "limit_lock";
+-
+-export type SignalEnabled = Record<SignalSwitchKey, boolean>;
+-
+ export interface SignalMsg {
+   type: "signal";
+-  /** 決定性鍵 `trade_date-code-kind-(levels+ | direction | "-")-time_key`:
+-   *  重啟後同訊號重發時靠它去重(後端 `signal_hub._event_id`)。 */
++  /** 決定性鍵 `trade_date-rule_id-code-kind-(levels+ | direction | "-")-time_key`:
++   *  重啟後同訊號重發時靠它去重(後端 `signal_hub._event_id`)。
++   *
++   *  `rule_id` 是必要的一段:同 kind 兩條規則同一 tick 各發一則,少了它兩則同 id,
++   *  這裡的 `mergeSignals` 會把第二則整個吃掉。 */
+   id: string;
+   kind: SignalKind;
+   code: string;
+@@ -40,19 +38,12 @@ export interface SignalMsg {
+   /** surge/crash 實際漲跌幅(%);vol_burst 實際倍率;其他 null。 */
+   pct: number | null;
+   touch_count: number;
++  /** 產生這則訊號的規則(signal-rules SC-8)。**選填**:升級當日已存 jsonl 的舊行
++   *  沒有這兩欄,消費端要能退回 kind 文案而不是顯示空白。 */
++  rule_id?: string;
++  rule_name?: string;
+ }
+ 
+-/** kind → 開關鍵。`SWITCH_KEYS` 四鍵制:surge/crash 同鍵、limit_lock/limit_open 同鍵
+- *  (與後端 `signal_state.KIND_SWITCH` 逐字對應,改一邊要改兩邊)。 */
+-const KIND_SWITCH: Record<SignalKind, SignalSwitchKey> = {
+-  cdp_cross: "cdp_cross",
+-  surge: "surge_crash",
+-  crash: "surge_crash",
+-  vol_burst: "vol_burst",
+-  limit_lock: "limit_lock",
+-  limit_open: "limit_lock",
+-};
+-
+ /** CDP 五線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 否則標籤變「突破 CDP CDP」。 */
+ const LEVEL_LABEL: Record<string, string> = {
+   cdp: "中軸",
+@@ -116,15 +107,3 @@ export function mergeSignals(
+   out.sort((a, b) => (a.time === b.time ? 0 : a.time > b.time ? -1 : 1));
+   return out.length > cap ? out.slice(0, cap) : out;
+ }
+-
+-/** 依四鍵開關過濾。
+- *
+- *  **fail-open**:未知 kind 與缺鍵的 enabled 一律當開啟 —— 前端舊 / 後端新增類型時
+- *  誤判成「全部關掉」會讓整條訊號流靜默清空,那比多顯示幾則難察覺得多。 */
+-export function filterKinds(sigs: SignalMsg[], enabled: SignalEnabled): SignalMsg[] {
+-  return sigs.filter((sig) => {
+-    const key = KIND_SWITCH[sig.kind] as SignalSwitchKey | undefined;
+-    if (key === undefined) return true;
+-    return enabled[key] !== false;
+-  });
+-}
+diff --git a/tests/server/test_signal_hub.py b/tests/server/test_signal_hub.py
+index 6dad942..542cb5b 100644
+--- a/tests/server/test_signal_hub.py
++++ b/tests/server/test_signal_hub.py
+@@ -2,7 +2,8 @@
+ 
+ detector 本身的判定邏輯在 `tests/live/test_signal_state.py`,這裡只釘接線:
+ payload 逐鍵契約、membership gate、fanout(WS / jsonl / Discord)、基準 worker、
+-enabled 持久化。時鐘一律注入,daily_bars / publish / notify_fallback 全用 fake。
++規則引擎(per-rule detector / basis cache / CRUD 熱重載)。時鐘一律注入,
++daily_bars / publish / notify_fallback 全用 fake。
+ """
+ 
+ from __future__ import annotations
+@@ -11,9 +12,9 @@ import asyncio
+ import datetime as _dt
+ import json
+ import logging
+-import time
+ from dataclasses import replace
+ from pathlib import Path
++from typing import Any
+ 
+ import pytest
+ 
+@@ -21,12 +22,14 @@ from copycat.live.stock_models import StockBook, StockMeta, StockTick
+ from copycat.live.stock_source import DailyBar
+ from copycat.live.stock_state import StockDayState
+ from copycat.server import signal_hub as hub_mod
+-from copycat.server.signal_hub import SignalHub
++from copycat.server.signal_hub import SignalHub, format_signal_text
++from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
+ from copycat.signals_config import SignalsConfig
+ 
+ _DATE = "2026-08-04"
+ _NEXT = "2026-08-05"
+ _THIRD = "2026-08-06"
++_RULES_FILE = "signal_rules.json"
+ # design §7 的 WS 訊號契約鍵集合(jsonl row 為本集合 + trade_date)
+ _SIGNAL_KEYS = {
+     "type",
+@@ -40,8 +43,46 @@ _SIGNAL_KEYS = {
+     "direction",
+     "pct",
+     "touch_count",
++    "rule_id",
++    "rule_name",
+ }
+ 
++_RULE_PARAMS: dict[str, dict[str, float]] = {
++    "cdp_cross": {"rearm_ticks": 5},
++    "surge_crash": {"pct": 2.0, "window_secs": 300},
++    "vol_burst": {
++        "ratio": 3,
++        "window_secs": 300,
++        "min_elapsed_min": 15,
++        "min_window_lots": 100,
++        "min_day_lots": 500,
++    },
++    "limit_lock": {},
++}
++
++
++def _rule(kind: str, rid: str, **over: Any) -> dict[str, Any]:
++    """規則樣板(參數 = SignalsConfig 預設,行為與遷移種子一致);over 覆寫任一欄。"""
++    rule: dict[str, Any] = {
++        "id": rid,
++        "name": f"{kind}-{rid}",
++        "kind": kind,
++        "enabled": True,
++        "notify_discord": True,
++        "cooldown_secs": 600,
++        "params": dict(_RULE_PARAMS[kind]),
++        "cdp_levels": list(CDP_LEVELS) if kind == "cdp_cross" else [],
++    }
++    rule.update(over)
++    return rule
++
++
++def _write_rules(tmp_path: Path, rules: list[dict[str, Any]]) -> None:
++    """預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。"""
++    (tmp_path / _RULES_FILE).write_text(
++        json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
++    )
++
+ 
+ class _Clock:
+     def __init__(self, start: _dt.datetime | None = None) -> None:
+@@ -182,6 +223,12 @@ class _Harness:
+         await asyncio.wait_for(self.hub._jsonl_queue.join(), 2)
+         await asyncio.wait_for(self.hub._discord_queue.join(), 2)
+ 
++    def rule_id(self, kind: str) -> str:
++        return next(r["id"] for r in self.hub.rules() if r["kind"] == kind)
++
++    def rule_name(self, kind: str) -> str:
++        return next(r["name"] for r in self.hub.rules() if r["kind"] == kind)
++
+     def rows(self, date: str = _DATE) -> list[dict]:
+         path = self.data_dir / "signals" / f"{date.replace('-', '')}.jsonl"
+         if not path.exists():
+@@ -205,6 +252,12 @@ def _drain(queue: asyncio.Queue[dict]) -> list[dict]:
+     return rows
+ 
+ 
++def _cache(h: _Harness, code: str = "2330") -> tuple[str, int | None]:
++    """hub 的 basis cache 摘要 → (基準日, nh 線價);cdp 不可得時 nh 為 None。"""
++    basis_date, cdp = h.hub._basis_cache[code]
++    return basis_date, None if cdp is None else cdp["nh"]
++
++
+ async def _wait_rows(h: _Harness, n: int, timeout: float = 2.0) -> None:
+     """等 jsonl 落到 n 筆(不碰私有佇列 —— 這裡驗的正是「哪條路徑卡不住哪條」)。"""
+     loop = asyncio.get_running_loop()
+@@ -245,7 +298,11 @@ class TestPayloadContract:
+             assert msg["direction"] == "from_below"
+             assert msg["pct"] is None
+             assert msg["touch_count"] == 1
+-            assert msg["id"] == "2026-08-04-2330-cdp_cross-nh-10:00:00.123"
++            # id 帶 rule 段(SC-2):同 kind 多規則同 tick 的兩則事件不得撞 id
++            rid = h.rule_id("cdp_cross")
++            assert msg["rule_id"] == rid
++            assert msg["rule_name"] == h.rule_name("cdp_cross")
++            assert msg["id"] == f"2026-08-04-{rid}-2330-cdp_cross-nh-10:00:00.123"
+ 
+             rows = h.rows()
+             assert len(rows) == 1
+@@ -278,7 +335,8 @@ class TestPayloadContract:
+             h.lock_up(_state(upper=110_000, locked_up=True))
+             await h.settle()
+             assert h.published[0]["kind"] == "limit_lock"
+-            assert h.published[0]["id"] == "2026-08-04-2330-limit_lock-up-10:00:00.123"
++            rid = h.rule_id("limit_lock")
++            assert h.published[0]["id"] == f"2026-08-04-{rid}-2330-limit_lock-up-10:00:00.123"
+         finally:
+             await h.hub.close()
+ 
+@@ -340,7 +398,8 @@ class TestMembership:
+             assert fetched == ["2317", "2330"]  # 基準非零:第一次真的抓了(request_basis 排序)
+ 
+             dropped: list[str] = []
+-            h.hub._detector.drop_code = dropped.append  # type: ignore[method-assign]
++            for slot in h.hub._slots.values():  # 逐 slot:drop 已是每顆 detector 各做一次
++                slot.detector.drop_code = dropped.append  # type: ignore[method-assign]
+ 
+             h.hub.on_watchlist(["2317", "2330"])  # 同集合(順序不同)
+             await h.settle()
+@@ -458,29 +517,26 @@ class TestHistoryAndId:
+ 
+ 
+ class TestEnabled:
+-    async def test_disabled_kind_emits_nothing_and_persists(
++    async def test_disabled_rule_emits_nothing_and_persists(
+         self, tmp_path: Path, clock: _Clock
+     ) -> None:
+-        """SC-12 後端半:關掉的 kind 不產事件,開關跨重啟保留。"""
++        """SC-2:停用的單位是**規則**,停用態隨規則檔跨重啟保留;其他規則照發。
++
++        事前標記的契約改寫(design R8「既有測試遷移」表):原
++        `test_disabled_kind_emits_nothing_and_persists` 釘的是 `set_enabled` 四鍵開關,
++        該家族已不參與評估(評估只讀 slots),本輪整組退役。
++        """
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
+         h = _Harness(tmp_path, clock)
+         await h.hub.start()
+         try:
+-            assert h.hub.enabled() == {
+-                "cdp_cross": True,
+-                "surge_crash": True,
+-                "vol_burst": True,
+-                "limit_lock": True,
+-            }
+-            await h.hub.set_enabled({"cdp_cross": False})
+-            h.hub.on_watchlist(["2330"])
++            await h.hub.upsert_rule(_rule("cdp_cross", "r-1-000", enabled=False), rule_id="r-1-000")
++            h.hub.on_watchlist(["2330", "2317"])
+             await h.settle()
+             h.cross_nh(_state())
+             await h.settle()
+             assert h.published == []
+ 
+-            h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
+-            h.hub.on_watchlist(["2330", "2317"])
+-            await h.settle()
+             h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
+             await h.settle()
+             assert [m["kind"] for m in h.published] == ["limit_lock"]
+@@ -488,48 +544,8 @@ class TestEnabled:
+             await h.hub.close()
+ 
+         again = _Harness(tmp_path, clock)
+-        assert again.hub.enabled()["cdp_cross"] is False
+-        assert again.hub.enabled()["limit_lock"] is True
+-
+-    async def test_concurrent_set_enabled_lands_memory_state_on_disk(
+-        self, tmp_path: Path, clock: _Clock
+-    ) -> None:
+-        """CC-7:read-modify-write 與落檔沒有共同臨界區 → 慢的那次寫入覆蓋在後。
+-
+-        記憶體是對的、磁碟停在舊值,重啟後開關「自己跳回去」而當下零錯誤訊號。
+-        """
+-        h = _Harness(tmp_path, clock)
+-        real = h.hub._write_enabled
+-
+-        def slow_stale_write(flags: dict[str, bool]) -> None:
+-            # 舊快照(vol_burst 還是 True 的那次)刻意寫得慢 → 無 lock 時它最後落地
+-            if flags["vol_burst"]:
+-                time.sleep(0.05)
+-            real(flags)
+-
+-        h.hub._write_enabled = slow_stale_write  # type: ignore[method-assign]
+-
+-        await asyncio.gather(
+-            h.hub.set_enabled({"cdp_cross": False}),
+-            h.hub.set_enabled({"vol_burst": False}),
+-        )
+-
+-        expected = {
+-            "cdp_cross": False,
+-            "surge_crash": True,
+-            "vol_burst": False,
+-            "limit_lock": True,
+-        }
+-        assert h.hub.enabled() == expected
+-        on_disk = json.loads((tmp_path / "signals_enabled.json").read_text(encoding="utf-8"))
+-        assert on_disk == expected, "磁碟停在舊快照 = 重啟後開關自己跳回去"
+-
+-    async def test_set_enabled_rejects_unknown_key(self, tmp_path: Path, clock: _Clock) -> None:
+-        h = _Harness(tmp_path, clock)
+-        with pytest.raises(ValueError):
+-            await h.hub.set_enabled({"nope": True})
+-        with pytest.raises(ValueError):
+-            await h.hub.set_enabled({"cdp_cross": "yes"})  # type: ignore[dict-item]
++        by_id = {r["id"]: r["enabled"] for r in again.hub.rules()}
++        assert by_id == {"r-1-000": False, "r-1-001": True}
+ 
+ 
+ class TestDiscordFanout:
+@@ -735,15 +751,22 @@ class TestBasisWorker:
+         try:
+             h.hub.on_watchlist(["2330"])
+             await h.settle()
++            assert _cache(h) == (_DATE, 80_000)  # 基準快照歸 hub 持有(SC-3)
+             # stage1:盤前預抓次日基準(多一根 08-04 日 K → nh 由 80_000 變 95_000)
+             h.bars.bars = [_BAR_A, _BAR_B]
+             h.hub.on_rollover_pending(_NEXT)
+             await h.settle()
+             assert h.published == []  # 暫存不生效
++            assert h.hub._staged_date == _NEXT
++            assert h.hub._staged_cache["2330"] is not None
++            assert h.hub._staged_cache["2330"]["nh"] == 95_000
++            assert _cache(h) == (_DATE, 80_000)  # 當日快照未被暫存區汙染
+ 
+             h.date = _NEXT
+             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+             h.hub.on_rollover()
++            assert _cache(h) == (_NEXT, 95_000)  # promote:整批換日別
++            assert h.hub._staged_cache == {} and h.hub._staged_date is None
+             state = _state()
+             h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
+             h.hub.on_tick("2330", _tick(95_500, cum=2, trade_date=_NEXT), state)
+@@ -767,6 +790,7 @@ class TestBasisWorker:
+             h.hub.on_rollover()  # stage1 沒跑過 → swap 失敗 → 清空重抓
+             await h.settle()
+             assert len(h.bars.calls) == 2
++            assert _cache(h) == (_NEXT, 95_000)
+ 
+             state = _state()
+             h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
+@@ -799,6 +823,7 @@ class TestBasisWorker:
+             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+             h.hub.on_rollover()
+             await h.settle()  # 此刻 worker 才消化 stage1 的 job → 暫存區被填上 08-05 基準
++            assert _cache(h) == (_NEXT, 95_000)
+ 
+             state = _state()
+             h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
+@@ -814,6 +839,7 @@ class TestBasisWorker:
+             clock.now = _dt.datetime(2026, 8, 6, 10, 0, 0)
+             h.hub.on_rollover()
+             await h.settle()
++            assert _cache(h) == (_THIRD, 125_000), "hub 快照沿用了昨天的基準日"
+ 
+             state2 = _state()
+             h.hub.on_tick("2330", _tick(124_000, trade_date=_THIRD), state2)
+@@ -895,3 +921,405 @@ class TestBookPath:
+             await h.settle()
+         finally:
+             await h.hub.close()
++
++
++class TestRuleEngine:
++    """SC-2/3/5:每條規則一顆 detector;design「邊界」逐 edge。"""
++
++    async def test_zero_rules_no_events(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 1:規則 0 條 → 評估迴圈零次,不炸也不發。"""
++        _write_rules(tmp_path, [])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            assert h.hub.rules() == []
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.cross_nh(_state())
++            h.hub.on_book("2330", _state(upper=110_000))
++            await h.settle()
++            assert h.published == []
++            assert h.rows() == []
++        finally:
++            await h.hub.close()
++
++    async def test_empty_rules_file_not_remigrated(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 1 的另一半:空陣列 ≠ 缺檔 —— 刪光規則後重啟不得復活四條預設。"""
++        _write_rules(tmp_path, [])
++        assert _Harness(tmp_path, clock).hub.rules() == []
++        assert _Harness(tmp_path, clock).hub.rules() == []
++        assert load_rules(tmp_path / _RULES_FILE) == []
++
++    async def test_two_rules_same_kind_both_fire(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 2:同 kind 兩規則同 tick → 兩則事件,id 因 rule 段不撞。"""
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert [m["rule_id"] for m in h.published] == ["r-1-000", "r-1-001"]
++            assert len({m["id"] for m in h.published}) == 2
++            assert len(h.rows()) == 2
++            assert len(h.bot) == 2
++        finally:
++            await h.hub.close()
++
++    async def test_upsert_preserves_other_rules_state(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 3:被編輯那顆 detector 重建歸零,其他顆的 cooldown 原樣保留。
++
++        兩條規則都把冷卻設到一天:第一次穿越後兩顆都被自己的冷卻壓著;編輯 A 之後
++        只有 A 能再發。順帶釘 `_seed_slot` —— 新 detector 沒被餵基準的話這裡零事件。
++        """
++        rules = [
++            _rule("cdp_cross", "r-1-000", cooldown_secs=86_400, params={"rearm_ticks": 0}),
++            _rule("cdp_cross", "r-1-001", cooldown_secs=86_400, params={"rearm_ticks": 0}),
++        ]
++        _write_rules(tmp_path, rules)
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert [m["rule_id"] for m in h.published] == ["r-1-000", "r-1-001"]
++            h.published.clear()
++
++            await h.hub.upsert_rule({**rules[0], "name": "改過的 A"}, rule_id="r-1-000")
++
++            state = _state()
++            h.hub.on_tick("2330", _tick(79_000, cum=3), state)  # 新 detector:首 tick 只初始化
++            h.hub.on_tick("2330", _tick(80_500, cum=4), state)
++            await h.settle()
++            assert [m["rule_id"] for m in h.published] == ["r-1-000"]
++            assert h.published[0]["rule_name"] == "改過的 A"
++            assert h.published[0]["touch_count"] == 1  # 歸零(B 那顆若被波及會是 2)
++        finally:
++            await h.hub.close()
++
++    async def test_cdp_levels_subset(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 4:規則只訂 AH → hub 只餵那條線,detector 認不得 nh 就不會發。"""
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000", cdp_levels=["ah"])])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            assert h.hub._slots["r-1-000"].detector._basis["2330"] == {"ah": 85_000}
++
++            h.cross_nh(_state())
++            await h.settle()
++            assert h.published == []
++
++            state = _state()
++            h.hub.on_tick("2330", _tick(84_000, cum=3), state)
++            h.hub.on_tick("2330", _tick(85_500, cum=4), state)
++            await h.settle()
++            assert [m["levels"] for m in h.published] == [["ah"]]
++        finally:
++            await h.hub.close()
++
++    @pytest.mark.parametrize(
++        "payload",
++        [
++            pytest.param({**_rule("cdp_cross", "x"), "kind": "nope"}, id="kind"),
++            pytest.param(_rule("cdp_cross", "x", name="   "), id="blank-name"),
++            pytest.param(_rule("cdp_cross", "x", name="cdp_cross-r-1-000"), id="dup-name"),
++            pytest.param(_rule("cdp_cross", "x", cooldown_secs=5), id="cooldown-low"),
++            pytest.param(_rule("cdp_cross", "x", cdp_levels=[]), id="levels-empty"),
++            pytest.param(_rule("cdp_cross", "x", cdp_levels=["zz"]), id="levels-unknown"),
++            pytest.param(_rule("cdp_cross", "x", params={"rearm_ticks": 999}), id="param-range"),
++            pytest.param(
++                _rule("cdp_cross", "x", params={"rearm_ticks": 5, "bogus": 1}), id="param-extra"
++            ),
++            pytest.param(_rule("surge_crash", "x", params={"pct": 2.0}), id="param-missing"),
++            pytest.param(_rule("limit_lock", "x", cdp_levels=["ah"]), id="levels-on-non-cdp"),
++        ],
++    )
++    async def test_invalid_payload_rejected_and_state_untouched(
++        self, tmp_path: Path, clock: _Clock, payload: dict[str, Any]
++    ) -> None:
++        """邊界 6:語意驗證單一定義在 normalize_rule;拒收時記憶體與磁碟都不得動。"""
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000")])
++        h = _Harness(tmp_path, clock)
++        before = h.hub.rules()
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            await h.hub.upsert_rule(payload)
++        assert h.hub.rules() == before
++        assert load_rules(tmp_path / _RULES_FILE) == before
++
++    async def test_limit_rule_latch_isolated(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 7:latch 在各自 detector 內閉合 —— 兩條鎖板規則各發一對 lock/open。"""
++        _write_rules(tmp_path, [_rule("limit_lock", "r-1-000"), _rule("limit_lock", "r-1-001")])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.lock_up(_state(upper=110_000, locked_up=True))
++            await h.settle()
++            assert [(m["rule_id"], m["kind"]) for m in h.published] == [
++                ("r-1-000", "limit_lock"),
++                ("r-1-001", "limit_lock"),
++            ]
++            h.hub.on_book("2330", _state(upper=110_000))
++            await h.settle()
++            assert [(m["rule_id"], m["kind"]) for m in h.published][2:] == [
++                ("r-1-000", "limit_open"),
++                ("r-1-001", "limit_open"),
++            ]
++        finally:
++            await h.hub.close()
++
++    async def test_migration_defaults(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界 8:缺規則檔 + 缺 legacy 檔 → 每 kind 一條、全開,並立刻落檔。"""
++        h = _Harness(tmp_path, clock)
++        rules = h.hub.rules()
++        assert [r["kind"] for r in rules] == list(RULE_KINDS)
++        assert all(r["enabled"] for r in rules)
++        assert all(r["notify_discord"] for r in rules)
++        assert load_rules(tmp_path / _RULES_FILE) == rules
++
++    async def test_migration_reads_legacy_flags(self, tmp_path: Path, clock: _Clock) -> None:
++        """SC-4:舊 `signals_enabled.json` 的關閉態要跟著遷移過來(缺鍵 = fail-open)。"""
++        (tmp_path / "signals_enabled.json").write_text(
++            json.dumps({"vol_burst": False}), encoding="utf-8"
++        )
++        h = _Harness(tmp_path, clock)
++        assert {r["kind"]: r["enabled"] for r in h.hub.rules()} == {
++            "cdp_cross": True,
++            "surge_crash": True,
++            "vol_burst": False,
++            "limit_lock": True,
++        }
++
++    async def test_bad_rules_file_raises_on_construct(self, tmp_path: Path, clock: _Clock) -> None:
++        """R9:壞規則檔在建構時就往外拋(app 的 `_boot` 傘接手 → hub None + 503)。
++
++        靜默套預設會在盤中無預警改變推播行為,所以這裡要的正是「大聲」。
++        """
++        (tmp_path / _RULES_FILE).write_text("{壞檔", encoding="utf-8")
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            _Harness(tmp_path, clock)
++
++    async def test_watchlist_removal_stops_all_rules(self, tmp_path: Path, clock: _Clock) -> None:
++        """SC-5:移出自選 → 逐 slot drop + basis / staged 雙 cache 都不得留下該檔。"""
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.hub.on_rollover_pending(_NEXT)  # 讓暫存區也有這檔
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert len(h.published) == 2
++            assert "2330" in h.hub._basis_cache
++            assert "2330" in h.hub._staged_cache
++
++            h.hub.on_watchlist([])
++            assert "2330" not in h.hub._basis_cache
++            assert "2330" not in h.hub._staged_cache
++            assert all("2330" not in s.detector._basis for s in h.hub._slots.values())
++
++            h.cross_nh(_state())
++            await h.settle()
++            assert len(h.published) == 2  # 兩顆都停發
++        finally:
++            await h.hub.close()
++
++    async def test_one_rule_exception_does_not_stop_others(
++        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """R1:per-rule try/except —— 一條規則炸掉只跳過它自己,其餘照評。"""
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++
++            def _boom(*_args: Any, **_kwargs: Any) -> list:
++                raise RuntimeError("這條規則壞了")
++
++            h.hub._slots["r-1-000"].detector.evaluate = _boom  # type: ignore[method-assign]
++            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
++                h.cross_nh(_state())
++                await h.settle()
++
++            assert [m["rule_id"] for m in h.published] == ["r-1-001"]
++            assert "cdp_cross-r-1-000" in caplog.text  # log 要指得出是哪條規則
++        finally:
++            await h.hub.close()
++
++    async def test_notify_discord_false_skips_discord_only(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """SC-2:`notify_discord` 只擋 Discord,WS 與 jsonl 這條真相源照走。"""
++        _write_rules(
++            tmp_path,
++            [
++                _rule("cdp_cross", "r-1-000", name="要通知"),
++                _rule("cdp_cross", "r-1-001", name="不通知", notify_discord=False),
++            ],
++        )
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert len(h.published) == 2
++            assert len(h.rows()) == 2
++            assert h.bot == [h.bot[0]] and h.bot[0].endswith("｜要通知")
++        finally:
++            await h.hub.close()
++
++
++class TestDiscordText:
++    def _row(self, **over: Any) -> dict[str, Any]:
++        row: dict[str, Any] = {
++            "kind": "vol_burst",
++            "code": "2330",
++            "name": "台積電",
++            "price": 100_000,
++            "time": "10:00:00",
++            "pct": 3.2,
++        }
++        row.update(over)
++        return row
++
++    def test_rule_name_appended(self) -> None:
++        """R14b:同 kind 多規則在 Discord 要分得出是哪一條發的。"""
++        assert format_signal_text(self._row(rule_name="爆量-緊")).endswith("｜爆量-緊")
++
++    def test_legacy_row_without_rule_name(self) -> None:
++        """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
++        assert format_signal_text(self._row()).endswith("10:00:00")
++
++
++class TestRulesCrud:
++    async def test_create_assigns_new_id_persists_and_is_live(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        _write_rules(tmp_path, [_rule("limit_lock", "r-1-000")])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            created = await h.hub.upsert_rule(_rule("cdp_cross", "客戶端亂填的", name="新 CDP"))
++            assert created["id"] not in {"客戶端亂填的", "r-1-000"}
++            assert [r["id"] for r in h.hub.rules()] == ["r-1-000", created["id"]]
++            assert load_rules(tmp_path / _RULES_FILE) == h.hub.rules()
++
++            h.cross_nh(_state())  # 熱重載:新規則立刻生效(基準由 _seed_slot 補上)
++            await h.settle()
++            assert [m["rule_id"] for m in h.published] == [created["id"]]
++        finally:
++            await h.hub.close()
++
++    async def test_ids_not_recycled_after_delete(self, tmp_path: Path, clock: _Clock) -> None:
++        """R12:id 走單調計數 —— 刪掉再新增不得撞上已存 jsonl 的舊 id。"""
++        h = _Harness(tmp_path, clock)
++        first = await h.hub.upsert_rule(_rule("limit_lock", "x", name="A"))
++        await h.hub.delete_rule(first["id"])
++        second = await h.hub.upsert_rule(_rule("limit_lock", "x", name="B"))
++        assert second["id"] != first["id"]
++
++    async def test_put_edits_in_place_and_hot_reloads(self, tmp_path: Path, clock: _Clock) -> None:
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            await h.hub.upsert_rule(
++                _rule("cdp_cross", "r-1-000", cdp_levels=["ah"]), rule_id="r-1-000"
++            )
++            assert [r["id"] for r in h.hub.rules()] == ["r-1-000", "r-1-001"]  # 位置不變
++            assert h.hub._slots["r-1-000"].detector._basis["2330"] == {"ah": 85_000}
++
++            h.cross_nh(_state())  # nh 已不在規則的線集合
++            await h.settle()
++            assert h.published == []
++        finally:
++            await h.hub.close()
++
++    async def test_put_unknown_id_raises_not_found(self, tmp_path: Path, clock: _Clock) -> None:
++        h = _Harness(tmp_path, clock)
++        with pytest.raises(RuleError, match="RULE_NOT_FOUND"):
++            await h.hub.upsert_rule(_rule("limit_lock", "nope", name="X"), rule_id="nope")
++
++    async def test_delete_unknown_id_raises_not_found(self, tmp_path: Path, clock: _Clock) -> None:
++        h = _Harness(tmp_path, clock)
++        with pytest.raises(RuleError, match="RULE_NOT_FOUND"):
++            await h.hub.delete_rule("nope")
++
++    async def test_delete_removes_slot_and_persists(self, tmp_path: Path, clock: _Clock) -> None:
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
++        h = _Harness(tmp_path, clock)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            await h.hub.delete_rule("r-1-000")
++            assert [r["id"] for r in h.hub.rules()] == ["r-1-001"]
++            assert load_rules(tmp_path / _RULES_FILE) == h.hub.rules()
++
++            h.cross_nh(_state())
++            await h.settle()
++            assert h.published == []
++        finally:
++            await h.hub.close()
++
++    async def test_max_rules_enforced_on_create_only(self, tmp_path: Path, clock: _Clock) -> None:
++        """R11:上限只擋新增 —— 編輯既有規則不得因為「已經滿了」而被拒。"""
++        _write_rules(
++            tmp_path,
++            [_rule("limit_lock", f"r-1-{i:03d}", name=f"n{i}") for i in range(MAX_RULES)],
++        )
++        h = _Harness(tmp_path, clock)
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            await h.hub.upsert_rule(_rule("limit_lock", "x", name="第 31 條"))
++        assert len(h.hub.rules()) == MAX_RULES
++
++        edited = await h.hub.upsert_rule(
++            _rule("limit_lock", "r-1-000", name="n0 改"), rule_id="r-1-000"
++        )
++        assert edited["name"] == "n0 改"
++
++    async def test_save_failure_leaves_memory_untouched(
++        self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """R12/R21:記憶體不得先於落檔更新 —— 否則畫面有、重啟後就沒了。"""
++        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000")])
++        h = _Harness(tmp_path, clock)
++        before = h.hub.rules()
++
++        def _boom(path: Path, rules: list) -> None:
++            raise OSError("磁碟滿了")
++
++        monkeypatch.setattr(hub_mod, "save_rules", _boom)
++        with pytest.raises(OSError):
++            await h.hub.upsert_rule(_rule("limit_lock", "x", name="新"))
++        assert h.hub.rules() == before
++        with pytest.raises(OSError):
++            await h.hub.delete_rule("r-1-000")
++        assert h.hub.rules() == before
++
++    async def test_rules_returns_copies(self, tmp_path: Path, clock: _Clock) -> None:
++        """外部改到回傳值不得反噬 slot(熱路徑讀的就是那份 rule)。"""
++        h = _Harness(tmp_path, clock)
++        snapshot = h.hub.rules()
++        snapshot[0]["name"] = "亂改"
++        snapshot[0]["cdp_levels"].append("zz")
++        assert h.hub.rules()[0]["name"] != "亂改"
++        assert "zz" not in h.hub.rules()[0]["cdp_levels"]
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index b638dd1..7622785 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -21,13 +21,28 @@ import pytest
+ from fastapi import FastAPI
+ 
+ from copycat.server import app as app_mod
++from copycat.server import signal_hub as hub_mod
+ from copycat.server.app import create_app
+ from copycat.server.signal_hub import SignalHub
++from copycat.signal_rules import RULE_KINDS, Rule
+ from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_txo import FakeTxoSource
+ from tests.server.test_stock_routes import FakeStockSource
+ 
+-_ALL_ON = {"cdp_cross": True, "surge_crash": True, "vol_burst": True, "limit_lock": True}
++_RULES_FILE = "signal_rules.json"
++
++_RULE_PARAMS: dict[str, dict[str, float]] = {
++    "cdp_cross": {"rearm_ticks": 5},
++    "surge_crash": {"pct": 2.0, "window_secs": 300},
++    "vol_burst": {
++        "ratio": 3,
++        "window_secs": 300,
++        "min_elapsed_min": 15,
++        "min_window_lots": 100,
++        "min_day_lots": 500,
++    },
++    "limit_lock": {},
++}
+ 
+ 
+ def make_app(tmp_path: Path, *, with_stock: bool = True) -> tuple[FastAPI, FakeStockSource]:
+@@ -58,6 +73,31 @@ def _signal_row(trade_date: str) -> dict:
+     }
+ 
+ 
++def _rule_body(kind: str, name: str, /, **over: object) -> dict:
++    """合法 RuleBody(參數取 SignalsConfig 預設值域內的值);`over` 覆寫任一欄以造非法輸入。
++
++    `kind` / `name` 宣告成 positional-only:`over` 要能覆寫這兩欄(非法 kind / 撞名案例),
++    同名關鍵字否則會撞成 TypeError。
++    """
++    body: dict = {
++        "name": name,
++        "kind": kind,
++        "enabled": True,
++        "notify_discord": True,
++        "cooldown_secs": 600,
++        "params": dict(_RULE_PARAMS[kind]),
++        "cdp_levels": ["ah", "nh"] if kind == "cdp_cross" else [],
++    }
++    body.update(over)
++    return body
++
++
++def _rules(client: BootedClient) -> list[Rule]:
++    r = client.get("/api/stock/signals/rules")
++    assert r.status_code == 200
++    return r.json()["rules"]
++
++
+ class TestLifespanWiring:
+     """hub 掛不上去的失效樣態是「今天都沒訊號」,沒有任何錯誤訊號 → 這條測試是唯一守門。"""
+ 
+@@ -168,8 +208,8 @@ class TestSignalsShutdownIsolation:
+ 
+             for r in (
+                 client.get("/api/stock/signals/today"),
+-                client.get("/api/stock/signals/enabled"),
+-                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
++                client.get("/api/stock/signals/rules"),
++                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
+             ):
+                 assert r.status_code == 503
+                 assert r.json()["detail"]["error"] == "NOT_READY"
+@@ -199,62 +239,203 @@ class TestSignalsTodayRoute:
+             assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
+ 
+ 
+-class TestSignalsEnabledRoute:
+-    def test_default_all_on(self, tmp_path: Path) -> None:
++class TestLegacyEnabledRouteGone:
++    """SC-4:四鍵開關家族退役 —— 規則自帶 `enabled`,兩套開關並存會互相蓋掉。
++
++    hub **就緒**下仍是 404(不是 503):503 代表「暫時不可用、待會再試」,前端會
++    留著舊 UI 等它回來;退役的東西要回 404 才說得清楚「這條路沒了」。
++    """
++
++    def test_legacy_enabled_route_gone(self, tmp_path: Path) -> None:
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            assert app.state.signal_hub is not None  # hub 就緒 → 404 不是降級造成的
++
++            responses = [
++                client.get("/api/stock/signals/enabled"),
++                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
++            ]
++
++        assert [r.status_code for r in responses] == [404, 404]
++
++
++class TestSignalRulesRoutes:
++    """SC-4/6:規則 CRUD 是訊號設定的唯一入口 —— 這層壞掉 = 只能手改檔案 + 重啟 server。
++
++    hub 自身的 CRUD 語意在 `test_signal_hub.py`;這裡只釘 **app 層**:狀態碼、
++    `detail.error` 契約、PUT 的 path id 語意,以及「改完不必重啟」(熱重載)。
++    """
++
++    def test_get_returns_migrated_defaults(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
++            rules = _rules(client)
++            assert [r["kind"] for r in rules] == list(RULE_KINDS)
++            assert rules == app.state.signal_hub.rules()
+ 
+-    def test_put_round_trip(self, tmp_path: Path) -> None:
++    def test_post_creates_201_and_hot_reloads(self, tmp_path: Path) -> None:
++        """201 + 新規則立刻出現在 hub —— 熱重載沒接上的話畫面有、盤中行為沒變。"""
+         app, _ = make_app(tmp_path)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            r = client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}})
++            body = _rule_body("cdp_cross", "我的 CDP", id="客戶端亂填的")
++            r = client.post("/api/stock/signals/rules", json=body)
++
++            assert r.status_code == 201
++            created = r.json()
++            assert created["id"] not in ("", "客戶端亂填的")  # id 由 hub 配,不是客戶端說了算
++            assert created["name"] == "我的 CDP"
++            assert created["cdp_levels"] == ["ah", "nh"]
++            assert [r["id"] for r in app.state.signal_hub.rules()][-1] == created["id"]
++            assert _rules(client)[-1] == created
++
++    def test_put_edits_in_place_and_hot_reloads(self, tmp_path: Path) -> None:
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            before = _rules(client)
++            rid = before[0]["id"]
++
++            r = client.put(
++                f"/api/stock/signals/rules/{rid}",
++                json=_rule_body("cdp_cross", "改過的 CDP", enabled=False, cdp_levels=["ah"]),
++            )
++
+             assert r.status_code == 200
+-            assert r.json() == {"enabled": {**_ALL_ON, "vol_burst": False}}
+-            # 回傳的是新狀態,GET 必須同值(部分更新不得把其他三鍵清掉)
+-            assert client.get("/api/stock/signals/enabled").json() == {
+-                "enabled": {**_ALL_ON, "vol_burst": False}
+-            }
+-
+-    def test_persists_across_restart(self, tmp_path: Path) -> None:
+-        """SC-12:開關是持久化狀態,重啟 server 不得回到全開。"""
++            assert r.json()["id"] == rid  # path id 為準
++            live = {x["id"]: x for x in app.state.signal_hub.rules()}
++            assert live[rid]["name"] == "改過的 CDP"
++            assert live[rid]["enabled"] is False
++            assert live[rid]["cdp_levels"] == ["ah"]
++            assert list(live) == [x["id"] for x in before], "編輯不得改變規則順序"
++
++    def test_delete_204_and_removed(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            client.put("/api/stock/signals/enabled", json={"enabled": {"cdp_cross": False}})
+-        app2, _ = make_app(tmp_path)
+-        with BootedClient(app2, raise_server_exceptions=False) as client2:
+-            assert client2.get("/api/stock/signals/enabled").json() == {
+-                "enabled": {**_ALL_ON, "cdp_cross": False}
+-            }
+-
+-    def test_unknown_key_400(self, tmp_path: Path) -> None:
++            rid = _rules(client)[0]["id"]
++
++            r = client.delete(f"/api/stock/signals/rules/{rid}")
++
++            assert r.status_code == 204
++            assert r.content == b""
++            live = [x["id"] for x in app.state.signal_hub.rules()]
++            assert rid not in live
++            assert [x["id"] for x in _rules(client)] == live
++
++    def test_put_body_id_mismatch_400(self, tmp_path: Path) -> None:
++        """R6:body 帶的 id 與 path 不一致 → 400,不得靜默改到 path 那條。"""
+         app, _ = make_app(tmp_path)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            r = client.put("/api/stock/signals/enabled", json={"enabled": {"nope": True}})
+-            assert r.status_code == 400
+-            assert r.json()["detail"]["error"] == "INVALID_SIGNALS_ENABLED"
+-            assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
++            before = _rules(client)
++            rid, other = before[0]["id"], before[1]["id"]
+ 
+-    def test_non_bool_value_400_not_coerced(self, tmp_path: Path) -> None:
+-        """值的驗證必須落在 hub(400 契約),不能讓 pydantic 把 "yes" 寬鬆轉成 True。"""
++            r = client.put(
++                f"/api/stock/signals/rules/{rid}",
++                json=_rule_body("cdp_cross", "改名了", id=other),
++            )
++
++            assert r.status_code == 400
++            assert r.json()["detail"]["error"] == "INVALID_RULE"
++            assert _rules(client) == before
++
++    @pytest.mark.parametrize(
++        "over",
++        [
++            pytest.param({"name": "   "}, id="空白名稱"),
++            pytest.param({"name": "CDP 穿越"}, id="撞既有規則名"),
++            pytest.param({"kind": "nope"}, id="不認得的 kind"),
++            pytest.param({"cooldown_secs": 10}, id="cooldown 低於下限"),
++            pytest.param({"enabled": "yes"}, id="非 bool 的 enabled 不得被寬鬆轉型"),
++            pytest.param({"params": {}}, id="params 缺鍵"),
++            pytest.param({"params": {"pct": 2.0, "window_secs": 300, "x": 1}}, id="params 多鍵"),
++            pytest.param({"params": {"pct": 999.0, "window_secs": 300}}, id="params 違域"),
++            pytest.param({"cdp_levels": ["zz"]}, id="非 cdp 規則帶線"),
++        ],
++    )
++    def test_invalid_body_400(self, tmp_path: Path, over: dict) -> None:
++        """非法輸入一律 400 INVALID_RULE(不是 422,前端只解 detail.error)。"""
+         app, _ = make_app(tmp_path)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            r = client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": "yes"}})
++            before = _rules(client)
++
++            r = client.post("/api/stock/signals/rules", json=_rule_body("surge_crash", "新", **over))
++
+             assert r.status_code == 400
+-            assert r.json()["detail"]["error"] == "INVALID_SIGNALS_ENABLED"
+-            assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
++            assert r.json()["detail"]["error"] == "INVALID_RULE"
++            assert _rules(client) == before, "被拒的請求不得留下半套狀態"
++
++    def test_unknown_id_404(self, tmp_path: Path) -> None:
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            put = client.put(
++                "/api/stock/signals/rules/r-nope", json=_rule_body("limit_lock", "X", id="r-nope")
++            )
++            delete = client.delete("/api/stock/signals/rules/r-nope")
++
++            for r in (put, delete):
++                assert r.status_code == 404
++                assert r.json()["detail"]["error"] == "RULE_NOT_FOUND"
++
++    def test_save_failure_500(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++        """R21:落檔失敗要當面回 500,不得回 200 讓畫面顯示一條重啟後就消失的規則。"""
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            before = _rules(client)
++
++            def _boom(path: Path, rules: list) -> None:
++                raise OSError("磁碟滿了")
++
++            monkeypatch.setattr(hub_mod, "save_rules", _boom)
++            responses = [
++                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
++                client.put(
++                    f"/api/stock/signals/rules/{before[0]['id']}",
++                    json=_rule_body("cdp_cross", "改名"),
++                ),
++                client.delete(f"/api/stock/signals/rules/{before[0]['id']}"),
++            ]
++
++            for r in responses:
++                assert r.status_code == 500
++                assert r.json()["detail"]["error"] == "RULE_SAVE_FAILED"
++            monkeypatch.undo()
++            assert _rules(client) == before
++
++    def test_bad_rules_file_degrades(self, tmp_path: Path) -> None:
++        """邊界 5 / R9:壞規則檔 = hub 整個不啟動(靜默套預設會在盤中改變推播行為)。
++
++        失效樣態不是 500 也不是空清單,而是四條 rules route 全 503 NOT_READY;
++        其他引擎照常。
++        """
++        (tmp_path / _RULES_FILE).write_text("{壞掉的 json", encoding="utf-8")
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            assert app.state.signal_hub is None
++            assert app.state.stock is not None  # 訊號層單獨降級,不波及個股引擎
++
++            responses = [
++                client.get("/api/stock/signals/rules"),
++                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
++                client.put("/api/stock/signals/rules/r-1-000", json=_rule_body("limit_lock", "新")),
++                client.delete("/api/stock/signals/rules/r-1-000"),
++            ]
++
++        for r in responses:
++            assert r.status_code == 503
++            assert r.json()["detail"]["error"] == "NOT_READY"
+ 
+ 
+ class TestSignalRoutesNotReady:
+-    """hub 缺席(stock engine 未就緒)→ 三條全 503 NOT_READY,不是 500 也不是空回應。"""
++    """hub 缺席(stock engine 未就緒)→ 訊號 route 全 503 NOT_READY,不是 500 也不是空回應。"""
+ 
+-    def test_all_three_return_503(self, tmp_path: Path) -> None:
++    def test_all_signal_routes_return_503(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path, with_stock=False)
+         with BootedClient(app, raise_server_exceptions=False) as client:
++            rid = "r-1-000"
+             responses = [
+                 client.get("/api/stock/signals/today"),
+-                client.get("/api/stock/signals/enabled"),
+-                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
++                client.get("/api/stock/signals/rules"),
++                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
++                client.put(f"/api/stock/signals/rules/{rid}", json=_rule_body("limit_lock", "新")),
++                client.delete(f"/api/stock/signals/rules/{rid}"),
+             ]
+         for r in responses:
+             assert r.status_code == 503
+diff --git a/tests/test_signal_rules.py b/tests/test_signal_rules.py
+new file mode 100644
+index 0000000..c9b0c14
+--- /dev/null
++++ b/tests/test_signal_rules.py
+@@ -0,0 +1,493 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from copycat.signal_rules import (
++    CDP_LEVELS,
++    COOLDOWN_MAX,
++    COOLDOWN_MIN,
++    MAX_RULES,
++    PARAM_SPECS,
++    RULE_KINDS,
++    Rule,
++    RuleError,
++    default_rules,
++    load_rules,
++    new_rule_id,
++    normalize_rule,
++    rule_config,
++    save_rules,
++)
++from copycat.signals_config import SignalsConfig
++
++VALID_PARAMS: dict[str, dict[str, float]] = {
++    "cdp_cross": {"rearm_ticks": 5},
++    "surge_crash": {"pct": 2.0, "window_secs": 300},
++    "vol_burst": {
++        "ratio": 3,
++        "window_secs": 300,
++        "min_elapsed_min": 15,
++        "min_window_lots": 100,
++        "min_day_lots": 500,
++    },
++    "limit_lock": {},
++}
++
++
++def make(kind: str = "cdp_cross", **over: Any) -> Any:
++    """合法規則樣板;over 覆寫任一欄(含刻意的非法值)。"""
++    rule: dict[str, Any] = {
++        "id": "r-1-000",
++        "name": f"規則-{kind}",
++        "kind": kind,
++        "enabled": True,
++        "notify_discord": True,
++        "cooldown_secs": 600,
++        "params": dict(VALID_PARAMS[kind]),
++        "cdp_levels": list(CDP_LEVELS) if kind == "cdp_cross" else [],
++    }
++    rule.update(over)
++    return rule
++
++
++class TestConstants:
++    def test_kinds_and_levels(self) -> None:
++        assert RULE_KINDS == ("cdp_cross", "surge_crash", "vol_burst", "limit_lock")
++        assert CDP_LEVELS == ("ah", "nh", "cdp", "nl", "al")
++        assert (COOLDOWN_MIN, COOLDOWN_MAX) == (60, 86_400)
++        assert MAX_RULES == 30
++
++    def test_param_specs_cover_every_kind(self) -> None:
++        assert set(PARAM_SPECS) == set(RULE_KINDS)
++        assert PARAM_SPECS["limit_lock"] == {}
++
++
++class TestNormalizeHappyPath:
++    @pytest.mark.parametrize("kind", RULE_KINDS)
++    def test_valid_rule_of_each_kind(self, kind: str) -> None:
++        out = normalize_rule(make(kind), {})
++        assert out["kind"] == kind
++        assert set(out["params"]) == set(PARAM_SPECS[kind])
++        assert all(isinstance(v, float) for v in out["params"].values())
++
++    def test_name_stripped(self) -> None:
++        assert normalize_rule(make(name="  盤中 CDP  "), {})["name"] == "盤中 CDP"
++
++    def test_idempotent(self) -> None:
++        once = normalize_rule(make("vol_burst"), {})
++        assert normalize_rule(once, {}) == once
++
++    def test_cooldown_bounds_inclusive(self) -> None:
++        assert normalize_rule(make(cooldown_secs=COOLDOWN_MIN), {})["cooldown_secs"] == COOLDOWN_MIN
++        assert normalize_rule(make(cooldown_secs=COOLDOWN_MAX), {})["cooldown_secs"] == COOLDOWN_MAX
++
++    def test_integral_float_cooldown_coerced_to_int(self) -> None:
++        out = normalize_rule(make(cooldown_secs=600.0), {})
++        assert out["cooldown_secs"] == 600
++        assert isinstance(out["cooldown_secs"], int)
++
++
++class TestNormalizeParams:
++    @pytest.mark.parametrize(
++        ("kind", "key"),
++        [(k, key) for k, spec in PARAM_SPECS.items() for key in spec],
++    )
++    def test_below_min_and_above_max_rejected(self, kind: str, key: str) -> None:
++        lo, hi = PARAM_SPECS[kind][key]
++        for bad in (lo - 1, hi + 1):
++            params = dict(VALID_PARAMS[kind])
++            params[key] = bad
++            with pytest.raises(RuleError, match="INVALID_RULE"):
++                normalize_rule(make(kind, params=params), {})
++
++    @pytest.mark.parametrize(
++        ("kind", "key"),
++        [(k, key) for k, spec in PARAM_SPECS.items() for key in spec],
++    )
++    def test_bounds_inclusive(self, kind: str, key: str) -> None:
++        lo, hi = PARAM_SPECS[kind][key]
++        for good in (lo, hi):
++            params = dict(VALID_PARAMS[kind])
++            params[key] = good
++            assert normalize_rule(make(kind, params=params), {})["params"][key] == float(good)
++
++    @pytest.mark.parametrize(
++        ("kind", "key"),
++        [(k, key) for k, spec in PARAM_SPECS.items() for key in spec],
++    )
++    def test_missing_key_rejected(self, kind: str, key: str) -> None:
++        params = dict(VALID_PARAMS[kind])
++        del params[key]
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(kind, params=params), {})
++
++    @pytest.mark.parametrize("kind", RULE_KINDS)
++    def test_extra_key_rejected(self, kind: str) -> None:
++        params = dict(VALID_PARAMS[kind])
++        params["bogus"] = 1
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(kind, params=params), {})
++
++    @pytest.mark.parametrize(
++        ("kind", "key"),
++        [(k, key) for k, spec in PARAM_SPECS.items() for key in spec],
++    )
++    def test_bool_value_rejected(self, kind: str, key: str) -> None:
++        """bool 是 int 子類 —— 不排除的話 True 會被當 1 靜默通過."""
++        params = dict(VALID_PARAMS[kind])
++        params[key] = True  # type: ignore[assignment]
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(kind, params=params), {})
++
++    def test_non_numeric_value_rejected(self) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make("cdp_cross", params={"rearm_ticks": "5"}), {})
++
++    def test_params_not_a_dict_rejected(self) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make("limit_lock", params=[]), {})
++
++    @pytest.mark.parametrize(
++        ("kind", "key"),
++        [
++            ("cdp_cross", "rearm_ticks"),
++            ("vol_burst", "min_window_lots"),
++            ("vol_burst", "min_day_lots"),
++        ],
++    )
++    def test_integer_keys_reject_fractional(self, kind: str, key: str) -> None:
++        params = dict(VALID_PARAMS[kind])
++        params[key] = float(params[key]) + 0.5
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(kind, params=params), {})
++
++    @pytest.mark.parametrize(
++        ("kind", "key"),
++        [
++            ("cdp_cross", "rearm_ticks"),
++            ("vol_burst", "min_window_lots"),
++            ("vol_burst", "min_day_lots"),
++        ],
++    )
++    def test_integer_keys_accept_integral_float(self, kind: str, key: str) -> None:
++        params = dict(VALID_PARAMS[kind])
++        params[key] = float(params[key])
++        assert normalize_rule(make(kind, params=params), {})["params"][key] == params[key]
++
++    def test_float_keys_accept_fractional(self) -> None:
++        params = dict(VALID_PARAMS["surge_crash"])
++        params["pct"] = 2.5
++        assert normalize_rule(make("surge_crash", params=params), {})["params"]["pct"] == 2.5
++
++
++class TestNormalizeFields:
++    def test_unknown_kind_rejected(self) -> None:
++        rule = make("cdp_cross")
++        rule["kind"] = "nope"
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(rule, {})
++
++    def test_blank_name_rejected(self) -> None:
++        for bad in ("", "   "):
++            with pytest.raises(RuleError, match="INVALID_RULE"):
++                normalize_rule(make(name=bad), {})
++
++    def test_missing_id_rejected(self) -> None:
++        for bad in ("", 3):
++            with pytest.raises(RuleError, match="INVALID_RULE"):
++                normalize_rule(make(id=bad), {})
++
++    @pytest.mark.parametrize("field", ["enabled", "notify_discord"])
++    def test_non_bool_flags_rejected(self, field: str) -> None:
++        rule = make()
++        rule[field] = 1
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(rule, {})
++
++    @pytest.mark.parametrize("bad", [59, 86_401, True, 600.5, "600"])
++    def test_cooldown_out_of_domain_rejected(self, bad: object) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(cooldown_secs=bad), {})
++
++
++class TestNormalizeNameUniqueness:
++    def test_duplicate_name_against_others_rejected(self) -> None:
++        other = normalize_rule(make(id="r-1-001", name="重複"), {})
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(id="r-1-002", name="重複"), {"r-1-001": other})
++
++    def test_duplicate_name_after_strip_rejected(self) -> None:
++        other = normalize_rule(make(id="r-1-001", name="重複"), {})
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(id="r-1-002", name="  重複 "), {"r-1-001": other})
++
++    def test_self_excluded_from_others_so_rename_noop_allowed(self) -> None:
++        """R6:others 不含自身 —— 編輯規則但不改名不該被自己撞掉."""
++        me = normalize_rule(make(id="r-1-001", name="我"), {})
++        assert normalize_rule(make(id="r-1-001", name="我"), {})["name"] == "我"
++        # 呼叫端若誤把自身放進 others,契約上就是撞名 —— 明示這個界線
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(id="r-1-001", name="我"), {"r-1-001": me})
++
++
++class TestNormalizeCdpLevels:
++    def test_cdp_cross_requires_non_empty_levels(self) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make("cdp_cross", cdp_levels=[]), {})
++
++    def test_unknown_level_rejected(self) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make("cdp_cross", cdp_levels=["ah", "zz"]), {})
++
++    def test_subset_kept_in_order_and_deduped(self) -> None:
++        out = normalize_rule(make("cdp_cross", cdp_levels=["nl", "ah", "nl"]), {})
++        assert out["cdp_levels"] == ["nl", "ah"]
++
++    @pytest.mark.parametrize("kind", [k for k in RULE_KINDS if k != "cdp_cross"])
++    def test_non_cdp_kind_must_have_empty_levels(self, kind: str) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make(kind, cdp_levels=["ah"]), {})
++
++    def test_levels_not_a_list_rejected(self) -> None:
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make("cdp_cross", cdp_levels="ah"), {})
++
++
++class TestNewRuleId:
++    def test_format(self) -> None:
++        assert new_rule_id(1_754_400_000, 7) == "r-1754400000-007"
++
++    def test_seq_beyond_three_digits_not_truncated(self) -> None:
++        assert new_rule_id(1, 1234) == "r-1-1234"
++
++
++class TestDefaultRules:
++    def test_one_rule_per_kind_all_valid(self) -> None:
++        rules = default_rules(SignalsConfig(), {})
++        assert [r["kind"] for r in rules] == list(RULE_KINDS)
++        assert len({r["id"] for r in rules}) == len(rules)
++        assert len({r["name"] for r in rules}) == len(rules)
++        by_id = {r["id"]: r for r in rules}
++        for r in rules:
++            others = {k: v for k, v in by_id.items() if k != r["id"]}
++            assert normalize_rule(r, others) == r
++
++    def test_legacy_flags_map_to_enabled(self) -> None:
++        rules = default_rules(SignalsConfig(), {"vol_burst": False, "cdp_cross": True})
++        flags = {r["kind"]: r["enabled"] for r in rules}
++        assert flags["vol_burst"] is False
++        assert flags["cdp_cross"] is True
++        assert flags["surge_crash"] is True  # 缺鍵 = fail-open 全開
++        assert flags["limit_lock"] is True
++
++    def test_params_seeded_from_config(self) -> None:
++        cfg = SignalsConfig(
++            cdp_rearm_ticks=7,
++            surge_pct=3.5,
++            surge_window_secs=120.0,
++            vol_ratio=4.0,
++            vol_min_elapsed_min=20.0,
++            vol_min_window_lots=200,
++            vol_min_day_lots=900,
++        )
++        by_kind = {r["kind"]: r for r in default_rules(cfg, {})}
++        assert by_kind["cdp_cross"]["params"]["rearm_ticks"] == 7
++        assert by_kind["cdp_cross"]["cdp_levels"] == list(CDP_LEVELS)
++        assert by_kind["surge_crash"]["params"] == {"pct": 3.5, "window_secs": 120.0}
++        assert by_kind["vol_burst"]["params"] == {
++            "ratio": 4.0,
++            "window_secs": 120.0,
++            "min_elapsed_min": 20.0,
++            "min_window_lots": 200.0,
++            "min_day_lots": 900.0,
++        }
++        assert by_kind["limit_lock"]["params"] == {}
++
++    def test_cooldowns_seeded_per_kind(self) -> None:
++        cfg = SignalsConfig(
++            cdp_cooldown_secs=300.0,
++            surge_cooldown_secs=900.0,
++            vol_cooldown_secs=1200.0,
++            limit_cooldown_secs=180.0,
++        )
++        by_kind = {r["kind"]: r["cooldown_secs"] for r in default_rules(cfg, {})}
++        assert by_kind == {
++            "cdp_cross": 300,
++            "surge_crash": 900,
++            "vol_burst": 1200,
++            "limit_lock": 180,
++        }
++
++    def test_out_of_domain_config_cooldown_clamped_not_raised(self) -> None:
++        """設定檔可以把冷卻設到界外 —— 遷移不得因此炸掉(clamp 並 log)."""
++        rules = default_rules(SignalsConfig(cdp_cooldown_secs=1.0), {})
++        by_kind = {r["kind"]: r["cooldown_secs"] for r in rules}
++        assert by_kind["cdp_cross"] == COOLDOWN_MIN
++
++
++class TestLoadSaveRules:
++    def test_missing_file_returns_none(self, tmp_path: Path) -> None:
++        """None = 沒這個檔 → hub 走遷移;與「空陣列」語意不同."""
++        assert load_rules(tmp_path / "nope.json") is None
++
++    def test_empty_list_round_trips_as_empty(self, tmp_path: Path) -> None:
++        """使用者刪光規則不得復活預設(邊界 1)."""
++        path = tmp_path / "rules.json"
++        save_rules(path, [])
++        assert load_rules(path) == []
++
++    def test_round_trip(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        rules: list[Rule] = [
++            normalize_rule(make("cdp_cross", id="r-1-000", name="A"), {}),
++            normalize_rule(make("vol_burst", id="r-1-001", name="B"), {}),
++        ]
++        save_rules(path, rules)
++        assert load_rules(path) == rules
++
++    def test_saved_file_carries_cache_version(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        save_rules(path, [])
++        payload = json.loads(path.read_text(encoding="utf-8"))
++        assert payload["_cache_version"] == 1
++        assert payload["rules"] == []
++
++    def test_bad_json_raises(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        path.write_text("{not json", encoding="utf-8")
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_non_object_payload_raises(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        path.write_text("[]", encoding="utf-8")
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_version_mismatch_raises(self, tmp_path: Path) -> None:
++        """版本 bump = 開發期動作,屆時必須同時寫轉換 —— 大聲不靜默."""
++        path = tmp_path / "rules.json"
++        path.write_text(json.dumps({"_cache_version": 999, "rules": []}), encoding="utf-8")
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_invalid_rule_in_file_raises(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        bad = make("cdp_cross", cooldown_secs=5)
++        path.write_text(
++            json.dumps({"_cache_version": 1, "rules": [bad]}, ensure_ascii=False), encoding="utf-8"
++        )
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_duplicate_names_in_file_raise(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        rules = [make(id="r-1-000", name="同"), make(id="r-1-001", name="同")]
++        path.write_text(
++            json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
++        )
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_duplicate_ids_in_file_raise(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        rules = [make(id="r-1-000", name="甲"), make(id="r-1-000", name="乙")]
++        path.write_text(
++            json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
++        )
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_over_max_rules_raises(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        rules = [make(id=f"r-1-{i:03d}", name=f"n{i}") for i in range(MAX_RULES + 1)]
++        path.write_text(
++            json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
++        )
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_exactly_max_rules_ok(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        rules = [make(id=f"r-1-{i:03d}", name=f"n{i}") for i in range(MAX_RULES)]
++        path.write_text(
++            json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
++        )
++        loaded = load_rules(path)
++        assert loaded is not None and len(loaded) == MAX_RULES
++
++    def test_save_oserror_propagates(self, tmp_path: Path) -> None:
++        """R12/R21:落檔失敗必須往外拋(route 500 RULE_SAVE_FAILED),不得吞掉."""
++        blocker = tmp_path / "blocker"
++        blocker.write_text("x", encoding="utf-8")
++        with pytest.raises(OSError):
++            save_rules(blocker / "rules.json", [])
++
++
++class TestRuleConfig:
++    def test_cdp_cross_mapping(self) -> None:
++        base = SignalsConfig()
++        rule = normalize_rule(
++            make("cdp_cross", cooldown_secs=900, params={"rearm_ticks": 8}), {}
++        )
++        cfg = rule_config(rule, base)
++        assert cfg.cdp_rearm_ticks == 8
++        assert isinstance(cfg.cdp_rearm_ticks, int)
++        assert cfg.cdp_cooldown_secs == 900
++        assert cfg.surge_pct == base.surge_pct  # 其他 kind 欄位不動
++
++    def test_surge_crash_mapping(self) -> None:
++        rule = normalize_rule(
++            make("surge_crash", cooldown_secs=900, params={"pct": 3.5, "window_secs": 120}), {}
++        )
++        cfg = rule_config(rule, SignalsConfig())
++        assert cfg.surge_pct == 3.5
++        assert cfg.surge_window_secs == 120.0
++        assert cfg.surge_cooldown_secs == 900
++
++    def test_vol_burst_mapping_uses_surge_window_secs(self) -> None:
++        """SignalsConfig 無 vol_window_secs;per-rule detector 讓 surge_window_secs 可共用."""
++        rule = normalize_rule(
++            make(
++                "vol_burst",
++                cooldown_secs=1200,
++                params={
++                    "ratio": 4.5,
++                    "window_secs": 90,
++                    "min_elapsed_min": 20,
++                    "min_window_lots": 150,
++                    "min_day_lots": 800,
++                },
++            ),
++            {},
++        )
++        cfg = rule_config(rule, SignalsConfig())
++        assert cfg.vol_ratio == 4.5
++        assert cfg.surge_window_secs == 90.0
++        assert cfg.vol_min_elapsed_min == 20.0
++        assert cfg.vol_min_window_lots == 150
++        assert isinstance(cfg.vol_min_window_lots, int)
++        assert cfg.vol_min_day_lots == 800
++        assert isinstance(cfg.vol_min_day_lots, int)
++        assert cfg.vol_cooldown_secs == 1200
++
++    def test_limit_lock_mapping(self) -> None:
++        rule = normalize_rule(make("limit_lock", cooldown_secs=180), {})
++        cfg = rule_config(rule, SignalsConfig())
++        assert cfg.limit_cooldown_secs == 180
++
++    @pytest.mark.parametrize("kind", RULE_KINDS)
++    def test_non_signal_fields_preserved(self, kind: str) -> None:
++        base = SignalsConfig(discord_per_min=7, basis_gap_secs=0.0)
++        cfg = rule_config(normalize_rule(make(kind), {}), base)
++        assert cfg.discord_per_min == 7
++        assert cfg.basis_gap_secs == 0.0
++
++    def test_base_config_not_mutated(self) -> None:
++        base = SignalsConfig()
++        rule_config(normalize_rule(make("cdp_cross", params={"rearm_ticks": 9}), {}), base)
++        assert base.cdp_rearm_ticks == SignalsConfig().cdp_rearm_ticks

@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "verdict": "1 P0 / 5 P1 / 4 P2 — 全 accepted",
+  "dispositions": {
+    "R1(P0)": "T2 改純加法(enabled 家族暫存);新 T3b = 🔴 單一跨檔退役 commit(hub API + app routes + Body + 測試 8 條 + 503 清單換 rules),排在 T3 rules routes 之後;紅 = test_legacy_enabled_route_gone",
+    "R2": "_load_enabled 保留改名 _legacy_flags(遷移專用);補冷啟動 vol_burst:false 對映測試",
+    "R3": "T2 補 drop_code 逐 slot 實作項 + test_watchlist_removal_stops_all_rules(SC-5 硬性)",
+    "R4": "test_bad_rules_file_degrades 歸 T3(routes 503 層);T2 只測建構拋",
+    "R5": "T3b 紅測試 test_legacy_enabled_route_gone(404,hub 就緒下)",
+    "R6": "commit 分類修正:清理 = chore 無 emoji 混用;退役 = 🔴;引擎 = 🟢[green]",
+    "R7": "T4 清單補 useSignalsConfig.ts 本體刪除",
+    "R8": "T4 補 useSignalRules hook 層測試 + rule_name 缺值 fallback 測試",
+    "R9": "日別檢查職責照 design(_resolve_basis 檢查;_distribute 只過濾分發)",
+    "R10": "validate gate 豁免明寫(不動 replay/engine;harness.json verify 無 validate;worktree 無 data 種子)"
+  },
+  "exit": "P0/P1 修入 PLAN v2 → 固定 1 輪 → Phase 3"
+}
