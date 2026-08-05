@@ -874,6 +874,28 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
   });
 
+  /** 🔴 無漲跌停(autofit 域)時,域原本只由**分鐘收盤**決定 —— 逐筆高一離開收盤群
+   *  整個標記就消失,而畫面上完全沒有訊號。既有元件測試全走漲跌停分支或 high/low = null,
+   *  對這條路徑零覆蓋,所以另造一份無漲跌停 snapshot。 */
+  it("無漲跌停 + 當日高遠離收盤群 → 域跟著擴,標記仍畫得出來", () => {
+    const autofit = fromSnapshot({
+      code: "2330", seq: 2,
+      last: { p: 2_390_000, t: "09:02:30.000", cum_vol: 12 },
+      vwap: 2_380_000,
+      minutes: {
+        "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_600_000, l: 2_370_000 },
+        "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_395_000, l: 2_385_000 },
+      },
+      ticks: [], book: null,
+      // upper/lower 缺 → 走對稱 autofit;舊域 [2_243_000, 2_397_000] 裝不下 2_600_000
+      meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: 100 },
+      high: 2_600_000, low: 2_370_000,
+    });
+    const { container } = wrap(<StockIntradayChart accum={autofit} />);
+    expect(container.querySelector('circle[data-testid="day-high"]')).toBeTruthy();
+    expect(container.querySelector('circle[data-testid="day-low"]')).toBeTruthy();
+  });
+
   it("域內但沒有分鐘的 h 等於該值(反查落空)→ 不畫,不退而求其次挑別的分鐘", () => {
     const { container } = wrap(<StockIntradayChart accum={withHL(2_392_000, 2_371_000)} />);
     expect(container.querySelector('[data-testid="day-high"]')).toBeNull();

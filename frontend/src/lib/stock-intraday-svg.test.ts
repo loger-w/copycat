@@ -6,11 +6,13 @@ import {
   buildIntradayGeometry,
   minuteToX,
   overlayLines,
+  PAD_Y,
   plotWidth,
   R_AXIS_W,
   sideSummary,
   SUB_TOP_PAD,
   X_END_MIN,
+  X_LABEL_H,
   X_START_MIN,
   Y_AXIS_W,
 } from "@/lib/stock-intraday-svg";
@@ -285,6 +287,110 @@ describe("buildIntradayGeometry", () => {
     // ref=0 不得留在刻度上變成假價位
     expect(g.yTicks.every((t) => t.priceMilli > 0)).toBe(true);
     expect(g.hasRef).toBe(false);
+  });
+
+  /** 🔴 autofit 域原本只吃**每分鐘收盤**,裝不下逐筆極值 → 當日高低標記被 markFor 的
+   *  域外 guard 靜默攔掉(2330 2026-07-30 盤後:域 [2160.5, 2259.5] 差 0.5 元裝不下
+   *  當日最高 2260.0)。域改為併入 `input.high` / `input.low`,0 值仍依歸一慣例視為不可得。 */
+  describe("autofit 域含當日高低(無漲跌停)", () => {
+    const W = Y_AXIS_W + 270 + R_AXIS_W;
+    const H = 100;
+    /** 長上影:540 的逐筆高遠離兩分鐘的收盤(2_200_000 / 2_210_000);ref = 首筆收盤 */
+    const SPIKE = minutes([
+      [540, { c: 2_200_000, v: 1, h: 2_600_000 }],
+      [541, { c: 2_210_000, v: 1 }],
+    ]);
+    const REF = 2_200_000;
+
+    it("長上影極端分鐘 → 域含 high,highMark 可畫(SC-1/SC-3)", () => {
+      const g = buildIntradayGeometry(
+        { minutes: SPIKE, meta: null, high: 2_600_000 },
+        { width: W, height: H },
+      );
+      expect(g.yDomain[1]).toBeGreaterThanOrEqual(2_600_000);
+      expect(g.highMark).not.toBeNull();
+      expect(g.highMark!.priceMilli).toBe(2_600_000);
+      expect(g.highMark!.x).toBeCloseTo(minuteToX(540, W), 6);
+      // 落在繪圖區內才算畫得出來(域裝不下時標記會壓到底部時間帶上)
+      expect(g.highMark!.y).toBeGreaterThanOrEqual(PAD_Y);
+      expect(g.highMark!.y).toBeLessThanOrEqual(H - X_LABEL_H - PAD_Y);
+    });
+
+    it("low 低於收盤群 → 域含 low,lowMark 可畫(SC-2)", () => {
+      const dip = minutes([
+        [540, { c: 2_200_000, v: 1, l: 1_900_000 }],
+        [541, { c: 2_190_000, v: 1 }],
+      ]);
+      const g = buildIntradayGeometry(
+        { minutes: dip, meta: null, low: 1_900_000 },
+        { width: W, height: H },
+      );
+      expect(g.yDomain[0]).toBeLessThanOrEqual(1_900_000);
+      expect(g.lowMark).not.toBeNull();
+      expect(g.lowMark!.priceMilli).toBe(1_900_000);
+      expect(g.lowMark!.x).toBeCloseTo(minuteToX(540, W), 6);
+    });
+
+    /** 白名單 7:TC4 送 "0" → 後端 `to_milli_units` 原樣轉 0。危險方向是 **low = 0**
+     *  (`Math.min` 會把它吃進域讓下緣變負;high = 0 被 `Math.max` 自然忽略,測不出漏做 norm)。 */
+    it("low = 0 → 視為不可得,域同未傳且下緣仍 > 0", () => {
+      const base = buildIntradayGeometry({ minutes: SPIKE, meta: null }, { width: W, height: H });
+      const g = buildIntradayGeometry(
+        { minutes: SPIKE, meta: null, low: 0 },
+        { width: W, height: H },
+      );
+      expect(g.yDomain).toEqual(base.yDomain);
+      expect(g.yDomain[0]).toBeGreaterThan(0);
+    });
+
+    it("含極值後域仍以 ref 為中心(SC-4:對稱語意不變,只是半幅池擴大)", () => {
+      const g = buildIntradayGeometry(
+        { minutes: SPIKE, meta: null, high: 2_600_000 },
+        { width: W, height: H },
+      );
+      expect((g.yDomain[0] + g.yDomain[1]) / 2).toBeCloseTo(REF, 6);
+    });
+
+    /** SC-5:單點 fixture 撐不住「域必含當日極值」這條不變式 —— 只要 high/low 相對
+     *  收盤群的位置換一組就可能落回舊行為而沒有測試會紅。改成 table-driven 掃五種位置。 */
+    const INV = minutes([
+      [540, { c: 2_200_000, v: 1, h: 2_600_000, l: 1_900_000 }],
+      [541, { c: 2_210_000, v: 1, h: 2_215_000, l: 2_205_000 }],
+    ]);
+    it.each([
+      ["(a) high 在收盤群之上且舊域外", 2_600_000, 2_205_000, false],
+      ["(b) low 在收盤群之下且舊域外", 2_215_000, 1_900_000, false],
+      ["(c) high/low 皆在收盤群內", 2_210_000, 2_200_000, true],
+      ["(d) high === ref", REF, REF, true],
+      ["(e) low = 0(不可得)", null, 0, true],
+    ] as [string, number | null, number | null, boolean][])(
+      "不變式:域必含當日極值 — %s",
+      (_name, high, low, sameAsBaseline) => {
+        const base = buildIntradayGeometry({ minutes: INV, meta: null }, { width: W, height: H });
+        const g = buildIntradayGeometry(
+          { minutes: INV, meta: null, high, low },
+          { width: W, height: H },
+        );
+        if ((high ?? 0) > 0) expect(high!).toBeLessThanOrEqual(g.yDomain[1]);
+        if ((low ?? 0) > 0) expect(g.yDomain[0]).toBeLessThanOrEqual(low!);
+        expect(g.yDomain[0]).toBeGreaterThan(0);
+        if (sameAsBaseline) expect(g.yDomain).toEqual(base.yDomain);
+      },
+    );
+
+    /** 刻意接受的連帶變化:域是疊線的裁切門檻,域一寬原本被裁掉的 CDP/MA 就會出現。
+     *  與 round4 R6「域收窄時疊線變少」是同一條語意的反向。 */
+    it("疊線裁切門檻隨域放寬(舊域外、新域內的 ma5 由不給變成給)", () => {
+      const g = buildIntradayGeometry(
+        { minutes: SPIKE, meta: null, high: 2_600_000 },
+        { width: W, height: H },
+      );
+      // 2_500_000 > 舊上緣 2_224_200(半幅由 ref×1% 決定),< 新上緣 2_640_000
+      const overlay = { cdp: null, ma5: 2_500_000, ma20: null, date: "2026-07-30" };
+      expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.level)).toEqual([
+        "ma5",
+      ]);
+    });
   });
 
   // 🔴 SC-4:刻度由「以 5% 為分隔的 5 點」改為 ±2/4/6/8/10% 的 11 點(2330 tick 5 元,不去重)
