@@ -39,7 +39,16 @@ async function fetchFuturesBars(key: FuturesBarsKey, tf: "1" | "D"): Promise<Mar
 
 /** 空態 / 壞態由**消費端**判(`data.meta.source === "unavailable"` → 圖表區印進行式
  *  文案)—— hook 只負責把後端講的話原樣帶回來,不在這裡把降級翻譯成 error。 */
-export function useFuturesBars(key: FuturesBarsKey, mode: FutChartMode) {
+/** @param active 使用者是否正看著期貨 tab。期貨 tab 的 DOM 由 App 以 `hidden` 保留
+ *  (不 unmount),沒有這道 gate 的話輪詢會在背景整晚跑(review LF-2)。
+ *
+ *  **只停 `refetchInterval`,不關 `enabled`**:輪詢是這支 query 唯一的背景請求來源,
+ *  停掉即達成目的;而 `enabled: false` 會讓切回 tab 時 query 退回 pending 態 →
+ *  圖表閃一次「載入中」而不是留著舊圖等新料(`staleTime: 0` 本來就會立刻重抓)。
+ *
+ *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更(同 FuturesLadder 的
+ *  `qtyState` 慣例)。 */
+export function useFuturesBars(key: FuturesBarsKey, mode: FutChartMode, active = true) {
   const isMinute = mode !== "day";
   const tf: "1" | "D" = isMinute ? "1" : "D";
   return useQuery({
@@ -51,6 +60,6 @@ export function useFuturesBars(key: FuturesBarsKey, mode: FutChartMode) {
     retry: 1,
     staleTime: isMinute ? 0 : Infinity,
     // 函式形式:TQ 每次 interval 到期都重新求值 → 日盤收 / 夜盤開的開關不依賴外部 re-render
-    refetchInterval: () => (isMinute && inFuturesAllDayHours() ? POLL_MS : false),
+    refetchInterval: () => (active && isMinute && inFuturesAllDayHours() ? POLL_MS : false),
   });
 }

@@ -39,6 +39,10 @@ interface Props {
   wsStatus: WsStatus;
   /** 加權指數(App 的 `useIndexStream().twse`)—— 期現價差的現貨腿。 */
   twse: IndexSeries | null;
+  /** 使用者是否正看著期貨 tab(App 的 `tab === "futures"`)。本頁的 DOM 由 App 以
+   *  `hidden` 保留 → 沒有這道 gate 主圖會在背景整晚輪詢(review LF-2)。
+   *  未給時預設 true(既有呼叫路徑不靜默停更)。 */
+  active?: boolean;
 }
 
 export function FuturesPage({
@@ -49,6 +53,7 @@ export function FuturesPage({
   resolvedYm,
   wsStatus,
   twse,
+  active = true,
 }: Props) {
   const diff = state?.p != null && state.ref != null ? state.p - state.ref : null;
   const chg = diff !== null && state?.ref ? (diff / state.ref) * 100 : null;
@@ -135,7 +140,7 @@ export function FuturesPage({
       {/* 近全時段主圖(SC-1/2/4/7/8/11)。掛在 DepthBar 下方 —— 五檔是「現在」、
           圖是「怎麼走到現在」,由上而下的閱讀順序。 */}
       {barsKey === null ? null : (
-        <FuturesChart product={barsKey} state={state} resolvedYm={resolvedYm} />
+        <FuturesChart product={barsKey} state={state} resolvedYm={resolvedYm} active={active} />
       )}
     </div>
   );
