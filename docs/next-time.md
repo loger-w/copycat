@@ -5,6 +5,12 @@
   重啟後打 `GET /api/capital/positions` 確認形狀正常、面板部位列顯示與現況一致(單一
   種類帳戶下畫面應無差異,sec 列多一個 現/資/券 小字標籤)。同檔資+集保並存是低頻
   狀態,真要驗兩列並存需等實際持倉出現
+- [ ] **store 鍵未帶 market**(round 1 review A-2 的殘留):鍵是 `(stock_no, kind)`,
+  `position_for` 的 `market` 參數只收斂「掃描母體」,擋不住 sec 與 fut 兩列**股號與種類
+  都相同**時的鍵碰撞(後到者勝)。實務上撞不到 —— 期交所契約碼必含英文字母、股號全數字
+  (本輪想寫 fut 方向的測試就是卡在這:全數字契約碼過不了 `exchange_product_of`),
+  且真撞到時 A-3 的重複鍵 warning 會叫。要根除就把鍵改成 `(market, stock_no, kind)`,
+  代價是 `apply_profit_rows` 得寫死 `market="sec"`(損益試算報告本來就只有證券)
 - [ ] 平倉 dup guard 未按 kind 細分(本輪 out of scope,白名單 5 的保守行為):同檔兩
   種類**同向**平倉時,第二筆會被「已有同向活躍委託」擋(委託回報沒有庫存種類這一維,
   活單掃描只能以標的比對)。要細分需先確認回報端能否還原種類(sFlag / flag_label)
