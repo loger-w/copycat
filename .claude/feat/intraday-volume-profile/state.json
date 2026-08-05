@@ -1,0 +1,19 @@
+{
+  "slug": "intraday-volume-profile",
+  "start_sha": "24a8f640e3ab66f3bd71feae54735ae01aaf238d",
+  "branch": "feat/intraday-volume-profile",
+  "worktree_path": "C:\\side-project\\copycat\\.claude\\worktrees\\feat-discord-watchlist",
+  "current_phase": 8,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7],
+  "scope": "M",
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-08-05T22:40:00+08:00",
+  "project_shape": "frontend-only(後端零改)",
+  "last_commit_sha": "3826ffa",
+  "final_merge_sha": null,
+  "self_review_head": "3826ffa70383513d4454ee8e610bffef94d04a18",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}

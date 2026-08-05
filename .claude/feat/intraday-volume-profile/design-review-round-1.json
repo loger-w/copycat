@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "verdict": "0 P0 / 2 P1 / 5 P2 — 全 accepted",
+  "dispositions": {
+    "R1": "accepted — fill-ink-muted(EnergySub 量柱同 token)+ fillOpacity 0.25,常數收進 volume-profile.ts;刪 implementer 裁量句",
+    "R2": "accepted — 檔案表補 StockChart.test.tsx / StockPage.test.tsx fixture(vp: new Map());新增 SC-4 gate 節;不准消費端 ?? 吞",
+    "R3": "accepted — buildVpBars(accum.vp, g, mainW);width 註明 = MAIN.width 同一值",
+    "R4": "accepted — Known Risks 記後端 deque 20k 上界(最近 2 萬筆語意)",
+    "R5": "accepted(選 a)— foldVp 套 [X_START_MIN, X_END_MIN] 窗,與 windowedEntries/sideSummary 同一把尺;VP 總量 = 說明列三數和,一致性可測",
+    "R6": "accepted — 縫改比例式 h = max(1, dist × 0.85);SC-2 補高密度域測試",
+    "R7": "accepted — 標籤維持「量分佈」,註明窄容器截斷已接受 + Phase 6 補窄寬截圖對照"
+  },
+  "exit": "P1 修入 v2 → 無 accepted P0 → 進 Phase 2"
+}

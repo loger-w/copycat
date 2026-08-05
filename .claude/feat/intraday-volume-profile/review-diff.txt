@@ -1,0 +1,768 @@
+﻿diff --git a/frontend/src/components/stock/StockChart.test.tsx b/frontend/src/components/stock/StockChart.test.tsx
+index 40c637f..39ea11b 100644
+--- a/frontend/src/components/stock/StockChart.test.tsx
++++ b/frontend/src/components/stock/StockChart.test.tsx
+@@ -13,6 +13,9 @@ const ACCUM = {
+   vwap: 2_380_000,
+   minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
+   ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
++  // `vp` 是 StockAccum 的必填欄。`as unknown as` 硬轉不會被 tsc 抓到漏欄,而消費端
++  // (分時圖的 VP 長條)刻意不用 `?? new Map()` 吞 —— 真漏建要在執行期炸,不要靜默空圖。
++  vp: new Map(),
+   book: { bids: [], asks: [] },
+   meta: {
+     name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000,
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index 7d602bd..5963639 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+ import { fromSnapshot } from "@/lib/stock-accum";
+ import { buildIntradayGeometry, lastPoint, R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
++import { VP_FILL_OPACITY } from "@/lib/volume-profile";
+ import { wrap } from "@/test-utils";
+ 
+ const OVERLAY = {
+@@ -982,3 +983,90 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
+     expect(screen.getByText("尚無成交")).toBeTruthy();
+   });
+ });
++
++// 🟢 SC-3:分時圖價位別成交量(VP)長條 + 「量分佈」toggle
++describe("StockIntradayChart 價位別成交量(SC-3)", () => {
++  /** **獨立 fixture,刻意不動共用的 `ACCUM`**:ACCUM 的 `ticks` 是空陣列,VP 因此恆空,
++   *  而既有的 SC-5「主圖 drawnRects === 0」正是拿 ACCUM 在量 —— 把 tick 加進共用 fixture
++   *  會讓那條測試因為多了 VP 的 rect 而紅,紅的原因卻與它要守的「量 bar 不在主圖」無關。
++   *
++   *  只換 `ticks`:價格全落在既有 y 域 [2_090_000, 2_550_000] 內、時間全落在
++   *  [09:00, 13:30] 窗內,三個價位各自是合法檔位(2380 / 2385 / 2390,5 元 tick)
++   *  → snapDown 後互不合併,bar 數可精確斷言。 */
++  const WITH_TICKS = fromSnapshot({
++    code: "2330",
++    seq: 2,
++    last: { p: 2_390_000, t: "09:02:10.000", cum_vol: 12 },
++    vwap: 2_380_000,
++    minutes: {
++      "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 },
++      "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_385_000 },
++    },
++    ticks: [
++      { t: "09:01:30.000", p: 2_380_000, q: 7, side: "outer" },
++      { t: "09:01:40.000", p: 2_385_000, q: 3, side: "outer" },
++      { t: "09:02:10.000", p: 2_390_000, q: 2, side: "inner" },
++    ],
++    book: null,
++    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++  });
++
++  function vpBars(container: HTMLElement): Element[] {
++    return [...container.querySelectorAll('[data-testid="vp-bar"]')];
++  }
++
++  it("預設開:每個成交價位一根長條,自繪圖區左緣向右、半透明中性色", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    const bars = vpBars(container);
++    expect(bars.length).toBe(3);
++    for (const b of bars) {
++      // x 恆為繪圖區左界:長條是「從價位軸長出來的」,越界進價位帶會壓到刻度數字
++      expect(Number(b.getAttribute("x"))).toBe(Y_AXIS_W);
++      expect(Number(b.getAttribute("width"))).toBeGreaterThan(0);
++      expect(b.getAttribute("fill-opacity")).toBe(String(VP_FILL_OPACITY));
++      expect(b.getAttribute("class")).toContain("fill-ink-muted");
++    }
++  });
++
++  it("長度比例 = 該價位當日成交量(量最大的那根最長)", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    // 降冪排序 → [2390(2 張), 2385(3 張), 2380(7 張)]
++    const ws = vpBars(container).map((b) => Number(b.getAttribute("width")));
++    expect(ws[2]! / ws[0]!).toBeCloseTo(7 / 2, 5);
++    expect(ws[1]! / ws[0]!).toBeCloseTo(3 / 2, 5);
++  });
++
++  it("toggle 列多一顆「量分佈」,預設亮起;關掉後長條整組消失", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    const btn = screen.getByRole("button", { name: "量分佈" });
++    expect(btn.getAttribute("aria-pressed")).toBe("true");
++    expect(vpBars(container).length).toBeGreaterThan(0);
++    fireEvent.click(btn);
++    expect(screen.getByRole("button", { name: "量分佈" }).getAttribute("aria-pressed")).toBe("false");
++    expect(vpBars(container).length).toBe(0);
++  });
++
++  /** z-order 是這組長條能不能用的前提:它是背景參考,壓在紅綠填色與走勢線之上就等於
++   *  把主資訊蓋掉。svg 沒有 z-index,唯一決定圖層的就是文件順序,所以只能在這裡量。 */
++  it("畫在 y 格線之後、平盤填色與走勢線之前(不遮主資訊)", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    const main = [...container.querySelectorAll("svg")].find(
++      (s) => s.getAttribute("aria-label") === "分時走勢圖",
++    )!;
++    const nodes = [
++      ...main.querySelectorAll('[data-testid="y-grid"], [data-testid="vp-bar"], polygon, polyline'),
++    ];
++    const testids = nodes.map((n) => n.getAttribute("data-testid"));
++    const lastGrid = testids.lastIndexOf("y-grid");
++    const firstBar = testids.indexOf("vp-bar");
++    const firstFill = nodes.findIndex((n) => n.tagName.toLowerCase() === "polygon");
++    expect(lastGrid).toBeGreaterThanOrEqual(0);
++    expect(firstBar).toBeGreaterThan(lastGrid);
++    expect(firstFill).toBeGreaterThan(firstBar);
++  });
++
++  it("尚無成交(tick 全無)→ 一根長條都沒有,不崩", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(vpBars(container).length).toBe(0);
++  });
++});
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 7abbaea..4dc1fa9 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -30,6 +30,7 @@ import {
+   type OverlayLevel,
+   type OverlayLine,
+ } from "@/lib/stock-intraday-svg";
++import { buildVpBars, VP_FILL_OPACITY, type VpBar } from "@/lib/volume-profile";
+ import { cn, safeIdToken } from "@/lib/utils";
+ 
+ const MAIN = { width: 800, height: 260 };
+@@ -107,6 +108,7 @@ const ChartStatic = memo(function ChartStatic({
+   refMilli,
+   showVwap,
+   oLines,
++  vpBars,
+   clipAbove,
+   clipBelow,
+   plotBottom,
+@@ -119,6 +121,8 @@ const ChartStatic = memo(function ChartStatic({
+   refMilli: number | null;
+   showVwap: boolean;
+   oLines: OverlayLine[];
++  /** 價位別成交量長條;關掉 toggle 時為空陣列。**必經呼叫端 useMemo**(identity 穩定) */
++  vpBars: VpBar[];
+   clipAbove: string;
+   clipBelow: string;
+   /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
+@@ -214,6 +218,26 @@ const ChartStatic = memo(function ChartStatic({
+           </text>
+         </g>
+       ))}
++      {/* 價位別成交量(SC-3)。水平長條自繪圖區左緣向右,長度 = 該價位當日成交張數比例。
++          **位置在 y 格線之後、平盤填色之前**:svg 沒有 z-index,圖層完全由文件順序決定,
++          而這組長條是背景參考 —— 排到紅綠填色或走勢線之後就把主資訊蓋掉,畫面上卻照樣
++          「有東西」,沒有任何錯誤訊號。
++          `x` 恆為 `Y_AXIS_W`(幾何層只出 y/h/w,左界屬版面決策留在元件端);顏色與量副圖
++          同一個 `fill-ink-muted` token,透明度收在 lib 常數不在這裡寫 magic number。 */}
++      <g data-testid="vp-bars">
++        {vpBars.map((b) => (
++          <rect
++            key={b.priceMilli}
++            data-testid="vp-bar"
++            x={Y_AXIS_W}
++            y={b.y}
++            width={b.w}
++            height={b.h}
++            className="fill-ink-muted"
++            fillOpacity={VP_FILL_OPACITY}
++          />
++        ))}
++      </g>
+       {/* 平盤與走勢線之間的填色(SC-3):同一個封閉多邊形,用 clip 切上下兩半分別塗色 */}
+       {g.hasRef && g.areaPolygon !== "" ? (
+         <>
+@@ -492,6 +516,16 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+     [accum.minutes, subW, subH],
+   );
+ 
++  // 價位別成交量(SC-3)。**必經 useMemo**:hover 每個 mousemove 都 re-render 本元件,
++  // 陣列每次新 identity 會打穿 ChartStatic 的 memo,整層線圖跟著重建。
++  // 關掉時回**同一個空陣列語意**的重算即可 —— 依賴沒變就不會重算,不需要另設常數。
++  // `mainW` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
++  // 幾何與長條會各自依據不同的畫布寬算,bar 的滿寬比例靜默漂掉。
++  const vpBars = useMemo(
++    () => (toggles.vp ? buildVpBars(accum.vp, g, mainW) : []),
++    [accum.vp, g, toggles.vp, mainW],
++  );
++
+   const overlay = overlayQ.data ?? null;
+   // 可用性:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰 + 顯示 off
+   const cdpAvailable = overlayQ.isError ? false : overlay ? overlay.cdp !== null : true;
+@@ -587,10 +621,12 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+     setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
+   }
+ 
+-  const toggleDefs: { key: "vwap" | "cdp" | "ma"; label: string; available: boolean }[] = [
++  const toggleDefs: { key: "vwap" | "cdp" | "ma" | "vp"; label: string; available: boolean }[] = [
+     { key: "vwap", label: "均價", available: true },
+     { key: "cdp", label: "CDP", available: cdpAvailable },
+     { key: "ma", label: "MA", available: maAvailable },
++    // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),恆可用
++    { key: "vp", label: "量分佈", available: true },
+   ];
+ 
+   return (
+@@ -638,6 +674,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+           refMilli={ref}
+           showVwap={toggles.vwap}
+           oLines={oLines}
++          vpBars={vpBars}
+           clipAbove={clipAbove}
+           clipBelow={clipBelow}
+           plotBottom={plotBottom}
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index 9088a59..998d8ec 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -21,6 +21,9 @@ const ACCUM = {
+   vwap: 2_380_000,
+   minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
+   ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
++  // `vp` 是 StockAccum 的必填欄。`as unknown as` 硬轉不會被 tsc 抓到漏欄,而消費端
++  // (分時圖的 VP 長條)刻意不用 `?? new Map()` 吞 —— 真漏建要在執行期炸,不要靜默空圖。
++  vp: new Map(),
+   book: { bids: [[2_375_000, 5]], asks: [[2_380_000, 3]] },
+   meta: {
+     name: "台積電",
+@@ -151,6 +154,9 @@ describe("StockPage 切股時明細展開筆數歸零(M8)", () => {
+         q: 1,
+         side: "outer",
+       })),
++      // 這份 fixture 只餵明細表(tape),VP 不是它要驗的東西 —— 但 `vp` 是必填欄,
++      // 每個 `as unknown as StockAccum` 站點都自己列全,不倚賴 spread 幫忙補
++      vp: new Map(),
+     } as unknown as StockAccum;
+   }
+ 
+diff --git a/frontend/src/hooks/useChartToggles.test.ts b/frontend/src/hooks/useChartToggles.test.ts
+index 3087ed7..ff3ab66 100644
+--- a/frontend/src/hooks/useChartToggles.test.ts
++++ b/frontend/src/hooks/useChartToggles.test.ts
+@@ -13,7 +13,10 @@ beforeEach(() => {
+ afterEach(cleanup);
+ 
+ // 🔴 round4 項 6:bb 由預設關改為預設開(user 拍板「K 線圖都要顯示布林通道到 5ma 20ma」)
+-const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true };
++// 🟢 SC-3:新增 vp(量分佈)預設開。這份 local 常數是「整包預設長什麼樣」的鏡像,
++// 新增欄位屬預期變更(事前標記),不是把失敗的斷言改綠 —— 6 處 toEqual(DEFAULTS)
++// 與下方一處硬列鍵集連動。
++const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
+ /** 存檔 schema 版本(storage-only 欄位,不屬 ChartToggles) */
+ const V = 2;
+ 
+@@ -114,6 +117,20 @@ describe("useChartToggles", () => {
+     });
+   });
+ 
++  // 🟢 SC-3:新增 `vp`(量分佈)預設開。**刻意不 bump TOGGLES_VERSION** ——
++  // 版本升級要處理的是「既有鍵的預設改了」(bb 前例:存檔裡的 false 是舊預設不是使用者選的),
++  // 而 vp 是全新的鍵,舊存檔根本沒有它,`{...DEFAULTS, ...flags}` 自然就補上新預設。
++  // 這條鎖的是「不 bump 也真的拿得到預設」,而不是版本號本身。
++  it("舊存檔沒有 vp 鍵 → 預設開,且不影響存檔裡既有的選擇", () => {
++    window.localStorage.setItem(
++      KEY,
++      JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, v: V }),
++    );
++    const hook = renderHook(() => useChartToggles());
++    expect(hook.result.current.toggles.vp).toBe(true);
++    expect(hook.result.current.toggles.cdp).toBe(false);
++  });
++
+   // 🔴 R21:StockChart(持有 bb)與 StockIntradayChart(持有 vwap/cdp/ma)是兩個 instance,
+   // set 若用自己那份 stale prev 整包寫回,後寫的一方會回滾對方剛做的變更。
+   it("兩個 instance 交替 set 不互相覆蓋(set 先重讀 localStorage 再 merge)", () => {
+@@ -126,6 +143,7 @@ describe("useChartToggles", () => {
+       cdp: false, // ← 沒有被 b 的 stale prev 還原成 true
+       ma: false,
+       bb: false,
++      vp: true, // 🟢 SC-3:整包寫回會含新欄位(事前標記的預期變更)
+       v: V,
+     });
+   });
+diff --git a/frontend/src/hooks/useChartToggles.ts b/frontend/src/hooks/useChartToggles.ts
+index 54f393d..5b57fda 100644
+--- a/frontend/src/hooks/useChartToggles.ts
++++ b/frontend/src/hooks/useChartToggles.ts
+@@ -8,19 +8,27 @@ export interface ChartToggles {
+   ma: boolean;
+   /** 布林通道(K 線專用) */
+   bb: boolean;
++  /** 價位別成交量長條(江波圖專用) */
++  vp: boolean;
+ }
+ 
+ /** 存檔 schema 版本。**storage-only,不屬 `ChartToggles`** —— 洩進 toggles 物件會讓
+  *  「整包比對」的測試與 memo 比較多一個非布林欄位。 */
+ const TOGGLES_VERSION = 2;
+ 
+-/** `cdp` 預設開(SC-3,user 拍板);`bb` 預設開(round4 項 6,user 拍板)。
++/** `cdp` 預設開(SC-3,user 拍板);`bb` 預設開(round4 項 6,user 拍板);
++ *  `vp` 預設開(價位別成交量 SC-3,user 拍板)。
++ *
++ *  **`vp` 不需要 bump `TOGGLES_VERSION`**:版本升級要處理的是「**既有**鍵的預設改了」
++ *  —— 舊存檔裡那個值是當時的預設而不是使用者的選擇,不強制升級就永遠蓋掉新預設。
++ *  `vp` 是全新的鍵,舊存檔根本沒有它,下面的 `{...DEFAULTS, ...flags}` 自然就補上。
++ *  無謂 bump 的代價是所有人的 `bb` 會被再打開一次(升級分支不分辨是誰觸發的)。
+  *
+  *  `load()` 的 `{...DEFAULTS, ...saved}` 讓存檔覆蓋預設 —— 對「使用者選過」的項目是
+  *  對的,但對**新改的預設**是錯的:舊存檔裡的 `bb: false` 是「當時的預設」而不是
+  *  「使用者選了關」,照樣覆蓋的話 user 的畫面永遠不會變成新預設。
+  *  故只對 `bb` 做一次性升級(見 `load`),其餘欄位維持「存檔優先、不強制升級」。 */
+-const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true };
++const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
+ 
+ interface Stored extends Partial<ChartToggles> {
+   v?: number;
+diff --git a/frontend/src/lib/stock-accum.test.ts b/frontend/src/lib/stock-accum.test.ts
+index 952343b..be533e6 100644
+--- a/frontend/src/lib/stock-accum.test.ts
++++ b/frontend/src/lib/stock-accum.test.ts
+@@ -1,6 +1,7 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { applyTick, fromSnapshot, type StockAccum } from "@/lib/stock-accum";
++import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
++import { sideSummary } from "@/lib/stock-intraday-svg";
+ 
+ const SNAP = {
+   code: "2330",
+@@ -159,3 +160,119 @@ describe("applyTick", () => {
+     expect(acc.ticks.length).toBe(200);
+   });
+ });
++
++/** VP(價位別成交量)fold — SC-1。
++ *
++ *  fold **先於 tape 截斷**:tape 只留最後 200 筆是顯示需求,VP 要的是「全日」。
++ *  兩者共用同一批 tick,所以測試同時鎖住「vp 收到 300 筆」與「ticks 仍是 200 筆」。 */
++describe("vp(價位別成交量 fold,SC-1)", () => {
++  const tick = (over: Partial<StockTickMsg> = {}): StockTickMsg => ({
++    type: "tick",
++    code: "2330",
++    t: "09:01:30.000",
++    p: 2_380_000,
++    q: 1,
++    side: "outer",
++    seq: 1,
++    ...over,
++  });
++
++  it("fromSnapshot 對原始全量 ticks fold(tape 截斷之前)", () => {
++    // 300 筆:前 100 筆在 238.0、後 200 筆在 239.0(皆為合法檔位)
++    const ticks = Array.from({ length: 300 }, (_, i) => ({
++      t: "09:01:30.000",
++      p: i < 100 ? 2_380_000 : 2_390_000,
++      q: 2,
++      side: "outer",
++    }));
++    const acc = fromSnapshot({ ...SNAP, ticks });
++    expect(acc.ticks.length).toBe(200); // tape 行為不變
++    const total = [...acc.vp.values()].reduce((s, c) => s + c.t, 0);
++    expect(total).toBe(600); // 300 筆 × 2 張,全數入 vp
++    expect(acc.vp.get(2_380_000)?.t).toBe(200);
++    expect(acc.vp.get(2_390_000)?.t).toBe(400);
++  });
++
++  it("applyTick 在同一檔位上增量累加", () => {
++    let acc = fromSnapshot({ ...SNAP, ticks: [] });
++    expect(acc.vp.size).toBe(0);
++    acc = applyTick(acc, tick({ p: 2_380_000, q: 3, seq: 4 }));
++    acc = applyTick(acc, tick({ p: 2_380_000, q: 5, seq: 5 }));
++    acc = applyTick(acc, tick({ p: 2_390_000, q: 7, seq: 6 }));
++    expect(acc.vp.get(2_380_000)?.t).toBe(8);
++    expect(acc.vp.get(2_390_000)?.t).toBe(7);
++  });
++
++  it("applyTick 不就地改動前一份 vp(memo 比較與時間旅行安全)", () => {
++    const base = fromSnapshot({ ...SNAP, ticks: [] });
++    const next = applyTick(base, tick({ p: 2_380_000, q: 3, seq: 4 }));
++    expect(base.vp.size).toBe(0);
++    expect(next.vp.size).toBe(1);
++    expect(next.vp).not.toBe(base.vp);
++  });
++
++  it("p <= 0(市價偽價位)不入 vp", () => {
++    // 鎖漲跌停時 TC4 的市價佇列價格欄是 0;snapDown(0) 會產生一個假檔位
++    let acc = fromSnapshot({ ...SNAP, ticks: [{ t: "09:01:30.000", p: 0, q: 9, side: "outer" }] });
++    expect(acc.vp.size).toBe(0);
++    acc = applyTick(acc, tick({ p: 0, q: 9, seq: 4 }));
++    expect(acc.vp.size).toBe(0);
++  });
++
++  it("非合法檔位的成交價 snapDown 到檔位", () => {
++    // 2383 元 → 2380 元(≥1000 元帶 tick = 5 元,2383 不是合法檔位)
++    const acc = fromSnapshot({
++      ...SNAP,
++      ticks: [{ t: "09:01:30.000", p: 2_383_000, q: 4, side: "outer" }],
++    });
++    expect(acc.vp.get(2_380_000)?.t).toBe(4);
++    expect(acc.vp.get(2_383_000)).toBeUndefined();
++  });
++
++  it("窗外([09:00, 13:30] 外)的成交不入 vp", () => {
++    const acc = fromSnapshot({
++      ...SNAP,
++      ticks: [
++        { t: "08:59:59.000", p: 2_380_000, q: 11, side: "outer" }, // 盤前試撮
++        { t: "13:31:00.000", p: 2_380_000, q: 13, side: "outer" }, // 收盤後
++        { t: "09:00:00.000", p: 2_380_000, q: 1, side: "outer" }, // 窗邊界(含)
++        { t: "13:30:59.000", p: 2_380_000, q: 1, side: "outer" }, // 窗邊界(含)
++      ],
++    });
++    expect(acc.vp.get(2_380_000)?.t).toBe(2);
++  });
++
++  it("side 拆分:outer/inner 各自進 o/i,其餘只進 t", () => {
++    const acc = fromSnapshot({
++      ...SNAP,
++      ticks: [
++        { t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer" },
++        { t: "09:01:31.000", p: 2_380_000, q: 4, side: "inner" },
++        { t: "09:01:32.000", p: 2_380_000, q: 6, side: "neutral" },
++      ],
++    });
++    expect(acc.vp.get(2_380_000)).toEqual({ t: 20, o: 10, i: 4 });
++  });
++
++  it("R3 一致性鎖:Σ vp[*].t === sideSummary(minutes) 的 外+內+未分類", () => {
++    // minutes 與 vp 同源(同一批 tick 走 applyTick),兩者套的是同一把窗尺
++    // ([09:00, 13:30])→ 總張必然相等。這條同時鎖住:
++    //   (a) foldVp 的窗與 windowedEntries / sideSummary 不會各漂各的;
++    //   (b) 後端 20k tick deque 截斷時,snapshot 的 minutes 完整而 ticks 缺角 →
++    //       兩數岔開,說明列與 VP 對不上就會被這條的同構造版本間接暴露。
++    const batch: StockTickMsg[] = [
++      { type: "tick", code: "2330", t: "08:59:00.000", p: 2_380_000, q: 50, side: "outer", seq: 1 },
++      { type: "tick", code: "2330", t: "09:00:00.000", p: 2_380_000, q: 10, side: "outer", seq: 2 },
++      { type: "tick", code: "2330", t: "09:01:30.000", p: 2_385_000, q: 4, side: "inner", seq: 3 },
++      { type: "tick", code: "2330", t: "10:00:00.000", p: 2_390_000, q: 6, side: "neutral", seq: 4 },
++      { type: "tick", code: "2330", t: "13:30:00.000", p: 2_400_000, q: 3, side: "outer", seq: 5 },
++      { type: "tick", code: "2330", t: "13:35:00.000", p: 2_400_000, q: 90, side: "outer", seq: 6 },
++    ];
++    let acc = fromSnapshot({ ...SNAP, minutes: {}, ticks: [], last: null, vwap: null });
++    for (const m of batch) acc = applyTick(acc, m);
++    const s = sideSummary(acc.minutes);
++    const vpTotal = [...acc.vp.values()].reduce((sum, c) => sum + c.t, 0);
++    expect(vpTotal).toBe(s.outer + s.inner + s.unch);
++    expect(vpTotal).toBe(23); // 窗內 10 + 4 + 6 + 3;窗外 50 / 90 皆不計
++  });
++});
+diff --git a/frontend/src/lib/stock-accum.ts b/frontend/src/lib/stock-accum.ts
+index 71559fe..7cc7f2d 100644
+--- a/frontend/src/lib/stock-accum.ts
++++ b/frontend/src/lib/stock-accum.ts
+@@ -1,5 +1,8 @@
+ /** 個股前端累算:snapshot 為基底 + tick 增量(design v4 §4;與後端 StockDayState 等值)。 */
+ 
++import { X_END_MIN, X_START_MIN } from "@/lib/stock-intraday-svg";
++import { snapDown } from "@/lib/stock-tick";
++
+ export interface StockTickMsg {
+   type: "tick";
+   code: string;
+@@ -55,6 +58,16 @@ export interface StockBook {
+   asks: [number, number][];
+ }
+ 
++/** 一個價位檔位的當日成交量:總張 / 外盤 / 內盤。
++ *
++ *  `t` 不等於 `o + i` —— 未分類(neutral,開盤集合競價無 Bid/Ask 可比)只進 `t`,
++ *  與 `MinuteAgg` 的 `u` 同一語意。 */
++export interface VpCell {
++  t: number;
++  o: number;
++  i: number;
++}
++
+ export interface StockAccum {
+   code: string;
+   seq: number;
+@@ -62,6 +75,11 @@ export interface StockAccum {
+   vwap: number | null;
+   minutes: Map<number, MinuteAgg>;
+   ticks: TickRow[];
++  /** 價位別成交量(key = `snapDown` 後的毫元檔位)。**必填** —— 硬轉 fixture 漏建時
++   *  要在消費端炸掉,不要用 `?? new Map()` 吞成靜默空圖。
++   *
++   *  來源是 tick 全量(`ticks` 的 200 筆上限是 tape 顯示需求,與這裡無關)。 */
++  vp: Map<number, VpCell>;
+   book: StockBook | null;
+   meta: StockMeta | null;
+   noData: boolean;
+@@ -81,6 +99,34 @@ export function minuteKey(t: string): number {
+   return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+ }
+ 
++/** 把一筆成交折進價位別直方圖(就地寫入傳入的 map;呼叫端負責先淺拷)。
++ *
++ *  兩道過濾都是「與畫面其他數字對得上」的必要條件,不是防禦性補丁:
++ *  - `p <= 0`:鎖漲跌停時 TC4 會在簿的第一檔推市價佇列,價格欄是 `0`。`snapDown(0)` 是
++ *    合法運算,會憑空長出一個 0 元檔位(規則同 `stock-tick.ts::isMarketLevel`)。
++ *  - `[X_START_MIN, X_END_MIN]` 窗:與 `windowedEntries` / `sideSummary` 同一把尺,
++ *    所以「VP 全部 bar 的總張 = 說明列 外+內+未分類 三數之和」恆成立(可互驗)。
++ *
++ *  cell 一律重建不就地改:memo 比較與時間旅行安全。 */
++function foldVp(
++  vp: Map<number, VpCell>,
++  t: string,
++  p: number,
++  q: number,
++  side: string,
++): void {
++  if (p <= 0) return;
++  const m = minuteKey(t);
++  if (m < X_START_MIN || m > X_END_MIN) return;
++  const key = snapDown(p);
++  const cell = vp.get(key) ?? { t: 0, o: 0, i: 0 };
++  vp.set(key, {
++    t: cell.t + q,
++    o: cell.o + (side === "outer" ? q : 0),
++    i: cell.i + (side === "inner" ? q : 0),
++  });
++}
++
+ interface SnapshotShape {
+   code?: string;
+   seq: number;
+@@ -109,13 +155,19 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+   // 就會岔開,拿錯的當分母不會報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
+   // `?? cum_vol` 是舊後端(還沒送 vwap_vol)的相容路徑。
+   const volume = snap.vwap_vol ?? snap.last?.cum_vol ?? 0;
++  // VP fold 走**原始全量** ticks —— 在 `slice(-TAPE_MAX)` 之前。tape 的 200 筆上限是
++  // 逐筆明細的顯示需求,VP 要的是「全日」,兩者共用來源但截斷點不同。
++  const srcTicks = snap.ticks ?? [];
++  const vp = new Map<number, VpCell>();
++  for (const row of srcTicks) foldVp(vp, row.t, row.p, row.q, row.side);
+   return {
+     code: snap.code ?? "",
+     seq: snap.seq,
+     last: snap.last,
+     vwap: snap.vwap,
+     minutes,
+-    ticks: [...(snap.ticks ?? [])].slice(-TAPE_MAX),
++    ticks: [...srcTicks].slice(-TAPE_MAX),
++    vp,
+     book: snap.book,
+     meta: snap.meta,
+     high: snap.high ?? null,
+@@ -150,6 +202,9 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
+     ...acc.ticks,
+     { t: msg.t, p: msg.p, q: msg.q, side: msg.side, b: msg.b ?? null, a: msg.a ?? null },
+   ].slice(-TAPE_MAX);
++  // 淺拷後折本筆(O(價位數) ≤ 域內檔位數 ~200);cell 由 foldVp 重建不就地改
++  const vp = new Map(acc.vp);
++  foldVp(vp, msg.t, msg.p, msg.q, msg.side);
+   return {
+     ...acc,
+     seq: msg.seq,
+@@ -157,6 +212,7 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
+     vwap: volume > 0 ? Math.round(amountMilli / volume) : null,
+     minutes,
+     ticks,
++    vp,
+     // 缺欄位 → 保留原值(舊後端不發 h/l 時,線不該閃掉)
+     high: msg.h ?? acc.high,
+     low: msg.l ?? acc.low,
+diff --git a/frontend/src/lib/volume-profile.test.ts b/frontend/src/lib/volume-profile.test.ts
+new file mode 100644
+index 0000000..22be97a
+--- /dev/null
++++ b/frontend/src/lib/volume-profile.test.ts
+@@ -0,0 +1,125 @@
++import { describe, expect, it } from "vitest";
++
++import type { VpCell } from "@/lib/stock-accum";
++import { PAD_Y, plotWidth, X_LABEL_H } from "@/lib/stock-intraday-svg";
++import { buildVpBars, VP_MAX_W_RATIO } from "@/lib/volume-profile";
++
++const WIDTH = 800;
++
++/** 與 `buildIntradayGeometry` 同式的線性 toY(不依賴整份幾何,只給 VP 需要的兩個欄位)。 */
++function geom(yBottom: number, yTop: number, height = 256) {
++  const plotH = Math.max(1, height - X_LABEL_H - PAD_Y * 2);
++  const span = yTop - yBottom;
++  const flat = span <= 0;
++  return {
++    plotH,
++    toY: (p: number): number => (flat ? PAD_Y + plotH / 2 : PAD_Y + ((yTop - p) / span) * plotH),
++    yDomain: [yBottom, yTop] as [number, number],
++  };
++}
++
++function cells(entries: [number, number][]): Map<number, VpCell> {
++  return new Map(entries.map(([p, t]) => [p, { t, o: t, i: 0 }]));
++}
++
++describe("buildVpBars", () => {
++  it("空 map → []", () => {
++    expect(buildVpBars(new Map(), geom(2_090_000, 2_550_000), WIDTH)).toEqual([]);
++  });
++
++  it("域外檔位跳過;全部域外 → []", () => {
++    const g = geom(2_300_000, 2_400_000);
++    const bars = buildVpBars(cells([[2_200_000, 5], [2_350_000, 5], [2_500_000, 5]]), g, WIDTH);
++    expect(bars.map((b) => b.priceMilli)).toEqual([2_350_000]);
++    expect(buildVpBars(cells([[2_200_000, 5], [2_500_000, 5]]), g, WIDTH)).toEqual([]);
++  });
++
++  it("歸一分母取**域內** max(域縮放後最大的域內 bar 仍為滿寬)", () => {
++    const g = geom(2_300_000, 2_400_000);
++    // 域外那筆的 t 遠大於域內任何一筆:若拿它當分母,域內全部 bar 會縮成細線
++    const bars = buildVpBars(
++      cells([[2_500_000, 1000], [2_350_000, 40], [2_360_000, 10]]),
++      g,
++      WIDTH,
++    );
++    const full = plotWidth(WIDTH) * VP_MAX_W_RATIO;
++    expect(bars.find((b) => b.priceMilli === 2_350_000)?.w).toBeCloseTo(full, 6);
++    expect(bars.find((b) => b.priceMilli === 2_360_000)?.w).toBeCloseTo(full * 0.25, 6);
++  });
++
++  it("w 上限 = plotWidth(width) × VP_MAX_W_RATIO(0.22)", () => {
++    const g = geom(2_300_000, 2_400_000);
++    const bars = buildVpBars(cells([[2_350_000, 7], [2_360_000, 3]]), g, WIDTH);
++    const max = Math.max(...bars.map((b) => b.w));
++    expect(max).toBeCloseTo(plotWidth(WIDTH) * 0.22, 6);
++    for (const b of bars) expect(b.w).toBeLessThanOrEqual(plotWidth(WIDTH) * 0.22 + 1e-9);
++  });
++
++  it("t 全 0 → w 有限且非 NaN(maxTotal clamp 到 1,禁 0/0)", () => {
++    const bars = buildVpBars(cells([[2_350_000, 0], [2_360_000, 0]]), geom(2_300_000, 2_400_000), WIDTH);
++    expect(bars.length).toBe(2);
++    for (const b of bars) {
++      expect(Number.isFinite(b.w)).toBe(true);
++      expect(b.w).toBe(0);
++      expect(Number.isFinite(b.h)).toBe(true);
++    }
++  });
++
++  it("輸出依 priceMilli 降冪(穩定 React key)", () => {
++    const bars = buildVpBars(
++      cells([[2_310_000, 1], [2_390_000, 2], [2_350_000, 3]]),
++      geom(2_300_000, 2_400_000),
++      WIDTH,
++    );
++    expect(bars.map((b) => b.priceMilli)).toEqual([2_390_000, 2_350_000, 2_310_000]);
++  });
++
++  it("bar 帶原始總張與價位帶頂端 y", () => {
++    const g = geom(2_300_000, 2_400_000);
++    const bars = buildVpBars(cells([[2_350_000, 42]]), g, WIDTH);
++    expect(bars[0]?.total).toBe(42);
++    // 價位帶 [p, p + tickOf(p)) 的頂端
++    expect(bars[0]?.y).toBeCloseTo(g.toY(2_350_000 + 5_000), 6);
++  });
++
++  it("退化域(toY 常數)→ dist 0,h clamp 到 1", () => {
++    const g = geom(2_350_000, 2_350_000);
++    const bars = buildVpBars(cells([[2_350_000, 5]]), g, WIDTH);
++    expect(bars.length).toBe(1);
++    expect(bars[0]?.h).toBe(1);
++  });
++
++  it("最上緣檔位的價位帶上界 clamp 進 yDomain(不外溢)", () => {
++    const g = geom(2_300_000, 2_350_000);
++    const bars = buildVpBars(cells([[2_350_000, 5]]), g, WIDTH);
++    expect(bars[0]?.y).toBeCloseTo(g.toY(2_350_000), 6);
++    expect(bars[0]?.h).toBe(1); // dist = 0 → clamp
++  });
++
++  describe("高密度域的縫(R6)", () => {
++    it("(a) dist ≈ 1.19px(域 200 檔)→ h ≤ dist 且 ≥ dist × 0.8(相鄰不重疊)", () => {
++      // 250 元帶 tick = 0.5 元(500 毫元);200 檔 = 100_000 毫元域寬
++      const yBottom = 200_000;
++      const yTop = 300_000;
++      const g = geom(yBottom, yTop, 260); // plotH = 260 − X_LABEL_H 14 − PAD_Y×2 8 = 238
++      expect(g.plotH).toBe(238);
++      const dist = (500 / (yTop - yBottom)) * g.plotH;
++      expect(dist).toBeCloseTo(1.19, 6);
++      const bars = buildVpBars(cells([[250_000, 5], [250_500, 3]]), g, WIDTH);
++      for (const b of bars) {
++        expect(b.h).toBeLessThanOrEqual(dist);
++        expect(b.h).toBeGreaterThanOrEqual(dist * 0.8);
++      }
++    });
++
++    it("(b) dist < 1px → h === 1(clamp 生效;亞像素重疊為刻意接受的下界)", () => {
++      const yBottom = 200_000;
++      const yTop = 400_000; // 400 檔
++      const g = geom(yBottom, yTop, 256);
++      const dist = (500 / (yTop - yBottom)) * g.plotH;
++      expect(dist).toBeLessThan(1);
++      const bars = buildVpBars(cells([[250_000, 5]]), g, WIDTH);
++      expect(bars[0]?.h).toBe(1);
++    });
++  });
++});
+diff --git a/frontend/src/lib/volume-profile.ts b/frontend/src/lib/volume-profile.ts
+new file mode 100644
+index 0000000..356342d
+--- /dev/null
++++ b/frontend/src/lib/volume-profile.ts
+@@ -0,0 +1,67 @@
++/** 價位別成交量(volume profile)的幾何純函數;零 React 依賴。
++ *
++ *  與 CDP overlay 同一「價位 → toY → 畫水平元素」樣板,只是畫的是有寬度的長條。
++ *  x 恆為 `Y_AXIS_W`(bar 自繪圖區左緣向右)由元件端負責,這裡只出 y/h/w。 */
++
++import type { VpCell } from "@/lib/stock-accum";
++import { plotWidth } from "@/lib/stock-intraday-svg";
++import { tickOf } from "@/lib/stock-tick";
++
++/** bar 最大寬 = 繪圖區的 22%(長條是背景參考,不該吃掉走勢線的可讀空間)。 */
++export const VP_MAX_W_RATIO = 0.22;
++
++/** 渲染透明度。收在 lib 常數而不是元件的 magic number:與 `VP_MAX_W_RATIO` 一樣是
++ *  「這組長條在視覺層級上壓在走勢線之下」這一個決策的兩半,分開放會各自漂移。 */
++export const VP_FILL_OPACITY = 0.25;
++
++export interface VpBar {
++  /** 價位帶頂端的 y(svg 座標,愈小愈上) */
++  y: number;
++  h: number;
++  w: number;
++  priceMilli: number;
++  /** 該檔位當日總張(未歸一;hover / debug 用) */
++  total: number;
++}
++
++interface Geo {
++  toY: (priceMilli: number) => number;
++  yDomain: [number, number];
++}
++
++/** 價位別成交量 → 水平長條。空 map / 全部域外 → `[]`;輸出依 priceMilli 降冪。 */
++export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: number): VpBar[] {
++  const [yBottom, yTop] = g.yDomain;
++  const inDomain: [number, VpCell][] = [];
++  for (const [priceMilli, cell] of vp) {
++    // 域過濾與 `overlayLines` 同規(閉區間)
++    if (priceMilli < yBottom || priceMilli > yTop) continue;
++    inDomain.push([priceMilli, cell]);
++  }
++  if (inDomain.length === 0) return [];
++
++  // 歸一分母取**域內** max:y 域縮放(漲跌停 vs autofit)時 bar 才會用滿寬度。
++  // `Math.max(1, ...)` 是 `plotWidth` / `energyFrom` 同一條紀律 —— 全 0 的當下
++  // (盤前、或整批都是市價偽價位被濾掉)分母為 0 會讓每個 w 變 NaN,而 NaN 的
++  // `width` 屬性在 SVG 是靜默忽略,畫面上只是「沒有長條」看不出算壞了。
++  const maxTotal = Math.max(1, ...inDomain.map(([, c]) => c.t));
++  const maxW = plotWidth(width) * VP_MAX_W_RATIO;
++
++  const bars = inDomain.map(([priceMilli, cell]): VpBar => {
++    // 價位帶 = [p, p + tickOf(p));頂端夾進 y 域上界,最上緣那一檔不外溢畫布
++    const top = g.toY(Math.min(priceMilli + tickOf(priceMilli), yTop));
++    const dist = g.toY(priceMilli) - top;
++    return {
++      y: top,
++      // 比例縫(0.85):高密度域(dist ≈ 1px)時退化成近連續帶而相鄰不重疊;
++      // dist < 1(或退化域 toY 常數 → dist 0)時 clamp 到 1,亞像素重疊是刻意接受的下界
++      h: Math.max(1, dist * 0.85),
++      w: (cell.t / maxTotal) * maxW,
++      priceMilli,
++      total: cell.t,
++    };
++  });
++  // 降冪 = 由上而下,React key 穩定
++  bars.sort((a, b) => b.priceMilli - a.priceMilli);
++  return bars;
++}
