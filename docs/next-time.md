@@ -17,6 +17,18 @@
   rejected — 點一下左圖「加權」即永久自癒):若真嫌,IndexPage 做一次性 seed
   (MARKET2_KEY_STORE 未設時依左值選互補標的),冪等不引入持續耦合。
 
+## 2026-08-06(signal-rules 題1 收尾留尾巴)
+
+- [ ] **規則 UI 待 user 過目**(PR #25 試用指引):訊號欄「監聽規則」區 + 規則 Dialog
+  (新增/編輯/刪除/開關);盤中自訂規則真 tick 觸發 + Discord 文末規則名實發。
+- [ ] **duplicate-key console error(key=0)嫌疑已鎖定**(題2 輪首記,題1 輪 Phase 6
+  隔離定位):以 `priceMilli` 當 React key 的清單在「無資料/全 0」態全撞 key 0 —
+  `MarketChart.tsx:69`、`PriceLadder.tsx:535`、`StockIntradayChart.tsx:230`、
+  `FuturesLadder.tsx:298`(行號為 2026-08-06 快照)。每 5 秒節奏 = 行情輪詢重繪。
+  修法候選:key 加 prefix 或空態不 render 列表。
+- [ ] **關閉規則的歷史列視覺弱化**(design R14a 記帳):filterKinds 移除後關閉規則當日
+  已發的列仍顯示(帶規則名可辨識);若 user 覺得干擾,補 per-rule 淡化或「只看啟用」勾選。
+
 ## 2026-08-05(intraday-volume-profile 題2 收尾留尾巴)
 
 - [ ] **VP 畫面待 user 過目**(PR #22 試用指引):個股頁分時圖左緣水平量條 +「量分佈」toggle。
