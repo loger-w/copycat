@@ -264,6 +264,17 @@ describe("PriceLadder 反灰列的淡化落點", () => {
     expect(sell.parentElement!.className).toContain("opacity-35");
     expect(within(row).getByText("110").className).toContain("opacity-35");
   });
+
+  it("反灰列的分隔線降階到 border-line/20,一般列維持 /50(LP-4)", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const dimmed = screen.getByLabelText("買 110").closest("div.grid") as HTMLElement;
+    const normal = screen.getByLabelText("買 100").closest("div.grid") as HTMLElement;
+    // border 掛在 row 容器上,移欄後不再吃 row 的 opacity → 不降階會比改動前亮
+    expect(dimmed.className).toContain("border-line/20");
+    expect(dimmed.className).not.toContain("border-line/50");
+    expect(normal.className).toContain("border-line/50");
+  });
 });
 
 describe("PriceLadder 武裝直送(SC-7)", () => {
@@ -539,6 +550,19 @@ describe("PriceLadder 部位條(SC-1 / SC-6 / SC-7)", () => {
     expect(screen.queryAllByTestId("ladder-avg-mark").length).toBe(0);
   });
 
+  it("第二行兩顆色點:bg-warn 對「打平 <值>」、bg-ma20 對「均價」標籤(LP-1 / CALC-3)", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("打平 100.5")).toBeTruthy();
+    expect(within(bar).getByText("均價")).toBeTruthy();
+    const dots = [...bar.querySelectorAll("[aria-hidden='true']")];
+    expect(dots.some((d) => d.className.includes("bg-warn"))).toBe(true);
+    expect(dots.some((d) => d.className.includes("bg-ma20"))).toBe(true);
+    // 均價色點**不並列數字**:第一行 @100 是真均價,標線位置是 snapNearest 近似,
+    // 兩個口徑的數字並列會讓人以為均價變了(CALC-3)
+    expect(bar.textContent).not.toContain("均價 1");
+  });
+
   it("現價缺值 → pnl「—」,打平照算照畫(D15)", async () => {
     renderWith([capitalPosition()], null);
     const bar = await screen.findByTestId("ladder-position-bar");
@@ -549,14 +573,31 @@ describe("PriceLadder 部位條(SC-1 / SC-6 / SC-7)", () => {
 });
 
 describe("PriceLadder 梯內標記(SC-4)", () => {
-  it("打平 / 均價標記落在正確價位列,title 帶 kind", async () => {
+  it("打平 / 均價標記落在正確價位列;title 掛 row 容器、標記本身不帶(LP-1)", async () => {
     renderWith([capitalPosition()], { ...LAST, p: 102_000 });
     const be = await screen.findByTestId("ladder-be-mark");
-    expect(be.closest("[data-price]")!.getAttribute("data-price")).toBe("100500");
-    expect(be.getAttribute("title")).toBe("打平(現股)");
+    const beRow = be.closest("[data-price]")!;
+    expect(beRow.getAttribute("data-price")).toBe("100500");
+    // 標記是 pointer-events-none → 永遠不會觸發自己的 tooltip,title 必須掛 row
+    expect(be.getAttribute("title")).toBeNull();
+    expect(beRow.getAttribute("title")).toBe("打平(現股)");
     const avg = screen.getByTestId("ladder-avg-mark");
-    expect(avg.closest("[data-price]")!.getAttribute("data-price")).toBe("100000");
-    expect(avg.getAttribute("title")).toBe("均價(現股)");
+    const avgRow = avg.closest("[data-price]")!;
+    expect(avgRow.getAttribute("data-price")).toBe("100000");
+    expect(avg.getAttribute("title")).toBeNull();
+    expect(avgRow.getAttribute("title")).toBe("均價(現股)");
+    // 無標記的列不掛 title(免整梯都是空 tooltip)
+    expect(
+      screen.getByLabelText("買 99.9").closest("[data-price]")!.getAttribute("title"),
+    ).toBeNull();
+  });
+
+  it("同一列同時有打平與均價 → row title 併成一句(LP-1)", async () => {
+    // 現股 avg=100 的打平落 100.5;融資 avg=100.5 的均價標記同樣落 100.5
+    renderWith([capitalPosition(), capitalPosition({ kind: "margin", avg_price: 100.5 })]);
+    await screen.findByTestId("ladder-position-bar");
+    const row = screen.getByLabelText("買 100.5").closest("[data-price]")!;
+    expect(row.getAttribute("title")).toBe("打平(現股)、均價(融資)");
   });
 
   it("反灰列上的標記不跟著淡化(自帶 opacity-100)", async () => {
@@ -624,6 +665,33 @@ describe("PriceLadder 手續費折數(SC-5 / D1)", () => {
     fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "3" } });
     expect(window.localStorage.getItem("copycat-fee-discount")).toBe("3");
     expect(screen.queryByTestId("ladder-position-bar")).toBeNull();
+  });
+
+  it("折數框在標題列(跟隨置中鈕左側),武裝列零折數框(ORD-1 / LP-7)", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const input = screen.getByLabelText("手續費折數");
+    const titleRow = screen.getByRole("button", { name: "跟隨置中" }).closest("div.border-b")!;
+    const armRow = screen.getByLabelText("張數").closest("div.border-b")!;
+    expect(titleRow).not.toBe(armRow);
+    expect(titleRow.contains(input)).toBe(true);
+    // 折數與張數同型相鄰是誤打風險(誤打折數 → 張數靜默留舊值 → 舊張數送真單)
+    expect(armRow.contains(input)).toBe(false);
+  });
+
+  it("非法折數 → aria-invalid + 紅框;改回合法即消失(CALC-1)", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const input = screen.getByLabelText("手續費折數");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(input.className).not.toContain("border-loss");
+    fireEvent.change(input, { target: { value: "0" } });
+    // 「輸入框顯示 raw、計算用舊 value 且零訊號」是靜默態,必須有可視訊號
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.className).toContain("border-loss");
+    fireEvent.change(input, { target: { value: "1.8" } });
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(input.className).not.toContain("border-loss");
   });
 
   it("改折數不影響張數輸入,且折數框帶可見「折」後綴(IS-8)", () => {
