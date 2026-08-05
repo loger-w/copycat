@@ -48,7 +48,7 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
   }
 
   // n=1 時 aggregateBars 原樣回傳,不必特判
-  const bars = useMemo(() => aggregateBars(data ?? [], minutesOf(mode)), [data, mode]);
+  const bars = useMemo(() => aggregateBars(data?.bars ?? [], minutesOf(mode)), [data, mode]);
 
   const isMinute = mode !== "intraday" && mode !== "day";
 
