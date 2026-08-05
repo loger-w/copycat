@@ -71,7 +71,8 @@ class CapitalStore:
         self._lock = threading.Lock()
         self._orders: dict[str, _Agg] = {}
         self._order_seq: list[str] = []  # 到達順序
-        self._positions: dict[str, Position] = {}
+        # 鍵 = (stock_no, kind):同檔資+集保並存各佔一列,兩種類都平倉鍵得到
+        self._positions: dict[tuple[str, str], Position] = {}
 
     def _set_status(self, a: _Agg, label: str) -> None:
         if _RANK.get(label, 0) >= _RANK.get(a.status_label or "", 0):
@@ -220,24 +221,30 @@ class CapitalStore:
         with self._lock:
             old = self._positions
             for p in positions:
-                prev = old.get(p.stock_no)
-                # 損益查詢回來前沿用既有均價/損益基底(同種類才沿用 — 資/券成本基礎不同)
-                if p.avg_price is None and prev is not None and prev.kind == p.kind:
+                prev = old.get((p.stock_no, p.kind))
+                # 損益查詢回來前沿用既有均價/損益基底(鍵已含 kind,天然只沿用同種類 —
+                # 資/券成本基礎不同,異種類是另一列不是同一列的續命)
+                if p.avg_price is None and prev is not None:
                     p.avg_price = prev.avg_price
                     p.pnl_base = prev.pnl_base
                     p.pnl_base_price = prev.pnl_base_price
                     p.pnl_cost = prev.pnl_cost
-            self._positions = {p.stock_no: p for p in positions}
+            self._positions = {(p.stock_no, p.kind): p for p in positions}
 
     def apply_profit_rows(self, rows: list[ProfitRow]) -> None:
-        """損益試算回填(均價+含費稅息損益基底);查無股號忽略(部位清單以即時庫存為權威)。
+        """損益試算回填(均價+含費稅息損益基底);查無 (股號, 種類) 忽略
+        (部位清單以即時庫存為權威);kind=None(未知標籤)整列略過 —
+        寧缺均價,不可把不明成本基礎套到任一種類上。
         用 dataclasses.replace 發布新物件而非就地變更:positions() 回傳的是物件參考,
         route 在鎖外 asdict,就地改會撕裂讀(新 pnl 配舊基準價)。"""
         with self._lock:
             for r in rows:
-                p = self._positions.get(r.stock_no)
+                if r.kind is None:
+                    continue
+                key = (r.stock_no, r.kind)
+                p = self._positions.get(key)
                 if p is not None:
-                    self._positions[r.stock_no] = dataclasses.replace(
+                    self._positions[key] = dataclasses.replace(
                         p,
                         avg_price=r.avg_price,
                         pnl_base=r.pnl,
@@ -249,6 +256,11 @@ class CapitalStore:
         with self._lock:
             return list(self._positions.values())
 
-    def position_for(self, stock_no: str) -> Position | None:
+    def position_for(self, stock_no: str, kind: str | None = None) -> Position | None:
+        """平倉查找。kind 有值 = 精確鍵;kind=None = 同股號恰一列才回傳,
+        多列(同檔資+集保並存)回 None — 平倉種類猜錯會送錯單種,寧可讓 caller 阻擋。"""
         with self._lock:
-            return self._positions.get(stock_no)
+            if kind is not None:
+                return self._positions.get((stock_no, kind))
+            hits = [p for (no, _kind), p in self._positions.items() if no == stock_no]
+            return hits[0] if len(hits) == 1 else None

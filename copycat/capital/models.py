@@ -89,6 +89,9 @@ class PositionCloseRequest:
     qty: int | None = None  # None=全部
     price_type: PriceType = "market"
     source: str = "panel"
+    # sec 庫存種類 cash/margin/short(同檔資+集保並存時的第二把鍵);
+    # None = 舊 body:同檔唯一列才成立,多列一律阻擋不猜。fut 忽略此欄。
+    kind: str | None = None
 
 
 @dataclass(frozen=True)
