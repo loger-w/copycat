@@ -24,6 +24,7 @@ from copycat.server import build_info
 from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.capital_api import register_capital
+from copycat.server.oi_levels import register_oi
 from copycat.server.ws import WsBroadcaster, relay
 from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
@@ -628,6 +629,7 @@ def create_app(
     app.state.corr_ws = corr_ws
     app.state.river_ws = river_ws
     register_capital(app)  # capital/futures routes + 例外映射(capital-order design §6)
+    register_oi(app)  # /api/futures/oi-levels(FinMind OI 撐壓;futures-allday SC-11)
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
