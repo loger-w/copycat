@@ -2,7 +2,8 @@
 
 detector 本身的判定邏輯在 `tests/live/test_signal_state.py`,這裡只釘接線:
 payload 逐鍵契約、membership gate、fanout(WS / jsonl / Discord)、基準 worker、
-enabled 持久化。時鐘一律注入,daily_bars / publish / notify_fallback 全用 fake。
+規則引擎(per-rule detector / basis cache / CRUD 熱重載)。時鐘一律注入,
+daily_bars / publish / notify_fallback 全用 fake。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import logging
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,12 +23,14 @@ from copycat.live.stock_models import StockBook, StockMeta, StockTick
 from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.server import signal_hub as hub_mod
-from copycat.server.signal_hub import SignalHub
+from copycat.server.signal_hub import SignalHub, format_signal_text
+from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
 from copycat.signals_config import SignalsConfig
 
 _DATE = "2026-08-04"
 _NEXT = "2026-08-05"
 _THIRD = "2026-08-06"
+_RULES_FILE = "signal_rules.json"
 # design §7 的 WS 訊號契約鍵集合(jsonl row 為本集合 + trade_date)
 _SIGNAL_KEYS = {
     "type",
@@ -40,7 +44,45 @@ _SIGNAL_KEYS = {
     "direction",
     "pct",
     "touch_count",
+    "rule_id",
+    "rule_name",
 }
+
+_RULE_PARAMS: dict[str, dict[str, float]] = {
+    "cdp_cross": {"rearm_ticks": 5},
+    "surge_crash": {"pct": 2.0, "window_secs": 300},
+    "vol_burst": {
+        "ratio": 3,
+        "window_secs": 300,
+        "min_elapsed_min": 15,
+        "min_window_lots": 100,
+        "min_day_lots": 500,
+    },
+    "limit_lock": {},
+}
+
+
+def _rule(kind: str, rid: str, **over: Any) -> dict[str, Any]:
+    """規則樣板(參數 = SignalsConfig 預設,行為與遷移種子一致);over 覆寫任一欄。"""
+    rule: dict[str, Any] = {
+        "id": rid,
+        "name": f"{kind}-{rid}",
+        "kind": kind,
+        "enabled": True,
+        "notify_discord": True,
+        "cooldown_secs": 600,
+        "params": dict(_RULE_PARAMS[kind]),
+        "cdp_levels": list(CDP_LEVELS) if kind == "cdp_cross" else [],
+    }
+    rule.update(over)
+    return rule
+
+
+def _write_rules(tmp_path: Path, rules: list[dict[str, Any]]) -> None:
+    """預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。"""
+    (tmp_path / _RULES_FILE).write_text(
+        json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 class _Clock:
@@ -182,6 +224,12 @@ class _Harness:
         await asyncio.wait_for(self.hub._jsonl_queue.join(), 2)
         await asyncio.wait_for(self.hub._discord_queue.join(), 2)
 
+    def rule_id(self, kind: str) -> str:
+        return next(r["id"] for r in self.hub.rules() if r["kind"] == kind)
+
+    def rule_name(self, kind: str) -> str:
+        return next(r["name"] for r in self.hub.rules() if r["kind"] == kind)
+
     def rows(self, date: str = _DATE) -> list[dict]:
         path = self.data_dir / "signals" / f"{date.replace('-', '')}.jsonl"
         if not path.exists():
@@ -203,6 +251,12 @@ def _drain(queue: asyncio.Queue[dict]) -> list[dict]:
     while not queue.empty():
         rows.append(queue.get_nowait())
     return rows
+
+
+def _cache(h: _Harness, code: str = "2330") -> tuple[str, int | None]:
+    """hub 的 basis cache 摘要 → (基準日, nh 線價);cdp 不可得時 nh 為 None。"""
+    basis_date, cdp = h.hub._basis_cache[code]
+    return basis_date, None if cdp is None else cdp["nh"]
 
 
 async def _wait_rows(h: _Harness, n: int, timeout: float = 2.0) -> None:
@@ -245,7 +299,11 @@ class TestPayloadContract:
             assert msg["direction"] == "from_below"
             assert msg["pct"] is None
             assert msg["touch_count"] == 1
-            assert msg["id"] == "2026-08-04-2330-cdp_cross-nh-10:00:00.123"
+            # id 帶 rule 段(SC-2):同 kind 多規則同 tick 的兩則事件不得撞 id
+            rid = h.rule_id("cdp_cross")
+            assert msg["rule_id"] == rid
+            assert msg["rule_name"] == h.rule_name("cdp_cross")
+            assert msg["id"] == f"2026-08-04-{rid}-2330-cdp_cross-nh-10:00:00.123"
 
             rows = h.rows()
             assert len(rows) == 1
@@ -278,7 +336,8 @@ class TestPayloadContract:
             h.lock_up(_state(upper=110_000, locked_up=True))
             await h.settle()
             assert h.published[0]["kind"] == "limit_lock"
-            assert h.published[0]["id"] == "2026-08-04-2330-limit_lock-up-10:00:00.123"
+            rid = h.rule_id("limit_lock")
+            assert h.published[0]["id"] == f"2026-08-04-{rid}-2330-limit_lock-up-10:00:00.123"
         finally:
             await h.hub.close()
 
@@ -340,7 +399,8 @@ class TestMembership:
             assert fetched == ["2317", "2330"]  # 基準非零:第一次真的抓了(request_basis 排序)
 
             dropped: list[str] = []
-            h.hub._detector.drop_code = dropped.append  # type: ignore[method-assign]
+            for slot in h.hub._slots.values():  # 逐 slot:drop 已是每顆 detector 各做一次
+                slot.detector.drop_code = dropped.append  # type: ignore[method-assign]
 
             h.hub.on_watchlist(["2317", "2330"])  # 同集合(順序不同)
             await h.settle()
@@ -458,29 +518,26 @@ class TestHistoryAndId:
 
 
 class TestEnabled:
-    async def test_disabled_kind_emits_nothing_and_persists(
+    async def test_disabled_rule_emits_nothing_and_persists(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
-        """SC-12 後端半:關掉的 kind 不產事件,開關跨重啟保留。"""
+        """SC-2:停用的單位是**規則**,停用態隨規則檔跨重啟保留;其他規則照發。
+
+        事前標記的契約改寫(design R8「既有測試遷移」表):原
+        `test_disabled_kind_emits_nothing_and_persists` 釘的是 `set_enabled` 四鍵開關,
+        該家族已不參與評估(評估只讀 slots),T3b 整組退役。
+        """
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
         h = _Harness(tmp_path, clock)
         await h.hub.start()
         try:
-            assert h.hub.enabled() == {
-                "cdp_cross": True,
-                "surge_crash": True,
-                "vol_burst": True,
-                "limit_lock": True,
-            }
-            await h.hub.set_enabled({"cdp_cross": False})
-            h.hub.on_watchlist(["2330"])
+            await h.hub.upsert_rule(_rule("cdp_cross", "r-1-000", enabled=False), rule_id="r-1-000")
+            h.hub.on_watchlist(["2330", "2317"])
             await h.settle()
             h.cross_nh(_state())
             await h.settle()
             assert h.published == []
 
-            h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
-            h.hub.on_watchlist(["2330", "2317"])
-            await h.settle()
             h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
             await h.settle()
             assert [m["kind"] for m in h.published] == ["limit_lock"]
@@ -488,8 +545,8 @@ class TestEnabled:
             await h.hub.close()
 
         again = _Harness(tmp_path, clock)
-        assert again.hub.enabled()["cdp_cross"] is False
-        assert again.hub.enabled()["limit_lock"] is True
+        by_id = {r["id"]: r["enabled"] for r in again.hub.rules()}
+        assert by_id == {"r-1-000": False, "r-1-001": True}
 
     async def test_concurrent_set_enabled_lands_memory_state_on_disk(
         self, tmp_path: Path, clock: _Clock
@@ -735,15 +792,22 @@ class TestBasisWorker:
         try:
             h.hub.on_watchlist(["2330"])
             await h.settle()
+            assert _cache(h) == (_DATE, 80_000)  # 基準快照歸 hub 持有(SC-3)
             # stage1:盤前預抓次日基準(多一根 08-04 日 K → nh 由 80_000 變 95_000)
             h.bars.bars = [_BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             await h.settle()
             assert h.published == []  # 暫存不生效
+            assert h.hub._staged_date == _NEXT
+            assert h.hub._staged_cache["2330"] is not None
+            assert h.hub._staged_cache["2330"]["nh"] == 95_000
+            assert _cache(h) == (_DATE, 80_000)  # 當日快照未被暫存區汙染
 
             h.date = _NEXT
             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
             h.hub.on_rollover()
+            assert _cache(h) == (_NEXT, 95_000)  # promote:整批換日別
+            assert h.hub._staged_cache == {} and h.hub._staged_date is None
             state = _state()
             h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
             h.hub.on_tick("2330", _tick(95_500, cum=2, trade_date=_NEXT), state)
@@ -767,6 +831,7 @@ class TestBasisWorker:
             h.hub.on_rollover()  # stage1 沒跑過 → swap 失敗 → 清空重抓
             await h.settle()
             assert len(h.bars.calls) == 2
+            assert _cache(h) == (_NEXT, 95_000)
 
             state = _state()
             h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
@@ -799,6 +864,7 @@ class TestBasisWorker:
             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
             h.hub.on_rollover()
             await h.settle()  # 此刻 worker 才消化 stage1 的 job → 暫存區被填上 08-05 基準
+            assert _cache(h) == (_NEXT, 95_000)
 
             state = _state()
             h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
@@ -814,6 +880,7 @@ class TestBasisWorker:
             clock.now = _dt.datetime(2026, 8, 6, 10, 0, 0)
             h.hub.on_rollover()
             await h.settle()
+            assert _cache(h) == (_THIRD, 125_000), "hub 快照沿用了昨天的基準日"
 
             state2 = _state()
             h.hub.on_tick("2330", _tick(124_000, trade_date=_THIRD), state2)
@@ -895,3 +962,405 @@ class TestBookPath:
             await h.settle()
         finally:
             await h.hub.close()
+
+
+class TestRuleEngine:
+    """SC-2/3/5:每條規則一顆 detector;design「邊界」逐 edge。"""
+
+    async def test_zero_rules_no_events(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 1:規則 0 條 → 評估迴圈零次,不炸也不發。"""
+        _write_rules(tmp_path, [])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            assert h.hub.rules() == []
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            h.hub.on_book("2330", _state(upper=110_000))
+            await h.settle()
+            assert h.published == []
+            assert h.rows() == []
+        finally:
+            await h.hub.close()
+
+    async def test_empty_rules_file_not_remigrated(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 1 的另一半:空陣列 ≠ 缺檔 —— 刪光規則後重啟不得復活四條預設。"""
+        _write_rules(tmp_path, [])
+        assert _Harness(tmp_path, clock).hub.rules() == []
+        assert _Harness(tmp_path, clock).hub.rules() == []
+        assert load_rules(tmp_path / _RULES_FILE) == []
+
+    async def test_two_rules_same_kind_both_fire(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 2:同 kind 兩規則同 tick → 兩則事件,id 因 rule 段不撞。"""
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert [m["rule_id"] for m in h.published] == ["r-1-000", "r-1-001"]
+            assert len({m["id"] for m in h.published}) == 2
+            assert len(h.rows()) == 2
+            assert len(h.bot) == 2
+        finally:
+            await h.hub.close()
+
+    async def test_upsert_preserves_other_rules_state(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 3:被編輯那顆 detector 重建歸零,其他顆的 cooldown 原樣保留。
+
+        兩條規則都把冷卻設到一天:第一次穿越後兩顆都被自己的冷卻壓著;編輯 A 之後
+        只有 A 能再發。順帶釘 `_seed_slot` —— 新 detector 沒被餵基準的話這裡零事件。
+        """
+        rules = [
+            _rule("cdp_cross", "r-1-000", cooldown_secs=86_400, params={"rearm_ticks": 0}),
+            _rule("cdp_cross", "r-1-001", cooldown_secs=86_400, params={"rearm_ticks": 0}),
+        ]
+        _write_rules(tmp_path, rules)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert [m["rule_id"] for m in h.published] == ["r-1-000", "r-1-001"]
+            h.published.clear()
+
+            await h.hub.upsert_rule({**rules[0], "name": "改過的 A"}, rule_id="r-1-000")
+
+            state = _state()
+            h.hub.on_tick("2330", _tick(79_000, cum=3), state)  # 新 detector:首 tick 只初始化
+            h.hub.on_tick("2330", _tick(80_500, cum=4), state)
+            await h.settle()
+            assert [m["rule_id"] for m in h.published] == ["r-1-000"]
+            assert h.published[0]["rule_name"] == "改過的 A"
+            assert h.published[0]["touch_count"] == 1  # 歸零(B 那顆若被波及會是 2)
+        finally:
+            await h.hub.close()
+
+    async def test_cdp_levels_subset(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 4:規則只訂 AH → hub 只餵那條線,detector 認不得 nh 就不會發。"""
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000", cdp_levels=["ah"])])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            assert h.hub._slots["r-1-000"].detector._basis["2330"] == {"ah": 85_000}
+
+            h.cross_nh(_state())
+            await h.settle()
+            assert h.published == []
+
+            state = _state()
+            h.hub.on_tick("2330", _tick(84_000, cum=3), state)
+            h.hub.on_tick("2330", _tick(85_500, cum=4), state)
+            await h.settle()
+            assert [m["levels"] for m in h.published] == [["ah"]]
+        finally:
+            await h.hub.close()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({**_rule("cdp_cross", "x"), "kind": "nope"}, id="kind"),
+            pytest.param(_rule("cdp_cross", "x", name="   "), id="blank-name"),
+            pytest.param(_rule("cdp_cross", "x", name="cdp_cross-r-1-000"), id="dup-name"),
+            pytest.param(_rule("cdp_cross", "x", cooldown_secs=5), id="cooldown-low"),
+            pytest.param(_rule("cdp_cross", "x", cdp_levels=[]), id="levels-empty"),
+            pytest.param(_rule("cdp_cross", "x", cdp_levels=["zz"]), id="levels-unknown"),
+            pytest.param(_rule("cdp_cross", "x", params={"rearm_ticks": 999}), id="param-range"),
+            pytest.param(
+                _rule("cdp_cross", "x", params={"rearm_ticks": 5, "bogus": 1}), id="param-extra"
+            ),
+            pytest.param(_rule("surge_crash", "x", params={"pct": 2.0}), id="param-missing"),
+            pytest.param(_rule("limit_lock", "x", cdp_levels=["ah"]), id="levels-on-non-cdp"),
+        ],
+    )
+    async def test_invalid_payload_rejected_and_state_untouched(
+        self, tmp_path: Path, clock: _Clock, payload: dict[str, Any]
+    ) -> None:
+        """邊界 6:語意驗證單一定義在 normalize_rule;拒收時記憶體與磁碟都不得動。"""
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000")])
+        h = _Harness(tmp_path, clock)
+        before = h.hub.rules()
+        with pytest.raises(RuleError, match="INVALID_RULE"):
+            await h.hub.upsert_rule(payload)
+        assert h.hub.rules() == before
+        assert load_rules(tmp_path / _RULES_FILE) == before
+
+    async def test_limit_rule_latch_isolated(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 7:latch 在各自 detector 內閉合 —— 兩條鎖板規則各發一對 lock/open。"""
+        _write_rules(tmp_path, [_rule("limit_lock", "r-1-000"), _rule("limit_lock", "r-1-001")])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.lock_up(_state(upper=110_000, locked_up=True))
+            await h.settle()
+            assert [(m["rule_id"], m["kind"]) for m in h.published] == [
+                ("r-1-000", "limit_lock"),
+                ("r-1-001", "limit_lock"),
+            ]
+            h.hub.on_book("2330", _state(upper=110_000))
+            await h.settle()
+            assert [(m["rule_id"], m["kind"]) for m in h.published][2:] == [
+                ("r-1-000", "limit_open"),
+                ("r-1-001", "limit_open"),
+            ]
+        finally:
+            await h.hub.close()
+
+    async def test_migration_defaults(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界 8:缺規則檔 + 缺 legacy 檔 → 每 kind 一條、全開,並立刻落檔。"""
+        h = _Harness(tmp_path, clock)
+        rules = h.hub.rules()
+        assert [r["kind"] for r in rules] == list(RULE_KINDS)
+        assert all(r["enabled"] for r in rules)
+        assert all(r["notify_discord"] for r in rules)
+        assert load_rules(tmp_path / _RULES_FILE) == rules
+
+    async def test_migration_reads_legacy_flags(self, tmp_path: Path, clock: _Clock) -> None:
+        """SC-4:舊 `signals_enabled.json` 的關閉態要跟著遷移過來(缺鍵 = fail-open)。"""
+        (tmp_path / "signals_enabled.json").write_text(
+            json.dumps({"vol_burst": False}), encoding="utf-8"
+        )
+        h = _Harness(tmp_path, clock)
+        assert {r["kind"]: r["enabled"] for r in h.hub.rules()} == {
+            "cdp_cross": True,
+            "surge_crash": True,
+            "vol_burst": False,
+            "limit_lock": True,
+        }
+
+    async def test_bad_rules_file_raises_on_construct(self, tmp_path: Path, clock: _Clock) -> None:
+        """R9:壞規則檔在建構時就往外拋(app 的 `_boot` 傘接手 → hub None + 503)。
+
+        靜默套預設會在盤中無預警改變推播行為,所以這裡要的正是「大聲」。
+        """
+        (tmp_path / _RULES_FILE).write_text("{壞檔", encoding="utf-8")
+        with pytest.raises(RuleError, match="INVALID_RULE"):
+            _Harness(tmp_path, clock)
+
+    async def test_watchlist_removal_stops_all_rules(self, tmp_path: Path, clock: _Clock) -> None:
+        """SC-5:移出自選 → 逐 slot drop + basis / staged 雙 cache 都不得留下該檔。"""
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.hub.on_rollover_pending(_NEXT)  # 讓暫存區也有這檔
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert len(h.published) == 2
+            assert "2330" in h.hub._basis_cache
+            assert "2330" in h.hub._staged_cache
+
+            h.hub.on_watchlist([])
+            assert "2330" not in h.hub._basis_cache
+            assert "2330" not in h.hub._staged_cache
+            assert all("2330" not in s.detector._basis for s in h.hub._slots.values())
+
+            h.cross_nh(_state())
+            await h.settle()
+            assert len(h.published) == 2  # 兩顆都停發
+        finally:
+            await h.hub.close()
+
+    async def test_one_rule_exception_does_not_stop_others(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """R1:per-rule try/except —— 一條規則炸掉只跳過它自己,其餘照評。"""
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+
+            def _boom(*_args: Any, **_kwargs: Any) -> list:
+                raise RuntimeError("這條規則壞了")
+
+            h.hub._slots["r-1-000"].detector.evaluate = _boom  # type: ignore[method-assign]
+            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
+                h.cross_nh(_state())
+                await h.settle()
+
+            assert [m["rule_id"] for m in h.published] == ["r-1-001"]
+            assert "cdp_cross-r-1-000" in caplog.text  # log 要指得出是哪條規則
+        finally:
+            await h.hub.close()
+
+    async def test_notify_discord_false_skips_discord_only(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """SC-2:`notify_discord` 只擋 Discord,WS 與 jsonl 這條真相源照走。"""
+        _write_rules(
+            tmp_path,
+            [
+                _rule("cdp_cross", "r-1-000", name="要通知"),
+                _rule("cdp_cross", "r-1-001", name="不通知", notify_discord=False),
+            ],
+        )
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert len(h.published) == 2
+            assert len(h.rows()) == 2
+            assert h.bot == [h.bot[0]] and h.bot[0].endswith("｜要通知")
+        finally:
+            await h.hub.close()
+
+
+class TestDiscordText:
+    def _row(self, **over: Any) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "kind": "vol_burst",
+            "code": "2330",
+            "name": "台積電",
+            "price": 100_000,
+            "time": "10:00:00",
+            "pct": 3.2,
+        }
+        row.update(over)
+        return row
+
+    def test_rule_name_appended(self) -> None:
+        """R14b:同 kind 多規則在 Discord 要分得出是哪一條發的。"""
+        assert format_signal_text(self._row(rule_name="爆量-緊")).endswith("｜爆量-緊")
+
+    def test_legacy_row_without_rule_name(self) -> None:
+        """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
+        assert format_signal_text(self._row()).endswith("10:00:00")
+
+
+class TestRulesCrud:
+    async def test_create_assigns_new_id_persists_and_is_live(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        _write_rules(tmp_path, [_rule("limit_lock", "r-1-000")])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            created = await h.hub.upsert_rule(_rule("cdp_cross", "客戶端亂填的", name="新 CDP"))
+            assert created["id"] not in {"客戶端亂填的", "r-1-000"}
+            assert [r["id"] for r in h.hub.rules()] == ["r-1-000", created["id"]]
+            assert load_rules(tmp_path / _RULES_FILE) == h.hub.rules()
+
+            h.cross_nh(_state())  # 熱重載:新規則立刻生效(基準由 _seed_slot 補上)
+            await h.settle()
+            assert [m["rule_id"] for m in h.published] == [created["id"]]
+        finally:
+            await h.hub.close()
+
+    async def test_ids_not_recycled_after_delete(self, tmp_path: Path, clock: _Clock) -> None:
+        """R12:id 走單調計數 —— 刪掉再新增不得撞上已存 jsonl 的舊 id。"""
+        h = _Harness(tmp_path, clock)
+        first = await h.hub.upsert_rule(_rule("limit_lock", "x", name="A"))
+        await h.hub.delete_rule(first["id"])
+        second = await h.hub.upsert_rule(_rule("limit_lock", "x", name="B"))
+        assert second["id"] != first["id"]
+
+    async def test_put_edits_in_place_and_hot_reloads(self, tmp_path: Path, clock: _Clock) -> None:
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            await h.hub.upsert_rule(
+                _rule("cdp_cross", "r-1-000", cdp_levels=["ah"]), rule_id="r-1-000"
+            )
+            assert [r["id"] for r in h.hub.rules()] == ["r-1-000", "r-1-001"]  # 位置不變
+            assert h.hub._slots["r-1-000"].detector._basis["2330"] == {"ah": 85_000}
+
+            h.cross_nh(_state())  # nh 已不在規則的線集合
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
+
+    async def test_put_unknown_id_raises_not_found(self, tmp_path: Path, clock: _Clock) -> None:
+        h = _Harness(tmp_path, clock)
+        with pytest.raises(RuleError, match="RULE_NOT_FOUND"):
+            await h.hub.upsert_rule(_rule("limit_lock", "nope", name="X"), rule_id="nope")
+
+    async def test_delete_unknown_id_raises_not_found(self, tmp_path: Path, clock: _Clock) -> None:
+        h = _Harness(tmp_path, clock)
+        with pytest.raises(RuleError, match="RULE_NOT_FOUND"):
+            await h.hub.delete_rule("nope")
+
+    async def test_delete_removes_slot_and_persists(self, tmp_path: Path, clock: _Clock) -> None:
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("limit_lock", "r-1-001")])
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            await h.hub.delete_rule("r-1-000")
+            assert [r["id"] for r in h.hub.rules()] == ["r-1-001"]
+            assert load_rules(tmp_path / _RULES_FILE) == h.hub.rules()
+
+            h.cross_nh(_state())
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
+
+    async def test_max_rules_enforced_on_create_only(self, tmp_path: Path, clock: _Clock) -> None:
+        """R11:上限只擋新增 —— 編輯既有規則不得因為「已經滿了」而被拒。"""
+        _write_rules(
+            tmp_path,
+            [_rule("limit_lock", f"r-1-{i:03d}", name=f"n{i}") for i in range(MAX_RULES)],
+        )
+        h = _Harness(tmp_path, clock)
+        with pytest.raises(RuleError, match="INVALID_RULE"):
+            await h.hub.upsert_rule(_rule("limit_lock", "x", name="第 31 條"))
+        assert len(h.hub.rules()) == MAX_RULES
+
+        edited = await h.hub.upsert_rule(
+            _rule("limit_lock", "r-1-000", name="n0 改"), rule_id="r-1-000"
+        )
+        assert edited["name"] == "n0 改"
+
+    async def test_save_failure_leaves_memory_untouched(
+        self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R12/R21:記憶體不得先於落檔更新 —— 否則畫面有、重啟後就沒了。"""
+        _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000")])
+        h = _Harness(tmp_path, clock)
+        before = h.hub.rules()
+
+        def _boom(path: Path, rules: list) -> None:
+            raise OSError("磁碟滿了")
+
+        monkeypatch.setattr(hub_mod, "save_rules", _boom)
+        with pytest.raises(OSError):
+            await h.hub.upsert_rule(_rule("limit_lock", "x", name="新"))
+        assert h.hub.rules() == before
+        with pytest.raises(OSError):
+            await h.hub.delete_rule("r-1-000")
+        assert h.hub.rules() == before
+
+    async def test_rules_returns_copies(self, tmp_path: Path, clock: _Clock) -> None:
+        """外部改到回傳值不得反噬 slot(熱路徑讀的就是那份 rule)。"""
+        h = _Harness(tmp_path, clock)
+        snapshot = h.hub.rules()
+        snapshot[0]["name"] = "亂改"
+        snapshot[0]["cdp_levels"].append("zz")
+        assert h.hub.rules()[0]["name"] != "亂改"
+        assert "zz" not in h.hub.rules()[0]["cdp_levels"]
