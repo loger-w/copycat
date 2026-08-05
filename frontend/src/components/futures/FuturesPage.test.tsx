@@ -1,9 +1,11 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesPage, futCloseEstimate } from "@/components/futures/FuturesPage";
+import type { IndexSeries } from "@/hooks/useIndexStream";
+import { wrap } from "@/test-utils";
 import type { CapitalPosition, FuturesProductState } from "@/types";
 
 const TXF_STATE: FuturesProductState = {
@@ -63,8 +65,27 @@ function futPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition 
   };
 }
 
+/** 指數流的 twse 腿(SC-5 期現價差來源)。 */
+function series(overrides: Partial<IndexSeries> = {}): IndexSeries {
+  return {
+    p: 22_950_000,
+    ref: 22_900_000,
+    high: null,
+    low: null,
+    stale: false,
+    minutes: {},
+    ...overrides,
+  };
+}
+
 /** product 已上提到 App(D-3)→ 這裡用受控 wrapper 模擬父層持有 state。 */
-function Harness({ initial = "TXF" }: { initial?: string }) {
+function Harness({
+  initial = "TXF",
+  twse = null,
+}: {
+  initial?: string;
+  twse?: IndexSeries | null;
+}) {
   const [product, setProduct] = useState(initial);
   const state = STATES[product] ?? null;
   return (
@@ -75,12 +96,54 @@ function Harness({ initial = "TXF" }: { initial?: string }) {
       state={state}
       resolvedYm={state?.resolved_contract ?? null}
       wsStatus="open"
+      twse={twse}
     />
   );
 }
 
+// test-infra:FuturesPage 自 SC-1 起掛 FuturesChart(TQ hooks)→ render 必須有
+// QueryClientProvider 與這三條路由的 fetch mock,否則與本檔斷言無關的 query 會炸開。
+let barsUrls: string[] = [];
+
+beforeEach(() => {
+  window.localStorage.clear();
+  barsUrls = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/api/market/bars")) {
+        barsUrls.push(u);
+        return new Response(
+          JSON.stringify({
+            bars: [],
+            meta: {
+              source: "tc4_1k",
+              coverage_from: null,
+              coverage_to: null,
+              partial_last: false,
+              volume: true,
+              refusal: null,
+              synth_since: null,
+            },
+          }),
+        );
+      }
+      if (u.includes("/api/futures/oi-levels")) {
+        return new Response(JSON.stringify({ date: null, contract: null, strikes: [] }));
+      }
+      if (u.includes("/api/capital/positions")) {
+        return new Response(JSON.stringify({ positions: [] }));
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    }),
+  );
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -108,7 +171,7 @@ describe("futCloseEstimate 平倉閘用估價(design amendment:限價貼漲跌�
 
 describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
   it("預設大台:現價/漲跌/漲跌%/合約顯示", () => {
-    render(<Harness />);
+    wrap(<Harness />);
     // 「23000」同時出現在五檔中央 → 收斂 scope 到頂部資訊列(header)
     const header = within(screen.getByRole("banner"));
     expect(header.getByText("23000")).toBeTruthy();
@@ -119,7 +182,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
   });
 
   it("切小台:回呼上拋並顯示 MXF 行情與合約", () => {
-    render(<Harness />);
+    wrap(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "小台" }));
     const header = within(screen.getByRole("banner"));
     expect(header.getByText("MXF 2026/09")).toBeTruthy();
@@ -127,7 +190,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
   });
 
   it("初始微台;resolved null 顯示「合約解析中」", () => {
-    render(<Harness initial="TMF" />);
+    wrap(<Harness initial="TMF" />);
     expect(screen.getByRole("button", { name: "微台" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByText("合約解析中")).toBeTruthy();
   });
@@ -137,7 +200,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
 // 「部位平倉:多單估價貼跌停,確認彈窗顯示閘用估價」已逐條搬入 RightRail.test.tsx。
 describe("FuturesPage 中間主區(SC-5)", () => {
   it("渲染水平五檔(DepthBar)", () => {
-    render(<Harness />);
+    wrap(<Harness />);
     // DepthBar 的格子一律是 div(五檔點價置中是個股 OrderBook 專屬)→ 以 aria-label 指認
     expect(screen.getByLabelText("買1 22999")).toBeTruthy();
     expect(screen.getByLabelText("賣1 23001")).toBeTruthy();
@@ -146,9 +209,98 @@ describe("FuturesPage 中間主區(SC-5)", () => {
   });
 
   it("不再渲染閃電梯 / 委託 / 部位(已移到右欄)", () => {
-    render(<Harness />);
+    wrap(<Harness />);
     expect(screen.queryByRole("button", { name: "武裝" })).toBeNull();
     expect(screen.queryByText("委託")).toBeNull();
     expect(screen.queryByText("部位")).toBeNull();
+  });
+});
+
+describe("FuturesPage 期現價差(SC-5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  function spreadText(): string {
+    return within(screen.getByRole("banner")).getByTestId("fut-spread").textContent ?? "";
+  }
+
+  it("盤中 + twse 有價且不 stale → 正價差(text-bull)", () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0)); // 週三 10:00
+    wrap(<Harness twse={series({ p: 22_950_000 })} />);
+    const el = within(screen.getByRole("banner")).getByTestId("fut-spread");
+    expect(el.textContent).toBe("價差 +50");
+    expect(el.getAttribute("class")).toContain("text-bull");
+  });
+
+  it("期指低於現貨 → 負價差(text-bear)", () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0));
+    wrap(<Harness twse={series({ p: 23_050_000 })} />);
+    const el = within(screen.getByRole("banner")).getByTestId("fut-spread");
+    expect(el.textContent).toBe("價差 -50");
+    expect(el.getAttribute("class")).toContain("text-bear");
+  });
+
+  it("twse.stale → 價差 —", () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0));
+    wrap(<Harness twse={series({ stale: true })} />);
+    expect(spreadText()).toBe("價差 —");
+  });
+
+  it("夜間假價差:{p:23000, stale:false} 但現貨已收盤 → 價差 —", () => {
+    // index_engine 的 watchdog 只在 09:00–13:25 維護 stale,收盤後 p 保留收盤值且
+    // stale 恆 false —— 單靠 stale 會整夜顯示一個看起來很真的假價差(design §6.1)
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0)); // 週三 22:00 夜盤
+    wrap(<Harness twse={series({ p: 23_000_000, stale: false })} />);
+    expect(spreadText()).toBe("價差 —");
+  });
+
+  it("twse null(指數流未就緒)→ 價差 —", () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0));
+    wrap(<Harness twse={null} />);
+    expect(spreadText()).toBe("價差 —");
+  });
+});
+
+describe("FuturesPage 結算倒數 badge(SC-6)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  it("2026-08-05 對 202609 契約 → 結算 T-N", () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0));
+    // 2026-09 第三週三 = 2026-09-16;交易日(週一〜五)倒數
+    wrap(<Harness />);
+    const badge = screen.getByTestId("fut-settlement");
+    expect(badge.textContent).toBe("結算 T-30");
+  });
+
+  it("結算當日 → amber 底「今日結算」", () => {
+    vi.setSystemTime(new Date(2026, 8, 16, 10, 0)); // 2026-09-16 = 202609 第三週三
+    wrap(<Harness />);
+    const badge = screen.getByTestId("fut-settlement");
+    expect(badge.textContent).toBe("今日結算");
+    expect(badge.getAttribute("class")).toContain("amber");
+  });
+
+  it("resolvedYm null → 不顯示 badge", () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0));
+    wrap(<Harness initial="TMF" />);
+    expect(screen.queryByTestId("fut-settlement")).toBeNull();
+  });
+});
+
+describe("FuturesPage 掛載 FuturesChart(SC-1/SC-4)", () => {
+  it("圖表跟隨商品切換 —— 換小台後改抓 MXF 的 bars", async () => {
+    wrap(<Harness />);
+    await waitFor(() => expect(barsUrls.some((u) => u.includes("/bars/TXF"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "小台" }));
+    await waitFor(() => expect(barsUrls.some((u) => u.includes("/bars/MXF"))).toBe(true));
+  });
+
+  it("模式列與五檔同時在頁上(圖表掛在 DepthBar 下方)", () => {
+    wrap(<Harness />);
+    expect(screen.getByRole("button", { name: "分時" })).toBeTruthy();
+    expect(screen.getByLabelText("買1 22999")).toBeTruthy();
   });
 });
