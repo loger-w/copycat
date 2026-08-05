@@ -81,6 +81,13 @@ describe("positionEcon 邊界", () => {
     );
   });
 
+  it("qty = 0 → 全 null(「0 不是部位」,同 px() 歸一精神;CALC-2)", () => {
+    expect(positionEcon(0, 100, 102_000, 1.8, "cash")).toEqual({
+      pnl: null,
+      breakEvenMilli: null,
+    });
+  });
+
   it("avgPrice 為 null → pnl 與 BE 皆 null", () => {
     expect(positionEcon(2, null, 102_000, 1.8, "cash")).toEqual({
       pnl: null,
