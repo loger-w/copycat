@@ -750,14 +750,17 @@ describe("StockIntradayChart 左緣漲跌停亮燈(round6 項 5)", () => {
 describe("StockIntradayChart 當日高低與現價圈", () => {
   const withHL = (high: number | null, low: number | null) => ({ ...ACCUM, high, low });
 
-  function geometryOf(container: HTMLElement) {
+  /** 參考幾何:必須吃**該測試實際渲染的那份 accum**,不是硬編 ACCUM ——
+   *  換 meta / 換 high/low 的測試若拿 ACCUM 算,參考值會來自另一條域分支,
+   *  斷言仍會綠(或紅得莫名),而漂掉的是「測試在比什麼」本身。 */
+  function geometryOf(container: HTMLElement, accum: typeof ACCUM) {
     const [, , w, h] = container
       .querySelector("svg")!
       .getAttribute("viewBox")!
       .split(" ")
       .map(Number);
     return buildIntradayGeometry(
-      { minutes: ACCUM.minutes, meta: ACCUM.meta },
+      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
       { width: w!, height: h! },
     );
   }
@@ -835,8 +838,9 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
   });
 
   it("圓心壓在極值價位上(round4 的「apex 貼價位」語意原樣保留)", () => {
-    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
-    const g = geometryOf(container);
+    const accum = withHL(2_395_000, 2_370_000);
+    const { container } = wrap(<StockIntradayChart accum={accum} />);
+    const g = geometryOf(container, accum);
     const high = container.querySelector('circle[data-testid="day-high"]')!;
     expect(Number(high.getAttribute("cy"))).toBeCloseTo(g.toY(2_395_000), 5);
     const low = container.querySelector('circle[data-testid="day-low"]')!;
@@ -844,8 +848,9 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
   });
 
   it("標記落在**摸到極值的那一分鐘**,不是最後一分鐘", () => {
-    const { container } = wrap(<StockIntradayChart accum={withHL(2_395_000, 2_370_000)} />);
-    const g = geometryOf(container);
+    const accum = withHL(2_395_000, 2_370_000);
+    const { container } = wrap(<StockIntradayChart accum={accum} />);
+    const g = geometryOf(container, accum);
     // 高低都發生在 541 分(ACCUM fixture 的 per-minute h/l);最後一分鐘是 542
     const expectedX = g.priceLine[0]!.x;
     const lastX = g.priceLine[g.priceLine.length - 1]!.x;
@@ -898,7 +903,7 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
 
   it("現價圈落在走勢線最右端", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    const g = geometryOf(container);
+    const g = geometryOf(container, ACCUM);
     const lp = lastPoint(g)!;
     const dot = container.querySelector('[data-testid="last-dot"]')!;
     expect(Number(dot.getAttribute("cx"))).toBeCloseTo(lp.x, 5);
