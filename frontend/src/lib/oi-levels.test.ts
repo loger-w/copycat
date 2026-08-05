@@ -33,11 +33,27 @@ describe("pickOiLines(SC-11 帶內取 max)", () => {
     expect(call!.priceMilli).not.toBe(55_000_000);
   });
 
-  it("帶界含端點:0.9×spot 與 1.1×spot 上的履約價算帶內", () => {
-    const edge = [s(21600, 1_000, 1_000), s(26400, 2_000, 3_000)];
+  // 帶界端點各自獨立一條,且**端點就是該側唯一的 max** —— 端點若被排除,選中的會
+  // 換成帶心那根而不是「碰巧仍是同一根」(原本兩端寫在一條裡,下界被排除也照樣綠)
+  it("帶界含下端點:0.9×spot(21600)上的履約價算帶內", () => {
+    const edge = [s(21600, 5_000, 5_000), s(24000, 1_000, 1_000)];
+    const { call, put } = pickOiLines(edge, SPOT, "2026-08-04");
+    expect(call!.priceMilli).toBe(21_600_000);
+    expect(put!.priceMilli).toBe(21_600_000);
+  });
+
+  it("帶界含上端點:1.1×spot(26400)上的履約價算帶內", () => {
+    const edge = [s(24000, 1_000, 1_000), s(26400, 5_000, 5_000)];
     const { call, put } = pickOiLines(edge, SPOT, "2026-08-04");
     expect(call!.priceMilli).toBe(26_400_000);
     expect(put!.priceMilli).toBe(26_400_000);
+  });
+
+  it("端點外一檔(21599 / 26401)排除 —— 帶界是「含」不是「約等於」", () => {
+    const out = [s(21599, 5_000, 5_000), s(24000, 1_000, 1_000), s(26401, 5_000, 5_000)];
+    const { call, put } = pickOiLines(out, SPOT, "2026-08-04");
+    expect(call!.priceMilli).toBe(24_000_000);
+    expect(put!.priceMilli).toBe(24_000_000);
   });
 
   it("label 為「壓 {strike}」/「撐 {strike}」", () => {
