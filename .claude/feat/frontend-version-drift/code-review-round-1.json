@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "phase": "Phase 4 自評(雙 lens opus:正確性/時序 + missing-from-spec/測試強度)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [
+    {"id": "C1(lens1-L1)", "summary": "useFrontendSha 暖態失敗(曾成功後某輪 error)退回 define 舊值 → vite 重啟瞬間假膠囊 + 永久假 warn;TanStack error 態保留 data 卻不用", "resolution": "accepted — 來源選擇改 data-first:有 data 用最後現算值;從未成功且 404 才降級 define;其餘 null"},
+    {"id": "C2(lens2-L1)", "summary": "warn 去重 ref 對現有兩條測試是死碼(deps 不變 effect 不重跑);載重路徑(drift 消失後同 pair 再現)零覆蓋 — 突變刪去重全綠", "resolution": "accepted — 補 drift→null→同 pair 再現仍 1 次 warn 的測試"},
+    {"id": "C3(lens2-L2)", "summary": "dev 語意缺 `-- copycat/` 路徑過濾:純前端/docs/chore commit 也亮燈,本 repo 工作流下膠囊近乎恆亮 = 雜訊化;design 的「= §8 判法」宣稱不實", "resolution": "accepted(選項 a)— middleware 升級 range 判別:/__build/sha?since=<be_sha> 執行 git log <since>..HEAD -- copycat(execFileSync + sha 格式驗證防注入),回 {git_sha, behind};dev drift = behind;PROD 維持 define 比對。design/brainstorm amendment"}
+  ],
+  "p2": [
+    {"id": "C4(lens1-L2)", "summary": "success 但 git_sha null 時 ?? frontendSha() 假造(偏離 §0 契約)", "resolution": "accepted — 併入 C1 的 data-first 改寫"},
+    {"id": "C5(lens2-L5)", "summary": "404 與其他 error 一視同仁降級 define;transient 失敗拿舊 sha 當身分", "resolution": "accepted — getJson 帶 status,僅 404 降級;500/網路 → null;補測試"},
+    {"id": "C6(lens1-L3)", "summary": "無 staleTime + focus refetch → alt-tab 密集 spawn 同步 execSync 卡 dev server;design 成本記帳失實", "resolution": "accepted — 兩 query staleTime 5_000;design 記帳更新"},
+    {"id": "C7(lens2-L3)", "summary": "HEALTH_POLL_MS 無字面斷言(改 6_000 全綠)", "resolution": "accepted — expect(HEALTH_POLL_MS).toBe(60_000)"},
+    {"id": "C8(lens2-L4)", "summary": "R4 落點契約(wrapper ml-auto / 膠囊不帶)無結構斷言,v1 被否決版面同樣全綠;nav.contains 恆真贅斷言", "resolution": "accepted — wrapper 層級/className 斷言 + 刪贅斷言"},
+    {"id": "C9(lens1-L4 = lens2-L6)", "summary": "App.test warn spy 還原在 test body 末行,斷言失敗即洩漏至同檔後續測試", "resolution": "accepted — restoreAllMocks 移 afterEach"}
+  ],
+  "counts": {"P0": 0, "P1": 3, "P2": 6, "accepted": 9, "rejected": 0},
+  "lens_verified_clean": "hooks 順序/StrictMode warn 恰一次;error 態 refetchInterval 持續(自癒);middleware 排序與錯誤路徑;define null 字面量;負例 settle 點突變驗證有區辨力;SC-1~SC-6 測試對應皆存在;§0 三契約逐字相符"
+}

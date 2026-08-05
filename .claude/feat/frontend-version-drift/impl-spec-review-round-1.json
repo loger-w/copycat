@@ -1,0 +1,14 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [
+    {"id": "R1", "summary": "useFrontendSha 未 resolve 前 fallback define 舊值 → dev 每次 reload 閃現假 drift + 永久假 warn", "resolution": "accepted — DEV 下未 fetched 回 null 不假造;補 never-resolve 紅測試"},
+    {"id": "R2", "summary": "SC-6 middleware 零自動化覆蓋(build gate 不執行 configureServer),且函式非匯出無接縫", "resolution": "accepted — 抽 frontend/sha-plugin.ts named exports + fake server/res 單元測試 + Phase 6 具名 curl 驗證"},
+    {"id": "R3", "summary": "來源選擇只測 DEV 半邊,PROD/降級無測(vitest DEV 恆 true 未給手法)", "resolution": "accepted — vi.stubEnv('DEV', false) + 404 降級兩條紅測試"},
+    {"id": "R4", "summary": "雙 ml-auto 平分剩餘空間 → 膠囊停 nav 中段,SC-4 位置不成立且自動化抓不到", "resolution": "accepted(選項 a)— badge+IndexBar 包 ml-auto 容器,IndexBar 不動"}
+  ],
+  "p2_summary": {"count": 4, "themes": "IndexBar 指認手法(tablist role + textContent,R5)/ renderHook 慣例 + fake timers 收尾(R6)/ warn 文案單一定案 + hooks 順序(R7)/ frontendSha 格式斷言兩態 stub 防 vacuous(R8)— 全數整併 PLAN v2", "resolution": "accepted en bloc"},
+  "exit": "P0/P1 修入 PLAN v2,固定 1 輪不重審 → 進 Phase 3"
+}

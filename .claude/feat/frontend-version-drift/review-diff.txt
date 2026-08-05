@@ -1,0 +1,779 @@
+diff --git a/frontend/sha-plugin.ts b/frontend/sha-plugin.ts
+new file mode 100644
+index 0000000..16ee25c
+--- /dev/null
++++ b/frontend/sha-plugin.ts
+@@ -0,0 +1,44 @@
++/// <reference types="node" />
++/** build sha 的取得與 dev server 曝露(SC-1 / SC-6)。
++ *
++ *  抽成獨立檔而非寫在 vite.config.ts 內,是為了可測(design R2):測試 import 這裡
++ *  不會連帶執行 defineConfig。vite.config.ts 只負責接線。
++ */
++import type { Plugin } from "vite";
++
++import { execSync } from "node:child_process";
++
++/** 與後端 `build_info._git` 同一套降級紀律:timeout 3s、stderr 靜默、任何失敗回 null。
++ *  非 git checkout / 沒裝 git / repo 損毀都不該讓 dev server 或 build 掛掉。 */
++export function gitSha(): string | null {
++  try {
++    return (
++      execSync("git rev-parse --short HEAD", {
++        encoding: "utf8",
++        timeout: 3000,
++        stdio: ["ignore", "pipe", "ignore"],
++      }).trim() || null
++    );
++  } catch {
++    return null;
++  }
++}
++
++/** dev server 專屬的 `/__build/sha`:**每請求現算**當下 HEAD(design R1)。
++ *
++ *  現算是這條路徑存在的全部理由 —— dev 下 HMR 已把新 code 送進瀏覽器,凍結的
++ *  define(啟動時求值)會讓「commit 後忘了重啟後端」變成反向誤報:前端顯示舊 sha、
++ *  後端是新 sha,方向剛好相反。middleware 只存在於 dev server,build 產物打這條會
++ *  404 → useFrontendSha 降級回 define 常數。
++ */
++export function buildShaPlugin(): Plugin {
++  return {
++    name: "copycat-build-sha",
++    configureServer(server) {
++      server.middlewares.use("/__build/sha", (_req, res) => {
++        res.setHeader("content-type", "application/json");
++        res.end(JSON.stringify({ git_sha: gitSha() }));
++      });
++    },
++  };
++}
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index b44a46a..72d560c 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -48,17 +48,25 @@ beforeEach(() => {
+   window.localStorage.clear();
+   FakeWS.instances = [];
+   vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
+-  vi.stubGlobal(
+-    "fetch",
+-    vi.fn(async (url: string) => {
+-      if (String(url).includes("/api/index/state")) {
+-        return new Response(JSON.stringify(INDEX_STATE));
+-      }
+-      return new Response(JSON.stringify({}), { status: 404 });
+-    }),
+-  );
++  vi.stubGlobal("fetch", appFetch());
+ });
+ 
++/** 版本落差偵測的兩條路由預設回 `git_sha: null` = 「不可得」→ 全域無膠囊、無 warn。
++ *  傳 sha 進來即成落差 fixture。 */
++function appFetch(sha?: { fe: string | null; be: string | null }) {
++  return vi.fn(async (url: string) => {
++    const u = String(url);
++    if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
++    if (u.includes("/api/health")) {
++      return new Response(JSON.stringify({ git_sha: sha?.be ?? null, git_dirty: false }));
++    }
++    if (u.includes("/__build/sha")) {
++      return new Response(JSON.stringify({ git_sha: sha?.fe ?? null }));
++    }
++    return new Response(JSON.stringify({}), { status: 404 });
++  });
++}
++
+ afterEach(() => {
+   cleanup();
+   vi.unstubAllGlobals();
+@@ -289,6 +297,41 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
+   });
+ });
+ 
++// 🟢 版本落差膠囊的**落點**(SC-4 / design R4):元件自身行為在
++// VersionDriftBadge.test.tsx,這裡只驗「在 nav 列內、在 IndexBar 左邊」。
++describe("App 版本落差膠囊落點(SC-4)", () => {
++  function nav() {
++    return screen.getByRole("tablist", { name: "主要分頁" });
++  }
++
++  it("落差態:膠囊在 nav 內,且緊鄰 IndexBar 左側", async () => {
++    vi.spyOn(console, "warn").mockImplementation(() => {});
++    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "bbbbbbb" }));
++    renderApp();
++    const badge = await within(nav()).findByTestId("version-drift-badge");
++    expect(nav().contains(badge)).toBe(true);
++    expect(badge.nextElementSibling?.textContent).toContain("加權");
++    vi.restoreAllMocks();
++  });
++
++  it("健康態(兩邊同 sha):nav 內零膠囊", async () => {
++    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "aaaaaaa" }));
++    renderApp();
++    // 負例 settle 點:等 health 真的打過再把 promise chain 排乾
++    await waitFor(() =>
++      expect(
++        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some((c) =>
++          String(c[0]).includes("/api/health"),
++        ),
++      ).toBe(true),
++    );
++    await act(async () => {
++      await new Promise((r) => setTimeout(r, 0));
++    });
++    expect(within(nav()).queryByTestId("version-drift-badge")).toBeNull();
++  });
++});
++
+ // 🟢 stock-signals T11(SC-10):toast 掛在 App 層,與當前 tab 無關 ——
+ // 訊號涵蓋整個自選池,人在看大盤 / 期貨時個股鎖漲停一樣要跳出來。
+ describe("App 訊號 toast(SC-10)", () => {
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 7db83b4..91dd127 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -9,6 +9,7 @@ import { QuoteTable } from "@/components/QuoteTable";
+ import { RightRail, type RailContext } from "@/components/rail/RightRail";
+ import { SeriesSelect } from "@/components/SeriesSelect";
+ import { ToastStack } from "@/components/ToastStack";
++import { VersionDriftBadge } from "@/components/VersionDriftBadge";
+ import { useCapitalStream } from "@/hooks/useCapital";
+ import { useSignalAlerts } from "@/hooks/useSignalAlerts";
+ import { useFuturesStream } from "@/hooks/useFuturesStream";
+@@ -194,7 +195,12 @@ export default function App() {
+             {label}
+           </button>
+         ))}
+-        <IndexBar twse={twse} otc={otc} txf={txf} />
++        {/* 一個 ml-auto 推到右側,兩個會平分剩餘空間把膠囊卡在 nav 中段(design R4);
++            IndexBar 自身的 ml-auto 在這個內容尺寸容器內成為 no-op。 */}
++        <div className="ml-auto flex items-baseline gap-3">
++          <VersionDriftBadge />
++          <IndexBar twse={twse} otc={otc} txf={txf} />
++        </div>
+       </nav>
+       {/* 主區 + 常駐右欄(SC-3:切 tab 時右欄位置 / 寬度 / 三顆 tab 都不變) */}
+       <div className="flex min-h-0 min-w-0 flex-1 gap-4">
+diff --git a/frontend/src/components/VersionDriftBadge.test.tsx b/frontend/src/components/VersionDriftBadge.test.tsx
+new file mode 100644
+index 0000000..9862500
+--- /dev/null
++++ b/frontend/src/components/VersionDriftBadge.test.tsx
+@@ -0,0 +1,155 @@
++/** @vitest-environment jsdom */
++/** 版本落差膠囊(SC-4)與 console.warn once per pair(SC-5)。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { VersionDriftBadge } from "@/components/VersionDriftBadge";
++import { wrap } from "@/test-utils";
++
++let fetchMock: ReturnType<typeof vi.fn>;
++let warnSpy: ReturnType<typeof vi.spyOn>;
++
++/** health 的 git_sha 與 /__build/sha 的回應;`status` 用於 500 負例。 */
++function mockFetch(opts: { health?: unknown; healthStatus?: number; buildSha?: string | null }) {
++  fetchMock = vi.fn((url: string) => {
++    const u = String(url);
++    if (u.includes("/api/health")) {
++      return Promise.resolve(
++        new Response(JSON.stringify(opts.health ?? {}), { status: opts.healthStatus ?? 200 }),
++      );
++    }
++    if (u.includes("/__build/sha")) {
++      return Promise.resolve(JSON.stringify({ git_sha: opts.buildSha ?? null })).then(
++        (b) => new Response(b),
++      );
++    }
++    return Promise.resolve(new Response("{}", { status: 404 }));
++  });
++  vi.stubGlobal("fetch", fetchMock);
++}
++
++/** 負例的 settle 點(design R9):先確認 fetch 真的發生,再把 promise chain 排乾
++ *  ——「還沒 fetch 就斷言沒膠囊」會恆綠。 */
++async function settle() {
++  await waitFor(() => expect(fetchMock).toHaveBeenCalled());
++  await act(async () => {
++    await new Promise((r) => setTimeout(r, 0));
++  });
++}
++
++beforeEach(() => {
++  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.restoreAllMocks();
++});
++
++describe("VersionDriftBadge 落差態(SC-4/SC-5)", () => {
++  it("前後端 sha 不同 → 膠囊出現,title 帶兩邊 sha", async () => {
++    mockFetch({ health: { git_sha: "bbbbbbb" } });
++    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
++    const badge = await screen.findByTestId("version-drift-badge");
++    expect(badge.textContent).toContain("版本落差");
++    const title = badge.getAttribute("title") ?? "";
++    expect(title).toContain("aaaaaaa");
++    expect(title).toContain("bbbbbbb");
++    expect(title).toContain("重啟");
++  });
++
++  it("console.warn 恰一次,訊息含兩邊 sha 與「重啟」(SC-5)", async () => {
++    mockFetch({ health: { git_sha: "bbbbbbb" } });
++    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
++    await screen.findByTestId("version-drift-badge");
++    await act(async () => {
++      await new Promise((r) => setTimeout(r, 0));
++    });
++    expect(warnSpy).toHaveBeenCalledTimes(1);
++    const msg = String(warnSpy.mock.calls[0]?.[0]);
++    expect(msg).toContain("aaaaaaa");
++    expect(msg).toContain("bbbbbbb");
++    expect(msg).toContain("重啟");
++  });
++});
++
++describe("VersionDriftBadge 健康態(零 DOM 零噪音)", () => {
++  it("兩邊 sha 相同 → 不掛任何 DOM、不 warn", async () => {
++    mockFetch({ health: { git_sha: "aaaaaaa" } });
++    const { container } = wrap(<VersionDriftBadge feSha="aaaaaaa" />);
++    await settle();
++    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
++    expect(container.textContent).toBe("");
++    expect(warnSpy).not.toHaveBeenCalled();
++  });
++
++  it("後端 git_sha 為 null(非 git checkout)→ 不誤報", async () => {
++    mockFetch({ health: { git_sha: null } });
++    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
++    await settle();
++    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
++    expect(warnSpy).not.toHaveBeenCalled();
++  });
++
++  it("/api/health 500 → 不誤報(後端沒回答不等於版本不同)", async () => {
++    mockFetch({ health: {}, healthStatus: 500 });
++    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
++    await settle();
++    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
++    expect(warnSpy).not.toHaveBeenCalled();
++  });
++
++  it("前端 sha 未知(live 未回、prop 為 null)→ 不誤報", async () => {
++    mockFetch({ health: { git_sha: "bbbbbbb" } });
++    wrap(<VersionDriftBadge feSha={null} />);
++    await settle();
++    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
++    expect(warnSpy).not.toHaveBeenCalled();
++  });
++});
++
++describe("VersionDriftBadge warn 去重(SC-5:per pair)", () => {
++  // 這兩條要 rerender 同一個元件實例(去重的 ref 掛在實例上),必須自己持有 client ——
++  // `wrap()` 不外露 client,rerender 時重建 provider 會連元件一起換掉。
++  // 形態沿用 PriceLadder.test.tsx 的 `ladder()` helper。
++  function badge(feSha: string, client: QueryClient) {
++    return (
++      <QueryClientProvider client={client}>
++        <VersionDriftBadge feSha={feSha} />
++      </QueryClientProvider>
++    );
++  }
++
++  it("同一組 sha 重繪不重複 warn", async () => {
++    mockFetch({ health: { git_sha: "bbbbbbb" } });
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    const { rerender } = render(badge("aaaaaaa", client));
++    await screen.findByTestId("version-drift-badge");
++    rerender(badge("aaaaaaa", client));
++    await act(async () => {
++      await new Promise((r) => setTimeout(r, 0));
++    });
++    expect(warnSpy).toHaveBeenCalledTimes(1);
++  });
++
++  it("sha 組合變了 → 再 warn 一次(換了一組落差就是新事實)", async () => {
++    mockFetch({ health: { git_sha: "bbbbbbb" } });
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    const { rerender } = render(badge("aaaaaaa", client));
++    await screen.findByTestId("version-drift-badge");
++    rerender(badge("ccccccc", client));
++    await waitFor(() => expect(warnSpy).toHaveBeenCalledTimes(2));
++    expect(String(warnSpy.mock.calls[1]?.[0])).toContain("ccccccc");
++  });
++});
++
++describe("VersionDriftBadge 前端 sha 來源(SC-6)", () => {
++  it("未給 prop 時走 /__build/sha 現算值(dev live 優先於 define)", async () => {
++    mockFetch({ health: { git_sha: "bbbbbbb" }, buildSha: "aaaaaaa" });
++    wrap(<VersionDriftBadge />);
++    const badge = await screen.findByTestId("version-drift-badge");
++    expect(badge.getAttribute("title")).toContain("aaaaaaa");
++  });
++});
+diff --git a/frontend/src/components/VersionDriftBadge.tsx b/frontend/src/components/VersionDriftBadge.tsx
+new file mode 100644
+index 0000000..b260b73
+--- /dev/null
++++ b/frontend/src/components/VersionDriftBadge.tsx
+@@ -0,0 +1,48 @@
++import { useEffect, useRef } from "react";
++
++import { useFrontendSha, useServerBuild } from "@/hooks/useServerBuild";
++import { versionDrift } from "@/lib/version-drift";
++
++/** warn 與 title 共用同一句(PLAN §6「title 同 warn 文案」)—— 兩處各寫一份就會漂。 */
++function driftMessage(fe: string, be: string): string {
++  return `前後端版本落差:前端 ${fe} / 後端 ${be} — 舊的一邊該重啟`;
++}
++
++/** 前後端版本落差膠囊(SC-4)+ console.warn once per pair(SC-5)。
++ *
++ *  健康態**零 DOM**:版面不留位、無膠囊 = 一切同步,不需要人去分辨「灰色的沒事」。
++ *  任一邊 sha 不可得也視為健康(見 versionDrift)—— 誤報一次就會被當雜訊無視。
++ *
++ *  `feSha` 是測試注入縫(design R2):不給時走 `useFrontendSha()`,測試不必依賴
++ *  跑測試那台機器的 git 狀態。 */
++export function VersionDriftBadge({ feSha }: { feSha?: string | null }) {
++  const live = useFrontendSha();
++  const fe = feSha !== undefined ? feSha : live;
++  const { data } = useServerBuild();
++  const drift = versionDrift(fe, data?.git_sha);
++
++  // hooks 順序:warn 的 ref/effect 必須宣告在下面的 early return 之前
++  const warnedPair = useRef<string | null>(null);
++  const driftFe = drift?.fe ?? null;
++  const driftBe = drift?.be ?? null;
++  useEffect(() => {
++    if (driftFe === null || driftBe === null) return;
++    const pair = `${driftFe}|${driftBe}`;
++    // per pair 去重:同一組落差只吵一次(60s 輪詢會一直重算),換一組 sha 是新事實。
++    // 落差消失時不清 ref —— 清掉就會讓「重啟前 / 重啟後又回到同一組」再吵一次。
++    if (warnedPair.current === pair) return;
++    warnedPair.current = pair;
++    console.warn(driftMessage(driftFe, driftBe));
++  }, [driftFe, driftBe]);
++
++  if (drift === null) return null;
++  return (
++    <span
++      data-testid="version-drift-badge"
++      title={driftMessage(drift.fe, drift.be)}
++      className="inline-flex items-center gap-1.5 rounded-sm border border-warn/40 bg-warn/15 px-2.5 py-1 font-mono text-xs text-warn"
++    >
++      版本落差
++    </span>
++  );
++}
+diff --git a/frontend/src/hooks/useServerBuild.test.tsx b/frontend/src/hooks/useServerBuild.test.tsx
+new file mode 100644
+index 0000000..d35787e
+--- /dev/null
++++ b/frontend/src/hooks/useServerBuild.test.tsx
+@@ -0,0 +1,130 @@
++/** @vitest-environment jsdom */
++/** `/api/health` 輪詢與前端 sha 來源選擇(SC-2 / SC-6;design R1/R3/R8)。
++ *
++ *  用 renderHook 而不是 `wrap()`:`wrap()` 是 render 包裝,拿不到 hook 回傳值
++ *  (repo 慣例見 useCapital.test.tsx)。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { HEALTH_POLL_MS, useFrontendSha, useServerBuild } from "@/hooks/useServerBuild";
++
++let fetchMock: ReturnType<typeof vi.fn>;
++
++/** url substring → 回應工廠;未命中回 404。never-resolve 用 `() => new Promise(() => {})`。 */
++function routeFetch(routes: [string, () => Promise<Response>][]): ReturnType<typeof vi.fn> {
++  return vi.fn((url: string) => {
++    for (const [frag, make] of routes) {
++      if (String(url).includes(frag)) return make();
++    }
++    return Promise.resolve(new Response(JSON.stringify({}), { status: 404 }));
++  });
++}
++
++function json(body: unknown, status = 200): Promise<Response> {
++  return Promise.resolve(new Response(JSON.stringify(body), { status }));
++}
++
++function callsTo(frag: string): number {
++  return fetchMock.mock.calls.filter((c) => String(c[0]).includes(frag)).length;
++}
++
++function makeWrapper() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return function Wrapper({ children }: { children: ReactNode }) {
++    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++  };
++}
++
++beforeEach(() => {
++  fetchMock = routeFetch([]);
++  vi.stubGlobal("fetch", fetchMock);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.unstubAllEnvs();
++  vi.useRealTimers();
++});
++
++describe("useServerBuild(SC-2)", () => {
++  it("取回 /api/health 的 build 資訊", async () => {
++    fetchMock = routeFetch([
++      ["/api/health", () => json({ git_sha: "bbbbbbb", git_dirty: false, started_at: "2026-08-05T01:00:00" })],
++    ]);
++    vi.stubGlobal("fetch", fetchMock);
++    const { result } = renderHook(() => useServerBuild(), { wrapper: makeWrapper() });
++    await waitFor(() => expect(result.current.data?.git_sha).toBe("bbbbbbb"));
++  });
++
++  it(`每 ${HEALTH_POLL_MS}ms 輪詢一次(R8:fake timers 卡邊界)`, async () => {
++    vi.useFakeTimers();
++    fetchMock = routeFetch([["/api/health", () => json({ git_sha: "bbbbbbb" })]]);
++    vi.stubGlobal("fetch", fetchMock);
++    renderHook(() => useServerBuild(), { wrapper: makeWrapper() });
++    await act(async () => {
++      await vi.advanceTimersByTimeAsync(0);
++    });
++    expect(callsTo("/api/health")).toBe(1);
++    await act(async () => {
++      await vi.advanceTimersByTimeAsync(HEALTH_POLL_MS - 1);
++    });
++    expect(callsTo("/api/health")).toBe(1);
++    await act(async () => {
++      await vi.advanceTimersByTimeAsync(1);
++    });
++    expect(callsTo("/api/health")).toBe(2);
++  });
++
++  it("HTTP 非 2xx → error 終態(retry:false,不等退避)", async () => {
++    fetchMock = routeFetch([["/api/health", () => json({}, 500)]]);
++    vi.stubGlobal("fetch", fetchMock);
++    const { result } = renderHook(() => useServerBuild(), { wrapper: makeWrapper() });
++    await waitFor(() => expect(result.current.isError).toBe(true));
++    expect(result.current.data).toBeUndefined();
++  });
++});
++
++describe("useFrontendSha(SC-6 來源選擇)", () => {
++  it("DEV 且 /__build/sha 未回前回 null(R1:不拿 define 舊值假造)", async () => {
++    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
++    fetchMock = routeFetch([["/__build/sha", () => new Promise<Response>(() => {})]]);
++    vi.stubGlobal("fetch", fetchMock);
++    const { result } = renderHook(() => useFrontendSha(), { wrapper: makeWrapper() });
++    await act(async () => {
++      await Promise.resolve();
++    });
++    expect(result.current).toBeNull();
++  });
++
++  it("DEV 且 /__build/sha 回值 → 現算值優先於 define(R1)", async () => {
++    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
++    fetchMock = routeFetch([["/__build/sha", () => json({ git_sha: "ccccccc" })]]);
++    vi.stubGlobal("fetch", fetchMock);
++    const { result } = renderHook(() => useFrontendSha(), { wrapper: makeWrapper() });
++    await waitFor(() => expect(result.current).toBe("ccccccc"));
++  });
++
++  it("DEV 但 /__build/sha 404(build 產物)→ settle 後降級 define(R3)", async () => {
++    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
++    fetchMock = routeFetch([["/__build/sha", () => json({}, 404)]]);
++    vi.stubGlobal("fetch", fetchMock);
++    const { result } = renderHook(() => useFrontendSha(), { wrapper: makeWrapper() });
++    await waitFor(() => expect(result.current).toBe("aaaaaaa"));
++  });
++
++  it("非 DEV → 直接用 define,完全不打 /__build/sha(R3)", async () => {
++    vi.stubEnv("DEV", false);
++    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
++    fetchMock = routeFetch([["/__build/sha", () => json({ git_sha: "ccccccc" })]]);
++    vi.stubGlobal("fetch", fetchMock);
++    const { result } = renderHook(() => useFrontendSha(), { wrapper: makeWrapper() });
++    await act(async () => {
++      await Promise.resolve();
++    });
++    expect(result.current).toBe("aaaaaaa");
++    expect(callsTo("/__build/sha")).toBe(0);
++  });
++});
+diff --git a/frontend/src/hooks/useServerBuild.ts b/frontend/src/hooks/useServerBuild.ts
+new file mode 100644
+index 0000000..3239343
+--- /dev/null
++++ b/frontend/src/hooks/useServerBuild.ts
+@@ -0,0 +1,56 @@
++/** 後端 build 資訊輪詢(SC-2)與前端 sha 來源選擇(SC-6)。
++ *
++ *  `/api/health` 回的是**跑著的那個後端行程**的 sha(CLAUDE.md §1 那條「跑著的 server
++ *  是哪一版」的機器版);前端 sha 在 dev 下走 vite plugin 的 `/__build/sha` 現算 HEAD,
++ *  build 產物下退回 `define` 凍結值。 */
++import { useQuery } from "@tanstack/react-query";
++
++import { frontendSha } from "@/lib/version-drift";
++
++export interface ServerBuild {
++  git_sha: string | null;
++  git_dirty: boolean | null;
++  started_at: string;
++}
++
++export const HEALTH_POLL_MS = 60_000;
++
++/** 本檔自寫的 local fetch(design R6):`lib/api-error` 的 parseError 解的是
++ *  `{detail:{error}}` 契約,`/api/health` 與 `/__build/sha` 都沒有那個 shape,
++ *  借過來只會讓錯誤訊息更難讀。這兩條路徑只需要「成功 / 不成功」。 */
++async function getJson<T>(url: string): Promise<T> {
++  const res = await fetch(url);
++  if (!res.ok) throw new Error(String(res.status));
++  return (await res.json()) as T;
++}
++
++export function useServerBuild() {
++  return useQuery({
++    queryKey: ["server-build"],
++    queryFn: () => getJson<ServerBuild>("/api/health"),
++    refetchInterval: HEALTH_POLL_MS,
++    // 60s 後的下一輪就是重試;retry 反而會在測試 teardown 後才打真 fetch(flake 源)
++    retry: false,
++  });
++}
++
++/** 前端 sha:dev 走 `/__build/sha` 現算(與 health 同節奏輪詢),非 dev 或該路徑
++ *  不可得(404 / 失敗)才降級 `frontendSha()` 常數。
++ *
++ *  **pending 回 null 是關鍵**(design R1):live 值未回前拿 define 舊值頂替,會在首幀
++ *  閃現一次假落差 + 假 warn —— dev 下 define 是「vite 啟動當時」的 sha,跟當下 HEAD
++ *  本來就常常不同。不知道就回不知道。 */
++export function useFrontendSha(): string | null {
++  const dev = import.meta.env.DEV;
++  const q = useQuery({
++    queryKey: ["frontend-sha"],
++    queryFn: () => getJson<{ git_sha: string | null }>("/__build/sha"),
++    refetchInterval: HEALTH_POLL_MS,
++    retry: false,
++    enabled: dev,
++  });
++  if (!dev) return frontendSha();
++  if (q.status === "success") return q.data.git_sha ?? frontendSha();
++  if (q.status === "error") return frontendSha();
++  return null;
++}
+diff --git a/frontend/src/lib/sha-plugin.test.ts b/frontend/src/lib/sha-plugin.test.ts
+new file mode 100644
+index 0000000..94bfbe4
+--- /dev/null
++++ b/frontend/src/lib/sha-plugin.test.ts
+@@ -0,0 +1,77 @@
++/** vite plugin `buildShaPlugin` 與 `gitSha()` 的單元測試(node 環境)。
++ *
++ *  受測檔在 `src/` 之外(vite.config.ts 的同層),`@/` alias 涵蓋不到 → 只有這檔用相對
++ *  import。之所以把 plugin 抽成獨立檔而不是寫在 vite.config.ts 裡,就是為了這個接縫
++ *  (design R2):vite.config.ts 本身在測試裡 import 會連帶跑整份 defineConfig。 */
++import { describe, expect, it } from "vitest";
++
++import { buildShaPlugin, gitSha } from "../../sha-plugin";
++
++/** vite dev server 的最小替身:plugin 只用到 `middlewares.use(path, handler)`。 */
++interface FakeRes {
++  setHeader: (key: string, value: string) => void;
++  end: (body: string) => void;
++}
++type Handler = (req: unknown, res: FakeRes) => void;
++
++function fakeServer() {
++  const registered: [string, Handler][] = [];
++  const server = {
++    middlewares: {
++      use: (path: string, handler: Handler) => {
++        registered.push([path, handler]);
++      },
++    },
++  };
++  const configure = buildShaPlugin().configureServer as unknown as (s: typeof server) => void;
++  configure(server);
++  return registered;
++}
++
++function callHandler(handler: Handler): { headers: [string, string][]; body: string } {
++  const headers: [string, string][] = [];
++  let body = "";
++  handler(
++    {},
++    {
++      setHeader: (key, value) => headers.push([key, value]),
++      end: (b) => {
++        body = b;
++      },
++    },
++  );
++  return { headers, body };
++}
++
++describe("gitSha(SC-1)", () => {
++  it("在本 repo 回短 sha", () => {
++    expect(gitSha()).toMatch(/^[0-9a-f]{7,12}$/);
++  });
++});
++
++describe("buildShaPlugin(SC-6)", () => {
++  it("掛在 /__build/sha 路徑上", () => {
++    const registered = fakeServer();
++    expect(registered.length).toBe(1);
++    expect(registered[0]?.[0]).toBe("/__build/sha");
++  });
++
++  it("handler 回 JSON,payload 帶當下 git_sha", () => {
++    const handler = fakeServer()[0]![1];
++    const { headers, body } = callHandler(handler);
++    expect(headers).toContainEqual(["content-type", "application/json"]);
++    expect((JSON.parse(body) as { git_sha: string | null }).git_sha).toBe(gitSha());
++  });
++
++  it("每次請求現算(不是註冊時凍結一次)", () => {
++    // 直接觀測「重新求值」需要 spy node:child_process,對這條 import 路徑不可行;
++    // 退而驗「同一個 handler 連呼兩次都各自回當下值」—— 凍結實作若把值存進 closure,
++    // 這條測試在 sha 未變時仍會綠,真正的守門是 design R2 具名的真環境驗證
++    // (commit 後不重啟 vite 再 curl 應變值)。此處守的是「handler 可重入且無副作用」。
++    const handler = fakeServer()[0]![1];
++    const first = callHandler(handler);
++    const second = callHandler(handler);
++    expect(JSON.parse(first.body)).toEqual({ git_sha: gitSha() });
++    expect(JSON.parse(second.body)).toEqual({ git_sha: gitSha() });
++  });
++});
+diff --git a/frontend/src/lib/version-drift.test.ts b/frontend/src/lib/version-drift.test.ts
+new file mode 100644
+index 0000000..d79e0de
+--- /dev/null
++++ b/frontend/src/lib/version-drift.test.ts
+@@ -0,0 +1,56 @@
++/** 版本落差判定純函數(SC-3)+ 前端 sha 延遲求值接縫(design R2)。 */
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { frontendSha, versionDrift } from "@/lib/version-drift";
++
++afterEach(() => {
++  vi.unstubAllGlobals();
++});
++
++describe("versionDrift(SC-3 判定表)", () => {
++  it("兩者皆非空且不等 → 落差物件", () => {
++    expect(versionDrift("aaaaaaa", "bbbbbbb")).toEqual({ fe: "aaaaaaa", be: "bbbbbbb" });
++  });
++
++  it("兩者相等 → null(健康態零 DOM)", () => {
++    expect(versionDrift("aaaaaaa", "aaaaaaa")).toBeNull();
++  });
++
++  it("前端 sha 不可得 → null(不誤報)", () => {
++    expect(versionDrift(null, "bbbbbbb")).toBeNull();
++    expect(versionDrift(undefined, "bbbbbbb")).toBeNull();
++  });
++
++  it("後端 sha 不可得 → null(不誤報)", () => {
++    expect(versionDrift("aaaaaaa", null)).toBeNull();
++    expect(versionDrift("aaaaaaa", undefined)).toBeNull();
++  });
++
++  it("空字串視同不可得(git 失敗時後端回空字串也不該亮燈)", () => {
++    expect(versionDrift("", "bbbbbbb")).toBeNull();
++    expect(versionDrift("aaaaaaa", "")).toBeNull();
++    expect(versionDrift("", "")).toBeNull();
++  });
++});
++
++describe("frontendSha(R2:延遲求值,不在 module 頂層凍結)", () => {
++  it("讀當下的 __GIT_SHA__ 全域值", () => {
++    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
++    expect(frontendSha()).toBe("aaaaaaa");
++  });
++
++  it("define 為 null(git 不可得)→ null", () => {
++    vi.stubGlobal("__GIT_SHA__", null);
++    expect(frontendSha()).toBeNull();
++  });
++
++  it("define 為空字串 → null(與 null 同語意)", () => {
++    vi.stubGlobal("__GIT_SHA__", "");
++    expect(frontendSha()).toBeNull();
++  });
++
++  it("未 stub 時取 vite define 注入值:null 或短 sha,且不拋(define 缺席也要活)", () => {
++    const sha = frontendSha();
++    if (sha !== null) expect(sha).toMatch(/^[0-9a-f]{7,12}$/);
++  });
++});
+diff --git a/frontend/src/lib/version-drift.ts b/frontend/src/lib/version-drift.ts
+new file mode 100644
+index 0000000..7700fd1
+--- /dev/null
++++ b/frontend/src/lib/version-drift.ts
+@@ -0,0 +1,27 @@
++/** 前後端版本落差判定(SC-3)。 */
++
++export interface Drift {
++  fe: string;
++  be: string;
++}
++
++/** 兩邊 sha 皆可得且不等 → 落差;任一不可得(null / undefined / 空字串)→ null。
++ *
++ *  「不可得就不判定」是刻意的:沒有 sha 代表不知道,不是代表不同。誤報一次就會讓
++ *  這顆膠囊被當雜訊無視,之後真的落差也不會有人看。 */
++export function versionDrift(
++  fe: string | null | undefined,
++  be: string | null | undefined,
++): Drift | null {
++  if (!fe || !be) return null;
++  return fe === be ? null : { fe, be };
++}
++
++/** vite `define` 注入的 bundle sha;缺席或空值回 null。
++ *
++ *  **延遲求值**(design R2):寫成 module 頂層 const 會在 import 當下凍結,測試就
++ *  無法用 `vi.stubGlobal("__GIT_SHA__", …)` 換值(vitest 把 define 當 globalThis 屬性
++ *  注入)。`typeof` 守衛是為了 define 完全缺席時不拋 ReferenceError。 */
++export function frontendSha(): string | null {
++  return typeof __GIT_SHA__ === "undefined" ? null : __GIT_SHA__ || null;
++}
+diff --git a/frontend/src/vite-env.d.ts b/frontend/src/vite-env.d.ts
+index 11f02fe..0bec93b 100644
+--- a/frontend/src/vite-env.d.ts
++++ b/frontend/src/vite-env.d.ts
+@@ -1 +1,5 @@
+ /// <reference types="vite/client" />
++
++/** vite.config.ts `define` 注入的 build sha(git 不可得時為 null)。
++ *  讀取一律經 `lib/version-drift.ts` 的 `frontendSha()`,別直接用。 */
++declare const __GIT_SHA__: string | null;
+diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
+index 47d0059..cbb508d 100644
+--- a/frontend/vite.config.ts
++++ b/frontend/vite.config.ts
+@@ -4,10 +4,15 @@ import react from "@vitejs/plugin-react";
+ import path from "node:path";
+ import { defineConfig } from "vite";
+ 
++import { buildShaPlugin, gitSha } from "./sha-plugin";
++
+ const BACKEND = "http://127.0.0.1:8721";
+ 
+ export default defineConfig({
+-  plugins: [react(), tailwindcss()],
++  plugins: [react(), tailwindcss(), buildShaPlugin()],
++  // build 時凍結的 bundle sha(SC-1);dev 下前端 sha 改走 plugin 的 /__build/sha 現算,
++  // 這裡的值只在非 dev(build 產物)或該路徑不可得時當降級來源。
++  define: { __GIT_SHA__: JSON.stringify(gitSha()) },
+   resolve: {
+     alias: { "@": path.resolve(__dirname, "src") },
+   },

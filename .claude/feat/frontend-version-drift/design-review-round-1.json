@@ -1,0 +1,14 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [
+    {"id": "R1", "summary": "dev(主要跑法)下 define 凍結 sha:漏報動機情境(commit 後忘重啟後端)+ 誤報 HMR 反向", "resolution": "accepted(選項 a)— vite middleware /__build/sha 每次現算 HEAD;dev 語意成為 CLAUDE.md §8 判法的自動化;新 SC-6"},
+    {"id": "R2", "summary": "FRONTEND_SHA 頂層 const 無注入縫,badge 正例測試綁死機器 git 狀態;vi.stubGlobal 對 import 時凍結無效", "resolution": "accepted — frontendSha() 延遲求值 + feSha prop 注入縫;附 vitest define 實際機制更正(globalThis 注入非靜態替換)"},
+    {"id": "R3", "summary": "測試環境前提缺(jsdom docblock / wrap() / QueryClientProvider)", "resolution": "accepted — 測試設計節明列"},
+    {"id": "R4", "summary": "IndexBar 自帶 ml-auto,膠囊插前面會落在左側與 SC-4 不符;缺 App 層落點測試", "resolution": "accepted — 膠囊自帶 ml-auto + App 層落點測試(sibling 斷言)"}
+  ],
+  "p2_summary": {"count": 6, "themes": "App.test health 路由 + retry:false 防 teardown 後真 fetch(R5)/ local getJson 不借私有 fetchJson(R6)/ execSync timeout+stdio 靜默降級(R7)/ 60s 輪詢 fake timers 可驗(R8)/ 負例 settle 點防 vacuous(R9)/ 取證配方(天然 drift + fetch override 健康態,R10)— 全數整併 v2", "resolution": "accepted en bloc"},
+  "exit": "0 P0(無加輪條件)、4 P1 全修入 v2、餘 P1 = 0 ≤ 2 → 進 Phase 2"
+}
