@@ -260,6 +260,11 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
   const ref = metaRef ?? (prices.length ? prices[0]! : 0);
   const upper = norm(input.meta?.upper);
   const lower = norm(input.meta?.lower);
+  // 當日極值同走 norm:0 = 不可得。**危險方向是 low**(`Math.min` 會把 0 吃進域讓
+  // 下緣變負、整圖壓扁;high = 0 被 `Math.max` 自然忽略)。原本 0 是靠「yBottom > 0」
+  // 間接擋下的,而本輪動的正是決定 yBottom 的那條路,不能再依賴它。
+  const dayHigh = norm(input.high);
+  const dayLow = norm(input.low);
 
   let yTop: number;
   let yBottom: number;
@@ -268,9 +273,11 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     yTop = upper;
     yBottom = lower;
   } else {
-    // 對稱域 fallback:以 ref 為中心,半幅 = max 偏離 × 1.1(最少 1% 防平線貼邊)
-    const hi = Math.max(ref, ...prices);
-    const lo = Math.min(ref, ...prices);
+    // 對稱域 fallback:以 ref 為中心,半幅 = max 偏離 × 1.1(最少 1% 防平線貼邊)。
+    // 半幅池含當日高低:只看每分鐘**收盤**的話,長上下影就會被域裁掉,而症狀是
+    // 高低標記靜默消失(2330 2026-07-30 盤後域 [2160.5, 2259.5],當日高 2260.0 差 0.5 元)。
+    const hi = Math.max(ref, ...prices, ...(dayHigh !== null ? [dayHigh] : []));
+    const lo = Math.min(ref, ...prices, ...(dayLow !== null ? [dayLow] : []));
     const half = Math.max(hi - ref, ref - lo, ref * 0.01) * 1.1 || 1;
     yTop = ref + half;
     yBottom = ref - half;
@@ -378,9 +385,11 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     const hit = entries.find(([, m]) => (pick === "h" ? m.h : m.l) === target);
     return hit === undefined ? null : { x: toX(hit[0]), y: toY(target), priceMilli: target };
   };
-  const highMark = markFor(input.high, "h");
+  // 吃 norm 後的值:域計算與標記對 high/low 的解讀必須是同一套「0 = 不可得」,
+  // 兩邊各判各的話,0 會進得了域卻進不了標記(或反過來)而完全靜默。
+  const highMark = markFor(dayHigh, "h");
   // 高 === 低(漲停鎖死 / 一字盤)時兩個標記會疊在同一點變成看不懂的黑塊 → 只留高標
-  const lowMark = input.low != null && input.low === input.high ? null : markFor(input.low, "l");
+  const lowMark = dayLow !== null && dayLow === dayHigh ? null : markFor(dayLow, "l");
 
   return {
     priceLine,
