@@ -220,6 +220,25 @@ describe("MarketPane 參數化(SC-2)", () => {
   });
 });
 
+describe("MarketPane review 修復", () => {
+  it("(SI-1) 標的切換一律沖掉 mode 殘值,重載不會跳到沒選過的週期", () => {
+    // 殘值 = 「櫃買 + 日K」,畫面已 coerce 成分時,但 storage 的 mode 還留著 day
+    window.localStorage.setItem(MARKET_KEY_STORE, "OTC");
+    window.localStorage.setItem(MARKET_MODE_STORE, "day");
+    renderPane();
+    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+    // 點加權 = 一次 no-op coerce(intraday 對 TWSE 合法)→ 舊寫法只寫 key 不寫 mode,
+    // storage 變成 TWSE+day 這組「合法但使用者沒選過」的組合,下次重載就跳日K
+    fireEvent.click(btn("加權"));
+    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("intraday");
+  });
+
+  it("(F3) 根節點是具名 group,兩 pane 在 a11y 樹可區分", () => {
+    renderPane({ paneId: "left" });
+    expect(screen.getByRole("group", { name: "左圖" })).toBeTruthy();
+  });
+});
+
 describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
   it("三顆標的鈕;預設選加權,現值/漲跌/高低昨收顯示於標題列", () => {
     renderPane();
