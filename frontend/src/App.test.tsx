@@ -75,9 +75,11 @@ afterEach(() => {
 });
 
 describe("App(index-board T9)", () => {
-  it("無 localStorage 時預設停在「大盤」(index-board SC-1)", () => {
+  it("無 localStorage 時預設停在「台股綜合」(index-board SC-1)", () => {
     renderApp();
-    expect(screen.getByRole("tab", { name: "大盤" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
   });
 
   it("舊 localStorage 值 txo 仍還原到「選擇權」(backward compat)", () => {
@@ -86,9 +88,9 @@ describe("App(index-board T9)", () => {
     expect(screen.getByRole("tab", { name: "選擇權" }).getAttribute("aria-selected")).toBe("true");
   });
 
-  it("nav 有「大盤」tab 且 IndexBar 常駐(切到選擇權 tab 仍可見)", async () => {
+  it("nav 有「台股綜合」tab 且 IndexBar 常駐(切到選擇權 tab 仍可見)", async () => {
     renderApp();
-    expect(screen.getByRole("tab", { name: "大盤" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "台股綜合" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
     await waitFor(() => expect(screen.getByText(/加權/).textContent).toContain("42039.92"));
     expect(screen.getByText(/櫃買/).textContent).toContain("359.8");
@@ -101,13 +103,15 @@ describe("App(index-board T9)", () => {
   it("localStorage 記住 index tab,重載復原(review B8)", async () => {
     window.localStorage.setItem("copycat-tab", "index");
     renderApp();
-    expect(screen.getByRole("tab", { name: "大盤" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
   });
 
-  it("切到大盤 tab 顯示 IndexPage(標的列 + 週期列)", async () => {
+  it("切到台股綜合 tab 顯示 IndexPage(標的列 + 週期列)", async () => {
     renderApp();
-    fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
+    fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
     // 版面自 index-board SC-2/3 起由「兩張並排卡」改為「標的切換 + 單一主圖」;
     // 台股綜合 R1 起是**雙 pane** —— 兩張圖的按鈕文字完全相同,裸 getByRole 會撞
     // ambiguous,收斂到左 pane 查(斷言意圖不變:大盤頁有標的列 + 週期列)。
@@ -117,6 +121,24 @@ describe("App(index-board T9)", () => {
     expect(left.getByRole("button", { name: "櫃買" })).toBeTruthy();
     expect(left.getByRole("button", { name: "台指期" })).toBeTruthy();
     expect(left.getByRole("button", { name: "日K" })).toBeTruthy();
+  });
+});
+
+// 🟢 台股綜合 R1(SC-1):corr tab 併入台股綜合頁 → nav 少一顆,
+// localStorage 值域縮減一項(舊值 "corr" 刻意 fallback 到 index)。
+describe("App 台股綜合 tab 整併(SC-1)", () => {
+  it("舊 localStorage 值 corr 落到「台股綜合」(值域縮減的刻意遷移)", () => {
+    window.localStorage.setItem("copycat-tab", "corr");
+    renderApp();
+    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  it("nav 不再有「相關係數」tab", () => {
+    renderApp();
+    const nav = within(screen.getByRole("tablist", { name: "主要分頁" }));
+    expect(nav.queryByRole("tab", { name: "相關係數" })).toBeNull();
   });
 });
 
@@ -135,15 +157,15 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
 });
 
 describe("App(期貨 tab T15)", () => {
-  it("nav tab 順序 = 大盤 / 個股(期) / 選擇權 / 期貨 / 相關係數", () => {
+  it("nav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨", () => {
     renderApp();
     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
-    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變,只有順序與標籤依
-    // index-board SC-1 改動(期貨 / 相關係數保留,只是排序在後)。
+    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;台股綜合 R1(SC-1)起
+    // 「相關係數」併入首顆分頁內的收合區塊,不再是獨立 tab。
     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
       .getAllByRole("tab")
       .map((el) => el.textContent);
-    expect(labels).toEqual(["大盤", "個股(期)", "選擇權", "期貨", "相關係數"]);
+    expect(labels).toEqual(["台股綜合", "個股(期)", "選擇權", "期貨"]);
   });
 
   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
@@ -193,7 +215,7 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
     expectRail();
-    fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
+    fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
     expectRail();
   });
@@ -203,11 +225,11 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
     expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
   });
 
-  it("nav 有 5 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
+  it("nav 有 4 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
     renderApp();
-    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 4 → 5 是 realtime-correlation SC-7
-    // 新增「相關係數」分頁的預期行為改變,右欄三顆不受影響。
-    expect(navTabs().length).toBe(5);
+    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 5 → 4 是台股綜合 R1(SC-1)
+    // 把「相關係數」分頁併入台股綜合頁的預期行為改變,右欄三顆不受影響。
+    expect(navTabs().length).toBe(4);
     expect(railTabs().length).toBe(3);
   });
 });
@@ -343,7 +365,7 @@ describe("App 版本落差膠囊落點(SC-4)", () => {
 });
 
 // 🟢 stock-signals T11(SC-10):toast 掛在 App 層,與當前 tab 無關 ——
-// 訊號涵蓋整個自選池,人在看大盤 / 期貨時個股鎖漲停一樣要跳出來。
+// 訊號涵蓋整個自選池,人在看台股綜合 / 期貨時個股鎖漲停一樣要跳出來。
 describe("App 訊號 toast(SC-10)", () => {
   function sig(id: string, code: string): SignalMsg {
     return {
@@ -361,7 +383,7 @@ describe("App 訊號 toast(SC-10)", () => {
     };
   }
 
-  it("預設 tab(大盤)收到訊號 → toast 出現", async () => {
+  it("預設 tab(台股綜合)收到訊號 → toast 出現", async () => {
     renderApp();
     act(() => emitSignal(sig("a", "2327")));
     const stack = await screen.findByTestId("toast-stack");
