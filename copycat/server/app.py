@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
@@ -172,6 +173,27 @@ async def _boot(
         return None
 
 
+@dataclass
+class _Booted:
+    """boot 序列實際掛上去的引擎 —— 關機反序 close 的唯一來源。
+
+    `_boot_all` 與 lifespan 的 finally 不再共用同一組 local(序列本身要能獨立於
+    lifespan 的執行點推進),record 就是兩者之間那條界線:finally 只關「record 裡
+    有值的」,None = 沒起來或還沒輪到,跳過。
+
+    `signals_close` 存 callable 而非只存 hub:signals 的收攤要先關 bot、再從 engine
+    摘掛點、最後才關 hub(`_close_signals` 的 closure),那個順序不能在 finally 重寫。
+    """
+
+    stock: StockEngine | None = None
+    signals: SignalHub | None = None
+    signals_close: Callable[[SignalHub], Awaitable[None]] | None = None
+    index: IndexEngine | None = None
+    capital: CapitalClient | None = None
+    futures: FuturesEngine | None = None
+    corr: CorrelationEngine | None = None
+
+
 def _default_source() -> QuoteSource:
     from copycat.live.tc4 import TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
 
@@ -242,248 +264,270 @@ def create_app(
             session_rollover=os.environ.get("TXO_BACKFILL_DATE") is None,
         )
         app.state.runtime = runtime
-        await runtime.start()
+        booted = _Booted()
 
-        # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
-        def _make_stock() -> StockEngine | None:
-            resolved_stock = (
-                _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
+        async def _boot_all() -> None:
+            """引擎啟動序列。**順序即依賴**(current-state §2),不可重排、不可並行:
+            watchlist_service 先於 signals、signals 需 stock、index 綁 runtime.spot、
+            capital 先 set_broadcast 再 start、corr 後於 futures。
+
+            每完成一段就同時寫 `app.state.X` 與 `booted.X` —— 前者給 route,後者給
+            關機反序 close(兩者必須成對,漏寫 record 的引擎關機時不會被關掉)。
+            """
+            await runtime.start()
+
+            # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
+            def _make_stock() -> StockEngine | None:
+                resolved_stock = (
+                    _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
+                )
+                if resolved_stock is None:
+                    return None
+                import datetime as _dt
+
+                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+                return StockEngine(
+                    cast(StockSource, resolved_stock),
+                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+                    throttle_secs=throttle_secs,
+                    checkpoint=backfill_date is None,
+                )
+
+            async def _start_stock(o: StockEngine) -> None:
+                await o.start()
+                # 自選回填屬於「帶到就緒」的一部分:load_watchlist 對壞檔不吞例外,
+                # 現況正是由 _boot 的 except 接住(留在 try 內是行為契約)
+                persisted = load_watchlist(wl_path)["codes"]
+                if persisted:
+                    await o.set_watchlist(persisted)
+
+            stock = await _boot(
+                "stock",
+                "stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)",
+                _make_stock,
+                _start_stock,
+                lambda o: o.close(),
             )
-            if resolved_stock is None:
-                return None
-            import datetime as _dt
+            app.state.stock = stock
+            booted.stock = stock
 
-            backfill_date = os.environ.get("TXO_BACKFILL_DATE")
-            return StockEngine(
-                cast(StockSource, resolved_stock),
-                trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
-                throttle_secs=throttle_secs,
-                checkpoint=backfill_date is None,
-            )
+            # 自選複合操作(design §6):落檔 + 訂閱池 + 廣播三件事的單一定義,前端 PUT 與
+            # Discord `/watch` 共用同一把 lock。**必須先於 signals `_boot`**(impl-review R3):
+            # 它是 `_start_signals` closure 的自由變數,順序反了會是 NameError,而 `_boot` 的
+            # except 會把它吞成「訊號功能靜默停用」—— 從畫面上只看得到「今天都沒訊號」。
+            service = WatchlistService(wl_path, stock) if stock is not None else None
+            app.state.watchlist_service = service
 
-        async def _start_stock(o: StockEngine) -> None:
-            await o.start()
-            # 自選回填屬於「帶到就緒」的一部分:load_watchlist 對壞檔不吞例外,
-            # 現況正是由 _boot 的 except 接住(留在 try 內是行為契約)
-            persisted = load_watchlist(wl_path)["codes"]
-            if persisted:
-                await o.set_watchlist(persisted)
+            # 訊號引擎(design §4.5):整段套 `_boot` 隔離 —— discord 登入失敗 / 壞自選檔
+            # 只讓訊號停用,不波及其他引擎。bot 由 start 建立、close 收攤(成對)。
+            bot: Bot | None = None
 
-        stock = await _boot(
-            "stock",
-            "stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)",
-            _make_stock,
-            _start_stock,
-            lambda o: o.close(),
-        )
-        app.state.stock = stock
+            def _make_signals() -> SignalHub | None:
+                if stock is None:
+                    return None
+                engine = stock
+                return SignalHub(
+                    load_signals_config(),
+                    publish=engine._publish,
+                    daily_bars=engine.daily_bars,
+                    notify_fallback=notify_discord,
+                    # 自選檔所在目錄 = 本專案的 data 根(`data/stock_watchlist.json`)→
+                    # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
+                    data_dir=wl_path.parent,
+                    # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
+                    trade_date_fn=lambda: engine.trade_date,
+                )
 
-        # 自選複合操作(design §6):落檔 + 訂閱池 + 廣播三件事的單一定義,前端 PUT 與
-        # Discord `/watch` 共用同一把 lock。**必須先於 signals `_boot`**(impl-review R3):
-        # 它是 `_start_signals` closure 的自由變數,順序反了會是 NameError,而 `_boot` 的
-        # except 會把它吞成「訊號功能靜默停用」—— 從畫面上只看得到「今天都沒訊號」。
-        service = WatchlistService(wl_path, stock) if stock is not None else None
-        app.state.watchlist_service = service
-
-        # 訊號引擎(design §4.5):整段套 `_boot` 隔離 —— discord 登入失敗 / 壞自選檔
-        # 只讓訊號停用,不波及其他引擎。bot 由 start 建立、close 收攤(成對)。
-        bot: Bot | None = None
-
-        def _make_signals() -> SignalHub | None:
-            if stock is None:
-                return None
-            engine = stock
-            return SignalHub(
-                load_signals_config(),
-                publish=engine._publish,
-                daily_bars=engine.daily_bars,
-                notify_fallback=notify_discord,
-                # 自選檔所在目錄 = 本專案的 data 根(`data/stock_watchlist.json`)→
-                # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
-                data_dir=wl_path.parent,
-                # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
-                trade_date_fn=lambda: engine.trade_date,
-            )
-
-        async def _start_signals(hub: SignalHub) -> None:
-            nonlocal bot
-            await hub.start()
-            # membership 種子:沒有這一步,開機後所有 tick 都被 hub 的 membership gate 擋掉
-            hub.on_watchlist(load_watchlist(wl_path)["codes"])
-            bot = create_bot(service, hub)  # token 未設 / extras 未裝 → None(SC-8 降級)
-            if bot is not None:
-                bot.start_bg()
-                hub.attach_discord(bot.send_signal)
-            # **必須是最後一行**(CC-2):attach 之後這個 hub 就在 engine 熱路徑上了,
-            # 而 `_boot` 的 except 只會把它 close 掉、不會從 engine 摘下來 —— 提早 attach
-            # 再讓後面任何一步拋,留下的是「WS 有訊號、jsonl 與 today 全空」的殭屍。
-            if stock is not None:  # `_make_signals` 已保證;narrowing 用
-                stock.attach_signal_hub(hub)
-
-        async def _close_signals(hub: SignalHub) -> None:
-            # try/finally(CC-1):bot.close 拋(token 失效)不得讓 hub 的 worker 洩漏、
-            # 也不得跳過關機盡力落檔
-            try:
+            async def _start_signals(hub: SignalHub) -> None:
+                nonlocal bot
+                await hub.start()
+                # membership 種子:沒有這一步,開機後所有 tick 都被 hub 的 membership gate 擋掉
+                hub.on_watchlist(load_watchlist(wl_path)["codes"])
+                bot = create_bot(service, hub)  # token 未設 / extras 未裝 → None(SC-8 降級)
                 if bot is not None:
-                    await bot.close()
-            finally:
-                if stock is not None:
-                    stock.detach_signal_hub()  # 先摘掛點:hub 收攤後熱路徑不得再打到它
-                await hub.close()
+                    bot.start_bg()
+                    hub.attach_discord(bot.send_signal)
+                # **必須是最後一行**(CC-2):attach 之後這個 hub 就在 engine 熱路徑上了,
+                # 而 `_boot` 的 except 只會把它 close 掉、不會從 engine 摘下來 —— 提早 attach
+                # 再讓後面任何一步拋,留下的是「WS 有訊號、jsonl 與 today 全空」的殭屍。
+                if stock is not None:  # `_make_signals` 已保證;narrowing 用
+                    stock.attach_signal_hub(hub)
 
-        signals = await _boot(
-            "signals",
-            "訊號引擎啟動失敗,訊號功能停用(其餘不受影響)",
-            _make_signals,
-            _start_signals,
-            _close_signals,
-        )
-        app.state.signal_hub = signals
-        # 啟動失敗時 `_boot` 已呼叫 `_close_signals`(bot 也收了)→ 不對外暴露死掉的 bot
-        app.state.discord_bot = bot if signals is not None else None
+            async def _close_signals(hub: SignalHub) -> None:
+                # try/finally(CC-1):bot.close 拋(token 失效)不得讓 hub 的 worker 洩漏、
+                # 也不得跳過關機盡力落檔
+                try:
+                    if bot is not None:
+                        await bot.close()
+                finally:
+                    if stock is not None:
+                        stock.detach_signal_hub()  # 先摘掛點:hub 收攤後熱路徑不得再打到它
+                    await hub.close()
 
-        # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
-        def _make_index() -> IndexEngine | None:
-            resolved_index = (
-                _default_index_source() if index_source is DEFAULT_INDEX else index_source
+            signals = await _boot(
+                "signals",
+                "訊號引擎啟動失敗,訊號功能停用(其餘不受影響)",
+                _make_signals,
+                _start_signals,
+                _close_signals,
             )
-            if resolved_index is None:
-                return None
-            import datetime as _dt
+            app.state.signal_hub = signals
+            booted.signals = signals
+            booted.signals_close = _close_signals
+            # 啟動失敗時 `_boot` 已呼叫 `_close_signals`(bot 也收了)→ 不對外暴露死掉的 bot
+            app.state.discord_bot = bot if signals is not None else None
 
-            backfill_date = os.environ.get("TXO_BACKFILL_DATE")
-            return IndexEngine(
-                cast(IndexSource, resolved_index),
-                # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
-                txf_getter=runtime.spot_millipts,
-                mis_fetch=index_mis_fetch,
-                trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
-                rollover=backfill_date is None,
-                throttle_secs=throttle_secs,
+            # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
+            def _make_index() -> IndexEngine | None:
+                resolved_index = (
+                    _default_index_source() if index_source is DEFAULT_INDEX else index_source
+                )
+                if resolved_index is None:
+                    return None
+                import datetime as _dt
+
+                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+                return IndexEngine(
+                    cast(IndexSource, resolved_index),
+                    # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
+                    txf_getter=runtime.spot_millipts,
+                    mis_fetch=index_mis_fetch,
+                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+                    rollover=backfill_date is None,
+                    throttle_secs=throttle_secs,
+                )
+
+            index = await _boot(
+                "index",
+                "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
+                _make_index,
+                lambda o: o.start(),
+                lambda o: o.close(),
             )
+            app.state.index = index
+            booted.index = index
 
-        index = await _boot(
-            "index",
-            "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
-            _make_index,
-            lambda o: o.start(),
-            lambda o: o.close(),
-        )
-        app.state.index = index
+            # capital(群益下單;capital-order design §13):factory 未設定 → None = disabled;
+            # 啟動失敗 catch → None 降級,server 照起(stock/index 同慣例)
+            async def _start_capital(c: CapitalClient) -> None:
+                loop = asyncio.get_running_loop()
 
-        # capital(群益下單;capital-order design §13):factory 未設定 → None = disabled;
-        # 啟動失敗 catch → None 降級,server 照起(stock/index 同慣例)
-        async def _start_capital(c: CapitalClient) -> None:
-            loop = asyncio.get_running_loop()
+                def _capital_broadcast(payload: dict[str, object]) -> None:
+                    # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
+                    loop.call_soon_threadsafe(capital_ws.publish, payload)
 
-            def _capital_broadcast(payload: dict[str, object]) -> None:
-                # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
-                loop.call_soon_threadsafe(capital_ws.publish, payload)
+                c.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
+                c.start(loop)
 
-            c.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
-            c.start(loop)
-
-        capital = await _boot(
-            "capital",
-            "capital 初始化非預期失敗,群益功能停用(其餘不受影響)",
-            capital_factory.get_capital,
-            _start_capital,
-            lambda c: asyncio.to_thread(c.close),  # COM 執行緒 join 是同步的
-        )
-        app.state.capital = capital
-
-        # futures 行情引擎(SC-8):__main__ 顯式傳 DEFAULT_FUTURES 即建真 source;
-        # 測試未傳(None)零連線;source 實例亦可
-        def _make_futures() -> FuturesEngine | None:
-            if futures_source is DEFAULT_FUTURES:
-                resolved_futures: FuturesSource | None = _default_futures_source()
-            else:
-                resolved_futures = cast("FuturesSource | None", futures_source)
-            if resolved_futures is None:
-                return None
-            fut_src = resolved_futures
-            return FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
-
-        futures = await _boot(
-            "futures",
-            "futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)",
-            _make_futures,
-            lambda o: o.start(),
-            lambda o: o.close(),
-        )
-        app.state.futures = futures
-
-        # 相關係數引擎(realtime-correlation SC-6):必須在 futures 之後建 —— base 腿
-        # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
-        # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
-        def _make_corr() -> CorrelationEngine | None:
-            # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
-            if corr_source is DEFAULT_CORR:
-                resolved_corr: CorrSource | None = _default_corr_source()
-            else:
-                resolved_corr = cast("CorrSource | None", corr_source)
-            if resolved_corr is None:
-                return None
-            corr_src = resolved_corr
-            futures_engine = futures
-            return CorrelationEngine(
-                lambda: corr_src,
-                config=load_corr_config(),
-                txf_state_getter=(
-                    lambda: futures_engine.state() if futures_engine is not None else {}
-                ),
-                broadcast=corr_ws.publish,
-                river_broadcast=river_ws.publish,
-                # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
-                futures_minutes_fetch=(
-                    lambda product: (
-                        futures_engine.fetch_day_1k(product) if futures_engine is not None else []
-                    )
-                ),
+            capital = await _boot(
+                "capital",
+                "capital 初始化非預期失敗,群益功能停用(其餘不受影響)",
+                capital_factory.get_capital,
+                _start_capital,
+                lambda c: asyncio.to_thread(c.close),  # COM 執行緒 join 是同步的
             )
+            app.state.capital = capital
+            booted.capital = capital
 
-        corr = await _boot(
-            "corr",
-            "corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)",
-            _make_corr,
-            lambda o: o.start(),
-            lambda o: o.close(),
-        )
-        app.state.corr = corr
+            # futures 行情引擎(SC-8):__main__ 顯式傳 DEFAULT_FUTURES 即建真 source;
+            # 測試未傳(None)零連線;source 實例亦可
+            def _make_futures() -> FuturesEngine | None:
+                if futures_source is DEFAULT_FUTURES:
+                    resolved_futures: FuturesSource | None = _default_futures_source()
+                else:
+                    resolved_futures = cast("FuturesSource | None", futures_source)
+                if resolved_futures is None:
+                    return None
+                fut_src = resolved_futures
+                return FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
+
+            futures = await _boot(
+                "futures",
+                "futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)",
+                _make_futures,
+                lambda o: o.start(),
+                lambda o: o.close(),
+            )
+            app.state.futures = futures
+            booted.futures = futures
+
+            # 相關係數引擎(realtime-correlation SC-6):必須在 futures 之後建 —— base 腿
+            # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
+            # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
+            def _make_corr() -> CorrelationEngine | None:
+                # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
+                if corr_source is DEFAULT_CORR:
+                    resolved_corr: CorrSource | None = _default_corr_source()
+                else:
+                    resolved_corr = cast("CorrSource | None", corr_source)
+                if resolved_corr is None:
+                    return None
+                corr_src = resolved_corr
+                futures_engine = futures
+                return CorrelationEngine(
+                    lambda: corr_src,
+                    config=load_corr_config(),
+                    txf_state_getter=(
+                        lambda: futures_engine.state() if futures_engine is not None else {}
+                    ),
+                    broadcast=corr_ws.publish,
+                    river_broadcast=river_ws.publish,
+                    # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
+                    futures_minutes_fetch=(
+                        lambda product: (
+                            futures_engine.fetch_day_1k(product)
+                            if futures_engine is not None
+                            else []
+                        )
+                    ),
+                )
+
+            corr = await _boot(
+                "corr",
+                "corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)",
+                _make_corr,
+                lambda o: o.start(),
+                lambda o: o.close(),
+            )
+            app.state.corr = corr
+            booted.corr = corr
+
+        await _boot_all()
         try:
             yield
         finally:
             # 關機反序:signals → corr → futures → capital → index → stock → runtime
             # (corr 依賴 futures.state(),必須先收;signals 最前 —— fanout worker 還活著時
             # 對已收攤的 stock engine publish 會炸在關機路徑上)
-            if signals is not None:
+            if booted.signals is not None and booted.signals_close is not None:
                 try:
-                    await _close_signals(signals)  # bot 先於 hub(hub 的 sender 指向 bot)
+                    # bot 先於 hub(hub 的 sender 指向 bot)—— 順序封在 `_close_signals` 內
+                    await booted.signals_close(booted.signals)
                 except Exception:
                     logger.exception("signals close 失敗(關機續行)")
-            if corr is not None:
+            if booted.corr is not None:
                 try:
-                    await corr.close()
+                    await booted.corr.close()
                 except Exception:
                     logger.exception("corr close 失敗(關機續行)")
-            if futures is not None:
+            if booted.futures is not None:
                 try:
-                    await futures.close()
+                    await booted.futures.close()
                 except Exception:
                     logger.exception("futures close 失敗(關機續行)")
-            if capital is not None:
+            if booted.capital is not None:
                 try:
-                    await asyncio.to_thread(capital.close)  # join COM 執行緒(≤5s)
+                    await asyncio.to_thread(booted.capital.close)  # join COM 執行緒(≤5s)
                 except Exception:
                     logger.exception("capital close 失敗(關機續行)")
-            if index is not None:
+            if booted.index is not None:
                 try:
-                    await index.close()
+                    await booted.index.close()
                 except Exception:
                     logger.exception("index close 失敗(關機續行)")
-            if stock is not None:
+            if booted.stock is not None:
                 try:
-                    await stock.close()
+                    await booted.stock.close()
                 except Exception:
                     logger.exception("stock close 失敗(關機續行)")
             await runtime.close()
