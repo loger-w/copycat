@@ -16,7 +16,7 @@ import datetime as _dt
 import logging
 import threading
 import time
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Literal, TypedDict
 
 from copycat.live.stock_models import StockTick, parse_hist_tick
 from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
@@ -60,6 +60,17 @@ class Bar(TypedDict):
     l: int  # noqa: E741 - 與前端 Bar 欄位對齊(o/h/l/c/v)
     c: int
     v: int
+
+
+#: K 線空結果的原因三態。**沒有「確定無資料」這一態** —— TC4 的 GETHISDATA 空頁
+#: 不區分「未備妥」與「無資料」(tc4.py 檔頭),所以:
+#:
+#: - `"timeout"` = 等滿 deadline 仍未備妥(慢 **或** 查無此檔,協定上不可分)。
+#: - `"ok"` = 首頁備妥、收割跑完(結果仍可能是空,例如 bar 全落在域外)。
+#: - `"disconnected"` = TC4 通訊失敗(ConnectionError),由 server 層降級時標。
+#:
+#: 文案因此必須用進行式不下結論(change-spec §1 語意錨點)。
+BarsStatus = Literal["ok", "timeout", "disconnected"]
 
 
 def _milli(raw: str) -> int:
@@ -412,48 +423,55 @@ class StockQuoteSource(TC4QuoteSource):
             logger.warning("1K minutes 解析略過 %d/%d 列", skipped, len(rows))
         return minutes
 
-    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
-        """K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
+    def fetch_bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> tuple[list[Bar], BarsStatus]:
+        """K 線 bar + 空結果的原因(`tf` = "D" 日 K / "1" 分 K;start/end 含端點)。
 
         range 型而非 days 型:server 層要把「歷史段(永久 memo)」與「當日段(短 TTL)」
         分開取,才不會每次輪詢都重拉整段歷史(change-spec R2-1/R2-2)。
 
         `tf="D"` 走 DK,空則 fallback 1K 聚合 —— fallback 視窗另行縮到
         `_OHLC_FALLBACK_WINDOW_DAYS`,避免 4.5× 量級放大(R2-7)。"""
-        return self.fetch_bars_range_tagged(code, tf, start_date, end_date)[0]
+        bars, _tag, status = self.fetch_bars_range_tagged(code, tf, start_date, end_date)
+        return bars, status
 
     def fetch_bars_range_tagged(
         self, code: str, tf: str, start_date: str, end_date: str
-    ) -> tuple[list[Bar], str]:
+    ) -> tuple[list[Bar], str, BarsStatus]:
         """同 `fetch_bars_range`,另回**實際走到的資料源標籤**。
 
         大盤頁的 meta 行要誠實說出這一份 bar 從哪來(index-board review P1-4):
         `tf="D"` 在 DK 空時會 fallback 成 90 日窗的 1K 聚合,若 meta 仍標 `tc4_dk`,
         「壞了 vs 沒資料看畫面即可答」的設計主軸剛好在最可能出事的那條路上失效。
 
-        `source_tag ∈ {"tc4_1k", "tc4_dk", "tc4_dk_1k_agg"}`。
+        `source_tag ∈ {"tc4_1k", "tc4_dk", "tc4_dk_1k_agg"}`;`status` 見 `BarsStatus`。
         """
         self._ensure_connected()
         sym = stock_symbol(code)
         start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows
-            return parse_1k_bars(rows), "tc4_1k"
+            rows, timed_out = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
+            return parse_1k_bars(rows), "tc4_1k", ("timeout" if timed_out else "ok")
 
-        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
+        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
+        bars = parse_dk_bars(dk_rows)
         if bars:
-            return bars, "tc4_dk"
+            return bars, "tc4_dk", "ok"
         fb_start = max(
             _dt.date.fromisoformat(start_date),
             _dt.date.fromisoformat(end_date) - _dt.timedelta(days=_OHLC_FALLBACK_WINDOW_DAYS),
         )
         logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
         # fallback 也要傳短 budget:漏傳的話 tf=D 無資料標的變成 10 + 30 = 40s
-        fb = aggregate_1k_to_daily(
-            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE).rows
+        fb_rows, fb_timed_out = self._collect_history(
+            sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE
         )
-        return fb, "tc4_dk_1k_agg"
+        # 兩段取最壞:fallback 補到了 bar 但 DK 那趟等滿了預算 → 仍是 timeout。
+        # 「有資料就一律 ok」會把「DK 沒回應」這件事在有 fallback 的日子裡靜默掉。
+        status: BarsStatus = "timeout" if (dk_timed_out or fb_timed_out) else "ok"
+        return aggregate_1k_to_daily(fb_rows), "tc4_dk_1k_agg", status
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。

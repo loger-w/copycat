@@ -16,8 +16,9 @@ import logging
 from typing import AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import StockTick, parse_stock_realtime, to_milli
-from copycat.live.stock_source import Bar, DailyBar
+from copycat.live.stock_source import Bar, BarsStatus, DailyBar
 from copycat.live.stock_state import StockDayState
+from copycat.server.bars import BarsResult
 from copycat.server.ws import WsBroadcaster
 from copycat.stkfut_map import load_map
 
@@ -58,7 +59,9 @@ class StockSource(Protocol):
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
 
-    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]: ...
+    def fetch_bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> tuple[list[Bar], BarsStatus]: ...
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
 
@@ -276,15 +279,20 @@ class StockEngine:
             logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
             return []
 
-    async def bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
-        """K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。"""
+    async def bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> BarsResult:
+        """K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。
+
+        降級**照舊回空不 raise**,但原因跟著空一起送出去:斷線與「這檔真的沒資料」
+        原本在前端收斂成同一句「無 K 線資料」,那正是使用者最需要分清的兩件事。
+        """
         try:
-            return await asyncio.to_thread(
+            bars, status = await asyncio.to_thread(
                 self._source.fetch_bars_range, code, tf, start_date, end_date
             )
+            return BarsResult(bars, status)
         except ConnectionError as e:
             logger.warning("bars_range %s(%s): TC4 不可用,降級空(%s)", code, tf, e)
-            return []
+            return BarsResult([], "disconnected")
 
     # ---- stkfut ----
 

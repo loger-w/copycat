@@ -40,6 +40,7 @@ def in_futures_session(now: _dt.time | None = None) -> bool:
         return True
     return t >= _FUT_NIGHT_OPEN or t <= _FUT_NIGHT_CLOSE
 
+
 # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
 _WATCH_START = _dt.time(9, 0)
 _WATCH_END = _dt.time(13, 25)
@@ -350,7 +351,10 @@ class IndexEngine:
             logger.warning("market: index history proxy miss(source 無 fetch_bars_range_tagged)")
             return [], "unavailable"
         try:
-            return await asyncio.to_thread(fetch, _SYMBOL, tf, start, end)
+            # source 另回第三元素 status(個股 K 線的三態);大盤的空態表述走自己的
+            # source tag 體系,對外簽名不變(bars-tristate-status 白名單 9)
+            bars, tag, _status = await asyncio.to_thread(fetch, _SYMBOL, tf, start, end)
+            return bars, tag
         except ConnectionError as e:
             logger.warning("market: index history proxy miss(%s)", e)
             return [], "unavailable"

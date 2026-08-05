@@ -32,9 +32,9 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import time
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, NamedTuple
 
-from copycat.live.stock_source import Bar
+from copycat.live.stock_source import Bar, BarsStatus
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,46 @@ DAILY_MAX_BARS = 120
 DAILY_LONG_WINDOW_DAYS = 1825
 DAILY_LONG_MAX_BARS = 1500  # 不截斷 5 年(留餘裕);上限只為防呆
 
-#: engine.bars_range(code, tf, start_date, end_date) -> list[Bar]
-BarsFetcher = Callable[[str, str, str, str], Awaitable[list[Bar]]]
+
+class BarsResult(NamedTuple):
+    """bars + 空結果的原因(`BarsStatus`)。
+
+    **刻意做成 NamedTuple 而不是裸 tuple**:與 `TaggedBars` 同構(`BarsStatus` 是
+    `str` 的 Literal 子型別),裸 tuple 下把帶 status 的 fetcher 誤傳給 `build_period`
+    型別合法,結果是大盤 meta 的「來源」欄靜默變成 `"ok"` —— 一個沒人會第一眼認出
+    是 bug 的字(spec R5)。
+    """
+
+    bars: list[Bar]
+    status: BarsStatus
+
+
+class TaggedBars(NamedTuple):
+    """bars + 實際走到的資料源標籤(大盤 meta 用;與 `BarsResult` 刻意不可互換)。"""
+
+    bars: list[Bar]
+    tag: str
+
+
+#: 嚴重度:壞消息不可被好消息蓋掉,所以合併一律取 max。
+_STATUS_SEVERITY: dict[BarsStatus, int] = {"ok": 0, "timeout": 1, "disconnected": 2}
+
+
+def worst_status(*statuses: BarsStatus) -> BarsStatus:
+    """SC-6:多段結果的 status = 最壞值(disconnected > timeout > ok)。
+
+    一個引數都沒有(兩段全 cache 命中、一次 fetch 都沒發)→ `"ok"`:沒發請求就
+    沒有壞消息可報,把它算成上一輪的原因等於讓過期的診斷永遠黏著。
+    """
+    worst: BarsStatus = "ok"
+    for s in statuses:
+        if _STATUS_SEVERITY[s] > _STATUS_SEVERITY[worst]:
+            worst = s
+    return worst
+
+
+#: engine.bars_range(code, tf, start_date, end_date) -> BarsResult
+BarsFetcher = Callable[[str, str, str, str], Awaitable[BarsResult]]
 
 
 def clamp_days(days: int) -> int:
@@ -71,14 +109,20 @@ def _iter_days(start: _dt.date, end: _dt.date):
 class BarsCache:
     def __init__(self, ttl: float = TODAY_TTL_SECS, clock: Callable[[], float] = time.monotonic):
         self._hist: dict[tuple[str, str], list[Bar]] = {}
-        self._today: dict[tuple[str, str], tuple[float, list[Bar]]] = {}
+        #: (code, today) -> (寫入時刻, bars, 寫入時的 status)。**status 要存**:
+        #: `_empty` 的 key 含 days 而這層不含,days=1 的當日段 timeout 寫入後,15s 內
+        #: days=30 的請求會 `empty_status` 未命中、`today_get` 命中那份源自 timeout 的
+        #: 空 —— 若視為 ok 就把 timeout 洗白了(spec R4;違反 SC-5)。
+        self._today: dict[tuple[str, str], tuple[float, list[Bar], BarsStatus]] = {}
         self._daily: dict[tuple[str, str], list[Bar]] = {}
         #: 與 `_daily` 同鍵的資料源標籤(大盤 meta 用)。分開存而不塞進值:
         #: `_daily` 的值型別是 `list[Bar]`,個股路徑四個呼叫點都吃它
         self._daily_tag: dict[tuple[str, str], str] = {}
-        #: (code, tf, days) -> 寫入時刻。days 必須進 key —— 少了它,days=1 的空結果
-        #: 會把 days=30 的請求一併釘住(spec review R15)。tf="D" 一律傳 days=0。
-        self._empty: dict[tuple[str, str, int], float] = {}
+        #: (code, tf, days) -> (寫入時刻, 空的原因)。days 必須進 key —— 少了它,
+        #: days=1 的空結果會把 days=30 的請求一併釘住(spec review R15)。
+        #: tf="D" 一律傳 days=0。**原因要存**:15s 內的重複請求若一律回 ok,
+        #: 「還在等 TC4」就被快取洗成「這檔沒資料」(SC-5)。
+        self._empty: dict[tuple[str, str, int], tuple[float, BarsStatus]] = {}
         self._ttl = ttl
         self._clock = clock
 
@@ -114,12 +158,18 @@ class BarsCache:
 
     # ---- 空結果負向快取(短 TTL)----
 
-    def empty_fresh(self, code: str, tf: str, days: int) -> bool:
-        ts = self._empty.get((code, tf, days))
-        return ts is not None and self._clock() - ts < EMPTY_TTL_SECS
+    def empty_status(self, code: str, tf: str, days: int) -> BarsStatus | None:
+        """未過期的空標記 → 存入時的 status;無標記 / 已過期 → None。
 
-    def empty_mark(self, code: str, tf: str, days: int) -> None:
-        self._empty[(code, tf, days)] = self._clock()
+        回 status 而不是 bool:呼叫端要能把「為什麼空」原封不動送出去(SC-5)。
+        """
+        entry = self._empty.get((code, tf, days))
+        if entry is None or self._clock() - entry[0] >= EMPTY_TTL_SECS:
+            return None
+        return entry[1]
+
+    def empty_mark(self, code: str, tf: str, days: int, status: BarsStatus) -> None:
+        self._empty[(code, tf, days)] = (self._clock(), status)
 
     def empty_clear(self, code: str, tf: str, days: int) -> None:
         self._empty.pop((code, tf, days), None)
@@ -131,7 +181,7 @@ class BarsCache:
         —— 各寫一份必然漂移。"""
         return self._ttl if bars else min(self._ttl, EMPTY_TTL_SECS)
 
-    def today_get(self, code: str, today: str) -> list[Bar] | None:
+    def today_get(self, code: str, today: str) -> tuple[list[Bar], BarsStatus] | None:
         # key 含日期:只用 code 的話,server 跨午夜後的 TTL 窗內會把昨日 bars 當今日回,
         # 而歷史段此時已含昨日 → 同一回應出現重複 t(review P2-9)
         entry = self._today.get((code, today))
@@ -139,21 +189,23 @@ class BarsCache:
             return None
         if self._clock() - entry[0] >= self._today_ttl(entry[1]):
             return None
-        return entry[1]
+        return entry[1], entry[2]
 
     def today_entry_count(self) -> int:
         """`_today` 的條目數(成長觀測用;prune 的 TTL evict 測試需要)。"""
         return len(self._today)
 
-    def today_put(self, code: str, today: str, bars: list[Bar]) -> None:
+    def today_put(self, code: str, today: str, bars: list[Bar], status: BarsStatus) -> None:
         """空結果也存,但吃更短的 TTL(`EMPTY_TTL_SECS`)。
 
         原本空結果一律不存(don't-cache-empty)。問題是**歷史有資料但今日零成交**的
         股票(冷門股常態):`build_minute` 合併後的 `out` 因為歷史段非空而永不觸發
         `empty_mark`,當日段自己又不存空 → 每次請求都要重付一次 TC4 首頁等待
         (self-review B2)。短 TTL 兩邊都顧:15 秒內的重複請求免費,過期即重抓,
-        該股一開始成交就看得到。"""
-        self._today[(code, today)] = (self._clock(), bars)
+        該股一開始成交就看得到。
+
+        `status` 一併存下(見 `_today` 註解):TTL 窗內的命中要能還原「為什麼空」。"""
+        self._today[(code, today)] = (self._clock(), bars, status)
 
     def prune(self, today: _dt.date) -> None:
         """剪掉視窗外與已過期的條目。
@@ -179,7 +231,7 @@ class BarsCache:
         ]:
             del self._today[key]
         # 只丟已過期的:prune 每次 build_* 開頭都會跑,無條件 clear 等於負向快取從未生效
-        for key in [k for k, ts in self._empty.items() if now - ts >= EMPTY_TTL_SECS]:
+        for key in [k for k, e in self._empty.items() if now - e[0] >= EMPTY_TTL_SECS]:
             del self._empty[key]
 
     # ---- 日 K(per (code, today) memo)----
@@ -203,22 +255,26 @@ class BarsCache:
 
 async def build_daily(
     fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date
-) -> list[Bar]:
+) -> BarsResult:
     cache.prune(today)
     cached = cache.daily_get(code, today.isoformat())
     if cached is not None:
-        return cached
-    # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline
-    if cache.empty_fresh(code, "D", 0):
-        return []
+        # memo 命中 = 這一輪沒發 fetch,沒有壞消息可報(worst_status() 的同一條理由)
+        return BarsResult(cached, "ok")
+    # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline。
+    # 回的是**存入時的原因**,不是 ok —— 洗白等於讓「還在等」在 15s 內變成「沒資料」。
+    marked = cache.empty_status(code, "D", 0)
+    if marked is not None:
+        return BarsResult([], marked)
     start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
-    bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-DAILY_MAX_BARS:]
+    fetched, status = await fetch(code, "D", start.isoformat(), today.isoformat())
+    bars = fetched[-DAILY_MAX_BARS:]
     cache.daily_put(code, today.isoformat(), bars)
     if bars:
         cache.empty_clear(code, "D", 0)
     else:
-        cache.empty_mark(code, "D", 0)
-    return bars
+        cache.empty_mark(code, "D", 0, status)
+    return BarsResult(bars, status)
 
 
 def _period_key(stamp: str, period: str) -> str | None:
@@ -270,8 +326,8 @@ def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
     return out
 
 
-#: `engine.bars_range_tagged(code, tf, start, end) -> (bars, source_tag)`
-TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[tuple[list[Bar], str]]]
+#: `engine.bars_range_tagged(code, tf, start, end) -> TaggedBars`
+TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[TaggedBars]]
 
 
 def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
@@ -296,7 +352,7 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
 
 async def build_period(
     fetch: TaggedBarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
-) -> tuple[list[Bar], str]:
+) -> TaggedBars:
     """大盤頁的日 / 週 / 月 K —— 三者共用同一份長窗日 K(見 `DAILY_LONG_WINDOW_DAYS`)。
 
     `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。回 `(bars, source_tag)`。
@@ -315,9 +371,9 @@ async def build_period(
         # tag 缺失回 unavailable 而非猜一個漂亮值 —— 猜值就是在最需要誠實的
         # 那條路上說謊(review P1-4 的同一條理由)
         tag = cache.daily_tag_get(key, day) or "unavailable"
-        return (cached if period == "D" else aggregate_period(cached, period)), tag
-    if cache.empty_fresh(key, "D", 0):
-        return [], "unavailable"
+        return TaggedBars((cached if period == "D" else aggregate_period(cached, period)), tag)
+    if cache.empty_status(key, "D", 0) is not None:
+        return TaggedBars([], "unavailable")
     start = today - _dt.timedelta(days=DAILY_LONG_WINDOW_DAYS)
     daily, tag = await fetch(code, "D", start.isoformat(), day)
     daily = daily[-DAILY_LONG_MAX_BARS:]
@@ -326,27 +382,37 @@ async def build_period(
         cache.daily_tag_put(key, day, tag)
         cache.empty_clear(key, "D", 0)
     else:
-        cache.empty_mark(key, "D", 0)
-    return (daily if period == "D" else aggregate_period(daily, period)), tag
+        # 大盤路徑的空態表述走自己的 source tag(`unavailable`),不吃三態 status ——
+        # 存 "ok" = 現況等價,只是讓 `_empty` 的值型別一致(本輪 out of scope)
+        cache.empty_mark(key, "D", 0, "ok")
+    return TaggedBars((daily if period == "D" else aggregate_period(daily, period)), tag)
 
 
 async def build_minute(
     fetch: BarsFetcher, cache: BarsCache, code: str, days: int, today: _dt.date
-) -> list[Bar]:
-    """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。"""
+) -> BarsResult:
+    """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。
+
+    status = 兩段的 worst(SC-6)。**未實際 fetch 且無存檔 status 的段不貢獻**
+    (歷史 memo 命中)—— 已經拿到的資料不是壞消息,把它算成上一輪的原因會讓
+    過期的診斷永遠黏著。
+    """
     cache.prune(today)
-    if cache.empty_fresh(code, "1", days):
-        return []
+    marked = cache.empty_status(code, "1", days)
+    if marked is not None:
+        return BarsResult([], marked)
     start = today - _dt.timedelta(days=clamp_days(days) - 1)
     yesterday = today - _dt.timedelta(days=1)
 
+    statuses: list[BarsStatus] = []
     out: list[Bar] = []
     if start <= yesterday:
         missing = cache.hist_missing(code, start, yesterday)
         if missing:
             # 只補缺口區間(端點取 min/max;中間已 memo 的日子重抓無害,省下逐日 REQ)
             lo, hi = missing[0], missing[-1]
-            fetched = await fetch(code, "1", lo.isoformat(), hi.isoformat())
+            fetched, hist_status = await fetch(code, "1", lo.isoformat(), hi.isoformat())
+            statuses.append(hist_status)
             if fetched:
                 cache.put_hist_range(code, lo, hi, fetched)
             else:
@@ -354,15 +420,21 @@ async def build_minute(
                 logger.info("bars %s: 歷史段 %s..%s 回空,不入 memo", code, lo, hi)
         out.extend(cache.hist_range(code, start, yesterday))
 
-    today_bars = cache.today_get(code, today.isoformat())
-    if today_bars is None:
-        today_bars = await fetch(code, "1", today.isoformat(), today.isoformat())
-        cache.today_put(code, today.isoformat(), today_bars)
+    entry = cache.today_get(code, today.isoformat())
+    if entry is None:
+        today_bars, today_status = await fetch(code, "1", today.isoformat(), today.isoformat())
+        cache.today_put(code, today.isoformat(), today_bars, today_status)
+    else:
+        # cache 命中也要把存入時的 status 帶回來:`_empty` 的 key 含 days 而這層不含,
+        # 少了它 days 一換就把 timeout 洗白(R4)
+        today_bars, today_status = entry
+    statuses.append(today_status)
     out.extend(today_bars)
+    status = worst_status(*statuses)
     # 兩段都空 = 這檔在 TC4 查不到(或 TC4 正忙)。標記 15 秒,期間的重複請求直接回空,
     # 不再各付一次首頁 deadline。過期即自動重試(W-15)。
     if out:
         cache.empty_clear(code, "1", days)
     else:
-        cache.empty_mark(code, "1", days)
-    return out
+        cache.empty_mark(code, "1", days, status)
+    return BarsResult(out, status)
