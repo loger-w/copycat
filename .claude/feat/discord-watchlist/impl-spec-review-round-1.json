@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "verdict": "0 P0 / 3 P1 / 5 P2",
+  "dispositions": {
+    "R1": "accepted — R9 守門測試移至 tests/server/test_stock_engine.py 用 FakeStockSource.subscribed/unsubscribed;T2 保留 set_calls 斷言;design 檔案組織表補該檔",
+    "R2": "accepted — rename 攔截只判 old(操作對象);new 交 normalize → BAD_GROUP;測試拆兩條",
+    "R3": "accepted — 補既有測試遷移項(FakeService 四新方法 + tuple;既有 add/remove 斷言解包),獨立 commit 不混紅綠證據",
+    "R4": "accepted — 讀時遷移改三路徑一致:dropped 群組 codes 先 union 進 codes 再丟組;補 orphan code 測試",
+    "R5": "accepted — T2 補 add 帶保留名群組的端到端零寫測試",
+    "R6": "accepted — _format_groups 未分組行三態測試補齊",
+    "R7": "accepted — 子群組變數名明定 group_cmd;wiring 斷言改 qualified name 集合",
+    "R8": "accepted — gate 節補 prod 檔中毒檢查 + SC-4 user 過目交付說明"
+  },
+  "exit": "P1 全修入 PLAN v2 → 固定 1 輪不重跑 → 進 Phase 3"
+}

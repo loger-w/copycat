@@ -1,0 +1,34 @@
+{
+  "round": 1,
+  "lenses": ["correctness+concurrency (opus)", "missing-from-spec+test-coverage (opus)"],
+  "verdict": "P1×3(A1/B1 同根因合併、A2)+ 行為級 P2×1(A3)+ p2_summary 12 條",
+  "findings": {
+    "A1+B1": {
+      "severity": "P1", "disposition": "accepted",
+      "claim": "create_group 於現況不可用(壞檔/超限檔)以空為底覆蓋 → 靜默清空自選 + 全退訂;讀時遷移 orphan union 可自製前置條件(推破 30 上限)",
+      "resolution": "四個新方法統一:_current_canonical() is None → raise WatchlistError('WATCHLIST_UNAVAILABLE') 零寫(順修 B-p2#5 的 GROUP_NOT_FOUND 誤導文案);_ERROR_TEXT 補文案;紅測試先行"
+    },
+    "A2": {
+      "severity": "P1", "disposition": "accepted(縮範圍)",
+      "claim": "群組名無上限 + _run 的 followup.send 在 try 外 → 超長回覆讓指令永久卡「思考中」",
+      "resolution": "修回覆層:>1900 截斷 + send 包 try/except logger.exception。名長/群組數上限維持 out of scope(brainstorm auto-default 已記 next-time)"
+    },
+    "A3": {
+      "severity": "P2(行為級,展開)", "disposition": "accepted",
+      "claim": "add() 群組比對未 strip 且基準與新方法不同 → 尾空白誤判 BAD_GROUP",
+      "resolution": "add() 比對與建群一律用 strip 後名;handler 入口統一 strip 群組名參數(A-p2#1/B-p2#2 同修)"
+    },
+    "p2_folded_in": [
+      "A-p2#2/B-p2#7 handle_group_remove 解包 changed(契約誠實)",
+      "A-p2#3 autocomplete 長名 warning 移到 needle 過濾後(防 log 洗版)",
+      "A-p2#4 resubscribe noop 測試補 baseline>0 斷言",
+      "B-p2#1 文案三格補逐字鎖測試(rename noop 用 strip 後 new、add noop+hint 組合、add noop 丟 group 後綴)",
+      "B-p2#3 SignalHub.on_watchlist 同集合差集守門測試補上(design R9 的第二側)"
+    ],
+    "p2_not_fixed": [
+      "A-p2#4(雙讀 IO,YAGNI)", "A-p2#5(%.1f log 格式)",
+      "B-p2#6 讀時遷移 orphan union 可推破 30 上限 → 檔進入不可 normalize 態:接受(fix 後群組操作大聲拒絕、apply 自癒;入 design Known Risks + next-time)"
+    ],
+    "refuted": "無(兩 lens 各附實跑 repro;聚焦反證三項乾淨:wait_for 鎖、tuple blast radius、遷移三路徑)"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "shape": "Discord bot(library 分流:真 WatchlistService + 真檔案 consumer script;夜盤紀律零 TC4 接觸)",
+  "script": "evidence/real_env_consumer.py",
+  "evidence": "evidence/SC-1237_real-env-consumer-output.txt",
+  "results": {
+    "happy": "add(自動建群)→ group add(空群組)→ groups(SC-1 空群組可見+未分組衍生標注)→ ungroup(SC-3)→ rename → autocomplete → remove → list — 文案逐格符 design v3 表",
+    "edge1_reserved": "group add 未分組 → 群組名稱不合法(normalize gate);ungroup 未分組 → 「未分組」不是群組,無法操作(handler 攔截)",
+    "edge2_unknown_noop": "add 9999 → 查無名稱警告仍加入(SC-5);重複 add → 已在自選(無變更)+警告(SC-7);group remove 不存在 → 找不到該群組",
+    "edge3_broken_file": "壞檔下 create_group → 自選檔目前不可用文案 + 檔逐字未變 + set_watchlist 零呼叫(review A1/B1 fix 實證)",
+    "regression": ["/watch list 既有輸出格式不變", "apply 同內容零寫早退(前端 PUT 語意)set_watchlist 零呼叫"]
+  },
+  "prod_poison_check": "data/stock_watchlist.json groups=[玻璃, 石英], codes=4 — 無保留名群組(design Known Risks 檢查項 PASS)",
+  "deferred_to_user": "SC-4 Discord 實發(autocomplete 選單/指令樹在真 guild 的呈現)— prod 重啟 + user 過目;降級依 brainstorm SC-4 窗口條款(單元測試 + consumer 證據已備)"
+}
