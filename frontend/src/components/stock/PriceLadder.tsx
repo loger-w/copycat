@@ -234,6 +234,7 @@ export function PriceLadder({
   );
   const beMarks = markMap(posRows, (r) => r.beTick);
   const avgMarks = markMap(posRows, (r) => r.avgTick);
+  const discountInvalid = clampDiscount(discount.raw) === null;
 
   const ladder = buildLadder({
     center: last?.p ?? null,
@@ -372,17 +373,47 @@ export function PriceLadder({
           {code}
           {name !== "" ? <span className="ml-1 font-sans text-ink-muted">{name}</span> : null}
         </span>
-        <button
-          type="button"
-          aria-pressed={follow}
-          onClick={() => setFollow((f) => !f)}
-          className={cn(
-            "rounded border px-1.5 py-0.5 text-xs",
-            follow ? "border-accent text-accent" : "border-line text-ink-dim",
-          )}
-        >
-          跟隨置中
-        </button>
+        <div className="flex items-center gap-1">
+          {/* 折數框放**標題列**不放武裝列(ORD-1):武裝列上它會與張數框變成同型相鄰的
+              兩個數字框,而其中一個是真錢張數 —— 誤打折數時張數靜默留舊值,下一次點價
+              就用舊張數送真單。折數本身不是下單控制項,不該待在誤送半徑內。
+              恆常渲染:空手也要能先把折數設好(D1)。 */}
+          <label className="flex items-center gap-0.5 text-xs text-ink-dim">
+            <input
+              aria-label="手續費折數"
+              type="number"
+              step={0.1}
+              min={0.1}
+              max={10}
+              value={discount.raw}
+              // 非法值不是「沒事」:輸入框顯示 raw、計算卻用舊 value,不給訊號就是靜默態
+              aria-invalid={discountInvalid ? true : undefined}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const v = clampDiscount(raw);
+                // 非法值只更新 raw(不吃掉按鍵),value 沿用上一個合法值 → 計算不跳動
+                setDiscount((s) => ({ raw, value: v ?? s.value }));
+                if (v !== null) persistDiscount(v);
+              }}
+              className={cn(
+                "w-10 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
+                discountInvalid ? "border-loss" : "border-line",
+              )}
+            />
+            折
+          </label>
+          <button
+            type="button"
+            aria-pressed={follow}
+            onClick={() => setFollow((f) => !f)}
+            className={cn(
+              "rounded border px-1.5 py-0.5 text-xs",
+              follow ? "border-accent text-accent" : "border-line text-ink-dim",
+            )}
+          >
+            跟隨置中
+          </button>
+        </div>
       </div>
       {/* 武裝列:武裝/解除 + 交易別 + 張數快捷 */}
       <div className="border-b border-line px-2 py-1.5">
@@ -444,28 +475,6 @@ export function PriceLadder({
             }}
             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
           />
-          {/* 折數與張數是相鄰的同型數字框,而其中一個是真錢張數 —— 後綴「折」是
-              肉眼區隔(IS-8),不是裝飾。恆常渲染:空手也要能先把折數設好(D1)。 */}
-          <label className="ml-0.5 flex items-center gap-0.5 border-l border-line pl-1 text-xs text-ink-dim">
-            <input
-              aria-label="手續費折數"
-              type="number"
-              step={0.1}
-              min={0.1}
-              max={10}
-              value={discount.raw}
-              onChange={(e) => {
-                touchIdle();
-                const raw = e.target.value;
-                const v = clampDiscount(raw);
-                // 非法值只更新 raw(輸入框照顯示),value 沿用上一個合法值 → 計算不跳動
-                setDiscount((s) => ({ raw, value: v ?? s.value }));
-                if (v !== null) persistDiscount(v);
-              }}
-              className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
-            />
-            折
-          </label>
         </div>
         {hint !== null ? (
           <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
@@ -504,18 +513,31 @@ export function PriceLadder({
             const buyLocked = r.dimmed || tradeKind === "daytrade_sell";
             const beKinds = beMarks.get(r.priceMilli);
             const avgKinds = avgMarks.get(r.priceMilli);
+            // title 掛 row 不掛標記(LP-1):標記是 pointer-events-none,永遠不會是
+            // hover 目標 → 掛在它身上的 tooltip 永遠不會出現。無標記的列不掛 title,
+            // 否則整梯都是空 tooltip。
+            const markTitle = [
+              beKinds !== undefined ? `打平(${beKinds.join("、")})` : null,
+              avgKinds !== undefined ? `均價(${avgKinds.join("、")})` : null,
+            ]
+              .filter((s) => s !== null)
+              .join("、");
             return (
               <div
                 key={r.priceMilli}
                 data-price={r.priceMilli}
+                title={markTitle !== "" ? markTitle : undefined}
                 ref={(el) => {
                   if (el) rowRefs.current.set(r.priceMilli, el);
                   else rowRefs.current.delete(r.priceMilli);
                   if (r.isCenter && el) centerRef.current = el;
                 }}
                 className={cn(
-                  "relative grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 font-mono text-xs",
+                  "relative grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b font-mono text-xs",
                   r.isCenter && "bg-bg-deep",
+                  // 分隔線留在 row 容器上 → 淡化移欄後它不再吃 row 的 opacity,
+                  // 不自己降階的話反灰列的格線會比改動前**更亮**(LP-4)
+                  r.dimmed ? "border-line/20" : "border-line/50",
                 )}
               >
                 {/* 部位標記(SC-4)。`pointer-events-none` 是必要的:左緣正是刪單紅方格
@@ -525,14 +547,12 @@ export function PriceLadder({
                 {beKinds !== undefined ? (
                   <span
                     data-testid="ladder-be-mark"
-                    title={`打平(${beKinds.join("、")})`}
                     className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-warn opacity-100"
                   />
                 ) : null}
                 {avgKinds !== undefined ? (
                   <span
                     data-testid="ladder-avg-mark"
-                    title={`均價(${avgKinds.join("、")})`}
                     className="pointer-events-none absolute inset-y-0 left-1 w-0.5 bg-ma20 opacity-100"
                   />
                 ) : null}
@@ -626,10 +646,21 @@ export function PriceLadder({
                 <span className="text-ink">{r.head}</span>
                 <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
               </div>
+              {/* 兩顆色點分別對應梯內兩根標線,讓「梯上那根線是什麼」不必猜。
+                  均價**只給標籤不給數字**(CALC-3):第一行 @ 顯示的是真均價原值,
+                  標線位置是 snapNearest 後的近似檔位 —— 兩個口徑的數字並列會讓人
+                  以為均價變了。 */}
               <div className="flex items-center gap-1 text-ink-muted">
-                {/* 色點對應梯內打平標記色(bg-warn),讓「梯上那根黃線是什麼」不必猜 */}
-                <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
+                {r.beTick !== null ? (
+                  <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
+                ) : null}
                 <span>{r.beText}</span>
+                {r.avgTick !== null ? (
+                  <>
+                    <span aria-hidden="true" className="ml-1 inline-block h-2 w-0.5 bg-ma20" />
+                    <span>均價</span>
+                  </>
+                ) : null}
               </div>
             </div>
           ))}
