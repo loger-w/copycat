@@ -27,7 +27,7 @@ describe("thirdWednesday(YYYYMM → YYYY-MM-DD)", () => {
   });
 });
 
-describe("settlementCountdown(週一〜五計數;T-0 = 當天;已過 null)", () => {
+describe("settlementCountdown(週一〜五計數;T-0 = 當天;已過仍 0)", () => {
   it("結算當日 = 0", () => {
     expect(settlementCountdown("202608", "2026-08-19")).toBe(0);
   });
@@ -49,9 +49,15 @@ describe("settlementCountdown(週一〜五計數;T-0 = 當天;已過 null)", () 
     expect(settlementCountdown("202609", "2026-08-28")).toBe(13);
   });
 
-  it("已過 → null(防 HOT 換月前的殘留契約算出負數)", () => {
-    expect(settlementCountdown("202608", "2026-08-20")).toBe(null);
-    expect(settlementCountdown("202608", "2026-09-01")).toBe(null);
+  // review TZ-3 拍板:純日曆的第三週三遇假日順延時,真結算日會落在「算出來的日子之後」,
+  // 回 null 等於警示在最該亮的那天整個消失。回 0(維持 T-0 警示)直到 HOT 換月自然收斂。
+  it("已過 → 0(結算日順延 / HOT 未換月的空窗期,警示不可消失)", () => {
+    expect(settlementCountdown("202608", "2026-08-20")).toBe(0);
+    expect(settlementCountdown("202608", "2026-09-01")).toBe(0);
+  });
+
+  it("已過仍不回負數(不顯示 T-(−3) 這種讀不懂的倒數)", () => {
+    expect(settlementCountdown("202608", "2026-12-31")).toBe(0);
   });
 
   it("壞輸入回 null 而不拋(render path 不可白屏)", () => {
