@@ -9,6 +9,7 @@ import {
   useDeleteRule,
   useSaveRule,
   useSignalRules,
+  type RuleDraft,
   type SignalRule,
 } from "@/hooks/useSignalRules";
 
@@ -73,7 +74,16 @@ describe("useSignalRules", () => {
 describe("useSaveRule", () => {
   it("無 id → POST /api/stock/signals/rules(新增)", async () => {
     const hook = renderHook(() => useSaveRule(), { wrapper });
-    const { id: _id, ...draft } = rule();
+    const full = rule();
+    const draft: RuleDraft = {
+      name: full.name,
+      kind: full.kind,
+      enabled: full.enabled,
+      notify_discord: full.notify_discord,
+      cooldown_secs: full.cooldown_secs,
+      params: full.params,
+      cdp_levels: full.cdp_levels,
+    };
     await act(async () => {
       await hook.result.current.mutateAsync(draft);
     });

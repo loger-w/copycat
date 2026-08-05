@@ -2,16 +2,16 @@ import { useState } from "react";
 
 import { OrderBook } from "@/components/stock/OrderBook";
 import { SignalRail } from "@/components/stock/SignalRail";
+import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
 import { StockChart } from "@/components/stock/StockChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import { useSignalFeed } from "@/hooks/useSignalFeed";
-import { useSignalsConfig } from "@/hooks/useSignalsConfig";
+import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
 import { useSignalSound } from "@/hooks/useSignalSound";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
-import type { SignalEnabled, SignalSwitchKey } from "@/lib/signal-model";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
@@ -38,10 +38,12 @@ function currentPermission(): NotificationPermission {
 
 export function StockPage({ code, onSelect, stream }: Props) {
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
-  // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 四鍵開關(後端 configs)/
+  // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
   const { signals } = useSignalFeed();
-  const { enabled, save: saveEnabled } = useSignalsConfig();
+  const { data: rules = [] } = useSignalRules();
+  const saveRule = useSaveRule();
+  const [rulesOpen, setRulesOpen] = useState(false);
   const { soundOn, setSoundOn } = useSignalSound();
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
@@ -84,11 +86,11 @@ export function StockPage({ code, onSelect, stream }: Props) {
     commit(g === null || g === undefined ? withCode : assignToGroup(withCode, code, g.name, g.codes.length));
   }
 
-  /** 只送被切的那一鍵(部分更新):PUT 失敗時 query data 不動 → 開關停在原位,
-   *  使用者看得出「沒切成功」;`mutate` 的錯誤留在 `saveEnabled.error`,不另吞。 */
-  function toggleKind(key: SignalSwitchKey, value: boolean): void {
-    const patch: Partial<SignalEnabled> = { [key]: value };
-    saveEnabled.mutate(patch);
+  /** 規則開關 = 整條規則 PUT(只翻 `enabled`)。PUT 失敗時 query data 不動 →
+   *  開關停在原位,使用者看得出「沒切成功」;錯誤留在 `saveRule.error`,不另吞。
+   *  送整條而不是部分更新:後端 PUT 是全量取代,少帶欄位會被判 INVALID_RULE。 */
+  function toggleRule(rule: SignalRule): void {
+    saveRule.mutate({ ...rule, enabled: !rule.enabled });
   }
 
   /** 權限狀態不是 React state 的衍生值,要主動回寫 —— 使用者按完瀏覽器提示後,
@@ -111,14 +113,17 @@ export function StockPage({ code, onSelect, stream }: Props) {
     <div className="flex min-h-0 flex-1 gap-4">
       <SignalRail
         signals={signals}
-        enabled={enabled}
-        onToggle={toggleKind}
+        rules={rules}
+        onToggleRule={toggleRule}
+        onOpenManager={() => setRulesOpen(true)}
         onSelect={onSelect}
         notifPermission={notifPermission}
         onRequestNotif={requestNotif}
         soundOn={soundOn}
         onToggleSound={setSoundOn}
       />
+      {/* 常駐掛載、只切 open(dialog 樣板慣例);規則清單由本層餵,Dialog 不自己抓 */}
+      <SignalRulesDialog open={rulesOpen} rules={rules} onClose={() => setRulesOpen(false)} />
       <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
         {status.tc4 === "down" || wsStatus === "closed" ? (

@@ -15,15 +15,13 @@ export type SignalKind =
   | "limit_lock"
   | "limit_open";
 
-/** 四鍵開關(後端 `SWITCH_KEYS`)—— 六個 kind 併成四個使用者可理解的類型。 */
-export type SignalSwitchKey = "cdp_cross" | "surge_crash" | "vol_burst" | "limit_lock";
-
-export type SignalEnabled = Record<SignalSwitchKey, boolean>;
-
 export interface SignalMsg {
   type: "signal";
-  /** 決定性鍵 `trade_date-code-kind-(levels+ | direction | "-")-time_key`:
-   *  重啟後同訊號重發時靠它去重(後端 `signal_hub._event_id`)。 */
+  /** 決定性鍵 `trade_date-rule_id-code-kind-(levels+ | direction | "-")-time_key`:
+   *  重啟後同訊號重發時靠它去重(後端 `signal_hub._event_id`)。
+   *
+   *  `rule_id` 是必要的一段:同 kind 兩條規則同一 tick 各發一則,少了它兩則同 id,
+   *  這裡的 `mergeSignals` 會把第二則整個吃掉。 */
   id: string;
   kind: SignalKind;
   code: string;
@@ -40,18 +38,11 @@ export interface SignalMsg {
   /** surge/crash 實際漲跌幅(%);vol_burst 實際倍率;其他 null。 */
   pct: number | null;
   touch_count: number;
+  /** 產生這則訊號的規則(signal-rules SC-8)。**選填**:升級當日已存 jsonl 的舊行
+   *  沒有這兩欄,消費端要能退回 kind 文案而不是顯示空白。 */
+  rule_id?: string;
+  rule_name?: string;
 }
-
-/** kind → 開關鍵。`SWITCH_KEYS` 四鍵制:surge/crash 同鍵、limit_lock/limit_open 同鍵
- *  (與後端 `signal_state.KIND_SWITCH` 逐字對應,改一邊要改兩邊)。 */
-const KIND_SWITCH: Record<SignalKind, SignalSwitchKey> = {
-  cdp_cross: "cdp_cross",
-  surge: "surge_crash",
-  crash: "surge_crash",
-  vol_burst: "vol_burst",
-  limit_lock: "limit_lock",
-  limit_open: "limit_lock",
-};
 
 /** CDP 五線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 否則標籤變「突破 CDP CDP」。 */
 const LEVEL_LABEL: Record<string, string> = {
@@ -115,16 +106,4 @@ export function mergeSignals(
   }
   out.sort((a, b) => (a.time === b.time ? 0 : a.time > b.time ? -1 : 1));
   return out.length > cap ? out.slice(0, cap) : out;
-}
-
-/** 依四鍵開關過濾。
- *
- *  **fail-open**:未知 kind 與缺鍵的 enabled 一律當開啟 —— 前端舊 / 後端新增類型時
- *  誤判成「全部關掉」會讓整條訊號流靜默清空,那比多顯示幾則難察覺得多。 */
-export function filterKinds(sigs: SignalMsg[], enabled: SignalEnabled): SignalMsg[] {
-  return sigs.filter((sig) => {
-    const key = KIND_SWITCH[sig.kind] as SignalSwitchKey | undefined;
-    if (key === undefined) return true;
-    return enabled[key] !== false;
-  });
 }

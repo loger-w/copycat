@@ -65,18 +65,24 @@ function writes(): { url: string; init: RequestInit }[] {
   return calls.filter((c) => c.init.method !== undefined);
 }
 
+/** **逐 token 比對不用子字串**:`flex-col` 恆在 class 上,`toContain("flex")`
+ *  在關閉狀態下同樣為真 —— 那條斷言鎖不到 display 是否跟著 `open` 切。 */
+function displayClasses(): string[] {
+  return (screen.getByTestId("signal-rules-dialog").className ?? "").split(/\s+/);
+}
+
 describe("SignalRulesDialog 開關", () => {
   it("open=false → display 是 hidden 且內容不渲染", () => {
     open([CDP], false);
-    const dlg = screen.getByTestId("signal-rules-dialog");
-    expect(dlg.className).toContain("hidden");
-    expect(dlg.className).not.toContain("flex");
+    expect(displayClasses()).toContain("hidden");
+    expect(displayClasses()).not.toContain("flex");
     expect(screen.queryByText("我的 CDP")).toBeNull();
   });
 
   it("open=true → display 是 flex", () => {
     open();
-    expect(screen.getByTestId("signal-rules-dialog").className).toContain("flex");
+    expect(displayClasses()).toContain("flex");
+    expect(displayClasses()).not.toContain("hidden");
   });
 
   it("關閉鈕呼叫 onClose", () => {
