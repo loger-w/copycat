@@ -206,8 +206,8 @@ class TestVolumeMeta:
         class ZeroVol(FakeIndexSource):
             def fetch_bars_range_tagged(
                 self, code: str, tf: str, start: str, end: str
-            ) -> tuple[list[dict], str]:
-                return [{"t": "2026-07-29", "o": 1, "h": 2, "l": 0, "c": 1, "v": 0}], "tc4_dk"
+            ) -> tuple[list[dict], str, str]:
+                return [{"t": "2026-07-29", "o": 1, "h": 2, "l": 0, "c": 1, "v": 0}], "tc4_dk", "ok"
 
         with make_client(index_source=ZeroVol()) as c:
             r = c.get("/api/market/bars/TWSE?tf=D")
@@ -255,8 +255,8 @@ class TestMinutePath:
         class Empty(FakeIndexSource):
             def fetch_bars_range_tagged(
                 self, code: str, tf: str, start: str, end: str
-            ) -> tuple[list[dict], str]:
-                return [], "tc4_1k"
+            ) -> tuple[list[dict], str, str]:
+                return [], "tc4_1k", "ok"
 
         with make_client(index_source=Empty()) as c:
             r = c.get("/api/market/bars/TWSE?tf=1")
@@ -282,8 +282,8 @@ class TestPartialLast:
         class Fixed(FakeIndexSource):
             def fetch_bars_range_tagged(
                 self, code: str, tf: str, start: str, end: str
-            ) -> tuple[list[dict], str]:
-                return [_dbar(last_date, 1_000)], "tc4_dk"
+            ) -> tuple[list[dict], str, str]:
+                return [_dbar(last_date, 1_000)], "tc4_dk", "ok"
 
         return Fixed()
 
@@ -307,3 +307,30 @@ class TestPartialLast:
         with make_client(index_source=self._src(_TODAY)) as c:
             assert c.get("/api/market/bars/TWSE?tf=W").json()["meta"]["partial_last"] is True
             assert c.get("/api/market/bars/TWSE?tf=M").json()["meta"]["partial_last"] is True
+
+
+class TestMarketPayloadUnaffectedByBarsStatus:
+    """N-6:個股 bars 的三態 status **不得**滲進 market payload(白名單 6)。
+
+    `meta.source` 是資料源標籤(tc4_dk / tc4_1k / unavailable …),與 status 同構
+    (都是 str)—— 誤把帶 status 的 fetcher 接進 `build_period` 會讓它靜默變成 "ok",
+    畫面上就是「來源:ok」這種沒人會第一眼認出是 bug 的字(R5 的誤接守門)。
+    """
+
+    def test_market_payload_has_no_status_field(self) -> None:
+        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
+            for path in ("/api/market/bars/TWSE?tf=D", "/api/market/bars/TWSE?tf=1&days=1"):
+                body = c.get(path).json()
+                assert "status" not in body
+                assert "status" not in body["meta"]
+
+    def test_meta_source_is_never_a_status_word(self) -> None:
+        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
+            for path in (
+                "/api/market/bars/TWSE?tf=D",
+                "/api/market/bars/TWSE?tf=W",
+                "/api/market/bars/TWSE?tf=1&days=1",
+                "/api/market/bars/TXF?tf=D",
+            ):
+                source = c.get(path).json()["meta"]["source"]
+                assert source not in ("ok", "timeout", "disconnected"), path

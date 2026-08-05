@@ -35,8 +35,14 @@ def dk(date: str, o: str, h: str, low: str, c: str, v: str = "100", qi: str = "1
 
 def k1(date: str, time: str, o: str, h: str, low: str, c: str, v: str = "5", qi: str = "1") -> dict:
     return {
-        "Date": date, "Time": time, "Open": o, "High": h, "Low": low,
-        "Close": c, "Volume": v, "QryIndex": qi,
+        "Date": date,
+        "Time": time,
+        "Open": o,
+        "High": h,
+        "Low": low,
+        "Close": c,
+        "Volume": v,
+        "QryIndex": qi,
     }
 
 
@@ -44,16 +50,20 @@ class TestFetchBarsRangeDaily:
     def test_dk_parsed_to_ohlcv(self) -> None:
         pages = {"DK": {"0": [dk("20260724", "100", "101.5", "99", "100.5", "1200")], "1": []}}
         src = _src(_pager(pages))
-        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == [
-            {"t": "2026-07-24", "o": 100_000, "h": 101_500, "l": 99_000, "c": 100_500, "v": 1200}
-        ]
+        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == (
+            [{"t": "2026-07-24", "o": 100_000, "h": 101_500, "l": 99_000, "c": 100_500, "v": 1200}],
+            "ok",
+        )
 
     def test_missing_open_falls_back_to_close_and_missing_volume_is_zero(self) -> None:
         # DK 的 Open / Volume 欄位名未實測(CLAUDE.md §8 只實證 High/Low/Close)
         row = {"Date": "20260724", "High": "101", "Low": "99", "Close": "100", "QryIndex": "1"}
         src = _src(_pager({"DK": {"0": [row], "1": []}}))
-        bars = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
-        assert bars == [{"t": "2026-07-24", "o": 100_000, "h": 101_000, "l": 99_000, "c": 100_000, "v": 0}]
+        bars, status = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+        assert bars == [
+            {"t": "2026-07-24", "o": 100_000, "h": 101_000, "l": 99_000, "c": 100_000, "v": 0}
+        ]
+        assert status == "ok"
 
     def test_dk_empty_falls_back_to_1k_aggregation(self) -> None:
         pages = {
@@ -67,9 +77,10 @@ class TestFetchBarsRangeDaily:
             },
         }
         src = _src(_pager(pages))
-        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == [
-            {"t": "2026-07-24", "o": 100_000, "h": 102_000, "l": 99_000, "c": 101_000, "v": 15}
-        ]
+        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == (
+            [{"t": "2026-07-24", "o": 100_000, "h": 102_000, "l": 99_000, "c": 101_000, "v": 15}],
+            "ok",
+        )
 
     def test_sorted_ascending(self) -> None:
         pages = {
@@ -82,7 +93,7 @@ class TestFetchBarsRangeDaily:
             }
         }
         src = _src(_pager(pages))
-        bars = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+        bars, _ = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
         assert [b["t"] for b in bars] == ["2026-07-24", "2026-07-27"]
 
 
@@ -91,9 +102,19 @@ class TestFetchBarsRangeMinute:
         # 1K Time 為 UTC 終點標記;01:01 UTC = 09:01 台北(當日第一根)
         pages = {"1K": {"0": [k1("20260728", "10100", "100", "101", "99", "100.5", "7")], "1": []}}
         src = _src(_pager(pages))
-        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == [
-            {"t": "2026-07-28 09:01", "o": 100_000, "h": 101_000, "l": 99_000, "c": 100_500, "v": 7}
-        ]
+        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == (
+            [
+                {
+                    "t": "2026-07-28 09:01",
+                    "o": 100_000,
+                    "h": 101_000,
+                    "l": 99_000,
+                    "c": 100_500,
+                    "v": 7,
+                }
+            ],
+            "ok",
+        )
 
     def test_close_correction_clamped_and_merged(self) -> None:
         # fetch_day_minutes 回 dict 靠 key 覆寫;Bar 是 list → 必須顯式合併(review R2-6)
@@ -103,7 +124,7 @@ class TestFetchBarsRangeMinute:
             k1("20260728", "53500", "102", "104", "98", "103", "3", "3"),  # 13:35 → clamp 13:30
         ]
         src = _src(_pager({"1K": {"0": rows, "3": []}}))
-        bars = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
+        bars, _ = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
         assert bars == [
             {"t": "2026-07-28 13:30", "o": 100_000, "h": 104_000, "l": 98_000, "c": 103_000, "v": 6}
         ]
@@ -115,7 +136,7 @@ class TestFetchBarsRangeMinute:
             k1("20260728", "54000", "1", "1", "1", "1", "1", "3"),  # 13:40 台北,域外
         ]
         src = _src(_pager({"1K": {"0": rows, "3": []}}))
-        bars = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
+        bars, _ = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
         assert [b["t"] for b in bars] == ["2026-07-28 09:01"]
 
     def test_cross_day_separate_bars(self) -> None:
@@ -124,12 +145,13 @@ class TestFetchBarsRangeMinute:
             k1("20260728", "10100", "2", "2", "2", "2", "2", "2"),
         ]
         src = _src(_pager({"1K": {"0": rows, "2": []}}))
-        bars = src.fetch_bars_range("2330", "1", "2026-07-27", "2026-07-28")
+        bars, _ = src.fetch_bars_range("2330", "1", "2026-07-27", "2026-07-28")
         assert [b["t"] for b in bars] == ["2026-07-27 09:01", "2026-07-28 09:01"]
 
     def test_empty_returns_empty(self) -> None:
+        """poll_wait=0 探測一次即回 = 等滿(零)預算 → timeout,不是「確認無資料」。"""
         src = _src(_pager({"1K": {"0": []}}))
-        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == []
+        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
 
 
 class TestFetchBarsRangeErrors:
@@ -154,6 +176,55 @@ class TestFetchBarsRangeErrors:
         assert src.fetch_daily_bars("2330") == [
             {"date": "2026-07-24", "high": 101_500, "low": 99_000, "close": 100_500}
         ]
+
+
+class TestBarsStatus:
+    """N-1:三態 status 的源頭 —— deadline 用滿 vs 首頁備妥但無 bar。
+
+    TC4 協定上「真無資料」沒有正面訊號(GETHISDATA 空頁不分未備妥/無資料),
+    唯一能誠實說出口的區分是「有沒有等滿預算」,所以逾時路徑必須帶得出來。
+    """
+
+    def test_minute_with_data_is_ok(self) -> None:
+        pages = {"1K": {"0": [k1("20260728", "10100", "100", "101", "99", "100.5", "7")], "1": []}}
+        bars, status = _src(_pager(pages)).fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
+        assert bars
+        assert status == "ok"
+
+    def test_minute_timeout_reports_timeout(self) -> None:
+        src = _src(_pager({"1K": {}}))
+        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
+
+    def test_daily_with_dk_data_is_ok(self) -> None:
+        pages = {"DK": {"0": [dk("20260724", "100", "101.5", "99", "100.5")], "1": []}}
+        bars, status = _src(_pager(pages)).fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+        assert bars
+        assert status == "ok"
+
+    def test_dk_timeout_with_fallback_data_still_reports_timeout(self) -> None:
+        """SC-6 worst:1K fallback 補到了 bar,但 DK 那一趟等滿了預算 —— 兩段取最壞。
+
+        bars 非空照樣回 bars(前端只在空時分態),status 誠實說有一段沒等到。
+        """
+        pages = {
+            "DK": {},  # 首頁永遠空 → 等滿預算
+            "1K": {
+                "0": [k1("20260724", "10000", "100", "101", "100", "100.5", "10", "1")],
+                "1": [],
+            },
+        }
+        bars, status = _src(_pager(pages)).fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+        assert bars == [
+            {"t": "2026-07-24", "o": 100_000, "h": 101_000, "l": 100_000, "c": 100_500, "v": 10}
+        ]
+        assert status == "timeout"
+
+    def test_tagged_returns_three_tuple(self) -> None:
+        """tagged 版是 index_engine 走的那條:tag 與 status 兩件事都要在。"""
+        pages = {"DK": {"0": [dk("20260724", "100", "101.5", "99", "100.5")], "1": []}}
+        assert _src(_pager(pages)).fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")[
+            1:
+        ] == ("tc4_dk", "ok")
 
 
 class TestCollectHistoryWaiting:
@@ -189,7 +260,7 @@ class TestCollectHistoryWaiting:
         """poll_wait=0(測試組態)不重試 —— 否則就是在 budget 內全速空轉打 fake API。"""
         sent: list[dict] = []
         src = _src(_pager({"1K": {}}, sent))
-        assert src.fetch_bars_range("2330", "1", "2026-07-24", "2026-07-24") == []
+        assert src.fetch_bars_range("2330", "1", "2026-07-24", "2026-07-24") == ([], "timeout")
         probes = [o for o in sent if o["Request"] == "GETHISDATA"]
         assert len(probes) == 1
 
@@ -224,6 +295,6 @@ class TestCollectHistoryWaiting:
             poll_wait_secs=1.0,
         )
         out, slept = self._run_with_fake_clock(src, "2330", "D", "2026-07-24", "2026-07-24")
-        assert out == []
+        assert out == ([], "timeout")
         # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束
         assert sum(slept) <= 20.0

@@ -365,6 +365,7 @@ class TestBarsRoute:
                 "code": "2330",
                 "tf": "D",
                 "bars": [{"t": "2026-07-27", "o": 100, "h": 110, "l": 90, "c": 105, "v": 7}],
+                "status": "ok",
             }
             assert fake.bars_calls[0][1] == "D"
 
@@ -427,10 +428,11 @@ class TestBarsRoute:
             assert r.json()["bars"]
 
     def test_tc4_down_returns_empty_200(self, tmp_path: Path) -> None:
-        """engine 層降級空(不是 502)—— 前端顯示「無 K 線資料」而非炸掉。"""
+        """engine 層降級空(不是 502),但 status 要說出是斷線 —— 前端才分得出
+        「TC4 掛了」與「這檔真的沒資料」,兩者原本收斂成同一句「無 K 線資料」。"""
         client, fake = make_client(tmp_path)
 
-        def boom(code: str, tf: str, start_date: str, end_date: str) -> list:
+        def boom(code: str, tf: str, start_date: str, end_date: str) -> tuple[list, str]:
             raise ConnectionError("tc4 down")
 
         fake.fetch_bars_range = boom  # type: ignore[method-assign]
@@ -438,3 +440,24 @@ class TestBarsRoute:
             r = client.get("/api/stock/bars/2330?tf=D")
             assert r.status_code == 200
             assert r.json()["bars"] == []
+            assert r.json()["status"] == "disconnected"
+
+    def test_timeout_status_reaches_response(self, tmp_path: Path) -> None:
+        """N-5:source 層 deadline 用滿 → `{"status": "timeout", "bars": []}`(SC-1)。"""
+        client, fake = make_client(tmp_path)
+        fake.bars_result = []
+        fake.bars_status = "timeout"
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=D")
+            assert r.status_code == 200
+            assert r.json()["status"] == "timeout"
+            assert r.json()["bars"] == []
+
+    def test_minute_response_carries_status(self, tmp_path: Path) -> None:
+        """分 K 路徑同樣要帶 status(兩段合併後的最壞值)。"""
+        client, fake = make_client(tmp_path)
+        fake.bars_result = []
+        fake.bars_status = "timeout"
+        with client:
+            r = client.get("/api/stock/bars/2330?tf=1&days=1")
+            assert r.json()["status"] == "timeout"
