@@ -21,6 +21,9 @@ const ACCUM = {
   vwap: 2_380_000,
   minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
   ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
+  // `vp` 是 StockAccum 的必填欄。`as unknown as` 硬轉不會被 tsc 抓到漏欄,而消費端
+  // (分時圖的 VP 長條)刻意不用 `?? new Map()` 吞 —— 真漏建要在執行期炸,不要靜默空圖。
+  vp: new Map(),
   book: { bids: [[2_375_000, 5]], asks: [[2_380_000, 3]] },
   meta: {
     name: "台積電",
@@ -151,6 +154,9 @@ describe("StockPage 切股時明細展開筆數歸零(M8)", () => {
         q: 1,
         side: "outer",
       })),
+      // 這份 fixture 只餵明細表(tape),VP 不是它要驗的東西 —— 但 `vp` 是必填欄,
+      // 每個 `as unknown as StockAccum` 站點都自己列全,不倚賴 spread 幫忙補
+      vp: new Map(),
     } as unknown as StockAccum;
   }
 

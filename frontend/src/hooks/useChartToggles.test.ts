@@ -13,7 +13,10 @@ beforeEach(() => {
 afterEach(cleanup);
 
 // 🔴 round4 項 6:bb 由預設關改為預設開(user 拍板「K 線圖都要顯示布林通道到 5ma 20ma」)
-const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true };
+// 🟢 SC-3:新增 vp(量分佈)預設開。這份 local 常數是「整包預設長什麼樣」的鏡像,
+// 新增欄位屬預期變更(事前標記),不是把失敗的斷言改綠 —— 6 處 toEqual(DEFAULTS)
+// 與下方一處硬列鍵集連動。
+const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
 /** 存檔 schema 版本(storage-only 欄位,不屬 ChartToggles) */
 const V = 2;
 
@@ -140,6 +143,7 @@ describe("useChartToggles", () => {
       cdp: false, // ← 沒有被 b 的 stale prev 還原成 true
       ma: false,
       bb: false,
+      vp: true, // 🟢 SC-3:整包寫回會含新欄位(事前標記的預期變更)
       v: V,
     });
   });
