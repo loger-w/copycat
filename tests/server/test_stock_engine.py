@@ -1062,6 +1062,196 @@ class TestStkfutRetry:
         await engine.close()
 
 
+async def _make_mapped() -> tuple[StockEngine, FakeSource]:
+    """顯式 stkfut 對映 + 不介入的重試迴圈:群組資料面的測試只關心 `_states` 的內容。"""
+    src = FakeSource()
+    engine = StockEngine(
+        src,
+        trade_date="2026-07-21",
+        throttle_secs=60,
+        checkpoint=False,
+        stkfut_map=_STKFUT_MAP,
+        resub_interval_secs=60,
+    )
+    await engine.start()
+    return engine, src
+
+
+class TestQuotes:
+    """SC-2:同群摘要要印成員的**名稱**與漲跌幅,而名稱只有 `state.meta.name` 拿得到。"""
+
+    async def test_quotes_returns_name_and_chg_pct(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7, price="2400"))
+        await _drain(engine)
+        assert engine.quotes() == {"2330": ("台積電", 3.45)}
+        await engine.close()
+
+    async def test_quotes_excludes_futures_pseudo_keys(self) -> None:
+        """`F:` 是訂閱池的期貨偽鍵,不是股號 —— 混進摘要會印出「F:CDF」這種東西。
+
+        走 `_watchlist` 而不是 `_states` 天然排除(`_states` 兩種鍵都有)。
+        """
+        engine, _src = await _make_mapped()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")  # → 加訂 F:CDF,`_states` 因此多一個偽鍵
+        await _drain(engine)
+        assert "F:CDF" in engine._states  # 前提:偽鍵確實在 `_states` 裡
+        assert set(engine.quotes()) == {"2330"}
+        await engine.close()
+
+    async def test_quotes_name_empty_and_chg_none_without_meta(self) -> None:
+        """盤前 / 冷啟動尚無 REALTIME:名稱回空字串、漲跌幅 None(摘要側各自降級顯示),
+        **不得**整檔缺席 —— 缺席會讓「群組有幾檔」跟著波動。"""
+        engine, _src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert engine.quotes() == {"2330": ("", None)}
+        await engine.close()
+
+    async def test_quotes_survives_states_mutation_during_iteration(self, monkeypatch) -> None:
+        """R16:名單以 local 參照取一次(該欄位以**整份重新指派**更新),且不對 `_states`
+        做 dict 迭代 —— 迭代中新訂閱寫進 `_states` 會炸 RuntimeError(size changed),
+        而 quotes 是在 Discord worker 呼叫的,盤中隨時可能與 `set_watchlist` 交錯。
+        """
+        from copycat.live.stock_state import StockDayState
+
+        engine, _src = await _make()
+        await engine.set_watchlist(["2330", "5483"])
+        orig = engine._quote_payload
+
+        def mutating(code: str) -> dict:
+            engine._states[f"X{code}"] = StockDayState()  # 迭代中新訂閱建 state
+            engine._watchlist = ["9999"]  # 使用者同時換了名單
+            return orig(code)
+
+        monkeypatch.setattr(engine, "_quote_payload", mutating)
+        got = engine.quotes()
+        assert set(got) == {"2330", "5483"}  # 一致快照:不炸、不漏鍵、不摻新名單
+        await engine.close()
+
+
+class TestGroupSnapshot:
+    """SC-4:群組檢視的唯讀 batch。**不 set_main、不改訂閱池**(`/api/stock/state/{code}`
+    會 set_main,群組每分鐘 30 次會把主圖搶走令主圖凍結 → 那條路不可重用)。"""
+
+    async def test_payload_is_the_lightweight_three_keys_plus_backfilling(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7, price="2380"))
+        await _drain(engine)
+        snap = engine.group_snapshot(["2330"])["2330"]
+        assert set(snap) == {"minutes", "meta", "no_data", "backfilling"}
+        # R2:ticks 是數千筆,30 檔一起送等於把 batch 端點變成頻寬炸彈
+        assert "ticks" not in snap
+        # 鍵名沿 `StockDayState.snapshot()` 的單一定義:直接丟 dataclass 會讓前端
+        # `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失
+        assert snap["meta"] == {
+            "name": "台積電",
+            "ref": 2_320_000,
+            "upper": 2_550_000,
+            "lower": 2_090_000,
+            "y_vol": 100,
+        }
+        assert snap["minutes"]["657"]["c"] == 2_380_000
+        assert snap["no_data"] is False
+        await engine.close()
+
+    async def test_unknown_code_is_no_data_and_never_enqueued(self) -> None:
+        """R9:`no_data` 推導式 = `code in _no_data` **或** 未訂閱。
+
+        刻意與 `snapshot()` / `engine` 其他地方相反 —— `StockDayState.snapshot()` 根本
+        沒這個鍵,而 `engine.snapshot()` 對未知 code 回 False(語意 = 「TC4 說查無此檔」)。
+        群組卡片要的是「這格畫不出東西」,未訂閱與查無此檔對它是同一件事。
+        未訂閱的 code 也**不得**入列回補:那等於替不在訂閱池的股票發 SubHistory。
+        """
+        engine, src = await _make()
+        snap = engine.group_snapshot(["9999"])["9999"]
+        assert snap["no_data"] is True
+        assert snap["minutes"] == {}
+        assert snap["meta"] is None
+        assert snap["backfilling"] is False
+        await _drain(engine)
+        assert src.backfills == []
+        await engine.close()
+
+    async def test_never_sets_main_or_touches_the_pool(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "5483"])
+        subscribed = list(src.subscribed)
+        engine.group_snapshot(["2330", "5483"])
+        await _drain(engine)
+        assert engine._main is None
+        assert src.subscribed == subscribed
+        assert src.unsubscribed == []
+        await engine.close()
+
+    async def test_enqueues_backfill_once_per_day(self) -> None:
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()  # 未 set → worker 卡在回補中
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        engine.group_snapshot(["2330"])  # 在途 → 不重入列(pending dedup)
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        engine.group_snapshot(["2330"])  # 今日已回補 → 仍不重入列(backfilled dedup)
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        await engine.close()
+
+    async def test_backfilling_flag_tracks_the_in_flight_job(self) -> None:
+        """卡片三態靠這個旗標分辨「回補中…」與「無資料」—— 沒有它,剛開的群組會有
+        一整排看起來像壞掉的空卡。"""
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()
+        await engine.set_watchlist(["2330"])
+        assert engine.group_snapshot(["2330"])["2330"]["backfilling"] is True
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert engine.group_snapshot(["2330"])["2330"]["backfilling"] is False
+        await engine.close()
+
+    async def test_backfill_reaches_a_non_main_member_end_to_end(self) -> None:
+        """R1/R12 端到端:主圖是別檔時,群組成員照樣補得到當日分鐘列。"""
+        engine, src = await _make()
+        from copycat.live.stock_models import StockTick
+
+        src.backfill_results = {
+            "2330": [
+                StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
+                          time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                          is_trial=False)
+            ]
+        }
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("5483")
+        await _drain(engine)
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        minutes = engine.group_snapshot(["2330"])["2330"]["minutes"]
+        assert minutes["541"]["c"] == 2_400_000  # 09:01 = 9*60+1
+        await engine.close()
+
+    async def test_member_reenqueued_after_reconnect(self) -> None:
+        """R4 的群組側:斷線期間的缺口要補得回來。reconnect 只重入列 `_main`,
+        成員全靠記帳清空後由下一次 group_snapshot 重新入列。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        assert src.on_reconnect is not None
+        src.on_reconnect()
+        await _drain(engine)
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.backfills.count("2330") == 2
+        await engine.close()
+
+
 class TestRetryLoopStarvation:
     async def test_slow_failing_subscribes_do_not_block_set_main(self) -> None:
         """P0-1:TC4 斷線時單檔 SUBQUOTE 要 10s 才失敗,整輪一鎖會讓 `_pool_lock`
