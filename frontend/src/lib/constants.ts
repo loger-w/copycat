@@ -36,6 +36,10 @@ export function purgeOrphanKeys(): void {
 
 /** 期貨 tab 的商品(TXF / MXF / TMF)— App.tsx */
 export const PRODUCT_KEY = "copycat-fut-product";
+/** 期貨 tab 的圖表模式(分時 / 1–60 分K / 日K)— lib/fut-chart-mode.ts 持有值域與還原。
+ *  **與個股的 `CHART_MODE_KEY` 刻意分開**:兩邊檔位值域不同(個股 m1–m10、期貨
+ *  m1/5/15/30/60),共用一把鍵會讓其中一頁的合法值在另一頁被白名單擋掉、靜默重設。 */
+export const FUT_CHART_MODE_KEY = "copycat-fut-chart-mode";
 
 /** 台股綜合**左圖**選中的指數(TWSE / OTC / TXF …)— components/index/IndexPage.tsx */
 export const MARKET_KEY_STORE = "copycat-market-key";

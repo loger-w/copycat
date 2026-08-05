@@ -233,6 +233,23 @@ export interface RiverState {
   legs: Record<string, RiverLeg>;
 }
 
+// ---- TXO 月契約 OI 撐壓(對應 copycat/server/oi_levels.py;futures-allday SC-11)----
+
+/** 單一履約價的雙邊 OI(口)。缺該邊的列由後端填 0。 */
+export interface OiStrikeRow {
+  strike: number;
+  call_oi: number;
+  put_oi: number;
+}
+
+/** `GET /api/futures/oi-levels`。降級一律 200 + `{date:null, contract:null, strikes:[]}`
+ *  —— token 未設 / 契約未解析 / FinMind 掛了都是同一種空 shape(SC-11 語意)。 */
+export interface OiLevelsResponse {
+  date: string | null; // 資料日 YYYY-MM-DD
+  contract: string | null; // YYYYMM
+  strikes: OiStrikeRow[]; // strike 升冪
+}
+
 /** 每秒增量:各腿最後寫入的那一分鐘;該腿本場尚無 live 點 → null。 */
 export interface RiverDelta {
   type: string; // "river_delta"
