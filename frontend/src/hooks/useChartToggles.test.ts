@@ -114,6 +114,20 @@ describe("useChartToggles", () => {
     });
   });
 
+  // 🟢 SC-3:新增 `vp`(量分佈)預設開。**刻意不 bump TOGGLES_VERSION** ——
+  // 版本升級要處理的是「既有鍵的預設改了」(bb 前例:存檔裡的 false 是舊預設不是使用者選的),
+  // 而 vp 是全新的鍵,舊存檔根本沒有它,`{...DEFAULTS, ...flags}` 自然就補上新預設。
+  // 這條鎖的是「不 bump 也真的拿得到預設」,而不是版本號本身。
+  it("舊存檔沒有 vp 鍵 → 預設開,且不影響存檔裡既有的選擇", () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, v: V }),
+    );
+    const hook = renderHook(() => useChartToggles());
+    expect(hook.result.current.toggles.vp).toBe(true);
+    expect(hook.result.current.toggles.cdp).toBe(false);
+  });
+
   // 🔴 R21:StockChart(持有 bb)與 StockIntradayChart(持有 vwap/cdp/ma)是兩個 instance,
   // set 若用自己那份 stale prev 整包寫回,後寫的一方會回滾對方剛做的變更。
   it("兩個 instance 交替 set 不互相覆蓋(set 先重讀 localStorage 再 merge)", () => {

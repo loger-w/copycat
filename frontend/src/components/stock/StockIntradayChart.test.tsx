@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
 import { buildIntradayGeometry, lastPoint, R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
+import { VP_FILL_OPACITY } from "@/lib/volume-profile";
 import { wrap } from "@/test-utils";
 
 const OVERLAY = {
@@ -980,5 +981,92 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     const { container } = wrap(<StockIntradayChart accum={empty} />);
     expect(container.querySelector('[data-testid="last-dot"]')).toBeNull();
     expect(screen.getByText("尚無成交")).toBeTruthy();
+  });
+});
+
+// 🟢 SC-3:分時圖價位別成交量(VP)長條 + 「量分佈」toggle
+describe("StockIntradayChart 價位別成交量(SC-3)", () => {
+  /** **獨立 fixture,刻意不動共用的 `ACCUM`**:ACCUM 的 `ticks` 是空陣列,VP 因此恆空,
+   *  而既有的 SC-5「主圖 drawnRects === 0」正是拿 ACCUM 在量 —— 把 tick 加進共用 fixture
+   *  會讓那條測試因為多了 VP 的 rect 而紅,紅的原因卻與它要守的「量 bar 不在主圖」無關。
+   *
+   *  只換 `ticks`:價格全落在既有 y 域 [2_090_000, 2_550_000] 內、時間全落在
+   *  [09:00, 13:30] 窗內,三個價位各自是合法檔位(2380 / 2385 / 2390,5 元 tick)
+   *  → snapDown 後互不合併,bar 數可精確斷言。 */
+  const WITH_TICKS = fromSnapshot({
+    code: "2330",
+    seq: 2,
+    last: { p: 2_390_000, t: "09:02:10.000", cum_vol: 12 },
+    vwap: 2_380_000,
+    minutes: {
+      "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 },
+      "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_385_000 },
+    },
+    ticks: [
+      { t: "09:01:30.000", p: 2_380_000, q: 7, side: "outer" },
+      { t: "09:01:40.000", p: 2_385_000, q: 3, side: "outer" },
+      { t: "09:02:10.000", p: 2_390_000, q: 2, side: "inner" },
+    ],
+    book: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  function vpBars(container: HTMLElement): Element[] {
+    return [...container.querySelectorAll('[data-testid="vp-bar"]')];
+  }
+
+  it("預設開:每個成交價位一根長條,自繪圖區左緣向右、半透明中性色", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    const bars = vpBars(container);
+    expect(bars.length).toBe(3);
+    for (const b of bars) {
+      // x 恆為繪圖區左界:長條是「從價位軸長出來的」,越界進價位帶會壓到刻度數字
+      expect(Number(b.getAttribute("x"))).toBe(Y_AXIS_W);
+      expect(Number(b.getAttribute("width"))).toBeGreaterThan(0);
+      expect(b.getAttribute("fill-opacity")).toBe(String(VP_FILL_OPACITY));
+      expect(b.getAttribute("class")).toContain("fill-ink-muted");
+    }
+  });
+
+  it("長度比例 = 該價位當日成交量(量最大的那根最長)", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    // 降冪排序 → [2390(2 張), 2385(3 張), 2380(7 張)]
+    const ws = vpBars(container).map((b) => Number(b.getAttribute("width")));
+    expect(ws[2]! / ws[0]!).toBeCloseTo(7 / 2, 5);
+    expect(ws[1]! / ws[0]!).toBeCloseTo(3 / 2, 5);
+  });
+
+  it("toggle 列多一顆「量分佈」,預設亮起;關掉後長條整組消失", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    const btn = screen.getByRole("button", { name: "量分佈" });
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(vpBars(container).length).toBeGreaterThan(0);
+    fireEvent.click(btn);
+    expect(screen.getByRole("button", { name: "量分佈" }).getAttribute("aria-pressed")).toBe("false");
+    expect(vpBars(container).length).toBe(0);
+  });
+
+  /** z-order 是這組長條能不能用的前提:它是背景參考,壓在紅綠填色與走勢線之上就等於
+   *  把主資訊蓋掉。svg 沒有 z-index,唯一決定圖層的就是文件順序,所以只能在這裡量。 */
+  it("畫在 y 格線之後、平盤填色與走勢線之前(不遮主資訊)", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    const main = [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )!;
+    const nodes = [
+      ...main.querySelectorAll('[data-testid="y-grid"], [data-testid="vp-bar"], polygon, polyline'),
+    ];
+    const testids = nodes.map((n) => n.getAttribute("data-testid"));
+    const lastGrid = testids.lastIndexOf("y-grid");
+    const firstBar = testids.indexOf("vp-bar");
+    const firstFill = nodes.findIndex((n) => n.tagName.toLowerCase() === "polygon");
+    expect(lastGrid).toBeGreaterThanOrEqual(0);
+    expect(firstBar).toBeGreaterThan(lastGrid);
+    expect(firstFill).toBeGreaterThan(firstBar);
+  });
+
+  it("尚無成交(tick 全無)→ 一根長條都沒有,不崩", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(vpBars(container).length).toBe(0);
   });
 });
