@@ -16,7 +16,7 @@ import datetime as _dt
 import logging
 import threading
 import time
-from typing import Any, Callable, Literal, TypedDict
+from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
 
 from copycat.live.stock_models import StockTick, parse_hist_tick
 from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
@@ -52,7 +52,11 @@ class Bar(TypedDict):
     """K 線 bar(毫元整數;`t` 日 K = YYYY-MM-DD、分 K = "YYYY-MM-DD HH:MM" 台北)。
 
     與 DailyBar 分開定義:後者是 overlay(實盤路徑)在用的,只有 high/low/close,
-    不得為了畫蠟燭去動它(change-spec W-D2)。"""
+    不得為了畫蠟燭去動它(change-spec W-D2)。
+
+    `uv` / `dv` = 內外盤量(1K row 的 UpVolume / DownVolume,futures-allday SC-8)。
+    **NotRequired 且來源沒欄就不設** —— DK 路徑與沒有這兩欄的 1K 來源,bar 形狀必須
+    與加這個欄位之前完全相同(前端以 `uv == null` 判定副圖隱藏)。"""
 
     t: str
     o: int
@@ -60,6 +64,8 @@ class Bar(TypedDict):
     l: int  # noqa: E741 - 與前端 Bar 欄位對齊(o/h/l/c/v)
     c: int
     v: int
+    uv: NotRequired[int]
+    dv: NotRequired[int]
 
 
 #: K 線空結果的原因三態。**沒有「確定無資料」這一態** —— TC4 的 GETHISDATA 空頁
@@ -192,12 +198,47 @@ def _taipei_minute_key(
     return key
 
 
-def _merge_into(bar: Bar, o: int, h: int, low: int, c: int, v: int) -> None:
-    """同 t 的後續列併入(o 保留第一根、c 取最後一根)。"""
-    bar["h"] = max(bar["h"], h)
-    bar["l"] = min(bar["l"], low)
-    bar["c"] = c
-    bar["v"] += v
+def _taipei_dt_key(
+    date_iso: str, raw_time: str, segments: Sequence[tuple[str, str, str]]
+) -> tuple[str, str] | None:
+    """(1K row 的 UTC 日期, UTC HHMMSS) → (台北 YYYY-MM-DD, HHMM 終點標記);域外回 None。
+
+    多段域專用。**完整 datetime 轉換**而不是 `_taipei_minute_key` 的「只加小時 % 24」
+    捷徑:夜盤跨午夜,UTC 16:00 之後的列屬台北**次日**,只加小時會把日期留在前一天
+    (畫面上是每天凌晨五小時的 bar 全被塞回前一日,零錯誤訊號)。
+
+    **不加 1 分鐘** —— 1K 的 `Time` 本身已是 bar 終點標記(`river_models` 實證),
+    加 1 會讓整條序列晚一分(日盤首根 0846 變 0847)。
+
+    段判定逐段試,`end`+1 ~ `clamp_end` clamp 為 `end`(收盤補正,與單段同規則);
+    clamp 不動日期 —— 05:03 clamp 成 05:00 仍是同一個台北日。
+    """
+    try:
+        utc = _dt.datetime.strptime(f"{date_iso} {raw_time.zfill(6)}", "%Y-%m-%d %H%M%S")
+    except ValueError:
+        return None
+    taipei = utc + _dt.timedelta(hours=8)
+    hhmm = f"{taipei:%H%M}"
+    for start, end, clamp_end in segments:
+        key = end if end < hhmm <= clamp_end else hhmm
+        if start <= key <= end:
+            return f"{taipei:%Y-%m-%d}", key
+    return None
+
+
+def _merge_into(bar: Bar, k: _RawK) -> None:
+    """同 t 的後續列併入(o 保留第一根、c 取最後一根)。
+
+    吃 `_RawK` 而不是拆開的純量:uv/dv 是選配欄,拆參數就得再多兩個 `| None`,
+    而「有沒有那兩欄」的判斷會散到呼叫點(R10)。
+    """
+    bar["h"] = max(bar["h"], k["h"])
+    bar["l"] = min(bar["l"], k["l"])
+    bar["c"] = k["c"]
+    bar["v"] += k["v"]
+    if "uv" in k and "dv" in k:
+        bar["uv"] = bar.get("uv", 0) + k["uv"]
+        bar["dv"] = bar.get("dv", 0) + k["dv"]
 
 
 class _RawK(TypedDict):
@@ -208,6 +249,20 @@ class _RawK(TypedDict):
     l: int  # noqa: E741
     c: int
     v: int
+    uv: NotRequired[int]
+    dv: NotRequired[int]
+
+
+def _delta_vol(row: dict) -> tuple[int, int] | None:
+    """1K row 的內外盤量 (UpVolume, DownVolume);**兩欄皆缺 → None**。
+
+    缺欄回 None 而不是 (0, 0):`Bar.uv/dv` 是 NotRequired,沒有來源就不該長出欄位
+    —— 否則個股與 DK 路徑的 bar 形狀跟著改變,而 0 與「沒這個資料」在畫面上不可分。
+    """
+    up, down = row.get("UpVolume"), row.get("DownVolume")
+    if up in (None, "") and down in (None, ""):
+        return None
+    return _int_field(row, "UpVolume"), _int_field(row, "DownVolume")
 
 
 def _parse_1k_rows(rows: list[dict]) -> list[_RawK]:
@@ -217,17 +272,19 @@ def _parse_1k_rows(rows: list[dict]) -> list[_RawK]:
     for r in rows:
         try:
             close = _milli(r["Close"])
-            out.append(
-                _RawK(
-                    date=_iso_date(str(r["Date"])),
-                    time=str(r["Time"]).zfill(6),
-                    o=_milli(r["Open"]) if r.get("Open") else close,
-                    h=_milli(r["High"]),
-                    l=_milli(r["Low"]),
-                    c=close,
-                    v=_int_field(r, "Volume", "TotalVolume", "Vol"),
-                )
+            k = _RawK(
+                date=_iso_date(str(r["Date"])),
+                time=str(r["Time"]).zfill(6),
+                o=_milli(r["Open"]) if r.get("Open") else close,
+                h=_milli(r["High"]),
+                l=_milli(r["Low"]),
+                c=close,
+                v=_int_field(r, "Volume", "TotalVolume", "Vol"),
             )
+            delta = _delta_vol(r)
+            if delta is not None:
+                k["uv"], k["dv"] = delta
+            out.append(k)
         except (KeyError, ValueError):
             skipped += 1
     if skipped:
@@ -239,23 +296,49 @@ def _parse_1k_rows(rows: list[dict]) -> list[_RawK]:
 def _fold(bars: dict[str, Bar], order: list[str], t: str, k: _RawK) -> None:
     existing = bars.get(t)
     if existing is None:
-        bars[t] = Bar(t=t, o=k["o"], h=k["h"], l=k["l"], c=k["c"], v=k["v"])
+        bar = Bar(t=t, o=k["o"], h=k["h"], l=k["l"], c=k["c"], v=k["v"])
+        if "uv" in k and "dv" in k:
+            bar["uv"] = k["uv"]
+            bar["dv"] = k["dv"]
+        bars[t] = bar
         order.append(t)
     else:
-        _merge_into(existing, k["o"], k["h"], k["l"], k["c"], k["v"])
+        _merge_into(existing, k)
 
 
-def parse_1k_bars(rows: list[dict], domain: tuple[str, str, str] | None = None) -> list[Bar]:
+def parse_1k_bars(
+    rows: list[dict],
+    domain: tuple[str, str, str] | Sequence[tuple[str, str, str]] | None = None,
+) -> list[Bar]:
     """1K rows → 分鐘 Bar(台北終點標記;域外丟棄)。
 
     clamp 後同 t 會有多列(個股 13:31–13:35 全標 1330)→ **必須合併**:`fetch_day_minutes`
     回 dict 靠 key 覆寫躲掉了這件事,list 不會(change-spec R2-6)。
 
-    `domain` = `(start, end, clamp_end)`;`None` = 個股日盤(既有行為)。
-    期貨傳 `FUTURES_MINUTE_DOMAIN`。"""
-    d = domain if domain is not None else (_MIN_DOMAIN_START, _MIN_DOMAIN_END, _MIN_CLAMP_END)
+    `domain`:
+    - `None` = 個股日盤(既有行為);單段 `(start, end, clamp_end)` = 既有路徑零改動
+      (期貨日盤傳 `FUTURES_MINUTE_DOMAIN`)。
+    - **段序列**(期指近全 `FUTURES_ALLDAY_DOMAIN`)= 新路徑,走完整 UTC→台北 datetime
+      轉換以跨午夜(`_taipei_dt_key`)。
+
+    判別法寫死 `isinstance(domain[0], str)`:三元素 str tuple **本身也是 Sequence**,
+    用 `isinstance(domain, Sequence)` 兩種都會命中,單段會被當成三個段解讀。"""
     by_key: dict[str, Bar] = {}
     order: list[str] = []
+    if domain is not None and not isinstance(domain[0], str):
+        segments = tuple(cast("Sequence[tuple[str, str, str]]", domain))
+        for k in _parse_1k_rows(rows):
+            got = _taipei_dt_key(k["date"], k["time"], segments)
+            if got is None:
+                continue
+            date_s, key = got
+            _fold(by_key, order, f"{date_s} {key[:2]}:{key[2:]}", k)
+        return [by_key[t] for t in order]
+    d = (
+        cast("tuple[str, str, str]", domain)
+        if domain is not None
+        else (_MIN_DOMAIN_START, _MIN_DOMAIN_END, _MIN_CLAMP_END)
+    )
     for k in _parse_1k_rows(rows):
         key = _taipei_minute_key(k["time"], d[0], d[1], d[2])
         if key is None:
@@ -265,7 +348,7 @@ def parse_1k_bars(rows: list[dict], domain: tuple[str, str, str] | None = None) 
 
 
 def aggregate_1k_to_daily(rows: list[dict]) -> list[Bar]:
-    """1K rows → 日 Bar(DK 不支援時的 fallback;o = 當日第一根 open、v = 加總)。
+    """1K rows → 日 Bar(DK 不支援時的 fallback;o = 當日第一根 open、v / uv / dv = 加總)。
 
     **不套分鐘域過濾** —— 域(0901–1330)是江波圖 x 軸語意,套進日聚合會把域外列
     (如試撮/開盤前後)的量與極值靜默丟掉,與既有 `_aggregate_1k_rows` 行為也不一致。"""

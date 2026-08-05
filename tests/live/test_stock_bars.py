@@ -344,17 +344,17 @@ class TestDeltaVolumeFields:
         ]
         bars = parse_1k_bars(rows)  # 13:31 clamp 進 13:30 → 同一根
         assert len(bars) == 1
-        assert (bars[0]["uv"], bars[0]["dv"], bars[0]["v"]) == (5, 5, 10)
+        assert (bars[0].get("uv"), bars[0].get("dv"), bars[0]["v"]) == (5, 5, 10)
 
     def test_missing_one_side_counts_as_zero(self) -> None:
         bars = parse_1k_bars([_k1v("20260728", "10100", "100", UpVolume="9")])
-        assert (bars[0]["uv"], bars[0]["dv"]) == (9, 0)
+        assert (bars[0].get("uv"), bars[0].get("dv")) == (9, 0)
 
     def test_multi_segment_path_also_carries_delta_volume(self) -> None:
         bars = parse_1k_bars(
             [_k1v("20260730", "070100", "100", v="5", UpVolume="4", DownVolume="1")], _ALLDAY
         )
-        assert (bars[0]["t"], bars[0]["uv"], bars[0]["dv"]) == ("2026-07-30 15:01", 4, 1)
+        assert (bars[0]["t"], bars[0].get("uv"), bars[0].get("dv")) == ("2026-07-30 15:01", 4, 1)
 
     def test_daily_aggregation_sums_delta_volume(self) -> None:
         rows = [
@@ -363,7 +363,7 @@ class TestDeltaVolumeFields:
         ]
         bars = aggregate_1k_to_daily(rows)
         assert len(bars) == 1
-        assert (bars[0]["uv"], bars[0]["dv"], bars[0]["v"]) == (5, 5, 10)
+        assert (bars[0].get("uv"), bars[0].get("dv"), bars[0]["v"]) == (5, 5, 10)
 
     def test_daily_aggregation_without_fields_unchanged(self) -> None:
         bars = aggregate_1k_to_daily([_k1v("20260728", "10100", "100", v="4")])

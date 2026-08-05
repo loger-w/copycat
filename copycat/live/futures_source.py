@@ -10,6 +10,7 @@ listener 覆寫為原始 Quote dict 分派(book/meta 都要,不能只回 Tick;�
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 from typing import Any, Callable
 
@@ -26,6 +27,15 @@ logger = logging.getLogger(__name__)
 #: 個股那把尺是 0901–1330,套上去會靜默丟掉開盤前 15 分與 13:31–13:45。
 #: 夜盤(15:00–05:00)不在本輪 scope,落在域外自然被丟(change-spec §5)。
 FUTURES_MINUTE_DOMAIN = ("0846", "1345", "1350")
+
+#: 近全段(日盤 + 夜盤兩半;futures-allday design §1.2)。**段本身不跨午夜** ——
+#: 夜盤拆成 1501–2359 與 0000–0500 兩段,台北日期由 `_taipei_dt_key` 的 datetime
+#: 轉換決定,段只管 HHMM 的落點與收盤 clamp。
+FUTURES_ALLDAY_DOMAIN: tuple[tuple[str, str, str], ...] = (
+    ("0846", "1345", "1350"),  # 日盤(= FUTURES_MINUTE_DOMAIN)
+    ("1501", "2359", "2359"),  # 夜盤前半(15:00 開盤 → 首根終點標記 1501)
+    ("0000", "0500", "0505"),  # 夜盤後半(05:00 收盤,0501–0505 clamp 併入 0500)
+)
 
 
 def futures_symbol(product: str) -> str:
@@ -93,7 +103,15 @@ class FuturesQuoteSource(TC4QuoteSource):
 
     # ---- K 線歷史(index-board N-2)----
 
-    def fetch_bars_range(self, product: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
+    def fetch_bars_range(
+        self,
+        product: str,
+        tf: str,
+        start_date: str,
+        end_date: str,
+        *,
+        session: str = "day",
+    ) -> list[Bar]:
         """期指 K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
 
         **必須從這條 session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這裡,
@@ -106,16 +124,28 @@ class FuturesQuoteSource(TC4QuoteSource):
 
         分鐘域走 `FUTURES_MINUTE_DOMAIN`(08:46–13:45),不是個股的 0901–1330:
         套個股的尺會丟掉開盤前 15 分並把 13:31–13:35 錯併進 13:30。
+
+        `session="allday"`(僅 tf="1" 有意義)= 近全段:域換成 `FUTURES_ALLDAY_DOMAIN`,
+        且**取數窗前移到 (start_date − 1 日) 的 UTC 16 時** —— 台北日 D 的凌晨段
+        (00:00–05:00)落在 UTC 日 D−1 的 16:00–21:00,不前移就整段抓不到,而失效樣態
+        是「圖照畫、只是每天凌晨五小時憑空消失」。前移窗會多收 start−1 日的夜盤前半
+        (台北日期 = start−1,域內但窗外),parse 後以台北日期 filter 掉。
         """
         self._ensure_connected()
         sym = futures_symbol(product)
-        start = f"{start_date.replace('-', '')}00"
+        allday = tf == "1" and session == "allday"
+        if allday:
+            prev = _dt.date.fromisoformat(start_date) - _dt.timedelta(days=1)
+            start = f"{prev:%Y%m%d}16"
+        else:
+            start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            return parse_1k_bars(
-                self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows,
-                FUTURES_MINUTE_DOMAIN,
-            )
+            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows
+            if not allday:
+                return parse_1k_bars(rows, FUTURES_MINUTE_DOMAIN)
+            bars = parse_1k_bars(rows, FUTURES_ALLDAY_DOMAIN)
+            return [b for b in bars if start_date <= b["t"][:10] <= end_date]
         return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
