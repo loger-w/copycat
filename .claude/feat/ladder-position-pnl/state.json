@@ -3,18 +3,31 @@
   "start_sha": "d0dcc89",
   "branch": "feat/ladder-position-pnl",
   "worktree_path": null,
-  "current_phase": 7,
-  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6],
+  "current_phase": 8,
+  "completed_phases": [
+    -1,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
   "scope": "M",
   "phase_6_blocked_reason": null,
-  "scope_overrides": { "goal_efficiency_mode": false },
-  "last_updated": "2026-08-05T14:20:00+08:00",
+  "scope_overrides": {
+    "goal_efficiency_mode": false
+  },
+  "last_updated": "2026-08-05T15:10:00+08:00",
   "note_phase3": "commits 04e3e8c..cc9ccbb;Phase 4 fixes cf54cf1..38bf4d3",
   "project_shape": "python-backend+react-frontend",
-  "last_commit_sha": "a2dbb95",
-  "final_merge_sha": null,
+  "last_commit_sha": "600d99e",
+  "final_merge_sha": "6cc4240",
   "self_review_head": "38bf4d3",
-  "artifact_commit": null,
+  "artifact_commit": "0cf627f",
   "rollbacks": [],
   "paused": null
 }
