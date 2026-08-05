@@ -159,6 +159,33 @@ describe("FuturesChart 分時圖(SC-1)", () => {
   });
 });
 
+describe("FuturesChart 背景輪詢 gate(LF-2)", () => {
+  it("active=false → 不輪詢(期貨 tab hidden 時不打 TC4)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0)); // 夜盤:active=true 時會輪詢
+    window.localStorage.setItem(FUT_CHART_MODE_KEY, "m1");
+    barsBody = { bars: [bar("2026-08-05 22:00", 23_000_000)], meta: META };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" active={false} />);
+    await vi.advanceTimersByTimeAsync(0);
+    const before = barsUrls.length;
+    expect(before).toBe(1);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(barsUrls.length).toBe(before);
+  });
+
+  it("active=true → 照輪詢(prop 真的接到 hook 上,不是擺著好看)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    window.localStorage.setItem(FUT_CHART_MODE_KEY, "m1");
+    barsBody = { bars: [bar("2026-08-05 22:00", 23_000_000)], meta: META };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" active />);
+    await vi.advanceTimersByTimeAsync(0);
+    const before = barsUrls.length;
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(barsUrls.length).toBeGreaterThan(before);
+  });
+});
+
 describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

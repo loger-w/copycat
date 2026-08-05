@@ -109,6 +109,30 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     expect(urls.length).toBeGreaterThan(before);
   });
 
+  // 期貨 tab 的 DOM 由 App 以 `hidden` 保留(不 unmount)→ 沒有 active gate 的話
+  // 這支 hook 會在使用者看著別的 tab 時整晚輪詢(近全時段窗 ≈ 19h/日打 TC4)
+  it("active=false(人不在期貨 tab)→ 夜盤時段也不輪詢", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0)); // active=true 時這個時刻會輪詢
+    renderHook(() => useFuturesBars("TXF", "m1", false), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    const before = urls.length;
+    // 掛載時仍抓一次:enabled 不關,只停 interval —— 切回 tab 時圖還在(不閃載入中)
+    expect(before).toBe(1);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(urls.length).toBe(before);
+  });
+
+  it("active 未給 → 預設 true(獨立使用與既有呼叫路徑照輪詢)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    renderHook(() => useFuturesBars("TXF", "m1"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    const before = urls.length;
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(urls.length).toBeGreaterThan(before);
+  });
+
   it("日 K 不輪詢(已完成日 bar 不會變)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
