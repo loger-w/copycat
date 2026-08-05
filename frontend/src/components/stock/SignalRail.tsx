@@ -4,7 +4,7 @@
  *  元件內不呼叫 `useSignalFeed` / `useSignalRules`,免得每個測試都要架 TQ provider,
  *  也讓規則切換的送出只有一個註冊點。 */
 
-import type { SignalRule } from "@/hooks/useSignalRules";
+import { errText, type SignalRule } from "@/hooks/useSignalRules";
 import { fmt } from "@/lib/format";
 import { kindLabel, type SignalMsg } from "@/lib/signal-model";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,10 @@ interface Props {
   signals: SignalMsg[];
   /** 後端規則全集(含停用的)—— 停用的也要列出來,否則使用者找不到地方開回來。 */
   rules: SignalRule[];
+  /** rules GET 失敗:空陣列在這裡有兩種意思,不分開的話「載入失敗」長得像「零規則」。 */
+  rulesError: boolean;
+  /** 開關 PUT 的錯誤碼(`errText` 的輸入);null = 沒有錯誤。 */
+  toggleError: string | null;
   onToggleRule: (rule: SignalRule) => void;
   onOpenManager: () => void;
   onSelect: (code: string) => void;
@@ -72,6 +76,8 @@ function Toggle({
 export function SignalRail({
   signals,
   rules,
+  rulesError,
+  toggleError,
   onToggleRule,
   onOpenManager,
   onSelect,
@@ -108,16 +114,26 @@ export function SignalRail({
                   <span className="min-w-0 truncate text-xs text-ink-muted">{sig.name}</span>
                 </span>
                 <span className="flex w-full items-baseline justify-between gap-1">
-                  {/* 規則名優先(同 kind 多規則靠它辨識來源);缺值 = 升級當日的舊
-                      jsonl 行 → 退回 kind 文案,不顯示空白。事件細節(漲跌幅 / 穿越
-                      的線)在規則名蓋掉時仍可 hover 看到 —— 窄欄放不下兩者。 */}
+                  {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
+                      漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
+                      規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
+                      升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
                   <span
-                    title={kindLabel(sig)}
-                    className={cn("min-w-0 truncate text-xs", toneOf(sig))}
+                    title={
+                      sig.rule_name === undefined || sig.rule_name === ""
+                        ? kindLabel(sig)
+                        : `${kindLabel(sig)}(${sig.rule_name})`
+                    }
+                    className="flex min-w-0 items-baseline gap-1"
                   >
-                    {sig.rule_name !== undefined && sig.rule_name !== ""
-                      ? sig.rule_name
-                      : kindLabel(sig)}
+                    <span className={cn("min-w-0 truncate text-xs", toneOf(sig))}>
+                      {kindLabel(sig)}
+                    </span>
+                    {sig.rule_name !== undefined && sig.rule_name !== "" ? (
+                      <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
+                        {sig.rule_name}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="shrink-0 font-mono text-xs text-ink">{fmt(sig.price)}</span>
                 </span>
@@ -142,6 +158,10 @@ export function SignalRail({
             規則
           </button>
         </div>
+        {/* 開關 PUT 失敗只會讓開關彈回原位 —— 沒有這一行就像「點了沒反應」 */}
+        {toggleError !== null ? (
+          <p className="px-1 py-0.5 text-xs text-bear">{errText(toggleError)}</p>
+        ) : null}
         {/* 規則多了會把清單擠光 —— 這一區自己捲,訊號列表的高度不受影響 */}
         <div className="max-h-40 overflow-y-auto">
           {rules.map((rule) => (
@@ -152,7 +172,13 @@ export function SignalRail({
               onChange={() => onToggleRule(rule)}
             />
           ))}
-          {rules.length === 0 ? <p className="px-1 py-1 text-xs text-ink-dim">尚無規則</p> : null}
+          {/* 載入失敗 ≠ 零規則(review A5):後者會讓使用者照著空態去新增,
+              而真值可能是規則都好好跑著,新增只會撞名失敗 */}
+          {rules.length === 0 ? (
+            <p className={cn("px-1 py-1 text-xs", rulesError ? "text-bear" : "text-ink-dim")}>
+              {rulesError ? "規則載入失敗" : "尚無規則"}
+            </p>
+          ) : null}
         </div>
       </div>
 

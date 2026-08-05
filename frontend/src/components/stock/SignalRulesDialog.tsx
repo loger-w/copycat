@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   CDP_LEVELS,
+  MAX_RULES,
   RULE_KINDS,
   errText,
   useDeleteRule,
@@ -140,10 +141,12 @@ function ruleSummary(rule: SignalRule): string {
 interface Props {
   open: boolean;
   rules: SignalRule[];
+  /** rules GET 失敗:空陣列有兩種意思,不分開的話「載入失敗」長得像「零規則」。 */
+  rulesError: boolean;
   onClose: () => void;
 }
 
-export function SignalRulesDialog({ open, rules, onClose }: Props) {
+export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
   const save = useSaveRule();
   const del = useDeleteRule();
   const dlgRef = useRef<HTMLDialogElement | null>(null);
@@ -151,7 +154,8 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
   const [form, setForm] = useState<FormState | null>(null);
   /** 二次確認中的規則 id —— 刪除規則不可逆(cooldown/latch 也一併沒了) */
   const [confirming, setConfirming] = useState<string | null>(null);
-  /** 前端就擋下來的錯誤(零送出),與 mutation 錯誤共用同一份文案 */
+  /** 前端就擋下來的錯誤:存**已翻好的文案**(mutation 那條才是錯誤碼,要過 `errText`)
+   *  —— 本地錯誤要能比「規則設定不合法」更精確地指出是哪一格。 */
   const [localError, setLocalError] = useState<string | null>(null);
 
   // 開關只走這一條路徑,`open` **不進 JSX**(React 在 commit 階段寫入的 open 屬性會讓
@@ -199,6 +203,13 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
     });
   }
 
+  /** 參數欄位一律走 functional updater(review A6(4)):`{...form.params}` 讀的是
+   *  render 當下那份快照,同一輪內連改兩個欄位(受控 input 的 change 可以連發)時
+   *  後寫的會把前一次的改動蓋掉,而畫面只是「有一格沒改到」。 */
+  function patchParam(key: string, value: string): void {
+    setForm((cur) => (cur === null ? cur : { ...cur, params: { ...cur.params, [key]: value } }));
+  }
+
   function toggleLevel(level: string): void {
     setForm((cur) =>
       cur === null
@@ -213,7 +224,9 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
   }
 
   /** 送出前在本地擋掉「空欄 / 非數字」:那些送出去只會拿到一句 INVALID_RULE,
-   *  使用者不知道是哪一格。值域(60–86400 等)仍以後端為準,前端不重抄一份會漂的表。 */
+   *  使用者不知道是哪一格。各參數的值域仍以後端為準(前端不重抄一份會漂的表),
+   *  唯獨冷卻秒數的界另外擋:它是每張表都有的欄位,且 `COOLDOWN_MIN/MAX` 已經為了
+   *  input 的 min/max 抄在這裡了 —— 抄了卻不擋等於把 60/86400 當裝飾。 */
   function submit(): void {
     if (form === null) return;
     const name = form.name.trim();
@@ -223,6 +236,10 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
 
     const cooldown = Number(form.cooldown);
     if (form.cooldown.trim() === "" || !Number.isFinite(cooldown)) bad = true;
+    else if (cooldown < COOLDOWN_MIN || cooldown > COOLDOWN_MAX) {
+      setLocalError(`冷卻秒數須在 ${COOLDOWN_MIN}–${COOLDOWN_MAX} 之間`);
+      return;
+    }
     for (const field of fields) {
       const raw = form.params[field.key] ?? "";
       const value = Number(raw);
@@ -233,7 +250,7 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
     if (form.kind === "cdp_cross" && form.levels.length === 0) bad = true;
 
     if (bad) {
-      setLocalError("INVALID_RULE");
+      setLocalError(errText("INVALID_RULE"));
       return;
     }
     setLocalError(null);
@@ -251,7 +268,9 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
     save.mutate(draft, { onSuccess: () => setForm(null) });
   }
 
-  const errorMessage = localError ?? save.error?.message ?? del.error?.message ?? null;
+  const mutationError = save.error?.message ?? del.error?.message ?? null;
+  const errorMessage =
+    localError ?? (mutationError === null ? null : errText(mutationError));
 
   function numberField(label: string, value: string, step: string, onChange: (v: string) => void) {
     return (
@@ -306,7 +325,7 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
 
           {errorMessage !== null ? (
             <p className="shrink-0 border-b border-line px-3 py-1 text-xs text-bear">
-              {errText(errorMessage)}
+              {errorMessage}
             </p>
           ) : null}
 
@@ -387,21 +406,31 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
                     )}
                   </li>
                 ))}
+                {/* 載入失敗 ≠ 零規則:後者會讓使用者照著空態去新增,而真值可能是
+                    規則都好好跑著(新增只會撞名失敗) */}
                 {rules.length === 0 ? (
-                  <li className="px-3 py-3 text-xs text-ink-dim">
-                    尚無規則 —— 用下方「新增規則」建立第一條
+                  <li className={cn("px-3 py-3 text-xs", rulesError ? "text-bear" : "text-ink-dim")}>
+                    {rulesError
+                      ? "規則載入失敗 —— 重新整理後再試"
+                      : "尚無規則 —— 用下方「新增規則」建立第一條"}
                   </li>
                 ) : null}
               </ul>
               <div className="shrink-0 border-t border-line p-2">
                 <button
                   type="button"
+                  // 上限是後端硬規則:按得下去只會拿到一句 INVALID_RULE,而畫面上
+                  // 完全看不出「是因為滿了」
+                  disabled={rules.length >= MAX_RULES}
+                  title={
+                    rules.length >= MAX_RULES ? `規則數已達上限 ${MAX_RULES} 條,請先刪除` : undefined
+                  }
                   onClick={() => {
                     setLocalError(null);
                     setConfirming(null);
                     setForm(blankForm());
                   }}
-                  className="rounded border border-line px-2 py-1 text-xs text-ink hover:border-accent"
+                  className="rounded border border-line px-2 py-1 text-xs text-ink hover:border-accent disabled:opacity-50"
                 >
                   新增規則
                 </button>
@@ -439,7 +468,7 @@ export function SignalRulesDialog({ open, rules, onClose }: Props) {
                 <div className="flex flex-wrap gap-3">
                   {PARAM_FIELDS[form.kind].map((field) =>
                     numberField(field.label, form.params[field.key] ?? "", field.step, (v) =>
-                      patch({ params: { ...form.params, [field.key]: v } }),
+                      patchParam(field.key, v),
                     ),
                   )}
                 </div>
