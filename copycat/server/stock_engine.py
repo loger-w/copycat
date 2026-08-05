@@ -3,7 +3,8 @@
 - refcount 訂閱池:owner ∈ {"watchlist", "main", "stkfut:<code>"};0→1 真訂、
   last-out 真退、真訂失敗回滾 bookkeeping 並 raise(treading-king WSPool 模型)。
 - backfill 單工 worker queue(engine 持有;source 只提供同步 backfill,r2-1 定案),
-  job 帶 (code, day_generation),套用 guard = 仍為 main ∧ generation 一致。
+  job 帶 (code, day_generation),套用 guard = **generation 一致**(收件人 = job 自帶的
+  code,不綁 `_main` —— 群組成員也要能補;design v3 R12)。
 - 兩段式 rollover:階段一(換日窗 + 重掛,不清狀態)→ 階段二(首筆新日 tick 才
   reset + 重回補;假日無新日推播天然不清空)。
 - 廣播:per-client 有界 queue,滿丟最舊;側欄 watchlist_quote 1s 節流合併。
@@ -117,6 +118,15 @@ class StockEngine:
         self._generation = 1
         self._backfill_jobs: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
         self._backfilling: str | None = None
+        # 回補記帳雙 set(design v3 R12/R3)。worker 的 guard 去掉 `_main` 綁定之後,
+        # 「這一檔今天補過了沒」不再能從 `_main` 推導,得自己記:
+        #   `_backfill_pending` = 在途(入列時加、worker 取件後**不論套用/失敗/丟棄**
+        #     一律 discard)= 群組入列的 dedup 與 `backfilling` 旗標的唯一來源
+        #   `_backfilled` = **套用成功**才加 = 今日已回補判準
+        # 兩者都是**日別**語意:rollover stage2 與 reconnect 皆顯式清空(R4 —— reconnect
+        # 不 bump generation 是實碼事實,漏清 = 斷線缺口整天補不回來而畫面毫無異狀)
+        self._backfill_pending: set[str] = set()
+        self._backfilled: set[str] = set()
         self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
         self._dirty_watchlist: set[str] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -258,7 +268,7 @@ class StockEngine:
                 await asyncio.to_thread(self._release, old, "main")
                 await asyncio.to_thread(self._release_stkfut, old)  # CR3:UNSUB 不佔 loop
             await self._acquire_stkfut(code)
-            self._backfill_jobs.put_nowait((code, self._generation))
+            self._enqueue_backfill(code)
 
     def snapshot(self, code: str) -> dict:
         state = self._states.get(code)
@@ -468,8 +478,12 @@ class StockEngine:
         for state in self._states.values():
             state.reset()
         self._no_data.clear()
+        # 回補記帳是**日別**語意:不清的話「今日已回補」會沿用昨天的判斷,新的一天
+        # 所有群組成員都不再被入列(而畫面只是空著,沒有任何錯誤訊號)
+        self._backfilled.clear()
+        self._backfill_pending.clear()
         if self._main is not None:
-            self._backfill_jobs.put_nowait((self._main, self._generation))
+            self._enqueue_backfill(self._main)
         logger.info("rollover stage2 → %s(首筆 %s)", self._trade_date, first_tick.code)
         if self._signal_hub is not None:
             # `_trade_date` 已前進、`_pending_date` 已清 → hub 的 reset_day + swap
@@ -519,8 +533,13 @@ class StockEngine:
         """TC4 重連:status 推播 + 主圖自癒重回補(design §2.4)。"""
         self.tc4_status = "up"
         self._publish({"type": "status", "tc4": "up", "backfilling": self._backfilling})
+        # reconnect **不** bump generation(實碼事實)→ 記帳不會被 generation 作廢帶走,
+        # 得顯式清。漏清的話斷線那段的缺口整天補不回來:主圖靠下一行自癒,主圖以外的
+        # 成員全靠這次清空才有機會再被 `group_snapshot` 入列(R4)
+        self._backfilled.clear()
+        self._backfill_pending.clear()
         if self._main is not None:
-            self._backfill_jobs.put_nowait((self._main, self._generation))
+            self._enqueue_backfill(self._main)
 
     def _handle_quote(self, quote: dict) -> None:
         symbol = str(quote.get("Symbol", ""))
@@ -555,7 +574,7 @@ class StockEngine:
             and meta.upper_milli is not None
             and (meta.upper_milli, meta.lower_milli) != prev_limits
         ):
-            self._backfill_jobs.put_nowait((code, self._generation))
+            self._enqueue_backfill(code)
         if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
             # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
             # 新日 tick → 先補 stage1 再走 stage2
@@ -623,12 +642,27 @@ class StockEngine:
         basis = price - last.price_milli if last is not None else None
         self._publish({"type": "stkfut", "code": code, "prod": prod, "p": price, "basis": basis})
 
-    # ---- backfill worker(單工;guard = main ∧ generation)----
+    # ---- backfill worker(單工;guard = job 自帶 code ∧ generation)----
+
+    def _enqueue_backfill(self, code: str) -> None:
+        """入列回補 job 的**唯一**接點(五個產出點共用:set_main / rollover stage2 /
+        reconnect / 漲跌停值變 / group_snapshot)。
+
+        `_backfill_pending` 必須與 put 同步寫入 —— 分開寫的話,某個入列點漏寫就會讓
+        `backfilling` 旗標與群組 dedup 對那條路徑靜默失準(卡片顯示「無資料」而不是
+        「回補中…」,或同一檔被重複入列灌爆單工 worker)。
+        """
+        self._backfill_pending.add(code)
+        self._backfill_jobs.put_nowait((code, self._generation))
 
     async def _backfill_worker(self) -> None:
         while True:
             code, generation = await self._backfill_jobs.get()
-            if code != self._main or generation != self._generation:
+            # 取件早退**只比 generation**(design v3 R12):job 自帶 code,收件人是那一檔
+            # 自己的 state 而不是「當下的主圖」。綁 `_main` 會讓群組成員的 job 全部被
+            # 靜默丟棄(零錯誤訊號,卡片只是一直空著)。
+            if generation != self._generation:
+                self._backfill_pending.discard(code)
                 continue
             self._backfilling = code
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code})
@@ -638,6 +672,7 @@ class StockEngine:
                 logger.exception("backfill %s failed", code)
                 self.tc4_status = "down"
                 self._backfilling = None
+                self._backfill_pending.discard(code)
                 self._publish({"type": "status", "tc4": "down", "backfilling": None})
                 continue
             except Exception:
@@ -645,15 +680,20 @@ class StockEngine:
                 # 死掉 = 之後所有回補靜默失效、backfilling 永久卡住
                 logger.exception("backfill %s unexpected failure(worker 續行)", code)
                 self._backfilling = None
+                self._backfill_pending.discard(code)
                 self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
                 continue
             self._backfilling = None
-            # 套用 guard:回補期間主圖切換或 rollover → 丟棄(design §2.3);
-            # 另過濾非當日列(防舊日窗殘留資料混入新日狀態)
-            if code == self._main and generation == self._generation:
+            # 套用 guard:rollover 作廢 in-flight 回補 → 丟棄(design §2.3);
+            # 另過濾非當日列(防舊日窗殘留資料混入新日狀態)。
+            # **不再比 `_main`**(design v3 R12,同取件早退的 rationale)。
+            if generation == self._generation:
                 state = self._states.get(code)
                 if state is not None:
                     state.apply_backfill([t for t in ticks if t.trade_date == self._trade_date])
+                    self._backfilled.add(code)  # 套用成功才記帳
+            # 在途記帳一律在此結清(套用 / 失敗 / 丟棄三條路都經過)
+            self._backfill_pending.discard(code)
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
 
     # ---- 廣播 ----
