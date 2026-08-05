@@ -843,9 +843,10 @@ class TestRealDiscordWiring:
         assert parameter.autocomplete is True
 
     def test_client_suppresses_mentions(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """群組名是自由文字且會原樣回填訊息:`/watch group add @everyone` 不得真 ping(R7)。"""
-        discord = importlib.import_module("discord")
+        """群組名是自由文字且會原樣回填訊息:`/watch group add @everyone` 不得真 ping(R7)。
 
-        bot = self._bot(monkeypatch)
+        逐欄比對而非比物件:`AllowedMentions` 沒有 `__eq__`,直接 `==` 恆為 False。
+        """
+        allowed = self._bot(monkeypatch).client.allowed_mentions
 
-        assert bot.client.allowed_mentions == discord.AllowedMentions.none()
+        assert (allowed.everyone, allowed.users, allowed.roles) == (False, False, False)
