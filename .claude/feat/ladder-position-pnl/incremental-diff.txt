@@ -1,0 +1,38 @@
+diff --git a/docs/next-time.md b/docs/next-time.md
+index cefbfd2..d30d3c1 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -151,10 +151,13 @@
+ 
+ ## 2026-07-29(stock-ui-round2 批一 順手清單)
+ 
+-- [ ] **批二(user 已拍板拆兩批)剩兩項**:項 9 閃電梯跟隨置中(判定為描述現況,
+-  待 user 確認是否有症狀;`PriceLadder.tsx:93,241-247,341` 行為未動)/ 項 13 閃電梯部位 +
+-  未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板預設 6 折;`PriceLadder.tsx`
+-  目前只有活單殘量聚合,手續費設定不存在於任何一端)
++- [ ] **批二(user 已拍板拆兩批)剩一項**:項 9 閃電梯跟隨置中(判定為描述現況,
++  待 user 確認是否有症狀;`PriceLadder.tsx` 行為未動)
++  - [x] ~~項 13 閃電梯部位 + 未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板
++    預設 6 折)~~ **2026-08-05 已出貨**(feat/ladder-position-pnl):部位條(卡片底部,
++    誤送風險考量不放梯上方)+ 梯內打平/均價標記 + 折數設定(標題列,localStorage
++    `copycat-fee-discount`);**折數 user 實答更正為 1.8 折**(原「6 折」記載過時);
++    計算含證交稅 0.3% 固定 + 融券借券費 0.08%;`lib/ladder-position.ts` 純函數五組手算例釘住
+   - [x] ~~項 12 自選側欄重做(預設群組取代「全部」+ 顯示名稱 → 需後端 `watchlist_quote`
+     加 `name` 欄位,跨檔契約改動)~~ **2026-07-31 盤點:做掉了,但走的是另一條路** —
+     側欄已改為「未分組 section + 逐群組 section 並列」+ `WatchlistManagerDialog`
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index 83a403b..eb7956a 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -396,7 +396,10 @@ export function PriceLadder({
+                 if (v !== null) persistDiscount(v);
+               }}
+               className={cn(
+-                "w-10 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
++                // w-12 不是隨手選的:Chrome 的 number input 右側恆留 spinner 空間,
++                // w-10 時「1.8」的 8 會被裁掉(真環境實測),使用者讀不到自己設的折數。
++                // 與張數框同寬 —— 那一格實證不截字。
++                "w-12 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
+                 discountInvalid ? "border-loss" : "border-line",
+               )}
+             />

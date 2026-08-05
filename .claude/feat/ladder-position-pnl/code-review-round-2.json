@@ -1,0 +1,14 @@
+{
+  "round": 2,
+  "phase": "branch-lifecycle 收尾補齊(增量 diff:38bf4d3..HEAD,w-12 fix + docs)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [],
+  "p2": [
+    {"id": "INC-1", "summary": "w-12 只容 3 字元,兩位小數合法折數仍會截字(spinner 恆佔寬是根因)", "resolution": "accepted — appearance:textfield utilities 收掉 spinner(dispatched)"},
+    {"id": "INC-2", "summary": "註解以張數框(2 字元)外推 3 字元容量,佐證鏈不成立", "resolution": "accepted — 改引真 Chrome 複驗直接證據(dispatched)"},
+    {"id": "INC-3", "summary": "真持倉待 user 過目與口徑簡化未入 next-time 真相源", "resolution": "accepted — 補 2026-08-05 收尾留尾巴節(main session 已改)"},
+    {"id": "INC-4", "summary": "項 9 定位資訊被勾銷改寫刪除且無等價取代", "resolution": "accepted — 改符號定位(main session 已改)"}
+  ],
+  "verified_clean": "w-12 diff 未波及其他 class;next-time 勾銷交付事實逐條核實;無誤刪他項"
+}

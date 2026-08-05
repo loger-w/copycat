@@ -1,4 +1,15 @@
 
+## 2026-08-05(ladder-position-pnl 收尾留尾巴)
+
+- [ ] **真持倉部位條畫面待 user 盤中過目**:本輪 SC-1/SC-4 的畫面驗證以 fake positions
+  (fetch override)截圖降級完成,真持倉態需群益登入 + 實際持倉才看得到 — 盤中開個股頁
+  閃電 tab,持倉標的底部應出現部位條(kind + 量 + 均價 / 未實現 / 打平)與梯內
+  amber(打平)/ 紫(均價)左緣標記。
+- [ ] **口徑已知簡化(皆 user 拍板,回頭看會問)**:不套低消 NT$20(聚合無筆數)/
+  不計融資利息 / 證交稅固定 0.3% 不分當沖(當沖 0.15% 情境打平價偏保守)/
+  融券借券費 0.08% 已計(kind=short 賣段)。折數預設 1.8(user 2026-08-05 實答,
+  取代舊「6 折」記載);localStorage key `copycat-fee-discount`。
+
 ## 2026-08-05(stock-intraday-autofit-range 沉澱)
 
 - [ ] **autofit 分支的畫面待盤後實看**:本輪改的路徑(無 meta → autofit 域含當日高低)盤中不可達
@@ -152,7 +163,8 @@
 ## 2026-07-29(stock-ui-round2 批一 順手清單)
 
 - [ ] **批二(user 已拍板拆兩批)剩一項**:項 9 閃電梯跟隨置中(判定為描述現況,
-  待 user 確認是否有症狀;`PriceLadder.tsx` 行為未動)
+  待 user 確認是否有症狀;定位:`PriceLadder.tsx` 的 `follow` state 與 `centerPrice` 的
+  scrollIntoView effect,行為未動)
   - [x] ~~項 13 閃電梯部位 + 未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板
     預設 6 折)~~ **2026-08-05 已出貨**(feat/ladder-position-pnl):部位條(卡片底部,
     誤送風險考量不放梯上方)+ 梯內打平/均價標記 + 折數設定(標題列,localStorage
