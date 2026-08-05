@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockPage } from "@/components/stock/StockPage";
@@ -59,6 +59,9 @@ beforeEach(() => {
       }
       if (String(url).includes("/api/stock/overlay")) {
         return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+      }
+      if (String(url).includes("/api/stock/signals/rules")) {
+        return new Response(JSON.stringify({ rules: [] }));
       }
       return new Response(JSON.stringify({}), { status: 404 });
     }),
@@ -302,6 +305,9 @@ describe("StockPage 加入自選(round4 項 4)", () => {
         if (String(url).includes("/api/stock/overlay")) {
           return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
         }
+        if (String(url).includes("/api/stock/signals/rules")) {
+          return new Response(JSON.stringify({ rules: [] }));
+        }
         return new Response(JSON.stringify({}), { status: 404 });
       }),
     );
@@ -484,5 +490,67 @@ describe("StockPage 訊號欄(SC-9)", () => {
     const label = await screen.findByText("爆拉 +2.50%");
     fireEvent.click(label.closest("button")!);
     expect(onSelect).toHaveBeenCalledWith("2317");
+  });
+});
+
+// 🟢 signal-rules SC-7:四鍵開關退場 → 規則列 + 規則 Dialog。
+// 接線在本層(SignalRail / SignalRulesDialog 都不自己抓 rules)。
+describe("StockPage 訊號規則(signal-rules SC-7)", () => {
+  const RULE = {
+    id: "r-1-000",
+    name: "我的爆量",
+    kind: "vol_burst",
+    enabled: true,
+    notify_discord: true,
+    cooldown_secs: 300,
+    params: { ratio: 3, window_secs: 60, min_elapsed_min: 5, min_window_lots: 100, min_day_lots: 500 },
+    cdp_levels: [],
+  };
+
+  let writes: { url: string; init: RequestInit }[];
+
+  function mockRules(): void {
+    writes = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method !== undefined) {
+          writes.push({ url: String(url), init });
+          return new Response(String(init.body ?? "{}"));
+        }
+        if (String(url).includes("/api/stock/signals/rules")) {
+          return new Response(JSON.stringify({ rules: [RULE] }));
+        }
+        if (String(url).includes("/api/stock/watchlist")) {
+          return new Response(JSON.stringify({ codes: ["2330"], groups: [] }));
+        }
+        if (String(url).includes("/api/stock/names")) {
+          return new Response(JSON.stringify({ names: [], count: 0 }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+  }
+
+  it("規則列顯示規則名;點開關 → PUT 該規則、enabled 反轉", async () => {
+    mockRules();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    const rules = screen.getByTestId("signal-rail-rules");
+    await waitFor(() => expect(within(rules).getByRole("switch", { name: /我的爆量/ })).toBeTruthy());
+    fireEvent.click(within(rules).getByRole("switch", { name: /我的爆量/ }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]?.url).toBe("/api/stock/signals/rules/r-1-000");
+    expect(writes[0]?.init.method).toBe("PUT");
+    expect((JSON.parse(String(writes[0]?.init.body)) as { enabled: boolean }).enabled).toBe(false);
+  });
+
+  it("點「規則」鈕 → 規則 Dialog 開啟(列出該規則)", async () => {
+    mockRules();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "管理訊號規則" })).toBeTruthy());
+    expect(screen.getByTestId("signal-rules-dialog").className).toContain("hidden");
+    fireEvent.click(screen.getByRole("button", { name: "管理訊號規則" }));
+    expect(screen.getByTestId("signal-rules-dialog").className).toContain("flex");
+    expect(within(screen.getByTestId("signal-rules-dialog")).getByText("我的爆量")).toBeTruthy();
   });
 });
