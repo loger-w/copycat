@@ -9,6 +9,7 @@ import { QuoteTable } from "@/components/QuoteTable";
 import { RightRail, type RailContext } from "@/components/rail/RightRail";
 import { SeriesSelect } from "@/components/SeriesSelect";
 import { ToastStack } from "@/components/ToastStack";
+import { VersionDriftBadge } from "@/components/VersionDriftBadge";
 import { useCapitalStream } from "@/hooks/useCapital";
 import { useSignalAlerts } from "@/hooks/useSignalAlerts";
 import { useFuturesStream } from "@/hooks/useFuturesStream";
@@ -194,7 +195,12 @@ export default function App() {
             {label}
           </button>
         ))}
-        <IndexBar twse={twse} otc={otc} txf={txf} />
+        {/* 一個 ml-auto 推到右側,兩個會平分剩餘空間把膠囊卡在 nav 中段(design R4);
+            IndexBar 自身的 ml-auto 在這個內容尺寸容器內成為 no-op。 */}
+        <div className="ml-auto flex items-baseline gap-3">
+          <VersionDriftBadge />
+          <IndexBar twse={twse} otc={otc} txf={txf} />
+        </div>
       </nav>
       {/* 主區 + 常駐右欄(SC-3:切 tab 時右欄位置 / 寬度 / 三顆 tab 都不變) */}
       <div className="flex min-h-0 min-w-0 flex-1 gap-4">
