@@ -8,19 +8,27 @@ export interface ChartToggles {
   ma: boolean;
   /** 布林通道(K 線專用) */
   bb: boolean;
+  /** 價位別成交量長條(江波圖專用) */
+  vp: boolean;
 }
 
 /** 存檔 schema 版本。**storage-only,不屬 `ChartToggles`** —— 洩進 toggles 物件會讓
  *  「整包比對」的測試與 memo 比較多一個非布林欄位。 */
 const TOGGLES_VERSION = 2;
 
-/** `cdp` 預設開(SC-3,user 拍板);`bb` 預設開(round4 項 6,user 拍板)。
+/** `cdp` 預設開(SC-3,user 拍板);`bb` 預設開(round4 項 6,user 拍板);
+ *  `vp` 預設開(價位別成交量 SC-3,user 拍板)。
+ *
+ *  **`vp` 不需要 bump `TOGGLES_VERSION`**:版本升級要處理的是「**既有**鍵的預設改了」
+ *  —— 舊存檔裡那個值是當時的預設而不是使用者的選擇,不強制升級就永遠蓋掉新預設。
+ *  `vp` 是全新的鍵,舊存檔根本沒有它,下面的 `{...DEFAULTS, ...flags}` 自然就補上。
+ *  無謂 bump 的代價是所有人的 `bb` 會被再打開一次(升級分支不分辨是誰觸發的)。
  *
  *  `load()` 的 `{...DEFAULTS, ...saved}` 讓存檔覆蓋預設 —— 對「使用者選過」的項目是
  *  對的,但對**新改的預設**是錯的:舊存檔裡的 `bb: false` 是「當時的預設」而不是
  *  「使用者選了關」,照樣覆蓋的話 user 的畫面永遠不會變成新預設。
  *  故只對 `bb` 做一次性升級(見 `load`),其餘欄位維持「存檔優先、不強制升級」。 */
-const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true };
+const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
 
 interface Stored extends Partial<ChartToggles> {
   v?: number;
