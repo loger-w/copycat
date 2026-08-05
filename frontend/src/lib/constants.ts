@@ -7,7 +7,7 @@
  *  命名前綴一律 `copycat-`:localStorage 是 origin 級共用空間,無前綴的 key 與他站撞名
  *  且清 site data 時難對照。 */
 
-/** 主 tab(txo / stock / futures / index / corr)— App.tsx */
+/** 主 tab(txo / stock / futures / index)— App.tsx */
 export const TAB_KEY = "copycat-tab";
 /** 主圖個股代號 — App.tsx */
 export const MAIN_CODE_KEY = "copycat-stock-main-code";
@@ -37,15 +37,28 @@ export function purgeOrphanKeys(): void {
 /** 期貨 tab 的商品(TXF / MXF / TMF)— App.tsx */
 export const PRODUCT_KEY = "copycat-fut-product";
 
-/** 大盤頁選中的指數(TWSE / OTC / TXF …)— components/index/IndexPage.tsx */
+/** 台股綜合**左圖**選中的指數(TWSE / OTC / TXF …)— components/index/IndexPage.tsx */
 export const MARKET_KEY_STORE = "copycat-market-key";
-/** 大盤頁的週期 / 模式(分時 / 日K …)— components/index/IndexPage.tsx */
+/** 台股綜合**左圖**的週期 / 模式(分時 / 日K …)— components/index/IndexPage.tsx */
 export const MARKET_MODE_STORE = "copycat-market-tf";
-/** 大盤頁的期現疊圖開關(舊值 "overlay" / "side")— components/index/IndexPage.tsx */
+/** 台股綜合**左圖**的期現疊圖開關(舊值 "overlay" / "side")— components/index/IndexPage.tsx。
+ *  重疊圖畫的固定是加權 vs 櫃買,右圖開它會出現兩張相同的圖 → 右圖不給重疊鈕,
+ *  因此**沒有** `MARKET2_OVERLAY_STORE` 這支 key。 */
 export const INDEX_OVERLAY_STORE = "copycat-index-mode";
-/** 大盤頁的期貨商品,**刻意不與 `PRODUCT_KEY` 共用**:共用會讓大盤頁選微台時,期貨 tab
- *  與右欄閃電梯的武裝語境一起被換掉 — components/index/IndexPage.tsx */
+/** 台股綜合**左圖**的期貨商品,**刻意不與 `PRODUCT_KEY` 共用**:共用會讓大盤頁選微台時,
+ *  期貨 tab 與右欄閃電梯的武裝語境一起被換掉 — components/index/IndexPage.tsx */
 export const MARKET_FUT_STORE = "copycat-market-fut";
+
+/** 台股綜合**右圖**選中的指數(左圖沿用 `MARKET_KEY_STORE`,舊使用者狀態零丟失)
+ *  — components/index/IndexPage.tsx */
+export const MARKET2_KEY_STORE = "copycat-market2-key";
+/** 台股綜合**右圖**的週期 / 模式 — components/index/IndexPage.tsx */
+export const MARKET2_MODE_STORE = "copycat-market2-tf";
+/** 台股綜合**右圖**的期貨商品 — components/index/IndexPage.tsx */
+export const MARKET2_FUT_STORE = "copycat-market2-fut";
+
+/** 相關係數收合區塊的展開狀態("1" = 展開)— components/corr/CorrSection.tsx */
+export const CORR_OPEN_KEY = "copycat-corr-open";
 
 /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
 export const RAIL_TAB_KEY = "copycat-rail-tab";
