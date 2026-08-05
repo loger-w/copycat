@@ -26,6 +26,18 @@
 - [x] ~~既有 console error:React duplicate key(key=0)每 5 秒一則 — 找到那個 map 的
   key 來源修掉~~ **根因已由 market-overview-r1-tab Phase 6 定位,併入 2026-08-06 節首條**
 
+## 2026-08-05(signal-rules 題1 code review 尾巴)
+
+- [ ] 🔵 **`SignalDetector` 的暫存基準家族已無呼叫端**(`set_staged_basis` /
+  `clear_staged` / `swap_staged_basis` + `_staged` / `_staged_date`):規則化之後暫存區
+  與日別判定整組移交 `SignalHub`(基準快照歸 hub 唯一持有)。真移除屬純結構改動,
+  本輪只在 `signal_state.py` 模組 docstring 標了「不要回頭呼叫」(review B4)。
+  動的時候 `tests/live/test_signal_state.py` 的對應測試一起刪。
+- [ ] **`default_rules` 的 `time.time()` 與注入時鐘不一致**(review A6(3),僅測試可觀察):
+  遷移種子的 id epoch 走真實時鐘,hub 其餘各處走 `now_fn`。要收斂就把 epoch 當參數傳進去。
+- [ ] **30 條規則的熱路徑成本未量測**(review A6(6),design 已知):per-tick N × evaluate,
+  上限 30 是 REST 可寫入的無界量守門值;真要壓成本得先量 tick 密度尖峰。
+
 ## 2026-08-05(discord-watchlist 題4 收尾留尾巴)
 
 - [ ] **SC-4 Discord 實發待 user 過目**(prod 重啟後,試用指引見 PR #21):`/watch add` 的
@@ -658,7 +670,8 @@
   「某面板初載空、用一陣子才出現」,先套同款 refetchInterval 再查別的。
   〔2026-08-05 mod/startup-http-window 盤點補充:窗內落 error 終態且無 interval 的
   一次性 query 至少四條 — useSeries / useStockWatchlist / useSignalFeed today /
-  useSignalsConfig enabled(皆 retry:1),需視窗重聚焦或重載才回復;lifespan 背景化後
+  useSignalRules(原 useSignalsConfig,signal-rules 起改指這條;皆 retry:1),
+  需視窗重聚焦或重載才回復;lifespan 背景化後
   窗形狀從「連線被拒」變「503」,終態問題本身不變。另:窗內誤按序列切換會看到原始碼
   字串「切換失敗:HANDOVER_BUSY」(SeriesSelect.tsx:33 原樣印 error.message),中文
   文案候選與此條同批處理〕

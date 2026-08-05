@@ -156,6 +156,11 @@ class _RuleSlot:
     enabled: frozenset[str]  # rule.enabled ? {rule.kind} : frozenset()
 
 
+def _rule_tag(rule: Rule) -> str:
+    """log 用的規則識別:名稱可以改、可以重複,id 才追得回是哪一顆 slot(review A4)。"""
+    return f"{rule['name']}({rule['id']})"
+
+
 def _copy_rule(rule: Rule) -> Rule:
     """對外回傳的規則一律是副本 —— 呼叫端改到的不能是熱路徑正在讀的那份。"""
     out = cast("Rule", dict(rule))
@@ -359,11 +364,12 @@ class SignalHub:
             return
         for slot in self._slots.values():
             try:
-                for event in slot.detector.evaluate(code, tick, ctx, slot.enabled):
-                    self._emit(event, slot.rule, state)
+                events = list(slot.detector.evaluate(code, tick, ctx, slot.enabled))
             except Exception:
                 # per-rule 隔離(R1):一條規則炸掉只跳過它自己這一 tick,其餘照評
-                logger.exception("訊號規則評估失敗(丟棄):%s / %s", code, slot.rule["name"])
+                logger.exception("訊號規則評估失敗(丟棄):%s / %s", code, _rule_tag(slot.rule))
+                continue
+            self._fanout(code, slot, events, state)
 
     def on_book(self, code: str, state: StockDayState) -> None:
         if code not in self._watch:
@@ -375,10 +381,25 @@ class SignalHub:
             return
         for slot in self._slots.values():
             try:
-                for event in slot.detector.evaluate_book(code, ctx, slot.enabled):
-                    self._emit(event, slot.rule, state)
+                events = list(slot.detector.evaluate_book(code, ctx, slot.enabled))
             except Exception:
-                logger.exception("簿更新規則評估失敗(丟棄):%s / %s", code, slot.rule["name"])
+                logger.exception("簿更新規則評估失敗(丟棄):%s / %s", code, _rule_tag(slot.rule))
+                continue
+            self._fanout(code, slot, events, state)
+
+    def _fanout(
+        self, code: str, slot: _RuleSlot, events: list[SignalEvent], state: StockDayState
+    ) -> None:
+        """evaluate 與 fanout 分開接(review A4):兩者的失敗語意完全不同 ——
+        前者是「這條規則的判定壞了」(狀態機可能已半推進),後者是「這一則送不出去」。
+        合在同一個 try 時,fanout 炸掉會讓同 tick 剩下的事件連帶被吞,而 log 會指向
+        detector,排查從一開始就走錯方向。
+        """
+        for event in events:
+            try:
+                self._emit(event, slot.rule, state)
+            except Exception:
+                logger.exception("訊號 fanout 失敗(丟棄該則):%s / %s", code, _rule_tag(slot.rule))
 
     def on_rollover_pending(self, new_date: str) -> None:
         """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 promote。
@@ -399,6 +420,13 @@ class SignalHub:
             self._basis_cache = {code: (expected, cdp) for code, cdp in self._staged_cache.items()}
             for code in self._basis_cache:
                 self._distribute(code)
+            # promote 是**整批取代**:暫存區沒抓到的檔等於基準被刪掉,而它們排在
+            # 換日前的當日 job 隨後會被日別尺丟棄 → 那些檔整天沒有 CDP 且不自癒。
+            # 此刻 trade_date 已前進,補抓拿到的就是當日基準(R18 不會丟掉它)。
+            missing = sorted(set(self._watch) - set(self._basis_cache))
+            if missing:
+                logger.info("換日 promote 差集補抓 %d 檔基準:%s", len(missing), missing)
+                self.request_basis(missing)
         else:
             # stage1 沒跑過(週六補市日 / server 盤中才啟動)→ 重抓;該窗 CDP 停用
             logger.info("換日無預抓基準,清空重抓(design §4.2 fallback)")
@@ -416,6 +444,11 @@ class SignalHub:
             self._drop_code(code)
         if added:
             self.request_basis(sorted(added))
+            if self._staged_date is not None:
+                # stage1 已經跑過(盤前窗內)才加進來的檔:**加排**一筆暫存 job,
+                # 否則 stage2 整批取代時它不在暫存區,隔天一整天沒有基準。
+                # 當日那筆照排不動 —— 今天剩下的時間仍要有 CDP。
+                self.request_basis(sorted(added), basis_date=self._staged_date, staged=True)
 
     def _drop_code(self, code: str) -> None:
         """SC-5:逐 slot 丟 + 雙 cache pop —— 漏掉 cache 的話重新加入時
@@ -438,23 +471,51 @@ class SignalHub:
     async def _basis_worker(self) -> None:
         while True:
             code, basis_date, staged = await self._basis_jobs.get()
+            fetched = True  # 例外路徑落點未知 → 保守付 gap(下方只用來省掉早退那一格)
             try:
-                await self._resolve_basis(code, basis_date, staged)
+                fetched = await self._resolve_basis(code, basis_date, staged)
             except asyncio.CancelledError:
                 raise  # finally 仍會 task_done,取消不留未完成計數
             except Exception:
                 # worker 死掉 = 之後所有基準靜默停用(stock_engine._backfill_worker CR4 同款)
                 logger.exception("CDP 基準解析未預期失敗,%s 停用 CDP", code)
-                for slot in self._slots.values():
-                    if slot.rule["kind"] == "cdp_cross":
-                        slot.detector.set_basis(code, None)
+                self._basis_failed(code, basis_date, staged)
             finally:
                 self._basis_jobs.task_done()
-            if self._cfg.basis_gap_secs > 0:
-                # 與主圖回補 / K 線 route 共用同一條 TC4 stock session,連發要讓位
+            if fetched and self._cfg.basis_gap_secs > 0:
+                # 與主圖回補 / K 線 route 共用同一條 TC4 stock session,連發要讓位。
+                # 沒打日 K 的那一格(過期早退)不必付 —— 一批過期 job 會把 gap 疊成分鐘級。
                 await asyncio.sleep(self._cfg.basis_gap_secs)
 
-    async def _resolve_basis(self, code: str, basis_date: str, staged: bool) -> None:
+    def _stale(self, basis_date: str, staged: bool) -> bool:
+        """日別尺的**唯一**定義:staged 比暫存區的基準日,非 staged 比當日。
+
+        成功 / 失敗 / 早退三條路徑共用同一把尺 —— 分開寫的那次,例外路徑就漏了它。
+        """
+        return basis_date != (self._staged_date if staged else self._trade_date_fn())
+
+    def _basis_failed(self, code: str, basis_date: str, staged: bool) -> None:
+        """未預期失敗的收斂點(review A1+B2):日別符才落 None,且**經由 cache**。
+
+        繞過 cache 直摸 detector 有兩個獨立的坑:(a) 沒有日別尺 —— 一則 stage1
+        (次日)或 promote 前排下的舊 job 崩掉,就把當日基準停掉;(b) cache 仍寫著
+        舊值 → 之後任何 `_distribute` 都會把它再餵回去,兩份真值就此分岔。
+        """
+        if self._stale(basis_date, staged):
+            logger.info("捨棄過期基準 job 的失敗結果:%s(%s,staged=%s)", code, basis_date, staged)
+            return
+        if staged:
+            self._staged_cache[code] = None
+            return
+        self._basis_cache[code] = (basis_date, None)
+        self._distribute(code)
+
+    async def _resolve_basis(self, code: str, basis_date: str, staged: bool) -> bool:
+        """回傳「有沒有真的打一次日 K」—— worker 據此決定要不要付 gap sleep。"""
+        if self._stale(basis_date, staged):
+            # 排進佇列後、輪到它之前就換日了 → 連 TC4 都不必打(review A3)
+            logger.info("捨棄過期的基準 job:%s(%s,staged=%s)", code, basis_date, staged)
+            return False
         try:
             bars = await self._daily_bars(code, _BASIS_BARS)
         except Exception:
@@ -468,28 +529,31 @@ class SignalHub:
             cdp = compute_cdp(last["high"], last["low"], last["close"])
         else:
             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
+        if self._stale(basis_date, staged):
+            # 打日 K 的期間換了日別(staged:暫存區已清空 MFS-2;非 staged:promote 走完
+            # R18)→ **丟棄**。餵進去等於把舊日別的基準當今天用,而且整天不會自癒。
+            logger.info("捨棄過期的基準結果:%s(%s,staged=%s)", code, basis_date, staged)
+            return True
         if staged:
-            if basis_date != self._staged_date:
-                # 這則是上一輪 stage1 排的、在暫存區清空之後才跑完的 in-flight job;
-                # 放進去等於把殘渣重新種回暫存區(MFS-2)
-                logger.info("捨棄過期的 staged 基準:%s(%s)", code, basis_date)
-                return
             self._staged_cache[code] = cdp
-            return
-        if basis_date != self._trade_date_fn():
-            # 換日已經走完 promote,這則是舊日別的 in-flight job → **丟棄**(R18)。
-            # 餵 None 會把剛 promote 的正確基準洗掉,而且整天不會自癒。
-            logger.info("捨棄過期的當日基準:%s(%s)", code, basis_date)
-            return
+            return True
         self._basis_cache[code] = (basis_date, cdp)
         self._distribute(code)
+        return True
 
     def _distribute(self, code: str) -> None:
-        """把快照餵給每條 CDP 規則(只做 levels 過濾;日別比對在 `_resolve_basis`)。"""
+        """把快照餵給每條 CDP 規則(levels 過濾 + 日別 guard,冪等)。
+
+        日別 guard 在此**再判一次**(review A6(5)):呼叫點有四處,漏一處的失效樣態
+        是「昨天的基準被當成今天的用一整天」,而那是靜默的。
+        """
         entry = self._basis_cache.get(code)
         if entry is None:
             return
-        cdp = entry[1]
+        basis_date, cdp = entry
+        if basis_date != self._trade_date_fn():
+            logger.warning("basis cache 日別不符,不分發:%s(%s)", code, basis_date)
+            return
         for slot in self._slots.values():
             if slot.rule["kind"] != "cdp_cross":
                 continue

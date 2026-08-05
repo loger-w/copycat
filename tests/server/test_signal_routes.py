@@ -347,7 +347,9 @@ class TestSignalRulesRoutes:
             pytest.param({"params": {}}, id="params 缺鍵"),
             pytest.param({"params": {"pct": 2.0, "window_secs": 300, "x": 1}}, id="params 多鍵"),
             pytest.param({"params": {"pct": 999.0, "window_secs": 300}}, id="params 違域"),
-            pytest.param({"cdp_levels": ["zz"]}, id="非 cdp 規則帶線"),
+            # 合法的線名(review B9):填 "zz" 時 `_normalize_levels` 在「不是五線之一」
+            # 就先拒了,鎖不到「非 cdp 規則必須空 levels」這條規則本身
+            pytest.param({"cdp_levels": ["ah"]}, id="非 cdp 規則帶線"),
         ],
     )
     def test_invalid_body_400(self, tmp_path: Path, over: dict) -> None:
@@ -361,6 +363,41 @@ class TestSignalRulesRoutes:
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "INVALID_RULE"
             assert _rules(client) == before, "被拒的請求不得留下半套狀態"
+
+    @pytest.mark.parametrize("missing", ["name", "kind", "cooldown_secs", "params", "cdp_levels"])
+    def test_missing_field_400(self, tmp_path: Path, missing: str) -> None:
+        """缺欄同樣走 400 INVALID_RULE(review B8)。
+
+        `RuleBody` 每個欄位都給 None 預設就是為了這條:宣告成必填時 pydantic 會回
+        422 + list 形 detail,前端只解 `detail.error` → 畫面上是「儲存失敗」而不是
+        「規則設定不合法」,而且完全看不出是缺了哪一種輸入。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            before = _rules(client)
+            body = _rule_body("surge_crash", "新")
+            del body[missing]
+
+            r = client.post("/api/stock/signals/rules", json=body)
+
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "INVALID_RULE"
+            assert _rules(client) == before
+
+    def test_non_string_id_in_body_400(self, tmp_path: Path) -> None:
+        """body 的 id 型別不符也要 400(review A6(1)):`RuleBody.id` 宣告成 `str | None`
+        時,`{"id": 123}` 會在 pydantic 那層變成 422 + list 形 detail。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            rule_id = _rules(client)[0]["id"]
+
+            r = client.put(
+                f"/api/stock/signals/rules/{rule_id}",
+                json=_rule_body("limit_lock", "X", id=123),
+            )
+
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "INVALID_RULE"
 
     def test_unknown_id_404(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path)

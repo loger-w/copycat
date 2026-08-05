@@ -65,6 +65,26 @@ class TestConstants:
         assert set(PARAM_SPECS) == set(RULE_KINDS)
         assert PARAM_SPECS["limit_lock"] == {}
 
+    def test_param_specs_literal(self) -> None:
+        """字面鎖(review B5):鍵集與值域是**跨檔契約** —— 前端 `PARAM_FIELDS` 的鍵集
+        必須逐字相同(多鍵 / 缺鍵同樣是 INVALID_RULE),Dialog 的 min/max 也照這張表。
+
+        只驗「涵蓋每個 kind」的話,悄悄改掉某條線的上下界不會有任何測試變紅,而失效
+        樣態是使用者填得進去的值被後端拒收(或反過來,拒收本來合法的值)。
+        """
+        assert PARAM_SPECS == {
+            "cdp_cross": {"rearm_ticks": (0, 50)},
+            "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
+            "vol_burst": {
+                "ratio": (1, 100),
+                "window_secs": (10, 3600),
+                "min_elapsed_min": (0, 240),
+                "min_window_lots": (0, 1e6),
+                "min_day_lots": (0, 1e7),
+            },
+            "limit_lock": {},
+        }
+
 
 class TestNormalizeHappyPath:
     @pytest.mark.parametrize("kind", RULE_KINDS)
