@@ -56,8 +56,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function open(rules: SignalRule[] = [CDP, VOL], isOpen = true) {
-  return wrap(<SignalRulesDialog open={isOpen} rules={rules} onClose={vi.fn()} />);
+function open(rules: SignalRule[] = [CDP, VOL], isOpen = true, rulesError = false) {
+  return wrap(
+    <SignalRulesDialog open={isOpen} rules={rules} rulesError={rulesError} onClose={vi.fn()} />,
+  );
 }
 
 /** 寫入型呼叫(GET 不算)—— 「零送出」斷言要排除清單重抓那些。 */
@@ -87,7 +89,7 @@ describe("SignalRulesDialog 開關", () => {
 
   it("關閉鈕呼叫 onClose", () => {
     const onClose = vi.fn();
-    wrap(<SignalRulesDialog open rules={[CDP]} onClose={onClose} />);
+    wrap(<SignalRulesDialog open rules={[CDP]} rulesError={false} onClose={onClose} />);
     fireEvent.click(screen.getByLabelText("關閉"));
     expect(onClose.mock.calls.length).toBe(1);
   });
@@ -116,6 +118,24 @@ describe("SignalRulesDialog 列表", () => {
   it("零規則 → 空態文案", () => {
     open([]);
     expect(screen.getByText("尚無規則 —— 用下方「新增規則」建立第一條")).toBeTruthy();
+  });
+
+  // review A5:載入失敗與「真的零規則」在畫面上一樣 → 使用者照著空態去新增,
+  // 而真值可能是四條規則好好跑著(新增只會撞名失敗)
+  it("規則載入失敗 → 失敗文案而非零規則空態", () => {
+    open([], true, true);
+    expect(screen.getByText(/規則載入失敗/)).toBeTruthy();
+    expect(screen.queryByText("尚無規則 —— 用下方「新增規則」建立第一條")).toBeNull();
+  });
+
+  // review B6:MAX_RULES = 30 是後端硬上限,按得下去只會拿到一句 INVALID_RULE,
+  // 而畫面上完全看不出「是因為滿了」
+  it("規則數達上限 30 → 新增規則鈕停用並說明原因", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ ...CDP, id: `r${i}`, name: `規則${i}` }));
+    open(many);
+    const btn = screen.getByRole("button", { name: "新增規則" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toContain("30");
   });
 });
 
@@ -244,6 +264,22 @@ describe("SignalRulesDialog 編輯表單", () => {
     fireEvent.change(screen.getByLabelText("名稱"), { target: { value: "壞數字" } });
     fireEvent.change(screen.getByLabelText("冷卻秒數"), { target: { value: "abc" } });
     fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(writes()).toHaveLength(0);
+  });
+
+  // review B6:值域交給後端時,使用者拿到的是一句「規則設定不合法」,不知道是哪一格
+  it("冷卻秒數超出 60–86400 → 零送出並指出是哪一格", async () => {
+    open();
+    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
+    fireEvent.change(screen.getByLabelText("冷卻秒數"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(screen.getByText("冷卻秒數須在 60–86400 之間")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("冷卻秒數"), { target: { value: "90000" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(screen.getByText("冷卻秒數須在 60–86400 之間")).toBeTruthy();
+
     await new Promise((r) => setTimeout(r, 20));
     expect(writes()).toHaveLength(0);
   });
