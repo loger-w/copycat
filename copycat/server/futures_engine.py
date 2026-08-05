@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 from typing import Callable, Protocol
 
@@ -196,11 +197,17 @@ class FuturesEngine:
             "products": {p: st.payload(p) for p, st in self._states.items()},
         }
 
-    async def bars_range(self, product: str, tf: str, start: str, end: str) -> list[Bar]:
+    async def bars_range(
+        self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+    ) -> list[Bar]:
         """期指 K 線歷史 —— **必須從本引擎的 session 問**(同 `fetch_day_1k` 的理由)。
 
         借不到就回空、不 fallback 不猜:回空 + 固定可 grep 的 log 字串,3am 時
         `grep 'market: futures history proxy miss'` 就能分辨「TC4 掛了」與「真沒資料」。
+
+        `session`(`day` / `allday`)原樣轉給 source(futures-allday §1.4);**不做
+        「source 沒有這個參數就退回不帶」的相容分支** —— 那會讓漏改的 fake 靜默走
+        日盤路徑,近全模式只是少了夜盤而不會有任何錯誤。fake 一律同步升簽名。
         """
         source = self._source
         # getattr 而非加進 Protocol:既有測試 fake 沒有這個方法,加進 Protocol 會讓
@@ -210,7 +217,10 @@ class FuturesEngine:
             logger.warning("market: futures history proxy miss %s(source 未建/不支援)", product)
             return []
         try:
-            return await asyncio.to_thread(fetch, product, tf, start, end)
+            # partial 而非 lambda:閉包會在 executor thread 才取值,partial 當場綁定
+            return await asyncio.to_thread(
+                functools.partial(fetch, product, tf, start, end, session=session)
+            )
         except ConnectionError as e:
             logger.warning("market: futures history proxy miss %s(%s)", product, e)
             return []
