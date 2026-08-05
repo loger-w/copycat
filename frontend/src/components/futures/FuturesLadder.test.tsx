@@ -564,6 +564,19 @@ describe("FuturesLadder 結算 T-0 警示(SC-6)", () => {
     expect(screen.queryByText("⚠ 今日結算")).toBeNull();
   });
 
+  // review TZ-3:第三週三遇假日順延 → 那天之後、HOT 換月之前仍是「最後交易日在即」,
+  // 警示消失比殘留危險得多(誤留倉 = 現金結算)
+  it("純日曆結算日已過但 HOT 未換月 → 警示仍在", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 17)); // 2026-09-17,202609 的第三週三之後
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    expect(screen.getByText("⚠ 今日結算")).toBeTruthy();
+  });
+
   it("resolved_contract null → 不顯示警示列(合約未解析)", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 8, 16));
