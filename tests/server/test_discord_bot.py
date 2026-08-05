@@ -62,28 +62,65 @@ class FakeInteraction:
 
 
 class FakeService:
-    def __init__(self, wl: Watchlist | None = None, error: Exception | None = None) -> None:
+    """`changed` 由建構參數控制 —— no-op 文案(「已在自選」/「名稱未變」)測的就是
+    service 回 False 那條路,fake 不自己推導「有沒有變」才不會把待測邏輯搬進 fake。"""
+
+    def __init__(
+        self,
+        wl: Watchlist | None = None,
+        error: Exception | None = None,
+        changed: bool = True,
+    ) -> None:
         self.wl: Watchlist = wl if wl is not None else {"codes": [], "groups": []}
         self.error = error
+        self.changed = changed
         self.added: list[tuple[str, str | None]] = []
         self.removed: list[str] = []
+        self.created: list[str] = []
+        self.deleted: list[str] = []
+        self.renamed: list[tuple[str, str]] = []
+        self.ungrouped: list[tuple[str, str]] = []
 
-    async def add(self, code: str, group: str | None = None) -> Watchlist:
+    async def add(self, code: str, group: str | None = None) -> tuple[Watchlist, bool]:
         if self.error is not None:
             raise self.error
         self.added.append((code, group))
-        return self.wl
+        return self.wl, self.changed
 
-    async def remove(self, code: str) -> Watchlist:
+    async def remove(self, code: str) -> tuple[Watchlist, bool]:
         if self.error is not None:
             raise self.error
         self.removed.append(code)
-        return self.wl
+        return self.wl, self.changed
 
     async def current(self) -> Watchlist:
         if self.error is not None:
             raise self.error
         return self.wl
+
+    async def create_group(self, name: str) -> tuple[Watchlist, bool]:
+        if self.error is not None:
+            raise self.error
+        self.created.append(name)
+        return self.wl, self.changed
+
+    async def delete_group(self, name: str) -> tuple[Watchlist, bool]:
+        if self.error is not None:
+            raise self.error
+        self.deleted.append(name)
+        return self.wl, self.changed
+
+    async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]:
+        if self.error is not None:
+            raise self.error
+        self.renamed.append((old, new))
+        return self.wl, self.changed
+
+    async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:
+        if self.error is not None:
+            raise self.error
+        self.ungrouped.append((code, group))
+        return self.wl, self.changed
 
 
 class TestAddCommand:

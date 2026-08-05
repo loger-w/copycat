@@ -49,8 +49,9 @@ class TestAdd:
     async def test_add_with_group_persists_subscribes_and_broadcasts(self, tmp_path: Path) -> None:
         service, engine, path = _service(tmp_path)
 
-        result = await service.add("2330", group="主力")
+        result, changed = await service.add("2330", group="主力")
 
+        assert changed is True
         assert result == {"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]}
         assert load_watchlist(path) == result
         assert engine.set_calls == [["2330"]]
@@ -59,8 +60,9 @@ class TestAdd:
     async def test_add_without_group_lands_ungrouped(self, tmp_path: Path) -> None:
         service, engine, path = _service(tmp_path)
 
-        result = await service.add("2330")
+        result, changed = await service.add("2330")
 
+        assert changed is True
         assert result == {"codes": ["2330"], "groups": []}
         assert load_watchlist(path)["codes"] == ["2330"]
         assert engine.set_calls == [["2330"]]
@@ -69,8 +71,9 @@ class TestAdd:
         service, engine, _ = _service(tmp_path)
         await service.add("2330", group="主力")
 
-        result = await service.add("5483", group="觀察")
+        result, changed = await service.add("5483", group="觀察")
 
+        assert changed is True
         assert result["codes"] == ["2330", "5483"]
         assert result["groups"] == [
             {"name": "主力", "codes": ["2330"]},
@@ -83,19 +86,21 @@ class TestAdd:
         service, engine, _ = _service(tmp_path)
         await service.add("2330")
 
-        result = await service.add("2330", group="主力")
+        result, changed = await service.add("2330", group="主力")
 
+        assert changed is True
         assert result["codes"] == ["2330"]
         assert result["groups"] == [{"name": "主力", "codes": ["2330"]}]
         assert len(engine.published) == 2
 
     async def test_add_duplicate_is_noop(self, tmp_path: Path) -> None:
         service, engine, path = _service(tmp_path)
-        first = await service.add("2330", group="主力")
+        first, _ = await service.add("2330", group="主力")
         mtime = path.stat().st_mtime_ns
 
-        again = await service.add("2330", group="主力")
+        again, changed = await service.add("2330", group="主力")
 
+        assert changed is False
         assert again == first
         assert path.stat().st_mtime_ns == mtime  # 沒落檔
         assert engine.set_calls == [["2330"]]
@@ -116,8 +121,9 @@ class TestRemove:
         )
         engine.published.clear()
 
-        result = await service.remove("2330")
+        result, changed = await service.remove("2330")
 
+        assert changed is True
         assert result == {
             "codes": ["5483"],
             "groups": [{"name": "主力", "codes": ["5483"]}, {"name": "觀察", "codes": []}],
@@ -132,8 +138,9 @@ class TestRemove:
         engine.set_calls.clear()
         engine.published.clear()
 
-        result = await service.remove("5483")
+        result, changed = await service.remove("5483")
 
+        assert changed is False
         assert result["codes"] == ["2330"]
         assert engine.set_calls == []
         assert engine.published == []
