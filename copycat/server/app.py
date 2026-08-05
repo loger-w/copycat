@@ -134,13 +134,6 @@ class GroupsBody(BaseModel):
     codes: list[str] | None = None  # v3 自選全體;缺省 → union(groups)(舊 client 相容)
 
 
-class SignalsEnabledBody(BaseModel):
-    #: 值刻意宣告成 `object` 而非 `bool`:pydantic v2 的寬鬆模式會把 "yes"/"1" 轉成 True,
-    #: 打錯的值就會被靜默接受成「開啟」。四鍵與型別一律由 `hub.set_enabled` 驗
-    #: (ValueError → 400 INVALID_SIGNALS_ENABLED),驗證規則單一定義在 hub。
-    enabled: dict[str, object]
-
-
 class RuleBody(BaseModel):
     """訊號規則的**形狀**層;語意(值域 / 唯一名 / levels / kind)單一定義在 `normalize_rule`。
 
@@ -863,23 +856,6 @@ def create_app(
         前端 reconnect 後拿它當 baseline 自癒 —— WS 斷線期間丟掉的訊號由這裡補回。
         """
         return {"signals": _signals(request).today_signals()}
-
-    @app.get("/api/stock/signals/enabled")
-    async def stock_signals_enabled(request: Request) -> dict:
-        return {"enabled": _signals(request).enabled()}
-
-    @app.put("/api/stock/signals/enabled")
-    async def stock_signals_enabled_put(request: Request, body: SignalsEnabledBody) -> dict:
-        """部分更新(只送要改的鍵);回傳合併後的完整四鍵狀態。"""
-        hub = _signals(request)
-        try:
-            # 值型別由 hub 驗(見 SignalsEnabledBody);cast 只是把驗證責任交出去
-            await hub.set_enabled(cast("dict[str, bool]", body.enabled))
-        except ValueError:
-            raise HTTPException(
-                status_code=400, detail={"error": "INVALID_SIGNALS_ENABLED"}
-            ) from None
-        return {"enabled": hub.enabled()}
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
 

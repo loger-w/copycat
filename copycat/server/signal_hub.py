@@ -49,7 +49,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from copycat.fileio import atomic_write_text
 from copycat.live.signal_state import (
     SWITCH_KEYS,
     SignalDetector,
@@ -200,10 +199,6 @@ class SignalHub:
         self._load_or_migrate_rules()
         self._rules_lock = asyncio.Lock()  # CRUD 的驗證 + 落檔 + swap 共同臨界區
         self._watch: set[str] = set()
-        # 舊四鍵開關家族:評估已改讀 slots,這裡只剩遷移來源與尚未退役的 route(T3b 刪)
-        self._enabled: dict[str, bool] = self._legacy_flags()
-        self._enabled_set: frozenset[str] = self._as_set(self._enabled)
-        self._enabled_lock = asyncio.Lock()  # read-modify-write + 落檔的共同臨界區(CC-7)
         self._basis_jobs: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
         #: CDP 基準的唯一快照:code → (基準日, cdp);日別是丟棄過期結果的判準(R3)
         self._basis_cache: dict[str, tuple[str, dict[str, int] | None]] = {}
@@ -680,30 +675,7 @@ class SignalHub:
         if not ok:
             logger.warning("Discord 兩層皆未送出 %s(WS/jsonl 不受影響)", row.get("id"))
 
-    # ---- enabled 開關(SC-12)----
-
-    @staticmethod
-    def _as_set(flags: dict[str, bool]) -> frozenset[str]:
-        return frozenset(key for key, value in flags.items() if value)
-
-    def enabled(self) -> dict[str, bool]:
-        return dict(self._enabled)
-
-    async def set_enabled(self, flags: dict[str, bool]) -> None:
-        """非法鍵 / 非 bool 值 → ValueError(route 轉 400 INVALID_SIGNALS_ENABLED)。
-
-        read-modify-write **與落檔同一個臨界區**(CC-7):兩者拆開時,先算後寫的那次可能
-        最後才落地,磁碟停在舊快照 —— 記憶體是對的、重啟後開關自己跳回去,零錯誤訊號。
-        驗證刻意留在鎖外:非法輸入不該排在別人的落檔後面。
-        """
-        for key, value in flags.items():
-            if key not in SWITCH_KEYS or not isinstance(value, bool):
-                raise ValueError(f"非法訊號開關:{key}={value!r}")
-        async with self._enabled_lock:
-            merged = {**self._enabled, **flags}
-            self._enabled = merged
-            self._enabled_set = self._as_set(merged)
-            await asyncio.to_thread(self._write_enabled, merged)
+    # ---- 舊四鍵開關檔(**唯讀**的遷移來源)----
 
     def _enabled_path(self) -> Path:
         return self._data_dir / _ENABLED_FILE
@@ -711,8 +683,9 @@ class SignalHub:
     def _legacy_flags(self) -> dict[str, bool]:
         """舊四鍵開關檔(遷移專用來源;fail-open 全開)。
 
-        規則化之後這份只在「規則檔不存在」時被讀一次,用來決定四條種子規則的
-        `enabled`;之後永遠不再回頭讀它(T3b 會把 route 與 setter 一併退役)。
+        規則化之後這份**只在「規則檔不存在」時被讀一次**,用來決定四條種子規則的
+        `enabled`;之後永遠不再回頭讀它。setter 與 route 已隨開關家族退役,這個檔
+        從此唯讀 —— 留著只為了讓既有部署的關閉態能跟著遷移過來。
         """
         flags = dict.fromkeys(SWITCH_KEYS, True)  # 缺檔 = 全開
         path = self._enabled_path()
@@ -731,14 +704,6 @@ class SignalHub:
             if isinstance(value, bool):
                 flags[key] = value
         return flags
-
-    def _write_enabled(self, flags: dict[str, bool]) -> None:
-        path = self._enabled_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(path, json.dumps(flags, ensure_ascii=False, indent=2))
-        except OSError as e:
-            logger.error("訊號開關檔寫入失敗(%s):%s", path, e)
 
 
 def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:

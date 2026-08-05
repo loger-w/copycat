@@ -29,7 +29,6 @@ from tests.helpers.boot import BootedClient
 from tests.helpers.fake_txo import FakeTxoSource
 from tests.server.test_stock_routes import FakeStockSource
 
-_ALL_ON = {"cdp_cross": True, "surge_crash": True, "vol_burst": True, "limit_lock": True}
 _RULES_FILE = "signal_rules.json"
 
 _RULE_PARAMS: dict[str, dict[str, float]] = {
@@ -209,8 +208,8 @@ class TestSignalsShutdownIsolation:
 
             for r in (
                 client.get("/api/stock/signals/today"),
-                client.get("/api/stock/signals/enabled"),
-                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
+                client.get("/api/stock/signals/rules"),
+                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
             ):
                 assert r.status_code == 503
                 assert r.json()["detail"]["error"] == "NOT_READY"
@@ -238,52 +237,6 @@ class TestSignalsTodayRoute:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
-
-
-class TestSignalsEnabledRoute:
-    def test_default_all_on(self, tmp_path: Path) -> None:
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
-
-    def test_put_round_trip(self, tmp_path: Path) -> None:
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            r = client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}})
-            assert r.status_code == 200
-            assert r.json() == {"enabled": {**_ALL_ON, "vol_burst": False}}
-            # 回傳的是新狀態,GET 必須同值(部分更新不得把其他三鍵清掉)
-            assert client.get("/api/stock/signals/enabled").json() == {
-                "enabled": {**_ALL_ON, "vol_burst": False}
-            }
-
-    def test_persists_across_restart(self, tmp_path: Path) -> None:
-        """SC-12:開關是持久化狀態,重啟 server 不得回到全開。"""
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            client.put("/api/stock/signals/enabled", json={"enabled": {"cdp_cross": False}})
-        app2, _ = make_app(tmp_path)
-        with BootedClient(app2, raise_server_exceptions=False) as client2:
-            assert client2.get("/api/stock/signals/enabled").json() == {
-                "enabled": {**_ALL_ON, "cdp_cross": False}
-            }
-
-    def test_unknown_key_400(self, tmp_path: Path) -> None:
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            r = client.put("/api/stock/signals/enabled", json={"enabled": {"nope": True}})
-            assert r.status_code == 400
-            assert r.json()["detail"]["error"] == "INVALID_SIGNALS_ENABLED"
-            assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
-
-    def test_non_bool_value_400_not_coerced(self, tmp_path: Path) -> None:
-        """值的驗證必須落在 hub(400 契約),不能讓 pydantic 把 "yes" 寬鬆轉成 True。"""
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            r = client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": "yes"}})
-            assert r.status_code == 400
-            assert r.json()["detail"]["error"] == "INVALID_SIGNALS_ENABLED"
-            assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
 
 
 class TestLegacyEnabledRouteGone:
@@ -471,15 +424,18 @@ class TestSignalRulesRoutes:
 
 
 class TestSignalRoutesNotReady:
-    """hub 缺席(stock engine 未就緒)→ 三條全 503 NOT_READY,不是 500 也不是空回應。"""
+    """hub 缺席(stock engine 未就緒)→ 訊號 route 全 503 NOT_READY,不是 500 也不是空回應。"""
 
-    def test_all_three_return_503(self, tmp_path: Path) -> None:
+    def test_all_signal_routes_return_503(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
+            rid = "r-1-000"
             responses = [
                 client.get("/api/stock/signals/today"),
-                client.get("/api/stock/signals/enabled"),
-                client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}}),
+                client.get("/api/stock/signals/rules"),
+                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
+                client.put(f"/api/stock/signals/rules/{rid}", json=_rule_body("limit_lock", "新")),
+                client.delete(f"/api/stock/signals/rules/{rid}"),
             ]
         for r in responses:
             assert r.status_code == 503
