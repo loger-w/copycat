@@ -52,6 +52,17 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
 
   const isMinute = mode !== "intraday" && mode !== "day";
 
+  // 空 bars 且非 ok 時的替代句(null = 照舊掛 CandleChart)。bars 非空一律不分態:
+  // 有資料就照常畫,某段降級不在本輪 scope。
+  const emptyNote =
+    data !== undefined && data.bars.length === 0
+      ? data.status === "timeout"
+        ? { text: "等待 TC4 回應中…(自動重試)", tone: "text-ink-muted" }
+        : data.status === "disconnected"
+          ? { text: "TC4 連線中斷,K 線暫不可用(自動重試中)", tone: "text-bear" }
+          : null
+      : null;
+
   // 量測 wrapper 的可用空間 → 圖表 viewBox 高度(round3 SC-6)。
   // 量的是「剩下多少」不是「圖表現在多高」—— 被量元素的高度必須由外層 flex 指派
   // (useContainerSize 的呼叫端契約),否則會形成「圖表高 → 量測值 → 圖表高」的迴圈。
@@ -98,6 +109,13 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 rounded-md border border-line bg-surface">
           <p className="text-sm text-bear">K 線載入失敗</p>
           <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
+        </div>
+      ) : emptyNote !== null ? (
+        // 空 bars 的三種來源不再共用「無 K 線資料」一句肯定語氣:timeout =「還在等」
+        // (TC4 協定下「慢」與「查無」不可分,故用進行式不下結論)、disconnected =
+        // 「斷線」。ok + 空才是「真的沒有」,交給 CandleChart 內的既有句子。
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
+          <p className={cn("text-sm", emptyNote.tone)}>{emptyNote.text}</p>
         </div>
       ) : (
         // key:換股或換模式時強制重掛,viewport 回到初始式。換模式會讓 total 由
