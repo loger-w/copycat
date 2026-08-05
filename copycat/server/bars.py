@@ -32,7 +32,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import time
-from typing import Awaitable, Callable, NamedTuple
+from typing import Awaitable, Callable, NamedTuple, cast
 
 from copycat.live.stock_source import Bar, BarsStatus
 
@@ -89,6 +89,25 @@ def worst_status(*statuses: BarsStatus) -> BarsStatus:
         if _STATUS_SEVERITY[s] > _STATUS_SEVERITY[worst]:
             worst = s
     return worst
+
+
+def _coerce_status(status: str) -> BarsStatus:
+    """fetcher 回來的 status 的唯一收斂點(review F2 / WL-COV-3)。
+
+    `BarsStatus` 是 Literal —— **只在 pyright 期生效**,runtime 什麼都攔不住,
+    而注入面是實在的(fake source 的欄位是裸 str,真實 source 也可能打錯字)。
+    少了這道收斂,`worst_status` 的嚴格查表會 KeyError 把整條 route 打成 500,
+    而 `build_daily` 那條不經它、會把未知值原封送進前端。
+
+    未知 → `"ok"` + warning:**與前端 `fetchBars` 的白名單正規化同語意**,
+    兩端對稱才不會出現「後端說 timeout、前端當 ok」這種零訊號的矛盾態。
+    不用 `"timeout"` —— 那會讓一個打錯字的欄位在畫面上長出「等待 TC4 回應中…」
+    並每 20s 重試,把設定錯誤偽裝成基礎設施問題。
+    """
+    if status in _STATUS_SEVERITY:
+        return cast("BarsStatus", status)
+    logger.warning("bars: 未知的 status %r,收斂為 ok", status)
+    return "ok"
 
 
 #: engine.bars_range(code, tf, start_date, end_date) -> BarsResult
@@ -267,7 +286,8 @@ async def build_daily(
     if marked is not None:
         return BarsResult([], marked)
     start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
-    fetched, status = await fetch(code, "D", start.isoformat(), today.isoformat())
+    fetched, raw_status = await fetch(code, "D", start.isoformat(), today.isoformat())
+    status = _coerce_status(raw_status)
     bars = fetched[-DAILY_MAX_BARS:]
     cache.daily_put(code, today.isoformat(), bars)
     if bars:
@@ -412,7 +432,7 @@ async def build_minute(
             # 只補缺口區間(端點取 min/max;中間已 memo 的日子重抓無害,省下逐日 REQ)
             lo, hi = missing[0], missing[-1]
             fetched, hist_status = await fetch(code, "1", lo.isoformat(), hi.isoformat())
-            statuses.append(hist_status)
+            statuses.append(_coerce_status(hist_status))
             if fetched:
                 cache.put_hist_range(code, lo, hi, fetched)
             else:
@@ -422,7 +442,10 @@ async def build_minute(
 
     entry = cache.today_get(code, today.isoformat())
     if entry is None:
-        today_bars, today_status = await fetch(code, "1", today.isoformat(), today.isoformat())
+        today_bars, raw_today_status = await fetch(code, "1", today.isoformat(), today.isoformat())
+        # 收斂在寫入 cache **之前**:域外值一旦進了 `_today`,15s 內的重播會把它
+        # 再送出去一次,收斂點就白做了
+        today_status = _coerce_status(raw_today_status)
         cache.today_put(code, today.isoformat(), today_bars, today_status)
     else:
         # cache 命中也要把存入時的 status 帶回來:`_empty` 的 key 含 days 而這層不含,
