@@ -311,7 +311,9 @@ describe("buildIntradayGeometry", () => {
       expect(g.highMark).not.toBeNull();
       expect(g.highMark!.priceMilli).toBe(2_600_000);
       expect(g.highMark!.x).toBeCloseTo(minuteToX(540, W), 6);
-      // 落在繪圖區內才算畫得出來(域裝不下時標記會壓到底部時間帶上)
+      // sanity(與 markFor 域外 guard 雙保險):guard 在時,「非 null 的標記」必然已在域內,
+      // 這兩行恆真 —— 它守的不是「標記壓到時間帶」那種不可達樣態,而是「域 / toY / PAD_Y
+      // 三者其中一個被改到不自洽」時能一起紅(例:toY 改了留邊而域沒跟著)。
       expect(g.highMark!.y).toBeGreaterThanOrEqual(PAD_Y);
       expect(g.highMark!.y).toBeLessThanOrEqual(H - X_LABEL_H - PAD_Y);
     });
@@ -390,6 +392,76 @@ describe("buildIntradayGeometry", () => {
       expect(overlayLines(overlay, g, { cdp: false, ma: true }).map((l) => l.level)).toEqual([
         "ma5",
       ]);
+    });
+
+    /** SC-3 的實例回歸(2330 2026-07-30 盤後)。臨界形狀刻意留在測試裡:域上緣
+     *  2_259_500 由**低側**(ref − lo = 45_000)決定,當日高 2_260_000 只差 0.5 元被裁掉 ——
+     *  差這麼小的失效沒有任何畫面訊號,只是標記不見。 */
+    it("實例回歸:域上緣差 0.5 元裝不下當日高(2330 2026-07-30)", () => {
+      const ms = minutes([
+        [540, { c: 2_210_000, v: 1 }],
+        [541, { c: 2_165_000, v: 1 }],
+        [542, { c: 2_255_000, v: 1, h: 2_260_000 }],
+      ]);
+      const g = buildIntradayGeometry(
+        { minutes: ms, meta: null, high: 2_260_000 },
+        { width: W, height: H },
+      );
+      expect(g.yDomain[1]).toBeGreaterThanOrEqual(2_260_000);
+      expect(g.highMark).not.toBeNull();
+      expect(g.highMark!.priceMilli).toBe(2_260_000);
+    });
+
+    /** 🔴 F5:`ref = 0`(meta 無 ref **且**收盤全濾光)時沒有中心錨點可言 —— 對稱域退化成
+     *  [−1, 1]。此時把 high/low 併進半幅池只是放大垃圾:域變成 [−1.1×high, 1.1×high],
+     *  3 點 fallback 會印出負價位刻度,標記還會畫在錯位的 y 上。ref = 0 一律維持退化域。 */
+    const DEGENERATE = minutes([
+      [540, { c: 0, v: 0, h: 2_600_000, l: 2_370_000 }],
+      [541, { c: 0, v: 0 }],
+    ]);
+
+    it("ref = 0(無 meta ref 且收盤全 0)→ 域不受 high/low 影響,標記皆不畫", () => {
+      const base = buildIntradayGeometry(
+        { minutes: DEGENERATE, meta: null },
+        { width: W, height: H },
+      );
+      const g = buildIntradayGeometry(
+        { minutes: DEGENERATE, meta: null, high: 2_600_000, low: 2_370_000 },
+        { width: W, height: H },
+      );
+      expect(g.yDomain).toEqual(base.yDomain);
+      expect(g.highMark).toBeNull();
+      expect(g.lowMark).toBeNull();
+    });
+
+    /** markFor 吃 norm 後的值(不是原始 `input.low`)這件事,只有在**退化域**下才測得出來:
+     *  域 [−1, 1] 含 0,raw 版會通過域外 guard、反查命中 `l: 0` 的那一分鐘,畫出一個
+     *  價位 0 的假標記。正常域(下緣 > 0)時 0 會被 guard 自然擋掉,兩版無差別。 */
+    it("low = 0 且有分鐘的 l 為 0(退化域)→ 仍不畫假標記", () => {
+      const zeros = minutes([
+        [540, { c: 0, v: 0, l: 0 }],
+        [541, { c: 0, v: 0 }],
+      ]);
+      const g = buildIntradayGeometry(
+        { minutes: zeros, meta: null, low: 0 },
+        { width: W, height: H },
+      );
+      expect(g.lowMark).toBeNull();
+    });
+
+    /** 白名單 1 的反向釘子:有漲跌停時域**恰為** [lower, upper],high/low 一絲都不得洩入
+     *  (本輪只動 autofit 分支)。用遠在域外的極值當探針,洩入的話域會立刻被撐爆。 */
+    it("有漲跌停 → 域恰為 [lower, upper],完全不受 high/low 影響", () => {
+      const g = buildIntradayGeometry(
+        {
+          minutes: minutes([[540, { c: 2_320_000, v: 1 }]]),
+          meta: META,
+          high: 9_999_000,
+          low: 1_000,
+        },
+        { width: W, height: H },
+      );
+      expect(g.yDomain).toEqual([2_090_000, 2_550_000]);
     });
   });
 
