@@ -1,26 +1,39 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 
+import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 import {
   useCancelOrder,
   useCapitalOrders,
+  useCapitalPositions,
   useCapitalWsStatus,
+  useClosePosition,
   useSubmitFuture,
 } from "@/hooks/useCapital";
+import { closeBodyOf } from "@/lib/close-order";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import {
   buildFuturesLadder,
+  futCloseEstimate,
   futExchangeContract,
   splitMyLots,
   type FutLadderRow,
 } from "@/lib/futures-ladder";
 import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
+import { settlementCountdown } from "@/lib/settlement";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
-import type { FuturesProductState } from "@/types";
+import type { CapitalPosition, FuturesProductState } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
+
+/** 本機日曆日 `YYYY-MM-DD`(結算倒數的「今天」;與 FuturesPage header badge 同口徑)。 */
+function todayOf(now: Date): string {
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${m}-${d}`;
+}
 
 interface Props {
   product: string; // TXF/MXF/TMF
@@ -52,6 +65,7 @@ export function FuturesLadder({
   // 值式會用到 stale state(review P2-9(3))
   const setQtyState = onQtyState ?? setQtyLocal;
   const [dayTrade, setDayTrade] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const centerRef = useRef<HTMLDivElement | null>(null);
   const progScroll = useRef(false);
@@ -63,11 +77,34 @@ export function FuturesLadder({
   const wsStatus = useCapitalWsStatus();
   const submitFuture = useSubmitFuture();
   const cancelOrder = useCancelOrder();
+  const closePosition = useClosePosition();
   const { data: ordersData } = useCapitalOrders();
+  const { data: positionsData } = useCapitalPositions();
 
   const resolvedYm = state?.resolved_contract ?? null;
   const contract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
   const myLots = contract !== null ? splitMyLots(ordersData?.orders ?? [], contract) : [];
+  const allSeqNos = myLots.flatMap((l) => l.seqNos);
+
+  // 一鍵平倉對象:期貨 + **契約完整字串相等**(前綴比對會把 MXF 的部位掃進 TXF 的平倉)
+  const closeTargets: { pos: CapitalPosition; est: number | null }[] =
+    contract === null
+      ? []
+      : (positionsData?.positions ?? [])
+          .filter((p) => p.market === "fut" && p.stock_no === contract)
+          .map((p) => ({ pos: p, est: futCloseEstimate(p, contract, state) }));
+  // 任一筆估不出價就整顆鎖住:後端對 price<=0 直接 raise,送出去只會是一半成功一半拒單
+  const closeBlocked = closeTargets.some((t) => t.est === null);
+  const closeDisabled = closeTargets.length === 0 || closeBlocked;
+  const closeTitle = closeBlocked
+    ? "無行情估價"
+    : closeTargets.length === 0
+      ? "無本契約部位"
+      : undefined;
+
+  // T-0 警示(SC-6):元件自算,不靠父層傳 —— 右欄可獨立於期貨頁掛載
+  const settleT0 =
+    resolvedYm !== null && settlementCountdown(resolvedYm, todayOf(new Date())) === 0;
 
   const centerMilli = state?.p ?? state?.ref ?? null;
   const rows: FutLadderRow[] =
@@ -150,6 +187,20 @@ export function FuturesLadder({
     for (const seq of seqNos) cancelOrder.mutate({ seq_no: seq, market: "fut" });
   }
 
+  // 全撤 = 對本契約所有活單做同一件事 → 沿用點刪的直刪規則(只減暴露,不加彈窗)
+  function cancelAll(): void {
+    cancelLot(allSeqNos);
+  }
+
+  // 平倉是「開新反向倉位」,暴露增加 → 一律過確認彈窗(與 CapitalPositionsList 同規)
+  function confirmClose(): void {
+    setCloseOpen(false);
+    for (const t of closeTargets) {
+      if (t.est === null) continue; // 型別收斂;closeDisabled 已擋整批
+      closePosition.mutate(closeBodyOf(t.pos, t.est));
+    }
+  }
+
   // 自動解除:換商品
   useEffect(() => {
     dispatchArm({ type: "symbol_changed" });
@@ -217,7 +268,13 @@ export function FuturesLadder({
           跟隨置中
         </button>
       </div>
-      {/* 武裝列:武裝/解除 + 當沖 + 口數快捷 */}
+      {/* 結算 T-0(SC-6):最後交易日誤留倉 = 現金結算,警示放在送單面最上緣 */}
+      {settleT0 ? (
+        <div className="border-b border-line bg-amber-500/20 px-2 py-0.5 text-center text-xs font-bold text-amber-400">
+          ⚠ 今日結算
+        </div>
+      ) : null}
+      {/* 武裝列:武裝/解除 + 當沖 + 口數快捷 + 全撤/平倉 */}
       <div className="border-b border-line px-2 py-1.5">
         <div className="flex items-center gap-2">
           <button
@@ -278,6 +335,30 @@ export function FuturesLadder({
             }}
             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
           />
+        </div>
+        {/* 減暴露的兩顆:與武裝無關(武裝只管點價直送),斷線/未武裝時照樣要能收手 */}
+        <div className="mt-1 flex items-center gap-1">
+          <button
+            type="button"
+            disabled={allSeqNos.length === 0}
+            title={allSeqNos.length === 0 ? "無本契約活單" : undefined}
+            onClick={cancelAll}
+            className="flex-1 rounded border border-line py-0.5 text-xs text-ink-muted hover:border-loss hover:text-loss disabled:opacity-40"
+          >
+            全撤
+          </button>
+          <button
+            type="button"
+            disabled={closeDisabled || closePosition.isPending}
+            title={closeTitle}
+            onClick={() => {
+              touchIdle();
+              setCloseOpen(true);
+            }}
+            className="flex-1 rounded border border-line py-0.5 text-xs text-ink-muted hover:border-loss hover:text-loss disabled:opacity-40"
+          >
+            平倉
+          </button>
         </div>
         {hint !== null ? (
           <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
@@ -352,6 +433,22 @@ export function FuturesLadder({
             </div>
           ))}
         </div>
+      )}
+      {/* 開著時部位消失 / 行情斷估價 → closeDisabled 轉真自動收窗(不留一個送不出的確認鍵) */}
+      {closeOpen && !closeDisabled && (
+        <CapitalConfirmDialog
+          title="確認平倉"
+          rows={[
+            { label: "契約", value: contract ?? "" },
+            ...closeTargets.map((t, i) => ({
+              // label 進 dialog 的 React key → 多筆時必須各自唯一
+              label: closeTargets.length === 1 ? "部位" : `部位 ${i + 1}`,
+              value: `${t.pos.qty > 0 ? "多" : "空"} ${Math.abs(t.pos.qty)} 口 · 估價 ${String(t.est)}`,
+            })),
+          ]}
+          onConfirm={confirmClose}
+          onCancel={() => setCloseOpen(false)}
+        />
       )}
     </div>
   );
