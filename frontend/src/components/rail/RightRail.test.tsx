@@ -154,6 +154,17 @@ describe("RightRail 內容跟隨 context(SC-3 / D2)", () => {
     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 個股專屬控制
   });
 
+  // LP-5:閃電 tab 是唯一渲染 PriceLadder 的地方,而部位條插在卡片最底 —— 這則守的是
+  // 「部位資料到達不會擠掉價格列」的整合面(PriceLadder.test.tsx 只驗元件單體)。
+  it("閃電 tab + 本檔部位 → 部位條出現且價格列仍在(LP-5)", async () => {
+    positions = [position()];
+    render(rail(STOCK_CTX));
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(bar.textContent).toContain("現股 2張 @100");
+    expect(screen.getByLabelText("買 100")).toBeTruthy();
+    expect(screen.getByLabelText("賣 100.5")).toBeTruthy();
+  });
+
   it("期貨 context → 期貨閃電梯,標題列顯示商品 + 契約(D-12)", () => {
     render(rail(FUT_CTX));
     expect(screen.getByText("TXF")).toBeTruthy();

@@ -501,6 +501,31 @@ describe("PriceLadder 部位條(SC-1 / SC-6 / SC-7)", () => {
     expect(within(bar).getByText("打平 100.5")).toBeTruthy();
   });
 
+  // LP-3:位置本身是安全需求(D5)—— 部位條插在梯**上方**會讓整梯下移,武裝中的
+  // 點擊目標就在部位資料到達的那一刻位移。斷言它是卡片 root 的最後一個子元素。
+  it("部位條在卡片最底 —— 價格梯 scroll 區之後(LP-3 / D5)", async () => {
+    const { container } = renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const bar = await screen.findByTestId("ladder-position-bar");
+    const card = container.firstElementChild!;
+    expect(card.lastElementChild).toBe(bar);
+    const scroller = screen.getByLabelText("買 100").closest(".overflow-y-auto")!;
+    // DOCUMENT_POSITION_FOLLOWING = 4:bar 在 scroll 容器之後
+    expect(scroller.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4);
+  });
+
+  it("現價前進 → pnl 隨之重算(LP-6)", async () => {
+    mockCapitalFetch({
+      "/api/capital/positions": () => json({ positions: [capitalPosition()] }),
+    });
+    const { rerender } = render(ladder("2330", { ...LAST, p: 102_000 }));
+    expect(within(await screen.findByTestId("ladder-position-bar")).getByText("+3,284")).toBeTruthy();
+    rerender(ladder("2330", { ...LAST, p: 103_000 }));
+    // 6000 − 51.3 − 670.839 = 5277.861
+    expect(
+      within(screen.getByTestId("ladder-position-bar")).getByText("+5,278"),
+    ).toBeTruthy();
+  });
+
   it("空手 → 部位條整段不渲染(非本檔 / 非 sec / qty 0 皆濾掉)", async () => {
     mockCapitalFetch({
       "/api/capital/positions": () =>
@@ -598,6 +623,13 @@ describe("PriceLadder 梯內標記(SC-4)", () => {
     await screen.findByTestId("ladder-position-bar");
     const row = screen.getByLabelText("買 100.5").closest("[data-price]")!;
     expect(row.getAttribute("title")).toBe("打平(現股)、均價(融資)");
+  });
+
+  it("標記不吃點擊(LP-2)—— 左緣正是刪單紅方格與買鈕的點擊區", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const be = await screen.findByTestId("ladder-be-mark");
+    expect(be.className).toContain("pointer-events-none");
+    expect(screen.getByTestId("ladder-avg-mark").className).toContain("pointer-events-none");
   });
 
   it("反灰列上的標記不跟著淡化(自帶 opacity-100)", async () => {
