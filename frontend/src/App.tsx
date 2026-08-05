@@ -228,6 +228,8 @@ export default function App() {
                   wsStatus={futuresStream.wsStatus}
                   // 期現價差的現貨腿(SC-5);App 已持有,傳進去即可
                   twse={twse}
+                  // tab 是 hidden 保留而非 unmount → 主圖的背景輪詢要靠這道 gate 停(LF-2)
+                  active={tab === "futures"}
                 />
               </Suspense>
             </div>

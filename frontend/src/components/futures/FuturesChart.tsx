@@ -231,11 +231,14 @@ interface Props {
   state: FuturesProductState | null;
   /** HOT → YYYYMM;null = 合約未解析 → 均價線不畫(不做前綴猜測) */
   resolvedYm: string | null;
+  /** 使用者是否正看著期貨 tab(App 的 `tab === "futures"`)。false → 停背景輪詢;
+   *  未給時預設 true(獨立使用與既有呼叫路徑不靜默停更)。review LF-2。 */
+  active?: boolean;
 }
 
-export function FuturesChart({ product, state, resolvedYm }: Props) {
+export function FuturesChart({ product, state, resolvedYm, active = true }: Props) {
   const [mode, setMode] = useState<FutChartMode>(initialFutChartMode);
-  const { data, isPending, isError, error } = useFuturesBars(product, mode);
+  const { data, isPending, isError, error } = useFuturesBars(product, mode, active);
   const { data: oi } = useOiLevels();
   const { data: positionsData } = useCapitalPositions();
 
