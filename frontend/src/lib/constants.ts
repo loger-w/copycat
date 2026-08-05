@@ -63,6 +63,9 @@ export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 /** 訊號提示音開關("on" / "off")— hooks/useSignalSound.ts */
 export const SOUND_KEY = "copycat-signal-sound";
 
+/** 手續費折數 — components/stock/PriceLadder.tsx */
+export const FEE_DISCOUNT_KEY = "copycat-fee-discount";
+
 /** 江波圖呈現模式(side / overlay)— components/corr/RiverPanel.tsx */
 export const RIVER_MODE_KEY = "copycat-river-mode";
 /** 江波圖**關掉**哪些腿(JSON 陣列)— components/corr/RiverPanel.tsx */
