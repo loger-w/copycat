@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from copycat.stock_names import load_names
-from copycat.stock_watchlist import Watchlist, WatchlistError
+from copycat.stock_watchlist import UNGROUPED_NAME, Watchlist, WatchlistError
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +39,15 @@ __all__ = [
     "Bot",
     "WatchlistServiceLike",
     "create_bot",
+    "group_choices",
     "handle_add",
+    "handle_group_add",
+    "handle_group_remove",
+    "handle_group_rename",
+    "handle_groups",
     "handle_list",
     "handle_remove",
+    "handle_ungroup",
 ]
 
 TOKEN_ENV = "DISCORD_BOT_TOKEN"
@@ -52,10 +58,22 @@ _ERROR_TEXT = {
     "WATCHLIST_FULL": "自選已達 30 檔上限",
     "BAD_CODE": "股號格式不正確",
     "BAD_GROUP": "群組名稱不合法",
+    "GROUP_NOT_FOUND": "找不到該群組",
 }
 _NOT_READY = "服務未就緒"
 _FALLBACK_ERROR = "儲存失敗"
 _UNEXPECTED = "操作失敗,請看伺服器 log"
+#: 「未分組」是 `_format_groups` 的**衍生桶**不是群組:對它做群組操作沒有對象。
+#: 攔在 handler 而不是讓 service 回 `GROUP_NOT_FOUND` —— 後者要留給「真的打錯名字」。
+_RESERVED_BLOCKED = f"「{UNGROUPED_NAME}」不是群組,無法操作"
+_UNKNOWN_CODE_HINT = "(查無此檔名稱,請確認代碼)"
+
+#: autocomplete 的取值上限。Discord 的 autocomplete 沒有 defer,3 秒不回就整份丟掉;
+#: 而 `service.current()` 與寫入共用同一把鎖,鎖被 `_commit` 的 ZMQ 往返佔住時只能放手。
+_AUTOCOMPLETE_TIMEOUT = 1.0
+#: Discord `Choice` 的 name / value 各 100 字上限;單一超長項會讓**整份**回應被拒收。
+_CHOICE_NAME_LIMIT = 100
+_CHOICE_LIMIT = 25
 
 
 # ---- env(capital/factory 同語意)----
@@ -176,12 +194,18 @@ async def handle_add(
     code: str,
     group: str | None = None,
 ) -> str:
+    """SC-5:名稱查不到只**提醒**不擋 —— 靜態名稱表落後於新上市/改名是常態,
+    擋下去會讓合法股號加不進來,而使用者最需要的正是「剛上市那檔」。"""
+
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        await service.add(code, group)
+        _, changed = await service.add(code, group)
+        hint = "" if _stock_name(code) else _UNKNOWN_CODE_HINT
+        if not changed:
+            return f"已在自選:{_label(code)}(無變更){hint}"
         suffix = f"(群組:{group})" if group else ""
-        return f"已加入自選:{_label(code)}{suffix}"
+        return f"已加入自選:{_label(code)}{suffix}{hint}"
 
     return await _run(interaction, action)
 
@@ -194,7 +218,9 @@ async def handle_remove(
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        await service.remove(code)
+        _, changed = await service.remove(code)
+        if not changed:
+            return f"不在自選:{_label(code)}"
         return f"已從自選移除:{_label(code)}"
 
     return await _run(interaction, action)
@@ -227,8 +253,157 @@ def _format_watchlist(wl: Watchlist) -> str:
         lines.append(f"【{group['name']}】" + "、".join(_label(c) for c in members))
     rest = [c for c in codes if c not in grouped]
     if rest:
-        lines.append("【未分組】" + "、".join(_label(c) for c in rest))
+        lines.append(f"【{UNGROUPED_NAME}】" + "、".join(_label(c) for c in rest))
     return "\n".join(lines)
+
+
+async def handle_groups(
+    service: WatchlistServiceLike | None,
+    interaction: Interaction,
+) -> str:
+    async def action() -> str:
+        if service is None:
+            return _NOT_READY
+        return _format_groups(await service.current())
+
+    return await _run(interaction, action)
+
+
+def _format_groups(wl: Watchlist) -> str:
+    """群組**名冊**(SC-1)—— 與 `_format_watchlist` 的差別是這裡列的是群組本身,
+    所以 0 檔群組必須出現:剛建好還沒放東西的群組不能看起來像建立失敗。
+
+    「未分組」標注「衍生,非群組」是為了讓它跟真群組在視覺上可分 —— 它只是
+    「不在任何群組的股票」的計數,對它下 `/watch group remove` 沒有對象可刪。
+    """
+    codes = list(wl["codes"])
+    groups = wl["groups"]
+    grouped = {c for g in groups for c in g["codes"] if c in codes}
+    rest = len([c for c in codes if c not in grouped])
+    if not groups:
+        return "尚無群組" if not codes else f"尚無群組;{UNGROUPED_NAME} {rest} 檔"
+    lines = [f"群組 {len(groups)} 個"]
+    for group in groups:
+        members = [c for c in group["codes"] if c in codes]
+        lines.append(f"【{group['name']}】{len(members)} 檔")
+    if rest:
+        lines.append(f"{UNGROUPED_NAME} {rest} 檔(衍生,非群組)")
+    return "\n".join(lines)
+
+
+async def handle_group_add(
+    service: WatchlistServiceLike | None,
+    interaction: Interaction,
+    name: str,
+) -> str:
+    """保留名**不在此攔** —— 群組名的合法性只有 `stock_watchlist.normalize` 一份定義,
+    handler 再判一次就成了第二份會漂移的規則(建立保留名的正確答案是「名稱不合法」)。"""
+
+    async def action() -> str:
+        if service is None:
+            return _NOT_READY
+        _, changed = await service.create_group(name)
+        if not changed:
+            return f"群組已存在:{name}"
+        return f"已建立群組:{name}"
+
+    return await _run(interaction, action)
+
+
+async def handle_group_remove(
+    service: WatchlistServiceLike | None,
+    interaction: Interaction,
+    name: str,
+) -> str:
+    async def action() -> str:
+        if service is None:
+            return _NOT_READY
+        if name.strip() == UNGROUPED_NAME:
+            return _RESERVED_BLOCKED
+        await service.delete_group(name)
+        return f"已刪除群組:{name}(成員移至{UNGROUPED_NAME})"
+
+    return await _run(interaction, action)
+
+
+async def handle_group_rename(
+    service: WatchlistServiceLike | None,
+    interaction: Interaction,
+    old: str,
+    new: str,
+) -> str:
+    """只攔 `old`(操作對象):`new` 是保留名時語意是「取的新名不合法」,交 service →
+    normalize → `BAD_GROUP`,兩種錯誤各自說得清楚(design R2)。"""
+
+    async def action() -> str:
+        if service is None:
+            return _NOT_READY
+        if old.strip() == UNGROUPED_NAME:
+            return _RESERVED_BLOCKED
+        _, changed = await service.rename_group(old, new)
+        if not changed:
+            return f"名稱未變:{new}"
+        return f"已改名:{old} → {new}"
+
+    return await _run(interaction, action)
+
+
+async def handle_ungroup(
+    service: WatchlistServiceLike | None,
+    interaction: Interaction,
+    code: str,
+    group: str,
+) -> str:
+    async def action() -> str:
+        if service is None:
+            return _NOT_READY
+        if group.strip() == UNGROUPED_NAME:
+            return _RESERVED_BLOCKED
+        _, changed = await service.ungroup(code, group)
+        if not changed:
+            return f"{_label(code)} 不在群組 {group}"
+        return f"已自群組 {group} 移出:{_label(code)}(仍在自選)"
+
+    return await _run(interaction, action)
+
+
+async def group_choices(service: WatchlistServiceLike | None, current: str) -> list[str]:
+    """`group` / `name` / `old` 參數的 autocomplete 選項(SC-4)。
+
+    **三態一律回空清單**(service 未就緒 / 逾時 / 例外):autocomplete 不能 defer,
+    Discord 只給 3 秒;而這條路與寫入共用 `WatchlistService` 的單鎖,寫入正卡在 ZMQ
+    往返時堆積等鎖 task 只會讓後面每一次輸入都更慢。回空 = 使用者仍可手打群組名。
+
+    子字串(非前綴)過濾:中文群組名沒有前綴語意,打「主力」要找得到「波段主力」。
+    """
+    if service is None:
+        return []
+    try:
+        wl = await asyncio.wait_for(service.current(), _AUTOCOMPLETE_TIMEOUT)
+    except TimeoutError:
+        logger.warning("群組 autocomplete 逾時(%.1fs),回空選單", _AUTOCOMPLETE_TIMEOUT)
+        return []
+    except Exception:
+        # 指令邊界同理:這裡拋出去只會讓使用者看到選單卡住,且真因埋在 discord.py 的 log
+        logger.exception("群組 autocomplete 取得自選失敗")
+        return []
+    needle = current.strip()
+    out: list[str] = []
+    for group in wl["groups"]:
+        name = group["name"]
+        if len(name) > _CHOICE_NAME_LIMIT:
+            logger.warning(
+                "群組名稱超過 Discord Choice 的 %d 字上限,autocomplete 略過:%.20s…",
+                _CHOICE_NAME_LIMIT,
+                name,
+            )
+            continue
+        if needle and needle not in name:
+            continue
+        out.append(name)
+        if len(out) >= _CHOICE_LIMIT:
+            break
+    return out
 
 
 # ---- Bot ----
@@ -366,28 +541,69 @@ def create_bot(service: WatchlistServiceLike | None, hub: Any) -> Bot | None:
         logger.info("discord.py 未安裝(extras [discord]),Discord bot 不啟用")
         return None
 
-    client = discord.Client(intents=discord.Intents.default())
+    client = discord.Client(
+        # 群組名是自由文字且會原樣回填訊息(`已建立群組:@everyone`)—— 沒有這個
+        # 設定,任何人都能透過 `/watch group add` 把 bot 變成 mention 擴音器。
+        intents=discord.Intents.default(),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
     tree = app_commands.CommandTree(client)
-    group = app_commands.Group(name="watch", description="自選股管理")
+    # 變數名 `watch` / `group_cmd` 是刻意的:叫 `group` 會遮蔽 `_add(..., group=...)` 參數,
+    # 且子群組一旦叫 `group`,既有的 `@group.command` 會**靜默**改掛到子群組底下。
+    watch = app_commands.Group(name="watch", description="自選股管理")
+    group_cmd = app_commands.Group(name="group", description="群組管理", parent=watch)
 
-    @group.command(name="add", description="加入自選")
+    async def _group_ac(interaction: Any, current: str) -> list[Any]:
+        return [
+            app_commands.Choice(name=n, value=n) for n in await group_choices(service, current)
+        ]
+
+    @watch.command(name="add", description="加入自選")
     @app_commands.describe(code="股號(例:2330)", group="群組名稱(選填)")
+    @app_commands.autocomplete(group=_group_ac)
     async def _add(interaction: Any, code: str, group: str | None = None) -> None:
         await handle_add(service, interaction, code, group)
 
-    @group.command(name="remove", description="移出自選")
+    @watch.command(name="remove", description="移出自選")
     @app_commands.describe(code="股號(例:2330)")
     async def _remove(interaction: Any, code: str) -> None:
         await handle_remove(service, interaction, code)
 
-    @group.command(name="list", description="列出自選")
+    @watch.command(name="list", description="列出自選")
     async def _list(interaction: Any) -> None:
         await handle_list(service, interaction)
+
+    @watch.command(name="groups", description="列出群組")
+    async def _groups(interaction: Any) -> None:
+        await handle_groups(service, interaction)
+
+    @watch.command(name="ungroup", description="自群組移出(仍留在自選)")
+    @app_commands.describe(code="股號(例:2330)", group="群組名稱")
+    @app_commands.autocomplete(group=_group_ac)
+    async def _ungroup(interaction: Any, code: str, group: str) -> None:
+        await handle_ungroup(service, interaction, code, group)
+
+    @group_cmd.command(name="add", description="建立群組")
+    @app_commands.describe(name="群組名稱")
+    async def _group_add(interaction: Any, name: str) -> None:
+        await handle_group_add(service, interaction, name)
+
+    @group_cmd.command(name="remove", description="刪除群組(成員移至未分組)")
+    @app_commands.describe(name="群組名稱")
+    @app_commands.autocomplete(name=_group_ac)
+    async def _group_remove(interaction: Any, name: str) -> None:
+        await handle_group_remove(service, interaction, name)
+
+    @group_cmd.command(name="rename", description="群組改名")
+    @app_commands.describe(old="原群組名稱", new="新群組名稱")
+    @app_commands.autocomplete(old=_group_ac)
+    async def _group_rename(interaction: Any, old: str, new: str) -> None:
+        await handle_group_rename(service, interaction, old, new)
 
     bot = Bot(
         client=client,
         tree=tree,
-        command=group,
+        command=watch,
         token=token,
         channel_id=_channel_id(),
         service=service,
