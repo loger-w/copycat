@@ -57,6 +57,15 @@ def neutralize_external_env() -> None:
     3. notify.py 是第三條出口(webhook),且是**舊語意**(值空白也 fallback .env)+
        自有 cache —— 空字串壓不住它,直接把 cache 釘成「已解析且為 None」(review R-6)。
 
+    **FinMind(`FINMIND_TOKEN` / `oi_levels`)刻意不在中和清單內**(review LF-4):
+    verify server 的存在理由正是「不碰 TC4 也能驗 HTTP 層」,而 `/api/futures/oi-levels`
+    要驗的就是**真打 FinMind** 那條路(design §10:「oi-levels 在 fake-source server 上
+    直接真打 FinMind(不碰 TC4)」)。中和它等於把該 endpoint 的驗證能力一起關掉,
+    而它的失效樣態(降級成空 shape + 200)與「壓制生效」在畫面上完全同形。
+    FinMind 也不具備本函式要防的那個風險等級 —— 讀取型 REST,不會像 SKCOM 那樣載 DLL、
+    也不會像 bot token 那樣真的登入一個常駐連線。**測試側則相反**:`tests/conftest.py`
+    有第三支 autouse fixture 把它中和掉(測試不該有任何真打上游的路徑)。
+
     程序生命週期內不還原(verify server 整個 process 都不該碰真憑證);測試要呼叫它時
     自行先用 monkeypatch 登記還原點(tests/server/test_verify.py 示範)。
     """

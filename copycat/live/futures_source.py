@@ -128,8 +128,18 @@ class FuturesQuoteSource(TC4QuoteSource):
         `session="allday"`(僅 tf="1" 有意義)= 近全段:域換成 `FUTURES_ALLDAY_DOMAIN`,
         且**取數窗前移到 (start_date − 1 日) 的 UTC 16 時** —— 台北日 D 的凌晨段
         (00:00–05:00)落在 UTC 日 D−1 的 16:00–21:00,不前移就整段抓不到,而失效樣態
-        是「圖照畫、只是每天凌晨五小時憑空消失」。前移窗會多收 start−1 日的夜盤前半
-        (台北日期 = start−1,域內但窗外),parse 後以台北日期 filter 掉。
+        是「圖照畫、只是每天凌晨五小時憑空消失」。
+
+        窗兩端各自多收什麼(方向不對稱,TZ-1 更正):
+
+        - **低端**多收 UTC (start−1) 16:00–23:59 = **台北 start_date 的 00:00–07:59**
+          —— 正是要救回來的那一段,全部落在 [start_date, end_date] 內,不會被 filter 掉。
+          台北 start−1 的夜盤前半(15:01–23:59)= UTC (start−1) 07:01–15:59,**根本不在
+          窗內**,不是靠 filter 擋掉的。
+        - **高端**多收 UTC end_date 16:00–23:00 = **台北 end_date+1 的 00:00–07:00**
+          —— 這才是 filter 真正擋掉的那段(次日凌晨盤)。
+
+        所以 parse 後的台北日期 filter 是**單邊**防線(擋高端);低端不需要它。
         """
         self._ensure_connected()
         sym = futures_symbol(product)

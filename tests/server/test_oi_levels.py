@@ -6,12 +6,17 @@ route 層則把 service 換掉。列資料形狀取自 design §2 的 2026-08-05
 
 from __future__ import annotations
 
+import asyncio
 import email.message
 import io
 import json
+import logging
+import time
 import urllib.error
 import urllib.parse
 from datetime import date as _date
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,6 +31,10 @@ from tests.helpers.fake_txo import FakeTxoSource
 _TODAY = _date(2026, 8, 5)
 _YM = "202608"
 _EMPTY = {"date": None, "contract": None, "strikes": []}
+
+#: 真實作的 restore point。**module import 期取**:conftest 的 autouse fixture 會在
+#: 每條測試前把它換成 `lambda: {}`(FinMind 憑證中和),那之後就抓不到本尊了。
+_REAL_DOTENV_VALUES = oi._dotenv_values
 
 
 def _row(
@@ -112,8 +121,14 @@ def _http_error(code: int) -> urllib.error.HTTPError:
 
 @pytest.fixture(autouse=True)
 def _fresh_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """module 級快取跨測試殘留 = 下一條測試看到的是上一條的答案。"""
+    """module 級快取跨測試殘留 = 下一條測試看到的是上一條的答案。
+
+    `_dotenv_cache` 一併重置(review TC-5):它是**解析一次就黏住**的 module 級狀態,
+    conftest 已把它設 None,這裡再顯式一次讓本檔的 .env 案例彼此不互相汙染
+    (前一條測到的檔案內容會直接變成後一條的答案)。
+    """
     monkeypatch.setattr(oi, "_cache", oi.OiLevelsCache())
+    monkeypatch.setattr(oi, "_dotenv_cache", None)
 
 
 # ---------- service:口徑與 pivot ----------
@@ -263,6 +278,120 @@ class TestFetchOiLevels:
 
         assert http.calls == 2
         assert got["strikes"] == [{"strike": 24000, "call_oi": 7, "put_oi": 0}]
+
+
+class TestSingleFlight:
+    """單飛鎖:同鍵並發只讓一條真的去打 FinMind(review TC-6)。
+
+    鎖若失效,失效樣態不是紅色而是**配額被乘上並發數** —— 前端一次重新整理就可能同時
+    發多發(query invalidate + 換 tab 重掛),而回應內容完全一樣,沒有任何跡象。
+    """
+
+    async def test_concurrent_same_key_makes_one_round_trip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class SlowHttp(FakeHttp):
+            """第一發在 worker thread 內卡住一下 —— 讓其餘 4 發**必定**在它回來之前
+            進場(否則鎖有沒有生效會取決於執行緒排程的運氣)。"""
+
+            def __call__(self, req: Any, timeout: float = 0.0) -> FakeResp:
+                time.sleep(0.05)
+                return super().__call__(req, timeout)
+
+        http = SlowHttp(_payload([_row(strike=24000.0, cp="call", open_interest=5)]))
+        monkeypatch.setattr(oi, "urlopen", http)
+
+        got = await asyncio.gather(
+            *(oi.fetch_oi_levels(_YM, token="tok", today=_TODAY) for _ in range(5))
+        )
+
+        assert http.calls == 1  # 5 發同鍵 → 1 次 HTTP 往返
+        assert all(g == got[0] for g in got)
+        assert got[0]["strikes"] == [{"strike": 24000, "call_oi": 5, "put_oi": 0}]
+
+
+class TestFreshnessLog:
+    """成功路徑的觀測(review LF-3):截斷 / 上游停更會讓 latest 靜默退化成舊日期。"""
+
+    @staticmethod
+    def _fetch_with_date(monkeypatch: pytest.MonkeyPatch, date: str) -> None:
+        monkeypatch.setattr(
+            oi,
+            "urlopen",
+            FakeHttp(_payload([_row(date=date, strike=24000.0, cp="call", open_interest=7)])),
+        )
+
+    async def test_fresh_latest_logs_info_only(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._fetch_with_date(monkeypatch, (_TODAY - timedelta(days=1)).isoformat())
+        with caplog.at_level(logging.INFO, logger=oi.__name__):
+            await oi.fetch_oi_levels(_YM, token="tok", today=_TODAY)
+        records = [r for r in caplog.records if "oi-levels" in r.message]
+        assert [r.levelno for r in records] == [logging.INFO]
+        assert "1 rows" in records[0].getMessage()
+        assert "1 strikes" in records[0].getMessage()
+
+    async def test_threshold_day_is_still_info(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """邊界含在內(`> STALE_WARN_DAYS` 才吵):連假剛好落在門檻上不該每天報警。
+
+        門檻**值**本身是可調參數,刻意不用字面量釘死;這裡鎖的是比較的方向與含端。
+        """
+        self._fetch_with_date(
+            monkeypatch, (_TODAY - timedelta(days=oi.STALE_WARN_DAYS)).isoformat()
+        )
+        with caplog.at_level(logging.INFO, logger=oi.__name__):
+            await oi.fetch_oi_levels(_YM, token="tok", today=_TODAY)
+        assert [r.levelno for r in caplog.records if "oi-levels" in r.message] == [logging.INFO]
+
+    async def test_stale_latest_warns_but_still_returns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """> STALE_WARN_DAYS:升 warning,但資料照樣回(舊撐壓仍有用,只是要有人知道)。"""
+        stale = (_TODAY - timedelta(days=oi.STALE_WARN_DAYS + 1)).isoformat()
+        self._fetch_with_date(monkeypatch, stale)
+        with caplog.at_level(logging.INFO, logger=oi.__name__):
+            got = await oi.fetch_oi_levels(_YM, token="tok", today=_TODAY)
+        records = [r for r in caplog.records if "oi-levels" in r.message]
+        assert [r.levelno for r in records] == [logging.WARNING]
+        assert got["date"] == stale
+        assert got["strikes"] == [{"strike": 24000, "call_oi": 7, "put_oi": 0}]
+
+
+class TestResolveToken:
+    """token 解析三條語意(review TC-5)。server 不載 dotenv:
+    `FINMIND_TOKEN in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 repo root .env。
+
+    conftest 的 autouse fixture 已把 `_dotenv_values` 中和成 `lambda: {}`,要驗 .env
+    行為的案例自行推回真實作(同 tests/capital/test_factory.py 的 `_REAL_DOTENV_VALUES`)。
+    """
+
+    def test_env_value_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FINMIND_TOKEN", "  tok-env  ")
+        assert oi.resolve_token() == "tok-env"  # 兩端空白剝掉
+
+    def test_empty_env_suppresses_dotenv(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`set FINMIND_TOKEN=` 是明確的「這台不要打 FinMind」,不得被檔案值復活。"""
+        monkeypatch.setattr(oi, "_dotenv_values", _REAL_DOTENV_VALUES)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FINMIND_TOKEN=tok-file\n", encoding="utf-8")
+        monkeypatch.setenv("FINMIND_TOKEN", "")
+        assert oi.resolve_token() is None
+
+    def test_dotenv_fallback_reads_bom_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """utf-8-sig:Windows 存的 .env 帶 BOM 會讓**首 key** 靜默失效(CLAUDE.md §8
+        真踩過)→ 治具刻意把 FINMIND_TOKEN 放第一行。"""
+        monkeypatch.setattr(oi, "_dotenv_values", _REAL_DOTENV_VALUES)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FINMIND_TOKEN=tok-file\nOTHER=x\n", encoding="utf-8-sig")
+        monkeypatch.delenv("FINMIND_TOKEN", raising=False)
+        assert oi.resolve_token() == "tok-file"
 
 
 # ---------- route:降級一律 200 空 shape(SC-11) ----------
