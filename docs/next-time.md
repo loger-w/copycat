@@ -96,7 +96,7 @@
 ## 2026-07-28(capital-order Phase 3 順手清單)
 
 - [x] ~~舊 TC4 trade 路刪除(server/trade.py、live/tc4_trade.py、fake_trade.py、frontend useTrade.ts/OrdersList.tsx/OrderConfirm.tsx + 測試;/api/trade/* 恆 503)~~ **2026-08-04 /mod remove-tc4-trade-path 完成**:11 檔全刪、`/api/trade/*` → 404(四路 404 + 對照錨迴歸鎖)、AuditWriteError handler 改獨立註冊(+ 探針測試)。同日稍早另一 session 的查證註記所列必留物(trade_models / 兩 handler / corr 第二處 sentinel)全數命中並保留,見 `.claude/mod/remove-tc4-trade-path/`(change-spec + 兩輪 review JSON + verification)
-- [ ] TXO snapshot 補推 per-contract last_price(OrderPanel 市價估價目前缺值全鎖,限價不受影響;ContractRow.last_price 前端欄位已預留)
+- [x] ~~TXO snapshot 補推 per-contract last_price(OrderPanel 市價估價目前缺值全鎖,限價不受影響;ContractRow.last_price 前端欄位已預留)~~ **2026-08-05 修畢(mod/txo-contract-last-price)**:aggregator 過 stale-drop 後逐 tick 記 `> 0` 成交價(0 價不收 — §8「0 不是價格」同款防禦)、`_contract_rows` additive 加欄(點,float);golden regen + ticks.jsonl 獨立斷言(QryIndex 單鍵 + shuffle 異構化)。零成交合約不出現在 contracts → 市價仍鎖 = 預期行為;reset 窗 UX 記 2026-08-05 節 Known Risk 條目
 - [x] ~~app.py futures source 啟動旗標借用 trade_source is DEFAULT_TRADE(sentinel 語意耦合已註解;__main__ 顯式傳 DEFAULT_FUTURES 後可解耦)~~ **2026-08-04 同輪解耦**:`__main__` 顯式傳 DEFAULT_FUTURES + DEFAULT_CORR(corr 同款借用一併解),`trade_source` 參數與 DEFAULT_TRADE sentinel 刪除;`tests/server/test_main_wiring.py` 上鎖(kwargs 整份相等)
 - [ ] 期貨平倉「範圍市價 P + IOC」候選:prod 實測 bstrPrice="P"/"M" 可送性後,可從限價貼漲跌停切回(docs/research/2026-07-28-skcom-typelib.md)
 - [ ] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價
