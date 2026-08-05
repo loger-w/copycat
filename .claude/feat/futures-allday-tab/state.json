@@ -10,9 +10,9 @@
   "scope_overrides": { "goal_efficiency_mode": false },
   "last_updated": "2026-08-05T22:10:00+08:00",
   "project_shape": "python-backend+react-frontend",
-  "last_commit_sha": "516dd0e",
+  "last_commit_sha": "5c6c0c8",
   "final_merge_sha": null,
-  "self_review_head": "516dd0e",
+  "self_review_head": "5c6c0c8",
   "artifact_commit": null,
   "rollbacks": [],
   "paused": null
