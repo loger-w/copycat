@@ -19,9 +19,15 @@ from copycat.server import discord_bot
 from copycat.server.discord_bot import (
     Bot,
     create_bot,
+    group_choices,
     handle_add,
+    handle_group_add,
+    handle_group_remove,
+    handle_group_rename,
+    handle_groups,
     handle_list,
     handle_remove,
+    handle_ungroup,
 )
 from copycat.stock_watchlist import Watchlist, WatchlistError
 
@@ -194,6 +200,29 @@ class TestAddCommand:
 
         assert "失敗" in it.sent
 
+    async def test_noop_text_when_service_reports_unchanged(self) -> None:
+        """SC-7:文案的唯一事實點是 service 的落檔比對,不是 handler 自己猜。"""
+        it = FakeInteraction()
+
+        await handle_add(FakeService(changed=False), it, "2330")
+
+        assert it.sent == "已在自選:2330 台積電(無變更)"
+
+    async def test_changed_with_group_text(self) -> None:
+        it = FakeInteraction()
+
+        await handle_add(FakeService(), it, "2330", "主力")
+
+        assert it.sent == "已加入自選:2330 台積電(群組:主力)"
+
+    async def test_unknown_code_appends_warning_suffix(self) -> None:
+        """SC-5:軟白名單 —— 仍照加,但提醒可能打錯代碼。"""
+        it = FakeInteraction()
+
+        await handle_add(FakeService(), it, "9999")
+
+        assert it.sent == "已加入自選:9999(查無此檔名稱,請確認代碼)"
+
 
 class TestRemoveCommand:
     async def test_success(self) -> None:
@@ -221,6 +250,13 @@ class TestRemoveCommand:
         await handle_remove(None, it, "2330")
 
         assert it.sent == "服務未就緒"
+
+    async def test_noop_text_when_service_reports_unchanged(self) -> None:
+        it = FakeInteraction()
+
+        await handle_remove(FakeService(changed=False), it, "2330")
+
+        assert it.sent == "不在自選:2330 台積電"
 
 
 class TestListCommand:
@@ -264,6 +300,295 @@ class TestListCommand:
         await handle_list(None, it)
 
         assert it.sent == "服務未就緒"
+
+
+_RESERVED_BLOCKED = "「未分組」不是群組,無法操作"
+
+
+class TestGroupsCommand:
+    """SC-1:`/watch groups` 列的是**群組名冊**(含 0 檔群組),不是股票清單。"""
+
+    async def test_lists_groups_with_counts_and_ungrouped(self) -> None:
+        service = FakeService(
+            {
+                "codes": ["2330", "5483", "2317"],
+                "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
+            }
+        )
+        it = FakeInteraction()
+
+        await handle_groups(service, it)
+
+        assert it.order == ["defer", "send"]
+        assert it.sent.splitlines() == [
+            "群組 1 個",
+            "【主力】2 檔",
+            "未分組 1 檔(衍生,非群組)",
+        ]
+
+    async def test_no_ungrouped_line_when_all_grouped(self) -> None:
+        service = FakeService(
+            {"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]}
+        )
+        it = FakeInteraction()
+
+        await handle_groups(service, it)
+
+        assert "未分組" not in it.sent
+
+    async def test_empty_group_is_still_listed(self) -> None:
+        """SC-1 的核心:空群組是使用者建的東西,不能因為沒成員就消失。"""
+        service = FakeService(
+            {
+                "codes": ["2330"],
+                "groups": [{"name": "主力", "codes": ["2330"]}, {"name": "觀察", "codes": []}],
+            }
+        )
+        it = FakeInteraction()
+
+        await handle_groups(service, it)
+
+        assert it.sent.splitlines() == ["群組 2 個", "【主力】1 檔", "【觀察】0 檔"]
+
+    async def test_zero_groups_with_empty_watchlist(self) -> None:
+        it = FakeInteraction()
+
+        await handle_groups(FakeService(), it)
+
+        assert it.sent == "尚無群組"
+
+    async def test_zero_groups_with_codes(self) -> None:
+        service = FakeService({"codes": ["2330", "2317"], "groups": []})
+        it = FakeInteraction()
+
+        await handle_groups(service, it)
+
+        assert it.sent == "尚無群組;未分組 2 檔"
+
+    async def test_service_none(self) -> None:
+        it = FakeInteraction()
+
+        await handle_groups(None, it)
+
+        assert it.sent == "服務未就緒"
+
+
+class TestGroupAddCommand:
+    async def test_creates(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_add(service, it, "主力")
+
+        assert service.created == ["主力"]
+        assert it.order == ["defer", "send"]
+        assert it.sent == "已建立群組:主力"
+
+    async def test_duplicate_is_noop_text(self) -> None:
+        it = FakeInteraction()
+
+        await handle_group_add(FakeService(changed=False), it, "主力")
+
+        assert it.sent == "群組已存在:主力"
+
+    async def test_reserved_name_maps_to_bad_group(self) -> None:
+        """建立保留名**不在 handler 攔** —— 合法性只有 normalize 一份定義(SC-6)。"""
+        service = FakeService(error=WatchlistError("BAD_GROUP"))
+        it = FakeInteraction()
+
+        await handle_group_add(service, it, "未分組")
+
+        assert it.sent == "群組名稱不合法"
+
+    async def test_service_none(self) -> None:
+        it = FakeInteraction()
+
+        await handle_group_add(None, it, "主力")
+
+        assert it.sent == "服務未就緒"
+
+
+class TestGroupRemoveCommand:
+    async def test_ok(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_remove(service, it, "主力")
+
+        assert service.deleted == ["主力"]
+        assert it.sent == "已刪除群組:主力(成員移至未分組)"
+
+    async def test_missing_group_text(self) -> None:
+        service = FakeService(error=WatchlistError("GROUP_NOT_FOUND"))
+        it = FakeInteraction()
+
+        await handle_group_remove(service, it, "不存在")
+
+        assert it.sent == "找不到該群組"
+
+    async def test_reserved_name_blocked_without_calling_service(self) -> None:
+        """「未分組」是衍生桶不是群組:攔在 handler,GROUP_NOT_FOUND 留給真缺席。"""
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_remove(service, it, " 未分組 ")
+
+        assert it.sent == _RESERVED_BLOCKED
+        assert service.deleted == []
+
+    async def test_service_none(self) -> None:
+        it = FakeInteraction()
+
+        await handle_group_remove(None, it, "主力")
+
+        assert it.sent == "服務未就緒"
+
+
+class TestGroupRenameCommand:
+    async def test_ok(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, "主力", "核心")
+
+        assert service.renamed == [("主力", "核心")]
+        assert it.sent == "已改名:主力 → 核心"
+
+    async def test_same_name_is_noop_text(self) -> None:
+        it = FakeInteraction()
+
+        await handle_group_rename(FakeService(changed=False), it, "主力", "主力")
+
+        assert it.sent == "名稱未變:主力"
+
+    async def test_missing_group_text(self) -> None:
+        service = FakeService(error=WatchlistError("GROUP_NOT_FOUND"))
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, "不存在", "核心")
+
+        assert it.sent == "找不到該群組"
+
+    async def test_reserved_old_blocked_without_calling_service(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, "未分組", "核心")
+
+        assert it.sent == _RESERVED_BLOCKED
+        assert service.renamed == []
+
+    async def test_reserved_new_falls_through_to_bad_group(self) -> None:
+        """取新名為保留名是「名稱不合法」不是「不是群組」—— 語意不同,不共用文案(R2)。"""
+        service = FakeService(error=WatchlistError("BAD_GROUP"))
+        it = FakeInteraction()
+
+        await handle_group_rename(service, it, "主力", "未分組")
+
+        assert it.sent == "群組名稱不合法"
+
+    async def test_service_none(self) -> None:
+        it = FakeInteraction()
+
+        await handle_group_rename(None, it, "主力", "核心")
+
+        assert it.sent == "服務未就緒"
+
+
+class TestUngroupCommand:
+    async def test_ok(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_ungroup(service, it, "2330", "主力")
+
+        assert service.ungrouped == [("2330", "主力")]
+        assert it.order == ["defer", "send"]
+        assert it.sent == "已自群組 主力 移出:2330 台積電(仍在自選)"
+
+    async def test_noop_when_not_member(self) -> None:
+        it = FakeInteraction()
+
+        await handle_ungroup(FakeService(changed=False), it, "2330", "主力")
+
+        assert it.sent == "2330 台積電 不在群組 主力"
+
+    async def test_missing_group_text(self) -> None:
+        service = FakeService(error=WatchlistError("GROUP_NOT_FOUND"))
+        it = FakeInteraction()
+
+        await handle_ungroup(service, it, "2330", "不存在")
+
+        assert it.sent == "找不到該群組"
+
+    async def test_reserved_group_blocked_without_calling_service(self) -> None:
+        service = FakeService()
+        it = FakeInteraction()
+
+        await handle_ungroup(service, it, "2330", "未分組")
+
+        assert it.sent == _RESERVED_BLOCKED
+        assert service.ungrouped == []
+
+    async def test_service_none(self) -> None:
+        it = FakeInteraction()
+
+        await handle_ungroup(None, it, "2330", "主力")
+
+        assert it.sent == "服務未就緒"
+
+
+class _HangingService(FakeService):
+    """`current()` 永不返回 —— 模擬寫入持鎖(TC4 往返)期間的 autocomplete。"""
+
+    async def current(self) -> Watchlist:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class TestGroupChoices:
+    def _service(self, names: list[str]) -> FakeService:
+        return FakeService(
+            {"codes": [], "groups": [{"name": n, "codes": []} for n in names]}
+        )
+
+    async def test_returns_group_names(self) -> None:
+        assert await group_choices(self._service(["主力", "觀察"]), "") == ["主力", "觀察"]
+
+    async def test_substring_filter(self) -> None:
+        """子字串(非前綴):中文群組名沒有前綴語意(design R8 amendment)。"""
+        service = self._service(["主力股", "觀察名單", "波段主力"])
+
+        assert await group_choices(service, "主力") == ["主力股", "波段主力"]
+
+    async def test_none_service_returns_empty(self) -> None:
+        assert await group_choices(None, "") == []
+
+    async def test_timeout_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """3 秒硬窗 + 與寫入共用單鎖:等不到就放手回空,不可堆積等鎖 task。"""
+        monkeypatch.setattr(discord_bot, "_AUTOCOMPLETE_TIMEOUT", 0.01)
+
+        assert await group_choices(_HangingService(), "") == []
+
+    async def test_error_returns_empty(self) -> None:
+        assert await group_choices(FakeService(error=RuntimeError("boom")), "") == []
+
+    async def test_long_name_skipped_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Choice name 上限 100:單一超長項會讓整份回應被 Discord 拒收(R7)。"""
+        service = self._service(["x" * 101, "主力"])
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.discord_bot"):
+            result = await group_choices(service, "")
+
+        assert result == ["主力"]
+        assert any("100" in r.getMessage() for r in caplog.records)
+
+    async def test_capped_at_25(self) -> None:
+        service = self._service([f"g{i}" for i in range(30)])
+
+        assert len(await group_choices(service, "")) == 25
 
 
 class TestCreateBotDegradation:
@@ -459,14 +784,68 @@ class TestBotLifecycle:
 
 @pytest.mark.skipif(not _HAS_DISCORD, reason="extras [discord] 未安裝(降級路徑另有測試)")
 class TestRealDiscordWiring:
+    def _bot(self, monkeypatch: pytest.MonkeyPatch) -> Bot:
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
+        monkeypatch.setenv("SIGNALS_DISCORD_CHANNEL_ID", "42")
+        bot = create_bot(FakeService(), None)
+        assert bot is not None
+        return bot
+
+    def _leaves(self, bot: Bot) -> dict[str, Any]:
+        app_commands = importlib.import_module("discord.app_commands")
+        return {
+            c.qualified_name: c
+            for c in bot.command.walk_commands()
+            if isinstance(c, app_commands.Command)
+        }
+
     def test_create_bot_builds_client_and_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
         discord = importlib.import_module("discord")
 
-        monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
-        monkeypatch.setenv("SIGNALS_DISCORD_CHANNEL_ID", "42")
+        bot = self._bot(monkeypatch)
 
-        bot = create_bot(FakeService(), None)
-
-        assert bot is not None
         assert isinstance(bot.client, discord.Client)
         assert bot.channel_id == 42
+
+    def test_command_tree_leaf_qualified_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """R7:子群組變數名若叫 `group`,既有 `@group.command` 會靜默改掛到子群組 ——
+        數量對不上不夠,要鎖**完整路徑**才抓得到掛錯層。"""
+        bot = self._bot(monkeypatch)
+
+        assert set(self._leaves(bot)) == {
+            "watch add",
+            "watch remove",
+            "watch list",
+            "watch groups",
+            "watch ungroup",
+            "watch group add",
+            "watch group remove",
+            "watch group rename",
+        }
+
+    @pytest.mark.parametrize(
+        ("qualified", "param"),
+        [
+            ("watch add", "group"),
+            ("watch ungroup", "group"),
+            ("watch group remove", "name"),
+            ("watch group rename", "old"),
+        ],
+    )
+    def test_autocomplete_wired(
+        self, monkeypatch: pytest.MonkeyPatch, qualified: str, param: str
+    ) -> None:
+        leaf = self._leaves(self._bot(monkeypatch))[qualified]
+
+        parameter = leaf.get_parameter(param)
+
+        assert parameter is not None
+        assert parameter.autocomplete is True
+
+    def test_client_suppresses_mentions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """群組名是自由文字且會原樣回填訊息:`/watch group add @everyone` 不得真 ping(R7)。"""
+        discord = importlib.import_module("discord")
+
+        bot = self._bot(monkeypatch)
+
+        assert bot.client.allowed_mentions == discord.AllowedMentions.none()
