@@ -157,6 +157,8 @@ export interface CapitalCloseBody {
   qty?: number | null; // null=全部
   price_type?: "limit" | "market";
   source?: string;
+  /** sec 庫存種類 cash/margin/short — 同檔資+集保並存時的第二把鍵(未帶且多列 → 後端阻擋)。 */
+  kind?: string;
 }
 
 // ---- futures 行情(對應 copycat/server/futures_engine.py state())----
