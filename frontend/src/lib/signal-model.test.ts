@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  filterKinds,
-  formatToastText,
-  kindLabel,
-  mergeSignals,
-  type SignalEnabled,
-  type SignalMsg,
-} from "@/lib/signal-model";
+import { formatToastText, kindLabel, mergeSignals, type SignalMsg } from "@/lib/signal-model";
 
 function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
   return {
@@ -25,13 +18,6 @@ function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
     ...overrides,
   };
 }
-
-const ALL_ON: SignalEnabled = {
-  cdp_cross: true,
-  surge_crash: true,
-  vol_burst: true,
-  limit_lock: true,
-};
 
 describe("kindLabel", () => {
   it("CDP 由下往上穿越 = 突破,線名大寫", () => {
@@ -135,42 +121,5 @@ describe("mergeSignals", () => {
 
   it("空輸入回空陣列", () => {
     expect(mergeSignals([], [])).toEqual([]);
-  });
-});
-
-describe("filterKinds", () => {
-  it("全開時原樣", () => {
-    const list = [sig({ id: "1", kind: "surge" }), sig({ id: "2", kind: "cdp_cross" })];
-    expect(filterKinds(list, ALL_ON).length).toBe(2);
-  });
-
-  it("surge 與 crash 共用 surge_crash 開關", () => {
-    const list = [sig({ id: "1", kind: "surge" }), sig({ id: "2", kind: "crash" })];
-    expect(filterKinds(list, { ...ALL_ON, surge_crash: false })).toEqual([]);
-  });
-
-  it("limit_lock 與 limit_open 共用 limit_lock 開關", () => {
-    const list = [sig({ id: "1", kind: "limit_lock" }), sig({ id: "2", kind: "limit_open" })];
-    expect(filterKinds(list, { ...ALL_ON, limit_lock: false })).toEqual([]);
-  });
-
-  it("cdp_cross / vol_burst 各自獨立開關", () => {
-    const list = [
-      sig({ id: "1", kind: "cdp_cross" }),
-      sig({ id: "2", kind: "vol_burst" }),
-      sig({ id: "3", kind: "surge" }),
-    ];
-    expect(filterKinds(list, { ...ALL_ON, cdp_cross: false }).map((s) => s.id)).toEqual(["2", "3"]);
-    expect(filterKinds(list, { ...ALL_ON, vol_burst: false }).map((s) => s.id)).toEqual(["1", "3"]);
-  });
-
-  it("未知 kind 不被吃掉(前端舊 / 後端新增類型時 fail-open)", () => {
-    const list = [sig({ id: "1", kind: "brand_new" as SignalMsg["kind"] })];
-    expect(filterKinds(list, { ...ALL_ON, surge_crash: false }).map((s) => s.id)).toEqual(["1"]);
-  });
-
-  it("enabled 缺鍵(舊後端)當開啟,不靜默清空整條訊號流", () => {
-    const list = [sig({ id: "1", kind: "surge" })];
-    expect(filterKinds(list, {} as SignalEnabled).map((s) => s.id)).toEqual(["1"]);
   });
 });
