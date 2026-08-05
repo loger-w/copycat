@@ -29,9 +29,8 @@ import { cn } from "@/lib/utils";
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
 const FuturesPage = lazy(() => import("@/components/futures/FuturesPage"));
 const IndexPage = lazy(() => import("@/components/index/IndexPage"));
-const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
 
-type Tab = "txo" | "stock" | "futures" | "index" | "corr";
+type Tab = "txo" | "stock" | "futures" | "index";
 
 const FUT_PRODUCTS = [
   ["TXF", "大台"],
@@ -40,13 +39,13 @@ const FUT_PRODUCTS = [
 ] as const;
 export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
 
-/** localStorage 值域**不變**(五個舊值全數仍還原到對應 tab);只有「無值」時的 fallback
- *  由 `txo` 改 `index` —— 大盤自 index-board SC-1 起排第一顆。 */
+/** localStorage 值域**縮減一項**:`corr` 自台股綜合 R1(SC-1)起移出合法清單 ——
+ *  相關係數併入台股綜合頁的收合區塊,舊值因此自然 fallback 到 `index`(刻意遷移,
+ *  不寫搬移碼)。其餘舊值仍各自還原到對應 tab;「無值」時的 fallback 同樣是
+ *  `index` —— 該頁自 index-board SC-1 起排第一顆。 */
 function initialTab(): Tab {
   const saved = window.localStorage.getItem(TAB_KEY);
-  return saved === "stock" || saved === "futures" || saved === "txo" || saved === "corr"
-    ? saved
-    : "index";
+  return saved === "stock" || saved === "futures" || saved === "txo" ? saved : "index";
 }
 
 function initialProduct(): FutProduct {
@@ -99,7 +98,6 @@ export default function App() {
     txo: true,
     stock: tab === "stock",
     futures: tab === "futures",
-    corr: tab === "corr",
   });
   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
   const [stockCode, setStockCode] = useState<string | null>(initialStockCode);
@@ -174,11 +172,10 @@ export default function App() {
       <nav className="flex items-baseline gap-1 border-b border-line" role="tablist" aria-label="主要分頁">
         {(
           [
-            ["index", "大盤"],
+            ["index", "台股綜合"],
             ["stock", "個股(期)"],
             ["txo", "選擇權"],
             ["futures", "期貨"],
-            ["corr", "相關係數"],
           ] as [Tab, string][]
         ).map(([id, label]) => (
           <button
@@ -244,15 +241,6 @@ export default function App() {
                   txf={txf}
                   futures={futuresStream.state?.products ?? null}
                 />
-              </Suspense>
-            </div>
-          ) : null}
-          {visited.corr ? (
-            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
-              <Suspense
-                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
-              >
-                <CorrPage />
               </Suspense>
             </div>
           ) : null}
