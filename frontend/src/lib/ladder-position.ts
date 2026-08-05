@@ -48,7 +48,8 @@ function px(v: number | null): number | null {
  * - 空方(qty < 0):
  *   pnl = (avg − px)·Q − avg·Q·(f + t + b) − px·Q·f;BE = avg·(1 − f − t − b) / (1 + f)
  *
- * 已知簡化:不套低消 NT$20(聚合部位無筆數可還原)、不計融資利息。
+ * qty = 0 → 全 null(不是部位)。已知簡化:不套低消 NT$20(聚合部位無筆數可還原)、
+ * 不計融資利息。
  */
 export function positionEcon(
   qty: number,
@@ -57,6 +58,9 @@ export function positionEcon(
   discount: number,
   kind: string,
 ): PositionEcon {
+  // 「0 不是部位」—— 與 px() 的歸一同一條精神。零張的部位算出來的 pnl 是 -0、
+  // 打平價卻是個像模像樣的數字,兩者都在騙人
+  if (qty === 0) return { pnl: null, breakEvenMilli: null };
   const avg = px(avgPrice);
   if (avg === null) return { pnl: null, breakEvenMilli: null };
 
