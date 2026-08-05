@@ -3,17 +3,27 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import {
   useCancelOrder,
   useCapitalOrders,
+  useCapitalPositions,
   useCapitalWsStatus,
   useSubmitStock,
 } from "@/hooks/useCapital";
+import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
+import {
+  avgTickOf,
+  clampDiscount,
+  FEE_DISCOUNT_DEFAULT,
+  positionEcon,
+  secPositionsOf,
+  snapBreakEven,
+} from "@/lib/ladder-position";
 import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
-import type { CapitalOrder } from "@/types";
+import type { CapitalOrder, CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
@@ -25,6 +35,108 @@ export const TRADE_KINDS = [
   ["daytrade_sell", "無券"],
 ] as const;
 export type TradeKind = (typeof TRADE_KINDS)[number][0];
+
+/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
+const DASH = "—";
+
+/** kind → 顯示標籤,查表未命中就顯示原字串:群益 `Position.kind` 的值域比本檔的
+ *  交易別寬(D13),不認得的部位寧可標籤怪也不要靜默消失。 */
+function kindLabel(kind: string): string {
+  return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
+}
+
+interface DiscountState {
+  /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
+  raw: string;
+  /** 最後一次通過 clampDiscount 的值;計算恆用它。 */
+  value: number;
+}
+
+/** 讀存檔折數。**整段包 try/catch**:localStorage 在私密視窗 / storage 被政策鎖時
+ *  光是存取就會拋,而這是 useState initializer —— 拋出去就是閃電梯首次 render 掛掉
+ *  (同 `hooks/useChartToggles.ts::load`)。 */
+function loadDiscount(): DiscountState {
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(FEE_DISCOUNT_KEY);
+  } catch {
+    raw = null; // 讀不到 → 走預設,記憶體內照常運作
+  }
+  const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
+  return { raw: String(value), value };
+}
+
+function persistDiscount(value: number): void {
+  try {
+    window.localStorage.setItem(FEE_DISCOUNT_KEY, String(value));
+  } catch {
+    // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉(同 useChartToggles::persist)
+  }
+}
+
+interface PositionRow {
+  key: string;
+  /** kind 標籤(部位條與標記 title 共用同一份字彙) */
+  label: string;
+  /** 第一行左側:`現股 2張 @100` / `融券 空2張 @100`(均價缺值 → `@—`) */
+  head: string;
+  /** 第二行:`打平 100.5`(顯示 snap 後的檔位,與梯內標記同值) */
+  beText: string;
+  pnl: number | null;
+  /** snap 後的打平檔位(毫元);均價缺值 → null */
+  beTick: number | null;
+  /** 均價所在檔位(毫元);均價缺值 → null */
+  avgTick: number | null;
+}
+
+function positionRows(
+  positions: CapitalPosition[],
+  lastMilli: number | null,
+  discount: number,
+): PositionRow[] {
+  return positions.map((p) => {
+    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind);
+    // 均價的缺值判定與 positionEcon 同一條規則(0 不是價格)
+    const avg = p.avg_price !== null && p.avg_price > 0 ? p.avg_price : null;
+    const label = kindLabel(p.kind);
+    const beTick = econ.breakEvenMilli === null ? null : snapBreakEven(econ.breakEvenMilli, p.qty);
+    // avg_price 是**元**(types.ts CapitalPosition),fmt 吃毫元 → 先 ×1000
+    const avgText = avg === null ? DASH : fmt(Math.round(avg * 1000));
+    return {
+      key: `${p.kind}:${p.stock_no}`,
+      label,
+      head: `${label} ${p.qty < 0 ? "空" : ""}${Math.abs(p.qty)}張 @${avgText}`,
+      beText: `打平 ${beTick === null ? DASH : fmt(beTick)}`,
+      pnl: econ.pnl,
+      beTick,
+      avgTick: avg === null ? null : avgTickOf(avg),
+    };
+  });
+}
+
+/** 檔位(毫元)→ 該檔位上的 kind 標籤陣列。同檔位多 kind 時 title 併列。 */
+function markMap(rows: PositionRow[], pick: (r: PositionRow) => number | null): Map<number, string[]> {
+  const map = new Map<number, string[]>();
+  for (const r of rows) {
+    const tick = pick(r);
+    if (tick === null) continue;
+    const cur = map.get(tick);
+    if (cur === undefined) map.set(tick, [r.label]);
+    else cur.push(r.label);
+  }
+  return map;
+}
+
+function pnlText(pnl: number | null): string {
+  if (pnl === null) return DASH;
+  return `${pnl > 0 ? "+" : ""}${pnl.toLocaleString("en-US")}`;
+}
+
+/** 台股慣例:賺紅賠綠。 */
+function pnlTone(pnl: number | null): string {
+  if (pnl === null) return "text-ink-dim";
+  return pnl > 0 ? "text-bull" : pnl < 0 ? "text-bear" : "text-ink";
+}
 
 interface LotEntry {
   qty: number; // 殘量(order_qty - filled_qty 聚合)
@@ -99,6 +211,7 @@ export function PriceLadder({
   // 值式會用到 stale state(review P2-9(3))
   const setQtyState = onQtyState ?? setQtyLocal;
   const [hint, setHint] = useState<string | null>(null);
+  const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
   const centerRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
   const progScroll = useRef(false);
@@ -112,6 +225,15 @@ export function PriceLadder({
   const cancelOrder = useCancelOrder();
   const { data: ordersData } = useCapitalOrders();
   const lots = aggregateLots(ordersData?.orders, code);
+  const { data: positionsData } = useCapitalPositions();
+  // 每 tick 重算:kinds 量級是個位數的純算術,不值得 memo
+  const posRows = positionRows(
+    secPositionsOf(positionsData?.positions, code),
+    last?.p ?? null,
+    discount.value,
+  );
+  const beMarks = markMap(posRows, (r) => r.beTick);
+  const avgMarks = markMap(posRows, (r) => r.avgTick);
 
   const ladder = buildLadder({
     center: last?.p ?? null,
@@ -322,6 +444,28 @@ export function PriceLadder({
             }}
             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
           />
+          {/* 折數與張數是相鄰的同型數字框,而其中一個是真錢張數 —— 後綴「折」是
+              肉眼區隔(IS-8),不是裝飾。恆常渲染:空手也要能先把折數設好(D1)。 */}
+          <label className="ml-0.5 flex items-center gap-0.5 border-l border-line pl-1 text-xs text-ink-dim">
+            <input
+              aria-label="手續費折數"
+              type="number"
+              step={0.1}
+              min={0.1}
+              max={10}
+              value={discount.raw}
+              onChange={(e) => {
+                touchIdle();
+                const raw = e.target.value;
+                const v = clampDiscount(raw);
+                // 非法值只更新 raw(輸入框照顯示),value 沿用上一個合法值 → 計算不跳動
+                setDiscount((s) => ({ raw, value: v ?? s.value }));
+                if (v !== null) persistDiscount(v);
+              }}
+              className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
+            />
+            折
+          </label>
         </div>
         {hint !== null ? (
           <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
@@ -358,19 +502,40 @@ export function PriceLadder({
             const buyLot = lots.buy.get(r.priceMilli);
             const sellLot = lots.sell.get(r.priceMilli);
             const buyLocked = r.dimmed || tradeKind === "daytrade_sell";
+            const beKinds = beMarks.get(r.priceMilli);
+            const avgKinds = avgMarks.get(r.priceMilli);
             return (
               <div
                 key={r.priceMilli}
+                data-price={r.priceMilli}
                 ref={(el) => {
                   if (el) rowRefs.current.set(r.priceMilli, el);
                   else rowRefs.current.delete(r.priceMilli);
                   if (r.isCenter && el) centerRef.current = el;
                 }}
                 className={cn(
-                  "grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 font-mono text-xs",
+                  "relative grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 font-mono text-xs",
                   r.isCenter && "bg-bg-deep",
                 )}
               >
+                {/* 部位標記(SC-4)。`pointer-events-none` 是必要的:左緣正是刪單紅方格
+                    與買鈕的點擊區,標記吃掉點擊會變成「按不到刪單」。
+                    `opacity-100` 顯式隔離同列內容的 `opacity-35` —— 遠離現價的打平標記
+                    正是最需要看見的那一根。 */}
+                {beKinds !== undefined ? (
+                  <span
+                    data-testid="ladder-be-mark"
+                    title={`打平(${beKinds.join("、")})`}
+                    className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-warn opacity-100"
+                  />
+                ) : null}
+                {avgKinds !== undefined ? (
+                  <span
+                    data-testid="ladder-avg-mark"
+                    title={`均價(${avgKinds.join("、")})`}
+                    className="pointer-events-none absolute inset-y-0 left-1 w-0.5 bg-ma20 opacity-100"
+                  />
+                ) : null}
                 {/* 反灰(±5% 外)的淡化套在三個 grid 欄、不套 row 容器:opacity 是
                     合成層屬性,套在容器上時子元素無法「反淡」—— 之後要疊在 row 上的
                     部位標記(打平 / 均價)正好都落在遠離現價的位置。 */}
@@ -447,6 +612,29 @@ export function PriceLadder({
           ) : null}
         </div>
       )}
+      {/* 部位條放**卡片最底**(D5):價格梯 scroll 區是 flex-1,部位條出現時 scroll
+          視窗從底部縮短,**既有價格列的 y 座標不動**。插在上方會整梯下移 —— 武裝中的
+          閃電梯不得因部位資料到達而位移點擊目標。空手 → 整段不渲染(零痕跡)。 */}
+      {posRows.length > 0 ? (
+        <div
+          data-testid="ladder-position-bar"
+          className="border-t border-line px-2 py-1 font-mono text-xs"
+        >
+          {posRows.map((r) => (
+            <div key={r.key} data-testid="ladder-position-row">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-ink">{r.head}</span>
+                <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
+              </div>
+              <div className="flex items-center gap-1 text-ink-muted">
+                {/* 色點對應梯內打平標記色(bg-warn),讓「梯上那根黃線是什麼」不必猜 */}
+                <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
+                <span>{r.beText}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
