@@ -111,14 +111,20 @@ class FakeFuturesSource:
     `fetch_bars_range` 不在 `FuturesSource` Protocol 內(engine 以 getattr 取用,見
     `futures_engine.bars_range` 的註解)—— 這裡提供它,缺這個方法的降級路徑由各檔自己
     的特化 fake 表達。
+
+    `sessions` 記錄每次收到的 `session`(futures-allday §1.4:route → engine → source
+    三層貫通,少了記錄就只能驗到「沒爆」而驗不到「真的傳下去了」)。
+    `today` 同 `FakeIndexSource`:分 K 治具那根的日期,有斷言依賴它的測試顯式傳入。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, today: str | None = None) -> None:
         self.subscribed: list[str] = []
         self.leaves: list[tuple[str, str]] = []
         self.calls: list[tuple[str, str, str, str]] = []
+        self.sessions: list[str] = []
         self.closed = False
         self.on_message: Callable[[dict], None] | None = None
+        self._today = today
 
     def subscribe_symbol(self, product: str) -> None:
         self.subscribed.append(product)
@@ -138,9 +144,20 @@ class FakeFuturesSource:
     def close(self) -> None:
         self.closed = True
 
-    def fetch_bars_range(self, product: str, tf: str, start: str, end: str) -> list[dict]:
+    def fetch_bars_range(
+        self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+    ) -> list[dict]:
         self.calls.append((product, tf, start, end))
-        return [dbar("2026-07-29", 23_200_000)]
+        self.sessions.append(session)
+        if tf != "1":
+            return [dbar("2026-07-29", 23_200_000)]
+        # 分 K 治具用**今日**日期:當日段(fetch(code, "1", today, today))不做日期過濾,
+        # 寫死的過去日期會在歷史段被 put_hist_range 丟掉,測試看到的就是一片空
+        today = self._today or f"{_dt.date.today():%Y-%m-%d}"
+        bars = [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}]
+        if session == "allday":
+            bars.append({"t": f"{today} 15:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 4})
+        return bars
 
 
 class FakeCorrSource:

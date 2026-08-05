@@ -459,7 +459,9 @@ class TestBarsRangeProxy:
     @pytest.mark.asyncio
     async def test_connection_error_returns_empty_with_fixed_log(self, caplog) -> None:
         class Boom(FakeSource):
-            def fetch_bars_range(self, product: str, tf: str, start: str, end: str) -> list[dict]:
+            def fetch_bars_range(
+                self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+            ) -> list[dict]:
                 raise ConnectionError("TC4 down")
 
         engine = FuturesEngine(lambda: Boom())
@@ -470,3 +472,34 @@ class TestBarsRangeProxy:
             await engine.close()
         assert got == []
         assert "market: futures history proxy miss" in caplog.text
+
+
+class TestBarsRangeSession:
+    """futures-allday §1.4:`session` 必須原樣轉給 source(三層貫通的中間那層)。
+
+    轉不下去的失效樣態是「近全模式照樣只有日盤」—— route 200、bars 非空、
+    沒有任何錯誤訊號,所以這一層要有自己的斷言。
+    """
+
+    class _WithBars(FakeSource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.bars_calls: list[tuple[str, str, str, str, str]] = []
+
+        def fetch_bars_range(
+            self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+        ) -> list[dict]:
+            self.bars_calls.append((product, tf, start, end, session))
+            return []
+
+    @pytest.mark.asyncio
+    async def test_session_forwarded_and_defaults_to_day(self) -> None:
+        src = self._WithBars()
+        engine = FuturesEngine(lambda: src)
+        await engine.start()
+        try:
+            await engine.bars_range("TXF", "1", "2026-07-30", "2026-07-30", session="allday")
+            await engine.bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+        finally:
+            await engine.close()
+        assert [c[4] for c in src.bars_calls] == ["allday", "day"]

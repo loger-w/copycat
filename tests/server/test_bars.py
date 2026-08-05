@@ -147,7 +147,8 @@ class TestMinuteTwoTier:
         await build_minute(fetch, cache, "2330", 5, today)
         assert len([c for c in fetch.calls if c[3] != today.isoformat()]) == hist_calls
         # 週末兩天被寫成空 list = 負向快取命中,不再算「缺」
-        assert cache.hist_missing("2330", _dt.date(2026, 7, 24), _dt.date(2026, 7, 27)) == []
+        # (cache 鍵是複合的 `code:session`,見 `build_minute`;預設 session = day)
+        assert cache.hist_missing("2330:day", _dt.date(2026, 7, 24), _dt.date(2026, 7, 27)) == []
 
     async def test_today_ttl_expiry_refetches_only_today(self) -> None:
         today = _dt.date(2026, 7, 28)
@@ -176,7 +177,7 @@ class TestMinuteTwoTier:
         fetch = _Fetcher([[], [], [bar("2026-07-27 09:01")], []])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
         await build_minute(fetch, cache, "2330", 2, today)
-        assert cache.hist_missing("2330", _dt.date(2026, 7, 27), _dt.date(2026, 7, 27)) != []
+        assert cache.hist_missing("2330:day", _dt.date(2026, 7, 27), _dt.date(2026, 7, 27)) != []
         clock["t"] = EMPTY_TTL_SECS + 1.0
         out, _ = await build_minute(fetch, cache, "2330", 2, today)
         assert out == [bar("2026-07-27 09:01")]
@@ -209,7 +210,7 @@ class TestPhase5Hardening:
         cache = BarsCache(ttl=999.0)
         await build_minute(fetch, cache, "2330", 5, today)
         # 07-26 / 07-27 仍算「缺」→ 下次會重抓
-        assert cache.hist_missing("2330", _dt.date(2026, 7, 26), _dt.date(2026, 7, 27)) == [
+        assert cache.hist_missing("2330:day", _dt.date(2026, 7, 26), _dt.date(2026, 7, 27)) == [
             _dt.date(2026, 7, 26),
             _dt.date(2026, 7, 27),
         ]
@@ -353,6 +354,58 @@ class TestEmptyNegativeCache:
         assert cache.empty_status("2330", "1", 30) is None  # 過期 → 被 prune 丟掉
 
 
+class TestSessionCacheIsolation:
+    """futures-allday §1.4:同 code 的 day / allday 各佔一格。
+
+    共用一格的失效樣態最惡劣:日盤模式先跑一輪之後,近全模式在 TTL 內拿到的是**日盤
+    那份 bars**,畫面上就是「切到近全還是只有日盤」—— 兩邊都 200、都非空、零錯誤訊號。
+    """
+
+    TODAY = _dt.date(2026, 7, 28)
+
+    async def test_today_segment_isolated_per_session(self) -> None:
+        day_cur = [bar("2026-07-28 09:01")]
+        night_cur = [bar("2026-07-28 15:01")]
+        fetch = _Fetcher([day_cur, night_cur])
+        cache = BarsCache(ttl=999.0)  # TTL 未到:共用一格的話第二次會拿到 day 那份
+        assert (await build_minute(fetch, cache, "F:TXF", 1, self.TODAY)).bars == day_cur
+        second = await build_minute(fetch, cache, "F:TXF", 1, self.TODAY, session="allday")
+        assert second.bars == night_cur
+
+    async def test_history_memo_isolated_per_session(self) -> None:
+        day_hist = [bar("2026-07-27 09:01")]
+        night_hist = [bar("2026-07-27 15:01")]
+        fetch = _Fetcher([day_hist, [], night_hist, []])
+        cache = BarsCache(ttl=999.0)
+        assert (await build_minute(fetch, cache, "F:TXF", 2, self.TODAY)).bars == day_hist
+        second = await build_minute(fetch, cache, "F:TXF", 2, self.TODAY, session="allday")
+        assert second.bars == night_hist
+        assert len(fetch.calls) == 4  # 兩個 session 各自兩段,沒有互相吃到 memo
+
+    async def test_negative_empty_cache_isolated_per_session(self) -> None:
+        """day 的空結果標記不得把 allday 一併釘住(反之亦然)。"""
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], [], [], []])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert (await build_minute(fetch, cache, "F:TXF", 2, self.TODAY)).bars == []
+        calls = len(fetch.calls)
+        await build_minute(fetch, cache, "F:TXF", 2, self.TODAY, session="allday")
+        assert len(fetch.calls) > calls
+
+    async def test_fetcher_receives_bare_code_without_session_suffix(self) -> None:
+        """複合鍵只在 cache 查表處組出 —— 覆寫掉會讓 source 拿 "F:TXF:allday" 去問 TC4,
+        結果是全空(與 timeout 無法區分),R8。"""
+        fetch = _Fetcher([[bar("2026-07-28 15:01")]])
+        await build_minute(fetch, BarsCache(), "F:TXF", 1, self.TODAY, session="allday")
+        assert [c[0] for c in fetch.calls] == ["F:TXF"]
+
+    async def test_default_session_is_day(self) -> None:
+        fetch = _Fetcher([[bar("2026-07-28 09:01")]])
+        cache = BarsCache(ttl=999.0)
+        await build_minute(fetch, cache, "F:TXF", 1, self.TODAY)
+        assert cache.today_get("F:TXF:day", self.TODAY.isoformat()) is not None
+
+
 class TestStatusFlow:
     """N-3:status 沿 build_* 流出,兩段以 worst 合併(SC-6)。"""
 
@@ -474,14 +527,18 @@ class TestUnknownStatusCoerced:
     「等待 TC4 回應中…」並每 20s 重試,把設定錯誤偽裝成基礎設施問題。
     """
 
-    async def test_build_daily_coerces_unknown_status(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_build_daily_coerces_unknown_status(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         today = _dt.date(2026, 7, 28)
         fetch = _Fetcher([[]], ["weird"])
         with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
             assert await build_daily(fetch, BarsCache(), "2330", today) == ([], "ok")
         assert any("weird" in r.getMessage() for r in caplog.records)
 
-    async def test_build_minute_coerces_unknown_status(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_build_minute_coerces_unknown_status(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """原本這條會 KeyError → 500(`worst_status` 直接查表)。"""
         today = _dt.date(2026, 7, 28)
         fetch = _Fetcher([[], []], ["weird", "bogus"])
@@ -501,7 +558,7 @@ class TestUnknownStatusCoerced:
         today = _dt.date(2026, 7, 28)
         cache = BarsCache(ttl=999.0)
         await build_minute(_Fetcher([[], []], ["ok", "weird"]), cache, "2330", 2, today)
-        entry = cache.today_get("2330", today.isoformat())
+        entry = cache.today_get("2330:day", today.isoformat())
         assert entry is not None
         assert entry[1] == "ok"
 
