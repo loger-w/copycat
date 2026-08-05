@@ -55,6 +55,18 @@ async function fetchBars(code: string, tf: string, days: number): Promise<BarsPa
   };
 }
 
+/** 輪詢間隔(SC-4)。空且非 ok = 「還在等 / 斷線」,必須自己走得出來:20s > 後端
+ *  15s 負向快取 TTL,所以每輪都真打 TC4 而不是撞快取空轉。其餘情形維持既有語意
+ *  (分K 交易時段 60s;日K 與盤外不輪詢)。抽成純函式才量得到(SC-4 量法)。 */
+export function barsPollInterval(
+  data: BarsPayload | undefined,
+  isDaily: boolean,
+  trading: boolean,
+): number | false {
+  if (data !== undefined && data.bars.length === 0 && data.status !== "ok") return 20_000;
+  return !isDaily && trading ? POLL_MS : false;
+}
+
 export function useStockBars(code: string | null, mode: ChartMode, days: number) {
   const isDaily = mode === "day";
   const enabled = code !== null && mode !== "intraday";
@@ -67,7 +79,9 @@ export function useStockBars(code: string | null, mode: ChartMode, days: number)
     retry: 1,
     staleTime: isDaily ? Infinity : 0,
     // 函式形式:TQ 每次 interval 到期都會重新求值 → 開盤/收盤的開關不依賴外部 re-render
-    // (值形式只在 render 當下求值,冷門股沒推播就不會自動開始輪詢 — review P2-4)
-    refetchInterval: () => (!isDaily && inTradingHours() ? POLL_MS : false),
+    // (值形式只在 render 當下求值,冷門股沒推播就不會自動開始輪詢 — review P2-4)。
+    // data 必須讀 `query.state.data`:閉包裡的 data 恆為訂閱當下的初值(undefined),
+    // 空態轉 timeout 後永遠不會開始 20s 重試(review R3)。
+    refetchInterval: (query) => barsPollInterval(query.state.data, isDaily, inTradingHours()),
   });
 }
