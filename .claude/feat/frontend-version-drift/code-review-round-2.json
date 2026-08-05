@@ -1,0 +1,17 @@
+{
+  "round": 2,
+  "phase": "branch-lifecycle 收尾補齊(增量 diff:ba31a8e..HEAD,docs-only)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [
+    {"id": "N-1", "summary": "build/prod equal 模式仍帶 C3 缺陷(無路徑過濾)且未驗,勾銷條目寫得像等價方案", "resolution": "accepted — next-time 補未勾子項(CI 注入範圍 sha / range 判別搬後端 兩候選)"}
+  ],
+  "p2": [
+    {"id": "N-2", "summary": "條目寫 `-- copycat` 而實作是 `-- :/copycat`,trap 重新埋回文件", "resolution": "accepted — 更正並記 magic pathspec 事實"},
+    {"id": "N-3", "summary": "「10 個純前端 commit」不可重現(實為 30 個、零碰 copycat/)", "resolution": "accepted — 改寫"},
+    {"id": "N-4", "summary": "git_dirty 零消費的殘留缺口無記載", "resolution": "accepted — next-time 子項"},
+    {"id": "N-5", "summary": "drift 態截圖不完整未留 user 過目尾巴", "resolution": "accepted — 條目補註"},
+    {"id": "N-6", "summary": "CLAUDE.md §1 工作流已被交付改變而未回寫", "resolution": "accepted(選 a)— §1 該列補一句膠囊自動化"}
+  ],
+  "verified_clean": "無誤刪他項;交付事實對照(middleware/badge/來源選擇)與勾銷內文一致(N-2/N-3 更正後)"
+}

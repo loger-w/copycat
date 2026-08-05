@@ -112,7 +112,7 @@ docs/superpowers/         # spec 與 implementation plan
 | Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
 | Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
 | TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;休市日補 env `TXO_BACKFILL_DATE=<上一交易日>`) | repo root |
-| **跑著的 server 是哪一版** | `curl -s localhost:8721/api/health` → `{git_sha, git_dirty, started_at}`;接著 `git log <git_sha>..HEAD -- copycat/` **有輸出 = 後端 code 比跑著的新,該重啟**。啟動 banner 也印同一份(`copycat server build <sha> [+dirty] started_at=…`)。**「改了沒生效」先查這條再查 code** —— 2026-07-29 曾為此誤查一輪(:8721 的 `openapi.json` 根本沒有那條 route) | repo root |
+| **跑著的 server 是哪一版** | `curl -s localhost:8721/api/health` → `{git_sha, git_dirty, started_at}`;接著 `git log <git_sha>..HEAD -- copycat/` **有輸出 = 後端 code 比跑著的新,該重啟**。啟動 banner 也印同一份(`copycat server build <sha> [+dirty] started_at=…`)。**「改了沒生效」先查這條再查 code** —— 2026-07-29 曾為此誤查一輪(:8721 的 `openapi.json` 根本沒有那條 route)。**2026-08-05 起 dev(vite)下這條已自動化**:nav 右緣 amber「版本落差」膠囊亮 = 同一判法(middleware range 判別含 `-- :/copycat` 過濾)命中,uncommitted 改動仍不可測 | repo root |
 | Frontend dev / 測試 / build | `npm run dev` / `npm test` / `npm run build` | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 | 日線回補(位階特徵前置,一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
