@@ -13,19 +13,20 @@
     4,
     5,
     6,
-    7
+    7,
+    8
   ],
   "scope": "M",
   "phase_6_blocked_reason": null,
   "scope_overrides": {
     "goal_efficiency_mode": false
   },
-  "last_updated": "2026-08-05T17:20:00+08:00",
+  "last_updated": "2026-08-05T17:50:00+08:00",
   "project_shape": "python-backend+react-frontend",
-  "last_commit_sha": "ba31a8e",
-  "final_merge_sha": null,
+  "last_commit_sha": "46d4b69",
+  "final_merge_sha": "46d4b69",
   "self_review_head": "ba31a8e",
-  "artifact_commit": null,
+  "artifact_commit": "3d88e52",
   "rollbacks": [],
   "paused": null
 }
