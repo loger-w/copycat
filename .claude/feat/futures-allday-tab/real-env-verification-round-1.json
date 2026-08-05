@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "date": "2026-08-05",
+  "head": "1b95d89",
+  "items": [
+    {"sc": "SC-3(HTTP 層)", "method": "verify server(--verify,port 8722,零 ZMQ)curl", "result": "PASS", "evidence": "evidence/SC-3_route-validation.txt(health 印新 sha 1b95d89;TWSE+allday 與 session=xxx → 400 INVALID_SESSION;oi-levels engine None → 200 空 shape;既有 day 路徑 NOT_READY 降級形狀不變)"},
+    {"sc": "SC-11(service 真打)", "method": "oi_levels.fetch_oi_levels 直呼(真 FinMind,.env token)", "result": "PASS", "evidence": "evidence/SC-11_finmind-real.txt(date=2026-08-05、contract=202608、strikes=238)"},
+    {"sc": "SC-1/2/4/5/6/7/8/10/11(UI)", "method": "fixture server(fake 行情源 8723,FinMind 真打)+ vite 5175 + claude-in-chrome 截圖(dispatch opus)", "result": "9/9 PASS", "evidence": "evidence/SC-1_intraday-allday-axis.jpg 等 10 張 + SC-ui-dom-assertions.txt(DOM 硬證據);SC-7 以 fetch override 注入部位完成加分項;SC-5 夜間「價差 —」= 正確降級;console 唯一 error 為 fixture 無資料觸發的既有 MarketChart key 重複(與本 feature 無關,prod 有真資料不觸發)"},
+    {"sc": "SC-9", "method": "既有測試迴歸(掛單顯示/點刪測試零改動)+ SC-10 截圖同框", "result": "PASS", "evidence": "vitest 綠 + SC-10_close-cancel-disabled-zoom.png"},
+    {"sc": "SC-12", "method": "驗證窗口 anytime(vitest 11 個星期×時刻對)", "result": "PASS(自動化層)", "evidence": "automated-verification-round-1.json"}
+  ],
+  "blocked": [
+    {"sc": "SC-3(真 TC4 bar 數量法)+ design §1.2 日K口徑實測 + §1.1 Date 欄語意真資料核對", "reason": "夜盤進行中(15:00–05:00),prod(舊 code)佔 TC4 訂閱;盤中不起第二台連 TC4 後端(CLAUDE.md §8 紀律)", "fallback": "fake rows(含夜盤/midnight 構造樣本)已由 pytest + fixture server 覆蓋;merge 後 user 自然重啟 prod(新 code)即可跑 brainstorm SC-3 量法 curl(單交易日 ≈300+840 根、15:01 與 00:0x 存在、13:45/15:01 相鄰)+ user 過目"}
+  ],
+  "regression_spotcheck": "抽 2 個未改功能:TXO tab(fixture server 上 TxoPage 正常 render)+ 大盤 tab(MarketChart 掛載;console key 重複為 fixture 無資料所致,非行為變化);另 copycat validate 42/42 為 replay 鏈迴歸"
+}

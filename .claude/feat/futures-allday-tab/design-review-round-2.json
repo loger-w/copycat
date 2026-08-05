@@ -1,0 +1,19 @@
+{
+  "round": 2,
+  "type": "限縮輪(round 1 accepted P0 觸發;只審 v2 變更節)",
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-05",
+  "verdict_summary": "P0 x1, P1 x4, P2 x4 — 全數 accepted 修入 v3(main agent 機械查核:R2-1 minute_end_from_1k「不加 1」屬實、R2-3 CapitalCloseBody.key=stock_no 屬實)",
+  "dispositions": [
+    {"id": "R2-1", "severity": "P0", "resolution": "accepted — v3 §1.1 刪 +1 分鐘子句(1K Time 已是終點標記),紅測試補 UTC 155900→當日 23:59 / 160000→次日 00:00;與 §3.2 live 點 +1 互為對照註明"},
+    {"id": "R2-2", "severity": "P1", "resolution": "accepted — v3 §2 快取查表鍵改 (contract_ym, today),值內含 resolved_date"},
+    {"id": "R2-3", "severity": "P1", "resolution": "accepted — v3 §7 helper body key=pos.stock_no、kind 僅 sec 附加、複合鍵僅 UI 列選取;既有 vitest 保護 body 形狀"},
+    {"id": "R2-4", "severity": "P1", "resolution": "accepted — v3 §3.2 live 點錨定日 gate(與 slice anchor 不同即不畫);vitest 開盤瞬間案例"},
+    {"id": "R2-5", "severity": "P1", "resolution": "accepted — brainstorm SC-11 amendment(口徑同步 design)"},
+    {"id": "R2-6", "severity": "P2", "resolution": "accepted — v3 §3.1 段長 300/539/301 + 錨點 vitest"},
+    {"id": "R2-7", "severity": "P2", "resolution": "accepted — v3 §4.1 誠實記帳(60分K 76 根不足 initBars=240,長週期回看不支援)+ Known Risks"},
+    {"id": "R2-8", "severity": "P2", "resolution": "accepted — v3 §10 量測補盤中當日段收割 allday vs day"},
+    {"id": "R2-9", "severity": "P2", "resolution": "accepted — v3 §4.2 邊界為準(停輪詢 13:51–14:54),brainstorm SC-12 amendment 同步 + 邊界測點"}
+  ],
+  "exit": "限縮輪後無未解 P0(R2-1 已修入),P1 全數修入 → 退出條件成立,進 Phase 2"
+}
