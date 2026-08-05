@@ -48,16 +48,24 @@ beforeEach(() => {
   window.localStorage.clear();
   FakeWS.instances = [];
   vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      if (String(url).includes("/api/index/state")) {
-        return new Response(JSON.stringify(INDEX_STATE));
-      }
-      return new Response(JSON.stringify({}), { status: 404 });
-    }),
-  );
+  vi.stubGlobal("fetch", appFetch());
 });
+
+/** 版本落差偵測的兩條路由預設回 `git_sha: null` = 「不可得」→ 全域無膠囊、無 warn。
+ *  傳 sha 進來即成落差 fixture。 */
+function appFetch(sha?: { fe: string | null; be: string | null }) {
+  return vi.fn(async (url: string) => {
+    const u = String(url);
+    if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
+    if (u.includes("/api/health")) {
+      return new Response(JSON.stringify({ git_sha: sha?.be ?? null, git_dirty: false }));
+    }
+    if (u.includes("/__build/sha")) {
+      return new Response(JSON.stringify({ git_sha: sha?.fe ?? null }));
+    }
+    return new Response(JSON.stringify({}), { status: 404 });
+  });
+}
 
 afterEach(() => {
   cleanup();
@@ -286,6 +294,41 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
     purgeOrphanKeys();
     expect(window.localStorage.getItem("stock-ladder-open")).toBeNull();
     expect(window.localStorage.getItem("stock-wl-group")).toBeNull();
+  });
+});
+
+// 🟢 版本落差膠囊的**落點**(SC-4 / design R4):元件自身行為在
+// VersionDriftBadge.test.tsx,這裡只驗「在 nav 列內、在 IndexBar 左邊」。
+describe("App 版本落差膠囊落點(SC-4)", () => {
+  function nav() {
+    return screen.getByRole("tablist", { name: "主要分頁" });
+  }
+
+  it("落差態:膠囊在 nav 內,且緊鄰 IndexBar 左側", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "bbbbbbb" }));
+    renderApp();
+    const badge = await within(nav()).findByTestId("version-drift-badge");
+    expect(nav().contains(badge)).toBe(true);
+    expect(badge.nextElementSibling?.textContent).toContain("加權");
+    vi.restoreAllMocks();
+  });
+
+  it("健康態(兩邊同 sha):nav 內零膠囊", async () => {
+    vi.stubGlobal("fetch", appFetch({ fe: "aaaaaaa", be: "aaaaaaa" }));
+    renderApp();
+    // 負例 settle 點:等 health 真的打過再把 promise chain 排乾
+    await waitFor(() =>
+      expect(
+        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some((c) =>
+          String(c[0]).includes("/api/health"),
+        ),
+      ).toBe(true),
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(within(nav()).queryByTestId("version-drift-badge")).toBeNull();
   });
 });
 
