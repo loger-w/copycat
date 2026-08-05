@@ -7,17 +7,21 @@ v3(stock-ui-round5 §🔴-4):`{"codes": [...], "groups": [{"name", "codes"}]}`�
 
 讀時遷移(不就地寫檔):v2(有 groups 無 codes)→ `codes = union(groups)`(畫面零差異);
 v1(只有 codes)→ codes 原樣 + 零群組(v1 從來沒有群組概念,包成假的「自選」組是 v2
-時代沒有未分組桶的權宜)。
+時代沒有未分組桶的權宜)。名為 `UNGROUPED_NAME` 的群組(舊版 bot 造得出)→ 成員先 union
+進 codes 再丟組(discord-watchlist SC-6)。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import TypedDict
 
 from copycat.fileio import atomic_write_text
+
+logger = logging.getLogger(__name__)
 
 
 class Group(TypedDict):
@@ -37,6 +41,9 @@ _CACHE_VERSION = 3
 _CODE_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9]{4,6}$")
 
 DEFAULT_PATH = Path("data") / "stock_watchlist.json"
+# 未分組 = codes − ∪groups 的衍生桶,不是真群組 → 保留名,不得有同名群組
+# (前端 WatchlistManagerDialog 的 UNGROUPED_LABEL 同值,跨檔契約)。
+UNGROUPED_NAME = "未分組"
 
 
 class WatchlistError(ValueError):
@@ -64,9 +71,17 @@ def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
     groups: list[Group] = [
         {"name": str(g["name"]), "codes": list(g["codes"])} for g in payload.get("groups", [])
     ]
-    if "codes" in payload:  # v3 / v1
-        return {"codes": list(payload["codes"]), "groups": groups}
-    return {"codes": union(groups), "groups": groups}  # v2 遷移
+    codes = list(payload["codes"]) if "codes" in payload else union(groups)  # v3 / v1;else v2 遷移
+    dropped = [g for g in groups if g["name"].strip() == UNGROUPED_NAME]
+    if dropped:
+        # 保留名群組是現行 bot 造得出的毒檔:只在寫路拒會讓所有寫入永久 BAD_GROUP。
+        # 丟組前先把成員 union 進 codes(手改檔的組可能含 codes 外股號),再落回未分組衍生桶。
+        for code in union(dropped):
+            if code not in codes:
+                codes.append(code)
+        logger.warning("watchlist 含保留名群組,讀時丟棄:%s(%s)", path, [g["name"] for g in dropped])
+        groups = [g for g in groups if g["name"].strip() != UNGROUPED_NAME]
+    return {"codes": codes, "groups": groups}
 
 
 def normalize(wl: Watchlist) -> Watchlist:
@@ -80,7 +95,7 @@ def normalize(wl: Watchlist) -> Watchlist:
     names: set[str] = set()
     for g in wl["groups"]:
         name = g["name"].strip()
-        if not name or name in names:
+        if not name or name in names or name == UNGROUPED_NAME:
             raise WatchlistError("BAD_GROUP")
         names.add(name)
         deduped: list[str] = []
