@@ -1,10 +1,18 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IndexPage } from "@/components/index/IndexPage";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+import {
+  MARKET2_FUT_STORE,
+  MARKET2_KEY_STORE,
+  MARKET2_MODE_STORE,
+  MARKET_FUT_STORE,
+  MARKET_KEY_STORE,
+  MARKET_MODE_STORE,
+} from "@/lib/constants";
 
 function series(over: Partial<IndexSeries> = {}): IndexSeries {
   return {
@@ -86,223 +94,122 @@ function renderPage(txf: TxfQuote | null = TXF) {
   );
 }
 
-function btn(name: string): HTMLButtonElement {
-  return screen.getByRole("button", { name }) as HTMLButtonElement;
+/** 兩個 pane 的按鈕文字**完全相同**(加權 / 櫃買 / 日K …)——本檔一律先收斂到 pane
+ *  再查,裸 `screen.getByRole` 必撞 ambiguous。 */
+function pane(id: "left" | "right") {
+  return within(screen.getByTestId(`market-pane-${id}`));
 }
 
-describe("IndexPage 標的列(SC-2)", () => {
-  it("三顆標的鈕;預設選加權,現值/漲跌/高低昨收顯示於標題列", () => {
+describe("IndexPage 雙 pane 容器(SC-2)", () => {
+  it("(a) 兩個 pane 同屏:左加權、右櫃買", () => {
     renderPage();
-    expect(btn("加權").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("櫃買")).toBeTruthy();
-    expect(btn("台指期")).toBeTruthy();
-    expect(screen.getByText("加權指數")).toBeTruthy();
-    expect(screen.getByText("42039.92")).toBeTruthy();
-    expect(screen.getByText(/-1594\.27/)).toBeTruthy();
-    expect(screen.getByText(/高 43221\.93/)).toBeTruthy();
-    expect(screen.getByText(/昨收 43634\.19/)).toBeTruthy();
+    expect(pane("left").getByText("加權指數")).toBeTruthy();
+    expect(pane("right").getByText("櫃買指數")).toBeTruthy();
+    expect(pane("left").queryByText("櫃買指數")).toBeNull();
+    expect(pane("right").queryByText("加權指數")).toBeNull();
   });
 
-  it("Quote 漲跌整串:跌用負號(characterization)", () => {
+  it("(b) 兩 pane 週期彼此獨立:左切日K,右仍停在分時", () => {
     renderPage();
-    expect(screen.getByText("-1594.27 (-3.65%)")).toBeTruthy();
+    fireEvent.click(pane("left").getByRole("button", { name: "日K" }));
+    expect(pane("left").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(pane("right").getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(pane("right").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
   });
 
-  it("Quote 漲跌整串:漲帶 + 前綴(characterization;台指期)", () => {
+  it("(b2) 兩 pane 標的彼此獨立:右切加權,左仍是加權且右不影響左標題", () => {
     renderPage();
-    fireEvent.click(btn("台指期"));
-    expect(screen.getByText("+142.00 (+0.34%)")).toBeTruthy();
+    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
+    expect(pane("right").getByText("加權指數")).toBeTruthy();
+    expect(pane("left").getByText("加權指數")).toBeTruthy();
+    expect(pane("left").getByRole("button", { name: "加權" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
-  it("點台指期才出現大台/小台/微台三選一;選微台後標題換料", () => {
+  it("(d) 右 pane 寫 market2 三支 key,左 pane 的舊 key 不動", async () => {
     renderPage();
-    expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
-    fireEvent.click(btn("台指期"));
-    expect(btn("大台").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(btn("微台"));
-    expect(screen.getByText("台指期(微台)")).toBeTruthy();
-    expect(btn("微台").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
+    fireEvent.click(pane("right").getByRole("button", { name: "日K" }));
+    await waitFor(() => expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("day"));
+    expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("TWSE");
+    expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBeNull();
+    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBeNull();
   });
 
-  it("期指商品用獨立 localStorage key,不碰期貨 tab 的 copycat-fut-product(W-13)", () => {
+  it("(d2) 左 pane 寫舊 key,market2 三支不動", async () => {
     renderPage();
-    fireEvent.click(btn("台指期"));
-    fireEvent.click(btn("小台"));
-    expect(window.localStorage.getItem("copycat-market-key")).toBe("MXF");
-    expect(window.localStorage.getItem("copycat-market-fut")).toBe("MXF");
-    expect(window.localStorage.getItem("copycat-fut-product")).toBeNull();
+    fireEvent.click(pane("left").getByRole("button", { name: "台指期" }));
+    fireEvent.click(pane("left").getByRole("button", { name: "小台" }));
+    await waitFor(() => expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF"));
+    expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
+    expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("m1");
+    expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBeNull();
+    expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBeNull();
+    expect(window.localStorage.getItem(MARKET2_FUT_STORE)).toBeNull();
   });
 
-  it("台指期基差列(相對加權)+ 更新時刻", () => {
+  it("(d3) 重疊鈕只在左 pane(右 pane 開了會畫出第二張同樣的加權 vs 櫃買)", () => {
     renderPage();
-    const row = screen.getByTestId("basis-row");
+    expect(pane("left").getByRole("button", { name: "重疊" })).toBeTruthy();
+    expect(pane("right").queryByRole("button", { name: "重疊" })).toBeNull();
+  });
+});
+
+describe("IndexPage 基差列(SC-3)", () => {
+  it("(c) 基差列在雙 pane 之外只有一份,含台指期價 / 價差 / 更新時刻", () => {
+    renderPage();
+    const rows = screen.getAllByTestId("basis-row");
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
     expect(row.textContent).toContain("42142");
     expect(row.textContent).toContain("+102.08");
     expect(row.textContent).toContain("10:16");
+    // 不屬於任一 pane
+    expect(pane("left").queryByTestId("basis-row")).toBeNull();
+    expect(pane("right").queryByTestId("basis-row")).toBeNull();
   });
 
-  it("txf null → 價差顯示「-」", () => {
+  it("(c2) 基差列位於雙 pane 之上", () => {
+    renderPage();
+    const row = screen.getByTestId("basis-row");
+    const left = screen.getByTestId("market-pane-left");
+    expect(row.compareDocumentPosition(left) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("(c3) 正價差用 text-bull,負價差用 text-bear", () => {
+    renderPage();
+    const up = screen.getByText(/價差 \+102\.08/);
+    expect(up.className).toContain("text-bull");
+    cleanup();
+    renderPage({ p: 41_000_000, time: "10:16:10" });
+    const down = screen.getByText(/價差 -1039\.92/);
+    expect(down.className).toContain("text-bear");
+  });
+
+  it("(c4) txf null → 價差顯示「-」", () => {
     renderPage(null);
     expect(screen.getByText(/價差 -/)).toBeTruthy();
   });
 });
 
-describe("IndexPage 週期列(SC-3)", () => {
-  it("十七顆週期鈕,順序 = 分時 / 1-10分 / 30 / 60 / 90 / 日 / 週 / 月", () => {
+describe("IndexPage 相關係數區塊(SC-4)", () => {
+  it("(e) 尾端有相關係數收合鈕,預設收合", () => {
     renderPage();
-    const labels = [
-      "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
-      "30分", "60分", "90分", "日K", "週K", "月K",
-    ];
-    const nodes = labels.map((l) => btn(l));
-    for (let i = 1; i < nodes.length; i += 1) {
-      // DOM 順序 = 畫面由左至右
-      expect(nodes[i - 1]!.compareDocumentPosition(nodes[i]!) & Node.DOCUMENT_POSITION_FOLLOWING)
-        .toBeTruthy();
-    }
+    const toggle = screen.getByRole("button", { name: /相關係數/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("預設分時;切日K 後打 /api/market/bars 並持久化", async () => {
+  it("(e2) 相關係數區塊位於基差列之後", () => {
     renderPage();
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(btn("日K"));
-    expect(window.localStorage.getItem("copycat-market-tf")).toBe("day");
-    await waitFor(() =>
-      expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=D"))).toBe(true),
-    );
-  });
-
-  it("分 K 走 tf=1 共用原料(30/60/90 由前端聚合)", async () => {
-    renderPage();
-    fireEvent.click(btn("90分"));
-    await waitFor(() =>
-      expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=1&days=30"))).toBe(true),
-    );
-  });
-});
-
-describe("IndexPage 櫃買降級(SC-6)", () => {
-  it("日/週/月 K 鈕 disabled,分 K 仍可點", () => {
-    renderPage();
-    fireEvent.click(btn("櫃買"));
-    for (const label of ["日K", "週K", "月K"]) {
-      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
-      expect(btn(label).disabled).toBe(true);
-    }
-    expect(btn("30分").disabled).toBe(false);
-  });
-
-  it("從加權(日K)切到櫃買 → 自動落回分時,不停在 disabled 模式", () => {
-    renderPage();
-    fireEvent.click(btn("日K"));
-    fireEvent.click(btn("櫃買"));
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("後端回 refusal → 圖區顯示明確理由,不畫假圖", async () => {
-    stubFetch({
-      key: "OTC",
-      tf: "D",
-      bars: [],
-      meta: {
-        source: "none",
-        coverage_from: null,
-        coverage_to: null,
-        partial_last: false,
-        volume: false,
-        refusal: "NO_HISTORICAL_SOURCE",
-        synth_since: null,
-      },
-    });
-    renderPage();
-    fireEvent.click(btn("日K"));
-    await waitFor(() =>
-      expect(screen.getByText("達錢 4 未提供櫃買指數,無歷史 K 線資料源")).toBeTruthy(),
-    );
-  });
-
-  it("localStorage 存著非法組合(櫃買 + 日K)重載後落回分時", () => {
-    window.localStorage.setItem("copycat-market-key", "OTC");
-    window.localStorage.setItem("copycat-market-tf", "day");
-    renderPage();
-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("期指沒有分時 → 分時鈕 disabled,由加權切過去自動落到 1分", () => {
-    renderPage();
-    fireEvent.click(btn("台指期"));
-    expect(btn("分時").disabled).toBe(true);
-    expect(btn("1分").getAttribute("aria-pressed")).toBe("true");
-  });
-});
-
-describe("IndexPage 重疊(SC-7 既有能力保留)", () => {
-  it("分時下有重疊 toggle,開啟後顯示加權 vs 櫃買疊線並持久化", () => {
-    renderPage();
-    fireEvent.click(btn("重疊"));
-    expect(screen.getByText("加權 vs 櫃買(相對昨收 %)")).toBeTruthy();
-    expect(screen.getByLabelText("指數重疊走勢")).toBeTruthy();
-    expect(window.localStorage.getItem("copycat-index-mode")).toBe("overlay");
-  });
-
-  it("舊 localStorage 值 overlay 讀時遷移(backward compat)", () => {
-    window.localStorage.setItem("copycat-index-mode", "overlay");
-    renderPage();
-    expect(screen.getByText("加權 vs 櫃買(相對昨收 %)")).toBeTruthy();
-  });
-
-  it("切到 K 線週期後不再顯示重疊圖", () => {
-    window.localStorage.setItem("copycat-index-mode", "overlay");
-    renderPage();
-    fireEvent.click(btn("日K"));
-    expect(screen.queryByLabelText("指數重疊走勢")).toBeNull();
-  });
-});
-
-describe("IndexPage meta 行(SC-4:來源 / 涵蓋期間)", () => {
-  it("顯示資料源中文與涵蓋期間", async () => {
-    renderPage();
-    fireEvent.click(btn("日K"));
-    const meta = await screen.findByTestId("market-meta");
-    expect(meta.textContent).toContain("達錢 4 日K");
-    expect(meta.textContent).toContain("2026-07-27 ~ 2026-07-29");
-  });
-
-  it("fallback 分支要說實話(tc4_dk_1k_agg),partial_last 標未收盤", async () => {
-    stubFetch({
-      ...DK_BODY,
-      meta: { ...DK_BODY.meta, source: "tc4_dk_1k_agg", partial_last: true },
-    });
-    renderPage();
-    fireEvent.click(btn("週K"));
-    const meta = await screen.findByTestId("market-meta");
-    expect(meta.textContent).toContain("達錢 4 1分K 聚合(日K 無資料)");
-    expect(meta.textContent).toContain("最後一根未收盤");
-  });
-
-  it("本機合成標明來源與起始時刻;無量資料不畫 0 柱、量欄顯示「—」", async () => {
-    stubFetch({
-      key: "OTC",
-      tf: "1",
-      bars: [{ t: "2026-07-30 10:17", o: 359_800, h: 359_900, l: 359_700, c: 359_800, v: 0 }],
-      meta: {
-        source: "mis_poll_synth",
-        coverage_from: "2026-07-30",
-        coverage_to: "2026-07-30",
-        partial_last: false,
-        volume: false,
-        refusal: null,
-        synth_since: "10:17",
-      },
-    });
-    renderPage();
-    fireEvent.click(btn("櫃買"));
-    fireEvent.click(btn("1分"));
-    const meta = await screen.findByTestId("market-meta");
-    expect(meta.textContent).toContain("本機合成(MIS 5秒取樣)");
-    expect(meta.textContent).toContain("自 10:17 起");
-    expect(screen.getByText("無量資料")).toBeTruthy();
-    expect(screen.getByText("—")).toBeTruthy(); // 資訊列的量欄
+    const row = screen.getByTestId("basis-row");
+    const toggle = screen.getByRole("button", { name: /相關係數/ });
+    expect(row.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

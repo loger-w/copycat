@@ -108,11 +108,15 @@ describe("App(index-board T9)", () => {
   it("切到大盤 tab 顯示 IndexPage(標的列 + 週期列)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "大盤" }));
-    // 版面自 index-board SC-2/3 起由「兩張並排卡」改為「標的切換 + 單一主圖」
-    await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
-    expect(screen.getByRole("button", { name: "櫃買" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "台指期" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
+    // 版面自 index-board SC-2/3 起由「兩張並排卡」改為「標的切換 + 單一主圖」;
+    // 台股綜合 R1 起是**雙 pane** —— 兩張圖的按鈕文字完全相同,裸 getByRole 會撞
+    // ambiguous,收斂到左 pane 查(斷言意圖不變:大盤頁有標的列 + 週期列)。
+    await waitFor(() => expect(screen.getByTestId("market-pane-left")).toBeTruthy());
+    const left = within(screen.getByTestId("market-pane-left"));
+    expect(left.getByText("加權指數")).toBeTruthy();
+    expect(left.getByRole("button", { name: "櫃買" })).toBeTruthy();
+    expect(left.getByRole("button", { name: "台指期" })).toBeTruthy();
+    expect(left.getByRole("button", { name: "日K" })).toBeTruthy();
   });
 });
 
