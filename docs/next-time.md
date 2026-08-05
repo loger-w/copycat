@@ -475,10 +475,18 @@
   `/api/health` 才發現版本落差。~~ **2026-08-05 已出貨**(feat/frontend-version-drift):
   比對語意經兩輪 review 升級 — dev 模式**不是**單純 sha 等值(HMR 下會漏報動機情境 +
   對純前端 commit 誤報恆亮),而是 vite middleware `/__build/sha?since=<後端sha>` 跑
-  `git log <since>..HEAD -- copycat`(= CLAUDE.md §8 判法含路徑過濾的完整自動化),
-  `behind:true` 才在 nav 列亮 amber「版本落差」膠囊 + console.warn(pair 去重);
-  build 產物退回 define 常數等值比對。真環境已驗:後端 8ef1346 vs HEAD 差 10 個純前端
-  commit → 不亮(正確);since 指到 copycat commit 之前 → 亮。
+  `git log <since>..HEAD -- :/copycat`(top-level magic pathspec;vite cwd 在 frontend/,
+  寫相對路徑會恆回 false 的靜默失效 — 實踩過)= CLAUDE.md §8 判法含路徑過濾的完整自動化,
+  `behind:true` 才在 nav 列亮 amber「版本落差」膠囊 + console.warn(pair 去重)。
+  真環境已驗:後端 8ef1346 vs HEAD ba31a8e 差 30 個 commit、其中**零個碰 copycat/**
+  (前端/docs/artifact)→ 不亮(正確);since 指到 copycat commit 之前 → 亮。
+  (drift 態像素級截圖不完整 — Chrome 視窗異常依紀律不重試,DOM/座標/title 已逐字查證
+  → 待 user 自然複現時過目。)
+  - [ ] **build/prod 的 equal 模式未經真環境驗證**(無 build 部署形態),且無路徑過濾 →
+    純前端 commit 會誤亮。真要部署前先決定:CI 注入 copycat/ 範圍 sha,或把 range 判別
+    搬到後端 /api/health。
+  - [ ] **膠囊只判 commit 落差**:後端 uncommitted(git_dirty=true)跑舊 code 不會亮;
+    /api/health 已回 git_dirty 而前端零消費,要不要併入膠囊/title 是下次議題。
 
 ## 2026-08-03(candle-right-edge-hover /bug 輪 —— 新流程首驗)
 

@@ -1,0 +1,22 @@
+diff --git a/docs/next-time.md b/docs/next-time.md
+index 589f748..21c7546 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -470,9 +470,15 @@
+   → `live/tc4.py`、`_BARS_POLL_DEADLINE` → 去底線、`min-h-56` → `h-56 shrink-0`),
+   都是「條目還在、指的東西已經搬走或改名」。條目寫 `檔案:行號` 很好用但過期無聲;
+   下次大盤點時同樣要逐條回查,或考慮條目只寫**符號名**不寫行號。
+-- [ ] **前端狀態列版本比對**(`/api/health` 的第三個候選修法,本輪只做後端兩個):
++- [x] ~~**前端狀態列版本比對**(`/api/health` 的第三個候選修法,本輪只做後端兩個):
+   前端拿到 `git_sha` 後與 build 時嵌入的 sha 比對才是閉環 —— 現況仍需要人主動去打
+-  `/api/health` 才發現版本落差。
++  `/api/health` 才發現版本落差。~~ **2026-08-05 已出貨**(feat/frontend-version-drift):
++  比對語意經兩輪 review 升級 — dev 模式**不是**單純 sha 等值(HMR 下會漏報動機情境 +
++  對純前端 commit 誤報恆亮),而是 vite middleware `/__build/sha?since=<後端sha>` 跑
++  `git log <since>..HEAD -- copycat`(= CLAUDE.md §8 判法含路徑過濾的完整自動化),
++  `behind:true` 才在 nav 列亮 amber「版本落差」膠囊 + console.warn(pair 去重);
++  build 產物退回 define 常數等值比對。真環境已驗:後端 8ef1346 vs HEAD 差 10 個純前端
++  commit → 不亮(正確);since 指到 copycat commit 之前 → 亮。
+ 
+ ## 2026-08-03(candle-right-edge-hover /bug 輪 —— 新流程首驗)
+ 
