@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date as _date
@@ -155,6 +156,9 @@ async def _boot(
     - `make` 回 `None` = sentinel 解析結果為「不啟動」→ 整段跳過,**不記失敗 log**。
     - `start` 語意 = 「帶到就緒的全部工作」,不只 `o.start()`:stock 的自選回填也在內
       (`load_watchlist` 對壞檔不吞例外,現況正是由這個 except 接住)。
+    - 序列跑在背景 task,關機會 cancel 它 → **`CancelledError` 要單獨接**(`except
+      Exception` 接不到):已建好的物件不關就是一條洩漏的 TC4 session。close 內部多為
+      `asyncio.to_thread`,執行緒派出去後不受 cancel 影響,會自然跑完。
     """
     obj: _BootT | None = None
     try:
@@ -163,6 +167,15 @@ async def _boot(
             return None
         await start(obj)
         return obj
+    except asyncio.CancelledError:
+        if obj is not None:
+            # best-effort:二次 cancel 會讓這個 await 就地拋,log 後把原本的
+            # CancelledError 交還關機路徑(shield 救不了 —— 孤兒 close task 一樣沒人 await)
+            try:
+                await close(obj)
+            except BaseException:
+                logger.exception("%s close 失敗(關機中斷 boot,忽略)", name)
+        raise
     except Exception:
         logger.exception("%s", fail_msg)
         if obj is not None:
@@ -263,18 +276,57 @@ def create_app(
             # 指定日資料(spec R5)
             session_rollover=os.environ.get("TXO_BACKFILL_DATE") is None,
         )
+        # 未 started 的 runtime 照樣掛上去:route 對它的 None 沒有 guard,但「已建構
+        # 未 started」本來就走既有 NOT_READY / 空鏈語意(current-state §4),不需新分支
         app.state.runtime = runtime
+        # 其餘八個先掛 None:窗內的對外形狀 = 既有「引擎降級」形狀(503 / WS close)
+        app.state.stock = None
+        app.state.watchlist_service = None
+        app.state.signal_hub = None
+        app.state.discord_bot = None
+        app.state.index = None
+        app.state.capital = None
+        app.state.futures = None
+        app.state.corr = None
+        # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
+        # AttributeError → 被全域 handler 轉成 502
+        app.state.boot_done = False
+        app.state.boot_error = None
         booted = _Booted()
 
         async def _boot_all() -> None:
-            """引擎啟動序列。**順序即依賴**(current-state §2),不可重排、不可並行:
-            watchlist_service 先於 signals、signals 需 stock、index 綁 runtime.spot、
-            capital 先 set_broadcast 再 start、corr 後於 futures。
+            """引擎啟動序列(背景 task)。**順序即依賴**(current-state §2),不可重排、
+            不可並行:watchlist_service 先於 signals、signals 需 stock、index 綁
+            runtime.spot、capital 先 set_broadcast 再 start、corr 後於 futures。
 
             每完成一段就同時寫 `app.state.X` 與 `booted.X` —— 前者給 route,後者給
             關機反序 close(兩者必須成對,漏寫 record 的引擎關機時不會被關掉)。
             """
-            await runtime.start()
+            started = time.monotonic()
+            try:
+                try:
+                    await runtime.start()
+                except Exception:
+                    # 🔴 D2:原本這裡的例外會炸掉 lifespan → 達錢 4 沒開的早上,個股 /
+                    # 指數 / 群益全部陪葬。改成只降級 txo 面(部分失敗時 `_series` 可能
+                    # 已填、self-heal 鏈仍會嘗試,所以不宣稱「恆 NOT_READY」)
+                    logger.exception("TXO runtime 啟動失敗,txo 面降級(其餘引擎照起)")
+
+                await _boot_engines()
+            except asyncio.CancelledError:
+                raise  # 關機中斷:不設 boot_done(關機中的 server 不得宣告就緒)
+            except Exception as exc:
+                # `_boot` 的傘只罩得住六段引擎;WatchlistService 建構、app.state 指派等
+                # 落在傘外 —— 沒有這層,序列半路崩掉會是「後續引擎全部靜默不啟動而
+                # /api/ready 照樣 true」,最壞的失效樣態
+                logger.exception("boot 序列非預期中止,後續引擎未啟動")
+                app.state.boot_error = repr(exc)
+            # 走到這裡 = 序列結束(可能不完整,由 boot_error 表述);cancel 天然跳過
+            app.state.boot_done = True
+            logger.info("boot 序列結束(%.1fs)", time.monotonic() - started)
+
+        async def _boot_engines() -> None:
+            """六段引擎的實際啟動序列(`_boot_all` 只管完成/中止語意與 done 標記)。"""
 
             # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
             def _make_stock() -> StockEngine | None:
@@ -492,10 +544,21 @@ def create_app(
             app.state.corr = corr
             booted.corr = corr
 
-        await _boot_all()
+        boot_task = asyncio.create_task(_boot_all())
         try:
             yield
         finally:
+            if not boot_task.done():
+                boot_task.cancel()
+            try:
+                await boot_task
+            except asyncio.CancelledError:
+                logger.info("boot 序列被關機中斷(已建物件由 _boot 的 cancel 分支收掉)")
+            except BaseException:
+                # **絕不能讓它跳過下面的反序 close**:裸 await 會把 boot task 的例外
+                # 就地重拋 → 六段 close + runtime.close 全部不執行,TC4 session /
+                # COM 執行緒 / hub worker 一次全洩漏(同白名單「各自 try/except 續行」)
+                logger.exception("boot task 以例外結束(關機續行)")
             # 關機反序:signals → corr → futures → capital → index → stock → runtime
             # (corr 依賴 futures.state(),必須先收;signals 最前 —— fanout worker 還活著時
             # 對已收攤的 stock engine publish 會炸在關機路徑上)

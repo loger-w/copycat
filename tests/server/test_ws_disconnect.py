@@ -41,6 +41,7 @@ import copycat.server.app as app_mod
 from copycat.live.models import SeriesInfo, Tick
 from copycat.server.app import create_app
 from copycat.server.ws import WsBroadcaster, relay
+from tests.helpers.boot import wait_boot
 from tests.helpers.fake_sources import (
     FakeCorrSource,
     FakeFuturesSource,
@@ -164,6 +165,8 @@ class TestAbruptDisconnect:
                 if time.monotonic() > deadline:
                     raise AssertionError("uvicorn 未在時限內啟動")
                 time.sleep(0.01)
+            # `server.started` = HTTP 面開了,不再等於引擎就緒(啟動序列已移背景 task)
+            wait_boot(app)
             port = int(server.servers[0].sockets[0].getsockname()[1])
 
             sock = _ws_handshake(port, "/ws/txo-pnl")
@@ -251,6 +254,7 @@ class _RunningServer:
             ws="auto",
             timeout_graceful_shutdown=graceful_timeout,
         )
+        self.app = app  # `wait_boot` 用:HTTP 開了 ≠ 引擎就緒(啟動序列在背景 task)
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.port = 0
@@ -268,6 +272,7 @@ class _RunningServer:
                 self.server.should_exit = True
                 raise AssertionError("uvicorn 未在時限內啟動")
             time.sleep(0.01)
+        wait_boot(self.app)  # 六路推播鏈的正向對照需要引擎真的起完
         self.port = int(self.server.servers[0].sockets[0].getsockname()[1])
         return self
 

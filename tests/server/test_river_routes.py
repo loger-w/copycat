@@ -5,13 +5,14 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
+from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeCorrSource
 from tests.helpers.fake_txo import FakeTxoSource
 
 
 def _client(corr_source: object | None) -> TestClient:
     app = create_app(FakeTxoSource(), corr_source=corr_source, throttle_secs=0.01)
-    return TestClient(app, raise_server_exceptions=False)
+    return BootedClient(app, raise_server_exceptions=False)
 
 
 class TestRiverStateRoute:

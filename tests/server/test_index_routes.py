@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
+from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.fake_txo import FakeTxoSource
 
@@ -24,7 +25,7 @@ def make_client(index_source: FakeIndexSource | None) -> tuple[TestClient, FakeI
         index_mis_fetch=_mis,
         throttle_secs=0.01,
     )
-    return TestClient(app, raise_server_exceptions=False), index_source
+    return BootedClient(app, raise_server_exceptions=False), index_source
 
 
 class TestIndexState:

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
+from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeFuturesSource, FakeIndexSource
 from tests.helpers.fake_sources import dbar as _dbar
 from tests.helpers.fake_txo import FakeTxoSource
@@ -54,7 +55,7 @@ def make_client(
         futures_source=futures_source,
         throttle_secs=0.01,
     )
-    return TestClient(app, raise_server_exceptions=False)
+    return BootedClient(app, raise_server_exceptions=False)
 
 
 class TestValidation:

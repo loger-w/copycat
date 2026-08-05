@@ -25,6 +25,7 @@ from copycat.capital.safety import SafetyConfig
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.app import create_app
 from tests.capital.fake_com import FakeCom, RejectingCom
+from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeFuturesSource
 
 C23000 = OptionContract(symbol="TC.O.TWF.TXO.202607.C.23000", cp="C", strike_millipts=23_000_000)
@@ -124,7 +125,7 @@ def make_client(
     )
     if configure is not None:
         configure(app)
-    return TestClient(app, raise_server_exceptions=False)
+    return BootedClient(app, raise_server_exceptions=False)
 
 
 _STOCK_BODY: dict[str, Any] = {"stock_no": "2330", "buy_sell": "buy", "price": 590.0, "qty": 1}
