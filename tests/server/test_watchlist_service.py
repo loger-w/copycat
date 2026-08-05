@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -503,6 +504,99 @@ class TestChangedFlag:
 
         _, removed_again = await service.remove("2330")
         assert removed_again is False
+
+
+#: 「現況不可用」的兩種真實形態:內容不合規則(壞碼)與超上限(讀得到但 normalize 拒)。
+#: 兩者都讓 `_current_canonical()` 回 None,而四個群組方法的存在性判定就架在它上面。
+_BROKEN_FILE = json.dumps(
+    {"codes": ["2330", "bad code"], "groups": [{"name": "主力", "codes": ["2330"]}]},
+    ensure_ascii=False,
+)
+_OVER_LIMIT_FILE = json.dumps(
+    {
+        "codes": [f"{1000 + i}" for i in range(WATCHLIST_LIMIT + 1)],
+        "groups": [{"name": "主力", "codes": ["1000"]}],
+    },
+    ensure_ascii=False,
+)
+
+#: 四個群組方法的代表性呼叫(目標群組「主力」在壞檔裡確實存在 —— 若基準改讀空快照,
+#: delete/rename/ungroup 會回誤導的 GROUP_NOT_FOUND,create_group 更會以空為底覆蓋)。
+_GROUP_OPS: dict[str, Callable[[WatchlistService], Awaitable[tuple[Watchlist, bool]]]] = {
+    "create_group": lambda s: s.create_group("新組"),
+    "delete_group": lambda s: s.delete_group("主力"),
+    "rename_group": lambda s: s.rename_group("主力", "核心"),
+    "ungroup": lambda s: s.ungroup("2330", "主力"),
+}
+
+
+class TestGroupOpsOnUnusableFile:
+    """v3 A1/B1:現況不可用 → 四個群組方法一律 `WATCHLIST_UNAVAILABLE` 且零寫。
+
+    舊碼以 `_snapshot()`(壞檔視同空)當基準,於是 `/watch group add` 會拿一份**空**
+    名單當底覆蓋回去 = 靜默清空整份自選(使用者只看到「已建立群組」);
+    delete/rename/ungroup 則回「找不到該群組」,把「檔壞了」講成「你打錯名字」。
+    """
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param(_BROKEN_FILE, id="broken"),
+            pytest.param(_OVER_LIMIT_FILE, id="over_limit"),
+        ],
+    )
+    @pytest.mark.parametrize("op", sorted(_GROUP_OPS))
+    async def test_raises_unavailable_and_writes_nothing(
+        self, tmp_path: Path, op: str, payload: str
+    ) -> None:
+        service, engine, path = _service(tmp_path)
+        path.write_text(payload, encoding="utf-8")
+
+        with pytest.raises(WatchlistError, match="WATCHLIST_UNAVAILABLE"):
+            await _GROUP_OPS[op](service)
+
+        assert path.read_text(encoding="utf-8") == payload  # 逐字不變
+        assert engine.set_calls == []
+        assert engine.published == []
+
+    async def test_apply_still_heals_an_unusable_file(self, tmp_path: Path) -> None:
+        """零寫早退不得擋住自癒:整份 apply(前端存檔)仍要能覆蓋壞檔。"""
+        service, engine, path = _service(tmp_path)
+        path.write_text(_BROKEN_FILE, encoding="utf-8")
+
+        result = await service.apply({"codes": ["2330"], "groups": []})
+
+        assert result == {"codes": ["2330"], "groups": []}
+        assert load_watchlist(path) == result
+        assert engine.set_calls == [["2330"]]
+
+
+class TestGroupNameStrip:
+    """v3 A3:群組名的比對基準統一為 strip 後值(add 的自動建群曾漏掉)。"""
+
+    async def test_add_with_padded_group_joins_existing_group(self, tmp_path: Path) -> None:
+        """舊碼以未 strip 的名比對 → 「主力 」建出第二個群組,而 normalize strip 後
+        兩組同名 → `BAD_GROUP`;使用者看到的是「群組名稱不合法」而名字明明合法。"""
+        service, engine, _ = _service(tmp_path)
+        await service.add("2330", group="主力")
+        engine.published.clear()
+
+        result, changed = await service.add("5483", group="主力 ")
+
+        assert changed is True
+        assert result["groups"] == [{"name": "主力", "codes": ["2330", "5483"]}]
+
+    async def test_add_padded_group_membership_is_a_noop(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        first, _ = await service.add("2330", group="主力")
+        mtime = path.stat().st_mtime_ns
+
+        again, changed = await service.add("2330", group=" 主力 ")
+
+        assert changed is False
+        assert again == first
+        assert path.stat().st_mtime_ns == mtime
+        assert engine.set_calls == [["2330"]]
 
 
 class TestReservedGroupGate:

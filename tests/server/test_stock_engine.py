@@ -154,6 +154,7 @@ class TestRefcountPool:
         await engine.set_watchlist(["2330", "2317"])
         subscribed = len(src.subscribed)
         unsubscribed = len(src.unsubscribed)
+        assert subscribed > 0  # 基準非零:第一次真的訂到了,第二次的「不變」才有意義
 
         await engine.set_watchlist(["2330", "2317"])
 
