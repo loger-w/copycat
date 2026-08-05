@@ -74,6 +74,7 @@ from copycat.signal_rules import (
     save_rules,
 )
 from copycat.signals_config import SignalsConfig
+from copycat.stock_watchlist import Group
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,9 @@ _DISCORD_WINDOW_SECS = 60.0
 
 _LEVEL_LABEL = {"cdp": "中軸", "ah": "AH", "nh": "NH", "nl": "NL", "al": "AL"}
 _LEVEL_ROLE = {"ah": "壓力", "nh": "壓力", "nl": "支撐", "al": "支撐"}
+
+#: 同群摘要最多印幾檔其他成員(group-grid SC-1);超過就只補一句總數
+_GROUP_PEERS = 4
 
 
 def _levels_of(row: dict[str, Any]) -> list[str]:
@@ -188,6 +192,8 @@ class SignalHub:
         data_dir: Path,
         trade_date_fn: Callable[[], str],
         now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
+        groups_fn: Callable[[], list[Group]] | None = None,
+        quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None,
     ) -> None:
         self._cfg = cfg
         self._publish = publish
@@ -196,6 +202,11 @@ class SignalHub:
         self._data_dir = Path(data_dir)
         self._trade_date_fn = trade_date_fn
         self._now_fn = now_fn
+        # 同群摘要(group-grid SC-1/2)。兩者皆 None = 停用 —— 這是**測試預設**,
+        # 生產端由 `create_app` 接上;接線測試在 `test_stock_routes` 那一側把關。
+        self._groups_fn = groups_fn
+        self._quotes_fn = quotes_fn
+        self._groups: list[Group] = []
         self._rules_path = self._data_dir / _RULES_FILE
         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
@@ -436,6 +447,7 @@ class SignalHub:
         self._staged_date = None
 
     def on_watchlist(self, codes: list[str]) -> None:
+        self._refresh_groups()
         new = set(codes)
         added = new - self._watch
         removed = self._watch - new
@@ -449,6 +461,54 @@ class SignalHub:
                 # 否則 stage2 整批取代時它不在暫存區,隔天一整天沒有基準。
                 # 當日那筆照排不動 —— 今天剩下的時間仍要有 CDP。
                 self.request_basis(sorted(added), basis_date=self._staged_date, staged=True)
+
+    def _refresh_groups(self) -> None:
+        """群組結構跟著自選一起更新(SC-2)。
+
+        `groups_fn` 生產端是讀自選檔 —— 失敗時**保舊值**而不是清空:membership 這一邊
+        照樣更新完,清空只會讓摘要從此永久消失,而畫面上完全看不出來(Discord 只是
+        少了一段尾巴)。舊群組頂多是「上一次的分組」,比沒有好。
+        """
+        if self._groups_fn is None:
+            return
+        try:
+            self._groups = self._groups_fn()
+        except Exception:
+            logger.exception("群組結構讀取失敗,同群摘要沿用上一份(%d 組)", len(self._groups))
+
+    def _group_suffix(self, row: dict[str, Any]) -> str:
+        """同群摘要(SC-1)。在 **Discord worker** 呼叫 —— 離熱路徑,quotes 取的是
+        「發送當下」的快照(訊號產生到送出之間的價差可接受,拿的是最新的更有用)。
+
+        回空字串的三種正常情況:兩 fn 未注入 / code 不屬任何群組(未分組是衍生桶不是
+        群組)/ 群組只有觸發者自己。一檔可屬多群組 → 取**群組序**第一個含它的。
+
+        排序鍵 `(chg is None, -abs(chg))`:無行情的排最後 —— 摘要要回答的是「同群
+        今天有沒有一起動」,一個還沒開盤的成員排在第一位等於把版面讓給零資訊。
+
+        整段 never-raise:摘要是通知的**裝飾**,它壞掉不得讓訊號本身消失(WS/jsonl
+        有而 Discord 沒有,對照時最容易被誤判成 Discord 掛了)。
+        """
+        quotes_fn = self._quotes_fn
+        if quotes_fn is None or self._groups_fn is None:
+            return ""
+        try:
+            code = str(row.get("code", ""))
+            group = next((g for g in self._groups if code in g["codes"]), None)
+            if group is None:
+                return ""
+            peers = [c for c in group["codes"] if c != code]
+            if not peers:
+                return ""
+            quotes = quotes_fn()
+            peers.sort(key=lambda c: _peer_sort_key(quotes.get(c)))
+            shown = "、".join(_peer_text(c, quotes.get(c)) for c in peers[:_GROUP_PEERS])
+            total = len(group["codes"])
+            tail = f"、…共 {total} 檔" if total > _GROUP_PEERS + 1 else ""
+            return f"｜同群 {group['name']}:{shown}{tail}"
+        except Exception:
+            logger.exception("同群摘要組裝失敗(通知照送):%s", row.get("id"))
+            return ""
 
     def _drop_code(self, code: str) -> None:
         """SC-5:逐 slot 丟 + 雙 cache pop —— 漏掉 cache 的話重新加入時
@@ -719,7 +779,8 @@ class SignalHub:
     async def _send_discord(self, row: dict) -> None:
         if not self._allow_discord():
             return
-        text = format_signal_text(row)
+        # 摘要**只接在 Discord 這一段**:WS/jsonl 是歷史真相源,格式不隨通知裝飾漂移
+        text = format_signal_text(row) + self._group_suffix(row)
         sender = self._discord_sender
         if sender is not None:
             try:
@@ -768,6 +829,22 @@ class SignalHub:
             if isinstance(value, bool):
                 flags[key] = value
         return flags
+
+
+def _peer_sort_key(quote: tuple[str, float | None] | None) -> tuple[bool, float]:
+    """同群成員排序(SC-1):|漲跌幅| 降冪,**無行情一律墊底**。
+
+    第一位是 bool 而不是把 None 當 0:當 0 排的話「還沒開盤」會混進平盤那一區,
+    而那兩件事對「同群有沒有一起動」的判讀完全不同。
+    """
+    chg = quote[1] if quote is not None else None
+    return (chg is None, -abs(chg or 0.0))
+
+
+def _peer_text(code: str, quote: tuple[str, float | None] | None) -> str:
+    """`{代碼}{名稱} {+x.x%}`;名稱缺(盤前 / 未訂閱)→ 只印代碼,不留尾隨空白。"""
+    name, chg = quote if quote is not None else ("", None)
+    return f"{code}{name} {'-' if chg is None else f'{chg:+.1f}%'}"
 
 
 def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
