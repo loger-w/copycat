@@ -25,6 +25,7 @@ from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub, format_signal_text
 from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
 from copycat.signals_config import SignalsConfig
+from copycat.stock_watchlist import Group
 
 _DATE = "2026-08-04"
 _NEXT = "2026-08-05"
@@ -197,12 +198,41 @@ def _boom_cdp(*_args: int) -> dict[str, int]:
     raise RuntimeError("compute_cdp 壞了")
 
 
+class _Watch:
+    """`groups_fn` / `quotes_fn` 的替身(SC-1/2):內容可換、可設成拋例外。
+
+    生產端兩者分別是「讀自選檔」與「讀 engine 現值」—— 都可能在盤中失敗,而摘要
+    是通知的**裝飾**,失敗絕不能連帶把訊號本身打掉,所以兩條失敗路徑都要有替身。
+    """
+
+    def __init__(
+        self,
+        groups: list[Group] | None = None,
+        quotes: dict[str, tuple[str, float | None]] | None = None,
+    ) -> None:
+        self.groups: list[Group] = list(groups or [])
+        self.quotes: dict[str, tuple[str, float | None]] = dict(quotes or {})
+        self.groups_error = False
+        self.quotes_error = False
+
+    def groups_fn(self) -> list[Group]:
+        if self.groups_error:
+            raise RuntimeError("自選檔讀取失敗")
+        return list(self.groups)
+
+    def quotes_fn(self) -> dict[str, tuple[str, float | None]]:
+        if self.quotes_error:
+            raise RuntimeError("engine quotes 壞了")
+        return dict(self.quotes)
+
+
 class _Harness:
     def __init__(
         self,
         tmp_path: Path,
         clock: _Clock,
         bars: _FakeBars | None = None,
+        wl: _Watch | None = None,
         **over: float | int,
     ) -> None:
         self.published: list[dict] = []
@@ -226,6 +256,9 @@ class _Harness:
             data_dir=tmp_path,
             trade_date_fn=lambda: self.date,
             now_fn=clock,
+            # 預設 None = 未注入(既有測試的摘要恆為空字串,行為零改動)
+            groups_fn=wl.groups_fn if wl is not None else None,
+            quotes_fn=wl.quotes_fn if wl is not None else None,
         )
 
     def _notify(self, text: str) -> bool:
@@ -1387,6 +1420,250 @@ class TestDiscordText:
     def test_legacy_row_without_rule_name(self) -> None:
         """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
         assert format_signal_text(self._row()).endswith("10:00:00")
+
+
+class TestGroupSuffix:
+    """同群摘要(group-grid SC-1/2)。
+
+    摘要在 **Discord worker** 組(離熱路徑),所以 quotes 取的是「發送當下」的快照 ——
+    這裡逐項釘格式與降級,因為它的失效樣態全是靜默的:排序反了只是「看起來怪」、
+    例外沒接住則整則通知消失(而 WS/jsonl 有,對照時最容易被當成 Discord 掛了)。
+    """
+
+    async def test_end_to_end_text_appends_summary(self, tmp_path: Path, clock: _Clock) -> None:
+        """逐字:`format_signal_text` 之後接摘要,WS/jsonl payload 零改。"""
+        wl = _Watch(
+            groups=[{"name": "半導體", "codes": ["2330", "2454", "2317"]}],
+            quotes={"2330": ("台積電", 1.5), "2454": ("聯發科", -3.2), "2317": ("鴻海", 0.8)},
+        )
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2454", "2317"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+
+            assert len(h.bot) == 1
+            assert h.bot[0].endswith("｜同群 半導體:2454聯發科 -3.2%、2317鴻海 +0.8%")
+            assert h.bot[0].startswith(format_signal_text(h.published[0]))
+            # WS / jsonl 零改動:摘要是 Discord 專屬
+            assert set(h.published[0]) == _SIGNAL_KEYS
+            assert all("同群" not in json.dumps(r, ensure_ascii=False) for r in h.rows())
+        finally:
+            await h.hub.close()
+
+    async def test_fallback_webhook_gets_same_summary(self, tmp_path: Path, clock: _Clock) -> None:
+        """bot 未 ready 走 webhook —— 兩層是同一段文字(design §4.3)。"""
+        wl = _Watch(
+            groups=[{"name": "半導體", "codes": ["2330", "2317"]}],
+            quotes={"2330": ("台積電", 1.5), "2317": ("鴻海", 0.8)},
+        )
+        h = _Harness(tmp_path, clock, wl=wl)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert h.fallback == [h.fallback[0]]
+            assert h.fallback[0].endswith("｜同群 半導體:2317鴻海 +0.8%")
+        finally:
+            await h.hub.close()
+
+    async def test_not_injected_means_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
+        """兩 fn 未注入(預設 None)→ 摘要停用,文字與規則化之前逐字相同。"""
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert h.bot[0] == format_signal_text(h.published[0])
+        finally:
+            await h.hub.close()
+
+    def _suffix(self, tmp_path: Path, clock: _Clock, wl: _Watch, code: str = "2330") -> str:
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.hub.on_watchlist(sorted({c for g in wl.groups for c in g["codes"]} | {code}))
+        return h.hub._group_suffix({"code": code})
+
+    def test_edge1_first_group_containing_code_wins(self, tmp_path: Path, clock: _Clock) -> None:
+        """edge 1:一檔可屬多群組 → 取**群組序**第一個含它的(不是最大的、不是最後的)。"""
+        wl = _Watch(
+            groups=[
+                {"name": "A", "codes": ["2330", "2317"]},
+                {"name": "B", "codes": ["2330", "2454"]},
+            ],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0), "2454": ("聯發科", 3.0)},
+        )
+        assert self._suffix(tmp_path, clock, wl) == "｜同群 A:2317鴻海 +2.0%"
+
+    def test_edge2_solo_group_has_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
+        """edge 2:群組只有觸發者自己 → 無「其他成員」→ 不附(不留空的分隔符)。"""
+        wl = _Watch(
+            groups=[{"name": "獨", "codes": ["2330"]}],
+            quotes={"2330": ("台積電", 1.0)},
+        )
+        assert self._suffix(tmp_path, clock, wl) == ""
+
+    def test_edge4_ungrouped_code_has_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
+        """edge 4:自選內但不屬任何群組(未分組是衍生桶不是群組)→ 不附。"""
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2317", "2454"]}],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0), "2454": ("聯發科", 3.0)},
+        )
+        assert self._suffix(tmp_path, clock, wl) == ""
+
+    def test_edge3_over_five_takes_top4_and_total_tail(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """edge 3:成員總數(含觸發者)> 5 → |漲跌幅| 前 4 + 尾綴總數(N = **總數**)。"""
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317", "2454", "3008", "2308", "1301"]}],
+            quotes={
+                "2330": ("台積電", 0.5),
+                "2317": ("鴻海", 1.0),
+                "2454": ("聯發科", -4.0),
+                "3008": ("大立光", 3.0),
+                "2308": ("台達電", -2.0),
+                "1301": ("台塑", 5.0),
+            },
+        )
+        assert self._suffix(tmp_path, clock, wl) == (
+            "｜同群 A:1301台塑 +5.0%、2454聯發科 -4.0%、3008大立光 +3.0%、2308台達電 -2.0%、…共 6 檔"
+        )
+
+    def test_exactly_five_shows_all_four_without_tail(self, tmp_path: Path, clock: _Clock) -> None:
+        """邊界另一側:總數 5(其他 4 檔)剛好全印 → **不得**出現「…共 5 檔」。"""
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317", "2454", "3008", "2308"]}],
+            quotes={
+                "2330": ("台積電", 0.5),
+                "2317": ("鴻海", 1.0),
+                "2454": ("聯發科", 2.0),
+                "3008": ("大立光", 3.0),
+                "2308": ("台達電", 4.0),
+            },
+        )
+        assert self._suffix(tmp_path, clock, wl) == (
+            "｜同群 A:2308台達電 +4.0%、3008大立光 +3.0%、2454聯發科 +2.0%、2317鴻海 +1.0%"
+        )
+
+    def test_edge7_missing_quote_shows_dash_and_sorts_last(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """edge 7:quotes 讀不到(未訂閱瞬間)→ `-`,且排在有行情的之後。
+
+        名稱同時缺 → 只印代碼:硬拼一個空字串會留下 `2317 ` 這種尾隨空白。
+        """
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317", "2454"]}],
+            quotes={"2330": ("台積電", 1.0), "2454": ("聯發科", 0.1)},
+        )
+        assert self._suffix(tmp_path, clock, wl) == "｜同群 A:2454聯發科 +0.1%、2317 -"
+
+    def test_explicit_none_chg_sorts_last(self, tmp_path: Path, clock: _Clock) -> None:
+        """有 meta 但無行情(chg None)也一樣排最後 —— 排序鍵第一位是「有沒有值」。"""
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317", "2454"]}],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", None), "2454": ("聯發科", 0.1)},
+        )
+        assert self._suffix(tmp_path, clock, wl) == "｜同群 A:2454聯發科 +0.1%、2317鴻海 -"
+
+    def test_groups_follow_watchlist_changes(self, tmp_path: Path, clock: _Clock) -> None:
+        """SC-2:群組結構改了(建群 / 改名 / 移成員)→ 下一則摘要跟著變。"""
+        wl = _Watch(
+            groups=[{"name": "舊", "codes": ["2330", "2317"]}],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0), "2454": ("聯發科", 3.0)},
+        )
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.hub.on_watchlist(["2330", "2317"])
+        assert h.hub._group_suffix({"code": "2330"}) == "｜同群 舊:2317鴻海 +2.0%"
+
+        wl.groups = [{"name": "新", "codes": ["2330", "2454"]}]
+        h.hub.on_watchlist(["2330", "2454"])
+        assert h.hub._group_suffix({"code": "2330"}) == "｜同群 新:2454聯發科 +3.0%"
+
+    def test_groups_fn_failure_keeps_previous_groups(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """自選檔讀取失敗 → 保舊值 + log。
+
+        清空才是危險的那一邊:membership 更新照走,但摘要會**永久**消失一整天,
+        而畫面上完全看不出來(Discord 只是少了一段尾巴)。
+        """
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317"]}],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
+        )
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.hub.on_watchlist(["2330", "2317"])
+        wl.groups_error = True
+        with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+            h.hub.on_watchlist(["2330", "2317", "2454"])
+        assert h.hub._watch == {"2330", "2317", "2454"}  # membership 照更新
+        assert h.hub._group_suffix({"code": "2330"}) == "｜同群 A:2317鴻海 +2.0%"
+        assert caplog.text != ""
+
+    async def test_quotes_failure_degrades_to_empty_suffix_not_lost_signal(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """摘要組裝任何例外 → 空字串 + log,訊號本身照送(摘要是裝飾不是內容)。"""
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317"]}],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
+        )
+        wl.quotes_error = True
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
+                h.cross_nh(_state())
+                await h.settle()
+            assert h.bot == [format_signal_text(h.published[0])]
+            assert len(h.rows()) == 1
+            assert caplog.text != ""
+        finally:
+            await h.hub.close()
+
+    async def test_notify_gate_still_blocks_discord_only(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """摘要接上去之後,`notify_discord=False` 仍然只擋 Discord(gate 未被繞過)。"""
+        _write_rules(
+            tmp_path,
+            [
+                _rule("cdp_cross", "r-1-000", name="要通知"),
+                _rule("cdp_cross", "r-1-001", name="不通知", notify_discord=False),
+            ],
+        )
+        wl = _Watch(
+            groups=[{"name": "A", "codes": ["2330", "2317"]}],
+            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
+        )
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert len(h.published) == 2
+            assert len(h.rows()) == 2
+            assert h.bot == [
+                "🔔 突破 CDP NH(壓力・第1次)｜台積電 2330｜80.50｜10:00:00｜要通知"
+                "｜同群 A:2317鴻海 +2.0%"
+            ]
+        finally:
+            await h.hub.close()
 
 
 class TestRulesCrud:
