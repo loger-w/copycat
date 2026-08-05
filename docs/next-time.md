@@ -1,4 +1,14 @@
 
+## 2026-08-05(capital-position-key-kind 收尾留尾巴)
+
+- [ ] **SC-7 真實環境驗證待補**(群益夜間登入 fail,memory 記「待白天觀察」):下次自然
+  重啟後打 `GET /api/capital/positions` 確認形狀正常、面板部位列顯示與現況一致(單一
+  種類帳戶下畫面應無差異,sec 列多一個 現/資/券 小字標籤)。同檔資+集保並存是低頻
+  狀態,真要驗兩列並存需等實際持倉出現
+- [ ] 平倉 dup guard 未按 kind 細分(本輪 out of scope,白名單 5 的保守行為):同檔兩
+  種類**同向**平倉時,第二筆會被「已有同向活躍委託」擋(委託回報沒有庫存種類這一維,
+  活單掃描只能以標的比對)。要細分需先確認回報端能否還原種類(sFlag / flag_label)
+
 ## 2026-08-05(txo-contract-last-price Phase 5 review 沉澱)
 
 - [ ] **TXO 市價估價的 reset 窗 UX**(review S-1,P1 判為 Known Risk 不擋本輪):
@@ -108,7 +118,7 @@
 
 - [ ] COM 卡死 stalled 心跳偵測(review B7):寫入 timeout 連發 / 幫浦圈停擺目前只靠 log,需心跳觀測基建(status 加 last_pump_ts + watchdog 降級);監控面非正確性,本輪 deferred
 - [ ] 期貨改價 `CorrectPriceBySeqNo` 末參數 nTradeType=0(ROD)對期權 IOC/FOK 單的影響 prod 首驗(review A6;test 沙盒未開通不可先驗)— 若群益端把改價後 TIF 重設為 ROD,IOC 單改價語意會變
-- [ ] 部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到。〔2026-08-04 查證:dedupe 實際住在 `balance.py`(`dedupe_positions` :70-88 / `merge_fut_positions` :92-112,由 `client.py:348/:399` 寫入前套用),`store.py` 只是 `stock_no` 單鍵 dict(:74,:230)— 那兩個函式是單鍵設計的補償層(docstring 自承「寧少不錯」)。改造範圍 = store 鍵 + 移除 sec dedupe 補償 + 平倉 `req.key` 帶 kind(client.py:809/:824)+ REST 與前端 `CapitalPositionsList`(以 stock_no 找列)連動,含 wire 契約,比原記載大〕
+- [x] ~~部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到。〔2026-08-04 查證:dedupe 實際住在 `balance.py`(`dedupe_positions` :70-88 / `merge_fut_positions` :92-112,由 `client.py:348/:399` 寫入前套用),`store.py` 只是 `stock_no` 單鍵 dict(:74,:230)— 那兩個函式是單鍵設計的補償層(docstring 自承「寧少不錯」)。改造範圍 = store 鍵 + 移除 sec dedupe 補償 + 平倉 `req.key` 帶 kind(client.py:809/:824)+ REST 與前端 `CapitalPositionsList`(以 stock_no 找列)連動,含 wire 契約,比原記載大〕~~ **2026-08-05 修畢(mod/capital-position-key-kind)**:`store._positions` 改 `(stock_no, kind)` 複合鍵(`set_positions` carry-over / `apply_profit_rows` 同鍵回填、kind=None 整列略過;`position_for(stock_no, kind=None)` 三態 = 精確鍵 / 唯一列 fallback / 多列回 None 不猜);**`balance.dedupe_positions` 補償層已刪**(`merge_fut_positions` 保留 — fut 列 kind 恆 cash,同契約 B/S 複合鍵下仍同鍵,不合併會互蓋);`close_position` sec 走 `(key, kind)`,無 kind 且同檔多列 → 403 ORDER_BLOCKED「請指定種類」(fail-safe 不猜種類),fut 走唯一匹配不寫死 cash;close 兩把鍵顯式分離(inflight 含 kind、活單掃描仍以標的);`_on_profit_complete` 兩段判別(查無股號靜默 / 種類不符才 warning);wire 加 optional `kind`(`PositionCloseRequest` / `PositionCloseBody` / 前端 `CapitalCloseBody`),前端 rowKey 複合化 + sec 列種類標籤(現/資/券,代號 span 的獨立子元素)+ 確認彈窗種類列。gate:pytest 1686 / npm test 1002 / ruff / pyright 0 / validate 42/42。**真環境待驗**(群益登入 + 面板部位列,見下)
 
 ## 2026-07-29(trade-layout-rework 順手清單)
 
