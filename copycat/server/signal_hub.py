@@ -11,15 +11,28 @@
 - **兩條佇列不可合併**(CC-5):jsonl 是歷史真相源(重連 refetch 讀它),Discord 是
   可丟的通知路。共用一條時 Discord 一卡住 jsonl 就跟著缺角,而缺角靜默且不可回復。
   關機時 jsonl 佇列要排空(含 worker 手上那則),Discord 佇列直接放棄。
-- **訊號 id 是決定性鍵**(`trade_date-code-kind-levels|direction-time_key`):
+- **訊號 id 是決定性鍵**(`trade_date-rule_id-code-kind-levels|direction-time_key`):
   不依賴 process 記憶,重啟後重發同一事件會得到同一個 id,前端與 jsonl 都據此去重。
+  規則 id 是其中一段(signal-rules R13):同 kind 兩條規則同一 tick 各發一則,沒有
+  這一段兩則會撞成同一個 id 被前端當重複丟掉。
 - **Discord 節流只擋 Discord**:WS 與 jsonl 是歷史真相源,節流它們會讓
   「reconnect refetch today」自癒語意破掉(design §4.3 R2-8)。
 
-換日順序契約(design §4.1 stage2):`on_rollover` **先 `reset_day()` 再
-`swap_staged_basis()`** —— 反了會把剛換上的當日基準洗掉(見 signal_state 模組
+規則引擎(signal-rules design「SC-2/3/5 hub」):**每條規則一顆未改動的
+`SignalDetector`**(per-rule `SignalsConfig`,`rule_config()` 映射)。hub 持:
+
+- `_slots`:熱路徑唯一讀取點。CRUD 在鎖內組好完整新 dict,**落檔成功後**才以單一
+  賦值替換(dict 賦值原子)—— 任何時刻熱路徑看到的都是自洽快照,落檔失敗則記憶體
+  零變更(畫面有、重啟後沒有,是最難查的一種不一致)。
+- `_basis_cache` / `_staged_cache`:CDP 基準的**唯一**快照(帶基準日),由 hub 依
+  各規則的 `cdp_levels` 過濾後餵給該規則的 detector。基準日不符一律**丟棄**(不寫
+  cache、不分發、不餵 None)—— 餵 None 會把 rollover 已 promote 的正確基準洗掉,
+  而且不會自癒。
+
+換日順序契約(design §4.1 stage2):`on_rollover` **先逐 slot `reset_day()` 再
+promote 暫存區** —— 反了會把剛換上的當日基準洗掉(見 signal_state 模組
 docstring)。stage1 (`on_rollover_pending`) 在盤前把次日基準抓進暫存區,
-stage2 只做 swap,開盤第一筆 tick 起 CDP 即用當日正確基準。
+stage2 只做 promote,開盤第一筆 tick 起 CDP 即用當日正確基準。
 """
 
 from __future__ import annotations
@@ -32,8 +45,9 @@ import json
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from copycat.fileio import atomic_write_text
 from copycat.live.signal_state import (
@@ -49,6 +63,17 @@ from copycat.live.stock_models import StockTick, _best_limit_price
 from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.server.overlay import compute_cdp
+from copycat.signal_rules import (
+    MAX_RULES,
+    Rule,
+    RuleError,
+    default_rules,
+    load_rules,
+    new_rule_id,
+    normalize_rule,
+    rule_config,
+    save_rules,
+)
 from copycat.signals_config import SignalsConfig
 
 logger = logging.getLogger(__name__)
@@ -67,6 +92,7 @@ DISCORD_QUEUE_MAXSIZE = 100
 #: 關機時等 jsonl worker 把手上與佇列中的訊號寫完的上限
 _CLOSE_FLUSH_TIMEOUT = 5.0
 _ENABLED_FILE = "signals_enabled.json"
+_RULES_FILE = "signal_rules.json"
 _SIGNAL_DIR = "signals"
 _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
 _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
@@ -105,11 +131,46 @@ def _kind_text(row: dict[str, Any]) -> str:
 
 
 def format_signal_text(row: dict[str, Any]) -> str:
-    """Discord 文案(bot 與 webhook 同一段,design §4.3)。"""
+    """Discord 文案(bot 與 webhook 同一段,design §4.3)。
+
+    有 `rule_name` 才在文末附規則名(R14b):同 kind 多規則在 Discord 靠它辨識來源;
+    升級當日的舊 jsonl row 沒有這個鍵,不得因此留下一個空的分隔符。
+    """
     price = row.get("price")
     price_text = f"{price / 1000:.2f}" if isinstance(price, int) else "-"
     who = f"{row.get('name') or ''} {row.get('code', '')}".strip()
-    return f"🔔 {_kind_text(row)}｜{who}｜{price_text}｜{row.get('time', '')}"
+    text = f"🔔 {_kind_text(row)}｜{who}｜{price_text}｜{row.get('time', '')}"
+    rule_name = row.get("rule_name")
+    return f"{text}｜{rule_name}" if rule_name else text
+
+
+@dataclass(frozen=True)
+class _RuleSlot:
+    """規則 / detector / 開關集合是**不可分割**的一組(R2)。
+
+    拆成三個平行 dict 時,熱路徑可能讀到「新規則配舊 detector」的混血快照;
+    綁成一顆 frozen slot 之後,替換永遠是整顆換掉。
+    """
+
+    rule: Rule
+    detector: SignalDetector
+    enabled: frozenset[str]  # rule.enabled ? {rule.kind} : frozenset()
+
+
+def _copy_rule(rule: Rule) -> Rule:
+    """對外回傳的規則一律是副本 —— 呼叫端改到的不能是熱路徑正在讀的那份。"""
+    out = cast("Rule", dict(rule))
+    out["params"] = dict(rule["params"])
+    out["cdp_levels"] = list(rule["cdp_levels"])
+    return out
+
+
+def _filter_levels(cdp: dict[str, int] | None, levels: list[str]) -> dict[str, int] | None:
+    """規則只訂閱部分 CDP 線 → 只餵那幾條(detector 只認得被餵進去的線)。"""
+    if not cdp:
+        return None
+    picked = {name: cdp[name] for name in levels if name in cdp}
+    return picked or None
 
 
 class SignalHub:
@@ -131,12 +192,22 @@ class SignalHub:
         self._data_dir = Path(data_dir)
         self._trade_date_fn = trade_date_fn
         self._now_fn = now_fn
-        self._detector = SignalDetector(cfg, now_fn=now_fn)
+        self._rules_path = self._data_dir / _RULES_FILE
+        # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
+        # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
+        self._slots: dict[str, _RuleSlot] = {}
+        self._rule_seq = 0  # id 單調計數(R12):刪掉的 id 不回收
+        self._load_or_migrate_rules()
+        self._rules_lock = asyncio.Lock()  # CRUD 的驗證 + 落檔 + swap 共同臨界區
         self._watch: set[str] = set()
-        self._enabled: dict[str, bool] = self._load_enabled()
+        # 舊四鍵開關家族:評估已改讀 slots,這裡只剩遷移來源與尚未退役的 route(T3b 刪)
+        self._enabled: dict[str, bool] = self._legacy_flags()
         self._enabled_set: frozenset[str] = self._as_set(self._enabled)
         self._enabled_lock = asyncio.Lock()  # read-modify-write + 落檔的共同臨界區(CC-7)
         self._basis_jobs: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
+        #: CDP 基準的唯一快照:code → (基準日, cdp);日別是丟棄過期結果的判準(R3)
+        self._basis_cache: dict[str, tuple[str, dict[str, int] | None]] = {}
+        self._staged_cache: dict[str, dict[str, int] | None] = {}
         self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
         # 兩條獨立佇列 + 兩個 worker(CC-5):Discord 卡住時 jsonl 這條真相源要照走
         self._jsonl_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=JSONL_QUEUE_MAXSIZE)
@@ -152,6 +223,96 @@ class SignalHub:
     @property
     def dropped(self) -> int:
         return self.dropped_jsonl + self.dropped_discord
+
+    # ---- 規則(SC-2)----
+
+    def _load_or_migrate_rules(self) -> None:
+        """三態(`load_rules`):缺檔 → 由既有全域設定 + 舊開關檔生成預設並落檔;
+        合法(含空陣列)→ 照用(使用者刪光規則不得復活預設);壞檔 → 往外拋。
+        """
+        rules = load_rules(self._rules_path)
+        if rules is None:
+            rules = default_rules(self._cfg, self._legacy_flags())
+            save_rules(self._rules_path, rules)  # OSError 往外拋:記憶體不得先於落檔
+            logger.info("訊號規則檔不存在,已由現行設定生成 %d 條預設規則", len(rules))
+        self._slots = {rule["id"]: self._make_slot(rule) for rule in rules}
+        self._rule_seq = len(rules)
+
+    def _make_slot(self, rule: Rule) -> _RuleSlot:
+        """建 detector 的**唯一**入口(R5):初始化 / 遷移 / upsert 三處同式,
+        漏帶 `now_fn` 的那一顆會偷用真實時鐘,而測試與盤後重放都看不出來。
+        """
+        return _RuleSlot(
+            rule=rule,
+            detector=SignalDetector(rule_config(rule, self._cfg), now_fn=self._now_fn),
+            enabled=frozenset({rule["kind"]}) if rule["enabled"] else frozenset(),
+        )
+
+    def rules(self) -> list[Rule]:
+        return [_copy_rule(slot.rule) for slot in self._slots.values()]
+
+    async def upsert_rule(self, payload: dict[str, Any], rule_id: str | None = None) -> Rule:
+        """`rule_id` None = 新增(配新 id),否則 = 編輯(缺 → RULE_NOT_FOUND)。
+
+        順序(R17):鎖內驗證 → 落檔 → **同一個不含 await 的同步區塊**內 swap `_slots`
+        並 seed 新 slot。seed 與 swap 之間插不進 basis worker,新 slot 必帶最新快照;
+        落檔失敗則記憶體零變更、例外往外拋(route 轉 500 RULE_SAVE_FAILED)。
+        """
+        async with self._rules_lock:
+            current = {rid: slot.rule for rid, slot in self._slots.items()}
+            seq = self._rule_seq
+            if rule_id is None:
+                if len(current) >= MAX_RULES:
+                    logger.warning("規則數已達上限 %d,拒絕新增", MAX_RULES)
+                    raise RuleError("INVALID_RULE")
+                epoch = int(self._now_fn().timestamp())
+                target = new_rule_id(epoch, seq)
+                while target in current:  # 同秒多次新增 / 匯入過的 id:單調往前找
+                    seq += 1
+                    target = new_rule_id(epoch, seq)
+            elif rule_id not in current:
+                raise RuleError("RULE_NOT_FOUND")
+            else:
+                target = rule_id
+            others = {rid: r for rid, r in current.items() if rid != target}
+            rule = normalize_rule(cast("Rule", {**payload, "id": target}), others)
+            slot = self._make_slot(rule)
+
+            merged = dict(current)
+            merged[target] = rule
+            await asyncio.to_thread(save_rules, self._rules_path, list(merged.values()))
+
+            slots = dict(self._slots)
+            slots[target] = slot
+            self._slots = slots
+            if rule_id is None:
+                self._rule_seq = seq + 1
+            self._seed_slot(slot)
+            return _copy_rule(rule)
+
+    async def delete_rule(self, rule_id: str) -> None:
+        async with self._rules_lock:
+            if rule_id not in self._slots:
+                raise RuleError("RULE_NOT_FOUND")
+            remaining = [slot.rule for rid, slot in self._slots.items() if rid != rule_id]
+            await asyncio.to_thread(save_rules, self._rules_path, remaining)
+            slots = dict(self._slots)
+            slots.pop(rule_id, None)
+            self._slots = slots
+
+    def _seed_slot(self, slot: _RuleSlot) -> None:
+        """upsert 的反向軸(R17):新 detector 補上已在手的當日基準。
+
+        沒有這一步,盤中編輯規則等於把該規則的 CDP 停到隔天 —— 而畫面只會顯示
+        「這條規則今天都沒發」,沒有任何錯誤訊號。
+        """
+        if slot.rule["kind"] != "cdp_cross":
+            return
+        today = self._trade_date_fn()
+        for code, (basis_date, cdp) in self._basis_cache.items():
+            if basis_date != today:
+                continue
+            slot.detector.set_basis(code, _filter_levels(cdp, slot.rule["cdp_levels"]))
 
     # ---- 生命週期 ----
 
@@ -196,41 +357,60 @@ class SignalHub:
         if code not in self._watch:
             return
         try:
-            ctx = self._context(state, tick.cum_vol)
-            for event in self._detector.evaluate(code, tick, ctx, self._enabled_set):
-                self._emit(event, state)
+            ctx = self._context(state, tick.cum_vol)  # ctx 每 tick 一次,全規則共用
         except Exception:
             # engine 熱路徑不可被訊號層汙染:丟棄這一筆評估,tick 本身照常走完
-            logger.exception("訊號評估失敗(丟棄該 tick):%s", code)
+            logger.exception("訊號 ctx 組建失敗(丟棄該 tick):%s", code)
+            return
+        for slot in self._slots.values():
+            try:
+                for event in slot.detector.evaluate(code, tick, ctx, slot.enabled):
+                    self._emit(event, slot.rule, state)
+            except Exception:
+                # per-rule 隔離(R1):一條規則炸掉只跳過它自己這一 tick,其餘照評
+                logger.exception("訊號規則評估失敗(丟棄):%s / %s", code, slot.rule["name"])
 
     def on_book(self, code: str, state: StockDayState) -> None:
         if code not in self._watch:
             return
         try:
             ctx = self._context(state, 0)  # 簿路只評估鎖板 kind,不會用到 day_volume
-            for event in self._detector.evaluate_book(code, ctx, self._enabled_set):
-                self._emit(event, state)
         except Exception:
-            logger.exception("簿更新訊號評估失敗(丟棄):%s", code)
+            logger.exception("簿更新 ctx 組建失敗(丟棄):%s", code)
+            return
+        for slot in self._slots.values():
+            try:
+                for event in slot.detector.evaluate_book(code, ctx, slot.enabled):
+                    self._emit(event, slot.rule, state)
+            except Exception:
+                logger.exception("簿更新規則評估失敗(丟棄):%s / %s", code, slot.rule["name"])
 
     def on_rollover_pending(self, new_date: str) -> None:
-        """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 swap。
+        """stage1(盤前):以次日為基準日預抓進暫存區,stage2 只做 promote。
 
         **先清暫存區**(MFS-2):快路徑(pending 與 stage2 同一輪 loop 連發)會讓 stage1
-        的 job 在 swap 之後才被 worker 消化,結果留在暫存區到下一輪換日;不清掉的話
-        下一次 swap 會回 True 並把舊日基準當當日基準用一整天,零錯誤訊號。
+        的 job 在 promote 之後才被 worker 消化,結果留在暫存區到下一輪換日;不清掉的話
+        下一次 promote 會成立並把舊日基準當當日基準用一整天,零錯誤訊號。
         """
-        self._detector.clear_staged()
+        self._staged_cache.clear()
         self._staged_date = new_date
         self.request_basis(sorted(self._watch), basis_date=new_date, staged=True)
 
     def on_rollover(self) -> None:
         expected = self._trade_date_fn()  # engine 已前進到新日別(stage2 契約)
-        self._detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 swap
-        if not self._detector.swap_staged_basis(expected):
+        for slot in self._slots.values():
+            slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
+        if self._staged_cache and self._staged_date == expected:
+            self._basis_cache = {code: (expected, cdp) for code, cdp in self._staged_cache.items()}
+            for code in self._basis_cache:
+                self._distribute(code)
+        else:
             # stage1 沒跑過(週六補市日 / server 盤中才啟動)→ 重抓;該窗 CDP 停用
             logger.info("換日無預抓基準,清空重抓(design §4.2 fallback)")
+            self._basis_cache.clear()
             self.request_basis(sorted(self._watch))
+        self._staged_cache.clear()
+        self._staged_date = None
 
     def on_watchlist(self, codes: list[str]) -> None:
         new = set(codes)
@@ -238,9 +418,18 @@ class SignalHub:
         removed = self._watch - new
         self._watch = new
         for code in sorted(removed):
-            self._detector.drop_code(code)
+            self._drop_code(code)
         if added:
             self.request_basis(sorted(added))
+
+    def _drop_code(self, code: str) -> None:
+        """SC-5:逐 slot 丟 + 雙 cache pop —— 漏掉 cache 的話重新加入時
+        `_seed_slot` 會拿舊快照當當日基準,而那份可能已經是別天的。
+        """
+        for slot in self._slots.values():
+            slot.detector.drop_code(code)
+        self._basis_cache.pop(code, None)
+        self._staged_cache.pop(code, None)
 
     # ---- CDP 基準 ----
 
@@ -261,7 +450,9 @@ class SignalHub:
             except Exception:
                 # worker 死掉 = 之後所有基準靜默停用(stock_engine._backfill_worker CR4 同款)
                 logger.exception("CDP 基準解析未預期失敗,%s 停用 CDP", code)
-                self._detector.set_basis(code, None)
+                for slot in self._slots.values():
+                    if slot.rule["kind"] == "cdp_cross":
+                        slot.detector.set_basis(code, None)
             finally:
                 self._basis_jobs.task_done()
             if self._cfg.basis_gap_secs > 0:
@@ -284,13 +475,30 @@ class SignalHub:
             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
         if staged:
             if basis_date != self._staged_date:
-                # 這則是上一輪 stage1 排的、在 `clear_staged` 之後才跑完的 in-flight job;
+                # 這則是上一輪 stage1 排的、在暫存區清空之後才跑完的 in-flight job;
                 # 放進去等於把殘渣重新種回暫存區(MFS-2)
                 logger.info("捨棄過期的 staged 基準:%s(%s)", code, basis_date)
                 return
-            self._detector.stage_basis(code, cdp, basis_date)
-        else:
-            self._detector.set_basis(code, cdp)
+            self._staged_cache[code] = cdp
+            return
+        if basis_date != self._trade_date_fn():
+            # 換日已經走完 promote,這則是舊日別的 in-flight job → **丟棄**(R18)。
+            # 餵 None 會把剛 promote 的正確基準洗掉,而且整天不會自癒。
+            logger.info("捨棄過期的當日基準:%s(%s)", code, basis_date)
+            return
+        self._basis_cache[code] = (basis_date, cdp)
+        self._distribute(code)
+
+    def _distribute(self, code: str) -> None:
+        """把快照餵給每條 CDP 規則(只做 levels 過濾;日別比對在 `_resolve_basis`)。"""
+        entry = self._basis_cache.get(code)
+        if entry is None:
+            return
+        cdp = entry[1]
+        for slot in self._slots.values():
+            if slot.rule["kind"] != "cdp_cross":
+                continue
+            slot.detector.set_basis(code, _filter_levels(cdp, slot.rule["cdp_levels"]))
 
     # ---- 事件 fanout ----
 
@@ -314,11 +522,13 @@ class SignalHub:
             day_volume=day_volume,
         )
 
-    def _emit(self, event: SignalEvent, state: StockDayState) -> None:
+    def _emit(self, event: SignalEvent, rule: Rule, state: StockDayState) -> None:
         trade_date = self._trade_date_fn()
         payload = {
             "type": "signal",
-            "id": _event_id(trade_date, event),
+            "id": _event_id(trade_date, rule["id"], event),
+            "rule_id": rule["id"],
+            "rule_name": rule["name"],
             "kind": event.kind,
             "code": event.code,
             "name": state.meta.name if state.meta is not None else "",
@@ -330,9 +540,10 @@ class SignalHub:
             "touch_count": event.touch_count,
         }
         self._publish(payload)  # WS 同步先送(前端要即時)
-        self._enqueue({**payload, "trade_date": trade_date})
+        self._enqueue({**payload, "trade_date": trade_date}, notify=rule["notify_discord"])
 
-    def _enqueue(self, row: dict) -> None:
+    def _enqueue(self, row: dict, *, notify: bool) -> None:
+        """`notify` 只擋 Discord:jsonl 是歷史真相源,關通知不等於不留紀錄。"""
         if self._closing:  # 關機已開始:再收件就永遠不會被寫出去
             return
         if _put_drop_oldest(self._jsonl_queue, row):
@@ -341,6 +552,8 @@ class SignalHub:
                 logger.warning(
                     "訊號 jsonl 佇列滿,已丟棄 %d 筆(WS 不受影響)", self.dropped_jsonl
                 )
+        if not notify:
+            return
         if _put_drop_oldest(self._discord_queue, row):
             self.dropped_discord += 1
             if self.dropped_discord % _DROP_LOG_EVERY == 1:
@@ -495,7 +708,12 @@ class SignalHub:
     def _enabled_path(self) -> Path:
         return self._data_dir / _ENABLED_FILE
 
-    def _load_enabled(self) -> dict[str, bool]:
+    def _legacy_flags(self) -> dict[str, bool]:
+        """舊四鍵開關檔(遷移專用來源;fail-open 全開)。
+
+        規則化之後這份只在「規則檔不存在」時被讀一次,用來決定四條種子規則的
+        `enabled`;之後永遠不再回頭讀它(T3b 會把 route 與 setter 一併退役)。
+        """
         flags = dict.fromkeys(SWITCH_KEYS, True)  # 缺檔 = 全開
         path = self._enabled_path()
         if not path.exists():
@@ -540,7 +758,11 @@ def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
     return True
 
 
-def _event_id(trade_date: str, event: SignalEvent) -> str:
-    """決定性鍵(design §4.3 R1):不依賴 process 記憶 → 重啟後同一事件同 id。"""
+def _event_id(trade_date: str, rule_id: str, event: SignalEvent) -> str:
+    """決定性鍵(design §4.3 R1):不依賴 process 記憶 → 重啟後同一事件同 id。
+
+    `rule_id` 是必要的一段:同 kind 兩條規則同一 tick 各發一則,少了它兩則同 id,
+    前端去重會把第二則整個吃掉(signal-rules 邊界 2)。
+    """
     tag = "+".join(event.levels) or event.direction or "-"
-    return f"{trade_date}-{event.code}-{event.kind}-{tag}-{event.time_key}"
+    return f"{trade_date}-{rule_id}-{event.code}-{event.kind}-{tag}-{event.time_key}"
