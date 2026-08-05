@@ -51,6 +51,7 @@ from copycat.server.watchlist_service import WatchlistService
 from copycat.signal_rules import Rule, RuleError
 from copycat.signals_config import load_signals_config
 from copycat.stock_watchlist import (
+    WATCHLIST_LIMIT,
     Group,
     WatchlistError,
     load_watchlist,
@@ -420,6 +421,12 @@ def create_app(
                     data_dir=wl_path.parent,
                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
                     trade_date_fn=lambda: engine.trade_date,
+                    # 同群摘要(group-grid SC-1/2)。groups 只在 `on_watchlist` 讀檔
+                    # (自選變更時),quotes 在 Discord worker 讀 engine 現值 —— 兩者
+                    # 都輕同步,不進熱路徑。漏接的失效樣態是「通知少一段尾巴」而已,
+                    # 所以由 booted app 的接線測試把關。
+                    groups_fn=lambda: load_watchlist(wl_path)["groups"],
+                    quotes_fn=engine.quotes,
                 )
 
             async def _start_signals(hub: SignalHub) -> None:
@@ -906,6 +913,31 @@ def create_app(
         _valid_code(code)
         await stock.set_main(code)  # 含回補觸發(design §2.5)
         return stock.snapshot(code)
+
+    @app.get("/api/stock/group-state")
+    async def stock_group_state(request: Request, codes: str = "") -> dict:
+        """群組檢視的唯讀 batch(group-grid SC-4)。
+
+        **刻意不重用 `/api/stock/state/{code}`**:那條路會 `set_main`,群組檢視每分鐘
+        對最多 30 檔各要一次狀態 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結,而畫面
+        上只表現為「圖不動了」沒有任何錯誤訊號。
+
+        逗號分隔的 codes 自行解析(不用 `list[str]` query):FastAPI 的重複參數形對
+        30 個 code 會長到難以閱讀,而轉換失敗回的是 422 + list 形 detail,不符全站
+        `{"detail": {"error": code}}` 契約。
+
+        **無 404 路徑**:未知 / 未訂閱 code → `no_data: true` 空 minutes。卡片要答的是
+        「這格畫不畫得出東西」,對它來說兩者是同一件事;整批中一顆 404 反而會讓整個
+        batch 沒得顯示。
+        """
+        stock = _stock(request)
+        wanted = [c for c in codes.split(",") if c]
+        # 數量先驗:超量時逐碼驗證只是白做工,而且錯誤碼會變成 BAD_CODE 誤導排查方向
+        if len(wanted) > WATCHLIST_LIMIT:
+            raise HTTPException(status_code=400, detail={"error": "BAD_CODES"})
+        for code in wanted:
+            _valid_code(code)
+        return {"states": stock.group_snapshot(wanted)}
 
     # ---- index(指數看盤;index-board SC-4)----
 
