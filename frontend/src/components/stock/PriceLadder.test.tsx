@@ -43,6 +43,19 @@ function mockFetch(routes: Record<string, Route>) {
   });
 }
 
+/** capital 路由 mock 的預設底：orders / positions 皆空,`extra` 疊加或覆寫。
+ *
+ *  兩條路由**每個 render 都要在**:PriceLadder 同時訂閱 useCapitalOrders 與
+ *  useCapitalPositions,未登記的 URL 會讓 mock fetch 直接 throw —— 失效樣態是某個
+ *  與本測試無關的 query 炸開,而不是斷言紅。 */
+function mockCapitalFetch(extra: Record<string, Route> = {}) {
+  return mockFetch({
+    "/api/capital/orders": () => json({ orders: [] }),
+    "/api/capital/positions": () => json({ positions: [] }),
+    ...extra,
+  });
+}
+
 function capitalOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
   return {
     seq_no: "001",
@@ -114,6 +127,7 @@ describe("PriceLadder 市價單列(round6 項 4)", () => {
   };
 
   function render_(book: typeof BOOK) {
+    mockCapitalFetch();
     return render(
       <QueryClientProvider client={qc}>
         <PriceLadder code="2327" book={book} last={LAST} meta={META} />
@@ -158,7 +172,7 @@ describe("PriceLadder 市價單列(round6 項 4)", () => {
 describe("PriceLadder(既有顯示行為)", () => {
   // 🔴-6:摺疊機制移除(右欄 tab 本身即顯隱,stock-ladder-open 停用)
   it("直接展開:價格列即時可見,標題列顯示標的(D-12)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(ladder());
     expect(screen.getByText("110")).toBeTruthy(); // 漲停端點
     expect(screen.getByText("90")).toBeTruthy(); // 跌停端點
@@ -167,7 +181,7 @@ describe("PriceLadder(既有顯示行為)", () => {
   });
 
   it("標題列帶股名時一併顯示(右欄跨 tab 切換的誤送防線)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(
       <QueryClientProvider client={qc}>
         <PriceLadder code="2330" name="台積電" book={BOOK} last={LAST} meta={META} />
@@ -177,14 +191,14 @@ describe("PriceLadder(既有顯示行為)", () => {
   });
 
   it("五檔量對映顯示於對應價位列(買賣側各自可點區)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(ladder());
     expect(screen.getByLabelText("買 100").textContent).toBe("30");
     expect(screen.getByLabelText("賣 100.5").textContent).toBe("10");
   });
 
   it("±5% 外價位買賣側皆反灰不可點(SC-7)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(ladder());
     expect(screen.getByLabelText("買 110").hasAttribute("disabled")).toBe(true);
     expect(screen.getByLabelText("賣 110").hasAttribute("disabled")).toBe(true);
@@ -192,7 +206,7 @@ describe("PriceLadder(既有顯示行為)", () => {
   });
 
   it("跟隨置中預設開,center 變更觸發 scrollIntoView", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     const { rerender } = render(ladder());
     expect(
       screen.getByRole("button", { name: "跟隨置中" }).getAttribute("aria-pressed"),
@@ -204,7 +218,7 @@ describe("PriceLadder(既有顯示行為)", () => {
   });
 
   it("無 ref 與 last → 顯示「無資料」(edge 6)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(
       <QueryClientProvider client={qc}>
         <PriceLadder
@@ -222,12 +236,11 @@ describe("PriceLadder(既有顯示行為)", () => {
 describe("PriceLadder 武裝直送(SC-7)", () => {
   it("武裝點價:1 次 API call + payload 斷言;鈕轉「解除」紅底", async () => {
     const bodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": (init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
       },
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
     armUp();
@@ -251,12 +264,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   it("未武裝點價:零請求 + hint「未武裝 — 點價不送單」3s 自動消失", () => {
     vi.useFakeTimers();
     const bodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": (init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
       },
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
     fireEvent.click(screen.getByLabelText("賣 100.5"));
@@ -270,12 +282,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
 
   it("同格 500ms 防抖:連點同格 1 call;不同格照送", async () => {
     const bodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": (init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
       },
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
     armUp();
@@ -287,7 +298,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   });
 
   it("code 變更自動解除武裝(symbol_changed)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     const { rerender } = render(ladder());
     armUp();
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
@@ -296,7 +307,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   });
 
   it("Esc 鍵解除武裝", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(ladder());
     armUp();
     fireEvent.keyDown(window, { key: "Escape" });
@@ -304,7 +315,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   });
 
   it("capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(ladder());
     armUp();
     act(() => setCapitalWsStatus("open"));
@@ -315,7 +326,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
 
   it("idle 5 分鐘自動解除", () => {
     vi.useFakeTimers();
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     render(ladder());
     armUp();
     act(() => {
@@ -326,12 +337,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
 
   it("無券(daytrade_sell)鎖買側;賣側照送且 payload 帶 trade_kind", async () => {
     const bodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": (init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
       },
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
     armUp();
@@ -346,12 +356,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
 
   it("qty 快捷同鍵累加 + 手動輸入重置;payload 帶累加後張數", async () => {
     const bodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": (init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
       },
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
     const qtyInput = screen.getByLabelText("張數") as HTMLInputElement;
@@ -373,10 +382,9 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
   });
 
   it("送單失敗:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除", async () => {
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": () =>
         json({ detail: { error: "ORDER_BLOCKED", reason: "order_disabled" } }, 403),
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     render(ladder());
     armUp();
@@ -392,7 +400,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
 describe("PriceLadder 掛單紅方格(SC-7)", () => {
   it("本檔活單價位聚合殘量;他檔/非活單不顯示;點擊逐 seq 直刪", async () => {
     const cancelBodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/cancel": (init) => {
         cancelBodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
@@ -442,12 +450,11 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
 
   it("centerRequest → 該價置中、暫停跟隨,且不送單", () => {
     const bodies: unknown[] = [];
-    mockFetch({
+    mockCapitalFetch({
       "/api/capital/order/stock": (init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return json(OK_RESULT);
       },
-      "/api/capital/orders": () => json({ orders: [] }),
     });
     const { rerender } = render(withCenter(null));
     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
@@ -461,7 +468,7 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
   });
 
   it("同價連點靠 nonce 變化重捲(值相同不會被 effect deps 吞掉)", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     const { rerender } = render(withCenter({ priceMilli: 100_500, nonce: 1 }));
     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
     spy.mockClear();
@@ -470,7 +477,7 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
   });
 
   it("不在階梯上的價位 → 不捲動也不崩", () => {
-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    mockCapitalFetch();
     const { rerender } = render(withCenter(null));
     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
     spy.mockClear();
