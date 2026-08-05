@@ -162,18 +162,25 @@ describe("VersionDriftBadge build 產物語意(/__build/sha 404 → define 等�
 });
 
 describe("VersionDriftBadge warn 去重(SC-5:per pair)", () => {
-  /** 推進一輪 60s 輪詢並把 promise chain 排乾。 */
+  /** 推進一輪 60s 輪詢並把 promise chain 排乾。
+   *
+   *  尾巴補兩次 1ms 是必要的:health 與 `/__build/sha` 是**兩段式**(後者的 since 來自
+   *  前者的回應),一次 advance 只推得動第一段;而且步進必須 > 0ms ——
+   *  `advanceTimersByTimeAsync(0)` 推不動第二段(實測 5 輪 0ms 後膠囊仍未出現,改 1ms
+   *  第一輪就到位)。 */
   async function poll(ms = 60_000) {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(ms);
-    });
+    for (const step of [ms, 1, 1]) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(step);
+      });
+    }
   }
 
   it("落差 → 消失 → 同一組 sha 再現:warn 仍只有一次(C2 載重路徑)", async () => {
     vi.useFakeTimers();
     fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
     wrap(<VersionDriftBadge />);
-    await poll(0);
+    await poll(1);
     expect(screen.queryByTestId("version-drift-badge")).toBeTruthy();
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
@@ -193,7 +200,7 @@ describe("VersionDriftBadge warn 去重(SC-5:per pair)", () => {
     vi.useFakeTimers();
     fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
     wrap(<VersionDriftBadge />);
-    await poll(0);
+    await poll(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
     fixture = { be: "ccccccc", build: { git_sha: "aaaaaaa", behind: true } };
