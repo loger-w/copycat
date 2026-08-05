@@ -1,32 +1,52 @@
 /** @vitest-environment jsdom */
-/** 版本落差膠囊(SC-4)與 console.warn once per pair(SC-5)。 */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+/** 版本落差膠囊(SC-4)與 console.warn once per pair(SC-5)。
+ *
+ *  dev 路徑的判定來源是 middleware 的 `behind`(design C3 range 判別),不是 sha 等值 ——
+ *  fixture 因此要同時餵 `/api/health`(後端 sha)與 `/__build/sha`(git_sha + behind)。 */
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VersionDriftBadge } from "@/components/VersionDriftBadge";
 import { wrap } from "@/test-utils";
 
+interface Fixture {
+  /** /api/health 的 git_sha */
+  be?: string | null;
+  beStatus?: number;
+  /** /__build/sha 的回應 body */
+  build?: { git_sha: string | null; behind: boolean | null };
+  buildStatus?: number;
+}
+
+let fixture: Fixture;
 let fetchMock: ReturnType<typeof vi.fn>;
 let warnSpy: ReturnType<typeof vi.spyOn>;
 
-/** health 的 git_sha 與 /__build/sha 的回應;`status` 用於 500 負例。 */
-function mockFetch(opts: { health?: unknown; healthStatus?: number; buildSha?: string | null }) {
+/** 讀 `fixture` 的**當下**值 → 測試中途改 fixture,下一輪輪詢就會拿到新答案。 */
+function installFetch() {
   fetchMock = vi.fn((url: string) => {
     const u = String(url);
     if (u.includes("/api/health")) {
       return Promise.resolve(
-        new Response(JSON.stringify(opts.health ?? {}), { status: opts.healthStatus ?? 200 }),
+        new Response(JSON.stringify({ git_sha: fixture.be ?? null, git_dirty: false }), {
+          status: fixture.beStatus ?? 200,
+        }),
       );
     }
     if (u.includes("/__build/sha")) {
-      return Promise.resolve(JSON.stringify({ git_sha: opts.buildSha ?? null })).then(
-        (b) => new Response(b),
+      return Promise.resolve(
+        new Response(JSON.stringify(fixture.build ?? { git_sha: null, behind: null }), {
+          status: fixture.buildStatus ?? 200,
+        }),
       );
     }
     return Promise.resolve(new Response("{}", { status: 404 }));
   });
   vi.stubGlobal("fetch", fetchMock);
+}
+
+function callsTo(frag: string): number {
+  return fetchMock.mock.calls.filter((c) => String(c[0]).includes(frag)).length;
 }
 
 /** 負例的 settle 點(design R9):先確認 fetch 真的發生,再把 promise chain 排乾
@@ -39,6 +59,8 @@ async function settle() {
 }
 
 beforeEach(() => {
+  fixture = {};
+  installFetch();
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -46,12 +68,13 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("VersionDriftBadge 落差態(SC-4/SC-5)", () => {
-  it("前後端 sha 不同 → 膠囊出現,title 帶兩邊 sha", async () => {
-    mockFetch({ health: { git_sha: "bbbbbbb" } });
-    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
+  it("behind=true(後端落後 copycat/ 的新 commit)→ 膠囊出現,title 帶兩邊 sha", async () => {
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
+    wrap(<VersionDriftBadge />);
     const badge = await screen.findByTestId("version-drift-badge");
     expect(badge.textContent).toContain("版本落差");
     const title = badge.getAttribute("title") ?? "";
@@ -61,8 +84,8 @@ describe("VersionDriftBadge 落差態(SC-4/SC-5)", () => {
   });
 
   it("console.warn 恰一次,訊息含兩邊 sha 與「重啟」(SC-5)", async () => {
-    mockFetch({ health: { git_sha: "bbbbbbb" } });
-    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
+    wrap(<VersionDriftBadge />);
     await screen.findByTestId("version-drift-badge");
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
@@ -76,80 +99,106 @@ describe("VersionDriftBadge 落差態(SC-4/SC-5)", () => {
 });
 
 describe("VersionDriftBadge 健康態(零 DOM 零噪音)", () => {
-  it("兩邊 sha 相同 → 不掛任何 DOM、不 warn", async () => {
-    mockFetch({ health: { git_sha: "aaaaaaa" } });
-    const { container } = wrap(<VersionDriftBadge feSha="aaaaaaa" />);
+  it("behind=false(前端 commit 沒動到 copycat/)→ 不掛任何 DOM、不 warn", async () => {
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: false } };
+    const { container } = wrap(<VersionDriftBadge />);
     await settle();
     expect(screen.queryByTestId("version-drift-badge")).toBeNull();
     expect(container.textContent).toBe("");
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("後端 git_sha 為 null(非 git checkout)→ 不誤報", async () => {
-    mockFetch({ health: { git_sha: null } });
-    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
+  it("behind=null(middleware 不判定:since 非法 / git 失敗)→ 不誤報", async () => {
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: null } };
+    wrap(<VersionDriftBadge />);
     await settle();
     expect(screen.queryByTestId("version-drift-badge")).toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("後端 git_sha 為 null(非 git checkout)→ 連問都不問,不誤報", async () => {
+    fixture = { be: null, build: { git_sha: "aaaaaaa", behind: true } };
+    wrap(<VersionDriftBadge />);
+    await settle();
+    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
+    expect(callsTo("/__build/sha")).toBe(0);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("/api/health 500 → 不誤報(後端沒回答不等於版本不同)", async () => {
-    mockFetch({ health: {}, healthStatus: 500 });
-    wrap(<VersionDriftBadge feSha="aaaaaaa" />);
+    fixture = { be: "bbbbbbb", beStatus: 500, build: { git_sha: "aaaaaaa", behind: true } };
+    wrap(<VersionDriftBadge />);
     await settle();
     expect(screen.queryByTestId("version-drift-badge")).toBeNull();
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("前端 sha 未知(live 未回、prop 為 null)→ 不誤報", async () => {
-    mockFetch({ health: { git_sha: "bbbbbbb" } });
-    wrap(<VersionDriftBadge feSha={null} />);
+  it("/__build/sha 500(transient)→ 不誤報,也不退回 define 等值比對(C1)", async () => {
+    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
+    fixture = { be: "bbbbbbb", buildStatus: 500 };
+    wrap(<VersionDriftBadge />);
     await settle();
     expect(screen.queryByTestId("version-drift-badge")).toBeNull();
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("VersionDriftBadge build 產物語意(/__build/sha 404 → define 等值比對)", () => {
+  it("define ≠ 後端 sha → 膠囊出現", async () => {
+    vi.stubGlobal("__GIT_SHA__", "aaaaaaa");
+    fixture = { be: "bbbbbbb", buildStatus: 404 };
+    wrap(<VersionDriftBadge />);
+    const badge = await screen.findByTestId("version-drift-badge");
+    expect(badge.getAttribute("title")).toContain("aaaaaaa");
+  });
+
+  it("define = 後端 sha → 零 DOM", async () => {
+    vi.stubGlobal("__GIT_SHA__", "bbbbbbb");
+    fixture = { be: "bbbbbbb", buildStatus: 404 };
+    wrap(<VersionDriftBadge />);
+    await settle();
+    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
   });
 });
 
 describe("VersionDriftBadge warn 去重(SC-5:per pair)", () => {
-  // 這兩條要 rerender 同一個元件實例(去重的 ref 掛在實例上),必須自己持有 client ——
-  // `wrap()` 不外露 client,rerender 時重建 provider 會連元件一起換掉。
-  // 形態沿用 PriceLadder.test.tsx 的 `ladder()` helper。
-  function badge(feSha: string, client: QueryClient) {
-    return (
-      <QueryClientProvider client={client}>
-        <VersionDriftBadge feSha={feSha} />
-      </QueryClientProvider>
-    );
+  /** 推進一輪 60s 輪詢並把 promise chain 排乾。 */
+  async function poll(ms = 60_000) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
   }
 
-  it("同一組 sha 重繪不重複 warn", async () => {
-    mockFetch({ health: { git_sha: "bbbbbbb" } });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { rerender } = render(badge("aaaaaaa", client));
-    await screen.findByTestId("version-drift-badge");
-    rerender(badge("aaaaaaa", client));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-    });
+  it("落差 → 消失 → 同一組 sha 再現:warn 仍只有一次(C2 載重路徑)", async () => {
+    vi.useFakeTimers();
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
+    wrap(<VersionDriftBadge />);
+    await poll(0);
+    expect(screen.queryByTestId("version-drift-badge")).toBeTruthy();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // 後端重啟到同步 → 膠囊消失
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: false } };
+    await poll();
+    expect(screen.queryByTestId("version-drift-badge")).toBeNull();
+
+    // 又落後回同一組 sha:去重是 pair 級,drift 消失時不清 ref,所以不該再吵
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
+    await poll();
+    expect(screen.queryByTestId("version-drift-badge")).toBeTruthy();
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
   it("sha 組合變了 → 再 warn 一次(換了一組落差就是新事實)", async () => {
-    mockFetch({ health: { git_sha: "bbbbbbb" } });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { rerender } = render(badge("aaaaaaa", client));
-    await screen.findByTestId("version-drift-badge");
-    rerender(badge("ccccccc", client));
-    await waitFor(() => expect(warnSpy).toHaveBeenCalledTimes(2));
-    expect(String(warnSpy.mock.calls[1]?.[0])).toContain("ccccccc");
-  });
-});
-
-describe("VersionDriftBadge 前端 sha 來源(SC-6)", () => {
-  it("未給 prop 時走 /__build/sha 現算值(dev live 優先於 define)", async () => {
-    mockFetch({ health: { git_sha: "bbbbbbb" }, buildSha: "aaaaaaa" });
+    vi.useFakeTimers();
+    fixture = { be: "bbbbbbb", build: { git_sha: "aaaaaaa", behind: true } };
     wrap(<VersionDriftBadge />);
-    const badge = await screen.findByTestId("version-drift-badge");
-    expect(badge.getAttribute("title")).toContain("aaaaaaa");
+    await poll(0);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    fixture = { be: "ccccccc", build: { git_sha: "aaaaaaa", behind: true } };
+    await poll();
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(String(warnSpy.mock.calls[1]?.[0])).toContain("ccccccc");
   });
 });
