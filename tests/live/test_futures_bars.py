@@ -101,3 +101,78 @@ class TestFetchBarsRange:
     def test_empty_first_page_returns_empty(self) -> None:
         src = _source([])
         assert src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30") == []
+
+
+class TestAlldaySession:
+    """SC-3:`session="allday"` 的近全段(日盤 + 夜盤兩半)。
+
+    台北日 D 的凌晨段(00:00–05:00)落在 **UTC 日 D−1 的 16:00–21:00** —— 窗不前移就
+    整段抓不到,而失效樣態是「圖照畫、只是每天凌晨五小時憑空消失」,沒有任何錯誤訊號。
+    """
+
+    @staticmethod
+    def _window(sent: list[dict]) -> tuple[str, str]:
+        hist = [o for o in sent if o["Request"] in ("SUBQUOTE", "GETHISDATA")]
+        return hist[0]["Param"]["StartTime"], hist[0]["Param"]["EndTime"]
+
+    def test_window_start_shifts_back_one_day(self) -> None:
+        sent: list[dict] = []
+        src = _source([], sent)
+        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30", session="allday")
+        assert self._window(sent) == ("2026072916", "2026073023")
+
+    def test_window_shift_crosses_month(self) -> None:
+        sent: list[dict] = []
+        src = _source([], sent)
+        src.fetch_bars_range("TXF", "1", "2026-08-01", "2026-08-03", session="allday")
+        assert self._window(sent) == ("2026073116", "2026080323")
+
+    def test_window_shift_crosses_year(self) -> None:
+        sent: list[dict] = []
+        src = _source([], sent)
+        src.fetch_bars_range("TXF", "1", "2026-01-01", "2026-01-01", session="allday")
+        assert self._window(sent) == ("2025123116", "2026010123")
+
+    def test_day_session_window_unchanged(self) -> None:
+        """預設 session(day)的窗與行為零改動 —— 既有 caller 全不受影響。"""
+        sent: list[dict] = []
+        src = _source([], sent)
+        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+        assert self._window(sent) == ("2026073000", "2026073023")
+
+    def test_daily_ignores_session(self) -> None:
+        """tf="D" 無 session 維度:窗與 SubDataType 都不因 allday 而變。"""
+        sent: list[dict] = []
+        src = _source([], sent)
+        src.fetch_bars_range("TXF", "D", "2026-07-30", "2026-07-30", session="allday")
+        assert self._window(sent) == ("2026073000", "2026073023")
+        assert sent[0]["Param"]["SubDataType"] == "DK"
+
+    def test_allday_bars_span_both_sessions_and_filter_out_of_range_taipei_days(self) -> None:
+        rows = [
+            # 台北 2026-07-29 15:01 —— 前移窗多收到的,台北日期在窗外 → filter 丟棄
+            _k1_row("20260729", "070100", "23000", "23000", "23000", "23000", "1", "1"),
+            # 台北 2026-07-30 00:00 —— 正是前移窗要救回來的那一段
+            _k1_row("20260729", "160000", "23010", "23010", "23010", "23010", "1", "2"),
+            _k1_row("20260730", "004600", "23020", "23020", "23020", "23020", "1", "3"),  # 08:46
+            _k1_row("20260730", "070100", "23030", "23030", "23030", "23030", "1", "4"),  # 15:01
+            # 台北 2026-07-31 00:00 —— end_date 之後,同樣被 filter 丟棄
+            _k1_row("20260730", "160000", "23040", "23040", "23040", "23040", "1", "5"),
+        ]
+        src = _source(rows)
+        bars = src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30", session="allday")
+        assert [b["t"] for b in bars] == [
+            "2026-07-30 00:00",
+            "2026-07-30 08:46",
+            "2026-07-30 15:01",
+        ]
+
+    def test_day_session_drops_night_rows(self) -> None:
+        """同一批 rows 在 day session 下只剩日盤段(既有語意)。"""
+        rows = [
+            _k1_row("20260730", "004600", "23020", "23020", "23020", "23020", "1", "1"),
+            _k1_row("20260730", "070100", "23030", "23030", "23030", "23030", "1", "2"),
+        ]
+        src = _source(rows)
+        bars = src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+        assert [b["t"] for b in bars] == ["2026-07-30 08:46"]
