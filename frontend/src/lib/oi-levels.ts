@@ -32,8 +32,11 @@ export function pickOiLines(
   if (spotMilli === null || !Number.isFinite(spotMilli) || spotMilli <= 0) {
     return { call: null, put: null };
   }
-  const loMilli = spotMilli * (1 - BAND);
-  const hiMilli = spotMilli * (1 + BAND);
+  // 取整:履約價一律是整點(× 1000 後為整數毫點),而 `spot × 1.1` 的浮點餘數
+  // (24000000 × 1.1 = 26400000.000000004)會讓「端點算不算帶內」變成浮點運氣 ——
+  // 實測上界端點在 `>=` 突變下仍通過,正是靠這一點鬆度。取整後端點判定是確定的。
+  const loMilli = Math.round(spotMilli * (1 - BAND));
+  const hiMilli = Math.round(spotMilli * (1 + BAND));
 
   let call: OiStrikeRow | null = null;
   let put: OiStrikeRow | null = null;
