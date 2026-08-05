@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "p0": [
+    {"id": "IS-1", "summary": "fmt() 吃毫元而 avg_price 是元 → 均價 100 會印成 0.1;design D8 與自身範例矛盾", "resolution": "accepted — §0 顯示契約拍板:均價 fmt(round(avg×1000)),期望字串寫死"}
+  ],
+  "p1": [
+    {"id": "IS-2", "summary": "部位條無 testid 可定位,梯內價格文字必多重命中", "resolution": "accepted — ladder-position-bar / ladder-position-row 契約入 §0"},
+    {"id": "IS-3", "summary": "BE 超出梯域(貼近漲跌停)分支零測試", "resolution": "accepted — §3 補紅測試(不畫標記 + 照顯示數字)"},
+    {"id": "IS-4", "summary": "kind 標籤來源未定,會長第三份字彙;空方文案自相矛盾", "resolution": "accepted — 複用 TRADE_KINDS;文案定案『融券 空2張 @100』"}
+  ],
+  "p2_summary": {"count": 6, "themes": "avgTickOf 單一定義(IS-5)/ jsdom number input 非法值選擇(IS-6)/ dimmed characterization 先行(IS-7)/ 折數框與張數框視覺區隔+互不影響斷言(IS-8)/ RightRail 確認項+取證擇一(IS-9)/ localStorage 字面 key 斷言+註解格式(IS-10)— 全數整併入 PLAN v2", "resolution": "accepted en bloc"},
+  "exit": "P0/P1 修入 PLAN v2,固定 1 輪不重審 → 進 Phase 3"
+}

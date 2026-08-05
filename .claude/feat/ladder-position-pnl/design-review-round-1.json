@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [
+    {"id": "D1", "summary": "折數輸入綁在條件 render 的部位條內,空手態功能整個消失", "resolution": "accepted — 移武裝列恆常渲染"},
+    {"id": "D2", "summary": "測試慣例誤寫 hook spy;實際是 fetch route mock 且未登記 URL 會 throw → 既有 20+ it 需補 positions 路由", "resolution": "accepted — 快篩證實(PriceLadder.test.tsx:35-44);改 route mock + 共用 helper + 市價單 describe 補 mock"},
+    {"id": "D3", "summary": "空方 pnl 零手算例,負 qty 直代公式會讓費用變號成收益", "resolution": "accepted — 補空方獲利/虧損兩例 + |qty| 計費契約"},
+    {"id": "D4", "summary": "單列佈局超出右欄 260px 寬度預算", "resolution": "accepted — 兩行式 + 寬度預算入 design"},
+    {"id": "D5", "summary": "部位條在武裝梯上方動態增高 → 點擊目標位移(誤送風險)", "resolution": "accepted — 移卡片底部(scroll 區下),價格列 y 不動"},
+    {"id": "D6", "summary": "融券借券費 0.08%(手續費 3 倍)漏計,空方打平偏樂觀,與保守取向矛盾", "resolution": "accepted — SHORT_BORROW=0.0008 入算(kind=short 賣段)"}
+  ],
+  "p2_summary": {"count": 11, "themes": "手算例中間值修正(D7)/ fmt 同源(D8)/ 示例自洽(D9)/ 色票與 dimmed 隔離(D10)/ 標記定位與 pointer-events(D11)/ 輪詢敘述實情(D12)/ kind 值域實況(D13)/ lastMilli 0 歸一(D14)/ last null 分支測試(D15)/ 取證通道 fake positions(D16)/ clampDiscount 契約(D17)— 全數整併入 v2", "resolution": "accepted en bloc(設計期整併零成本)"},
+  "exit": "0 P0(無加輪條件)、P1 6 條全修入 v2、餘 P1 = 0 ≤ 2 → 進 Phase 2"
+}

@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "phase": "Phase 4 自評(雙 lens opus:計算正確性/誤送風險 + missing-from-spec/測試強度)",
+  "date": "2026-08-05",
+  "p0": [],
+  "p1": [
+    {"id": "CALC-1", "summary": "非法折數靜默沿用舊值:輸入框顯示 raw、計算用舊 value,零 invalid 樣態 — 打平價口徑與畫面不一致(CLAUDE.md §8 同類失效)", "resolution": "accepted — raw 非法時 aria-invalid + border-loss 紅框 + 測試釘 invalid 標記"},
+    {"id": "LP-1/MARK-1", "summary": "title 掛在 pointer-events-none 標記上 → tooltip 永不顯示;均價標記(bg-ma20)在真實 UI 無任何辨識通道;attribute 斷言 vacuous", "resolution": "accepted — title 移 row 容器(be/avg 併句);部位條第二行補 bg-ma20 色點 +「均價」標籤;測試改斷 row title"}
+  ],
+  "p2": [
+    {"id": "LP-2", "summary": "pointer-events-none 無測試(突變驗證 39/39 綠)", "resolution": "accepted — class 斷言 be/avg 各一"},
+    {"id": "LP-3", "summary": "D5 部位條位置(卡片底)無測試(突變上移全綠)", "resolution": "accepted — DOM 順序斷言(bar 為卡片 root lastElementChild)"},
+    {"id": "LP-4", "summary": "dimmed 移欄後 border-b 不再淡化 — 🔵 宣稱行為不變但有可見差", "resolution": "accepted — dimmed 列 border-line/20"},
+    {"id": "LP-5", "summary": "IS-9 的 RightRail 確認項實為空(positions 在 beforeEach 重設 [],部位條從未在該脈絡渲染)", "resolution": "accepted — RightRail.test 補閃電 tab + position fixture 整合測試"},
+    {"id": "LP-6", "summary": "pnl 隨 tick 重算無測試(rerender last 變化)", "resolution": "accepted — rerender 測試釘 live 重算"},
+    {"id": "ORD-1/LP-7", "summary": "折數框在武裝列:與張數框同型相鄰混淆 + 快捷鈕壓到 ~30px;誤打折數 → 張數靜默維持舊值 → 舊張數送真單", "resolution": "accepted — 折數輸入移標題列(跟隨置中旁,非下單控制區;恆常渲染保 D1),武裝列回復原樣"},
+    {"id": "CALC-2", "summary": "positionEcon qty=0 落空方分支回方向錯的 BE(exported API 契約)", "resolution": "accepted — qty=0 early return null + 測試"},
+    {"id": "CALC-3", "summary": "部位條均價(原值)與均價標記(snapNearest)口徑不一,1000 元帶最多差 2.5 元", "resolution": "accepted(選 b)— 第一行保留真均價;第二行均價色點不帶數字(標線身分靠色點+row title);註解寫明取捨"}
+  ],
+  "counts": {"P0": 0, "P1": 2, "P2": 8, "accepted": 10, "rejected": 0},
+  "lens1_verified_clean": "五組手算例逐一驗算一致;|qty| 計費;b 限 short 賣段;BE/pnl 互為零點代數自洽;0 歸一;qty 單位張(balance.py:65-66);snap 與 buildLadder lattice 對齊;D5 成立;token 存在;lazy initializer;O(部位數) 無 memo 需求"
+}

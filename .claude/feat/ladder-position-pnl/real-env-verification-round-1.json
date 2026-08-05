@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "date": "2026-08-05",
+  "channel": "vite dev(5174,proxy 8721)+ claude-in-chrome(user 既有 Chrome session);fetch override 餵假部位(4989 現股 2張@66 + 融券 空2張@68);盤中紀律遵守(零新增 TC4 訂閱、未起第二台後端)",
+  "checks": [
+    {"sc": "SC-1", "result": "PASS", "evidence": "部位條於卡片底部渲染:『現股 2張 @66 / +1,330(bull 紅)/ 打平 66.3 / 均價』+『融券 空2張 @68 / +1,614 / 打平 67.7 / 均價』;截圖 evidence/SC-1_SC-4_SC-5_ladder-position-full.jpg"},
+    {"sc": "SC-2", "result": "PASS", "evidence": "last=66.9 時 +1,330 / +1,614 與手算逐位一致(main agent 驗算);last 隨 tick 變動時 pnl 即時重算(66.7 → 部位條數字跟動,LP-6 真環境成立)"},
+    {"sc": "SC-3", "result": "PASS", "evidence": "BE 66.2326→snapUp 66.3(現股)、67.707→snapDown 67.7(融券含借券費)與畫面一致"},
+    {"sc": "SC-4", "result": "PASS", "evidence": "DOM 查證:be 標記在 66300/67700、avg 標記在 66000/68000,row title 『打平(現股)』『均價(融券)』等 4 筆;zoom 截圖可見 66.3 amber 條與 66 紫條"},
+    {"sc": "SC-5", "result": "PASS(1 finding)", "evidence": "live 改 10 折 → localStorage['copycat-fee-discount']='10'、pnl +821 / BE 66.4 / 67.5 即時重算且驗算相符;finding:w-10 輸入框在真 Chrome 截字顯示『1.』→ 已派修復(real-env finding)"},
+    {"sc": "SC-6", "result": "PASS", "evidence": "現股 + 融券 兩列並列,各自口徑(融券含 SHORT_BORROW)"},
+    {"sc": "SC-7", "result": "component-test 層覆蓋", "evidence": "avg null / last null 分支為 fake 資料難以在 live 通道重現,依 design 以測試證據為準"}
+  ],
+  "findings": [
+    {"id": "RE-1", "severity": "P1", "summary": "折數輸入框 w-10 截字(顯示『1.』),使用者讀不到設定值", "resolution": "fixed — a2dbb95(w-12);真 Chrome 複驗『1.8』完整可讀,存證 evidence/SC-4_SC-5_rail-after-re1-fix.png;gate 1069 零回歸"}
+  ],
+  "notes": "TanStack refetchInterval 在背景分頁暫停(document.hidden)— 取證時需偽造 visibilityState;此為瀏覽器行為非 bug。真持倉畫面 = user 盤中過目(部位條需群益登入 + 實際持倉)。"
+}
