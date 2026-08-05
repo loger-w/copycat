@@ -44,7 +44,12 @@ function rule(o: Partial<SignalRule> = {}): SignalRule {
 
 /** 資料 props 可覆寫;回呼固定是 spy(覆寫回呼的話回傳的就不是實際掛上去的那顆)。 */
 function renderRail(
-  o: Partial<Pick<Props, "signals" | "rules" | "notifPermission" | "soundOn">> = {},
+  o: Partial<
+    Pick<
+      Props,
+      "signals" | "rules" | "notifPermission" | "soundOn" | "rulesError" | "toggleError"
+    >
+  > = {},
 ) {
   const spies = {
     onToggleRule: vi.fn<Props["onToggleRule"]>(),
@@ -57,6 +62,8 @@ function renderRail(
     <SignalRail
       signals={[]}
       rules={[]}
+      rulesError={false}
+      toggleError={null}
       notifPermission="granted"
       soundOn
       {...spies}
@@ -84,16 +91,22 @@ describe("SignalRail 訊號列", () => {
     expect(text).toContain("1050");
   });
 
-  it("帶 rule_name 的列副標顯示規則名(同 kind 多規則靠它辨識來源)", () => {
-    renderRail({ signals: [sig({ rule_id: "r-1-002", rule_name: "早盤鎖板" })] });
+  // review B1:規則名**蓋掉** kind 文案時,盤中最重要的兩個資訊(發生什麼事 / 幾 %)
+  // 只剩 hover 才看得到,而規則名可以取成任意字串 —— 列表可能整片是「我的規則1」。
+  it("副標並列:kind 文案為主 + 規則名為次(同 kind 多規則靠它辨識來源)", () => {
+    renderRail({
+      signals: [sig({ kind: "surge", direction: null, pct: 2.5, rule_name: "早盤急拉" })],
+    });
     const [text = ""] = rowTexts();
-    expect(text).toContain("早盤鎖板");
+    expect(text).toContain("爆拉 +2.50%"); // 主文:事件本身
+    expect(text).toContain("早盤急拉"); // 次級:哪條規則發的
   });
 
-  it("rule_name 缺值(升級當日的舊 jsonl)→ 退回既有 kind 文案", () => {
+  it("rule_name 缺值(升級當日的舊 jsonl)→ 只有 kind 文案,不留空分隔", () => {
     renderRail({ signals: [sig({ kind: "surge", direction: null, pct: 2.5 })] });
     const [text = ""] = rowTexts();
     expect(text).toContain("爆拉 +2.50%");
+    expect(text).not.toContain("·"); // 分隔符不得單獨留下
   });
 
   it("最新在上:signals 的順序即 DOM 序", () => {
@@ -182,6 +195,23 @@ describe("SignalRail 規則區", () => {
   it("零規則 → 空態文案(不是空白區塊)", () => {
     renderRail({ rules: [] });
     expect(within(screen.getByTestId("signal-rail-rules")).getByText("尚無規則")).toBeTruthy();
+  });
+
+  // review A5:GET 失敗與「真的沒有規則」在畫面上一模一樣 —— 使用者會照著空態去新增,
+  // 而真值可能是四條規則好好跑著,新增只會撞名失敗
+  it("規則載入失敗 → 失敗文案,不是「尚無規則」", () => {
+    renderRail({ rules: [], rulesError: true });
+    const rules = within(screen.getByTestId("signal-rail-rules"));
+    expect(rules.getByText("規則載入失敗")).toBeTruthy();
+    expect(rules.queryByText("尚無規則")).toBeNull();
+  });
+
+  // review B7:PUT 失敗時開關會彈回原位,沒有文案的話看起來就是「點了沒反應」
+  it("規則開關失敗 → 規則區一行錯誤文案(共用 errText)", () => {
+    renderRail({ rules: RULES, toggleError: "RULE_SAVE_FAILED" });
+    expect(
+      within(screen.getByTestId("signal-rail-rules")).getByText("規則儲存失敗"),
+    ).toBeTruthy();
   });
 });
 
