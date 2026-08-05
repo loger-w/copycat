@@ -14,9 +14,14 @@ export interface Bar {
   l: number;
   c: number;
   v: number;
+  /** 外盤量(TC4 1K `UpVolume`);DK 路徑不帶欄 —— 缺欄與 0 是兩件事(SC-8) */
+  uv?: number;
+  /** 內盤量(TC4 1K `DownVolume`) */
+  dv?: number;
 }
 
 const X_ORIGIN_MIN = 9 * 60; // 09:00 = 桶界原點
+const DAY_MIN = 24 * 60;
 
 function splitStamp(t: string): { date: string; minute: number | null } {
   const sp = t.indexOf(" ");
@@ -35,7 +40,26 @@ function stampOf(date: string, minute: number): string {
   return `${date} ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/** 1 分 bar → n 分 bar。桶以終點標記對齊 09:00 原點;跨日不合併。 */
+/** `YYYY-MM-DD` ± n 天。夜盤桶溢過午夜時要真的進位到次日日曆日(跨月/跨年才會對)。 */
+function shiftDate(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+/** 1 分 bar → n 分 bar。桶以終點標記對齊 09:00 原點;跨日不合併。
+ *
+ * **跨午夜正規化(SC-2)**:夜盤 23:5x 的桶終點會算到 ≥1440,直接 `stampOf` 會產出
+ * "24:00" 這個不存在的時戳,而且與次日 00:00 的桶各成一根 —— 兩者其實是同一根。
+ * 因此 bucketEnd ≥ 1440 時把日期進位、分鐘減 1440,桶 key 也用正規化後的值 →
+ * 23:56–23:59 與次日 00:00 自然合併。日盤-only 資料(個股/大盤)的 minute 永遠
+ * 不會讓 bucketEnd 溢位,行為零變化。
+ *
+ * **uv/dv(SC-8)**:缺欄與 0 是兩件事(DK 路徑不帶欄)。只要桶內任一根有欄就設欄、
+ * 缺值視 0;全桶皆缺則不設 —— 幾何層據此判「這份資料沒有內外盤」。 */
 export function aggregateBars(bars: readonly Bar[], n: number): Bar[] {
   if (n <= 1) return [...bars];
   const out: Bar[] = [];
@@ -53,17 +77,31 @@ export function aggregateBars(bars: readonly Bar[], n: number): Bar[] {
       out.push({ ...b });
       continue;
     }
-    const bucketEnd = X_ORIGIN_MIN + Math.ceil((minute - X_ORIGIN_MIN) / n) * n;
-    const key = `${date} ${bucketEnd}`;
+    let bucketEnd = X_ORIGIN_MIN + Math.ceil((minute - X_ORIGIN_MIN) / n) * n;
+    let bucketDate = date;
+    while (bucketEnd >= DAY_MIN) {
+      bucketEnd -= DAY_MIN;
+      bucketDate = shiftDate(bucketDate, 1);
+    }
+    const hasDelta = b.uv !== undefined || b.dv !== undefined;
+    const key = `${bucketDate} ${bucketEnd}`;
     if (key !== curKey) {
       if (cur !== null) out.push(cur);
-      cur = { t: stampOf(date, bucketEnd), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v };
+      cur = { t: stampOf(bucketDate, bucketEnd), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v };
+      if (hasDelta) {
+        cur.uv = b.uv ?? 0;
+        cur.dv = b.dv ?? 0;
+      }
       curKey = key;
     } else if (cur !== null) {
       cur.h = Math.max(cur.h, b.h);
       cur.l = Math.min(cur.l, b.l);
       cur.c = b.c;
       cur.v += b.v;
+      if (hasDelta) {
+        cur.uv = (cur.uv ?? 0) + (b.uv ?? 0);
+        cur.dv = (cur.dv ?? 0) + (b.dv ?? 0);
+      }
     }
   }
   if (cur !== null) out.push(cur);
@@ -101,9 +139,21 @@ export interface VolBar {
   dir: "up" | "down" | "flat";
 }
 
+/** 內外盤雙柱高度(SC-8)。x / 柱寬走同索引的 `VolBar`,這裡只給兩段高度 ——
+ *  幾何來源單一,元件不必自己重算 slot 與量區比例(同 `priceBottom` 的理由)。 */
+export interface DeltaVolBar {
+  /** 外盤(uv)柱高 */
+  uvH: number;
+  /** 內盤(dv)柱高 */
+  dvH: number;
+}
+
 export interface CandleGeometry {
   candles: Candle[];
   volBars: VolBar[];
+  /** 內外盤雙柱高度,與 `candles` / `volBars` 同索引對位。
+   *  分母 = 視窗內 `max(uv + dv)`;視窗內全無 uv/dv(或全為 0)→ null = 該回退主量柱。 */
+  deltaVol: DeltaVolBar[] | null;
   yTicks: { y: number; priceMilli: number }[];
   /** 毫元 → y 像素(反向) */
   toY: (priceMilli: number) => number;
@@ -152,6 +202,7 @@ export function buildCandleGeometry(
     return {
       candles: [],
       volBars: [],
+      deltaVol: null,
       yTicks: [],
       toY: () => priceBottom,
       priceAtY: () => 0,
@@ -163,7 +214,10 @@ export function buildCandleGeometry(
   let hi = -Infinity;
   let lo = Infinity;
   let maxVol = 1;
+  let maxDelta = 0;
   for (const b of bars) {
+    const delta = (b.uv ?? 0) + (b.dv ?? 0);
+    if (delta > maxDelta) maxDelta = delta;
     // 值域一併吃 o/c:DK 的 Open 欄位名/值域未實測(change-spec §7 Known Risk),
     // 若回 "0.00" 而 h/l 正常,只取 h/l 會讓實體畫到圖框外(review P2-8)
     if (b.h > hi) hi = b.h;
@@ -219,6 +273,16 @@ export function buildCandleGeometry(
     volBars.push({ x, w, y: bottom - h, h, dir });
   });
 
+  // maxDelta === 0 涵蓋「全無欄」與「有欄但全 0」兩種:前者是 DK 路徑,後者是零成交
+  // 視窗。兩者都不該畫雙柱(也順帶避開除以零),由呼叫端回退主量柱。
+  const deltaVol: DeltaVolBar[] | null =
+    maxDelta > 0
+      ? bars.map((b) => ({
+          uvH: ((b.uv ?? 0) / maxDelta) * volH,
+          dvH: ((b.dv ?? 0) / maxDelta) * volH,
+        }))
+      : null;
+
   // span=0(全平盤)只給一條刻度 — 否則 5 條同價位重疊(且會撞 React key)
   const yTicks: { y: number; priceMilli: number }[] = [];
   if (span <= 0) {
@@ -255,5 +319,21 @@ export function buildCandleGeometry(
     return i >= 0 && i < bars.length ? i : null;
   };
 
-  return { candles, volBars, yTicks, toY, priceAtY, indexOf, priceBottom };
+  return { candles, volBars, deltaVol, yTicks, toY, priceAtY, indexOf, priceBottom };
+}
+
+/** 水平 overlay 線(持倉均價 / OI 撐壓)的 y;**超出當前 y 視窗回 null 不畫**。
+ *
+ *  clamp 到邊緣會把「圖外的價位」畫成「圖緣的價位」,那是誤導 —— 均價線貼在圖頂時
+ *  看起來像剛好在最高點,實際可能差好幾百點。
+ *
+ *  超窗判定借 `priceAtY`(它本來就把域外夾回 [lo, hi]):夾制生效 = 原價不在域內。
+ *  這樣寫不必再把 hi/lo 洩到幾何介面上,也不會與 `toY` 各留一份域邊界而漂移
+ *  —— 既有的 round-trip 測試同時守住這兩支。 */
+export function hlineYOf(priceMilli: number, g: CandleGeometry): number | null {
+  if (g.candles.length === 0) return null;
+  const y = g.toY(priceMilli);
+  if (!Number.isFinite(y)) return null;
+  // ±1 毫元 = priceAtY 的四捨五入誤差(與 round-trip 測試同一容差)
+  return Math.abs(g.priceAtY(y) - priceMilli) <= 1 ? y : null;
 }
