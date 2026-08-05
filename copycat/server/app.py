@@ -26,7 +26,7 @@ from copycat.corr_config import load_config as load_corr_config
 from copycat.server.capital_api import register_capital
 from copycat.server.ws import WsBroadcaster, relay
 from copycat.server.corr_engine import CorrelationEngine, CorrSource
-from copycat.server.engine import EngineRuntime, QuoteSource
+from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
 from copycat.live.stock_source import Bar
@@ -647,6 +647,9 @@ def create_app(
             await runtime.activate(body.series_id)
         except KeyError:
             raise HTTPException(status_code=400, detail={"error": "UNKNOWN_SERIES"}) from None
+        except HandoverBusyError:
+            # 「現在忙,等一下再按」—— 與 NOT_READY(重試也一樣)刻意分開
+            raise HTTPException(status_code=503, detail={"error": "HANDOVER_BUSY"}) from None
         return runtime.latest_snapshot()
 
     @app.get("/api/txo/contracts")

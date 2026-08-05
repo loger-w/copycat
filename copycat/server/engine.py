@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 _HANDOVER_RETRIES = 3
 
 
+class HandoverBusyError(RuntimeError):
+    """交接進行中,`activate` 不可重入(route 層轉 503 HANDOVER_BUSY)。
+
+    不複用 NOT_READY:那個碼的既有語意是「引擎沒起來,重試也一樣」,而這裡是
+    「現在忙,等一下再按就會成功」—— 同碼多出一種來源,前端與 log 都分不出來。
+    """
+
+
 class QuoteSource(Protocol):
     """行情來源抽象;TC4 實作在 copycat.live.tc4,測試注入 fake。"""
 
@@ -152,18 +160,40 @@ class EngineRuntime:
     # ---- 序列切換與交接 ----
 
     async def activate(self, series_id: str) -> None:
-        """§4 select 流程:unsub 舊 → reset → 交接協定(訂閱 buffer → 回補 → flush)→ live。"""
+        """§4 select 流程:unsub 舊 → reset → 交接協定(訂閱 buffer → 回補 → flush)→ live。
+
+        互斥涵蓋**整個 activate**,不只 `_run_handover`:下面的 `to_thread(unsubscribe)`
+        是個讓出點,只查 `_run_handover` 的旗標時,A 停在那裡(旗標尚未設起)B 就能
+        一路通過 → 兩個交接共用 `_buffer` 互搶 + backfill 雙份疊加。
+        """
         series = self._series[series_id]  # 未知 series → KeyError(route 層轉 400)
-        if self._active is not None and self._active.series_id != series_id:
-            await asyncio.to_thread(self._source.unsubscribe, self._active)
-        self._active = series
-        if self._agg is None:
-            self._agg = ChainAggregator(series.contracts)
-        else:
-            self._agg.reset(series.contracts)
-        await self._run_handover(series, subscribe=True)
+        # check 與 set 之間**零 await** → 單執行緒 loop 上即原子
+        if self._handover_running:
+            raise HandoverBusyError(series_id)
+        self._handover_running = True
+        try:
+            if self._active is not None and self._active.series_id != series_id:
+                await asyncio.to_thread(self._source.unsubscribe, self._active)
+            self._active = series
+            if self._agg is None:
+                self._agg = ChainAggregator(series.contracts)
+            else:
+                self._agg.reset(series.contracts)
+            # `_run_handover` 內層也設/清同一個旗標,兩層 finally 復位冪等
+            await self._run_handover(series, subscribe=True)
+        finally:
+            # ⚠ 不變式:**`_run_handover` 之後不得再 await**。內層 finally 已把旗標清成
+            # False,到這裡之間現況零讓出點;日後在尾端補一個 await 就會開出「第三個
+            # activate 溜進來」的真窗,而不會有任何測試變紅。
+            self._handover_running = False
 
     async def _run_handover(self, series: SeriesInfo, *, subscribe: bool) -> None:
+        """交接協定本體。
+
+        ⚠ 呼叫端不變式:`activate` 在本函式之後不得再 await —— 本函式的 finally 會把
+        `_handover_running` 清成 False,`activate` 外層 finally 之前若出現讓出點,
+        另一個 activate 就能在「交接已結束但 activate 還沒收尾」的空隙溜進來。
+        """
         assert self._agg is not None
         # 交接起點即記時段 key:失敗也記(避免 rollover 條件無限重觸發;恢復走
         # on_reconnect 鏈,test_rollover_during_source_down 釘住)
