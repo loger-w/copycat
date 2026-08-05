@@ -276,8 +276,12 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     // 對稱域 fallback:以 ref 為中心,半幅 = max 偏離 × 1.1(最少 1% 防平線貼邊)。
     // 半幅池含當日高低:只看每分鐘**收盤**的話,長上下影就會被域裁掉,而症狀是
     // 高低標記靜默消失(2330 2026-07-30 盤後域 [2160.5, 2259.5],當日高 2260.0 差 0.5 元)。
-    const hi = Math.max(ref, ...prices, ...(dayHigh !== null ? [dayHigh] : []));
-    const lo = Math.min(ref, ...prices, ...(dayLow !== null ? [dayLow] : []));
+    // 但 `ref > 0` 是前提:ref = 0 表示 meta 沒 ref **且**收盤全被濾光,對稱域沒有中心
+    // 可言(退化成 [−1, 1])—— 這時把極值併進來只是放大垃圾,域變 [−1.1×high, 1.1×high],
+    // 3 點 fallback 印出負價位刻度、標記還畫在錯位的 y 上。ref = 0 一律維持退化域。
+    const foldExtremes = ref > 0;
+    const hi = Math.max(ref, ...prices, ...(foldExtremes && dayHigh !== null ? [dayHigh] : []));
+    const lo = Math.min(ref, ...prices, ...(foldExtremes && dayLow !== null ? [dayLow] : []));
     const half = Math.max(hi - ref, ref - lo, ref * 0.01) * 1.1 || 1;
     yTop = ref + half;
     yBottom = ref - half;

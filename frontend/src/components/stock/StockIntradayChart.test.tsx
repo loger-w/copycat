@@ -867,7 +867,9 @@ describe("StockIntradayChart 當日高低與現價圈", () => {
     expect(container.querySelector('circle[data-testid="day-low"]')).toBeNull();
   });
 
-  // review R12:無漲跌停時 y 域由**分鐘收盤**極值決定,裝不下逐筆極值 → 標記會落到時間軸上
+  /** 白名單 3:ACCUM 有 upper/lower → 走**漲跌停域**(恰為 [lower, upper]),超出漲停的
+   *  逐筆極值不畫。**這條與本輪的 autofit 改動無關** —— autofit 分支自本輪起域必含
+   *  high/low,已無此裁切;會裁的只剩漲跌停分支(超過漲停的價位當日不可能成交)。 */
   it("當日高超出 y 域 → 不畫(低點仍畫)", () => {
     const { container } = wrap(<StockIntradayChart accum={withHL(2_600_000, 2_370_000)} />);
     expect(container.querySelector('[data-testid="day-high"]')).toBeNull();
