@@ -143,9 +143,11 @@ class RuleBody(BaseModel):
     ——缺欄要走 400 INVALID_RULE(signal-rules R10)。
     """
 
-    #: 只有 id 是真的 `str | None`:PUT 拿它跟 path 比對(不一致 → 400,R6);
+    #: id 同樣是 `object`(review A6(1)):宣告成 `str | None` 時,`{"id": 123}` 會在
+    #: pydantic 那層變成 422 + list 形 detail —— 破的正是這個 class 存在的理由。
+    #: 用 object 收下來後由 PUT 自己比對(型別不符 → `!=` 成立 → 400 INVALID_RULE);
     #: POST 不看(id 由 hub 配)。
-    id: str | None = None
+    id: object = None
     name: object = None
     kind: object = None
     enabled: object = None

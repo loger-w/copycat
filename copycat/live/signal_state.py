@@ -11,9 +11,15 @@
   鎖上→打開的 latch 照常轉移,重開後不會補發一則過期的打開。
 - **接線層(SignalHub)持有所有 IO 與 membership gate**,本模組不認得自選清單。
 
-呼叫順序契約(換日,design §4.1 stage2):**先 `reset_day()` 再
-`swap_staged_basis()`** —— `reset_day` 會清空 `_basis`(當日基準不可跨日沿用),
-反過來呼叫會把剛 swap 進來的當日基準洗掉,失效樣態是「CDP 整天靜默不發」。
+呼叫順序契約(換日,design §4.1 stage2):**先 `reset_day()` 再 promote 暫存基準**
+—— `reset_day` 會清空 `_basis`(當日基準不可跨日沿用),反過來呼叫會把剛換上的
+當日基準洗掉,失效樣態是「CDP 整天靜默不發」。
+
+**暫存區家族(`set_staged_basis` / `clear_staged` / `swap_staged_basis`)已無呼叫端**
+(signal-rules:規則化之後暫存區與日別判定整組移交 `SignalHub`,基準快照歸 hub 唯一
+持有,detector 只認 `set_basis`)。留著是為了不在同一輪裡混入純結構改動 —— 真移除
+是 🔵,已記 `docs/next-time.md`。改換日流程時**不要**回頭呼叫它們:hub 的暫存區才是
+真值,兩份暫存會漂。
 """
 
 from __future__ import annotations
