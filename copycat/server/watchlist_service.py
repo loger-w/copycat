@@ -75,9 +75,15 @@ class WatchlistService:
                 {"name": g["name"], "codes": list(g["codes"])} for g in current["groups"]
             ]
             if group is not None:
-                target: Group | None = next((g for g in groups if g["name"] == group), None)
+                # strip 後比對(A3):`normalize` 存的是 strip 後名,拿原字串比會讓
+                # 「主力 」建出第二個組,兩組 normalize 後同名 → `BAD_GROUP`,
+                # 使用者看到「群組名稱不合法」而那個名字明明合法。
+                target_name = group.strip()
+                target: Group | None = next(
+                    (g for g in groups if g["name"].strip() == target_name), None
+                )
                 if target is None:
-                    target = Group(name=group, codes=[])
+                    target = Group(name=target_name, codes=[])
                     groups.append(target)
                 if code not in target["codes"]:
                     target["codes"].append(code)
@@ -101,18 +107,18 @@ class WatchlistService:
         群組名的合法性只有 `stock_watchlist.normalize` 一份定義。
         """
         async with self._lock:
-            current = self._snapshot()
+            current = self._require_current()
             target = name.strip()
             if any(g["name"] == target for g in current["groups"]):
                 return current, False
             groups = _copy_groups(current["groups"])
-            groups.append({"name": name, "codes": []})
+            groups.append({"name": target, "codes": []})  # 存 strip 後名(比對基準同一份)
             return await self._commit({"codes": list(current["codes"]), "groups": groups})
 
     async def delete_group(self, name: str) -> tuple[Watchlist, bool]:
         """刪群組;codes 不動 —— 成員落回未分組衍生桶(刪群組不等於刪股票)。"""
         async with self._lock:
-            current = self._snapshot()
+            current = self._require_current()
             target = name.strip()
             if not any(g["name"] == target for g in current["groups"]):
                 raise WatchlistError("GROUP_NOT_FOUND")
@@ -122,7 +128,7 @@ class WatchlistService:
     async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]:
         """改名;新名撞既有名 / 保留名 / 空名 → `normalize` 拒(`BAD_GROUP`)。"""
         async with self._lock:
-            current = self._snapshot()
+            current = self._require_current()
             src = old.strip()
             dst = new.strip()
             if not any(g["name"] == src for g in current["groups"]):
@@ -138,7 +144,7 @@ class WatchlistService:
     async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:
         """自該群組移出;wl codes 不動 —— 移出群組不等於移出自選。"""
         async with self._lock:
-            current = self._snapshot()
+            current = self._require_current()
             target = group.strip()
             found = next((g for g in current["groups"] if g["name"] == target), None)
             if found is None:
@@ -175,12 +181,26 @@ class WatchlistService:
         self._engine._publish({"type": "watchlist_changed"})
         return saved, True
 
-    def _snapshot(self) -> Watchlist:
-        """現況 canonical 形;不可用(壞檔)視同空 —— 新方法的存在性判定基準。
+    def _require_current(self) -> Watchlist:
+        """群組方法的現況基準;檔不可用 → 大聲拒絕、零寫(v3 A1/B1)。
 
-        壞檔下「群組不存在」是誠實的答案:讀不到的檔裡沒有任何群組可操作,
-        `delete/rename/ungroup` 因此拋 `GROUP_NOT_FOUND` 且零寫;`create_group` 則
-        以空為底覆蓋回去(與 `apply` 的自癒路徑同語意)。
+        群組操作全是 **read-modify-write**:它們只帶「差異」(建一個組 / 刪一個組),
+        現況必須是真的現況。壞檔視同空快照的話,`create_group` 會拿一份空名單當底
+        寫回去 = **靜默清空整份自選**,而使用者只看到「已建立群組」;
+        `delete/rename/ungroup` 則回 `GROUP_NOT_FOUND`,把「檔壞了」講成「你打錯名字」。
+
+        整份取代的 `apply`(前端存檔)不走這裡 —— 它自帶完整名單,正是壞檔的自癒路徑。
+        """
+        current = self._current_canonical()
+        if current is None:
+            raise WatchlistError("WATCHLIST_UNAVAILABLE")
+        return current
+
+    def _snapshot(self) -> Watchlist:
+        """現況 canonical 形;不可用(壞檔)視同空 —— **唯讀路徑專用**(`current()`)。
+
+        讀路可以降級成空:`/watch list` 顯示「自選清單目前是空的」雖然不精確,但不會
+        毀掉任何資料。寫路不行,見 `_require_current`。
         """
         return self._current_canonical() or {"codes": [], "groups": []}
 

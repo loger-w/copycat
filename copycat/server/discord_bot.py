@@ -59,6 +59,9 @@ _ERROR_TEXT = {
     "BAD_CODE": "股號格式不正確",
     "BAD_GROUP": "群組名稱不合法",
     "GROUP_NOT_FOUND": "找不到該群組",
+    # 群組操作是 read-modify-write,現況不可用時零寫 —— 文案要指出自癒路徑,
+    # 否則使用者只知道「失敗」,不知道去前端存一次檔就好。
+    "WATCHLIST_UNAVAILABLE": "自選檔目前不可用,請自前端存檔修復",
 }
 _NOT_READY = "服務未就緒"
 _FALLBACK_ERROR = "儲存失敗"
@@ -74,6 +77,11 @@ _AUTOCOMPLETE_TIMEOUT = 1.0
 #: Discord `Choice` 的 name / value 各 100 字上限;單一超長項會讓**整份**回應被拒收。
 _CHOICE_NAME_LIMIT = 100
 _CHOICE_LIMIT = 25
+
+#: Discord 訊息上限 2000 字;群組名是自由文字,`/watch groups` 可以輕易衝破。
+#: 超長訊息會被 Discord 直接拒收 → 已 defer 的互動永遠停在「思考中」。留 100 字餘裕。
+_REPLY_LIMIT = 1900
+_TRUNCATED_SUFFIX = "…(截斷)"
 
 
 # ---- env(capital/factory 同語意)----
@@ -184,7 +192,14 @@ async def _run(interaction: Interaction, action: Any) -> str:
     except Exception:
         logger.exception("Discord 指令執行失敗")
         text = _UNEXPECTED
-    await interaction.followup.send(text)
+    if len(text) > _REPLY_LIMIT:
+        text = text[:_REPLY_LIMIT] + _TRUNCATED_SUFFIX
+    try:
+        await interaction.followup.send(text)
+    except Exception:
+        # 送出失敗(Discord 5xx / 訊息被拒 / interaction 已過期)往外拋只會被 discord.py
+        # 記在它自己的 log,真因埋得很深;這裡是唯一還說得出「哪個指令、送了什麼」的地方。
+        logger.exception("Discord 回覆送出失敗")
     return text
 
 
@@ -200,11 +215,13 @@ async def handle_add(
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        _, changed = await service.add(code, group)
+        target = group.strip() if group is not None else None
+        _, changed = await service.add(code, target)
         hint = "" if _stock_name(code) else _UNKNOWN_CODE_HINT
         if not changed:
+            # no-op 代表群組關係也沒動 → 不掛「(群組:X)」,免得看起來像剛入了群
             return f"已在自選:{_label(code)}(無變更){hint}"
-        suffix = f"(群組:{group})" if group else ""
+        suffix = f"(群組:{target})" if target else ""
         return f"已加入自選:{_label(code)}{suffix}{hint}"
 
     return await _run(interaction, action)
@@ -302,10 +319,11 @@ async def handle_group_add(
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        _, changed = await service.create_group(name)
+        target = name.strip()
+        _, changed = await service.create_group(target)
         if not changed:
-            return f"群組已存在:{name}"
-        return f"已建立群組:{name}"
+            return f"群組已存在:{target}"
+        return f"已建立群組:{target}"
 
     return await _run(interaction, action)
 
@@ -318,10 +336,13 @@ async def handle_group_remove(
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        if name.strip() == UNGROUPED_NAME:
+        target = name.strip()
+        if target == UNGROUPED_NAME:
             return _RESERVED_BLOCKED
-        await service.delete_group(name)
-        return f"已刪除群組:{name}(成員移至{UNGROUPED_NAME})"
+        # 解包 changed(今天必 True:不存在會拋 GROUP_NOT_FOUND)—— 讓「回傳形」在
+        # 呼叫端也顯式成立,日後 service 若改成 no-op 回 False,這裡會是編輯的落點。
+        _, _changed = await service.delete_group(target)
+        return f"已刪除群組:{target}(成員移至{UNGROUPED_NAME})"
 
     return await _run(interaction, action)
 
@@ -338,12 +359,14 @@ async def handle_group_rename(
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        if old.strip() == UNGROUPED_NAME:
+        src = old.strip()
+        dst = new.strip()
+        if src == UNGROUPED_NAME:
             return _RESERVED_BLOCKED
-        _, changed = await service.rename_group(old, new)
+        _, changed = await service.rename_group(src, dst)
         if not changed:
-            return f"名稱未變:{new}"
-        return f"已改名:{old} → {new}"
+            return f"名稱未變:{dst}"
+        return f"已改名:{src} → {dst}"
 
     return await _run(interaction, action)
 
@@ -357,12 +380,13 @@ async def handle_ungroup(
     async def action() -> str:
         if service is None:
             return _NOT_READY
-        if group.strip() == UNGROUPED_NAME:
+        target = group.strip()
+        if target == UNGROUPED_NAME:
             return _RESERVED_BLOCKED
-        _, changed = await service.ungroup(code, group)
+        _, changed = await service.ungroup(code, target)
         if not changed:
-            return f"{_label(code)} 不在群組 {group}"
-        return f"已自群組 {group} 移出:{_label(code)}(仍在自選)"
+            return f"{_label(code)} 不在群組 {target}"
+        return f"已自群組 {target} 移出:{_label(code)}(仍在自選)"
 
     return await _run(interaction, action)
 
@@ -391,14 +415,16 @@ async def group_choices(service: WatchlistServiceLike | None, current: str) -> l
     out: list[str] = []
     for group in wl["groups"]:
         name = group["name"]
+        if needle and needle not in name:
+            continue
+        # warning 必須在 needle 過濾**之後**:autocomplete 每一鍵都呼叫一次,
+        # 擺在過濾前會讓單一超長群組名把 log 洗成每按一鍵一行。
         if len(name) > _CHOICE_NAME_LIMIT:
             logger.warning(
                 "群組名稱超過 Discord Choice 的 %d 字上限,autocomplete 略過:%.20s…",
                 _CHOICE_NAME_LIMIT,
                 name,
             )
-            continue
-        if needle and needle not in name:
             continue
         out.append(name)
         if len(out) >= _CHOICE_LIMIT:
