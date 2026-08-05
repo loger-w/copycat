@@ -1,7 +1,7 @@
 /** 個股前端累算:snapshot 為基底 + tick 增量(design v4 §4;與後端 StockDayState 等值)。 */
 
 import { X_END_MIN, X_START_MIN } from "@/lib/stock-intraday-svg";
-import { snapDown } from "@/lib/stock-tick";
+import { isMarketLevel, snapDown } from "@/lib/stock-tick";
 
 export interface StockTickMsg {
   type: "tick";
@@ -102,10 +102,18 @@ export function minuteKey(t: string): number {
 /** 把一筆成交折進價位別直方圖(就地寫入傳入的 map;呼叫端負責先淺拷)。
  *
  *  兩道過濾都是「與畫面其他數字對得上」的必要條件,不是防禦性補丁:
- *  - `p <= 0`:鎖漲跌停時 TC4 會在簿的第一檔推市價佇列,價格欄是 `0`。`snapDown(0)` 是
- *    合法運算,會憑空長出一個 0 元檔位(規則同 `stock-tick.ts::isMarketLevel`)。
- *  - `[X_START_MIN, X_END_MIN]` 窗:與 `windowedEntries` / `sideSummary` 同一把尺,
- *    所以「VP 全部 bar 的總張 = 說明列 外+內+未分類 三數之和」恆成立(可互驗)。
+ *  - `isMarketLevel(p)`:鎖漲跌停時 TC4 會在簿的第一檔推市價佇列,價格欄是 `0`。
+ *    `snapDown(0)` 是合法運算,會憑空長出一個 0 元檔位。判定走 `stock-tick.ts` 的
+ *    **單一定義**而不是自己再寫一次 `p <= 0`(review B4):兩份規則各自漂移的失效樣態
+ *    是「閃電梯把某個價欄當市價、VP 卻把它當成一個檔位」,純數字不一致沒有測試會紅。
+ *  - `[X_START_MIN, X_END_MIN]` 窗:與 `windowedEntries` / `sideSummary` 同一把尺。
+ *    寫成**正向條件的否定**(`!(m >= START && m <= END)`)而不是 `m < START || m > END`
+ *    —— 後者對 `NaN`(時間戳解不出分鐘)的兩個比較都是 false,壞掉的 tick 會整筆
+ *    漏進 VP(review A3)。
+ *
+ *  **在全部 tick 皆 `p > 0`、且後端未觸及 20k tick deque 截斷的前提下**,
+ *  「VP 全部 bar 的總張 = 說明列 外+內+未分類 三數之和」成立(可互驗)。前提不成立時
+ *  VP 是偏小的那一邊 —— 截斷的簽名見 `stock-accum.test.ts` 的 B1 characterization。
  *
  *  cell 一律重建不就地改:memo 比較與時間旅行安全。 */
 function foldVp(
@@ -115,9 +123,9 @@ function foldVp(
   q: number,
   side: string,
 ): void {
-  if (p <= 0) return;
+  if (isMarketLevel(p)) return;
   const m = minuteKey(t);
-  if (m < X_START_MIN || m > X_END_MIN) return;
+  if (!(m >= X_START_MIN && m <= X_END_MIN)) return;
   const key = snapDown(p);
   const cell = vp.get(key) ?? { t: 0, o: 0, i: 0 };
   vp.set(key, {
@@ -202,7 +210,9 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
     ...acc.ticks,
     { t: msg.t, p: msg.p, q: msg.q, side: msg.side, b: msg.b ?? null, a: msg.a ?? null },
   ].slice(-TAPE_MAX);
-  // 淺拷後折本筆(O(價位數) ≤ 域內檔位數 ~200);cell 由 foldVp 重建不就地改
+  // 淺拷後折本筆:O(當日成交過的檔位數)。**不是固定的 ~200** —— 有漲跌停時域是
+  // [lower, upper](± 10%),autofit 的低價股(tick 0.01 元)可以近千檔。仍遠小於
+  // 每秒 tick 數的量級,Map 淺拷在這個尺度上不是熱點。cell 由 foldVp 重建不就地改。
   const vp = new Map(acc.vp);
   foldVp(vp, msg.t, msg.p, msg.q, msg.side);
   return {

@@ -17,7 +17,8 @@ export interface ChartToggles {
 const TOGGLES_VERSION = 2;
 
 /** `cdp` 預設開(SC-3,user 拍板);`bb` 預設開(round4 項 6,user 拍板);
- *  `vp` 預設開(價位別成交量 SC-3,user 拍板)。
+ *  `vp` 預設開(價位別成交量 SC-3,**auto-default**,brainstorm 決策記錄 —— 與上面
+ *  兩項不同,這個預設沒有經過 user 逐項拍板,改動門檻相應較低)。
  *
  *  **`vp` 不需要 bump `TOGGLES_VERSION`**:版本升級要處理的是「**既有**鍵的預設改了」
  *  —— 舊存檔裡那個值是當時的預設而不是使用者的選擇,不強制升級就永遠蓋掉新預設。

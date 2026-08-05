@@ -259,10 +259,14 @@ describe("StockIntradayChart", () => {
     // round6 項 5 起主圖多了兩個 rect(左緣漲跌停亮燈),它們不是量 bar ——
     // 本條守的是「量 bar 不在主圖」,所以改成排除已知的非量元素後仍須為 0,
     // 而不是「主圖一個 rect 都不能有」(後者會把任何新的色塊元素都誤判成 regression)。
+    // `vp-bar`(價位別成交量)同理要排除:它是**價位軸**方向的量分佈,不是本條所指的
+    // 「底部沿時間軸的量 bar」。此處 ACCUM 的 ticks 為空所以現在一根都沒有,但把它
+    // 留給預設值決定,這條就會在「哪天有人給 ACCUM 補 ticks」時無關地紅掉(review B3)。
     const drawnRects = [...main.querySelectorAll("rect")].filter(
       (r) =>
         r.closest("defs") === null &&
         !(r.getAttribute("data-testid") ?? "").startsWith("y-tick-lamp") &&
+        r.getAttribute("data-testid") !== "vp-bar" &&
         r.getAttribute("data-testid") !== "price-tag" &&
         r.getAttribute("data-testid") !== "time-tag",
     );
