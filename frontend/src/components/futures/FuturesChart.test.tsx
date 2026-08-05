@@ -164,15 +164,30 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
-  it("開盤瞬間:末根 bar = D 05:00、時鐘 D 08:45:30 → 不畫 live 點", async () => {
+  it("時鐘落後資料:末根 bar = D 05:00(軸尾)、時鐘 D 08:45:30 → 不畫 live 點", async () => {
     barsBody = {
       bars: [bar("2026-08-05 04:59", 22_900_000), bar("2026-08-05 05:00", 22_910_000)],
       meta: META,
     };
     // 05:00 那根屬**前一交易日**(2026-08-04)的夜盤後半;08:46 的 live 點屬 08-05。
+    // 此案 tail.index(1139)> live.index(0),兩道 gate 同時成立 → 只證「有擋」。
     vi.setSystemTime(new Date(2026, 7, 5, 8, 45, 30));
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await screen.findByTestId("allday-line");
+    expect(screen.queryByTestId("allday-live")).toBeNull();
+  });
+
+  it("錨定日 gate 獨立於時鐘落後守衛:末根 = 前一交易日 08:46、時鐘 = 次日 08:47 → 不畫", async () => {
+    // 唯一一根 bar 是**前一交易日**的首根(軸索引 0);live 落 08:48(軸索引 2)。
+    // tail.index(0) > live.index(2) 不成立 → 時鐘落後守衛整條不參與,
+    // 擋下 live 點的只剩錨定日不同這一條(短路它 → 假 live 點被畫在今日圖上)。
+    barsBody = { bars: [bar("2026-08-04 08:46", 22_900_000)], meta: META };
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 47, 0));
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await screen.findByTestId("allday-line");
+    // 前置條件寫死在斷言裡:兩個索引的大小關係就是「守衛沒被觸發」的證據
+    expect(alldayIndexOf("0846")).toBe(0);
+    expect(alldayIndexOf("0848")).toBe(2);
     expect(screen.queryByTestId("allday-live")).toBeNull();
   });
 
@@ -267,5 +282,64 @@ describe("FuturesChart overlays(SC-7 均價線 / SC-11 OI 線)", () => {
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
     expect(screen.queryByText(/^壓 /)).toBeNull();
     expect(screen.queryByText(/^撐 /)).toBeNull();
+  });
+});
+
+describe("FuturesChart 分時模式的 overlays(SC-7 / SC-11;與 K 線同一套語意)", () => {
+  /** 分時的 y 域只由 close 與 ref 決定(高低價不參與)→ 用一低一高兩根撐開視窗,
+   *  讓 22400–23600 這帶的 overlay 落得進來。localStorage 未設 = 預設分時模式。 */
+  const SPAN = [bar("2026-08-05 09:30", 22_400_000), bar("2026-08-05 09:31", 23_600_000)];
+
+  const OI_BODY: OiLevelsResponse = {
+    date: "2026-08-04",
+    contract: "202608",
+    strikes: [
+      { strike: 22_500, call_oi: 100, put_oi: 8_000 },
+      { strike: 23_500, call_oi: 9_000, put_oi: 100 },
+      { strike: 55_000, call_oi: 99_999, put_oi: 0 }, // 帶外垃圾履約價
+    ],
+  };
+
+  beforeEach(() => {
+    barsBody = { bars: SPAN, meta: META };
+  });
+
+  it("本契約部位 → 分時圖畫出均價 hline(label + 線元素)", async () => {
+    positionsBody = { positions: [futPos({ qty: 2, avg_price: 23_000 })] };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await screen.findByTestId("allday-line"); // 確定走的是分時而非 CandleChart
+    await waitFor(() => expect(screen.getByText("均 23000 多2口")).toBeTruthy());
+    expect(screen.getAllByTestId("chart-hline").length).toBe(1);
+  });
+
+  it("OI 有值 → 分時圖畫出壓/撐 hline(帶外 55000 仍不入選)", async () => {
+    oiBody = OI_BODY;
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await screen.findByTestId("allday-line");
+    await waitFor(() => expect(screen.getByText("壓 23500")).toBeTruthy());
+    expect(screen.getByText("撐 22500")).toBeTruthy();
+    expect(screen.queryByText("壓 55000")).toBeNull();
+    expect(screen.getAllByTestId("chart-hline").length).toBe(2);
+  });
+
+  it("priceMilli 遠超 y 域 → 只不畫那一條(clamp 到邊緣 = 把圖外價位講成圖緣價位)", async () => {
+    // 同一次 render 內一條在窗內、兩條在窗外 → 「只畫窗內那條」才是斷言,
+    // 全部不畫或全部照畫都會紅(y 域上緣 = 23600 × 1.003、下緣 = 22400 × 0.997)
+    positionsBody = {
+      positions: [futPos({ qty: 2, avg_price: 23_000 }), futPos({ qty: 1, avg_price: 30_000 })],
+    };
+    oiBody = {
+      date: "2026-08-04",
+      contract: "202608",
+      // 帶內(±10% of 23000)但落在 y 域下緣之外
+      strikes: [{ strike: 21_000, call_oi: 5_000, put_oi: 5_000 }],
+    } satisfies OiLevelsResponse;
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await screen.findByTestId("allday-line");
+    await waitFor(() => expect(screen.getByText("均 23000 多2口")).toBeTruthy());
+    expect(screen.queryByText("均 30000 多1口")).toBeNull();
+    expect(screen.queryByText("壓 21000")).toBeNull();
+    expect(screen.queryByText("撐 21000")).toBeNull();
+    expect(screen.getAllByTestId("chart-hline").length).toBe(1);
   });
 });

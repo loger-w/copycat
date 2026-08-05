@@ -90,8 +90,13 @@ describe("closeBodyOf(SC-10 送單面;兩呼叫端同形)", () => {
   });
 
   it("qty 由 helper 內部給,不開參數 —— 兩個呼叫端 body 必然同形", () => {
-    const p = pos({ market: "fut", stock_no: "TXFI6", qty: 2 });
-    expect(closeBodyOf(p, 23_000)).toEqual(closeBodyOf(p, 23_000));
-    expect(Object.keys(closeBodyOf(p, 23_000)).sort()).toEqual(["key", "market", "price", "qty"]);
+    // 同一個 pos 只換 market:鍵集的差異**只有** kind 一維(qty / price / key 不隨之變),
+    // 這是「兩個呼叫端各自組 body 也不會漂移」的實質內容
+    const base = { stock_no: "TXFI6", qty: 2, kind: "cash" } as const;
+    const futKeys = Object.keys(closeBodyOf(pos({ ...base, market: "fut" }), 23_000)).sort();
+    const secKeys = Object.keys(closeBodyOf(pos({ ...base, market: "sec" }), 23_000)).sort();
+    expect(futKeys).toEqual(["key", "market", "price", "qty"]);
+    expect(secKeys).toEqual(["key", "kind", "market", "price", "qty"]);
+    expect(secKeys.filter((k) => !futKeys.includes(k))).toEqual(["kind"]);
   });
 });
