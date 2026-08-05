@@ -806,16 +806,14 @@ class CapitalClient:
         return CapitalGateBlockedError(reason)
 
     async def _submit_close_locked(
-        self,
-        req: PositionCloseRequest,
-        inflight_key: str,
-        submit: Callable[[], Awaitable[OrderResult]],
+        self, inflight_key: str, submit: Callable[[], Awaitable[OrderResult]]
     ) -> OrderResult:
         """in-flight 標記 + 送單。await 前就標記:同 loop 上的併發請求才擋得住。
         submit 被前置閘擋下(CapitalGateBlockedError / AuditWriteError / NotReady,
         錢沒動)→ 解鎖再 re-raise,立即重試不被「在途」擋(review A8);
         逾時/COM 例外的結果未知 → 不解鎖,寧可鎖滿窗口(多鎖 10s 是可接受代價)。
-        鍵必須與 _close_dup_reason 的讀取/清理端同一把(見該處說明)。"""
+        鍵一律由 inflight_key 決定(caller 已依 market 組好),不從 req 另推一次 —
+        兩處推法各自演化正是防重送整層失效的入口。"""
         self._close_inflight[inflight_key] = time.monotonic() + _CLOSE_INFLIGHT_S
         try:
             return await submit()
@@ -851,7 +849,7 @@ class CapitalClient:
             if reason:
                 raise await self._close_blocked(req, reason)
             return await self._submit_close_locked(
-                req, inflight_key, lambda: self.submit_stock_order(order, action="close")
+                inflight_key, lambda: self.submit_stock_order(order, action="close")
             )
 
         # fut:kind 忽略(OI 列不帶種類),market 內唯一匹配即可 — 不寫死 "cash",
@@ -869,7 +867,6 @@ class CapitalClient:
             raise await self._close_blocked(req, reason)
         multiplier = self._multiplier_for_contract(req.key, seq_no="(close)")
         return await self._submit_close_locked(
-            req,
             req.key,
             lambda: self.submit_future_order(
                 fut_order, contract=req.key, multiplier=multiplier, new_close=1, action="close"
