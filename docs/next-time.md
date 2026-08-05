@@ -1,5 +1,14 @@
 
-## 2026-08-05(bars-tristate-status 收尾留尾巴)
+## 2026-08-05(discord-watchlist 題4 收尾留尾巴)
+
+- [ ] **SC-4 Discord 實發待 user 過目**(prod 重啟後,試用指引見 PR #21):`/watch add` 的
+  group 欄 autocomplete 選單、`/watch groups` 空群組與衍生標注、group add/rename/remove 全鏈。
+- [ ] **群組名長度 / 群組數上限未加**(review A2 縮範圍,user auto-default 記錄):回覆層已以
+  1900 截斷 + send 防護兜底,超長名只影響觀感不再永久卡死;真要根除在 `normalize` 加
+  name ≤ 32 / 群組數 ≤ 30,`_CHOICE_NAME_LIMIT` 的略過分支順帶變不可達防禦。
+- [ ] **讀時遷移 orphan union 理論可推破 30 上限**(design Known Risks):該態下群組操作
+  大聲拒絕(`WATCHLIST_UNAVAILABLE`)、自癒 = 前端整份 apply;僅手改檔可達,不加遷移端 cap。
+
 
 - [ ] `StockChart.tsx` 的 isPending / emptyNote(timeout/disconnected)/ isError 三個
   佔位框 class 字串幾乎相同(僅文字與色差),可抽 `<ChartNotice tone text sub?>`;
