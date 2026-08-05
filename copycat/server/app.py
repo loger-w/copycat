@@ -62,9 +62,15 @@ from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
 
+#: 期指鍵(近全盤別 `session=allday` 專屬 —— 加權 / 櫃買沒有夜盤)。
+FUTURES_MARKET_KEYS = ("TXF", "MXF", "TMF")
+
 #: 大盤頁支援的標的鍵。值域小且固定 → 白名單比 regex 好:非法鍵一律 400 BAD_KEY,
 #: 不讓打錯的字串一路走到 TC4 才回空(那會被誤讀成「沒資料」)。
-MARKET_KEYS = ("TWSE", "OTC", "TXF", "MXF", "TMF")
+MARKET_KEYS = ("TWSE", "OTC") + FUTURES_MARKET_KEYS
+
+#: `?session=` 的值域。
+MARKET_SESSIONS = ("day", "allday")
 
 
 def _market_payload(
@@ -858,7 +864,9 @@ def create_app(
     # ---- market(大盤 K 線;index-board SC-4/5/6)----
 
     @app.get("/api/market/bars/{key}")
-    async def market_bars(request: Request, key: str, tf: str = "D", days: str = "30") -> dict:
+    async def market_bars(
+        request: Request, key: str, tf: str = "D", days: str = "30", session: str = "day"
+    ) -> dict:
         """大盤頁 K 線(index-board N-5)。
 
         **拒繪走 200 + `meta.refusal`,不用 4xx**:4xx 會被 TanStack Query 的 error 路徑
@@ -868,16 +876,26 @@ def create_app(
         分派 = 每個 symbol 都向**持有它 REALTIME 訂閱的那條 session** 問歷史
         (CLAUDE.md §8 同 symbol 跨 session 只推一邊):
         `TWSE` → index 引擎、`TXF/MXF/TMF` → futures 引擎、`OTC` → 本機合成(無 TC4 來源)。
+
+        `session`(`day` 預設 / `allday` 近全,futures-allday SC-3)只對期指 tf=1 有意義:
+        非法值或非期指鍵帶 `allday` 一律 400 —— 靜默當 day 處理的話,前端會以為自己拿到
+        的是近全序列(而畫面上「加權沒有夜盤」與「參數沒生效」長得一模一樣)。
+        `tf != "1"` 則忽略 session(日/週/月 K 無盤別維度,D-15:忽略的參數不進 cache 鍵)。
         """
         if key not in MARKET_KEYS:
             raise HTTPException(status_code=400, detail={"error": "BAD_KEY"})
         if tf not in ("1", "D", "W", "M"):
             raise HTTPException(status_code=400, detail={"error": "BAD_TF"})
+        if session not in MARKET_SESSIONS or (
+            session == "allday" and key not in FUTURES_MARKET_KEYS
+        ):
+            raise HTTPException(status_code=400, detail={"error": "INVALID_SESSION"})
         try:
             days_n = clamp_days(int(days))
         except ValueError:
             raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
         today = _date.today()
+        eff_session = session if tf == "1" else "day"
 
         if key == "OTC":
             index = _index(request)
@@ -908,7 +926,7 @@ def create_app(
 
             async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
                 # 期指沒有 DK→1K 的 fallback 分支,tag 恆定;回空 = 借不到(engine 已 log)
-                got = await futures.bars_range(key, tf_, s, e)
+                got = await futures.bars_range(key, tf_, s, e, session=eff_session)
                 return TaggedBars(got, "tc4_dk" if got else "unavailable")
 
         # 兩個閉包的第二元素語意不同(source tag vs 三態 status)且同為 str ——
@@ -923,7 +941,9 @@ def create_app(
         # 長窗路徑的 |L 後綴同理(review P2-1)。期指的 F: 前綴含冒號,本來就撞不到。
         code = ("IX0001|M" if tf == "1" else "IX0001") if key == "TWSE" else f"F:{key}"
         if tf == "1":
-            bars, _ = await build_minute(plain_with_status, bars_cache, code, days_n, today)
+            bars, _ = await build_minute(
+                plain_with_status, bars_cache, code, days_n, today, session=eff_session
+            )
             return _market_payload(
                 key,
                 tf,

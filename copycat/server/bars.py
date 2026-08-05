@@ -409,16 +409,35 @@ async def build_period(
 
 
 async def build_minute(
-    fetch: BarsFetcher, cache: BarsCache, code: str, days: int, today: _dt.date
+    fetch: BarsFetcher,
+    cache: BarsCache,
+    code: str,
+    days: int,
+    today: _dt.date,
+    *,
+    session: str = "day",
 ) -> BarsResult:
     """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。
 
     status = 兩段的 worst(SC-6)。**未實際 fetch 且無存檔 status 的段不貢獻**
     (歷史 memo 命中)—— 已經拿到的資料不是壞消息,把它算成上一輪的原因會讓
     過期的診斷永遠黏著。
+
+    `session`(`day` / `allday`,futures-allday §1.4):同一個 code 的兩種盤別是
+    **不同的序列**(近全多了夜盤那 14 小時),所以三處 cache(歷史 memo / 當日 /
+    負向)的鍵一律用複合字串 `f"{code}:{session}"` —— 共用一格的話,日盤模式先跑一輪
+    之後,近全模式在 TTL 內拿到的是日盤那份 bars,畫面上是「切到近全還是只有日盤」,
+    兩邊都 200、都非空、零錯誤訊號。day 也帶後綴(單一格式;in-memory 無相容問題)。
+
+    **複合鍵只在 cache 查表處組出,`fetch` 的第一個引數維持原 `code`**(R8):
+    覆寫掉會讓 source 拿 "F:TXF:allday" 去問 TC4,回來是空 —— 與 timeout 不可分。
+
+    `tf="D"` 的兩條(`build_daily` / `build_period`)不帶 session:日 K 無盤別維度,
+    忽略的參數不進 cache 鍵(D-15)。
     """
     cache.prune(today)
-    marked = cache.empty_status(code, "1", days)
+    ck = f"{code}:{session}"
+    marked = cache.empty_status(ck, "1", days)
     if marked is not None:
         return BarsResult([], marked)
     start = today - _dt.timedelta(days=clamp_days(days) - 1)
@@ -427,26 +446,26 @@ async def build_minute(
     statuses: list[BarsStatus] = []
     out: list[Bar] = []
     if start <= yesterday:
-        missing = cache.hist_missing(code, start, yesterday)
+        missing = cache.hist_missing(ck, start, yesterday)
         if missing:
             # 只補缺口區間(端點取 min/max;中間已 memo 的日子重抓無害,省下逐日 REQ)
             lo, hi = missing[0], missing[-1]
             fetched, hist_status = await fetch(code, "1", lo.isoformat(), hi.isoformat())
             statuses.append(_coerce_status(hist_status))
             if fetched:
-                cache.put_hist_range(code, lo, hi, fetched)
+                cache.put_hist_range(ck, lo, hi, fetched)
             else:
                 # 全空:可能是 TC4 失敗,不寫負向快取(否則整段被永久釘成空)
-                logger.info("bars %s: 歷史段 %s..%s 回空,不入 memo", code, lo, hi)
-        out.extend(cache.hist_range(code, start, yesterday))
+                logger.info("bars %s: 歷史段 %s..%s 回空,不入 memo", ck, lo, hi)
+        out.extend(cache.hist_range(ck, start, yesterday))
 
-    entry = cache.today_get(code, today.isoformat())
+    entry = cache.today_get(ck, today.isoformat())
     if entry is None:
         today_bars, raw_today_status = await fetch(code, "1", today.isoformat(), today.isoformat())
         # 收斂在寫入 cache **之前**:域外值一旦進了 `_today`,15s 內的重播會把它
         # 再送出去一次,收斂點就白做了
         today_status = _coerce_status(raw_today_status)
-        cache.today_put(code, today.isoformat(), today_bars, today_status)
+        cache.today_put(ck, today.isoformat(), today_bars, today_status)
     else:
         # cache 命中也要把存入時的 status 帶回來:`_empty` 的 key 含 days 而這層不含,
         # 少了它 days 一換就把 timeout 洗白(R4)
@@ -457,7 +476,7 @@ async def build_minute(
     # 兩段都空 = 這檔在 TC4 查不到(或 TC4 正忙)。標記 15 秒,期間的重複請求直接回空,
     # 不再各付一次首頁 deadline。過期即自動重試(W-15)。
     if out:
-        cache.empty_clear(code, "1", days)
+        cache.empty_clear(ck, "1", days)
     else:
-        cache.empty_mark(code, "1", days, status)
+        cache.empty_mark(ck, "1", days, status)
     return BarsResult(out, status)
