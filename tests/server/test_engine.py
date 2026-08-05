@@ -334,6 +334,40 @@ async def test_self_heal_source_error_degrades_then_recovers() -> None:
         await rt.close()
 
 
+class _BlockingBackfillSource(FakeQuoteSource):
+    """`fetch_backfill` 卡在 gate 上 —— 交接期最長的那個讓出點,cancel 真的穿得過去。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+
+    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+        self.entered.set()
+        self.gate.wait(15)
+        return super().fetch_backfill(series)
+
+
+async def test_cancel_during_backfill_clears_orphan_buffer() -> None:
+    """cancel 穿過交接時孤兒 buffer 也要清(ConnectionError 那條分支的對稱面)。
+
+    留著的 buffer 會把其後每一則 tick 吞進沒人 flush 的容器裡(totals 靜默凍結)。
+    現況 cancel 只來自關機(engine 隨即整個收掉)所以看不到症狀 —— 這條把那個沒寫
+    下來的不變式釘成合約,日後新增別的 cancel 來源時不會靜默壞掉。
+    """
+    fake = _BlockingBackfillSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    task = asyncio.create_task(rt.start())
+    entered = await asyncio.to_thread(fake.entered.wait, 5)
+    assert entered, "boot 沒卡在 fetch_backfill 上,cancel 路徑不會被執行"
+    task.cancel()
+    fake.gate.set()  # 放行卡住的 executor 執行緒(否則收尾 join 它會掛住)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert rt._buffer is None, "cancel 路徑孤兒 buffer 未清,其後 tick 全被吞"
+    await rt.close()
+
+
 async def test_snapshot_reports_handover_stats() -> None:
     """條 2(next-time 2026-07-20):回補逾時預警的 snapshot 欄位(degraded 時可診斷)。"""
     fake = FakeQuoteSource(
