@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from copycat.live.stock_source import StockQuoteSource
+from copycat.live.stock_source import StockQuoteSource, aggregate_1k_to_daily, parse_1k_bars
 from tests.helpers.tc4_fakes import FakeApi, ok
 
 
@@ -227,6 +227,149 @@ class TestBarsStatus:
         assert _src(_pager(pages)).fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")[
             1:
         ] == ("tc4_dk", "ok")
+
+
+_ALLDAY = (("0846", "1345", "1350"), ("1501", "2359", "2359"), ("0000", "0500", "0505"))
+_DAY_ONLY = ("0846", "1345", "1350")
+
+
+def _k1v(date: str, time: str, c: str, v: str = "1", qi: str = "1", **extra: str) -> dict:
+    """1K row 治具(o/h/l 全等於 c;`extra` 供 UpVolume / DownVolume 等選配欄)。"""
+    row = k1(date, time, c, c, c, c, v, qi)
+    row.update(extra)
+    return row
+
+
+class TestParse1kMultiSegmentDomain:
+    """SC-3:夜盤多段域 —— 段序列 + 完整 UTC→台北 datetime 轉換。
+
+    夜盤跨午夜,`_taipei_minute_key` 的「只加小時 % 24」捷徑會把台北次日的列留在
+    前一天(UTC 16:00 之後全體受害),所以序列路徑改走完整 datetime 轉換。
+    **不加 1 分鐘**:1K 的 `Time` 本身已是 bar 終點標記。
+    """
+
+    def _stamps(self, *rows: dict) -> list[str]:
+        return [b["t"] for b in parse_1k_bars(list(rows), _ALLDAY)]
+
+    def test_day_open_first_bar_kept(self) -> None:
+        # UTC 00:46 = 台北 08:46 = 日盤首根終點標記(08:45 開盤)
+        assert self._stamps(_k1v("20260730", "004600", "23000")) == ["2026-07-30 08:46"]
+
+    def test_before_day_open_dropped(self) -> None:
+        """UTC 00:45(台北 08:45)落在日盤段起點之前 → 丟(與既有單段域同語意,R9)。"""
+        assert self._stamps(_k1v("20260730", "004500", "23000")) == []
+
+    def test_night_session_first_bar_is_1501(self) -> None:
+        # 夜盤 15:00 開盤 → 首根終點標記 15:01(UTC 07:01)
+        assert self._stamps(_k1v("20260730", "070100", "23100")) == ["2026-07-30 15:01"]
+
+    def test_utc_1559_stays_on_same_taipei_day(self) -> None:
+        """23:59 不進位、不加 1 —— 加 1 會變 24:00 這種不存在的時刻。"""
+        assert self._stamps(_k1v("20260730", "155900", "23100")) == ["2026-07-30 23:59"]
+
+    def test_utc_1600_rolls_into_next_taipei_day(self) -> None:
+        """台北日期由 datetime 轉換得出:UTC 16:00 = 台北**次日** 00:00。"""
+        assert self._stamps(_k1v("20260730", "160000", "23100")) == ["2026-07-31 00:00"]
+
+    def test_night_close_and_clamp_and_out_of_domain(self) -> None:
+        assert self._stamps(_k1v("20260730", "205900", "1")) == ["2026-07-31 04:59"]
+        # 05:01–05:05 clamp 進 05:00(收盤補正);05:10 已在 clamp 窗外 → 丟
+        assert self._stamps(_k1v("20260730", "210300", "1")) == ["2026-07-31 05:00"]
+        assert self._stamps(_k1v("20260730", "211000", "1")) == []
+
+    def test_clamped_rows_merge_into_one_bar(self) -> None:
+        bars = parse_1k_bars(
+            [
+                _k1v("20260730", "210000", "100", v="2", qi="1"),  # 台北次日 05:00
+                _k1v("20260730", "210300", "103", v="3", qi="2"),  # clamp → 05:00
+            ],
+            _ALLDAY,
+        )
+        assert bars == [
+            {
+                "t": "2026-07-31 05:00",
+                "o": 100_000,
+                "h": 103_000,
+                "l": 100_000,
+                "c": 103_000,
+                "v": 5,
+            }
+        ]
+
+    def test_segments_ordered_chronologically(self) -> None:
+        rows = [
+            _k1v("20260730", "004600", "1", qi="1"),  # 08:46
+            _k1v("20260730", "070100", "2", qi="2"),  # 15:01
+            _k1v("20260730", "160000", "3", qi="3"),  # 次日 00:00
+        ]
+        assert self._stamps(*rows) == [
+            "2026-07-30 08:46",
+            "2026-07-30 15:01",
+            "2026-07-31 00:00",
+        ]
+
+    def test_single_tuple_domain_keeps_legacy_path(self) -> None:
+        """三元素 str tuple 也是 Sequence —— 判別法必須是 `isinstance(domain[0], str)`。
+
+        單段路徑行為零變化:夜盤列照舊落在域外被丟。
+        """
+        rows = [_k1v("20260730", "004600", "1", qi="1"), _k1v("20260730", "070100", "2", qi="2")]
+        assert [b["t"] for b in parse_1k_bars(rows, _DAY_ONLY)] == ["2026-07-30 08:46"]
+
+
+class TestDeltaVolumeFields:
+    """SC-8 後端半:1K row 的 UpVolume / DownVolume(內外盤量)貫通到 Bar。
+
+    `uv` / `dv` 是 `NotRequired` —— **來源沒有那兩欄就不得長出欄位**,否則個股既有
+    路徑與 DK 路徑的 bar 形狀一起改變(既有測試以完整 dict 相等把這件事釘住)。
+    """
+
+    def test_absent_fields_leave_bar_shape_unchanged(self) -> None:
+        bars = parse_1k_bars([_k1v("20260728", "10100", "100", v="7")])
+        assert bars == [
+            {
+                "t": "2026-07-28 09:01",
+                "o": 100_000,
+                "h": 100_000,
+                "l": 100_000,
+                "c": 100_000,
+                "v": 7,
+            }
+        ]
+
+    def test_delta_volume_accumulated_within_same_minute(self) -> None:
+        rows = [
+            _k1v("20260728", "53000", "100", v="4", qi="1", UpVolume="3", DownVolume="1"),
+            _k1v("20260728", "53100", "101", v="6", qi="2", UpVolume="2", DownVolume="4"),
+        ]
+        bars = parse_1k_bars(rows)  # 13:31 clamp 進 13:30 → 同一根
+        assert len(bars) == 1
+        assert (bars[0]["uv"], bars[0]["dv"], bars[0]["v"]) == (5, 5, 10)
+
+    def test_missing_one_side_counts_as_zero(self) -> None:
+        bars = parse_1k_bars([_k1v("20260728", "10100", "100", UpVolume="9")])
+        assert (bars[0]["uv"], bars[0]["dv"]) == (9, 0)
+
+    def test_multi_segment_path_also_carries_delta_volume(self) -> None:
+        bars = parse_1k_bars(
+            [_k1v("20260730", "070100", "100", v="5", UpVolume="4", DownVolume="1")], _ALLDAY
+        )
+        assert (bars[0]["t"], bars[0]["uv"], bars[0]["dv"]) == ("2026-07-30 15:01", 4, 1)
+
+    def test_daily_aggregation_sums_delta_volume(self) -> None:
+        rows = [
+            _k1v("20260728", "10100", "100", v="4", qi="1", UpVolume="3", DownVolume="1"),
+            _k1v("20260728", "10200", "102", v="6", qi="2", UpVolume="2", DownVolume="4"),
+        ]
+        bars = aggregate_1k_to_daily(rows)
+        assert len(bars) == 1
+        assert (bars[0]["uv"], bars[0]["dv"], bars[0]["v"]) == (5, 5, 10)
+
+    def test_daily_aggregation_without_fields_unchanged(self) -> None:
+        bars = aggregate_1k_to_daily([_k1v("20260728", "10100", "100", v="4")])
+        assert bars == [
+            {"t": "2026-07-28", "o": 100_000, "h": 100_000, "l": 100_000, "c": 100_000, "v": 4}
+        ]
 
 
 class TestCollectHistoryWaiting:
