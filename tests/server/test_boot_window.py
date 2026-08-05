@@ -114,13 +114,22 @@ def _watchlist(tmp_path: Path, codes: list[str]) -> Path:
 
 
 class TestBootWindowIsOpen:
-    def test_lifespan_yields_before_boot_completes(self) -> None:
+    def test_lifespan_yields_before_boot_completes(self, tmp_path: Path) -> None:
         """窗開著:boot 還卡在 TXO 那段時,HTTP 面必須已經在服務。
 
         裸 `TestClient`(刻意不用 `BootedClient`)—— 這條要驗的正是「不等就緒也進得去」。
+
+        **stock source 必須注入**:不注入的話 `/api/stock/watchlist` 恆 503(engine 從頭
+        到尾都是 None),那個 503 反映的是「沒 source」不是「還在窗內」—— 斷言看起來
+        對、實際上不鑑別。注入之後才有 503 → 200 的翻轉可比。
         """
         fake = BlockingTxoSource()
-        app = create_app(fake, throttle_secs=0.01)
+        app = create_app(
+            fake,
+            stock_source=FakeStockSource(),
+            stock_watchlist_path=_watchlist(tmp_path, []),
+            throttle_secs=0.01,
+        )
         client = TestClient(app, raise_server_exceptions=False)
         t0 = time.monotonic()
         with client:
@@ -133,6 +142,7 @@ class TestBootWindowIsOpen:
             assert app.state.boot_done is False
             assert client.get("/api/health").status_code == 200, "build 身分在窗內必須答得出來"
             assert client.get("/api/txo/series").status_code == 503
+            # stock 排在 TXO runtime 之後 → 窗內尚未輪到,與注入的 source 無關
             assert client.get("/api/stock/watchlist").status_code == 503
 
             # **exit 之前必須放行**:阻塞點跑在 loop 的預設 executor,`__exit__` 會
@@ -142,6 +152,8 @@ class TestBootWindowIsOpen:
             assert app.state.boot_done is True
             assert app.state.boot_error is None
             assert client.get("/api/txo/snapshot").status_code == 200
+            # 翻轉對照:同一條 route 在窗外變 200 → 上面那個 503 確實只出自「窗內」
+            assert client.get("/api/stock/watchlist").status_code == 200
 
 
 class TestShutdownDuringBoot:
@@ -159,8 +171,8 @@ class TestShutdownDuringBoot:
         # → 走正常反序 close」也會讓 fake.closed 成立,中斷路徑一次都沒驗到
         assert app.state.boot_done is False, "關機中的 server 不得宣告就緒"
         assert app.state.stock is None
-        assert app.state.index is None
-        assert app.state.corr is None
+        # index / corr 的 None 斷言已刪:這個 app 根本沒注入那兩個 source,值與 cancel
+        # 無關(恆 None),留著只會讓人以為中斷路徑多驗了兩件事
 
     def test_boot_cancel_closes_inflight_engine(self, tmp_path: Path) -> None:
         """中斷點落在某個引擎的 `_boot` 內時,已建好的物件也要關掉。

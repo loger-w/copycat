@@ -272,7 +272,14 @@ class _RunningServer:
                 self.server.should_exit = True
                 raise AssertionError("uvicorn 未在時限內啟動")
             time.sleep(0.01)
-        wait_boot(self.app)  # 六路推播鏈的正向對照需要引擎真的起完
+        try:
+            wait_boot(self.app)  # 六路推播鏈的正向對照需要引擎真的起完
+        except BaseException:
+            # `__enter__` 拋 = `with` 主體不執行 = `__exit__` **永不執行**:server 沒被
+            # should_exit 收掉,殭屍廣播迴圈也不會進 `_HUNG_SERVERS` → 其後每條測試的
+            # connlost 計數都被污染卻看不出來(歸還路徑同 `BootedClient.__enter__`)
+            self.__exit__()
+            raise
         self.port = int(self.server.servers[0].sockets[0].getsockname()[1])
         return self
 
