@@ -369,10 +369,12 @@ export function PriceLadder({
                 className={cn(
                   "grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 font-mono text-xs",
                   r.isCenter && "bg-bg-deep",
-                  r.dimmed && "opacity-35",
                 )}
               >
-                <div className="flex items-stretch">
+                {/* 反灰(±5% 外)的淡化套在三個 grid 欄、不套 row 容器:opacity 是
+                    合成層屬性,套在容器上時子元素無法「反淡」—— 之後要疊在 row 上的
+                    部位標記(打平 / 均價)正好都落在遠離現價的位置。 */}
+                <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
                   {buyLot !== undefined ? (
                     <button
                       type="button"
@@ -400,11 +402,12 @@ export function PriceLadder({
                   className={cn(
                     "flex items-center justify-center",
                     r.isCenter ? "text-accent" : r.dimmed ? "text-ink-dim" : "text-ink",
+                    r.dimmed && "opacity-35",
                   )}
                 >
                   {fmt(r.priceMilli)}
                 </span>
-                <div className="flex items-stretch">
+                <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
                   <button
                     type="button"
                     disabled={r.dimmed}
