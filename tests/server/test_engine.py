@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any, Callable
 
+import pytest
+
 from copycat.live.models import OptionContract, SeriesInfo, Tick
-from copycat.server.engine import EngineRuntime
+from copycat.server.engine import EngineRuntime, HandoverBusyError
 
 C44000 = OptionContract(symbol="TC.O.TWF.TX4.202607.C.44000", cp="C", strike_millipts=44_000_000)
 C45000 = OptionContract(symbol="TC.O.TWF.TX5.202607.C.45000", cp="C", strike_millipts=45_000_000)
@@ -385,4 +388,59 @@ async def test_snapshots_throttled_stream_yields_on_change() -> None:
         assert snap["totals"]["call_net_qty"] == 1
         await agen.aclose()
     finally:
+        await rt.close()
+
+
+class _BlockingUnsubSource(FakeQuoteSource):
+    """`unsubscribe` 卡住 —— 那是 `activate` 在設交接旗標**之前**的讓出點。
+
+    只查 `_handover_running` 擋不住相鄰兩個 select:A 停在這裡時旗標還沒設起,
+    B 照樣一路通過 → 兩個交接共用 `_buffer`。互斥必須涵蓋整個 `activate`。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+
+    def unsubscribe(self, series: SeriesInfo) -> None:
+        self.entered.set()
+        self.gate.wait(15)
+        super().unsubscribe(series)
+
+
+async def test_activate_while_handover_running_raises_busy() -> None:
+    """交接進行中(rollover / 自癒 / 初始交接皆可能)的 activate 一律拒絕。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        rt._handover_running = True
+        with pytest.raises(HandoverBusyError):
+            await rt.activate("TX5.202607")
+        assert fake.unsubscribed == [], "busy 時不得動到訂閱狀態(必須在 mutation 之前擋)"
+    finally:
+        rt._handover_running = False
+        await rt.close()
+
+
+async def test_concurrent_activate_second_raises_busy() -> None:
+    fake = _BlockingUnsubSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()  # 啟動即 activate A(_active 為 None → 不走 unsubscribe)
+    try:
+        first = asyncio.ensure_future(rt.activate("TX5.202607"))
+        for _ in range(1_000):
+            if fake.entered.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert fake.entered.is_set(), "第一個 activate 沒停在 unsubscribe 的讓出點"
+
+        with pytest.raises(HandoverBusyError):
+            await rt.activate("TX5.202607")
+
+        fake.gate.set()
+        await asyncio.wait_for(first, timeout=5)
+    finally:
+        fake.gate.set()
         await rt.close()

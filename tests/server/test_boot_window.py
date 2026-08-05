@@ -52,6 +52,23 @@ class BlockingTxoSource(FakeTxoSource):
         self.closed = True
 
 
+class BlockingBackfillTxoSource(FakeTxoSource):
+    """`fetch_backfill` 卡在 gate 上 —— 交接協定裡真正貴的那一段(prod 全鏈分鐘級)。
+
+    `list_series` 照常回,所以窗內 `/api/txo/series` 已經看得到序列 → 前端按得下去,
+    而初始交接還沒完 —— select 與 boot 中的交接並發共用 `_buffer` 的那個窗。
+    """
+
+    def __init__(self) -> None:
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+
+    def fetch_backfill(self, series: SeriesInfo) -> list:
+        self.entered.set()
+        self.gate.wait(_GATE_CAP)
+        return []
+
+
 class FailingTxoSource(FakeTxoSource):
     """`list_series` 直接拋 —— runtime start 的執行期失敗(D2)。"""
 
@@ -190,6 +207,35 @@ class TestRuntimeStartFailureDegrades:
             assert app.state.boot_error is None
             assert client.get("/api/txo/series").status_code == 503
             assert client.get("/api/stock/watchlist").status_code == 200
+
+
+class TestSelectDuringHandover:
+    def test_select_during_handover_returns_503(self) -> None:
+        """交接進行中的 select 回 503 HANDOVER_BUSY,交接完成後同請求 200(SC-4)。
+
+        窗開了之後這條才變得可達:`runtime.start` 已填 `_series` → `/api/txo/series`
+        回得出清單 → 前端按得下去,而初始交接還在跑。`activate` 沒有重入 guard 時,
+        第二個交接會與第一個共用 `_buffer`(engine.py 的 F1 註解警告的正是這件事)。
+        """
+        fake = BlockingBackfillTxoSource()
+        app = create_app(fake, throttle_secs=0.01)
+        client = TestClient(app, raise_server_exceptions=False)
+        with client:
+            assert fake.entered.wait(5), "初始交接沒卡在回補上,並發窗不存在"
+            assert client.get("/api/txo/series").status_code == 200, (
+                "序列還沒列出的話,前端根本按不下 select —— 這條測的窗不成立"
+            )
+            r = client.post("/api/txo/select", json={"series_id": SERIES.series_id})
+            assert r.status_code == 503
+            assert r.json()["detail"]["error"] == "HANDOVER_BUSY"
+
+            # **不用 Timer**:測試執行緒在兩次 POST 之間是自由的,預先 arm 反而會在慢
+            # 機器上讓第一次 POST 晚於放行 → 拿 200 假紅(Timer 協定只適用「放行時機
+            # 必須落在 __exit__ 阻塞期間」的那兩條)
+            fake.gate.set()
+            wait_boot(app)
+            again = client.post("/api/txo/select", json={"series_id": SERIES.series_id})
+            assert again.status_code == 200, "交接完成後同一個請求必須成功"
 
 
 class TestBootSequenceException:
