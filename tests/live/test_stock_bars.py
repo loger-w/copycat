@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from copycat.live.futures_source import FUTURES_ALLDAY_DOMAIN
 from copycat.live.stock_source import StockQuoteSource, aggregate_1k_to_daily, parse_1k_bars
 from tests.helpers.tc4_fakes import FakeApi, ok
 
@@ -229,7 +230,10 @@ class TestBarsStatus:
         ] == ("tc4_dk", "ok")
 
 
-_ALLDAY = (("0846", "1345", "1350"), ("1501", "2359", "2359"), ("0000", "0500", "0505"))
+#: **真常數本尊**,不是同值副本(review TC-1):自己抄一份的話,`futures_source` 那邊
+#: 把段界改壞(例如夜盤收盤 0500 寫成 0400)這裡照樣全綠 —— 這批段域測試就完全失去
+#: 鎖定力,而失效樣態是「圖照畫、只是少了一段時間」,沒有任何錯誤訊號。
+_ALLDAY = FUTURES_ALLDAY_DOMAIN
 _DAY_ONLY = ("0846", "1345", "1350")
 
 

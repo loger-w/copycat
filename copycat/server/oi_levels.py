@@ -47,6 +47,11 @@ _ATTEMPTS = 2  # 一天一次呼叫的量級,重試一次即可;402 完全不重
 #: 失敗/402 的負向快取秒數。不可永久 —— FinMind 恢復(或隔小時配額回補)後要自癒。
 NEGATIVE_TTL_SECS = 300.0
 
+#: `latest` 落後今日超過這麼多**日曆日**就升 warning(連假最長約 5 天)。
+#: 分頁截斷 / 上游停更會讓 `latest` 悄悄退化成舊日期,而畫面上「舊了三天的 OI 線」與
+#: 「今天的 OI 線」長得一模一樣 —— 沒有這道觀測就只能靠猜(review LF-3)。
+STALE_WARN_DAYS = 5
+
 
 class OiStrike(TypedDict):
     strike: int
@@ -250,6 +255,30 @@ def _pivot(rows: list[dict], contract_ym: str) -> OiLevels:
     }
 
 
+def _log_freshness(rows: list[dict], levels: OiLevels, today: _date) -> None:
+    """成功路徑的唯一觀測點(review LF-3)。
+
+    10 日窗 ≈7 萬列走一次分頁,截斷或上游停更會讓 `latest` 靜默退化成舊日期 ——
+    回應形狀完全合法、HTTP 200、前端照畫,只有「哪一天的 OI」變了。
+    `latest` 落後 > `STALE_WARN_DAYS` 即升 warning,**但照樣回傳**(舊的撐壓仍有用,
+    只是要有人知道它舊了)。
+    """
+    latest = levels["date"] or ""
+    try:
+        lag: int | None = (today - _date.fromisoformat(latest)).days
+    except ValueError:
+        lag = None  # 上游日期格式怪 → 一樣要吵(不可靜默當新鮮)
+    log = logger.info if lag is not None and lag <= STALE_WARN_DAYS else logger.warning
+    log(
+        "oi-levels %s:%d rows → latest=%s / %d strikes(落後 %s 日)",
+        levels["contract"],
+        len(rows),
+        latest,
+        len(levels["strikes"]),
+        "?" if lag is None else lag,
+    )
+
+
 async def fetch_oi_levels(contract_ym: str, *, token: str | None, today: _date) -> OiLevels:
     """月契約 OI 撐壓表;token 未設 / 取數失敗 / 無資料一律空 shape(never-raise)。
 
@@ -280,6 +309,7 @@ async def fetch_oi_levels(contract_ym: str, *, token: str | None, today: _date) 
             logger.info("oi-levels %s 無 position 列(%d rows)→ 負向快取", contract_ym, len(rows))
             _cache.put_negative(key, now=_now())
             return _empty()
+        _log_freshness(rows, levels, today)
         _cache.put(key, levels)
         return levels
 

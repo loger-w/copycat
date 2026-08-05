@@ -244,6 +244,25 @@ class TestSessionParam:
         assert r.status_code == 200
         assert set(fut.sessions) == {"day"}
 
+    def test_delta_volume_passes_through_untouched(self) -> None:
+        """uv/dv(內外盤量)route → cache → payload **原值直通**(review TC-7)。
+
+        分 K 的 bar dict 一路是原封轉發,沒有任何 response_model 會替我們守住形狀 ——
+        中途少一欄的失效樣態是「內外盤副圖整片空白」,HTTP 照樣 200。
+        """
+        fut = FakeFuturesSource(today=_TODAY)
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TXF?tf=1&days=2&session=allday")
+        assert [(b.get("uv"), b.get("dv")) for b in r.json()["bars"]] == [(2, 1), (3, 1)]
+
+    def test_daily_bars_carry_no_delta_volume(self) -> None:
+        """日 K 沒有內外盤欄 —— 憑空長出來就代表某層在補預設值(0 與「沒有」不同)。"""
+        fut = FakeFuturesSource(today=_TODAY)
+        with make_client(index_source=FakeIndexSource(), futures_source=fut) as c:
+            r = c.get("/api/market/bars/TXF?tf=D")
+        bars = r.json()["bars"]
+        assert bars and all("uv" not in b and "dv" not in b for b in bars)
+
 
 class TestVolumeMeta:
     """`volume` 由資料判定(2026-07-30 real-env 抓到:加權 DK 的 v 全為 0)。

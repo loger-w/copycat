@@ -156,7 +156,13 @@ class FakeFuturesSource:
         today = self._today or f"{_dt.date.today():%Y-%m-%d}"
         bars = [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}]
         if session == "allday":
-            bars.append({"t": f"{today} 15:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 4})
+            # 近全那條帶 uv/dv(內外盤量):route → cache → payload 全程是**原封轉發**,
+            # 少了治具就只驗得到「沒爆」,驗不到欄位真的到得了前端(review TC-7)。
+            # 日盤那條刻意不帶 —— 兩條同形的話「allday 專屬」就測不出差別。
+            bars[0]["uv"], bars[0]["dv"] = 2, 1
+            bars.append(
+                {"t": f"{today} 15:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 4, "uv": 3, "dv": 1}
+            )
         return bars
 
 

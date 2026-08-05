@@ -1,4 +1,4 @@
-"""全域測試隔離:capital factory 的 os.environ 憑證與 repo root .env fallback 一律中和。
+"""全域測試隔離:外部 IO 憑證(capital / discord / FinMind)與 .env fallback 一律中和。
 
 factory._getenv 讀 os.environ + repo root .env(Phase 6 real-env finding)— 開發機 shell
 已 export CAPITAL_* 憑證、或 repo root 有真 .env 時,「未設 env」的測試會吃到真憑證,
@@ -49,3 +49,30 @@ def _neutralize_discord_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(_discord_bot, "_dotenv_values", lambda: {})
     monkeypatch.setattr(_discord_bot, "_dotenv_cache", None)
+
+
+#: FinMind(oi_levels)是第四條外部 IO 出口。key 名在此重述一份而不 import 常數:
+#: `copycat.server.oi_levels` 會拉進 fastapi,而 conftest 是**每一條測試**都載的模組
+#: (verify.py 檔頭同一條理由:不讓 [live] extras 變成整套測試的硬依賴)。
+FINMIND_ENV_KEY = "FINMIND_TOKEN"
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_finmind_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CAPITAL_* / DISCORD_* 同型隔離(review LF-4)。
+
+    開發機 shell 或 repo root .env 的真 FINMIND_TOKEN 一旦流進測試,任何漏 patch
+    `oi_levels.urlopen` 的路徑就會**真的**打 FinMind —— 燒配額,而且測試結果從此
+    隨上游資料變動(失效樣態是偶發紅,最難查的那一種)。
+    需要 token 的測試自行 `monkeypatch.setenv`(或直接把 token 當引數傳)。
+
+    模組 import 延到 fixture 內:見 `FINMIND_ENV_KEY` 註解;[live] extras 未裝的環境
+    根本沒有這條出口,ImportError 即無事可中和。
+    """
+    monkeypatch.delenv(FINMIND_ENV_KEY, raising=False)
+    try:
+        import copycat.server.oi_levels as _oi_levels
+    except ImportError:
+        return
+    monkeypatch.setattr(_oi_levels, "_dotenv_values", lambda: {})
+    monkeypatch.setattr(_oi_levels, "_dotenv_cache", None)
