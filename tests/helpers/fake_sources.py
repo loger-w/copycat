@@ -88,15 +88,19 @@ class FakeIndexSource:
 
     def fetch_bars_range_tagged(
         self, code: str, tf: str, start: str, end: str
-    ) -> tuple[list[dict], str]:
+    ) -> tuple[list[dict], str, str]:
         self.calls.append((code, tf, start, end))
         if tf == "1":
             today = self._today or f"{_dt.date.today():%Y-%m-%d}"
-            return [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}], "tc4_1k"
+            return (
+                [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}],
+                "tc4_1k",
+                "ok",
+            )
         # 深拷貝:`DEFAULT_DAILY` 是 module-level 共享的,`list()` 只換外層 list,內層 dict
         # 仍是同一批物件 —— 任何一條測試(或被測 route)改到 bar 的欄位,都會滲進其後
         # 每一條測試。
-        return [dict(b) for b in self._daily], self._tag
+        return [dict(b) for b in self._daily], self._tag, "ok"
 
 
 class FakeFuturesSource:
@@ -172,11 +176,15 @@ class FakeStockSource:
         self.daily_bars_result: list[dict] | Exception = []
         self.bars_calls: list[tuple[str, str, str, str]] = []
         self.bars_result: list[dict] = []
+        #: 三態 status 的注入點(bars-tristate-status);預設 "ok" = 現況等價
+        self.bars_status: str = "ok"
 
-    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list:
-        """Protocol 新增方法(change-spec R2-1)。"""
+    def fetch_bars_range(
+        self, code: str, tf: str, start_date: str, end_date: str
+    ) -> tuple[list, str]:
+        """Protocol 新增方法(change-spec R2-1);三態 status 隨 bars 一起回。"""
         self.bars_calls.append((code, tf, start_date, end_date))
-        return self.bars_result
+        return self.bars_result, self.bars_status
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
         if isinstance(self.daily_bars_result, Exception):

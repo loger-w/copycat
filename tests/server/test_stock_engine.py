@@ -89,9 +89,9 @@ class FakeSource:
 
     def fetch_bars_range(
         self, code: str, tf: str, start_date: str, end_date: str
-    ) -> list:
+    ) -> tuple[list, str]:
         """Protocol 新增方法(change-spec R2-1);既有斷言不依賴,回空即可。"""
-        return []
+        return [], "ok"
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
         return []
@@ -616,6 +616,37 @@ class TestReviewFixes:
         # refs 未損毀:再次移除 main(切走)才真退訂
         await engine.set_main("2317")
         assert "2330" in src.unsubscribed
+        await engine.close()
+
+
+class TestBarsRangeStatus:
+    """N-2:TC4 斷線在 engine 層被吞成空,前端只看得到「無 K 線資料」。
+
+    降級空的行為照舊(K 線可降級,不 raise),但**原因要跟著空一起送出去**
+    —— 那正是使用者五秒內要答出「壞了 vs 沒資料」的唯一依據。
+    """
+
+    async def test_connection_error_reports_disconnected(self) -> None:
+        engine, src = await _make()
+
+        def boom(code: str, tf: str, start_date: str, end_date: str) -> tuple[list, str]:
+            raise ConnectionError("tc4 down")
+
+        src.fetch_bars_range = boom  # type: ignore[method-assign]
+        assert await engine.bars_range("2330", "D", "2026-01-01", "2026-07-28") == (
+            [],
+            "disconnected",
+        )
+        await engine.close()
+
+    async def test_source_status_passed_through(self) -> None:
+        engine, src = await _make()
+
+        def slow(code: str, tf: str, start_date: str, end_date: str) -> tuple[list, str]:
+            return [], "timeout"
+
+        src.fetch_bars_range = slow  # type: ignore[method-assign]
+        assert await engine.bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
         await engine.close()
 
 

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from copycat.live.stock_source import Bar
+from copycat.live.stock_source import Bar, BarsStatus
 from copycat.server.bars import (
     DAILY_MAX_BARS,
     EMPTY_TTL_SECS,
     BarsCache,
+    BarsResult,
     build_daily,
     build_minute,
     clamp_days,
+    worst_status,
 )
 
 
@@ -18,18 +20,31 @@ def bar(t: str, c: int = 100, v: int = 1) -> Bar:
 
 
 class _Fetcher:
-    """engine.bars_range 替身:記錄每次呼叫的區間。"""
+    """engine.bars_range 替身:記錄每次呼叫的區間。
 
-    def __init__(self, by_call: list[list[Bar]] | None = None) -> None:
+    `statuses` 逐次對應 `by_call`(超出長度 → "ok"),讓「哪一段逾時」可以精確注入
+    —— 三態的重點正是兩段各自的來源不同(SC-6 worst 合併)。
+    """
+
+    def __init__(
+        self,
+        by_call: list[list[Bar]] | None = None,
+        statuses: list[BarsStatus] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
         self._by_call = by_call
+        self._statuses = statuses
 
-    async def __call__(self, code: str, tf: str, start: str, end: str) -> list[Bar]:
+    async def __call__(self, code: str, tf: str, start: str, end: str) -> BarsResult:
         self.calls.append((code, tf, start, end))
-        if self._by_call is not None:
-            idx = len(self.calls) - 1
-            return self._by_call[idx] if idx < len(self._by_call) else []
-        return []
+        idx = len(self.calls) - 1
+        bars: list[Bar] = []
+        if self._by_call is not None and idx < len(self._by_call):
+            bars = self._by_call[idx]
+        status: BarsStatus = "ok"
+        if self._statuses is not None and idx < len(self._statuses):
+            status = self._statuses[idx]
+        return BarsResult(bars, status)
 
 
 class TestClampDays:
@@ -39,13 +54,27 @@ class TestClampDays:
         assert clamp_days(999) == 30
 
 
+class TestWorstStatus:
+    """SC-6:status = 各實際發出 fetch 的最壞值(disconnected > timeout > ok)。"""
+
+    def test_severity_order(self) -> None:
+        assert worst_status("ok", "timeout") == "timeout"
+        assert worst_status("timeout", "disconnected") == "disconnected"
+        assert worst_status("ok", "ok") == "ok"
+        assert worst_status("disconnected", "ok", "timeout") == "disconnected"
+
+    def test_no_args_is_ok(self) -> None:
+        """一次 fetch 都沒發(兩段全 cache 命中)→ 沒有壞消息可報。"""
+        assert worst_status() == "ok"
+
+
 class TestDailyCache:
     async def test_daily_memo_hits_second_call(self) -> None:
         today = _dt.date(2026, 7, 28)
         fetch = _Fetcher([[bar("2026-07-27")]])
         cache = BarsCache()
-        assert await build_daily(fetch, cache, "2330", today) == [bar("2026-07-27")]
-        assert await build_daily(fetch, cache, "2330", today) == [bar("2026-07-27")]
+        assert (await build_daily(fetch, cache, "2330", today)).bars == [bar("2026-07-27")]
+        assert (await build_daily(fetch, cache, "2330", today)).bars == [bar("2026-07-27")]
         assert len(fetch.calls) == 1  # 第二次全走 memo
 
     async def test_daily_empty_not_cached(self) -> None:
@@ -57,15 +86,15 @@ class TestDailyCache:
         clock = {"t": 0.0}
         fetch = _Fetcher([[], [bar("2026-07-27")]])
         cache = BarsCache(clock=lambda: clock["t"])
-        assert await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28)) == []
+        assert (await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28))).bars == []
         clock["t"] = EMPTY_TTL_SECS + 1.0
-        assert await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28)) != []
+        assert (await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28))).bars != []
         assert len(fetch.calls) == 2
 
     async def test_daily_tail_limited_to_120(self) -> None:
         many = [bar(f"2026-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}") for i in range(200)]
         fetch = _Fetcher([many])
-        bars = await build_daily(fetch, BarsCache(), "2330", _dt.date(2026, 7, 28))
+        bars, _ = await build_daily(fetch, BarsCache(), "2330", _dt.date(2026, 7, 28))
         assert len(bars) == DAILY_MAX_BARS
 
     async def test_daily_window_is_180_calendar_days(self) -> None:
@@ -87,9 +116,9 @@ class TestMinuteTwoTier:
         fetch = _Fetcher([hist, cur, cur])
         cache = BarsCache(ttl=0.0)  # 當日段每次都過期
         first = await build_minute(fetch, cache, "2330", 2, today)
-        assert first == hist + cur
+        assert first.bars == hist + cur
         second = await build_minute(fetch, cache, "2330", 2, today)
-        assert second == hist + cur
+        assert second.bars == hist + cur
         # 3 次呼叫 = 歷史 1 次 + 當日 2 次(歷史沒有重抓)
         assert len(fetch.calls) == 3
         assert [c[1:] for c in fetch.calls] == [
@@ -124,7 +153,7 @@ class TestMinuteTwoTier:
         await build_minute(fetch, cache, "2330", 2, today)  # TTL 內 → 不重抓
         assert len(fetch.calls) == 2
         clock["t"] = 40.0
-        out = await build_minute(fetch, cache, "2330", 2, today)  # TTL 過 → 只重抓當日
+        out, _ = await build_minute(fetch, cache, "2330", 2, today)  # TTL 過 → 只重抓當日
         assert len(fetch.calls) == 3
         assert out[-1]["t"] == "2026-07-28 09:02"  # SC-10:最後一根會前進
 
@@ -141,7 +170,7 @@ class TestMinuteTwoTier:
         await build_minute(fetch, cache, "2330", 2, today)
         assert cache.hist_missing("2330", _dt.date(2026, 7, 27), _dt.date(2026, 7, 27)) != []
         clock["t"] = EMPTY_TTL_SECS + 1.0
-        out = await build_minute(fetch, cache, "2330", 2, today)
+        out, _ = await build_minute(fetch, cache, "2330", 2, today)
         assert out == [bar("2026-07-27 09:01")]
 
     async def test_days_1_skips_history_segment(self) -> None:
@@ -156,9 +185,9 @@ class TestMinuteTwoTier:
         clock = {"t": 0.0}
         fetch = _Fetcher([[], [bar("2026-07-28 09:01")]])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        assert await build_minute(fetch, cache, "2330", 1, today) == []
+        assert (await build_minute(fetch, cache, "2330", 1, today)).bars == []
         clock["t"] = EMPTY_TTL_SECS + 1.0
-        assert await build_minute(fetch, cache, "2330", 1, today) != []
+        assert (await build_minute(fetch, cache, "2330", 1, today)).bars != []
 
 
 class TestPhase5Hardening:
@@ -176,7 +205,7 @@ class TestPhase5Hardening:
             _dt.date(2026, 7, 26),
             _dt.date(2026, 7, 27),
         ]
-        out = await build_minute(fetch, cache, "2330", 5, today)
+        out, _ = await build_minute(fetch, cache, "2330", 5, today)
         assert [b["t"] for b in out] == [b["t"] for b in full]
 
     async def test_existing_bars_not_overwritten_by_empty(self) -> None:
@@ -189,8 +218,8 @@ class TestPhase5Hardening:
     async def test_today_cache_keyed_by_date_survives_midnight(self) -> None:
         """跨午夜:昨日的當日段不可在 TTL 窗內被當成今日資料回(review P2-9)。"""
         cache = BarsCache(ttl=999.0)
-        cache.today_put("2330", "2026-07-28", [bar("2026-07-28 13:30")])
-        assert cache.today_get("2330", "2026-07-28") is not None
+        cache.today_put("2330", "2026-07-28", [bar("2026-07-28 13:30")], "ok")
+        assert cache.today_get("2330", "2026-07-28") == ([bar("2026-07-28 13:30")], "ok")
         assert cache.today_get("2330", "2026-07-29") is None
 
     async def test_prune_drops_out_of_window_entries(self) -> None:
@@ -198,7 +227,7 @@ class TestPhase5Hardening:
         old = _dt.date(2026, 1, 1)
         cache.put_hist_range("2330", old, old, [bar("2026-01-01 09:01")])
         cache.daily_put("2330", "2026-01-01", [bar("2026-01-01")])
-        cache.today_put("2330", "2026-01-01", [bar("2026-01-01 09:01")])
+        cache.today_put("2330", "2026-01-01", [bar("2026-01-01 09:01")], "ok")
         cache.prune(_dt.date(2026, 7, 28))
         assert cache.hist_range("2330", old, old) == []
         assert cache.daily_get("2330", "2026-01-01") is None
@@ -217,10 +246,10 @@ class TestEmptyNegativeCache:
         clock = {"t": 0.0}
         fetch = _Fetcher([[], []])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        assert await build_minute(fetch, cache, "9999", 2, today) == []
+        assert (await build_minute(fetch, cache, "9999", 2, today)).bars == []
         calls = len(fetch.calls)
         clock["t"] = EMPTY_TTL_SECS - 1.0
-        assert await build_minute(fetch, cache, "9999", 2, today) == []
+        assert (await build_minute(fetch, cache, "9999", 2, today)).bars == []
         assert len(fetch.calls) == calls  # TTL 內完全不打 TC4
 
     async def test_empty_ttl_expiry_recovers(self) -> None:
@@ -229,16 +258,16 @@ class TestEmptyNegativeCache:
         clock = {"t": 0.0}
         fetch = _Fetcher([[], [], [bar("2026-07-27 09:01")], [bar("2026-07-28 09:01")]])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        assert await build_minute(fetch, cache, "9999", 2, today) == []
+        assert (await build_minute(fetch, cache, "9999", 2, today)).bars == []
         clock["t"] = EMPTY_TTL_SECS + 1.0
-        assert await build_minute(fetch, cache, "9999", 2, today) != []
+        assert (await build_minute(fetch, cache, "9999", 2, today)).bars != []
 
     async def test_empty_key_includes_days(self) -> None:
         """key 含 days:days=1 的空結果不可把 days=30 一併釘住(review R15)。"""
         today = _dt.date(2026, 7, 28)
         cache = BarsCache(ttl=999.0)
         fetch = _Fetcher([[], [bar("2026-07-27 09:01")], [bar("2026-07-28 09:01")]])
-        assert await build_minute(fetch, cache, "2330", 1, today) == []
+        assert (await build_minute(fetch, cache, "2330", 1, today)).bars == []
         calls = len(fetch.calls)
         await build_minute(fetch, cache, "2330", 30, today)
         assert len(fetch.calls) > calls
@@ -248,10 +277,10 @@ class TestEmptyNegativeCache:
         clock = {"t": 0.0}
         fetch = _Fetcher([[], []])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        assert await build_daily(fetch, cache, "9999", today) == []
+        assert (await build_daily(fetch, cache, "9999", today)).bars == []
         calls = len(fetch.calls)
         clock["t"] = EMPTY_TTL_SECS - 1.0
-        assert await build_daily(fetch, cache, "9999", today) == []
+        assert (await build_daily(fetch, cache, "9999", today)).bars == []
         assert len(fetch.calls) == calls
 
     async def test_today_empty_with_nonempty_history_still_short_cached(self) -> None:
@@ -263,10 +292,10 @@ class TestEmptyNegativeCache:
         hist = [bar("2026-07-27 09:01")]
         fetch = _Fetcher([hist, [], []])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        assert await build_minute(fetch, cache, "2317", 2, today) == hist
+        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist
         calls = len(fetch.calls)
         clock["t"] = EMPTY_TTL_SECS - 1.0
-        assert await build_minute(fetch, cache, "2317", 2, today) == hist
+        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist
         assert len(fetch.calls) == calls  # 當日段不再重打
 
     async def test_today_empty_short_ttl_expires(self) -> None:
@@ -277,9 +306,9 @@ class TestEmptyNegativeCache:
         cur = [bar("2026-07-28 09:01")]
         fetch = _Fetcher([hist, [], cur])
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        assert await build_minute(fetch, cache, "2317", 2, today) == hist
+        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist
         clock["t"] = EMPTY_TTL_SECS + 1.0
-        assert await build_minute(fetch, cache, "2317", 2, today) == hist + cur
+        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist + cur
 
     async def test_prune_evicts_expired_today_entries(self) -> None:
         """`today_put` 開始存空 entry 後,同日內過期的 entry 也要能回收。
@@ -292,8 +321,8 @@ class TestEmptyNegativeCache:
         clock = {"t": 0.0}
         today = _dt.date(2026, 7, 28)
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        cache.today_put("9999", today.isoformat(), [])  # 空 → 吃 EMPTY_TTL_SECS
-        cache.today_put("2330", today.isoformat(), [bar("2026-07-28 09:01")])  # 非空 → 吃 ttl
+        cache.today_put("9999", today.isoformat(), [], "ok")  # 空 → 吃 EMPTY_TTL_SECS
+        cache.today_put("2330", today.isoformat(), [bar("2026-07-28 09:01")], "ok")  # 非空 → ttl
         clock["t"] = EMPTY_TTL_SECS + 1.0
         cache.prune(today)
         # 空 entry 已過期 → 回收;非空 entry 的 ttl=999 還沒到 → 留著
@@ -302,12 +331,121 @@ class TestEmptyNegativeCache:
         assert cache.today_entry_count() == 1
 
     async def test_prune_drops_only_expired_empty_marks(self) -> None:
-        """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。"""
+        """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。
+
+        順帶覆蓋 SC-5:標記存的是**原因**,prune 過一輪也不得被洗成 ok。
+        """
         clock = {"t": 0.0}
         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
-        cache.empty_mark("2330", "1", 30)
+        cache.empty_mark("2330", "1", 30, "timeout")
         cache.prune(_dt.date(2026, 7, 28))
-        assert cache.empty_fresh("2330", "1", 30) is True  # 未過期 → 留著
+        assert cache.empty_status("2330", "1", 30) == "timeout"  # 未過期 → 留著,原因保真
         clock["t"] = EMPTY_TTL_SECS + 1.0
         cache.prune(_dt.date(2026, 7, 28))
-        assert cache.empty_fresh("2330", "1", 30) is False  # 過期 → 被 prune 丟掉
+        assert cache.empty_status("2330", "1", 30) is None  # 過期 → 被 prune 丟掉
+
+
+class TestStatusFlow:
+    """N-3:status 沿 build_* 流出,兩段以 worst 合併(SC-6)。"""
+
+    async def test_daily_status_flows_through(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[]], ["timeout"])
+        assert await build_daily(fetch, BarsCache(), "2330", today) == ([], "timeout")
+
+    async def test_daily_ok_status_when_data(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[bar("2026-07-27")]])
+        assert await build_daily(fetch, BarsCache(), "2330", today) == ([bar("2026-07-27")], "ok")
+
+    async def test_daily_memo_hit_reports_ok(self) -> None:
+        """已有資料的 memo 命中 = 沒發 fetch,沒有壞消息可報。"""
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[bar("2026-07-27")]], ["timeout"])
+        cache = BarsCache()
+        # 第一次:有資料但那一趟 timeout(DK 逾時→1K fallback 有料的樣態)
+        assert (await build_daily(fetch, cache, "2330", today)).status == "timeout"
+        # 第二次全走 memo → 不再重播上一次的壞消息
+        assert (await build_daily(fetch, cache, "2330", today)) == ([bar("2026-07-27")], "ok")
+        assert len(fetch.calls) == 1
+
+    async def test_minute_worst_of_two_segments(self) -> None:
+        """歷史段 ok + 當日段 timeout → timeout(bars 非空也照回 status)。"""
+        today = _dt.date(2026, 7, 28)
+        hist = [bar("2026-07-27 09:01")]
+        fetch = _Fetcher([hist, []], ["ok", "timeout"])
+        out, status = await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)
+        assert out == hist
+        assert status == "timeout"
+
+    async def test_minute_disconnected_beats_timeout(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[], []], ["timeout", "disconnected"])
+        assert (await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)) == (
+            [],
+            "disconnected",
+        )
+
+    async def test_minute_all_ok_stays_ok(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        fetch = _Fetcher([[], []])
+        assert (await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)).status == "ok"
+
+    async def test_minute_history_memo_hit_counts_as_ok(self) -> None:
+        """歷史段全 memo 命中(未 fetch)→ 不貢獻 status;當日段 ok → 整體 ok。"""
+        today = _dt.date(2026, 7, 28)
+        hist = [bar("2026-07-27 09:01")]
+        cur = [bar("2026-07-28 09:01")]
+        fetch = _Fetcher([hist, cur, cur], ["timeout", "ok", "ok"])
+        cache = BarsCache(ttl=0.0)  # 當日段每次都過期 → 只有歷史段吃 memo
+        assert (await build_minute(fetch, cache, "2330", 2, today)).status == "timeout"
+        assert (await build_minute(fetch, cache, "2330", 2, today)).status == "ok"
+
+    async def test_today_cache_hit_preserves_status(self) -> None:
+        """R4:`_today` 存 status —— days 維度不同時 `_empty` 未命中,
+        當日段的空若被視為 ok,timeout 就被洗白(SC-5)。"""
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        hist = [bar("2026-07-27 09:01")]
+        # call0=days1 當日段 timeout;call1=days30 歷史段 ok(當日段走 cache)
+        fetch = _Fetcher([[], hist], ["timeout", "ok"])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert (await build_minute(fetch, cache, "2330", 1, today)) == ([], "timeout")
+        out, status = await build_minute(fetch, cache, "2330", 30, today)
+        assert out == hist
+        assert status == "timeout"  # 當日段那份 timeout 沒被洗白
+
+
+class TestEmptyMarkStatusFidelity:
+    """N-4 / SC-5:負向快取回的是**存入時的 status**,不得洗白成 ok。"""
+
+    async def test_minute_empty_mark_replays_timeout(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], []], ["ok", "timeout"])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert (await build_minute(fetch, cache, "9999", 2, today)) == ([], "timeout")
+        calls = len(fetch.calls)
+        clock["t"] = EMPTY_TTL_SECS - 1.0
+        assert (await build_minute(fetch, cache, "9999", 2, today)) == ([], "timeout")
+        assert len(fetch.calls) == calls  # TTL 內不打 TC4,但原因照樣說得出來
+
+    async def test_daily_empty_mark_replays_disconnected(self) -> None:
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], []], ["disconnected", "ok"])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert (await build_daily(fetch, cache, "9999", today)) == ([], "disconnected")
+        clock["t"] = EMPTY_TTL_SECS - 1.0
+        assert (await build_daily(fetch, cache, "9999", today)) == ([], "disconnected")
+
+    async def test_expired_mark_refetches_and_updates_status(self) -> None:
+        """過期後恢復重抓,新的 status 取代舊的(不是永遠停在第一次的原因)。"""
+        today = _dt.date(2026, 7, 28)
+        clock = {"t": 0.0}
+        fetch = _Fetcher([[], []], ["timeout", "ok"])
+        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+        assert (await build_daily(fetch, cache, "9999", today)).status == "timeout"
+        clock["t"] = EMPTY_TTL_SECS + 1.0
+        assert (await build_daily(fetch, cache, "9999", today)) == ([], "ok")
+        assert len(fetch.calls) == 2
