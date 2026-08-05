@@ -209,3 +209,72 @@ describe("StockChart 模式切換(SC-7)", () => {
     expect(screen.queryByText("K 線載入失敗")).toBeNull();
   });
 });
+
+// 🔴 N-7:空 bars 的三種來源(逾時 / 真無資料 / 斷線)原本共用「無 K 線資料」一句
+// 肯定語氣,把「還在等」與「斷線」都講成「這檔沒 K 線」。三態各自的文案已由 user 拍板。
+describe("StockChart 空態三分態文案(N-7)", () => {
+  function stubBars(body: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/api/stock/bars")
+          ? new Response(JSON.stringify(body))
+          : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
+      ),
+    );
+  }
+
+  async function daily(body: unknown) {
+    stubBars(body);
+    chart();
+    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+  }
+
+  it("status=timeout + 空 bars → 灰字「等待 TC4 回應中…(自動重試)」", async () => {
+    await daily({ bars: [], status: "timeout" });
+    await waitFor(() => expect(screen.getByText("等待 TC4 回應中…(自動重試)")).toBeTruthy(), {
+      timeout: 5000,
+    });
+    // 中性灰(同「載入中…」樣式)—— 逾時不是錯誤,不用紅
+    expect(screen.getByText("等待 TC4 回應中…(自動重試)").className).toContain("text-ink-muted");
+    expect(screen.queryByText("無 K 線資料")).toBeNull();
+    expect(screen.queryByText("K 線載入失敗")).toBeNull();
+  });
+
+  it("status=disconnected + 空 bars → 紅字「TC4 連線中斷,K 線暫不可用(自動重試中)」", async () => {
+    await daily({ bars: [], status: "disconnected" });
+    await waitFor(
+      () => expect(screen.getByText("TC4 連線中斷,K 線暫不可用(自動重試中)")).toBeTruthy(),
+      { timeout: 5000 },
+    );
+    expect(screen.getByText("TC4 連線中斷,K 線暫不可用(自動重試中)").className).toContain(
+      "text-bear",
+    );
+    expect(screen.queryByText("無 K 線資料")).toBeNull();
+    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
+  });
+
+  // §3 backward compat:舊後端沒有 status 欄位 → default "ok" = 現況行為
+  it("缺 status 欄位(舊後端)+ 空 bars → 回歸「無 K 線資料」", async () => {
+    await daily({ bars: [] });
+    await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
+  });
+
+  // R6:未知值若放行,輪詢會因 `!== "ok"` 開始、畫面卻落「無 K 線資料」→ 零訊號矛盾態。
+  // 正規化集中在 fetchBars,所以未知值在這裡就已經是 "ok"(不觸發 20s 的斷言見
+  // useStockBars.test.tsx 的接線測試)。
+  it("status 為未知值 → 正規化成 ok,仍顯示「無 K 線資料」", async () => {
+    await daily({ bars: [], status: "weird" });
+    await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
+    expect(screen.queryByText("TC4 連線中斷,K 線暫不可用(自動重試中)")).toBeNull();
+  });
+
+  // bars 非空時不分態(Out of scope 3):當日段降級但有歷史資料 → 照常畫圖
+  it("status=timeout 但 bars 非空 → 照常掛 K 線圖,不顯示等待句", async () => {
+    await daily({ bars: BARS, status: "timeout" });
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
+  });
+});

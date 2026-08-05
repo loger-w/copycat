@@ -4,7 +4,12 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
+import {
+  MINUTE_DAYS,
+  barsPollInterval,
+  useStockBars,
+  type BarsPayload,
+} from "@/hooks/useStockBars";
 import { inTradingHours } from "@/lib/trading-hours";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -115,5 +120,88 @@ describe("useStockBars 取數條件", () => {
 
   it("MINUTE_DAYS 為 30(與後端 clamp 一致;分K 一次載滿不再分頁)", () => {
     expect(MINUTE_DAYS).toBe(30);
+  });
+});
+
+// 🔴 N-8 / SC-4:空且非 ok 的結果要能自己走出來。原本 tf=D 空結果 staleTime ∞ 釘死到
+// remount = 零流量,TC4 慢一次就永遠停在「無 K 線資料」。20s > 後端 15s 負向快取 TTL,
+// 每輪重試都真打 TC4,不會撞負向快取空轉。
+describe("barsPollInterval(SC-4 純函式)", () => {
+  const empty = (status: BarsPayload["status"]): BarsPayload => ({ bars: [], status });
+  const filled: BarsPayload = {
+    bars: [{ t: "2026-08-05", o: 1, h: 1, l: 1, c: 1, v: 1 }],
+    status: "timeout",
+  };
+
+  it("空 + 非 ok → 20_000(日K 與分K、盤中與盤外皆同)", () => {
+    expect(barsPollInterval(empty("timeout"), true, false)).toBe(20_000);
+    expect(barsPollInterval(empty("disconnected"), true, false)).toBe(20_000);
+    expect(barsPollInterval(empty("timeout"), false, true)).toBe(20_000);
+  });
+
+  it("空 + ok → 既有邏輯(日K false;分K 依交易時段)", () => {
+    expect(barsPollInterval(empty("ok"), true, false)).toBe(false);
+    expect(barsPollInterval(empty("ok"), false, true)).toBe(60_000);
+    expect(barsPollInterval(empty("ok"), false, false)).toBe(false);
+  });
+
+  it("非空 + 非 ok → 既有邏輯,不觸發 20s(Out of scope 3:有資料就照常畫)", () => {
+    expect(barsPollInterval(filled, true, false)).toBe(false);
+    expect(barsPollInterval(filled, false, true)).toBe(60_000);
+    expect(barsPollInterval(filled, false, false)).toBe(false);
+  });
+
+  it("data 尚未到位(undefined)→ 既有邏輯", () => {
+    expect(barsPollInterval(undefined, true, false)).toBe(false);
+    expect(barsPollInterval(undefined, false, true)).toBe(60_000);
+  });
+});
+
+// 接線測試(R3):純函式綠不足以證明 refetchInterval 真的吃它 —— TanStack v5 函式形
+// refetchInterval 若讀閉包裡的 data 會恆為初值(undefined),純函式測全綠但線沒接上。
+describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
+  function barsCalls(): number {
+    return urls().filter((u) => u.includes("/api/stock/bars")).length;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("tf=D 空 + timeout:20s 後真的重打", async () => {
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ bars: [], status: "timeout" })),
+    );
+    vi.useFakeTimers();
+    renderHook(() => useStockBars("2330", "day", 5), { wrapper });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(barsCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(barsCalls()).toBe(2);
+  });
+
+  it("tf=D 空 + ok:前進 60s 仍只打一次(既有 staleTime ∞ 語意不變)", async () => {
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ bars: [], status: "ok" })),
+    );
+    vi.useFakeTimers();
+    renderHook(() => useStockBars("2330", "day", 5), { wrapper });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(barsCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(barsCalls()).toBe(1);
+  });
+
+  // R6:未知 status 在 fetchBars 就被正規化成 ok → 不得因 `!== "ok"` 而輪詢
+  it("tf=D 空 + 未知 status:正規化成 ok,前進 20s 不重打", async () => {
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ bars: [], status: "weird" })),
+    );
+    vi.useFakeTimers();
+    renderHook(() => useStockBars("2330", "day", 5), { wrapper });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(barsCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(barsCalls()).toBe(1);
   });
 });
