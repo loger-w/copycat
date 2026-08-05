@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { applyTick, fromSnapshot, type StockAccum } from "@/lib/stock-accum";
+import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
+import { sideSummary } from "@/lib/stock-intraday-svg";
 
 const SNAP = {
   code: "2330",
@@ -157,5 +158,121 @@ describe("applyTick", () => {
       acc = applyTick(acc, { type: "tick", code: "2330", t: "09:05:00.000", p: 2_380_000, q: 1, side: "neutral", seq: 10 + i });
     }
     expect(acc.ticks.length).toBe(200);
+  });
+});
+
+/** VP(價位別成交量)fold — SC-1。
+ *
+ *  fold **先於 tape 截斷**:tape 只留最後 200 筆是顯示需求,VP 要的是「全日」。
+ *  兩者共用同一批 tick,所以測試同時鎖住「vp 收到 300 筆」與「ticks 仍是 200 筆」。 */
+describe("vp(價位別成交量 fold,SC-1)", () => {
+  const tick = (over: Partial<StockTickMsg> = {}): StockTickMsg => ({
+    type: "tick",
+    code: "2330",
+    t: "09:01:30.000",
+    p: 2_380_000,
+    q: 1,
+    side: "outer",
+    seq: 1,
+    ...over,
+  });
+
+  it("fromSnapshot 對原始全量 ticks fold(tape 截斷之前)", () => {
+    // 300 筆:前 100 筆在 238.0、後 200 筆在 239.0(皆為合法檔位)
+    const ticks = Array.from({ length: 300 }, (_, i) => ({
+      t: "09:01:30.000",
+      p: i < 100 ? 2_380_000 : 2_390_000,
+      q: 2,
+      side: "outer",
+    }));
+    const acc = fromSnapshot({ ...SNAP, ticks });
+    expect(acc.ticks.length).toBe(200); // tape 行為不變
+    const total = [...acc.vp.values()].reduce((s, c) => s + c.t, 0);
+    expect(total).toBe(600); // 300 筆 × 2 張,全數入 vp
+    expect(acc.vp.get(2_380_000)?.t).toBe(200);
+    expect(acc.vp.get(2_390_000)?.t).toBe(400);
+  });
+
+  it("applyTick 在同一檔位上增量累加", () => {
+    let acc = fromSnapshot({ ...SNAP, ticks: [] });
+    expect(acc.vp.size).toBe(0);
+    acc = applyTick(acc, tick({ p: 2_380_000, q: 3, seq: 4 }));
+    acc = applyTick(acc, tick({ p: 2_380_000, q: 5, seq: 5 }));
+    acc = applyTick(acc, tick({ p: 2_390_000, q: 7, seq: 6 }));
+    expect(acc.vp.get(2_380_000)?.t).toBe(8);
+    expect(acc.vp.get(2_390_000)?.t).toBe(7);
+  });
+
+  it("applyTick 不就地改動前一份 vp(memo 比較與時間旅行安全)", () => {
+    const base = fromSnapshot({ ...SNAP, ticks: [] });
+    const next = applyTick(base, tick({ p: 2_380_000, q: 3, seq: 4 }));
+    expect(base.vp.size).toBe(0);
+    expect(next.vp.size).toBe(1);
+    expect(next.vp).not.toBe(base.vp);
+  });
+
+  it("p <= 0(市價偽價位)不入 vp", () => {
+    // 鎖漲跌停時 TC4 的市價佇列價格欄是 0;snapDown(0) 會產生一個假檔位
+    let acc = fromSnapshot({ ...SNAP, ticks: [{ t: "09:01:30.000", p: 0, q: 9, side: "outer" }] });
+    expect(acc.vp.size).toBe(0);
+    acc = applyTick(acc, tick({ p: 0, q: 9, seq: 4 }));
+    expect(acc.vp.size).toBe(0);
+  });
+
+  it("非合法檔位的成交價 snapDown 到檔位", () => {
+    // 2383 元 → 2380 元(≥1000 元帶 tick = 5 元,2383 不是合法檔位)
+    const acc = fromSnapshot({
+      ...SNAP,
+      ticks: [{ t: "09:01:30.000", p: 2_383_000, q: 4, side: "outer" }],
+    });
+    expect(acc.vp.get(2_380_000)?.t).toBe(4);
+    expect(acc.vp.get(2_383_000)).toBeUndefined();
+  });
+
+  it("窗外([09:00, 13:30] 外)的成交不入 vp", () => {
+    const acc = fromSnapshot({
+      ...SNAP,
+      ticks: [
+        { t: "08:59:59.000", p: 2_380_000, q: 11, side: "outer" }, // 盤前試撮
+        { t: "13:31:00.000", p: 2_380_000, q: 13, side: "outer" }, // 收盤後
+        { t: "09:00:00.000", p: 2_380_000, q: 1, side: "outer" }, // 窗邊界(含)
+        { t: "13:30:59.000", p: 2_380_000, q: 1, side: "outer" }, // 窗邊界(含)
+      ],
+    });
+    expect(acc.vp.get(2_380_000)?.t).toBe(2);
+  });
+
+  it("side 拆分:outer/inner 各自進 o/i,其餘只進 t", () => {
+    const acc = fromSnapshot({
+      ...SNAP,
+      ticks: [
+        { t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer" },
+        { t: "09:01:31.000", p: 2_380_000, q: 4, side: "inner" },
+        { t: "09:01:32.000", p: 2_380_000, q: 6, side: "neutral" },
+      ],
+    });
+    expect(acc.vp.get(2_380_000)).toEqual({ t: 20, o: 10, i: 4 });
+  });
+
+  it("R3 一致性鎖:Σ vp[*].t === sideSummary(minutes) 的 外+內+未分類", () => {
+    // minutes 與 vp 同源(同一批 tick 走 applyTick),兩者套的是同一把窗尺
+    // ([09:00, 13:30])→ 總張必然相等。這條同時鎖住:
+    //   (a) foldVp 的窗與 windowedEntries / sideSummary 不會各漂各的;
+    //   (b) 後端 20k tick deque 截斷時,snapshot 的 minutes 完整而 ticks 缺角 →
+    //       兩數岔開,說明列與 VP 對不上就會被這條的同構造版本間接暴露。
+    const batch: StockTickMsg[] = [
+      { type: "tick", code: "2330", t: "08:59:00.000", p: 2_380_000, q: 50, side: "outer", seq: 1 },
+      { type: "tick", code: "2330", t: "09:00:00.000", p: 2_380_000, q: 10, side: "outer", seq: 2 },
+      { type: "tick", code: "2330", t: "09:01:30.000", p: 2_385_000, q: 4, side: "inner", seq: 3 },
+      { type: "tick", code: "2330", t: "10:00:00.000", p: 2_390_000, q: 6, side: "neutral", seq: 4 },
+      { type: "tick", code: "2330", t: "13:30:00.000", p: 2_400_000, q: 3, side: "outer", seq: 5 },
+      { type: "tick", code: "2330", t: "13:35:00.000", p: 2_400_000, q: 90, side: "outer", seq: 6 },
+    ];
+    let acc = fromSnapshot({ ...SNAP, minutes: {}, ticks: [], last: null, vwap: null });
+    for (const m of batch) acc = applyTick(acc, m);
+    const s = sideSummary(acc.minutes);
+    const vpTotal = [...acc.vp.values()].reduce((sum, c) => sum + c.t, 0);
+    expect(vpTotal).toBe(s.outer + s.inner + s.unch);
+    expect(vpTotal).toBe(23); // 窗內 10 + 4 + 6 + 3;窗外 50 / 90 皆不計
   });
 });
