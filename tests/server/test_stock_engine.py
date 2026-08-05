@@ -58,6 +58,10 @@ class FakeSource:
         self.closed = False
         self.backfill_gate: threading.Event | None = None
         self.backfill_result: list = []
+        # 逐碼結果(優先於 `backfill_result`)。單一 `backfill_result` 對每個 code 都回
+        # 同一份 → 「job 有沒有落到**別檔**的 state」根本測不出來(兩邊都會有值,而且
+        # 那些值來自各自的 job)。收件人正確性要鎖,就得讓不同 code 的回補可分辨。
+        self.backfill_results: dict[str, list] = {}
         self.backfill_error: Exception | None = None
         self.on_message: Callable[[dict], None] | None = None
         self.on_no_data: Callable[[str], None] | None = None
@@ -86,6 +90,8 @@ class FakeSource:
             raise self.backfill_error
         if self.backfill_gate is not None:
             self.backfill_gate.wait(timeout=5)
+        if code in self.backfill_results:
+            return list(self.backfill_results[code])
         return list(self.backfill_result)
 
     def fetch_bars_range(
@@ -164,21 +170,98 @@ class TestRefcountPool:
 
 
 class TestBackfillGuard:
-    async def test_stale_backfill_not_applied_after_main_switch(self) -> None:
+    async def test_backfill_lands_on_its_own_state_after_main_switch(self) -> None:
+        """**事前標記該變的既有斷言**(design v3 R12 / PLAN R1/R2)。
+
+        舊名 `test_stale_backfill_not_applied_after_main_switch` 釘的是「回補中切走主圖 →
+        結果丟棄」,那條語意把 job 的收件人綁在 `_main` 上。群組檢視要替**非主圖成員**補
+        當日分鐘資料,同一條單工 worker 會收到不屬於主圖的 job —— 綁 `_main` 等於那些 job
+        全部靜默丟棄(零錯誤訊號,卡片只是一直空著)。
+
+        新契約 = **job 自帶 code,落地到它自己的 state**;generation 作廢照舊
+        (`test_rollover_generation_voids_inflight_backfill` 不動 —— 那條鎖的是跨日,
+        與收件人無關)。
+        """
         engine, src = await _make()
         src.backfill_gate = threading.Event()
         from copycat.live.stock_models import StockTick
 
-        src.backfill_result = [
-            StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
-                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
-                      is_trial=False)
-        ]
+        # 逐碼結果:B 的回補回空,所以「B 有 tick」只可能是 A 的 job 串了檔
+        src.backfill_results = {
+            "2330": [
+                StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
+                          time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                          is_trial=False)
+            ]
+        }
         await engine.set_main("2330")
         await engine.set_main("5483")  # A 回補中切 B
         src.backfill_gate.set()
         await _drain(engine)
-        assert engine.snapshot("2330")["ticks"] == []  # A 結果不落地
+        ticks = engine.snapshot("2330")["ticks"]
+        assert len(ticks) == 1  # A 的結果落到 A 自己的 state
+        assert ticks[0]["p"] == 2_380_000
+        # 且**不會**串到 B:收件人是 job 自帶的 code,不是「當下主圖」
+        assert engine.snapshot("5483")["ticks"] == []
+        await engine.close()
+
+    async def test_non_main_job_backfills_end_to_end(self) -> None:
+        """R1 端到端:主圖是別檔時,非主圖成員的 job 仍要跑完並產出當日分鐘列。
+
+        (群組成員的入列點在 T1 後半的 `group_snapshot`;這裡直接入列 job,鎖的是
+        worker 這一段與收件人無關。)
+        """
+        engine, src = await _make()
+        from copycat.live.stock_models import StockTick
+
+        src.backfill_result = [
+            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
+                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                      is_trial=False)
+        ]
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("5483")
+        await _drain(engine)
+        engine._backfill_jobs.put_nowait(("2330", engine._generation))
+        await _drain(engine)
+        minutes = engine.snapshot("2330")["minutes"]
+        assert minutes["541"]["c"] == 2_400_000  # 09:01 = 9*60+1
+        assert "2330" in engine._backfilled  # 套用成功才進帳
+        await engine.close()
+
+    async def test_reconnect_clears_backfill_bookkeeping(self) -> None:
+        """R4:reconnect **不** bump generation(實碼事實)。
+
+        兩個記帳 set 沒被顯式清掉的話,「今日已回補」會一路留到收盤 —— 斷線那段的缺口
+        整天補不回來,而 tick 流恢復後畫面看起來完全正常。主圖以外的成員尤其嚴重:
+        reconnect 只重入列 `_main` 一檔,其餘全靠這次清空才有機會再被 `group_snapshot`
+        入列。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine._backfill_jobs.put_nowait(("2330", engine._generation))
+        await _drain(engine)
+        assert "2330" in engine._backfilled  # 前提:確實記過帳,否則這條測不到東西
+        assert src.on_reconnect is not None
+        src.on_reconnect()
+        await _drain(engine)
+        assert "2330" not in engine._backfilled
+        assert "2330" not in engine._backfill_pending
+        await engine.close()
+
+    async def test_rollover_stage2_clears_backfill_bookkeeping(self) -> None:
+        """R4 的另一半:跨日後「今日已回補」必須全部作廢(記帳是日別語意)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine._backfill_jobs.put_nowait(("2330", engine._generation))
+        await _drain(engine)
+        assert "2330" in engine._backfilled
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
+        await _drain(engine)
+        assert "2330" not in engine._backfilled
+        assert "2330" not in engine._backfill_pending
         await engine.close()
 
     async def test_rollover_generation_voids_inflight_backfill(self) -> None:
