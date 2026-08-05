@@ -30,7 +30,6 @@ from pathlib import Path
 from copycat.capital.balance import (
     BalanceCollector,
     ProfitRow,
-    dedupe_positions,
     merge_fut_positions,
     parse_open_interest_line,
     parse_profit_line,
@@ -344,8 +343,9 @@ class CapitalClient:
             logger.warning("GetRealBalanceReport rc=%s: %s", rc, self._com.return_code_message(rc))
 
     def _on_balance_complete(self, positions: list[Position]) -> None:
-        """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。"""
-        self._pending_sec = dedupe_positions(positions)
+        """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。
+        同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
+        self._pending_sec = positions
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
         self._balance_last_ts = time.monotonic()
         self._profit.reset()
@@ -361,14 +361,22 @@ class CapitalClient:
         if pending is None:
             logger.warning("損益報告遲到(本輪 pending 已發布),丟棄 %d 列", len(rows))
             return
-        by_no = {p.stock_no: p for p in pending}
+        by_key = {(p.stock_no, p.kind): p for p in pending}
         for r in rows:
-            p = by_no.get(r.stock_no)
+            # 兩段判別:查無股號 = 靜默(部位清單以即時庫存為權威,且 balance 側丟掉的列
+            # ——零股不足 1 張 / 未知種類——在損益報告仍有列,合併成一段會每 60s 洗版 warning)
+            same_no = [p for p in pending if p.stock_no == r.stock_no]
+            if not same_no:
+                continue
+            p = by_key.get((r.stock_no, r.kind)) if r.kind is not None else None
             if p is None:
-                continue  # 部位清單以即時庫存為權威,查無股號忽略
-            if r.kind != p.kind:
                 # kind=None(未知標籤)也略過:寧缺均價,不可套錯成本基礎
-                logger.warning("profit row 種類不符略過: %s 報告=%s 部位=%s", r.stock_no, r.kind, p.kind)
+                logger.warning(
+                    "profit row 種類不符略過: %s 報告=%s 部位=%s",
+                    r.stock_no,
+                    r.kind,
+                    [q.kind for q in same_no],
+                )
                 continue
             p.avg_price = r.avg_price
             p.pnl_base = r.pnl
@@ -769,19 +777,26 @@ class CapitalClient:
 
     # ------------------------------------------------------------------ 平倉
 
-    def _close_dup_reason(self, key: str, side: BuySell) -> str | None:
+    def _close_dup_reason(self, inflight_key: str, scan_key: str, side: BuySell) -> str | None:
         """平倉重複送單防護。部位快取要等成交回報→debounce→重查回來才更新,
         窗口內(數秒)第二次平倉仍看得到原始全量持倉、照樣過量閘 → 兩張全量反向單。
-        兩層擋:1. in-flight 窗口(送出後 ~10s);2. store 同 key 同向活躍委託。"""
-        deadline = self._close_inflight.get(key)
+        兩層擋:1. in-flight 窗口(送出後 ~10s);2. store 同標的同向活躍委託。
+
+        ⚠ 兩把鍵語意不同,顯式分離:
+        - inflight_key = sec `"{股號}:{種類}"` / fut 契約碼 —— 同檔資+集保是兩筆各自的平倉,
+          互不阻擋;寫入(_submit_close_locked)/讀取/過期清理三端必須同鍵,
+          只改寫入端會讓 10s 防重送整層失效。
+        - scan_key = 股號/契約碼 —— 委託回報沒有庫存種類這維,活單掃描只能以標的比對
+          (同檔兩種類同向平倉時第二筆會被擋,是接受的保守行為)。"""
+        deadline = self._close_inflight.get(inflight_key)
         if deadline is not None:
             if time.monotonic() < deadline:
-                return f"{key} 平倉單剛送出(在途),請先核對委託回報"
-            del self._close_inflight[key]
+                return f"{scan_key} 平倉單剛送出(在途),請先核對委託回報"
+            del self._close_inflight[inflight_key]
         want = "B" if side == "buy" else "S"
         for o in self.store.orders():
-            if o.actionable and o.stock_no == key and o.buy_sell == want:
-                return f"{key} 已有同向活躍委託(seq={o.seq_no}),請先刪單或等其成交"
+            if o.actionable and o.stock_no == scan_key and o.buy_sell == want:
+                return f"{scan_key} 已有同向活躍委託(seq={o.seq_no}),請先刪單或等其成交"
         return None
 
     async def _close_blocked(
@@ -791,36 +806,55 @@ class CapitalClient:
         return CapitalGateBlockedError(reason)
 
     async def _submit_close_locked(
-        self, req: PositionCloseRequest, submit: Callable[[], Awaitable[OrderResult]]
+        self,
+        req: PositionCloseRequest,
+        inflight_key: str,
+        submit: Callable[[], Awaitable[OrderResult]],
     ) -> OrderResult:
         """in-flight 標記 + 送單。await 前就標記:同 loop 上的併發請求才擋得住。
         submit 被前置閘擋下(CapitalGateBlockedError / AuditWriteError / NotReady,
         錢沒動)→ 解鎖再 re-raise,立即重試不被「在途」擋(review A8);
-        逾時/COM 例外的結果未知 → 不解鎖,寧可鎖滿窗口(多鎖 10s 是可接受代價)。"""
-        self._close_inflight[req.key] = time.monotonic() + _CLOSE_INFLIGHT_S
+        逾時/COM 例外的結果未知 → 不解鎖,寧可鎖滿窗口(多鎖 10s 是可接受代價)。
+        鍵必須與 _close_dup_reason 的讀取/清理端同一把(見該處說明)。"""
+        self._close_inflight[inflight_key] = time.monotonic() + _CLOSE_INFLIGHT_S
         try:
             return await submit()
         except (CapitalGateBlockedError, AuditWriteError, CapitalNotReadyError):
-            self._close_inflight.pop(req.key, None)
+            self._close_inflight.pop(inflight_key, None)
             raise
+
+    def _sec_no_position_reason(self, req: PositionCloseRequest) -> str:
+        """sec 查不到部位的兩種成因分流:req 沒帶 kind 且同檔多列 = 歧義,阻擋不猜
+        (猜錯種類 = 送錯單種)。position_for 與這次計數之間的競態只影響文案,可接受。"""
+        if req.kind is None:
+            same = [
+                p for p in self.store.positions() if p.market == "sec" and p.stock_no == req.key
+            ]
+            if len(same) > 1:
+                return f"{req.key} 多種庫存並存,請指定種類"
+        return f"{req.key} 無部位可平"
 
     async def close_position(self, req: PositionCloseRequest) -> OrderResult:
         if req.market == "sec":
-            pos = self.store.position_for(req.key)
+            # kind 有值 → 精確鍵;None → 唯一列 fallback(舊 body 相容),多列則歧義阻擋
+            pos = self.store.position_for(req.key, req.kind)
             if pos is None or pos.qty == 0 or pos.market != "sec":
-                raise await self._close_blocked(req, f"{req.key} 無部位可平")
+                raise await self._close_blocked(req, self._sec_no_position_reason(req))
             try:
                 # kind 來自即時庫存 — 融資部位平倉送融資賣,不可送現股賣
                 order = build_close_order(pos, req)
             except ValueError as e:
                 raise await self._close_blocked(req, str(e)) from e
-            reason = self._close_dup_reason(req.key, order.buy_sell)
+            inflight_key = f"{req.key}:{pos.kind}"
+            reason = self._close_dup_reason(inflight_key, req.key, order.buy_sell)
             if reason:
                 raise await self._close_blocked(req, reason)
             return await self._submit_close_locked(
-                req, lambda: self.submit_stock_order(order, action="close")
+                req, inflight_key, lambda: self.submit_stock_order(order, action="close")
             )
 
+        # fut:kind 忽略(OI 列不帶種類),唯一匹配即可 — 不寫死 "cash",
+        # 免得 OnOpenInterest 欄序 prod 校正時順手設了 kind 就靜默「無部位可平」
         pos = self.store.position_for(req.key)
         if pos is None or pos.qty == 0 or pos.market != "fut":
             raise await self._close_blocked(req, f"{req.key} 無部位可平")
@@ -829,12 +863,13 @@ class CapitalClient:
             fut_order = build_future_close_order(pos, req)
         except ValueError as e:
             raise await self._close_blocked(req, str(e)) from e
-        reason = self._close_dup_reason(req.key, fut_order.buy_sell)
+        reason = self._close_dup_reason(req.key, req.key, fut_order.buy_sell)
         if reason:
             raise await self._close_blocked(req, reason)
         multiplier = self._multiplier_for_contract(req.key, seq_no="(close)")
         return await self._submit_close_locked(
             req,
+            req.key,
             lambda: self.submit_future_order(
                 fut_order, contract=req.key, multiplier=multiplier, new_close=1, action="close"
             ),

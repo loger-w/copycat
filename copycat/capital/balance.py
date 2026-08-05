@@ -67,33 +67,13 @@ def parse_balance_line(raw: str) -> Position | None:
     return Position(market="sec", stock_no=stock_no, qty=lots, kind=kind)
 
 
-def dedupe_positions(positions: list[Position]) -> list[Position]:
-    """同檔多種庫存列(集保+融資並存)→ 保留張數大者。store 以 stock_no 為鍵,
-    被捨棄的部分平倉鍵不到 — 部位資料分種類建模前的過渡取捨,寧少不錯。"""
-    seen: dict[str, Position] = {}
-    for p in positions:
-        q = seen.get(p.stock_no)
-        if q is not None:
-            # debug 級:資+集保並存是穩定狀態,每 60s 查詢都會走到這裡,warning 會洗版
-            logger.debug(
-                "同檔多種庫存列 %s: %s %d張 / %s %d張 — 保留張數大者",
-                p.stock_no,
-                q.kind,
-                q.qty,
-                p.kind,
-                p.qty,
-            )
-            if abs(p.qty) <= abs(q.qty):
-                continue
-        seen[p.stock_no] = p
-    return list(seen.values())
-
-
 def merge_fut_positions(rows: list[Position]) -> list[Position]:
     """同契約多列期貨部位 → 淨額合併(B 正 S 負相加;review A5)。
 
-    store 以 stock_no 為鍵,B/S 兩列同 key 會互蓋成「後到的那列」;
-    淨額才是可平倉曝險。合併發生時 warning 留痕(prod 欄序假定下的異常訊號);
+    ⚠ store 改成 (stock_no, kind) 複合鍵後這層仍然必要:fut 列由
+    parse_open_interest_line 建構、kind 恆 "cash",同契約 B/S 兩列在複合鍵下**仍同鍵**,
+    不合併就會互蓋成「後到的那列」;而淨額才是可平倉曝險(期交所同契約多空本就淨額)。
+    合併發生時 warning 留痕(prod 欄序假定下的異常訊號);
     淨額 0 = 無部位,不佔一列。avg_price 等附屬欄保留首列值(淨額語意下
     混合成本無單一正解,寧取首列不硬算)。
     """

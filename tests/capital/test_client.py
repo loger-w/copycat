@@ -780,7 +780,8 @@ async def test_close_inflight_unlocked_when_gate_blocks_submit(tmp_path: Path) -
         with pytest.raises(CapitalGateBlockedError) as ei:
             await client.close_position(req)
         assert ei.value.reason == "order_disabled"
-    assert "2330" not in client._close_inflight
+    # 複合鍵("2330:cash")亦已解鎖 — 斷言空 dict 而非「某鍵不在」,避免改鍵後恆真變 vacuous
+    assert client._close_inflight == {}
     assert com.sent == []
 
 

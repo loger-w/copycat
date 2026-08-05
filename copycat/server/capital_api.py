@@ -98,6 +98,7 @@ class PositionCloseBody(BaseModel):
     qty: int | None = None
     price_type: _PriceType = "market"
     source: str = "panel"
+    kind: str | None = None  # sec 庫存種類 cash/margin/short;未帶 = 同檔唯一列才成立
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +217,7 @@ async def capital_position_close(request: Request, body: PositionCloseBody) -> d
         qty=body.qty,
         price_type=body.price_type,
         source=body.source,
+        kind=body.kind,
     )
     return dataclasses.asdict(await client.close_position(req))
 

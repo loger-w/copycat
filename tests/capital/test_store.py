@@ -275,6 +275,7 @@ def test_set_positions_replaces_not_merges() -> None:
 
 
 def test_apply_profit_rows_fills_existing_only() -> None:
+    """複合鍵回填:同 (股號, 種類) 才落地;kind=None(未知標籤)整列略過,不可覆蓋已知均價。"""
     from copycat.capital.balance import ProfitRow
     from copycat.capital.models import Position
 
@@ -282,11 +283,13 @@ def test_apply_profit_rows_fills_existing_only() -> None:
     s.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
     s.apply_profit_rows(
         [
-            ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0),
-            ProfitRow("9999", 1.0, None, None, None),  # 查無股號忽略(部位以即時庫存為權威)
+            ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0, kind="margin"),
+            # 未知標籤:寧缺均價也不可套錯成本基礎 → 整列略過(不得蓋掉上一列的融資均價)
+            ProfitRow("3357", 999.0, 1.0, 2.0, 3.0, kind=None),
+            ProfitRow("9999", 1.0, None, None, None, kind="cash"),  # 查無股號忽略
         ]
     )
-    p = s.position_for("3357")
+    p = s.position_for("3357", "margin")
     assert p is not None
     assert p.avg_price == 311.75
     assert p.pnl_base == -74636.0
@@ -295,24 +298,51 @@ def test_apply_profit_rows_fills_existing_only() -> None:
     assert len(s.positions()) == 1
 
 
-def test_set_positions_carries_profit_same_kind_only() -> None:
-    """損益查詢回來前,新一輪庫存覆寫不可閃掉已知均價/損益基底;種類變了成本基礎不同,不沿用。"""
+def test_set_positions_carries_profit_by_composite_key() -> None:
+    """損益查詢回來前,新一輪庫存覆寫不可閃掉已知均價/損益基底;
+    鍵含 kind → 同種類天然沿用、異種類是「另一列」(成本基礎不混用)。"""
     from copycat.capital.balance import ProfitRow
     from copycat.capital.models import Position
 
     s = CapitalStore()
     s.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
-    s.apply_profit_rows([ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0)])
-    s.set_positions([Position(market="sec", stock_no="3357", qty=4, kind="margin")])
-    p = s.position_for("3357")
-    assert p is not None
-    assert p.avg_price == 311.75
-    assert p.pnl_base == -74636.0 and p.pnl_base_price == 288.0 and p.pnl_cost == 935000.0
-    s.set_positions([Position(market="sec", stock_no="3357", qty=4, kind="cash")])
-    p = s.position_for("3357")
-    assert p is not None
-    assert p.avg_price is None
-    assert p.pnl_base is None and p.pnl_base_price is None and p.pnl_cost is None
+    s.apply_profit_rows([ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0, kind="margin")])
+    s.set_positions(
+        [
+            Position(market="sec", stock_no="3357", qty=4, kind="margin"),
+            Position(market="sec", stock_no="3357", qty=1, kind="cash"),
+        ]
+    )
+    assert len(s.positions()) == 2  # 同檔資+集保並存各佔一列
+    m = s.position_for("3357", "margin")
+    assert m is not None and m.qty == 4
+    assert m.avg_price == 311.75
+    assert m.pnl_base == -74636.0 and m.pnl_base_price == 288.0 and m.pnl_cost == 935000.0
+    c = s.position_for("3357", "cash")
+    assert c is not None and c.qty == 1
+    assert c.avg_price is None  # 集保列是另一列,不沿用融資成本
+    assert c.pnl_base is None and c.pnl_base_price is None and c.pnl_cost is None
+
+
+def test_position_for_kind_exact_unique_and_ambiguous() -> None:
+    """position_for 三態:kind 精確鍵到 / kind=None 唯一列 fallback / kind=None 多列回 None(不猜)。"""
+    from copycat.capital.models import Position
+
+    s = CapitalStore()
+    s.set_positions(
+        [
+            Position(market="sec", stock_no="3357", qty=3, kind="margin"),
+            Position(market="sec", stock_no="3357", qty=1, kind="cash"),
+            Position(market="sec", stock_no="2330", qty=2, kind="cash"),
+        ]
+    )
+    m = s.position_for("3357", "margin")
+    assert m is not None and m.qty == 3 and m.kind == "margin"
+    assert s.position_for("3357", "short") is None  # 精確查:無此種類
+    assert s.position_for("3357") is None  # 多列歧義:不猜
+    only = s.position_for("2330")
+    assert only is not None and only.qty == 2  # 唯一列 → fallback 成立
+    assert s.position_for("9999") is None
 
 
 def test_fut_position_keyed_by_contract() -> None:

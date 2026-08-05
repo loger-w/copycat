@@ -8,7 +8,6 @@ import pytest
 from copycat.capital.balance import (
     BalanceCollector,
     ProfitRow,
-    dedupe_positions,
     merge_fut_positions,
     parse_balance_line,
     parse_open_interest_line,
@@ -121,18 +120,6 @@ def test_unparseable_or_short_line_skipped() -> None:
 def test_unknown_kind_skipped() -> None:
     # 未知庫存種類寧缺勿錯:平倉映射依 kind 送單,猜錯=送錯單種
     assert parse_balance_line(RAW_T_BOUGHT.replace(",T,", ",Z,")) is None
-
-
-def test_dedupe_keeps_larger_position() -> None:
-    # 同檔集保+融資並存:store 以 stock_no 為鍵,保留張數大者(被捨棄部分暫不可平,待分種類建模)
-    cash = Position(market="sec", stock_no="2330", qty=1, kind="cash")
-    margin = Position(market="sec", stock_no="2330", qty=3, kind="margin")
-    other = Position(market="sec", stock_no="2317", qty=2, kind="cash")
-    out = dedupe_positions([cash, margin, other])
-    assert sorted((p.stock_no, p.qty, p.kind) for p in out) == [
-        ("2317", 2, "cash"),
-        ("2330", 3, "margin"),
-    ]
 
 
 def test_collector_flush_on_end_marker() -> None:
