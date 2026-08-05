@@ -1,0 +1,19 @@
+{
+  "slug": "discord-watchlist",
+  "start_sha": "a858decf2be7920e7deec236048c7cb712331685",
+  "branch": "feat/discord-watchlist",
+  "worktree_path": "C:\\side-project\\copycat\\.claude\\worktrees\\feat-discord-watchlist",
+  "current_phase": 8,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7],
+  "scope": "M",
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-08-05T20:40:00+08:00",
+  "project_shape": "python-backend(前端零改)",
+  "last_commit_sha": "342f7a7",
+  "final_merge_sha": null,
+  "self_review_head": "342f7a701f34831875543bab48732d7c1bfb4f1b",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}

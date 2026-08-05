@@ -1,0 +1,1504 @@
+﻿diff --git a/copycat/server/discord_bot.py b/copycat/server/discord_bot.py
+index c5af42f..280c45c 100644
+--- a/copycat/server/discord_bot.py
++++ b/copycat/server/discord_bot.py
+@@ -31,7 +31,7 @@ from pathlib import Path
+ from typing import Any, Protocol
+ 
+ from copycat.stock_names import load_names
+-from copycat.stock_watchlist import Watchlist, WatchlistError
++from copycat.stock_watchlist import UNGROUPED_NAME, Watchlist, WatchlistError
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -39,9 +39,15 @@ __all__ = [
+     "Bot",
+     "WatchlistServiceLike",
+     "create_bot",
++    "group_choices",
+     "handle_add",
++    "handle_group_add",
++    "handle_group_remove",
++    "handle_group_rename",
++    "handle_groups",
+     "handle_list",
+     "handle_remove",
++    "handle_ungroup",
+ ]
+ 
+ TOKEN_ENV = "DISCORD_BOT_TOKEN"
+@@ -52,10 +58,22 @@ _ERROR_TEXT = {
+     "WATCHLIST_FULL": "自選已達 30 檔上限",
+     "BAD_CODE": "股號格式不正確",
+     "BAD_GROUP": "群組名稱不合法",
++    "GROUP_NOT_FOUND": "找不到該群組",
+ }
+ _NOT_READY = "服務未就緒"
+ _FALLBACK_ERROR = "儲存失敗"
+ _UNEXPECTED = "操作失敗,請看伺服器 log"
++#: 「未分組」是 `_format_groups` 的**衍生桶**不是群組:對它做群組操作沒有對象。
++#: 攔在 handler 而不是讓 service 回 `GROUP_NOT_FOUND` —— 後者要留給「真的打錯名字」。
++_RESERVED_BLOCKED = f"「{UNGROUPED_NAME}」不是群組,無法操作"
++_UNKNOWN_CODE_HINT = "(查無此檔名稱,請確認代碼)"
++
++#: autocomplete 的取值上限。Discord 的 autocomplete 沒有 defer,3 秒不回就整份丟掉;
++#: 而 `service.current()` 與寫入共用同一把鎖,鎖被 `_commit` 的 ZMQ 往返佔住時只能放手。
++_AUTOCOMPLETE_TIMEOUT = 1.0
++#: Discord `Choice` 的 name / value 各 100 字上限;單一超長項會讓**整份**回應被拒收。
++_CHOICE_NAME_LIMIT = 100
++_CHOICE_LIMIT = 25
+ 
+ 
+ # ---- env(capital/factory 同語意)----
+@@ -97,14 +115,26 @@ def _getenv(name: str) -> str | None:
+ 
+ 
+ class WatchlistServiceLike(Protocol):
+-    """`WatchlistService` 的結構子集(測試注入 fake)。"""
++    """`WatchlistService` 的結構子集(測試注入 fake)。
++
++    寫入類方法一律回 `(watchlist, changed)`:handler 要靠 `changed` 分「已加入」與
++    「已在自選(無變更)」兩種文案,而那個判斷的唯一事實點在 service 的落檔比對。
++    """
+ 
+-    async def add(self, code: str, group: str | None = None) -> Watchlist: ...
++    async def add(self, code: str, group: str | None = None) -> tuple[Watchlist, bool]: ...
+ 
+-    async def remove(self, code: str) -> Watchlist: ...
++    async def remove(self, code: str) -> tuple[Watchlist, bool]: ...
+ 
+     async def current(self) -> Watchlist: ...
+ 
++    async def create_group(self, name: str) -> tuple[Watchlist, bool]: ...
++
++    async def delete_group(self, name: str) -> tuple[Watchlist, bool]: ...
++
++    async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]: ...
++
++    async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]: ...
++
+ 
+ class _Response(Protocol):
+     async def defer(self, *, thinking: bool = False) -> Any: ...
+@@ -164,12 +194,18 @@ async def handle_add(
+     code: str,
+     group: str | None = None,
+ ) -> str:
++    """SC-5:名稱查不到只**提醒**不擋 —— 靜態名稱表落後於新上市/改名是常態,
++    擋下去會讓合法股號加不進來,而使用者最需要的正是「剛上市那檔」。"""
++
+     async def action() -> str:
+         if service is None:
+             return _NOT_READY
+-        await service.add(code, group)
++        _, changed = await service.add(code, group)
++        hint = "" if _stock_name(code) else _UNKNOWN_CODE_HINT
++        if not changed:
++            return f"已在自選:{_label(code)}(無變更){hint}"
+         suffix = f"(群組:{group})" if group else ""
+-        return f"已加入自選:{_label(code)}{suffix}"
++        return f"已加入自選:{_label(code)}{suffix}{hint}"
+ 
+     return await _run(interaction, action)
+ 
+@@ -182,7 +218,9 @@ async def handle_remove(
+     async def action() -> str:
+         if service is None:
+             return _NOT_READY
+-        await service.remove(code)
++        _, changed = await service.remove(code)
++        if not changed:
++            return f"不在自選:{_label(code)}"
+         return f"已從自選移除:{_label(code)}"
+ 
+     return await _run(interaction, action)
+@@ -215,10 +253,159 @@ def _format_watchlist(wl: Watchlist) -> str:
+         lines.append(f"【{group['name']}】" + "、".join(_label(c) for c in members))
+     rest = [c for c in codes if c not in grouped]
+     if rest:
+-        lines.append("【未分組】" + "、".join(_label(c) for c in rest))
++        lines.append(f"【{UNGROUPED_NAME}】" + "、".join(_label(c) for c in rest))
++    return "\n".join(lines)
++
++
++async def handle_groups(
++    service: WatchlistServiceLike | None,
++    interaction: Interaction,
++) -> str:
++    async def action() -> str:
++        if service is None:
++            return _NOT_READY
++        return _format_groups(await service.current())
++
++    return await _run(interaction, action)
++
++
++def _format_groups(wl: Watchlist) -> str:
++    """群組**名冊**(SC-1)—— 與 `_format_watchlist` 的差別是這裡列的是群組本身,
++    所以 0 檔群組必須出現:剛建好還沒放東西的群組不能看起來像建立失敗。
++
++    「未分組」標注「衍生,非群組」是為了讓它跟真群組在視覺上可分 —— 它只是
++    「不在任何群組的股票」的計數,對它下 `/watch group remove` 沒有對象可刪。
++    """
++    codes = list(wl["codes"])
++    groups = wl["groups"]
++    grouped = {c for g in groups for c in g["codes"] if c in codes}
++    rest = len([c for c in codes if c not in grouped])
++    if not groups:
++        return "尚無群組" if not codes else f"尚無群組;{UNGROUPED_NAME} {rest} 檔"
++    lines = [f"群組 {len(groups)} 個"]
++    for group in groups:
++        members = [c for c in group["codes"] if c in codes]
++        lines.append(f"【{group['name']}】{len(members)} 檔")
++    if rest:
++        lines.append(f"{UNGROUPED_NAME} {rest} 檔(衍生,非群組)")
+     return "\n".join(lines)
+ 
+ 
++async def handle_group_add(
++    service: WatchlistServiceLike | None,
++    interaction: Interaction,
++    name: str,
++) -> str:
++    """保留名**不在此攔** —— 群組名的合法性只有 `stock_watchlist.normalize` 一份定義,
++    handler 再判一次就成了第二份會漂移的規則(建立保留名的正確答案是「名稱不合法」)。"""
++
++    async def action() -> str:
++        if service is None:
++            return _NOT_READY
++        _, changed = await service.create_group(name)
++        if not changed:
++            return f"群組已存在:{name}"
++        return f"已建立群組:{name}"
++
++    return await _run(interaction, action)
++
++
++async def handle_group_remove(
++    service: WatchlistServiceLike | None,
++    interaction: Interaction,
++    name: str,
++) -> str:
++    async def action() -> str:
++        if service is None:
++            return _NOT_READY
++        if name.strip() == UNGROUPED_NAME:
++            return _RESERVED_BLOCKED
++        await service.delete_group(name)
++        return f"已刪除群組:{name}(成員移至{UNGROUPED_NAME})"
++
++    return await _run(interaction, action)
++
++
++async def handle_group_rename(
++    service: WatchlistServiceLike | None,
++    interaction: Interaction,
++    old: str,
++    new: str,
++) -> str:
++    """只攔 `old`(操作對象):`new` 是保留名時語意是「取的新名不合法」,交 service →
++    normalize → `BAD_GROUP`,兩種錯誤各自說得清楚(design R2)。"""
++
++    async def action() -> str:
++        if service is None:
++            return _NOT_READY
++        if old.strip() == UNGROUPED_NAME:
++            return _RESERVED_BLOCKED
++        _, changed = await service.rename_group(old, new)
++        if not changed:
++            return f"名稱未變:{new}"
++        return f"已改名:{old} → {new}"
++
++    return await _run(interaction, action)
++
++
++async def handle_ungroup(
++    service: WatchlistServiceLike | None,
++    interaction: Interaction,
++    code: str,
++    group: str,
++) -> str:
++    async def action() -> str:
++        if service is None:
++            return _NOT_READY
++        if group.strip() == UNGROUPED_NAME:
++            return _RESERVED_BLOCKED
++        _, changed = await service.ungroup(code, group)
++        if not changed:
++            return f"{_label(code)} 不在群組 {group}"
++        return f"已自群組 {group} 移出:{_label(code)}(仍在自選)"
++
++    return await _run(interaction, action)
++
++
++async def group_choices(service: WatchlistServiceLike | None, current: str) -> list[str]:
++    """`group` / `name` / `old` 參數的 autocomplete 選項(SC-4)。
++
++    **三態一律回空清單**(service 未就緒 / 逾時 / 例外):autocomplete 不能 defer,
++    Discord 只給 3 秒;而這條路與寫入共用 `WatchlistService` 的單鎖,寫入正卡在 ZMQ
++    往返時堆積等鎖 task 只會讓後面每一次輸入都更慢。回空 = 使用者仍可手打群組名。
++
++    子字串(非前綴)過濾:中文群組名沒有前綴語意,打「主力」要找得到「波段主力」。
++    """
++    if service is None:
++        return []
++    try:
++        wl = await asyncio.wait_for(service.current(), _AUTOCOMPLETE_TIMEOUT)
++    except TimeoutError:
++        logger.warning("群組 autocomplete 逾時(%.1fs),回空選單", _AUTOCOMPLETE_TIMEOUT)
++        return []
++    except Exception:
++        # 指令邊界同理:這裡拋出去只會讓使用者看到選單卡住,且真因埋在 discord.py 的 log
++        logger.exception("群組 autocomplete 取得自選失敗")
++        return []
++    needle = current.strip()
++    out: list[str] = []
++    for group in wl["groups"]:
++        name = group["name"]
++        if len(name) > _CHOICE_NAME_LIMIT:
++            logger.warning(
++                "群組名稱超過 Discord Choice 的 %d 字上限,autocomplete 略過:%.20s…",
++                _CHOICE_NAME_LIMIT,
++                name,
++            )
++            continue
++        if needle and needle not in name:
++            continue
++        out.append(name)
++        if len(out) >= _CHOICE_LIMIT:
++            break
++    return out
++
++
+ # ---- Bot ----
+ 
+ 
+@@ -354,28 +541,69 @@ def create_bot(service: WatchlistServiceLike | None, hub: Any) -> Bot | None:
+         logger.info("discord.py 未安裝(extras [discord]),Discord bot 不啟用")
+         return None
+ 
+-    client = discord.Client(intents=discord.Intents.default())
++    client = discord.Client(
++        # 群組名是自由文字且會原樣回填訊息(`已建立群組:@everyone`)—— 沒有這個
++        # 設定,任何人都能透過 `/watch group add` 把 bot 變成 mention 擴音器。
++        intents=discord.Intents.default(),
++        allowed_mentions=discord.AllowedMentions.none(),
++    )
+     tree = app_commands.CommandTree(client)
+-    group = app_commands.Group(name="watch", description="自選股管理")
++    # 變數名 `watch` / `group_cmd` 是刻意的:叫 `group` 會遮蔽 `_add(..., group=...)` 參數,
++    # 且子群組一旦叫 `group`,既有的 `@group.command` 會**靜默**改掛到子群組底下。
++    watch = app_commands.Group(name="watch", description="自選股管理")
++    group_cmd = app_commands.Group(name="group", description="群組管理", parent=watch)
+ 
+-    @group.command(name="add", description="加入自選")
++    async def _group_ac(interaction: Any, current: str) -> list[Any]:
++        return [
++            app_commands.Choice(name=n, value=n) for n in await group_choices(service, current)
++        ]
++
++    @watch.command(name="add", description="加入自選")
+     @app_commands.describe(code="股號(例:2330)", group="群組名稱(選填)")
++    @app_commands.autocomplete(group=_group_ac)
+     async def _add(interaction: Any, code: str, group: str | None = None) -> None:
+         await handle_add(service, interaction, code, group)
+ 
+-    @group.command(name="remove", description="移出自選")
++    @watch.command(name="remove", description="移出自選")
+     @app_commands.describe(code="股號(例:2330)")
+     async def _remove(interaction: Any, code: str) -> None:
+         await handle_remove(service, interaction, code)
+ 
+-    @group.command(name="list", description="列出自選")
++    @watch.command(name="list", description="列出自選")
+     async def _list(interaction: Any) -> None:
+         await handle_list(service, interaction)
+ 
++    @watch.command(name="groups", description="列出群組")
++    async def _groups(interaction: Any) -> None:
++        await handle_groups(service, interaction)
++
++    @watch.command(name="ungroup", description="自群組移出(仍留在自選)")
++    @app_commands.describe(code="股號(例:2330)", group="群組名稱")
++    @app_commands.autocomplete(group=_group_ac)
++    async def _ungroup(interaction: Any, code: str, group: str) -> None:
++        await handle_ungroup(service, interaction, code, group)
++
++    @group_cmd.command(name="add", description="建立群組")
++    @app_commands.describe(name="群組名稱")
++    async def _group_add(interaction: Any, name: str) -> None:
++        await handle_group_add(service, interaction, name)
++
++    @group_cmd.command(name="remove", description="刪除群組(成員移至未分組)")
++    @app_commands.describe(name="群組名稱")
++    @app_commands.autocomplete(name=_group_ac)
++    async def _group_remove(interaction: Any, name: str) -> None:
++        await handle_group_remove(service, interaction, name)
++
++    @group_cmd.command(name="rename", description="群組改名")
++    @app_commands.describe(old="原群組名稱", new="新群組名稱")
++    @app_commands.autocomplete(old=_group_ac)
++    async def _group_rename(interaction: Any, old: str, new: str) -> None:
++        await handle_group_rename(service, interaction, old, new)
++
+     bot = Bot(
+         client=client,
+         tree=tree,
+-        command=group,
++        command=watch,
+         token=token,
+         channel_id=_channel_id(),
+         service=service,
+diff --git a/copycat/server/watchlist_service.py b/copycat/server/watchlist_service.py
+index afe2a4c..376b849 100644
+--- a/copycat/server/watchlist_service.py
++++ b/copycat/server/watchlist_service.py
+@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
+ __all__ = ["WatchlistEngine", "WatchlistService"]
+ 
+ 
++def _copy_groups(groups: list[Group]) -> list[Group]:
++    """拷一層再改 —— 同一輪裡的 no-op 分支可能把那份現況原樣回給呼叫端,就地改會讓
++    「沒落檔」與「回傳值」對不上(回的是改過的形,檔卻是舊的)。"""
++    return [{"name": g["name"], "codes": list(g["codes"])} for g in groups]
++
++
+ class WatchlistEngine(Protocol):
+     """StockEngine 結構子集(測試注入 fake)。"""
+ 
+@@ -49,11 +55,16 @@ class WatchlistService:
+         self._lock = asyncio.Lock()
+ 
+     async def apply(self, wl: Watchlist) -> Watchlist:
+-        """整份取代(前端 PUT 的語意)。"""
++        """整份取代(前端 PUT 的語意)。
++
++        REST 契約不變(回 Watchlist):HTTP 沒有「沒變」這個回應形,前端拿到的一律是
++        現況;changed flag 只有 Discord 那條路要分文案。
++        """
+         async with self._lock:
+-            return await self._commit(wl)
++            saved, _ = await self._commit(wl)
++            return saved
+ 
+-    async def add(self, code: str, group: str | None = None) -> Watchlist:
++    async def add(self, code: str, group: str | None = None) -> tuple[Watchlist, bool]:
+         """加進自選;帶 group 則同時入該群組(群組不存在自動建)。"""
+         async with self._lock:
+             current = load_watchlist(self._path)
+@@ -72,7 +83,7 @@ class WatchlistService:
+                     target["codes"].append(code)
+             return await self._commit({"codes": codes, "groups": groups})
+ 
+-    async def remove(self, code: str) -> Watchlist:
++    async def remove(self, code: str) -> tuple[Watchlist, bool]:
+         """自自選與**所有**群組移除(留在任一群組就會被 normalize 補回 codes)。"""
+         async with self._lock:
+             current = load_watchlist(self._path)
+@@ -83,6 +94,63 @@ class WatchlistService:
+             codes = [c for c in current["codes"] if c != code]
+             return await self._commit({"codes": codes, "groups": groups})
+ 
++    async def create_group(self, name: str) -> tuple[Watchlist, bool]:
++        """建立空群組;strip 後同名已存在 → no-op(不報錯 —— 使用者的意圖已經成立)。
++
++        保留名 / 空名不在此判,交 `_commit` 內的 `normalize` 拒(`BAD_GROUP`):
++        群組名的合法性只有 `stock_watchlist.normalize` 一份定義。
++        """
++        async with self._lock:
++            current = self._snapshot()
++            target = name.strip()
++            if any(g["name"] == target for g in current["groups"]):
++                return current, False
++            groups = _copy_groups(current["groups"])
++            groups.append({"name": name, "codes": []})
++            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++
++    async def delete_group(self, name: str) -> tuple[Watchlist, bool]:
++        """刪群組;codes 不動 —— 成員落回未分組衍生桶(刪群組不等於刪股票)。"""
++        async with self._lock:
++            current = self._snapshot()
++            target = name.strip()
++            if not any(g["name"] == target for g in current["groups"]):
++                raise WatchlistError("GROUP_NOT_FOUND")
++            groups = [g for g in _copy_groups(current["groups"]) if g["name"] != target]
++            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++
++    async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]:
++        """改名;新名撞既有名 / 保留名 / 空名 → `normalize` 拒(`BAD_GROUP`)。"""
++        async with self._lock:
++            current = self._snapshot()
++            src = old.strip()
++            dst = new.strip()
++            if not any(g["name"] == src for g in current["groups"]):
++                raise WatchlistError("GROUP_NOT_FOUND")
++            if src == dst:
++                return current, False
++            groups = _copy_groups(current["groups"])
++            for g in groups:
++                if g["name"] == src:
++                    g["name"] = dst
++            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++
++    async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:
++        """自該群組移出;wl codes 不動 —— 移出群組不等於移出自選。"""
++        async with self._lock:
++            current = self._snapshot()
++            target = group.strip()
++            found = next((g for g in current["groups"] if g["name"] == target), None)
++            if found is None:
++                raise WatchlistError("GROUP_NOT_FOUND")
++            if code not in found["codes"]:
++                return current, False
++            groups = _copy_groups(current["groups"])
++            for g in groups:
++                if g["name"] == target:
++                    g["codes"] = [c for c in g["codes"] if c != code]
++            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++
+     async def current(self) -> Watchlist:
+         """現況(canonical 形);壞檔回空清單。Discord `/watch list` 的讀取入口。
+ 
+@@ -90,17 +158,31 @@ class WatchlistService:
+         鎖才不會出現「list 顯示的是 add 尚未完成前的樣子」這種讓人困惑的交錯。
+         """
+         async with self._lock:
+-            return self._current_canonical() or {"codes": [], "groups": []}
++            return self._snapshot()
++
++    async def _commit(self, wl: Watchlist) -> tuple[Watchlist, bool]:
++        """持 lock 呼叫。正規化 → 與現況比對 → 落檔 + 訂閱 + 廣播。
+ 
+-    async def _commit(self, wl: Watchlist) -> Watchlist:
+-        """持 lock 呼叫。正規化 → 與現況比對 → 落檔 + 訂閱 + 廣播。"""
++        回傳的 bool = 「這次真的改了嗎」。**唯一事實點就是這裡的比對** —— 呼叫端自己
++        比對會多一次讀檔、也就多一個 TOCTOU 窗;而 Discord 的 no-op 文案(「已在自選」
++        vs「已加入自選」)必須跟「有沒有落檔」完全一致,否則回報與實況會對不上。
++        """
+         desired = normalize(wl)  # 非法碼 / 超上限在此拋,尚未落檔
+         if desired == self._current_canonical():
+-            return desired
++            return desired, False
+         saved = save_watchlist(self._path, desired)
+         await self._engine.set_watchlist(saved["codes"])
+         self._engine._publish({"type": "watchlist_changed"})
+-        return saved
++        return saved, True
++
++    def _snapshot(self) -> Watchlist:
++        """現況 canonical 形;不可用(壞檔)視同空 —— 新方法的存在性判定基準。
++
++        壞檔下「群組不存在」是誠實的答案:讀不到的檔裡沒有任何群組可操作,
++        `delete/rename/ungroup` 因此拋 `GROUP_NOT_FOUND` 且零寫;`create_group` 則
++        以空為底覆蓋回去(與 `apply` 的自癒路徑同語意)。
++        """
++        return self._current_canonical() or {"codes": [], "groups": []}
+ 
+     def _current_canonical(self) -> Watchlist | None:
+         """現況的 canonical 形;檔**不可用**時回 None(= 一定不相等 → 照常落檔覆蓋)。
+diff --git a/copycat/stock_watchlist.py b/copycat/stock_watchlist.py
+index 224c405..35bd194 100644
+--- a/copycat/stock_watchlist.py
++++ b/copycat/stock_watchlist.py
+@@ -7,18 +7,22 @@ v3(stock-ui-round5 §🔴-4):`{"codes": [...], "groups": [{"name", "codes"}]}`
+ 
+ 讀時遷移(不就地寫檔):v2(有 groups 無 codes)→ `codes = union(groups)`(畫面零差異);
+ v1(只有 codes)→ codes 原樣 + 零群組(v1 從來沒有群組概念,包成假的「自選」組是 v2
+-時代沒有未分組桶的權宜)。
++時代沒有未分組桶的權宜)。名為 `UNGROUPED_NAME` 的群組(舊版 bot 造得出)→ 成員先 union
++進 codes 再丟組(discord-watchlist SC-6)。
+ """
+ 
+ from __future__ import annotations
+ 
+ import json
++import logging
+ import re
+ from pathlib import Path
+ from typing import TypedDict
+ 
+ from copycat.fileio import atomic_write_text
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ class Group(TypedDict):
+     name: str
+@@ -37,6 +41,9 @@ _CACHE_VERSION = 3
+ _CODE_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9]{4,6}$")
+ 
+ DEFAULT_PATH = Path("data") / "stock_watchlist.json"
++# 未分組 = codes − ∪groups 的衍生桶,不是真群組 → 保留名,不得有同名群組
++# (前端 WatchlistManagerDialog 的 UNGROUPED_LABEL 同值,跨檔契約)。
++UNGROUPED_NAME = "未分組"
+ 
+ 
+ class WatchlistError(ValueError):
+@@ -64,9 +71,17 @@ def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
+     groups: list[Group] = [
+         {"name": str(g["name"]), "codes": list(g["codes"])} for g in payload.get("groups", [])
+     ]
+-    if "codes" in payload:  # v3 / v1
+-        return {"codes": list(payload["codes"]), "groups": groups}
+-    return {"codes": union(groups), "groups": groups}  # v2 遷移
++    codes = list(payload["codes"]) if "codes" in payload else union(groups)  # v3 / v1;else v2 遷移
++    dropped = [g for g in groups if g["name"].strip() == UNGROUPED_NAME]
++    if dropped:
++        # 保留名群組是現行 bot 造得出的毒檔:只在寫路拒會讓所有寫入永久 BAD_GROUP。
++        # 丟組前先把成員 union 進 codes(手改檔的組可能含 codes 外股號),再落回未分組衍生桶。
++        for code in union(dropped):
++            if code not in codes:
++                codes.append(code)
++        logger.warning("watchlist 含保留名群組,讀時丟棄:%s(%s)", path, [g["name"] for g in dropped])
++        groups = [g for g in groups if g["name"].strip() != UNGROUPED_NAME]
++    return {"codes": codes, "groups": groups}
+ 
+ 
+ def normalize(wl: Watchlist) -> Watchlist:
+@@ -80,7 +95,7 @@ def normalize(wl: Watchlist) -> Watchlist:
+     names: set[str] = set()
+     for g in wl["groups"]:
+         name = g["name"].strip()
+-        if not name or name in names:
++        if not name or name in names or name == UNGROUPED_NAME:
+             raise WatchlistError("BAD_GROUP")
+         names.add(name)
+         deduped: list[str] = []
+diff --git a/tests/server/test_discord_bot.py b/tests/server/test_discord_bot.py
+index a026e42..31b0a5d 100644
+--- a/tests/server/test_discord_bot.py
++++ b/tests/server/test_discord_bot.py
+@@ -19,9 +19,15 @@ from copycat.server import discord_bot
+ from copycat.server.discord_bot import (
+     Bot,
+     create_bot,
++    group_choices,
+     handle_add,
++    handle_group_add,
++    handle_group_remove,
++    handle_group_rename,
++    handle_groups,
+     handle_list,
+     handle_remove,
++    handle_ungroup,
+ )
+ from copycat.stock_watchlist import Watchlist, WatchlistError
+ 
+@@ -62,29 +68,66 @@ class FakeInteraction:
+ 
+ 
+ class FakeService:
+-    def __init__(self, wl: Watchlist | None = None, error: Exception | None = None) -> None:
++    """`changed` 由建構參數控制 —— no-op 文案(「已在自選」/「名稱未變」)測的就是
++    service 回 False 那條路,fake 不自己推導「有沒有變」才不會把待測邏輯搬進 fake。"""
++
++    def __init__(
++        self,
++        wl: Watchlist | None = None,
++        error: Exception | None = None,
++        changed: bool = True,
++    ) -> None:
+         self.wl: Watchlist = wl if wl is not None else {"codes": [], "groups": []}
+         self.error = error
++        self.changed = changed
+         self.added: list[tuple[str, str | None]] = []
+         self.removed: list[str] = []
++        self.created: list[str] = []
++        self.deleted: list[str] = []
++        self.renamed: list[tuple[str, str]] = []
++        self.ungrouped: list[tuple[str, str]] = []
+ 
+-    async def add(self, code: str, group: str | None = None) -> Watchlist:
++    async def add(self, code: str, group: str | None = None) -> tuple[Watchlist, bool]:
+         if self.error is not None:
+             raise self.error
+         self.added.append((code, group))
+-        return self.wl
++        return self.wl, self.changed
+ 
+-    async def remove(self, code: str) -> Watchlist:
++    async def remove(self, code: str) -> tuple[Watchlist, bool]:
+         if self.error is not None:
+             raise self.error
+         self.removed.append(code)
+-        return self.wl
++        return self.wl, self.changed
+ 
+     async def current(self) -> Watchlist:
+         if self.error is not None:
+             raise self.error
+         return self.wl
+ 
++    async def create_group(self, name: str) -> tuple[Watchlist, bool]:
++        if self.error is not None:
++            raise self.error
++        self.created.append(name)
++        return self.wl, self.changed
++
++    async def delete_group(self, name: str) -> tuple[Watchlist, bool]:
++        if self.error is not None:
++            raise self.error
++        self.deleted.append(name)
++        return self.wl, self.changed
++
++    async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]:
++        if self.error is not None:
++            raise self.error
++        self.renamed.append((old, new))
++        return self.wl, self.changed
++
++    async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:
++        if self.error is not None:
++            raise self.error
++        self.ungrouped.append((code, group))
++        return self.wl, self.changed
++
+ 
+ class TestAddCommand:
+     async def test_success_text_has_code_name_and_group(self) -> None:
+@@ -157,6 +200,29 @@ class TestAddCommand:
+ 
+         assert "失敗" in it.sent
+ 
++    async def test_noop_text_when_service_reports_unchanged(self) -> None:
++        """SC-7:文案的唯一事實點是 service 的落檔比對,不是 handler 自己猜。"""
++        it = FakeInteraction()
++
++        await handle_add(FakeService(changed=False), it, "2330")
++
++        assert it.sent == "已在自選:2330 台積電(無變更)"
++
++    async def test_changed_with_group_text(self) -> None:
++        it = FakeInteraction()
++
++        await handle_add(FakeService(), it, "2330", "主力")
++
++        assert it.sent == "已加入自選:2330 台積電(群組:主力)"
++
++    async def test_unknown_code_appends_warning_suffix(self) -> None:
++        """SC-5:軟白名單 —— 仍照加,但提醒可能打錯代碼。"""
++        it = FakeInteraction()
++
++        await handle_add(FakeService(), it, "9999")
++
++        assert it.sent == "已加入自選:9999(查無此檔名稱,請確認代碼)"
++
+ 
+ class TestRemoveCommand:
+     async def test_success(self) -> None:
+@@ -185,6 +251,13 @@ class TestRemoveCommand:
+ 
+         assert it.sent == "服務未就緒"
+ 
++    async def test_noop_text_when_service_reports_unchanged(self) -> None:
++        it = FakeInteraction()
++
++        await handle_remove(FakeService(changed=False), it, "2330")
++
++        assert it.sent == "不在自選:2330 台積電"
++
+ 
+ class TestListCommand:
+     async def test_groups_listed_with_ungrouped_last(self) -> None:
+@@ -229,6 +302,295 @@ class TestListCommand:
+         assert it.sent == "服務未就緒"
+ 
+ 
++_RESERVED_BLOCKED = "「未分組」不是群組,無法操作"
++
++
++class TestGroupsCommand:
++    """SC-1:`/watch groups` 列的是**群組名冊**(含 0 檔群組),不是股票清單。"""
++
++    async def test_lists_groups_with_counts_and_ungrouped(self) -> None:
++        service = FakeService(
++            {
++                "codes": ["2330", "5483", "2317"],
++                "groups": [{"name": "主力", "codes": ["2330", "5483"]}],
++            }
++        )
++        it = FakeInteraction()
++
++        await handle_groups(service, it)
++
++        assert it.order == ["defer", "send"]
++        assert it.sent.splitlines() == [
++            "群組 1 個",
++            "【主力】2 檔",
++            "未分組 1 檔(衍生,非群組)",
++        ]
++
++    async def test_no_ungrouped_line_when_all_grouped(self) -> None:
++        service = FakeService(
++            {"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]}
++        )
++        it = FakeInteraction()
++
++        await handle_groups(service, it)
++
++        assert "未分組" not in it.sent
++
++    async def test_empty_group_is_still_listed(self) -> None:
++        """SC-1 的核心:空群組是使用者建的東西,不能因為沒成員就消失。"""
++        service = FakeService(
++            {
++                "codes": ["2330"],
++                "groups": [{"name": "主力", "codes": ["2330"]}, {"name": "觀察", "codes": []}],
++            }
++        )
++        it = FakeInteraction()
++
++        await handle_groups(service, it)
++
++        assert it.sent.splitlines() == ["群組 2 個", "【主力】1 檔", "【觀察】0 檔"]
++
++    async def test_zero_groups_with_empty_watchlist(self) -> None:
++        it = FakeInteraction()
++
++        await handle_groups(FakeService(), it)
++
++        assert it.sent == "尚無群組"
++
++    async def test_zero_groups_with_codes(self) -> None:
++        service = FakeService({"codes": ["2330", "2317"], "groups": []})
++        it = FakeInteraction()
++
++        await handle_groups(service, it)
++
++        assert it.sent == "尚無群組;未分組 2 檔"
++
++    async def test_service_none(self) -> None:
++        it = FakeInteraction()
++
++        await handle_groups(None, it)
++
++        assert it.sent == "服務未就緒"
++
++
++class TestGroupAddCommand:
++    async def test_creates(self) -> None:
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_group_add(service, it, "主力")
++
++        assert service.created == ["主力"]
++        assert it.order == ["defer", "send"]
++        assert it.sent == "已建立群組:主力"
++
++    async def test_duplicate_is_noop_text(self) -> None:
++        it = FakeInteraction()
++
++        await handle_group_add(FakeService(changed=False), it, "主力")
++
++        assert it.sent == "群組已存在:主力"
++
++    async def test_reserved_name_maps_to_bad_group(self) -> None:
++        """建立保留名**不在 handler 攔** —— 合法性只有 normalize 一份定義(SC-6)。"""
++        service = FakeService(error=WatchlistError("BAD_GROUP"))
++        it = FakeInteraction()
++
++        await handle_group_add(service, it, "未分組")
++
++        assert it.sent == "群組名稱不合法"
++
++    async def test_service_none(self) -> None:
++        it = FakeInteraction()
++
++        await handle_group_add(None, it, "主力")
++
++        assert it.sent == "服務未就緒"
++
++
++class TestGroupRemoveCommand:
++    async def test_ok(self) -> None:
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_group_remove(service, it, "主力")
++
++        assert service.deleted == ["主力"]
++        assert it.sent == "已刪除群組:主力(成員移至未分組)"
++
++    async def test_missing_group_text(self) -> None:
++        service = FakeService(error=WatchlistError("GROUP_NOT_FOUND"))
++        it = FakeInteraction()
++
++        await handle_group_remove(service, it, "不存在")
++
++        assert it.sent == "找不到該群組"
++
++    async def test_reserved_name_blocked_without_calling_service(self) -> None:
++        """「未分組」是衍生桶不是群組:攔在 handler,GROUP_NOT_FOUND 留給真缺席。"""
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_group_remove(service, it, " 未分組 ")
++
++        assert it.sent == _RESERVED_BLOCKED
++        assert service.deleted == []
++
++    async def test_service_none(self) -> None:
++        it = FakeInteraction()
++
++        await handle_group_remove(None, it, "主力")
++
++        assert it.sent == "服務未就緒"
++
++
++class TestGroupRenameCommand:
++    async def test_ok(self) -> None:
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_group_rename(service, it, "主力", "核心")
++
++        assert service.renamed == [("主力", "核心")]
++        assert it.sent == "已改名:主力 → 核心"
++
++    async def test_same_name_is_noop_text(self) -> None:
++        it = FakeInteraction()
++
++        await handle_group_rename(FakeService(changed=False), it, "主力", "主力")
++
++        assert it.sent == "名稱未變:主力"
++
++    async def test_missing_group_text(self) -> None:
++        service = FakeService(error=WatchlistError("GROUP_NOT_FOUND"))
++        it = FakeInteraction()
++
++        await handle_group_rename(service, it, "不存在", "核心")
++
++        assert it.sent == "找不到該群組"
++
++    async def test_reserved_old_blocked_without_calling_service(self) -> None:
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_group_rename(service, it, "未分組", "核心")
++
++        assert it.sent == _RESERVED_BLOCKED
++        assert service.renamed == []
++
++    async def test_reserved_new_falls_through_to_bad_group(self) -> None:
++        """取新名為保留名是「名稱不合法」不是「不是群組」—— 語意不同,不共用文案(R2)。"""
++        service = FakeService(error=WatchlistError("BAD_GROUP"))
++        it = FakeInteraction()
++
++        await handle_group_rename(service, it, "主力", "未分組")
++
++        assert it.sent == "群組名稱不合法"
++
++    async def test_service_none(self) -> None:
++        it = FakeInteraction()
++
++        await handle_group_rename(None, it, "主力", "核心")
++
++        assert it.sent == "服務未就緒"
++
++
++class TestUngroupCommand:
++    async def test_ok(self) -> None:
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_ungroup(service, it, "2330", "主力")
++
++        assert service.ungrouped == [("2330", "主力")]
++        assert it.order == ["defer", "send"]
++        assert it.sent == "已自群組 主力 移出:2330 台積電(仍在自選)"
++
++    async def test_noop_when_not_member(self) -> None:
++        it = FakeInteraction()
++
++        await handle_ungroup(FakeService(changed=False), it, "2330", "主力")
++
++        assert it.sent == "2330 台積電 不在群組 主力"
++
++    async def test_missing_group_text(self) -> None:
++        service = FakeService(error=WatchlistError("GROUP_NOT_FOUND"))
++        it = FakeInteraction()
++
++        await handle_ungroup(service, it, "2330", "不存在")
++
++        assert it.sent == "找不到該群組"
++
++    async def test_reserved_group_blocked_without_calling_service(self) -> None:
++        service = FakeService()
++        it = FakeInteraction()
++
++        await handle_ungroup(service, it, "2330", "未分組")
++
++        assert it.sent == _RESERVED_BLOCKED
++        assert service.ungrouped == []
++
++    async def test_service_none(self) -> None:
++        it = FakeInteraction()
++
++        await handle_ungroup(None, it, "2330", "主力")
++
++        assert it.sent == "服務未就緒"
++
++
++class _HangingService(FakeService):
++    """`current()` 永不返回 —— 模擬寫入持鎖(TC4 往返)期間的 autocomplete。"""
++
++    async def current(self) -> Watchlist:
++        await asyncio.Event().wait()
++        raise AssertionError("unreachable")
++
++
++class TestGroupChoices:
++    def _service(self, names: list[str]) -> FakeService:
++        return FakeService(
++            {"codes": [], "groups": [{"name": n, "codes": []} for n in names]}
++        )
++
++    async def test_returns_group_names(self) -> None:
++        assert await group_choices(self._service(["主力", "觀察"]), "") == ["主力", "觀察"]
++
++    async def test_substring_filter(self) -> None:
++        """子字串(非前綴):中文群組名沒有前綴語意(design R8 amendment)。"""
++        service = self._service(["主力股", "觀察名單", "波段主力"])
++
++        assert await group_choices(service, "主力") == ["主力股", "波段主力"]
++
++    async def test_none_service_returns_empty(self) -> None:
++        assert await group_choices(None, "") == []
++
++    async def test_timeout_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """3 秒硬窗 + 與寫入共用單鎖:等不到就放手回空,不可堆積等鎖 task。"""
++        monkeypatch.setattr(discord_bot, "_AUTOCOMPLETE_TIMEOUT", 0.01)
++
++        assert await group_choices(_HangingService(), "") == []
++
++    async def test_error_returns_empty(self) -> None:
++        assert await group_choices(FakeService(error=RuntimeError("boom")), "") == []
++
++    async def test_long_name_skipped_with_warning(
++        self, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """Choice name 上限 100:單一超長項會讓整份回應被 Discord 拒收(R7)。"""
++        service = self._service(["x" * 101, "主力"])
++
++        with caplog.at_level(logging.WARNING, logger="copycat.server.discord_bot"):
++            result = await group_choices(service, "")
++
++        assert result == ["主力"]
++        assert any("100" in r.getMessage() for r in caplog.records)
++
++    async def test_capped_at_25(self) -> None:
++        service = self._service([f"g{i}" for i in range(30)])
++
++        assert len(await group_choices(service, "")) == 25
++
++
+ class TestCreateBotDegradation:
+     def test_token_unset_returns_none(self) -> None:
+         assert create_bot(FakeService(), object()) is None
+@@ -422,14 +784,69 @@ class TestBotLifecycle:
+ 
+ @pytest.mark.skipif(not _HAS_DISCORD, reason="extras [discord] 未安裝(降級路徑另有測試)")
+ class TestRealDiscordWiring:
+-    def test_create_bot_builds_client_and_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+-        discord = importlib.import_module("discord")
+-
++    def _bot(self, monkeypatch: pytest.MonkeyPatch) -> Bot:
+         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
+         monkeypatch.setenv("SIGNALS_DISCORD_CHANNEL_ID", "42")
+-
+         bot = create_bot(FakeService(), None)
+-
+         assert bot is not None
++        return bot
++
++    def _leaves(self, bot: Bot) -> dict[str, Any]:
++        app_commands = importlib.import_module("discord.app_commands")
++        return {
++            c.qualified_name: c
++            for c in bot.command.walk_commands()
++            if isinstance(c, app_commands.Command)
++        }
++
++    def test_create_bot_builds_client_and_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        discord = importlib.import_module("discord")
++
++        bot = self._bot(monkeypatch)
++
+         assert isinstance(bot.client, discord.Client)
+         assert bot.channel_id == 42
++
++    def test_command_tree_leaf_qualified_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """R7:子群組變數名若叫 `group`,既有 `@group.command` 會靜默改掛到子群組 ——
++        數量對不上不夠,要鎖**完整路徑**才抓得到掛錯層。"""
++        bot = self._bot(monkeypatch)
++
++        assert set(self._leaves(bot)) == {
++            "watch add",
++            "watch remove",
++            "watch list",
++            "watch groups",
++            "watch ungroup",
++            "watch group add",
++            "watch group remove",
++            "watch group rename",
++        }
++
++    @pytest.mark.parametrize(
++        ("qualified", "param"),
++        [
++            ("watch add", "group"),
++            ("watch ungroup", "group"),
++            ("watch group remove", "name"),
++            ("watch group rename", "old"),
++        ],
++    )
++    def test_autocomplete_wired(
++        self, monkeypatch: pytest.MonkeyPatch, qualified: str, param: str
++    ) -> None:
++        leaf = self._leaves(self._bot(monkeypatch))[qualified]
++
++        parameter = leaf.get_parameter(param)
++
++        assert parameter is not None
++        assert parameter.autocomplete is True
++
++    def test_client_suppresses_mentions(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """群組名是自由文字且會原樣回填訊息:`/watch group add @everyone` 不得真 ping(R7)。
++
++        逐欄比對而非比物件:`AllowedMentions` 沒有 `__eq__`,直接 `==` 恆為 False。
++        """
++        allowed = self._bot(monkeypatch).client.allowed_mentions
++
++        assert (allowed.everyone, allowed.users, allowed.roles) == (False, False, False)
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index c04fdb6..c58d60d 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -145,6 +145,22 @@ class TestRefcountPool:
+         assert src.subscribed.count("9999") == 1
+         await engine.close()
+ 
++    async def test_same_codes_resubscribe_is_a_noop_for_the_source(self) -> None:
++        """group-only 變更(建群 / 改名 / 移出群組)會以**相同 codes** 再呼叫一次
++        `set_watchlist`(watchlist_service R9 的前提)。那條路一旦產生 UNSUB/SUB,
++        盤中改個群組就會讓整份自選斷訂重訂 —— 畫面是一排「-」而且沒有任何錯誤訊號。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["2330", "2317"])
++        subscribed = len(src.subscribed)
++        unsubscribed = len(src.unsubscribed)
++
++        await engine.set_watchlist(["2330", "2317"])
++
++        assert len(src.subscribed) == subscribed
++        assert len(src.unsubscribed) == unsubscribed
++        await engine.close()
++
+ 
+ class TestBackfillGuard:
+     async def test_stale_backfill_not_applied_after_main_switch(self) -> None:
+diff --git a/tests/server/test_watchlist_service.py b/tests/server/test_watchlist_service.py
+index 3260eba..69563fa 100644
+--- a/tests/server/test_watchlist_service.py
++++ b/tests/server/test_watchlist_service.py
+@@ -13,7 +13,13 @@ from pathlib import Path
+ import pytest
+ 
+ from copycat.server.watchlist_service import WatchlistService
+-from copycat.stock_watchlist import WATCHLIST_LIMIT, Watchlist, WatchlistError, load_watchlist
++from copycat.stock_watchlist import (
++    UNGROUPED_NAME,
++    WATCHLIST_LIMIT,
++    Watchlist,
++    WatchlistError,
++    load_watchlist,
++)
+ 
+ 
+ class _FakeEngine:
+@@ -43,8 +49,9 @@ class TestAdd:
+     async def test_add_with_group_persists_subscribes_and_broadcasts(self, tmp_path: Path) -> None:
+         service, engine, path = _service(tmp_path)
+ 
+-        result = await service.add("2330", group="主力")
++        result, changed = await service.add("2330", group="主力")
+ 
++        assert changed is True
+         assert result == {"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]}
+         assert load_watchlist(path) == result
+         assert engine.set_calls == [["2330"]]
+@@ -53,8 +60,9 @@ class TestAdd:
+     async def test_add_without_group_lands_ungrouped(self, tmp_path: Path) -> None:
+         service, engine, path = _service(tmp_path)
+ 
+-        result = await service.add("2330")
++        result, changed = await service.add("2330")
+ 
++        assert changed is True
+         assert result == {"codes": ["2330"], "groups": []}
+         assert load_watchlist(path)["codes"] == ["2330"]
+         assert engine.set_calls == [["2330"]]
+@@ -63,8 +71,9 @@ class TestAdd:
+         service, engine, _ = _service(tmp_path)
+         await service.add("2330", group="主力")
+ 
+-        result = await service.add("5483", group="觀察")
++        result, changed = await service.add("5483", group="觀察")
+ 
++        assert changed is True
+         assert result["codes"] == ["2330", "5483"]
+         assert result["groups"] == [
+             {"name": "主力", "codes": ["2330"]},
+@@ -77,19 +86,21 @@ class TestAdd:
+         service, engine, _ = _service(tmp_path)
+         await service.add("2330")
+ 
+-        result = await service.add("2330", group="主力")
++        result, changed = await service.add("2330", group="主力")
+ 
++        assert changed is True
+         assert result["codes"] == ["2330"]
+         assert result["groups"] == [{"name": "主力", "codes": ["2330"]}]
+         assert len(engine.published) == 2
+ 
+     async def test_add_duplicate_is_noop(self, tmp_path: Path) -> None:
+         service, engine, path = _service(tmp_path)
+-        first = await service.add("2330", group="主力")
++        first, _ = await service.add("2330", group="主力")
+         mtime = path.stat().st_mtime_ns
+ 
+-        again = await service.add("2330", group="主力")
++        again, changed = await service.add("2330", group="主力")
+ 
++        assert changed is False
+         assert again == first
+         assert path.stat().st_mtime_ns == mtime  # 沒落檔
+         assert engine.set_calls == [["2330"]]
+@@ -110,8 +121,9 @@ class TestRemove:
+         )
+         engine.published.clear()
+ 
+-        result = await service.remove("2330")
++        result, changed = await service.remove("2330")
+ 
++        assert changed is True
+         assert result == {
+             "codes": ["5483"],
+             "groups": [{"name": "主力", "codes": ["5483"]}, {"name": "觀察", "codes": []}],
+@@ -126,8 +138,9 @@ class TestRemove:
+         engine.set_calls.clear()
+         engine.published.clear()
+ 
+-        result = await service.remove("5483")
++        result, changed = await service.remove("5483")
+ 
++        assert changed is False
+         assert result["codes"] == ["2330"]
+         assert engine.set_calls == []
+         assert engine.published == []
+@@ -294,3 +307,219 @@ class TestConcurrency:
+         assert json.loads(path.read_text(encoding="utf-8"))["codes"] == ["2330"]
+         assert len(engine.set_calls) == 1
+         assert len(engine.published) == 1
++
++
++class TestCreateGroup:
++    """SC-2:建空群組;同名(strip 後)= no-op 不是錯誤;保留名 / 空名照 normalize 拒。"""
++
++    async def test_create_group_empty_and_duplicate_noop(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++
++        wl, changed = await service.create_group("主力")
++
++        assert changed is True
++        assert wl == {"codes": [], "groups": [{"name": "主力", "codes": []}]}
++        assert load_watchlist(path) == wl
++        mtime = path.stat().st_mtime_ns
++
++        again, changed_again = await service.create_group("主力 ")  # strip 後同名
++
++        assert changed_again is False
++        assert again == wl
++        assert path.stat().st_mtime_ns == mtime  # 沒落檔
++        assert len(engine.set_calls) == 1
++
++    async def test_create_group_blank_name_raises(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++
++        with pytest.raises(WatchlistError, match="BAD_GROUP"):
++            await service.create_group("   ")
++
++        assert not path.exists()
++        assert engine.set_calls == []
++
++    async def test_create_group_reserved_name_raises(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++
++        with pytest.raises(WatchlistError, match="BAD_GROUP"):
++            await service.create_group(UNGROUPED_NAME)
++
++        assert not path.exists()
++        assert engine.set_calls == []
++
++    async def test_group_only_change_reissues_same_codes(self, tmp_path: Path) -> None:
++        """R9:group-only 變更照樣 set_watchlist,codes 相同(引擎端零 SUB/UNSUB,
++        守門測試在 tests/server/test_stock_engine.py)。"""
++        service, engine, _ = _service(tmp_path)
++        await service.apply({"codes": ["2330", "5483"], "groups": []})
++
++        _, changed = await service.create_group("觀察")
++
++        assert changed is True
++        assert len(engine.set_calls) == 2
++        assert engine.set_calls[-1] == ["2330", "5483"]  # codes 未變,仍重送一次
++
++
++class TestDeleteGroup:
++    async def test_delete_group_keeps_codes(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.apply(
++            {"codes": ["2330", "5483"], "groups": [{"name": "主力", "codes": ["2330"]}]}
++        )
++
++        wl, changed = await service.delete_group(" 主力 ")  # strip 後比對
++
++        assert changed is True
++        assert wl == {"codes": ["2330", "5483"], "groups": []}  # 成員落回未分組衍生桶
++        assert load_watchlist(path) == wl
++        assert engine.set_calls[-1] == ["2330", "5483"]
++
++    async def test_delete_group_missing_raises(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.add("2330")
++        before = path.read_text(encoding="utf-8")
++        engine.set_calls.clear()
++
++        with pytest.raises(WatchlistError, match="GROUP_NOT_FOUND"):
++            await service.delete_group("不存在")
++
++        assert path.read_text(encoding="utf-8") == before
++        assert engine.set_calls == []
++
++
++class TestRenameGroup:
++    async def test_rename_group_basic(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.apply({"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]})
++
++        wl, changed = await service.rename_group("主力", " 觀察 ")
++
++        assert changed is True
++        assert wl == {"codes": ["2330"], "groups": [{"name": "觀察", "codes": ["2330"]}]}
++        assert load_watchlist(path) == wl
++        assert engine.set_calls[-1] == ["2330"]
++
++    async def test_rename_group_collision_bad_group(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.apply(
++            {
++                "codes": ["2330", "5483"],
++                "groups": [{"name": "主力", "codes": ["2330"]}, {"name": "觀察", "codes": []}],
++            }
++        )
++        before = path.read_text(encoding="utf-8")
++        engine.set_calls.clear()
++
++        with pytest.raises(WatchlistError, match="BAD_GROUP"):
++            await service.rename_group("主力", "觀察")
++
++        assert path.read_text(encoding="utf-8") == before
++        assert engine.set_calls == []
++
++    async def test_rename_group_same_after_strip_noop(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        first = await service.apply(
++            {"codes": ["2330"], "groups": [{"name": "主力", "codes": ["2330"]}]}
++        )
++        mtime = path.stat().st_mtime_ns
++
++        wl, changed = await service.rename_group("主力", " 主力 ")
++
++        assert changed is False
++        assert wl == first
++        assert path.stat().st_mtime_ns == mtime
++        assert len(engine.set_calls) == 1
++
++    async def test_rename_group_missing_raises(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.add("2330")
++        before = path.read_text(encoding="utf-8")
++        engine.set_calls.clear()
++
++        with pytest.raises(WatchlistError, match="GROUP_NOT_FOUND"):
++            await service.rename_group("不存在", "新名")
++
++        assert path.read_text(encoding="utf-8") == before
++        assert engine.set_calls == []
++
++
++class TestUngroup:
++    async def test_ungroup_removes_membership_keeps_code(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.apply(
++            {"codes": ["2330", "5483"], "groups": [{"name": "主力", "codes": ["2330", "5483"]}]}
++        )
++
++        wl, changed = await service.ungroup("2330", " 主力 ")
++
++        assert changed is True
++        assert wl == {
++            "codes": ["2330", "5483"],
++            "groups": [{"name": "主力", "codes": ["5483"]}],
++        }  # 仍在自選
++        assert load_watchlist(path) == wl
++        assert engine.set_calls[-1] == ["2330", "5483"]
++
++    async def test_ungroup_noop_when_absent(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        first = await service.apply(
++            {"codes": ["2330", "5483"], "groups": [{"name": "主力", "codes": ["2330"]}]}
++        )
++        mtime = path.stat().st_mtime_ns
++
++        wl, changed = await service.ungroup("5483", "主力")
++
++        assert changed is False
++        assert wl == first
++        assert path.stat().st_mtime_ns == mtime
++        assert len(engine.set_calls) == 1
++
++    async def test_ungroup_missing_group_raises(self, tmp_path: Path) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.add("2330")
++        before = path.read_text(encoding="utf-8")
++        engine.set_calls.clear()
++
++        with pytest.raises(WatchlistError, match="GROUP_NOT_FOUND"):
++            await service.ungroup("2330", "不存在")
++
++        assert path.read_text(encoding="utf-8") == before
++        assert engine.set_calls == []
++
++
++class TestChangedFlag:
++    async def test_add_remove_return_changed_flag(self, tmp_path: Path) -> None:
++        service, _, _ = _service(tmp_path)
++
++        wl, changed = await service.add("2330")
++        assert changed is True
++        assert wl["codes"] == ["2330"]
++
++        _, changed_again = await service.add("2330")
++        assert changed_again is False
++
++        _, removed = await service.remove("2330")
++        assert removed is True
++
++        _, removed_again = await service.remove("2330")
++        assert removed_again is False
++
++
++class TestReservedGroupGate:
++    """SC-6 R5:保留名 gate 的唯一端到端證明(bot 自動建群那條路打得到)。"""
++
++    async def test_add_with_reserved_group_raises_bad_group_and_writes_nothing(
++        self, tmp_path: Path
++    ) -> None:
++        service, engine, path = _service(tmp_path)
++        await service.add("5483")
++        before = path.read_text(encoding="utf-8")
++        engine.set_calls.clear()
++        engine.published.clear()
++
++        with pytest.raises(WatchlistError, match="BAD_GROUP"):
++            await service.add("2330", group=UNGROUPED_NAME)
++
++        assert path.read_text(encoding="utf-8") == before  # 檔未變
++        assert engine.set_calls == []
++        assert engine.published == []
+diff --git a/tests/test_stock_watchlist.py b/tests/test_stock_watchlist.py
+index a51eb7f..53bf5df 100644
+--- a/tests/test_stock_watchlist.py
++++ b/tests/test_stock_watchlist.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ import pytest
+ 
+ from copycat.stock_watchlist import (
++    UNGROUPED_NAME,
+     WATCHLIST_LIMIT,
+     Group,
+     Watchlist,
+@@ -157,6 +158,51 @@ class TestWatchlistPersistence:
+         )
+         assert saved["codes"] == ["2330", "5483", "3231"]
+ 
++    def test_load_drops_reserved_group_and_keeps_codes(self, tmp_path: Path) -> None:
++        """SC-6 讀時遷移:保留名群組丟棄(v3 / v2 兩形),成員落回未分組衍生桶."""
++        v3 = tmp_path / "v3.json"
++        v3.write_text(
++            json.dumps(
++                {
++                    "_cache_version": 3,
++                    "codes": ["2330"],
++                    "groups": [{"name": UNGROUPED_NAME, "codes": ["2330"]}],
++                },
++                ensure_ascii=False,
++            ),
++            encoding="utf-8",
++        )
++        assert load_watchlist(v3) == {"codes": ["2330"], "groups": []}
++
++        v2 = tmp_path / "v2.json"  # strip 後同名亦丟
++        v2.write_text(
++            json.dumps(
++                {
++                    "_cache_version": 2,
++                    "groups": [{"name": f" {UNGROUPED_NAME} ", "codes": ["2330"]}],
++                },
++                ensure_ascii=False,
++            ),
++            encoding="utf-8",
++        )
++        assert load_watchlist(v2) == {"codes": ["2330"], "groups": []}
++
++    def test_load_drops_reserved_group_keeps_orphan_code(self, tmp_path: Path) -> None:
++        """手改 v3 檔的保留名組可能含 codes 外股號 —— 丟組前先 union 進 codes,不流失."""
++        path = tmp_path / "w.json"
++        path.write_text(
++            json.dumps(
++                {
++                    "_cache_version": 3,
++                    "codes": ["2330"],
++                    "groups": [{"name": UNGROUPED_NAME, "codes": ["2317"]}],
++                },
++                ensure_ascii=False,
++            ),
++            encoding="utf-8",
++        )
++        assert load_watchlist(path) == {"codes": ["2330", "2317"], "groups": []}
++
+ 
+ class TestNormalize:
+     """純函數版正規化(save_watchlist 內部同一份;零寫早退的比較基準)."""
+@@ -186,6 +232,20 @@ class TestNormalize:
+         with pytest.raises(WatchlistError, match="WATCHLIST_FULL"):
+             normalize({"codes": [f"{1000 + i}" for i in range(WATCHLIST_LIMIT + 1)], "groups": []})
+ 
++    def test_rejects_reserved_group_name(self) -> None:
++        """SC-6:保留名「未分組」= codes − ∪groups 的衍生桶,不得存在同名真群組."""
++        with pytest.raises(WatchlistError, match="BAD_GROUP"):
++            normalize({"codes": ["2330"], "groups": [{"name": UNGROUPED_NAME, "codes": ["2330"]}]})
++        with pytest.raises(WatchlistError, match="BAD_GROUP"):  # strip 後同名亦拒
++            normalize(
++                {"codes": ["2330"], "groups": [{"name": f"  {UNGROUPED_NAME} ", "codes": []}]}
++            )
++
++    def test_keeps_empty_groups(self) -> None:
++        """空群組全程保留(SC-1 依賴:/watch groups 要列出 0 檔群組)."""
++        wl: Watchlist = {"codes": ["2330"], "groups": [{"name": "空組", "codes": []}]}
++        assert normalize(wl) == {"codes": ["2330"], "groups": [{"name": "空組", "codes": []}]}
++
+     def test_matches_save_watchlist_result(self, tmp_path: Path) -> None:
+         wl: Watchlist = {
+             "codes": ["2330"],

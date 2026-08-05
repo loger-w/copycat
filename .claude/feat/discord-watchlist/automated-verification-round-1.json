@@ -1,0 +1,10 @@
+{
+  "round": 1,
+  "source": "主 tree .claude/harness.json verify 陣列(worktree 因 gitignore 無該檔;validate 不在陣列且 replay 鏈零觸碰)",
+  "steps": [
+    { "step": "pytest", "command": ".venv\\Scripts\\python -m pytest -q", "exit_code": 0, "result": "1822 passed, 1 skipped, 1 warning in 78.94s", "evidence": "evidence-pytest.txt" },
+    { "step": "ruff", "command": ".venv\\Scripts\\python -m ruff check copycat tests", "exit_code": 0, "result": "All checks passed!" },
+    { "step": "pyright", "command": ".venv\\Scripts\\python -m pyright", "exit_code": 0, "result": "0 errors, 0 warnings, 0 informations" }
+  ],
+  "all_green": true
+}

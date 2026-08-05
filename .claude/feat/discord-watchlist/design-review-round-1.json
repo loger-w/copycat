@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "verdict": "0 P0 / 2 P1 / 7 P2",
+  "dispositions": {
+    "R1": "accepted — group_choices 改 asyncio.wait_for(service.current(), 1.0) 逾時回 [];降級清單補逾時態 + 測試",
+    "R2": "accepted — load_watchlist 讀時遷移:strip 後名 == UNGROUPED_NAME 的群組於 codes 推導後丟棄 + logger.warning(不就地寫檔,v1/v2 慣例);Known Risks 記現行 bot 可造出此狀態",
+    "R3": "accepted — snippet 補 description、外層變數改名 watch、接線測試改寫為擴充 TestRealDiscordWiring(leaf 數 + autocomplete 掛載斷言)",
+    "R4": "accepted — create_group 以 strip 後名對 canonical 現況比對",
+    "R5": "accepted — _format_groups 未分組標注衍生、零群組但有 codes 仍出未分組數、對保留名操作給專屬文案(handler 層判)",
+    "R6": "accepted — apply body 明寫解包;五個新方法 lock 契約句補上",
+    "R7": "accepted — Choice >100 字元略過並 log;client 帶 allowed_mentions none",
+    "R8": "accepted — 子字串過濾偏離記入 brainstorm amendment + auto-default",
+    "R9": "accepted — 改寫為已驗證結論(stock_engine.py:225-226 / signal_hub.py:235-243),刪條件備案,改測試斷言 group-only 變更零 SUB/UNSUB"
+  },
+  "findings_raw": "見對話 dispatch 回傳;9 條全 accepted,無 REFUTED",
+  "exit": "P1 全修入 design v2 → 無 accepted P0 → 不觸發限縮加輪,進 Phase 2"
+}
