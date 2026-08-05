@@ -1,0 +1,1110 @@
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index d46e761..eae6bd5 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -1,12 +1,12 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { PriceLadder } from "@/components/stock/PriceLadder";
+ import { setCapitalWsStatus } from "@/hooks/useCapital";
+ import { ARM_IDLE_MS } from "@/lib/flash-arm";
+-import type { CapitalOrder } from "@/types";
++import type { CapitalOrder, CapitalPosition } from "@/types";
+ 
+ const META = {
+   name: "測試",
+@@ -43,6 +43,19 @@ function mockFetch(routes: Record<string, Route>) {
+   });
+ }
+ 
++/** capital 路由 mock 的預設底：orders / positions 皆空,`extra` 疊加或覆寫。
++ *
++ *  兩條路由**每個 render 都要在**:PriceLadder 同時訂閱 useCapitalOrders 與
++ *  useCapitalPositions,未登記的 URL 會讓 mock fetch 直接 throw —— 失效樣態是某個
++ *  與本測試無關的 query 炸開,而不是斷言紅。 */
++function mockCapitalFetch(extra: Record<string, Route> = {}) {
++  return mockFetch({
++    "/api/capital/orders": () => json({ orders: [] }),
++    "/api/capital/positions": () => json({ positions: [] }),
++    ...extra,
++  });
++}
++
+ function capitalOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
+   return {
+     seq_no: "001",
+@@ -69,6 +82,21 @@ function capitalOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
+   };
+ }
+ 
++function capitalPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
++  return {
++    market: "sec",
++    stock_no: "2330",
++    qty: 2,
++    name: "台積電",
++    avg_price: 100,
++    kind: "cash",
++    pnl_base: null,
++    pnl_base_price: null,
++    pnl_cost: null,
++    ...overrides,
++  };
++}
++
+ const OK_RESULT = { ok: true, code: 0, message: "ok", seq_no: "001" };
+ 
+ let qc: QueryClient;
+@@ -114,6 +142,7 @@ describe("PriceLadder 市價單列(round6 項 4)", () => {
+   };
+ 
+   function render_(book: typeof BOOK) {
++    mockCapitalFetch();
+     return render(
+       <QueryClientProvider client={qc}>
+         <PriceLadder code="2327" book={book} last={LAST} meta={META} />
+@@ -158,7 +187,7 @@ describe("PriceLadder 市價單列(round6 項 4)", () => {
+ describe("PriceLadder(既有顯示行為)", () => {
+   // 🔴-6:摺疊機制移除(右欄 tab 本身即顯隱,stock-ladder-open 停用)
+   it("直接展開:價格列即時可見,標題列顯示標的(D-12)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(ladder());
+     expect(screen.getByText("110")).toBeTruthy(); // 漲停端點
+     expect(screen.getByText("90")).toBeTruthy(); // 跌停端點
+@@ -167,7 +196,7 @@ describe("PriceLadder(既有顯示行為)", () => {
+   });
+ 
+   it("標題列帶股名時一併顯示(右欄跨 tab 切換的誤送防線)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(
+       <QueryClientProvider client={qc}>
+         <PriceLadder code="2330" name="台積電" book={BOOK} last={LAST} meta={META} />
+@@ -177,14 +206,14 @@ describe("PriceLadder(既有顯示行為)", () => {
+   });
+ 
+   it("五檔量對映顯示於對應價位列(買賣側各自可點區)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(ladder());
+     expect(screen.getByLabelText("買 100").textContent).toBe("30");
+     expect(screen.getByLabelText("賣 100.5").textContent).toBe("10");
+   });
+ 
+   it("±5% 外價位買賣側皆反灰不可點(SC-7)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(ladder());
+     expect(screen.getByLabelText("買 110").hasAttribute("disabled")).toBe(true);
+     expect(screen.getByLabelText("賣 110").hasAttribute("disabled")).toBe(true);
+@@ -192,7 +221,7 @@ describe("PriceLadder(既有顯示行為)", () => {
+   });
+ 
+   it("跟隨置中預設開,center 變更觸發 scrollIntoView", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     const { rerender } = render(ladder());
+     expect(
+       screen.getByRole("button", { name: "跟隨置中" }).getAttribute("aria-pressed"),
+@@ -204,7 +233,7 @@ describe("PriceLadder(既有顯示行為)", () => {
+   });
+ 
+   it("無 ref 與 last → 顯示「無資料」(edge 6)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(
+       <QueryClientProvider client={qc}>
+         <PriceLadder
+@@ -219,15 +248,32 @@ describe("PriceLadder(既有顯示行為)", () => {
+   });
+ });
+ 
++// 反灰(±5% 外)的淡化落在哪一層。SC-4 的梯內標記必須**不受**淡化影響(遠離現價的
++// 打平標記正是最需要看見的),而 opacity 套在 row 容器上時子元素無法「反淡」
++// → 淡化改套三個 grid 欄。這是本輪唯一「該變」的既有斷言(PLAN §3 明列)。
++describe("PriceLadder 反灰列的淡化落點", () => {
++  it("±5% 外的列:三個 grid 欄各自淡化,row 容器不淡化", () => {
++    mockCapitalFetch();
++    render(ladder());
++    const buy = screen.getByLabelText("買 110");
++    const sell = screen.getByLabelText("賣 110");
++    const row = buy.closest("div.grid") as HTMLElement;
++    expect(row).toBeTruthy();
++    expect(row.className).not.toContain("opacity-35");
++    expect(buy.parentElement!.className).toContain("opacity-35");
++    expect(sell.parentElement!.className).toContain("opacity-35");
++    expect(within(row).getByText("110").className).toContain("opacity-35");
++  });
++});
++
+ describe("PriceLadder 武裝直送(SC-7)", () => {
+   it("武裝點價:1 次 API call + payload 斷言;鈕轉「解除」紅底", async () => {
+     const bodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": (init) => {
+         bodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+       },
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     render(ladder());
+     armUp();
+@@ -251,12 +297,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+   it("未武裝點價:零請求 + hint「未武裝 — 點價不送單」3s 自動消失", () => {
+     vi.useFakeTimers();
+     const bodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": (init) => {
+         bodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+       },
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     render(ladder());
+     fireEvent.click(screen.getByLabelText("賣 100.5"));
+@@ -270,12 +315,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+ 
+   it("同格 500ms 防抖:連點同格 1 call;不同格照送", async () => {
+     const bodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": (init) => {
+         bodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+       },
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     render(ladder());
+     armUp();
+@@ -287,7 +331,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+   });
+ 
+   it("code 變更自動解除武裝(symbol_changed)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     const { rerender } = render(ladder());
+     armUp();
+     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+@@ -296,7 +340,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+   });
+ 
+   it("Esc 鍵解除武裝", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(ladder());
+     armUp();
+     fireEvent.keyDown(window, { key: "Escape" });
+@@ -304,7 +348,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+   });
+ 
+   it("capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(ladder());
+     armUp();
+     act(() => setCapitalWsStatus("open"));
+@@ -315,7 +359,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+ 
+   it("idle 5 分鐘自動解除", () => {
+     vi.useFakeTimers();
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     render(ladder());
+     armUp();
+     act(() => {
+@@ -326,12 +370,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+ 
+   it("無券(daytrade_sell)鎖買側;賣側照送且 payload 帶 trade_kind", async () => {
+     const bodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": (init) => {
+         bodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+       },
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     render(ladder());
+     armUp();
+@@ -346,12 +389,11 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+ 
+   it("qty 快捷同鍵累加 + 手動輸入重置;payload 帶累加後張數", async () => {
+     const bodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": (init) => {
+         bodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+       },
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     render(ladder());
+     const qtyInput = screen.getByLabelText("張數") as HTMLInputElement;
+@@ -373,10 +415,9 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+   });
+ 
+   it("送單失敗:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除", async () => {
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": () =>
+         json({ detail: { error: "ORDER_BLOCKED", reason: "order_disabled" } }, 403),
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     render(ladder());
+     armUp();
+@@ -392,7 +433,7 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+ describe("PriceLadder 掛單紅方格(SC-7)", () => {
+   it("本檔活單價位聚合殘量;他檔/非活單不顯示;點擊逐 seq 直刪", async () => {
+     const cancelBodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/cancel": (init) => {
+         cancelBodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+@@ -422,6 +463,181 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
+   });
+ });
+ 
++// ---------------------------------------------------------------------------
++// 部位列 + 未實現損益 + 含成本打平價(SC-1 / SC-4 / SC-5 / SC-6 / SC-7)
++// ---------------------------------------------------------------------------
++
++function renderWith(
++  positions: CapitalPosition[],
++  last: typeof LAST | null = LAST,
++  code = "2330",
++) {
++  mockCapitalFetch({ "/api/capital/positions": () => json({ positions }) });
++  return render(
++    <QueryClientProvider client={qc}>
++      <PriceLadder code={code} book={BOOK} last={last} meta={META} />
++    </QueryClientProvider>,
++  );
++}
++
++describe("PriceLadder 部位條(SC-1 / SC-6 / SC-7)", () => {
++  it("多方現股:第一行 kind + 量 + 均價、右緣未實現損益,第二行打平價", async () => {
++    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
++    const bar = await screen.findByTestId("ladder-position-bar");
++    expect(within(bar).getByText("現股 2張 @100")).toBeTruthy();
++    const pnl = within(bar).getByText("+3,284");
++    expect(pnl.className).toContain("text-bull");
++    expect(within(bar).getByText("打平 100.5")).toBeTruthy();
++  });
++
++  it("空手 → 部位條整段不渲染(非本檔 / 非 sec / qty 0 皆濾掉)", async () => {
++    mockCapitalFetch({
++      "/api/capital/positions": () =>
++        json({
++          positions: [
++            capitalPosition({ stock_no: "2317", name: "鴻海" }),
++            capitalPosition({ market: "fut", stock_no: "TXFH6", name: "台指期" }),
++            capitalPosition({ qty: 0, kind: "margin" }),
++          ],
++        }),
++    });
++    const { rerender } = render(ladder("2330"));
++    // 「資料已到」的證據:同一份 positions 換到 2317 就看得見部位條
++    rerender(ladder("2317"));
++    expect(await screen.findByTestId("ladder-position-bar")).toBeTruthy();
++    rerender(ladder("2330"));
++    expect(screen.queryByTestId("ladder-position-bar")).toBeNull();
++  });
++
++  it("多 kind → 逐 kind 一列,cash 在 short 之前(SC-6)", async () => {
++    renderWith(
++      [capitalPosition({ kind: "short", qty: -2 }), capitalPosition()],
++      { ...LAST, p: 102_000 },
++    );
++    const bar = await screen.findByTestId("ladder-position-bar");
++    const rows = within(bar).getAllByTestId("ladder-position-row");
++    expect(rows.length).toBe(2);
++    expect(rows[0]!.textContent).toContain("現股 2張 @100");
++    expect(rows[1]!.textContent).toContain("融券 空2張 @100");
++  });
++
++  it("空方列:量帶「空」、負 pnl 用 text-bear、打平往下 snap", async () => {
++    renderWith([capitalPosition({ kind: "short", qty: -2 })], { ...LAST, p: 103_000 });
++    const bar = await screen.findByTestId("ladder-position-bar");
++    expect(within(bar).getByText("融券 空2張 @100")).toBeTruthy();
++    expect(within(bar).getByText("-6,864").className).toContain("text-bear");
++    expect(within(bar).getByText("打平 99.5")).toBeTruthy();
++  });
++
++  it("均價缺值 → 量照顯示、均價與打平皆「—」、不畫任何標記(SC-7)", async () => {
++    renderWith([capitalPosition({ avg_price: null })]);
++    const bar = await screen.findByTestId("ladder-position-bar");
++    expect(within(bar).getByText("現股 2張 @—")).toBeTruthy();
++    expect(within(bar).getByText("打平 —")).toBeTruthy();
++    expect(within(bar).getByText("—")).toBeTruthy(); // pnl 亦缺
++    expect(screen.queryAllByTestId("ladder-be-mark").length).toBe(0);
++    expect(screen.queryAllByTestId("ladder-avg-mark").length).toBe(0);
++  });
++
++  it("現價缺值 → pnl「—」,打平照算照畫(D15)", async () => {
++    renderWith([capitalPosition()], null);
++    const bar = await screen.findByTestId("ladder-position-bar");
++    expect(within(bar).getByText("打平 100.5")).toBeTruthy();
++    expect(within(bar).getByText("—")).toBeTruthy();
++    expect(screen.getByTestId("ladder-be-mark")).toBeTruthy();
++  });
++});
++
++describe("PriceLadder 梯內標記(SC-4)", () => {
++  it("打平 / 均價標記落在正確價位列,title 帶 kind", async () => {
++    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
++    const be = await screen.findByTestId("ladder-be-mark");
++    expect(be.closest("[data-price]")!.getAttribute("data-price")).toBe("100500");
++    expect(be.getAttribute("title")).toBe("打平(現股)");
++    const avg = screen.getByTestId("ladder-avg-mark");
++    expect(avg.closest("[data-price]")!.getAttribute("data-price")).toBe("100000");
++    expect(avg.getAttribute("title")).toBe("均價(現股)");
++  });
++
++  it("反灰列上的標記不跟著淡化(自帶 opacity-100)", async () => {
++    renderWith([capitalPosition({ avg_price: 106 })]);
++    const avg = await screen.findByTestId("ladder-avg-mark");
++    expect(avg.className).toContain("opacity-100");
++    expect(avg.className).not.toContain("opacity-35");
++    const row = avg.closest("[data-price]") as HTMLElement;
++    expect(row.getAttribute("data-price")).toBe("106000");
++    expect(row.className).not.toContain("opacity-35");
++    // 同列的內容欄確實反灰 —— 標記不淡化才有意義
++    expect(screen.getByLabelText("買 106").parentElement!.className).toContain("opacity-35");
++  });
++
++  it("打平價超出梯域(均價貼漲停)→ 不畫標記,部位條數字照顯示(IS-3)", async () => {
++    renderWith([capitalPosition({ avg_price: 110 })]);
++    const bar = await screen.findByTestId("ladder-position-bar");
++    expect(within(bar).getByText("打平 110.5")).toBeTruthy();
++    expect(screen.queryAllByTestId("ladder-be-mark").length).toBe(0);
++    expect(screen.getByTestId("ladder-avg-mark")).toBeTruthy(); // 均價本身仍在梯上
++  });
++});
++
++describe("PriceLadder 手續費折數(SC-5 / D1)", () => {
++  it("初值取 localStorage,缺值退回預設 1.8", () => {
++    mockCapitalFetch();
++    render(ladder());
++    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("1.8");
++    cleanup();
++    window.localStorage.setItem("copycat-fee-discount", "2.5");
++    mockCapitalFetch();
++    render(ladder());
++    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("2.5");
++  });
++
++  it("改折數 → 重算 pnl 並以字面 key 寫入 localStorage(IS-10)", async () => {
++    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
++    const bar = await screen.findByTestId("ladder-position-bar");
++    expect(within(bar).getByText("+3,284")).toBeTruthy();
++    fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "0.5" } });
++    expect(window.localStorage.getItem("copycat-fee-discount")).toBe("0.5");
++    expect(
++      within(screen.getByTestId("ladder-position-bar")).getByText("+3,359"),
++    ).toBeTruthy();
++  });
++
++  it("非法折數(0 / -1 / 11)不寫入且計算沿用最後一次合法值(IS-6)", async () => {
++    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
++    await screen.findByTestId("ladder-position-bar");
++    const input = screen.getByLabelText("手續費折數") as HTMLInputElement;
++    fireEvent.change(input, { target: { value: "0.5" } });
++    for (const bad of ["0", "-1", "11"]) {
++      fireEvent.change(input, { target: { value: bad } });
++      expect(input.value).toBe(bad); // 受控輸入照顯示原始值,不吃掉使用者的按鍵
++      expect(window.localStorage.getItem("copycat-fee-discount")).toBe("0.5");
++      expect(
++        within(screen.getByTestId("ladder-position-bar")).getByText("+3,359"),
++      ).toBeTruthy();
++    }
++  });
++
++  it("空手也能設定折數 —— 輸入框恆常渲染(D1)", () => {
++    mockCapitalFetch();
++    render(ladder());
++    fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "3" } });
++    expect(window.localStorage.getItem("copycat-fee-discount")).toBe("3");
++    expect(screen.queryByTestId("ladder-position-bar")).toBeNull();
++  });
++
++  it("改折數不影響張數輸入,且折數框帶可見「折」後綴(IS-8)", () => {
++    mockCapitalFetch();
++    render(ladder());
++    const qty = screen.getByLabelText("張數") as HTMLInputElement;
++    fireEvent.change(qty, { target: { value: "7" } });
++    fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "3" } });
++    expect(qty.value).toBe("7");
++    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("3");
++    expect(screen.getByText("折")).toBeTruthy();
++  });
++});
++
+ // 🔴-10:window listener 上移到 RightRail(右欄非閃電 tab 時本元件已 unmount,
+ // 自有 listener 收不到 — change-spec R2-5)。本元件改吃 centerRequest prop。
+ // 「事件 → 切回閃電 tab → 置中」的完整鏈由 RightRail.test.tsx 覆蓋。
+@@ -442,12 +658,11 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
+ 
+   it("centerRequest → 該價置中、暫停跟隨,且不送單", () => {
+     const bodies: unknown[] = [];
+-    mockFetch({
++    mockCapitalFetch({
+       "/api/capital/order/stock": (init) => {
+         bodies.push(JSON.parse(String(init?.body)));
+         return json(OK_RESULT);
+       },
+-      "/api/capital/orders": () => json({ orders: [] }),
+     });
+     const { rerender } = render(withCenter(null));
+     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+@@ -461,7 +676,7 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
+   });
+ 
+   it("同價連點靠 nonce 變化重捲(值相同不會被 effect deps 吞掉)", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     const { rerender } = render(withCenter({ priceMilli: 100_500, nonce: 1 }));
+     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+     spy.mockClear();
+@@ -470,7 +685,7 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
+   });
+ 
+   it("不在階梯上的價位 → 不捲動也不崩", () => {
+-    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
++    mockCapitalFetch();
+     const { rerender } = render(withCenter(null));
+     const spy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+     spy.mockClear();
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index 64637db..cf4c1ae 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -3,17 +3,27 @@ import { useEffect, useReducer, useRef, useState } from "react";
+ import {
+   useCancelOrder,
+   useCapitalOrders,
++  useCapitalPositions,
+   useCapitalWsStatus,
+   useSubmitStock,
+ } from "@/hooks/useCapital";
++import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+ import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
++import {
++  avgTickOf,
++  clampDiscount,
++  FEE_DISCOUNT_DEFAULT,
++  positionEcon,
++  secPositionsOf,
++  snapBreakEven,
++} from "@/lib/ladder-position";
+ import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
+ import type { StockBook, StockMeta } from "@/lib/stock-accum";
+ import { buildLadder } from "@/lib/stock-tick";
+ import { tradeErrorText } from "@/lib/trade-text";
+ import { cn } from "@/lib/utils";
+-import type { CapitalOrder } from "@/types";
++import type { CapitalOrder, CapitalPosition } from "@/types";
+ 
+ const CLICK_DEBOUNCE_MS = 500;
+ const HINT_MS = 3_000;
+@@ -26,6 +36,108 @@ export const TRADE_KINDS = [
+ ] as const;
+ export type TradeKind = (typeof TRADE_KINDS)[number][0];
+ 
++/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
++const DASH = "—";
++
++/** kind → 顯示標籤,查表未命中就顯示原字串:群益 `Position.kind` 的值域比本檔的
++ *  交易別寬(D13),不認得的部位寧可標籤怪也不要靜默消失。 */
++function kindLabel(kind: string): string {
++  return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
++}
++
++interface DiscountState {
++  /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
++  raw: string;
++  /** 最後一次通過 clampDiscount 的值;計算恆用它。 */
++  value: number;
++}
++
++/** 讀存檔折數。**整段包 try/catch**:localStorage 在私密視窗 / storage 被政策鎖時
++ *  光是存取就會拋,而這是 useState initializer —— 拋出去就是閃電梯首次 render 掛掉
++ *  (同 `hooks/useChartToggles.ts::load`)。 */
++function loadDiscount(): DiscountState {
++  let raw: string | null = null;
++  try {
++    raw = window.localStorage.getItem(FEE_DISCOUNT_KEY);
++  } catch {
++    raw = null; // 讀不到 → 走預設,記憶體內照常運作
++  }
++  const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
++  return { raw: String(value), value };
++}
++
++function persistDiscount(value: number): void {
++  try {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, String(value));
++  } catch {
++    // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉(同 useChartToggles::persist)
++  }
++}
++
++interface PositionRow {
++  key: string;
++  /** kind 標籤(部位條與標記 title 共用同一份字彙) */
++  label: string;
++  /** 第一行左側:`現股 2張 @100` / `融券 空2張 @100`(均價缺值 → `@—`) */
++  head: string;
++  /** 第二行:`打平 100.5`(顯示 snap 後的檔位,與梯內標記同值) */
++  beText: string;
++  pnl: number | null;
++  /** snap 後的打平檔位(毫元);均價缺值 → null */
++  beTick: number | null;
++  /** 均價所在檔位(毫元);均價缺值 → null */
++  avgTick: number | null;
++}
++
++function positionRows(
++  positions: CapitalPosition[],
++  lastMilli: number | null,
++  discount: number,
++): PositionRow[] {
++  return positions.map((p) => {
++    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind);
++    // 均價的缺值判定與 positionEcon 同一條規則(0 不是價格)
++    const avg = p.avg_price !== null && p.avg_price > 0 ? p.avg_price : null;
++    const label = kindLabel(p.kind);
++    const beTick = econ.breakEvenMilli === null ? null : snapBreakEven(econ.breakEvenMilli, p.qty);
++    // avg_price 是**元**(types.ts CapitalPosition),fmt 吃毫元 → 先 ×1000
++    const avgText = avg === null ? DASH : fmt(Math.round(avg * 1000));
++    return {
++      key: `${p.kind}:${p.stock_no}`,
++      label,
++      head: `${label} ${p.qty < 0 ? "空" : ""}${Math.abs(p.qty)}張 @${avgText}`,
++      beText: `打平 ${beTick === null ? DASH : fmt(beTick)}`,
++      pnl: econ.pnl,
++      beTick,
++      avgTick: avg === null ? null : avgTickOf(avg),
++    };
++  });
++}
++
++/** 檔位(毫元)→ 該檔位上的 kind 標籤陣列。同檔位多 kind 時 title 併列。 */
++function markMap(rows: PositionRow[], pick: (r: PositionRow) => number | null): Map<number, string[]> {
++  const map = new Map<number, string[]>();
++  for (const r of rows) {
++    const tick = pick(r);
++    if (tick === null) continue;
++    const cur = map.get(tick);
++    if (cur === undefined) map.set(tick, [r.label]);
++    else cur.push(r.label);
++  }
++  return map;
++}
++
++function pnlText(pnl: number | null): string {
++  if (pnl === null) return DASH;
++  return `${pnl > 0 ? "+" : ""}${pnl.toLocaleString("en-US")}`;
++}
++
++/** 台股慣例:賺紅賠綠。 */
++function pnlTone(pnl: number | null): string {
++  if (pnl === null) return "text-ink-dim";
++  return pnl > 0 ? "text-bull" : pnl < 0 ? "text-bear" : "text-ink";
++}
++
+ interface LotEntry {
+   qty: number; // 殘量(order_qty - filled_qty 聚合)
+   seqs: string[];
+@@ -99,6 +211,7 @@ export function PriceLadder({
+   // 值式會用到 stale state(review P2-9(3))
+   const setQtyState = onQtyState ?? setQtyLocal;
+   const [hint, setHint] = useState<string | null>(null);
++  const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
+   const centerRef = useRef<HTMLDivElement | null>(null);
+   const rowRefs = useRef(new Map<number, HTMLDivElement>());
+   const progScroll = useRef(false);
+@@ -112,6 +225,15 @@ export function PriceLadder({
+   const cancelOrder = useCancelOrder();
+   const { data: ordersData } = useCapitalOrders();
+   const lots = aggregateLots(ordersData?.orders, code);
++  const { data: positionsData } = useCapitalPositions();
++  // 每 tick 重算:kinds 量級是個位數的純算術,不值得 memo
++  const posRows = positionRows(
++    secPositionsOf(positionsData?.positions, code),
++    last?.p ?? null,
++    discount.value,
++  );
++  const beMarks = markMap(posRows, (r) => r.beTick);
++  const avgMarks = markMap(posRows, (r) => r.avgTick);
+ 
+   const ladder = buildLadder({
+     center: last?.p ?? null,
+@@ -322,6 +444,28 @@ export function PriceLadder({
+             }}
+             className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
+           />
++          {/* 折數與張數是相鄰的同型數字框,而其中一個是真錢張數 —— 後綴「折」是
++              肉眼區隔(IS-8),不是裝飾。恆常渲染:空手也要能先把折數設好(D1)。 */}
++          <label className="ml-0.5 flex items-center gap-0.5 border-l border-line pl-1 text-xs text-ink-dim">
++            <input
++              aria-label="手續費折數"
++              type="number"
++              step={0.1}
++              min={0.1}
++              max={10}
++              value={discount.raw}
++              onChange={(e) => {
++                touchIdle();
++                const raw = e.target.value;
++                const v = clampDiscount(raw);
++                // 非法值只更新 raw(輸入框照顯示),value 沿用上一個合法值 → 計算不跳動
++                setDiscount((s) => ({ raw, value: v ?? s.value }));
++                if (v !== null) persistDiscount(v);
++              }}
++              className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
++            />
++            折
++          </label>
+         </div>
+         {hint !== null ? (
+           <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
+@@ -358,21 +502,44 @@ export function PriceLadder({
+             const buyLot = lots.buy.get(r.priceMilli);
+             const sellLot = lots.sell.get(r.priceMilli);
+             const buyLocked = r.dimmed || tradeKind === "daytrade_sell";
++            const beKinds = beMarks.get(r.priceMilli);
++            const avgKinds = avgMarks.get(r.priceMilli);
+             return (
+               <div
+                 key={r.priceMilli}
++                data-price={r.priceMilli}
+                 ref={(el) => {
+                   if (el) rowRefs.current.set(r.priceMilli, el);
+                   else rowRefs.current.delete(r.priceMilli);
+                   if (r.isCenter && el) centerRef.current = el;
+                 }}
+                 className={cn(
+-                  "grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 font-mono text-xs",
++                  "relative grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 font-mono text-xs",
+                   r.isCenter && "bg-bg-deep",
+-                  r.dimmed && "opacity-35",
+                 )}
+               >
+-                <div className="flex items-stretch">
++                {/* 部位標記(SC-4)。`pointer-events-none` 是必要的:左緣正是刪單紅方格
++                    與買鈕的點擊區,標記吃掉點擊會變成「按不到刪單」。
++                    `opacity-100` 顯式隔離同列內容的 `opacity-35` —— 遠離現價的打平標記
++                    正是最需要看見的那一根。 */}
++                {beKinds !== undefined ? (
++                  <span
++                    data-testid="ladder-be-mark"
++                    title={`打平(${beKinds.join("、")})`}
++                    className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-warn opacity-100"
++                  />
++                ) : null}
++                {avgKinds !== undefined ? (
++                  <span
++                    data-testid="ladder-avg-mark"
++                    title={`均價(${avgKinds.join("、")})`}
++                    className="pointer-events-none absolute inset-y-0 left-1 w-0.5 bg-ma20 opacity-100"
++                  />
++                ) : null}
++                {/* 反灰(±5% 外)的淡化套在三個 grid 欄、不套 row 容器:opacity 是
++                    合成層屬性,套在容器上時子元素無法「反淡」—— 之後要疊在 row 上的
++                    部位標記(打平 / 均價)正好都落在遠離現價的位置。 */}
++                <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
+                   {buyLot !== undefined ? (
+                     <button
+                       type="button"
+@@ -400,11 +567,12 @@ export function PriceLadder({
+                   className={cn(
+                     "flex items-center justify-center",
+                     r.isCenter ? "text-accent" : r.dimmed ? "text-ink-dim" : "text-ink",
++                    r.dimmed && "opacity-35",
+                   )}
+                 >
+                   {fmt(r.priceMilli)}
+                 </span>
+-                <div className="flex items-stretch">
++                <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
+                   <button
+                     type="button"
+                     disabled={r.dimmed}
+@@ -444,6 +612,29 @@ export function PriceLadder({
+           ) : null}
+         </div>
+       )}
++      {/* 部位條放**卡片最底**(D5):價格梯 scroll 區是 flex-1,部位條出現時 scroll
++          視窗從底部縮短,**既有價格列的 y 座標不動**。插在上方會整梯下移 —— 武裝中的
++          閃電梯不得因部位資料到達而位移點擊目標。空手 → 整段不渲染(零痕跡)。 */}
++      {posRows.length > 0 ? (
++        <div
++          data-testid="ladder-position-bar"
++          className="border-t border-line px-2 py-1 font-mono text-xs"
++        >
++          {posRows.map((r) => (
++            <div key={r.key} data-testid="ladder-position-row">
++              <div className="flex items-baseline justify-between gap-2">
++                <span className="text-ink">{r.head}</span>
++                <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
++              </div>
++              <div className="flex items-center gap-1 text-ink-muted">
++                {/* 色點對應梯內打平標記色(bg-warn),讓「梯上那根黃線是什麼」不必猜 */}
++                <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
++                <span>{r.beText}</span>
++              </div>
++            </div>
++          ))}
++        </div>
++      ) : null}
+     </div>
+   );
+ }
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index f625641..cf1ba8e 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -63,6 +63,9 @@ export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
+ /** 訊號提示音開關("on" / "off")— hooks/useSignalSound.ts */
+ export const SOUND_KEY = "copycat-signal-sound";
+ 
++/** 手續費折數 — components/stock/PriceLadder.tsx */
++export const FEE_DISCOUNT_KEY = "copycat-fee-discount";
++
+ /** 江波圖呈現模式(side / overlay)— components/corr/RiverPanel.tsx */
+ export const RIVER_MODE_KEY = "copycat-river-mode";
+ /** 江波圖**關掉**哪些腿(JSON 陣列)— components/corr/RiverPanel.tsx */
+diff --git a/frontend/src/lib/ladder-position.test.ts b/frontend/src/lib/ladder-position.test.ts
+new file mode 100644
+index 0000000..202560b
+--- /dev/null
++++ b/frontend/src/lib/ladder-position.test.ts
+@@ -0,0 +1,199 @@
++import { describe, expect, it } from "vitest";
++
++import {
++  avgTickOf,
++  clampDiscount,
++  FEE_DISCOUNT_DEFAULT,
++  feeRate,
++  positionEcon,
++  secPositionsOf,
++  snapBreakEven,
++} from "@/lib/ladder-position";
++import type { CapitalPosition } from "@/types";
++
++function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
++  return {
++    market: "sec",
++    stock_no: "2330",
++    qty: 2,
++    name: "台積電",
++    avg_price: 100,
++    kind: "cash",
++    pnl_base: null,
++    pnl_base_price: null,
++    pnl_cost: null,
++    ...over,
++  };
++}
++
++describe("feeRate", () => {
++  it("1.8 折 = 牌告 ×0.18", () => {
++    expect(feeRate(1.8)).toBeCloseTo(0.0002565, 10);
++  });
++
++  it("10 折 = 牌告原價", () => {
++    expect(feeRate(10)).toBeCloseTo(0.001425, 10);
++  });
++
++  it("預設折數是 user 實答的 1.8", () => {
++    expect(FEE_DISCOUNT_DEFAULT).toBe(1.8);
++  });
++});
++
++// design v2「SC-2/SC-3」節手算例(五組),折數 1.8(f = 0.0002565)
++describe("positionEcon 手算例(design v2 五組)", () => {
++  it("多方 pnl:avg=100 px=102 qty=2 現股 → 4000 − 51.3 − 664.326 = +3284", () => {
++    expect(positionEcon(2, 100, 102_000, 1.8, "cash").pnl).toBe(3_284);
++  });
++
++  it("多方 BE:avg=100 → 100.352…,snapUp = 100_500", () => {
++    const be = positionEcon(2, 100, 102_000, 1.8, "cash").breakEvenMilli;
++    expect(be).not.toBeNull();
++    expect(be!).toBeCloseTo(100_352.45, 1);
++    expect(snapBreakEven(be!, 2)).toBe(100_500);
++  });
++
++  it("空方 pnl:avg=100 px=98 qty=−2 融券 → 4000 − 811.3 − 50.274 = +3138", () => {
++    expect(positionEcon(-2, 100, 98_000, 1.8, "short").pnl).toBe(3_138);
++  });
++
++  it("空方 BE(short 含借券費 b):avg=100 → 99.569…,snapDown = 99_500", () => {
++    const be = positionEcon(-2, 100, 98_000, 1.8, "short").breakEvenMilli;
++    expect(be).not.toBeNull();
++    expect(be!).toBeCloseTo(99_568.81, 1);
++    expect(snapBreakEven(be!, -2)).toBe(99_500);
++  });
++
++  it("空方虧損例:avg=100 px=103 qty=−2 融券 → −6864(費用不得變號成收益)", () => {
++    expect(positionEcon(-2, 100, 103_000, 1.8, "short").pnl).toBe(-6_864);
++  });
++});
++
++describe("positionEcon 邊界", () => {
++  it("非 short 的空方不計借券費(b 只在 kind==='short')", () => {
++    // 4000 − 100×2000×0.0032565(=651.3) − 50.274 = 3298.426
++    expect(positionEcon(-2, 100, 98_000, 1.8, "daytrade_sell").pnl).toBe(3_298);
++  });
++
++  it("多方恆不計借券費 —— kind 誤植 short 也一樣", () => {
++    expect(positionEcon(2, 100, 102_000, 1.8, "short").pnl).toBe(
++      positionEcon(2, 100, 102_000, 1.8, "cash").pnl,
++    );
++  });
++
++  it("avgPrice 為 null → pnl 與 BE 皆 null", () => {
++    expect(positionEcon(2, null, 102_000, 1.8, "cash")).toEqual({
++      pnl: null,
++      breakEvenMilli: null,
++    });
++  });
++
++  it("avgPrice <= 0 視為缺值(D14:「0 不是價格」)→ 全 null", () => {
++    expect(positionEcon(2, 0, 102_000, 1.8, "cash")).toEqual({ pnl: null, breakEvenMilli: null });
++    expect(positionEcon(2, -1, 102_000, 1.8, "cash")).toEqual({ pnl: null, breakEvenMilli: null });
++  });
++
++  it("lastMilli = 0 → pnl null,BE 照算(D14)", () => {
++    const econ = positionEcon(2, 100, 0, 1.8, "cash");
++    expect(econ.pnl).toBeNull();
++    expect(econ.breakEvenMilli).not.toBeNull();
++  });
++
++  it("lastMilli = null → pnl null,BE 照算(D15)", () => {
++    const econ = positionEcon(2, 100, null, 1.8, "cash");
++    expect(econ.pnl).toBeNull();
++    expect(econ.breakEvenMilli).toBeCloseTo(100_352.45, 1);
++  });
++
++  it("|qty| 計費:同均價同現價,做多 2 張與做空 2 張的費用基數一致(D3)", () => {
++    // 空方(非 short,b=0)相對均價的對稱點,費用結構與多方同基數
++    const long = positionEcon(2, 100, 100_000, 1.8, "cash").pnl;
++    const short = positionEcon(-2, 100, 100_000, 1.8, "cash").pnl;
++    expect(long).toBe(short);
++    expect(long).toBe(-703); // 0 − 51.3 − 651.3
++  });
++});
++
++describe("snapBreakEven 方向", () => {
++  it("多方 snapUp(第一個獲利 ≥ 0 的 tick)", () => {
++    expect(snapBreakEven(100_352.45, 2)).toBe(100_500);
++  });
++
++  it("空方 snapDown", () => {
++    expect(snapBreakEven(99_568.81, -2)).toBe(99_500);
++  });
++
++  it("已在合法檔位上 → 兩方向皆不動", () => {
++    expect(snapBreakEven(100_500, 2)).toBe(100_500);
++    expect(snapBreakEven(100_500, -2)).toBe(100_500);
++  });
++});
++
++describe("avgTickOf", () => {
++  it("均價本身即合法檔位 → 原值", () => {
++    expect(avgTickOf(100)).toBe(100_000);
++  });
++
++  it("取最近檔位,跨級距時往上收(99.97 → 100)", () => {
++    expect(avgTickOf(99.97)).toBe(100_000);
++  });
++
++  it("同級距內取較近的一側", () => {
++    expect(avgTickOf(99.92)).toBe(99_900);
++  });
++});
++
++describe("clampDiscount", () => {
++  it("合法值原樣回傳(字串與數字皆收)", () => {
++    expect(clampDiscount("1.8")).toBe(1.8);
++    expect(clampDiscount(1.8)).toBe(1.8);
++    expect(clampDiscount(10)).toBe(10);
++    expect(clampDiscount("10")).toBe(10);
++  });
++
++  it("空字串 / 非數字 → null", () => {
++    expect(clampDiscount("")).toBeNull();
++    expect(clampDiscount("abc")).toBeNull();
++    expect(clampDiscount(Number.NaN)).toBeNull();
++  });
++
++  it("超出 0 < v ≤ 10 → null", () => {
++    expect(clampDiscount("0")).toBeNull();
++    expect(clampDiscount(0)).toBeNull();
++    expect(clampDiscount("-1")).toBeNull();
++    expect(clampDiscount("11")).toBeNull();
++  });
++});
++
++describe("secPositionsOf", () => {
++  it("只留本檔 sec 且 qty ≠ 0 的部位", () => {
++    const all = [
++      pos({ kind: "cash" }),
++      pos({ market: "fut", stock_no: "TXFH6", kind: "cash" }),
++      pos({ stock_no: "2317", kind: "cash" }),
++      pos({ qty: 0, kind: "margin" }),
++    ];
++    const got = secPositionsOf(all, "2330");
++    expect(got.length).toBe(1);
++    expect(got[0]!.kind).toBe("cash");
++  });
++
++  it("排序 cash → margin → short,未知 kind 殿後(D13)", () => {
++    const all = [
++      pos({ kind: "wtf" }),
++      pos({ kind: "short", qty: -2 }),
++      pos({ kind: "cash" }),
++      pos({ kind: "margin" }),
++    ];
++    expect(secPositionsOf(all, "2330").map((p) => p.kind)).toEqual([
++      "cash",
++      "margin",
++      "short",
++      "wtf",
++    ]);
++  });
++
++  it("undefined(尚未載入)→ 空陣列", () => {
++    expect(secPositionsOf(undefined, "2330")).toEqual([]);
++  });
++});
+diff --git a/frontend/src/lib/ladder-position.ts b/frontend/src/lib/ladder-position.ts
+new file mode 100644
+index 0000000..1e11b17
+--- /dev/null
++++ b/frontend/src/lib/ladder-position.ts
+@@ -0,0 +1,114 @@
++/** 閃電梯部位經濟:未實現損益 + 含成本打平價(零 React 純函數)。
++ *
++ *  **為什麼前端自算**:群益 `CapitalPosition.pnl_*` 是名目損益(不含費稅),而閃電梯上
++ *  真正要回答的問題是「現在平掉,含手續費與證交稅之後我是賺是賠」。口徑與折數都在這裡
++ *  收斂,元件只負責顯示。
++ *
++ *  單位約定:`avgPrice` 是**元**(群益 `avg_price` 原樣),`lastMilli` / 回傳的
++ *  `breakEvenMilli` 是**毫元**(本專案價格通貨)。qty 是**張**(1 張 = 1000 股),
++ *  費用一律以 `|qty|` 計、方向只由 qty 符號決定。 */
++import { snapDown, snapNearest, snapUp } from "@/lib/stock-tick";
++import type { CapitalPosition } from "@/types";
++
++/** 牌告手續費率(買賣各收一次)。 */
++export const FEE_BASE = 0.001425;
++/** 證交稅(賣出價金;user 拍板固定 0.3%,不分現股 / 當沖減半)。 */
++export const SELL_TAX = 0.003;
++/** 融券借券費(賣出價金 0.08%;只有 kind === "short" 計入)。 */
++export const SHORT_BORROW = 0.0008;
++/** 預設手續費折數(user 實答:1.8 折)。 */
++export const FEE_DISCOUNT_DEFAULT = 1.8;
++
++/** 折數 → 實際費率。1.8 折 = 牌告 ×0.18。 */
++export function feeRate(discount: number): number {
++  return (FEE_BASE * discount) / 10;
++}
++
++export interface PositionEcon {
++  /** 未實現損益(元,四捨五入到整數);avg 或 last 缺值 → null。 */
++  pnl: number | null;
++  /** 含成本打平價(毫元,**未 snap**);avg 缺值 → null。 */
++  breakEvenMilli: number | null;
++}
++
++/** 價格欄的 `0` 不是價格(同 `stock-tick::isMarketLevel` 與後端 `_best_limit_price`),
++ *  均價欄的 0 / 負值同理視為缺值 —— 拿去算會得到「打平價 0」這種看起來像數字的假答案。 */
++function px(v: number | null): number | null {
++  return v !== null && v > 0 ? v : null;
++}
++
++/**
++ * 部位經濟。
++ *
++ * f = feeRate(discount);t = SELL_TAX;b = kind === "short" ? SHORT_BORROW : 0;
++ * Q = |qty| × 1000 股。
++ *
++ * - 多方(qty > 0,b 恆 0 — 多方無借券):
++ *   pnl = (px − avg)·Q − avg·Q·f − px·Q·(f + t);BE = avg·(1 + f) / (1 − f − t)
++ * - 空方(qty < 0):
++ *   pnl = (avg − px)·Q − avg·Q·(f + t + b) − px·Q·f;BE = avg·(1 − f − t − b) / (1 + f)
++ *
++ * 已知簡化:不套低消 NT$20(聚合部位無筆數可還原)、不計融資利息。
++ */
++export function positionEcon(
++  qty: number,
++  avgPrice: number | null,
++  lastMilli: number | null,
++  discount: number,
++  kind: string,
++): PositionEcon {
++  const avg = px(avgPrice);
++  if (avg === null) return { pnl: null, breakEvenMilli: null };
++
++  const f = feeRate(discount);
++  const t = SELL_TAX;
++  const b = kind === "short" ? SHORT_BORROW : 0;
++  const long = qty > 0;
++  const q = Math.abs(qty) * 1000;
++
++  const breakEven = long ? (avg * (1 + f)) / (1 - f - t) : (avg * (1 - f - t - b)) / (1 + f);
++  const breakEvenMilli = breakEven * 1000;
++
++  const lastPrice = px(lastMilli);
++  if (lastPrice === null) return { pnl: null, breakEvenMilli };
++  const p = lastPrice / 1000;
++
++  const pnl = long
++    ? (p - avg) * q - avg * q * f - p * q * (f + t)
++    : (avg - p) * q - avg * q * (f + t + b) - p * q * f;
++  return { pnl: Math.round(pnl), breakEvenMilli };
++}
++
++/** 打平價 snap 到合法檔位:多方 snapUp(第一個真獲利的 tick)、空方 snapDown。
++ *  方向刻意保守 —— 往「還沒打平」那側取,不讓標記騙人。 */
++export function snapBreakEven(beMilli: number, qty: number): number {
++  return qty > 0 ? snapUp(beMilli) : snapDown(beMilli);
++}
++
++/** 均價標記所在的檔位(毫元)。均價是成交均值,幾乎不會剛好落在合法檔位上 →
++ *  取最近檔位。**標記 key 的單一定義處**,元件不自算(兩處各算會靜默錯位)。 */
++export function avgTickOf(avgPrice: number): number {
++  return snapNearest(Math.round(avgPrice * 1000));
++}
++
++/** 折數夾制:收 string(受控輸入的原始值)或 number,0 < v ≤ 10 才是合法折數。
++ *  不合法回 null,由呼叫端決定沿用舊值還是套預設 —— 不在這裡替它決定。 */
++export function clampDiscount(raw: string | number): number | null {
++  const v = typeof raw === "number" ? raw : Number.parseFloat(raw);
++  if (!Number.isFinite(v)) return null;
++  if (v <= 0 || v > 10) return null;
++  return v;
++}
++
++/** 顯示順序:cash → margin → short → 其餘(含 daytrade_sell 與未知字串)殿後。 */
++const KIND_ORDER: Record<string, number> = { cash: 0, margin: 1, short: 2 };
++
++/** 當前標的的證券部位列(sec / 同股號 / qty ≠ 0),依 KIND_ORDER 排序。 */
++export function secPositionsOf(
++  positions: CapitalPosition[] | undefined,
++  code: string,
++): CapitalPosition[] {
++  return (positions ?? [])
++    .filter((p) => p.market === "sec" && p.stock_no === code && p.qty !== 0)
++    .sort((a, b) => (KIND_ORDER[a.kind] ?? 3) - (KIND_ORDER[b.kind] ?? 3));
++}
