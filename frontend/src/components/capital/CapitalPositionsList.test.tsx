@@ -199,6 +199,19 @@ describe("CapitalPositionsList", () => {
     expect(bodies[1]).toEqual({ market: "sec", key: "2330", price: 985, qty: 3, kind: "margin" });
   });
 
+  it("同檔兩列的 React key 唯一(複合鍵),無 duplicate key warning", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mockFetch({
+      "/api/capital/status": () => json(STATUS),
+      "/api/capital/positions": () =>
+        json({ positions: [pos({ kind: "cash" }), pos({ kind: "margin" })] }),
+    });
+    renderList("sec", () => 985);
+    await screen.findAllByText(/2330/);
+    const msgs = spy.mock.calls.map((c) => String(c[0]));
+    expect(msgs.filter((m) => m.includes("same key"))).toEqual([]);
+  });
+
   it("平倉 400 BROKER_REJECTED → 錯誤列繁中顯示(review A2)", async () => {
     mockFetch({
       "/api/capital/status": () => json(STATUS),

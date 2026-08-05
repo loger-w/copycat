@@ -847,6 +847,134 @@ async def test_close_fut_builds_reverse_ioc_new_close_1(tmp_path: Path) -> None:
     assert len(com.sent) == 1
 
 
+# ── 複合鍵 (stock_no, kind) 防回歸 ──────────────────────────────
+
+
+def _sec_positions_two_kinds() -> list[Position]:
+    return [
+        Position(market="sec", stock_no="2330", qty=1, kind="cash"),
+        Position(market="sec", stock_no="2330", qty=3, kind="margin"),
+    ]
+
+
+async def test_close_sec_with_kind_hits_exact_row(tmp_path: Path) -> None:
+    # 同檔資+集保並存:帶 kind 精確鍵到融資列 → 送融資賣(送現股賣會變成賣掉集保部位)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(_sec_positions_two_kinds())
+    req = PositionCloseRequest(market="sec", key="2330", price=590.0, kind="margin")
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    fields = _sent_fields(com.sent[0])
+    assert fields["sBuySell"] == 1 and fields["sFlag"] == 1  # 融資多 → 融資賣
+    assert fields["nQty"] == 3  # 融資列的張數,不是集保列的 1
+
+
+async def test_close_sec_without_kind_blocks_ambiguous_but_allows_unique(tmp_path: Path) -> None:
+    # 舊 body(不帶 kind):多列 = 歧義,fail-safe 阻擋不猜;唯一列則照舊成功(backward compat)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(_sec_positions_two_kinds())
+    req = PositionCloseRequest(market="sec", key="2330", price=590.0)
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.close_position(req)
+    assert ei.value.reason is not None and "請指定種類" in ei.value.reason
+    assert com.sent == []
+    assert "請指定種類" in _audit_lines(client)[-1]["blocked"]
+
+    client.store.set_positions([Position(market="sec", stock_no="2330", qty=1, kind="cash")])
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    assert _sent_fields(com.sent[0])["sFlag"] == 0  # 現股賣
+
+
+async def test_close_inflight_separates_kinds_but_locks_same_kind(tmp_path: Path) -> None:
+    # P0-1 兩面:同檔兩種類的 in-flight 互不阻擋;同一種類第二次仍被 10s「在途」擋
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions(_sec_positions_two_kinds())
+    cash = PositionCloseRequest(market="sec", key="2330", price=590.0, kind="cash")
+    margin = PositionCloseRequest(market="sec", key="2330", price=590.0, kind="margin")
+    assert (await _drive(client, lambda: client.close_position(cash))).ok is True
+    assert (await _drive(client, lambda: client.close_position(margin))).ok is True
+    assert len(com.sent) == 2  # 種類不同 = 兩筆各自的平倉,不互擋
+    with pytest.raises(CapitalGateBlockedError) as ei:
+        await client.close_position(cash)
+    assert ei.value.reason is not None and "在途" in ei.value.reason
+    assert len(com.sent) == 2
+    assert sorted(client._close_inflight) == ["2330:cash", "2330:margin"]
+
+
+def test_balance_chain_keeps_both_kinds_of_same_stock(tmp_path: Path) -> None:
+    # 全鏈:balance 兩列都留(不再 dedupe)→ profit 各自回填 → finalize 兩列並存
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    client._handle_balance(
+        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    )
+    client._handle_balance("3357,T,0,0,0,0,2000,0,0,0,0,2000,0,0,2000,0,0,A123456789,1234567890")
+    client._handle_balance("##")
+    profit_margin = (
+        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
+        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+    )
+    client._handle_profit("000,查詢成功")
+    client._handle_profit(profit_margin)
+    client._handle_profit(profit_margin.replace(",融資,", ",現股,").replace(",150.55,", ",140.25,"))
+    client._handle_profit("##,,,,")
+    assert len(client.store.positions()) == 2
+    m = client.store.position_for("3357", "margin")
+    c = client.store.position_for("3357", "cash")
+    assert m is not None and m.qty == 3 and m.avg_price == 150.55
+    assert c is not None and c.qty == 2 and c.avg_price == 140.25  # 各拿自己種類的均價
+
+
+def test_profit_row_for_dropped_stock_is_silent(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """P1-3 兩段判別:balance 側丟掉的股號(零股不足 1 張)在損益報告仍有列 →
+    靜默(否則每 60s 洗版 warning);真正的種類不符才 warning。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    with caplog.at_level("WARNING"):
+        client._handle_balance(
+            "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+        )
+        client._handle_balance(  # 2330 只有 500 股(零股不足 1 張)→ balance 側丟掉
+            "2330,T,0,0,0,0,500,0,0,0,0,500,0,0,500,0,0,A123456789,1234567890"
+        )
+        client._handle_balance("##")
+        client._handle_profit(
+            "台積電,2330,新台幣,現股,500,1000.00,0.27,468000,464000,12345,980.00,451650,"
+            "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+        )
+        client._handle_profit("##,,,,")
+    assert not [r for r in caplog.records if "種類不符" in r.message]
+    assert client.store.position_for("3357", "margin") is not None  # 本輪照常發布
+
+    caplog.clear()
+    other = _client(FakeCom(), tmp_path / "b")  # 每輪查詢會 reset collector,對照用新 client
+    _mark_ready(other, futures_account=None)
+    with caplog.at_level("WARNING"):  # 對照:股號在但種類對不上 → 照樣 warning
+        other._handle_balance(
+            "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+        )
+        other._handle_balance("##")
+        other._handle_profit(
+            "臺慶科,3357,新台幣,現股,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
+            "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+        )
+        other._handle_profit("##,,,,")
+    assert any("種類不符" in r.message for r in caplog.records)
+    p = other.store.position_for("3357", "margin")
+    assert p is not None and p.avg_price is None  # 種類不符不回填
+
+
 async def test_close_fut_no_position_blocked(tmp_path: Path) -> None:
     com = FakeCom()
     client = _client(com, tmp_path)
