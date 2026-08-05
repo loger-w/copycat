@@ -490,8 +490,8 @@ describe("aggregateBars uv/dv 貫通(futures-allday §4.3 D6)", () => {
       5,
     );
     expect(out).toHaveLength(1);
-    expect(out[0]!.uv).toBe(16);
-    expect(out[0]!.dv).toBe(10);
+    expect(out[0]!.uv).toBe(10 + 5 + 1);
+    expect(out[0]!.dv).toBe(4 + 6 + 2);
   });
 
   it("來源全無 uv/dv → 桶也不設欄(維持 NotRequired 語意,日盤資料 bit-for-bit 不變)", () => {
