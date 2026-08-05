@@ -1,4 +1,16 @@
 
+## 2026-08-05(stock-intraday-autofit-range 沉澱)
+
+- [ ] **autofit 分支的畫面待盤後實看**:本輪改的路徑(無 meta → autofit 域含當日高低)盤中不可達
+  (盤中個股帶 meta 走漲跌停分支),目前以 SC-3 臨界回歸測試(2330 2026-07-30 實例數字)+
+  元件測試(day-high circle 由不畫變畫)代替。盤後開個股頁看任一檔的高低標記即實看。
+  白名單畫面證據:`docs/specs/stock-intraday-autofit-range/screenshots/2026-08-05-intraday-limit-branch-whitelist.png`
+  (3481 群創,**漲跌停分支**,域恰為 [43.05, 52.5] 未被當日高 50.5 撐開;autofit 分支未入鏡)。
+- [ ] **負域 cosmetic 風險(刻意不 clamp)**:對稱域設計下 `dayLow < ref×0.0909`(盤中跌逾 91%)
+  時 yBottom 為負 → 3 點 fallback 刻度印負價位。±10% 制度下不可達、興櫃實務不存在;
+  不 clamp 是因會破壞「域以 ref 為中心」的對稱語意(SC-4)。`ref=0`(無成交且無 metaRef)
+  的另一條負域路徑已修(ref > 0 才併極值)。若日後真出現負刻度,從這裡追。
+
 ## 2026-08-05(capital-position-key-kind 收尾留尾巴)
 
 - [ ] **SC-7 真實環境驗證待補**(群益夜間登入 fail,memory 記「待白天觀察」):下次自然
