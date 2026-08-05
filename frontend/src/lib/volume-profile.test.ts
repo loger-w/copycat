@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { VpCell } from "@/lib/stock-accum";
 import { PAD_Y, plotWidth, X_LABEL_H } from "@/lib/stock-intraday-svg";
+import { tickOf } from "@/lib/stock-tick";
 import { buildVpBars, VP_MAX_W_RATIO } from "@/lib/volume-profile";
 
 const WIDTH = 800;
@@ -74,12 +75,31 @@ describe("buildVpBars", () => {
     expect(bars.map((b) => b.priceMilli)).toEqual([2_390_000, 2_350_000, 2_310_000]);
   });
 
-  it("bar 帶原始總張與價位帶頂端 y", () => {
+  /** 🔴 review A1/A2/B2(design amendment 2026-08-05):價位帶由「向上一個 tick」
+   *  `[p, p + tick)` 改為**以成交價置中** `[p − tick/2, p + tick/2]`。
+   *
+   *  舊語意有兩個症狀:(a) 整組 bar 相對走勢線上偏半檔;(b) 漲停 / 跌停那一檔的帶
+   *  整段落在 y 域外 → clamp 後 dist = 0 → `h` 被 clamp 成 **1px 髮絲**,而鎖停日
+   *  量最大的正是那一檔(§0a 鎖板品質的核心觀察對象)反而看不見。
+   *
+   *  本節下面兩條的舊版斷言(「y = toY(p + tick)」與「最上緣 h === 1」)是
+   *  **事前標記為該變**的行為合約更新,不是把紅的斷言改綠。 */
+  it("bar 帶原始總張;價位帶以成交價置中(y = toY(p + tick/2))", () => {
     const g = geom(2_300_000, 2_400_000);
-    const bars = buildVpBars(cells([[2_350_000, 42]]), g, WIDTH);
+    const p = 2_350_000;
+    const half = tickOf(p) / 2; // 2500 毫元(≥1000 元帶 tick = 5 元)
+    const bars = buildVpBars(cells([[p, 42]]), g, WIDTH);
+    const top = g.toY(p + half);
+    const bottom = g.toY(p - half);
     expect(bars[0]?.total).toBe(42);
-    // 價位帶 [p, p + tickOf(p)) 的頂端
-    expect(bars[0]?.y).toBeCloseTo(g.toY(2_350_000 + 5_000), 6);
+    expect(bars[0]?.y).toBeCloseTo(top, 6);
+    expect(bars[0]?.h).toBeCloseTo((bottom - top) * 0.85, 6);
+    // 成交價的 y 落在 bar 之內 —— 舊語意下 toY(p) 恰好貼在 bar 的下緣**之外**
+    expect(g.toY(p)).toBeGreaterThan(bars[0]!.y);
+    expect(g.toY(p)).toBeLessThan(bars[0]!.y + bars[0]!.h);
+    // R6 的 0.15 縫全由下緣吃掉(`y = top` 是端點 clamp 所必需,見下兩條)→ 中心與
+    // 價線只差半條縫(0.075 × dist),對比舊語意差的是整整半個 tick。
+    expect(bars[0]!.y + bars[0]!.h / 2 - g.toY(p)).toBeCloseTo((bottom - top) * 0.075, 6);
   });
 
   it("退化域(toY 常數)→ dist 0,h clamp 到 1", () => {
@@ -89,11 +109,24 @@ describe("buildVpBars", () => {
     expect(bars[0]?.h).toBe(1);
   });
 
-  it("最上緣檔位的價位帶上界 clamp 進 yDomain(不外溢)", () => {
+  it("最上緣(漲停)檔位:帶的上半 clamp 進域,仍得半帶高(不再是 1px 髮絲)", () => {
     const g = geom(2_300_000, 2_350_000);
-    const bars = buildVpBars(cells([[2_350_000, 5]]), g, WIDTH);
-    expect(bars[0]?.y).toBeCloseTo(g.toY(2_350_000), 6);
-    expect(bars[0]?.h).toBe(1); // dist = 0 → clamp
+    const p = 2_350_000; // = yTop
+    const halfBand = g.toY(p - tickOf(p) / 2) - g.toY(p);
+    const bars = buildVpBars(cells([[p, 5]]), g, WIDTH);
+    expect(bars[0]?.y).toBeCloseTo(g.toY(p), 6); // 不外溢畫布
+    expect(bars[0]?.h).toBeCloseTo(halfBand * 0.85, 6);
+    expect(bars[0]!.h).toBeGreaterThan(1);
+  });
+
+  it("最下緣(跌停)檔位:帶的下半 clamp 進域,同樣得半帶高", () => {
+    const g = geom(2_300_000, 2_350_000);
+    const p = 2_300_000; // = yBottom
+    const halfBand = g.toY(p) - g.toY(p + tickOf(p) / 2);
+    const bars = buildVpBars(cells([[p, 5]]), g, WIDTH);
+    expect(bars[0]?.y).toBeCloseTo(g.toY(p + tickOf(p) / 2), 6);
+    expect(bars[0]?.h).toBeCloseTo(halfBand * 0.85, 6);
+    expect(bars[0]!.y + bars[0]!.h).toBeLessThanOrEqual(g.toY(p) + 1e-9);
   });
 
   describe("高密度域的縫(R6)", () => {

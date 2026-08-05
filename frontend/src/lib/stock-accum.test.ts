@@ -242,6 +242,20 @@ describe("vp(價位別成交量 fold,SC-1)", () => {
     expect(acc.vp.get(2_380_000)?.t).toBe(2);
   });
 
+  // 🔴 review A3:窗過濾要用**正向條件的否定**(`!(m >= START && m <= END)`),
+  // 不是 `m < START || m > END`。後者對 NaN 的兩個比較都是 false → 壞掉的時間戳
+  // 整筆漏進 vp,而畫面上只是多一根對不上任何分鐘的長條(說明列三數和與 VP 總張
+  // 靜默岔開)。`windowedEntries` / `sideSummary` 用的是 filter 的正向式,天然沒這問題。
+  it("分鐘鍵解不出(NaN)的 tick 不入 vp", () => {
+    let acc = fromSnapshot({
+      ...SNAP,
+      ticks: [{ t: "xx:yy:00.000", p: 2_380_000, q: 9, side: "outer" }],
+    });
+    expect(acc.vp.size).toBe(0);
+    acc = applyTick(acc, tick({ t: "xx:yy:00.000", p: 2_380_000, q: 9, seq: 4 }));
+    expect(acc.vp.size).toBe(0);
+  });
+
   it("side 拆分:outer/inner 各自進 o/i,其餘只進 t", () => {
     const acc = fromSnapshot({
       ...SNAP,
@@ -274,5 +288,34 @@ describe("vp(價位別成交量 fold,SC-1)", () => {
     const vpTotal = [...acc.vp.values()].reduce((sum, c) => sum + c.t, 0);
     expect(vpTotal).toBe(s.outer + s.inner + s.unch);
     expect(vpTotal).toBe(23); // 窗內 10 + 4 + 6 + 3;窗外 50 / 90 皆不計
+  });
+
+  // 🟢 review B1:上一條的「VP 總張 = 說明列三數和」只在 **applyTick 路徑**(前端自己
+  // 從頭累起)恆成立。`fromSnapshot` 路徑不成立 —— 後端 tick deque 上限 20,000
+  // (`stock_state.py::_TICKS_MAXLEN`),超界時 snapshot 的 `minutes` 仍是**完整日聚合**
+  // 而 `ticks` 只剩尾段,VP 會靜默缺早盤那一角。
+  //
+  // 這條是 **characterization**:把「兩數會岔開」釘成已知且刻意接受的行為(design
+  // Known Risks;零後端改動拍板),而不是宣稱它相等。真要修是後端補一份價位直方圖,
+  // 屆時這條會紅 —— 那正是它該提醒的時機。
+  it("fromSnapshot 的 20k 截斷簽名:vp 總張 < 說明列三數和(B1 characterization)", () => {
+    const acc = fromSnapshot({
+      ...SNAP,
+      // 完整日聚合(後端 minutes 不受 tick deque 影響)
+      minutes: {
+        "540": { c: 2_380_000, v: 500, i: 200, o: 300, u: 0 }, // 早盤,對應 tick 已被砍頭
+        "541": { c: 2_385_000, v: 30, i: 10, o: 20, u: 0 },
+      },
+      // deque 砍頭後只剩尾段的兩筆
+      ticks: [
+        { t: "09:01:10.000", p: 2_385_000, q: 20, side: "outer" },
+        { t: "09:01:20.000", p: 2_385_000, q: 10, side: "inner" },
+      ],
+    });
+    const vpTotal = [...acc.vp.values()].reduce((sum, c) => sum + c.t, 0);
+    const s = sideSummary(acc.minutes);
+    expect(vpTotal).toBe(30); // fromSnapshot 路徑:vp 與**手上這批 ticks** 合計一致
+    expect(s.outer + s.inner + s.unch).toBe(530);
+    expect(vpTotal).toBeLessThan(s.outer + s.inner + s.unch); // ← 截斷簽名
   });
 });
