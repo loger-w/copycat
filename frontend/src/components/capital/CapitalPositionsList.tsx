@@ -2,9 +2,10 @@ import { useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 import { useCapitalPositions, useCapitalStatus, useClosePosition } from "@/hooks/useCapital";
+import { closeBodyOf, kindOf, KIND_TEXT } from "@/lib/close-order";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
-import type { CapitalMarket, CapitalPosition, PositionKind } from "@/types";
+import type { CapitalMarket, CapitalPosition } from "@/types";
 
 interface CapitalPositionsListProps {
   market: CapitalMarket;
@@ -13,19 +14,6 @@ interface CapitalPositionsListProps {
 }
 
 const GRID = "grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-baseline gap-x-3";
-
-/** sec 庫存種類標籤(列內小字 / 確認彈窗全稱);fut 不顯示(OI 列無種類)。 */
-const KIND_TEXT: Record<PositionKind, { short: string; full: string }> = {
-  cash: { short: "現", full: "現股" },
-  margin: { short: "資", full: "融資" },
-  short: { short: "券", full: "融券" },
-};
-
-/** 後端 Position.kind 值域比 PositionKind 寬(daytrade_sell)— 認不得就不標也不送 kind
- *  (退回「同檔唯一列」語意;真有多列後端會擋,不會猜錯種類)。 */
-function kindOf(p: CapitalPosition): PositionKind | null {
-  return p.kind in KIND_TEXT ? (p.kind as PositionKind) : null;
-}
 
 /** 部位列鍵 = 後端 store 的複合鍵:同檔資+集保並存時兩列才分得開。 */
 function rowKeyOf(p: CapitalPosition): string {
@@ -56,15 +44,9 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
 
   function confirm(): void {
     if (closing === undefined || estimate === null) return;
-    // kind 只在證券送:fut 的 OI 列沒有庫存種類這一維,硬送 "cash" 會讓每筆期貨平倉的
-    // 審計多一個看起來像「現股」的欄位(後端也只在 sec 分支讀它)
-    closePosition.mutate({
-      market,
-      key: closing.stock_no,
-      price: estimate,
-      qty: Math.abs(closing.qty),
-      ...(closingKind !== null ? { kind: closingKind } : {}),
-    });
+    // body 由共用 helper 產(閃電梯一鍵平倉同一支):kind 只在證券送、key 用 stock_no
+    // 而非 UI 的複合鍵 rowKeyOf,兩處若各留一份組裝法會靜默漂移
+    closePosition.mutate(closeBodyOf(closing, estimate));
     setClosingKey(null);
   }
 
