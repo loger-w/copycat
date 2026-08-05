@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "verdict": "2 P0 / 7 P1 / 6 P2 — 15 條全 accepted",
+  "dispositions": {
+    "R1(P0)": "params 逐鍵型別+值域表入 normalize_rule;hub 評估迴圈改 per-rule try/except",
+    "R2(P0)": "三平行 dict 收成單一 _RuleSlot dict + 原子替換;熱路徑自洽快照不變式明文",
+    "R3": "basis cache 恢復 (basis_date, cdp) 形;分發驗日別;fallback 清 basis cache",
+    "R4": "_staged_date 保留 + 三動作明文;drop_code pop 雙 cache",
+    "R5": "全部建 detector 處帶 now_fn=self._now_fn",
+    "R6": "normalize_rule 排除自身;PUT 以 path id 為準、body id 不一致 400",
+    "R7": "檔案表補 StockPage.tsx;消費點清單更正(filterKinds 唯一消費 = SignalRail:95)",
+    "R8": "補『既有測試遷移』節逐檔列;test_signal_routes.py 為既有檔;新 payload key set 契約列明",
+    "R9": "壞檔語意改 _boot 降級(hub None + routes 503),驗收對齊",
+    "R10": "RuleError 值域 {INVALID_RULE, RULE_NOT_FOUND}",
+    "R11": "MAX_RULES=30",
+    "R12": "id = r-<epoch>-<hub 單調計數> + POST id 唯一斷言;save 失敗拋且記憶體不先更新",
+    "R13": "升級當日單日雙列入 Known Risks;兩處 id 格式註解列待改",
+    "R14": "(a) 關規則後當日歷史列仍顯示記為 🔴 行為改動(帶規則名可辨識;弱化記 next-time);(b) format_signal_text 附規則名",
+    "R15": "邊界逐條回應 8 edge;load_rules 三態(缺檔 None/空陣列 []/壞檔 raise)"
+  },
+  "exit": "有 accepted P0 → design v2 後補一輪限縮 review(只審 changelog 段)"
+}
