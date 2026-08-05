@@ -172,6 +172,31 @@ class _FakeBars:
         return list(self.bars)
 
 
+class _GatedBars(_FakeBars):
+    """掛上 `gate` 後**下一次**呼叫會卡在閘門上 —— 用來造「in-flight job 跨過換日」。
+
+    基準 worker 是序列的,唯一能讓一則舊 job 在 promote **之後**才 settle 的方法,
+    就是把它卡在日 K 那個 await 上。
+    """
+
+    def __init__(self, bars: list[DailyBar] | None = None) -> None:
+        super().__init__(bars)
+        self.gate: asyncio.Event | None = None
+        self.entered = asyncio.Event()
+
+    async def __call__(self, code: str, n: int = 25) -> list[DailyBar]:
+        gate = self.gate
+        if gate is not None:
+            self.gate = None
+            self.entered.set()
+            await gate.wait()
+        return await super().__call__(code, n)
+
+
+def _boom_cdp(*_args: int) -> dict[str, int]:
+    raise RuntimeError("compute_cdp 壞了")
+
+
 class _Harness:
     def __init__(
         self,
@@ -847,6 +872,165 @@ class TestBasisWorker:
             await h.settle()
             assert [m["levels"] for m in h.published] == [["nh"]], "沿用了昨天的 CDP 基準"
             assert h.published[0]["price"] == 125_500
+        finally:
+            await h.hub.close()
+
+    async def test_staged_job_crash_keeps_today_basis(
+        self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A1:stage1(**次日**)的 job 崩掉,不得動到當日正在用的基準。
+
+        worker 的 outer except 繞過 cache 直摸 detector 時,一則盤前預抓的例外會把
+        今天剩下的 CDP 全部停掉;cache 還寫著正確值 → 之後任何 `_distribute` 都不會
+        自癒,而畫面只顯示「這條規則今天都沒發」,零錯誤訊號。
+        """
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+
+            monkeypatch.setattr(hub_mod, "compute_cdp", _boom_cdp)
+            h.hub.on_rollover_pending(_NEXT)
+            await h.settle()
+
+            assert _cache(h) == (_DATE, 80_000)  # 當日快照未被暫存區的例外動到
+            # 崩掉的 staged job 落點必須是暫存區(日別符),不是當日 detector
+            assert h.hub._staged_cache["2330"] is None
+            h.cross_nh(_state())
+            await h.settle()
+            assert [m["levels"] for m in h.published] == [["nh"]], "當日 CDP 被次日的例外停掉了"
+        finally:
+            await h.hub.close()
+
+    async def test_stale_job_crash_does_not_clobber_promoted_basis(
+        self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A1:換日前排下的當日 job 在 promote **之後**才崩,不得洗掉剛換上的基準。
+
+        成功路徑早有日別尺(R18),例外路徑沒有 —— 同一個劇本只要 worker 這一則
+        剛好炸掉,結果就從「丟棄」變成「整天沒有 CDP」。
+        """
+        gated = _GatedBars([_BAR_A])
+        h = _Harness(tmp_path, clock, gated)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            gated.bars = [_BAR_A, _BAR_B]
+            h.hub.on_rollover_pending(_NEXT)
+            await h.settle()  # 暫存區備妥次日基準
+
+            gate = asyncio.Event()
+            gated.gate = gate
+            # 換日前排下的當日 job(自選異動 / server 剛啟動),此刻卡在日 K 上
+            h.hub.request_basis(["2330"])
+            await asyncio.wait_for(gated.entered.wait(), 2)
+            monkeypatch.setattr(hub_mod, "compute_cdp", _boom_cdp)
+
+            h.date = _NEXT
+            clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+            h.hub.on_rollover()
+            assert _cache(h) == (_NEXT, 95_000)
+
+            gate.set()  # 舊 job 這時才崩
+            await h.settle()
+
+            assert _cache(h) == (_NEXT, 95_000), "過期 job 的例外洗掉了剛 promote 的快照"
+            state = _state()
+            h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
+            h.hub.on_tick("2330", _tick(95_500, cum=2, trade_date=_NEXT), state)
+            await h.settle()
+            assert [m["levels"] for m in h.published] == [["nh"]], "當日基準被過期的例外洗掉"
+        finally:
+            await h.hub.close()
+
+    async def test_stale_job_result_does_not_overwrite_promoted_basis(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """B3:同劇本但舊 job **成功**收工 —— 舊日別的結果一樣不得覆蓋 promote 的快照。
+
+        成功路徑的日別尺(R18)現在改在 `_daily_bars` 之前也判一次,這條是它的迴歸鎖:
+        判斷提前之後,「排隊時還新鮮、收工時已過期」這一格仍必須丟棄。
+        """
+        gated = _GatedBars([_BAR_A])
+        h = _Harness(tmp_path, clock, gated)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            gated.bars = [_BAR_A, _BAR_B]
+            h.hub.on_rollover_pending(_NEXT)
+            await h.settle()
+
+            gate = asyncio.Event()
+            gated.gate = gate
+            h.hub.request_basis(["2330"])
+            await asyncio.wait_for(gated.entered.wait(), 2)
+
+            h.date = _NEXT
+            clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+            h.hub.on_rollover()
+            gated.bars = [_BAR_A]  # 舊 job 拿到的是舊資料(nh = 80_000)
+            gate.set()
+            await h.settle()
+
+            assert _cache(h) == (_NEXT, 95_000), "過期 job 的結果覆蓋了 promote 的快照"
+        finally:
+            await h.hub.close()
+
+    async def test_code_added_between_stages_gets_next_day_basis(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """A2:stage1 之後才加進自選的檔,也要進暫存區 —— 否則 promote 時它整批不在。
+
+        失效樣態:那一檔隔天一整天沒有 CDP 基準(當日 job 會被日別尺丟棄),
+        而畫面只會顯示「這檔今天沒發 CDP」。
+        """
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.bars.bars = [_BAR_A, _BAR_B]
+            h.hub.on_rollover_pending(_NEXT)
+            await h.settle()
+
+            h.hub.on_watchlist(["2330", "2317"])  # 盤前(stage1 之後)才加的自選
+            await h.settle()
+            assert h.hub._staged_cache.get("2317") is not None, "新加的檔沒有進暫存區"
+
+            h.date = _NEXT
+            clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+            h.hub.on_rollover()
+            assert _cache(h, "2317") == (_NEXT, 95_000)
+        finally:
+            await h.hub.close()
+
+    async def test_promote_refetches_codes_missing_from_staged(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """A2:promote 之後要對「自選有、快照沒有」的差集補抓。
+
+        stage1 排的 job 還沒 settle 換日就到了(快路徑)時,那些檔不在暫存區,
+        promote 整批換上去等於把它們的基準**刪掉**,而且不會自癒。
+        """
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.bars.bars = [_BAR_A, _BAR_B]
+            h.hub.on_rollover_pending(_NEXT)
+            await h.settle()
+
+            h.hub.on_watchlist(["2330", "2317"])  # job 還在佇列裡,換日就到了
+            h.date = _NEXT
+            clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+            h.hub.on_rollover()
+            await h.settle()
+
+            assert _cache(h, "2317") == (_NEXT, 95_000), "promote 漏掉的檔整天沒有基準"
         finally:
             await h.hub.close()
 
