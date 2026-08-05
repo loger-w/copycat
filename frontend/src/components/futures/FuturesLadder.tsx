@@ -193,11 +193,31 @@ export function FuturesLadder({
   }
 
   // 平倉是「開新反向倉位」,暴露增加 → 一律過確認彈窗(與 CapitalPositionsList 同規)
+  //
+  // 回饋走 mutateAsync + then/catch → hint,與同檔 clickPrice 同型(review LF-1):
+  // 靜默失敗時「部位還在」與「送出去被拒」在畫面上長得一樣。
+  // **逐筆 hint 不彙總**:多筆時最後一則回應覆蓋前一則 —— 與 clickPrice 連發點價同規,
+  // 不為此多養一份彙總狀態(真相源是委託 / 部位列表,hint 只是即時回饋)。
+  // **不動武裝狀態**:平倉不是武裝路徑(要過彈窗),失敗不計入 failStreak。
   function confirmClose(): void {
     setCloseOpen(false);
     for (const t of closeTargets) {
       if (t.est === null) continue; // 型別收斂;closeDisabled 已擋整批
-      closePosition.mutate(closeBodyOf(t.pos, t.est));
+      const body = closeBodyOf(t.pos, t.est);
+      closePosition
+        .mutateAsync(body)
+        .then((r) => {
+          if (!aliveRef.current) return; // review B8
+          if (r.ok) {
+            showHint(`已送平倉 ${body.key} × ${body.qty} 口`);
+          } else {
+            showHint(r.message !== "" ? r.message : "平倉失敗");
+          }
+        })
+        .catch((err: unknown) => {
+          if (!aliveRef.current) return; // review B8
+          showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
+        });
     }
   }
 
