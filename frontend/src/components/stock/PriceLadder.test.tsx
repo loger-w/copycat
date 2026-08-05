@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PriceLadder } from "@/components/stock/PriceLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
 import { ARM_IDLE_MS } from "@/lib/flash-arm";
-import type { CapitalOrder } from "@/types";
+import type { CapitalOrder, CapitalPosition } from "@/types";
 
 const META = {
   name: "測試",
@@ -78,6 +78,21 @@ function capitalOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
     error_msg: null,
     actionable: true,
     raw: "",
+    ...overrides,
+  };
+}
+
+function capitalPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+  return {
+    market: "sec",
+    stock_no: "2330",
+    qty: 2,
+    name: "台積電",
+    avg_price: 100,
+    kind: "cash",
+    pnl_base: null,
+    pnl_base_price: null,
+    pnl_cost: null,
     ...overrides,
   };
 }
@@ -445,6 +460,181 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
       { seq_no: "001", market: "sec" },
       { seq_no: "002", market: "sec" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 部位列 + 未實現損益 + 含成本打平價(SC-1 / SC-4 / SC-5 / SC-6 / SC-7)
+// ---------------------------------------------------------------------------
+
+function renderWith(
+  positions: CapitalPosition[],
+  last: typeof LAST | null = LAST,
+  code = "2330",
+) {
+  mockCapitalFetch({ "/api/capital/positions": () => json({ positions }) });
+  return render(
+    <QueryClientProvider client={qc}>
+      <PriceLadder code={code} book={BOOK} last={last} meta={META} />
+    </QueryClientProvider>,
+  );
+}
+
+describe("PriceLadder 部位條(SC-1 / SC-6 / SC-7)", () => {
+  it("多方現股:第一行 kind + 量 + 均價、右緣未實現損益,第二行打平價", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("現股 2張 @100")).toBeTruthy();
+    const pnl = within(bar).getByText("+3,284");
+    expect(pnl.className).toContain("text-bull");
+    expect(within(bar).getByText("打平 100.5")).toBeTruthy();
+  });
+
+  it("空手 → 部位條整段不渲染(非本檔 / 非 sec / qty 0 皆濾掉)", async () => {
+    mockCapitalFetch({
+      "/api/capital/positions": () =>
+        json({
+          positions: [
+            capitalPosition({ stock_no: "2317", name: "鴻海" }),
+            capitalPosition({ market: "fut", stock_no: "TXFH6", name: "台指期" }),
+            capitalPosition({ qty: 0, kind: "margin" }),
+          ],
+        }),
+    });
+    const { rerender } = render(ladder("2330"));
+    // 「資料已到」的證據:同一份 positions 換到 2317 就看得見部位條
+    rerender(ladder("2317"));
+    expect(await screen.findByTestId("ladder-position-bar")).toBeTruthy();
+    rerender(ladder("2330"));
+    expect(screen.queryByTestId("ladder-position-bar")).toBeNull();
+  });
+
+  it("多 kind → 逐 kind 一列,cash 在 short 之前(SC-6)", async () => {
+    renderWith(
+      [capitalPosition({ kind: "short", qty: -2 }), capitalPosition()],
+      { ...LAST, p: 102_000 },
+    );
+    const bar = await screen.findByTestId("ladder-position-bar");
+    const rows = within(bar).getAllByTestId("ladder-position-row");
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.textContent).toContain("現股 2張 @100");
+    expect(rows[1]!.textContent).toContain("融券 空2張 @100");
+  });
+
+  it("空方列:量帶「空」、負 pnl 用 text-bear、打平往下 snap", async () => {
+    renderWith([capitalPosition({ kind: "short", qty: -2 })], { ...LAST, p: 103_000 });
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("融券 空2張 @100")).toBeTruthy();
+    expect(within(bar).getByText("-6,864").className).toContain("text-bear");
+    expect(within(bar).getByText("打平 99.5")).toBeTruthy();
+  });
+
+  it("均價缺值 → 量照顯示、均價與打平皆「—」、不畫任何標記(SC-7)", async () => {
+    renderWith([capitalPosition({ avg_price: null })]);
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("現股 2張 @—")).toBeTruthy();
+    expect(within(bar).getByText("打平 —")).toBeTruthy();
+    expect(within(bar).getByText("—")).toBeTruthy(); // pnl 亦缺
+    expect(screen.queryAllByTestId("ladder-be-mark").length).toBe(0);
+    expect(screen.queryAllByTestId("ladder-avg-mark").length).toBe(0);
+  });
+
+  it("現價缺值 → pnl「—」,打平照算照畫(D15)", async () => {
+    renderWith([capitalPosition()], null);
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("打平 100.5")).toBeTruthy();
+    expect(within(bar).getByText("—")).toBeTruthy();
+    expect(screen.getByTestId("ladder-be-mark")).toBeTruthy();
+  });
+});
+
+describe("PriceLadder 梯內標記(SC-4)", () => {
+  it("打平 / 均價標記落在正確價位列,title 帶 kind", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const be = await screen.findByTestId("ladder-be-mark");
+    expect(be.closest("[data-price]")!.getAttribute("data-price")).toBe("100500");
+    expect(be.getAttribute("title")).toBe("打平(現股)");
+    const avg = screen.getByTestId("ladder-avg-mark");
+    expect(avg.closest("[data-price]")!.getAttribute("data-price")).toBe("100000");
+    expect(avg.getAttribute("title")).toBe("均價(現股)");
+  });
+
+  it("反灰列上的標記不跟著淡化(自帶 opacity-100)", async () => {
+    renderWith([capitalPosition({ avg_price: 106 })]);
+    const avg = await screen.findByTestId("ladder-avg-mark");
+    expect(avg.className).toContain("opacity-100");
+    expect(avg.className).not.toContain("opacity-35");
+    const row = avg.closest("[data-price]") as HTMLElement;
+    expect(row.getAttribute("data-price")).toBe("106000");
+    expect(row.className).not.toContain("opacity-35");
+    // 同列的內容欄確實反灰 —— 標記不淡化才有意義
+    expect(screen.getByLabelText("買 106").parentElement!.className).toContain("opacity-35");
+  });
+
+  it("打平價超出梯域(均價貼漲停)→ 不畫標記,部位條數字照顯示(IS-3)", async () => {
+    renderWith([capitalPosition({ avg_price: 110 })]);
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("打平 110.5")).toBeTruthy();
+    expect(screen.queryAllByTestId("ladder-be-mark").length).toBe(0);
+    expect(screen.getByTestId("ladder-avg-mark")).toBeTruthy(); // 均價本身仍在梯上
+  });
+});
+
+describe("PriceLadder 手續費折數(SC-5 / D1)", () => {
+  it("初值取 localStorage,缺值退回預設 1.8", () => {
+    mockCapitalFetch();
+    render(ladder());
+    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("1.8");
+    cleanup();
+    window.localStorage.setItem("copycat-fee-discount", "2.5");
+    mockCapitalFetch();
+    render(ladder());
+    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("2.5");
+  });
+
+  it("改折數 → 重算 pnl 並以字面 key 寫入 localStorage(IS-10)", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("+3,284")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "0.5" } });
+    expect(window.localStorage.getItem("copycat-fee-discount")).toBe("0.5");
+    expect(
+      within(screen.getByTestId("ladder-position-bar")).getByText("+3,359"),
+    ).toBeTruthy();
+  });
+
+  it("非法折數(0 / -1 / 11)不寫入且計算沿用最後一次合法值(IS-6)", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    await screen.findByTestId("ladder-position-bar");
+    const input = screen.getByLabelText("手續費折數") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "0.5" } });
+    for (const bad of ["0", "-1", "11"]) {
+      fireEvent.change(input, { target: { value: bad } });
+      expect(input.value).toBe(bad); // 受控輸入照顯示原始值,不吃掉使用者的按鍵
+      expect(window.localStorage.getItem("copycat-fee-discount")).toBe("0.5");
+      expect(
+        within(screen.getByTestId("ladder-position-bar")).getByText("+3,359"),
+      ).toBeTruthy();
+    }
+  });
+
+  it("空手也能設定折數 —— 輸入框恆常渲染(D1)", () => {
+    mockCapitalFetch();
+    render(ladder());
+    fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "3" } });
+    expect(window.localStorage.getItem("copycat-fee-discount")).toBe("3");
+    expect(screen.queryByTestId("ladder-position-bar")).toBeNull();
+  });
+
+  it("改折數不影響張數輸入,且折數框帶可見「折」後綴(IS-8)", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const qty = screen.getByLabelText("張數") as HTMLInputElement;
+    fireEvent.change(qty, { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("手續費折數"), { target: { value: "3" } });
+    expect(qty.value).toBe("7");
+    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("3");
+    expect(screen.getByText("折")).toBeTruthy();
   });
 });
 
