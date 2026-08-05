@@ -12,7 +12,7 @@ from datetime import date as _date
 from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -48,6 +48,7 @@ from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.server.watchlist_service import WatchlistService
+from copycat.signal_rules import Rule, RuleError
 from copycat.signals_config import load_signals_config
 from copycat.stock_watchlist import (
     Group,
@@ -138,6 +139,31 @@ class SignalsEnabledBody(BaseModel):
     #: 打錯的值就會被靜默接受成「開啟」。四鍵與型別一律由 `hub.set_enabled` 驗
     #: (ValueError → 400 INVALID_SIGNALS_ENABLED),驗證規則單一定義在 hub。
     enabled: dict[str, object]
+
+
+class RuleBody(BaseModel):
+    """訊號規則的**形狀**層;語意(值域 / 唯一名 / levels / kind)單一定義在 `normalize_rule`。
+
+    每個欄位都宣告成 `object` 且給 None 預設,兩個理由都是為了守住錯誤契約:
+    宣告成 `bool`/`int` 會讓 pydantic 把 "yes"/"3" 寬鬆轉型、把打錯的值靜默收下;
+    宣告成必填則缺欄回 422 + list 形 detail,不符全站 `{"detail": {"error": code}}`
+    ——缺欄要走 400 INVALID_RULE(signal-rules R10)。
+    """
+
+    #: 只有 id 是真的 `str | None`:PUT 拿它跟 path 比對(不一致 → 400,R6);
+    #: POST 不看(id 由 hub 配)。
+    id: str | None = None
+    name: object = None
+    kind: object = None
+    enabled: object = None
+    notify_discord: object = None
+    cooldown_secs: object = None
+    params: object = None
+    cdp_levels: object = None
+
+    def payload(self) -> dict:
+        """送進 hub 的規則欄位(去掉 id — 那由 route 的 path / hub 決定)。"""
+        return self.model_dump(exclude={"id"})
 
 
 def _tc4_port() -> str:
@@ -719,6 +745,17 @@ def create_app(
     async def _watchlist_error(request: Request, exc: WatchlistError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": {"error": str(exc)}})
 
+    @app.exception_handler(RuleError)
+    async def _rule_error(request: Request, exc: RuleError) -> JSONResponse:
+        """`RuleError` 的值域只有兩碼(signal_rules R10):找不到 → 404,其餘 → 400。
+
+        未知碼收斂成 400 而非 500:新增碼忘了在這裡對照時,前端至少拿得到 `detail.error`
+        原文,而不是被全域 handler 轉成 502 TC4_DOWN(那條訊息與真因完全無關)。
+        """
+        code = str(exc)
+        status = 404 if code == "RULE_NOT_FOUND" else 400
+        return JSONResponse(status_code=status, content={"detail": {"error": code}})
+
     def _stock(request: Request) -> StockEngine:
         stock: StockEngine | None = request.app.state.stock
         if stock is None:
@@ -843,6 +880,47 @@ def create_app(
                 status_code=400, detail={"error": "INVALID_SIGNALS_ENABLED"}
             ) from None
         return {"enabled": hub.enabled()}
+
+    # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
+
+    async def _save_rule(hub: SignalHub, body: RuleBody, rule_id: str | None) -> Rule:
+        """POST / PUT 的共同落點。**OSError 必須在這裡轉 500**:全域 handler 會把它
+        收成 502 TC4_DOWN,而落檔失敗跟達錢 4 一點關係都沒有(排查會被帶到反方向)。
+        """
+        try:
+            return await hub.upsert_rule(body.payload(), rule_id=rule_id)
+        except OSError:
+            logger.exception("訊號規則落檔失敗(記憶體未變更):%s", rule_id)
+            raise HTTPException(status_code=500, detail={"error": "RULE_SAVE_FAILED"}) from None
+
+    @app.get("/api/stock/signals/rules")
+    async def stock_signals_rules(request: Request) -> dict:
+        return {"rules": _signals(request).rules()}
+
+    @app.post("/api/stock/signals/rules", status_code=201)
+    async def stock_signals_rules_post(request: Request, body: RuleBody) -> Rule:
+        """新增。body 的 `id` 一律忽略 —— id 由 hub 的單調計數配(R12),客戶端指定
+        會讓已存 jsonl 的舊 id 被重用,前端去重就把新規則的訊號吃掉。"""
+        return await _save_rule(_signals(request), body, None)
+
+    @app.put("/api/stock/signals/rules/{rule_id}")
+    async def stock_signals_rules_put(request: Request, rule_id: str, body: RuleBody) -> Rule:
+        """編輯。**path 的 id 為準**;body 帶了不一致的 id → 400(R6):兩者不一致時
+        猜哪一個都可能改到使用者沒看著的那條規則。"""
+        hub = _signals(request)
+        if body.id is not None and body.id != rule_id:
+            raise HTTPException(status_code=400, detail={"error": "INVALID_RULE"})
+        return await _save_rule(hub, body, rule_id)
+
+    @app.delete("/api/stock/signals/rules/{rule_id}", status_code=204)
+    async def stock_signals_rules_delete(request: Request, rule_id: str) -> Response:
+        hub = _signals(request)
+        try:
+            await hub.delete_rule(rule_id)
+        except OSError:
+            logger.exception("訊號規則落檔失敗(記憶體未變更):%s", rule_id)
+            raise HTTPException(status_code=500, detail={"error": "RULE_SAVE_FAILED"}) from None
+        return Response(status_code=204)
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:
