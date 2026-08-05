@@ -63,6 +63,12 @@ beforeEach(() => {
       if (String(url).includes("/api/stock/signals/rules")) {
         return new Response(JSON.stringify({ rules: [] }));
       }
+      // 群組檢視 batch(group-grid SC-4)。預設檢視是單檔 → 這支多半不會被打到,
+      // 但 stub 少一條分支的代價是掉進 404 → query error,而群組檢視的錯誤態
+      // 恰好也是「無資料」,測試會綠得毫無意義。
+      if (String(url).includes("/api/stock/group-state")) {
+        return new Response(JSON.stringify({ states: {} }));
+      }
       return new Response(JSON.stringify({}), { status: 404 });
     }),
   );
@@ -554,5 +560,120 @@ describe("StockPage 訊號規則(signal-rules SC-7)", () => {
     fireEvent.click(screen.getByRole("button", { name: "管理訊號規則" }));
     expect(cls()).toContain("flex");
     expect(within(screen.getByTestId("signal-rules-dialog")).getByText("我的爆量")).toBeTruthy();
+  });
+});
+
+// 🟢 group-grid SC-3:個股頁新增「單檔｜群組」檢視切換。
+// pill 掛在 main 頂層、`code === null` 與 `accum === null` 兩個條件分支**之外**(design R6)
+// —— 未選股 / 主圖 snapshot 還沒回來時,群組檢視仍要可達。
+describe("StockPage 群組檢視(group-grid SC-3)", () => {
+  const GROUP_WL = {
+    codes: ["2330", "2317"],
+    groups: [{ name: "半導體", codes: ["2330", "2317"] }],
+  };
+
+  function mockGroupApi(): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/stock/watchlist")) {
+          return new Response(JSON.stringify(GROUP_WL));
+        }
+        if (String(url).includes("/api/stock/group-state")) {
+          return new Response(
+            JSON.stringify({
+              states: {
+                "2330": {
+                  minutes: { "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } },
+                  meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: 1 },
+                  no_data: false,
+                  backfilling: false,
+                },
+                "2317": {
+                  minutes: {},
+                  meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 1 },
+                  no_data: true,
+                  backfilling: false,
+                },
+              },
+            }),
+          );
+        }
+        if (String(url).includes("/api/stock/names")) {
+          return new Response(JSON.stringify({ names: [], count: 0 }));
+        }
+        if (String(url).includes("/api/stock/bars")) {
+          return new Response(JSON.stringify({ bars: [] }));
+        }
+        if (String(url).includes("/api/stock/overlay")) {
+          return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+        }
+        if (String(url).includes("/api/stock/signals/rules")) {
+          return new Response(JSON.stringify({ rules: [] }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+  }
+
+  it("預設單檔檢視:pill 在、群組 grid 不在", () => {
+    mockGroupApi();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    expect(screen.getByRole("button", { name: "單檔" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "群組" })).toBeTruthy();
+    expect(screen.queryByLabelText("選擇群組")).toBeNull();
+    expect(screen.getByTestId("stock-lower-row")).toBeTruthy();
+  });
+
+  it("切到群組 → header / 圖表 / 下半列讓位給卡片 grid;訊號欄與自選欄不動", async () => {
+    mockGroupApi();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+    expect(screen.queryByTestId("stock-lower-row")).toBeNull();
+    expect(screen.queryByTestId("page-quote")).toBeNull();
+    expect(screen.getByTestId("signal-rail")).toBeTruthy();
+    expect(screen.getByLabelText("自選清單")).toBeTruthy();
+  });
+
+  // R6 鎖:pill 若掛在 `code === null` 分支內,未選股時就永遠切不到群組檢視
+  it("未選股(code=null)仍切得到群組檢視", async () => {
+    mockGroupApi();
+    wrap(<StockPage code={null} onSelect={vi.fn()} stream={stream({ accum: null })} />);
+    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+    expect(screen.queryByText(/從自選清單選擇/)).toBeNull();
+  });
+
+  // R6 鎖的另一半:主圖 snapshot 還沒回來(accum === null)時也不可把群組檢視關在門外
+  it("主圖 snapshot 未到(accum=null)仍切得到群組檢視", async () => {
+    mockGroupApi();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream({ accum: null })} />);
+    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+    expect(screen.queryByText("載入中…")).toBeNull();
+  });
+
+  it("點卡片 → onSelect 該股 + 自動切回單檔檢視", async () => {
+    mockGroupApi();
+    const onSelect = vi.fn();
+    wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
+    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    const card = await screen.findByTestId("group-card-2317");
+    fireEvent.click(card);
+    expect(onSelect).toHaveBeenCalledWith("2317");
+    await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
+    expect(screen.queryByLabelText("選擇群組")).toBeNull();
+  });
+
+  it("檢視選擇存進 localStorage,重掛後還原", async () => {
+    mockGroupApi();
+    const { unmount } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
+    unmount();
+    mockGroupApi();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
   });
 });
