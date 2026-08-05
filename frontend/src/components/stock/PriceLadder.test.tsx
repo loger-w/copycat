@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PriceLadder } from "@/components/stock/PriceLadder";
@@ -233,16 +233,21 @@ describe("PriceLadder(既有顯示行為)", () => {
   });
 });
 
-// characterization:反灰(±5% 外)的淡化落在哪一層。SC-4 的梯內標記必須**不受**
-// 淡化影響(遠離現價的打平標記正是最需要看見的),而 opacity 套在 row 容器上時
-// 子元素無法「反淡」→ 下一步會把 opacity 移到三個 grid 欄。先鎖現況。
+// 反灰(±5% 外)的淡化落在哪一層。SC-4 的梯內標記必須**不受**淡化影響(遠離現價的
+// 打平標記正是最需要看見的),而 opacity 套在 row 容器上時子元素無法「反淡」
+// → 淡化改套三個 grid 欄。這是本輪唯一「該變」的既有斷言(PLAN §3 明列)。
 describe("PriceLadder 反灰列的淡化落點", () => {
-  it("±5% 外的列整條淡化 —— opacity-35 掛在 row 容器上", () => {
+  it("±5% 外的列:三個 grid 欄各自淡化,row 容器不淡化", () => {
     mockCapitalFetch();
     render(ladder());
-    const row = screen.getByLabelText("買 110").closest("div.grid");
+    const buy = screen.getByLabelText("買 110");
+    const sell = screen.getByLabelText("賣 110");
+    const row = buy.closest("div.grid") as HTMLElement;
     expect(row).toBeTruthy();
-    expect(row!.className).toContain("opacity-35");
+    expect(row.className).not.toContain("opacity-35");
+    expect(buy.parentElement!.className).toContain("opacity-35");
+    expect(sell.parentElement!.className).toContain("opacity-35");
+    expect(within(row).getByText("110").className).toContain("opacity-35");
   });
 });
 
