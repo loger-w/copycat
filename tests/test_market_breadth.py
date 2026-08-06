@@ -180,6 +180,36 @@ def test_max_tick_datetime_none_cases() -> None:
     assert max_tick_datetime([{"date": "garbage"}]) is None
 
 
+def test_max_tick_datetime_upper_bound_drops_future_rows() -> None:
+    """越界(遠超本機時鐘)的單一髒 row 不得決定整份快照的時刻(review P1-2)。"""
+    rows = [
+        {"date": "2026-08-06 09:29:30"},
+        {"date": "2026-08-06 09:30:10"},
+        {"date": "2026-08-06 13:30:00"},  # 髒 row:上游偶發回收盤時刻
+    ]
+    bound = _dt.datetime(2026, 8, 6, 9, 40)
+
+    assert max_tick_datetime(rows, upper_bound=bound) == _dt.datetime(2026, 8, 6, 9, 30, 10)
+    # 不給 bound = 舊行為(全收)
+    assert max_tick_datetime(rows) == _dt.datetime(2026, 8, 6, 13, 30)
+
+
+def test_max_tick_datetime_upper_bound_inclusive_and_all_dropped() -> None:
+    """邊界含等值(恰在界上的 row 仍算數);全部越界 → None(呼叫端視同該輪失敗)。"""
+    bound = _dt.datetime(2026, 8, 6, 9, 40)
+
+    assert max_tick_datetime([{"date": "2026-08-06 09:40:00"}], upper_bound=bound) == bound
+    assert max_tick_datetime([{"date": "2026-08-06 13:30:00"}], upper_bound=bound) is None
+
+
+def test_max_tick_datetime_upper_bound_applies_after_taipei_normalisation() -> None:
+    """Z 尾(UTC)先歸一成台北 naive 才比界 —— 否則 8 小時偏移會把正常 row 判成越界。"""
+    rows = [{"date": "2026-08-06T02:23:45Z"}]  # = 台北 10:23:45
+    assert max_tick_datetime(rows, upper_bound=_dt.datetime(2026, 8, 6, 10, 30)) == _dt.datetime(
+        2026, 8, 6, 10, 23, 45
+    )
+
+
 # ---------------------------------------------------------------------------
 # assemble_universe(白名單 → filter_universe 順序)
 # ---------------------------------------------------------------------------

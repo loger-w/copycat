@@ -180,11 +180,13 @@ class TestBreadthRest:
         assert body["counts"] == {"twse": _EXPECTED_TWSE, "tpex": _EXPECTED_TPEX}
         assert body["series"] == [{"t": _KEY, "twse": [1, 1, 0, 0, 0], "tpex": [0, 0, 0, 0, 1]}]
 
-    def test_before_boot_does_not_raise(self, tmp_path: Path) -> None:
-        """create_app 期(lifespan 未進場)直打 —— `app.state.breadth` 根本還不存在。
+    def test_before_boot_returns_loading_shape(self, tmp_path: Path) -> None:
+        """create_app 期(lifespan 未進場 / boot 未完成)直打 —— `app.state.breadth` 還不存在。
 
         沒有 getattr 預設的話這裡是 AttributeError → 全域 handler 轉 502 TC4_DOWN,
-        而那句訊息與真因(啟動窗還沒開)完全無關。
+        而那句訊息與真因(啟動窗還沒開)完全無關。**但也不能回 enabled=false**:
+        breadth 排在 boot 序列最後,開站頭幾秒必然落在這個窗,回「未設定」會讓前端
+        在每次重啟時閃一次「FINMIND_TOKEN 未設定」的假訊息(review P2-1)。
         """
         client = TestClient(
             _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path),
@@ -192,7 +194,14 @@ class TestBreadthRest:
         )
         r = client.get("/api/market/breadth")
         assert r.status_code == 200
-        assert r.json()["enabled"] is False
+        assert r.json() == {
+            "enabled": True,
+            "trade_date": None,
+            "as_of": None,
+            "stale": True,
+            "counts": None,
+            "series": [],
+        }
 
 
 class TestBreadthWebSocket:
@@ -212,6 +221,21 @@ class TestBreadthWebSocket:
                 # 引擎停用 → accept 後即關(`/ws/index` 同處置),不得讓 client 空等
                 with pytest.raises(WebSocketDisconnect):
                     ws.receive_json()
+
+    def test_before_boot_sends_loading_frame_then_closes(self, tmp_path: Path) -> None:
+        """boot 未完成:先送一則載入中 scalar 再關(client 自行退避重連,屆時 boot 已完成)
+        —— 與 REST 同語意,不與「未設定」同形(review P2-1)。"""
+        client = TestClient(
+            _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path),
+            raise_server_exceptions=False,
+        )
+        with client.websocket_connect("/ws/breadth") as ws:
+            first = ws.receive_json()
+            assert first["type"] == "breadth"
+            assert first["counts"] is None
+            assert first["stale"] is True
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
 
 
 class TestFailureIsolation:

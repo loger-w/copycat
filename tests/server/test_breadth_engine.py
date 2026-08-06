@@ -356,6 +356,15 @@ class TestFailureHandling:
         assert engine.state()["counts"] is None
         assert engine._effective_interval() == 10.0
 
+    async def test_backoff_exponent_clamped_against_overflow(self, tmp_path: Path) -> None:
+        """退避指數必須先夾制再取冪:`2 ** 1999` 乘 float 會 OverflowError,而它是在
+        `_poll_loop` 的 `await asyncio.sleep(...)` 那行拋 —— 傘罩包不到,poll task
+        當場死透且面板只是凍住(review P2-2)。"""
+        engine, *_ = _make(tmp_path)
+        engine._fail_streak = 2_000
+
+        assert engine._effective_interval() == 60.0  # backoff_max_secs
+
     async def test_empty_sector_map_is_degraded(self, tmp_path: Path) -> None:
         """對照表空 → 白名單剃光 → 統計全空;degraded 必須拉起 stale 且每輪重試。"""
         info = FakeFetch([])
@@ -420,6 +429,62 @@ class TestMapCache:
         await engine._run_cycle()
 
         assert engine.state()["counts"] == _EXPECTED
+
+    async def test_maps_refetched_on_new_trade_day(self, tmp_path: Path, mono: FakeMono) -> None:
+        """24h TTL 走單調鐘,不隨交易日換 —— 跨日必須重取,否則沿用前一日的處置名單
+        (那份名單每天都變)整個交易日(review P1-3)。"""
+        engine, _snap, inf, disp, clock = _make(tmp_path)
+        await engine._run_cycle()
+        assert (inf.calls, disp.calls) == (1, 1)
+
+        clock.today = _dt.date(2026, 8, 6)
+        clock.now = _dt.datetime(2026, 8, 6, 10, 24)
+        mono.advance(3_600.0)  # 遠短於 24h TTL:光靠單調鐘不會到期
+
+        await engine._run_cycle()
+
+        assert (inf.calls, disp.calls) == (2, 2)
+
+    async def test_map_failure_backs_off_before_retry(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """對照表取數失敗 → 退避 60s 才重試(review P2-4)。
+
+        `TaiwanStockInfo` 是這條路上最重的 endpoint,以 poll 節奏(10s)重打壞掉的
+        上游只會加速燒配額,而配額用盡的表現是**整個面板**跟著死。
+        """
+        info = FakeFetch(list(_INFO_ROWS))
+        info.error = BreadthFetchError("info down")
+        engine, _snap, inf, *_ = _make(tmp_path, info=info)
+
+        await engine._run_cycle()
+        assert inf.calls == 1
+
+        mono.advance(10.0)  # 下一輪 poll
+        await engine._run_cycle()
+        assert inf.calls == 1  # 退避中:不重打
+
+        mono.advance(51.0)  # 越過 60s
+        info.error = None
+        await engine._run_cycle()
+        assert inf.calls == 2
+
+    async def test_map_quota_failure_uses_quota_backoff(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """402 = 配額用盡 → 沿用 `quota_backoff_secs`(300s),不是一般 60s。"""
+        info = FakeFetch(list(_INFO_ROWS))
+        info.error = BreadthFetchError("配額用盡", quota=True)
+        engine, _snap, inf, *_ = _make(tmp_path, info=info)
+
+        await engine._run_cycle()
+        mono.advance(299.0)
+        await engine._run_cycle()
+        assert inf.calls == 1
+
+        mono.advance(2.0)
+        await engine._run_cycle()
+        assert inf.calls == 2
 
     async def test_disposition_failure_is_degraded_but_continues(self, tmp_path: Path) -> None:
         """處置股表拿不到 → 空集合續行(那幾檔會被算進去),但要亮 degraded。"""
@@ -521,6 +586,56 @@ class TestSeriesPersistence:
         state = engine.state()
         assert state["trade_date"] == "2026-08-06"
         assert state["series"] == [{**_EXPECTED_POINT, "t": "0931"}]
+
+    async def test_stale_date_snapshot_does_not_clobber_today_series(self, tmp_path: Path) -> None:
+        """快照日期既非今日、也非目前序列日 → **不採用日期變更、不清序列**(review P1-1)。
+
+        清序列的條件原本只看「與前值不同」,而 append 的條件是「== 今天」—— 兩者不對稱:
+        一輪拿到上一交易日(或髒 row 推出來的別日)就會把當天已累積的整段序列連同落檔
+        一起抹掉,而下一輪又因 `!= today` 不 append,畫面從此空著且零錯誤訊號。
+        """
+        engine, snap, *_ = _make(tmp_path)
+        await engine._run_cycle()
+        assert engine.state()["series"] == [_EXPECTED_POINT]
+        before = _series_file(tmp_path).read_text(encoding="utf-8")
+
+        snap.rows = _snapshot_rows("2026-08-04 13:20:00")  # 上一交易日
+        await engine._run_cycle()
+
+        state = engine.state()
+        assert state["trade_date"] == _TRADE_DATE  # 日期不採用
+        assert state["series"] == [_EXPECTED_POINT]  # 序列不清
+        assert state["as_of"] == "13:20:00"  # scalar 仍誠實反映該輪快照
+        assert _series_file(tmp_path).read_text(encoding="utf-8") == before  # 落檔不被截短
+        assert not _series_file(tmp_path, "2026-08-04").exists()
+
+    async def test_future_dirty_row_does_not_freeze_minute_key(self, tmp_path: Path) -> None:
+        """單一越界髒 row 不得決定 as_of / 分鐘鍵(review P1-2)。
+
+        `max(date)` 取自未過濾全快照:上游偶發回一列收盤時刻,整個交易日的序列就會塌成
+        那一格(同鍵 last-wins),檔案還在、格式還對,只有內容從整天縮成一點。
+        """
+        clock = Clock(now="09:30:00")
+        dirty = {
+            "date": f"{_TRADE_DATE} 13:30:00",
+            "stock_id": "001",  # 指數 row:不在對照表 → 不影響家數
+            "close": 23_000.0,
+            "change_price": 100.0,
+            "change_rate": 0.4,
+        }
+        snap = FakeFetch([*_snapshot_rows(f"{_TRADE_DATE} 09:29:30"), dirty])
+        engine, *_ = _make(tmp_path, snapshot=snap, clock=clock)
+
+        await engine._run_cycle()
+        assert engine.state()["as_of"] == "09:29:30"
+
+        clock.now = _dt.datetime.fromisoformat(f"{_TRADE_DATE} 09:31:00")
+        snap.rows = [*_snapshot_rows(f"{_TRADE_DATE} 09:30:30"), dirty]
+        await engine._run_cycle()
+
+        state = engine.state()
+        assert state["as_of"] == "09:30:30"
+        assert [p["t"] for p in state["series"]] == ["0930", "0931"]  # 逐分鐘長格,不塌成一格
 
     @pytest.mark.parametrize("stamp_time", ["14:30:00", "08:59:00"])
     async def test_tick_outside_minute_domain_not_appended(

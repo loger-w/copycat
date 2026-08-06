@@ -16,6 +16,7 @@ attr 登記還原點,teardown 由 monkeypatch 收拾 —— 不得讓空字串 l
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 
 import pytest
@@ -23,6 +24,7 @@ import pytest
 import copycat.capital.factory as factory
 import copycat.notify as notify
 import copycat.server.discord_bot as discord_bot
+import copycat.server.verify as verify
 from copycat.server.verify import (
     CAPITAL_ENV_KEYS,
     DISCORD_ENV_KEYS,
@@ -90,6 +92,25 @@ def test_discord_token_unresolvable(_restore_point: None) -> None:
     neutralize_external_env()
     assert discord_bot._getenv(discord_bot.TOKEN_ENV) == ""
     assert discord_bot._getenv(discord_bot.CHANNEL_ENV) == ""
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        ("2026-08-06 10:23:45", "2026-08-06 10:23:45"),  # 域內:原樣
+        ("2026-08-06 09:01:00", "2026-08-06 09:01:00"),  # 下界含等值
+        ("2026-08-06 13:30:00", "2026-08-06 13:30:00"),  # 上界含等值
+        ("2026-08-06 16:40:00", "2026-08-06 13:00:00"),  # 盤後 → clamp
+        ("2026-08-06 08:30:00", "2026-08-06 13:00:00"),  # 盤前 → clamp
+    ],
+)
+def test_snapshot_stamp_clamped_into_minute_domain(now: str, expected: str) -> None:
+    """fake 快照時刻在分鐘域(0901–1330)外時 clamp 到當日 13:00(review SPEC-4)。
+
+    直接用 `datetime.now()` 的話,盤後跑 verify server 的每一輪都落在域外 → 序列恆空,
+    而那與「序列接線壞掉」在畫面上完全同形 —— verify 的存在理由正是目視這條路。
+    """
+    assert verify._snapshot_stamp(_dt.datetime.fromisoformat(now)) == expected
 
 
 def test_notify_webhook_unresolvable(_restore_point: None) -> None:
