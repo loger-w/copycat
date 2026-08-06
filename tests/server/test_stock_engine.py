@@ -251,14 +251,23 @@ class TestBackfillGuard:
         await engine.close()
 
     async def test_rollover_stage2_clears_backfill_bookkeeping(self) -> None:
-        """R4 的另一半:跨日後「今日已回補」必須全部作廢(記帳是日別語意)。"""
+        """R4 的另一半:跨日後「今日已回補」必須全部作廢(記帳是日別語意)。
+
+        **setup 先餵一則當日 REALTIME 把 meta 補齊**(斷言不變):A6-5 之後「漲跌停值
+        變化」對已回補過的成員也會重入列,而 meta 為 None 時**任何**一則報價都算值變
+        —— 觸發 stage2 的那一則會順手排一筆合法的新日回補,`_backfilled` 就在同一輪
+        drain 內被正當地重新填上,這條測試要釘的「清空」反而被那件事蓋掉。
+        先讓 meta 有值(且新日報價的漲跌停與之相同)就沒有這個混淆源。
+        """
         engine, src = await _make()
         await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # meta 到位;此時尚未回補過 → 不觸發重入列
+        await _drain(engine)
         engine._backfill_jobs.put_nowait(("2330", engine._generation))
         await _drain(engine)
         assert "2330" in engine._backfilled
         engine.rollover_stage1("2026-07-22")
-        assert src.on_message is not None
         src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
         await _drain(engine)
         assert "2330" not in engine._backfilled

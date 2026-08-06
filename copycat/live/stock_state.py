@@ -159,6 +159,51 @@ class StockDayState:
         else:
             agg.unch += tick.qty
 
+    def _minutes_payload(self) -> dict[str, dict]:
+        """分鐘序列的 wire 形。**鍵名的單一定義** —— 全量 snapshot 與群組 batch 共用。
+
+        兩邊各寫一份的漂移樣態是其中一邊的 `h`/`l` 留在 undefined,而分時圖的極值
+        等值反查(`minute.h == accum.high`)對它恆為 false → 當日高低標記靜默消失。
+        """
+        return {
+            str(k): {
+                "c": m.close_milli,
+                "v": m.volume,
+                "i": m.inner,
+                "o": m.outer,
+                "u": m.unch,
+                # additive(round4 項 1):舊前端忽略未知 key;新前端缺 key 時填 null
+                # 而不是拿 c 頂替 —— 頂替會讓等值反查命中錯的分鐘 = 靜默標錯位置
+                "h": m.high_milli,
+                "l": m.low_milli,
+            }
+            for k, m in sorted(self.minutes.items())
+        }
+
+    def _meta_payload(self) -> dict | None:
+        """靜態盤別資料的 wire 形(同上,單一定義)。
+
+        缺 meta 回 `None` **不是漏鍵**:前端 `raw.meta ?? null` 對兩者同解,但少一個
+        鍵時 response 形的契約測試與型別檢查都看不出來。
+        """
+        if self.meta is None:
+            return None
+        return {
+            "name": self.meta.name,
+            "ref": self.meta.ref_milli,
+            "upper": self.meta.upper_milli,
+            "lower": self.meta.lower_milli,
+            "y_vol": self.meta.y_volume,
+        }
+
+    def light_snapshot(self) -> dict:
+        """群組 batch 專用的輕量 payload(code review A1)。
+
+        `group_snapshot` 對最多 30 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
+        當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到 minutes / meta。
+        """
+        return {"minutes": self._minutes_payload(), "meta": self._meta_payload()}
+
     def snapshot(self) -> dict:
         """REST 全量(design §4:snapshot 為前端累算基底)。"""
         last = self.last
@@ -182,20 +227,7 @@ class StockDayState:
             # meta 為 None(只跑過回補、未收 REALTIME)時高低照樣有值。
             "high": self.high_milli,
             "low": self.low_milli,
-            "minutes": {
-                str(k): {
-                    "c": m.close_milli,
-                    "v": m.volume,
-                    "i": m.inner,
-                    "o": m.outer,
-                    "u": m.unch,
-                    # additive(round4 項 1):舊前端忽略未知 key;新前端缺 key 時填 null
-                    # 而不是拿 c 頂替 —— 頂替會讓等值反查命中錯的分鐘 = 靜默標錯位置
-                    "h": m.high_milli,
-                    "l": m.low_milli,
-                }
-                for k, m in sorted(self.minutes.items())
-            },
+            "minutes": self._minutes_payload(),
             "ticks": [
                 {
                     "t": t.time,
@@ -208,13 +240,5 @@ class StockDayState:
                 for t in self.ticks
             ],
             "book": {"bids": self.book.bids, "asks": self.book.asks} if self.book else None,
-            "meta": {
-                "name": self.meta.name,
-                "ref": self.meta.ref_milli,
-                "upper": self.meta.upper_milli,
-                "lower": self.meta.lower_milli,
-                "y_vol": self.meta.y_volume,
-            }
-            if self.meta
-            else None,
+            "meta": self._meta_payload(),
         }
