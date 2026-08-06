@@ -1718,11 +1718,16 @@ class TestContractSessionGate:
         await engine.set_main_contract(_CONTRACT)
         assert src.on_message is not None
         src.on_message(_fut_quote(cum=1, precise="073000000000"))  # 台北 15:30
+        await _drain(engine)
+        # 基準不是 0:主圖入列的**空回補**照樣 `apply_backfill` → seq 跳增 1001
+        # (既有行為,與 ingest 無關)。要鎖的是「夜盤 tick 不推進序號」,所以取基準比對。
+        before = engine.snapshot(_CONTRACT)["seq"]
         src.on_message(_fut_quote(cum=2, precise="170000000000"))  # 台北次日 01:00
         await _drain(engine)
         snap = engine.snapshot(_CONTRACT)
         assert snap["minutes"] == {}
-        assert snap["seq"] == 0  # 沒有 ingest → 序號不進位(前端不會被騙去 refetch)
+        assert snap["last"] is None  # 兩則都沒進狀態機
+        assert snap["seq"] == before
         await engine.close()
 
     async def test_daytime_edges_are_inside_the_gate(self) -> None:

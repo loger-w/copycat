@@ -17,7 +17,13 @@ import logging
 from typing import AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import StockTick, parse_stock_realtime, to_milli
-from copycat.live.stock_source import Bar, BarsStatus, DailyBar
+from copycat.live.stock_source import (
+    Bar,
+    BarsStatus,
+    DailyBar,
+    is_futures_key,
+    trial_windows_for,
+)
 from copycat.live.stock_state import StockDayState
 from copycat.server.bars import BarsResult
 from copycat.server.ws import WsBroadcaster
@@ -34,6 +40,18 @@ _BACKFILL_MAX_FAILS = 3
 # 建構一次是為了避開每格空卡都 new 一個 `deque(maxlen=20_000)` 的狀態機;
 # 取用端一律 `dict(...)` 淺拷後才放進回應(payload 到消費端只被序列化,不被就地改)。
 _EMPTY_LIGHT: dict = StockDayState().light_snapshot()
+
+#: 個股期日盤窗(台北 HH:MM,含端點;台指期同表 08:45–13:45)。夜盤 tick 一律不進當日
+#: 狀態(D14b):REALTIME 訂閱窗(UTC 00–06)只是「不主動要夜盤」,TC4 在窗邊界仍可能
+#: 推進來,而夜盤成交混進日盤分時圖的失效樣態是 x 軸左右各長出一段沒有位置的資料
+#: (前端的窗是 08:45–13:45),圖畫得出來、根數也合理,沒有任何 assertion 會紅。
+_FUT_SESSION_START = "08:45"
+_FUT_SESSION_END = "13:45"
+
+
+def _in_futures_session(time_taipei: str) -> bool:
+    """台北 HH:MM:SS.fff 是否落在個股期日盤窗(兩端含)。"""
+    return _FUT_SESSION_START <= time_taipei[:5] <= _FUT_SESSION_END
 
 
 def _round_robin(items: list[str], round_no: int) -> list[str]:
@@ -58,11 +76,17 @@ class _EngineClosing(Exception):
 
 
 class StockSource(Protocol):
-    """個股行情來源抽象;TC4 實作在 copycat.live.stock_source,測試注入 fake。"""
+    """個股行情來源抽象;TC4 實作在 copycat.live.stock_source,測試注入 fake。
+
+    `code` 一律是 **instrument key**:股號 / `F:<prod>`(期現對照腿)/ `F:<prod>:<ym>`
+    (選定的月契約主圖)。key → TC4 symbol 的對映**只有 source 知道**(`symbol_of`)。
+    """
 
     def subscribe_symbol(self, code: str) -> None: ...
 
     def unsubscribe_symbol(self, code: str) -> None: ...
+
+    def symbol_of(self, key: str) -> str: ...
 
     def backfill(self, code: str) -> list[StockTick]: ...
 
@@ -120,6 +144,12 @@ class StockEngine:
         self._prod_to_code = {v["prod"]: k for k, v in self._map.items()}
         self._refs: dict[str, set[str]] = {}
         self._states: dict[str, StockDayState] = {}
+        # 推播路由表 symbol → instrument key(D1/R2-2)。`Security` **不是**路由鍵:
+        # 個股期 leaf 的該欄值域未實證(產品碼 / 股號都可能),同一個值可同時出現在
+        # 現貨與合約推播上,拿它當鍵時「合約推播蓋掉現貨狀態」完全靜默。
+        # 只增不減(同 `_states`):退訂後殘留的鍵指向仍存在的 state,晚到的推播照舊
+        # 落在原處;真正的失效是「訂閱失敗卻留著鍵」,那條在 `_acquire` 回滾。
+        self._symbol_to_key: dict[str, str] = {}
         self._no_data: set[str] = set()
         self._watchlist: list[str] = []
         self._main: str | None = None
@@ -220,12 +250,21 @@ class StockEngine:
         if owner in owners:
             return
         if not owners:
+            # **先寫記帳再訂閱**(R2-2):TC4 在 SUB 回來後毫秒級推第一則 REALTIME
+            # (§8 實證),而 `subscribe_symbol` 走 to_thread —— 期間 loop 是空的,
+            # 那一則會直接進 `_handle_quote`。路由表或 state 任一後寫都會讓首則被丟,
+            # 而冷門標的整天可能只有那一則(meta / 參考價),畫面只是空著。
+            symbol = self._source.symbol_of(code)
+            self._symbol_to_key[symbol] = code
+            self._states.setdefault(code, StockDayState())
             try:
                 self._source.subscribe_symbol(code)
             except ConnectionError:
-                # 真訂失敗回滾 bookkeeping(design §2.4):不留空 owner set
+                # 真訂失敗回滾 bookkeeping(design §2.4):不留空 owner set,也不留
+                # 指向無 owner 的路由鍵(state 照留 —— 只增不減,`_release` 亦不清)
                 if not owners:
                     self._refs.pop(code, None)
+                    self._symbol_to_key.pop(symbol, None)
                 raise
         owners.add(owner)
         self._states.setdefault(code, StockDayState())
@@ -273,17 +312,37 @@ class StockEngine:
                 self._signal_hub.on_watchlist(list(codes))
 
     async def set_main(self, code: str) -> None:
+        """現貨主圖(既有 route 入口)= `set_main_contract` 的股號形。"""
+        await self.set_main_contract(code)
+
+    async def set_main_contract(self, key: str) -> None:
+        """主圖槽位轉移(D15);`key` = 股號 或 `F:<prod>:<ym>` 合約鍵。
+
+        四種轉移共用同一段程式,差別只有兩處條件:
+
+        | 轉移 | 動作 |
+        |---|---|
+        | 現貨→期貨 | acquire(F:key,main) → release(舊,main) → release_stkfut(舊) → 回補;**不**加對照腿 |
+        | 期貨→現貨 | acquire(股號,main) → release(F:舊,main) → release_stkfut(F:舊)(map 查無 → 無害早退) → acquire_stkfut → 回補 |
+        | 期貨→期貨 / 現貨→現貨 | 同構類推 |
+
+        **先 acquire 新的再 release 舊的**(既有順序):反過來的話同一檔在
+        「現貨→現貨」時會被真退訂再真訂,盤中切回上一檔要重等一次 SUB。
+        合約態不加期現對照腿 —— 主圖已經是期貨,再掛一條 HOT 腿只會讓期現價差列
+        拿自己跟自己比。
+        """
         async with self._pool_lock:  # CR2
             old = self._main
-            if old == code:
+            if old == key:
                 return
-            await asyncio.to_thread(self._acquire, code, "main")
-            self._main = code
+            await asyncio.to_thread(self._acquire, key, "main")
+            self._main = key
             if old is not None:
                 await asyncio.to_thread(self._release, old, "main")
                 await asyncio.to_thread(self._release_stkfut, old)  # CR3:UNSUB 不佔 loop
-            await self._acquire_stkfut(code)
-            self._enqueue_backfill(code)
+            if not is_futures_key(key):
+                await self._acquire_stkfut(key)
+            self._enqueue_backfill(key)
 
     def snapshot(self, code: str) -> dict:
         state = self._states.get(code)
@@ -641,14 +700,26 @@ class StockEngine:
 
     def _handle_quote(self, quote: dict) -> None:
         symbol = str(quote.get("Symbol", ""))
-        if symbol.startswith("TC.F."):
+        # 期現對照腿的判定是 **`.HOT` 後綴**,不是 `TC.F.` 前綴(D1):後者會把月契約
+        # leaf(`TC.F.TWF.CDF.202609`)一起吃掉 → 合約主圖永遠收不到自己的推播,
+        # 而畫面只是空著。
+        if symbol.endswith(".HOT"):
             self._handle_stkfut(quote)
             return
-        tick, book, meta = parse_stock_realtime(quote)
-        code = str(quote.get("Security", ""))
+        code = self._symbol_to_key.get(symbol)
+        if code is None:
+            # 訂閱池外的推播(退訂競態 / 未知 symbol):顯式丟棄。debug 而非 warning ——
+            # UNSUB 之後 TC4 仍可能推幾則,那是常態不是異常
+            logger.debug("未對映的推播 symbol=%s(訂閱池外,丟棄)", symbol)
+            return
         state = self._states.get(code)
         if state is None:
             return
+        tick, book, meta = parse_stock_realtime(quote, trial_windows=trial_windows_for(code))
+        if tick is not None and is_futures_key(code) and not _in_futures_session(tick.time):
+            # 夜盤 tick 不進當日狀態(D14b);丟棄而不是照收 —— 前端 x 軸窗是
+            # 08:45–13:45,收下之後那些成交沒有位置可畫,卻會推進 seq 與 VWAP
+            tick = None
         # 「無資料」復原:**命中才推**。寫成無條件 discard + publish 會變成每 tick 廣播,
         # 直接打穿 1s 節流(W-17)。
         recovered = code in self._no_data
@@ -679,12 +750,22 @@ class StockEngine:
             and (meta.upper_milli, meta.lower_milli) != prev_limits
         ):
             self._enqueue_backfill(code)
-        if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
+        # **期貨 instrument 不參與換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
+        # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它換日會在夜盤把全部
+        # 現貨狀態 reset(當日分時線整條消失,而畫面上只是「圖突然空了」)。
+        rolls_the_day = not is_futures_key(code)
+        if (
+            tick is not None
+            and rolls_the_day
+            and self._pending_date is None
+            and tick.trade_date > self._trade_date
+        ):
             # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
             # 新日 tick → 先補 stage1 再走 stage2
             self.rollover_stage1(tick.trade_date)
         if (
             tick is not None
+            and rolls_the_day
             and self._pending_date is not None
             and tick.trade_date == self._pending_date
         ):
@@ -710,7 +791,11 @@ class StockEngine:
                         "seq": state.seq,
                     }
                 )
-            self._dirty_watchlist.add(code)
+            # **只收自選碼**(D16):`watchlist_quote` 的消費端是側欄,它以 code 對照
+            # 自選名單 —— 合約鍵(或任何非自選的主圖檔)混進去就是一則對不上任何項目
+            # 的訊息,而側欄不會報錯,只會多出一格幽靈卡片。
+            if code in self._watchlist:
+                self._dirty_watchlist.add(code)
             if self._signal_hub is not None:
                 # 掛在 `ingest` 為真的分支內:試撮與重複 tick 已被短路,訊號層天然
                 # 不必重複判(回補重放走 `apply_backfill`,不經過這裡 — SC-5)
