@@ -7,7 +7,7 @@
  *  成員層是 lazy:未鑽取時**一次 members 請求都不該發**。這條與「展開產業」分開驗,
  *  因為兩者在畫面上都是「列展開了」,但一個是零網路、一個是每次點都打一發。 */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SectorSection } from "@/components/index/SectorSection";
@@ -77,13 +77,29 @@ function memberUrls(): string[] {
   return urls.filter((u) => u.startsWith("/api/market/sector/members")).map(decodeURIComponent);
 }
 
+/** 最近一次 render 用的 client —— refetch 情境要從測試側主動觸發第二次取數。 */
+let client: QueryClient;
+
+function newClient() {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return client;
+}
+
 function renderSection(onOpenStock?: (code: string) => void, active?: boolean) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
+    <QueryClientProvider client={newClient()}>
       <SectorSection onOpenStock={onOpenStock} active={active} />
     </QueryClientProvider>,
   );
+}
+
+/** 直接以「已展開 + 已鑽取單層產業(航運)」開場,等成員層落定後回傳。 */
+async function drillMembers(members: SectorMembers): Promise<void> {
+  window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+  stubFetch(mkState(), members);
+  renderSection();
+  await screen.findByTestId("sector-body");
+  fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
 }
 
 /** 直接以「已展開」開場(收合閘門另有專測),等資料落地後回傳。 */
@@ -244,6 +260,42 @@ describe("SectorSection 成員層(lazy drill-down)", () => {
     expect(onOpenStock.mock.calls).toEqual([["2454"]]);
   });
 
+  // 成員鑽取是 404(查無 industry / sub)/ 500(後端全 universe 掃描炸掉)都到得了的路。
+  // 少了這條分流,失敗會永遠停在「載入中…」—— 看起來像還在等,其實已經放棄了。
+  it("成員請求 500 → 成員載入失敗(清單其餘部分照常)", async () => {
+    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+    urls = [];
+    fetchSpy = vi.fn(async (url: string) => {
+      const u = String(url);
+      urls.push(u);
+      if (u.startsWith("/api/market/sector/members")) return new Response("boom", { status: 500 });
+      return new Response(JSON.stringify(mkState()));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    renderSection();
+    await screen.findByTestId("sector-body");
+    fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
+
+    // MembersPanel 自帶 `retry: 1` → 要等一次重試(exponential backoff 初次 1s)
+    await waitFor(
+      () => expect(screen.getByTestId("sector-members-msg").textContent).toBe("成員載入失敗"),
+      { timeout: 5000 },
+    );
+    expect(screen.queryByTestId("sector-members-table")).toBeNull();
+    // 失敗只吃掉成員層:輪動清單本身是另一支 query,不該一起消失
+    expect(screen.queryByTestId("sector-list")).toBeTruthy();
+  });
+
+  // 「該群組今天一檔成員都沒有」與「還在抓」是兩句話。少了這條,空成員會渲染成一張
+  // 只有表頭的空表格 —— 看起來像資料掉了。
+  it("成員回空陣列 → 無成員資料(不是空表格)", async () => {
+    await drillMembers({ ...MEMBERS, members: [] });
+    await waitFor(() =>
+      expect(screen.getByTestId("sector-members-msg").textContent).toBe("無成員資料"),
+    );
+    expect(screen.queryByTestId("sector-members-table")).toBeNull();
+  });
+
   it("再點同一個鑽取目標 → 收起成員層", async () => {
     await openWith();
     fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
@@ -258,6 +310,15 @@ describe("SectorSection 降級", () => {
   it("rotation null → 類股資料未就緒(不是「載入中」也不是空清單)", async () => {
     await openWith(mkState({ rotation: null }));
     expect(screen.getByTestId("sector-msg").textContent).toBe("類股資料未就緒");
+    expect(screen.queryByTestId("sector-list")).toBeNull();
+  });
+
+  // `rotation: null` 與 `industries: []` 不同義:前者「產業鏈快取還沒好,等一下就有」,
+  // 後者「今天所有產業都沒成員」。共用一句文案會把前者說成後者(或反過來),而使用者
+  // 對這兩句的反應完全不同(等 vs 去查為什麼)。
+  it("industries 空陣列 → 暫無類股資料(與 rotation null 分流)", async () => {
+    await openWith(mkState({ rotation: { industries: [] } }));
+    expect(screen.getByTestId("sector-msg").textContent).toBe("暫無類股資料");
     expect(screen.queryByTestId("sector-list")).toBeNull();
   });
 
@@ -276,6 +337,26 @@ describe("SectorSection 降級", () => {
   it("stale=false → 無標記", async () => {
     await openWith();
     expect(screen.queryByTestId("sector-stale")).toBeNull();
+  });
+
+  // TQ v5 的 `isError` 對 **refetch** 失敗同樣為 true(`LimitListSection` 同款)。單看它
+  // 分流會讓「已經有一整份輪動、只是這一輪 10 秒輪詢沒抓到」整塊消失換成「載入失敗」
+  // —— 盤中最需要看的那份資料因為一次網路抖動就被清掉。有 data 就保清單,失敗改用膠囊說。
+  it("已有資料後 refetch 失敗 → 清單保留,改以「更新失敗」膠囊示警", async () => {
+    await openWith();
+    expect(screen.getAllByTestId(/^sector-row-btn-/).length).toBe(2);
+
+    fetchSpy.mockImplementation(async () => new Response("boom", { status: 500 }));
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["sector-state"] });
+    });
+    // TQ 的 observer 通知走 notifyManager(macrotask 排程),act 只吃得到 microtask
+    await waitFor(() => expect(screen.getByTestId("sector-refetch-error")).toBeTruthy());
+
+    expect(screen.getByTestId("sector-refetch-error").textContent).toContain("更新失敗");
+    expect(screen.queryByTestId("sector-list")).toBeTruthy();
+    expect(screen.getAllByTestId(/^sector-row-btn-/).length).toBe(2);
+    expect(screen.queryByTestId("sector-msg")).toBeNull();
   });
 
   it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
