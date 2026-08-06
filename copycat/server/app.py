@@ -27,6 +27,7 @@ from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.breadth_engine import (
     BreadthEngine,
+    DailyPricesFetch,
     DispositionFetch,
     SnapshotFetch,
     StockInfoFetch,
@@ -149,8 +150,10 @@ DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
 DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
 DEFAULT_BREADTH: Final = object()  # 同語意(market-overview R2 SC-3;→ 真 FinMind 取數層)
 
-#: breadth 引擎的注入點三元組(snapshot / stock_info / disposition)。
-BreadthFetchers = tuple[SnapshotFetch, StockInfoFetch, DispositionFetch]
+#: breadth 引擎的注入點四元組(snapshot / stock_info / disposition / daily_prices)。
+#: 第四槽 `None` = 連板數停用(rows 端點照常、`streak` 恆 null)—— 停用是契約的一部分,
+#: 不用 cast 掩蓋(R3 design R20)。長度固定 4。
+BreadthFetchers = tuple[SnapshotFetch, StockInfoFetch, DispositionFetch, DailyPricesFetch | None]
 
 
 class SelectBody(BaseModel):
@@ -649,19 +652,31 @@ def create_app(
                         breadth_fetch.fetch_snapshot,
                         breadth_fetch.fetch_stock_info,
                         breadth_fetch.fetch_disposition,
+                        breadth_fetch.fetch_daily_prices,
                     )
                 else:
-                    # 顯式注入的三元組**跳過 token 閘**:fake 取數層根本不看 token,
+                    # 顯式注入的四元組**跳過 token 閘**:fake 取數層根本不看 token,
                     # 而 verify server / 測試環境本來就沒有(有閘就恆停用 → 驗不到)
                     token = "fake-token"
+                    injected = cast("tuple[object, ...]", breadth_fetchers)
+                    if len(injected) != 4:
+                        # 光讓解包自己拋 ValueError 不夠:`_boot` 的傘罩會把它收成
+                        # 「breadth 停用」,與「FINMIND_TOKEN 未設」在畫面上同形 ——
+                        # repo 外的側車樣板漏改第四槽時,症狀會是家數面板整段悄悄
+                        # 消失而查不到原因,所以先留下講清楚長度的那行(R3 design R8)
+                        logger.error(
+                            "breadth 取數元組長度 %d,預期 4(呼叫端未更新)", len(injected)
+                        )
+                        raise ValueError("breadth_fetchers 必須是四元組")
                     fetchers = cast("BreadthFetchers", breadth_fetchers)
-                snapshot_fetch, stock_info_fetch, disposition_fetch = fetchers
+                snapshot_fetch, stock_info_fetch, disposition_fetch, daily_fetch = fetchers
                 return BreadthEngine(
                     token=token,
                     config=load_breadth_config(),
                     snapshot_fetch=snapshot_fetch,
                     stock_info_fetch=stock_info_fetch,
                     disposition_fetch=disposition_fetch,
+                    daily_fetch=daily_fetch,
                     data_dir=breadth_data_dir,  # None → repo root data/market
                 )
 
@@ -1247,6 +1262,29 @@ def create_app(
                 "series": [],
             }
         return breadth.state()
+
+    @app.get("/api/market/breadth/rows")
+    async def market_breadth_rows(request: Request) -> dict:
+        """全量逐檔(漲跌停列表的原料;R3 SC-1)—— 三態判式與 `/api/market/breadth` 同款。
+
+        刻意**不進 WS**:~2800 列 × 13 欄只有列表展開時才有人看,每 10 秒推給所有連線
+        是純浪費(brainstorm Q2)。連板算術全在 `rows_state()`(單一真相),前端零日期推理。
+
+        前端的「載入中 vs 暫無資料」判別子是 `as_of`(首輪成功前恆 null),不是 `stale`
+        —— 冷啟動 degraded 下 `stale` 恆 True,拿它判載入中會兩態顛倒(design R18)。
+        """
+        breadth = _breadth(request)
+        if breadth is None:
+            loading = not _breadth_booted(request)
+            return {
+                "enabled": loading,
+                "trade_date": None,
+                "as_of": None,
+                "stale": loading,
+                "streaks_ready": False,
+                "rows": [],
+            }
+        return breadth.rows_state()
 
     @app.websocket("/ws/breadth")
     async def ws_breadth(websocket: WebSocket) -> None:
