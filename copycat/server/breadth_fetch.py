@@ -1,9 +1,10 @@
 """FinMind 全市場取數層(market-overview R2 design §4)— 阻塞,呼叫端丟 to_thread。
 
-三個取數點,錯誤分類與 `oi_levels._fetch_rows` 同款:
+四個取數點,錯誤分類與 `oi_levels._fetch_rows` 同款:
 - `fetch_snapshot`:全市場即時快照(專屬 endpoint,**無 query 參數**),每輪都打。
 - `fetch_stock_info`:代碼 → 名稱 / 市場別 / 產業別對照(24h TTL,一天打幾次)。
 - `fetch_disposition`:近 60 日處置股期間表(參數名 **start_date / end_date**)。
+- `fetch_daily_prices`:單日全市場 EOD(連板數回看用,一天一輪 ≤ 25 次)。
 
 **402 不重試**:配額用盡時重打只會燒更多且必然同樣失敗 —— 以 `BreadthFetchError.quota`
 標記讓呼叫端改走長退避(config `quota_backoff_secs`),與一般失敗的短退避分開。
@@ -27,8 +28,12 @@ _DATA_API = f"{_BASE}/data"
 _SNAPSHOT_API = f"{_BASE}/taiwan_stock_tick_snapshot"
 _INFO_DATASET = "TaiwanStockInfo"
 _DISPOSITION_DATASET = "TaiwanStockDispositionSecuritiesPeriod"
+_PRICE_DATASET = "TaiwanStockPrice"
 _DISPOSITION_LOOKBACK_DAYS = 60
 _TIMEOUT = 30.0
+#: 單日全市場 EOD 專用:回應是 MB 級(~3 萬列含權證),秒級輪詢用的 30s 會在正常日
+#: 就逾時 —— 失效樣態是 streak 整輪失敗、連板欄整天 null(`backfill_finmind` 同量級)
+_DAILY_TIMEOUT = 60.0
 _ATTEMPTS = 2  # 秒級輪詢的量級,重試一次即可;402 完全不重試(見 _get_rows)
 
 #: `TaiwanStockInfo` 少於這麼多列即升 warning。實錄約 4300 列(上市+上櫃+興櫃);
@@ -45,13 +50,17 @@ class BreadthFetchError(RuntimeError):
         self.quota = quota
 
 
-def _get_rows(url: str, token: str, *, label: str) -> list[dict]:
-    """單一 GET → `data` 陣列。失敗一律 `BreadthFetchError`(402 帶 quota=True 不重試)。"""
+def _get_rows(url: str, token: str, *, label: str, timeout: float = _TIMEOUT) -> list[dict]:
+    """單一 GET → `data` 陣列。失敗一律 `BreadthFetchError`(402 帶 quota=True 不重試)。
+
+    `timeout` keyword-only:秒級輪詢的三支沿用 30s,單日 EOD 那支帶 60s(回應量級
+    差兩個數量級,共用一個常數只能二選一地錯)。
+    """
     req = Request(url, headers={"Authorization": f"Bearer {token}"})
     last: Exception | None = None
     for attempt in range(_ATTEMPTS):
         try:
-            with urlopen(req, timeout=_TIMEOUT) as resp:
+            with urlopen(req, timeout=timeout) as resp:
                 payload = json.load(resp)
         except urllib.error.HTTPError as e:
             if e.code == 402:
@@ -102,3 +111,27 @@ def fetch_disposition(token: str, today: _date) -> list[dict]:
         }
     )
     return _get_rows(f"{_DATA_API}?{query}", token, label="disposition")
+
+
+def fetch_daily_prices(token: str, day: _date) -> list[dict]:
+    """單日全市場 EOD(`TaiwanStockPrice`,start == end == `day`,**無 data_id**)。
+
+    非交易日回**空 `data` 陣列**(合法回應,不是錯誤)—— 「空 = 假日候選」的判定
+    在引擎那層,本函式只如實回傳。
+
+    不重用 `backfill_finmind.fetch_day`:那條的錯誤契約是 RuntimeError / HTTPError,
+    而引擎的退避分類吃 `BreadthFetchError.quota`(402 走長退避)。
+    """
+    query = urllib.parse.urlencode(
+        {
+            "dataset": _PRICE_DATASET,
+            "start_date": day.isoformat(),
+            "end_date": day.isoformat(),
+        }
+    )
+    return _get_rows(
+        f"{_DATA_API}?{query}",
+        token,
+        label=f"daily_prices {day.isoformat()}",
+        timeout=_DAILY_TIMEOUT,
+    )
