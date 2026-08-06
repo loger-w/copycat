@@ -31,7 +31,7 @@ import { futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import {
   instrumentKeyOf,
-  isEtfUnderlying,
+  isOrderBlocked,
   stkfutTc4Symbol,
   ymLabel,
   type StkfutSelection,
@@ -43,7 +43,9 @@ import type { CapitalOrder, CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
-const ETF_BLOCKED_TEXT = "ETF 期貨下單暫未開放";
+/** 前置閘的唯一說明。文案不點名 ETF —— 除權息調整契約(單位 2,157)也走同一條
+ *  (code review B3),寫死「ETF」會讓那類標的的提示變成假訊息。 */
+const BLOCKED_TEXT = "此契約規格暫未開放下單";
 
 /** 本合約 actionable 活單 → 價位(毫元)聚合殘量;點紅方格逐 seq 直刪用。
  *
@@ -134,7 +136,8 @@ export function StkfutLadder({
   } catch {
     exchangeContract = null;
   }
-  const etfBlocked = isEtfUnderlying(code);
+  // 判準吃契約單位(與後端 `_stkfut_gates` 同一個),單位不可得才落回股號 fallback
+  const blocked = isOrderBlocked(code, contract.unit);
 
   const lots = aggregateLots(ordersData?.orders, exchangeContract);
   const posRows = contractPositions(positionsData?.positions, exchangeContract);
@@ -164,7 +167,7 @@ export function StkfutLadder({
 
   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
     touchIdle();
-    if (etfBlocked) return; // UI 已 disabled,雙保險(後端亦拒 PRODUCT_NOT_ALLOWED)
+    if (blocked) return; // UI 已 disabled,雙保險(後端亦拒 PRODUCT_NOT_ALLOWED)
     if (!arm.armed) {
       showHint("未武裝 — 點價不送單", true);
       return;
@@ -259,13 +262,13 @@ export function StkfutLadder({
       buyLots={lots.buy}
       sellLots={lots.sell}
       armed={arm.armed}
-      armDisabled={etfBlocked}
-      armTitle={etfBlocked ? ETF_BLOCKED_TEXT : undefined}
+      armDisabled={blocked}
+      armTitle={blocked ? BLOCKED_TEXT : undefined}
       onToggleArm={() => {
         touchIdle();
         dispatchArm({ type: "toggle" });
       }}
-      priceLocked={etfBlocked}
+      priceLocked={blocked}
       qty={qtyState.qty}
       qtyLabel="口數"
       onQtyPreset={(p) => {

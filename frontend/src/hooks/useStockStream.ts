@@ -197,6 +197,18 @@ export function useStockStream(
             no_data: Boolean(msg.no_data),
           };
           setWatchlist((prev) => ({ ...prev, [msg.code as string]: q }));
+          // 主圖也要收這一則(code review A2)。engine 的 `_handle_no_data` 對**任何**
+          // code 都發 `watchlist_quote`(包含合約鍵),而側欄只認自選碼 —— 沒有這段的話
+          // 「合約訂上了但 TC4 零推播」在畫面上就是一張永遠空著的圖:snapshot 是在
+          // set_main 當下取的(那時 TC4 還沒回答),之後再也沒有東西會把 noData 帶進來。
+          if (msg.code === current && q.no_data) {
+            const acc = accumRef.current;
+            if (acc !== null && !acc.noData) {
+              const next = { ...acc, noData: true };
+              accumRef.current = next;
+              setAccum(next);
+            }
+          }
           return;
         }
         case "status": {

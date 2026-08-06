@@ -9,7 +9,7 @@ import { StkfutLadder } from "@/components/stock/StkfutLadder";
 import { RAIL_TAB_KEY } from "@/lib/constants";
 import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
-import type { StkfutSelection } from "@/lib/stkfut";
+import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
@@ -71,9 +71,11 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
   const [tradeKind, setTradeKind] = useState<TradeKind>("cash");
   const [stockQty, setStockQty] = useState<QtyState>(initialQtyState);
   const [futQty, setFutQty] = useState<QtyState>(initialQtyState);
-  // 個股期口數與台指期分開存:兩者都是「口」但契約規模差兩個量級,帶著上一個商品的
-  // 口數切過去就是誤送規模
-  const [stkfutQty, setStkfutQty] = useState<QtyState>(initialQtyState);
+  // 個股期口數 **per instrument key**(code review A5)。與台指期分開存還不夠:標準檔
+  // (2,000 股)與小型檔(100 股)差 20 倍,共用一格會讓「在小型上按了 20 口再切回標準」
+  // 直接變成 20 倍規模的單,而畫面上那個數字本來就是使用者自己按的 —— 沒有任何異狀。
+  // 每個合約各一格 = 切合約回到初值(1 口),要多少自己按。
+  const [stkfutQty, setStkfutQty] = useState<Record<string, QtyState>>({});
 
   function selectTab(next: RailTab): void {
     setTab(next);
@@ -85,12 +87,36 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
     if (next !== "flash") setCenterRequest(null);
   }
 
+  // R4:選中個股期合約 → 右欄整組換到期貨市場。委託 / 部位若還停在 `sec`,使用者
+  // 看到的是現股庫存與現股委託,而閃電梯送出去的是期貨單 —— 兩邊對不起來。
+  const stockCode = ctx.kind === "stock" ? ctx.code : null;
+  const stkfutContract = ctx.kind === "stock" ? ctx.contract : null;
+  const market = ctx.kind === "futures" || stkfutContract !== null ? "fut" : "sec";
+  // 「這是哪一個標的」的唯一鍵(code review A7a)。舊碼把「換標的就清掉置中請求」掛在
+  // 上面那個 effect 的 cleanup、判準是 `stockCode` —— 兩個問題:
+  //   (a) 判準太粗:合約 ↔ 現貨、換月、換產品腿時 `code` 恆是股號不變(D5),cleanup
+  //       根本不觸發,舊價位的請求跨 instrument 存活;
+  //   (b) 就算把 instrumentKey 加進 deps 也**贏不了同一個 commit 內的子元件掛載**:
+  //       合約 ↔ 現貨那一步會把 StkfutLadder 換成 PriceLadder(元件不同 = 真的重新
+  //       掛載),而 React 的順序是「先跑全部 destroy、再跑全部 create」—— destroy 裡的
+  //       `setCenterRequest(null)` 只是排一次更新,新掛載的梯這一輪拿到的仍是舊值,
+  //       開頁就捲到別的價帶並關掉跟隨。
+  // 所以改成 render 期間直接調整 state(官方 pattern,同 StockPage 的 pickerOpen):
+  // 子元件這一輪就拿到 null,零競態。
+  const instrumentKey = instrumentKeyOf(stockCode, stkfutContract);
+  const [prevInstrument, setPrevInstrument] = useState(instrumentKey);
+  if (prevInstrument !== instrumentKey) {
+    setPrevInstrument(instrumentKey);
+    setCenterRequest(null);
+  }
+
   // 五檔點價的唯一 window listener(W-C1 / R2-5):ladder 在非閃電 tab 已 unmount,
   // 收不到事件 → 這裡先切回閃電 tab,再以 centerRequest prop 讓 ladder 掛載後置中。
-  const stockCode = ctx.kind === "stock" ? ctx.code : null;
   useEffect(() => {
     const onPriceClick = (e: Event): void => {
       const detail = (e as CustomEvent<{ priceMilli?: number; code?: string }>).detail;
+      // 事件的比對鍵是**股號**:發事件的 OrderBook 畫的是主圖,而點價 gate 一路都以
+      // 股號指認標的(D5)—— 換成 instrumentKey 會讓期貨態的點價全部落空。
       if (!detail || detail.code !== stockCode || typeof detail.priceMilli !== "number") return;
       setTab("flash");
       window.localStorage.setItem(RAIL_TAB_KEY, "flash");
@@ -100,20 +126,14 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
       }));
     };
     window.addEventListener("stock-price-click", onPriceClick);
-    return () => {
-      window.removeEventListener("stock-price-click", onPriceClick);
-      // 換標的:舊的置中請求對新標的無意義,留著會在新 ladder 掛載時捲到不存在的價位
-      setCenterRequest(null);
-    };
+    return () => window.removeEventListener("stock-price-click", onPriceClick);
   }, [stockCode]);
-
-  // R4:選中個股期合約 → 右欄整組換到期貨市場。委託 / 部位若還停在 `sec`,使用者
-  // 看到的是現股庫存與現股委託,而閃電梯送出去的是期貨單 —— 兩邊對不起來。
-  const stkfutContract = ctx.kind === "stock" ? ctx.contract : null;
-  const market = ctx.kind === "futures" || stkfutContract !== null ? "fut" : "sec";
 
   function flashContent() {
     if (ctx.kind === "stock" && ctx.code !== null && ctx.contract !== null) {
+      // 這條分支下 instrumentKey 必非 null(code 與 contract 都有值),`?? ""` 只是
+      // 型別收斂 —— 真落到 "" 也只是共用一格,不會壞
+      const key = instrumentKey ?? "";
       return (
         <StkfutLadder
           code={ctx.code}
@@ -123,8 +143,10 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
           last={ctx.last}
           meta={ctx.meta}
           centerRequest={centerRequest}
-          qtyState={stkfutQty}
-          onQtyState={setStkfutQty}
+          qtyState={stkfutQty[key] ?? initialQtyState()}
+          onQtyState={(updater) =>
+            setStkfutQty((m) => ({ ...m, [key]: updater(m[key] ?? initialQtyState()) }))
+          }
         />
       );
     }
