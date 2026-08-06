@@ -280,8 +280,14 @@ function NumField({
 // 展開後的本體
 // ---------------------------------------------------------------------------
 
-function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
-  const { data, isError } = useBreadthRows();
+function LimitListBody({
+  onOpenStock,
+  active,
+}: {
+  onOpenStock?: (code: string) => void;
+  active: boolean;
+}) {
+  const { data, isError } = useBreadthRows(active);
   const [filter, setFilter] = useState<LimitListFilter>(loadFilter);
 
   function update(patch: Partial<LimitListFilter>): void {
@@ -465,7 +471,16 @@ function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }
 // 收合殼
 // ---------------------------------------------------------------------------
 
-export function LimitListSection({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
+/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。收合是
+ *  unmount、但 tab 切換不是 —— 展開狀態又存在 localStorage,所以「展開著被切走」
+ *  是常態,那條路要靠這道 gate 停背景輪詢(review FE-2)。未給時預設 true。 */
+export function LimitListSection({
+  onOpenStock,
+  active = true,
+}: {
+  onOpenStock?: (code: string) => void;
+  active?: boolean;
+}) {
   // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
   // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(CorrSection 同慣例)。
   const [open, setOpen] = useState<boolean>(() => {
@@ -497,7 +512,7 @@ export function LimitListSection({ onOpenStock }: { onOpenStock?: (code: string)
         <span className="text-sm font-bold text-ink">漲跌停</span>
         <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
       </button>
-      {open ? <LimitListBody onOpenStock={onOpenStock} /> : null}
+      {open ? <LimitListBody onOpenStock={onOpenStock} active={active} /> : null}
     </section>
   );
 }

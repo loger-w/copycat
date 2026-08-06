@@ -283,6 +283,9 @@ export default function App() {
                     setStockCode(code);
                     setTab("stock");
                   }}
+                  // tab 是 hidden 保留而非 unmount → 漲跌停列表的背景輪詢要靠這道
+                  // gate 停(review FE-2;FuturesPage 的 active 同慣例)
+                  active={tab === "index"}
                 />
               </Suspense>
             </div>

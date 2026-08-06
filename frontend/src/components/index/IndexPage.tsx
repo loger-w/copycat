@@ -81,9 +81,21 @@ interface Props {
   /** 漲跌停列表點列 → 開個股(期)頁(R3 SC-5)。狀態(主檔 / 當前 tab)在 App 層,
    *  本頁只把回呼往下傳 —— 頁內自己記一份主檔會與右欄 / 個股頁分岔。 */
   onOpenStock?: (code: string) => void;
+  /** 使用者是否正看著本 tab(App 的 `tab === "index"`)。本頁的 DOM 由 App 以 `hidden`
+   *  保留 → 漲跌停列表的背景輪詢要靠這道 gate 停(review FE-2;FuturesPage 同慣例)。
+   *  未給時預設 true(既有呼叫路徑不靜默停更)。 */
+  active?: boolean;
 }
 
-export function IndexPage({ twse, otc, txf, futures, breadth = null, onOpenStock }: Props) {
+export function IndexPage({
+  twse,
+  otc,
+  txf,
+  futures,
+  breadth = null,
+  onOpenStock,
+  active = true,
+}: Props) {
   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
   const { toggles, set } = useChartToggles();
@@ -122,7 +134,7 @@ export function IndexPage({ twse, otc, txf, futures, breadth = null, onOpenStock
       </section>
       {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
           點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
-      <LimitListSection onOpenStock={onOpenStock} />
+      <LimitListSection onOpenStock={onOpenStock} active={active} />
       <CorrSection />
     </div>
   );
