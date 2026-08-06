@@ -375,6 +375,10 @@ class TC4QuoteSource:
 
         `StockSource` Protocol **之外**的能力(個股訂閱面用不到)—— server 以
         `getattr` 接線,fake source 不必為此實作 Protocol 方法。
+
+        ⚠ **秒級同步呼叫且全程持 session 鎖**(`_session_req`;Opt 的同款查詢實測
+        1.93s)—— 期間這條 session 上的其他 REQ(訂閱 / SubHistory)全部排隊。呼叫端
+        一律走 `StkfutCatalog`(當日 cache + 單飛 + boot 預熱),不要在請求路徑上直呼。
         """
         self._ensure_connected()
         res = self._session_req(

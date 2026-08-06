@@ -70,6 +70,7 @@ from copycat.stock_watchlist import (
 from copycat.stock_watchlist import DEFAULT_PATH as WATCHLIST_DEFAULT_PATH
 from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
 from copycat.stock_names import load_names as load_stock_names
+from copycat.stkfut_map import lookup_product
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,20 @@ MARKET_SESSIONS = ("day", "allday")
 #: `/api/stock/state/{code}?contract=` 的形檢:`<prod>:<YYYYMM>`(stkfut-contracts D7)。
 #: 只是第一道 —— 「這個合約屬不屬於這檔股票」必須另外查 catalog 白名單。
 _CONTRACT_RE = re.compile(r"^[A-Z0-9]{2,4}:20\d{2}(0[1-9]|1[0-2])$")
+
+
+def _with_unit(leg: dict | None) -> dict | None:
+    """合約腿 + 契約單位股數(code review B2/B3)。查無對映 → `unit: None`。
+
+    前端的 ETF 前置閘原本以「股號開頭為 0」推,那是這份資料**今天**的性質而不是契約
+    規格;權威判準(`capital_api._stkfut_gates`)吃的是單位。單位隨清單一起送出,兩邊
+    從此同一個判準,而查無時給 `None` 讓前端明確落回 fallback —— 塞 0 會被讀成
+    「非股票單位」→ 誤擋一檔本來可以下單的標的,而後端那道真閘根本沒被觸發過。
+    """
+    if leg is None:
+        return None
+    found = lookup_product(leg["prod"])
+    return {**leg, "unit": None if found is None else found.get("unit")}
 
 
 def _market_payload(
@@ -660,6 +675,13 @@ def create_app(
             app.state.breadth = breadth
             booted.breadth = breadth
 
+            # 序列尾段:合約目錄預熱一次(A3)。放在**最後**而不是接線當下 —— 它是
+            # 秒級查詢,插在引擎序列中間會把後面每一段都往後推(capital 登入、corr
+            # 訂閱都吃啟動時序)。留在 boot task 內而不另起 detached task:關機取消與
+            # 例外收斂在這裡已經有人管,多一條背景 task 就多一個要 cancel 的地方。
+            if app.state.stkfut_catalog is not None:
+                await app.state.stkfut_catalog.prewarm()
+
         boot_task = asyncio.create_task(_boot_all())
         try:
             yield
@@ -1023,7 +1045,12 @@ def create_app(
         entry = await catalog.get(code)
         if entry is None:
             raise HTTPException(status_code=404, detail={"error": "NO_STKFUT"})
-        return {"code": code, **entry}
+        return {
+            "code": code,
+            "name": entry["name"],
+            "std": _with_unit(entry["std"]),
+            "mini": _with_unit(entry.get("mini")),
+        }
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str, contract: str | None = None) -> dict:

@@ -79,7 +79,11 @@ def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000") -> str:
 
 
 def _capital_client(
-    tmp_path: Path, *, com: FakeCom | None = None, enabled: bool = True
+    tmp_path: Path,
+    *,
+    com: FakeCom | None = None,
+    enabled: bool = True,
+    max_amount: float | None = None,
 ) -> tuple[CapitalClient, FakeCom]:
     com = com if com is not None else FakeCom()
     client = CapitalClient(
@@ -88,7 +92,7 @@ def _capital_client(
         password="p",
         full_account="1234567890A",
         env="test",
-        safety=SafetyConfig(order_enabled=enabled, max_qty=None, max_amount=None),
+        safety=SafetyConfig(order_enabled=enabled, max_qty=None, max_amount=max_amount),
         audit_base=tmp_path / "audit",
     )
     return client, com
@@ -498,6 +502,38 @@ class TestOrderStkfutGates:
             body = dict(_STKFUT_BODY, price=1180.5, price_type="market", time_in_force="IOC")
             assert client.post("/api/capital/order/future", json=body).status_code == 200
             assert len(_sent(com, "future")) == 1
+
+    # code review B4:名目金額閘的乘數 = 契約單位股數。這條沒被鎖住的話,乘數若退回
+    # 1(`multiplier_of` 的 fallback 路徑)金額閘會鬆 2,000 倍 —— 而畫面上只是「單送出去
+    # 了」,沒有任何訊號。標準與小型差 20 倍,兩腿各鎖一次才分得出「用錯了另一腿的單位」。
+    @pytest.mark.parametrize(
+        "symbol,unit",
+        [("TC.F.TWF.CDF.202609", 2000), ("TC.F.TWF.QFF.202609", 100)],
+    )
+    def test_amount_gate_uses_the_contract_unit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symbol: str, unit: int
+    ) -> None:
+        _stkfut_map(tmp_path, monkeypatch)
+        price = 1180.0
+        notional = price * unit  # qty=1
+        # 邊界:est == 上限放行(閘是 `>` 才擋)
+        cap, com = _capital_client(tmp_path, max_amount=notional)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, tc4_symbol=symbol, price=price)
+            assert client.post("/api/capital/order/future", json=body).status_code == 200
+            assert len(_sent(com, "future")) == 1
+        # 差一元就要擋 —— 乘數若是別腿的單位,這一則會靜默通過
+        cap2, com2 = _capital_client(tmp_path, max_amount=notional - 1)
+        with make_client(monkeypatch, capital=cap2) as client:
+            _wait_status(cap2)
+            body = dict(_STKFUT_BODY, tc4_symbol=symbol, price=price)
+            res = client.post("/api/capital/order/future", json=body)
+            assert res.status_code == 403
+            detail = res.json()["detail"]
+            assert detail["error"] == "ORDER_BLOCKED"
+            assert f"{notional:.0f}" in detail["reason"]
+            assert _sent(com2, "future") == []
 
     def test_index_future_not_subject_to_stock_tick_gate(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
