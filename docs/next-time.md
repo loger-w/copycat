@@ -1,4 +1,20 @@
 
+## 2026-08-06(market-overview-r2-finmind 收尾留尾巴)
+
+- [ ] **user 過目待做(SC-4 雙層之二)**:綜合 tab 中段家數帶(上市/上櫃 × 漲停/上漲/平盤/
+  下跌/跌停,漲停紅底/跌停綠底,戳記「日期 · 時刻」)+ 騰落線(0 軸、末值標籤)。
+  AI 截圖三張在 `.claude/feat/market-overview-r2-finmind/evidence/SC-4_*.png`(盤中真數據)。
+- [ ] **prod 8721 實測未在跑**(Phase 6 發現):下次啟動 `python -m copycat.server` 即含
+  R2(無「等重啟生效」問題);首啟順手目視 —— 家數帶與指數圖並置、`/api/index/state`
+  正常、`data/market/breadth-<date>.json` 開始落檔。
+- [ ] **SC-1 的「neigui panel 畫面同分鐘截圖」層未做**(panel 未在跑;數字層已以
+  neigui 現碼即時對照等價驗過,見 evidence/SC-1_live-parity.txt)。要補就任一交易日
+  兩邊同開比對一次;純 optional。
+- [ ] **WS /ws/breadth 無 enabled 欄**(review 波一偏離 3):boot 未完成時 WS 送一則
+  載入中 scalar 再關,前端靠退避重連自癒;R3 若要前端據 WS 顯示載入中,payload 補欄位。
+- [ ] R3 前置已備:`BreadthEngine.rows`(compute_breadth 全量 rows)存引擎屬性未曝露,
+  接列表時開 REST 曝露面即可。
+
 ## 2026-08-06(market-overview-r1-tab Phase 6 real-env 沉澱)
 
 - [ ] **既有 bug:React duplicate key(key=0)每 5 秒刷 console — 根因已定位:
