@@ -7,7 +7,7 @@ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshai
 import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
-import { hhmm, HOUR_TICKS } from "@/lib/time-labels";
+import { hhmm, hourTicksOf, type HourTick } from "@/lib/time-labels";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
@@ -21,6 +21,7 @@ import {
   R_AXIS_W,
   sideSummary,
   SPOT_WINDOW,
+  STKFUT_WINDOW,
   X_LABEL_H,
   SUB_TOP_PAD,
   Y_AXIS_W,
@@ -115,11 +116,17 @@ const ChartStatic = memo(function ChartStatic({
   clipAbove,
   clipBelow,
   plotBottom,
+  xw,
+  hourTicks,
 }: {
   g: IntradayGeometry;
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
   w: number;
   h: number;
+  /** x 軸分鐘窗。**必經模組層常數或 useMemo**(identity 穩定),行內字面值會打穿本 memo */
+  xw: XWindow;
+  /** 整點刻度;同上,必經 useMemo */
+  hourTicks: readonly HourTick[];
   /** 參考價(左緣刻度判色用);純量,memo 安全 */
   refMilli: number | null;
   showVwap: boolean;
@@ -155,11 +162,11 @@ const ChartStatic = memo(function ChartStatic({
       {/* 漲跌停虛線已移除(round3 項 4):Y 域恰為 [lower, upper],兩條線本來就貼死在
           上下緣、與最外側刻度重合,是純粹的視覺噪音。左緣的漲跌停價位文字仍在。 */}
       <line x1={Y_AXIS_W} x2={w - R_AXIS_W} y1={g.refY} y2={g.refY} className="stroke-line" strokeDasharray="2 3" strokeWidth={1} />
-      {HOUR_TICKS.map(({ minute }) => (
+      {hourTicks.map(({ minute }) => (
         <line
           key={minute}
-          x1={minuteToX(minute, w)}
-          x2={minuteToX(minute, w)}
+          x1={minuteToX(minute, w, xw)}
+          x2={minuteToX(minute, w, xw)}
           y1={0}
           y2={h - X_LABEL_H}
           className="stroke-line"
@@ -370,15 +377,19 @@ function XAxisLabels({
   w,
   h,
   tagSpan,
+  xw,
+  hourTicks,
 }: {
   w: number;
   h: number;
   tagSpan: [number, number] | null;
+  xw: XWindow;
+  hourTicks: readonly HourTick[];
 }) {
   return (
     <g>
-      {HOUR_TICKS.map(({ minute, label }) => {
-        const x = minuteToX(minute, w) + 2;
+      {hourTicks.map(({ minute, label }) => {
+        const x = minuteToX(minute, w, xw) + 2;
         if (tagSpan !== null && overlaps(x, x + 30, tagSpan[0], tagSpan[1])) return null;
         return (
           <text key={minute} x={x} y={h - 3} className="fill-time" fontSize="0.625rem">
@@ -407,14 +418,17 @@ const EnergySub = memo(function EnergySub({
   maxTotal,
   w,
   h,
+  xw,
 }: {
   bars: EnergyBar[];
   /** 歸一分母 = 全日最大**總量**,即頂端刻度值 */
   maxTotal: number;
   w: number;
   h: number;
+  /** 柱寬分母的來源(見 `barW`);模組層常數,memo 安全 */
+  xw: XWindow;
 }) {
-  const bw = barW(w);
+  const bw = barW(w, xw);
   const midY = h - (h - SUB_TOP_PAD) / 2;
   return (
     <g>
@@ -484,15 +498,26 @@ interface Props {
    *  每次 render 因 identity 改變而重建(W-5)。未傳 = 量測未就緒 / jsdom,沿用固定常數。 */
   mainHeight?: number;
   subHeight?: number;
+  /** 期貨態(個股期合約主圖,SC-5/D10):x 窗換成 08:45–13:45,且 overlay / VP 全停。
+   *
+   *  **顯式 prop,不從 `accum.code` 猜**(R6):code 的形狀(`F:<prod>:<ym>`)是資料層
+   *  契約,拿它當渲染分支的判準會讓兩層耦合 —— 後端哪天改 key 形狀,前端就靜默退回
+   *  現貨窗(圖照畫、只是窗錯了),而沒有任何錯誤訊號。 */
+  stkfut?: boolean;
 }
 
-export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
+export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = false }: Props) {
   const { toggles, set } = useChartToggles();
   const mainW = MAIN.width;
   const mainH = mainHeight ?? MAIN.height;
   const subW = SUB.width;
   const subH = subHeight ?? SUB.height;
-  const overlayQ = useStockOverlay(accum.code || null, toggles.cdp || toggles.ma);
+  // 模組層常數 → identity 穩定,直接進 memo 子元件的 props 不會打穿 memo
+  const xw = stkfut ? STKFUT_WINDOW : SPOT_WINDOW;
+  const hourTicks = useMemo(() => hourTicksOf(xw), [xw]);
+  // 期貨態不打 overlay:CDP/MA 是**現股日線**衍生的(/api/stock/overlay 吃股號),
+  // 對合約既取不到也不該套 —— 拿標的現股的 CDP 疊在期貨價上是假陳述。
+  const overlayQ = useStockOverlay(accum.code || null, !stkfut && (toggles.cdp || toggles.ma));
   // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
   const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
@@ -506,17 +531,19 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
       buildIntradayGeometry(
         { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
         { width: mainW, height: mainH },
+        xw,
       ),
     // mainW / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
-    // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)
-    [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH],
+    // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)。
+    // `xw` 同理 —— 漏了它,現貨↔期貨切換時幾何會停在舊窗上。
+    [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH, xw],
   );
 
   // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
   // 價線 / 刻度 / 反演算完即丟。`meta` 不影響量的幾何,故不入 deps。
   const subEnergy = useMemo(
-    () => buildEnergyBars(accum.minutes, { width: subW, height: subH }),
-    [accum.minutes, subW, subH],
+    () => buildEnergyBars(accum.minutes, { width: subW, height: subH }, xw),
+    [accum.minutes, subW, subH, xw],
   );
 
   // 價位別成交量(SC-3)。**必經 useMemo**:hover 每個 mousemove 都 re-render 本元件,
@@ -524,9 +551,13 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
   // 關掉時回**同一個空陣列語意**的重算即可 —— 依賴沒變就不會重算,不需要另設常數。
   // `mainW` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
   // 幾何與長條會各自依據不同的畫布寬算,bar 的滿寬比例靜默漂掉。
+  // 期貨態不畫 VP:`accum.vp` 由 `foldVp` 折出,而 foldVp 的分鐘窗仍是現貨窗
+  // (本輪不參數化 —— 期貨態既然不畫,參數化只是加一條沒人走的分支)。
+  // 直方圖若照畫,08:45–08:59 與 13:31–13:45 的成交會整段缺席而畫面看不出來。
+  const vpEnabled = toggles.vp && !stkfut;
   const vpBars = useMemo(
-    () => (toggles.vp ? buildVpBars(accum.vp, g, mainW) : []),
-    [accum.vp, g, toggles.vp, mainW],
+    () => (vpEnabled ? buildVpBars(accum.vp, g, mainW) : []),
+    [accum.vp, g, vpEnabled, mainW],
   );
 
   const overlay = overlayQ.data ?? null;
@@ -557,7 +588,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
     );
   }
 
-  const side = sideSummary(accum.minutes);
+  const side = sideSummary(accum.minutes, xw);
   const lowDecided = side.decidedPct !== null && side.decidedPct < LOW_DECIDED_PCT;
 
   const hoverMin = hover?.min ?? null;
@@ -611,7 +642,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
         ];
 
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
-  const timeTagX = hoverMin !== null ? clampTagX(minuteToX(hoverMin, mainW), TIME_TAG.w, mainW) : null;
+  const timeTagX =
+    hoverMin !== null ? clampTagX(minuteToX(hoverMin, mainW, xw), TIME_TAG.w, mainW) : null;
   const timeTagSpan: [number, number] | null =
     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
 
@@ -624,12 +656,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
     setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
   }
 
+  // 期貨態三顆一律反灰(D10):CDP/MA 是現股日線衍生、VP 的折入窗仍是現貨窗。
+  // 「按得下去但沒反應」比「按不下去」難懂 —— 反灰 + tooltip 才講得出為什麼。
   const toggleDefs: { key: "vwap" | "cdp" | "ma" | "vp"; label: string; available: boolean }[] = [
     { key: "vwap", label: "均價", available: true },
-    { key: "cdp", label: "CDP", available: cdpAvailable },
-    { key: "ma", label: "MA", available: maAvailable },
-    // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),恆可用
-    { key: "vp", label: "量分佈", available: true },
+    { key: "cdp", label: "CDP", available: !stkfut && cdpAvailable },
+    { key: "ma", label: "MA", available: !stkfut && maAvailable },
+    // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
+    { key: "vp", label: "量分佈", available: !stkfut },
   ];
 
   return (
@@ -646,7 +680,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
             type="button"
             aria-pressed={toggles[key] && available}
             disabled={!available}
-            title={available ? undefined : "無日線資料"}
+            title={available ? undefined : stkfut ? "期貨合約本輪不提供" : "無日線資料"}
             onClick={() => set(key, !toggles[key])}
             className={cn(
               "rounded border px-2 py-0.5 text-xs",
@@ -681,8 +715,10 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
           clipAbove={clipAbove}
           clipBelow={clipBelow}
           plotBottom={plotBottom}
+          xw={xw}
+          hourTicks={hourTicks}
         />
-        <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} />
+        <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
             會與右緣疊線價位標(R_AXIS_W 帶)重疊;現價本來就在資訊列與報價 header
             各有一份,圈的作用是「線走到哪」而不是再報一次價。 */}
@@ -700,8 +736,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
               <>
                 <line
                   data-testid="crosshair-v"
-                  x1={minuteToX(hoverMin, mainW)}
-                  x2={minuteToX(hoverMin, mainW)}
+                  x1={minuteToX(hoverMin, mainW, xw)}
+                  x2={minuteToX(hoverMin, mainW, xw)}
                   y1={0}
                   y2={plotBottom}
                   className="stroke-ink-muted"
@@ -709,7 +745,12 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
                   strokeWidth={0.7}
                 />
                 {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
-                <circle cx={minuteToX(hoverMin, mainW)} cy={g.toY(hoverAgg.c)} r={2.5} className="fill-ink" />
+                <circle
+                  cx={minuteToX(hoverMin, mainW, xw)}
+                  cy={g.toY(hoverAgg.c)}
+                  r={2.5}
+                  className="fill-ink"
+                />
               </>
             ) : null}
             <line
@@ -796,14 +837,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight }: Props) {
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
       <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="成交量">
-        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={subW} h={subH} />
+        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={subW} h={subH} xw={xw} />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
           // 這條線畫在 subW 的 viewBox 裡 → x 必須用 subW 換算(L-19)。今日 MAIN.width
           // 與 SUB.width 同值,故輸出逐值相同;用 mainW 只是靠兩個常數碰巧相等在維持對位。
           <line
-            x1={minuteToX(hoverMin, subW)}
-            x2={minuteToX(hoverMin, subW)}
+            x1={minuteToX(hoverMin, subW, xw)}
+            x2={minuteToX(hoverMin, subW, xw)}
             y1={0}
             y2={subH}
             className="stroke-ink-muted"
