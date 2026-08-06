@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
+import { createElement, StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStockStream } from "@/hooks/useStockStream";
@@ -57,6 +57,13 @@ let queryClient: QueryClient;
  *  故 provider 用 createElement 包。hook 內 `useQueryClient()` 沒 provider 會直接拋。 */
 function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client: queryClient }, children);
+}
+
+/** 全站 main.tsx 是包在 `<StrictMode>` 下的 —— dev 會 double-invoke updater 與 effect。
+ *  `wrapper` 不套是為了讓其餘測試維持單發語意(訊息數、WS instance 數都好數),
+ *  只有「副作用不可寫在 updater 內」這一條需要真的重現正式環境的雙發。 */
+function strictWrapper({ children }: { children: ReactNode }) {
+  return createElement(StrictMode, null, createElement(QueryClientProvider, { client: queryClient }, children));
 }
 
 beforeEach(() => {
@@ -148,6 +155,30 @@ describe("useStockStream", () => {
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: "2330" }));
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  // 🔴 F-1:`refetch()` 是副作用,不可寫在 `setStatus` 的 updater 內 —— React 的 updater
+  // 契約是純函式,而全站包在 StrictMode(main.tsx)下 dev 會 double-invoke:第一次進
+  // 單飛分支(refetchingRef=true),第二次撞上 in-flight → pendingRefetchRef=true,
+  // finally 的「合併不丟棄」語意再補發一次真的 fetch。每次回補完成都串行多打一份
+  // MB 級 snapshot(後端 `_TICKS_MAXLEN=20_000`)。
+  //
+  // 上一條測試只鎖了「有打」的下界(`toBeGreaterThan`),打幾次不管 —— 這正是本條要補的。
+  it("回補完成的 refetch 恰一次(StrictMode 下 updater 被 double-invoke)", async () => {
+    const hook = renderHook(() => useStockStream("2330"), { wrapper: strictWrapper });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    // StrictMode 的 effect double-invoke 會建兩條 FakeWS(第一條已在 cleanup 關掉)
+    const ws = FakeWS.instances[FakeWS.instances.length - 1]!;
+    const before = fetchMock.mock.calls.length;
+    act(() => ws.emit({ type: "status", tc4: "up", backfilling: "2330" }));
+    act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
+    // 上界:finally 的補發是非同步的,要等它有機會發生才算數
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(fetchMock.mock.calls.length).toBe(before + 1);
+    expect(hook.result.current.status.backfilling).toBeNull();
   });
 
   it("watchlist_quote 更新側欄報價(含 no_data)", async () => {
