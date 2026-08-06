@@ -6,6 +6,7 @@
 import { CorrSection } from "@/components/corr/CorrSection";
 import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
 import { BreadthBand } from "@/components/index/BreadthBand";
+import { LimitListSection } from "@/components/index/LimitListSection";
 import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
@@ -77,9 +78,12 @@ interface Props {
   /** 全市場家數 / 騰落序列(App 層 `useBreadth` 下傳;design R8 —— 本頁維持純展示,
    *  既有測試不必 stub WS)。 */
   breadth?: BreadthState | null;
+  /** 漲跌停列表點列 → 開個股(期)頁(R3 SC-5)。狀態(主檔 / 當前 tab)在 App 層,
+   *  本頁只把回呼往下傳 —— 頁內自己記一份主檔會與右欄 / 個股頁分岔。 */
+  onOpenStock?: (code: string) => void;
 }
 
-export function IndexPage({ twse, otc, txf, futures, breadth = null }: Props) {
+export function IndexPage({ twse, otc, txf, futures, breadth = null, onOpenStock }: Props) {
   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
   const { toggles, set } = useChartToggles();
@@ -116,6 +120,9 @@ export function IndexPage({ twse, otc, txf, futures, breadth = null }: Props) {
         <BreadthBand breadth={breadth} />
         <AdvanceDeclineChart series={breadth?.series ?? []} />
       </section>
+      {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
+          點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
+      <LimitListSection onOpenStock={onOpenStock} />
       <CorrSection />
     </div>
   );

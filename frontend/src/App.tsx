@@ -275,6 +275,14 @@ export default function App() {
                   txf={txf}
                   futures={futuresStream.state?.products ?? null}
                   breadth={breadth}
+                  // R3 SC-5:漲跌停列表點列 → 切個股(期)。走既有 visited gate →
+                  // StockPage mount → `/api/stock/state/{code}`(內含 set_main),
+                  // 個股頁零改動。順序無所謂:兩個 setState 同批,tab 切換與主檔
+                  // 一起生效。
+                  onOpenStock={(code) => {
+                    setStockCode(code);
+                    setTab("stock");
+                  }}
                 />
               </Suspense>
             </div>
