@@ -1603,6 +1603,7 @@ class TestRowsState:
             "total_amount": 12_345,
             "limit_up": True,
             "limit_down": False,
+            "limit_judged": True,
             "touched_limit_up": False,
             "touched_limit_down": False,
             "streak": 3,

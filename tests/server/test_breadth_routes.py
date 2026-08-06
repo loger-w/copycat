@@ -232,6 +232,9 @@ _ROW_FIELDS = {
     "total_amount",
     "limit_up",
     "limit_down",
+    # SC-5 diff 事件源前置(design §6.1):limit 旗標是判定結果還是缺值預設。
+    # 前端不消費,但 rows payload 是 `rows_state()` 直通,這裡如實釘住實際契約。
+    "limit_judged",
     "touched_limit_up",
     "touched_limit_down",
     "streak",
