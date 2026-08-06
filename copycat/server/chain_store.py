@@ -42,6 +42,11 @@ def load_chain(path: Path) -> tuple[list[dict], float] | None:
     if not isinstance(rows, list) or not isinstance(fetched_at, (int, float)):
         logger.warning("chain 快取形狀不符(視為無快取):%s", path)
         return None
+    if not all(isinstance(row, dict) for row in rows):
+        # 只驗外層 list 不夠:壞元素會一路交給 `rows_to_chain_map`,而那支在 boot
+        # 路徑上被呼叫 —— 一份壞快取檔就能讓整台 server 起不來(review S-3/C-4)
+        logger.warning("chain 快取含非 dict 列(視為無快取):%s", path)
+        return None
     return rows, float(fetched_at)
 
 

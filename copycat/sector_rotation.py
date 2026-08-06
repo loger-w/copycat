@@ -37,9 +37,16 @@ def rows_to_chain_map(rows: list[dict]) -> ChainMap:
     的 drill-down 語意會撞在一起。
     同 `(industry, sub_industry)` 內同 `stock_id` 只留一次(N-to-M 對映本身不該
     重複,防上游髒資料重複列);跨 sub / 跨 industry 的重複是正常對映,不去重。
+
+    **列本身不是 dict 一律跳過**(copycat 側加固,review S-3):入參可能來自上游
+    殘表或壞掉的本地快取,而 `row.get` 在 str / None / list 上直接 AttributeError ——
+    兩個呼叫點一個在 boot 路徑(`_restore_chain`)、一個在背景 task,炸掉的代價
+    分別是整台 server 起不來與 task 靜默死透。
     """
     out: ChainMap = {}
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         sid = row.get("stock_id")
         industry = row.get("industry")
         sub = row.get("sub_industry")
