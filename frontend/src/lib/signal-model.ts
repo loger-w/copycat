@@ -13,7 +13,17 @@ export type SignalKind =
   | "crash"
   | "vol_burst"
   | "limit_lock"
-  | "limit_open";
+  | "limit_open"
+  /** 全市場廣度事件(market-overview R4 SC-6):來源是 FinMind 快照 diff,不是自選池的
+   *  tick —— 精度 5-10s、量可達自選訊號的百倍,消費端一律先分族再處理。 */
+  | "market_limit_lock"
+  | "market_limit_open";
+
+/** 全市場廣度事件的判別子。**前綴約定是唯一依據**(不是列舉):後端之後補新的廣度
+ *  kind 時,前端不必同步改就能維持「不進 toast、不進自選 rail」的分族語意。 */
+export function isMarketKind(kind: string): boolean {
+  return kind.startsWith("market_");
+}
 
 export interface SignalMsg {
   type: "signal";
@@ -73,6 +83,12 @@ export function kindLabel(sig: SignalMsg): string {
   }
   if (kind === "limit_lock") return sig.direction === "up" ? "鎖漲停" : "鎖跌停";
   if (kind === "limit_open") return sig.direction === "up" ? "漲停打開" : "跌停打開";
+  // 與後端 `signal_hub._kind_text` 逐字對齊(design §7):同一則事件在 WS 列、jsonl
+  // 與 Discord 上的文案漂掉時,對帳會變成人工比對。
+  if (kind === "market_limit_lock") return sig.direction === "up" ? "全市場鎖漲停" : "全市場鎖跌停";
+  if (kind === "market_limit_open") {
+    return sig.direction === "up" ? "全市場漲停打開" : "全市場跌停打開";
+  }
   return kind;
 }
 
