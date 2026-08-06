@@ -16,6 +16,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import copycat.capital.factory as factory_mod
+import copycat.stkfut_map as stkfut_map
+from copycat.stkfut_map import write_map
 from copycat.capital.client import CapitalClient
 from copycat.server.audit import AuditWriteError
 from copycat.server.ws import CLIENT_QUEUE_MAX as _CLIENT_QUEUE_MAX
@@ -365,6 +367,149 @@ class TestOrderFuture:
             fields = _sent(com, "future")[0][1]
             assert isinstance(fields, dict)
             assert fields["bstrStockNo"] == "TXFI6"
+
+
+# ---------------------------------------------------------------------------
+# order/future 的個股期閘(stkfut-contracts SC-6:PRODUCT_NOT_ALLOWED / BAD_TICK)
+# ---------------------------------------------------------------------------
+
+
+def _stkfut_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """個股期對映表注入(隔離版控真檔;CDF=標準 2000、QFF=小型 100、NYF=ETF 10000)。"""
+    path = tmp_path / "stkfut_map.json"
+    write_map(
+        path,
+        {
+            "2330": {
+                "prod": "CDF",
+                "name": "台積電",
+                "unit": 2000,
+                "mini": {"prod": "QFF", "unit": 100},
+            },
+            "0050": {"prod": "NYF", "name": "元大台灣50ETF", "unit": 10000, "mini": None},
+            "1312": {"prod": "EEF", "name": "國喬", "unit": 2157, "mini": None},
+        },
+    )
+    monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", path)
+
+
+_STKFUT_BODY: dict[str, Any] = {
+    "tc4_symbol": "TC.F.TWF.CDF.202609",
+    "buy_sell": "buy",
+    "price": 1180.0,
+    "qty": 1,
+}
+
+
+class TestOrderStkfutGates:
+    def test_standard_stock_future_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            res = client.post("/api/capital/order/future", json=_STKFUT_BODY)
+            assert res.status_code == 200
+            fields = _sent(com, "future")[0][1]
+            assert isinstance(fields, dict)
+            assert fields["bstrStockNo"] == "CDFI6"
+
+    def test_mini_stock_future_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, tc4_symbol="TC.F.TWF.QFF.202609")
+            assert client.post("/api/capital/order/future", json=body).status_code == 200
+            assert len(_sent(com, "future")) == 1
+
+    def test_etf_future_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ETF 期貨(契約單位 10,000 受益權單位)本輪不開放下單 —— 行情/乘數照落,
+        送單層擋:名目金額是股票期貨的 5 倍,誤按一次的後果與個股期完全不同級。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, tc4_symbol="TC.F.TWF.NYF.202609", price=60.0)
+            res = client.post("/api/capital/order/future", json=body)
+            assert res.status_code == 400
+            assert res.json()["detail"]["error"] == "PRODUCT_NOT_ALLOWED"
+            assert _sent(com, "future") == []
+
+    def test_non_standard_unit_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """characterization(R13):除權息調整後契約單位變 2,157 的個股期會被一併擋下。
+
+        這是**已知的誤拒**(design Known Risks)—— 「單位必須是標準值」這道閘的
+        目的是擋 ETF,而調整契約剛好落在同一側。放寬要另外拿到「哪些單位算股票期貨」
+        的權威來源,不是把閘拿掉。
+        """
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, tc4_symbol="TC.F.TWF.EEF.202609", price=60.0)
+            res = client.post("/api/capital/order/future", json=body)
+            assert res.status_code == 400
+            assert res.json()["detail"]["error"] == "PRODUCT_NOT_ALLOWED"
+            assert _sent(com, "future") == []
+
+    @pytest.mark.parametrize("price", [1180.5, 60.03, 9.999])
+    def test_illegal_tick_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, price: float
+    ) -> None:
+        """個股期的升降單位 = 現股 tick 表(期交所規格同級距)。非法檔位在期交所會被
+        退單,而群益端的退單訊息回到畫面上只是一句「委託失敗」。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, price=price)
+            res = client.post("/api/capital/order/future", json=body)
+            assert res.status_code == 400
+            assert res.json()["detail"]["error"] == "BAD_TICK"
+            assert _sent(com, "future") == []
+
+    @pytest.mark.parametrize("price", [1180.0, 60.05, 9.99, 505.0])
+    def test_legal_ticks_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, price: float
+    ) -> None:
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, price=price)
+            assert client.post("/api/capital/order/future", json=body).status_code == 200
+            assert len(_sent(com, "future")) == 1
+
+    def test_market_order_skips_tick_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """市價單的 price 欄無意義(bstrPrice="M")→ 不得拿它去驗檔位(R2-8)。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STKFUT_BODY, price=1180.5, price_type="market", time_in_force="IOC")
+            assert client.post("/api/capital/order/future", json=body).status_code == 200
+            assert len(_sent(com, "future")) == 1
+
+    def test_index_future_not_subject_to_stock_tick_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """台指期 23,000 點在股票 tick 表是「5 元檔」的合法值,但這道閘本來就只該
+        套在個股期上 —— 鎖住範圍,免得日後改 tick 表誤傷指數期。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_FUTURE_BODY, price=23001)
+            assert client.post("/api/capital/order/future", json=body).status_code == 200
+            assert len(_sent(com, "future")) == 1
 
 
 # ---------------------------------------------------------------------------
