@@ -815,7 +815,13 @@ class BreadthEngine:
         if loaded is None:
             return
         rows, fetched_at = loaded
-        chain_map = rows_to_chain_map(rows)
+        try:
+            chain_map = rows_to_chain_map(rows)
+        except Exception:
+            # 這裡跑在 boot 路徑上(`start()`):一份髒快取打穿 parse 就讓整台 server
+            # 起不來 —— 失效半徑從類股面板擴到全部面板(review S-3/C-4)
+            logger.exception("breadth industry_chain 快取解析失敗(視同無快取)")
+            return
         if not chain_map:
             logger.warning("breadth industry_chain 快取解析後為空(%d 列),視同無快取", len(rows))
             return
@@ -877,18 +883,30 @@ class BreadthEngine:
             )
             self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
             return
-        chain_map = rows_to_chain_map(rows)
-        if not chain_map:
-            # 換表 = 連磁碟那份一起覆寫;空表照換的話重啟後連 stale 的類股都沒有
-            logger.warning(
-                "breadth industry_chain 解析後為空(%d 列;沿用舊表不落檔,%.0fs 後重試)",
-                len(rows),
+        try:
+            chain_map = rows_to_chain_map(rows)
+            if not chain_map:
+                # 換表 = 連磁碟那份一起覆寫;空表照換的話重啟後連 stale 的類股都沒有
+                logger.warning(
+                    "breadth industry_chain 解析後為空(%d 列;沿用舊表不落檔,%.0fs 後重試)",
+                    len(rows),
+                    _MAP_RETRY_SECS,
+                )
+                self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
+                return
+            fetched_at = _time.time()
+            save_chain(self._chain_path(), rows, fetched_at)
+        except Exception:
+            # parse / 落檔的髒值路徑也要自己收尾退避(docstring 的「不外拋」在此成真):
+            # 例外逃出去只會變成 asyncio 的「Task exception was never retrieved」,而
+            # `_chain_retry_at` 沒設 → 下一圈立刻重武裝,以 poll 節奏(10s)對著壞上游
+            # 重打而類股面板停在舊表上零錯誤訊號(review S-3/C-4)
+            logger.exception(
+                "breadth industry_chain 解析 / 落檔失敗(沿用舊表,%.0fs 後重試)",
                 _MAP_RETRY_SECS,
             )
             self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
             return
-        fetched_at = _time.time()
-        save_chain(self._chain_path(), rows, fetched_at)
         self._chain_map = chain_map
         self._chain_fetched_at = fetched_at
         self._chain_retry_at = None
