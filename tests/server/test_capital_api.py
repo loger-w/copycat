@@ -620,6 +620,35 @@ class TestCorrectPriceStkfutTickGate:
             assert res.status_code == 200
             assert len(_sent(com, "correct_price")) == 1
 
+    @pytest.mark.parametrize(
+        ("seq", "contract"),
+        [
+            ("00000000023", "NYFI6"),  # ETF 期貨(10,000 受益權單位)
+            ("00000000024", "EEFI6"),  # 除權息調整後的非標準單位(2,157)
+        ],
+    )
+    def test_non_standard_unit_not_gated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seq: str, contract: str
+    ) -> None:
+        """非標準契約單位的個股期改價不驗檔位 —— 送單面根本走不到 tick 檢查。
+
+        送單面在 tick 檢查**之前**先擋單位(PRODUCT_NOT_ALLOWED),ETF / 調整後
+        契約永遠到不了現股 tick 表;改價面照套那張表,會把制度上合法的 60.05
+        擋成 400 BAD_TICK。而這種活單真的存在(可由群益 APP 下),擋掉的結果是
+        既有委託改不動 —— 閘的目的是消滅退單,不是自己造一個。
+        """
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._seed_fut_order(com, seq, contract)
+            res = client.post(
+                "/api/capital/order/correct-price",
+                json={"seq_no": seq, "market": "fut", "price": 60.05},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "correct_price")) == 1
+
     def test_index_future_not_gated(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
