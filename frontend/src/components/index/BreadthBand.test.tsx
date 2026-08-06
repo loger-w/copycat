@@ -1,0 +1,123 @@
+/** @vitest-environment jsdom */
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { BreadthBand } from "@/components/index/BreadthBand";
+import type { BreadthState } from "@/types";
+
+function state(over: Partial<BreadthState> = {}): BreadthState {
+  return {
+    enabled: true,
+    trade_date: "2026-08-06",
+    as_of: "10:31:00",
+    stale: false,
+    counts: {
+      twse: { limit_up: 3, up: 512, flat: 88, down: 401, limit_down: 2 },
+      tpex: { limit_up: 7, up: 388, flat: 61, down: 290, limit_down: 1 },
+    },
+    series: [],
+    ...over,
+  };
+}
+
+afterEach(cleanup);
+
+describe("BreadthBand 三態(SC-4)", () => {
+  it("(a) breadth null → 載入中", () => {
+    render(<BreadthBand breadth={null} />);
+    expect(screen.getByTestId("breadth-band").textContent).toContain("載入中");
+    expect(screen.queryByTestId("breadth-cell-twse-up")).toBeNull();
+  });
+
+  it("(b) enabled=false → FinMind 未設定(不畫格子)", () => {
+    render(<BreadthBand breadth={state({ enabled: false, counts: null })} />);
+    expect(screen.getByTestId("breadth-band").textContent).toContain("FinMind 未設定");
+    expect(screen.queryByTestId("breadth-cell-twse-up")).toBeNull();
+  });
+
+  it("(c) enabled 但 counts=null → 載入中", () => {
+    render(<BreadthBand breadth={state({ counts: null })} />);
+    expect(screen.getByTestId("breadth-band").textContent).toContain("載入中");
+    expect(screen.queryByTestId("breadth-cell-twse-up")).toBeNull();
+  });
+});
+
+describe("BreadthBand 格值與版面(SC-4)", () => {
+  it("(d) 上市 / 上櫃兩列各五格,依序漲停 / 上漲 / 平盤 / 下跌 / 跌停", () => {
+    render(<BreadthBand breadth={state()} />);
+    for (const market of ["twse", "tpex"] as const) {
+      const row = within(screen.getByTestId(`breadth-row-${market}`));
+      const cells = row.getAllByTestId(/^breadth-cell-/);
+      expect(cells.length).toBe(5);
+      expect(cells.map((c) => c.getAttribute("data-testid"))).toEqual([
+        `breadth-cell-${market}-limit_up`,
+        `breadth-cell-${market}-up`,
+        `breadth-cell-${market}-flat`,
+        `breadth-cell-${market}-down`,
+        `breadth-cell-${market}-limit_down`,
+      ]);
+      expect(cells.map((c) => c.textContent)).toEqual([
+        expect.stringContaining("漲停"),
+        expect.stringContaining("上漲"),
+        expect.stringContaining("平盤"),
+        expect.stringContaining("下跌"),
+        expect.stringContaining("跌停"),
+      ]);
+    }
+    expect(screen.getByTestId("breadth-row-twse").textContent).toContain("上市");
+    expect(screen.getByTestId("breadth-row-tpex").textContent).toContain("上櫃");
+  });
+
+  it("(e) 十個數字逐格對上後端 counts", () => {
+    render(<BreadthBand breadth={state()} />);
+    const got: Record<string, string> = {};
+    for (const market of ["twse", "tpex"] as const) {
+      for (const b of ["limit_up", "up", "flat", "down", "limit_down"]) {
+        got[`${market}-${b}`] = screen.getByTestId(`breadth-cell-${market}-${b}`).textContent ?? "";
+      }
+    }
+    expect(got["twse-limit_up"]).toContain("3");
+    expect(got["twse-up"]).toContain("512");
+    expect(got["twse-flat"]).toContain("88");
+    expect(got["twse-down"]).toContain("401");
+    expect(got["twse-limit_down"]).toContain("2");
+    expect(got["tpex-limit_up"]).toContain("7");
+    expect(got["tpex-up"]).toContain("388");
+    expect(got["tpex-flat"]).toContain("61");
+    expect(got["tpex-down"]).toContain("290");
+    expect(got["tpex-limit_down"]).toContain("1");
+  });
+
+  it("(f) 漲停格紅底、跌停格綠底、中間三格中性(台股紅漲綠跌)", () => {
+    render(<BreadthBand breadth={state()} />);
+    const up = screen.getByTestId("breadth-cell-twse-limit_up").className;
+    const down = screen.getByTestId("breadth-cell-twse-limit_down").className;
+    expect(up).toContain("bg-bull");
+    expect(down).toContain("bg-bear");
+    for (const b of ["up", "flat", "down"]) {
+      const cls = screen.getByTestId(`breadth-cell-twse-${b}`).className;
+      expect(cls).not.toContain("bg-bull");
+      expect(cls).not.toContain("bg-bear");
+    }
+  });
+
+  it("(g) 數字用 ink token,不與底色同色(染色只在格底)", () => {
+    render(<BreadthBand breadth={state()} />);
+    const num = screen.getByTestId("breadth-value-twse-limit_up").className;
+    expect(num).toContain("text-ink");
+    expect(num).not.toContain("text-bull");
+  });
+});
+
+describe("BreadthBand stale 徽章(SC-3)", () => {
+  it("(h) stale=true → 顯示「資料延遲」且前值仍在", () => {
+    render(<BreadthBand breadth={state({ stale: true })} />);
+    expect(screen.getByTestId("breadth-stale").textContent).toContain("資料延遲");
+    expect(screen.getByTestId("breadth-cell-twse-up").textContent).toContain("512");
+  });
+
+  it("(i) stale=false → 無徽章", () => {
+    render(<BreadthBand breadth={state()} />);
+    expect(screen.queryByTestId("breadth-stale")).toBeNull();
+  });
+});
