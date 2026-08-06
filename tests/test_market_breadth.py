@@ -32,19 +32,21 @@ def test_classify_stock_id_buckets() -> None:
     assert classify_stock_id("00679B") == "etf"  # 00 前綴優先於長度判定
     assert classify_stock_id("030171") == "warrant"  # 6 位權證
     assert classify_stock_id("2330A") == "warrant"  # 含非 digit
-    assert classify_stock_id("001") == "warrant"  # 3 位指數 row
+    # 3 位指數 row:`00` 前綴判定先於長度 → 落 etf 桶(neigui 原語意;兩桶都排除)
+    assert classify_stock_id("001") == "etf"
+    assert classify_stock_id("036") == "warrant"  # 非 00 前綴的指數 row → 長度不合
     assert classify_stock_id("") == "warrant"
     assert classify_stock_id("  2330  ") is None  # 前後空白先 strip
 
 
 def test_filter_universe_partitions_and_watch_list_wins() -> None:
     out = filter_universe(
-        ["2330", "0050", "030171", "2317", "001"],
+        ["2330", "0050", "030171", "2317", "001", "036"],
         watch_list={"2317"},
     )
     assert out["universe"] == {"2330"}
-    assert out["excluded"]["etf"] == ["0050"]
-    assert out["excluded"]["warrant"] == ["030171", "001"]
+    assert out["excluded"]["etf"] == ["0050", "001"]  # 001 走 00 前綴 → etf 桶
+    assert out["excluded"]["warrant"] == ["030171", "036"]
     assert out["excluded"]["watch_list"] == ["2317"]
 
 
