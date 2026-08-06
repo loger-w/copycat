@@ -1,0 +1,333 @@
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index d3f470fa..f63e8f46 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -311,7 +311,23 @@ class StockEngine:
+                     logger.warning("watchlist subscribe %s failed", code)
+             for code in removed:
+                 await asyncio.to_thread(self._release, code, "watchlist")
+-                self._no_data.discard(code)
++                if code not in self._refs:
++                    # **真正退訂了才**清(code review A7d,鏡像路徑 `set_main_contract`
++                    # 的同款處理)。同一檔可能同時是主圖:無條件清會讓主圖那格的
++                    # 「無資料」在使用者把它移出自選之後永久消失 —— TC4 的 no-data
++                    # 回呼只在訂閱當下發一次,之後 snapshot 恆 no_data=False。
++                    self._no_data.discard(code)
++                    # 回補記帳同樣以**訂閱期**為界:真退訂後「今日已回補 / 失敗冷卻」
++                    # 的判斷作廢,重新訂閱時回補機會重新開始。不清的話 `_acquire` 的
++                    # setdefault 用回同一個舊 state,`group_snapshot` 的入列 guard 恆擋
++                    # → 退訂期間的分鐘缺口整天補不回來,而 backfilling / no_data 都是
++                    # False,卡片零訊號地空著。冷卻歸零是接受的:re-acquire 是使用者
++                    # 驅動(把股票加回自選),不是重試風暴。
++                    # **在 loop 側清**:記帳集合是 loop-only 不變式,不可下沉到
++                    # `_release`(那個是在 executor thread 跑的)。
++                    # `_backfill_pending` 不清 —— 在途 job 之後仍會來扣一次(A3)。
++                    self._backfilled.discard(code)
++                    self._backfill_failed.pop(code, None)
+             # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
+             # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
+             # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
+@@ -359,6 +375,10 @@ class StockEngine:
+                     # 無條件清會讓側欄的「無資料」在使用者點開再切走之後永久消失
+                     # (TC4 的 no-data 回呼只在訂閱當下發一次)。
+                     self._no_data.discard(old)
++                    # 回補記帳同以訂閱期為界(理由見 `set_watchlist` removed 迴圈):
++                    # 主圖槽位真退訂時,那一檔的「今日已回補 / 失敗冷卻」一併作廢。
++                    self._backfilled.discard(old)
++                    self._backfill_failed.pop(old, None)
+             if not is_futures_key(key):
+                 await self._acquire_stkfut(key)
+             self._enqueue_backfill(key)
+@@ -647,7 +667,12 @@ class StockEngine:
+         assert self._pending_date is not None
+         self._trade_date = self._pending_date
+         self._pending_date = None
+-        for state in self._states.values():
++        # **快照後迭代**:`_acquire` 在 executor thread 對 `_states` setdefault 新鍵
++        # (自選新增 / 重試輪 / stkfut 腿隨時可能發生),直接迭代 `.values()` 撞上就是
++        # RuntimeError —— 迴圈之後的每一步(記帳清空、主圖重回補、hub 的 on_rollover)
++        # 全部不跑,而 `_pending_date` 已在上一行清掉 → 這一天不會再有第二次 stage2。
++        # 同 `quotes()` 的 R16(那裡顯式辨識過這條 hazard,這裡是漏網的第二處)。
++        for state in list(self._states.values()):
+             state.reset()
+         self._no_data.clear()
+         # 回補記帳是**日別**語意:不清的話「今日已回補」會沿用昨天的判斷,新的一天
+@@ -780,22 +805,30 @@ class StockEngine:
+             and (meta.upper_milli, meta.lower_milli) != prev_limits
+         ):
+             self._enqueue_backfill(code)
+-        # **期貨 instrument 不參與換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
+-        # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它換日會在夜盤把全部
+-        # 現貨狀態 reset(當日分時線整條消失,而畫面上只是「圖突然空了」)。
+-        rolls_the_day = not is_futures_key(code)
++        # **期貨 instrument 不武裝換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
++        # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它武裝 stage1 會在夜盤把
++        # 全部現貨狀態 reset(當日分時線整條消失,而畫面上只是「圖突然空了」)。
++        arms_the_day = not is_futures_key(code)
+         if (
+             tick is not None
+-            and rolls_the_day
++            and arms_the_day
+             and self._pending_date is None
+             and tick.trade_date > self._trade_date
+         ):
+             # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
+             # 新日 tick → 先補 stage1 再走 stage2
+             self.rollover_stage1(tick.trade_date)
++        # **完成(stage2)不限現貨鍵**(E-3):期貨日盤 08:45 開盤而現貨 09:00 才有首筆,
++        # 舊條件讓那 15 分鐘的合約 tick 落到下面的 `state.ingest` —— 昨日 `_last_cum`
++        # 使它恆 False(不 apply 不推播),分時圖左緣整段消失且零錯誤訊號;自選空 +
++        # 主圖合約時更是永遠等不到現貨首筆 → 整天不換日。
++        # 夜盤沒有誤觸的路:(a) 夜盤 tick 在上面的 `_in_futures_session` 就整則早退,
++        # 到得了這裡的期貨 tick 必屬日盤 08:45–13:45,其 `trade_date` 即當日;
++        # (b) 00:00–05:00 夜盤時段 `_pending_date` 恆 None(checkpoint 08:00 才武裝)。
++        # 已知殘留限制:補市日(週六)+ 自選空 + 主圖合約時 checkpoint 不武裝、現貨
++        # 快路徑也沒有現貨 tick → 仍整天不換日(極罕見,不在本輪展開)。
+         if (
+             tick is not None
+-            and rolls_the_day
+             and self._pending_date is not None
+             and tick.trade_date == self._pending_date
+         ):
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 7ab9d8cd..62cc068d 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -341,6 +341,47 @@ class TestRollover:
+         assert snap["minutes"]["657"]["o"] == 1
+         await engine.close()
+ 
++    async def test_stage2_survives_states_mutation_during_reset_iteration(self) -> None:
++        """E-5:stage2 的 reset 迴圈要先對 `_states` 取快照。
++
++        `_acquire` 在 executor thread 對 `_states` setdefault 新鍵(自選新增 / 重試輪 /
++        stkfut 腿隨時可能發生),而 stage2 在 loop 上直接迭代 `.values()` —— 撞上就是
++        RuntimeError:迴圈**之後**的每一步(記帳清空、主圖重回補、hub 的 on_rollover)
++        全部不跑,而 `_pending_date` 已在迴圈**之前**清掉 → 這一天不會再有第二次 stage2。
++        沒 reset 到的 state 整天 ingest=False、記帳整天沿用昨日,畫面只是「圖不動」。
++        `quotes()` 的同款 hazard 已由 R16 防住,這裡是漏網的第二處。
++        """
++        from copycat.live.stock_state import StockDayState
++
++        engine, src = await _make()
++        await engine.set_watchlist(["2330", "5483"])
++        assert src.on_message is not None
++        src.on_message(_quote(cum=1))
++        src.on_message(_quote(code="5483", cum=1))
++        await _drain(engine)
++        engine._backfill_jobs.put_nowait(("2330", engine._generation))
++        engine._backfill_jobs.put_nowait(("5483", engine._generation))
++        await _drain(engine)
++        assert engine._backfilled == {"2330", "5483"}  # 前提:記帳確實有東西可清
++
++        state = engine._states["2330"]  # 迭代的第一個 → 之後的每一步都在它後面
++        orig_reset = state.reset
++
++        def _mutating_reset() -> None:
++            engine._states.setdefault("F:XXF", StockDayState())  # executor thread 的新訂閱
++            orig_reset()
++
++        state.reset = _mutating_reset  # type: ignore[method-assign]
++
++        engine.rollover_stage1("2026-07-22")
++        src.on_message(_quote(cum=50, date="20260722"))
++        await _drain(engine)
++
++        assert engine._backfilled == set()  # 迴圈之後的步驟確實跑完
++        assert engine.snapshot("5483")["last"] is None  # 迴圈內的每個 state 都 reset 到
++        assert engine.trade_date == "2026-07-22"
++        await engine.close()
++
+ 
+ class TestStreamAndStatus:
+     async def test_stream_receives_tick_and_book(self) -> None:
+@@ -1811,7 +1852,12 @@ class TestContractSessionGate:
+ 
+ 
+ class TestRolloverIsolationForContracts:
+-    """D14a:期貨 tick 不觸發換日(夜盤跨午夜的日期會比日盤主圖早一天到)。"""
++    """D14a:期貨 tick 不**武裝** stage1(夜盤跨午夜的日期會比日盤主圖早一天到);
++    但已武裝的 pending 可由**日盤**合約 tick 完成 stage2(E-3)。
++
++    兩者的分界靠 `_in_futures_session` 的整則早退:到得了 stage2 那段的期貨 tick
++    必屬日盤 08:45–13:45,其 `trade_date` 即當日,無跨午夜歧義。
++    """
+ 
+     async def test_contract_tick_with_a_new_date_never_rolls_the_day(self) -> None:
+         engine, src = await _make()
+@@ -1828,17 +1874,51 @@ class TestRolloverIsolationForContracts:
+         assert engine.snapshot("2330")["last"]["cum_vol"] == 100  # 現貨狀態未被 reset
+         await engine.close()
+ 
+-    async def test_contract_tick_does_not_complete_a_pending_rollover(self) -> None:
++    async def test_night_contract_tick_does_not_complete_a_pending_rollover(self) -> None:
++        """**事前標為該變的既有斷言**(舊名 `test_contract_tick_does_not_complete_a_pending_rollover`)。
++
++        舊契約是「任何期貨 tick 都不得完成 stage2」,那把 08:45–09:00 的期貨成交
++        全丟掉(pending 期間合約 tick 落到 `state.ingest`,昨日 `_last_cum` 使它恆
++        False);極端情形是自選空 + 主圖合約時永遠等不到現貨首筆 → 整天不換日。
++        新契約 = **日盤**合約 tick 可完成 stage2,而這條保留其防護意圖的新表述:
++        夜盤 tick 在 `_in_futures_session` 就整則早退,到不了 stage2 那段。
++        """
+         engine, src = await _make()
+         await engine.set_main_contract(_CONTRACT)
+         engine.rollover_stage1("2026-07-22")
+         assert src.on_message is not None
+-        src.on_message(_fut_quote(cum=1, date="20260722"))
++        # 台北次日 01:00(夜盤):跨午夜的日期比日盤主圖早一天到
++        src.on_message(_fut_quote(cum=1, date="20260722", precise="170000000000"))
+         await _drain(engine)
+-        assert engine._pending_date == "2026-07-22"  # 仍等現貨首筆
++        assert engine._pending_date == "2026-07-22"  # 仍等日盤首筆
+         assert engine.trade_date == "2026-07-21"
+         await engine.close()
+ 
++    async def test_daytime_contract_tick_completes_a_pending_rollover(self) -> None:
++        """E-3:pending 已武裝時,日盤合約 tick 要完成 stage2 並自己被 ingest。
++
++        期貨日盤 08:45 開盤、現貨 09:00 才有首筆 —— 舊碼要求 `rolls_the_day`
++        (非期貨鍵)才完成 stage2,那 15 分鐘的期貨成交全部落到 `state.ingest`
++        而昨日 `_last_cum` 使它恆 False(不 apply 不推播),分時圖左緣整段消失
++        且沒有任何錯誤訊號。
++        """
++        engine, src = await _make()
++        await engine.set_main_contract(_CONTRACT)
++        await _drain(engine)
++        engine.rollover_stage1("2026-07-22")
++        stream = engine.stream()
++        assert src.on_message is not None
++        # 台北 08:46(日盤窗內)+ 新日 trade_date
++        src.on_message(_fut_quote(cum=1, date="20260722", precise="004600000000"))
++        await _drain(engine)
++
++        assert engine.trade_date == "2026-07-22"
++        assert engine._pending_date is None
++        assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 1  # 觸發的那一則自己也進狀態
++        got = await _collect(stream)
++        assert any(m["type"] == "tick" and m["code"] == _CONTRACT for m in got)
++        await engine.close()
++
+ 
+ class TestMainSlotTransfer:
+     """D15 槽位轉移表:四種轉移後 `_refs` 零洩漏(逐 owner 斷言)。"""
+@@ -1920,6 +2000,120 @@ class TestMainSlotTransfer:
+         await engine.close()
+ 
+ 
++class TestWatchlistRemovalBookkeeping:
++    """E-4:自選移除的旗標清理要與 `set_main_contract` 的 A7d 同守則 ——
++    **真正退訂了才**清,還有 owner 時不動。"""
++
++    async def test_no_data_survives_removal_while_main_still_holds(self) -> None:
++        """同一檔同時是主圖與自選時,自自選移除**不得**清 `_no_data`。
++
++        TC4 的 no-data 回呼只在訂閱當下發一次 —— 被誤清之後那一檔的 snapshot 恆
++        `no_data=False`,而它其實仍訂著且平台說查無此檔:「查無此檔」與「還沒推」
++        在畫面上合併成同一張空卡,使用者分不出該不該換一檔看。
++        鏡像路徑 `set_main_contract`(A7d)早已依此守則做對。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["9999"])  # 對映表無此碼 → 不掛期現對照腿
++        await engine.set_main("9999")
++        assert src.on_no_data is not None
++        src.on_no_data("9999")
++        await _drain(engine)
++        assert engine.snapshot("9999")["no_data"] is True  # 前提:旗標確實掛上了
++
++        await engine.set_watchlist([])
++
++        assert engine._refs["9999"] == {"main"}  # 前提:主圖 owner 還在 = 沒真退訂
++        assert engine.snapshot("9999")["no_data"] is True
++        await engine.close()
++
++    async def test_no_data_cleared_when_removal_is_the_last_owner(self) -> None:
++        """對照組:自選是最後一個 owner → 真退訂,旗標照清(A7d 的另一半)。
++
++        不清的話下次把它加回自選,畫面在任何新推播之前就先掛「無資料」,
++        而那是上一輪訂閱期的答案。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["9999"])
++        assert src.on_no_data is not None
++        src.on_no_data("9999")
++        await _drain(engine)
++        assert engine.snapshot("9999")["no_data"] is True
++
++        await engine.set_watchlist([])
++
++        assert "9999" not in engine._refs  # 前提:真的退訂了
++        assert engine.snapshot("9999")["no_data"] is False
++        await engine.close()
++
++    async def test_backfill_bookkeeping_restarts_after_a_real_unsubscribe(self) -> None:
++        """E-2:`_backfilled` 是日別記帳,但**真退訂**同樣要讓它作廢。
++
++        清空點只有 rollover stage2 與 reconnect —— 移除再加回之後(`_acquire` 的
++        setdefault 用回同一個舊 state)`code not in self._backfilled` 恆假,
++        `group_snapshot` 的入列 guard 永遠擋著 → 退訂期間的分鐘缺口整天補不回來,
++        而 `backfilling` / `no_data` 都是 False,卡片零訊號地空著。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++        assert src.backfills.count("2330") == 1
++        assert "2330" in engine._backfilled  # 前提:確實記過帳
++
++        await engine.set_watchlist([])  # 真退訂(自選是唯一 owner)
++        assert "2330" not in engine._refs
++        await engine.set_watchlist(["2330"])  # 重新加回
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++
++        assert src.backfills.count("2330") == 2
++        await engine.close()
++
++    async def test_failure_cooldown_restarts_after_a_real_unsubscribe(self) -> None:
++        """`_backfill_failed` 同構:冷卻計數隨真退訂歸零。
++
++        re-acquire 是使用者驅動(把股票加回自選)、不是重試風暴,所以「當日已失敗
++        3 次」這個判斷跟著訂閱期一起作廢 —— 否則使用者移除再加回也救不了那一格。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        src.backfill_error = ConnectionError("SubHistory 2330 failed")
++        for _ in range(5):
++            engine.group_snapshot(["2330"])
++            await _drain(engine)
++        assert src.backfills.count("2330") == 3  # 前提:當日冷卻確實生效(A2)
++
++        await engine.set_watchlist([])
++        await engine.set_watchlist(["2330"])
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++
++        assert src.backfills.count("2330") == 4
++        await engine.close()
++
++    async def test_backfill_bookkeeping_survives_removal_while_main_still_holds(self) -> None:
++        """對照組:仍有 owner(主圖)= 沒真退訂 → 記帳**保留**,不得重補。
++
++        無條件清會讓「移出自選」變成對 TC4 多發一次 SubHistory,而那一檔的當日
++        資料根本沒斷過。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        await engine.set_main("2330")
++        await _drain(engine)
++        assert src.backfills.count("2330") == 1  # set_main 的入列
++        assert "2330" in engine._backfilled
++
++        await engine.set_watchlist([])
++
++        assert engine._refs["2330"] == {"main"}  # 前提:主圖 owner 還在
++        assert "2330" in engine._backfilled
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++        assert src.backfills.count("2330") == 1
++        await engine.close()
++
++
+ class TestDirtyWatchlistScope:
+     """D16:`_dirty_watchlist` 只收自選碼 —— 合約鍵混進去會廣播 code="F:CDF:202609"
+     的 `watchlist_quote`,而側欄以 code 對照自選名單,那一則對它是垃圾。"""

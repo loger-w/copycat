@@ -1,0 +1,33 @@
+{
+  "round": 1,
+  "date": "2026-08-06",
+  "stage": "branch-lifecycle 收尾補齊(/bug 一輪 medium,2 lens)",
+  "diff": "review-diff.txt(29004dc8..4d084100)",
+  "lenses": [
+    {"id": "A", "focus": "rollover/訂閱池狀態機正確性", "model": "opus"},
+    {"id": "B", "focus": "測試覆蓋(mutation 實測)", "model": "opus"}
+  ],
+  "findings": [
+    {"id": "A-1", "severity": "P2", "disposition": "註解記帳 + next-time",
+     "title": "退訂清帳被在途 backfill job 秒級窗回寫(generation 退訂不 bump)",
+     "fix": "2b1d7b1a 註解;完整解 per-code epoch 記 next-time"},
+    {"id": "A-2", "severity": "P2", "disposition": "next-time",
+     "title": "stage2 提前後開盤前空回補佔 _backfilled,疊加重掛失敗才顯害"},
+    {"id": "A-3", "severity": "P2", "disposition": "FIXED(註解)",
+     "title": "現貨側提前 reset 效果未寫進 E-3 修法註解", "fix": "2b1d7b1a"},
+    {"id": "B-1", "severity": "P1", "disposition": "FIXED",
+     "title": "夜盤 rollover 防線測試不具鑑別力(trade_date 錯位,session gate 未被測到)",
+     "verify": "finder 變異實測 M7 不殺 + 修後殺;implementer 雙向自證(mutant 下新紅舊綠)",
+     "fix": "dac180b0"},
+    {"id": "B-2", "severity": "P2", "disposition": "FIXED",
+     "title": "set_main_contract A7d 清點是 unkilled mutant", "fix": "fee96b36(mutant 紅實證)"},
+    {"id": "B-3", "severity": "P2", "disposition": "FIXED",
+     "title": "合約觸發 stage2 會 reset 現貨池的放行邊界無斷言", "fix": "fee96b36"}
+  ],
+  "post_fix_gates": {
+    "pytest": "2548 passed, 1 skipped(exit 0)",
+    "ruff": "All checks passed!(exit 0)",
+    "pyright": "0 errors(exit 0)"
+  },
+  "exit": "無未處置 P0/P1 → 進 push"
+}
