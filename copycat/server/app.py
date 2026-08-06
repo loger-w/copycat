@@ -931,8 +931,13 @@ def create_app(
         batch 沒得顯示。
         """
         stock = _stock(request)
-        wanted = [c for c in codes.split(",") if c]
-        # 數量先驗:超量時逐碼驗證只是白做工,而且錯誤碼會變成 BAD_CODE 誤導排查方向
+        # **先去重(保序)再驗數量**:重複碼是正常輸入 —— 同一檔可屬多個群組,而前端
+        # 把成員直接拼進 csv。反過來(先驗後去重)會把一份合法請求判成 `BAD_CODES`,
+        # 而畫面只顯示「載入失敗」,沒有任何線索指向「有一檔重複」。保序是因為卡片
+        # 就照這個順序排;`dict.fromkeys` 是首見序去重的既有寫法(同自選聯集)。
+        wanted = list(dict.fromkeys(c for c in codes.split(",") if c))
+        # 數量驗證仍在逐碼驗證之前:超量時逐碼驗只是白做工,而且錯誤碼會變成
+        # BAD_CODE 誤導排查方向
         if len(wanted) > WATCHLIST_LIMIT:
             raise HTTPException(status_code=400, detail={"error": "BAD_CODES"})
         for code in wanted:
