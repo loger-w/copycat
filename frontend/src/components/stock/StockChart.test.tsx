@@ -303,3 +303,53 @@ describe("StockChart 空態三分態文案(N-7)", () => {
     expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
   });
 });
+
+// 🟢 SC-5 / D10:選了個股期合約 → 本輪只提供江波圖。
+// 「K 線模式鈕反灰」單獨是不夠的:模式是**持久化狀態**,使用者上次停在日 K 時,
+// 切進期貨的第一次 render 就已經是 day 模式 —— 不收斂就會掛著 CandleChart、
+// 且 `useStockBars` 已經拿股號打了一發 `/api/stock/bars`(那支查的是現貨不是合約,
+// 畫出來的 K 線與畫面上的合約無關,是零訊號的假資料)。所以三件事要同時成立:
+// 模式鈕 disabled + 模式收斂 + 取數 enabled:false。
+describe("StockChart 期貨態(D10/R5)", () => {
+  const CONTRACT = { prod: "CDF", ym: "202609" };
+
+  function futChart() {
+    return wrap(<StockChart accum={ACCUM} code="2330" contract={CONTRACT} />);
+  }
+
+  it("江波圖以外的模式鈕全部 disabled + tooltip", () => {
+    futChart();
+    const intraday = screen.getByRole("button", { name: "江波圖" });
+    expect(intraday.hasAttribute("disabled")).toBe(false);
+    for (const label of [...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"]) {
+      const btn = screen.getByRole("button", { name: label });
+      expect(btn.hasAttribute("disabled")).toBe(true);
+      expect(btn.getAttribute("title")).toBe("期貨合約本輪僅提供分時");
+    }
+  });
+
+  it("殘留日 K 存檔 → 收斂回江波圖,且不寫回 localStorage(現貨的偏好要留著)", async () => {
+    window.localStorage.setItem("copycat-chart-mode", "day");
+    futChart();
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "江波圖" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByLabelText("K 線圖")).toBeNull();
+    // 存檔維持 day:切回現貨時使用者原本選的模式要回得來
+    expect(window.localStorage.getItem("copycat-chart-mode")).toBe("day");
+  });
+
+  it("期貨態一發 /api/stock/bars 都不打(收斂前的那一次 render 也不打)", async () => {
+    window.localStorage.setItem("copycat-chart-mode", "day");
+    futChart();
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    expect(barsUrls).toEqual([]);
+  });
+
+  // 對照組:證明上面三條不是因為 fixture 本來就不會走 K 線路徑而 vacuous
+  it("contract=null(現貨)行為不變:日 K 存檔照樣還原且會打 bars", async () => {
+    window.localStorage.setItem("copycat-chart-mode", "day");
+    chart();
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+    expect(barsUrls.length).toBeGreaterThan(0);
+  });
+});
