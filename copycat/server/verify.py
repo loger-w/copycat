@@ -207,7 +207,8 @@ def fake_breadth_fetchers() -> tuple[
     只有 counts、序列恆空,而那與「序列接線壞掉」長得一模一樣。
 
     第四支(EOD 日線,R3)每個掃描日回同一份造值 → 1101 逐日皆漲停 → 連板數撞到回看
-    窗上限(前端顯示「10+ 板」),`streak_capped` 那條路在 verify 畫面上也走得到。
+    窗上限(窗內 10 板 + 盤中今日這根 → 前端顯示「11+ 板」),`streak_capped` 那條路在
+    verify 畫面上也走得到。
     """
 
     def _fail_if_injected() -> None:

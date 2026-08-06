@@ -321,7 +321,10 @@ class TestFetchersArity:
     def test_three_tuple_is_rejected_with_explicit_log(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """舊三元組(repo 外的側車樣板漏改)必須**炸而且說清楚**(design R8)。
+        """舊三元組(repo 外的側車樣板漏改)必須**炸而且說清楚**。
+
+        出處 = impl-spec review R8「arity 防呆」;design §3.3a v3 未載,實作期補強
+        (design 自己的 R8 是另一件事:漲跌停列表的排序優先序)。
 
         `_boot` 的傘罩會把任何例外收成「breadth 停用」,與「FINMIND_TOKEN 未設」在
         畫面上同形 —— 沒有這行 error log 的話,漏改一個呼叫端的症狀是家數面板悄悄

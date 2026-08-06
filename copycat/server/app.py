@@ -663,7 +663,9 @@ def create_app(
                         # 光讓解包自己拋 ValueError 不夠:`_boot` 的傘罩會把它收成
                         # 「breadth 停用」,與「FINMIND_TOKEN 未設」在畫面上同形 ——
                         # repo 外的側車樣板漏改第四槽時,症狀會是家數面板整段悄悄
-                        # 消失而查不到原因,所以先留下講清楚長度的那行(R3 design R8)
+                        # 消失而查不到原因,所以先留下講清楚長度的那行
+                        # (出處 = impl-spec review R8「arity 防呆」;design §3.3a v3
+                        # 未載,實作期補強 —— design 的 R8 是另一件事:排序優先序)
                         logger.error(
                             "breadth 取數元組長度 %d,預期 4(呼叫端未更新)", len(injected)
                         )
