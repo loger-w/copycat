@@ -1,0 +1,226 @@
+"""FinMind 全市場取數層(market-overview R2 Task 5;`test_oi_levels` 同款)。
+
+真打 FinMind 一律禁止:HTTP 層以 `breadth_fetch.urlopen` monkeypatch 攔下
+(conftest 另把 FINMIND_TOKEN 中和,漏 patch 也不會流出去打真 API)。
+"""
+
+from __future__ import annotations
+
+import email.message
+import io
+import json
+import logging
+import urllib.error
+import urllib.parse
+from datetime import date as _date
+from typing import Any
+
+import pytest
+
+import copycat.server.breadth_fetch as bf
+
+_TODAY = _date(2026, 8, 5)
+
+
+class FakeResp:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self) -> FakeResp:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self, *args: object) -> bytes:
+        return self._body
+
+
+class FakeHttp:
+    """`urlopen` 替身:記錄每次請求,依序吐 responses(用完固定停在最後一項)。
+
+    元素是 Exception 就 raise、bytes 則原樣當 body(非 JSON 路徑)、dict 走 JSON。
+    """
+
+    def __init__(self, *responses: dict | bytes | Exception) -> None:
+        self._responses: list[dict | bytes | Exception] = list(responses)
+        self.urls: list[str] = []
+        self.headers: list[dict[str, str]] = []
+        self.timeouts: list[float] = []
+
+    def __call__(self, req: Any, timeout: float = 0.0) -> FakeResp:
+        self.urls.append(req.full_url)
+        self.headers.append(dict(req.headers))
+        self.timeouts.append(timeout)
+        item = self._responses[min(len(self.urls) - 1, len(self._responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        if isinstance(item, bytes):
+            return FakeResp(item)
+        return FakeResp(json.dumps(item).encode("utf-8"))
+
+    @property
+    def calls(self) -> int:
+        return len(self.urls)
+
+    def query(self, i: int = 0) -> dict[str, list[str]]:
+        return urllib.parse.parse_qs(urllib.parse.urlsplit(self.urls[i]).query)
+
+    def path(self, i: int = 0) -> str:
+        return urllib.parse.urlsplit(self.urls[i]).path
+
+
+def _payload(rows: list[dict]) -> dict:
+    return {"msg": "success", "status": 200, "data": rows}
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://api.finmindtrade.com/api/v4/data",
+        code,
+        "err",
+        email.message.Message(),
+        io.BytesIO(b""),
+    )
+
+
+def _snapshot_rows(n: int = 1) -> list[dict]:
+    return [{"stock_id": f"{2330 + i}", "close": 100.0, "change_price": 1.0} for i in range(n)]
+
+
+def _info_rows(n: int) -> list[dict]:
+    return [
+        {"industry_category": "半導體業", "stock_id": f"{1000 + i}", "stock_name": "X", "type": "twse"}
+        for i in range(n)
+    ]
+
+
+# ---------- URL / header / timeout 契約 ----------
+
+
+class TestRequestShape:
+    def test_snapshot_has_no_query_and_bearer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """snapshot 是專屬 endpoint(非 /data),**無 query 參數**;Bearer 帶 token。"""
+        http = FakeHttp(_payload(_snapshot_rows()))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        rows = bf.fetch_snapshot("tok")
+
+        assert rows == _snapshot_rows()
+        assert http.calls == 1
+        assert http.path() == "/api/v4/taiwan_stock_tick_snapshot"
+        assert http.query() == {}
+        assert http.headers[0]["Authorization"] == "Bearer tok"
+        assert http.timeouts[0] == 30.0
+
+    def test_stock_info_dataset_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        http = FakeHttp(_payload(_info_rows(3000)))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        bf.fetch_stock_info("tok")
+
+        assert http.path() == "/api/v4/data"
+        assert http.query() == {"dataset": ["TaiwanStockInfo"]}
+        assert http.headers[0]["Authorization"] == "Bearer tok"
+
+    def test_disposition_range_query_param_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """參數名必為 start_date / end_date(oi_levels / neigui 同款;PLAN R6)。"""
+        http = FakeHttp(_payload([]))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        bf.fetch_disposition("tok", _TODAY)
+
+        q = http.query()
+        assert q["dataset"] == ["TaiwanStockDispositionSecuritiesPeriod"]
+        assert q["start_date"] == ["2026-06-06"]  # today − 60 日曆日
+        assert q["end_date"] == ["2026-08-05"]
+        assert set(q) == {"dataset", "start_date", "end_date"}
+        assert http.headers[0]["Authorization"] == "Bearer tok"
+
+
+# ---------- 錯誤分類 ----------
+
+
+class TestErrorClassification:
+    def test_402_marks_quota_and_does_not_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """配額用盡:重打只會燒更多且必然同樣失敗 → 一次就放棄,quota=True。"""
+        http = FakeHttp(_http_error(402))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        with pytest.raises(bf.BreadthFetchError) as exc:
+            bf.fetch_snapshot("tok")
+
+        assert exc.value.quota is True
+        assert http.calls == 1
+
+    def test_timeout_retries_once_then_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SSL read timeout 以 TimeoutError 拋出,不包在 URLError(CLAUDE.md §8)。"""
+        http = FakeHttp(TimeoutError("read timed out"), _payload(_snapshot_rows(2)))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        rows = bf.fetch_snapshot("tok")
+
+        assert len(rows) == 2
+        assert http.calls == 2
+
+    def test_non_json_retries_once_then_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """配額燒乾時 FinMind 會回非 JSON 內容 —— 與連線失敗同樣可重試。"""
+        http = FakeHttp(b"<html>oops</html>", _payload(_snapshot_rows()))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        assert bf.fetch_snapshot("tok") == _snapshot_rows()
+        assert http.calls == 2
+
+    def test_both_attempts_fail_raises_without_quota(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        http = FakeHttp(urllib.error.URLError("down"))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        with pytest.raises(bf.BreadthFetchError) as exc:
+            bf.fetch_disposition("tok", _TODAY)
+
+        assert exc.value.quota is False
+        assert http.calls == 2
+
+    def test_http_error_other_than_402_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        http = FakeHttp(_http_error(500), _payload(_info_rows(3000)))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        assert len(bf.fetch_stock_info("tok")) == 3000
+        assert http.calls == 2
+
+    def test_missing_data_array_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        http = FakeHttp({"msg": "no data", "status": 200})
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        with pytest.raises(bf.BreadthFetchError) as exc:
+            bf.fetch_snapshot("tok")
+
+        assert exc.value.quota is False
+
+
+# ---------- row 數觀測 ----------
+
+
+class TestStockInfoRowCountLog:
+    def test_normal_row_count_logs_info(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(bf, "urlopen", FakeHttp(_payload(_info_rows(4300))))
+        with caplog.at_level(logging.INFO, logger=bf.__name__):
+            bf.fetch_stock_info("tok")
+
+        recs = [r for r in caplog.records if "4300" in r.getMessage()]
+        assert recs and all(r.levelno == logging.INFO for r in recs)
+
+    def test_short_row_count_logs_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """上游分頁截斷會讓 TaiwanStockInfo 悄悄少一半 —— 少了就沒有人知道(升 warning)。"""
+        monkeypatch.setattr(bf, "urlopen", FakeHttp(_payload(_info_rows(2999))))
+        with caplog.at_level(logging.INFO, logger=bf.__name__):
+            bf.fetch_stock_info("tok")
+
+        recs = [r for r in caplog.records if "2999" in r.getMessage()]
+        assert recs and any(r.levelno == logging.WARNING for r in recs)
