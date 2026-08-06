@@ -225,3 +225,89 @@ describe("useStockStream", () => {
     expect(opened).toBe(1);
   });
 });
+
+// 🟢 stkfut-contracts SC-4:主圖標的由「股號」推廣為「instrument」。
+// 兩個口徑必須分開,混用會靜默壞掉:
+//   REST 路徑段**恆為股號**(後端 `_valid_code` 對 `F:CDF:202609` 會 400,且 D7 白名單
+//   需要股號才驗得了「這個合約屬於這檔股票」),合約走 query string;
+//   WS 比對鍵**恆為 instrument key**(後端推播的 `code` 欄在期貨態是 `F:<prod>:<ym>`)。
+describe("useStockStream(合約態:instrument key vs REST 路徑)", () => {
+  const C9 = { prod: "CDF", ym: "202609", mini: false };
+  const FUT_KEY = "F:CDF:202609";
+  const FT = (seq: number, code: string) => ({
+    type: "tick", code, t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq,
+  });
+
+  type Sel = { prod: string; ym: string; mini: boolean } | null;
+
+  function stateUrls(): string[] {
+    return fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.startsWith("/api/stock/state/"));
+  }
+
+  async function setupFut(initial: Sel = C9) {
+    const hook = renderHook(({ c }: { c: Sel }) => useStockStream("2330", c), {
+      initialProps: { c: initial },
+      wrapper,
+    });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    return { hook, ws: FakeWS.instances[0]! };
+  }
+
+  it("REST 路徑仍是股號,合約走 ?contract=(路徑段放 key 會被後端 400)", async () => {
+    await setupFut();
+    expect(stateUrls()).toEqual(["/api/stock/state/2330?contract=CDF:202609"]);
+  });
+
+  it("WS 重連(onopen)後的 refetch 仍帶 contract", async () => {
+    const { ws } = await setupFut();
+    act(() => ws.onopen?.());
+    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(1));
+    // 「五個 refetch 觸發共用單一 URL helper」的鎖:任何一條漏帶 contract 就會靜默
+    // 把畫面拉回現貨資料,而 URL 以外沒有任何訊號。
+    expect(stateUrls().every((u) => u.includes("?contract=CDF:202609"))).toBe(true);
+  });
+
+  it("切合約不重建 WS,只以新合約重抓 snapshot", async () => {
+    const { hook } = await setupFut();
+    expect(FakeWS.instances.length).toBe(1);
+    hook.rerender({ c: { prod: "CDF", ym: "202610", mini: false } });
+    await waitFor(() =>
+      expect(stateUrls().some((u) => u.endsWith("?contract=CDF:202610"))).toBe(true),
+    );
+    expect(FakeWS.instances.length).toBe(1);
+  });
+
+  it("切回現貨 → URL 不再帶 contract", async () => {
+    const { hook } = await setupFut();
+    hook.rerender({ c: null });
+    await waitFor(() => expect(stateUrls().some((u) => u === "/api/stock/state/2330")).toBe(true));
+  });
+
+  it("tick 以 instrument key 比對:股號的推播在合約態被忽略", async () => {
+    const { hook, ws } = await setupFut();
+    act(() => ws.emit(FT(2, "2330"))); // 現貨腿的 tick(watchlist 仍在推)
+    expect(hook.result.current.accum?.seq).toBe(1);
+    act(() => ws.emit(FT(2, FUT_KEY)));
+    expect(hook.result.current.accum?.seq).toBe(2);
+  });
+
+  it("book / stkfut 同樣以 instrument key 比對", async () => {
+    const { hook, ws } = await setupFut();
+    act(() => ws.emit({ type: "book", code: "2330", bids: [[1, 1]], asks: [[2, 2]] }));
+    expect(hook.result.current.accum?.book).toBeNull(); // snapshot 的 book 是 null,沒被現貨腿蓋掉
+    act(() => ws.emit({ type: "book", code: FUT_KEY, bids: [[1, 1]], asks: [[2, 2]] }));
+    expect(hook.result.current.accum?.book?.bids).toEqual([[1, 1]]);
+    act(() => ws.emit({ type: "stkfut", code: FUT_KEY, prod: "CDF", p: 1, basis: null }));
+    expect(hook.result.current.stkfut?.prod).toBe("CDF");
+  });
+
+  it("backfilling 完成的比對鍵也是 instrument key", async () => {
+    const { ws } = await setupFut();
+    const before = stateUrls().length;
+    act(() => ws.emit({ type: "status", tc4: "up", backfilling: FUT_KEY }));
+    act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
+    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(before));
+  });
+});

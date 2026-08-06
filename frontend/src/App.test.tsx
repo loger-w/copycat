@@ -405,3 +405,98 @@ describe("App 訊號 toast(SC-10)", () => {
     expect(screen.queryByTestId("toast-stack")).toBeNull();
   });
 });
+
+// 🟢 stkfut-contracts SC-4:合約選擇的狀態持有者是 App(D5)。
+// 兩件事只有在這一層測得到,而兩者失效都極安靜:
+//   (a) 換股沒重置 → 新股的 REST 帶著舊股的合約 → 後端 D7 白名單 400,畫面停在載入中;
+//   (b) railCtx.code 若改塞 instrument key → 右欄下單面顯示 `F:CDF:202609` 且五檔
+//       點價 gate(比對 detail.code === ctx.code)整條失效。
+describe("App 個股期合約選擇(SC-4)", () => {
+  const CONTRACTS = {
+    code: "2330",
+    name: "台積電",
+    std: { prod: "CDF", contracts: ["202608", "202609"] },
+    mini: { prod: "QFF", contracts: ["202608", "202609"] },
+  };
+
+  function snapshot(code: string) {
+    return {
+      code,
+      seq: 1,
+      last: { p: 2_380_000, t: "09:00:01.000", cum_vol: 1 },
+      vwap: 2_380_000,
+      minutes: {},
+      ticks: [],
+      book: { bids: [[2_375_000, 5]], asks: [[2_380_000, 3]] },
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+      no_data: false,
+    };
+  }
+
+  function stockFetch() {
+    return vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
+      if (u.includes("/api/health")) {
+        return new Response(JSON.stringify({ git_sha: null, git_dirty: false }));
+      }
+      if (u.includes("/__build/sha")) {
+        return new Response(JSON.stringify({ git_sha: null, behind: null }));
+      }
+      if (u.includes("/api/stock/stkfut/contracts/2330")) {
+        return new Response(JSON.stringify(CONTRACTS));
+      }
+      if (u.includes("/api/stock/stkfut/contracts/")) {
+        return new Response(JSON.stringify({ detail: { error: "NO_STKFUT" } }), { status: 404 });
+      }
+      if (u.includes("/api/stock/watchlist")) {
+        return new Response(JSON.stringify({ groups: [{ name: "自選", codes: ["2330", "2454"] }] }));
+      }
+      if (u.includes("/api/stock/state/")) {
+        const code = u.slice("/api/stock/state/".length).split("?")[0] ?? "2330";
+        return new Response(JSON.stringify(snapshot(code)));
+      }
+      if (u.includes("/api/stock/bars")) {
+        return new Response(JSON.stringify({ bars: [], status: "ok" }));
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+  }
+
+  function stateUrls(): string[] {
+    return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.startsWith("/api/stock/state/"));
+  }
+
+  async function openStockWithContract() {
+    // 右欄閃電梯掛載即置中;jsdom 無 scrollIntoView(同 PriceLadder.test / RightRail.test)
+    Element.prototype.scrollIntoView = vi.fn();
+    window.localStorage.setItem("copycat-tab", "stock");
+    window.localStorage.setItem("copycat-stock-main-code", "2330");
+    vi.stubGlobal("fetch", stockFetch());
+    renderApp();
+    const select = await screen.findByLabelText("合約");
+    fireEvent.change(select, { target: { value: "CDF:202609" } });
+    await waitFor(() =>
+      expect(stateUrls().includes("/api/stock/state/2330?contract=CDF:202609")).toBe(true),
+    );
+  }
+
+  it("換股重置合約:新股的 snapshot 不帶舊合約", async () => {
+    await openStockWithContract();
+    fireEvent.click(screen.getByTestId("wl-row-2454"));
+    await waitFor(() => expect(stateUrls().includes("/api/stock/state/2454")).toBe(true));
+    // 重置若走 effect 而非 render 期間,會先有一個 render 拿新股號配舊合約送出去
+    expect(stateUrls().some((u) => u.startsWith("/api/stock/state/2454?"))).toBe(false);
+    // 下拉本身也要回到「現貨」(2454 無期貨 → 連下拉都不該在)
+    await waitFor(() => expect(screen.queryByLabelText("合約")).toBeNull());
+  });
+
+  it("railCtx.code 恆為股號(期貨態右欄仍指認 2330,不是 instrument key)", async () => {
+    await openStockWithContract();
+    const rail = screen.getByRole("complementary", { name: "交易面板" });
+    expect(rail.textContent).toContain("2330");
+    expect(rail.textContent).not.toContain("F:CDF");
+  });
+});
