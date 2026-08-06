@@ -280,6 +280,50 @@ export interface BreadthState {
   series: BreadthPoint[];
 }
 
+// ---- 漲跌停列表(對應 breadth_engine.rows_state();market-overview R3)----
+
+/** 列表一列(design §4 契約)。
+ *
+ *  `total_amount` 是**元**口徑(2026-08-06 真快照算術實證:2330@12:19 15339 張 ×
+ *  均價 2375.78 × 1000 ≈ 3.644e10 == 36442215000),不是千元也不是億元。
+ *
+ *  `streak` 三值語意:number = **含今日**的連續漲停日數(只會出現在 `limit_up` 列)/
+ *  null = 非漲停列、連板未就緒、連板停用、或 rows 資料日與連板基準日關係異常。
+ *  **連板算術全在後端**(design R1):前端不做任何日期推理或 +1,拿到什麼印什麼。
+ *  `streak_capped` = 該 streak 撞到後端回看窗邊緣(顯示「N+ 板」而非「連 N 板」)。 */
+export interface BreadthRow {
+  stock_id: string;
+  name: string;
+  market: "twse" | "tpex";
+  close: number | null;
+  change_rate: number; // 百分比(9.98 = +9.98%)
+  volume_ratio: number | null;
+  total_amount: number | null; // 元
+  limit_up: boolean;
+  limit_down: boolean;
+  touched_limit_up: boolean; // 盤中觸及漲停、收盤未鎖(已鎖列為 false,不重複歸類)
+  touched_limit_down: boolean;
+  streak: number | null;
+  streak_capped: boolean;
+}
+
+/** `GET /api/market/breadth/rows` 全量(恆 200)。
+ *
+ *  **載入判別子是 `as_of` 不是 `stale`**(design R18):`stale` 在冷啟動 degraded 下
+ *  恆為 true,拿它判「載入中」會讓「載入中」與「有資料但延遲」兩態顛倒。
+ *  `as_of` 只在首輪取數成功後才有值,才是誠實的 sentinel。
+ *
+ *  `trade_date` = **rows 的資料日**(與列表內容同源),與 `/api/market/breadth` 的
+ *  `trade_date`(序列日)語意不同,屬設計刻意。 */
+export interface BreadthRowsState {
+  enabled: boolean;
+  trade_date: string | null;
+  as_of: string | null; // HH:MM:SS
+  stale: boolean;
+  streaks_ready: boolean;
+  rows: BreadthRow[];
+}
+
 /** 每秒增量:各腿最後寫入的那一分鐘;該腿本場尚無 live 點 → null。 */
 export interface RiverDelta {
   type: string; // "river_delta"
