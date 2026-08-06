@@ -1,6 +1,13 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 
 import {
+  LadderView,
+  pnlText,
+  pnlTone,
+  type CenterRequest,
+  type LadderLot,
+} from "@/components/stock/LadderView";
+import {
   useCancelOrder,
   useCapitalOrders,
   useCapitalPositions,
@@ -18,7 +25,7 @@ import {
   secPositionsOf,
   snapBreakEven,
 } from "@/lib/ladder-position";
-import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
+import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
 import { tradeErrorText } from "@/lib/trade-text";
@@ -127,29 +134,13 @@ function markMap(rows: PositionRow[], pick: (r: PositionRow) => number | null): 
   return map;
 }
 
-function pnlText(pnl: number | null): string {
-  if (pnl === null) return DASH;
-  return `${pnl > 0 ? "+" : ""}${pnl.toLocaleString("en-US")}`;
-}
-
-/** 台股慣例:賺紅賠綠。 */
-function pnlTone(pnl: number | null): string {
-  if (pnl === null) return "text-ink-dim";
-  return pnl > 0 ? "text-bull" : pnl < 0 ? "text-bear" : "text-ink";
-}
-
-interface LotEntry {
-  qty: number; // 殘量(order_qty - filled_qty 聚合)
-  seqs: string[];
-}
-
 /** 本檔 actionable 活單 → 價位(毫元)聚合殘量;點紅方格逐 seq 直刪用。 */
 function aggregateLots(
   orders: CapitalOrder[] | undefined,
   code: string,
-): { buy: Map<number, LotEntry>; sell: Map<number, LotEntry> } {
-  const buy = new Map<number, LotEntry>();
-  const sell = new Map<number, LotEntry>();
+): { buy: Map<number, LadderLot>; sell: Map<number, LadderLot> } {
+  const buy = new Map<number, LadderLot>();
+  const sell = new Map<number, LadderLot>();
   for (const o of orders ?? []) {
     if (!o.actionable || o.stock_no !== code || o.price === null) continue;
     const map = o.buy_sell === "B" ? buy : o.buy_sell === "S" ? sell : null;
@@ -161,13 +152,6 @@ function aggregateLots(
     map.set(key, cur);
   }
   return { buy, sell };
-}
-
-/** OrderBook 點價置中請求。nonce 變化即觸發(同價連點也要重捲);訂閱者是 RightRail
- *  (唯一 window listener),因為右欄非閃電 tab 時本元件已 unmount(change-spec R2-5)。 */
-export interface CenterRequest {
-  priceMilli: number;
-  nonce: number;
 }
 
 interface Props {
@@ -198,7 +182,6 @@ export function PriceLadder({
   qtyState: qtyStateProp,
   onQtyState,
 }: Props) {
-  const [follow, setFollow] = useState(true);
   // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換股/斷線/idle/Esc/連 3 次失敗/離開畫面
   // (離開畫面 = RightRail 條件 render 讓本元件 unmount,arm state 隨之消滅;change-spec D-13)
   const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
@@ -212,9 +195,6 @@ export function PriceLadder({
   const setQtyState = onQtyState ?? setQtyLocal;
   const [hint, setHint] = useState<string | null>(null);
   const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
-  const centerRef = useRef<HTMLDivElement | null>(null);
-  const rowRefs = useRef(new Map<number, HTMLDivElement>());
-  const progScroll = useRef(false);
   const idleTimer = useRef<number | undefined>(undefined);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
@@ -243,8 +223,6 @@ export function PriceLadder({
     lower: meta?.lower ?? null,
     book,
   });
-  const rows = ladder.rows;
-  const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
 
   function touchIdle(): void {
     window.clearTimeout(idleTimer.current);
@@ -310,7 +288,7 @@ export function PriceLadder({
   }
 
   // 紅方格點刪:閃電規則直刪(無彈窗),逐 seq 送 cancel
-  function cancelLot(lot: LotEntry): void {
+  function cancelLot(lot: LadderLot): void {
     touchIdle();
     for (const seq of lot.seqs) cancelOrder.mutate({ seq_no: seq, market: "sec" });
   }
@@ -335,16 +313,6 @@ export function PriceLadder({
     return () => window.removeEventListener("keydown", onKey);
   }, [arm.armed]);
 
-  // OrderBook 點價 → 該價置中,不送單(W-C1)。事件由 RightRail 收(唯一 listener)後
-  // 以 centerRequest prop 下傳:右欄非閃電 tab 時本元件已 unmount,window listener 收不到。
-  useEffect(() => {
-    if (centerRequest === null) return;
-    const el = rowRefs.current.get(centerRequest.priceMilli);
-    if (!el) return;
-    setFollow(false);
-    el.scrollIntoView({ block: "center" });
-  }, [centerRequest?.nonce, centerRequest?.priceMilli]);
-
   // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
   useEffect(() => {
     aliveRef.current = true;
@@ -355,325 +323,125 @@ export function PriceLadder({
     };
   }, []);
 
-  // 跟隨置中:center 價變更才捲(rows identity 每 tick 變,依 centerPrice 值 — R5)
-  useEffect(() => {
-    if (!follow || centerPrice === null) return;
-    progScroll.current = true;
-    centerRef.current?.scrollIntoView({ block: "center" });
-    requestAnimationFrame(() => {
-      progScroll.current = false;
-    });
-  }, [follow, centerPrice]);
-
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col rounded-md border border-line bg-surface">
-      {/* 標的列(D-12):右欄內容會隨主 tab 切換,標的必須畫面可指認以降誤送風險 */}
-      <div className="flex items-center justify-between border-b border-line px-2 py-1">
-        <span className="truncate font-mono text-sm text-ink">
-          {code}
-          {name !== "" ? <span className="ml-1 font-sans text-ink-muted">{name}</span> : null}
-        </span>
-        <div className="flex items-center gap-1">
-          {/* 折數框放**標題列**不放武裝列(ORD-1):武裝列上它會與張數框變成同型相鄰的
-              兩個數字框,而其中一個是真錢張數 —— 誤打折數時張數靜默留舊值,下一次點價
-              就用舊張數送真單。折數本身不是下單控制項,不該待在誤送半徑內。
-              恆常渲染:空手也要能先把折數設好(D1)。 */}
-          <label className="flex items-center gap-0.5 text-xs text-ink-dim">
-            <input
-              aria-label="手續費折數"
-              type="number"
-              step={0.1}
-              min={0.1}
-              max={10}
-              value={discount.raw}
-              // 非法值不是「沒事」:輸入框顯示 raw、計算卻用舊 value,不給訊號就是靜默態
-              aria-invalid={discountInvalid ? true : undefined}
-              onChange={(e) => {
-                const raw = e.target.value;
-                const v = clampDiscount(raw);
-                // 非法值只更新 raw(不吃掉按鍵),value 沿用上一個合法值 → 計算不跳動
-                setDiscount((s) => ({ raw, value: v ?? s.value }));
-                if (v !== null) persistDiscount(v);
-              }}
-              className={cn(
-                // **spinner 必須收掉**:Chrome 的 number input 右側恆佔 ~13-16px 給
-                // 上下箭頭,吃掉的是可視字元數 —— w-10 時「1.8」的 8 直接被裁掉(真
-                // Chrome 實測),使用者讀不到自己設的折數,而折數決定打平價與未實現損益。
-                // w-12 下「1.8」完整可讀是真 Chrome 複驗結果
-                // (evidence/SC-4_SC-5_rail-after-re1-fix.png);但 w-12 只剛好容 3 字元,
-                // 兩位小數的合法折數(2.85 / 0.85)仍會截 —— 收掉 spinner 後同寬可容
-                // 約 5 字元,才算真的修好。
-                "w-12 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
-                "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
-                discountInvalid ? "border-loss" : "border-line",
-              )}
-            />
-            折
-          </label>
-          <button
-            type="button"
-            aria-pressed={follow}
-            onClick={() => setFollow((f) => !f)}
-            className={cn(
-              "rounded border px-1.5 py-0.5 text-xs",
-              follow ? "border-accent text-accent" : "border-line text-ink-dim",
-            )}
-          >
-            跟隨置中
-          </button>
-        </div>
-      </div>
-      {/* 武裝列:武裝/解除 + 交易別 + 張數快捷 */}
-      <div className="border-b border-line px-2 py-1.5">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-pressed={arm.armed}
-            onClick={() => {
-              touchIdle();
-              dispatchArm({ type: "toggle" });
-            }}
-            className={cn(
-              "flex-1 rounded border px-2 py-1 text-xs font-bold",
-              arm.armed
-                ? "border-loss bg-loss text-bg"
-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
-            )}
-          >
-            {arm.armed ? "解除" : "武裝"}
-          </button>
-          <select
-            aria-label="交易別"
-            value={tradeKind}
-            onChange={(e) => {
-              touchIdle();
-              setTradeKind(e.target.value as TradeKind);
-            }}
-            className="rounded border border-line bg-bg-deep px-1 py-1 text-xs text-ink"
-          >
-            {TRADE_KINDS.map(([v, label]) => (
-              <option key={v} value={v}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="mt-1 flex items-center gap-1">
-          {QTY_PRESETS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => {
-                touchIdle();
-                setQtyState((s) => pressQuick(s, p));
-              }}
-              className="flex-1 rounded border border-line py-0.5 font-mono text-xs text-ink hover:border-accent"
-            >
-              {p}
-            </button>
-          ))}
+    <LadderView
+      code={code}
+      name={name}
+      rows={ladder.rows}
+      marketBidQty={ladder.marketBidQty}
+      marketAskQty={ladder.marketAskQty}
+      beMarks={beMarks}
+      avgMarks={avgMarks}
+      buyLots={lots.buy}
+      sellLots={lots.sell}
+      armed={arm.armed}
+      onToggleArm={() => {
+        touchIdle();
+        dispatchArm({ type: "toggle" });
+      }}
+      buyLocked={tradeKind === "daytrade_sell"}
+      qty={qtyState.qty}
+      qtyLabel="張數"
+      onQtyPreset={(p) => {
+        touchIdle();
+        setQtyState((s) => pressQuick(s, p));
+      }}
+      onQtyInput={(v) => {
+        touchIdle();
+        setQtyState((s) => manualQty(s, v));
+      }}
+      hint={hint}
+      onClickPrice={clickPrice}
+      onCancelLot={cancelLot}
+      centerRequest={centerRequest}
+      titleExtra={
+        /* 折數框放**標題列**不放武裝列(ORD-1):武裝列上它會與張數框變成同型相鄰的
+           兩個數字框,而其中一個是真錢張數 —— 誤打折數時張數靜默留舊值,下一次點價
+           就用舊張數送真單。折數本身不是下單控制項,不該待在誤送半徑內。
+           恆常渲染:空手也要能先把折數設好(D1)。 */
+        <label className="flex items-center gap-0.5 text-xs text-ink-dim">
           <input
-            aria-label="張數"
+            aria-label="手續費折數"
             type="number"
-            min={1}
-            value={qtyState.qty}
+            step={0.1}
+            min={0.1}
+            max={10}
+            value={discount.raw}
+            // 非法值不是「沒事」:輸入框顯示 raw、計算卻用舊 value,不給訊號就是靜默態
+            aria-invalid={discountInvalid ? true : undefined}
             onChange={(e) => {
-              touchIdle();
-              setQtyState((s) => manualQty(s, Number(e.target.value)));
+              const raw = e.target.value;
+              const v = clampDiscount(raw);
+              // 非法值只更新 raw(不吃掉按鍵),value 沿用上一個合法值 → 計算不跳動
+              setDiscount((s) => ({ raw, value: v ?? s.value }));
+              if (v !== null) persistDiscount(v);
             }}
-            className="w-12 rounded border border-line bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink"
+            className={cn(
+              // **spinner 必須收掉**:Chrome 的 number input 右側恆佔 ~13-16px 給
+              // 上下箭頭,吃掉的是可視字元數 —— w-10 時「1.8」的 8 直接被裁掉(真
+              // Chrome 實測),使用者讀不到自己設的折數,而折數決定打平價與未實現損益。
+              // w-12 下「1.8」完整可讀是真 Chrome 複驗結果
+              // (evidence/SC-4_SC-5_rail-after-re1-fix.png);但 w-12 只剛好容 3 字元,
+              // 兩位小數的合法折數(2.85 / 0.85)仍會截 —— 收掉 spinner 後同寬可容
+              // 約 5 字元,才算真的修好。
+              "w-12 rounded border bg-bg-deep px-1 py-0.5 text-right font-mono text-xs text-ink",
+              "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+              discountInvalid ? "border-loss" : "border-line",
+            )}
           />
-        </div>
-        {hint !== null ? (
-          <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
-        ) : null}
-      </div>
-      {rows.length === 0 ? (
-        <p className="px-2 py-4 text-center text-xs text-ink-dim">無資料</p>
-      ) : (
-        <div
-          className="min-h-0 flex-1 overflow-y-auto"
-          onScroll={() => {
-            // 手動捲動(非程式捲)自動暫停跟隨(design R5)
-            if (!progScroll.current && follow) setFollow(false);
+          折
+        </label>
+      }
+      armControls={
+        <select
+          aria-label="交易別"
+          value={tradeKind}
+          onChange={(e) => {
+            touchIdle();
+            setTradeKind(e.target.value as TradeKind);
           }}
+          className="rounded border border-line bg-bg-deep px-1 py-1 text-xs text-ink"
         >
-          {/* 市價買單列(項 4)。階梯只涵蓋 [下界, 上界] 的合法 tick,市價單沒有價格
-              → 永遠不會落進任何一列,不獨立畫的話它在閃電梯完全消失。
-              位置語意:市價買單優先於任何限價買單 → 價格軸最上。
-              **不可點、不進 rowRefs**:它沒有價格,既送不了單也不是置中目標(W-15
-              的 rows 集合語意不變)。 */}
-          {ladder.marketBidQty > 0 ? (
-            <div
-              data-testid="ladder-market-bid"
-              className="grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 bg-bull/5 font-mono text-xs"
-            >
-              <span className="flex items-center justify-end pr-1 text-bull">
-                {ladder.marketBidQty}
-              </span>
-              <span className="flex items-center justify-center text-ink-muted">市價</span>
-              <span />
-            </div>
-          ) : null}
-          {rows.map((r) => {
-            const buyLot = lots.buy.get(r.priceMilli);
-            const sellLot = lots.sell.get(r.priceMilli);
-            const buyLocked = r.dimmed || tradeKind === "daytrade_sell";
-            const beKinds = beMarks.get(r.priceMilli);
-            const avgKinds = avgMarks.get(r.priceMilli);
-            // title 掛 row 不掛標記(LP-1):標記是 pointer-events-none,永遠不會是
-            // hover 目標 → 掛在它身上的 tooltip 永遠不會出現。無標記的列不掛 title,
-            // 否則整梯都是空 tooltip。
-            const markTitle = [
-              beKinds !== undefined ? `打平(${beKinds.join("、")})` : null,
-              avgKinds !== undefined ? `均價(${avgKinds.join("、")})` : null,
-            ]
-              .filter((s) => s !== null)
-              .join("、");
-            return (
-              <div
-                key={r.priceMilli}
-                data-price={r.priceMilli}
-                title={markTitle !== "" ? markTitle : undefined}
-                ref={(el) => {
-                  if (el) rowRefs.current.set(r.priceMilli, el);
-                  else rowRefs.current.delete(r.priceMilli);
-                  if (r.isCenter && el) centerRef.current = el;
-                }}
-                className={cn(
-                  "relative grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b font-mono text-xs",
-                  r.isCenter && "bg-bg-deep",
-                  // 分隔線留在 row 容器上 → 淡化移欄後它不再吃 row 的 opacity,
-                  // 不自己降階的話反灰列的格線會比改動前**更亮**(LP-4)
-                  r.dimmed ? "border-line/20" : "border-line/50",
-                )}
-              >
-                {/* 部位標記(SC-4)。`pointer-events-none` 是必要的:左緣正是刪單紅方格
-                    與買鈕的點擊區,標記吃掉點擊會變成「按不到刪單」。
-                    `opacity-100` 顯式隔離同列內容的 `opacity-35` —— 遠離現價的打平標記
-                    正是最需要看見的那一根。 */}
-                {beKinds !== undefined ? (
-                  <span
-                    data-testid="ladder-be-mark"
-                    className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-warn opacity-100"
-                  />
-                ) : null}
-                {avgKinds !== undefined ? (
-                  <span
-                    data-testid="ladder-avg-mark"
-                    className="pointer-events-none absolute inset-y-0 left-1 w-0.5 bg-ma20 opacity-100"
-                  />
-                ) : null}
-                {/* 反灰(±5% 外)的淡化套在三個 grid 欄、不套 row 容器:opacity 是
-                    合成層屬性,套在容器上時子元素無法「反淡」—— 之後要疊在 row 上的
-                    部位標記(打平 / 均價)正好都落在遠離現價的位置。 */}
-                <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
-                  {buyLot !== undefined ? (
-                    <button
-                      type="button"
-                      aria-label={`刪 ${fmt(r.priceMilli)} 買單`}
-                      onClick={() => cancelLot(buyLot)}
-                      className="my-0.5 ml-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
-                    >
-                      {buyLot.qty}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={buyLocked}
-                    aria-label={`買 ${fmt(r.priceMilli)}`}
-                    onClick={() => clickPrice(r.priceMilli, "buy")}
-                    className={cn(
-                      "min-w-0 flex-1 pr-1 text-right",
-                      buyLocked ? "text-ink-dim/50" : "text-bull hover:bg-bull/10",
-                    )}
-                  >
-                    {r.bidQty > 0 ? r.bidQty : ""}
-                  </button>
-                </div>
-                <span
-                  className={cn(
-                    "flex items-center justify-center",
-                    r.isCenter ? "text-accent" : r.dimmed ? "text-ink-dim" : "text-ink",
-                    r.dimmed && "opacity-35",
-                  )}
-                >
-                  {fmt(r.priceMilli)}
-                </span>
-                <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
-                  <button
-                    type="button"
-                    disabled={r.dimmed}
-                    aria-label={`賣 ${fmt(r.priceMilli)}`}
-                    onClick={() => clickPrice(r.priceMilli, "sell")}
-                    className={cn(
-                      "min-w-0 flex-1 pl-1 text-left",
-                      r.dimmed ? "text-ink-dim/50" : "text-bear hover:bg-bear/10",
-                    )}
-                  >
-                    {r.askQty > 0 ? r.askQty : ""}
-                  </button>
-                  {sellLot !== undefined ? (
-                    <button
-                      type="button"
-                      aria-label={`刪 ${fmt(r.priceMilli)} 賣單`}
-                      onClick={() => cancelLot(sellLot)}
-                      className="my-0.5 mr-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
-                    >
-                      {sellLot.qty}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
-          {/* 市價賣單列:對稱 —— 優先於任何限價賣單 → 價格軸最下 */}
-          {ladder.marketAskQty > 0 ? (
-            <div
-              data-testid="ladder-market-ask"
-              className="grid h-6 grid-cols-[1fr_64px_1fr] items-stretch border-b border-line/50 bg-bear/5 font-mono text-xs"
-            >
-              <span />
-              <span className="flex items-center justify-center text-ink-muted">市價</span>
-              <span className="flex items-center pl-1 text-bear">{ladder.marketAskQty}</span>
-            </div>
-          ) : null}
-        </div>
-      )}
-      {/* 部位條放**卡片最底**(D5):價格梯 scroll 區是 flex-1,部位條出現時 scroll
-          視窗從底部縮短,**既有價格列的 y 座標不動**。插在上方會整梯下移 —— 武裝中的
-          閃電梯不得因部位資料到達而位移點擊目標。空手 → 整段不渲染(零痕跡)。 */}
-      {posRows.length > 0 ? (
-        <div
-          data-testid="ladder-position-bar"
-          className="border-t border-line px-2 py-1 font-mono text-xs"
-        >
-          {posRows.map((r) => (
-            <div key={r.key} data-testid="ladder-position-row">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-ink">{r.head}</span>
-                <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
-              </div>
-              {/* 兩顆色點分別對應梯內兩根標線,讓「梯上那根線是什麼」不必猜。
-                  均價**只給標籤不給數字**(CALC-3):第一行 @ 顯示的是真均價原值,
-                  標線位置是 snapNearest 後的近似檔位 —— 兩個口徑的數字並列會讓人
-                  以為均價變了。 */}
-              <div className="flex items-center gap-1 text-ink-muted">
-                {r.beTick !== null ? (
-                  <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
-                ) : null}
-                <span>{r.beText}</span>
-                {r.avgTick !== null ? (
-                  <>
-                    <span aria-hidden="true" className="ml-1 inline-block h-2 w-0.5 bg-ma20" />
-                    <span>均價</span>
-                  </>
-                ) : null}
-              </div>
-            </div>
+          {TRADE_KINDS.map(([v, label]) => (
+            <option key={v} value={v}>
+              {label}
+            </option>
           ))}
-        </div>
-      ) : null}
-    </div>
+        </select>
+      }
+      footer={
+        posRows.length > 0 ? (
+          <div
+            data-testid="ladder-position-bar"
+            className="border-t border-line px-2 py-1 font-mono text-xs"
+          >
+            {posRows.map((r) => (
+              <div key={r.key} data-testid="ladder-position-row">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-ink">{r.head}</span>
+                  <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
+                </div>
+                {/* 兩顆色點分別對應梯內兩根標線,讓「梯上那根線是什麼」不必猜。
+                    均價**只給標籤不給數字**(CALC-3):第一行 @ 顯示的是真均價原值,
+                    標線位置是 snapNearest 後的近似檔位 —— 兩個口徑的數字並列會讓人
+                    以為均價變了。 */}
+                <div className="flex items-center gap-1 text-ink-muted">
+                  {r.beTick !== null ? (
+                    <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
+                  ) : null}
+                  <span>{r.beText}</span>
+                  {r.avgTick !== null ? (
+                    <>
+                      <span aria-hidden="true" className="ml-1 inline-block h-2 w-0.5 bg-ma20" />
+                      <span>均價</span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null
+      }
+    />
   );
 }
