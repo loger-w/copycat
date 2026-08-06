@@ -92,11 +92,22 @@ interface Props {
   series: IndexSeries | null;
   showBb: boolean;
   onToggleBb: (v: boolean) => void;
+  /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
+   *  gate 停(review round-2 XR-4);未給時預設 true。 */
+  active?: boolean;
 }
 
 /** 大盤主圖:分時走勢 or 蠟燭圖 + 一行來源/涵蓋期間 meta(SC-4/5/6)。 */
-export function MarketChart({ marketKey, mode, name, series, showBb, onToggleBb }: Props) {
-  const { data, isPending, isError, error } = useMarketBars(marketKey, mode);
+export function MarketChart({
+  marketKey,
+  mode,
+  name,
+  series,
+  showBb,
+  onToggleBb,
+  active = true,
+}: Props) {
+  const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
   const minutes = marketMinutesOf(mode);
   const bars = useMemo(
     () => aggregateBars(data?.bars ?? [], minutes),

@@ -220,6 +220,9 @@ interface Props {
    *  (與改版前的全域單開關行為一致)。 */
   toggles: ChartToggles;
   onToggle: (key: keyof ChartToggles, value: boolean) => void;
+  /** 使用者是否正看著台股綜合 tab。純轉發給 `MarketChart` 的分 K 輪詢 gate
+   *  (review round-2 XR-4);未給時預設 true。 */
+  active?: boolean;
 }
 
 /** 台股綜合的單張指數圖(標的列 + 週期列 + 圖)。
@@ -235,6 +238,7 @@ export function MarketPane({
   defaultKey,
   toggles,
   onToggle,
+  active = true,
 }: Props) {
   const [futKey, setFutKey] = useState<FutKey>(() => {
     const saved = window.localStorage.getItem(stores.fut);
@@ -367,6 +371,7 @@ export function MarketPane({
               series={series}
               showBb={toggles.bb}
               onToggleBb={(v) => onToggle("bb", v)}
+              active={active}
             />
           )}
         </div>

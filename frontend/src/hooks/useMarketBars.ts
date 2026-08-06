@@ -39,7 +39,11 @@ async function fetchMarketBars(key: MarketKey, tf: string): Promise<MarketBars> 
   return (await res.json()) as MarketBars;
 }
 
-export function useMarketBars(key: MarketKey, mode: MarketMode) {
+/** @param active 使用者是否正看著這張圖所在的 tab。**預設 true**(保守:既有呼叫路徑
+ *  不因為新參數而靜默停更)。分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME
+ *  搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發是看不見的成本(review round-2 XR-4;
+ *  `FuturesPage` / `SectorSection` / `LimitListSection` 同慣例)。 */
+export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
   const tf = tfOf(mode);
   const isMinute = tf === "1";
   // 期指日盤 08:45–13:45,個股那把尺會讓開盤前 15 分與 13:36–13:45 不自動更新(P2-5)
@@ -54,6 +58,6 @@ export function useMarketBars(key: MarketKey, mode: MarketMode) {
     retry: 1,
     staleTime: isMinute ? 0 : Infinity,
     // 函式形式:TQ 每次 interval 到期都重新求值 → 開盤/收盤的開關不依賴外部 re-render
-    refetchInterval: () => (isMinute && inHours() ? POLL_MS : false),
+    refetchInterval: () => (active && isMinute && inHours() ? POLL_MS : false),
   });
 }
