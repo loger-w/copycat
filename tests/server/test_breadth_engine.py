@@ -1298,7 +1298,10 @@ class TestStreakCache:
         daily = FakeDaily(_calendar({"2026-08-05": ("1101",), "2026-08-04": ("1101",)}))
         engine, _s, _i, _d, clock = _make(tmp_path, daily=daily)
         engine._restore_streaks()
-        assert engine._streak_task is None and engine._streaks == {"1101": 3}
+        # 綁區域變數再斷言:直接對 `engine._streak_task` 斷言 is None 會讓 pyright 把
+        # 那個 member expression 一路窄化成 None,後面的 `await task` 就變成 await Never
+        restored_task = engine._streak_task
+        assert restored_task is None and engine._streaks == {"1101": 3}
 
         clock.today = _dt.date(2026, 8, 6)
         clock.now = _dt.datetime(2026, 8, 6, 6, 30)
