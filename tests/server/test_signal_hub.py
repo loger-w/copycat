@@ -1032,8 +1032,11 @@ class TestBasisWorker:
         worker 的 outer except 繞過 cache 直摸 detector 時,一則盤前預抓的例外會把
         今天剩下的 CDP 全部停掉;cache 還寫著正確值 → 之後任何 `_distribute` 都不會
         自癒,而畫面只顯示「這條規則今天都沒發」,零錯誤訊號。
+
+        **落點契約不變,時點改了(X-2b)**:worker 級例外現在先走有限重試,超限
+        (第 3 次)才落暫存區 —— 故等到 daily_bars 被打滿 4 次(當日 1 + staged 3)。
         """
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, basis_retry_delay_secs=0.0)
         await h.hub.start()
         try:
             h.hub.on_watchlist(["2330"])
@@ -1041,6 +1044,7 @@ class TestBasisWorker:
 
             monkeypatch.setattr(hub_mod, "compute_cdp", _boom_cdp)
             h.hub.on_rollover_pending(_NEXT)
+            await _wait_calls(h.bars, 4)
             await h.settle()
 
             assert _cache(h) == (_DATE, 80_000)  # 當日快照未被暫存區的例外動到

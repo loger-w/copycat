@@ -37,6 +37,7 @@ class SignalsConfig:
     # --- 接線層(SignalHub)---
     discord_per_min: int = 30  # Discord 每分鐘送出上限(只擋 Discord,不擋 jsonl/WS)
     basis_gap_secs: float = 0.2  # CDP 基準 worker 逐檔間隔(測試注入 0)
+    basis_retry_delay_secs: float = 30.0  # CDP 基準取得失敗後的重試間隔(X-2b;測試注入 0)
 
 
 def load_signals_config(path: Path = CONFIG_PATH) -> SignalsConfig:

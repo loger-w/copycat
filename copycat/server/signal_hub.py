@@ -95,6 +95,8 @@ _ENABLED_FILE = "signals_enabled.json"
 _RULES_FILE = "signal_rules.json"
 _SIGNAL_DIR = "signals"
 _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
+#: 基準取得**例外**的重試上限(per (code, basis_date, staged));超限才落 None
+_BASIS_MAX_RETRIES = 2
 _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
 _DISCORD_WINDOW_SECS = 60.0
 
@@ -229,6 +231,12 @@ class SignalHub:
         self._basis_cache: dict[str, tuple[str, dict[str, int] | None]] = {}
         self._staged_cache: dict[str, dict[str, int] | None] = {}
         self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
+        #: 例外路徑的重試記帳(X-2b):(code, 基準日, staged) → 已排過幾次重試。
+        #: 基準日在鍵裡 → 跨日天然作廢,再由 `on_rollover` 清掉舊日別的鍵(不長大)。
+        self._basis_retries: dict[tuple[str, str, bool], int] = {}
+        #: 在途的延遲重試(同一個鍵最多一筆:基準 worker 是序列的)。close() 要能
+        #: 全部取消 —— 關機後才觸發的 callback 會往一條再也沒有 worker 的佇列塞件。
+        self._retry_handles: dict[tuple[str, str, bool], asyncio.TimerHandle] = {}
         # 兩條獨立佇列 + 兩個 worker(CC-5):Discord 卡住時 jsonl 這條真相源要照走
         self._jsonl_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=JSONL_QUEUE_MAXSIZE)
         self._discord_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=DISCORD_QUEUE_MAXSIZE)
@@ -353,6 +361,9 @@ class SignalHub:
         但還沒寫完,先取消就沒有任何地方找得回它(`_flush_pending` 只掃得到還在佇列裡的)。
         """
         self._closing = True
+        for handle in self._retry_handles.values():
+            handle.cancel()  # 在途的基準重試:關機後入列的 job 永遠不會有人消化
+        self._retry_handles.clear()
         jsonl_task = self._jsonl_task
         if jsonl_task is not None and not jsonl_task.done():
             try:
@@ -436,6 +447,9 @@ class SignalHub:
 
     def on_rollover(self) -> None:
         expected = self._trade_date_fn()  # engine 已前進到新日別(stage2 契約)
+        # 重試記帳的日別作廢:新的一天是新的鍵,舊日別的計數再也不會被讀到 ——
+        # 不清的話這張表會隨開機天數單調長大(長駐 server 的慢性洩漏)。
+        self._basis_retries = {k: v for k, v in self._basis_retries.items() if k[1] == expected}
         for slot in self._slots.values():
             slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
         if self._staged_cache and self._staged_date == expected:
@@ -565,15 +579,60 @@ class SignalHub:
         """
         return basis_date != (self._staged_date if staged else self._trade_date_fn())
 
+    def _schedule_basis_retry(self, code: str, basis_date: str, staged: bool) -> bool:
+        """例外路徑的有限重試(X-2b)。回傳「有沒有排到重試」—— False = 已達上限,
+        呼叫端照舊落 None。
+
+        **只有例外走這裡**(連線 / 傳輸層,暫時性):落 None 是**整天**的決定,而
+        basis sweep 逐檔間隔只有 0.2s —— 一次連線抖動(例:REQ 棄連線級聯)可以在
+        數秒內把十幾檔的 CDP 停掉一整天,而畫面只是「那條規則今天都沒發」。反過來
+        「日 K 回空」是資料面的答案(新上市無歷史),重抓一百次也一樣,不得重試。
+
+        重試 job 走**同一條佇列**且帶原 `basis_date`/`staged` → `_stale` 這把既有的
+        尺自然擋掉跨日殘留,不必另立一套過期判定。
+        """
+        if self._closing:
+            return False
+        key = (code, basis_date, staged)
+        tries = self._basis_retries.get(key, 0)
+        if tries >= _BASIS_MAX_RETRIES:
+            logger.warning("CDP 基準連續失敗 %d 次,%s 當日停用 CDP", tries + 1, code)
+            return False
+        self._basis_retries[key] = tries + 1
+        delay = self._cfg.basis_retry_delay_secs
+        handle = asyncio.get_running_loop().call_later(delay, self._requeue_basis, key)
+        self._retry_handles[key] = handle
+        logger.info(
+            "CDP 基準取得失敗,%.0fs 後重試(第 %d 次):%s(%s,staged=%s)",
+            delay,
+            tries + 1,
+            code,
+            basis_date,
+            staged,
+        )
+        return True
+
+    def _requeue_basis(self, key: tuple[str, str, bool]) -> None:
+        """延遲到期:把原封不動的 job 放回佇列(過期與否由 worker 的 `_stale` 判)。"""
+        self._retry_handles.pop(key, None)
+        if self._closing:
+            return
+        self._basis_jobs.put_nowait(key)
+
     def _basis_failed(self, code: str, basis_date: str, staged: bool) -> None:
         """未預期失敗的收斂點(review A1+B2):日別符才落 None,且**經由 cache**。
 
         繞過 cache 直摸 detector 有兩個獨立的坑:(a) 沒有日別尺 —— 一則 stage1
         (次日)或 promote 前排下的舊 job 崩掉,就把當日基準停掉;(b) cache 仍寫著
         舊值 → 之後任何 `_distribute` 都會把它再餵回去,兩份真值就此分岔。
+
+        日別符時**先試重試**(X-2b:worker 級未預期例外同屬暫時性失敗那一類),
+        超限才落 None。
         """
         if self._stale(basis_date, staged):
             logger.info("捨棄過期基準 job 的失敗結果:%s(%s,staged=%s)", code, basis_date, staged)
+            return
+        if self._schedule_basis_retry(code, basis_date, staged):
             return
         if staged:
             self._staged_cache[code] = None
@@ -590,8 +649,14 @@ class SignalHub:
         try:
             bars = await self._daily_bars(code, _BASIS_BARS)
         except Exception:
-            # 具體處理 = 基準設 None(CDP 跳過、其他 kind 照常),不重試(design §4.2)
-            logger.exception("CDP 基準日 K 取得失敗,%s 停用 CDP", code)
+            # 具體處理 = 有限重試(X-2b,收窄 design §4.2),超限才落 None
+            # (CDP 跳過、其他 kind 照常)。過期的失敗不排重試 —— 日別都換了,
+            # 這則 job 的答案已經沒有人要。
+            logger.exception("CDP 基準日 K 取得失敗:%s", code)
+            if not self._stale(basis_date, staged) and self._schedule_basis_retry(
+                code, basis_date, staged
+            ):
+                return True
             bars = []
         done = [b for b in bars if b["date"] < basis_date]  # 今日 partial bar 不得入計算
         cdp: dict[str, int] | None = None
@@ -600,6 +665,10 @@ class SignalHub:
             cdp = compute_cdp(last["high"], last["low"], last["close"])
         else:
             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
+        # 走到這裡 = 這則 job 已經產出答案(含「資料面就是沒有」):抖動過去了,重試
+        # 記帳歸零。**不可提前到取得 bars 之後** —— 那之後還有 `compute_cdp`,它每次
+        # 都炸的話計數會被歸零成無限重試(這正是本輪先寫錯再被既有測試抓到的那條)。
+        self._basis_retries.pop((code, basis_date, staged), None)
         if self._stale(basis_date, staged):
             # 打日 K 的期間換了日別(staged:暫存區已清空 MFS-2;非 staged:promote 走完
             # R18)→ **丟棄**。餵進去等於把舊日別的基準當今天用,而且整天不會自癒。
