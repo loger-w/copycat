@@ -104,6 +104,29 @@ describe("useMarketBars", () => {
     expect(urls.length).toBe(before);
   });
 
+  // (review round-2 XR-4)分 K 這條路在**當日段每次都真走 TC4 SubHistory**,與
+  // REALTIME 搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發,是看不見的成本。
+  // 同頁的 R3/R4 區塊與 FuturesPage 都已經吃 `active` gate,只有 R1 這兩張圖沒有。
+  it("盤中 + active 未給(預設 true)→ 照 60 秒輪詢", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+    renderHook(() => useMarketBars("TWSE", "m1"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(urls.length).toBe(2);
+  });
+
+  it("active=false → 盤中也不背景輪詢(掛載仍抓一次)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 6, 10, 0));
+    renderHook(() => useMarketBars("TWSE", "m1", false), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(180_000); // 三個輪詢週期
+    expect(urls.length).toBe(1);
+  });
+
   it("HTTP 錯誤 → error 帶 detail.error 錯誤碼", async () => {
     vi.stubGlobal(
       "fetch",
