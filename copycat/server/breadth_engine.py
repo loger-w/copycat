@@ -759,9 +759,11 @@ class BreadthEngine:
                 # 逐列容錯:一列髒值只丟那一列,同輪其他檔照發(design R5)
                 logger.warning("breadth 廣度事件單列處理失敗(丟棄該列):%r", row, exc_info=True)
         if unjudged:
+            # 文案必須與逐列 `continue` 的行為一致(review S-5):寫「該批不發事件」
+            # 會把排查的人帶去找「整批為何消失」,而真相是只少了缺鍵的那幾列
             logger.warning(
-                "breadth 廣度事件:%d/%d 列無 limit_judged 鍵(疑似餵入原始快照 rows"
-                " 而非 compute_breadth 輸出),該批不發事件",
+                "breadth 廣度事件:%d/%d 列缺 limit_judged 鍵(疑似餵入原始快照 rows"
+                " 而非 compute_breadth 輸出),該些列不發事件(其餘照常)",
                 unjudged,
                 len(rows_out),
             )
