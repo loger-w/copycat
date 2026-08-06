@@ -95,6 +95,13 @@ def _info_rows(n: int) -> list[dict]:
     ]
 
 
+def _eod_rows(n: int = 2) -> list[dict]:
+    return [
+        {"date": "2026-08-05", "stock_id": f"{2330 + i}", "close": 100.0, "spread": 1.0}
+        for i in range(n)
+    ]
+
+
 # ---------- URL / header / timeout 契約 ----------
 
 
@@ -122,6 +129,62 @@ class TestRequestShape:
         assert http.path() == "/api/v4/data"
         assert http.query() == {"dataset": ["TaiwanStockInfo"]}
         assert http.headers[0]["Authorization"] == "Bearer tok"
+
+    def test_daily_prices_single_day_query_and_long_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """單日全市場 EOD:start_date == end_date == 該日、無 data_id;**timeout 60s**。
+
+        回應是 MB 級(全市場 ~3 萬列含權證),秒級輪詢用的 30s 會在正常日就逾時 ——
+        而逾時的表現是 streak 整輪失敗、連板欄整天 null(design §3.3a R10)。
+        """
+        http = FakeHttp(_payload(_eod_rows()))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        rows = bf.fetch_daily_prices("tok", _TODAY)
+
+        assert rows == _eod_rows()
+        assert http.calls == 1
+        assert http.path() == "/api/v4/data"
+        assert http.query() == {
+            "dataset": ["TaiwanStockPrice"],
+            "start_date": ["2026-08-05"],
+            "end_date": ["2026-08-05"],
+        }
+        assert http.headers[0]["Authorization"] == "Bearer tok"
+        assert http.timeouts[0] == 60.0
+
+    def test_other_fetchers_keep_default_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`timeout` 是 keyword-only 且**只有 EOD 帶 60**;秒級輪詢的三支維持 30s。"""
+        http = FakeHttp(_payload(_snapshot_rows()))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        bf.fetch_snapshot("tok")
+        bf.fetch_disposition("tok", _TODAY)
+
+        assert http.timeouts == [30.0, 30.0]
+
+    def test_daily_prices_402_marks_quota_and_does_not_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """錯誤分類沿 `_get_rows`:402 → quota=True 不重試(引擎據此走長退避)。"""
+        http = FakeHttp(_http_error(402))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        with pytest.raises(bf.BreadthFetchError) as exc:
+            bf.fetch_daily_prices("tok", _TODAY)
+
+        assert exc.value.quota is True
+        assert http.calls == 1
+
+    def test_daily_prices_empty_day_returns_empty_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """假日 = 合法的空 `data` 陣列(不是錯誤);「空 = 假日候選」的判定在引擎。"""
+        http = FakeHttp(_payload([]))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        assert bf.fetch_daily_prices("tok", _TODAY) == []
 
     def test_disposition_range_query_param_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """參數名必為 start_date / end_date(oi_levels / neigui 同款;PLAN R6)。"""
