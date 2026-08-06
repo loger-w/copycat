@@ -2117,6 +2117,26 @@ class TestSectorState:
         assert engine._chain_map == _CHAIN_MAP  # 前置:表真的換上去了
         assert engine.sector_state()["rotation"] is None
 
+    async def test_sector_state_uses_rows_date_not_trade_date(self, tmp_path: Path) -> None:
+        """`adopt_date=False` 輪:標頭日期取 `_rows_date`(鏡射 `rows_state` 同款;T-4)。
+
+        rotation 是從**那一輪的 universe** 算的,而 `_trade_date` 在該路徑刻意停在
+        序列日(序列保護)—— 報 `_trade_date` 的表現是「畫面全對、只有標頭日期是
+        別天的」,而那正是最不會被發現的一種錯。
+        """
+        engine, snap, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
+        await _arm_chain(engine)
+        await engine._run_cycle()
+        assert engine.sector_state()["trade_date"] == _TRADE_DATE  # 前置:同日輪
+
+        snap.rows = _snapshot_rows("2026-08-04 13:30:00")
+        await engine._run_cycle()
+
+        assert engine._trade_date == _TRADE_DATE  # 日期變更不採用(序列保護)
+        state = engine.sector_state()
+        assert state["trade_date"] == "2026-08-04"  # 但 payload 與 rows / rotation 同源
+        assert state["rotation"] is not None  # 該輪照樣重算(rows 換了)
+
     async def test_sector_members_known(self, tmp_path: Path) -> None:
         """成員 drill-down:名稱走 `_name_map`,按 change_rate desc。"""
         engine = await _ready_engine(tmp_path)
@@ -2357,6 +2377,42 @@ class TestMarketLimitEvents:
             ("1101", _OPEN_KIND, 1)
         ]
         assert published[0]["time"] == "10:00:05"  # 帶當下時刻(jsonl 缺角自癒)
+
+    async def test_seeded_touch_count_continues_not_restarts(self, tmp_path: Path) -> None:
+        """(c) seed 的**計數**要續數,不得從 1 重來(T-2)。
+
+        `touch_count` 是「今天第 N 次」的對外語意:重啟後從 1 重數的話,盤中重啟過的
+        那天每一檔的次數都被腰斬,而畫面上只是數字小一點 —— 沒有任何錯誤訊號。
+        """
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub(counts={("1101", _LOCK_KIND, "up"): 2})
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "10:00:05")
+
+        assert _tuples(hub.events) == [(_LOCK_KIND, "1101", "up", "10:00:05", 3)]
+
+    async def test_restart_reopen_continues_open_count(self, tmp_path: Path) -> None:
+        """(c-整合)jsonl 已有 open→lock 一輪 → 重啟後再打開,open 是當日第 **2** 次。
+
+        走真 SignalHub 的回放(不是 FakeHub 的注入):計數 seed 與狀態 seed 是同一個
+        `market_event_state` 呼叫回來的兩份,只釘其中一份的話另一份可以整個接錯而全綠。
+        """
+        _write_market_jsonl(
+            tmp_path,
+            [
+                {"id": "x1", "kind": _OPEN_KIND, "code": "1101", "direction": "up"},
+                {"id": "x2", "kind": _LOCK_KIND, "code": "1101", "direction": "up"},
+            ],
+        )
+        published: list[dict] = []
+        hub = _real_hub(tmp_path, published)
+        engine, *_ = _make(tmp_path)
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101")], "10:30:05")
+
+        assert [(m["kind"], m["touch_count"]) for m in published] == [(_OPEN_KIND, 2)]
 
     async def test_cooldown_defers_reconciliation_not_drops(
         self, tmp_path: Path, mono: FakeMono
