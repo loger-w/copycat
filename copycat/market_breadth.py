@@ -267,15 +267,37 @@ def _is_limit(close: float, prev_close: float) -> tuple[bool, bool]:
     )
 
 
-def _is_touched(high: float | None, low: float | None, prev_close: float) -> tuple[bool, bool]:
-    """毫元等值判「盤中曾觸及停板」;high/low 缺(舊 fixture / 剪裁快照)→ (False, False)。
+def _to_number(value: object) -> float | None:
+    """數值欄 → float;缺值 / 非數值 → None(`limit_streaks._to_float` 同語意)。
+
+    `bool` 明確排除(True 靜默變 1.0)。snapshot 的 `high` / `low` 不保證是數值 ——
+    未成交的檔位實務上會是空字串或 `"-"`,而 `round(x * 1000)` 對 str 直接 TypeError:
+    那個例外從 `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉,`_fail()` 沒被
+    呼叫 → 退避不動、stale 不亮,整片家數只是凍在最後一則且零錯誤訊號。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _is_touched(high: object, low: object, prev_close: float) -> tuple[bool, bool]:
+    """毫元等值判「盤中曾觸及停板」;high/low 缺或非數值 → (False, False)。
 
     只回「是否摸到」;「觸及**未鎖**」= 本結果 and not `_is_limit` 同向,由呼叫端合成
     (本函式拿不到 close)。
     """
     prev_milli = round(prev_close * 1000)
-    touched_up = high is not None and round(high * 1000) == limit_up_milli(prev_milli)
-    touched_down = low is not None and round(low * 1000) == limit_down_milli(prev_milli)
+    high_f = _to_number(high)
+    low_f = _to_number(low)
+    touched_up = high_f is not None and round(high_f * 1000) == limit_up_milli(prev_milli)
+    touched_down = low_f is not None and round(low_f * 1000) == limit_down_milli(prev_milli)
     return touched_up, touched_down
 
 

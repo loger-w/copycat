@@ -197,6 +197,11 @@ class BreadthEngine:
         self._streak_armed_day: str | None = None  # 今日已排程過(不論成敗)
         self._streak_task: asyncio.Task[None] | None = None
         self._streak_attempts = 0  # 武裝日內的嘗試計數
+        #: 武裝日內跨重試重用的逐日成果(日期 → 漲停集合;None = 空回應 = 假日候選)。
+        #: 每日 EOD 是 MB 級回應而重試是整輪從頭掃 —— 沒有它,第 25 日才失敗會把前 24 日
+        #: 各重抓 10 遍,而配額燒光的表現是**整個**家數面板跟著死(review R3-BE-2)。
+        #: 武裝時清空:同一日期的 EOD 不會變,但成果只服務當次武裝日的窗。
+        self._streak_memo: dict[str, set[str] | None] = {}
 
         # ---- 當日分鐘序列(分鐘鍵 → point,last-wins)----
         self._series: dict[str, dict] = {}
@@ -591,6 +596,7 @@ class BreadthEngine:
         self._streaks_span = 0
         self._streaks_skipped = set()
         self._streak_attempts = 0
+        self._streak_memo = {}
         self._streak_armed_day = today
         self._streak_task = asyncio.create_task(self._compute_streaks_loop())
         logger.info("breadth streak 武裝 %s(回看 %d 交易日)", today, STREAK_WINDOW_DAYS)
@@ -646,35 +652,68 @@ class BreadthEngine:
         值,否則跨午夜完成的那一輪會以昨日為基準算出錯值並被快取固化(R3)。
 
         記憶體紀律(R5):每日 rows 一拿到就收成集合後丟棄 —— 全市場單日 ~3 萬列,
-        10 日全持有是數百 MB 級,live server 內不可接受。
+        10 日全持有是數百 MB 級,live server 內不可接受。`_streak_memo` 只留收成後的
+        集合(每日數十個代號),重試因此不必重抓已成功的日(R3-BE-2)。
         """
         fetch = self._daily_fetch
         if fetch is None:  # pragma: no cover - 武裝條件已擋掉
             return False
         day = self._today_fn()
+        memo = self._streak_memo
         day_sets: list[set[str]] = []
         dates: list[str] = []
         skipped: list[str] = []
         d = day - _dt.timedelta(days=1)
         floor = day - _dt.timedelta(days=_STREAK_SCAN_CAL_DAYS)
         while d >= floor and len(day_sets) < STREAK_WINDOW_DAYS:
+            key = d.isoformat()
+            if key in memo:
+                cached = memo[key]
+                if cached is None:
+                    skipped.append(key)
+                else:
+                    day_sets.append(set(cached))
+                    dates.append(key)
+                d -= _dt.timedelta(days=1)
+                continue
             rows = await asyncio.to_thread(fetch, self._token, d)
             await asyncio.sleep(_STREAK_REQ_GAP_SECS)
             if not rows:
-                skipped.append(d.isoformat())  # 假日候選(FinMind 對非交易日回空陣列)
+                skipped.append(key)  # 假日候選(FinMind 對非交易日回空陣列)
+                memo[key] = None
             elif len(rows) < _DAILY_MIN_ROWS:
                 # 部分截斷若被當假日跳過,那一天就從回看窗裡消失 → 連板數靜默高估
                 logger.warning(
                     "breadth streak %s 只有 %d 列(門檻 %d),視同該日取數失敗 → 整輪重試",
-                    d.isoformat(),
+                    key,
                     len(rows),
                     _DAILY_MIN_ROWS,
                 )
                 return False
+            elif rows[0].get("date") != key:
+                # 資料日回聲不符 = 參數被忽略 / 回到別日的快取。回應形狀完全合法且列數
+                # 也夠 —— 沒有這道檢查,別日的漲停集合會被當成該日的答案填進窗裡,而
+                # 錯值會被當日快取固化,整天不再重算(review R3-T3)
+                logger.warning(
+                    "breadth streak %s 回應資料日為 %r(不符請求日),視同該日取數失敗 → 整輪重試",
+                    key,
+                    rows[0].get("date"),
+                )
+                return False
             else:
-                logger.info("breadth streak %s:%d 列", d.isoformat(), len(rows))
-                day_sets.append(compute_day_limitups(rows))
-                dates.append(d.isoformat())
+                day_set = compute_day_limitups(rows)
+                if not day_set:
+                    # 全市場單日零漲停極罕見(多半是 close/spread 欄位語意變了);不中斷,
+                    # 但連板欄整片空白與「今天真的沒人漲停」同形,要留下觀測訊號
+                    logger.warning(
+                        "breadth streak %s 零漲停(%d 列)—— 欄位語意可能已變,請核對",
+                        key,
+                        len(rows),
+                    )
+                logger.info("breadth streak %s:%d 列 / %d 檔漲停", key, len(rows), len(day_set))
+                memo[key] = day_set
+                day_sets.append(set(day_set))
+                dates.append(key)
             d -= _dt.timedelta(days=1)
 
         if not dates:
@@ -682,6 +721,19 @@ class BreadthEngine:
                 "breadth streak 自 %s 往回掃 %d 日曆日仍無任何交易日資料 → 整輪重試",
                 day.isoformat(),
                 _STREAK_SCAN_CAL_DAYS,
+            )
+            return False
+        lead_gap = (day - _dt.date.fromisoformat(dates[0])).days
+        if lead_gap > _STREAK_GAP_CAL_DAYS:
+            # **前緣**同閾值(review R3-BE-1):上游把最近 N 個交易日整段丟掉時,收到的
+            # 序列自己是連續的(內部間距全 1),交集遞進照樣成功、成果照樣被當日快取固化,
+            # 而盤中判式仍走 `rows_date > data_end` 分支 +1 → 連板數靜默少計整段
+            logger.warning(
+                "breadth streak 最新資料日 %s 距 %s 已 %d 日(上限 %d),該輪不採用",
+                dates[0],
+                day.isoformat(),
+                lead_gap,
+                _STREAK_GAP_CAL_DAYS,
             )
             return False
         for newer, older in zip(dates, dates[1:]):
@@ -712,6 +764,10 @@ class BreadthEngine:
         self._streaks_dates = dates
         self._streaks_span = len(dates)
         self._streaks_skipped = set(skipped)
+        # 武裝日對齊**成果日**:跨午夜完成時 `day` 已是 D+1,armed_day 若還停在 D,
+        # 下一圈武裝檢查會判「今日尚未武裝」把剛算好的成果整組清掉再全掃一次
+        # (白燒一輪 MB 級請求,期間連板欄全 null;review R3-BE-3)
+        self._streak_armed_day = day.isoformat()
         yesterday = (day - _dt.timedelta(days=1)).isoformat()
         if dates[0] != yesterday:
             # 昨日若其實是交易日(FinMind 丟資料)→ 盤中判式仍會 +1 而少計一板(KR-1)
@@ -786,12 +842,25 @@ class BreadthEngine:
         ):
             logger.warning("breadth streak 快取形狀不符,今日重算:%s", path)
             return
+        # `dates` 是 `_streaks_span`(封頂判定的分母)與 `data_end`(盤中 +1 判定的基準)
+        # 的唯一來源,三條自洽檢查缺一不可(review R3-BE-4):空 list 讓 span=0 →
+        # `prev >= span` 恆真 → **每一列**漲停都被標成假的「N+ 板」;dates[0] ≠ data_end
+        # 則兩個判定各自以不同的日為基準;逐項過濾掉髒值後照樣採用等於半份快取生效
+        dates_out = [d for d in dates if isinstance(d, str)]
+        if not dates_out or len(dates_out) != len(dates) or dates_out[0] != data_end:
+            logger.warning(
+                "breadth streak 快取 dates 與 data_end 不自洽(%d 筆 / data_end=%s),今日重算:%s",
+                len(dates),
+                data_end,
+                path,
+            )
+            return
         self._streaks = {
             k: v
             for k, v in streaks.items()
             if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
         }
-        self._streaks_dates = [d for d in dates if isinstance(d, str)]
+        self._streaks_dates = dates_out
         self._streaks_day = today
         self._streaks_end = data_end
         self._streaks_span = len(self._streaks_dates)
