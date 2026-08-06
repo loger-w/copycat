@@ -326,6 +326,15 @@ class StockEngine:
                     # **在 loop 側清**:記帳集合是 loop-only 不變式,不可下沉到
                     # `_release`(那個是在 executor thread 跑的)。
                     # `_backfill_pending` 不清 —— 在途 job 之後仍會來扣一次(A3)。
+                    #
+                    # ⚠ **已知殘留窗**(review A-1,本輪不修):清點只作用於「清的那一刻」。
+                    # 退訂當下若有一個 job 還在佇列裡或正跑著 `to_thread(backfill)`,
+                    # 它完成時 `_backfilled.add(code)` 會把記帳寫回去 —— 而 generation
+                    # 只在 rollover stage1 才 bump,退訂不 bump,worker 的 guard 攔不住。
+                    # 窗是秒級(一次 SubHistory 的時間)且後果與 E-2 同構(那一檔在
+                    # 群組輪詢裡被 dedup 擋到下一次日別清空為止)。完整解要 per-code
+                    # epoch(退訂時 +1,job 自帶取件時的 epoch,套用前比對),那是新的
+                    # 不變式不是註解能帶過的,記 next-time。
                     self._backfilled.discard(code)
                     self._backfill_failed.pop(code, None)
             # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
@@ -825,6 +834,16 @@ class StockEngine:
         # 夜盤沒有誤觸的路:(a) 夜盤 tick 在上面的 `_in_futures_session` 就整則早退,
         # 到得了這裡的期貨 tick 必屬日盤 08:45–13:45,其 `trade_date` 即當日;
         # (b) 00:00–05:00 夜盤時段 `_pending_date` 恆 None(checkpoint 08:00 才武裝)。
+        #
+        # **對現貨側的既定效果**(review A-3,不是副作用是語意):`_rollover_stage2`
+        # 是**全池** reset,觸發者是誰不改變作用範圍 —— 放寬之後那一刻從現貨首筆
+        # (09:00)提前到期貨開盤(08:45)。也就是 08:45–09:00 之間:現貨的盤前圖被
+        # 清空(昨日殘留本來就該清)、`seq` 歸零觸發前端全量 refetch、stage1 重掛時
+        # 掛上的 no-data 旗標(`_no_data`)一併被清。三者都是兩段式 rollover 原本就
+        # 有的語意,只是「首筆」的定義從現貨放寬到日盤合約而提早了十五分鐘。
+        # 合約鍵觸發、現貨池被 reset 的這條跨 instrument 邊界由
+        # `test_daytime_contract_tick_stage2_resets_the_spot_pool` 鎖住。
+        #
         # 已知殘留限制:補市日(週六)+ 自選空 + 主圖合約時 checkpoint 不武裝、現貨
         # 快路徑也沒有現貨 tick → 仍整天不換日(極罕見,不在本輪展開)。
         if (
