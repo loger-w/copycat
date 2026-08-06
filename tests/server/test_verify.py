@@ -23,8 +23,10 @@ import pytest
 
 import copycat.capital.factory as factory
 import copycat.notify as notify
+import copycat.server.breadth_engine as be
 import copycat.server.discord_bot as discord_bot
 import copycat.server.verify as verify
+from copycat.limit_streaks import compute_day_limitups, compute_prev_streaks
 from copycat.market_breadth import (
     assemble_universe,
     build_name_map,
@@ -126,14 +128,14 @@ def test_snapshot_stamp_clamped_into_minute_domain(now: str, expected: str) -> N
 
 
 def test_fake_breadth_fetchers_feed_the_real_pipeline() -> None:
-    """fake 三元組餵進真管線的**語意**斷言(review TC-6)。
+    """fake 四元組的前三支餵進真管線的**語意**斷言(review TC-6)。
 
-    這三支是 verify server 上目視的唯一資料源:形狀對但值域無意義(例如漲跌停那兩檔
+    這幾支是 verify server 上目視的唯一資料源:形狀對但值域無意義(例如漲跌停那兩檔
     沒真的落在停板價、或 ETF 沒被剔除)時,畫面照樣有數字,而「接線壞掉」與「fake 資料
     本身沒覆蓋到那條路」在畫面上同形。手算:1101 前收 10.0 → 漲停 11.0;6488 前收
     10.0 → 跌停 9.0;2330(前收 995)只是上漲;2317 平盤;2454 下跌;0050 = ETF 剔除。
     """
-    snapshot, stock_info, disposition = fake_breadth_fetchers()
+    snapshot, stock_info, disposition, _daily = fake_breadth_fetchers()
     today = _dt.date.today()
     info_rows = stock_info("tok")
     snapshot_rows = snapshot("tok")
@@ -146,6 +148,35 @@ def test_fake_breadth_fetchers_feed_the_real_pipeline() -> None:
     assert out["twse"] == {"limit_up": 1, "up": 1, "flat": 1, "down": 1, "limit_down": 0}
     assert out["tpex"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 1}
     assert "0050" not in {r["stock_id"] for r in out["rows"]}
+
+    by_id = {r["stock_id"]: r for r in out["rows"]}
+    # 「觸及未鎖」是 R3 列表的第三種狀態,verify 畫面要看得到它才驗得了那條路:
+    # 3105 前收 79.0 → 漲停 86.9,high 摸到但收 80.0(未鎖)
+    assert by_id["3105"]["touched_limit_up"] is True
+    assert by_id["3105"]["limit_up"] is False
+    # 已鎖的那檔 high 同樣等於漲停價,但**不得**重複算進「觸及未鎖」桶
+    assert by_id["1101"]["limit_up"] is True
+    assert by_id["1101"]["touched_limit_up"] is False
+
+
+def test_fake_daily_prices_feed_the_streak_pipeline() -> None:
+    """第四支(EOD 日線)fake 的**語意**斷言:指定股兩日皆收漲停 → streak == 2。
+
+    形狀對但值沒真的落在停板價時,verify server 的連板欄會恆空,而那與「連板管線
+    壞掉」在畫面上同形。手算:1101 close 11.0 / spread 1.0 → 前收 10.0 → 漲停 11.0。
+
+    列數門檻同樣是語意的一部分:低於 `_DAILY_MIN_ROWS` 會被引擎當成「回應被截斷」
+    → 整輪失敗 → 連板欄整天 null(design R4/R16),fake 不夠長就等於這條路沒接上。
+    """
+    *_, daily = fake_breadth_fetchers()
+    today = _dt.date.today()
+    day1 = daily("tok", today - _dt.timedelta(days=1))
+    day2 = daily("tok", today - _dt.timedelta(days=2))
+
+    assert len(day1) >= be._DAILY_MIN_ROWS
+    streaks = compute_prev_streaks([compute_day_limitups(day1), compute_day_limitups(day2)])
+    assert streaks.get("1101") == 2
+    assert streaks.get("2330") is None  # 未漲停的那檔不得混進來
 
 
 def test_fake_snapshot_stamp_is_today_and_inside_minute_domain() -> None:
@@ -160,15 +191,20 @@ def test_fake_snapshot_stamp_is_today_and_inside_minute_domain() -> None:
     assert len({r["date"] for r in rows}) == 1  # 同一輪同一個時刻
 
 
-def test_verify_breadth_fail_injects_all_three(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`VERIFY_BREADTH_FAIL=1` → 三支全拋(SC-3 在真 server 上的失效注入通道)。"""
+def test_verify_breadth_fail_injects_all_four(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`VERIFY_BREADTH_FAIL=1` → 四支全拋(SC-3/SC-6 在真 server 上的失效注入通道)。
+
+    第四支(EOD 日線)漏接注入的話,FinMind 「整段掛掉」的注入其實漏了一條路 ——
+    連板背景 task 照樣打得通,失效隔離就沒真的被驗到。
+    """
     monkeypatch.setenv(FAIL_ENV_KEY, "1")
-    snapshot, stock_info, disposition = fake_breadth_fetchers()
+    snapshot, stock_info, disposition, daily = fake_breadth_fetchers()
 
     for call in (
         lambda: snapshot("tok"),
         lambda: stock_info("tok"),
         lambda: disposition("tok", _dt.date.today()),
+        lambda: daily("tok", _dt.date.today()),
     ):
         with pytest.raises(BreadthFetchError):
             call()

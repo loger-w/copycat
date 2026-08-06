@@ -110,7 +110,7 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
         "breadth_fetchers",
         "breadth_data_dir",
     }
-    assert len(cap.create_kwargs["breadth_fetchers"]) == 3
+    assert len(cap.create_kwargs["breadth_fetchers"]) == 4
     assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
     # env 壓制必須有跑、log 不落檔、port 與 prod 錯開
     assert cap.neutralized is True
