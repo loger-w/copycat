@@ -13,6 +13,18 @@
   LimitListSection 是 amber「延遲」— 視覺是否統一待 user 過目時定。
 - [ ] **時間軸歷史日回看不做**(R4 out of scope):jsonl 按日分檔,要做時 today 端點
   加 `?date=` 即可。
+- [ ] **廣度事件與規則訊號共用 jsonl 佇列(1000,drop-oldest)**(review C-6,量級
+  安全暫不動):單輪廣度批次數百 < 1000;若漲停潮日觀察到 `dropped_jsonl` 上升,
+  丟棄 warning 先分家族計數,再考慮廣度獨立佇列。
+- [ ] **`--verify` 模式無 stock engine → SignalHub 恆 None → 廣度事件層在官方 verify
+  上不可達**(Phase 6 實測;design §8 的取證通道假設漏了這層):事件鏈取證用
+  `evidence/events_side_server_r4.py`(FakeStockSource 組裝,jsonl 隔離 tmp)。
+  若 verify 要原生支援,補 fake stock source 進 verify.py 是獨立決策。
+- [ ] **SC-4 盤中同時刻 REST 對照層未做**(窗外降級層已 PASS — 兩實作同快照全等):
+  任一交易日盤中 neigui `/api/market/snapshot?refresh=true` 與 copycat
+  `/api/market/sector` 同分鐘各落檔比對一次即補齊;純 optional。
+- [ ] 類股成員表小型股「成交額」顯示 0.0(億元捨入)— 外觀候選,要改就低於 0.05 億
+  顯示千萬/萬單位。
 
 ## 2026-08-06(market-overview-r3-limit-list 收尾留尾巴)
 
