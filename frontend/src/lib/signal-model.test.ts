@@ -94,6 +94,17 @@ describe("isMarketKind", () => {
   it("自選訊號 kind 為 false(限自選的鎖板不是全市場事件)", () => {
     expect(signalModel.isMarketKind("limit_lock")).toBe(false);
   });
+
+  // (review round-2 FE-2)`kind` 的型別在 runtime 沒有任何人保證:jsonl 是一行一行
+  // append 的檔案,壞行 / 舊格式 / 手改都可能讓它不是字串。裸 `startsWith` 會拋在
+  // `useSignalFeed` 的 useMemo 裡 —— 沒有 ErrorBoundary 就是整頁白屏,而壞行還留在
+  // 檔案裡,重整也不會自癒。後端對應的 `app._is_market_kind` 就是先 isinstance。
+  it("非字串 kind 回 false 而不拋(壞 jsonl 行不該讓整頁白屏)", () => {
+    expect(signalModel.isMarketKind(null as unknown as string)).toBe(false);
+    expect(signalModel.isMarketKind(undefined as unknown as string)).toBe(false);
+    expect(signalModel.isMarketKind(42 as unknown as string)).toBe(false);
+    expect(signalModel.isMarketKind({} as unknown as string)).toBe(false);
+  });
 });
 
 describe("formatToastText", () => {
