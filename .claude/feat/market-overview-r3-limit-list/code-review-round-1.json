@@ -1,0 +1,26 @@
+{
+  "round": 1,
+  "mode": "medium(3 lens finder:後端時序 / 前端行為 / 測試覆蓋+missing-from-spec,opus)",
+  "date": "2026-08-06",
+  "findings_summary": {"P0": 0, "P1": 3, "P2": 12},
+  "findings": {
+    "FE-1": {"sev": "P1", "claim": "refetch error(有 data)整表消失換「載入失敗」— TQ v5 isError 含 refetch error", "disposition": "accepted → isError && data===undefined 才走失敗文案;有 data 時保表 + 補 refetch-error 測試"},
+    "R3-T1": {"sev": "P1", "claim": "「窗外武裝」位置零測試鎖(mutation:移進窗 gate 全綠)", "disposition": "accepted → 補走 start()+poll loop 的窗外武裝測試"},
+    "R3-BE-1": {"sev": "P1", "claim": "連續性健檢缺前緣(today↔dates[0])— 上游遺失近 N 交易日照樣成功固化,連板靜默少計", "disposition": "accepted → 前緣同閾值檢查(> 12 日 → 整輪失敗)"},
+    "FE-2": {"sev": "P2", "claim": "hidden tab 下列表照輪詢(IndexPage 恆 mount;FuturesPage active prop 慣例未沿用)", "disposition": "accepted → App 傳 active,mount 條件 open && active"},
+    "FE-3": {"sev": "P2", "claim": "filter localStorage 型別不符 → threshold TypeError → 白屏(無 ErrorBoundary)", "disposition": "accepted → loadFilter 逐欄正規化 + threshold 防禦"},
+    "FE-4": {"sev": "P2", "claim": "「無符合條件」與「今日尚無漲跌停」共用文案,把系統態說成操作結果", "disposition": "accepted → 狀態池為 0 →「今日尚無漲跌停」"},
+    "R3-T2": {"sev": "P2", "claim": "max(prev,1) 下界零覆蓋(mutation 存活)", "disposition": "accepted → 補 prev=0 案例"},
+    "R3-T3": {"sev": "P2", "claim": "EOD 無 date 回聲檢查 + 全日零漲停無 warning;fake 缺 date 欄與真回應脫節", "disposition": "accepted → per-day date 檢查 + warning + fake 補 date"},
+    "R3-T4": {"sev": "P2", "claim": "名稱欄與表頭欄名零斷言(SC-3 anytime 證據缺口)", "disposition": "accepted → limit-name testid + 表頭整組比對"},
+    "R3-T5": {"sev": "P2", "claim": "arity guard 註解誤標「design R8」(R8 是排序優先序)", "disposition": "accepted → 改正出處 + design §3.3a 補一行收進契約"},
+    "R3-T6": {"sev": "P2", "claim": "CLAUDE.md 模組樹缺 limit_streaks.py 與 /api/market/breadth/rows", "disposition": "accepted → 補記"},
+    "R3-BE-2": {"sev": "P2", "claim": "重試不保留部分進度,最壞 500 次 MB 級請求", "disposition": "accepted → task 級 day→set memo 跨 attempt 重用"},
+    "R3-BE-3": {"sev": "P2", "claim": "跨午夜成功後 armed_day 未對齊 → 成果被清空重跑一次全掃", "disposition": "accepted → 成功時 _streak_armed_day 對齊 day"},
+    "R3-BE-4": {"sev": "P2", "claim": "restore 不驗 dates 非空/與 data_end 一致 → span=0 全列誤標 capped", "disposition": "accepted → restore 形狀檢查補三條"},
+    "R3-MB-5": {"sev": "P2", "claim": "high/low 非數值 → TypeError 打穿 _apply,poll 傘罩吞掉且不觸發退避", "disposition": "accepted → 數值化 helper;parity 不重錄(合成測試覆蓋)"},
+    "R3-VF-6": {"sev": "P2", "claim": "verify docstring 算術錯(實際 11+ 板非 10+)", "disposition": "accepted → docstring 改正"}
+  },
+  "p2_summary": "12 條 P2 全為行為級/測試缺口/文件正確性,無風格類;逐條展開如上,無彙總丟棄項",
+  "clean_areas": "篩選/排序/badge 歸屬逐條符合 §5.2;key 唯一;hook 慣例一致;App 接線 visited gate 正確;a11y 依既有慣例不強加"
+}

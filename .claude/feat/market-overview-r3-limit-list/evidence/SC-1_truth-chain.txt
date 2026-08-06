@@ -1,0 +1,18 @@
+SC-1 真值鏈驗證(2026-08-06 16:20,側車 server port 8723:fake TXO + 真 FinMind 四支)
+
+端點:GET /api/market/breadth/rows
+streaks_ready: True | trade_date: 2026-08-06 | as_of: 14:59:59(定盤後快照)| stale: False | rows: 1954
+limit_up: 44 | limit_down: 3 | touched-only: 26
+
+交叉驗證(vs evidence/SC-2_streak-truth.txt 的獨立 EOD 實跑):
+- 3081 聯亞:SC-2 真值 prev_streak=4(截至 2026-08-05)→ 今日快照 limit_up=True
+  → 端點 streak=5 = prev+1 ✓(rows_date 2026-08-06 > data_end 2026-08-05 分支)
+- 6727 力智:SC-2 真值 prev_streak=4,但今日未鎖(limit_up=False)
+  → streak=null 不顯示 ✓(連板欄僅漲停列有值的語意)
+- 2491 吉祥全 streak=3 / 2070 精湛 streak=2 / 6213 聯茂 streak=2(與 EOD 窗一致)
+
+top 漲停列:
+  3081 聯亞 streak=5 capped=False close=2375.0 amt=110.4億
+  2491 吉祥全 streak=3 close=31.95
+  2070 精湛 streak=2 / 6213 聯茂 streak=2(107.6億)/ 7711 永擎 streak=2
+原始 payload:SC-1_rows-first.json(streaks_ready=false 過渡態)/ SC-1_rows-ready.json(就緒態)

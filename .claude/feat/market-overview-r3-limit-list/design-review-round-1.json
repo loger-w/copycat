@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-06",
+  "findings_summary": {
+    "P0": 1,
+    "P1": 5,
+    "P2": 6,
+    "dispositions": {
+      "R1": "accepted (P0) — 後端算 streak/streak_capped,trade_date vs data_end 判式;v2 §3.3",
+      "R2": "accepted — BreadthFetchers 四元組 + verify 第四支 fake + fake 快照補 high/low;v2 §3.3a",
+      "R3": "accepted — today 進場取樣一次,收尾不符丟棄;v2 §3.3",
+      "R4": "accepted — _DAILY_MIN_ROWS 健檢 + dates 稽核 + 間距 12 日閾值;v2 §3.3",
+      "R5": "accepted — compute_day_limitups 串流化,純函式吃 list[set[str]];v2 §3.2",
+      "R6": "RESOLVED_WITH_EVIDENCE — total_amount 元口徑以真快照算術實證(2330@12:19 15339 張 × 2375.78 × 1000 ≈ total_amount);v2 §5.2",
+      "R7": "accepted — 該變 assertion 改指 test_compute_breadth_row_shape;_SNAPSHOT_FIELDS 補 high/low;v2 §3.1",
+      "R8": "accepted — 狀態優先序 limit_up > limit_down > touched;null streak 排序 -1;v2 §5.2",
+      "R9": "accepted — task is None or done();換日檢查移 _poll_loop 每圈窗外;v2 §3.3",
+      "R10": "accepted — _get_rows timeout 參數(EOD 60s);refetchInterval inHours() gate;v2 §3.3a/§5.2",
+      "R11": "accepted — streak_capped 後端旗標,前端「N+ 板」;窗收不滿同觸發;v2 §3.3",
+      "R12": "accepted — SC-2 oracle 指定 limitup_all.csv + 人工核對;空+stale 文案分離;v2 §5.2/§7"
+    }
+  },
+  "raw_findings_file": "design-review-round-1.raw.json"
+}

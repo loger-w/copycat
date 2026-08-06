@@ -1,0 +1,3631 @@
+﻿diff --git a/CLAUDE.md b/CLAUDE.md
+index 89ef3a23..6638f507 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -92,8 +92,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
+ │                         #   cache 鍵複合 code:session;預設 day = 大盤 tab 行為不變)
+ │                         #   breadth_engine(FinMind 全市場家數 poller,2026-08-06:10s poll/
+ │                         #   盤中窗/當日序列落檔 data/market/、失敗退避;REST /api/market/breadth
+-│                         #   + WS /ws/breadth)、breadth_fetch(三支 FinMind dataset 取數 +
+-│                         #   錯誤分類 quota)、finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
++│                         #   + WS /ws/breadth)、breadth_fetch(四支 FinMind dataset 取數 +
++│                         #   錯誤分類 quota;第四支 = 單日全市場 EOD,連板數用)、
++│                         #   finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
+ ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算;tick_size_milli 毫元版)
+ ├── market_breadth.py     #   全市場廣度純函式(2026-08-06,零 IO):universe 過濾 / 五桶家數 /
+ │                         #   毫元漲跌停判定;neigui 搬移,parity oracle fixture 對照
+@@ -160,9 +161,10 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通
+   `CAPITAL_DLL_DIR` / `CAPITAL_ORDER_ENABLED`(false=總開關全擋)/
+   `CAPITAL_MAX_QTY` / `CAPITAL_MAX_AMOUNT`(未設/0 = 不限,user 拍板)/
+   `CAPITAL_AUDIT_DIR`(選配,預設隨 TXO_AUDIT_DIR;審計檔 capital-YYYYMMDD.jsonl)。
+-- `VERIFY_BREADTH_FAIL=1`(**verify server 專用**,非 .env:`--verify` 模式下三支 breadth
+-  fake 取數齊拋 `BreadthFetchError` —— SC-3「FinMind 掛掉只讓家數面板 stale,TC4 系零波及」
+-  的失效注入通道。prod server 不看這個 key)。
++- `VERIFY_BREADTH_FAIL=1`(**verify server 專用**,非 .env:`--verify` 模式下四支 breadth
++  fake 取數(snapshot / stock_info / disposition / daily prices)齊拋 `BreadthFetchError`
++  —— SC-3「FinMind 掛掉只讓家數面板 stale,TC4 系零波及」的失效注入通道。prod server
++  不看這個 key)。
+ 
+ ---
+ 
+diff --git a/copycat/limit_streaks.py b/copycat/limit_streaks.py
+new file mode 100644
+index 00000000..1662b7f5
+--- /dev/null
++++ b/copycat/limit_streaks.py
+@@ -0,0 +1,84 @@
++"""連板數純函式(零 IO)—— SC-2。
++
++輸入 = FinMind `TaiwanStockPrice` 的單日全市場 rows(無 data_id);輸出 = 該日
++收盤漲停的普通股集合,再由 `compute_prev_streaks` 逐日交集遞進成連續漲停日數。
++
++**記憶體紀律**:呼叫端(`server/breadth_engine.py`)逐日 fetch → 立即
++`compute_day_limitups` → 丟棄 raw rows;本模組只吃 `list[set[str]]`。全市場單日
++~3 萬列(含權證),10 日全持有是數百 MB 級,live server 內不可接受。
++
++漲停判定與 `market_breadth._is_limit` 同口徑(毫元精確等值),但**前收來源不同**:
++snapshot 有 `change_price`,EOD 只有 `spread` → `prev_close = close − spread`
++(除權息參考價,neigui `DailyIndex.ref_prev_close` 同源;直接拿前一日 close 會在
++除權息日整批誤判)。上市首五日無漲跌幅限制,close 天然不等於公式漲停價,自然不計。
++"""
++
++from __future__ import annotations
++
++from copycat.market import limit_up_milli
++from copycat.market_breadth import classify_stock_id
++
++#: 回看交易日數(= streak 上限;撞頂由呼叫端以 `streak_capped` 表達)。
++STREAK_WINDOW_DAYS = 10
++
++
++def _to_float(value: object) -> float | None:
++    """數值欄 → float;缺值 / 非數值 → None(`backfill_finmind._map_row` 同語意)。
++
++    `bool` 明確排除:True 靜默變 1.0 會推出荒謬前收。
++    """
++    if isinstance(value, bool):
++        return None
++    if isinstance(value, (int, float)):
++        return float(value)
++    if isinstance(value, str):
++        try:
++            return float(value)
++        except ValueError:
++            return None
++    return None
++
++
++def compute_day_limitups(rows: list[dict]) -> set[str]:
++    """單日 TaiwanStockPrice 全市場 rows → 該日收盤漲停的 4 位普通股代號集合。
++
++    - Universe:`classify_stock_id(sid) is None`(ETF / 權證 / 指數 row 全剃除)。
++    - `prev_close = close − spread`;欄缺 / 非數值 / `prev_close <= 0` → 不判
++      (該檔的 streak 於該日自然中斷)。
++    - 漲停 = 毫元精確等值,無容差。
++    """
++    out: set[str] = set()
++    for row in rows:
++        sid = row.get("stock_id")
++        if not isinstance(sid, str) or classify_stock_id(sid) is not None:
++            continue
++        close = _to_float(row.get("close"))
++        spread = _to_float(row.get("spread"))
++        if close is None or spread is None:
++            continue
++        prev_close = close - spread
++        if prev_close <= 0:
++            continue
++        if round(close * 1000) == limit_up_milli(round(prev_close * 1000)):
++            out.add(sid)
++    return out
++
++
++def compute_prev_streaks(day_sets: list[set[str]]) -> dict[str, int]:
++    """`day_sets` = 連續交易日的漲停集合,**新 → 舊**排序(day_sets[0] = 最近可得
++    交易日)。回傳 {stock_id: 截至 day_sets[0] 的連續漲停日數},只含 streak ≥ 1。
++
++    演算法 = 交集遞進:候選 = day_sets[0],逐個較舊日取交集,存活者 +1。窗內缺 row
++    的檔(新上市 / 停牌)不在該日集合 → 自然出局。streak 上限 = `len(day_sets)`。
++    """
++    if not day_sets:
++        return {}
++    candidates = set(day_sets[0])
++    streaks = {sid: 1 for sid in candidates}
++    for older in day_sets[1:]:
++        candidates &= older
++        if not candidates:
++            break
++        for sid in candidates:
++            streaks[sid] += 1
++    return streaks
+diff --git a/copycat/market_breadth.py b/copycat/market_breadth.py
+index 0a14064a..81ff8208 100644
+--- a/copycat/market_breadth.py
++++ b/copycat/market_breadth.py
+@@ -267,6 +267,18 @@ def _is_limit(close: float, prev_close: float) -> tuple[bool, bool]:
+     )
+ 
+ 
++def _is_touched(high: float | None, low: float | None, prev_close: float) -> tuple[bool, bool]:
++    """毫元等值判「盤中曾觸及停板」;high/low 缺(舊 fixture / 剪裁快照)→ (False, False)。
++
++    只回「是否摸到」;「觸及**未鎖**」= 本結果 and not `_is_limit` 同向,由呼叫端合成
++    (本函式拿不到 close)。
++    """
++    prev_milli = round(prev_close * 1000)
++    touched_up = high is not None and round(high * 1000) == limit_up_milli(prev_milli)
++    touched_down = low is not None and round(low * 1000) == limit_down_milli(prev_milli)
++    return touched_up, touched_down
++
++
+ def compute_breadth(
+     rows: list[dict],
+     type_map: dict[str, str],
+@@ -279,6 +291,9 @@ def compute_breadth(
+       `close` / `change_price` 缺或 `prev_close <= 0` → 不判 limit,只按 change_rate
+       正負分桶。
+     - `change_rate` 為 None 的整檔跳過;`type_map` 查無市場的代號排除。
++    - rows 另帶 `close`(直通)與 `touched_limit_up` / `touched_limit_down`
++      (`high`/`low` 摸到停板但收盤未鎖;缺欄或前收不可用 → False)。touched 不影響
++      五桶家數 —— 觸及未鎖仍按 change_rate 分桶。
+     - 全空 → `None`(呼叫端視同該輪失敗)。
+     """
+     counts: dict[str, dict[str, int]] = {
+@@ -301,8 +316,11 @@ def compute_breadth(
+         )
+         limit_up = False
+         limit_down = False
++        touched_up = False
++        touched_down = False
+         if prev_close is not None and prev_close > 0 and close is not None:
+             limit_up, limit_down = _is_limit(close, prev_close)
++            touched_up, touched_down = _is_touched(r.get("high"), r.get("low"), prev_close)
+ 
+         if limit_up:
+             bucket = "limit_up"
+@@ -324,11 +342,14 @@ def compute_breadth(
+                 "stock_id": sid,
+                 "name": name_map.get(sid) or sid,
+                 "market": market,
++                "close": close,
+                 "change_rate": chg,
+                 "volume_ratio": vol_ratio,
+                 "total_amount": r.get("total_amount"),
+                 "limit_up": limit_up,
+                 "limit_down": limit_down,
++                "touched_limit_up": touched_up and not limit_up,
++                "touched_limit_down": touched_down and not limit_down,
+             }
+         )
+ 
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 186df0d6..bfb62887 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -26,6 +26,7 @@ from copycat.server.audit import AuditWriteError
+ from copycat.corr_config import load_config as load_corr_config
+ from copycat.server.breadth_engine import (
+     BreadthEngine,
++    DailyPricesFetch,
+     DispositionFetch,
+     SnapshotFetch,
+     StockInfoFetch,
+@@ -128,8 +129,10 @@ DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
+ DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
+ DEFAULT_BREADTH: Final = object()  # 同語意(market-overview R2 SC-3;→ 真 FinMind 取數層)
+ 
+-#: breadth 引擎的注入點三元組(snapshot / stock_info / disposition)。
+-BreadthFetchers = tuple[SnapshotFetch, StockInfoFetch, DispositionFetch]
++#: breadth 引擎的注入點四元組(snapshot / stock_info / disposition / daily_prices)。
++#: 第四槽 `None` = 連板數停用(rows 端點照常、`streak` 恆 null)—— 停用是契約的一部分,
++#: 不用 cast 掩蓋(R3 design R20)。長度固定 4。
++BreadthFetchers = tuple[SnapshotFetch, StockInfoFetch, DispositionFetch, DailyPricesFetch | None]
+ 
+ 
+ class SelectBody(BaseModel):
+@@ -615,19 +618,31 @@ def create_app(
+                         breadth_fetch.fetch_snapshot,
+                         breadth_fetch.fetch_stock_info,
+                         breadth_fetch.fetch_disposition,
++                        breadth_fetch.fetch_daily_prices,
+                     )
+                 else:
+-                    # 顯式注入的三元組**跳過 token 閘**:fake 取數層根本不看 token,
++                    # 顯式注入的四元組**跳過 token 閘**:fake 取數層根本不看 token,
+                     # 而 verify server / 測試環境本來就沒有(有閘就恆停用 → 驗不到)
+                     token = "fake-token"
++                    injected = cast("tuple[object, ...]", breadth_fetchers)
++                    if len(injected) != 4:
++                        # 光讓解包自己拋 ValueError 不夠:`_boot` 的傘罩會把它收成
++                        # 「breadth 停用」,與「FINMIND_TOKEN 未設」在畫面上同形 ——
++                        # repo 外的側車樣板漏改第四槽時,症狀會是家數面板整段悄悄
++                        # 消失而查不到原因,所以先留下講清楚長度的那行(R3 design R8)
++                        logger.error(
++                            "breadth 取數元組長度 %d,預期 4(呼叫端未更新)", len(injected)
++                        )
++                        raise ValueError("breadth_fetchers 必須是四元組")
+                     fetchers = cast("BreadthFetchers", breadth_fetchers)
+-                snapshot_fetch, stock_info_fetch, disposition_fetch = fetchers
++                snapshot_fetch, stock_info_fetch, disposition_fetch, daily_fetch = fetchers
+                 return BreadthEngine(
+                     token=token,
+                     config=load_breadth_config(),
+                     snapshot_fetch=snapshot_fetch,
+                     stock_info_fetch=stock_info_fetch,
+                     disposition_fetch=disposition_fetch,
++                    daily_fetch=daily_fetch,
+                     data_dir=breadth_data_dir,  # None → repo root data/market
+                 )
+ 
+@@ -1150,6 +1165,29 @@ def create_app(
+             }
+         return breadth.state()
+ 
++    @app.get("/api/market/breadth/rows")
++    async def market_breadth_rows(request: Request) -> dict:
++        """全量逐檔(漲跌停列表的原料;R3 SC-1)—— 三態判式與 `/api/market/breadth` 同款。
++
++        刻意**不進 WS**:~2800 列 × 13 欄只有列表展開時才有人看,每 10 秒推給所有連線
++        是純浪費(brainstorm Q2)。連板算術全在 `rows_state()`(單一真相),前端零日期推理。
++
++        前端的「載入中 vs 暫無資料」判別子是 `as_of`(首輪成功前恆 null),不是 `stale`
++        —— 冷啟動 degraded 下 `stale` 恆 True,拿它判載入中會兩態顛倒(design R18)。
++        """
++        breadth = _breadth(request)
++        if breadth is None:
++            loading = not _breadth_booted(request)
++            return {
++                "enabled": loading,
++                "trade_date": None,
++                "as_of": None,
++                "stale": loading,
++                "streaks_ready": False,
++                "rows": [],
++            }
++        return breadth.rows_state()
++
+     @app.websocket("/ws/breadth")
+     async def ws_breadth(websocket: WebSocket) -> None:
+         breadth = _breadth(websocket)
+diff --git a/copycat/server/breadth_engine.py b/copycat/server/breadth_engine.py
+index 58f2181b..0667bba7 100644
+--- a/copycat/server/breadth_engine.py
++++ b/copycat/server/breadth_engine.py
+@@ -15,6 +15,12 @@ WS 廣播。純函式在 `copycat.market_breadth`,取數在 `copycat.server.brea
+ **分鐘鍵**沿用 `index_engine.minute_key`(1K 終點標記 floor+1、域 0901–1330、
+ 1331–1335 clamp):同一頁的指數分時圖用同一把尺,兩張圖的 x 軸才對得起來;域外
+ (盤後定盤 14:30、盤前)一律丟棄。
++
++**連板數(R3 design §3.3)**:另有一條每日一次的背景 task —— FinMind EOD 回看
++10 個交易日算連續漲停日數,成果落 `streaks-<today>.json`。與 poll 迴圈共用同一個
++FinMind 失效域(壞了只讓連板欄 null),排程狀態刻意與成果分離:`_streak_armed_day`
++(今日已排程過,不論成敗)決定要不要再起 task,`_streaks_day`(算成功的那個 today)
++決定成果能不能用 —— 兩者合一的話,失敗會讓「嘗試上限」形同虛設(整天重跑燒配額)。
+ """
+ 
+ from __future__ import annotations
+@@ -29,6 +35,11 @@ from pathlib import Path
+ from typing import AsyncGenerator, Callable, TypeGuard
+ 
+ from copycat.breadth_config import BreadthConfig
++from copycat.limit_streaks import (
++    STREAK_WINDOW_DAYS,
++    compute_day_limitups,
++    compute_prev_streaks,
++)
+ from copycat.market_breadth import (
+     assemble_universe,
+     build_name_map,
+@@ -63,9 +74,32 @@ _BUCKETS: tuple[str, ...] = ("limit_up", "up", "flat", "down", "limit_down")
+ #: 長出第二份 data/,而序列檔「換個地方存」的表現是重啟後序列莫名歸零
+ _DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market"
+ 
++# ---- 連板數(streak)重算 ----
++#: streak 快取格式版本(與序列檔各自獨立;不相容改動時 +1 → 舊檔略過即重算)
++_STREAK_FILE_VERSION = 1
++#: 單日 EOD 的最低列數;**低於此視同取數失敗而非假日**。實測 2026-08-05 全市場單日
++#: 42,074 列(4 位普通股 2,334 檔),門檻取 ~0.6×。部分截斷若被當成假日跳過,那一天
++#: 就從回看窗裡消失 —— 連板數靜默高估,且會被當日快取固化(design R4/R16)。
++_DAILY_MIN_ROWS = 25_000
++#: 06:00 前不武裝:T-1 的 EOD 尚未發布時重算,T-1 會被當假日跳過而該輪**成功**,
++#: 盤中判式仍 +1 → 整天連板數少 1 並落檔固化(design R15)。
++_STREAK_ARM_TIME = _dt.time(6, 0)
++#: 自 day−1 起往回掃的日曆日上限(容得下長假;收不滿即 span < 10,封頂語意照樣成立)
++_STREAK_SCAN_CAL_DAYS = 25
++#: 單一武裝日內的嘗試上限;用完當日放棄(連板欄 null),不整天燒配額
++_STREAK_MAX_ATTEMPTS = 10
++#: 相鄰兩個「收到的交易日」容許的日曆間距上限(春節極端連假 ~9–11 日);超過代表
++#: 中間有整段真交易日被當假日吃掉 → 該輪不採用
++_STREAK_GAP_CAL_DAYS = 12
++#: 逐日 request 間隔 / 重試間隔。**模組層名字**是為了測試 monkeypatch 成 0
++#: (`_monotonic` 同理由):要驗退避不該真的等 60 秒。
++_STREAK_REQ_GAP_SECS = 0.3
++_STREAK_RETRY_SECS = 60.0
++
+ SnapshotFetch = Callable[[str], list[dict]]
+ StockInfoFetch = Callable[[str], list[dict]]
+ DispositionFetch = Callable[[str, _dt.date], list[dict]]
++DailyPricesFetch = Callable[[str, _dt.date], list[dict]]
+ 
+ 
+ def _monotonic() -> float:
+@@ -93,6 +127,17 @@ def _parse_hhmm(value: str) -> _dt.time:
+     return _dt.datetime.strptime(value, "%H:%M").time()
+ 
+ 
++async def _cancel(task: asyncio.Task[None] | None) -> None:
++    """收攤一條背景 task(poll / streak 同款):cancel 後等它真的結束。"""
++    if task is None:
++        return
++    task.cancel()
++    try:
++        await task
++    except asyncio.CancelledError:
++        pass
++
++
+ def _is_bucket_row(value: object) -> TypeGuard[list[int]]:
+     return (
+         isinstance(value, list)
+@@ -112,6 +157,7 @@ class BreadthEngine:
+         snapshot_fetch: SnapshotFetch,
+         stock_info_fetch: StockInfoFetch,
+         disposition_fetch: DispositionFetch,
++        daily_fetch: DailyPricesFetch | None = None,
+         data_dir: Path | None = None,
+         today_fn: Callable[[], _dt.date] = _dt.date.today,
+         now_fn: Callable[[], _dt.datetime] | None = None,
+@@ -121,6 +167,8 @@ class BreadthEngine:
+         self._snapshot_fetch = snapshot_fetch
+         self._stock_info_fetch = stock_info_fetch
+         self._disposition_fetch = disposition_fetch
++        #: None = 連板數停用(rows 端點照常,`streak` 恆 null)
++        self._daily_fetch = daily_fetch
+         self._data_dir = data_dir if data_dir is not None else _DEFAULT_DATA_DIR
+         self._today_fn = today_fn
+         # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
+@@ -133,8 +181,22 @@ class BreadthEngine:
+         self._counts: dict[str, dict[str, int]] | None = None
+         #: 全量逐檔 rows(漲跌停列表 / 類股熱力圖的原料 — R3 輪用)。
+         #: 刻意**不進 `state()`**:本輪對外契約只有 counts + series,四千列 rows
+-        #: 每 10 秒進一次 REST payload 是純浪費。
++        #: 每 10 秒進一次 REST payload 是純浪費(`rows_state()` 才給)。
+         self.rows: list[dict] = []
++        #: `self.rows` 的資料日 —— 與 `self.rows` **同步無條件更新**。連板判式不得用
++        #: `_trade_date`:`_apply` 的 `adopt_date=False` 路徑會讓它與 rows 脫鉤
++        #: (rows 是上一交易日的,`_trade_date` 還停在今日)→ 誤判成「今日盤中」再 +1。
++        self._rows_date: str | None = None
++        # ---- 連板數:成果 vs 排程(design R13,兩組不可合一)----
++        self._streaks: dict[str, int] = {}
++        self._streaks_day: str | None = None  # 這份成果是為哪個 today 算的
++        self._streaks_end: str | None = None  # 最新資料日(= dates[0])
++        self._streaks_dates: list[str] = []  # 實收交易日(新→舊),供稽核與 span
++        self._streaks_span = 0  # 實收交易日數(= streak 的封頂值)
++        self._streaks_skipped: set[str] = set()  # 掃描中被當假日跳過的日期(R15 guard)
++        self._streak_armed_day: str | None = None  # 今日已排程過(不論成敗)
++        self._streak_task: asyncio.Task[None] | None = None
++        self._streak_attempts = 0  # 武裝日內的嘗試計數
+ 
+         # ---- 當日分鐘序列(分鐘鍵 → point,last-wins)----
+         self._series: dict[str, dict] = {}
+@@ -165,21 +227,21 @@ class BreadthEngine:
+     # ---- 生命週期 ----
+ 
+     async def start(self) -> None:
+-        """restore 當日落檔 + 起 poll task。**零網路 IO** —— 首輪 fetch 在 task 上跑,
+-        FinMind 慢或掛都不得延後 lifespan(design R6)。"""
++        """restore 當日落檔(序列 + streak)+ 起 poll task。**零網路 IO** —— 首輪 fetch
++        在 task 上跑,FinMind 慢或掛都不得延後 lifespan(design R6)。
++
++        streak task 刻意**不在這裡起**:武裝條件含 06:00 時間閘,交給 `_poll_loop`
++        每圈檢查才只有一處判定(start() 另起一份就會繞過時間閘)。
++        """
+         self._restore()
++        self._restore_streaks()
+         self._task = asyncio.create_task(self._poll_loop())
+ 
+     async def close(self) -> None:
+-        task = self._task
+-        self._task = None
+-        if task is None:
+-            return
+-        task.cancel()
+-        try:
+-            await task
+-        except asyncio.CancelledError:
+-            pass
++        task, self._task = self._task, None
++        streak, self._streak_task = self._streak_task, None
++        await _cancel(task)
++        await _cancel(streak)
+ 
+     # ---- 對外狀態 ----
+ 
+@@ -194,6 +256,49 @@ class BreadthEngine:
+             "series": self._series_list(),
+         }
+ 
++    def rows_state(self) -> dict:
++        """REST 全量逐檔(`GET /api/market/breadth/rows`)—— **連板算術只在這裡**。
++
++        `streak` 三值語意:int(含今日的連板數,僅 `limit_up` 列)/ null(非漲停列、
++        未就緒、停用、或 rows 資料日與 streak 資料日的關係不明)。前端零日期推理。
++
++        日期基準 = `_rows_date`(rows 的資料日),不是 `_trade_date`:
++        - `rows_date > data_end` → rows 是今日盤中,昨日止的 streak 要 +1。
++        - `rows_date == data_end` → rows 是上一交易日的收盤快照,該日**已在** streak
++          內(盤前 / 假日開站),再 +1 就是憑空多一板。
++        - `rows_date ∈ skipped` → 那天在掃描時被當假日跳過,關係不明 → null(R15)。
++        """
++        today = self._today_fn().isoformat()
++        # 綁區域變數再比較:pyright basic 不把「經 bool 變數的 narrowing」傳遞下去,
++        # `rows_date > self._streaks_end` 會報 reportOptionalOperand(禁 type: ignore)
++        end = self._streaks_end
++        ready = self._streaks_day == today and end is not None
++        rows_date = self._rows_date
++        rows_out: list[dict] = []
++        for row in self.rows:
++            streak: int | None = None
++            capped = False
++            if ready and end is not None and row["limit_up"] and rows_date is not None:
++                prev = self._streaks.get(row["stock_id"], 0)
++                if rows_date in self._streaks_skipped:
++                    pass
++                elif rows_date > end:
++                    streak = prev + 1
++                elif rows_date == end:
++                    streak = max(prev, 1)
++                # rows_date < data_end(理論不可能)→ 保持 None
++                if streak is not None and prev >= self._streaks_span:
++                    capped = True  # streak 撞到回看窗邊緣 → 前端顯示「N+ 板」
++            rows_out.append({**row, "streak": streak, "streak_capped": capped})
++        return {
++            "enabled": True,
++            "trade_date": rows_date,
++            "as_of": self._as_of,
++            "stale": self._stale(),
++            "streaks_ready": ready,
++            "rows": rows_out,
++        }
++
+     def payload(self, last_minute: dict | None = None) -> dict:
+         """WS scalar 訊息;`last_minute` 只在本輪真的 append 了一格時帶值。"""
+         return {
+@@ -222,6 +327,10 @@ class BreadthEngine:
+         first = True
+         while True:
+             try:
++                # 武裝檢查在傘罩**內**、窗 gate **外**:盤前(窗外)也要能重算,而它
++                # 拋例外絕不能殺掉整條 poll task —— 那會讓家數面板為了連板數這條旁支
++                # 凍在最後一則且零錯誤訊號(review R9)。
++                self._maybe_arm_streaks()
+                 if first or self._in_window():
+                     await self._run_cycle()
+             except Exception:
+@@ -392,6 +501,9 @@ class BreadthEngine:
+         self._as_of = dt.strftime("%H:%M:%S")
+         self._counts = counts
+         self.rows = breadth["rows"]
++        # 與 rows 同行、**無條件**更新(含 adopt_date=False 路徑)—— 這正是它存在的
++        # 理由:rows 換了而日期沒換的話,連板判式會拿舊日期去比 data_end(R14)
++        self._rows_date = trade_date
+         self._fail_streak = 0
+         self._quota = False
+         self._last_success = _monotonic()
+@@ -450,6 +562,249 @@ class BreadthEngine:
+             return True
+         return _monotonic() - self._last_success > self._config.stale_secs
+ 
++    # ---- 連板數重算(design §3.3)----
++
++    def _maybe_arm_streaks(self) -> None:
++        """今日該不該起重算 task。四個條件缺一不可(順序即語意):
++
++        1. `daily_fetch` 有值 —— None = 連板停用。
++        2. `now >= 06:00` —— T-1 的 EOD 發布餘裕(R15)。
++        3. `_streak_armed_day != today` —— **武裝日不是成功日**:失敗用完 10 次後
++           同日不再重跑(壞上游不整天燒配額),restore 命中也算已武裝(同日重啟不重打)。
++        4. task 不在跑 —— `is None` 分支不可省:restore 命中後換日時 task 從未存在。
++        """
++        if self._daily_fetch is None:
++            return
++        if self._now_fn().time() < _STREAK_ARM_TIME:
++            return
++        today = self._today_fn().isoformat()
++        if self._streak_armed_day == today:
++            return
++        task = self._streak_task
++        if task is not None and not task.done():
++            return
++        # 先清再算:昨日那份留到重算完成之前會被當成今日的答案 → 整段窗口多算一板
++        self._streaks = {}
++        self._streaks_day = None
++        self._streaks_end = None
++        self._streaks_dates = []
++        self._streaks_span = 0
++        self._streaks_skipped = set()
++        self._streak_attempts = 0
++        self._streak_armed_day = today
++        self._streak_task = asyncio.create_task(self._compute_streaks_loop())
++        logger.info("breadth streak 武裝 %s(回看 %d 交易日)", today, STREAK_WINDOW_DAYS)
++
++    async def _compute_streaks_loop(self) -> None:
++        """重試 / 退避 / 上限。成功即結束;用完 `_STREAK_MAX_ATTEMPTS` 當日放棄。
++
++        `except Exception` 是**任務存活邊界**(`_poll_loop` 同款):注入的取數層不保證
++        只丟 `BreadthFetchError`,漏接會讓這條 task 在第一個意外上當場死透,而表現只是
++        連板欄整天 null —— 沒有人會知道它死了。
++        """
++        while self._streak_attempts < _STREAK_MAX_ATTEMPTS:
++            self._streak_attempts += 1
++            wait = _STREAK_RETRY_SECS
++            try:
++                if await self._compute_streaks_once():
++                    logger.info(
++                        "breadth streak %s 完成:%d 檔 / %d 交易日(資料至 %s)",
++                        self._streaks_day,
++                        len(self._streaks),
++                        self._streaks_span,
++                        self._streaks_end,
++                    )
++                    return
++            except BreadthFetchError as e:
++                wait = self._config.quota_backoff_secs if e.quota else _STREAK_RETRY_SECS
++                logger.warning(
++                    "breadth streak 取數失敗(第 %d/%d 次,quota=%s,%.0fs 後重試):%s",
++                    self._streak_attempts,
++                    _STREAK_MAX_ATTEMPTS,
++                    e.quota,
++                    wait,
++                    e,
++                )
++            except Exception:
++                logger.exception(
++                    "breadth streak 重算非預期失敗(第 %d/%d 次,%.0fs 後重試)",
++                    self._streak_attempts,
++                    _STREAK_MAX_ATTEMPTS,
++                    wait,
++                )
++            if self._streak_attempts < _STREAK_MAX_ATTEMPTS:
++                await asyncio.sleep(wait)
++        logger.error(
++            "breadth streak 連續 %d 次未成,當日放棄(連板欄 null,明日再武裝)",
++            _STREAK_MAX_ATTEMPTS,
++        )
++
++    async def _compute_streaks_once(self) -> bool:
++        """單次嘗試:自 `today − 1` 往回掃 → 逐日收成漲停集合 → 交集遞進 → 落檔。
++
++        `today` **進場取樣一次**:掃描起點 / 檔名 / `computed_for` / 收尾檢查全用同一個
++        值,否則跨午夜完成的那一輪會以昨日為基準算出錯值並被快取固化(R3)。
++
++        記憶體紀律(R5):每日 rows 一拿到就收成集合後丟棄 —— 全市場單日 ~3 萬列,
++        10 日全持有是數百 MB 級,live server 內不可接受。
++        """
++        fetch = self._daily_fetch
++        if fetch is None:  # pragma: no cover - 武裝條件已擋掉
++            return False
++        day = self._today_fn()
++        day_sets: list[set[str]] = []
++        dates: list[str] = []
++        skipped: list[str] = []
++        d = day - _dt.timedelta(days=1)
++        floor = day - _dt.timedelta(days=_STREAK_SCAN_CAL_DAYS)
++        while d >= floor and len(day_sets) < STREAK_WINDOW_DAYS:
++            rows = await asyncio.to_thread(fetch, self._token, d)
++            await asyncio.sleep(_STREAK_REQ_GAP_SECS)
++            if not rows:
++                skipped.append(d.isoformat())  # 假日候選(FinMind 對非交易日回空陣列)
++            elif len(rows) < _DAILY_MIN_ROWS:
++                # 部分截斷若被當假日跳過,那一天就從回看窗裡消失 → 連板數靜默高估
++                logger.warning(
++                    "breadth streak %s 只有 %d 列(門檻 %d),視同該日取數失敗 → 整輪重試",
++                    d.isoformat(),
++                    len(rows),
++                    _DAILY_MIN_ROWS,
++                )
++                return False
++            else:
++                logger.info("breadth streak %s:%d 列", d.isoformat(), len(rows))
++                day_sets.append(compute_day_limitups(rows))
++                dates.append(d.isoformat())
++            d -= _dt.timedelta(days=1)
++
++        if not dates:
++            logger.warning(
++                "breadth streak 自 %s 往回掃 %d 日曆日仍無任何交易日資料 → 整輪重試",
++                day.isoformat(),
++                _STREAK_SCAN_CAL_DAYS,
++            )
++            return False
++        for newer, older in zip(dates, dates[1:]):
++            gap = (_dt.date.fromisoformat(newer) - _dt.date.fromisoformat(older)).days
++            if gap > _STREAK_GAP_CAL_DAYS:
++                # 中間有整段真交易日被當成假日吃掉 → 交集遞進會跨過斷層算出高估的 streak
++                logger.warning(
++                    "breadth streak 交易日 %s → %s 間距 %d 日(上限 %d),該輪不採用",
++                    older,
++                    newer,
++                    gap,
++                    _STREAK_GAP_CAL_DAYS,
++                )
++                return False
++
++        streaks = compute_prev_streaks(day_sets)
++        if self._today_fn() != day:
++            logger.warning(
++                "breadth streak 重算期間換日(%s → %s),丟棄本輪結果",
++                day.isoformat(),
++                self._today_fn().isoformat(),
++            )
++            return False
++
++        self._streaks = streaks
++        self._streaks_day = day.isoformat()
++        self._streaks_end = dates[0]
++        self._streaks_dates = dates
++        self._streaks_span = len(dates)
++        self._streaks_skipped = set(skipped)
++        yesterday = (day - _dt.timedelta(days=1)).isoformat()
++        if dates[0] != yesterday:
++            # 昨日若其實是交易日(FinMind 丟資料)→ 盤中判式仍會 +1 而少計一板(KR-1)
++            logger.warning(
++                "breadth streak 最新資料日 %s 不是昨日 %s(昨日若為交易日則連板數少計)",
++                dates[0],
++                yesterday,
++            )
++        self._save_streaks()
++        return True
++
++    def _streaks_path(self, day: str) -> Path:
++        return self._data_dir / f"streaks-{day}.json"
++
++    def _save_streaks(self) -> None:
++        """tmp + `os.replace` 原子寫;失敗只降級(記憶體成果照在,重啟才會重算)。"""
++        day = self._streaks_day
++        if day is None:  # pragma: no cover - 呼叫端已保證有值
++            return
++        path = self._streaks_path(day)
++        payload = {
++            "_version": _STREAK_FILE_VERSION,
++            "computed_for": day,
++            "data_end": self._streaks_end,
++            "dates": self._streaks_dates,
++            "skipped": sorted(self._streaks_skipped),
++            "streaks": self._streaks,
++        }
++        tmp = path.with_name(f"{path.name}.tmp")
++        try:
++            self._data_dir.mkdir(parents=True, exist_ok=True)
++            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
++            os.replace(tmp, path)
++        except OSError as e:
++            logger.warning("breadth streak 落檔失敗(續行):%r", e)
++
++    def _restore_streaks(self) -> None:
++        """讀 `streaks-<today>.json`;**命中即連 `_streak_armed_day` 一併設為 today**。
++
++        那個副作用就是「同日第二次啟動不打 FinMind」的實際機制(SC-2)。形狀 / 版本 /
++        `computed_for` 任一不符一律當沒有(今日重算)—— 半採用一份舊快取會讓連板數
++        整天錯著,而錯的連板數比沒有更糟。
++        """
++        today = self._today_fn().isoformat()
++        path = self._streaks_path(today)
++        if not path.exists():
++            return
++        try:
++            payload = json.loads(path.read_text(encoding="utf-8"))
++        except (OSError, ValueError, UnicodeDecodeError) as e:
++            logger.warning("breadth streak 快取讀取失敗,今日重算:%r", e)
++            return
++        if not isinstance(payload, dict) or payload.get("_version") != _STREAK_FILE_VERSION:
++            logger.warning("breadth streak 快取版本不符,今日重算:%s", path)
++            return
++        if payload.get("computed_for") != today:
++            logger.warning(
++                "breadth streak 快取 computed_for=%s ≠ 今日 %s,不採用",
++                payload.get("computed_for"),
++                today,
++            )
++            return
++        data_end = payload.get("data_end")
++        dates = payload.get("dates")
++        skipped = payload.get("skipped")
++        streaks = payload.get("streaks")
++        if (
++            not isinstance(data_end, str)
++            or not isinstance(dates, list)
++            or not isinstance(skipped, list)
++            or not isinstance(streaks, dict)
++        ):
++            logger.warning("breadth streak 快取形狀不符,今日重算:%s", path)
++            return
++        self._streaks = {
++            k: v
++            for k, v in streaks.items()
++            if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
++        }
++        self._streaks_dates = [d for d in dates if isinstance(d, str)]
++        self._streaks_day = today
++        self._streaks_end = data_end
++        self._streaks_span = len(self._streaks_dates)
++        self._streaks_skipped = {s for s in skipped if isinstance(s, str)}
++        self._streak_armed_day = today
++        logger.info(
++            "breadth streak restore %s:%d 檔 / %d 交易日(資料至 %s)",
++            today,
++            len(self._streaks),
++            self._streaks_span,
++            data_end,
++        )
++
+     # ---- 序列落檔 / restore ----
+ 
+     def _series_list(self) -> list[dict]:
+diff --git a/copycat/server/breadth_fetch.py b/copycat/server/breadth_fetch.py
+index 8737f683..8fd040c0 100644
+--- a/copycat/server/breadth_fetch.py
++++ b/copycat/server/breadth_fetch.py
+@@ -1,9 +1,10 @@
+ """FinMind 全市場取數層(market-overview R2 design §4)— 阻塞,呼叫端丟 to_thread。
+ 
+-三個取數點,錯誤分類與 `oi_levels._fetch_rows` 同款:
++四個取數點,錯誤分類與 `oi_levels._fetch_rows` 同款:
+ - `fetch_snapshot`:全市場即時快照(專屬 endpoint,**無 query 參數**),每輪都打。
+ - `fetch_stock_info`:代碼 → 名稱 / 市場別 / 產業別對照(24h TTL,一天打幾次)。
+ - `fetch_disposition`:近 60 日處置股期間表(參數名 **start_date / end_date**)。
++- `fetch_daily_prices`:單日全市場 EOD(連板數回看用,一天一輪 ≤ 25 次)。
+ 
+ **402 不重試**:配額用盡時重打只會燒更多且必然同樣失敗 —— 以 `BreadthFetchError.quota`
+ 標記讓呼叫端改走長退避(config `quota_backoff_secs`),與一般失敗的短退避分開。
+@@ -27,8 +28,12 @@ _DATA_API = f"{_BASE}/data"
+ _SNAPSHOT_API = f"{_BASE}/taiwan_stock_tick_snapshot"
+ _INFO_DATASET = "TaiwanStockInfo"
+ _DISPOSITION_DATASET = "TaiwanStockDispositionSecuritiesPeriod"
++_PRICE_DATASET = "TaiwanStockPrice"
+ _DISPOSITION_LOOKBACK_DAYS = 60
+ _TIMEOUT = 30.0
++#: 單日全市場 EOD 專用:回應是 MB 級(~3 萬列含權證),秒級輪詢用的 30s 會在正常日
++#: 就逾時 —— 失效樣態是 streak 整輪失敗、連板欄整天 null(`backfill_finmind` 同量級)
++_DAILY_TIMEOUT = 60.0
+ _ATTEMPTS = 2  # 秒級輪詢的量級,重試一次即可;402 完全不重試(見 _get_rows)
+ 
+ #: `TaiwanStockInfo` 少於這麼多列即升 warning。實錄約 4300 列(上市+上櫃+興櫃);
+@@ -45,13 +50,17 @@ class BreadthFetchError(RuntimeError):
+         self.quota = quota
+ 
+ 
+-def _get_rows(url: str, token: str, *, label: str) -> list[dict]:
+-    """單一 GET → `data` 陣列。失敗一律 `BreadthFetchError`(402 帶 quota=True 不重試)。"""
++def _get_rows(url: str, token: str, *, label: str, timeout: float = _TIMEOUT) -> list[dict]:
++    """單一 GET → `data` 陣列。失敗一律 `BreadthFetchError`(402 帶 quota=True 不重試)。
++
++    `timeout` keyword-only:秒級輪詢的三支沿用 30s,單日 EOD 那支帶 60s(回應量級
++    差兩個數量級,共用一個常數只能二選一地錯)。
++    """
+     req = Request(url, headers={"Authorization": f"Bearer {token}"})
+     last: Exception | None = None
+     for attempt in range(_ATTEMPTS):
+         try:
+-            with urlopen(req, timeout=_TIMEOUT) as resp:
++            with urlopen(req, timeout=timeout) as resp:
+                 payload = json.load(resp)
+         except urllib.error.HTTPError as e:
+             if e.code == 402:
+@@ -102,3 +111,27 @@ def fetch_disposition(token: str, today: _date) -> list[dict]:
+         }
+     )
+     return _get_rows(f"{_DATA_API}?{query}", token, label="disposition")
++
++
++def fetch_daily_prices(token: str, day: _date) -> list[dict]:
++    """單日全市場 EOD(`TaiwanStockPrice`,start == end == `day`,**無 data_id**)。
++
++    非交易日回**空 `data` 陣列**(合法回應,不是錯誤)—— 「空 = 假日候選」的判定
++    在引擎那層,本函式只如實回傳。
++
++    不重用 `backfill_finmind.fetch_day`:那條的錯誤契約是 RuntimeError / HTTPError,
++    而引擎的退避分類吃 `BreadthFetchError.quota`(402 走長退避)。
++    """
++    query = urllib.parse.urlencode(
++        {
++            "dataset": _PRICE_DATASET,
++            "start_date": day.isoformat(),
++            "end_date": day.isoformat(),
++        }
++    )
++    return _get_rows(
++        f"{_DATA_API}?{query}",
++        token,
++        label=f"daily_prices {day.isoformat()}",
++        timeout=_DAILY_TIMEOUT,
++    )
+diff --git a/copycat/server/verify.py b/copycat/server/verify.py
+index 20d73217..cb7158c4 100644
+--- a/copycat/server/verify.py
++++ b/copycat/server/verify.py
+@@ -10,7 +10,8 @@ prod 的推播)——驗 HTTP 層(route 形狀 / 非行情 endpoint)一律走本
+ **FinMind 兩條路刻意分開處置**:`/api/futures/oi-levels` 照舊**真打**(它的驗證價值
+ 就在那條路上);家數帶(breadth)走本模組的 `fake_breadth_fetchers()` **不打真 FinMind**
+ —— 每 10 秒一次的輪詢在驗證期間會持續燒配額,而家數帶要驗的是接線與三態形狀,fake
+-固定快照反而讓斷言變成確定值(失敗注入見該函式的 `VERIFY_BREADTH_FAIL`)。
++固定快照反而讓斷言變成確定值(失敗注入見該函式的 `VERIFY_BREADTH_FAIL`)。同理由涵蓋
++第四支 EOD 日線(R3 連板數):真打的話一輪要抓 10 個交易日的全市場日線。
+ 
+ env 壓制的必要性(next-time 2026-08-04):app lifespan 無條件呼叫 `get_capital`,
+ CAPITAL_USER_ID 有值(env 或 repo root .env)即載真 SKCOM DLL;DISCORD_BOT_TOKEN 有值
+@@ -115,7 +116,7 @@ class FakeTxoSource:
+         return None
+ 
+ 
+-# ---- fake breadth 取數三元組(--verify 模式;market-overview R2 SC-3)----
++# ---- fake breadth 取數四元組(--verify 模式;market-overview R2 SC-3 / R3 SC-1)----
+ 
+ #: `TaiwanStockInfo` 對照列(代號 / 市場別 / 產業別)—— snapshot 的白名單來源。
+ _BREADTH_INFO_ROWS: list[dict] = [
+@@ -128,19 +129,42 @@ _BREADTH_INFO_ROWS: list[dict] = [
+     {"stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "industry_category": "ETF"},
+ ]
+ 
+-#: (代號, 收盤, 漲跌價, 漲跌幅%)。1101 前收 10.0 → 漲停 11.0;6488 前收 10.0 →
+-#: 跌停 9.0;0050 是 `00` 前綴 → 被 universe filter 剔掉(驗排除路徑也有走到)。
+-_BREADTH_QUOTES: tuple[tuple[str, float, float, float], ...] = (
+-    ("1101", 11.0, 1.0, 10.0),
+-    ("2330", 1000.0, 5.0, 0.5),
+-    ("2317", 200.0, 0.0, 0.0),
+-    ("2454", 1200.0, -10.0, -0.83),
+-    ("6488", 9.0, -1.0, -10.0),
+-    ("3105", 80.0, 1.0, 1.27),
+-    ("0050", 200.0, 1.0, 0.5),
++#: (代號, 收盤, 漲跌價, 漲跌幅%, 最高, 最低)。1101 前收 10.0 → 漲停 11.0(已鎖);
++#: 6488 前收 10.0 → 跌停 9.0(已鎖);**3105 前收 79.0 → 漲停 86.9,high 摸到但收
++#: 80.0 = 「觸及未鎖」**(R3 列表的第三種狀態,不造這一列就在畫面上看不到那條路);
++#: 0050 是 `00` 前綴 → 被 universe filter 剔掉(驗排除路徑也有走到)。
++_BREADTH_QUOTES: tuple[tuple[str, float, float, float, float, float], ...] = (
++    ("1101", 11.0, 1.0, 10.0, 11.0, 10.2),
++    ("2330", 1000.0, 5.0, 0.5, 1005.0, 990.0),
++    ("2317", 200.0, 0.0, 0.0, 202.0, 199.0),
++    ("2454", 1200.0, -10.0, -0.83, 1215.0, 1195.0),
++    ("6488", 9.0, -1.0, -10.0, 9.9, 9.0),
++    ("3105", 80.0, 1.0, 1.27, 86.9, 79.5),
++    ("0050", 200.0, 1.0, 0.5, 201.0, 199.0),
+ )
+ 
+-#: 設成 `"1"` 時三個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
++#: (代號, 收盤, 除權息調整價差)—— `TaiwanStockPrice` 的 EOD 造值,**每個掃描日都回
++#: 同一份**:`prev_close = close − spread`,1101 = 11.0 − 1.0 → 前收 10.0 → 漲停 11.0,
++#: 於是逐日交集後 1101 是唯一的連板檔(其餘皆非漲停)。
++_BREADTH_DAILY: tuple[tuple[str, float, float], ...] = (
++    ("1101", 11.0, 1.0),
++    ("2330", 1000.0, 5.0),
++    ("2317", 200.0, 0.0),
++    ("2454", 1200.0, -10.0),
++    ("6488", 9.0, -1.0),
++    ("3105", 80.0, 1.0),
++    ("0050", 200.0, 1.0),
++)
++
++#: EOD 造值的填充列數。**不是湊數**:`breadth_engine._DAILY_MIN_ROWS`(25,000)把
++#: 「非空但列數過少」判成回應被截斷 → 整輪失敗 → verify server 的連板欄整天 null,
++#: 與「連板管線壞掉」同形。填充列用 6 位權證碼(`classify_stock_id` 會剃掉),只負責
++#: 讓列數像真的全市場單日回應(2026-08-05 實測 42,074 列)。
++#: 門檻的耦合由 `tests/server/test_verify.py` 直接對 `_DAILY_MIN_ROWS` 斷言釘住 ——
++#: 這裡不 import breadth_engine(本模組刻意不拖 fastapi 進 conftest 的 import 路徑)。
++_DAILY_PAD_ROWS = 25_000
++
++#: 設成 `"1"` 時四個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
+ #: stale,TC4 系零波及)在**真 server** 上的注入通道;單元測試注入 fake 即可,這條
+ #: 是為了在跑著的 verify server 上取證。
+ FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
+@@ -173,13 +197,17 @@ def fake_breadth_fetchers() -> tuple[
+     Callable[[str], list[dict]],
+     Callable[[str], list[dict]],
+     Callable[[str, _dt.date], list[dict]],
++    Callable[[str, _dt.date], list[dict]],
+ ]:
+-    """固定小快照的 breadth 取數三元組(snapshot / stock_info / disposition)。
++    """固定小快照的 breadth 取數四元組(snapshot / stock_info / disposition / daily_prices)。
+ 
+     快照時刻取自**呼叫當下**的 `datetime.now()`,域外 clamp 進盤中(`_snapshot_stamp`):
+     `trade_date == today` 且時刻在分鐘域內才會 append 與落檔(engine 的 design R1/R3
+     條件),序列因此會隨輪詢長出格子 —— 用固定日期或直接用盤後時刻的話,畫面上永遠
+     只有 counts、序列恆空,而那與「序列接線壞掉」長得一模一樣。
++
++    第四支(EOD 日線,R3)每個掃描日回同一份造值 → 1101 逐日皆漲停 → 連板數撞到回看
++    窗上限(前端顯示「10+ 板」),`streak_capped` 那條路在 verify 畫面上也走得到。
+     """
+ 
+     def _fail_if_injected() -> None:
+@@ -196,11 +224,13 @@ def fake_breadth_fetchers() -> tuple[
+                 "close": close,
+                 "change_price": chg_price,
+                 "change_rate": chg_rate,
++                "high": high,
++                "low": low,
+                 "total_volume": 1_000,
+                 "yesterday_volume": 500,
+                 "total_amount": 12_345_000,
+             }
+-            for sid, close, chg_price, chg_rate in _BREADTH_QUOTES
++            for sid, close, chg_price, chg_rate, high, low in _BREADTH_QUOTES
+         ]
+ 
+     def _stock_info(_token: str) -> list[dict]:
+@@ -212,4 +242,18 @@ def fake_breadth_fetchers() -> tuple[
+         _fail_if_injected()
+         return []  # 空 = 當下沒有處置中的股票(合法結果,與取數失敗不同)
+ 
+-    return (_snapshot, _stock_info, _disposition)
++    def _daily_prices(_token: str, day: _dt.date) -> list[dict]:
++        _fail_if_injected()
++        stamp = day.isoformat()
++        rows = [
++            {"date": stamp, "stock_id": sid, "close": close, "spread": spread}
++            for sid, close, spread in _BREADTH_DAILY
++        ]
++        # 填充到全市場量級:低於 `_DAILY_MIN_ROWS` 會被引擎當成回應被截斷 → 整輪失敗
++        rows.extend(
++            {"date": stamp, "stock_id": f"{300000 + i}", "close": 10.0, "spread": 0.0}
++            for i in range(_DAILY_PAD_ROWS)
++        )
++        return rows
++
++    return (_snapshot, _stock_info, _disposition, _daily_prices)
+diff --git a/docs/superpowers/specs/2026-08-05-taiwan-market-overview-tab-spec.md b/docs/superpowers/specs/2026-08-05-taiwan-market-overview-tab-spec.md
+index 12e289ef..a3dae354 100644
+--- a/docs/superpowers/specs/2026-08-05-taiwan-market-overview-tab-spec.md
++++ b/docs/superpowers/specs/2026-08-05-taiwan-market-overview-tab-spec.md
+@@ -207,6 +207,8 @@ TC4 系(指數圖/corr/個股/既有訊號)完全不受影響。
+    extras 引 httpx;poll 間隔預設值(5s vs 10s,看 neigui 實際配額用量)。
+ 3. R2:breadth WS 併入 index WS 還是獨立 endpoint。
+ 4. R3:連板數欄位的資料路徑(daily store 只涵蓋 watchlist universe)。
++   〔2026-08-06 R3 Phase 0 拍板:FinMind TaiwanStockPrice EOD 回看 10 交易日,
++   每日一次快取落檔;連板算術在後端 rows 端點(streak/streak_capped)。〕
+ 5. R4:鎖板/開板事件的 dedup 鍵與「觸及未鎖」是否也算事件。
+ 6. next-time 既有候選:列表迷你預覽(D-5)、大盤級衍生訊號(§1 non-goal)、
+    創 20 日新高/新低家數。
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index 7805dee5..73a86701 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -44,6 +44,21 @@ const INDEX_STATE = {
+   txf: { p: 42_142_000, time: "10:16:10" },
+ };
+ 
++const BREADTH_ROWS = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  streaks_ready: true,
++  rows: [
++    {
++      stock_id: "1101", name: "台泥", market: "twse", close: 55.5, change_rate: 9.98,
++      volume_ratio: 2.5, total_amount: 9e8, limit_up: true, limit_down: false,
++      touched_limit_up: false, touched_limit_down: false, streak: 3, streak_capped: false,
++    },
++  ],
++};
++
+ beforeEach(() => {
+   window.localStorage.clear();
+   FakeWS.instances = [];
+@@ -58,6 +73,8 @@ function appFetch(sha?: { fe: string | null; be: string | null; behind: boolean
+   return vi.fn(async (url: string) => {
+     const u = String(url);
+     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
++    // 漲跌停列表(R3 SC-5 的跳轉起點)。列表預設收合 → 其餘測試不會走到這條分支。
++    if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
+     if (u.includes("/api/health")) {
+       return new Response(JSON.stringify({ git_sha: sha?.be ?? null, git_dirty: false }));
+     }
+@@ -142,6 +159,42 @@ describe("App 台股綜合 tab 整併(SC-1)", () => {
+   });
+ });
+ 
++// 🟢 台股綜合 R3(SC-5):列表 → 個股(期)的一鍵銜接。走**整條真鏈**
++// (App → IndexPage → LimitListSection → 列 onClick),不 mock 中間任何一層 ——
++// 少接一根線(IndexPage 沒把 onOpenStock 往下傳、App 沒 setStockCode)在元件級測試
++// 各自都是綠的,只有這裡會紅。
++describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
++  async function openList() {
++    window.localStorage.setItem("copycat-tab", "index");
++    window.localStorage.setItem("copycat-limit-list-open", "1");
++    renderApp();
++    return await screen.findByTestId("limit-row-1101");
++  }
++
++  it("點列 → tab 切到「個股(期)」", async () => {
++    fireEvent.click(await openList());
++    await waitFor(() =>
++      expect(screen.getByRole("tab", { name: "個股(期)" }).getAttribute("aria-selected")).toBe(
++        "true",
++      ),
++    );
++    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
++      "false",
++    );
++  });
++
++  it("點列 → 個股頁收到該檔(打 /api/stock/state/1101,含 set_main)", async () => {
++    fireEvent.click(await openList());
++    await waitFor(() => {
++      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
++        String(c[0]),
++      );
++      expect(calls.some((u) => u.includes("/api/stock/state/1101"))).toBe(true);
++    });
++    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("1101");
++  });
++});
++
+ describe("App(capital WS 唯一掛載 review B2)", () => {
+   it("App 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線", async () => {
+     renderApp();
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 4ef1e947..375a6aa9 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -249,6 +249,14 @@ export default function App() {
+                   txf={txf}
+                   futures={futuresStream.state?.products ?? null}
+                   breadth={breadth}
++                  // R3 SC-5:漲跌停列表點列 → 切個股(期)。走既有 visited gate →
++                  // StockPage mount → `/api/stock/state/{code}`(內含 set_main),
++                  // 個股頁零改動。順序無所謂:兩個 setState 同批,tab 切換與主檔
++                  // 一起生效。
++                  onOpenStock={(code) => {
++                    setStockCode(code);
++                    setTab("stock");
++                  }}
+                 />
+               </Suspense>
+             </div>
+diff --git a/frontend/src/components/index/IndexPage.test.tsx b/frontend/src/components/index/IndexPage.test.tsx
+index 682e5184..39ba716a 100644
+--- a/frontend/src/components/index/IndexPage.test.tsx
++++ b/frontend/src/components/index/IndexPage.test.tsx
+@@ -252,3 +252,25 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+     expect(screen.getByTestId("adl-chart").textContent).toContain("盤中累積後顯示");
+   });
+ });
++
++// 🟢 台股綜合 R3(SC-3 / SC-5):漲跌停列表落在家數 section 與相關係數之間。
++// 本檔只驗**落點**(元件自身行為在 LimitListSection.test.tsx,跳轉全鏈在 App.test.tsx)——
++// 列表預設收合 = body 不 mount、零 fetch,所以這裡不需要 breadth rows 的 stub。
++describe("IndexPage 漲跌停列表落點(R3 SC-3)", () => {
++  it("(g) 列表區塊在頁面內,預設收合", () => {
++    renderPage(TXF, BREADTH);
++    expect(screen.getByTestId("limit-list")).toBeTruthy();
++    expect(screen.getByRole("button", { name: /漲跌停/ }).getAttribute("aria-expanded")).toBe(
++      "false",
++    );
++  });
++
++  it("(g2) 列表位於騰落線之後、相關係數區塊之前", () => {
++    renderPage(TXF, BREADTH);
++    const adl = screen.getByTestId("adl-chart");
++    const list = screen.getByTestId("limit-list");
++    const corr = screen.getByRole("button", { name: /相關係數/ });
++    expect(adl.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    expect(list.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index 49fe4f1c..a2e798c5 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -6,6 +6,7 @@
+ import { CorrSection } from "@/components/corr/CorrSection";
+ import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
+ import { BreadthBand } from "@/components/index/BreadthBand";
++import { LimitListSection } from "@/components/index/LimitListSection";
+ import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+@@ -77,9 +78,12 @@ interface Props {
+   /** 全市場家數 / 騰落序列(App 層 `useBreadth` 下傳;design R8 —— 本頁維持純展示,
+    *  既有測試不必 stub WS)。 */
+   breadth?: BreadthState | null;
++  /** 漲跌停列表點列 → 開個股(期)頁(R3 SC-5)。狀態(主檔 / 當前 tab)在 App 層,
++   *  本頁只把回呼往下傳 —— 頁內自己記一份主檔會與右欄 / 個股頁分岔。 */
++  onOpenStock?: (code: string) => void;
+ }
+ 
+-export function IndexPage({ twse, otc, txf, futures, breadth = null }: Props) {
++export function IndexPage({ twse, otc, txf, futures, breadth = null, onOpenStock }: Props) {
+   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
+   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
+   const { toggles, set } = useChartToggles();
+@@ -116,6 +120,9 @@ export function IndexPage({ twse, otc, txf, futures, breadth = null }: Props) {
+         <BreadthBand breadth={breadth} />
+         <AdvanceDeclineChart series={breadth?.series ?? []} />
+       </section>
++      {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
++          點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
++      <LimitListSection onOpenStock={onOpenStock} />
+       <CorrSection />
+     </div>
+   );
+diff --git a/frontend/src/components/index/LimitListSection.test.tsx b/frontend/src/components/index/LimitListSection.test.tsx
+new file mode 100644
+index 00000000..eb6f22ae
+--- /dev/null
++++ b/frontend/src/components/index/LimitListSection.test.tsx
+@@ -0,0 +1,341 @@
++/** @vitest-environment jsdom */
++/** 漲跌停列表(market-overview R3 SC-3 / SC-4 / SC-5 的 vitest 面)。
++ *
++ *  空狀態判別子逐字照 design §5.2:`enabled=false` → 「FinMind 未設定」、
++ *  `as_of == null` → 「載入中…」、`as_of != null` 且 rows 空 → 「暫無資料(延遲)」、
++ *  篩選後 0 列 → 「無符合條件」;`stale` **只**管標題列膠囊,不參與空狀態分流(R18)。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { LimitListSection } from "@/components/index/LimitListSection";
++import { LIMIT_LIST_FILTER_KEY, LIMIT_LIST_OPEN_KEY } from "@/lib/constants";
++import type { BreadthRow, BreadthRowsState } from "@/types";
++
++function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
++  return {
++    stock_id,
++    name: `名${stock_id}`,
++    market: "twse",
++    close: 100,
++    change_rate: 1.23,
++    volume_ratio: 2.5,
++    total_amount: 5e8,
++    limit_up: false,
++    limit_down: false,
++    touched_limit_up: false,
++    touched_limit_down: false,
++    streak: null,
++    streak_capped: false,
++    ...over,
++  };
++}
++
++function mkState(rows: BreadthRow[], over: Partial<BreadthRowsState> = {}): BreadthRowsState {
++  return {
++    enabled: true,
++    trade_date: "2026-08-06",
++    as_of: "10:31:00",
++    stale: false,
++    streaks_ready: true,
++    rows,
++    ...over,
++  };
++}
++
++/** 排序 / 篩選共用的完整樣本:三組狀態 × 組內金額差 × streak 三態 × 一列無狀態。 */
++const ROWS: BreadthRow[] = [
++  mkRow("1103", { limit_up: true, streak: 5, streak_capped: true, total_amount: 1e8 }),
++  mkRow("1101", { limit_up: true, streak: 3, total_amount: 9e8, name: "台泥", close: 55.5 }),
++  mkRow("1102", { limit_up: true, streak: null, total_amount: 8e8 }),
++  mkRow("6489", { limit_down: true, market: "tpex", total_amount: 7e8, close: null }),
++  mkRow("6488", { limit_down: true, market: "tpex", total_amount: 3e8, close: 200 }),
++  // 多狀態列:盤中觸及漲停後殺到跌停 → 歸屬 limit_down(優先序 R8),badge 唯一
++  mkRow("2454", { limit_down: true, touched_limit_up: true, total_amount: 1e8 }),
++  mkRow("2330", { touched_limit_up: true, total_amount: 20e8, volume_ratio: null, close: 1000 }),
++  mkRow("2317", { touched_limit_down: true, total_amount: 2e8 }),
++  mkRow("9999", { total_amount: 99e8 }), // 無任何狀態 → 不入表
++];
++
++let fetchSpy: ReturnType<typeof vi.fn>;
++
++function stubFetch(state: BreadthRowsState): void {
++  fetchSpy = vi.fn(async () => new Response(JSON.stringify(state)));
++  vi.stubGlobal("fetch", fetchSpy);
++}
++
++function newClient() {
++  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
++}
++
++function renderSection(onOpenStock?: (code: string) => void) {
++  return render(
++    <QueryClientProvider client={newClient()}>
++      <LimitListSection onOpenStock={onOpenStock} />
++    </QueryClientProvider>,
++  );
++}
++
++/** 直接以「已展開」狀態開場(收合閘門另有專測),等資料落地後回傳。 */
++async function openWith(
++  state: BreadthRowsState,
++  onOpenStock?: (code: string) => void,
++): Promise<void> {
++  window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
++  stubFetch(state);
++  renderSection(onOpenStock);
++  await screen.findByTestId("limit-list-body");
++  await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
++}
++
++function rowIds(): string[] {
++  return screen
++    .getAllByTestId(/^limit-row-/)
++    .map((el) => el.getAttribute("data-testid")!.replace("limit-row-", ""));
++}
++
++function header(): HTMLElement {
++  return screen.getByRole("button", { name: /漲跌停/ });
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  stubFetch(mkState(ROWS));
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("LimitListSection 收合閘門", () => {
++  it("預設收合:body 不 mount、零 fetch", async () => {
++    renderSection();
++    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
++    expect(screen.queryByTestId("limit-list-body")).toBeNull();
++    expect(fetchSpy.mock.calls.length).toBe(0);
++    expect(header().textContent).toContain("展開");
++  });
++
++  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
++    renderSection();
++    fireEvent.click(header());
++    await screen.findByTestId("limit-list-body");
++    expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("1");
++    expect(header().getAttribute("aria-expanded")).toBe("true");
++    expect(header().textContent).toContain("收合");
++
++    cleanup();
++    renderSection();
++    expect(await screen.findByTestId("limit-list-body")).toBeTruthy();
++  });
++
++  it("收合把列表 unmount(query 隨之消失)", async () => {
++    await openWith(mkState(ROWS));
++    expect(screen.queryByTestId("limit-list-table")).toBeTruthy();
++
++    fireEvent.click(header());
++
++    expect(screen.queryByTestId("limit-list-body")).toBeNull();
++    expect(screen.queryByTestId("limit-list-table")).toBeNull();
++    expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("0");
++    expect(header().getAttribute("aria-expanded")).toBe("false");
++  });
++});
++
++describe("LimitListSection 空狀態(判別子 = as_of)", () => {
++  it("enabled=false → FinMind 未設定", async () => {
++    await openWith(mkState([], { enabled: false, as_of: null, stale: true }));
++    expect(screen.getByTestId("limit-list-msg").textContent).toBe("FinMind 未設定");
++  });
++
++  it("as_of == null → 載入中…(stale 恆 true 的冷啟動不得誤判成有資料)", async () => {
++    await openWith(mkState([], { as_of: null, stale: true }));
++    expect(screen.getByTestId("limit-list-msg").textContent).toBe("載入中…");
++  });
++
++  it("as_of != null 且 rows 空 → 暫無資料(延遲)", async () => {
++    await openWith(mkState([], { as_of: "09:05:00", stale: true }));
++    expect(screen.getByTestId("limit-list-msg").textContent).toBe("暫無資料(延遲)");
++  });
++
++  it("stale=true 只出膠囊,有列時照常渲染表格", async () => {
++    await openWith(mkState(ROWS, { stale: true }));
++    const pill = screen.getByTestId("limit-list-stale");
++    expect(pill.textContent).toContain("延遲");
++    expect(pill.getAttribute("class")).toContain("amber");
++    expect(screen.queryByTestId("limit-list-table")).toBeTruthy();
++    expect(screen.queryByTestId("limit-list-msg")).toBeNull();
++  });
++
++  // 端點設計上恆 200,能走到 error 的只有網路 / proxy 斷。少了這條分流,失敗會停在
++  // 「載入中…」永遠不動 —— 那是誠實度問題(看起來像還在等,其實已經放棄了)。
++  it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
++    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
++    fetchSpy = vi.fn(async () => new Response("boom", { status: 500 }));
++    vi.stubGlobal("fetch", fetchSpy);
++    renderSection();
++    await screen.findByTestId("limit-list-body");
++    // hook 內 retry:1 → 要等一次重試(exponential backoff 初次 1s)
++    await waitFor(() => expect(screen.getByTestId("limit-list-msg").textContent).toBe("載入失敗"), {
++      timeout: 5000,
++    });
++  });
++
++  it("stale=false → 無膠囊", async () => {
++    await openWith(mkState(ROWS));
++    expect(screen.queryByTestId("limit-list-stale")).toBeNull();
++  });
++});
++
++describe("LimitListSection 表格內容", () => {
++  it("預設排序:漲停(streak desc,null 視為 -1)→ 跌停 → 觸及,組內金額 desc", async () => {
++    await openWith(mkState(ROWS));
++    expect(rowIds()).toEqual(["1103", "1101", "1102", "6489", "6488", "2454", "2330", "2317"]);
++  });
++
++  it("連板欄三態:連 N 板 / N+ 板 / -,非漲停列空白", async () => {
++    await openWith(mkState(ROWS));
++    expect(screen.getByTestId("limit-streak-1101").textContent).toBe("連 3 板");
++    expect(screen.getByTestId("limit-streak-1103").textContent).toBe("5+ 板");
++    expect(screen.getByTestId("limit-streak-1102").textContent).toBe("-");
++    expect(screen.getByTestId("limit-streak-6488").textContent).toBe("");
++    expect(screen.getByTestId("limit-streak-2330").textContent).toBe("");
++  });
++
++  it("狀態 badge 唯一,多狀態列依 limit_up > limit_down > touched 歸屬", async () => {
++    await openWith(mkState(ROWS));
++    expect(screen.getByTestId("limit-badge-1101").textContent).toBe("漲停");
++    expect(screen.getByTestId("limit-badge-2454").textContent).toBe("跌停"); // touched_limit_up 讓位
++    expect(screen.getByTestId("limit-badge-2330").textContent).toBe("觸及未鎖");
++  });
++
++  it("金額以億元 1 位小數、量比 / 現價缺值顯示破折號", async () => {
++    await openWith(
++      mkState([
++        mkRow("1101", { limit_up: true, streak: 1, total_amount: 3_640_000_000, close: 55.5 }),
++        mkRow("1102", { limit_up: true, streak: 1, total_amount: null, close: null, volume_ratio: null }),
++      ]),
++    );
++    expect(screen.getByTestId("limit-amount-1101").textContent).toBe("36.4");
++    expect(screen.getByTestId("limit-amount-1102").textContent).toBe("—");
++    expect(screen.getByTestId("limit-close-1102").textContent).toBe("—");
++    expect(screen.getByTestId("limit-ratio-1102").textContent).toBe("—");
++  });
++
++  it("漲跌幅染色:漲紅(text-bull)/ 跌綠(text-bear)", async () => {
++    await openWith(
++      mkState([
++        mkRow("1101", { limit_up: true, change_rate: 9.98 }),
++        mkRow("6488", { limit_down: true, change_rate: -9.96 }),
++      ]),
++    );
++    const up = screen.getByTestId("limit-change-1101");
++    const down = screen.getByTestId("limit-change-6488");
++    expect(up.textContent).toBe("+9.98%");
++    expect(up.getAttribute("class")).toContain("text-bull");
++    expect(down.textContent).toBe("-9.96%");
++    expect(down.getAttribute("class")).toContain("text-bear");
++  });
++
++  it("市場欄印上市 / 上櫃", async () => {
++    await openWith(mkState(ROWS));
++    expect(screen.getByTestId("limit-market-1101").textContent).toBe("上市");
++    expect(screen.getByTestId("limit-market-6488").textContent).toBe("上櫃");
++  });
++
++  it("點列呼叫 onOpenStock(SC-5)", async () => {
++    const onOpenStock = vi.fn();
++    await openWith(mkState(ROWS), onOpenStock);
++    fireEvent.click(screen.getByTestId("limit-row-1101"));
++    expect(onOpenStock.mock.calls).toEqual([["1101"]]);
++  });
++});
++
++describe("LimitListSection 篩選(OR 狀態 × AND 門檻)", () => {
++  it("取消上櫃 → 上櫃列消失,上市列保留", async () => {
++    await openWith(mkState(ROWS));
++    fireEvent.click(screen.getByLabelText("上櫃"));
++    expect(rowIds()).toEqual(["1103", "1101", "1102", "2454", "2330", "2317"]);
++  });
++
++  it("取消漲停 → 漲停列消失(狀態間為 OR)", async () => {
++    await openWith(mkState(ROWS));
++    fireEvent.click(screen.getByLabelText("漲停"));
++    expect(rowIds()).toEqual(["6489", "6488", "2454", "2330", "2317"]);
++  });
++
++  it("只留觸及未鎖", async () => {
++    await openWith(mkState(ROWS));
++    fireEvent.click(screen.getByLabelText("漲停"));
++    fireEvent.click(screen.getByLabelText("跌停"));
++    expect(rowIds()).toEqual(["2330", "2317"]);
++  });
++
++  it("金額門檻單位億元;total_amount null 不過門檻", async () => {
++    await openWith(
++      mkState([
++        mkRow("1101", { limit_up: true, total_amount: 9e8 }),
++        mkRow("1102", { limit_up: true, total_amount: 4.9e8 }),
++        mkRow("1103", { limit_up: true, total_amount: null }),
++      ]),
++    );
++    fireEvent.change(screen.getByLabelText("金額(億)"), { target: { value: "5" } });
++    expect(rowIds()).toEqual(["1101"]);
++  });
++
++  it("股價區間用 close;close null 不過區間篩", async () => {
++    await openWith(
++      mkState([
++        mkRow("1101", { limit_up: true, close: 100, total_amount: 9e8 }),
++        mkRow("1102", { limit_up: true, close: 30, total_amount: 8e8 }),
++        mkRow("1103", { limit_up: true, close: 500, total_amount: 7e8 }),
++        mkRow("1104", { limit_up: true, close: null, total_amount: 6e8 }),
++      ]),
++    );
++    fireEvent.change(screen.getByLabelText("股價下限"), { target: { value: "50" } });
++    fireEvent.change(screen.getByLabelText("股價上限"), { target: { value: "200" } });
++    expect(rowIds()).toEqual(["1101"]);
++  });
++
++  it("門檻清空即恢復不限", async () => {
++    await openWith(mkState(ROWS));
++    const amount = screen.getByLabelText("金額(億)");
++    fireEvent.change(amount, { target: { value: "50" } });
++    expect(screen.getByTestId("limit-list-msg").textContent).toBe("無符合條件");
++    fireEvent.change(amount, { target: { value: "" } });
++    expect(rowIds().length).toBe(8);
++  });
++
++  it("篩選後 0 列 → 無符合條件(與「暫無資料」分流)", async () => {
++    await openWith(mkState(ROWS));
++    fireEvent.click(screen.getByLabelText("上市"));
++    fireEvent.click(screen.getByLabelText("上櫃"));
++    expect(screen.queryByTestId("limit-list-table")).toBeNull();
++    expect(screen.getByTestId("limit-list-msg").textContent).toBe("無符合條件");
++  });
++
++  it("篩選寫入 localStorage,重新 mount 還原(SC-4)", async () => {
++    await openWith(mkState(ROWS));
++    fireEvent.click(screen.getByLabelText("上櫃"));
++    fireEvent.change(screen.getByLabelText("金額(億)"), { target: { value: "2" } });
++
++    const saved: unknown = JSON.parse(window.localStorage.getItem(LIMIT_LIST_FILTER_KEY)!);
++    expect(saved).toMatchObject({ twse: true, tpex: false, minAmount: "2" });
++
++    cleanup();
++    stubFetch(mkState(ROWS));
++    renderSection();
++    await screen.findByTestId("limit-list-table");
++    expect((screen.getByLabelText("上櫃") as HTMLInputElement).checked).toBe(false);
++    expect((screen.getByLabelText("金額(億)") as HTMLInputElement).value).toBe("2");
++    // 上櫃(6488/6489)出局 + 金額 < 2 億(1103 / 2454 各 1 億)出局
++    expect(rowIds()).toEqual(["1101", "1102", "2330", "2317"]);
++  });
++
++  it("localStorage 壞值不炸,退回全開預設", async () => {
++    window.localStorage.setItem(LIMIT_LIST_FILTER_KEY, "{壞掉的 JSON");
++    await openWith(mkState(ROWS));
++    expect(rowIds().length).toBe(8);
++  });
++});
+diff --git a/frontend/src/components/index/LimitListSection.tsx b/frontend/src/components/index/LimitListSection.tsx
+new file mode 100644
+index 00000000..1eb7d6dd
+--- /dev/null
++++ b/frontend/src/components/index/LimitListSection.tsx
+@@ -0,0 +1,450 @@
++/** 台股綜合頁的漲跌停列表收合區塊(market-overview R3;design §5.2)。
++ *
++ *  **收合 = unmount,不是 `hidden`**(CorrSection 同款慣例):payload 是全市場約 2800 列
++ *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於所有開站的人都持續吃
++ *  這份頻寬,而它只有列表展開時才有人看。收合即 unmount → `useBreadthRows` 連同 query
++ *  一起消失。與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
++ *  無重依賴,lazy 只會多一個 Suspense 空窗與一條測不到的非同步路徑。
++ *
++ *  **前端零日期推理**(design R1):`streak` / `streak_capped` 都由後端算完,這裡只負責
++ *  把 null / capped 翻成文案。任何「今天是不是還要 +1」的算術一旦在前端重做一份,
++ *  盤前、假日、rows 為上一交易日快照這三條路就會各錯一種。 */
++import { useMemo, useState } from "react";
++
++import { useBreadthRows } from "@/hooks/useBreadthRows";
++import { LIMIT_LIST_FILTER_KEY, LIMIT_LIST_OPEN_KEY } from "@/lib/constants";
++import { cn } from "@/lib/utils";
++import type { BreadthRow } from "@/types";
++
++// ---------------------------------------------------------------------------
++// 狀態歸屬(design R8:優先序 limit_up > limit_down > touched,badge 唯一)
++// ---------------------------------------------------------------------------
++
++type RowStatus = "limit_up" | "limit_down" | "touched";
++
++const STATUS_LABEL: Record<RowStatus, string> = {
++  limit_up: "漲停",
++  limit_down: "跌停",
++  touched: "觸及未鎖",
++};
++
++/** 分組排序用的名次;同時是「多狀態列歸哪一類」的優先序。 */
++const STATUS_ORDER: Record<RowStatus, number> = { limit_up: 0, limit_down: 1, touched: 2 };
++
++const STATUS_TONE: Record<RowStatus, string> = {
++  limit_up: "border border-bull/40 bg-bull/15 text-bull",
++  limit_down: "border border-bear/40 bg-bear/15 text-bear",
++  touched: "border border-line bg-bg-deep text-ink-muted",
++};
++
++const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpex: "上櫃" };
++
++/** 一列的唯一狀態;三者皆無 → null(該列不入表)。
++ *
++ *  「觸及漲停後殺到跌停」這種多狀態列必須歸唯一一類,否則同一檔會在兩個篩選分類下
++ *  各出現一次、badge 也會長出兩顆。 */
++function statusOf(row: BreadthRow): RowStatus | null {
++  if (row.limit_up) return "limit_up";
++  if (row.limit_down) return "limit_down";
++  if (row.touched_limit_up || row.touched_limit_down) return "touched";
++  return null;
++}
++
++// ---------------------------------------------------------------------------
++// 篩選(OR 狀態 × AND 門檻)
++// ---------------------------------------------------------------------------
++
++export interface LimitListFilter {
++  twse: boolean;
++  tpex: boolean;
++  limitUp: boolean;
++  limitDown: boolean;
++  touched: boolean;
++  /** 成交金額下限,**億元**;空字串 = 不限 */
++  minAmount: string;
++  /** 股價下 / 上限(`close`);空字串 = 不限 */
++  priceMin: string;
++  priceMax: string;
++}
++
++const DEFAULT_FILTER: LimitListFilter = {
++  twse: true,
++  tpex: true,
++  limitUp: true,
++  limitDown: true,
++  touched: true,
++  minAmount: "",
++  priceMin: "",
++  priceMax: "",
++};
++
++/** 門檻欄位是 `string` 不是 `number | null`:number input 的「清空」是空字串,
++ *  轉成 0 會靜默變成「金額 ≥ 0 億」這個看起來一樣、語意卻不同的門檻。
++ *  非數字(輸入法中途 / 貼上文字)一律視同不限,不讓 NaN 進比較式。 */
++function threshold(raw: string): number | null {
++  if (raw.trim() === "") return null;
++  const n = Number(raw);
++  return Number.isFinite(n) ? n : null;
++}
++
++/** 缺值一律**不過門檻**(design §5.2):`total_amount` / `close` 為 null 代表快照沒給,
++ *  當成 0 會讓「金額 ≥ 5 億」把資料缺漏的列一起濾掉還看不出來,當成無限大更糟。
++ *  沒設門檻時它們照常入表 —— 只有「有門檻」才排除。 */
++function passes(row: BreadthRow, status: RowStatus, f: LimitListFilter): boolean {
++  if (!(row.market === "twse" ? f.twse : f.tpex)) return false;
++  if (status === "limit_up" && !f.limitUp) return false;
++  if (status === "limit_down" && !f.limitDown) return false;
++  if (status === "touched" && !f.touched) return false;
++
++  const minAmount = threshold(f.minAmount);
++  if (minAmount !== null && (row.total_amount === null || row.total_amount < minAmount * 1e8)) {
++    return false;
++  }
++  const lo = threshold(f.priceMin);
++  if (lo !== null && (row.close === null || row.close < lo)) return false;
++  const hi = threshold(f.priceMax);
++  if (hi !== null && (row.close === null || row.close > hi)) return false;
++  return true;
++}
++
++function loadFilter(): LimitListFilter {
++  try {
++    const raw = window.localStorage.getItem(LIMIT_LIST_FILTER_KEY);
++    if (!raw) return DEFAULT_FILTER;
++    const parsed: unknown = JSON.parse(raw);
++    // `JSON.parse("null")` 成功且回 null;陣列 / 字串同樣是合法 JSON —— 解構在 try 之外
++    // 就會是 TypeError,而這裡是 useState initializer,拋出去就是整頁白屏。
++    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
++      return DEFAULT_FILTER;
++    }
++    return { ...DEFAULT_FILTER, ...(parsed as Partial<LimitListFilter>) };
++  } catch {
++    return DEFAULT_FILTER;
++  }
++}
++
++function persistFilter(filter: LimitListFilter): void {
++  try {
++    window.localStorage.setItem(LIMIT_LIST_FILTER_KEY, JSON.stringify(filter));
++  } catch {
++    // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉(useChartToggles 同慣例)
++  }
++}
++
++// ---------------------------------------------------------------------------
++// 排序與文案
++// ---------------------------------------------------------------------------
++
++interface Entry {
++  row: BreadthRow;
++  status: RowStatus;
++}
++
++/** 漲停(連板深 → 淺)→ 跌停 → 觸及;組內成交金額 desc。
++ *
++ *  `streak` 為 null 視為 -1 排該組最後(R8):連板未就緒時整組都是 null → 全部同分,
++ *  自然退回金額排序,不會因為 null 參與比較而讓順序在 ready 前後跳動。 */
++function amountRank(row: BreadthRow): number {
++  return row.total_amount ?? -Infinity;
++}
++
++function buildEntries(rows: BreadthRow[], filter: LimitListFilter): Entry[] {
++  const entries: Entry[] = [];
++  for (const row of rows) {
++    const status = statusOf(row);
++    if (status === null) continue;
++    if (!passes(row, status, filter)) continue;
++    entries.push({ row, status });
++  }
++  entries.sort((a, b) => {
++    const group = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
++    if (group !== 0) return group;
++    const sa = a.row.streak ?? -1;
++    const sb = b.row.streak ?? -1;
++    if (sa !== sb) return sb - sa;
++    const aa = amountRank(a.row);
++    const ab = amountRank(b.row);
++    // 兩邊都缺值時 `ab - aa` 是 NaN(comparator 回 NaN 的行為未定義)—— 先判等值
++    return aa === ab ? 0 : ab - aa;
++  });
++  return entries;
++}
++
++/** 非漲停列一律空白(不是「-」):跌停 / 觸及的列本來就沒有連板這回事,
++ *  印破折號會讓人以為是「有但取不到」。「-」專門留給「漲停但連板數不可得」。 */
++function streakText(row: BreadthRow): string {
++  if (!row.limit_up) return "";
++  if (row.streak === null) return "-";
++  return row.streak_capped ? `${row.streak}+ 板` : `連 ${row.streak} 板`;
++}
++
++function changeText(v: number): string {
++  return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
++}
++
++function changeTone(v: number): string {
++  if (v > 0) return "text-bull";
++  if (v < 0) return "text-bear";
++  return "text-ink-muted";
++}
++
++function amountText(v: number | null): string {
++  return v === null ? "—" : (v / 1e8).toFixed(1);
++}
++
++function decimalText(v: number | null): string {
++  return v === null ? "—" : v.toFixed(2);
++}
++
++// ---------------------------------------------------------------------------
++// 篩選列元件
++// ---------------------------------------------------------------------------
++
++function Check({
++  label,
++  checked,
++  onChange,
++}: {
++  label: string;
++  checked: boolean;
++  onChange: (next: boolean) => void;
++}) {
++  return (
++    <label className="flex items-center gap-1 text-xs text-ink-muted">
++      <input
++        type="checkbox"
++        checked={checked}
++        onChange={(e) => onChange(e.target.checked)}
++        className="accent-accent"
++      />
++      {label}
++    </label>
++  );
++}
++
++function NumField({
++  label,
++  value,
++  onChange,
++}: {
++  label: string;
++  value: string;
++  onChange: (next: string) => void;
++}) {
++  return (
++    <label className="flex items-center gap-1 text-xs text-ink-muted">
++      {label}
++      <input
++        type="number"
++        inputMode="decimal"
++        value={value}
++        onChange={(e) => onChange(e.target.value)}
++        className="w-16 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink"
++      />
++    </label>
++  );
++}
++
++// ---------------------------------------------------------------------------
++// 展開後的本體
++// ---------------------------------------------------------------------------
++
++function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
++  const { data, isError } = useBreadthRows();
++  const [filter, setFilter] = useState<LimitListFilter>(loadFilter);
++
++  function update(patch: Partial<LimitListFilter>): void {
++    const next = { ...filter, ...patch };
++    setFilter(next);
++    persistFilter(next);
++  }
++
++  const entries = useMemo(
++    () => (data === undefined ? [] : buildEntries(data.rows, filter)),
++    [data, filter],
++  );
++
++  // 空狀態判別子是 `as_of` 不是 `stale`(design R18):`stale` 在冷啟動 degraded 下恆為
++  // true,拿它分流會讓「載入中」與「有資料但延遲」兩態顛倒。
++  // `enabled=false` 要排在最前面 —— 那是「去設 .env」不是「等一下就好」。
++  // 端點恆 200,能走到 isError 的只有網路 / proxy 斷 —— 但那條路必須說出來:
++  // 少了它,`data` 恆 undefined 會讓畫面永遠停在「載入中…」(把已放棄說成還在等)。
++  let message: string | null = null;
++  if (isError) message = "載入失敗";
++  else if (data === undefined) message = "載入中…";
++  else if (!data.enabled) message = "FinMind 未設定";
++  else if (data.as_of === null) message = "載入中…";
++  else if (data.rows.length === 0) message = "暫無資料(延遲)";
++  else if (entries.length === 0) message = "無符合條件";
++
++  return (
++    <div data-testid="limit-list-body" className="flex flex-col gap-2 px-4 pb-4">
++      <div className="flex flex-wrap items-center gap-2">
++        {data?.stale ? (
++          <span
++            data-testid="limit-list-stale"
++            className="rounded bg-amber-500/20 px-1.5 text-xs text-amber-400"
++          >
++            延遲
++          </span>
++        ) : null}
++      </div>
++
++      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
++        <Check label="上市" checked={filter.twse} onChange={(v) => update({ twse: v })} />
++        <Check label="上櫃" checked={filter.tpex} onChange={(v) => update({ tpex: v })} />
++        <span className="h-3 w-px bg-line" />
++        <Check label="漲停" checked={filter.limitUp} onChange={(v) => update({ limitUp: v })} />
++        <Check
++          label="跌停"
++          checked={filter.limitDown}
++          onChange={(v) => update({ limitDown: v })}
++        />
++        <Check label="觸及未鎖" checked={filter.touched} onChange={(v) => update({ touched: v })} />
++        <span className="h-3 w-px bg-line" />
++        <NumField
++          label="金額(億)"
++          value={filter.minAmount}
++          onChange={(v) => update({ minAmount: v })}
++        />
++        <NumField
++          label="股價下限"
++          value={filter.priceMin}
++          onChange={(v) => update({ priceMin: v })}
++        />
++        <NumField
++          label="股價上限"
++          value={filter.priceMax}
++          onChange={(v) => update({ priceMax: v })}
++        />
++      </div>
++
++      {message !== null ? (
++        <p data-testid="limit-list-msg" className="py-6 text-center text-sm text-ink-muted">
++          {message}
++        </p>
++      ) : (
++        <div className="overflow-x-auto">
++          <table data-testid="limit-list-table" className="w-full border-collapse text-sm">
++            <thead>
++              <tr className="border-b border-line text-ink-dim">
++                <th className="px-2 py-1 text-left font-normal">代號</th>
++                <th className="px-2 py-1 text-left font-normal">名稱</th>
++                <th className="px-2 py-1 text-left font-normal">市場</th>
++                <th className="px-2 py-1 text-right font-normal">現價</th>
++                <th className="px-2 py-1 text-right font-normal">漲跌幅</th>
++                <th className="px-2 py-1 text-right font-normal">連板</th>
++                <th className="px-2 py-1 text-right font-normal">金額(億)</th>
++                <th className="px-2 py-1 text-right font-normal">量比</th>
++                <th className="px-2 py-1 text-left font-normal">狀態</th>
++              </tr>
++            </thead>
++            <tbody>
++              {entries.map(({ row, status }) => (
++                <tr
++                  key={row.stock_id}
++                  data-testid={`limit-row-${row.stock_id}`}
++                  onClick={() => onOpenStock?.(row.stock_id)}
++                  className="cursor-pointer border-b border-line/50 hover:bg-bg-deep"
++                >
++                  <td className="px-2 py-1 font-mono text-ink">{row.stock_id}</td>
++                  <td className="px-2 py-1 text-ink">{row.name}</td>
++                  <td
++                    data-testid={`limit-market-${row.stock_id}`}
++                    className="px-2 py-1 text-ink-muted"
++                  >
++                    {MARKET_LABEL[row.market]}
++                  </td>
++                  <td
++                    data-testid={`limit-close-${row.stock_id}`}
++                    className="px-2 py-1 text-right font-mono tabular-nums text-ink"
++                  >
++                    {decimalText(row.close)}
++                  </td>
++                  <td
++                    data-testid={`limit-change-${row.stock_id}`}
++                    className={cn(
++                      "px-2 py-1 text-right font-mono tabular-nums",
++                      changeTone(row.change_rate),
++                    )}
++                  >
++                    {changeText(row.change_rate)}
++                  </td>
++                  <td
++                    data-testid={`limit-streak-${row.stock_id}`}
++                    className="px-2 py-1 text-right text-ink"
++                  >
++                    {streakText(row)}
++                  </td>
++                  <td
++                    data-testid={`limit-amount-${row.stock_id}`}
++                    className="px-2 py-1 text-right font-mono tabular-nums text-ink"
++                  >
++                    {amountText(row.total_amount)}
++                  </td>
++                  <td
++                    data-testid={`limit-ratio-${row.stock_id}`}
++                    className="px-2 py-1 text-right font-mono tabular-nums text-ink-muted"
++                  >
++                    {decimalText(row.volume_ratio)}
++                  </td>
++                  <td className="px-2 py-1">
++                    <span
++                      data-testid={`limit-badge-${row.stock_id}`}
++                      className={cn("rounded px-1.5 text-xs", STATUS_TONE[status])}
++                    >
++                      {STATUS_LABEL[status]}
++                    </span>
++                  </td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        </div>
++      )}
++    </div>
++  );
++}
++
++// ---------------------------------------------------------------------------
++// 收合殼
++// ---------------------------------------------------------------------------
++
++export function LimitListSection({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
++  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
++  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(CorrSection 同慣例)。
++  const [open, setOpen] = useState<boolean>(() => {
++    try {
++      return window.localStorage.getItem(LIMIT_LIST_OPEN_KEY) === "1";
++    } catch {
++      return false;
++    }
++  });
++
++  function toggle(): void {
++    const next = !open;
++    setOpen(next);
++    try {
++      window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, next ? "1" : "0");
++    } catch {
++      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
++    }
++  }
++
++  return (
++    <section data-testid="limit-list" className="rounded-md border border-line bg-surface">
++      <button
++        type="button"
++        aria-expanded={open}
++        onClick={toggle}
++        className="flex w-full items-center gap-2 px-4 py-2 text-left"
++      >
++        <span className="text-sm font-bold text-ink">漲跌停</span>
++        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
++      </button>
++      {open ? <LimitListBody onOpenStock={onOpenStock} /> : null}
++    </section>
++  );
++}
++
++export default LimitListSection;
+diff --git a/frontend/src/hooks/useBreadthRows.test.ts b/frontend/src/hooks/useBreadthRows.test.ts
+new file mode 100644
+index 00000000..6c54f125
+--- /dev/null
++++ b/frontend/src/hooks/useBreadthRows.test.ts
+@@ -0,0 +1,122 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, renderHook, waitFor } from "@testing-library/react";
++import { createElement, type ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { useBreadthRows } from "@/hooks/useBreadthRows";
++
++const STATE = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  streaks_ready: true,
++  rows: [
++    {
++      stock_id: "1101",
++      name: "台泥",
++      market: "twse",
++      close: 55.5,
++      change_rate: 9.98,
++      volume_ratio: 3.2,
++      total_amount: 900_000_000,
++      limit_up: true,
++      limit_down: false,
++      touched_limit_up: false,
++      touched_limit_down: false,
++      streak: 2,
++      streak_capped: false,
++    },
++  ],
++};
++
++let urls: string[] = [];
++
++function wrapper(client: QueryClient) {
++  return ({ children }: { children: ReactNode }) =>
++    createElement(QueryClientProvider, { client }, children);
++}
++
++function newClient() {
++  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
++}
++
++beforeEach(() => {
++  urls = [];
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      urls.push(String(url));
++      return new Response(JSON.stringify(STATE));
++    }),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.useRealTimers();
++});
++
++describe("useBreadthRows(SC-1)", () => {
++  it("抓 /api/market/breadth/rows 並回傳全量 state", async () => {
++    const client = newClient();
++    const { result } = renderHook(() => useBreadthRows(), { wrapper: wrapper(client) });
++    await waitFor(() => expect(result.current.data).toEqual(STATE));
++    expect(urls).toEqual(["/api/market/breadth/rows"]);
++    expect(
++      client
++        .getQueryCache()
++        .getAll()
++        .map((q) => q.queryKey),
++    ).toEqual([["breadth-rows"]]);
++  });
++
++  it("多個消費端共用同一把 key(列表只需一份 payload)", async () => {
++    const client = newClient();
++    const w = wrapper(client);
++    renderHook(() => useBreadthRows(), { wrapper: w });
++    renderHook(() => useBreadthRows(), { wrapper: w });
++    await waitFor(() => expect(urls.length).toBeGreaterThan(0));
++    expect(urls.length).toBe(1);
++  });
++
++  // R10:refetchInterval 是函式形式,交易時段 gate 每次到期重新求值。
++  it("交易時段內每 10 秒輪詢一次", async () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
++    renderHook(() => useBreadthRows(), { wrapper: wrapper(newClient()) });
++    await vi.advanceTimersByTimeAsync(0);
++    expect(urls.length).toBe(1);
++    await vi.advanceTimersByTimeAsync(10_000);
++    expect(urls.length).toBe(2);
++    await vi.advanceTimersByTimeAsync(10_000);
++    expect(urls.length).toBe(3);
++  });
++
++  it("非交易時段不輪詢(refetchInterval 為 false)", async () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date(2026, 7, 6, 20, 0)); // 週四 20:00,日盤已收
++    renderHook(() => useBreadthRows(), { wrapper: wrapper(newClient()) });
++    await vi.advanceTimersByTimeAsync(0);
++    const before = urls.length;
++    expect(before).toBe(1);
++    await vi.advanceTimersByTimeAsync(60_000); // 六個輪詢週期
++    expect(urls.length).toBe(before);
++  });
++
++  it("HTTP 錯誤 → error 終態帶 detail.error 錯誤碼", async () => {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(
++        async () => new Response(JSON.stringify({ detail: { error: "BOOM" } }), { status: 500 }),
++      ),
++    );
++    const { result } = renderHook(() => useBreadthRows(), { wrapper: wrapper(newClient()) });
++    // hook 內 retry:1 覆寫 defaultOptions → 要等一次重試(exponential backoff 初次 1s)
++    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
++    expect(result.current.data).toBeUndefined();
++    expect((result.current.error as Error).message).toBe("BOOM");
++  });
++});
+diff --git a/frontend/src/hooks/useBreadthRows.ts b/frontend/src/hooks/useBreadthRows.ts
+new file mode 100644
+index 00000000..4c5dd2e4
+--- /dev/null
++++ b/frontend/src/hooks/useBreadthRows.ts
+@@ -0,0 +1,36 @@
++import { useQuery } from "@tanstack/react-query";
++
++import { parseError } from "@/lib/api-error";
++import { inTradingHours } from "@/lib/trading-hours";
++import type { BreadthRowsState } from "@/types";
++
++/** 漲跌停列表資料流(market-overview R3 SC-1;design §5.2)。
++ *
++ * **REST on-demand 不進 WS**(brainstorm Q2):payload 是全市場 ~2800 列 × 15 欄,
++ * 掛上 `/ws/breadth` 等於所有開站的人都吃這份頻寬,而它只有列表展開時才有人看。
++ * 消費端(`LimitListSection`)收合即 unmount,query 隨之消失 —— 頻寬跟著消費者走。
++ *
++ * `refetchInterval` 用**函式形式**(R10,`useMarketBars` 同慣例):TQ 每次 interval
++ * 到期都重新求值,開盤 / 收盤的開關不依賴外部 re-render 才會生效。收盤後回 false
++ * = 完全停輪詢(家數引擎自己也只在盤中窗取數,盤後輪詢只是白打)。
++ *
++ * `retry: 1` 而非預設的 3:這條路的失敗多半是後端引擎不在 / FinMind 掛了,
++ * 重試三輪只是把「載入中」拖得更長。
++ */
++
++const POLL_MS = 10_000;
++
++async function fetchBreadthRows(): Promise<BreadthRowsState> {
++  const res = await fetch("/api/market/breadth/rows");
++  if (!res.ok) throw new Error(await parseError(res));
++  return (await res.json()) as BreadthRowsState;
++}
++
++export function useBreadthRows() {
++  return useQuery({
++    queryKey: ["breadth-rows"],
++    queryFn: fetchBreadthRows,
++    retry: 1,
++    refetchInterval: () => (inTradingHours() ? POLL_MS : false),
++  });
++}
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index 7892b3a8..e4627d93 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -64,6 +64,13 @@ export const MARKET2_FUT_STORE = "copycat-market2-fut";
+ /** 相關係數收合區塊的展開狀態("1" = 展開)— components/corr/CorrSection.tsx */
+ export const CORR_OPEN_KEY = "copycat-corr-open";
+ 
++/** 漲跌停列表收合區塊的展開狀態("1" = 展開)— components/index/LimitListSection.tsx。
++ *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場 rows」。 */
++export const LIMIT_LIST_OPEN_KEY = "copycat-limit-list-open";
++/** 漲跌停列表的篩選條件(JSON:市場 / 狀態三旗標 + 金額 / 股價門檻字串)
++ *  — components/index/LimitListSection.tsx */
++export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";
++
+ /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
+ export const RAIL_TAB_KEY = "copycat-rail-tab";
+ 
+diff --git a/frontend/src/types.ts b/frontend/src/types.ts
+index 3dcc5eb9..f1e2885a 100644
+--- a/frontend/src/types.ts
++++ b/frontend/src/types.ts
+@@ -280,6 +280,50 @@ export interface BreadthState {
+   series: BreadthPoint[];
+ }
+ 
++// ---- 漲跌停列表(對應 breadth_engine.rows_state();market-overview R3)----
++
++/** 列表一列(design §4 契約)。
++ *
++ *  `total_amount` 是**元**口徑(2026-08-06 真快照算術實證:2330@12:19 15339 張 ×
++ *  均價 2375.78 × 1000 ≈ 3.644e10 == 36442215000),不是千元也不是億元。
++ *
++ *  `streak` 三值語意:number = **含今日**的連續漲停日數(只會出現在 `limit_up` 列)/
++ *  null = 非漲停列、連板未就緒、連板停用、或 rows 資料日與連板基準日關係異常。
++ *  **連板算術全在後端**(design R1):前端不做任何日期推理或 +1,拿到什麼印什麼。
++ *  `streak_capped` = 該 streak 撞到後端回看窗邊緣(顯示「N+ 板」而非「連 N 板」)。 */
++export interface BreadthRow {
++  stock_id: string;
++  name: string;
++  market: "twse" | "tpex";
++  close: number | null;
++  change_rate: number; // 百分比(9.98 = +9.98%)
++  volume_ratio: number | null;
++  total_amount: number | null; // 元
++  limit_up: boolean;
++  limit_down: boolean;
++  touched_limit_up: boolean; // 盤中觸及漲停、收盤未鎖(已鎖列為 false,不重複歸類)
++  touched_limit_down: boolean;
++  streak: number | null;
++  streak_capped: boolean;
++}
++
++/** `GET /api/market/breadth/rows` 全量(恆 200)。
++ *
++ *  **載入判別子是 `as_of` 不是 `stale`**(design R18):`stale` 在冷啟動 degraded 下
++ *  恆為 true,拿它判「載入中」會讓「載入中」與「有資料但延遲」兩態顛倒。
++ *  `as_of` 只在首輪取數成功後才有值,才是誠實的 sentinel。
++ *
++ *  `trade_date` = **rows 的資料日**(與列表內容同源),與 `/api/market/breadth` 的
++ *  `trade_date`(序列日)語意不同,屬設計刻意。 */
++export interface BreadthRowsState {
++  enabled: boolean;
++  trade_date: string | null;
++  as_of: string | null; // HH:MM:SS
++  stale: boolean;
++  streaks_ready: boolean;
++  rows: BreadthRow[];
++}
++
+ /** 每秒增量:各腿最後寫入的那一分鐘;該腿本場尚無 live 點 → null。 */
+ export interface RiverDelta {
+   type: string; // "river_delta"
+diff --git a/tests/fixtures/record_breadth_parity.py b/tests/fixtures/record_breadth_parity.py
+index 2921c8b2..9129e975 100644
+--- a/tests/fixtures/record_breadth_parity.py
++++ b/tests/fixtures/record_breadth_parity.py
+@@ -44,11 +44,16 @@ _TIMEOUT = 60
+ _DISPOSITION_LOOKBACK_DAYS = 60
+ 
+ # 欄位剝離白名單 —— 只留純函式層真的讀到的欄
++# `high`/`low` 是 R3 的 touched_limit_* 判定來源(2026-08-06 加入);**本輪不重錄**,
++# 既有 fixture 沒這兩欄 → `_is_touched` 一律回 False,parity oracle 只比 counts 與逐檔
++# bucket 故不受影響。下次重錄才會連 touched 一起覆蓋。
+ _SNAPSHOT_FIELDS = (
+     "stock_id",
+     "close",
+     "change_price",
+     "change_rate",
++    "high",
++    "low",
+     "total_volume",
+     "yesterday_volume",
+     "total_amount",
+diff --git a/tests/server/test_breadth_engine.py b/tests/server/test_breadth_engine.py
+index 07a26e2c..88c24d08 100644
+--- a/tests/server/test_breadth_engine.py
++++ b/tests/server/test_breadth_engine.py
+@@ -136,6 +136,28 @@ class FakeFetch:
+         return self.rows
+ 
+ 
++class FakeDaily:
++    """單日全市場 EOD 取數替身(`daily_fetch`)。
++
++    `calendar` 沒有的日期一律回空 list —— 即「假日」的真實樣態(FinMind 對非交易日
++    回合法的空 `data` 陣列)。`on_call` 讓測試在掃描途中動時鐘(跨午夜情境)。
++    """
++
++    def __init__(self, calendar: dict[str, list[dict]]) -> None:
++        self.calendar = calendar
++        self.calls: list[str] = []
++        self.error: Exception | None = None
++        self.on_call: Callable[[int], None] | None = None
++
++    def __call__(self, token: str, day: _dt.date) -> list[dict]:
++        self.calls.append(day.isoformat())
++        if self.on_call is not None:
++            self.on_call(len(self.calls))
++        if self.error is not None:
++            raise self.error
++        return self.calendar.get(day.isoformat(), [])
++
++
+ class FakeMono:
+     """凍結的單調鐘(`breadth_engine._monotonic` 替身)。
+ 
+@@ -180,6 +202,7 @@ def _make(
+     snapshot: FakeFetch | None = None,
+     info: FakeFetch | None = None,
+     disposition: FakeFetch | None = None,
++    daily: FakeDaily | None = None,
+     clock: Clock | None = None,
+     config: BreadthConfig | None = None,
+ ) -> tuple[Any, FakeFetch, FakeFetch, FakeFetch, Clock]:
+@@ -193,6 +216,7 @@ def _make(
+         snapshot_fetch=snap,
+         stock_info_fetch=inf,
+         disposition_fetch=disp,
++        daily_fetch=daily,
+         data_dir=tmp_path,
+         today_fn=clk.today_fn,
+         now_fn=clk.now_fn,
+@@ -213,6 +237,82 @@ def _series_file(tmp_path: Path, trade_date: str = _TRADE_DATE) -> Path:
+     return tmp_path / f"breadth-{trade_date}.json"
+ 
+ 
++# ---------------------------------------------------------------------------
++# 連板數(streak)用具 —— EOD 造值 / 造日曆 / 快取檔
++# ---------------------------------------------------------------------------
++
++#: today = 2026-08-05(週三)往回的 10 個交易日;夾著兩個週末(_HOLIDAYS)
++_TRADING_DAYS = [
++    "2026-08-04",
++    "2026-08-03",
++    "2026-07-31",
++    "2026-07-30",
++    "2026-07-29",
++    "2026-07-28",
++    "2026-07-27",
++    "2026-07-24",
++    "2026-07-23",
++    "2026-07-22",
++]
++_HOLIDAYS = ["2026-08-02", "2026-08-01", "2026-07-26", "2026-07-25"]
++
++
++def _eod_rows(limit_ups: tuple[str, ...] = (), *, pad: int = 3) -> list[dict]:
++    """單日 EOD 造值:`limit_ups` 每檔一列**剛好漲停**,其餘為平盤墊列。
++
++    前收 = `close − spread` = 10.0 → 漲停 11.0(tick 0.05,10% 整除)。墊列只為
++    撐過 `_DAILY_MIN_ROWS` 健檢,代號取 9000 段避免與被判股撞號。
++    """
++    rows: list[dict] = [{"stock_id": sid, "close": 11.0, "spread": 1.0} for sid in limit_ups]
++    rows += [{"stock_id": f"{9000 + i}", "close": 10.0, "spread": 0.0} for i in range(pad)]
++    return rows
++
++
++def _calendar(days: dict[str, tuple[str, ...]]) -> dict[str, list[dict]]:
++    """{交易日: 該日漲停代號} → FakeDaily 的 calendar(不在鍵內的日期 = 假日空回應)。"""
++    return {day: _eod_rows(sids) for day, sids in days.items()}
++
++
++def _streaks_file(tmp_path: Path, day: str = _TRADE_DATE) -> Path:
++    return tmp_path / f"streaks-{day}.json"
++
++
++def _write_streaks_cache(
++    tmp_path: Path,
++    *,
++    computed_for: str = _TRADE_DATE,
++    data_end: str = "2026-08-04",
++    dates: list[str] | None = None,
++    skipped: list[str] | None = None,
++    streaks: dict[str, int] | None = None,
++    version: int = 1,
++    file_day: str = _TRADE_DATE,
++) -> Path:
++    payload = {
++        "_version": version,
++        "computed_for": computed_for,
++        "data_end": data_end,
++        "dates": dates if dates is not None else ["2026-08-04", "2026-08-03", "2026-07-31"],
++        "skipped": skipped if skipped is not None else ["2026-08-02", "2026-08-01"],
++        "streaks": streaks if streaks is not None else {"1101": 3},
++    }
++    path = _streaks_file(tmp_path, file_day)
++    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
++    return path
++
++
++@pytest.fixture
++def fast_streaks(monkeypatch: pytest.MonkeyPatch) -> None:
++    """streak 測試不靠真 sleep(檔頭慣例):request 間隔與重試秒數歸零。
++
++    `_DAILY_MIN_ROWS` 一併降到墊列量級 —— 每個成功路徑案例都造 25,000 列會讓整個
++    檔慢一個數量級;真門檻的邊界由 `TestStreakHealthChecks` 以真常數兩側取值把關。
++    """
++    monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
++    monkeypatch.setattr(be, "_STREAK_RETRY_SECS", 0.0)
++    monkeypatch.setattr(be, "_DAILY_MIN_ROWS", 3)
++
++
+ # ---------------------------------------------------------------------------
+ # 正常輪
+ # ---------------------------------------------------------------------------
+@@ -806,6 +906,31 @@ class TestPollLoop:
+ 
+         assert snap.calls >= 3
+ 
++    async def test_arm_streaks_exception_does_not_kill_poll_loop(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """武裝檢查拋例外 → poll loop 續行(review R9)。
++
++        `_maybe_arm_streaks` 放在 `try:` **之外**的話,一次例外就殺掉整條 poll task ——
++        表現是家數面板從此凍在最後一則、零錯誤訊號,而肇因只是連板數那條旁支。
++        前兩圈拋、之後放行:同時驗「迴圈沒死」與「後續照常取數」。
++        """
++        seen = {"n": 0}
++
++        def _boom(_self: object) -> None:
++            seen["n"] += 1
++            if seen["n"] <= 2:
++                raise RuntimeError("boom")
++
++        monkeypatch.setattr(be.BreadthEngine, "_maybe_arm_streaks", _boom)
++        engine, snap, *_ = _make(tmp_path, config=BreadthConfig(poll_secs=0.01))
++
++        await engine.start()
++        try:
++            await _wait_until(lambda: seen["n"] >= 3 and snap.calls >= 1)
++        finally:
++            await engine.close()
++
+     async def test_loop_survives_cycle_exception(
+         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+     ) -> None:
+@@ -829,3 +954,552 @@ class TestPollLoop:
+             await engine.close()
+ 
+         assert snap.calls >= 3
++
++
++# ---------------------------------------------------------------------------
++# 連板數重算(design §3.3;R3/R4/R13/R15/R16)
++# ---------------------------------------------------------------------------
++
++
++class TestStreakCompute:
++    async def test_success_path_skips_holidays_and_caches(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """回看 10 交易日:空回應日跳過(不中斷)、收滿即停、成果落檔。
++
++        1101 十日皆漲停 → 10(撞窗上限);2330 只有最近兩日 → 2;2317 漲停不含最近
++        一日 → 不在結果內(streak 已中斷)。
++        """
++        limits: dict[str, tuple[str, ...]] = {d: ("1101",) for d in _TRADING_DAYS}
++        limits["2026-08-04"] = ("1101", "2330")
++        limits["2026-08-03"] = ("1101", "2330", "2317")
++        daily = FakeDaily(_calendar(limits))
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        assert await engine._compute_streaks_once() is True
++
++        assert engine._streaks == {"1101": 10, "2330": 2}
++        assert engine._streaks_day == _TRADE_DATE
++        assert engine._streaks_end == "2026-08-04"
++        assert engine._streaks_span == 10
++        assert engine._streaks_skipped == set(_HOLIDAYS)
++        # 掃描自 day−1 起、收滿 10 個交易日即停(不會掃滿 25 日曆日)
++        assert daily.calls == sorted([*_TRADING_DAYS, *_HOLIDAYS], reverse=True)
++
++        saved = json.loads(_streaks_file(tmp_path).read_text(encoding="utf-8"))
++        assert saved == {
++            "_version": 1,
++            "computed_for": _TRADE_DATE,
++            "data_end": "2026-08-04",
++            "dates": _TRADING_DAYS,
++            "skipped": sorted(_HOLIDAYS),
++            "streaks": {"1101": 10, "2330": 2},
++        }
++
++    async def test_scan_stops_at_calendar_limit_with_short_window(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """窗收不滿(長假 / 上市未滿 10 日)照樣成立:span < 10,封頂語意由 span 表達。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",), "2026-08-03": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        assert await engine._compute_streaks_once() is True
++
++        assert engine._streaks == {"1101": 2}
++        assert engine._streaks_span == 2
++        assert len(daily.calls) == 25  # 收不滿 → 掃到 _STREAK_SCAN_CAL_DAYS 上限為止
++        assert daily.calls[-1] == "2026-07-11"  # day − 25
++
++    async def test_result_discarded_when_day_rolls_over_mid_scan(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """跨午夜完成的結果是「以昨日為基準」的錯值,且會被快取固化 → 丟棄(R3)。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        engine, _s, _i, _d, clock = _make(tmp_path, daily=daily)
++
++        def _roll(n: int) -> None:
++            if n == 1:
++                clock.today = _dt.date(2026, 8, 6)
++
++        daily.on_call = _roll
++
++        assert await engine._compute_streaks_once() is False
++
++        assert engine._streaks == {} and engine._streaks_day is None
++        assert not _streaks_file(tmp_path).exists()
++        assert not _streaks_file(tmp_path, "2026-08-06").exists()
++
++    async def test_data_end_not_yesterday_logs_warning(
++        self, tmp_path: Path, fast_streaks: None, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """昨日被當假日跳過 → 盤中判式仍會 +1(KR-1 殘餘風險)。落檔前留下觀測訊號。"""
++        daily = FakeDaily(_calendar({"2026-08-03": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        with caplog.at_level("WARNING"):
++            assert await engine._compute_streaks_once() is True
++
++        assert engine._streaks_end == "2026-08-03"
++        assert any("2026-08-04" in r.getMessage() for r in caplog.records)
++
++
++class TestStreakHealthChecks:
++    """空回應 = 假日的兩道防禦(R4/R16)—— 真交易日回空 / 回半份都會高估連板數。"""
++
++    async def test_row_count_below_threshold_fails_whole_round(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """非空但列數不足 = 部分截斷,**不可當假日跳過**:整輪失敗(真門檻 − 1)。"""
++        monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
++        short = _eod_rows(("1101",), pad=be._DAILY_MIN_ROWS - 2)
++        assert len(short) == be._DAILY_MIN_ROWS - 1
++        daily = FakeDaily({"2026-08-04": short})
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        assert await engine._compute_streaks_once() is False
++
++        assert engine._streaks_day is None
++        assert daily.calls == ["2026-08-04"]  # 立即中止,不繼續往回掃
++        assert not _streaks_file(tmp_path).exists()
++
++    async def test_row_count_at_threshold_accepted(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """門檻**含等值**:剛好 25,000 列是可用的一日(邊界另一側)。"""
++        monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
++        exact = _eod_rows(("1101",), pad=be._DAILY_MIN_ROWS - 1)
++        assert len(exact) == be._DAILY_MIN_ROWS
++        daily = FakeDaily({"2026-08-04": exact})
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        assert await engine._compute_streaks_once() is True
++
++        assert engine._streaks == {"1101": 1}
++        assert engine._streaks_span == 1
++
++    async def test_calendar_gap_beyond_limit_is_not_adopted(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """收到的相鄰交易日日曆間距 > 12 日 = 中間有整段被當假日吃掉 → 該輪不採用。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",), "2026-07-20": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        assert await engine._compute_streaks_once() is False
++
++        assert engine._streaks_day is None
++        assert not _streaks_file(tmp_path).exists()
++
++    async def test_gap_within_limit_is_adopted(self, tmp_path: Path, fast_streaks: None) -> None:
++        """春節等級的連假(≤ 12 日)不誤殺(KR-3 的另一側)。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",), "2026-07-23": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        assert await engine._compute_streaks_once() is True
++
++        assert engine._streaks == {"1101": 2}
++
++
++class TestStreakScheduling:
++    """武裝(排程)與成功分離 —— `_streak_armed_day` vs `_streaks_day`(R13)。"""
++
++    async def test_not_armed_before_arm_time(self, tmp_path: Path, fast_streaks: None) -> None:
++        """06:00 前不武裝:T-1 EOD 未發布時重算會把 T-1 當假日跳過並**成功**固化錯值。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily, clock=Clock(now="05:59:59"))
++
++        engine._maybe_arm_streaks()
++
++        assert engine._streak_task is None
++        assert engine._streak_armed_day is None
++        assert daily.calls == []
++
++    async def test_armed_at_arm_time(self, tmp_path: Path, fast_streaks: None) -> None:
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily, clock=Clock(now="06:00:00"))
++
++        engine._maybe_arm_streaks()
++
++        task = engine._streak_task
++        assert task is not None
++        assert engine._streak_armed_day == _TRADE_DATE
++        await task
++        assert engine._streaks == {"1101": 1}
++
++    async def test_disabled_when_no_daily_fetch(self, tmp_path: Path, fast_streaks: None) -> None:
++        """`daily_fetch=None` = 連板停用:不武裝、rows 端點照常(streak 恆 null)。"""
++        engine, *_ = _make(tmp_path)
++
++        engine._maybe_arm_streaks()
++
++        assert engine._streak_task is None and engine._streak_armed_day is None
++
++    async def test_attempt_limit_then_no_rearm_same_day(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """壞上游不整天燒配額:10 次用完 task 結束,同日再檢查也不重起(R13)。"""
++        daily = FakeDaily({})
++        daily.error = BreadthFetchError("upstream down")
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        engine._maybe_arm_streaks()
++        task = engine._streak_task
++        assert task is not None
++        await task
++
++        assert len(daily.calls) == be._STREAK_MAX_ATTEMPTS
++        assert engine._streak_attempts == be._STREAK_MAX_ATTEMPTS
++        assert engine._streaks_day is None
++
++        engine._maybe_arm_streaks()  # task 已 done,但 armed_day 相符 → 不再起
++        assert engine._streak_task is task
++        assert len(daily.calls) == be._STREAK_MAX_ATTEMPTS
++
++    @pytest.mark.parametrize(
++        ("quota", "expected"),
++        [pytest.param(False, 60.0, id="一般失敗 60s"), pytest.param(True, 300.0, id="配額 300s")],
++    )
++    async def test_retry_backoff_seconds(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quota: bool, expected: float
++    ) -> None:
++        """退避秒數以「sleep 被呼叫的值」驗,不真等(檔頭慣例)。
++
++        402 走 `config.quota_backoff_secs`,其餘走 `_STREAK_RETRY_SECS`;最後一次
++        嘗試後不再睡(直接放棄)→ 10 次嘗試對應 9 段退避。
++        """
++        sleeps: list[float] = []
++
++        async def _fake_sleep(secs: float) -> None:
++            sleeps.append(secs)
++
++        monkeypatch.setattr(be.asyncio, "sleep", _fake_sleep)
++        daily = FakeDaily({})
++        daily.error = BreadthFetchError("down", quota=quota)
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        await engine._compute_streaks_loop()
++
++        assert sleeps == [expected] * (be._STREAK_MAX_ATTEMPTS - 1)
++
++    async def test_unexpected_exception_retries_and_survives(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """注入的取數層不保證只丟 BreadthFetchError;漏接會讓 task 當場死透。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        daily.error = RuntimeError("boom")
++
++        def _heal(n: int) -> None:
++            if n >= 3:
++                daily.error = None
++
++        daily.on_call = _heal
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        await engine._compute_streaks_loop()
++
++        assert engine._streaks == {"1101": 1}
++        assert engine._streak_attempts == 3
++
++    async def test_close_cancels_streak_task(self, tmp_path: Path) -> None:
++        """`close()` 一併收攤 streak task(與 poll task 同款),否則 shutdown 掛著孤兒。"""
++        daily = FakeDaily({})
++        daily.error = BreadthFetchError("down")
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        engine._maybe_arm_streaks()
++        task = engine._streak_task
++        assert task is not None
++        await _wait_until(lambda: len(daily.calls) >= 1)
++
++        await engine.close()
++
++        assert task.done()
++        assert engine._streak_task is None
++
++
++class TestStreakCache:
++    async def test_restore_same_day_does_not_refetch(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """同日第二次啟動不打 FinMind —— restore 命中即視同**已武裝**(SC-2 的機制)。"""
++        _write_streaks_cache(tmp_path)
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily, config=BreadthConfig(poll_secs=0.01))
++
++        await engine.start()
++        try:
++            await _wait_until(lambda: engine.state()["counts"] is not None)
++            await asyncio.sleep(0.1)  # 夠跑約 10 圈武裝檢查
++        finally:
++            await engine.close()
++
++        assert daily.calls == []
++        assert engine._streak_armed_day == _TRADE_DATE
++        assert engine._streaks == {"1101": 3}
++        assert engine._streaks_day == _TRADE_DATE
++        assert engine._streaks_end == "2026-08-04"
++        assert engine._streaks_span == 3
++        assert engine._streaks_skipped == {"2026-08-02", "2026-08-01"}
++
++    async def test_start_does_not_start_streak_task(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """start() 維持零網路 IO:streak task 由 poll loop 的武裝檢查起(時間閘一致)。"""
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        engine, *_ = _make(
++            tmp_path,
++            daily=daily,
++            config=BreadthConfig(poll_secs=60.0),
++            clock=Clock(now="03:00:00"),
++        )
++
++        await engine.start()
++        try:
++            assert daily.calls == []
++            assert engine._streak_task is None
++        finally:
++            await engine.close()
++
++    @pytest.mark.parametrize(
++        "kwargs",
++        [
++            pytest.param({"computed_for": "2026-08-04"}, id="computed_for 非今日"),
++            pytest.param({"version": 99}, id="版本不符"),
++            pytest.param({"data_end": 20260804}, id="data_end 非 str"),
++            pytest.param({"streaks": ["1101"]}, id="streaks 非 dict"),
++        ],
++    )
++    async def test_restore_rejects_unusable_cache(self, tmp_path: Path, kwargs: dict) -> None:
++        """不合用的快取一律當沒有(今日重算),不半採用 —— 錯的連板數比沒有更糟。"""
++        _write_streaks_cache(tmp_path, **kwargs)
++        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
++
++        engine._restore_streaks()
++
++        assert engine._streaks == {} and engine._streaks_day is None
++        assert engine._streak_armed_day is None
++
++    async def test_restore_bad_json_is_never_raise(self, tmp_path: Path) -> None:
++        _streaks_file(tmp_path).write_text("not json at all", encoding="utf-8")
++        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
++
++        engine._restore_streaks()
++
++        assert engine._streaks_day is None and engine._streak_armed_day is None
++
++    async def test_new_day_rearms_and_replaces_stale_result(
++        self, tmp_path: Path, fast_streaks: None
++    ) -> None:
++        """換日:先清舊成果再重算 —— 昨日那份留著會讓連板數整天多算一板(R9/R13)。
++
++        情境刻意選「restore 命中、streak task 從未存在」:守門若寫成 `task.done()`
++        而沒有 `task is None` 分支,這條路永遠武裝不了。
++        """
++        _write_streaks_cache(tmp_path)
++        daily = FakeDaily(_calendar({"2026-08-05": ("1101",), "2026-08-04": ("1101",)}))
++        engine, _s, _i, _d, clock = _make(tmp_path, daily=daily)
++        engine._restore_streaks()
++        # 綁區域變數再斷言:直接對 `engine._streak_task` 斷言 is None 會讓 pyright 把
++        # 那個 member expression 一路窄化成 None,後面的 `await task` 就變成 await Never
++        restored_task = engine._streak_task
++        assert restored_task is None and engine._streaks == {"1101": 3}
++
++        clock.today = _dt.date(2026, 8, 6)
++        clock.now = _dt.datetime(2026, 8, 6, 6, 30)
++        engine._maybe_arm_streaks()
++
++        # 起 task 的同一個同步區塊內就得清空:舊值不得在重算完成前被當今日的答案
++        assert engine._streaks == {} and engine._streaks_day is None
++        assert engine._streaks_end is None and engine._streaks_span == 0
++        assert engine._streaks_skipped == set()
++        assert engine._streak_attempts == 0
++        assert engine._streak_armed_day == "2026-08-06"
++        task = engine._streak_task
++        assert task is not None
++        await task
++
++        assert engine._streaks == {"1101": 2}
++        assert engine._streaks_day == "2026-08-06"
++        assert engine._streaks_end == "2026-08-05"
++        assert _streaks_file(tmp_path, "2026-08-06").exists()
++
++    async def test_save_oserror_degrades_only(
++        self,
++        tmp_path: Path,
++        fast_streaks: None,
++        monkeypatch: pytest.MonkeyPatch,
++        caplog: pytest.LogCaptureFixture,
++    ) -> None:
++        """落檔失敗只降級:記憶體成果照在(重啟才會重算),不得讓整輪失敗。"""
++
++        def _boom(*_a: object, **_k: object) -> None:
++            raise OSError("disk full")
++
++        monkeypatch.setattr(be.os, "replace", _boom)
++        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
++        engine, *_ = _make(tmp_path, daily=daily)
++
++        with caplog.at_level("WARNING"):
++            assert await engine._compute_streaks_once() is True
++
++        assert engine._streaks == {"1101": 1}
++        assert not _streaks_file(tmp_path).exists()
++        assert any("落檔失敗" in r.getMessage() for r in caplog.records)
++# ---------------------------------------------------------------------------
++# rows_state():連板算術與 rows 同源日(design §3.3 code block;R1/R14/R15)
++# ---------------------------------------------------------------------------
++
++
++def _row_of(state: dict, sid: str) -> dict:
++    return next(r for r in state["rows"] if r["stock_id"] == sid)
++
++
++class TestRowsState:
++    async def test_shape_before_first_cycle(self, tmp_path: Path) -> None:
++        """引擎在、首輪未成:契約欄位齊全,`as_of` 為 None(前端據它判「載入中」)。"""
++        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
++
++        assert engine.rows_state() == {
++            "enabled": True,
++            "trade_date": None,
++            "as_of": None,
++            "stale": True,
++            "streaks_ready": False,
++            "rows": [],
++        }
++
++    async def test_streak_null_until_ready(self, tmp_path: Path) -> None:
++        """streak 未就緒(含 `daily_fetch=None` 停用)→ 每列 null,不是 0 也不是猜值。"""
++        engine, *_ = _make(tmp_path)
++
++        await engine._run_cycle()
++        state = engine.rows_state()
++
++        assert state["streaks_ready"] is False
++        assert state["trade_date"] == _TRADE_DATE
++        assert all(
++            r["streak"] is None and r["streak_capped"] is False for r in state["rows"]
++        )
++        assert len(state["rows"]) == 4
++
++    async def test_intraday_rows_add_today_and_keep_row_fields(
++        self, tmp_path: Path
++    ) -> None:
++        """rows 是今日盤中(rows_date > data_end)→ 昨日止的 streak + 今日這根。
++
++        同時釘住 merge 是**加欄不改欄**:原本的 rows 欄位一個不漏地原樣帶出去。
++        """
++        _write_streaks_cache(tmp_path, streaks={"1101": 2})
++        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
++        engine._restore_streaks()
++
++        await engine._run_cycle()
++        state = engine.rows_state()
++
++        assert state["streaks_ready"] is True
++        assert state["trade_date"] == _TRADE_DATE
++        assert _row_of(state, "1101") == {
++            "stock_id": "1101",
++            "name": "台泥",
++            "market": "twse",
++            "close": 11.0,
++            "change_rate": 10.0,
++            "volume_ratio": 2.0,
++            "total_amount": 12_345,
++            "limit_up": True,
++            "limit_down": False,
++            "touched_limit_up": False,
++            "touched_limit_down": False,
++            "streak": 3,
++            "streak_capped": False,
++        }
++        # 非漲停列一律 null(跌停的 6488 也不例外 —— 連板只描述漲停)
++        assert _row_of(state, "6488")["streak"] is None
++        assert _row_of(state, "2330")["streak"] is None
++
++    async def test_previous_session_snapshot_does_not_add_one(
++        self, tmp_path: Path
++    ) -> None:
++        """rows 是**上一交易日收盤快照**(盤前 / 假日開站)→ 該日已在 streak 內,不 +1。
++
++        這是 R1 的核心:前端 +1 的舊設計在這條路上會憑空多一板,而畫面看起來完全正常。
++        """
++        _write_streaks_cache(
++            tmp_path,
++            computed_for="2026-08-06",
++            data_end=_TRADE_DATE,
++            dates=[_TRADE_DATE, "2026-08-04", "2026-08-03"],
++            streaks={"1101": 3},
++            file_day="2026-08-06",
++        )
++        engine, *_ = _make(
++            tmp_path,
++            snapshot=FakeFetch(_snapshot_rows(f"{_TRADE_DATE} 13:30:00")),
++            daily=FakeDaily({}),
++            clock=Clock(today="2026-08-06"),
++        )
++        engine._restore_streaks()
++
++        await engine._run_cycle()
++        state = engine.rows_state()
++
++        assert state["trade_date"] == _TRADE_DATE
++        assert _row_of(state, "1101")["streak"] == 3
++        assert _row_of(state, "1101")["streak_capped"] is True  # prev 撞上 span=3
++
++    async def test_uses_rows_date_not_trade_date(self, tmp_path: Path) -> None:
++        """`adopt_date=False` 路徑:`_trade_date` 與 rows 脫鉤 → 判式必須用 `_rows_date`。
++
++        第二輪拿到的快照日既非今日也非序列日 → 日期變更不採用(`_trade_date` 停在
++        08-05),但 `self.rows` 已經換成 08-04 那份。用 `_trade_date` 判會得到
++        「08-05 > data_end 08-04」→ 多一板,而畫面與 counts 全部正常(R14)。
++        """
++        _write_streaks_cache(tmp_path, streaks={"1101": 3})
++        engine, snap, *_ = _make(tmp_path, daily=FakeDaily({}))
++        engine._restore_streaks()
++        await engine._run_cycle()
++        assert _row_of(engine.rows_state(), "1101")["streak"] == 4  # 盤中:3 + 今日
++
++        snap.rows = _snapshot_rows("2026-08-04 13:30:00")
++        await engine._run_cycle()
++        state = engine.rows_state()
++
++        assert engine._trade_date == _TRADE_DATE  # 日期變更不採用(序列保護)
++        assert state["trade_date"] == "2026-08-04"  # 但 payload 與 rows 同源
++        assert _row_of(state, "1101")["streak"] == 3  # 不是 4
++
++    async def test_rows_date_in_skipped_is_null(self, tmp_path: Path) -> None:
++        """rows 的資料日在掃描時被當假日跳過 → 兩者關係不明,誠實回 null(R15)。
++
++        沒有這道 guard 時它會走 `rows_date > data_end` 分支 +1 —— 而那一天到底有沒有
++        漲停過根本不知道(FinMind 當時回空)。
++        """
++        _write_streaks_cache(
++            tmp_path,
++            data_end="2026-08-03",
++            dates=["2026-08-03", "2026-07-31", "2026-07-30"],
++            skipped=["2026-08-04", "2026-08-02", "2026-08-01"],
++            streaks={"1101": 3},
++        )
++        engine, snap, *_ = _make(tmp_path, daily=FakeDaily({}))
++        engine._restore_streaks()
++        snap.rows = _snapshot_rows("2026-08-04 13:30:00")
++
++        await engine._run_cycle()
++        state = engine.rows_state()
++
++        assert state["streaks_ready"] is True
++        assert state["trade_date"] == "2026-08-04"
++        assert _row_of(state, "1101")["streak"] is None
++
++    async def test_streaks_from_other_day_are_not_ready(self, tmp_path: Path) -> None:
++        """成果是為別的 today 算的(00:00–06:00 之間 / 換日未重算完)→ 整片 null。"""
++        _write_streaks_cache(tmp_path, streaks={"1101": 2})
++        engine, _s, _i, _d, clock = _make(tmp_path, daily=FakeDaily({}))
++        engine._restore_streaks()
++        await engine._run_cycle()
++
++        clock.today = _dt.date(2026, 8, 6)
++        state = engine.rows_state()
++
++        assert state["streaks_ready"] is False
++        assert _row_of(state, "1101")["streak"] is None
+diff --git a/tests/server/test_breadth_fetch.py b/tests/server/test_breadth_fetch.py
+index cd2c1a8a..293955a3 100644
+--- a/tests/server/test_breadth_fetch.py
++++ b/tests/server/test_breadth_fetch.py
+@@ -95,6 +95,13 @@ def _info_rows(n: int) -> list[dict]:
+     ]
+ 
+ 
++def _eod_rows(n: int = 2) -> list[dict]:
++    return [
++        {"date": "2026-08-05", "stock_id": f"{2330 + i}", "close": 100.0, "spread": 1.0}
++        for i in range(n)
++    ]
++
++
+ # ---------- URL / header / timeout 契約 ----------
+ 
+ 
+@@ -123,6 +130,62 @@ class TestRequestShape:
+         assert http.query() == {"dataset": ["TaiwanStockInfo"]}
+         assert http.headers[0]["Authorization"] == "Bearer tok"
+ 
++    def test_daily_prices_single_day_query_and_long_timeout(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """單日全市場 EOD:start_date == end_date == 該日、無 data_id;**timeout 60s**。
++
++        回應是 MB 級(全市場 ~3 萬列含權證),秒級輪詢用的 30s 會在正常日就逾時 ——
++        而逾時的表現是 streak 整輪失敗、連板欄整天 null(design §3.3a R10)。
++        """
++        http = FakeHttp(_payload(_eod_rows()))
++        monkeypatch.setattr(bf, "urlopen", http)
++
++        rows = bf.fetch_daily_prices("tok", _TODAY)
++
++        assert rows == _eod_rows()
++        assert http.calls == 1
++        assert http.path() == "/api/v4/data"
++        assert http.query() == {
++            "dataset": ["TaiwanStockPrice"],
++            "start_date": ["2026-08-05"],
++            "end_date": ["2026-08-05"],
++        }
++        assert http.headers[0]["Authorization"] == "Bearer tok"
++        assert http.timeouts[0] == 60.0
++
++    def test_other_fetchers_keep_default_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """`timeout` 是 keyword-only 且**只有 EOD 帶 60**;秒級輪詢的三支維持 30s。"""
++        http = FakeHttp(_payload(_snapshot_rows()))
++        monkeypatch.setattr(bf, "urlopen", http)
++
++        bf.fetch_snapshot("tok")
++        bf.fetch_disposition("tok", _TODAY)
++
++        assert http.timeouts == [30.0, 30.0]
++
++    def test_daily_prices_402_marks_quota_and_does_not_retry(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """錯誤分類沿 `_get_rows`:402 → quota=True 不重試(引擎據此走長退避)。"""
++        http = FakeHttp(_http_error(402))
++        monkeypatch.setattr(bf, "urlopen", http)
++
++        with pytest.raises(bf.BreadthFetchError) as exc:
++            bf.fetch_daily_prices("tok", _TODAY)
++
++        assert exc.value.quota is True
++        assert http.calls == 1
++
++    def test_daily_prices_empty_day_returns_empty_list(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """假日 = 合法的空 `data` 陣列(不是錯誤);「空 = 假日候選」的判定在引擎。"""
++        http = FakeHttp(_payload([]))
++        monkeypatch.setattr(bf, "urlopen", http)
++
++        assert bf.fetch_daily_prices("tok", _TODAY) == []
++
+     def test_disposition_range_query_param_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+         """參數名必為 start_date / end_date(oi_levels / neigui 同款;PLAN R6)。"""
+         http = FakeHttp(_payload([]))
+diff --git a/tests/server/test_breadth_routes.py b/tests/server/test_breadth_routes.py
+index ec14db54..3d7f24b3 100644
+--- a/tests/server/test_breadth_routes.py
++++ b/tests/server/test_breadth_routes.py
+@@ -1,6 +1,6 @@
+ """家數帶 API/WS 接線(market-overview R2 Task 7;design §6)— SC-3。
+ 
+-**禁止真打 FinMind / 禁起 TC4**:取數三元組全部注入 fake、TXO 走 `FakeTxoSource`,
++**禁止真打 FinMind / 禁起 TC4**:取數四元組全部注入 fake、TXO 走 `FakeTxoSource`,
+ 整條路不碰網路也不碰 ZMQ。
+ 
+ `BootedClient`(design R12):啟動序列已背景化,`with TestClient(app)` 返回只代表
+@@ -10,6 +10,7 @@ HTTP 面可用 —— breadth 引擎是否掛上去要等 boot 序列結束才
+ from __future__ import annotations
+ 
+ import datetime as _dt
++import logging
+ import time
+ from pathlib import Path
+ from typing import Callable
+@@ -23,7 +24,7 @@ import copycat.server.breadth_fetch as breadth_fetch
+ import copycat.server.finmind_token as finmind_token
+ from copycat.breadth_config import BreadthConfig
+ from copycat.server import app as app_mod
+-from copycat.server.app import DEFAULT_BREADTH, create_app
++from copycat.server.app import DEFAULT_BREADTH, BreadthFetchers, create_app
+ from copycat.server.breadth_fetch import BreadthFetchError
+ from copycat.server.mis import OtcSnap
+ from tests.helpers.boot import BootedClient
+@@ -97,29 +98,27 @@ def _snapshot_rows() -> list[dict]:
+     ]
+ 
+ 
+-def _ok_fetchers() -> tuple[
+-    Callable[[str], list[dict]],
+-    Callable[[str], list[dict]],
+-    Callable[[str, _dt.date], list[dict]],
+-]:
++def _ok_fetchers() -> BreadthFetchers:
++    """第四槽(EOD 日線)刻意給 `None` = 連板停用(契約的一部分,R3 R20)。
++
++    本檔驗的是 route 形狀與接線;真要在這裡餵日線,引擎的 `_DAILY_MIN_ROWS` 健檢
++    會逼每個 fake 日回 25,000 列 —— 連板編排的行為面在 test_breadth_engine 已逐條覆蓋。
++    """
+     return (
+         lambda _token: _snapshot_rows(),
+         lambda _token: list(_INFO_ROWS),
+         lambda _token, _today: [],
++        None,
+     )
+ 
+ 
+-def _raising_fetchers() -> tuple[
+-    Callable[[str], list[dict]],
+-    Callable[[str], list[dict]],
+-    Callable[[str, _dt.date], list[dict]],
+-]:
+-    """三個取數點全炸 —— SC-3 的失效注入(FinMind 整段掛掉)。"""
++def _raising_fetchers() -> BreadthFetchers:
++    """四個取數點全炸 —— SC-3 的失效注入(FinMind 整段掛掉,含 EOD 日線那支)。"""
+ 
+     def _boom(*_a: object) -> list[dict]:
+         raise BreadthFetchError("fake FinMind down")
+ 
+-    return (_boom, _boom, _boom)
++    return (_boom, _boom, _boom, _boom)
+ 
+ 
+ def _mis() -> OtcSnap | None:
+@@ -220,6 +219,125 @@ class TestBreadthRest:
+         }
+ 
+ 
++#: `/api/market/breadth/rows` 每列的完整欄位(design §4 契約)。整組等值比對而不是
++#: 逐欄 `in`:漏欄與多欄都要紅 —— 前端型別直譯這份契約,少一欄是 undefined、多一欄
++#: 是無人消費的頻寬(rows payload 每 10 秒數百 KB)。
++_ROW_FIELDS = {
++    "stock_id",
++    "name",
++    "market",
++    "close",
++    "change_rate",
++    "volume_ratio",
++    "total_amount",
++    "limit_up",
++    "limit_down",
++    "touched_limit_up",
++    "touched_limit_down",
++    "streak",
++    "streak_capped",
++}
++
++
++class TestBreadthRowsRest:
++    """`GET /api/market/breadth/rows` 三態 + 契約(R3 SC-1)。
++
++    與 `/api/market/breadth` 同款恆 200 三態(未設定 / 載入中 / 有引擎),理由相同:
++    503 會被 TanStack 的 error 路徑吞成同一種紅色。
++    """
++
++    def test_engine_absent_returns_disabled_shape(self) -> None:
++        with _client() as c:
++            r = c.get("/api/market/breadth/rows")
++        assert r.status_code == 200
++        assert r.json() == {
++            "enabled": False,
++            "trade_date": None,
++            "as_of": None,
++            "stale": False,
++            "streaks_ready": False,
++            "rows": [],
++        }
++
++    def test_before_boot_returns_loading_shape(self, tmp_path: Path) -> None:
++        """boot 未完成 → 載入中(enabled=true / stale=true),不得與「未設定」同形。"""
++        client = TestClient(
++            _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path),
++            raise_server_exceptions=False,
++        )
++        r = client.get("/api/market/breadth/rows")
++        assert r.status_code == 200
++        assert r.json() == {
++            "enabled": True,
++            "trade_date": None,
++            "as_of": None,
++            "stale": True,
++            "streaks_ready": False,
++            "rows": [],
++        }
++
++    def test_rows_payload_matches_contract(self, tmp_path: Path) -> None:
++        with _client(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path) as c:
++            _wait_counts(c)
++            body = c.get("/api/market/breadth/rows").json()
++
++        assert set(body) == {"enabled", "trade_date", "as_of", "stale", "streaks_ready", "rows"}
++        assert body["enabled"] is True
++        assert body["trade_date"] == _TODAY.isoformat()
++        assert body["as_of"] == "10:23:45"
++        assert body["streaks_ready"] is False  # daily_fetch=None → 連板停用
++        by_id = {r["stock_id"]: r for r in body["rows"]}
++        assert set(by_id) == {"1101", "2330", "6488"}
++        assert set(by_id["1101"]) == _ROW_FIELDS
++        assert by_id["1101"]["limit_up"] is True
++        assert by_id["1101"]["streak"] is None  # 未就緒 → null(不是 0,更不是 1)
++        assert by_id["1101"]["streak_capped"] is False
++
++    def test_rows_carry_engine_streak_merge(self, tmp_path: Path) -> None:
++        """route 必須回 `rows_state()` 的**算術結果**,不是自己拼一份 rows。
++
++        直接種引擎的 streak 成果(昨日止 2 板)→ 今日盤中的漲停列要是 3。
++        route 若改回 `{"rows": engine.rows}` 之類的直通,這裡就會紅。
++        """
++        app = _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as c:
++            _wait_counts(c)
++            engine = app.state.breadth
++            assert engine is not None
++            engine._streaks = {"1101": 2}
++            engine._streaks_day = _TODAY.isoformat()
++            engine._streaks_end = (_TODAY - _dt.timedelta(days=1)).isoformat()
++            engine._streaks_span = 10
++            body = c.get("/api/market/breadth/rows").json()
++
++        assert body["streaks_ready"] is True
++        by_id = {r["stock_id"]: r for r in body["rows"]}
++        assert by_id["1101"]["streak"] == 3
++        assert by_id["1101"]["streak_capped"] is False
++        assert by_id["2330"]["streak"] is None  # 非漲停列恆 null
++
++
++class TestFetchersArity:
++    def test_three_tuple_is_rejected_with_explicit_log(
++        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """舊三元組(repo 外的側車樣板漏改)必須**炸而且說清楚**(design R8)。
++
++        `_boot` 的傘罩會把任何例外收成「breadth 停用」,與「FINMIND_TOKEN 未設」在
++        畫面上同形 —— 沒有這行 error log 的話,漏改一個呼叫端的症狀是家數面板悄悄
++        整段消失,查不到原因。
++        """
++        def _f(*_a: object) -> list[dict]:
++            return []
++
++        app = _make_app(breadth_fetchers=(_f, _f, _f), breadth_data_dir=tmp_path)
++        with caplog.at_level(logging.ERROR):
++            with BootedClient(app, raise_server_exceptions=False) as c:
++                assert app.state.breadth is None
++                assert c.get("/api/market/breadth/rows").json()["enabled"] is False
++        assert any("預期 4" in rec.getMessage() for rec in caplog.records)
++
++
+ class TestBreadthWebSocket:
+     def test_first_frame_is_scalar_seed(self, tmp_path: Path) -> None:
+         with _client(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path) as c:
+@@ -274,33 +392,41 @@ class TestBreadthWebSocket:
+ 
+ 
+ class TestProdWiring:
+-    """`DEFAULT_BREADTH` sentinel → 真取數三元組(prod 唯一走的那條路;review TC-1)。
++    """`DEFAULT_BREADTH` sentinel → 真取數四元組(prod 唯一走的那條路;review TC-1)。
+ 
+-    三個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
+-    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有三個 callable」——
+-    三元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
++    四個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
++    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有四個 callable」——
++    四元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
+     snapshot 拿到對照表格式),沒有任何錯誤訊號。
+     """
+ 
+     @pytest.fixture
+-    def fetchers(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Callable, Callable, Callable]:
++    def fetchers(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> tuple[Callable, Callable, Callable, Callable]:
+         def _make(name: str) -> Callable[..., list[dict]]:
+             def _f(*_a: object) -> list[dict]:
+                 raise BreadthFetchError(f"{name} 不得真打")
+ 
+             return _f
+ 
+-        trio = (_make("snapshot"), _make("stock_info"), _make("disposition"))
+-        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", trio[0])
+-        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", trio[1])
+-        monkeypatch.setattr(breadth_fetch, "fetch_disposition", trio[2])
+-        return trio
++        quad = (
++            _make("snapshot"),
++            _make("stock_info"),
++            _make("disposition"),
++            _make("daily_prices"),
++        )
++        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", quad[0])
++        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", quad[1])
++        monkeypatch.setattr(breadth_fetch, "fetch_disposition", quad[2])
++        monkeypatch.setattr(breadth_fetch, "fetch_daily_prices", quad[3])
++        return quad
+ 
+     def test_default_sentinel_wires_real_fetchers_in_order(
+         self,
+         tmp_path: Path,
+         monkeypatch: pytest.MonkeyPatch,
+-        fetchers: tuple[Callable, Callable, Callable],
++        fetchers: tuple[Callable, Callable, Callable, Callable],
+     ) -> None:
+         monkeypatch.setattr(finmind_token, "resolve_token", lambda: "tok")
+         app = _make_app(breadth_fetchers=DEFAULT_BREADTH, breadth_data_dir=tmp_path)
+@@ -312,12 +438,14 @@ class TestProdWiring:
+             assert engine._snapshot_fetch is fetchers[0]
+             assert engine._stock_info_fetch is fetchers[1]
+             assert engine._disposition_fetch is fetchers[2]
++            # 第四支漏接的失效樣態 = 連板欄整天 null(prod 沒有任何錯誤訊號)
++            assert engine._daily_fetch is fetchers[3]
+ 
+     def test_default_sentinel_disabled_without_token(
+         self,
+         tmp_path: Path,
+         monkeypatch: pytest.MonkeyPatch,
+-        fetchers: tuple[Callable, Callable, Callable],
++        fetchers: tuple[Callable, Callable, Callable, Callable],
+     ) -> None:
+         """FINMIND_TOKEN 未設 = 合法配置(不是失敗)→ 引擎不建、REST 回「未設定」。"""
+         monkeypatch.setattr(finmind_token, "resolve_token", lambda: None)
+diff --git a/tests/server/test_main_wiring.py b/tests/server/test_main_wiring.py
+index 455b3cfd..5632819a 100644
+--- a/tests/server/test_main_wiring.py
++++ b/tests/server/test_main_wiring.py
+@@ -110,7 +110,7 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
+         "breadth_fetchers",
+         "breadth_data_dir",
+     }
+-    assert len(cap.create_kwargs["breadth_fetchers"]) == 3
++    assert len(cap.create_kwargs["breadth_fetchers"]) == 4
+     assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
+     # env 壓制必須有跑、log 不落檔、port 與 prod 錯開
+     assert cap.neutralized is True
+diff --git a/tests/server/test_verify.py b/tests/server/test_verify.py
+index 5676b2c2..413dd09b 100644
+--- a/tests/server/test_verify.py
++++ b/tests/server/test_verify.py
+@@ -23,8 +23,10 @@ import pytest
+ 
+ import copycat.capital.factory as factory
+ import copycat.notify as notify
++import copycat.server.breadth_engine as be
+ import copycat.server.discord_bot as discord_bot
+ import copycat.server.verify as verify
++from copycat.limit_streaks import compute_day_limitups, compute_prev_streaks
+ from copycat.market_breadth import (
+     assemble_universe,
+     build_name_map,
+@@ -126,14 +128,14 @@ def test_snapshot_stamp_clamped_into_minute_domain(now: str, expected: str) -> N
+ 
+ 
+ def test_fake_breadth_fetchers_feed_the_real_pipeline() -> None:
+-    """fake 三元組餵進真管線的**語意**斷言(review TC-6)。
++    """fake 四元組的前三支餵進真管線的**語意**斷言(review TC-6)。
+ 
+-    這三支是 verify server 上目視的唯一資料源:形狀對但值域無意義(例如漲跌停那兩檔
++    這幾支是 verify server 上目視的唯一資料源:形狀對但值域無意義(例如漲跌停那兩檔
+     沒真的落在停板價、或 ETF 沒被剔除)時,畫面照樣有數字,而「接線壞掉」與「fake 資料
+     本身沒覆蓋到那條路」在畫面上同形。手算:1101 前收 10.0 → 漲停 11.0;6488 前收
+     10.0 → 跌停 9.0;2330(前收 995)只是上漲;2317 平盤;2454 下跌;0050 = ETF 剔除。
+     """
+-    snapshot, stock_info, disposition = fake_breadth_fetchers()
++    snapshot, stock_info, disposition, _daily = fake_breadth_fetchers()
+     today = _dt.date.today()
+     info_rows = stock_info("tok")
+     snapshot_rows = snapshot("tok")
+@@ -147,6 +149,35 @@ def test_fake_breadth_fetchers_feed_the_real_pipeline() -> None:
+     assert out["tpex"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 1}
+     assert "0050" not in {r["stock_id"] for r in out["rows"]}
+ 
++    by_id = {r["stock_id"]: r for r in out["rows"]}
++    # 「觸及未鎖」是 R3 列表的第三種狀態,verify 畫面要看得到它才驗得了那條路:
++    # 3105 前收 79.0 → 漲停 86.9,high 摸到但收 80.0(未鎖)
++    assert by_id["3105"]["touched_limit_up"] is True
++    assert by_id["3105"]["limit_up"] is False
++    # 已鎖的那檔 high 同樣等於漲停價,但**不得**重複算進「觸及未鎖」桶
++    assert by_id["1101"]["limit_up"] is True
++    assert by_id["1101"]["touched_limit_up"] is False
++
++
++def test_fake_daily_prices_feed_the_streak_pipeline() -> None:
++    """第四支(EOD 日線)fake 的**語意**斷言:指定股兩日皆收漲停 → streak == 2。
++
++    形狀對但值沒真的落在停板價時,verify server 的連板欄會恆空,而那與「連板管線
++    壞掉」在畫面上同形。手算:1101 close 11.0 / spread 1.0 → 前收 10.0 → 漲停 11.0。
++
++    列數門檻同樣是語意的一部分:低於 `_DAILY_MIN_ROWS` 會被引擎當成「回應被截斷」
++    → 整輪失敗 → 連板欄整天 null(design R4/R16),fake 不夠長就等於這條路沒接上。
++    """
++    *_, daily = fake_breadth_fetchers()
++    today = _dt.date.today()
++    day1 = daily("tok", today - _dt.timedelta(days=1))
++    day2 = daily("tok", today - _dt.timedelta(days=2))
++
++    assert len(day1) >= be._DAILY_MIN_ROWS
++    streaks = compute_prev_streaks([compute_day_limitups(day1), compute_day_limitups(day2)])
++    assert streaks.get("1101") == 2
++    assert streaks.get("2330") is None  # 未漲停的那檔不得混進來
++
+ 
+ def test_fake_snapshot_stamp_is_today_and_inside_minute_domain() -> None:
+     """快照時刻恆為**今天**且落在分鐘域內 —— 兩者都是「序列會長格」的前提(SPEC-4)。"""
+@@ -160,15 +191,20 @@ def test_fake_snapshot_stamp_is_today_and_inside_minute_domain() -> None:
+     assert len({r["date"] for r in rows}) == 1  # 同一輪同一個時刻
+ 
+ 
+-def test_verify_breadth_fail_injects_all_three(monkeypatch: pytest.MonkeyPatch) -> None:
+-    """`VERIFY_BREADTH_FAIL=1` → 三支全拋(SC-3 在真 server 上的失效注入通道)。"""
++def test_verify_breadth_fail_injects_all_four(monkeypatch: pytest.MonkeyPatch) -> None:
++    """`VERIFY_BREADTH_FAIL=1` → 四支全拋(SC-3/SC-6 在真 server 上的失效注入通道)。
++
++    第四支(EOD 日線)漏接注入的話,FinMind 「整段掛掉」的注入其實漏了一條路 ——
++    連板背景 task 照樣打得通,失效隔離就沒真的被驗到。
++    """
+     monkeypatch.setenv(FAIL_ENV_KEY, "1")
+-    snapshot, stock_info, disposition = fake_breadth_fetchers()
++    snapshot, stock_info, disposition, daily = fake_breadth_fetchers()
+ 
+     for call in (
+         lambda: snapshot("tok"),
+         lambda: stock_info("tok"),
+         lambda: disposition("tok", _dt.date.today()),
++        lambda: daily("tok", _dt.date.today()),
+     ):
+         with pytest.raises(BreadthFetchError):
+             call()
+diff --git a/tests/test_limit_streaks.py b/tests/test_limit_streaks.py
+new file mode 100644
+index 00000000..b6641075
+--- /dev/null
++++ b/tests/test_limit_streaks.py
+@@ -0,0 +1,106 @@
++"""SC-2 純函式層測試:連板數(compute_day_limitups / compute_prev_streaks)。
++
++零 IO。單日漲停判定與 `market_breadth` 同口徑(毫元精確等值),但前收來源不同:
++snapshot 走 `close − change_price`,EOD 走 `close − spread`(除權息安全,neigui
++`DailyIndex.ref_prev_close` 同源)。
++"""
++
++from __future__ import annotations
++
++from copycat.limit_streaks import (
++    STREAK_WINDOW_DAYS,
++    compute_day_limitups,
++    compute_prev_streaks,
++)
++
++# ---------------------------------------------------------------------------
++# compute_day_limitups —— 單日 TaiwanStockPrice rows → 收盤漲停代號集合
++# ---------------------------------------------------------------------------
++
++
++def _row(sid: str, close: float, spread: float) -> dict:
++    """FinMind TaiwanStockPrice 的最小必要欄(真 dataset 另有 open/max/min/...)。"""
++    return {"stock_id": sid, "close": close, "spread": spread}
++
++
++def test_compute_day_limitups_derives_prev_close_from_spread() -> None:
++    # prev = 55.0 − 5.0 = 50.0 元 = 50_000 毫;cand = 55_000 落 50–100 元段
++    # (tick 100 毫)→ 漲停 55_000 毫 = 55.0 元
++    assert compute_day_limitups([_row("1234", 55.0, 5.0)]) == {"1234"}
++
++
++def test_compute_day_limitups_spread_is_the_only_prev_close_source() -> None:
++    """同一個 close 換 spread 即改判 —— 釘死前收確實由 spread 推導(除權息日的
++    「前一日 close」與參考前收不同,拿錯來源會整批誤判)。"""
++    # prev = 55.0 − 4.0 = 51.0 → 漲停 = 51_000*11//10 = 56_100 毫 ≠ 55_000
++    assert compute_day_limitups([_row("1234", 55.0, 4.0)]) == set()
++
++
++def test_compute_day_limitups_exact_milli_no_tolerance() -> None:
++    # 54.9 = 一個整 tick(100 毫)之下;54.95 = 半 tick 之下 —— 皆非漲停
++    assert compute_day_limitups([_row("1234", 54.9, 4.9)]) == set()
++    assert compute_day_limitups([_row("1234", 54.95, 4.95)]) == set()
++
++
++def test_compute_day_limitups_keeps_only_four_digit_ordinary_stocks() -> None:
++    """權證 / ETF / 指數 row 即使價格恰好落在公式漲停價也不得入集合。"""
++    rows = [
++        _row("0050", 55.0, 5.0),  # ETF
++        _row("00679B", 55.0, 5.0),  # ETF(6 位,00 前綴優先)
++        _row("030171", 55.0, 5.0),  # 權證
++        _row("001", 55.0, 5.0),  # 指數 row
++        _row("1234", 55.0, 5.0),  # 普通股
++    ]
++    assert compute_day_limitups(rows) == {"1234"}
++
++
++def test_compute_day_limitups_skips_unusable_rows() -> None:
++    rows: list[dict] = [
++        _row("1111", 5.0, 5.0),  # prev_close = 0 → 不判
++        _row("2222", 5.0, 6.0),  # prev_close < 0 → 不判
++        {"stock_id": "3333", "spread": 5.0},  # 缺 close
++        {"stock_id": "4444", "close": 55.0},  # 缺 spread
++        {"stock_id": "5555", "close": "N/A", "spread": 5.0},  # 非數值
++        {"close": 55.0, "spread": 5.0},  # 缺 stock_id
++    ]
++    assert compute_day_limitups(rows) == set()
++
++
++def test_compute_day_limitups_empty_input() -> None:
++    assert compute_day_limitups([]) == set()
++
++
++# ---------------------------------------------------------------------------
++# compute_prev_streaks —— 新 → 舊 的日集合列表 → 連續漲停日數
++# ---------------------------------------------------------------------------
++
++
++def test_streak_window_days_is_ten() -> None:
++    assert STREAK_WINDOW_DAYS == 10
++
++
++def test_compute_prev_streaks_counts_consecutive_days_from_newest() -> None:
++    # day_sets[0] = 最近可得交易日;A 連 3 日、B 只連最近 2 日
++    day_sets = [{"A", "B"}, {"A", "B"}, {"A"}]
++    assert compute_prev_streaks(day_sets) == {"A": 3, "B": 2}
++
++
++def test_compute_prev_streaks_break_stops_counting() -> None:
++    """中間一日沒漲停 → streak 停在中斷之前,更舊的漲停不得接回去。"""
++    assert compute_prev_streaks([{"A"}, set(), {"A"}]) == {"A": 1}
++
++
++def test_compute_prev_streaks_only_counts_stocks_in_the_newest_day() -> None:
++    """最近日沒漲停的檔(含窗內才上市而缺 row 的檔)完全不入結果 —— 只含 streak ≥ 1。"""
++    assert compute_prev_streaks([{"A"}, {"A", "C"}]) == {"A": 2}
++
++
++def test_compute_prev_streaks_caps_at_window_length() -> None:
++    """streak 上限 = 收到的交易日數(呼叫端據此標 `streak_capped`)。"""
++    day_sets = [{"A"} for _ in range(STREAK_WINDOW_DAYS)]
++    assert compute_prev_streaks(day_sets) == {"A": STREAK_WINDOW_DAYS}
++
++
++def test_compute_prev_streaks_empty_inputs() -> None:
++    assert compute_prev_streaks([]) == {}
++    assert compute_prev_streaks([set()]) == {}
+diff --git a/tests/test_market_breadth.py b/tests/test_market_breadth.py
+index 1967e224..a00ce25a 100644
+--- a/tests/test_market_breadth.py
++++ b/tests/test_market_breadth.py
+@@ -302,11 +302,14 @@ def test_compute_breadth_row_shape() -> None:
+         "stock_id": "2330",
+         "name": "台積電",
+         "market": "twse",
++        "close": 1000.0,
+         "change_rate": 1.5,
+         "volume_ratio": 1.5,
+         "total_amount": 12345,
+         "limit_up": False,
+         "limit_down": False,
++        "touched_limit_up": False,
++        "touched_limit_down": False,
+     }
+     assert out["rows"][1]["name"] == "5483"
+     assert out["rows"][1]["volume_ratio"] is None
+@@ -393,6 +396,135 @@ def test_compute_breadth_no_limit_judgement_when_prev_close_unusable() -> None:
+     assert all(not r["limit_up"] and not r["limit_down"] for r in out["rows"])
+ 
+ 
++# ---------------------------------------------------------------------------
++# compute_breadth — 觸及未鎖(touched)/ close 直通(R3 漲跌停列表)
++# ---------------------------------------------------------------------------
++
++
++def test_compute_breadth_touched_limit_up_when_high_hits_but_close_backs_off() -> None:
++    # prev = 105.0 − 5.0 = 100.0 元 → 漲停 110.0 元;high 摸到但收 105 → 觸及未鎖
++    rows = [
++        {
++            "stock_id": "2330",
++            "change_rate": 5.0,
++            "close": 105.0,
++            "change_price": 5.0,
++            "high": 110.0,
++            "low": 104.0,
++        }
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["touched_limit_up"] is True
++    assert out["rows"][0]["touched_limit_down"] is False
++    assert out["rows"][0]["limit_up"] is False
++    # 家數桶不受 touched 影響(觸及未鎖仍是「上漲」)
++    assert out["twse"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 0}
++
++
++def test_compute_breadth_touched_limit_down_when_low_hits_but_close_backs_off() -> None:
++    # prev = 95.0 + 5.0 = 100.0 元 → 跌停 90.0 元;low 摜到但收 95 → 觸及未鎖
++    rows = [
++        {
++            "stock_id": "6488",
++            "change_rate": -5.0,
++            "close": 95.0,
++            "change_price": -5.0,
++            "high": 99.0,
++            "low": 90.0,
++        }
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["touched_limit_down"] is True
++    assert out["rows"][0]["touched_limit_up"] is False
++    assert out["rows"][0]["limit_down"] is False
++
++
++def test_compute_breadth_touched_is_false_when_already_locked() -> None:
++    """已鎖停板的列不重複算「觸及未鎖」—— 前端狀態歸屬才不會兩個 badge 打架。"""
++    rows = [
++        {
++            "stock_id": "2330",
++            "change_rate": 10.0,
++            "close": 110.0,
++            "change_price": 10.0,
++            "high": 110.0,
++            "low": 105.0,
++        },
++        {
++            "stock_id": "6488",
++            "change_rate": -10.0,
++            "close": 90.0,
++            "change_price": -10.0,
++            "high": 95.0,
++            "low": 90.0,
++        },
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["limit_up"] is True
++    assert out["rows"][0]["touched_limit_up"] is False
++    assert out["rows"][1]["limit_down"] is True
++    assert out["rows"][1]["touched_limit_down"] is False
++
++
++def test_compute_breadth_touched_false_when_high_low_missing() -> None:
++    """舊 fixture / 剪裁快照無 high/low → 兩向皆 False(不得炸,也不得亂猜)。"""
++    rows = [{"stock_id": "2330", "change_rate": 5.0, "close": 105.0, "change_price": 5.0}]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["touched_limit_up"] is False
++    assert out["rows"][0]["touched_limit_down"] is False
++
++
++def test_compute_breadth_touched_needs_exact_milli_equality() -> None:
++    # 漲停 110.0 元;high 109.5(一個整 tick 500 毫之下)→ 不算觸及
++    rows = [
++        {
++            "stock_id": "2330",
++            "change_rate": 5.0,
++            "close": 105.0,
++            "change_price": 5.0,
++            "high": 109.5,
++            "low": 104.0,
++        }
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["touched_limit_up"] is False
++
++
++def test_compute_breadth_touched_false_when_prev_close_unusable() -> None:
++    """前收不可用(change_price 缺)→ 無漲跌停價可比,touched 一律 False。"""
++    rows = [
++        {
++            "stock_id": "2330",
++            "change_rate": 5.0,
++            "close": 105.0,
++            "change_price": None,
++            "high": 110.0,
++            "low": 90.0,
++        }
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["touched_limit_up"] is False
++    assert out["rows"][0]["touched_limit_down"] is False
++
++
++def test_compute_breadth_close_passes_through_including_none() -> None:
++    """`close` 直通 snapshot 原值(前端現價欄);缺值列不得補 0 假裝有價。"""
++    rows = [
++        {"stock_id": "2330", "change_rate": 1.5, "close": 105.0, "change_price": 5.0},
++        {"stock_id": "6488", "change_rate": 1.5, "close": None, "change_price": 5.0},
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert out["rows"][0]["close"] == 105.0
++    assert out["rows"][1]["close"] is None
++
++
+ # ---------------------------------------------------------------------------
+ # SC-1 parity oracle —— 真 FinMind rows,expected 由 neigui 現碼全管線算出
+ # ---------------------------------------------------------------------------

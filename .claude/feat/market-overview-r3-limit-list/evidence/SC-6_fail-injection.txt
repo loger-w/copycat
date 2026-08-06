@@ -1,0 +1,17 @@
+SC-6 失效域隔離(2026-08-06 16:2x,--verify server port 8722 + VERIFY_BREADTH_FAIL=1)
+
+注入:四支 breadth fake 取數齊拋 BreadthFetchError(含本輪新增的第四支 daily prices)。
+
+GET /api/market/breadth/rows(注入下):
+{"enabled":true,"trade_date":null,"as_of":null,"stale":true,"streaks_ready":false,"rows":[]}
+→ stale=true(膠囊)、as_of=null(前端判別子 →「載入中…」— 從未成功的誠實表述,design R18)、
+  streaks_ready=false、rows 空;恆 200 不炸。
+
+TC4 系零波及:
+GET /api/txo/snapshot → 200,fake TXO runtime 正常出 series/spot/curve(見下)
+{"series_id":"TXO.202608","series_name":"TXO 202608","status":"live",...}
+GET /api/index/state → NOT_READY(verify 模式本來就不啟動 index 引擎,與注入無關)
+GET /api/health → 200 {"git_sha":"78a64ea5","git_dirty":false}
+
+pytest 側:tests/server/test_verify.py 的 injects_all_four + feed_the_real_pipeline
+(touched 覆蓋)已鎖同語意(Phase 4 fix 波)。

@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "date": "2026-08-06",
+  "window": "盤後(16:0x–17:2x;日盤 13:30 收盤後)— 各 SC 依 brainstorm 窗外降級策略執行,資料為今日收盤快照(真 FinMind)",
+  "environment": "側車 server port 8723(fake TXO + 真 FinMind 四支 fetcher,零 TC4/ZMQ — 盤中紀律同樣滿足)+ vite dev 5174(proxy 暫指 8723,驗畢已還原 8721)+ --verify server 8722(SC-6 注入)",
+  "results": {
+    "SC-1": "PASS — /api/market/breadth/rows 真資料 1954 列;streaks_ready 過渡態→就緒態皆驗;真值鏈:3081 聯亞 SC-2 獨立 EOD 實跑 prev=4 + 今日鎖板 → 端點 streak=5;6727 prev=4 今日未鎖 → null。evidence: SC-1_rows-first.json / SC-1_rows-ready.json / SC-1_truth-chain.txt",
+    "SC-2": "PASS — 真 FinMind EOD 10 交易日實跑(週末空日正確跳過、每日 41-42k 列),6727/4991 逐日鏈算術人工核對(close == 由前收推得之漲停價,中斷日正確);oracle limitup_all.csv 僅至 07-16(窗外)→ 依 design R12 備援走逐日鏈核對。evidence: SC-2_streak-truth.txt",
+    "SC-3": "PASS — AI 截圖對照(chrome-devtools MCP):收合位置 / 篩選五勾選+三輸入 / 表頭九欄 / 繁中名稱 / 3081「連 5 板」+ badge / 紅漲綠跌 / 即時重濾全中。evidence: SC-3_collapsed.png / SC-3_expanded.png / SC-3_expanded-down-rows.png / SC-3_filtered.png;user 過目待收尾回報",
+    "SC-4": "PASS — F5 後展開態與勾選條件保留(vitest 已鎖 + 截圖 SC-4_after-reload.png)",
+    "SC-5": "PASS(窗外降級)— 點 3081 列 → 個股(期) tab aria-selected + 主圖標的 3081(截圖 SC-5_jump.png);五檔跳動屬盤中限定,留 user 盤中過目(側車 fake TXO 下 /api/stock/* 503 為環境限制)",
+    "SC-6": "PASS — --verify + VERIFY_BREADTH_FAIL=1(四支齊拋):rows 恆 200 {stale:true, as_of:null, rows:[]};/api/txo/snapshot 照常 200(TC4 系零波及)。evidence: SC-6_fail-injection.txt"
+  },
+  "regression_spot_checks": [
+    "家數帶 + 騰落線(R2 功能):側車頁面截圖內數字正常(上市 19/515/99/440/2 上櫃 25/415/93/345/1),/api/market/breadth 全程 200",
+    "TXO snapshot(fake runtime):SC-6 注入下照常出 series/spot/curve",
+    "replay/validate golden gate:42/42 PASS(Phase 5)"
+  ],
+  "console_errors": "無新增(503 為側車不供 TC4 系 route 之預期;既有 duplicate key=0 本輪未觸發)",
+  "notes": "瀏覽器一度被孤兒 chrome-devtools 實例(PID 13592,about:blank)卡住,主 session 清除後重跑成功;claude-in-chrome 擴充因 user Chrome 未開不可用,fallback devtools MCP(memory 記載的 fallback 順位)"
+}

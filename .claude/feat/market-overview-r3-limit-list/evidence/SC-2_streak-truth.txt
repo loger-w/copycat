@@ -1,0 +1,31 @@
+﻿2026-08-05 rows=42074 limitups=77
+2026-08-04 rows=41886 limitups=79
+2026-08-03 rows=41831 limitups=107
+2026-08-02 EMPTY (holiday?)
+2026-08-01 EMPTY (holiday?)
+2026-07-31 rows=41876 limitups=204
+2026-07-30 rows=42076 limitups=5
+2026-07-29 rows=41870 limitups=10
+2026-07-28 rows=41648 limitups=4
+2026-07-27 rows=41451 limitups=20
+2026-07-26 EMPTY (holiday?)
+2026-07-25 EMPTY (holiday?)
+2026-07-24 rows=41231 limitups=14
+2026-07-23 rows=41463 limitups=18
+
+data_end=2026-08-05 span=10 total_streak1+=77 streak2+=23
+top: [('6727', 4), ('4991', 4), ('5351', 4), ('3167', 4), ('2455', 4), ('3006', 4), ('3081', 4), ('3163', 4), ('6274', 4), ('7610', 4)]
+
+=== 6727 streak=4 逐日鏈(新→舊)===
+  2026-08-05: close=407.0 spread=37.0 prev=370.00 漲停價=407.0 LIMIT_UP
+  2026-08-04: close=370.0 spread=33.5 prev=336.50 漲停價=370.0 LIMIT_UP
+  2026-08-03: close=336.5 spread=30.5 prev=306.00 漲停價=336.5 LIMIT_UP
+  2026-07-31: close=306.0 spread=27.5 prev=278.50 漲停價=306.0 LIMIT_UP
+  2026-07-30: close=278.5 spread=-30.5 prev=309.00 漲停價=339.5 -
+
+=== 4991 streak=4 逐日鏈(新→舊)===
+  2026-08-05: close=469.0 spread=42.5 prev=426.50 漲停價=469.0 LIMIT_UP
+  2026-08-04: close=426.5 spread=38.5 prev=388.00 漲停價=426.5 LIMIT_UP
+  2026-08-03: close=388.0 spread=35.0 prev=353.00 漲停價=388.0 LIMIT_UP
+  2026-07-31: close=353.0 spread=32.0 prev=321.00 漲停價=353.0 LIMIT_UP
+  2026-07-30: close=321.0 spread=-35.5 prev=356.50 漲停價=392.0 -

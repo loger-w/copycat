@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "date": "2026-08-06",
+  "findings_summary": {"P0": 0, "P1": 3, "P2": 7},
+  "dispositions": {
+    "R1": "accepted — 四元組波及面逐檔列出(test_breadth_routes/_main_wiring/_verify);== 3 斷言入檔頭該變白名單",
+    "R2": "accepted — §6 補 verify fake 紅測試三條(注入四支/streak 語意/touched 覆蓋)",
+    "R3": "accepted — _STREAK_REQ_GAP_SECS/_STREAK_RETRY_SECS 模組層常數,monkeypatch 為 0;退避驗 sleep 秒數",
+    "R4": "accepted — rows_state 落地綁區域變數(pyright narrowing);禁 type: ignore",
+    "R5": "accepted — 測試路徑改 tests/server/*",
+    "R6": "accepted — key 改 copycat-limit-list-open / copycat-limit-list-filter",
+    "R7": "accepted — to_thread / restore 設 armed_day / arm 三動作 / 快取欄位逐項",
+    "R8": "accepted — 解包 len != 4 防呆 + §10 側車樣板同步",
+    "R9": "accepted — _maybe_arm_streaks 在 try 內 + 例外續行測試",
+    "R10": "accepted — 抽 useBreadthRows hook(hooks/ 慣例)"
+  },
+  "exit": "全數修入 PLAN.md;無 P0 → 進 Phase 3(固定 1 輪不重跑)"
+}

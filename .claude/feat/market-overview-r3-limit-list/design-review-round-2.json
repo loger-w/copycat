@@ -1,0 +1,18 @@
+{
+  "round": 2,
+  "mode": "限縮輪(round 1 accepted P0 觸發;只審 v2 changelog 指向段落)",
+  "reviewer": "design-reviewer (opus)",
+  "date": "2026-08-06",
+  "findings_summary": {"P0": 0, "P1": 5, "P2": 3},
+  "dispositions": {
+    "R13": "accepted — _streak_armed_day 武裝/成功分離,超限同日不再重跑;v3 §3.3",
+    "R14": "accepted — _rows_date 無條件同步 rows,rows_state 判式與 payload trade_date 改用它;v3 §3.3",
+    "R15": "accepted — 06:00 武裝時間閘 + skipped 集合 guard(rows_date ∈ skipped → null)+ KR-1 重寫;v3 §3.3/§8",
+    "R16": "accepted — _DAILY_MIN_ROWS=25000(實測 2026-08-05 單日 42,074 列、普通股 2,334 檔)+ 每日列數 log;v3 §3.3",
+    "R17": "accepted — brainstorm SC-1 amendment(streak/streak_capped + 四元組)",
+    "R18": "accepted — 載入判別子改 as_of sentinel,stale 只管膠囊;v3 §3.4/§5.2",
+    "R19": "accepted — 改動清單補 CLAUDE.md §1 VERIFY_BREADTH_FAIL 三支→四支 + verify.py docstring;v3 §3.3a",
+    "R20": "accepted — BreadthFetchers 第四槽 DailyPricesFetch | None;v3 §3.3a"
+  },
+  "exit": "全數修入 v3;無 P0、無未處置 P1 → 進 Phase 2(限縮輪後不重跑 review)"
+}

@@ -1,0 +1,14 @@
+[
+  {"id": "R1", "severity": "P0", "section": "§3.3 rows_state() / §5.2 連板欄", "problem": "prev_streak 合併只查 _streaks_day == today,未查 rows 的 trade_date;盤前/假日開站 rows = 上一交易日收盤快照(該日已在 streak 內),前端 +1 → 連板數多 1;畫面正常無錯誤訊號。", "suggested_fix": "以 data_end 對比 trade_date 決定 +1 與否,或後端直接算完;補測試。"},
+  {"id": "R2", "severity": "P1", "section": "§3.3 ctor daily_fetch", "problem": "注入點未設計:BreadthFetchers 是三元組(app.py:132),_make_breadth/verify.fake_breadth_fetchers/VERIFY_BREADTH_FAIL 都只涵蓋三支;照字面實作 prod daily_fetch 恆 None → prev_streak 恆 null,與合法降級同形。fake 快照無 high/low → verify 看不到觸及未鎖。", "suggested_fix": "四元組 + DEFAULT 分支 + verify 第四支 fake(含 FAIL 注入)+ fake 快照補 high/low。"},
+  {"id": "R3", "severity": "P1", "section": "§3.3 _compute_streaks_loop", "problem": "today 取樣時點未定義;跨午夜完成的一輪把「以昨日為基準的 streaks」標成新一天,整體少一天且落檔固化。", "suggested_fix": "進場取一次 day,全程同用;收尾不符丟棄重跑;補測試。"},
+  {"id": "R4", "severity": "P1", "section": "§3.3 空回應=假日", "problem": "真交易日回空(未發布/部分故障)被當假日跳過 → 非相鄰日做交集 → streak 高估,落檔固化,無錯誤訊號。", "suggested_fix": "列數健檢(對照 INFO_MIN_ROWS 慣例)+ 快取記 dates + 相鄰間距上限檢查 + 測試。"},
+  {"id": "R5", "severity": "P1", "section": "§3.2 簽名", "problem": "10 日全市場 raw rows(~30 萬 dict)同時常駐 → live server 內數百 MB 峰值,設計零記帳。", "suggested_fix": "逐日縮減成漲停集合即丟 raw rows;純函式吃集合。"},
+  {"id": "R6", "severity": "P1", "section": "§5.2 成交金額", "problem": "total_amount 單位無實證,若千元/張口徑則差 1000 倍靜默。", "resolution": "REFUTED-as-risk / RESOLVED:main agent 以 2026-08-06 12:19 真快照算術實證元口徑(2330:15339 張 × 均價 2375.78 × 1000 ≈ 3.644e10 == 36442215000)。"},
+  {"id": "R7", "severity": "P2", "section": "§3.1 parity 註記", "problem": "「該變」誤指 parity fixture(只比 counts/bucket 不會紅);真正會紅的是 test_compute_breadth_row_shape;record 腳本 _SNAPSHOT_FIELDS 無 high/low。", "suggested_fix": "改指認 + 補白名單(不重錄)。"},
+  {"id": "R8", "severity": "P2", "section": "§5.2 badge/排序", "problem": "多狀態列(觸及漲停後鎖跌停)歸屬未定義;null streak 排序位置未定義。", "suggested_fix": "優先序 limit_up > limit_down > touched;null 視為 -1。"},
+  {"id": "R9", "severity": "P2", "section": "§3.3 換日/start()", "problem": "「task 已結束」對 None 未定義(restore 命中即 None → 永不重算);換日檢查在 _run_cycle 受窗 gate → 盤前連板恆 -。", "suggested_fix": "task is None or task.done();檢查移 _poll_loop 每圈。"},
+  {"id": "R10", "severity": "P2", "section": "§3.3a/§5.2", "problem": "EOD 沿用 30s timeout(backfill 刻意 60s);refetchInterval 無交易時段 gate(既有 hook 慣例是 inHours())。", "suggested_fix": "timeout 參數 60s;refetchInterval 函式形式。"},
+  {"id": "R11", "severity": "P2", "section": "§5.2 封頂文案", "problem": "prev_streak==10 → N=11 卻顯示 10+(少一板);窗收不滿(長假)語意未定義。", "suggested_fix": "後端 capped 旗標 + 前端 N+ 板;收不滿同觸發。"},
+  {"id": "R12", "severity": "P2", "section": "§7 SC-2 / §5.2 空狀態", "problem": "真值抽驗無 oracle 來源(自我對照無效);空 rows 一律「載入中」與三態紀律不一致。", "suggested_fix": "oracle = limitup_all.csv + 人工核對;空+stale 文案分離。"}
+]
