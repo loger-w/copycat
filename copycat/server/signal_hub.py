@@ -848,12 +848,20 @@ class SignalHub:
         return rows
 
     def read_signals(self, trade_date: str) -> list[dict]:
-        """當日 jsonl → row 清單;壞行跳過(半寫入的最後一行不該讓整條端點掛掉)。"""
+        """當日 jsonl → row 清單;壞行跳過(半寫入的最後一行不該讓整條端點掛掉)。
+
+        `errors="replace"` 而非嚴格解碼:半寫入切在中文多位元組序列中間時嚴格解碼丟
+        `UnicodeDecodeError`(ValueError 系,**不在** `except OSError` 內)→ 整個當日檔
+        一起消失,三條消費路(breadth 對帳 seed / today 端點 / 前端自癒)整天壞著。
+        壞位元組換成 U+FFFD 後只有那一行 `json.loads` 失敗、被既有「壞行跳過」吃掉,
+        好行全數保留 —— 把 except 擴成 `(OSError, ValueError)` 則是整檔丟掉,更差
+        (review round-2 HR-1)。
+        """
         path = self._signal_path(trade_date)
         if not path.exists():
             return []
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError as e:
             logger.error("訊號 jsonl 讀取失敗(%s):%s", path, e)
             return []
