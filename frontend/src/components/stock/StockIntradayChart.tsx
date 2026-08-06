@@ -20,15 +20,15 @@ import {
   plotWidth,
   R_AXIS_W,
   sideSummary,
-  X_END_MIN,
+  SPOT_WINDOW,
   X_LABEL_H,
   SUB_TOP_PAD,
-  X_START_MIN,
   Y_AXIS_W,
   type EnergyBar,
   type IntradayGeometry,
   type OverlayLevel,
   type OverlayLine,
+  type XWindow,
 } from "@/lib/stock-intraday-svg";
 import { buildVpBars, VP_FILL_OPACITY, type VpBar } from "@/lib/volume-profile";
 import { cn, safeIdToken } from "@/lib/utils";
@@ -45,8 +45,11 @@ const PRICE_TAG = { w: Y_AXIS_W, h: 14 };
  *  就不畫」靠 `tagSpan` 判定,寫死在 JSX 會讓遮蔽判定與實際寬度脫鉤。 */
 const TIME_TAG = { w: 40, h: 24 };
 
-function barW(width: number): number {
-  return Math.max(1, plotWidth(width) / (X_END_MIN - X_START_MIN) - 0.4);
+/** 量柱寬 = 一分鐘的水平間距減去柱間縫。**分母必須是當前窗的分鐘數**,不是現貨窗的常數
+ *  —— 換窗時漏改這裡的樣態是「柱子照畫、只是與走勢線的分鐘節點對不上」,沒有 assertion
+ *  會紅(同 `minuteToX` / `minuteOf` 共用 `plotWidth` 的理由)。 */
+function barW(width: number, xw: XWindow = SPOT_WINDOW): number {
+  return Math.max(1, plotWidth(width) / (xw.end - xw.start) - 0.4);
 }
 
 /** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
