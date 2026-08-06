@@ -189,19 +189,40 @@ describe("useStockStream", () => {
     expect(hook.result.current.accum?.book?.asks).toEqual([[2_381_000, 4]]);
   });
 
-  it("refetch 期間無 book 推播 → snapshot 的簿原樣採用(F-2 不誤留舊 pending)", async () => {
-    const { hook, ws } = await setup();
-    // 先讓一則 book 進 accum,再跑一次「期間無推播」的 refetch
+  // 🔴 review B-3:這條原本是「先發一則 book(refetching=false),再跑一次期間無推播的
+  // refetch」—— 那則 book **從沒進過 `pendingBookRef`**,所以兩處 `= null` 拿掉它照樣綠,
+  // 是 vacuous。真正危險的路徑是**跨輪殘留**:第一輪 refetch 期間有簿進了 pending、
+  // 該輪卻失敗了,第二輪(重試)期間沒有推播 —— 上一輪的簿若沒被清掉就會蓋掉這一輪
+  // 的 snapshot 簿,把畫面推回一個更舊的狀態,而且零錯誤訊號。
+  it("失敗重試後的 snapshot 簿不被前一輪的 pending 簿蓋回(F-2 跨輪不殘留)", async () => {
+    const hook = renderHook(() => useStockStream("2330"), { wrapper });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    await openAndSettle(hook, ws, 2); // 重試排程的前置:WS 要 open
+
+    vi.useFakeTimers();
+    // refetch#1:in-flight(fetch 已送出 = 後端簿已凍結)期間收到簿 B1 → 進 pending
+    let fail: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { fail = r; }));
+    act(() => ws.emit(T(9))); // 跳號 → refetch#1
     act(() => ws.emit({ type: "book", code: "2330", bids: [[2_379_000, 9]], asks: [[2_381_000, 4]] }));
     expect(hook.result.current.accum?.book?.bids).toEqual([[2_379_000, 9]]);
-    fetchMock.mockImplementationOnce(
-      async () => new Response(JSON.stringify({
-        ...snap(4, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]),
-        book: { bids: [[2_360_000, 2]], asks: [[2_361_000, 2]] },
-      })),
-    );
-    act(() => ws.emit(T(4)));
-    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
+
+    // refetch#2(重試)成功,期間**無**簿推播 → 應原樣採用 snapshot#2 的簿
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({
+      ...snap(10, [TICK1]),
+      book: { bids: [[2_360_000, 2]], asks: [[2_361_000, 2]] },
+    })));
+    await act(async () => {
+      fail(new Response("{}", { status: 503 })); // refetch#1 失敗 → 排重試
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(hook.result.current.accum?.seq).toBe(10);
+    // B1 是**上一輪**的殘留,不得蓋掉這一輪 snapshot 的簿
     expect(hook.result.current.accum?.book?.bids).toEqual([[2_360_000, 2]]);
   });
 
@@ -234,6 +255,22 @@ describe("useStockStream", () => {
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: "2330" }));
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  // 🟢 review B-5:上一條只鎖了正向(**本檔**回補完成 → refetch)。`prev.backfilling`
+  // 與主圖 key 的比對拿掉一樣全綠 —— 而它守的是「別人回補完成不要害我重抓」:自選池
+  // 每檔都會輪到,一天下來是幾十份 MB 級 snapshot 的無謂流量。
+  it("他檔回補完成不觸發主圖 refetch", async () => {
+    const { hook, ws } = await setup();
+    const before = fetchMock.mock.calls.length;
+    act(() => ws.emit({ type: "status", tc4: "up", backfilling: "5483" }));
+    act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
+    // refetch 是非同步的,要等它有機會發生才算數(否則斷言的是「還沒打」)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(fetchMock.mock.calls.length).toBe(before);
+    expect(hook.result.current.status.backfilling).toBeNull();
   });
 
   // 🔴 F-1:`refetch()` 是副作用,不可寫在 `setStatus` 的 updater 內 —— React 的 updater
