@@ -939,6 +939,44 @@ class TestPollLoop:
         finally:
             await engine.close()
 
+    async def test_streaks_armed_outside_window_via_poll_loop(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """**窗外**(06:30,poll 窗 08:55–13:40)照樣武裝 —— 走真的 `start()` + poll loop。
+
+        連板重算刻意排在盤前:`_maybe_arm_streaks()` 在傘罩**內**、窗 gate **外**。
+        直接呼叫 `_maybe_arm_streaks()` 的既有測試驗的是那個方法自己,對「它掛在迴圈的
+        哪一層」零覆蓋 —— 把它移進 `if first or self._in_window():` 之後,連板數會退化成
+        「只有盤中才可能算」,而盤中算出來的是**當天已在漲的**那份,設計上就是錯的。
+
+        mutation 鎖靠時序:起跑時 05:30 < `_STREAK_ARM_TIME`(06:00)→ 首圈那次
+        `first=True` 也武裝不了;等時鐘推到 06:30(仍在窗外)之後,只有窗 gate 之外的
+        呼叫點還會執行 → 移進 gate 內本測試必逾時。
+        """
+        daily = FakeDaily(_calendar({d: ("1101",) for d in _TRADING_DAYS}))
+        engine, snap, _i, _d, clock = _make(
+            tmp_path,
+            daily=daily,
+            clock=Clock(now="05:30:00"),
+            config=BreadthConfig(poll_secs=0.01),
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: snap.calls >= 1)  # 首圈(無條件)已跑過
+            assert engine._streak_armed_day is None  # 05:30 未到武裝時刻
+            assert daily.calls == []
+
+            clock.now = _dt.datetime.fromisoformat(f"{_TRADE_DATE} 06:30:00")
+            await _wait_until(lambda: engine._streaks_day == _TRADE_DATE)
+        finally:
+            await engine.close()
+
+        assert engine._in_window() is False  # 06:30 確實在 poll 窗外
+        assert engine._streak_armed_day == _TRADE_DATE
+        assert daily.calls != []
+        assert engine._streaks == {"1101": 10}
+
     async def test_loop_survives_cycle_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1603,6 +1641,36 @@ class TestRowsState:
         assert state["trade_date"] == _TRADE_DATE
         assert _row_of(state, "1101")["streak"] == 3
         assert _row_of(state, "1101")["streak_capped"] is True  # prev 撞上 span=3
+
+    async def test_previous_session_snapshot_floors_at_one(self, tmp_path: Path) -> None:
+        """`rows_date == data_end` 且該檔不在 streak 表(prev = 0)→ 下界 1(review R3-T2)。
+
+        該日**已在** streak 窗內,所以不 +1;但它自己就是一根漲停,回 0 說不通。
+        `max(prev, 1)` 的下界原本零覆蓋:寫成 `prev` 的 mutation 全綠,而畫面上會是
+        「漲停 0 板」—— 比 null 更誤導(看起來像個真數字)。
+        """
+        _write_streaks_cache(
+            tmp_path,
+            computed_for="2026-08-06",
+            data_end=_TRADE_DATE,
+            dates=[_TRADE_DATE, "2026-08-04", "2026-08-03"],
+            streaks={},  # 1101 不在表內 → prev = 0
+            file_day="2026-08-06",
+        )
+        engine, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(f"{_TRADE_DATE} 13:30:00")),
+            daily=FakeDaily({}),
+            clock=Clock(today="2026-08-06"),
+        )
+        engine._restore_streaks()
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is True
+        assert _row_of(state, "1101")["streak"] == 1
+        assert _row_of(state, "1101")["streak_capped"] is False  # prev 0 < span 3
 
     async def test_uses_rows_date_not_trade_date(self, tmp_path: Path) -> None:
         """`adopt_date=False` 路徑:`_trade_date` 與 rows 脫鉤 → 判式必須用 `_rows_date`。
