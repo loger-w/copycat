@@ -1,0 +1,65 @@
+{
+  "round": 1,
+  "date": "2026-08-06",
+  "stage": "branch-lifecycle 收尾補齊(review-protocol C 節,/bug 一輪 medium)",
+  "diff": "review-diff.txt(f9fff6a0..09a67a91,copycat+tests)",
+  "lenses": [
+    {"id": "A", "focus": "真錢面正確性(分類邊界/抽取等價/執行緒/檔位語意/殘留引用)", "model": "opus"},
+    {"id": "B", "focus": "測試覆蓋(vacuous 斷言/mutation 思想實驗/斷言弱化/邊界缺口)", "model": "opus"}
+  ],
+  "findings": [
+    {
+      "id": "A-1", "severity": "P1", "disposition": "FIXED",
+      "title": "調整後個股期(EE1/CD1,第三碼數字)被結構判別判成選擇權,平倉路無閘可擋",
+      "verify": "主 session 實跑確認 is_option_contract('EE1I6')==True(修前);EE1 存在性由專案 CLAUDE.md §8 調整契約記載佐證",
+      "fix": "9c787d63 [red] + f20fa5bf [green]:第 4 層改連續 ≥2 位數字(履約價必多位)才判選擇權;test_mapping 直接單測 + close EE1I6 失效路徑測試"
+    },
+    {
+      "id": "A-2", "severity": "P1", "disposition": "FIXED",
+      "title": "改價閘漏送單面的單位過濾,ETF 期貨(unit 10000 等 21 檔)被誤套現股 tick 表,合法檔位 400 BAD_TICK",
+      "verify": "主 session 讀 _correct_price_tick_gate 確認無 unit 檢查;ETF 升降單位(<50 0.01 / ≥50 0.05)與現股表分歧屬期交所規格",
+      "fix": "f18d113d [red] + 8d2e6bed [green]:_is_tickable_stkfut 單一判準共用兩閘;送單面語意零變、改價面不合即放行;NYFI6/EEFI6 紅測試",
+      "note": "B-4 同一 finding,合併處置"
+    },
+    {
+      "id": "A-3", "severity": "P2", "disposition": "FIXED",
+      "title": "mapping.py 檔頭「唯一的 IO = 乘數 fallback」宣告漂移(is_option_contract 也查 lookup_product)",
+      "fix": "併入 f20fa5bf(docstring 更正)"
+    },
+    {
+      "id": "A-4", "severity": "P2", "disposition": "ACCEPTED(記帳不修)",
+      "title": "route 層 BAD_TICK 早退繞過 client 審計與總開關次序(B-5 同族)",
+      "rationale": "與送單面既有慣例一致(#28 SC-6 接受的形狀:_stkfut_gates 同樣 route 層先擋無審計);被擋的是未送出的非法價,不構成不可逆動作;屬審計設計面整體問題,已記 docs/next-time.md 2026-08-06 節"
+    },
+    {
+      "id": "B-1", "severity": "P2", "disposition": "FIXED(以 characterization 記帳)",
+      "title": "is_option_contract 三層對現行可達輸入是等價變異,無殺手測試;fixture 裝飾性",
+      "fix": "併入 9c787d63:空表降級時 CDFI6 仍判 False 的 characterization(先斷言 lookup_product('CDF') is None 防 vacuous),把「結構 fallback 是真安全網、lookup 層是快路徑」寫成契約"
+    },
+    {
+      "id": "B-2", "severity": "P2", "disposition": "FIXED",
+      "title": "is_option_contract 無 test_mapping 直接單測,邊界(週選 Put/降級空表)全靠 async 治具間接覆蓋",
+      "fix": "併入 9c787d63:TestIsOptionContract parametrize(含週選 Put TX422000T6)"
+    },
+    {
+      "id": "B-3", "severity": "P2", "disposition": "REFUTED-ACCEPTED",
+      "title": "close 面無 TXO/週選 is_option=True 側測試",
+      "rationale": "finder 自我反駁成立:close 與 submit 共用同一行分流且無 close 專屬轉換層,submit 面 True 側已鎖(TXO/週選各一),邊際價值低"
+    },
+    {
+      "id": "B-4", "severity": "P2", "disposition": "FIXED(併入 A-2)",
+      "title": "同 A-2(ETF 改價誤拒 + docstring scope 不符 + 無測試)"
+    },
+    {
+      "id": "B-5", "severity": "P2", "disposition": "ACCEPTED(記帳不修)",
+      "title": "同 A-4 族(enabled=false 時錯誤碼變化與審計缺行)",
+      "rationale": "同 A-4;CAPITAL_DISABLED 語意未被搶先(TestDisabled 鎖住)"
+    }
+  ],
+  "post_fix_gates": {
+    "pytest": "2420 passed, 1 skipped(exit 0;implementer 跑,主 session spot-check 目標測試 + 分類矩陣重驗)",
+    "ruff": "All checks passed!(exit 0)",
+    "pyright": "0 errors(exit 0,主 session 重跑)"
+  },
+  "exit": "無未處置 P0/P1 → 進 push"
+}
