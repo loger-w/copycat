@@ -1086,19 +1086,28 @@ def create_app(
         breadth: BreadthEngine | None = getattr(request_or_ws.app.state, "breadth", None)
         return breadth
 
+    def _breadth_booted(request_or_ws: Request | WebSocket) -> bool:
+        """boot 序列是否已跑完(`getattr` 預設:lifespan 進場前這個旗標也還不存在)。"""
+        return bool(getattr(request_or_ws.app.state, "boot_done", False))
+
     @app.get("/api/market/breadth")
     async def market_breadth(request: Request) -> dict:
         """**恆 200 三態**(design §6),不用 503:引擎缺席(FINMIND_TOKEN 未設)是合法
         配置而非故障,而前端要把「未設定」「載入中」「有數字」講成三句不同的話 ——
         503 會被 TanStack 的 error 路徑吞成同一種紅色,三者從此不可分辨。
+
+        引擎缺席**又分兩態**(review P2-1):boot 未完成 = 載入中(enabled=true /
+        counts=null),boot 完成仍是 None 才是「未設定」。breadth 排在 boot 序列最後,
+        開站頭幾秒必然落在前者 —— 混講成「未設定」等於每次重啟都閃一次假訊息。
         """
         breadth = _breadth(request)
         if breadth is None:
+            loading = not _breadth_booted(request)
             return {
-                "enabled": False,
+                "enabled": loading,
                 "trade_date": None,
                 "as_of": None,
-                "stale": False,
+                "stale": loading,
                 "counts": None,
                 "series": [],
             }
@@ -1109,6 +1118,19 @@ def create_app(
         breadth = _breadth(websocket)
         await websocket.accept()
         if breadth is None:
+            if not _breadth_booted(websocket):
+                # 載入中:先送一則載入中 scalar 再關,client 退避重連時 boot 已完成
+                # → 屆時拿到的是真狀態或「未設定」,不會與後者同形(review P2-1)
+                await websocket.send_json(
+                    {
+                        "type": "breadth",
+                        "trade_date": None,
+                        "as_of": None,
+                        "stale": True,
+                        "counts": None,
+                        "last_minute": None,
+                    }
+                )
             await websocket.close()
             return
         try:

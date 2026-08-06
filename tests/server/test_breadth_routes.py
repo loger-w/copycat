@@ -18,6 +18,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
+import copycat.server.breadth_engine as be
 from copycat.server.app import create_app
 from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.mis import OtcSnap
@@ -59,6 +60,17 @@ _INFO_ROWS: list[dict] = [
 #: 漲停 1094.5 ≠ 1000.0 故只是上漲。
 _EXPECTED_TWSE = {"limit_up": 1, "up": 1, "flat": 0, "down": 0, "limit_down": 0}
 _EXPECTED_TPEX = {"limit_up": 0, "up": 0, "flat": 0, "down": 0, "limit_down": 1}
+
+
+@pytest.fixture(autouse=True)
+def _fixed_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    """引擎的牆上時鐘釘在今天 10:24(`_STAMP` 的下一分鐘)。
+
+    引擎在 lifespan 內建構 → 這個檔案沒有 `now_fn` 注入點,只能 monkeypatch 模組層的
+    `_now`。不釘的話兩件事會跟著實跑時刻飄:快照時刻超前本機時鐘 10 分鐘以上會被當
+    髒 row 忽略(review P1-2)→ 早上 10:14 之前跑整批紅;窗判定(08:55–13:40)也同理。
+    """
+    monkeypatch.setattr(be, "_now", lambda: _dt.datetime.combine(_TODAY, _dt.time(10, 24)))
 
 
 def _snapshot_rows() -> list[dict]:

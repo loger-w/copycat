@@ -146,6 +146,29 @@ _BREADTH_QUOTES: tuple[tuple[str, float, float, float], ...] = (
 FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
 
 
+#: engine 的分鐘域(`index_engine.minute_key`:0901–1330;1331–1335 clamp 進 1330)。
+#: 域外的時刻不入序列 —— 而 verify server 多半是**盤後**跑的。
+_DOMAIN_START = _dt.time(9, 1)
+_DOMAIN_END = _dt.time(13, 30)
+_CLAMP_TO = _dt.time(13, 0)
+
+
+def _snapshot_stamp(now: _dt.datetime) -> str:
+    """fake 快照時刻:`now` 落在分鐘域外時 clamp 到**當日 13:00**(review SPEC-4)。
+
+    日期一律是當天(`trade_date == today` 才會 append 與落檔,engine design R1);
+    時刻若直接用 `datetime.now()`,盤後跑 verify server 的每一輪都落在域外 → 序列恆空,
+    而那與「序列接線壞掉」在畫面上完全同形 —— verify 的存在理由正是目視這條路。
+    """
+    if _DOMAIN_START <= now.time() <= _DOMAIN_END:
+        stamp = now
+    else:
+        stamp = now.replace(
+            hour=_CLAMP_TO.hour, minute=_CLAMP_TO.minute, second=0, microsecond=0
+        )
+    return stamp.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def fake_breadth_fetchers() -> tuple[
     Callable[[str], list[dict]],
     Callable[[str], list[dict]],
@@ -153,9 +176,10 @@ def fake_breadth_fetchers() -> tuple[
 ]:
     """固定小快照的 breadth 取數三元組(snapshot / stock_info / disposition)。
 
-    快照時刻用**呼叫當下**的 `datetime.now()`:`trade_date == today` 才會 append 與
-    落檔(engine 的 design R1 條件),序列因此會隨輪詢長出格子 —— 用固定日期的話
-    畫面上永遠只有 counts、序列恆空,而那與「序列接線壞掉」長得一模一樣。
+    快照時刻取自**呼叫當下**的 `datetime.now()`,域外 clamp 進盤中(`_snapshot_stamp`):
+    `trade_date == today` 且時刻在分鐘域內才會 append 與落檔(engine 的 design R1/R3
+    條件),序列因此會隨輪詢長出格子 —— 用固定日期或直接用盤後時刻的話,畫面上永遠
+    只有 counts、序列恆空,而那與「序列接線壞掉」長得一模一樣。
     """
 
     def _fail_if_injected() -> None:
@@ -164,7 +188,7 @@ def fake_breadth_fetchers() -> tuple[
 
     def _snapshot(_token: str) -> list[dict]:
         _fail_if_injected()
-        stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stamp = _snapshot_stamp(_dt.datetime.now())
         return [
             {
                 "date": stamp,

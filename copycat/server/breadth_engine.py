@@ -48,6 +48,13 @@ logger = logging.getLogger(__name__)
 _CLIENT_QUEUE_MAX = 32
 #: 對照表(TaiwanStockInfo / 處置股)快取壽命;一天打幾次而已
 _MAP_TTL_SECS = 86_400.0
+#: 對照表取數失敗後的最短重試間隔(quota 失敗改用 `config.quota_backoff_secs`)。
+#: TaiwanStockInfo 是這條路上最重的 endpoint,以 poll 節奏(10s)重打壞掉的上游只會
+#: 加速燒配額,而配額用盡的表現是整個面板跟著死(review P2-4)。
+_MAP_RETRY_SECS = 60.0
+#: 快照時刻可超前本機時鐘的容差;越過即視為髒 row(review P1-2)。10 分鐘 = 遠寬於
+#: FinMind 的正常延遲與本機時鐘偏差,又足以擋掉「收盤時刻 / 未來日期」這類真髒值。
+_TICK_FUTURE_TOLERANCE = _dt.timedelta(minutes=10)
 #: 序列落檔格式版本;不相容改動時 +1(舊檔 restore 直接略過 → 空序列起步)
 _FILE_VERSION = 1
 #: 桶序 = `[limit_up, up, flat, down, limit_down]`,與 types.ts / 前端 x 軸同一份約定
@@ -69,6 +76,16 @@ def _monotonic() -> float:
     即可推進時間,不必真 sleep 30 秒去驗一個門檻。
     """
     return _time.monotonic()
+
+
+def _now() -> _dt.datetime:
+    """`now_fn` 未注入時的本機牆上時鐘(模組層一個名字,與 `_monotonic` 同理由)。
+
+    它同時決定「窗內與否」與「快照時刻的上界」,而 server route 測試沒有 now_fn 的
+    注入點(引擎在 lifespan 內建構)—— 沒有這個名字的話,那些測試會跟著實跑時刻
+    飄:同一份固定快照在 09:00 跑是「未來時刻」、在 11:00 跑是正常值。
+    """
+    return _dt.datetime.now()
 
 
 def _parse_hhmm(value: str) -> _dt.time:
@@ -97,7 +114,7 @@ class BreadthEngine:
         disposition_fetch: DispositionFetch,
         data_dir: Path | None = None,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
-        now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
+        now_fn: Callable[[], _dt.datetime] | None = None,
     ) -> None:
         self._token = token
         self._config = config
@@ -106,7 +123,8 @@ class BreadthEngine:
         self._disposition_fetch = disposition_fetch
         self._data_dir = data_dir if data_dir is not None else _DEFAULT_DATA_DIR
         self._today_fn = today_fn
-        self._now_fn = now_fn
+        # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
+        self._now_fn = now_fn if now_fn is not None else _now
         self._window = (_parse_hhmm(config.window_start), _parse_hhmm(config.window_end))
 
         # ---- scalar 狀態 ----
@@ -128,6 +146,12 @@ class BreadthEngine:
         self._disposition: set[str] = set()
         self._info_at: float | None = None
         self._disp_at: float | None = None
+        #: 上次成功刷新的**交易日**(單調鐘的 24h TTL 不隨換日到期;review P1-3)
+        self._info_day: _dt.date | None = None
+        self._disp_day: _dt.date | None = None
+        #: 取數失敗後的重試不早於此單調時刻(review P2-4)
+        self._info_retry_at: float | None = None
+        self._disp_retry_at: float | None = None
         self._disposition_ok = False
 
         # ---- 節奏 / 失效 ----
@@ -227,56 +251,104 @@ class BreadthEngine:
         return None
 
     async def _refresh_maps(self) -> None:
-        """對照表 24h TTL:**成功才寫入與刷時戳**,失敗保前值、不動時戳 → 下輪即重試。
+        """對照表 24h TTL:**成功才寫入與刷時戳**,失敗保前值 → 退避後重試。
 
         失敗時刷時戳的話,冷啟動那次失敗會把 degraded 鎖死 24 小時(白名單空 →
         家數恆為 0),而每一輪都「成功」地算出一組全零 —— neigui「失敗不寫 cache」
         同語意(design R9)。取數**成功但空表**同樣視為失敗:空對照表會把整個宇宙
-        剃光,跟拿不到沒有差別。
+        剃光,跟拿不到沒有差別(空表不設退避 —— 那是上游回了合法回應,下輪即重試)。
         """
         now = _monotonic()
-        if self._info_at is None or now - self._info_at >= _MAP_TTL_SECS:
+        today = self._today_fn()
+        if self._map_due(self._info_at, self._info_day, self._info_retry_at, now, today):
             await self._refresh_stock_info()
-        if self._disp_at is None or now - self._disp_at >= _MAP_TTL_SECS:
+        if self._map_due(self._disp_at, self._disp_day, self._disp_retry_at, now, today):
             await self._refresh_disposition()
+
+    @staticmethod
+    def _map_due(
+        at: float | None,
+        day: _dt.date | None,
+        retry_at: float | None,
+        now: float,
+        today: _dt.date,
+    ) -> bool:
+        """該不該重取這張對照表。三個條件的**順序即語意**:
+
+        1. 退避中 → 一律不取(失敗剛發生,再打也是同一個壞上游)。
+        2. 上次成功不是今天(含冷啟動 `day is None`)→ 取。TTL 走單調鐘,24h 不隨
+           交易日換 —— 早上 09:00 起的 server 到隔天 09:00 才過期,而處置股名單**每天
+           都變**,那一整個交易日都會沿用昨天的名單(review P1-3)。
+        3. 其餘照 TTL。
+        """
+        if retry_at is not None and now < retry_at:
+            return False
+        if day != today:
+            return True
+        return at is None or now - at >= _MAP_TTL_SECS
+
+    def _map_backoff(self, quota: bool) -> float:
+        return self._config.quota_backoff_secs if quota else _MAP_RETRY_SECS
 
     async def _refresh_stock_info(self) -> None:
         try:
             rows = await asyncio.to_thread(self._stock_info_fetch, self._token)
         except BreadthFetchError as e:
-            logger.warning("breadth stock_info 取數失敗(保留前值,下輪重試):%s", e)
+            wait = self._map_backoff(e.quota)
+            logger.warning("breadth stock_info 取數失敗(保前值,%.0fs 後重試):%s", wait, e)
+            self._info_retry_at = _monotonic() + wait
             return
         except Exception:
-            logger.exception("breadth stock_info 取數非預期失敗(保留前值,下輪重試)")
+            logger.exception(
+                "breadth stock_info 取數非預期失敗(保前值,%.0fs 後重試)", _MAP_RETRY_SECS
+            )
+            self._info_retry_at = _monotonic() + _MAP_RETRY_SECS
             return
         if not rows:
-            logger.warning("breadth stock_info 回空表(保留前值,下輪重試)")
+            logger.warning("breadth stock_info 回空表(保前值,下輪重試)")
             return
         self._sector_map = dedup_sector_map(rows)
         self._type_map = build_type_map(rows)
         self._name_map = build_name_map(rows)
         self._info_at = _monotonic()
+        self._info_day = self._today_fn()
+        self._info_retry_at = None
 
     async def _refresh_disposition(self) -> None:
         today = self._today_fn()
         try:
             rows = await asyncio.to_thread(self._disposition_fetch, self._token, today)
         except BreadthFetchError as e:
-            logger.warning("breadth 處置股取數失敗(以空集合續行,標 degraded):%s", e)
+            # 「保前值」而非「以空集合續行」:前一份名單仍生效,冷啟動時才真的是空集合
+            wait = self._map_backoff(e.quota)
+            logger.warning(
+                "breadth 處置股取數失敗(保前值(冷啟動為空),標 degraded,%.0fs 後重試):%s",
+                wait,
+                e,
+            )
             self._disposition_ok = False
+            self._disp_retry_at = _monotonic() + wait
             return
         except Exception:
-            logger.exception("breadth 處置股取數非預期失敗(以空集合續行,標 degraded)")
+            logger.exception(
+                "breadth 處置股取數非預期失敗(保前值(冷啟動為空),標 degraded,%.0fs 後重試)",
+                _MAP_RETRY_SECS,
+            )
             self._disposition_ok = False
+            self._disp_retry_at = _monotonic() + _MAP_RETRY_SECS
             return
         # 空 list 是合法結果(當下沒有處置中的股票),與 stock_info 的空表不同
         self._disposition = parse_active_disposition(rows, today)
         self._disposition_ok = True
         self._disp_at = _monotonic()
+        self._disp_day = today
+        self._disp_retry_at = None
 
     def _apply(self, rows: list[dict]) -> dict | None:
         """快照 rows → counts / as_of / trade_date / 序列;回傳本輪 append 的那一格。"""
-        dt = max_tick_datetime(rows)
+        # 上界 = 本機時鐘 + 容差:單一列偶發帶著收盤時刻時,`max()` 會讓整份快照的
+        # 時刻被那一列決定,分鐘鍵因此恆定 → 整日序列塌成一格(review P1-2)
+        dt = max_tick_datetime(rows, upper_bound=self._now_fn() + _TICK_FUTURE_TOLERANCE)
         if dt is None:
             # 時刻推不出來就沒有 as_of 也沒有分鐘鍵,硬記會標成錯的時間(design R9)
             logger.warning("breadth 快照無可解析時刻(%d 列),該輪視同失敗", len(rows))
@@ -295,17 +367,36 @@ class BreadthEngine:
             return None
 
         trade_date = dt.date().isoformat()
-        if self._trade_date is not None and self._trade_date != trade_date:
+        today = self._today_fn().isoformat()
+        # 日期變更的三分法(review P1-1)。清序列的條件必須與 append 的條件對稱:
+        # 「與前值不同」就清、但只有「== 今天」才 append —— 兩者不對稱時,一輪拿到
+        # 上一交易日(跨午夜 / 假日重啟 / 上游回舊日)就會把當天已累積的整段序列連同
+        # 落檔一起抹掉,而其後每一輪又都不 append,畫面從此空著且零錯誤訊號。
+        adopt_date = True
+        if self._trade_date is None or trade_date == self._trade_date:
+            pass  # 首次 / 同日:照常
+        elif trade_date == today:
             logger.info("breadth 換日 %s → %s(清當日序列)", self._trade_date, trade_date)
             self._series = {}
+        else:
+            adopt_date = False
+            logger.warning(
+                "breadth 快照日期 %s 既非今日 %s 也非序列日 %s:不採用日期變更(序列保留)",
+                trade_date,
+                today,
+                self._trade_date,
+            )
         counts = {"twse": breadth["twse"], "tpex": breadth["tpex"]}
-        self._trade_date = trade_date
+        if adopt_date:
+            self._trade_date = trade_date
         self._as_of = dt.strftime("%H:%M:%S")
         self._counts = counts
         self.rows = breadth["rows"]
         self._fail_streak = 0
         self._quota = False
         self._last_success = _monotonic()
+        if not adopt_date:
+            return None  # scalar 已更新;序列與落檔一概不動
         return self._append(dt, trade_date, counts)
 
     def _append(
@@ -336,7 +427,10 @@ class BreadthEngine:
             return self._config.poll_secs
         if self._quota:
             return self._config.quota_backoff_secs
-        grown = self._config.poll_secs * (2 ** (self._fail_streak - 1))
+        # 指數**先夾制再取冪**:`2 ** 1999` 是合法 int,但乘上 float 會 OverflowError,
+        # 而那行在 `_poll_loop` 的 `await asyncio.sleep(...)`(傘罩外)→ poll task 當場
+        # 死透、面板只是凍住(review P2-2)。6 已遠超上限所需(10×64 = 640s > 60s)。
+        grown = self._config.poll_secs * (2 ** min(self._fail_streak - 1, 6))
         return min(grown, self._config.backoff_max_secs)
 
     def _in_window(self) -> bool:

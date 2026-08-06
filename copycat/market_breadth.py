@@ -188,12 +188,20 @@ def parse_active_disposition(rows: list[dict], today: _dt.date) -> set[str]:
     return active
 
 
-def max_tick_datetime(rows: list[dict]) -> _dt.datetime | None:
+def max_tick_datetime(
+    rows: list[dict], *, upper_bound: _dt.datetime | None = None
+) -> _dt.datetime | None:
     """snapshot rows 的 `date` 欄最大值 → **台北 naive** datetime;無有效值回 None。
 
     `Z` 尾(UTC ISO)先當 aware UTC 再拉到台北,避免 strip Z 後被當台北時刻而
     產生 8 小時偏移;任何帶 tzinfo 的值一律歸一成台北 naive,否則 `max()` 會在
     aware/naive 混用時拋 TypeError。
+
+    `upper_bound`(台北 naive,**含等值**)= 越過即視為髒 row 忽略:單一列偶發帶著
+    收盤時刻(或未來日期)時,`max()` 會讓整份快照的時刻被那一列決定 —— 呼叫端的
+    分鐘鍵因此恆定,整個交易日的序列塌成一格(同鍵 last-wins),而檔案還在、格式還對,
+    沒有任何錯誤訊號。**歸一成台北 naive 之後才比界**,否則 Z 尾的正常列會被 8 小時
+    偏移判成越界。全部越界 → None(= 該輪無可用時刻,呼叫端視同失敗)。
     """
     parsed: list[_dt.datetime] = []
     for row in rows:
@@ -212,6 +220,8 @@ def max_tick_datetime(rows: list[dict]) -> _dt.datetime | None:
             dt = dt.replace(tzinfo=_dt.timezone.utc)
         if dt.tzinfo is not None:
             dt = dt.astimezone(_TAIPEI_TZ).replace(tzinfo=None)
+        if upper_bound is not None and dt > upper_bound:
+            continue
         parsed.append(dt)
     if not parsed:
         return None
