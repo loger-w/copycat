@@ -205,6 +205,15 @@ class FakeStockSource:
         #: 標 `BarsStatus` 讓「隨手指派一個域外字串」在 pyright 期就被擋下 ——
         #: runtime 的那道防線在 `bars._coerce_status`,兩道各管一半。
         self.bars_status: BarsStatus = "ok"
+        #: Fut2 合約發現(stkfut-contracts SC-1);指派 Exception → 查詢拋(502 路徑)
+        self.stkfut_catalog: dict[str, dict] | Exception = {}
+
+    def list_stock_futures(self) -> dict[str, dict]:
+        """個股期合約清單(真實作 = TC4QuoteSource.list_stock_futures;StockSource
+        Protocol 之外的能力,由 app 以 getattr 接線)。"""
+        if isinstance(self.stkfut_catalog, Exception):
+            raise self.stkfut_catalog
+        return {k: dict(v) for k, v in self.stkfut_catalog.items()}
 
     def fetch_bars_range(
         self, code: str, tf: str, start_date: str, end_date: str

@@ -1,0 +1,399 @@
+{
+ "Reply": "QUERYALLINSTRUMENT",
+ "Success": "OK",
+ "Instruments": {
+  "ENG": "TC4_STF",
+  "CHT": "個股期貨",
+  "CHS": "個股期貨",
+  "EXGID": "",
+  "Node": [
+   {
+    "ENG": "StockFutures",
+    "CHT": "個股期貨",
+    "CHS": "個股期貨",
+    "EXGID": "",
+    "Node": [
+     {
+      "ENG": "HOT",
+      "CHT": "熱門月",
+      "CHS": "热门月",
+      "Contracts": [
+       "TC.F.TWF.SRF.202607",
+       "TC.F.TWF.NYF.202607",
+       "TC.F.TWF.EEF.202607",
+       "TC.F.TWF.EE1.202607",
+       "TC.F.TWF.QFF.202607",
+       "TC.F.TWF.CDF.202607"
+      ],
+      "InstrumentID": [
+       "SRFG6",
+       "NYFG6",
+       "EEFG6",
+       "EE1G6",
+       "QFFG6",
+       "CDFG6"
+      ],
+      "ExpirationDate": [
+       "20260715",
+       "20260715",
+       "20260715",
+       "20260715",
+       "20260715",
+       "20260715"
+      ],
+      "TradeingDays": [
+       "12",
+       "12",
+       "12",
+       "12",
+       "12",
+       "12"
+      ]
+     },
+     {
+      "CHT": "小型元大台灣50(0050)",
+      "CHS": "小型元大台灣50(0050)",
+      "ENG": "小型元大台灣50(0050)",
+      "SYMBOL": "SRF",
+      "Contracts": [
+       "TC.F.TWF.SRF",
+       "TC.F.TWF.SRF.202607",
+       "TC.F.TWF.SRF.202608",
+       "TC.F.TWF.SRF.202609",
+       "TC.F.TWF.SRF.202612",
+       "TC.F.TWF.SRF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       "SRFG6",
+       "SRFH6",
+       "SRFI6",
+       "SRFL6",
+       "SRFC7"
+      ],
+      "ExpirationDate": [
+       null,
+       "20260715",
+       "20260819",
+       "20260916",
+       "20261216",
+       "20270317"
+      ],
+      "TradeingDays": [
+       "0",
+       "12",
+       "37",
+       "57",
+       "118",
+       "182"
+      ]
+     },
+     {
+      "CHT": "元大台灣50(0050)",
+      "CHS": "元大台灣50(0050)",
+      "ENG": "元大台灣50(0050)",
+      "SYMBOL": "NYF",
+      "Contracts": [
+       "TC.F.TWF.NYF",
+       "TC.F.TWF.NYF.202607",
+       "TC.F.TWF.NYF.202608",
+       "TC.F.TWF.NYF.202609",
+       "TC.F.TWF.NYF.202612",
+       "TC.F.TWF.NYF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       "NYFG6",
+       "NYFH6",
+       "NYFI6",
+       "NYFL6",
+       "NYFC7"
+      ],
+      "ExpirationDate": [
+       null,
+       "20260715",
+       "20260819",
+       "20260916",
+       "20261216",
+       "20270317"
+      ],
+      "TradeingDays": [
+       "0",
+       "12",
+       "37",
+       "57",
+       "118",
+       "182"
+      ]
+     },
+     {
+      "ENG": "國喬(1312)",
+      "CHT": "國喬(1312)",
+      "CHS": "國喬(1312)",
+      "ENG_M": "國喬",
+      "CHT_M": "國喬",
+      "CHS_M": "國喬",
+      "SYMBOL": "EEF",
+      "Contracts": [
+       "TC.F.TWF.EEF",
+       "TC.F.TWF.EEF.202607",
+       "TC.F.TWF.EEF.202608",
+       "TC.F.TWF.EEF.202609",
+       "TC.F.TWF.EEF.202612",
+       "TC.F.TWF.EEF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       "EEFG6",
+       "EEFH6",
+       "EEFI6",
+       "EEFL6",
+       "EEFC7"
+      ],
+      "ExpirationDate": [
+       null,
+       "20260715",
+       "20260819",
+       "20260916",
+       "20261216",
+       "20270317"
+      ],
+      "TradeingDays": [
+       "0",
+       "12",
+       "37",
+       "57",
+       "118",
+       "182"
+      ]
+     },
+     {
+      "ENG": "國喬1(1312)",
+      "CHT": "國喬1(1312)",
+      "CHS": "國喬1(1312)",
+      "ENG_M": "國喬1",
+      "CHT_M": "國喬1",
+      "CHS_M": "國喬1",
+      "SYMBOL": "EE1",
+      "Contracts": [
+       "TC.F.TWF.EE1",
+       "TC.F.TWF.EE1.202607",
+       "TC.F.TWF.EE1.202612"
+      ],
+      "InstrumentID": [
+       null,
+       "EE1G6",
+       "EE1L6"
+      ],
+      "ExpirationDate": [
+       null,
+       "20260715",
+       "20261216"
+      ],
+      "TradeingDays": [
+       "0",
+       "12",
+       "118"
+      ]
+     },
+     {
+      "CHT": "小型台積電(2330)",
+      "CHS": "小型台积电(2330)",
+      "ENG": "小型台積電(2330)",
+      "SYMBOL": "QFF",
+      "Contracts": [
+       "TC.F.TWF.QFF",
+       "TC.F.TWF.QFF.202607",
+       "TC.F.TWF.QFF.202608",
+       "TC.F.TWF.QFF.202609",
+       "TC.F.TWF.QFF.202612",
+       "TC.F.TWF.QFF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       "QFFG6",
+       "QFFH6",
+       "QFFI6",
+       "QFFL6",
+       "QFFC7"
+      ],
+      "ExpirationDate": [
+       null,
+       "20260715",
+       "20260819",
+       "20260916",
+       "20261216",
+       "20270317"
+      ],
+      "TradeingDays": [
+       "0",
+       "12",
+       "37",
+       "57",
+       "118",
+       "182"
+      ]
+     },
+     {
+      "CHT": "台積電(2330)",
+      "CHS": "台积电(2330)",
+      "ENG": "台積電(2330)",
+      "SYMBOL": "CDF",
+      "Contracts": [
+       "TC.F.TWF.CDF",
+       "TC.F.TWF.CDF.202607",
+       "TC.F.TWF.CDF.202608",
+       "TC.F.TWF.CDF.202609",
+       "TC.F.TWF.CDF.202612",
+       "TC.F.TWF.CDF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       "CDFG6",
+       "CDFH6",
+       "CDFI6",
+       "CDFL6",
+       "CDFC7"
+      ],
+      "ExpirationDate": [
+       null,
+       "20260715",
+       "20260819",
+       "20260916",
+       "20261216",
+       "20270317"
+      ],
+      "TradeingDays": [
+       "0",
+       "12",
+       "37",
+       "57",
+       "118",
+       "182"
+      ]
+     }
+    ]
+   },
+   {
+    "ENG": "StockFutures(F2)",
+    "CHT": "個股期貨價差",
+    "CHS": "个股期货价差",
+    "EXGID": "",
+    "Node": [
+     {
+      "ENG": "小型台積電(2330)",
+      "CHT": "小型台積電(2330)",
+      "CHS": "小型台积电(2330)",
+      "ENG_M": null,
+      "CHT_M": null,
+      "CHS_M": null,
+      "Contracts": [
+       "TC.F.TWF.QFF.202607.QFF.202608",
+       "TC.F.TWF.QFF.202607.QFF.202609",
+       "TC.F.TWF.QFF.202607.QFF.202612",
+       "TC.F.TWF.QFF.202607.QFF.202703",
+       "TC.F.TWF.QFF.202608.QFF.202609",
+       "TC.F.TWF.QFF.202608.QFF.202612",
+       "TC.F.TWF.QFF.202608.QFF.202703",
+       "TC.F.TWF.QFF.202609.QFF.202612",
+       "TC.F.TWF.QFF.202609.QFF.202703",
+       "TC.F.TWF.QFF.202612.QFF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      "ExpirationDate": [
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      "TradeingDays": [
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0"
+      ]
+     },
+     {
+      "ENG": "台積電(2330)",
+      "CHT": "台積電(2330)",
+      "CHS": "台积电(2330)",
+      "ENG_M": null,
+      "CHT_M": null,
+      "CHS_M": null,
+      "Contracts": [
+       "TC.F.TWF.CDF.202607.CDF.202608",
+       "TC.F.TWF.CDF.202607.CDF.202609",
+       "TC.F.TWF.CDF.202607.CDF.202612",
+       "TC.F.TWF.CDF.202607.CDF.202703",
+       "TC.F.TWF.CDF.202608.CDF.202609",
+       "TC.F.TWF.CDF.202608.CDF.202612",
+       "TC.F.TWF.CDF.202608.CDF.202703",
+       "TC.F.TWF.CDF.202609.CDF.202612",
+       "TC.F.TWF.CDF.202609.CDF.202703",
+       "TC.F.TWF.CDF.202612.CDF.202703"
+      ],
+      "InstrumentID": [
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      "ExpirationDate": [
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      "TradeingDays": [
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0",
+       "0"
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}
