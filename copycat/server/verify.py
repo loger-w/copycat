@@ -10,7 +10,8 @@ prod 的推播)——驗 HTTP 層(route 形狀 / 非行情 endpoint)一律走本
 **FinMind 兩條路刻意分開處置**:`/api/futures/oi-levels` 照舊**真打**(它的驗證價值
 就在那條路上);家數帶(breadth)走本模組的 `fake_breadth_fetchers()` **不打真 FinMind**
 —— 每 10 秒一次的輪詢在驗證期間會持續燒配額,而家數帶要驗的是接線與三態形狀,fake
-固定快照反而讓斷言變成確定值(失敗注入見該函式的 `VERIFY_BREADTH_FAIL`)。
+固定快照反而讓斷言變成確定值(失敗注入見該函式的 `VERIFY_BREADTH_FAIL`)。同理由涵蓋
+第四支 EOD 日線(R3 連板數):真打的話一輪要抓 10 個交易日的全市場日線。
 
 env 壓制的必要性(next-time 2026-08-04):app lifespan 無條件呼叫 `get_capital`,
 CAPITAL_USER_ID 有值(env 或 repo root .env)即載真 SKCOM DLL;DISCORD_BOT_TOKEN 有值
@@ -115,7 +116,7 @@ class FakeTxoSource:
         return None
 
 
-# ---- fake breadth 取數三元組(--verify 模式;market-overview R2 SC-3)----
+# ---- fake breadth 取數四元組(--verify 模式;market-overview R2 SC-3 / R3 SC-1)----
 
 #: `TaiwanStockInfo` 對照列(代號 / 市場別 / 產業別)—— snapshot 的白名單來源。
 _BREADTH_INFO_ROWS: list[dict] = [
@@ -128,19 +129,42 @@ _BREADTH_INFO_ROWS: list[dict] = [
     {"stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "industry_category": "ETF"},
 ]
 
-#: (代號, 收盤, 漲跌價, 漲跌幅%)。1101 前收 10.0 → 漲停 11.0;6488 前收 10.0 →
-#: 跌停 9.0;0050 是 `00` 前綴 → 被 universe filter 剔掉(驗排除路徑也有走到)。
-_BREADTH_QUOTES: tuple[tuple[str, float, float, float], ...] = (
-    ("1101", 11.0, 1.0, 10.0),
-    ("2330", 1000.0, 5.0, 0.5),
-    ("2317", 200.0, 0.0, 0.0),
-    ("2454", 1200.0, -10.0, -0.83),
-    ("6488", 9.0, -1.0, -10.0),
-    ("3105", 80.0, 1.0, 1.27),
-    ("0050", 200.0, 1.0, 0.5),
+#: (代號, 收盤, 漲跌價, 漲跌幅%, 最高, 最低)。1101 前收 10.0 → 漲停 11.0(已鎖);
+#: 6488 前收 10.0 → 跌停 9.0(已鎖);**3105 前收 79.0 → 漲停 86.9,high 摸到但收
+#: 80.0 = 「觸及未鎖」**(R3 列表的第三種狀態,不造這一列就在畫面上看不到那條路);
+#: 0050 是 `00` 前綴 → 被 universe filter 剔掉(驗排除路徑也有走到)。
+_BREADTH_QUOTES: tuple[tuple[str, float, float, float, float, float], ...] = (
+    ("1101", 11.0, 1.0, 10.0, 11.0, 10.2),
+    ("2330", 1000.0, 5.0, 0.5, 1005.0, 990.0),
+    ("2317", 200.0, 0.0, 0.0, 202.0, 199.0),
+    ("2454", 1200.0, -10.0, -0.83, 1215.0, 1195.0),
+    ("6488", 9.0, -1.0, -10.0, 9.9, 9.0),
+    ("3105", 80.0, 1.0, 1.27, 86.9, 79.5),
+    ("0050", 200.0, 1.0, 0.5, 201.0, 199.0),
 )
 
-#: 設成 `"1"` 時三個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
+#: (代號, 收盤, 除權息調整價差)—— `TaiwanStockPrice` 的 EOD 造值,**每個掃描日都回
+#: 同一份**:`prev_close = close − spread`,1101 = 11.0 − 1.0 → 前收 10.0 → 漲停 11.0,
+#: 於是逐日交集後 1101 是唯一的連板檔(其餘皆非漲停)。
+_BREADTH_DAILY: tuple[tuple[str, float, float], ...] = (
+    ("1101", 11.0, 1.0),
+    ("2330", 1000.0, 5.0),
+    ("2317", 200.0, 0.0),
+    ("2454", 1200.0, -10.0),
+    ("6488", 9.0, -1.0),
+    ("3105", 80.0, 1.0),
+    ("0050", 200.0, 1.0),
+)
+
+#: EOD 造值的填充列數。**不是湊數**:`breadth_engine._DAILY_MIN_ROWS`(25,000)把
+#: 「非空但列數過少」判成回應被截斷 → 整輪失敗 → verify server 的連板欄整天 null,
+#: 與「連板管線壞掉」同形。填充列用 6 位權證碼(`classify_stock_id` 會剃掉),只負責
+#: 讓列數像真的全市場單日回應(2026-08-05 實測 42,074 列)。
+#: 門檻的耦合由 `tests/server/test_verify.py` 直接對 `_DAILY_MIN_ROWS` 斷言釘住 ——
+#: 這裡不 import breadth_engine(本模組刻意不拖 fastapi 進 conftest 的 import 路徑)。
+_DAILY_PAD_ROWS = 25_000
+
+#: 設成 `"1"` 時四個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
 #: stale,TC4 系零波及)在**真 server** 上的注入通道;單元測試注入 fake 即可,這條
 #: 是為了在跑著的 verify server 上取證。
 FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
@@ -173,13 +197,17 @@ def fake_breadth_fetchers() -> tuple[
     Callable[[str], list[dict]],
     Callable[[str], list[dict]],
     Callable[[str, _dt.date], list[dict]],
+    Callable[[str, _dt.date], list[dict]],
 ]:
-    """固定小快照的 breadth 取數三元組(snapshot / stock_info / disposition)。
+    """固定小快照的 breadth 取數四元組(snapshot / stock_info / disposition / daily_prices)。
 
     快照時刻取自**呼叫當下**的 `datetime.now()`,域外 clamp 進盤中(`_snapshot_stamp`):
     `trade_date == today` 且時刻在分鐘域內才會 append 與落檔(engine 的 design R1/R3
     條件),序列因此會隨輪詢長出格子 —— 用固定日期或直接用盤後時刻的話,畫面上永遠
     只有 counts、序列恆空,而那與「序列接線壞掉」長得一模一樣。
+
+    第四支(EOD 日線,R3)每個掃描日回同一份造值 → 1101 逐日皆漲停 → 連板數撞到回看
+    窗上限(前端顯示「10+ 板」),`streak_capped` 那條路在 verify 畫面上也走得到。
     """
 
     def _fail_if_injected() -> None:
@@ -196,11 +224,13 @@ def fake_breadth_fetchers() -> tuple[
                 "close": close,
                 "change_price": chg_price,
                 "change_rate": chg_rate,
+                "high": high,
+                "low": low,
                 "total_volume": 1_000,
                 "yesterday_volume": 500,
                 "total_amount": 12_345_000,
             }
-            for sid, close, chg_price, chg_rate in _BREADTH_QUOTES
+            for sid, close, chg_price, chg_rate, high, low in _BREADTH_QUOTES
         ]
 
     def _stock_info(_token: str) -> list[dict]:
@@ -212,4 +242,18 @@ def fake_breadth_fetchers() -> tuple[
         _fail_if_injected()
         return []  # 空 = 當下沒有處置中的股票(合法結果,與取數失敗不同)
 
-    return (_snapshot, _stock_info, _disposition)
+    def _daily_prices(_token: str, day: _dt.date) -> list[dict]:
+        _fail_if_injected()
+        stamp = day.isoformat()
+        rows = [
+            {"date": stamp, "stock_id": sid, "close": close, "spread": spread}
+            for sid, close, spread in _BREADTH_DAILY
+        ]
+        # 填充到全市場量級:低於 `_DAILY_MIN_ROWS` 會被引擎當成回應被截斷 → 整輪失敗
+        rows.extend(
+            {"date": stamp, "stock_id": f"{300000 + i}", "close": 10.0, "spread": 0.0}
+            for i in range(_DAILY_PAD_ROWS)
+        )
+        return rows
+
+    return (_snapshot, _stock_info, _disposition, _daily_prices)
