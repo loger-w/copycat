@@ -1,0 +1,10 @@
+[
+  {"id":"R2-1","severity":"P1","problem":"attach 前的首輪 _apply 會以 hub None 推進狀態機,事件永久假發布","resolution":"accepted — _diff_limit_events 開頭 hub None 早退(不 seed 不推進)(v3 §6.3)"},
+  {"id":"R2-2","severity":"P1","problem":"parity fixture『需再生/口徑含新鍵』與實際比對機制矛盾且不可行","resolution":"accepted — 改寫:limit_judged 為 copycat-only 附加鍵,parity 不比逐鍵、不重錄(v3 §6.1)"},
+  {"id":"R2-3","severity":"P1","problem":"KR-1 前提錯:engine.trade_date 停滯是靜默常見態(空自選/零推播),非可見大故障","resolution":"accepted — today_signals 改讀 {engine日, 本機日} 聯集 + id 去重,KR-1 改寫為殘餘外觀風險(v3 §7)"},
+  {"id":"R2-4","severity":"P2","problem":"market_event_state tuple 回傳與 seed 虛擬碼指派不自洽","resolution":"accepted — unpack 修正(v3 §6.3)"},
+  {"id":"R2-5","severity":"P2","problem":"rows 鍵名是 stock_id 非 code","resolution":"accepted — §6.4 明寫 code = row[\"stock_id\"]"},
+  {"id":"R2-6","severity":"P2","problem":"時間軸單一 cap 200 被 market 族獨佔,chip 過濾後自選清單空","resolution":"accepted — include 模式分族各 cap 再合併(v3 §9.3)+ vitest 案"},
+  {"id":"R2-7","severity":"P2","problem":"today 端點全量無上限,exclude 端整包下載後 client 丟棄","resolution":"accepted — 端點加 ?market= 後端過濾 + 量級記載(v3 §7)"},
+  {"id":"R2-8","severity":"P2","problem":"分鐘域實為 0901–1330 + 1331–1335 clamp,前後緣推論不精確","resolution":"accepted — §6.3/§10 改寫,收盤定盤輪對帳為刻意行為"}
+]

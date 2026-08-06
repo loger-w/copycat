@@ -1,0 +1,15 @@
+[
+  {"id":"R1","severity":"P0","section":"§6 baseline","problem":"換日/開盤 baseline 吞掉開盤即鎖整類事件;盤前殘留分支可產假 open","resolution":"accepted — jsonl 回放 seed latch + 分鐘域 gate(v2 §6)"},
+  {"id":"R2","severity":"P1","section":"§9.3","problem":"useSignalAlerts(toast/beep/桌面通知)未過濾 market kinds","resolution":"accepted — feed/alerts 層過濾(v2 §9.3)"},
+  {"id":"R3","severity":"P1","section":"§9.2/9.3","problem":"mergeSignals cap 200 在過濾前,market 事件擠掉自選訊號","resolution":"accepted — useSignalFeed 過濾參數前置於 cap(v2 §9.2)"},
+  {"id":"R4","severity":"P1","section":"§3","problem":"rows_to_chain_map 缺 sub 的行為與 neigui 不等價(neigui 整列丟)","resolution":"accepted — 忠實照抄 neigui(v2 §3)"},
+  {"id":"R5","severity":"P1","section":"§6","problem":"close/change_price 缺值輪產假 open + price round(None) TypeError 整批消失","resolution":"accepted — rows 加 limit_judged 三態 + 逐筆容錯(v2 §6)"},
+  {"id":"R6","severity":"P1","section":"§6 cooldown","problem":"冷卻中轉移永久遺失,事件流最終狀態可與實況相反","resolution":"accepted — last_emitted 對帳制取代 raw 轉移偵測(v2 §6)"},
+  {"id":"R7","severity":"P1","section":"§7","problem":"hub trade_date 綁 TC4 engine 日別,TC4 停擺時廣度事件寫錯日","resolution":"accepted(部分)— trade_date 由 breadth 顯式傳入 + 不符 warning;today 端點讀日不改,殘餘窗入 Known Risks"},
+  {"id":"R8","severity":"P2","problem":"fake 層在 verify.py 非 __main__;靜態 fake 跑不出轉移","resolution":"accepted — 檔案清單補 verify.py + fake 加可控翻轉"},
+  {"id":"R9","severity":"P2","problem":"chain stale cache 吸收失效注入","resolution":"accepted — verify data_dir 無 chain 檔為前置,量法明寫"},
+  {"id":"R10","severity":"P2","problem":"neigui 端點名錯;422/404 語意錯;sub 空字串歧義","resolution":"accepted — 量法/route 表述修正"},
+  {"id":"R11","severity":"P2","problem":"_rotation/_universe_rows/_chain_map ctor 未初始化 → 首輪前 REST AttributeError","resolution":"accepted — ctor 初始化明寫 + 三態測試案"},
+  {"id":"R12","severity":"P2","problem":"chain fetch 最壞 60s 阻塞 poll loop","resolution":"accepted — 改獨立 task(streak 形狀)"},
+  {"id":"R13","severity":"P2","problem":"kindLabel 未列修改清單,未知 kind 靜默印英文","resolution":"accepted — 修改清單補 kindLabel 兩案"}
+]

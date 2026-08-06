@@ -1,0 +1,13 @@
+[
+  {"id":"R1","severity":"P0","problem":"useSignalFeed 兩模式共用固定 TODAY_KEY → 時間軸 baseline 恆 exclude 版,SC-7 靜默不成立","resolution":"accepted — queryKey 帶模式 + prefix invalidate + 雙掛載紅案;design §9.2 同 key 句改寫"},
+  {"id":"R2","severity":"P1","problem":"_diff_limit_events 傳 _apply 入參 rows(原始快照)會 KeyError 且被逐筆 except 吞","resolution":"accepted — 明寫傳 breadth[\"rows\"],紅案補原始欄位列 → 0 則 + warning"},
+  {"id":"R3","severity":"P1","problem":"verify flip 若用 clamp 後 stamp 分鐘恆不翻;600s 冷卻吃掉逐分鐘翻轉","resolution":"accepted — 牆鐘 minute//11 奇偶(週期 11min > 冷卻 600s),紅案 monkeypatch 牆鐘"},
+  {"id":"R4","severity":"P1","problem":"never-raise / 逐筆容錯無紅案","resolution":"accepted — Task 5/7 紅補失敗注入案"},
+  {"id":"R5","severity":"P2","problem":"engine 紅案斷言不存在的 id 欄","resolution":"accepted — engine 斷 (kind,code,direction,time,touch_count),id 歸 Task 5"},
+  {"id":"R6","severity":"P2","problem":"chain fetch 回空表會洗掉好表,無紅案","resolution":"accepted — 紅補空表不換表不落檔案"},
+  {"id":"R7","severity":"P2","problem":"測試檔名留白/不一致","resolution":"accepted — 填實名 + design §2 對齊 tests/server/"},
+  {"id":"R8","severity":"P2","problem":"gate 與 R3 pattern 不一致;Task 11 active prop 懸空","resolution":"accepted — 含 inTradingHours;Task 11 拿掉 active"},
+  {"id":"R9","severity":"P2","problem":"today 聯集串接順序未定 + 缺同日回歸案","resolution":"accepted — 日期字串升冪串接 + 同日單讀回歸案"},
+  {"id":"R10","severity":"P2","problem":"SC-2/SC-4 側車取證工具無落點","resolution":"accepted — 新 Task 13(evidence 工具,非 TDD)排盤中窗前"},
+  {"id":"R11","severity":"P2","problem":"members 缺 change_rate None 排序 / vol_ratio 缺值兩案","resolution":"accepted — 等價搬 neigui :407-447 兩案"}
+]
