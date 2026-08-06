@@ -25,6 +25,8 @@ class BreadthConfig:
     stale_secs: float = 30.0  # 窗內距上次成功超過此秒數 → state.stale
     backoff_max_secs: float = 60.0  # 連續失敗退避上限(10→20→40→60)
     quota_backoff_secs: float = 300.0  # FinMind 402 配額用盡的退避
+    event_cooldown_secs: float = 600.0  # 市場事件(鎖板/開板)對帳冷卻,抑制邊界抖動
+    chain_ttl_hours: float = 168.0  # 產業鏈對照表快取 TTL(7 天;過期也先用舊表)
 
 
 def load_breadth_config(path: Path = CONFIG_PATH) -> BreadthConfig:
