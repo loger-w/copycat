@@ -15,6 +15,12 @@ WS 廣播。純函式在 `copycat.market_breadth`,取數在 `copycat.server.brea
 **分鐘鍵**沿用 `index_engine.minute_key`(1K 終點標記 floor+1、域 0901–1330、
 1331–1335 clamp):同一頁的指數分時圖用同一把尺,兩張圖的 x 軸才對得起來;域外
 (盤後定盤 14:30、盤前)一律丟棄。
+
+**連板數(R3 design §3.3)**:另有一條每日一次的背景 task —— FinMind EOD 回看
+10 個交易日算連續漲停日數,成果落 `streaks-<today>.json`。與 poll 迴圈共用同一個
+FinMind 失效域(壞了只讓連板欄 null),排程狀態刻意與成果分離:`_streak_armed_day`
+(今日已排程過,不論成敗)決定要不要再起 task,`_streaks_day`(算成功的那個 today)
+決定成果能不能用 —— 兩者合一的話,失敗會讓「嘗試上限」形同虛設(整天重跑燒配額)。
 """
 
 from __future__ import annotations
@@ -29,6 +35,11 @@ from pathlib import Path
 from typing import AsyncGenerator, Callable, TypeGuard
 
 from copycat.breadth_config import BreadthConfig
+from copycat.limit_streaks import (
+    STREAK_WINDOW_DAYS,
+    compute_day_limitups,
+    compute_prev_streaks,
+)
 from copycat.market_breadth import (
     assemble_universe,
     build_name_map,
@@ -63,9 +74,32 @@ _BUCKETS: tuple[str, ...] = ("limit_up", "up", "flat", "down", "limit_down")
 #: 長出第二份 data/,而序列檔「換個地方存」的表現是重啟後序列莫名歸零
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market"
 
+# ---- 連板數(streak)重算 ----
+#: streak 快取格式版本(與序列檔各自獨立;不相容改動時 +1 → 舊檔略過即重算)
+_STREAK_FILE_VERSION = 1
+#: 單日 EOD 的最低列數;**低於此視同取數失敗而非假日**。實測 2026-08-05 全市場單日
+#: 42,074 列(4 位普通股 2,334 檔),門檻取 ~0.6×。部分截斷若被當成假日跳過,那一天
+#: 就從回看窗裡消失 —— 連板數靜默高估,且會被當日快取固化(design R4/R16)。
+_DAILY_MIN_ROWS = 25_000
+#: 06:00 前不武裝:T-1 的 EOD 尚未發布時重算,T-1 會被當假日跳過而該輪**成功**,
+#: 盤中判式仍 +1 → 整天連板數少 1 並落檔固化(design R15)。
+_STREAK_ARM_TIME = _dt.time(6, 0)
+#: 自 day−1 起往回掃的日曆日上限(容得下長假;收不滿即 span < 10,封頂語意照樣成立)
+_STREAK_SCAN_CAL_DAYS = 25
+#: 單一武裝日內的嘗試上限;用完當日放棄(連板欄 null),不整天燒配額
+_STREAK_MAX_ATTEMPTS = 10
+#: 相鄰兩個「收到的交易日」容許的日曆間距上限(春節極端連假 ~9–11 日);超過代表
+#: 中間有整段真交易日被當假日吃掉 → 該輪不採用
+_STREAK_GAP_CAL_DAYS = 12
+#: 逐日 request 間隔 / 重試間隔。**模組層名字**是為了測試 monkeypatch 成 0
+#: (`_monotonic` 同理由):要驗退避不該真的等 60 秒。
+_STREAK_REQ_GAP_SECS = 0.3
+_STREAK_RETRY_SECS = 60.0
+
 SnapshotFetch = Callable[[str], list[dict]]
 StockInfoFetch = Callable[[str], list[dict]]
 DispositionFetch = Callable[[str, _dt.date], list[dict]]
+DailyPricesFetch = Callable[[str, _dt.date], list[dict]]
 
 
 def _monotonic() -> float:
@@ -93,6 +127,17 @@ def _parse_hhmm(value: str) -> _dt.time:
     return _dt.datetime.strptime(value, "%H:%M").time()
 
 
+async def _cancel(task: asyncio.Task[None] | None) -> None:
+    """收攤一條背景 task(poll / streak 同款):cancel 後等它真的結束。"""
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def _is_bucket_row(value: object) -> TypeGuard[list[int]]:
     return (
         isinstance(value, list)
@@ -112,6 +157,7 @@ class BreadthEngine:
         snapshot_fetch: SnapshotFetch,
         stock_info_fetch: StockInfoFetch,
         disposition_fetch: DispositionFetch,
+        daily_fetch: DailyPricesFetch | None = None,
         data_dir: Path | None = None,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
         now_fn: Callable[[], _dt.datetime] | None = None,
@@ -121,6 +167,8 @@ class BreadthEngine:
         self._snapshot_fetch = snapshot_fetch
         self._stock_info_fetch = stock_info_fetch
         self._disposition_fetch = disposition_fetch
+        #: None = 連板數停用(rows 端點照常,`streak` 恆 null)
+        self._daily_fetch = daily_fetch
         self._data_dir = data_dir if data_dir is not None else _DEFAULT_DATA_DIR
         self._today_fn = today_fn
         # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
@@ -135,6 +183,16 @@ class BreadthEngine:
         #: 刻意**不進 `state()`**:本輪對外契約只有 counts + series,四千列 rows
         #: 每 10 秒進一次 REST payload 是純浪費。
         self.rows: list[dict] = []
+        # ---- 連板數:成果 vs 排程(design R13,兩組不可合一)----
+        self._streaks: dict[str, int] = {}
+        self._streaks_day: str | None = None  # 這份成果是為哪個 today 算的
+        self._streaks_end: str | None = None  # 最新資料日(= dates[0])
+        self._streaks_dates: list[str] = []  # 實收交易日(新→舊),供稽核與 span
+        self._streaks_span = 0  # 實收交易日數(= streak 的封頂值)
+        self._streaks_skipped: set[str] = set()  # 掃描中被當假日跳過的日期(R15 guard)
+        self._streak_armed_day: str | None = None  # 今日已排程過(不論成敗)
+        self._streak_task: asyncio.Task[None] | None = None
+        self._streak_attempts = 0  # 武裝日內的嘗試計數
 
         # ---- 當日分鐘序列(分鐘鍵 → point,last-wins)----
         self._series: dict[str, dict] = {}
@@ -165,21 +223,21 @@ class BreadthEngine:
     # ---- 生命週期 ----
 
     async def start(self) -> None:
-        """restore 當日落檔 + 起 poll task。**零網路 IO** —— 首輪 fetch 在 task 上跑,
-        FinMind 慢或掛都不得延後 lifespan(design R6)。"""
+        """restore 當日落檔(序列 + streak)+ 起 poll task。**零網路 IO** —— 首輪 fetch
+        在 task 上跑,FinMind 慢或掛都不得延後 lifespan(design R6)。
+
+        streak task 刻意**不在這裡起**:武裝條件含 06:00 時間閘,交給 `_poll_loop`
+        每圈檢查才只有一處判定(start() 另起一份就會繞過時間閘)。
+        """
         self._restore()
+        self._restore_streaks()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def close(self) -> None:
-        task = self._task
-        self._task = None
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        task, self._task = self._task, None
+        streak, self._streak_task = self._streak_task, None
+        await _cancel(task)
+        await _cancel(streak)
 
     # ---- 對外狀態 ----
 
@@ -222,6 +280,10 @@ class BreadthEngine:
         first = True
         while True:
             try:
+                # 武裝檢查在傘罩**內**、窗 gate **外**:盤前(窗外)也要能重算,而它
+                # 拋例外絕不能殺掉整條 poll task —— 那會讓家數面板為了連板數這條旁支
+                # 凍在最後一則且零錯誤訊號(review R9)。
+                self._maybe_arm_streaks()
                 if first or self._in_window():
                     await self._run_cycle()
             except Exception:
@@ -449,6 +511,249 @@ class BreadthEngine:
         if self._last_success is None:
             return True
         return _monotonic() - self._last_success > self._config.stale_secs
+
+    # ---- 連板數重算(design §3.3)----
+
+    def _maybe_arm_streaks(self) -> None:
+        """今日該不該起重算 task。四個條件缺一不可(順序即語意):
+
+        1. `daily_fetch` 有值 —— None = 連板停用。
+        2. `now >= 06:00` —— T-1 的 EOD 發布餘裕(R15)。
+        3. `_streak_armed_day != today` —— **武裝日不是成功日**:失敗用完 10 次後
+           同日不再重跑(壞上游不整天燒配額),restore 命中也算已武裝(同日重啟不重打)。
+        4. task 不在跑 —— `is None` 分支不可省:restore 命中後換日時 task 從未存在。
+        """
+        if self._daily_fetch is None:
+            return
+        if self._now_fn().time() < _STREAK_ARM_TIME:
+            return
+        today = self._today_fn().isoformat()
+        if self._streak_armed_day == today:
+            return
+        task = self._streak_task
+        if task is not None and not task.done():
+            return
+        # 先清再算:昨日那份留到重算完成之前會被當成今日的答案 → 整段窗口多算一板
+        self._streaks = {}
+        self._streaks_day = None
+        self._streaks_end = None
+        self._streaks_dates = []
+        self._streaks_span = 0
+        self._streaks_skipped = set()
+        self._streak_attempts = 0
+        self._streak_armed_day = today
+        self._streak_task = asyncio.create_task(self._compute_streaks_loop())
+        logger.info("breadth streak 武裝 %s(回看 %d 交易日)", today, STREAK_WINDOW_DAYS)
+
+    async def _compute_streaks_loop(self) -> None:
+        """重試 / 退避 / 上限。成功即結束;用完 `_STREAK_MAX_ATTEMPTS` 當日放棄。
+
+        `except Exception` 是**任務存活邊界**(`_poll_loop` 同款):注入的取數層不保證
+        只丟 `BreadthFetchError`,漏接會讓這條 task 在第一個意外上當場死透,而表現只是
+        連板欄整天 null —— 沒有人會知道它死了。
+        """
+        while self._streak_attempts < _STREAK_MAX_ATTEMPTS:
+            self._streak_attempts += 1
+            wait = _STREAK_RETRY_SECS
+            try:
+                if await self._compute_streaks_once():
+                    logger.info(
+                        "breadth streak %s 完成:%d 檔 / %d 交易日(資料至 %s)",
+                        self._streaks_day,
+                        len(self._streaks),
+                        self._streaks_span,
+                        self._streaks_end,
+                    )
+                    return
+            except BreadthFetchError as e:
+                wait = self._config.quota_backoff_secs if e.quota else _STREAK_RETRY_SECS
+                logger.warning(
+                    "breadth streak 取數失敗(第 %d/%d 次,quota=%s,%.0fs 後重試):%s",
+                    self._streak_attempts,
+                    _STREAK_MAX_ATTEMPTS,
+                    e.quota,
+                    wait,
+                    e,
+                )
+            except Exception:
+                logger.exception(
+                    "breadth streak 重算非預期失敗(第 %d/%d 次,%.0fs 後重試)",
+                    self._streak_attempts,
+                    _STREAK_MAX_ATTEMPTS,
+                    wait,
+                )
+            if self._streak_attempts < _STREAK_MAX_ATTEMPTS:
+                await asyncio.sleep(wait)
+        logger.error(
+            "breadth streak 連續 %d 次未成,當日放棄(連板欄 null,明日再武裝)",
+            _STREAK_MAX_ATTEMPTS,
+        )
+
+    async def _compute_streaks_once(self) -> bool:
+        """單次嘗試:自 `today − 1` 往回掃 → 逐日收成漲停集合 → 交集遞進 → 落檔。
+
+        `today` **進場取樣一次**:掃描起點 / 檔名 / `computed_for` / 收尾檢查全用同一個
+        值,否則跨午夜完成的那一輪會以昨日為基準算出錯值並被快取固化(R3)。
+
+        記憶體紀律(R5):每日 rows 一拿到就收成集合後丟棄 —— 全市場單日 ~3 萬列,
+        10 日全持有是數百 MB 級,live server 內不可接受。
+        """
+        fetch = self._daily_fetch
+        if fetch is None:  # pragma: no cover - 武裝條件已擋掉
+            return False
+        day = self._today_fn()
+        day_sets: list[set[str]] = []
+        dates: list[str] = []
+        skipped: list[str] = []
+        d = day - _dt.timedelta(days=1)
+        floor = day - _dt.timedelta(days=_STREAK_SCAN_CAL_DAYS)
+        while d >= floor and len(day_sets) < STREAK_WINDOW_DAYS:
+            rows = await asyncio.to_thread(fetch, self._token, d)
+            await asyncio.sleep(_STREAK_REQ_GAP_SECS)
+            if not rows:
+                skipped.append(d.isoformat())  # 假日候選(FinMind 對非交易日回空陣列)
+            elif len(rows) < _DAILY_MIN_ROWS:
+                # 部分截斷若被當假日跳過,那一天就從回看窗裡消失 → 連板數靜默高估
+                logger.warning(
+                    "breadth streak %s 只有 %d 列(門檻 %d),視同該日取數失敗 → 整輪重試",
+                    d.isoformat(),
+                    len(rows),
+                    _DAILY_MIN_ROWS,
+                )
+                return False
+            else:
+                logger.info("breadth streak %s:%d 列", d.isoformat(), len(rows))
+                day_sets.append(compute_day_limitups(rows))
+                dates.append(d.isoformat())
+            d -= _dt.timedelta(days=1)
+
+        if not dates:
+            logger.warning(
+                "breadth streak 自 %s 往回掃 %d 日曆日仍無任何交易日資料 → 整輪重試",
+                day.isoformat(),
+                _STREAK_SCAN_CAL_DAYS,
+            )
+            return False
+        for newer, older in zip(dates, dates[1:]):
+            gap = (_dt.date.fromisoformat(newer) - _dt.date.fromisoformat(older)).days
+            if gap > _STREAK_GAP_CAL_DAYS:
+                # 中間有整段真交易日被當成假日吃掉 → 交集遞進會跨過斷層算出高估的 streak
+                logger.warning(
+                    "breadth streak 交易日 %s → %s 間距 %d 日(上限 %d),該輪不採用",
+                    older,
+                    newer,
+                    gap,
+                    _STREAK_GAP_CAL_DAYS,
+                )
+                return False
+
+        streaks = compute_prev_streaks(day_sets)
+        if self._today_fn() != day:
+            logger.warning(
+                "breadth streak 重算期間換日(%s → %s),丟棄本輪結果",
+                day.isoformat(),
+                self._today_fn().isoformat(),
+            )
+            return False
+
+        self._streaks = streaks
+        self._streaks_day = day.isoformat()
+        self._streaks_end = dates[0]
+        self._streaks_dates = dates
+        self._streaks_span = len(dates)
+        self._streaks_skipped = set(skipped)
+        yesterday = (day - _dt.timedelta(days=1)).isoformat()
+        if dates[0] != yesterday:
+            # 昨日若其實是交易日(FinMind 丟資料)→ 盤中判式仍會 +1 而少計一板(KR-1)
+            logger.warning(
+                "breadth streak 最新資料日 %s 不是昨日 %s(昨日若為交易日則連板數少計)",
+                dates[0],
+                yesterday,
+            )
+        self._save_streaks()
+        return True
+
+    def _streaks_path(self, day: str) -> Path:
+        return self._data_dir / f"streaks-{day}.json"
+
+    def _save_streaks(self) -> None:
+        """tmp + `os.replace` 原子寫;失敗只降級(記憶體成果照在,重啟才會重算)。"""
+        day = self._streaks_day
+        if day is None:  # pragma: no cover - 呼叫端已保證有值
+            return
+        path = self._streaks_path(day)
+        payload = {
+            "_version": _STREAK_FILE_VERSION,
+            "computed_for": day,
+            "data_end": self._streaks_end,
+            "dates": self._streaks_dates,
+            "skipped": sorted(self._streaks_skipped),
+            "streaks": self._streaks,
+        }
+        tmp = path.with_name(f"{path.name}.tmp")
+        try:
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as e:
+            logger.warning("breadth streak 落檔失敗(續行):%r", e)
+
+    def _restore_streaks(self) -> None:
+        """讀 `streaks-<today>.json`;**命中即連 `_streak_armed_day` 一併設為 today**。
+
+        那個副作用就是「同日第二次啟動不打 FinMind」的實際機制(SC-2)。形狀 / 版本 /
+        `computed_for` 任一不符一律當沒有(今日重算)—— 半採用一份舊快取會讓連板數
+        整天錯著,而錯的連板數比沒有更糟。
+        """
+        today = self._today_fn().isoformat()
+        path = self._streaks_path(today)
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as e:
+            logger.warning("breadth streak 快取讀取失敗,今日重算:%r", e)
+            return
+        if not isinstance(payload, dict) or payload.get("_version") != _STREAK_FILE_VERSION:
+            logger.warning("breadth streak 快取版本不符,今日重算:%s", path)
+            return
+        if payload.get("computed_for") != today:
+            logger.warning(
+                "breadth streak 快取 computed_for=%s ≠ 今日 %s,不採用",
+                payload.get("computed_for"),
+                today,
+            )
+            return
+        data_end = payload.get("data_end")
+        dates = payload.get("dates")
+        skipped = payload.get("skipped")
+        streaks = payload.get("streaks")
+        if (
+            not isinstance(data_end, str)
+            or not isinstance(dates, list)
+            or not isinstance(skipped, list)
+            or not isinstance(streaks, dict)
+        ):
+            logger.warning("breadth streak 快取形狀不符,今日重算:%s", path)
+            return
+        self._streaks = {
+            k: v
+            for k, v in streaks.items()
+            if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
+        }
+        self._streaks_dates = [d for d in dates if isinstance(d, str)]
+        self._streaks_day = today
+        self._streaks_end = data_end
+        self._streaks_span = len(self._streaks_dates)
+        self._streaks_skipped = {s for s in skipped if isinstance(s, str)}
+        self._streak_armed_day = today
+        logger.info(
+            "breadth streak restore %s:%d 檔 / %d 交易日(資料至 %s)",
+            today,
+            len(self._streaks),
+            self._streaks_span,
+            data_end,
+        )
 
     # ---- 序列落檔 / restore ----
 
