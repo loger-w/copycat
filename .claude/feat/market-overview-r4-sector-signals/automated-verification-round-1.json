@@ -1,0 +1,14 @@
+{
+  "round": 1,
+  "steps": [
+    {"step": "pytest", "command": ".venv\Scripts\python -m pytest -q", "exit_code": 0, "summary": "2518 passed, 1 warning(既有 starlette deprecation)"},
+    {"step": "ruff", "command": ".venv\Scripts\python -m ruff check copycat tests", "exit_code": 0, "summary": "All checks passed"},
+    {"step": "pyright", "command": ".venv\Scripts\python -m pyright", "exit_code": 0, "summary": "0 errors 0 warnings"},
+    {"step": "validate", "command": ".venv\Scripts\python -m copycat validate", "exit_code": 0, "summary": "42/42 PASS"},
+    {"step": "vitest", "command": "npm test (frontend/)", "exit_code": 0, "summary": "1661 passed / 108 files"},
+    {"step": "tsc", "command": "npx tsc -b (frontend/)", "exit_code": 0, "summary": "0 errors"},
+    {"step": "eslint", "command": "npx eslint src (frontend/)", "exit_code": 0, "summary": "0 issues"}
+  ],
+  "all_green": true,
+  "evidence": "evidence/phase5_*.txt"
+}

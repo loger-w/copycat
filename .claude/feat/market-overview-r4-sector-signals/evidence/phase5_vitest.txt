@@ -1,0 +1,183 @@
+﻿
+> copycat-frontend@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 C:/side-project/copycat/frontend
+
+ ✓ src/hooks/useSignalFeed.test.tsx (7 tests) 1593ms
+   ✓ useSignalFeed > today 抓失敗 → signals 空陣列(不 throw,live 訊號照樣進得來)  1093ms
+ ✓ src/hooks/useStockStream.test.ts (22 tests) 1873ms
+ ✓ src/hooks/useBreadth.test.ts (10 tests) 2001ms
+   ✓ useBreadth > WS reconnect onopen → refetch 全量(補回斷線期間漏格)  1170ms
+ ✓ src/components/stock/CandleChart.test.tsx (47 tests) 2891ms
+   ✓ CandleChart 縮放與平移(SC-6.3/6.4) > 縮放下限 20 根、上限 min(total, 700) 根  1638ms
+   ✓ CandleChart 縮放與平移(SC-6.3/6.4) > 拖曳往右平移看更早的資料;拖到左端點即停  335ms
+ ✓ src/components/index/LimitListSection.test.tsx (34 tests) 2990ms
+   ✓ LimitListSection 空狀態(判別子 = as_of) > HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)  1041ms
+   ✓ LimitListSection 空狀態(判別子 = as_of) > 已有資料後 refetch 失敗 → 表格保留,改以「更新失敗」膠囊示警  1066ms
+ ✓ src/components/stock/WatchlistSidebar.test.tsx (55 tests) 3493ms
+   ✓ WatchlistSidebar 管理入口(SC-13 / SC-15) > 載入失敗 → 管理鈕不渲染(EMPTY_WL 上開 Dialog 新增群組會整份 PUT 清空自選)  1035ms
+ ✓ src/App.test.tsx (36 tests) 3386ms
+   ✓ App(index-board T9) > localStorage 記住 index tab,重載復原(review B8)  332ms
+   ✓ App(capital WS 唯一掛載 review B2) > App 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線  751ms
+   ✓ App 個股期合約選擇(SC-4) > 換股重置合約:新股的 snapshot 不帶舊合約  304ms
+ ✓ src/components/index/SectorSection.test.tsx (22 tests) 3711ms
+   ✓ SectorSection 成員層(lazy drill-down) > 成員請求 500 → 成員載入失敗(清單其餘部分照常)  1049ms
+   ✓ SectorSection 降級 > 已有資料後 refetch 失敗 → 清單保留,改以「更新失敗」膠囊示警  1034ms
+   ✓ SectorSection 降級 > HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)  1046ms
+ ✓ src/components/stock/StockChart.test.tsx (28 tests) 3536ms
+   ✓ StockChart 模式切換(SC-7) > 取數失敗顯示「K 線載入失敗」+ 錯誤碼,不崩  1064ms
+   ✓ StockChart 模式切換(SC-7) > 錯誤碼 fallback:body 無 detail.error → 顯示 HTTP_<status>  1051ms
+ ✓ src/components/stock/StockPage.test.tsx (43 tests) 3789ms
+   ✓ StockPage 群組檢視(group-grid SC-3) > 自選載入失敗 → 群組檢視說「自選載入失敗」,不冒充零群組  1063ms
+ ✓ src/components/stock/StkfutLadder.test.tsx (17 tests) 4210ms
+   ✓ StkfutLadder 武裝直送(R2-4) > payload 帶月份 leaf symbol + day_trade 預設 false + 口數  351ms
+   ✓ StkfutLadder 武裝直送(R2-4) > capital wsStatus 轉 closed 自動解除武裝(conn_lost)  439ms
+   ✓ StkfutLadder 武裝解除鍵 = instrumentKey(R2-5) > 換合約月份(股號不變)→ 武裝自動解除  415ms
+   ✓ StkfutLadder 武裝解除鍵 = instrumentKey(R2-5) > 換產品腿(標準 → 小型,股號不變)→ 武裝自動解除  345ms
+   ✓ StkfutLadder 非標準契約單位不開放下單(SC-6) > 單位不可得(後端查無對映)→ 落回股號 fallback  402ms
+   ✓ StkfutLadder 非標準契約單位不開放下單(SC-6) > 標準 / 小型契約單位 → 武裝鈕可用(閘不誤傷)  408ms
+ ✓ src/hooks/useIndexStream.test.ts (4 tests) 1347ms
+   ✓ useIndexStream > WS reconnect → refetch state 全量(F3)  1095ms
+ ✓ src/hooks/useBreadthRows.test.ts (8 tests) 1304ms
+   ✓ useBreadthRows(SC-1) > HTTP 錯誤 → error 終態帶 detail.error 錯誤碼  1081ms
+ ✓ src/components/stock/StockIntradayChart.test.tsx (90 tests) 1392ms
+ ✓ src/components/rail/RightRail.test.tsx (32 tests) 5899ms
+   ✓ RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13) > 個股武裝後切到期貨 context 再切回 → 鈕回到「武裝」  517ms
+   ✓ RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13) > 武裝後切右欄 tab 再切回閃電 → 鈕回到「武裝」  474ms
+   ✓ RightRail 五檔點價接點(W-C1 / R2-5) > 切離閃電 tab 會清掉置中請求(重掛載不重放過期價位;review P2-2)  306ms
+   ✓ RightRail 個股期態 market 貫穿(stkfut-contracts R4) > 現貨態切到合約 → 閃電梯換成合約梯且未武裝(整合面煙霧測試,非 R2-5 鎖)  612ms
+   ✓ RightRail 個股期口數不跨合約(A5) > 換產品腿(標準 ↔ 小型)口數回初值,切回時各自記得自己那格  546ms
+   ✓ RightRail 個股期口數不跨合約(A5) > 切 rail tab 仍不重置(R2-10 既有行為不因分槽而破)  322ms
+   ✓ RightRail 置中請求不跨 instrument(A7a) > 合約態點價置中後切回現貨 → 現股梯掛載時跟隨仍開啟(舊請求已清)  417ms
+   ✓ RightRail 置中請求不跨 instrument(A7a) > 同 instrument re-render 不清(否則每則報價都會把使用者捲回現價)  339ms
+ ✓ src/hooks/useStockBars.test.tsx (18 tests) 1210ms
+   ✓ useStockBars 取數條件 > 錯誤碼依專案契約自 detail.error 解析  1083ms
+ ✓ src/hooks/useStkfutContracts.test.tsx (4 tests) 1262ms
+   ✓ useStkfutContracts > 502 TC4_DOWN 是錯誤,不降級成「沒期貨」  1078ms
+ ✓ src/hooks/useStockNames.test.tsx (5 tests) 6389ms
+   ✓ useStockNames > 404 → error 態帶錯誤碼  1076ms
+   ✓ useStockNames > 啟動窗內連續失敗後應自動復原(不需 focus / remount)  4049ms
+   ✓ useStockNames > body 為合法 JSON null → 退回 HTTP_<status>,不讓 TypeError 逸出  1092ms
+ ✓ src/components/index/MarketPane.test.tsx (30 tests) 1025ms
+ ✓ src/hooks/useFuturesBars.test.ts (9 tests) 1145ms
+   ✓ useFuturesBars(SC-1/2/3) > HTTP 錯誤 → error 帶 detail.error 錯誤碼  1078ms
+ ✓ src/components/index/IndexPage.test.tsx (21 tests) 831ms
+ ✓ src/hooks/useMarketBars.test.ts (6 tests) 1137ms
+   ✓ useMarketBars > HTTP 錯誤 → error 帶 detail.error 錯誤碼  1079ms
+ ✓ src/hooks/useOiLevels.test.ts (3 tests) 1183ms
+   ✓ useOiLevels(SC-11) > HTTP 500 → 不 throw、data 維持 undefined(線消失即降級)  1082ms
+ ✓ src/components/stock/WatchlistManagerDialog.test.tsx (32 tests) 905ms
+ ✓ src/components/stock/GroupGridView.test.tsx (21 tests) 924ms
+ ✓ src/components/futures/FuturesChart.test.tsx (20 tests) 837ms
+ ✓ src/components/OrderPanel.test.tsx (11 tests) 738ms
+ ✓ src/components/futures/FuturesLadder.test.tsx (26 tests) 7431ms
+   ✓ FuturesLadder 武裝直送(SC-8) > 武裝點價:1 次 API call;payload 帶 HOT symbol + day_trade 預設 false  519ms
+   ✓ FuturesLadder 武裝直送(SC-8) > 當沖 checkbox 開啟 → payload day_trade: true  316ms
+   ✓ FuturesLadder 武裝直送(SC-8) > product 變更自動解除武裝(symbol_changed)  385ms
+   ✓ FuturesLadder 武裝直送(SC-8) > capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)  413ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > idle 5 分鐘自動解除  396ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > 送單 400:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除  598ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > 200 但 ok:false(結果未知 code=-1)→ hint 顯示 message 且 failStreak 累積  687ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > qty 快捷「3」按兩下累加 → payload qty 6(review C4)  544ms
+   ✓ FuturesLadder 一鍵平倉(SC-10) > 多筆本契約部位 → 確認後逐筆送出  301ms
+   ✓ FuturesLadder 一鍵平倉(SC-10) > 平倉失敗不動武裝狀態(平倉不是武裝路徑)  524ms
+ ✓ src/hooks/useRiver.test.ts (9 tests) 662ms
+ ✓ src/components/stock/SignalRulesDialog.test.tsx (21 tests) 753ms
+ ✓ src/components/capital/CapitalOrdersList.test.tsx (11 tests) 661ms
+ ✓ src/hooks/useFuturesStream.test.ts (11 tests) 497ms
+ ✓ src/hooks/useCorrelation.test.ts (7 tests) 479ms
+ ✓ src/components/corr/CorrSection.test.tsx (3 tests) 450ms
+   ✓ CorrSection > (c) 展開寫入 localStorage,重新 mount 仍展開  361ms
+ ✓ src/components/index/SignalTimelineSection.test.tsx (15 tests) 666ms
+ ✓ src/hooks/useServerBuild.test.tsx (13 tests) 443ms
+ ✓ src/components/capital/CapitalPositionsList.test.tsx (9 tests) 356ms
+ ✓ src/components/stock/PriceLadder.test.tsx (47 tests) 8950ms
+   ✓ PriceLadder 武裝直送(SC-7) > 武裝點價:1 次 API call + payload 斷言;鈕轉「解除」紅底  336ms
+   ✓ PriceLadder 武裝直送(SC-7) > code 變更自動解除武裝(symbol_changed)  460ms
+   ✓ PriceLadder 武裝直送(SC-7) > Esc 鍵解除武裝  360ms
+   ✓ PriceLadder 武裝直送(SC-7) > capital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入)  488ms
+   ✓ PriceLadder 武裝直送(SC-7) > idle 5 分鐘自動解除  370ms
+   ✓ PriceLadder 武裝直送(SC-7) > 無券(daytrade_sell)鎖買側;賣側照送且 payload 帶 trade_kind  304ms
+   ✓ PriceLadder 武裝直送(SC-7) > qty 快捷同鍵累加 + 手動輸入重置;payload 帶累加後張數  1000ms
+   ✓ PriceLadder 武裝直送(SC-7) > 送單失敗:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除  628ms
+ ✓ src/components/corr/CorrSection.lazy.test.tsx (2 tests) 399ms
+   ✓ CorrSection(lazy 真身) > (b) 展開後真的 mount CorrPage,不是停在 Suspense fallback  378ms
+ ✓ src/hooks/useStockWatchlist.test.tsx (4 tests) 479ms
+ ✓ src/hooks/useSignalRules.test.tsx (9 tests) 331ms
+ ✓ src/hooks/useGroupSnapshots.test.tsx (6 tests) 374ms
+ ✓ src/components/futures/FuturesPage.test.tsx (20 tests) 364ms
+ ✓ src/components/VersionDriftBadge.test.tsx (11 tests) 333ms
+ ✓ src/components/corr/RiverPanel.test.tsx (12 tests) 309ms
+ ✓ src/components/stock/TickTape.test.tsx (9 tests) 210ms
+ ✓ src/components/QuoteTable.test.tsx (5 tests) 79ms
+ ✓ src/components/capital/CapitalConfirmDialog.test.tsx (2 tests) 119ms
+ ✓ src/components/quote/DepthBar.test.tsx (19 tests) 204ms
+ ✓ src/components/corr/CorrPage.test.tsx (2 tests) 92ms
+ ✓ src/components/PnlChart.test.tsx (5 tests) 101ms
+ ✓ src/components/stock/SignalRail.test.tsx (18 tests) 191ms
+ ✓ src/components/stock/OrderBook.test.tsx (30 tests) 313ms
+ ✓ src/hooks/useStockOverlay.test.tsx (2 tests) 157ms
+ ✓ src/components/stock/GroupGridView.memo.test.tsx (2 tests) 106ms
+ ✓ src/components/index/AdvanceDeclineChart.test.tsx (10 tests) 83ms
+ ✓ src/components/index/BreadthBand.test.tsx (11 tests) 89ms
+ ✓ src/components/corr/CorrPanel.test.tsx (10 tests) 82ms
+ ✓ src/lib/candle.test.ts (63 tests) 77ms
+ ✓ src/components/MetricsBar.test.tsx (3 tests) 54ms
+ ✓ src/components/IndexBar.test.tsx (6 tests) 52ms
+ ✓ src/lib/stock-intraday-svg.test.ts (67 tests) 17ms
+ ✓ src/components/ConnectionBadge.test.tsx (5 tests) 41ms
+ ✓ src/lib/fut-chart-mode.test.ts (8 tests) 5ms
+ ✓ src/components/chart/ChartReadout.test.tsx (5 tests) 47ms
+ ✓ src/components/ToastStack.test.tsx (4 tests) 36ms
+ ✓ src/hooks/useTxoSnapshot.test.ts (3 tests) 20ms
+ ✓ src/hooks/useChartToggles.test.ts (12 tests) 32ms
+ ✓ src/components/stock/MiniIntradayChart.test.tsx (11 tests) 45ms
+ ✓ src/hooks/useSignalAlerts.test.tsx (14 tests) 43ms
+ ✓ src/lib/stock-tick.test.ts (25 tests) 11ms
+ ✓ src/hooks/useCapital.test.tsx (14 tests) 47ms
+ ✓ src/lib/sector-model.test.ts (6 tests) 10ms
+ ✓ src/lib/stock-accum.test.ts (25 tests) 8ms
+ ✓ src/hooks/useSignalSound.test.tsx (3 tests) 21ms
+ ✓ src/hooks/useContainerSize.test.tsx (1 test) 15ms
+ ✓ src/lib/watchlist-model.test.ts (31 tests) 7ms
+ ✓ src/lib/river-chart-svg.test.ts (23 tests) 8ms
+ ✓ src/lib/api-error.test.ts (5 tests) 7ms
+ ✓ src/lib/allday.test.ts (19 tests) 7ms
+ ✓ src/lib/futures-ladder.test.ts (16 tests) 7ms
+ ✓ src/lib/candle-viewport.test.ts (23 tests) 7ms
+ ✓ src/lib/ladder-position.test.ts (28 tests) 7ms
+ ✓ src/lib/sha-plugin.test.ts (11 tests) 1849ms
+   ✓ buildShaPlugin(SC-6) > ?since=<舊 sha> → behind true;?since=<HEAD> → behind false  572ms
+   ✓ buildShaPlugin(SC-6) > 每次請求現算(不是註冊時凍結一次)  304ms
+ ✓ src/lib/volume-profile.test.ts (12 tests) 6ms
+ ✓ src/lib/pnl-svg.test.ts (9 tests) 6ms
+ ✓ src/lib/signal-model.test.ts (21 tests) 7ms
+ ✓ src/lib/bollinger.test.ts (9 tests) 5ms
+ ✓ src/lib/oi-levels.test.ts (14 tests) 5ms
+ ✓ src/lib/settlement.test.ts (13 tests) 5ms
+ ✓ src/lib/stkfut.test.ts (20 tests) 6ms
+ ✓ src/lib/chart-extreme.test.ts (16 tests) 5ms
+ ✓ src/lib/stock-search.test.ts (10 tests) 4ms
+ ✓ src/lib/index-chart-svg.test.ts (5 tests) 5ms
+ ✓ src/lib/time-labels.test.ts (6 tests) 4ms
+ ✓ src/lib/version-drift.test.ts (9 tests) 4ms
+ ✓ src/lib/close-order.test.ts (10 tests) 5ms
+ ✓ src/lib/trading-hours.test.ts (7 tests) 4ms
+ ✓ src/lib/format.test.ts (8 tests) 4ms
+ ✓ src/lib/chart-crosshair.test.ts (10 tests) 4ms
+ ✓ src/lib/flash-arm.test.ts (6 tests) 5ms
+ ✓ src/lib/tquote.test.ts (11 tests) 5ms
+ ✓ src/lib/list-drag.test.ts (7 tests) 4ms
+ ✓ src/lib/spot-session.test.ts (5 tests) 3ms
+ ✓ src/lib/signal-bus.test.ts (5 tests) 4ms
+ ✓ src/lib/trade-text.test.ts (8 tests) 3ms
+ ✓ src/lib/chart-frame.test.ts (7 tests) 3ms
+ ✓ src/lib/qty-quick.test.ts (6 tests) 3ms
+
+ Test Files  108 passed (108)
+      Tests  1661 passed (1661)
+   Start at  21:26:46
+   Duration  16.50s (transform 4.01s, setup 0ms, collect 34.75s, tests 89.35s, environment 77.09s, prepare 14.64s)
+

@@ -57,4 +57,6 @@ app = create_app(
     breadth_data_dir=DATA_DIR,
 )
 
-uvicorn.run(app, host="127.0.0.1", port=8723)
+import os  # noqa: E402
+
+uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("SIDECAR_PORT", "8723")))

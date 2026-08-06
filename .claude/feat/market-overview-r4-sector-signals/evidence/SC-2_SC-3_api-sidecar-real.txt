@@ -1,0 +1,19 @@
+=== SC-3/SC-2: /api/market/sector(真 FinMind,盤後快照,側車 8721)===
+trade_date 2026-08-06 as_of 14:59:59 stale False
+industries: 47
+  能源元件 members 29 avg 1.81 subs 3
+  鋼鐵 members 59 avg 1.64 subs 19
+  造紙 members 8 avg 1.59 subs 6
+  印刷電路板 members 92 avg 1.46 subs 10
+  電動車輛產業 members 69 avg 1.23 subs 3
+=== members happy(半導體):264 檔 ===
+  3219 倚強科 10.0
+  3114 好德 9.98
+  6735 美達科技 9.95
+=== edge 1 未知 industry → 404 {"detail":{"error":"SECTOR_NOT_FOUND"}}(實測)===
+=== edge 2 industry 缺席 → 422(實測)===
+=== edge 3 sub 空字串當未指定 → 200(實測)===
+=== SC-2 chain 快取落檔:_version 1 rows 6861 ===
+=== regression R3 rows:1954 列 streaks_ready True ===
+limit_up sample(含 limit_judged):[('3081', '聯亞', True), ('3543', '州巧', True)]
+=== regression R2 breadth:twse {'limit_up': 19, 'up': 515, 'flat': 99, 'down': 440, 'limit_down': 2} tpex {'limit_up': 25, 'up': 415, 'flat': 93, 'down': 345, 'limit_down': 1} ===
