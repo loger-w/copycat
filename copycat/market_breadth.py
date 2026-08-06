@@ -316,6 +316,11 @@ def compute_breadth(
     - rows 另帶 `close`(直通)與 `touched_limit_up` / `touched_limit_down`
       (`high`/`low` 摸到停板但收盤未鎖;缺欄或前收不可用 → False)。touched 不影響
       五桶家數 —— 觸及未鎖仍按 change_rate 分桶。
+    - rows 另帶 `limit_judged` = 「本輪這檔的 limit 旗標是**判定結果**而非缺值
+      預設」。缺值列的 `limit_up` / `limit_down` 恆 False,與「真的沒鎖」同形 ——
+      diff 事件源(`breadth_engine`)靠這鍵整列跳過,缺欄輪才不會產假 open。
+      **copycat-only 附加鍵**:parity oracle 只比 counts + 逐檔桶推導,不做逐鍵
+      dict 比對,fixture 不需重錄。
     - 全空 → `None`(呼叫端視同該輪失敗)。
     """
     counts: dict[str, dict[str, int]] = {
@@ -340,7 +345,11 @@ def compute_breadth(
         limit_down = False
         touched_up = False
         touched_down = False
+        limit_judged = False
+        # 條件寫在 `if` 內(不抽成布林變數再 `if flag:`)—— pyright 只在條件式當場
+        # narrow `close` / `prev_close`,經布林變數轉一手就會退回 `... | None`。
         if prev_close is not None and prev_close > 0 and close is not None:
+            limit_judged = True
             limit_up, limit_down = _is_limit(close, prev_close)
             touched_up, touched_down = _is_touched(r.get("high"), r.get("low"), prev_close)
 
@@ -370,6 +379,7 @@ def compute_breadth(
                 "total_amount": r.get("total_amount"),
                 "limit_up": limit_up,
                 "limit_down": limit_down,
+                "limit_judged": limit_judged,
                 "touched_limit_up": touched_up and not limit_up,
                 "touched_limit_down": touched_down and not limit_down,
             }
