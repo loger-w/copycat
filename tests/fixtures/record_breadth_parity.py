@@ -44,11 +44,16 @@ _TIMEOUT = 60
 _DISPOSITION_LOOKBACK_DAYS = 60
 
 # 欄位剝離白名單 —— 只留純函式層真的讀到的欄
+# `high`/`low` 是 R3 的 touched_limit_* 判定來源(2026-08-06 加入);**本輪不重錄**,
+# 既有 fixture 沒這兩欄 → `_is_touched` 一律回 False,parity oracle 只比 counts 與逐檔
+# bucket 故不受影響。下次重錄才會連 touched 一起覆蓋。
 _SNAPSHOT_FIELDS = (
     "stock_id",
     "close",
     "change_price",
     "change_rate",
+    "high",
+    "low",
     "total_volume",
     "yesterday_volume",
     "total_amount",
