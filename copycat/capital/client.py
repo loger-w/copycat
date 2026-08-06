@@ -39,6 +39,7 @@ from copycat.capital.com import CapitalCom
 from copycat.capital.mapping import (
     exchange_product_of,
     future_price_str,
+    is_option_contract,
     multiplier_of,
     to_futureorder_fields,
     to_stockorder_fields,
@@ -89,9 +90,6 @@ _PENDING_TIMEOUT_S = 8.0
 # reply idx1 期權市場別(cancel/correct/decrease 的 market 交叉驗證用;
 # 證券側用 reply.SEC_MARKETS 同一份)
 _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
-
-# SendFutureOrder 家族;其餘產品(TXO/週選)走 SendOptionOrder
-_FUTURE_PRODUCTS: frozenset[str] = frozenset({"TXF", "MXF", "TMF"})
 
 _WriteReq = (
     StockOrderRequest
@@ -674,8 +672,9 @@ class CapitalClient:
         fut_account = self._futures_account
         if gate.allowed and fut_account is None:
             gate = GateResult(False, "no_futures_account")
-        # 分流判準:期貨家族 {TXF, MXF, TMF} 走 SendFutureOrder,其餘(TXO/週選)期權面
-        is_option = exchange_product_of(contract) not in _FUTURE_PRODUCTS
+        # 分流判準收在 mapping(單一定義):指數期貨/個股期走 SendFutureOrder,
+        # 選擇權(TXO/週選)走 SendOptionOrder;未知產品以契約碼結構判別
+        is_option = is_option_contract(contract)
         # market+ROD → mapping 強制 IOC;升級註記由 client 組進 message(review R6)
         prefix = (
             "市價單已升級 IOC;"
