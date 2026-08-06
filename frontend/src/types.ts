@@ -250,6 +250,36 @@ export interface OiLevelsResponse {
   strikes: OiStrikeRow[]; // strike 升冪
 }
 
+// ---- 全市場家數帶 / 騰落線(對應 copycat/server/breadth_engine.py;market-overview R2)----
+
+/** 一格分鐘的五桶計數,桶序固定 `[limit_up, up, flat, down, limit_down]`
+ *  —— 與後端 `_series_list()` 同一份順序,前端不得重排。 */
+export type BreadthBuckets = [number, number, number, number, number];
+
+/** 當下家數(scalar);上市 / 上櫃各一組。 */
+export interface BreadthCounts {
+  twse: { limit_up: number; up: number; flat: number; down: number; limit_down: number };
+  tpex: { limit_up: number; up: number; flat: number; down: number; limit_down: number };
+}
+
+/** 序列一格。`t` = 台北分鐘鍵 `HHMM`(終點標記,域 0901–1330,與指數分時圖同語意)。 */
+export interface BreadthPoint {
+  t: string;
+  twse: BreadthBuckets;
+  tpex: BreadthBuckets;
+}
+
+/** `GET /api/market/breadth` 全量(恆 200 三態):
+ *  `enabled=false` = FinMind 未設定 / 引擎缺席;`enabled=true` 且 `counts=null` = 載入中。 */
+export interface BreadthState {
+  enabled: boolean;
+  trade_date: string | null;
+  as_of: string | null; // HH:MM:SS
+  stale: boolean;
+  counts: BreadthCounts | null;
+  series: BreadthPoint[];
+}
+
 /** 每秒增量:各腿最後寫入的那一分鐘;該腿本場尚無 live 點 → null。 */
 export interface RiverDelta {
   type: string; // "river_delta"
