@@ -78,6 +78,8 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  // 用了 fake timers 的測試不還原會外溢到別檔(skill frontend-testing)
+  vi.useRealTimers();
 });
 
 async function setup() {
@@ -287,6 +289,73 @@ describe("useStockStream", () => {
     act(() => ws.emit({ type: "watchlist_changed" }));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith({ queryKey: ["stock-watchlist"] });
+  });
+
+  // 🔴 F-3:`refetch` 非 2xx 只有一個沒有 else 的 `if (res.ok)`,throw 只 console.warn ——
+  // 兩路都不改 accum(留 null)、不設錯誤態、不排重試。而 `accum === null` 時 tick 早退
+  // → seq-gap 自癒也是死路,唯一活路是 WS onopen(沒斷線就不會發)。#28 的 `?contract=`
+  // 讓 502/503 從正常操作可達 → 畫面釘在「載入中…」直到使用者自己重整。
+  //
+  // fake timers 下不可用 `waitFor`(vitest 的 fake timers 它偵測不到,會退回真 interval
+  // 而 timeout,skill frontend-testing)→ 一律 `advanceTimersByTimeAsync` + 同步斷言。
+  it("refetch 503 → backoff 重試,成功後 accum 就緒(F-3)", async () => {
+    const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
+      initialProps: { c: "2330" },
+      wrapper,
+    });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    await act(async () => { ws.onopen?.(); }); // WS open 是排程重試的前置條件之一
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+
+    vi.useFakeTimers();
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ detail: { error: "TC4_DOWN" } }), { status: 503 }),
+    );
+    hook.rerender({ c: "5483" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(hook.result.current.accum).toBeNull(); // 503 → 畫面上就是「載入中…」
+    const calls = fetchMock.mock.calls.length;
+
+    // 第一段 backoff = 1s
+    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    expect(fetchMock.mock.calls.length).toBe(calls);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(fetchMock.mock.calls.length).toBe(calls + 1);
+    expect(String(fetchMock.mock.calls[calls]?.[0])).toBe("/api/stock/state/5483");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(hook.result.current.accum).not.toBeNull(); // 自癒,不必使用者重整
+  });
+
+  // 同一條的另一半:切檔要取消還沒打出去的重試。沒取消的話舊 timer 到期時 `refetch()`
+  // 讀的是**當下**的 ref → 對新標的多打一份全量 snapshot(而且與正牌重試同一 tick)。
+  it("切檔取消 pending 重試(1s 後只有新標的自己的那一次)", async () => {
+    const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
+      initialProps: { c: "2330" },
+      wrapper,
+    });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    await act(async () => { ws.onopen?.(); });
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+
+    vi.useFakeTimers();
+    // (a) 2330 的 refetch 失敗 → 排一次重試
+    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 503 }));
+    act(() => ws.emit(T(9))); // 跳號 → refetch
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    // (b) 重試到期前切檔,新標的的初次 fetch 也失敗 → 它自己排一次
+    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 503 }));
+    hook.rerender({ c: "5483" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const before = fetchMock.mock.calls.length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(fetchMock.mock.calls.length).toBe(before + 1); // 舊 timer 沒取消 = 這裡變 +2
+    expect(String(fetchMock.mock.calls[before]?.[0])).toBe("/api/stock/state/5483");
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(hook.result.current.accum).not.toBeNull();
   });
 
   it("WS onopen 發 ws-open 事件(斷線期間漏掉的訊號靠它自癒回補)", async () => {
