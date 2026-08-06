@@ -15,6 +15,7 @@ import pytest
 
 import copycat.capital.factory as _capital_factory
 import copycat.server.discord_bot as _discord_bot
+import copycat.server.finmind_token as _finmind_token
 from copycat.server.verify import CAPITAL_ENV_KEYS, DISCORD_ENV_KEYS
 
 # TC4 官方 wrapper(spikes/TCPY)不在版控(.gitignore:9)→ 乾淨 checkout 與新 worktree
@@ -51,8 +52,8 @@ def _neutralize_discord_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_discord_bot, "_dotenv_cache", None)
 
 
-#: FinMind(oi_levels)是第四條外部 IO 出口。key 名在此重述一份而不 import 常數:
-#: `copycat.server.oi_levels` 會拉進 fastapi,而 conftest 是**每一條測試**都載的模組
+#: FinMind(finmind_token)是第四條外部 IO 出口。key 名在此重述一份而不 import 常數:
+#: 那是新模組的私有名,測試基建不該綁它的內部符號
 #: (verify.py 檔頭同一條理由:不讓 [live] extras 變成整套測試的硬依賴)。
 FINMIND_ENV_KEY = "FINMIND_TOKEN"
 
@@ -66,13 +67,9 @@ def _neutralize_finmind_env(monkeypatch: pytest.MonkeyPatch) -> None:
     隨上游資料變動(失效樣態是偶發紅,最難查的那一種)。
     需要 token 的測試自行 `monkeypatch.setenv`(或直接把 token 當引數傳)。
 
-    模組 import 延到 fixture 內:見 `FINMIND_ENV_KEY` 註解;[live] extras 未裝的環境
-    根本沒有這條出口,ImportError 即無事可中和。
+    patch 目標是 `finmind_token`(token 解析的唯一一份;stdlib-only 故可頂層 import,
+    不會把 fastapi 拉進每一條測試)—— 消費端(oi_levels / breadth)不必逐一中和。
     """
     monkeypatch.delenv(FINMIND_ENV_KEY, raising=False)
-    try:
-        import copycat.server.oi_levels as _oi_levels
-    except ImportError:
-        return
-    monkeypatch.setattr(_oi_levels, "_dotenv_values", lambda: {})
-    monkeypatch.setattr(_oi_levels, "_dotenv_cache", None)
+    monkeypatch.setattr(_finmind_token, "_dotenv_values", lambda: {})
+    monkeypatch.setattr(_finmind_token, "_dotenv_cache", None)
