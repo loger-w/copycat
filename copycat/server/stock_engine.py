@@ -647,7 +647,12 @@ class StockEngine:
         assert self._pending_date is not None
         self._trade_date = self._pending_date
         self._pending_date = None
-        for state in self._states.values():
+        # **快照後迭代**:`_acquire` 在 executor thread 對 `_states` setdefault 新鍵
+        # (自選新增 / 重試輪 / stkfut 腿隨時可能發生),直接迭代 `.values()` 撞上就是
+        # RuntimeError —— 迴圈之後的每一步(記帳清空、主圖重回補、hub 的 on_rollover)
+        # 全部不跑,而 `_pending_date` 已在上一行清掉 → 這一天不會再有第二次 stage2。
+        # 同 `quotes()` 的 R16(那裡顯式辨識過這條 hazard,這裡是漏網的第二處)。
+        for state in list(self._states.values()):
             state.reset()
         self._no_data.clear()
         # 回補記帳是**日別**語意:不清的話「今日已回補」會沿用昨天的判斷,新的一天
