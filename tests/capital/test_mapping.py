@@ -6,8 +6,13 @@ FUTUREORDER 用欄依 Task 0 spike 定案(docs/research/2026-07-28-skcom-typelib
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
+import copycat.stkfut_map as stkfut_map
+from copycat.stkfut_map import write_map
 from copycat.capital.mapping import (
     exchange_product_of,
     multiplier_of,
@@ -272,6 +277,58 @@ def test_multiplier_of_weekly_family_is_50(product: str) -> None:
 def test_multiplier_of_unknown_raises() -> None:
     with pytest.raises(ValueError):
         multiplier_of("ZZZ")
+
+
+class TestMultiplierStkfutFallback:
+    """個股期乘數 = 契約單位(股數),來源是版控的 stkfut 對映表(SC-2)。
+
+    沒有這條 fallback,個股期送單在 `multiplier_of` 就 400 —— 而那個錯誤碼
+    (INVALID_ORDER)完全指不到真因「乘數表沒有這個產品」。
+    """
+
+    def _map(self, tmp_path: Path) -> Path:
+        path = tmp_path / "map.json"
+        write_map(
+            path,
+            {
+                "2330": {
+                    "prod": "CDF",
+                    "name": "台積電",
+                    "unit": 2000,
+                    "mini": {"prod": "QFF", "unit": 100},
+                },
+                "1234": {"prod": "BBF", "name": "壞單位", "unit": 0, "mini": None},
+            },
+        )
+        return path
+
+    def test_standard_and_mini_units(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", self._map(tmp_path))
+        assert multiplier_of("CDF") == 2000
+        assert multiplier_of("QFF") == 100
+
+    def test_known_products_still_win(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", self._map(tmp_path))
+        assert multiplier_of("TXF") == 200
+
+    def test_bad_unit_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """查得到但單位 ≤0 → ValueError(→400):乘數是名目金額閘的分母,猜不得。"""
+        monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", self._map(tmp_path))
+        with pytest.raises(ValueError):
+            multiplier_of("BBF")
+
+    def test_stale_map_version_degrades_to_unknown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """對映檔版本不符 → load_map 回空 → 個股期一律拒單(不是靜默用錯乘數)。"""
+        path = tmp_path / "map.json"
+        path.write_text(
+            json.dumps({"_cache_version": 1, "map": {"2330": {"prod": "CDF", "name": "台積電"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", path)
+        with pytest.raises(ValueError):
+            multiplier_of("CDF")
 
 
 @pytest.mark.parametrize(
