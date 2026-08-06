@@ -15,6 +15,7 @@ User-global `~/.claude/CLAUDE.md` 的鐵則(觀察優先 / Scope / 測試 / 證�
 - Read-only 看盤,直到 §7 路徑明確開啟。
 - **個股 + 族群「純看盤」即時監控不在這個專案** — 那塊 use case 純 FinMind 一條線就完成且不要 Windows + Touchance 常駐,**回到 neigui(前 trash-cmoney)擴展**(2026-06-26 第三次釐清後分離)。
   - **例外(2026-07-06)**:分點盤中行為指紋辨識(鎖漲停攻擊手法 / 鎖板品質評分 / T+1 出貨劇本判別,見 §0a)**不受此排除限制**——排除理由是「純 FinMind 就做得到,不需要 Windows + Touchance 常駐」,但這塊工作的核心訊號(每分鐘內外盤張數、逐筆 Bid/Ask、鎖板前後量能結構)**FinMind 完全沒有**,必須靠 Touchance tick / 1K 才拿得到,原排除理由在此不成立,因此留在 copycat。
+  - **例外(2026-08-06)**:**全市場廣度掃描**(漲跌家數 / 漲跌停列表 / 類股強弱,台股綜合 tab R2 起,走 **FinMind** 全市場快照)**不受此排除限制**——排除理由是「純 FinMind 就做得到,不需要 Windows + Touchance 常駐」,但這塊是**台股綜合 tab 的一環**,與同頁的 TC4 指數 / 期指 / 個股深度即時互補(FinMind 廣度發現 → TC4 深度盯盤一鍵銜接,總 spec 2026-08-05 D-1 拍板),單獨拆去 neigui 反而是把一頁看盤拆成兩個 app,原排除理由在此不成立,因此留在 copycat。總 spec:`docs/superpowers/specs/2026-08-05-taiwan-market-overview-tab-spec.md`。
 - 「Mr Warrant」= 權證小哥 reference,場景偏 **權證 + 選擇權 trader workflow**(純現貨個股 / 族群監控不在此 scope,在 neigui;分點行為指紋辨識例外,見上)。
 - 目錄結構待專案啟動後填(預期跟 neigui 同樣 backend/ + frontend/ 分離,但不強制)。
 
@@ -89,7 +90,14 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   期指近全 K 線(2026-08-05):/api/market/bars 加 ?session=
 │                         #   allday(夜盤貫通,三層 keyword-only 貫穿 route→engine→source;
 │                         #   cache 鍵複合 code:session;預設 day = 大盤 tab 行為不變)
+│                         #   breadth_engine(FinMind 全市場家數 poller,2026-08-06:10s poll/
+│                         #   盤中窗/當日序列落檔 data/market/、失敗退避;REST /api/market/breadth
+│                         #   + WS /ws/breadth)、breadth_fetch(三支 FinMind dataset 取數 +
+│                         #   錯誤分類 quota)、finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算;tick_size_milli 毫元版)
+├── market_breadth.py     #   全市場廣度純函式(2026-08-06,零 IO):universe 過濾 / 五桶家數 /
+│                         #   毫元漲跌停判定;neigui 搬移,parity oracle fixture 對照
+├── breadth_config.py     #   家數帶門檻(configs/breadth.json 覆寫:poll 間隔 / 盤中窗 / 退避)
 ├── signals_config.py     #   訊號門檻(configs/signals.json 覆寫;檔缺=全預設、壞檔 raise)
 ├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
 │                         #   URL 未設 no-op、429 Retry-After 重試一次、never-raise;stdlib urllib。
@@ -137,7 +145,9 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
 - 這個 repo 一啟動就被 Windows 綁住(scope 純 Touchance),Linux Docker 不在規劃內。
 
 `.env` 需要的 secret:
-- `FINMIND_TOKEN`(沿用 trash-cmoney,補期貨 / 選擇權 chip 用)
+- `FINMIND_TOKEN`(沿用 trash-cmoney,補期貨 / 選擇權 chip 用;實際用途 = oi-levels TXO OI 撐壓
+  + 台股綜合 tab 家數帶 breadth。未設 → breadth 引擎停用、家數帶顯示「FinMind 未設定」,
+  其餘功能不受影響)
 - `DISCORD_WEBHOOK_URL`(Discord 通知,選配;未設時 notify 層 no-op。驗收:`python -m copycat notify-test`)
 - `DISCORD_BOT_TOKEN` + `SIGNALS_DISCORD_CHANNEL_ID`(2026-08-04 沿用 treading-king bot;
   個股訊號推送 + `/watch` slash 指令。token 未設 → bot 降級不啟動,推送 fallback webhook。
