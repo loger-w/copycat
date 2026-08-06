@@ -84,6 +84,12 @@ export function useStockStream(
   const refetchingRef = useRef(false);
   const pendingRefetchRef = useRef(false);
   const pendingRef = useRef<StockTickMsg[]>([]);
+  // 上一則 status 的**真值**(F-1)。WS handler 是 deps `[]` 的閉包讀不到最新 state,
+  // 而把比較塞進 `setStatus` 的 updater 會讓副作用跟著 StrictMode 的 double-invoke 重跑。
+  const statusRef = useRef<{ tc4: string; backfilling: string | null }>({
+    tc4: "up",
+    backfilling: null,
+  });
   const codeRef = useRef(code);
   codeRef.current = code;
   const contractRef = useRef(contract);
@@ -216,13 +222,18 @@ export function useStockStream(
             tc4: String(msg.tc4 ?? "up"),
             backfilling: (msg.backfilling as string | null) ?? null,
           };
-          setStatus((prev) => {
-            // 主圖回補完成(backfilling 從本檔 → null)→ 全量 refetch(靜市無 tick 也更新)
-            if (prev.backfilling !== null && next.backfilling === null && prev.backfilling === instrumentKeyRef.current) {
-              void refetch();
-            }
-            return next;
-          });
+          // 比較與 refetch 都在 handler 本體做,**不可搬回 `setStatus` 的 updater 內**
+          // (F-1):updater 的契約是純函式,而全站包在 StrictMode 下 dev 會 double-invoke
+          // → 第一次進單飛、第二次撞 in-flight 設 pendingRefetchRef,finally 的「合併不
+          // 丟棄」再補發一次真 fetch,每次回補完成都串行多打一份 MB 級 snapshot。
+          // 前值改由 ref 持有(handler 是 effect deps `[]` 的閉包,讀不到最新的 state)。
+          const prev = statusRef.current;
+          statusRef.current = next;
+          // 主圖回補完成(backfilling 從本檔 → null)→ 全量 refetch(靜市無 tick 也更新)
+          if (prev.backfilling !== null && next.backfilling === null && prev.backfilling === current) {
+            void refetch();
+          }
+          setStatus(next);
           return;
         }
         case "stkfut": {
