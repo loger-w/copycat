@@ -1,6 +1,6 @@
 """家數帶 API/WS 接線(market-overview R2 Task 7;design §6)— SC-3。
 
-**禁止真打 FinMind / 禁起 TC4**:取數三元組全部注入 fake、TXO 走 `FakeTxoSource`,
+**禁止真打 FinMind / 禁起 TC4**:取數四元組全部注入 fake、TXO 走 `FakeTxoSource`,
 整條路不碰網路也不碰 ZMQ。
 
 `BootedClient`(design R12):啟動序列已背景化,`with TestClient(app)` 返回只代表
@@ -10,6 +10,7 @@ HTTP 面可用 —— breadth 引擎是否掛上去要等 boot 序列結束才�
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 import time
 from pathlib import Path
 from typing import Callable
@@ -23,7 +24,7 @@ import copycat.server.breadth_fetch as breadth_fetch
 import copycat.server.finmind_token as finmind_token
 from copycat.breadth_config import BreadthConfig
 from copycat.server import app as app_mod
-from copycat.server.app import DEFAULT_BREADTH, create_app
+from copycat.server.app import DEFAULT_BREADTH, BreadthFetchers, create_app
 from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.mis import OtcSnap
 from tests.helpers.boot import BootedClient
@@ -97,29 +98,27 @@ def _snapshot_rows() -> list[dict]:
     ]
 
 
-def _ok_fetchers() -> tuple[
-    Callable[[str], list[dict]],
-    Callable[[str], list[dict]],
-    Callable[[str, _dt.date], list[dict]],
-]:
+def _ok_fetchers() -> BreadthFetchers:
+    """第四槽(EOD 日線)刻意給 `None` = 連板停用(契約的一部分,R3 R20)。
+
+    本檔驗的是 route 形狀與接線;真要在這裡餵日線,引擎的 `_DAILY_MIN_ROWS` 健檢
+    會逼每個 fake 日回 25,000 列 —— 連板編排的行為面在 test_breadth_engine 已逐條覆蓋。
+    """
     return (
         lambda _token: _snapshot_rows(),
         lambda _token: list(_INFO_ROWS),
         lambda _token, _today: [],
+        None,
     )
 
 
-def _raising_fetchers() -> tuple[
-    Callable[[str], list[dict]],
-    Callable[[str], list[dict]],
-    Callable[[str, _dt.date], list[dict]],
-]:
-    """三個取數點全炸 —— SC-3 的失效注入(FinMind 整段掛掉)。"""
+def _raising_fetchers() -> BreadthFetchers:
+    """四個取數點全炸 —— SC-3 的失效注入(FinMind 整段掛掉,含 EOD 日線那支)。"""
 
     def _boom(*_a: object) -> list[dict]:
         raise BreadthFetchError("fake FinMind down")
 
-    return (_boom, _boom, _boom)
+    return (_boom, _boom, _boom, _boom)
 
 
 def _mis() -> OtcSnap | None:
@@ -220,6 +219,125 @@ class TestBreadthRest:
         }
 
 
+#: `/api/market/breadth/rows` 每列的完整欄位(design §4 契約)。整組等值比對而不是
+#: 逐欄 `in`:漏欄與多欄都要紅 —— 前端型別直譯這份契約,少一欄是 undefined、多一欄
+#: 是無人消費的頻寬(rows payload 每 10 秒數百 KB)。
+_ROW_FIELDS = {
+    "stock_id",
+    "name",
+    "market",
+    "close",
+    "change_rate",
+    "volume_ratio",
+    "total_amount",
+    "limit_up",
+    "limit_down",
+    "touched_limit_up",
+    "touched_limit_down",
+    "streak",
+    "streak_capped",
+}
+
+
+class TestBreadthRowsRest:
+    """`GET /api/market/breadth/rows` 三態 + 契約(R3 SC-1)。
+
+    與 `/api/market/breadth` 同款恆 200 三態(未設定 / 載入中 / 有引擎),理由相同:
+    503 會被 TanStack 的 error 路徑吞成同一種紅色。
+    """
+
+    def test_engine_absent_returns_disabled_shape(self) -> None:
+        with _client() as c:
+            r = c.get("/api/market/breadth/rows")
+        assert r.status_code == 200
+        assert r.json() == {
+            "enabled": False,
+            "trade_date": None,
+            "as_of": None,
+            "stale": False,
+            "streaks_ready": False,
+            "rows": [],
+        }
+
+    def test_before_boot_returns_loading_shape(self, tmp_path: Path) -> None:
+        """boot 未完成 → 載入中(enabled=true / stale=true),不得與「未設定」同形。"""
+        client = TestClient(
+            _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path),
+            raise_server_exceptions=False,
+        )
+        r = client.get("/api/market/breadth/rows")
+        assert r.status_code == 200
+        assert r.json() == {
+            "enabled": True,
+            "trade_date": None,
+            "as_of": None,
+            "stale": True,
+            "streaks_ready": False,
+            "rows": [],
+        }
+
+    def test_rows_payload_matches_contract(self, tmp_path: Path) -> None:
+        with _client(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path) as c:
+            _wait_counts(c)
+            body = c.get("/api/market/breadth/rows").json()
+
+        assert set(body) == {"enabled", "trade_date", "as_of", "stale", "streaks_ready", "rows"}
+        assert body["enabled"] is True
+        assert body["trade_date"] == _TODAY.isoformat()
+        assert body["as_of"] == "10:23:45"
+        assert body["streaks_ready"] is False  # daily_fetch=None → 連板停用
+        by_id = {r["stock_id"]: r for r in body["rows"]}
+        assert set(by_id) == {"1101", "2330", "6488"}
+        assert set(by_id["1101"]) == _ROW_FIELDS
+        assert by_id["1101"]["limit_up"] is True
+        assert by_id["1101"]["streak"] is None  # 未就緒 → null(不是 0,更不是 1)
+        assert by_id["1101"]["streak_capped"] is False
+
+    def test_rows_carry_engine_streak_merge(self, tmp_path: Path) -> None:
+        """route 必須回 `rows_state()` 的**算術結果**,不是自己拼一份 rows。
+
+        直接種引擎的 streak 成果(昨日止 2 板)→ 今日盤中的漲停列要是 3。
+        route 若改回 `{"rows": engine.rows}` 之類的直通,這裡就會紅。
+        """
+        app = _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as c:
+            _wait_counts(c)
+            engine = app.state.breadth
+            assert engine is not None
+            engine._streaks = {"1101": 2}
+            engine._streaks_day = _TODAY.isoformat()
+            engine._streaks_end = (_TODAY - _dt.timedelta(days=1)).isoformat()
+            engine._streaks_span = 10
+            body = c.get("/api/market/breadth/rows").json()
+
+        assert body["streaks_ready"] is True
+        by_id = {r["stock_id"]: r for r in body["rows"]}
+        assert by_id["1101"]["streak"] == 3
+        assert by_id["1101"]["streak_capped"] is False
+        assert by_id["2330"]["streak"] is None  # 非漲停列恆 null
+
+
+class TestFetchersArity:
+    def test_three_tuple_is_rejected_with_explicit_log(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """舊三元組(repo 外的側車樣板漏改)必須**炸而且說清楚**(design R8)。
+
+        `_boot` 的傘罩會把任何例外收成「breadth 停用」,與「FINMIND_TOKEN 未設」在
+        畫面上同形 —— 沒有這行 error log 的話,漏改一個呼叫端的症狀是家數面板悄悄
+        整段消失,查不到原因。
+        """
+        def _f(*_a: object) -> list[dict]:
+            return []
+
+        app = _make_app(breadth_fetchers=(_f, _f, _f), breadth_data_dir=tmp_path)
+        with caplog.at_level(logging.ERROR):
+            with BootedClient(app, raise_server_exceptions=False) as c:
+                assert app.state.breadth is None
+                assert c.get("/api/market/breadth/rows").json()["enabled"] is False
+        assert any("預期 4" in rec.getMessage() for rec in caplog.records)
+
+
 class TestBreadthWebSocket:
     def test_first_frame_is_scalar_seed(self, tmp_path: Path) -> None:
         with _client(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path) as c:
@@ -274,33 +392,41 @@ class TestBreadthWebSocket:
 
 
 class TestProdWiring:
-    """`DEFAULT_BREADTH` sentinel → 真取數三元組(prod 唯一走的那條路;review TC-1)。
+    """`DEFAULT_BREADTH` sentinel → 真取數四元組(prod 唯一走的那條路;review TC-1)。
 
-    三個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
-    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有三個 callable」——
-    三元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
+    四個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
+    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有四個 callable」——
+    四元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
     snapshot 拿到對照表格式),沒有任何錯誤訊號。
     """
 
     @pytest.fixture
-    def fetchers(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Callable, Callable, Callable]:
+    def fetchers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[Callable, Callable, Callable, Callable]:
         def _make(name: str) -> Callable[..., list[dict]]:
             def _f(*_a: object) -> list[dict]:
                 raise BreadthFetchError(f"{name} 不得真打")
 
             return _f
 
-        trio = (_make("snapshot"), _make("stock_info"), _make("disposition"))
-        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", trio[0])
-        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", trio[1])
-        monkeypatch.setattr(breadth_fetch, "fetch_disposition", trio[2])
-        return trio
+        quad = (
+            _make("snapshot"),
+            _make("stock_info"),
+            _make("disposition"),
+            _make("daily_prices"),
+        )
+        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", quad[0])
+        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", quad[1])
+        monkeypatch.setattr(breadth_fetch, "fetch_disposition", quad[2])
+        monkeypatch.setattr(breadth_fetch, "fetch_daily_prices", quad[3])
+        return quad
 
     def test_default_sentinel_wires_real_fetchers_in_order(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        fetchers: tuple[Callable, Callable, Callable],
+        fetchers: tuple[Callable, Callable, Callable, Callable],
     ) -> None:
         monkeypatch.setattr(finmind_token, "resolve_token", lambda: "tok")
         app = _make_app(breadth_fetchers=DEFAULT_BREADTH, breadth_data_dir=tmp_path)
@@ -312,12 +438,14 @@ class TestProdWiring:
             assert engine._snapshot_fetch is fetchers[0]
             assert engine._stock_info_fetch is fetchers[1]
             assert engine._disposition_fetch is fetchers[2]
+            # 第四支漏接的失效樣態 = 連板欄整天 null(prod 沒有任何錯誤訊號)
+            assert engine._daily_fetch is fetchers[3]
 
     def test_default_sentinel_disabled_without_token(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        fetchers: tuple[Callable, Callable, Callable],
+        fetchers: tuple[Callable, Callable, Callable, Callable],
     ) -> None:
         """FINMIND_TOKEN 未設 = 合法配置(不是失敗)→ 引擎不建、REST 回「未設定」。"""
         monkeypatch.setattr(finmind_token, "resolve_token", lambda: None)
