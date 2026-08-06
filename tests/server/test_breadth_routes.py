@@ -1,6 +1,8 @@
 """家數帶 API/WS 接線(market-overview R2 Task 7;design §6)— SC-3。
 
-**禁止真打 FinMind / 禁起 TC4**:取數四元組全部注入 fake、TXO 走 `FakeTxoSource`,
+R4 併入:類股輪動兩條 route(§5)、取數五元組、廣度事件的 hub attach/detach 接線(§8)。
+
+**禁止真打 FinMind / 禁起 TC4**:取數五元組全部注入 fake、TXO 走 `FakeTxoSource`,
 整條路不碰網路也不碰 ZMQ。
 
 `BootedClient`(design R12):啟動序列已背景化,`with TestClient(app)` 返回只代表
@@ -30,6 +32,7 @@ from copycat.server.mis import OtcSnap
 from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.fake_txo import FakeTxoSource
+from tests.server.test_stock_routes import FakeStockSource
 
 #: 快照時刻固定用**今天** 10:23:45:trade_date == today 才會 append(design R1),
 #: 而 10:23:45 → 分鐘鍵 "1024" 落在域內 —— 兩者都與測試實跑時刻無關。
@@ -98,27 +101,40 @@ def _snapshot_rows() -> list[dict]:
     ]
 
 
-def _ok_fetchers() -> BreadthFetchers:
+#: 產業鏈對照(R4):1101 獨佔水泥;2330 / 6488 同屬半導體的兩個子產業。
+#: 手算 rotation —— 水泥 avg = 10.0;半導體 avg = (0.5 + (-10.0)) / 2 = -4.75 → 水泥在前。
+_CHAIN_ROWS: list[dict] = [
+    {"date": "2026-08-01", "stock_id": "1101", "industry": "水泥", "sub_industry": "水泥製造"},
+    {"date": "2026-08-01", "stock_id": "2330", "industry": "半導體", "sub_industry": "晶圓代工"},
+    {"date": "2026-08-01", "stock_id": "6488", "industry": "半導體", "sub_industry": "矽晶圓"},
+]
+
+
+def _ok_fetchers(*, chain: bool = False) -> BreadthFetchers:
     """第四槽(EOD 日線)刻意給 `None` = 連板停用(契約的一部分,R3 R20)。
 
     本檔驗的是 route 形狀與接線;真要在這裡餵日線,引擎的 `_DAILY_MIN_ROWS` 健檢
     會逼每個 fake 日回 25,000 列 —— 連板編排的行為面在 test_breadth_engine 已逐條覆蓋。
+
+    第五槽(產業鏈)預設同樣 `None` = 類股輪動停用(R4;`rotation` 恆 null)——
+    要驗 rotation 有值的那條路才傳 `chain=True`。
     """
     return (
         lambda _token: _snapshot_rows(),
         lambda _token: list(_INFO_ROWS),
         lambda _token, _today: [],
         None,
+        (lambda _token: list(_CHAIN_ROWS)) if chain else None,
     )
 
 
 def _raising_fetchers() -> BreadthFetchers:
-    """四個取數點全炸 —— SC-3 的失效注入(FinMind 整段掛掉,含 EOD 日線那支)。"""
+    """五個取數點全炸 —— SC-3 的失效注入(FinMind 整段掛掉,含 EOD 日線與產業鏈那兩支)。"""
 
     def _boom(*_a: object) -> list[dict]:
         raise BreadthFetchError("fake FinMind down")
 
-    return (_boom, _boom, _boom, _boom)
+    return (_boom, _boom, _boom, _boom, _boom)
 
 
 def _mis() -> OtcSnap | None:
@@ -130,9 +146,13 @@ def _make_app(
     breadth_fetchers: object | None = None,
     breadth_data_dir: Path | None = None,
     index_source: FakeIndexSource | None = None,
+    stock_source: object | None = None,
+    stock_watchlist_path: Path | None = None,
 ):
     return create_app(
         FakeTxoSource(),
+        stock_source=stock_source,
+        stock_watchlist_path=stock_watchlist_path,
         index_source=index_source,
         index_mis_fetch=_mis,
         breadth_fetchers=breadth_fetchers,
@@ -168,6 +188,22 @@ def _wait_counts(client: TestClient, timeout: float = 5.0) -> dict:
             return payload
         if time.monotonic() > deadline:
             raise AssertionError(f"breadth 首輪未在 {timeout}s 內完成:{payload}")
+        time.sleep(0.01)
+
+
+def _wait_rotation(client: TestClient, timeout: float = 5.0) -> dict:
+    """輪詢到 rotation 有值。
+
+    chain 刷新是**獨立 task**(design §4.3)—— 家數首輪完成不代表 chain 已換表,
+    等 counts 就斷言 rotation 會偶發紅(競態)。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        payload = client.get("/api/market/sector").json()
+        if payload["rotation"] is not None:
+            return payload
+        if time.monotonic() > deadline:
+            raise AssertionError(f"rotation 未在 {timeout}s 內就緒:{payload}")
         time.sleep(0.01)
 
 
@@ -321,10 +357,10 @@ class TestBreadthRowsRest:
 
 
 class TestFetchersArity:
-    def test_three_tuple_is_rejected_with_explicit_log(
+    def test_four_tuple_is_rejected_with_explicit_log(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """舊三元組(repo 外的側車樣板漏改)必須**炸而且說清楚**。
+        """舊四元組(repo 外的側車樣板漏改第五槽)必須**炸而且說清楚**。
 
         出處 = impl-spec review R8「arity 防呆」;design §3.3a v3 未載,實作期補強
         (design 自己的 R8 是另一件事:漲跌停列表的排序優先序)。
@@ -336,12 +372,12 @@ class TestFetchersArity:
         def _f(*_a: object) -> list[dict]:
             return []
 
-        app = _make_app(breadth_fetchers=(_f, _f, _f), breadth_data_dir=tmp_path)
+        app = _make_app(breadth_fetchers=(_f, _f, _f, _f), breadth_data_dir=tmp_path)
         with caplog.at_level(logging.ERROR):
             with BootedClient(app, raise_server_exceptions=False) as c:
                 assert app.state.breadth is None
                 assert c.get("/api/market/breadth/rows").json()["enabled"] is False
-        assert any("預期 4" in rec.getMessage() for rec in caplog.records)
+        assert any("預期 5" in rec.getMessage() for rec in caplog.records)
 
 
 class TestBreadthWebSocket:
@@ -398,41 +434,43 @@ class TestBreadthWebSocket:
 
 
 class TestProdWiring:
-    """`DEFAULT_BREADTH` sentinel → 真取數四元組(prod 唯一走的那條路;review TC-1)。
+    """`DEFAULT_BREADTH` sentinel → 真取數五元組(prod 唯一走的那條路;review TC-1)。
 
-    四個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
-    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有四個 callable」——
-    四元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
+    五個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
+    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有五個 callable」——
+    元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
     snapshot 拿到對照表格式),沒有任何錯誤訊號。
     """
 
     @pytest.fixture
     def fetchers(
         self, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[Callable, Callable, Callable, Callable]:
+    ) -> tuple[Callable, Callable, Callable, Callable, Callable]:
         def _make(name: str) -> Callable[..., list[dict]]:
             def _f(*_a: object) -> list[dict]:
                 raise BreadthFetchError(f"{name} 不得真打")
 
             return _f
 
-        quad = (
+        quint = (
             _make("snapshot"),
             _make("stock_info"),
             _make("disposition"),
             _make("daily_prices"),
+            _make("industry_chain"),
         )
-        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", quad[0])
-        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", quad[1])
-        monkeypatch.setattr(breadth_fetch, "fetch_disposition", quad[2])
-        monkeypatch.setattr(breadth_fetch, "fetch_daily_prices", quad[3])
-        return quad
+        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", quint[0])
+        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", quint[1])
+        monkeypatch.setattr(breadth_fetch, "fetch_disposition", quint[2])
+        monkeypatch.setattr(breadth_fetch, "fetch_daily_prices", quint[3])
+        monkeypatch.setattr(breadth_fetch, "fetch_industry_chain", quint[4])
+        return quint
 
     def test_default_sentinel_wires_real_fetchers_in_order(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        fetchers: tuple[Callable, Callable, Callable, Callable],
+        fetchers: tuple[Callable, Callable, Callable, Callable, Callable],
     ) -> None:
         monkeypatch.setattr(finmind_token, "resolve_token", lambda: "tok")
         app = _make_app(breadth_fetchers=DEFAULT_BREADTH, breadth_data_dir=tmp_path)
@@ -446,12 +484,14 @@ class TestProdWiring:
             assert engine._disposition_fetch is fetchers[2]
             # 第四支漏接的失效樣態 = 連板欄整天 null(prod 沒有任何錯誤訊號)
             assert engine._daily_fetch is fetchers[3]
+            # 第五支漏接 = 類股面板整天「資料未就緒」,同樣零錯誤訊號(R4)
+            assert engine._chain_fetch is fetchers[4]
 
     def test_default_sentinel_disabled_without_token(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        fetchers: tuple[Callable, Callable, Callable, Callable],
+        fetchers: tuple[Callable, Callable, Callable, Callable, Callable],
     ) -> None:
         """FINMIND_TOKEN 未設 = 合法配置(不是失敗)→ 引擎不建、REST 回「未設定」。"""
         monkeypatch.setattr(finmind_token, "resolve_token", lambda: None)
@@ -481,3 +521,197 @@ class TestFailureIsolation:
         assert body["enabled"] is True
         assert body["counts"] is None
         assert body["stale"] is True
+
+
+class TestSectorRest:
+    """`GET /api/market/sector` 三態(R4 design §5)—— 判式與 `/api/market/breadth` 同款。"""
+
+    def test_engine_absent_returns_disabled_shape(self) -> None:
+        with _client() as c:
+            r = c.get("/api/market/sector")
+        assert r.status_code == 200
+        assert r.json() == {
+            "enabled": False,
+            "trade_date": None,
+            "as_of": None,
+            "stale": False,
+            "rotation": None,
+        }
+
+    def test_before_boot_returns_loading_shape(self, tmp_path: Path) -> None:
+        """boot 未完成 → 載入中(enabled=true / stale=true),不得與「未設定」同形。"""
+        client = TestClient(
+            _make_app(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path),
+            raise_server_exceptions=False,
+        )
+        r = client.get("/api/market/sector")
+        assert r.status_code == 200
+        assert r.json() == {
+            "enabled": True,
+            "trade_date": None,
+            "as_of": None,
+            "stale": True,
+            "rotation": None,
+        }
+
+    def test_booted_without_chain_returns_null_rotation(self, tmp_path: Path) -> None:
+        """boot 完成、chain 未就緒 → **200 且 rotation=null**(不是 503,也不是空清單)。
+
+        空 `industries` 會被前端讀成「今天所有產業都沒成員」;null 才是「還沒有資料」。
+        """
+        with _client(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path) as c:
+            _wait_counts(c)
+            body = c.get("/api/market/sector").json()
+        assert body["enabled"] is True
+        assert body["trade_date"] == _TODAY.isoformat()
+        assert body["as_of"] == "10:23:45"
+        assert body["rotation"] is None
+
+    def test_rotation_payload_carries_engine_computation(self, tmp_path: Path) -> None:
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            body = _wait_rotation(c)
+
+        assert set(body) == {"enabled", "trade_date", "as_of", "stale", "rotation"}
+        assert body["trade_date"] == _TODAY.isoformat()
+        assert body["as_of"] == "10:23:45"
+        industries = body["rotation"]["industries"]
+        # avg desc:水泥 10.0 > 半導體 -4.75
+        assert [i["name"] for i in industries] == ["水泥", "半導體"]
+        assert industries[0]["members"] == 1
+        assert industries[0]["avg_change_rate"] == pytest.approx(10.0)
+        assert industries[0]["vol_ratio"] == pytest.approx(2.0)  # 1000 / 500
+        assert industries[1]["members"] == 2
+        assert industries[1]["avg_change_rate"] == pytest.approx(-4.75)
+        assert [s["name"] for s in industries[1]["subs"]] == ["晶圓代工", "矽晶圓"]
+
+
+class TestSectorMembers:
+    """`GET /api/market/sector/members` 三語意(design §5 / R10)。"""
+
+    def test_missing_industry_is_422(self, tmp_path: Path) -> None:
+        """`industry` **缺席** = 呼叫端寫錯 → FastAPI required query 的 422。
+
+        與「查無此產業」的 404 刻意分開:前者是程式 bug、後者是資料還沒到。
+        """
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get("/api/market/sector/members")
+        assert r.status_code == 422
+
+    def test_blank_industry_is_404(self, tmp_path: Path) -> None:
+        """空字串 industry → 404(chain_map 沒有 "" 桶:缺 sub 的列整列丟)。"""
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get("/api/market/sector/members", params={"industry": ""})
+        assert r.status_code == 404
+        assert r.json()["detail"]["error"] == "SECTOR_NOT_FOUND"
+
+    def test_unknown_industry_is_404(self, tmp_path: Path) -> None:
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get("/api/market/sector/members", params={"industry": "不存在的產業"})
+        assert r.status_code == 404
+        assert r.json()["detail"]["error"] == "SECTOR_NOT_FOUND"
+
+    def test_unknown_sub_is_404(self, tmp_path: Path) -> None:
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get(
+                "/api/market/sector/members", params={"industry": "半導體", "sub": "不存在的子業"}
+            )
+        assert r.status_code == 404
+        assert r.json()["detail"]["error"] == "SECTOR_NOT_FOUND"
+
+    def test_known_industry_returns_members(self, tmp_path: Path) -> None:
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get("/api/market/sector/members", params={"industry": "半導體"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["industry"] == "半導體"
+        assert body["sub_industry"] is None
+        # change_rate desc:2330(+0.5)在 6488(-10.0)之前
+        assert [m["stock_id"] for m in body["members"]] == ["2330", "6488"]
+        assert body["members"][0]["name"] == "台積電"
+        assert body["members"][0]["vol_ratio"] == pytest.approx(2.0)
+
+    def test_blank_sub_is_treated_as_unspecified(self, tmp_path: Path) -> None:
+        """`sub=`(空字串)**當未指定** —— 前端不帶 sub 時送空字串是最容易寫出的形狀,
+        當成「子產業名為空」查就會回 404,而畫面上與「這個產業沒有成員」同形。"""
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get("/api/market/sector/members", params={"industry": "半導體", "sub": ""})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["sub_industry"] is None
+        assert [m["stock_id"] for m in body["members"]] == ["2330", "6488"]
+
+    def test_sub_narrows_members(self, tmp_path: Path) -> None:
+        with _client(breadth_fetchers=_ok_fetchers(chain=True), breadth_data_dir=tmp_path) as c:
+            _wait_rotation(c)
+            r = c.get(
+                "/api/market/sector/members", params={"industry": "半導體", "sub": "矽晶圓"}
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["sub_industry"] == "矽晶圓"
+        assert [m["stock_id"] for m in body["members"]] == ["6488"]
+
+    def test_engine_absent_is_404(self) -> None:
+        """引擎缺席 → 同一個錯誤碼(沒有引擎就沒有任何產業;不是 503)。"""
+        with _client() as c:
+            r = c.get("/api/market/sector/members", params={"industry": "半導體"})
+        assert r.status_code == 404
+        assert r.json()["detail"]["error"] == "SECTOR_NOT_FOUND"
+
+
+class TestSignalHubWiring:
+    """廣度事件入匯流排的接線(design §8)。
+
+    漏 attach 的失效樣態 = 全市場鎖板事件整天不產生(`_diff_limit_events` 對 hub None
+    早退,連狀態機都不推進)—— 畫面上與「今天沒有漲停」完全同形,沒有錯誤訊號。
+    漏 detach 則相反:關機序 breadth 先收,close 之後才摘掛點的話,收攤中的那一輪
+    會對還沒 close 的 hub 發事件(或反過來對已 close 的 hub 發)。
+    """
+
+    def _app(self, tmp_path: Path):
+        return _make_app(
+            breadth_fetchers=_ok_fetchers(),
+            breadth_data_dir=tmp_path,
+            stock_source=FakeStockSource(),
+            stock_watchlist_path=tmp_path / "watchlist.json",
+        )
+
+    def test_hub_attached_after_breadth_boot(self, tmp_path: Path) -> None:
+        app = self._app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False):
+            assert app.state.signal_hub is not None
+            assert app.state.breadth is not None
+            assert app.state.breadth._signal_hub is app.state.signal_hub
+
+    def test_no_hub_leaves_breadth_unattached(self, tmp_path: Path) -> None:
+        """stock 引擎缺席 → 沒有 hub 可掛,但 breadth 本身照常啟動(失效域隔離)。"""
+        app = _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path)
+        with BootedClient(app, raise_server_exceptions=False):
+            assert app.state.signal_hub is None
+            assert app.state.breadth is not None
+            assert app.state.breadth._signal_hub is None
+
+    def test_detach_happens_before_close(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+        app = self._app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False):
+            engine = app.state.breadth
+            assert engine is not None
+            orig_close = engine.close
+
+            async def _spy_close() -> None:
+                seen["hub"] = engine._signal_hub
+                await orig_close()
+
+            monkeypatch.setattr(engine, "close", _spy_close)
+
+        assert "hub" in seen, "關機序沒有呼叫 breadth.close()"
+        assert seen["hub"] is None, "detach 必須在 close 之前"

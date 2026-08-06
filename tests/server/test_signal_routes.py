@@ -239,6 +239,56 @@ class TestSignalsTodayRoute:
             assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
 
 
+class TestSignalsTodayMarketParam:
+    """`?market=exclude` 後端過濾(R4 design §7 / R2-7)。
+
+    SignalRail 那個消費端只要自選訊號,而全市場鎖板事件在漲停潮日可以是數百則 ——
+    整包下載後 client 丟棄會讓 cap 200 在過濾**之前**發生,自選訊號被擠光。
+    """
+
+    def _seed(self, app: FastAPI, tmp_path: Path) -> tuple[dict, dict]:
+        trade_date = app.state.stock.trade_date
+        own = _signal_row(trade_date)
+        market = {
+            **_signal_row(trade_date),
+            "id": f"{trade_date}-breadth-1101-market_limit_lock-up-10:01:00",
+            "kind": "market_limit_lock",
+            "code": "1101",
+            "name": "台泥",
+            "direction": "up",
+            "levels": [],
+        }
+        path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in (own, market)),
+            encoding="utf-8",
+        )
+        return own, market
+
+    def test_default_includes_market_rows(self, tmp_path: Path) -> None:
+        """預設(不帶參數)= include —— 既有呼叫端零改動,行為逐字不變。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            own, market = self._seed(app, tmp_path)
+            body = client.get("/api/stock/signals/today").json()
+        assert body == {"signals": [own, market]}
+
+    def test_explicit_include_matches_default(self, tmp_path: Path) -> None:
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            own, market = self._seed(app, tmp_path)
+            body = client.get("/api/stock/signals/today", params={"market": "include"}).json()
+        assert body == {"signals": [own, market]}
+
+    def test_exclude_drops_market_kinds(self, tmp_path: Path) -> None:
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            own, _market = self._seed(app, tmp_path)
+            body = client.get("/api/stock/signals/today", params={"market": "exclude"}).json()
+        assert body == {"signals": [own]}
+
+
 class TestLegacyEnabledRouteGone:
     """SC-4:四鍵開關家族退役 —— 規則自帶 `enabled`,兩套開關並存會互相蓋掉。
 

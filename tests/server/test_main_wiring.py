@@ -104,13 +104,13 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
     # fake source 單一位置參數;其餘 source 全部不傳(= None = 引擎不啟動、零 ZMQ)
     assert cap.create_args is not None and len(cap.create_args) == 1
     assert isinstance(cap.create_args[0], FakeTxoSource)
-    # breadth 是唯一的例外:走 fake 三元組(不打真 FinMind)+ 獨立落檔目錄
+    # breadth 是唯一的例外:走 fake 五元組(不打真 FinMind)+ 獨立落檔目錄
     # ——共用 prod 的 data/market/ 會讓 fake 快照有機會蓋掉當日真序列
     assert cap.create_kwargs is not None and set(cap.create_kwargs) == {
         "breadth_fetchers",
         "breadth_data_dir",
     }
-    assert len(cap.create_kwargs["breadth_fetchers"]) == 4
+    assert len(cap.create_kwargs["breadth_fetchers"]) == 5
     assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
     # env 壓制必須有跑、log 不落檔、port 與 prod 錯開
     assert cap.neutralized is True
