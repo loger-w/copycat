@@ -84,8 +84,10 @@ interface Props {
    *  本頁只把回呼往下傳 —— 頁內自己記一份主檔會與右欄 / 個股頁分岔。 */
   onOpenStock?: (code: string) => void;
   /** 使用者是否正看著本 tab(App 的 `tab === "index"`)。本頁的 DOM 由 App 以 `hidden`
-   *  保留 → 漲跌停列表的背景輪詢要靠這道 gate 停(review FE-2;FuturesPage 同慣例)。
-   *  未給時預設 true(既有呼叫路徑不靜默停更)。 */
+   *  保留 → 頁內所有背景輪詢都要靠這道 gate 停(review FE-2;FuturesPage 同慣例):
+   *  漲跌停列表、類股強弱(含鑽開的成員表),以及**兩張指數圖的分 K**
+   *  —— 最後那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME 搶同一把
+   *  `api.lock`(review round-2 XR-4)。未給時預設 true(既有呼叫路徑不靜默停更)。 */
   active?: boolean;
 }
 
@@ -116,6 +118,7 @@ export function IndexPage({
           defaultKey="TWSE"
           toggles={toggles}
           onToggle={set}
+          active={active}
         />
         <MarketPane
           paneId="right"
@@ -126,6 +129,7 @@ export function IndexPage({
           defaultKey="OTC"
           toggles={toggles}
           onToggle={set}
+          active={active}
         />
       </div>
       {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
