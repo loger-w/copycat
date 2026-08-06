@@ -4,7 +4,9 @@
 - `fetch_snapshot`:全市場即時快照(專屬 endpoint,**無 query 參數**),每輪都打。
 - `fetch_stock_info`:代碼 → 名稱 / 市場別 / 產業別對照(24h TTL,一天打幾次)。
 - `fetch_disposition`:近 60 日處置股期間表(參數名 **start_date / end_date**)。
-- `fetch_daily_prices`:單日全市場 EOD(連板數回看用,一天一輪 ≤ 25 次)。
+- `fetch_daily_prices`:單日全市場 EOD(連板數回看用)。一天只武裝一輪,掃描窗上限
+  25 個日曆日,而**已成功取得的日跨重試由引擎的 memo 重用** → 成功取數 ≤ 25 次;
+  每次失敗的嘗試最多多打 1 次(嘗試上限 10)→ 一天上界 ≈ 35 次。
 
 **402 不重試**:配額用盡時重打只會燒更多且必然同樣失敗 —— 以 `BreadthFetchError.quota`
 標記讓呼叫端改走長退避(config `quota_backoff_secs`),與一般失敗的短退避分開。
