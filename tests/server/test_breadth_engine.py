@@ -1916,6 +1916,55 @@ class TestChainCache:
         await engine._run_cycle()
         assert engine.sector_state()["rotation"] is not None  # 舊表照樣算得出來
 
+    async def test_parse_crash_keeps_old_map_and_backs_off(
+        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """parse 炸掉(髒值打穿 `rows_to_chain_map`)→ 沿用舊表 + 退避,不外拋(review S-3)。
+
+        `_refresh_chain` 是 fire-and-forget task 的身體:逃出去的例外只會變成 asyncio
+        的「Task exception was never retrieved」,而 `_chain_retry_at` 沒設 → 下一圈
+        立刻重武裝、以 poll 節奏(10s)對著壞上游重打,類股面板停在舊表上零錯誤訊號。
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        # 形狀合法(是 dict)但 industry 不可雜湊 → setdefault 當場 TypeError
+        chain = FakeFetch([{"stock_id": "2330", "industry": ["半導體"], "sub_industry": "晶圓"}])
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP  # 舊表原封不動
+        assert engine._chain_fetched_at == 0.0
+        assert engine._chain_retry_at is not None
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+        mono.advance(be._MAP_RETRY_SECS - 1.0)
+        await _arm_chain(engine)
+        assert chain.calls == 1  # 退避中不重打
+
+    async def test_restore_parse_crash_treated_as_no_cache(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """快取檔 parse 炸 → 當作沒有快取(**不得外拋**:`_restore_chain` 在 boot 路徑)。
+
+        一份壞快取檔讓整台 server 起不來的話,失效半徑從「類股面板」擴到「全部面板」。
+        """
+        save_chain(
+            _chain_file(tmp_path),
+            [{"stock_id": "2330", "industry": ["半導體"], "sub_industry": "晶圓"}],
+            123.0,
+        )
+        engine, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            engine._restore_chain()
+
+        assert engine._chain_map == {}
+        assert engine._chain_fetched_at is None  # 視同無快取 → 下一圈立刻武裝
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
     async def test_no_chain_fetch_disables_rotation(self, tmp_path: Path) -> None:
         """`chain_fetch=None` = 類股停用:不武裝、rotation 恆 null、members 恆 None。"""
         engine, *_ = _make(tmp_path)
