@@ -27,14 +27,16 @@ describe("AdvanceDeclineChart net 計算(SC-4)", () => {
     expect(screen.getByTestId("adl-last").textContent).toContain("+7");
   });
 
-  it("(b) net 為負 → 末值染 text-bear;為正 → text-bull", () => {
+  // SVG `<text>` 的字色走 `fill-*`(`text-*` 在 SVG 是 no-op;MarketChart 同慣例),
+  // 語意仍是 bull/bear 兩顆 token。
+  it("(b) net 為負 → 末值染 bear;為正 → bull", () => {
     render(<AdvanceDeclineChart series={[pt("0930", [0, 1, 0, 20, 3], [0, 0, 0, 0, 0])]} />);
     const neg = screen.getByTestId("adl-last");
     expect(neg.textContent).toContain("-22");
-    expect(neg.getAttribute("class")).toContain("text-bear");
+    expect(neg.getAttribute("class")).toContain("fill-bear");
     cleanup();
     render(<AdvanceDeclineChart series={[pt("0930", [2, 30, 0, 1, 0], [0, 0, 0, 0, 0])]} />);
-    expect(screen.getByTestId("adl-last").getAttribute("class")).toContain("text-bull");
+    expect(screen.getByTestId("adl-last").getAttribute("class")).toContain("fill-bull");
   });
 
   it("(c) 只標右端末值,不逐點標數字", () => {

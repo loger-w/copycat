@@ -4,6 +4,8 @@
  *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
  *  「同一段程式碼寫兩遍」。 */
 import { CorrSection } from "@/components/corr/CorrSection";
+import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
+import { BreadthBand } from "@/components/index/BreadthBand";
 import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
@@ -17,6 +19,7 @@ import {
   MARKET_MODE_STORE,
 } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import type { BreadthState } from "@/types";
 
 /** 左圖沿用改版前那四支 key —— 舊使用者的標的 / 週期 / 期指商品 / 重疊開關零丟失。 */
 const LEFT_STORES: PaneStores = {
@@ -71,9 +74,12 @@ interface Props {
   txf: TxfQuote | null;
   /** 期貨三檔即時狀態(App 層 `useFuturesStream` 下傳;review P1-6)。 */
   futures?: Record<string, PaneFutState> | null;
+  /** 全市場家數 / 騰落序列(App 層 `useBreadth` 下傳;design R8 —— 本頁維持純展示,
+   *  既有測試不必 stub WS)。 */
+  breadth?: BreadthState | null;
 }
 
-export function IndexPage({ twse, otc, txf, futures }: Props) {
+export function IndexPage({ twse, otc, txf, futures, breadth = null }: Props) {
   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
   const { toggles, set } = useChartToggles();
@@ -104,6 +110,12 @@ export function IndexPage({ twse, otc, txf, futures }: Props) {
           onToggle={set}
         />
       </div>
+      {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
+          section 讓「當下十個數字」與「一整天的走向」在版面上是同一塊。 */}
+      <section className="flex flex-col gap-2">
+        <BreadthBand breadth={breadth} />
+        <AdvanceDeclineChart series={breadth?.series ?? []} />
+      </section>
       <CorrSection />
     </div>
   );

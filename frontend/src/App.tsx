@@ -10,6 +10,7 @@ import { RightRail, type RailContext } from "@/components/rail/RightRail";
 import { SeriesSelect } from "@/components/SeriesSelect";
 import { ToastStack } from "@/components/ToastStack";
 import { VersionDriftBadge } from "@/components/VersionDriftBadge";
+import { useBreadth } from "@/hooks/useBreadth";
 import { useCapitalStream } from "@/hooks/useCapital";
 import { useSignalAlerts } from "@/hooks/useSignalAlerts";
 import { useFuturesStream } from "@/hooks/useFuturesStream";
@@ -105,6 +106,9 @@ export default function App() {
 
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
   const { twse, otc, txf } = useIndexStream();
+  // 家數 / 騰落流同樣常駐 App 層(design R8):IndexPage 維持純展示,tab 切走也不斷線
+  // —— 序列是「當日累積」,切回來時要是完整的一整天,不是重新開始那一刻起。
+  const breadth = useBreadth();
   // capital 下單 WS 常駐 App 層:唯一連線 + 唯一 invalidate 接線(review B2/B4)
   useCapitalStream();
   // 訊號提示常駐 App 層(design §8.3):訊號涵蓋整個自選池,人在看期貨頁時個股鎖漲停
@@ -244,6 +248,7 @@ export default function App() {
                   otc={otc}
                   txf={txf}
                   futures={futuresStream.state?.products ?? null}
+                  breadth={breadth}
                 />
               </Suspense>
             </div>
