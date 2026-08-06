@@ -181,8 +181,12 @@ class BreadthEngine:
         self._counts: dict[str, dict[str, int]] | None = None
         #: 全量逐檔 rows(漲跌停列表 / 類股熱力圖的原料 — R3 輪用)。
         #: 刻意**不進 `state()`**:本輪對外契約只有 counts + series,四千列 rows
-        #: 每 10 秒進一次 REST payload 是純浪費。
+        #: 每 10 秒進一次 REST payload 是純浪費(`rows_state()` 才給)。
         self.rows: list[dict] = []
+        #: `self.rows` 的資料日 —— 與 `self.rows` **同步無條件更新**。連板判式不得用
+        #: `_trade_date`:`_apply` 的 `adopt_date=False` 路徑會讓它與 rows 脫鉤
+        #: (rows 是上一交易日的,`_trade_date` 還停在今日)→ 誤判成「今日盤中」再 +1。
+        self._rows_date: str | None = None
         # ---- 連板數:成果 vs 排程(design R13,兩組不可合一)----
         self._streaks: dict[str, int] = {}
         self._streaks_day: str | None = None  # 這份成果是為哪個 today 算的
@@ -250,6 +254,49 @@ class BreadthEngine:
             "stale": self._stale(),
             "counts": self._counts,
             "series": self._series_list(),
+        }
+
+    def rows_state(self) -> dict:
+        """REST 全量逐檔(`GET /api/market/breadth/rows`)—— **連板算術只在這裡**。
+
+        `streak` 三值語意:int(含今日的連板數,僅 `limit_up` 列)/ null(非漲停列、
+        未就緒、停用、或 rows 資料日與 streak 資料日的關係不明)。前端零日期推理。
+
+        日期基準 = `_rows_date`(rows 的資料日),不是 `_trade_date`:
+        - `rows_date > data_end` → rows 是今日盤中,昨日止的 streak 要 +1。
+        - `rows_date == data_end` → rows 是上一交易日的收盤快照,該日**已在** streak
+          內(盤前 / 假日開站),再 +1 就是憑空多一板。
+        - `rows_date ∈ skipped` → 那天在掃描時被當假日跳過,關係不明 → null(R15)。
+        """
+        today = self._today_fn().isoformat()
+        # 綁區域變數再比較:pyright basic 不把「經 bool 變數的 narrowing」傳遞下去,
+        # `rows_date > self._streaks_end` 會報 reportOptionalOperand(禁 type: ignore)
+        end = self._streaks_end
+        ready = self._streaks_day == today and end is not None
+        rows_date = self._rows_date
+        rows_out: list[dict] = []
+        for row in self.rows:
+            streak: int | None = None
+            capped = False
+            if ready and end is not None and row["limit_up"] and rows_date is not None:
+                prev = self._streaks.get(row["stock_id"], 0)
+                if rows_date in self._streaks_skipped:
+                    pass
+                elif rows_date > end:
+                    streak = prev + 1
+                elif rows_date == end:
+                    streak = max(prev, 1)
+                # rows_date < data_end(理論不可能)→ 保持 None
+                if streak is not None and prev >= self._streaks_span:
+                    capped = True  # streak 撞到回看窗邊緣 → 前端顯示「N+ 板」
+            rows_out.append({**row, "streak": streak, "streak_capped": capped})
+        return {
+            "enabled": True,
+            "trade_date": rows_date,
+            "as_of": self._as_of,
+            "stale": self._stale(),
+            "streaks_ready": ready,
+            "rows": rows_out,
         }
 
     def payload(self, last_minute: dict | None = None) -> dict:
@@ -454,6 +501,9 @@ class BreadthEngine:
         self._as_of = dt.strftime("%H:%M:%S")
         self._counts = counts
         self.rows = breadth["rows"]
+        # 與 rows 同行、**無條件**更新(含 adopt_date=False 路徑)—— 這正是它存在的
+        # 理由:rows 換了而日期沒換的話,連板判式會拿舊日期去比 data_end(R14)
+        self._rows_date = trade_date
         self._fail_streak = 0
         self._quota = False
         self._last_success = _monotonic()
