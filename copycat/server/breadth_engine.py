@@ -23,6 +23,13 @@ WS 廣播。純函式在 `copycat.market_breadth`,取數在 `copycat.server.brea
 在畫面上完全同形。取數成功但 parse 後為空(欄位語意變 / 上游回殘表)時**不換表
 也不落檔**:照樣換的話,一份可用的舊快取會被空表覆寫並固化到磁碟。
 
+**全市場鎖板事件(R4 design §6)**:每輪 append 成功後對 rows 做一次**對帳** ——
+比的是「事件流已對外宣告的狀態」(`_mkt_last_emitted`,重啟時自 jsonl 回放)而不是
+「上一輪的實況」。差別在兩個邊界上是致命的:開盤即鎖(一價到底)沒有轉移可偵測、
+盤中重啟後記憶體是空的 —— 兩者在 raw 轉移偵測下都靜默漏發,而漏發的表現就是畫面
+少一列。冷卻(`event_cooldown_secs`)只**延後**對帳不丟棄,所以抖動有上界而終態
+仍收斂到實況。
+
 **連板數(R3 design §3.3)**:另有一條每日一次的背景 task —— FinMind EOD 回看
 10 個交易日算連續漲停日數,成果落 `streaks-<today>.json`。與 poll 迴圈共用同一個
 FinMind 失效域(壞了只讓連板欄 null),排程狀態刻意與成果分離:`_streak_armed_day`
@@ -39,7 +46,7 @@ import logging
 import os
 import time as _time
 from pathlib import Path
-from typing import AsyncGenerator, Callable, TypeGuard
+from typing import AsyncGenerator, Callable, Protocol, TypeGuard
 
 from copycat.breadth_config import BreadthConfig
 from copycat.limit_streaks import (
@@ -114,11 +121,32 @@ _STREAK_RETRY_SECS = 60.0
 #: chain 快取檔名(`<data_dir>/industry_chain.json`;格式與讀寫在 `chain_store`)
 _CHAIN_FILE = "industry_chain.json"
 
+# ---- 全市場鎖板事件(diff)----
+#: 事件 kind。與自選股那條路的 `limit_lock` / `limit_open` **只差前綴**且刻意如此:
+#: hub 的 seed 回放依這兩個字串把兩條路分開(signal_hub `_MARKET_LOCK` 同值)。
+_MARKET_LOCK = "market_limit_lock"
+_MARKET_OPEN = "market_limit_open"
+
 SnapshotFetch = Callable[[str], list[dict]]
 StockInfoFetch = Callable[[str], list[dict]]
 DispositionFetch = Callable[[str, _dt.date], list[dict]]
 DailyPricesFetch = Callable[[str, _dt.date], list[dict]]
 ChainFetch = Callable[[str], list[dict]]
+
+
+class MarketSignalSink(Protocol):
+    """訊號匯流排掛點(實作 = `copycat.server.signal_hub.SignalHub`;測試注入 fake)。
+
+    結構型協定而非直接 import `SignalHub`(`stock_engine.SignalSink` 同款):引擎不該
+    為了型別去相依整個訊號層,測試也才能注入不繼承任何東西的替身。**全部同步方法** ——
+    這條路徑跑在 poll 輪內,不 await。
+    """
+
+    def publish_market_events(self, events: list[dict], *, trade_date: str) -> None: ...
+
+    def market_event_state(
+        self, trade_date: str
+    ) -> tuple[dict[tuple[str, str], bool], dict[tuple[str, str, str], int]]: ...
 
 
 def _monotonic() -> float:
@@ -239,6 +267,19 @@ class BreadthEngine:
         #: 後者的量欄已收成 `volume_ratio`,分子分母不可再同步剔除)
         self._universe_rows: list[dict] = []
 
+        # ---- 全市場鎖板事件的對帳狀態(design §6.2)----
+        #: `(code, direction)` → **事件流已對外宣告的**鎖定狀態(不是「當下實況」)。
+        #: 兩者的差就是還沒發出去的帳,對帳制的全部語意都建立在這個區別上。
+        self._mkt_last_emitted: dict[tuple[str, str], bool] = {}
+        #: `_mkt_last_emitted` 服務的資料日;不符即重 seed(首輪 / 換日 / 重啟)
+        self._mkt_emitted_date: str | None = None
+        #: `(code, kind, direction)` → 冷卻**單調** deadline。冷卻只延後對帳不丟棄
+        self._mkt_cooldown: dict[tuple[str, str, str], float] = {}
+        #: `(code, kind, direction)` → 當日第 N 次(seed 自 jsonl,重啟後不從 1 重數)
+        self._mkt_touch: dict[tuple[str, str, str], int] = {}
+        #: 未 attach 時整條路早退:發布通道與狀態機推進不得解耦(design R2-1)
+        self._signal_hub: MarketSignalSink | None = None
+
         # ---- 當日分鐘序列(分鐘鍵 → point,last-wins)----
         self._series: dict[str, dict] = {}
 
@@ -264,6 +305,15 @@ class BreadthEngine:
 
         self._task: asyncio.Task[None] | None = None
         self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
+
+    # ---- 訊號匯流排掛點(鏡射 `stock_engine`)----
+
+    def attach_signal_hub(self, hub: MarketSignalSink) -> None:
+        self._signal_hub = hub
+
+    def detach_signal_hub(self) -> None:
+        """摘掉掛點(hub 收攤前呼叫):對已收攤的 hub 繼續發事件 = 靜默全丟。"""
+        self._signal_hub = None
 
     # ---- 生命週期 ----
 
@@ -568,7 +618,8 @@ class BreadthEngine:
         counts = {"twse": breadth["twse"], "tpex": breadth["tpex"]}
         if adopt_date:
             self._trade_date = trade_date
-        self._as_of = dt.strftime("%H:%M:%S")
+        as_of = dt.strftime("%H:%M:%S")
+        self._as_of = as_of
         self._counts = counts
         self.rows = breadth["rows"]
         # 與 rows 同行、**無條件**更新(含 adopt_date=False 路徑)—— 這正是它存在的
@@ -583,7 +634,16 @@ class BreadthEngine:
         self._last_success = _monotonic()
         if not adopt_date:
             return None  # scalar 已更新;序列與落檔一概不動
-        return self._append(dt, trade_date, counts)
+        point = self._append(dt, trade_date, counts)
+        if point is not None:
+            # 事件的觸發 gate = **append 成功**(design §6.3):盤前試撮輪(分鐘域外)
+            # 與他日快照輪天然不觸發,「試撮殘留假事件」整個分支因此不存在。
+            # 傘罩:事件流是旁支,它炸掉不得把家數輪一起帶走(逐列容錯在裡面另有一層)。
+            try:
+                self._diff_limit_events(trade_date, breadth["rows"], as_of)
+            except Exception:
+                logger.exception("breadth 廣度事件對帳非預期失敗(本輪事件丟棄,家數不受影響)")
+        return point
 
     def _append(
         self, dt: _dt.datetime, trade_date: str, counts: dict[str, dict[str, int]]
@@ -602,6 +662,95 @@ class BreadthEngine:
         self._series[key] = point  # 同分鐘 last-wins
         self._save()
         return point
+
+    # ---- 全市場鎖板事件 diff(design §6.3 / §6.4)----
+
+    def _diff_limit_events(self, trade_date: str, rows_out: list[dict], as_of: str) -> None:
+        """`compute_breadth` 的 rows 對帳 → 鎖板 / 開板事件批次交給匯流排。
+
+        **入參是 `compute_breadth` 的輸出**(帶 `limit_*` 與 `name`),不是 `_apply` 收到的
+        原始快照 —— 餵錯那份的表現是事件流永遠空著,而空事件流與「今天沒人鎖板」同形,
+        所以缺鍵在收尾記一則 warning(逐列記會在四千列的輪次把 log 洗掉)。
+
+        `last_emitted` = 事件流**已對外宣告**的狀態(不是當下實況):
+        - 開盤首輪 seed 空 → 一價到底的檔照發 lock(raw 轉移偵測會靜默漏掉)。
+        - 重啟 seed 自 jsonl 回放 → 已發過的不重發、停機期間的轉移補發一則。
+        - 冷卻中**只跳過本輪、不動 `last_emitted`** → 帳還欠著,冷卻一過自然補發,
+          事件流終態恆收斂到實況(冷卻是抖動上界,不是丟棄)。
+        """
+        hub = self._signal_hub
+        if hub is None:
+            # 未 attach:不 seed、不 latch 日別、不動任何狀態(design R2-1)。推進了狀態
+            # 等於把這些轉移當成「已發布」,當日不再回放 seed → 開盤那一批永遠不見。
+            return
+        if self._mkt_emitted_date != trade_date:
+            self._mkt_last_emitted, self._mkt_touch = hub.market_event_state(trade_date)
+            self._mkt_cooldown.clear()  # 昨日的冷卻不得壓掉今日開盤的第一則
+            self._mkt_emitted_date = trade_date
+            logger.info(
+                "breadth 廣度事件 seed %s:%d 檔已發布狀態 / %d 桶計數",
+                trade_date,
+                len(self._mkt_last_emitted),
+                len(self._mkt_touch),
+            )
+
+        now = _monotonic()
+        cooldown = self._config.event_cooldown_secs
+        events: list[dict] = []
+        unjudged = 0
+        for row in rows_out:
+            try:
+                if "limit_judged" not in row:
+                    unjudged += 1
+                    continue
+                if row["limit_judged"] is not True:
+                    # 缺值列的 `limit_up` 恆 False,與「真的打開了」同形 → 整列跳過,
+                    # 對帳狀態不動(不然缺欄輪會產假 open,下一輪再補一則假 lock)
+                    continue
+                code = row["stock_id"]
+                name = row["name"]
+                # 先算出這列要用的值再動狀態:壞值在這裡就拋,`last_emitted` 不會被
+                # 推進到一個「已宣告」卻沒有事件出去的位置(那筆帳會永遠對不回來)
+                price = round(row["close"] * 1000)
+                for direction, desired in (
+                    ("up", bool(row["limit_up"])),
+                    ("down", bool(row["limit_down"])),
+                ):
+                    key = (code, direction)
+                    if desired == self._mkt_last_emitted.get(key, False):
+                        continue
+                    kind = _MARKET_LOCK if desired else _MARKET_OPEN
+                    bucket = (code, kind, direction)
+                    deadline = self._mkt_cooldown.get(bucket)
+                    if deadline is not None and now < deadline:
+                        continue  # 本輪不發;desired 持續不符則冷卻結束後補發
+                    self._mkt_cooldown[bucket] = now + cooldown
+                    self._mkt_last_emitted[key] = desired
+                    touch = self._mkt_touch.get(bucket, 0) + 1
+                    self._mkt_touch[bucket] = touch
+                    events.append(
+                        {
+                            "kind": kind,
+                            "code": code,
+                            "name": name,
+                            "price": price,
+                            "time": as_of,
+                            "direction": direction,
+                            "touch_count": touch,
+                        }
+                    )
+            except Exception:
+                # 逐列容錯:一列髒值只丟那一列,同輪其他檔照發(design R5)
+                logger.warning("breadth 廣度事件單列處理失敗(丟棄該列):%r", row, exc_info=True)
+        if unjudged:
+            logger.warning(
+                "breadth 廣度事件:%d/%d 列無 limit_judged 鍵(疑似餵入原始快照 rows"
+                " 而非 compute_breadth 輸出),該批不發事件",
+                unjudged,
+                len(rows_out),
+            )
+        if events:
+            hub.publish_market_events(events, trade_date=trade_date)
 
     def _fail(self, *, quota: bool) -> None:
         self._fail_streak += 1
