@@ -277,16 +277,9 @@ function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }
   else if (data.rows.length === 0) message = "暫無資料(延遲)";
   else if (entries.length === 0) message = "無符合條件";
 
-  const stamp = [data?.trade_date, data?.as_of].filter(Boolean).join(" · ");
-
   return (
     <div data-testid="limit-list-body" className="flex flex-col gap-2 px-4 pb-4">
       <div className="flex flex-wrap items-center gap-2">
-        {stamp ? (
-          <span data-testid="limit-list-stamp" className="font-mono text-xs text-ink-dim">
-            {stamp}
-          </span>
-        ) : null}
         {data?.stale ? (
           <span
             data-testid="limit-list-stale"
