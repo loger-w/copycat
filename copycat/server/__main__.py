@@ -23,13 +23,14 @@ from typing import Any, Iterable, Sequence, TextIO, cast
 import uvicorn
 
 from copycat.server.app import (
+    DEFAULT_BREADTH,
     DEFAULT_CORR,
     DEFAULT_FUTURES,
     DEFAULT_INDEX,
     DEFAULT_STOCK,
     create_app,
 )
-from copycat.server.verify import FakeTxoSource, neutralize_external_env
+from copycat.server.verify import FakeTxoSource, fake_breadth_fetchers, neutralize_external_env
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ VERIFY_PORT_DEFAULT = 8722  # 與 prod 8721 錯開:verify server 不可搶 canon
 # 錨定 repo root(build_info._REPO_ROOT 同慣例):.gitignore 的 `/logs/` 只認 root,
 # cwd 相對會在子目錄起 server 時長出未被 ignore 的 logs/(review R-7)
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+
+#: verify server 的家數帶序列落檔目錄。**不可與 prod 共用** `data/market/`:兩台會寫
+#: 同一個 `breadth-<date>.json`,verify 的 fake 六檔快照有機會蓋掉 prod 當日的完整
+#: 序列(prod 下一輪雖會寫回,但夾縫中重啟 prod 就會 restore 到那一格 fake)。
+VERIFY_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify"
 
 
 class _Tee:
@@ -134,7 +140,12 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"--verify 不可用 canonical port {PROD_PORT_DEFAULT}"
                 "(TXO_SERVER_PORT 殘留?verify 預設 8722,或顯式設非 8721 的 port)"
             )
-        app = create_app(FakeTxoSource())
+        app = create_app(
+            FakeTxoSource(),
+            # 家數帶走 fake 取數(不打真 FinMind)+ 獨立落檔目錄(不覆蓋 prod 當日序列)
+            breadth_fetchers=fake_breadth_fetchers(),
+            breadth_data_dir=VERIFY_DATA_DIR,
+        )
         logger.info("verify 模式:fake source + 外部 IO env 壓制,port %d(log 不落檔)", port)
     else:
         app = create_app(
@@ -142,6 +153,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             index_source=DEFAULT_INDEX,
             futures_source=DEFAULT_FUTURES,
             corr_source=DEFAULT_CORR,
+            breadth_fetchers=DEFAULT_BREADTH,
         )
         port = int(os.environ.get("TXO_SERVER_PORT", str(PROD_PORT_DEFAULT)))
         if log_path is not None:

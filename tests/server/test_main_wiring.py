@@ -16,7 +16,13 @@ import pytest
 import uvicorn
 
 import copycat.server.__main__ as main_mod
-from copycat.server.app import DEFAULT_CORR, DEFAULT_FUTURES, DEFAULT_INDEX, DEFAULT_STOCK
+from copycat.server.app import (
+    DEFAULT_BREADTH,
+    DEFAULT_CORR,
+    DEFAULT_FUTURES,
+    DEFAULT_INDEX,
+    DEFAULT_STOCK,
+)
 from copycat.server.verify import FakeTxoSource
 
 
@@ -65,6 +71,9 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
         "index_source": DEFAULT_INDEX,
         "futures_source": DEFAULT_FUTURES,
         "corr_source": DEFAULT_CORR,
+        # 家數帶(market-overview R2):prod 必須顯式 DEFAULT_BREADTH,漏傳 = 整條
+        # FinMind 管線靜默不啟動而面板只寫「FinMind 未設定」(與真的沒設同形)
+        "breadth_fetchers": DEFAULT_BREADTH,
     }
     # 明寫:trade 路已除役,sentinel 借用語意不得復活
     assert cap.create_kwargs is not None and "trade_source" not in cap.create_kwargs
@@ -95,7 +104,14 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
     # fake source 單一位置參數;其餘 source 全部不傳(= None = 引擎不啟動、零 ZMQ)
     assert cap.create_args is not None and len(cap.create_args) == 1
     assert isinstance(cap.create_args[0], FakeTxoSource)
-    assert cap.create_kwargs == {}
+    # breadth 是唯一的例外:走 fake 三元組(不打真 FinMind)+ 獨立落檔目錄
+    # ——共用 prod 的 data/market/ 會讓 fake 快照有機會蓋掉當日真序列
+    assert cap.create_kwargs is not None and set(cap.create_kwargs) == {
+        "breadth_fetchers",
+        "breadth_data_dir",
+    }
+    assert len(cap.create_kwargs["breadth_fetchers"]) == 3
+    assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
     # env 壓制必須有跑、log 不落檔、port 與 prod 錯開
     assert cap.neutralized is True
     assert cap.prod_log_calls == 0

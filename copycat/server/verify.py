@@ -7,6 +7,11 @@ prod 的推播)——驗 HTTP 層(route 形狀 / 非行情 endpoint)一律走本
 **本模組刻意不 import fastapi / uvicorn**:tests/conftest.py 全域 import 這裡的 key 清單,
 不能因此把 [live] extras 變成整個測試套件的硬依賴;組 app 的那步留在 `__main__`。
 
+**FinMind 兩條路刻意分開處置**:`/api/futures/oi-levels` 照舊**真打**(它的驗證價值
+就在那條路上);家數帶(breadth)走本模組的 `fake_breadth_fetchers()` **不打真 FinMind**
+—— 每 10 秒一次的輪詢在驗證期間會持續燒配額,而家數帶要驗的是接線與三態形狀,fake
+固定快照反而讓斷言變成確定值(失敗注入見該函式的 `VERIFY_BREADTH_FAIL`)。
+
 env 壓制的必要性(next-time 2026-08-04):app lifespan 無條件呼叫 `get_capital`,
 CAPITAL_USER_ID 有值(env 或 repo root .env)即載真 SKCOM DLL;DISCORD_BOT_TOKEN 有值
 即真登入 Discord。歷史事故:驗證腳本以真憑證打了一次群益登入(restart_trials.py 的
@@ -15,6 +20,7 @@ Popen 無 env= 直接繼承)。
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 from typing import Callable
 
@@ -22,6 +28,7 @@ import copycat.capital.factory as _capital_factory
 import copycat.notify as _notify
 import copycat.server.discord_bot as _discord_bot
 from copycat.live.models import OptionContract, SeriesInfo, Tick
+from copycat.server.breadth_fetch import BreadthFetchError
 
 #: capital/factory 讀取的全部環境變數 key。tests/conftest.py 與 test_factory 引用同一份
 #: (原本住在 conftest;上提到 package 讓 verify 模式與測試隔離不會漂移)。
@@ -106,3 +113,79 @@ class FakeTxoSource:
 
     def close(self) -> None:
         return None
+
+
+# ---- fake breadth 取數三元組(--verify 模式;market-overview R2 SC-3)----
+
+#: `TaiwanStockInfo` 對照列(代號 / 市場別 / 產業別)—— snapshot 的白名單來源。
+_BREADTH_INFO_ROWS: list[dict] = [
+    {"stock_id": "1101", "stock_name": "台泥", "type": "twse", "industry_category": "水泥工業"},
+    {"stock_id": "2330", "stock_name": "台積電", "type": "twse", "industry_category": "半導體業"},
+    {"stock_id": "2317", "stock_name": "鴻海", "type": "twse", "industry_category": "其他電子業"},
+    {"stock_id": "2454", "stock_name": "聯發科", "type": "twse", "industry_category": "半導體業"},
+    {"stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "industry_category": "半導體業"},
+    {"stock_id": "3105", "stock_name": "穩懋", "type": "tpex", "industry_category": "半導體業"},
+    {"stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "industry_category": "ETF"},
+]
+
+#: (代號, 收盤, 漲跌價, 漲跌幅%)。1101 前收 10.0 → 漲停 11.0;6488 前收 10.0 →
+#: 跌停 9.0;0050 是 `00` 前綴 → 被 universe filter 剔掉(驗排除路徑也有走到)。
+_BREADTH_QUOTES: tuple[tuple[str, float, float, float], ...] = (
+    ("1101", 11.0, 1.0, 10.0),
+    ("2330", 1000.0, 5.0, 0.5),
+    ("2317", 200.0, 0.0, 0.0),
+    ("2454", 1200.0, -10.0, -0.83),
+    ("6488", 9.0, -1.0, -10.0),
+    ("3105", 80.0, 1.0, 1.27),
+    ("0050", 200.0, 1.0, 0.5),
+)
+
+#: 設成 `"1"` 時三個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
+#: stale,TC4 系零波及)在**真 server** 上的注入通道;單元測試注入 fake 即可,這條
+#: 是為了在跑著的 verify server 上取證。
+FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
+
+
+def fake_breadth_fetchers() -> tuple[
+    Callable[[str], list[dict]],
+    Callable[[str], list[dict]],
+    Callable[[str, _dt.date], list[dict]],
+]:
+    """固定小快照的 breadth 取數三元組(snapshot / stock_info / disposition)。
+
+    快照時刻用**呼叫當下**的 `datetime.now()`:`trade_date == today` 才會 append 與
+    落檔(engine 的 design R1 條件),序列因此會隨輪詢長出格子 —— 用固定日期的話
+    畫面上永遠只有 counts、序列恆空,而那與「序列接線壞掉」長得一模一樣。
+    """
+
+    def _fail_if_injected() -> None:
+        if os.environ.get(FAIL_ENV_KEY) == "1":
+            raise BreadthFetchError("VERIFY_BREADTH_FAIL=1 注入的取數失敗")
+
+    def _snapshot(_token: str) -> list[dict]:
+        _fail_if_injected()
+        stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return [
+            {
+                "date": stamp,
+                "stock_id": sid,
+                "close": close,
+                "change_price": chg_price,
+                "change_rate": chg_rate,
+                "total_volume": 1_000,
+                "yesterday_volume": 500,
+                "total_amount": 12_345_000,
+            }
+            for sid, close, chg_price, chg_rate in _BREADTH_QUOTES
+        ]
+
+    def _stock_info(_token: str) -> list[dict]:
+        _fail_if_injected()
+        today = _dt.date.today().isoformat()
+        return [{**row, "date": today} for row in _BREADTH_INFO_ROWS]
+
+    def _disposition(_token: str, _today: _dt.date) -> list[dict]:
+        _fail_if_injected()
+        return []  # 空 = 當下沒有處置中的股票(合法結果,與取數失敗不同)
+
+    return (_snapshot, _stock_info, _disposition)
