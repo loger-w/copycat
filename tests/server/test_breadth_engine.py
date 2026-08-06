@@ -257,20 +257,28 @@ _TRADING_DAYS = [
 _HOLIDAYS = ["2026-08-02", "2026-08-01", "2026-07-26", "2026-07-25"]
 
 
-def _eod_rows(limit_ups: tuple[str, ...] = (), *, pad: int = 3) -> list[dict]:
+def _eod_rows(day: str, limit_ups: tuple[str, ...] = (), *, pad: int = 3) -> list[dict]:
     """單日 EOD 造值:`limit_ups` 每檔一列**剛好漲停**,其餘為平盤墊列。
 
     前收 = `close − spread` = 10.0 → 漲停 11.0(tick 0.05,10% 整除)。墊列只為
     撐過 `_DAILY_MIN_ROWS` 健檢,代號取 9000 段避免與被判股撞號。
+
+    `day` 進 `date` 欄 —— 真回應(`TaiwanStockPrice`)每列都帶資料日,而引擎以
+    `rows[0]["date"]` 做回聲檢查;fake 少這一欄就跟真回應脫節(review R3-T3)。
     """
-    rows: list[dict] = [{"stock_id": sid, "close": 11.0, "spread": 1.0} for sid in limit_ups]
-    rows += [{"stock_id": f"{9000 + i}", "close": 10.0, "spread": 0.0} for i in range(pad)]
+    rows: list[dict] = [
+        {"date": day, "stock_id": sid, "close": 11.0, "spread": 1.0} for sid in limit_ups
+    ]
+    rows += [
+        {"date": day, "stock_id": f"{9000 + i}", "close": 10.0, "spread": 0.0}
+        for i in range(pad)
+    ]
     return rows
 
 
 def _calendar(days: dict[str, tuple[str, ...]]) -> dict[str, list[dict]]:
     """{交易日: 該日漲停代號} → FakeDaily 的 calendar(不在鍵內的日期 = 假日空回應)。"""
-    return {day: _eod_rows(sids) for day, sids in days.items()}
+    return {day: _eod_rows(day, sids) for day, sids in days.items()}
 
 
 def _streaks_file(tmp_path: Path, day: str = _TRADE_DATE) -> Path:
@@ -1051,7 +1059,7 @@ class TestStreakHealthChecks:
     ) -> None:
         """非空但列數不足 = 部分截斷,**不可當假日跳過**:整輪失敗(真門檻 − 1)。"""
         monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
-        short = _eod_rows(("1101",), pad=be._DAILY_MIN_ROWS - 2)
+        short = _eod_rows("2026-08-04", ("1101",), pad=be._DAILY_MIN_ROWS - 2)
         assert len(short) == be._DAILY_MIN_ROWS - 1
         daily = FakeDaily({"2026-08-04": short})
         engine, *_ = _make(tmp_path, daily=daily)
@@ -1067,7 +1075,7 @@ class TestStreakHealthChecks:
     ) -> None:
         """門檻**含等值**:剛好 25,000 列是可用的一日(邊界另一側)。"""
         monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
-        exact = _eod_rows(("1101",), pad=be._DAILY_MIN_ROWS - 1)
+        exact = _eod_rows("2026-08-04", ("1101",), pad=be._DAILY_MIN_ROWS - 1)
         assert len(exact) == be._DAILY_MIN_ROWS
         daily = FakeDaily({"2026-08-04": exact})
         engine, *_ = _make(tmp_path, daily=daily)
@@ -1097,6 +1105,67 @@ class TestStreakHealthChecks:
         assert await engine._compute_streaks_once() is True
 
         assert engine._streaks == {"1101": 2}
+
+    async def test_leading_gap_beyond_limit_is_not_adopted(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """**前緣**間距(today ↔ dates[0])同樣要檢查(review R3-BE-1)。
+
+        相鄰兩日的間距檢查只覆蓋窗**內部**:上游把最近 N 個交易日整段丟掉時,收到的
+        序列自己是連續的(內部間距全 1),但它止於兩週前 —— 交集遞進照樣成功、成果照樣
+        被當日快取固化,而盤中判式仍以 `rows_date > data_end` 分支 +1,連板數靜默少計
+        整段。夾在中間的那些真交易日一個訊號都不會發。
+        """
+        daily = FakeDaily(_calendar({"2026-07-22": ("1101",), "2026-07-21": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)  # today = 2026-08-05 → 前緣 14 日
+
+        assert await engine._compute_streaks_once() is False
+
+        assert engine._streaks_day is None
+        assert not _streaks_file(tmp_path).exists()
+
+    async def test_leading_gap_at_limit_is_adopted(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """前緣門檻與內部同一個常數且**含等值**:剛好 12 日仍採用(邊界另一側)。"""
+        daily = FakeDaily(_calendar({"2026-07-24": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)  # today − 2026-07-24 = 12 日
+
+        assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {"1101": 1}
+
+    async def test_wrong_date_echo_fails_whole_round(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """回應的資料日與請求日不符 → 該日視同取數失敗 → 整輪重試(review R3-T3)。
+
+        `TaiwanStockPrice` 是 start_date/end_date 查詢,參數被忽略或回到別日的快取時,
+        回應形狀完全合法(列數也夠)—— 沒有回聲檢查的話,別日的漲停集合會被當成該日的
+        答案填進窗裡,連板數錯著且被當日快取固化,整天不會再重算。
+        """
+        daily = FakeDaily({"2026-08-04": _eod_rows("2026-07-31", ("1101",))})
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is False
+
+        assert engine._streaks_day is None
+        assert daily.calls == ["2026-08-04"]  # 立即中止,不繼續往回掃
+        assert not _streaks_file(tmp_path).exists()
+
+    async def test_zero_limitup_day_logs_warning(
+        self, tmp_path: Path, fast_streaks: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """全市場單日零漲停極罕見(多半是 close/spread 欄位語意變了)—— 不中斷,但要
+        留下觀測訊號:否則連板欄整片空白與「今天真的沒人漲停」完全同形。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ()}))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        with caplog.at_level("WARNING"):
+            assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {}
+        assert any("零漲停" in r.getMessage() for r in caplog.records)
 
 
 class TestStreakScheduling:
@@ -1199,6 +1268,66 @@ class TestStreakScheduling:
         assert engine._streaks == {"1101": 1}
         assert engine._streak_attempts == 3
 
+    async def test_retry_reuses_days_already_fetched(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """重試保留部分進度(review R3-BE-2)。
+
+        每一日都是 MB 級回應,而重試是整輪從頭掃 —— 第 25 日才失敗的情境下,10 次
+        嘗試會把前 24 日各重抓 10 遍(最壞 250 次 MB 級請求),配額燒光的表現是**整個**
+        家數面板跟著死。memo 是武裝日內的,已成功取得的日不重取。
+        """
+        daily = FakeDaily(_calendar({d: ("1101",) for d in _TRADING_DAYS}))
+
+        def _fail_third(n: int) -> None:
+            daily.error = BreadthFetchError("upstream down") if n == 3 else None
+
+        daily.on_call = _fail_third
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        await engine._compute_streaks_loop()
+
+        assert engine._streaks == {"1101": 10}
+        assert engine._streak_attempts == 2
+        # 前兩日在 attempt 1 就取到了 → attempt 2 直接重用,不再打上游
+        assert daily.calls.count("2026-08-04") == 1
+        assert daily.calls.count("2026-08-03") == 1
+        assert daily.calls.count("2026-08-02") == 2  # 失敗那日照樣重取
+
+    async def test_success_after_midnight_aligns_armed_day(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """跨午夜完成 → `_streak_armed_day` 對齊**成果日**(review R3-BE-3)。
+
+        attempt 1 掃到一半換日 → 丟棄(R3);attempt 2 以 D+1 為基準成功。此時
+        `_streaks_day` 是 D+1 而 `_streak_armed_day` 還停在 D —— 下一圈武裝檢查看到
+        「今日尚未武裝」,會把剛算好的成果整組清掉再全掃一次(白燒一輪 25 次 MB 級
+        請求,期間連板欄全 null)。
+        """
+        daily = FakeDaily(_calendar({"2026-08-05": ("1101",), "2026-08-04": ("1101",)}))
+        engine, _s, _i, _d, clock = _make(tmp_path, daily=daily, clock=Clock(now="06:30:00"))
+
+        def _roll(n: int) -> None:
+            if n == 1:
+                clock.today = _dt.date(2026, 8, 6)
+                clock.now = _dt.datetime(2026, 8, 6, 6, 30)
+
+        daily.on_call = _roll
+        engine._maybe_arm_streaks()
+        task = engine._streak_task
+        assert task is not None
+        await task
+
+        assert engine._streaks == {"1101": 2}
+        assert engine._streaks_day == "2026-08-06"
+        assert engine._streak_armed_day == "2026-08-06"
+
+        calls = len(daily.calls)
+        engine._maybe_arm_streaks()  # 下一圈 poll
+
+        assert engine._streaks == {"1101": 2}  # 成果沒被清掉
+        assert len(daily.calls) == calls
+
     async def test_close_cancels_streak_task(self, tmp_path: Path) -> None:
         """`close()` 一併收攤 streak task(與 poll task 同款),否則 shutdown 掛著孤兒。"""
         daily = FakeDaily({})
@@ -1266,10 +1395,20 @@ class TestStreakCache:
             pytest.param({"version": 99}, id="版本不符"),
             pytest.param({"data_end": 20260804}, id="data_end 非 str"),
             pytest.param({"streaks": ["1101"]}, id="streaks 非 dict"),
+            pytest.param({"dates": []}, id="dates 空"),
+            pytest.param(
+                {"dates": ["2026-08-03", "2026-08-04"]}, id="dates[0] 與 data_end 不符"
+            ),
+            pytest.param({"dates": ["2026-08-04", 20260803]}, id="dates 含非 str"),
         ],
     )
     async def test_restore_rejects_unusable_cache(self, tmp_path: Path, kwargs: dict) -> None:
-        """不合用的快取一律當沒有(今日重算),不半採用 —— 錯的連板數比沒有更糟。"""
+        """不合用的快取一律當沒有(今日重算),不半採用 —— 錯的連板數比沒有更糟。
+
+        後三例是 review R3-BE-4:`dates` 是 `_streaks_span`(封頂判定的分母)與
+        `data_end`(盤中 +1 判定的基準)的唯一來源,逐項過濾後**不驗自洽**就採用,
+        會讓一份半壞的快取整天生效。
+        """
         _write_streaks_cache(tmp_path, **kwargs)
         engine, *_ = _make(tmp_path, daily=FakeDaily({}))
 
@@ -1277,6 +1416,25 @@ class TestStreakCache:
 
         assert engine._streaks == {} and engine._streaks_day is None
         assert engine._streak_armed_day is None
+
+    async def test_restore_empty_dates_does_not_flag_every_row_capped(
+        self, tmp_path: Path
+    ) -> None:
+        """`dates: []` 的快取:`_streaks_span` = 0 → `prev >= span` 恆真 → **每一列**
+        漲停都被標成「N+ 板」封頂(review R3-BE-4)。
+
+        形狀檢查擋在採用之前才是誠實的降級:整片 null(不知道)勝過整片假封頂。
+        """
+        _write_streaks_cache(tmp_path, dates=[], streaks={"1101": 2})
+        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
+        engine._restore_streaks()
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is False
+        assert _row_of(state, "1101")["streak"] is None
+        assert _row_of(state, "1101")["streak_capped"] is False
 
     async def test_restore_bad_json_is_never_raise(self, tmp_path: Path) -> None:
         _streaks_file(tmp_path).write_text("not json at all", encoding="utf-8")

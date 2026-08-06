@@ -10,6 +10,8 @@ import datetime as _dt
 import json
 from pathlib import Path
 
+import pytest
+
 from copycat.market_breadth import (
     PRIMARY_INDUSTRY_OVERRIDE,
     assemble_universe,
@@ -476,6 +478,49 @@ def test_compute_breadth_touched_false_when_high_low_missing() -> None:
     assert out is not None
     assert out["rows"][0]["touched_limit_up"] is False
     assert out["rows"][0]["touched_limit_down"] is False
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param("", id="空字串"),
+        pytest.param("-", id="破折號"),
+        pytest.param("N/A", id="非數值字串"),
+        pytest.param({}, id="非純量"),
+        pytest.param(True, id="bool"),
+    ],
+)
+def test_compute_breadth_touched_tolerates_non_numeric_high_low(bad: object) -> None:
+    """`high`/`low` 非數值(未成交檔位常見的空字串 / `"-"`)→ 不判 touched,**不得拋**。
+
+    `round(x * 1000)` 對 str / dict 直接 TypeError,而那個例外從 `_apply` 一路逃到
+    `_poll_loop` 的傘罩被吞掉:`_fail()` 沒被呼叫 → 退避不動、stale 不亮,面板只是
+    凍在最後一則。一列髒值就足以讓**整片**家數停止更新且零錯誤訊號。
+    """
+    rows = [
+        {
+            "stock_id": "2330",
+            "change_rate": 5.0,
+            "close": 105.0,
+            "change_price": 5.0,
+            "high": bad,
+            "low": bad,
+        },
+        # 同輪的正常列:整輪不得被前一列的髒值中斷
+        {
+            "stock_id": "6488",
+            "change_rate": 5.0,
+            "close": 105.0,
+            "change_price": 5.0,
+            "high": 110.0,
+            "low": 104.0,
+        },
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["touched_limit_up"] is False
+    assert out["rows"][0]["touched_limit_down"] is False
+    assert out["rows"][1]["touched_limit_up"] is True
 
 
 def test_compute_breadth_touched_needs_exact_milli_equality() -> None:
