@@ -144,6 +144,52 @@ describe("buildVpBars", () => {
     expect(bars[0]!.y + bars[0]!.h).toBeLessThanOrEqual(g.toY(p) + 1e-9);
   });
 
+  /** 🔴 F-5:價位帶的兩端改為「與相鄰**合法檔位**的中點」。
+   *
+   *  舊版兩端都用 `tickOf(p) / 2`,在 tick 級距邊界(50 / 100 / 500 / 1000 元)會跨過
+   *  下方鄰檔:p = 100.00 元的 tick 是 0.5 元 → 帶下緣 99.75,但下方的合法檔位是 99.90
+   *  (它自己的 tick 是 0.1 元)、帶上緣 99.95 → 兩帶重疊 0.2 元,`VP_FILL_OPACITY`
+   *  疊加後看起來像那一帶的量特別集中。
+   *
+   *  上緣不受影響(`stepUp` 用的就是 p 自己的 tick),所以只有下緣會動。 */
+  describe("價位帶兩端 = 與相鄰合法檔位的中點(F-5:級距邊界不跨檔)", () => {
+    // [邊界檔位, 下方合法檔位, 上方合法檔位](毫元)
+    const CASES: [number, number, number][] = [
+      [50_000, 49_950, 50_100], // 50.00 元:tick 0.1 ← 下方 0.05
+      [100_000, 99_900, 100_500], // 100.00 元:tick 0.5 ← 下方 0.1
+      [500_000, 499_500, 501_000], // 500.0 元:tick 1 ← 下方 0.5
+      [1_000_000, 999_000, 1_005_000], // 1000 元:tick 5 ← 下方 1
+    ];
+
+    for (const [p, below, above] of CASES) {
+      it(`p=${p} 毫元:下緣 = 與 ${below} 的中點,與下方檔位的帶不重疊`, () => {
+        // 域取寬一點讓 dist 遠大於 1px(否則 h 被 clamp,量不到帶邊界)
+        const g = geom(below - 10 * (p - below), above + 10 * (above - p));
+        const bars = buildVpBars(cells([[p, 5], [below, 5]]), g, WIDTH);
+        const bar = bars.find((b) => b.priceMilli === p)!;
+        const lower = bars.find((b) => b.priceMilli === below)!;
+        // h = dist × 0.85(0.15 的縫全由下緣吃掉)→ 由 h 反推帶的下緣
+        const bandBottomY = bar.y + bar.h / 0.85;
+
+        expect(bar.y).toBeCloseTo(g.toY((p + above) / 2), 6);
+        expect(bandBottomY).toBeCloseTo(g.toY((p + below) / 2), 6);
+        // 舊版 `tickOf(p)/2` 的下緣落在下方檔位的帶內(svg y 愈大愈下)
+        expect(bandBottomY).toBeLessThan(g.toY(p - tickOf(p) / 2));
+        // 與下方檔位的帶相接不重疊
+        expect(bandBottomY).toBeLessThanOrEqual(lower.y + 1e-9);
+      });
+    }
+
+    it("非邊界檔位:帶仍是 [p − tick/2, p + tick/2](與現行等價)", () => {
+      const g = geom(2_300_000, 2_400_000);
+      const p = 2_350_000;
+      const half = tickOf(p) / 2;
+      const bars = buildVpBars(cells([[p, 5]]), g, WIDTH);
+      expect(bars[0]!.y).toBeCloseTo(g.toY(p + half), 6);
+      expect(bars[0]!.y + bars[0]!.h / 0.85).toBeCloseTo(g.toY(p - half), 6);
+    });
+  });
+
   describe("高密度域的縫(R6)", () => {
     it("(a) dist ≈ 1.19px(域 200 檔)→ h ≤ dist 且 ≥ dist × 0.8(相鄰不重疊)", () => {
       // 250 元帶 tick = 0.5 元(500 毫元);200 檔 = 100_000 毫元域寬
