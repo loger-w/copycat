@@ -16,6 +16,13 @@ WS 廣播。純函式在 `copycat.market_breadth`,取數在 `copycat.server.brea
 1331–1335 clamp):同一頁的指數分時圖用同一把尺,兩張圖的 x 軸才對得起來;域外
 (盤後定盤 14:30、盤前)一律丟棄。
 
+**產業鏈(R4 design §4.3/§5)**:第三條背景 task —— `TaiwanStockIndustryChain`
+的 7 天 TTL 快取,成功即換表 + 落檔。刷新**刻意不 await**:那張表壞掉或上游卡住
+只該讓類股面板 degraded,家數輪一秒都不能被它拖住(§1 失效域的前提)。載入紀律
+是「**過期也先用**」—— stale 的產業對照勝於整片空白,而空白與「FinMind 掛了」
+在畫面上完全同形。取數成功但 parse 後為空(欄位語意變 / 上游回殘表)時**不換表
+也不落檔**:照樣換的話,一份可用的舊快取會被空表覆寫並固化到磁碟。
+
 **連板數(R3 design §3.3)**:另有一條每日一次的背景 task —— FinMind EOD 回看
 10 個交易日算連續漲停日數,成果落 `streaks-<today>.json`。與 poll 迴圈共用同一個
 FinMind 失效域(壞了只讓連板欄 null),排程狀態刻意與成果分離:`_streak_armed_day`
@@ -49,7 +56,14 @@ from copycat.market_breadth import (
     max_tick_datetime,
     parse_active_disposition,
 )
+from copycat.sector_rotation import (
+    ChainMap,
+    compute_sector_members,
+    compute_sector_rotation,
+    rows_to_chain_map,
+)
 from copycat.server.breadth_fetch import BreadthFetchError
+from copycat.server.chain_store import load_chain, save_chain
 from copycat.server.index_engine import minute_key
 from copycat.server.ws import WsBroadcaster
 
@@ -96,10 +110,15 @@ _STREAK_GAP_CAL_DAYS = 12
 _STREAK_REQ_GAP_SECS = 0.3
 _STREAK_RETRY_SECS = 60.0
 
+# ---- 產業鏈(chain)刷新 ----
+#: chain 快取檔名(`<data_dir>/industry_chain.json`;格式與讀寫在 `chain_store`)
+_CHAIN_FILE = "industry_chain.json"
+
 SnapshotFetch = Callable[[str], list[dict]]
 StockInfoFetch = Callable[[str], list[dict]]
 DispositionFetch = Callable[[str, _dt.date], list[dict]]
 DailyPricesFetch = Callable[[str, _dt.date], list[dict]]
+ChainFetch = Callable[[str], list[dict]]
 
 
 def _monotonic() -> float:
@@ -158,6 +177,7 @@ class BreadthEngine:
         stock_info_fetch: StockInfoFetch,
         disposition_fetch: DispositionFetch,
         daily_fetch: DailyPricesFetch | None = None,
+        chain_fetch: ChainFetch | None = None,
         data_dir: Path | None = None,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
         now_fn: Callable[[], _dt.datetime] | None = None,
@@ -169,6 +189,8 @@ class BreadthEngine:
         self._disposition_fetch = disposition_fetch
         #: None = 連板數停用(rows 端點照常,`streak` 恆 null)
         self._daily_fetch = daily_fetch
+        #: None = 類股輪動停用(`sector_state().rotation` 恆 null,家數面板不受影響)
+        self._chain_fetch = chain_fetch
         self._data_dir = data_dir if data_dir is not None else _DEFAULT_DATA_DIR
         self._today_fn = today_fn
         # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
@@ -203,6 +225,20 @@ class BreadthEngine:
         #: 武裝時清空:同一日期的 EOD 不會變,但成果只服務當次武裝日的窗。
         self._streak_memo: dict[str, set[str] | None] = {}
 
+        # ---- 產業鏈 / 類股輪動(design §4.3;成果 vs 排程同樣分離)----
+        self._chain_map: ChainMap = {}
+        #: **epoch**(不是單調鐘):TTL 要跨重啟算得準,而單調鐘的原點每次重啟都不同。
+        #: None = 從未成功(含快取檔壞掉)→ 武裝判定視同過期。
+        self._chain_fetched_at: float | None = None
+        self._chain_task: asyncio.Task[None] | None = None
+        #: 取數失敗後的重試不早於此**單調**時刻(對照表的 `_info_retry_at` 同語意)
+        self._chain_retry_at: float | None = None
+        #: 最近一輪成功的 rotation(None = chain 缺 / 首輪未成 → 面板 degraded)
+        self._rotation: dict | None = None
+        #: members drill-down 的原料 = `assemble_universe` 輸出(**不是** `self.rows`:
+        #: 後者的量欄已收成 `volume_ratio`,分子分母不可再同步剔除)
+        self._universe_rows: list[dict] = []
+
         # ---- 當日分鐘序列(分鐘鍵 → point,last-wins)----
         self._series: dict[str, dict] = {}
 
@@ -232,21 +268,24 @@ class BreadthEngine:
     # ---- 生命週期 ----
 
     async def start(self) -> None:
-        """restore 當日落檔(序列 + streak)+ 起 poll task。**零網路 IO** —— 首輪 fetch
-        在 task 上跑,FinMind 慢或掛都不得延後 lifespan(design R6)。
+        """restore 本地落檔(序列 + streak + chain)+ 起 poll task。**零網路 IO** ——
+        首輪 fetch 在 task 上跑,FinMind 慢或掛都不得延後 lifespan(design R6)。
 
-        streak task 刻意**不在這裡起**:武裝條件含 06:00 時間閘,交給 `_poll_loop`
-        每圈檢查才只有一處判定(start() 另起一份就會繞過時間閘)。
+        streak / chain task 刻意**不在這裡起**:武裝條件含時間閘與 TTL,交給
+        `_poll_loop` 每圈檢查才只有一處判定(start() 另起一份就會繞過那些閘)。
         """
         self._restore()
         self._restore_streaks()
+        self._restore_chain()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def close(self) -> None:
         task, self._task = self._task, None
         streak, self._streak_task = self._streak_task, None
+        chain, self._chain_task = self._chain_task, None
         await _cancel(task)
         await _cancel(streak)
+        await _cancel(chain)
 
     # ---- 對外狀態 ----
 
@@ -304,6 +343,31 @@ class BreadthEngine:
             "rows": rows_out,
         }
 
+    def sector_state(self) -> dict:
+        """REST 全量類股輪動(`GET /api/market/sector`)。`rotation` None = 未就緒。
+
+        日期基準 = `_rows_date`(與 rotation 同一輪的資料日),不是 `_trade_date`:
+        `adopt_date=False` 路徑會讓後者與 rows 脫鉤,而 rotation 是從那一輪的
+        universe 算的 —— 報錯日期的表現是「畫面全對、只有標頭日期是別天的」。
+        """
+        return {
+            "enabled": True,
+            "trade_date": self._rows_date,
+            "as_of": self._as_of,
+            "stale": self._stale(),
+            "rotation": self._rotation,
+        }
+
+    def sector_members(self, industry: str, sub_industry: str | None) -> dict | None:
+        """成員股 drill-down;未知 industry / sub_industry → None(呼叫端轉 404)。"""
+        return compute_sector_members(
+            self._universe_rows,
+            self._chain_map,
+            self._name_map,
+            industry,
+            sub_industry,
+        )
+
     def payload(self, last_minute: dict | None = None) -> dict:
         """WS scalar 訊息;`last_minute` 只在本輪真的 append 了一格時帶值。"""
         return {
@@ -336,6 +400,7 @@ class BreadthEngine:
                 # 拋例外絕不能殺掉整條 poll task —— 那會讓家數面板為了連板數這條旁支
                 # 凍在最後一則且零錯誤訊號(review R9)。
                 self._maybe_arm_streaks()
+                self._maybe_arm_chain()
                 if first or self._in_window():
                     await self._run_cycle()
             except Exception:
@@ -509,6 +574,10 @@ class BreadthEngine:
         # 與 rows 同行、**無條件**更新(含 adopt_date=False 路徑)—— 這正是它存在的
         # 理由:rows 換了而日期沒換的話,連板判式會拿舊日期去比 data_end(R14)
         self._rows_date = trade_date
+        # 類股輪動與 rows 同輪同源(design §5):`sector_state()` 報的 trade_date /
+        # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾
+        self._universe_rows = universe
+        self._rotation = compute_sector_rotation(universe, self._chain_map)
         self._fail_streak = 0
         self._quota = False
         self._last_success = _monotonic()
@@ -566,6 +635,99 @@ class BreadthEngine:
         if self._last_success is None:
             return True
         return _monotonic() - self._last_success > self._config.stale_secs
+
+    # ---- 產業鏈刷新(design §4.3)----
+
+    def _chain_path(self) -> Path:
+        return self._data_dir / _CHAIN_FILE
+
+    def _restore_chain(self) -> None:
+        """讀本地 chain 快取進表 —— **過期也先用**(TTL 只決定要不要重取,不決定能不能用)。
+
+        parse 後為空(舊格式 / 殘表)則當沒有快取:時戳留 None → 下一圈立刻武裝。
+        """
+        loaded = load_chain(self._chain_path())
+        if loaded is None:
+            return
+        rows, fetched_at = loaded
+        chain_map = rows_to_chain_map(rows)
+        if not chain_map:
+            logger.warning("breadth industry_chain 快取解析後為空(%d 列),視同無快取", len(rows))
+            return
+        self._chain_map = chain_map
+        self._chain_fetched_at = fetched_at
+        logger.info(
+            "breadth industry_chain restore:%d 列 / %d 產業(取數於 epoch %.0f)",
+            len(rows),
+            len(chain_map),
+            fetched_at,
+        )
+
+    def _maybe_arm_chain(self) -> None:
+        """該不該起 chain 刷新 task。四個條件缺一不可(順序即語意):
+
+        1. `chain_fetch` 有值 —— None = 類股停用。
+        2. task 不在跑 —— 上游卡住時不重複武裝(`is None` 分支不可省:第一次武裝前
+           task 從未存在)。
+        3. TTL 過期(`chain_ttl_hours`;`_chain_fetched_at is None` = 從未成功 → 視同
+           過期)。TTL 走 **epoch**,重啟後照樣算得準。
+        4. 退避冷卻已過 —— 壞上游不跟著 poll 節奏(10s)重打。
+        """
+        if self._chain_fetch is None:
+            return
+        task = self._chain_task
+        if task is not None and not task.done():
+            return
+        fetched_at = self._chain_fetched_at
+        ttl = self._config.chain_ttl_hours * 3600.0
+        if fetched_at is not None and _time.time() - fetched_at < ttl:
+            return
+        retry_at = self._chain_retry_at
+        if retry_at is not None and _monotonic() < retry_at:
+            return
+        self._chain_task = asyncio.create_task(self._refresh_chain())
+
+    async def _refresh_chain(self) -> None:
+        """一次刷新:取數 → parse → 落檔 → 換表。**失敗一律沿用舊表**。
+
+        整個 method 是 fire-and-forget task 的身體,所以每條失敗路徑都自己收尾(退避
+        時刻),不外拋 —— 逃出去的例外只會變成 asyncio 的「Task exception was never
+        retrieved」,而類股面板停在舊表上零錯誤訊號。
+        """
+        fetch = self._chain_fetch
+        if fetch is None:  # pragma: no cover - 武裝條件已擋掉
+            return
+        try:
+            rows = await asyncio.to_thread(fetch, self._token)
+        except BreadthFetchError as e:
+            wait = self._map_backoff(e.quota)
+            logger.warning(
+                "breadth industry_chain 取數失敗(沿用舊表,%.0fs 後重試):%s", wait, e
+            )
+            self._chain_retry_at = _monotonic() + wait
+            return
+        except Exception:
+            logger.exception(
+                "breadth industry_chain 取數非預期失敗(沿用舊表,%.0fs 後重試)", _MAP_RETRY_SECS
+            )
+            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
+            return
+        chain_map = rows_to_chain_map(rows)
+        if not chain_map:
+            # 換表 = 連磁碟那份一起覆寫;空表照換的話重啟後連 stale 的類股都沒有
+            logger.warning(
+                "breadth industry_chain 解析後為空(%d 列;沿用舊表不落檔,%.0fs 後重試)",
+                len(rows),
+                _MAP_RETRY_SECS,
+            )
+            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
+            return
+        fetched_at = _time.time()
+        save_chain(self._chain_path(), rows, fetched_at)
+        self._chain_map = chain_map
+        self._chain_fetched_at = fetched_at
+        self._chain_retry_at = None
+        logger.info("breadth industry_chain 刷新:%d 列 / %d 產業", len(rows), len(chain_map))
 
     # ---- 連板數重算(design §3.3)----
 
