@@ -398,6 +398,46 @@ describe("SectorSection 背景輪詢 gate", () => {
     expect(fetchSpy.mock.calls.length).toBe(2);
   });
 
+  // (review round-2 FE-3)成員表原本沒有 `refetchInterval`,全 repo 也沒人 invalidate
+  // `["sector-members"]` → 鑽開的成員表**從打開那一刻起就凍結**,而它正上方的產業列
+  // 每 10 秒在更新。畫面上兩層數字並排,一層是即時的、一層是幾分鐘前的,沒有任何
+  // 標示能區分 —— 使用者只會以為這幾檔今天很穩。
+  /** 展開 + 鑽取單層產業(航運)的成員表,全程 fake timers。 */
+  async function drillWithTimers(active?: boolean): Promise<void> {
+    openWithTimers(active);
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("成員表跟著產業列一起輪詢(盤中 + active)", async () => {
+    await drillWithTimers(true);
+    expect(memberUrls().length).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(memberUrls().length).toBe(2);
+  });
+
+  it("active=false → 成員表也不背景輪詢(鑽取當下仍抓一次)", async () => {
+    await drillWithTimers(false);
+    expect(memberUrls().length).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(memberUrls().length).toBe(1);
+  });
+
+  it("盤外(週六)→ 成員表不輪詢", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
+    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+    stubFetch(mkState());
+    renderSection(undefined, true);
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(memberUrls().length).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(memberUrls().length).toBe(1);
+  });
+
   it("盤外(週六)→ 展開且 active 也不輪詢", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
