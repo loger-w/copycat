@@ -77,6 +77,12 @@ export const WL_COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 /** 自選側欄未分組區塊的折疊("1" = 折疊)— components/stock/WatchlistSidebar.tsx */
 export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 
+/** 個股頁檢視("single" / "group")— components/stock/StockPage.tsx */
+export const STOCK_VIEW_KEY = "copycat-stock-view";
+/** 群組檢視選中的群組名 — components/stock/GroupGridView.tsx。
+ *  **與 `WL_COLLAPSED_KEY` 無關**:那支記的是側欄折疊,兩者同時存在且語意不同。 */
+export const STOCK_GROUP_KEY = "copycat-stock-group";
+
 /** 訊號提示音開關("on" / "off")— hooks/useSignalSound.ts */
 export const SOUND_KEY = "copycat-signal-sound";
 
