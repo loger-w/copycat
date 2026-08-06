@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { createElement, StrictMode, type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStockStream } from "@/hooks/useStockStream";
@@ -60,11 +60,15 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 /** 全站 main.tsx 是包在 `<StrictMode>` 下的 —— dev 會 double-invoke updater 與 effect。
- *  `wrapper` 不套是為了讓其餘測試維持單發語意(訊息數、WS instance 數都好數),
- *  只有「副作用不可寫在 updater 內」這一條需要真的重現正式環境的雙發。 */
-function strictWrapper({ children }: { children: ReactNode }) {
-  return createElement(StrictMode, null, createElement(QueryClientProvider, { client: queryClient }, children));
-}
+ *  其餘測試不套是為了維持單發語意(訊息數、WS instance 數都好數),只有「副作用不可
+ *  寫在 updater 內」「旗標不可跨 socket 世代」這兩條需要真的重現正式環境的雙發。
+ *
+ *  **必須走 RTL 的 `reactStrictMode` option,不可自己寫一個回傳 `<StrictMode>` 的
+ *  wrapper 元件**:後者的 StrictMode 是在 wrapper **render 當中**才產生的,React 不會
+ *  對它做 mount→cleanup→mount 的模擬 —— 實測 effect 只跑一次(`["setup"]`),
+ *  而 option 版是 `["setup","cleanup","setup"]`。掛錯的話測試照樣全綠,只是「StrictMode
+ *  下……」的那些斷言全部退化成單發語意的重複驗證。 */
+const STRICT = { wrapper, reactStrictMode: true } as const;
 
 beforeEach(() => {
   FakeWS.instances = [];
@@ -208,9 +212,10 @@ describe("useStockStream", () => {
   //
   // 上一條測試只鎖了「有打」的下界(`toBeGreaterThan`),打幾次不管 —— 這正是本條要補的。
   it("回補完成的 refetch 恰一次(StrictMode 下 updater 被 double-invoke)", async () => {
-    const hook = renderHook(() => useStockStream("2330"), { wrapper: strictWrapper });
+    const hook = renderHook(() => useStockStream("2330"), STRICT);
     await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
     // StrictMode 的 effect double-invoke 會建兩條 FakeWS(第一條已在 cleanup 關掉)
+    expect(FakeWS.instances.length).toBe(2);
     const ws = FakeWS.instances[FakeWS.instances.length - 1]!;
     const before = fetchMock.mock.calls.length;
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: "2330" }));
@@ -356,6 +361,42 @@ describe("useStockStream", () => {
     expect(String(fetchMock.mock.calls[before]?.[0])).toBe("/api/stock/state/5483");
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(hook.result.current.accum).not.toBeNull();
+  });
+
+  // 🔴 review A-2:`wsOpenRef` 是**跨 socket 世代共用**的單一旗標,而 `onclose` 把
+  // `wsOpenRef.current = false` 寫在 `alive` 早退**之前** —— StrictMode(main.tsx 全站,
+  // dev)的 mount→cleanup→mount 下,舊 socket 的 close 事件若晚於新 socket 的 `onopen`
+  // 到達,旗標被清成 false 而且**再也回不去**(新 socket 的 onopen 已經發生過了)。
+  // 之後 `scheduleRetry` 的第三道檢查永遠早退 → F-3 的自癒在 dev 整條失效,而 dev
+  // 正是驗證環境,且零錯誤訊號。
+  it("舊 socket 的 onclose 不得清掉新 socket 的 open 旗標(A-2)", async () => {
+    const hook = renderHook(() => useStockStream("2330"), STRICT);
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    expect(FakeWS.instances.length).toBe(2); // StrictMode 雙掛:ws1 已 cleanup,ws2 活著
+    const ws1 = FakeWS.instances[0]!;
+    const ws2 = FakeWS.instances[1]!;
+    // 雙掛的補發 refetch 是非同步的,先讓它落地再換 mock(否則 once 被它吃掉)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+
+    // 新 socket open → 旗標轉真。用**不同 seq** 的 snapshot 才等得到「真的 settle」:
+    // 只等 fetch 呼叫數等不到 setState,是刀鋒時序(A-1 同源)。
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify(snap(2, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]))),
+    );
+    await act(async () => { ws2.onopen?.(); });
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(2));
+    // 舊 socket 的 close 晚到(它那條 effect 早已 cleanup → 該閉包的 alive=false)
+    act(() => { ws1.onclose?.(); });
+
+    vi.useFakeTimers();
+    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 503 }));
+    act(() => ws2.emit(T(9))); // 跳號 → refetch → 503 → 應排一次重試
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const before = fetchMock.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(fetchMock.mock.calls.length).toBe(before + 1); // 修前:旗標被清 → 一次都不排
   });
 
   it("WS onopen 發 ws-open 事件(斷線期間漏掉的訊號靠它自癒回補)", async () => {
