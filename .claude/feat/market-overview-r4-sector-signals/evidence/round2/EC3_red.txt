@@ -1,0 +1,30 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+_________ TestChainCache.test_future_fetched_at_is_treated_as_expired _________
+
+self = <test_breadth_engine.TestChainCache object at 0x0000023463A76DD0>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2666/test_future_fetched_at_is_trea0')
+small_chain = None
+
+    async def test_future_fetched_at_is_treated_as_expired(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
+        """未來時戳(本機時鐘曾超前後回退)= 過期 → 立刻武裝(review round-2 EC-3/PS-4)。
+    
+        `now - fetched_at < ttl` 對未來時戳恆真 —— chain 永不重取、也不留任何 log,
+        表現只是「類股表停在很久以前」而畫面上完全正常。
+        """
+        chain = FakeFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._chain_fetched_at = _time.time() + 86_400.0
+    
+        await _arm_chain(engine)
+    
+>       assert chain.calls == 1
+E       assert 0 == 1
+E        +  where 0 = <test_breadth_engine.FakeFetch object at 0x00000234638C7E00>.calls
+
+tests\server\test_breadth_engine.py:2135: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_future_fetched_at_is_treated_as_expired
+1 failed, 133 deselected in 0.30s

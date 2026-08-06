@@ -1,0 +1,179 @@
+FF                                                                       [100%]
+================================== FAILURES ===================================
+__________ test_compute_breadth_tolerates_non_numeric_numeric_fields __________
+
+    def test_compute_breadth_tolerates_non_numeric_numeric_fields() -> None:
+        """數值欄的髒值(`"-"` / 空字串 = 未成交檔位的實務樣態)整檔跳過,不得炸整輪。
+    
+        `high` / `low` 早有 `_to_number` 防禦,但 `close` / `change_price` / `change_rate`
+        與量欄仍是裸取:`close - change_price` 對 str 直接 TypeError,而那個例外會從
+        `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉 —— 整片家數凍在最後一則
+        (review round-2 XR-1b)。乾淨列必須照常入桶。
+        """
+        rows = [
+            {"stock_id": "2330", "change_rate": 1.5, "close": 1000.0, "change_price": 15.0},
+            {"stock_id": "2317", "change_rate": 1.0, "close": "-", "change_price": 1.0},
+            {"stock_id": "6488", "change_rate": "-", "close": 500.0, "change_price": -10.0},
+            {"stock_id": "5483", "change_rate": -1.0, "close": 100.0, "change_price": ""},
+        ]
+>       out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_market_breadth.py:288: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+rows = [{'stock_id': '2330', 'change_rate': 1.5, 'close': 1000.0, 'change_price': 15.0}, {'stock_id': '2317', 'change_rate': ... 'close': 500.0, 'change_price': -10.0}, {'stock_id': '5483', 'change_rate': -1.0, 'close': 100.0, 'change_price': ''}]
+type_map = {'2330': 'twse', '2317': 'twse', '6488': 'tpex', '5483': 'tpex'}
+name_map = {'2330': '台積電', '6488': '環球晶'}
+
+    def compute_breadth(
+        rows: list[dict],
+        type_map: dict[str, str],
+        name_map: dict[str, str],
+    ) -> dict | None:
+        """上市 / 上櫃 × 漲停 / 上漲 / 平盤 / 下跌 / 跌停 家數 + 全量 rows。
+    
+        - 五桶**互斥**(漲停不重複計入上漲)。
+        - `prev_close = close \u2212 change_price`(snapshot \u7cbe\u78ba\u6b04\u4f4d,\u4e0d\u7528 change_rate \u53cd\u63a8);
+          `close` / `change_price` 缺或 `prev_close <= 0` → 不判 limit,只按 change_rate
+          正負分桶。
+        - `change_rate` 為 None 的整檔跳過;`type_map` 查無市場的代號排除。
+        - rows 另帶 `close`(直通)與 `touched_limit_up` / `touched_limit_down`
+          (`high`/`low` 摸到停板但收盤未鎖;缺欄或前收不可用 → False)。touched 不影響
+          五桶家數 —— 觸及未鎖仍按 change_rate 分桶。
+        - rows 另帶 `limit_judged` = 「本輪這檔的 limit 旗標是**判定結果**而非缺值
+          預設」。缺值列的 `limit_up` / `limit_down` 恆 False,與「真的沒鎖」同形 ——
+          diff 事件源(`breadth_engine`)靠這鍵整列跳過,缺欄輪才不會產假 open。
+          **copycat-only 附加鍵**:parity oracle 只比 counts + 逐檔桶推導,不做逐鍵
+          dict 比對,fixture 不需重錄。
+        - 全空 → `None`(呼叫端視同該輪失敗)。
+        """
+        counts: dict[str, dict[str, int]] = {
+            m: {"limit_up": 0, "up": 0, "flat": 0, "down": 0, "limit_down": 0}
+            for m in ("twse", "tpex")
+        }
+        rows_out: list[dict] = []
+    
+        for r in rows:
+            sid = r.get("stock_id")
+            market = type_map.get(sid or "")
+            chg = r.get("change_rate")
+            if not sid or market not in counts or chg is None:
+                continue
+    
+            close = r.get("close")
+            change_price = r.get("change_price")
+            prev_close = (
+>               close - change_price if close is not None and change_price is not None else None
+                ^^^^^^^^^^^^^^^^^^^^
+            )
+E           TypeError: unsupported operand type(s) for -: 'str' and 'float'
+
+copycat\market_breadth.py:342: TypeError
+__________ test_compute_breadth_tolerates_non_numeric_volume_fields ___________
+
+    def test_compute_breadth_tolerates_non_numeric_volume_fields() -> None:
+        """量欄髒值 → `volume_ratio` None(除法對 str 直接 TypeError;review round-2 XR-1b)。"""
+        rows = [
+            {
+                "stock_id": "2330",
+                "change_rate": 1.5,
+                "close": 1000.0,
+                "change_price": 15.0,
+                "total_volume": "-",
+                "yesterday_volume": 200,
+            },
+            {
+                "stock_id": "2317",
+                "change_rate": 1.5,
+                "close": 200.0,
+                "change_price": 3.0,
+                "total_volume": 300,
+                "yesterday_volume": "-",
+            },
+        ]
+>       out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_market_breadth.py:317: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+rows = [{'stock_id': '2330', 'change_rate': 1.5, 'close': 1000.0, 'change_price': 15.0, ...}, {'stock_id': '2317', 'change_rate': 1.5, 'close': 200.0, 'change_price': 3.0, ...}]
+type_map = {'2330': 'twse', '2317': 'twse', '6488': 'tpex', '5483': 'tpex'}
+name_map = {'2330': '台積電', '6488': '環球晶'}
+
+    def compute_breadth(
+        rows: list[dict],
+        type_map: dict[str, str],
+        name_map: dict[str, str],
+    ) -> dict | None:
+        """上市 / 上櫃 × 漲停 / 上漲 / 平盤 / 下跌 / 跌停 家數 + 全量 rows。
+    
+        - 五桶**互斥**(漲停不重複計入上漲)。
+        - `prev_close = close \u2212 change_price`(snapshot \u7cbe\u78ba\u6b04\u4f4d,\u4e0d\u7528 change_rate \u53cd\u63a8);
+          `close` / `change_price` 缺或 `prev_close <= 0` → 不判 limit,只按 change_rate
+          正負分桶。
+        - `change_rate` 為 None 的整檔跳過;`type_map` 查無市場的代號排除。
+        - rows 另帶 `close`(直通)與 `touched_limit_up` / `touched_limit_down`
+          (`high`/`low` 摸到停板但收盤未鎖;缺欄或前收不可用 → False)。touched 不影響
+          五桶家數 —— 觸及未鎖仍按 change_rate 分桶。
+        - rows 另帶 `limit_judged` = 「本輪這檔的 limit 旗標是**判定結果**而非缺值
+          預設」。缺值列的 `limit_up` / `limit_down` 恆 False,與「真的沒鎖」同形 ——
+          diff 事件源(`breadth_engine`)靠這鍵整列跳過,缺欄輪才不會產假 open。
+          **copycat-only 附加鍵**:parity oracle 只比 counts + 逐檔桶推導,不做逐鍵
+          dict 比對,fixture 不需重錄。
+        - 全空 → `None`(呼叫端視同該輪失敗)。
+        """
+        counts: dict[str, dict[str, int]] = {
+            m: {"limit_up": 0, "up": 0, "flat": 0, "down": 0, "limit_down": 0}
+            for m in ("twse", "tpex")
+        }
+        rows_out: list[dict] = []
+    
+        for r in rows:
+            sid = r.get("stock_id")
+            market = type_map.get(sid or "")
+            chg = r.get("change_rate")
+            if not sid or market not in counts or chg is None:
+                continue
+    
+            close = r.get("close")
+            change_price = r.get("change_price")
+            prev_close = (
+                close - change_price if close is not None and change_price is not None else None
+            )
+            limit_up = False
+            limit_down = False
+            touched_up = False
+            touched_down = False
+            limit_judged = False
+            # 條件寫在 `if` 內(不抽成布林變數再 `if flag:`)—— pyright 只在條件式當場
+            # narrow `close` / `prev_close`,經布林變數轉一手就會退回 `... | None`。
+            if prev_close is not None and prev_close > 0 and close is not None:
+                limit_judged = True
+                limit_up, limit_down = _is_limit(close, prev_close)
+                touched_up, touched_down = _is_touched(r.get("high"), r.get("low"), prev_close)
+    
+            if limit_up:
+                bucket = "limit_up"
+            elif limit_down:
+                bucket = "limit_down"
+            elif chg > 0:
+                bucket = "up"
+            elif chg < 0:
+                bucket = "down"
+            else:
+                bucket = "flat"
+            counts[market][bucket] += 1
+    
+            tv = r.get("total_volume")
+            yv = r.get("yesterday_volume")
+>           vol_ratio = (tv / yv) if (tv is not None and yv) else None
+                         ^^^^^^^
+E           TypeError: unsupported operand type(s) for /: 'str' and 'int'
+
+copycat\market_breadth.py:370: TypeError
+=========================== short test summary info ===========================
+FAILED tests/test_market_breadth.py::test_compute_breadth_tolerates_non_numeric_numeric_fields
+FAILED tests/test_market_breadth.py::test_compute_breadth_tolerates_non_numeric_volume_fields
+2 failed, 46 deselected in 0.09s

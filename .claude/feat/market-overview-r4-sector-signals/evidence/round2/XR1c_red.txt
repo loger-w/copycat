@@ -1,0 +1,43 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+_ TestFailureHandling.test_apply_crash_counted_as_failure_and_still_broadcasts _
+
+self = <test_breadth_engine.TestFailureHandling object at 0x00000231DEA17B50>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2664/test_apply_crash_counted_as_fa0')
+
+    async def test_apply_crash_counted_as_failure_and_still_broadcasts(
+        self, tmp_path: Path
+    ) -> None:
+        """`_apply` 拋 → 該輪算失敗**且照樣廣播**(review round-2 XR-1c)。
+    
+        現況兩層都缺:例外一路逃到 `_poll_loop` 的傘罩 → `_fail()` 沒被呼叫(退避不動)
+        且 `publish` 被跳過 → 家數帶凍在最後一則、stale 永遠到不了前端,零錯誤訊號。
+        """
+        engine, *_ = _make(tmp_path)
+    
+        def _boom(rows: list[dict]) -> dict | None:
+            raise RuntimeError("髒列打穿統計層")
+    
+        engine._apply = _boom  # type: ignore[method-assign]
+        published: list[dict] = []
+        engine._ws.publish = published.append  # type: ignore[method-assign]
+    
+>       await engine._run_cycle()
+
+tests\server\test_breadth_engine.py:513: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+copycat\server\breadth_engine.py:467: in _run_cycle
+    last_minute = self._apply(rows)
+                  ^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+rows = [{'date': '2026-08-05 10:23:45', 'stock_id': '2330', 'close': 100.0, 'change_price': 1.0, ...}, {'date': '2026-08-05 1...e_price': 1.0, ...}, {'date': '2026-08-05 10:23:45', 'stock_id': '9999', 'close': 20.0, 'change_price': 1.0, ...}, ...]
+
+    def _boom(rows: list[dict]) -> dict | None:
+>       raise RuntimeError("髒列打穿統計層")
+E       RuntimeError: 髒列打穿統計層
+
+tests\server\test_breadth_engine.py:507: RuntimeError
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestFailureHandling::test_apply_crash_counted_as_failure_and_still_broadcasts
+1 failed, 133 deselected in 0.33s

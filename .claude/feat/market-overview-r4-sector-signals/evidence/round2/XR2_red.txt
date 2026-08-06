@@ -1,0 +1,36 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+_ TestSeriesPersistence.test_stale_date_snapshot_does_not_refresh_last_success _
+
+self = <test_breadth_engine.TestSeriesPersistence object at 0x000002C2861DB540>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2665/test_stale_date_snapshot_does_0')
+mono = <test_breadth_engine.FakeMono object at 0x000002C2861D7A10>
+
+    async def test_stale_date_snapshot_does_not_refresh_last_success(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """`adopt_date=False` 輪**不刷 `_last_success`** → 窗內照樣亮 stale。
+    
+        \u8a72\u8def\u5f91\u4e0b counts \u662f D\u22121 \u7684\u3001\u6a19\u982d `trade_date` \u537b\u505c\u5728 D:\u5237 `_last_success` \u7684\u8a71
+        stale 永不亮,畫面完全正常而數字是別天的 —— 零可見訊號。退避與 quota 旗標維持
+        無條件重置(上游有回應,不該退避;review round-2 XR-2)。
+        """
+        engine, snap, *_ = _make(tmp_path)  # stale_secs 預設 30
+        await engine._run_cycle()
+        assert engine.state()["stale"] is False
+        last_success = engine._last_success
+    
+        snap.rows = _snapshot_rows("2026-08-04 13:20:00")  # 上一交易日
+        mono.advance(31.0)
+        await engine._run_cycle()
+    
+>       assert engine._last_success == last_success
+E       assert 1031.0 == 1000.0
+E        +  where 1031.0 = <copycat.server.breadth_engine.BreadthEngine object at 0x000002C2864002F0>._last_success
+
+tests\server\test_breadth_engine.py:865: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  copycat.server.breadth_engine:breadth_engine.py:612 breadth 快照日期 2026-08-04 既非今日 2026-08-05 也非序列日 2026-08-05:不採用日期變更(序列保留)
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestSeriesPersistence::test_stale_date_snapshot_does_not_refresh_last_success
+1 failed, 133 deselected in 0.31s

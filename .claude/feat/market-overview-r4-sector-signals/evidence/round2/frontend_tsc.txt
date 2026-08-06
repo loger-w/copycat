@@ -1,0 +1,1 @@
+npx tsc -b  → exit=0  (無輸出 = PASS)

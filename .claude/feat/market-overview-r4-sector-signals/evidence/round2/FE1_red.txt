@@ -1,0 +1,607 @@
+
+> copycat-frontend@0.1.0 test
+> vitest run src/hooks/useSignalFeed.test.tsx src/components/index/SignalTimelineSection.test.tsx --run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/side-project/copycat/frontend[39m
+
+ [31m❯[39m src/hooks/useSignalFeed.test.tsx [2m([22m[2m9 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 3736[2mms[22m[39m
+   [32m✓[39m useSignalFeed[2m > [22mbaseline 反轉為新在前(後端 jsonl 是舊在前)[32m 86[2mms[22m[39m
+   [32m✓[39m useSignalFeed[2m > [22mlive 訊號 prepend 在最前,且同 id 不重複入列[32m 80[2mms[22m[39m
+   [32m✓[39m useSignalFeed[2m > [22mws-open → 重抓當日 baseline(斷線期間漏的訊號自癒補回)[32m 157[2mms[22m[39m
+   [33m[2m✓[22m[39m useSignalFeed[2m > [22mtoday 抓失敗 → signals 空陣列(不 throw,live 訊號照樣進得來) [33m 1102[2mms[22m[39m
+[31m   [31m×[31m useSignalFeed[2m > [22mtoday 抓失敗 → baselineError 為 true(降級要可見,不只是靜靜地空著)[39m[33m 2095[2mms[22m[39m
+[31m     → expected undefined to be true // Object.is equality
+
+Ignored nodes: comments, script, style
+[36m<html>[31m
+  [36m<head />[31m
+  [36m<body>[31m
+    [36m<div />[31m
+  [36m</body>[31m
+[36m</html>[31m[39m
+[31m   [31m×[31m useSignalFeed[2m > [22mtoday 抓成功 → baselineError 為 false(不誤報)[39m[32m 72[2mms[22m[39m
+[31m     → expected undefined to be false // Object.is equality[39m
+   [32m✓[39m useSignalFeed — market 分流(SC-8)[2m > [22mexclude(預設):live 的 market 事件在合併前就被擋掉,不吃自選的 cap[32m 30[2mms[22m[39m
+   [32m✓[39m useSignalFeed — market 分流(SC-8)[2m > [22minclude:分族各自 cap 200 —— market 族擠不掉自選族[32m 32[2mms[22m[39m
+   [32m✓[39m useSignalFeed — market 分流(SC-8)[2m > [22m同一 QueryClient 兩消費端:各自 fetch、URL 不同、內容不同(queryKey 帶模式)[32m 82[2mms[22m[39m
+ [31m❯[39m src/components/index/SignalTimelineSection.test.tsx [2m([22m[2m18 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 7646[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 收合閘門[2m > [22m預設收合:body 不 mount、零 fetch[32m 55[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 收合閘門[2m > [22m展開寫入 localStorage,重新 mount 仍展開[32m 31[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 收合閘門[2m > [22m收合把 body unmount 並寫回 0[32m 56[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 列渲染[2m > [22m時間倒序(baseline 舊在前 → 畫面新在前)[32m 9[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 列渲染[2m > [22m每列 = 時刻 + 代號 + 名稱 + kindLabel 文案[32m 32[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 列渲染[2m > [22mmarket 列帶「廣度」badge(title 註記精度),自選列沒有[32m 32[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 列渲染[2m > [22m自選 + market 同軸:兩族都渲染(SC-7)[32m 17[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 列渲染[2m > [22m列點擊 → onOpenStock(廣度→深度銜接)[32m 30[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection kind chips[2m > [22m預設「全部」:兩族全列[32m 32[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection kind chips[2m > [22m選「全市場鎖板」→ 只剩 market 兩列[32m 18[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection kind chips[2m > [22m選「CDP」→ 只剩 cdp 列[32m 29[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection kind chips[2m > [22mchip 群組:爆拉跌 = surge+crash、爆量 = vol_burst、鎖板(自選)= limit_lock+limit_open[32m 34[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection kind chips[2m > [22m分族擠壓:250 則 market + 3 則自選 → 切「鎖板(自選)」仍見 3 則[32m 80[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 空態[2m > [22m今日零訊號 → 今日尚無訊號[32m 23[2mms[22m[39m
+   [32m✓[39m SignalTimelineSection 空態[2m > [22m有訊號但選中 chip 無事件 → 無符合條件(與「今日尚無訊號」分開)[32m 33[2mms[22m[39m
+[31m   [31m×[31m SignalTimelineSection baseline 取數失敗[2m > [22m零訊號 + 取數失敗 → 說是失敗,不是「今日尚無訊號」[39m[33m 5014[2mms[22m[39m
+[31m     → Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[31m   [31m×[31m SignalTimelineSection baseline 取數失敗[2m > [22m取數失敗但已有 live 訊號 → 清單照畫,頂部加一行「僅顯示即時訊號」提示[39m[33m 2093[2mms[22m[39m
+[31m     → Unable to find an element by: [data-testid="signal-timeline-baseline-error"]
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<section[31m
+      [33mclass[31m=[32m"rounded-md border border-line bg-surface"[31m
+      [33mdata-testid[31m=[32m"signal-timeline"[31m
+    [36m>[31m
+      [36m<button[31m
+        [33maria-expanded[31m=[32m"true"[31m
+        [33mclass[31m=[32m"flex w-full items-center gap-2 px-4 py-2 text-left"[31m
+        [33mtype[31m=[32m"button"[31m
+      [36m>[31m
+        [36m<span[31m
+          [33mclass[31m=[32m"text-sm font-bold text-ink"[31m
+        [36m>[31m
+          [0m訊號時間軸[0m
+        [36m</span>[31m
+        [36m<span[31m
+          [33mclass[31m=[32m"text-xs text-ink-dim"[31m
+        [36m>[31m
+          [0m收合[0m
+        [36m</span>[31m
+      [36m</button>[31m
+      [36m<div[31m
+        [33mclass[31m=[32m"flex flex-col gap-2 px-4 pb-4"[31m
+        [33mdata-testid[31m=[32m"signal-timeline-body"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"flex flex-wrap items-center gap-1"[31m
+        [36m>[31m
+          [36m<button[31m
+            [33maria-pressed[31m=[32m"true"[31m
+            [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-accent bg-accent/15 text-ink"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-chip-all"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0m全部[0m
+          [36m</button>[31m
+          [36m<button[31m
+            [33maria-pressed[31m=[32m"false"[31m
+            [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-chip-cdp"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0mCDP[0m
+          [36m</button>[31m
+          [36m<button[31m
+            [33maria-pressed[31m=[32m"false"[31m
+            [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-chip-move"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0m爆拉跌[0m
+          [36m</button>[31m
+          [36m<button[31m
+            [33maria-pressed[31m=[32m"false"[31m
+            [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-chip-vol"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0m爆量[0m
+          [36m</button>[31m
+          [36m<button[31m
+            [33maria-pressed[31m=[32m"false"[31m
+            [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-chip-lock"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0m鎖板(自選)[0m
+          [36m</button>[31m
+          [36m<button[31m
+            [33maria-pressed[31m=[32m"false"[31m
+            [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-chip-market"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0m全市場鎖板[0m
+          [36m</button>[31m
+        [36m</div>[31m
+        [36m<ul[31m
+          [33mclass[31m=[32m"flex flex-col"[31m
+          [33mdata-testid[31m=[32m"signal-timeline-list"[31m
+        [36m>[31m
+          [36m<li>[31m
+            [36m<button[31m
+              [33mclass[31m=[32m"flex w-full items-baseline gap-2 border-b border-line/50 px-1 py-1 text-left text-sm hover:bg-bg-deep pointer-coarse:min-h-11"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-row-live-1"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [36m<span[31m
+                [33mclass[31m=[32m"shrink-0 font-mono text-xs text-ink-dim"[31m
+              [36m>[31m
+                [0m09:45:00[0m
+              [36m</span>[31m
+              [36m<span[31m
+                [33mclass[31m=[32m"shrink-0 font-mono text-ink"[31m
+              [36m>[31m
+                [0m2330[0m
+              [36m</span>[31m
+              [36m<span[31m
+                [33mclass[31m=[32m"min-w-0 shrink truncate text-xs text-ink-muted"[31m
+              [36m>[31m
+                [0m台積電[0m
+              [36m</span>[31m
+              [36m<span[31m
+                [33mclass[31m=[32m"min-w-0 flex-1 truncate text-xs text-bull"[31m
+              [36m>[31m
+                [0m爆拉 +1.50%[0m
+              [36m</span>[31m
+            [36m</button>[31m
+          [36m</li>[31m
+        [36m</ul>[31m
+      [36m</div>[31m
+    [36m</section>[31m
+  [36m</div>[31m
+[36m</body>[31m
+
+Ignored nodes: comments, script, style
+[36m<html>[31m
+  [36m<head />[31m
+  [36m<body>[31m
+    [36m<div>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"rounded-md border border-line bg-surface"[31m
+        [33mdata-testid[31m=[32m"signal-timeline"[31m
+      [36m>[31m
+        [36m<button[31m
+          [33maria-expanded[31m=[32m"true"[31m
+          [33mclass[31m=[32m"flex w-full items-center gap-2 px-4 py-2 text-left"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [36m<span[31m
+            [33mclass[31m=[32m"text-sm font-bold text-ink"[31m
+          [36m>[31m
+            [0m訊號時間軸[0m
+          [36m</span>[31m
+          [36m<span[31m
+            [33mclass[31m=[32m"text-xs text-ink-dim"[31m
+          [36m>[31m
+            [0m收合[0m
+          [36m</span>[31m
+        [36m</button>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"flex flex-col gap-2 px-4 pb-4"[31m
+          [33mdata-testid[31m=[32m"signal-timeline-body"[31m
+        [36m>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"flex flex-wrap items-center gap-1"[31m
+          [36m>[31m
+            [36m<button[31m
+              [33maria-pressed[31m=[32m"true"[31m
+              [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-accent bg-accent/15 text-ink"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-chip-all"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0m全部[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33maria-pressed[31m=[32m"false"[31m
+              [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-chip-cdp"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0mCDP[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33maria-pressed[31m=[32m"false"[31m
+              [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-chip-move"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0m爆拉跌[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33maria-pressed[31m=[32m"false"[31m
+              [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-chip-vol"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0m爆量[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33maria-pressed[31m=[32m"false"[31m
+              [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-chip-lock"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0m鎖板(自選)[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33maria-pressed[31m=[32m"false"[31m
+              [33mclass[31m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[31m
+              [33mdata-testid[31m=[32m"signal-timeline-chip-market"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0m全市場鎖板[0m
+            [36m</button>[31m
+          [36m</div>[31m
+          [36m<ul[31m
+            [33mclass[31m=[32m"flex flex-col"[31m
+            [33mdata-testid[31m=[32m"signal-timeline-list"[31m
+          [36m>[31m
+            [36m<li>[31m
+              [36m<button[31m
+                [33mclass[31m=[32m"flex w-full items-baseline gap-2 border-b border-line/50 px-1 py-1 text-left text-sm hover:bg-bg-deep pointer-coarse:min-h-11"[31m
+                [33mdata-testid[31m=[32m"signal-timeline-row-live-1"[31m
+                [33mtype[31m=[32m"button"[31m
+              [36m>[31m
+                [36m<span[31m
+                  [33mclass[31m=[32m"shrink-0 font-mono text-xs text-ink-dim"[31m
+                [36m>[31m
+                  [0m09:45:00[0m
+                [36m</span>[31m
+                [36m<span[31m
+                  [33mclass[31m=[32m"shrink-0 font-mono text-ink"[31m
+                [36m>[31m
+                  [0m2330[0m
+                [36m</span>[31m
+                [36m<span[31m
+                  [33mclass[31m=[32m"min-w-0 shrink truncate text-xs text-ink-muted"[31m
+                [36m>[31m
+                  [0m台積電[0m
+                [36m</span>[31m
+                [36m<span[31m
+                  [33mclass[31m=[32m"min-w-0 flex-1 truncate text-xs text-bull"[31m
+                [36m>[31m
+                  [0m爆拉 +1.50%[0m
+                [36m</span>[31m
+              [36m</button>[31m
+            [36m</li>[31m
+          [36m</ul>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+    [36m</div>[31m
+  [36m</body>[31m
+[36m</html>[31m[39m
+   [32m✓[39m SignalTimelineSection baseline 取數失敗[2m > [22m取數成功 → 無失敗提示(不誤報)[32m 26[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 4 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/hooks/useSignalFeed.test.tsx[2m > [22museSignalFeed[2m > [22mtoday 抓失敗 → baselineError 為 true(降級要可見,不只是靜靜地空著)
+[31m[1mAssertionError[22m: expected undefined to be true // Object.is equality
+
+Ignored nodes: comments, script, style
+[36m<html>[31m
+  [36m<head />[31m
+  [36m<body>[31m
+    [36m<div />[31m
+  [36m</body>[31m
+[36m</html>[31m[39m
+
+[32m- Expected:[39m 
+true
+
+[31m+ Received:[39m 
+undefined
+
+[36m [2m❯[22m src/hooks/useSignalFeed.test.tsx:[2m115:67[22m[39m
+    [90m113| [39m    [90m// retry: 1 → 第二次 fetch 發出後才是 error 終態(retryDelay 預設 1s)[39m
+    [90m114| [39m    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { …
+    [90m115| [39m    await waitFor(() => expect(hook.result.current.baselineError).toBe…
+    [90m   | [39m                                                                  [31m^[39m
+    [90m116| [39m  })[33m;[39m
+    [90m117| [39m
+[90m [2m❯[22m runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:[2m47:12[22m[39m
+[90m [2m❯[22m checkCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m124:77[22m[39m
+[90m [2m❯[22m Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m118:16[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/hooks/useSignalFeed.test.tsx[2m > [22museSignalFeed[2m > [22mtoday 抓成功 → baselineError 為 false(不誤報)
+[31m[1mAssertionError[22m: expected undefined to be false // Object.is equality[39m
+
+[32m- Expected:[39m 
+false
+
+[31m+ Received:[39m 
+undefined
+
+[36m [2m❯[22m src/hooks/useSignalFeed.test.tsx:[2m121:47[22m[39m
+    [90m119| [39m    [35mconst[39m hook [33m=[39m [34mrenderHook[39m(() [33m=>[39m [34museSignalFeed[39m()[33m,[39m { wrapper })[33m;[39m
+    [90m120| [39m    await waitFor(() => expect(hook.result.current.signals.length).toB…
+    [90m121| [39m    [34mexpect[39m(hook[33m.[39mresult[33m.[39mcurrent[33m.[39mbaselineError)[33m.[39m[34mtoBe[39m([35mfalse[39m)[33m;[39m
+    [90m   | [39m                                              [31m^[39m
+    [90m122| [39m  })[33m;[39m
+    [90m123| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/index/SignalTimelineSection.test.tsx[2m > [22mSignalTimelineSection baseline 取數失敗[2m > [22m零訊號 + 取數失敗 → 說是失敗,不是「今日尚無訊號」
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/components/index/SignalTimelineSection.test.tsx:[2m311:3[22m[39m
+    [90m309| [39m  }
+    [90m310| [39m
+    [90m311| [39m  [34mit[39m([32m"零訊號 + 取數失敗 → 說是失敗,不是「今日尚無訊號」"[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m   | [39m  [31m^[39m
+    [90m312| [39m    [35mawait[39m [34mopenWith503[39m()[33m;[39m
+    [90m313| [39m    [35mawait[39m [34mwaitFor[39m(
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/index/SignalTimelineSection.test.tsx[2m > [22mSignalTimelineSection baseline 取數失敗[2m > [22m取數失敗但已有 live 訊號 → 清單照畫,頂部加一行「僅顯示即時訊號」提示
+[31m[1mTestingLibraryElementError[22m[39m: Unable to find an element by: [data-testid="signal-timeline-baseline-error"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<section[39m
+      [33mclass[39m=[32m"rounded-md border border-line bg-surface"[39m
+      [33mdata-testid[39m=[32m"signal-timeline"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33maria-expanded[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex w-full items-center gap-2 px-4 py-2 text-left"[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"text-sm font-bold text-ink"[39m
+        [36m>[39m
+          [0m訊號時間軸[0m
+        [36m</span>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"text-xs text-ink-dim"[39m
+        [36m>[39m
+          [0m收合[0m
+        [36m</span>[39m
+      [36m</button>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-col gap-2 px-4 pb-4"[39m
+        [33mdata-testid[39m=[32m"signal-timeline-body"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-wrap items-center gap-1"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33maria-pressed[39m=[32m"true"[39m
+            [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-accent bg-accent/15 text-ink"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-chip-all"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0m全部[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-pressed[39m=[32m"false"[39m
+            [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-chip-cdp"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mCDP[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-pressed[39m=[32m"false"[39m
+            [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-chip-move"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0m爆拉跌[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-pressed[39m=[32m"false"[39m
+            [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-chip-vol"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0m爆量[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-pressed[39m=[32m"false"[39m
+            [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-chip-lock"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0m鎖板(自選)[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-pressed[39m=[32m"false"[39m
+            [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-chip-market"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0m全市場鎖板[0m
+          [36m</button>[39m
+        [36m</div>[39m
+        [36m<ul[39m
+          [33mclass[39m=[32m"flex flex-col"[39m
+          [33mdata-testid[39m=[32m"signal-timeline-list"[39m
+        [36m>[39m
+          [36m<li>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"flex w-full items-baseline gap-2 border-b border-line/50 px-1 py-1 text-left text-sm hover:bg-bg-deep pointer-coarse:min-h-11"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-row-live-1"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"shrink-0 font-mono text-xs text-ink-dim"[39m
+              [36m>[39m
+                [0m09:45:00[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"shrink-0 font-mono text-ink"[39m
+              [36m>[39m
+                [0m2330[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"min-w-0 shrink truncate text-xs text-ink-muted"[39m
+              [36m>[39m
+                [0m台積電[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"min-w-0 flex-1 truncate text-xs text-bull"[39m
+              [36m>[39m
+                [0m爆拉 +1.50%[0m
+              [36m</span>[39m
+            [36m</button>[39m
+          [36m</li>[39m
+        [36m</ul>[39m
+      [36m</div>[39m
+    [36m</section>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<section[39m
+        [33mclass[39m=[32m"rounded-md border border-line bg-surface"[39m
+        [33mdata-testid[39m=[32m"signal-timeline"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-expanded[39m=[32m"true"[39m
+          [33mclass[39m=[32m"flex w-full items-center gap-2 px-4 py-2 text-left"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"text-sm font-bold text-ink"[39m
+          [36m>[39m
+            [0m訊號時間軸[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"text-xs text-ink-dim"[39m
+          [36m>[39m
+            [0m收合[0m
+          [36m</span>[39m
+        [36m</button>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col gap-2 px-4 pb-4"[39m
+          [33mdata-testid[39m=[32m"signal-timeline-body"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-1"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-accent bg-accent/15 text-ink"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-chip-all"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0m全部[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-pressed[39m=[32m"false"[39m
+              [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-chip-cdp"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mCDP[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-pressed[39m=[32m"false"[39m
+              [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-chip-move"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0m爆拉跌[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-pressed[39m=[32m"false"[39m
+              [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-chip-vol"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0m爆量[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-pressed[39m=[32m"false"[39m
+              [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-chip-lock"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0m鎖板(自選)[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-pressed[39m=[32m"false"[39m
+              [33mclass[39m=[32m"rounded border px-2 py-0.5 text-xs pointer-coarse:min-h-11 border-line text-ink-dim hover:text-ink"[39m
+              [33mdata-testid[39m=[32m"signal-timeline-chip-market"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0m全市場鎖板[0m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<ul[39m
+            [33mclass[39m=[32m"flex flex-col"[39m
+            [33mdata-testid[39m=[32m"signal-timeline-list"[39m
+          [36m>[39m
+            [36m<li>[39m
+              [36m<button[39m
+                [33mclass[39m=[32m"flex w-full items-baseline gap-2 border-b border-line/50 px-1 py-1 text-left text-sm hover:bg-bg-deep pointer-coarse:min-h-11"[39m
+                [33mdata-testid[39m=[32m"signal-timeline-row-live-1"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"shrink-0 font-mono text-xs text-ink-dim"[39m
+                [36m>[39m
+                  [0m09:45:00[0m
+                [36m</span>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"shrink-0 font-mono text-ink"[39m
+                [36m>[39m
+                  [0m2330[0m
+                [36m</span>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"min-w-0 shrink truncate text-xs text-ink-muted"[39m
+                [36m>[39m
+                  [0m台積電[0m
+                [36m</span>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"min-w-0 flex-1 truncate text-xs text-bull"[39m
+                [36m>[39m
+                  [0m爆拉 +1.50%[0m
+                [36m</span>[39m
+              [36m</button>[39m
+            [36m</li>[39m
+          [36m</ul>[39m
+        [36m</div>[39m
+      [36m</section>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+[90m [2m❯[22m waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:[2m163:27[22m[39m
+[36m [2m❯[22m src/components/index/SignalTimelineSection.test.tsx:[2m328:11[22m[39m
+    [90m326| [39m    [35mawait[39m [34mwaitFor[39m(() [33m=>[39m [34mexpect[39m([34mrowIds[39m())[33m.[39m[34mtoEqual[39m([[32m"live-1"[39m]))[33m;[39m
+    [90m327| [39m    [34mexpect[39m(screen[33m.[39m[34mqueryByTestId[39m([32m"signal-timeline-msg"[39m))[33m.[39m[34mtoBeNull[39m()[33m;[39m
+    [90m328| [39m    [35mawait[39m [34mwaitFor[39m(() [33m=>[39m
+    [90m   | [39m          [31m^[39m
+    [90m329| [39m      expect(screen.getByTestId("signal-timeline-baseline-error").text…
+    [90m330| [39m        [32m"歷史訊號載入失敗,僅顯示即時訊號"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m4 failed[39m[22m[2m | [22m[1m[32m23 passed[39m[22m[90m (27)[39m
+[2m   Start at [22m 23:04:30
+[2m   Duration [22m 8.87s[2m (transform 82ms, setup 0ms, collect 580ms, tests 11.38s, environment 1.12s, prepare 212ms)[22m
+
