@@ -62,6 +62,26 @@ def test_rows_to_chain_map_drops_row_when_any_field_falsy() -> None:
     assert "" not in out["半導體業"]
 
 
+def test_rows_to_chain_map_skips_non_dict_rows() -> None:
+    """列本身不是 dict(上游回殘表 / 壞快取)→ 跳過該列,同批其他列照收(review S-3)。
+
+    `row.get` 在 str / None / list 上直接 AttributeError,而這支的兩個呼叫點一個在
+    boot 路徑(`_restore_chain`)、一個在背景 task(`_refresh_chain`)—— 前者炸掉是
+    整台 server 起不來,後者是 task 靜默死透而類股面板停在舊表上零錯誤訊號。
+    """
+    rows = [
+        {"industry": "半導體業", "sub_industry": "IC設計", "stock_id": "2454"},
+        "2330",  # type: ignore[list-item]  # 上游回字串列
+        None,  # type: ignore[list-item]
+        ["半導體業", "晶圓代工", "2330"],  # type: ignore[list-item]
+        {"industry": "水泥工業", "sub_industry": "水泥製造", "stock_id": "1101"},
+    ]
+    assert rows_to_chain_map(rows) == {
+        "半導體業": {"IC設計": ["2454"]},
+        "水泥工業": {"水泥製造": ["1101"]},
+    }
+
+
 def test_rows_to_chain_map_dedups_same_stock_in_same_bucket() -> None:
     """同 (industry, sub) 內同 sid 只留一次;跨 sub 允許重複(N-to-M 對映)。"""
     rows = [

@@ -118,6 +118,25 @@ class TestLoadDegradation:
 
         assert caplog.records
 
+    def test_row_element_not_dict_returns_none(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """rows 是 list 但元素不是 dict → 視為無快取(review S-3/C-4)。
+
+        只驗 `isinstance(rows, list)` 的話,壞元素會一路交給 `rows_to_chain_map`,
+        而那支在 boot 路徑上被呼叫 —— 一份壞快取檔就能讓整台 server 起不來。
+        """
+        path = tmp_path / "industry_chain.json"
+        path.write_text(
+            json.dumps({"_version": 1, "fetched_at": 1.0, "rows": [_ROWS[0], "2330", None]}),
+            encoding="utf-8",
+        )
+
+        with caplog.at_level("WARNING"):
+            assert load_chain(path) is None
+
+        assert caplog.records
+
     def test_payload_not_dict_returns_none(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
