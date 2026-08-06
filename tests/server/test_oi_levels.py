@@ -16,12 +16,12 @@ import urllib.error
 import urllib.parse
 from datetime import date as _date
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+import copycat.server.finmind_token as finmind_token
 import copycat.server.oi_levels as oi
 from copycat.server.app import create_app
 from tests.helpers.boot import BootedClient
@@ -31,10 +31,6 @@ from tests.helpers.fake_txo import FakeTxoSource
 _TODAY = _date(2026, 8, 5)
 _YM = "202608"
 _EMPTY = {"date": None, "contract": None, "strikes": []}
-
-#: 真實作的 restore point。**module import 期取**:conftest 的 autouse fixture 會在
-#: 每條測試前把它換成 `lambda: {}`(FinMind 憑證中和),那之後就抓不到本尊了。
-_REAL_DOTENV_VALUES = oi._dotenv_values
 
 
 def _row(
@@ -123,12 +119,12 @@ def _http_error(code: int) -> urllib.error.HTTPError:
 def _fresh_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """module 級快取跨測試殘留 = 下一條測試看到的是上一條的答案。
 
-    `_dotenv_cache` 一併重置(review TC-5):它是**解析一次就黏住**的 module 級狀態,
-    conftest 已把它設 None,這裡再顯式一次讓本檔的 .env 案例彼此不互相汙染
-    (前一條測到的檔案內容會直接變成後一條的答案)。
+    `finmind_token._dotenv_cache` 一併重置(review TC-5):它是**解析一次就黏住**的
+    module 級狀態,conftest 已把它設 None,這裡再顯式一次讓本檔不被別處的 .env 案例
+    汙染(前一條測到的檔案內容會直接變成後一條的答案)。
     """
     monkeypatch.setattr(oi, "_cache", oi.OiLevelsCache())
-    monkeypatch.setattr(oi, "_dotenv_cache", None)
+    monkeypatch.setattr(finmind_token, "_dotenv_cache", None)
 
 
 # ---------- service:口徑與 pivot ----------
@@ -360,40 +356,6 @@ class TestFreshnessLog:
         assert got["strikes"] == [{"strike": 24000, "call_oi": 7, "put_oi": 0}]
 
 
-class TestResolveToken:
-    """token 解析三條語意(review TC-5)。server 不載 dotenv:
-    `FINMIND_TOKEN in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 repo root .env。
-
-    conftest 的 autouse fixture 已把 `_dotenv_values` 中和成 `lambda: {}`,要驗 .env
-    行為的案例自行推回真實作(同 tests/capital/test_factory.py 的 `_REAL_DOTENV_VALUES`)。
-    """
-
-    def test_env_value_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("FINMIND_TOKEN", "  tok-env  ")
-        assert oi.resolve_token() == "tok-env"  # 兩端空白剝掉
-
-    def test_empty_env_suppresses_dotenv(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """`set FINMIND_TOKEN=` 是明確的「這台不要打 FinMind」,不得被檔案值復活。"""
-        monkeypatch.setattr(oi, "_dotenv_values", _REAL_DOTENV_VALUES)
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("FINMIND_TOKEN=tok-file\n", encoding="utf-8")
-        monkeypatch.setenv("FINMIND_TOKEN", "")
-        assert oi.resolve_token() is None
-
-    def test_dotenv_fallback_reads_bom_file(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """utf-8-sig:Windows 存的 .env 帶 BOM 會讓**首 key** 靜默失效(CLAUDE.md §8
-        真踩過)→ 治具刻意把 FINMIND_TOKEN 放第一行。"""
-        monkeypatch.setattr(oi, "_dotenv_values", _REAL_DOTENV_VALUES)
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("FINMIND_TOKEN=tok-file\nOTHER=x\n", encoding="utf-8-sig")
-        monkeypatch.delenv("FINMIND_TOKEN", raising=False)
-        assert oi.resolve_token() == "tok-file"
-
-
 # ---------- route:降級一律 200 空 shape(SC-11) ----------
 
 
@@ -427,7 +389,7 @@ class TestOiRoute:
             }
 
         monkeypatch.setattr(oi, "fetch_oi_levels", fake_fetch)
-        monkeypatch.setattr(oi, "resolve_token", lambda: "tok")
+        monkeypatch.setattr(finmind_token, "resolve_token", lambda: "tok")
         stub = StubFutures(_YM)
         with _client(futures_source=FakeFuturesSource()) as c:
             c.app.state.futures = stub  # type: ignore[union-attr]

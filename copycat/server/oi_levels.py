@@ -21,25 +21,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 import urllib.error
 import urllib.parse
 from datetime import date as _date
 from datetime import timedelta
-from pathlib import Path
 from typing import TypedDict
 from urllib.request import Request, urlopen
 
 from fastapi import FastAPI
 from fastapi import Request as HttpRequest
 
+from copycat.server import finmind_token
+
 logger = logging.getLogger(__name__)
 
 _API = "https://api.finmindtrade.com/api/v4/data"
 _DATASET = "TaiwanOptionDaily"
 _DATA_ID = "TXO"
-_ENV_KEY = "FINMIND_TOKEN"
 _LOOKBACK_DAYS = 10
 _TIMEOUT = 30.0
 _ATTEMPTS = 2  # 一天一次呼叫的量級,重試一次即可;402 完全不重試(見 _fetch_rows)
@@ -77,47 +76,6 @@ def _empty() -> OiLevels:
 def _now() -> float:
     """負向快取的時鐘(monotonic);測試 monkeypatch 這一個名字即可推進時間。"""
     return time.monotonic()
-
-
-# ---------------------------------------------------------------------------
-# token 讀取(server 不載 dotenv:env → repo root .env 逐 key fallback)
-# ---------------------------------------------------------------------------
-
-
-def _dotenv_values() -> dict[str, str]:
-    """repo root .env 逐 key 解析。utf-8-sig:Windows BOM 會讓首 key 靜默失效;
-    never-raise:壞檔視同無檔(對齊 capital/factory 與 notify 的慣例)。"""
-    env_file = Path(".env")
-    try:
-        if not env_file.exists():
-            return {}
-        text = env_file.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as e:
-        logger.warning(".env 讀取失敗,%s 的 dotenv fallback 視同無檔:%s", _ENV_KEY, e)
-        return {}
-    out: dict[str, str] = {}
-    for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep and not line.lstrip().startswith("#"):
-            out[key.strip()] = value.strip()
-    return out
-
-
-_dotenv_cache: dict[str, str] | None = None
-
-
-def resolve_token() -> str | None:
-    """`FINMIND_TOKEN in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 .env。
-
-    空字串當未設而**不**往下 fallback:operator 用 `set FINMIND_TOKEN=` 清空是明確的
-    「這台不要打 FinMind」,被檔案值復活就違反那個意圖。
-    """
-    global _dotenv_cache
-    if _ENV_KEY in os.environ:
-        return os.environ[_ENV_KEY].strip() or None
-    if _dotenv_cache is None:
-        _dotenv_cache = _dotenv_values()
-    return (_dotenv_cache.get(_ENV_KEY) or "").strip() or None
 
 
 # ---------------------------------------------------------------------------
@@ -330,4 +288,5 @@ def register_oi(app: FastAPI) -> None:
         ym = futures.resolved_contract("TXF")
         if not ym:
             return dict(_empty())
-        return dict(await fetch_oi_levels(ym, token=resolve_token(), today=_date.today()))
+        token = finmind_token.resolve_token()  # 經模組屬性:patch finmind_token 即全域生效
+        return dict(await fetch_oi_levels(ym, token=token, today=_date.today()))
