@@ -1,8 +1,8 @@
-"""群益送單欄位映射 + TC4 → 期交所契約碼轉換(純函式;唯一的 IO = 個股期乘數 fallback)。
+"""群益送單欄位映射 + TC4 → 期交所契約碼轉換(純函式;唯一的 IO = 個股期對映表查詢)。
 
-`multiplier_of` 對非指數期權產品會問 `stkfut_map.lookup_product` —— 那份版控對映檔
-以 process 級索引 cache 讀,首呼一次 JSON 讀檔,之後純記憶體(檔頭原本的「零 IO」
-約定隨 stkfut-contracts SC-2 更新為此)。
+`multiplier_of`(乘數 fallback)與 `is_option_contract`(送單分流第 3 層)都會問
+`stkfut_map.lookup_product` —— 那份版控對映檔以 process 級索引 cache 讀,首呼一次
+JSON 讀檔,之後純記憶體(檔頭原本的「零 IO」約定隨 stkfut-contracts SC-2 更新為此)。
 
 
 STOCKORDER 映射照搬 treading-king backend/services/capital_mapping.py(enum → Literal);
@@ -116,12 +116,17 @@ def is_option_contract(contract: str) -> bool:
     1. 已知選擇權產品(月選 TXO ∪ 週選家族)→ True。
     2. 已知指數期貨({TXF, MXF, TMF})→ False。
     3. 個股期(`stkfut_map.lookup_product` 查得到,約 270 檔且隨期交所異動)→ False。
-    4. 其餘未知產品走**結構判別**:選擇權契約碼必含履約價數字(TXO20000I6),
-       契約本體(去尾 2 碼月碼+年碼)純字母則是期貨形(SXFI6 費半、海外期貨平倉)。
+    4. 其餘未知產品走**結構判別**:契約本體(去尾 2 碼月碼+年碼)含**連續 ≥2 位
+       數字**才是選擇權形(TXO20000I6 的履約價),否則歸期貨(SXFI6 費半、
+       EE1I6 除權息調整後的個股期)。
 
     未知產品的預設方向由結構決定而非白名單,是因為白名單註定追不上上架節奏 ——
-    個股期就是這樣漏掉的。這個預設安全:選擇權路徑的契約碼一律由 `to_exchange_symbol`
-    的 TC.O 分支產出,必然帶履約價數字,不會落到「純字母 → 期貨」那側。
+    個股期就是這樣漏掉的。門檻取「連續 ≥2 位」而不是「含任何數字」,是因為期交所
+    股票期貨經契約調整(除權息等)後商品代號第三碼會由 F 改成單一數字(EE1/CD1),
+    這種碼進不了 `stkfut_map`(`_parse_rows` 只組 XXF 形)必然落到這層,用「含任何
+    數字」判會把它送進選擇權通道 —— 與本輪 P0 同一個失效樣態,且平倉路徑沒有單位閘
+    可擋。反方向仍然安全:履約價必為多位數,未知的新選擇權家族(如 TE1 + 22000)
+    body 內產品尾數字與履約價相鄰,必然構成 ≥2 位連續數字串,照樣判 option。
     """
     prod = exchange_product_of(contract)
     if prod in _OPTION_PRODUCTS:
@@ -130,7 +135,7 @@ def is_option_contract(contract: str) -> bool:
         return False
     if lookup_product(prod) is not None:
         return False
-    return any(ch.isdigit() for ch in contract[:-2])
+    return re.search(r"\d{2}", contract[:-2]) is not None
 
 
 def _month_year_codes(ym: str, *, put: bool = False) -> str:
