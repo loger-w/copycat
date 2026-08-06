@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useMemo } from "react";
 
 import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
 import {
@@ -79,9 +79,21 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
   const uid = safeIdToken(useId());
   const above = `${uid}-mini-a`;
   const below = `${uid}-mini-b`;
-  const g = buildIntradayGeometry(
-    { minutes: extendMinutes(minutes, liveP), meta },
-    { width: MINI_W + Y_AXIS_W + R_AXIS_W, height: MINI_H + X_LABEL_H },
+  // 幾何算一次就好(review A6-1):`minutes` 最多 271 格,而群組頁最多 30 張卡片,
+  // 父層每秒隨 `quotes` re-render 一次。deps 只列真正的輸入 —— `minutes` / `meta` 來自
+  // TQ cache(60s 才換 identity),`liveP` 是每秒可能變的那一個。
+  //
+  // ⚠ `extendMinutes` 內部讀**本機時鐘**,而時鐘不在 deps 裡:整分鐘一到,只要
+  // `liveP` 沒變就不會重算,延伸點會停在上一分鐘的格子裡最多 60 秒。可接受 ——
+  // 盤中每秒都有報價的檔 `liveP` 本來就一直在動;真的一分鐘零成交的冷門股,
+  // 那條線本來也沒有新資訊可畫。
+  const g = useMemo(
+    () =>
+      buildIntradayGeometry(
+        { minutes: extendMinutes(minutes, liveP), meta },
+        { width: MINI_W + Y_AXIS_W + R_AXIS_W, height: MINI_H + X_LABEL_H },
+      ),
+    [minutes, liveP, meta],
   );
   const line = pts(g.priceLine);
   return (
