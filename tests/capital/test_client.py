@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 import copycat.capital.client as client_mod
+import copycat.stkfut_map as stkfut_map
 from copycat.capital.client import CapitalClient
 from copycat.capital.com import CapitalCom
 from copycat.capital.models import (
@@ -36,6 +37,7 @@ from copycat.capital.models import (
 from copycat.capital.reply import parse_onnewdata
 from copycat.capital.safety import SafetyConfig
 from copycat.server.audit import AuditWriteError
+from copycat.stkfut_map import write_map
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 
@@ -284,7 +286,7 @@ async def test_submit_option_goes_send_option_order(tmp_path: Path) -> None:
 
 
 async def test_weekly_contract_routes_as_option(tmp_path: Path) -> None:
-    # TX4 週選是選擇權家族:非 {TXF, MXF, TMF} 一律走 SendOptionOrder
+    # TX4 週選是選擇權家族(已知產品),走 SendOptionOrder
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
@@ -293,6 +295,98 @@ async def test_weekly_contract_routes_as_option(tmp_path: Path) -> None:
         client, lambda: client.submit_future_order(req, contract="TX423000G6", multiplier=50)
     )
     assert com.sent[0][2] is True
+
+
+def _stkfut_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """個股期對映表注入(隔離版控真檔;CDF=標準 2000、QFF=小型 100)—— 同 test_capital_api 慣例。
+
+    `lookup_product` 的 process 級索引 cache 以 path + stat 簽章為鍵,tmp_path 天然隔離。
+    """
+    path = tmp_path / "stkfut_map.json"
+    write_map(
+        path,
+        {
+            "2330": {
+                "prod": "CDF",
+                "name": "台積電",
+                "unit": 2000,
+                "mini": {"prod": "QFF", "unit": 100},
+            }
+        },
+    )
+    monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", path)
+
+
+@pytest.mark.parametrize(
+    "symbol,contract,multiplier",
+    [
+        ("TC.F.TWF.CDF.202609", "CDFI6", 2000),  # 標準腿
+        ("TC.F.TWF.QFF.202609", "QFFI6", 100),  # 小型腿
+    ],
+)
+async def test_stock_future_routes_as_future(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    symbol: str,
+    contract: str,
+    multiplier: int,
+) -> None:
+    """個股期是**期貨**,必須走 SendFutureOrder。
+
+    舊分流是「非 {TXF, MXF, TMF} → 選擇權」的封閉白名單,個股期落到選擇權那側 ——
+    最好情況群益/期交所退單(功能整條不可用),最壞情況選擇權通道解讀 FUTUREORDER
+    struct 送出非預期委託。真錢面。
+    """
+    _stkfut_map(tmp_path, monkeypatch)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    req = _fut_req(tc4_symbol=symbol, price=1180.0, qty=1)
+    await _drive(
+        client, lambda: client.submit_future_order(req, contract=contract, multiplier=multiplier)
+    )
+    kind, _fields, is_option = com.sent[0]
+    assert kind == "future" and is_option is False
+    assert _sent_fields(com.sent[0])["bstrStockNo"] == contract
+
+
+async def test_close_stock_future_position_routes_as_future(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 平倉走同一支 submit_future_order → 同一個分流缺陷(既有部位平不掉)
+    _stkfut_map(tmp_path, monkeypatch)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="fut", stock_no="CDFI6", qty=1, avg_price=1180.0)])
+    req = PositionCloseRequest(market="fut", key="CDFI6", price=1100.0)
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    assert com.sent[0][2] is False
+
+
+@pytest.mark.parametrize(
+    "contract,is_option",
+    [
+        ("SXFI6", False),  # 未知產品、契約本體純字母 = 期貨形
+        ("ZZZ20000I6", True),  # 未知產品、契約本體含履約價數字 = 選擇權形
+    ],
+)
+async def test_unknown_product_routed_by_contract_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contract: str, is_option: bool
+) -> None:
+    """未知產品(對映表查無、非指數期權)以契約碼結構判別:選擇權碼必含履約價數字。
+
+    白名單註定追不上上架節奏(個股期就是這樣漏掉的),預設方向必須由結構決定
+    而不是「不認得就當選擇權」。
+    """
+    _stkfut_map(tmp_path, monkeypatch)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    req = _fut_req(price=100.0, qty=1)
+    await _drive(client, lambda: client.submit_future_order(req, contract=contract, multiplier=1))
+    assert com.sent[0][2] is is_option
 
 
 async def test_market_rod_upgraded_to_ioc_with_message_note(tmp_path: Path) -> None:
