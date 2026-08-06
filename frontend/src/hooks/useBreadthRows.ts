@@ -26,11 +26,20 @@ async function fetchBreadthRows(): Promise<BreadthRowsState> {
   return (await res.json()) as BreadthRowsState;
 }
 
-export function useBreadthRows() {
+/** @param active 使用者是否正看著台股綜合 tab。該 tab 的 DOM 由 App 以 `hidden` 保留
+ *  (不 unmount),列表又把展開狀態記在 localStorage —— 沒有這道 gate,展開過一次的人
+ *  只要開著站台,整個盤中每 10 秒都在抓一份全市場 ~2800 列的 payload(review FE-2)。
+ *
+ *  **只停 `refetchInterval`,不關 `enabled`**(`useFuturesBars` 同慣例):輪詢是這支
+ *  query 唯一的背景請求來源,停掉即達成目的;而 `enabled: false` 會讓切回 tab 時
+ *  query 退回 pending 態 → 表格閃一次「載入中…」而不是留著舊表等新料。
+ *
+ *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更。 */
+export function useBreadthRows(active = true) {
   return useQuery({
     queryKey: ["breadth-rows"],
     queryFn: fetchBreadthRows,
     retry: 1,
-    refetchInterval: () => (inTradingHours() ? POLL_MS : false),
+    refetchInterval: () => (active && inTradingHours() ? POLL_MS : false),
   });
 }
