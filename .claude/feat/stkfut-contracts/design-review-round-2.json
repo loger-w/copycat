@@ -1,0 +1,15 @@
+{
+  "round": 2,
+  "type": "限縮輪",
+  "verdict": "1 P0(R2-1 價差子樹)/ 6 P1 / 1 P2 — 全 accepted,依 suggested_fix 機械落地 v2.1(修法明確非 SC 互斥,前兩輪同例)",
+  "dispositions": {
+    "R2-1(P0)": "parser 只走 ENG==StockFutures 支(顯式排除 StockFutures(F2) 價差);prod 取節點 SYMBOL 欄;月份只收四段形 TC.F.TWF.<SYMBOL>.<YYYYMM>;InstrumentID 非 null 第二判準;fixture 必含價差節點反例並斷言不出現",
+    "R2-2": "_symbol_to_key 鍵由 stock_source.stock_symbol 唯一產(StockSource Protocol 加 symbol_of);寫入先於 subscribe(失敗回滾 pop);miss → debug log 丟棄;測試鎖先寫後訂",
+    "R2-3": "no-data timer 只掛三段形合約鍵(F:<prod>:<ym>);HOT 腿維持排除;on_no_data 回呼傳 key、僅 _seen 鍵改 symbol",
+    "R2-4": "下單面改「共用價格梯 presentation + 現股/個股期兩薄 container」;個股期 container 規格逐項:useSubmitFuture/cancel market:fut/活單部位以 exchangeContract+market 比對/期貨損益口徑/交易別列隱藏/day_trade/口數標籤",
+    "R2-5": "武裝解除 key = instrumentKey(effect deps 換);vitest 切 contract → aria-pressed false;railCtx 口徑寫死(code=股號、contract 獨立欄)",
+    "R2-6": "load_map 版本不符 → log + 回 {}(個股期降級,個股頁照常);安全閘收 multiplier_of(ValueError→400);refresh 壞列跳過彙總 warn 全滅才 raise;v2 json 重生同 commit",
+    "R2-7": "instrumentKey 僅 WS gate/deps;REST 恆 /state/{code}?contract=(單一 helper);vitest URL 形",
+    "R2-8": "拒單碼分化:BAD_TICK(檔位)/ PRODUCT_NOT_ALLOWED(ETF/非股票單位);market 單跳過檔位驗證"
+  }
+}

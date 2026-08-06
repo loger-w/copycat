@@ -1,0 +1,12 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "verdict": "4 P0(D1 推播路由/D2 試撮窗/D3 閃電梯檔位/D4 回補接點)/ 11 P1 / 3 P2 — 全 accepted;D18 的 SC-6 延後建議被裁決不採(user 拍板一輪,[auto-default] 記 brainstorm 精神),改採其替代路徑(D3/D11/D12 實作前定稿 + 測試鎖)",
+  "fact_checks_done": {
+    "D13": "catalog_Fut2.json 於主 tree spikes/catalog_dump 尋回(873KB,gitignore 致 worktree 缺)已複製;fixture 落檔列 T1 首步",
+    "D3": "期交所股票期貨升降單位 = 與現股同級距表(stf.pdf/元大/台新來源);ETF 標的不同 → 本輪 ETF 期貨禁下單",
+    "D4": "TICKS/1K probe 實證 CDF.202608 當日 TICKS 2381 rows、1K 224 rows 首根 0846 — 回補走既有 TICKS 路徑定案"
+  },
+  "dispositions": "十八條逐項落 design v2(changelog 對照)",
+  "exit": "P0 → v2 後限縮輪"
+}
