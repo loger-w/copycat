@@ -33,6 +33,20 @@
   rejected — 點一下左圖「加權」即永久自癒):若真嫌,IndexPage 做一次性 seed
   (MARKET2_KEY_STORE 未設時依左值選互補標的),冪等不引入持續耦合。
 
+## 2026-08-06(stkfut-contracts 題3 收尾留尾巴)
+
+- [ ] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
+  四張在 `.claude/feat/stkfut-contracts/evidence/`;**真送單驗證 = prod 安全首單**
+  (遠價 1 口 → 群益 APP 核對 → 刪單,§7);首個交易日順看 08:45–09:00 期貨分時有資料
+  (夜盤訂閱窗假設的 prod 觀察項)。
+- [ ] **refresh-stkfut-map 後需重啟 server 才生效**(review A4 已修 mtime cache,但
+  CLAUDE.md §1 該指令列尚未註記 — 下次動 CLAUDE.md 時順補)。
+- [ ] **_symbol_to_key/_states 隨瀏覽合約單調成長**(review A7c,量級無害僅記錄)。
+- [ ] **OrderBook 元件層無合約簿專屬斷言**(review B8;hook 層已鎖,截圖層已過 —
+  若日後改 OrderBook 資料源,補一條)。
+- [ ] **catalog 冷查詢持 api.lock 秒級**(review A3 已以開機預熱緩解;若 prod 觀察到
+  盤中首開下拉造成 TC4 斷線,升級為獨立 session)。
+
 ## 2026-08-06(group-grid 題5 收尾留尾巴)
 
 - [ ] **群組檢視待 user 過目**(PR #27 試用指引):個股頁「單檔｜群組」pill、mini 分時圖牆、
