@@ -417,6 +417,19 @@ class _RaisingSocket:
         raise AssertionError("recv 不應被呼叫")
 
 
+class TestLockTimeoutContract:
+    """X-2a:等鎖上界必須大於單次 REQ 的上界(不等式契約,不是某個數字)。
+
+    持鎖上界 = 健康慢路徑的一次 REQ ≈ RCVTIMEO;等鎖上界比它小的話,一個**正常但慢**
+    的 REQ(QUERYALLINSTRUMENT 實測 1.93s,最壞到 RCVTIMEO)就會讓所有等鎖者
+    `_dispose` 整條連線 —— 那是把健康慢當成毒鎖治。
+    """
+
+    def test_default_lock_timeout_exceeds_req_timeout(self) -> None:
+        src = TC4QuoteSource(port="0", api=object(), session="sess-1")
+        assert src._lock_timeout * 1000 > tc4_mod._REQ_TIMEOUT_MS
+
+
 class TestRtRequestResilience:
     """條 1(next-time 2026-07-20):REQ 路徑錯誤收斂 ConnectionError + lock timeout。"""
 
