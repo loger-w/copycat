@@ -300,3 +300,56 @@ class TestDayHighLow:
         st.ingest(_tick(10, bid=2_375_000, ask=2_380_000))
         assert st.snapshot()["ticks"][0]["b"] == 2_375_000
         assert st.snapshot()["ticks"][0]["a"] == 2_380_000
+
+
+class TestLightSnapshot:
+    """群組 batch 專用的輕量 payload(code review A1)。
+
+    `group_snapshot` 對最多 30 檔、每 60s 各建一次全量 `snapshot()`,而那份會把當日
+    數千筆 tick 逐筆組成 dict 之後**整份丟掉** —— 畫面只用得到 minutes / meta 兩鍵。
+
+    抽 `_minutes_payload` / `_meta_payload` 共用而不是在 engine 那邊另寫一份對映,
+    是為了讓**鍵名只有一份定義**:各寫一份的漂移樣態是前端 `meta.ref` 讀成
+    undefined → `hasRef=false` → 紅綠面積與平盤線靜默消失。
+    """
+
+    def _filled(self) -> StockDayState:
+        st = StockDayState()
+        st.ingest(_tick(10, qty=10, price=2_380_000, time="09:01:30.000"))
+        st.ingest(_tick(20, qty=5, price=2_400_000, time="09:02:10.000"))
+        st.update_meta(
+            StockMeta(
+                name="台積電",
+                ref_milli=2_320_000,
+                upper_milli=2_550_000,
+                lower_milli=2_090_000,
+                y_close_milli=2_320_000,
+                y_volume=100,
+                open_time="09:00:00",
+                close_time="13:30:00",
+            )
+        )
+        return st
+
+    def test_light_snapshot_is_exactly_minutes_and_meta(self) -> None:
+        light = self._filled().light_snapshot()
+        assert set(light) == {"minutes", "meta"}
+        # ticks 是本輪要省掉的那一份(30 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
+        assert "ticks" not in light
+
+    def test_light_and_full_snapshot_share_one_key_mapping(self) -> None:
+        """同一份資料兩條路產出的 minutes / meta 必須逐鍵相同 —— 這條測試就是
+        「單一定義」的證明;兩邊各自維護時它會第一個紅。"""
+        st = self._filled()
+        light = st.light_snapshot()
+        full = st.snapshot()
+        assert light["minutes"] == full["minutes"]
+        assert light["meta"] == full["meta"]
+        assert light["minutes"]["541"]["c"] == 2_380_000  # 非空基準:比對的不是兩個空 dict
+        assert light["meta"]["ref"] == 2_320_000
+
+    def test_light_snapshot_without_meta_is_none_not_missing(self) -> None:
+        """缺 meta 回 `None` 而不是漏鍵:前端 `raw.meta ?? null` 對兩者同解,但
+        route 的 response 形若少一個鍵,契約測試與 pyright 都看不出來。"""
+        light = StockDayState().light_snapshot()
+        assert light == {"minutes": {}, "meta": None}
