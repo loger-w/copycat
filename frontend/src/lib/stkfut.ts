@@ -37,13 +37,29 @@ export interface StkfutSelection {
   unit: number | null;
 }
 
+/** instrument key 的前綴 —— 產生端與辨識端共用同一個定義,不各寫各的字串。 */
+const KEY_PREFIX = "F:";
+
 /** 主圖 instrument 鍵 —— **WS 比對與 effect deps 專用**,不可當 REST 路徑段。 */
 export function instrumentKeyOf(
   code: string | null,
   contract: { prod: string; ym: string } | null,
 ): string | null {
   if (code === null) return null;
-  return contract === null ? code : `F:${contract.prod}:${contract.ym}`;
+  return contract === null ? code : `${KEY_PREFIX}${contract.prod}:${contract.ym}`;
+}
+
+/** 這個字串是 instrument key(而非股號)?
+ *
+ *  用途只有一個:**把 key 送進吃股號的 REST 路徑段之前擋下來**。後端 `_valid_code`
+ *  對 key 一律 400,而發生的時機是**切換合約的那一個過渡 render** —— 選擇態(`stkfut`
+ *  之類的顯式 prop)與 WS 推來的 `accum` 不同步,prop 先翻、snapshot 晚一拍,那一拍
+ *  的組合是「現貨態 + 合約 code」,兩邊各自看都合法(Phase 6 real-env finding)。
+ *
+ *  **不可拿它當渲染分支的判準**(R6):要不要用期貨窗畫、要不要停 VP,一律吃顯式 prop。
+ *  這裡判的是「這個 code 能不能當股號用」,是資料形狀問題不是模式問題。 */
+export function isInstrumentKey(code: string): boolean {
+  return code.startsWith(KEY_PREFIX);
 }
 
 /** 送單用的 TC4 月份 leaf symbol。
