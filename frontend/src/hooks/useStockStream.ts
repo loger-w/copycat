@@ -148,6 +148,15 @@ export function useStockStream(
   const scheduleRetry = (key: string): void => {
     // 三道檢查都是「重試已經沒有意義」:元件沒了 / 標的換了(新標的自己會抓)/
     // WS 斷了(重連的 onopen 本來就會發一次全量對齊,這裡再排只是重複)。
+    //
+    // 覆蓋度誠實記帳(review B-1):只有 `wsOpen` 那道**單獨拿掉會紅**。另兩道在現行
+    // 呼叫點下是防禦、不是可獨立覆蓋的邏輯:
+    //  - `mounted`:unmount 的 cleanup(:381)同時清了 `wsOpenRef`,所以單獨拿掉它
+    //    測試照樣綠(實測 31/31 passed);兩道一起拿掉才紅。cleanup 的清旗標順序哪天
+    //    變了,這道就是唯一剩下的防線,故保留。
+    //  - `key`:唯一呼叫點是 `refetch` 的 finally,而那條路已經以
+    //    `instrumentKeyRef.current !== current` 分岔去補發,走到這裡時兩者恆相等 ——
+    //    可證的死碼,無法覆蓋。留著是為了「之後多一個呼叫點」時不必重新想這件事。
     if (!mountedRef.current) return;
     if (instrumentKeyRef.current !== key) return;
     if (!wsOpenRef.current) return;
