@@ -27,7 +27,7 @@ import copycat.server.finmind_token as finmind_token
 from copycat.breadth_config import BreadthConfig
 from copycat.server import app as app_mod
 from copycat.server.app import DEFAULT_BREADTH, BreadthFetchers, create_app
-from copycat.server.breadth_fetch import BreadthFetchError
+from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
 from copycat.server.mis import OtcSnap
 from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeIndexSource
@@ -109,6 +109,18 @@ _CHAIN_ROWS: list[dict] = [
     {"date": "2026-08-01", "stock_id": "6488", "industry": "半導體", "sub_industry": "矽晶圓"},
 ]
 
+#: 過 `CHAIN_MIN_ROWS`(部分截斷健檢)的墊列。代號取 9000 段 = **不在 universe**,
+#: `_group_stats` 回 None → 那些產業天然不進 rotation,手算對照一格不動。
+_CHAIN_PAD: list[dict] = [
+    {
+        "date": "2026-08-01",
+        "stock_id": f"{9000 + i}",
+        "industry": "墊檔",
+        "sub_industry": "墊檔",
+    }
+    for i in range(CHAIN_MIN_ROWS - len(_CHAIN_ROWS))
+]
+
 
 def _ok_fetchers(*, chain: bool = False) -> BreadthFetchers:
     """第四槽(EOD 日線)刻意給 `None` = 連板停用(契約的一部分,R3 R20)。
@@ -124,7 +136,7 @@ def _ok_fetchers(*, chain: bool = False) -> BreadthFetchers:
         lambda _token: list(_INFO_ROWS),
         lambda _token, _today: [],
         None,
-        (lambda _token: list(_CHAIN_ROWS)) if chain else None,
+        (lambda _token: [*_CHAIN_ROWS, *_CHAIN_PAD]) if chain else None,
     )
 
 
