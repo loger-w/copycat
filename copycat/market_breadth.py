@@ -289,6 +289,36 @@ def _to_number(value: object) -> float | None:
     return None
 
 
+#: `sector_rotation._group_stats` 會直接做算術(`sum` / `+=`)的三個欄位。
+_ROTATION_NUMERIC_FIELDS = ("change_rate", "total_volume", "yesterday_volume")
+
+
+def normalize_universe_rows(rows: list[dict]) -> list[dict]:
+    """`assemble_universe` 輸出 → 餵 `sector_rotation` 前的**防髒清洗**(淺複製)。
+
+    `_ROTATION_NUMERIC_FIELDS` 三欄過 `_to_number`;缺欄不補、其餘欄原樣直通。
+
+    為什麼清洗在這裡而不在 `sector_rotation` 內:那個模組是 neigui parity 全等搬移,
+    不得在其內加防禦。而 universe rows 是**原始快照列**(不是 `compute_breadth` 的
+    rows_out —— 後者的數值欄已清過)—— 整日未成交的檔位實務上是 `""` / `"-"`,
+    `_group_stats` 的 `sum()` 當場 TypeError。那種髒列是**持續性**的(那檔一整天都
+    不會成交):`_recompute_rotation` 的傘罩每輪都被觸發 → 類股面板整個交易日
+    「未就緒」、log 每 10s 一則,而家數帶就在旁邊好好的(review round-3 CR-2)。
+    傘罩保留為 backstop(清洗涵蓋不到的髒法仍會被接住)。
+
+    `change_rate` 變 `None` 的列會被 `_group_stats` 的既有 None gate 跳過 —— 即
+    neigui 對 `None` 的既有語意(該檔不進 members / avg / Σ量),不是新行為。
+    """
+    out: list[dict] = []
+    for row in rows:
+        cleaned = dict(row)
+        for key in _ROTATION_NUMERIC_FIELDS:
+            if key in cleaned:
+                cleaned[key] = _to_number(cleaned[key])
+        out.append(cleaned)
+    return out
+
+
 def _is_touched(high: object, low: object, prev_close: float) -> tuple[bool, bool]:
     """毫元等值判「盤中曾觸及停板」;high/low 缺或非數值 → (False, False)。
 

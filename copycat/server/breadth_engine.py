@@ -61,6 +61,7 @@ from copycat.market_breadth import (
     compute_breadth,
     dedup_sector_map,
     max_tick_datetime,
+    normalize_universe_rows,
     parse_active_disposition,
 )
 from copycat.sector_rotation import (
@@ -463,14 +464,17 @@ class BreadthEngine:
         last_minute: dict | None = None
         rows = await self._fetch_snapshot()
         if rows is not None:
-            await self._refresh_maps()
             try:
+                # `_refresh_maps` 也在傘罩**內**:取數層的 never-raise 只涵蓋取數本身,
+                # 解析步驟(`parse_active_disposition` 對非字串 `period_start`、
+                # `dedup_sector_map` 對非 dict 列)是裸呼叫(review round-3 CR-4)。
+                await self._refresh_maps()
                 last_minute = self._apply(rows)
             except Exception:
                 # 逃到 `_poll_loop` 的傘罩就繞過了 `_fail()`(退避不動)——
                 # 而 publish 也跟著被跳過 → 家數帶凍在最後一則、stale 永遠到不了
                 # 前端,零錯誤訊號(review round-2 XR-1c)
-                logger.exception("breadth 統計 / append 非預期失敗(該輪視同失敗)")
+                logger.exception("breadth 對照表 / 統計 / append 非預期失敗(該輪視同失敗)")
                 self._fail(quota=False)
         # 廣播在傘罩**外**:成敗皆送一則,stale 才傳得到前端(docstring 的「成敗皆廣播」)
         self._ws.publish(self.payload(last_minute))
@@ -634,8 +638,11 @@ class BreadthEngine:
         # 理由:rows 換了而日期沒換的話,連板判式會拿舊日期去比 data_end(R14)
         self._rows_date = trade_date
         # 類股輪動與 rows 同輪同源(design §5):`sector_state()` 報的 trade_date /
-        # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾
-        self._universe_rows = universe
+        # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾。
+        # 存**清洗過**的那份:原始快照列的髒數值欄(整日未成交 = `""` / `"-"`)會在
+        # `_group_stats` 的 `sum()` 當場炸,而那種髒列是持續性的 → 傘罩每輪把 rotation
+        # 打成 None,類股面板整個交易日「未就緒」(review round-3 CR-2)
+        self._universe_rows = normalize_universe_rows(universe)
         self._recompute_rotation()
         # 退避與 quota 旗標**無條件**重置:上游有回應,不該退避。
         self._fail_streak = 0
@@ -832,12 +839,23 @@ class BreadthEngine:
     def _restore_chain(self) -> None:
         """讀本地 chain 快取進表 —— **過期也先用**(TTL 只決定要不要重取,不決定能不能用)。
 
-        parse 後為空(舊格式 / 殘表)則當沒有快取:時戳留 None → 下一圈立刻武裝。
+        列數低於門檻 / parse 後為空(舊格式 / 殘表)則當沒有快取:時戳留 None →
+        下一圈立刻武裝重取。
         """
         loaded = load_chain(self._chain_path())
         if loaded is None:
             return
         rows, fetched_at = loaded
+        if len(rows) < CHAIN_MIN_ROWS:
+            # `_refresh_chain` 的門檻只擋得住「這一次取到殘表」:門檻之前的版本落下的
+            # 殘表 restore 照收的話,會帶著自己的時戳回來 → 7 天 TTL 內不重取,而少掉
+            # 的產業歸類在畫面上零錯誤訊號,重啟一次就再續命 7 天(review round-3 CR-3)
+            logger.warning(
+                "breadth industry_chain 快取只有 %d 列(門檻 %d),視同無快取(下一圈重取)",
+                len(rows),
+                CHAIN_MIN_ROWS,
+            )
+            return
         try:
             chain_map = rows_to_chain_map(rows)
         except Exception:
