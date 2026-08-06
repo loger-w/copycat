@@ -126,6 +126,47 @@ describe("useStockStream", () => {
     expect(hook.result.current.accum?.ticks.length).toBe(5);
   });
 
+  // 🔴 F-2:`tick` 有兩道時序保護(refetch 中進 pendingRef、重放只收 seq > snap.seq),
+  // `book` 一道都沒有 —— t0 發 fetch(後端在那一刻凍結簿)→ t0+δ 新簿推播套用 →
+  // t0+Δ snapshot 回來整份覆蓋,**新簿被較舊的 snapshot 回捲**。鎖板 / 盤後推播稀疏時
+  // 回捲窗可達數十秒,而五檔、鎖停 badge、量 bar 的分母會一起退回舊值,零錯誤訊號。
+  it("refetch in-flight 期間的 book 推播不被較舊的 snapshot 回捲(F-2)", async () => {
+    const { hook, ws } = await setup();
+    let resolveRefetch: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((res) => { resolveRefetch = res; }),
+    );
+    act(() => ws.emit(T(4))); // 1→4 跳號 → refetch(fetch 已送出 = 後端簿已凍結)
+    // fetch 送出**之後**才到的新簿:方向恆定(推播必晚於 fetch 發起)
+    act(() => ws.emit({ type: "book", code: "2330", bids: [[2_379_000, 9]], asks: [[2_381_000, 4]] }));
+    act(() => {
+      resolveRefetch(new Response(JSON.stringify({
+        ...snap(4, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]),
+        // snapshot 帶的是**凍結當下**的舊簿
+        book: { bids: [[2_370_000, 1]], asks: [[2_371_000, 1]] },
+      })));
+    });
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
+    expect(hook.result.current.accum?.book?.bids).toEqual([[2_379_000, 9]]);
+    expect(hook.result.current.accum?.book?.asks).toEqual([[2_381_000, 4]]);
+  });
+
+  it("refetch 期間無 book 推播 → snapshot 的簿原樣採用(F-2 不誤留舊 pending)", async () => {
+    const { hook, ws } = await setup();
+    // 先讓一則 book 進 accum,再跑一次「期間無推播」的 refetch
+    act(() => ws.emit({ type: "book", code: "2330", bids: [[2_379_000, 9]], asks: [[2_381_000, 4]] }));
+    expect(hook.result.current.accum?.book?.bids).toEqual([[2_379_000, 9]]);
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify({
+        ...snap(4, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]),
+        book: { bids: [[2_360_000, 2]], asks: [[2_361_000, 2]] },
+      })),
+    );
+    act(() => ws.emit(T(4)));
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
+    expect(hook.result.current.accum?.book?.bids).toEqual([[2_360_000, 2]]);
+  });
+
   it("切檔撞上 in-flight refetch 不被吞(CR1:合併不丟棄)", async () => {
     let resolveFirst: (r: Response) => void = () => {};
     fetchMock.mockImplementationOnce(
