@@ -396,8 +396,14 @@ class TestFailureHandling:
 
 
 class TestMapCache:
-    async def test_failure_retries_next_cycle_then_ttl_holds(self, tmp_path: Path) -> None:
-        """失敗不刷時戳(下輪重試);成功才刷(24h 內不再打)。"""
+    async def test_failure_retries_after_backoff_then_ttl_holds(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """失敗不刷時戳(退避後重試);成功才刷(24h 內不再打)。
+
+        「下輪即重試」是 P2-4 之前的契約 —— 以 poll 節奏重打壞掉的最重 endpoint 只會
+        加速燒配額,改為 60s 退避(重試條件本身不變:時戳仍未刷)。
+        """
         info = FakeFetch(list(_INFO_ROWS))
         info.error = BreadthFetchError("info down")
         engine, _snap, inf, disp, _ = _make(tmp_path, info=info)
@@ -407,6 +413,7 @@ class TestMapCache:
         assert inf.calls == 1
 
         info.error = None
+        mono.advance(be._MAP_RETRY_SECS + 1.0)
         await engine._run_cycle()
         assert engine.state()["counts"] == _EXPECTED
         assert inf.calls == 2
@@ -642,9 +649,13 @@ class TestSeriesPersistence:
         self, tmp_path: Path, stamp_time: str
     ) -> None:
         """盤後定盤 14:30 與盤前 08:59 都在分鐘域(0901–1330)之外 —— scalar 更新、
-        序列不收、檔不寫。"""
+        序列不收、檔不寫。
+
+        `now` 跟著快照時刻走(P1-2 之後兩者必須自洽:快照時刻超前本機時鐘 10 分鐘
+        以上即視為髒 row 忽略,而 14:30 的定盤本來就是 14:30 當下收到的)。
+        """
         snap = FakeFetch(_snapshot_rows(f"{_TRADE_DATE} {stamp_time}"))
-        engine, *_ = _make(tmp_path, snapshot=snap)
+        engine, *_ = _make(tmp_path, snapshot=snap, clock=Clock(now=stamp_time))
 
         await engine._run_cycle()
 
