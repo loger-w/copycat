@@ -24,7 +24,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from copycat.capital.client import CapitalClient
-from copycat.capital.mapping import multiplier_of, product_of, to_exchange_symbol
+from copycat.capital.mapping import (
+    exchange_product_of,
+    multiplier_of,
+    product_of,
+    to_exchange_symbol,
+)
 from copycat.capital.models import (
     CancelOrderRequest,
     CapitalDisabledError,
@@ -129,6 +134,18 @@ def _invalid_order() -> HTTPException:
 _STOCK_FUTURE_UNITS: dict[str, int] = {"std": 2000, "mini": 100}
 
 
+def _require_legal_tick(price: float, *, context: str) -> None:
+    """個股期限價檔位閘:非現股 tick 表合法檔位 → 400 `BAD_TICK`。
+
+    送單(`_stkfut_gates`)與改價 route 共用的**單一定義** —— 兩處各寫一份規則,
+    漂移後的失效樣態是「送不出去的價改得進去」(或反過來),而兩邊都不會有錯誤訊號。
+    """
+    price_milli = round(price * 1000)
+    if price_milli <= 0 or price_milli % tick_size_milli(price_milli) != 0:
+        logger.info("%s 非法檔位:@%s", context, price)
+        raise HTTPException(status_code=400, detail={"error": "BAD_TICK"})
+
+
 def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
     """個股期送單的兩道閘(stkfut-contracts SC-6);非個股期產品直接放行。
 
@@ -144,10 +161,29 @@ def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
         raise HTTPException(status_code=400, detail={"error": "PRODUCT_NOT_ALLOWED"})
     if req.price_type != "limit":
         return
-    price_milli = round(req.price * 1000)
-    if price_milli <= 0 or price_milli % tick_size_milli(price_milli) != 0:
-        logger.info("order/future 非法檔位:%s @%s", product, req.price)
-        raise HTTPException(status_code=400, detail={"error": "BAD_TICK"})
+    _require_legal_tick(req.price, context=f"order/future {product}")
+
+
+def _correct_price_tick_gate(client: CapitalClient, seq_no: str, price: float) -> None:
+    """改價的個股期檔位閘:契約碼由 seq_no 反查 store(`_fut_multiplier` 同一條路)。
+
+    - store 查無該委託 → 放行(review R3 逃生口:斷線 store 空時仍要能刪改單);
+    - 契約碼推不出產品、或產品不是個股期 → 放行。scope 與送單面一致只驗個股期,
+      指數期權不適用現股 tick 表。
+    """
+    rec = next((o for o in client.store.orders() if o.seq_no == seq_no), None)
+    if rec is None or not rec.stock_no:
+        return
+    try:
+        product = exchange_product_of(rec.stock_no)
+    except ValueError:
+        logger.info(
+            "correct-price 契約碼推不出產品(seq=%s, contract=%r)→ 不驗檔位", seq_no, rec.stock_no
+        )
+        return
+    if lookup_product(product) is None:
+        return
+    _require_legal_tick(price, context=f"correct-price {product}")
 
 
 @router.get("/api/capital/status")
@@ -226,6 +262,8 @@ async def capital_order_cancel(request: Request, body: CancelBody) -> dict:
 @router.post("/api/capital/order/correct-price")
 async def capital_order_correct_price(request: Request, body: CorrectPriceBody) -> dict:
     client = _capital(request)
+    if body.market == "fut":
+        _correct_price_tick_gate(client, body.seq_no, body.price)
     result = await client.correct_price(
         CorrectPriceRequest(seq_no=body.seq_no, market=body.market, price=body.price)
     )
