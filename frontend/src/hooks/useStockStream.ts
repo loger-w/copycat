@@ -53,6 +53,12 @@ const BACKOFF_CAP_MS = 30_000;
 const REFETCH_RETRY_START_MS = 1_000;
 const REFETCH_RETRY_CAP_MS = 8_000;
 
+/** refetch 交錯期間暫存的簿(F-2);帶 instrumentKey 標記,切檔撞上 in-flight 時丟棄。 */
+interface PendingBook {
+  key: string;
+  book: StockBook;
+}
+
 interface WsMsg {
   type: string;
   code?: string;
@@ -94,7 +100,16 @@ export function useStockStream(
   // refetch 進行中收到的**最新一份**簿(F-2)。snapshot 是後端在 fetch 送出當下凍結的,
   // 而推播必晚於 fetch 發起 → 方向恆定,套完 snapshot 之後蓋回來就是對的。
   // 帶 instrumentKey 標記:切檔撞上 in-flight 時 key 不符即丟,不把 A 的簿蓋到 B 上。
-  const pendingBookRef = useRef<{ key: string; book: StockBook } | null>(null);
+  const pendingBookRef = useRef<PendingBook | null>(null);
+
+  /** 取出並清掉暫存的簿。**要經過一層函式**:`refetch` 一開頭就寫 `= null`,而 TS 的
+   *  屬性窄化不會被 await / 函式呼叫重置(寫進值的那條路在 WS callback 裡,TS 看不到)
+   *  → 直接讀會被判成 `never`,`.key` 編不過。順手清掉也讓「只用一次」變成結構保證。 */
+  const takePendingBook = (): PendingBook | null => {
+    const pending = pendingBookRef.current;
+    pendingBookRef.current = null;
+    return pending;
+  };
   // 上一則 status 的**真值**(F-1)。WS handler 是 deps `[]` 的閉包讀不到最新 state,
   // 而把比較塞進 `setStatus` 的 updater 會讓副作用跟著 StrictMode 的 double-invoke 重跑。
   const statusRef = useRef<{ tc4: string; backfilling: string | null }>({
@@ -170,7 +185,7 @@ export function useStockStream(
             if (msg.seq > snap.seq) next = applyTick(next, msg);
           }
           // 交錯的簿蓋回 snapshot 的凍結簿(F-2);key 不符 = 已切檔 → 丟棄
-          const pendingBook = pendingBookRef.current;
+          const pendingBook = takePendingBook();
           if (pendingBook !== null && pendingBook.key === current) {
             next = { ...next, book: pendingBook.book };
           }
