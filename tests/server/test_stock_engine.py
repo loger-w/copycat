@@ -1882,13 +1882,19 @@ class TestRolloverIsolationForContracts:
         False);極端情形是自選空 + 主圖合約時永遠等不到現貨首筆 → 整天不換日。
         新契約 = **日盤**合約 tick 可完成 stage2,而這條保留其防護意圖的新表述:
         夜盤 tick 在 `_in_futures_session` 就整則早退,到不了 stage2 那段。
+
+        **這則 tick 的 `trade_date` 恰為 pending 的 2026-07-22**(UTC 2026-07-21 17:00
+        = 台北 07-22 01:00),stage2 的日期條件因此成立 —— 唯一擋住它的防線就是
+        `_in_futures_session` 的整則早退。刻意不寫 `date="20260722"`:那會讓
+        `_taipei_time` 推成台北 07-23,日期條件先斷,session gate 根本沒被執行到
+        (測試照樣綠,但驗的是別條路)。
         """
         engine, src = await _make()
         await engine.set_main_contract(_CONTRACT)
         engine.rollover_stage1("2026-07-22")
         assert src.on_message is not None
         # 台北次日 01:00(夜盤):跨午夜的日期比日盤主圖早一天到
-        src.on_message(_fut_quote(cum=1, date="20260722", precise="170000000000"))
+        src.on_message(_fut_quote(cum=1, precise="170000000000"))
         await _drain(engine)
         assert engine._pending_date == "2026-07-22"  # 仍等日盤首筆
         assert engine.trade_date == "2026-07-21"
