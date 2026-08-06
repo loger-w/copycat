@@ -194,3 +194,68 @@ describe("useBreadth", () => {
     expect(ws.closed).toBe(true);
   });
 });
+
+/** fetch 回應懸置在手上,測「refetch 在途」這段窗。 */
+function deferredResponse() {
+  let release!: (body: unknown) => void;
+  const promise = new Promise<Response>((resolve) => {
+    release = (body: unknown) => resolve(new Response(JSON.stringify(body)));
+  });
+  return { promise, release };
+}
+
+/** refetch 未回期間抵達的 WS 增量格,不可被隨後的全量回應整份覆蓋掉(review P2-3)。 */
+describe("useBreadth refetch 競態(review P2-3)", () => {
+  async function inflightRefetch() {
+    const hook = renderHook(() => useBreadth());
+    await waitFor(() => expect(hook.result.current).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    const pending = deferredResponse();
+    fetchMock.mockImplementation(async () => pending.promise);
+    act(() => ws.onopen?.()); // reconnect → refetch,回應懸置
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+    return { hook, ws, pending };
+  }
+
+  it("fetch 在途 → WS 新格先到 → 全量回應缺該格,該格仍在 series", async () => {
+    const { hook, ws, pending } = await inflightRefetch();
+    act(() =>
+      ws.emit(
+        wsMsg({ last_minute: { t: "0904", twse: [3, 515, 85, 400, 1], tpex: [1, 302, 38, 249, 0] } }),
+      ),
+    );
+    expect(hook.result.current!.series.map((p) => p.t)).toEqual(["0901", "0903", "0904"]);
+
+    // 全量只到 0903(該格是 fetch 快照拍完之後才產生的)
+    await act(async () => {
+      pending.release(STATE);
+      await pending.promise;
+    });
+    await waitFor(() =>
+      expect(hook.result.current!.series.map((p) => p.t)).toEqual(["0901", "0903", "0904"]),
+    );
+    // 同 t 以全量為準
+    expect(hook.result.current!.series[1]!.twse).toEqual([3, 512, 88, 401, 1]);
+  });
+
+  it("換日 refetch(trade_date 不同)不合併,一律以全量回應為準", async () => {
+    const { hook, ws, pending } = await inflightRefetch();
+    act(() =>
+      ws.emit(
+        wsMsg({ last_minute: { t: "0904", twse: [3, 515, 85, 400, 1], tpex: [1, 302, 38, 249, 0] } }),
+      ),
+    );
+    await act(async () => {
+      pending.release({
+        ...STATE,
+        trade_date: "2026-08-07",
+        series: [{ t: "0901", twse: [0, 1, 2, 3, 4], tpex: [0, 1, 2, 3, 4] }],
+      });
+      await pending.promise;
+    });
+    await waitFor(() => expect(hook.result.current!.trade_date).toBe("2026-08-07"));
+    expect(hook.result.current!.series).toEqual([
+      { t: "0901", twse: [0, 1, 2, 3, 4], tpex: [0, 1, 2, 3, 4] },
+    ]);
+  });
+});

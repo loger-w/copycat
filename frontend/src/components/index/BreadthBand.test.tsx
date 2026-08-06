@@ -121,3 +121,19 @@ describe("BreadthBand stale 徽章(SC-3)", () => {
     expect(screen.queryByTestId("breadth-stale")).toBeNull();
   });
 });
+
+/** 開盤前面板上掛的是前一交易日的曲線,只印時分秒看不出是舊的(review P2-5)。 */
+describe("BreadthBand trade_date 標示(review P2-5)", () => {
+  it("(j) 正常態於 as_of 旁顯示 trade_date", () => {
+    render(<BreadthBand breadth={state({ trade_date: "2026-08-05", as_of: "13:30:00" })} />);
+    const stamp = screen.getByTestId("breadth-stamp");
+    expect(stamp.textContent).toContain("2026-08-05");
+    expect(stamp.textContent).toContain("13:30:00");
+    expect(stamp.className).toContain("text-ink-dim");
+  });
+
+  it("(k) trade_date 為 null 時只印 as_of,不留分隔符", () => {
+    render(<BreadthBand breadth={state({ trade_date: null, as_of: "13:30:00" })} />);
+    expect(screen.getByTestId("breadth-stamp").textContent).toBe("13:30:00");
+  });
+});
