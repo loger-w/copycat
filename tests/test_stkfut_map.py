@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -161,6 +163,54 @@ class TestLookupProduct:
         write_map(path, {"9999": {"prod": "ZZF", "name": "新", "unit": 2000, "mini": None}})
         assert lookup_product("CDF", path=path) is None
         assert lookup_product("ZZF", path=path) == {"unit": 2000, "kind": "std", "code": "9999"}
+
+    def test_cache_invalidated_by_out_of_process_rewrite(self, tmp_path: Path) -> None:
+        """code review A4:`refresh-stkfut-map` 一般是**另一個 process** 跑的 CLI ——
+        跑著的 server 沒有經過 `write_map`,只靠「path 為鍵」的 cache 會抱著開機那份
+        對映到重啟為止。失效樣態極安靜:新上市個股期送單被判 `unknown product
+        multiplier` 拒單,而對映檔明明已經更新了。
+
+        鍵要含檔案 stat(mtime + size),所以這裡刻意繞開 `write_map` 直接改檔。
+        """
+        path = tmp_path / "map.json"
+        write_map(path, _v2_map())
+        assert lookup_product("CDF", path=path) == {"unit": 2000, "kind": "std", "code": "2330"}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["map"]["2330"]["unit"] = 1000  # 契約單位改了(除權息調整)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        # 同秒寫入時 mtime 可能相同 → 明確推進(pyc 同秒陷阱的同款成因)
+        os.utime(path, (time.time() + 2, time.time() + 2))
+        assert lookup_product("CDF", path=path) == {"unit": 1000, "kind": "std", "code": "2330"}
+
+
+class TestPackagedMapInvariants:
+    """版控檔 `copycat/stkfut_map.json` 的不變式(code review A8s)。
+
+    前端 ETF 前置閘的 fallback 判準是「股號開頭為 0」,而後端的權威判準是契約單位。
+    兩者對得起來是**這份資料的性質**,不是程式保證的 —— 期交所哪天讓某檔 1xxx 的
+    標的用非標準單位,fallback 就會在真錢面板上放行一張必被 `PRODUCT_NOT_ALLOWED`
+    拒掉的單(而前端沒有任何訊號)。所以把它釘在版控檔上,下次 refresh 若破了就紅。
+    """
+
+    def test_non_stock_units_belong_only_to_zero_prefixed_codes(self) -> None:
+        m = load_map()
+        assert len(m) > 200  # 前提:讀到的是真的那份表,不是空降級
+        for code, entry in m.items():
+            legs = [entry["unit"]]
+            mini = entry.get("mini")
+            if mini is not None:
+                legs.append(mini["unit"])
+            for unit in legs:
+                if unit not in (2000, 100):
+                    assert code.startswith("0"), f"{code} unit={unit} 不是 ETF 卻非標準單位"
+
+    def test_zero_prefixed_codes_never_use_stock_units(self) -> None:
+        """反向也要成立:`0` 開頭卻用股票單位的話,fallback 會誤擋一檔可下單的標的。"""
+        m = load_map()
+        for code, entry in m.items():
+            if not code.startswith("0"):
+                continue
+            assert entry["unit"] not in (2000, 100), f"{code} 以 0 開頭卻是股票單位"
 
 
 class TestRefresh:
