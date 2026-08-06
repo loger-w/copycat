@@ -53,6 +53,7 @@ from copycat.notify import notify_discord
 from copycat.server.discord_bot import Bot, create_bot
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.signal_hub import SignalHub
+from copycat.server.stkfut_catalog import StkfutCatalog
 from copycat.server.stock_engine import StockEngine, StockSource
 from copycat.server.watchlist_service import WatchlistService
 from copycat.signal_rules import Rule, RuleError
@@ -329,6 +330,7 @@ def create_app(
         # 其餘九個先掛 None:窗內的對外形狀 = 既有「引擎降級」形狀(503 / WS close /
         # breadth 的 enabled=false 三態)
         app.state.stock = None
+        app.state.stkfut_catalog = None
         app.state.watchlist_service = None
         app.state.signal_hub = None
         app.state.discord_bot = None
@@ -377,13 +379,20 @@ def create_app(
         async def _boot_engines() -> None:
             """六段引擎的實際啟動序列(`_boot_all` 只管完成/中止語意與 done 標記)。"""
 
+            # 合約發現(SC-1)的接線點:`list_stock_futures` **不在** `StockSource`
+            # Protocol 內(個股訂閱面用不到,加進去等於逼所有 fake 實作)→ 由這裡以
+            # getattr 取。source 沒這能力時 catalog 留 None,route 回 503 —— 不假裝查得到。
+            stkfut_source: object | None = None
+
             # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
             def _make_stock() -> StockEngine | None:
+                nonlocal stkfut_source
                 resolved_stock = (
                     _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
                 )
                 if resolved_stock is None:
                     return None
+                stkfut_source = resolved_stock
                 import datetime as _dt
 
                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
@@ -411,6 +420,11 @@ def create_app(
             )
             app.state.stock = stock
             booted.stock = stock
+            # 合約查詢與個股訂閱共用同一條 session:QUERYALLINSTRUMENT 是 REQ 不是訂閱,
+            # 不會有「同 symbol 跨 session 只推一邊」的問題,但多開一條 TC4 登入沒有理由
+            fetch = getattr(stkfut_source, "list_stock_futures", None)
+            if stock is not None and callable(fetch):
+                app.state.stkfut_catalog = StkfutCatalog(cast(Callable[[], dict], fetch))
 
             # 自選複合操作(design §6):落檔 + 訂閱池 + 廣播三件事的單一定義,前端 PUT 與
             # Discord `/watch` 共用同一把 lock。**必須先於 signals `_boot`**(impl-review R3):
@@ -969,6 +983,23 @@ def create_app(
             logger.exception("訊號規則落檔失敗(記憶體未變更):%s", rule_id)
             raise HTTPException(status_code=500, detail={"error": "RULE_SAVE_FAILED"}) from None
         return Response(status_code=204)
+
+    @app.get("/api/stock/stkfut/contracts/{code}")
+    async def stock_stkfut_contracts(request: Request, code: str) -> dict:
+        """個股期合約清單(SC-1):404 = 這檔沒有期貨(前端據此不渲染下拉)。
+
+        TC4 查詢失敗**不 catch** —— 全域 handler 的 502 TC4_DOWN 正是這條路要的語意,
+        而降級成空清單會讓「達錢 4 斷線」看起來像「這檔沒期貨」。
+        """
+        _stock(request)
+        _valid_code(code)
+        catalog: StkfutCatalog | None = request.app.state.stkfut_catalog
+        if catalog is None:
+            raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+        entry = await catalog.get(code)
+        if entry is None:
+            raise HTTPException(status_code=404, detail={"error": "NO_STKFUT"})
+        return {"code": code, **entry}
 
     @app.get("/api/stock/state/{code}")
     async def stock_state(request: Request, code: str) -> dict:
