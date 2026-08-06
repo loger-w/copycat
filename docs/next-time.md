@@ -830,3 +830,24 @@
   fixture 實測 3.5 次/秒;prod 有真資料不觸發):`key={t.priceMilli}` 改帶 index 即根除。
 - [ ] days=5 下 30/60 分 K 無歷史回看(初始視窗即全部;design Known Risk):要支援回看
   可對 n≥30 另發長窗 query。
+
+## 2026-08-06(stkfut-order-channel /bug 收尾留尾巴)
+
+- [ ] **`_stkfut_gates` / `_require_legal_tick` 的 `round(price*1000)` 對 ±inf 拋
+  OverflowError**,route 的 `except ValueError` 不涵蓋 → 502 TC4_DOWN 而非 400
+  (NaN 反而正確;quintet review C-5)。修法 = catch 併入 OverflowError 或先過
+  `math.isfinite`。本輪抽共用 helper 時刻意不動語意,兩處呼叫點同一份修一次即可。
+- [ ] **當沖 checkbox 不隨合約切換重置**(StkfutLadder `dayTrade` state;quintet
+  review C-4):同元件的武裝鍵與口數都已 per-instrument 化,獨漏這格。
+- [ ] **前端 `isOrderBlocked` 在 unit=null(對映表過期)時放行**,後端 multiplier_of
+  兜底成 400 INVALID_ORDER —— fail-closed 但錯誤碼指向使用者參數,真因是伺服器端
+  對映檔過期(quintet review C-3);建議分開錯誤碼(MAP_STALE 或沿用
+  PRODUCT_NOT_ALLOWED)。
+- [ ] **ws flake 家族新樣本**:`test_index_routes.py::test_ws_streams_index_payload`
+  全套件跑偶紅(`twse.p == None`,快照先於 tick 送達的時序),單檔重跑綠、全套件
+  重跑綠(2026-08-06 一次;與既有 ws_disconnect flake 待排查條目同批)。
+- [ ] **quintet review 其餘 12 條 P2 尚未逐條入帳**(E-2/E-3/E-4/E-5、X-1/X-2/X-3、
+  F-1~F-5、W-1~W-3;全文 `.claude/bug/stkfut-order-channel/` 同批 artifacts 的
+  `review-findings.md`):review 建議優先 X-2/X-3/E-5(共用資源結構性)與
+  F-2/F-3(鎖板場景/可用性)。E-1(P1,期貨回補 cum 假設)另案處理,
+  第一步 = prod 停機窗跑 ticks_probe 對合約 leaf 印 TradeVolume。
