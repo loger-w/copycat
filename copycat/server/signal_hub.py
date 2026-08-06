@@ -685,6 +685,11 @@ class SignalHub:
 
         繞過規則 slots(這條路徑沒有規則,也不該被規則的開關影響);逐則 try/except
         —— 呼叫端是 breadth `_poll_loop`,往外拋等於整條家數輪停擺。
+
+        **入列(jsonl)先行、WS 後行,兩者各自 try**(review S-4/C-5):jsonl 是歷史
+        真相源**也是重啟後對帳 seed 的唯一來源**。共用一個 try 而 WS 先跑的話,WS
+        拋一次就連 jsonl 一起丟 —— 那則事件從此不存在,重啟後 seed 讀不到它,對帳
+        會把已經發生過的鎖板當成新的再發一次(而畫面上只是多一列,沒有錯誤訊號)。
         """
         if self._closing:  # 關機已開始:收了也不會被寫出去
             return
@@ -713,10 +718,15 @@ class SignalHub:
                     "pct": None,
                     "touch_count": event["touch_count"],
                 }
-                self._publish(payload)  # WS 同步先送(前端要即時)
                 self._enqueue({**payload, "trade_date": trade_date}, notify=False)
             except Exception:
-                logger.exception("廣度事件發布失敗(丟棄該則):%s", event)
+                # 這裡拋 = 連 payload 都組不出來(髒欄位)→ 這則真的沒有東西可發
+                logger.exception("廣度事件入列失敗(丟棄該則):%s", event)
+                continue
+            try:
+                self._publish(payload)  # WS 後送:斷線 / 佇列爆不得回頭吃掉 jsonl
+            except Exception:
+                logger.exception("廣度事件 WS 發布失敗(jsonl 已留紀錄):%s", event)
 
     def market_event_state(
         self, trade_date: str
