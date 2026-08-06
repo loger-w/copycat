@@ -415,9 +415,12 @@ class TestOrderStkfutGates:
             _wait_status(cap)
             res = client.post("/api/capital/order/future", json=_STKFUT_BODY)
             assert res.status_code == 200
-            fields = _sent(com, "future")[0][1]
+            sent = _sent(com, "future")[0]
+            fields = sent[1]
             assert isinstance(fields, dict)
             assert fields["bstrStockNo"] == "CDFI6"
+            # 個股期是期貨:整條 route 走到 COM 時必須是 SendFutureOrder(C-1)
+            assert sent[2] is False
 
     def test_mini_stock_future_passes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -429,6 +432,7 @@ class TestOrderStkfutGates:
             body = dict(_STKFUT_BODY, tc4_symbol="TC.F.TWF.QFF.202609")
             assert client.post("/api/capital/order/future", json=body).status_code == 200
             assert len(_sent(com, "future")) == 1
+            assert _sent(com, "future")[0][2] is False  # 小型腿同樣是期貨(C-1)
 
     def test_etf_future_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """ETF 期貨(契約單位 10,000 受益權單位)本輪不開放下單 —— 行情/乘數照落,
