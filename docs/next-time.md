@@ -882,3 +882,17 @@
   `review-findings.md`):review 建議優先 X-2/X-3/E-5(共用資源結構性)與
   F-2/F-3(鎖板場景/可用性)。E-1(P1,期貨回補 cum 假設)另案處理,
   第一步 = prod 停機窗跑 ticks_probe 對合約 leaf 印 TradeVolume。
+  (2026-08-06 追記:E-2/E-3/E-4/E-5 已由 fix/stock-engine-p2s 批次修畢)
+
+## 2026-08-06(stock-engine-p2s /bug 收尾留尾巴)
+
+- [ ] **退訂清帳的秒級殘留窗(review A-1)**:在途/佇列中的 backfill job 完成時把
+  `_backfilled`/`_backfill_failed` 寫回(generation 只在 stage1 bump,退訂不 bump)。
+  完整解 = per-code 訂閱 epoch(退訂 +1,worker 套用前比對);窗長 = job 排隊 +
+  SubHistory 往返(秒級),已在 `set_watchlist` removed 迴圈註解記帳。
+- [ ] **stage2 提前後的開盤前空回補佔記帳(review A-2)**:合約 tick 08:45 完成
+  stage2 → 群組輪詢在 09:00 前入列的現貨回補必為空,仍 `_backfilled.add` →
+  疊加「重掛失敗由重試輪補上」時該檔缺口整天補不回。候選解 = `_backfilled.add`
+  只在回補真的套用到列時記,或 stage2 後現貨開盤前不接受群組入列。
+- [ ] **補市日(週六)+ 自選空 + 主圖合約仍整天不換日**:checkpoint weekday>=5
+  不武裝、無現貨快路徑 tick;極罕見組合(E-3 修法註解已記載)。
