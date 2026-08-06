@@ -1203,6 +1203,19 @@ describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
     expect(overlayCalls()).toBe(0);
   });
 
+  // 🔴 Phase 6 real-env finding:合約→現貨切換的**那一個 render**,`stkfut` prop 已翻
+  // false 但 `accum` 還是上一拍的合約 snapshot(code = instrument key)→ overlay 拿
+  // `F:CDF:202608` 當股號打 `/api/stock/overlay/`,後端 `_valid_code` 必 400(實測 2/2 必現)。
+  //
+  // 這道閘吃 `accum.code` 的**形狀**,與 R6「渲染分支不從 code 猜期貨態」不衝突 ——
+  // 判的不是「要不要用期貨窗畫」,是「這個 code 能不能當股號送進 REST 路徑段」。
+  it("過渡 render(stkfut 已 false 但 accum 仍是合約)不打 overlay", async () => {
+    wrap(<StockIntradayChart accum={FUT} />);
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(overlayCalls()).toBe(0);
+  });
+
   it("期貨態 VP 長條整組不畫(量分佈預設開也一樣;對照組畫得出來)", () => {
     const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
     expect(fut.container.querySelectorAll('[data-testid="vp-bar"]').length).toBe(0);
