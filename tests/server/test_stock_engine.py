@@ -1852,7 +1852,12 @@ class TestContractSessionGate:
 
 
 class TestRolloverIsolationForContracts:
-    """D14a:期貨 tick 不觸發換日(夜盤跨午夜的日期會比日盤主圖早一天到)。"""
+    """D14a:期貨 tick 不**武裝** stage1(夜盤跨午夜的日期會比日盤主圖早一天到);
+    但已武裝的 pending 可由**日盤**合約 tick 完成 stage2(E-3)。
+
+    兩者的分界靠 `_in_futures_session` 的整則早退:到得了 stage2 那段的期貨 tick
+    必屬日盤 08:45–13:45,其 `trade_date` 即當日,無跨午夜歧義。
+    """
 
     async def test_contract_tick_with_a_new_date_never_rolls_the_day(self) -> None:
         engine, src = await _make()
@@ -1869,15 +1874,49 @@ class TestRolloverIsolationForContracts:
         assert engine.snapshot("2330")["last"]["cum_vol"] == 100  # 現貨狀態未被 reset
         await engine.close()
 
-    async def test_contract_tick_does_not_complete_a_pending_rollover(self) -> None:
+    async def test_night_contract_tick_does_not_complete_a_pending_rollover(self) -> None:
+        """**事前標為該變的既有斷言**(舊名 `test_contract_tick_does_not_complete_a_pending_rollover`)。
+
+        舊契約是「任何期貨 tick 都不得完成 stage2」,那把 08:45–09:00 的期貨成交
+        全丟掉(pending 期間合約 tick 落到 `state.ingest`,昨日 `_last_cum` 使它恆
+        False);極端情形是自選空 + 主圖合約時永遠等不到現貨首筆 → 整天不換日。
+        新契約 = **日盤**合約 tick 可完成 stage2,而這條保留其防護意圖的新表述:
+        夜盤 tick 在 `_in_futures_session` 就整則早退,到不了 stage2 那段。
+        """
         engine, src = await _make()
         await engine.set_main_contract(_CONTRACT)
         engine.rollover_stage1("2026-07-22")
         assert src.on_message is not None
-        src.on_message(_fut_quote(cum=1, date="20260722"))
+        # 台北次日 01:00(夜盤):跨午夜的日期比日盤主圖早一天到
+        src.on_message(_fut_quote(cum=1, date="20260722", precise="170000000000"))
         await _drain(engine)
-        assert engine._pending_date == "2026-07-22"  # 仍等現貨首筆
+        assert engine._pending_date == "2026-07-22"  # 仍等日盤首筆
         assert engine.trade_date == "2026-07-21"
+        await engine.close()
+
+    async def test_daytime_contract_tick_completes_a_pending_rollover(self) -> None:
+        """E-3:pending 已武裝時,日盤合約 tick 要完成 stage2 並自己被 ingest。
+
+        期貨日盤 08:45 開盤、現貨 09:00 才有首筆 —— 舊碼要求 `rolls_the_day`
+        (非期貨鍵)才完成 stage2,那 15 分鐘的期貨成交全部落到 `state.ingest`
+        而昨日 `_last_cum` 使它恆 False(不 apply 不推播),分時圖左緣整段消失
+        且沒有任何錯誤訊號。
+        """
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        await _drain(engine)
+        engine.rollover_stage1("2026-07-22")
+        stream = engine.stream()
+        assert src.on_message is not None
+        # 台北 08:46(日盤窗內)+ 新日 trade_date
+        src.on_message(_fut_quote(cum=1, date="20260722", precise="004600000000"))
+        await _drain(engine)
+
+        assert engine.trade_date == "2026-07-22"
+        assert engine._pending_date is None
+        assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 1  # 觸發的那一則自己也進狀態
+        got = await _collect(stream)
+        assert any(m["type"] == "tick" and m["code"] == _CONTRACT for m in got)
         await engine.close()
 
 
