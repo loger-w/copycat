@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -82,6 +83,10 @@ MARKET_KEYS = ("TWSE", "OTC") + FUTURES_MARKET_KEYS
 
 #: `?session=` 的值域。
 MARKET_SESSIONS = ("day", "allday")
+
+#: `/api/stock/state/{code}?contract=` 的形檢:`<prod>:<YYYYMM>`(stkfut-contracts D7)。
+#: 只是第一道 —— 「這個合約屬不屬於這檔股票」必須另外查 catalog 白名單。
+_CONTRACT_RE = re.compile(r"^[A-Z0-9]{2,4}:20\d{2}(0[1-9]|1[0-2])$")
 
 
 def _market_payload(
@@ -984,6 +989,25 @@ def create_app(
             raise HTTPException(status_code=500, detail={"error": "RULE_SAVE_FAILED"}) from None
         return Response(status_code=204)
 
+    async def _resolve_contract(request: Request, code: str, contract: str) -> str:
+        """`<prod>:<ym>` → instrument key `F:<prod>:<ym>`;不合法一律 400 BAD_CONTRACT。
+
+        **形檢在白名單之前**:白名單那一步在冷 cache 時是一次真的 TC4
+        `QUERYALLINSTRUMENT`(實測秒級),隨手打錯的字串不該換來一次重查詢。
+        """
+        if _CONTRACT_RE.fullmatch(contract) is None:
+            raise HTTPException(status_code=400, detail={"error": "BAD_CONTRACT"})
+        prod, _sep, ym = contract.partition(":")
+        catalog: StkfutCatalog | None = request.app.state.stkfut_catalog
+        if catalog is None:
+            # source 沒有合約查詢能力 = 這條路無從驗證。放行等於讓白名單形同虛設,
+            # 所以擋下並回 NOT_READY(同 contracts route 對 catalog 缺席的判法)
+            raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+        # 查詢失敗**不 catch** → 全域 handler 502 TC4_DOWN(不降級成現貨:悄悄換商品)
+        if not await catalog.contains(code, prod, ym):
+            raise HTTPException(status_code=400, detail={"error": "BAD_CONTRACT"})
+        return f"F:{prod}:{ym}"
+
     @app.get("/api/stock/stkfut/contracts/{code}")
     async def stock_stkfut_contracts(request: Request, code: str) -> dict:
         """個股期合約清單(SC-1):404 = 這檔沒有期貨(前端據此不渲染下拉)。
@@ -1002,11 +1026,27 @@ def create_app(
         return {"code": code, **entry}
 
     @app.get("/api/stock/state/{code}")
-    async def stock_state(request: Request, code: str) -> dict:
+    async def stock_state(request: Request, code: str, contract: str | None = None) -> dict:
+        """主圖狀態;`?contract=<prod>:<ym>` 切成該股的個股期合約(stkfut-contracts D6/D7)。
+
+        **合約合法性只能來自 catalog,不能只驗字串形**:`?contract=DHF:202609` 打到
+        2330 上,形狀完全合法而畫的是鴻海期貨 —— URL、下單面、右側欄全都還寫著 2330,
+        而 TC4 對不相干的 symbol 一律照回 `Success: OK`,訂閱層不會有任何抗議。所以
+        白名單查不到就 400,catalog 本身查不到(TC4 斷)就讓 502 冒出去,**都不降級成
+        現貨** —— 悄悄跳回現貨等於在使用者不知情下換了商品。
+
+        `code` 回 instrument key(前端 WS 比對鍵)、`underlying` 回股號:兩者在現貨態
+        相同,期貨態才分岔,前端因此有單一讀法(不必自己從 key 反推股號)。
+        """
         stock = _stock(request)
-        _valid_code(code)
-        await stock.set_main(code)  # 含回補觸發(design §2.5)
-        return stock.snapshot(code)
+        _valid_code(code)  # 代號閘優先(既有優先序)
+        key = code
+        if contract is not None:
+            key = await _resolve_contract(request, code, contract)
+        await stock.set_main_contract(key)  # 含回補觸發(design §2.5)
+        snap = stock.snapshot(key)
+        snap["underlying"] = code
+        return snap
 
     @app.get("/api/stock/group-state")
     async def stock_group_state(request: Request, codes: str = "") -> dict:
