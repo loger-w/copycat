@@ -197,6 +197,8 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
     await act(async () => {
       await client.refetchQueries({ queryKey: ["breadth-rows"] });
     });
+    // TQ 的 observer 通知走 notifyManager(macrotask 排程),act 只吃得到 microtask
+    await waitFor(() => expect(screen.getByTestId("limit-list-refetch-error")).toBeTruthy());
 
     expect(screen.queryByTestId("limit-list-table")).toBeTruthy();
     expect(rowIds().length).toBe(8);

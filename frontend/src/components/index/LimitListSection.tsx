@@ -80,8 +80,13 @@ const DEFAULT_FILTER: LimitListFilter = {
 
 /** 門檻欄位是 `string` 不是 `number | null`:number input 的「清空」是空字串,
  *  轉成 0 會靜默變成「金額 ≥ 0 億」這個看起來一樣、語意卻不同的門檻。
- *  非數字(輸入法中途 / 貼上文字)一律視同不限,不讓 NaN 進比較式。 */
+ *  非數字(輸入法中途 / 貼上文字)一律視同不限,不讓 NaN 進比較式。
+ *
+ *  `typeof raw !== "string"` 這道防禦不是多餘的:型別只在編譯期成立,而這個值的
+ *  來源是 localStorage(使用者 / 舊版 / 別的分頁都寫得進去)。`loadFilter` 已在入口
+ *  正規化,這裡是第二道 —— 它在 render 路徑上,而專案沒有 ErrorBoundary,漏掉就是白屏。 */
 function threshold(raw: string): number | null {
+  if (typeof raw !== "string") return null;
   if (raw.trim() === "") return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
@@ -107,6 +112,22 @@ function passes(row: BreadthRow, status: RowStatus, f: LimitListFilter): boolean
   return true;
 }
 
+/** 逐欄取值:型別不符即退回該欄預設。
+ *
+ *  `{ ...DEFAULT_FILTER, ...parsed }` 只擋得掉「整包不是 object」,擋不掉「形狀對但
+ *  欄位型別錯」—— 而後者正是舊版 schema / 手動編輯 / 別的分頁寫入會產生的東西,
+ *  一路灌進 `threshold` 就是 render 期 TypeError(無 ErrorBoundary = 白屏,且壞值
+ *  留在 localStorage 裡,重整也修不好)。 */
+function pickBool(src: Record<string, unknown>, key: keyof LimitListFilter, fallback: boolean) {
+  const v = src[key];
+  return typeof v === "boolean" ? v : fallback;
+}
+
+function pickText(src: Record<string, unknown>, key: keyof LimitListFilter): string {
+  const v = src[key];
+  return typeof v === "string" ? v : "";
+}
+
 function loadFilter(): LimitListFilter {
   try {
     const raw = window.localStorage.getItem(LIMIT_LIST_FILTER_KEY);
@@ -117,7 +138,17 @@ function loadFilter(): LimitListFilter {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       return DEFAULT_FILTER;
     }
-    return { ...DEFAULT_FILTER, ...(parsed as Partial<LimitListFilter>) };
+    const o = parsed as Record<string, unknown>;
+    return {
+      twse: pickBool(o, "twse", DEFAULT_FILTER.twse),
+      tpex: pickBool(o, "tpex", DEFAULT_FILTER.tpex),
+      limitUp: pickBool(o, "limitUp", DEFAULT_FILTER.limitUp),
+      limitDown: pickBool(o, "limitDown", DEFAULT_FILTER.limitDown),
+      touched: pickBool(o, "touched", DEFAULT_FILTER.touched),
+      minAmount: pickText(o, "minAmount"),
+      priceMin: pickText(o, "priceMin"),
+      priceMax: pickText(o, "priceMax"),
+    };
   } catch {
     return DEFAULT_FILTER;
   }
@@ -264,17 +295,33 @@ function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }
     [data, filter],
   );
 
+  /** 「今天有幾檔進得了這張表」——**篩選前**的狀態池。與 `entries.length` 分開算才能
+   *  把系統態(全市場一檔都沒鎖)與操作結果(自己把篩選收太緊)講成兩句話。 */
+  const pool = useMemo(
+    () =>
+      data === undefined ? 0 : data.rows.reduce((n, r) => (statusOf(r) === null ? n : n + 1), 0),
+    [data],
+  );
+
   // 空狀態判別子是 `as_of` 不是 `stale`(design R18):`stale` 在冷啟動 degraded 下恆為
   // true,拿它分流會讓「載入中」與「有資料但延遲」兩態顛倒。
   // `enabled=false` 要排在最前面 —— 那是「去設 .env」不是「等一下就好」。
   // 端點恆 200,能走到 isError 的只有網路 / proxy 斷 —— 但那條路必須說出來:
   // 少了它,`data` 恆 undefined 會讓畫面永遠停在「載入中…」(把已放棄說成還在等)。
+  //
+  // **`isError` 要跟 `data === undefined` 綁在一起**(review FE-1):TQ v5 的 `isError`
+  // 對 refetch 失敗同樣為 true,單看它會讓「已有一整張表、只是這一輪 10 秒輪詢沒抓到」
+  // 整表消失換成「載入失敗」—— 盤中最該盯的那份資料因一次網路抖動被清掉。
+  // 有 data 就保表,失敗改由標題列的「更新失敗」膠囊說。
+  const loadFailed = isError && data === undefined;
+  const refetchFailed = isError && data !== undefined;
   let message: string | null = null;
-  if (isError) message = "載入失敗";
+  if (loadFailed) message = "載入失敗";
   else if (data === undefined) message = "載入中…";
   else if (!data.enabled) message = "FinMind 未設定";
   else if (data.as_of === null) message = "載入中…";
   else if (data.rows.length === 0) message = "暫無資料(延遲)";
+  else if (pool === 0) message = "今日尚無漲跌停";
   else if (entries.length === 0) message = "無符合條件";
 
   return (
@@ -286,6 +333,14 @@ function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }
             className="rounded bg-amber-500/20 px-1.5 text-xs text-amber-400"
           >
             延遲
+          </span>
+        ) : null}
+        {refetchFailed ? (
+          <span
+            data-testid="limit-list-refetch-error"
+            className="rounded border border-amber-500/40 px-1.5 text-xs text-amber-400"
+          >
+            更新失敗
           </span>
         ) : null}
       </div>
