@@ -317,6 +317,17 @@ class StockEngine:
                     # 「無資料」在使用者把它移出自選之後永久消失 —— TC4 的 no-data
                     # 回呼只在訂閱當下發一次,之後 snapshot 恆 no_data=False。
                     self._no_data.discard(code)
+                    # 回補記帳同樣以**訂閱期**為界:真退訂後「今日已回補 / 失敗冷卻」
+                    # 的判斷作廢,重新訂閱時回補機會重新開始。不清的話 `_acquire` 的
+                    # setdefault 用回同一個舊 state,`group_snapshot` 的入列 guard 恆擋
+                    # → 退訂期間的分鐘缺口整天補不回來,而 backfilling / no_data 都是
+                    # False,卡片零訊號地空著。冷卻歸零是接受的:re-acquire 是使用者
+                    # 驅動(把股票加回自選),不是重試風暴。
+                    # **在 loop 側清**:記帳集合是 loop-only 不變式,不可下沉到
+                    # `_release`(那個是在 executor thread 跑的)。
+                    # `_backfill_pending` 不清 —— 在途 job 之後仍會來扣一次(A3)。
+                    self._backfilled.discard(code)
+                    self._backfill_failed.pop(code, None)
             # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
             # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
             # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
@@ -364,6 +375,10 @@ class StockEngine:
                     # 無條件清會讓側欄的「無資料」在使用者點開再切走之後永久消失
                     # (TC4 的 no-data 回呼只在訂閱當下發一次)。
                     self._no_data.discard(old)
+                    # 回補記帳同以訂閱期為界(理由見 `set_watchlist` removed 迴圈):
+                    # 主圖槽位真退訂時,那一檔的「今日已回補 / 失敗冷卻」一併作廢。
+                    self._backfilled.discard(old)
+                    self._backfill_failed.pop(old, None)
             if not is_futures_key(key):
                 await self._acquire_stkfut(key)
             self._enqueue_backfill(key)
