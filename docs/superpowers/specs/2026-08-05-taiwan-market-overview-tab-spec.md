@@ -165,6 +165,11 @@ TC4 系(指數圖/corr/個股/既有訊號)完全不受影響。
 
 ### Round 4 — 類股強弱 + 訊號事件流(規模 M)
 
+〔2026-08-06 R4 實作輪更正:sector_rotation 吃的是 `TaiwanStockIndustryChain`
+chain_map(新 dataset,7 天 cache),**不是** industry_category —— 「industry
+override 表與幽靈 sector 教訓」屬 dedup_sector_map 鏈路,R2 已搬,與 rotation
+無關。〕
+
 **Scope**:
 - sector_rotation 搬移(依賴 R2 管線;含 industry override 表與幽靈 sector 教訓)。
 - 訊號事件流:
@@ -210,5 +215,9 @@ TC4 系(指數圖/corr/個股/既有訊號)完全不受影響。
    〔2026-08-06 R3 Phase 0 拍板:FinMind TaiwanStockPrice EOD 回看 10 交易日,
    每日一次快取落檔;連板算術在後端 rows 端點(streak/streak_capped)。〕
 5. R4:鎖板/開板事件的 dedup 鍵與「觸及未鎖」是否也算事件。
+   〔2026-08-06 R4 Phase 0/1 拍板:dedup = last_emitted 對帳制(當日 jsonl seed
+   回放 + 決定性 id `{date}-breadth-{code}-{kind}-{dir}-{as_of}` + 600s/桶冷卻,
+   冷卻只延後對帳不丟棄);「觸及未鎖」不算事件(touched 是當日不可逆 latch,
+   轉移語意弱,開板已由 open 事件涵蓋),記 next-time。〕
 6. next-time 既有候選:列表迷你預覽(D-5)、大盤級衍生訊號(§1 non-goal)、
    創 20 日新高/新低家數。
