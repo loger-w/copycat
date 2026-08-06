@@ -1,0 +1,28 @@
+{
+  "round": 1,
+  "date": "2026-08-06",
+  "setup": [
+    "側車 server(fake TXO + 真 FinMind 五元組,port 8721)— SC-2/SC-3/SC-4 與 API 層",
+    "events server(fake TXO + FakeStockSource 讓 hub boot + verify fake breadth FLIP,jsonl 隔離 tmp)— SC-5/SC-6/SC-7/SC-8 事件鏈",
+    "vite dev 5174 + claude-in-chrome 截圖 dispatch × 2"
+  ],
+  "results": [
+    {"sc": "SC-2", "verdict": "PASS", "evidence": "evidence/SC-2_SC-3_api-sidecar-real.txt(chain 真取數 6861 rows 落檔 _version 1;probe 另證 47 industries)"},
+    {"sc": "SC-3", "verdict": "PASS", "evidence": "evidence/SC-3a/3b/3c png(真資料 47 產業/子產業/成員表/點擊跳轉 1101→3211)+ API happy/404/422/sub空字串 三 edge"},
+    {"sc": "SC-4", "verdict": "PASS(窗外降級層)", "evidence": "evidence/SC-4_parity-20260806-204443.json(同一份真 snapshot 餵兩實作:47 產業序列/avg/members 全等);盤中同時刻 REST 對照層記 next-time"},
+    {"sc": "SC-5", "verdict": "PASS", "evidence": "evidence/SC-5_SC-6_market-events-live.txt(首輪 seed 空 → 已鎖檔即發 lock;id 文法逐字;as_of 隨牆鐘 = S-1 生效)+ pytest 對帳全套"},
+    {"sc": "SC-6", "verdict": "PASS", "evidence": "同上(jsonl 隔離目錄落檔 + today 端點回傳含 market 事件;Discord 零收件由 pytest 斷言 + neutralize 雙保險)"},
+    {"sc": "SC-7", "verdict": "PASS", "evidence": "evidence/SC-7a/7b/7c×2/7d png(空態/兩事件列+廣度badge title/chips 過濾/點列跳轉)"},
+    {"sc": "SC-8", "verdict": "PASS", "evidence": "evidence/SC-8_rail-no-market.png + DOM 查證(market 字樣零洩漏至 rail)"}
+  ],
+  "regressions": [
+    "R2 /api/market/breadth counts 完好(twse 19/515/99/440/2)",
+    "R3 /api/market/breadth/rows 1954 列 + streaks_ready + limit_judged 新鍵並存",
+    "console 零新增 error(兩輪截圖各查一次)"
+  ],
+  "notes": [
+    "verify --verify 模式無 stock engine → hub None → 事件層在官方 verify 上不可達;取證改走 events_side_server_r4.py(FakeStockSource 組裝),此限制記 next-time",
+    "真 data/signals/20260806.jsonl(今晨 prod 產,mtime 11:02)全程未觸碰 — 零汙染",
+    "成員表成交額小型股顯示 0.0(億元捨入)— 外觀觀察記 next-time 候選"
+  ]
+}

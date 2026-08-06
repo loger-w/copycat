@@ -1,0 +1,11 @@
+=== SC-5/SC-6: 廣度事件全鏈實證(events server 8721,fake stock 讓 hub boot,FLIP 模式)===
+today signals total=2 market=2
+  2026-08-06-breadth-1101-market_limit_lock-up-13:18:00 | market_limit_lock 1101 台泥 price=11000 time=13:18:00 dir=up touch=1
+  2026-08-06-breadth-6488-market_limit_lock-down-13:18:00 | market_limit_lock 6488 環球晶 price=9000 time=13:18:00 dir=down touch=1
+要點:(a) 首輪 seed 空 → 已鎖檔(1101 漲停 / 6488 跌停)即發 lock(R1 主修實機展演);
+(b) id 文法 = {date}-breadth-{code}-{kind}-{dir}-{as_of} 逐字符合 design §7;
+(c) as_of 13:18 = S-1 修復(牆鐘分鐘 %29 映入分鐘域);
+(d) jsonl 落隔離目錄(見下),Discord 由 neutralize_external_env 壓制 + notify=False(pytest 斷言 Discord 佇列 0)
+jsonl: C:\Users\USER\AppData\Local\Temp\r4-events-ouagg13n\signals\20260806.jsonl (2 rows)
+  {"type": "signal", "id": "2026-08-06-breadth-1101-market_limit_lock-up-13:18:00", "kind": "market_limit_lock", "code": "1101", "name": "台泥", "price": 11000, "time": "13:18:00", "levels": [], "direction": "up", "pct": null, "touch_count": 1, "trade_date": "2026-08-06"}
+  {"type": "signal", "id": "2026-08-06-breadth-6488-market_limit_lock-down-13:18:00", "kind": "market_limit_lock", "code": "6488", "name": "環球晶", "price": 9000, "time": "13:18:00", "levels": [], "direction": "down", "pct": null, "touch_count": 1, "trade_date": "2026-08-06"}

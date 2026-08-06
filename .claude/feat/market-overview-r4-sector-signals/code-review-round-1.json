@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "lenses": ["correctness-eventchain", "test-coverage-vacuous", "spec-conformance"],
+  "findings": [
+    {"id":"C-1","severity":"P1","verdict":"CONFIRMED(main agent 實碼核 :875-879)","problem":"chain task 換表後不重算 _rotation;盤後首次部署(無快取)整晚 rotation=null","resolution":"accepted → fix:抽 _recompute_rotation() 供 _apply 與 chain 刷新共用(universe 空時保持 None)"},
+    {"id":"C-2","severity":"P1","verdict":"CONFIRMED(poll gate first or _in_window 已讀)","problem":"verify 盤後只跑首輪 _apply,flip 翻轉無人讀,SC-7 取證失效","resolution":"accepted → fix:--verify 分支注入全天窗 BreadthConfig"},
+    {"id":"S-1","severity":"P1","verdict":"CONFIRMED(clamp 恆 13:00 → id 恆定)","problem":"flip 事件 as_of 恆定 → 前端 id 去重吃掉後續事件","resolution":"accepted → fix:flip 模式 stamp 分鐘隨牆鐘變(域內 0901-1330)"},
+    {"id":"T-1","severity":"P1","verdict":"CONFIRMED(App.test.tsx 未動;R3 同款全鏈測試存在)","problem":"IndexPage→兩新區塊的 onOpenStock/active 接線零覆蓋","resolution":"accepted → fix:App.test.tsx 鏡射 R3 兩支全鏈案"},
+    {"id":"S-3/C-4","severity":"P2","verdict":"CONFIRMED","problem":"chain rows parse 無傘:restore 路炸 boot、refresh 路零退避重打","resolution":"accepted → fix:rows_to_chain_map 非 dict 列 continue + refresh parse/save 入 try 設 retry_at + load_chain 驗元素"},
+    {"id":"S-4/C-5","severity":"P2","verdict":"CONFIRMED(:716-717)","problem":"publish 先於 enqueue 同 try:WS 拋 → jsonl 也丟,假發布","resolution":"accepted → fix:enqueue(真相源)先行、兩者各自 try"},
+    {"id":"S-5","severity":"P2","problem":"unjudged warning 文案與行為不符","resolution":"accepted → fix 文案 + 混合列測試"},
+    {"id":"S-2/C-3","severity":"P2","verdict":"CONFIRMED","problem":"verify data_dir 跨 run 持久,FAIL 注入被舊 chain 快取吸收","resolution":"accepted → fix:FAIL=1 時改用 market-verify-fail 隔離目錄(啟動清 chain 檔)"},
+    {"id":"T-2","severity":"P2","problem":"_mkt_touch seed 續數無測試釘住","resolution":"accepted → 補案"},
+    {"id":"T-3","severity":"P2","problem":"SectorSection 四顯示分支零覆蓋","resolution":"accepted → 補案"},
+    {"id":"T-4","severity":"P2","problem":"sector_state 取 _rows_date 的決策無測試","resolution":"accepted → 補案"},
+    {"id":"T-5","severity":"P2","problem":"today market 未知值 + 壞 kind 行防禦無測試","resolution":"accepted → 補案"},
+    {"id":"C-6","severity":"P2","confidence":"low","problem":"廣度與規則訊號共用 jsonl 佇列(1000)理論擠壓","resolution":"rejected_with_reason:量級安全(單輪數百 < 1000、10s 一輪);耦合觀察記 next-time"},
+    {"id":"S-6","severity":"P2","problem":"design §2 列 StockPage.tsx 實際零改動","resolution":"accepted → ledger errata 記載(§9.3 取代,零改動達成 SC-8)"}
+  ],
+  "p2_summary": "11 P2:9 accepted(全數低成本修復/補案)、1 rejected(C-6 量級安全記 next-time)、1 errata"
+}

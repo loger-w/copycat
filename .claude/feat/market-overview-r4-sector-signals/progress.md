@@ -1,5 +1,11 @@
 # progress ledger — market-overview-r4-sector-signals
 
+**Phase 4 自評(2026-08-06)**:3 lens(事件鏈/測試空洞/spec 對照)→ 4 P1 + 11 P2,
+全 P1 CONFIRMED 修復;fix 波 A(後端 9 commits,4 對紅綠 + 1 補強)+ B(前端 1
+補強 commit,mutation 五處驗非 vacuous)。C-6(jsonl 佇列共用)rejected:量級安全,
+記 next-time。**S-6 errata:design §2 列 StockPage.tsx 為修改檔,實際零改動
+(§9.3 的 feed 預設 exclude 已達成 SC-8)— 非漏改。**
+
 Plan: `.claude/feat/market-overview-r4-sector-signals/implementation/PLAN.md`
 (機制真相源 design.md v3;每 task 一行:編號 / commit 範圍 / review 結果)
 
