@@ -5,8 +5,9 @@ import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList"
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import type { CenterRequest } from "@/components/stock/LadderView";
 import { PriceLadder, type TradeKind } from "@/components/stock/PriceLadder";
+import { StkfutLadder } from "@/components/stock/StkfutLadder";
 import { RAIL_TAB_KEY } from "@/lib/constants";
-import { futCloseEstimate } from "@/lib/futures-ladder";
+import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
@@ -70,6 +71,9 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
   const [tradeKind, setTradeKind] = useState<TradeKind>("cash");
   const [stockQty, setStockQty] = useState<QtyState>(initialQtyState);
   const [futQty, setFutQty] = useState<QtyState>(initialQtyState);
+  // 個股期口數與台指期分開存:兩者都是「口」但契約規模差兩個量級,帶著上一個商品的
+  // 口數切過去就是誤送規模
+  const [stkfutQty, setStkfutQty] = useState<QtyState>(initialQtyState);
 
   function selectTab(next: RailTab): void {
     setTab(next);
@@ -103,9 +107,27 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
     };
   }, [stockCode]);
 
-  const market = ctx.kind === "futures" ? "fut" : "sec";
+  // R4:選中個股期合約 → 右欄整組換到期貨市場。委託 / 部位若還停在 `sec`,使用者
+  // 看到的是現股庫存與現股委託,而閃電梯送出去的是期貨單 —— 兩邊對不起來。
+  const stkfutContract = ctx.kind === "stock" ? ctx.contract : null;
+  const market = ctx.kind === "futures" || stkfutContract !== null ? "fut" : "sec";
 
   function flashContent() {
+    if (ctx.kind === "stock" && ctx.code !== null && ctx.contract !== null) {
+      return (
+        <StkfutLadder
+          code={ctx.code}
+          name={ctx.name}
+          contract={ctx.contract}
+          book={ctx.book}
+          last={ctx.last}
+          meta={ctx.meta}
+          centerRequest={centerRequest}
+          qtyState={stkfutQty}
+          onQtyState={setStkfutQty}
+        />
+      );
+    }
     if (ctx.kind === "stock" && ctx.code !== null) {
       return (
         <PriceLadder
@@ -173,7 +195,29 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
       );
     }
     if (ctx.kind === "stock") {
-      const { code, last } = ctx;
+      const { code, last, meta } = ctx;
+      if (ctx.contract !== null) {
+        // 個股期部位:平倉估價貼漲跌停(futCloseEstimate 同一支),漲跌停取自主圖
+        // meta —— 期貨態的 meta 已是該合約的。契約碼算不出來 → 恆 null = 平倉鍵鎖住,
+        // 不放行「估不出價還送單」(後端對 price<=0 直接 raise)。
+        let futKey: string | null = null;
+        try {
+          futKey = futExchangeContract(ctx.contract.prod, ctx.contract.ym);
+        } catch {
+          futKey = null;
+        }
+        return (
+          <CapitalPositionsList
+            market="fut"
+            closePriceOf={(pos) =>
+              futCloseEstimate(pos, futKey, {
+                upper: meta?.upper ?? null,
+                lower: meta?.lower ?? null,
+              })
+            }
+          />
+        );
+      }
       return (
         <CapitalPositionsList
           market="sec"
