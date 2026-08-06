@@ -10,6 +10,7 @@ port 錯開、不落 log 檔 —— 漏任一項的失效樣態都是「盤中�
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,7 +24,8 @@ from copycat.server.app import (
     DEFAULT_INDEX,
     DEFAULT_STOCK,
 )
-from copycat.server.verify import FakeTxoSource
+from copycat.server.chain_store import CHAIN_FILENAME
+from copycat.server.verify import FAIL_ENV_KEY, FakeTxoSource
 
 
 class _Capture:
@@ -53,6 +55,8 @@ class _Capture:
         # 開發機 shell 可能 export 著 TXO_SERVER_PORT(正式設定 key),port 斷言要隔離
         # (review T-5;test_verify_port_env_override 自己 setenv 不受影響)
         monkeypatch.delenv("TXO_SERVER_PORT", raising=False)
+        # 失效注入 key 同理隔離:operator 的 shell 留著它會讓 data_dir 斷言隨環境飄
+        monkeypatch.delenv(FAIL_ENV_KEY, raising=False)
 
     def _count_prod_log(self) -> None:
         self.prod_log_calls += 1
@@ -77,6 +81,8 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
     }
     # 明寫:trade 路已除役,sentinel 借用語意不得復活
     assert cap.create_kwargs is not None and "trade_source" not in cap.create_kwargs
+    # 放寬窗只屬於 verify:prod 一律吃 configs/breadth.json(review C-2 的零改動要求)
+    assert "breadth_config" not in cap.create_kwargs
     # prod:log 落檔有掛、env 壓制不得跑(真 server 要吃真憑證)、port canonical
     assert cap.prod_log_calls == 1
     assert cap.neutralized is False
@@ -109,13 +115,56 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
     assert cap.create_kwargs is not None and set(cap.create_kwargs) == {
         "breadth_fetchers",
         "breadth_data_dir",
+        "breadth_config",
     }
     assert len(cap.create_kwargs["breadth_fetchers"]) == 5
     assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
+    # 放寬窗(review C-2):prod 預設窗 08:55–13:40 之外 `_poll_loop` 只跑首圈 ——
+    # flip 翻轉 / 失效注入 / 事件鏈路全都要「第二輪之後」才看得到,而 verify server
+    # 幾乎都在盤後跑,窗照抄 prod 等於整條取證路徑只剩一格
+    config = cap.create_kwargs["breadth_config"]
+    assert (config.window_start, config.window_end) == ("00:00", "23:59")
     # env 壓制必須有跑、log 不落檔、port 與 prod 錯開
     assert cap.neutralized is True
     assert cap.prod_log_calls == 0
     assert cap.run_kwargs is not None and cap.run_kwargs["port"] == 8722
+
+
+def test_verify_fail_injection_uses_isolated_dir_and_clears_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`VERIFY_BREADTH_FAIL=1` → 隔離目錄 + 開機清 chain 快取(review S-2/C-3)。
+
+    verify 的 data_dir 跨 run 持久:上一次成功的 `industry_chain.json` 還在的話,
+    chain fake 拋不拋都一樣有表 —— 「FinMind 整段掛掉」的注入漏了一條路,而畫面上
+    類股面板照常有內容,看起來就像 SC-3 通過了(design §8 / R9 的前置)。
+    """
+    cap = _Capture()
+    cap.install(monkeypatch)
+    fail_dir = tmp_path / "market-verify-fail"
+    fail_dir.mkdir()
+    stale = fail_dir / CHAIN_FILENAME
+    stale.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(main_mod, "VERIFY_FAIL_DATA_DIR", fail_dir)
+    monkeypatch.setenv(FAIL_ENV_KEY, "1")
+
+    main_mod.main(["--verify"])
+
+    assert cap.create_kwargs is not None
+    assert cap.create_kwargs["breadth_data_dir"] == fail_dir
+    assert not stale.exists()
+
+
+def test_verify_without_fail_env_keeps_default_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未注入失效 → 照舊用 `market-verify`(隔離目錄只服務注入那條路)。"""
+    cap = _Capture()
+    cap.install(monkeypatch)
+    monkeypatch.delenv(FAIL_ENV_KEY, raising=False)
+
+    main_mod.main(["--verify"])
+
+    assert cap.create_kwargs is not None
+    assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
 
 
 def test_verify_port_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
