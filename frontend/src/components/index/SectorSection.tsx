@@ -82,9 +82,12 @@ function GroupStats({ id, group }: { id: string; group: SectorRotationGroup }) {
 
 function MembersPanel({
   drill,
+  active,
   onOpenStock,
 }: {
   drill: Drill;
+  /** 與產業列同一道 tab gate(見 `SectorBody`)。 */
+  active: boolean;
   onOpenStock?: (code: string) => void;
 }) {
   // query key 帶完整鑽取目標:同一個產業的不同子產業是不同結果,共用一把 key 會讓
@@ -93,6 +96,13 @@ function MembersPanel({
     queryKey: ["sector-members", drill.industry, drill.sub],
     queryFn: () => fetchSectorMembers(drill.industry, drill.sub),
     retry: 1,
+    // **成員表必須跟上面那層同步輪詢**(review round-2 FE-3):原本沒有這行,而且全
+    // repo 沒有任何人 invalidate `["sector-members"]` → 鑽開的成員表從打開那一刻起就
+    // 凍結,正上方的產業列卻每 10 秒在更新。兩層數字並排、一層即時一層是幾分鐘前的,
+    // 畫面上沒有任何東西能區分 —— 使用者只會以為這幾檔今天很穩。
+    // 函式形式的理由同下方 state query:TQ 每次 interval 到期才重新求值,開盤 / 收盤
+    // 的開關不依賴外部 re-render 才會生效。
+    refetchInterval: () => (active && inTradingHours() ? POLL_MS : false),
   });
 
   let message: string | null = null;
@@ -283,6 +293,7 @@ function SectorBody({
                 {!hasSubs && isDrill(ind.name, null) ? (
                   <MembersPanel
                     drill={{ industry: ind.name, sub: null }}
+                    active={active}
                     onOpenStock={onOpenStock}
                   />
                 ) : null}
@@ -307,6 +318,7 @@ function SectorBody({
                         {isDrill(ind.name, sub.name) ? (
                           <MembersPanel
                             drill={{ industry: ind.name, sub: sub.name }}
+                            active={active}
                             onOpenStock={onOpenStock}
                           />
                         ) : null}
