@@ -256,6 +256,26 @@ describe("SignalTimelineSection kind chips", () => {
     expect(rowIds()).toEqual(["open-1", "lock-1"]);
   });
 
+  // (review round-2 FE-5)design §9.3 的驗收明文是「chip 切『自選』…見 3 則」,
+  // 但 §9.2 的 chip 列表漏列這一顆,實作照 §9.2 就少做了。少了它,想「只看自選」
+  // 唯一的辦法是逐 kind 點過去 —— 而 kind 是會增加的,漏一顆就靜默看不到。
+  it("選「自選」→ 只剩自選族(kind 各異一起收,market 族全不見)", async () => {
+    await openWith(MIXED);
+    await screen.findByTestId("signal-timeline-row-mk-2");
+    fireEvent.click(chip("own"));
+    expect(rowIds()).toEqual(["open-1", "lock-1", "vol-1", "crash-1", "surge-1", "cdp-1"]);
+    expect(chip("own").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  // 族層(全部 / 自選)與 kind 層分開擺:「自選」問的是「這則跟我有關嗎」,
+  // 「CDP」問的是「這是哪種訊號」,兩個問題混排會讓人以為它們互斥。
+  it("chip 順序:自選夾在「全部」與 kind 層之間", async () => {
+    await openWith(MIXED);
+    expect(
+      screen.getAllByTestId(/^signal-timeline-chip-/).map((el) => el.textContent),
+    ).toEqual(["全部", "自選", "CDP", "爆拉跌", "爆量", "鎖板(自選)", "全市場鎖板"]);
+  });
+
   // SC-7/SC-8 對稱:market 族擠爆時,自選那幾則必須還在 feed 裡(分族 cap),
   // 而且 chip 切過去看得到 —— 少了任一半,畫面上都是「今天自選沒訊號」。
   it("分族擠壓:250 則 market + 3 則自選 → 切「鎖板(自選)」仍見 3 則", async () => {
@@ -269,6 +289,24 @@ describe("SignalTimelineSection kind chips", () => {
 
     await waitFor(() => expect(rowIds().length).toBeGreaterThan(3));
     fireEvent.click(chip("lock"));
+    expect(rowIds()).toEqual(["own-3", "own-2", "own-1"]);
+  });
+
+  // design §9.3 的驗收原文就是這一句(「『自選』chip 見 3 則」):三則 kind 各異,
+  // 靠 kind 層 chip 一顆都收不齊,只有族層那顆做得到。
+  it("分族擠壓:250 則 market + 3 則 kind 各異的自選 → 切「自選」見 3 則", async () => {
+    await openWith([]);
+    act(() => {
+      for (let i = 0; i < 250; i += 1) emitSignal(mkt({ id: `m${i}`, time: "09:31:00" }));
+      emitSignal(sig({ id: "own-1", kind: "surge", time: "09:20:01" }));
+      emitSignal(sig({ id: "own-2", kind: "vol_burst", pct: 4.2, time: "09:20:02" }));
+      emitSignal(
+        sig({ id: "own-3", kind: "limit_lock", direction: "up", pct: null, time: "09:20:03" }),
+      );
+    });
+
+    await waitFor(() => expect(rowIds().length).toBeGreaterThan(3));
+    fireEvent.click(chip("own"));
     expect(rowIds()).toEqual(["own-3", "own-2", "own-1"]);
   });
 });
@@ -287,5 +325,54 @@ describe("SignalTimelineSection 空態", () => {
     await screen.findByTestId("signal-timeline-row-s1");
     fireEvent.click(chip("market"));
     expect(screen.getByTestId("signal-timeline-msg").textContent).toBe("無符合條件");
+  });
+});
+
+// (review round-2 FE-1 / XR-3)達錢 4 沒開時 `/api/stock/signals/today` 回 503,
+// 而「baseline 抓不到」與「今天真的沒訊號」在畫面上完全同形 —— 使用者看到「今日尚無
+// 訊號」不會去查服務,只會以為今天很安靜。這一組鎖的是「降級說得出口」。
+describe("SignalTimelineSection baseline 取數失敗", () => {
+  /** 展開 + baseline 端點 503(hub 未就緒)。retry: 1 是 hook 內建 → 要等第二次 fetch。 */
+  async function openWith503(): Promise<void> {
+    window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, "1");
+    fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderSection();
+    await screen.findByTestId("signal-timeline-body");
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2), {
+      timeout: 5_000,
+    });
+  }
+
+  it("零訊號 + 取數失敗 → 說是失敗,不是「今日尚無訊號」", async () => {
+    await openWith503();
+    await waitFor(
+      () =>
+        expect(screen.getByTestId("signal-timeline-msg").textContent).toBe(
+          "訊號服務未就緒或取數失敗(即時訊號仍會顯示)",
+        ),
+      { timeout: 5_000 },
+    );
+  });
+
+  it("取數失敗但已有 live 訊號 → 清單照畫,頂部加一行「僅顯示即時訊號」提示", async () => {
+    await openWith503();
+    act(() => emitSignal(sig({ id: "live-1", time: "09:45:00" })));
+
+    await waitFor(() => expect(rowIds()).toEqual(["live-1"]));
+    expect(screen.queryByTestId("signal-timeline-msg")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId("signal-timeline-baseline-error").textContent).toBe(
+        "歷史訊號載入失敗,僅顯示即時訊號",
+      ),
+    );
+  });
+
+  it("取數成功 → 無失敗提示(不誤報)", async () => {
+    await openWith([sig({ id: "s1" })]);
+    await screen.findByTestId("signal-timeline-row-s1");
+    expect(screen.queryByTestId("signal-timeline-baseline-error")).toBeNull();
   });
 });

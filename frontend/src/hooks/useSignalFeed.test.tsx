@@ -101,6 +101,25 @@ describe("useSignalFeed", () => {
     act(() => emitSignal(sig("live-1")));
     expect(ids(hook.result.current.signals)).toEqual(["live-1"]);
   });
+
+  // (review round-2 FE-1 / XR-3)降級**必須可見**:達錢 4 沒開時這支端點回 503,
+  // 而「baseline 抓不到」與「今天真的沒訊號」在下游畫面上完全同形 —— 消費端沒有
+  // 這顆旗標就只能把兩者說成同一句話,使用者看到「今日尚無訊號」不會去查服務。
+  it("today 抓失敗 → baselineError 為 true(降級要可見,不只是靜靜地空著)", async () => {
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
+    );
+    const hook = renderHook(() => useSignalFeed(), { wrapper });
+    // retry: 1 → 第二次 fetch 發出後才是 error 終態(retryDelay 預設 1s)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+    await waitFor(() => expect(hook.result.current.baselineError).toBe(true));
+  });
+
+  it("today 抓成功 → baselineError 為 false(不誤報)", async () => {
+    const hook = renderHook(() => useSignalFeed(), { wrapper });
+    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
+    expect(hook.result.current.baselineError).toBe(false);
+  });
 });
 
 // 🟢 market-overview R4(SC-8):全市場廣度事件與自選訊號同一條匯流排,
