@@ -59,21 +59,32 @@ const BREADTH_ROWS = {
   ],
 };
 
-/** 類股輪動(R4 SC-3 的跳轉起點)。**單層產業**(subs 空)= 點產業列直接鑽成員,
- *  全鏈只需要一次點擊就走到成員列 —— 中間多一層子產業對「線有沒有接上」零貢獻。 */
+/** 類股輪動(R4 SC-3 的跳轉起點)。**產業必須帶子產業**(review round-2 FE-6):
+ *  後端 `compute_sector_rotation` 產不出 `subs: []` 這個形狀 —— 有成員的產業至少會有
+ *  一個非空子產業。原本的 fixture 用空 subs 讓全鏈走 `!hasSubs → 直接鑽產業` 那條分支,
+ *  而那條在 prod 是死碼:真正會走到的「展開產業 → 點子產業 → 成員列」全鏈零覆蓋,
+ *  中間任一根線斷掉這支測試照樣綠。 */
 const SECTOR_STATE = {
   enabled: true,
   trade_date: "2026-08-06",
   as_of: "10:31:00",
   stale: false,
   rotation: {
-    industries: [{ name: "航運", members: 30, avg_change_rate: -0.75, vol_ratio: 0.9, subs: [] }],
+    industries: [
+      {
+        name: "航運",
+        members: 30,
+        avg_change_rate: -0.75,
+        vol_ratio: 0.9,
+        subs: [{ name: "貨櫃航運", members: 12, avg_change_rate: -1.2, vol_ratio: 1.1 }],
+      },
+    ],
   },
 };
 
 const SECTOR_MEMBERS = {
   industry: "航運",
-  sub_industry: null,
+  sub_industry: "貨櫃航運",
   members: [
     { stock_id: "2603", name: "長榮", change_rate: 4.12, vol_ratio: 2.4, total_amount: 3.64e9 },
   ],
@@ -289,12 +300,16 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
       .filter((u) => u.includes("/api/stock/state/"));
   }
 
+  /** 走**真實的三層路徑**:產業列展開 → 子產業列鑽取 → 成員列(review round-2 FE-6)。
+   *  後端產不出空 subs,所以「點產業列直接鑽成員」那條分支在 prod 到不了 —— 全鏈測試
+   *  必須走這條,否則 IndexPage / SectorSection 之間少接一根線也驗不出來。 */
   async function openSectorMember(): Promise<HTMLElement> {
     window.localStorage.setItem("copycat-tab", "index");
     window.localStorage.setItem("copycat-sector-open", "1");
     renderApp();
-    // 單層產業 → 點產業列即鑽成員(沒有可展開的下一層)
     fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
+    fireEvent.click(await screen.findByTestId("sector-sub-btn-航運-貨櫃航運"));
+    await screen.findByTestId("sector-members-table");
     return await screen.findByTestId("sector-member-2603");
   }
 
@@ -362,6 +377,39 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
       return typeof ri === "function" ? ri(query) : ri;
     };
     expect(pollMs()).toBe(10_000); // 人在台股綜合 tab:照輪詢
+
+    fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
+    await waitFor(() => expect(pollMs()).toBe(false));
+  });
+
+  // (review round-2 XR-4)R1 的兩張指數圖是同頁**唯一**沒吃 `active` gate 的輪詢:
+  // 分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME 搶同一把 `api.lock`
+  // —— tab 切走後照打是看不見的成本。走全鏈(App → IndexPage → MarketPane →
+  // MarketChart → useMarketBars):中間少接一根線在元件級測試全綠,只有這裡會紅。
+  it("切離台股綜合 tab → 大盤分 K 停止背景輪詢(active gate 全鏈)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); // 同上:RTL 的 waitFor 偵測不到 fake timer
+    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+    window.localStorage.setItem("copycat-tab", "index");
+    // 預設週期是分時走勢(不打 bars API)→ 指定分 K 才有這支 query 可驗
+    window.localStorage.setItem("copycat-market-key", "TWSE");
+    window.localStorage.setItem("copycat-market-tf", "m1");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    const query = await waitFor(() => {
+      const q = client.getQueryCache().find({ queryKey: ["market-bars", "TWSE", "1", 30] });
+      expect(q).toBeTruthy();
+      return q!;
+    });
+    const pollMs = () => {
+      const ri = query.observers[0]!.options.refetchInterval;
+      return typeof ri === "function" ? ri(query) : ri;
+    };
+    expect(pollMs()).toBe(60_000); // 人在台股綜合 tab:照輪詢
 
     fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
     await waitFor(() => expect(pollMs()).toBe(false));
