@@ -789,9 +789,12 @@ describe("StockPage 合約下拉(SC-4)", () => {
   it("期貨態不顯示期現價差列", async () => {
     withContracts();
     const s = stream({ stkfut: { prod: "CDF", p: 2_398_000, basis: 18_000 } });
-    const { rerender } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={s} />);
+    // 兩次獨立 render(不用 rerender:`wrap` 的 QueryClientProvider 會被 rerender 換掉)
+    const { unmount } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={s} />);
     await waitFor(() => expect(screen.getByText(/價差/)).toBeTruthy());
-    rerender(
+    unmount();
+    withContracts();
+    wrap(
       <StockPage
         code="2330"
         onSelect={vi.fn()}
@@ -800,6 +803,7 @@ describe("StockPage 合約下拉(SC-4)", () => {
         onContract={vi.fn()}
       />,
     );
+    await waitFor(() => expect(screen.getByLabelText("合約")).toBeTruthy());
     expect(screen.queryByText(/價差/)).toBeNull();
   });
 

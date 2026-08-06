@@ -39,6 +39,8 @@ const FUT_STATE: FuturesProductState = {
 const STOCK_CTX: RailContext = {
   kind: "stock",
   code: "2330",
+  // 個股期合約選擇(stkfut-contracts SC-4)的獨立欄;現貨態 = null,本檔行為不變
+  contract: null,
   name: "台積電",
   book: BOOK,
   last: LAST,

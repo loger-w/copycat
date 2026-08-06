@@ -10,10 +10,12 @@ import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
 import { useSignalFeed } from "@/hooks/useSignalFeed";
 import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
 import { useSignalSound } from "@/hooks/useSignalSound";
+import { useStkfutContracts } from "@/hooks/useStkfutContracts";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
+import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/lib/stkfut";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
@@ -26,6 +28,10 @@ interface Props {
   code: string | null;
   onSelect: (code: string) => void;
   stream: StockStreamState;
+  /** 選中的個股期合約;`null` = 現貨態。狀態持有者是 App(D5)—— 資料流(useStockStream)
+   *  與右欄都要吃同一份,留在本元件內餵不到那兩處。 */
+  contract?: StkfutSelection | null;
+  onContract?: (next: StkfutSelection | null) => void;
 }
 
 /** 中間主區的檢視(group-grid SC-3):單檔看盤 vs 群組 mini 圖牆。 */
@@ -56,7 +62,7 @@ function currentPermission(): NotificationPermission {
   }
 }
 
-export function StockPage({ code, onSelect, stream }: Props) {
+export function StockPage({ code, onSelect, stream, contract = null, onContract }: Props) {
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
   // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
@@ -86,10 +92,15 @@ export function StockPage({ code, onSelect, stream }: Props) {
     setPickerOpen(false);
   }
 
+  // 合約清單:404(這檔沒期貨)→ null → 不渲染下拉。TC4 斷線(502)也會沒有下拉,
+  // 但那是 hook 內刻意保留的錯誤態,不與「沒期貨」共用一個 data 值。
+  const { data: contracts } = useStkfutContracts(code);
   const meta = accum?.meta ?? null;
   const last = accum?.last ?? null;
   const chg = last && meta?.ref ? chgPct(last.p, meta.ref) : null;
   const limit = limitState(last?.p ?? null, meta?.upper ?? null, meta?.lower ?? null);
+  // 回補中的旗標由後端以**槽位鍵**發出,期貨態是 `F:<prod>:<ym>` 不是股號
+  const instrumentKey = instrumentKeyOf(code, contract);
 
   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
   // 靜默清空。這是新入口才有的 gate,不是既有行為。
@@ -220,6 +231,30 @@ export function StockPage({ code, onSelect, stream }: Props) {
               <h2 className="text-lg font-bold text-ink">
                 {meta?.name ?? ""} <span className="font-mono text-ink-muted">{code}</span>
               </h2>
+              {/* 合約下拉(SC-4)。三類選項都得**逐字可指認**:`現貨` / `2026/09` /
+                  `小型 2026/09` —— 標準與小型的契約單位差 20 倍(2,000 vs 100 股),
+                  選錯而看不出來就是下單量差 20 倍。
+                  受控於 `contract` prop:選擇態的真相源在 App,本元件不留第二份。 */}
+              {contracts != null ? (
+                <select
+                  aria-label="合約"
+                  value={contract === null ? "" : `${contract.prod}:${contract.ym}`}
+                  onChange={(e) => onContract?.(selectionOf(contracts, e.target.value))}
+                  className="rounded border border-line bg-bg-deep px-1.5 py-0.5 font-mono text-xs text-ink"
+                >
+                  <option value="">現貨</option>
+                  {contracts.std.contracts.map((ym) => (
+                    <option key={`s-${ym}`} value={`${contracts.std.prod}:${ym}`}>
+                      {ymLabel(ym)}
+                    </option>
+                  ))}
+                  {(contracts.mini?.contracts ?? []).map((ym) => (
+                    <option key={`m-${ym}`} value={`${contracts.mini?.prod ?? ""}:${ym}`}>
+                      {`小型 ${ymLabel(ym)}`}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               {/* 漲跌停亮燈(項 3):踩到漲跌停時整塊反白底色,不只是換文字色 ——
                   這是盤中要用餘光捕捉的狀態,而紅字與「今天最多只能到這裡」是兩件事。 */}
               {last ? (
@@ -244,10 +279,12 @@ export function StockPage({ code, onSelect, stream }: Props) {
                 </span>
               ) : null}
               {accum?.noData ? <span className="text-xs text-ink-dim">無資料</span> : null}
-              {status.backfilling === code ? (
+              {status.backfilling === instrumentKey ? (
                 <span className="text-xs text-ink-dim">回補中…</span>
               ) : null}
-              {stkfut ? (
+              {/* 期現價差列在期貨態清空(D15 前端側):兩條腿是「現貨主圖 vs 期貨」,
+                  主圖已經是期貨時它比的是自己。 */}
+              {contract === null && stkfut ? (
                 <span className="font-mono text-xs text-ink-muted">
                   {stkfut.prod} {fmt(stkfut.p)}
                   {stkfut.basis != null ? (
@@ -312,7 +349,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
             </header>
             {accum ? (
               <>
-                <StockChart accum={accum} code={code} />
+                <StockChart accum={accum} code={code} contract={contract} />
                 {/* 下半:左五檔、右明細(round3 SC-6)。
 
                     h-56 shrink-0 = **確定高度**,不吃剩餘空間 —— 剩餘全歸圖表。

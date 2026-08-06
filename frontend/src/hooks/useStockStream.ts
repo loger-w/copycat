@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
+import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
 
 export type WsStatus = "connecting" | "open" | "closed";
 
@@ -51,7 +52,21 @@ interface WsMsg {
   [key: string]: unknown;
 }
 
-export function useStockStream(code: string | null): StockStreamState {
+/** 主圖 snapshot 的 REST URL —— **五個 refetch 觸發共用的唯一產生點**(R2-7)。
+ *
+ *  路徑段恆為股號、合約走 query string:instrument key(`F:CDF:202609`)放進路徑會被
+ *  後端 `_valid_code` 400,而且 D7 白名單需要股號才驗得了「這個合約屬於這檔股票」。
+ *  任何一條 refetch 路徑漏帶 `?contract=` 都會靜默把畫面拉回現貨資料。 */
+function stateUrl(code: string, contract: { prod: string; ym: string } | null): string {
+  return contract === null
+    ? `/api/stock/state/${code}`
+    : `/api/stock/state/${code}?contract=${contract.prod}:${contract.ym}`;
+}
+
+export function useStockStream(
+  code: string | null,
+  contract: StkfutSelection | null = null,
+): StockStreamState {
   // WS 是全站唯一一條 → 自選失效的註冊點也只在這裡一處(design §8.1 / impl-review R10)。
   // 多處註冊(App + feed hook)會對同一則 watchlist_changed 重複 refetch。
   const queryClient = useQueryClient();
@@ -71,11 +86,21 @@ export function useStockStream(code: string | null): StockStreamState {
   const pendingRef = useRef<StockTickMsg[]>([]);
   const codeRef = useRef(code);
   codeRef.current = code;
+  const contractRef = useRef(contract);
+  contractRef.current = contract;
+  // 主圖標的的**識別**是 instrument key,不是股號:同一檔股票的現貨與各月合約是
+  // 不同標的,而 WS 推播的 `code` 欄、engine 的訂閱槽位鍵用的都是它(R9)。
+  // ref 化的理由同 codeRef —— WS callback 只建立一次(effect deps `[]`),閉包裡讀
+  // 的必須是「當下」的值而不是掛載當時那個。
+  const instrumentKey = instrumentKeyOf(code, contract);
+  const instrumentKeyRef = useRef(instrumentKey);
+  instrumentKeyRef.current = instrumentKey;
   accumRef.current = accum;
 
   const refetch = async (): Promise<void> => {
-    const current = codeRef.current;
-    if (current === null) return;
+    const current = instrumentKeyRef.current;
+    const currentCode = codeRef.current;
+    if (current === null || currentCode === null) return;
     if (refetchingRef.current) {
       // CR1:in-flight 中的需求「合併不丟棄」— finally 補發,切檔/回補完成不被吞
       pendingRefetchRef.current = true;
@@ -84,10 +109,10 @@ export function useStockStream(code: string | null): StockStreamState {
     refetchingRef.current = true;
     pendingRef.current = [];
     try {
-      const res = await fetch(`/api/stock/state/${current}`);
+      const res = await fetch(stateUrl(currentCode, contractRef.current));
       if (res.ok) {
         const snap = fromSnapshot(await res.json());
-        if (codeRef.current === current) {
+        if (instrumentKeyRef.current === current) {
           let next = snap;
           for (const msg of pendingRef.current) {
             if (msg.seq > snap.seq) next = applyTick(next, msg);
@@ -101,21 +126,22 @@ export function useStockStream(code: string | null): StockStreamState {
     } finally {
       refetchingRef.current = false;
       pendingRef.current = [];
-      if (pendingRefetchRef.current || codeRef.current !== current) {
+      if (pendingRefetchRef.current || instrumentKeyRef.current !== current) {
         pendingRefetchRef.current = false;
         void refetch();
       }
     }
   };
 
-  // 主圖切檔:載 snapshot
+  // 主圖切標的(換股**或**換合約):載 snapshot。deps 是 instrumentKey 而非 code ——
+  // 同股換月時 code 不變,用 code 當 deps 會讓畫面停在舊合約的資料上。
   useEffect(() => {
     setAccum(null);
     setStkfut(null);
     accumRef.current = null;
-    if (code === null) return;
+    if (instrumentKey === null) return;
     void refetch();
-  }, [code]);
+  }, [instrumentKey]);
 
   // WS 連線(單條,頁面生命週期)
   useEffect(() => {
@@ -125,7 +151,9 @@ export function useStockStream(code: string | null): StockStreamState {
     let backoff = BACKOFF_START_MS;
 
     const handle = (msg: WsMsg): void => {
-      const current = codeRef.current;
+      // 主圖相關訊息(tick / book / stkfut / backfilling)的比對鍵一律是 instrument key:
+      // 期貨態下 `2330` 的推播仍在跑(自選池),用股號比對會把現貨 tick 混進合約圖。
+      const current = instrumentKeyRef.current;
       switch (msg.type) {
         case "tick": {
           if (msg.code !== current) return;
@@ -178,7 +206,7 @@ export function useStockStream(code: string | null): StockStreamState {
           };
           setStatus((prev) => {
             // 主圖回補完成(backfilling 從本檔 → null)→ 全量 refetch(靜市無 tick 也更新)
-            if (prev.backfilling !== null && next.backfilling === null && prev.backfilling === codeRef.current) {
+            if (prev.backfilling !== null && next.backfilling === null && prev.backfilling === instrumentKeyRef.current) {
               void refetch();
             }
             return next;
