@@ -23,7 +23,7 @@ import pytest
 
 import copycat.server.breadth_engine as be
 from copycat.breadth_config import BreadthConfig
-from copycat.server.breadth_fetch import BreadthFetchError
+from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
 from copycat.server.chain_store import load_chain, save_chain
 from copycat.server.signal_hub import SignalHub
 from copycat.signals_config import SignalsConfig
@@ -493,6 +493,28 @@ class TestFailureHandling:
         assert state["stale"] is True  # 窗外也 stale:degraded 不受窗限制
         assert inf.calls == 2  # 空表不刷 TTL,下一輪照樣重試
 
+    async def test_apply_crash_counted_as_failure_and_still_broadcasts(
+        self, tmp_path: Path
+    ) -> None:
+        """`_apply` 拋 → 該輪算失敗**且照樣廣播**(review round-2 XR-1c)。
+
+        現況兩層都缺:例外一路逃到 `_poll_loop` 的傘罩 → `_fail()` 沒被呼叫(退避不動)
+        且 `publish` 被跳過 → 家數帶凍在最後一則、stale 永遠到不了前端,零錯誤訊號。
+        """
+        engine, *_ = _make(tmp_path)
+
+        def _boom(rows: list[dict]) -> dict | None:
+            raise RuntimeError("髒列打穿統計層")
+
+        engine._apply = _boom  # type: ignore[method-assign]
+        published: list[dict] = []
+        engine._ws.publish = published.append  # type: ignore[method-assign]
+
+        await engine._run_cycle()
+
+        assert engine._fail_streak == 1
+        assert len(published) == 1
+
     async def test_no_parsable_tick_time_is_failure(self, tmp_path: Path) -> None:
         """時刻推不出來就無從標記 as_of / 分鐘鍵 —— 該輪視同失敗,不動既有值。"""
         rows = [{**r, "date": None} for r in _snapshot_rows()]
@@ -821,6 +843,29 @@ class TestSeriesPersistence:
         assert state["as_of"] == "13:20:00"  # scalar 仍誠實反映該輪快照
         assert _series_file(tmp_path).read_text(encoding="utf-8") == before  # 落檔不被截短
         assert not _series_file(tmp_path, "2026-08-04").exists()
+
+    async def test_stale_date_snapshot_does_not_refresh_last_success(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """`adopt_date=False` 輪**不刷 `_last_success`** → 窗內照樣亮 stale。
+
+        該路徑下 counts 是 D−1 的、標頭 `trade_date` 卻停在 D:刷 `_last_success` 的話
+        stale 永不亮,畫面完全正常而數字是別天的 —— 零可見訊號。退避與 quota 旗標維持
+        無條件重置(上游有回應,不該退避;review round-2 XR-2)。
+        """
+        engine, snap, *_ = _make(tmp_path)  # stale_secs 預設 30
+        await engine._run_cycle()
+        assert engine.state()["stale"] is False
+        last_success = engine._last_success
+
+        snap.rows = _snapshot_rows("2026-08-04 13:20:00")  # 上一交易日
+        mono.advance(31.0)
+        await engine._run_cycle()
+
+        assert engine._last_success == last_success
+        assert engine.state()["stale"] is True
+        assert engine._fail_streak == 0  # 上游有回應 → 不退避
+        assert engine._effective_interval() == 10.0
 
     async def test_future_dirty_row_does_not_freeze_minute_key(self, tmp_path: Path) -> None:
         """單一越界髒 row 不得決定 as_of / 分鐘鍵(review P1-2)。
@@ -1760,6 +1805,16 @@ def _chain_file(tmp_path: Path) -> Path:
     return tmp_path / "industry_chain.json"
 
 
+@pytest.fixture
+def small_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """chain 列數門檻降到 fixture 量級(`fast_streaks` 的 `_DAILY_MIN_ROWS` 同理由)。
+
+    每個案例造 1000 列只為過健檢,會讓 `_CHAIN_MAP` 的手算對照完全失去可讀性;真門檻
+    的邊界由 `test_truncated_rows_keep_old_map_and_file` 以真常數取值把關。
+    """
+    monkeypatch.setattr(be, "CHAIN_MIN_ROWS", 1)
+
+
 class HangingFetch:
     """在 worker thread 內真的卡住的取數替身 —— 驗 poll loop 不 await chain task。
 
@@ -1829,7 +1884,9 @@ class TestChainCache:
         assert engine._chain_task is None
         assert chain.calls == 0
 
-    async def test_expired_arms_task_then_swaps_and_saves(self, tmp_path: Path) -> None:
+    async def test_expired_arms_task_then_swaps_and_saves(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         """從未成功(冷啟動無快取)→ 武裝 → 成功即換表 + 落檔;之後 TTL 內不再打。"""
         chain = FakeFetch(list(_CHAIN_ROWS))
         engine, *_ = _make(tmp_path, chain=chain)
@@ -1846,7 +1903,7 @@ class TestChainCache:
         assert chain.calls == 1  # TTL 內
 
     async def test_fetch_failure_keeps_old_map_and_backs_off(
-        self, tmp_path: Path, mono: FakeMono
+        self, tmp_path: Path, mono: FakeMono, small_chain: None
     ) -> None:
         """取數失敗 → 沿用舊表 + 60s 退避;退避內不重打(壞上游不跟著 poll 節奏燒配額)。"""
         save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
@@ -1915,6 +1972,40 @@ class TestChainCache:
 
         await engine._run_cycle()
         assert engine.sector_state()["rotation"] is not None  # 舊表照樣算得出來
+
+    async def test_truncated_rows_keep_old_map_and_file(
+        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """列數低於門檻(上游 200 但截斷)→ **不換表、不落檔、不刷時戳** + 退避。
+
+        `not chain_map` 擋不住這種殘表:它 parse 得出來、rotation 照算,而換表會把
+        殘表釘進 7 天 TTL 的磁碟快取,重啟後 restore 回同一份 —— 畫面上只是「那些
+        股票的產業歸類消失、類股強弱少幾個業別」,零錯誤訊號(連板路的
+        `_DAILY_MIN_ROWS` 同一道防線)。
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        before = _chain_file(tmp_path).read_text(encoding="utf-8")
+        truncated = [
+            {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "晶圓代工"}
+            for i in range(CHAIN_MIN_ROWS - 1)
+        ]
+        chain = FakeFetch(truncated)
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP  # 舊表原封不動
+        assert engine._chain_fetched_at == 0.0
+        assert _chain_file(tmp_path).read_text(encoding="utf-8") == before
+        assert engine._chain_retry_at is not None
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+        mono.advance(be._MAP_RETRY_SECS - 1.0)
+        await _arm_chain(engine)
+        assert chain.calls == 1  # 退避中不重打
 
     async def test_parse_crash_keeps_old_map_and_backs_off(
         self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
@@ -2013,7 +2104,7 @@ class TestChainCache:
         finally:
             chain.release.set()
 
-    async def test_chain_armed_via_poll_loop(self, tmp_path: Path) -> None:
+    async def test_chain_armed_via_poll_loop(self, tmp_path: Path, small_chain: None) -> None:
         """武裝掛在 poll loop(與 streak 同一處)—— start() 本身仍零網路 IO。"""
         chain = FakeFetch(list(_CHAIN_ROWS))
         engine, *_ = _make(tmp_path, chain=chain, config=BreadthConfig(poll_secs=0.01))
@@ -2025,6 +2116,23 @@ class TestChainCache:
         finally:
             await engine.close()
 
+        assert engine._chain_map == _CHAIN_MAP
+
+    async def test_future_fetched_at_is_treated_as_expired(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
+        """未來時戳(本機時鐘曾超前後回退)= 過期 → 立刻武裝(review round-2 EC-3/PS-4)。
+
+        `now - fetched_at < ttl` 對未來時戳恆真 —— chain 永不重取、也不留任何 log,
+        表現只是「類股表停在很久以前」而畫面上完全正常。
+        """
+        chain = FakeFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._chain_fetched_at = _time.time() + 86_400.0
+
+        await _arm_chain(engine)
+
+        assert chain.calls == 1
         assert engine._chain_map == _CHAIN_MAP
 
 
@@ -2041,7 +2149,9 @@ class TestSectorState:
             "rotation": None,
         }
 
-    async def test_rotation_and_universe_rows_after_cycle(self, tmp_path: Path) -> None:
+    async def test_rotation_and_universe_rows_after_cycle(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         """`_apply` 成功 → rotation 與 universe_rows 同輪同源更新。
 
         手算(universe = 2330 +1.01 / 1101 +10.0 / 2317 0.0 / 6488 −10.0,每檔量
@@ -2082,7 +2192,9 @@ class TestSectorState:
         assert engine.state()["counts"] == _EXPECTED
         assert engine.sector_state()["rotation"] is None
 
-    async def test_chain_arriving_after_cycle_recomputes_rotation(self, tmp_path: Path) -> None:
+    async def test_chain_arriving_after_cycle_recomputes_rotation(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         """chain 換表發生在 `_run_cycle` **之後** → 當場重算 rotation(review C-1)。
 
         盤後首次部署(無 chain 快取)的真實順序就是這個:家數首輪先成、chain task
@@ -2103,7 +2215,7 @@ class TestSectorState:
         assert [i["name"] for i in rotation["industries"]] == ["水泥", "半導體"]
 
     async def test_chain_swap_before_first_cycle_keeps_rotation_none(
-        self, tmp_path: Path
+        self, tmp_path: Path, small_chain: None
     ) -> None:
         """首輪未成(universe 空)時換表 → rotation 保持 **None**,不得變成空 industries。
 
@@ -2117,7 +2229,9 @@ class TestSectorState:
         assert engine._chain_map == _CHAIN_MAP  # 前置:表真的換上去了
         assert engine.sector_state()["rotation"] is None
 
-    async def test_sector_state_uses_rows_date_not_trade_date(self, tmp_path: Path) -> None:
+    async def test_sector_state_uses_rows_date_not_trade_date(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         """`adopt_date=False` 輪:標頭日期取 `_rows_date`(鏡射 `rows_state` 同款;T-4)。
 
         rotation 是從**那一輪的 universe** 算的,而 `_trade_date` 在該路徑刻意停在
@@ -2137,7 +2251,36 @@ class TestSectorState:
         assert state["trade_date"] == "2026-08-04"  # 但 payload 與 rows / rotation 同源
         assert state["rotation"] is not None  # 該輪照樣重算(rows 換了)
 
-    async def test_sector_members_known(self, tmp_path: Path) -> None:
+    async def test_rotation_crash_yields_none_not_stale_value(
+        self, tmp_path: Path, small_chain: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """universe 髒列打穿 `compute_sector_rotation` → rotation **None**、不外拋。
+
+        `compute_sector_rotation` 是 neigui parity 全等搬移(不得在其內加防禦),而它對
+        非數值 `change_rate` 會在 `sum()` 當場 TypeError。沒有這道傘罩,例外會從
+        `_apply` / `_refresh_chain` 兩個呼叫端逃出去,把家數輪(旁支炸掉主線)與 chain
+        task 一起帶走;沿用**舊** rotation 也不行 —— 那會頂著新 as_of 說謊,回 None
+        (= 未就緒)才誠實(review round-2 XR-1a)。
+        """
+        engine = await _ready_engine(tmp_path)
+        assert engine.sector_state()["rotation"] is not None  # 前置:算得出來
+
+        engine._universe_rows = [
+            {
+                "stock_id": "2330",  # chain_map 內 → 真的會進 `_group_stats`
+                "change_rate": "-",  # 非 None 的髒值:`sum()` 直接 TypeError
+                "total_volume": 1000,
+                "yesterday_volume": 500,
+                "total_amount": 12_345,
+            }
+        ]
+        with caplog.at_level(logging.ERROR, logger="copycat.server.breadth_engine"):
+            engine._recompute_rotation()
+
+        assert engine._rotation is None
+        assert any(r.levelno >= logging.ERROR for r in caplog.records)
+
+    async def test_sector_members_known(self, tmp_path: Path, small_chain: None) -> None:
         """成員 drill-down:名稱走 `_name_map`,按 change_rate desc。"""
         engine = await _ready_engine(tmp_path)
 
@@ -2162,7 +2305,9 @@ class TestSectorState:
             ],
         }
 
-    async def test_sector_members_sub_narrows(self, tmp_path: Path) -> None:
+    async def test_sector_members_sub_narrows(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         engine = await _ready_engine(tmp_path)
 
         result = engine.sector_members("半導體", "矽晶圓")

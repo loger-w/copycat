@@ -271,6 +271,54 @@ def test_compute_breadth_skips_null_change_rate_and_unknown_market() -> None:
     assert out["twse"]["up"] == 1
 
 
+def test_compute_breadth_tolerates_non_numeric_numeric_fields() -> None:
+    """數值欄的髒值(`"-"` / 空字串 = 未成交檔位的實務樣態)整檔跳過,不得炸整輪。
+
+    `high` / `low` 早有 `_to_number` 防禦,但 `close` / `change_price` / `change_rate`
+    與量欄仍是裸取:`close - change_price` 對 str 直接 TypeError,而那個例外會從
+    `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉 —— 整片家數凍在最後一則
+    (review round-2 XR-1b)。乾淨列必須照常入桶。
+    """
+    rows = [
+        {"stock_id": "2330", "change_rate": 1.5, "close": 1000.0, "change_price": 15.0},
+        {"stock_id": "2317", "change_rate": 1.0, "close": "-", "change_price": 1.0},
+        {"stock_id": "6488", "change_rate": "-", "close": 500.0, "change_price": -10.0},
+        {"stock_id": "5483", "change_rate": -1.0, "close": 100.0, "change_price": ""},
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    # 髒 change_rate 整檔跳過(與 None 同語意);髒 close / change_price 只是不判 limit
+    assert [r["stock_id"] for r in out["rows"]] == ["2330", "2317", "5483"]
+    assert out["twse"] == {"limit_up": 0, "up": 2, "flat": 0, "down": 0, "limit_down": 0}
+    assert out["tpex"] == {"limit_up": 0, "up": 0, "flat": 0, "down": 1, "limit_down": 0}
+    assert [r["limit_judged"] for r in out["rows"]] == [True, False, False]
+
+
+def test_compute_breadth_tolerates_non_numeric_volume_fields() -> None:
+    """量欄髒值 → `volume_ratio` None(除法對 str 直接 TypeError;review round-2 XR-1b)。"""
+    rows = [
+        {
+            "stock_id": "2330",
+            "change_rate": 1.5,
+            "close": 1000.0,
+            "change_price": 15.0,
+            "total_volume": "-",
+            "yesterday_volume": 200,
+        },
+        {
+            "stock_id": "2317",
+            "change_rate": 1.5,
+            "close": 200.0,
+            "change_price": 3.0,
+            "total_volume": 300,
+            "yesterday_volume": "-",
+        },
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert [r["volume_ratio"] for r in out["rows"]] == [None, None]
+
+
 def test_compute_breadth_returns_none_when_empty() -> None:
     assert compute_breadth([], _TYPE_MAP, _NAME_MAP) is None
     assert compute_breadth([{"stock_id": "001", "change_rate": 1.0}], _TYPE_MAP, _NAME_MAP) is None
