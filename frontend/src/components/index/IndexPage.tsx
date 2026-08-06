@@ -8,6 +8,7 @@ import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
 import { BreadthBand } from "@/components/index/BreadthBand";
 import { LimitListSection } from "@/components/index/LimitListSection";
 import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
+import { SectorSection } from "@/components/index/SectorSection";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import {
@@ -135,6 +136,9 @@ export function IndexPage({
       {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
           點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
       <LimitListSection onOpenStock={onOpenStock} active={active} />
+      {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
+          點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
+      <SectorSection onOpenStock={onOpenStock} active={active} />
       <CorrSection />
     </div>
   );

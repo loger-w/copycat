@@ -71,6 +71,10 @@ export const LIMIT_LIST_OPEN_KEY = "copycat-limit-list-open";
  *  — components/index/LimitListSection.tsx */
 export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";
 
+/** 類股強弱收合區塊的展開狀態("1" = 展開)— components/index/SectorSection.tsx。
+ *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份類股輪動」。 */
+export const SECTOR_OPEN_KEY = "copycat-sector-open";
+
 /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
 export const RAIL_TAB_KEY = "copycat-rail-tab";
 
