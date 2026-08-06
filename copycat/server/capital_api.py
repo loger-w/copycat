@@ -146,6 +146,16 @@ def _require_legal_tick(price: float, *, context: str) -> None:
         raise HTTPException(status_code=400, detail={"error": "BAD_TICK"})
 
 
+def _is_tickable_stkfut(stkfut: dict) -> bool:
+    """該個股期是否為標準/小型腿(= 唯一適用現股 tick 表的一群)。
+
+    送單面與改價面共用的**單一判準**:送單面以此擋單(不開放的產品),改價面以此
+    決定驗不驗檔位 —— 兩處各寫一份的話,失效樣態是「送單面根本走不到 tick 檢查的
+    產品,改價面卻拿現股表擋它」(ETF 期貨 60.05 是 ETF 制度上的合法檔位)。
+    """
+    return stkfut.get("unit") == _STOCK_FUTURE_UNITS.get(str(stkfut.get("kind")))
+
+
 def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
     """個股期送單的兩道閘(stkfut-contracts SC-6);非個股期產品直接放行。
 
@@ -156,7 +166,7 @@ def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
     stkfut = lookup_product(product)
     if stkfut is None:
         return
-    if stkfut.get("unit") != _STOCK_FUTURE_UNITS.get(str(stkfut.get("kind"))):
+    if not _is_tickable_stkfut(stkfut):
         logger.info("order/future 產品未開放:%s unit=%s", product, stkfut.get("unit"))
         raise HTTPException(status_code=400, detail={"error": "PRODUCT_NOT_ALLOWED"})
     if req.price_type != "limit":
@@ -168,8 +178,12 @@ def _correct_price_tick_gate(client: CapitalClient, seq_no: str, price: float) -
     """改價的個股期檔位閘:契約碼由 seq_no 反查 store(`_fut_multiplier` 同一條路)。
 
     - store 查無該委託 → 放行(review R3 逃生口:斷線 store 空時仍要能刪改單);
-    - 契約碼推不出產品、或產品不是個股期 → 放行。scope 與送單面一致只驗個股期,
-      指數期權不適用現股 tick 表。
+    - 契約碼推不出產品、或產品不是個股期 → 放行(指數期權不適用現股 tick 表);
+    - 個股期但非標準/小型腿(ETF 期貨、除權息調整後的非標準單位)→ **放行**:
+      現股 tick 表不適用,而這種活單可由群益 APP 下,改不動比擋掉更糟。
+
+    scope = 僅驗「會被送單面放行的標準/小型個股期」,判準與送單面共用
+    `_is_tickable_stkfut`(送單面不合 → PRODUCT_NOT_ALLOWED;改價面不合 → 放行)。
     """
     rec = next((o for o in client.store.orders() if o.seq_no == seq_no), None)
     if rec is None or not rec.stock_no:
@@ -181,7 +195,8 @@ def _correct_price_tick_gate(client: CapitalClient, seq_no: str, price: float) -
             "correct-price 契約碼推不出產品(seq=%s, contract=%r)→ 不驗檔位", seq_no, rec.stock_no
         )
         return
-    if lookup_product(product) is None:
+    stkfut = lookup_product(product)
+    if stkfut is None or not _is_tickable_stkfut(stkfut):
         return
     _require_legal_tick(price, context=f"correct-price {product}")
 
