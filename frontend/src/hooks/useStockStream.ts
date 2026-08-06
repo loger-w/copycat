@@ -363,8 +363,13 @@ export function useStockStream(
         }
       };
       ws.onclose = () => {
-        wsOpenRef.current = false;
+        // `alive` 早退**必須在寫旗標之前**:`wsOpenRef` 是跨 socket 世代共用的單一
+        // 旗標,而 StrictMode(dev)的 mount→cleanup→mount 會讓舊 socket 的 close
+        // 晚於新 socket 的 `onopen` 到達 —— 寫在前面的話旗標被清成 false 且**再也
+        // 回不去**(新 socket 的 onopen 已經發生過了),scheduleRetry 的第三道檢查
+        // 永遠早退 = F-3 自癒整條失效。unmount 語意不受影響:cleanup 自己會清旗標。
         if (!alive) return;
+        wsOpenRef.current = false;
         setWsStatus("closed");
         timer = window.setTimeout(connect, backoff);
         backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
