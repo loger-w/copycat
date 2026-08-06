@@ -432,3 +432,56 @@ class TestTickCarriesBidAsk:
         assert tick is not None
         assert tick.bid_milli is None
         assert tick.ask_milli is None
+
+
+class TestTrialWindowsParameter:
+    """D2:試撮窗是**參數**不是常數(個股期主圖傳空窗)。
+
+    個股期日盤 08:45 開盤即真成交、13:30 之後仍連續交易到 13:45 —— 套個股試撮窗會把
+    08:45–09:00 與 13:25–13:30 的成交整段標成 `is_trial`,而 `StockDayState.ingest`
+    對試撮 tick 在 dedup **之前**就短路。失效樣態:分時圖開盤那段與尾盤五分鐘直接
+    消失,沒有任何錯誤訊號(而開盤跳空正是期貨看盤的重點)。
+    """
+
+    @staticmethod
+    def _msg(utc_hhmmss: str) -> dict:
+        return {**REALTIME_MSG, "FilledTime": utc_hhmmss, "PreciseTime": utc_hhmmss + "000000"}
+
+    @staticmethod
+    def _row(utc_hhmmss: str) -> dict:
+        return {
+            "Date": "20260721",
+            "FilledTime": utc_hhmmss,
+            "TradeQuantity": "3",
+            "TradeVolume": "3",
+            "TradingPrice": "2415",
+            "PreciseTime": utc_hhmmss + "000000",
+            "QryIndex": "1",
+        }
+
+    def test_realtime_default_windows_mark_0850_and_1327(self) -> None:
+        # 現貨口徑不得因參數化而變(既有行為的對照組)
+        for utc in ("005000", "052700"):  # 台北 08:50 / 13:27
+            tick, _b, _m = parse_stock_realtime(self._msg(utc))
+            assert tick is not None
+            assert tick.is_trial is True
+
+    def test_realtime_empty_windows_keep_0850_and_1327(self) -> None:
+        for utc in ("005000", "052700"):
+            tick, _b, _m = parse_stock_realtime(self._msg(utc), trial_windows=())
+            assert tick is not None
+            assert tick.is_trial is False
+
+    def test_hist_default_windows_mark_0850(self) -> None:
+        tick = parse_hist_tick("2330", self._row("005000"))
+        assert tick is not None
+        assert tick.is_trial is True
+
+    def test_hist_empty_windows_keep_0850(self) -> None:
+        tick = parse_hist_tick("F:CDF:202609", self._row("005000"), trial_windows=())
+        assert tick is not None
+        assert tick.is_trial is False
+
+    def test_is_trial_window_takes_the_windows_it_is_given(self) -> None:
+        assert is_trial_window("08:50:00.000", ()) is False
+        assert is_trial_window("08:50:00.000") is True

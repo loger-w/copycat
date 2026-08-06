@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Callable
 
-from copycat.live.stock_source import Bar, BarsStatus
+from copycat.live.stock_source import Bar, BarsStatus, stock_symbol
 from copycat.server import stock_engine as stock_engine_mod
 from copycat.server.stock_engine import StockEngine
 
@@ -19,7 +19,13 @@ def _quote(
     qty: str = "1",
     date: str = "20260721",
     symbol: str | None = None,
+    precise: str = "25751000000",
 ) -> dict:
+    """`precise` = TC4 的 UTC PreciseTime(預設 02:57:51 = 台北 10:57:51,日盤正中)。
+
+    參數化是 SC-3 需要的:試撮窗與期貨日盤窗的行為只有在**特定時刻**才分得出來
+    (08:50 / 13:27 / 15:30 / 次日 01:00),寫死一個時刻就只驗得到「沒爆」。
+    """
     return {
         "Symbol": symbol or f"TC.S.TWS.{code}",
         "Security": code,
@@ -28,8 +34,8 @@ def _quote(
         "TradeQuantity": qty,
         "TradeVolume": str(cum),
         "TradeDate": date,
-        "FilledTime": "25751",
-        "PreciseTime": "25751000000",
+        "FilledTime": precise.zfill(12)[:6],  # 同一時刻的 HHMMSS 形(UTC)
+        "PreciseTime": precise,
         "Bid": "2375",
         "Ask": "2380",
         "BidVolume": "10",
@@ -84,6 +90,12 @@ class FakeSource:
 
     def unsubscribe_symbol(self, code: str) -> None:
         self.unsubscribed.append(code)
+
+    def symbol_of(self, key: str) -> str:
+        """instrument key → TC4 symbol。**一律委派 `stock_symbol`**(R1):fake 自寫
+        第二份對映時,engine 的路由表鍵與真實 symbol 會在測試裡永遠一致、在 prod
+        永遠對不上 —— 而那條路的失效是「訂閱成功但零推播」。"""
+        return stock_symbol(key)
 
     def backfill(self, code: str) -> list:
         self.backfills.append(code)
@@ -1561,4 +1573,267 @@ class TestSignalHubHooks:
             ("watchlist", ["2330", "5483"]),
             ("watchlist", ["5483"]),
         ]
+        await engine.close()
+
+
+# ---- 個股期合約主圖(stkfut-contracts SC-3;instrument key = 股號 或 F:<prod>:<ym>)----
+
+_CONTRACT = "F:CDF:202609"
+_CONTRACT_SYMBOL = "TC.F.TWF.CDF.202609"
+
+
+def _fut_quote(*, cum: int = 1, price: str = "2400", **kw) -> dict:
+    """月契約 leaf 的 REALTIME(`Security` 是產品碼,**不是** instrument key)。"""
+    return _quote(code="CDF", symbol=_CONTRACT_SYMBOL, cum=cum, price=price, **kw)
+
+
+class TestInstrumentRouting:
+    """D1/R2-2:推播路由以 `Symbol` → `_symbol_to_key` 決定收件人。"""
+
+    async def test_contract_quote_lands_on_the_contract_key(self) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert _CONTRACT in src.subscribed
+        stream = engine.stream()
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=7))
+        await _drain(engine)
+        got = await _collect(stream)
+        tick = next(m for m in got if m["type"] == "tick")
+        assert tick["code"] == _CONTRACT  # WS code = instrument key,不是 Security
+        assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 7
+        await engine.close()
+
+    async def test_security_field_does_not_decide_the_recipient(self) -> None:
+        """`Security` 不是路由鍵:個股期 leaf 的該欄值域未實證(產品碼 / 股號都可能),
+        拿它當鍵時「合約推播蓋掉現貨狀態」是靜默的 —— 主圖畫的是期貨價,側欄的現貨
+        卻也跟著跳。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=9, price="2400") | {"Security": "2330"})
+        await _drain(engine)
+        assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 9
+        assert engine.snapshot("2330")["last"] is None
+        await engine.close()
+
+    async def test_bookkeeping_is_written_before_subscribe(self) -> None:
+        """R2-2 先寫後訂:TC4 在 SUB 回來後毫秒級推第一則 REALTIME(§8 實證)。
+
+        後寫的話首則必漏 —— 冷門合約整天可能只有那一則(meta / 參考價),而畫面
+        只是空著。fake 在 subscribe 當下回推並**等到引擎收下才返回**(順序反了就會
+        等滿 deadline 再讓斷言紅,不靠時序運氣)。
+        """
+        engine, src = await _make()
+
+        def _push_on_subscribe(code: str) -> None:
+            if code != _CONTRACT or src.on_message is None:
+                return
+            src.on_message(_fut_quote(cum=5))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                state = engine._states.get(_CONTRACT)
+                if state is not None and state.last is not None:
+                    return
+                time.sleep(0.005)
+
+        src.on_subscribe = _push_on_subscribe
+        await engine.set_main_contract(_CONTRACT)
+        await _drain(engine)
+        assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 5
+        await engine.close()
+
+    async def test_failed_subscribe_rolls_back_the_symbol_map(self) -> None:
+        """訂閱失敗要連對映一起回滾:留著的話那個 symbol 的後續推播會落到一個
+        沒有 owner 的 key 上(而 `_refs` 的對帳判準看不到它)。"""
+        engine, src = await _make()
+        src.fail_subscribe.add(_CONTRACT)
+        try:
+            await engine.set_main_contract(_CONTRACT)
+        except ConnectionError:
+            pass
+        assert _CONTRACT_SYMBOL not in engine._symbol_to_key
+        await engine.close()
+
+    async def test_unmapped_symbol_is_dropped(self) -> None:
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=3))  # 從未訂閱這個合約
+        await _drain(engine)
+        assert engine.snapshot(_CONTRACT)["last"] is None
+        assert engine.snapshot("2330")["last"] is None
+        await engine.close()
+
+    async def test_hot_leg_is_routed_by_suffix_not_by_tc_f_prefix(self) -> None:
+        """`_handle_stkfut` 的判定改「endswith('.HOT')」—— 舊的 `startswith('TC.F.')`
+        會把月契約 leaf 一起吃掉,主圖永遠收不到自己的推播。"""
+        engine, src = await _make()
+        await engine.set_main("2330")  # 對映表 2330 → CDF,加訂 HOT 腿
+        stream = engine.stream()
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 現股價 2380
+        src.on_message(
+            _quote(code="CDF", symbol="TC.F.TWF.CDF.HOT", price="2398", cum=100)
+            | {"SecurityName": "台積電(2330)"}
+        )
+        await _drain(engine)
+        got = await _collect(stream)
+        assert any(m["type"] == "stkfut" for m in got)
+        assert "F:CDF" not in {m.get("code") for m in got if m["type"] == "tick"}
+        await engine.close()
+
+
+class TestContractTrialWindow:
+    """D2:期貨 instrument 用空試撮窗(現貨口徑不動)。"""
+
+    async def test_contract_ingests_0850_and_1327(self) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=1, precise="005000000000"))  # 台北 08:50
+        src.on_message(_fut_quote(cum=2, precise="052700000000"))  # 台北 13:27
+        await _drain(engine)
+        minutes = engine.snapshot(_CONTRACT)["minutes"]
+        assert set(minutes) == {"530", "807"}  # 8*60+50 / 13*60+27
+        await engine.close()
+
+    async def test_spot_still_drops_the_trial_window(self) -> None:
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, precise="005000000000"))
+        src.on_message(_quote(cum=2, precise="052700000000"))
+        await _drain(engine)
+        assert engine.snapshot("2330")["minutes"] == {}
+        await engine.close()
+
+
+class TestContractSessionGate:
+    """D14b:期貨 key 的 ingest 前加日盤窗 gate(夜盤 tick 不得進當日狀態)。"""
+
+    async def test_night_ticks_never_reach_the_contract_state(self) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=1, precise="073000000000"))  # 台北 15:30
+        src.on_message(_fut_quote(cum=2, precise="170000000000"))  # 台北次日 01:00
+        await _drain(engine)
+        snap = engine.snapshot(_CONTRACT)
+        assert snap["minutes"] == {}
+        assert snap["seq"] == 0  # 沒有 ingest → 序號不進位(前端不會被騙去 refetch)
+        await engine.close()
+
+    async def test_daytime_edges_are_inside_the_gate(self) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=1, precise="004500000000"))  # 台北 08:45 開盤
+        src.on_message(_fut_quote(cum=2, precise="054500000000"))  # 台北 13:45 收盤
+        await _drain(engine)
+        assert set(engine.snapshot(_CONTRACT)["minutes"]) == {"525", "825"}
+        await engine.close()
+
+    async def test_spot_is_not_gated(self) -> None:
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, precise="073000000000"))  # 台北 15:30(盤後零股等)
+        await _drain(engine)
+        assert set(engine.snapshot("2330")["minutes"]) == {"930"}
+        await engine.close()
+
+
+class TestRolloverIsolationForContracts:
+    """D14a:期貨 tick 不觸發換日(夜盤跨午夜的日期會比日盤主圖早一天到)。"""
+
+    async def test_contract_tick_with_a_new_date_never_rolls_the_day(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=100))  # 現貨當日狀態
+        await _drain(engine)
+        # 日盤窗內、但日期是次日(夜盤契約的跨日推播)
+        src.on_message(_fut_quote(cum=1, date="20260722"))
+        await _drain(engine)
+        assert engine.trade_date == "2026-07-21"
+        assert engine._pending_date is None
+        assert engine.snapshot("2330")["last"]["cum_vol"] == 100  # 現貨狀態未被 reset
+        await engine.close()
+
+    async def test_contract_tick_does_not_complete_a_pending_rollover(self) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=1, date="20260722"))
+        await _drain(engine)
+        assert engine._pending_date == "2026-07-22"  # 仍等現貨首筆
+        assert engine.trade_date == "2026-07-21"
+        await engine.close()
+
+
+class TestMainSlotTransfer:
+    """D15 槽位轉移表:四種轉移後 `_refs` 零洩漏(逐 owner 斷言)。"""
+
+    async def test_four_transfers_leave_no_ref_leak(self) -> None:
+        engine, _src = await _make()
+        # 現貨 → 期現對照腿一併掛上
+        await engine.set_main("2330")
+        assert engine._refs["2330"] == {"main"}
+        assert engine._refs["F:CDF"] == {"stkfut:2330"}
+
+        # 現貨 → 期貨:主圖換合約,舊現貨與它的對照腿一起收(合約態不加對照腿)
+        await engine.set_main_contract(_CONTRACT)
+        assert engine._refs == {_CONTRACT: {"main"}}
+
+        # 期貨 → 期貨(換月)
+        await engine.set_main_contract("F:CDF:202610")
+        assert engine._refs == {"F:CDF:202610": {"main"}}
+
+        # 期貨 → 現貨:`_release_stkfut` 對合約鍵查無對映 → 無害早退
+        await engine.set_main("2317")
+        assert engine._refs == {"2317": {"main"}, "F:DHF": {"stkfut:2317"}}
+
+        # 現貨 → 現貨(既有行為)
+        await engine.set_main("2330")
+        assert engine._refs == {"2330": {"main"}, "F:CDF": {"stkfut:2330"}}
+        await engine.close()
+
+    async def test_contract_main_enqueues_its_own_backfill(self) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        await _drain(engine)
+        assert src.backfills == [_CONTRACT]
+        await engine.close()
+
+    async def test_watchlist_owner_survives_a_contract_switch(self) -> None:
+        """自選檔同時是主圖時,切去合約不得把它退訂(refcount 語意不因新槽位而破)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")
+        await engine.set_main_contract(_CONTRACT)
+        assert engine._refs["2330"] == {"watchlist"}
+        assert "2330" not in src.unsubscribed
+        await engine.close()
+
+
+class TestDirtyWatchlistScope:
+    """D16:`_dirty_watchlist` 只收自選碼 —— 合約鍵混進去會廣播 code="F:CDF:202609"
+    的 `watchlist_quote`,而側欄以 code 對照自選名單,那一則對它是垃圾。"""
+
+    async def test_contract_ticks_never_produce_watchlist_quote(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main_contract(_CONTRACT)
+        stream = engine.stream()
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=3))
+        await _drain(engine)
+        got = await _collect(stream)
+        codes = {m["code"] for m in got if m["type"] == "watchlist_quote"}
+        assert codes <= {"2330"}
+        assert _CONTRACT not in engine._dirty_watchlist
         await engine.close()

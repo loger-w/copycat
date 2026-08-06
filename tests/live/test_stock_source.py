@@ -31,6 +31,20 @@ class TestSymbolAndWindow:
         # 誤組成 TC.S.TWS.CDF.HOT 時 SUBQUOTE 照回 OK,零錯誤訊號)
         assert stock_symbol("F:CDF") == "TC.F.TWF.CDF.HOT"
 
+    def test_contract_key_maps_to_month_leaf(self) -> None:
+        # SC-3:三段形 `F:<prod>:<ym>` = 使用者選定的月契約(HOT 兩段形是期現對照腿)
+        assert stock_symbol("F:CDF:202609") == "TC.F.TWF.CDF.202609"
+
+    def test_symbol_of_is_the_same_single_definition(self) -> None:
+        """R2-2:engine 的 `_symbol_to_key` 只能經 `symbol_of` 取 symbol。
+
+        engine 自組第二份對映的失效樣態是「兩邊各自演化」—— 路由表的鍵與真正送出去的
+        SUBQUOTE symbol 不同字,推播因此永遠 map miss(而 TC4 對訂閱照回 OK)。
+        """
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+        for key in ("2330", "F:CDF", "F:CDF:202609"):
+            assert src.symbol_of(key) == stock_symbol(key)
+
     def test_stock_window_utc_day(self) -> None:
         assert stock_window("2026-07-21") == ("2026072100", "2026072106")
 
@@ -423,5 +437,146 @@ class TestNoDataHealthCheck:
         flagged: list[str] = []
         src.set_on_no_data(flagged.append)
         src.subscribe_symbol("2330")
+        threading.Event().wait(0.1)
+        assert flagged == []
+
+
+class TestContractKeySubscription:
+    """SC-3:三段形合約鍵沿現貨那條路(只換 symbol + 空試撮窗)。"""
+
+    @staticmethod
+    def _src(handler, **kw) -> StockQuoteSource:
+        return StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21", **kw)
+
+    def test_subscribe_uses_the_month_leaf_symbol(self) -> None:
+        sent: list[dict] = []
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            return ok()
+
+        self._src(handler).subscribe_symbol("F:CDF:202609")
+        sub = next(o for o in sent if o["Request"] == "SUBQUOTE")
+        assert sub["Param"]["Symbol"] == "TC.F.TWF.CDF.202609"
+        # 窗沿個股日盤窗(UTC 00–06 涵蓋期貨日盤 08:45–13:45,design SC-3 刻意選擇)
+        assert sub["Param"]["StartTime"] == "2026072100"
+        assert sub["Param"]["EndTime"] == "2026072106"
+
+    def test_backfill_uses_the_leaf_symbol_and_no_trial_window(self) -> None:
+        """回補走既有 TICKS 路徑(D4);08:50 的成交對期貨**不是**試撮。
+
+        沿用個股試撮窗的話,`StockDayState.ingest` 會在 dedup 前把 08:45–09:00 全部
+        短路 —— 切一次檔(`apply_backfill` 先 reset 再重放)開盤那段就永久消失。
+        """
+        sent: list[dict] = []
+        row = {
+            "Date": "20260721",
+            "FilledTime": "005000",
+            "TradeQuantity": "3",
+            "TradeVolume": "3",
+            "TradingPrice": "2400",
+            "PreciseTime": "005000000000",
+            "QryIndex": "1",
+        }
+        pages = {"0": [row], "1": []}
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "TICKS:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return ok()
+
+        ticks = self._src(handler, poll_wait_secs=0.0).backfill("F:CDF:202609")
+        assert {o["Param"]["Symbol"] for o in sent} == {"TC.F.TWF.CDF.202609"}
+        assert len(ticks) == 1
+        assert ticks[0].time == "08:50:00.000"
+        assert ticks[0].is_trial is False
+
+    def test_spot_backfill_still_marks_the_trial_window(self) -> None:
+        row = {
+            "Date": "20260721",
+            "FilledTime": "005000",
+            "TradeQuantity": "3",
+            "TradeVolume": "3",
+            "TradingPrice": "2400",
+            "PreciseTime": "005000000000",
+            "QryIndex": "1",
+        }
+        pages = {"0": [row], "1": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "TICKS:" + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])}) + "\0"
+                ).encode()
+            return ok()
+
+        ticks = self._src(handler, poll_wait_secs=0.0).backfill("2330")
+        assert ticks[0].is_trial is True
+
+
+class TestHealthCheckKeyedBySymbol:
+    """D8/R2-3:`_seen` 以 **symbol** 記;timer 只掛現貨與三段形合約鍵。"""
+
+    @staticmethod
+    def _src(**kw) -> StockQuoteSource:
+        return StockQuoteSource(
+            api=FakeApi(lambda o: ok()),
+            session="s1",
+            trade_date="2026-07-21",
+            in_trading_hours=lambda: True,
+            **kw,
+        )
+
+    @staticmethod
+    def _push(src: StockQuoteSource, symbol: str, security: str) -> None:
+        src.handle_raw(
+            "REALTIME:"
+            + json.dumps(
+                {"DataType": "REALTIME", "Quote": {"Symbol": symbol, "Security": security}}
+            )
+        )
+
+    def test_contract_key_with_no_push_is_flagged_with_the_key(self) -> None:
+        src = self._src(no_data_secs=0.01)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src.subscribe_symbol("F:CDF:202609")
+        threading.Event().wait(0.1)
+        assert flagged == ["F:CDF:202609"]  # 回呼傳 key(engine 的 `_no_data` 以 key 記)
+
+    def test_contract_push_cancels_its_own_health_check(self) -> None:
+        src = self._src(no_data_secs=0.05)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src.subscribe_symbol("F:CDF:202609")
+        # 個股期推播的 `Security` 是產品碼 / 股號(未實證),以 Security 為鍵時
+        # 這一則對不上 "F:CDF:202609" → 健檢誤判 no_data
+        self._push(src, "TC.F.TWF.CDF.202609", "CDF")
+        threading.Event().wait(0.15)
+        assert flagged == []
+
+    def test_contract_push_does_not_cancel_the_spot_health_check(self) -> None:
+        """同一個 `Security` 可能同時出現在現貨與合約推播上 —— 以 Security 為鍵時,
+        期貨那一則會把現貨的健檢一起消掉(現貨真的零推播也不再有訊號)。"""
+        src = self._src(no_data_secs=0.01)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src.subscribe_symbol("2330")
+        self._push(src, "TC.F.TWF.CDF.202609", "2330")
+        threading.Event().wait(0.1)
+        assert flagged == ["2330"]
+
+    def test_hot_leg_has_no_health_check(self) -> None:
+        """兩段形 HOT 腿維持現行排除(R2-3):放開會讓 `_handle_no_data` 廣播
+        code="F:CDF" 的 watchlist_quote,與 D16(只收自選碼)直接打架。"""
+        src = self._src(no_data_secs=0.01)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src.subscribe_symbol("F:CDF")
         threading.Event().wait(0.1)
         assert flagged == []
