@@ -17,6 +17,21 @@ import { snapDown } from "@/lib/stock-tick";
 export const X_START_MIN = 9 * 60; // 09:00
 export const X_END_MIN = 13 * 60 + 30; // 13:30
 
+/** x 軸的分鐘窗(兩端皆含)。
+ *
+ *  幾何層原本把 `[X_START_MIN, X_END_MIN]` 當成全域事實硬編在五個地方(minuteToX /
+ *  minuteOf / windowedEntries / sideSummary / 元件 barW 分母)。同一張圖要換窗時,
+ *  漏改任何一處的失效樣態都是「圖畫得出來、只是對不齊」——線與整點刻度差幾 px、
+ *  bar 寬與分鐘間距不等、反演回來的分鐘偏移一格,沒有任何 assertion 會紅。
+ *  所以窗一律當**參數**沿呼叫鏈傳,不再由各處各自 import 常數。 */
+export interface XWindow {
+  start: number;
+  end: number;
+}
+
+/** 現貨日盤窗 09:00–13:30。所有窗參數的預設值 = 既有語意,呼叫端不傳即零行為改變。 */
+export const SPOT_WINDOW: XWindow = { start: X_START_MIN, end: X_END_MIN };
+
 /** 底部時間標籤帶;繪圖區 = [PAD_Y, height − X_LABEL_H − PAD_Y] */
 export const X_LABEL_H = 14;
 export const PAD_Y = 4;
@@ -55,8 +70,8 @@ export function plotWidth(width: number): number {
 /** 分鐘 → x 座標。**幾何與元件共用這一份** —— 兩邊各寫一次的話,任何 x 軸幾何改動
  *  都得同時改對兩處,而漂移的症狀是「線與刻度差幾 px」,目視幾乎抓不到
  *  (同 `toY` / `priceAtY` 必須共用 `PAD_Y` 的理由)。 */
-export function minuteToX(minute: number, width: number): number {
-  return Y_AXIS_W + ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * plotWidth(width);
+export function minuteToX(minute: number, width: number, xw: XWindow = SPOT_WINDOW): number {
+  return Y_AXIS_W + ((minute - xw.start) / (xw.end - xw.start)) * plotWidth(width);
 }
 
 export interface Pt {
@@ -160,13 +175,17 @@ export interface SideSummary {
  *  根本沒印。要補「未分類 N」就必須從分鐘聚合算,那時若外 / 內仍走後端值,就會出現
  *  兩個來源混用 —— 而混用的失效樣態是純數字不一致,沒有任何測試會紅。
  *
- *  **窗與副圖一致**([09:00, 13:30]):這個數字的全部意義就是與畫面上的灰段總和對得上。 */
-export function sideSummary(minutes: Map<number, MinuteAgg>): SideSummary {
+ *  **窗與副圖一致**(現貨 [09:00, 13:30]):這個數字的全部意義就是與畫面上的灰段總和
+ *  對得上,所以窗必須與 `windowedEntries` 吃同一個 `xw`,不可各自 import 常數。 */
+export function sideSummary(
+  minutes: Map<number, MinuteAgg>,
+  xw: XWindow = SPOT_WINDOW,
+): SideSummary {
   let outer = 0;
   let inner = 0;
   let unch = 0;
   for (const [k, m] of minutes) {
-    if (k < X_START_MIN || k > X_END_MIN) continue;
+    if (k < xw.start || k > xw.end) continue;
     outer += m.o;
     inner += m.i;
     unch += m.u;
@@ -212,15 +231,16 @@ interface Size {
   height: number;
 }
 
-function windowedEntries(minutes: Map<number, MinuteAgg>): [number, MinuteAgg][] {
+function windowedEntries(minutes: Map<number, MinuteAgg>, xw: XWindow): [number, MinuteAgg][] {
   return [...minutes.entries()]
-    .filter(([k]) => k >= X_START_MIN && k <= X_END_MIN)
+    .filter(([k]) => k >= xw.start && k <= xw.end)
     .sort(([a], [b]) => a - b);
 }
 
 function energyFrom(
   entries: readonly [number, MinuteAgg][],
   size: Size,
+  xw: XWindow,
 ): { bars: EnergyBar[]; maxTotal: number } {
   // round5 E:分母是**全日最大總量**(外+內+未分類)而不是舊的「單邊最大」。
   // 舊分母讓資訊列的「量」在副圖上找不到對應高度 —— 未分類(開盤集合競價沒有 Bid/Ask
@@ -231,7 +251,7 @@ function energyFrom(
   const energyH = Math.max(1, size.height - SUB_TOP_PAD);
   const bars = entries.map(([minute, m]) => {
     const total = m.o + m.i + m.u;
-    return { x: minuteToX(minute, size.width), h: (total / maxTotal) * energyH };
+    return { x: minuteToX(minute, size.width, xw), h: (total / maxTotal) * energyH };
   });
   return { bars, maxTotal };
 }
@@ -242,12 +262,17 @@ function energyFrom(
 export function buildEnergyBars(
   minutes: Map<number, MinuteAgg>,
   size: { width: number; height: number },
+  xw: XWindow = SPOT_WINDOW,
 ): { bars: EnergyBar[]; maxTotal: number } {
-  return energyFrom(windowedEntries(minutes), size);
+  return energyFrom(windowedEntries(minutes, xw), size, xw);
 }
 
-export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometry {
-  const entries = windowedEntries(input.minutes);
+export function buildIntradayGeometry(
+  input: Input,
+  size: Size,
+  xw: XWindow = SPOT_WINDOW,
+): IntradayGeometry {
+  const entries = windowedEntries(input.minutes, xw);
   const prices = entries.map(([, m]) => m.c).filter((p) => p > 0);
   // **幾何入口統一歸一**:TC4 會送 "0",後端 `to_milli_units` 原樣轉成 0 而不是 None,
   // 三欄多半同時為 0。毫元價格恆 > 0,所以 0 只可能是「不可得」——
@@ -300,7 +325,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     const raw = yTop - ((y - PAD_Y) / plotH) * ySpan;
     return Math.min(yTop, Math.max(yBottom, Math.round(raw)));
   };
-  const toX = (minute: number): number => minuteToX(minute, size.width);
+  const toX = (minute: number): number => minuteToX(minute, size.width, xw);
 
   const priceLine = entries.map(([minute, m]) => ({ minute, x: toX(minute), y: toY(m.c) }));
 
@@ -316,7 +341,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     }
   }
 
-  const { bars: energyBars, maxTotal } = energyFrom(entries, size);
+  const { bars: energyBars, maxTotal } = energyFrom(entries, size, xw);
 
   const yTicks: YTick[] = [];
   if (upper !== null && lower !== null && ref > 0) {
@@ -359,8 +384,7 @@ export function buildIntradayGeometry(input: Input, size: Size): IntradayGeometr
     // 而超過 width,用 width 當上界就會把自己算出來的座標判成域外 → 兩者不再互逆。
     if (xPx < Y_AXIS_W || xPx > Y_AXIS_W + plotWidth(size.width)) return null;
     const m =
-      Math.round(((xPx - Y_AXIS_W) / plotWidth(size.width)) * (X_END_MIN - X_START_MIN)) +
-      X_START_MIN;
+      Math.round(((xPx - Y_AXIS_W) / plotWidth(size.width)) * (xw.end - xw.start)) + xw.start;
     return haveMinutes.has(m) ? m : null;
   };
 
