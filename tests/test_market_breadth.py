@@ -310,6 +310,7 @@ def test_compute_breadth_row_shape() -> None:
         "total_amount": 12345,
         "limit_up": False,
         "limit_down": False,
+        "limit_judged": True,
         "touched_limit_up": False,
         "touched_limit_down": False,
     }
@@ -568,6 +569,50 @@ def test_compute_breadth_close_passes_through_including_none() -> None:
     assert out is not None
     assert out["rows"][0]["close"] == 105.0
     assert out["rows"][1]["close"] is None
+
+
+# ---------------------------------------------------------------------------
+# compute_breadth — limit_judged(SC-5 diff 事件源前置)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_breadth_limit_judged_marks_decided_rows() -> None:
+    """`limit_judged` = 「limit 旗標是判定結果而非缺值預設」。
+
+    缺值列的 `limit_up` / `limit_down` 恆 False,與「真的沒鎖漲停」同形 —— 下游
+    diff 事件源若無法區分兩者,缺欄輪會被誤讀成「漲停打開」而發假事件。
+    """
+    rows = [
+        # prev_close = 985.0 > 0 且 close 有值 → 判定成立
+        {"stock_id": "2330", "change_rate": 1.5, "close": 1000.0, "change_price": 15.0},
+        # close 缺 → prev_close 推不出來,limit 旗標是缺值預設
+        {"stock_id": "2317", "change_rate": 10.0, "close": None, "change_price": 10.0},
+        # change_price 缺 → 同上
+        {"stock_id": "6488", "change_rate": 10.0, "close": 110.0, "change_price": None},
+        # prev_close = 0 → 不判(避免 0 價推導出荒謬漲停)
+        {"stock_id": "5483", "change_rate": 1.0, "close": 5.0, "change_price": 5.0},
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    judged = {r["stock_id"]: r["limit_judged"] for r in out["rows"]}
+    assert judged == {"2330": True, "2317": False, "6488": False, "5483": False}
+
+
+def test_compute_breadth_limit_judged_false_when_prev_close_negative() -> None:
+    """prev_close < 0(髒 change_price)也在 `prev_close > 0` 這道 gate 之外。"""
+    rows = [{"stock_id": "2330", "change_rate": 1.0, "close": 5.0, "change_price": 6.0}]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["limit_judged"] is False
+
+
+def test_compute_breadth_limit_judged_true_for_locked_row() -> None:
+    """真的鎖漲停 → 判定成立且旗標為 True(判定與結果兩個維度不混談)。"""
+    rows = [{"stock_id": "2330", "change_rate": 10.0, "close": 110.0, "change_price": 10.0}]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["limit_judged"] is True
+    assert out["rows"][0]["limit_up"] is True
 
 
 # ---------------------------------------------------------------------------
