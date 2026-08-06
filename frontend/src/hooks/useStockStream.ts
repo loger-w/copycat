@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
-import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
+import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickMsg } from "@/lib/stock-accum";
 import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -84,6 +84,10 @@ export function useStockStream(
   const refetchingRef = useRef(false);
   const pendingRefetchRef = useRef(false);
   const pendingRef = useRef<StockTickMsg[]>([]);
+  // refetch 進行中收到的**最新一份**簿(F-2)。snapshot 是後端在 fetch 送出當下凍結的,
+  // 而推播必晚於 fetch 發起 → 方向恆定,套完 snapshot 之後蓋回來就是對的。
+  // 帶 instrumentKey 標記:切檔撞上 in-flight 時 key 不符即丟,不把 A 的簿蓋到 B 上。
+  const pendingBookRef = useRef<{ key: string; book: StockBook } | null>(null);
   // 上一則 status 的**真值**(F-1)。WS handler 是 deps `[]` 的閉包讀不到最新 state,
   // 而把比較塞進 `setStatus` 的 updater 會讓副作用跟著 StrictMode 的 double-invoke 重跑。
   const statusRef = useRef<{ tc4: string; backfilling: string | null }>({
@@ -114,6 +118,7 @@ export function useStockStream(
     }
     refetchingRef.current = true;
     pendingRef.current = [];
+    pendingBookRef.current = null;
     try {
       const res = await fetch(stateUrl(currentCode, contractRef.current));
       if (res.ok) {
@@ -122,6 +127,11 @@ export function useStockStream(
           let next = snap;
           for (const msg of pendingRef.current) {
             if (msg.seq > snap.seq) next = applyTick(next, msg);
+          }
+          // 交錯的簿蓋回 snapshot 的凍結簿(F-2);key 不符 = 已切檔 → 丟棄
+          const pendingBook = pendingBookRef.current;
+          if (pendingBook !== null && pendingBook.key === current) {
+            next = { ...next, book: pendingBook.book };
           }
           accumRef.current = next;
           setAccum(next);
@@ -132,6 +142,7 @@ export function useStockStream(
     } finally {
       refetchingRef.current = false;
       pendingRef.current = [];
+      pendingBookRef.current = null;
       if (pendingRefetchRef.current || instrumentKeyRef.current !== current) {
         pendingRefetchRef.current = false;
         void refetch();
@@ -145,6 +156,7 @@ export function useStockStream(
     setAccum(null);
     setStkfut(null);
     accumRef.current = null;
+    pendingBookRef.current = null; // 舊標的的簿不可跨檔存活(F-2)
     if (instrumentKey === null) return;
     void refetch();
   }, [instrumentKey]);
@@ -182,12 +194,18 @@ export function useStockStream(
         }
         case "book": {
           if (msg.code !== current) return;
+          const book: StockBook = {
+            bids: msg.bids as [number, number][],
+            asks: msg.asks as [number, number][],
+          };
+          // refetch 進行中:snapshot 是**較舊**的凍結簿,回來時會整份覆蓋 accum ——
+          // 這裡先留一份最新的,套完 snapshot 之後蓋回去(F-2)。
+          if (refetchingRef.current && current !== null) {
+            pendingBookRef.current = { key: current, book };
+          }
           const acc = accumRef.current;
           if (acc === null) return;
-          const next = {
-            ...acc,
-            book: { bids: msg.bids as [number, number][], asks: msg.asks as [number, number][] },
-          };
+          const next = { ...acc, book };
           accumRef.current = next;
           setAccum(next);
           return;
