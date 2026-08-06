@@ -25,6 +25,7 @@ import {
   TAB_KEY,
 } from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
+import type { StkfutSelection } from "@/lib/stkfut";
 import { cn } from "@/lib/utils";
 
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
@@ -103,6 +104,18 @@ export default function App() {
   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
   const [stockCode, setStockCode] = useState<string | null>(initialStockCode);
   const [product, setProduct] = useState<FutProduct>(initialProduct);
+  // 個股期合約選擇(stkfut-contracts D5):與 stockCode 同層 —— 資料流(useStockStream)、
+  // 主圖(StockChart)、右欄(railCtx)三處都要吃同一份,放進 StockPage 就餵不到右欄。
+  // **不持久化**:合約每月到期,存下來的月份重開後可能已不存在(訂閱零推播且無錯誤訊號)。
+  const [stkfutContract, setStkfutContract] = useState<StkfutSelection | null>(null);
+  // 換股重置。用 render 期間調整 state 的官方 pattern 而**不是** effect:effect 版本會
+  // 先放行一個「新股號 + 舊合約」的 render,而 useStockStream 在那一拍就會送出
+  // `/api/stock/state/2454?contract=CDF:202609` —— 後端 D7 白名單直接 400,畫面停在載入中。
+  const [prevStockCode, setPrevStockCode] = useState(stockCode);
+  if (prevStockCode !== stockCode) {
+    setPrevStockCode(stockCode);
+    setStkfutContract(null);
+  }
 
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
   const { twse, otc, txf } = useIndexStream();
@@ -125,7 +138,10 @@ export default function App() {
   // (b) App 層本來就會因 useIndexStream 每則指數推播重繪,不是新增的重繪類別。
   // 若日後量測到掉幀,先做的是讓 useStockStream 吃 `enabled` 參數(與這裡同一個開關),
   // 而不是把資料流搬回頁面內 —— 右欄跟隨當前 tab 標的(D2)依賴資料在 App 層。
-  const stockStream = useStockStream(tab === "stock" || visited.stock ? stockCode : null);
+  const stockStream = useStockStream(
+    tab === "stock" || visited.stock ? stockCode : null,
+    stkfutContract,
+  );
   const futuresStream = useFuturesStream();
 
   useEffect(() => {
@@ -161,7 +177,11 @@ export default function App() {
     tab === "stock"
       ? {
           kind: "stock",
+          // **恆為股號**(D5 口徑寫死):RightRail 的五檔點價 gate 比對 `detail.code === ctx.code`,
+          // 而事件是主區的 OrderBook 以股號發的;塞 instrument key 會讓整條點價路徑靜默失效,
+          // 下單面也會顯示 `F:CDF:202609`。合約走獨立欄。
           code: stockCode,
+          contract: stkfutContract,
           name: accum?.meta?.name ?? "",
           book: accum?.book ?? null,
           last: accum?.last ?? null,
@@ -214,7 +234,13 @@ export default function App() {
               <Suspense
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
-                <StockPage code={stockCode} onSelect={setStockCode} stream={stockStream} />
+                <StockPage
+                  code={stockCode}
+                  onSelect={setStockCode}
+                  stream={stockStream}
+                  contract={stkfutContract}
+                  onContract={setStkfutContract}
+                />
               </Suspense>
             </div>
           ) : null}

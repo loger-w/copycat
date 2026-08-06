@@ -7,6 +7,7 @@ import { PriceLadder, type CenterRequest, type TradeKind } from "@/components/st
 import { RAIL_TAB_KEY } from "@/lib/constants";
 import { futCloseEstimate } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
+import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
@@ -36,7 +37,11 @@ function initialTab(): RailTab {
 export type RailContext =
   | {
       kind: "stock";
+      /** **恆為股號**(stkfut-contracts D5),期貨態也一樣 —— 點價 gate 與下單面標的都吃它 */
       code: string | null;
+      /** 選中的個股期合約;`null` = 現貨態。與 `code` 分成兩欄而不是塞成一個 key,
+       *  是為了讓「這是哪一檔股票」與「這是哪一個合約」兩個問題各自有單一讀法。 */
+      contract: StkfutSelection | null;
       name: string;
       book: StockBook | null;
       last: { p: number; t: string; cum_vol: number } | null;
