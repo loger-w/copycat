@@ -4,6 +4,7 @@ import datetime as _dt
 from pathlib import Path
 from typing import cast
 
+import pytest
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
@@ -315,6 +316,142 @@ class TestStateRoute:
             r = client.get("/api/stock/state/@@@")
         assert r.status_code == 503
         assert r.json()["detail"]["error"] == "NOT_READY"
+
+
+STKFUT_CATALOG: dict[str, dict] = {
+    "2330": {
+        "name": "台積電",
+        "std": {"prod": "CDF", "contracts": ["202608", "202609"]},
+        "mini": {"prod": "QFF", "contracts": ["202609"]},
+    },
+    "2317": {
+        "name": "鴻海",
+        "std": {"prod": "DHF", "contracts": ["202608", "202609"]},
+        "mini": None,
+    },
+}
+
+
+class TestStateRouteContract:
+    """`?contract=` 主圖合約切換(stkfut-contracts SC-3 / D6+D7)。
+
+    **白名單是這組測試的核心**:regex 過得了不代表這個合約屬於這檔股票 ——
+    `/api/stock/state/2330?contract=DHF:202609` 光看形狀完全合法,放行的話主圖畫的是
+    鴻海期貨,而 URL、下單面、右側欄的股號全都還是 2330,畫面上沒有任何地方會不一致
+    到被看出來(TC4 對不存在 / 不相干的 symbol 一律照回 `Success: OK`,連訂閱層都不會
+    抗議)。所以合法性判定只能來自 catalog,不能只靠字串形。
+    """
+
+    def _client(self, tmp_path: Path) -> tuple[TestClient, FakeStockSource]:
+        client, fake = make_client(tmp_path)
+        fake.stkfut_catalog = {k: dict(v) for k, v in STKFUT_CATALOG.items()}
+        return client, fake
+
+    def test_valid_contract_switches_main_and_returns_instrument_key(self, tmp_path: Path) -> None:
+        client, fake = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2330?contract=CDF:202609")
+        assert r.status_code == 200
+        snap = r.json()
+        # code = instrument key(前端 WS 比對鍵);underlying = 股號(下單/右欄口徑)
+        assert snap["code"] == "F:CDF:202609"
+        assert snap["underlying"] == "2330"
+        assert "F:CDF:202609" in fake.subscribed, "set_main_contract 必須真的訂到合約鍵"
+
+    def test_mini_contract_allowed(self, tmp_path: Path) -> None:
+        """小型合約也在白名單內(std / mini 兩腿都要查,只查 std 會讓小型永遠 400)。"""
+        client, fake = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2330?contract=QFF:202609")
+        assert r.status_code == 200
+        assert r.json()["code"] == "F:QFF:202609"
+        assert "F:QFF:202609" in fake.subscribed
+
+    def test_no_contract_keeps_spot_behaviour(self, tmp_path: Path) -> None:
+        """現貨態零行為變更;`underlying` 在現貨態 = code 自身(前端單一讀法)。"""
+        client, fake = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2330")
+        assert r.status_code == 200
+        snap = r.json()
+        assert snap["code"] == "2330"
+        assert snap["underlying"] == "2330"
+        assert "2330" in fake.subscribed
+
+    def test_foreign_product_rejected(self, tmp_path: Path) -> None:
+        """形狀合法但產品屬於別檔股票 → 400(白名單的存在理由)。"""
+        client, fake = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2330?contract=DHF:202609")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "BAD_CONTRACT"
+        assert "F:DHF:202609" not in fake.subscribed, "被拒的合約不得留下訂閱"
+
+    def test_unknown_month_rejected(self, tmp_path: Path) -> None:
+        """產品對、月份不在清單(已到期 / 尚未掛牌)→ 400。
+
+        放行的話會訂到不存在的 symbol,而 TC4 照回 OK → 表現為「圖是空的」。
+        """
+        client, fake = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2330?contract=CDF:202612")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "BAD_CONTRACT"
+        assert "F:CDF:202612" not in fake.subscribed
+
+    def test_stock_without_futures_rejected(self, tmp_path: Path) -> None:
+        client, _ = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/9999?contract=CDF:202609")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "BAD_CONTRACT"
+
+    @pytest.mark.parametrize(
+        "contract",
+        [
+            "CDF-202609",  # 分隔符錯
+            "CDF:2026",  # 缺月
+            "cdf:202609",  # 小寫
+            "CDF:202613",  # 月份 13
+            "CDF:202600",  # 月份 00
+            "CDF:192609",  # 世紀非 20
+            "C:202609",  # 產品碼過短
+            "CDFFF:202609",  # 產品碼過長
+            "CDF:202609:X",  # 尾贅
+            "F:CDF:202609",  # 直接把 instrument key 當 contract 塞
+            "",  # 空字串(前端狀態清空時最容易誤送)
+        ],
+    )
+    def test_malformed_contract_rejected(self, tmp_path: Path, contract: str) -> None:
+        """形檢在白名單之前:壞形不該打到 catalog(那是一次 TC4 查詢)。"""
+        client, fake = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2330", params={"contract": contract})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "BAD_CONTRACT"
+        assert fake.subscribed == [], "被拒的請求不得動到訂閱池"
+
+    def test_catalog_down_rejects_not_falls_back_to_spot(self, tmp_path: Path) -> None:
+        """catalog 查不到 → 502,**不放行**。
+
+        降級成「當作現貨處理」會讓 TC4 一斷線畫面就悄悄從期貨跳回現貨,而下拉還顯示著
+        合約 —— 使用者看著的是另一個商品的價格。
+        """
+        client, fake = self._client(tmp_path)
+        fake.stkfut_catalog = ConnectionError("tc4 down")
+        with client:
+            r = client.get("/api/stock/state/2330?contract=CDF:202609")
+        assert r.status_code == 502
+        assert r.json()["detail"]["error"] == "TC4_DOWN"
+        assert fake.subscribed == []
+
+    def test_bad_code_beats_contract_check(self, tmp_path: Path) -> None:
+        """代號閘優先(既有優先序不變):壞代號 + 壞合約 → BAD_CODE。"""
+        client, _ = self._client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/bad!?contract=nope")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "BAD_CODE"
 
 
 class TestGroupStateRoute:
