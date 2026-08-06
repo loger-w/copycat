@@ -78,6 +78,19 @@ def test_unknown_key_near_r4_keys_raises(tmp_path: Path) -> None:
         load_breadth_config(p)
 
 
+@pytest.mark.parametrize("bad", [0, 0.0, -1.0])
+def test_non_positive_event_cooldown_raises(tmp_path: Path, bad: float) -> None:
+    """冷卻 ≤ 0 讓廣度事件的 id 唯一性假設崩潰 —— 值域也要驗,不只未知鍵。
+
+    事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆抑制**全靠**
+    正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上只是「這則沒出現」。
+    """
+    p = tmp_path / "breadth.json"
+    p.write_text(json.dumps({"event_cooldown_secs": bad}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_breadth_config(p)
+
+
 def test_unknown_key_raises(tmp_path: Path) -> None:
     p = tmp_path / "breadth.json"
     p.write_text(json.dumps({"no_such_param": 1}), encoding="utf-8")
