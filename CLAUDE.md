@@ -329,6 +329,14 @@ WebSocket / 即時 Stream 紀律:
 - **server 不載 dotenv 檔**:runtime 讀設定一律「`name in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 repo root .env」逐 key fallback(capital/factory 慣例;cli/notify 舊慣例是「僅未設才 fallback」,下單開關類安全 key 必須用新語意)。讀 .env 用 `utf-8-sig` + never-raise(Windows BOM 會讓首 key 靜默失效 — 真踩過)。測試側 `tests/conftest.py` 全域中和 dotenv + delenv CAPITAL_*(否則開發機真憑證流入測試,最壞載真 SKCOM DLL → segfault,實測過)。(2026-07-28,Trigger:新增任何 env 設定讀取或 env 相依測試)
 
 - **rollover stage1/stage2 可在同一同步區塊內連發(快路徑),掛兩段通知的模組不能假設中間有 await(2026-08-04 stock-signals 實證)**:`_handle_quote` 的快路徑(週六補市日 / checkpoint 沒跑)會在同一則 quote 內接連跑 stage1 → stage2,任何「stage1 排非同步預備、stage2 消費」的設計在此路徑下預備必為空;更陰的是預備 job 事後完成的**殘留**會被下一次快路徑誤當有效 → 用日別標記(basis_date)驗證,不符即丟。訊號 CDP 基準的 staged swap 就是這樣修的(design review MFS-2)。(Trigger:掛 rollover 兩段通知、或任何 stage1 預備/stage2 消費的設計)
+- **`--verify` 模式沒有 stock engine → SignalHub 恆 None → 訊號/廣度事件鏈在官方
+  verify server 上不可達(2026-08-06 R4 Phase 6 實測)**:`_make_signals` 以
+  `stock is None` 早退,而 verify 只組 FakeTxoSource。任何「事件鏈取證走 verify」
+  的設計假設都不成立,失效樣態 = today 端點 503 / 時間軸空,與「接線壞掉」同形。
+  事件鏈取證樣板 = `.claude/feat/market-overview-r4-sector-signals/evidence/
+  events_side_server_r4.py`(FakeStockSource 讓 hub boot + verify fake breadth,
+  jsonl 落隔離 tmp)。(Trigger:驗任何 signal_hub / 廣度事件改動、或設計含
+  「verify 取證」字樣的 spec)
 - **盤中驗 FinMind 類後端改動可走「側車 server」(2026-08-06,R2 實證)**:fake TXO source
   + 真 FinMind fetchers(顯式三元組以閉包綁真 token — 顯式傳入路徑會拿 dummy token)+
   `neutralize_external_env()` + 落檔隔離目錄 + 非 canonical port,全程零 TC4/ZMQ →
