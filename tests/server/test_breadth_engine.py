@@ -515,6 +515,30 @@ class TestFailureHandling:
         assert engine._fail_streak == 1
         assert len(published) == 1
 
+    async def test_refresh_maps_crash_counted_as_failure_and_still_broadcasts(
+        self, tmp_path: Path
+    ) -> None:
+        """`_refresh_maps` 拋 → 該輪算失敗**且照樣廣播**(review round-3 CR-4)。
+
+        對照表那幾步是裸呼叫(`parse_active_disposition` 對非字串 `period_start`
+        直接 TypeError,取數層的 never-raise 保證只涵蓋取數本身)—— 例外逃到
+        `_poll_loop` 的傘罩就繞過了 `_fail()`(退避不動)且 publish 跟著被跳過
+        (stale 傳不到前端),與 XR-1c 同一個失效樣態換了個入口。
+        """
+        engine, *_ = _make(tmp_path)
+
+        async def _boom() -> None:
+            raise RuntimeError("對照表解析炸")
+
+        engine._refresh_maps = _boom  # type: ignore[method-assign]
+        published: list[dict] = []
+        engine._ws.publish = published.append  # type: ignore[method-assign]
+
+        await engine._run_cycle()
+
+        assert engine._fail_streak == 1
+        assert len(published) == 1
+
     async def test_no_parsable_tick_time_is_failure(self, tmp_path: Path) -> None:
         """時刻推不出來就無從標記 as_of / 分鐘鍵 —— 該輪視同失敗,不動既有值。"""
         rows = [{**r, "date": None} for r in _snapshot_rows()]
@@ -1845,6 +1869,15 @@ async def _arm_chain(engine: Any) -> None:
         await task
 
 
+def _warned(caplog: pytest.LogCaptureFixture, needle: str) -> bool:
+    """WARNING 以上 **且**訊息含 `needle`(= 分支專屬子字串)。
+
+    只斷 `levelno >= WARNING` 的話,走錯分支(例:被列數門檻先攔下、根本沒到要驗的
+    那段)照樣綠 —— 斷言外觀與真正要驗的分支完全同形(review round-3 CR-1)。
+    """
+    return any(r.levelno >= logging.WARNING and needle in r.getMessage() for r in caplog.records)
+
+
 async def _ready_engine(tmp_path: Path) -> Any:
     """chain 表就緒 + 跑完一輪家數的引擎(rotation 掛點的前置)。"""
     engine, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
@@ -1854,7 +1887,9 @@ async def _ready_engine(tmp_path: Path) -> Any:
 
 
 class TestChainCache:
-    async def test_start_loads_expired_cache_without_network(self, tmp_path: Path) -> None:
+    async def test_start_loads_expired_cache_without_network(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         """start() 讀本地 chain 快取 —— **過期也先用**(stale 勝於無),且零網路 IO。
 
         過期就不載入的話,冷啟動到首次刷新完成之間類股面板整片空白,而那段空白與
@@ -1872,7 +1907,9 @@ class TestChainCache:
         finally:
             await engine.close()
 
-    async def test_fresh_cache_within_ttl_not_refetched(self, tmp_path: Path) -> None:
+    async def test_fresh_cache_within_ttl_not_refetched(
+        self, tmp_path: Path, small_chain: None
+    ) -> None:
         """TTL(7 天)內不重打:chain 是一天最多幾次的重表,不該跟著 poll 節奏走。"""
         save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), _time.time())
         chain = FakeFetch(list(_CHAIN_ROWS))
@@ -1945,13 +1982,17 @@ class TestChainCache:
         assert chain.calls == 2
 
     async def test_empty_parse_keeps_old_map_and_file(
-        self, tmp_path: Path, mono: FakeMono
+        self, tmp_path: Path, mono: FakeMono, small_chain: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         """取數成功但 parse 後為空 → **不換表、不落檔、不刷時戳**,rotation 仍有值(R6)。
 
         欄位語意變更(或上游回一份殘表)時 `rows_to_chain_map` 會整份丟成空 dict:
         照樣換表的話,一份可用的舊快取會被空表覆寫**並固化到磁碟**,重啟後連 stale
         的類股資料都沒有,而畫面上只是「類股資料未就緒」零錯誤訊號。
+
+        `small_chain` 不可省:1 列的 fake 回應會被列數門檻先攔下,那條截斷路徑的外觀
+        (不換表 / 不落檔 / 退避)與本案完全同形 → 少掛 fixture 就變成 vacuous test。
+        訊息子字串斷言同理(review round-3 CR-1)。
         """
         save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
         before = _chain_file(tmp_path).read_text(encoding="utf-8")
@@ -1959,12 +2000,14 @@ class TestChainCache:
         engine, *_ = _make(tmp_path, chain=chain)
         engine._restore_chain()
 
-        await _arm_chain(engine)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
 
         assert chain.calls == 1
         assert engine._chain_map == _CHAIN_MAP
         assert engine._chain_fetched_at == 0.0
         assert _chain_file(tmp_path).read_text(encoding="utf-8") == before
+        assert _warned(caplog, "解析後為空")
 
         mono.advance(be._MAP_RETRY_SECS - 1.0)
         await _arm_chain(engine)
@@ -1982,8 +2025,15 @@ class TestChainCache:
         殘表釘進 7 天 TTL 的磁碟快取,重啟後 restore 回同一份 —— 畫面上只是「那些
         股票的產業歸類消失、類股強弱少幾個業別」,零錯誤訊號(連板路的
         `_DAILY_MIN_ROWS` 同一道防線)。
+
+        本案**刻意不掛 `small_chain`**(真常數取值就是它要驗的東西)→ 舊快取也得墊到
+        門檻之上,否則 `_restore_chain` 的同一道門檻會先把它擋掉(round-3 CR-3)。
         """
-        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        cached = list(_CHAIN_ROWS) + [
+            {"stock_id": f"{5000 + i}", "industry": "填充", "sub_industry": "墊列"}
+            for i in range(CHAIN_MIN_ROWS - len(_CHAIN_ROWS))
+        ]
+        save_chain(_chain_file(tmp_path), cached, 0.0)
         before = _chain_file(tmp_path).read_text(encoding="utf-8")
         truncated = [
             {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "晶圓代工"}
@@ -1992,29 +2042,34 @@ class TestChainCache:
         chain = FakeFetch(truncated)
         engine, *_ = _make(tmp_path, chain=chain)
         engine._restore_chain()
+        restored = dict(engine._chain_map)
+        assert restored  # 前置:舊表真的在
 
         with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
             await _arm_chain(engine)
 
         assert chain.calls == 1
-        assert engine._chain_map == _CHAIN_MAP  # 舊表原封不動
+        assert engine._chain_map == restored  # 舊表原封不動
         assert engine._chain_fetched_at == 0.0
         assert _chain_file(tmp_path).read_text(encoding="utf-8") == before
         assert engine._chain_retry_at is not None
-        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+        assert _warned(caplog, "視同取數失敗")
 
         mono.advance(be._MAP_RETRY_SECS - 1.0)
         await _arm_chain(engine)
         assert chain.calls == 1  # 退避中不重打
 
     async def test_parse_crash_keeps_old_map_and_backs_off(
-        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, mono: FakeMono, small_chain: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         """parse 炸掉(髒值打穿 `rows_to_chain_map`)→ 沿用舊表 + 退避,不外拋(review S-3)。
 
         `_refresh_chain` 是 fire-and-forget task 的身體:逃出去的例外只會變成 asyncio
         的「Task exception was never retrieved」,而 `_chain_retry_at` 沒設 → 下一圈
         立刻重武裝、以 poll 節奏(10s)對著壞上游重打,類股面板停在舊表上零錯誤訊號。
+
+        `small_chain` 不可省:1 列的 fake 回應會被列數門檻先攔下 → parse 根本沒被呼叫,
+        而截斷路徑的外觀(沿用舊表 / 退避 / 有 WARNING)與本案完全同形(round-3 CR-1)。
         """
         save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
         # 形狀合法(是 dict)但 industry 不可雜湊 → setdefault 當場 TypeError
@@ -2029,14 +2084,14 @@ class TestChainCache:
         assert engine._chain_map == _CHAIN_MAP  # 舊表原封不動
         assert engine._chain_fetched_at == 0.0
         assert engine._chain_retry_at is not None
-        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+        assert _warned(caplog, "解析 / 落檔失敗")
 
         mono.advance(be._MAP_RETRY_SECS - 1.0)
         await _arm_chain(engine)
         assert chain.calls == 1  # 退避中不重打
 
     async def test_restore_parse_crash_treated_as_no_cache(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, small_chain: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         """快取檔 parse 炸 → 當作沒有快取(**不得外拋**:`_restore_chain` 在 boot 路徑)。
 
@@ -2054,7 +2109,32 @@ class TestChainCache:
 
         assert engine._chain_map == {}
         assert engine._chain_fetched_at is None  # 視同無快取 → 下一圈立刻武裝
-        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+        assert _warned(caplog, "快取解析失敗")
+
+    async def test_restore_truncated_cache_treated_as_no_cache(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """快取檔列數低於門檻 → 視同無快取(review round-3 CR-3)。
+
+        `_refresh_chain` 的門檻只擋得住「這一次取到殘表」,擋不住「門檻之前的版本
+        落下的殘表」:restore 照收的話那份殘表帶著自己的時戳回來,7 天 TTL 內不重取,
+        而少掉的產業歸類在畫面上零錯誤訊號 —— 重啟一次就再續命 7 天。
+        """
+        truncated = [
+            {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "晶圓代工"}
+            for i in range(CHAIN_MIN_ROWS - 1)
+        ]
+        save_chain(_chain_file(tmp_path), truncated, _time.time())
+        engine, *_ = _make(tmp_path, config=BreadthConfig(poll_secs=60.0))
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await engine.start()
+        try:
+            assert engine._chain_map == {}
+            assert engine._chain_fetched_at is None  # 時戳留 None → 下一圈立刻武裝
+            assert _warned(caplog, "快取只有")
+        finally:
+            await engine.close()
 
     async def test_no_chain_fetch_disables_rotation(self, tmp_path: Path) -> None:
         """`chain_fetch=None` = 類股停用:不武裝、rotation 恆 null、members 恆 None。"""
@@ -2279,6 +2359,37 @@ class TestSectorState:
 
         assert engine._rotation is None
         assert any(r.levelno >= logging.ERROR for r in caplog.records)
+
+    async def test_dirty_change_rate_row_does_not_kill_rotation(
+        self, tmp_path: Path, small_chain: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """整日未成交的髒列(`change_rate = "-"`)不得讓類股面板整天未就緒(round-3 CR-2)。
+
+        傘罩(`_recompute_rotation`)是 backstop 不是解法:這種髒列是**持續性**的
+        (那檔一整天都不會成交)→ 每一輪 `sum()` 都炸、rotation 每輪被打成 None、
+        log 每 10s 一則,類股面板整個交易日「未就緒」。清洗必須在餵進
+        `compute_sector_rotation` **之前**做 —— 該模組是 neigui parity 全等搬移,
+        不得在其內加防禦。
+        """
+        rows = _snapshot_rows()
+        for r in rows:
+            if r["stock_id"] == "2330":  # 在 chain_map 內 → 真的會進 `_group_stats`
+                r["change_rate"] = "-"
+        engine, *_ = _make(tmp_path, snapshot=FakeFetch(rows), chain=FakeFetch(list(_CHAIN_ROWS)))
+        await _arm_chain(engine)
+
+        with caplog.at_level(logging.ERROR, logger="copycat.server.breadth_engine"):
+            await engine._run_cycle()
+
+        rotation = engine.sector_state()["rotation"]
+        assert rotation is not None
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []  # 傘罩沒被觸發
+        assert [i["name"] for i in rotation["industries"]] == ["水泥", "半導體"]
+        semi = next(i for i in rotation["industries"] if i["name"] == "半導體")
+        assert semi["members"] == 1  # 髒列跳過(neigui 對 None 的既有語意),6488 照聚合
+        assert semi["avg_change_rate"] == pytest.approx(-10.0)
+        assert semi["vol_ratio"] == pytest.approx(2.0)
+        assert [s["name"] for s in semi["subs"]] == ["矽晶圓"]  # 晶圓代工只有髒列 → 整組略過
 
     async def test_sector_members_known(self, tmp_path: Path, small_chain: None) -> None:
         """成員 drill-down:名稱走 `_name_map`,按 change_rate desc。"""
