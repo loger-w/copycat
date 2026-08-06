@@ -92,12 +92,17 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   cache 鍵複合 code:session;預設 day = 大盤 tab 行為不變)
 │                         #   breadth_engine(FinMind 全市場家數 poller,2026-08-06:10s poll/
 │                         #   盤中窗/當日序列落檔 data/market/、失敗退避;REST /api/market/breadth
-│                         #   + WS /ws/breadth)、breadth_fetch(四支 FinMind dataset 取數 +
+│                         #   + WS /ws/breadth。另掛連板數每日一次的背景 task:06:00 後武裝、
+│                         #   EOD 回看 10 交易日、成果落 streaks-<day>.json、逐日 memo 跨重試
+│                         #   重用;逐檔 rows 走 REST /api/market/breadth/rows,streak 算術
+│                         #   只在該端點)、breadth_fetch(四支 FinMind dataset 取數 +
 │                         #   錯誤分類 quota;第四支 = 單日全市場 EOD,連板數用)、
 │                         #   finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算;tick_size_milli 毫元版)
 ├── market_breadth.py     #   全市場廣度純函式(2026-08-06,零 IO):universe 過濾 / 五桶家數 /
 │                         #   毫元漲跌停判定;neigui 搬移,parity oracle fixture 對照
+├── limit_streaks.py      #   連板數純函式(2026-08-06,零 IO):單日收盤漲停集合 + 逐日交集
+│                         #   遞進;prev_close = close − spread(EOD 無 change_price)
 ├── breadth_config.py     #   家數帶門檻(configs/breadth.json 覆寫:poll 間隔 / 盤中窗 / 退避)
 ├── signals_config.py     #   訊號門檻(configs/signals.json 覆寫;檔缺=全預設、壞檔 raise)
 ├── notify.py             #   Discord webhook 發送層(2026-07-27):notify_discord() keyword-only、
