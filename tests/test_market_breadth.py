@@ -302,11 +302,14 @@ def test_compute_breadth_row_shape() -> None:
         "stock_id": "2330",
         "name": "台積電",
         "market": "twse",
+        "close": 1000.0,
         "change_rate": 1.5,
         "volume_ratio": 1.5,
         "total_amount": 12345,
         "limit_up": False,
         "limit_down": False,
+        "touched_limit_up": False,
+        "touched_limit_down": False,
     }
     assert out["rows"][1]["name"] == "5483"
     assert out["rows"][1]["volume_ratio"] is None
@@ -391,6 +394,135 @@ def test_compute_breadth_no_limit_judgement_when_prev_close_unusable() -> None:
     assert out["twse"] == {"limit_up": 0, "up": 2, "flat": 0, "down": 0, "limit_down": 0}
     assert out["tpex"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 0}
     assert all(not r["limit_up"] and not r["limit_down"] for r in out["rows"])
+
+
+# ---------------------------------------------------------------------------
+# compute_breadth — 觸及未鎖(touched)/ close 直通(R3 漲跌停列表)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_breadth_touched_limit_up_when_high_hits_but_close_backs_off() -> None:
+    # prev = 105.0 − 5.0 = 100.0 元 → 漲停 110.0 元;high 摸到但收 105 → 觸及未鎖
+    rows = [
+        {
+            "stock_id": "2330",
+            "change_rate": 5.0,
+            "close": 105.0,
+            "change_price": 5.0,
+            "high": 110.0,
+            "low": 104.0,
+        }
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["touched_limit_up"] is True
+    assert out["rows"][0]["touched_limit_down"] is False
+    assert out["rows"][0]["limit_up"] is False
+    # 家數桶不受 touched 影響(觸及未鎖仍是「上漲」)
+    assert out["twse"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 0}
+
+
+def test_compute_breadth_touched_limit_down_when_low_hits_but_close_backs_off() -> None:
+    # prev = 95.0 + 5.0 = 100.0 元 → 跌停 90.0 元;low 摜到但收 95 → 觸及未鎖
+    rows = [
+        {
+            "stock_id": "6488",
+            "change_rate": -5.0,
+            "close": 95.0,
+            "change_price": -5.0,
+            "high": 99.0,
+            "low": 90.0,
+        }
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["touched_limit_down"] is True
+    assert out["rows"][0]["touched_limit_up"] is False
+    assert out["rows"][0]["limit_down"] is False
+
+
+def test_compute_breadth_touched_is_false_when_already_locked() -> None:
+    """已鎖停板的列不重複算「觸及未鎖」—— 前端狀態歸屬才不會兩個 badge 打架。"""
+    rows = [
+        {
+            "stock_id": "2330",
+            "change_rate": 10.0,
+            "close": 110.0,
+            "change_price": 10.0,
+            "high": 110.0,
+            "low": 105.0,
+        },
+        {
+            "stock_id": "6488",
+            "change_rate": -10.0,
+            "close": 90.0,
+            "change_price": -10.0,
+            "high": 95.0,
+            "low": 90.0,
+        },
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["limit_up"] is True
+    assert out["rows"][0]["touched_limit_up"] is False
+    assert out["rows"][1]["limit_down"] is True
+    assert out["rows"][1]["touched_limit_down"] is False
+
+
+def test_compute_breadth_touched_false_when_high_low_missing() -> None:
+    """舊 fixture / 剪裁快照無 high/low → 兩向皆 False(不得炸,也不得亂猜)。"""
+    rows = [{"stock_id": "2330", "change_rate": 5.0, "close": 105.0, "change_price": 5.0}]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["touched_limit_up"] is False
+    assert out["rows"][0]["touched_limit_down"] is False
+
+
+def test_compute_breadth_touched_needs_exact_milli_equality() -> None:
+    # 漲停 110.0 元;high 109.5(一個整 tick 500 毫之下)→ 不算觸及
+    rows = [
+        {
+            "stock_id": "2330",
+            "change_rate": 5.0,
+            "close": 105.0,
+            "change_price": 5.0,
+            "high": 109.5,
+            "low": 104.0,
+        }
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["touched_limit_up"] is False
+
+
+def test_compute_breadth_touched_false_when_prev_close_unusable() -> None:
+    """前收不可用(change_price 缺)→ 無漲跌停價可比,touched 一律 False。"""
+    rows = [
+        {
+            "stock_id": "2330",
+            "change_rate": 5.0,
+            "close": 105.0,
+            "change_price": None,
+            "high": 110.0,
+            "low": 90.0,
+        }
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["touched_limit_up"] is False
+    assert out["rows"][0]["touched_limit_down"] is False
+
+
+def test_compute_breadth_close_passes_through_including_none() -> None:
+    """`close` 直通 snapshot 原值(前端現價欄);缺值列不得補 0 假裝有價。"""
+    rows = [
+        {"stock_id": "2330", "change_rate": 1.5, "close": 105.0, "change_price": 5.0},
+        {"stock_id": "6488", "change_rate": 1.5, "close": None, "change_price": 5.0},
+    ]
+    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
+    assert out is not None
+    assert out["rows"][0]["close"] == 105.0
+    assert out["rows"][1]["close"] is None
 
 
 # ---------------------------------------------------------------------------
