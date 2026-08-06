@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStockStream } from "@/hooks/useStockStream";
 import { onSignal, onWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
+import type { StkfutSelection } from "@/lib/stkfut";
 
 class FakeWS {
   static instances: FakeWS[] = [];
@@ -232,13 +233,13 @@ describe("useStockStream", () => {
 //   需要股號才驗得了「這個合約屬於這檔股票」),合約走 query string;
 //   WS 比對鍵**恆為 instrument key**(後端推播的 `code` 欄在期貨態是 `F:<prod>:<ym>`)。
 describe("useStockStream(合約態:instrument key vs REST 路徑)", () => {
-  const C9 = { prod: "CDF", ym: "202609", mini: false };
+  const C9 = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
   const FUT_KEY = "F:CDF:202609";
   const FT = (seq: number, code: string) => ({
     type: "tick", code, t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq,
   });
 
-  type Sel = { prod: string; ym: string; mini: boolean } | null;
+  type Sel = StkfutSelection | null;
 
   function stateUrls(): string[] {
     return fetchMock.mock.calls
@@ -272,7 +273,7 @@ describe("useStockStream(合約態:instrument key vs REST 路徑)", () => {
   it("切合約不重建 WS,只以新合約重抓 snapshot", async () => {
     const { hook } = await setupFut();
     expect(FakeWS.instances.length).toBe(1);
-    hook.rerender({ c: { prod: "CDF", ym: "202610", mini: false } });
+    hook.rerender({ c: { prod: "CDF", ym: "202610", mini: false, unit: 2000 } });
     await waitFor(() =>
       expect(stateUrls().some((u) => u.endsWith("?contract=CDF:202610"))).toBe(true),
     );
@@ -309,5 +310,44 @@ describe("useStockStream(合約態:instrument key vs REST 路徑)", () => {
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: FUT_KEY }));
     act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
     await waitFor(() => expect(stateUrls().length).toBeGreaterThan(before));
+  });
+
+  // 🔴 code review A2:合約訂上了但 TC4 零推播(過期月 / 不存在的 symbol —— TC4 對它們
+  // 照回 `Success: OK`)。engine 的 `_handle_no_data` 對任何 code 都發 `watchlist_quote`,
+  // 而側欄只認自選碼 → 沒有這條的話畫面就是一張永遠空著的圖:snapshot 是 set_main 當下
+  // 取的(TC4 還沒回答),之後再也沒有東西會把 noData 帶進來。
+  it("合約主圖收到自己的 no_data quote → accum.noData 轉真(畫面才印得出「無資料」)", async () => {
+    const { hook, ws } = await setupFut();
+    expect(hook.result.current.accum?.noData).toBe(false);
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: FUT_KEY,
+        p: null, chg_pct: null, vol: null, ref: null, no_data: true,
+      }),
+    );
+    expect(hook.result.current.accum?.noData).toBe(true);
+  });
+
+  it("他檔的 no_data quote 不影響主圖(側欄那格照收)", async () => {
+    const { hook, ws } = await setupFut();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "9999",
+        p: null, chg_pct: null, vol: null, no_data: true,
+      }),
+    );
+    expect(hook.result.current.watchlist["9999"]?.no_data).toBe(true);
+    expect(hook.result.current.accum?.noData).toBe(false);
+  });
+
+  it("現貨主圖同理(這條路不是期貨態專屬)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: null, chg_pct: null, vol: null, no_data: true,
+      }),
+    );
+    expect(hook.result.current.accum?.noData).toBe(true);
   });
 });

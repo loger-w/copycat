@@ -4,7 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
-import { buildIntradayGeometry, lastPoint, R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
+import {
+  buildIntradayGeometry,
+  lastPoint,
+  minuteToX,
+  R_AXIS_W,
+  SPOT_WINDOW,
+  STKFUT_WINDOW,
+  Y_AXIS_W,
+} from "@/lib/stock-intraday-svg";
 import { VP_FILL_OPACITY } from "@/lib/volume-profile";
 import { wrap } from "@/test-utils";
 
@@ -1101,8 +1109,10 @@ describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
     meta: { name: "台積電期", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
   });
 
-  /** 量副圖 viewBox 寬固定 800 → 繪圖區 800 − Y_AXIS_W − R_AXIS_W = 724 */
-  const SUB_PLOT_W = 800 - Y_AXIS_W - R_AXIS_W;
+  /** 兩張 svg 的 viewBox 寬固定 800(高度才是隨可用空間變的那一維) */
+  const MAIN_VB_W = 800;
+  /** 量副圖繪圖區 800 − Y_AXIS_W − R_AXIS_W = 724 */
+  const SUB_PLOT_W = MAIN_VB_W - Y_AXIS_W - R_AXIS_W;
 
   function urls(): string[] {
     return (globalThis.fetch as unknown as Mock).mock.calls.map((c) => String(c[0]));
@@ -1122,6 +1132,53 @@ describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
     // 對照組:同一份 accum 不給 stkfut → 08:45 與 13:40 被現貨窗濾掉
     const spot = wrap(<StockIntradayChart accum={FUT} />);
     expect(energyBars(spot.container).length).toBe(1);
+  });
+
+  // 🔴 code review B1(P1):量柱數與寬只驗到「窗有換」的兩個副作用 —— 而 x 軸本身
+  // (時間標與整點格線的座標)沒有任何斷言。`minuteToX` 若漏傳 `xw` 就會退回現貨窗:
+  // 量柱照樣三根、寬照樣 300 分母(那兩處各自傳對了),但線與刻度整體左右錯位 ——
+  // 09:00 的標籤會落在 08:45 的位置,而畫面「看起來完全正常」。
+  it("x 軸:09:00 時間標的座標吃期貨窗(現貨窗對照組不同值)", () => {
+    const labelX = () => Number(screen.getByText("09:00", { selector: "text" }).getAttribute("x"));
+    const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
+    const futX = labelX();
+    // +2 = 標籤相對格線的左偏移(元件內同一處計算)
+    expect(futX).toBeCloseTo(minuteToX(540, MAIN_VB_W, STKFUT_WINDOW) + 2, 6);
+    fut.unmount();
+    cleanup();
+    wrap(<StockIntradayChart accum={FUT} />);
+    const spotX = labelX();
+    expect(spotX).toBeCloseTo(minuteToX(540, MAIN_VB_W, SPOT_WINDOW) + 2, 6);
+    // 兩窗的 09:00 不在同一個位置 —— 相等就代表 xw 根本沒傳進去
+    expect(futX).not.toBeCloseTo(spotX, 1);
+  });
+
+  it("x 軸:整點格線與其時間標同源(逐個整點比對,期貨窗 09:00–13:00)", () => {
+    const { container } = wrap(<StockIntradayChart accum={FUT} stkfut />);
+    const main = [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )!;
+    const labels = [...main.querySelectorAll("text")].filter((t) =>
+      /^\d{2}:00$/.test(t.textContent ?? ""),
+    );
+    expect(labels.map((t) => t.textContent)).toEqual([
+      "09:00",
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00",
+    ]);
+    for (const t of labels) {
+      const minute = Number(t.textContent!.slice(0, 2)) * 60;
+      const gx = minuteToX(minute, MAIN_VB_W, STKFUT_WINDOW);
+      expect(Number(t.getAttribute("x"))).toBeCloseTo(gx + 2, 6);
+      // 同一個 x 上要有一條垂直格線(標籤與線分開算的話會靜默錯開)
+      const line = [...main.querySelectorAll("line")].find(
+        (l) => Math.abs(Number(l.getAttribute("x1")) - gx) < 1e-6 &&
+          l.getAttribute("x1") === l.getAttribute("x2"),
+      );
+      expect(line).toBeTruthy();
+    }
   });
 
   it("量柱寬分母 = 300 分鐘(現貨為 270)", () => {

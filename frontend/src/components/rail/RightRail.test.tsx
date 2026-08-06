@@ -49,7 +49,7 @@ const STOCK_CTX: RailContext = {
 /** 個股期態:`code` 仍是股號(點價 gate 依賴),合約走獨立欄(stkfut-contracts R4) */
 const STKFUT_CTX: RailContext = {
   ...STOCK_CTX,
-  contract: { prod: "CDF", ym: "202609", mini: false },
+  contract: { prod: "CDF", ym: "202609", mini: false, unit: 2000 },
 };
 const FUT_CTX: RailContext = {
   kind: "futures",
@@ -364,7 +364,11 @@ describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
     expect(close.getAttribute("title")).toBe("無行情估價");
   });
 
-  it("現貨態武裝後切到合約 → 武裝不殘留(R2-5)", async () => {
+  // ⚠ 這條**不是** R2-5(instrumentKey 解除鍵)的鎖:現貨 → 合約會把 PriceLadder 換成
+  // StkfutLadder,元件不同 = 必然重新掛載,武裝鈕本來就回到未武裝 —— 就算解除鍵寫成
+  // `code` 它照樣綠(code review B5)。R2-5 的真鎖是 StkfutLadder.test.tsx「武裝解除鍵 =
+  // instrumentKey」那兩條(同一個元件實例內換月份 / 換產品腿)。留著它是整合面的煙霧測試。
+  it("現貨態切到合約 → 閃電梯換成合約梯且未武裝(整合面煙霧測試,非 R2-5 鎖)", async () => {
     const { rerender } = render(rail(STOCK_CTX));
     fireEvent.click(screen.getByRole("button", { name: "武裝" }));
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
@@ -374,6 +378,90 @@ describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
         "false",
       ),
     );
+    expect(screen.getByLabelText("口數")).toBeTruthy(); // 真的換成合約梯了
+  });
+});
+
+// 🔴 code review A5:個股期口數改 per instrument key。標準檔 2,000 股與小型檔 100 股
+// 差 20 倍 —— 共用一格的話「在小型上按 20 口再切回標準」直接送出 20 倍規模的單,而那個
+// 數字本來就是使用者自己按的,畫面上沒有任何異狀。
+describe("RightRail 個股期口數不跨合約(A5)", () => {
+  const MINI_CTX: RailContext = {
+    ...STOCK_CTX,
+    contract: { prod: "QFF", ym: "202609", mini: true, unit: 100 },
+  };
+  const NEXT_MONTH_CTX: RailContext = {
+    ...STOCK_CTX,
+    contract: { prod: "CDF", ym: "202610", mini: false, unit: 2000 },
+  };
+
+  function qty(): string {
+    return (screen.getByLabelText("口數") as HTMLInputElement).value;
+  }
+
+  it("換產品腿(標準 ↔ 小型)口數回初值,切回時各自記得自己那格", () => {
+    const { rerender } = render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(qty()).toBe("5");
+    rerender(rail(MINI_CTX));
+    expect(qty()).toBe("1"); // 小型那格是新的
+    fireEvent.click(screen.getByRole("button", { name: "10" }));
+    expect(qty()).toBe("10");
+    rerender(rail(STKFUT_CTX));
+    expect(qty()).toBe("5"); // 標準那格原樣還在
+  });
+
+  it("換月份(同產品腿)同樣各自一格", () => {
+    const { rerender } = render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    rerender(rail(NEXT_MONTH_CTX));
+    expect(qty()).toBe("1");
+  });
+
+  it("切 rail tab 仍不重置(R2-10 既有行為不因分槽而破)", () => {
+    render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+    expect(qty()).toBe("5");
+  });
+});
+
+// 🔴 code review A7a:置中請求的清除判準改 instrumentKey,且改在 render 期間清。
+// 舊碼判準是 `stockCode` —— 合約 ↔ 現貨之間它完全不變(D5:code 恆是股號)→ cleanup
+// 不觸發、舊的置中請求活著;而那一步正好會把 StkfutLadder 換成 PriceLadder(元件不同 =
+// 真的重新掛載),新掛載的現股梯立刻吃到一個屬於合約價帶的舊請求 → 開頁就捲到別的價位
+// 並關掉跟隨,零錯誤訊號。(只把 instrumentKey 加進 deps 不夠 —— destroy 裡的 setState
+// 贏不了同一個 commit 內的子元件掛載,見元件內註解。)
+describe("RightRail 置中請求不跨 instrument(A7a)", () => {
+  function clickPrice(): void {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("stock-price-click", {
+          detail: { priceMilli: 100_500, side: "ask", code: "2330" },
+        }),
+      );
+    });
+  }
+
+  const follow = () =>
+    screen.getByRole("button", { name: "跟隨置中" }).getAttribute("aria-pressed");
+
+  it("合約態點價置中後切回現貨 → 現股梯掛載時跟隨仍開啟(舊請求已清)", async () => {
+    const { rerender } = render(rail(STKFUT_CTX));
+    clickPrice();
+    await waitFor(() => expect(follow()).toBe("false"));
+    rerender(rail(STOCK_CTX)); // 同一個股號、換回現貨 → 舊 deps 認不出這是換標的
+    expect(screen.getByLabelText("交易別")).toBeTruthy(); // 前提:真的換成現股梯了
+    await waitFor(() => expect(follow()).toBe("true"));
+  });
+
+  it("同 instrument re-render 不清(否則每則報價都會把使用者捲回現價)", async () => {
+    const { rerender } = render(rail(STKFUT_CTX));
+    clickPrice();
+    await waitFor(() => expect(follow()).toBe("false"));
+    rerender(rail({ ...STKFUT_CTX, last: { p: 100_500, t: "09:11:00.000", cum_vol: 6 } }));
+    expect(follow()).toBe("false");
   });
 });
 

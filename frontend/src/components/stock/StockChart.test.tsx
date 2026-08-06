@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockChart } from "@/components/stock/StockChart";
@@ -351,5 +352,75 @@ describe("StockChart 期貨態(D10/R5)", () => {
     chart();
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
     expect(barsUrls.length).toBeGreaterThan(0);
+  });
+});
+
+// 🔴 code review A6:切回現貨要**還原**進期貨前的現貨模式。
+// 「不寫回 localStorage」只保住了「重開瀏覽器後偏好還在」;同一個 session 內 `mode`
+// state 已經被收斂成 intraday,切回現貨時沒有人會把存檔讀回來 —— 使用者的體感是
+// 「進了一次合約,我的日 K 就沒了」,而且每切一次合約就要重按一次。
+describe("StockChart 現貨模式還原(A6)", () => {
+  const CONTRACT = { prod: "CDF", ym: "202609" };
+
+  /** 進出合約要在**同一個元件實例**上驗(重掛載會讓 ref 歸零 = 測不到還原)。
+   *  不能用 `wrap` 的 rerender:那會把 QueryClientProvider 一起換掉(StockPage.test 同註),
+   *  所以這裡自己持有 client 並讓每次 rerender 都帶著同一個 provider。 */
+  function mount() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (contract: { prod: string; ym: string } | null) => (
+      <QueryClientProvider client={client}>
+        <StockChart accum={ACCUM} code="2330" contract={contract} />
+      </QueryClientProvider>
+    );
+    const view = render(tree(null));
+    return { setContract: (c: typeof CONTRACT | null) => view.rerender(tree(c)) };
+  }
+
+  const pressed = (name: string) =>
+    screen.getByRole("button", { name }).getAttribute("aria-pressed");
+
+  it("現貨日K → 進合約(收斂江波圖)→ 切回現貨:回到日K", async () => {
+    const { setContract } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+
+    setContract(CONTRACT);
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+
+    setContract(null);
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+    expect(pressed("日K")).toBe("true");
+  });
+
+  it("分K 也還原(還原的是「進去前那一個」,不是寫死日K)", async () => {
+    const { setContract } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+    setContract(CONTRACT);
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    setContract(null);
+    await waitFor(() => expect(pressed("7分K")).toBe("true"));
+  });
+
+  it("本來就停在江波圖 → 切回現貨仍是江波圖(不憑空跳成 K 線)", async () => {
+    const { setContract } = mount();
+    expect(pressed("江波圖")).toBe("true");
+    setContract(CONTRACT);
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    setContract(null);
+    expect(pressed("江波圖")).toBe("true");
+    expect(screen.queryByLabelText("K 線圖")).toBeNull();
+  });
+
+  it("還原只做一次:切回現貨後手動改模式,不會被舊值再蓋一次", async () => {
+    const { setContract } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+    setContract(CONTRACT);
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    setContract(null);
+    await waitFor(() => expect(pressed("日K")).toBe("true"));
+    fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
+    expect(pressed("江波圖")).toBe("true");
   });
 });

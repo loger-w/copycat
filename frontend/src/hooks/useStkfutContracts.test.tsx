@@ -13,8 +13,8 @@ import { useStkfutContracts } from "@/hooks/useStkfutContracts";
 const BODY = {
   code: "2330",
   name: "台積電",
-  std: { prod: "CDF", contracts: ["202608", "202609"] },
-  mini: { prod: "QFF", contracts: ["202608", "202609"] },
+  std: { prod: "CDF", contracts: ["202608", "202609"], unit: 2000 },
+  mini: { prod: "QFF", contracts: ["202608", "202609"], unit: 100 },
 };
 
 let fetchMock: ReturnType<typeof vi.fn>;
