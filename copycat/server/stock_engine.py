@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 from typing import AsyncGenerator, Callable, Protocol
 
@@ -52,6 +53,15 @@ _FUT_SESSION_END = "13:45"
 def _in_futures_session(time_taipei: str) -> bool:
     """台北 HH:MM:SS.fff 是否落在個股期日盤窗(兩端含)。"""
     return _FUT_SESSION_START <= time_taipei[:5] <= _FUT_SESSION_END
+
+
+def _now_taipei_hhmm() -> str:
+    """本機時鐘的台北 `HH:MM`(部署綁本機 = 台北,同 `stkfut_catalog._today` 慣例)。
+
+    純簿更新(`TradeQuantity=0`)解不出 tick,窗判準只剩本機時鐘 —— 而個股期夜盤
+    大部分時間**只有簿在動**,不判就等於整夜的五檔覆蓋日盤收盤簿。
+    """
+    return f"{_dt.datetime.now():%H:%M}"
 
 
 def _round_robin(items: list[str], round_no: int) -> list[str]:
@@ -340,6 +350,15 @@ class StockEngine:
             if old is not None:
                 await asyncio.to_thread(self._release, old, "main")
                 await asyncio.to_thread(self._release_stkfut, old)  # CR3:UNSUB 不佔 loop
+                if old not in self._refs:
+                    # **真正退訂了才**清「無資料」旗標(code review A7d,同 set_watchlist
+                    # 移除檔的既有處理)。留著的話下次切回那一檔,畫面在任何新推播之前
+                    # 就先掛上「無資料」—— 而那是上一輪訂閱期的答案,重新訂閱後 TC4 若
+                    # 這次有推,旗標也要等到推播到達那一刻才會被清掉。
+                    # 還有 owner(例:仍在自選)時**不清**:那格旗標歸側欄不歸主圖,
+                    # 無條件清會讓側欄的「無資料」在使用者點開再切走之後永久消失
+                    # (TC4 的 no-data 回呼只在訂閱當下發一次)。
+                    self._no_data.discard(old)
             if not is_futures_key(key):
                 await self._acquire_stkfut(key)
             self._enqueue_backfill(key)
@@ -716,10 +735,21 @@ class StockEngine:
         if state is None:
             return
         tick, book, meta = parse_stock_realtime(quote, trial_windows=trial_windows_for(code))
-        if tick is not None and is_futures_key(code) and not _in_futures_session(tick.time):
-            # 夜盤 tick 不進當日狀態(D14b);丟棄而不是照收 —— 前端 x 軸窗是
-            # 08:45–13:45,收下之後那些成交沒有位置可畫,卻會推進 seq 與 VWAP
-            tick = None
+        if is_futures_key(code) and not _in_futures_session(
+            tick.time if tick is not None else _now_taipei_hhmm()
+        ):
+            # 夜盤**整則**早退(D14b + code review A1):tick / book / meta 全擋。
+            #
+            # 只丟 tick 的舊寫法擋不住另外兩條:夜盤的五檔會蓋掉日盤收盤簿(閃電梯與
+            # 五檔整晚跟著夜盤跳,而分時圖與 seq 都不動 → 目視像「還在盤中」)、夜盤的
+            # 參考價 / 漲跌停會寫進 meta(隔天早上開盤前拿它算漲跌幅與亮燈)。兩者都
+            # 沒有任何錯誤訊號。前端 x 軸窗是 08:45–13:45,收下的夜盤資料本來就沒有
+            # 位置可畫。
+            #
+            # **窗判準的取捨**:有 tick 就用 tick 時刻(TC4 時戳,權威);純簿更新
+            # (`TradeQuantity=0`)沒有時刻欄可用,只能退到本機時鐘。代價是窗邊界前後
+            # 幾秒可能誤判一兩則簿更新 —— 相對於「整夜的簿覆蓋日盤簿」,這是划算的。
+            return
         # 「無資料」復原:**命中才推**。寫成無條件 discard + publish 會變成每 tick 廣播,
         # 直接打穿 1s 節流(W-17)。
         recovered = code in self._no_data

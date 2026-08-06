@@ -72,7 +72,10 @@ class TestContractsRoute:
         body = r.json()
         assert body["code"] == "2330"
         assert body["name"] == "台積電"
-        assert body["std"] == {"prod": "CDF", "contracts": ["202608", "202609"]}
+        # `unit` 是 code review B2 新增的欄(值由版控對映檔決定,見 TestContractUnits);
+        # 這條只鎖既有兩鍵不因此改形
+        assert body["std"]["prod"] == "CDF"
+        assert body["std"]["contracts"] == ["202608", "202609"]
         assert body["mini"]["prod"] == "QFF"
 
     def test_no_futures_404(self, tmp_path: Path) -> None:

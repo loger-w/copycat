@@ -53,6 +53,20 @@ class StkfutCatalog:
             logger.info("stkfut catalog 更新:%d 檔(%s)", len(data), day)
             return data
 
+    async def prewarm(self) -> None:
+        """boot 尾段預熱(code review A3):把冷查詢移出盤中熱路徑。
+
+        冷 cache 的第一次 `QUERYALLINSTRUMENT(Fut2)` 是**秒級且持鎖**(Opt 實測 1.93s)
+        —— 沒有預熱的話,開盤第一個打開合約下拉的請求要等它,而那正是最不能等的時刻。
+
+        **失敗只 log 不拋**:TC4 沒開的早上照樣要開得起來(同 `_boot` 的降級語意),
+        代價僅是退回「第一次請求時再查」的既有行為。
+        """
+        try:
+            await self._load()
+        except Exception:
+            logger.warning("stkfut catalog 預熱失敗(降級:第一次請求時再查)", exc_info=True)
+
     async def get(self, code: str) -> dict | None:
         """股號 → `{name, std, mini}`;無期貨 → None。查詢失敗原樣拋(route 轉 502)。"""
         return (await self._load()).get(code)

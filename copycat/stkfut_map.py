@@ -32,8 +32,14 @@ _TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 #: prod → {unit, kind, code} 的反向索引(process 級 lazy cache,per path)。
-#: 送單熱路徑上每筆都重讀 270 檔 JSON 是無謂 IO;`write_map` 會作廢對應路徑。
-_INDEX_CACHE: dict[Path, dict[str, dict]] = {}
+#: 送單熱路徑上每筆都重讀 270 檔 JSON 是無謂 IO。
+#:
+#: 值帶檔案 stat 簽章(mtime_ns, size):`refresh-stkfut-map` 一般是**另一個 process**
+#: 跑的 CLI,跑著的 server 不會經過 `write_map` 的作廢點,只以 path 為鍵的話會抱著
+#: 開機那份對映到重啟為止 —— 失效樣態是新上市個股期送單被 `unknown product
+#: multiplier` 拒單,而對映檔明明已經更新了(A4)。
+#: 用 `mtime_ns` 不是 `mtime`:同秒重寫在秒解析度下看起來沒變(pyc 同秒陷阱同款成因)。
+_INDEX_CACHE: dict[Path, tuple[tuple[int, int], dict[str, dict]]] = {}
 
 
 def _text(cell: str) -> str:
@@ -123,13 +129,26 @@ def write_map(path: Path, mapping: dict[str, dict]) -> None:
             sort_keys=True,
         ),
     )
-    _INDEX_CACHE.pop(path, None)  # refresh 之後同 process 必須看得到新表
+    # 同 process refresh 的顯式作廢。stat 簽章已能涵蓋這條,留著是因為 atomic_write_text
+    # 走 replace,理論上可能落在同一個 mtime_ns 且大小相同(同內容重寫)—— 那時新舊表
+    # 本來就相同,但顯式 pop 讓「本 process 剛寫過」不必依賴檔案系統的時間解析度。
+    _INDEX_CACHE.pop(path, None)
+
+
+def _stat_sig(path: Path) -> tuple[int, int]:
+    """檔案簽章(mtime_ns, size);檔不存在 → `(-1, -1)`(與任何真檔互異)。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return (-1, -1)
+    return (st.st_mtime_ns, st.st_size)
 
 
 def _product_index(path: Path) -> dict[str, dict]:
+    sig = _stat_sig(path)
     cached = _INDEX_CACHE.get(path)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] == sig:
+        return cached[1]
     index: dict[str, dict] = {}
     for code, entry in load_map(path).items():
         prod = entry.get("prod")
@@ -138,7 +157,7 @@ def _product_index(path: Path) -> dict[str, dict]:
         mini = entry.get("mini")
         if isinstance(mini, dict) and isinstance(mini.get("prod"), str):
             index[mini["prod"]] = {"unit": mini.get("unit", 0), "kind": "mini", "code": code}
-    _INDEX_CACHE[path] = index
+    _INDEX_CACHE[path] = (sig, index)
     return index
 
 

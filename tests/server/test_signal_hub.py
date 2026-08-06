@@ -414,6 +414,34 @@ class TestMembership:
         finally:
             await h.hub.close()
 
+    async def test_contract_instrument_key_emits_nothing(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """code review B7:個股期合約主圖的推播不得產出訊號 —— 即使它的標的股在自選裡。
+
+        engine 的訊號掛點是**逐 instrument key** 的(`_handle_quote` 不分現貨 / 合約),
+        擋在這裡的只有 membership gate。合約鍵永遠不可能進 `_watch`(自選存的是股號),
+        所以這條是結構不變量;把它釘住是因為破壞它的改動長得很無害 —— 有人把合約鍵
+        「正規化」回標的股號,訊號就會拿期貨價去比現貨的 CDP 線,而畫面上只是多了
+        幾則看起來很合理的假訊號。
+        """
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.lock_up(_state(upper=110_000, locked_up=True), code="F:CDF:202609")
+            h.hub.on_book("F:CDF:202609", _state(upper=110_000))
+            await h.settle()
+            assert h.published == []
+            assert h.rows() == []
+            # 對照組:同一組 tick 走股號就會發 —— 沒有這一半,上面全綠也可能是治具壞了
+            h.lock_up(_state(upper=110_000, locked_up=True))
+            await h.settle()
+            assert [p["code"] for p in h.published] == ["2330"]
+        finally:
+            await h.hub.close()
+
     async def test_removed_code_dropped_and_added_code_gets_basis(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
