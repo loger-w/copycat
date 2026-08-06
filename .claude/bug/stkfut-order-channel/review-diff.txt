@@ -1,0 +1,415 @@
+diff --git a/copycat/capital/client.py b/copycat/capital/client.py
+index 2df23e25..c6572fda 100644
+--- a/copycat/capital/client.py
++++ b/copycat/capital/client.py
+@@ -39,6 +39,7 @@ from copycat.capital.com import CapitalCom
+ from copycat.capital.mapping import (
+     exchange_product_of,
+     future_price_str,
++    is_option_contract,
+     multiplier_of,
+     to_futureorder_fields,
+     to_stockorder_fields,
+@@ -90,9 +91,6 @@ _PENDING_TIMEOUT_S = 8.0
+ # 證券側用 reply.SEC_MARKETS 同一份)
+ _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
+ 
+-# SendFutureOrder 家族;其餘產品(TXO/週選)走 SendOptionOrder
+-_FUTURE_PRODUCTS: frozenset[str] = frozenset({"TXF", "MXF", "TMF"})
+-
+ _WriteReq = (
+     StockOrderRequest
+     | FutureOrderRequest
+@@ -674,8 +672,9 @@ class CapitalClient:
+         fut_account = self._futures_account
+         if gate.allowed and fut_account is None:
+             gate = GateResult(False, "no_futures_account")
+-        # 分流判準:期貨家族 {TXF, MXF, TMF} 走 SendFutureOrder,其餘(TXO/週選)期權面
+-        is_option = exchange_product_of(contract) not in _FUTURE_PRODUCTS
++        # 分流判準收在 mapping(單一定義):指數期貨/個股期走 SendFutureOrder,
++        # 選擇權(TXO/週選)走 SendOptionOrder;未知產品以契約碼結構判別
++        is_option = is_option_contract(contract)
+         # market+ROD → mapping 強制 IOC;升級註記由 client 組進 message(review R6)
+         prefix = (
+             "市價單已升級 IOC;"
+diff --git a/copycat/capital/mapping.py b/copycat/capital/mapping.py
+index cbc04b63..4bae743b 100644
+--- a/copycat/capital/mapping.py
++++ b/copycat/capital/mapping.py
+@@ -42,6 +42,10 @@ _KNOWN_PRODUCTS: tuple[str, ...] = tuple(
+     sorted(set(MULTIPLIERS) | _WEEKLY_50, key=len, reverse=True)
+ )
+ 
++# 選擇權產品(月選 + 週選家族);指數期貨 = 台指/小台/微台三檔
++_OPTION_PRODUCTS: frozenset[str] = frozenset({"TXO"}) | _WEEKLY_50
++_INDEX_FUTURES: frozenset[str] = frozenset({"TXF", "MXF", "TMF"})
++
+ _BUYSELL: dict[BuySell, int] = {"buy": 0, "sell": 1}
+ _SPECIAL: dict[PriceType, int] = {"market": 1, "limit": 2}
+ _TIF: dict[TimeInForce, int] = {"ROD": 0, "IOC": 1, "FOK": 2}
+@@ -102,6 +106,33 @@ def exchange_product_of(contract: str) -> str:
+     return m.group(0)
+ 
+ 
++def is_option_contract(contract: str) -> bool:
++    """期交所契約碼 → 是否為選擇權(送單分流 SendOptionOrder vs SendFutureOrder)。
++
++    「什麼是期貨」只能有一份定義:原本 client 端拿 `not in {TXF, MXF, TMF}` 當判準,
++    預設方向是「未知 → 選擇權」,個股期上線後整條被送進期權面(送單 + 平倉全中)。
++    分類收在這裡,判準逐層收斂:
++
++    1. 已知選擇權產品(月選 TXO ∪ 週選家族)→ True。
++    2. 已知指數期貨({TXF, MXF, TMF})→ False。
++    3. 個股期(`stkfut_map.lookup_product` 查得到,約 270 檔且隨期交所異動)→ False。
++    4. 其餘未知產品走**結構判別**:選擇權契約碼必含履約價數字(TXO20000I6),
++       契約本體(去尾 2 碼月碼+年碼)純字母則是期貨形(SXFI6 費半、海外期貨平倉)。
++
++    未知產品的預設方向由結構決定而非白名單,是因為白名單註定追不上上架節奏 ——
++    個股期就是這樣漏掉的。這個預設安全:選擇權路徑的契約碼一律由 `to_exchange_symbol`
++    的 TC.O 分支產出,必然帶履約價數字,不會落到「純字母 → 期貨」那側。
++    """
++    prod = exchange_product_of(contract)
++    if prod in _OPTION_PRODUCTS:
++        return True
++    if prod in _INDEX_FUTURES:
++        return False
++    if lookup_product(prod) is not None:
++        return False
++    return any(ch.isdigit() for ch in contract[:-2])
++
++
+ def _month_year_codes(ym: str, *, put: bool = False) -> str:
+     """YYYYMM → 月碼 + 年末碼(期貨/Call A..L、Put M..X)。"""
+     year, month = int(ym[:4]), int(ym[4:6])
+diff --git a/copycat/server/capital_api.py b/copycat/server/capital_api.py
+index 6dc07d10..b1065fab 100644
+--- a/copycat/server/capital_api.py
++++ b/copycat/server/capital_api.py
+@@ -24,7 +24,12 @@ from fastapi.responses import JSONResponse
+ from pydantic import BaseModel
+ 
+ from copycat.capital.client import CapitalClient
+-from copycat.capital.mapping import multiplier_of, product_of, to_exchange_symbol
++from copycat.capital.mapping import (
++    exchange_product_of,
++    multiplier_of,
++    product_of,
++    to_exchange_symbol,
++)
+ from copycat.capital.models import (
+     CancelOrderRequest,
+     CapitalDisabledError,
+@@ -129,6 +134,18 @@ def _invalid_order() -> HTTPException:
+ _STOCK_FUTURE_UNITS: dict[str, int] = {"std": 2000, "mini": 100}
+ 
+ 
++def _require_legal_tick(price: float, *, context: str) -> None:
++    """個股期限價檔位閘:非現股 tick 表合法檔位 → 400 `BAD_TICK`。
++
++    送單(`_stkfut_gates`)與改價 route 共用的**單一定義** —— 兩處各寫一份規則,
++    漂移後的失效樣態是「送不出去的價改得進去」(或反過來),而兩邊都不會有錯誤訊號。
++    """
++    price_milli = round(price * 1000)
++    if price_milli <= 0 or price_milli % tick_size_milli(price_milli) != 0:
++        logger.info("%s 非法檔位:@%s", context, price)
++        raise HTTPException(status_code=400, detail={"error": "BAD_TICK"})
++
++
+ def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
+     """個股期送單的兩道閘(stkfut-contracts SC-6);非個股期產品直接放行。
+ 
+@@ -144,10 +161,29 @@ def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
+         raise HTTPException(status_code=400, detail={"error": "PRODUCT_NOT_ALLOWED"})
+     if req.price_type != "limit":
+         return
+-    price_milli = round(req.price * 1000)
+-    if price_milli <= 0 or price_milli % tick_size_milli(price_milli) != 0:
+-        logger.info("order/future 非法檔位:%s @%s", product, req.price)
+-        raise HTTPException(status_code=400, detail={"error": "BAD_TICK"})
++    _require_legal_tick(req.price, context=f"order/future {product}")
++
++
++def _correct_price_tick_gate(client: CapitalClient, seq_no: str, price: float) -> None:
++    """改價的個股期檔位閘:契約碼由 seq_no 反查 store(`_fut_multiplier` 同一條路)。
++
++    - store 查無該委託 → 放行(review R3 逃生口:斷線 store 空時仍要能刪改單);
++    - 契約碼推不出產品、或產品不是個股期 → 放行。scope 與送單面一致只驗個股期,
++      指數期權不適用現股 tick 表。
++    """
++    rec = next((o for o in client.store.orders() if o.seq_no == seq_no), None)
++    if rec is None or not rec.stock_no:
++        return
++    try:
++        product = exchange_product_of(rec.stock_no)
++    except ValueError:
++        logger.info(
++            "correct-price 契約碼推不出產品(seq=%s, contract=%r)→ 不驗檔位", seq_no, rec.stock_no
++        )
++        return
++    if lookup_product(product) is None:
++        return
++    _require_legal_tick(price, context=f"correct-price {product}")
+ 
+ 
+ @router.get("/api/capital/status")
+@@ -226,6 +262,8 @@ async def capital_order_cancel(request: Request, body: CancelBody) -> dict:
+ @router.post("/api/capital/order/correct-price")
+ async def capital_order_correct_price(request: Request, body: CorrectPriceBody) -> dict:
+     client = _capital(request)
++    if body.market == "fut":
++        _correct_price_tick_gate(client, body.seq_no, body.price)
+     result = await client.correct_price(
+         CorrectPriceRequest(seq_no=body.seq_no, market=body.market, price=body.price)
+     )
+diff --git a/tests/capital/test_client.py b/tests/capital/test_client.py
+index 5bd32906..e7245e06 100644
+--- a/tests/capital/test_client.py
++++ b/tests/capital/test_client.py
+@@ -18,6 +18,7 @@ from typing import Any
+ import pytest
+ 
+ import copycat.capital.client as client_mod
++import copycat.stkfut_map as stkfut_map
+ from copycat.capital.client import CapitalClient
+ from copycat.capital.com import CapitalCom
+ from copycat.capital.models import (
+@@ -36,6 +37,7 @@ from copycat.capital.models import (
+ from copycat.capital.reply import parse_onnewdata
+ from copycat.capital.safety import SafetyConfig
+ from copycat.server.audit import AuditWriteError
++from copycat.stkfut_map import write_map
+ from copycat.live.trade_models import BrokerRejectedError
+ from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
+ 
+@@ -284,7 +286,7 @@ async def test_submit_option_goes_send_option_order(tmp_path: Path) -> None:
+ 
+ 
+ async def test_weekly_contract_routes_as_option(tmp_path: Path) -> None:
+-    # TX4 週選是選擇權家族:非 {TXF, MXF, TMF} 一律走 SendOptionOrder
++    # TX4 週選是選擇權家族(已知產品),走 SendOptionOrder
+     com = FakeCom()
+     client = _client(com, tmp_path)
+     _mark_ready(client)
+@@ -295,6 +297,98 @@ async def test_weekly_contract_routes_as_option(tmp_path: Path) -> None:
+     assert com.sent[0][2] is True
+ 
+ 
++def _stkfut_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """個股期對映表注入(隔離版控真檔;CDF=標準 2000、QFF=小型 100)—— 同 test_capital_api 慣例。
++
++    `lookup_product` 的 process 級索引 cache 以 path + stat 簽章為鍵,tmp_path 天然隔離。
++    """
++    path = tmp_path / "stkfut_map.json"
++    write_map(
++        path,
++        {
++            "2330": {
++                "prod": "CDF",
++                "name": "台積電",
++                "unit": 2000,
++                "mini": {"prod": "QFF", "unit": 100},
++            }
++        },
++    )
++    monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", path)
++
++
++@pytest.mark.parametrize(
++    "symbol,contract,multiplier",
++    [
++        ("TC.F.TWF.CDF.202609", "CDFI6", 2000),  # 標準腿
++        ("TC.F.TWF.QFF.202609", "QFFI6", 100),  # 小型腿
++    ],
++)
++async def test_stock_future_routes_as_future(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    symbol: str,
++    contract: str,
++    multiplier: int,
++) -> None:
++    """個股期是**期貨**,必須走 SendFutureOrder。
++
++    舊分流是「非 {TXF, MXF, TMF} → 選擇權」的封閉白名單,個股期落到選擇權那側 ——
++    最好情況群益/期交所退單(功能整條不可用),最壞情況選擇權通道解讀 FUTUREORDER
++    struct 送出非預期委託。真錢面。
++    """
++    _stkfut_map(tmp_path, monkeypatch)
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    req = _fut_req(tc4_symbol=symbol, price=1180.0, qty=1)
++    await _drive(
++        client, lambda: client.submit_future_order(req, contract=contract, multiplier=multiplier)
++    )
++    kind, _fields, is_option = com.sent[0]
++    assert kind == "future" and is_option is False
++    assert _sent_fields(com.sent[0])["bstrStockNo"] == contract
++
++
++async def test_close_stock_future_position_routes_as_future(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    # 平倉走同一支 submit_future_order → 同一個分流缺陷(既有部位平不掉)
++    _stkfut_map(tmp_path, monkeypatch)
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client.store.set_positions([Position(market="fut", stock_no="CDFI6", qty=1, avg_price=1180.0)])
++    req = PositionCloseRequest(market="fut", key="CDFI6", price=1100.0)
++    res = await _drive(client, lambda: client.close_position(req))
++    assert res.ok is True
++    assert com.sent[0][2] is False
++
++
++@pytest.mark.parametrize(
++    "contract,is_option",
++    [
++        ("SXFI6", False),  # 未知產品、契約本體純字母 = 期貨形
++        ("ZZZ20000I6", True),  # 未知產品、契約本體含履約價數字 = 選擇權形
++    ],
++)
++async def test_unknown_product_routed_by_contract_shape(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contract: str, is_option: bool
++) -> None:
++    """未知產品(對映表查無、非指數期權)以契約碼結構判別:選擇權碼必含履約價數字。
++
++    白名單註定追不上上架節奏(個股期就是這樣漏掉的),預設方向必須由結構決定
++    而不是「不認得就當選擇權」。
++    """
++    _stkfut_map(tmp_path, monkeypatch)
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    req = _fut_req(price=100.0, qty=1)
++    await _drive(client, lambda: client.submit_future_order(req, contract=contract, multiplier=1))
++    assert com.sent[0][2] is is_option
++
++
+ async def test_market_rod_upgraded_to_ioc_with_message_note(tmp_path: Path) -> None:
+     com = FakeCom()
+     client = _client(com, tmp_path)
+diff --git a/tests/server/test_capital_api.py b/tests/server/test_capital_api.py
+index 8001ac8a..eeeb11da 100644
+--- a/tests/server/test_capital_api.py
++++ b/tests/server/test_capital_api.py
+@@ -78,6 +78,14 @@ def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000") -> str:
+     return ",".join(arr)
+ 
+ 
++def _fut_evt_raw(seq: str, contract: str = "TXFI6", qty: str = "2", price: str = "23000") -> str:
++    """OnNewData 期權委託事件(N;市場別 TF)最小治具(欄位對照 test_client 同款)。"""
++    arr = [""] * 48
++    arr[0], arr[1], arr[2], arr[3] = seq, "TF", "N", "N"
++    arr[6], arr[8], arr[11], arr[20] = "BNR20", contract, price, qty
++    return ",".join(arr)
++
++
+ def _capital_client(
+     tmp_path: Path,
+     *,
+@@ -415,9 +423,12 @@ class TestOrderStkfutGates:
+             _wait_status(cap)
+             res = client.post("/api/capital/order/future", json=_STKFUT_BODY)
+             assert res.status_code == 200
+-            fields = _sent(com, "future")[0][1]
++            sent = _sent(com, "future")[0]
++            fields = sent[1]
+             assert isinstance(fields, dict)
+             assert fields["bstrStockNo"] == "CDFI6"
++            # 個股期是期貨:整條 route 走到 COM 時必須是 SendFutureOrder(C-1)
++            assert sent[2] is False
+ 
+     def test_mini_stock_future_passes(
+         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@@ -429,6 +440,7 @@ class TestOrderStkfutGates:
+             body = dict(_STKFUT_BODY, tc4_symbol="TC.F.TWF.QFF.202609")
+             assert client.post("/api/capital/order/future", json=body).status_code == 200
+             assert len(_sent(com, "future")) == 1
++            assert _sent(com, "future")[0][2] is False  # 小型腿同樣是期貨(C-1)
+ 
+     def test_etf_future_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+         """ETF 期貨(契約單位 10,000 受益權單位)本輪不開放下單 —— 行情/乘數照落,
+@@ -549,6 +561,82 @@ class TestOrderStkfutGates:
+             assert len(_sent(com, "future")) == 1
+ 
+ 
++# ---------------------------------------------------------------------------
++# 改價的個股期檔位閘(SC-6 同一 blast radius:送單擋得住的價,改價不可放行)
++# ---------------------------------------------------------------------------
++
++
++class TestCorrectPriceStkfutTickGate:
++    def _seed_fut_order(self, com: FakeCom, seq: str, contract: str) -> None:
++        assert com.on_reply is not None
++        com.on_reply(_fut_evt_raw(seq, contract=contract))
++
++    def test_illegal_tick_rejected(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """個股期活單改到非法檔位 → 400 BAD_TICK,不得送到群益。
++
++        送單面有這道閘、改價面沒有的話,同一個 1180.5 送不出去卻改得進去,
++        而期交所退單回到畫面上只是一句「委託失敗」(送單閘的 docstring 逐字)。
++        """
++        _stkfut_map(tmp_path, monkeypatch)
++        cap, com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            self._seed_fut_order(com, "00000000021", "CDFI6")
++            res = client.post(
++                "/api/capital/order/correct-price",
++                json={"seq_no": "00000000021", "market": "fut", "price": 1180.5},
++            )
++            assert res.status_code == 400
++            assert res.json()["detail"]["error"] == "BAD_TICK"
++            assert _sent(com, "correct_price") == []
++
++    def test_legal_tick_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++        _stkfut_map(tmp_path, monkeypatch)
++        cap, com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            self._seed_fut_order(com, "00000000021", "CDFI6")
++            res = client.post(
++                "/api/capital/order/correct-price",
++                json={"seq_no": "00000000021", "market": "fut", "price": 1180.0},
++            )
++            assert res.status_code == 200
++            assert len(_sent(com, "correct_price")) == 1
++
++    def test_unknown_seq_still_passes_through(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """store 查無 → 放行(R3 逃生口):斷線時 store 空,刪改單仍必須送得出去。"""
++        _stkfut_map(tmp_path, monkeypatch)
++        cap, com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            res = client.post(
++                "/api/capital/order/correct-price",
++                json={"seq_no": "99999999999", "market": "fut", "price": 1180.5},
++            )
++            assert res.status_code == 200
++            assert len(_sent(com, "correct_price")) == 1
++
++    def test_index_future_not_gated(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """characterization:現股 tick 表只適用個股期,指數期權改價照放行(鎖 scope)。"""
++        _stkfut_map(tmp_path, monkeypatch)
++        cap, com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            self._seed_fut_order(com, "00000000022", "TXFI6")
++            res = client.post(
++                "/api/capital/order/correct-price",
++                json={"seq_no": "00000000022", "market": "fut", "price": 23000.5},
++            )
++            assert res.status_code == 200
++            assert len(_sent(com, "correct_price")) == 1
++
++
+ # ---------------------------------------------------------------------------
+ # cancel / correct-price / decrease(SC-4:market 帳號路由)
+ # ---------------------------------------------------------------------------
