@@ -4,7 +4,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useStockStream } from "@/hooks/useStockStream";
+import { useStockStream, type StockStreamState } from "@/hooks/useStockStream";
 import { onSignal, onWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
@@ -50,6 +50,8 @@ const T = (seq: number) => ({
   type: "tick", code: "2330", t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq,
 });
 
+const TICK1 = { t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" };
+
 let fetchMock: ReturnType<typeof vi.fn>;
 let queryClient: QueryClient;
 
@@ -91,6 +93,36 @@ async function setup() {
   await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
   const ws = FakeWS.instances[0]!;
   return { hook, ws };
+}
+
+/** WS 進 open(重試排程的三道前置之一)並**等到它觸發的 refetch 真的落地**。
+ *
+ *  `waitFor(fetch 呼叫數)` 只等得到「打出去了」,等不到 setState —— 之後 `useFakeTimers()`
+ *  一切,還沒 settle 的那條 promise 鏈就被凍在半路,後面的斷言看的是上一輪的畫面
+ *  (review A-1:在 fetch mock 裡注入一個 macrotask 即偶紅)。這裡改用**不同 seq**
+ *  的 snapshot 當 settle 訊號 —— 等到 `accum.seq` 變才算數,與時序無關。 */
+async function openAndSettle(
+  hook: { result: { current: StockStreamState } },
+  ws: FakeWS,
+  seq: number,
+): Promise<void> {
+  fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify(snap(seq, [TICK1]))));
+  await act(async () => { ws.onopen?.(); });
+  await waitFor(() => expect(hook.result.current.accum?.seq).toBe(seq));
+}
+
+/** 推進到下一個重試 timer,回傳它等了多久(fake timers 連 `Date` 一起假造)。
+ *  量「間隔」而不是斷言毫秒常數:曲線的性質(遞增 / 有上限 / 成功後歸零)才是行為
+ *  合約,`1s→2s→4s cap 8s` 是可調參數,鎖死它等於把 config 寫進測試。 */
+async function nextRetryDelay(): Promise<number> {
+  const calls = fetchMock.mock.calls.length;
+  const t0 = Date.now();
+  await act(async () => {
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.advanceTimersByTimeAsync(0); // 讓 refetch 的 promise 鏈跑完並排下一段
+  });
+  expect(fetchMock.mock.calls.length).toBe(calls + 1);
+  return Date.now() - t0;
 }
 
 describe("useStockStream", () => {
@@ -310,8 +342,7 @@ describe("useStockStream", () => {
     });
     await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
     const ws = FakeWS.instances[0]!;
-    await act(async () => { ws.onopen?.(); }); // WS open 是排程重試的前置條件之一
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+    await openAndSettle(hook, ws, 2); // WS open 是排程重試的前置條件之一
 
     vi.useFakeTimers();
     fetchMock.mockImplementationOnce(
@@ -342,8 +373,7 @@ describe("useStockStream", () => {
     });
     await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
     const ws = FakeWS.instances[0]!;
-    await act(async () => { ws.onopen?.(); });
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+    await openAndSettle(hook, ws, 2);
 
     vi.useFakeTimers();
     // (a) 2330 的 refetch 失敗 → 排一次重試
@@ -363,6 +393,85 @@ describe("useStockStream", () => {
     expect(hook.result.current.accum).not.toBeNull();
   });
 
+  // 🟢 review B-1:排程前的三道檢查各自的**負向**路徑。原本只有正向(排得出來)被鎖,
+  // 把任何一道拿掉都不會紅 —— 而它們守的是「重試打到不該打的地方」:已卸載的元件、
+  // 已經換掉的標的、以及 WS 斷線期間(重連的 onopen 本來就會發一次全量對齊)。
+  it("unmount 後不排重試(元件存活檢查)", async () => {
+    const hook = renderHook(() => useStockStream("2330"), { wrapper });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    await openAndSettle(hook, ws, 2);
+
+    vi.useFakeTimers();
+    let fail: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { fail = r; }));
+    act(() => ws.emit(T(9))); // 跳號 → refetch(in-flight)
+    hook.unmount(); // 結果還沒回來就離開頁面
+    await act(async () => {
+      fail(new Response("{}", { status: 503 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const before = fetchMock.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); }); // > cap
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
+
+  it("WS 斷線期間不排重試(重連的 onopen 本來就會發一次全量對齊)", async () => {
+    const hook = renderHook(() => useStockStream("2330"), { wrapper });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    await openAndSettle(hook, ws, 2);
+
+    vi.useFakeTimers();
+    let fail: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { fail = r; }));
+    act(() => ws.emit(T(9)));
+    act(() => { ws.onclose?.(); }); // 同一條 socket(alive=true)→ 旗標轉假 + 排重連
+    await act(async () => {
+      fail(new Response("{}", { status: 503 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const before = fetchMock.mock.calls.length;
+    // 10s 內重連 timer 會建一條新 FakeWS(它自己不會 onopen)—— 但**不該**有 refetch
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(FakeWS.instances.length).toBe(2);
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
+
+  // 🟢 review B-2/B-6:backoff 曲線本身。既有兩條 F-3 測試都只走**第一段**(1s),
+  // 「會遞增」「有上限」「成功後歸零」三個性質一條都沒鎖 —— 把遞增或成功路徑的
+  // `cancelRetry` 拿掉都是全綠。斷言用**性質**(段與段相比)而不是毫秒常數:
+  // 1s→2s→4s cap 8s 是可調參數,鎖死它等於把 config 抄進測試。
+  it("重試間隔遞增、有上限、成功一次後歸零", async () => {
+    const hook = renderHook(() => useStockStream("2330"), { wrapper });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    await openAndSettle(hook, ws, 2);
+
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async () => new Response("{}", { status: 503 }));
+    act(() => ws.emit(T(9))); // 跳號 → refetch → 503 → 排第一段
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    const d: number[] = [];
+    for (let i = 0; i < 6; i += 1) d.push(await nextRetryDelay());
+    expect(d[1]!).toBeGreaterThan(d[0]!); // 遞增
+    expect(d[2]!).toBeGreaterThan(d[1]!);
+    expect(d[5]!).toBe(d[4]!); // 有上限:夠多次之後不再增長
+    expect(d[5]!).toBeGreaterThan(d[0]!);
+
+    // 成功一次 → backoff 歸零(否則 TC4 短暫抽風之後,下一次失敗要等到 cap 才自癒)
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify(snap(20, [TICK1]))));
+    await act(async () => {
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(hook.result.current.accum?.seq).toBe(20);
+    act(() => ws.emit(T(50))); // 跳號 → refetch → 503(持久 mock)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(await nextRetryDelay()).toBe(d[0]!); // 回到最短間隔,不是沿用退避後的
+  });
+
   // 🔴 review A-2:`wsOpenRef` 是**跨 socket 世代共用**的單一旗標,而 `onclose` 把
   // `wsOpenRef.current = false` 寫在 `alive` 早退**之前** —— StrictMode(main.tsx 全站,
   // dev)的 mount→cleanup→mount 下,舊 socket 的 close 事件若晚於新 socket 的 `onopen`
@@ -380,13 +489,7 @@ describe("useStockStream", () => {
       await new Promise((r) => setTimeout(r, 30));
     });
 
-    // 新 socket open → 旗標轉真。用**不同 seq** 的 snapshot 才等得到「真的 settle」:
-    // 只等 fetch 呼叫數等不到 setState,是刀鋒時序(A-1 同源)。
-    fetchMock.mockImplementationOnce(
-      async () => new Response(JSON.stringify(snap(2, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]))),
-    );
-    await act(async () => { ws2.onopen?.(); });
-    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(2));
+    await openAndSettle(hook, ws2, 2); // 新 socket open → 旗標轉真
     // 舊 socket 的 close 晚到(它那條 effect 早已 cleanup → 該閉包的 alive=false)
     act(() => { ws1.onclose?.(); });
 
