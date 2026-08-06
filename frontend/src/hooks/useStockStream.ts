@@ -46,6 +46,13 @@ export interface StockStreamState {
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
 
+/** snapshot refetch 失敗的重試節奏(F-3)。與 WS 重連的 backoff 分開:WS 斷了整頁都停,
+ *  refetch 失敗只是**這一個標的**的一次取數失敗,cap 短一點才不會讓自癒等半分鐘。
+ *  刻意**不設次數上限** —— TC4 / 後端一時不可用是常態,自癒比放棄有用;避免無限打的
+ *  節流靠排程前的三道檢查(標的未變 + WS 仍 open + 元件未 unmount)。 */
+const REFETCH_RETRY_START_MS = 1_000;
+const REFETCH_RETRY_CAP_MS = 8_000;
+
 interface WsMsg {
   type: string;
   code?: string;
@@ -107,6 +114,37 @@ export function useStockStream(
   instrumentKeyRef.current = instrumentKey;
   accumRef.current = accum;
 
+  // 重試排程的三道前置(F-3)。ref 而非 state:排程與取消都發生在 WS callback / async
+  // finally 裡,那些地方讀不到 render 當下的 state。
+  const mountedRef = useRef(true);
+  const wsOpenRef = useRef(false);
+  const retryTimerRef = useRef<number | undefined>(undefined);
+  const retryDelayRef = useRef(REFETCH_RETRY_START_MS);
+
+  /** 取消還沒打出去的重試並把 backoff 歸零(切標的 / 成功 / unmount)。
+   *  不取消的話舊 timer 到期時 `refetch()` 讀的是**當下**的 ref → 對新標的多打一份
+   *  全量 snapshot,而且與新標的自己的重試撞在同一 tick。 */
+  const cancelRetry = (): void => {
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = undefined;
+    retryDelayRef.current = REFETCH_RETRY_START_MS;
+  };
+
+  const scheduleRetry = (key: string): void => {
+    // 三道檢查都是「重試已經沒有意義」:元件沒了 / 標的換了(新標的自己會抓)/
+    // WS 斷了(重連的 onopen 本來就會發一次全量對齊,這裡再排只是重複)。
+    if (!mountedRef.current) return;
+    if (instrumentKeyRef.current !== key) return;
+    if (!wsOpenRef.current) return;
+    const delay = retryDelayRef.current;
+    retryDelayRef.current = Math.min(delay * 2, REFETCH_RETRY_CAP_MS);
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = window.setTimeout(() => {
+      retryTimerRef.current = undefined;
+      void refetch();
+    }, delay);
+  };
+
   const refetch = async (): Promise<void> => {
     const current = instrumentKeyRef.current;
     const currentCode = codeRef.current;
@@ -119,9 +157,12 @@ export function useStockStream(
     refetchingRef.current = true;
     pendingRef.current = [];
     pendingBookRef.current = null;
+    // 非 2xx 與 throw 走同一條復原路徑(F-3);`finally` 讀得到才能與「切檔補發」分岔
+    let failed = false;
     try {
       const res = await fetch(stateUrl(currentCode, contractRef.current));
       if (res.ok) {
+        cancelRetry(); // 成功即歸零 backoff,並丟掉還沒打出去的重試
         const snap = fromSnapshot(await res.json());
         if (instrumentKeyRef.current === current) {
           let next = snap;
@@ -136,9 +177,15 @@ export function useStockStream(
           accumRef.current = next;
           setAccum(next);
         }
+      } else {
+        // 502/503(TC4 斷線 / 後端還沒起)從正常操作可達 —— 不排重試的話 accum 留 null,
+        // 而 accum===null 時 tick 早退 → seq-gap 自癒也是死路,畫面釘在「載入中…」。
+        console.warn("stock: snapshot refetch 非 2xx", res.status);
+        failed = true;
       }
     } catch (err) {
       console.warn("stock: snapshot refetch 失敗", err);
+      failed = true;
     } finally {
       refetchingRef.current = false;
       pendingRef.current = [];
@@ -146,6 +193,8 @@ export function useStockStream(
       if (pendingRefetchRef.current || instrumentKeyRef.current !== current) {
         pendingRefetchRef.current = false;
         void refetch();
+      } else if (failed) {
+        scheduleRetry(current);
       }
     }
   };
@@ -157,6 +206,7 @@ export function useStockStream(
     setStkfut(null);
     accumRef.current = null;
     pendingBookRef.current = null; // 舊標的的簿不可跨檔存活(F-2)
+    cancelRetry(); // 舊標的的重試不可跨檔存活(F-3)
     if (instrumentKey === null) return;
     void refetch();
   }, [instrumentKey]);
@@ -167,6 +217,7 @@ export function useStockStream(
     let ws: WebSocket | null = null;
     let timer: number | undefined;
     let backoff = BACKOFF_START_MS;
+    mountedRef.current = true; // StrictMode 的 mount→cleanup→mount 會把它翻回來
 
     const handle = (msg: WsMsg): void => {
       // 主圖相關訊息(tick / book / stkfut / backfilling)的比對鍵一律是 instrument key:
@@ -284,6 +335,7 @@ export function useStockStream(
       setWsStatus("connecting");
       ws.onopen = () => {
         backoff = BACKOFF_START_MS;
+        wsOpenRef.current = true;
         setWsStatus("open");
         void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
         emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
@@ -296,6 +348,7 @@ export function useStockStream(
         }
       };
       ws.onclose = () => {
+        wsOpenRef.current = false;
         if (!alive) return;
         setWsStatus("closed");
         timer = window.setTimeout(connect, backoff);
@@ -309,6 +362,9 @@ export function useStockStream(
     connect();
     return () => {
       alive = false;
+      mountedRef.current = false;
+      wsOpenRef.current = false;
+      cancelRetry(); // in-flight 的 refetch 事後失敗時才不會排到已卸載的元件上
       window.clearTimeout(timer);
       ws?.close();
     };
