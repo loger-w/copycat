@@ -97,8 +97,14 @@ export function useStockStream(
   const refetchingRef = useRef(false);
   const pendingRefetchRef = useRef(false);
   const pendingRef = useRef<StockTickMsg[]>([]);
-  // refetch 進行中收到的**最新一份**簿(F-2)。snapshot 是後端在 fetch 送出當下凍結的,
-  // 而推播必晚於 fetch 發起 → 方向恆定,套完 snapshot 之後蓋回來就是對的。
+  // refetch 進行中收到的**最新一份**簿(F-2),套完 snapshot 之後蓋回去。
+  //
+  // 「推播比 snapshot 新」是**近似恆定不是恆定**(review A-3):snapshot 凍結在後端
+  // 處理該 request 的當下,不是前端送出的當下 —— 誤差 = request 的單程延遲,在那個
+  // 窗內產生的推播理論上可能比 snapshot 舊。本機 localhost 下這個窗是次毫秒級,而
+  // 回捲窗(鎖板 / 盤後推播稀疏時)可達數十秒,兩害相權取這一邊。真正的定序要靠
+  // book 自己的 seq(後端目前不發,不在本輪 scope)。
+  //
   // 帶 instrumentKey 標記:切檔撞上 in-flight 時 key 不符即丟,不把 A 的簿蓋到 B 上。
   const pendingBookRef = useRef<PendingBook | null>(null);
 
@@ -137,8 +143,14 @@ export function useStockStream(
   const retryDelayRef = useRef(REFETCH_RETRY_START_MS);
 
   /** 取消還沒打出去的重試並把 backoff 歸零(切標的 / 成功 / unmount)。
-   *  不取消的話舊 timer 到期時 `refetch()` 讀的是**當下**的 ref → 對新標的多打一份
-   *  全量 snapshot,而且與新標的自己的重試撞在同一 tick。 */
+   *
+   *  兩半都要:
+   *  - 取消 timer:舊 timer 到期時 `refetch()` 讀的是**當下**的 ref → 對新標的多打
+   *    一份全量 snapshot。(只在新標的自己的 fetch 還 in-flight 時才走得到 ——
+   *    否則 `scheduleRetry` 自己開頭的 `clearTimeout` 就先清掉了。)
+   *  - 歸零 backoff:漏掉這半的失效樣態是**少一發不是多一發**(review B-8,實測
+   *    mutant 是 4 vs 5)—— 新標的的第一段重試沿用上一檔退避後的間隔(2s / 4s / …),
+   *    畫面上是「換一檔之後要多等好幾秒才自癒」,而且愈換愈久。 */
   const cancelRetry = (): void => {
     window.clearTimeout(retryTimerRef.current);
     retryTimerRef.current = undefined;
