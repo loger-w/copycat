@@ -1,0 +1,27 @@
+{
+  "round": 1,
+  "lenses": ["backfill-chain+concurrency (opus)", "missing-from-spec+test-coverage (opus)"],
+  "verdict": "0 P0 / 4 P1(A1/A2/B1/B2)/ P2 多數摺入",
+  "accepted_fixes": {
+    "A1(P1)": "StockDayState 抽 _minutes_payload/_meta_payload 共用 helper + light_snapshot();group_snapshot 改用(不再為 30 檔每輪建全量 tick dict);未知 code 用模組級空 payload 常數",
+    "A2(P1)": "成員回補 ConnectionError 不再寫全域 tc4_status(僅 job code == 當時 _main 才維持舊語意);新 _backfill_failed 當日計數,≥3 次不再入列(60s 重試風暴止血);測試:成員失敗後 tc4_status 不變 down",
+    "B1(P1)": "GroupGridView 補 liveP 接線測試(quotes.p 餵入 → mini 圖多一延伸點)",
+    "B2(P1)": "TestGroupSnapshot 補 _no_data 已訂閱成員 → no_data true",
+    "A3": "_backfill_pending 改 dict[str,int] 計數(enqueue +1/結清 -1);reconnect/rollover 清空改只清 _backfilled;測試 in-flight reconnect 不重複入列且旗標不早翻",
+    "A4": "wl isPending/isError 分態:「載入群組…」/「自選載入失敗」;終態空文案只在真零群組",
+    "A5": "「回補中…」只在 backfilling 且 minutes 空;已有分鐘照畫圖",
+    "A6(1)": "卡片 React.memo + geometry useMemo(30×1Hz 重算止血)",
+    "A6(2)": "codes 解析 dedup 保序後驗數量",
+    "A6(3)": "已訂閱判準改 code in self._refs(訂閱池真相源);no_data 同判準",
+    "A6(4)": "入列 guard 加 code not in self._no_data",
+    "A6(5)": "漲跌停值變重入列放寬:code == _main or code in _backfilled(鎖停側標整天退化止血)",
+    "B3-a": "端到端測試:只改群組名(codes 不變)→ hub._groups 跟著變",
+    "B3-b": "兩弱斷言修(len==1 明斷言;'-' 全等)"
+  },
+  "not_fixed_recorded": [
+    "B3-c mini 圖 ±10% 域壓縮可讀性 → Phase 6 截圖確認項",
+    "B3-d 三項實作註解已載,記帳",
+    "B3-e stage1→stage2 窗 _backfilled 殘留(假日無資料可補,正常日自癒)→ Known Risks",
+    "B3-f apply_backfill reset+replay 競態範圍擴大(每日一次+60s 自癒)→ Known Risks/next-time"
+  ]
+}

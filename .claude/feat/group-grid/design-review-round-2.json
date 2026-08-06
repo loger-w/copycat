@@ -1,0 +1,15 @@
+{
+  "round": 2,
+  "type": "限縮輪",
+  "verdict": "1 P0(R12)/ 1 P1(R15)/ 5 P2 — 全 accepted,依 reviewer suggested_fix 機械落地入 v3(無新增輪;P0 非 SC 互斥、修法明確)",
+  "dispositions": {
+    "R12(P0)": "group_snapshot 對今日未回補成員入列 backfill job(queue put,非訂閱變更);backfill 套用 guard 改「job 自帶 code + generation」不再綁 _main;_backfilled set 防重複(rollover 清);payload 每 code 帶 backfilling 卡片顯示「回補中…」;FIFO 排隊影響主圖回補記 Known Risk",
+    "R15(P1)": "payload 形寫死(沿 StockDayState.snapshot() 鍵名,snap 後挑三鍵單一定義);前端 minutes 轉換抽 minutesFromRecord 共用(含 h/l ?? null);hasRef lock test",
+    "R13": "height = H + X_LABEL_H、viewBox y=0(上下各留一份 PAD_Y);lock test 補 y 域斷言",
+    "R16": "quotes() 取 local 參照 codes = self._watchlist;風險敘述改「迭代中整份換名單」;測試改鎖換名單不炸不漏",
+    "R17": "空群組:前端 enabled=false + 「這個群組還沒有成員」空態;後端 codes 空參數 → 200 {states:{}}",
+    "R18": "測試列更正:set_main 恆 0 / 超量 BAD_CODES / 壞碼 BAD_CODE / 未知 code no_data / 503 NOT_READY / 形狀(無 404 路徑)",
+    "R19": "design 註明 SC-2 簽名相對 brainstorm 擴充 (name, chg_pct) 的理由",
+    "R14": "檔案表補 engine.group_snapshot + backfill guard 改動 + 對應測試"
+  }
+}

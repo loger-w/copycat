@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "verdict": "2 P0 / 5 P1 / 6 P2 — 全 accepted",
+  "dispositions": {
+    "R1(P0)": "guard 兩處都改(:631 早退去 main 比對只留 generation;:653 同);端到端測試 = drain 後非主檔 minutes 有回補列",
+    "R2(P0)": "test_stale_backfill_not_applied_after_main_switch 事前標記該變(新契約:切走的舊主檔 job 落地到它自己的 state;generation 作廢照舊);guard 改動獨立 🔴 commit",
+    "R3": "拆 _backfill_pending(入列加/取件後一律 discard;dedup + backfilling 來源)與 _backfilled(套用成功才加);四個既有入列點一併寫;失敗路徑 discard",
+    "R4": "清空點兩處:_rollover_stage2 + _handle_reconnect 顯式 clear(reconnect 不 bump generation 為實碼事實);reconnect 後可重入列測試",
+    "R5": "hook 契約補 backfilling;卡片三態優先序 backfilling → noData → 常態",
+    "R6": "groups_fn: Callable[[], list[Group]](import 自 stock_watchlist)",
+    "R7": "整合測試:booted client 下 _groups 非空 + _group_suffix 產非空(接線防漏)",
+    "R8": "route 測試進 test_stock_routes.py;set_main 斷言 = app.state.stock._main is None",
+    "R9": "no_data 推導式 = code in _no_data or code not in _states(與 engine.snapshot 語意刻意不同,註明)",
+    "R10": "edge 4 測試入 T2;edge 5 fallback lock 入 T3;edge 6 更正為「batch 整批失敗 → 全部卡片無資料」+ 測試(brainstorm amendment)",
+    "R11": "StockPage.test fetch stub 補 group-state 分支(既有遷移項)",
+    "R12": "檔案表補 stock-accum.ts;抽共用刪二擇一;獨立 🔵 commit"
+  }
+}

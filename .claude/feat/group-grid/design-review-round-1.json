@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "reviewer": "design-reviewer (opus)",
+  "verdict": "1 P0 / 6 P1 / 4 P2 — 全 accepted",
+  "dispositions": {
+    "R1(P0)": "棄用 /api/stock/state/{code}(它 set_main!)→ 新唯讀 GET /api/stock/group-state?codes=…(batch,零 set_main;測試斷言 set_main 呼叫 0)",
+    "R2": "同上 batch 回 {minutes, meta, no_data} 不含 ticks(單檔 payload KB 級);量法寫入 SC-4",
+    "R3": "quotes_fn 改回 dict[code, (name, chg_pct)](engine 自 state.meta.name + _quote_payload)",
+    "R4": "quotes() 以 list(self._states.items()) C-level 快照迭代 + docstring + 併發測試",
+    "R5": "mini 圖幾何補償:外擴 width/height 後 viewBox 平移裁掉三條軸帶;lock test priceLine x 範圍",
+    "R6": "檢視切換 pill 掛 main 頂層(code===null / accum===null 兩條件之外);vitest code=null 可切",
+    "R7": "refetchInterval 函式形 + inTradingHours() gate(閉包坑照 useStockBars 前例)",
+    "R8": "quotes() domain = _watchlist(排除 F: 偽鍵)且 chg 走 _quote_payload 單一定義",
+    "R9": "排序鍵 (chg is None, -abs(chg or 0));「…共 N 檔」N = 群組成員總數(含觸發者)",
+    "R10": "延伸規則明定:本機分鐘 ∈ 窗內且 liveP>0;既有 bucket 只換 c;新 bucket {c,0,0,0,0,h:null,l:null}",
+    "R11": "卡片價 p ?? ref(ref 態中性色 + 「參考」標記,與側欄同序)"
+  },
+  "exit": "P0 → v2 後限縮輪"
+}
