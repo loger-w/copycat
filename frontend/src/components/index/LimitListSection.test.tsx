@@ -168,6 +168,20 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
     expect(screen.queryByTestId("limit-list-msg")).toBeNull();
   });
 
+  // 端點設計上恆 200,能走到 error 的只有網路 / proxy 斷。少了這條分流,失敗會停在
+  // 「載入中…」永遠不動 —— 那是誠實度問題(看起來像還在等,其實已經放棄了)。
+  it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
+    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
+    fetchSpy = vi.fn(async () => new Response("boom", { status: 500 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    renderSection();
+    await screen.findByTestId("limit-list-body");
+    // hook 內 retry:1 → 要等一次重試(exponential backoff 初次 1s)
+    await waitFor(() => expect(screen.getByTestId("limit-list-msg").textContent).toBe("載入失敗"), {
+      timeout: 5000,
+    });
+  });
+
   it("stale=false → 無膠囊", async () => {
     await openWith(mkState(ROWS));
     expect(screen.queryByTestId("limit-list-stale")).toBeNull();
