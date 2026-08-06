@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import logging
 import threading
 import time as _time
 from pathlib import Path
@@ -24,6 +25,8 @@ import copycat.server.breadth_engine as be
 from copycat.breadth_config import BreadthConfig
 from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.chain_store import load_chain, save_chain
+from copycat.server.signal_hub import SignalHub
+from copycat.signals_config import SignalsConfig
 
 _TRADE_DATE = "2026-08-05"
 _STAMP = f"{_TRADE_DATE} 10:23:45"
@@ -2078,3 +2081,404 @@ class TestSectorState:
         engine = await _ready_engine(tmp_path)
 
         assert engine.sector_members(industry, sub) is None
+
+
+# ---------------------------------------------------------------------------
+# 全市場鎖板事件 diff(R4 design §6 — SC-5)
+# ---------------------------------------------------------------------------
+
+#: 事件層讀到的鍵(`compute_breadth` rows_out 的子集)。**刻意不是快照 rows 的形狀** ——
+#: 那正是 (i) 案要擋的東西:入參餵錯一份 rows,事件會整批靜默消失。
+_LOCK_KIND = "market_limit_lock"
+_OPEN_KIND = "market_limit_open"
+
+
+def _row_out(
+    sid: str,
+    *,
+    name: str = "台泥",
+    close: float = 11.0,
+    up: bool = False,
+    down: bool = False,
+    judged: bool = True,
+) -> dict:
+    """`compute_breadth` rows_out 的最小形狀(diff 只讀這幾鍵)。"""
+    return {
+        "stock_id": sid,
+        "name": name,
+        "close": close,
+        "limit_up": up,
+        "limit_down": down,
+        "limit_judged": judged,
+    }
+
+
+class FakeHub:
+    """訊號匯流排替身:收批次 + 供 seed(engine 對它的唯一兩個要求)。
+
+    `market_event_state` 每次回**新 dict**:engine 會就地改那兩份(對帳狀態與計數),
+    共用同一個物件的話,替身的 seed 會被受測物改掉而測試仍然綠。
+    """
+
+    def __init__(
+        self,
+        seed: dict[tuple[str, str], bool] | None = None,
+        counts: dict[tuple[str, str, str], int] | None = None,
+    ) -> None:
+        self.seed: dict[tuple[str, str], bool] = seed if seed is not None else {}
+        self.counts: dict[tuple[str, str, str], int] = counts if counts is not None else {}
+        self.batches: list[tuple[list[dict], str]] = []
+        self.state_calls: list[str] = []
+        self.publish_error: Exception | None = None
+
+    @property
+    def events(self) -> list[dict]:
+        return [e for batch, _ in self.batches for e in batch]
+
+    def publish_market_events(self, events: list[dict], *, trade_date: str) -> None:
+        if self.publish_error is not None:
+            raise self.publish_error
+        self.batches.append(([dict(e) for e in events], trade_date))
+
+    def market_event_state(
+        self, trade_date: str
+    ) -> tuple[dict[tuple[str, str], bool], dict[tuple[str, str, str], int]]:
+        self.state_calls.append(trade_date)
+        return dict(self.seed), dict(self.counts)
+
+
+def _real_hub(tmp_path: Path, published: list[dict]) -> SignalHub:
+    """真 SignalHub(fake publish + tmp data_dir)—— id 文法與 jsonl seed 的端到端證據。"""
+
+    async def _bars(code: str, days: int) -> list:
+        return []
+
+    return SignalHub(
+        SignalsConfig(),
+        publish=published.append,
+        daily_bars=_bars,
+        notify_fallback=lambda text: True,
+        data_dir=tmp_path,
+        trade_date_fn=lambda: _TRADE_DATE,
+    )
+
+
+def _write_market_jsonl(tmp_path: Path, rows: list[dict], day: str = _TRADE_DATE) -> Path:
+    """前一個 process 留下的當日 jsonl(重啟 seed 的真實來源)。"""
+    path = tmp_path / "signals" / f"{day.replace('-', '')}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps({**r, "trade_date": day}, ensure_ascii=False) + "\n" for r in rows),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _tuples(events: list[dict]) -> list[tuple]:
+    return [(e["kind"], e["code"], e["direction"], e["time"], e["touch_count"]) for e in events]
+
+
+class TestMarketLimitEvents:
+    """對帳制(design §6.4):`last_emitted` 是「事件流已對外宣告的狀態」。
+
+    不是 raw 轉移偵測 —— 那一式在「開盤即鎖」與「盤中重啟」兩個邊界都會靜默漏發,
+    而漏發沒有任何觀測訊號(畫面就是少一列)。
+    """
+
+    async def test_lock_open_relock_emits_three_events(self, tmp_path: Path, mono: FakeMono) -> None:
+        """(a) lock → open → relock 三轉移三則,每則五欄位正確。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:01:05")
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101")], "09:05:05")
+        mono.advance(601.0)  # lock 桶冷卻已過
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:20:05")
+
+        assert _tuples(hub.events) == [
+            (_LOCK_KIND, "1101", "up", "09:01:05", 1),
+            (_OPEN_KIND, "1101", "up", "09:05:05", 1),
+            (_LOCK_KIND, "1101", "up", "09:20:05", 2),  # 同桶第 2 次
+        ]
+        assert hub.events[0]["name"] == "台泥"
+        assert hub.events[0]["price"] == 11_000  # 毫元
+        assert len(hub.batches) == 3  # 每輪一批
+
+    async def test_real_hub_gets_deterministic_id(self, tmp_path: Path) -> None:
+        """(a-整合)真 SignalHub 接上 → id 文法端到端(`<日>-breadth-<code>-<kind>-<dir>-<time>`)。"""
+        published: list[dict] = []
+        hub = _real_hub(tmp_path, published)
+        engine, *_ = _make(tmp_path)
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:01:05")
+
+        assert [m["id"] for m in published] == [
+            f"{_TRADE_DATE}-breadth-1101-{_LOCK_KIND}-up-09:01:05"
+        ]
+        assert published[0]["price"] == 11_000
+        assert published[0]["touch_count"] == 1
+
+    async def test_first_round_already_locked_emits_lock(self, tmp_path: Path) -> None:
+        """(b) 開盤首輪(seed 空)已鎖的檔照發 —— 一價到底不再靜默(design R1 主修)。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(
+            _TRADE_DATE,
+            [
+                _row_out("1101", up=True),
+                _row_out("6488", name="環球晶", close=9.0, down=True),
+            ],
+            "09:01:05",
+        )
+
+        assert hub.state_calls == [_TRADE_DATE]  # 首輪 seed 一次
+        assert _tuples(hub.events) == [
+            (_LOCK_KIND, "1101", "up", "09:01:05", 1),
+            (_LOCK_KIND, "6488", "down", "09:01:05", 1),
+        ]
+        assert hub.events[1]["price"] == 9_000
+
+    async def test_restart_seed_replays_jsonl(self, tmp_path: Path) -> None:
+        """(c) 盤中重啟:既有 jsonl 回放 → 已發布的不重發,停機期轉移補發 open。
+
+        seed 若空著(靜默 baseline),重啟後整片已鎖的檔會被當成新鎖再發一遍;
+        seed 若當成「當下實況」,停機期間打開的那些檔就永遠不會有 open。
+        """
+        _write_market_jsonl(
+            tmp_path,
+            [
+                {"id": "x1", "kind": _LOCK_KIND, "code": "2330", "direction": "up"},
+                {"id": "x2", "kind": _LOCK_KIND, "code": "1101", "direction": "up"},
+            ],
+        )
+        published: list[dict] = []
+        hub = _real_hub(tmp_path, published)
+        engine, *_ = _make(tmp_path)
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(
+            _TRADE_DATE,
+            [
+                _row_out("2330", name="台積電", close=100.0, up=True),  # 仍鎖 → 不重發
+                _row_out("1101"),  # 停機期打開 → 補發 open
+            ],
+            "10:00:05",
+        )
+
+        assert [(m["code"], m["kind"], m["touch_count"]) for m in published] == [
+            ("1101", _OPEN_KIND, 1)
+        ]
+        assert published[0]["time"] == "10:00:05"  # 帶當下時刻(jsonl 缺角自癒)
+
+    async def test_cooldown_defers_reconciliation_not_drops(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """(d) 冷卻內抖動不丟棄:冷卻結束後 desired 仍不符 → 補發,終態收斂到實況。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:01:05")
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101")], "09:02:05")
+        mono.advance(60.0)
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:03:05")
+
+        assert _tuples(hub.events) == [
+            (_LOCK_KIND, "1101", "up", "09:01:05", 1),
+            (_OPEN_KIND, "1101", "up", "09:02:05", 1),
+        ]
+        # 冷卻中那輪不得更新 last_emitted,否則對帳會停在「已宣告鎖定」而永不補發
+        mono.advance(600.0)
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:13:05")
+
+        assert _tuples(hub.events)[-1] == (_LOCK_KIND, "1101", "up", "09:13:05", 2)
+
+    async def test_opposite_direction_bucket_not_swallowed(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """(d) 對向桶不互吃:up 的 lock 桶冷卻中,down 的 lock 照發。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:01:05")
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", down=True)], "09:01:15")
+
+        assert _tuples(hub.events) == [
+            (_LOCK_KIND, "1101", "up", "09:01:05", 1),
+            (_OPEN_KIND, "1101", "up", "09:01:15", 1),
+            (_LOCK_KIND, "1101", "down", "09:01:15", 1),
+        ]
+
+    async def test_limit_judged_false_row_skipped_entirely(self, tmp_path: Path) -> None:
+        """(e) 缺值輪(`limit_judged=False`)整列跳過:不發事件、`last_emitted` 不動。
+
+        缺值列的 `limit_up` 恆 False,與「真的打開了」同形 —— 不跳過就會產假 open,
+        而下一個正常輪又補回一則 lock,事件流變成一串不存在的抖動。
+        """
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True, judged=False)], "09:01:05")
+        assert hub.events == []
+
+        # 狀態零推進 → 之後判得出來的那輪照樣發 lock(不是被吃掉的一次轉移)
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:02:05")
+        assert _tuples(hub.events) == [(_LOCK_KIND, "1101", "up", "09:02:05", 1)]
+
+        # 已發布 lock 後的缺值輪:不得產假 open
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", judged=False)], "09:03:05")
+        assert len(hub.events) == 1
+
+    async def test_hub_none_does_not_advance_state(self, tmp_path: Path) -> None:
+        """(f) 未 attach → 早退:不 seed、不 latch 日別、不動對帳狀態(design R2-1)。
+
+        attach 前推進了狀態的話,那些轉移會被「假發布」—— 當日不再回放 seed,
+        而事件流少的正是開盤那一批。
+        """
+        engine, *_ = _make(tmp_path)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:01:05")
+
+        assert engine._mkt_emitted_date is None
+        assert engine._mkt_last_emitted == {}
+        assert engine._mkt_cooldown == {}
+
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:02:05")
+
+        assert hub.state_calls == [_TRADE_DATE]
+        assert _tuples(hub.events) == [(_LOCK_KIND, "1101", "up", "09:02:05", 1)]
+
+    async def test_detach_stops_events(self, tmp_path: Path) -> None:
+        """detach 後不再發(hub 收攤前的關機序;鏡射 stock_engine)。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "09:01:05")
+
+        engine.detach_signal_hub()
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101")], "09:02:05")
+
+        assert len(hub.events) == 1
+
+    async def test_cycle_emits_from_computed_rows(self, tmp_path: Path) -> None:
+        """整輪接線:diff 吃的是 `compute_breadth` 的 rows(帶 limit 旗標與 name)。
+
+        餵 `_apply` 的入參(原始快照)會讓事件整批消失 —— 那份沒有 limit 鍵。
+        """
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        await engine._run_cycle()
+
+        assert _tuples(hub.events) == [
+            (_LOCK_KIND, "1101", "up", "10:23:45", 1),
+            (_LOCK_KIND, "6488", "down", "10:23:45", 1),
+        ]
+        assert [e["name"] for e in hub.events] == ["台泥", "環球晶"]
+        assert [e["price"] for e in hub.events] == [11_000, 9_000]
+
+    async def test_out_of_domain_minute_does_not_trigger_diff(self, tmp_path: Path) -> None:
+        """(g) `_append` 回 None(分鐘域外:盤後定盤 14:30)→ 完全不觸發 diff。"""
+        stamp = f"{_TRADE_DATE} 14:30:00"
+        engine, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(stamp)),
+            clock=Clock(now="14:31:00"),
+        )
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        await engine._run_cycle()
+
+        assert engine.state()["counts"] == _EXPECTED  # 家數照算
+        assert hub.batches == []
+        assert hub.state_calls == []
+        assert engine._mkt_emitted_date is None
+
+    async def test_other_day_snapshot_does_not_trigger_diff(self, tmp_path: Path) -> None:
+        """(g) 上一交易日的快照(跨午夜 / 假日重啟)→ 不觸發 diff。"""
+        stamp = "2026-08-04 10:23:45"
+        engine, *_ = _make(tmp_path, snapshot=FakeFetch(_snapshot_rows(stamp)))
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        await engine._run_cycle()
+
+        assert hub.batches == []
+        assert engine._mkt_emitted_date is None
+
+    async def test_new_day_reseeds_and_clears_cooldown(self, tmp_path: Path) -> None:
+        """(h) 換日 → 重 seed + 清冷卻:昨日的冷卻不得壓掉今日開盤的第一則。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        engine._diff_limit_events(_TRADE_DATE, [_row_out("1101", up=True)], "13:29:05")
+        engine._diff_limit_events("2026-08-06", [_row_out("1101", up=True)], "09:01:05")
+
+        assert hub.state_calls == [_TRADE_DATE, "2026-08-06"]
+        assert _tuples(hub.events) == [
+            (_LOCK_KIND, "1101", "up", "13:29:05", 1),
+            (_LOCK_KIND, "1101", "up", "09:01:05", 1),  # 當日第 1 次(計數也重 seed)
+        ]
+        assert [batch[1] for batch in hub.batches] == [_TRADE_DATE, "2026-08-06"]
+
+    async def test_raw_snapshot_rows_emit_nothing_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(i) 餵原始快照列(無 limit 鍵)→ 0 則,且留下**可辨識**的 warning。
+
+        靜默跳過的話,呼叫點餵錯 rows 的表現只是「事件流永遠空著」,而空事件流與
+        「今天沒人鎖板」完全同形。
+        """
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            engine._diff_limit_events(_TRADE_DATE, _snapshot_rows(), "10:00:05")
+
+        assert hub.batches == []
+        assert any("limit_judged" in r.getMessage() for r in caplog.records)
+
+    async def test_bad_row_value_drops_only_that_row(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(j) 單列壞值(close 為字串)→ 只丟該筆,同輪其他檔照發。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            engine._diff_limit_events(
+                _TRADE_DATE,
+                [
+                    {**_row_out("1101", up=True), "close": "壞值"},
+                    _row_out("2330", name="台積電", close=100.0, up=True),
+                ],
+                "10:00:05",
+            )
+
+        assert [e["code"] for e in hub.events] == ["2330"]
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+    async def test_hub_failure_does_not_kill_cycle(self, tmp_path: Path) -> None:
+        """(j) 批次傘:事件層炸掉不得殺 poll 輪 —— 家數面板與事件流是兩件事。"""
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        hub.publish_error = RuntimeError("匯流排壞了")
+        engine.attach_signal_hub(hub)
+
+        await engine._run_cycle()
+
+        assert engine.state()["counts"] == _EXPECTED
+        assert engine._series_list() == [_EXPECTED_POINT]
