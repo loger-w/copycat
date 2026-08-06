@@ -365,6 +365,26 @@ async def test_close_stock_future_position_routes_as_future(
     assert com.sent[0][2] is False
 
 
+async def test_close_adjusted_stock_future_routes_as_future(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """除權息調整後的個股期(第三碼變數字,如 EE1)平倉仍必須走 SendFutureOrder。
+
+    這種碼進不了 `stkfut_map`(那份只組 XXF 形)→ 掉到結構判別;「body 含任何
+    數字 = 選擇權」會讓它與本輪 P0 同樣走選擇權通道,而平倉的 fut 分支沒有單位閘
+    可擋(乘數反查失敗只 warn 降 1),既有部位平不掉。
+    """
+    _stkfut_map(tmp_path, monkeypatch)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="fut", stock_no="EE1I6", qty=1, avg_price=60.0)])
+    req = PositionCloseRequest(market="fut", key="EE1I6", price=55.0)
+    res = await _drive(client, lambda: client.close_position(req))
+    assert res.ok is True
+    assert com.sent[0][2] is False
+
+
 @pytest.mark.parametrize(
     "contract,is_option",
     [

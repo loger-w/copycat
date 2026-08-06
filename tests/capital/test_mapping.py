@@ -12,9 +12,10 @@ from pathlib import Path
 import pytest
 
 import copycat.stkfut_map as stkfut_map
-from copycat.stkfut_map import write_map
+from copycat.stkfut_map import lookup_product, write_map
 from copycat.capital.mapping import (
     exchange_product_of,
+    is_option_contract,
     multiplier_of,
     product_of,
     to_exchange_symbol,
@@ -347,6 +348,75 @@ def test_exchange_product_of_known_prefix_wins(contract: str, product: str) -> N
     # 週選契約(TX422000T6)的「去尾 2 碼取字母段」啟發式會截成 "TX" →
     # 乘數反查 ValueError → fallback 1,金額閘鬆 50 倍(review A1)
     assert exchange_product_of(contract) == product
+
+
+class TestIsOptionContract:
+    """送單分流(SendOptionOrder vs SendFutureOrder)的單一定義,直接單元測試。
+
+    先前只有 client 層的間接覆蓋(`test_client.py`),判準本身的邊界(調整後
+    契約碼、ETF 期貨、對映表降級)沒有一條測試指得到 —— 分流錯的代價是真錢面。
+    """
+
+    def _map(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """個股期對映表注入(隔離版控真檔;CDF=標準 2000、NYF=ETF 10000)。"""
+        path = tmp_path / "map.json"
+        write_map(
+            path,
+            {
+                "2330": {
+                    "prod": "CDF",
+                    "name": "台積電",
+                    "unit": 2000,
+                    "mini": {"prod": "QFF", "unit": 100},
+                },
+                "0050": {"prod": "NYF", "name": "元大台灣50ETF", "unit": 10000, "mini": None},
+            },
+        )
+        monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", path)
+
+    @pytest.mark.parametrize(
+        ("contract", "option"),
+        [
+            ("TXO20000I6", True),  # 月選(已知產品)
+            ("TX422000T6", True),  # 週選 Put 月碼(已知家族;啟發式會截成 "TX")
+            ("ZZZ20000I6", True),  # 未知產品、body 含履約價 = 選擇權形
+            ("TXFI6", False),  # 指數期貨
+            ("CDFI6", False),  # 個股期標準腿(對映表命中)
+            ("SXFI6", False),  # 未知產品、body 純字母 = 期貨形(費半)
+            ("NYFI6", False),  # ETF 期貨(單位非標準,但仍是期貨)
+            ("EE1I6", False),  # 除權息調整後個股期:第三碼變數字,不是履約價
+            ("CD1I6", False),
+        ],
+    )
+    def test_classification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contract: str, option: bool
+    ) -> None:
+        """調整後契約(EE1/CD1)必須留在期貨側:第三碼的**單一**數字是流水碼不是履約價。
+
+        期交所股票期貨經契約調整(除權息等)後商品代號第三碼由 F 改為數字,這種碼
+        不可能出現在 `stkfut_map`(`_parse_rows` 只組 XXF 形)→ 一路掉到結構判別;
+        「body 含任何數字 = 選擇權」會把它判成選擇權,與本輪 P0 同一個失效樣態
+        (送單 + 平倉全走 SendOptionOrder,真錢面)。
+        """
+        self._map(tmp_path, monkeypatch)
+        assert is_option_contract(contract) is option
+
+    def test_structural_fallback_survives_stale_map(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """對映表版本不符降級空表時,個股期仍判期貨 —— 結構判別是真安全網。
+
+        `lookup_product` 那層只是快路徑:對映檔失效(版本 bump / 檔案損毀)時
+        分流不可以跟著翻面,否則「對映表過期」會靜默升級成「送單走錯通道」。
+        """
+        path = tmp_path / "map.json"
+        path.write_text(
+            json.dumps({"_cache_version": 1, "map": {"2330": {"prod": "CDF", "name": "台積電"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(stkfut_map, "DEFAULT_PATH", path)
+        assert lookup_product("CDF") is None  # 前提:這條測的確實是降級路徑
+        assert is_option_contract("CDFI6") is False
 
 
 def test_product_of_takes_fourth_segment() -> None:
