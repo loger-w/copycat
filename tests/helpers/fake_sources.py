@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Callable
 
-from copycat.live.stock_source import BarsStatus
+from copycat.live.stock_source import BarsStatus, stock_symbol
 
 
 def dbar(t: str, c: int) -> dict:
@@ -232,6 +232,14 @@ class FakeStockSource:
 
     def unsubscribe_symbol(self, code: str) -> None:
         pass
+
+    def symbol_of(self, key: str) -> str:
+        """instrument key → TC4 symbol(stkfut-contracts R2-2:engine 的推播路由鍵)。
+
+        **一律委派 `stock_symbol`**(R1):fake 自寫第二份對映時,路由表的鍵在測試裡
+        永遠自洽、在 prod 永遠對不上真實 symbol,而那條路的失效是「訂閱成功但零推播」。
+        """
+        return stock_symbol(key)
 
     def backfill(self, code: str) -> list:
         return []
