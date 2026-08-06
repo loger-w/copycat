@@ -92,8 +92,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   cache 鍵複合 code:session;預設 day = 大盤 tab 行為不變)
 │                         #   breadth_engine(FinMind 全市場家數 poller,2026-08-06:10s poll/
 │                         #   盤中窗/當日序列落檔 data/market/、失敗退避;REST /api/market/breadth
-│                         #   + WS /ws/breadth)、breadth_fetch(三支 FinMind dataset 取數 +
-│                         #   錯誤分類 quota)、finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
+│                         #   + WS /ws/breadth)、breadth_fetch(四支 FinMind dataset 取數 +
+│                         #   錯誤分類 quota;第四支 = 單日全市場 EOD,連板數用)、
+│                         #   finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算;tick_size_milli 毫元版)
 ├── market_breadth.py     #   全市場廣度純函式(2026-08-06,零 IO):universe 過濾 / 五桶家數 /
 │                         #   毫元漲跌停判定;neigui 搬移,parity oracle fixture 對照
@@ -160,9 +161,10 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
   `CAPITAL_DLL_DIR` / `CAPITAL_ORDER_ENABLED`(false=總開關全擋)/
   `CAPITAL_MAX_QTY` / `CAPITAL_MAX_AMOUNT`(未設/0 = 不限,user 拍板)/
   `CAPITAL_AUDIT_DIR`(選配,預設隨 TXO_AUDIT_DIR;審計檔 capital-YYYYMMDD.jsonl)。
-- `VERIFY_BREADTH_FAIL=1`(**verify server 專用**,非 .env:`--verify` 模式下三支 breadth
-  fake 取數齊拋 `BreadthFetchError` —— SC-3「FinMind 掛掉只讓家數面板 stale,TC4 系零波及」
-  的失效注入通道。prod server 不看這個 key)。
+- `VERIFY_BREADTH_FAIL=1`(**verify server 專用**,非 .env:`--verify` 模式下四支 breadth
+  fake 取數(snapshot / stock_info / disposition / daily prices)齊拋 `BreadthFetchError`
+  —— SC-3「FinMind 掛掉只讓家數面板 stale,TC4 系零波及」的失效注入通道。prod server
+  不看這個 key)。
 
 ---
 
