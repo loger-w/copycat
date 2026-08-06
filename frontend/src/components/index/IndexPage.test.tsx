@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IndexPage } from "@/components/index/IndexPage";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+import type { BreadthState } from "@/types";
 import {
   MARKET2_FUT_STORE,
   MARKET2_KEY_STORE,
@@ -85,11 +86,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderPage(txf: TxfQuote | null = TXF) {
+const BREADTH: BreadthState = {
+  enabled: true,
+  trade_date: "2026-08-06",
+  as_of: "10:31:00",
+  stale: false,
+  counts: {
+    twse: { limit_up: 3, up: 512, flat: 88, down: 401, limit_down: 2 },
+    tpex: { limit_up: 7, up: 388, flat: 61, down: 290, limit_down: 1 },
+  },
+  series: [{ t: "0930", twse: [3, 512, 88, 401, 2], tpex: [7, 388, 61, 290, 1] }],
+};
+
+function renderPage(txf: TxfQuote | null = TXF, breadth: BreadthState | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <IndexPage twse={series()} otc={OTC} txf={txf} futures={FUTURES} />
+      <IndexPage twse={series()} otc={OTC} txf={txf} futures={FUTURES} breadth={breadth} />
     </QueryClientProvider>,
   );
 }
@@ -211,5 +224,31 @@ describe("IndexPage 相關係數區塊(SC-4)", () => {
     const row = screen.getByTestId("basis-row");
     const toggle = screen.getByRole("button", { name: /相關係數/ });
     expect(row.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+  it("(f) 中段出現家數帶與騰落線,數字取自 breadth props", () => {
+    renderPage(TXF, BREADTH);
+    expect(screen.getByTestId("breadth-band")).toBeTruthy();
+    expect(screen.getByTestId("adl-chart")).toBeTruthy();
+    expect(screen.getByTestId("breadth-cell-twse-limit_up").textContent).toContain("3");
+    // net = (3+512+7+388) − (401+2+290+1) = 910 − 694 = +216
+    expect(screen.getByTestId("adl-last").textContent).toContain("+216");
+  });
+
+  it("(f2) 家數帶位於雙 pane 之後、相關係數區塊之前", () => {
+    renderPage(TXF, BREADTH);
+    const left = screen.getByTestId("market-pane-left");
+    const band = screen.getByTestId("breadth-band");
+    const toggle = screen.getByRole("button", { name: /相關係數/ });
+    expect(left.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(band.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("(f3) breadth 為 null 時家數帶照樣在位(載入中),不炸圖", () => {
+    renderPage(TXF, null);
+    expect(screen.getByTestId("breadth-band").textContent).toContain("載入中");
+    expect(screen.getByTestId("adl-chart").textContent).toContain("盤中累積後顯示");
   });
 });
