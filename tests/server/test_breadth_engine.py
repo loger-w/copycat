@@ -493,8 +493,30 @@ class TestMapCache:
         await engine._run_cycle()
         assert inf.calls == 2
 
+    async def test_disposition_success_then_failure_keeps_previous_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """**先成功後失敗 → 前一份名單仍生效**(design「保前值」的字面;review SPEC-5)。
+
+        「以空集合續行」只描述了冷啟動那一半:已經拿到過名單之後再失敗,處置股不會突然
+        被算回家數裡(否則 counts 會在上游抖一下時跳一階,而那一階看起來像真的行情)。
+        """
+        monkeypatch.setattr(be, "_MAP_TTL_SECS", 0.0)  # 每輪都重取(才走得到第二次失敗)
+        disp = FakeFetch(list(_DISPOSITION_ROWS))
+        engine, *_ = _make(tmp_path, disposition=disp, clock=Clock(now="16:00:00"))
+
+        await engine._run_cycle()
+        assert engine.state()["counts"]["twse"]["up"] == 1  # 9999 被名單剔除
+
+        disp.error = BreadthFetchError("disposition down")
+        await engine._run_cycle()
+
+        state = engine.state()
+        assert state["counts"]["twse"]["up"] == 1  # 前一份名單仍生效(不是空集合)
+        assert state["stale"] is True  # 但誠實標 degraded
+
     async def test_disposition_failure_is_degraded_but_continues(self, tmp_path: Path) -> None:
-        """處置股表拿不到 → 空集合續行(那幾檔會被算進去),但要亮 degraded。"""
+        """處置股表**冷啟動**就拿不到 → 空集合續行(那幾檔會被算進去),但要亮 degraded。"""
         disp = FakeFetch(list(_DISPOSITION_ROWS))
         disp.error = BreadthFetchError("disposition down")
         engine, *_ = _make(tmp_path, disposition=disp, clock=Clock(now="16:00:00"))
@@ -579,6 +601,75 @@ class TestSeriesPersistence:
 
         state = engine.state()
         assert state["series"] == [] and state["trade_date"] is None
+
+    @pytest.mark.parametrize(
+        "bad_point",
+        [
+            pytest.param("not a dict", id="非 dict"),
+            pytest.param({"t": 931, "twse": [0] * 5, "tpex": [0] * 5}, id="t 非 str"),
+            pytest.param({"t": "0940", "twse": [0, 1, 2, 3], "tpex": [0] * 5}, id="twse 長度 4"),
+            pytest.param({"t": "0941", "twse": [0] * 5, "tpex": [0, 0, 0, 0, "x"]}, id="含字串"),
+            pytest.param(
+                {"t": "0942", "twse": [0, 0, 0, 0, True], "tpex": [0] * 5}, id="bool 混入"
+            ),
+            pytest.param({"t": "0943", "twse": [0] * 5}, id="缺 tpex"),
+        ],
+    )
+    async def test_restore_drops_malformed_points_only(
+        self, tmp_path: Path, bad_point: object
+    ) -> None:
+        """畸形點**逐點丟棄**、合法點照收(review TC-2)。
+
+        形狀防禦零覆蓋時 `_is_bucket_row` 恆 True 的 mutation 全綠 —— 而畸形點會一路
+        流到前端變成 NaN(圖上是斷線或整段空白,不是錯誤)。`bool` 是 `int` 的子類,
+        `[.., True]` 這種值必須擋在後端。
+        """
+        good = {"t": "0931", "twse": [0, 1, 2, 3, 0], "tpex": [0, 0, 0, 0, 0]}
+        _series_file(tmp_path).write_text(
+            json.dumps({"_version": 1, "trade_date": _TRADE_DATE, "series": [good, bad_point]}),
+            encoding="utf-8",
+        )
+        engine, *_ = _make(tmp_path)
+
+        engine._restore()
+
+        assert engine.state()["series"] == [good]
+        assert engine.state()["trade_date"] == _TRADE_DATE
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"_version": 1, "trade_date": _TRADE_DATE, "series": {}}, id="series 非 list"),
+            pytest.param({"_version": 1, "trade_date": 20260805, "series": []}, id="日期非 str"),
+        ],
+    )
+    async def test_restore_rejects_bad_top_level_shape(self, tmp_path: Path, payload: dict) -> None:
+        """頂層形狀不符 → 整份不採用(空序列起步),不是半份。"""
+        _series_file(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+        engine, *_ = _make(tmp_path)
+
+        engine._restore()
+
+        state = engine.state()
+        assert state["series"] == [] and state["trade_date"] is None
+
+    async def test_save_oserror_degrades_without_killing_cycle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """落檔失敗只降級:記憶體序列照在、該輪照樣廣播 —— 磁碟滿不得拖垮 poll(review TC-2)。"""
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(be.os, "replace", _boom)
+        engine, *_ = _make(tmp_path)
+
+        with caplog.at_level("WARNING"):
+            await engine._run_cycle()
+
+        assert engine.state()["series"] == [_EXPECTED_POINT]  # 記憶體序列不受影響
+        assert not _series_file(tmp_path).exists()
+        assert any("落檔失敗" in r.message for r in caplog.records)
 
     async def test_rollover_clears_series(self, tmp_path: Path) -> None:
         engine, snap, _inf, _disp, clock = _make(tmp_path)
@@ -715,10 +806,21 @@ class TestPollLoop:
 
         assert snap.calls >= 3
 
-    async def test_loop_survives_cycle_exception(self, tmp_path: Path) -> None:
-        """一輪炸掉不得讓 poll task 死透(index `_mis_loop` 同款傘罩)。"""
+    async def test_loop_survives_cycle_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """一輪炸掉不得讓 poll task 死透(index `_mis_loop` 同款傘罩)。
+
+        注入點必須在 `_fetch_snapshot` 的 try/except **之外**(review TC-3):注在取數層
+        時例外根本到不了 `_poll_loop`,測到的是那個 catch 而不是傘罩 —— 把傘罩整段刪掉
+        原測試照樣綠。`compute_breadth` 在 `_apply` 內、全程無保護,是真的會逃到迴圈的路。
+        """
+
+        def _boom(*_a: object, **_k: object) -> dict:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(be, "compute_breadth", _boom)
         engine, snap, *_ = _make(tmp_path, config=BreadthConfig(poll_secs=0.01))
-        snap.error = RuntimeError("boom")
 
         await engine.start()
         try:

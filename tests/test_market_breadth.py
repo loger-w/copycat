@@ -431,6 +431,12 @@ def test_breadth_parity() -> None:
     )
     assert limit_total > 0, "fixture 對漲跌停判定零覆蓋,需盤中重錄"
 
+    # 時刻推導也吃這份真 rows(review TC-5):engine 的 trade_date / 分鐘鍵全建立在
+    # 它上面,而 fixture 帶著真 FinMind 的 `date` 欄格式(Z 尾 / 台北 naive 都可能)
+    snapshot_dt = max_tick_datetime(fixture["snapshot_rows"])
+    assert snapshot_dt is not None
+    assert snapshot_dt.date().isoformat() == fixture["today"]
+
     stock_info = fixture["stock_info_rows"]
     primary_sector = dedup_sector_map(stock_info)
     type_map = build_type_map(stock_info)

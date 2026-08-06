@@ -88,6 +88,13 @@ def test_limit_down_milli_tick_zone_taken_before_ceil() -> None:
     assert limit_up_milli(45_455) == 50_000
 
 
-def test_limit_up_price_is_thin_wrapper_of_milli() -> None:
-    for pc in (100.0, 29.1, 99.0, 9.5, 56.2, 45.5, 10.01, 123.5):
-        assert limit_up_price(pc) == round(limit_up_milli(round(pc * 1000)) / 1000, 2)
+def test_limit_up_price_hand_computed_across_tick_zones() -> None:
+    """元版硬編值(review TC-7)。
+
+    原本這條是「`limit_up_price(pc) == limit_up_milli(...)/1000`」的鏡像斷言 —— 但
+    `limit_up_price` 的實作**就是**那一行,兩邊同時錯就同時綠(tick 表整段改壞照樣過)。
+    改成與 `test_limit_up_milli_hand_computed` 同源的獨立手算值,挑三個 tick 段。
+    """
+    assert limit_up_price(9.99) == 10.95  # 過 10 元 → tick 0.05
+    assert limit_up_price(45.5) == 50.0  # 過 50 元 → tick 0.1
+    assert limit_up_price(999.0) == 1095.0  # 過 1000 元 → tick 5

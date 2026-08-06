@@ -160,6 +160,9 @@ Touchance 4.0 是 **Windows 桌面 app**,Python client 透過 **ZMQ** 跟它通�
   `CAPITAL_DLL_DIR` / `CAPITAL_ORDER_ENABLED`(false=總開關全擋)/
   `CAPITAL_MAX_QTY` / `CAPITAL_MAX_AMOUNT`(未設/0 = 不限,user 拍板)/
   `CAPITAL_AUDIT_DIR`(選配,預設隨 TXO_AUDIT_DIR;審計檔 capital-YYYYMMDD.jsonl)。
+- `VERIFY_BREADTH_FAIL=1`(**verify server 專用**,非 .env:`--verify` 模式下三支 breadth
+  fake 取數齊拋 `BreadthFetchError` —— SC-3「FinMind 掛掉只讓家數面板 stale,TC4 系零波及」
+  的失效注入通道。prod server 不看這個 key)。
 
 ---
 
