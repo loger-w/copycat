@@ -28,13 +28,18 @@ class _FakeEngine:
 
     def __init__(self, delay: float = 0.0) -> None:
         self.set_calls: list[list[str]] = []
+        self.seqs: list[int | None] = []
         self.published: list[dict] = []
         self._delay = delay
+        #: 第一次進到 set_watchlist(= 慢訂閱窗的起點;X-3 的並發測試靠它定錨)
+        self.entered = asyncio.Event()
 
-    async def set_watchlist(self, codes: list[str]) -> None:
+    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None:
+        self.entered.set()
         if self._delay:
             await asyncio.sleep(self._delay)
         self.set_calls.append(list(codes))
+        self.seqs.append(seq)
 
     def _publish(self, msg: dict) -> None:
         self.published.append(msg)
@@ -44,6 +49,18 @@ def _service(tmp_path: Path, delay: float = 0.0) -> tuple[WatchlistService, _Fak
     path = tmp_path / "watchlist.json"
     engine = _FakeEngine(delay)
     return WatchlistService(path, engine), engine, path
+
+
+async def _wait_codes(path: Path, codes: list[str], timeout: float = 0.25) -> None:
+    """等落檔變成 `codes`(不看 engine —— 這裡驗的正是「落檔不必等訂閱」)。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if path.exists() and load_watchlist(path)["codes"] == codes:
+            return
+        await asyncio.sleep(0.01)
+    got = load_watchlist(path)["codes"] if path.exists() else None
+    raise AssertionError(f"{timeout}s 內落檔仍是 {got},沒變成 {codes}(第二個 commit 被鎖擋住)")
 
 
 class TestAdd:
@@ -299,6 +316,46 @@ class TestConcurrency:
         assert len(engine.set_calls) == 2
         assert sorted(engine.set_calls[-1]) == ["2330", "5483"]  # 最後一次是累積結果
         assert len(engine.published) == 2
+
+    async def test_second_commit_persists_while_first_subscribe_in_flight(
+        self, tmp_path: Path
+    ) -> None:
+        """X-3:訂閱副作用移到鎖外 —— 落檔 + 定序留鎖內,ZMQ 往返不再擋住下一個寫入。
+
+        TC4 故障時單次 `set_watchlist` 最壞是 30 檔 × 數十秒;鎖在裡面的話,期間所有
+        `/watch` 與前端 PUT 全部堆積,而 Discord 的 interaction token 只有 15 分鐘。
+        """
+        service, engine, path = _service(tmp_path, delay=0.5)
+
+        first = asyncio.create_task(service.apply({"codes": ["2330"], "groups": []}))
+        await asyncio.wait_for(engine.entered.wait(), 1)
+        second = asyncio.create_task(service.apply({"codes": ["2317"], "groups": []}))
+
+        await _wait_codes(path, ["2317"])
+        assert not first.done(), "前提失效:第一次的訂閱已跑完,這條測不到鎖凸出"
+        await asyncio.gather(first, second)
+
+    async def test_commit_hands_engine_a_monotonic_seq(self, tmp_path: Path) -> None:
+        """定序在鎖內取號:鎖外的訂閱不論以什麼順序抵達 engine,都認得出誰比較新。"""
+        service, engine, _ = _service(tmp_path)
+
+        await service.add("2330")
+        await service.add("5483")
+
+        assert engine.seqs == [1, 2]
+
+    async def test_subscribe_done_when_call_returns(self, tmp_path: Path) -> None:
+        """語意不變(回歸):呼叫端 await 返回時 engine 那一趟已跑完、廣播已發。
+
+        收斂的是**鎖凸出**,不是自己這一次的等待 —— 改成 fire-and-forget 的話
+        route 回應時訂閱可能還沒掛上,前端拿到的第一份 snapshot 會缺。
+        """
+        service, engine, _ = _service(tmp_path, delay=0.05)
+
+        await service.add("2330")
+
+        assert engine.set_calls == [["2330"]]
+        assert engine.published == [{"type": "watchlist_changed"}]
 
     async def test_concurrent_same_add_only_writes_once(self, tmp_path: Path) -> None:
         service, engine, path = _service(tmp_path, delay=0.02)

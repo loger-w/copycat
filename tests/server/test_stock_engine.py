@@ -1619,6 +1619,49 @@ class TestSignalHubHooks:
         await engine.close()
 
 
+class TestWatchlistSeq:
+    """X-3:`seq` = last-writer-wins 的定序尺。
+
+    service 把訂閱移到鎖外之後,兩個並發 commit 可能以任意順序抵達 engine。舊名單
+    後到時若照套,訂閱池 / hub membership / 種子廣播會**一起**退回上一版,而畫面上
+    只是「剛加的股票又不見了」,沒有任何錯誤訊號。
+    """
+
+    async def test_stale_seq_is_skipped_entirely(self) -> None:
+        engine, src = await _make()
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+        await engine.set_watchlist(["2330"], seq=2)
+        subscribed = list(src.subscribed)
+
+        await engine.set_watchlist(["5483"], seq=1)  # 舊名單後到
+
+        assert src.subscribed == subscribed, "舊 seq 用舊名單蓋掉了訂閱池"
+        assert src.unsubscribed == [], "舊 seq 把新名單的檔退訂了"
+        assert hub.kinds("watchlist") == [("watchlist", ["2330"])]
+        await engine.close()
+
+    async def test_newer_seq_applies(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"], seq=1)
+
+        await engine.set_watchlist(["5483"], seq=2)
+
+        assert "5483" in src.subscribed
+        assert "2330" in src.unsubscribed
+        await engine.close()
+
+    async def test_seq_none_does_not_participate(self) -> None:
+        """既有 caller / boot 還原不帶 seq → 不參與定序,照舊全套。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"], seq=5)
+
+        await engine.set_watchlist(["5483"])
+
+        assert "5483" in src.subscribed
+        await engine.close()
+
+
 # ---- 個股期合約主圖(stkfut-contracts SC-3;instrument key = 股號 或 F:<prod>:<ym>)----
 
 _CONTRACT = "F:CDF:202609"
