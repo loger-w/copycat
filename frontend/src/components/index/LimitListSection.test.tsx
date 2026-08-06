@@ -5,7 +5,7 @@
  *  `as_of == null` → 「載入中…」、`as_of != null` 且 rows 空 → 「暫無資料(延遲)」、
  *  篩選後 0 列 → 「無符合條件」;`stale` **只**管標題列膠囊,不參與空狀態分流(R18)。 */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LimitListSection } from "@/components/index/LimitListSection";
@@ -64,8 +64,12 @@ function stubFetch(state: BreadthRowsState): void {
   vi.stubGlobal("fetch", fetchSpy);
 }
 
+/** 最近一次 render 用的 client —— refetch 情境要從測試側主動觸發第二次取數。 */
+let client: QueryClient;
+
 function newClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return client;
 }
 
 function renderSection(onOpenStock?: (code: string) => void) {
@@ -182,9 +186,43 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
     });
   });
 
+  // FE-1:TQ v5 的 `isError` 對 **refetch** 失敗同樣為 true。單看 `isError` 分流會讓
+  // 「已經有一整張表、只是這一輪 10 秒輪詢沒抓到」整表消失換成「載入失敗」——
+  // 盤中最需要看的那份資料因為一次網路抖動就被清掉。有 data 就保表,失敗改用膠囊說。
+  it("已有資料後 refetch 失敗 → 表格保留,改以「更新失敗」膠囊示警", async () => {
+    await openWith(mkState(ROWS));
+    expect(rowIds().length).toBe(8);
+
+    fetchSpy.mockImplementation(async () => new Response("boom", { status: 500 }));
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["breadth-rows"] });
+    });
+
+    expect(screen.queryByTestId("limit-list-table")).toBeTruthy();
+    expect(rowIds().length).toBe(8);
+    expect(screen.queryByTestId("limit-list-msg")).toBeNull();
+    expect(screen.getByTestId("limit-list-refetch-error").textContent).toContain("更新失敗");
+  });
+
   it("stale=false → 無膠囊", async () => {
     await openWith(mkState(ROWS));
     expect(screen.queryByTestId("limit-list-stale")).toBeNull();
+    expect(screen.queryByTestId("limit-list-refetch-error")).toBeNull();
+  });
+
+  // FE-4:「無符合條件」是操作結果(自己把篩選收太緊),「今日尚無漲跌停」是系統態
+  // (全市場真的一檔都沒鎖)。共用一句文案會把後者說成前者 —— 使用者會去翻篩選找錯。
+  it("狀態池為 0(全市場零漲跌停)→ 今日尚無漲跌停", async () => {
+    await openWith(mkState([mkRow("9999"), mkRow("8888"), mkRow("7777")]));
+    expect(screen.queryByTestId("limit-list-table")).toBeNull();
+    expect(screen.getByTestId("limit-list-msg").textContent).toBe("今日尚無漲跌停");
+  });
+
+  it("狀態池 > 0 但篩選後 0 列 → 無符合條件(與上一條分流)", async () => {
+    await openWith(mkState(ROWS));
+    fireEvent.change(screen.getByLabelText("金額(億)"), { target: { value: "999" } });
+    expect(screen.queryByTestId("limit-list-table")).toBeNull();
+    expect(screen.getByTestId("limit-list-msg").textContent).toBe("無符合條件");
   });
 });
 
@@ -337,5 +375,33 @@ describe("LimitListSection 篩選(OR 狀態 × AND 門檻)", () => {
     window.localStorage.setItem(LIMIT_LIST_FILTER_KEY, "{壞掉的 JSON");
     await openWith(mkState(ROWS));
     expect(rowIds().length).toBe(8);
+  });
+
+  // FE-3:形狀對(是 object)但**逐欄型別不符**的 JSON 一路通過 `{...DEFAULT, ...parsed}`,
+  // 門檻欄拿到 number 時 `threshold` 的 `raw.trim()` 直接 TypeError —— 而它在 render 路徑上、
+  // 專案又沒有 ErrorBoundary,失效樣態是整頁白屏且清不掉(壞值留在 localStorage 裡)。
+  it("localStorage 逐欄型別不符 → 該欄退回預設,畫面照常渲染", async () => {
+    window.localStorage.setItem(
+      LIMIT_LIST_FILTER_KEY,
+      JSON.stringify({ minAmount: 5, twse: "yes", priceMin: null, priceMax: [], limitDown: 0 }),
+    );
+    await openWith(mkState(ROWS));
+    expect(rowIds().length).toBe(8);
+    expect((screen.getByLabelText("金額(億)") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("股價下限") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("股價上限") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("上市") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("跌停") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("合法欄位照常還原,壞欄不牽連好欄", async () => {
+    window.localStorage.setItem(
+      LIMIT_LIST_FILTER_KEY,
+      JSON.stringify({ tpex: false, minAmount: 5, priceMin: "50" }),
+    );
+    await openWith(mkState(ROWS));
+    expect((screen.getByLabelText("上櫃") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("股價下限") as HTMLInputElement).value).toBe("50");
+    expect((screen.getByLabelText("金額(億)") as HTMLInputElement).value).toBe("");
   });
 });
