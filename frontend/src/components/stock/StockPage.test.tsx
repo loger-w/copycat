@@ -497,6 +497,20 @@ describe("StockPage 訊號欄(SC-9)", () => {
     fireEvent.click(label.closest("button")!);
     expect(onSelect).toHaveBeenCalledWith("2317");
   });
+
+  // 🟢 market-overview R4(SC-8):rail 的語意是「我的自選發生什麼事」;
+  // 全市場廣度事件走綜合 tab 的時間軸,不得混進來(feed 預設 exclude)。
+  it("同一條 bus 上的 market 事件不進 rail(feed 預設 exclude)", async () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    act(() => {
+      emitSignal(sig({ id: "m-1", kind: "market_limit_lock", code: "1101", direction: "up" }));
+      emitSignal(sig());
+    });
+    const list = await screen.findByTestId("signal-rail-list");
+    await waitFor(() => expect(within(list).getByText("爆拉 +2.50%")).toBeTruthy());
+    expect(within(list).queryByText("1101")).toBeNull();
+    expect(list.querySelectorAll("li").length).toBe(1);
+  });
 });
 
 // 🟢 signal-rules SC-7:四鍵開關退場 → 規則列 + 規則 Dialog。

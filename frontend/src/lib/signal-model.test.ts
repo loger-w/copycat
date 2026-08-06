@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { formatToastText, kindLabel, mergeSignals, type SignalMsg } from "@/lib/signal-model";
+// namespace import(不是具名):具名 import 一個尚未存在的 export 在 Vite SSR transform 下
+// 是**載入期例外**(整檔 error),紅階段要的是「fail 不是 error」。
+import * as signalModel from "@/lib/signal-model";
 
 function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
   return {
@@ -57,6 +60,19 @@ describe("kindLabel", () => {
     expect(kindLabel(sig({ kind: "limit_open", direction: "down", pct: null }))).toBe("跌停打開");
   });
 
+  // 文案與後端 `signal_hub._kind_text` 逐字對齊(design §7):兩邊漂掉時
+  // WS 列與 Discord/jsonl 上的同一則事件會長得不一樣。
+  it("全市場鎖板 / 打開依 direction 分中文(SC-8)", () => {
+    expect(kindLabel(sig({ kind: "market_limit_lock", direction: "up", pct: null })))
+      .toBe("全市場鎖漲停");
+    expect(kindLabel(sig({ kind: "market_limit_lock", direction: "down", pct: null })))
+      .toBe("全市場鎖跌停");
+    expect(kindLabel(sig({ kind: "market_limit_open", direction: "up", pct: null })))
+      .toBe("全市場漲停打開");
+    expect(kindLabel(sig({ kind: "market_limit_open", direction: "down", pct: null })))
+      .toBe("全市場跌停打開");
+  });
+
   it("pct 缺值不印 NaN(舊後端 / 壞行)", () => {
     expect(kindLabel(sig({ kind: "surge", pct: null }))).toBe("爆拉");
     expect(kindLabel(sig({ kind: "vol_burst", pct: null }))).toBe("爆量");
@@ -64,6 +80,19 @@ describe("kindLabel", () => {
 
   it("未知 kind 原樣回傳(新後端 kind 不因前端舊而變空白)", () => {
     expect(kindLabel(sig({ kind: "brand_new" as SignalMsg["kind"], pct: null }))).toBe("brand_new");
+  });
+});
+
+// 🟢 market-overview R4(SC-8):全市場廣度事件與自選訊號同一條匯流排,
+// 前綴 `market_` 是唯一的分族依據(feed 過濾 / alerts 早退都吃它)。
+describe("isMarketKind", () => {
+  it("兩個 market kind 為 true", () => {
+    expect(signalModel.isMarketKind("market_limit_lock")).toBe(true);
+    expect(signalModel.isMarketKind("market_limit_open")).toBe(true);
+  });
+
+  it("自選訊號 kind 為 false(限自選的鎖板不是全市場事件)", () => {
+    expect(signalModel.isMarketKind("limit_lock")).toBe(false);
   });
 });
 
