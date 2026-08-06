@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
+from pathlib import Path
 
 from copycat.market_breadth import (
     PRIMARY_INDUSTRY_OVERRIDE,
@@ -359,3 +361,58 @@ def test_compute_breadth_no_limit_judgement_when_prev_close_unusable() -> None:
     assert out["twse"] == {"limit_up": 0, "up": 2, "flat": 0, "down": 0, "limit_down": 0}
     assert out["tpex"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 0}
     assert all(not r["limit_up"] and not r["limit_down"] for r in out["rows"])
+
+
+# ---------------------------------------------------------------------------
+# SC-1 parity oracle —— 真 FinMind rows,expected 由 neigui 現碼全管線算出
+# ---------------------------------------------------------------------------
+
+_PARITY_PATH = Path(__file__).parent / "fixtures" / "breadth_parity.json"
+
+
+def _bucket_of(row: dict) -> str:
+    """rows 逐檔的桶(與 record_breadth_parity.py 的推導同式)。"""
+    if row["limit_up"]:
+        return "limit_up"
+    if row["limit_down"]:
+        return "limit_down"
+    if row["change_rate"] > 0:
+        return "up"
+    if row["change_rate"] < 0:
+        return "down"
+    return "flat"
+
+
+def test_breadth_parity() -> None:
+    """copycat 全管線 vs neigui 全管線:counts 全等 + 逐檔 bucket 全等。
+
+    這是 **oracle 對照**不是 TDD 紅測試(實作完成後才寫,天然綠)。fixture
+    由 `tests/fixtures/record_breadth_parity.py` 一次性手跑錄製(真 FinMind
+    原始 rows + neigui 現碼算出的 expected),重錄方式見該腳本檔頭。
+    """
+    fixture = json.loads(_PARITY_PATH.read_text(encoding="utf-8"))
+    today = _dt.date.fromisoformat(fixture["today"])
+
+    # fixture 自身健檢:oracle 必須真的涵蓋 limit 判定,否則 parity 是空談
+    expected_counts = fixture["expected_counts"]
+    assert expected_counts["twse"] and expected_counts["tpex"]
+    limit_total = sum(
+        expected_counts[m][b] for m in ("twse", "tpex") for b in ("limit_up", "limit_down")
+    )
+    assert limit_total > 0, "fixture 對漲跌停判定零覆蓋,需盤中重錄"
+
+    stock_info = fixture["stock_info_rows"]
+    primary_sector = dedup_sector_map(stock_info)
+    type_map = build_type_map(stock_info)
+    name_map = build_name_map(stock_info)
+    watch_list = parse_active_disposition(fixture["disposition_rows"], today)
+
+    universe = assemble_universe(fixture["snapshot_rows"], primary_sector, watch_list)
+    assert len(universe) == fixture["row_counts"]["universe"]
+
+    out = compute_breadth(universe, type_map, name_map)
+    assert out is not None
+    assert {"twse": out["twse"], "tpex": out["tpex"]} == expected_counts
+
+    actual_buckets = {r["stock_id"]: _bucket_of(r) for r in out["rows"]}
+    assert actual_buckets == fixture["expected_rows_buckets"]
