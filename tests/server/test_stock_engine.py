@@ -6,6 +6,8 @@ import threading
 import time
 from typing import Callable
 
+import pytest
+
 from copycat.live.stock_source import Bar, BarsStatus, stock_symbol
 from copycat.server import stock_engine as stock_engine_mod
 from copycat.server.stock_engine import StockEngine
@@ -1749,6 +1751,64 @@ class TestContractSessionGate:
         assert set(engine.snapshot("2330")["minutes"]) == {"930"}
         await engine.close()
 
+    async def test_night_quote_leaves_the_book_and_meta_untouched(self) -> None:
+        """code review A1:窗外要**整則早退**,不是只丟 tick。
+
+        只丟 tick 的話夜盤的五檔與參考價照樣蓋掉日盤收盤簿 —— 分時圖與序號都不動,
+        畫面只表現為「收盤後五檔還在跳」,沒有任何錯誤訊號。
+        """
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=1, precise="004500000000"))  # 台北 08:45
+        await _drain(engine)
+        day = engine.snapshot(_CONTRACT)
+        assert day["book"] == {"bids": [(2_375_000, 10)], "asks": [(2_380_000, 10)]}
+        src.on_message(
+            _fut_quote(cum=2, precise="073000000000")  # 台北 15:30
+            | {"Bid": "2500", "BidVolume": "99", "ReferencePrice": "2500"}
+        )
+        await _drain(engine)
+        after = engine.snapshot(_CONTRACT)
+        assert after["book"] == day["book"]
+        assert after["meta"] == day["meta"]
+
+        await engine.close()
+
+    async def test_night_book_only_update_is_dropped_by_wall_clock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """純簿更新(qty=0 → tick=None)沒有 tick 時刻可判窗 → 退到本機時鐘。
+
+        這是夜盤覆蓋日盤簿最主要的一條路:個股期夜盤大部分時間只有簿在動。
+        """
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_fut_quote(cum=1, precise="004500000000"))
+        await _drain(engine)
+        day_book = engine.snapshot(_CONTRACT)["book"]
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_hhmm", lambda: "15:30")
+        src.on_message(
+            _fut_quote(cum=1, qty="0") | {"Bid": "2500", "BidVolume": "99"}  # 純簿更新
+        )
+        await _drain(engine)
+        assert engine.snapshot(_CONTRACT)["book"] == day_book
+        await engine.close()
+
+    async def test_daytime_book_only_update_still_applies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """對照組:本機時鐘在日盤窗內時,純簿更新照舊生效(gate 不誤傷)。"""
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_hhmm", lambda: "10:30")
+        src.on_message(_fut_quote(cum=1, qty="0") | {"Bid": "2500", "BidVolume": "99"})
+        await _drain(engine)
+        assert engine.snapshot(_CONTRACT)["book"]["bids"] == [(2_500_000, 99)]
+        await engine.close()
+
 
 class TestRolloverIsolationForContracts:
     """D14a:期貨 tick 不觸發換日(夜盤跨午夜的日期會比日盤主圖早一天到)。"""
@@ -1812,6 +1872,41 @@ class TestMainSlotTransfer:
         await engine.set_main_contract(_CONTRACT)
         await _drain(engine)
         assert src.backfills == [_CONTRACT]
+        await engine.close()
+
+    async def test_releasing_the_old_main_clears_its_no_data_flag(self) -> None:
+        """code review A7d:主圖被**真正退訂**時要一併清 `_no_data`。
+
+        留著的話下次切回那一檔,畫面在任何新推播之前就先掛上「無資料」,而那是上一輪
+        訂閱期的答案 —— 而重新訂閱後 TC4 若這次有推,`_no_data` 也只在收到推播那一刻
+        才會被清,中間那段空窗使用者看到的是假訊息。`set_watchlist` 移除檔早有同款處理。
+        """
+        engine, src = await _make()
+        await engine.set_main("9999")  # 對映表無此碼 → 不掛期現對照腿
+        assert src.on_no_data is not None
+        src.on_no_data("9999")
+        await _drain(engine)
+        assert engine.snapshot("9999")["no_data"] is True
+        await engine.set_main_contract(_CONTRACT)
+        assert "9999" not in engine._refs  # 前提:真的退訂了
+        assert engine.snapshot("9999")["no_data"] is False
+        await engine.close()
+
+    async def test_no_data_survives_when_the_old_main_is_still_subscribed(self) -> None:
+        """還有 owner(自選)時不得清:那格旗標歸側欄,不歸主圖。
+
+        無條件清的話,自選裡一檔查無資料的股票只要被點開再切走,側欄的「無資料」
+        就此消失且不會再回來(TC4 的 no-data 回呼只在訂閱當下發一次)。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["9999"])
+        await engine.set_main("9999")
+        assert src.on_no_data is not None
+        src.on_no_data("9999")
+        await _drain(engine)
+        await engine.set_main_contract(_CONTRACT)
+        assert engine._refs["9999"] == {"watchlist"}
+        assert engine.snapshot("9999")["no_data"] is True
         await engine.close()
 
     async def test_watchlist_owner_survives_a_contract_switch(self) -> None:

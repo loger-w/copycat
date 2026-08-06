@@ -207,10 +207,13 @@ class FakeStockSource:
         self.bars_status: BarsStatus = "ok"
         #: Fut2 合約發現(stkfut-contracts SC-1);指派 Exception → 查詢拋(502 路徑)
         self.stkfut_catalog: dict[str, dict] | Exception = {}
+        #: 真查詢次數 —— 「當日 cache 只問一次」與「boot 預熱過了」都只有這個計數看得出來
+        self.stkfut_calls = 0
 
     def list_stock_futures(self) -> dict[str, dict]:
         """個股期合約清單(真實作 = TC4QuoteSource.list_stock_futures;StockSource
         Protocol 之外的能力,由 app 以 getattr 接線)。"""
+        self.stkfut_calls += 1
         if isinstance(self.stkfut_catalog, Exception):
             raise self.stkfut_catalog
         return {k: dict(v) for k, v in self.stkfut_catalog.items()}
