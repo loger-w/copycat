@@ -29,6 +29,13 @@ describe("tradeErrorText(capital 錯誤碼)", () => {
   it("INVALID_ORDER 既有文案不變", () => {
     expect(tradeErrorText("INVALID_ORDER")).toBe("下單參數不合法");
   });
+
+  // 個股期下單閘(stkfut-contracts SC-6 / R2-8):兩碼都是「這一單不會被送出去」,
+  // 原碼直接顯示在閃電梯 hint 上等於沒說明白
+  it("個股期兩道閘的錯誤碼各有專屬文案", () => {
+    expect(tradeErrorText("BAD_TICK")).toBe("價格非合法檔位");
+    expect(tradeErrorText("PRODUCT_NOT_ALLOWED")).toBe("此商品下單暫未開放");
+  });
 });
 
 describe("orderStatusText", () => {

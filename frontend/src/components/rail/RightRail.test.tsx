@@ -46,6 +46,11 @@ const STOCK_CTX: RailContext = {
   last: LAST,
   meta: META,
 };
+/** 個股期態:`code` 仍是股號(點價 gate 依賴),合約走獨立欄(stkfut-contracts R4) */
+const STKFUT_CTX: RailContext = {
+  ...STOCK_CTX,
+  contract: { prod: "CDF", ym: "202609", mini: false },
+};
 const FUT_CTX: RailContext = {
   kind: "futures",
   product: "TXF",
@@ -314,6 +319,61 @@ describe("RightRail 委託 / 部位(P0-2 兩段並排)", () => {
     expect(screen.getByText("TXFH6 台指期")).toBeTruthy();
     expect(screen.getByText("證券")).toBeTruthy();
     expect(screen.getByText("期貨")).toBeTruthy();
+  });
+});
+
+// R4:選中個股期合約後,右欄三個 tab 必須整組換到期貨市場 —— 委託 / 部位若還停在
+// `sec`,使用者看到的是現股庫存與現股委託,而閃電梯送出去的是期貨單。
+describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
+  it("閃電 tab → 個股期閃電梯(口數 + 當沖;無交易別)", () => {
+    render(rail(STKFUT_CTX));
+    expect(screen.getByLabelText("口數")).toBeTruthy();
+    expect(screen.getByLabelText("當沖")).toBeTruthy();
+    expect(screen.queryByLabelText("交易別")).toBeNull();
+    expect(screen.queryByLabelText("張數")).toBeNull();
+    expect(screen.getByText("2330")).toBeTruthy(); // 標的仍以股號指認
+    expect(screen.getByText("台積電 CDF 2026/09")).toBeTruthy();
+  });
+
+  it("委託 tab → CapitalOrdersList 收到 market=fut(證券單不混入)", async () => {
+    orders = [secOrder(), futOrder()];
+    render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("tab", { name: "委託" }));
+    await waitFor(() => expect(screen.getByText("TXFH6 台指期")).toBeTruthy());
+    expect(screen.queryByText("2330 台積電")).toBeNull();
+  });
+
+  it("部位 tab → market=fut,估價走 futCloseEstimate(合約 + meta 漲跌停)", async () => {
+    positions = [position({ market: "fut", stock_no: "CDFI6", name: "台積電期貨", qty: 2 })];
+    render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    const close = await screen.findByRole("button", { name: "平倉" });
+    expect(close.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(close);
+    expect(screen.getByText("確認平倉")).toBeTruthy();
+    // 多單平倉貼跌停(meta.lower 90_000 毫元 / 1000);現股態會是最新成交價 100
+    expect(screen.getByText("90")).toBeTruthy();
+  });
+
+  it("他契約的期貨部位估不出價 → 平倉鍵鎖住(不放行跨商品平倉)", async () => {
+    positions = [position({ market: "fut", stock_no: "TXFH6", name: "台指期", qty: 1 })];
+    render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    const close = await screen.findByRole("button", { name: "平倉" });
+    expect(close.hasAttribute("disabled")).toBe(true);
+    expect(close.getAttribute("title")).toBe("無行情估價");
+  });
+
+  it("現貨態武裝後切到合約 → 武裝不殘留(R2-5)", async () => {
+    const { rerender } = render(rail(STOCK_CTX));
+    fireEvent.click(screen.getByRole("button", { name: "武裝" }));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    rerender(rail(STKFUT_CTX));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "武裝" }).getAttribute("aria-pressed")).toBe(
+        "false",
+      ),
+    );
   });
 });
 
