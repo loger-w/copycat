@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "shape": "web UI(SeededStockSource 擴充個股期 fake server :8899 + vite;零 TC4;AI 截圖 + DOM/幾何量化交叉 + user 過目雙層)",
+  "results": {
+    "SC-4 合約下拉": "PASS — 現貨/2026/08/09/12/小型×2 逐字;無期貨(2317)404 不渲染;unit 由真 stkfut_map 併入(SC-4_contract-select.png)",
+    "SC-5 合約分時": "PASS — x 窗量化:整點間距 144.8px(=300 分鐘窗)vs 現貨 160.9px(=270);線/五檔/明細全合約資料;模式鈕 disabled;CDP/MA/量分佈反灰(SC-5_contract-intraday.png)",
+    "SC-6 個股期梯": "PASS — 檔位 5 元級距(現股表)、口數 aria-label、當沖 checkbox;未武裝未點價(SC-6_stkfut-ladder.png)",
+    "SC-5 切回現貨": "PASS — 窗/模式鈕/五檔全還原(SC-5_back-to-spot.png)",
+    "console": "一條新 P2(合約→現貨過渡 render 打 overlay 400)→ 當輪修復 56cdbbda [red] → e8f54009 [green](Phase 6 real-env finding);其餘為 fake 環境噪音;duplicate-key 未再現"
+  },
+  "evidence_dir": "evidence/(4 png + fake_server.py)",
+  "deferred_to_user": [
+    "SC-4/5/6 截圖 user 過目",
+    "SC-6 真送單:prod 安全首單(遠價 1 口 → 群益 APP 核對 → 刪單,§7 紀律)",
+    "D14 觀察項:prod 重啟後首日 08:45–09:00 期貨分時有資料"
+  ]
+}

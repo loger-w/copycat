@@ -1,0 +1,20 @@
+{
+  "round": 1,
+  "reviewer": "impl-spec-reviewer (opus)",
+  "verdict": "0 P0 / 7 P1 / 6 P2 — 全 accepted 修入 PLAN v2",
+  "dispositions": {
+    "R1": "T3 補 fake source 遷移清單(fake_sources/FakeSource/SeededStockSource)+ symbol_of 與 stock_symbol 同規則",
+    "R2": "T2 事前標記 test_stkfut_map 三處 v1 斷言 + 新形期望值",
+    "R3": "新 accessor stkfut_map.lookup_product(prod)(反向索引 + process cache);mapping 與 capital_api 共用;mapping 檔頭零 IO 約定更新 + 測試隔離",
+    "R4": "T7 補 RightRail:contract≠null → market=fut(委託/部位 tab 同口徑)+ vitest",
+    "R5": "T5 補:contract≠null → mode 強制 intraday(不寫回 localStorage)+ useStockBars enabled:false;元件收值口徑(OrderBook=股號)",
+    "R6": "T5 補元件層測試(overlay/VP 不打請求、toggle/模式鈕 disabled);期貨態顯式 prop 不從 accum.code 猜",
+    "R7": "T7 具名 LadderView.tsx + presentation props 清單 + container 保留清單;「量 bar」改 bidQty/askQty",
+    "R8": "T2 補 refresh 壞列兩測試(混壞列 warn/全滅 raise 不覆寫)",
+    "R9": "T6:instrumentKeyRef(codeRef 同款);切檔 effect deps 換 instrumentKey;WS effect [] 不動",
+    "R10": "T3 補夜盤 ingest gate 測試(15:30/01:00 tick 不入;現貨不受影響)",
+    "R11": "T1 補 catalog 單元四條(cache/單飛/不留舊日/contains)",
+    "R12": "T3 commit 判準機械化:未改任何既有 assertion = 🟢;需改既有 assertion 一律 🔴 + message 引用",
+    "R13": "T2 補 unit 非標準值 characterization(2157 → 拒單)+ design Known Risks 記除權息調整誤拒"
+  }
+}

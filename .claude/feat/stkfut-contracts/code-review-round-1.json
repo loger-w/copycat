@@ -1,0 +1,28 @@
+{
+  "round": 1,
+  "lenses": ["engine-routing+order-safety (opus)", "missing-from-spec+test-coverage (opus)"],
+  "verdict": "0 P0 / 1 P1(B1)/ P2 大部摺入修復(真錢面三條升級處置)",
+  "accepted_fixes": {
+    "B1(P1)": "StockIntradayChart 期貨態補 x 軸格線/時間標斷言(minuteToX(min, W, STKFUT_WINDOW) 對照;現貨對照組)",
+    "A1": "夜盤 gate 提前:期貨 key 且窗外 → 整則早退(tick/book/meta 全擋;純簿更新無 tick 時刻 → 本機時鐘窗判斷,註解記取捨)+ 測試(夜盤 book 不更新)",
+    "A2": "前端 watchlist_quote 命中 instrumentKey → 更新主圖 noData(合約零推播 → 畫面「無資料」)+ vitest",
+    "A5": "stkfutQty 以 instrumentKey 分槽(std/mini 20 倍規模不跨帶)+ 測試",
+    "A6": "spotModeRef:進期貨態記住現貨 mode,切回還原 + 測試",
+    "A7a": "RightRail centerRequest 清除 deps 改 instrumentKey",
+    "A7b": "期貨態 header/梯標題名稱取 contracts route 的股票名(非合約 SecurityName)",
+    "A7d": "set_main_contract 釋放舊主圖時 _no_data.discard(old)",
+    "A3": "lifespan 尾段背景預熱 catalog 一次(冷查詢移出盤中熱路徑)+ list_stock_futures docstring 記持鎖秒級",
+    "A4": "_INDEX_CACHE key 加檔案 mtime+size(跨 process refresh 生效)",
+    "B2+B3": "contracts route 回 std.unit/mini.unit(自 stkfut_map 併);前端 ETF gate 改吃 unit(isEtfUnderlying 退場或降 fallback);新 src/lib/stkfut.test.ts(selectionOf 白名單三態/stkfutTc4Symbol 不產 HOT/instrumentKeyOf)",
+    "B4": "TestOrderStkfutGates 補 max_amount 邊界 ×2(std 2000/mini 100)",
+    "A8s": "ETF 不變式釘版控檔測試(unit 非 2000/100 → 股號 0 開頭)",
+    "B5": "恆真測試註解更正(真鎖在 StkfutLadder 兩條)",
+    "B7": "合約主圖不觸發 signal_hub.on_tick 事件之不變量測試"
+  },
+  "not_fixed_recorded": [
+    "A7c _symbol_to_key/_states 單調成長(註解一行,量級無害)",
+    "B6 design 補記(main session 直改)",
+    "B8 OrderBook 元件層 → Phase 6 截圖 + user 過目吸收",
+    "A8 其餘為通過記錄(.HOT 實證/送單欄位逐欄對齊/BAD_TICK 毫元口徑)"
+  ]
+}
