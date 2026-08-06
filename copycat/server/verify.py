@@ -116,7 +116,7 @@ class FakeTxoSource:
         return None
 
 
-# ---- fake breadth 取數四元組(--verify 模式;market-overview R2 SC-3 / R3 SC-1)----
+# ---- fake breadth 取數五元組(--verify 模式;market-overview R2 SC-3 / R3 SC-1 / R4)----
 
 #: `TaiwanStockInfo` 對照列(代號 / 市場別 / 產業別)—— snapshot 的白名單來源。
 _BREADTH_INFO_ROWS: list[dict] = [
@@ -164,10 +164,37 @@ _BREADTH_DAILY: tuple[tuple[str, float, float], ...] = (
 #: 這裡不 import breadth_engine(本模組刻意不拖 fastapi 進 conftest 的 import 路徑)。
 _DAILY_PAD_ROWS = 25_000
 
-#: 設成 `"1"` 時四個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
+#: 產業鏈對照(R4):**必須涵蓋 `_BREADTH_QUOTES` 的股票** —— 對不上的話每個群組都是
+#: 0 成員(`compute_sector_rotation` 天然略過)→ industries 空陣列,而那與「rotation
+#: 接線壞掉」在畫面上同形。半導體刻意給三個子產業:sub 展開那條路要看得到。
+#: 0050 不列(ETF 在 universe 就被剔掉,列了也只是幽靈成員)。
+_BREADTH_CHAIN: tuple[tuple[str, str, str], ...] = (
+    ("1101", "水泥", "水泥製造"),
+    ("2330", "半導體", "晶圓代工"),
+    ("2454", "半導體", "IC 設計"),
+    ("6488", "半導體", "矽晶圓"),
+    ("3105", "半導體", "化合物半導體"),
+    ("2317", "電子零組件", "連接器"),
+)
+
+#: 設成 `"1"` 時五個取數點全拋 `BreadthFetchError` —— SC-3(FinMind 掛掉只讓家數面板
 #: stale,TC4 系零波及)在**真 server** 上的注入通道;單元測試注入 fake 即可,這條
 #: 是為了在跑著的 verify server 上取證。
+#: **前置**:verify 的 data_dir 必須是隔離空目錄(無 `industry_chain.json`)—— 有快取檔
+#: 的話 chain 那支拋不拋都一樣有表,失效注入就漏了一條路(design §8 / R9)。
 FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
+
+#: 設成 `"1"` 時 1101 依**牆鐘**分鐘在「鎖漲停 ↔ 非鎖」兩態切換 —— SC-7(廣度事件
+#: → hub → WS → 前端時間軸)在真 server 上的唯一取證通道:fake 快照恆定的話一則事件
+#: 都不會發,整條鏈路無從目視。
+#: 週期取 `minute // 11` 的奇偶 = 11 分鐘,**刻意 > 事件冷卻 600s**(`event_cooldown_secs`)
+#: —— 每次翻轉必定發得出事件,不會被冷卻吃掉。
+FLIP_ENV_KEY = "VERIFY_BREADTH_FLIP"
+
+#: 翻轉後的 1101(前收仍是 10.0 → 漲停 11.0,但收在 10.5 = **未鎖**;high 仍摸到漲停
+#: → 落在「觸及未鎖」那一態)。`close` / `change_price` 都給值是硬要求:缺欄會讓
+#: `limit_judged=False`,而那樣的列在事件 diff 被整列跳過 —— 翻了也不發事件。
+_FLIP_1101 = ("1101", 10.5, 0.5, 5.0, 11.0, 10.2)
 
 
 #: engine 的分鐘域(`index_engine.minute_key`:0901–1330;1331–1335 clamp 進 1330)。
@@ -175,6 +202,25 @@ FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
 _DOMAIN_START = _dt.time(9, 1)
 _DOMAIN_END = _dt.time(13, 30)
 _CLAMP_TO = _dt.time(13, 0)
+
+
+def _now() -> _dt.datetime:
+    """fake 快照的牆上時鐘(模組層一個名字,`breadth_engine._now` 同理由)。
+
+    `datetime.datetime` 是不可變型別、monkeypatch 不上去 —— 沒有這個名字,翻轉的
+    分鐘判定就只能靠測試真的等到某一分鐘,那是不可能寫的測試。
+    """
+    return _dt.datetime.now()
+
+
+def _flip_locked(now: _dt.datetime) -> bool:
+    """這一刻 1101 該不該是鎖漲停態(`FLIP_ENV_KEY` 開啟時)。
+
+    判別子是**牆鐘**分鐘,不是 `_snapshot_stamp` clamp 後的快照時刻 —— 後者在盤後恆為
+    13:00,分鐘永遠不動,而 verify server 幾乎都在盤後跑:拿它當判別子等於整條 SC-7
+    取證路徑靜默失效(翻轉永遠不發生,畫面上與「事件接線壞掉」同形)。
+    """
+    return (now.minute // 11) % 2 == 0
 
 
 def _snapshot_stamp(now: _dt.datetime) -> str:
@@ -198,8 +244,10 @@ def fake_breadth_fetchers() -> tuple[
     Callable[[str], list[dict]],
     Callable[[str, _dt.date], list[dict]],
     Callable[[str, _dt.date], list[dict]],
+    Callable[[str], list[dict]],
 ]:
-    """固定小快照的 breadth 取數四元組(snapshot / stock_info / disposition / daily_prices)。
+    """固定小快照的 breadth 取數五元組(snapshot / stock_info / disposition /
+    daily_prices / industry_chain)。
 
     快照時刻取自**呼叫當下**的 `datetime.now()`,域外 clamp 進盤中(`_snapshot_stamp`):
     `trade_date == today` 且時刻在分鐘域內才會 append 與落檔(engine 的 design R1/R3
@@ -209,6 +257,9 @@ def fake_breadth_fetchers() -> tuple[
     第四支(EOD 日線,R3)每個掃描日回同一份造值 → 1101 逐日皆漲停 → 連板數撞到回看
     窗上限(窗內 10 板 + 盤中今日這根 → 前端顯示「11+ 板」),`streak_capped` 那條路在
     verify 畫面上也走得到。
+
+    第五支(產業鏈,R4)回固定小表且涵蓋本快照的每一檔 → 類股面板 anytime 有畫面;
+    `VERIFY_BREADTH_FLIP=1` 時 1101 隨牆鐘翻轉,SC-7 的事件鏈路才有東西可看。
     """
 
     def _fail_if_injected() -> None:
@@ -217,7 +268,12 @@ def fake_breadth_fetchers() -> tuple[
 
     def _snapshot(_token: str) -> list[dict]:
         _fail_if_injected()
-        stamp = _snapshot_stamp(_dt.datetime.now())
+        now = _now()
+        stamp = _snapshot_stamp(now)
+        quotes = _BREADTH_QUOTES
+        if os.environ.get(FLIP_ENV_KEY) == "1" and not _flip_locked(now):
+            # 只換 1101 那一列(其餘照舊):翻轉要能與家數帶的其他變化分得開
+            quotes = tuple(_FLIP_1101 if q[0] == _FLIP_1101[0] else q for q in quotes)
         return [
             {
                 "date": stamp,
@@ -231,7 +287,7 @@ def fake_breadth_fetchers() -> tuple[
                 "yesterday_volume": 500,
                 "total_amount": 12_345_000,
             }
-            for sid, close, chg_price, chg_rate, high, low in _BREADTH_QUOTES
+            for sid, close, chg_price, chg_rate, high, low in quotes
         ]
 
     def _stock_info(_token: str) -> list[dict]:
@@ -257,4 +313,12 @@ def fake_breadth_fetchers() -> tuple[
         )
         return rows
 
-    return (_snapshot, _stock_info, _disposition, _daily_prices)
+    def _industry_chain(_token: str) -> list[dict]:
+        _fail_if_injected()
+        today = _dt.date.today().isoformat()
+        return [
+            {"date": today, "stock_id": sid, "industry": industry, "sub_industry": sub}
+            for sid, industry, sub in _BREADTH_CHAIN
+        ]
+
+    return (_snapshot, _stock_info, _disposition, _daily_prices, _industry_chain)

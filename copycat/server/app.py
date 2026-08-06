@@ -27,6 +27,7 @@ from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.breadth_engine import (
     BreadthEngine,
+    ChainFetch,
     DailyPricesFetch,
     DispositionFetch,
     SnapshotFetch,
@@ -105,6 +106,17 @@ def _with_unit(leg: dict | None) -> dict | None:
     return {**leg, "unit": None if found is None else found.get("unit")}
 
 
+#: 全市場廣度事件的 kind 前綴(`breadth_engine` 的 `market_limit_lock` / `market_limit_open`
+#: 同族)。前綴而非窮舉清單:新增廣度 kind 時 `?market=exclude` 的過濾自然涵蓋 ——
+#: 漏改清單的失效樣態是「自選訊號欄突然混進全市場的列」,而那不會有任何錯誤訊號。
+_MARKET_KIND_PREFIX = "market_"
+
+
+def _is_market_kind(kind: object) -> bool:
+    """jsonl row 來自檔案 —— `kind` 型別無人保證(壞行只擋到 JSON 層),先驗型別再比前綴。"""
+    return isinstance(kind, str) and kind.startswith(_MARKET_KIND_PREFIX)
+
+
 def _market_payload(
     key: str,
     tf: str,
@@ -150,10 +162,18 @@ DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
 DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
 DEFAULT_BREADTH: Final = object()  # 同語意(market-overview R2 SC-3;→ 真 FinMind 取數層)
 
-#: breadth 引擎的注入點四元組(snapshot / stock_info / disposition / daily_prices)。
-#: 第四槽 `None` = 連板數停用(rows 端點照常、`streak` 恆 null)—— 停用是契約的一部分,
-#: 不用 cast 掩蓋(R3 design R20)。長度固定 4。
-BreadthFetchers = tuple[SnapshotFetch, StockInfoFetch, DispositionFetch, DailyPricesFetch | None]
+#: breadth 引擎的注入點五元組(snapshot / stock_info / disposition / daily_prices /
+#: industry_chain)。
+#: 第四槽 `None` = 連板數停用(rows 端點照常、`streak` 恆 null);第五槽 `None` = 類股
+#: 輪動停用(`/api/market/sector` 照常、`rotation` 恆 null)—— 停用是契約的一部分,
+#: 不用 cast 掩蓋(R3 design R20;R4 沿用)。長度固定 5。
+BreadthFetchers = tuple[
+    SnapshotFetch,
+    StockInfoFetch,
+    DispositionFetch,
+    DailyPricesFetch | None,
+    ChainFetch | None,
+]
 
 
 class SelectBody(BaseModel):
@@ -653,13 +673,14 @@ def create_app(
                         breadth_fetch.fetch_stock_info,
                         breadth_fetch.fetch_disposition,
                         breadth_fetch.fetch_daily_prices,
+                        breadth_fetch.fetch_industry_chain,
                     )
                 else:
-                    # 顯式注入的四元組**跳過 token 閘**:fake 取數層根本不看 token,
+                    # 顯式注入的五元組**跳過 token 閘**:fake 取數層根本不看 token,
                     # 而 verify server / 測試環境本來就沒有(有閘就恆停用 → 驗不到)
                     token = "fake-token"
                     injected = cast("tuple[object, ...]", breadth_fetchers)
-                    if len(injected) != 4:
+                    if len(injected) != 5:
                         # 光讓解包自己拋 ValueError 不夠:`_boot` 的傘罩會把它收成
                         # 「breadth 停用」,與「FINMIND_TOKEN 未設」在畫面上同形 ——
                         # repo 外的側車樣板漏改第四槽時,症狀會是家數面板整段悄悄
@@ -667,11 +688,17 @@ def create_app(
                         # (出處 = impl-spec review R8「arity 防呆」;design §3.3a v3
                         # 未載,實作期補強 —— design 的 R8 是另一件事:排序優先序)
                         logger.error(
-                            "breadth 取數元組長度 %d,預期 4(呼叫端未更新)", len(injected)
+                            "breadth 取數元組長度 %d,預期 5(呼叫端未更新)", len(injected)
                         )
-                        raise ValueError("breadth_fetchers 必須是四元組")
+                        raise ValueError("breadth_fetchers 必須是五元組")
                     fetchers = cast("BreadthFetchers", breadth_fetchers)
-                snapshot_fetch, stock_info_fetch, disposition_fetch, daily_fetch = fetchers
+                (
+                    snapshot_fetch,
+                    stock_info_fetch,
+                    disposition_fetch,
+                    daily_fetch,
+                    chain_fetch,
+                ) = fetchers
                 return BreadthEngine(
                     token=token,
                     config=load_breadth_config(),
@@ -679,6 +706,7 @@ def create_app(
                     stock_info_fetch=stock_info_fetch,
                     disposition_fetch=disposition_fetch,
                     daily_fetch=daily_fetch,
+                    chain_fetch=chain_fetch,
                     data_dir=breadth_data_dir,  # None → repo root data/market
                 )
 
@@ -691,6 +719,13 @@ def create_app(
             )
             app.state.breadth = breadth
             booted.breadth = breadth
+            # 廣度事件入訊號匯流排(R4 design §8):hub 早在序列前段就緒,所以只有
+            # breadth 這一端決定得了時機。漏掛的失效樣態 = 全市場鎖板事件整天不產生
+            # (`_diff_limit_events` 對 hub None 早退,連狀態機都不推進)—— 畫面上與
+            # 「今天沒有漲停」完全同形。attach 前的輪次不推進狀態,故晚掛只是少幾則,
+            # 不會留下「已發布」的假帳。
+            if breadth is not None and signals is not None:
+                breadth.attach_signal_hub(signals)
 
             # 序列尾段:合約目錄預熱一次(A3)。放在**最後**而不是接線當下 —— 它是
             # 秒級查詢,插在引擎序列中間會把後面每一段都往後推(capital 登入、corr
@@ -727,6 +762,10 @@ def create_app(
             # fanout worker 還活著時對已收攤的 stock engine publish 會炸在關機路徑上)
             if booted.breadth is not None:
                 try:
+                    # **先摘掛點再 close**:hub 此刻還活著(它排在 breadth 之後才收),
+                    # 所以這裡沒有 use-after-close 窗;反過來寫的話,收攤中的最後一輪
+                    # 會把事件發給正要收攤的 hub,而那條路的失效是靜默丟棄
+                    booted.breadth.detach_signal_hub()
                     await booted.breadth.close()
                 except Exception:
                     logger.exception("breadth close 失敗(關機續行)")
@@ -980,12 +1019,20 @@ def create_app(
     # ---- stock signals(stock-signals design §7)----
 
     @app.get("/api/stock/signals/today")
-    async def stock_signals_today(request: Request) -> dict:
+    async def stock_signals_today(request: Request, market: str = "include") -> dict:
         """當日訊號歷史(SC-7):讀 hub 的 jsonl,壞行跳過。
 
         前端 reconnect 後拿它當 baseline 自癒 —— WS 斷線期間丟掉的訊號由這裡補回。
+
+        `market=exclude` 濾掉全市場廣度事件(R4 design §7):SignalRail 那個消費端只要
+        自選訊號,而廣度事件在漲停潮日可以是數百則 —— 整包下載後 client 丟棄會讓
+        cap 200 發生在過濾**之前**,自選訊號被擠光。預設 `include` = 既有行為逐字不變;
+        未知值一律當 include(這個參數是效能取捨,不是安全閘,擋下來只會讓舊 client 白掉)。
         """
-        return {"signals": _signals(request).today_signals()}
+        rows = _signals(request).today_signals()
+        if market == "exclude":
+            rows = [r for r in rows if not _is_market_kind(r.get("kind"))]
+        return {"signals": rows}
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
 
@@ -1287,6 +1334,48 @@ def create_app(
                 "rows": [],
             }
         return breadth.rows_state()
+
+    @app.get("/api/market/sector")
+    async def market_sector(request: Request) -> dict:
+        """類股強弱(R4 design §5)—— 三態判式與 `/api/market/breadth` 同款(恆 200)。
+
+        `rotation` 是**第四態**且與前三態正交:引擎在、家數也有數字,但產業鏈快取尚未
+        就緒(或 `chain_fetch` 未接 = 類股停用)時 `rotation: null`。空 `industries`
+        會被前端讀成「今天所有產業都沒成員」,null 才是「還沒有資料」。
+        """
+        breadth = _breadth(request)
+        if breadth is None:
+            loading = not _breadth_booted(request)
+            return {
+                "enabled": loading,
+                "trade_date": None,
+                "as_of": None,
+                "stale": loading,
+                "rotation": None,
+            }
+        return breadth.sector_state()
+
+    @app.get("/api/market/sector/members")
+    async def market_sector_members(request: Request, industry: str, sub: str = "") -> dict:
+        """成員股 drill-down。三種語意刻意分開(design §5 / R10):
+
+        - `industry` **缺席** = 呼叫端寫錯 → FastAPI required query 的 422(不是 404:
+          那會把程式 bug 講成「資料還沒到」)。
+        - `industry` 空字串或查無 → 404 `SECTOR_NOT_FOUND`(chain_map 沒有 `""` 桶 ——
+          缺 `sub_industry` 的列在 `rows_to_chain_map` 就整列丟掉了)。
+        - `sub` 空字串 **當未指定**:前端不鑽取子產業時送空字串是最容易寫出的形狀,
+          當成「子產業名為空」查會回 404,而畫面上與「這個產業沒有成員」同形。
+
+        引擎缺席同樣 404(沒有引擎就沒有任何產業),不用 503:這條路是使用者點出來的
+        鑽取,回「服務未就緒」會讓前端留著舊 UI 等一個永遠不會來的結果。
+        """
+        breadth = _breadth(request)
+        members = (
+            None if breadth is None else breadth.sector_members(industry, sub if sub else None)
+        )
+        if members is None:
+            raise HTTPException(status_code=404, detail={"error": "SECTOR_NOT_FOUND"})
+        return members
 
     @app.websocket("/ws/breadth")
     async def ws_breadth(websocket: WebSocket) -> None:
