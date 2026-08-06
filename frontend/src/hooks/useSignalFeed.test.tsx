@@ -194,11 +194,14 @@ describe("useSignalFeed — market 分流(SC-8)", () => {
     expect(ids(hook.result.current.excluded.signals)).toEqual(["own-1"]);
     expect(ids(hook.result.current.included.signals)).toEqual(["m-1", "own-1"]);
 
-    // ws-open 的 invalidate 用 prefix key:兩族一起自癒,不是只救其中一掛載點
+    // ws-open 的 invalidate 用 prefix key:兩族一起自癒,不是只救其中一掛載點。
+    // 次數不寫死(兩個掛載點各自 invalidate 一次前綴 → TQ 會重抓不只一輪),
+    // 契約是「兩族都被重抓到」。
     act(() => emitWsOpen());
-    await waitFor(() => expect(urlFetch.mock.calls.length).toBe(4));
-    const after = urlFetch.mock.calls.map((c) => c[0]);
-    expect(after.filter((u) => u.includes("market=exclude")).length).toBe(2);
-    expect(after.filter((u) => !u.includes("market=exclude")).length).toBe(2);
+    await waitFor(() => {
+      const after = urlFetch.mock.calls.map((c) => c[0]);
+      expect(after.filter((u) => u.includes("market=exclude")).length).toBeGreaterThanOrEqual(2);
+      expect(after.filter((u) => !u.includes("market=exclude")).length).toBeGreaterThanOrEqual(2);
+    });
   });
 });
