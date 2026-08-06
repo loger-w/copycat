@@ -7,6 +7,7 @@ import time
 from typing import Callable
 
 from copycat.live.stock_source import Bar, BarsStatus
+from copycat.server import stock_engine as stock_engine_mod
 from copycat.server.stock_engine import StockEngine
 
 
@@ -1249,6 +1250,173 @@ class TestGroupSnapshot:
         engine.group_snapshot(["2330"])
         await _drain(engine)
         assert src.backfills.count("2330") == 2
+        await engine.close()
+
+    # ---- code review round 1 ----
+
+    async def test_does_not_build_the_full_snapshot(self) -> None:
+        """A1:batch 走 `light_snapshot()`,不得再建全量 `snapshot()`。
+
+        全量那份會把當日數千筆 tick 逐筆組成 dict 再整份丟掉 —— 30 檔 × 每 60s。
+        用「把該檔 state 的 `snapshot` 換成會炸的替身」鎖:讀不到 tick 這件事沒有
+        任何畫面表現,只有這樣才驗得到真的沒走那條路。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7, price="2380"))
+        await _drain(engine)
+
+        def _boom() -> dict:
+            raise AssertionError("group batch 不得建全量 snapshot(ticks 是數千筆)")
+
+        engine._states["2330"].snapshot = _boom  # type: ignore[method-assign]
+        snap = engine.group_snapshot(["2330"])["2330"]
+        assert snap["minutes"]["657"]["c"] == 2_380_000
+        assert snap["meta"]["name"] == "台積電"
+        await engine.close()
+
+    async def test_unknown_code_reuses_the_module_level_empty_payload(self, monkeypatch) -> None:
+        """A1 的另一半:未知 / 未訂閱 code 不得為了「拿一份空 payload」而 new 一個
+        狀態機(deque(maxlen=20_000) 一個都不便宜,而群組頁的空格數量沒有上界)。"""
+        engine, _ = await _make()
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise AssertionError("未知 code 不得建 StockDayState")
+
+        monkeypatch.setattr(stock_engine_mod, "StockDayState", _boom)
+        snap = engine.group_snapshot(["9999"])["9999"]
+        assert snap == {"minutes": {}, "meta": None, "no_data": True, "backfilling": False}
+        await engine.close()
+
+    async def test_released_member_is_no_data_and_not_enqueued(self) -> None:
+        """A6-3:「已訂閱」與 `no_data` 的判準都改讀訂閱池 `_refs`。
+
+        `_states` 是**只增不減**的(退訂只動 `_refs`)—— 拿它當判準會讓卡片對一檔
+        早就退出自選的股票答「有資料」,還每 60s 替它發一次 SubHistory。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_watchlist([])
+        assert "2330" in engine._states  # 前提:state 確實留著,判準才有得選
+        assert "2330" not in engine._refs
+        snap = engine.group_snapshot(["2330"])["2330"]
+        await _drain(engine)
+        assert snap["no_data"] is True
+        assert src.backfills == []
+        await engine.close()
+
+    async def test_no_data_member_is_no_data_and_not_enqueued(self) -> None:
+        """B2 + A6-4:TC4 已回「查無此檔」的**已訂閱**成員 → `no_data` 為真,且不再
+        入列回補(對一檔平台說沒有的股票發 SubHistory 是純浪費,每 60s 一次)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_no_data is not None
+        src.on_no_data("2330")
+        await _drain(engine)
+        snap = engine.group_snapshot(["2330"])["2330"]
+        await _drain(engine)
+        assert snap["no_data"] is True
+        assert src.backfills == []
+        await engine.close()
+
+    async def test_limit_change_reenqueues_a_backfilled_member(self) -> None:
+        """A6-5:漲跌停值變化的重入列放寬到「已回補過的成員」。
+
+        鎖停日的回補補判(round6 項 2)靠 `meta` 的 upper/lower,而 meta 只有 REALTIME
+        才寫入 —— 成員的回補常常先跑完。舊條件只認 `_main`,群組成員的鎖停側標就整天
+        停在 neutral(內外盤整片灰、外盤比算不出來),而畫面上完全看不出異常。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        assert engine._main != "2330"  # 前提:這一檔不是主圖,舊條件涵蓋不到
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7))  # 首則 REALTIME:漲跌停 None → 有值
+        await _drain(engine)
+        assert src.backfills.count("2330") == 2
+        await engine.close()
+
+
+class TestBackfillFailureIsolation:
+    """A2/A3:成員回補失敗的爆炸半徑與當日冷卻。
+
+    群組檢視把「非主圖成員」也送進同一條單工 worker 之後,成員的一次 SubHistory 失敗
+    會沿著舊碼把**全域** `tc4_status` 打成 down —— 畫面跳出「達錢 4 連線中斷」而達錢 4
+    好得很;而 60s 一輪的重入列會讓失敗檔持續重試到收盤。
+    """
+
+    async def _collect(self, stream) -> list[dict]:
+        got: list[dict] = []
+        try:
+            while True:
+                got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+        return got
+
+    async def test_member_failure_does_not_flip_global_tc4_status(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        stream = engine.stream()
+        src.backfill_error = ConnectionError("SubHistory 2330 failed")
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert engine.tc4_status == "up"
+        got = await self._collect(stream)
+        statuses = [m for m in got if m["type"] == "status"]
+        assert statuses, "回補期間必有 status 訊息(前提)"
+        assert all(m["tc4"] == "up" for m in statuses)
+        # 徽章仍要收:失敗路徑不補推 backfilling=None 的話「回補中…」永遠掛著(TQ-4)
+        assert statuses[-1]["backfilling"] is None
+        await engine.close()
+
+    async def test_main_failure_still_marks_tc4_down(self) -> None:
+        """舊語意保留:主圖自己的回補失敗仍是「達錢 4 出事了」的最好證據 ——
+        使用者當下就在看那一檔,靜默降級會讓他以為畫面是真的。"""
+        engine, src = await _make()
+        src.backfill_error = ConnectionError("SubHistory 2330 failed")
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert engine.tc4_status == "down"
+        await engine.close()
+
+    async def test_member_stops_being_enqueued_after_three_failures(self) -> None:
+        """A2 止血:同一檔當日連 3 次失敗就不再入列。
+
+        沒有這條的話,一檔壞碼會讓 60s 輪詢整天對 TC4 發同一個必敗請求(單工 worker
+        還會被它排隊佔用),而卡片顯示的一直是「回補中…」。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        src.backfill_error = ConnectionError("SubHistory 2330 failed")
+        for _ in range(5):
+            engine.group_snapshot(["2330"])
+            await _drain(engine)
+        assert src.backfills.count("2330") == 3
+        await engine.close()
+
+    async def test_inflight_job_survives_reconnect_without_duplicate_enqueue(self) -> None:
+        """A3:`_backfill_pending` 改計數,reconnect 不再清它。
+
+        舊碼把在途集合一起清掉 → 下一次 `group_snapshot`(60s 或更快)會對**同一檔**
+        再入列一次;而第一個 job 結清時 `discard` 直接把旗標翻成 False,卡片在第二個
+        job 還在跑的時候就從「回補中…」跳成「無資料」。
+        """
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()  # 未 set → worker 卡在回補中
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.on_reconnect is not None
+        src.on_reconnect()
+        await _drain(engine)
+        assert engine.group_snapshot(["2330"])["2330"]["backfilling"] is True
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
         await engine.close()
 
 

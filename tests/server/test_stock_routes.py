@@ -383,6 +383,29 @@ class TestGroupStateRoute:
         assert r.status_code == 503
         assert r.json()["detail"]["error"] == "NOT_READY"
 
+    def test_duplicate_codes_are_deduped_before_the_count_check(self, tmp_path: Path) -> None:
+        """A6-2:重複碼是**正常輸入**(同一檔可屬多群組,前端把群組成員直接拼進 csv),
+        先驗數量再去重會把它判成 `BAD_CODES` —— 而整個群組頁只會顯示「載入失敗」,
+        沒有任何線索指向「你有一檔重複」。去重要**保序**:卡片順序就是這個順序。
+        """
+        client, _ = make_client(tmp_path)
+        with client:
+            self._put(client, ["2330", "2317"])
+            r = client.get("/api/stock/group-state", params={"codes": ",".join(["2330"] * 31)})
+            assert r.status_code == 200
+            assert list(r.json()["states"]) == ["2330"]
+            r = client.get("/api/stock/group-state", params={"codes": "2317,2330,2317"})
+            assert list(r.json()["states"]) == ["2317", "2330"]
+
+    def test_dedup_does_not_defeat_the_limit(self, tmp_path: Path) -> None:
+        """去重之後仍要驗上限:相異碼超量照樣 400(去重不是放行的後門)。"""
+        client, _ = make_client(tmp_path)
+        with client:
+            codes = ",".join(f"{9000 + i}" for i in range(31))
+            r = client.get("/api/stock/group-state", params={"codes": codes})
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "BAD_CODES"
+
 
 class TestSignalHubGroupWiring:
     """接線防呆(group-grid R7):`groups_fn` / `quotes_fn` 預設 None = 靜默停用摘要。
@@ -403,6 +426,31 @@ class TestSignalHubGroupWiring:
             assert hub._groups == [{"name": "半導體", "codes": ["2330", "2317"]}]
             # quotes_fn 也接上了才產得出成員列(缺行情時是 `-`,但不會是空字串)
             assert hub._group_suffix({"code": "2330"}).startswith("｜同群 半導體:2317")
+
+    def test_group_rename_without_code_change_reaches_the_hub(self, tmp_path: Path) -> None:
+        """B3-a 端到端:只改群組名(codes 一模一樣)也要傳到 hub。
+
+        這條路的 `set_watchlist` 收到的 added / removed 都是空的 —— 只要哪天有人為了
+        省 UNSUB/SUB 而把 `on_watchlist` 收進「有增減才呼叫」的條件裡,摘要就會一直
+        印**舊組名**,而畫面、log、hub 單元測試全部正常。
+        """
+        save_watchlist(
+            tmp_path / "watchlist.json",
+            {"codes": ["2330", "2317"], "groups": [{"name": "舊名", "codes": ["2330", "2317"]}]},
+        )
+        client, _ = make_client(tmp_path)
+        with client:
+            hub = cast("SignalHub", client.app.state.signal_hub)  # type: ignore[attr-defined]
+            assert hub._groups == [{"name": "舊名", "codes": ["2330", "2317"]}]
+            r = client.put(
+                "/api/stock/watchlist",
+                json={
+                    "codes": ["2330", "2317"],
+                    "groups": [{"name": "新名", "codes": ["2330", "2317"]}],
+                },
+            )
+            assert r.status_code == 200
+            assert hub._groups == [{"name": "新名", "codes": ["2330", "2317"]}]
 
 
 class TestStockWs:

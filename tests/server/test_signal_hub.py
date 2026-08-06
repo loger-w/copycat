@@ -1467,7 +1467,9 @@ class TestGroupSuffix:
             await h.settle()
             h.cross_nh(_state())
             await h.settle()
-            assert h.fallback == [h.fallback[0]]
+            # B3-b:`fallback == [fallback[0]]` 讀起來像在比內容,實際只釘了「長度 1」
+            # 而且空 list 會炸 IndexError 而不是失敗訊息 —— 意圖直接寫出來
+            assert len(h.fallback) == 1
             assert h.fallback[0].endswith("｜同群 半導體:2317鴻海 +0.8%")
         finally:
             await h.hub.close()
