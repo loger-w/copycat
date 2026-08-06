@@ -71,9 +71,18 @@ export function barsPollInterval(
   return !isDaily && trading ? POLL_MS : false;
 }
 
-export function useStockBars(code: string | null, mode: ChartMode, days: number) {
+/** `enabled` 是**外部否決**(D10/R5),不是「再判一次 code/mode」:個股期合約態下
+ *  這支 endpoint 查的是**現貨**股號,拿回來的 K 線與畫面上的合約無關 —— 畫得出來、
+ *  沒有錯誤,是零訊號的假資料。而模式收斂是 effect(下一個 render 才生效),
+ *  「殘留日 K + 切進合約」的**第一次 render** 仍是 day,不在這裡擋就已經打出去了。 */
+export function useStockBars(
+  code: string | null,
+  mode: ChartMode,
+  days: number,
+  externallyEnabled = true,
+) {
   const isDaily = mode === "day";
-  const enabled = code !== null && mode !== "intraday";
+  const enabled = externallyEnabled && code !== null && mode !== "intraday";
   const tf = isDaily ? "D" : "1";
   return useQuery({
     // tf=D 不含 days:忽略該參數卻進 key 會產生多份等價 cache(D-15)

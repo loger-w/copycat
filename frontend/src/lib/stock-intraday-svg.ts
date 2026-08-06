@@ -32,6 +32,12 @@ export interface XWindow {
 /** 現貨日盤窗 09:00–13:30。所有窗參數的預設值 = 既有語意,呼叫端不傳即零行為改變。 */
 export const SPOT_WINDOW: XWindow = { start: X_START_MIN, end: X_END_MIN };
 
+/** 個股期日盤窗 08:45–13:45(期交所股票期貨交易時段;比現貨兩端各長一截)。
+ *
+ *  **模組層常數不是行內字面值**:窗物件會直接進 `memo` 子元件的 props,行內 `{...}`
+ *  每次 render 都是新 identity,靜態圖層(ChartStatic / EnergySub)的 memo 會被整層打穿。 */
+export const STKFUT_WINDOW: XWindow = { start: 8 * 60 + 45, end: 13 * 60 + 45 };
+
 /** 底部時間標籤帶;繪圖區 = [PAD_Y, height − X_LABEL_H − PAD_Y] */
 export const X_LABEL_H = 14;
 export const PAD_Y = 4;
