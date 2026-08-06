@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import threading
 import time as _time
 from pathlib import Path
 from typing import Any, Callable
@@ -22,6 +23,7 @@ import pytest
 import copycat.server.breadth_engine as be
 from copycat.breadth_config import BreadthConfig
 from copycat.server.breadth_fetch import BreadthFetchError
+from copycat.server.chain_store import load_chain, save_chain
 
 _TRADE_DATE = "2026-08-05"
 _STAMP = f"{_TRADE_DATE} 10:23:45"
@@ -203,6 +205,7 @@ def _make(
     info: FakeFetch | None = None,
     disposition: FakeFetch | None = None,
     daily: FakeDaily | None = None,
+    chain: Callable[[str], list[dict]] | None = None,
     clock: Clock | None = None,
     config: BreadthConfig | None = None,
 ) -> tuple[Any, FakeFetch, FakeFetch, FakeFetch, Clock]:
@@ -217,6 +220,7 @@ def _make(
         stock_info_fetch=inf,
         disposition_fetch=disp,
         daily_fetch=daily,
+        chain_fetch=chain,
         data_dir=tmp_path,
         today_fn=clk.today_fn,
         now_fn=clk.now_fn,
@@ -1730,3 +1734,347 @@ class TestRowsState:
 
         assert state["streaks_ready"] is False
         assert _row_of(state, "1101")["streak"] is None
+
+
+# ---------------------------------------------------------------------------
+# 產業鏈快取刷新 + 類股輪動掛點(R4 design §4.3 / §5)
+# ---------------------------------------------------------------------------
+
+#: chain fixture 只涵蓋 universe 內的三檔(2317 刻意不入鏈 —— 未涵蓋的股不該
+#: 憑空長出產業);2330 / 6488 同產業不同次產業,用來釘 industry 層的聯集語意。
+_CHAIN_ROWS: list[dict] = [
+    {"stock_id": "2330", "industry": "半導體", "sub_industry": "晶圓代工"},
+    {"stock_id": "6488", "industry": "半導體", "sub_industry": "矽晶圓"},
+    {"stock_id": "1101", "industry": "水泥", "sub_industry": "水泥製造"},
+]
+_CHAIN_MAP: dict[str, dict[str, list[str]]] = {
+    "半導體": {"晶圓代工": ["2330"], "矽晶圓": ["6488"]},
+    "水泥": {"水泥製造": ["1101"]},
+}
+
+
+def _chain_file(tmp_path: Path) -> Path:
+    return tmp_path / "industry_chain.json"
+
+
+class HangingFetch:
+    """在 worker thread 內真的卡住的取數替身 —— 驗 poll loop 不 await chain task。
+
+    「不阻塞」不能用快 fake 驗:快 fake 之下即使把 `await` 寫進 poll loop,家數輪
+    照樣跑得動,測試全綠而 §1 的失效域宣稱是假的。要卡住才測得到。
+    """
+
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.calls = 0
+        self.release = threading.Event()
+
+    def __call__(self, token: str) -> list[dict]:
+        self.calls += 1
+        self.release.wait(5.0)
+        return self.rows
+
+
+async def _arm_chain(engine: Any) -> None:
+    """武裝一次並等 chain task 收工(引擎本身絕不 await 它 —— 那是 poll loop 的紀律)。
+
+    武裝條件不成立時 `_chain_task` 可能是上一輪留下的 done task,await 無副作用;
+    「這次到底有沒有真的去打上游」一律以取數替身的 `calls` 為準。
+    """
+    engine._maybe_arm_chain()
+    task = engine._chain_task
+    if task is not None:
+        await task
+
+
+async def _ready_engine(tmp_path: Path) -> Any:
+    """chain 表就緒 + 跑完一輪家數的引擎(rotation 掛點的前置)。"""
+    engine, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
+    await _arm_chain(engine)
+    await engine._run_cycle()
+    return engine
+
+
+class TestChainCache:
+    async def test_start_loads_expired_cache_without_network(self, tmp_path: Path) -> None:
+        """start() 讀本地 chain 快取 —— **過期也先用**(stale 勝於無),且零網路 IO。
+
+        過期就不載入的話,冷啟動到首次刷新完成之間類股面板整片空白,而那段空白與
+        「FinMind 掛了」完全同形。
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)  # epoch 0 = 遠古
+        chain = FakeFetch([])
+        engine, *_ = _make(tmp_path, chain=chain, config=BreadthConfig(poll_secs=60.0))
+
+        await engine.start()
+        try:
+            assert engine._chain_map == _CHAIN_MAP
+            assert engine._chain_fetched_at == 0.0
+            assert chain.calls == 0
+        finally:
+            await engine.close()
+
+    async def test_fresh_cache_within_ttl_not_refetched(self, tmp_path: Path) -> None:
+        """TTL(7 天)內不重打:chain 是一天最多幾次的重表,不該跟著 poll 節奏走。"""
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), _time.time())
+        chain = FakeFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+
+        await _arm_chain(engine)
+
+        assert engine._chain_task is None
+        assert chain.calls == 0
+
+    async def test_expired_arms_task_then_swaps_and_saves(self, tmp_path: Path) -> None:
+        """從未成功(冷啟動無快取)→ 武裝 → 成功即換表 + 落檔;之後 TTL 內不再打。"""
+        chain = FakeFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain)
+
+        await _arm_chain(engine)
+
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP
+        fetched_at = engine._chain_fetched_at
+        assert fetched_at is not None
+        assert load_chain(_chain_file(tmp_path)) == (_CHAIN_ROWS, fetched_at)
+
+        await _arm_chain(engine)
+        assert chain.calls == 1  # TTL 內
+
+    async def test_fetch_failure_keeps_old_map_and_backs_off(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """取數失敗 → 沿用舊表 + 60s 退避;退避內不重打(壞上游不跟著 poll 節奏燒配額)。"""
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        chain = FakeFetch([])
+        chain.error = BreadthFetchError("chain down")
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+
+        await _arm_chain(engine)
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP  # 沿用舊表,不清空
+
+        mono.advance(be._MAP_RETRY_SECS - 1.0)
+        await _arm_chain(engine)
+        assert chain.calls == 1  # 退避中
+
+        mono.advance(2.0)
+        chain.error = None
+        chain.rows = list(_CHAIN_ROWS)
+        await _arm_chain(engine)
+        assert chain.calls == 2
+        assert engine._chain_fetched_at != 0.0  # 成功才刷時戳
+
+    async def test_quota_failure_uses_quota_backoff(self, tmp_path: Path, mono: FakeMono) -> None:
+        """402 = 配額用盡 → 走 `quota_backoff_secs`(300s),不是一般 60s。"""
+        chain = FakeFetch([])
+        chain.error = BreadthFetchError("配額用盡", quota=True)
+        engine, *_ = _make(tmp_path, chain=chain)
+
+        await _arm_chain(engine)
+        assert chain.calls == 1
+
+        mono.advance(299.0)
+        await _arm_chain(engine)
+        assert chain.calls == 1
+
+        mono.advance(2.0)
+        await _arm_chain(engine)
+        assert chain.calls == 2
+
+    async def test_empty_parse_keeps_old_map_and_file(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        """取數成功但 parse 後為空 → **不換表、不落檔、不刷時戳**,rotation 仍有值(R6)。
+
+        欄位語意變更(或上游回一份殘表)時 `rows_to_chain_map` 會整份丟成空 dict:
+        照樣換表的話,一份可用的舊快取會被空表覆寫**並固化到磁碟**,重啟後連 stale
+        的類股資料都沒有,而畫面上只是「類股資料未就緒」零錯誤訊號。
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        before = _chain_file(tmp_path).read_text(encoding="utf-8")
+        chain = FakeFetch([{"stock_id": "2330", "industry": "半導體"}])  # 缺 sub → 整列丟
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+
+        await _arm_chain(engine)
+
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP
+        assert engine._chain_fetched_at == 0.0
+        assert _chain_file(tmp_path).read_text(encoding="utf-8") == before
+
+        mono.advance(be._MAP_RETRY_SECS - 1.0)
+        await _arm_chain(engine)
+        assert chain.calls == 1  # 空表同樣走退避
+
+        await engine._run_cycle()
+        assert engine.sector_state()["rotation"] is not None  # 舊表照樣算得出來
+
+    async def test_no_chain_fetch_disables_rotation(self, tmp_path: Path) -> None:
+        """`chain_fetch=None` = 類股停用:不武裝、rotation 恆 null、members 恆 None。"""
+        engine, *_ = _make(tmp_path)
+
+        await _arm_chain(engine)
+        await engine._run_cycle()
+
+        assert engine._chain_task is None
+        assert engine.sector_state()["rotation"] is None
+        assert engine.sector_members("半導體", None) is None
+
+    async def test_poll_loop_not_blocked_by_hanging_chain_fetch(self, tmp_path: Path) -> None:
+        """chain 取數卡死 → 家數輪照跑(§1 失效域:類股壞不得拖慢家數)。
+
+        `_maybe_arm_chain` 起的是 fire-and-forget task,poll loop 不 await 它;
+        寫成 `await self._refresh_chain()` 的話這裡會停在 chain.calls == 1 那一刻,
+        整片家數面板跟著卡住而唯一的肇因只是類股這條旁支。
+        """
+        chain = HangingFetch(list(_CHAIN_ROWS))
+        engine, snap, *_ = _make(tmp_path, chain=chain, config=BreadthConfig(poll_secs=0.01))
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: snap.calls >= 3)
+            assert chain.calls == 1  # 卡住的 task 不重複武裝
+            task = engine._chain_task
+            assert task is not None and not task.done()
+        finally:
+            chain.release.set()
+            await engine.close()
+
+    async def test_close_cancels_chain_task(self, tmp_path: Path) -> None:
+        """`close()` 一併收攤 chain task(與 poll / streak 同款),否則 shutdown 掛孤兒。"""
+        chain = HangingFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._maybe_arm_chain()
+        task = engine._chain_task
+        assert task is not None
+        try:
+            await _wait_until(lambda: chain.calls >= 1)
+
+            await engine.close()
+
+            assert task.done()
+            assert engine._chain_task is None
+        finally:
+            chain.release.set()
+
+    async def test_chain_armed_via_poll_loop(self, tmp_path: Path) -> None:
+        """武裝掛在 poll loop(與 streak 同一處)—— start() 本身仍零網路 IO。"""
+        chain = FakeFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain, config=BreadthConfig(poll_secs=0.01))
+
+        await engine.start()
+        try:
+            assert chain.calls == 0  # start() 不打上游
+            await _wait_until(lambda: engine._chain_map != {})
+        finally:
+            await engine.close()
+
+        assert engine._chain_map == _CHAIN_MAP
+
+
+class TestSectorState:
+    async def test_state_before_first_cycle(self, tmp_path: Path) -> None:
+        """引擎在、首輪未成 → rotation null(前端「類股資料未就緒」的三態之一)。"""
+        engine, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
+
+        assert engine.sector_state() == {
+            "enabled": True,
+            "trade_date": None,
+            "as_of": None,
+            "stale": True,
+            "rotation": None,
+        }
+
+    async def test_rotation_and_universe_rows_after_cycle(self, tmp_path: Path) -> None:
+        """`_apply` 成功 → rotation 與 universe_rows 同輪同源更新。
+
+        手算(universe = 2330 +1.01 / 1101 +10.0 / 2317 0.0 / 6488 −10.0,每檔量
+        1000、昨量 500):水泥 +10.00 排在半導體 (1.01 − 10.0)/2 之前;半導體
+        industry 層是兩個 sub 的聯集(members 2),subs 各自 1 檔按 avg desc。
+        2317 不在 chain 內 → 不長出產業。
+        """
+        engine = await _ready_engine(tmp_path)
+
+        state = engine.sector_state()
+        assert state["enabled"] is True
+        assert state["trade_date"] == _TRADE_DATE
+        assert state["as_of"] == "10:23:45"
+        assert state["stale"] is False
+
+        industries = state["rotation"]["industries"]
+        assert [i["name"] for i in industries] == ["水泥", "半導體"]
+        cement, semi = industries
+        assert (cement["members"], cement["vol_ratio"]) == (1, 2.0)
+        assert cement["avg_change_rate"] == pytest.approx(10.0)
+        assert [s["name"] for s in cement["subs"]] == ["水泥製造"]
+        assert semi["members"] == 2  # 聯集去重,不是兩個 sub 相加
+        assert semi["avg_change_rate"] == pytest.approx(-4.495)
+        assert semi["vol_ratio"] == pytest.approx(2.0)
+        assert [s["name"] for s in semi["subs"]] == ["晶圓代工", "矽晶圓"]
+
+        # universe_rows = members drill-down 的原料(compute_breadth 的 rows 已把量欄
+        # 收成 volume_ratio,分子分母不可再同步剔除 → 必須是 universe 那份)
+        assert {r["stock_id"] for r in engine._universe_rows} == {"2330", "1101", "2317", "6488"}
+        assert "yesterday_volume" in engine._universe_rows[0]
+
+    async def test_rotation_null_when_chain_missing(self, tmp_path: Path) -> None:
+        """chain 表還沒到(首次刷新未完成)→ 家數照常,rotation null。"""
+        engine, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
+
+        await engine._run_cycle()
+
+        assert engine.state()["counts"] == _EXPECTED
+        assert engine.sector_state()["rotation"] is None
+
+    async def test_sector_members_known(self, tmp_path: Path) -> None:
+        """成員 drill-down:名稱走 `_name_map`,按 change_rate desc。"""
+        engine = await _ready_engine(tmp_path)
+
+        assert engine.sector_members("半導體", None) == {
+            "industry": "半導體",
+            "sub_industry": None,
+            "members": [
+                {
+                    "stock_id": "2330",
+                    "name": "台積電",
+                    "change_rate": 1.01,
+                    "vol_ratio": 2.0,
+                    "total_amount": 12_345,
+                },
+                {
+                    "stock_id": "6488",
+                    "name": "環球晶",
+                    "change_rate": -10.0,
+                    "vol_ratio": 2.0,
+                    "total_amount": 12_345,
+                },
+            ],
+        }
+
+    async def test_sector_members_sub_narrows(self, tmp_path: Path) -> None:
+        engine = await _ready_engine(tmp_path)
+
+        result = engine.sector_members("半導體", "矽晶圓")
+
+        assert result["sub_industry"] == "矽晶圓"
+        assert [m["stock_id"] for m in result["members"]] == ["6488"]
+
+    @pytest.mark.parametrize(
+        ("industry", "sub"),
+        [
+            pytest.param("不存在", None, id="未知產業"),
+            pytest.param("半導體", "不存在", id="未知次產業"),
+            pytest.param("", None, id="空字串產業"),
+        ],
+    )
+    async def test_sector_members_unknown_is_none(
+        self, tmp_path: Path, industry: str, sub: str | None
+    ) -> None:
+        """查無 → None(呼叫端轉 404 SECTOR_NOT_FOUND),不是空 members。"""
+        engine = await _ready_engine(tmp_path)
+
+        assert engine.sector_members(industry, sub) is None
