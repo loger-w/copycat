@@ -250,7 +250,7 @@ function NumField({
 // ---------------------------------------------------------------------------
 
 function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
-  const { data } = useBreadthRows();
+  const { data, isError } = useBreadthRows();
   const [filter, setFilter] = useState<LimitListFilter>(loadFilter);
 
   function update(patch: Partial<LimitListFilter>): void {
@@ -267,8 +267,11 @@ function LimitListBody({ onOpenStock }: { onOpenStock?: (code: string) => void }
   // 空狀態判別子是 `as_of` 不是 `stale`(design R18):`stale` 在冷啟動 degraded 下恆為
   // true,拿它分流會讓「載入中」與「有資料但延遲」兩態顛倒。
   // `enabled=false` 要排在最前面 —— 那是「去設 .env」不是「等一下就好」。
+  // 端點恆 200,能走到 isError 的只有網路 / proxy 斷 —— 但那條路必須說出來:
+  // 少了它,`data` 恆 undefined 會讓畫面永遠停在「載入中…」(把已放棄說成還在等)。
   let message: string | null = null;
-  if (data === undefined) message = "載入中…";
+  if (isError) message = "載入失敗";
+  else if (data === undefined) message = "載入中…";
   else if (!data.enabled) message = "FinMind 未設定";
   else if (data.as_of === null) message = "載入中…";
   else if (data.rows.length === 0) message = "暫無資料(延遲)";
