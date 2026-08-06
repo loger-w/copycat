@@ -207,6 +207,8 @@ TC4 系(指數圖/corr/個股/既有訊號)完全不受影響。
    extras 引 httpx;poll 間隔預設值(5s vs 10s,看 neigui 實際配額用量)。
 3. R2:breadth WS 併入 index WS 還是獨立 endpoint。
 4. R3:連板數欄位的資料路徑(daily store 只涵蓋 watchlist universe)。
+   〔2026-08-06 R3 Phase 0 拍板:FinMind TaiwanStockPrice EOD 回看 10 交易日,
+   每日一次快取落檔;連板算術在後端 rows 端點(streak/streak_capped)。〕
 5. R4:鎖板/開板事件的 dedup 鍵與「觸及未鎖」是否也算事件。
 6. next-time 既有候選:列表迷你預覽(D-5)、大盤級衍生訊號(§1 non-goal)、
    創 20 日新高/新低家數。
