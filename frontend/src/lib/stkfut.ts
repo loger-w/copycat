@@ -39,6 +39,27 @@ export function instrumentKeyOf(
   return contract === null ? code : `F:${contract.prod}:${contract.ym}`;
 }
 
+/** 送單用的 TC4 月份 leaf symbol。
+ *
+ *  **不可用 `.HOT`**:HOT 由 TC4 解析成熱門月,使用者在下拉選的若是次月,送出去的
+ *  會是近月 —— 真錢面板上「畫面顯示的合約」與「送出去的合約」必須是同一個。 */
+export function stkfutTc4Symbol(contract: { prod: string; ym: string }): string {
+  return `TC.F.TWF.${contract.prod}.${contract.ym}`;
+}
+
+/** ETF 標的?(下單面前置閘)
+ *
+ *  ETF 期貨的契約單位是 10,000 受益權單位,後端 `_stkfut_gates` 對非股票單位一律回
+ *  `PRODUCT_NOT_ALLOWED`(design SC-6);**權威判定在後端**(它讀得到期交所契約單位),
+ *  這裡只是前置閘,避免使用者在真錢面板上按下一個必被拒的鍵。
+ *
+ *  判準用**股號**而非契約單位:前端拿不到單位(contracts route 只回 prod / 月份)。
+ *  台股上市櫃普通股代號一律 1000–9999,開頭為 `0` 的是 ETF / ETN / 受益證券 —— 方向
+ *  保守:誤判只會多擋一檔,不會放行一張必被拒的單。 */
+export function isEtfUnderlying(code: string): boolean {
+  return code.startsWith("0");
+}
+
 /** `202609` → `2026/09`(下拉選項文字)。 */
 export function ymLabel(ym: string): string {
   return `${ym.slice(0, 4)}/${ym.slice(4)}`;

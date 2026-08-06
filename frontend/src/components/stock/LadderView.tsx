@@ -66,6 +66,8 @@ interface Props {
   armControls?: ReactNode;
   /** 買側全鎖(現股無券);與 `dimmed` 疊加 */
   buyLocked?: boolean;
+  /** 買賣兩側全鎖(商品本身不開放下單,如 ETF 期貨);與 `dimmed` 疊加 */
+  priceLocked?: boolean;
   qty: number;
   /** 數量欄位 aria-label:現股「張數」/ 期貨「口數」 */
   qtyLabel: string;
@@ -97,6 +99,7 @@ export function LadderView({
   onToggleArm,
   armControls = null,
   buyLocked = false,
+  priceLocked = false,
   qty,
   qtyLabel,
   onQtyPreset,
@@ -231,7 +234,8 @@ export function LadderView({
           {rows.map((r) => {
             const buyLot = buyLots?.get(r.priceMilli);
             const sellLot = sellLots?.get(r.priceMilli);
-            const buyDisabled = r.dimmed || buyLocked;
+            const buyDisabled = r.dimmed || buyLocked || priceLocked;
+            const sellDisabled = r.dimmed || priceLocked;
             const beKinds = beMarks?.get(r.priceMilli);
             const avgKinds = avgMarks?.get(r.priceMilli);
             // title 掛 row 不掛標記(LP-1):標記是 pointer-events-none,永遠不會是
@@ -316,12 +320,12 @@ export function LadderView({
                 <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
                   <button
                     type="button"
-                    disabled={r.dimmed}
+                    disabled={sellDisabled}
                     aria-label={`賣 ${fmt(r.priceMilli)}`}
                     onClick={() => onClickPrice(r.priceMilli, "sell")}
                     className={cn(
                       "min-w-0 flex-1 pl-1 text-left",
-                      r.dimmed ? "text-ink-dim/50" : "text-bear hover:bg-bear/10",
+                      sellDisabled ? "text-ink-dim/50" : "text-bear hover:bg-bear/10",
                     )}
                   >
                     {r.askQty > 0 ? r.askQty : ""}

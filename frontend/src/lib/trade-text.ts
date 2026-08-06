@@ -8,6 +8,11 @@ const TRADE_ERROR_TEXT: Record<string, string> = {
   CONFIRM_REQUIRED: "確認已失效,請重新送單",
   PREVIEW_EXPIRED: "預覽已過期,請重新送單",
   INVALID_ORDER: "下單參數不合法",
+  // 個股期兩道閘(stkfut-contracts R2-8)。BAD_TICK 只對 limit 單成立(市價單的
+  // price 欄不參與送單);PRODUCT_NOT_ALLOWED = 契約單位非股票期貨規格(ETF 期貨、
+  // 除權息調整契約)—— 兩者都是「這一單不會被送出去」,原碼直接顯示等於沒說明白。
+  BAD_TICK: "價格非合法檔位",
+  PRODUCT_NOT_ALLOWED: "此商品下單暫未開放",
   SYMBOL_NOT_ALLOWED: "商品不可下單",
   BROKER_REJECTED: "券商拒單",
   AUDIT_WRITE_FAILED: "審計寫入失敗,單未送出",
