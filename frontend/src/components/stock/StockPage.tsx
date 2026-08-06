@@ -374,11 +374,13 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
                     />
                   </div>
                   <div className="min-h-0 min-w-0 flex-[2]">
-                    {/* `key={code}`:明細的「載入更多」筆數是 TickTape 內部 state,
-                        換股時元件不 unmount → 展開到一半的筆數會跟著新股票走
+                    {/* `key={instrumentKey}`:明細的「載入更多」筆數是 TickTape 內部 state,
+                        切標的時元件不 unmount → 展開到一半的筆數會跟著新標的走
                         (同一頁的 pickerOpen 是換股歸零的,兩者語意該一致)。
-                        用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。 */}
-                    <TickTape key={code} ticks={accum.ticks} ref_={meta?.ref ?? null} />
+                        用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。
+                        鍵是 instrument key 不是股號(F-4):同一檔股票的現貨與各月合約是
+                        不同標的,而 `code` 在換月與現貨↔合約時恆不變 → 用它當 key 不重掛。 */}
+                    <TickTape key={instrumentKey} ticks={accum.ticks} ref_={meta?.ref ?? null} />
                   </div>
                 </div>
               </>
