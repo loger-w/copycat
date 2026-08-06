@@ -54,12 +54,18 @@ export function BreadthBand({ breadth }: { breadth: BreadthState | null }) {
     );
   }
 
+  // 只印時分秒時,開盤前掛著的前一交易日曲線與今日盤中長得一模一樣 —— 日期要一起印,
+  // 舊資料才辨識得出來(review P2-5)。任一端缺值就不留分隔符。
+  const stamp = [breadth?.trade_date, breadth?.as_of].filter(Boolean).join(" · ");
+
   return (
     <Shell>
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-sm text-ink">漲跌家數</span>
-        {breadth?.as_of ? (
-          <span className="font-mono text-xs text-ink-dim">至 {breadth.as_of}</span>
+        {stamp ? (
+          <span data-testid="breadth-stamp" className="font-mono text-xs text-ink-dim">
+            {stamp}
+          </span>
         ) : null}
         {breadth?.stale ? (
           <span

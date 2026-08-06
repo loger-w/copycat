@@ -4,7 +4,8 @@
  * (TQ 慣例適用於 request/response)。
  * merge 契約(design §7 R8):scalar(counts/stale/as_of)覆寫;`last_minute` 依 `t`
  * upsert(同 t 覆寫、新 t 升冪插入);`trade_date` 與本地不同 → 清 series + refetch;
- * WS `onopen` → refetch 全量(補回斷線期間漏掉的分鐘格)。
+ * WS `onopen` → refetch 全量(補回斷線期間漏掉的分鐘格),回應以 union-by-t 併回在途
+ * 期間抵達的增量格(見 `mergeSnapshot`)。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -38,6 +39,22 @@ function upsert(series: BreadthPoint[], point: BreadthPoint): BreadthPoint[] {
   return [...series.slice(0, idx), point, ...series.slice(idx)];
 }
 
+/** 全量回應併回「fetch 在途期間抵達的 WS 增量格」(review P2-3)。
+ *
+ *  refetch 拍的是發出請求那一刻的快照,回應在飛的期間 WS 可能已經 append 了新的分鐘格;
+ *  直接整份取代會把那幾格靜默抹掉(reconnect onopen 必 refetch,所以這條路很常走)。
+ *  以回應為基底做 union-by-t:同 t 以回應為準(全量恆為權威),回應缺席而本地有的補回,
+ *  順序交給 `upsert` 維持升冪。`trade_date` 不同 = 本地序列屬舊日,不合併。 */
+function mergeSnapshot(prev: BreadthState | null, next: BreadthState): BreadthState {
+  if (prev === null || prev.trade_date !== next.trade_date) return next;
+  const inNext = new Set(next.series.map((p) => p.t));
+  const missing = prev.series.filter((p) => !inNext.has(p.t));
+  if (missing.length === 0) return next;
+  let series = next.series;
+  for (const point of missing) series = upsert(series, point);
+  return { ...next, series };
+}
+
 export function useBreadth(): BreadthState | null {
   const [state, setState] = useState<BreadthState | null>(null);
   const stateRef = useRef<BreadthState | null>(null);
@@ -47,7 +64,8 @@ export function useBreadth(): BreadthState | null {
     try {
       const res = await fetch(ENDPOINT);
       if (!res.ok) return;
-      setState((await res.json()) as BreadthState);
+      const snapshot = (await res.json()) as BreadthState;
+      setState((prev) => mergeSnapshot(prev, snapshot));
     } catch (err) {
       console.warn("breadth: state 載入失敗", err);
     }
