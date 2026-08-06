@@ -22,7 +22,12 @@ export type SignalKind =
 /** 全市場廣度事件的判別子。**前綴約定是唯一依據**(不是列舉):後端之後補新的廣度
  *  kind 時,前端不必同步改就能維持「不進 toast、不進自選 rail」的分族語意。 */
 export function isMarketKind(kind: string): boolean {
-  return kind.startsWith("market_");
+  // **runtime guard 不是多餘的**(review round-2 FE-2):型別上 `kind` 是 string,但這份
+  // 資料的來源是 jsonl 檔的一行與 WS 訊息 —— runtime 沒有任何人保證。裸 `startsWith`
+  // 對非字串會拋,而呼叫點在 `useSignalFeed` 的 useMemo 內、上頭沒有 ErrorBoundary
+  // → 整頁白屏,且壞行還留在檔案裡,重整也不會自癒。後端對應的 `app._is_market_kind`
+  // 就是先 `isinstance(kind, str)`,兩邊同一道防禦。
+  return typeof kind === "string" && kind.startsWith("market_");
 }
 
 export interface SignalMsg {
