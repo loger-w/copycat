@@ -5,7 +5,7 @@
 
 import type { VpCell } from "@/lib/stock-accum";
 import { plotWidth } from "@/lib/stock-intraday-svg";
-import { tickOf } from "@/lib/stock-tick";
+import { stepDown, stepUp } from "@/lib/stock-tick";
 
 /** bar 最大寬 = 繪圖區的 22%(長條是背景參考,不該吃掉走勢線的可讀空間)。 */
 export const VP_MAX_W_RATIO = 0.22;
@@ -61,9 +61,16 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
     // `y = top` 而不是把 bar 再置中進帶內:0.15 的縫必須全由下緣吃掉,否則端點檔位
     // 的 bar 會往上溢出畫布(它的 top 已經**就是**域邊界)。代價是中心與價線差
     // 0.075 × dist(半條縫),遠小於舊語意的半個 tick。
-    const half = tickOf(priceMilli) / 2;
-    const top = Math.max(g.toY(yTop), g.toY(priceMilli + half));
-    const bottom = Math.min(g.toY(yBottom), g.toY(priceMilli - half));
+    //
+    // 兩端取「與相鄰**合法檔位**的中點」而不是 `± tickOf(p)/2`(F-5):tick 級距邊界上
+    // 下方鄰檔比自己細(100.00 元的 tick 是 0.5,但下一檔 99.90 的 tick 是 0.1),
+    // 同寬的帶會跨進鄰檔的帶 0.2 元 —— fillOpacity 疊加後看起來像那一帶量特別集中。
+    // 檔位規則沿 `stock-tick.ts` 的單一定義,不在這裡自寫第二份。
+    // 非邊界檔位的結果與 `p ± tick/2` 等價,只有 50 / 100 / 500 / 1000 元四處收斂。
+    const topMilli = (priceMilli + stepUp(priceMilli)) / 2;
+    const bottomMilli = (priceMilli + stepDown(priceMilli)) / 2;
+    const top = Math.max(g.toY(yTop), g.toY(topMilli));
+    const bottom = Math.min(g.toY(yBottom), g.toY(bottomMilli));
     const dist = bottom - top;
     return {
       y: top,
