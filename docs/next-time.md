@@ -1,4 +1,18 @@
 
+## 2026-08-06(market-overview-r3-limit-list 收尾留尾巴)
+
+- [ ] **user 過目待做(SC-3/4/5 雙層之二)**:綜合 tab「漲跌停」收合區塊(家數帶之下、
+  相關係數之上)— 展開後篩選列(上市/上櫃/漲停/跌停/觸及未鎖 + 金額(億)/股價區間)、
+  表格九欄(3081 聯亞當日顯示「連 5 板」)、點列跳個股 tab。AI 截圖六張在
+  `.claude/feat/market-overview-r3-limit-list/evidence/SC-{3,4,5}_*.png`(盤後真數據)。
+- [ ] **SC-5 盤中層待驗**:點列表任一檔跳個股 tab 後五檔開始跳動(需 prod server +
+  盤中;截圖層已驗 tab 切換與主圖標的設定)。
+- [ ] **prod 8721 重啟後才含 R3**:FinMind poller 活在 server process;下次啟動順手目視
+  列表區塊 + `data/market/streaks-<date>.json` 開始落檔(06:00 後武裝)。
+- [ ] **側車樣板已升四元組**:`.claude/feat/market-overview-r3-limit-list/evidence/
+  breadth_side_server_r3.py`(R2 樣板是三元組,已過時 — 下次盤中驗 FinMind 管線用這份)。
+- [ ] 跌停連板數欄(Q4 拍板不做)、列表迷你預覽(D-5)仍在 next-time 池。
+
 ## 2026-08-06(market-overview-r2-finmind 收尾留尾巴)
 
 - [ ] **user 過目待做(SC-4 雙層之二)**:綜合 tab 中段家數帶(上市/上櫃 × 漲停/上漲/平盤/
@@ -12,8 +26,9 @@
   兩邊同開比對一次;純 optional。
 - [ ] **WS /ws/breadth 無 enabled 欄**(review 波一偏離 3):boot 未完成時 WS 送一則
   載入中 scalar 再關,前端靠退避重連自癒;R3 若要前端據 WS 顯示載入中,payload 補欄位。
-- [ ] R3 前置已備:`BreadthEngine.rows`(compute_breadth 全量 rows)存引擎屬性未曝露,
-  接列表時開 REST 曝露面即可。
+- [x] ~~R3 前置已備:`BreadthEngine.rows`(compute_breadth 全量 rows)存引擎屬性未曝露,
+  接列表時開 REST 曝露面即可。~~ **2026-08-06 R3 已出貨**(`/api/market/breadth/rows` +
+  連板數管線 + LimitListSection,見下方 R3 收尾節)。
 
 ## 2026-08-06(market-overview-r1-tab Phase 6 real-env 沉澱)
 
@@ -771,6 +786,11 @@
 - [ ] `copycat/live/trade_models.py` 瘦身候選:僅 `BrokerRejectedError` 與 `mask_account` 有 production consumer(皆 `capital/client.py`;2026-08-04 增量 review F5 全符號盤點)— 其餘全數零引用:`OrderRequest` / `millipts_from_price_str` / `price_str_from_millipts` / `to_neworder_param` / `TouchanceDownError` / `AccountInfo` / `OrderReport` / `parse_accounts` / `parse_execution_report` / `parse_fill_report` / `classify_is_sim`。動它時 `tests/live/test_trade_models.py` 對應測試同步縮,且先 grep 確認 capital 端沒長出新引用。
 - [ ] `frontend/src/lib/trade-text.ts` 瘦身候選(review F3):`TRADE_ERROR_TEXT` 有 6 個無 producer 的 dead key(TOUCHANCE_DOWN / TRADE_NOT_READY / LIVE_DISABLED / CONFIRM_REQUIRED / PREVIEW_EXPIRED / SYMBOL_NOT_ALLOWED,一對一對應已刪的 _TRADE_ERROR_MAP)+ `orderStatusText` / `orderSideText` 已 test-only(唯一 production consumer 是被刪的 OrdersList/OrderConfirm)。**⚠ `INVALID_ORDER` 必留**(capital_api 仍回它);`tradeErrorText` / `shortSymbol` 是 useCapital 等現行 consumer 在用,不可整檔刪。`trade-text.test.ts:7-8` 對 dead key 的斷言一併清。
 - [ ] `tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` 是既有 timing flake(0.5s 收 frame 窗,全套負載下間歇紅;2026-08-04 雙跑對照:全套 1 failed/1620 → 重跑 1621 passed、單檔 6 passed)。放寬候選:時間窗改 deadline 迴圈。與 remove-tc4-trade-path 零因果。〔2026-08-05 加證:capital-position-key-kind 輪(diff 零碰 WS/transport)4 次全套 2 紅 2 綠,且**單檔重跑也紅過一次**(後續單測綠 / tests/server 全段綠 / 同檔連跑兩次綠)— 重現率比原記載高,下輪處理時當真 bug 排查(deadline 迴圈化),不要重跑掉〕
+  〔2026-08-06 R3 輪再加證:worktree 全套下 ~3/5 紅(base 4/4 綠)— 隔離實證為
+  **時序位移推高既有 flake 命中率**(新增 4 個 breadth route 測試改變排程;移除即恢復、
+  production code 零涉入;停用連板 task 無效)。修法已驗證可行:該測試改用
+  `_ws_handshake_keep_rest` + `assert rest or sock.recv(4096)` → 同組合 4/4 綠。
+  優先級應再上調 — 它現在會間歇咬到每一輪的全套 gate〕
 - [x] ~~下次自然重啟 prod server 時,目視 futures / corr / river 三面板有值 —— sentinel 解耦(`__main__` 顯式傳 DEFAULT_FUTURES/DEFAULT_CORR)的 real-env 確認(自動化已由 `test_main_wiring.py` 守;2026-08-04 依「盤中/夜盤不重啟」紀律未做重啟驗證)。~~ **2026-08-04 23:09 user 指示重啟驗畢**(build 7310418):futures TXF/MXF/TMF 三品全值(五檔 + resolved_contract 202608)、corr 六腿全非 stale(w60 有值,長窗待樣本累積屬預期)、river 六腿回補 491 分鐘(SXF 438,稀疏腿正常);UI 目視期貨 / 相關係數 tab 皆「即時連線中」,截圖 `.claude/mod/remove-tc4-trade-path/evidence/restart-corr-river-panel.png`。**同場首驗 server-launch-wrapper 的 log 落檔**:`logs/server-20260804-2309.log` 自動生成,banner / 引擎 / uvicorn access 全入檔。另觀測:23:09 群益登入回 `SK_ERROR_TELNET_LOGINSERVER_FAIL`(降級 status=error,其餘不受影響)— 疑似群益夜間維護窗,白天重啟再看。
 
 ## 2026-08-04(ws-test-consolidation 收尾沉澱)
