@@ -7,6 +7,7 @@ import { StockPage } from "@/components/stock/StockPage";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { emitSignal } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
+import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
 
@@ -191,6 +192,38 @@ describe("StockPage 切股時明細展開筆數歸零(M8)", () => {
 
     // 切股(元件不 unmount,只是 props 換了)
     rerender(page("2317"));
+    expect(rows(container)).toBe(30);
+  });
+
+  // 🔴 F-4:同一檔股票的現貨與各月合約是**不同標的**,而 `code` 在換月與現貨↔合約時
+  // 恆不變 → `key={code}` 不重掛,展開到一半的筆數跟著跨標的存活(同頁的 pickerOpen、
+  // useStockStream deps、RightRail centerRequest 都已改吃 instrumentKey,獨漏此處)。
+  it("同股切合約 → 顯示筆數回初始值(重掛鍵是 instrumentKey 不是 code)", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = (contract: StkfutSelection | null) => (
+      <QueryClientProvider client={client}>
+        <StockPage
+          code="2330"
+          onSelect={vi.fn()}
+          stream={stream({ accum: accumWithTicks("2330") })}
+          contract={contract}
+          onContract={vi.fn()}
+        />
+      </QueryClientProvider>
+    );
+    const { container, rerender } = render(page(null));
+    expect(rows(container)).toBe(30);
+    fireEvent.click(screen.getByRole("button", { name: "載入更多" }));
+    expect(rows(container)).toBe(60);
+
+    // 現貨 → 合約(股號不變)
+    rerender(page({ prod: "CDF", ym: "202609", mini: false, unit: 2000 }));
+    expect(rows(container)).toBe(30);
+
+    // 換月(股號仍不變)
+    fireEvent.click(screen.getByRole("button", { name: "載入更多" }));
+    expect(rows(container)).toBe(60);
+    rerender(page({ prod: "CDF", ym: "202610", mini: false, unit: 2000 }));
     expect(rows(container)).toBe(30);
   });
 });
