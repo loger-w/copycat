@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
@@ -1072,5 +1072,99 @@ describe("StockIntradayChart 價位別成交量(SC-3)", () => {
   it("尚無成交(tick 全無)→ 一根長條都沒有,不崩", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     expect(vpBars(container).length).toBe(0);
+  });
+});
+
+// 🟢 SC-5 / D10:期貨態(個股期合約主圖)。三件事同時成立才算對 ——
+// (1) x 窗換成 08:45–13:45(含量柱寬的分母);(2) overlay / VP 這兩個日線與現股口徑的
+// 疊加物不畫;(3) **不可打請求**(打了就是白花 TC4/FinMind 的錢還汙染 query cache)。
+//
+// 期貨態一律由**顯式 prop** 傳入,不從 `accum.code` 猜(R6):code 的形狀是資料層契約,
+// 拿它當渲染分支的判準等於讓兩層耦合,而後端哪天改 key 形狀時前端會靜默退回現貨窗。
+describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
+  const FUT = fromSnapshot({
+    code: "F:CDF:202609",
+    seq: 3,
+    last: { p: 2_390_000, t: "13:40:10.000", cum_vol: 16 },
+    vwap: 2_380_000,
+    minutes: {
+      // 08:45 與 13:40 是個股期獨有的兩段(現貨窗會整段濾掉)
+      "525": { c: 2_330_000, v: 4, i: 0, o: 4, u: 0, h: 2_330_000, l: 2_330_000 },
+      "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 },
+      "820": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_385_000 },
+    },
+    ticks: [
+      { t: "08:46:10.000", p: 2_330_000, q: 4, side: "outer" },
+      { t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer" },
+    ],
+    book: null,
+    meta: { name: "台積電期", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  /** 量副圖 viewBox 寬固定 800 → 繪圖區 800 − Y_AXIS_W − R_AXIS_W = 724 */
+  const SUB_PLOT_W = 800 - Y_AXIS_W - R_AXIS_W;
+
+  function urls(): string[] {
+    return (globalThis.fetch as unknown as Mock).mock.calls.map((c) => String(c[0]));
+  }
+  function overlayCalls(): number {
+    return urls().filter((u) => u.includes("/api/stock/overlay")).length;
+  }
+  function energyBars(container: HTMLElement): Element[] {
+    return [...container.querySelectorAll('[data-testid="energy-bar"]')];
+  }
+
+  it("窗 = 08:45–13:45:窗外三段以外的分鐘全入圖(現貨態同資料只留一根)", () => {
+    const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
+    expect(energyBars(fut.container).length).toBe(3);
+    fut.unmount();
+    cleanup();
+    // 對照組:同一份 accum 不給 stkfut → 08:45 與 13:40 被現貨窗濾掉
+    const spot = wrap(<StockIntradayChart accum={FUT} />);
+    expect(energyBars(spot.container).length).toBe(1);
+  });
+
+  it("量柱寬分母 = 300 分鐘(現貨為 270)", () => {
+    const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
+    const w = Number(energyBars(fut.container)[0]!.getAttribute("width"));
+    expect(w).toBeCloseTo(SUB_PLOT_W / 300 - 0.4, 6);
+    fut.unmount();
+    cleanup();
+    const spot = wrap(<StockIntradayChart accum={FUT} />);
+    const w2 = Number(energyBars(spot.container)[0]!.getAttribute("width"));
+    expect(w2).toBeCloseTo(SUB_PLOT_W / 270 - 0.4, 6);
+  });
+
+  it("期貨態不打 overlay 請求(對照:現貨態在同一組預設下會打)", async () => {
+    const spot = wrap(<StockIntradayChart accum={ACCUM} />);
+    await waitFor(() => expect(overlayCalls()).toBe(1));
+    spot.unmount();
+    cleanup();
+    (globalThis.fetch as unknown as Mock).mockClear();
+    wrap(<StockIntradayChart accum={FUT} stkfut />);
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    expect(overlayCalls()).toBe(0);
+  });
+
+  it("期貨態 VP 長條整組不畫(量分佈預設開也一樣;對照組畫得出來)", () => {
+    const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
+    expect(fut.container.querySelectorAll('[data-testid="vp-bar"]').length).toBe(0);
+    fut.unmount();
+    cleanup();
+    const spot = wrap(<StockIntradayChart accum={FUT} />);
+    expect(spot.container.querySelectorAll('[data-testid="vp-bar"]').length).toBeGreaterThan(0);
+  });
+
+  it("期貨態:CDP / MA / 量分佈 三顆 toggle 反灰,均價仍可用", () => {
+    wrap(<StockIntradayChart accum={FUT} stkfut />);
+    for (const label of ["CDP", "MA", "量分佈"]) {
+      const btn = screen.getByRole("button", { name: label });
+      expect(btn.hasAttribute("disabled")).toBe(true);
+      expect(btn.getAttribute("aria-pressed")).toBe("false");
+      expect(btn.getAttribute("title")).toBe("期貨合約本輪不提供");
+    }
+    const vwap = screen.getByRole("button", { name: "均價" });
+    expect(vwap.hasAttribute("disabled")).toBe(false);
+    expect(vwap.getAttribute("aria-pressed")).toBe("true");
   });
 });

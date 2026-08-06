@@ -10,6 +10,8 @@ import {
   plotWidth,
   R_AXIS_W,
   sideSummary,
+  SPOT_WINDOW,
+  STKFUT_WINDOW,
   SUB_TOP_PAD,
   X_END_MIN,
   X_LABEL_H,
@@ -867,5 +869,85 @@ describe("round5:右緣帶 + 總量堆疊", () => {
       { width: W, height: 100 },
     );
     expect(g.maxTotal).toBe(269); // 不是 164
+  });
+});
+
+// 🟢 SC-5 / D9:x 窗參數化。個股期日盤是 08:45–13:45(300 分鐘),比現貨的
+// 09:00–13:30(270 分鐘)兩端各長一截 —— 窗一旦有第二種值,「幾何各處共用同一把尺」
+// 就從註解升級成必須被鎖住的契約:漏傳窗的失效樣態全是「圖照畫、只是對不齊」。
+describe("x 窗參數化(D9)", () => {
+  /** 繪圖區恰 300px → 期貨窗下每分鐘 1px,座標可直接對讀 */
+  const W = Y_AXIS_W + 300 + R_AXIS_W;
+  const META2 = { name: "台積電期", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 1 };
+
+  it("SPOT_WINDOW = 09:00–13:30、STKFUT_WINDOW = 08:45–13:45", () => {
+    expect(SPOT_WINDOW).toEqual({ start: 540, end: 810 });
+    expect(STKFUT_WINDOW).toEqual({ start: 525, end: 825 });
+    // 現貨窗必須逐值等於既有兩個常數 —— 兩份數字漂開時,預設參數就不再等於舊語意,
+    // 而所有「不傳窗」的既有呼叫端會一起靜默改變
+    expect(SPOT_WINDOW.start).toBe(X_START_MIN);
+    expect(SPOT_WINDOW.end).toBe(X_END_MIN);
+  });
+
+  it("期貨窗:minuteToX 兩端恰落在繪圖區左右界", () => {
+    expect(minuteToX(525, W, STKFUT_WINDOW)).toBeCloseTo(Y_AXIS_W, 6);
+    expect(minuteToX(825, W, STKFUT_WINDOW)).toBeCloseTo(W - R_AXIS_W, 6);
+    // 分母 = 300 分鐘(不是現貨的 270):09:00 落在左界右方恰 15px
+    expect(minuteToX(540, W, STKFUT_WINDOW)).toBeCloseTo(Y_AXIS_W + 15, 6);
+  });
+
+  it("不傳窗 = 現貨窗(既有呼叫端零改)", () => {
+    expect(minuteToX(X_START_MIN, W)).toBeCloseTo(minuteToX(X_START_MIN, W, SPOT_WINDOW), 10);
+    expect(minuteToX(X_END_MIN, W)).toBeCloseTo(W - R_AXIS_W, 6);
+    // 現貨窗下 09:00 仍在左界(不因期貨窗的存在而位移)
+    expect(minuteToX(X_START_MIN, W)).toBeCloseTo(Y_AXIS_W, 6);
+  });
+
+  it("期貨窗:minuteOf ↔ minuteToX 互逆(含 08:45 / 13:45 兩端)", () => {
+    const ms = [525, 540, 600, 810, 825];
+    const g = buildIntradayGeometry(
+      { minutes: minutes(ms.map((m) => [m, { c: 2_320_000, v: 1 }])), meta: META2 },
+      { width: W, height: 100 },
+      STKFUT_WINDOW,
+    );
+    for (const m of ms) expect(g.minuteOf(minuteToX(m, W, STKFUT_WINDOW))).toBe(m);
+  });
+
+  it("期貨窗:窗外(08:44 / 13:46)仍被濾掉,窗內兩端的分鐘進得了價線", () => {
+    const ms = minutes([
+      [524, { c: 2_300_000, v: 1 }],
+      [525, { c: 2_320_000, v: 1 }],
+      [600, { c: 2_330_000, v: 1 }],
+      [825, { c: 2_340_000, v: 1 }],
+      [826, { c: 2_350_000, v: 1 }],
+    ]);
+    const fut = buildIntradayGeometry(
+      { minutes: ms, meta: META2 },
+      { width: W, height: 100 },
+      STKFUT_WINDOW,
+    );
+    expect(fut.priceLine.map((p) => p.minute)).toEqual([525, 600, 825]);
+    // 同一份資料走預設(現貨)窗只留 09:00–13:30 那一格 —— 證明窗真的是參數而不是常數
+    const spot = buildIntradayGeometry({ minutes: ms, meta: META2 }, { width: W, height: 100 });
+    expect(spot.priceLine.map((p) => p.minute)).toEqual([600]);
+  });
+
+  it("期貨窗:sideSummary 與副圖 bar 與價線吃同一把尺", () => {
+    const ms = minutes([
+      [525, { c: 2_320_000, v: 5, o: 5 }],
+      [600, { c: 2_330_000, v: 3, o: 3 }],
+    ]);
+    expect(sideSummary(ms, STKFUT_WINDOW).outer).toBe(8);
+    expect(sideSummary(ms).outer).toBe(3); // 預設現貨窗:08:45 那分鐘不算
+    const sub = buildEnergyBars(ms, { width: W, height: 70 }, STKFUT_WINDOW);
+    expect(sub.bars.length).toBe(2);
+    expect(sub.bars[0]!.x).toBeCloseTo(minuteToX(525, W, STKFUT_WINDOW), 6);
+    // 主圖 energyBars 與副圖逐值相同(既有紀律在新窗下仍成立)
+    const g = buildIntradayGeometry(
+      { minutes: ms, meta: META2 },
+      { width: W, height: 70 },
+      STKFUT_WINDOW,
+    );
+    expect(g.energyBars).toEqual(sub.bars);
   });
 });
