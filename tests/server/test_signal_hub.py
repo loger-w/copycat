@@ -310,6 +310,30 @@ def _drain(queue: asyncio.Queue[dict]) -> list[dict]:
     return rows
 
 
+def _market_event(**over: Any) -> dict[str, Any]:
+    """breadth diff 交給 hub 的事件形狀(design §6.4 → §7)。"""
+    event: dict[str, Any] = {
+        "kind": "market_limit_lock",
+        "code": "2330",
+        "name": "台積電",
+        "price": 100_000,
+        "time": "10:00:00",
+        "direction": "up",
+        "touch_count": 1,
+    }
+    event.update(over)
+    return event
+
+
+def _seed_jsonl(tmp_path: Path, date: str, rows: list[dict[str, Any]]) -> None:
+    """直接鋪當日 jsonl(模擬「上一個 process 留下的檔」)。"""
+    path = tmp_path / "signals" / f"{date.replace('-', '')}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
+    )
+
+
 def _cache(h: _Harness, code: str = "2330") -> tuple[str, int | None]:
     """hub 的 basis cache 摘要 → (基準日, nh 線價);cdp 不可得時 nh 為 None。"""
     basis_date, cdp = h.hub._basis_cache[code]
@@ -1814,3 +1838,230 @@ class TestRulesCrud:
         snapshot[0]["cdp_levels"].append("zz")
         assert h.hub.rules()[0]["name"] != "亂改"
         assert "zz" not in h.hub.rules()[0]["cdp_levels"]
+
+
+class TestMarketEvents:
+    """SC-6:全市場廣度事件的入口(design §7)。
+
+    這條路徑與規則引擎**完全平行** —— 不經 slots、不經 detector、硬性不進 Discord。
+    breadth 是純 FinMind 來源,它的日別由呼叫端傳入(TC4 engine 的 trade_date 會在
+    空自選 / 零推播時靜默停在昨日,綁上去等於整批事件落錯檔且無錯誤訊號)。
+    """
+
+    async def test_publishes_ws_and_jsonl_but_never_discord(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """(a) 兩則 → WS 兩則(id 文法 + 鍵集合)、jsonl 佇列 2、Discord 佇列 0。"""
+        h = _Harness(tmp_path, clock)  # 刻意不 start:兩條佇列的內容留在原地可直接數
+        h.attach_bot()
+        h.hub.publish_market_events(
+            [
+                _market_event(),
+                _market_event(
+                    kind="market_limit_open",
+                    code="2317",
+                    name="鴻海",
+                    price=50_000,
+                    time="10:01:00",
+                    direction="down",
+                    touch_count=2,
+                ),
+            ],
+            trade_date=_DATE,
+        )
+
+        assert len(h.published) == 2
+        first = h.published[0]
+        # 無 rule_id / rule_name:這條路徑沒有規則(前端型別 optional)
+        assert set(first) == _SIGNAL_KEYS - {"rule_id", "rule_name"}
+        assert first["type"] == "signal"
+        assert first["id"] == "2026-08-04-breadth-2330-market_limit_lock-up-10:00:00"
+        assert first["kind"] == "market_limit_lock"
+        assert first["code"] == "2330"
+        assert first["name"] == "台積電"
+        assert first["price"] == 100_000
+        assert first["time"] == "10:00:00"
+        assert first["levels"] == []
+        assert first["direction"] == "up"
+        assert first["pct"] is None
+        assert first["touch_count"] == 1
+        assert h.published[1]["id"] == "2026-08-04-breadth-2317-market_limit_open-down-10:01:00"
+        assert h.published[1]["touch_count"] == 2
+
+        assert h.hub._discord_queue.qsize() == 0  # 硬性不進 Discord(不是靠規則開關)
+        rows = _drain(h.hub._jsonl_queue)
+        assert [r["code"] for r in rows] == ["2330", "2317"]
+        assert [r["trade_date"] for r in rows] == [_DATE, _DATE]
+        assert set(rows[0]) == (_SIGNAL_KEYS - {"rule_id", "rule_name"}) | {"trade_date"}
+
+    async def test_closing_drops_events(self, tmp_path: Path, clock: _Clock) -> None:
+        """(b) 關機已開始 → 整批丟棄(再收件也不會被寫出去)。"""
+        h = _Harness(tmp_path, clock)
+        await h.hub.close()
+        h.hub.publish_market_events([_market_event()], trade_date=_DATE)
+        assert h.published == []
+        assert h.hub._jsonl_queue.qsize() == 0
+        assert h.rows() == []
+
+    async def test_trade_date_mismatch_warns_once_and_uses_given_date(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(c) 傳入日別與 `_trade_date_fn()` 不符 → warning **每日別一次**,仍落傳入值檔。
+
+        engine 的 trade_date 可能靜默停在昨日,所以不符不是「錯誤」而是「要看得見」;
+        每則都記則會在一輪數百則的廣度事件下把 log 洗掉,反而更看不見。
+        """
+        h = _Harness(tmp_path, clock)  # trade_date_fn() = 2026-08-04
+        with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+            h.hub.publish_market_events(
+                [_market_event(), _market_event(code="2317", time="10:01:00")],
+                trade_date=_NEXT,
+            )
+            assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+            h.hub.publish_market_events(
+                [_market_event(code="2454", time="10:02:00")], trade_date=_NEXT
+            )
+            assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+        await h.hub.close()  # 盡力落檔
+        assert h.rows(_DATE) == []
+        assert [r["code"] for r in h.rows(_NEXT)] == ["2330", "2317", "2454"]
+
+    async def test_publish_exception_does_not_escape_and_later_events_still_sent(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """(g) never-raise:一則炸掉只丟那一則,同批後續照發。
+
+        呼叫端是 breadth `_poll_loop`;這裡往外拋等於整條家數輪停擺,而家數面板
+        與廣度事件是兩件事,不該被彼此的失敗綁死。
+        """
+        h = _Harness(tmp_path, clock)
+        sent: list[dict] = []
+
+        def _flaky(msg: dict) -> None:
+            if msg["code"] == "2330":
+                raise RuntimeError("ws 壞了")
+            sent.append(msg)
+
+        h.hub._publish = _flaky  # type: ignore[assignment]
+        h.hub.publish_market_events(
+            [_market_event(), _market_event(code="2317", time="10:01:00")], trade_date=_DATE
+        )
+
+        assert [m["code"] for m in sent] == ["2317"]
+        assert [r["code"] for r in _drain(h.hub._jsonl_queue)] == ["2317"]
+
+
+class TestMarketEventState:
+    async def test_replays_lock_then_open_to_false_with_counts(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """(d) engine seed 的唯一來源:檔內順序後者勝 → lock→open 得 False。
+
+        非 market 的 kind 一律不進(`limit_lock` 是自選股那條路,名字只差前綴)。
+        """
+        h = _Harness(tmp_path, clock)
+        h.hub.on_watchlist(["2330"])
+        h.lock_up(_state(upper=110_000, locked_up=True))  # 自選股 limit_lock:不得混入
+        h.hub.publish_market_events([_market_event()], trade_date=_DATE)
+        h.hub.publish_market_events(
+            [_market_event(kind="market_limit_open", time="10:05:00")], trade_date=_DATE
+        )
+        await h.hub.close()
+        assert len(h.rows()) == 3
+
+        fresh = _Harness(tmp_path, clock)  # 重啟後的 engine seed
+        emitted, counts = fresh.hub.market_event_state(_DATE)
+        assert emitted == {("2330", "up"): False}
+        assert counts == {
+            ("2330", "market_limit_lock", "up"): 1,
+            ("2330", "market_limit_open", "up"): 1,
+        }
+
+    async def test_missing_file_returns_empty_pair(self, tmp_path: Path, clock: _Clock) -> None:
+        """檔缺 → 空 seed(視同全 False):開盤即鎖的檔在首輪就發 lock。"""
+        h = _Harness(tmp_path, clock)
+        assert h.hub.market_event_state("2026-01-01") == ({}, {})
+
+
+class TestTodaySignalsUnion:
+    async def test_reads_union_of_engine_date_and_wall_clock_date(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """(e) 兩日別檔聯集:**日期字串升冪**(舊日在前)+ 以 id 去重保檔內順序。
+
+        stock engine 的 trade_date 只在當日首 tick 前進 —— 空自選 / 零推播時它停在
+        昨日,而廣度事件寫的是牆鐘日檔;只讀其中一邊,今天的事件會整批從端點消失。
+        """
+        _seed_jsonl(
+            tmp_path,
+            _DATE,
+            [
+                {"id": "a", "code": "1101", "trade_date": _DATE},
+                {"id": "dup", "code": "2330", "trade_date": _DATE},
+            ],
+        )
+        _seed_jsonl(
+            tmp_path,
+            _NEXT,
+            [
+                {"id": "dup", "code": "2330", "trade_date": _NEXT},
+                {"id": "b", "code": "2317", "trade_date": _NEXT},
+            ],
+        )
+        h = _Harness(tmp_path, clock)
+        h.date = _DATE  # engine 停在昨日
+        clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)  # 牆鐘已是今天
+
+        rows = h.hub.today_signals()
+        assert [r["id"] for r in rows] == ["a", "dup", "b"]
+        assert rows[1]["trade_date"] == _DATE  # 去重保「先出現的那一份」
+
+    async def test_same_date_reads_single_file_verbatim(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """(e) 回歸:兩 fn 同日 → 只讀一次檔、輸出**逐字**同既有行為(含重複 id)。
+
+        既有契約(SC-7)是「重啟後同一事件同 id」,當日檔裡本來就會有同 id 兩列,
+        端點必須原樣回傳;聯集分支若無條件套去重,就會把那一列吃掉。
+        """
+        _seed_jsonl(
+            tmp_path,
+            _DATE,
+            [{"id": "same", "code": "2330"}, {"id": "same", "code": "2330"}],
+        )
+        h = _Harness(tmp_path, clock)  # trade_date_fn() 與牆鐘同為 2026-08-04
+        reads: list[str] = []
+        real = h.hub.read_signals
+
+        def _counted(trade_date: str) -> list[dict]:
+            reads.append(trade_date)
+            return real(trade_date)
+
+        h.hub.read_signals = _counted  # type: ignore[method-assign]
+        rows = h.hub.today_signals()
+        assert reads == [_DATE]
+        assert rows == [{"id": "same", "code": "2330"}, {"id": "same", "code": "2330"}]
+
+
+class TestMarketKindText:
+    """(f) `_kind_text` 的 market 兩案 × 兩方向 —— 前端 `kindLabel` 與此對齊。"""
+
+    def test_market_limit_lock_up(self) -> None:
+        assert hub_mod._kind_text({"kind": "market_limit_lock", "direction": "up"}) == "全市場鎖漲停"
+
+    def test_market_limit_lock_down(self) -> None:
+        assert (
+            hub_mod._kind_text({"kind": "market_limit_lock", "direction": "down"}) == "全市場鎖跌停"
+        )
+
+    def test_market_limit_open_up(self) -> None:
+        assert (
+            hub_mod._kind_text({"kind": "market_limit_open", "direction": "up"}) == "全市場漲停打開"
+        )
+
+    def test_market_limit_open_down(self) -> None:
+        assert (
+            hub_mod._kind_text({"kind": "market_limit_open", "direction": "down"})
+            == "全市場跌停打開"
+        )
