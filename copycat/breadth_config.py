@@ -30,12 +30,24 @@ class BreadthConfig:
 
 
 def load_breadth_config(path: Path = CONFIG_PATH) -> BreadthConfig:
-    """讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 → ValueError。"""
+    """讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 / 值域違反 → ValueError。
+
+    dataclass 預設路徑(檔不存在)不必驗 —— 預設值恆合法,驗的是**覆寫進來的值**。
+    """
     if not path.exists():
         return BreadthConfig()
-    return load_dataclass_json(
+    cfg = load_dataclass_json(
         path,
         BreadthConfig,
         tuple_keys=(),
         unknown_label="未知家數帶參數",
     )
+    if cfg.event_cooldown_secs <= 0:
+        # 廣度事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆
+        # 抑制**全靠**正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上
+        # 只是「這則沒出現」(review round-2 HR-4)
+        raise ValueError(
+            f"event_cooldown_secs 必須 > 0(取得 {cfg.event_cooldown_secs}):"
+            "廣度事件的 id 唯一性靠冷卻抑制同 as_of 重覆,關掉會讓前端去重吃掉真事件"
+        )
+    return cfg
