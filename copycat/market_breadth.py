@@ -270,10 +270,12 @@ def _is_limit(close: float, prev_close: float) -> tuple[bool, bool]:
 def _to_number(value: object) -> float | None:
     """數值欄 → float;缺值 / 非數值 → None(`limit_streaks._to_float` 同語意)。
 
-    `bool` 明確排除(True 靜默變 1.0)。snapshot 的 `high` / `low` 不保證是數值 ——
-    未成交的檔位實務上會是空字串或 `"-"`,而 `round(x * 1000)` 對 str 直接 TypeError:
-    那個例外從 `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉,`_fail()` 沒被
-    呼叫 → 退避不動、stale 不亮,整片家數只是凍在最後一則且零錯誤訊號。
+    `bool` 明確排除(True 靜默變 1.0)。snapshot 的數值欄不保證是數值 —— 未成交的檔位
+    實務上會是空字串或 `"-"`,而 `round(x * 1000)`(或 `close - change_price`)對 str
+    直接 TypeError:那個例外從 `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉,
+    `_fail()` 沒被呼叫 → **退避不動、家數輪整條停擺**,面板只是凍在最後一則。
+    (窗內 stale 仍會因「距上次成功超過 stale_secs」亮起 —— `_stale()` 判的是
+    `_last_success` 不是本輪成敗;凍住的是數字本身。)
     """
     if isinstance(value, bool):
         return None
@@ -332,12 +334,17 @@ def compute_breadth(
     for r in rows:
         sid = r.get("stock_id")
         market = type_map.get(sid or "")
-        chg = r.get("change_rate")
+        # 數值欄一律過 `_to_number`:snapshot 的未成交檔位實務上會是 `""` / `"-"`,
+        # 而 `close - change_price` 與 `tv / yv` 對 str 直接 TypeError —— 那個例外從
+        # 這裡一路逃到 `_poll_loop` 的傘罩被吞掉,整片家數凍住且零錯誤訊號。髒
+        # `change_rate` 與 None 同語意(整檔跳過);髒 close / change_price 只是
+        # 不判 limit(review round-2 XR-1b)
+        chg = _to_number(r.get("change_rate"))
         if not sid or market not in counts or chg is None:
             continue
 
-        close = r.get("close")
-        change_price = r.get("change_price")
+        close = _to_number(r.get("close"))
+        change_price = _to_number(r.get("change_price"))
         prev_close = (
             close - change_price if close is not None and change_price is not None else None
         )
@@ -365,8 +372,8 @@ def compute_breadth(
             bucket = "flat"
         counts[market][bucket] += 1
 
-        tv = r.get("total_volume")
-        yv = r.get("yesterday_volume")
+        tv = _to_number(r.get("total_volume"))
+        yv = _to_number(r.get("yesterday_volume"))
         vol_ratio = (tv / yv) if (tv is not None and yv) else None
         rows_out.append(
             {

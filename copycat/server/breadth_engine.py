@@ -69,7 +69,7 @@ from copycat.sector_rotation import (
     compute_sector_rotation,
     rows_to_chain_map,
 )
-from copycat.server.breadth_fetch import BreadthFetchError
+from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
 from copycat.server.chain_store import CHAIN_FILENAME, load_chain, save_chain
 from copycat.server.index_engine import minute_key
 from copycat.server.ws import WsBroadcaster
@@ -464,7 +464,15 @@ class BreadthEngine:
         rows = await self._fetch_snapshot()
         if rows is not None:
             await self._refresh_maps()
-            last_minute = self._apply(rows)
+            try:
+                last_minute = self._apply(rows)
+            except Exception:
+                # 逃到 `_poll_loop` 的傘罩就繞過了 `_fail()`(退避不動)——
+                # 而 publish 也跟著被跳過 → 家數帶凍在最後一則、stale 永遠到不了
+                # 前端,零錯誤訊號(review round-2 XR-1c)
+                logger.exception("breadth 統計 / append 非預期失敗(該輪視同失敗)")
+                self._fail(quota=False)
+        # 廣播在傘罩**外**:成敗皆送一則,stale 才傳得到前端(docstring 的「成敗皆廣播」)
         self._ws.publish(self.payload(last_minute))
 
     async def _fetch_snapshot(self) -> list[dict] | None:
@@ -629,11 +637,15 @@ class BreadthEngine:
         # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾
         self._universe_rows = universe
         self._recompute_rotation()
+        # 退避與 quota 旗標**無條件**重置:上游有回應,不該退避。
         self._fail_streak = 0
         self._quota = False
-        self._last_success = _monotonic()
         if not adopt_date:
+            # `_last_success` 刻意不刷:counts 是 D−1 的、標頭 `trade_date` 卻停在 D,
+            # 刷了就 stale 永不亮 —— 畫面完全正常而數字是別天的,零可見訊號。標頭日期
+            # 錯位是殘餘已知,stale 旗標是唯一看得見的那個(review round-2 XR-2)。
             return None  # scalar 已更新;序列與落檔一概不動
+        self._last_success = _monotonic()
         point = self._append(dt, trade_date, counts)
         if point is not None:
             # 事件的觸發 gate = **append 成功**(design §6.3):盤前試撮輪(分鐘域外)
@@ -659,7 +671,16 @@ class BreadthEngine:
         if not self._universe_rows:
             self._rotation = None
             return
-        self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
+        try:
+            self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
+        except Exception:
+            # `compute_sector_rotation` 是 neigui parity 全等搬移(不得在其內加防禦),
+            # 而 universe 的髒列(非數值 `change_rate`)會在 `sum()` 當場炸。rotation 是
+            # 旁支:炸掉不得把兩個呼叫端(`_apply` 的家數輪 / `_refresh_chain` 的 task)
+            # 一起帶走。清成 None 而非沿用舊值 —— 舊 rotation 會頂著新 as_of 說謊,
+            # None(= 未就緒)才誠實(review round-2 XR-1a)。
+            logger.exception("breadth 類股輪動計算失敗(rotation 標未就緒,家數不受影響)")
+            self._rotation = None
 
     def _append(
         self, dt: _dt.datetime, trade_date: str, counts: dict[str, dict[str, int]]
@@ -853,8 +874,14 @@ class BreadthEngine:
             return
         fetched_at = self._chain_fetched_at
         ttl = self._config.chain_ttl_hours * 3600.0
-        if fetched_at is not None and _time.time() - fetched_at < ttl:
-            return
+        if fetched_at is not None:
+            # 未來時戳(本機時鐘曾超前後回退)視同過期:`age < ttl` 對負 age 恆真 →
+            # chain 永不重取且零 log,表現只是「類股表停在很久以前」而畫面完全正常
+            # (`market_breadth.max_tick_datetime` 的 upper_bound 同一類未來髒值防禦;
+            # review round-2 EC-3/PS-4)
+            age = _time.time() - fetched_at
+            if 0 <= age < ttl:
+                return
         retry_at = self._chain_retry_at
         if retry_at is not None and _monotonic() < retry_at:
             return
@@ -882,6 +909,19 @@ class BreadthEngine:
         except Exception:
             logger.exception(
                 "breadth industry_chain 取數非預期失敗(沿用舊表,%.0fs 後重試)", _MAP_RETRY_SECS
+            )
+            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
+            return
+        if len(rows) < CHAIN_MIN_ROWS:
+            # 部分截斷(HTTP 200 但少一截)parse 得出來、rotation 照算,而換表會把殘表
+            # 釘進 7 天 TTL 的磁碟快取,重啟 restore 還是同一份 —— 少掉的產業歸類在
+            # 畫面上零錯誤訊號(連板路 `_DAILY_MIN_ROWS` 同一道防線;review round-2 PS-1)
+            logger.warning(
+                "breadth industry_chain 只有 %d 列(門檻 %d),視同取數失敗"
+                "(沿用舊表不落檔,%.0fs 後重試)",
+                len(rows),
+                CHAIN_MIN_ROWS,
+                _MAP_RETRY_SECS,
             )
             self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
             return
