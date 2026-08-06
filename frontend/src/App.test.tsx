@@ -44,6 +44,21 @@ const INDEX_STATE = {
   txf: { p: 42_142_000, time: "10:16:10" },
 };
 
+const BREADTH_ROWS = {
+  enabled: true,
+  trade_date: "2026-08-06",
+  as_of: "10:31:00",
+  stale: false,
+  streaks_ready: true,
+  rows: [
+    {
+      stock_id: "1101", name: "台泥", market: "twse", close: 55.5, change_rate: 9.98,
+      volume_ratio: 2.5, total_amount: 9e8, limit_up: true, limit_down: false,
+      touched_limit_up: false, touched_limit_down: false, streak: 3, streak_capped: false,
+    },
+  ],
+};
+
 beforeEach(() => {
   window.localStorage.clear();
   FakeWS.instances = [];
@@ -58,6 +73,8 @@ function appFetch(sha?: { fe: string | null; be: string | null; behind: boolean 
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
+    // 漲跌停列表(R3 SC-5 的跳轉起點)。列表預設收合 → 其餘測試不會走到這條分支。
+    if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
     if (u.includes("/api/health")) {
       return new Response(JSON.stringify({ git_sha: sha?.be ?? null, git_dirty: false }));
     }
@@ -139,6 +156,42 @@ describe("App 台股綜合 tab 整併(SC-1)", () => {
     renderApp();
     const nav = within(screen.getByRole("tablist", { name: "主要分頁" }));
     expect(nav.queryByRole("tab", { name: "相關係數" })).toBeNull();
+  });
+});
+
+// 🟢 台股綜合 R3(SC-5):列表 → 個股(期)的一鍵銜接。走**整條真鏈**
+// (App → IndexPage → LimitListSection → 列 onClick),不 mock 中間任何一層 ——
+// 少接一根線(IndexPage 沒把 onOpenStock 往下傳、App 沒 setStockCode)在元件級測試
+// 各自都是綠的,只有這裡會紅。
+describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
+  async function openList() {
+    window.localStorage.setItem("copycat-tab", "index");
+    window.localStorage.setItem("copycat-limit-list-open", "1");
+    renderApp();
+    return await screen.findByTestId("limit-row-1101");
+  }
+
+  it("點列 → tab 切到「個股(期)」", async () => {
+    fireEvent.click(await openList());
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "個股(期)" }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
+  });
+
+  it("點列 → 個股頁收到該檔(打 /api/stock/state/1101,含 set_main)", async () => {
+    fireEvent.click(await openList());
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
+        String(c[0]),
+      );
+      expect(calls.some((u) => u.includes("/api/stock/state/1101"))).toBe(true);
+    });
+    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("1101");
   });
 });
 

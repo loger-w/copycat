@@ -252,3 +252,25 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
     expect(screen.getByTestId("adl-chart").textContent).toContain("盤中累積後顯示");
   });
 });
+
+// 🟢 台股綜合 R3(SC-3 / SC-5):漲跌停列表落在家數 section 與相關係數之間。
+// 本檔只驗**落點**(元件自身行為在 LimitListSection.test.tsx,跳轉全鏈在 App.test.tsx)——
+// 列表預設收合 = body 不 mount、零 fetch,所以這裡不需要 breadth rows 的 stub。
+describe("IndexPage 漲跌停列表落點(R3 SC-3)", () => {
+  it("(g) 列表區塊在頁面內,預設收合", () => {
+    renderPage(TXF, BREADTH);
+    expect(screen.getByTestId("limit-list")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /漲跌停/ }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+  });
+
+  it("(g2) 列表位於騰落線之後、相關係數區塊之前", () => {
+    renderPage(TXF, BREADTH);
+    const adl = screen.getByTestId("adl-chart");
+    const list = screen.getByTestId("limit-list");
+    const corr = screen.getByRole("button", { name: /相關係數/ });
+    expect(adl.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(list.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
