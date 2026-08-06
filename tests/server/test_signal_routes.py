@@ -572,9 +572,9 @@ def _spy(engine: object) -> tuple[list[list[str]], list[dict]]:
     orig_set = engine.set_watchlist  # type: ignore[attr-defined]
     orig_publish = engine._publish  # type: ignore[attr-defined]
 
-    async def spy_set(codes: list[str]) -> None:
+    async def spy_set(codes: list[str], *, seq: int | None = None) -> None:
         calls.append(list(codes))
-        await orig_set(codes)
+        await orig_set(codes, seq=seq)
 
     def spy_publish(msg: dict) -> None:
         published.append(msg)

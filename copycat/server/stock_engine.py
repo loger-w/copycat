@@ -192,6 +192,9 @@ class StockEngine:
         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
         self._pool_lock = asyncio.Lock()
+        # 已套用的自選定序號(X-3):service 在自己的鎖內取號,訂閱在鎖外送達 →
+        # 抵達順序不保證。0 = 還沒套過任何帶號的名單(取號自 1 起)。
+        self._wl_seq_applied = 0
         # 訂閱失敗的復原路徑(mod/subscribe-retry-recovery):三處失敗各自靜默 ——
         # watchlist 檔回滾出 `_refs` 後畫面永遠 `-`、stkfut 腿要切走再切回才會重掛、
         # rollover 重掛失敗更是連 `_refs` 都不動,對帳判準看不到
@@ -293,8 +296,24 @@ class StockEngine:
 
     # ---- 對外操作 ----
 
-    async def set_watchlist(self, codes: list[str]) -> None:
+    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None:
+        """`seq` = 呼叫端(`WatchlistService`)在**它自己的鎖內**取的定序號(X-3)。
+
+        訂閱副作用移出 service 的鎖之後,兩個並發 commit 可能以任意順序抵達這裡。
+        `seq <= 已套用` = 舊名單後到 → **整段跳過**(不訂不退不廣播不通知 hub),
+        照套的話訂閱池 / hub membership / 種子廣播會一起退回上一版,而畫面上只是
+        「剛加的股票又不見了」,零錯誤訊號。
+
+        `None`(boot 還原 / 既有 caller)= 不參與定序,照舊全套。
+        """
         async with self._pool_lock:  # CR2
+            if seq is not None:
+                if seq <= self._wl_seq_applied:
+                    logger.info(
+                        "watchlist seq %d 已過期(已套用 %d),跳過", seq, self._wl_seq_applied
+                    )
+                    return
+                self._wl_seq_applied = seq
             # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
             added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
             removed = [c for c in self._watchlist if c not in codes]

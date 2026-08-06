@@ -6,6 +6,12 @@
 撞在一起會靜默丟掉其中一邊(後寫者以自己讀到的舊快照覆蓋)。本模組把序列與 lock 收成
 單一定義,route 與 bot 都只呼叫這裡。
 
+**鎖的範圍到落檔為止(X-3)**:`_commit` 在鎖內做「正規化 → 比對 → 落檔 → 取定序號」,
+`_settle` 在**鎖外**做「訂閱 → 廣播」。`engine.set_watchlist` 逐檔走 ZMQ,TC4 故障時
+單次最壞是數十檔 × 數十秒 —— 包在鎖內的話期間所有寫入一起堵死,而 Discord 的
+interaction token 只有 15 分鐘。並發正確性改由 `seq` 在 engine 端保證(舊名單後到整段
+跳過 = last-writer-wins),不再倚賴「訂閱也在鎖內」。
+
 **canonical 零寫早退(§6 R18)**:比較「請求正規化後的形」與「現況正規化後的形」,
 相同就不落檔、不 `set_watchlist`、不廣播。這是既有 PUT 的行為改動(🔴)—— 舊碼對同
 內容 PUT 照樣跑一輪 `set_watchlist`,而那條路會對整份名單做 UNSUB/SUB;前端每次存檔
@@ -43,9 +49,14 @@ def _copy_groups(groups: list[Group]) -> list[Group]:
 class WatchlistEngine(Protocol):
     """StockEngine 結構子集(測試注入 fake)。"""
 
-    async def set_watchlist(self, codes: list[str]) -> None: ...
+    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None: ...
 
     def _publish(self, msg: dict) -> None: ...
+
+
+#: `_commit` 的產出:(現況 / 落檔結果, 這次有沒有改, 定序號)。
+#: 沒改 → seq 為 None,`_settle` 直接放行(不訂閱、不廣播)。
+_Pending = tuple[Watchlist, bool, int | None]
 
 
 class WatchlistService:
@@ -53,6 +64,9 @@ class WatchlistService:
         self._path = path
         self._engine = engine
         self._lock = asyncio.Lock()
+        # 定序號在鎖內取(X-3);訂閱在鎖外送,抵達 engine 的順序不保證 —— engine
+        # 靠這個號認出「舊名單後到」並整段跳過(last-writer-wins)。
+        self._apply_seq = 0
 
     async def apply(self, wl: Watchlist) -> Watchlist:
         """整份取代(前端 PUT 的語意)。
@@ -61,8 +75,9 @@ class WatchlistService:
         現況;changed flag 只有 Discord 那條路要分文案。
         """
         async with self._lock:
-            saved, _ = await self._commit(wl)
-            return saved
+            pending = self._commit(wl)
+        saved, _ = await self._settle(pending)
+        return saved
 
     async def add(self, code: str, group: str | None = None) -> tuple[Watchlist, bool]:
         """加進自選;帶 group 則同時入該群組(群組不存在自動建)。"""
@@ -87,7 +102,8 @@ class WatchlistService:
                     groups.append(target)
                 if code not in target["codes"]:
                     target["codes"].append(code)
-            return await self._commit({"codes": codes, "groups": groups})
+            pending = self._commit({"codes": codes, "groups": groups})
+        return await self._settle(pending)
 
     async def remove(self, code: str) -> tuple[Watchlist, bool]:
         """自自選與**所有**群組移除(留在任一群組就會被 normalize 補回 codes)。"""
@@ -98,7 +114,8 @@ class WatchlistService:
                 for g in current["groups"]
             ]
             codes = [c for c in current["codes"] if c != code]
-            return await self._commit({"codes": codes, "groups": groups})
+            pending = self._commit({"codes": codes, "groups": groups})
+        return await self._settle(pending)
 
     async def create_group(self, name: str) -> tuple[Watchlist, bool]:
         """建立空群組;strip 後同名已存在 → no-op(不報錯 —— 使用者的意圖已經成立)。
@@ -113,7 +130,8 @@ class WatchlistService:
                 return current, False
             groups = _copy_groups(current["groups"])
             groups.append({"name": target, "codes": []})  # 存 strip 後名(比對基準同一份)
-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
+            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
+        return await self._settle(pending)
 
     async def delete_group(self, name: str) -> tuple[Watchlist, bool]:
         """刪群組;codes 不動 —— 成員落回未分組衍生桶(刪群組不等於刪股票)。"""
@@ -123,7 +141,8 @@ class WatchlistService:
             if not any(g["name"] == target for g in current["groups"]):
                 raise WatchlistError("GROUP_NOT_FOUND")
             groups = [g for g in _copy_groups(current["groups"]) if g["name"] != target]
-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
+            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
+        return await self._settle(pending)
 
     async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]:
         """改名;新名撞既有名 / 保留名 / 空名 → `normalize` 拒(`BAD_GROUP`)。"""
@@ -139,7 +158,8 @@ class WatchlistService:
             for g in groups:
                 if g["name"] == src:
                     g["name"] = dst
-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
+            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
+        return await self._settle(pending)
 
     async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:
         """自該群組移出;wl codes 不動 —— 移出群組不等於移出自選。"""
@@ -155,7 +175,8 @@ class WatchlistService:
             for g in groups:
                 if g["name"] == target:
                     g["codes"] = [c for c in g["codes"] if c != code]
-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
+            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
+        return await self._settle(pending)
 
     async def current(self) -> Watchlist:
         """現況(canonical 形);壞檔回空清單。Discord `/watch list` 的讀取入口。
@@ -166,8 +187,13 @@ class WatchlistService:
         async with self._lock:
             return self._snapshot()
 
-    async def _commit(self, wl: Watchlist) -> tuple[Watchlist, bool]:
-        """持 lock 呼叫。正規化 → 與現況比對 → 落檔 + 訂閱 + 廣播。
+    def _commit(self, wl: Watchlist) -> _Pending:
+        """**持 lock 呼叫**。正規化 → 與現況比對 → 落檔 → 取定序號。
+
+        鎖內到此為止(X-3):訂閱與廣播由呼叫端在**鎖外**交給 `_settle`。
+        `engine.set_watchlist` 逐檔走 ZMQ,TC4 故障時單次最壞是數十檔 × 數十秒;
+        留在鎖內的話期間所有 `/watch` 與前端 PUT 全部堆積,而 Discord 的 interaction
+        token 只有 15 分鐘 —— 使用者看到的是「應用程式沒有回應」。
 
         回傳的 bool = 「這次真的改了嗎」。**唯一事實點就是這裡的比對** —— 呼叫端自己
         比對會多一次讀檔、也就多一個 TOCTOU 窗;而 Discord 的 no-op 文案(「已在自選」
@@ -175,9 +201,22 @@ class WatchlistService:
         """
         desired = normalize(wl)  # 非法碼 / 超上限在此拋,尚未落檔
         if desired == self._current_canonical():
-            return desired, False
+            return desired, False, None
         saved = save_watchlist(self._path, desired)
-        await self._engine.set_watchlist(saved["codes"])
+        self._apply_seq += 1  # 落檔順序 = 定序順序(同在鎖內,不會交錯)
+        return saved, True, self._apply_seq
+
+    async def _settle(self, pending: _Pending) -> tuple[Watchlist, bool]:
+        """**鎖外**的副作用:訂閱 + 廣播。六個公開方法共用這一份。
+
+        呼叫端仍 `await` —— 收斂的是**鎖凸出**,不是自己這一次的等待:改成
+        fire-and-forget 的話 route 回應時訂閱可能還沒掛上,前端拿到的第一份 snapshot
+        會缺。並發安全由 `seq` 在 engine 端負責(舊名單後到整段跳過)。
+        """
+        saved, changed, seq = pending
+        if not changed:
+            return saved, False
+        await self._engine.set_watchlist(saved["codes"], seq=seq)
         self._engine._publish({"type": "watchlist_changed"})
         return saved, True
 
