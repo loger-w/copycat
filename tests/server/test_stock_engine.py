@@ -341,6 +341,47 @@ class TestRollover:
         assert snap["minutes"]["657"]["o"] == 1
         await engine.close()
 
+    async def test_stage2_survives_states_mutation_during_reset_iteration(self) -> None:
+        """E-5:stage2 的 reset 迴圈要先對 `_states` 取快照。
+
+        `_acquire` 在 executor thread 對 `_states` setdefault 新鍵(自選新增 / 重試輪 /
+        stkfut 腿隨時可能發生),而 stage2 在 loop 上直接迭代 `.values()` —— 撞上就是
+        RuntimeError:迴圈**之後**的每一步(記帳清空、主圖重回補、hub 的 on_rollover)
+        全部不跑,而 `_pending_date` 已在迴圈**之前**清掉 → 這一天不會再有第二次 stage2。
+        沒 reset 到的 state 整天 ingest=False、記帳整天沿用昨日,畫面只是「圖不動」。
+        `quotes()` 的同款 hazard 已由 R16 防住,這裡是漏網的第二處。
+        """
+        from copycat.live.stock_state import StockDayState
+
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "5483"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        src.on_message(_quote(code="5483", cum=1))
+        await _drain(engine)
+        engine._backfill_jobs.put_nowait(("2330", engine._generation))
+        engine._backfill_jobs.put_nowait(("5483", engine._generation))
+        await _drain(engine)
+        assert engine._backfilled == {"2330", "5483"}  # 前提:記帳確實有東西可清
+
+        state = engine._states["2330"]  # 迭代的第一個 → 之後的每一步都在它後面
+        orig_reset = state.reset
+
+        def _mutating_reset() -> None:
+            engine._states.setdefault("F:XXF", StockDayState())  # executor thread 的新訂閱
+            orig_reset()
+
+        state.reset = _mutating_reset  # type: ignore[method-assign]
+
+        engine.rollover_stage1("2026-07-22")
+        src.on_message(_quote(cum=50, date="20260722"))
+        await _drain(engine)
+
+        assert engine._backfilled == set()  # 迴圈之後的步驟確實跑完
+        assert engine.snapshot("5483")["last"] is None  # 迴圈內的每個 state 都 reset 到
+        assert engine.trade_date == "2026-07-22"
+        await engine.close()
+
 
 class TestStreamAndStatus:
     async def test_stream_receives_tick_and_book(self) -> None:
