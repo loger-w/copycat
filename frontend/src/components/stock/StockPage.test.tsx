@@ -703,3 +703,120 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
   });
 });
+
+// 🟢 stkfut-contracts SC-4:header 合約下拉。契約選擇的**狀態持有者是 App**(D5),
+// 本元件只負責「畫得出來 + 選了要通知上層」—— 所以這裡測的是渲染與回呼,
+// 換股重置與資料流在 App.test.tsx。
+describe("StockPage 合約下拉(SC-4)", () => {
+  const CONTRACTS = {
+    code: "2330",
+    name: "台積電",
+    std: { prod: "CDF", contracts: ["202608", "202609"] },
+    mini: { prod: "QFF", contracts: ["202608", "202609"] },
+  };
+
+  /** 在 beforeEach 的預設 stub 之上補合約端點(其餘路由行為逐字不變) */
+  function withContracts(body: unknown = CONTRACTS, status = 200) {
+    const base = globalThis.fetch as ReturnType<typeof vi.fn>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/stock/stkfut/contracts/")) {
+          return new Response(JSON.stringify(body), { status });
+        }
+        return base(url);
+      }),
+    );
+  }
+
+  it("無期貨(404)→ 不渲染下拉", async () => {
+    // 預設 stub 對未知路由就是 404 = NO_STKFUT
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
+    expect(screen.queryByLabelText("合約")).toBeNull();
+  });
+
+  it("有期貨 → 現貨 + 標準月 + 小型月三類選項皆可指認", async () => {
+    withContracts();
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    const select = await screen.findByLabelText("合約");
+    const labels = [...select.querySelectorAll("option")].map((o) => o.textContent);
+    expect(labels).toEqual(["現貨", "2026/08", "2026/09", "小型 2026/08", "小型 2026/09"]);
+    expect((select as HTMLSelectElement).value).toBe(""); // 預設現貨
+  });
+
+  it("選標準月 → 上層收到 {prod, ym, mini:false}", async () => {
+    withContracts();
+    const onContract = vi.fn();
+    wrap(
+      <StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} onContract={onContract} />,
+    );
+    const select = await screen.findByLabelText("合約");
+    fireEvent.change(select, { target: { value: "CDF:202609" } });
+    expect(onContract).toHaveBeenCalledWith({ prod: "CDF", ym: "202609", mini: false });
+  });
+
+  it("選小型月 → mini:true(乘數與口數標籤靠它分岔)", async () => {
+    withContracts();
+    const onContract = vi.fn();
+    wrap(
+      <StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} onContract={onContract} />,
+    );
+    fireEvent.change(await screen.findByLabelText("合約"), { target: { value: "QFF:202608" } });
+    expect(onContract).toHaveBeenCalledWith({ prod: "QFF", ym: "202608", mini: true });
+  });
+
+  it("選回現貨 → 上層收到 null", async () => {
+    withContracts();
+    const onContract = vi.fn();
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={stream()}
+        contract={{ prod: "CDF", ym: "202609", mini: false }}
+        onContract={onContract}
+      />,
+    );
+    const select = await screen.findByLabelText("合約");
+    expect((select as HTMLSelectElement).value).toBe("CDF:202609"); // 受控於 contract prop
+    fireEvent.change(select, { target: { value: "" } });
+    expect(onContract).toHaveBeenCalledWith(null);
+  });
+
+  // 期現價差列的兩條腿是「現貨主圖 vs 期貨」;主圖已經是期貨時它比的是自己,
+  // 留著會顯示一個恆為 0 或與畫面無關的價差(D15 前端側)。
+  it("期貨態不顯示期現價差列", async () => {
+    withContracts();
+    const s = stream({ stkfut: { prod: "CDF", p: 2_398_000, basis: 18_000 } });
+    const { rerender } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={s} />);
+    await waitFor(() => expect(screen.getByText(/價差/)).toBeTruthy());
+    rerender(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={s}
+        contract={{ prod: "CDF", ym: "202609", mini: false }}
+        onContract={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/價差/)).toBeNull();
+  });
+
+  // contract 有沒有真的傳到圖表:忘了傳照樣全綠,而畫面會掛一張現貨 K 線在期貨合約上
+  it("contract 傳進 StockChart(期貨態 K 線模式鈕停用)", async () => {
+    withContracts();
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={stream()}
+        contract={{ prod: "CDF", ym: "202609", mini: false }}
+        onContract={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "日K" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "江波圖" }).hasAttribute("disabled")).toBe(false);
+  });
+});
