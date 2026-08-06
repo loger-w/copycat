@@ -19,7 +19,11 @@ from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 import copycat.server.breadth_engine as be
-from copycat.server.app import create_app
+import copycat.server.breadth_fetch as breadth_fetch
+import copycat.server.finmind_token as finmind_token
+from copycat.breadth_config import BreadthConfig
+from copycat.server import app as app_mod
+from copycat.server.app import DEFAULT_BREADTH, create_app
 from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.mis import OtcSnap
 from tests.helpers.boot import BootedClient
@@ -234,6 +238,25 @@ class TestBreadthWebSocket:
                 with pytest.raises(WebSocketDisconnect):
                     ws.receive_json()
 
+    def test_second_frame_carries_last_minute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """route 層的第二則(= 下一輪 poll 的增量)必須帶 `last_minute`(review TC-4)。
+
+        首則是 `stream()` 內建的 seed,增量路徑要再等一輪才走得到 —— 只驗首則的話,
+        `payload(last_minute)` 沒接上去也照樣綠(前端的分鐘格全靠這個欄位)。
+        poll 間隔由 `load_breadth_config` 注入點壓到 0.05s(engine 無 config 參數)。
+        """
+        monkeypatch.setattr(app_mod, "load_breadth_config", lambda: BreadthConfig(poll_secs=0.05))
+        with _client(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path) as c:
+            _wait_counts(c)
+            with c.websocket_connect("/ws/breadth") as ws:
+                ws.receive_json()  # seed
+                second = ws.receive_json()
+
+        assert second["type"] == "breadth"
+        assert second["last_minute"] == {"t": _KEY, "twse": [1, 1, 0, 0, 0], "tpex": [0, 0, 0, 0, 1]}
+
     def test_before_boot_sends_loading_frame_then_closes(self, tmp_path: Path) -> None:
         """boot 未完成:先送一則載入中 scalar 再關(client 自行退避重連,屆時 boot 已完成)
         —— 與 REST 同語意,不與「未設定」同形(review P2-1)。"""
@@ -248,6 +271,61 @@ class TestBreadthWebSocket:
             assert first["stale"] is True
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_json()
+
+
+class TestProdWiring:
+    """`DEFAULT_BREADTH` sentinel → 真取數三元組(prod 唯一走的那條路;review TC-1)。
+
+    三個 `breadth_fetch.*` 一律先 monkeypatch 成會拋的替身:引擎 start 後首圈就會打,
+    不換掉等於讓測試真打 FinMind。身分比對(`is`)而非「有三個 callable」——
+    三元組調序是這條接線最可能的錯誤,而它的失效樣態是家數恆為 0(取數層互換後
+    snapshot 拿到對照表格式),沒有任何錯誤訊號。
+    """
+
+    @pytest.fixture
+    def fetchers(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Callable, Callable, Callable]:
+        def _make(name: str) -> Callable[..., list[dict]]:
+            def _f(*_a: object) -> list[dict]:
+                raise BreadthFetchError(f"{name} 不得真打")
+
+            return _f
+
+        trio = (_make("snapshot"), _make("stock_info"), _make("disposition"))
+        monkeypatch.setattr(breadth_fetch, "fetch_snapshot", trio[0])
+        monkeypatch.setattr(breadth_fetch, "fetch_stock_info", trio[1])
+        monkeypatch.setattr(breadth_fetch, "fetch_disposition", trio[2])
+        return trio
+
+    def test_default_sentinel_wires_real_fetchers_in_order(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fetchers: tuple[Callable, Callable, Callable],
+    ) -> None:
+        monkeypatch.setattr(finmind_token, "resolve_token", lambda: "tok")
+        app = _make_app(breadth_fetchers=DEFAULT_BREADTH, breadth_data_dir=tmp_path)
+
+        with BootedClient(app, raise_server_exceptions=False):
+            engine = app.state.breadth
+            assert engine is not None
+            assert engine._token == "tok"
+            assert engine._snapshot_fetch is fetchers[0]
+            assert engine._stock_info_fetch is fetchers[1]
+            assert engine._disposition_fetch is fetchers[2]
+
+    def test_default_sentinel_disabled_without_token(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fetchers: tuple[Callable, Callable, Callable],
+    ) -> None:
+        """FINMIND_TOKEN 未設 = 合法配置(不是失敗)→ 引擎不建、REST 回「未設定」。"""
+        monkeypatch.setattr(finmind_token, "resolve_token", lambda: None)
+        app = _make_app(breadth_fetchers=DEFAULT_BREADTH, breadth_data_dir=tmp_path)
+
+        with BootedClient(app, raise_server_exceptions=False) as c:
+            assert app.state.breadth is None
+            assert c.get("/api/market/breadth").json()["enabled"] is False
 
 
 class TestFailureIsolation:

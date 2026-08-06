@@ -25,10 +25,22 @@ import copycat.capital.factory as factory
 import copycat.notify as notify
 import copycat.server.discord_bot as discord_bot
 import copycat.server.verify as verify
+from copycat.market_breadth import (
+    assemble_universe,
+    build_name_map,
+    build_type_map,
+    compute_breadth,
+    dedup_sector_map,
+    max_tick_datetime,
+    parse_active_disposition,
+)
+from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.verify import (
     CAPITAL_ENV_KEYS,
     DISCORD_ENV_KEYS,
     DOTENV_MODULES,
+    FAIL_ENV_KEY,
+    fake_breadth_fetchers,
     neutralize_external_env,
 )
 
@@ -111,6 +123,55 @@ def test_snapshot_stamp_clamped_into_minute_domain(now: str, expected: str) -> N
     而那與「序列接線壞掉」在畫面上完全同形 —— verify 的存在理由正是目視這條路。
     """
     assert verify._snapshot_stamp(_dt.datetime.fromisoformat(now)) == expected
+
+
+def test_fake_breadth_fetchers_feed_the_real_pipeline() -> None:
+    """fake 三元組餵進真管線的**語意**斷言(review TC-6)。
+
+    這三支是 verify server 上目視的唯一資料源:形狀對但值域無意義(例如漲跌停那兩檔
+    沒真的落在停板價、或 ETF 沒被剔除)時,畫面照樣有數字,而「接線壞掉」與「fake 資料
+    本身沒覆蓋到那條路」在畫面上同形。手算:1101 前收 10.0 → 漲停 11.0;6488 前收
+    10.0 → 跌停 9.0;2330(前收 995)只是上漲;2317 平盤;2454 下跌;0050 = ETF 剔除。
+    """
+    snapshot, stock_info, disposition = fake_breadth_fetchers()
+    today = _dt.date.today()
+    info_rows = stock_info("tok")
+    snapshot_rows = snapshot("tok")
+
+    watch_list = parse_active_disposition(disposition("tok", today), today)
+    universe = assemble_universe(snapshot_rows, dedup_sector_map(info_rows), watch_list)
+    out = compute_breadth(universe, build_type_map(info_rows), build_name_map(info_rows))
+
+    assert out is not None
+    assert out["twse"] == {"limit_up": 1, "up": 1, "flat": 1, "down": 1, "limit_down": 0}
+    assert out["tpex"] == {"limit_up": 0, "up": 1, "flat": 0, "down": 0, "limit_down": 1}
+    assert "0050" not in {r["stock_id"] for r in out["rows"]}
+
+
+def test_fake_snapshot_stamp_is_today_and_inside_minute_domain() -> None:
+    """快照時刻恆為**今天**且落在分鐘域內 —— 兩者都是「序列會長格」的前提(SPEC-4)。"""
+    snapshot, *_ = fake_breadth_fetchers()
+    rows = snapshot("tok")
+
+    stamp = max_tick_datetime(rows)
+    assert stamp is not None
+    assert stamp.date() == _dt.date.today()
+    assert _dt.time(9, 1) <= stamp.time() <= _dt.time(13, 30)
+    assert len({r["date"] for r in rows}) == 1  # 同一輪同一個時刻
+
+
+def test_verify_breadth_fail_injects_all_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`VERIFY_BREADTH_FAIL=1` → 三支全拋(SC-3 在真 server 上的失效注入通道)。"""
+    monkeypatch.setenv(FAIL_ENV_KEY, "1")
+    snapshot, stock_info, disposition = fake_breadth_fetchers()
+
+    for call in (
+        lambda: snapshot("tok"),
+        lambda: stock_info("tok"),
+        lambda: disposition("tok", _dt.date.today()),
+    ):
+        with pytest.raises(BreadthFetchError):
+            call()
 
 
 def test_notify_webhook_unresolvable(_restore_point: None) -> None:
