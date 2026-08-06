@@ -136,6 +136,28 @@ class FakeFetch:
         return self.rows
 
 
+class FakeDaily:
+    """單日全市場 EOD 取數替身(`daily_fetch`)。
+
+    `calendar` 沒有的日期一律回空 list —— 即「假日」的真實樣態(FinMind 對非交易日
+    回合法的空 `data` 陣列)。`on_call` 讓測試在掃描途中動時鐘(跨午夜情境)。
+    """
+
+    def __init__(self, calendar: dict[str, list[dict]]) -> None:
+        self.calendar = calendar
+        self.calls: list[str] = []
+        self.error: Exception | None = None
+        self.on_call: Callable[[int], None] | None = None
+
+    def __call__(self, token: str, day: _dt.date) -> list[dict]:
+        self.calls.append(day.isoformat())
+        if self.on_call is not None:
+            self.on_call(len(self.calls))
+        if self.error is not None:
+            raise self.error
+        return self.calendar.get(day.isoformat(), [])
+
+
 class FakeMono:
     """凍結的單調鐘(`breadth_engine._monotonic` 替身)。
 
@@ -180,6 +202,7 @@ def _make(
     snapshot: FakeFetch | None = None,
     info: FakeFetch | None = None,
     disposition: FakeFetch | None = None,
+    daily: FakeDaily | None = None,
     clock: Clock | None = None,
     config: BreadthConfig | None = None,
 ) -> tuple[Any, FakeFetch, FakeFetch, FakeFetch, Clock]:
@@ -193,6 +216,7 @@ def _make(
         snapshot_fetch=snap,
         stock_info_fetch=inf,
         disposition_fetch=disp,
+        daily_fetch=daily,
         data_dir=tmp_path,
         today_fn=clk.today_fn,
         now_fn=clk.now_fn,
@@ -211,6 +235,82 @@ async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
 
 def _series_file(tmp_path: Path, trade_date: str = _TRADE_DATE) -> Path:
     return tmp_path / f"breadth-{trade_date}.json"
+
+
+# ---------------------------------------------------------------------------
+# 連板數(streak)用具 —— EOD 造值 / 造日曆 / 快取檔
+# ---------------------------------------------------------------------------
+
+#: today = 2026-08-05(週三)往回的 10 個交易日;夾著兩個週末(_HOLIDAYS)
+_TRADING_DAYS = [
+    "2026-08-04",
+    "2026-08-03",
+    "2026-07-31",
+    "2026-07-30",
+    "2026-07-29",
+    "2026-07-28",
+    "2026-07-27",
+    "2026-07-24",
+    "2026-07-23",
+    "2026-07-22",
+]
+_HOLIDAYS = ["2026-08-02", "2026-08-01", "2026-07-26", "2026-07-25"]
+
+
+def _eod_rows(limit_ups: tuple[str, ...] = (), *, pad: int = 3) -> list[dict]:
+    """單日 EOD 造值:`limit_ups` 每檔一列**剛好漲停**,其餘為平盤墊列。
+
+    前收 = `close − spread` = 10.0 → 漲停 11.0(tick 0.05,10% 整除)。墊列只為
+    撐過 `_DAILY_MIN_ROWS` 健檢,代號取 9000 段避免與被判股撞號。
+    """
+    rows: list[dict] = [{"stock_id": sid, "close": 11.0, "spread": 1.0} for sid in limit_ups]
+    rows += [{"stock_id": f"{9000 + i}", "close": 10.0, "spread": 0.0} for i in range(pad)]
+    return rows
+
+
+def _calendar(days: dict[str, tuple[str, ...]]) -> dict[str, list[dict]]:
+    """{交易日: 該日漲停代號} → FakeDaily 的 calendar(不在鍵內的日期 = 假日空回應)。"""
+    return {day: _eod_rows(sids) for day, sids in days.items()}
+
+
+def _streaks_file(tmp_path: Path, day: str = _TRADE_DATE) -> Path:
+    return tmp_path / f"streaks-{day}.json"
+
+
+def _write_streaks_cache(
+    tmp_path: Path,
+    *,
+    computed_for: str = _TRADE_DATE,
+    data_end: str = "2026-08-04",
+    dates: list[str] | None = None,
+    skipped: list[str] | None = None,
+    streaks: dict[str, int] | None = None,
+    version: int = 1,
+    file_day: str = _TRADE_DATE,
+) -> Path:
+    payload = {
+        "_version": version,
+        "computed_for": computed_for,
+        "data_end": data_end,
+        "dates": dates if dates is not None else ["2026-08-04", "2026-08-03", "2026-07-31"],
+        "skipped": skipped if skipped is not None else ["2026-08-02", "2026-08-01"],
+        "streaks": streaks if streaks is not None else {"1101": 3},
+    }
+    path = _streaks_file(tmp_path, file_day)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def fast_streaks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """streak 測試不靠真 sleep(檔頭慣例):request 間隔與重試秒數歸零。
+
+    `_DAILY_MIN_ROWS` 一併降到墊列量級 —— 每個成功路徑案例都造 25,000 列會讓整個
+    檔慢一個數量級;真門檻的邊界由 `TestStreakHealthChecks` 以真常數兩側取值把關。
+    """
+    monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
+    monkeypatch.setattr(be, "_STREAK_RETRY_SECS", 0.0)
+    monkeypatch.setattr(be, "_DAILY_MIN_ROWS", 3)
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +906,31 @@ class TestPollLoop:
 
         assert snap.calls >= 3
 
+    async def test_arm_streaks_exception_does_not_kill_poll_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """武裝檢查拋例外 → poll loop 續行(review R9)。
+
+        `_maybe_arm_streaks` 放在 `try:` **之外**的話,一次例外就殺掉整條 poll task ——
+        表現是家數面板從此凍在最後一則、零錯誤訊號,而肇因只是連板數那條旁支。
+        前兩圈拋、之後放行:同時驗「迴圈沒死」與「後續照常取數」。
+        """
+        seen = {"n": 0}
+
+        def _boom(_self: object) -> None:
+            seen["n"] += 1
+            if seen["n"] <= 2:
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(be.BreadthEngine, "_maybe_arm_streaks", _boom)
+        engine, snap, *_ = _make(tmp_path, config=BreadthConfig(poll_secs=0.01))
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: seen["n"] >= 3 and snap.calls >= 1)
+        finally:
+            await engine.close()
+
     async def test_loop_survives_cycle_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -829,3 +954,390 @@ class TestPollLoop:
             await engine.close()
 
         assert snap.calls >= 3
+
+
+# ---------------------------------------------------------------------------
+# 連板數重算(design §3.3;R3/R4/R13/R15/R16)
+# ---------------------------------------------------------------------------
+
+
+class TestStreakCompute:
+    async def test_success_path_skips_holidays_and_caches(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """回看 10 交易日:空回應日跳過(不中斷)、收滿即停、成果落檔。
+
+        1101 十日皆漲停 → 10(撞窗上限);2330 只有最近兩日 → 2;2317 漲停不含最近
+        一日 → 不在結果內(streak 已中斷)。
+        """
+        limits: dict[str, tuple[str, ...]] = {d: ("1101",) for d in _TRADING_DAYS}
+        limits["2026-08-04"] = ("1101", "2330")
+        limits["2026-08-03"] = ("1101", "2330", "2317")
+        daily = FakeDaily(_calendar(limits))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {"1101": 10, "2330": 2}
+        assert engine._streaks_day == _TRADE_DATE
+        assert engine._streaks_end == "2026-08-04"
+        assert engine._streaks_span == 10
+        assert engine._streaks_skipped == set(_HOLIDAYS)
+        # 掃描自 day−1 起、收滿 10 個交易日即停(不會掃滿 25 日曆日)
+        assert daily.calls == sorted([*_TRADING_DAYS, *_HOLIDAYS], reverse=True)
+
+        saved = json.loads(_streaks_file(tmp_path).read_text(encoding="utf-8"))
+        assert saved == {
+            "_version": 1,
+            "computed_for": _TRADE_DATE,
+            "data_end": "2026-08-04",
+            "dates": _TRADING_DAYS,
+            "skipped": sorted(_HOLIDAYS),
+            "streaks": {"1101": 10, "2330": 2},
+        }
+
+    async def test_scan_stops_at_calendar_limit_with_short_window(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """窗收不滿(長假 / 上市未滿 10 日)照樣成立:span < 10,封頂語意由 span 表達。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",), "2026-08-03": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {"1101": 2}
+        assert engine._streaks_span == 2
+        assert len(daily.calls) == 25  # 收不滿 → 掃到 _STREAK_SCAN_CAL_DAYS 上限為止
+        assert daily.calls[-1] == "2026-07-11"  # day − 25
+
+    async def test_result_discarded_when_day_rolls_over_mid_scan(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """跨午夜完成的結果是「以昨日為基準」的錯值,且會被快取固化 → 丟棄(R3)。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        engine, _s, _i, _d, clock = _make(tmp_path, daily=daily)
+
+        def _roll(n: int) -> None:
+            if n == 1:
+                clock.today = _dt.date(2026, 8, 6)
+
+        daily.on_call = _roll
+
+        assert await engine._compute_streaks_once() is False
+
+        assert engine._streaks == {} and engine._streaks_day is None
+        assert not _streaks_file(tmp_path).exists()
+        assert not _streaks_file(tmp_path, "2026-08-06").exists()
+
+    async def test_data_end_not_yesterday_logs_warning(
+        self, tmp_path: Path, fast_streaks: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """昨日被當假日跳過 → 盤中判式仍會 +1(KR-1 殘餘風險)。落檔前留下觀測訊號。"""
+        daily = FakeDaily(_calendar({"2026-08-03": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        with caplog.at_level("WARNING"):
+            assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks_end == "2026-08-03"
+        assert any("2026-08-04" in r.getMessage() for r in caplog.records)
+
+
+class TestStreakHealthChecks:
+    """空回應 = 假日的兩道防禦(R4/R16)—— 真交易日回空 / 回半份都會高估連板數。"""
+
+    async def test_row_count_below_threshold_fails_whole_round(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """非空但列數不足 = 部分截斷,**不可當假日跳過**:整輪失敗(真門檻 − 1)。"""
+        monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
+        short = _eod_rows(("1101",), pad=be._DAILY_MIN_ROWS - 2)
+        assert len(short) == be._DAILY_MIN_ROWS - 1
+        daily = FakeDaily({"2026-08-04": short})
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is False
+
+        assert engine._streaks_day is None
+        assert daily.calls == ["2026-08-04"]  # 立即中止,不繼續往回掃
+        assert not _streaks_file(tmp_path).exists()
+
+    async def test_row_count_at_threshold_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """門檻**含等值**:剛好 25,000 列是可用的一日(邊界另一側)。"""
+        monkeypatch.setattr(be, "_STREAK_REQ_GAP_SECS", 0.0)
+        exact = _eod_rows(("1101",), pad=be._DAILY_MIN_ROWS - 1)
+        assert len(exact) == be._DAILY_MIN_ROWS
+        daily = FakeDaily({"2026-08-04": exact})
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {"1101": 1}
+        assert engine._streaks_span == 1
+
+    async def test_calendar_gap_beyond_limit_is_not_adopted(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """收到的相鄰交易日日曆間距 > 12 日 = 中間有整段被當假日吃掉 → 該輪不採用。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",), "2026-07-20": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is False
+
+        assert engine._streaks_day is None
+        assert not _streaks_file(tmp_path).exists()
+
+    async def test_gap_within_limit_is_adopted(self, tmp_path: Path, fast_streaks: None) -> None:
+        """春節等級的連假(≤ 12 日)不誤殺(KR-3 的另一側)。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",), "2026-07-23": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {"1101": 2}
+
+
+class TestStreakScheduling:
+    """武裝(排程)與成功分離 —— `_streak_armed_day` vs `_streaks_day`(R13)。"""
+
+    async def test_not_armed_before_arm_time(self, tmp_path: Path, fast_streaks: None) -> None:
+        """06:00 前不武裝:T-1 EOD 未發布時重算會把 T-1 當假日跳過並**成功**固化錯值。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily, clock=Clock(now="05:59:59"))
+
+        engine._maybe_arm_streaks()
+
+        assert engine._streak_task is None
+        assert engine._streak_armed_day is None
+        assert daily.calls == []
+
+    async def test_armed_at_arm_time(self, tmp_path: Path, fast_streaks: None) -> None:
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily, clock=Clock(now="06:00:00"))
+
+        engine._maybe_arm_streaks()
+
+        task = engine._streak_task
+        assert task is not None
+        assert engine._streak_armed_day == _TRADE_DATE
+        await task
+        assert engine._streaks == {"1101": 1}
+
+    async def test_disabled_when_no_daily_fetch(self, tmp_path: Path, fast_streaks: None) -> None:
+        """`daily_fetch=None` = 連板停用:不武裝、rows 端點照常(streak 恆 null)。"""
+        engine, *_ = _make(tmp_path)
+
+        engine._maybe_arm_streaks()
+
+        assert engine._streak_task is None and engine._streak_armed_day is None
+
+    async def test_attempt_limit_then_no_rearm_same_day(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """壞上游不整天燒配額:10 次用完 task 結束,同日再檢查也不重起(R13)。"""
+        daily = FakeDaily({})
+        daily.error = BreadthFetchError("upstream down")
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        engine._maybe_arm_streaks()
+        task = engine._streak_task
+        assert task is not None
+        await task
+
+        assert len(daily.calls) == be._STREAK_MAX_ATTEMPTS
+        assert engine._streak_attempts == be._STREAK_MAX_ATTEMPTS
+        assert engine._streaks_day is None
+
+        engine._maybe_arm_streaks()  # task 已 done,但 armed_day 相符 → 不再起
+        assert engine._streak_task is task
+        assert len(daily.calls) == be._STREAK_MAX_ATTEMPTS
+
+    @pytest.mark.parametrize(
+        ("quota", "expected"),
+        [pytest.param(False, 60.0, id="一般失敗 60s"), pytest.param(True, 300.0, id="配額 300s")],
+    )
+    async def test_retry_backoff_seconds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quota: bool, expected: float
+    ) -> None:
+        """退避秒數以「sleep 被呼叫的值」驗,不真等(檔頭慣例)。
+
+        402 走 `config.quota_backoff_secs`,其餘走 `_STREAK_RETRY_SECS`;最後一次
+        嘗試後不再睡(直接放棄)→ 10 次嘗試對應 9 段退避。
+        """
+        sleeps: list[float] = []
+
+        async def _fake_sleep(secs: float) -> None:
+            sleeps.append(secs)
+
+        monkeypatch.setattr(be.asyncio, "sleep", _fake_sleep)
+        daily = FakeDaily({})
+        daily.error = BreadthFetchError("down", quota=quota)
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        await engine._compute_streaks_loop()
+
+        assert sleeps == [expected] * (be._STREAK_MAX_ATTEMPTS - 1)
+
+    async def test_unexpected_exception_retries_and_survives(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """注入的取數層不保證只丟 BreadthFetchError;漏接會讓 task 當場死透。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        daily.error = RuntimeError("boom")
+
+        def _heal(n: int) -> None:
+            if n >= 3:
+                daily.error = None
+
+        daily.on_call = _heal
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        await engine._compute_streaks_loop()
+
+        assert engine._streaks == {"1101": 1}
+        assert engine._streak_attempts == 3
+
+    async def test_close_cancels_streak_task(self, tmp_path: Path) -> None:
+        """`close()` 一併收攤 streak task(與 poll task 同款),否則 shutdown 掛著孤兒。"""
+        daily = FakeDaily({})
+        daily.error = BreadthFetchError("down")
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        engine._maybe_arm_streaks()
+        task = engine._streak_task
+        assert task is not None
+        await _wait_until(lambda: len(daily.calls) >= 1)
+
+        await engine.close()
+
+        assert task.done()
+        assert engine._streak_task is None
+
+
+class TestStreakCache:
+    async def test_restore_same_day_does_not_refetch(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """同日第二次啟動不打 FinMind —— restore 命中即視同**已武裝**(SC-2 的機制)。"""
+        _write_streaks_cache(tmp_path)
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily, config=BreadthConfig(poll_secs=0.01))
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: engine.state()["counts"] is not None)
+            await asyncio.sleep(0.1)  # 夠跑約 10 圈武裝檢查
+        finally:
+            await engine.close()
+
+        assert daily.calls == []
+        assert engine._streak_armed_day == _TRADE_DATE
+        assert engine._streaks == {"1101": 3}
+        assert engine._streaks_day == _TRADE_DATE
+        assert engine._streaks_end == "2026-08-04"
+        assert engine._streaks_span == 3
+        assert engine._streaks_skipped == {"2026-08-02", "2026-08-01"}
+
+    async def test_start_does_not_start_streak_task(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """start() 維持零網路 IO:streak task 由 poll loop 的武裝檢查起(時間閘一致)。"""
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        engine, *_ = _make(
+            tmp_path,
+            daily=daily,
+            config=BreadthConfig(poll_secs=60.0),
+            clock=Clock(now="03:00:00"),
+        )
+
+        await engine.start()
+        try:
+            assert daily.calls == []
+            assert engine._streak_task is None
+        finally:
+            await engine.close()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"computed_for": "2026-08-04"}, id="computed_for 非今日"),
+            pytest.param({"version": 99}, id="版本不符"),
+            pytest.param({"data_end": 20260804}, id="data_end 非 str"),
+            pytest.param({"streaks": ["1101"]}, id="streaks 非 dict"),
+        ],
+    )
+    async def test_restore_rejects_unusable_cache(self, tmp_path: Path, kwargs: dict) -> None:
+        """不合用的快取一律當沒有(今日重算),不半採用 —— 錯的連板數比沒有更糟。"""
+        _write_streaks_cache(tmp_path, **kwargs)
+        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
+
+        engine._restore_streaks()
+
+        assert engine._streaks == {} and engine._streaks_day is None
+        assert engine._streak_armed_day is None
+
+    async def test_restore_bad_json_is_never_raise(self, tmp_path: Path) -> None:
+        _streaks_file(tmp_path).write_text("not json at all", encoding="utf-8")
+        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
+
+        engine._restore_streaks()
+
+        assert engine._streaks_day is None and engine._streak_armed_day is None
+
+    async def test_new_day_rearms_and_replaces_stale_result(
+        self, tmp_path: Path, fast_streaks: None
+    ) -> None:
+        """換日:先清舊成果再重算 —— 昨日那份留著會讓連板數整天多算一板(R9/R13)。
+
+        情境刻意選「restore 命中、streak task 從未存在」:守門若寫成 `task.done()`
+        而沒有 `task is None` 分支,這條路永遠武裝不了。
+        """
+        _write_streaks_cache(tmp_path)
+        daily = FakeDaily(_calendar({"2026-08-05": ("1101",), "2026-08-04": ("1101",)}))
+        engine, _s, _i, _d, clock = _make(tmp_path, daily=daily)
+        engine._restore_streaks()
+        assert engine._streak_task is None and engine._streaks == {"1101": 3}
+
+        clock.today = _dt.date(2026, 8, 6)
+        clock.now = _dt.datetime(2026, 8, 6, 6, 30)
+        engine._maybe_arm_streaks()
+
+        # 起 task 的同一個同步區塊內就得清空:舊值不得在重算完成前被當今日的答案
+        assert engine._streaks == {} and engine._streaks_day is None
+        assert engine._streaks_end is None and engine._streaks_span == 0
+        assert engine._streaks_skipped == set()
+        assert engine._streak_attempts == 0
+        assert engine._streak_armed_day == "2026-08-06"
+        task = engine._streak_task
+        assert task is not None
+        await task
+
+        assert engine._streaks == {"1101": 2}
+        assert engine._streaks_day == "2026-08-06"
+        assert engine._streaks_end == "2026-08-05"
+        assert _streaks_file(tmp_path, "2026-08-06").exists()
+
+    async def test_save_oserror_degrades_only(
+        self,
+        tmp_path: Path,
+        fast_streaks: None,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """落檔失敗只降級:記憶體成果照在(重啟才會重算),不得讓整輪失敗。"""
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(be.os, "replace", _boom)
+        daily = FakeDaily(_calendar({"2026-08-04": ("1101",)}))
+        engine, *_ = _make(tmp_path, daily=daily)
+
+        with caplog.at_level("WARNING"):
+            assert await engine._compute_streaks_once() is True
+
+        assert engine._streaks == {"1101": 1}
+        assert not _streaks_file(tmp_path).exists()
+        assert any("落檔失敗" in r.getMessage() for r in caplog.records)
