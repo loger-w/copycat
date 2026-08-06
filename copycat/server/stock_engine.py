@@ -311,7 +311,12 @@ class StockEngine:
                     logger.warning("watchlist subscribe %s failed", code)
             for code in removed:
                 await asyncio.to_thread(self._release, code, "watchlist")
-                self._no_data.discard(code)
+                if code not in self._refs:
+                    # **真正退訂了才**清(code review A7d,鏡像路徑 `set_main_contract`
+                    # 的同款處理)。同一檔可能同時是主圖:無條件清會讓主圖那格的
+                    # 「無資料」在使用者把它移出自選之後永久消失 —— TC4 的 no-data
+                    # 回呼只在訂閱當下發一次,之後 snapshot 恆 no_data=False。
+                    self._no_data.discard(code)
             # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
             # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
             # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
