@@ -38,7 +38,9 @@ from copycat.capital.models import (
     PositionKind,
     StockOrderRequest,
 )
+from copycat.market import tick_size_milli
 from copycat.server.futures_engine import FuturesEngine
+from copycat.stkfut_map import lookup_product
 from copycat.server.ws import WsBroadcaster, relay
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,32 @@ def _invalid_order() -> HTTPException:
     return HTTPException(status_code=400, detail={"error": "INVALID_ORDER"})
 
 
+#: 期交所股票期貨規格:標準 2,000 股 / 小型 100 股。ETF 期貨(10,000 受益權單位)與
+#: 除權息調整後的非標準單位(如 2,157)本輪一律不開放下單(design SC-6 / Known Risks)。
+_STOCK_FUTURE_UNITS: dict[str, int] = {"std": 2000, "mini": 100}
+
+
+def _stkfut_gates(product: str, req: FutureOrderRequest) -> None:
+    """個股期送單的兩道閘(stkfut-contracts SC-6);非個股期產品直接放行。
+
+    - 非股票契約單位 → `PRODUCT_NOT_ALLOWED`
+    - limit 單價格非現股 tick 表合法檔位 → `BAD_TICK`(**market 單跳過**:
+      `bstrPrice="M"`,body 的 price 欄不參與送單,拿它驗檔位會擋掉合法的市價單)
+    """
+    stkfut = lookup_product(product)
+    if stkfut is None:
+        return
+    if stkfut.get("unit") != _STOCK_FUTURE_UNITS.get(str(stkfut.get("kind"))):
+        logger.info("order/future 產品未開放:%s unit=%s", product, stkfut.get("unit"))
+        raise HTTPException(status_code=400, detail={"error": "PRODUCT_NOT_ALLOWED"})
+    if req.price_type != "limit":
+        return
+    price_milli = round(req.price * 1000)
+    if price_milli <= 0 or price_milli % tick_size_milli(price_milli) != 0:
+        logger.info("order/future 非法檔位:%s @%s", product, req.price)
+        raise HTTPException(status_code=400, detail={"error": "BAD_TICK"})
+
+
 @router.get("/api/capital/status")
 async def capital_status(request: Request) -> dict:
     client: CapitalClient | None = request.app.state.capital
@@ -174,6 +202,9 @@ async def capital_order_future(request: Request, body: FutureOrderBody) -> dict:
     # product → 乘數 → HOT 解析 → 期交所契約碼(任一步 ValueError = 拒單,不猜月份)
     try:
         product = product_of(req.tc4_symbol)
+        # 個股期兩道閘先於乘數:兩者都會 400,但錯誤碼分得開才指得到真因
+        # (INVALID_ORDER 對使用者只是「不知道為什麼不能送」)
+        _stkfut_gates(product, req)
         multiplier = multiplier_of(product)
         futures: FuturesEngine | None = request.app.state.futures
         resolved = futures.resolved_contract(product) if futures is not None else None
