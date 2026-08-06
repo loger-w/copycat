@@ -625,6 +625,40 @@ class TestHistoryAndId:
         finally:
             await h.hub.close()
 
+    async def test_truncated_multibyte_tail_keeps_good_rows(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """半寫入的最後一行切在中文序列中間 → 好行全保留,三條消費路都不得拋。
+
+        `read_text(encoding="utf-8")` 對這種截斷丟的是 `UnicodeDecodeError`(ValueError
+        系),不在 `except OSError` 內 —— 整個當日檔一起消失,而 breadth 對帳 seed /
+        today 端點 / 前端自癒三條路會同時整天壞著(review round-2 HR-1)。
+        """
+        path = tmp_path / "signals" / f"{_DATE.replace('-', '')}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        good = {
+            "id": "a",
+            "kind": "market_limit_lock",
+            "code": "2330",
+            "name": "台積電",
+            "direction": "up",
+            "trade_date": _DATE,
+        }
+        good_bytes = json.dumps(good, ensure_ascii=False).encode("utf-8")
+        tail = json.dumps({"id": "b", "code": "2317", "name": "鴻海"}, ensure_ascii=False)
+        tail_bytes = tail.encode("utf-8")
+        # 切在「鴻」的第 2 個 byte:UTF-8 續位元組單獨解不出來(半寫入的真實樣態)
+        cut = tail_bytes[: tail_bytes.index("鴻".encode("utf-8")) + 1]
+        path.write_bytes(good_bytes + b"\n" + cut)
+
+        h = _Harness(tmp_path, clock)
+        assert h.hub.read_signals(_DATE) == [good]
+        assert h.hub.today_signals() == [good]
+        assert h.hub.market_event_state(_DATE) == (
+            {("2330", "up"): True},
+            {("2330", "market_limit_lock", "up"): 1},
+        )
+
 
 class TestEnabled:
     async def test_disabled_rule_emits_nothing_and_persists(
