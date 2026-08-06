@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { GroupGridView } from "@/components/stock/GroupGridView";
 import { OrderBook } from "@/components/stock/OrderBook";
 import { SignalRail } from "@/components/stock/SignalRail";
 import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
@@ -11,6 +12,7 @@ import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalR
 import { useSignalSound } from "@/hooks/useSignalSound";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
+import { STOCK_VIEW_KEY } from "@/lib/constants";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
@@ -24,6 +26,24 @@ interface Props {
   code: string | null;
   onSelect: (code: string) => void;
   stream: StockStreamState;
+}
+
+/** 中間主區的檢視(group-grid SC-3):單檔看盤 vs 群組 mini 圖牆。 */
+type StockView = "single" | "group";
+
+const VIEW_LABELS: [StockView, string][] = [
+  ["single", "單檔"],
+  ["group", "群組"],
+];
+
+/** 只認得 `"group"`,其餘(未設 / 被人手動改壞 / 舊版遺留值)一律回單檔 ——
+ *  預設檢視必須是「有主圖」的那個,壞值把使用者丟進群組檢視會像整頁不見了。 */
+function initialView(): StockView {
+  try {
+    return window.localStorage.getItem(STOCK_VIEW_KEY) === "group" ? "group" : "single";
+  } catch {
+    return "single";
+  }
 }
 
 /** jsdom 與不支援 Notification 的瀏覽器沒有這個全域 → 一律當「已拒絕」降級:
@@ -48,6 +68,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
   const [rulesOpen, setRulesOpen] = useState(false);
   const { soundOn, setSoundOn } = useSignalSound();
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
+  const [view, setView] = useState<StockView>(initialView);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
   const { data: wl } = useStockWatchlist();
@@ -95,6 +116,17 @@ export function StockPage({ code, onSelect, stream }: Props) {
     saveRule.mutate({ ...rule, enabled: !rule.enabled });
   }
 
+  /** 檢視切換 + 記憶。localStorage 寫失敗(隱私模式 / 配額)不讓整頁掛掉:
+   *  切換本身已生效,代價僅是下次重開回到單檔。 */
+  function selectView(next: StockView): void {
+    setView(next);
+    try {
+      window.localStorage.setItem(STOCK_VIEW_KEY, next);
+    } catch {
+      // 記不住就算了 —— 為了記憶檢視而讓看盤頁白掉是本末倒置
+    }
+  }
+
   /** 權限狀態不是 React state 的衍生值,要主動回寫 —— 使用者按完瀏覽器提示後,
    *  只有這裡更新才會讓「允許通知」鈕收起來。 */
   function requestNotif(): void {
@@ -140,7 +172,40 @@ export function StockPage({ code, onSelect, stream }: Props) {
             {status.tc4 === "down" ? "達錢 4 連線中斷,恢復後自動回補" : "伺服器連線中斷,重連中…"}
           </p>
         ) : null}
-        {code === null ? (
+        {/* 檢視切換 pill(group-grid SC-3)。掛在 main 頂層、`code === null` 與
+            `accum === null` 兩個條件分支**之外**(design R6)—— 掛進任一分支內,
+            未選股 / 主圖 snapshot 還沒回來時就永遠切不到群組檢視,而那兩個時機
+            恰恰是最想看「整組今天在幹嘛」的時候。 */}
+        <div className="flex shrink-0 flex-wrap items-center gap-1">
+          {VIEW_LABELS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={view === id}
+              onClick={() => selectView(id)}
+              className={cn(
+                "rounded border px-2 py-0.5 text-xs",
+                view === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {view === "group" ? (
+          // 群組檢視吃掉整個 main 主體(header / 圖表 / 下半列全部讓位),訊號欄與
+          // 自選欄在 main 之外不受影響。`wl` 未載入時 groups 為空 → GroupGridView
+          // 自己的空態接手,這裡不另做載入態。
+          <GroupGridView
+            groups={wl?.groups ?? []}
+            quotes={watchlist}
+            onPick={(picked) => {
+              onSelect(picked);
+              // 點卡片的意圖是「看這一檔的細節」,留在群組檢視等於沒反應
+              selectView("single");
+            }}
+          />
+        ) : code === null ? (
           <div className="flex flex-1 items-center justify-center">
             <p className="text-sm text-ink-muted">從自選清單選擇一檔開始看盤</p>
           </div>
