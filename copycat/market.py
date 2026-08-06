@@ -32,8 +32,25 @@ def tick_size(price: float) -> float:
     return _tick_milli(round(price * 1000)) / 1000
 
 
+def limit_up_milli(prev_close_milli: int) -> int:
+    """毫元版漲停:前收 ×1.1 向下貼 tick(tick 段取 candidate 所在價位段)."""
+    cand = prev_close_milli * 11 // 10
+    tick = _tick_milli(cand)
+    return cand // tick * tick
+
+
+def limit_down_milli(prev_close_milli: int) -> int:
+    """毫元版跌停:前收 ×0.9 向上貼 tick。
+
+    tick 段取 **ceil 前** 的 candidate 所在價位段(與 neigui float 版
+    `_tick_size(raw)` 同語意)—— candidate 落在段上界附近時,ceil 後可能跨進
+    下一段,取段一律以 ceil 前的值為準。
+    """
+    cand = prev_close_milli * 9 // 10
+    tick = _tick_milli(cand)
+    return -(-cand // tick) * tick
+
+
 def limit_up_price(prev_close: float) -> float:
     """前收 ×1.1 向下貼 tick(tick 段取 candidate 所在價位段)."""
-    cand = round(prev_close * 1000) * 11 // 10
-    tick = _tick_milli(cand)
-    return round(cand // tick * tick / 1000, 2)
+    return round(limit_up_milli(round(prev_close * 1000)) / 1000, 2)
