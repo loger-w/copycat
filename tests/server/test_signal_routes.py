@@ -288,6 +288,42 @@ class TestSignalsTodayMarketParam:
             body = client.get("/api/stock/signals/today", params={"market": "exclude"}).json()
         assert body == {"signals": [own]}
 
+    def test_unknown_value_falls_back_to_include(self, tmp_path: Path) -> None:
+        """未知值 = include(T-5):這個參數是效能取捨,不是安全閘。
+
+        擋成 400 的話,舊 client(或打錯字的手測)只會白掉一整條自癒 baseline ——
+        而 baseline 空掉的表現是「重連後訊號欄突然少了一段」,沒有錯誤訊號。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            own, market = self._seed(app, tmp_path)
+            r = client.get("/api/stock/signals/today", params={"market": "whatever"})
+        assert r.status_code == 200
+        assert r.json() == {"signals": [own, market]}
+
+    def test_bad_kind_rows_survive_exclude(self, tmp_path: Path) -> None:
+        """`kind` 不是字串 / 整個缺鍵的列:過濾要**留著**它們且不得 500(T-5)。
+
+        jsonl 是檔案,`kind` 的型別無人保證(壞行只擋到 JSON 層)。`str.startswith`
+        對 int 會 AttributeError → 整條端點 502,而肇因只是一列髒資料;而「留著」是
+        因為它已經不是可辨識的廣度事件 —— 這條路徑的預設是 include。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            trade_date = app.state.stock.trade_date
+            numeric = {**_signal_row(trade_date), "id": "bad-1", "kind": 123}
+            missing = {k: v for k, v in _signal_row(trade_date).items() if k != "kind"}
+            missing["id"] = "bad-2"
+            path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in (numeric, missing)),
+                encoding="utf-8",
+            )
+            r = client.get("/api/stock/signals/today", params={"market": "exclude"})
+        assert r.status_code == 200
+        assert [row["id"] for row in r.json()["signals"]] == ["bad-1", "bad-2"]
+
 
 class TestLegacyEnabledRouteGone:
     """SC-4:四鍵開關家族退役 —— 規則自帶 `enabled`,兩套開關並存會互相蓋掉。
