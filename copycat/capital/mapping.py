@@ -1,4 +1,9 @@
-"""群益送單欄位映射 + TC4 → 期交所契約碼轉換(零 IO 純函式)。
+"""群益送單欄位映射 + TC4 → 期交所契約碼轉換(純函式;唯一的 IO = 個股期乘數 fallback)。
+
+`multiplier_of` 對非指數期權產品會問 `stkfut_map.lookup_product` —— 那份版控對映檔
+以 process 級索引 cache 讀,首呼一次 JSON 讀檔,之後純記憶體(檔頭原本的「零 IO」
+約定隨 stkfut-contracts SC-2 更新為此)。
+
 
 STOCKORDER 映射照搬 treading-king backend/services/capital_mapping.py(enum → Literal);
 FUTUREORDER 用欄依 Task 0 spike 定案(docs/research/2026-07-28-skcom-typelib.md):
@@ -14,6 +19,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
+from copycat.stkfut_map import lookup_product
 from copycat.capital.models import (
     BuySell,
     FutureOrderRequest,
@@ -51,11 +57,20 @@ _YM_RE = re.compile(r"^\d{6}$")
 
 
 def multiplier_of(product: str) -> int:
-    """product → 元/點乘數;未知 raise ValueError(route 層轉 400 INVALID_ORDER)。"""
+    """product → 元/點乘數;未知 raise ValueError(route 層轉 400 INVALID_ORDER)。
+
+    指數期權查內建表;查無再問個股期對映表(`stkfut_map.lookup_product`)——
+    個股期的「乘數」= 契約單位股數(標準 2,000 / 小型 100),名目金額 = 價 × 股數。
+    查得到但單位缺 / ≤0(含對映檔版本不符 → 空表)一律 ValueError:乘數是名目
+    金額閘的分母,寧可拒單也不能用一個猜的數字放行。
+    """
     if product in MULTIPLIERS:
         return MULTIPLIERS[product]
     if product in _WEEKLY_50:
         return 50
+    stkfut = lookup_product(product)
+    if stkfut is not None and isinstance(stkfut.get("unit"), int) and stkfut["unit"] > 0:
+        return stkfut["unit"]
     raise ValueError(f"unknown product multiplier: {product!r}")
 
 

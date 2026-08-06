@@ -474,7 +474,8 @@ class TestOrderStkfutGates:
             assert res.json()["detail"]["error"] == "BAD_TICK"
             assert _sent(com, "future") == []
 
-    @pytest.mark.parametrize("price", [1180.0, 60.05, 9.99, 505.0])
+    # 50–100 元段的檔位是 0.1 元(不是 0.05)—— 各段的合法值各取一個
+    @pytest.mark.parametrize("price", [1180.0, 60.1, 9.99, 505.0])
     def test_legal_ticks_pass(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, price: float
     ) -> None:
