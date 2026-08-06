@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 _FILE_VERSION = 1
 
+#: 快取檔名(`<data_dir>/industry_chain.json`)。公開在「擁有這個格式」的模組:
+#: `breadth_engine` 組路徑要用它,`__main__` 的失效注入前置也要刪它 —— 兩處各自
+#: 手抄字串的話,改名時漏改的那一處會靜默失效(檔還在 = 注入被舊表吸收)。
+CHAIN_FILENAME = "industry_chain.json"
+
 
 def load_chain(path: Path) -> tuple[list[dict], float] | None:
     """讀 chain 快取,回 `(rows, fetched_at)`;檔缺 / 壞檔 / 形狀不符一律 `None`。"""
