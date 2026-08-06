@@ -64,6 +64,13 @@ export const MARKET2_FUT_STORE = "copycat-market2-fut";
 /** 相關係數收合區塊的展開狀態("1" = 展開)— components/corr/CorrSection.tsx */
 export const CORR_OPEN_KEY = "copycat-corr-open";
 
+/** 漲跌停列表收合區塊的展開狀態("1" = 展開)— components/index/LimitListSection.tsx。
+ *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場 rows」。 */
+export const LIMIT_LIST_OPEN_KEY = "copycat-limit-list-open";
+/** 漲跌停列表的篩選條件(JSON:市場 / 狀態三旗標 + 金額 / 股價門檻字串)
+ *  — components/index/LimitListSection.tsx */
+export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";
+
 /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
 export const RAIL_TAB_KEY = "copycat-rail-tab";
 
