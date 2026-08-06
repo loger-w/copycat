@@ -4,7 +4,9 @@
 - 時間:TC4 的 FilledTime/PreciseTime 為 UTC,parse 層即 +8 轉台北;OpenTime/CloseTime
   實測為交易所當地時間(90000 = 09:00 台北),不轉。
 - 試撮:只以時間窗判定([08:30,09:00) / [13:25,13:30),端點不含);TradeStatus != "0"
-  值域未實測,僅 warning 觀測不丟棄(design v4 r2-F5)。
+  值域未實測,僅 warning 觀測不丟棄(design v4 r2-F5)。窗是**參數**(stkfut-contracts
+  D2):個股期日盤 08:45 開盤即真成交、13:30 後續交易到 13:45,套現貨窗會把那兩段
+  整個標成試撮而被 `StockDayState.ingest` 在 dedup 前短路。
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 from dataclasses import dataclass, replace
+from typing import Sequence
 
 from copycat.tc4common import to_milli_units
 
@@ -19,8 +22,13 @@ logger = logging.getLogger(__name__)
 
 _DEPTH = 5
 _TAIPEI_OFFSET = _dt.timedelta(hours=8)
-# 試撮窗(台北,端點不含右界;09:00:00 起=開盤撮合、13:30:00 起=收盤撮合,皆真成交)
-_TRIAL_WINDOWS = (("08:30:00.000", "09:00:00.000"), ("13:25:00.000", "13:30:00.000"))
+#: 現貨試撮窗(台北,端點不含右界;09:00:00 起=開盤撮合、13:30:00 起=收盤撮合,皆真成交)。
+#: 公開常數:呼叫端要能明確傳「現貨那把尺」或空窗,而不是靠預設值猜(stock_source
+#: 的 `trial_windows_for` 是唯一的 key→窗對映)。
+TRIAL_WINDOWS: tuple[tuple[str, str], ...] = (
+    ("08:30:00.000", "09:00:00.000"),
+    ("13:25:00.000", "13:30:00.000"),
+)
 
 
 #: 十進位字串 → 毫元整數(元 × 1000);空/無效 → None。
@@ -87,9 +95,9 @@ def _taipei_time(precise_utc: str, date_utc: str) -> tuple[str, str]:
     return f"{local:%H:%M:%S}.{frac}", f"{local:%Y-%m-%d}"
 
 
-def is_trial_window(time_taipei: str) -> bool:
-    """台北 HH:MM:SS.fff 是否落在試撮窗(端點不含右界、含左界)。"""
-    return any(lo <= time_taipei < hi for lo, hi in _TRIAL_WINDOWS)
+def is_trial_window(time_taipei: str, windows: Sequence[tuple[str, str]] = TRIAL_WINDOWS) -> bool:
+    """台北 HH:MM:SS.fff 是否落在試撮窗(端點不含右界、含左界);空窗 → 恆 False。"""
+    return any(lo <= time_taipei < hi for lo, hi in windows)
 
 
 def derive_side(price_milli: int, bid_milli: int | None, ask_milli: int | None) -> str:
@@ -177,8 +185,15 @@ def _parse_levels(msg: dict, price_key: str, vol_key: str) -> list[tuple[int, in
     return levels
 
 
-def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockMeta]:
-    """一則個股 REALTIME 拆 (tick, book, meta);無成交(qty 空/0)→ tick=None(純簿更新)。"""
+def parse_stock_realtime(
+    msg: dict, *, trial_windows: Sequence[tuple[str, str]] = TRIAL_WINDOWS
+) -> tuple[StockTick | None, StockBook, StockMeta]:
+    """一則個股 REALTIME 拆 (tick, book, meta);無成交(qty 空/0)→ tick=None(純簿更新)。
+
+    `trial_windows` = 該 instrument 的試撮窗(個股期傳 `()`,D2)。keyword-only:
+    位置參數會讓「第二個引數是什麼」在四個呼叫點各自靠記憶,而傳錯的失效是靜默的
+    (整段成交被當試撮丟掉)。
+    """
     book = StockBook(
         bids=_parse_levels(msg, "Bid", "BidVolume"),
         asks=_parse_levels(msg, "Ask", "AskVolume"),
@@ -213,15 +228,22 @@ def parse_stock_realtime(msg: dict) -> tuple[StockTick | None, StockBook, StockM
         time=time_tp,
         trade_date=date_tp,
         side=derive_side(price, bid0, ask0),
-        is_trial=is_trial_window(time_tp),
+        is_trial=is_trial_window(time_tp, trial_windows),
         bid_milli=bid0,
         ask_milli=ask0,
     )
     return tick, book, meta
 
 
-def parse_hist_tick(code: str, row: dict) -> StockTick | None:
-    """歷史/當日回補 TICKS row → StockTick;缺 price/qty/PreciseTime → None。"""
+def parse_hist_tick(
+    code: str, row: dict, *, trial_windows: Sequence[tuple[str, str]] = TRIAL_WINDOWS
+) -> StockTick | None:
+    """歷史/當日回補 TICKS row → StockTick;缺 price/qty/PreciseTime → None。
+
+    `trial_windows` 同 `parse_stock_realtime` —— 回補與 live 必須是**同一把尺**:
+    分岔的樣態是 live 收得到 08:50 的成交、回補把它丟掉,而 `apply_backfill` 會先
+    reset 再重放,所以每切一次檔那段成交就消失一次。
+    """
     price = to_milli(row.get("TradingPrice", ""))
     qty = _to_int(row.get("TradeQuantity", ""))
     if price is None or qty is None or qty <= 0:
@@ -244,7 +266,7 @@ def parse_hist_tick(code: str, row: dict) -> StockTick | None:
         time=time_tp,
         trade_date=date_tp,
         side=derive_side(price, bid, ask),
-        is_trial=is_trial_window(time_tp),
+        is_trial=is_trial_window(time_tp, trial_windows),
         bid_milli=bid,
         ask_milli=ask,
     )

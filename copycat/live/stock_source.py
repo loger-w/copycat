@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
 
-from copycat.live.stock_models import StockTick, parse_hist_tick
+from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
 from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
 from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
 
@@ -359,14 +359,38 @@ def aggregate_1k_to_daily(rows: list[dict]) -> list[Bar]:
     return [by_date[d] for d in order]
 
 
-def stock_symbol(code: str) -> str:
-    """股號 → TC4 symbol。上市/上櫃都掛 TWS 段(2026-07-21 spike:5483 上櫃推播成功)。
+def stock_symbol(key: str) -> str:
+    """instrument key → TC4 symbol(**唯一定義**;engine 經 `symbol_of` 取用)。
 
-    `F:<prod>` 前綴 = 個股期(期現對照加訂)→ 期貨樹 HOT;誤走股票段時 SUBQUOTE
-    照回 OK 零錯誤訊號(2026-07-21 real-env 實證),前綴分流是唯一防線。"""
-    if code.startswith("F:"):
-        return f"TC.F.TWF.{code[2:]}.HOT"
-    return f"TC.S.TWS.{code}"
+    - 股號 → `TC.S.TWS.<code>`:上市/上櫃都掛 TWS 段(2026-07-21 spike:5483 上櫃推播成功)
+    - `F:<prod>`(兩段形)→ `TC.F.TWF.<prod>.HOT`:期現對照腿
+    - `F:<prod>:<ym>`(三段形)→ `TC.F.TWF.<prod>.<ym>`:使用者選定的月契約主圖
+
+    誤走股票段時 SUBQUOTE 照回 OK 零錯誤訊號(2026-07-21 real-env 實證),前綴分流
+    是唯一防線;同理 engine 不得自組第二份對映(R2-2)。"""
+    if key.startswith("F:"):
+        prod, _sep, ym = key[2:].partition(":")
+        return f"TC.F.TWF.{prod}.{ym or 'HOT'}"
+    return f"TC.S.TWS.{key}"
+
+
+def is_futures_key(key: str) -> bool:
+    """instrument key 是否為個股期(兩段形對照腿或三段形合約)。"""
+    return key.startswith("F:")
+
+
+def is_contract_key(key: str) -> bool:
+    """三段形合約鍵(`F:<prod>:<ym>`)= 可當主圖的 instrument;HOT 對照腿不算。"""
+    return key.startswith("F:") and ":" in key[2:]
+
+
+def trial_windows_for(key: str) -> tuple[tuple[str, str], ...]:
+    """instrument key → 試撮窗(個股期空窗,D2)。
+
+    **單一定義**:engine(REALTIME)與 source(回補)必須同一把尺 —— 分岔時 live
+    收得到 08:50 的成交、回補把它丟掉,而 `apply_backfill` 先 reset 再重放,每切一次
+    檔那段就消失一次。"""
+    return () if is_futures_key(key) else TRIAL_WINDOWS
 
 
 def stock_window(trade_date: str) -> tuple[str, str]:
@@ -401,10 +425,17 @@ class StockQuoteSource(TC4QuoteSource):
         self._in_trading_hours = in_trading_hours
         self._on_message: Callable[[dict], None] | None = None
         self._on_no_data: Callable[[str], None] | None = None
-        self._seen: set[str] = set()  # 已收過推播的股號(健檢用)
+        # 已收過推播的 **symbol**(健檢用;D8)。**不可用 `Security`** —— 個股期 leaf 的
+        # 該欄值域未實證(產品碼 / 股號都可能),同一個值會同時出現在現貨與合約推播上,
+        # 以它為鍵時合約的推播會把現貨的健檢一起消掉(現貨真的零推播也不再有訊號)。
+        self._seen: set[str] = set()
         self._seen_lock = threading.Lock()
 
     # ---- 設定 ----
+
+    def symbol_of(self, key: str) -> str:
+        """instrument key → TC4 symbol(`StockSource` Protocol;engine 路由表的鍵來源)。"""
+        return stock_symbol(key)
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self._on_message = cb
@@ -430,11 +461,14 @@ class StockQuoteSource(TC4QuoteSource):
         if self._sub_port is not None:
             # 真連線才有 SubPort;漏啟 = 訂閱成功但永收不到推播(2026-07-21 real-env 實證)
             self._start_listener()
-        self._resub(stock_symbol(code))
+        symbol = stock_symbol(code)
+        self._resub(symbol)
         with self._seen_lock:
-            self._seen.discard(code)
-        # 個股期(F:)不做無推播健檢:seen 以 Security(=股號)為鍵,期貨鍵對不上
-        if not code.startswith("F:") and self._in_trading_hours():
+            self._seen.discard(symbol)
+        # 健檢只掛現貨與**三段形合約鍵**(R2-3):兩段形 HOT 對照腿放開的話,
+        # `_handle_no_data` 會廣播 code="F:CDF" 的 watchlist_quote,與 D16(只收自選碼)
+        # 直接打架 —— 側欄會多出一格對不上任何自選項目的卡片。
+        if (not is_futures_key(code) or is_contract_key(code)) and self._in_trading_hours():
             timer = threading.Timer(self._no_data_secs, self._health_check, args=(code,))
             timer.daemon = True
             timer.start()
@@ -443,9 +477,11 @@ class StockQuoteSource(TC4QuoteSource):
         self._unsub(stock_symbol(code))
 
     def _health_check(self, code: str) -> None:
+        """回呼一律傳 **key**(engine 的 `_no_data` 以 key 記);`_seen` 比對用 symbol。"""
+        symbol = stock_symbol(code)
         with self._seen_lock:
-            seen = code in self._seen
-        if not seen and stock_symbol(code) in self._subscribed:
+            seen = symbol in self._seen
+        if not seen and symbol in self._subscribed:
             if self._on_no_data is not None:
                 self._on_no_data(code)
 
@@ -472,7 +508,10 @@ class StockQuoteSource(TC4QuoteSource):
 
         for page in iter_qry_pages(_page):
             rows.extend(page)
-        ticks = [t for r in rows if (t := parse_hist_tick(code, r)) is not None]
+        windows = trial_windows_for(code)  # 個股期空窗(D2);現貨照舊
+        ticks = [
+            t for r in rows if (t := parse_hist_tick(code, r, trial_windows=windows)) is not None
+        ]
         logger.info("stock backfill %s: %d ticks", code, len(ticks))
         return ticks
 
@@ -579,9 +618,9 @@ class StockQuoteSource(TC4QuoteSource):
         if msg is None:
             return
         quote = msg.get("Quote", {})
-        code = str(quote.get("Security", ""))
-        if code:
+        symbol = str(quote.get("Symbol", ""))
+        if symbol:
             with self._seen_lock:
-                self._seen.add(code)
+                self._seen.add(symbol)  # 健檢以 symbol 為鍵(D8;理由見 `_seen` 宣告處)
         if self._on_message is not None:
             self._on_message(quote)
