@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
  *
  *  `null` = 全部(不過濾)。市場族用 `isMarketKind` 前綴判別而不是列舉:後端補新的
  *  廣度 kind 時,這顆 chip 不必同步改就仍然收得到。 */
-type ChipKey = "all" | "cdp" | "move" | "vol" | "lock" | "market";
+type ChipKey = "all" | "own" | "cdp" | "move" | "vol" | "lock" | "market";
 
 interface Chip {
   key: ChipKey;
@@ -37,6 +37,11 @@ interface Chip {
 
 const CHIPS: Chip[] = [
   { key: "all", label: "全部", match: null },
+  // **族層 chip,擺在 kind 層之前**(design §9.3 的驗收原文;§9.2 的列表漏列 →
+  // review round-2 FE-5):「這則跟我有關嗎」與「這是哪種訊號」是兩個問題,前者
+  // 沒有專屬 chip 的話,想只看自選就得逐 kind 點過去 —— 而 kind 是會增加的,
+  // 後端補一種就靜默漏一種。同樣用 `isMarketKind` 的補集,不列舉自選 kind。
+  { key: "own", label: "自選", match: (s) => !isMarketKind(s.kind) },
   { key: "cdp", label: "CDP", match: (s) => s.kind === "cdp_cross" },
   { key: "move", label: "爆拉跌", match: (s) => s.kind === "surge" || s.kind === "crash" },
   { key: "vol", label: "爆量", match: (s) => s.kind === "vol_burst" },
@@ -72,7 +77,7 @@ function toneOf(sig: SignalMsg): string {
 const BREADTH_TITLE = "FinMind 快照精度 5-10s,非 tick 級";
 
 function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
-  const { signals } = useSignalFeed({ market: "include" });
+  const { signals, baselineError } = useSignalFeed({ market: "include" });
   // 篩選態刻意不持久化(design §9.2):它是「現在想看什麼」不是偏好,
   // 隔天開站停在昨天切的那顆 chip 只會讓人以為訊號沒了。
   const [chip, setChip] = useState<ChipKey>("all");
@@ -87,9 +92,14 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
 
   // 「今天完全沒有訊號」與「自己把 chip 切窄了」是兩句話:共用一句文案會讓後者
   // 看起來像系統沒在跑。
+  //
+  // **第三句是「取數失敗」**(review round-2 FE-1 / XR-3):達錢 4 沒開時 baseline 端點
+  // 回 503,清單同樣是空的 —— 兩者同形已是 CLAUDE.md 記載的既知陷阱,而「今日尚無
+  // 訊號」會讓人以為系統好好的、只是今天很安靜,不會去查服務。
   let message: string | null = null;
-  if (signals.length === 0) message = "今日尚無訊號";
-  else if (rows.length === 0) message = "無符合條件";
+  if (signals.length === 0) {
+    message = baselineError ? "訊號服務未就緒或取數失敗(即時訊號仍會顯示)" : "今日尚無訊號";
+  } else if (rows.length === 0) message = "無符合條件";
 
   return (
     <div data-testid="signal-timeline-body" className="flex flex-col gap-2 px-4 pb-4">
@@ -112,6 +122,14 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
           </button>
         ))}
       </div>
+
+      {/* 清單有東西時失敗不能只是靜靜地少幾列:live 那條路照樣在推,畫面看起來完全
+          正常,但少掉的是「今天稍早發生過什麼」—— 那正是時間軸的用途。 */}
+      {baselineError && signals.length > 0 ? (
+        <p data-testid="signal-timeline-baseline-error" className="text-xs text-ink-muted">
+          歷史訊號載入失敗,僅顯示即時訊號
+        </p>
+      ) : null}
 
       {message !== null ? (
         <p data-testid="signal-timeline-msg" className="py-6 text-center text-sm text-ink-muted">

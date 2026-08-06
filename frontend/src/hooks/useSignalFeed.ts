@@ -49,7 +49,18 @@ function mergeByFamily(baseline: SignalMsg[], live: SignalMsg[]): SignalMsg[] {
   return mergeSignals([...marketSide, ...ownSide], [], FAMILY_CAP * 2);
 }
 
-export function useSignalFeed(opts?: { market?: MarketMode }): { signals: SignalMsg[] } {
+export interface SignalFeed {
+  signals: SignalMsg[];
+  /** baseline 取數是否已失敗(retry 1 次後才會 true)。
+   *
+   *  **降級要說得出口**(review round-2 FE-1):達錢 4 沒開時 `/api/stock/signals/today`
+   *  回 503 → 這裡沒有 baseline,但 live 訊號照樣進得來。少了這顆旗標,消費端只能把
+   *  「服務沒起來」與「今天真的沒訊號」畫成同一句話,而使用者對這兩句的反應完全相反
+   *  (去查 vs 繼續等)。 */
+  baselineError: boolean;
+}
+
+export function useSignalFeed(opts?: { market?: MarketMode }): SignalFeed {
   const mode: MarketMode = opts?.market ?? "exclude";
   const queryClient = useQueryClient();
   const today = useQuery({
@@ -88,5 +99,5 @@ export function useSignalFeed(opts?: { market?: MarketMode }): { signals: Signal
       mode === "include" ? mergeByFamily(baseline ?? [], live) : mergeSignals(baseline ?? [], live),
     [baseline, live, mode],
   );
-  return { signals };
+  return { signals, baselineError: today.isError };
 }
