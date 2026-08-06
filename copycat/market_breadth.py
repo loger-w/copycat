@@ -267,6 +267,18 @@ def _is_limit(close: float, prev_close: float) -> tuple[bool, bool]:
     )
 
 
+def _is_touched(high: float | None, low: float | None, prev_close: float) -> tuple[bool, bool]:
+    """毫元等值判「盤中曾觸及停板」;high/low 缺(舊 fixture / 剪裁快照)→ (False, False)。
+
+    只回「是否摸到」;「觸及**未鎖**」= 本結果 and not `_is_limit` 同向,由呼叫端合成
+    (本函式拿不到 close)。
+    """
+    prev_milli = round(prev_close * 1000)
+    touched_up = high is not None and round(high * 1000) == limit_up_milli(prev_milli)
+    touched_down = low is not None and round(low * 1000) == limit_down_milli(prev_milli)
+    return touched_up, touched_down
+
+
 def compute_breadth(
     rows: list[dict],
     type_map: dict[str, str],
@@ -279,6 +291,9 @@ def compute_breadth(
       `close` / `change_price` 缺或 `prev_close <= 0` → 不判 limit,只按 change_rate
       正負分桶。
     - `change_rate` 為 None 的整檔跳過;`type_map` 查無市場的代號排除。
+    - rows 另帶 `close`(直通)與 `touched_limit_up` / `touched_limit_down`
+      (`high`/`low` 摸到停板但收盤未鎖;缺欄或前收不可用 → False)。touched 不影響
+      五桶家數 —— 觸及未鎖仍按 change_rate 分桶。
     - 全空 → `None`(呼叫端視同該輪失敗)。
     """
     counts: dict[str, dict[str, int]] = {
@@ -301,8 +316,11 @@ def compute_breadth(
         )
         limit_up = False
         limit_down = False
+        touched_up = False
+        touched_down = False
         if prev_close is not None and prev_close > 0 and close is not None:
             limit_up, limit_down = _is_limit(close, prev_close)
+            touched_up, touched_down = _is_touched(r.get("high"), r.get("low"), prev_close)
 
         if limit_up:
             bucket = "limit_up"
@@ -324,11 +342,14 @@ def compute_breadth(
                 "stock_id": sid,
                 "name": name_map.get(sid) or sid,
                 "market": market,
+                "close": close,
                 "change_rate": chg,
                 "volume_ratio": vol_ratio,
                 "total_amount": r.get("total_amount"),
                 "limit_up": limit_up,
                 "limit_down": limit_down,
+                "touched_limit_up": touched_up and not limit_up,
+                "touched_limit_down": touched_down and not limit_down,
             }
         )
 
