@@ -136,6 +136,30 @@ class FakeFetch:
         return self.rows
 
 
+class FakeMono:
+    """凍結的單調鐘(`breadth_engine._monotonic` 替身)。
+
+    真時鐘在兩次呼叫之間必然前進,「剛剛成功」與「stale_secs 已過」就無法用門檻
+    0 / 極小值區分 —— 要驗一個時間門檻只能真的控制時間,不是把門檻調到極端。
+    """
+
+    def __init__(self, start: float = 1_000.0) -> None:
+        self.t = start
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, secs: float) -> None:
+        self.t += secs
+
+
+@pytest.fixture
+def mono(monkeypatch: pytest.MonkeyPatch) -> FakeMono:
+    clock = FakeMono()
+    monkeypatch.setattr(be, "_monotonic", clock)
+    return clock
+
+
 class Clock:
     """today_fn / now_fn 注入點;兩者可各自改(換日測試要它們錯開)。"""
 
@@ -236,9 +260,9 @@ class TestNormalCycle:
             "series": [],
         }
 
-    async def test_publishes_payload_each_cycle(self, tmp_path: Path) -> None:
+    async def test_publishes_payload_each_cycle(self, tmp_path: Path, mono: FakeMono) -> None:
         """成敗皆 publish 一則;`last_minute` 只在本輪有 append 時帶值。"""
-        engine, snap, *_ = _make(tmp_path, config=BreadthConfig(stale_secs=0.0))
+        engine, snap, *_ = _make(tmp_path)
         stream = engine.stream()
         seed = await stream.__anext__()
         assert seed["type"] == "breadth" and seed["counts"] is None
@@ -247,6 +271,7 @@ class TestNormalCycle:
         ok_msg = await stream.__anext__()
 
         snap.error = BreadthFetchError("down")
+        mono.advance(60.0)  # 超過 stale_secs
         await engine._run_cycle()
         fail_msg = await stream.__anext__()
         await stream.aclose()
@@ -270,12 +295,19 @@ class TestNormalCycle:
 
 
 class TestFailureHandling:
-    async def test_fetch_error_keeps_counts_and_marks_stale(self, tmp_path: Path) -> None:
-        engine, snap, *_ = _make(tmp_path, config=BreadthConfig(stale_secs=0.0))
+    async def test_fetch_error_keeps_counts_and_marks_stale(
+        self, tmp_path: Path, mono: FakeMono
+    ) -> None:
+        engine, snap, *_ = _make(tmp_path)  # stale_secs 預設 30
         await engine._run_cycle()
-        assert engine.state()["stale"] is False  # 剛成功(stale_secs=0 但 elapsed 尚未過)
+        assert engine.state()["stale"] is False
 
         snap.error = BreadthFetchError("upstream down")
+        mono.advance(20.0)
+        await engine._run_cycle()
+        assert engine.state()["stale"] is False  # 門檻內的一次失敗不算延遲
+
+        mono.advance(20.0)
         await engine._run_cycle()
 
         state = engine.state()
@@ -372,7 +404,8 @@ class TestMapCache:
 
         await engine._run_cycle()
         assert inf.calls == 2  # TTL 內不再取
-        assert disp.calls == 2  # 處置股同款(第三輪同樣被 TTL 擋)
+        # 處置股在第一輪就成功了(兩份對照表各自計時)→ 之後三輪都被自己的 TTL 擋
+        assert disp.calls == 1
 
     async def test_failure_keeps_previous_maps(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
