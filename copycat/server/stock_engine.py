@@ -805,22 +805,30 @@ class StockEngine:
             and (meta.upper_milli, meta.lower_milli) != prev_limits
         ):
             self._enqueue_backfill(code)
-        # **期貨 instrument 不參與換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
-        # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它換日會在夜盤把全部
-        # 現貨狀態 reset(當日分時線整條消失,而畫面上只是「圖突然空了」)。
-        rolls_the_day = not is_futures_key(code)
+        # **期貨 instrument 不武裝換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
+        # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它武裝 stage1 會在夜盤把
+        # 全部現貨狀態 reset(當日分時線整條消失,而畫面上只是「圖突然空了」)。
+        arms_the_day = not is_futures_key(code)
         if (
             tick is not None
-            and rolls_the_day
+            and arms_the_day
             and self._pending_date is None
             and tick.trade_date > self._trade_date
         ):
             # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
             # 新日 tick → 先補 stage1 再走 stage2
             self.rollover_stage1(tick.trade_date)
+        # **完成(stage2)不限現貨鍵**(E-3):期貨日盤 08:45 開盤而現貨 09:00 才有首筆,
+        # 舊條件讓那 15 分鐘的合約 tick 落到下面的 `state.ingest` —— 昨日 `_last_cum`
+        # 使它恆 False(不 apply 不推播),分時圖左緣整段消失且零錯誤訊號;自選空 +
+        # 主圖合約時更是永遠等不到現貨首筆 → 整天不換日。
+        # 夜盤沒有誤觸的路:(a) 夜盤 tick 在上面的 `_in_futures_session` 就整則早退,
+        # 到得了這裡的期貨 tick 必屬日盤 08:45–13:45,其 `trade_date` 即當日;
+        # (b) 00:00–05:00 夜盤時段 `_pending_date` 恆 None(checkpoint 08:00 才武裝)。
+        # 已知殘留限制:補市日(週六)+ 自選空 + 主圖合約時 checkpoint 不武裝、現貨
+        # 快路徑也沒有現貨 tick → 仍整天不換日(極罕見,不在本輪展開)。
         if (
             tick is not None
-            and rolls_the_day
             and self._pending_date is not None
             and tick.trade_date == self._pending_date
         ):
