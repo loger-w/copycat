@@ -1,0 +1,4 @@
+{"round": 1, "reviewer": "design-reviewer(opus)", "date": "2026-08-06",
+ "findings_p0": 0, "findings_p1": 9, "findings_p2": 7,
+ "disposition": "全數 accepted 修入 design v2(R1-R16;逐條內容見下)",
+ "findings": "R1 落檔/restore 鍵不同源(修:append+落檔僅 trade_date==today);R2 restore 未還原 trade_date(修:還原+換日判定舊值非 None);R3 分鐘域 guard 落掉(修:0900-1330+clamp1335+丟棄);R4 sentinel 方向與慣例相反、verify 會真打 FinMind(修:預設 None,__main__/verify 入表);R5 test_oi_levels 綁 oi_levels 模組屬性(修:測試遷移+不留 re-export);R6 start() 阻塞 boot 序列+二態混淆(修:首輪移 poll task+REST 三態);R7 parity fixture 測不到組裝順序與毫元替換(修:原始 rows 全管線口徑+limit 邊界手造);R8 useBreadth 偏離 useIndexStream 慣例(修:手寫 WS+onopen refetch+換日清);R9 map 失敗寫空佔 24h TTL(修:成功才寫);R10 失敗無退避(修:指數退避+402 300s);R11 data 相對路徑(修:repo root 錨定);R12 裸 TestClient 競態(修:BootedClient);R13 毫元介面未定(修:limit_up/down_milli);R14 TaiwanStockInfo 截斷(Known Risk+row 數 log);R15 compute None 分支(修:視同失敗+三態);R16 config 檔名分岔(拍板 breadth.json)"}

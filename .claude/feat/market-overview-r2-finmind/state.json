@@ -1,0 +1,31 @@
+{
+  "slug": "market-overview-r2-finmind",
+  "start_sha": "6d9eed1c058e3cac30d9201d27fbcb1475e022dc",
+  "branch": "feat/market-overview-r2-finmind",
+  "worktree_path": null,
+  "current_phase": 8,
+  "completed_phases": [
+    -1,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "scope": "L",
+  "phase_6_blocked_reason": null,
+  "scope_overrides": {
+    "goal_efficiency_mode": false
+  },
+  "last_updated": "2026-08-06T10:58:00+08:00",
+  "project_shape": "fullstack(FastAPI + React)",
+  "last_commit_sha": "fcba0be",
+  "final_merge_sha": null,
+  "self_review_head": "fcba0bec33ad5704c720a987a2b835ca540f8463",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}

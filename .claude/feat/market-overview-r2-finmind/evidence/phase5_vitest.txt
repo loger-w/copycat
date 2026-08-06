@@ -1,0 +1,215 @@
+
+> copycat-frontend@0.1.0 test
+> vitest run --run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/side-project/copycat/frontend[39m
+
+ [32m✓[39m src/hooks/useFuturesBars.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1144[2mms[22m[39m
+   [33m[2m✓[22m[39m useFuturesBars(SC-1/2/3)[2m > [22mHTTP 錯誤 → error 帶 detail.error 錯誤碼 [33m 1078[2mms[22m[39m
+ [32m✓[39m src/hooks/useOiLevels.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1179[2mms[22m[39m
+   [33m[2m✓[22m[39m useOiLevels(SC-11)[2m > [22mHTTP 500 → 不 throw、data 維持 undefined(線消失即降級) [33m 1076[2mms[22m[39m
+ [32m✓[39m src/hooks/useStockBars.test.tsx [2m([22m[2m18 tests[22m[2m)[22m[33m 1189[2mms[22m[39m
+   [33m[2m✓[22m[39m useStockBars 取數條件[2m > [22m錯誤碼依專案契約自 detail.error 解析 [33m 1080[2mms[22m[39m
+ [32m✓[39m src/hooks/useIndexStream.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1442[2mms[22m[39m
+   [33m[2m✓[22m[39m useIndexStream[2m > [22mWS reconnect → refetch state 全量(F3) [33m 1175[2mms[22m[39m
+ [32m✓[39m src/hooks/useSignalFeed.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 1417[2mms[22m[39m
+   [33m[2m✓[22m[39m useSignalFeed[2m > [22mtoday 抓失敗 → signals 空陣列(不 throw,live 訊號照樣進得來) [33m 1096[2mms[22m[39m
+ [32m✓[39m src/components/stock/StockPage.test.tsx [2m([22m[2m28 tests[22m[2m)[22m[33m 1469[2mms[22m[39m
+ [32m✓[39m src/hooks/useBreadth.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 1941[2mms[22m[39m
+   [33m[2m✓[22m[39m useBreadth[2m > [22mWS reconnect onopen → refetch 全量(補回斷線期間漏格) [33m 1169[2mms[22m[39m
+ [32m✓[39m src/App.test.tsx [2m([22m[2m28 tests[22m[2m)[22m[33m 2381[2mms[22m[39m
+   [33m[2m✓[22m[39m App(index-board T9)[2m > [22mlocalStorage 記住 index tab,重載復原(review B8) [33m 324[2mms[22m[39m
+   [33m[2m✓[22m[39m App(capital WS 唯一掛載 review B2)[2m > [22mApp 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線 [33m 719[2mms[22m[39m
+ [32m✓[39m src/components/stock/CandleChart.test.tsx [2m([22m[2m47 tests[22m[2m)[22m[33m 2607[2mms[22m[39m
+   [33m[2m✓[22m[39m CandleChart 縮放與平移(SC-6.3/6.4)[2m > [22m縮放下限 20 根、上限 min(total, 700) 根 [33m 1421[2mms[22m[39m
+ [32m✓[39m src/components/rail/RightRail.test.tsx [2m([22m[2m22 tests[22m[2m)[22m[33m 2830[2mms[22m[39m
+   [33m[2m✓[22m[39m RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13)[2m > [22m個股武裝後切到期貨 context 再切回 → 鈕回到「武裝」 [33m 341[2mms[22m[39m
+   [33m[2m✓[22m[39m RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13)[2m > [22m武裝後切右欄 tab 再切回閃電 → 鈕回到「武裝」 [33m 423[2mms[22m[39m
+   [33m[2m✓[22m[39m RightRail 交易別 / 數量不隨 tab 重置(R2-10)[2m > [22m張數快捷值切 tab 後保留 [33m 320[2mms[22m[39m
+   [33m[2m✓[22m[39m RightRail 五檔點價接點(W-C1 / R2-5)[2m > [22m切離閃電 tab 會清掉置中請求(重掛載不重放過期價位;review P2-2) [33m 347[2mms[22m[39m
+ [32m✓[39m src/components/stock/StockChart.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[33m 2985[2mms[22m[39m
+   [33m[2m✓[22m[39m StockChart 模式切換(SC-7)[2m > [22m取數失敗顯示「K 線載入失敗」+ 錯誤碼,不崩 [33m 1048[2mms[22m[39m
+   [33m[2m✓[22m[39m StockChart 模式切換(SC-7)[2m > [22m錯誤碼 fallback:body 無 detail.error → 顯示 HTTP_<status> [33m 1070[2mms[22m[39m
+ [32m✓[39m src/components/stock/WatchlistSidebar.test.tsx [2m([22m[2m55 tests[22m[2m)[22m[33m 3456[2mms[22m[39m
+   [33m[2m✓[22m[39m WatchlistSidebar 管理入口(SC-13 / SC-15)[2m > [22m載入失敗 → 管理鈕不渲染(EMPTY_WL 上開 Dialog 新增群組會整份 PUT 清空自選) [33m 1052[2mms[22m[39m
+ [32m✓[39m src/hooks/useStockStream.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 1054[2mms[22m[39m
+ [32m✓[39m src/hooks/useMarketBars.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1137[2mms[22m[39m
+   [33m[2m✓[22m[39m useMarketBars[2m > [22mHTTP 錯誤 → error 帶 detail.error 錯誤碼 [33m 1080[2mms[22m[39m
+ [32m✓[39m src/components/index/MarketPane.test.tsx [2m([22m[2m30 tests[22m[2m)[22m[33m 1093[2mms[22m[39m
+ [32m✓[39m src/components/stock/WatchlistManagerDialog.test.tsx [2m([22m[2m32 tests[22m[2m)[22m[33m 885[2mms[22m[39m
+ [32m✓[39m src/components/stock/StockIntradayChart.test.tsx [2m([22m[2m82 tests[22m[2m)[22m[33m 1029[2mms[22m[39m
+ [32m✓[39m src/components/capital/CapitalOrdersList.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 640[2mms[22m[39m
+ [32m✓[39m src/components/futures/FuturesChart.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[33m 841[2mms[22m[39m
+ [32m✓[39m src/components/stock/SignalRulesDialog.test.tsx [2m([22m[2m21 tests[22m[2m)[22m[33m 713[2mms[22m[39m
+[90mstderr[2m | src/hooks/useRiver.test.ts[2m > [22m[2museRiver[2m > [22m[2m非 river 型別的訊息忽略,壞 JSON 不崩
+[22m[39mriver ws: 無法解析訊息 SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at FakeWS.ws.onmessage [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:135:28[90m)[39m
+    at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useRiver.test.ts:164:18
+    at [90mC:\side-project\copycat\frontend\[39mnode_modules\[4m@testing-library\react[24m\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact[24m\cjs\react.development.js:814:22[90m)[39m
+    at [90mC:\side-project\copycat\frontend\[39mnode_modules\[4m@testing-library\react[24m\dist\act-compat.js:46:25
+    at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useRiver.test.ts:164:5
+    at [90mfile:///C:/side-project/copycat/frontend/[39mnode_modules/[4m@vitest/runner[24m/dist/chunk-hooks.js:752:20
+
+ [32m✓[39m src/components/OrderPanel.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 746[2mms[22m[39m
+ [32m✓[39m src/hooks/useRiver.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 676[2mms[22m[39m
+ [32m✓[39m src/components/index/IndexPage.test.tsx [2m([22m[2m15 tests[22m[2m)[22m[33m 640[2mms[22m[39m
+[90mstderr[2m | src/hooks/useCorrelation.test.ts[2m > [22m[2museCorrelation[2m > [22m[2m壞 JSON 不讓 hook 崩潰
+[22m[39mcorr ws: 無法解析訊息 SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at FakeWS.ws.onmessage [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useCorrelation.ts:63:28[90m)[39m
+    at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useCorrelation.test.ts:105:18
+    at [90mC:\side-project\copycat\frontend\[39mnode_modules\[4m@testing-library\react[24m\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact[24m\cjs\react.development.js:814:22[90m)[39m
+    at [90mC:\side-project\copycat\frontend\[39mnode_modules\[4m@testing-library\react[24m\dist\act-compat.js:46:25
+    at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useCorrelation.test.ts:105:5
+    at [90mfile:///C:/side-project/copycat/frontend/[39mnode_modules/[4m@vitest/runner[24m/dist/chunk-hooks.js:752:20
+
+ [32m✓[39m src/hooks/useFuturesStream.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 496[2mms[22m[39m
+[90mstderr[2m | src/hooks/useCorrelation.test.ts[2m > [22m[2museCorrelation[2m > [22m[2mREST 失敗不拋,等推播補上
+[22m[39mcorr: state 載入失敗 Error: boom
+    at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useCorrelation.test.ts:122:13
+    at mockCall [90m(file:///C:/side-project/copycat/frontend/[39mnode_modules/[4m@vitest/spy[24m/dist/index.js:96:15[90m)[39m
+    at spy [90m(file:///C:/side-project/copycat/frontend/[39mnode_modules/[4mtinyspy[24m/dist/index.js:47:80[90m)[39m
+    at load [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useCorrelation.ts:41:27[90m)[39m
+    at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useCorrelation.ts:51:10
+    at Object.react_stack_bottom_frame [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:25989:20[90m)[39m
+    at runWithFiberInDEV [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:874:13[90m)[39m
+    at commitHookEffectListMount [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:13249:29[90m)[39m
+    at commitHookPassiveMountEffects [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:13336:11[90m)[39m
+    at commitPassiveMountOnFiber [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:15484:13[90m)[39m
+
+ [32m✓[39m src/hooks/useCorrelation.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 497[2mms[22m[39m
+ [32m✓[39m src/components/corr/CorrSection.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 445[2mms[22m[39m
+   [33m[2m✓[22m[39m CorrSection[2m > [22m(c) 展開寫入 localStorage,重新 mount 仍展開 [33m 359[2mms[22m[39m
+ [32m✓[39m src/hooks/useStockWatchlist.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 484[2mms[22m[39m
+ [32m✓[39m src/hooks/useServerBuild.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 421[2mms[22m[39m
+ [32m✓[39m src/components/capital/CapitalPositionsList.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 342[2mms[22m[39m
+ [32m✓[39m src/components/corr/CorrSection.lazy.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 408[2mms[22m[39m
+   [33m[2m✓[22m[39m CorrSection(lazy 真身)[2m > [22m(b) 展開後真的 mount CorrPage,不是停在 Suspense fallback [33m 381[2mms[22m[39m
+ [32m✓[39m src/hooks/useSignalRules.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 348[2mms[22m[39m
+ [32m✓[39m src/hooks/useStockNames.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 6387[2mms[22m[39m
+   [33m[2m✓[22m[39m useStockNames[2m > [22m404 → error 態帶錯誤碼 [33m 1077[2mms[22m[39m
+   [33m[2m✓[22m[39m useStockNames[2m > [22m啟動窗內連續失敗後應自動復原(不需 focus / remount) [33m 4053[2mms[22m[39m
+   [33m[2m✓[22m[39m useStockNames[2m > [22mbody 為合法 JSON null → 退回 HTTP_<status>,不讓 TypeError 逸出 [33m 1092[2mms[22m[39m
+ [32m✓[39m src/components/VersionDriftBadge.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[32m 293[2mms[22m[39m
+ [32m✓[39m src/components/stock/OrderBook.test.tsx [2m([22m[2m30 tests[22m[2m)[22m[33m 332[2mms[22m[39m
+ [32m✓[39m src/components/futures/FuturesLadder.test.tsx [2m([22m[2m26 tests[22m[2m)[22m[33m 7035[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 武裝直送(SC-8)[2m > [22m武裝點價:1 次 API call;payload 帶 HOT symbol + day_trade 預設 false [33m 417[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 武裝直送(SC-8)[2m > [22mcapital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入) [33m 439[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 武裝防護(review C3/C4)[2m > [22midle 5 分鐘自動解除 [33m 433[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 武裝防護(review C3/C4)[2m > [22m送單 400:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除 [33m 631[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 武裝防護(review C3/C4)[2m > [22m200 但 ok:false(結果未知 code=-1)→ hint 顯示 message 且 failStreak 累積 [33m 597[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 武裝防護(review C3/C4)[2m > [22mqty 快捷「3」按兩下累加 → payload qty 6(review C4) [33m 475[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 一鍵平倉(SC-10)[2m > [22m本契約部位 → 彈窗列出方向/口數/估價,確認後送 closeBodyOf 形狀 [33m 344[2mms[22m[39m
+   [33m[2m✓[22m[39m FuturesLadder 一鍵平倉(SC-10)[2m > [22m平倉失敗不動武裝狀態(平倉不是武裝路徑) [33m 489[2mms[22m[39m
+ [32m✓[39m src/components/futures/FuturesPage.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[33m 416[2mms[22m[39m
+ [32m✓[39m src/components/corr/RiverPanel.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[32m 270[2mms[22m[39m
+ [32m✓[39m src/components/stock/TickTape.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[32m 215[2mms[22m[39m
+ [32m✓[39m src/components/quote/DepthBar.test.tsx [2m([22m[2m19 tests[22m[2m)[22m[32m 182[2mms[22m[39m
+ [32m✓[39m src/components/corr/CorrPanel.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/components/PnlChart.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 111[2mms[22m[39m
+[90mstderr[2m | src/components/corr/CorrPage.test.tsx[2m > [22m[2mCorrPage[2m > [22m[2m把 hook 的 state 傳進面板
+[22m[39mriver: state 載入失敗 TypeError: Failed to parse URL from /api/river/state
+[90m    at node:internal/deps/undici/undici:16416:13[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+    at load [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:100:21[90m)[39m {
+  [cause]: TypeError: Invalid URL: /api/river/state
+      at new URLImpl [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mwhatwg-url[24m\lib\URL-impl.js:20:13[90m)[39m
+      at Object.exports.setup [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mwhatwg-url[24m\lib\URL.js:54:12[90m)[39m
+      at new URL [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mwhatwg-url[24m\lib\URL.js:115:22[90m)[39m
+  [90m    at new Request (node:internal/deps/undici/undici:10971:25)[39m
+  [90m    at fetch (node:internal/deps/undici/undici:11891:25)[39m
+  [90m    at fetch (node:internal/deps/undici/undici:16414:10)[39m
+  [90m    at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)[39m
+      at load [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:100:27[90m)[39m
+      at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:110:10
+      at Object.react_stack_bottom_frame [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:25989:20[90m)[39m
+}
+
+[90mstderr[2m | src/components/corr/CorrPage.test.tsx[2m > [22m[2mCorrPage[2m > [22m[2mhook 尚未取得資料時顯示載入中
+[22m[39mriver: state 載入失敗 TypeError: Failed to parse URL from /api/river/state
+[90m    at node:internal/deps/undici/undici:16416:13[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+    at load [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:100:21[90m)[39m {
+  [cause]: TypeError: Invalid URL: /api/river/state
+      at new URLImpl [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mwhatwg-url[24m\lib\URL-impl.js:20:13[90m)[39m
+      at Object.exports.setup [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mwhatwg-url[24m\lib\URL.js:54:12[90m)[39m
+      at new URL [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mwhatwg-url[24m\lib\URL.js:115:22[90m)[39m
+  [90m    at new Request (node:internal/deps/undici/undici:10971:25)[39m
+  [90m    at fetch (node:internal/deps/undici/undici:11891:25)[39m
+  [90m    at fetch (node:internal/deps/undici/undici:16414:10)[39m
+  [90m    at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)[39m
+      at load [90m(C:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:100:27[90m)[39m
+      at [90mC:\side-project\copycat\frontend\[39msrc\hooks\useRiver.ts:110:10
+      at Object.react_stack_bottom_frame [90m(C:\side-project\copycat\frontend\[39mnode_modules\[4mreact-dom[24m\cjs\react-dom-client.development.js:25989:20[90m)[39m
+}
+
+ [32m✓[39m src/components/index/BreadthBand.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/components/corr/CorrPage.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/hooks/useStockOverlay.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 153[2mms[22m[39m
+ [32m✓[39m src/components/stock/SignalRail.test.tsx [2m([22m[2m18 tests[22m[2m)[22m[32m 203[2mms[22m[39m
+ [32m✓[39m src/components/QuoteTable.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m src/components/capital/CapitalConfirmDialog.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 97[2mms[22m[39m
+ [32m✓[39m src/components/index/AdvanceDeclineChart.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+ [32m✓[39m src/components/stock/PriceLadder.test.tsx [2m([22m[2m47 tests[22m[2m)[22m[33m 8816[2mms[22m[39m
+   [33m[2m✓[22m[39m PriceLadder 武裝直送(SC-7)[2m > [22mcode 變更自動解除武裝(symbol_changed) [33m 451[2mms[22m[39m
+   [33m[2m✓[22m[39m PriceLadder 武裝直送(SC-7)[2m > [22mEsc 鍵解除武裝 [33m 352[2mms[22m[39m
+   [33m[2m✓[22m[39m PriceLadder 武裝直送(SC-7)[2m > [22mcapital wsStatus 轉 closed 自動解除(conn_lost;wsStatus store 注入) [33m 495[2mms[22m[39m
+   [33m[2m✓[22m[39m PriceLadder 武裝直送(SC-7)[2m > [22midle 5 分鐘自動解除 [33m 311[2mms[22m[39m
+   [33m[2m✓[22m[39m PriceLadder 武裝直送(SC-7)[2m > [22mqty 快捷同鍵累加 + 手動輸入重置;payload 帶累加後張數 [33m 1033[2mms[22m[39m
+   [33m[2m✓[22m[39m PriceLadder 武裝直送(SC-7)[2m > [22m送單失敗:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除 [33m 695[2mms[22m[39m
+ [32m✓[39m src/components/MetricsBar.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/components/IndexBar.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/components/chart/ChartReadout.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/lib/candle.test.ts [2m([22m[2m63 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/lib/stock-tick.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/lib/stock-intraday-svg.test.ts [2m([22m[2m61 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/hooks/useSignalSound.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/hooks/useContainerSize.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/hooks/useChartToggles.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/hooks/useCapital.test.tsx [2m([22m[2m14 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/components/ConnectionBadge.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/hooks/useSignalAlerts.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/components/ToastStack.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/lib/stock-accum.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/hooks/useTxoSnapshot.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/lib/river-chart-svg.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/lib/candle-viewport.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/lib/watchlist-model.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/lib/futures-ladder.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/lib/api-error.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/lib/volume-profile.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/ladder-position.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/lib/allday.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/lib/oi-levels.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/pnl-svg.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/lib/signal-model.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/lib/fut-chart-mode.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/chart-extreme.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/bollinger.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/sha-plugin.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 1035[2mms[22m[39m
+ [32m✓[39m src/lib/settlement.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/index-chart-svg.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/close-order.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/tquote.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/trading-hours.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/format.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/list-drag.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/stock-search.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/version-drift.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/signal-bus.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/chart-crosshair.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/chart-frame.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/lib/spot-session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/qty-quick.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/lib/trade-text.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/lib/flash-arm.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m95 passed[39m[22m[90m (95)[39m
+[2m      Tests [22m [1m[32m1410 passed[39m[22m[90m (1410)[39m
+[2m   Start at [22m 11:43:05
+[2m   Duration [22m 12.49s[2m (transform 3.14s, setup 0ms, collect 27.87s, tests 63.56s, environment 59.03s, prepare 11.74s)[22m
+

@@ -1,0 +1,4 @@
+{"round": 1, "reviewer": "impl-spec-reviewer(opus)", "date": "2026-08-06",
+ "findings_p0": 0, "findings_p1": 6, "findings_p2": 5,
+ "disposition": "全數 accepted 修入 PLAN v2 + design v2 amendments",
+ "findings": "R1 _ENV_KEY 不在搬移行號段(修:四符號);R2 _Booted/反序 close 缺席(修:入 dataclass+finally 鏈最前);R3 lifespan 未預掛 state.breadth=None → boot 窗 502(修:預掛);R4 create_app 無 data_dir 通道 → 測試落檔真 repo(修:breadth_data_dir 參數);R5 依賴表三處錯(修:T3依T2、T4/T5獨立、T7依T1);R6 disposition 參數名 start/end 錯(修:start_date/end_date+query 斷言測試);R7 分鐘鍵 floor vs 同頁分時圖 floor+1 錯位(修:改用 index_engine.minute_key 域 0901-1330);R8 useBreadth 在 IndexPage 內呼叫波及既有 11 例測試(修:App 層下傳);R9 as_of/trade_date 推導未釘(修:raw rows max_tick_datetime);R10 verify fake 仍過 token 閘 → 無 token 環境 SC-3 通道失效(修:顯式三元組跳閘);R11 測試遷移行號錯含 fixture(修::363-394+:131 retarget 留原檔)"}

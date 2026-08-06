@@ -1,0 +1,25 @@
+{"round": 1, "date": "2026-08-06", "lenses": ["correctness(opus)", "test-coverage(opus)", "missing-from-spec(opus)"],
+ "findings_p0": 0, "findings_p1": 5, "findings_p2": 15,
+ "p1": [
+   {"id": "P1-1", "lens": "correctness", "file": "breadth_engine.py:297-309", "title": "換日清序列與 append 條件不對稱 — 非今日 trade_date 會抹掉當日序列(記憶體+磁碟,有 repro)", "disposition": "accepted → fix(紅先行):清序列僅 new==today;new≠today 且 old 非 None 時不採用日期變更(warning)"},
+   {"id": "P1-2", "lens": "correctness", "file": "breadth_engine.py:279", "title": "as_of/分鐘鍵取自未過濾全快照 max(date),單一髒 row 讓序列塌成一格(有 repro)", "disposition": "accepted → fix(紅先行):max_tick_datetime 加 upper_bound(now+10min),越界 row 忽略"},
+   {"id": "P1-3", "lens": "correctness", "file": "breadth_engine.py:240-275", "title": "maps 24h TTL 用單調鐘不隨交易日換 — 跨日沿用前一日處置名單", "disposition": "accepted → fix(紅先行):TTL 之外加 day != today 失效條件(兩張 map 同修);log 文案「空集合續行」改為實況「保前值」"},
+   {"id": "TC-1", "lens": "test-coverage", "file": "app.py:598-613", "title": "prod DEFAULT_BREADTH 接線零覆蓋(mutation:三元組調序全綠)", "disposition": "accepted → lock test:token 閘兩態 + fetcher 身分比對釘順序"},
+   {"id": "TC-2", "lens": "test-coverage", "file": "breadth_engine.py:79-86,405-418", "title": "restore 形狀防禦零覆蓋(mutation:_is_bucket_row 恆 True 全綠);畸形點會流到前端成 NaN", "disposition": "accepted → lock test:畸形 point 參數化(部分丟棄)+ _save OSError 降級測試"}
+ ],
+ "p2_behavior": [
+   {"id": "P2-1", "disposition": "accepted → fix:boot 未完成時 REST 回載入中語意(enabled=true, counts=null),不回「未設定」"},
+   {"id": "P2-2", "disposition": "accepted → fix(紅先行):退避指數 min 夾制,防 streak>=1024 OverflowError 殺 poll task"},
+   {"id": "P2-3", "disposition": "accepted → fix(紅先行,前端):refetch 全量與 WS 增量競態 — refetch 套 union-by-t 合併"},
+   {"id": "P2-4", "disposition": "accepted → fix:maps 取數失敗加退避(quota 沿 quota_backoff_secs),不以 10s 重打最重 endpoint"},
+   {"id": "P2-5", "disposition": "accepted → fix(前端):BreadthBand 顯示 trade_date,開盤前舊曲線可辨識"},
+   {"id": "TC-3", "disposition": "accepted → test-infra fix:loop 存活傘罩測試注入點移到 _fetch_snapshot 管不到的路徑"},
+   {"id": "TC-4/SPEC-6", "disposition": "accepted → lock test:WS route 層第二則(增量含 last_minute)"},
+   {"id": "TC-5", "disposition": "accepted → parity 測試加 max_tick_datetime 真值兩行斷言"},
+   {"id": "TC-6", "disposition": "accepted → lock test:verify fake 三元組語意 + VERIFY_BREADTH_FAIL 注入"},
+   {"id": "TC-7", "disposition": "accepted → 改鏡像測試為硬編值(或刪)"},
+   {"id": "SPEC-4", "disposition": "accepted → fix:verify fake stamp 域外時 clamp 進 0901-1330,盤後 verify 序列可目視"},
+   {"id": "SPEC-5", "disposition": "accepted → design 字面收斂為「保前值」+ 補「先成功後失敗保前值」測試"}
+ ],
+ "p2_summary": "SPEC-1/2/3/7 文件同步類 4 條彙總:design §6 載入中欄位描述與 restore 實況、VERIFY_DATA_DIR 落檔目錄未記載、VERIFY_BREADTH_FAIL env 未入文件、SC-5 grep 第二處位置與敘述不符 — 主 session 直接修 design/brainstorm/CLAUDE.md,不 dispatch",
+ "refuted": []}

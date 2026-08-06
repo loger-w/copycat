@@ -1,0 +1,10 @@
+{"round": 1, "date": "2026-08-06", "window": "盤中 11:46-12:00",
+ "method": "側車路線(prod 8721 不可重啟且實測未在跑;側車 = fake TXO + 真 FinMind breadth,零 TC4/ZMQ,落檔隔離 data/market-verify-real/)",
+ "results": [
+  {"sc": "SC-1", "verdict": "PASS", "evidence": ["evidence/SC-1_sidecar-first.json", "evidence/SC-1_live-parity.txt"], "note": "盤中三方對照:neigui 現碼 vs copycat 純函式對同 raw rows 十格全等(universe 1954);vs 側車 REST(取樣差 13s)max|diff|=3,與相鄰輪變動量同量級 → 容差判準成立"},
+  {"sc": "SC-2", "verdict": "PASS", "evidence": ["evidence/SC-2_restart-series.txt"], "note": "側車真重啟:4 筆 → restore 逐位元組相同 + 首輪 append = 5 筆,不歸零"},
+  {"sc": "SC-3", "verdict": "PASS", "evidence": ["evidence/SC-3_fail-injection.txt", "evidence/SC-3_edges.txt"], "note": "VERIFY_BREADTH_FAIL 注入 + runtime 翻轉:counts 保前值 + stale=true + 恆 200;txo/health/ws 不受影響;側車 /api/index/state 503 為 index_source=None 設計(與 breadth 無關,對照組證明);真 TC4 指數不受影響的最終確認待 prod 重啟目視"},
+  {"sc": "SC-4", "verdict": "PASS", "evidence": ["evidence/SC-4_full-page.png", "evidence/SC-4_breadth-band.png", "evidence/SC-4_adl-chart.png"], "note": "盤中真數據截圖:兩列五格順序正確、漲停紅底/跌停綠底、戳記 trade_date·as_of、騰落線 0 軸/序列/末值 -266;console 零新增 error;user 過目待收尾"}
+ ],
+ "regressions": "/api/txo/snapshot + /api/health 側車 200;既有 vite dev(5173)未受打擾",
+ "cleanup": "側車 A/B/C 全殺、vite.config.ts 還原、data/market-verify-flip 已清;data/market-verify-real 留檔(gitignored)"}

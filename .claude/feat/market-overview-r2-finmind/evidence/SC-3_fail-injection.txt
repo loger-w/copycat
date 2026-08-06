@@ -1,0 +1,68 @@
+﻿# SC-3 失效域隔離 — 側車 B(port 8722, --verify, VERIFY_BREADTH_FAIL=1)
+# 取樣 2026-08-06 11:48:41  PID=1784
+
+--- GET /api/market/breadth  -> HTTP 200  @11:48:42
+{"enabled":true,"trade_date":null,"as_of":null,"stale":true,"counts":null,"series":[]}
+
+--- GET /api/index/state  -> HTTP 503  @11:48:42
+{"detail":{"error":"NOT_READY"}}
+
+--- GET /api/health  -> HTTP 200  @11:48:42
+{"git_sha":"1122402","git_dirty":true,"started_at":"2026-08-06T11:48:31"}
+
+## 對照組 1:側車 A(8723,同樣 FakeTxoSource 但 breadth 正常)的 /api/index/state
+--- GET :8723/api/index/state -> HTTP 503  @11:49:06
+{"detail":{"error":"NOT_READY"}}
+→ 側車 A 的 breadth 完全正常(見 SC-1),其 /api/index/state 同為 HTTP 503:
+   證明該狀態源自 FakeTxoSource(無真 TC4 推播 → index engine NOT_READY),與 breadth 失敗無關。
+
+## 正向隔離證據:breadth 持續失敗中,TC4 系(fake source 供料)route 照常 200
+--- GET :8722/api/txo/snapshot -> HTTP 200  @11:49:23
+{"series_id":"TXO.202608","series_name":"TXO 202608","status":"live","accumulated_from":"-","generated_at":"11:49:23","spot":{"symbol":"TXF","price":null},"curve":[],"beps":[],"max_profit":null,"max_loss":null,"spot_pnl":null,"contracts":[],"totals":{"call_net_qty":0,"put_net_qty":0,"contracts_active":0,"ticks":0,"unclassified_ticks":0,"unclassified_qty":0,"overlap_risk_ticks":0,"dropped_foreign_ticks":0,"queue_dropped":0},"handover":{"backfill_secs":0.0,"buffer_used":0,"buffer_cap":200000,"buffer_warned":false,"overflows":0}}
+--- GET :8722/api/futures/state -> HTTP 503  @11:49:24
+{"detail":{"error":"NOT_READY"}}
+--- GET :8722/api/market/state -> HTTP 404  @11:49:24
+{"detail":"Not Found"}
+
+## 對照組 2:側車 B 拔掉 VERIFY_BREADTH_FAIL 重啟(PID=27448)@11:51:14
+--- GET :8722/api/market/breadth -> HTTP 200
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:51:04","stale":false,"counts":{"twse":{"limit_up":1,"up":1,"flat":1,"down":1,"limit_down":0},"tpex":{"limit_up":0,"up":1,"flat":0,"down":0,"limit_down":1}},"series":[{"t":"1151","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]},{"t":"1152","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]}]}
+→ 同一支 --verify server、同一組 fake 取數點,只差 env:counts 由 null 變成有值、stale 由 true 變 false。
+   證明 SC-3 的 stale 態確由取數失敗造成,而非 fake 路徑本身就沒資料。
+
+## 補充實驗:runtime 翻轉(側車 C,port 8724,sentinel 開關;PID=304)
+   目的 = 驗 SC-3 的核心語意「counts 保**前值** + stale=true」——冷啟注入只驗得到 counts=null。
+
+--- [健康期] GET :8724/api/market/breadth
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:52:30","stale":false,"counts":{"twse":{"limit_up":1,"up":1,"flat":1,"down":1,"limit_down":0},"tpex":{"limit_up":0,"up":1,"flat":0,"down":0,"limit_down":1}},"series":[{"t":"1152","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]},{"t":"1153","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]}]}
+
+--- 於 11:52:32 建立 sentinel(三個取數點起全拋 BreadthFetchError),等 45s(逾 4 輪)
+
+--- [失效期] GET :8724/api/market/breadth @11:53:18
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:52:30","stale":true,"counts":{"twse":{"limit_up":1,"up":1,"flat":1,"down":1,"limit_down":0},"tpex":{"limit_up":0,"up":1,"flat":0,"down":0,"limit_down":1}},"series":[{"t":"1152","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]},{"t":"1153","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]}]}
+
+--- 同時刻其他 route(失效域是否外溢)
+GET :8724/api/txo/snapshot   -> HTTP 200
+GET :8724/api/health         -> HTTP 200   {"git_sha":"1122402","git_dirty":true,"started_at":"2026-08-06T11:51:50"}
+GET :8724/api/index/state    -> HTTP 503  {"detail":{"error":"NOT_READY"}}  (FakeTxoSource 基線,見對照組 1)
+
+## WS 層(側車 C 失效期中,breadth 取數持續拋錯)
+ws://localhost:8724/ws/index
+  handshake=FAIL ConnectionClosedOK: received 1000 (OK); then sent 1000 (OK)
+
+ws://localhost:8724/ws/breadth
+  handshake=OK  first_frame=230B keys=[as_of,counts,last_minute,stale,trade_date,type]
+  body={"type":"breadth","trade_date":"2026-08-06","as_of":"11:52:30","stale":true,"counts":{"twse":{"limit_up":1,"up":1,"flat":1,"down":1,"limit_down":0},"tpex":{"limit_up":0,"up":1,"flat":0,"down":0,"limit_down":1}},"last_minute":null}
+
+
+## /api/index/state 回 503 的根因(非 breadth 汙染)
+app.py:123-128 sentinel 註解「__main__ 顯式傳入才建真 source(測試不傳 → None → 零連線)」;
+create_app 的 index_source 預設 = None(app.py:291)→ 三台側車皆未建 IndexEngine,
+app.state.index is None → route 依 app.py:975-979 回 503 NOT_READY、/ws/index accept 後即 close(1000)。
+這同時是**盤中紀律的正向證據**:三台側車全程零 TC4/ZMQ 連線(log 無任何 TC4 連線訊息),
+prod 8721 的 IX0001 推播不可能被搶走。因此本輪對「指數不受影響」的取證改以:
+  (a) 對照組 1 —— breadth 健康的側車 A 同樣 503 → 503 與 breadth 無關;
+  (b) 正向隔離 —— breadth 持續拋錯期間 /api/txo/snapshot 200 live、/api/health 200、process 存活、
+      /ws/breadth 正常推 stale 態(見上)。
+真 TC4 指數不受影響的最終確認留 prod 重啟後目視(與既有紀律一致)。
+

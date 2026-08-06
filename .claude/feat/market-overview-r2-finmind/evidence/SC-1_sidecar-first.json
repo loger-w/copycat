@@ -1,0 +1,2 @@
+﻿=== fetched_at 2026-08-06 11:46:16 ===
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:46:09","stale":false,"counts":{"twse":{"limit_up":16,"up":367,"flat":71,"down":620,"limit_down":1},"tpex":{"limit_up":19,"up":355,"flat":93,"down":411,"limit_down":1}},"series":[{"t":"1147","twse":[16,367,71,620,1],"tpex":[19,355,93,411,1]}]}

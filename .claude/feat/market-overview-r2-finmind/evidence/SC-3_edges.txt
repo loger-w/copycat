@@ -1,0 +1,24 @@
+﻿# edge + regression 抽樣 — 側車 A(port 8723,真 FinMind breadth + FakeTxoSource)
+# 取樣 2026-08-06 11:54:55  PID=27896
+
+--- GET :8723/api/market/breadth -> HTTP 200
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:54:49","stale":false,"counts":{"twse":{"limit_up":16,"up":371,"flat":71,"down":616,"limit_down":1},"tpex":{"limit_up":19,"up":358,"flat":91,"down":410,"limit_down":1}},"series":[{"t":"1147","twse":[16,366,72,620,1],"tpex":[19,354,93,412,1]},{"t":"1148","twse":[16,368,72,618,1],"tpex":[19,355,97,407,1]},{"t":"1149","twse":[16,371,71,616,1],"tpex":[19,355,95,409,1]},{"t":"1150","twse":[16,371,75,612,1],"tpex":[19,357,94,408,1]},{"t":"1151","twse":[16,374,72,612,1],"tpex":[18,358,96,406,1]},{"t":"1152","twse":[16,373,73,612,1],"tpex":[19,357,93,409,1]},{"t":"1153","twse":[16,373,71,614,1],"tpex":[18,358,92,410,1]},{"t":"1154","twse":[16,371,71,616,1],"tpex":[19,357,92,410,1]},{"t":"1155","twse":[16,371,71,616,1],"tpex":[19,358,91,410,1]}]}
+
+--- GET :8723/api/txo/snapshot -> HTTP 200
+{"series_id":"TXO.202608","series_name":"TXO 202608","status":"live","accumulated_from":"-","generated_at":"11:54:55","spot":{"symbol":"TXF","price":null},"curve":[],"beps":[],"max_profit":null,"max_loss":null,"spot_pnl":null,"contracts":[],"totals":{"call_net_qty":0,"put_net_qty":0,"contracts_active":0,"ticks":0,"unclassified_ticks":0,"unclassified_qty":0,"overlap_risk_ticks":0,"dropped_foreign_ticks":0,"queue_dropped":0},"handover":{"backfill_secs":0.0,"buffer_used":0,"buffer_cap":200000,"buffer_warned":false,"overflows":0}}
+
+--- GET :8723/api/health -> HTTP 200
+{"git_sha":"1122402","git_dirty":true,"started_at":"2026-08-06T11:50:06"}
+
+--- GET :8723/api/futures/oi-levels -> HTTP 200
+{"date":null,"contract":null,"strikes":[]}
+
+--- WS ws://localhost:8723/ws/breadth(happy path)
+ws://localhost:8723/ws/breadth
+  handshake=OK  first_frame=243B keys=[as_of,counts,last_minute,stale,trade_date,type]
+  body={"type":"breadth","trade_date":"2026-08-06","as_of":"11:54:49","stale":false,"counts":{"twse":{"limit_up":16,"up":371,"flat":71,"down":616,"limit_down":1},"tpex":{"limit_up":19,"up":358,"flat":91,"down":410,"limit_down":1}},"last_minute":null}
+
+
+註:/api/futures/oi-levels 回空 shape(date=null, strikes=[])是 FakeTxoSource 的必然結果 ——
+    該 route 需現價帶才選得出撐壓履約價,而 fake source 的 spot.price=null;非 R2 迴歸。
+註:/ws/breadth 首則為全量 state(last_minute=null),與 REST 同值 → 首則全量契約成立。
