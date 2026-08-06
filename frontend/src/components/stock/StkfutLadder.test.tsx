@@ -24,7 +24,7 @@ const BOOK = {
 };
 const LAST = { p: 100_000, t: "09:10:00.000", cum_vol: 5 };
 
-const CDF_202609: StkfutSelection = { prod: "CDF", ym: "202609", mini: false };
+const CDF_202609: StkfutSelection = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
 /** futExchangeContract("CDF","202609") —— 月碼 I(9 月)+ 年末碼 6 */
 const CDFI6 = "CDFI6";
 
@@ -250,7 +250,7 @@ describe("StkfutLadder 武裝解除鍵 = instrumentKey(R2-5)", () => {
     const { rerender } = render(ladder());
     armUp();
     expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
-    rerender(ladder({ prod: "CDF", ym: "202610", mini: false }));
+    rerender(ladder({ prod: "CDF", ym: "202610", mini: false, unit: 2000 }));
     expect(screen.getByRole("button", { name: "武裝" }).getAttribute("aria-pressed")).toBe("false");
   });
 
@@ -258,7 +258,7 @@ describe("StkfutLadder 武裝解除鍵 = instrumentKey(R2-5)", () => {
     mockCapitalFetch();
     const { rerender } = render(ladder());
     armUp();
-    rerender(ladder({ prod: "QFF", ym: "202609", mini: true }));
+    rerender(ladder({ prod: "QFF", ym: "202609", mini: true, unit: 100 }));
     expect(screen.getByRole("button", { name: "武裝" }).getAttribute("aria-pressed")).toBe("false");
   });
 });
@@ -327,10 +327,11 @@ describe("StkfutLadder 部位條(R2-4)", () => {
   });
 });
 
-// ETF 期貨的契約單位是 10,000 受益權單位,後端 `_stkfut_gates` 一律回
-// PRODUCT_NOT_ALLOWED。前端先擋是為了不讓使用者在真錢面板上按下一個必被拒的鍵。
-describe("StkfutLadder ETF 標的不開放下單(SC-6)", () => {
-  it("ETF 股號 → 武裝鈕 disabled + 文案;點價零請求", () => {
+// 非標準契約單位(ETF 10,000 受益權單位 / 除權息調整契約 2,157)後端 `_stkfut_gates`
+// 一律回 PRODUCT_NOT_ALLOWED。前端先擋是為了不讓使用者在真錢面板上按下一個必被拒的鍵。
+// 🔴 code review B3:判準由「股號 0 開頭」改吃契約單位 —— 與後端同一個判準。
+describe("StkfutLadder 非標準契約單位不開放下單(SC-6)", () => {
+  function blockedBodies() {
     const bodies: unknown[] = [];
     mockCapitalFetch({
       "/api/capital/order/future": (init) => {
@@ -338,20 +339,50 @@ describe("StkfutLadder ETF 標的不開放下單(SC-6)", () => {
         return json(OK_RESULT);
       },
     });
-    render(ladder({ prod: "NYF", ym: "202609", mini: false }, "0050"));
+    return bodies;
+  }
+
+  it("ETF 契約(unit 10000)→ 武裝鈕 disabled + 文案;點價零請求", () => {
+    const bodies = blockedBodies();
+    render(ladder({ prod: "NYF", ym: "202609", mini: false, unit: 10000 }, "0050"));
     const armBtn = screen.getByRole("button", { name: "武裝" });
     expect(armBtn.hasAttribute("disabled")).toBe(true);
-    expect(armBtn.getAttribute("title")).toBe("ETF 期貨下單暫未開放");
+    expect(armBtn.getAttribute("title")).toBe("此契約規格暫未開放下單");
     fireEvent.click(armBtn);
     fireEvent.click(screen.getByLabelText("買 100"));
     expect(bodies.length).toBe(0);
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
   });
 
-  it("一般股號 → 武裝鈕可用(閘不誤傷)", () => {
+  // 舊的股號判準對這一檔是「放行」—— 使用者按下去只會收到一句莫名的「委託失敗」
+  it("除權息調整契約(股號非 0 開頭、unit 2157)→ 一樣擋", () => {
+    const bodies = blockedBodies();
+    render(ladder({ prod: "EEF", ym: "202609", mini: false, unit: 2157 }, "1312"));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByLabelText("買 100"));
+    expect(bodies.length).toBe(0);
+  });
+
+  it("單位不可得(後端查無對映)→ 落回股號 fallback", () => {
     mockCapitalFetch();
-    render(ladder());
+    const { unmount } = render(ladder({ prod: "NYF", ym: "202609", mini: false, unit: null }, "0050"));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(true);
+    unmount();
+    cleanup();
+    mockCapitalFetch();
+    render(ladder({ prod: "CDF", ym: "202609", mini: false, unit: null }));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("標準 / 小型契約單位 → 武裝鈕可用(閘不誤傷)", () => {
+    mockCapitalFetch();
+    const { unmount } = render(ladder());
     expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(false);
+    unmount();
+    cleanup();
+    mockCapitalFetch();
+    render(ladder({ prod: "QFF", ym: "202609", mini: true, unit: 100 }));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
   });
 });

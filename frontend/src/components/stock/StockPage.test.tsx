@@ -711,8 +711,8 @@ describe("StockPage 合約下拉(SC-4)", () => {
   const CONTRACTS = {
     code: "2330",
     name: "台積電",
-    std: { prod: "CDF", contracts: ["202608", "202609"] },
-    mini: { prod: "QFF", contracts: ["202608", "202609"] },
+    std: { prod: "CDF", contracts: ["202608", "202609"], unit: 2000 },
+    mini: { prod: "QFF", contracts: ["202608", "202609"], unit: 100 },
   };
 
   /** 在 beforeEach 的預設 stub 之上補合約端點(其餘路由行為逐字不變) */
@@ -753,7 +753,7 @@ describe("StockPage 合約下拉(SC-4)", () => {
     );
     const select = await screen.findByLabelText("合約");
     fireEvent.change(select, { target: { value: "CDF:202609" } });
-    expect(onContract).toHaveBeenCalledWith({ prod: "CDF", ym: "202609", mini: false });
+    expect(onContract).toHaveBeenCalledWith({ prod: "CDF", ym: "202609", mini: false, unit: 2000 });
   });
 
   it("選小型月 → mini:true(乘數與口數標籤靠它分岔)", async () => {
@@ -763,7 +763,7 @@ describe("StockPage 合約下拉(SC-4)", () => {
       <StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} onContract={onContract} />,
     );
     fireEvent.change(await screen.findByLabelText("合約"), { target: { value: "QFF:202608" } });
-    expect(onContract).toHaveBeenCalledWith({ prod: "QFF", ym: "202608", mini: true });
+    expect(onContract).toHaveBeenCalledWith({ prod: "QFF", ym: "202608", mini: true, unit: 100 });
   });
 
   it("選回現貨 → 上層收到 null", async () => {
@@ -774,7 +774,7 @@ describe("StockPage 合約下拉(SC-4)", () => {
         code="2330"
         onSelect={vi.fn()}
         stream={stream()}
-        contract={{ prod: "CDF", ym: "202609", mini: false }}
+        contract={{ prod: "CDF", ym: "202609", mini: false, unit: 2000 }}
         onContract={onContract}
       />,
     );
@@ -799,7 +799,7 @@ describe("StockPage 合約下拉(SC-4)", () => {
         code="2330"
         onSelect={vi.fn()}
         stream={s}
-        contract={{ prod: "CDF", ym: "202609", mini: false }}
+        contract={{ prod: "CDF", ym: "202609", mini: false, unit: 2000 }}
         onContract={vi.fn()}
       />,
     );
@@ -815,7 +815,7 @@ describe("StockPage 合約下拉(SC-4)", () => {
         code="2330"
         onSelect={vi.fn()}
         stream={stream()}
-        contract={{ prod: "CDF", ym: "202609", mini: false }}
+        contract={{ prod: "CDF", ym: "202609", mini: false, unit: 2000 }}
         onContract={vi.fn()}
       />,
     );
