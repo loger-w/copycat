@@ -2006,6 +2006,74 @@ class TestWatchlistRemovalBookkeeping:
         assert engine.snapshot("9999")["no_data"] is False
         await engine.close()
 
+    async def test_backfill_bookkeeping_restarts_after_a_real_unsubscribe(self) -> None:
+        """E-2:`_backfilled` 是日別記帳,但**真退訂**同樣要讓它作廢。
+
+        清空點只有 rollover stage2 與 reconnect —— 移除再加回之後(`_acquire` 的
+        setdefault 用回同一個舊 state)`code not in self._backfilled` 恆假,
+        `group_snapshot` 的入列 guard 永遠擋著 → 退訂期間的分鐘缺口整天補不回來,
+        而 `backfilling` / `no_data` 都是 False,卡片零訊號地空著。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        assert "2330" in engine._backfilled  # 前提:確實記過帳
+
+        await engine.set_watchlist([])  # 真退訂(自選是唯一 owner)
+        assert "2330" not in engine._refs
+        await engine.set_watchlist(["2330"])  # 重新加回
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+
+        assert src.backfills.count("2330") == 2
+        await engine.close()
+
+    async def test_failure_cooldown_restarts_after_a_real_unsubscribe(self) -> None:
+        """`_backfill_failed` 同構:冷卻計數隨真退訂歸零。
+
+        re-acquire 是使用者驅動(把股票加回自選)、不是重試風暴,所以「當日已失敗
+        3 次」這個判斷跟著訂閱期一起作廢 —— 否則使用者移除再加回也救不了那一格。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        src.backfill_error = ConnectionError("SubHistory 2330 failed")
+        for _ in range(5):
+            engine.group_snapshot(["2330"])
+            await _drain(engine)
+        assert src.backfills.count("2330") == 3  # 前提:當日冷卻確實生效(A2)
+
+        await engine.set_watchlist([])
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+
+        assert src.backfills.count("2330") == 4
+        await engine.close()
+
+    async def test_backfill_bookkeeping_survives_removal_while_main_still_holds(self) -> None:
+        """對照組:仍有 owner(主圖)= 沒真退訂 → 記帳**保留**,不得重補。
+
+        無條件清會讓「移出自選」變成對 TC4 多發一次 SubHistory,而那一檔的當日
+        資料根本沒斷過。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1  # set_main 的入列
+        assert "2330" in engine._backfilled
+
+        await engine.set_watchlist([])
+
+        assert engine._refs["2330"] == {"main"}  # 前提:主圖 owner 還在
+        assert "2330" in engine._backfilled
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        await engine.close()
+
 
 class TestDirtyWatchlistScope:
     """D16:`_dirty_watchlist` 只收自選碼 —— 合約鍵混進去會廣播 code="F:CDF:202609"
