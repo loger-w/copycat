@@ -1,0 +1,53 @@
+
+> copycat-frontend@0.1.0 test
+> vitest run src/lib/signal-model.test.ts --run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/side-project/copycat/frontend[39m
+
+ [31m❯[39m src/lib/signal-model.test.ts [2m([22m[2m22 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 7[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22mCDP 由下往上穿越 = 突破,線名大寫[32m 1[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22mCDP 由上往下穿越 = 跌破[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22mcdp 線顯示「中軸」不是「CDP」(避免 CDP CDP 疊字)[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22m同 tick 多線合併事件以 + 串接(後端固定序,前端不重排)[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22m爆拉 / 爆跌附實際漲跌幅(帶正負號、兩位小數)[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22m爆量附倍率(一位小數)[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22m鎖漲跌停 / 打開依 direction 分中文[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22m全市場鎖板 / 打開依 direction 分中文(SC-8)[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22mpct 缺值不印 NaN(舊後端 / 壞行)[32m 0[2mms[22m[39m
+   [32m✓[39m kindLabel[2m > [22m未知 kind 原樣回傳(新後端 kind 不因前端舊而變空白)[32m 0[2mms[22m[39m
+   [32m✓[39m isMarketKind[2m > [22m兩個 market kind 為 true[32m 0[2mms[22m[39m
+   [32m✓[39m isMarketKind[2m > [22m自選訊號 kind 為 false(限自選的鎖板不是全市場事件)[32m 0[2mms[22m[39m
+[31m   [31m×[31m isMarketKind[2m > [22m非字串 kind 回 false 而不拋(壞 jsonl 行不該讓整頁白屏)[39m[32m 3[2mms[22m[39m
+[31m     → Cannot read properties of null (reading 'startsWith')[39m
+   [32m✓[39m formatToastText[2m > [22m代號 名稱 訊號名 價格(價格毫元轉字串)[32m 0[2mms[22m[39m
+   [32m✓[39m formatToastText[2m > [22m名稱缺值不留雙空格[32m 0[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22m同 time 併列時 live 在前、baseline 在後(穩定排序保留插入序)[32m 1[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22m斷線自癒:baseline 補回的較新訊號排在既有 live 之上(review CC-3)[32m 0[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22mcap 在排序之後才截斷(留下的是最新那些,不是先到的)[32m 0[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22m同 id 只留一筆(WS 已收 + jsonl baseline 重疊)[32m 0[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22mlive 內部自身重複也去重[32m 0[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22m上限 cap(預設 200)截斷尾端[32m 0[2mms[22m[39m
+   [32m✓[39m mergeSignals[2m > [22m空輸入回空陣列[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/lib/signal-model.test.ts[2m > [22misMarketKind[2m > [22m非字串 kind 回 false 而不拋(壞 jsonl 行不該讓整頁白屏)
+[31m[1mTypeError[22m: Cannot read properties of null (reading 'startsWith')[39m
+[36m [2m❯[22m Module.isMarketKind src/lib/signal-model.ts:[2m25:15[22m[39m
+    [90m 23| [39m *  kind 時,前端不必同步改就能維持「不進 toast、不進自選 rail」的分族語意。 */[39m
+    [90m 24| [39m[35mexport[39m [35mfunction[39m [34misMarketKind[39m(kind[33m:[39m string)[33m:[39m boolean {
+    [90m 25| [39m  [35mreturn[39m kind[33m.[39m[34mstartsWith[39m([32m"market_"[39m)[33m;[39m
+    [90m   | [39m              [31m^[39m
+    [90m 26| [39m}
+    [90m 27| [39m
+[90m [2m❯[22m src/lib/signal-model.test.ts:[2m103:24[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m21 passed[39m[22m[90m (22)[39m
+[2m   Start at [22m 23:03:25
+[2m   Duration [22m 423ms[2m (transform 33ms, setup 0ms, collect 55ms, tests 7ms, environment 0ms, prepare 81ms)[22m
+

@@ -1,0 +1,1 @@
+npx eslint src  → exit=0  (無輸出 = PASS)

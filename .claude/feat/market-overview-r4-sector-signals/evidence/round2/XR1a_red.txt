@@ -1,0 +1,74 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+_______ TestSectorState.test_rotation_crash_yields_none_not_stale_value _______
+
+self = <test_breadth_engine.TestSectorState object at 0x000001A7A5D76F10>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2663/test_rotation_crash_yields_non0')
+small_chain = None
+caplog = <_pytest.logging.LogCaptureFixture object at 0x000001A7A5C87A10>
+
+    async def test_rotation_crash_yields_none_not_stale_value(
+        self, tmp_path: Path, small_chain: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """universe 髒列打穿 `compute_sector_rotation` → rotation **None**、不外拋。
+    
+        `compute_sector_rotation` 是 neigui parity 全等搬移(不得在其內加防禦),而它對
+        非數值 `change_rate` 會在 `sum()` 當場 TypeError。沒有這道傘罩,例外會從
+        `_apply` / `_refresh_chain` 兩個呼叫端逃出去,把家數輪(旁支炸掉主線)與 chain
+        task 一起帶走;沿用**舊** rotation 也不行 —— 那會頂著新 as_of 說謊,回 None
+        (= 未就緒)才誠實(review round-2 XR-1a)。
+        """
+        engine = await _ready_engine(tmp_path)
+        assert engine.sector_state()["rotation"] is not None  # 前置:算得出來
+    
+        engine._universe_rows = [
+            {
+                "stock_id": "2330",  # chain_map 內 → 真的會進 `_group_stats`
+                "change_rate": "-",  # 非 None 的髒值:`sum()` 直接 TypeError
+                "total_volume": 1000,
+                "yesterday_volume": 500,
+                "total_amount": 12_345,
+            }
+        ]
+        with caplog.at_level(logging.ERROR, logger="copycat.server.breadth_engine"):
+>           engine._recompute_rotation()
+
+tests\server\test_breadth_engine.py:2278: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+copycat\server\breadth_engine.py:662: in _recompute_rotation
+    self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+copycat\sector_rotation.py:135: in compute_sector_rotation
+    industry_stats = _group_stats(union_ids, universe_by_id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+stock_ids = ['2330', '6488']
+universe_by_id = {'2330': {'stock_id': '2330', 'change_rate': '-', 'total_volume': 1000, 'yesterday_volume': 500, ...}}
+
+    def _group_stats(stock_ids: list[str], universe_by_id: dict[str, dict]) -> dict | None:
+        """一群 stock_id → `{members, avg_change_rate, vol_ratio}`;成員 0 → None。
+    
+        - `members` = `change_rate` 非 None 的成員數(universe 查無的代號同樣剔除)。
+        - vol_ratio **分子分母同步剔除**:缺 `total_volume` 或 `yesterday_volume` 的股
+          整檔不進 Σ —— 只剔分母會讓量比被高估。
+        - 剔除後分母 0 → `vol_ratio` None(members 與 avg 仍成立)。
+        """
+        member_rows: list[dict] = []
+        for sid in _dedup_ids(stock_ids):
+            row = universe_by_id.get(sid)
+            if row is None or row.get("change_rate") is None:
+                continue
+            member_rows.append(row)
+    
+        if not member_rows:
+            return None
+    
+>       avg_change_rate = sum(r["change_rate"] for r in member_rows) / len(member_rows)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: unsupported operand type(s) for +: 'int' and 'str'
+
+copycat\sector_rotation.py:95: TypeError
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestSectorState::test_rotation_crash_yields_none_not_stale_value
+1 failed, 133 deselected in 0.33s

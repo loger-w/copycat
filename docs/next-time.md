@@ -896,3 +896,46 @@
   只在回補真的套用到列時記,或 stage2 後現貨開盤前不接受群組入列。
 - [ ] **補市日(週六)+ 自選空 + 主圖合約仍整天不換日**:checkpoint weekday>=5
   不武裝、無現貨快路徑 tick;極罕見組合(E-3 修法註解已記載)。
+
+## 2026-08-06(R4 round-2 復審 rejected 項與架構級遺留)
+
+review 全文 `.claude/feat/market-overview-r4-sector-signals/code-review-round-2.json`。
+accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
+
+- [ ] **XR-3(架構級,本輪最大遺留):SignalHub 深綁 stock engine**(`app.py
+  _make_signals` 用 `engine._publish`/`daily_bars`/`trade_date`/`quotes` 四處)——
+  達錢 4 沒開時純 FinMind 的廣度事件鏈連同時間軸整條靜默消失(today 503)。
+  R4 只做了「FinMind 掛 → TC4 系零波及」單向隔離,反向沒有。本輪緩解 = FE-1
+  (時間軸把 503 顯示成「訊號服務未就緒」,不再與「今日尚無訊號」同形)。
+  根治 = hub 的 bus/trade_date 與 stock engine 解耦,是獨立 /mod。
+- [ ] **HR-6:WS 事件類訊息丟包無回補**(`ws.py` drop-oldest 對一次性 signal =
+  永久遺失且不斷線,baseline 重抓只掛 onWsOpen)。候選:signal payload 加 seq +
+  前端 gap 偵測觸發 invalidate,或 baseline 盤中週期重抓。R4 把漲停潮日數百則
+  廣度事件灌進同一 per-client 佇列(上限 1000 按 30 檔自選推的),量級重估後再定。
+- [ ] **HR-3:hub close() 逾時路徑可致 jsonl 檔內順序倒置**(cancel 後 to_thread
+  的 OS thread 照樣寫完,_flush_pending 另起 thread 並寫)。後果有界(重啟後最壞
+  補發一則假 open,終態收斂);修法要 thread join 機制,複雜度不成比例,先記著。
+- [ ] **HR-5:`_append_jsonl` 吞 OSError 後無對外可見管道**(`dropped_jsonl` 全
+  repo 零讀取點,/api/health 刻意極簡)。觀測性議題:候選 = health 加 signal 節
+  或 dropped 計數入 /api/stock/signals/today meta。
+- [ ] **EC-1:streak 重試迴圈跨午夜後以 D+1 重算繞過 06:00 武裝閘**——風險窗僅
+  00:00-06:00 且需 FinMind EOD 遲發 >6h(正常 D 日傍晚已發布),`:1121` 的
+  「最新資料日不是昨日」warning 是觀測訊號;擋窗會破壞 R3-BE-3 拍板的跨午夜
+  恢復行為。真踩到再修(修法要同時保住兩個語意)。
+- [ ] **XR-5:08:55-09:00 試撮窗四區塊 gate 互相矛盾**(家數/rows/連板收試撮價,
+  連板判式在試撮漲停上照 +1;騰落線與事件流不收;前端 09:01 才開輪詢 → 試撮
+  快照殘留畫面到 09:01)。要不要排除/標示試撮窗 = 產品語意,待 user 拍板。
+- [ ] **XR-6:後端 `_in_window` 無星期維度**,週末照 10s 打 FinMind(~1,710 次/日,
+  配額安全)。加星期 gate 有週六補市日非對稱風險(rollover 教訓把週六補市當真
+  場景),暫維持現狀。
+- [ ] **XR-7:開盤首輪廣度事件逐則 WS frame → 時間軸 N 則各自重排重繪**(漲停潮
+  日 ~200 則擠在 09:01 一秒)。未 profile 先不動;若真 jank,候選 = hub 批次
+  publish 或前端 buffer 一個 frame 再 setState。
+- [ ] **FE-4:SectorSection 不顯示 trade_date/as_of**(sector-model 有欄位,UI 丟
+  掉;唯一日期戳來自 BreadthBand 的 `_trade_date`,兩者可脫鉤)。加 stamp 是 UI
+  增項,待四輪 user 過目時一併拍板。
+- [ ] **FE-7:產業列每 10s 依 avg 重排,展開/鑽取中的區塊在游標下位移**(誤點成員
+  = setStockCode + set_main,代價不只看錯)。候選 = 鑽取中凍結排序;UX 拍板項。
+- [ ] **XR-2 殘餘:adopt_date=False 時家數帶標頭日期(`_trade_date`)與 counts
+  資料日錯位**——本輪已修 stale 會亮(`_last_success` 不再刷),日期標示要完全
+  誠實需 per-view date(band 用 series 日、counts 用 rows 日),等真的踩到再說。

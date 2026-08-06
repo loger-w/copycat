@@ -1,0 +1,62 @@
+
+> copycat-frontend@0.1.0 test
+> vitest run src/components/index/SectorSection.test.tsx --run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/side-project/copycat/frontend[39m
+
+ [31m❯[39m src/components/index/SectorSection.test.tsx [2m([22m[2m25 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 3632[2mms[22m[39m
+   [32m✓[39m SectorSection 收合閘門[2m > [22m預設收合:body 不 mount、零 fetch[32m 51[2mms[22m[39m
+   [32m✓[39m SectorSection 收合閘門[2m > [22m展開寫入 localStorage,重新 mount 仍展開[32m 29[2mms[22m[39m
+   [32m✓[39m SectorSection 收合閘門[2m > [22m收合把 body unmount 並寫回 0(query 隨之消失)[32m 31[2mms[22m[39m
+   [32m✓[39m SectorSection 產業列[2m > [22m每列印名稱 / 成員數 / 著色漲跌 / 量比,預設全部收合[32m 6[2mms[22m[39m
+   [32m✓[39m SectorSection 產業列[2m > [22m產業排序照後端給的順序(前端不重排)[32m 12[2mms[22m[39m
+   [32m✓[39m SectorSection 產業列[2m > [22m點有子產業的產業列 → 展開 subs(同欄位),再點收合[32m 17[2mms[22m[39m
+   [32m✓[39m SectorSection 成員層(lazy drill-down)[2m > [22m點子產業 → 帶 industry + sub 取成員,表頭四欄[32m 46[2mms[22m[39m
+   [32m✓[39m SectorSection 成員層(lazy drill-down)[2m > [22m點無子產業的產業列 → 直接取成員,URL 不帶 sub[32m 43[2mms[22m[39m
+   [32m✓[39m SectorSection 成員層(lazy drill-down)[2m > [22m成員列點擊 → onOpenStock(SC-3 廣度→深度銜接)[32m 47[2mms[22m[39m
+   [33m[2m✓[22m[39m SectorSection 成員層(lazy drill-down)[2m > [22m成員請求 500 → 成員載入失敗(清單其餘部分照常) [33m 1071[2mms[22m[39m
+   [32m✓[39m SectorSection 成員層(lazy drill-down)[2m > [22m成員回空陣列 → 無成員資料(不是空表格)[32m 62[2mms[22m[39m
+   [32m✓[39m SectorSection 成員層(lazy drill-down)[2m > [22m再點同一個鑽取目標 → 收起成員層[32m 50[2mms[22m[39m
+   [32m✓[39m SectorSection 降級[2m > [22mrotation null → 類股資料未就緒(不是「載入中」也不是空清單)[32m 15[2mms[22m[39m
+   [32m✓[39m SectorSection 降級[2m > [22mindustries 空陣列 → 暫無類股資料(與 rotation null 分流)[32m 16[2mms[22m[39m
+   [32m✓[39m SectorSection 降級[2m > [22menabled=false → FinMind 未設定[32m 16[2mms[22m[39m
+   [32m✓[39m SectorSection 降級[2m > [22mstale=true → 延遲標記,清單照常渲染[32m 16[2mms[22m[39m
+   [32m✓[39m SectorSection 降級[2m > [22mstale=false → 無標記[32m 6[2mms[22m[39m
+   [33m[2m✓[22m[39m SectorSection 降級[2m > [22m已有資料後 refetch 失敗 → 清單保留,改以「更新失敗」膠囊示警 [33m 1028[2mms[22m[39m
+   [33m[2m✓[22m[39m SectorSection 降級[2m > [22mHTTP 失敗 → 載入失敗(不可永遠停在「載入中…」) [33m 1043[2mms[22m[39m
+   [32m✓[39m SectorSection 背景輪詢 gate[2m > [22mactive=false → 展開著也不背景輪詢(掛載仍抓一次)[32m 4[2mms[22m[39m
+   [32m✓[39m SectorSection 背景輪詢 gate[2m > [22mactive 未給 → 預設 true,盤中照 10 秒輪詢[32m 3[2mms[22m[39m
+[31m   [31m×[31m SectorSection 背景輪詢 gate[2m > [22m成員表跟著產業列一起輪詢(盤中 + active)[39m[32m 9[2mms[22m[39m
+[31m     → expected 1 to be 2 // Object.is equality[39m
+   [32m✓[39m SectorSection 背景輪詢 gate[2m > [22mactive=false → 成員表也不背景輪詢(鑽取當下仍抓一次)[32m 5[2mms[22m[39m
+   [32m✓[39m SectorSection 背景輪詢 gate[2m > [22m盤外(週六)→ 成員表不輪詢[32m 4[2mms[22m[39m
+   [32m✓[39m SectorSection 背景輪詢 gate[2m > [22m盤外(週六)→ 展開且 active 也不輪詢[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/components/index/SectorSection.test.tsx[2m > [22mSectorSection 背景輪詢 gate[2m > [22m成員表跟著產業列一起輪詢(盤中 + active)
+[31m[1mAssertionError[22m: expected 1 to be 2 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 2[39m
+[31m+ 1[39m
+
+[36m [2m❯[22m src/components/index/SectorSection.test.tsx:[2m417:33[22m[39m
+    [90m415| [39m    [34mexpect[39m([34mmemberUrls[39m()[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m416| [39m    [35mawait[39m vi[33m.[39m[34madvanceTimersByTimeAsync[39m([34m10_000[39m)[33m;[39m
+    [90m417| [39m    [34mexpect[39m([34mmemberUrls[39m()[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m2[39m)[33m;[39m
+    [90m   | [39m                                [31m^[39m
+    [90m418| [39m  })[33m;[39m
+    [90m419| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m24 passed[39m[22m[90m (25)[39m
+[2m   Start at [22m 23:07:21
+[2m   Duration [22m 4.87s[2m (transform 61ms, setup 0ms, collect 319ms, tests 3.63s, environment 548ms, prepare 93ms)[22m
+

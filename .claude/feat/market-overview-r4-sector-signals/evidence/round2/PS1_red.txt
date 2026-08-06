@@ -1,0 +1,47 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________ TestChainCache.test_truncated_rows_keep_old_map_and_file ___________
+
+self = <test_breadth_engine.TestChainCache object at 0x000001E67A85E8B0>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2659/test_truncated_rows_keep_old_m0')
+mono = <test_breadth_engine.FakeMono object at 0x000001E67BE6B8C0>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x000001E67BE6B620>
+
+    async def test_truncated_rows_keep_old_map_and_file(
+        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """列數低於門檻(上游 200 但截斷)→ **不換表、不落檔、不刷時戳** + 退避。
+    
+        `not chain_map` 擋不住這種殘表:它 parse 得出來、rotation 照算,而換表會把
+        殘表釘進 7 天 TTL 的磁碟快取,重啟後 restore 回同一份 —— 畫面上只是「那些
+        股票的產業歸類消失、類股強弱少幾個業別」,零錯誤訊號(連板路的
+        `_DAILY_MIN_ROWS` 同一道防線)。
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        before = _chain_file(tmp_path).read_text(encoding="utf-8")
+        truncated = [
+            {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "晶圓代工"}
+            for i in range(CHAIN_MIN_ROWS - 1)
+        ]
+        chain = FakeFetch(truncated)
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+    
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+    
+        assert chain.calls == 1
+>       assert engine._chain_map == _CHAIN_MAP  # 舊表原封不動
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert {'半導體': {'晶圓代...'1005', ...]}} == {'半導體': {'晶圓代...造': ['1101']}}
+E         
+E         Differing items:
+E         {'半導體': {'晶圓代工': ['1000', '1001', '1002', '1003', '1004', '1005', ...]}} != {'半導體': {'晶圓代工': ['2330'], '矽晶圓': ['6488']}}
+E         Right contains 1 more item:
+E         {'水泥': {'水泥製造': ['1101']}}
+E         Use -v to get more diff
+
+tests\server\test_breadth_engine.py:1943: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_truncated_rows_keep_old_map_and_file
+1 failed, 129 deselected in 0.66s

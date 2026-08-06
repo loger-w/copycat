@@ -1,0 +1,64 @@
+FFF                                                                      [100%]
+================================== FAILURES ===================================
+_________________ test_non_positive_event_cooldown_raises[0] __________________
+
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2668/test_non_positive_event_cooldo0')
+bad = 0
+
+    @pytest.mark.parametrize("bad", [0, 0.0, -1.0])
+    def test_non_positive_event_cooldown_raises(tmp_path: Path, bad: float) -> None:
+        """\u51b7\u537b \u2264 0 \u8b93\u5ee3\u5ea6\u4e8b\u4ef6\u7684 id \u552f\u4e00\u6027\u5047\u8a2d\u5d29\u6f70 \u2014\u2014 \u503c\u57df\u4e5f\u8981\u9a57,\u4e0d\u53ea\u672a\u77e5\u9375\u3002
+    
+        事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆抑制**全靠**
+        正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上只是「這則沒出現」。
+        """
+        p = tmp_path / "breadth.json"
+        p.write_text(json.dumps({"event_cooldown_secs": bad}), encoding="utf-8")
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_breadth_config.py:90: Failed
+________________ test_non_positive_event_cooldown_raises[0.0] _________________
+
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2668/test_non_positive_event_cooldo1')
+bad = 0.0
+
+    @pytest.mark.parametrize("bad", [0, 0.0, -1.0])
+    def test_non_positive_event_cooldown_raises(tmp_path: Path, bad: float) -> None:
+        """\u51b7\u537b \u2264 0 \u8b93\u5ee3\u5ea6\u4e8b\u4ef6\u7684 id \u552f\u4e00\u6027\u5047\u8a2d\u5d29\u6f70 \u2014\u2014 \u503c\u57df\u4e5f\u8981\u9a57,\u4e0d\u53ea\u672a\u77e5\u9375\u3002
+    
+        事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆抑制**全靠**
+        正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上只是「這則沒出現」。
+        """
+        p = tmp_path / "breadth.json"
+        p.write_text(json.dumps({"event_cooldown_secs": bad}), encoding="utf-8")
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_breadth_config.py:90: Failed
+________________ test_non_positive_event_cooldown_raises[-1.0] ________________
+
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2668/test_non_positive_event_cooldo2')
+bad = -1.0
+
+    @pytest.mark.parametrize("bad", [0, 0.0, -1.0])
+    def test_non_positive_event_cooldown_raises(tmp_path: Path, bad: float) -> None:
+        """\u51b7\u537b \u2264 0 \u8b93\u5ee3\u5ea6\u4e8b\u4ef6\u7684 id \u552f\u4e00\u6027\u5047\u8a2d\u5d29\u6f70 \u2014\u2014 \u503c\u57df\u4e5f\u8981\u9a57,\u4e0d\u53ea\u672a\u77e5\u9375\u3002
+    
+        事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆抑制**全靠**
+        正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上只是「這則沒出現」。
+        """
+        p = tmp_path / "breadth.json"
+        p.write_text(json.dumps({"event_cooldown_secs": bad}), encoding="utf-8")
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_breadth_config.py:90: Failed
+=========================== short test summary info ===========================
+FAILED tests/test_breadth_config.py::test_non_positive_event_cooldown_raises[0]
+FAILED tests/test_breadth_config.py::test_non_positive_event_cooldown_raises[0.0]
+FAILED tests/test_breadth_config.py::test_non_positive_event_cooldown_raises[-1.0]
+3 failed, 8 deselected in 0.09s

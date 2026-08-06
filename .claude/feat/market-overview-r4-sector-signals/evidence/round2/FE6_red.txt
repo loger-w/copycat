@@ -1,0 +1,786 @@
+
+> copycat-frontend@0.1.0 test
+> vitest run src/App.test.tsx --run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/side-project/copycat/frontend[39m
+
+ [31m❯[39m src/App.test.tsx [2m([22m[2m37 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 3035[2mms[22m[39m
+   [32m✓[39m App(index-board T9)[2m > [22m無 localStorage 時預設停在「台股綜合」(index-board SC-1)[32m 53[2mms[22m[39m
+   [32m✓[39m App(index-board T9)[2m > [22m舊 localStorage 值 txo 仍還原到「選擇權」(backward compat)[32m 11[2mms[22m[39m
+   [32m✓[39m App(index-board T9)[2m > [22mnav 有「台股綜合」tab 且 IndexBar 常駐(切到選擇權 tab 仍可見)[32m 18[2mms[22m[39m
+   [33m[2m✓[22m[39m App(index-board T9)[2m > [22mlocalStorage 記住 index tab,重載復原(review B8) [33m 329[2mms[22m[39m
+   [32m✓[39m App(index-board T9)[2m > [22m切到台股綜合 tab 顯示 IndexPage(標的列 + 週期列)[32m 33[2mms[22m[39m
+   [32m✓[39m App 台股綜合 tab 整併(SC-1)[2m > [22m舊 localStorage 值 corr 落到「台股綜合」(值域縮減的刻意遷移)[32m 10[2mms[22m[39m
+   [32m✓[39m App 台股綜合 tab 整併(SC-1)[2m > [22mnav 不再有「相關係數」tab[32m 10[2mms[22m[39m
+   [32m✓[39m App 漲跌停列表跳轉個股(R3 SC-5)[2m > [22m點列 → tab 切到「個股(期)」[32m 61[2mms[22m[39m
+   [32m✓[39m App 漲跌停列表跳轉個股(R3 SC-5)[2m > [22m切離台股綜合 tab → 列表停止背景輪詢(active gate 全鏈)[32m 35[2mms[22m[39m
+   [32m✓[39m App 漲跌停列表跳轉個股(R3 SC-5)[2m > [22m點列 → 個股頁收到該檔(打 /api/stock/state/1101,含 set_main)[32m 40[2mms[22m[39m
+[31m   [31m×[31m App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)[2m > [22m點類股成員列 → tab 切到「個股(期)」且個股頁收到該檔[39m[33m 1039[2mms[22m[39m
+[31m     → Unable to find an element by: [data-testid="sector-member-2603"]
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<div[31m
+      [33mclass[31m=[32m"flex h-full w-full flex-col gap-3 px-4 py-4"[31m
+    [36m>[31m
+      [36m<nav[31m
+        [33maria-label[31m=[32m"主要分頁"[31m
+        [33mclass[31m=[32m"flex items-baseline gap-1 border-b border-line"[31m
+        [33mrole[31m=[32m"tablist"[31m
+      [36m>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"true"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm border border-b-0 border-line bg-surface text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m台股綜合[0m
+        [36m</button>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"false"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m個股(期)[0m
+        [36m</button>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"false"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m選擇權[0m
+        [36m</button>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"false"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m期貨[0m
+        [36m</button>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"ml-auto flex items-baseline gap-3"[31m
+        [36m>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"ml-auto flex items-baseline gap-3"[31m
+          [36m>[31m
+            [36m<span[31m
+              [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+            [36m>[31m
+              [0m加權[0m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-ink"[31m
+              [36m>[31m
+                [0m42039.92[0m
+              [36m</span>[31m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-bear"[31m
+              [36m>[31m
+                [0m-3.65%[0m
+              [36m</span>[31m
+            [36m</span>[31m
+            [36m<span[31m
+              [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+            [36m>[31m
+              [0m櫃買[0m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-ink"[31m
+              [36m>[31m
+                [0m359.8[0m
+              [36m</span>[31m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-bear"[31m
+              [36m>[31m
+                [0m-4.84%[0m
+              [36m</span>[31m
+            [36m</span>[31m
+            [36m<span[31m
+              [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+            [36m>[31m
+              [0m台指 [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-ink"[31m
+              [36m>[31m
+                [0m42142[0m
+              [36m</span>[31m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-bull"[31m
+              [36m>[31m
+                [0m+102.08[0m
+              [36m</span>[31m
+            [36m</span>[31m
+          [36m</div>[31m
+        [36m</div>[31m
+      [36m</nav>[31m
+      [36m<div[31m
+        [33mclass[31m=[32m"flex min-h-0 min-w-0 flex-1 gap-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"flex min-h-0 min-w-0 flex-1 flex-col"[31m
+        [36m>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m""[31m
+            [33mhidden[31m=[32m""[31m
+          [36m>[31m
+            [36m<div[31m
+              [33mclass[31m=[32m"flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"[31m
+            [36m>[31m
+              [36m<header[31m
+                [33mclass[31m=[32m"flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4"[31m
+              [36m>[31m
+                [36m<div[31m
+                  [33mclass[31m=[32m"flex items-baseline gap-3"[31m
+                [36m>[31m
+                  [36m<h1[31m
+                    [33mclass[31m=[32m"text-lg font-bold tracking-wide text-ink"[31m
+                  [36m>[31m
+                    [0m台指選擇權[0m
+                    [36m<span[31m
+                      [33mclass[31m=[32m"text-profit"[31m
+                    [36m>[31m
+                      [0m全市場綜合損益[0m
+                    [36m</span>[31m
+                  [36m</h1>[31m
+                  [36m<span[31m
+                    [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+                  [36m/>[31m
+                [36m</div>[31m
+                [36m<div[31m
+                  [33mclass[31m=[32m"flex items-center gap-3"[31m
+                [36m>[31m
+                  [36m<span[31m
+                    [33mclass[31m=[32m"text-xs text-bull"[31m
+                  [36m>[31m
+                    [0m序列載入失敗:[0m
+                    [0mHTTP_404[0m
+                  [36m</span>[31m
+                  [36m<span[31m
+                    [33mclass[31m=[32m"inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-mono text-xs bg-bull/15 text-bull border-bull/40"[31m
+                  [36m>[31m
+                    [36m<span[31m
+                      [33maria-hidden[31m=[32m"true"[31m
+                      [33mclass[31m=[32m"inline-block size-1.5 rounded-full bg-current"[31m
+                    [36m/>[31m
+                    [0m連線中[0m
+                  [36m</span>[31m
+                [36m</div>[31m
+              [36m</header>[31m
+              [36m<div[31m
+                [33mclass[31m=[32m"flex flex-1 items-center justify-center"[31m
+              [36m>[31m
+                [36m<p[31m
+                  [33mclass[31m=[32m"text-sm text-ink-muted"[31m
+                [36m>[31m
+                  [0m等待伺服器連線…[0m
+                [36m</p>[31m
+              [36m</div>[31m
+            [36m</div>[31m
+          [36m</div>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"flex min-h-0 flex-1 flex-col"[31m
+          [36m>[31m
+            [36m<div[31m
+              [33mclass[31m=[32m"flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto"[31m
+            [36m>[31m
+              [36m<div[31m
+                [33mclass[31m=[32m"flex flex-wrap items-center gap-3"[31m
+              [36m>[31m
+                [36m<span[31m
+                  [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+    ...
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<div[31m
+      [33mclass[31m=[32m"flex h-full w-full flex-col gap-3 px-4 py-4"[31m
+    [36m>[31m
+      [36m<nav[31m
+        [33maria-label[31m=[32m"主要分頁"[31m
+        [33mclass[31m=[32m"flex items-baseline gap-1 border-b border-line"[31m
+        [33mrole[31m=[32m"tablist"[31m
+      [36m>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"true"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm border border-b-0 border-line bg-surface text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m台股綜合[0m
+        [36m</button>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"false"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m個股(期)[0m
+        [36m</button>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"false"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m選擇權[0m
+        [36m</button>[31m
+        [36m<button[31m
+          [33maria-selected[31m=[32m"false"[31m
+          [33mclass[31m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[31m
+          [33mrole[31m=[32m"tab"[31m
+          [33mtype[31m=[32m"button"[31m
+        [36m>[31m
+          [0m期貨[0m
+        [36m</button>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"ml-auto flex items-baseline gap-3"[31m
+        [36m>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"ml-auto flex items-baseline gap-3"[31m
+          [36m>[31m
+            [36m<span[31m
+              [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+            [36m>[31m
+              [0m加權[0m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-ink"[31m
+              [36m>[31m
+                [0m42039.92[0m
+              [36m</span>[31m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-bear"[31m
+              [36m>[31m
+                [0m-3.65%[0m
+              [36m</span>[31m
+            [36m</span>[31m
+            [36m<span[31m
+              [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+            [36m>[31m
+              [0m櫃買[0m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-ink"[31m
+              [36m>[31m
+                [0m359.8[0m
+              [36m</span>[31m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-bear"[31m
+              [36m>[31m
+                [0m-4.84%[0m
+              [36m</span>[31m
+            [36m</span>[31m
+            [36m<span[31m
+              [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+            [36m>[31m
+              [0m台指 [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-ink"[31m
+              [36m>[31m
+                [0m42142[0m
+              [36m</span>[31m
+              [0m [0m
+              [36m<span[31m
+                [33mclass[31m=[32m"text-bull"[31m
+              [36m>[31m
+                [0m+102.08[0m
+              [36m</span>[31m
+            [36m</span>[31m
+          [36m</div>[31m
+        [36m</div>[31m
+      [36m</nav>[31m
+      [36m<div[31m
+        [33mclass[31m=[32m"flex min-h-0 min-w-0 flex-1 gap-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"flex min-h-0 min-w-0 flex-1 flex-col"[31m
+        [36m>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m""[31m
+            [33mhidden[31m=[32m""[31m
+          [36m>[31m
+            [36m<div[31m
+              [33mclass[31m=[32m"flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"[31m
+            [36m>[31m
+              [36m<header[31m
+                [33mclass[31m=[32m"flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4"[31m
+              [36m>[31m
+                [36m<div[31m
+                  [33mclass[31m=[32m"flex items-baseline gap-3"[31m
+                [36m>[31m
+                  [36m<h1[31m
+                    [33mclass[31m=[32m"text-lg font-bold tracking-wide text-ink"[31m
+                  [36m>[31m
+                    [0m台指選擇權[0m
+                    [36m<span[31m
+                      [33mclass[31m=[32m"text-profit"[31m
+                    [36m>[31m
+                      [0m全市場綜合損益[0m
+                    [36m</span>[31m
+                  [36m</h1>[31m
+                  [36m<span[31m
+                    [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+                  [36m/>[31m
+                [36m</div>[31m
+                [36m<div[31m
+                  [33mclass[31m=[32m"flex items-center gap-3"[31m
+                [36m>[31m
+                  [36m<span[31m
+                    [33mclass[31m=[32m"text-xs text-bull"[31m
+                  [36m>[31m
+                    [0m序列載入失敗:[0m
+                    [0mHTTP_404[0m
+                  [36m</span>[31m
+                  [36m<span[31m
+                    [33mclass[31m=[32m"inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-mono text-xs bg-bull/15 text-bull border-bull/40"[31m
+                  [36m>[31m
+                    [36m<span[31m
+                      [33maria-hidden[31m=[32m"true"[31m
+                      [33mclass[31m=[32m"inline-block size-1.5 rounded-full bg-current"[31m
+                    [36m/>[31m
+                    [0m連線中[0m
+                  [36m</span>[31m
+                [36m</div>[31m
+              [36m</header>[31m
+              [36m<div[31m
+                [33mclass[31m=[32m"flex flex-1 items-center justify-center"[31m
+              [36m>[31m
+                [36m<p[31m
+                  [33mclass[31m=[32m"text-sm text-ink-muted"[31m
+                [36m>[31m
+                  [0m等待伺服器連線…[0m
+                [36m</p>[31m
+              [36m</div>[31m
+            [36m</div>[31m
+          [36m</div>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"flex min-h-0 flex-1 flex-col"[31m
+          [36m>[31m
+            [36m<div[31m
+              [33mclass[31m=[32m"flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto"[31m
+            [36m>[31m
+              [36m<div[31m
+                [33mclass[31m=[32m"flex flex-wrap items-center gap-3"[31m
+              [36m>[31m
+                [36m<span[31m
+                  [33mclass[31m=[32m"font-mono text-xs text-ink-dim"[31m
+    ...[39m
+   [32m✓[39m App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)[2m > [22m點訊號時間軸列 → tab 切到「個股(期)」且個股頁收到該檔[32m 54[2mms[22m[39m
+   [32m✓[39m App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)[2m > [22m切離台股綜合 tab → 類股區塊停止背景輪詢(active gate 全鏈)[32m 46[2mms[22m[39m
+   [32m✓[39m App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)[2m > [22m切離台股綜合 tab → 大盤分 K 停止背景輪詢(active gate 全鏈)[32m 31[2mms[22m[39m
+   [33m[2m✓[22m[39m App(capital WS 唯一掛載 review B2)[2m > [22mApp 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線 [33m 380[2mms[22m[39m
+   [32m✓[39m App(期貨 tab T15)[2m > [22mnav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨[32m 12[2mms[22m[39m
+   [32m✓[39m App(期貨 tab T15)[2m > [22m切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)[32m 80[2mms[22m[39m
+   [32m✓[39m App(期貨 tab T15)[2m > [22mlocalStorage copycat-tab=futures 重載復原[32m 42[2mms[22m[39m
+   [32m✓[39m App 版面重構(SC-1 寬度 / SC-3 右欄常駐)[2m > [22mroot 不再有 max-w-6xl 上限,吃滿視窗寬(SC-1)[32m 6[2mms[22m[39m
+   [32m✓[39m App 版面重構(SC-1 寬度 / SC-3 右欄常駐)[2m > [22m右欄在四個主 tab 之間切換時位置固定、三顆 tab 不變(SC-3)[32m 103[2mms[22m[39m
+   [32m✓[39m App 版面重構(SC-1 寬度 / SC-3 右欄常駐)[2m > [22mTXO / 指數 tab 的閃電 tab 顯示「此頁無可下單標的」(D6)[32m 7[2mms[22m[39m
+   [32m✓[39m App 版面重構(SC-1 寬度 / SC-3 右欄常駐)[2m > [22mnav 有 4 顆 tab、右欄有 3 顆,兩者互不干擾[32m 10[2mms[22m[39m
+   [32m✓[39m App 資料流上提(D-3 / D-16)[2m > [22m未訪問個股 tab 時不打 /api/stock/state(D-16:避免無謂 set_main + 全量回補)[32m 6[2mms[22m[39m
+   [32m✓[39m App 資料流上提(D-3 / D-16)[2m > [22m切到個股 tab 後才建立 stock WS 並取 snapshot[32m 29[2mms[22m[39m
+   [32m✓[39m App 資料流上提(D-3 / D-16)[2m > [22mstock WS status=down → 個股頁告警列(W-B5 文案逐字不變;自 StockPage.test 上移)[32m 26[2mms[22m[39m
+   [32m✓[39m App 資料流上提(D-3 / D-16)[2m > [22m期貨商品選擇寫入 localStorage(自 FuturesPage.test 上移:state 已上提到 App)[32m 61[2mms[22m[39m
+   [32m✓[39m App localStorage key 遷移 / 孤兒清除[2m > [22m新 key 有值時優先採用,不被舊 key 的殘值蓋回去[32m 17[2mms[22m[39m
+   [32m✓[39m App localStorage key 遷移 / 孤兒清除[2m > [22m只有舊 key 有值 → 搬到新 key 且舊 key 被移除(一次性遷移)[32m 4[2mms[22m[39m
+   [32m✓[39m App localStorage key 遷移 / 孤兒清除[2m > [22m新舊都有值 → 採新值,舊 key 照樣被清掉(雙分頁升版會把舊 key 寫回)[32m 5[2mms[22m[39m
+   [32m✓[39m App localStorage key 遷移 / 孤兒清除[2m > [22mpurgeOrphanKeys 清掉孤兒鍵(stock-ladder-open / stock-wl-group)[32m 0[2mms[22m[39m
+   [32m✓[39m App 版本落差膠囊落點(SC-4)[2m > [22m落差態:膠囊在 nav 內、與 IndexBar 同在單一 ml-auto 容器,且排在其左[32m 41[2mms[22m[39m
+   [32m✓[39m App 版本落差膠囊落點(SC-4)[2m > [22m健康態(behind=false):nav 內零膠囊[32m 15[2mms[22m[39m
+   [32m✓[39m App 訊號 toast(SC-10)[2m > [22m預設 tab(台股綜合)收到訊號 → toast 出現[32m 8[2mms[22m[39m
+   [32m✓[39m App 訊號 toast(SC-10)[2m > [22m切到期貨 tab 後照樣跳 toast(跨 tab 常駐)[32m 55[2mms[22m[39m
+   [32m✓[39m App 訊號 toast(SC-10)[2m > [22m沒有訊號時不掛空容器(fixed 空盒子會壓住右上角元件)[32m 7[2mms[22m[39m
+   [32m✓[39m App 個股期合約選擇(SC-4)[2m > [22m換股重置合約:新股的 snapshot 不帶舊合約[32m 230[2mms[22m[39m
+   [32m✓[39m App 個股期合約選擇(SC-4)[2m > [22mrailCtx.code 恆為股號(期貨態右欄仍指認 2330,不是 instrument key)[32m 120[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mApp 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)[2m > [22m點類股成員列 → tab 切到「個股(期)」且個股頁收到該檔
+[31m[1mTestingLibraryElementError[22m[39m: Unable to find an element by: [data-testid="sector-member-2603"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex h-full w-full flex-col gap-3 px-4 py-4"[39m
+    [36m>[39m
+      [36m<nav[39m
+        [33maria-label[39m=[32m"主要分頁"[39m
+        [33mclass[39m=[32m"flex items-baseline gap-1 border-b border-line"[39m
+        [33mrole[39m=[32m"tablist"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"true"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm border border-b-0 border-line bg-surface text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m台股綜合[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m個股(期)[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m選擇權[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m期貨[0m
+        [36m</button>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"ml-auto flex items-baseline gap-3"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"ml-auto flex items-baseline gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+            [36m>[39m
+              [0m加權[0m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-ink"[39m
+              [36m>[39m
+                [0m42039.92[0m
+              [36m</span>[39m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-bear"[39m
+              [36m>[39m
+                [0m-3.65%[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+            [36m>[39m
+              [0m櫃買[0m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-ink"[39m
+              [36m>[39m
+                [0m359.8[0m
+              [36m</span>[39m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-bear"[39m
+              [36m>[39m
+                [0m-4.84%[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+            [36m>[39m
+              [0m台指 [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-ink"[39m
+              [36m>[39m
+                [0m42142[0m
+              [36m</span>[39m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-bull"[39m
+              [36m>[39m
+                [0m+102.08[0m
+              [36m</span>[39m
+            [36m</span>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</nav>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex min-h-0 min-w-0 flex-1 gap-4"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex min-h-0 min-w-0 flex-1 flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m""[39m
+            [33mhidden[39m=[32m""[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"[39m
+            [36m>[39m
+              [36m<header[39m
+                [33mclass[39m=[32m"flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex items-baseline gap-3"[39m
+                [36m>[39m
+                  [36m<h1[39m
+                    [33mclass[39m=[32m"text-lg font-bold tracking-wide text-ink"[39m
+                  [36m>[39m
+                    [0m台指選擇權[0m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"text-profit"[39m
+                    [36m>[39m
+                      [0m全市場綜合損益[0m
+                    [36m</span>[39m
+                  [36m</h1>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+                  [36m/>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex items-center gap-3"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"text-xs text-bull"[39m
+                  [36m>[39m
+                    [0m序列載入失敗:[0m
+                    [0mHTTP_404[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-mono text-xs bg-bull/15 text-bull border-bull/40"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"inline-block size-1.5 rounded-full bg-current"[39m
+                    [36m/>[39m
+                    [0m連線中[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+              [36m</header>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-1 items-center justify-center"[39m
+              [36m>[39m
+                [36m<p[39m
+                  [33mclass[39m=[32m"text-sm text-ink-muted"[39m
+                [36m>[39m
+                  [0m等待伺服器連線…[0m
+                [36m</p>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex min-h-0 flex-1 flex-col"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-wrap items-center gap-3"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+    ...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex h-full w-full flex-col gap-3 px-4 py-4"[39m
+    [36m>[39m
+      [36m<nav[39m
+        [33maria-label[39m=[32m"主要分頁"[39m
+        [33mclass[39m=[32m"flex items-baseline gap-1 border-b border-line"[39m
+        [33mrole[39m=[32m"tablist"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"true"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm border border-b-0 border-line bg-surface text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m台股綜合[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m個股(期)[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m選擇權[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"rounded-t px-3 py-1.5 text-sm text-ink-dim hover:text-ink"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0m期貨[0m
+        [36m</button>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"ml-auto flex items-baseline gap-3"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"ml-auto flex items-baseline gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+            [36m>[39m
+              [0m加權[0m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-ink"[39m
+              [36m>[39m
+                [0m42039.92[0m
+              [36m</span>[39m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-bear"[39m
+              [36m>[39m
+                [0m-3.65%[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+            [36m>[39m
+              [0m櫃買[0m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-ink"[39m
+              [36m>[39m
+                [0m359.8[0m
+              [36m</span>[39m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-bear"[39m
+              [36m>[39m
+                [0m-4.84%[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+            [36m>[39m
+              [0m台指 [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-ink"[39m
+              [36m>[39m
+                [0m42142[0m
+              [36m</span>[39m
+              [0m [0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-bull"[39m
+              [36m>[39m
+                [0m+102.08[0m
+              [36m</span>[39m
+            [36m</span>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</nav>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex min-h-0 min-w-0 flex-1 gap-4"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex min-h-0 min-w-0 flex-1 flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m""[39m
+            [33mhidden[39m=[32m""[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"[39m
+            [36m>[39m
+              [36m<header[39m
+                [33mclass[39m=[32m"flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex items-baseline gap-3"[39m
+                [36m>[39m
+                  [36m<h1[39m
+                    [33mclass[39m=[32m"text-lg font-bold tracking-wide text-ink"[39m
+                  [36m>[39m
+                    [0m台指選擇權[0m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"text-profit"[39m
+                    [36m>[39m
+                      [0m全市場綜合損益[0m
+                    [36m</span>[39m
+                  [36m</h1>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+                  [36m/>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex items-center gap-3"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"text-xs text-bull"[39m
+                  [36m>[39m
+                    [0m序列載入失敗:[0m
+                    [0mHTTP_404[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-mono text-xs bg-bull/15 text-bull border-bull/40"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"inline-block size-1.5 rounded-full bg-current"[39m
+                    [36m/>[39m
+                    [0m連線中[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+              [36m</header>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-1 items-center justify-center"[39m
+              [36m>[39m
+                [36m<p[39m
+                  [33mclass[39m=[32m"text-sm text-ink-muted"[39m
+                [36m>[39m
+                  [0m等待伺服器連線…[0m
+                [36m</p>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex min-h-0 flex-1 flex-col"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-wrap items-center gap-3"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"font-mono text-xs text-ink-dim"[39m
+    ...
+[90m [2m❯[22m waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:[2m163:27[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m86:33[22m[39m
+[36m [2m❯[22m openSectorMember src/App.test.tsx:[2m309:25[22m[39m
+    [90m307| [39m    [90m// 單層產業 → 點產業列即鑽成員(沒有可展開的下一層)[39m
+    [90m308| [39m    fireEvent[33m.[39m[34mclick[39m([35mawait[39m screen[33m.[39m[34mfindByTestId[39m([32m"sector-row-btn-航運"[39m))[33m;[39m
+    [90m309| [39m    [35mreturn[39m [35mawait[39m screen[33m.[39m[34mfindByTestId[39m([32m"sector-member-2603"[39m)[33m;[39m
+    [90m   | [39m                        [31m^[39m
+    [90m310| [39m  }
+    [90m311| [39m
+[90m [2m❯[22m src/App.test.tsx:[2m321:21[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m36 passed[39m[22m[90m (37)[39m
+[2m   Start at [22m 23:10:50
+[2m   Duration [22m 4.32s[2m (transform 380ms, setup 0ms, collect 485ms, tests 3.03s, environment 475ms, prepare 83ms)[22m
+
