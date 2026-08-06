@@ -1,0 +1,53 @@
+# Phase 7 真實環境驗證 curl 全文(2026-08-06,側車 server port 8899)
+# harness:scratchpad capital_side_server.py(FakeCom + FakeQuoteSource +
+# neutralize_external_env();對映表 = 版控真檔 copycat/stkfut_map.json)
+
+$ curl -s http://127.0.0.1:8899/api/capital/status
+{"status":"ok","env":"test","account_masked":"****890A","futures_account_masked":"****9999","order_enabled":true}
+
+$ curl -s -X POST "http://127.0.0.1:8899/debug/seed-fut-order?seq=00000000021&contract=CDFI6"
+{"seeded":"00000000021","contract":"CDFI6"}
+
+## C-1 happy:個股期送單走期貨通道(is_option=False)
+$ curl -s -X POST http://127.0.0.1:8899/api/capital/order/future \
+    -d '{"tc4_symbol":"TC.F.TWF.CDF.202609","buy_sell":"buy","price":1180.0,"qty":1,"price_type":"limit","time_in_force":"ROD"}'
+{"ok":true,"code":0,"message":"成功 SEQF001","seq_no":"SEQF001"}
+
+$ curl -s http://127.0.0.1:8899/debug/com-sent   # ← tuple 第三欄 = is_option
+"('future', {'bstrFullAccount': 'F9999999', 'bstrStockNo': 'CDFI6', 'bstrPrice': '1180',
+  'sTradeType': 0, 'sBuySell': 0, 'sDayTrade': 0, 'sNewClose': 2, 'nQty': 1}, False)"
+
+## C-2 E1:個股期活單改非法檔位(1180.5,1000 元段 tick=5)→ 400,COM 未收到
+$ curl -s -w "\nHTTP %{http_code}" -X POST .../api/capital/order/correct-price \
+    -d '{"seq_no":"00000000021","market":"fut","price":1180.5}'
+{"detail":{"error":"BAD_TICK"}}
+HTTP 400
+
+## C-2 H1:同單改合法檔位 → 200
+$ ... -d '{"seq_no":"00000000021","market":"fut","price":1185.0}'
+{"ok":true,"code":0,"message":"成功 OK","seq_no":"OK"}
+HTTP 200
+
+## C-2 E2:store 查無 seq → 放行(R3 逃生口)
+$ ... -d '{"seq_no":"99999999999","market":"fut","price":1180.5}'
+{"ok":true,"code":0,"message":"成功 OK","seq_no":"OK"}
+HTTP 200
+
+## C-2 E3:指數期貨單改價不驗(scope 限個股期)
+$ curl -s -X POST ".../debug/seed-fut-order?seq=00000000022&contract=TXFI6"
+$ ... -d '{"seq_no":"00000000022","market":"fut","price":23000.37}'
+{"ok":true,"code":0,"message":"成功 OK","seq_no":"OK"}
+HTTP 200
+
+## regression 抽查:證券送單 / GET orders
+$ ... /api/capital/order/stock -d '{"stock_no":"2330","buy_sell":"buy","price":590.0,"qty":1}'
+{"ok":true,"code":0,"message":"成功 SEQ0001","seq_no":"SEQ0001"}
+HTTP 200
+$ curl -s .../api/capital/orders   → 200,兩筆 TF 委託欄位正常
+
+## 最終 com-sent(佐證 E1 的 1180.5@seq21 從未到 COM;E2/E3/H1 都有到)
+('future', {...CDFI6...}, False)
+('correct_price', 'F9999999', '00000000021', '1185')
+('correct_price', 'F9999999', '99999999999', '1180.5')
+('correct_price', 'F9999999', '00000000022', '23000.37')
+('stock', {...2330...})
