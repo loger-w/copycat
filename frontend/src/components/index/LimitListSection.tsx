@@ -409,7 +409,9 @@ function LimitListBody({
                   className="cursor-pointer border-b border-line/50 hover:bg-bg-deep"
                 >
                   <td className="px-2 py-1 font-mono text-ink">{row.stock_id}</td>
-                  <td className="px-2 py-1 text-ink">{row.name}</td>
+                  <td data-testid={`limit-name-${row.stock_id}`} className="px-2 py-1 text-ink">
+                    {row.name}
+                  </td>
                   <td
                     data-testid={`limit-market-${row.stock_id}`}
                     className="px-2 py-1 text-ink-muted"

@@ -308,6 +308,29 @@ describe("LimitListSection 表格內容", () => {
     expect(down.getAttribute("class")).toContain("text-bear");
   });
 
+  // R3-T4:SC-3 的「哪幾檔」= 代號 **與名稱**;表頭九欄是這張表的欄位契約(design §5.2)。
+  // 兩者原本零斷言 —— 名稱欄整欄改錯 / 少一欄 / 欄序調換都不會有任何測試變紅。
+  it("名稱欄印個股名稱", async () => {
+    await openWith(mkState(ROWS));
+    expect(screen.getByTestId("limit-name-1101").textContent).toBe("台泥");
+    expect(screen.getByTestId("limit-name-6488").textContent).toBe("名6488");
+  });
+
+  it("表頭九欄文字與順序", async () => {
+    await openWith(mkState(ROWS));
+    expect(screen.getAllByRole("columnheader").map((el) => el.textContent)).toEqual([
+      "代號",
+      "名稱",
+      "市場",
+      "現價",
+      "漲跌幅",
+      "連板",
+      "金額(億)",
+      "量比",
+      "狀態",
+    ]);
+  });
+
   it("市場欄印上市 / 上櫃", async () => {
     await openWith(mkState(ROWS));
     expect(screen.getByTestId("limit-market-1101").textContent).toBe("上市");
