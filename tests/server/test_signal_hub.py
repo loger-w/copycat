@@ -194,6 +194,24 @@ class _GatedBars(_FakeBars):
         return await super().__call__(code, n)
 
 
+class _FlakyBars(_FakeBars):
+    """前 `fail_times` 次拋例外(連線 / 傳輸層抖動),之後正常回 bars。
+
+    X-2b 的分流前提:同一個 code 的同一天,失敗與成功可以在幾十秒內先後發生 ——
+    `_FakeBars(error=True)` 的「永遠失敗」測不到這件事。
+    """
+
+    def __init__(self, bars: list[DailyBar] | None = None, *, fail_times: int = 1) -> None:
+        super().__init__(bars)
+        self.fail_times = fail_times
+
+    async def __call__(self, code: str, n: int = 25) -> list[DailyBar]:
+        if len(self.calls) < self.fail_times:
+            self.calls.append((code, n))
+            raise ConnectionError("TC4 連線抖動")
+        return await super().__call__(code, n)
+
+
 def _boom_cdp(*_args: int) -> dict[str, int]:
     raise RuntimeError("compute_cdp 壞了")
 
@@ -349,6 +367,18 @@ async def _wait_rows(h: _Harness, n: int, timeout: float = 2.0) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError(f"jsonl 只落了 {len(h.rows())} 筆,等不到 {n} 筆")
+
+
+async def _wait_calls(bars: _FakeBars, n: int, timeout: float = 2.0) -> None:
+    """等 daily_bars 被打到第 n 次 —— 重試是**延遲入列**的,不在 `settle()` 的射程內
+    (job 已 `task_done`,佇列是空的,`join()` 立刻返回)。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if len(bars.calls) >= n:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"daily_bars 只被打了 {len(bars.calls)} 次,等不到 {n} 次")
 
 
 @pytest.fixture
@@ -1184,6 +1214,78 @@ class TestBasisWorker:
             h.cross_nh(_state())
             await h.settle()
             assert h.published == []
+        finally:
+            await h.hub.close()
+
+
+class TestBasisRetry:
+    """X-2b:例外(連線 / 傳輸層,暫時性)有限重試;資料面的空 bars 不重試。
+
+    落 None 是**整天**的決定(當日不再重抓),而 basis sweep 逐檔間隔只有 0.2s ——
+    一次連線抖動可以在數秒內把十幾檔的 CDP 停掉一整天,而畫面只是「規則沒發」。
+    """
+
+    async def test_transient_failure_retried_until_success(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        bars = _FlakyBars([_BAR_A], fail_times=1)
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await _wait_calls(bars, 2)
+            await h.settle()
+            assert _cache(h) == (_DATE, 80_000), "第一次失敗就把當天的 CDP 定死了"
+            h.cross_nh(_state())
+            await h.settle()
+            assert [m["levels"] for m in h.published] == [["nh"]]
+        finally:
+            await h.hub.close()
+
+    async def test_retry_capped_then_basis_none(self, tmp_path: Path, clock: _Clock) -> None:
+        """連續失敗 = 不是抖動:重試上限後落 None 定格,不得無限重打 TC4。"""
+        bars = _FakeBars([_BAR_A], error=True)
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await _wait_calls(bars, 3)
+            await h.settle()
+            assert _cache(h) == (_DATE, None)
+            await asyncio.sleep(0.05)
+            assert len(bars.calls) == 3, "重試沒有上限"
+        finally:
+            await h.hub.close()
+
+    async def test_empty_bars_not_retried(self, tmp_path: Path, clock: _Clock) -> None:
+        """新上市無歷史日 K = 資料面的答案,重抓一百次也一樣 —— 不重試。"""
+        bars = _FakeBars([])
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            assert _cache(h) == (_DATE, None)
+            await asyncio.sleep(0.05)
+            assert len(bars.calls) == 1, "空 bars 也重試 = 白打 TC4"
+        finally:
+            await h.hub.close()
+
+    async def test_stale_retry_job_discarded_after_rollover(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """重試 job 帶原 basis_date 走同一條佇列 → 跨日後由 `_stale` 丟棄,不打 TC4。"""
+        bars = _FakeBars([_BAR_A], error=True)
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.1)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await _wait_calls(bars, 1)
+            await h.settle()
+            h.date = _NEXT  # 重試還沒入列就換日了
+            await asyncio.sleep(0.25)
+            await h.settle()
+            assert len(bars.calls) == 1, "過期的重試 job 仍去打了 TC4"
         finally:
             await h.hub.close()
 
