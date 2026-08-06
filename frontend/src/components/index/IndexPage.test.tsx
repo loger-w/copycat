@@ -274,3 +274,25 @@ describe("IndexPage 漲跌停列表落點(R3 SC-3)", () => {
     expect(list.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+// 🟢 台股綜合 R4(SC-3):類股強弱落在漲跌停列表與相關係數之間。
+// 本檔只驗**落點**(元件自身行為在 SectorSection.test.tsx)—— 區塊預設收合 = body 不
+// mount、零 fetch,所以這裡不需要 sector 的 stub。
+describe("IndexPage 類股強弱落點(R4 SC-3)", () => {
+  it("(h) 類股強弱區塊在頁面內,預設收合", () => {
+    renderPage(TXF, BREADTH);
+    expect(screen.getByTestId("sector-section")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /類股強弱/ }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+  });
+
+  it("(h2) 類股強弱位於漲跌停列表之後、相關係數區塊之前", () => {
+    renderPage(TXF, BREADTH);
+    const list = screen.getByTestId("limit-list");
+    const sector = screen.getByTestId("sector-section");
+    const corr = screen.getByRole("button", { name: /相關係數/ });
+    expect(list.compareDocumentPosition(sector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(sector.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
