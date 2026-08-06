@@ -1,0 +1,26 @@
+﻿# SC-2 重啟序列不歸零 — 側車 A(port 8723,真 FinMind,落檔 data/market-verify-real/)
+
+## [1] 重啟前 @11:50:04  PID=4120
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:49:50","stale":false,"counts":{"twse":{"limit_up":16,"up":371,"flat":75,"down":612,"limit_down":1},"tpex":{"limit_up":19,"up":357,"flat":94,"down":408,"limit_down":1}},"series":[{"t":"1147","twse":[16,366,72,620,1],"tpex":[19,354,93,412,1]},{"t":"1148","twse":[16,368,72,618,1],"tpex":[19,355,97,407,1]},{"t":"1149","twse":[16,371,71,616,1],"tpex":[19,355,95,409,1]},{"t":"1150","twse":[16,371,75,612,1],"tpex":[19,357,94,408,1]}]}
+series 筆數(重啟前) = 4   分鐘鍵 = 1147,1148,1149,1150
+
+## [2] 落檔內容(kill 前)
+{"_version": 1, "trade_date": "2026-08-06", "series": [{"t": "1147", "twse": [16, 366, 72, 620, 1], "tpex": [19, 354, 93, 412, 1]}, {"t": "1148", "twse": [16, 368, 72, 618, 1], "tpex": [19, 355, 97, 407, 1]}, {"t": "1149", "twse": [16, 371, 71, 616, 1], "tpex": [19, 355, 95, 409, 1]}, {"t": "1150", "twse": [16, 371, 75, 612, 1], "tpex": [19, 357, 94, 408, 1]}]}
+
+## [3] kill PID=4120 @11:50:04
+## [4] 重啟 新 PID=27896 @11:50:06
+
+## [5] 重啟後首輪 @11:50:32  PID=27896
+{"enabled":true,"trade_date":"2026-08-06","as_of":"11:50:20","stale":false,"counts":{"twse":{"limit_up":16,"up":376,"flat":71,"down":611,"limit_down":1},"tpex":{"limit_up":18,"up":358,"flat":96,"down":406,"limit_down":1}},"series":[{"t":"1147","twse":[16,366,72,620,1],"tpex":[19,354,93,412,1]},{"t":"1148","twse":[16,368,72,618,1],"tpex":[19,355,97,407,1]},{"t":"1149","twse":[16,371,71,616,1],"tpex":[19,355,95,409,1]},{"t":"1150","twse":[16,371,75,612,1],"tpex":[19,357,94,408,1]},{"t":"1151","twse":[16,376,71,611,1],"tpex":[18,358,96,406,1]}]}
+series 筆數(重啟後) = 5   分鐘鍵 = 1147,1148,1149,1150,1151
+
+## 判定:重啟前 4 筆 → 重啟後 5 筆  =>  PASS(序列未歸零,restore + 首輪 append)
+
+## [6] 重啟後 server log(restore 相關)
+(註:server log 為 UTF-8 中文,PowerShell 讀出為 mojibake,以下為原始 tail 20 行)
+INFO:     Started server process [19056]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8723 (Press CTRL+C to quit)
+
+## 佐證:重啟後 1147-1150 四筆數值與 kill 前落檔逐字節相同 → 確為 restore 而非重算。

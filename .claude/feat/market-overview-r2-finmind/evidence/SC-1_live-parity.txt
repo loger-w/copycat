@@ -1,0 +1,37 @@
+# SC-1 盤中三方對照  日期=2026-08-06
+
+raw rows: snapshot=2865 stock_info=4300 disposition=235
+取樣時刻: stock_info@11:47:21  snapshot@11:47:21~11:47:22  sidecar_curl@11:47:22~11:47:24
+側車回報 as_of=11:47:09 trade_date=2026-08-06 stale=False enabled=True series_len=2
+
+universe 大小: neigui=1954  copycat=1954
+
+market/bucket         A neigui  B copycat  C sidecar   A-B   B-C
+----------------------------------------------------------------
+twse.limit_up               16         16         16     0     0
+twse.up                    368        368        367     0     1
+twse.flat                   70         70         73     0    -3
+twse.down                  620        620        618     0     2
+twse.limit_down              1          1          1     0     0
+tpex.limit_up               18         18         19     0    -1
+tpex.up                    356        356        355     0     1
+tpex.flat                   94         94         93     0     1
+tpex.down                  410        410        411     0    -1
+tpex.limit_down              1          1          1     0     0
+
+A vs B(同輸入跨 codebase pipeline):全等 PASS
+B vs C(取樣時刻差):max|diff|=3  全等格數=3/10
+
+判準:A==B 證明兩 codebase 對同一份 raw rows 算出全等十格;B vs C 的殘差來自
+      側車自己那輪 snapshot 與本腳本 snapshot 的取樣時刻差(盤中價格持續變動)。
+
+## 附錄:側車連續輪次 counts(當作「同分鐘變動量」基準,每輪間隔 10s)
+
+as_of     twLU  twU  twF  twDtwLD | tpLU  tpU  tpF  tpDtpLD
+11:47:30    16  367   71  620   1 |   18  356   94  410   1
+11:47:39    16  366   72  620   1 |   19  355   95  409   1
+11:47:39    16  366   72  620   1 |   19  355   95  409   1
+11:47:55    16  368   72  618   1 |   19  355   97  407   1
+11:47:55    16  368   72  618   1 |   19  355   97  407   1
+
+觀察:相鄰輪次(10s)逐格變動量與上表 B-C 殘差同量級 → SC-1 容差判準成立。
