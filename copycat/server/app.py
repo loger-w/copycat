@@ -18,11 +18,18 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from copycat.live.trade_models import BrokerRejectedError
+from copycat.breadth_config import load_breadth_config
 from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
-from copycat.server import build_info
+from copycat.server import build_info, breadth_fetch, finmind_token
 from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
+from copycat.server.breadth_engine import (
+    BreadthEngine,
+    DispositionFetch,
+    SnapshotFetch,
+    StockInfoFetch,
+)
 from copycat.server.capital_api import register_capital
 from copycat.server.oi_levels import register_oi
 from copycat.server.ws import WsBroadcaster, relay
@@ -118,6 +125,10 @@ DEFAULT_STOCK: Final = object()  # __main__ 傳入才建真 StockQuoteSource
 DEFAULT_INDEX: Final = object()  # 同語意(index-board IR9)
 DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
 DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
+DEFAULT_BREADTH: Final = object()  # 同語意(market-overview R2 SC-3;→ 真 FinMind 取數層)
+
+#: breadth 引擎的注入點三元組(snapshot / stock_info / disposition)。
+BreadthFetchers = tuple[SnapshotFetch, StockInfoFetch, DispositionFetch]
 
 
 class SelectBody(BaseModel):
@@ -237,6 +248,7 @@ class _Booted:
     capital: CapitalClient | None = None
     futures: FuturesEngine | None = None
     corr: CorrelationEngine | None = None
+    breadth: BreadthEngine | None = None
 
 
 def _default_source() -> QuoteSource:
@@ -279,6 +291,8 @@ def create_app(
     index_source: IndexSource | object | None = None,
     futures_source: FuturesSource | object | None = None,
     corr_source: CorrSource | object | None = None,
+    breadth_fetchers: BreadthFetchers | object | None = None,
+    breadth_data_dir: Path | None = None,
     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
     stock_names_path: Path | None = None,
@@ -311,7 +325,8 @@ def create_app(
         # 未 started 的 runtime 照樣掛上去:route 對它的 None 沒有 guard,但「已建構
         # 未 started」本來就走既有 NOT_READY / 空鏈語意(current-state §4),不需新分支
         app.state.runtime = runtime
-        # 其餘八個先掛 None:窗內的對外形狀 = 既有「引擎降級」形狀(503 / WS close)
+        # 其餘九個先掛 None:窗內的對外形狀 = 既有「引擎降級」形狀(503 / WS close /
+        # breadth 的 enabled=false 三態)
         app.state.stock = None
         app.state.watchlist_service = None
         app.state.signal_hub = None
@@ -320,6 +335,7 @@ def create_app(
         app.state.capital = None
         app.state.futures = None
         app.state.corr = None
+        app.state.breadth = None
         # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
         # AttributeError → 被全域 handler 轉成 502
         app.state.boot_done = False
@@ -576,6 +592,48 @@ def create_app(
             app.state.corr = corr
             booted.corr = corr
 
+            # 家數帶 / 騰落線(market-overview R2 SC-3):**排序列最後** —— 它完全不碰
+            # TC4/ZMQ,前面每一段都不依賴它,而 FinMind 是唯一一條會在啟動當下就慢的
+            # 上游。放前面等於讓一個外部 HTTP 服務決定 TC4 系何時就緒。
+            def _make_breadth() -> BreadthEngine | None:
+                if breadth_fetchers is None:
+                    return None
+                if breadth_fetchers is DEFAULT_BREADTH:
+                    token = finmind_token.resolve_token()
+                    if token is None:
+                        # 未設 token 是合法配置(不是失敗)→ info 不是 exception
+                        logger.info("FINMIND_TOKEN 未設定,家數帶停用")
+                        return None
+                    fetchers: BreadthFetchers = (
+                        breadth_fetch.fetch_snapshot,
+                        breadth_fetch.fetch_stock_info,
+                        breadth_fetch.fetch_disposition,
+                    )
+                else:
+                    # 顯式注入的三元組**跳過 token 閘**:fake 取數層根本不看 token,
+                    # 而 verify server / 測試環境本來就沒有(有閘就恆停用 → 驗不到)
+                    token = "fake-token"
+                    fetchers = cast("BreadthFetchers", breadth_fetchers)
+                snapshot_fetch, stock_info_fetch, disposition_fetch = fetchers
+                return BreadthEngine(
+                    token=token,
+                    config=load_breadth_config(),
+                    snapshot_fetch=snapshot_fetch,
+                    stock_info_fetch=stock_info_fetch,
+                    disposition_fetch=disposition_fetch,
+                    data_dir=breadth_data_dir,  # None → repo root data/market
+                )
+
+            breadth = await _boot(
+                "breadth",
+                "breadth engine 初始化非預期失敗,家數帶停用(其餘不受影響)",
+                _make_breadth,
+                lambda o: o.start(),
+                lambda o: o.close(),
+            )
+            app.state.breadth = breadth
+            booted.breadth = breadth
+
         boot_task = asyncio.create_task(_boot_all())
         try:
             yield
@@ -599,9 +657,14 @@ def create_app(
                 # 就地重拋 → 六段 close + runtime.close 全部不執行,TC4 session /
                 # COM 執行緒 / hub worker 一次全洩漏(同白名單「各自 try/except 續行」)
                 logger.exception("boot task 以例外結束(關機續行)")
-            # 關機反序:signals → corr → futures → capital → index → stock → runtime
-            # (corr 依賴 futures.state(),必須先收;signals 最前 —— fanout worker 還活著時
-            # 對已收攤的 stock engine publish 會炸在關機路徑上)
+            # 關機反序:breadth → signals → corr → futures → capital → index → stock →
+            # runtime(corr 依賴 futures.state(),必須先收;signals 在 breadth 之後 ——
+            # fanout worker 還活著時對已收攤的 stock engine publish 會炸在關機路徑上)
+            if booted.breadth is not None:
+                try:
+                    await booted.breadth.close()
+                except Exception:
+                    logger.exception("breadth close 失敗(關機續行)")
             if booted.signals is not None and booted.signals_close is not None:
                 try:
                     # bot 先於 hub(hub 的 sender 指向 bot)—— 順序封在 `_close_signals` 內
@@ -1013,6 +1076,47 @@ def create_app(
         return _market_payload(
             key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)
         )
+
+    # ---- market breadth(家數帶 / 騰落線;market-overview R2 §6)----
+
+    def _breadth(request_or_ws: Request | WebSocket) -> BreadthEngine | None:
+        """`getattr` 帶預設:lifespan 進場前(create_app 期直打 / 單元測試)`state.breadth`
+        還不存在,直取屬性會是 AttributeError → 全域 handler 轉 502 TC4_DOWN,而那句
+        訊息與真因(啟動窗還沒開)完全無關。"""
+        breadth: BreadthEngine | None = getattr(request_or_ws.app.state, "breadth", None)
+        return breadth
+
+    @app.get("/api/market/breadth")
+    async def market_breadth(request: Request) -> dict:
+        """**恆 200 三態**(design §6),不用 503:引擎缺席(FINMIND_TOKEN 未設)是合法
+        配置而非故障,而前端要把「未設定」「載入中」「有數字」講成三句不同的話 ——
+        503 會被 TanStack 的 error 路徑吞成同一種紅色,三者從此不可分辨。
+        """
+        breadth = _breadth(request)
+        if breadth is None:
+            return {
+                "enabled": False,
+                "trade_date": None,
+                "as_of": None,
+                "stale": False,
+                "counts": None,
+                "series": [],
+            }
+        return breadth.state()
+
+    @app.websocket("/ws/breadth")
+    async def ws_breadth(websocket: WebSocket) -> None:
+        breadth = _breadth(websocket)
+        await websocket.accept()
+        if breadth is None:
+            await websocket.close()
+            return
+        try:
+            # 首則 seed(當前 scalar 快照)已封在 `engine.stream()` 內 —— 不在這裡另送,
+            # 否則盤中連線會收到兩則相同的全量(前端 upsert 看不出差別,更難查)
+            await relay(websocket, breadth.stream())
+        except WebSocketDisconnect:
+            return
 
     @app.get("/api/corr/state")
     async def corr_state(request: Request) -> dict:
