@@ -1930,10 +1930,14 @@ class TestMarketEvents:
     async def test_publish_exception_does_not_escape_and_later_events_still_sent(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
-        """(g) never-raise:一則炸掉只丟那一則,同批後續照發。
+        """(g) never-raise:WS 那則炸掉只丟 WS,**jsonl 照收**(review S-4/C-5)。
 
         呼叫端是 breadth `_poll_loop`;這裡往外拋等於整條家數輪停擺,而家數面板
         與廣度事件是兩件事,不該被彼此的失敗綁死。
+
+        jsonl 是歷史真相源**也是重啟後對帳 seed 的來源**:WS 拋一次就連 jsonl 一起
+        丟的話,那則事件從此不存在 —— 重啟後 seed 讀不到它,對帳會把已經發生過的
+        鎖板當成新的再發一次(或反過來永遠對不回來)。所以入列先行、兩者各自 try。
         """
         h = _Harness(tmp_path, clock)
         sent: list[dict] = []
@@ -1949,7 +1953,7 @@ class TestMarketEvents:
         )
 
         assert [m["code"] for m in sent] == ["2317"]
-        assert [r["code"] for r in _drain(h.hub._jsonl_queue)] == ["2317"]
+        assert [r["code"] for r in _drain(h.hub._jsonl_queue)] == ["2330", "2317"]
 
 
 class TestMarketEventState:

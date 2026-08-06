@@ -2534,6 +2534,34 @@ class TestMarketLimitEvents:
         assert hub.batches == []
         assert any("limit_judged" in r.getMessage() for r in caplog.records)
 
+    async def test_mixed_unjudged_rows_still_emit_the_judged_ones(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(i) 混合列:缺鍵的跳過、其餘照發,warning 文案要與這個行為一致(review S-5)。
+
+        原文案寫「該批不發事件」,但實作是逐列 `continue` —— 照文案排查的人會去找
+        「為什麼整批消失」,而真相是只少了那幾列。文案與行為不符的 log 比沒有更貴。
+        """
+        engine, *_ = _make(tmp_path)
+        hub = FakeHub()
+        engine.attach_signal_hub(hub)
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            engine._diff_limit_events(
+                _TRADE_DATE,
+                [
+                    {k: v for k, v in _row_out("1101", up=True).items() if k != "limit_judged"},
+                    _row_out("2330", name="台積電", close=100.0, up=True),
+                ],
+                "10:00:05",
+            )
+
+        assert _tuples(hub.events) == [(_LOCK_KIND, "2330", "up", "10:00:05", 1)]
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("limit_judged" in m for m in messages)
+        assert not any("該批不發事件" in m for m in messages)  # 整批消失 ≠ 少幾列
+        assert any("其餘照常" in m for m in messages)
+
     async def test_bad_row_value_drops_only_that_row(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
