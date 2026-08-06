@@ -75,6 +75,11 @@ export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";
  *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份類股輪動」。 */
 export const SECTOR_OPEN_KEY = "copycat-sector-open";
 
+/** 訊號時間軸收合區塊的展開狀態("1" = 展開)— components/index/SignalTimelineSection.tsx。
+ *  **收合 = unmount**,所以這把鍵同時決定「要不要抓一份含全市場廣度事件的當日訊號」
+ *  (自選那份由個股頁的 rail 各自抓,兩者 queryKey 不同族)。 */
+export const SIGNAL_TIMELINE_OPEN_KEY = "copycat-signal-timeline-open";
+
 /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
 export const RAIL_TAB_KEY = "copycat-rail-tab";
 

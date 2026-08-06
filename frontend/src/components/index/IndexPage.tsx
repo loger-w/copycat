@@ -9,6 +9,7 @@ import { BreadthBand } from "@/components/index/BreadthBand";
 import { LimitListSection } from "@/components/index/LimitListSection";
 import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
 import { SectorSection } from "@/components/index/SectorSection";
+import { SignalTimelineSection } from "@/components/index/SignalTimelineSection";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import {
@@ -139,6 +140,10 @@ export function IndexPage({
       {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
           點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
       <SectorSection onOpenStock={onOpenStock} active={active} />
+      {/* 同一條銜接路徑的第三半:列表 / 類股是「現在的橫切面」,時間軸是「今天依序
+          發生了什麼」—— 自選訊號與全市場廣度事件同軸(R4 SC-7)。無 `active` gate:
+          資料是一次性 query + WS bus,沒有輪詢可停。 */}
+      <SignalTimelineSection onOpenStock={onOpenStock} />
       <CorrSection />
     </div>
   );
