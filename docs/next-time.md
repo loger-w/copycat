@@ -939,3 +939,12 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 - [ ] **XR-2 殘餘:adopt_date=False 時家數帶標頭日期(`_trade_date`)與 counts
   資料日錯位**——本輪已修 stale 會亮(`_last_success` 不再刷),日期標示要完全
   誠實需 per-view date(band 用 series 日、counts 用 rows 日),等真的踩到再說。
+## 2026-08-07(frontend-stream-p2s /bug 收尾留尾巴)
+
+- [ ] **首掛第一發 refetch 失敗時不排重試(review A-4)**:effect 宣告順序使第一發
+  refetch 必早於 ws.onopen,`wsOpenRef` 尚 false → scheduleRetry 第三道檢查早退;
+  自癒退到 WS onopen 的 refetch(非死路,延遲從 1s 變 WS 連上時間)。
+  候選解 = 第三道檢查放寬成「WS open 或本 session 從未 open 過」。
+- [ ] **book 推播與 snapshot 的定序是近似不是嚴格(review A-3)**:pendingBook 蓋回
+  假設「推播晚於後端 handle」,誤差窗 = request 單程延遲(localhost 次毫秒)。
+  嚴格定序需後端給 book seq(契約改動);鎖板稀疏推播場景若再見一格舊簿,先想起這條。
