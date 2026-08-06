@@ -2033,6 +2033,41 @@ class TestSectorState:
         assert engine.state()["counts"] == _EXPECTED
         assert engine.sector_state()["rotation"] is None
 
+    async def test_chain_arriving_after_cycle_recomputes_rotation(self, tmp_path: Path) -> None:
+        """chain 換表發生在 `_run_cycle` **之後** → 當場重算 rotation(review C-1)。
+
+        盤後首次部署(無 chain 快取)的真實順序就是這個:家數首輪先成、chain task
+        幾秒後才換表。換表不重算的話 rotation 要等下一次 `_apply` —— 而窗外根本不會
+        有下一輪,整晚 rotation 恆 null,與「chain 取數失敗」在畫面上完全同形。
+        """
+        chain = FakeFetch(list(_CHAIN_ROWS))
+        engine, *_ = _make(tmp_path, chain=chain)
+
+        await engine._run_cycle()
+        assert engine.sector_state()["rotation"] is None  # 前置:chain 尚未到
+
+        await _arm_chain(engine)  # 換表(**不再跑第二輪 cycle**)
+
+        assert chain.calls == 1
+        rotation = engine.sector_state()["rotation"]
+        assert rotation is not None
+        assert [i["name"] for i in rotation["industries"]] == ["水泥", "半導體"]
+
+    async def test_chain_swap_before_first_cycle_keeps_rotation_none(
+        self, tmp_path: Path
+    ) -> None:
+        """首輪未成(universe 空)時換表 → rotation 保持 **None**,不得變成空 industries。
+
+        `{"industries": []}` 在前端是「產業都算得出來、只是沒有成員」;None 才是
+        「類股資料未就緒」—— 兩句文案語意不同,而首輪未成時說的是後者。
+        """
+        engine, *_ = _make(tmp_path, chain=FakeFetch(list(_CHAIN_ROWS)))
+
+        await _arm_chain(engine)
+
+        assert engine._chain_map == _CHAIN_MAP  # 前置:表真的換上去了
+        assert engine.sector_state()["rotation"] is None
+
     async def test_sector_members_known(self, tmp_path: Path) -> None:
         """成員 drill-down:名稱走 `_name_map`,按 change_rate desc。"""
         engine = await _ready_engine(tmp_path)
