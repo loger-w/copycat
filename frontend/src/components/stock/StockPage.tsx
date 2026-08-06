@@ -71,7 +71,10 @@ export function StockPage({ code, onSelect, stream }: Props) {
   const [view, setView] = useState<StockView>(initialView);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
-  const { data: wl } = useStockWatchlist();
+  // `isPending` / `isError` 要一路帶到群組檢視(review A4):`wl?.groups ?? []` 把
+  // 「還在載」「載入失敗」「真的零群組」壓成同一個空陣列,而空態文案會叫使用者去
+  // 建群組 —— 把「後端出事」講成「你沒建群組」。
+  const { data: wl, isPending: wlPending, isError: wlError } = useStockWatchlist();
   const save = useSaveWatchlist();
   const [pickerOpen, setPickerOpen] = useState(false);
   // 換股時關掉面板(review F3)。App 渲染本元件沒帶 key,同一個 instance 會活過切檔 ——
@@ -194,10 +197,12 @@ export function StockPage({ code, onSelect, stream }: Props) {
         </div>
         {view === "group" ? (
           // 群組檢視吃掉整個 main 主體(header / 圖表 / 下半列全部讓位),訊號欄與
-          // 自選欄在 main 之外不受影響。`wl` 未載入時 groups 為空 → GroupGridView
-          // 自己的空態接手,這裡不另做載入態。
+          // 自選欄在 main 之外不受影響。載入 / 失敗 / 零群組的分態由 GroupGridView
+          // 接手,但**判斷依據得由這裡給** —— 它只看得到 groups 陣列。
           <GroupGridView
             groups={wl?.groups ?? []}
+            wlPending={wlPending}
+            wlError={wlError}
             quotes={watchlist}
             onPick={(picked) => {
               onSelect(picked);
