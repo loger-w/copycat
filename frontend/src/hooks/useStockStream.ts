@@ -193,7 +193,11 @@ export function useStockStream(
           for (const msg of pendingRef.current) {
             if (msg.seq > snap.seq) next = applyTick(next, msg);
           }
-          // 交錯的簿蓋回 snapshot 的凍結簿(F-2);key 不符 = 已切檔 → 丟棄
+          // 交錯的簿蓋回 snapshot 的凍結簿(F-2);key 不符 = 已切檔 → 丟棄。
+          //
+          // key 比對看似多餘(切檔已在 :223 清過 pending),但守的正是「那行哪天被拿掉 /
+          // 新增一條沒清 pending 的切檔路徑」的情況 —— 窄,但後果是把 A 的五檔畫到 B
+          // 的圖上,而且零錯誤訊號。留著(review B-4)。
           const pendingBook = takePendingBook();
           if (pendingBook !== null && pendingBook.key === current) {
             next = { ...next, book: pendingBook.book };

@@ -66,7 +66,8 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
     // 下方鄰檔比自己細(100.00 元的 tick 是 0.5,但下一檔 99.90 的 tick 是 0.1),
     // 同寬的帶會跨進鄰檔的帶 0.2 元 —— fillOpacity 疊加後看起來像那一帶量特別集中。
     // 檔位規則沿 `stock-tick.ts` 的單一定義,不在這裡自寫第二份。
-    // 非邊界檔位的結果與 `p ± tick/2` 等價,只有 50 / 100 / 500 / 1000 元四處收斂。
+    // 非邊界檔位的結果與 `p ± tick/2` 等價,只有 `TICK_TABLE` 的**五**個交界
+    // (10 / 50 / 100 / 500 / 1000 元)收斂。
     const topMilli = (priceMilli + stepUp(priceMilli)) / 2;
     const bottomMilli = (priceMilli + stepDown(priceMilli)) / 2;
     const top = Math.max(g.toY(yTop), g.toY(topMilli));
