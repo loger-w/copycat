@@ -55,7 +55,8 @@ class TestDayCache:
     async def test_same_day_second_get_does_not_hit_source(self) -> None:
         fetch = _Fetch()
         catalog = StkfutCatalog(fetch, today=_Clock())
-        assert (await catalog.get("2330"))["std"]["prod"] == "CDF"
+        entry = await catalog.get("2330")
+        assert entry is not None and entry["std"]["prod"] == "CDF"
         assert await catalog.get("1312") is not None
         assert fetch.calls == 1
 

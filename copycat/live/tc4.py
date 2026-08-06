@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -31,7 +32,14 @@ from copycat.live.models import (
 from copycat.live.session import session_key, session_window
 from copycat.tc4common import TC4_APPID, TC4_DEFAULT_PORT, TC4_SKEY, iter_qry_pages
 
-__all__ = ["SPOT_SYMBOL", "TC4_APPID", "TC4_SKEY", "TC4QuoteSource", "group_series"]
+__all__ = [
+    "SPOT_SYMBOL",
+    "TC4_APPID",
+    "TC4_SKEY",
+    "TC4QuoteSource",
+    "group_series",
+    "parse_stkfut_catalog",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +113,93 @@ def group_series(symbols: list[str]) -> list[SeriesInfo]:
     ]
     series.sort(key=lambda s: (s.expiry, s.series_id))
     return series
+
+
+#: 個股期真合約支(價差支逐字同名 + "(F2)");parser 顯式只走這一支
+_STKFUT_BRANCH = "StockFutures"
+#: 月份合約:恰四段 + 尾 YYYYMM(裸產品節點 `TC.F.TWF.CDF` 與價差六段形天然排除)
+_STKFUT_MONTH_RE = re.compile(r"^TC\.F\.TWF\.(?P<prod>[A-Z0-9]+)\.(?P<ym>\d{6})$")
+#: 節點名尾綴的標的股號(「台積電(2330)」/「小型元大台灣50(0050)」)
+_STKFUT_NAME_RE = re.compile(r"^(?P<name>.+?)\((?P<code>\w{4,6})\)$")
+_MINI_PREFIX = "小型"
+
+
+def _stkfut_months(node: dict) -> list[str]:
+    """節點 Contracts → 月份清單(升冪)。
+
+    只收 `TC.F.TWF.<SYMBOL>.<YYYYMM>`,且 prod 必須等於節點自己的 SYMBOL ——
+    價差節點的六段形、產品層裸節點、以及 HOT 支借來的別檔合約全部落在外面。
+    `InstrumentID` 同索引非 null 為第二判準(真合約才有期交所碼)。
+    """
+    symbol = node.get("SYMBOL")
+    contracts = node.get("Contracts") or []
+    ids = node.get("InstrumentID") or []
+    months: list[str] = []
+    for i, raw in enumerate(contracts):
+        if not isinstance(raw, str):
+            continue
+        m = _STKFUT_MONTH_RE.match(raw)
+        if m is None or m.group("prod") != symbol:
+            continue
+        if i < len(ids) and ids[i] is None:
+            continue
+        months.append(m.group("ym"))
+    return sorted(set(months))
+
+
+def parse_stkfut_catalog(res: dict) -> dict[str, dict]:
+    """QUERYALLINSTRUMENT(Type="Fut2")回應 → `{股號: {name, std, mini}}`。
+
+    樹形實讀(2026-06-30 dump,873KB;fixture 見 tests/fixtures/catalog_fut2_sample.json):
+    `Instruments.Node` 有兩支 —— `ENG="StockFutures"`(真合約,節點帶 `SYMBOL`)與
+    `ENG="StockFutures(F2)"`(**個股期貨價差**,節點名逐字同名、無 SYMBOL、Contracts
+    是六段跨月形)。價差支誤收會讓下拉長出訂不到的合約,而 TC4 對不存在的 symbol
+    照回 `Success: OK`(§8)→ 失效樣態是「選了之後一片空白」毫無錯誤訊號,所以這裡
+    **顯式**只走真合約支,不用「有沒有解析成功」當過濾。
+
+    std / mini:同一股號可有標準(CDF)與小型(QFF)兩個產品節點,以節點名的「小型」
+    前綴判別。另有除權息調整契約(國喬1 = EE1)同樣掛在同一股號下 —— 它們的 SYMBOL
+    尾碼不是 "F",不得蓋掉原始契約(調整契約的契約單位非 2,000,下單層另有閘)。
+    """
+    branches = (res.get("Instruments") or {}).get("Node") or []
+    nodes: list[dict] = []
+    for branch in branches:
+        if isinstance(branch, dict) and branch.get("ENG") == _STKFUT_BRANCH:
+            nodes.extend(n for n in (branch.get("Node") or []) if isinstance(n, dict))
+    grouped: dict[str, list[tuple[str, str, dict]]] = {}
+    for node in nodes:
+        symbol = node.get("SYMBOL")
+        if not isinstance(symbol, str) or not symbol:
+            continue  # HOT(熱門月)節點:Contracts 合法但無 SYMBOL,不是產品
+        m = _STKFUT_NAME_RE.match(str(node.get("CHT") or ""))
+        if m is None:
+            continue
+        grouped.setdefault(m.group("code"), []).append((symbol, m.group("name"), node))
+    result: dict[str, dict] = {}
+    for code, entries in grouped.items():
+        minis = [e for e in entries if e[1].startswith(_MINI_PREFIX)]
+        stds = [e for e in entries if not e[1].startswith(_MINI_PREFIX)]
+        # 原始契約(SYMBOL 尾 "F")優先於除權息調整契約(EE1);同類再以 SYMBOL 定序
+        stds.sort(key=lambda e: (not e[0].endswith("F"), e[0]))
+        minis.sort(key=lambda e: (not e[0].endswith("F"), e[0]))
+        if not stds:
+            continue
+        std_symbol, std_name, std_node = stds[0]
+        months = _stkfut_months(std_node)
+        if not months:
+            continue
+        entry: dict = {
+            "name": std_name,
+            "std": {"prod": std_symbol, "contracts": months},
+            "mini": None,
+        }
+        if minis:
+            mini_symbol, _, mini_node = minis[0]
+            mini_months = _stkfut_months(mini_node)
+            if mini_months:
+                entry["mini"] = {"prod": mini_symbol, "contracts": mini_months}
+        result[code] = entry
+    return result
 
 
 def _walk_strings(node: object, acc: list[str]) -> None:
@@ -274,6 +369,24 @@ class TC4QuoteSource:
         _walk_strings(res, strings)
         leaves = sorted({s for s in strings if s.startswith("TC.O.TWF.")})
         return group_series(leaves)
+
+    def list_stock_futures(self) -> dict[str, dict]:
+        """個股期合約清單(Type="Fut2";stkfut-contracts SC-1)。
+
+        `StockSource` Protocol **之外**的能力(個股訂閱面用不到)—— server 以
+        `getattr` 接線,fake source 不必為此實作 Protocol 方法。
+        """
+        self._ensure_connected()
+        res = self._session_req(
+            lambda session: {
+                "Request": "QUERYALLINSTRUMENT",
+                "SessionKey": session,
+                "Type": "Fut2",
+            }
+        )
+        if res.get("Success") != "OK":
+            raise ConnectionError(f"TC4 QUERYALLINSTRUMENT(Fut2) failed: {res.get('ErrMsg')}")
+        return parse_stkfut_catalog(res)
 
     def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
         self._ensure_connected()
