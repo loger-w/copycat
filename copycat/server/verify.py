@@ -181,7 +181,9 @@ _BREADTH_CHAIN: tuple[tuple[str, str, str], ...] = (
 #: stale,TC4 系零波及)在**真 server** 上的注入通道;單元測試注入 fake 即可,這條
 #: 是為了在跑著的 verify server 上取證。
 #: **前置**:verify 的 data_dir 必須是隔離空目錄(無 `industry_chain.json`)—— 有快取檔
-#: 的話 chain 那支拋不拋都一樣有表,失效注入就漏了一條路(design §8 / R9)。
+#: 的話 chain 那支拋不拋都一樣有表,失效注入就漏了一條路(design §8 / R9)。該前置
+#: 已由 `__main__` 自動化(這個 key 為 "1" 時改用 `VERIFY_FAIL_DATA_DIR` 並開機清檔),
+#: 不靠 operator 記得手動刪(review S-2/C-3)。
 FAIL_ENV_KEY = "VERIFY_BREADTH_FAIL"
 
 #: 設成 `"1"` 時 1101 依**牆鐘**分鐘在「鎖漲停 ↔ 非鎖」兩態切換 —— SC-7(廣度事件
@@ -201,7 +203,10 @@ _FLIP_1101 = ("1101", 10.5, 0.5, 5.0, 11.0, 10.2)
 #: 域外的時刻不入序列 —— 而 verify server 多半是**盤後**跑的。
 _DOMAIN_START = _dt.time(9, 1)
 _DOMAIN_END = _dt.time(13, 30)
-_CLAMP_TO = _dt.time(13, 0)
+#: 域外 clamp 的落點:`13:<牆鐘分鐘 % _CLAMP_MINUTE_MOD>`。模數取 29 讓分鐘停在
+#: 00–28(域上界 13:30 之內,且避開 clamp 進來就撞邊界的 13:29/13:30)。
+_CLAMP_HOUR = 13
+_CLAMP_MINUTE_MOD = 29
 
 
 def _now() -> _dt.datetime:
@@ -224,17 +229,25 @@ def _flip_locked(now: _dt.datetime) -> bool:
 
 
 def _snapshot_stamp(now: _dt.datetime) -> str:
-    """fake 快照時刻:`now` 落在分鐘域外時 clamp 到**當日 13:00**(review SPEC-4)。
+    """fake 快照時刻:`now` 落在分鐘域外時 clamp 進 **13 時帶**(review SPEC-4)。
 
     日期一律是當天(`trade_date == today` 才會 append 與落檔,engine design R1);
     時刻若直接用 `datetime.now()`,盤後跑 verify server 的每一輪都落在域外 → 序列恆空,
     而那與「序列接線壞掉」在畫面上完全同形 —— verify 的存在理由正是目視這條路。
+
+    **分鐘跟著牆鐘走**(`% _CLAMP_MINUTE_MOD`)而不是恆定 13:00(review S-1):廣度
+    事件 id 含 `time` 欄 = 這個時刻,恆定的話翻轉之後每一則的 id 完全相同 → 前端去重
+    把後續全吃掉,SC-7 的時間軸只看得到第一則;當日序列也只長得出一格。相差 29 分的
+    兩個牆鐘會撞成同一格 —— 取證無妨(輪詢是 10 秒一次,同格只是 last-wins)。
     """
     if _DOMAIN_START <= now.time() <= _DOMAIN_END:
         stamp = now
     else:
         stamp = now.replace(
-            hour=_CLAMP_TO.hour, minute=_CLAMP_TO.minute, second=0, microsecond=0
+            hour=_CLAMP_HOUR,
+            minute=now.minute % _CLAMP_MINUTE_MOD,
+            second=0,
+            microsecond=0,
         )
     return stamp.strftime("%Y-%m-%d %H:%M:%S")
 

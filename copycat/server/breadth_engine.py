@@ -70,7 +70,7 @@ from copycat.sector_rotation import (
     rows_to_chain_map,
 )
 from copycat.server.breadth_fetch import BreadthFetchError
-from copycat.server.chain_store import load_chain, save_chain
+from copycat.server.chain_store import CHAIN_FILENAME, load_chain, save_chain
 from copycat.server.index_engine import minute_key
 from copycat.server.ws import WsBroadcaster
 
@@ -118,8 +118,8 @@ _STREAK_REQ_GAP_SECS = 0.3
 _STREAK_RETRY_SECS = 60.0
 
 # ---- 產業鏈(chain)刷新 ----
-#: chain 快取檔名(`<data_dir>/industry_chain.json`;格式與讀寫在 `chain_store`)
-_CHAIN_FILE = "industry_chain.json"
+#: chain 快取檔名(格式與讀寫在 `chain_store`,檔名也由它擁有 —— 見 `CHAIN_FILENAME`)
+_CHAIN_FILE = CHAIN_FILENAME
 
 # ---- 全市場鎖板事件(diff)----
 #: 事件 kind。與自選股那條路的 `limit_lock` / `limit_open` **只差前綴**且刻意如此:

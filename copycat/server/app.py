@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from copycat.live.trade_models import BrokerRejectedError
-from copycat.breadth_config import load_breadth_config
+from copycat.breadth_config import BreadthConfig, load_breadth_config
 from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
 from copycat.server import build_info, breadth_fetch, finmind_token
@@ -338,6 +338,7 @@ def create_app(
     corr_source: CorrSource | object | None = None,
     breadth_fetchers: BreadthFetchers | object | None = None,
     breadth_data_dir: Path | None = None,
+    breadth_config: BreadthConfig | None = None,
     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
     stock_names_path: Path | None = None,
@@ -701,7 +702,11 @@ def create_app(
                 ) = fetchers
                 return BreadthEngine(
                     token=token,
-                    config=load_breadth_config(),
+                    # None → configs/breadth.json(prod 唯一路徑);顯式注入只服務
+                    # --verify 的放寬窗(盤後也要跑得出第二輪,review C-2)
+                    config=(
+                        breadth_config if breadth_config is not None else load_breadth_config()
+                    ),
                     snapshot_fetch=snapshot_fetch,
                     stock_info_fetch=stock_info_fetch,
                     disposition_fetch=disposition_fetch,

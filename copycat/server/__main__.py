@@ -22,6 +22,7 @@ from typing import Any, Iterable, Sequence, TextIO, cast
 
 import uvicorn
 
+from copycat.breadth_config import BreadthConfig
 from copycat.server.app import (
     DEFAULT_BREADTH,
     DEFAULT_CORR,
@@ -30,7 +31,13 @@ from copycat.server.app import (
     DEFAULT_STOCK,
     create_app,
 )
-from copycat.server.verify import FakeTxoSource, fake_breadth_fetchers, neutralize_external_env
+from copycat.server.chain_store import CHAIN_FILENAME
+from copycat.server.verify import (
+    FAIL_ENV_KEY,
+    FakeTxoSource,
+    fake_breadth_fetchers,
+    neutralize_external_env,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,17 @@ LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 #: 同一個 `breadth-<date>.json`,verify 的 fake 六檔快照有機會蓋掉 prod 當日的完整
 #: 序列(prod 下一輪雖會寫回,但夾縫中重啟 prod 就會 restore 到那一格 fake)。
 VERIFY_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify"
+
+#: `VERIFY_BREADTH_FAIL=1` 專用的落檔目錄。與常態 verify 目錄分開 + 開機清 chain 檔:
+#: verify 的 data_dir 跨 run 持久,上一次成功的 `industry_chain.json` 還在的話 chain
+#: fake 拋不拋都一樣有表 —— 「FinMind 整段掛掉」的注入漏了 chain 那條路,而畫面上
+#: 類股面板照常有內容,看起來就像 SC-3 通過了(design §8 / R9;review S-2/C-3)。
+VERIFY_FAIL_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify-fail"
+
+#: --verify 的家數帶輪詢窗:全天。prod 預設窗(08:55–13:40)之外 `_poll_loop` 只跑
+#: 首圈,而 verify server 幾乎都在盤後跑 —— flip 翻轉、失效注入、事件鏈路全都要
+#: 「第二輪之後」才看得到,窗照抄 prod 等於整條取證路徑只剩一格(review C-2)。
+VERIFY_WINDOW = ("00:00", "23:59")
 
 
 class _Tee:
@@ -119,6 +137,21 @@ def _setup_prod_log() -> Path | None:
     return path
 
 
+def _clear_chain_cache(data_dir: Path) -> None:
+    """失效注入的前置:刪掉 chain 快取檔。
+
+    never-raise —— 這是取證的前置而不是啟動條件,刪不掉只要說得夠大聲即可(留著
+    舊表的話 chain 那條注入會被靜默吸收,而畫面上與「注入沒生效」完全同形)。
+    """
+    path = data_dir / CHAIN_FILENAME
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("verify chain 快取清除失敗(chain 失效注入可能被舊表吸收):%r", e)
+        return
+    logger.info("verify 失效注入模式:落檔目錄 %s(已清 %s)", data_dir, CHAIN_FILENAME)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     unknown = [a for a in args if a != "--verify"]
@@ -140,11 +173,18 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"--verify 不可用 canonical port {PROD_PORT_DEFAULT}"
                 "(TXO_SERVER_PORT 殘留?verify 預設 8722,或顯式設非 8721 的 port)"
             )
+        data_dir = VERIFY_DATA_DIR
+        if os.environ.get(FAIL_ENV_KEY) == "1":
+            data_dir = VERIFY_FAIL_DATA_DIR
+            _clear_chain_cache(data_dir)
         app = create_app(
             FakeTxoSource(),
             # 家數帶走 fake 取數(不打真 FinMind)+ 獨立落檔目錄(不覆蓋 prod 當日序列)
             breadth_fetchers=fake_breadth_fetchers(),
-            breadth_data_dir=VERIFY_DATA_DIR,
+            breadth_data_dir=data_dir,
+            breadth_config=BreadthConfig(
+                window_start=VERIFY_WINDOW[0], window_end=VERIFY_WINDOW[1]
+            ),
         )
         logger.info("verify 模式:fake source + 外部 IO env 壓制,port %d(log 不落檔)", port)
     else:
