@@ -116,17 +116,33 @@ def test_discord_token_unresolvable(_restore_point: None) -> None:
         ("2026-08-06 10:23:45", "2026-08-06 10:23:45"),  # 域內:原樣
         ("2026-08-06 09:01:00", "2026-08-06 09:01:00"),  # 下界含等值
         ("2026-08-06 13:30:00", "2026-08-06 13:30:00"),  # 上界含等值
-        ("2026-08-06 16:40:00", "2026-08-06 13:00:00"),  # 盤後 → clamp
-        ("2026-08-06 08:30:00", "2026-08-06 13:00:00"),  # 盤前 → clamp
+        ("2026-08-06 16:40:00", "2026-08-06 13:11:00"),  # 盤後 → clamp(40 % 29 = 11)
+        ("2026-08-06 08:30:00", "2026-08-06 13:01:00"),  # 盤前 → clamp(30 % 29 = 1)
     ],
 )
 def test_snapshot_stamp_clamped_into_minute_domain(now: str, expected: str) -> None:
-    """fake 快照時刻在分鐘域(0901–1330)外時 clamp 到當日 13:00(review SPEC-4)。
+    """fake 快照時刻在分鐘域(0901–1330)外時 clamp 進 13 時帶(review SPEC-4)。
 
     直接用 `datetime.now()` 的話,盤後跑 verify server 的每一輪都落在域外 → 序列恆空,
     而那與「序列接線壞掉」在畫面上完全同形 —— verify 的存在理由正是目視這條路。
     """
     assert verify._snapshot_stamp(_dt.datetime.fromisoformat(now)) == expected
+
+
+def test_clamped_stamp_minute_follows_wall_clock() -> None:
+    """clamp 後的**分鐘隨牆鐘變**,不得恆定(review S-1)。
+
+    廣度事件 id 含 `time` 欄(= 快照時刻):時刻恆定 → 翻轉之後每一則的 id 完全相同
+    → 前端去重把後續全吃掉,SC-7 的時間軸永遠只看得到第一則;當日序列同樣只長得出
+    一格,而那與「序列接線壞掉」同形。
+    """
+    stamps = [verify._snapshot_stamp(_dt.datetime(2026, 8, 6, 20, m)) for m in (5, 15, 27)]
+
+    assert len(set(stamps)) == 3
+    for s in stamps:
+        moment = _dt.datetime.fromisoformat(s)
+        assert moment.date() == _dt.date(2026, 8, 6)  # 日期仍是當天(append 的前提)
+        assert _dt.time(9, 1) <= moment.time() <= _dt.time(13, 30)  # 域內,否則不入序列
 
 
 def test_fake_breadth_fetchers_feed_the_real_pipeline() -> None:
@@ -290,16 +306,17 @@ class TestBreadthFlip:
         assert _quotes(locked) == _quotes(opened)
 
     def test_flip_ignores_clamped_snapshot_minute(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """盤後(快照時刻恆 clamp 到 13:00)兩個牆鐘週期仍必須翻轉。
+        """盤後兩個**快照時刻相同**的牆鐘仍必須翻轉。
 
-        判別子若寫成快照時刻的分鐘,這裡兩次都會拿到同一態 —— 而 verify server 幾乎
-        都在盤後跑,那等於整條 SC-7 取證路徑靜默失效。
+        牆鐘 20:04 與 20:33 clamp 後同為 13:04(分鐘 % 29 相同),但翻轉週期
+        (`minute // 11` 奇偶)不同 —— 判別子若寫成快照時刻的分鐘,這裡兩次會拿到
+        同一態,而 verify server 幾乎都在盤後跑,那等於整條 SC-7 取證路徑靜默失效。
         """
         monkeypatch.setenv(FLIP_ENV_KEY, "1")
-        a = self._rows(_dt.datetime(2026, 8, 6, 20, 5), monkeypatch)
-        b = self._rows(_dt.datetime(2026, 8, 6, 20, 15), monkeypatch)
+        a = self._rows(_dt.datetime(2026, 8, 6, 20, 4), monkeypatch)  # 4 // 11 = 0(偶)
+        b = self._rows(_dt.datetime(2026, 8, 6, 20, 33), monkeypatch)  # 33 // 11 = 3(奇)
 
-        assert a[0]["date"] == b[0]["date"] == "2026-08-06 13:00:00"
+        assert a[0]["date"] == b[0]["date"] == "2026-08-06 13:04:00"
         assert self._limit_up_1101(a) != self._limit_up_1101(b)
 
 
