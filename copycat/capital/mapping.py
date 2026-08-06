@@ -42,6 +42,10 @@ _KNOWN_PRODUCTS: tuple[str, ...] = tuple(
     sorted(set(MULTIPLIERS) | _WEEKLY_50, key=len, reverse=True)
 )
 
+# 選擇權產品(月選 + 週選家族);指數期貨 = 台指/小台/微台三檔
+_OPTION_PRODUCTS: frozenset[str] = frozenset({"TXO"}) | _WEEKLY_50
+_INDEX_FUTURES: frozenset[str] = frozenset({"TXF", "MXF", "TMF"})
+
 _BUYSELL: dict[BuySell, int] = {"buy": 0, "sell": 1}
 _SPECIAL: dict[PriceType, int] = {"market": 1, "limit": 2}
 _TIF: dict[TimeInForce, int] = {"ROD": 0, "IOC": 1, "FOK": 2}
@@ -100,6 +104,33 @@ def exchange_product_of(contract: str) -> str:
     if m is None:
         raise ValueError(f"cannot derive product from contract: {contract!r}")
     return m.group(0)
+
+
+def is_option_contract(contract: str) -> bool:
+    """期交所契約碼 → 是否為選擇權(送單分流 SendOptionOrder vs SendFutureOrder)。
+
+    「什麼是期貨」只能有一份定義:原本 client 端拿 `not in {TXF, MXF, TMF}` 當判準,
+    預設方向是「未知 → 選擇權」,個股期上線後整條被送進期權面(送單 + 平倉全中)。
+    分類收在這裡,判準逐層收斂:
+
+    1. 已知選擇權產品(月選 TXO ∪ 週選家族)→ True。
+    2. 已知指數期貨({TXF, MXF, TMF})→ False。
+    3. 個股期(`stkfut_map.lookup_product` 查得到,約 270 檔且隨期交所異動)→ False。
+    4. 其餘未知產品走**結構判別**:選擇權契約碼必含履約價數字(TXO20000I6),
+       契約本體(去尾 2 碼月碼+年碼)純字母則是期貨形(SXFI6 費半、海外期貨平倉)。
+
+    未知產品的預設方向由結構決定而非白名單,是因為白名單註定追不上上架節奏 ——
+    個股期就是這樣漏掉的。這個預設安全:選擇權路徑的契約碼一律由 `to_exchange_symbol`
+    的 TC.O 分支產出,必然帶履約價數字,不會落到「純字母 → 期貨」那側。
+    """
+    prod = exchange_product_of(contract)
+    if prod in _OPTION_PRODUCTS:
+        return True
+    if prod in _INDEX_FUTURES:
+        return False
+    if lookup_product(prod) is not None:
+        return False
+    return any(ch.isdigit() for ch in contract[:-2])
 
 
 def _month_year_codes(ym: str, *, put: bool = False) -> str:
