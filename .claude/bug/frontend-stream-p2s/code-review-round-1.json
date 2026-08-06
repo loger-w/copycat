@@ -1,0 +1,32 @@
+{
+  "round": 1,
+  "date": "2026-08-07",
+  "stage": "branch-lifecycle 收尾補齊(/bug 一輪 medium,2 lens)",
+  "diff": "review-diff.txt(f6a60675..c0669462,frontend/src 6 檔)",
+  "lenses": [
+    {"id": "A", "focus": "WS stream / hook 時序正確性", "model": "opus"},
+    {"id": "B", "focus": "測試覆蓋(17 mutants 實測)", "model": "opus"}
+  ],
+  "process_note": "兩 lens 並行於同一 worktree 做 mutation 實驗互相污染過觀察(A 見到 B 的 MUTANT M10;A 的兩次偶紅無法歸因)。P1 存活宣稱(M9)由主 session 獨立重驗後才採信。教訓入 memory:mutation 型 reviewer 一律序列或隔離 worktree。",
+  "findings": [
+    {"id": "A-1", "severity": "P2", "disposition": "FIXED(c1949401)", "title": "F-3 測試刀鋒時序:waitFor 只等呼叫數不等 settle,慢環境偶紅"},
+    {"id": "A-2", "severity": "P2", "disposition": "FIXED(8e475593+7afcc8f2,唯一行為改動)", "title": "wsOpenRef 寫在 alive 檢查前,舊 socket close 可清掉新 socket 的 open 態 → dev 下 F-3 自癒失效"},
+    {"id": "A-3", "severity": "P2", "disposition": "FIXED(82cc8717 註解+repro.md)", "title": "「方向恆定」比實際成立的命題強一格(snapshot 凍結在後端 handle 當下)"},
+    {"id": "A-4", "severity": "P2", "disposition": "next-time", "title": "首掛第一發 refetch 失敗時 wsOpen 尚 false → 不排重試(自癒退到 onopen,非死路)"},
+    {"id": "B-1", "severity": "P1", "disposition": "FIXED(c1949401;M3c/M3a 見 note)", "title": "三道排程前檢查 + unmount 取消零覆蓋(mutants 存活)", "note": "M3c 已殺;M3a(mounted)與 wsOpen 防線在 unmount 路徑重疊無法單獨歸因,行為由新測試鎖住並註記;key 檢查為可證死碼,保留註記防後續呼叫點"},
+    {"id": "B-2", "severity": "P1", "disposition": "FIXED(c1949401)", "title": "backoff 曲線零覆蓋(M9 主 session 重驗存活)→ 補行為性質斷言(遞增/cap/成功歸零)"},
+    {"id": "B-3", "severity": "P2", "disposition": "FIXED(179c95d7)", "title": "F-2 反向鎖測試 vacuous → 改寫為失敗輪殘留真路徑(殺 M2c)"},
+    {"id": "B-4", "severity": "P2", "disposition": "FIXED(註解)", "title": "pendingBook key 比對窄而非零,註記其守的是切檔清理被移除的情況"},
+    {"id": "B-5", "severity": "P2", "disposition": "FIXED(179c95d7)", "title": "他檔回補完成不觸發主圖 refetch 無負向測試(殺 M10)"},
+    {"id": "B-6", "severity": "P2", "disposition": "FIXED(併 B-2)", "title": "成功路徑 cancelRetry 無覆蓋(殺 M6)"},
+    {"id": "B-7", "severity": "P2", "disposition": "FIXED(179c95d7)", "title": "VP 邊界 CASES 漏 10 元(tick 表五個交界測了四個);repro.md 同步更正"},
+    {"id": "B-8", "severity": "P2", "disposition": "FIXED(82cc8717)", "title": "取消測試註解把失效樣態寫反(實測少一發非多一發)"}
+  ],
+  "post_fix_gates": {
+    "vitest": "108 files / 1678 passed(exit 0,主 session 重跑)",
+    "tsc": "0(主 session 重跑)",
+    "eslint": "0(主 session 重跑)",
+    "pytest": "2548 passed(sanity,零後端 diff)"
+  },
+  "exit": "無未處置 P0/P1 → 進 push"
+}

@@ -1,0 +1,587 @@
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index bef9db57..d7aee26f 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -7,6 +7,7 @@ import { StockPage } from "@/components/stock/StockPage";
+ import type { StockStreamState } from "@/hooks/useStockStream";
+ import { emitSignal } from "@/lib/signal-bus";
+ import type { SignalMsg } from "@/lib/signal-model";
++import type { StkfutSelection } from "@/lib/stkfut";
+ import type { StockAccum } from "@/lib/stock-accum";
+ import { wrap } from "@/test-utils";
+ 
+@@ -193,6 +194,38 @@ describe("StockPage 切股時明細展開筆數歸零(M8)", () => {
+     rerender(page("2317"));
+     expect(rows(container)).toBe(30);
+   });
++
++  // 🔴 F-4:同一檔股票的現貨與各月合約是**不同標的**,而 `code` 在換月與現貨↔合約時
++  // 恆不變 → `key={code}` 不重掛,展開到一半的筆數跟著跨標的存活(同頁的 pickerOpen、
++  // useStockStream deps、RightRail centerRequest 都已改吃 instrumentKey,獨漏此處)。
++  it("同股切合約 → 顯示筆數回初始值(重掛鍵是 instrumentKey 不是 code)", () => {
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    const page = (contract: StkfutSelection | null) => (
++      <QueryClientProvider client={client}>
++        <StockPage
++          code="2330"
++          onSelect={vi.fn()}
++          stream={stream({ accum: accumWithTicks("2330") })}
++          contract={contract}
++          onContract={vi.fn()}
++        />
++      </QueryClientProvider>
++    );
++    const { container, rerender } = render(page(null));
++    expect(rows(container)).toBe(30);
++    fireEvent.click(screen.getByRole("button", { name: "載入更多" }));
++    expect(rows(container)).toBe(60);
++
++    // 現貨 → 合約(股號不變)
++    rerender(page({ prod: "CDF", ym: "202609", mini: false, unit: 2000 }));
++    expect(rows(container)).toBe(30);
++
++    // 換月(股號仍不變)
++    fireEvent.click(screen.getByRole("button", { name: "載入更多" }));
++    expect(rows(container)).toBe(60);
++    rerender(page({ prod: "CDF", ym: "202610", mini: false, unit: 2000 }));
++    expect(rows(container)).toBe(30);
++  });
+ });
+ 
+ // 🟢 round4 項 4:搜尋改預覽後,「加入自選」的入口移到分時圖上方的報價 header
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 3c9d1866..d8387cb1 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -374,11 +374,13 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+                     />
+                   </div>
+                   <div className="min-h-0 min-w-0 flex-[2]">
+-                    {/* `key={code}`:明細的「載入更多」筆數是 TickTape 內部 state,
+-                        換股時元件不 unmount → 展開到一半的筆數會跟著新股票走
++                    {/* `key={instrumentKey}`:明細的「載入更多」筆數是 TickTape 內部 state,
++                        切標的時元件不 unmount → 展開到一半的筆數會跟著新標的走
+                         (同一頁的 pickerOpen 是換股歸零的,兩者語意該一致)。
+-                        用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。 */}
+-                    <TickTape key={code} ticks={accum.ticks} ref_={meta?.ref ?? null} />
++                        用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。
++                        鍵是 instrument key 不是股號(F-4):同一檔股票的現貨與各月合約是
++                        不同標的,而 `code` 在換月與現貨↔合約時恆不變 → 用它當 key 不重掛。 */}
++                    <TickTape key={instrumentKey} ticks={accum.ticks} ref_={meta?.ref ?? null} />
+                   </div>
+                 </div>
+               </>
+diff --git a/frontend/src/hooks/useStockStream.test.ts b/frontend/src/hooks/useStockStream.test.ts
+index 7e95b50c..2507e60a 100644
+--- a/frontend/src/hooks/useStockStream.test.ts
++++ b/frontend/src/hooks/useStockStream.test.ts
+@@ -1,7 +1,7 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+-import { createElement, type ReactNode } from "react";
++import { createElement, StrictMode, type ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { useStockStream } from "@/hooks/useStockStream";
+@@ -59,6 +59,13 @@ function wrapper({ children }: { children: ReactNode }) {
+   return createElement(QueryClientProvider, { client: queryClient }, children);
+ }
+ 
++/** 全站 main.tsx 是包在 `<StrictMode>` 下的 —— dev 會 double-invoke updater 與 effect。
++ *  `wrapper` 不套是為了讓其餘測試維持單發語意(訊息數、WS instance 數都好數),
++ *  只有「副作用不可寫在 updater 內」這一條需要真的重現正式環境的雙發。 */
++function strictWrapper({ children }: { children: ReactNode }) {
++  return createElement(StrictMode, null, createElement(QueryClientProvider, { client: queryClient }, children));
++}
++
+ beforeEach(() => {
+   FakeWS.instances = [];
+   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+@@ -71,6 +78,8 @@ afterEach(() => {
+   cleanup();
+   vi.unstubAllGlobals();
+   vi.restoreAllMocks();
++  // 用了 fake timers 的測試不還原會外溢到別檔(skill frontend-testing)
++  vi.useRealTimers();
+ });
+ 
+ async function setup() {
+@@ -119,6 +128,47 @@ describe("useStockStream", () => {
+     expect(hook.result.current.accum?.ticks.length).toBe(5);
+   });
+ 
++  // 🔴 F-2:`tick` 有兩道時序保護(refetch 中進 pendingRef、重放只收 seq > snap.seq),
++  // `book` 一道都沒有 —— t0 發 fetch(後端在那一刻凍結簿)→ t0+δ 新簿推播套用 →
++  // t0+Δ snapshot 回來整份覆蓋,**新簿被較舊的 snapshot 回捲**。鎖板 / 盤後推播稀疏時
++  // 回捲窗可達數十秒,而五檔、鎖停 badge、量 bar 的分母會一起退回舊值,零錯誤訊號。
++  it("refetch in-flight 期間的 book 推播不被較舊的 snapshot 回捲(F-2)", async () => {
++    const { hook, ws } = await setup();
++    let resolveRefetch: (r: Response) => void = () => {};
++    fetchMock.mockImplementationOnce(
++      () => new Promise<Response>((res) => { resolveRefetch = res; }),
++    );
++    act(() => ws.emit(T(4))); // 1→4 跳號 → refetch(fetch 已送出 = 後端簿已凍結)
++    // fetch 送出**之後**才到的新簿:方向恆定(推播必晚於 fetch 發起)
++    act(() => ws.emit({ type: "book", code: "2330", bids: [[2_379_000, 9]], asks: [[2_381_000, 4]] }));
++    act(() => {
++      resolveRefetch(new Response(JSON.stringify({
++        ...snap(4, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]),
++        // snapshot 帶的是**凍結當下**的舊簿
++        book: { bids: [[2_370_000, 1]], asks: [[2_371_000, 1]] },
++      })));
++    });
++    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
++    expect(hook.result.current.accum?.book?.bids).toEqual([[2_379_000, 9]]);
++    expect(hook.result.current.accum?.book?.asks).toEqual([[2_381_000, 4]]);
++  });
++
++  it("refetch 期間無 book 推播 → snapshot 的簿原樣採用(F-2 不誤留舊 pending)", async () => {
++    const { hook, ws } = await setup();
++    // 先讓一則 book 進 accum,再跑一次「期間無推播」的 refetch
++    act(() => ws.emit({ type: "book", code: "2330", bids: [[2_379_000, 9]], asks: [[2_381_000, 4]] }));
++    expect(hook.result.current.accum?.book?.bids).toEqual([[2_379_000, 9]]);
++    fetchMock.mockImplementationOnce(
++      async () => new Response(JSON.stringify({
++        ...snap(4, [{ t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" }]),
++        book: { bids: [[2_360_000, 2]], asks: [[2_361_000, 2]] },
++      })),
++    );
++    act(() => ws.emit(T(4)));
++    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
++    expect(hook.result.current.accum?.book?.bids).toEqual([[2_360_000, 2]]);
++  });
++
+   it("切檔撞上 in-flight refetch 不被吞(CR1:合併不丟棄)", async () => {
+     let resolveFirst: (r: Response) => void = () => {};
+     fetchMock.mockImplementationOnce(
+@@ -150,6 +200,30 @@ describe("useStockStream", () => {
+     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls));
+   });
+ 
++  // 🔴 F-1:`refetch()` 是副作用,不可寫在 `setStatus` 的 updater 內 —— React 的 updater
++  // 契約是純函式,而全站包在 StrictMode(main.tsx)下 dev 會 double-invoke:第一次進
++  // 單飛分支(refetchingRef=true),第二次撞上 in-flight → pendingRefetchRef=true,
++  // finally 的「合併不丟棄」語意再補發一次真的 fetch。每次回補完成都串行多打一份
++  // MB 級 snapshot(後端 `_TICKS_MAXLEN=20_000`)。
++  //
++  // 上一條測試只鎖了「有打」的下界(`toBeGreaterThan`),打幾次不管 —— 這正是本條要補的。
++  it("回補完成的 refetch 恰一次(StrictMode 下 updater 被 double-invoke)", async () => {
++    const hook = renderHook(() => useStockStream("2330"), { wrapper: strictWrapper });
++    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
++    // StrictMode 的 effect double-invoke 會建兩條 FakeWS(第一條已在 cleanup 關掉)
++    const ws = FakeWS.instances[FakeWS.instances.length - 1]!;
++    const before = fetchMock.mock.calls.length;
++    act(() => ws.emit({ type: "status", tc4: "up", backfilling: "2330" }));
++    act(() => ws.emit({ type: "status", tc4: "up", backfilling: null }));
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
++    // 上界:finally 的補發是非同步的,要等它有機會發生才算數
++    await act(async () => {
++      await new Promise((r) => setTimeout(r, 30));
++    });
++    expect(fetchMock.mock.calls.length).toBe(before + 1);
++    expect(hook.result.current.status.backfilling).toBeNull();
++  });
++
+   it("watchlist_quote 更新側欄報價(含 no_data)", async () => {
+     const { hook, ws } = await setup();
+     act(() => ws.emit({ type: "watchlist_quote", code: "5483", p: 216_500, chg_pct: -1.2, vol: 100, no_data: false }));
+@@ -217,6 +291,73 @@ describe("useStockStream", () => {
+     expect(spy).toHaveBeenCalledWith({ queryKey: ["stock-watchlist"] });
+   });
+ 
++  // 🔴 F-3:`refetch` 非 2xx 只有一個沒有 else 的 `if (res.ok)`,throw 只 console.warn ——
++  // 兩路都不改 accum(留 null)、不設錯誤態、不排重試。而 `accum === null` 時 tick 早退
++  // → seq-gap 自癒也是死路,唯一活路是 WS onopen(沒斷線就不會發)。#28 的 `?contract=`
++  // 讓 502/503 從正常操作可達 → 畫面釘在「載入中…」直到使用者自己重整。
++  //
++  // fake timers 下不可用 `waitFor`(vitest 的 fake timers 它偵測不到,會退回真 interval
++  // 而 timeout,skill frontend-testing)→ 一律 `advanceTimersByTimeAsync` + 同步斷言。
++  it("refetch 503 → backoff 重試,成功後 accum 就緒(F-3)", async () => {
++    const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
++      initialProps: { c: "2330" },
++      wrapper,
++    });
++    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
++    const ws = FakeWS.instances[0]!;
++    await act(async () => { ws.onopen?.(); }); // WS open 是排程重試的前置條件之一
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
++
++    vi.useFakeTimers();
++    fetchMock.mockImplementationOnce(
++      async () => new Response(JSON.stringify({ detail: { error: "TC4_DOWN" } }), { status: 503 }),
++    );
++    hook.rerender({ c: "5483" });
++    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
++    expect(hook.result.current.accum).toBeNull(); // 503 → 畫面上就是「載入中…」
++    const calls = fetchMock.mock.calls.length;
++
++    // 第一段 backoff = 1s
++    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
++    expect(fetchMock.mock.calls.length).toBe(calls);
++    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
++    expect(fetchMock.mock.calls.length).toBe(calls + 1);
++    expect(String(fetchMock.mock.calls[calls]?.[0])).toBe("/api/stock/state/5483");
++
++    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
++    expect(hook.result.current.accum).not.toBeNull(); // 自癒,不必使用者重整
++  });
++
++  // 同一條的另一半:切檔要取消還沒打出去的重試。沒取消的話舊 timer 到期時 `refetch()`
++  // 讀的是**當下**的 ref → 對新標的多打一份全量 snapshot(而且與正牌重試同一 tick)。
++  it("切檔取消 pending 重試(1s 後只有新標的自己的那一次)", async () => {
++    const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
++      initialProps: { c: "2330" },
++      wrapper,
++    });
++    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
++    const ws = FakeWS.instances[0]!;
++    await act(async () => { ws.onopen?.(); });
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
++
++    vi.useFakeTimers();
++    // (a) 2330 的 refetch 失敗 → 排一次重試
++    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 503 }));
++    act(() => ws.emit(T(9))); // 跳號 → refetch
++    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
++    // (b) 重試到期前切檔,新標的的初次 fetch 也失敗 → 它自己排一次
++    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 503 }));
++    hook.rerender({ c: "5483" });
++    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
++    const before = fetchMock.mock.calls.length;
++
++    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
++    expect(fetchMock.mock.calls.length).toBe(before + 1); // 舊 timer 沒取消 = 這裡變 +2
++    expect(String(fetchMock.mock.calls[before]?.[0])).toBe("/api/stock/state/5483");
++    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
++    expect(hook.result.current.accum).not.toBeNull();
++  });
++
+   it("WS onopen 發 ws-open 事件(斷線期間漏掉的訊號靠它自癒回補)", async () => {
+     let opened = 0;
+     const off = onWsOpen(() => (opened += 1));
+diff --git a/frontend/src/hooks/useStockStream.ts b/frontend/src/hooks/useStockStream.ts
+index de1df911..71d1ff1c 100644
+--- a/frontend/src/hooks/useStockStream.ts
++++ b/frontend/src/hooks/useStockStream.ts
+@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
+ 
+ import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
+ import type { SignalMsg } from "@/lib/signal-model";
+-import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
++import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickMsg } from "@/lib/stock-accum";
+ import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+@@ -46,6 +46,19 @@ export interface StockStreamState {
+ const BACKOFF_START_MS = 1_000;
+ const BACKOFF_CAP_MS = 30_000;
+ 
++/** snapshot refetch 失敗的重試節奏(F-3)。與 WS 重連的 backoff 分開:WS 斷了整頁都停,
++ *  refetch 失敗只是**這一個標的**的一次取數失敗,cap 短一點才不會讓自癒等半分鐘。
++ *  刻意**不設次數上限** —— TC4 / 後端一時不可用是常態,自癒比放棄有用;避免無限打的
++ *  節流靠排程前的三道檢查(標的未變 + WS 仍 open + 元件未 unmount)。 */
++const REFETCH_RETRY_START_MS = 1_000;
++const REFETCH_RETRY_CAP_MS = 8_000;
++
++/** refetch 交錯期間暫存的簿(F-2);帶 instrumentKey 標記,切檔撞上 in-flight 時丟棄。 */
++interface PendingBook {
++  key: string;
++  book: StockBook;
++}
++
+ interface WsMsg {
+   type: string;
+   code?: string;
+@@ -84,6 +97,25 @@ export function useStockStream(
+   const refetchingRef = useRef(false);
+   const pendingRefetchRef = useRef(false);
+   const pendingRef = useRef<StockTickMsg[]>([]);
++  // refetch 進行中收到的**最新一份**簿(F-2)。snapshot 是後端在 fetch 送出當下凍結的,
++  // 而推播必晚於 fetch 發起 → 方向恆定,套完 snapshot 之後蓋回來就是對的。
++  // 帶 instrumentKey 標記:切檔撞上 in-flight 時 key 不符即丟,不把 A 的簿蓋到 B 上。
++  const pendingBookRef = useRef<PendingBook | null>(null);
++
++  /** 取出並清掉暫存的簿。**要經過一層函式**:`refetch` 一開頭就寫 `= null`,而 TS 的
++   *  屬性窄化不會被 await / 函式呼叫重置(寫進值的那條路在 WS callback 裡,TS 看不到)
++   *  → 直接讀會被判成 `never`,`.key` 編不過。順手清掉也讓「只用一次」變成結構保證。 */
++  const takePendingBook = (): PendingBook | null => {
++    const pending = pendingBookRef.current;
++    pendingBookRef.current = null;
++    return pending;
++  };
++  // 上一則 status 的**真值**(F-1)。WS handler 是 deps `[]` 的閉包讀不到最新 state,
++  // 而把比較塞進 `setStatus` 的 updater 會讓副作用跟著 StrictMode 的 double-invoke 重跑。
++  const statusRef = useRef<{ tc4: string; backfilling: string | null }>({
++    tc4: "up",
++    backfilling: null,
++  });
+   const codeRef = useRef(code);
+   codeRef.current = code;
+   const contractRef = useRef(contract);
+@@ -97,6 +129,37 @@ export function useStockStream(
+   instrumentKeyRef.current = instrumentKey;
+   accumRef.current = accum;
+ 
++  // 重試排程的三道前置(F-3)。ref 而非 state:排程與取消都發生在 WS callback / async
++  // finally 裡,那些地方讀不到 render 當下的 state。
++  const mountedRef = useRef(true);
++  const wsOpenRef = useRef(false);
++  const retryTimerRef = useRef<number | undefined>(undefined);
++  const retryDelayRef = useRef(REFETCH_RETRY_START_MS);
++
++  /** 取消還沒打出去的重試並把 backoff 歸零(切標的 / 成功 / unmount)。
++   *  不取消的話舊 timer 到期時 `refetch()` 讀的是**當下**的 ref → 對新標的多打一份
++   *  全量 snapshot,而且與新標的自己的重試撞在同一 tick。 */
++  const cancelRetry = (): void => {
++    window.clearTimeout(retryTimerRef.current);
++    retryTimerRef.current = undefined;
++    retryDelayRef.current = REFETCH_RETRY_START_MS;
++  };
++
++  const scheduleRetry = (key: string): void => {
++    // 三道檢查都是「重試已經沒有意義」:元件沒了 / 標的換了(新標的自己會抓)/
++    // WS 斷了(重連的 onopen 本來就會發一次全量對齊,這裡再排只是重複)。
++    if (!mountedRef.current) return;
++    if (instrumentKeyRef.current !== key) return;
++    if (!wsOpenRef.current) return;
++    const delay = retryDelayRef.current;
++    retryDelayRef.current = Math.min(delay * 2, REFETCH_RETRY_CAP_MS);
++    window.clearTimeout(retryTimerRef.current);
++    retryTimerRef.current = window.setTimeout(() => {
++      retryTimerRef.current = undefined;
++      void refetch();
++    }, delay);
++  };
++
+   const refetch = async (): Promise<void> => {
+     const current = instrumentKeyRef.current;
+     const currentCode = codeRef.current;
+@@ -108,27 +171,45 @@ export function useStockStream(
+     }
+     refetchingRef.current = true;
+     pendingRef.current = [];
++    pendingBookRef.current = null;
++    // 非 2xx 與 throw 走同一條復原路徑(F-3);`finally` 讀得到才能與「切檔補發」分岔
++    let failed = false;
+     try {
+       const res = await fetch(stateUrl(currentCode, contractRef.current));
+       if (res.ok) {
++        cancelRetry(); // 成功即歸零 backoff,並丟掉還沒打出去的重試
+         const snap = fromSnapshot(await res.json());
+         if (instrumentKeyRef.current === current) {
+           let next = snap;
+           for (const msg of pendingRef.current) {
+             if (msg.seq > snap.seq) next = applyTick(next, msg);
+           }
++          // 交錯的簿蓋回 snapshot 的凍結簿(F-2);key 不符 = 已切檔 → 丟棄
++          const pendingBook = takePendingBook();
++          if (pendingBook !== null && pendingBook.key === current) {
++            next = { ...next, book: pendingBook.book };
++          }
+           accumRef.current = next;
+           setAccum(next);
+         }
++      } else {
++        // 502/503(TC4 斷線 / 後端還沒起)從正常操作可達 —— 不排重試的話 accum 留 null,
++        // 而 accum===null 時 tick 早退 → seq-gap 自癒也是死路,畫面釘在「載入中…」。
++        console.warn("stock: snapshot refetch 非 2xx", res.status);
++        failed = true;
+       }
+     } catch (err) {
+       console.warn("stock: snapshot refetch 失敗", err);
++      failed = true;
+     } finally {
+       refetchingRef.current = false;
+       pendingRef.current = [];
++      pendingBookRef.current = null;
+       if (pendingRefetchRef.current || instrumentKeyRef.current !== current) {
+         pendingRefetchRef.current = false;
+         void refetch();
++      } else if (failed) {
++        scheduleRetry(current);
+       }
+     }
+   };
+@@ -139,6 +220,8 @@ export function useStockStream(
+     setAccum(null);
+     setStkfut(null);
+     accumRef.current = null;
++    pendingBookRef.current = null; // 舊標的的簿不可跨檔存活(F-2)
++    cancelRetry(); // 舊標的的重試不可跨檔存活(F-3)
+     if (instrumentKey === null) return;
+     void refetch();
+   }, [instrumentKey]);
+@@ -149,6 +232,7 @@ export function useStockStream(
+     let ws: WebSocket | null = null;
+     let timer: number | undefined;
+     let backoff = BACKOFF_START_MS;
++    mountedRef.current = true; // StrictMode 的 mount→cleanup→mount 會把它翻回來
+ 
+     const handle = (msg: WsMsg): void => {
+       // 主圖相關訊息(tick / book / stkfut / backfilling)的比對鍵一律是 instrument key:
+@@ -176,12 +260,18 @@ export function useStockStream(
+         }
+         case "book": {
+           if (msg.code !== current) return;
++          const book: StockBook = {
++            bids: msg.bids as [number, number][],
++            asks: msg.asks as [number, number][],
++          };
++          // refetch 進行中:snapshot 是**較舊**的凍結簿,回來時會整份覆蓋 accum ——
++          // 這裡先留一份最新的,套完 snapshot 之後蓋回去(F-2)。
++          if (refetchingRef.current && current !== null) {
++            pendingBookRef.current = { key: current, book };
++          }
+           const acc = accumRef.current;
+           if (acc === null) return;
+-          const next = {
+-            ...acc,
+-            book: { bids: msg.bids as [number, number][], asks: msg.asks as [number, number][] },
+-          };
++          const next = { ...acc, book };
+           accumRef.current = next;
+           setAccum(next);
+           return;
+@@ -216,13 +306,18 @@ export function useStockStream(
+             tc4: String(msg.tc4 ?? "up"),
+             backfilling: (msg.backfilling as string | null) ?? null,
+           };
+-          setStatus((prev) => {
+-            // 主圖回補完成(backfilling 從本檔 → null)→ 全量 refetch(靜市無 tick 也更新)
+-            if (prev.backfilling !== null && next.backfilling === null && prev.backfilling === instrumentKeyRef.current) {
+-              void refetch();
+-            }
+-            return next;
+-          });
++          // 比較與 refetch 都在 handler 本體做,**不可搬回 `setStatus` 的 updater 內**
++          // (F-1):updater 的契約是純函式,而全站包在 StrictMode 下 dev 會 double-invoke
++          // → 第一次進單飛、第二次撞 in-flight 設 pendingRefetchRef,finally 的「合併不
++          // 丟棄」再補發一次真 fetch,每次回補完成都串行多打一份 MB 級 snapshot。
++          // 前值改由 ref 持有(handler 是 effect deps `[]` 的閉包,讀不到最新的 state)。
++          const prev = statusRef.current;
++          statusRef.current = next;
++          // 主圖回補完成(backfilling 從本檔 → null)→ 全量 refetch(靜市無 tick 也更新)
++          if (prev.backfilling !== null && next.backfilling === null && prev.backfilling === current) {
++            void refetch();
++          }
++          setStatus(next);
+           return;
+         }
+         case "stkfut": {
+@@ -255,6 +350,7 @@ export function useStockStream(
+       setWsStatus("connecting");
+       ws.onopen = () => {
+         backoff = BACKOFF_START_MS;
++        wsOpenRef.current = true;
+         setWsStatus("open");
+         void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
+         emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
+@@ -267,6 +363,7 @@ export function useStockStream(
+         }
+       };
+       ws.onclose = () => {
++        wsOpenRef.current = false;
+         if (!alive) return;
+         setWsStatus("closed");
+         timer = window.setTimeout(connect, backoff);
+@@ -280,6 +377,9 @@ export function useStockStream(
+     connect();
+     return () => {
+       alive = false;
++      mountedRef.current = false;
++      wsOpenRef.current = false;
++      cancelRetry(); // in-flight 的 refetch 事後失敗時才不會排到已卸載的元件上
+       window.clearTimeout(timer);
+       ws?.close();
+     };
+diff --git a/frontend/src/lib/volume-profile.test.ts b/frontend/src/lib/volume-profile.test.ts
+index 36d9eb49..2fc7bb15 100644
+--- a/frontend/src/lib/volume-profile.test.ts
++++ b/frontend/src/lib/volume-profile.test.ts
+@@ -144,6 +144,52 @@ describe("buildVpBars", () => {
+     expect(bars[0]!.y + bars[0]!.h).toBeLessThanOrEqual(g.toY(p) + 1e-9);
+   });
+ 
++  /** 🔴 F-5:價位帶的兩端改為「與相鄰**合法檔位**的中點」。
++   *
++   *  舊版兩端都用 `tickOf(p) / 2`,在 tick 級距邊界(50 / 100 / 500 / 1000 元)會跨過
++   *  下方鄰檔:p = 100.00 元的 tick 是 0.5 元 → 帶下緣 99.75,但下方的合法檔位是 99.90
++   *  (它自己的 tick 是 0.1 元)、帶上緣 99.95 → 兩帶重疊 0.2 元,`VP_FILL_OPACITY`
++   *  疊加後看起來像那一帶的量特別集中。
++   *
++   *  上緣不受影響(`stepUp` 用的就是 p 自己的 tick),所以只有下緣會動。 */
++  describe("價位帶兩端 = 與相鄰合法檔位的中點(F-5:級距邊界不跨檔)", () => {
++    // [邊界檔位, 下方合法檔位, 上方合法檔位](毫元)
++    const CASES: [number, number, number][] = [
++      [50_000, 49_950, 50_100], // 50.00 元:tick 0.1 ← 下方 0.05
++      [100_000, 99_900, 100_500], // 100.00 元:tick 0.5 ← 下方 0.1
++      [500_000, 499_500, 501_000], // 500.0 元:tick 1 ← 下方 0.5
++      [1_000_000, 999_000, 1_005_000], // 1000 元:tick 5 ← 下方 1
++    ];
++
++    for (const [p, below, above] of CASES) {
++      it(`p=${p} 毫元:下緣 = 與 ${below} 的中點,與下方檔位的帶不重疊`, () => {
++        // 域取寬一點讓 dist 遠大於 1px(否則 h 被 clamp,量不到帶邊界)
++        const g = geom(below - 10 * (p - below), above + 10 * (above - p));
++        const bars = buildVpBars(cells([[p, 5], [below, 5]]), g, WIDTH);
++        const bar = bars.find((b) => b.priceMilli === p)!;
++        const lower = bars.find((b) => b.priceMilli === below)!;
++        // h = dist × 0.85(0.15 的縫全由下緣吃掉)→ 由 h 反推帶的下緣
++        const bandBottomY = bar.y + bar.h / 0.85;
++
++        expect(bar.y).toBeCloseTo(g.toY((p + above) / 2), 6);
++        expect(bandBottomY).toBeCloseTo(g.toY((p + below) / 2), 6);
++        // 舊版 `tickOf(p)/2` 的下緣落在下方檔位的帶內(svg y 愈大愈下)
++        expect(bandBottomY).toBeLessThan(g.toY(p - tickOf(p) / 2));
++        // 與下方檔位的帶相接不重疊
++        expect(bandBottomY).toBeLessThanOrEqual(lower.y + 1e-9);
++      });
++    }
++
++    it("非邊界檔位:帶仍是 [p − tick/2, p + tick/2](與現行等價)", () => {
++      const g = geom(2_300_000, 2_400_000);
++      const p = 2_350_000;
++      const half = tickOf(p) / 2;
++      const bars = buildVpBars(cells([[p, 5]]), g, WIDTH);
++      expect(bars[0]!.y).toBeCloseTo(g.toY(p + half), 6);
++      expect(bars[0]!.y + bars[0]!.h / 0.85).toBeCloseTo(g.toY(p - half), 6);
++    });
++  });
++
+   describe("高密度域的縫(R6)", () => {
+     it("(a) dist ≈ 1.19px(域 200 檔)→ h ≤ dist 且 ≥ dist × 0.8(相鄰不重疊)", () => {
+       // 250 元帶 tick = 0.5 元(500 毫元);200 檔 = 100_000 毫元域寬
+diff --git a/frontend/src/lib/volume-profile.ts b/frontend/src/lib/volume-profile.ts
+index c74be910..630c213f 100644
+--- a/frontend/src/lib/volume-profile.ts
++++ b/frontend/src/lib/volume-profile.ts
+@@ -5,7 +5,7 @@
+ 
+ import type { VpCell } from "@/lib/stock-accum";
+ import { plotWidth } from "@/lib/stock-intraday-svg";
+-import { tickOf } from "@/lib/stock-tick";
++import { stepDown, stepUp } from "@/lib/stock-tick";
+ 
+ /** bar 最大寬 = 繪圖區的 22%(長條是背景參考,不該吃掉走勢線的可讀空間)。 */
+ export const VP_MAX_W_RATIO = 0.22;
+@@ -61,9 +61,16 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
+     // `y = top` 而不是把 bar 再置中進帶內:0.15 的縫必須全由下緣吃掉,否則端點檔位
+     // 的 bar 會往上溢出畫布(它的 top 已經**就是**域邊界)。代價是中心與價線差
+     // 0.075 × dist(半條縫),遠小於舊語意的半個 tick。
+-    const half = tickOf(priceMilli) / 2;
+-    const top = Math.max(g.toY(yTop), g.toY(priceMilli + half));
+-    const bottom = Math.min(g.toY(yBottom), g.toY(priceMilli - half));
++    //
++    // 兩端取「與相鄰**合法檔位**的中點」而不是 `± tickOf(p)/2`(F-5):tick 級距邊界上
++    // 下方鄰檔比自己細(100.00 元的 tick 是 0.5,但下一檔 99.90 的 tick 是 0.1),
++    // 同寬的帶會跨進鄰檔的帶 0.2 元 —— fillOpacity 疊加後看起來像那一帶量特別集中。
++    // 檔位規則沿 `stock-tick.ts` 的單一定義,不在這裡自寫第二份。
++    // 非邊界檔位的結果與 `p ± tick/2` 等價,只有 50 / 100 / 500 / 1000 元四處收斂。
++    const topMilli = (priceMilli + stepUp(priceMilli)) / 2;
++    const bottomMilli = (priceMilli + stepDown(priceMilli)) / 2;
++    const top = Math.max(g.toY(yTop), g.toY(topMilli));
++    const bottom = Math.min(g.toY(yBottom), g.toY(bottomMilli));
+     const dist = bottom - top;
+     return {
+       y: top,
