@@ -33,6 +33,23 @@
   rejected — 點一下左圖「加權」即永久自癒):若真嫌,IndexPage 做一次性 seed
   (MARKET2_KEY_STORE 未設時依左值選互補標的),冪等不引入持續耦合。
 
+## 2026-08-06(group-grid 題5 收尾留尾巴)
+
+- [ ] **群組檢視待 user 過目**(PR #27 試用指引):個股頁「單檔｜群組」pill、mini 分時圖牆、
+  點卡切檔;盤中 Discord 訊號同群摘要實發。過目時順看:mini 圖沿用 ±10% 漲跌停域,
+  1% 波動僅 ~3.4px(主圖 1/5.5)— 若「看不出誰在動」,候選解 = mini 圖改 autofit 域。
+- [ ] **reconnect 不清 `_backfill_failed`**(fix 輪 deviation 2):斷線期間成員連 3 次
+  回補失敗 → TC4 重連後該檔當日不再入列(主圖不受影響)。一行
+  `self._backfill_failed.clear()` 於 `_handle_reconnect` 可解。
+- [ ] **rollover stage1→stage2 窗 `_backfilled` 殘留**(review B3-e):停在兩段之間
+  (開盤前/假日)時群組成員不重回補;正常日首 tick 觸發 stage2 後 60s 自癒,假日無資料
+  可補 — 影響低,記錄備查。
+- [ ] **apply_backfill reset+replay 競態範圍隨 guard 去 main 化擴大**(review B3-f):
+  SubHistory 與套用之間到達的 live tick 被洗掉,現及於全部自選成員(每檔每日一次 +
+  60s 輪詢自癒)。若盤中觀察到卡片閃缺分鐘,從這裡追。
+- [ ] **同步率 badge / CorrState 掛群組卡片**(brainstorm auto-default 未做):全配對
+  成本趨近零,掛不掛看 user 用過 grid 後的需求。
+
 ## 2026-08-06(signal-rules 題1 收尾留尾巴)
 
 - [ ] **規則 UI 待 user 過目**(PR #25 試用指引):訊號欄「監聽規則」區 + 規則 Dialog
