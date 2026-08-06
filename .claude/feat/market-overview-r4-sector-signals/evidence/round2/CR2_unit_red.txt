@@ -1,0 +1,21 @@
+ERROR: found no collectors for C:\side-project\copycat\tests\test_market_breadth.py::test_normalize_universe_rows_cleans_three_numeric_fields
+
+ERROR: found no collectors for C:\side-project\copycat\tests\test_market_breadth.py::test_normalize_universe_rows_does_not_mutate_input
+
+ERROR: found no collectors for C:\side-project\copycat\tests\test_market_breadth.py::test_normalize_universe_rows_keeps_missing_keys_absent
+
+
+=================================== ERRORS ====================================
+________________ ERROR collecting tests/test_market_breadth.py ________________
+ImportError while importing test module 'C:\side-project\copycat\tests\test_market_breadth.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Users\USER\AppData\Local\Programs\Python\Python313\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_market_breadth.py:15: in <module>
+    from copycat.market_breadth import (
+E   ImportError: cannot import name 'normalize_universe_rows' from 'copycat.market_breadth' (C:\side-project\copycat\copycat\market_breadth.py)
+=========================== short test summary info ===========================
+ERROR tests/test_market_breadth.py
+1 error in 0.39s

@@ -1,0 +1,184 @@
+### MUTATION: å…©æ”¯æ¸¬è©¦æ‹¿æ‰ small_chain fixture(CHAIN_MIN_ROWS å›åˆ°çœŸå€¼ 1000)
+### æœŸæœ›:1 åˆ—çš„ FakeFetch è¢«åˆ—æ•¸é–€æª»å…ˆæ””ä¸‹ -> èµ°ä¸åˆ°ã€Œç©ºè¡¨ã€/ã€Œparse å´©æ½°ã€åˆ†æ”¯ -> åˆ†æ”¯å°ˆå±¬è¨Šæ¯æ–·è¨€ç´…
+
+FF                                                                       [100%]
+================================== FAILURES ===================================
+___________ TestChainCache.test_empty_parse_keeps_old_map_and_file ____________
+
+self = <test_breadth_engine.TestChainCache object at 0x00000143987596A0>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2684/test_empty_parse_keeps_old_map0')
+mono = <test_breadth_engine.FakeMono object at 0x0000014396AB6BA0>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x00000143985FF380>
+
+    async def test_empty_parse_keeps_old_map_and_file(
+        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """¨ú¼Æ¦¨¥\¦ı parse «á¬°ªÅ ¡÷ **¤£´«ªí¡B¤£¸¨ÀÉ¡B¤£¨ê®ÉÂW**,rotation ¤´¦³­È(R6)¡C
+    
+        Äæ¦ì»y·NÅÜ§ó(©Î¤W´å¦^¤@¥÷´İªí)®É `rows_to_chain_map` ·|¾ã¥÷¥á¦¨ªÅ dict:
+        ·Ó¼Ë´«ªíªº¸Ü,¤@¥÷¥i¥ÎªºÂÂ§Ö¨ú·|³QªÅªíÂĞ¼g**¨Ã©T¤Æ¨ìºÏºĞ**,­«±Ò«á³s stale
+        ªºÃşªÑ¸ê®Æ³£¨S¦³,¦Óµe­±¤W¥u¬O¡uÃşªÑ¸ê®Æ¥¼´Nºü¡v¹s¿ù»~°T¸¹¡C
+    
+        `small_chain` ¤£¥i¬Ù:1 ¦Cªº fake ¦^À³·|³Q¦C¼ÆªùÂe¥ıÄd¤U,¨º±øºIÂ_¸ô®|ªº¥~Æ[
+        (¤£´«ªí / ¤£¸¨ÀÉ / °hÁ×)»P¥»®×§¹¥ş¦P§Î ¡÷ ¤Ö±¾ fixture ´NÅÜ¦¨ vacuous test¡C
+        °T®§¤l¦r¦êÂ_¨¥¦P²z(review round-3 CR-1)¡C
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        before = _chain_file(tmp_path).read_text(encoding="utf-8")
+        chain = FakeFetch([{"stock_id": "2330", "industry": "¥b¾ÉÅé"}])  # ¯Ê sub ¡÷ ¾ã¦C¥á
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+    
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+    
+        assert chain.calls == 1
+>       assert engine._chain_map == _CHAIN_MAP
+E       AssertionError: assert {} == {'¥b¾ÉÅé': {'´¹¶ê¥N...³y': ['1101']}}
+E         
+E         Right contains 2 more items:
+E         {'¥b¾ÉÅé': {'´¹¶ê¥N¤u': ['2330'], 'ª¿´¹¶ê': ['6488']}, '¤ôªd': {'¤ôªd»s³y': ['1101']}}
+E         Use -v to get more diff
+
+tests\server\test_breadth_engine.py:2007: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  copycat.server.breadth_engine:breadth_engine.py:853 breadth industry_chain §Ö¨ú¥u¦³ 3 ¦C(ªùÂe 1000),µø¦PµL§Ö¨ú(¤U¤@°é­«¨ú)
+WARNING  copycat.server.breadth_engine:breadth_engine.py:937 breadth industry_chain ¥u¦³ 1 ¦C(ªùÂe 1000),µø¦P¨ú¼Æ¥¢±Ñ(ªu¥ÎÂÂªí¤£¸¨ÀÉ,60s «á­«¸Õ)
+_________ TestChainCache.test_parse_crash_keeps_old_map_and_backs_off _________
+
+self = <test_breadth_engine.TestChainCache object at 0x0000014396AFB150>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2684/test_parse_crash_keeps_old_map0')
+mono = <test_breadth_engine.FakeMono object at 0x00000143986DFD90>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x00000143986DF890>
+
+    async def test_parse_crash_keeps_old_map_and_backs_off(
+        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """parse ¬µ±¼(Å¼­È¥´¬ï `rows_to_chain_map`)¡÷ ªu¥ÎÂÂªí + °hÁ×,¤£¥~©ß(review S-3)¡C
+    
+        `_refresh_chain` ¬O fire-and-forget task ªº¨­Åé:°k¥X¥hªº¨Ò¥~¥u·|ÅÜ¦¨ asyncio
+        ªº¡uTask exception was never retrieved¡v,¦Ó `_chain_retry_at` ¨S³] ¡÷ ¤U¤@°é
+        ¥ß¨è­«ªZ¸Ë¡B¥H poll ¸`«µ(10s)¹ïµÛÃa¤W´å­«¥´,ÃşªÑ­±ªO°±¦bÂÂªí¤W¹s¿ù»~°T¸¹¡C
+    
+        `small_chain` ¤£¥i¬Ù:1 ¦Cªº fake ¦^À³·|³Q¦C¼ÆªùÂe¥ıÄd¤U ¡÷ parse ®Ú¥»¨S³Q©I¥s,
+        ¦ÓºIÂ_¸ô®|ªº¥~Æ[(ªu¥ÎÂÂªí / °hÁ× / ¦³ WARNING)»P¥»®×§¹¥ş¦P§Î(round-3 CR-1)¡C
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        # §Îª¬¦Xªk(¬O dict)¦ı industry ¤£¥iÂø´ê ¡÷ setdefault ·í³õ TypeError
+        chain = FakeFetch([{"stock_id": "2330", "industry": ["¥b¾ÉÅé"], "sub_industry": "´¹¶ê"}])
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+    
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+    
+        assert chain.calls == 1
+>       assert engine._chain_map == _CHAIN_MAP  # ÂÂªí­ì«Ê¤£°Ê
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert {} == {'¥b¾ÉÅé': {'´¹¶ê¥N...³y': ['1101']}}
+E         
+E         Right contains 2 more items:
+E         {'¥b¾ÉÅé': {'´¹¶ê¥N¤u': ['2330'], 'ª¿´¹¶ê': ['6488']}, '¤ôªd': {'¤ôªd»s³y': ['1101']}}
+E         Use -v to get more diff
+
+tests\server\test_breadth_engine.py:2084: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  copycat.server.breadth_engine:breadth_engine.py:853 breadth industry_chain §Ö¨ú¥u¦³ 3 ¦C(ªùÂe 1000),µø¦PµL§Ö¨ú(¤U¤@°é­«¨ú)
+WARNING  copycat.server.breadth_engine:breadth_engine.py:937 breadth industry_chain ¥u¦³ 1 ¦C(ªùÂe 1000),µø¦P¨ú¼Æ¥¢±Ñ(ªu¥ÎÂÂªí¤£¸¨ÀÉ,60s «á­«¸Õ)
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_empty_parse_keeps_old_map_and_file
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_parse_crash_keeps_old_map_and_backs_off
+2 failed in 0.66s
+
+############################################################
+### MUTATION B: small_chain é–€æª» 1 -> 2(restore çš„ 3 åˆ—ç…§æ¨£é,fetch çš„ 1 åˆ—è®Šæˆªæ–·)
+### æœŸæœ›:èˆŠçš„ã€Œå¤–è§€ã€æ–·è¨€(ä¸æ›è¡¨ / ä¸è½æª” / æœ‰ WARNING)å…¨ç¶  = æ­£æ˜¯ vacuous çš„æ¨£æ…‹,
+###       åªæœ‰æ–°çš„åˆ†æ”¯å°ˆå±¬è¨Šæ¯æ–·è¨€(è§£æå¾Œç‚ºç©º / è§£æ / è½æª”å¤±æ•—)æœƒç´…
+
+FF                                                                       [100%]
+================================== FAILURES ===================================
+___________ TestChainCache.test_empty_parse_keeps_old_map_and_file ____________
+
+self = <test_breadth_engine.TestChainCache object at 0x000001F6311E16A0>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2685/test_empty_parse_keeps_old_map0')
+mono = <test_breadth_engine.FakeMono object at 0x000001F62F456BA0>
+small_chain = None
+caplog = <_pytest.logging.LogCaptureFixture object at 0x000001F62F7AF380>
+
+    async def test_empty_parse_keeps_old_map_and_file(
+        self, tmp_path: Path, mono: FakeMono, small_chain: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """¨ú¼Æ¦¨¥\¦ı parse «á¬°ªÅ ¡÷ **¤£´«ªí¡B¤£¸¨ÀÉ¡B¤£¨ê®ÉÂW**,rotation ¤´¦³­È(R6)¡C
+    
+        Äæ¦ì»y·NÅÜ§ó(©Î¤W´å¦^¤@¥÷´İªí)®É `rows_to_chain_map` ·|¾ã¥÷¥á¦¨ªÅ dict:
+        ·Ó¼Ë´«ªíªº¸Ü,¤@¥÷¥i¥ÎªºÂÂ§Ö¨ú·|³QªÅªíÂĞ¼g**¨Ã©T¤Æ¨ìºÏºĞ**,­«±Ò«á³s stale
+        ªºÃşªÑ¸ê®Æ³£¨S¦³,¦Óµe­±¤W¥u¬O¡uÃşªÑ¸ê®Æ¥¼´Nºü¡v¹s¿ù»~°T¸¹¡C
+    
+        `small_chain` ¤£¥i¬Ù:1 ¦Cªº fake ¦^À³·|³Q¦C¼ÆªùÂe¥ıÄd¤U,¨º±øºIÂ_¸ô®|ªº¥~Æ[
+        (¤£´«ªí / ¤£¸¨ÀÉ / °hÁ×)»P¥»®×§¹¥ş¦P§Î ¡÷ ¤Ö±¾ fixture ´NÅÜ¦¨ vacuous test¡C
+        °T®§¤l¦r¦êÂ_¨¥¦P²z(review round-3 CR-1)¡C
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        before = _chain_file(tmp_path).read_text(encoding="utf-8")
+        chain = FakeFetch([{"stock_id": "2330", "industry": "¥b¾ÉÅé"}])  # ¯Ê sub ¡÷ ¾ã¦C¥á
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+    
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+    
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP
+        assert engine._chain_fetched_at == 0.0
+        assert _chain_file(tmp_path).read_text(encoding="utf-8") == before
+>       assert _warned(caplog, "¸ÑªR«á¬°ªÅ")
+E       AssertionError: assert False
+E        +  where False = _warned(<_pytest.logging.LogCaptureFixture object at 0x000001F62F7AF380>, '¸ÑªR«á¬°ªÅ')
+
+tests\server\test_breadth_engine.py:2010: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  copycat.server.breadth_engine:breadth_engine.py:937 breadth industry_chain ¥u¦³ 1 ¦C(ªùÂe 2),µø¦P¨ú¼Æ¥¢±Ñ(ªu¥ÎÂÂªí¤£¸¨ÀÉ,60s «á­«¸Õ)
+_________ TestChainCache.test_parse_crash_keeps_old_map_and_backs_off _________
+
+self = <test_breadth_engine.TestChainCache object at 0x000001F62F49B150>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2685/test_parse_crash_keeps_old_map0')
+mono = <test_breadth_engine.FakeMono object at 0x000001F62F76F890>
+small_chain = None
+caplog = <_pytest.logging.LogCaptureFixture object at 0x000001F63104C190>
+
+    async def test_parse_crash_keeps_old_map_and_backs_off(
+        self, tmp_path: Path, mono: FakeMono, small_chain: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """parse ¬µ±¼(Å¼­È¥´¬ï `rows_to_chain_map`)¡÷ ªu¥ÎÂÂªí + °hÁ×,¤£¥~©ß(review S-3)¡C
+    
+        `_refresh_chain` ¬O fire-and-forget task ªº¨­Åé:°k¥X¥hªº¨Ò¥~¥u·|ÅÜ¦¨ asyncio
+        ªº¡uTask exception was never retrieved¡v,¦Ó `_chain_retry_at` ¨S³] ¡÷ ¤U¤@°é
+        ¥ß¨è­«ªZ¸Ë¡B¥H poll ¸`«µ(10s)¹ïµÛÃa¤W´å­«¥´,ÃşªÑ­±ªO°±¦bÂÂªí¤W¹s¿ù»~°T¸¹¡C
+    
+        `small_chain` ¤£¥i¬Ù:1 ¦Cªº fake ¦^À³·|³Q¦C¼ÆªùÂe¥ıÄd¤U ¡÷ parse ®Ú¥»¨S³Q©I¥s,
+        ¦ÓºIÂ_¸ô®|ªº¥~Æ[(ªu¥ÎÂÂªí / °hÁ× / ¦³ WARNING)»P¥»®×§¹¥ş¦P§Î(round-3 CR-1)¡C
+        """
+        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+        # §Îª¬¦Xªk(¬O dict)¦ı industry ¤£¥iÂø´ê ¡÷ setdefault ·í³õ TypeError
+        chain = FakeFetch([{"stock_id": "2330", "industry": ["¥b¾ÉÅé"], "sub_industry": "´¹¶ê"}])
+        engine, *_ = _make(tmp_path, chain=chain)
+        engine._restore_chain()
+    
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await _arm_chain(engine)
+    
+        assert chain.calls == 1
+        assert engine._chain_map == _CHAIN_MAP  # ÂÂªí­ì«Ê¤£°Ê
+        assert engine._chain_fetched_at == 0.0
+        assert engine._chain_retry_at is not None
+>       assert _warned(caplog, "¸ÑªR / ¸¨ÀÉ¥¢±Ñ")
+E       AssertionError: assert False
+E        +  where False = _warned(<_pytest.logging.LogCaptureFixture object at 0x000001F63104C190>, '¸ÑªR / ¸¨ÀÉ¥¢±Ñ')
+
+tests\server\test_breadth_engine.py:2087: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  copycat.server.breadth_engine:breadth_engine.py:937 breadth industry_chain ¥u¦³ 1 ¦C(ªùÂe 2),µø¦P¨ú¼Æ¥¢±Ñ(ªu¥ÎÂÂªí¤£¸¨ÀÉ,60s «á­«¸Õ)
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_empty_parse_keeps_old_map_and_file
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_parse_crash_keeps_old_map_and_backs_off
+2 failed in 0.42s

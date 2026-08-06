@@ -1,0 +1,1280 @@
+diff --git a/copycat/breadth_config.py b/copycat/breadth_config.py
+index 7b9f6116..30bad8e9 100644
+--- a/copycat/breadth_config.py
++++ b/copycat/breadth_config.py
+@@ -30,12 +30,24 @@ class BreadthConfig:
+ 
+ 
+ def load_breadth_config(path: Path = CONFIG_PATH) -> BreadthConfig:
+-    """讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 → ValueError。"""
++    """讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 / 值域違反 → ValueError。
++
++    dataclass 預設路徑(檔不存在)不必驗 —— 預設值恆合法,驗的是**覆寫進來的值**。
++    """
+     if not path.exists():
+         return BreadthConfig()
+-    return load_dataclass_json(
++    cfg = load_dataclass_json(
+         path,
+         BreadthConfig,
+         tuple_keys=(),
+         unknown_label="未知家數帶參數",
+     )
++    if cfg.event_cooldown_secs <= 0:
++        # 廣度事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆
++        # 抑制**全靠**正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上
++        # 只是「這則沒出現」(review round-2 HR-4)
++        raise ValueError(
++            f"event_cooldown_secs 必須 > 0(取得 {cfg.event_cooldown_secs}):"
++            "廣度事件的 id 唯一性靠冷卻抑制同 as_of 重覆,關掉會讓前端去重吃掉真事件"
++        )
++    return cfg
+diff --git a/copycat/market_breadth.py b/copycat/market_breadth.py
+index fe7e061e..91b44f09 100644
+--- a/copycat/market_breadth.py
++++ b/copycat/market_breadth.py
+@@ -270,10 +270,12 @@ def _is_limit(close: float, prev_close: float) -> tuple[bool, bool]:
+ def _to_number(value: object) -> float | None:
+     """數值欄 → float;缺值 / 非數值 → None(`limit_streaks._to_float` 同語意)。
+ 
+-    `bool` 明確排除(True 靜默變 1.0)。snapshot 的 `high` / `low` 不保證是數值 ——
+-    未成交的檔位實務上會是空字串或 `"-"`,而 `round(x * 1000)` 對 str 直接 TypeError:
+-    那個例外從 `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉,`_fail()` 沒被
+-    呼叫 → 退避不動、stale 不亮,整片家數只是凍在最後一則且零錯誤訊號。
++    `bool` 明確排除(True 靜默變 1.0)。snapshot 的數值欄不保證是數值 —— 未成交的檔位
++    實務上會是空字串或 `"-"`,而 `round(x * 1000)`(或 `close - change_price`)對 str
++    直接 TypeError:那個例外從 `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉,
++    `_fail()` 沒被呼叫 → **退避不動、家數輪整條停擺**,面板只是凍在最後一則。
++    (窗內 stale 仍會因「距上次成功超過 stale_secs」亮起 —— `_stale()` 判的是
++    `_last_success` 不是本輪成敗;凍住的是數字本身。)
+     """
+     if isinstance(value, bool):
+         return None
+@@ -332,12 +334,17 @@ def compute_breadth(
+     for r in rows:
+         sid = r.get("stock_id")
+         market = type_map.get(sid or "")
+-        chg = r.get("change_rate")
++        # 數值欄一律過 `_to_number`:snapshot 的未成交檔位實務上會是 `""` / `"-"`,
++        # 而 `close - change_price` 與 `tv / yv` 對 str 直接 TypeError —— 那個例外從
++        # 這裡一路逃到 `_poll_loop` 的傘罩被吞掉,整片家數凍住且零錯誤訊號。髒
++        # `change_rate` 與 None 同語意(整檔跳過);髒 close / change_price 只是
++        # 不判 limit(review round-2 XR-1b)
++        chg = _to_number(r.get("change_rate"))
+         if not sid or market not in counts or chg is None:
+             continue
+ 
+-        close = r.get("close")
+-        change_price = r.get("change_price")
++        close = _to_number(r.get("close"))
++        change_price = _to_number(r.get("change_price"))
+         prev_close = (
+             close - change_price if close is not None and change_price is not None else None
+         )
+@@ -365,8 +372,8 @@ def compute_breadth(
+             bucket = "flat"
+         counts[market][bucket] += 1
+ 
+-        tv = r.get("total_volume")
+-        yv = r.get("yesterday_volume")
++        tv = _to_number(r.get("total_volume"))
++        yv = _to_number(r.get("yesterday_volume"))
+         vol_ratio = (tv / yv) if (tv is not None and yv) else None
+         rows_out.append(
+             {
+diff --git a/copycat/server/breadth_engine.py b/copycat/server/breadth_engine.py
+index 471ba29f..c685d773 100644
+--- a/copycat/server/breadth_engine.py
++++ b/copycat/server/breadth_engine.py
+@@ -69,7 +69,7 @@ from copycat.sector_rotation import (
+     compute_sector_rotation,
+     rows_to_chain_map,
+ )
+-from copycat.server.breadth_fetch import BreadthFetchError
++from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
+ from copycat.server.chain_store import CHAIN_FILENAME, load_chain, save_chain
+ from copycat.server.index_engine import minute_key
+ from copycat.server.ws import WsBroadcaster
+@@ -464,7 +464,15 @@ class BreadthEngine:
+         rows = await self._fetch_snapshot()
+         if rows is not None:
+             await self._refresh_maps()
+-            last_minute = self._apply(rows)
++            try:
++                last_minute = self._apply(rows)
++            except Exception:
++                # 逃到 `_poll_loop` 的傘罩就繞過了 `_fail()`(退避不動)——
++                # 而 publish 也跟著被跳過 → 家數帶凍在最後一則、stale 永遠到不了
++                # 前端,零錯誤訊號(review round-2 XR-1c)
++                logger.exception("breadth 統計 / append 非預期失敗(該輪視同失敗)")
++                self._fail(quota=False)
++        # 廣播在傘罩**外**:成敗皆送一則,stale 才傳得到前端(docstring 的「成敗皆廣播」)
+         self._ws.publish(self.payload(last_minute))
+ 
+     async def _fetch_snapshot(self) -> list[dict] | None:
+@@ -629,11 +637,15 @@ class BreadthEngine:
+         # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾
+         self._universe_rows = universe
+         self._recompute_rotation()
++        # 退避與 quota 旗標**無條件**重置:上游有回應,不該退避。
+         self._fail_streak = 0
+         self._quota = False
+-        self._last_success = _monotonic()
+         if not adopt_date:
++            # `_last_success` 刻意不刷:counts 是 D−1 的、標頭 `trade_date` 卻停在 D,
++            # 刷了就 stale 永不亮 —— 畫面完全正常而數字是別天的,零可見訊號。標頭日期
++            # 錯位是殘餘已知,stale 旗標是唯一看得見的那個(review round-2 XR-2)。
+             return None  # scalar 已更新;序列與落檔一概不動
++        self._last_success = _monotonic()
+         point = self._append(dt, trade_date, counts)
+         if point is not None:
+             # 事件的觸發 gate = **append 成功**(design §6.3):盤前試撮輪(分鐘域外)
+@@ -659,7 +671,16 @@ class BreadthEngine:
+         if not self._universe_rows:
+             self._rotation = None
+             return
+-        self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
++        try:
++            self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
++        except Exception:
++            # `compute_sector_rotation` 是 neigui parity 全等搬移(不得在其內加防禦),
++            # 而 universe 的髒列(非數值 `change_rate`)會在 `sum()` 當場炸。rotation 是
++            # 旁支:炸掉不得把兩個呼叫端(`_apply` 的家數輪 / `_refresh_chain` 的 task)
++            # 一起帶走。清成 None 而非沿用舊值 —— 舊 rotation 會頂著新 as_of 說謊,
++            # None(= 未就緒)才誠實(review round-2 XR-1a)。
++            logger.exception("breadth 類股輪動計算失敗(rotation 標未就緒,家數不受影響)")
++            self._rotation = None
+ 
+     def _append(
+         self, dt: _dt.datetime, trade_date: str, counts: dict[str, dict[str, int]]
+@@ -853,8 +874,14 @@ class BreadthEngine:
+             return
+         fetched_at = self._chain_fetched_at
+         ttl = self._config.chain_ttl_hours * 3600.0
+-        if fetched_at is not None and _time.time() - fetched_at < ttl:
+-            return
++        if fetched_at is not None:
++            # 未來時戳(本機時鐘曾超前後回退)視同過期:`age < ttl` 對負 age 恆真 →
++            # chain 永不重取且零 log,表現只是「類股表停在很久以前」而畫面完全正常
++            # (`market_breadth.max_tick_datetime` 的 upper_bound 同一類未來髒值防禦;
++            # review round-2 EC-3/PS-4)
++            age = _time.time() - fetched_at
++            if 0 <= age < ttl:
++                return
+         retry_at = self._chain_retry_at
+         if retry_at is not None and _monotonic() < retry_at:
+             return
+@@ -885,6 +912,19 @@ class BreadthEngine:
+             )
+             self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
+             return
++        if len(rows) < CHAIN_MIN_ROWS:
++            # 部分截斷(HTTP 200 但少一截)parse 得出來、rotation 照算,而換表會把殘表
++            # 釘進 7 天 TTL 的磁碟快取,重啟 restore 還是同一份 —— 少掉的產業歸類在
++            # 畫面上零錯誤訊號(連板路 `_DAILY_MIN_ROWS` 同一道防線;review round-2 PS-1)
++            logger.warning(
++                "breadth industry_chain 只有 %d 列(門檻 %d),視同取數失敗"
++                "(沿用舊表不落檔,%.0fs 後重試)",
++                len(rows),
++                CHAIN_MIN_ROWS,
++                _MAP_RETRY_SECS,
++            )
++            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
++            return
+         try:
+             chain_map = rows_to_chain_map(rows)
+             if not chain_map:
+diff --git a/copycat/server/signal_hub.py b/copycat/server/signal_hub.py
+index bee85ec7..407332d3 100644
+--- a/copycat/server/signal_hub.py
++++ b/copycat/server/signal_hub.py
+@@ -848,12 +848,20 @@ class SignalHub:
+         return rows
+ 
+     def read_signals(self, trade_date: str) -> list[dict]:
+-        """當日 jsonl → row 清單;壞行跳過(半寫入的最後一行不該讓整條端點掛掉)。"""
++        """當日 jsonl → row 清單;壞行跳過(半寫入的最後一行不該讓整條端點掛掉)。
++
++        `errors="replace"` 而非嚴格解碼:半寫入切在中文多位元組序列中間時嚴格解碼丟
++        `UnicodeDecodeError`(ValueError 系,**不在** `except OSError` 內)→ 整個當日檔
++        一起消失,三條消費路(breadth 對帳 seed / today 端點 / 前端自癒)整天壞著。
++        壞位元組換成 U+FFFD 後只有那一行 `json.loads` 失敗、被既有「壞行跳過」吃掉,
++        好行全數保留 —— 把 except 擴成 `(OSError, ValueError)` 則是整檔丟掉,更差
++        (review round-2 HR-1)。
++        """
+         path = self._signal_path(trade_date)
+         if not path.exists():
+             return []
+         try:
+-            lines = path.read_text(encoding="utf-8").splitlines()
++            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+         except OSError as e:
+             logger.error("訊號 jsonl 讀取失敗(%s):%s", path, e)
+             return []
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index 32cd015a..08b807ca 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -59,21 +59,32 @@ const BREADTH_ROWS = {
+   ],
+ };
+ 
+-/** 類股輪動(R4 SC-3 的跳轉起點)。**單層產業**(subs 空)= 點產業列直接鑽成員,
+- *  全鏈只需要一次點擊就走到成員列 —— 中間多一層子產業對「線有沒有接上」零貢獻。 */
++/** 類股輪動(R4 SC-3 的跳轉起點)。**產業必須帶子產業**(review round-2 FE-6):
++ *  後端 `compute_sector_rotation` 產不出 `subs: []` 這個形狀 —— 有成員的產業至少會有
++ *  一個非空子產業。原本的 fixture 用空 subs 讓全鏈走 `!hasSubs → 直接鑽產業` 那條分支,
++ *  而那條在 prod 是死碼:真正會走到的「展開產業 → 點子產業 → 成員列」全鏈零覆蓋,
++ *  中間任一根線斷掉這支測試照樣綠。 */
+ const SECTOR_STATE = {
+   enabled: true,
+   trade_date: "2026-08-06",
+   as_of: "10:31:00",
+   stale: false,
+   rotation: {
+-    industries: [{ name: "航運", members: 30, avg_change_rate: -0.75, vol_ratio: 0.9, subs: [] }],
++    industries: [
++      {
++        name: "航運",
++        members: 30,
++        avg_change_rate: -0.75,
++        vol_ratio: 0.9,
++        subs: [{ name: "貨櫃航運", members: 12, avg_change_rate: -1.2, vol_ratio: 1.1 }],
++      },
++    ],
+   },
+ };
+ 
+ const SECTOR_MEMBERS = {
+   industry: "航運",
+-  sub_industry: null,
++  sub_industry: "貨櫃航運",
+   members: [
+     { stock_id: "2603", name: "長榮", change_rate: 4.12, vol_ratio: 2.4, total_amount: 3.64e9 },
+   ],
+@@ -289,12 +300,16 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
+       .filter((u) => u.includes("/api/stock/state/"));
+   }
+ 
++  /** 走**真實的三層路徑**:產業列展開 → 子產業列鑽取 → 成員列(review round-2 FE-6)。
++   *  後端產不出空 subs,所以「點產業列直接鑽成員」那條分支在 prod 到不了 —— 全鏈測試
++   *  必須走這條,否則 IndexPage / SectorSection 之間少接一根線也驗不出來。 */
+   async function openSectorMember(): Promise<HTMLElement> {
+     window.localStorage.setItem("copycat-tab", "index");
+     window.localStorage.setItem("copycat-sector-open", "1");
+     renderApp();
+-    // 單層產業 → 點產業列即鑽成員(沒有可展開的下一層)
+     fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
++    fireEvent.click(await screen.findByTestId("sector-sub-btn-航運-貨櫃航運"));
++    await screen.findByTestId("sector-members-table");
+     return await screen.findByTestId("sector-member-2603");
+   }
+ 
+@@ -366,6 +381,39 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
+     fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
+     await waitFor(() => expect(pollMs()).toBe(false));
+   });
++
++  // (review round-2 XR-4)R1 的兩張指數圖是同頁**唯一**沒吃 `active` gate 的輪詢:
++  // 分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME 搶同一把 `api.lock`
++  // —— tab 切走後照打是看不見的成本。走全鏈(App → IndexPage → MarketPane →
++  // MarketChart → useMarketBars):中間少接一根線在元件級測試全綠,只有這裡會紅。
++  it("切離台股綜合 tab → 大盤分 K 停止背景輪詢(active gate 全鏈)", async () => {
++    vi.useFakeTimers({ toFake: ["Date"] }); // 同上:RTL 的 waitFor 偵測不到 fake timer
++    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
++    window.localStorage.setItem("copycat-tab", "index");
++    // 預設週期是分時走勢(不打 bars API)→ 指定分 K 才有這支 query 可驗
++    window.localStorage.setItem("copycat-market-key", "TWSE");
++    window.localStorage.setItem("copycat-market-tf", "m1");
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    render(
++      <QueryClientProvider client={client}>
++        <App />
++      </QueryClientProvider>,
++    );
++
++    const query = await waitFor(() => {
++      const q = client.getQueryCache().find({ queryKey: ["market-bars", "TWSE", "1", 30] });
++      expect(q).toBeTruthy();
++      return q!;
++    });
++    const pollMs = () => {
++      const ri = query.observers[0]!.options.refetchInterval;
++      return typeof ri === "function" ? ri(query) : ri;
++    };
++    expect(pollMs()).toBe(60_000); // 人在台股綜合 tab:照輪詢
++
++    fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
++    await waitFor(() => expect(pollMs()).toBe(false));
++  });
+ });
+ 
+ describe("App(capital WS 唯一掛載 review B2)", () => {
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index 39655080..0c0f8a01 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -84,8 +84,10 @@ interface Props {
+    *  本頁只把回呼往下傳 —— 頁內自己記一份主檔會與右欄 / 個股頁分岔。 */
+   onOpenStock?: (code: string) => void;
+   /** 使用者是否正看著本 tab(App 的 `tab === "index"`)。本頁的 DOM 由 App 以 `hidden`
+-   *  保留 → 漲跌停列表的背景輪詢要靠這道 gate 停(review FE-2;FuturesPage 同慣例)。
+-   *  未給時預設 true(既有呼叫路徑不靜默停更)。 */
++   *  保留 → 頁內所有背景輪詢都要靠這道 gate 停(review FE-2;FuturesPage 同慣例):
++   *  漲跌停列表、類股強弱(含鑽開的成員表),以及**兩張指數圖的分 K**
++   *  —— 最後那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME 搶同一把
++   *  `api.lock`(review round-2 XR-4)。未給時預設 true(既有呼叫路徑不靜默停更)。 */
+   active?: boolean;
+ }
+ 
+@@ -116,6 +118,7 @@ export function IndexPage({
+           defaultKey="TWSE"
+           toggles={toggles}
+           onToggle={set}
++          active={active}
+         />
+         <MarketPane
+           paneId="right"
+@@ -126,6 +129,7 @@ export function IndexPage({
+           defaultKey="OTC"
+           toggles={toggles}
+           onToggle={set}
++          active={active}
+         />
+       </div>
+       {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
+diff --git a/frontend/src/components/index/MarketChart.tsx b/frontend/src/components/index/MarketChart.tsx
+index 0ca91297..f80d4d29 100644
+--- a/frontend/src/components/index/MarketChart.tsx
++++ b/frontend/src/components/index/MarketChart.tsx
+@@ -92,11 +92,22 @@ interface Props {
+   series: IndexSeries | null;
+   showBb: boolean;
+   onToggleBb: (v: boolean) => void;
++  /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
++   *  gate 停(review round-2 XR-4);未給時預設 true。 */
++  active?: boolean;
+ }
+ 
+ /** 大盤主圖:分時走勢 or 蠟燭圖 + 一行來源/涵蓋期間 meta(SC-4/5/6)。 */
+-export function MarketChart({ marketKey, mode, name, series, showBb, onToggleBb }: Props) {
+-  const { data, isPending, isError, error } = useMarketBars(marketKey, mode);
++export function MarketChart({
++  marketKey,
++  mode,
++  name,
++  series,
++  showBb,
++  onToggleBb,
++  active = true,
++}: Props) {
++  const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
+   const minutes = marketMinutesOf(mode);
+   const bars = useMemo(
+     () => aggregateBars(data?.bars ?? [], minutes),
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index 33674739..1b8e4499 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -220,6 +220,9 @@ interface Props {
+    *  (與改版前的全域單開關行為一致)。 */
+   toggles: ChartToggles;
+   onToggle: (key: keyof ChartToggles, value: boolean) => void;
++  /** 使用者是否正看著台股綜合 tab。純轉發給 `MarketChart` 的分 K 輪詢 gate
++   *  (review round-2 XR-4);未給時預設 true。 */
++  active?: boolean;
+ }
+ 
+ /** 台股綜合的單張指數圖(標的列 + 週期列 + 圖)。
+@@ -235,6 +238,7 @@ export function MarketPane({
+   defaultKey,
+   toggles,
+   onToggle,
++  active = true,
+ }: Props) {
+   const [futKey, setFutKey] = useState<FutKey>(() => {
+     const saved = window.localStorage.getItem(stores.fut);
+@@ -367,6 +371,7 @@ export function MarketPane({
+               series={series}
+               showBb={toggles.bb}
+               onToggleBb={(v) => onToggle("bb", v)}
++              active={active}
+             />
+           )}
+         </div>
+diff --git a/frontend/src/components/index/SectorSection.test.tsx b/frontend/src/components/index/SectorSection.test.tsx
+index 657b5d5f..bac4373a 100644
+--- a/frontend/src/components/index/SectorSection.test.tsx
++++ b/frontend/src/components/index/SectorSection.test.tsx
+@@ -398,6 +398,46 @@ describe("SectorSection 背景輪詢 gate", () => {
+     expect(fetchSpy.mock.calls.length).toBe(2);
+   });
+ 
++  // (review round-2 FE-3)成員表原本沒有 `refetchInterval`,全 repo 也沒人 invalidate
++  // `["sector-members"]` → 鑽開的成員表**從打開那一刻起就凍結**,而它正上方的產業列
++  // 每 10 秒在更新。畫面上兩層數字並排,一層是即時的、一層是幾分鐘前的,沒有任何
++  // 標示能區分 —— 使用者只會以為這幾檔今天很穩。
++  /** 展開 + 鑽取單層產業(航運)的成員表,全程 fake timers。 */
++  async function drillWithTimers(active?: boolean): Promise<void> {
++    openWithTimers(active);
++    await vi.advanceTimersByTimeAsync(0);
++    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
++    await vi.advanceTimersByTimeAsync(0);
++  }
++
++  it("成員表跟著產業列一起輪詢(盤中 + active)", async () => {
++    await drillWithTimers(true);
++    expect(memberUrls().length).toBe(1);
++    await vi.advanceTimersByTimeAsync(10_000);
++    expect(memberUrls().length).toBe(2);
++  });
++
++  it("active=false → 成員表也不背景輪詢(鑽取當下仍抓一次)", async () => {
++    await drillWithTimers(false);
++    expect(memberUrls().length).toBe(1);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(memberUrls().length).toBe(1);
++  });
++
++  it("盤外(週六)→ 成員表不輪詢", async () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
++    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
++    stubFetch(mkState());
++    renderSection(undefined, true);
++    await vi.advanceTimersByTimeAsync(0);
++    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
++    await vi.advanceTimersByTimeAsync(0);
++    expect(memberUrls().length).toBe(1);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(memberUrls().length).toBe(1);
++  });
++
+   it("盤外(週六)→ 展開且 active 也不輪詢", async () => {
+     vi.useFakeTimers();
+     vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
+diff --git a/frontend/src/components/index/SectorSection.tsx b/frontend/src/components/index/SectorSection.tsx
+index ec22e0c5..dbdcfdc9 100644
+--- a/frontend/src/components/index/SectorSection.tsx
++++ b/frontend/src/components/index/SectorSection.tsx
+@@ -82,9 +82,12 @@ function GroupStats({ id, group }: { id: string; group: SectorRotationGroup }) {
+ 
+ function MembersPanel({
+   drill,
++  active,
+   onOpenStock,
+ }: {
+   drill: Drill;
++  /** 與產業列同一道 tab gate(見 `SectorBody`)。 */
++  active: boolean;
+   onOpenStock?: (code: string) => void;
+ }) {
+   // query key 帶完整鑽取目標:同一個產業的不同子產業是不同結果,共用一把 key 會讓
+@@ -93,6 +96,13 @@ function MembersPanel({
+     queryKey: ["sector-members", drill.industry, drill.sub],
+     queryFn: () => fetchSectorMembers(drill.industry, drill.sub),
+     retry: 1,
++    // **成員表必須跟上面那層同步輪詢**(review round-2 FE-3):原本沒有這行,而且全
++    // repo 沒有任何人 invalidate `["sector-members"]` → 鑽開的成員表從打開那一刻起就
++    // 凍結,正上方的產業列卻每 10 秒在更新。兩層數字並排、一層即時一層是幾分鐘前的,
++    // 畫面上沒有任何東西能區分 —— 使用者只會以為這幾檔今天很穩。
++    // 函式形式的理由同下方 state query:TQ 每次 interval 到期才重新求值,開盤 / 收盤
++    // 的開關不依賴外部 re-render 才會生效。
++    refetchInterval: () => (active && inTradingHours() ? POLL_MS : false),
+   });
+ 
+   let message: string | null = null;
+@@ -283,6 +293,7 @@ function SectorBody({
+                 {!hasSubs && isDrill(ind.name, null) ? (
+                   <MembersPanel
+                     drill={{ industry: ind.name, sub: null }}
++                    active={active}
+                     onOpenStock={onOpenStock}
+                   />
+                 ) : null}
+@@ -307,6 +318,7 @@ function SectorBody({
+                         {isDrill(ind.name, sub.name) ? (
+                           <MembersPanel
+                             drill={{ industry: ind.name, sub: sub.name }}
++                            active={active}
+                             onOpenStock={onOpenStock}
+                           />
+                         ) : null}
+diff --git a/frontend/src/components/index/SignalTimelineSection.test.tsx b/frontend/src/components/index/SignalTimelineSection.test.tsx
+index ce94f2c1..7fcc7914 100644
+--- a/frontend/src/components/index/SignalTimelineSection.test.tsx
++++ b/frontend/src/components/index/SignalTimelineSection.test.tsx
+@@ -256,6 +256,26 @@ describe("SignalTimelineSection kind chips", () => {
+     expect(rowIds()).toEqual(["open-1", "lock-1"]);
+   });
+ 
++  // (review round-2 FE-5)design §9.3 的驗收明文是「chip 切『自選』…見 3 則」,
++  // 但 §9.2 的 chip 列表漏列這一顆,實作照 §9.2 就少做了。少了它,想「只看自選」
++  // 唯一的辦法是逐 kind 點過去 —— 而 kind 是會增加的,漏一顆就靜默看不到。
++  it("選「自選」→ 只剩自選族(kind 各異一起收,market 族全不見)", async () => {
++    await openWith(MIXED);
++    await screen.findByTestId("signal-timeline-row-mk-2");
++    fireEvent.click(chip("own"));
++    expect(rowIds()).toEqual(["open-1", "lock-1", "vol-1", "crash-1", "surge-1", "cdp-1"]);
++    expect(chip("own").getAttribute("aria-pressed")).toBe("true");
++  });
++
++  // 族層(全部 / 自選)與 kind 層分開擺:「自選」問的是「這則跟我有關嗎」,
++  // 「CDP」問的是「這是哪種訊號」,兩個問題混排會讓人以為它們互斥。
++  it("chip 順序:自選夾在「全部」與 kind 層之間", async () => {
++    await openWith(MIXED);
++    expect(
++      screen.getAllByTestId(/^signal-timeline-chip-/).map((el) => el.textContent),
++    ).toEqual(["全部", "自選", "CDP", "爆拉跌", "爆量", "鎖板(自選)", "全市場鎖板"]);
++  });
++
+   // SC-7/SC-8 對稱:market 族擠爆時,自選那幾則必須還在 feed 裡(分族 cap),
+   // 而且 chip 切過去看得到 —— 少了任一半,畫面上都是「今天自選沒訊號」。
+   it("分族擠壓:250 則 market + 3 則自選 → 切「鎖板(自選)」仍見 3 則", async () => {
+@@ -271,6 +291,24 @@ describe("SignalTimelineSection kind chips", () => {
+     fireEvent.click(chip("lock"));
+     expect(rowIds()).toEqual(["own-3", "own-2", "own-1"]);
+   });
++
++  // design §9.3 的驗收原文就是這一句(「『自選』chip 見 3 則」):三則 kind 各異,
++  // 靠 kind 層 chip 一顆都收不齊,只有族層那顆做得到。
++  it("分族擠壓:250 則 market + 3 則 kind 各異的自選 → 切「自選」見 3 則", async () => {
++    await openWith([]);
++    act(() => {
++      for (let i = 0; i < 250; i += 1) emitSignal(mkt({ id: `m${i}`, time: "09:31:00" }));
++      emitSignal(sig({ id: "own-1", kind: "surge", time: "09:20:01" }));
++      emitSignal(sig({ id: "own-2", kind: "vol_burst", pct: 4.2, time: "09:20:02" }));
++      emitSignal(
++        sig({ id: "own-3", kind: "limit_lock", direction: "up", pct: null, time: "09:20:03" }),
++      );
++    });
++
++    await waitFor(() => expect(rowIds().length).toBeGreaterThan(3));
++    fireEvent.click(chip("own"));
++    expect(rowIds()).toEqual(["own-3", "own-2", "own-1"]);
++  });
+ });
+ 
+ describe("SignalTimelineSection 空態", () => {
+@@ -289,3 +327,52 @@ describe("SignalTimelineSection 空態", () => {
+     expect(screen.getByTestId("signal-timeline-msg").textContent).toBe("無符合條件");
+   });
+ });
++
++// (review round-2 FE-1 / XR-3)達錢 4 沒開時 `/api/stock/signals/today` 回 503,
++// 而「baseline 抓不到」與「今天真的沒訊號」在畫面上完全同形 —— 使用者看到「今日尚無
++// 訊號」不會去查服務,只會以為今天很安靜。這一組鎖的是「降級說得出口」。
++describe("SignalTimelineSection baseline 取數失敗", () => {
++  /** 展開 + baseline 端點 503(hub 未就緒)。retry: 1 是 hook 內建 → 要等第二次 fetch。 */
++  async function openWith503(): Promise<void> {
++    window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, "1");
++    fetchMock = vi.fn(
++      async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
++    );
++    vi.stubGlobal("fetch", fetchMock);
++    renderSection();
++    await screen.findByTestId("signal-timeline-body");
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2), {
++      timeout: 5_000,
++    });
++  }
++
++  it("零訊號 + 取數失敗 → 說是失敗,不是「今日尚無訊號」", async () => {
++    await openWith503();
++    await waitFor(
++      () =>
++        expect(screen.getByTestId("signal-timeline-msg").textContent).toBe(
++          "訊號服務未就緒或取數失敗(即時訊號仍會顯示)",
++        ),
++      { timeout: 5_000 },
++    );
++  });
++
++  it("取數失敗但已有 live 訊號 → 清單照畫,頂部加一行「僅顯示即時訊號」提示", async () => {
++    await openWith503();
++    act(() => emitSignal(sig({ id: "live-1", time: "09:45:00" })));
++
++    await waitFor(() => expect(rowIds()).toEqual(["live-1"]));
++    expect(screen.queryByTestId("signal-timeline-msg")).toBeNull();
++    await waitFor(() =>
++      expect(screen.getByTestId("signal-timeline-baseline-error").textContent).toBe(
++        "歷史訊號載入失敗,僅顯示即時訊號",
++      ),
++    );
++  });
++
++  it("取數成功 → 無失敗提示(不誤報)", async () => {
++    await openWith([sig({ id: "s1" })]);
++    await screen.findByTestId("signal-timeline-row-s1");
++    expect(screen.queryByTestId("signal-timeline-baseline-error")).toBeNull();
++  });
++});
+diff --git a/frontend/src/components/index/SignalTimelineSection.tsx b/frontend/src/components/index/SignalTimelineSection.tsx
+index 1e19c515..d5c6927e 100644
+--- a/frontend/src/components/index/SignalTimelineSection.tsx
++++ b/frontend/src/components/index/SignalTimelineSection.tsx
+@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
+  *
+  *  `null` = 全部(不過濾)。市場族用 `isMarketKind` 前綴判別而不是列舉:後端補新的
+  *  廣度 kind 時,這顆 chip 不必同步改就仍然收得到。 */
+-type ChipKey = "all" | "cdp" | "move" | "vol" | "lock" | "market";
++type ChipKey = "all" | "own" | "cdp" | "move" | "vol" | "lock" | "market";
+ 
+ interface Chip {
+   key: ChipKey;
+@@ -37,6 +37,11 @@ interface Chip {
+ 
+ const CHIPS: Chip[] = [
+   { key: "all", label: "全部", match: null },
++  // **族層 chip,擺在 kind 層之前**(design §9.3 的驗收原文;§9.2 的列表漏列 →
++  // review round-2 FE-5):「這則跟我有關嗎」與「這是哪種訊號」是兩個問題,前者
++  // 沒有專屬 chip 的話,想只看自選就得逐 kind 點過去 —— 而 kind 是會增加的,
++  // 後端補一種就靜默漏一種。同樣用 `isMarketKind` 的補集,不列舉自選 kind。
++  { key: "own", label: "自選", match: (s) => !isMarketKind(s.kind) },
+   { key: "cdp", label: "CDP", match: (s) => s.kind === "cdp_cross" },
+   { key: "move", label: "爆拉跌", match: (s) => s.kind === "surge" || s.kind === "crash" },
+   { key: "vol", label: "爆量", match: (s) => s.kind === "vol_burst" },
+@@ -72,7 +77,7 @@ function toneOf(sig: SignalMsg): string {
+ const BREADTH_TITLE = "FinMind 快照精度 5-10s,非 tick 級";
+ 
+ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
+-  const { signals } = useSignalFeed({ market: "include" });
++  const { signals, baselineError } = useSignalFeed({ market: "include" });
+   // 篩選態刻意不持久化(design §9.2):它是「現在想看什麼」不是偏好,
+   // 隔天開站停在昨天切的那顆 chip 只會讓人以為訊號沒了。
+   const [chip, setChip] = useState<ChipKey>("all");
+@@ -87,9 +92,14 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
+ 
+   // 「今天完全沒有訊號」與「自己把 chip 切窄了」是兩句話:共用一句文案會讓後者
+   // 看起來像系統沒在跑。
++  //
++  // **第三句是「取數失敗」**(review round-2 FE-1 / XR-3):達錢 4 沒開時 baseline 端點
++  // 回 503,清單同樣是空的 —— 兩者同形已是 CLAUDE.md 記載的既知陷阱,而「今日尚無
++  // 訊號」會讓人以為系統好好的、只是今天很安靜,不會去查服務。
+   let message: string | null = null;
+-  if (signals.length === 0) message = "今日尚無訊號";
+-  else if (rows.length === 0) message = "無符合條件";
++  if (signals.length === 0) {
++    message = baselineError ? "訊號服務未就緒或取數失敗(即時訊號仍會顯示)" : "今日尚無訊號";
++  } else if (rows.length === 0) message = "無符合條件";
+ 
+   return (
+     <div data-testid="signal-timeline-body" className="flex flex-col gap-2 px-4 pb-4">
+@@ -113,6 +123,14 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
+         ))}
+       </div>
+ 
++      {/* 清單有東西時失敗不能只是靜靜地少幾列:live 那條路照樣在推,畫面看起來完全
++          正常,但少掉的是「今天稍早發生過什麼」—— 那正是時間軸的用途。 */}
++      {baselineError && signals.length > 0 ? (
++        <p data-testid="signal-timeline-baseline-error" className="text-xs text-ink-muted">
++          歷史訊號載入失敗,僅顯示即時訊號
++        </p>
++      ) : null}
++
+       {message !== null ? (
+         <p data-testid="signal-timeline-msg" className="py-6 text-center text-sm text-ink-muted">
+           {message}
+diff --git a/frontend/src/hooks/useMarketBars.test.ts b/frontend/src/hooks/useMarketBars.test.ts
+index d1fad59b..35932ece 100644
+--- a/frontend/src/hooks/useMarketBars.test.ts
++++ b/frontend/src/hooks/useMarketBars.test.ts
+@@ -104,6 +104,29 @@ describe("useMarketBars", () => {
+     expect(urls.length).toBe(before);
+   });
+ 
++  // (review round-2 XR-4)分 K 這條路在**當日段每次都真走 TC4 SubHistory**,與
++  // REALTIME 搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發,是看不見的成本。
++  // 同頁的 R3/R4 區塊與 FuturesPage 都已經吃 `active` gate,只有 R1 這兩張圖沒有。
++  it("盤中 + active 未給(預設 true)→ 照 60 秒輪詢", async () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
++    renderHook(() => useMarketBars("TWSE", "m1"), { wrapper: wrapper(newClient()) });
++    await vi.advanceTimersByTimeAsync(0);
++    expect(urls.length).toBe(1);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(urls.length).toBe(2);
++  });
++
++  it("active=false → 盤中也不背景輪詢(掛載仍抓一次)", async () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date(2026, 7, 6, 10, 0));
++    renderHook(() => useMarketBars("TWSE", "m1", false), { wrapper: wrapper(newClient()) });
++    await vi.advanceTimersByTimeAsync(0);
++    expect(urls.length).toBe(1);
++    await vi.advanceTimersByTimeAsync(180_000); // 三個輪詢週期
++    expect(urls.length).toBe(1);
++  });
++
+   it("HTTP 錯誤 → error 帶 detail.error 錯誤碼", async () => {
+     vi.stubGlobal(
+       "fetch",
+diff --git a/frontend/src/hooks/useMarketBars.ts b/frontend/src/hooks/useMarketBars.ts
+index 655523e1..8567e5c3 100644
+--- a/frontend/src/hooks/useMarketBars.ts
++++ b/frontend/src/hooks/useMarketBars.ts
+@@ -39,7 +39,11 @@ async function fetchMarketBars(key: MarketKey, tf: string): Promise<MarketBars>
+   return (await res.json()) as MarketBars;
+ }
+ 
+-export function useMarketBars(key: MarketKey, mode: MarketMode) {
++/** @param active 使用者是否正看著這張圖所在的 tab。**預設 true**(保守:既有呼叫路徑
++ *  不因為新參數而靜默停更)。分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME
++ *  搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發是看不見的成本(review round-2 XR-4;
++ *  `FuturesPage` / `SectorSection` / `LimitListSection` 同慣例)。 */
++export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
+   const tf = tfOf(mode);
+   const isMinute = tf === "1";
+   // 期指日盤 08:45–13:45,個股那把尺會讓開盤前 15 分與 13:36–13:45 不自動更新(P2-5)
+@@ -54,6 +58,6 @@ export function useMarketBars(key: MarketKey, mode: MarketMode) {
+     retry: 1,
+     staleTime: isMinute ? 0 : Infinity,
+     // 函式形式:TQ 每次 interval 到期都重新求值 → 開盤/收盤的開關不依賴外部 re-render
+-    refetchInterval: () => (isMinute && inHours() ? POLL_MS : false),
++    refetchInterval: () => (active && isMinute && inHours() ? POLL_MS : false),
+   });
+ }
+diff --git a/frontend/src/hooks/useSignalFeed.test.tsx b/frontend/src/hooks/useSignalFeed.test.tsx
+index 051d77ab..2bafe543 100644
+--- a/frontend/src/hooks/useSignalFeed.test.tsx
++++ b/frontend/src/hooks/useSignalFeed.test.tsx
+@@ -101,6 +101,25 @@ describe("useSignalFeed", () => {
+     act(() => emitSignal(sig("live-1")));
+     expect(ids(hook.result.current.signals)).toEqual(["live-1"]);
+   });
++
++  // (review round-2 FE-1 / XR-3)降級**必須可見**:達錢 4 沒開時這支端點回 503,
++  // 而「baseline 抓不到」與「今天真的沒訊號」在下游畫面上完全同形 —— 消費端沒有
++  // 這顆旗標就只能把兩者說成同一句話,使用者看到「今日尚無訊號」不會去查服務。
++  it("today 抓失敗 → baselineError 為 true(降級要可見,不只是靜靜地空著)", async () => {
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
++    );
++    const hook = renderHook(() => useSignalFeed(), { wrapper });
++    // retry: 1 → 第二次 fetch 發出後才是 error 終態(retryDelay 預設 1s)
++    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 5_000 });
++    await waitFor(() => expect(hook.result.current.baselineError).toBe(true));
++  });
++
++  it("today 抓成功 → baselineError 為 false(不誤報)", async () => {
++    const hook = renderHook(() => useSignalFeed(), { wrapper });
++    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
++    expect(hook.result.current.baselineError).toBe(false);
++  });
+ });
+ 
+ // 🟢 market-overview R4(SC-8):全市場廣度事件與自選訊號同一條匯流排,
+diff --git a/frontend/src/hooks/useSignalFeed.ts b/frontend/src/hooks/useSignalFeed.ts
+index 88ccf95f..f4a6d30a 100644
+--- a/frontend/src/hooks/useSignalFeed.ts
++++ b/frontend/src/hooks/useSignalFeed.ts
+@@ -49,7 +49,18 @@ function mergeByFamily(baseline: SignalMsg[], live: SignalMsg[]): SignalMsg[] {
+   return mergeSignals([...marketSide, ...ownSide], [], FAMILY_CAP * 2);
+ }
+ 
+-export function useSignalFeed(opts?: { market?: MarketMode }): { signals: SignalMsg[] } {
++export interface SignalFeed {
++  signals: SignalMsg[];
++  /** baseline 取數是否已失敗(retry 1 次後才會 true)。
++   *
++   *  **降級要說得出口**(review round-2 FE-1):達錢 4 沒開時 `/api/stock/signals/today`
++   *  回 503 → 這裡沒有 baseline,但 live 訊號照樣進得來。少了這顆旗標,消費端只能把
++   *  「服務沒起來」與「今天真的沒訊號」畫成同一句話,而使用者對這兩句的反應完全相反
++   *  (去查 vs 繼續等)。 */
++  baselineError: boolean;
++}
++
++export function useSignalFeed(opts?: { market?: MarketMode }): SignalFeed {
+   const mode: MarketMode = opts?.market ?? "exclude";
+   const queryClient = useQueryClient();
+   const today = useQuery({
+@@ -88,5 +99,5 @@ export function useSignalFeed(opts?: { market?: MarketMode }): { signals: Signal
+       mode === "include" ? mergeByFamily(baseline ?? [], live) : mergeSignals(baseline ?? [], live),
+     [baseline, live, mode],
+   );
+-  return { signals };
++  return { signals, baselineError: today.isError };
+ }
+diff --git a/frontend/src/lib/signal-model.test.ts b/frontend/src/lib/signal-model.test.ts
+index 53b53157..c706b2ee 100644
+--- a/frontend/src/lib/signal-model.test.ts
++++ b/frontend/src/lib/signal-model.test.ts
+@@ -94,6 +94,17 @@ describe("isMarketKind", () => {
+   it("自選訊號 kind 為 false(限自選的鎖板不是全市場事件)", () => {
+     expect(signalModel.isMarketKind("limit_lock")).toBe(false);
+   });
++
++  // (review round-2 FE-2)`kind` 的型別在 runtime 沒有任何人保證:jsonl 是一行一行
++  // append 的檔案,壞行 / 舊格式 / 手改都可能讓它不是字串。裸 `startsWith` 會拋在
++  // `useSignalFeed` 的 useMemo 裡 —— 沒有 ErrorBoundary 就是整頁白屏,而壞行還留在
++  // 檔案裡,重整也不會自癒。後端對應的 `app._is_market_kind` 就是先 isinstance。
++  it("非字串 kind 回 false 而不拋(壞 jsonl 行不該讓整頁白屏)", () => {
++    expect(signalModel.isMarketKind(null as unknown as string)).toBe(false);
++    expect(signalModel.isMarketKind(undefined as unknown as string)).toBe(false);
++    expect(signalModel.isMarketKind(42 as unknown as string)).toBe(false);
++    expect(signalModel.isMarketKind({} as unknown as string)).toBe(false);
++  });
+ });
+ 
+ describe("formatToastText", () => {
+diff --git a/frontend/src/lib/signal-model.ts b/frontend/src/lib/signal-model.ts
+index 7a2755e2..3e439258 100644
+--- a/frontend/src/lib/signal-model.ts
++++ b/frontend/src/lib/signal-model.ts
+@@ -22,7 +22,12 @@ export type SignalKind =
+ /** 全市場廣度事件的判別子。**前綴約定是唯一依據**(不是列舉):後端之後補新的廣度
+  *  kind 時,前端不必同步改就能維持「不進 toast、不進自選 rail」的分族語意。 */
+ export function isMarketKind(kind: string): boolean {
+-  return kind.startsWith("market_");
++  // **runtime guard 不是多餘的**(review round-2 FE-2):型別上 `kind` 是 string,但這份
++  // 資料的來源是 jsonl 檔的一行與 WS 訊息 —— runtime 沒有任何人保證。裸 `startsWith`
++  // 對非字串會拋,而呼叫點在 `useSignalFeed` 的 useMemo 內、上頭沒有 ErrorBoundary
++  // → 整頁白屏,且壞行還留在檔案裡,重整也不會自癒。後端對應的 `app._is_market_kind`
++  // 就是先 `isinstance(kind, str)`,兩邊同一道防禦。
++  return typeof kind === "string" && kind.startsWith("market_");
+ }
+ 
+ export interface SignalMsg {
+diff --git a/tests/server/test_breadth_engine.py b/tests/server/test_breadth_engine.py
+index 5dbfd786..1bab4637 100644
+--- a/tests/server/test_breadth_engine.py
++++ b/tests/server/test_breadth_engine.py
+@@ -23,7 +23,7 @@ import pytest
+ 
+ import copycat.server.breadth_engine as be
+ from copycat.breadth_config import BreadthConfig
+-from copycat.server.breadth_fetch import BreadthFetchError
++from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
+ from copycat.server.chain_store import load_chain, save_chain
+ from copycat.server.signal_hub import SignalHub
+ from copycat.signals_config import SignalsConfig
+@@ -493,6 +493,28 @@ class TestFailureHandling:
+         assert state["stale"] is True  # 窗外也 stale:degraded 不受窗限制
+         assert inf.calls == 2  # 空表不刷 TTL,下一輪照樣重試
+ 
++    async def test_apply_crash_counted_as_failure_and_still_broadcasts(
++        self, tmp_path: Path
++    ) -> None:
++        """`_apply` 拋 → 該輪算失敗**且照樣廣播**(review round-2 XR-1c)。
++
++        現況兩層都缺:例外一路逃到 `_poll_loop` 的傘罩 → `_fail()` 沒被呼叫(退避不動)
++        且 `publish` 被跳過 → 家數帶凍在最後一則、stale 永遠到不了前端,零錯誤訊號。
++        """
++        engine, *_ = _make(tmp_path)
++
++        def _boom(rows: list[dict]) -> dict | None:
++            raise RuntimeError("髒列打穿統計層")
++
++        engine._apply = _boom  # type: ignore[method-assign]
++        published: list[dict] = []
++        engine._ws.publish = published.append  # type: ignore[method-assign]
++
++        await engine._run_cycle()
++
++        assert engine._fail_streak == 1
++        assert len(published) == 1
++
+     async def test_no_parsable_tick_time_is_failure(self, tmp_path: Path) -> None:
+         """時刻推不出來就無從標記 as_of / 分鐘鍵 —— 該輪視同失敗,不動既有值。"""
+         rows = [{**r, "date": None} for r in _snapshot_rows()]
+@@ -822,6 +844,29 @@ class TestSeriesPersistence:
+         assert _series_file(tmp_path).read_text(encoding="utf-8") == before  # 落檔不被截短
+         assert not _series_file(tmp_path, "2026-08-04").exists()
+ 
++    async def test_stale_date_snapshot_does_not_refresh_last_success(
++        self, tmp_path: Path, mono: FakeMono
++    ) -> None:
++        """`adopt_date=False` 輪**不刷 `_last_success`** → 窗內照樣亮 stale。
++
++        該路徑下 counts 是 D−1 的、標頭 `trade_date` 卻停在 D:刷 `_last_success` 的話
++        stale 永不亮,畫面完全正常而數字是別天的 —— 零可見訊號。退避與 quota 旗標維持
++        無條件重置(上游有回應,不該退避;review round-2 XR-2)。
++        """
++        engine, snap, *_ = _make(tmp_path)  # stale_secs 預設 30
++        await engine._run_cycle()
++        assert engine.state()["stale"] is False
++        last_success = engine._last_success
++
++        snap.rows = _snapshot_rows("2026-08-04 13:20:00")  # 上一交易日
++        mono.advance(31.0)
++        await engine._run_cycle()
++
++        assert engine._last_success == last_success
++        assert engine.state()["stale"] is True
++        assert engine._fail_streak == 0  # 上游有回應 → 不退避
++        assert engine._effective_interval() == 10.0
++
+     async def test_future_dirty_row_does_not_freeze_minute_key(self, tmp_path: Path) -> None:
+         """單一越界髒 row 不得決定 as_of / 分鐘鍵(review P1-2)。
+ 
+@@ -1760,6 +1805,16 @@ def _chain_file(tmp_path: Path) -> Path:
+     return tmp_path / "industry_chain.json"
+ 
+ 
++@pytest.fixture
++def small_chain(monkeypatch: pytest.MonkeyPatch) -> None:
++    """chain 列數門檻降到 fixture 量級(`fast_streaks` 的 `_DAILY_MIN_ROWS` 同理由)。
++
++    每個案例造 1000 列只為過健檢,會讓 `_CHAIN_MAP` 的手算對照完全失去可讀性;真門檻
++    的邊界由 `test_truncated_rows_keep_old_map_and_file` 以真常數取值把關。
++    """
++    monkeypatch.setattr(be, "CHAIN_MIN_ROWS", 1)
++
++
+ class HangingFetch:
+     """在 worker thread 內真的卡住的取數替身 —— 驗 poll loop 不 await chain task。
+ 
+@@ -1829,7 +1884,9 @@ class TestChainCache:
+         assert engine._chain_task is None
+         assert chain.calls == 0
+ 
+-    async def test_expired_arms_task_then_swaps_and_saves(self, tmp_path: Path) -> None:
++    async def test_expired_arms_task_then_swaps_and_saves(
++        self, tmp_path: Path, small_chain: None
++    ) -> None:
+         """從未成功(冷啟動無快取)→ 武裝 → 成功即換表 + 落檔;之後 TTL 內不再打。"""
+         chain = FakeFetch(list(_CHAIN_ROWS))
+         engine, *_ = _make(tmp_path, chain=chain)
+@@ -1846,7 +1903,7 @@ class TestChainCache:
+         assert chain.calls == 1  # TTL 內
+ 
+     async def test_fetch_failure_keeps_old_map_and_backs_off(
+-        self, tmp_path: Path, mono: FakeMono
++        self, tmp_path: Path, mono: FakeMono, small_chain: None
+     ) -> None:
+         """取數失敗 → 沿用舊表 + 60s 退避;退避內不重打(壞上游不跟著 poll 節奏燒配額)。"""
+         save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
+@@ -1916,6 +1973,40 @@ class TestChainCache:
+         await engine._run_cycle()
+         assert engine.sector_state()["rotation"] is not None  # 舊表照樣算得出來
+ 
++    async def test_truncated_rows_keep_old_map_and_file(
++        self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """列數低於門檻(上游 200 但截斷)→ **不換表、不落檔、不刷時戳** + 退避。
++
++        `not chain_map` 擋不住這種殘表:它 parse 得出來、rotation 照算,而換表會把
++        殘表釘進 7 天 TTL 的磁碟快取,重啟後 restore 回同一份 —— 畫面上只是「那些
++        股票的產業歸類消失、類股強弱少幾個業別」,零錯誤訊號(連板路的
++        `_DAILY_MIN_ROWS` 同一道防線)。
++        """
++        save_chain(_chain_file(tmp_path), list(_CHAIN_ROWS), 0.0)
++        before = _chain_file(tmp_path).read_text(encoding="utf-8")
++        truncated = [
++            {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "晶圓代工"}
++            for i in range(CHAIN_MIN_ROWS - 1)
++        ]
++        chain = FakeFetch(truncated)
++        engine, *_ = _make(tmp_path, chain=chain)
++        engine._restore_chain()
++
++        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
++            await _arm_chain(engine)
++
++        assert chain.calls == 1
++        assert engine._chain_map == _CHAIN_MAP  # 舊表原封不動
++        assert engine._chain_fetched_at == 0.0
++        assert _chain_file(tmp_path).read_text(encoding="utf-8") == before
++        assert engine._chain_retry_at is not None
++        assert any(r.levelno >= logging.WARNING for r in caplog.records)
++
++        mono.advance(be._MAP_RETRY_SECS - 1.0)
++        await _arm_chain(engine)
++        assert chain.calls == 1  # 退避中不重打
++
+     async def test_parse_crash_keeps_old_map_and_backs_off(
+         self, tmp_path: Path, mono: FakeMono, caplog: pytest.LogCaptureFixture
+     ) -> None:
+@@ -2013,7 +2104,7 @@ class TestChainCache:
+         finally:
+             chain.release.set()
+ 
+-    async def test_chain_armed_via_poll_loop(self, tmp_path: Path) -> None:
++    async def test_chain_armed_via_poll_loop(self, tmp_path: Path, small_chain: None) -> None:
+         """武裝掛在 poll loop(與 streak 同一處)—— start() 本身仍零網路 IO。"""
+         chain = FakeFetch(list(_CHAIN_ROWS))
+         engine, *_ = _make(tmp_path, chain=chain, config=BreadthConfig(poll_secs=0.01))
+@@ -2027,6 +2118,23 @@ class TestChainCache:
+ 
+         assert engine._chain_map == _CHAIN_MAP
+ 
++    async def test_future_fetched_at_is_treated_as_expired(
++        self, tmp_path: Path, small_chain: None
++    ) -> None:
++        """未來時戳(本機時鐘曾超前後回退)= 過期 → 立刻武裝(review round-2 EC-3/PS-4)。
++
++        `now - fetched_at < ttl` 對未來時戳恆真 —— chain 永不重取、也不留任何 log,
++        表現只是「類股表停在很久以前」而畫面上完全正常。
++        """
++        chain = FakeFetch(list(_CHAIN_ROWS))
++        engine, *_ = _make(tmp_path, chain=chain)
++        engine._chain_fetched_at = _time.time() + 86_400.0
++
++        await _arm_chain(engine)
++
++        assert chain.calls == 1
++        assert engine._chain_map == _CHAIN_MAP
++
+ 
+ class TestSectorState:
+     async def test_state_before_first_cycle(self, tmp_path: Path) -> None:
+@@ -2041,7 +2149,9 @@ class TestSectorState:
+             "rotation": None,
+         }
+ 
+-    async def test_rotation_and_universe_rows_after_cycle(self, tmp_path: Path) -> None:
++    async def test_rotation_and_universe_rows_after_cycle(
++        self, tmp_path: Path, small_chain: None
++    ) -> None:
+         """`_apply` 成功 → rotation 與 universe_rows 同輪同源更新。
+ 
+         手算(universe = 2330 +1.01 / 1101 +10.0 / 2317 0.0 / 6488 −10.0,每檔量
+@@ -2082,7 +2192,9 @@ class TestSectorState:
+         assert engine.state()["counts"] == _EXPECTED
+         assert engine.sector_state()["rotation"] is None
+ 
+-    async def test_chain_arriving_after_cycle_recomputes_rotation(self, tmp_path: Path) -> None:
++    async def test_chain_arriving_after_cycle_recomputes_rotation(
++        self, tmp_path: Path, small_chain: None
++    ) -> None:
+         """chain 換表發生在 `_run_cycle` **之後** → 當場重算 rotation(review C-1)。
+ 
+         盤後首次部署(無 chain 快取)的真實順序就是這個:家數首輪先成、chain task
+@@ -2103,7 +2215,7 @@ class TestSectorState:
+         assert [i["name"] for i in rotation["industries"]] == ["水泥", "半導體"]
+ 
+     async def test_chain_swap_before_first_cycle_keeps_rotation_none(
+-        self, tmp_path: Path
++        self, tmp_path: Path, small_chain: None
+     ) -> None:
+         """首輪未成(universe 空)時換表 → rotation 保持 **None**,不得變成空 industries。
+ 
+@@ -2117,7 +2229,9 @@ class TestSectorState:
+         assert engine._chain_map == _CHAIN_MAP  # 前置:表真的換上去了
+         assert engine.sector_state()["rotation"] is None
+ 
+-    async def test_sector_state_uses_rows_date_not_trade_date(self, tmp_path: Path) -> None:
++    async def test_sector_state_uses_rows_date_not_trade_date(
++        self, tmp_path: Path, small_chain: None
++    ) -> None:
+         """`adopt_date=False` 輪:標頭日期取 `_rows_date`(鏡射 `rows_state` 同款;T-4)。
+ 
+         rotation 是從**那一輪的 universe** 算的,而 `_trade_date` 在該路徑刻意停在
+@@ -2137,7 +2251,36 @@ class TestSectorState:
+         assert state["trade_date"] == "2026-08-04"  # 但 payload 與 rows / rotation 同源
+         assert state["rotation"] is not None  # 該輪照樣重算(rows 換了)
+ 
+-    async def test_sector_members_known(self, tmp_path: Path) -> None:
++    async def test_rotation_crash_yields_none_not_stale_value(
++        self, tmp_path: Path, small_chain: None, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """universe 髒列打穿 `compute_sector_rotation` → rotation **None**、不外拋。
++
++        `compute_sector_rotation` 是 neigui parity 全等搬移(不得在其內加防禦),而它對
++        非數值 `change_rate` 會在 `sum()` 當場 TypeError。沒有這道傘罩,例外會從
++        `_apply` / `_refresh_chain` 兩個呼叫端逃出去,把家數輪(旁支炸掉主線)與 chain
++        task 一起帶走;沿用**舊** rotation 也不行 —— 那會頂著新 as_of 說謊,回 None
++        (= 未就緒)才誠實(review round-2 XR-1a)。
++        """
++        engine = await _ready_engine(tmp_path)
++        assert engine.sector_state()["rotation"] is not None  # 前置:算得出來
++
++        engine._universe_rows = [
++            {
++                "stock_id": "2330",  # chain_map 內 → 真的會進 `_group_stats`
++                "change_rate": "-",  # 非 None 的髒值:`sum()` 直接 TypeError
++                "total_volume": 1000,
++                "yesterday_volume": 500,
++                "total_amount": 12_345,
++            }
++        ]
++        with caplog.at_level(logging.ERROR, logger="copycat.server.breadth_engine"):
++            engine._recompute_rotation()
++
++        assert engine._rotation is None
++        assert any(r.levelno >= logging.ERROR for r in caplog.records)
++
++    async def test_sector_members_known(self, tmp_path: Path, small_chain: None) -> None:
+         """成員 drill-down:名稱走 `_name_map`,按 change_rate desc。"""
+         engine = await _ready_engine(tmp_path)
+ 
+@@ -2162,7 +2305,9 @@ class TestSectorState:
+             ],
+         }
+ 
+-    async def test_sector_members_sub_narrows(self, tmp_path: Path) -> None:
++    async def test_sector_members_sub_narrows(
++        self, tmp_path: Path, small_chain: None
++    ) -> None:
+         engine = await _ready_engine(tmp_path)
+ 
+         result = engine.sector_members("半導體", "矽晶圓")
+diff --git a/tests/server/test_breadth_routes.py b/tests/server/test_breadth_routes.py
+index 047b5971..3c2dd573 100644
+--- a/tests/server/test_breadth_routes.py
++++ b/tests/server/test_breadth_routes.py
+@@ -27,7 +27,7 @@ import copycat.server.finmind_token as finmind_token
+ from copycat.breadth_config import BreadthConfig
+ from copycat.server import app as app_mod
+ from copycat.server.app import DEFAULT_BREADTH, BreadthFetchers, create_app
+-from copycat.server.breadth_fetch import BreadthFetchError
++from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
+ from copycat.server.mis import OtcSnap
+ from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeIndexSource
+@@ -109,6 +109,18 @@ _CHAIN_ROWS: list[dict] = [
+     {"date": "2026-08-01", "stock_id": "6488", "industry": "半導體", "sub_industry": "矽晶圓"},
+ ]
+ 
++#: 過 `CHAIN_MIN_ROWS`(部分截斷健檢)的墊列。代號取 9000 段 = **不在 universe**,
++#: `_group_stats` 回 None → 那些產業天然不進 rotation,手算對照一格不動。
++_CHAIN_PAD: list[dict] = [
++    {
++        "date": "2026-08-01",
++        "stock_id": f"{9000 + i}",
++        "industry": "墊檔",
++        "sub_industry": "墊檔",
++    }
++    for i in range(CHAIN_MIN_ROWS - len(_CHAIN_ROWS))
++]
++
+ 
+ def _ok_fetchers(*, chain: bool = False) -> BreadthFetchers:
+     """第四槽(EOD 日線)刻意給 `None` = 連板停用(契約的一部分,R3 R20)。
+@@ -124,7 +136,7 @@ def _ok_fetchers(*, chain: bool = False) -> BreadthFetchers:
+         lambda _token: list(_INFO_ROWS),
+         lambda _token, _today: [],
+         None,
+-        (lambda _token: list(_CHAIN_ROWS)) if chain else None,
++        (lambda _token: [*_CHAIN_ROWS, *_CHAIN_PAD]) if chain else None,
+     )
+ 
+ 
+diff --git a/tests/server/test_signal_hub.py b/tests/server/test_signal_hub.py
+index 4c34c6f6..6e76a731 100644
+--- a/tests/server/test_signal_hub.py
++++ b/tests/server/test_signal_hub.py
+@@ -625,6 +625,40 @@ class TestHistoryAndId:
+         finally:
+             await h.hub.close()
+ 
++    async def test_truncated_multibyte_tail_keeps_good_rows(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """半寫入的最後一行切在中文序列中間 → 好行全保留,三條消費路都不得拋。
++
++        `read_text(encoding="utf-8")` 對這種截斷丟的是 `UnicodeDecodeError`(ValueError
++        系),不在 `except OSError` 內 —— 整個當日檔一起消失,而 breadth 對帳 seed /
++        today 端點 / 前端自癒三條路會同時整天壞著(review round-2 HR-1)。
++        """
++        path = tmp_path / "signals" / f"{_DATE.replace('-', '')}.jsonl"
++        path.parent.mkdir(parents=True, exist_ok=True)
++        good = {
++            "id": "a",
++            "kind": "market_limit_lock",
++            "code": "2330",
++            "name": "台積電",
++            "direction": "up",
++            "trade_date": _DATE,
++        }
++        good_bytes = json.dumps(good, ensure_ascii=False).encode("utf-8")
++        tail = json.dumps({"id": "b", "code": "2317", "name": "鴻海"}, ensure_ascii=False)
++        tail_bytes = tail.encode("utf-8")
++        # 切在「鴻」的第 2 個 byte:UTF-8 續位元組單獨解不出來(半寫入的真實樣態)
++        cut = tail_bytes[: tail_bytes.index("鴻".encode("utf-8")) + 1]
++        path.write_bytes(good_bytes + b"\n" + cut)
++
++        h = _Harness(tmp_path, clock)
++        assert h.hub.read_signals(_DATE) == [good]
++        assert h.hub.today_signals() == [good]
++        assert h.hub.market_event_state(_DATE) == (
++            {("2330", "up"): True},
++            {("2330", "market_limit_lock", "up"): 1},
++        )
++
+ 
+ class TestEnabled:
+     async def test_disabled_rule_emits_nothing_and_persists(
+diff --git a/tests/test_breadth_config.py b/tests/test_breadth_config.py
+index d72ddb5c..c6c0798d 100644
+--- a/tests/test_breadth_config.py
++++ b/tests/test_breadth_config.py
+@@ -78,6 +78,19 @@ def test_unknown_key_near_r4_keys_raises(tmp_path: Path) -> None:
+         load_breadth_config(p)
+ 
+ 
++@pytest.mark.parametrize("bad", [0, 0.0, -1.0])
++def test_non_positive_event_cooldown_raises(tmp_path: Path, bad: float) -> None:
++    """冷卻 ≤ 0 讓廣度事件的 id 唯一性假設崩潰 —— 值域也要驗,不只未知鍵。
++
++    事件 id 不含 `touch_count`,同 `(code, kind, direction, as_of)` 的重覆抑制**全靠**
++    正冷卻;關掉冷卻後同 id 兩則會被前端去重吃掉一則,而畫面上只是「這則沒出現」。
++    """
++    p = tmp_path / "breadth.json"
++    p.write_text(json.dumps({"event_cooldown_secs": bad}), encoding="utf-8")
++    with pytest.raises(ValueError):
++        load_breadth_config(p)
++
++
+ def test_unknown_key_raises(tmp_path: Path) -> None:
+     p = tmp_path / "breadth.json"
+     p.write_text(json.dumps({"no_such_param": 1}), encoding="utf-8")
+diff --git a/tests/test_market_breadth.py b/tests/test_market_breadth.py
+index f3e370e5..7cc66311 100644
+--- a/tests/test_market_breadth.py
++++ b/tests/test_market_breadth.py
+@@ -271,6 +271,54 @@ def test_compute_breadth_skips_null_change_rate_and_unknown_market() -> None:
+     assert out["twse"]["up"] == 1
+ 
+ 
++def test_compute_breadth_tolerates_non_numeric_numeric_fields() -> None:
++    """數值欄的髒值(`"-"` / 空字串 = 未成交檔位的實務樣態)整檔跳過,不得炸整輪。
++
++    `high` / `low` 早有 `_to_number` 防禦,但 `close` / `change_price` / `change_rate`
++    與量欄仍是裸取:`close - change_price` 對 str 直接 TypeError,而那個例外會從
++    `compute_breadth` 一路逃到 `_poll_loop` 的傘罩被吞掉 —— 整片家數凍在最後一則
++    (review round-2 XR-1b)。乾淨列必須照常入桶。
++    """
++    rows = [
++        {"stock_id": "2330", "change_rate": 1.5, "close": 1000.0, "change_price": 15.0},
++        {"stock_id": "2317", "change_rate": 1.0, "close": "-", "change_price": 1.0},
++        {"stock_id": "6488", "change_rate": "-", "close": 500.0, "change_price": -10.0},
++        {"stock_id": "5483", "change_rate": -1.0, "close": 100.0, "change_price": ""},
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    # 髒 change_rate 整檔跳過(與 None 同語意);髒 close / change_price 只是不判 limit
++    assert [r["stock_id"] for r in out["rows"]] == ["2330", "2317", "5483"]
++    assert out["twse"] == {"limit_up": 0, "up": 2, "flat": 0, "down": 0, "limit_down": 0}
++    assert out["tpex"] == {"limit_up": 0, "up": 0, "flat": 0, "down": 1, "limit_down": 0}
++    assert [r["limit_judged"] for r in out["rows"]] == [True, False, False]
++
++
++def test_compute_breadth_tolerates_non_numeric_volume_fields() -> None:
++    """量欄髒值 → `volume_ratio` None(除法對 str 直接 TypeError;review round-2 XR-1b)。"""
++    rows = [
++        {
++            "stock_id": "2330",
++            "change_rate": 1.5,
++            "close": 1000.0,
++            "change_price": 15.0,
++            "total_volume": "-",
++            "yesterday_volume": 200,
++        },
++        {
++            "stock_id": "2317",
++            "change_rate": 1.5,
++            "close": 200.0,
++            "change_price": 3.0,
++            "total_volume": 300,
++            "yesterday_volume": "-",
++        },
++    ]
++    out = compute_breadth(rows, _TYPE_MAP, _NAME_MAP)
++    assert out is not None
++    assert [r["volume_ratio"] for r in out["rows"]] == [None, None]
++
++
+ def test_compute_breadth_returns_none_when_empty() -> None:
+     assert compute_breadth([], _TYPE_MAP, _NAME_MAP) is None
+     assert compute_breadth([{"stock_id": "001", "change_rate": 1.0}], _TYPE_MAP, _NAME_MAP) is None

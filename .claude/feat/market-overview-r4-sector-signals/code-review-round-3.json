@@ -1,0 +1,19 @@
+{
+  "round": 3,
+  "context": "收尾補齊(branch-lifecycle 步驟 3 / review-protocol C 節):對 fix/r4-review-round2 完整 diff(master..HEAD,1280 行)單輪 medium review —— 標的是 round-2 修復本身(修錯/修出新洞/vacuous/與宣稱不符)",
+  "lenses": ["closing-review"],
+  "findings": [
+    {"id":"CR-1","severity":"P1","verdict":"CONFIRMED(主 session 核:兩支既有測試 1 列 FakeFetch 無 small_chain,被 :915 新 gate 先攔,斷言外觀與截斷路徑同形)","problem":"CHAIN_MIN_ROWS gate 讓 test_empty_parse_keeps_old_map_and_file 與 test_parse_crash_keeps_old_map_and_backs_off 變 vacuous —— R6「空表不換表」與 S-3「parse 傘罩退避」兩道既有防禦零覆蓋,拿掉也 2551 全綠","resolution":"accepted → fix:兩支補掛 small_chain + WARNING 斷言收緊到分支專屬訊息(走錯分支會紅);mutation 證據 = 拿掉 fixture 應紅"},
+    {"id":"CR-2","severity":"P2","verdict":"CONFIRMED(universe 是 assemble_universe 原始 rows;sector_rotation 的 None gate 擋不住 \"-\" 字串)","problem":"XR-1(a) 傘罩只治單次:持續性髒列(整日未成交 change_rate=\"-\")讓 rotation 每輪 TypeError → 類股面板整天「未就緒」、log 每 10s 一則,而 FE-4(面板無狀態標示)已 rejected → 使用者拿不到理由","resolution":"accepted → fix:market_breadth 加 normalize_universe_rows(change_rate/total_volume/yesterday_volume 過 _to_number,copycat 側清洗 —— sector_rotation 是 parity 全等搬移不得加防禦,清洗在餵入前做);_apply 餵清洗後的 universe;傘罩保留當 backstop"},
+    {"id":"CR-3","severity":"P2","verdict":"CONFIRMED(_restore_chain 無列數判斷;prod 現跑 gate 前版本,磁碟殘表可能已存在)","problem":"PS-1 門檻只加在取數路,boot restore 路沒擋 —— 部署後既有殘表照樣載入且 TTL 內不武裝,新 gate 一次都跑不到,殘表再活最多 7 天","resolution":"accepted → fix:_restore_chain 補同款 gate(視同無快取,時戳留 None → 下一圈立即重取)"},
+    {"id":"CR-4","severity":"P2","verdict":"CONFIRMED(_refresh_maps 在 try 外;parse_active_disposition 只 except ValueError,TypeError 漏出,docstring 的 never-raise 不成立)","problem":"XR-1(c) 的「publish 無論如何都跑/該輪視同失敗」宣稱不完整:對照表解析例外仍逃到 _poll_loop 傘罩 → _fail 不動、publish 跳過 —— 同一失效樣態換了 24h TTL 的入口","resolution":"accepted → fix:try 起點上移涵蓋 _refresh_maps + _apply,publish 照舊必跑"}
+  ],
+  "non_findings_highlights": [
+    "新傘罩對 asyncio 取消路徑安全(_apply/_recompute_rotation 皆同步無 await,CancelledError 是 BaseException 接不到)",
+    "compute_breadth coercion 對乾淨輸入零行為差異,parity oracle 安全(bucket 由 chg 正負推導)",
+    "errors=\"replace\" 無 BOM/合法行副作用;rules/enabled 的另一處 read_text 不同語意未波及",
+    "前端消費端未破壞(StockPage 只解構 signals;FuturesPage 走 useFuturesBars 自有 gate;_CHAIN_PAD/small_chain 不使既有手算對照 vacuous)",
+    "13 組 round-2 修復的新測試逐支 mutation 推理皆非 vacuous"
+  ],
+  "summary": "1 P1 + 3 P2 全 accepted(全是對 round-2 修復的補洞:vacuous 化的兩支既有測試、傘罩只治單次、restore 路漏 gate、try 起點不足);同分支修復後 merge。"
+}
