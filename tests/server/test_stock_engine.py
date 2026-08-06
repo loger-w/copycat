@@ -1925,6 +1925,42 @@ class TestRolloverIsolationForContracts:
         assert any(m["type"] == "tick" and m["code"] == _CONTRACT for m in got)
         await engine.close()
 
+    async def test_daytime_contract_tick_stage2_resets_the_spot_pool(self) -> None:
+        """E-3 放行邊界的**另一半**:合約 tick 完成的 stage2 一樣是全池 reset。
+
+        `_rollover_stage2` 對 `_states` 全部 `reset()` —— 觸發者是誰不影響作用範圍。
+        E-3 把觸發資格放寬到日盤合約鍵之後,「合約的 tick 會清掉現貨的當日狀態」
+        就成了新的既定行為,且時點從現貨首筆(09:00)提前到期貨開盤(08:45)。
+        這是**要的**行為(昨日狀態不該留到新的一天),但它是一條跨 instrument 的
+        副作用,寫成合約才不會在下一輪被當成 bug「修掉」。
+
+        同時鎖住 reset 之後現貨側仍然健康:昨日 `_last_cum` 已歸 -1,新日的現貨
+        tick 進得來 —— 沒歸零的話 `ingest` 對整個新交易日恆 False(不 apply 不
+        推播),而畫面只是空著。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=100))  # 昨日(2026-07-21)的現貨狀態
+        await _drain(engine)
+        assert engine.snapshot("2330")["last"]["cum_vol"] == 100  # 前提:狀態確實有值
+
+        engine.rollover_stage1("2026-07-22")
+        # 台北 08:46:期貨日盤已開、現貨要 09:00 才有首筆
+        src.on_message(_fut_quote(cum=1, date="20260722", precise="004600000000"))
+        await _drain(engine)
+
+        assert engine.trade_date == "2026-07-22"
+        assert engine.snapshot("2330")["last"] is None  # 現貨池被 reset
+        assert engine.snapshot("2330")["seq"] == 0
+
+        # 新日的現貨首筆(cum 比昨日的 100 小)照樣收得下
+        src.on_message(_quote(cum=3, date="20260722"))
+        await _drain(engine)
+        assert engine.snapshot("2330")["last"]["cum_vol"] == 3
+        await engine.close()
+
 
 class TestMainSlotTransfer:
     """D15 槽位轉移表:四種轉移後 `_refs` 零洩漏(逐 owner 斷言)。"""
@@ -2117,6 +2153,41 @@ class TestWatchlistRemovalBookkeeping:
         engine.group_snapshot(["2330"])
         await _drain(engine)
         assert src.backfills.count("2330") == 1
+        await engine.close()
+
+    async def test_backfill_bookkeeping_restarts_after_a_main_slot_release(self) -> None:
+        """E-2 的**鏡像路徑**:退訂發生在 `set_main_contract` 的 A7d 區塊時同樣要作廢。
+
+        既有三條全走 `set_watchlist` 的 removed 迴圈,主圖槽位那一份清點沒有任何
+        測試蓋到 —— 而「主圖是唯一 owner 的現貨檔,使用者切去合約再切回來」是
+        stkfut-contracts 出貨後最日常的一條路(SC-3 的選月切換),不是邊角。
+
+        失效樣態同 E-2:切走那段時間的分鐘缺口整天補不回來,`group_snapshot` 的
+        `code not in self._backfilled` 恆假地擋著,而 `backfilling` / `no_data`
+        都是 False,卡片零訊號地空著。
+
+        re-acquire 刻意走**自選**而不是切回主圖:`set_main_contract` 尾端無條件
+        `_enqueue_backfill`,拿它當第二次入列的證據會讓這條測試對清點與否都綠。
+        """
+        engine, src = await _make()
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1  # 前提:set_main 的入列跑完了
+        assert "2330" in engine._backfilled  # 前提:確實記過帳
+
+        await engine.set_main_contract(_CONTRACT)  # 主圖是唯一 owner → 真退訂
+
+        assert "2330" not in engine._refs  # 前提:真的退訂了(不是還有別的 owner)
+        assert "2330" not in engine._backfilled
+        assert "2330" in src.unsubscribed
+
+        # 重新訂閱 → 回補機會重新開始(入列點走群組輪詢,不靠 set_main 的無條件入列)
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+
+        assert src.backfills.count("2330") == 2
+        assert "2330" in engine._backfilled
         await engine.close()
 
 
