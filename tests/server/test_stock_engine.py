@@ -1961,6 +1961,52 @@ class TestMainSlotTransfer:
         await engine.close()
 
 
+class TestWatchlistRemovalBookkeeping:
+    """E-4:自選移除的旗標清理要與 `set_main_contract` 的 A7d 同守則 ——
+    **真正退訂了才**清,還有 owner 時不動。"""
+
+    async def test_no_data_survives_removal_while_main_still_holds(self) -> None:
+        """同一檔同時是主圖與自選時,自自選移除**不得**清 `_no_data`。
+
+        TC4 的 no-data 回呼只在訂閱當下發一次 —— 被誤清之後那一檔的 snapshot 恆
+        `no_data=False`,而它其實仍訂著且平台說查無此檔:「查無此檔」與「還沒推」
+        在畫面上合併成同一張空卡,使用者分不出該不該換一檔看。
+        鏡像路徑 `set_main_contract`(A7d)早已依此守則做對。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["9999"])  # 對映表無此碼 → 不掛期現對照腿
+        await engine.set_main("9999")
+        assert src.on_no_data is not None
+        src.on_no_data("9999")
+        await _drain(engine)
+        assert engine.snapshot("9999")["no_data"] is True  # 前提:旗標確實掛上了
+
+        await engine.set_watchlist([])
+
+        assert engine._refs["9999"] == {"main"}  # 前提:主圖 owner 還在 = 沒真退訂
+        assert engine.snapshot("9999")["no_data"] is True
+        await engine.close()
+
+    async def test_no_data_cleared_when_removal_is_the_last_owner(self) -> None:
+        """對照組:自選是最後一個 owner → 真退訂,旗標照清(A7d 的另一半)。
+
+        不清的話下次把它加回自選,畫面在任何新推播之前就先掛「無資料」,
+        而那是上一輪訂閱期的答案。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["9999"])
+        assert src.on_no_data is not None
+        src.on_no_data("9999")
+        await _drain(engine)
+        assert engine.snapshot("9999")["no_data"] is True
+
+        await engine.set_watchlist([])
+
+        assert "9999" not in engine._refs  # 前提:真的退訂了
+        assert engine.snapshot("9999")["no_data"] is False
+        await engine.close()
+
+
 class TestDirtyWatchlistScope:
     """D16:`_dirty_watchlist` 只收自選碼 —— 合約鍵混進去會廣播 code="F:CDF:202609"
     的 `watchlist_quote`,而側欄以 code 對照自選名單,那一則對它是垃圾。"""
