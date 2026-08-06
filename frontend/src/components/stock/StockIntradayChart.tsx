@@ -9,6 +9,7 @@ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
 import { hhmm, hourTicksOf, type HourTick } from "@/lib/time-labels";
 import { useStockOverlay } from "@/hooks/useStockOverlay";
+import { isInstrumentKey } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
   buildEnergyBars,
@@ -517,7 +518,15 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
   const hourTicks = useMemo(() => hourTicksOf(xw), [xw]);
   // 期貨態不打 overlay:CDP/MA 是**現股日線**衍生的(/api/stock/overlay 吃股號),
   // 對合約既取不到也不該套 —— 拿標的現股的 CDP 疊在期貨價上是假陳述。
-  const overlayQ = useStockOverlay(accum.code || null, !stkfut && (toggles.cdp || toggles.ma));
+  //
+  // 第二道閘 `isInstrumentKey`:合約→現貨切換的**那一個 render**,prop 先翻 false 而
+  // WS 推來的 `accum` 晚一拍還是合約 snapshot,只靠 `stkfut` 會拿 `F:CDF:202608` 當
+  // 股號打進路徑段吃 400(Phase 6 real-env finding,實測 2/2 必現)。兩個判準不重複:
+  // prop 管「模式」、code 形狀管「這個字串能不能當股號送出去」。
+  const overlayQ = useStockOverlay(
+    accum.code || null,
+    !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
+  );
   // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
   const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
