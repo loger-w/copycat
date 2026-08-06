@@ -95,10 +95,21 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   + WS /ws/breadth。另掛連板數每日一次的背景 task:06:00 後武裝、
 │                         #   EOD 回看 10 交易日、成果落 streaks-<day>.json、逐日 memo 跨重試
 │                         #   重用;逐檔 rows 走 REST /api/market/breadth/rows,streak 算術
-│                         #   只在該端點)、breadth_fetch(四支 FinMind dataset 取數 +
-│                         #   錯誤分類 quota;第四支 = 單日全市場 EOD,連板數用)、
+│                         #   只在該端點)、breadth_fetch(五支 FinMind dataset 取數 +
+│                         #   錯誤分類 quota;第四支 = 單日全市場 EOD,連板數用;第五支 =
+│                         #   TaiwanStockIndustryChain 產業鏈全表,類股輪動用)、
+│                         #   breadth_engine 另兼類股輪動 + 全市場鎖板事件(2026-08-06 R4):
+│                         #   chain 7 天 disk cache(獨立刷新 task,不阻家數輪)→
+│                         #   sector_rotation 純函式 → REST /api/market/sector(+/members);
+│                         #   rows limit 旗標 diff(last_emitted 對帳 + 當日 jsonl seed 回放
+│                         #   + 600s/桶冷卻)→ hub.publish_market_events(kind =
+│                         #   market_limit_lock/open,硬性不進 Discord)、
+│                         #   chain_store(industry_chain.json 原子落檔/回讀)、
 │                         #   finmind_token(FINMIND_TOKEN 解析,oi_levels 共用)
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算;tick_size_milli 毫元版)
+├── sector_rotation.py    #   類股輪動純函式(2026-08-06 R4,零 IO):chain rows → ChainMap /
+│                         #   產業與子產業聚合(avg/量比/聯集去重)/ 成員 drill-down;
+│                         #   neigui market_today+industry_chain 邏輯全等搬移
 ├── market_breadth.py     #   全市場廣度純函式(2026-08-06,零 IO):universe 過濾 / 五桶家數 /
 │                         #   毫元漲跌停判定;neigui 搬移,parity oracle fixture 對照
 ├── limit_streaks.py      #   連板數純函式(2026-08-06,零 IO):單日收盤漲停集合 + 逐日交集

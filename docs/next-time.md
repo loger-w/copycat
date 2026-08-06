@@ -1,4 +1,19 @@
 
+## 2026-08-06(market-overview-r4-sector-signals 收尾留尾巴)
+
+- [ ] **user 過目待做(SC-3/SC-7 雙層之二)**:綜合 tab「類股強弱」(三層清單:產業 →
+  子產業 → 成員,著色漲跌% + 量比,點成員跳個股)與「訊號時間軸」(倒序、kind chips、
+  market 列「廣度」badge)兩個收合區塊,位於漲跌停列表與相關係數之間。AI 截圖見
+  `.claude/feat/market-overview-r4-sector-signals/evidence/`。
+- [ ] **prod 8721 重啟後才含 R4**:廣度事件 + 類股面板隨下次啟動生效;首啟順手目視
+  `data/market/industry_chain.json` 開始落檔、盤中時間軸出現全市場鎖板事件。
+- [ ] **「觸及未鎖」事件不做**(R4 Phase 0 拍板):touched 是當日不可逆 latch,開板已由
+  open 事件涵蓋;若日後要,從 breadth rows 的 touched_* 旗標 diff 起。
+- [ ] **同頁 stale 標記兩款並存**:SectorSection 沿 BreadthBand 版(bull 色「資料延遲」),
+  LimitListSection 是 amber「延遲」— 視覺是否統一待 user 過目時定。
+- [ ] **時間軸歷史日回看不做**(R4 out of scope):jsonl 按日分檔,要做時 today 端點
+  加 `?date=` 即可。
+
 ## 2026-08-06(market-overview-r3-limit-list 收尾留尾巴)
 
 - [ ] **user 過目待做(SC-3/4/5 雙層之二)**:綜合 tab「漲跌停」收合區塊(家數帶之下、
@@ -769,6 +784,10 @@
   `_dirty` 後 `_broadcast_loop` 會推一則 `p=None` payload,ws client 若在該 flush 前
   註冊就收到它當首則。master 本就有同一 race,靠時序運氣繞過。修法方向:測試改吃「第一
   則非 None 的 payload」或 engine 對 `p=None` 的首推抑制;修時勿加 sleep 掩蓋。
+  〔2026-08-06 R4 輪加證:全套又目擊 3 次(Task 2/7/8 各一,單檔與重跑皆綠),
+  另一 implementer 定位到第二觸發路徑 — 牆鐘落在 09:00–13:25 時 watchdog 分支把
+  `stale` 翻真 → `_dirty` → 搶在測試 quote 前 publish `p=None`。重現率已高到
+  幾乎每次全套必中一次,建議升優先度處理。〕
 - [ ] **個股頁現價旁加漲跌額(絕對點數)**:本輪(mod/stock-price-prominence)只放大字級,
   % 旁沒有漲跌額;要加時連同 fmtPct 慣例一起看(2026-08-04 change-spec out of scope)。
 - [ ] **三頁現價字級是否統一**:個股頁現價已改 text-3xl,期貨頁 FuturesPage.tsx L54 仍
