@@ -1,0 +1,7 @@
+### CR-2 unit(normalize_universe_rows)
+...                                                                      [100%]
+3 passed, 48 deselected in 0.02s
+
+### CR-2 engine / CR-3 / CR-4
+...                                                                      [100%]
+3 passed in 0.22s

@@ -1,0 +1,127 @@
+FFF                                                                      [100%]
+================================== FAILURES ===================================
+______ TestSectorState.test_dirty_change_rate_row_does_not_kill_rotation ______
+
+self = <test_breadth_engine.TestSectorState object at 0x0000021FE69C4050>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2682/test_dirty_change_rate_row_doe0')
+small_chain = None
+caplog = <_pytest.logging.LogCaptureFixture object at 0x0000021FE6896BA0>
+
+    async def test_dirty_change_rate_row_does_not_kill_rotation(
+        self, tmp_path: Path, small_chain: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """整日未成交的髒列(`change_rate = "-"`)不得讓類股面板整天未就緒(round-3 CR-2)。
+    
+        傘罩(`_recompute_rotation`)是 backstop 不是解法:這種髒列是**持續性**的
+        (那檔一整天都不會成交)→ 每一輪 `sum()` 都炸、rotation 每輪被打成 None、
+        log 每 10s 一則,類股面板整個交易日「未就緒」。清洗必須在餵進
+        `compute_sector_rotation` **之前**做 —— 該模組是 neigui parity 全等搬移,
+        不得在其內加防禦。
+        """
+        rows = _snapshot_rows()
+        for r in rows:
+            if r["stock_id"] == "2330":  # 在 chain_map 內 → 真的會進 `_group_stats`
+                r["change_rate"] = "-"
+        engine, *_ = _make(tmp_path, snapshot=FakeFetch(rows), chain=FakeFetch(list(_CHAIN_ROWS)))
+        await _arm_chain(engine)
+    
+        with caplog.at_level(logging.ERROR, logger="copycat.server.breadth_engine"):
+            await engine._run_cycle()
+    
+        rotation = engine.sector_state()["rotation"]
+>       assert rotation is not None
+E       assert None is not None
+
+tests\server\test_breadth_engine.py:2354: AssertionError
+------------------------------ Captured log call ------------------------------
+ERROR    copycat.server.breadth_engine:breadth_engine.py:682 breadth 類股輪動計算失敗(rotation 標未就緒,家數不受影響)
+Traceback (most recent call last):
+  File "C:\side-project\copycat\copycat\server\breadth_engine.py", line 675, in _recompute_rotation
+    self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
+                     ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\side-project\copycat\copycat\sector_rotation.py", line 135, in compute_sector_rotation
+    industry_stats = _group_stats(union_ids, universe_by_id)
+  File "C:\side-project\copycat\copycat\sector_rotation.py", line 95, in _group_stats
+    avg_change_rate = sum(r["change_rate"] for r in member_rows) / len(member_rows)
+                      ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+_______ TestChainCache.test_restore_truncated_cache_treated_as_no_cache _______
+
+self = <test_breadth_engine.TestChainCache object at 0x0000021FE6932030>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2682/test_restore_truncated_cache_t0')
+caplog = <_pytest.logging.LogCaptureFixture object at 0x0000021FE6956350>
+
+    async def test_restore_truncated_cache_treated_as_no_cache(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """快取檔列數低於門檻 → 視同無快取(review round-3 CR-3)。
+    
+        `_refresh_chain` 的門檻只擋得住「這一次取到殘表」,擋不住「門檻之前的版本
+        落下的殘表」:restore 照收的話那份殘表帶著自己的時戳回來,7 天 TTL 內不重取,
+        而少掉的產業歸類在畫面上零錯誤訊號 —— 重啟一次就再續命 7 天。
+        """
+        truncated = [
+            {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "晶圓代工"}
+            for i in range(CHAIN_MIN_ROWS - 1)
+        ]
+        save_chain(_chain_file(tmp_path), truncated, _time.time())
+        engine, *_ = _make(tmp_path, config=BreadthConfig(poll_secs=60.0))
+    
+        with caplog.at_level(logging.WARNING, logger="copycat.server.breadth_engine"):
+            await engine.start()
+        try:
+>           assert engine._chain_map == {}
+E           AssertionError: assert {'半導體': {'晶圓代...'1005', ...]}} == {}
+E             
+E             Left contains 1 more item:
+E             {'半導體': {'晶圓代工': ['1000',
+E                               '1001',
+E                               '1002',
+E                               '1003',
+E                               '1004',...
+E             
+E             ...Full output truncated (995 lines hidden), use '-vv' to show
+
+tests\server\test_breadth_engine.py:2102: AssertionError
+_ TestFailureHandling.test_refresh_maps_crash_counted_as_failure_and_still_broadcasts _
+
+self = <test_breadth_engine.TestFailureHandling object at 0x0000021FE7170150>
+tmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2682/test_refresh_maps_crash_counte0')
+
+    async def test_refresh_maps_crash_counted_as_failure_and_still_broadcasts(
+        self, tmp_path: Path
+    ) -> None:
+        """`_refresh_maps` 拋 → 該輪算失敗**且照樣廣播**(review round-3 CR-4)。
+    
+        對照表那幾步是裸呼叫(`parse_active_disposition` 對非字串 `period_start`
+        直接 TypeError,取數層的 never-raise 保證只涵蓋取數本身)—— 例外逃到
+        `_poll_loop` 的傘罩就繞過了 `_fail()`(退避不動)且 publish 跟著被跳過
+        (stale 傳不到前端),與 XR-1c 同一個失效樣態換了個入口。
+        """
+        engine, *_ = _make(tmp_path)
+    
+        async def _boom() -> None:
+            raise RuntimeError("對照表解析炸")
+    
+        engine._refresh_maps = _boom  # type: ignore[method-assign]
+        published: list[dict] = []
+        engine._ws.publish = published.append  # type: ignore[method-assign]
+    
+>       await engine._run_cycle()
+
+tests\server\test_breadth_engine.py:537: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+copycat\server\breadth_engine.py:466: in _run_cycle
+    await self._refresh_maps()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def _boom() -> None:
+>       raise RuntimeError("對照表解析炸")
+E       RuntimeError: 對照表解析炸
+
+tests\server\test_breadth_engine.py:531: RuntimeError
+=========================== short test summary info ===========================
+FAILED tests/server/test_breadth_engine.py::TestSectorState::test_dirty_change_rate_row_does_not_kill_rotation
+FAILED tests/server/test_breadth_engine.py::TestChainCache::test_restore_truncated_cache_treated_as_no_cache
+FAILED tests/server/test_breadth_engine.py::TestFailureHandling::test_refresh_maps_crash_counted_as_failure_and_still_broadcasts
+3 failed in 0.44s
