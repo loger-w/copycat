@@ -175,7 +175,7 @@ describe("useStockStream", () => {
       () => new Promise<Response>((res) => { resolveRefetch = res; }),
     );
     act(() => ws.emit(T(4))); // 1→4 跳號 → refetch(fetch 已送出 = 後端簿已凍結)
-    // fetch 送出**之後**才到的新簿:方向恆定(推播必晚於 fetch 發起)
+    // fetch 送出**之後**才到的新簿(近似恆定比 snapshot 新;誤差 = request 單程延遲)
     act(() => ws.emit({ type: "book", code: "2330", bids: [[2_379_000, 9]], asks: [[2_381_000, 4]] }));
     act(() => {
       resolveRefetch(new Response(JSON.stringify({
@@ -401,8 +401,11 @@ describe("useStockStream", () => {
     expect(hook.result.current.accum).not.toBeNull(); // 自癒,不必使用者重整
   });
 
-  // 同一條的另一半:切檔要取消還沒打出去的重試。沒取消的話舊 timer 到期時 `refetch()`
-  // 讀的是**當下**的 ref → 對新標的多打一份全量 snapshot(而且與正牌重試同一 tick)。
+  // 同一條的另一半:切檔要 `cancelRetry()`。真實的失效樣態是**少一發不是多一發**
+  // (review B-8,實測 mutant 是 4 vs 5):`scheduleRetry` 自己會先
+  // `clearTimeout(retryTimerRef.current)`,所以舊 timer 不會真的多打一份;沒歸零的是
+  // **backoff** —— 新標的的第一段重試沿用上一檔退避後的間隔(2s / 4s / …),1s 到期
+  // 時打不出來。畫面上就是「換一檔之後要多等好幾秒才自癒」,而且愈換愈久。
   it("切檔取消 pending 重試(1s 後只有新標的自己的那一次)", async () => {
     const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
       initialProps: { c: "2330" },
@@ -424,7 +427,8 @@ describe("useStockStream", () => {
     const before = fetchMock.mock.calls.length;
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-    expect(fetchMock.mock.calls.length).toBe(before + 1); // 舊 timer 沒取消 = 這裡變 +2
+    // 沒 `cancelRetry()` = backoff 沒歸零 → 新標的的第一段變 2s,1s 這裡打不出來(+0)
+    expect(fetchMock.mock.calls.length).toBe(before + 1);
     expect(String(fetchMock.mock.calls[before]?.[0])).toBe("/api/stock/state/5483");
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(hook.result.current.accum).not.toBeNull();
