@@ -72,10 +72,10 @@ function newClient() {
   return client;
 }
 
-function renderSection(onOpenStock?: (code: string) => void) {
+function renderSection(onOpenStock?: (code: string) => void, active?: boolean) {
   return render(
     <QueryClientProvider client={newClient()}>
-      <LimitListSection onOpenStock={onOpenStock} />
+      <LimitListSection onOpenStock={onOpenStock} active={active} />
     </QueryClientProvider>,
   );
 }
@@ -110,6 +110,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("LimitListSection 收合閘門", () => {
@@ -144,6 +145,35 @@ describe("LimitListSection 收合閘門", () => {
     expect(screen.queryByTestId("limit-list-table")).toBeNull();
     expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("0");
     expect(header().getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+// FE-2:tab 是 `hidden` 保留而非 unmount(App 慣例)→ 展開狀態會跨 tab 存活。
+// 這一組鎖的是「`active` 有真的接到 hook 上」,不是 hook 自己的 gate(那在
+// useBreadthRows.test.ts)—— 少接這一根線,hook 測試照樣全綠。
+describe("LimitListSection 背景輪詢 gate(FE-2)", () => {
+  function openWithTimers(active?: boolean): void {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
+    stubFetch(mkState(ROWS));
+    renderSection(undefined, active);
+  }
+
+  it("active=false → 展開著也不背景輪詢(掛載仍抓一次)", async () => {
+    openWithTimers(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy.mock.calls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchSpy.mock.calls.length).toBe(1);
+  });
+
+  it("active 未給 → 預設 true,盤中照 10 秒輪詢", async () => {
+    openWithTimers();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy.mock.calls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchSpy.mock.calls.length).toBe(2);
   });
 });
 

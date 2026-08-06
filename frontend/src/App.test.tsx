@@ -89,6 +89,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("App(index-board T9)", () => {
@@ -181,6 +182,39 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
     expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
       "false",
     );
+  });
+
+  // FE-2:tab 是 `hidden` 保留而非 unmount → 列表展開過一次就會跨 tab 存活,沒有
+  // `active` gate 的話使用者看著別的 tab 時它照樣整個盤中每 10 秒抓一份全市場 payload。
+  // 走全鏈(App → IndexPage → LimitListSection → useBreadthRows):少接一根線在
+  // hook / 元件級測試各自都是綠的,只有這裡會紅。
+  it("切離台股綜合 tab → 列表停止背景輪詢(active gate 全鏈)", async () => {
+    // 只假造 `Date`(交易時段判別要可決定),**不假造 timer** —— RTL 的 waitFor 在
+    // vitest 下偵測不到 fake timers(它查的是全域 `jest`),整支 fake 會讓 findBy 永遠
+    // 等不到、lazy 的 IndexPage 也掛不上(本輪實測)。輪詢本身的行為在
+    // useBreadthRows.test.ts / LimitListSection.test.tsx 已用 fake timers 驗過,
+    // 這裡要鎖的是**線有沒有接上**:tab 切走後這支 query 的輪詢間隔要真的變成 false。
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+    window.localStorage.setItem("copycat-tab", "index");
+    window.localStorage.setItem("copycat-limit-list-open", "1");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <App />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("limit-row-1101");
+
+    const query = client.getQueryCache().find({ queryKey: ["breadth-rows"] })!;
+    const pollMs = () => {
+      const ri = query.observers[0]!.options.refetchInterval;
+      return typeof ri === "function" ? ri(query) : ri;
+    };
+    expect(pollMs()).toBe(10_000); // 人在台股綜合 tab:照輪詢
+
+    fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
+    await waitFor(() => expect(pollMs()).toBe(false));
   });
 
   it("點列 → 個股頁收到該檔(打 /api/stock/state/1101,含 set_main)", async () => {
