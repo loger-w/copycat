@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
@@ -58,16 +58,35 @@ export function StockChart({
   // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
   const { toggles, set } = useChartToggles();
 
+  // 進期貨態前的現貨模式;null = 沒有待還原的偏好(code review A6)。
+  const spotModeRef = useRef<ChartMode | null>(null);
+
   // 期貨態只提供江波圖(D10)。模式是**持久化狀態** —— 使用者上次停在日 K 時,切進
   // 合約的第一次 render 就已經是 day,不收斂會掛著一張與合約無關的現貨 K 線。
-  // **不寫回 localStorage**:那是使用者對現貨的偏好,切回現貨時要原樣回來。
+  // **不寫回 localStorage**:那是使用者對現貨的偏好,切回現貨時要原樣回來 —— 而「原樣
+  // 回來」需要一個 ref 記著(code review A6):只靠 localStorage 不夠,收斂發生在同一個
+  // session 內、`mode` state 已經被改成 intraday,切回現貨時沒有人會把它讀回來,使用者
+  // 看到的是「進了一次合約,我的日 K 偏好就沒了」。
   // (`you-might-not-need-an-effect` 的正解「render 期間直接算 effMode」在這裡不適用 ——
   //  它會讓 mode 這個 state 與畫面長期不一致,而模式鈕的 aria-pressed 讀的是 mode。)
-  /* eslint-disable react-you-might-not-need-an-effect/you-might-not-need-an-effect */
+  //  另註:新形狀下 `you-might-not-need-an-effect` 不再誤報,原本的 eslint-disable 對已
+  //  移除(留著會被 reportUnusedDisableDirectives 判成多餘)。
   useEffect(() => {
-    if (isFut && mode !== "intraday") setMode("intraday");
+    if (isFut) {
+      if (mode !== "intraday") {
+        spotModeRef.current = mode;
+        setMode("intraday");
+      }
+      return;
+    }
+    // 回現貨:還原並清掉待還原標記(下一輪 effect 因此 no-op)。使用者若在期貨態手動
+    // 按過模式鈕(本輪按不動,但這是狀態機層的保險)也不覆蓋 —— 還原只做一次。
+    const saved = spotModeRef.current;
+    if (saved !== null) {
+      spotModeRef.current = null;
+      setMode(saved);
+    }
   }, [isFut, mode]);
-  /* eslint-enable react-you-might-not-need-an-effect/you-might-not-need-an-effect */
 
   function selectMode(next: ChartMode): void {
     setMode(next);
