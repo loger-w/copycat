@@ -1,0 +1,19 @@
+{
+  "slug": "group-grid",
+  "start_sha": "2bb87a1fe8c94d09ff614cee000da5105b53f7be",
+  "branch": "feat/group-grid",
+  "worktree_path": "C:\\side-project\\copycat\\.claude\\worktrees\\feat-discord-watchlist",
+  "current_phase": 8,
+  "completed_phases": [-1, 0, 1, 2, 3, 4, 5, 6, 7],
+  "scope": "L",
+  "phase_6_blocked_reason": null,
+  "scope_overrides": { "goal_efficiency_mode": false },
+  "last_updated": "2026-08-06T11:12:30+08:00",
+  "project_shape": "fullstack",
+  "last_commit_sha": "cfd2f86",
+  "final_merge_sha": null,
+  "self_review_head": "cfd2f869cc50dd0e457f36505475520743df9a4f",
+  "artifact_commit": null,
+  "rollbacks": [],
+  "paused": null
+}

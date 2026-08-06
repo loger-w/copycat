@@ -1,0 +1,2382 @@
+﻿diff --git a/copycat/server/app.py b/copycat/server/app.py
+index d6b9611..9323496 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -51,6 +51,7 @@ from copycat.server.watchlist_service import WatchlistService
+ from copycat.signal_rules import Rule, RuleError
+ from copycat.signals_config import load_signals_config
+ from copycat.stock_watchlist import (
++    WATCHLIST_LIMIT,
+     Group,
+     WatchlistError,
+     load_watchlist,
+@@ -420,6 +421,12 @@ def create_app(
+                     data_dir=wl_path.parent,
+                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
+                     trade_date_fn=lambda: engine.trade_date,
++                    # 同群摘要(group-grid SC-1/2)。groups 只在 `on_watchlist` 讀檔
++                    # (自選變更時),quotes 在 Discord worker 讀 engine 現值 —— 兩者
++                    # 都輕同步,不進熱路徑。漏接的失效樣態是「通知少一段尾巴」而已,
++                    # 所以由 booted app 的接線測試把關。
++                    groups_fn=lambda: load_watchlist(wl_path)["groups"],
++                    quotes_fn=engine.quotes,
+                 )
+ 
+             async def _start_signals(hub: SignalHub) -> None:
+@@ -907,6 +914,31 @@ def create_app(
+         await stock.set_main(code)  # 含回補觸發(design §2.5)
+         return stock.snapshot(code)
+ 
++    @app.get("/api/stock/group-state")
++    async def stock_group_state(request: Request, codes: str = "") -> dict:
++        """群組檢視的唯讀 batch(group-grid SC-4)。
++
++        **刻意不重用 `/api/stock/state/{code}`**:那條路會 `set_main`,群組檢視每分鐘
++        對最多 30 檔各要一次狀態 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結,而畫面
++        上只表現為「圖不動了」沒有任何錯誤訊號。
++
++        逗號分隔的 codes 自行解析(不用 `list[str]` query):FastAPI 的重複參數形對
++        30 個 code 會長到難以閱讀,而轉換失敗回的是 422 + list 形 detail,不符全站
++        `{"detail": {"error": code}}` 契約。
++
++        **無 404 路徑**:未知 / 未訂閱 code → `no_data: true` 空 minutes。卡片要答的是
++        「這格畫不畫得出東西」,對它來說兩者是同一件事;整批中一顆 404 反而會讓整個
++        batch 沒得顯示。
++        """
++        stock = _stock(request)
++        wanted = [c for c in codes.split(",") if c]
++        # 數量先驗:超量時逐碼驗證只是白做工,而且錯誤碼會變成 BAD_CODE 誤導排查方向
++        if len(wanted) > WATCHLIST_LIMIT:
++            raise HTTPException(status_code=400, detail={"error": "BAD_CODES"})
++        for code in wanted:
++            _valid_code(code)
++        return {"states": stock.group_snapshot(wanted)}
++
+     # ---- index(指數看盤;index-board SC-4)----
+ 
+     def _index(request: Request) -> IndexEngine:
+diff --git a/copycat/server/signal_hub.py b/copycat/server/signal_hub.py
+index 360394b..f348570 100644
+--- a/copycat/server/signal_hub.py
++++ b/copycat/server/signal_hub.py
+@@ -74,6 +74,7 @@ from copycat.signal_rules import (
+     save_rules,
+ )
+ from copycat.signals_config import SignalsConfig
++from copycat.stock_watchlist import Group
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -100,6 +101,9 @@ _DISCORD_WINDOW_SECS = 60.0
+ _LEVEL_LABEL = {"cdp": "中軸", "ah": "AH", "nh": "NH", "nl": "NL", "al": "AL"}
+ _LEVEL_ROLE = {"ah": "壓力", "nh": "壓力", "nl": "支撐", "al": "支撐"}
+ 
++#: 同群摘要最多印幾檔其他成員(group-grid SC-1);超過就只補一句總數
++_GROUP_PEERS = 4
++
+ 
+ def _levels_of(row: dict[str, Any]) -> list[str]:
+     raw = row.get("levels") or []
+@@ -188,6 +192,8 @@ class SignalHub:
+         data_dir: Path,
+         trade_date_fn: Callable[[], str],
+         now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
++        groups_fn: Callable[[], list[Group]] | None = None,
++        quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None,
+     ) -> None:
+         self._cfg = cfg
+         self._publish = publish
+@@ -196,6 +202,11 @@ class SignalHub:
+         self._data_dir = Path(data_dir)
+         self._trade_date_fn = trade_date_fn
+         self._now_fn = now_fn
++        # 同群摘要(group-grid SC-1/2)。兩者皆 None = 停用 —— 這是**測試預設**,
++        # 生產端由 `create_app` 接上;接線測試在 `test_stock_routes` 那一側把關。
++        self._groups_fn = groups_fn
++        self._quotes_fn = quotes_fn
++        self._groups: list[Group] = []
+         self._rules_path = self._data_dir / _RULES_FILE
+         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
+         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
+@@ -436,6 +447,7 @@ class SignalHub:
+         self._staged_date = None
+ 
+     def on_watchlist(self, codes: list[str]) -> None:
++        self._refresh_groups()
+         new = set(codes)
+         added = new - self._watch
+         removed = self._watch - new
+@@ -450,6 +462,54 @@ class SignalHub:
+                 # 當日那筆照排不動 —— 今天剩下的時間仍要有 CDP。
+                 self.request_basis(sorted(added), basis_date=self._staged_date, staged=True)
+ 
++    def _refresh_groups(self) -> None:
++        """群組結構跟著自選一起更新(SC-2)。
++
++        `groups_fn` 生產端是讀自選檔 —— 失敗時**保舊值**而不是清空:membership 這一邊
++        照樣更新完,清空只會讓摘要從此永久消失,而畫面上完全看不出來(Discord 只是
++        少了一段尾巴)。舊群組頂多是「上一次的分組」,比沒有好。
++        """
++        if self._groups_fn is None:
++            return
++        try:
++            self._groups = self._groups_fn()
++        except Exception:
++            logger.exception("群組結構讀取失敗,同群摘要沿用上一份(%d 組)", len(self._groups))
++
++    def _group_suffix(self, row: dict[str, Any]) -> str:
++        """同群摘要(SC-1)。在 **Discord worker** 呼叫 —— 離熱路徑,quotes 取的是
++        「發送當下」的快照(訊號產生到送出之間的價差可接受,拿的是最新的更有用)。
++
++        回空字串的三種正常情況:兩 fn 未注入 / code 不屬任何群組(未分組是衍生桶不是
++        群組)/ 群組只有觸發者自己。一檔可屬多群組 → 取**群組序**第一個含它的。
++
++        排序鍵 `(chg is None, -abs(chg))`:無行情的排最後 —— 摘要要回答的是「同群
++        今天有沒有一起動」,一個還沒開盤的成員排在第一位等於把版面讓給零資訊。
++
++        整段 never-raise:摘要是通知的**裝飾**,它壞掉不得讓訊號本身消失(WS/jsonl
++        有而 Discord 沒有,對照時最容易被誤判成 Discord 掛了)。
++        """
++        quotes_fn = self._quotes_fn
++        if quotes_fn is None or self._groups_fn is None:
++            return ""
++        try:
++            code = str(row.get("code", ""))
++            group = next((g for g in self._groups if code in g["codes"]), None)
++            if group is None:
++                return ""
++            peers = [c for c in group["codes"] if c != code]
++            if not peers:
++                return ""
++            quotes = quotes_fn()
++            peers.sort(key=lambda c: _peer_sort_key(quotes.get(c)))
++            shown = "、".join(_peer_text(c, quotes.get(c)) for c in peers[:_GROUP_PEERS])
++            total = len(group["codes"])
++            tail = f"、…共 {total} 檔" if total > _GROUP_PEERS + 1 else ""
++            return f"｜同群 {group['name']}:{shown}{tail}"
++        except Exception:
++            logger.exception("同群摘要組裝失敗(通知照送):%s", row.get("id"))
++            return ""
++
+     def _drop_code(self, code: str) -> None:
+         """SC-5:逐 slot 丟 + 雙 cache pop —— 漏掉 cache 的話重新加入時
+         `_seed_slot` 會拿舊快照當當日基準,而那份可能已經是別天的。
+@@ -719,7 +779,8 @@ class SignalHub:
+     async def _send_discord(self, row: dict) -> None:
+         if not self._allow_discord():
+             return
+-        text = format_signal_text(row)
++        # 摘要**只接在 Discord 這一段**:WS/jsonl 是歷史真相源,格式不隨通知裝飾漂移
++        text = format_signal_text(row) + self._group_suffix(row)
+         sender = self._discord_sender
+         if sender is not None:
+             try:
+@@ -770,6 +831,22 @@ class SignalHub:
+         return flags
+ 
+ 
++def _peer_sort_key(quote: tuple[str, float | None] | None) -> tuple[bool, float]:
++    """同群成員排序(SC-1):|漲跌幅| 降冪,**無行情一律墊底**。
++
++    第一位是 bool 而不是把 None 當 0:當 0 排的話「還沒開盤」會混進平盤那一區,
++    而那兩件事對「同群有沒有一起動」的判讀完全不同。
++    """
++    chg = quote[1] if quote is not None else None
++    return (chg is None, -abs(chg or 0.0))
++
++
++def _peer_text(code: str, quote: tuple[str, float | None] | None) -> str:
++    """`{代碼}{名稱} {+x.x%}`;名稱缺(盤前 / 未訂閱)→ 只印代碼,不留尾隨空白。"""
++    name, chg = quote if quote is not None else ("", None)
++    return f"{code}{name} {'-' if chg is None else f'{chg:+.1f}%'}"
++
++
+ def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
+     """有界佇列滿載策略(design R14):丟最舊再放入,熱路徑零反壓。回傳「是否丟了一筆」。"""
+     try:
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index 607c8bd..974ff2d 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -3,7 +3,8 @@
+ - refcount 訂閱池:owner ∈ {"watchlist", "main", "stkfut:<code>"};0→1 真訂、
+   last-out 真退、真訂失敗回滾 bookkeeping 並 raise(treading-king WSPool 模型)。
+ - backfill 單工 worker queue(engine 持有;source 只提供同步 backfill,r2-1 定案),
+-  job 帶 (code, day_generation),套用 guard = 仍為 main ∧ generation 一致。
++  job 帶 (code, day_generation),套用 guard = **generation 一致**(收件人 = job 自帶的
++  code,不綁 `_main` —— 群組成員也要能補;design v3 R12)。
+ - 兩段式 rollover:階段一(換日窗 + 重掛,不清狀態)→ 階段二(首筆新日 tick 才
+   reset + 重回補;假日無新日推播天然不清空)。
+ - 廣播:per-client 有界 queue,滿丟最舊;側欄 watchlist_quote 1s 節流合併。
+@@ -117,6 +118,15 @@ class StockEngine:
+         self._generation = 1
+         self._backfill_jobs: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
+         self._backfilling: str | None = None
++        # 回補記帳雙 set(design v3 R12/R3)。worker 的 guard 去掉 `_main` 綁定之後,
++        # 「這一檔今天補過了沒」不再能從 `_main` 推導,得自己記:
++        #   `_backfill_pending` = 在途(入列時加、worker 取件後**不論套用/失敗/丟棄**
++        #     一律 discard)= 群組入列的 dedup 與 `backfilling` 旗標的唯一來源
++        #   `_backfilled` = **套用成功**才加 = 今日已回補判準
++        # 兩者都是**日別**語意:rollover stage2 與 reconnect 皆顯式清空(R4 —— reconnect
++        # 不 bump generation 是實碼事實,漏清 = 斷線缺口整天補不回來而畫面毫無異狀)
++        self._backfill_pending: set[str] = set()
++        self._backfilled: set[str] = set()
+         self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
+         self._dirty_watchlist: set[str] = set()
+         self._loop: asyncio.AbstractEventLoop | None = None
+@@ -258,7 +268,7 @@ class StockEngine:
+                 await asyncio.to_thread(self._release, old, "main")
+                 await asyncio.to_thread(self._release_stkfut, old)  # CR3:UNSUB 不佔 loop
+             await self._acquire_stkfut(code)
+-            self._backfill_jobs.put_nowait((code, self._generation))
++            self._enqueue_backfill(code)
+ 
+     def snapshot(self, code: str) -> dict:
+         state = self._states.get(code)
+@@ -271,6 +281,72 @@ class StockEngine:
+         # stkfut_prod 同理零讀者(期現價差走 WS `stkfut` 訊息的 prod)。
+         return snap
+ 
++    def quotes(self) -> dict[str, tuple[str, float | None]]:
++        """自選各檔的 `(名稱, 漲跌幅%)`(SC-2:同群摘要的資料面)。
++
++        名稱來源只有 `state.meta.name` —— 摘要要印成員名,而 `watchlist_quote` 沒帶。
++        缺 meta(盤前 / 冷啟動)回空字串、缺行情回 None,但**該檔仍在字典裡**:
++        整檔缺席會讓「群組有幾檔」跟著行情波動。
++
++        名單先取 local 參照(R16):`_watchlist` 以**整份重新指派**更新,所以這一份
++        是一致快照。刻意不對 `_states` 做 dict 迭代 —— 那會在並行 `set_watchlist`
++        寫入新 state 時炸 RuntimeError(size changed),而本方法是在 Discord worker
++        呼叫的,盤中隨時可能交錯。走 `_watchlist` 也天然排除 `F:` 期貨偽鍵
++        (`_states` 兩種鍵都有)。
++
++        `chg_pct` 一律走 `_quote_payload` 這個唯一定義,不自己再算一次 —— 除權息日
++        的分母是 `meta.ref_milli` 而不是昨收,兩份算式遲早會岔開。
++        """
++        codes = self._watchlist
++        out: dict[str, tuple[str, float | None]] = {}
++        for code in codes:
++            state = self._states.get(code)
++            meta = state.meta if state is not None else None
++            name = meta.name if meta is not None else ""
++            out[code] = (name, self._quote_payload(code)["chg_pct"])
++        return out
++
++    def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
++        """群組檢視的唯讀 batch(SC-4)。**不 set_main、不改訂閱池。**
++
++        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 30 次
++        會把主圖搶走 → 主圖分時線凍結。
++
++        payload 只挑 minutes/meta 兩鍵(+ 兩個旗標):`ticks` 是數千筆,30 檔一起送
++        等於把 batch 端點變成頻寬炸彈;而鍵名沿 `StockDayState.snapshot()` 的單一
++        對映(直接丟 dataclass 會讓前端 `meta.ref` undefined → hasRef=false →
++        紅綠面積靜默消失)。
++
++        ⚠ `no_data` 的推導式**刻意與別處不同**:這裡把「未訂閱」也算 no_data。
++        `StockDayState.snapshot()` 根本沒這個鍵,而 `engine.snapshot()` 對未知 code
++        回 `False`(語意 = 「TC4 說查無此檔」)—— 群組卡片要答的是「這格畫不畫得出
++        東西」,未訂閱與查無此檔對它是同一件事。
++
++        順帶把「今日還沒回補」的**已訂閱**成員入列(R12):群組成員多半不是主圖,
++        沒有這個入列點就只有當日 live tick、開盤前的分鐘全缺。未訂閱的不入列 ——
++        那等於替不在訂閱池的股票發 SubHistory。queue put 不是訂閱變更,前一段的
++        「不改訂閱池」仍成立。
++        """
++        out: dict[str, dict] = {}
++        for code in codes:
++            state = self._states.get(code)
++            snap = state.snapshot() if state is not None else StockDayState().snapshot()
++            if (
++                state is not None
++                and code not in self._backfilled
++                and code not in self._backfill_pending
++            ):
++                # 先入列再讀旗標:順序反了的話第一次請求會回 backfilling=False,
++                # 卡片顯示「無資料」而不是「回補中…」,而下一輪(60s 後)才會更正
++                self._enqueue_backfill(code)
++            out[code] = {
++                "minutes": snap["minutes"],
++                "meta": snap["meta"],
++                "no_data": code in self._no_data or code not in self._states,
++                "backfilling": code in self._backfill_pending,
++            }
++        return out
++
+     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+         """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
+         try:
+@@ -468,8 +544,12 @@ class StockEngine:
+         for state in self._states.values():
+             state.reset()
+         self._no_data.clear()
++        # 回補記帳是**日別**語意:不清的話「今日已回補」會沿用昨天的判斷,新的一天
++        # 所有群組成員都不再被入列(而畫面只是空著,沒有任何錯誤訊號)
++        self._backfilled.clear()
++        self._backfill_pending.clear()
+         if self._main is not None:
+-            self._backfill_jobs.put_nowait((self._main, self._generation))
++            self._enqueue_backfill(self._main)
+         logger.info("rollover stage2 → %s(首筆 %s)", self._trade_date, first_tick.code)
+         if self._signal_hub is not None:
+             # `_trade_date` 已前進、`_pending_date` 已清 → hub 的 reset_day + swap
+@@ -519,8 +599,13 @@ class StockEngine:
+         """TC4 重連:status 推播 + 主圖自癒重回補(design §2.4)。"""
+         self.tc4_status = "up"
+         self._publish({"type": "status", "tc4": "up", "backfilling": self._backfilling})
++        # reconnect **不** bump generation(實碼事實)→ 記帳不會被 generation 作廢帶走,
++        # 得顯式清。漏清的話斷線那段的缺口整天補不回來:主圖靠下一行自癒,主圖以外的
++        # 成員全靠這次清空才有機會再被 `group_snapshot` 入列(R4)
++        self._backfilled.clear()
++        self._backfill_pending.clear()
+         if self._main is not None:
+-            self._backfill_jobs.put_nowait((self._main, self._generation))
++            self._enqueue_backfill(self._main)
+ 
+     def _handle_quote(self, quote: dict) -> None:
+         symbol = str(quote.get("Symbol", ""))
+@@ -555,7 +640,7 @@ class StockEngine:
+             and meta.upper_milli is not None
+             and (meta.upper_milli, meta.lower_milli) != prev_limits
+         ):
+-            self._backfill_jobs.put_nowait((code, self._generation))
++            self._enqueue_backfill(code)
+         if tick is not None and self._pending_date is None and tick.trade_date > self._trade_date:
+             # 快路徑(CR5 / design §2.4):checkpoint 沒跑(週六補市日 weekday≥5)仍收到
+             # 新日 tick → 先補 stage1 再走 stage2
+@@ -623,12 +708,27 @@ class StockEngine:
+         basis = price - last.price_milli if last is not None else None
+         self._publish({"type": "stkfut", "code": code, "prod": prod, "p": price, "basis": basis})
+ 
+-    # ---- backfill worker(單工;guard = main ∧ generation)----
++    # ---- backfill worker(單工;guard = job 自帶 code ∧ generation)----
++
++    def _enqueue_backfill(self, code: str) -> None:
++        """入列回補 job 的**唯一**接點(五個產出點共用:set_main / rollover stage2 /
++        reconnect / 漲跌停值變 / group_snapshot)。
++
++        `_backfill_pending` 必須與 put 同步寫入 —— 分開寫的話,某個入列點漏寫就會讓
++        `backfilling` 旗標與群組 dedup 對那條路徑靜默失準(卡片顯示「無資料」而不是
++        「回補中…」,或同一檔被重複入列灌爆單工 worker)。
++        """
++        self._backfill_pending.add(code)
++        self._backfill_jobs.put_nowait((code, self._generation))
+ 
+     async def _backfill_worker(self) -> None:
+         while True:
+             code, generation = await self._backfill_jobs.get()
+-            if code != self._main or generation != self._generation:
++            # 取件早退**只比 generation**(design v3 R12):job 自帶 code,收件人是那一檔
++            # 自己的 state 而不是「當下的主圖」。綁 `_main` 會讓群組成員的 job 全部被
++            # 靜默丟棄(零錯誤訊號,卡片只是一直空著)。
++            if generation != self._generation:
++                self._backfill_pending.discard(code)
+                 continue
+             self._backfilling = code
+             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code})
+@@ -638,6 +738,7 @@ class StockEngine:
+                 logger.exception("backfill %s failed", code)
+                 self.tc4_status = "down"
+                 self._backfilling = None
++                self._backfill_pending.discard(code)
+                 self._publish({"type": "status", "tc4": "down", "backfilling": None})
+                 continue
+             except Exception:
+@@ -645,15 +746,20 @@ class StockEngine:
+                 # 死掉 = 之後所有回補靜默失效、backfilling 永久卡住
+                 logger.exception("backfill %s unexpected failure(worker 續行)", code)
+                 self._backfilling = None
++                self._backfill_pending.discard(code)
+                 self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+                 continue
+             self._backfilling = None
+-            # 套用 guard:回補期間主圖切換或 rollover → 丟棄(design §2.3);
+-            # 另過濾非當日列(防舊日窗殘留資料混入新日狀態)
+-            if code == self._main and generation == self._generation:
++            # 套用 guard:rollover 作廢 in-flight 回補 → 丟棄(design §2.3);
++            # 另過濾非當日列(防舊日窗殘留資料混入新日狀態)。
++            # **不再比 `_main`**(design v3 R12,同取件早退的 rationale)。
++            if generation == self._generation:
+                 state = self._states.get(code)
+                 if state is not None:
+                     state.apply_backfill([t for t in ticks if t.trade_date == self._trade_date])
++                    self._backfilled.add(code)  # 套用成功才記帳
++            # 在途記帳一律在此結清(套用 / 失敗 / 丟棄三條路都經過)
++            self._backfill_pending.discard(code)
+             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+ 
+     # ---- 廣播 ----
+diff --git a/frontend/src/components/stock/GroupGridView.test.tsx b/frontend/src/components/stock/GroupGridView.test.tsx
+new file mode 100644
+index 0000000..52eacb1
+--- /dev/null
++++ b/frontend/src/components/stock/GroupGridView.test.tsx
+@@ -0,0 +1,213 @@
++/** @vitest-environment jsdom */
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { GroupGridView } from "@/components/stock/GroupGridView";
++import type { WatchlistQuote } from "@/hooks/useStockStream";
++import { STOCK_GROUP_KEY } from "@/lib/constants";
++import type { Group } from "@/lib/watchlist-model";
++import { wrap } from "@/test-utils";
++
++const GROUPS: Group[] = [
++  { name: "半導體", codes: ["2330", "2317"] },
++  { name: "金融", codes: ["2881"] },
++];
++
++function quote(over: Partial<WatchlistQuote> = {}): WatchlistQuote {
++  return { p: null, chg_pct: null, vol: null, ref: null, upper: null, lower: null, no_data: false, ...over };
++}
++
++interface StateOver {
++  minutes?: Record<string, unknown>;
++  meta?: unknown;
++  no_data?: boolean;
++  backfilling?: boolean;
++}
++
++function state(over: StateOver = {}) {
++  return {
++    minutes: { "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } },
++    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++    no_data: false,
++    backfilling: false,
++    ...over,
++  };
++}
++
++let fetchMock: ReturnType<typeof vi.fn>;
++let states: Record<string, unknown>;
++
++beforeEach(() => {
++  window.localStorage.clear();
++  states = {
++    "2330": state(),
++    "2317": state({ meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 5 } }),
++    "2881": state({ meta: { name: "富邦金", ref: 800_000, upper: null, lower: null, y_vol: 5 } }),
++  };
++  fetchMock = vi.fn(async (url: string) => {
++    const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
++    const picked: Record<string, unknown> = {};
++    for (const c of codes.split(",").filter(Boolean)) picked[c] = states[c] ?? state({ no_data: true });
++    return new Response(JSON.stringify({ states: picked }));
++  });
++  vi.stubGlobal("fetch", fetchMock);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function groupCalls(): string[] {
++  return fetchMock.mock.calls
++    .map((c) => String(c[0]))
++    .filter((u) => u.includes("/api/stock/group-state"));
++}
++
++describe("GroupGridView 空態(文案逐字)", () => {
++  it("零群組 → 尚無群組空態,且零請求", async () => {
++    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} />);
++    expect(screen.getByText("尚無群組 — 到自選欄建立群組")).toBeTruthy();
++    await new Promise((r) => setTimeout(r, 30));
++    expect(groupCalls()).toHaveLength(0);
++  });
++
++  // R17:空群組的 codes 是空陣列,打端點只會拿回 `{"states":{}}` —— 沒有任何卡片可畫,
++  // 卻每 60s 燒一次來回。gate 在 hook 的 `enabled`,不是在畫面。
++  it("空群組(成員 0)→ 專屬空態,且零請求", async () => {
++    wrap(<GroupGridView groups={[{ name: "空組", codes: [] }]} quotes={{}} onPick={vi.fn()} />);
++    expect(screen.getByText("這個群組還沒有成員")).toBeTruthy();
++    await new Promise((r) => setTimeout(r, 30));
++    expect(groupCalls()).toHaveLength(0);
++  });
++});
++
++describe("GroupGridView 群組下拉", () => {
++  it("預設第一個群組;成員卡片全數渲染", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    const select = screen.getByLabelText("選擇群組") as HTMLSelectElement;
++    expect(select.value).toBe("半導體");
++    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
++    expect(screen.getByTestId("group-card-2317")).toBeTruthy();
++    expect(screen.queryByTestId("group-card-2881")).toBeNull();
++  });
++
++  it("切換群組 → 改打新群組的 codes", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    await waitFor(() => expect(groupCalls()).toHaveLength(1));
++    expect(groupCalls()[0]).toContain("codes=2330,2317");
++    fireEvent.change(screen.getByLabelText("選擇群組"), { target: { value: "金融" } });
++    await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
++    expect(groupCalls().some((u) => u.includes("codes=2881"))).toBe(true);
++  });
++
++  // edge 5(R10):群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名。
++  // 不 fallback 的話畫面會停在「這個群組還沒有成員」而使用者根本沒有那一組。
++  it("記住的群組已被刪 → fallback 第一個群組", async () => {
++    window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    expect((screen.getByLabelText("選擇群組") as HTMLSelectElement).value).toBe("半導體");
++    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
++  });
++
++  it("記住的群組仍在 → 沿用它(不重設回第一個)", async () => {
++    window.localStorage.setItem(STOCK_GROUP_KEY, "金融");
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    expect((screen.getByLabelText("選擇群組") as HTMLSelectElement).value).toBe("金融");
++    await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
++  });
++});
++
++describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => {
++  it("常態 → 代碼 + 名稱 + mini 分時圖", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    const card = await screen.findByTestId("group-card-2330");
++    expect(card.textContent).toContain("2330");
++    expect(card.textContent).toContain("台積電");
++    expect(card.querySelector("svg")).toBeTruthy();
++  });
++
++  it("backfilling → 「回補中…」,不呈現半截圖", async () => {
++    states["2330"] = state({ backfilling: true, minutes: {} });
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    const card = await screen.findByTestId("group-card-2330");
++    await waitFor(() => expect(card.textContent).toContain("回補中…"));
++    expect(card.querySelector("svg")).toBeNull();
++  });
++
++  // 優先序:回補中同時 no_data 時要說「回補中…」—— 回補完就會有資料,說「無資料」是錯的
++  it("backfilling 與 noData 同時為真 → 顯示「回補中…」", async () => {
++    states["2330"] = state({ backfilling: true, no_data: true, minutes: {} });
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    const card = await screen.findByTestId("group-card-2330");
++    await waitFor(() => expect(card.textContent).toContain("回補中…"));
++    expect(card.textContent).not.toContain("無資料");
++  });
++
++  it("noData → 「無資料」占位", async () => {
++    states["2330"] = state({ no_data: true, minutes: {} });
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    const card = await screen.findByTestId("group-card-2330");
++    await waitFor(() => expect(card.textContent).toContain("無資料"));
++    expect(card.querySelector("svg")).toBeNull();
++  });
++
++  // edge 6(R10:batch 化後 per-card 隔離不再成立)—— 整批一命
++  it("batch 整批失敗 → 全部卡片「無資料」", async () => {
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
++    );
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    await waitFor(() =>
++      expect(screen.getByTestId("group-card-2330").textContent).toContain("無資料"),
++    );
++    expect(screen.getByTestId("group-card-2317").textContent).toContain("無資料");
++  });
++});
++
++describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
++  it("有成交 → 現價 + 漲跌%,漲紅跌綠", async () => {
++    const quotes = {
++      "2330": quote({ p: 2_400_000, chg_pct: 3.45 }),
++      "2317": quote({ p: 1_900_000, chg_pct: -5 }),
++    };
++    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} />);
++    const a = await screen.findByTestId("group-quote-2330");
++    expect(a.textContent).toContain("2400");
++    expect(a.textContent).toContain("+3.45%");
++    expect(a.className).toContain("text-bull");
++    const b = screen.getByTestId("group-quote-2317");
++    expect(b.textContent).toContain("-5.00%");
++    expect(b.className).toContain("text-bear");
++  });
++
++  // 尚無成交時 `p` 為 null 而 `ref` 有值(兩欄互斥)。參考價不套漲跌色、不印 0.00%
++  // —— 那會讓昨收看起來像今天的走勢(同側欄既有紀律)。
++  it("尚無成交 → 顯示參考價 + 「參考」,中性色不套漲跌", async () => {
++    const quotes = { "2330": quote({ p: null, ref: 2_320_000 }) };
++    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} />);
++    const el = await screen.findByTestId("group-quote-2330");
++    expect(el.textContent).toContain("2320");
++    expect(el.textContent).toContain("參考");
++    expect(el.className).not.toContain("text-bull");
++    expect(el.className).not.toContain("text-bear");
++  });
++
++  it("p 與 ref 皆缺 → 「-」", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    const el = await screen.findByTestId("group-quote-2330");
++    expect(el.textContent).toContain("-");
++  });
++});
++
++describe("GroupGridView 點卡片切主檔", () => {
++  it("整張卡片是一顆 button(有可及名稱),點了回呼該股", async () => {
++    const onPick = vi.fn();
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} />);
++    const card = await screen.findByTestId("group-card-2330");
++    expect(card.tagName).toBe("BUTTON");
++    expect(card.getAttribute("aria-label")).toBe("查看 2330 台積電");
++    fireEvent.click(card);
++    expect(onPick).toHaveBeenCalledWith("2330");
++  });
++});
+diff --git a/frontend/src/components/stock/GroupGridView.tsx b/frontend/src/components/stock/GroupGridView.tsx
+new file mode 100644
+index 0000000..4c4b9aa
+--- /dev/null
++++ b/frontend/src/components/stock/GroupGridView.tsx
+@@ -0,0 +1,170 @@
++import { useState } from "react";
++
++import { MiniIntradayChart } from "@/components/stock/MiniIntradayChart";
++import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
++import type { WatchlistQuote } from "@/hooks/useStockStream";
++import { STOCK_GROUP_KEY } from "@/lib/constants";
++import { fmt, fmtPct } from "@/lib/format";
++import { cn } from "@/lib/utils";
++import type { Group } from "@/lib/watchlist-model";
++
++/** 群組檢視:自選群組成員的 mini 分時圖牆(group-grid SC-3)。
++ *
++ *  要回答的問題是「同產業今天有沒有一起動」—— 所以卡片只留代碼 / 名稱 / 現價 /
++ *  一條分時線,沒有座標軸、沒有五檔、沒有明細。點任一張卡片切回單檔檢視看細節。 */
++
++interface Props {
++  groups: Group[];
++  /** WS `watchlist_quote`(每秒);現價與漲跌幅來源,同時餵 mini 圖的末點延伸 */
++  quotes: Record<string, WatchlistQuote>;
++  onPick: (code: string) => void;
++}
++
++function loadGroupName(): string | null {
++  try {
++    return window.localStorage.getItem(STOCK_GROUP_KEY);
++  } catch {
++    return null;
++  }
++}
++
++function persistGroupName(name: string): void {
++  try {
++    window.localStorage.setItem(STOCK_GROUP_KEY, name);
++  } catch {
++    // 存不進去就算了 —— 下次開回第一個群組,不值得為此讓整頁掛掉
++  }
++}
++
++/** 卡片右上的價格區(R11)。`p` 與 `ref` 是**互斥**的兩欄:尚無成交時後端只給 `ref`。
++ *  參考價不套漲跌色也不印 `0.00%` —— 那會讓昨收看起來像今天的走勢(同側欄既有紀律)。 */
++function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined }) {
++  const tone =
++    q?.p == null
++      ? "text-ink-dim"
++      : (q.chg_pct ?? 0) > 0
++        ? "text-bull"
++        : (q.chg_pct ?? 0) < 0
++          ? "text-bear"
++          : "text-ink";
++  return (
++    <span
++      data-testid={`group-quote-${code}`}
++      className={cn("flex shrink-0 items-baseline gap-1 font-mono text-xs", tone)}
++    >
++      {q?.p != null ? (
++        <>
++          <span className="text-sm">{fmt(q.p)}</span>
++          <span>{q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}</span>
++        </>
++      ) : q?.ref != null ? (
++        <>
++          <span className="text-sm">{fmt(q.ref)}</span>
++          <span className="text-[0.625rem]">參考</span>
++        </>
++      ) : (
++        <span className="text-sm">-</span>
++      )}
++    </span>
++  );
++}
++
++export function GroupGridView({ groups, quotes, onPick }: Props) {
++  const [picked, setPicked] = useState<string | null>(loadGroupName);
++  // 群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名(edge 5)——
++  // fallback 第一個而不是停在空態,否則畫面會說「這個群組還沒有成員」而使用者
++  // 根本沒有那一組。衍生值不入 state:同步 state 與 props 正是 effect anti-pattern。
++  const selected = groups.find((g) => g.name === picked) ?? groups[0] ?? null;
++  const codes = selected?.codes ?? [];
++  const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
++
++  if (groups.length === 0) {
++    return (
++      <div className="flex flex-1 items-center justify-center">
++        <p className="text-sm text-ink-muted">尚無群組 — 到自選欄建立群組</p>
++      </div>
++    );
++  }
++
++  function card(code: string) {
++    const snap: GroupSnapshot | undefined = data?.[code];
++    const name = snap?.meta?.name ?? "";
++    // 三態優先序:回補中 → 無資料 → 常態。回補完就會有資料,回補中說「無資料」是錯的;
++    // `snap === undefined` 收斂進無資料 —— batch 整批失敗時全部卡片一命(edge 6)。
++    const backfilling = snap?.backfilling === true;
++    return (
++      <button
++        key={code}
++        type="button"
++        data-testid={`group-card-${code}`}
++        aria-label={name === "" ? `查看 ${code}` : `查看 ${code} ${name}`}
++        onClick={() => onPick(code)}
++        className="flex flex-col gap-1 rounded border border-line p-2 text-left hover:border-accent"
++      >
++        <span className="flex min-w-0 items-baseline gap-1">
++          <span className="font-mono text-sm text-ink">{code}</span>
++          <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">{name}</span>
++          <QuoteCell code={code} q={quotes[code]} />
++        </span>
++        {backfilling ? (
++          <span className="flex h-20 items-center justify-center text-xs text-ink-dim">
++            回補中…
++          </span>
++        ) : snap === undefined || snap.noData ? (
++          <span className="flex h-20 items-center justify-center text-xs text-ink-dim">
++            無資料
++          </span>
++        ) : (
++          <MiniIntradayChart
++            minutes={snap.minutes}
++            meta={snap.meta}
++            liveP={quotes[code]?.p ?? null}
++          />
++        )}
++      </button>
++    );
++  }
++
++  return (
++    <div className="flex min-h-0 flex-1 flex-col gap-2">
++      {/* 可見文字與 `aria-label` 刻意不用 `<label>` 包起來:兩者同時存在時 aria-label
++          會蓋掉 label 文字,可及名稱與畫面文字不一致是最難查的 a11y 漂移 */}
++      <div className="flex shrink-0 items-center gap-2 text-xs text-ink-muted">
++        <span>群組</span>
++        <select
++          aria-label="選擇群組"
++          value={selected?.name ?? ""}
++          onChange={(e) => {
++            setPicked(e.target.value);
++            persistGroupName(e.target.value);
++          }}
++          className="rounded border border-line bg-bg px-2 py-1 text-sm text-ink outline-none focus:border-accent"
++        >
++          {groups.map((g) => (
++            <option key={g.name} value={g.name}>
++              {g.name}
++            </option>
++          ))}
++        </select>
++      </div>
++      {codes.length === 0 ? (
++        <div className="flex flex-1 items-center justify-center">
++          <p className="text-sm text-ink-muted">這個群組還沒有成員</p>
++        </div>
++      ) : isPending ? (
++        // 首載未回前**不畫卡片**:卡片的三態全是**終態宣告**,而「無資料」是其中最強的
++        // 一句(「這檔今天沒東西可看」)。載入中就先鋪一整面「無資料」再逐格翻回圖,
++        // 既是閃爍也是說謊 —— 30 檔的群組會有整整一輪 batch 的時間停在錯的答案上。
++        // 錯誤終態不走這條(`isPending` 只涵蓋首載):整批失敗時卡片照畫、答「無資料」。
++        <div className="flex flex-1 items-center justify-center">
++          <p className="text-sm text-ink-muted">載入群組…</p>
++        </div>
++      ) : (
++        // min-h-0 不可省:少了它 flex 子項不會縮,`overflow-y-auto` 算不出可捲高度
++        <div className="grid min-h-0 grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-2 overflow-y-auto">
++          {codes.map((code) => card(code))}
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/frontend/src/components/stock/MiniIntradayChart.test.tsx b/frontend/src/components/stock/MiniIntradayChart.test.tsx
+new file mode 100644
+index 0000000..cfd5721
+--- /dev/null
++++ b/frontend/src/components/stock/MiniIntradayChart.test.tsx
+@@ -0,0 +1,157 @@
++/** @vitest-environment jsdom */
++import { cleanup, render } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { extendMinutes, MiniIntradayChart, MINI_H, MINI_W } from "@/components/stock/MiniIntradayChart";
++import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
++import { PAD_Y, X_END_MIN, X_START_MIN, Y_AXIS_W } from "@/lib/stock-intraday-svg";
++
++afterEach(() => {
++  cleanup();
++  vi.useRealTimers();
++});
++
++const META: StockMeta = {
++  name: "台積電",
++  ref: 2_320_000,
++  upper: 2_550_000,
++  lower: 2_090_000,
++  y_vol: 100,
++};
++
++function agg(over: Partial<MinuteAgg> = {}): MinuteAgg {
++  return { c: 2_320_000, v: 1, i: 0, o: 1, u: 0, h: null, l: null, ...over };
++}
++
++function xs(points: string): number[] {
++  return points.split(" ").map((p) => Number(p.split(",")[0]));
++}
++
++function ys(points: string): number[] {
++  return points.split(" ").map((p) => Number(p.split(",")[1]));
++}
++
++function priceLinePoints(container: HTMLElement): string {
++  const el = container.querySelector('[data-testid="mini-price"]');
++  return el?.getAttribute("points") ?? "";
++}
++
++describe("MiniIntradayChart 幾何補償(design v3 R5/R13)", () => {
++  it("viewBox 平移裁掉左右軸帶 —— 只留繪圖區", () => {
++    const { container } = render(
++      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={META} liveP={null} />,
++    );
++    const svg = container.querySelector("svg")!;
++    expect(svg.getAttribute("viewBox")).toBe(`${Y_AXIS_W} 0 ${MINI_W} ${MINI_H}`);
++  });
++
++  it("走勢線 x 滿版:09:00 貼左緣、13:30 貼右緣", () => {
++    const minutes = new Map<number, MinuteAgg>([
++      [X_START_MIN, agg()],
++      [X_END_MIN, agg()],
++    ]);
++    const { container } = render(<MiniIntradayChart minutes={minutes} meta={META} liveP={null} />);
++    const x = xs(priceLinePoints(container));
++    expect(x[0]).toBeCloseTo(Y_AXIS_W, 1);
++    expect(x[x.length - 1]!).toBeCloseTo(Y_AXIS_W + MINI_W, 1);
++  });
++
++  // R13:height 帶 X_LABEL_H 補償 → 內容落在 [PAD_Y, MINI_H − PAD_Y],上下對稱各留一份。
++  // v2 的「上緣 0、下緣 4px」不對稱會讓漲停那根貼頂的 stroke 被裁掉半條。
++  it("漲停 / 跌停都不被裁:所有 y ∈ [PAD_Y, MINI_H − PAD_Y] 且兩端恰貼邊", () => {
++    const minutes = new Map<number, MinuteAgg>([
++      [X_START_MIN, agg({ c: META.upper! })],
++      [X_START_MIN + 1, agg({ c: META.ref! })],
++      [X_END_MIN, agg({ c: META.lower! })],
++    ]);
++    const { container } = render(<MiniIntradayChart minutes={minutes} meta={META} liveP={null} />);
++    const y = ys(priceLinePoints(container));
++    for (const v of y) {
++      expect(v).toBeGreaterThanOrEqual(PAD_Y);
++      expect(v).toBeLessThanOrEqual(MINI_H - PAD_Y);
++    }
++    expect(y[0]).toBeCloseTo(PAD_Y, 1);
++    expect(y[y.length - 1]!).toBeCloseTo(MINI_H - PAD_Y, 1);
++  });
++
++  it("meta.ref 有值 → 畫平盤虛線 + 紅綠面積", () => {
++    const { container } = render(
++      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={META} liveP={null} />,
++    );
++    expect(container.querySelector('[data-testid="mini-ref"]')).toBeTruthy();
++    expect(container.querySelectorAll('[data-testid="mini-area"]').length).toBeGreaterThan(0);
++  });
++
++  it("meta.ref 缺 → 無平盤可言:不畫虛線也不填色", () => {
++    const noRef: StockMeta = { ...META, ref: null };
++    const { container } = render(
++      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={noRef} liveP={null} />,
++    );
++    expect(container.querySelector('[data-testid="mini-ref"]')).toBeNull();
++    expect(container.querySelectorAll('[data-testid="mini-area"]').length).toBe(0);
++    // 走勢線本身仍要畫得出來
++    expect(priceLinePoints(container)).not.toBe("");
++  });
++
++  // 卡片只有 15rem 寬,任何刻度文字都塞不下也讀不到 —— 「無座標軸」是 SC-3 的明文要求。
++  // (clipPath 內的 <rect> 是紅綠切半的機制,不是版面元素,所以只鎖文字。)
++  it("mini 圖不掛座標軸文字(SC-3:無座標軸)", () => {
++    const { container } = render(
++      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={META} liveP={null} />,
++    );
++    expect(container.querySelectorAll("text").length).toBe(0);
++  });
++});
++
++// R10 延伸規則:分鐘鍵 = 本機時鐘分鐘,僅當落在 [09:00, 13:30] 且 liveP > 0 才延伸。
++describe("extendMinutes(R10 現價延伸)", () => {
++  const at = (h: number, m: number) => new Date(2026, 7, 6, h, m, 30);
++
++  it("既有 bucket → 只覆寫 c,量與高低原樣", () => {
++    const src = new Map<number, MinuteAgg>([
++      [600, { c: 2_300_000, v: 12, i: 5, o: 6, u: 1, h: 2_310_000, l: 2_295_000 }],
++    ]);
++    const out = extendMinutes(src, 2_345_000, at(10, 0));
++    expect(out.get(600)).toEqual({
++      c: 2_345_000,
++      v: 12,
++      i: 5,
++      o: 6,
++      u: 1,
++      h: 2_310_000,
++      l: 2_295_000,
++    });
++    // 淺拷不就地改:原 Map 不可被污染
++    expect(src.get(600)?.c).toBe(2_300_000);
++  });
++
++  it("無 bucket → 新建零量點(h/l 為 null,不冒充)", () => {
++    const out = extendMinutes(new Map(), 2_345_000, at(10, 0));
++    expect(out.get(600)).toEqual({ c: 2_345_000, v: 0, i: 0, o: 0, u: 0, h: null, l: null });
++  });
++
++  it("窗外時刻(13:31 之後 / 09:00 之前)不延伸", () => {
++    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
++    expect(extendMinutes(src, 2_345_000, at(14, 0))).toBe(src);
++    expect(extendMinutes(src, 2_345_000, at(8, 50))).toBe(src);
++  });
++
++  it("liveP 為 null / 0 / 負 → 不延伸(0 是 TC4 的「不可得」不是價格)", () => {
++    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
++    expect(extendMinutes(src, null, at(10, 0))).toBe(src);
++    expect(extendMinutes(src, 0, at(10, 0))).toBe(src);
++    expect(extendMinutes(src, -5, at(10, 0))).toBe(src);
++  });
++
++  // 元件不開「注入 now」的測試專用 prop —— 那條路只有測試會走,鎖不到真實時鐘那一支。
++  // 改動系統時鐘,測到的是元件內真的呼叫了 `new Date()`。
++  it("延伸後的點真的畫進走勢線(不是只算不畫)", () => {
++    vi.useFakeTimers({ shouldAdvanceTime: true });
++    vi.setSystemTime(at(10, 0));
++    const minutes = new Map<number, MinuteAgg>([[X_START_MIN, agg()]]);
++    const { container } = render(
++      <MiniIntradayChart minutes={minutes} meta={META} liveP={2_500_000} />,
++    );
++    expect(xs(priceLinePoints(container)).length).toBe(2);
++  });
++});
+diff --git a/frontend/src/components/stock/MiniIntradayChart.tsx b/frontend/src/components/stock/MiniIntradayChart.tsx
+new file mode 100644
+index 0000000..670751a
+--- /dev/null
++++ b/frontend/src/components/stock/MiniIntradayChart.tsx
+@@ -0,0 +1,173 @@
++import { useId } from "react";
++
++import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
++import {
++  buildIntradayGeometry,
++  R_AXIS_W,
++  X_END_MIN,
++  X_LABEL_H,
++  X_START_MIN,
++  Y_AXIS_W,
++} from "@/lib/stock-intraday-svg";
++import { pts } from "@/lib/svg-points";
++import { safeIdToken } from "@/lib/utils";
++
++/** 群組卡片內的迷你分時圖(group-grid SC-3)。
++ *
++ *  **重用 `buildIntradayGeometry` 而不是另寫一份小尺寸幾何**:y 域(漲跌停 vs 對稱
++ *  autofit)、`hasRef` 的紅綠語意、0 = 不可得的歸一,這幾條規則各自漂一份的代價是
++ *  「主圖與卡片對同一檔股票畫出不同的圖」,而且沒有任何測試比得到兩者。
++ *
++ *  代價是那份幾何自帶左右軸帶(`Y_AXIS_W` / `R_AXIS_W`)與底部時間帶(`X_LABEL_H`)
++ *  ——卡片只有 15rem 寬,軸帶會吃掉近半。**幾何補償(design R5/R13)**:
++ *  傳進去的尺寸把三條帶都加回去,再用 viewBox 把它們裁掉。
++ *
++ *    width  = MINI_W + Y_AXIS_W + R_AXIS_W  → `plotWidth` 恰為 MINI_W,x ∈ [Y_AXIS_W, Y_AXIS_W+MINI_W]
++ *    height = MINI_H + X_LABEL_H            → `plotH` = MINI_H − 2·PAD_Y,y ∈ [PAD_Y, MINI_H−PAD_Y]
++ *    viewBox = "Y_AXIS_W 0 MINI_W MINI_H"
++ *
++ *  `height` 的 `+ X_LABEL_H` 是必要的(R13 修正 v2):不加的話上下留邊變成
++ *  「上緣 0、下緣 PAD_Y」的不對稱,漲停那根貼頂的 stroke 會被裁掉半條。 */
++
++export const MINI_W = 220;
++export const MINI_H = 76;
++
++interface Props {
++  minutes: Map<number, MinuteAgg>;
++  meta: StockMeta | null;
++  /** `watchlist_quote` 的現價(毫元);null / ≤0 = 不延伸 */
++  liveP: number | null;
++}
++
++/** 現價延伸(design R10)。分鐘級 snapshot 每 60s 才更新一次,不延伸的話卡片上的線
++ *  最久會停在一分鐘前 —— 而群組檢視的用途就是「現在有沒有一起動」。
++ *
++ *  三道限制都不是防禦性補丁:
++ *  - 分鐘鍵取**本機時鐘**(部署綁台北),窗外(盤前 / 盤後 / 隔天早上還開著頁面)
++ *    一律不延伸 —— 幾何的窗是 [09:00, 13:30],延伸到窗外的點會被 `windowedEntries`
++ *    濾掉,但延伸到**窗內錯的分鐘**(例如隔日 09:05 用的是昨天的 minutes)會靜默
++ *    畫出一條假的尾巴。
++ *  - `liveP > 0`:TC4 會送 0 表示「不可得」(鎖漲跌停的市價佇列同理),毫元價恆 > 0。
++ *  - 既有 bucket **只覆寫 `c`**:量 / 內外盤 / 高低都是後端聚合的真值,拿現價去改
++ *    它們等於偽造成交明細。無 bucket 才新建,且 `h`/`l` 給 `null` = 「這一分鐘的
++ *    高低不可知」而不是冒充等於現價。
++ *
++ *  不就地改傳入的 Map(淺拷後寫):來源是 TQ cache 的物件,污染它會讓下一次
++ *  render 拿到被改過的「快取」而看不出來。 */
++export function extendMinutes(
++  minutes: Map<number, MinuteAgg>,
++  liveP: number | null,
++  now: Date = new Date(),
++): Map<number, MinuteAgg> {
++  if (liveP === null || liveP <= 0) return minutes;
++  const key = now.getHours() * 60 + now.getMinutes();
++  if (key < X_START_MIN || key > X_END_MIN) return minutes;
++  const next = new Map(minutes);
++  const prev = next.get(key);
++  next.set(
++    key,
++    prev === undefined
++      ? { c: liveP, v: 0, i: 0, o: 0, u: 0, h: null, l: null }
++      : { ...prev, c: liveP },
++  );
++  return next;
++}
++
++export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
++  // clip id 必須全域唯一(SVG id 是 document 範圍)且只含識別字元 —— React 19 的
++  // useId 產出 «r0» 形態,而 `url(#…)` 解析失敗在 SVG 規範下是「該元素不繪製」= 全靜默
++  const uid = safeIdToken(useId());
++  const above = `${uid}-mini-a`;
++  const below = `${uid}-mini-b`;
++  const g = buildIntradayGeometry(
++    { minutes: extendMinutes(minutes, liveP), meta },
++    { width: MINI_W + Y_AXIS_W + R_AXIS_W, height: MINI_H + X_LABEL_H },
++  );
++  const line = pts(g.priceLine);
++  return (
++    // `preserveAspectRatio="none"` = 非等比拉伸:卡片寬度隨 grid 欄數變,等比縮放
++    // (letterbox)會讓同一列的圖高忽大忽小。尺度差不到 5%(220×76 → 約 224×80),
++    // sparkline 的線寬失真肉眼不可見。
++    <svg
++      viewBox={`${Y_AXIS_W} 0 ${MINI_W} ${MINI_H}`}
++      preserveAspectRatio="none"
++      className="block h-20 w-full"
++    >
++      {g.hasRef ? (
++        <defs>
++          {/* 平盤上下切兩半:面積與價線共用,紅漲綠跌與主圖同一套語彙 */}
++          <clipPath id={above}>
++            <rect x={Y_AXIS_W} y={0} width={MINI_W} height={Math.max(0, g.refY)} />
++          </clipPath>
++          <clipPath id={below}>
++            <rect
++              x={Y_AXIS_W}
++              y={g.refY}
++              width={MINI_W}
++              height={Math.max(0, MINI_H - g.refY)}
++            />
++          </clipPath>
++        </defs>
++      ) : null}
++      {g.hasRef ? (
++        <line
++          data-testid="mini-ref"
++          x1={Y_AXIS_W}
++          x2={Y_AXIS_W + MINI_W}
++          y1={g.refY}
++          y2={g.refY}
++          className="stroke-line"
++          strokeDasharray="2 3"
++          strokeWidth={1}
++        />
++      ) : null}
++      {g.hasRef && g.areaPolygon !== "" ? (
++        <>
++          <polygon
++            data-testid="mini-area"
++            points={g.areaPolygon}
++            className="fill-bull"
++            fillOpacity="0.15"
++            clipPath={`url(#${above})`}
++          />
++          <polygon
++            data-testid="mini-area"
++            points={g.areaPolygon}
++            className="fill-bear"
++            fillOpacity="0.15"
++            clipPath={`url(#${below})`}
++          />
++        </>
++      ) : null}
++      {g.hasRef ? (
++        <>
++          <polyline
++            data-testid="mini-price"
++            points={line}
++            fill="none"
++            className="stroke-bull"
++            strokeWidth={1.4}
++            clipPath={`url(#${above})`}
++          />
++          <polyline
++            data-testid="mini-price"
++            points={line}
++            fill="none"
++            className="stroke-bear"
++            strokeWidth={1.4}
++            clipPath={`url(#${below})`}
++          />
++        </>
++      ) : (
++        // 沒有昨收就沒有「平盤」可言,紅綠會把「開盤後漲跌」誤指為「相對昨收漲跌」
++        <polyline
++          data-testid="mini-price"
++          points={line}
++          fill="none"
++          className="stroke-accent"
++          strokeWidth={1.4}
++        />
++      )}
++    </svg>
++  );
++}
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index 6c2dcdd..a287368 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -63,6 +63,12 @@ beforeEach(() => {
+       if (String(url).includes("/api/stock/signals/rules")) {
+         return new Response(JSON.stringify({ rules: [] }));
+       }
++      // 群組檢視 batch(group-grid SC-4)。預設檢視是單檔 → 這支多半不會被打到,
++      // 但 stub 少一條分支的代價是掉進 404 → query error,而群組檢視的錯誤態
++      // 恰好也是「無資料」,測試會綠得毫無意義。
++      if (String(url).includes("/api/stock/group-state")) {
++        return new Response(JSON.stringify({ states: {} }));
++      }
+       return new Response(JSON.stringify({}), { status: 404 });
+     }),
+   );
+@@ -556,3 +562,118 @@ describe("StockPage 訊號規則(signal-rules SC-7)", () => {
+     expect(within(screen.getByTestId("signal-rules-dialog")).getByText("我的爆量")).toBeTruthy();
+   });
+ });
++
++// 🟢 group-grid SC-3:個股頁新增「單檔｜群組」檢視切換。
++// pill 掛在 main 頂層、`code === null` 與 `accum === null` 兩個條件分支**之外**(design R6)
++// —— 未選股 / 主圖 snapshot 還沒回來時,群組檢視仍要可達。
++describe("StockPage 群組檢視(group-grid SC-3)", () => {
++  const GROUP_WL = {
++    codes: ["2330", "2317"],
++    groups: [{ name: "半導體", codes: ["2330", "2317"] }],
++  };
++
++  function mockGroupApi(): void {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string) => {
++        if (String(url).includes("/api/stock/watchlist")) {
++          return new Response(JSON.stringify(GROUP_WL));
++        }
++        if (String(url).includes("/api/stock/group-state")) {
++          return new Response(
++            JSON.stringify({
++              states: {
++                "2330": {
++                  minutes: { "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } },
++                  meta: { name: "台積電", ref: 2_320_000, upper: null, lower: null, y_vol: 1 },
++                  no_data: false,
++                  backfilling: false,
++                },
++                "2317": {
++                  minutes: {},
++                  meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 1 },
++                  no_data: true,
++                  backfilling: false,
++                },
++              },
++            }),
++          );
++        }
++        if (String(url).includes("/api/stock/names")) {
++          return new Response(JSON.stringify({ names: [], count: 0 }));
++        }
++        if (String(url).includes("/api/stock/bars")) {
++          return new Response(JSON.stringify({ bars: [] }));
++        }
++        if (String(url).includes("/api/stock/overlay")) {
++          return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
++        }
++        if (String(url).includes("/api/stock/signals/rules")) {
++          return new Response(JSON.stringify({ rules: [] }));
++        }
++        return new Response(JSON.stringify({}), { status: 404 });
++      }),
++    );
++  }
++
++  it("預設單檔檢視:pill 在、群組 grid 不在", () => {
++    mockGroupApi();
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    expect(screen.getByRole("button", { name: "單檔" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "群組" })).toBeTruthy();
++    expect(screen.queryByLabelText("選擇群組")).toBeNull();
++    expect(screen.getByTestId("stock-lower-row")).toBeTruthy();
++  });
++
++  it("切到群組 → header / 圖表 / 下半列讓位給卡片 grid;訊號欄與自選欄不動", async () => {
++    mockGroupApi();
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
++    expect(screen.queryByTestId("stock-lower-row")).toBeNull();
++    expect(screen.queryByTestId("page-quote")).toBeNull();
++    expect(screen.getByTestId("signal-rail")).toBeTruthy();
++    expect(screen.getByLabelText("自選清單")).toBeTruthy();
++  });
++
++  // R6 鎖:pill 若掛在 `code === null` 分支內,未選股時就永遠切不到群組檢視
++  it("未選股(code=null)仍切得到群組檢視", async () => {
++    mockGroupApi();
++    wrap(<StockPage code={null} onSelect={vi.fn()} stream={stream({ accum: null })} />);
++    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
++    expect(screen.queryByText(/從自選清單選擇/)).toBeNull();
++  });
++
++  // R6 鎖的另一半:主圖 snapshot 還沒回來(accum === null)時也不可把群組檢視關在門外
++  it("主圖 snapshot 未到(accum=null)仍切得到群組檢視", async () => {
++    mockGroupApi();
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream({ accum: null })} />);
++    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
++    expect(screen.queryByText("載入中…")).toBeNull();
++  });
++
++  it("點卡片 → onSelect 該股 + 自動切回單檔檢視", async () => {
++    mockGroupApi();
++    const onSelect = vi.fn();
++    wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
++    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    const card = await screen.findByTestId("group-card-2317");
++    fireEvent.click(card);
++    expect(onSelect).toHaveBeenCalledWith("2317");
++    await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
++    expect(screen.queryByLabelText("選擇群組")).toBeNull();
++  });
++
++  it("檢視選擇存進 localStorage,重掛後還原", async () => {
++    mockGroupApi();
++    const { unmount } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
++    unmount();
++    mockGroupApi();
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
++  });
++});
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 07a07a3..015b1b1 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -1,5 +1,6 @@
+ import { useState } from "react";
+ 
++import { GroupGridView } from "@/components/stock/GroupGridView";
+ import { OrderBook } from "@/components/stock/OrderBook";
+ import { SignalRail } from "@/components/stock/SignalRail";
+ import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
+@@ -11,6 +12,7 @@ import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalR
+ import { useSignalSound } from "@/hooks/useSignalSound";
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import type { StockStreamState } from "@/hooks/useStockStream";
++import { STOCK_VIEW_KEY } from "@/lib/constants";
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
+ import { limitState } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+@@ -26,6 +28,24 @@ interface Props {
+   stream: StockStreamState;
+ }
+ 
++/** 中間主區的檢視(group-grid SC-3):單檔看盤 vs 群組 mini 圖牆。 */
++type StockView = "single" | "group";
++
++const VIEW_LABELS: [StockView, string][] = [
++  ["single", "單檔"],
++  ["group", "群組"],
++];
++
++/** 只認得 `"group"`,其餘(未設 / 被人手動改壞 / 舊版遺留值)一律回單檔 ——
++ *  預設檢視必須是「有主圖」的那個,壞值把使用者丟進群組檢視會像整頁不見了。 */
++function initialView(): StockView {
++  try {
++    return window.localStorage.getItem(STOCK_VIEW_KEY) === "group" ? "group" : "single";
++  } catch {
++    return "single";
++  }
++}
++
+ /** jsdom 與不支援 Notification 的瀏覽器沒有這個全域 → 一律當「已拒絕」降級:
+  *  rail 只在 `default` 時顯示「允許通知」鈕,denied 就是不出現那顆鈕。 */
+ function currentPermission(): NotificationPermission {
+@@ -48,6 +68,7 @@ export function StockPage({ code, onSelect, stream }: Props) {
+   const [rulesOpen, setRulesOpen] = useState(false);
+   const { soundOn, setSoundOn } = useSignalSound();
+   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
++  const [view, setView] = useState<StockView>(initialView);
+   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
+   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
+   const { data: wl } = useStockWatchlist();
+@@ -95,6 +116,17 @@ export function StockPage({ code, onSelect, stream }: Props) {
+     saveRule.mutate({ ...rule, enabled: !rule.enabled });
+   }
+ 
++  /** 檢視切換 + 記憶。localStorage 寫失敗(隱私模式 / 配額)不讓整頁掛掉:
++   *  切換本身已生效,代價僅是下次重開回到單檔。 */
++  function selectView(next: StockView): void {
++    setView(next);
++    try {
++      window.localStorage.setItem(STOCK_VIEW_KEY, next);
++    } catch {
++      // 記不住就算了 —— 為了記憶檢視而讓看盤頁白掉是本末倒置
++    }
++  }
++
+   /** 權限狀態不是 React state 的衍生值,要主動回寫 —— 使用者按完瀏覽器提示後,
+    *  只有這裡更新才會讓「允許通知」鈕收起來。 */
+   function requestNotif(): void {
+@@ -140,7 +172,40 @@ export function StockPage({ code, onSelect, stream }: Props) {
+             {status.tc4 === "down" ? "達錢 4 連線中斷,恢復後自動回補" : "伺服器連線中斷,重連中…"}
+           </p>
+         ) : null}
+-        {code === null ? (
++        {/* 檢視切換 pill(group-grid SC-3)。掛在 main 頂層、`code === null` 與
++            `accum === null` 兩個條件分支**之外**(design R6)—— 掛進任一分支內,
++            未選股 / 主圖 snapshot 還沒回來時就永遠切不到群組檢視,而那兩個時機
++            恰恰是最想看「整組今天在幹嘛」的時候。 */}
++        <div className="flex shrink-0 flex-wrap items-center gap-1">
++          {VIEW_LABELS.map(([id, label]) => (
++            <button
++              key={id}
++              type="button"
++              aria-pressed={view === id}
++              onClick={() => selectView(id)}
++              className={cn(
++                "rounded border px-2 py-0.5 text-xs",
++                view === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++              )}
++            >
++              {label}
++            </button>
++          ))}
++        </div>
++        {view === "group" ? (
++          // 群組檢視吃掉整個 main 主體(header / 圖表 / 下半列全部讓位),訊號欄與
++          // 自選欄在 main 之外不受影響。`wl` 未載入時 groups 為空 → GroupGridView
++          // 自己的空態接手,這裡不另做載入態。
++          <GroupGridView
++            groups={wl?.groups ?? []}
++            quotes={watchlist}
++            onPick={(picked) => {
++              onSelect(picked);
++              // 點卡片的意圖是「看這一檔的細節」,留在群組檢視等於沒反應
++              selectView("single");
++            }}
++          />
++        ) : code === null ? (
+           <div className="flex flex-1 items-center justify-center">
+             <p className="text-sm text-ink-muted">從自選清單選擇一檔開始看盤</p>
+           </div>
+diff --git a/frontend/src/hooks/useGroupSnapshots.test.tsx b/frontend/src/hooks/useGroupSnapshots.test.tsx
+new file mode 100644
+index 0000000..b503e50
+--- /dev/null
++++ b/frontend/src/hooks/useGroupSnapshots.test.tsx
+@@ -0,0 +1,99 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { groupPollInterval, useGroupSnapshots } from "@/hooks/useGroupSnapshots";
++
++/** 後端 `/api/stock/group-state` 的 payload 形(design v3 SC-4;R15 寫死三鍵 + backfilling) */
++const BODY = {
++  states: {
++    "2330": {
++      minutes: { "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0, h: 2_385_000, l: 2_375_000 } },
++      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++      no_data: false,
++      backfilling: false,
++    },
++    "2317": {
++      minutes: {},
++      meta: null,
++      no_data: true,
++      backfilling: true,
++    },
++  },
++};
++
++let fetchMock: ReturnType<typeof vi.fn>;
++
++beforeEach(() => {
++  fetchMock = vi.fn(async () => new Response(JSON.stringify(BODY)));
++  vi.stubGlobal("fetch", fetchMock);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.useRealTimers();
++});
++
++function wrapper({ children }: { children: ReactNode }) {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++}
++
++describe("useGroupSnapshots", () => {
++  it("打單一 batch 端點(逗號分隔 codes),不逐檔請求", async () => {
++    const hook = renderHook(() => useGroupSnapshots(["2330", "2317"], true), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toBeTruthy());
++    expect(fetchMock).toHaveBeenCalledTimes(1);
++    expect(String(fetchMock.mock.calls[0]![0])).toBe("/api/stock/group-state?codes=2330,2317");
++  });
++
++  it("minutes 轉成 Map(鍵為數字),meta / noData / backfilling 一併帶出", async () => {
++    const hook = renderHook(() => useGroupSnapshots(["2330", "2317"], true), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toBeTruthy());
++    const data = hook.result.current.data!;
++    const a = data["2330"]!;
++    expect(a.minutes instanceof Map).toBe(true);
++    expect(a.minutes.get(540)?.c).toBe(2_380_000);
++    expect(a.meta?.ref).toBe(2_320_000);
++    expect(a.noData).toBe(false);
++    expect(a.backfilling).toBe(false);
++    const b = data["2317"]!;
++    expect(b.minutes.size).toBe(0);
++    expect(b.meta).toBeNull();
++    expect(b.noData).toBe(true);
++    expect(b.backfilling).toBe(true);
++  });
++
++  it("空 codes → 零請求(R17:空群組不打端點)", async () => {
++    renderHook(() => useGroupSnapshots([], true), { wrapper });
++    await new Promise((r) => setTimeout(r, 50));
++    expect(fetchMock).not.toHaveBeenCalled();
++  });
++
++  it("enabled=false → 零請求(切回單檔檢視不再輪詢)", async () => {
++    renderHook(() => useGroupSnapshots(["2330"], false), { wrapper });
++    await new Promise((r) => setTimeout(r, 50));
++    expect(fetchMock).not.toHaveBeenCalled();
++  });
++
++  it("非 2xx → error 終態(卡片端據此全部顯示無資料)", async () => {
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify({ detail: { error: "BAD_CODES" } }), { status: 400 }),
++    );
++    const hook = renderHook(() => useGroupSnapshots(["2330"], true), { wrapper });
++    await waitFor(() => expect(hook.result.current.isError).toBe(true));
++    expect(hook.result.current.error?.message).toBe("BAD_CODES");
++  });
++});
++
++// 輪詢窗抽成純函式才量得到(沿 `barsPollInterval` 慣例):hook 內是函式形
++// refetchInterval,值形式只在 render 當下求值 —— 冷門股沒 re-render 就永遠不會開始輪詢。
++describe("groupPollInterval", () => {
++  it("盤中 60s;盤外不輪詢", () => {
++    expect(groupPollInterval(true)).toBe(60_000);
++    expect(groupPollInterval(false)).toBe(false);
++  });
++});
+diff --git a/frontend/src/hooks/useGroupSnapshots.ts b/frontend/src/hooks/useGroupSnapshots.ts
+new file mode 100644
+index 0000000..cdd2056
+--- /dev/null
++++ b/frontend/src/hooks/useGroupSnapshots.ts
+@@ -0,0 +1,76 @@
++import { useQuery } from "@tanstack/react-query";
++
++import { parseError } from "@/lib/api-error";
++import { minutesFromRecord, type MinuteAgg, type StockMeta } from "@/lib/stock-accum";
++import { inTradingHours } from "@/lib/trading-hours";
++
++/** 群組檢視的成員狀態(group-grid SC-4)。
++ *
++ *  **單一 batch 端點,不是 per-code query**:`/api/stock/state/{code}` 會 `set_main`,
++ *  群組檢視每分鐘對最多 30 檔各要一次 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結
++ *  而畫面上只表現為「圖不動了」,沒有任何錯誤訊號(design R1)。
++ *
++ *  payload 只有 minutes / meta 兩份資料(`ticks` 是數千筆,30 檔一起送等於把 batch
++ *  端點變成頻寬炸彈)+ 兩個旗標。 */
++export interface GroupSnapshot {
++  minutes: Map<number, MinuteAgg>;
++  meta: StockMeta | null;
++  /** 未知 / 未訂閱 / TC4 查無此檔 —— 卡片只要答「這格畫不畫得出東西」,三者同義 */
++  noData: boolean;
++  /** 今日回補尚未落地:卡片顯示「回補中…」而不是呈現半截圖 */
++  backfilling: boolean;
++}
++
++const POLL_MS = 60_000;
++
++interface RawState {
++  minutes?: Record<string, MinuteAgg>;
++  meta?: StockMeta | null;
++  no_data?: boolean;
++  backfilling?: boolean;
++}
++
++async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapshot>> {
++  const res = await fetch(`/api/stock/group-state?codes=${csv}`);
++  if (!res.ok) throw new Error(await parseError(res));
++  const body = (await res.json()) as { states?: Record<string, RawState> };
++  const out: Record<string, GroupSnapshot> = {};
++  for (const [code, raw] of Object.entries(body.states ?? {})) {
++    out[code] = {
++      // 與主圖 snapshot 共用 `minutesFromRecord`:各寫一份的漂移樣態是其中一邊的
++      // h/l 留在 undefined,而幾何的極值等值反查對它是 false → 標記靜默消失
++      minutes: minutesFromRecord(raw.minutes),
++      meta: raw.meta ?? null,
++      noData: raw.no_data ?? false,
++      backfilling: raw.backfilling ?? false,
++    };
++  }
++  return out;
++}
++
++/** 輪詢窗(design R7)。抽成純函式才量得到(沿 `barsPollInterval` 慣例)。
++ *  盤外不輪詢:群組成員的分鐘序列收盤後就不會再變,而 30 檔的 batch 不是免費的。 */
++export function groupPollInterval(trading: boolean): number | false {
++  return trading ? POLL_MS : false;
++}
++
++/** 群組成員狀態 batch。`enabled` 是檢視開關,`codes` 空(空群組 / 零群組)一律不請求
++ *  —— 打了只會拿回 `{"states":{}}`,沒有任何卡片可畫卻每 60s 燒一次來回(R17)。 */
++export function useGroupSnapshots(codes: string[], enabled: boolean) {
++  // query key 用逗號串而不是陣列:陣列每次 render 都是新 identity,TQ 的結構化比對
++  // 雖然吃得下,但 URL 本來就是這個字串,兩處各拼一次反而多一個會漂的地方
++  const csv = codes.join(",");
++  return useQuery({
++    queryKey: ["stock-group-state", csv],
++    queryFn: () => fetchGroupState(csv),
++    enabled: enabled && codes.length > 0,
++    // 不重試:60s 的下一輪就是重試(同 `useServerBuild` 慣例)。retry 在這裡是純損失 ——
++    // 退避期間卡片停在載入態,而 batch 是整批一命,一檔的暫時性失敗與整組失敗同表現;
++    // 使用者看到的是「圖遲遲不出來」而不是「無資料」,後者至少是誠實的終態。
++    retry: false,
++    staleTime: 55_000,
++    // 函式形式:TQ 每次 interval 到期都會重新求值 → 開盤 / 收盤的開關不依賴外部
++    // re-render(值形式只在 render 當下求值,群組檢視開著不動就永遠不會開始輪詢)
++    refetchInterval: () => groupPollInterval(inTradingHours()),
++  });
++}
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index bfff934..7892b3a 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -77,6 +77,12 @@ export const WL_COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+ /** 自選側欄未分組區塊的折疊("1" = 折疊)— components/stock/WatchlistSidebar.tsx */
+ export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
+ 
++/** 個股頁檢視("single" / "group")— components/stock/StockPage.tsx */
++export const STOCK_VIEW_KEY = "copycat-stock-view";
++/** 群組檢視選中的群組名 — components/stock/GroupGridView.tsx。
++ *  **與 `WL_COLLAPSED_KEY` 無關**:那支記的是側欄折疊,兩者同時存在且語意不同。 */
++export const STOCK_GROUP_KEY = "copycat-stock-group";
++
+ /** 訊號提示音開關("on" / "off")— hooks/useSignalSound.ts */
+ export const SOUND_KEY = "copycat-signal-sound";
+ 
+diff --git a/frontend/src/lib/stock-accum.ts b/frontend/src/lib/stock-accum.ts
+index 36669e2..b26d6a7 100644
+--- a/frontend/src/lib/stock-accum.ts
++++ b/frontend/src/lib/stock-accum.ts
+@@ -153,11 +153,23 @@ interface SnapshotShape {
+   no_data?: boolean;
+ }
+ 
+-export function fromSnapshot(snap: SnapshotShape): StockAccum {
++/** 後端 minutes(JSON 物件,key 是分鐘字串)→ 前端 Map。
++ *
++ *  **兩份消費者共用這一份**:`fromSnapshot`(主圖 `/api/stock/state/{code}`)與群組檢視的
++ *  batch(`/api/stock/group-state`)。各自寫一次的話漂移的樣態是「其中一邊的 `h`/`l`
++ *  沒有正規化成 `null`」——`undefined` 與 `null` 在 `?? null` 之後才等價,而
++ *  `buildIntradayGeometry` 的極值等值反查(`m.h === target`)對兩者都是 false,
++ *  結果是標記靜默消失,沒有任何測試會紅。 */
++export function minutesFromRecord(rec: Record<string, MinuteAgg> | undefined | null): Map<number, MinuteAgg> {
+   const minutes = new Map<number, MinuteAgg>();
+-  for (const [k, v] of Object.entries(snap.minutes ?? {})) {
++  for (const [k, v] of Object.entries(rec ?? {})) {
+     minutes.set(Number(k), { ...v, h: v.h ?? null, l: v.l ?? null });
+   }
++  return minutes;
++}
++
++export function fromSnapshot(snap: SnapshotShape): StockAccum {
++  const minutes = minutesFromRecord(snap.minutes);
+   // vwap 的分子要由 `vwap × 分母` 還原,分母是後端的 `vwap_vol`(去重剔試撮後的 Σqty)
+   // —— **不是** `last.cum_vol`(TC4 當日累積量)。兩者在有 tick 被去重或試撮丟棄時
+   // 就會岔開,拿錯的當分母不會報錯,只會讓增量 VWAP 靜默偏移到下次全量 refetch。
+diff --git a/tests/server/test_signal_hub.py b/tests/server/test_signal_hub.py
+index fee85b0..f275ec8 100644
+--- a/tests/server/test_signal_hub.py
++++ b/tests/server/test_signal_hub.py
+@@ -25,6 +25,7 @@ from copycat.server import signal_hub as hub_mod
+ from copycat.server.signal_hub import SignalHub, format_signal_text
+ from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
+ from copycat.signals_config import SignalsConfig
++from copycat.stock_watchlist import Group
+ 
+ _DATE = "2026-08-04"
+ _NEXT = "2026-08-05"
+@@ -197,12 +198,41 @@ def _boom_cdp(*_args: int) -> dict[str, int]:
+     raise RuntimeError("compute_cdp 壞了")
+ 
+ 
++class _Watch:
++    """`groups_fn` / `quotes_fn` 的替身(SC-1/2):內容可換、可設成拋例外。
++
++    生產端兩者分別是「讀自選檔」與「讀 engine 現值」—— 都可能在盤中失敗,而摘要
++    是通知的**裝飾**,失敗絕不能連帶把訊號本身打掉,所以兩條失敗路徑都要有替身。
++    """
++
++    def __init__(
++        self,
++        groups: list[Group] | None = None,
++        quotes: dict[str, tuple[str, float | None]] | None = None,
++    ) -> None:
++        self.groups: list[Group] = list(groups or [])
++        self.quotes: dict[str, tuple[str, float | None]] = dict(quotes or {})
++        self.groups_error = False
++        self.quotes_error = False
++
++    def groups_fn(self) -> list[Group]:
++        if self.groups_error:
++            raise RuntimeError("自選檔讀取失敗")
++        return list(self.groups)
++
++    def quotes_fn(self) -> dict[str, tuple[str, float | None]]:
++        if self.quotes_error:
++            raise RuntimeError("engine quotes 壞了")
++        return dict(self.quotes)
++
++
+ class _Harness:
+     def __init__(
+         self,
+         tmp_path: Path,
+         clock: _Clock,
+         bars: _FakeBars | None = None,
++        wl: _Watch | None = None,
+         **over: float | int,
+     ) -> None:
+         self.published: list[dict] = []
+@@ -226,6 +256,9 @@ class _Harness:
+             data_dir=tmp_path,
+             trade_date_fn=lambda: self.date,
+             now_fn=clock,
++            # 預設 None = 未注入(既有測試的摘要恆為空字串,行為零改動)
++            groups_fn=wl.groups_fn if wl is not None else None,
++            quotes_fn=wl.quotes_fn if wl is not None else None,
+         )
+ 
+     def _notify(self, text: str) -> bool:
+@@ -1389,6 +1422,250 @@ class TestDiscordText:
+         assert format_signal_text(self._row()).endswith("10:00:00")
+ 
+ 
++class TestGroupSuffix:
++    """同群摘要(group-grid SC-1/2)。
++
++    摘要在 **Discord worker** 組(離熱路徑),所以 quotes 取的是「發送當下」的快照 ——
++    這裡逐項釘格式與降級,因為它的失效樣態全是靜默的:排序反了只是「看起來怪」、
++    例外沒接住則整則通知消失(而 WS/jsonl 有,對照時最容易被當成 Discord 掛了)。
++    """
++
++    async def test_end_to_end_text_appends_summary(self, tmp_path: Path, clock: _Clock) -> None:
++        """逐字:`format_signal_text` 之後接摘要,WS/jsonl payload 零改。"""
++        wl = _Watch(
++            groups=[{"name": "半導體", "codes": ["2330", "2454", "2317"]}],
++            quotes={"2330": ("台積電", 1.5), "2454": ("聯發科", -3.2), "2317": ("鴻海", 0.8)},
++        )
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330", "2454", "2317"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++
++            assert len(h.bot) == 1
++            assert h.bot[0].endswith("｜同群 半導體:2454聯發科 -3.2%、2317鴻海 +0.8%")
++            assert h.bot[0].startswith(format_signal_text(h.published[0]))
++            # WS / jsonl 零改動:摘要是 Discord 專屬
++            assert set(h.published[0]) == _SIGNAL_KEYS
++            assert all("同群" not in json.dumps(r, ensure_ascii=False) for r in h.rows())
++        finally:
++            await h.hub.close()
++
++    async def test_fallback_webhook_gets_same_summary(self, tmp_path: Path, clock: _Clock) -> None:
++        """bot 未 ready 走 webhook —— 兩層是同一段文字(design §4.3)。"""
++        wl = _Watch(
++            groups=[{"name": "半導體", "codes": ["2330", "2317"]}],
++            quotes={"2330": ("台積電", 1.5), "2317": ("鴻海", 0.8)},
++        )
++        h = _Harness(tmp_path, clock, wl=wl)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330", "2317"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert h.fallback == [h.fallback[0]]
++            assert h.fallback[0].endswith("｜同群 半導體:2317鴻海 +0.8%")
++        finally:
++            await h.hub.close()
++
++    async def test_not_injected_means_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
++        """兩 fn 未注入(預設 None)→ 摘要停用,文字與規則化之前逐字相同。"""
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert h.bot[0] == format_signal_text(h.published[0])
++        finally:
++            await h.hub.close()
++
++    def _suffix(self, tmp_path: Path, clock: _Clock, wl: _Watch, code: str = "2330") -> str:
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.hub.on_watchlist(sorted({c for g in wl.groups for c in g["codes"]} | {code}))
++        return h.hub._group_suffix({"code": code})
++
++    def test_edge1_first_group_containing_code_wins(self, tmp_path: Path, clock: _Clock) -> None:
++        """edge 1:一檔可屬多群組 → 取**群組序**第一個含它的(不是最大的、不是最後的)。"""
++        wl = _Watch(
++            groups=[
++                {"name": "A", "codes": ["2330", "2317"]},
++                {"name": "B", "codes": ["2330", "2454"]},
++            ],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0), "2454": ("聯發科", 3.0)},
++        )
++        assert self._suffix(tmp_path, clock, wl) == "｜同群 A:2317鴻海 +2.0%"
++
++    def test_edge2_solo_group_has_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
++        """edge 2:群組只有觸發者自己 → 無「其他成員」→ 不附(不留空的分隔符)。"""
++        wl = _Watch(
++            groups=[{"name": "獨", "codes": ["2330"]}],
++            quotes={"2330": ("台積電", 1.0)},
++        )
++        assert self._suffix(tmp_path, clock, wl) == ""
++
++    def test_edge4_ungrouped_code_has_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
++        """edge 4:自選內但不屬任何群組(未分組是衍生桶不是群組)→ 不附。"""
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2317", "2454"]}],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0), "2454": ("聯發科", 3.0)},
++        )
++        assert self._suffix(tmp_path, clock, wl) == ""
++
++    def test_edge3_over_five_takes_top4_and_total_tail(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """edge 3:成員總數(含觸發者)> 5 → |漲跌幅| 前 4 + 尾綴總數(N = **總數**)。"""
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317", "2454", "3008", "2308", "1301"]}],
++            quotes={
++                "2330": ("台積電", 0.5),
++                "2317": ("鴻海", 1.0),
++                "2454": ("聯發科", -4.0),
++                "3008": ("大立光", 3.0),
++                "2308": ("台達電", -2.0),
++                "1301": ("台塑", 5.0),
++            },
++        )
++        assert self._suffix(tmp_path, clock, wl) == (
++            "｜同群 A:1301台塑 +5.0%、2454聯發科 -4.0%、3008大立光 +3.0%、2308台達電 -2.0%、…共 6 檔"
++        )
++
++    def test_exactly_five_shows_all_four_without_tail(self, tmp_path: Path, clock: _Clock) -> None:
++        """邊界另一側:總數 5(其他 4 檔)剛好全印 → **不得**出現「…共 5 檔」。"""
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317", "2454", "3008", "2308"]}],
++            quotes={
++                "2330": ("台積電", 0.5),
++                "2317": ("鴻海", 1.0),
++                "2454": ("聯發科", 2.0),
++                "3008": ("大立光", 3.0),
++                "2308": ("台達電", 4.0),
++            },
++        )
++        assert self._suffix(tmp_path, clock, wl) == (
++            "｜同群 A:2308台達電 +4.0%、3008大立光 +3.0%、2454聯發科 +2.0%、2317鴻海 +1.0%"
++        )
++
++    def test_edge7_missing_quote_shows_dash_and_sorts_last(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """edge 7:quotes 讀不到(未訂閱瞬間)→ `-`,且排在有行情的之後。
++
++        名稱同時缺 → 只印代碼:硬拼一個空字串會留下 `2317 ` 這種尾隨空白。
++        """
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317", "2454"]}],
++            quotes={"2330": ("台積電", 1.0), "2454": ("聯發科", 0.1)},
++        )
++        assert self._suffix(tmp_path, clock, wl) == "｜同群 A:2454聯發科 +0.1%、2317 -"
++
++    def test_explicit_none_chg_sorts_last(self, tmp_path: Path, clock: _Clock) -> None:
++        """有 meta 但無行情(chg None)也一樣排最後 —— 排序鍵第一位是「有沒有值」。"""
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317", "2454"]}],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", None), "2454": ("聯發科", 0.1)},
++        )
++        assert self._suffix(tmp_path, clock, wl) == "｜同群 A:2454聯發科 +0.1%、2317鴻海 -"
++
++    def test_groups_follow_watchlist_changes(self, tmp_path: Path, clock: _Clock) -> None:
++        """SC-2:群組結構改了(建群 / 改名 / 移成員)→ 下一則摘要跟著變。"""
++        wl = _Watch(
++            groups=[{"name": "舊", "codes": ["2330", "2317"]}],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0), "2454": ("聯發科", 3.0)},
++        )
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.hub.on_watchlist(["2330", "2317"])
++        assert h.hub._group_suffix({"code": "2330"}) == "｜同群 舊:2317鴻海 +2.0%"
++
++        wl.groups = [{"name": "新", "codes": ["2330", "2454"]}]
++        h.hub.on_watchlist(["2330", "2454"])
++        assert h.hub._group_suffix({"code": "2330"}) == "｜同群 新:2454聯發科 +3.0%"
++
++    def test_groups_fn_failure_keeps_previous_groups(
++        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """自選檔讀取失敗 → 保舊值 + log。
++
++        清空才是危險的那一邊:membership 更新照走,但摘要會**永久**消失一整天,
++        而畫面上完全看不出來(Discord 只是少了一段尾巴)。
++        """
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317"]}],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
++        )
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.hub.on_watchlist(["2330", "2317"])
++        wl.groups_error = True
++        with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
++            h.hub.on_watchlist(["2330", "2317", "2454"])
++        assert h.hub._watch == {"2330", "2317", "2454"}  # membership 照更新
++        assert h.hub._group_suffix({"code": "2330"}) == "｜同群 A:2317鴻海 +2.0%"
++        assert caplog.text != ""
++
++    async def test_quotes_failure_degrades_to_empty_suffix_not_lost_signal(
++        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """摘要組裝任何例外 → 空字串 + log,訊號本身照送(摘要是裝飾不是內容)。"""
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317"]}],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
++        )
++        wl.quotes_error = True
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330", "2317"])
++            await h.settle()
++            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
++                h.cross_nh(_state())
++                await h.settle()
++            assert h.bot == [format_signal_text(h.published[0])]
++            assert len(h.rows()) == 1
++            assert caplog.text != ""
++        finally:
++            await h.hub.close()
++
++    async def test_notify_gate_still_blocks_discord_only(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """摘要接上去之後,`notify_discord=False` 仍然只擋 Discord(gate 未被繞過)。"""
++        _write_rules(
++            tmp_path,
++            [
++                _rule("cdp_cross", "r-1-000", name="要通知"),
++                _rule("cdp_cross", "r-1-001", name="不通知", notify_discord=False),
++            ],
++        )
++        wl = _Watch(
++            groups=[{"name": "A", "codes": ["2330", "2317"]}],
++            quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
++        )
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330", "2317"])
++            await h.settle()
++            h.cross_nh(_state())
++            await h.settle()
++            assert len(h.published) == 2
++            assert len(h.rows()) == 2
++            assert h.bot == [
++                "🔔 突破 CDP NH(壓力・第1次)｜台積電 2330｜80.50｜10:00:00｜要通知"
++                "｜同群 A:2317鴻海 +2.0%"
++            ]
++        finally:
++            await h.hub.close()
++
++
+ class TestRulesCrud:
+     async def test_create_assigns_new_id_persists_and_is_live(
+         self, tmp_path: Path, clock: _Clock
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index a50f4e1..85f65c3 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -58,6 +58,10 @@ class FakeSource:
+         self.closed = False
+         self.backfill_gate: threading.Event | None = None
+         self.backfill_result: list = []
++        # 逐碼結果(優先於 `backfill_result`)。單一 `backfill_result` 對每個 code 都回
++        # 同一份 → 「job 有沒有落到**別檔**的 state」根本測不出來(兩邊都會有值,而且
++        # 那些值來自各自的 job)。收件人正確性要鎖,就得讓不同 code 的回補可分辨。
++        self.backfill_results: dict[str, list] = {}
+         self.backfill_error: Exception | None = None
+         self.on_message: Callable[[dict], None] | None = None
+         self.on_no_data: Callable[[str], None] | None = None
+@@ -86,6 +90,8 @@ class FakeSource:
+             raise self.backfill_error
+         if self.backfill_gate is not None:
+             self.backfill_gate.wait(timeout=5)
++        if code in self.backfill_results:
++            return list(self.backfill_results[code])
+         return list(self.backfill_result)
+ 
+     def fetch_bars_range(
+@@ -164,21 +170,98 @@ class TestRefcountPool:
+ 
+ 
+ class TestBackfillGuard:
+-    async def test_stale_backfill_not_applied_after_main_switch(self) -> None:
++    async def test_backfill_lands_on_its_own_state_after_main_switch(self) -> None:
++        """**事前標記該變的既有斷言**(design v3 R12 / PLAN R1/R2)。
++
++        舊名 `test_stale_backfill_not_applied_after_main_switch` 釘的是「回補中切走主圖 →
++        結果丟棄」,那條語意把 job 的收件人綁在 `_main` 上。群組檢視要替**非主圖成員**補
++        當日分鐘資料,同一條單工 worker 會收到不屬於主圖的 job —— 綁 `_main` 等於那些 job
++        全部靜默丟棄(零錯誤訊號,卡片只是一直空著)。
++
++        新契約 = **job 自帶 code,落地到它自己的 state**;generation 作廢照舊
++        (`test_rollover_generation_voids_inflight_backfill` 不動 —— 那條鎖的是跨日,
++        與收件人無關)。
++        """
+         engine, src = await _make()
+         src.backfill_gate = threading.Event()
+         from copycat.live.stock_models import StockTick
+ 
++        # 逐碼結果:B 的回補回空,所以「B 有 tick」只可能是 A 的 job 串了檔
++        src.backfill_results = {
++            "2330": [
++                StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
++                          time="09:01:00.000", trade_date="2026-07-21", side="outer",
++                          is_trial=False)
++            ]
++        }
++        await engine.set_main("2330")
++        await engine.set_main("5483")  # A 回補中切 B
++        src.backfill_gate.set()
++        await _drain(engine)
++        ticks = engine.snapshot("2330")["ticks"]
++        assert len(ticks) == 1  # A 的結果落到 A 自己的 state
++        assert ticks[0]["p"] == 2_380_000
++        # 且**不會**串到 B:收件人是 job 自帶的 code,不是「當下主圖」
++        assert engine.snapshot("5483")["ticks"] == []
++        await engine.close()
++
++    async def test_non_main_job_backfills_end_to_end(self) -> None:
++        """R1 端到端:主圖是別檔時,非主圖成員的 job 仍要跑完並產出當日分鐘列。
++
++        (群組成員的入列點在 T1 後半的 `group_snapshot`;這裡直接入列 job,鎖的是
++        worker 這一段與收件人無關。)
++        """
++        engine, src = await _make()
++        from copycat.live.stock_models import StockTick
++
+         src.backfill_result = [
+-            StockTick(code="2330", price_milli=2_380_000, qty=5, cum_vol=5,
++            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
+                       time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                       is_trial=False)
+         ]
+-        await engine.set_main("2330")
+-        await engine.set_main("5483")  # A 回補中切 B
+-        src.backfill_gate.set()
++        await engine.set_watchlist(["2330"])
++        await engine.set_main("5483")
++        await _drain(engine)
++        engine._backfill_jobs.put_nowait(("2330", engine._generation))
++        await _drain(engine)
++        minutes = engine.snapshot("2330")["minutes"]
++        assert minutes["541"]["c"] == 2_400_000  # 09:01 = 9*60+1
++        assert "2330" in engine._backfilled  # 套用成功才進帳
++        await engine.close()
++
++    async def test_reconnect_clears_backfill_bookkeeping(self) -> None:
++        """R4:reconnect **不** bump generation(實碼事實)。
++
++        兩個記帳 set 沒被顯式清掉的話,「今日已回補」會一路留到收盤 —— 斷線那段的缺口
++        整天補不回來,而 tick 流恢復後畫面看起來完全正常。主圖以外的成員尤其嚴重:
++        reconnect 只重入列 `_main` 一檔,其餘全靠這次清空才有機會再被 `group_snapshot`
++        入列。
++        """
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        engine._backfill_jobs.put_nowait(("2330", engine._generation))
++        await _drain(engine)
++        assert "2330" in engine._backfilled  # 前提:確實記過帳,否則這條測不到東西
++        assert src.on_reconnect is not None
++        src.on_reconnect()
+         await _drain(engine)
+-        assert engine.snapshot("2330")["ticks"] == []  # A 結果不落地
++        assert "2330" not in engine._backfilled
++        assert "2330" not in engine._backfill_pending
++        await engine.close()
++
++    async def test_rollover_stage2_clears_backfill_bookkeeping(self) -> None:
++        """R4 的另一半:跨日後「今日已回補」必須全部作廢(記帳是日別語意)。"""
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        engine._backfill_jobs.put_nowait(("2330", engine._generation))
++        await _drain(engine)
++        assert "2330" in engine._backfilled
++        engine.rollover_stage1("2026-07-22")
++        assert src.on_message is not None
++        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
++        await _drain(engine)
++        assert "2330" not in engine._backfilled
++        assert "2330" not in engine._backfill_pending
+         await engine.close()
+ 
+     async def test_rollover_generation_voids_inflight_backfill(self) -> None:
+@@ -979,6 +1062,196 @@ class TestStkfutRetry:
+         await engine.close()
+ 
+ 
++async def _make_mapped() -> tuple[StockEngine, FakeSource]:
++    """顯式 stkfut 對映 + 不介入的重試迴圈:群組資料面的測試只關心 `_states` 的內容。"""
++    src = FakeSource()
++    engine = StockEngine(
++        src,
++        trade_date="2026-07-21",
++        throttle_secs=60,
++        checkpoint=False,
++        stkfut_map=_STKFUT_MAP,
++        resub_interval_secs=60,
++    )
++    await engine.start()
++    return engine, src
++
++
++class TestQuotes:
++    """SC-2:同群摘要要印成員的**名稱**與漲跌幅,而名稱只有 `state.meta.name` 拿得到。"""
++
++    async def test_quotes_returns_name_and_chg_pct(self) -> None:
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        assert src.on_message is not None
++        src.on_message(_quote(cum=7, price="2400"))
++        await _drain(engine)
++        assert engine.quotes() == {"2330": ("台積電", 3.45)}
++        await engine.close()
++
++    async def test_quotes_excludes_futures_pseudo_keys(self) -> None:
++        """`F:` 是訂閱池的期貨偽鍵,不是股號 —— 混進摘要會印出「F:CDF」這種東西。
++
++        走 `_watchlist` 而不是 `_states` 天然排除(`_states` 兩種鍵都有)。
++        """
++        engine, _src = await _make_mapped()
++        await engine.set_watchlist(["2330"])
++        await engine.set_main("2330")  # → 加訂 F:CDF,`_states` 因此多一個偽鍵
++        await _drain(engine)
++        assert "F:CDF" in engine._states  # 前提:偽鍵確實在 `_states` 裡
++        assert set(engine.quotes()) == {"2330"}
++        await engine.close()
++
++    async def test_quotes_name_empty_and_chg_none_without_meta(self) -> None:
++        """盤前 / 冷啟動尚無 REALTIME:名稱回空字串、漲跌幅 None(摘要側各自降級顯示),
++        **不得**整檔缺席 —— 缺席會讓「群組有幾檔」跟著波動。"""
++        engine, _src = await _make()
++        await engine.set_watchlist(["2330"])
++        assert engine.quotes() == {"2330": ("", None)}
++        await engine.close()
++
++    async def test_quotes_survives_states_mutation_during_iteration(self, monkeypatch) -> None:
++        """R16:名單以 local 參照取一次(該欄位以**整份重新指派**更新),且不對 `_states`
++        做 dict 迭代 —— 迭代中新訂閱寫進 `_states` 會炸 RuntimeError(size changed),
++        而 quotes 是在 Discord worker 呼叫的,盤中隨時可能與 `set_watchlist` 交錯。
++        """
++        from copycat.live.stock_state import StockDayState
++
++        engine, _src = await _make()
++        await engine.set_watchlist(["2330", "5483"])
++        orig = engine._quote_payload
++
++        def mutating(code: str) -> dict:
++            engine._states[f"X{code}"] = StockDayState()  # 迭代中新訂閱建 state
++            engine._watchlist = ["9999"]  # 使用者同時換了名單
++            return orig(code)
++
++        monkeypatch.setattr(engine, "_quote_payload", mutating)
++        got = engine.quotes()
++        assert set(got) == {"2330", "5483"}  # 一致快照:不炸、不漏鍵、不摻新名單
++        await engine.close()
++
++
++class TestGroupSnapshot:
++    """SC-4:群組檢視的唯讀 batch。**不 set_main、不改訂閱池**(`/api/stock/state/{code}`
++    會 set_main,群組每分鐘 30 次會把主圖搶走令主圖凍結 → 那條路不可重用)。"""
++
++    async def test_payload_is_the_lightweight_three_keys_plus_backfilling(self) -> None:
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        assert src.on_message is not None
++        src.on_message(_quote(cum=7, price="2380"))
++        await _drain(engine)
++        snap = engine.group_snapshot(["2330"])["2330"]
++        assert set(snap) == {"minutes", "meta", "no_data", "backfilling"}
++        # R2:ticks 是數千筆,30 檔一起送等於把 batch 端點變成頻寬炸彈
++        assert "ticks" not in snap
++        # 鍵名沿 `StockDayState.snapshot()` 的單一定義:直接丟 dataclass 會讓前端
++        # `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失
++        assert snap["meta"] == {
++            "name": "台積電",
++            "ref": 2_320_000,
++            "upper": 2_550_000,
++            "lower": 2_090_000,
++            "y_vol": 100,
++        }
++        assert snap["minutes"]["657"]["c"] == 2_380_000
++        assert snap["no_data"] is False
++        await engine.close()
++
++    async def test_unknown_code_is_no_data_and_never_enqueued(self) -> None:
++        """R9:`no_data` 推導式 = `code in _no_data` **或** 未訂閱。
++
++        刻意與 `snapshot()` / `engine` 其他地方相反 —— `StockDayState.snapshot()` 根本
++        沒這個鍵,而 `engine.snapshot()` 對未知 code 回 False(語意 = 「TC4 說查無此檔」)。
++        群組卡片要的是「這格畫不出東西」,未訂閱與查無此檔對它是同一件事。
++        未訂閱的 code 也**不得**入列回補:那等於替不在訂閱池的股票發 SubHistory。
++        """
++        engine, src = await _make()
++        snap = engine.group_snapshot(["9999"])["9999"]
++        assert snap["no_data"] is True
++        assert snap["minutes"] == {}
++        assert snap["meta"] is None
++        assert snap["backfilling"] is False
++        await _drain(engine)
++        assert src.backfills == []
++        await engine.close()
++
++    async def test_never_sets_main_or_touches_the_pool(self) -> None:
++        engine, src = await _make()
++        await engine.set_watchlist(["2330", "5483"])
++        subscribed = list(src.subscribed)
++        engine.group_snapshot(["2330", "5483"])
++        await _drain(engine)
++        assert engine._main is None
++        assert src.subscribed == subscribed
++        assert src.unsubscribed == []
++        await engine.close()
++
++    async def test_enqueues_backfill_once_per_day(self) -> None:
++        engine, src = await _make()
++        src.backfill_gate = threading.Event()  # 未 set → worker 卡在回補中
++        await engine.set_watchlist(["2330"])
++        engine.group_snapshot(["2330"])
++        engine.group_snapshot(["2330"])  # 在途 → 不重入列(pending dedup)
++        src.backfill_gate.set()
++        await _drain(engine)
++        assert src.backfills.count("2330") == 1
++        engine.group_snapshot(["2330"])  # 今日已回補 → 仍不重入列(backfilled dedup)
++        await _drain(engine)
++        assert src.backfills.count("2330") == 1
++        await engine.close()
++
++    async def test_backfilling_flag_tracks_the_in_flight_job(self) -> None:
++        """卡片三態靠這個旗標分辨「回補中…」與「無資料」—— 沒有它,剛開的群組會有
++        一整排看起來像壞掉的空卡。"""
++        engine, src = await _make()
++        src.backfill_gate = threading.Event()
++        await engine.set_watchlist(["2330"])
++        assert engine.group_snapshot(["2330"])["2330"]["backfilling"] is True
++        src.backfill_gate.set()
++        await _drain(engine)
++        assert engine.group_snapshot(["2330"])["2330"]["backfilling"] is False
++        await engine.close()
++
++    async def test_backfill_reaches_a_non_main_member_end_to_end(self) -> None:
++        """R1/R12 端到端:主圖是別檔時,群組成員照樣補得到當日分鐘列。"""
++        engine, src = await _make()
++        from copycat.live.stock_models import StockTick
++
++        src.backfill_results = {
++            "2330": [
++                StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
++                          time="09:01:00.000", trade_date="2026-07-21", side="outer",
++                          is_trial=False)
++            ]
++        }
++        await engine.set_watchlist(["2330"])
++        await engine.set_main("5483")
++        await _drain(engine)
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++        minutes = engine.group_snapshot(["2330"])["2330"]["minutes"]
++        assert minutes["541"]["c"] == 2_400_000  # 09:01 = 9*60+1
++        await engine.close()
++
++    async def test_member_reenqueued_after_reconnect(self) -> None:
++        """R4 的群組側:斷線期間的缺口要補得回來。reconnect 只重入列 `_main`,
++        成員全靠記帳清空後由下一次 group_snapshot 重新入列。"""
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"])
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++        assert src.backfills.count("2330") == 1
++        assert src.on_reconnect is not None
++        src.on_reconnect()
++        await _drain(engine)
++        engine.group_snapshot(["2330"])
++        await _drain(engine)
++        assert src.backfills.count("2330") == 2
++        await engine.close()
++
++
+ class TestRetryLoopStarvation:
+     async def test_slow_failing_subscribes_do_not_block_set_main(self) -> None:
+         """P0-1:TC4 斷線時單檔 SUBQUOTE 要 10s 才失敗,整輪一鎖會讓 `_pool_lock`
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 3383bbd..eb9acf4 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -2,10 +2,14 @@ from __future__ import annotations
+ 
+ import datetime as _dt
+ from pathlib import Path
++from typing import cast
+ 
+ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
++from copycat.server.signal_hub import SignalHub
++from copycat.server.stock_engine import StockEngine
++from copycat.stock_watchlist import save_watchlist
+ from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeStockSource
+ from tests.helpers.fake_txo import FakeTxoSource
+@@ -313,6 +317,94 @@ class TestStateRoute:
+         assert r.json()["detail"]["error"] == "NOT_READY"
+ 
+ 
++class TestGroupStateRoute:
++    """群組檢視的唯讀 batch(group-grid SC-4)。
++
++    **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 30 檔各要一次
++    狀態,重用 `/api/stock/state/{code}` 等於每分鐘把主圖搶走 30 次 → 主圖分時線凍結,
++    而畫面上只表現為「圖不動了」,沒有任何錯誤。所以 `_main` 的斷言是本組的核心。
++    """
++
++    def _put(self, client: TestClient, codes: list[str]) -> None:
++        r = client.put("/api/stock/watchlist", json={"codes": codes, "groups": []})
++        assert r.status_code == 200
++
++    def test_batch_shape_and_never_sets_main(self, tmp_path: Path) -> None:
++        client, _ = make_client(tmp_path)
++        with client:
++            self._put(client, ["2330", "2317"])
++            r = client.get("/api/stock/group-state", params={"codes": "2330,2317"})
++            assert r.status_code == 200
++            states = r.json()["states"]
++            assert set(states) == {"2330", "2317"}
++            # payload 形寫死:ticks 不得混進來(30 檔 × 數千筆 = 頻寬炸彈)
++            assert set(states["2330"]) == {"minutes", "meta", "no_data", "backfilling"}
++            assert states["2330"]["no_data"] is False
++            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
++            assert stock._main is None, "群組 batch 不得 set_main(會把主圖搶走)"
++
++    def test_empty_codes_returns_empty_states(self, tmp_path: Path) -> None:
++        """空群組 → 前端 hook 是 enabled=false 零請求;真的打到也必須是 200 空表。"""
++        client, _ = make_client(tmp_path)
++        with client:
++            assert client.get("/api/stock/group-state").json() == {"states": {}}
++            r = client.get("/api/stock/group-state", params={"codes": ""})
++            assert r.status_code == 200
++            assert r.json() == {"states": {}}
++
++    def test_unknown_code_is_no_data_not_404(self, tmp_path: Path) -> None:
++        """未訂閱 / 查無此檔對卡片是同一件事(「這格畫不出東西」)→ 無 404 路徑。"""
++        client, _ = make_client(tmp_path)
++        with client:
++            states = client.get("/api/stock/group-state", params={"codes": "9999"}).json()["states"]
++            assert states["9999"]["no_data"] is True
++            assert states["9999"]["minutes"] == {}
++            assert states["9999"]["meta"] is None
++
++    def test_too_many_codes_400(self, tmp_path: Path) -> None:
++        client, _ = make_client(tmp_path)
++        with client:
++            codes = ",".join(f"{9000 + i}" for i in range(31))  # 自選上限 30
++            r = client.get("/api/stock/group-state", params={"codes": codes})
++            assert r.status_code == 400
++            assert r.json()["detail"]["error"] == "BAD_CODES"
++
++    def test_bad_code_400(self, tmp_path: Path) -> None:
++        client, _ = make_client(tmp_path)
++        with client:
++            r = client.get("/api/stock/group-state", params={"codes": "2330,bad!"})
++            assert r.status_code == 400
++            assert r.json()["detail"]["error"] == "BAD_CODE"
++
++    def test_engine_missing_503(self) -> None:
++        app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            r = client.get("/api/stock/group-state", params={"codes": "@@@"})
++        assert r.status_code == 503
++        assert r.json()["detail"]["error"] == "NOT_READY"
++
++
++class TestSignalHubGroupWiring:
++    """接線防呆(group-grid R7):`groups_fn` / `quotes_fn` 預設 None = 靜默停用摘要。
++
++    忘了在 `create_app` 接上去的失效樣態是「Discord 通知少了一段尾巴」—— 沒有例外、
++    沒有 log、hub 單元測試全綠。只有從 booted app 這一端看才抓得到。
++    """
++
++    def test_boot_injects_groups_and_quotes(self, tmp_path: Path) -> None:
++        save_watchlist(
++            tmp_path / "watchlist.json",
++            {"codes": ["2330", "2317"], "groups": [{"name": "半導體", "codes": ["2330", "2317"]}]},
++        )
++        client, _ = make_client(tmp_path)
++        with client:
++            hub = cast("SignalHub", client.app.state.signal_hub)  # type: ignore[attr-defined]
++            assert hub is not None
++            assert hub._groups == [{"name": "半導體", "codes": ["2330", "2317"]}]
++            # quotes_fn 也接上了才產得出成員列(缺行情時是 `-`,但不會是空字串)
++            assert hub._group_suffix({"code": "2330"}).startswith("｜同群 半導體:2317")
++
++
+ class TestStockWs:
+     def test_ws_streams_engine_messages(self, tmp_path: Path) -> None:
+         client, fake = make_client(tmp_path)

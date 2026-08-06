@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "shape": "web UI(SeededStockSource fake server :8899 走真實 parse/apply code path + vite;零 TC4;AI 截圖 + DOM 交叉 + user 過目雙層)",
+  "results": {
+    "SC-3.1 pill 預設單檔": "PASS(SC-3_view-pill.jpg)",
+    "SC-3.2 群組 grid": "PASS — 下拉三群組;卡片代碼+名稱+價/漲跌幅、mini 線紅綠面積+平盤虛線(SC-3_group-grid.jpg)",
+    "SC-3.3 切群組": "PASS(SC-3_group-switch.jpg)",
+    "SC-3.4 點卡回單檔": "PASS — 2317 卡 → pill 回單檔 + 主圖 header 鴻海(SC-3_card-pick.jpg)",
+    "SC-3.5 空群組": "PASS — 「這個群組還沒有成員」(SC-3_empty-group.jpg)",
+    "console": "零新增 error(duplicate-key 既有噪音,首則於單檔檢視期即出現)",
+    "payload(R2 量法)": "5 檔×174 分 = 59,185 B;邊際 ≈68 B/分/檔;外推 30 檔全日 ≈550 KB/60s(未壓縮)— 輕量端點目標達成"
+  },
+  "evidence_dir": "evidence/(5 jpg,主 tree 另有一份防 worktree 清除)",
+  "deferred_to_user": "user 過目截圖;盤中真資料群組同步實看 + Discord 同群摘要實發(prod 重啟後)"
+}
