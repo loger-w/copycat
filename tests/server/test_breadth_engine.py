@@ -1344,3 +1344,162 @@ class TestStreakCache:
         assert engine._streaks == {"1101": 1}
         assert not _streaks_file(tmp_path).exists()
         assert any("落檔失敗" in r.getMessage() for r in caplog.records)
+# ---------------------------------------------------------------------------
+# rows_state():連板算術與 rows 同源日(design §3.3 code block;R1/R14/R15)
+# ---------------------------------------------------------------------------
+
+
+def _row_of(state: dict, sid: str) -> dict:
+    return next(r for r in state["rows"] if r["stock_id"] == sid)
+
+
+class TestRowsState:
+    async def test_shape_before_first_cycle(self, tmp_path: Path) -> None:
+        """引擎在、首輪未成:契約欄位齊全,`as_of` 為 None(前端據它判「載入中」)。"""
+        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
+
+        assert engine.rows_state() == {
+            "enabled": True,
+            "trade_date": None,
+            "as_of": None,
+            "stale": True,
+            "streaks_ready": False,
+            "rows": [],
+        }
+
+    async def test_streak_null_until_ready(self, tmp_path: Path) -> None:
+        """streak 未就緒(含 `daily_fetch=None` 停用)→ 每列 null,不是 0 也不是猜值。"""
+        engine, *_ = _make(tmp_path)
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is False
+        assert state["trade_date"] == _TRADE_DATE
+        assert all(
+            r["streak"] is None and r["streak_capped"] is False for r in state["rows"]
+        )
+        assert len(state["rows"]) == 4
+
+    async def test_intraday_rows_add_today_and_keep_row_fields(
+        self, tmp_path: Path
+    ) -> None:
+        """rows 是今日盤中(rows_date > data_end)→ 昨日止的 streak + 今日這根。
+
+        同時釘住 merge 是**加欄不改欄**:原本的 rows 欄位一個不漏地原樣帶出去。
+        """
+        _write_streaks_cache(tmp_path, streaks={"1101": 2})
+        engine, *_ = _make(tmp_path, daily=FakeDaily({}))
+        engine._restore_streaks()
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is True
+        assert state["trade_date"] == _TRADE_DATE
+        assert _row_of(state, "1101") == {
+            "stock_id": "1101",
+            "name": "台泥",
+            "market": "twse",
+            "close": 11.0,
+            "change_rate": 10.0,
+            "volume_ratio": 2.0,
+            "total_amount": 12_345,
+            "limit_up": True,
+            "limit_down": False,
+            "touched_limit_up": False,
+            "touched_limit_down": False,
+            "streak": 3,
+            "streak_capped": False,
+        }
+        # 非漲停列一律 null(跌停的 6488 也不例外 —— 連板只描述漲停)
+        assert _row_of(state, "6488")["streak"] is None
+        assert _row_of(state, "2330")["streak"] is None
+
+    async def test_previous_session_snapshot_does_not_add_one(
+        self, tmp_path: Path
+    ) -> None:
+        """rows 是**上一交易日收盤快照**(盤前 / 假日開站)→ 該日已在 streak 內,不 +1。
+
+        這是 R1 的核心:前端 +1 的舊設計在這條路上會憑空多一板,而畫面看起來完全正常。
+        """
+        _write_streaks_cache(
+            tmp_path,
+            computed_for="2026-08-06",
+            data_end=_TRADE_DATE,
+            dates=[_TRADE_DATE, "2026-08-04", "2026-08-03"],
+            streaks={"1101": 3},
+            file_day="2026-08-06",
+        )
+        engine, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(f"{_TRADE_DATE} 13:30:00")),
+            daily=FakeDaily({}),
+            clock=Clock(today="2026-08-06"),
+        )
+        engine._restore_streaks()
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["trade_date"] == _TRADE_DATE
+        assert _row_of(state, "1101")["streak"] == 3
+        assert _row_of(state, "1101")["streak_capped"] is True  # prev 撞上 span=3
+
+    async def test_uses_rows_date_not_trade_date(self, tmp_path: Path) -> None:
+        """`adopt_date=False` 路徑:`_trade_date` 與 rows 脫鉤 → 判式必須用 `_rows_date`。
+
+        第二輪拿到的快照日既非今日也非序列日 → 日期變更不採用(`_trade_date` 停在
+        08-05),但 `self.rows` 已經換成 08-04 那份。用 `_trade_date` 判會得到
+        「08-05 > data_end 08-04」→ 多一板,而畫面與 counts 全部正常(R14)。
+        """
+        _write_streaks_cache(tmp_path, streaks={"1101": 3})
+        engine, snap, *_ = _make(tmp_path, daily=FakeDaily({}))
+        engine._restore_streaks()
+        await engine._run_cycle()
+        assert _row_of(engine.rows_state(), "1101")["streak"] == 4  # 盤中:3 + 今日
+
+        snap.rows = _snapshot_rows("2026-08-04 13:30:00")
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert engine._trade_date == _TRADE_DATE  # 日期變更不採用(序列保護)
+        assert state["trade_date"] == "2026-08-04"  # 但 payload 與 rows 同源
+        assert _row_of(state, "1101")["streak"] == 3  # 不是 4
+
+    async def test_rows_date_in_skipped_is_null(self, tmp_path: Path) -> None:
+        """rows 的資料日在掃描時被當假日跳過 → 兩者關係不明,誠實回 null(R15)。
+
+        沒有這道 guard 時它會走 `rows_date > data_end` 分支 +1 —— 而那一天到底有沒有
+        漲停過根本不知道(FinMind 當時回空)。
+        """
+        _write_streaks_cache(
+            tmp_path,
+            data_end="2026-08-03",
+            dates=["2026-08-03", "2026-07-31", "2026-07-30"],
+            skipped=["2026-08-04", "2026-08-02", "2026-08-01"],
+            streaks={"1101": 3},
+        )
+        engine, snap, *_ = _make(tmp_path, daily=FakeDaily({}))
+        engine._restore_streaks()
+        snap.rows = _snapshot_rows("2026-08-04 13:30:00")
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is True
+        assert state["trade_date"] == "2026-08-04"
+        assert _row_of(state, "1101")["streak"] is None
+
+    async def test_streaks_from_other_day_are_not_ready(self, tmp_path: Path) -> None:
+        """成果是為別的 today 算的(00:00–06:00 之間 / 換日未重算完)→ 整片 null。"""
+        _write_streaks_cache(tmp_path, streaks={"1101": 2})
+        engine, _s, _i, _d, clock = _make(tmp_path, daily=FakeDaily({}))
+        engine._restore_streaks()
+        await engine._run_cycle()
+
+        clock.today = _dt.date(2026, 8, 6)
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is False
+        assert _row_of(state, "1101")["streak"] is None
