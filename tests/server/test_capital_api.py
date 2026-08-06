@@ -78,6 +78,14 @@ def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000") -> str:
     return ",".join(arr)
 
 
+def _fut_evt_raw(seq: str, contract: str = "TXFI6", qty: str = "2", price: str = "23000") -> str:
+    """OnNewData 期權委託事件(N;市場別 TF)最小治具(欄位對照 test_client 同款)。"""
+    arr = [""] * 48
+    arr[0], arr[1], arr[2], arr[3] = seq, "TF", "N", "N"
+    arr[6], arr[8], arr[11], arr[20] = "BNR20", contract, price, qty
+    return ",".join(arr)
+
+
 def _capital_client(
     tmp_path: Path,
     *,
@@ -551,6 +559,82 @@ class TestOrderStkfutGates:
             body = dict(_FUTURE_BODY, price=23001)
             assert client.post("/api/capital/order/future", json=body).status_code == 200
             assert len(_sent(com, "future")) == 1
+
+
+# ---------------------------------------------------------------------------
+# 改價的個股期檔位閘(SC-6 同一 blast radius:送單擋得住的價,改價不可放行)
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectPriceStkfutTickGate:
+    def _seed_fut_order(self, com: FakeCom, seq: str, contract: str) -> None:
+        assert com.on_reply is not None
+        com.on_reply(_fut_evt_raw(seq, contract=contract))
+
+    def test_illegal_tick_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """個股期活單改到非法檔位 → 400 BAD_TICK,不得送到群益。
+
+        送單面有這道閘、改價面沒有的話,同一個 1180.5 送不出去卻改得進去,
+        而期交所退單回到畫面上只是一句「委託失敗」(送單閘的 docstring 逐字)。
+        """
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._seed_fut_order(com, "00000000021", "CDFI6")
+            res = client.post(
+                "/api/capital/order/correct-price",
+                json={"seq_no": "00000000021", "market": "fut", "price": 1180.5},
+            )
+            assert res.status_code == 400
+            assert res.json()["detail"]["error"] == "BAD_TICK"
+            assert _sent(com, "correct_price") == []
+
+    def test_legal_tick_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._seed_fut_order(com, "00000000021", "CDFI6")
+            res = client.post(
+                "/api/capital/order/correct-price",
+                json={"seq_no": "00000000021", "market": "fut", "price": 1180.0},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "correct_price")) == 1
+
+    def test_unknown_seq_still_passes_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """store 查無 → 放行(R3 逃生口):斷線時 store 空,刪改單仍必須送得出去。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            res = client.post(
+                "/api/capital/order/correct-price",
+                json={"seq_no": "99999999999", "market": "fut", "price": 1180.5},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "correct_price")) == 1
+
+    def test_index_future_not_gated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """characterization:現股 tick 表只適用個股期,指數期權改價照放行(鎖 scope)。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            self._seed_fut_order(com, "00000000022", "TXFI6")
+            res = client.post(
+                "/api/capital/order/correct-price",
+                json={"seq_no": "00000000022", "market": "fut", "price": 23000.5},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "correct_price")) == 1
 
 
 # ---------------------------------------------------------------------------
