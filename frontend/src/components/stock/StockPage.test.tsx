@@ -666,6 +666,32 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     expect(screen.queryByLabelText("選擇群組")).toBeNull();
   });
 
+  // review A4 的接線半:三態要分得出來,`wl` 的 isPending / isError 就得真的傳下去。
+  // 只在 GroupGridView 那一側測 props 是 vacuous —— StockPage 忘了傳照樣全綠,而畫面
+  // 會在自選讀不到時說「尚無群組 — 到自選欄建立群組」,把「後端出事」講成「你沒建群組」。
+  it("自選載入失敗 → 群組檢視說「自選載入失敗」,不冒充零群組", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/stock/watchlist")) {
+          return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
+        }
+        if (String(url).includes("/api/stock/signals/rules")) {
+          return new Response(JSON.stringify({ rules: [] }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    // `useStockWatchlist` 是 retry: 1 + 指數退避 → 錯誤終態要等第二次失敗(skill:
+    // TanStack Query error path 的 waitFor 必須放寬 timeout)
+    await waitFor(() => expect(screen.getByText("自選載入失敗")).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
+    // it 自己的 timeout 也要放寬:預設 5s 與 waitFor 的 5s 撞在一起,失敗訊息會變成
+    // 「Test timed out」而看不出是哪一條斷言沒過
+  }, 10_000);
+
   it("檢視選擇存進 localStorage,重掛後還原", async () => {
     mockGroupApi();
     const { unmount } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
