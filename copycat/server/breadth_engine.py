@@ -628,7 +628,7 @@ class BreadthEngine:
         # 類股輪動與 rows 同輪同源(design §5):`sector_state()` 報的 trade_date /
         # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾
         self._universe_rows = universe
-        self._rotation = compute_sector_rotation(universe, self._chain_map)
+        self._recompute_rotation()
         self._fail_streak = 0
         self._quota = False
         self._last_success = _monotonic()
@@ -644,6 +644,22 @@ class BreadthEngine:
             except Exception:
                 logger.exception("breadth 廣度事件對帳非預期失敗(本輪事件丟棄,家數不受影響)")
         return point
+
+    def _recompute_rotation(self) -> None:
+        """`_universe_rows` × `_chain_map` → `_rotation`。**`_rotation` 的單一寫入點**。
+
+        兩個輸入各自更新(universe 每輪 `_apply`、chain 由背景 task 換表),所以兩邊
+        都得回到這裡重算:chain 換表不重算的話 rotation 要等下一次 `_apply`,而盤後
+        首次部署(無快取)窗外根本沒有下一輪 —— 整晚 rotation 恆 null,與「chain
+        取數失敗」在畫面上完全同形(review C-1)。
+
+        universe 空(首輪未成)→ 保持 **None** 而不是算出 `{"industries": []}`:後者
+        在前端是「產業算得出來、只是沒有成員」,None 才是「類股資料未就緒」。
+        """
+        if not self._universe_rows:
+            self._rotation = None
+            return
+        self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
 
     def _append(
         self, dt: _dt.datetime, trade_date: str, counts: dict[str, dict[str, int]]
@@ -876,6 +892,8 @@ class BreadthEngine:
         self._chain_map = chain_map
         self._chain_fetched_at = fetched_at
         self._chain_retry_at = None
+        # 換表即重算(`_apply` 之外的第二個 rotation 輸入;review C-1)
+        self._recompute_rotation()
         logger.info("breadth industry_chain 刷新:%d 列 / %d 產業", len(rows), len(chain_map))
 
     # ---- 連板數重算(design §3.3)----
