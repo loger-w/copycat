@@ -1,0 +1,13 @@
+{
+  "round": 1,
+  "phase": "self-review (mod Phase 5)",
+  "date": "2026-08-05",
+  "lenses": ["correctness/status-chain (opus)", "whitelist/test-coverage (opus)"],
+  "whitelist_check": "11 條白名單逐條對照 diff:零違反(兩個 lens 皆確認;overlay 只 .rows 適配、deadline 常數未動、market payload 不變、index/futures 對外簽名不變、N-1~N-8 皆有非 vacuous 對應測試、舊 test_bars 22 個 test function 零刪除、32 呼叫點語意逐條等價)",
+  "findings": [
+    {"id": "F1/WL-COV-1", "severity": "P2", "file": "frontend/src/hooks/useStockBars.ts + StockChart.tsx", "summary": "fetchBars 正規化只涵蓋 status 不涵蓋 bars;缺 bars 的 200 回應 → data.bars.length TypeError → 無 ErrorBoundary 白畫面(舊碼 undefined 會走 TanStack error 態,新碼反而更糟)", "resolution": "accepted — fetchBars 同點補 Array.isArray 正規化 + N-7 回歸測試"},
+    {"id": "WL-COV-2", "severity": "P2", "file": "frontend/src/components/stock/StockChart.tsx:113-119", "summary": "SC-1 spec 措辭「原無K線資料同一佔位框」與「同載入中樣式」內部張力;實作採後者(符合 user 拍板原文),但無測試釘住容器樣式", "resolution": "accepted — spec 措辭更正為「同載入中佔位框」+ N-7 補框樣式斷言(border-line/bg-surface)"},
+    {"id": "F2/WL-COV-3", "severity": "P2", "file": "copycat/server/bars.py", "summary": "後端無 status 收斂點:worst_status 對域外字串 KeyError(build_minute 500)、build_daily 不經 worst_status 直接放行 —— 同一契約兩種解讀,與前端 R6 白名單不對稱", "resolution": "accepted — bars.py 加 _coerce_status(未知 → log warning + 'ok',與前端同語意),build_daily/build_minute fetch 後各過一次;fake 的 bars_status 標 BarsStatus;補 worst/coerce 測試"}
+  ],
+  "verdict": "0 P0 / 0 P1 / 5 P2(去重後 3 實質項,全 accepted 並修復);其餘掃過區域(prune tuple 索引、_hist 無洗白孿生、_empty 命名空間、R5 型別阻擋、TanStack v5 接線非 vacuous、20s/15s 邊際)判 clean"
+}

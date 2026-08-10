@@ -1,0 +1,15 @@
+{
+  "round": 2,
+  "type": "限縮輪(只審 [amendment] 段落)",
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "R10", "severity": "P0", "summary": "R5 元件測試配方(spread ACCUM + 換 meta)兩變體改動前皆綠 — vacuous TDD 在元件層復發", "resolution": "accepted — 主 agent 算術複驗成立;改為新造 snapshot(h=2_600_000 域外)+ 具體數字 + 紅先行留證。屬可就地修復的 spec 缺陷,非三選一情境(縮 scope/換做法/Known Risks 皆不適用);Phase 4 pre-impl 紅測試為經驗性後盾"},
+    {"id": "R11", "severity": "P1", "summary": "SC-3 數字與現況表矛盾(2259.5 是域上緣不是收盤群最高),照抄會造出 vacuous fixture", "resolution": "accepted — 反推臨界數字(首筆 2_210_000/最低 2_165_000/h=2_260_000)改寫 SC-3,附改動前後算術"},
+    {"id": "R12", "severity": "P1", "summary": "測試總表「該紅/不該紅」與新增測試實際性質不符(5、6 是紅先行不是守門綠)", "resolution": "accepted — 總表逐支標;主 agent 補判:測試 4(對稱性)改動前後皆成立,歸守門綠(reviewer 標紅先行係誤,對稱域恆以 ref 為中心)"},
+    {"id": "R13", "severity": "P2", "summary": "SC-5 未列舉 case;yDomain[0] > 0 危險方向(dayLow < ref/11 → 負域)未守", "resolution": "partially accepted — case 表明列 (a)-(e);全域 yDomain[0] > 0 不變式主 agent 複驗不成立(對稱域設計下極端低點必負),負域類寫入 Known Risks(±10% 制度下不可達、退化為 cosmetic),不加 clamp(破壞 SC-4)"},
+    {"id": "R14", "severity": "P2", "summary": "geometryOf helper 修法只補 high/low,minutes/meta 仍硬編 — 新測試換 meta 後參考幾何拿錯分支", "resolution": "accepted — helper 改吃整份 accum,三處既有呼叫點帶入"}
+  ],
+  "counts": {"P0": 1, "P1": 2, "P2": 2, "accepted": 4, "partially_accepted": 1, "rejected": 0},
+  "exit_note": "R10 為 fix 引入段落的新 vacuousness,reviewer 附具體修復且主 agent 複驗;已就地修復。spec 收斂,進 Phase 4(pre-impl 紅測試留證為最終防線)。"
+}

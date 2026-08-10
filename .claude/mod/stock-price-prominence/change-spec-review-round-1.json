@@ -1,0 +1,75 @@
+{
+  "findings": [
+    {
+      "id": "P1-1",
+      "severity": "P1",
+      "location": {
+        "file": "change-spec.md",
+        "section": "不能破壞的既有行為白名單 / 成功條件"
+      },
+      "title": "白名單漏了字級放大對 header 版面本身的既有行為(換行門檻、列高、圖表可用高度)",
+      "detail": "白名單第 6 項只寫「內容與樣式不動、items-baseline 保留(flex-wrap 容許換行)」,把真正會被打到的三件事都跳過了:(a) header 是 `flex flex-wrap items-baseline gap-3`(StockPage.tsx:80),現價寬度從 text-lg 變 text-3xl 約增 1.67 倍,窄視窗下 `ml-auto` 的「總量/昨量」(L166)與「加入自選」按鈕(L121)會比改前更早被擠到第二列 —— 這是可見的版面回歸,spec 卻用「容許換行」一句帶過,等於預先豁免而非驗證;(b) items-baseline 下 line box 由最大字撐開,header 高度從約 28px 增至約 40px(text-3xl 在 Tailwind v4 帶 line-height 2.25rem),其餘 text-xs 元素相對位置整列變動;(c) `<main>` 是 flex-col,StockChart 根節點 `flex min-h-0 flex-1`(StockChart.tsx:68),header 長高即直接吃掉圖表高度(下方 `h-56 shrink-0` 不讓步)。三者都沒有 SC、沒有測試、也沒有列入驗收截圖清單,而 jsdom 測試對版面完全盲(專案已有 dialog/Tailwind 那條教訓)。",
+      "suggestion": "白名單第 6 項拆成可驗的兩條:『header 在專案支援的最小寬度下仍維持單列,總量/昨量不被擠到第二列』與『StockChart 不因 header 增高而出現 <main> 捲軸』;SC 的量法補上「窄寬度(如 1280 與最小支援寬)各一張截圖對照」,而不是只截預設寬度。"
+    },
+    {
+      "id": "P1-2",
+      "severity": "P1",
+      "location": {
+        "file": "change-spec.md",
+        "section": "Diff 級 spec → StockPage.test.tsx(先紅後綠)第 2 條"
+      },
+      "title": "新測試 2(% span 含 text-sm)沒有可用的選擇器,且 diff spec 明文禁止加 testid → 實作會卡住或偷改 spec",
+      "detail": "內層 % span(StockPage.tsx:99)沒有 data-testid、沒有 role、也沒有穩定文字錨(內容是 fmtPct(chg) 的動態百分比),而既有 3 條測試全走 `screen.getByTestId(\"page-quote\").className`,沒有現成取子元素的路子。同時 diff spec 又寫死「其餘(limitState 三態 class、渲染條件)一字不動」,實作者若補 `data-testid=\"page-quote-pct\"` 就是違反 spec、不補就選不到節點。這條測試是 SC-2 的唯一自動化鎖,懸空等於 SC-2 無測試覆蓋。",
+      "suggestion": "在 spec 明寫選取方式二選一並同步放寬「一字不動」的限制:(a) 允許在 % span 加 `data-testid=\"page-quote-pct\"`(把它列進逐檔改動,仍屬 🔴 同一 commit);或 (b) 指定 `screen.getByTestId(\"page-quote\").querySelector(\"span\")`(目前它是 page-quote 唯一的子 span,可行但要在 spec 註明這個前提,日後多一個子 span 就會靜默選錯)。"
+    },
+    {
+      "id": "P2-1",
+      "severity": "P2",
+      "location": {
+        "file": "change-spec.md",
+        "section": "成功條件 SC-3 / 白名單 1-2"
+      },
+      "title": "SC-3「與改前逐像素同語意」自相矛盾,且漲跌停反白塊的 px-1.5 未隨字級檢討",
+      "detail": "字級變大時不可能「逐像素」相同,這個措辭讓驗收無法判定通過與否。實質風險在於:反白態的 class 是 `rounded bg-bull px-1.5`(L91-92),只有 6px 水平 padding、無垂直 padding。字高從 1.125rem 變 1.875rem 後,底色塊會變成「高而貼邊」(左右留白 6px vs 字高 30px),與改前那個小徽章式反白塊的視覺表現差很多。這正是白名單第 1、2 項要保的「盤中用餘光捕捉」的狀態顯示,spec 卻只承諾語意不變、對表現形狀隻字未提。",
+      "suggestion": "SC-3 改寫成可判定的敘述(『三態的底色/文字色 class 集合與改前完全相同』+ 截圖對照),另在逐檔改動明確表態 px-1.5 是刻意不動還是隨字級調整(例如 px-2),刻意不動也要寫進白名單當作預期。"
+    },
+    {
+      "id": "P2-2",
+      "severity": "P2",
+      "location": {
+        "file": "current-state.md",
+        "section": "現況 vs 目標 / change-spec SC-2"
+      },
+      "title": "current-state 寫「等比放大」與 spec 選用 text-sm 不一致",
+      "detail": "current-state 目標欄寫『漲跌 % 隨主數字等比放大』,但實際選值不是等比:現價 1.125rem → 1.875rem(×1.67),% 0.75rem → 0.875rem(×1.17);主數字與 % 的比例反而從 1.5× 拉大到 2.14×,% 相對變得更小。真等比應是 text-xl(1.25rem)。兩份文件用詞不一致會讓驗收時對「% 夠不夠大」各說各話。",
+      "suggestion": "統一措辭:若刻意讓 % 相對縮小(讓現價成為唯一焦點),把 current-state 的『等比』改成『同步放大一級』並在 SC-2 註明比例是刻意拉開;若真要等比則把 text-sm 改成 text-xl。"
+    },
+    {
+      "id": "P2-3",
+      "severity": "P2",
+      "location": {
+        "file": "change-spec.md",
+        "section": "Diff 級 spec → 新增 2 條測試 / SC-1 量法"
+      },
+      "title": "兩條新測試都是 className 子字串斷言,鎖不住 SC-1 的相對關係,有 vacuous test 風險",
+      "detail": "`toContain(\"text-3xl\")` / `toContain(\"font-semibold\")` 只證明字串被寫進 class,不證明 SC-1 的『明顯大於股名』——若日後有人把 h2 也調成 text-3xl,SC-1 實質破功而兩條測試照樣綠;jsdom 也量不到 computed font-size(專案 CLAUDE.md 已有 Tailwind/dialog 那條『828 測試全綠但版面壞掉』的教訓,上一輪 refactor review 亦踩過 vacuous test)。目前 spec 也沒指定新測試要在哪個 fixture 狀態下渲染(未觸價 vs 漲跌停),漏了『反白 + 放大並存』這個組合。",
+      "suggestion": "新測試加第 3 條相對斷言:同時讀 h2 與 page-quote 的 className,斷言兩者字級 class 不同(或 page-quote 含 text-3xl 且 h2 不含 text-3xl);並指定至少一條在漲停 fixture 下跑,同時斷言 text-3xl 與 bg-bull/text-white 並存(驗 twMerge 沒把誰吃掉)。SC-1 的截圖證據列為必附而非可選。"
+    },
+    {
+      "id": "P2-4",
+      "severity": "P2",
+      "location": {
+        "file": "change-spec.md",
+        "section": "Out of scope"
+      },
+      "title": "跨頁現價字級一致性未評估,out of scope 沒留 next-time 尾巴",
+      "detail": "同樣是『現價』的顯示點還有 FuturesPage.tsx:54(`font-mono text-lg`,與改前的個股頁完全同款)與 IndexPage.tsx:178(`font-mono text-2xl`)。改完之後三頁現價會是 3xl / lg / 2xl 三種字級。spec 的 out of scope 已排除期貨頁(正確,避免 scope 滑),但沒提 IndexPage,也沒像『漲跌額』那樣寫進 next-time 候選,下一輪很容易有人以『順手統一』為由擴散改動。",
+      "suggestion": "out of scope 補一句:期貨頁 L54 與指數頁 L178 的現價字級維持現狀,並寫入 next-time 候選『三頁現價字級是否統一』,由後續獨立決策。"
+    }
+  ],
+  "summary": "無 P0(caller map 完整、無相容性面、行號/class/測試行號與源碼逐項核對皆相符、tailwind-merge v3 下 text-3xl 與 text-white 不同 group 無殘留疊加風險、IBM Plex Mono 已載入 600 字重);兩條 P1 分別是白名單漏掉 header 換行/列高/圖表高度這組真正會被字級打到的版面行為,以及新測試 2 缺可用選擇器而 diff spec 又禁止加 testid。",
+  "_meta": {
+    "backfilled": "2026-08-10",
+    "source": "session 538ee281 transcript(change-spec-reviewer dispatch 2026-08-04 01:41,當輪已 receiving 處理;本檔為稽核補檔,非新 review)"
+  }
+}

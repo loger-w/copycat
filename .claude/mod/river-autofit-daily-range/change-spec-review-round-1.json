@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "R1", "severity": "P0", "summary": "新測試 fixture 改動前即全綠,非紅先行(現況域已含 high)", "resolution": "accepted — fixture 全改為真正重現「域裝不下」形狀(meta:null、長上影),實作前先跑紅並留證"},
+    {"id": "R2", "severity": "P1", "summary": "0 值歸一守門測試選錯方向(high=0 被 Math.max 忽略測不出漏 norm),危險方向是 low=0", "resolution": "accepted — 測試 3 改 low=0 並加 yDomain[0] > 0 斷言"},
+    {"id": "R3", "severity": "P1", "summary": "fixture low > high 自相矛盾;SC-3 宣稱無 meta 但 fixture 帶 ref,路徑不同", "resolution": "accepted — 改 meta: null 走實例真路徑,low 改合法值"},
+    {"id": "R4", "severity": "P1", "summary": "yDomain 下游消費者 overlayLines(:417)未盤點:域變寬 → CDP/MA 疊線裁切門檻放寬,是另一 feature 的可見行為改動", "resolution": "accepted — 快篩證實(:414-418);spec 補「刻意接受的連帶變化」節 + 疊線測試釘住"},
+    {"id": "R5", "severity": "P1", "summary": "SC 引用的既有元件測試對本輪路徑零覆蓋;geometryOf helper 不傳 high/low 與 production 不一致", "resolution": "accepted — 快篩證實(:759-762 無 high/low);新增 autofit 元件測試 + helper 修正"},
+    {"id": "R6", "severity": "P2", "summary": "白名單未交代 3 點刻度價位/VWAP/hover 讀價等連帶位移", "resolution": "accepted — 併入「刻意接受的連帶變化」節"},
+    {"id": "R7", "severity": "P2", "summary": "markFor 仍吃原始 input.high/low,與域計算的 norm 解讀不一致;yBottom>0 的自然擋 0 前提被本輪動搖", "resolution": "accepted — markFor 改吃 norm 後值"},
+    {"id": "R8", "severity": "P2", "summary": "SC-1/2 單點 fixture 可升為 table-driven 不變式", "resolution": "accepted — 新增 SC-5 table-driven 測試"},
+    {"id": "R9", "severity": "P2", "summary": "驗證 gate 漏列 tsc -b / eslint", "resolution": "accepted — spec 補 gate 清單"}
+  ],
+  "counts": {"P0": 1, "P1": 4, "P2": 4, "accepted": 9, "rejected": 0}
+}

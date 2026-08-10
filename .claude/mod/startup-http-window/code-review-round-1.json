@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "phase": "Phase 5 自評(medium;雙焦點:implementation bug + 白名單對照)",
+  "date": "2026-08-05",
+  "lenses": ["async/lifecycle 正確性 (opus)", "白名單對照 + 測試效度 (opus)"],
+  "diff": "review-diff.txt(587bcd7..63fce7d,15 檔 +851/-258)",
+  "whitelist_check": {
+    "result": "10/10 PASS",
+    "notes": "逐條證據見 finder 輸出;含 mutation 驗證:拿掉 _boot CancelledError 分支 → 測試 3 立刻紅(非 vacuous);grep 遷移完整性:TestClient( 僅剩 test_boot_window 刻意裸用 8 處;既有 assertion 零刪改(diff 零 '-' assert 行)"
+  },
+  "findings": [
+    {"id": "AL-1", "severity": "P2", "file": "tests/server/test_ws_disconnect.py:275", "problem": "_RunningServer.__enter__ 的 wait_boot 失敗不歸還資源(平行於 R23 的洞):__exit__ 永不執行、殭屍 server 不進 _HUNG_SERVERS", "receiving": "accepted", "resolution": "wait_boot 包 try/except BaseException → should_exit + join + 記 _HUNG_SERVERS 後 re-raise"},
+    {"id": "AL-2", "severity": "P2", "file": "copycat/server/app.py:555", "problem": "finally 的 CancelledError 分不出「boot_task 被我們 cancel」與「lifespan task 被外部 cancel」,後者 log 指向錯的地方", "receiving": "accepted", "resolution": "以 boot_task.cancelled() 分流兩條 log(info / warning),不改續行語意"},
+    {"id": "AL-3", "severity": "P2", "file": "copycat/server/engine.py:214", "problem": "_run_handover_locked 的孤兒 _buffer 清理只涵蓋 ConnectionError,cancel 路徑穿過會留 buffer 吞 tick(現況靠「只在關機 cancel」撐著,未寫下的不變式)", "receiving": "accepted", "resolution": "補 except asyncio.CancelledError: self._buffer = None; raise(對稱分支,不設 degraded)"},
+    {"id": "R-T1", "severity": "P2", "file": "tests/server/test_boot_window.py:936", "problem": "測試 1 的 /api/stock/watchlist 503 斷言非鑑別(該 app 無 stock_source 恆 503);測試 2 的 index/corr None 斷言同款", "receiving": "accepted", "resolution": "測試 1 注入 FakeStockSource + 窗後 200 翻轉對照;測試 2 刪誤導性 None 斷言"},
+    {"id": "R-T2", "severity": "P2", "file": "copycat/server/app.py:176", "problem": "_boot cancel 分支用 except BaseException logger.exception 攔二次 cancel,預期路徑吐 ERROR traceback,與 finally 的分法不一致", "receiving": "accepted", "resolution": "內層分 CancelledError→info / Exception→exception,raise 位置不動"}
+  ],
+  "summary": {"P0": 0, "P1": 0, "P2": 5, "accepted": 5, "exit": "無 P0/P1;5 條 P2 全小型收斂,一次 dispatch 修畢後收自評"}
+}

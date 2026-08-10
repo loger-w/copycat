@@ -1,0 +1,19 @@
+{
+  "round": 2,
+  "scope": "限縮輪:只審 [amendment 2026-08-05] 段落(round 1 有 accepted P0)",
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "R14", "severity": "P1", "claim": "HANDOVER_BUSY 改碼未貫穿:檔案 2 select route 片段 / SC-4 / 白名單 4 / §4 仍寫 NOT_READY 或未記新碼", "receiving": "accepted", "resolution": "四處同步改 HANDOVER_BUSY + 白名單/compat 補記新碼"},
+    {"id": "R15", "severity": "P1", "claim": "/api/ready 片段缺 error 欄;placeholder 清單缺 boot_error=None(正常路徑直取會 AttributeError → 502)", "receiving": "accepted", "resolution": "片段補 error 欄;yield 前初始化 boot_error=None"},
+    {"id": "R16", "severity": "P1", "claim": "wait_boot 只看 boot_done,R3 的 fail-silent 讓 boot 崩掉時 33 個遷移站點照樣綠", "receiving": "accepted", "resolution": "wait_boot 加 boot_error 檢查(allow_error 參數,測試 6 顯式 True);D5 同步記載"},
+    {"id": "R17", "severity": "P1", "claim": "測試 2/3 Timer 協定無同步點:exit 可能在 boot 未推進或已跑完時發生,測試 3 vacuous(正常反序 close 也讓 fake.closed=True)", "receiving": "accepted", "resolution": "fake 加 entered Event + entered.wait(2) 前置;測試 3 鑑別斷言 fake.closed ∧ app.state.stock is None;測試 2 斷言 boot_done is False"},
+    {"id": "R18", "severity": "P2", "claim": "測試 5 不需 Timer,預先 arm 反而慢機器假紅", "receiving": "accepted", "resolution": "測試 5 改測試執行緒內 gate.set();R1 協定適用範圍明記為測試 2/3"},
+    {"id": "R19", "severity": "P2", "claim": "Known Risks 的 10s 上限對 fetch_backfill(多 REQ 迴圈,分鐘級)過樂觀", "receiving": "accepted", "resolution": "敘述改「單發 ≤10s;fetch_backfill 分鐘級」+ operator 預期一句"},
+    {"id": "R20", "severity": "P2", "claim": "shield 解在二次 cancel 下產生孤兒 close task + 現役 close 都是 to_thread 本就不受 cancel 影響", "receiving": "accepted", "resolution": "推翻 R13 shield:改 best-effort await close + except BaseException log;殘餘面記 Known Risks"},
+    {"id": "R21", "severity": "P2", "claim": "「前端未知碼 fallback 文案」未查證不成立:select 路原樣印碼,窗內會看到「切換失敗:HANDOVER_BUSY」", "receiving": "accepted", "resolution": "R12 敘述更正;列入 Phase 7 目視預期;中文文案候選回寫 next-time"},
+    {"id": "R22", "severity": "P2", "claim": "巢狀 finally 復位安全但依賴未寫下的不變式(activate 尾端不得再 await),回歸無測試會紅", "receiving": "accepted", "resolution": "採 (a):activate finally 上方與 _run_handover docstring 各留不變式註解"},
+    {"id": "R23", "severity": "P2", "claim": "BootedClient.__enter__ 的 wait_boot 失敗不歸還資源(lifespan 永不關閉)", "receiving": "accepted", "resolution": "wait 失敗 → super().__exit__ 後 re-raise"}
+  ],
+  "summary": {"P0": 0, "P1": 4, "P2": 6, "accepted": 10, "exit": "無 P0;P1 全數修入 spec → 退出條件成立,進 Phase 4"}
+}

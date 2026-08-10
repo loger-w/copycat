@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "R1", "severity": "P0", "claim": "測試 2/3「exit 後才放行 gate」會卡死(to_thread executor 在 TestClient.__exit__ 被 shutdown_default_executor join,3.13 timeout 300s);Known Risks 的 daemon 敘述錯誤(to_thread 執行緒 non-daemon)", "receiving": "accepted", "resolution": "測試步驟改 Timer 預先放行 / 有上限 gate.wait;Known Risks 敘述更正(上限 = _REQ_TIMEOUT_MS 10s)"},
+    {"id": "R2", "severity": "P1", "claim": "activate guard 只查 _handover_running 擋不住相鄰雙 select(unsubscribe to_thread 讓出點在旗標設定前)", "receiving": "accepted", "resolution": "互斥升級涵蓋整個 activate:進場同步 check+set _handover_running(零 await 間隙),try/finally 復位;補雙 activate 並發 engine 單元"},
+    {"id": "R3", "severity": "P1", "claim": "_boot_all 無頂層保護:_boot 傘外語句拋例外 → boot task 靜默死在半路,/api/ready 照樣 true", "receiving": "accepted", "resolution": "頂層 except Exception log + app.state.boot_error;/api/ready 回 {ready, error};新測試 6"},
+    {"id": "R4", "severity": "P1", "claim": "finally 只吞 CancelledError,boot task 以其他例外結束時 await boot_task 在反序 close 前重拋 → 全部 close 跳過", "receiving": "accepted", "resolution": "取回改 try/except BaseException log(關機續行),反序 close 無條件執行"},
+    {"id": "R5", "severity": "P1", "claim": "SC-1 / 測試 1 引用不存在的 /api/txo/state", "receiving": "accepted", "resolution": "改用 /api/txo/snapshot(grep 證實 route 清單:series/select/contracts/snapshot)"},
+    {"id": "R6", "severity": "P1", "claim": "caller map 漏 /api/txo/contracts,且窗內回 200 假全鏈 [TXF] 蓋掉 snapshot fallback", "receiving": "accepted(漏列部分)/ rejected_with_reason(失效敘述)", "resolution": "機械快篩反證:route 有 TC.O. 前綴過濾(app.py:549),SPOT 被濾掉 → 窗內回 200 空列表,前端空列表 fallback 有測試(OrderPanel.test.tsx:248-263)= 既有形狀。caller map 已補列,不改 route"},
+    {"id": "R7", "severity": "P2", "claim": "窗內 /api/capital/status 回 disabled(組態語意)可能誤讀", "receiving": "accepted", "resolution": "記入 SC-5 Phase 7 預期 + Known Risks;不改 route(starting 語意 scope 外)"},
+    {"id": "R8", "severity": "P2", "claim": "finally 設 boot_done=True 在 cancel 路徑也執行 → 關機中宣告就緒", "receiving": "accepted", "resolution": "boot_done 只在非 cancel 結束設(CancelledError re-raise 跳過);exception 中止 = done=true + error 非 null"},
+    {"id": "R9", "severity": "P2", "claim": "TestClient.app 型別是 ASGIApp,BootedClient 直傳會卡 pyright", "receiving": "accepted", "resolution": "__init__ 自存 FastAPI 引用或 cast;wait_boot 用 getattr default"},
+    {"id": "R10", "severity": "P2", "claim": "D2 邊界不準:建構期失敗仍 fail-fast;部分失敗非恆 NOT_READY", "receiving": "accepted", "resolution": "D2 amendment 明記建構 fail-fast 是刻意;log 文案改「txo 面降級」"},
+    {"id": "R11", "severity": "P2", "claim": "SC-5 自癒主張錯:四條一次性 query(useSeries 等)無 refetchInterval,落終態需重載", "receiving": "accepted", "resolution": "SC-5 限縮 + Phase 7 不得靠重載拿 PASS;回寫 next-time 既有條目"},
+    {"id": "R12", "severity": "P2", "claim": "HandoverBusy 複用 NOT_READY 是語意擴張", "receiving": "accepted", "resolution": "改新碼 HANDOVER_BUSY(503,契約形狀不變,前端 fallback 文案)"},
+    {"id": "R13", "severity": "P2", "claim": "CancelledError 分支的 close 未 shield,二次 cancel 下清理半途中斷", "receiving": "accepted", "resolution": "close 包 asyncio.shield"}
+  ],
+  "summary": {"P0": 1, "P1": 5, "P2": 7, "accepted": 12, "partial": 1, "refuted_claims": "R6 失效敘述(TC.O. 過濾反證)"}
+}

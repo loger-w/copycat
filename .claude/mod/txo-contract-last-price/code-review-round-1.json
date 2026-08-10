@@ -1,0 +1,13 @@
+{
+  "lenses": ["aggregate-semantics-wire", "test-strength-fixture"],
+  "findings": [
+    {"id": "S-1", "severity": "P1", "title": "市價估價來源掛在會被 reset() 清空的累積狀態:rollover/自癒/序列切換後 contracts 空數分鐘,已開的確認框因 premium != null gate 靜默卸載、handleConfirm 靜默 return", "resolution": "accepted_as_known_risk — 失效方向 fail-safe(估價消失 → 市價鈕鎖回 = 回到本輪前狀態;送單走 literal M 不受估價影響;不會送錯價)。真正修法((2) 前端 fallback / (3) dialog gate 拆分 + setSubmitError)是前端改動,本輪 spec 顯式排除前端 code — 寫入 change-spec Known Risks + next-time 獨立條目。後端保留 last_price 跨 reset(選項 1)經評估無效:rows 本身隨 _pos 消失,單保價值不恢復 row"},
+    {"id": "S-2", "severity": "P2", "title": "last_price 可為 0,穿過前端 `?? null` nullish 閘 → 市價鈕解鎖、確認框顯示 0 元(§8「0 不是價格」同款)", "resolution": "accepted — aggregate 端 `> 0` 才記價 + 測試釘 0 價不覆寫"},
+    {"id": "S-3", "severity": "P2", "title": "ticks.jsonl 獨立斷言排序鍵與 aggregator 同構(兩邊可能一起錯互相印證);排序本輪才首次承載語意", "resolution": "accepted — expected 側改 QryIndex 單鍵(實測 15 檔與雙鍵一致、異構化);前提 (PreciseTime=FilledTime×10⁶+µs 零例外、回補窗單一 UTC 日) 寫進 docstring"},
+    {"id": "S-4", "severity": "P2", "title": "test_last_price_is_latest_trade 構造(100→97.5)排除不了 min(),docstring 過度宣稱", "resolution": "accepted — 改為時序最後一筆既非最高也非最低(100 → 97.5 → 99)"},
+    {"id": "T-1", "severity": "P2", "title": "排序第二鍵 seq(QryIndex)全 repo 零斷言力(mutation 拿掉 seq → 1676 全綠);ticks.jsonl 錄檔本身已排序 → 兩側同時退化成檔序", "resolution": "accepted — actual 側輸入先 random.Random(0).shuffle 再 ingest_backfill(實測 drop-seq mutation 會紅於 C.45500 60→50,deterministic)"},
+    {"id": "T-2", "severity": "P2", "title": "test_last_price_is_latest_trade 的 t=1/t=2 是裝飾參數(route 路徑不讀 precise_time),docstring 給「live 有時序保證」假印象", "resolution": "accepted — 拿掉裝飾參數,docstring 改「抵達序最後一筆;時序保證只在 backfill 路徑」"}
+  ],
+  "whitelist_check": "S lens 逐條對照白名單 5 條 + 機械比對(剝 last_price 後與改動前全等 True、symbol 順序一致、舊 key 值變更 0);T lens 確認唯一被改的既有斷言 = spec 標該紅的 test_snapshot_contracts_detail;golden 15/15 檔 last_price 與 ticks.jsonl 重算全中。",
+  "summary": "核心實作正確(更新位置/單位/backfill 排序/handover 時序全查證通過);洞在前端消費端的 reset 窗(Known Risk)與測試驗證力(5 條小修)。"
+}

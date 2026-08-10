@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "backfilled": "2026-08-10",
+    "kind": "retrospective-review",
+    "note": "當輪(2026-08-03)漏跑 code review(兩發 dispatch 皆 implementer)。本檔為 2026-08-10 回溯補審:2 lens(重試機制正確性 / 測試效力覆蓋)opus dispatch,審 diff 99ef8888^..2d144765 並逐條對照當時 HEAD(e3aeda5b)現碼,無 already_fixed 項。全數 findings 記入 docs/next-time.md 2026-08-10 節,修復屬新 scope 待排程。",
+    "diff_range": "99ef8888^..2d144765",
+    "verified_against_head": "e3aeda5b"
+  },
+  "findings": [
+    {
+      "id": "P1-1",
+      "severity": "P1",
+      "lens": ["retry-correctness", "test-efficacy"],
+      "location": { "file": "copycat/server/futures_engine.py", "line": 155 },
+      "title": "_resub_loop 只接 ConnectionError:壞電文(JSONDecodeError/KeyError)一來復原路徑靜默死亡;同顆例外還會從 close() 的 await resub 重拋,跳過 source.close() → TC4 KeepAlive 執行緒洩漏 process 不退",
+      "detail": "tc4.py:349 json.loads 可拋 JSONDecodeError、:274 q['SubPort'] 可拋 KeyError,皆逸出 except ConnectionError → task 死、_pending_subs 永留、零 log(復刻原 bug 的零訊號終態)。close() futures_engine.py:176-180 只 suppress CancelledError,task 已死時 await resub 重拋 → 181-190 的 leaf gather 與 source.close() 全跳過。repro 實測:source.close 未被呼叫、close() 拋 ValueError。對照組:corr_engine.py:156-162 與 stock_engine.py:577-581 皆已補泛例外護欄且 corr 有專測(test_corr_engine.py:429),futures 是三支中唯一沒跟上的(它是被照抄的原型)。",
+      "suggestion": "迴圈抽 _resub_round(),外層 except Exception: logger.exception(續行)(照 corr 形狀);close() 的 suppress 放寬為 (CancelledError, Exception) 讓 source.close() 必達。紅測試照抄 test_corr_engine.py:429 的 _BadRetrySource。"
+    },
+    {
+      "id": "P1-2",
+      "severity": "P1",
+      "lens": ["retry-correctness(P2 評)", "test-efficacy(P1 評,採高)"],
+      "location": { "file": "copycat/server/futures_engine.py", "line": 162 },
+      "title": "close() 只 cancel 不等 in-flight to_thread:orphan thread 實測跨過 source.close() 之後才呼叫 subscribe → _ensure_connected 重建 TC4 連線(KeepAlive 洩漏);唯一相關測試把洩漏寫成允許值(attempts <= n+1)而非鎖不變式",
+      "detail": "實測(blocking fake source):close() 0.000s 返回,事件序列 subscribe_enter → source.close → subscribe_exit。真 source 上 orphan 走 futures_source.py:66 _ensure_connected(tc4.py:252-275,無 _stop 檢查)→ 建新 QuoteAPI + Connect,無人 Disconnect。觸發窗不窄:outage 下迴圈幾乎恆在 to_thread 內(REQ timeout 10s ×2)。stock_engine.py:657-672 已用 _EngineClosing 縮窗且 docstring 明指「此暴露與已出貨的 futures _resub_loop 同款」— 已知缺口未回補。test_futures_engine.py:418 的 assert len(src.attempts) <= n + 1 把 in-flight 洩漏當允許值。",
+      "suggestion": "worker 包裝先查 self._loop is None → raise _Closing(照 stock_engine.py:664-672);close 改等完(gather 或停止旗標 + await)。測試改鎖不變式:斷言不存在 close 之後的 subscribe_enter 事件。"
+    },
+    {
+      "id": "P1-3",
+      "severity": "P1",
+      "lens": ["test-efficacy"],
+      "location": { "file": "copycat/live/tc4.py", "line": 678 },
+      "title": "原症狀的第二條發生路徑(_check_stale 重連時掉訂閱)仍零復原 + 零覆蓋 — commit 宣稱「唯一缺的復原路徑」不成立",
+      "detail": "tc4.py:665-690 重連後 _subscribed 歸零逐支重掛:失敗者靜默丟出集合且零 log(:681-682);迴圈中途拋 ConnectionError 時 _subscribed 已部分重建,下一輪只剩已成功者 → 尾段 symbol 永久蒸發。失敗不進 _pending_subs(只在 _subscribe_all 寫入),_resub_loop 早已結束;_leaf_fallback 判準 st.p is None 不武裝(舊值仍在);FuturesEngine 是四引擎唯一沒接 on_reconnect 的。repro.md 記載的失敗夜 log(connect 間隔 = 3×REQ_TIMEOUT)指向當晚活躍的正是重連路徑。全域零測試覆蓋此路徑。",
+      "suggestion": "engine 接 on_reconnect 對帳(失敗品回填 _pending_subs 並重啟迴圈),或至少 tc4.py:681 else 補 warning 給 grep 判準;配一條 fake source 重連掉訂的紅測試。並修正 repro.md「唯一缺的復原路徑」措辭。"
+    },
+    {
+      "id": "P2-1",
+      "severity": "P2",
+      "lens": ["retry-correctness"],
+      "location": { "file": "copycat/server/futures_engine.py", "line": 167 },
+      "title": "重試成功後與 leaf fallback 併存:同商品 HOT + leaf 雙訂閱,seq/廣播加倍、tick 可短暫倒退,且 _leaf_fed 使跨日每天複製一次",
+      "detail": "實測部分失敗情境:TXF 首輪失敗 → 別品推播解析出 ym → leaf fallback 先補訂 TXF leaf → 10s 後重試把 HOT 掛回,雙 symbol 同指同一契約。兩路餵同一 _handle_quote(last-write-wins 無 stale-drop)。_leaf_fed 含該品 → 跨日清 p 重武裝,每天再補一次新月 leaf(leaf 無退訂路)。另更正:commit 註解「兩條都接不了一開始就訂不到的商品」過寬 — 部分失敗時 leaf 接得到,全失敗才接不到。",
+      "suggestion": "重試成功處補 self._leaf_fed.discard(product);註解誠實記「短暫雙訂閱,值相同故接受」。根治(leaf 退訂)列 next-time。"
+    },
+    {
+      "id": "P2-2",
+      "severity": "P2",
+      "lens": ["retry-correctness"],
+      "location": { "file": "frontend/src/hooks/useStockNames.ts", "line": 37 },
+      "title": "refetchInterval 永久錯誤態不停也不退避(404/後端掛 → 每 3s 無限輪詢);註解宣稱的 error 態無任何 consumer 在讀",
+      "detail": "停止條件只看 data !== undefined,error 態 data 恆 undefined → 無限 3s 輪詢(query-core 現版不因 error 停排程)。WatchlistSidebar.tsx:73 與 WatchlistManagerDialog.tsx:35 皆不讀 isError → 永久失敗的唯一可觀察表現 = 靜默輪詢。不影響原 fix 的啟動窗語意。",
+      "suggestion": "停止條件兼看 fetchFailureCount(如 >10 → 退避 30s);註解改與現實一致。"
+    },
+    {
+      "id": "P2-3",
+      "severity": "P2",
+      "lens": ["test-efficacy"],
+      "location": { "file": "tests/server/test_futures_engine.py", "line": 405 },
+      "title": "「全成功不起 task」與「pending 清空後迴圈結束」兩條收斂不變式的斷言結構性無效 — 兩個 mutant 實測存活",
+      "detail": "M1(拿掉 start() 的 if self._pending_subs 守衛)與 M2(_resub_loop 改 while True,收斂後 task 常駐洩漏)均以 subclass mutant 實跑,現測試全綠。all_tasks() 不含已完成 task 是 M1 存活主因。corr 版有正確寫法:assert eng._resub_task is None(test_corr_engine.py:410)。另 test_state_updates_after_retry_success 後半不真的在測重試(on_message 在 start 即掛好)。",
+      "suggestion": ":405 改 assert engine._resub_task is None;收斂後補 assert engine._pending_subs == set() and engine._resub_task.done()。"
+    },
+    {
+      "id": "P2-4",
+      "severity": "P2",
+      "lens": ["test-efficacy"],
+      "location": { "file": "frontend/src/hooks/useStockNames.test.tsx", "line": 58 },
+      "title": "前端測試只鎖「最終會復原」,不鎖輪詢節奏與「拿到資料後停止輪詢」— interval 改 1ms 或拿掉停止條件皆全綠",
+      "detail": "新測試本體不 vacuous(真計時,移除 refetchInterval 即逾時)。但 NAMES_RETRY_INTERVAL_MS 改 1ms 全綠(失效樣態 = 啟動窗內近千 req/s);停止條件改常數 3000 也全綠(58KB 靜態表被每分頁永久 3s 重抓,註解「穩態零成本」無人守)。",
+      "suggestion": "成功案取得資料後 sleep 3.5s 斷言 fetch 次數不增;復原案斷言呼叫次數落合理區間(≤4)。"
+    },
+    {
+      "id": "P2-5",
+      "severity": "P2",
+      "lens": ["retry-correctness"],
+      "location": { "file": "copycat/live/tc4.py", "line": 252 },
+      "title": "(共用層,diff 外)_ensure_connected 無鎖 check-then-act 與 _check_stale 重連的 race 被本 diff 系統性放大 — 雙 QuoteAPI 落敗者永不 Disconnect",
+      "detail": "_ensure_connected 檢查不持鎖(發布才進 _api_lock),與 listener thread 的 _check_stale 重連(持 self._lock)無互斥;兩 thread 同見 _api is None → 各建各連,後寫者勝,落敗連線無引用永不 Disconnect。本 diff 使該路徑從「使用者操作觸發」變成「有 pending 即每 10s 從 executor thread 觸發」,且 pending 存在 ⇔ TC4 正出問題 ⇔ _check_stale 最可能同時重連。未做 live 實證(需真 TC4 斷線),severity 保守 P2。",
+      "suggestion": "獨立 /mod:_ensure_connected 的 check+建立+發布以 _api_lock 原子化 + _stop 早退;stock/corr/index 四條 source 一起納回歸。"
+    }
+  ],
+  "summary": "3 P1 + 5 P2(兩 lens 合併去重;P1-1 兩 lens 同抓、close-orphan 一 lens P2 一 lens P1 採高)。主體評價:四條後端紅測試與前端計時測試皆非 vacuous,紅綠配對正確;缺口集中在「邊界與終態」— 泛例外護欄、close 收尾對稱性、重連路徑的第二條發生源、收斂不變式的斷言效力。三條 P1 的正解均已存在於同 repo 姊妹實作(corr/stock),照抄即可。"
+}

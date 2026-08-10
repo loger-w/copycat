@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {"id": "P1-3", "severity": "P1", "title": "round 級 return 早停 + 固定段序:單一長期失敗的 watchlist 檔永久餓死 failed_resubs 段與 stkfut 段(tc4._resub 對單一 symbol 可穩定 raise ConnectionError)", "resolution": "accepted — 早停改段級 break,補反餓死回歸測試"},
+    {"id": "P2-5", "severity": "P2", "title": "_failed_resubs 三個未釘死處:_do 收集例外種類(撞 task-died 既有測試)/ 段 3 無縮窗 guard / 成功 discard 可能抹掉同輪新失敗", "resolution": "accepted — _do 只收集 ConnectionError;段 3 走帶 closing 檢查 wrapper;重驗補 code in _failed_resubs"},
+    {"id": "P2-6", "severity": "P2", "title": "corr 測試 5「失敗腿含 base」場景不可構造;_retry_acquire 用 ConnectionError 當關機訊號會偽裝成 TC4 訂閱失敗 warning 汙染 grep 判準", "resolution": "accepted — 測試措辭修正;自訂 _EngineClosing 例外,catch 後靜默結束該輪"}
+  ],
+  "summary": "限縮輪:P1-2 裁決成立、P0-1 短鎖化判準完備無巢狀鎖、P1-1 設計與既有語意無矛盾;唯一新洞 = 早停粒度(P1-3),段級 break 即解。無新 P0。"
+}

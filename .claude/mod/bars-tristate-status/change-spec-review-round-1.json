@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "R1", "severity": "P1", "summary": "該紅清單漏 test_prune_drops_only_expired_empty_marks(cache API 直呼:empty_mark 3參數 / empty_fresh bool)+ 白名單 3 措辭與 API 簽名改動矛盾", "resolution": "accepted — spec 明列 cache API 類該紅 + 指定新斷言語意;白名單 3 改寫為「行為不變、API 簽名會改」"},
+    {"id": "R2", "severity": "P1", "summary": "commit 3 混三類:refetchInterval 行為改(🔴)+ 空態文案改(🔴)+ payload 型別適配(🔵)不可同 commit", "resolution": "accepted — 拆 🔵 commit 3(前端型別適配,畫面零變)+ 🔴 commit 4(三態文案 + 20s 輪詢)"},
+    {"id": "R3", "severity": "P1", "summary": "SC-4 只驗純函式,無測試釘 refetchInterval 真的接線(TanStack v5 函式形拿 query.state.data,寫錯恆 false 且零錯誤訊號)", "resolution": "accepted — N-8 補 fake timers + renderHook 接線測試(20s 後 fetch 第二次 + ok 反向);實作註記必須讀 query.state.data"},
+    {"id": "R4", "severity": "P2", "summary": "_today 不存 status 的不變式有洞:days 交叉(days=1 timeout 寫入 → 15s 內 days=30 讀到)會把 timeout 洗白成 ok,違反 SC-5", "resolution": "accepted — 採修法 (a):_today 值改 (ts, bars, status),today_get 回 status;直呼測試列入該紅"},
+    {"id": "R5", "severity": "P2", "summary": "BarsResult 與 TaggedBars 同構(str Literal 子型別),plain 誤傳 build_period 型別合法 → meta.source='ok' 靜默失真", "resolution": "accepted — 兩者改 NamedTuple 區分型別;閉包改名;N-6 加 meta.source != 'ok' 守門"},
+    {"id": "R6", "severity": "P2", "summary": "未知 status 值未定義:barsPollInterval 用 !== ok 輪詢、StockChart 落 CandleChart,矛盾態零訊號", "resolution": "accepted — fetchBars 白名單正規化(未知→ok);N-7 加 status:'weird' 回歸"},
+    {"id": "R7", "severity": "P2", "summary": "SC-3(ok+空)真環境幾乎不可製造(查無此檔常態=timeout),驗收會誤判", "resolution": "accepted — SC-3 標明僅 unit 可驗;真環境查無股號的預期=timeout 文案(作為 SC-1 證據)"},
+    {"id": "R8", "severity": "P2", "summary": "數字錯:_collect_history 是 4 函式/8 呼叫點(非 7);test_bars.py 是 32 個 call site(非 20,next-time 舊估)", "resolution": "accepted — spec 與 current-state 同步更正"}
+  ],
+  "verdict": "no P0; all P1/P2 accepted and fixed in-place with [amendment] marks; 1 round, no加輪"
+}

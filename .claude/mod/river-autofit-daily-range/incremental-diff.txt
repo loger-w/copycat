@@ -1,0 +1,31 @@
+diff --git a/docs/next-time.md b/docs/next-time.md
+index b4e83c6..fd4b99a 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -292,10 +292,13 @@
+ - [ ] **顏色類 SC 只能盤中驗**:收盤後 TC4 不推 REALTIME → `meta` 恆為 `null`,而漲跌色一律以
+   `meta.ref` 為基準 → 明細三欄(SC-5)、現價圈(SC-2)、左軸刻度(SC-20)盤後全灰。
+   這是既有行為不是本輪的 bug,但排驗收時程要考慮進去(盤後只驗得到幾何與有無)。
+-- [ ] **江波圖 autofit 域裝不下逐筆極值 —— 有實例了**:2330 於 2026-07-30 盤後(無 meta →
++- [x] ~~**江波圖 autofit 域裝不下逐筆極值 —— 有實例了**:2330 於 2026-07-30 盤後(無 meta →
+   autofit)域為 `[2160.5, 2259.5]` 而當日最高 `2260.0` 落在域外 0.5 元 → 高點線不畫(設計如此,
+   spec R12)。要讓兩條線在無漲跌停時也必定看得到,得把 y 域改成「含當日高低」再算 —— 那會動到
+-  `buildIntradayGeometry` 的域語意與一整批座標斷言,是獨立一輪的工作,不要順手改。
++  `buildIntradayGeometry` 的域語意與一整批座標斷言,是獨立一輪的工作,不要順手改。~~
++  **2026-08-05 已修**(mod/river-autofit-daily-range):autofit 半幅池併入 `input.high/low`
++  (norm 歸一、`ref > 0` 才併 — 無錨點時擴域只放大垃圾);markFor 同步吃 norm 值;
++  2330 臨界形狀(域外 0.02%)有回歸測試釘住;漲跌停分支與域外 guard 不動。
+ - [ ] `WatchlistManagerDialog` 的群組列**沒有排序握把**(spec 草圖有 `⋮⋮`,但 SC-14 沒有「群組
+   排序」這條 → 刻意不長沒有行為的 UI)。若日後群組變多想調順序,那時再一併設計拖曳語意。
+ - [ ] 側欄的零 PUT 判定用 `JSON.stringify(next) === JSON.stringify(wl)` 深度比較(W-22)。
+commit 3023661263fec3c3e9c1fdb069a4e4d817bc5ba7
+Author: Loger <kidd415055@gmail.com>
+Date:   Wed Aug 5 11:32:03 2026 +0800
+
+    chore(frontend): autofit y 域輪收尾 — next-time 勾銷 + 白名單畫面驗證截圖
+    
+    Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+ docs/next-time.md                                      |   7 +++++--
+ .../2026-08-05-intraday-limit-branch-whitelist.png     | Bin 0 -> 234170 bytes
+ 2 files changed, 5 insertions(+), 2 deletions(-)

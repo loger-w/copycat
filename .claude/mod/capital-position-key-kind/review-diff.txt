@@ -1,0 +1,857 @@
+﻿diff --git a/copycat/capital/balance.py b/copycat/capital/balance.py
+index 93ecf36..95a40f2 100644
+--- a/copycat/capital/balance.py
++++ b/copycat/capital/balance.py
+@@ -67,33 +67,13 @@ def parse_balance_line(raw: str) -> Position | None:
+     return Position(market="sec", stock_no=stock_no, qty=lots, kind=kind)
+ 
+ 
+-def dedupe_positions(positions: list[Position]) -> list[Position]:
+-    """同檔多種庫存列(集保+融資並存)→ 保留張數大者。store 以 stock_no 為鍵,
+-    被捨棄的部分平倉鍵不到 — 部位資料分種類建模前的過渡取捨,寧少不錯。"""
+-    seen: dict[str, Position] = {}
+-    for p in positions:
+-        q = seen.get(p.stock_no)
+-        if q is not None:
+-            # debug 級:資+集保並存是穩定狀態,每 60s 查詢都會走到這裡,warning 會洗版
+-            logger.debug(
+-                "同檔多種庫存列 %s: %s %d張 / %s %d張 — 保留張數大者",
+-                p.stock_no,
+-                q.kind,
+-                q.qty,
+-                p.kind,
+-                p.qty,
+-            )
+-            if abs(p.qty) <= abs(q.qty):
+-                continue
+-        seen[p.stock_no] = p
+-    return list(seen.values())
+-
+-
+ def merge_fut_positions(rows: list[Position]) -> list[Position]:
+     """同契約多列期貨部位 → 淨額合併(B 正 S 負相加;review A5)。
+ 
+-    store 以 stock_no 為鍵,B/S 兩列同 key 會互蓋成「後到的那列」;
+-    淨額才是可平倉曝險。合併發生時 warning 留痕(prod 欄序假定下的異常訊號);
++    ⚠ store 改成 (stock_no, kind) 複合鍵後這層仍然必要:fut 列由
++    parse_open_interest_line 建構、kind 恆 "cash",同契約 B/S 兩列在複合鍵下**仍同鍵**,
++    不合併就會互蓋成「後到的那列」;而淨額才是可平倉曝險(期交所同契約多空本就淨額)。
++    合併發生時 warning 留痕(prod 欄序假定下的異常訊號);
+     淨額 0 = 無部位,不佔一列。avg_price 等附屬欄保留首列值(淨額語意下
+     混合成本無單一正解,寧取首列不硬算)。
+     """
+diff --git a/copycat/capital/client.py b/copycat/capital/client.py
+index 1c65285..115f74c 100644
+--- a/copycat/capital/client.py
++++ b/copycat/capital/client.py
+@@ -30,7 +30,6 @@ from pathlib import Path
+ from copycat.capital.balance import (
+     BalanceCollector,
+     ProfitRow,
+-    dedupe_positions,
+     merge_fut_positions,
+     parse_open_interest_line,
+     parse_profit_line,
+@@ -344,8 +343,9 @@ class CapitalClient:
+             logger.warning("GetRealBalanceReport rc=%s: %s", rc, self._com.return_code_message(rc))
+ 
+     def _on_balance_complete(self, positions: list[Position]) -> None:
+-        """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。"""
+-        self._pending_sec = dedupe_positions(positions)
++        """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。
++        同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
++        self._pending_sec = positions
+         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
+         self._balance_last_ts = time.monotonic()
+         self._profit.reset()
+@@ -361,14 +361,22 @@ class CapitalClient:
+         if pending is None:
+             logger.warning("損益報告遲到(本輪 pending 已發布),丟棄 %d 列", len(rows))
+             return
+-        by_no = {p.stock_no: p for p in pending}
++        by_key = {(p.stock_no, p.kind): p for p in pending}
+         for r in rows:
+-            p = by_no.get(r.stock_no)
++            # 兩段判別:查無股號 = 靜默(部位清單以即時庫存為權威,且 balance 側丟掉的列
++            # ——零股不足 1 張 / 未知種類——在損益報告仍有列,合併成一段會每 60s 洗版 warning)
++            same_no = [p for p in pending if p.stock_no == r.stock_no]
++            if not same_no:
++                continue
++            p = by_key.get((r.stock_no, r.kind)) if r.kind is not None else None
+             if p is None:
+-                continue  # 部位清單以即時庫存為權威,查無股號忽略
+-            if r.kind != p.kind:
+                 # kind=None(未知標籤)也略過:寧缺均價,不可套錯成本基礎
+-                logger.warning("profit row 種類不符略過: %s 報告=%s 部位=%s", r.stock_no, r.kind, p.kind)
++                logger.warning(
++                    "profit row 種類不符略過: %s 報告=%s 部位=%s",
++                    r.stock_no,
++                    r.kind,
++                    [q.kind for q in same_no],
++                )
+                 continue
+             p.avg_price = r.avg_price
+             p.pnl_base = r.pnl
+@@ -769,19 +777,26 @@ class CapitalClient:
+ 
+     # ------------------------------------------------------------------ 平倉
+ 
+-    def _close_dup_reason(self, key: str, side: BuySell) -> str | None:
++    def _close_dup_reason(self, inflight_key: str, scan_key: str, side: BuySell) -> str | None:
+         """平倉重複送單防護。部位快取要等成交回報→debounce→重查回來才更新,
+         窗口內(數秒)第二次平倉仍看得到原始全量持倉、照樣過量閘 → 兩張全量反向單。
+-        兩層擋:1. in-flight 窗口(送出後 ~10s);2. store 同 key 同向活躍委託。"""
+-        deadline = self._close_inflight.get(key)
++        兩層擋:1. in-flight 窗口(送出後 ~10s);2. store 同標的同向活躍委託。
++
++        ⚠ 兩把鍵語意不同,顯式分離:
++        - inflight_key = sec `"{股號}:{種類}"` / fut 契約碼 —— 同檔資+集保是兩筆各自的平倉,
++          互不阻擋;寫入(_submit_close_locked)/讀取/過期清理三端必須同鍵,
++          只改寫入端會讓 10s 防重送整層失效。
++        - scan_key = 股號/契約碼 —— 委託回報沒有庫存種類這維,活單掃描只能以標的比對
++          (同檔兩種類同向平倉時第二筆會被擋,是接受的保守行為)。"""
++        deadline = self._close_inflight.get(inflight_key)
+         if deadline is not None:
+             if time.monotonic() < deadline:
+-                return f"{key} 平倉單剛送出(在途),請先核對委託回報"
+-            del self._close_inflight[key]
++                return f"{scan_key} 平倉單剛送出(在途),請先核對委託回報"
++            del self._close_inflight[inflight_key]
+         want = "B" if side == "buy" else "S"
+         for o in self.store.orders():
+-            if o.actionable and o.stock_no == key and o.buy_sell == want:
+-                return f"{key} 已有同向活躍委託(seq={o.seq_no}),請先刪單或等其成交"
++            if o.actionable and o.stock_no == scan_key and o.buy_sell == want:
++                return f"{scan_key} 已有同向活躍委託(seq={o.seq_no}),請先刪單或等其成交"
+         return None
+ 
+     async def _close_blocked(
+@@ -791,36 +806,55 @@ class CapitalClient:
+         return CapitalGateBlockedError(reason)
+ 
+     async def _submit_close_locked(
+-        self, req: PositionCloseRequest, submit: Callable[[], Awaitable[OrderResult]]
++        self,
++        req: PositionCloseRequest,
++        inflight_key: str,
++        submit: Callable[[], Awaitable[OrderResult]],
+     ) -> OrderResult:
+         """in-flight 標記 + 送單。await 前就標記:同 loop 上的併發請求才擋得住。
+         submit 被前置閘擋下(CapitalGateBlockedError / AuditWriteError / NotReady,
+         錢沒動)→ 解鎖再 re-raise,立即重試不被「在途」擋(review A8);
+-        逾時/COM 例外的結果未知 → 不解鎖,寧可鎖滿窗口(多鎖 10s 是可接受代價)。"""
+-        self._close_inflight[req.key] = time.monotonic() + _CLOSE_INFLIGHT_S
++        逾時/COM 例外的結果未知 → 不解鎖,寧可鎖滿窗口(多鎖 10s 是可接受代價)。
++        鍵必須與 _close_dup_reason 的讀取/清理端同一把(見該處說明)。"""
++        self._close_inflight[inflight_key] = time.monotonic() + _CLOSE_INFLIGHT_S
+         try:
+             return await submit()
+         except (CapitalGateBlockedError, AuditWriteError, CapitalNotReadyError):
+-            self._close_inflight.pop(req.key, None)
++            self._close_inflight.pop(inflight_key, None)
+             raise
+ 
++    def _sec_no_position_reason(self, req: PositionCloseRequest) -> str:
++        """sec 查不到部位的兩種成因分流:req 沒帶 kind 且同檔多列 = 歧義,阻擋不猜
++        (猜錯種類 = 送錯單種)。position_for 與這次計數之間的競態只影響文案,可接受。"""
++        if req.kind is None:
++            same = [
++                p for p in self.store.positions() if p.market == "sec" and p.stock_no == req.key
++            ]
++            if len(same) > 1:
++                return f"{req.key} 多種庫存並存,請指定種類"
++        return f"{req.key} 無部位可平"
++
+     async def close_position(self, req: PositionCloseRequest) -> OrderResult:
+         if req.market == "sec":
+-            pos = self.store.position_for(req.key)
++            # kind 有值 → 精確鍵;None → 唯一列 fallback(舊 body 相容),多列則歧義阻擋
++            pos = self.store.position_for(req.key, req.kind)
+             if pos is None or pos.qty == 0 or pos.market != "sec":
+-                raise await self._close_blocked(req, f"{req.key} 無部位可平")
++                raise await self._close_blocked(req, self._sec_no_position_reason(req))
+             try:
+                 # kind 來自即時庫存 — 融資部位平倉送融資賣,不可送現股賣
+                 order = build_close_order(pos, req)
+             except ValueError as e:
+                 raise await self._close_blocked(req, str(e)) from e
+-            reason = self._close_dup_reason(req.key, order.buy_sell)
++            inflight_key = f"{req.key}:{pos.kind}"
++            reason = self._close_dup_reason(inflight_key, req.key, order.buy_sell)
+             if reason:
+                 raise await self._close_blocked(req, reason)
+             return await self._submit_close_locked(
+-                req, lambda: self.submit_stock_order(order, action="close")
++                req, inflight_key, lambda: self.submit_stock_order(order, action="close")
+             )
+ 
++        # fut:kind 忽略(OI 列不帶種類),唯一匹配即可 — 不寫死 "cash",
++        # 免得 OnOpenInterest 欄序 prod 校正時順手設了 kind 就靜默「無部位可平」
+         pos = self.store.position_for(req.key)
+         if pos is None or pos.qty == 0 or pos.market != "fut":
+             raise await self._close_blocked(req, f"{req.key} 無部位可平")
+@@ -829,12 +863,13 @@ class CapitalClient:
+             fut_order = build_future_close_order(pos, req)
+         except ValueError as e:
+             raise await self._close_blocked(req, str(e)) from e
+-        reason = self._close_dup_reason(req.key, fut_order.buy_sell)
++        reason = self._close_dup_reason(req.key, req.key, fut_order.buy_sell)
+         if reason:
+             raise await self._close_blocked(req, reason)
+         multiplier = self._multiplier_for_contract(req.key, seq_no="(close)")
+         return await self._submit_close_locked(
+             req,
++            req.key,
+             lambda: self.submit_future_order(
+                 fut_order, contract=req.key, multiplier=multiplier, new_close=1, action="close"
+             ),
+diff --git a/copycat/capital/models.py b/copycat/capital/models.py
+index b99abb5..2db4def 100644
+--- a/copycat/capital/models.py
++++ b/copycat/capital/models.py
+@@ -89,6 +89,9 @@ class PositionCloseRequest:
+     qty: int | None = None  # None=全部
+     price_type: PriceType = "market"
+     source: str = "panel"
++    # sec 庫存種類 cash/margin/short(同檔資+集保並存時的第二把鍵);
++    # None = 舊 body:同檔唯一列才成立,多列一律阻擋不猜。fut 忽略此欄。
++    kind: str | None = None
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/copycat/capital/store.py b/copycat/capital/store.py
+index c06e1e0..fe39a5a 100644
+--- a/copycat/capital/store.py
++++ b/copycat/capital/store.py
+@@ -71,7 +71,8 @@ class CapitalStore:
+         self._lock = threading.Lock()
+         self._orders: dict[str, _Agg] = {}
+         self._order_seq: list[str] = []  # 到達順序
+-        self._positions: dict[str, Position] = {}
++        # 鍵 = (stock_no, kind):同檔資+集保並存各佔一列,兩種類都平倉鍵得到
++        self._positions: dict[tuple[str, str], Position] = {}
+ 
+     def _set_status(self, a: _Agg, label: str) -> None:
+         if _RANK.get(label, 0) >= _RANK.get(a.status_label or "", 0):
+@@ -220,24 +221,30 @@ class CapitalStore:
+         with self._lock:
+             old = self._positions
+             for p in positions:
+-                prev = old.get(p.stock_no)
+-                # 損益查詢回來前沿用既有均價/損益基底(同種類才沿用 — 資/券成本基礎不同)
+-                if p.avg_price is None and prev is not None and prev.kind == p.kind:
++                prev = old.get((p.stock_no, p.kind))
++                # 損益查詢回來前沿用既有均價/損益基底(鍵已含 kind,天然只沿用同種類 —
++                # 資/券成本基礎不同,異種類是另一列不是同一列的續命)
++                if p.avg_price is None and prev is not None:
+                     p.avg_price = prev.avg_price
+                     p.pnl_base = prev.pnl_base
+                     p.pnl_base_price = prev.pnl_base_price
+                     p.pnl_cost = prev.pnl_cost
+-            self._positions = {p.stock_no: p for p in positions}
++            self._positions = {(p.stock_no, p.kind): p for p in positions}
+ 
+     def apply_profit_rows(self, rows: list[ProfitRow]) -> None:
+-        """損益試算回填(均價+含費稅息損益基底);查無股號忽略(部位清單以即時庫存為權威)。
++        """損益試算回填(均價+含費稅息損益基底);查無 (股號, 種類) 忽略
++        (部位清單以即時庫存為權威);kind=None(未知標籤)整列略過 —
++        寧缺均價,不可把不明成本基礎套到任一種類上。
+         用 dataclasses.replace 發布新物件而非就地變更:positions() 回傳的是物件參考,
+         route 在鎖外 asdict,就地改會撕裂讀(新 pnl 配舊基準價)。"""
+         with self._lock:
+             for r in rows:
+-                p = self._positions.get(r.stock_no)
++                if r.kind is None:
++                    continue
++                key = (r.stock_no, r.kind)
++                p = self._positions.get(key)
+                 if p is not None:
+-                    self._positions[r.stock_no] = dataclasses.replace(
++                    self._positions[key] = dataclasses.replace(
+                         p,
+                         avg_price=r.avg_price,
+                         pnl_base=r.pnl,
+@@ -249,6 +256,11 @@ class CapitalStore:
+         with self._lock:
+             return list(self._positions.values())
+ 
+-    def position_for(self, stock_no: str) -> Position | None:
++    def position_for(self, stock_no: str, kind: str | None = None) -> Position | None:
++        """平倉查找。kind 有值 = 精確鍵;kind=None = 同股號恰一列才回傳,
++        多列(同檔資+集保並存)回 None — 平倉種類猜錯會送錯單種,寧可讓 caller 阻擋。"""
+         with self._lock:
+-            return self._positions.get(stock_no)
++            if kind is not None:
++                return self._positions.get((stock_no, kind))
++            hits = [p for (no, _kind), p in self._positions.items() if no == stock_no]
++            return hits[0] if len(hits) == 1 else None
+diff --git a/copycat/server/capital_api.py b/copycat/server/capital_api.py
+index ba6761a..c6877fb 100644
+--- a/copycat/server/capital_api.py
++++ b/copycat/server/capital_api.py
+@@ -98,6 +98,7 @@ class PositionCloseBody(BaseModel):
+     qty: int | None = None
+     price_type: _PriceType = "market"
+     source: str = "panel"
++    kind: str | None = None  # sec 庫存種類 cash/margin/short;未帶 = 同檔唯一列才成立
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -216,6 +217,7 @@ async def capital_position_close(request: Request, body: PositionCloseBody) -> d
+         qty=body.qty,
+         price_type=body.price_type,
+         source=body.source,
++        kind=body.kind,
+     )
+     return dataclasses.asdict(await client.close_position(req))
+ 
+diff --git a/docs/next-time.md b/docs/next-time.md
+index d7dbf7a..ec06f27 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -1,4 +1,14 @@
+ 
++## 2026-08-05(capital-position-key-kind 收尾留尾巴)
++
++- [ ] **SC-7 真實環境驗證待補**(群益夜間登入 fail,memory 記「待白天觀察」):下次自然
++  重啟後打 `GET /api/capital/positions` 確認形狀正常、面板部位列顯示與現況一致(單一
++  種類帳戶下畫面應無差異,sec 列多一個 現/資/券 小字標籤)。同檔資+集保並存是低頻
++  狀態,真要驗兩列並存需等實際持倉出現
++- [ ] 平倉 dup guard 未按 kind 細分(本輪 out of scope,白名單 5 的保守行為):同檔兩
++  種類**同向**平倉時,第二筆會被「已有同向活躍委託」擋(委託回報沒有庫存種類這一維,
++  活單掃描只能以標的比對)。要細分需先確認回報端能否還原種類(sFlag / flag_label)
++
+ ## 2026-08-05(txo-contract-last-price Phase 5 review 沉澱)
+ 
+ - [ ] **TXO 市價估價的 reset 窗 UX**(review S-1,P1 判為 Known Risk 不擋本輪):
+@@ -108,7 +118,7 @@
+ 
+ - [ ] COM 卡死 stalled 心跳偵測(review B7):寫入 timeout 連發 / 幫浦圈停擺目前只靠 log,需心跳觀測基建(status 加 last_pump_ts + watchdog 降級);監控面非正確性,本輪 deferred
+ - [ ] 期貨改價 `CorrectPriceBySeqNo` 末參數 nTradeType=0(ROD)對期權 IOC/FOK 單的影響 prod 首驗(review A6;test 沙盒未開通不可先驗)— 若群益端把改價後 TIF 重設為 ROD,IOC 單改價語意會變
+-- [ ] 部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到。〔2026-08-04 查證:dedupe 實際住在 `balance.py`(`dedupe_positions` :70-88 / `merge_fut_positions` :92-112,由 `client.py:348/:399` 寫入前套用),`store.py` 只是 `stock_no` 單鍵 dict(:74,:230)— 那兩個函式是單鍵設計的補償層(docstring 自承「寧少不錯」)。改造範圍 = store 鍵 + 移除 sec dedupe 補償 + 平倉 `req.key` 帶 kind(client.py:809/:824)+ REST 與前端 `CapitalPositionsList`(以 stock_no 找列)連動,含 wire 契約,比原記載大〕
++- [x] ~~部位 store `(stock_no, kind)` 鍵位改造(review A4):現況同檔多種類庫存 dedupe 只留張數大者(sec)/同契約淨額合併(fut),被捨棄種類平倉鍵不到。〔2026-08-04 查證:dedupe 實際住在 `balance.py`(`dedupe_positions` :70-88 / `merge_fut_positions` :92-112,由 `client.py:348/:399` 寫入前套用),`store.py` 只是 `stock_no` 單鍵 dict(:74,:230)— 那兩個函式是單鍵設計的補償層(docstring 自承「寧少不錯」)。改造範圍 = store 鍵 + 移除 sec dedupe 補償 + 平倉 `req.key` 帶 kind(client.py:809/:824)+ REST 與前端 `CapitalPositionsList`(以 stock_no 找列)連動,含 wire 契約,比原記載大〕~~ **2026-08-05 修畢(mod/capital-position-key-kind)**:`store._positions` 改 `(stock_no, kind)` 複合鍵(`set_positions` carry-over / `apply_profit_rows` 同鍵回填、kind=None 整列略過;`position_for(stock_no, kind=None)` 三態 = 精確鍵 / 唯一列 fallback / 多列回 None 不猜);**`balance.dedupe_positions` 補償層已刪**(`merge_fut_positions` 保留 — fut 列 kind 恆 cash,同契約 B/S 複合鍵下仍同鍵,不合併會互蓋);`close_position` sec 走 `(key, kind)`,無 kind 且同檔多列 → 403 ORDER_BLOCKED「請指定種類」(fail-safe 不猜種類),fut 走唯一匹配不寫死 cash;close 兩把鍵顯式分離(inflight 含 kind、活單掃描仍以標的);`_on_profit_complete` 兩段判別(查無股號靜默 / 種類不符才 warning);wire 加 optional `kind`(`PositionCloseRequest` / `PositionCloseBody` / 前端 `CapitalCloseBody`),前端 rowKey 複合化 + sec 列種類標籤(現/資/券,代號 span 的獨立子元素)+ 確認彈窗種類列。gate:pytest 1686 / npm test 1002 / ruff / pyright 0 / validate 42/42。**真環境待驗**(群益登入 + 面板部位列,見下)
+ 
+ ## 2026-07-29(trade-layout-rework 順手清單)
+ 
+diff --git a/frontend/src/components/capital/CapitalPositionsList.test.tsx b/frontend/src/components/capital/CapitalPositionsList.test.tsx
+index 6ac843c..3b8f7ec 100644
+--- a/frontend/src/components/capital/CapitalPositionsList.test.tsx
++++ b/frontend/src/components/capital/CapitalPositionsList.test.tsx
+@@ -153,10 +153,65 @@ describe("CapitalPositionsList", () => {
+     expect(screen.getByText("23000")).toBeTruthy();
+     fireEvent.click(screen.getByText("確認"));
+     await waitFor(() => expect(bodies.length).toBe(1));
+-    expect(bodies[0]).toMatchObject({ market: "fut", key: "TXFI6", price: 23000, qty: 2 });
++    expect(bodies[0]).toEqual({
++      market: "fut",
++      key: "TXFI6",
++      price: 23000,
++      qty: 2,
++      kind: "cash",
++    });
+     await waitFor(() => expect(screen.queryByText("確認平倉")).toBeNull());
+   });
+ 
++  it("同檔資+集保並存 → 兩列各帶種類標籤,平倉各自送出自己的 kind", async () => {
++    const bodies: unknown[] = [];
++    mockFetch({
++      "/api/capital/status": () => json(STATUS),
++      "/api/capital/position/close": (init) => {
++        bodies.push(JSON.parse(String(init?.body)));
++        return json({ ok: true, code: 0, message: "ok", seq_no: "006" });
++      },
++      "/api/capital/positions": () =>
++        json({
++          positions: [
++            pos({ kind: "cash", qty: 1 }),
++            pos({ kind: "margin", qty: 3, avg_price: 980 }),
++          ],
++        }),
++    });
++    renderList("sec", () => 985);
++    await screen.findAllByText(/2330/);
++    // 代號文字節點不變(RTL getNodeText 只取直接文字子節點),種類是獨立子元素
++    expect(screen.getAllByText("2330 台積電").length).toBe(2);
++    expect(screen.getByText("現")).toBeTruthy();
++    expect(screen.getByText("資")).toBeTruthy();
++
++    fireEvent.click(screen.getAllByText("平倉")[0]!);
++    expect(screen.getByText("現股")).toBeTruthy(); // 確認彈窗種類列
++    fireEvent.click(screen.getByText("確認"));
++    await waitFor(() => expect(bodies.length).toBe(1));
++
++    fireEvent.click(screen.getAllByText("平倉")[1]!);
++    expect(screen.getByText("融資")).toBeTruthy();
++    fireEvent.click(screen.getByText("確認"));
++    await waitFor(() => expect(bodies.length).toBe(2));
++    expect(bodies[0]).toEqual({ market: "sec", key: "2330", price: 985, qty: 1, kind: "cash" });
++    expect(bodies[1]).toEqual({ market: "sec", key: "2330", price: 985, qty: 3, kind: "margin" });
++  });
++
++  it("同檔兩列的 React key 唯一(複合鍵),無 duplicate key warning", async () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
++    mockFetch({
++      "/api/capital/status": () => json(STATUS),
++      "/api/capital/positions": () =>
++        json({ positions: [pos({ kind: "cash" }), pos({ kind: "margin" })] }),
++    });
++    renderList("sec", () => 985);
++    await screen.findAllByText(/2330/);
++    const msgs = spy.mock.calls.map((c) => String(c[0]));
++    expect(msgs.filter((m) => m.includes("same key"))).toEqual([]);
++  });
++
+   it("平倉 400 BROKER_REJECTED → 錯誤列繁中顯示(review A2)", async () => {
+     mockFetch({
+       "/api/capital/status": () => json(STATUS),
+diff --git a/frontend/src/components/capital/CapitalPositionsList.tsx b/frontend/src/components/capital/CapitalPositionsList.tsx
+index 35a915b..0fe2780 100644
+--- a/frontend/src/components/capital/CapitalPositionsList.tsx
++++ b/frontend/src/components/capital/CapitalPositionsList.tsx
+@@ -14,6 +14,18 @@ interface CapitalPositionsListProps {
+ 
+ const GRID = "grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-baseline gap-x-3";
+ 
++/** sec 庫存種類標籤(列內小字 / 確認彈窗全稱);fut 不顯示(OI 列無種類)。 */
++const KIND_TEXT: Record<string, { short: string; full: string }> = {
++  cash: { short: "現", full: "現股" },
++  margin: { short: "資", full: "融資" },
++  short: { short: "券", full: "融券" },
++};
++
++/** 部位列鍵 = 後端 store 的複合鍵:同檔資+集保並存時兩列才分得開。 */
++function rowKeyOf(p: CapitalPosition): string {
++  return `${p.stock_no}:${p.kind}`;
++}
++
+ /** 部位列表(market 過濾)+ 平倉(確認彈窗顯示閘用估價;後端另有 10s 防重送)。 */
+ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsListProps) {
+   const { data } = useCapitalPositions();
+@@ -26,7 +38,8 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
+   const codeLabel = market === "fut" ? "契約" : "代號";
+   const positions = (data?.positions ?? []).filter((p) => p.market === market);
+   // closing 走 key 而非快照:dialog 開著時回報更新部位,顯示跟最新資料走;部位消失自動關窗
+-  const closing = closingKey !== null ? positions.find((p) => p.stock_no === closingKey) : undefined;
++  const closing =
++    closingKey !== null ? positions.find((p) => rowKeyOf(p) === closingKey) : undefined;
+   const estimate = closing !== undefined ? (closePriceOf?.(closing) ?? null) : null;
+ 
+   if (positions.length === 0) {
+@@ -40,6 +53,7 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
+       key: closing.stock_no,
+       price: estimate,
+       qty: Math.abs(closing.qty),
++      kind: closing.kind, // 同檔多種庫存時後端靠它精確鍵到(未帶且多列會被阻擋)
+     });
+     setClosingKey(null);
+   }
+@@ -64,9 +78,19 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
+         const isLong = p.qty > 0;
+         const est = closePriceOf?.(p) ?? null;
+         const pnl = p.pnl_base;
++        const kindText = market === "sec" ? KIND_TEXT[p.kind] : undefined;
+         return (
+-          <li key={p.stock_no} className={cn(GRID, "border-b border-line/60 py-1.5 font-mono text-xs")}>
+-            <span className="truncate text-ink">{`${p.stock_no} ${p.name}`.trim()}</span>
++          <li
++            key={rowKeyOf(p)}
++            className={cn(GRID, "border-b border-line/60 py-1.5 font-mono text-xs")}
++          >
++            {/* 種類是獨立子元素而非併進代號文字:代號的精確字串斷言(RightRail)才不會被打斷 */}
++            <span className="truncate text-ink">
++              {`${p.stock_no} ${p.name}`.trim()}
++              {kindText !== undefined && (
++                <span className="ml-1 text-ink-dim">{kindText.short}</span>
++              )}
++            </span>
+             <span className={cn(isLong ? "text-bull" : "text-bear")}>{isLong ? "多" : "空"}</span>
+             <span className="text-ink-muted">{`${Math.abs(p.qty)} ${unit}`}</span>
+             <span className="text-ink">{p.avg_price !== null ? p.avg_price.toFixed(2) : "—"}</span>
+@@ -82,7 +106,7 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
+               type="button"
+               disabled={closePosition.isPending || est === null}
+               title={est === null ? "無行情估價" : undefined}
+-              onClick={() => setClosingKey(p.stock_no)}
++              onClick={() => setClosingKey(rowKeyOf(p))}
+               className="border border-line px-2 py-0.5 text-ink-muted transition-colors hover:border-loss hover:text-loss disabled:opacity-40"
+             >
+               平倉
+@@ -95,6 +119,10 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
+           title="確認平倉"
+           rows={[
+             { label: codeLabel, value: `${closing.stock_no} ${closing.name}`.trim() },
++            // 種類只在證券成立(fut 的 OI 列無種類);同檔兩列時這是唯一的分辨依據
++            ...(market === "sec" && KIND_TEXT[closing.kind] !== undefined
++              ? [{ label: "種類", value: KIND_TEXT[closing.kind]!.full }]
++              : []),
+             {
+               label: "部位",
+               value: `${closing.qty > 0 ? "多" : "空"} ${Math.abs(closing.qty)} ${unit} · 均 ${
+diff --git a/frontend/src/types.ts b/frontend/src/types.ts
+index 2fb0148..c52bbf2 100644
+--- a/frontend/src/types.ts
++++ b/frontend/src/types.ts
+@@ -157,6 +157,8 @@ export interface CapitalCloseBody {
+   qty?: number | null; // null=全部
+   price_type?: "limit" | "market";
+   source?: string;
++  /** sec 庫存種類 cash/margin/short — 同檔資+集保並存時的第二把鍵(未帶且多列 → 後端阻擋)。 */
++  kind?: string;
+ }
+ 
+ // ---- futures 行情(對應 copycat/server/futures_engine.py state())----
+diff --git a/tests/capital/test_balance.py b/tests/capital/test_balance.py
+index 801acc3..8b94a57 100644
+--- a/tests/capital/test_balance.py
++++ b/tests/capital/test_balance.py
+@@ -8,7 +8,6 @@ import pytest
+ from copycat.capital.balance import (
+     BalanceCollector,
+     ProfitRow,
+-    dedupe_positions,
+     merge_fut_positions,
+     parse_balance_line,
+     parse_open_interest_line,
+@@ -123,18 +122,6 @@ def test_unknown_kind_skipped() -> None:
+     assert parse_balance_line(RAW_T_BOUGHT.replace(",T,", ",Z,")) is None
+ 
+ 
+-def test_dedupe_keeps_larger_position() -> None:
+-    # 同檔集保+融資並存:store 以 stock_no 為鍵,保留張數大者(被捨棄部分暫不可平,待分種類建模)
+-    cash = Position(market="sec", stock_no="2330", qty=1, kind="cash")
+-    margin = Position(market="sec", stock_no="2330", qty=3, kind="margin")
+-    other = Position(market="sec", stock_no="2317", qty=2, kind="cash")
+-    out = dedupe_positions([cash, margin, other])
+-    assert sorted((p.stock_no, p.qty, p.kind) for p in out) == [
+-        ("2317", 2, "cash"),
+-        ("2330", 3, "margin"),
+-    ]
+-
+-
+ def test_collector_flush_on_end_marker() -> None:
+     got: list[list[object]] = []
+     c = BalanceCollector(on_complete=got.append)
+diff --git a/tests/capital/test_client.py b/tests/capital/test_client.py
+index 0d7c5f9..b78d0e1 100644
+--- a/tests/capital/test_client.py
++++ b/tests/capital/test_client.py
+@@ -780,7 +780,8 @@ async def test_close_inflight_unlocked_when_gate_blocks_submit(tmp_path: Path) -
+         with pytest.raises(CapitalGateBlockedError) as ei:
+             await client.close_position(req)
+         assert ei.value.reason == "order_disabled"
+-    assert "2330" not in client._close_inflight
++    # 複合鍵("2330:cash")亦已解鎖 — 斷言空 dict 而非「某鍵不在」,避免改鍵後恆真變 vacuous
++    assert client._close_inflight == {}
+     assert com.sent == []
+ 
+ 
+@@ -846,6 +847,134 @@ async def test_close_fut_builds_reverse_ioc_new_close_1(tmp_path: Path) -> None:
+     assert len(com.sent) == 1
+ 
+ 
++# ── 複合鍵 (stock_no, kind) 防回歸 ──────────────────────────────
++
++
++def _sec_positions_two_kinds() -> list[Position]:
++    return [
++        Position(market="sec", stock_no="2330", qty=1, kind="cash"),
++        Position(market="sec", stock_no="2330", qty=3, kind="margin"),
++    ]
++
++
++async def test_close_sec_with_kind_hits_exact_row(tmp_path: Path) -> None:
++    # 同檔資+集保並存:帶 kind 精確鍵到融資列 → 送融資賣(送現股賣會變成賣掉集保部位)
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client.store.set_positions(_sec_positions_two_kinds())
++    req = PositionCloseRequest(market="sec", key="2330", price=590.0, kind="margin")
++    res = await _drive(client, lambda: client.close_position(req))
++    assert res.ok is True
++    fields = _sent_fields(com.sent[0])
++    assert fields["sBuySell"] == 1 and fields["sFlag"] == 1  # 融資多 → 融資賣
++    assert fields["nQty"] == 3  # 融資列的張數,不是集保列的 1
++
++
++async def test_close_sec_without_kind_blocks_ambiguous_but_allows_unique(tmp_path: Path) -> None:
++    # 舊 body(不帶 kind):多列 = 歧義,fail-safe 阻擋不猜;唯一列則照舊成功(backward compat)
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client.store.set_positions(_sec_positions_two_kinds())
++    req = PositionCloseRequest(market="sec", key="2330", price=590.0)
++    with pytest.raises(CapitalGateBlockedError) as ei:
++        await client.close_position(req)
++    assert ei.value.reason is not None and "請指定種類" in ei.value.reason
++    assert com.sent == []
++    assert "請指定種類" in _audit_lines(client)[-1]["blocked"]
++
++    client.store.set_positions([Position(market="sec", stock_no="2330", qty=1, kind="cash")])
++    res = await _drive(client, lambda: client.close_position(req))
++    assert res.ok is True
++    assert _sent_fields(com.sent[0])["sFlag"] == 0  # 現股賣
++
++
++async def test_close_inflight_separates_kinds_but_locks_same_kind(tmp_path: Path) -> None:
++    # P0-1 兩面:同檔兩種類的 in-flight 互不阻擋;同一種類第二次仍被 10s「在途」擋
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client.store.set_positions(_sec_positions_two_kinds())
++    cash = PositionCloseRequest(market="sec", key="2330", price=590.0, kind="cash")
++    margin = PositionCloseRequest(market="sec", key="2330", price=590.0, kind="margin")
++    assert (await _drive(client, lambda: client.close_position(cash))).ok is True
++    assert (await _drive(client, lambda: client.close_position(margin))).ok is True
++    assert len(com.sent) == 2  # 種類不同 = 兩筆各自的平倉,不互擋
++    with pytest.raises(CapitalGateBlockedError) as ei:
++        await client.close_position(cash)
++    assert ei.value.reason is not None and "在途" in ei.value.reason
++    assert len(com.sent) == 2
++    assert sorted(client._close_inflight) == ["2330:cash", "2330:margin"]
++
++
++def test_balance_chain_keeps_both_kinds_of_same_stock(tmp_path: Path) -> None:
++    # 全鏈:balance 兩列都留(不再 dedupe)→ profit 各自回填 → finalize 兩列並存
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client, futures_account=None)
++    client._handle_balance(
++        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
++    )
++    client._handle_balance("3357,T,0,0,0,0,2000,0,0,0,0,2000,0,0,2000,0,0,A123456789,1234567890")
++    client._handle_balance("##")
++    profit_margin = (
++        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
++        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
++    )
++    client._handle_profit("000,查詢成功")
++    client._handle_profit(profit_margin)
++    client._handle_profit(profit_margin.replace(",融資,", ",現股,").replace(",150.55,", ",140.25,"))
++    client._handle_profit("##,,,,")
++    assert len(client.store.positions()) == 2
++    m = client.store.position_for("3357", "margin")
++    c = client.store.position_for("3357", "cash")
++    assert m is not None and m.qty == 3 and m.avg_price == 150.55
++    assert c is not None and c.qty == 2 and c.avg_price == 140.25  # 各拿自己種類的均價
++
++
++def test_profit_row_for_dropped_stock_is_silent(
++    tmp_path: Path, caplog: pytest.LogCaptureFixture
++) -> None:
++    """P1-3 兩段判別:balance 側丟掉的股號(零股不足 1 張)在損益報告仍有列 →
++    靜默(否則每 60s 洗版 warning);真正的種類不符才 warning。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client, futures_account=None)
++    with caplog.at_level("WARNING"):
++        client._handle_balance(
++            "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
++        )
++        client._handle_balance(  # 2330 只有 500 股(零股不足 1 張)→ balance 側丟掉
++            "2330,T,0,0,0,0,500,0,0,0,0,500,0,0,500,0,0,A123456789,1234567890"
++        )
++        client._handle_balance("##")
++        client._handle_profit(
++            "台積電,2330,新台幣,現股,500,1000.00,0.27,468000,464000,12345,980.00,451650,"
++            "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
++        )
++        client._handle_profit("##,,,,")
++    assert not [r for r in caplog.records if "種類不符" in r.message]
++    assert client.store.position_for("3357", "margin") is not None  # 本輪照常發布
++
++    caplog.clear()
++    other = _client(FakeCom(), tmp_path / "b")  # 每輪查詢會 reset collector,對照用新 client
++    _mark_ready(other, futures_account=None)
++    with caplog.at_level("WARNING"):  # 對照:股號在但種類對不上 → 照樣 warning
++        other._handle_balance(
++            "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
++        )
++        other._handle_balance("##")
++        other._handle_profit(
++            "臺慶科,3357,新台幣,現股,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
++            "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
++        )
++        other._handle_profit("##,,,,")
++    assert any("種類不符" in r.message for r in caplog.records)
++    p = other.store.position_for("3357", "margin")
++    assert p is not None and p.avg_price is None  # 種類不符不回填
++
++
+ async def test_close_fut_no_position_blocked(tmp_path: Path) -> None:
+     com = FakeCom()
+     client = _client(com, tmp_path)
+diff --git a/tests/capital/test_store.py b/tests/capital/test_store.py
+index 8b2798d..c0042f1 100644
+--- a/tests/capital/test_store.py
++++ b/tests/capital/test_store.py
+@@ -275,6 +275,7 @@ def test_set_positions_replaces_not_merges() -> None:
+ 
+ 
+ def test_apply_profit_rows_fills_existing_only() -> None:
++    """複合鍵回填:同 (股號, 種類) 才落地;kind=None(未知標籤)整列略過,不可覆蓋已知均價。"""
+     from copycat.capital.balance import ProfitRow
+     from copycat.capital.models import Position
+ 
+@@ -282,11 +283,13 @@ def test_apply_profit_rows_fills_existing_only() -> None:
+     s.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
+     s.apply_profit_rows(
+         [
+-            ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0),
+-            ProfitRow("9999", 1.0, None, None, None),  # 查無股號忽略(部位以即時庫存為權威)
++            ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0, kind="margin"),
++            # 未知標籤:寧缺均價也不可套錯成本基礎 → 整列略過(不得蓋掉上一列的融資均價)
++            ProfitRow("3357", 999.0, 1.0, 2.0, 3.0, kind=None),
++            ProfitRow("9999", 1.0, None, None, None, kind="cash"),  # 查無股號忽略
+         ]
+     )
+-    p = s.position_for("3357")
++    p = s.position_for("3357", "margin")
+     assert p is not None
+     assert p.avg_price == 311.75
+     assert p.pnl_base == -74636.0
+@@ -295,24 +298,51 @@ def test_apply_profit_rows_fills_existing_only() -> None:
+     assert len(s.positions()) == 1
+ 
+ 
+-def test_set_positions_carries_profit_same_kind_only() -> None:
+-    """損益查詢回來前,新一輪庫存覆寫不可閃掉已知均價/損益基底;種類變了成本基礎不同,不沿用。"""
++def test_set_positions_carries_profit_by_composite_key() -> None:
++    """損益查詢回來前,新一輪庫存覆寫不可閃掉已知均價/損益基底;
++    鍵含 kind → 同種類天然沿用、異種類是「另一列」(成本基礎不混用)。"""
+     from copycat.capital.balance import ProfitRow
+     from copycat.capital.models import Position
+ 
+     s = CapitalStore()
+     s.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
+-    s.apply_profit_rows([ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0)])
+-    s.set_positions([Position(market="sec", stock_no="3357", qty=4, kind="margin")])
+-    p = s.position_for("3357")
+-    assert p is not None
+-    assert p.avg_price == 311.75
+-    assert p.pnl_base == -74636.0 and p.pnl_base_price == 288.0 and p.pnl_cost == 935000.0
+-    s.set_positions([Position(market="sec", stock_no="3357", qty=4, kind="cash")])
+-    p = s.position_for("3357")
+-    assert p is not None
+-    assert p.avg_price is None
+-    assert p.pnl_base is None and p.pnl_base_price is None and p.pnl_cost is None
++    s.apply_profit_rows([ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0, kind="margin")])
++    s.set_positions(
++        [
++            Position(market="sec", stock_no="3357", qty=4, kind="margin"),
++            Position(market="sec", stock_no="3357", qty=1, kind="cash"),
++        ]
++    )
++    assert len(s.positions()) == 2  # 同檔資+集保並存各佔一列
++    m = s.position_for("3357", "margin")
++    assert m is not None and m.qty == 4
++    assert m.avg_price == 311.75
++    assert m.pnl_base == -74636.0 and m.pnl_base_price == 288.0 and m.pnl_cost == 935000.0
++    c = s.position_for("3357", "cash")
++    assert c is not None and c.qty == 1
++    assert c.avg_price is None  # 集保列是另一列,不沿用融資成本
++    assert c.pnl_base is None and c.pnl_base_price is None and c.pnl_cost is None
++
++
++def test_position_for_kind_exact_unique_and_ambiguous() -> None:
++    """position_for 三態:kind 精確鍵到 / kind=None 唯一列 fallback / kind=None 多列回 None(不猜)。"""
++    from copycat.capital.models import Position
++
++    s = CapitalStore()
++    s.set_positions(
++        [
++            Position(market="sec", stock_no="3357", qty=3, kind="margin"),
++            Position(market="sec", stock_no="3357", qty=1, kind="cash"),
++            Position(market="sec", stock_no="2330", qty=2, kind="cash"),
++        ]
++    )
++    m = s.position_for("3357", "margin")
++    assert m is not None and m.qty == 3 and m.kind == "margin"
++    assert s.position_for("3357", "short") is None  # 精確查:無此種類
++    assert s.position_for("3357") is None  # 多列歧義:不猜
++    only = s.position_for("2330")
++    assert only is not None and only.qty == 2  # 唯一列 → fallback 成立
++    assert s.position_for("9999") is None
+ 
+ 
+ def test_fut_position_keyed_by_contract() -> None:
+diff --git a/tests/server/test_capital_api.py b/tests/server/test_capital_api.py
+index 32c2b50..2bbd270 100644
+--- a/tests/server/test_capital_api.py
++++ b/tests/server/test_capital_api.py
+@@ -226,6 +226,25 @@ class TestOrdersPositions:
+             assert [p["stock_no"] for p in positions] == ["2330"]
+             assert positions[0]["market"] == "sec"
+ 
++    def test_positions_keep_both_kinds_of_same_stock(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        # 複合鍵:同檔資+集保並存回兩列(舊 dedupe 只留張數大者,被捨棄種類平倉鍵不到)
++        cap, _com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            cap.store.set_positions(
++                [
++                    Position(market="sec", stock_no="2330", qty=1, kind="cash"),
++                    Position(market="sec", stock_no="2330", qty=3, kind="margin"),
++                ]
++            )
++            positions = client.get("/api/capital/positions").json()["positions"]
++            assert [(p["stock_no"], p["kind"], p["qty"]) for p in positions] == [
++                ("2330", "cash", 1),
++                ("2330", "margin", 3),
++            ]
++
+ 
+ # ---------------------------------------------------------------------------
+ # order/stock(SC-2)
+@@ -446,6 +465,50 @@ class TestPositionClose:
+             assert fields["sBuySell"] == 1  # 現股多 → 反向賣
+             assert fields["nQty"] == 2
+ 
++    def test_close_body_kind_selects_row(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        # body 的 kind 透傳到 client:同檔資+集保並存時精確鍵到融資列(送融資賣)
++        cap, com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            cap.store.set_positions(
++                [
++                    Position(market="sec", stock_no="2330", qty=2, kind="cash"),
++                    Position(market="sec", stock_no="2330", qty=5, kind="margin"),
++                ]
++            )
++            res = client.post(
++                "/api/capital/position/close",
++                json={"market": "sec", "key": "2330", "price": 590.0, "kind": "margin"},
++            )
++            assert res.status_code == 200
++            fields = _sent(com, "stock")[0][1]
++            assert isinstance(fields, dict)
++            assert fields["sFlag"] == 1 and fields["nQty"] == 5  # 融資賣、融資列張數
++
++    def test_close_without_kind_ambiguous_403(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        cap, com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            cap.store.set_positions(
++                [
++                    Position(market="sec", stock_no="2330", qty=2, kind="cash"),
++                    Position(market="sec", stock_no="2330", qty=5, kind="margin"),
++                ]
++            )
++            res = client.post(
++                "/api/capital/position/close",
++                json={"market": "sec", "key": "2330", "price": 590.0},
++            )
++            assert res.status_code == 403
++            detail = res.json()["detail"]
++            assert detail["error"] == "ORDER_BLOCKED"
++            assert "請指定種類" in detail["reason"]
++            assert _sent(com, "stock") == []  # 猜錯種類 = 送錯單種,寧可不送
++
+ 
+ # ---------------------------------------------------------------------------
+ # 群益拒單透傳 400 BROKER_REJECTED(review A2/C1/C2)

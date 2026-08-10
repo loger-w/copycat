@@ -1,0 +1,16 @@
+{
+  "findings": [
+    {"id": "P0-1", "severity": "P0", "title": "inflight 鍵複合化只改寫入端,讀取/清理端(_close_dup_reason :776/:780)仍吃 req.key → sec 平倉 10s 防重送整層失效;既有防重送測試會紅但被判不該紅", "resolution": "accepted — inflight_key / scan_key 顯式分離為兩參數;_submit_close_locked 加 inflight_key 參數;白名單 5 精確化;測試補兩面鎖"},
+    {"id": "P1-1", "severity": "P1", "title": "漏標必紅:test_apply_profit_rows_fills_existing_only(ProfitRow kind 預設 None 撞新 skip 規則)", "resolution": "accepted — 標 🔴 該改:ProfitRow 補 kind=margin + kind=None skip 案例"},
+    {"id": "P1-2", "severity": "P1", "title": "SC-2 寫 400 GATE_BLOCKED,實際契約 403 ORDER_BLOCKED(handler + 既有測試已鎖)", "resolution": "accepted — SC-2 與新測試清單更正"},
+    {"id": "P1-3", "severity": "P1", "title": "profit 回填單次複合鍵 lookup 把「查無股號(靜默)」升級成每 60s warning,原文案無法維持", "resolution": "accepted — 維持兩段判別(same_no 空靜默 / 種類不符 warning 含 kind 清單)"},
+    {"id": "P1-4", "severity": "P1", "title": "既有測試未逐一標;test_client.py:783 複合鍵下恆真變 vacuous", "resolution": "accepted — 逐檔補標(含前端三支);:783 標 🔴 改複合鍵斷言"},
+    {"id": "P2-1", "severity": "P2", "title": "SC-5 種類標籤版面歸屬未定(GRID 六欄/表頭)", "resolution": "accepted — 置於代號 span 內,GRID 不動,補可觀察描述"},
+    {"id": "P2-2", "severity": "P2", "title": "前端 close body 斷言是 toMatchObject,補 kind 不會先紅;行號引用錯(:142 是 mock 註冊,斷言在 :156)", "resolution": "accepted — 改 toEqual/toHaveProperty,行號更正"},
+    {"id": "P2-3", "severity": "P2", "title": "「渲染兩列不 crash」恆綠 vacuous", "resolution": "accepted — console.error spy 或行為斷言(兩列 body kind 不同)"},
+    {"id": "P2-4", "severity": "P2", "title": "失效註解未列入改動(merge_fut_positions docstring / store.set_positions 註解)", "resolution": "accepted — 列入 🔴 backend 包"},
+    {"id": "P2-5", "severity": "P2", "title": "fut 分支寫死 position_for(key, \"cash\") 依賴無測試保護的隱形不變量", "resolution": "accepted — 改 position_for(req.key) 唯一匹配(與現況逐字等價)"},
+    {"id": "P2-6", "severity": "P2", "title": "next-time:111 勾銷未列入 commit 計畫", "resolution": "accepted — 補 chore 包"}
+  ],
+  "summary": "reviewer 附帶查證:apply_profit_rows prod 無 caller 屬實;parse_open_interest_line 不設 kind 屬實;audit asdict(req) 自動含 kind;RightRail/futures-ladder/FuturesPage 只讀 stock_no/qty/market 成立。P0 觸發限縮加輪。"
+}

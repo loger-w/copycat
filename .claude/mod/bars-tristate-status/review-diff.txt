@@ -1,0 +1,1768 @@
+diff --git a/copycat/live/futures_source.py b/copycat/live/futures_source.py
+index 22c32af..efce3df 100644
+--- a/copycat/live/futures_source.py
++++ b/copycat/live/futures_source.py
+@@ -113,10 +113,10 @@ class FuturesQuoteSource(TC4QuoteSource):
+         end = f"{end_date.replace('-', '')}23"
+         if tf == "1":
+             return parse_1k_bars(
+-                self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE),
++                self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows,
+                 FUTURES_MINUTE_DOMAIN,
+             )
+-        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
++        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
+ 
+     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
+ 
+diff --git a/copycat/live/stock_source.py b/copycat/live/stock_source.py
+index bc45381..e5431e4 100644
+--- a/copycat/live/stock_source.py
++++ b/copycat/live/stock_source.py
+@@ -16,7 +16,7 @@ import datetime as _dt
+ import logging
+ import threading
+ import time
+-from typing import Any, Callable, TypedDict
++from typing import Any, Callable, Literal, TypedDict
+ 
+ from copycat.live.stock_models import StockTick, parse_hist_tick
+ from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
+@@ -62,6 +62,17 @@ class Bar(TypedDict):
+     v: int
+ 
+ 
++#: K 線空結果的原因三態。**沒有「確定無資料」這一態** —— TC4 的 GETHISDATA 空頁
++#: 不區分「未備妥」與「無資料」(tc4.py 檔頭),所以:
++#:
++#: - `"timeout"` = 等滿 deadline 仍未備妥(慢 **或** 查無此檔,協定上不可分)。
++#: - `"ok"` = 首頁備妥、收割跑完(結果仍可能是空,例如 bar 全落在域外)。
++#: - `"disconnected"` = TC4 通訊失敗(ConnectionError),由 server 層降級時標。
++#:
++#: 文案因此必須用進行式不下結論(change-spec §1 語意錨點)。
++BarsStatus = Literal["ok", "timeout", "disconnected"]
++
++
+ def _milli(raw: str) -> int:
+     return round(float(raw) * 1000)
+ 
+@@ -395,7 +406,7 @@ class StockQuoteSource(TC4QuoteSource):
+         self._ensure_connected()
+         sym = stock_symbol(code)
+         start, end = stock_window(self._trade_date)
+-        rows = self._collect_history(sym, "1K", start, end)
++        rows = self._collect_history(sym, "1K", start, end).rows
+         minutes: dict[str, int] = {}
+         skipped = 0
+         for r in rows:
+@@ -412,48 +423,55 @@ class StockQuoteSource(TC4QuoteSource):
+             logger.warning("1K minutes 解析略過 %d/%d 列", skipped, len(rows))
+         return minutes
+ 
+-    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
+-        """K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
++    def fetch_bars_range(
++        self, code: str, tf: str, start_date: str, end_date: str
++    ) -> tuple[list[Bar], BarsStatus]:
++        """K 線 bar + 空結果的原因(`tf` = "D" 日 K / "1" 分 K;start/end 含端點)。
+ 
+         range 型而非 days 型:server 層要把「歷史段(永久 memo)」與「當日段(短 TTL)」
+         分開取,才不會每次輪詢都重拉整段歷史(change-spec R2-1/R2-2)。
+ 
+         `tf="D"` 走 DK,空則 fallback 1K 聚合 —— fallback 視窗另行縮到
+         `_OHLC_FALLBACK_WINDOW_DAYS`,避免 4.5× 量級放大(R2-7)。"""
+-        return self.fetch_bars_range_tagged(code, tf, start_date, end_date)[0]
++        bars, _tag, status = self.fetch_bars_range_tagged(code, tf, start_date, end_date)
++        return bars, status
+ 
+     def fetch_bars_range_tagged(
+         self, code: str, tf: str, start_date: str, end_date: str
+-    ) -> tuple[list[Bar], str]:
++    ) -> tuple[list[Bar], str, BarsStatus]:
+         """同 `fetch_bars_range`,另回**實際走到的資料源標籤**。
+ 
+         大盤頁的 meta 行要誠實說出這一份 bar 從哪來(index-board review P1-4):
+         `tf="D"` 在 DK 空時會 fallback 成 90 日窗的 1K 聚合,若 meta 仍標 `tc4_dk`,
+         「壞了 vs 沒資料看畫面即可答」的設計主軸剛好在最可能出事的那條路上失效。
+ 
+-        `source_tag ∈ {"tc4_1k", "tc4_dk", "tc4_dk_1k_agg"}`。
++        `source_tag ∈ {"tc4_1k", "tc4_dk", "tc4_dk_1k_agg"}`;`status` 見 `BarsStatus`。
+         """
+         self._ensure_connected()
+         sym = stock_symbol(code)
+         start = f"{start_date.replace('-', '')}00"
+         end = f"{end_date.replace('-', '')}23"
+         if tf == "1":
+-            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
+-            return parse_1k_bars(rows), "tc4_1k"
++            rows, timed_out = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
++            return parse_1k_bars(rows), "tc4_1k", ("timeout" if timed_out else "ok")
+ 
+-        bars = parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE))
++        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
++        bars = parse_dk_bars(dk_rows)
+         if bars:
+-            return bars, "tc4_dk"
++            return bars, "tc4_dk", "ok"
+         fb_start = max(
+             _dt.date.fromisoformat(start_date),
+             _dt.date.fromisoformat(end_date) - _dt.timedelta(days=_OHLC_FALLBACK_WINDOW_DAYS),
+         )
+         logger.info("bars %s: DK 空,fallback 1K 聚合(視窗縮至 %s..%s)", code, fb_start, end_date)
+         # fallback 也要傳短 budget:漏傳的話 tf=D 無資料標的變成 10 + 30 = 40s
+-        fb = aggregate_1k_to_daily(
+-            self._collect_history(sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE)
++        fb_rows, fb_timed_out = self._collect_history(
++            sym, "1K", f"{fb_start:%Y%m%d}00", end, BARS_POLL_DEADLINE
+         )
+-        return fb, "tc4_dk_1k_agg"
++        # 兩段取最壞:fallback 補到了 bar 但 DK 那趟等滿了預算 → 仍是 timeout。
++        # 「有資料就一律 ok」會把「DK 沒回應」這件事在有 fallback 的日子裡靜默掉。
++        status: BarsStatus = "timeout" if (dk_timed_out or fb_timed_out) else "ok"
++        return aggregate_1k_to_daily(fb_rows), "tc4_dk_1k_agg", status
+ 
+     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。
+@@ -464,10 +482,10 @@ class StockQuoteSource(TC4QuoteSource):
+         end_d = _dt.date.today()
+         start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
+         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
+-        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end))
++        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end).rows)
+         if not bars:
+             logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
+-            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end))
++            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end).rows)
+         return bars[-n:]
+ 
+     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑)----
+diff --git a/copycat/live/tc4.py b/copycat/live/tc4.py
+index 2470de8..7273390 100644
+--- a/copycat/live/tc4.py
++++ b/copycat/live/tc4.py
+@@ -15,7 +15,7 @@ import sys
+ import threading
+ import time
+ from pathlib import Path
+-from typing import Any, Callable
++from typing import Any, Callable, NamedTuple
+ 
+ import zmq
+ 
+@@ -42,6 +42,18 @@ BARS_POLL_DEADLINE = 10.0
+ #: stock_source 上提 — index-board R-3)
+ _POLL_BACKOFF_START = 0.15
+ 
++class HistoryResult(NamedTuple):
++    """`_collect_history` 的回傳:rows + 「是否等滿 deadline 仍未備妥」。
++
++    TC4 的 GETHISDATA 空頁無法區分「未備妥」與「無資料」(檔頭),所以 `rows == []`
++    這一件事本身沒有原因;`timed_out` 是**唯一**能從協定側正面取得的區分訊號
++    —— 逾時路徑之外的空,至少代表首頁備妥、收割跑完了。
++    """
++
++    rows: list[dict]
++    timed_out: bool
++
++
+ _STALE_THRESHOLD_SECS = 30.0
+ _RECONNECT_BACKOFF_CAP = 60.0
+ # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
+@@ -341,7 +353,7 @@ class TC4QuoteSource:
+         start: str,
+         end: str,
+         deadline_secs: float | None = None,
+-    ) -> list[dict]:
++    ) -> HistoryResult:
+         """SubHistory → 首頁 poll → QryIndex 收割;TC4 通訊失敗由 _req 收斂 ConnectionError。
+ 
+         `deadline_secs` = 首頁備妥的等待預算。預設沿用舊值(`poll_wait*30` ≈ 30s),
+@@ -353,6 +365,9 @@ class TC4QuoteSource:
+         舊制固定睡滿 1.0s,讓所有冷載入無條件多等約 0.9 秒。
+ 
+         `poll_wait == 0` 是測試組態,語意 = 不等待 → 探測一次就回,不 busy loop。
++
++        回 `HistoryResult(rows, timed_out)`:逾時路徑的空與「首頁備妥但 0 rows」是
++        不同的事,呼叫端要能分(bars 三態 status)。
+         """
+         self._sub_history(sym, start, end, data_type)
+         budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
+@@ -367,7 +382,7 @@ class TC4QuoteSource:
+                 logger.info(
+                     "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
+                 )
+-                return []
++                return HistoryResult([], True)
+             # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
+             time.sleep(min(wait, remaining))
+             wait = min(wait * 2, self._poll_wait)
+@@ -378,7 +393,7 @@ class TC4QuoteSource:
+         rows: list[dict] = []
+         for page in iter_qry_pages(_page):
+             rows.extend(page)
+-        return rows
++        return HistoryResult(rows, False)
+ 
+     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
+         # 單發:首頁空即回空(未備妥的重試由 fetch_backfill 的 round 制統籌,不逐檔等)
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 2b3822f..5216dde 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -31,6 +31,8 @@ from copycat.live.stock_source import Bar
+ from copycat.server.mis import OtcSnap, fetch_otc_snapshot
+ from copycat.server.bars import (
+     BarsCache,
++    BarsResult,
++    TaggedBars,
+     build_daily,
+     build_minute,
+     build_period,
+@@ -654,7 +656,7 @@ def create_app(
+         if tf == "D":
+             # days 在日線路徑完全不參與(不進 cache/query key,D-15)→ 連驗都不驗:
+             # 對忽略的參數回 400 會讓「多帶一個沒用的 query」變成擋下日 K 的理由(M1)
+-            bars = await build_daily(stock.bars_range, bars_cache, code, today)
++            bars, status = await build_daily(stock.bars_range, bars_cache, code, today)
+         else:
+             # days 自行解析:交給 FastAPI 轉 int 時,轉換失敗回的是 422 + list 形 detail,
+             # 不符全站 {"detail": {"error": "<code>"}} 契約(W-D3;review P2-6)
+@@ -662,8 +664,12 @@ def create_app(
+                 days_n = int(days)
+             except ValueError:
+                 raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
+-            bars = await build_minute(stock.bars_range, bars_cache, code, clamp_days(days_n), today)
+-        return {"code": code, "tf": tf, "bars": bars}
++            bars, status = await build_minute(
++                stock.bars_range, bars_cache, code, clamp_days(days_n), today
++            )
++        # status:空的三種來源(逾時 / 真無資料 / 斷線)原本在前端收斂成同一句
++        # 「無 K 線資料」。加欄位 = 向後相容(舊前端忽略,新前端對缺欄位 default "ok")
++        return {"code": code, "tf": tf, "bars": bars, "status": status}
+ 
+     # ---- stock signals(stock-signals design §7)----
+ 
+@@ -755,20 +761,23 @@ def create_app(
+         if key == "TWSE":
+             index = _index(request)
+ 
+-            async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
+-                return await index.bars_range(tf_, s, e)
++            async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
++                return TaggedBars(*await index.bars_range(tf_, s, e))
+         else:
+             futures: FuturesEngine | None = request.app.state.futures
+             if futures is None:
+                 raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
+ 
+-            async def tagged(_c: str, tf_: str, s: str, e: str) -> tuple[list[Bar], str]:
++            async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
+                 # 期指沒有 DK→1K 的 fallback 分支,tag 恆定;回空 = 借不到(engine 已 log)
+                 got = await futures.bars_range(key, tf_, s, e)
+-                return got, ("tc4_dk" if got else "unavailable")
++                return TaggedBars(got, "tc4_dk" if got else "unavailable")
+ 
+-        async def plain(c: str, tf_: str, s: str, e: str) -> list[Bar]:
+-            return (await tagged(c, tf_, s, e))[0]
++        # 兩個閉包的第二元素語意不同(source tag vs 三態 status)且同為 str ——
++        # 名字必須隔開,否則接錯的表現是 meta.source 靜默變成 "ok"(spec R5)
++        async def plain_with_status(c: str, tf_: str, s: str, e: str) -> BarsResult:
++            # 大盤路徑本輪不做三態(out of scope):固定 "ok",空態仍由 source tag 表述
++            return BarsResult((await tagged_source(c, tf_, s, e)).bars, "ok")
+ 
+         # 分鐘路徑的 cache code 加 |M 後綴:裸 "IX0001" 會與 /api/stock/bars/IX0001
+         # (走 **stock** session)共用 `_hist` / `_today` / `_empty` 同一格 —— 那會讓
+@@ -776,7 +785,7 @@ def create_app(
+         # 長窗路徑的 |L 後綴同理(review P2-1)。期指的 F: 前綴含冒號,本來就撞不到。
+         code = ("IX0001|M" if tf == "1" else "IX0001") if key == "TWSE" else f"F:{key}"
+         if tf == "1":
+-            bars = await build_minute(plain, bars_cache, code, days_n, today)
++            bars, _ = await build_minute(plain_with_status, bars_cache, code, days_n, today)
+             return _market_payload(
+                 key,
+                 tf,
+@@ -784,7 +793,7 @@ def create_app(
+                 source="tc4_1k" if bars else "unavailable",
+                 partial_last=is_partial_last(bars, tf, today),
+             )
+-        bars, tag = await build_period(tagged, bars_cache, code, today, tf)
++        bars, tag = await build_period(tagged_source, bars_cache, code, today, tf)
+         return _market_payload(
+             key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)
+         )
+diff --git a/copycat/server/bars.py b/copycat/server/bars.py
+index 2993ec7..822fe9b 100644
+--- a/copycat/server/bars.py
++++ b/copycat/server/bars.py
+@@ -32,9 +32,9 @@ from __future__ import annotations
+ import datetime as _dt
+ import logging
+ import time
+-from typing import Awaitable, Callable
++from typing import Awaitable, Callable, NamedTuple
+ 
+-from copycat.live.stock_source import Bar
++from copycat.live.stock_source import Bar, BarsStatus
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -53,8 +53,46 @@ DAILY_MAX_BARS = 120
+ DAILY_LONG_WINDOW_DAYS = 1825
+ DAILY_LONG_MAX_BARS = 1500  # 不截斷 5 年(留餘裕);上限只為防呆
+ 
+-#: engine.bars_range(code, tf, start_date, end_date) -> list[Bar]
+-BarsFetcher = Callable[[str, str, str, str], Awaitable[list[Bar]]]
++
++class BarsResult(NamedTuple):
++    """bars + 空結果的原因(`BarsStatus`)。
++
++    **刻意做成 NamedTuple 而不是裸 tuple**:與 `TaggedBars` 同構(`BarsStatus` 是
++    `str` 的 Literal 子型別),裸 tuple 下把帶 status 的 fetcher 誤傳給 `build_period`
++    型別合法,結果是大盤 meta 的「來源」欄靜默變成 `"ok"` —— 一個沒人會第一眼認出
++    是 bug 的字(spec R5)。
++    """
++
++    bars: list[Bar]
++    status: BarsStatus
++
++
++class TaggedBars(NamedTuple):
++    """bars + 實際走到的資料源標籤(大盤 meta 用;與 `BarsResult` 刻意不可互換)。"""
++
++    bars: list[Bar]
++    tag: str
++
++
++#: 嚴重度:壞消息不可被好消息蓋掉,所以合併一律取 max。
++_STATUS_SEVERITY: dict[BarsStatus, int] = {"ok": 0, "timeout": 1, "disconnected": 2}
++
++
++def worst_status(*statuses: BarsStatus) -> BarsStatus:
++    """SC-6:多段結果的 status = 最壞值(disconnected > timeout > ok)。
++
++    一個引數都沒有(兩段全 cache 命中、一次 fetch 都沒發)→ `"ok"`:沒發請求就
++    沒有壞消息可報,把它算成上一輪的原因等於讓過期的診斷永遠黏著。
++    """
++    worst: BarsStatus = "ok"
++    for s in statuses:
++        if _STATUS_SEVERITY[s] > _STATUS_SEVERITY[worst]:
++            worst = s
++    return worst
++
++
++#: engine.bars_range(code, tf, start_date, end_date) -> BarsResult
++BarsFetcher = Callable[[str, str, str, str], Awaitable[BarsResult]]
+ 
+ 
+ def clamp_days(days: int) -> int:
+@@ -71,14 +109,20 @@ def _iter_days(start: _dt.date, end: _dt.date):
+ class BarsCache:
+     def __init__(self, ttl: float = TODAY_TTL_SECS, clock: Callable[[], float] = time.monotonic):
+         self._hist: dict[tuple[str, str], list[Bar]] = {}
+-        self._today: dict[tuple[str, str], tuple[float, list[Bar]]] = {}
++        #: (code, today) -> (寫入時刻, bars, 寫入時的 status)。**status 要存**:
++        #: `_empty` 的 key 含 days 而這層不含,days=1 的當日段 timeout 寫入後,15s 內
++        #: days=30 的請求會 `empty_status` 未命中、`today_get` 命中那份源自 timeout 的
++        #: 空 —— 若視為 ok 就把 timeout 洗白了(spec R4;違反 SC-5)。
++        self._today: dict[tuple[str, str], tuple[float, list[Bar], BarsStatus]] = {}
+         self._daily: dict[tuple[str, str], list[Bar]] = {}
+         #: 與 `_daily` 同鍵的資料源標籤(大盤 meta 用)。分開存而不塞進值:
+         #: `_daily` 的值型別是 `list[Bar]`,個股路徑四個呼叫點都吃它
+         self._daily_tag: dict[tuple[str, str], str] = {}
+-        #: (code, tf, days) -> 寫入時刻。days 必須進 key —— 少了它,days=1 的空結果
+-        #: 會把 days=30 的請求一併釘住(spec review R15)。tf="D" 一律傳 days=0。
+-        self._empty: dict[tuple[str, str, int], float] = {}
++        #: (code, tf, days) -> (寫入時刻, 空的原因)。days 必須進 key —— 少了它,
++        #: days=1 的空結果會把 days=30 的請求一併釘住(spec review R15)。
++        #: tf="D" 一律傳 days=0。**原因要存**:15s 內的重複請求若一律回 ok,
++        #: 「還在等 TC4」就被快取洗成「這檔沒資料」(SC-5)。
++        self._empty: dict[tuple[str, str, int], tuple[float, BarsStatus]] = {}
+         self._ttl = ttl
+         self._clock = clock
+ 
+@@ -114,12 +158,18 @@ class BarsCache:
+ 
+     # ---- 空結果負向快取(短 TTL)----
+ 
+-    def empty_fresh(self, code: str, tf: str, days: int) -> bool:
+-        ts = self._empty.get((code, tf, days))
+-        return ts is not None and self._clock() - ts < EMPTY_TTL_SECS
++    def empty_status(self, code: str, tf: str, days: int) -> BarsStatus | None:
++        """未過期的空標記 → 存入時的 status;無標記 / 已過期 → None。
++
++        回 status 而不是 bool:呼叫端要能把「為什麼空」原封不動送出去(SC-5)。
++        """
++        entry = self._empty.get((code, tf, days))
++        if entry is None or self._clock() - entry[0] >= EMPTY_TTL_SECS:
++            return None
++        return entry[1]
+ 
+-    def empty_mark(self, code: str, tf: str, days: int) -> None:
+-        self._empty[(code, tf, days)] = self._clock()
++    def empty_mark(self, code: str, tf: str, days: int, status: BarsStatus) -> None:
++        self._empty[(code, tf, days)] = (self._clock(), status)
+ 
+     def empty_clear(self, code: str, tf: str, days: int) -> None:
+         self._empty.pop((code, tf, days), None)
+@@ -131,7 +181,7 @@ class BarsCache:
+         —— 各寫一份必然漂移。"""
+         return self._ttl if bars else min(self._ttl, EMPTY_TTL_SECS)
+ 
+-    def today_get(self, code: str, today: str) -> list[Bar] | None:
++    def today_get(self, code: str, today: str) -> tuple[list[Bar], BarsStatus] | None:
+         # key 含日期:只用 code 的話,server 跨午夜後的 TTL 窗內會把昨日 bars 當今日回,
+         # 而歷史段此時已含昨日 → 同一回應出現重複 t(review P2-9)
+         entry = self._today.get((code, today))
+@@ -139,21 +189,23 @@ class BarsCache:
+             return None
+         if self._clock() - entry[0] >= self._today_ttl(entry[1]):
+             return None
+-        return entry[1]
++        return entry[1], entry[2]
+ 
+     def today_entry_count(self) -> int:
+         """`_today` 的條目數(成長觀測用;prune 的 TTL evict 測試需要)。"""
+         return len(self._today)
+ 
+-    def today_put(self, code: str, today: str, bars: list[Bar]) -> None:
++    def today_put(self, code: str, today: str, bars: list[Bar], status: BarsStatus) -> None:
+         """空結果也存,但吃更短的 TTL(`EMPTY_TTL_SECS`)。
+ 
+         原本空結果一律不存(don't-cache-empty)。問題是**歷史有資料但今日零成交**的
+         股票(冷門股常態):`build_minute` 合併後的 `out` 因為歷史段非空而永不觸發
+         `empty_mark`,當日段自己又不存空 → 每次請求都要重付一次 TC4 首頁等待
+         (self-review B2)。短 TTL 兩邊都顧:15 秒內的重複請求免費,過期即重抓,
+-        該股一開始成交就看得到。"""
+-        self._today[(code, today)] = (self._clock(), bars)
++        該股一開始成交就看得到。
++
++        `status` 一併存下(見 `_today` 註解):TTL 窗內的命中要能還原「為什麼空」。"""
++        self._today[(code, today)] = (self._clock(), bars, status)
+ 
+     def prune(self, today: _dt.date) -> None:
+         """剪掉視窗外與已過期的條目。
+@@ -179,7 +231,7 @@ class BarsCache:
+         ]:
+             del self._today[key]
+         # 只丟已過期的:prune 每次 build_* 開頭都會跑,無條件 clear 等於負向快取從未生效
+-        for key in [k for k, ts in self._empty.items() if now - ts >= EMPTY_TTL_SECS]:
++        for key in [k for k, e in self._empty.items() if now - e[0] >= EMPTY_TTL_SECS]:
+             del self._empty[key]
+ 
+     # ---- 日 K(per (code, today) memo)----
+@@ -203,22 +255,26 @@ class BarsCache:
+ 
+ async def build_daily(
+     fetch: BarsFetcher, cache: BarsCache, code: str, today: _dt.date
+-) -> list[Bar]:
++) -> BarsResult:
+     cache.prune(today)
+     cached = cache.daily_get(code, today.isoformat())
+     if cached is not None:
+-        return cached
+-    # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline
+-    if cache.empty_fresh(code, "D", 0):
+-        return []
++        # memo 命中 = 這一輪沒發 fetch,沒有壞消息可報(worst_status() 的同一條理由)
++        return BarsResult(cached, "ok")
++    # 短 TTL 負向快取:上一次剛確認過沒資料,不必再等一輪 TC4 首頁 deadline。
++    # 回的是**存入時的原因**,不是 ok —— 洗白等於讓「還在等」在 15s 內變成「沒資料」。
++    marked = cache.empty_status(code, "D", 0)
++    if marked is not None:
++        return BarsResult([], marked)
+     start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
+-    bars = (await fetch(code, "D", start.isoformat(), today.isoformat()))[-DAILY_MAX_BARS:]
++    fetched, status = await fetch(code, "D", start.isoformat(), today.isoformat())
++    bars = fetched[-DAILY_MAX_BARS:]
+     cache.daily_put(code, today.isoformat(), bars)
+     if bars:
+         cache.empty_clear(code, "D", 0)
+     else:
+-        cache.empty_mark(code, "D", 0)
+-    return bars
++        cache.empty_mark(code, "D", 0, status)
++    return BarsResult(bars, status)
+ 
+ 
+ def _period_key(stamp: str, period: str) -> str | None:
+@@ -270,8 +326,8 @@ def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
+     return out
+ 
+ 
+-#: `engine.bars_range_tagged(code, tf, start, end) -> (bars, source_tag)`
+-TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[tuple[list[Bar], str]]]
++#: `engine.bars_range_tagged(code, tf, start, end) -> TaggedBars`
++TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[TaggedBars]]
+ 
+ 
+ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
+@@ -296,7 +352,7 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
+ 
+ async def build_period(
+     fetch: TaggedBarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
+-) -> tuple[list[Bar], str]:
++) -> TaggedBars:
+     """大盤頁的日 / 週 / 月 K —— 三者共用同一份長窗日 K(見 `DAILY_LONG_WINDOW_DAYS`)。
+ 
+     `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。回 `(bars, source_tag)`。
+@@ -315,9 +371,9 @@ async def build_period(
+         # tag 缺失回 unavailable 而非猜一個漂亮值 —— 猜值就是在最需要誠實的
+         # 那條路上說謊(review P1-4 的同一條理由)
+         tag = cache.daily_tag_get(key, day) or "unavailable"
+-        return (cached if period == "D" else aggregate_period(cached, period)), tag
+-    if cache.empty_fresh(key, "D", 0):
+-        return [], "unavailable"
++        return TaggedBars((cached if period == "D" else aggregate_period(cached, period)), tag)
++    if cache.empty_status(key, "D", 0) is not None:
++        return TaggedBars([], "unavailable")
+     start = today - _dt.timedelta(days=DAILY_LONG_WINDOW_DAYS)
+     daily, tag = await fetch(code, "D", start.isoformat(), day)
+     daily = daily[-DAILY_LONG_MAX_BARS:]
+@@ -326,27 +382,37 @@ async def build_period(
+         cache.daily_tag_put(key, day, tag)
+         cache.empty_clear(key, "D", 0)
+     else:
+-        cache.empty_mark(key, "D", 0)
+-    return (daily if period == "D" else aggregate_period(daily, period)), tag
++        # 大盤路徑的空態表述走自己的 source tag(`unavailable`),不吃三態 status ——
++        # 存 "ok" = 現況等價,只是讓 `_empty` 的值型別一致(本輪 out of scope)
++        cache.empty_mark(key, "D", 0, "ok")
++    return TaggedBars((daily if period == "D" else aggregate_period(daily, period)), tag)
+ 
+ 
+ async def build_minute(
+     fetch: BarsFetcher, cache: BarsCache, code: str, days: int, today: _dt.date
+-) -> list[Bar]:
+-    """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。"""
++) -> BarsResult:
++    """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。
++
++    status = 兩段的 worst(SC-6)。**未實際 fetch 且無存檔 status 的段不貢獻**
++    (歷史 memo 命中)—— 已經拿到的資料不是壞消息,把它算成上一輪的原因會讓
++    過期的診斷永遠黏著。
++    """
+     cache.prune(today)
+-    if cache.empty_fresh(code, "1", days):
+-        return []
++    marked = cache.empty_status(code, "1", days)
++    if marked is not None:
++        return BarsResult([], marked)
+     start = today - _dt.timedelta(days=clamp_days(days) - 1)
+     yesterday = today - _dt.timedelta(days=1)
+ 
++    statuses: list[BarsStatus] = []
+     out: list[Bar] = []
+     if start <= yesterday:
+         missing = cache.hist_missing(code, start, yesterday)
+         if missing:
+             # 只補缺口區間(端點取 min/max;中間已 memo 的日子重抓無害,省下逐日 REQ)
+             lo, hi = missing[0], missing[-1]
+-            fetched = await fetch(code, "1", lo.isoformat(), hi.isoformat())
++            fetched, hist_status = await fetch(code, "1", lo.isoformat(), hi.isoformat())
++            statuses.append(hist_status)
+             if fetched:
+                 cache.put_hist_range(code, lo, hi, fetched)
+             else:
+@@ -354,15 +420,21 @@ async def build_minute(
+                 logger.info("bars %s: 歷史段 %s..%s 回空,不入 memo", code, lo, hi)
+         out.extend(cache.hist_range(code, start, yesterday))
+ 
+-    today_bars = cache.today_get(code, today.isoformat())
+-    if today_bars is None:
+-        today_bars = await fetch(code, "1", today.isoformat(), today.isoformat())
+-        cache.today_put(code, today.isoformat(), today_bars)
++    entry = cache.today_get(code, today.isoformat())
++    if entry is None:
++        today_bars, today_status = await fetch(code, "1", today.isoformat(), today.isoformat())
++        cache.today_put(code, today.isoformat(), today_bars, today_status)
++    else:
++        # cache 命中也要把存入時的 status 帶回來:`_empty` 的 key 含 days 而這層不含,
++        # 少了它 days 一換就把 timeout 洗白(R4)
++        today_bars, today_status = entry
++    statuses.append(today_status)
+     out.extend(today_bars)
++    status = worst_status(*statuses)
+     # 兩段都空 = 這檔在 TC4 查不到(或 TC4 正忙)。標記 15 秒,期間的重複請求直接回空,
+     # 不再各付一次首頁 deadline。過期即自動重試(W-15)。
+     if out:
+         cache.empty_clear(code, "1", days)
+     else:
+-        cache.empty_mark(code, "1", days)
+-    return out
++        cache.empty_mark(code, "1", days, status)
++    return BarsResult(out, status)
+diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index ea84d73..086e38f 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -40,6 +40,7 @@ def in_futures_session(now: _dt.time | None = None) -> bool:
+         return True
+     return t >= _FUT_NIGHT_OPEN or t <= _FUT_NIGHT_CLOSE
+ 
++
+ # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
+ _WATCH_START = _dt.time(9, 0)
+ _WATCH_END = _dt.time(13, 25)
+@@ -350,7 +351,10 @@ class IndexEngine:
+             logger.warning("market: index history proxy miss(source 無 fetch_bars_range_tagged)")
+             return [], "unavailable"
+         try:
+-            return await asyncio.to_thread(fetch, _SYMBOL, tf, start, end)
++            # source 另回第三元素 status(個股 K 線的三態);大盤的空態表述走自己的
++            # source tag 體系,對外簽名不變(bars-tristate-status 白名單 9)
++            bars, tag, _status = await asyncio.to_thread(fetch, _SYMBOL, tf, start, end)
++            return bars, tag
+         except ConnectionError as e:
+             logger.warning("market: index history proxy miss(%s)", e)
+             return [], "unavailable"
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index e755dee..607c8bd 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -16,8 +16,9 @@ import logging
+ from typing import AsyncGenerator, Callable, Protocol
+ 
+ from copycat.live.stock_models import StockTick, parse_stock_realtime, to_milli
+-from copycat.live.stock_source import Bar, DailyBar
++from copycat.live.stock_source import Bar, BarsStatus, DailyBar
+ from copycat.live.stock_state import StockDayState
++from copycat.server.bars import BarsResult
+ from copycat.server.ws import WsBroadcaster
+ from copycat.stkfut_map import load_map
+ 
+@@ -58,7 +59,9 @@ class StockSource(Protocol):
+ 
+     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
+ 
+-    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]: ...
++    def fetch_bars_range(
++        self, code: str, tf: str, start_date: str, end_date: str
++    ) -> tuple[list[Bar], BarsStatus]: ...
+ 
+     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
+ 
+@@ -276,15 +279,20 @@ class StockEngine:
+             logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
+             return []
+ 
+-    async def bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list[Bar]:
+-        """K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。"""
++    async def bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> BarsResult:
++        """K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。
++
++        降級**照舊回空不 raise**,但原因跟著空一起送出去:斷線與「這檔真的沒資料」
++        原本在前端收斂成同一句「無 K 線資料」,那正是使用者最需要分清的兩件事。
++        """
+         try:
+-            return await asyncio.to_thread(
++            bars, status = await asyncio.to_thread(
+                 self._source.fetch_bars_range, code, tf, start_date, end_date
+             )
++            return BarsResult(bars, status)
+         except ConnectionError as e:
+             logger.warning("bars_range %s(%s): TC4 不可用,降級空(%s)", code, tf, e)
+-            return []
++            return BarsResult([], "disconnected")
+ 
+     # ---- stkfut ----
+ 
+diff --git a/frontend/src/components/stock/StockChart.test.tsx b/frontend/src/components/stock/StockChart.test.tsx
+index 5aea2ab..8926c4e 100644
+--- a/frontend/src/components/stock/StockChart.test.tsx
++++ b/frontend/src/components/stock/StockChart.test.tsx
+@@ -209,3 +209,72 @@ describe("StockChart 模式切換(SC-7)", () => {
+     expect(screen.queryByText("K 線載入失敗")).toBeNull();
+   });
+ });
++
++// 🔴 N-7:空 bars 的三種來源(逾時 / 真無資料 / 斷線)原本共用「無 K 線資料」一句
++// 肯定語氣,把「還在等」與「斷線」都講成「這檔沒 K 線」。三態各自的文案已由 user 拍板。
++describe("StockChart 空態三分態文案(N-7)", () => {
++  function stubBars(body: unknown) {
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string) =>
++        String(url).includes("/api/stock/bars")
++          ? new Response(JSON.stringify(body))
++          : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
++      ),
++    );
++  }
++
++  async function daily(body: unknown) {
++    stubBars(body);
++    chart();
++    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++  }
++
++  it("status=timeout + 空 bars → 灰字「等待 TC4 回應中…(自動重試)」", async () => {
++    await daily({ bars: [], status: "timeout" });
++    await waitFor(() => expect(screen.getByText("等待 TC4 回應中…(自動重試)")).toBeTruthy(), {
++      timeout: 5000,
++    });
++    // 中性灰(同「載入中…」樣式)—— 逾時不是錯誤,不用紅
++    expect(screen.getByText("等待 TC4 回應中…(自動重試)").className).toContain("text-ink-muted");
++    expect(screen.queryByText("無 K 線資料")).toBeNull();
++    expect(screen.queryByText("K 線載入失敗")).toBeNull();
++  });
++
++  it("status=disconnected + 空 bars → 紅字「TC4 連線中斷,K 線暫不可用(自動重試中)」", async () => {
++    await daily({ bars: [], status: "disconnected" });
++    await waitFor(
++      () => expect(screen.getByText("TC4 連線中斷,K 線暫不可用(自動重試中)")).toBeTruthy(),
++      { timeout: 5000 },
++    );
++    expect(screen.getByText("TC4 連線中斷,K 線暫不可用(自動重試中)").className).toContain(
++      "text-bear",
++    );
++    expect(screen.queryByText("無 K 線資料")).toBeNull();
++    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
++  });
++
++  // §3 backward compat:舊後端沒有 status 欄位 → default "ok" = 現況行為
++  it("缺 status 欄位(舊後端)+ 空 bars → 回歸「無 K 線資料」", async () => {
++    await daily({ bars: [] });
++    await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
++    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
++  });
++
++  // R6:未知值若放行,輪詢會因 `!== "ok"` 開始、畫面卻落「無 K 線資料」→ 零訊號矛盾態。
++  // 正規化集中在 fetchBars,所以未知值在這裡就已經是 "ok"(不觸發 20s 的斷言見
++  // useStockBars.test.tsx 的接線測試)。
++  it("status 為未知值 → 正規化成 ok,仍顯示「無 K 線資料」", async () => {
++    await daily({ bars: [], status: "weird" });
++    await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
++    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
++    expect(screen.queryByText("TC4 連線中斷,K 線暫不可用(自動重試中)")).toBeNull();
++  });
++
++  // bars 非空時不分態(Out of scope 3):當日段降級但有歷史資料 → 照常畫圖
++  it("status=timeout 但 bars 非空 → 照常掛 K 線圖,不顯示等待句", async () => {
++    await daily({ bars: BARS, status: "timeout" });
++    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
++    expect(screen.queryByText("等待 TC4 回應中…(自動重試)")).toBeNull();
++  });
++});
+diff --git a/frontend/src/components/stock/StockChart.tsx b/frontend/src/components/stock/StockChart.tsx
+index c7822a3..c9e9cf6 100644
+--- a/frontend/src/components/stock/StockChart.tsx
++++ b/frontend/src/components/stock/StockChart.tsx
+@@ -48,10 +48,21 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
+   }
+ 
+   // n=1 時 aggregateBars 原樣回傳,不必特判
+-  const bars = useMemo(() => aggregateBars(data ?? [], minutesOf(mode)), [data, mode]);
++  const bars = useMemo(() => aggregateBars(data?.bars ?? [], minutesOf(mode)), [data, mode]);
+ 
+   const isMinute = mode !== "intraday" && mode !== "day";
+ 
++  // 空 bars 且非 ok 時的替代句(null = 照舊掛 CandleChart)。bars 非空一律不分態:
++  // 有資料就照常畫,某段降級不在本輪 scope。
++  const emptyNote =
++    data !== undefined && data.bars.length === 0
++      ? data.status === "timeout"
++        ? { text: "等待 TC4 回應中…(自動重試)", tone: "text-ink-muted" }
++        : data.status === "disconnected"
++          ? { text: "TC4 連線中斷,K 線暫不可用(自動重試中)", tone: "text-bear" }
++          : null
++      : null;
++
+   // 量測 wrapper 的可用空間 → 圖表 viewBox 高度(round3 SC-6)。
+   // 量的是「剩下多少」不是「圖表現在多高」—— 被量元素的高度必須由外層 flex 指派
+   // (useContainerSize 的呼叫端契約),否則會形成「圖表高 → 量測值 → 圖表高」的迴圈。
+@@ -99,6 +110,13 @@ export function StockChart({ accum, code }: { accum: StockAccum; code: string })
+           <p className="text-sm text-bear">K 線載入失敗</p>
+           <p className="font-mono text-xs text-ink-dim">{(error as Error | null)?.message ?? ""}</p>
+         </div>
++      ) : emptyNote !== null ? (
++        // 空 bars 的三種來源不再共用「無 K 線資料」一句肯定語氣:timeout =「還在等」
++        // (TC4 協定下「慢」與「查無」不可分,故用進行式不下結論)、disconnected =
++        // 「斷線」。ok + 空才是「真的沒有」,交給 CandleChart 內的既有句子。
++        <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
++          <p className={cn("text-sm", emptyNote.tone)}>{emptyNote.text}</p>
++        </div>
+       ) : (
+         // key:換股或換模式時強制重掛,viewport 回到初始式。換模式會讓 total 由
+         // ~5,900 變 ~590,沿用舊 index 沒有意義(onTotalChange 只處理同序列的延伸)。
+diff --git a/frontend/src/hooks/useStockBars.test.tsx b/frontend/src/hooks/useStockBars.test.tsx
+index 5f662af..8525b23 100644
+--- a/frontend/src/hooks/useStockBars.test.tsx
++++ b/frontend/src/hooks/useStockBars.test.tsx
+@@ -4,7 +4,12 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
+ import type { ReactNode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+-import { MINUTE_DAYS, useStockBars } from "@/hooks/useStockBars";
++import {
++  MINUTE_DAYS,
++  barsPollInterval,
++  useStockBars,
++  type BarsPayload,
++} from "@/hooks/useStockBars";
+ import { inTradingHours } from "@/lib/trading-hours";
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+@@ -117,3 +122,86 @@ describe("useStockBars 取數條件", () => {
+     expect(MINUTE_DAYS).toBe(30);
+   });
+ });
++
++// 🔴 N-8 / SC-4:空且非 ok 的結果要能自己走出來。原本 tf=D 空結果 staleTime ∞ 釘死到
++// remount = 零流量,TC4 慢一次就永遠停在「無 K 線資料」。20s > 後端 15s 負向快取 TTL,
++// 每輪重試都真打 TC4,不會撞負向快取空轉。
++describe("barsPollInterval(SC-4 純函式)", () => {
++  const empty = (status: BarsPayload["status"]): BarsPayload => ({ bars: [], status });
++  const filled: BarsPayload = {
++    bars: [{ t: "2026-08-05", o: 1, h: 1, l: 1, c: 1, v: 1 }],
++    status: "timeout",
++  };
++
++  it("空 + 非 ok → 20_000(日K 與分K、盤中與盤外皆同)", () => {
++    expect(barsPollInterval(empty("timeout"), true, false)).toBe(20_000);
++    expect(barsPollInterval(empty("disconnected"), true, false)).toBe(20_000);
++    expect(barsPollInterval(empty("timeout"), false, true)).toBe(20_000);
++  });
++
++  it("空 + ok → 既有邏輯(日K false;分K 依交易時段)", () => {
++    expect(barsPollInterval(empty("ok"), true, false)).toBe(false);
++    expect(barsPollInterval(empty("ok"), false, true)).toBe(60_000);
++    expect(barsPollInterval(empty("ok"), false, false)).toBe(false);
++  });
++
++  it("非空 + 非 ok → 既有邏輯,不觸發 20s(Out of scope 3:有資料就照常畫)", () => {
++    expect(barsPollInterval(filled, true, false)).toBe(false);
++    expect(barsPollInterval(filled, false, true)).toBe(60_000);
++    expect(barsPollInterval(filled, false, false)).toBe(false);
++  });
++
++  it("data 尚未到位(undefined)→ 既有邏輯", () => {
++    expect(barsPollInterval(undefined, true, false)).toBe(false);
++    expect(barsPollInterval(undefined, false, true)).toBe(60_000);
++  });
++});
++
++// 接線測試(R3):純函式綠不足以證明 refetchInterval 真的吃它 —— TanStack v5 函式形
++// refetchInterval 若讀閉包裡的 data 會恆為初值(undefined),純函式測全綠但線沒接上。
++describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
++  function barsCalls(): number {
++    return urls().filter((u) => u.includes("/api/stock/bars")).length;
++  }
++
++  afterEach(() => {
++    vi.useRealTimers();
++  });
++
++  it("tf=D 空 + timeout:20s 後真的重打", async () => {
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify({ bars: [], status: "timeout" })),
++    );
++    vi.useFakeTimers();
++    renderHook(() => useStockBars("2330", "day", 5), { wrapper });
++    await vi.advanceTimersByTimeAsync(50);
++    expect(barsCalls()).toBe(1);
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(barsCalls()).toBe(2);
++  });
++
++  it("tf=D 空 + ok:前進 60s 仍只打一次(既有 staleTime ∞ 語意不變)", async () => {
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify({ bars: [], status: "ok" })),
++    );
++    vi.useFakeTimers();
++    renderHook(() => useStockBars("2330", "day", 5), { wrapper });
++    await vi.advanceTimersByTimeAsync(50);
++    expect(barsCalls()).toBe(1);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(barsCalls()).toBe(1);
++  });
++
++  // R6:未知 status 在 fetchBars 就被正規化成 ok → 不得因 `!== "ok"` 而輪詢
++  it("tf=D 空 + 未知 status:正規化成 ok,前進 20s 不重打", async () => {
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify({ bars: [], status: "weird" })),
++    );
++    vi.useFakeTimers();
++    renderHook(() => useStockBars("2330", "day", 5), { wrapper });
++    await vi.advanceTimersByTimeAsync(50);
++    expect(barsCalls()).toBe(1);
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(barsCalls()).toBe(1);
++  });
++});
+diff --git a/frontend/src/hooks/useStockBars.ts b/frontend/src/hooks/useStockBars.ts
+index a899e6e..293b549 100644
+--- a/frontend/src/hooks/useStockBars.ts
++++ b/frontend/src/hooks/useStockBars.ts
+@@ -31,11 +31,40 @@ export function minutesOf(mode: ChartMode): number {
+   return Number.isFinite(n) && n >= 1 ? n : 1;
+ }
+ 
+-async function fetchBars(code: string, tf: string, days: number): Promise<Bar[]> {
++/** 空 bars 的三種來源(後端 /api/stock/bars 的 `status` 欄位):
++ *  - `ok`:TC4 有回應但窗內無 bar(= 真無資料的最接近表述)
++ *  - `timeout`:等滿 deadline 沒等到首頁備妥(慢**或**查無,TC4 協定不可分)
++ *  - `disconnected`:TC4 連線中斷(engine 層 ConnectionError) */
++export type BarsStatus = "ok" | "timeout" | "disconnected";
++export type BarsPayload = { bars: Bar[]; status: BarsStatus };
++
++const STATUSES: readonly string[] = ["ok", "timeout", "disconnected"];
++
++/** status 正規化**只在這一處**:欄位缺(舊後端,§3 backward compat)或值不在白名單
++ *  一律當 `"ok"` = 現況行為。未知值若放行,`barsPollInterval` 會因 `!== "ok"` 開始
++ *  輪詢、StockChart 卻落回「無 K 線資料」,形成零訊號的矛盾態(review R6)。 */
++async function fetchBars(code: string, tf: string, days: number): Promise<BarsPayload> {
+   const qs = tf === "D" ? `tf=D` : `tf=1&days=${days}`;
+   const res = await fetch(`/api/stock/bars/${code}?${qs}`);
+   if (!res.ok) throw new Error(await parseError(res));
+-  return ((await res.json()) as { bars: Bar[] }).bars;
++  const body = (await res.json()) as { bars: Bar[]; status?: string };
++  const status = body.status;
++  return {
++    bars: body.bars,
++    status: status !== undefined && STATUSES.includes(status) ? (status as BarsStatus) : "ok",
++  };
++}
++
++/** 輪詢間隔(SC-4)。空且非 ok = 「還在等 / 斷線」,必須自己走得出來:20s > 後端
++ *  15s 負向快取 TTL,所以每輪都真打 TC4 而不是撞快取空轉。其餘情形維持既有語意
++ *  (分K 交易時段 60s;日K 與盤外不輪詢)。抽成純函式才量得到(SC-4 量法)。 */
++export function barsPollInterval(
++  data: BarsPayload | undefined,
++  isDaily: boolean,
++  trading: boolean,
++): number | false {
++  if (data !== undefined && data.bars.length === 0 && data.status !== "ok") return 20_000;
++  return !isDaily && trading ? POLL_MS : false;
+ }
+ 
+ export function useStockBars(code: string | null, mode: ChartMode, days: number) {
+@@ -50,7 +79,9 @@ export function useStockBars(code: string | null, mode: ChartMode, days: number)
+     retry: 1,
+     staleTime: isDaily ? Infinity : 0,
+     // 函式形式:TQ 每次 interval 到期都會重新求值 → 開盤/收盤的開關不依賴外部 re-render
+-    // (值形式只在 render 當下求值,冷門股沒推播就不會自動開始輪詢 — review P2-4)
+-    refetchInterval: () => (!isDaily && inTradingHours() ? POLL_MS : false),
++    // (值形式只在 render 當下求值,冷門股沒推播就不會自動開始輪詢 — review P2-4)。
++    // data 必須讀 `query.state.data`:閉包裡的 data 恆為訂閱當下的初值(undefined),
++    // 空態轉 timeout 後永遠不會開始 20s 重試(review R3)。
++    refetchInterval: (query) => barsPollInterval(query.state.data, isDaily, inTradingHours()),
+   });
+ }
+diff --git a/tests/helpers/fake_sources.py b/tests/helpers/fake_sources.py
+index 5928677..cf65d2d 100644
+--- a/tests/helpers/fake_sources.py
++++ b/tests/helpers/fake_sources.py
+@@ -88,15 +88,19 @@ class FakeIndexSource:
+ 
+     def fetch_bars_range_tagged(
+         self, code: str, tf: str, start: str, end: str
+-    ) -> tuple[list[dict], str]:
++    ) -> tuple[list[dict], str, str]:
+         self.calls.append((code, tf, start, end))
+         if tf == "1":
+             today = self._today or f"{_dt.date.today():%Y-%m-%d}"
+-            return [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}], "tc4_1k"
++            return (
++                [{"t": f"{today} 09:01", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}],
++                "tc4_1k",
++                "ok",
++            )
+         # 深拷貝:`DEFAULT_DAILY` 是 module-level 共享的,`list()` 只換外層 list,內層 dict
+         # 仍是同一批物件 —— 任何一條測試(或被測 route)改到 bar 的欄位,都會滲進其後
+         # 每一條測試。
+-        return [dict(b) for b in self._daily], self._tag
++        return [dict(b) for b in self._daily], self._tag, "ok"
+ 
+ 
+ class FakeFuturesSource:
+@@ -172,11 +176,15 @@ class FakeStockSource:
+         self.daily_bars_result: list[dict] | Exception = []
+         self.bars_calls: list[tuple[str, str, str, str]] = []
+         self.bars_result: list[dict] = []
++        #: 三態 status 的注入點(bars-tristate-status);預設 "ok" = 現況等價
++        self.bars_status: str = "ok"
+ 
+-    def fetch_bars_range(self, code: str, tf: str, start_date: str, end_date: str) -> list:
+-        """Protocol 新增方法(change-spec R2-1)。"""
++    def fetch_bars_range(
++        self, code: str, tf: str, start_date: str, end_date: str
++    ) -> tuple[list, str]:
++        """Protocol 新增方法(change-spec R2-1);三態 status 隨 bars 一起回。"""
+         self.bars_calls.append((code, tf, start_date, end_date))
+-        return self.bars_result
++        return self.bars_result, self.bars_status
+ 
+     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+         if isinstance(self.daily_bars_result, Exception):
+diff --git a/tests/live/test_stock_bars.py b/tests/live/test_stock_bars.py
+index 21e1615..ef60b35 100644
+--- a/tests/live/test_stock_bars.py
++++ b/tests/live/test_stock_bars.py
+@@ -35,8 +35,14 @@ def dk(date: str, o: str, h: str, low: str, c: str, v: str = "100", qi: str = "1
+ 
+ def k1(date: str, time: str, o: str, h: str, low: str, c: str, v: str = "5", qi: str = "1") -> dict:
+     return {
+-        "Date": date, "Time": time, "Open": o, "High": h, "Low": low,
+-        "Close": c, "Volume": v, "QryIndex": qi,
++        "Date": date,
++        "Time": time,
++        "Open": o,
++        "High": h,
++        "Low": low,
++        "Close": c,
++        "Volume": v,
++        "QryIndex": qi,
+     }
+ 
+ 
+@@ -44,16 +50,20 @@ class TestFetchBarsRangeDaily:
+     def test_dk_parsed_to_ohlcv(self) -> None:
+         pages = {"DK": {"0": [dk("20260724", "100", "101.5", "99", "100.5", "1200")], "1": []}}
+         src = _src(_pager(pages))
+-        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == [
+-            {"t": "2026-07-24", "o": 100_000, "h": 101_500, "l": 99_000, "c": 100_500, "v": 1200}
+-        ]
++        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == (
++            [{"t": "2026-07-24", "o": 100_000, "h": 101_500, "l": 99_000, "c": 100_500, "v": 1200}],
++            "ok",
++        )
+ 
+     def test_missing_open_falls_back_to_close_and_missing_volume_is_zero(self) -> None:
+         # DK 的 Open / Volume 欄位名未實測(CLAUDE.md §8 只實證 High/Low/Close)
+         row = {"Date": "20260724", "High": "101", "Low": "99", "Close": "100", "QryIndex": "1"}
+         src = _src(_pager({"DK": {"0": [row], "1": []}}))
+-        bars = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+-        assert bars == [{"t": "2026-07-24", "o": 100_000, "h": 101_000, "l": 99_000, "c": 100_000, "v": 0}]
++        bars, status = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
++        assert bars == [
++            {"t": "2026-07-24", "o": 100_000, "h": 101_000, "l": 99_000, "c": 100_000, "v": 0}
++        ]
++        assert status == "ok"
+ 
+     def test_dk_empty_falls_back_to_1k_aggregation(self) -> None:
+         pages = {
+@@ -67,7 +77,10 @@ class TestFetchBarsRangeDaily:
+             },
+         }
+         src = _src(_pager(pages))
+-        assert src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28") == [
++        # status 不在這條的意圖內:DK 首頁空 = 等滿(poll_wait=0)預算 → 必然 timeout,
++        # 那條語意由 TestBarsStatus 專門鎖。這裡只驗 fallback 真的聚出了 bar。
++        bars, _ = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
++        assert bars == [
+             {"t": "2026-07-24", "o": 100_000, "h": 102_000, "l": 99_000, "c": 101_000, "v": 15}
+         ]
+ 
+@@ -82,7 +95,7 @@ class TestFetchBarsRangeDaily:
+             }
+         }
+         src = _src(_pager(pages))
+-        bars = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
++        bars, _ = src.fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
+         assert [b["t"] for b in bars] == ["2026-07-24", "2026-07-27"]
+ 
+ 
+@@ -91,9 +104,19 @@ class TestFetchBarsRangeMinute:
+         # 1K Time 為 UTC 終點標記;01:01 UTC = 09:01 台北(當日第一根)
+         pages = {"1K": {"0": [k1("20260728", "10100", "100", "101", "99", "100.5", "7")], "1": []}}
+         src = _src(_pager(pages))
+-        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == [
+-            {"t": "2026-07-28 09:01", "o": 100_000, "h": 101_000, "l": 99_000, "c": 100_500, "v": 7}
+-        ]
++        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == (
++            [
++                {
++                    "t": "2026-07-28 09:01",
++                    "o": 100_000,
++                    "h": 101_000,
++                    "l": 99_000,
++                    "c": 100_500,
++                    "v": 7,
++                }
++            ],
++            "ok",
++        )
+ 
+     def test_close_correction_clamped_and_merged(self) -> None:
+         # fetch_day_minutes 回 dict 靠 key 覆寫;Bar 是 list → 必須顯式合併(review R2-6)
+@@ -103,7 +126,7 @@ class TestFetchBarsRangeMinute:
+             k1("20260728", "53500", "102", "104", "98", "103", "3", "3"),  # 13:35 → clamp 13:30
+         ]
+         src = _src(_pager({"1K": {"0": rows, "3": []}}))
+-        bars = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
++        bars, _ = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
+         assert bars == [
+             {"t": "2026-07-28 13:30", "o": 100_000, "h": 104_000, "l": 98_000, "c": 103_000, "v": 6}
+         ]
+@@ -115,7 +138,7 @@ class TestFetchBarsRangeMinute:
+             k1("20260728", "54000", "1", "1", "1", "1", "1", "3"),  # 13:40 台北,域外
+         ]
+         src = _src(_pager({"1K": {"0": rows, "3": []}}))
+-        bars = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
++        bars, _ = src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
+         assert [b["t"] for b in bars] == ["2026-07-28 09:01"]
+ 
+     def test_cross_day_separate_bars(self) -> None:
+@@ -124,12 +147,13 @@ class TestFetchBarsRangeMinute:
+             k1("20260728", "10100", "2", "2", "2", "2", "2", "2"),
+         ]
+         src = _src(_pager({"1K": {"0": rows, "2": []}}))
+-        bars = src.fetch_bars_range("2330", "1", "2026-07-27", "2026-07-28")
++        bars, _ = src.fetch_bars_range("2330", "1", "2026-07-27", "2026-07-28")
+         assert [b["t"] for b in bars] == ["2026-07-27 09:01", "2026-07-28 09:01"]
+ 
+     def test_empty_returns_empty(self) -> None:
++        """poll_wait=0 探測一次即回 = 等滿(零)預算 → timeout,不是「確認無資料」。"""
+         src = _src(_pager({"1K": {"0": []}}))
+-        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == []
++        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
+ 
+ 
+ class TestFetchBarsRangeErrors:
+@@ -156,6 +180,55 @@ class TestFetchBarsRangeErrors:
+         ]
+ 
+ 
++class TestBarsStatus:
++    """N-1:三態 status 的源頭 —— deadline 用滿 vs 首頁備妥但無 bar。
++
++    TC4 協定上「真無資料」沒有正面訊號(GETHISDATA 空頁不分未備妥/無資料),
++    唯一能誠實說出口的區分是「有沒有等滿預算」,所以逾時路徑必須帶得出來。
++    """
++
++    def test_minute_with_data_is_ok(self) -> None:
++        pages = {"1K": {"0": [k1("20260728", "10100", "100", "101", "99", "100.5", "7")], "1": []}}
++        bars, status = _src(_pager(pages)).fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28")
++        assert bars
++        assert status == "ok"
++
++    def test_minute_timeout_reports_timeout(self) -> None:
++        src = _src(_pager({"1K": {}}))
++        assert src.fetch_bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
++
++    def test_daily_with_dk_data_is_ok(self) -> None:
++        pages = {"DK": {"0": [dk("20260724", "100", "101.5", "99", "100.5")], "1": []}}
++        bars, status = _src(_pager(pages)).fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
++        assert bars
++        assert status == "ok"
++
++    def test_dk_timeout_with_fallback_data_still_reports_timeout(self) -> None:
++        """SC-6 worst:1K fallback 補到了 bar,但 DK 那一趟等滿了預算 —— 兩段取最壞。
++
++        bars 非空照樣回 bars(前端只在空時分態),status 誠實說有一段沒等到。
++        """
++        pages = {
++            "DK": {},  # 首頁永遠空 → 等滿預算
++            "1K": {
++                "0": [k1("20260724", "10000", "100", "101", "100", "100.5", "10", "1")],
++                "1": [],
++            },
++        }
++        bars, status = _src(_pager(pages)).fetch_bars_range("2330", "D", "2026-07-01", "2026-07-28")
++        assert bars == [
++            {"t": "2026-07-24", "o": 100_000, "h": 101_000, "l": 100_000, "c": 100_500, "v": 10}
++        ]
++        assert status == "timeout"
++
++    def test_tagged_returns_three_tuple(self) -> None:
++        """tagged 版是 index_engine 走的那條:tag 與 status 兩件事都要在。"""
++        pages = {"DK": {"0": [dk("20260724", "100", "101.5", "99", "100.5")], "1": []}}
++        assert _src(_pager(pages)).fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")[
++            1:
++        ] == ("tc4_dk", "ok")
++
++
+ class TestCollectHistoryWaiting:
+     """round3 T-9(項 9):首頁 poll 的等待策略。
+ 
+@@ -189,7 +262,7 @@ class TestCollectHistoryWaiting:
+         """poll_wait=0(測試組態)不重試 —— 否則就是在 budget 內全速空轉打 fake API。"""
+         sent: list[dict] = []
+         src = _src(_pager({"1K": {}}, sent))
+-        assert src.fetch_bars_range("2330", "1", "2026-07-24", "2026-07-24") == []
++        assert src.fetch_bars_range("2330", "1", "2026-07-24", "2026-07-24") == ([], "timeout")
+         probes = [o for o in sent if o["Request"] == "GETHISDATA"]
+         assert len(probes) == 1
+ 
+@@ -224,6 +297,6 @@ class TestCollectHistoryWaiting:
+             poll_wait_secs=1.0,
+         )
+         out, slept = self._run_with_fake_clock(src, "2330", "D", "2026-07-24", "2026-07-24")
+-        assert out == []
++        assert out == ([], "timeout")
+         # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束
+         assert sum(slept) <= 20.0
+diff --git a/tests/server/test_bars.py b/tests/server/test_bars.py
+index 6c10205..ebe951b 100644
+--- a/tests/server/test_bars.py
++++ b/tests/server/test_bars.py
+@@ -2,14 +2,16 @@ from __future__ import annotations
+ 
+ import datetime as _dt
+ 
+-from copycat.live.stock_source import Bar
++from copycat.live.stock_source import Bar, BarsStatus
+ from copycat.server.bars import (
+     DAILY_MAX_BARS,
+     EMPTY_TTL_SECS,
+     BarsCache,
++    BarsResult,
+     build_daily,
+     build_minute,
+     clamp_days,
++    worst_status,
+ )
+ 
+ 
+@@ -18,18 +20,31 @@ def bar(t: str, c: int = 100, v: int = 1) -> Bar:
+ 
+ 
+ class _Fetcher:
+-    """engine.bars_range 替身:記錄每次呼叫的區間。"""
++    """engine.bars_range 替身:記錄每次呼叫的區間。
+ 
+-    def __init__(self, by_call: list[list[Bar]] | None = None) -> None:
++    `statuses` 逐次對應 `by_call`(超出長度 → "ok"),讓「哪一段逾時」可以精確注入
++    —— 三態的重點正是兩段各自的來源不同(SC-6 worst 合併)。
++    """
++
++    def __init__(
++        self,
++        by_call: list[list[Bar]] | None = None,
++        statuses: list[BarsStatus] | None = None,
++    ) -> None:
+         self.calls: list[tuple[str, str, str, str]] = []
+         self._by_call = by_call
++        self._statuses = statuses
+ 
+-    async def __call__(self, code: str, tf: str, start: str, end: str) -> list[Bar]:
++    async def __call__(self, code: str, tf: str, start: str, end: str) -> BarsResult:
+         self.calls.append((code, tf, start, end))
+-        if self._by_call is not None:
+-            idx = len(self.calls) - 1
+-            return self._by_call[idx] if idx < len(self._by_call) else []
+-        return []
++        idx = len(self.calls) - 1
++        bars: list[Bar] = []
++        if self._by_call is not None and idx < len(self._by_call):
++            bars = self._by_call[idx]
++        status: BarsStatus = "ok"
++        if self._statuses is not None and idx < len(self._statuses):
++            status = self._statuses[idx]
++        return BarsResult(bars, status)
+ 
+ 
+ class TestClampDays:
+@@ -39,13 +54,27 @@ class TestClampDays:
+         assert clamp_days(999) == 30
+ 
+ 
++class TestWorstStatus:
++    """SC-6:status = 各實際發出 fetch 的最壞值(disconnected > timeout > ok)。"""
++
++    def test_severity_order(self) -> None:
++        assert worst_status("ok", "timeout") == "timeout"
++        assert worst_status("timeout", "disconnected") == "disconnected"
++        assert worst_status("ok", "ok") == "ok"
++        assert worst_status("disconnected", "ok", "timeout") == "disconnected"
++
++    def test_no_args_is_ok(self) -> None:
++        """一次 fetch 都沒發(兩段全 cache 命中)→ 沒有壞消息可報。"""
++        assert worst_status() == "ok"
++
++
+ class TestDailyCache:
+     async def test_daily_memo_hits_second_call(self) -> None:
+         today = _dt.date(2026, 7, 28)
+         fetch = _Fetcher([[bar("2026-07-27")]])
+         cache = BarsCache()
+-        assert await build_daily(fetch, cache, "2330", today) == [bar("2026-07-27")]
+-        assert await build_daily(fetch, cache, "2330", today) == [bar("2026-07-27")]
++        assert (await build_daily(fetch, cache, "2330", today)).bars == [bar("2026-07-27")]
++        assert (await build_daily(fetch, cache, "2330", today)).bars == [bar("2026-07-27")]
+         assert len(fetch.calls) == 1  # 第二次全走 memo
+ 
+     async def test_daily_empty_not_cached(self) -> None:
+@@ -57,15 +86,15 @@ class TestDailyCache:
+         clock = {"t": 0.0}
+         fetch = _Fetcher([[], [bar("2026-07-27")]])
+         cache = BarsCache(clock=lambda: clock["t"])
+-        assert await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28)) == []
++        assert (await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28))).bars == []
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+-        assert await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28)) != []
++        assert (await build_daily(fetch, cache, "2330", _dt.date(2026, 7, 28))).bars != []
+         assert len(fetch.calls) == 2
+ 
+     async def test_daily_tail_limited_to_120(self) -> None:
+         many = [bar(f"2026-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}") for i in range(200)]
+         fetch = _Fetcher([many])
+-        bars = await build_daily(fetch, BarsCache(), "2330", _dt.date(2026, 7, 28))
++        bars, _ = await build_daily(fetch, BarsCache(), "2330", _dt.date(2026, 7, 28))
+         assert len(bars) == DAILY_MAX_BARS
+ 
+     async def test_daily_window_is_180_calendar_days(self) -> None:
+@@ -87,9 +116,9 @@ class TestMinuteTwoTier:
+         fetch = _Fetcher([hist, cur, cur])
+         cache = BarsCache(ttl=0.0)  # 當日段每次都過期
+         first = await build_minute(fetch, cache, "2330", 2, today)
+-        assert first == hist + cur
++        assert first.bars == hist + cur
+         second = await build_minute(fetch, cache, "2330", 2, today)
+-        assert second == hist + cur
++        assert second.bars == hist + cur
+         # 3 次呼叫 = 歷史 1 次 + 當日 2 次(歷史沒有重抓)
+         assert len(fetch.calls) == 3
+         assert [c[1:] for c in fetch.calls] == [
+@@ -124,7 +153,7 @@ class TestMinuteTwoTier:
+         await build_minute(fetch, cache, "2330", 2, today)  # TTL 內 → 不重抓
+         assert len(fetch.calls) == 2
+         clock["t"] = 40.0
+-        out = await build_minute(fetch, cache, "2330", 2, today)  # TTL 過 → 只重抓當日
++        out, _ = await build_minute(fetch, cache, "2330", 2, today)  # TTL 過 → 只重抓當日
+         assert len(fetch.calls) == 3
+         assert out[-1]["t"] == "2026-07-28 09:02"  # SC-10:最後一根會前進
+ 
+@@ -141,7 +170,7 @@ class TestMinuteTwoTier:
+         await build_minute(fetch, cache, "2330", 2, today)
+         assert cache.hist_missing("2330", _dt.date(2026, 7, 27), _dt.date(2026, 7, 27)) != []
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+-        out = await build_minute(fetch, cache, "2330", 2, today)
++        out, _ = await build_minute(fetch, cache, "2330", 2, today)
+         assert out == [bar("2026-07-27 09:01")]
+ 
+     async def test_days_1_skips_history_segment(self) -> None:
+@@ -156,9 +185,9 @@ class TestMinuteTwoTier:
+         clock = {"t": 0.0}
+         fetch = _Fetcher([[], [bar("2026-07-28 09:01")]])
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        assert await build_minute(fetch, cache, "2330", 1, today) == []
++        assert (await build_minute(fetch, cache, "2330", 1, today)).bars == []
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+-        assert await build_minute(fetch, cache, "2330", 1, today) != []
++        assert (await build_minute(fetch, cache, "2330", 1, today)).bars != []
+ 
+ 
+ class TestPhase5Hardening:
+@@ -176,7 +205,7 @@ class TestPhase5Hardening:
+             _dt.date(2026, 7, 26),
+             _dt.date(2026, 7, 27),
+         ]
+-        out = await build_minute(fetch, cache, "2330", 5, today)
++        out, _ = await build_minute(fetch, cache, "2330", 5, today)
+         assert [b["t"] for b in out] == [b["t"] for b in full]
+ 
+     async def test_existing_bars_not_overwritten_by_empty(self) -> None:
+@@ -189,8 +218,8 @@ class TestPhase5Hardening:
+     async def test_today_cache_keyed_by_date_survives_midnight(self) -> None:
+         """跨午夜:昨日的當日段不可在 TTL 窗內被當成今日資料回(review P2-9)。"""
+         cache = BarsCache(ttl=999.0)
+-        cache.today_put("2330", "2026-07-28", [bar("2026-07-28 13:30")])
+-        assert cache.today_get("2330", "2026-07-28") is not None
++        cache.today_put("2330", "2026-07-28", [bar("2026-07-28 13:30")], "ok")
++        assert cache.today_get("2330", "2026-07-28") == ([bar("2026-07-28 13:30")], "ok")
+         assert cache.today_get("2330", "2026-07-29") is None
+ 
+     async def test_prune_drops_out_of_window_entries(self) -> None:
+@@ -198,7 +227,7 @@ class TestPhase5Hardening:
+         old = _dt.date(2026, 1, 1)
+         cache.put_hist_range("2330", old, old, [bar("2026-01-01 09:01")])
+         cache.daily_put("2330", "2026-01-01", [bar("2026-01-01")])
+-        cache.today_put("2330", "2026-01-01", [bar("2026-01-01 09:01")])
++        cache.today_put("2330", "2026-01-01", [bar("2026-01-01 09:01")], "ok")
+         cache.prune(_dt.date(2026, 7, 28))
+         assert cache.hist_range("2330", old, old) == []
+         assert cache.daily_get("2330", "2026-01-01") is None
+@@ -217,10 +246,10 @@ class TestEmptyNegativeCache:
+         clock = {"t": 0.0}
+         fetch = _Fetcher([[], []])
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        assert await build_minute(fetch, cache, "9999", 2, today) == []
++        assert (await build_minute(fetch, cache, "9999", 2, today)).bars == []
+         calls = len(fetch.calls)
+         clock["t"] = EMPTY_TTL_SECS - 1.0
+-        assert await build_minute(fetch, cache, "9999", 2, today) == []
++        assert (await build_minute(fetch, cache, "9999", 2, today)).bars == []
+         assert len(fetch.calls) == calls  # TTL 內完全不打 TC4
+ 
+     async def test_empty_ttl_expiry_recovers(self) -> None:
+@@ -229,16 +258,16 @@ class TestEmptyNegativeCache:
+         clock = {"t": 0.0}
+         fetch = _Fetcher([[], [], [bar("2026-07-27 09:01")], [bar("2026-07-28 09:01")]])
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        assert await build_minute(fetch, cache, "9999", 2, today) == []
++        assert (await build_minute(fetch, cache, "9999", 2, today)).bars == []
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+-        assert await build_minute(fetch, cache, "9999", 2, today) != []
++        assert (await build_minute(fetch, cache, "9999", 2, today)).bars != []
+ 
+     async def test_empty_key_includes_days(self) -> None:
+         """key 含 days:days=1 的空結果不可把 days=30 一併釘住(review R15)。"""
+         today = _dt.date(2026, 7, 28)
+         cache = BarsCache(ttl=999.0)
+         fetch = _Fetcher([[], [bar("2026-07-27 09:01")], [bar("2026-07-28 09:01")]])
+-        assert await build_minute(fetch, cache, "2330", 1, today) == []
++        assert (await build_minute(fetch, cache, "2330", 1, today)).bars == []
+         calls = len(fetch.calls)
+         await build_minute(fetch, cache, "2330", 30, today)
+         assert len(fetch.calls) > calls
+@@ -248,10 +277,10 @@ class TestEmptyNegativeCache:
+         clock = {"t": 0.0}
+         fetch = _Fetcher([[], []])
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        assert await build_daily(fetch, cache, "9999", today) == []
++        assert (await build_daily(fetch, cache, "9999", today)).bars == []
+         calls = len(fetch.calls)
+         clock["t"] = EMPTY_TTL_SECS - 1.0
+-        assert await build_daily(fetch, cache, "9999", today) == []
++        assert (await build_daily(fetch, cache, "9999", today)).bars == []
+         assert len(fetch.calls) == calls
+ 
+     async def test_today_empty_with_nonempty_history_still_short_cached(self) -> None:
+@@ -263,10 +292,10 @@ class TestEmptyNegativeCache:
+         hist = [bar("2026-07-27 09:01")]
+         fetch = _Fetcher([hist, [], []])
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        assert await build_minute(fetch, cache, "2317", 2, today) == hist
++        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist
+         calls = len(fetch.calls)
+         clock["t"] = EMPTY_TTL_SECS - 1.0
+-        assert await build_minute(fetch, cache, "2317", 2, today) == hist
++        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist
+         assert len(fetch.calls) == calls  # 當日段不再重打
+ 
+     async def test_today_empty_short_ttl_expires(self) -> None:
+@@ -277,9 +306,9 @@ class TestEmptyNegativeCache:
+         cur = [bar("2026-07-28 09:01")]
+         fetch = _Fetcher([hist, [], cur])
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        assert await build_minute(fetch, cache, "2317", 2, today) == hist
++        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+-        assert await build_minute(fetch, cache, "2317", 2, today) == hist + cur
++        assert (await build_minute(fetch, cache, "2317", 2, today)).bars == hist + cur
+ 
+     async def test_prune_evicts_expired_today_entries(self) -> None:
+         """`today_put` 開始存空 entry 後,同日內過期的 entry 也要能回收。
+@@ -292,8 +321,8 @@ class TestEmptyNegativeCache:
+         clock = {"t": 0.0}
+         today = _dt.date(2026, 7, 28)
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        cache.today_put("9999", today.isoformat(), [])  # 空 → 吃 EMPTY_TTL_SECS
+-        cache.today_put("2330", today.isoformat(), [bar("2026-07-28 09:01")])  # 非空 → 吃 ttl
++        cache.today_put("9999", today.isoformat(), [], "ok")  # 空 → 吃 EMPTY_TTL_SECS
++        cache.today_put("2330", today.isoformat(), [bar("2026-07-28 09:01")], "ok")  # 非空 → ttl
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+         cache.prune(today)
+         # 空 entry 已過期 → 回收;非空 entry 的 ttl=999 還沒到 → 留著
+@@ -302,12 +331,121 @@ class TestEmptyNegativeCache:
+         assert cache.today_entry_count() == 1
+ 
+     async def test_prune_drops_only_expired_empty_marks(self) -> None:
+-        """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。"""
++        """prune 在每次 build_* 開頭都會跑 —— 無條件清空等於負向快取從未生效。
++
++        順帶覆蓋 SC-5:標記存的是**原因**,prune 過一輪也不得被洗成 ok。
++        """
+         clock = {"t": 0.0}
+         cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
+-        cache.empty_mark("2330", "1", 30)
++        cache.empty_mark("2330", "1", 30, "timeout")
+         cache.prune(_dt.date(2026, 7, 28))
+-        assert cache.empty_fresh("2330", "1", 30) is True  # 未過期 → 留著
++        assert cache.empty_status("2330", "1", 30) == "timeout"  # 未過期 → 留著,原因保真
+         clock["t"] = EMPTY_TTL_SECS + 1.0
+         cache.prune(_dt.date(2026, 7, 28))
+-        assert cache.empty_fresh("2330", "1", 30) is False  # 過期 → 被 prune 丟掉
++        assert cache.empty_status("2330", "1", 30) is None  # 過期 → 被 prune 丟掉
++
++
++class TestStatusFlow:
++    """N-3:status 沿 build_* 流出,兩段以 worst 合併(SC-6)。"""
++
++    async def test_daily_status_flows_through(self) -> None:
++        today = _dt.date(2026, 7, 28)
++        fetch = _Fetcher([[]], ["timeout"])
++        assert await build_daily(fetch, BarsCache(), "2330", today) == ([], "timeout")
++
++    async def test_daily_ok_status_when_data(self) -> None:
++        today = _dt.date(2026, 7, 28)
++        fetch = _Fetcher([[bar("2026-07-27")]])
++        assert await build_daily(fetch, BarsCache(), "2330", today) == ([bar("2026-07-27")], "ok")
++
++    async def test_daily_memo_hit_reports_ok(self) -> None:
++        """已有資料的 memo 命中 = 沒發 fetch,沒有壞消息可報。"""
++        today = _dt.date(2026, 7, 28)
++        fetch = _Fetcher([[bar("2026-07-27")]], ["timeout"])
++        cache = BarsCache()
++        # 第一次:有資料但那一趟 timeout(DK 逾時→1K fallback 有料的樣態)
++        assert (await build_daily(fetch, cache, "2330", today)).status == "timeout"
++        # 第二次全走 memo → 不再重播上一次的壞消息
++        assert (await build_daily(fetch, cache, "2330", today)) == ([bar("2026-07-27")], "ok")
++        assert len(fetch.calls) == 1
++
++    async def test_minute_worst_of_two_segments(self) -> None:
++        """歷史段 ok + 當日段 timeout → timeout(bars 非空也照回 status)。"""
++        today = _dt.date(2026, 7, 28)
++        hist = [bar("2026-07-27 09:01")]
++        fetch = _Fetcher([hist, []], ["ok", "timeout"])
++        out, status = await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)
++        assert out == hist
++        assert status == "timeout"
++
++    async def test_minute_disconnected_beats_timeout(self) -> None:
++        today = _dt.date(2026, 7, 28)
++        fetch = _Fetcher([[], []], ["timeout", "disconnected"])
++        assert (await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)) == (
++            [],
++            "disconnected",
++        )
++
++    async def test_minute_all_ok_stays_ok(self) -> None:
++        today = _dt.date(2026, 7, 28)
++        fetch = _Fetcher([[], []])
++        assert (await build_minute(fetch, BarsCache(ttl=999.0), "2330", 2, today)).status == "ok"
++
++    async def test_minute_history_memo_hit_counts_as_ok(self) -> None:
++        """歷史段全 memo 命中(未 fetch)→ 不貢獻 status;當日段 ok → 整體 ok。"""
++        today = _dt.date(2026, 7, 28)
++        hist = [bar("2026-07-27 09:01")]
++        cur = [bar("2026-07-28 09:01")]
++        fetch = _Fetcher([hist, cur, cur], ["timeout", "ok", "ok"])
++        cache = BarsCache(ttl=0.0)  # 當日段每次都過期 → 只有歷史段吃 memo
++        assert (await build_minute(fetch, cache, "2330", 2, today)).status == "timeout"
++        assert (await build_minute(fetch, cache, "2330", 2, today)).status == "ok"
++
++    async def test_today_cache_hit_preserves_status(self) -> None:
++        """R4:`_today` 存 status —— days 維度不同時 `_empty` 未命中,
++        當日段的空若被視為 ok,timeout 就被洗白(SC-5)。"""
++        today = _dt.date(2026, 7, 28)
++        clock = {"t": 0.0}
++        hist = [bar("2026-07-27 09:01")]
++        # call0=days1 當日段 timeout;call1=days30 歷史段 ok(當日段走 cache)
++        fetch = _Fetcher([[], hist], ["timeout", "ok"])
++        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
++        assert (await build_minute(fetch, cache, "2330", 1, today)) == ([], "timeout")
++        out, status = await build_minute(fetch, cache, "2330", 30, today)
++        assert out == hist
++        assert status == "timeout"  # 當日段那份 timeout 沒被洗白
++
++
++class TestEmptyMarkStatusFidelity:
++    """N-4 / SC-5:負向快取回的是**存入時的 status**,不得洗白成 ok。"""
++
++    async def test_minute_empty_mark_replays_timeout(self) -> None:
++        today = _dt.date(2026, 7, 28)
++        clock = {"t": 0.0}
++        fetch = _Fetcher([[], []], ["ok", "timeout"])
++        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
++        assert (await build_minute(fetch, cache, "9999", 2, today)) == ([], "timeout")
++        calls = len(fetch.calls)
++        clock["t"] = EMPTY_TTL_SECS - 1.0
++        assert (await build_minute(fetch, cache, "9999", 2, today)) == ([], "timeout")
++        assert len(fetch.calls) == calls  # TTL 內不打 TC4,但原因照樣說得出來
++
++    async def test_daily_empty_mark_replays_disconnected(self) -> None:
++        today = _dt.date(2026, 7, 28)
++        clock = {"t": 0.0}
++        fetch = _Fetcher([[], []], ["disconnected", "ok"])
++        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
++        assert (await build_daily(fetch, cache, "9999", today)) == ([], "disconnected")
++        clock["t"] = EMPTY_TTL_SECS - 1.0
++        assert (await build_daily(fetch, cache, "9999", today)) == ([], "disconnected")
++
++    async def test_expired_mark_refetches_and_updates_status(self) -> None:
++        """過期後恢復重抓,新的 status 取代舊的(不是永遠停在第一次的原因)。"""
++        today = _dt.date(2026, 7, 28)
++        clock = {"t": 0.0}
++        fetch = _Fetcher([[], []], ["timeout", "ok"])
++        cache = BarsCache(ttl=999.0, clock=lambda: clock["t"])
++        assert (await build_daily(fetch, cache, "9999", today)).status == "timeout"
++        clock["t"] = EMPTY_TTL_SECS + 1.0
++        assert (await build_daily(fetch, cache, "9999", today)) == ([], "ok")
++        assert len(fetch.calls) == 2
+diff --git a/tests/server/test_market_routes.py b/tests/server/test_market_routes.py
+index 193fac8..9326f4a 100644
+--- a/tests/server/test_market_routes.py
++++ b/tests/server/test_market_routes.py
+@@ -206,8 +206,8 @@ class TestVolumeMeta:
+         class ZeroVol(FakeIndexSource):
+             def fetch_bars_range_tagged(
+                 self, code: str, tf: str, start: str, end: str
+-            ) -> tuple[list[dict], str]:
+-                return [{"t": "2026-07-29", "o": 1, "h": 2, "l": 0, "c": 1, "v": 0}], "tc4_dk"
++            ) -> tuple[list[dict], str, str]:
++                return [{"t": "2026-07-29", "o": 1, "h": 2, "l": 0, "c": 1, "v": 0}], "tc4_dk", "ok"
+ 
+         with make_client(index_source=ZeroVol()) as c:
+             r = c.get("/api/market/bars/TWSE?tf=D")
+@@ -255,8 +255,8 @@ class TestMinutePath:
+         class Empty(FakeIndexSource):
+             def fetch_bars_range_tagged(
+                 self, code: str, tf: str, start: str, end: str
+-            ) -> tuple[list[dict], str]:
+-                return [], "tc4_1k"
++            ) -> tuple[list[dict], str, str]:
++                return [], "tc4_1k", "ok"
+ 
+         with make_client(index_source=Empty()) as c:
+             r = c.get("/api/market/bars/TWSE?tf=1")
+@@ -282,8 +282,8 @@ class TestPartialLast:
+         class Fixed(FakeIndexSource):
+             def fetch_bars_range_tagged(
+                 self, code: str, tf: str, start: str, end: str
+-            ) -> tuple[list[dict], str]:
+-                return [_dbar(last_date, 1_000)], "tc4_dk"
++            ) -> tuple[list[dict], str, str]:
++                return [_dbar(last_date, 1_000)], "tc4_dk", "ok"
+ 
+         return Fixed()
+ 
+@@ -307,3 +307,30 @@ class TestPartialLast:
+         with make_client(index_source=self._src(_TODAY)) as c:
+             assert c.get("/api/market/bars/TWSE?tf=W").json()["meta"]["partial_last"] is True
+             assert c.get("/api/market/bars/TWSE?tf=M").json()["meta"]["partial_last"] is True
++
++
++class TestMarketPayloadUnaffectedByBarsStatus:
++    """N-6:個股 bars 的三態 status **不得**滲進 market payload(白名單 6)。
++
++    `meta.source` 是資料源標籤(tc4_dk / tc4_1k / unavailable …),與 status 同構
++    (都是 str)—— 誤把帶 status 的 fetcher 接進 `build_period` 會讓它靜默變成 "ok",
++    畫面上就是「來源:ok」這種沒人會第一眼認出是 bug 的字(R5 的誤接守門)。
++    """
++
++    def test_market_payload_has_no_status_field(self) -> None:
++        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
++            for path in ("/api/market/bars/TWSE?tf=D", "/api/market/bars/TWSE?tf=1&days=1"):
++                body = c.get(path).json()
++                assert "status" not in body
++                assert "status" not in body["meta"]
++
++    def test_meta_source_is_never_a_status_word(self) -> None:
++        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
++            for path in (
++                "/api/market/bars/TWSE?tf=D",
++                "/api/market/bars/TWSE?tf=W",
++                "/api/market/bars/TWSE?tf=1&days=1",
++                "/api/market/bars/TXF?tf=D",
++            ):
++                source = c.get(path).json()["meta"]["source"]
++                assert source not in ("ok", "timeout", "disconnected"), path
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index b484c05..c04fdb6 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -6,6 +6,7 @@ import threading
+ import time
+ from typing import Callable
+ 
++from copycat.live.stock_source import Bar, BarsStatus
+ from copycat.server.stock_engine import StockEngine
+ 
+ 
+@@ -89,9 +90,9 @@ class FakeSource:
+ 
+     def fetch_bars_range(
+         self, code: str, tf: str, start_date: str, end_date: str
+-    ) -> list:
++    ) -> tuple[list[Bar], BarsStatus]:
+         """Protocol 新增方法(change-spec R2-1);既有斷言不依賴,回空即可。"""
+-        return []
++        return [], "ok"
+ 
+     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+         return []
+@@ -619,6 +620,41 @@ class TestReviewFixes:
+         await engine.close()
+ 
+ 
++class TestBarsRangeStatus:
++    """N-2:TC4 斷線在 engine 層被吞成空,前端只看得到「無 K 線資料」。
++
++    降級空的行為照舊(K 線可降級,不 raise),但**原因要跟著空一起送出去**
++    —— 那正是使用者五秒內要答出「壞了 vs 沒資料」的唯一依據。
++    """
++
++    async def test_connection_error_reports_disconnected(self) -> None:
++        engine, src = await _make()
++
++        def boom(
++            code: str, tf: str, start_date: str, end_date: str
++        ) -> tuple[list[Bar], BarsStatus]:
++            raise ConnectionError("tc4 down")
++
++        src.fetch_bars_range = boom  # type: ignore[method-assign]
++        assert await engine.bars_range("2330", "D", "2026-01-01", "2026-07-28") == (
++            [],
++            "disconnected",
++        )
++        await engine.close()
++
++    async def test_source_status_passed_through(self) -> None:
++        engine, src = await _make()
++
++        def slow(
++            code: str, tf: str, start_date: str, end_date: str
++        ) -> tuple[list[Bar], BarsStatus]:
++            return [], "timeout"
++
++        src.fetch_bars_range = slow  # type: ignore[method-assign]
++        assert await engine.bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
++        await engine.close()
++
++
+ class TestStkfut:
+     async def test_stkfut_subscribed_with_future_prefix(self) -> None:
+         engine, src = await _make()
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 915f6d7..49a6368 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -365,6 +365,7 @@ class TestBarsRoute:
+                 "code": "2330",
+                 "tf": "D",
+                 "bars": [{"t": "2026-07-27", "o": 100, "h": 110, "l": 90, "c": 105, "v": 7}],
++                "status": "ok",
+             }
+             assert fake.bars_calls[0][1] == "D"
+ 
+@@ -427,10 +428,11 @@ class TestBarsRoute:
+             assert r.json()["bars"]
+ 
+     def test_tc4_down_returns_empty_200(self, tmp_path: Path) -> None:
+-        """engine 層降級空(不是 502)—— 前端顯示「無 K 線資料」而非炸掉。"""
++        """engine 層降級空(不是 502),但 status 要說出是斷線 —— 前端才分得出
++        「TC4 掛了」與「這檔真的沒資料」,兩者原本收斂成同一句「無 K 線資料」。"""
+         client, fake = make_client(tmp_path)
+ 
+-        def boom(code: str, tf: str, start_date: str, end_date: str) -> list:
++        def boom(code: str, tf: str, start_date: str, end_date: str) -> tuple[list, str]:
+             raise ConnectionError("tc4 down")
+ 
+         fake.fetch_bars_range = boom  # type: ignore[method-assign]
+@@ -438,3 +440,24 @@ class TestBarsRoute:
+             r = client.get("/api/stock/bars/2330?tf=D")
+             assert r.status_code == 200
+             assert r.json()["bars"] == []
++            assert r.json()["status"] == "disconnected"
++
++    def test_timeout_status_reaches_response(self, tmp_path: Path) -> None:
++        """N-5:source 層 deadline 用滿 → `{"status": "timeout", "bars": []}`(SC-1)。"""
++        client, fake = make_client(tmp_path)
++        fake.bars_result = []
++        fake.bars_status = "timeout"
++        with client:
++            r = client.get("/api/stock/bars/2330?tf=D")
++            assert r.status_code == 200
++            assert r.json()["status"] == "timeout"
++            assert r.json()["bars"] == []
++
++    def test_minute_response_carries_status(self, tmp_path: Path) -> None:
++        """分 K 路徑同樣要帶 status(兩段合併後的最壞值)。"""
++        client, fake = make_client(tmp_path)
++        fake.bars_result = []
++        fake.bars_status = "timeout"
++        with client:
++            r = client.get("/api/stock/bars/2330?tf=1&days=1")
++            assert r.json()["status"] == "timeout"

@@ -948,3 +948,37 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 - [ ] **book 推播與 snapshot 的定序是近似不是嚴格(review A-3)**:pendingBook 蓋回
   假設「推播晚於後端 handle」,誤差窗 = request 單程延遲(localhost 次毫秒)。
   嚴格定序需後端給 book seq(契約改動);鎖板稀疏推播場景若再見一格舊簿,先想起這條。
+
+
+## 2026-08-10(startup-names-futures-resub 回溯補審 — 當輪漏跑 code review,補審抓到 3 P1)
+
+> 完整 findings:`.claude/bug/startup-names-futures-resub/code-review-round-1.json`
+> (2 lens 回溯審 diff 99ef8888^..2d144765,逐條對照 HEAD e3aeda5b 現碼,全部仍成立)。
+> 三條 P1 的正解都已存在於 corr/stock 姊妹實作,照抄即可 — 建議合併成一輪 /bug 或 /mod。
+
+- [ ] **P1:`_resub_loop` 只接 ConnectionError**(futures_engine.py:155)— 壞電文
+  (tc4.py:349 JSONDecodeError / :274 KeyError)殺死復原路徑且零 log;同顆例外從
+  close() 的 `await resub` 重拋 → `source.close()` 跳過 → KeepAlive 洩漏 process
+  不退(repro 實證)。修法照 corr_engine.py:156-162(`_resub_round` + except
+  Exception 續行)+ close suppress 放寬;紅測試抄 test_corr_engine.py:429。
+- [ ] **P1:close() 不等 in-flight `to_thread`**(futures_engine.py:162)— orphan
+  thread 實測跨過 source.close() 後才 subscribe → `_ensure_connected` 重建 TC4 連線
+  無人 Disconnect。修法照 stock_engine.py:657-672(`_EngineClosing` 縮窗);
+  test_futures_engine.py:418 的 `attempts <= n+1` 是把洩漏寫成允許值,改鎖
+  「close 之後不得有 subscribe_enter」不變式。
+- [ ] **P1:`_check_stale` 重連掉訂閱零復原零覆蓋**(tc4.py:678-682)— 重掛失敗品
+  靜默丟出 `_subscribed` 且無 log;迴圈中途拋錯 → 尾段 symbol 永久蒸發;不進
+  `_pending_subs`,FuturesEngine 又是四引擎唯一沒接 on_reconnect 的。當輪 commit
+  「唯一缺的復原路徑」措辭不成立(repro.md 同句要一併更正)。
+- [ ] P2:重試成功後 HOT + leaf 雙訂閱(`_leaf_fed` 跨日每天複製)— 至少補
+  `_leaf_fed.discard(product)`(futures_engine.py:167)。
+- [ ] P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
+  error 態無 consumer 在讀,註解與現實不符。
+- [ ] P2:test_futures_engine 兩條收斂不變式 mutant 存活(:405 改
+  `assert engine._resub_task is None` 照 corr 版;收斂後補 pending 空 + task done)。
+- [ ] P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
+  皆全綠)— 成功案 sleep 3.5s 斷言 fetch 次數不增。
+- [ ] P2(共用層,獨立 /mod):tc4 `_ensure_connected` 無鎖 check-then-act ×
+  `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
+  系統性放大。修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
+  stock/corr/index 四 source 一起回歸。

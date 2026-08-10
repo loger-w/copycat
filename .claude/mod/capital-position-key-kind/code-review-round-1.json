@@ -1,0 +1,14 @@
+{
+  "lenses": ["close-safety-concurrency", "test-strength-frontend-wire"],
+  "findings": [
+    {"id": "A-1", "severity": "P2", "title": "_submit_close_locked 的 req 參數改造後零讀取(dead param),誤導鍵來源", "resolution": "accepted — 刪參數(兩 call site 同步)"},
+    {"id": "A-2", "severity": "P2", "title": "position_for 唯一匹配掃描不分 market,fut 路徑新依賴「sec 股號與期交所契約碼不重疊」隱形不變量(sec/fut 計數母體不一致)", "resolution": "accepted — position_for 加 market 參數,fut 傳 \"fut\"、掃描母體對齊 + 測試"},
+    {"id": "A-3", "severity": "P2", "title": "移除 dedupe 後同 (stock_no, kind) 重複列靜默 last-wins,sec 側失去異常訊號(fut merge 有 warning 對照)", "resolution": "accepted — set_positions 偵測重複鍵 warning 留痕"},
+    {"id": "A-4/F-1", "severity": "P2", "title": "kind 在 wire 三處為自由字串(同檔其他列舉欄位皆 Literal);錯值降級成誤導性 403「無部位可平」", "resolution": "accepted — PositionKind Literal(models)+ Body Literal(422)+ 前端 union"},
+    {"id": "A-5", "severity": "P2", "title": "kind 入審計靠 asdict 自動帶,零測試釘住(§7 可重建性)", "resolution": "accepted — 精確平倉測試補審計行 kind 斷言"},
+    {"id": "F-2", "severity": "P2", "title": "fut 平倉 body 也送 kind=\"cash\" 且 toEqual 把它鎖成契約;審計每筆 fut 多一個易誤讀欄位", "resolution": "accepted(方案 a)— body 條件化只在 sec 送 kind,fut 測試回到不含 kind"},
+    {"id": "F-3", "severity": "P2", "title": "spec 對 RightRail :283/292/300 的引用錯置(那是委託列測試);「獨立子元素」的真守門是 CapitalPositionsList.test.tsx:185", "resolution": "accepted — spec 更正(main session 自改)+ :185 加守門註解"}
+  ],
+  "whitelist_check": "A lens 逐條對照白名單 9 條無破壞(inflight 三端同鍵、scan_key 保守、close.py 零改動、orders 未動、error shape/WS 形狀不變、fut 列外觀不變);F lens 驗證不該紅測試的 `-` 行僅四處且全在該紅/該改清單內,無放寬斷言;兩個反證實驗(rowKey 回退 → 2 測試轉紅)證非 vacuous。",
+  "summary": "核心安全性質全數成立(close 路徑無 await 讓出、三端同鍵、送單種類取 pos.kind 而非 wire 值、鎖覆蓋完整、dialog 關窗語意更嚴格);8 P2 全為契約韌性/訊號留痕加固。"
+}

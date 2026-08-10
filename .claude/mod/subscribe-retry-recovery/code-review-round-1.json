@@ -1,0 +1,13 @@
+{
+  "lenses": ["concurrency-lifecycle", "whitelist-testcoverage"],
+  "findings": [
+    {"id": "C-1/W-1", "severity": "P1", "title": "段級 break 只解跨段餓死,段內 head-of-line 餓死原封不動(固定迭代順序 + 首個 ConnectionError break)", "resolution": "accepted — 段內迭代加 round-robin 輪轉起點(持鎖上界不變),補兩檔 pending 第一檔恆失敗的回歸測試"},
+    {"id": "C-2", "severity": "P1", "title": "_resubscribe_all 的 _failed_resubs 合併不持 _pool_lock,段 3 await 期間插入的新失敗會被成功 discard 抹掉;:383 註解宣稱的保護實際不存在", "resolution": "accepted — 合併收進 _pool_lock,建立「_failed_resubs 一律鎖內存取」不變式;修正註解"},
+    {"id": "C-3", "severity": "P2", "title": "corr _resub_loop 缺 per-round except Exception:非 ConnectionError 靜默殺掉重試路徑(close 的 gather 又吞掉)", "resolution": "accepted — 每輪包 try/except Exception + logger.exception 續行(對齊 corr _run / stock retry loop)"},
+    {"id": "W-2", "severity": "P2", "title": "stock 側缺 close() 後重試迴圈停止的測試(corr 有)", "resolution": "accepted — 仿 corr 補一條"},
+    {"id": "W-3", "severity": "P2", "title": "corr 重訂成功觸發 _schedule_backfill 是 spec 明列行為但零測試覆蓋(刪掉整段照樣全綠)", "resolution": "accepted — fake 記 fetch_day_1k 呼叫,鎖成功後回補 + 全成功不多跑"},
+    {"id": "W-4", "severity": "P2", "title": "否定斷言的「5 個間隔」在 Windows timer 解析度(15.6ms)下實際只 ~3 輪,spec 強度是假的", "resolution": "accepted — 改用可觀察輪數(哨兵檔 attempts)_wait_until 後再下否定斷言,或誠實註解 + 拉長 sleep"}
+  ],
+  "whitelist_check": "兩個 lens 皆逐條對照白名單 8 條:未發現靜默破壞(base 腿結構性排除、_acquire 回滾、refcount、set_watchlist 判準/順序、seed、signal_hub 呼叫點、rollover 兩段式、close 收尾、訊息形狀、_do 例外契約全保留);既有測試零 assertion 改動。",
+  "summary": "生命週期收尾與鎖判準正確;洞集中在重試排程公平性(段內餓死)與 _failed_resubs 鎖不變式。"
+}

@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {"id": "P2-R2-1", "severity": "P2", "title": "test_client.py:771/:783 同時列該改與不該紅兩清單,自相矛盾", "resolution": "accepted — 不該紅清單排除 :771 並指向該改條目"},
+    {"id": "P2-R2-2", "severity": "P2", "title": "🟢 測試清單未隨 SC-5 撤回 vacuous 的「渲染不 crash」測試", "resolution": "accepted — 改 console.error spy / 行為斷言,與 SC-5 對齊"},
+    {"id": "P2-R2-3", "severity": "P2", "title": "RightRail「regex 容忍」理由與事實不符(實為精確字串 + getNodeText 直接子節點);標籤須為獨立子元素的硬性前提未寫出", "resolution": "accepted — 理由更正 + 硬性要求寫入"}
+  ],
+  "summary": "無新 P0/P1,收斂。三個 round-1 fix 查證通過:P0-1 兩鍵分離無併發洞(close 路徑至 inflight 標記間無 await,caller 唯二);P1-3 兩段判別自洽且 warning 文案無測試契約;P2-5 fut 唯一匹配即使撞字串也 fail-safe(多列 None / sec 列被 market 檢查擋)。"
+}

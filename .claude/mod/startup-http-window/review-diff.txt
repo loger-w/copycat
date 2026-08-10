@@ -1,0 +1,1597 @@
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 5216dde..a13e155 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -5,7 +5,9 @@ from __future__ import annotations
+ import asyncio
+ import logging
+ import os
++import time
+ from contextlib import asynccontextmanager
++from dataclasses import dataclass
+ from datetime import date as _date
+ from pathlib import Path
+ from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
+@@ -24,7 +26,7 @@ from copycat.corr_config import load_config as load_corr_config
+ from copycat.server.capital_api import register_capital
+ from copycat.server.ws import WsBroadcaster, relay
+ from copycat.server.corr_engine import CorrelationEngine, CorrSource
+-from copycat.server.engine import EngineRuntime, QuoteSource
++from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
+ from copycat.server.futures_engine import FuturesEngine, FuturesSource
+ from copycat.server.index_engine import IndexEngine, IndexSource
+ from copycat.live.stock_source import Bar
+@@ -154,6 +156,9 @@ async def _boot(
+     - `make` 回 `None` = sentinel 解析結果為「不啟動」→ 整段跳過,**不記失敗 log**。
+     - `start` 語意 = 「帶到就緒的全部工作」,不只 `o.start()`:stock 的自選回填也在內
+       (`load_watchlist` 對壞檔不吞例外,現況正是由這個 except 接住)。
++    - 序列跑在背景 task,關機會 cancel 它 → **`CancelledError` 要單獨接**(`except
++      Exception` 接不到):已建好的物件不關就是一條洩漏的 TC4 session。close 內部多為
++      `asyncio.to_thread`,執行緒派出去後不受 cancel 影響,會自然跑完。
+     """
+     obj: _BootT | None = None
+     try:
+@@ -162,6 +167,15 @@ async def _boot(
+             return None
+         await start(obj)
+         return obj
++    except asyncio.CancelledError:
++        if obj is not None:
++            # best-effort:二次 cancel 會讓這個 await 就地拋,log 後把原本的
++            # CancelledError 交還關機路徑(shield 救不了 —— 孤兒 close task 一樣沒人 await)
++            try:
++                await close(obj)
++            except BaseException:
++                logger.exception("%s close 失敗(關機中斷 boot,忽略)", name)
++        raise
+     except Exception:
+         logger.exception("%s", fail_msg)
+         if obj is not None:
+@@ -172,6 +186,27 @@ async def _boot(
+         return None
+ 
+ 
++@dataclass
++class _Booted:
++    """boot 序列實際掛上去的引擎 —— 關機反序 close 的唯一來源。
++
++    `_boot_all` 與 lifespan 的 finally 不再共用同一組 local(序列本身要能獨立於
++    lifespan 的執行點推進),record 就是兩者之間那條界線:finally 只關「record 裡
++    有值的」,None = 沒起來或還沒輪到,跳過。
++
++    `signals_close` 存 callable 而非只存 hub:signals 的收攤要先關 bot、再從 engine
++    摘掛點、最後才關 hub(`_close_signals` 的 closure),那個順序不能在 finally 重寫。
++    """
++
++    stock: StockEngine | None = None
++    signals: SignalHub | None = None
++    signals_close: Callable[[SignalHub], Awaitable[None]] | None = None
++    index: IndexEngine | None = None
++    capital: CapitalClient | None = None
++    futures: FuturesEngine | None = None
++    corr: CorrelationEngine | None = None
++
++
+ def _default_source() -> QuoteSource:
+     from copycat.live.tc4 import TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
+ 
+@@ -241,249 +276,321 @@ def create_app(
+             # 指定日資料(spec R5)
+             session_rollover=os.environ.get("TXO_BACKFILL_DATE") is None,
+         )
++        # 未 started 的 runtime 照樣掛上去:route 對它的 None 沒有 guard,但「已建構
++        # 未 started」本來就走既有 NOT_READY / 空鏈語意(current-state §4),不需新分支
+         app.state.runtime = runtime
+-        await runtime.start()
+-
+-        # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
+-        def _make_stock() -> StockEngine | None:
+-            resolved_stock = (
+-                _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
++        # 其餘八個先掛 None:窗內的對外形狀 = 既有「引擎降級」形狀(503 / WS close)
++        app.state.stock = None
++        app.state.watchlist_service = None
++        app.state.signal_hub = None
++        app.state.discord_bot = None
++        app.state.index = None
++        app.state.capital = None
++        app.state.futures = None
++        app.state.corr = None
++        # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
++        # AttributeError → 被全域 handler 轉成 502
++        app.state.boot_done = False
++        app.state.boot_error = None
++        booted = _Booted()
++
++        async def _boot_all() -> None:
++            """引擎啟動序列(背景 task)。**順序即依賴**(current-state §2),不可重排、
++            不可並行:watchlist_service 先於 signals、signals 需 stock、index 綁
++            runtime.spot、capital 先 set_broadcast 再 start、corr 後於 futures。
++
++            每完成一段就同時寫 `app.state.X` 與 `booted.X` —— 前者給 route,後者給
++            關機反序 close(兩者必須成對,漏寫 record 的引擎關機時不會被關掉)。
++            """
++            started = time.monotonic()
++            try:
++                try:
++                    await runtime.start()
++                except Exception:
++                    # 🔴 D2:原本這裡的例外會炸掉 lifespan → 達錢 4 沒開的早上,個股 /
++                    # 指數 / 群益全部陪葬。改成只降級 txo 面(部分失敗時 `_series` 可能
++                    # 已填、self-heal 鏈仍會嘗試,所以不宣稱「恆 NOT_READY」)
++                    logger.exception("TXO runtime 啟動失敗,txo 面降級(其餘引擎照起)")
++
++                await _boot_engines()
++            except asyncio.CancelledError:
++                raise  # 關機中斷:不設 boot_done(關機中的 server 不得宣告就緒)
++            except Exception as exc:
++                # `_boot` 的傘只罩得住六段引擎;WatchlistService 建構、app.state 指派等
++                # 落在傘外 —— 沒有這層,序列半路崩掉會是「後續引擎全部靜默不啟動而
++                # /api/ready 照樣 true」,最壞的失效樣態
++                logger.exception("boot 序列非預期中止,後續引擎未啟動")
++                app.state.boot_error = repr(exc)
++            # 走到這裡 = 序列結束(可能不完整,由 boot_error 表述);cancel 天然跳過
++            app.state.boot_done = True
++            logger.info("boot 序列結束(%.1fs)", time.monotonic() - started)
++
++        async def _boot_engines() -> None:
++            """六段引擎的實際啟動序列(`_boot_all` 只管完成/中止語意與 done 標記)。"""
++
++            # stock engine:與 TXO runtime 並存;失敗不得波及 quote(同 trade 邊界慣例)
++            def _make_stock() -> StockEngine | None:
++                resolved_stock = (
++                    _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
++                )
++                if resolved_stock is None:
++                    return None
++                import datetime as _dt
++
++                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
++                return StockEngine(
++                    cast(StockSource, resolved_stock),
++                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
++                    throttle_secs=throttle_secs,
++                    checkpoint=backfill_date is None,
++                )
++
++            async def _start_stock(o: StockEngine) -> None:
++                await o.start()
++                # 自選回填屬於「帶到就緒」的一部分:load_watchlist 對壞檔不吞例外,
++                # 現況正是由 _boot 的 except 接住(留在 try 內是行為契約)
++                persisted = load_watchlist(wl_path)["codes"]
++                if persisted:
++                    await o.set_watchlist(persisted)
++
++            stock = await _boot(
++                "stock",
++                "stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)",
++                _make_stock,
++                _start_stock,
++                lambda o: o.close(),
+             )
+-            if resolved_stock is None:
+-                return None
+-            import datetime as _dt
+-
+-            backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+-            return StockEngine(
+-                cast(StockSource, resolved_stock),
+-                trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+-                throttle_secs=throttle_secs,
+-                checkpoint=backfill_date is None,
++            app.state.stock = stock
++            booted.stock = stock
++
++            # 自選複合操作(design §6):落檔 + 訂閱池 + 廣播三件事的單一定義,前端 PUT 與
++            # Discord `/watch` 共用同一把 lock。**必須先於 signals `_boot`**(impl-review R3):
++            # 它是 `_start_signals` closure 的自由變數,順序反了會是 NameError,而 `_boot` 的
++            # except 會把它吞成「訊號功能靜默停用」—— 從畫面上只看得到「今天都沒訊號」。
++            service = WatchlistService(wl_path, stock) if stock is not None else None
++            app.state.watchlist_service = service
++
++            # 訊號引擎(design §4.5):整段套 `_boot` 隔離 —— discord 登入失敗 / 壞自選檔
++            # 只讓訊號停用,不波及其他引擎。bot 由 start 建立、close 收攤(成對)。
++            bot: Bot | None = None
++
++            def _make_signals() -> SignalHub | None:
++                if stock is None:
++                    return None
++                engine = stock
++                return SignalHub(
++                    load_signals_config(),
++                    publish=engine._publish,
++                    daily_bars=engine.daily_bars,
++                    notify_fallback=notify_discord,
++                    # 自選檔所在目錄 = 本專案的 data 根(`data/stock_watchlist.json`)→
++                    # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
++                    data_dir=wl_path.parent,
++                    # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
++                    trade_date_fn=lambda: engine.trade_date,
++                )
++
++            async def _start_signals(hub: SignalHub) -> None:
++                nonlocal bot
++                await hub.start()
++                # membership 種子:沒有這一步,開機後所有 tick 都被 hub 的 membership gate 擋掉
++                hub.on_watchlist(load_watchlist(wl_path)["codes"])
++                bot = create_bot(service, hub)  # token 未設 / extras 未裝 → None(SC-8 降級)
++                if bot is not None:
++                    bot.start_bg()
++                    hub.attach_discord(bot.send_signal)
++                # **必須是最後一行**(CC-2):attach 之後這個 hub 就在 engine 熱路徑上了,
++                # 而 `_boot` 的 except 只會把它 close 掉、不會從 engine 摘下來 —— 提早 attach
++                # 再讓後面任何一步拋,留下的是「WS 有訊號、jsonl 與 today 全空」的殭屍。
++                if stock is not None:  # `_make_signals` 已保證;narrowing 用
++                    stock.attach_signal_hub(hub)
++
++            async def _close_signals(hub: SignalHub) -> None:
++                # try/finally(CC-1):bot.close 拋(token 失效)不得讓 hub 的 worker 洩漏、
++                # 也不得跳過關機盡力落檔
++                try:
++                    if bot is not None:
++                        await bot.close()
++                finally:
++                    if stock is not None:
++                        stock.detach_signal_hub()  # 先摘掛點:hub 收攤後熱路徑不得再打到它
++                    await hub.close()
++
++            signals = await _boot(
++                "signals",
++                "訊號引擎啟動失敗,訊號功能停用(其餘不受影響)",
++                _make_signals,
++                _start_signals,
++                _close_signals,
+             )
+-
+-        async def _start_stock(o: StockEngine) -> None:
+-            await o.start()
+-            # 自選回填屬於「帶到就緒」的一部分:load_watchlist 對壞檔不吞例外,
+-            # 現況正是由 _boot 的 except 接住(留在 try 內是行為契約)
+-            persisted = load_watchlist(wl_path)["codes"]
+-            if persisted:
+-                await o.set_watchlist(persisted)
+-
+-        stock = await _boot(
+-            "stock",
+-            "stock engine 初始化非預期失敗,個股功能停用(quote 不受影響)",
+-            _make_stock,
+-            _start_stock,
+-            lambda o: o.close(),
+-        )
+-        app.state.stock = stock
+-
+-        # 自選複合操作(design §6):落檔 + 訂閱池 + 廣播三件事的單一定義,前端 PUT 與
+-        # Discord `/watch` 共用同一把 lock。**必須先於 signals `_boot`**(impl-review R3):
+-        # 它是 `_start_signals` closure 的自由變數,順序反了會是 NameError,而 `_boot` 的
+-        # except 會把它吞成「訊號功能靜默停用」—— 從畫面上只看得到「今天都沒訊號」。
+-        service = WatchlistService(wl_path, stock) if stock is not None else None
+-        app.state.watchlist_service = service
+-
+-        # 訊號引擎(design §4.5):整段套 `_boot` 隔離 —— discord 登入失敗 / 壞自選檔
+-        # 只讓訊號停用,不波及其他引擎。bot 由 start 建立、close 收攤(成對)。
+-        bot: Bot | None = None
+-
+-        def _make_signals() -> SignalHub | None:
+-            if stock is None:
+-                return None
+-            engine = stock
+-            return SignalHub(
+-                load_signals_config(),
+-                publish=engine._publish,
+-                daily_bars=engine.daily_bars,
+-                notify_fallback=notify_discord,
+-                # 自選檔所在目錄 = 本專案的 data 根(`data/stock_watchlist.json`)→
+-                # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
+-                data_dir=wl_path.parent,
+-                # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
+-                trade_date_fn=lambda: engine.trade_date,
++            app.state.signal_hub = signals
++            booted.signals = signals
++            booted.signals_close = _close_signals
++            # 啟動失敗時 `_boot` 已呼叫 `_close_signals`(bot 也收了)→ 不對外暴露死掉的 bot
++            app.state.discord_bot = bot if signals is not None else None
++
++            # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
++            def _make_index() -> IndexEngine | None:
++                resolved_index = (
++                    _default_index_source() if index_source is DEFAULT_INDEX else index_source
++                )
++                if resolved_index is None:
++                    return None
++                import datetime as _dt
++
++                backfill_date = os.environ.get("TXO_BACKFILL_DATE")
++                return IndexEngine(
++                    cast(IndexSource, resolved_index),
++                    # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
++                    txf_getter=runtime.spot_millipts,
++                    mis_fetch=index_mis_fetch,
++                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
++                    rollover=backfill_date is None,
++                    throttle_secs=throttle_secs,
++                )
++
++            index = await _boot(
++                "index",
++                "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
++                _make_index,
++                lambda o: o.start(),
++                lambda o: o.close(),
+             )
+-
+-        async def _start_signals(hub: SignalHub) -> None:
+-            nonlocal bot
+-            await hub.start()
+-            # membership 種子:沒有這一步,開機後所有 tick 都被 hub 的 membership gate 擋掉
+-            hub.on_watchlist(load_watchlist(wl_path)["codes"])
+-            bot = create_bot(service, hub)  # token 未設 / extras 未裝 → None(SC-8 降級)
+-            if bot is not None:
+-                bot.start_bg()
+-                hub.attach_discord(bot.send_signal)
+-            # **必須是最後一行**(CC-2):attach 之後這個 hub 就在 engine 熱路徑上了,
+-            # 而 `_boot` 的 except 只會把它 close 掉、不會從 engine 摘下來 —— 提早 attach
+-            # 再讓後面任何一步拋,留下的是「WS 有訊號、jsonl 與 today 全空」的殭屍。
+-            if stock is not None:  # `_make_signals` 已保證;narrowing 用
+-                stock.attach_signal_hub(hub)
+-
+-        async def _close_signals(hub: SignalHub) -> None:
+-            # try/finally(CC-1):bot.close 拋(token 失效)不得讓 hub 的 worker 洩漏、
+-            # 也不得跳過關機盡力落檔
+-            try:
+-                if bot is not None:
+-                    await bot.close()
+-            finally:
+-                if stock is not None:
+-                    stock.detach_signal_hub()  # 先摘掛點:hub 收攤後熱路徑不得再打到它
+-                await hub.close()
+-
+-        signals = await _boot(
+-            "signals",
+-            "訊號引擎啟動失敗,訊號功能停用(其餘不受影響)",
+-            _make_signals,
+-            _start_signals,
+-            _close_signals,
+-        )
+-        app.state.signal_hub = signals
+-        # 啟動失敗時 `_boot` 已呼叫 `_close_signals`(bot 也收了)→ 不對外暴露死掉的 bot
+-        app.state.discord_bot = bot if signals is not None else None
+-
+-        # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
+-        def _make_index() -> IndexEngine | None:
+-            resolved_index = (
+-                _default_index_source() if index_source is DEFAULT_INDEX else index_source
++            app.state.index = index
++            booted.index = index
++
++            # capital(群益下單;capital-order design §13):factory 未設定 → None = disabled;
++            # 啟動失敗 catch → None 降級,server 照起(stock/index 同慣例)
++            async def _start_capital(c: CapitalClient) -> None:
++                loop = asyncio.get_running_loop()
++
++                def _capital_broadcast(payload: dict[str, object]) -> None:
++                    # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
++                    loop.call_soon_threadsafe(capital_ws.publish, payload)
++
++                c.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
++                c.start(loop)
++
++            capital = await _boot(
++                "capital",
++                "capital 初始化非預期失敗,群益功能停用(其餘不受影響)",
++                capital_factory.get_capital,
++                _start_capital,
++                lambda c: asyncio.to_thread(c.close),  # COM 執行緒 join 是同步的
+             )
+-            if resolved_index is None:
+-                return None
+-            import datetime as _dt
+-
+-            backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+-            return IndexEngine(
+-                cast(IndexSource, resolved_index),
+-                # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
+-                txf_getter=runtime.spot_millipts,
+-                mis_fetch=index_mis_fetch,
+-                trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+-                rollover=backfill_date is None,
+-                throttle_secs=throttle_secs,
++            app.state.capital = capital
++            booted.capital = capital
++
++            # futures 行情引擎(SC-8):__main__ 顯式傳 DEFAULT_FUTURES 即建真 source;
++            # 測試未傳(None)零連線;source 實例亦可
++            def _make_futures() -> FuturesEngine | None:
++                if futures_source is DEFAULT_FUTURES:
++                    resolved_futures: FuturesSource | None = _default_futures_source()
++                else:
++                    resolved_futures = cast("FuturesSource | None", futures_source)
++                if resolved_futures is None:
++                    return None
++                fut_src = resolved_futures
++                return FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
++
++            futures = await _boot(
++                "futures",
++                "futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)",
++                _make_futures,
++                lambda o: o.start(),
++                lambda o: o.close(),
+             )
+-
+-        index = await _boot(
+-            "index",
+-            "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
+-            _make_index,
+-            lambda o: o.start(),
+-            lambda o: o.close(),
+-        )
+-        app.state.index = index
+-
+-        # capital(群益下單;capital-order design §13):factory 未設定 → None = disabled;
+-        # 啟動失敗 catch → None 降級,server 照起(stock/index 同慣例)
+-        async def _start_capital(c: CapitalClient) -> None:
+-            loop = asyncio.get_running_loop()
+-
+-            def _capital_broadcast(payload: dict[str, object]) -> None:
+-                # COM 執行緒 → loop threadsafe 排入 WS fanout(publish 只能在 loop 上跑)
+-                loop.call_soon_threadsafe(capital_ws.publish, payload)
+-
+-            c.set_broadcast(_capital_broadcast)  # 先掛再 start:啟動狀態事件不漏
+-            c.start(loop)
+-
+-        capital = await _boot(
+-            "capital",
+-            "capital 初始化非預期失敗,群益功能停用(其餘不受影響)",
+-            capital_factory.get_capital,
+-            _start_capital,
+-            lambda c: asyncio.to_thread(c.close),  # COM 執行緒 join 是同步的
+-        )
+-        app.state.capital = capital
+-
+-        # futures 行情引擎(SC-8):__main__ 顯式傳 DEFAULT_FUTURES 即建真 source;
+-        # 測試未傳(None)零連線;source 實例亦可
+-        def _make_futures() -> FuturesEngine | None:
+-            if futures_source is DEFAULT_FUTURES:
+-                resolved_futures: FuturesSource | None = _default_futures_source()
+-            else:
+-                resolved_futures = cast("FuturesSource | None", futures_source)
+-            if resolved_futures is None:
+-                return None
+-            fut_src = resolved_futures
+-            return FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
+-
+-        futures = await _boot(
+-            "futures",
+-            "futures engine 初始化非預期失敗,期貨行情停用(其餘不受影響)",
+-            _make_futures,
+-            lambda o: o.start(),
+-            lambda o: o.close(),
+-        )
+-        app.state.futures = futures
+-
+-        # 相關係數引擎(realtime-correlation SC-6):必須在 futures 之後建 —— base 腿
+-        # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
+-        # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
+-        def _make_corr() -> CorrelationEngine | None:
+-            # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
+-            if corr_source is DEFAULT_CORR:
+-                resolved_corr: CorrSource | None = _default_corr_source()
+-            else:
+-                resolved_corr = cast("CorrSource | None", corr_source)
+-            if resolved_corr is None:
+-                return None
+-            corr_src = resolved_corr
+-            futures_engine = futures
+-            return CorrelationEngine(
+-                lambda: corr_src,
+-                config=load_corr_config(),
+-                txf_state_getter=(
+-                    lambda: futures_engine.state() if futures_engine is not None else {}
+-                ),
+-                broadcast=corr_ws.publish,
+-                river_broadcast=river_ws.publish,
+-                # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
+-                futures_minutes_fetch=(
+-                    lambda product: (
+-                        futures_engine.fetch_day_1k(product) if futures_engine is not None else []
+-                    )
+-                ),
++            app.state.futures = futures
++            booted.futures = futures
++
++            # 相關係數引擎(realtime-correlation SC-6):必須在 futures 之後建 —— base 腿
++            # (台指)直接讀 futures.state(),不自行訂閱 TXF.HOT(同 symbol 跨 session 只推
++            # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
++            def _make_corr() -> CorrelationEngine | None:
++                # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
++                if corr_source is DEFAULT_CORR:
++                    resolved_corr: CorrSource | None = _default_corr_source()
++                else:
++                    resolved_corr = cast("CorrSource | None", corr_source)
++                if resolved_corr is None:
++                    return None
++                corr_src = resolved_corr
++                futures_engine = futures
++                return CorrelationEngine(
++                    lambda: corr_src,
++                    config=load_corr_config(),
++                    txf_state_getter=(
++                        lambda: futures_engine.state() if futures_engine is not None else {}
++                    ),
++                    broadcast=corr_ws.publish,
++                    river_broadcast=river_ws.publish,
++                    # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
++                    futures_minutes_fetch=(
++                        lambda product: (
++                            futures_engine.fetch_day_1k(product)
++                            if futures_engine is not None
++                            else []
++                        )
++                    ),
++                )
++
++            corr = await _boot(
++                "corr",
++                "corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)",
++                _make_corr,
++                lambda o: o.start(),
++                lambda o: o.close(),
+             )
++            app.state.corr = corr
++            booted.corr = corr
+ 
+-        corr = await _boot(
+-            "corr",
+-            "corr engine 初始化非預期失敗,相關係數停用(其餘不受影響)",
+-            _make_corr,
+-            lambda o: o.start(),
+-            lambda o: o.close(),
+-        )
+-        app.state.corr = corr
++        boot_task = asyncio.create_task(_boot_all())
+         try:
+             yield
+         finally:
++            if not boot_task.done():
++                boot_task.cancel()
++            try:
++                await boot_task
++            except asyncio.CancelledError:
++                logger.info("boot 序列被關機中斷(已建物件由 _boot 的 cancel 分支收掉)")
++            except BaseException:
++                # **絕不能讓它跳過下面的反序 close**:裸 await 會把 boot task 的例外
++                # 就地重拋 → 六段 close + runtime.close 全部不執行,TC4 session /
++                # COM 執行緒 / hub worker 一次全洩漏(同白名單「各自 try/except 續行」)
++                logger.exception("boot task 以例外結束(關機續行)")
+             # 關機反序:signals → corr → futures → capital → index → stock → runtime
+             # (corr 依賴 futures.state(),必須先收;signals 最前 —— fanout worker 還活著時
+             # 對已收攤的 stock engine publish 會炸在關機路徑上)
+-            if signals is not None:
++            if booted.signals is not None and booted.signals_close is not None:
+                 try:
+-                    await _close_signals(signals)  # bot 先於 hub(hub 的 sender 指向 bot)
++                    # bot 先於 hub(hub 的 sender 指向 bot)—— 順序封在 `_close_signals` 內
++                    await booted.signals_close(booted.signals)
+                 except Exception:
+                     logger.exception("signals close 失敗(關機續行)")
+-            if corr is not None:
++            if booted.corr is not None:
+                 try:
+-                    await corr.close()
++                    await booted.corr.close()
+                 except Exception:
+                     logger.exception("corr close 失敗(關機續行)")
+-            if futures is not None:
++            if booted.futures is not None:
+                 try:
+-                    await futures.close()
++                    await booted.futures.close()
+                 except Exception:
+                     logger.exception("futures close 失敗(關機續行)")
+-            if capital is not None:
++            if booted.capital is not None:
+                 try:
+-                    await asyncio.to_thread(capital.close)  # join COM 執行緒(≤5s)
++                    await asyncio.to_thread(booted.capital.close)  # join COM 執行緒(≤5s)
+                 except Exception:
+                     logger.exception("capital close 失敗(關機續行)")
+-            if index is not None:
++            if booted.index is not None:
+                 try:
+-                    await index.close()
++                    await booted.index.close()
+                 except Exception:
+                     logger.exception("index close 失敗(關機續行)")
+-            if stock is not None:
++            if booted.stock is not None:
+                 try:
+-                    await stock.close()
++                    await booted.stock.close()
+                 except Exception:
+                     logger.exception("stock close 失敗(關機續行)")
+             await runtime.close()
+@@ -518,6 +625,22 @@ def create_app(
+         """
+         return request.app.state.build.as_dict()
+ 
++    @app.get("/api/ready")
++    async def ready(request: Request) -> dict:
++        """readiness probe:`ready` = boot 序列已結束(啟動窗已關)。
++
++        **不是**「所有引擎都健康」—— 個別引擎的好壞由各 route 的 503 表述,那是另一個
++        問題(混進來會讓這條在任一引擎降級時就恆 false,失去「窗關了沒」的用途)。
++        `error` 非 null = 序列未走完即中止(傘外一步拋例外),後續引擎根本沒啟動。
++
++        `getattr` 帶 default:lifespan 之外(單元測試直接打 app)也要答得出來。
++        """
++        state = request.app.state
++        return {
++            "ready": bool(getattr(state, "boot_done", False)),
++            "error": getattr(state, "boot_error", None),
++        }
++
+     def _runtime(request: Request) -> EngineRuntime:
+         return request.app.state.runtime
+ 
+@@ -540,6 +663,9 @@ def create_app(
+             await runtime.activate(body.series_id)
+         except KeyError:
+             raise HTTPException(status_code=400, detail={"error": "UNKNOWN_SERIES"}) from None
++        except HandoverBusyError:
++            # 「現在忙,等一下再按」—— 與 NOT_READY(重試也一樣)刻意分開
++            raise HTTPException(status_code=503, detail={"error": "HANDOVER_BUSY"}) from None
+         return runtime.latest_snapshot()
+ 
+     @app.get("/api/txo/contracts")
+diff --git a/copycat/server/engine.py b/copycat/server/engine.py
+index 127459a..1ae302c 100644
+--- a/copycat/server/engine.py
++++ b/copycat/server/engine.py
+@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
+ _HANDOVER_RETRIES = 3
+ 
+ 
++class HandoverBusyError(RuntimeError):
++    """交接進行中,`activate` 不可重入(route 層轉 503 HANDOVER_BUSY)。
++
++    不複用 NOT_READY:那個碼的既有語意是「引擎沒起來,重試也一樣」,而這裡是
++    「現在忙,等一下再按就會成功」—— 同碼多出一種來源,前端與 log 都分不出來。
++    """
++
++
+ class QuoteSource(Protocol):
+     """行情來源抽象;TC4 實作在 copycat.live.tc4,測試注入 fake。"""
+ 
+@@ -152,18 +160,40 @@ class EngineRuntime:
+     # ---- 序列切換與交接 ----
+ 
+     async def activate(self, series_id: str) -> None:
+-        """§4 select 流程:unsub 舊 → reset → 交接協定(訂閱 buffer → 回補 → flush)→ live。"""
++        """§4 select 流程:unsub 舊 → reset → 交接協定(訂閱 buffer → 回補 → flush)→ live。
++
++        互斥涵蓋**整個 activate**,不只 `_run_handover`:下面的 `to_thread(unsubscribe)`
++        是個讓出點,只查 `_run_handover` 的旗標時,A 停在那裡(旗標尚未設起)B 就能
++        一路通過 → 兩個交接共用 `_buffer` 互搶 + backfill 雙份疊加。
++        """
+         series = self._series[series_id]  # 未知 series → KeyError(route 層轉 400)
+-        if self._active is not None and self._active.series_id != series_id:
+-            await asyncio.to_thread(self._source.unsubscribe, self._active)
+-        self._active = series
+-        if self._agg is None:
+-            self._agg = ChainAggregator(series.contracts)
+-        else:
+-            self._agg.reset(series.contracts)
+-        await self._run_handover(series, subscribe=True)
++        # check 與 set 之間**零 await** → 單執行緒 loop 上即原子
++        if self._handover_running:
++            raise HandoverBusyError(series_id)
++        self._handover_running = True
++        try:
++            if self._active is not None and self._active.series_id != series_id:
++                await asyncio.to_thread(self._source.unsubscribe, self._active)
++            self._active = series
++            if self._agg is None:
++                self._agg = ChainAggregator(series.contracts)
++            else:
++                self._agg.reset(series.contracts)
++            # `_run_handover` 內層也設/清同一個旗標,兩層 finally 復位冪等
++            await self._run_handover(series, subscribe=True)
++        finally:
++            # ⚠ 不變式:**`_run_handover` 之後不得再 await**。內層 finally 已把旗標清成
++            # False,到這裡之間現況零讓出點;日後在尾端補一個 await 就會開出「第三個
++            # activate 溜進來」的真窗,而不會有任何測試變紅。
++            self._handover_running = False
+ 
+     async def _run_handover(self, series: SeriesInfo, *, subscribe: bool) -> None:
++        """交接協定本體。
++
++        ⚠ 呼叫端不變式:`activate` 在本函式之後不得再 await —— 本函式的 finally 會把
++        `_handover_running` 清成 False,`activate` 外層 finally 之前若出現讓出點,
++        另一個 activate 就能在「交接已結束但 activate 還沒收尾」的空隙溜進來。
++        """
+         assert self._agg is not None
+         # 交接起點即記時段 key:失敗也記(避免 rollover 條件無限重觸發;恢復走
+         # on_reconnect 鏈,test_rollover_during_source_down 釘住)
+diff --git a/tests/helpers/boot.py b/tests/helpers/boot.py
+new file mode 100644
+index 0000000..91b7909
+--- /dev/null
++++ b/tests/helpers/boot.py
+@@ -0,0 +1,52 @@
++"""測試側的「引擎就緒」等待器(mod/startup-http-window D5)。
++
++啟動序列移到背景 task 之後,`with TestClient(app)` 返回只代表 **HTTP 面可用**,不再
++等於「引擎就緒」—— 而既有 server 測試整批依賴後者(進 context 就打 route 期待 200、
++或直接斷言 `app.state.signal_hub is not None`)。`BootedClient` 把那條假設補回來:
++enter 之後等到 boot 序列結束才交回 client,既有斷言語意因此零改動。
++"""
++
++from __future__ import annotations
++
++import time
++from typing import cast
++
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
++
++
++def wait_boot(app: FastAPI, timeout: float = 10.0, *, allow_error: bool = False) -> None:
++    """輪詢 `app.state.boot_done`(跨執行緒讀 bool = GIL 原子),逾時 raise。
++
++    done 之後檢查 `boot_error`:背景化把「序列本體拋例外」從 fail-loud(lifespan 炸、
++    TestClient enter 就爆)變成 fail-silent(log + 後續引擎不啟動),等待器必須把它
++    變回 loud —— 否則遷移過來的每個站點在 boot 半路崩掉時只會看到一片 503,照樣綠。
++    刻意驗這條降級行為的測試顯式傳 `allow_error=True`。
++
++    `getattr` 帶 default:lifespan 之外(沒進 context)呼叫時視為未完成,不 raise
++    AttributeError 蓋掉真正的失敗訊息。
++    """
++    deadline = time.monotonic() + timeout
++    while not getattr(app.state, "boot_done", False):
++        if time.monotonic() > deadline:
++            raise AssertionError(f"boot 序列未在 {timeout}s 內完成")
++        time.sleep(0.005)
++    error = getattr(app.state, "boot_error", None)
++    if error is not None and not allow_error:
++        raise AssertionError(f"boot 序列未走完即中止:{error}")
++
++
++class BootedClient(TestClient):
++    """`__enter__` 後自動等到引擎就緒的 `TestClient`(其餘行為完全相同)。"""
++
++    def __enter__(self) -> BootedClient:
++        super().__enter__()
++        try:
++            # starlette 宣告 `TestClient.app` 是 `ASGIApp`;此處恆為 create_app 的 FastAPI
++            wait_boot(cast("FastAPI", self.app))
++        except BaseException:
++            # 逾時的 client 若不歸還,lifespan 永不關閉 → portal 執行緒與 boot task
++            # 活到 process 結束,污染其後每一條測試
++            super().__exit__(None, None, None)
++            raise
++        return self
+diff --git a/tests/server/test_app.py b/tests/server/test_app.py
+index dda18b7..0be3d69 100644
+--- a/tests/server/test_app.py
++++ b/tests/server/test_app.py
+@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
+ from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+ 
++from tests.helpers.boot import BootedClient
++
+ C44000 = OptionContract(symbol="TC.O.TWF.TX4.202607.C.44000", cp="C", strike_millipts=44_000_000)
+ SERIES_A = SeriesInfo(
+     series_id="TX4.202607", name="TX4 202607", expiry="202607", contracts=(C44000,)
+@@ -53,7 +55,7 @@ def make_client(fake: FakeQuoteSource | None = None) -> tuple[TestClient, FakeQu
+     fake = fake or FakeQuoteSource()
+     app = create_app(fake, throttle_secs=0.01)
+     # raise_server_exceptions=False:讓全域 exception handler 的 502 回應可被斷言
+-    return TestClient(app, raise_server_exceptions=False), fake
++    return BootedClient(app, raise_server_exceptions=False), fake
+ 
+ 
+ class TestSeriesRoute:
+diff --git a/tests/server/test_boot_window.py b/tests/server/test_boot_window.py
+new file mode 100644
+index 0000000..e648db0
+--- /dev/null
++++ b/tests/server/test_boot_window.py
+@@ -0,0 +1,313 @@
++"""啟動窗(HTTP 已開、引擎還在起)的行為合約(mod/startup-http-window)。
++
++lifespan 的 `yield` 之前只做「便宜且必要」的三件事(build 身分 / banner / 建 runtime),
++整段引擎啟動序列改跑在背景 task —— uvicorn 因此在亞秒級開始 serve,而不是等 TXO 全鏈
++回補跑完(prod 分鐘級)。窗內的對外形狀 = 既有「引擎降級」形狀(503 NOT_READY /
++WS close),不是新狀態。
++
++這一組釘住四件事:窗真的開著、關機中斷 boot 不洩漏、runtime 起不來只降級 txo 面、
++序列本體拋例外要留下痕跡(背景化把它從 fail-loud 變 fail-silent)。
++"""
++
++from __future__ import annotations
++
++import threading
++import time
++from pathlib import Path
++
++import pytest
++from fastapi.testclient import TestClient
++
++import copycat.server.app as app_mod
++from copycat.live.models import SeriesInfo
++from copycat.server.app import create_app
++from tests.helpers.boot import wait_boot
++from tests.helpers.fake_sources import FakeStockSource
++from tests.helpers.fake_txo import SERIES, FakeTxoSource
++
++#: fake 的阻塞上限。測試一律自己放行,這只是「忘了放行」時不要把整套測試掛死的保險。
++_GATE_CAP = 15.0
++
++
++class BlockingTxoSource(FakeTxoSource):
++    """`list_series` 卡在 gate 上 —— 那是 `runtime.start` 的第一個 to_thread,也就是
++    prod 啟動最貴的那一段(TXO 全鏈回補)在測試裡的替身。
++
++    `entered` 是同步點:沒有它,測試無從分辨「boot 卡在這裡」與「boot 一行都還沒跑」
++    (`create_task` 只是排程)或「boot 早就跑完了」—— 後兩者會讓中斷路徑一次都沒執行
++    而測試照樣綠。
++    """
++
++    def __init__(self) -> None:
++        self.gate = threading.Event()
++        self.entered = threading.Event()
++        self.closed = False
++
++    def list_series(self) -> list[SeriesInfo]:
++        self.entered.set()
++        self.gate.wait(_GATE_CAP)
++        return [SERIES]
++
++    def close(self) -> None:
++        self.closed = True
++
++
++class BlockingBackfillTxoSource(FakeTxoSource):
++    """`fetch_backfill` 卡在 gate 上 —— 交接協定裡真正貴的那一段(prod 全鏈分鐘級)。
++
++    `list_series` 照常回,所以窗內 `/api/txo/series` 已經看得到序列 → 前端按得下去,
++    而初始交接還沒完 —— select 與 boot 中的交接並發共用 `_buffer` 的那個窗。
++    """
++
++    def __init__(self) -> None:
++        self.gate = threading.Event()
++        self.entered = threading.Event()
++
++    def fetch_backfill(self, series: SeriesInfo) -> list:
++        self.entered.set()
++        self.gate.wait(_GATE_CAP)
++        return []
++
++
++class FailingTxoSource(FakeTxoSource):
++    """`list_series` 直接拋 —— runtime start 的執行期失敗(D2)。"""
++
++    def __init__(self) -> None:
++        self.closed = False
++
++    def list_series(self) -> list[SeriesInfo]:
++        raise RuntimeError("TC4 沒開")
++
++    def close(self) -> None:
++        self.closed = True
++
++
++class BlockingSubscribeStockSource(FakeStockSource):
++    """`subscribe_symbol` 卡在 gate 上 —— 自選回填(`_start_stock` 的第二段)會走到它,
++    而那一步是 `asyncio.to_thread`,loop 仍能收下 cancel。
++
++    卡在 `set_trade_date` 反而不行:那一步同步跑在 loop 上,整條 loop 都會停住,
++    cancel 根本送不進去(boot 會在 gate 放行後照常跑完,中斷路徑一次都沒執行)。
++    """
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.gate = threading.Event()
++        self.entered = threading.Event()
++        self.closed = False
++
++    def subscribe_symbol(self, code: str) -> None:
++        self.entered.set()
++        self.gate.wait(_GATE_CAP)
++        super().subscribe_symbol(code)
++
++    def close(self) -> None:
++        self.closed = True
++
++
++def _watchlist(tmp_path: Path, codes: list[str]) -> Path:
++    path = tmp_path / "watchlist.json"
++    path.write_text(
++        '{"codes": %s, "groups": []}' % str(codes).replace("'", '"'), encoding="utf-8"
++    )
++    return path
++
++
++class TestBootWindowIsOpen:
++    def test_lifespan_yields_before_boot_completes(self) -> None:
++        """窗開著:boot 還卡在 TXO 那段時,HTTP 面必須已經在服務。
++
++        裸 `TestClient`(刻意不用 `BootedClient`)—— 這條要驗的正是「不等就緒也進得去」。
++        """
++        fake = BlockingTxoSource()
++        app = create_app(fake, throttle_secs=0.01)
++        client = TestClient(app, raise_server_exceptions=False)
++        t0 = time.monotonic()
++        with client:
++            entered_secs = time.monotonic() - t0
++            assert entered_secs < 2.0, (
++                f"進 context 花了 {entered_secs:.1f}s:lifespan 仍在等引擎起完"
++            )
++            assert fake.entered.wait(5), "boot 沒真的跑到 list_series,窗態斷言不算數"
++
++            assert app.state.boot_done is False
++            assert client.get("/api/health").status_code == 200, "build 身分在窗內必須答得出來"
++            assert client.get("/api/txo/series").status_code == 503
++            assert client.get("/api/stock/watchlist").status_code == 503
++
++            # **exit 之前必須放行**:阻塞點跑在 loop 的預設 executor,`__exit__` 會
++            # `shutdown_default_executor()` join 它(3.13 上限 300s),之後才放行 = 卡死
++            fake.gate.set()
++            wait_boot(app)
++            assert app.state.boot_done is True
++            assert app.state.boot_error is None
++            assert client.get("/api/txo/snapshot").status_code == 200
++
++
++class TestShutdownDuringBoot:
++    def test_shutdown_during_boot_closes_started(self) -> None:
++        """關機中斷 boot 不得洩漏已建好的 source(SC-3)。"""
++        fake = BlockingTxoSource()
++        app = create_app(fake, throttle_secs=0.01)
++        with TestClient(app, raise_server_exceptions=False):
++            assert fake.entered.wait(5), "boot 沒卡在 list_series,中斷路徑不會被執行"
++            # 放行必須落在 `__exit__` 阻塞期間 → 只能由別的執行緒定時放(見上一條註解)
++            threading.Timer(0.2, fake.gate.set).start()
++
++        assert fake.closed is True, "runtime.close 恆做(source 必須關掉)"
++        # 鑑別證據:cancel 路徑不設 boot_done。少了它,「Timer 先放行 → boot 正常跑完
++        # → 走正常反序 close」也會讓 fake.closed 成立,中斷路徑一次都沒驗到
++        assert app.state.boot_done is False, "關機中的 server 不得宣告就緒"
++        assert app.state.stock is None
++        assert app.state.index is None
++        assert app.state.corr is None
++
++    def test_boot_cancel_closes_inflight_engine(self, tmp_path: Path) -> None:
++        """中斷點落在某個引擎的 `_boot` 內時,已建好的物件也要關掉。
++
++        `_boot` 的 `except Exception` 接不到 `CancelledError` —— 少了那條分支,這裡
++        洩漏的是一條已連線的 TC4 session,而畫面上只看得到 503。
++        """
++        fake = BlockingSubscribeStockSource()
++        app = create_app(
++            FakeTxoSource(),
++            stock_source=fake,
++            stock_watchlist_path=_watchlist(tmp_path, ["2330"]),
++            throttle_secs=0.01,
++        )
++        with TestClient(app, raise_server_exceptions=False):
++            assert fake.entered.wait(5), "boot 沒卡在 stock 的自選回填上"
++            threading.Timer(0.2, fake.gate.set).start()
++
++        assert fake.closed is True, "cancel 時已建好的 stock source 必須關掉"
++        # 鑑別:引擎從未掛上 app.state → 這個 close 只可能出自 `_boot` 的 cancel 分支,
++        # 不可能是 lifespan finally 的正常反序(那條讀的是 record,而 record 沒被寫)
++        assert app.state.stock is None
++
++
++class TestRuntimeStartFailureDegrades:
++    def test_runtime_start_failure_degrades_not_crash(self, tmp_path: Path) -> None:
++        """TXO runtime 起不來只降級 txo 面,其餘引擎照起(D2,🔴 行為改動)。
++
++        現況是 lifespan 例外 → server 整台起不來:達錢 4 沒開的早上,個股 / 指數 /
++        群益全部跟著陪葬。
++        """
++        fake = FailingTxoSource()
++        stock = FakeStockSource()
++        app = create_app(
++            fake,
++            stock_source=stock,
++            stock_watchlist_path=_watchlist(tmp_path, []),
++            throttle_secs=0.01,
++        )
++        with TestClient(app, raise_server_exceptions=False) as client:
++            wait_boot(app)
++            # 受控降級 ≠ 序列中止:error 必須是 null,否則 `wait_boot` 的 loud 語意
++            # 會被這條常見狀況灌成雜訊
++            assert app.state.boot_error is None
++            assert client.get("/api/txo/series").status_code == 503
++            assert client.get("/api/stock/watchlist").status_code == 200
++
++
++class TestSelectDuringHandover:
++    def test_select_during_handover_returns_503(self) -> None:
++        """交接進行中的 select 回 503 HANDOVER_BUSY,交接完成後同請求 200(SC-4)。
++
++        窗開了之後這條才變得可達:`runtime.start` 已填 `_series` → `/api/txo/series`
++        回得出清單 → 前端按得下去,而初始交接還在跑。`activate` 沒有重入 guard 時,
++        第二個交接會與第一個共用 `_buffer`(engine.py 的 F1 註解警告的正是這件事)。
++        """
++        fake = BlockingBackfillTxoSource()
++        app = create_app(fake, throttle_secs=0.01)
++        client = TestClient(app, raise_server_exceptions=False)
++        with client:
++            assert fake.entered.wait(5), "初始交接沒卡在回補上,並發窗不存在"
++            assert client.get("/api/txo/series").status_code == 200, (
++                "序列還沒列出的話,前端根本按不下 select —— 這條測的窗不成立"
++            )
++            r = client.post("/api/txo/select", json={"series_id": SERIES.series_id})
++            assert r.status_code == 503
++            assert r.json()["detail"]["error"] == "HANDOVER_BUSY"
++
++            # **不用 Timer**:測試執行緒在兩次 POST 之間是自由的,預先 arm 反而會在慢
++            # 機器上讓第一次 POST 晚於放行 → 拿 200 假紅(Timer 協定只適用「放行時機
++            # 必須落在 __exit__ 阻塞期間」的那兩條)
++            fake.gate.set()
++            wait_boot(app)
++            again = client.post("/api/txo/select", json={"series_id": SERIES.series_id})
++            assert again.status_code == 200, "交接完成後同一個請求必須成功"
++
++
++class TestReadyProbe:
++    """`/api/ready` = 就緒的唯一對外管道(D4)。
++
++    刻意**不動 `/api/health`**:它的 docstring 明文「不含引擎健康度」,build 身分要在
++    引擎全壞時也答得出來 —— 混進就緒狀態會讓「這台是哪一版」在最需要它的時候失效。
++    """
++
++    def test_ready_flips_false_to_true(self) -> None:
++        fake = BlockingTxoSource()
++        app = create_app(fake, throttle_secs=0.01)
++        client = TestClient(app, raise_server_exceptions=False)
++        with client:
++            assert fake.entered.wait(5), "boot 沒真的在跑,窗內 false 不算數"
++            assert client.get("/api/ready").json() == {"ready": False, "error": None}
++
++            fake.gate.set()  # 放行必須在 exit 之前(見 TestBootWindowIsOpen 的註解)
++            wait_boot(app)
++            assert client.get("/api/ready").json() == {"ready": True, "error": None}
++
++    def test_ready_reports_boot_error(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """序列未走完即中止:ready 仍是 true(序列結束了),但 error 必須有值。
++
++        兩欄合起來才分得出「正常起完」與「起到一半炸了」—— 只有 ready 的話,最壞的
++        失效樣態(後續引擎全部靜默不啟動)在 probe 上看起來一切正常。
++        """
++
++        def _boom(*_a: object, **_k: object) -> object:
++            raise RuntimeError("watchlist service 建構炸了")
++
++        monkeypatch.setattr(app_mod, "WatchlistService", _boom)
++        app = create_app(
++            FakeTxoSource(),
++            stock_source=FakeStockSource(),
++            stock_watchlist_path=_watchlist(tmp_path, []),
++            throttle_secs=0.01,
++        )
++        with TestClient(app, raise_server_exceptions=False) as client:
++            wait_boot(app, allow_error=True)
++            body = client.get("/api/ready").json()
++            assert body["ready"] is True
++            assert body["error"] is not None
++            assert "watchlist service 建構炸了" in body["error"]
++
++
++class TestBootSequenceException:
++    def test_boot_sequence_exception_surfaces_error(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """`_boot` 傘**外**的一步拋(此處 `WatchlistService` 建構)必須留下痕跡。
++
++        背景化之前這種例外會炸掉 lifespan(fail-loud);背景化之後沒有頂層 catch 的話,
++        後續引擎全部靜默不啟動而 server 看起來一切正常 —— 最壞的失效樣態。
++        """
++
++        def _boom(*_a: object, **_k: object) -> object:
++            raise RuntimeError("watchlist service 建構炸了")
++
++        monkeypatch.setattr(app_mod, "WatchlistService", _boom)
++        app = create_app(
++            FakeTxoSource(),
++            stock_source=FakeStockSource(),
++            stock_watchlist_path=_watchlist(tmp_path, []),
++            throttle_secs=0.01,
++        )
++        with TestClient(app, raise_server_exceptions=False) as client:
++            wait_boot(app, allow_error=True)
++            assert app.state.boot_done is True, "序列結束(雖不完整)仍算結束"
++            assert app.state.boot_error is not None
++            assert "watchlist service 建構炸了" in app.state.boot_error
++            # 後續引擎未啟動 = 既有降級形狀
++            assert client.get("/api/index/state").status_code == 503
+diff --git a/tests/server/test_capital_api.py b/tests/server/test_capital_api.py
+index 7154fdb..2b65daf 100644
+--- a/tests/server/test_capital_api.py
++++ b/tests/server/test_capital_api.py
+@@ -25,6 +25,7 @@ from copycat.capital.safety import SafetyConfig
+ from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
+ from tests.capital.fake_com import FakeCom, RejectingCom
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeFuturesSource
+ 
+ C23000 = OptionContract(symbol="TC.O.TWF.TXO.202607.C.23000", cp="C", strike_millipts=23_000_000)
+@@ -124,7 +125,7 @@ def make_client(
+     )
+     if configure is not None:
+         configure(app)
+-    return TestClient(app, raise_server_exceptions=False)
++    return BootedClient(app, raise_server_exceptions=False)
+ 
+ 
+ _STOCK_BODY: dict[str, Any] = {"stock_no": "2330", "buy_sell": "buy", "price": 590.0, "qty": 1}
+diff --git a/tests/server/test_corr_routes.py b/tests/server/test_corr_routes.py
+index e835181..ab76841 100644
+--- a/tests/server/test_corr_routes.py
++++ b/tests/server/test_corr_routes.py
+@@ -5,13 +5,14 @@ from __future__ import annotations
+ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeCorrSource
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ def _client(corr_source: object | None) -> TestClient:
+     app = create_app(FakeTxoSource(), corr_source=corr_source, throttle_secs=0.01)
+-    return TestClient(app, raise_server_exceptions=False)
++    return BootedClient(app, raise_server_exceptions=False)
+ 
+ 
+ class TestCorrStateRoute:
+diff --git a/tests/server/test_engine.py b/tests/server/test_engine.py
+index d872605..08b69d2 100644
+--- a/tests/server/test_engine.py
++++ b/tests/server/test_engine.py
+@@ -1,10 +1,13 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import threading
+ from typing import Any, Callable
+ 
++import pytest
++
+ from copycat.live.models import OptionContract, SeriesInfo, Tick
+-from copycat.server.engine import EngineRuntime
++from copycat.server.engine import EngineRuntime, HandoverBusyError
+ 
+ C44000 = OptionContract(symbol="TC.O.TWF.TX4.202607.C.44000", cp="C", strike_millipts=44_000_000)
+ C45000 = OptionContract(symbol="TC.O.TWF.TX5.202607.C.45000", cp="C", strike_millipts=45_000_000)
+@@ -386,3 +389,58 @@ async def test_snapshots_throttled_stream_yields_on_change() -> None:
+         await agen.aclose()
+     finally:
+         await rt.close()
++
++
++class _BlockingUnsubSource(FakeQuoteSource):
++    """`unsubscribe` 卡住 —— 那是 `activate` 在設交接旗標**之前**的讓出點。
++
++    只查 `_handover_running` 擋不住相鄰兩個 select:A 停在這裡時旗標還沒設起,
++    B 照樣一路通過 → 兩個交接共用 `_buffer`。互斥必須涵蓋整個 `activate`。
++    """
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.gate = threading.Event()
++        self.entered = threading.Event()
++
++    def unsubscribe(self, series: SeriesInfo) -> None:
++        self.entered.set()
++        self.gate.wait(15)
++        super().unsubscribe(series)
++
++
++async def test_activate_while_handover_running_raises_busy() -> None:
++    """交接進行中(rollover / 自癒 / 初始交接皆可能)的 activate 一律拒絕。"""
++    fake = FakeQuoteSource()
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    await rt.start()
++    try:
++        rt._handover_running = True
++        with pytest.raises(HandoverBusyError):
++            await rt.activate("TX5.202607")
++        assert fake.unsubscribed == [], "busy 時不得動到訂閱狀態(必須在 mutation 之前擋)"
++    finally:
++        rt._handover_running = False
++        await rt.close()
++
++
++async def test_concurrent_activate_second_raises_busy() -> None:
++    fake = _BlockingUnsubSource()
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    await rt.start()  # 啟動即 activate A(_active 為 None → 不走 unsubscribe)
++    try:
++        first = asyncio.ensure_future(rt.activate("TX5.202607"))
++        for _ in range(1_000):
++            if fake.entered.is_set():
++                break
++            await asyncio.sleep(0.005)
++        assert fake.entered.is_set(), "第一個 activate 沒停在 unsubscribe 的讓出點"
++
++        with pytest.raises(HandoverBusyError):
++            await rt.activate("TX5.202607")
++
++        fake.gate.set()
++        await asyncio.wait_for(first, timeout=5)
++    finally:
++        fake.gate.set()
++        await rt.close()
+diff --git a/tests/server/test_health.py b/tests/server/test_health.py
+index 1e7fb41..284748d 100644
+--- a/tests/server/test_health.py
++++ b/tests/server/test_health.py
+@@ -12,11 +12,12 @@ from fastapi.testclient import TestClient
+ 
+ from copycat.server import build_info
+ from copycat.server.app import create_app
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ def _client() -> TestClient:
+-    return TestClient(create_app(FakeTxoSource()))
++    return BootedClient(create_app(FakeTxoSource()))
+ 
+ 
+ class TestHealthRoute:
+diff --git a/tests/server/test_index_routes.py b/tests/server/test_index_routes.py
+index 71cf01c..e9e0472 100644
+--- a/tests/server/test_index_routes.py
++++ b/tests/server/test_index_routes.py
+@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
+ from copycat.server.mis import OtcSnap
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeIndexSource
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
+@@ -24,7 +25,7 @@ def make_client(index_source: FakeIndexSource | None) -> tuple[TestClient, FakeI
+         index_mis_fetch=_mis,
+         throttle_secs=0.01,
+     )
+-    return TestClient(app, raise_server_exceptions=False), index_source
++    return BootedClient(app, raise_server_exceptions=False), index_source
+ 
+ 
+ class TestIndexState:
+diff --git a/tests/server/test_market_routes.py b/tests/server/test_market_routes.py
+index 9326f4a..a9aa851 100644
+--- a/tests/server/test_market_routes.py
++++ b/tests/server/test_market_routes.py
+@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
+ from copycat.server.mis import OtcSnap
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeFuturesSource, FakeIndexSource
+ from tests.helpers.fake_sources import dbar as _dbar
+ from tests.helpers.fake_txo import FakeTxoSource
+@@ -54,7 +55,7 @@ def make_client(
+         futures_source=futures_source,
+         throttle_secs=0.01,
+     )
+-    return TestClient(app, raise_server_exceptions=False)
++    return BootedClient(app, raise_server_exceptions=False)
+ 
+ 
+ class TestValidation:
+diff --git a/tests/server/test_river_routes.py b/tests/server/test_river_routes.py
+index 76e1704..c2b6eeb 100644
+--- a/tests/server/test_river_routes.py
++++ b/tests/server/test_river_routes.py
+@@ -5,13 +5,14 @@ from __future__ import annotations
+ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeCorrSource
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
+ 
+ def _client(corr_source: object | None) -> TestClient:
+     app = create_app(FakeTxoSource(), corr_source=corr_source, throttle_secs=0.01)
+-    return TestClient(app, raise_server_exceptions=False)
++    return BootedClient(app, raise_server_exceptions=False)
+ 
+ 
+ class TestRiverStateRoute:
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index 5c3b5f8..b638dd1 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -19,11 +19,11 @@ from pathlib import Path
+ 
+ import pytest
+ from fastapi import FastAPI
+-from fastapi.testclient import TestClient
+ 
+ from copycat.server import app as app_mod
+ from copycat.server.app import create_app
+ from copycat.server.signal_hub import SignalHub
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_txo import FakeTxoSource
+ from tests.server.test_stock_routes import FakeStockSource
+ 
+@@ -63,7 +63,7 @@ class TestLifespanWiring:
+ 
+     def test_signal_hub_service_attached_when_stock_ready(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             assert app.state.signal_hub is not None
+             assert app.state.watchlist_service is not None
+             # engine 側也要真的接上(只建 hub 不 attach = 一則訊號都不會產生)
+@@ -72,7 +72,7 @@ class TestLifespanWiring:
+     def test_discord_bot_none_without_token(self, tmp_path: Path) -> None:
+         """conftest 中和 `DISCORD_BOT_TOKEN` → `create_bot` 回 None = SC-8 降級路徑。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             assert app.state.discord_bot is None
+             assert app.state.signal_hub is not None  # bot 缺席不得連帶關掉訊號
+ 
+@@ -83,12 +83,12 @@ class TestLifespanWiring:
+             encoding="utf-8",
+         )
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             assert app.state.signal_hub._watch == {"2330"}
+ 
+     def test_no_stock_leaves_hub_none(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path, with_stock=False)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             assert app.state.signal_hub is None
+             assert app.state.watchlist_service is None
+ 
+@@ -120,7 +120,7 @@ class TestSignalsShutdownIsolation:
+         bot = _ExplodingBot()
+         monkeypatch.setattr(app_mod, "create_bot", lambda service, hub: bot)
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             hub = app.state.signal_hub
+             assert hub is not None
+         assert bot.closed is True
+@@ -139,7 +139,7 @@ class TestSignalsShutdownIsolation:
+ 
+         monkeypatch.setattr(app_mod, "create_bot", _boom)
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             assert app.state.signal_hub is None
+             assert app.state.discord_bot is None
+             assert app.state.stock is not None  # 其他引擎不受波及
+@@ -159,7 +159,7 @@ class TestSignalsShutdownIsolation:
+ 
+         monkeypatch.setattr(SignalHub, "start", _boom)
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             assert app.state.signal_hub is None
+             assert app.state.discord_bot is None  # bot state 不得殘留
+             assert app.state.stock is not None  # 其他引擎不受波及
+@@ -177,7 +177,7 @@ class TestSignalsShutdownIsolation:
+     def test_shutdown_detaches_hub_from_engine(self, tmp_path: Path) -> None:
+         """CC-2 後半:收攤後掛點要摘掉,關機序列後半不得再打到已收的 hub。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False):
++        with BootedClient(app, raise_server_exceptions=False):
+             assert app.state.stock._signal_hub is app.state.signal_hub
+         assert app.state.stock._signal_hub is None
+ 
+@@ -185,12 +185,12 @@ class TestSignalsShutdownIsolation:
+ class TestSignalsTodayRoute:
+     def test_empty_when_no_jsonl(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             assert client.get("/api/stock/signals/today").json() == {"signals": []}
+ 
+     def test_returns_jsonl_rows(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             trade_date = app.state.stock.trade_date  # 引擎當前日別 = hub 的 jsonl 檔名
+             row = _signal_row(trade_date)
+             path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
+@@ -202,12 +202,12 @@ class TestSignalsTodayRoute:
+ class TestSignalsEnabledRoute:
+     def test_default_all_on(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             assert client.get("/api/stock/signals/enabled").json() == {"enabled": _ALL_ON}
+ 
+     def test_put_round_trip(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             r = client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": False}})
+             assert r.status_code == 200
+             assert r.json() == {"enabled": {**_ALL_ON, "vol_burst": False}}
+@@ -219,17 +219,17 @@ class TestSignalsEnabledRoute:
+     def test_persists_across_restart(self, tmp_path: Path) -> None:
+         """SC-12:開關是持久化狀態,重啟 server 不得回到全開。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             client.put("/api/stock/signals/enabled", json={"enabled": {"cdp_cross": False}})
+         app2, _ = make_app(tmp_path)
+-        with TestClient(app2, raise_server_exceptions=False) as client2:
++        with BootedClient(app2, raise_server_exceptions=False) as client2:
+             assert client2.get("/api/stock/signals/enabled").json() == {
+                 "enabled": {**_ALL_ON, "cdp_cross": False}
+             }
+ 
+     def test_unknown_key_400(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             r = client.put("/api/stock/signals/enabled", json={"enabled": {"nope": True}})
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "INVALID_SIGNALS_ENABLED"
+@@ -238,7 +238,7 @@ class TestSignalsEnabledRoute:
+     def test_non_bool_value_400_not_coerced(self, tmp_path: Path) -> None:
+         """值的驗證必須落在 hub(400 契約),不能讓 pydantic 把 "yes" 寬鬆轉成 True。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             r = client.put("/api/stock/signals/enabled", json={"enabled": {"vol_burst": "yes"}})
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "INVALID_SIGNALS_ENABLED"
+@@ -250,7 +250,7 @@ class TestSignalRoutesNotReady:
+ 
+     def test_all_three_return_503(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path, with_stock=False)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             responses = [
+                 client.get("/api/stock/signals/today"),
+                 client.get("/api/stock/signals/enabled"),
+@@ -287,7 +287,7 @@ class TestWatchlistPutGoesThroughService:
+     def test_change_broadcasts_watchlist_changed(self, tmp_path: Path) -> None:
+         """SC-11 後端半:改自選要廣播,前端才能自動 refetch(不必靠使用者重整)。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             calls, published = _spy(app.state.stock)
+             r = client.put("/api/stock/watchlist", json=self.BODY)
+             assert r.status_code == 200
+@@ -301,7 +301,7 @@ class TestWatchlistPutGoesThroughService:
+         舊碼每次存檔都讓所有自選股斷訂一次,盤中畫面就是一排「-」。
+         """
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             calls, published = _spy(app.state.stock)
+             r1 = client.put("/api/stock/watchlist", json=self.BODY)
+             r2 = client.put("/api/stock/watchlist", json=self.BODY)
+@@ -314,7 +314,7 @@ class TestWatchlistPutGoesThroughService:
+     def test_broken_watchlist_file_still_accepts_put(self, tmp_path: Path) -> None:
+         """MFS-3:自選檔壞掉(半寫入 / 手改壞)時,存一份合法名單必須是 200 + 檔被修正。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             (tmp_path / "watchlist.json").write_text("{壞掉的 json", encoding="utf-8")
+ 
+             r = client.put("/api/stock/watchlist", json=self.BODY)
+@@ -327,7 +327,7 @@ class TestWatchlistPutGoesThroughService:
+     def test_bad_code_still_400(self, tmp_path: Path) -> None:
+         """改走 service 之後,WatchlistError → 400 的既有契約不得改變。"""
+         app, _ = make_app(tmp_path)
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             r = client.put(
+                 "/api/stock/watchlist", json={"groups": [{"name": "a", "codes": ["bad code"]}]}
+             )
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 49a6368..3383bbd 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
++from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeStockSource
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
+@@ -21,7 +22,7 @@ def make_client(
+         stock_names_path=names_path,
+         throttle_secs=0.01,
+     )
+-    return TestClient(app, raise_server_exceptions=False), fake
++    return BootedClient(app, raise_server_exceptions=False), fake
+ 
+ 
+ class _FailingStartStockSource(FakeStockSource):
+@@ -64,7 +65,7 @@ class TestEngineStartFailureDegrades:
+             stock_watchlist_path=tmp_path / "watchlist.json",
+             throttle_secs=0.01,
+         )
+-        client = TestClient(app, raise_server_exceptions=False)
++        client = BootedClient(app, raise_server_exceptions=False)
+         with client:
+             r = client.get("/api/stock/watchlist")
+         assert r.status_code == 503
+@@ -86,7 +87,7 @@ class TestEngineStartFailureDegrades:
+             stock_watchlist_path=tmp_path / "watchlist.json",
+             throttle_secs=0.01,
+         )
+-        client = TestClient(app, raise_server_exceptions=False)
++        client = BootedClient(app, raise_server_exceptions=False)
+         with client:
+             r = client.get("/api/stock/watchlist")
+         assert r.status_code == 503
+@@ -124,7 +125,7 @@ class TestStockNamesRoute:
+     def test_available_without_tc4(self, tmp_path: Path) -> None:
+         """名稱表與 TC4 連線無關:達錢 4 沒開(stock engine 未就緒)也要能搜尋。"""
+         app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             assert client.get("/api/stock/names").status_code == 200
+ 
+ 
+@@ -306,7 +307,7 @@ class TestStateRoute:
+         優先序會靜默翻成 400,前端就把「達錢 4 沒開」誤顯示成「代號打錯」。
+         """
+         app = create_app(FakeTxoSource(), throttle_secs=0.01)  # 無 stock_source
+-        with TestClient(app, raise_server_exceptions=False) as client:
++        with BootedClient(app, raise_server_exceptions=False) as client:
+             r = client.get("/api/stock/state/@@@")
+         assert r.status_code == 503
+         assert r.json()["detail"]["error"] == "NOT_READY"
+diff --git a/tests/server/test_ws_disconnect.py b/tests/server/test_ws_disconnect.py
+index 229c19b..fb7e81c 100644
+--- a/tests/server/test_ws_disconnect.py
++++ b/tests/server/test_ws_disconnect.py
+@@ -41,6 +41,7 @@ import copycat.server.app as app_mod
+ from copycat.live.models import SeriesInfo, Tick
+ from copycat.server.app import create_app
+ from copycat.server.ws import WsBroadcaster, relay
++from tests.helpers.boot import wait_boot
+ from tests.helpers.fake_sources import (
+     FakeCorrSource,
+     FakeFuturesSource,
+@@ -164,6 +165,8 @@ class TestAbruptDisconnect:
+                 if time.monotonic() > deadline:
+                     raise AssertionError("uvicorn 未在時限內啟動")
+                 time.sleep(0.01)
++            # `server.started` = HTTP 面開了,不再等於引擎就緒(啟動序列已移背景 task)
++            wait_boot(app)
+             port = int(server.servers[0].sockets[0].getsockname()[1])
+ 
+             sock = _ws_handshake(port, "/ws/txo-pnl")
+@@ -251,6 +254,7 @@ class _RunningServer:
+             ws="auto",
+             timeout_graceful_shutdown=graceful_timeout,
+         )
++        self.app = app  # `wait_boot` 用:HTTP 開了 ≠ 引擎就緒(啟動序列在背景 task)
+         self.server = uvicorn.Server(config)
+         self.thread = threading.Thread(target=self.server.run, daemon=True)
+         self.port = 0
+@@ -268,6 +272,7 @@ class _RunningServer:
+                 self.server.should_exit = True
+                 raise AssertionError("uvicorn 未在時限內啟動")
+             time.sleep(0.01)
++        wait_boot(self.app)  # 六路推播鏈的正向對照需要引擎真的起完
+         self.port = int(self.server.servers[0].sockets[0].getsockname()[1])
+         return self
+ 

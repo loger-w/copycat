@@ -1,0 +1,12 @@
+{
+  "round": 2,
+  "phase": "branch-lifecycle 收尾補齊(增量 diff:819d2f8..HEAD,docs-only chore)",
+  "date": "2026-08-05",
+  "verdict": "勾銷條目描述與交付逐句核實無失真;無誤刪;截圖存在且內容相符",
+  "findings": [
+    {"id": "F1", "severity": "P2", "summary": "缺本輪 next-time 沉澱段(盤後畫面待實看 + 負域 known risk 無版控載體)", "resolution": "accepted — 補 2026-08-05 沉澱段兩條"},
+    {"id": "F2", "severity": "P2", "summary": "截圖零 in-repo 脈絡(拍的是漲跌停分支非改動路徑,易誤讀為 autofit 已畫面驗證)", "resolution": "accepted — 脈絡一行併入沉澱段"},
+    {"id": "F3", "severity": "P2", "summary": "docs/specs/river-autofit-daily-range 與六腿 river 撞名(spec 自己的 Out of scope 都點名了)", "resolution": "accepted — git mv 為 stock-intraday-autofit-range"}
+  ],
+  "counts": {"P0": 0, "P1": 0, "P2": 3, "accepted": 3}
+}

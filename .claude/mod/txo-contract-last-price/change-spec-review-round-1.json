@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {"id": "P1-1", "severity": "P1", "title": "SC-2 零成交 null 情境在 code 上不存在(零成交合約無 row),spec 後段推翻卻沒改本文", "resolution": "accepted — SC-2 改寫為事實;else None 標防禦性死碼"},
+    {"id": "P1-2", "severity": "P1", "title": "golden regen 對 contracts 無條件覆寫 → SC-1 真實資料零驗證(self-fulfilling);白名單 3 宣稱流程無法證明", "resolution": "accepted — git diff 只允許新增 last_price 行為證據 + 新增不吃 golden 的 ticks.jsonl 獨立斷言"},
+    {"id": "P1-3", "severity": "P1", "title": "動機(OrderPanel 市價解鎖,下單路徑)無驗收條件且被誤列 out of scope", "resolution": "accepted — 補 SC-6(含「零成交合約仍鎖 = 預期」);out of scope 改為只排除前端 code 改動"},
+    {"id": "P1-4", "severity": "P1", "title": "同一份實作同時標 🟢 又進 🔴 commit,三類標記與 commit 計畫打架", "resolution": "accepted — 實作整包歸 🔴;🟢 只放防回歸新測試"},
+    {"id": "P2-1", "severity": "P2", "title": "stale-drop 測試構造前提未寫死(tick helper 預設 cum=None 不登記 _last_cum),可能錯因紅/假綠", "resolution": "accepted — 構造寫死 + 斷言加 totals.ticks == 1"},
+    {"id": "P2-2", "severity": "P2", "title": "時效標記 out-of-scope 理由與事實不符(消費者在下單路徑;但送單走 literal M 不受 stale 價影響)", "resolution": "accepted — 理由更正 + 確認框估算記 next-time"},
+    {"id": "P2-3", "severity": "P2", "title": "現況表行號/route 名/caller map 小幅失準(/api/txo/snapshot、/ws/txo/pnl、tquote.ts 漏列)", "resolution": "accepted — 更正 + 補 no-response_model 與 handover 時序事實"}
+  ],
+  "summary": "技術路線全數查證通過無 P0;4 P1 集中在驗證力與標記(SC 自洽、golden 驗證力、動機驗收、三類分離),全數修入 spec。無限縮加輪(無 P0)。"
+}

@@ -1,0 +1,658 @@
+﻿diff --git a/copycat/server/corr_engine.py b/copycat/server/corr_engine.py
+index 815232e..86e9641 100644
+--- a/copycat/server/corr_engine.py
++++ b/copycat/server/corr_engine.py
+@@ -74,6 +74,7 @@ class CorrelationEngine:
+         now_fn: Callable[[], float] = time.monotonic,
+         session_fn: Callable[[], SessionKey] = session_key,
+         taipei_time_fn: Callable[[], str] = _taipei_hhmmss,
++        resub_interval_secs: float = 10.0,
+     ) -> None:
+         self._source_factory = source_factory
+         self._config = config
+@@ -104,6 +105,11 @@ class CorrelationEngine:
+         self._river_seq = 0
+         self._backfill_task: asyncio.Task[None] | None = None
+         self._backfill_inflight = False
++        # 訂閱失敗腿的唯一重試路徑(照抄 futures_engine 形狀):`_on_reconnect` 只重跑
++        # 江波圖回補、不重訂閱 → 首輪 SUBQUOTE 失敗的腿整天零推播且無錯誤訊號
++        self._resub_interval_secs = resub_interval_secs
++        self._pending_subs: set[str] = set()
++        self._resub_task: asyncio.Task[None] | None = None
+ 
+     # ---- 生命週期 ----
+ 
+@@ -112,6 +118,9 @@ class CorrelationEngine:
+         self._source = self._source_factory()
+         self._source.set_on_message(self._on_quote_threadsafe)
+         await asyncio.to_thread(self._subscribe_all)
++        if self._pending_subs:
++            # 只有失敗腿才起這個 task —— 訂閱全成功時行為與修復前完全相同
++            self._resub_task = self._loop.create_task(self._resub_loop())
+         self._task = self._loop.create_task(self._run())
+         # 回補放背景:六腿各要 SubHistory + 分頁收割,阻塞 start 會讓整個 app 起動變慢,
+         # 而畫面本來就可以先有 live 點再補歷史(design §3)
+@@ -121,13 +130,49 @@ class CorrelationEngine:
+             self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
+ 
+     def _subscribe_all(self) -> None:
+-        """只訂 source == tc4 的腿;單腿失敗降級續行(沿用 futures_engine 慣例)。"""
++        """只訂 source == tc4 的腿;單腿失敗降級續行,失敗品進 `_pending_subs` 由重試迴圈接手。
++
++        (寫入安全:start() 正 await 這個 to_thread,期間無並發讀寫;同 futures_engine 註解。)
++        """
+         assert self._source is not None
+         for leg in self._config.tc4_legs():
+             try:
+                 self._source.subscribe_raw(leg.symbol)
+             except ConnectionError:
+-                logger.warning("corr subscribe %s(%s)失敗,該腿停用", leg.key, leg.symbol)
++                logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
++                self._pending_subs.add(leg.symbol)
++
++    async def _resub_loop(self) -> None:
++        """pending 腿每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。
++
++        迭代 `tc4_legs()` 而非 `_pending_subs` 本身:base 腿(futures_engine 來源)因此
++        結構上不可能被重試訂閱 —— 重複訂 `TXF.HOT` 會讓其中一邊永久零推播(CLAUDE.md §8)。
++        """
++        while self._pending_subs:
++            await asyncio.sleep(self._resub_interval_secs)
++            source = self._source  # 每輪重讀:close 中會變 None
++            if source is None:
++                return
++            recovered = False
++            for leg in self._config.tc4_legs():
++                if leg.symbol not in self._pending_subs:
++                    continue
++                try:
++                    await asyncio.to_thread(source.subscribe_raw, leg.symbol)
++                except ConnectionError:
++                    # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
++                    logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
++                    continue
++                self._pending_subs.discard(leg.symbol)
++                logger.info("corr %s subscribe retry ok", leg.key)
++                recovered = True
++            if recovered:
++                # 失敗窗內漏掉的江波圖分鐘只能靠回補補齊。`_schedule_backfill` 在
++                # inflight 時是**丟棄**不是排隊 → 本輪定調 best-effort,被擋下時留一行
++                # 痕跡才追得到(排隊化屬 `_backfill_task` 覆寫孤兒那條 next-time 條目)
++                if self._backfill_inflight:
++                    logger.info("corr 重訂成功但回補進行中,本次補分鐘略過(best-effort)")
++                self._schedule_backfill()
+ 
+     async def _run(self) -> None:
+         while True:
+@@ -144,7 +189,10 @@ class CorrelationEngine:
+         self._loop = None
+         tick_task, self._task = self._task, None
+         backfill_task, self._backfill_task = self._backfill_task, None
+-        for task in (tick_task, backfill_task):
++        resub_task, self._resub_task = self._resub_task, None
++        # 重試迴圈**排最前**:留著會在 source close 後繼續 subscribe → 重連 TC4
++        # (同 futures_engine close 的理由)
++        for task in (resub_task, tick_task, backfill_task):
+             if task is None:
+                 continue
+             task.cancel()
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index 556b91c..137d7bf 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
+ _CLIENT_QUEUE_MAX = 1000
+ 
+ 
++class _EngineClosing(Exception):
++    """關機中的早退訊號(訂閱重試迴圈內部用)。
++
++    刻意**不是** `ConnectionError`:那會被重試段的 except 接住,打出與「TC4 訂閱失敗」
++    一模一樣的 warning,污染 `grep 'subscribe .* failed'` 這條運維判準。
++    """
++
++
+ class StockSource(Protocol):
+     """個股行情來源抽象;TC4 實作在 copycat.live.stock_source,測試注入 fake。"""
+ 
+@@ -76,6 +84,7 @@ class StockEngine:
+         throttle_secs: float = 1.0,
+         checkpoint: bool = True,
+         stkfut_map: dict[str, dict] | None = None,
++        resub_interval_secs: float = 10.0,
+     ) -> None:
+         self._source = source
+         self._trade_date = trade_date
+@@ -102,6 +111,13 @@ class StockEngine:
+         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
+         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
+         self._pool_lock = asyncio.Lock()
++        # 訂閱失敗的復原路徑(mod/subscribe-retry-recovery):三處失敗各自靜默 ——
++        # watchlist 檔回滾出 `_refs` 後畫面永遠 `-`、stkfut 腿要切走再切回才會重掛、
++        # rollover 重掛失敗更是連 `_refs` 都不動,對帳判準看不到
++        self._resub_interval_secs = resub_interval_secs
++        # `_resubscribe_all` 的失敗檔:owner 還在 `_refs` 裡,只是 SUB 沒掛上 →
++        # 「owner 缺席」的對帳判準涵蓋不到,得另記(P1-1)
++        self._failed_resubs: set[str] = set()
+         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
+         # 引擎本體不得因它缺席而改變行為
+         self._signal_hub: SignalSink | None = None
+@@ -134,6 +150,7 @@ class StockEngine:
+             self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
+         self._tasks.append(asyncio.create_task(self._backfill_worker()))
+         self._tasks.append(asyncio.create_task(self._flush_watchlist_loop()))
++        self._tasks.append(asyncio.create_task(self._retry_subscribe_loop()))
+         if self._checkpoint_enabled:
+             self._tasks.append(asyncio.create_task(self._checkpoint_loop()))
+ 
+@@ -294,14 +311,124 @@ class StockEngine:
+         async with self._pool_lock:
+             codes = list(self._refs)
+ 
+-        def _do() -> None:
++        def _do() -> list[str]:
++            failed: list[str] = []
+             for code in codes:
+                 try:
+                     self._source.subscribe_symbol(code)
+                 except ConnectionError:
++                    # 只收 ConnectionError:其他例外照舊往外拋(壞電文那類要能穿到
++                    # close() 的收尾記錄,test_close_completes_even_if_a_task_died_with_exception)
+                     logger.warning("rollover resubscribe %s failed", code)
++                    failed.append(code)
++            return failed
++
++        failed = await asyncio.to_thread(_do)
++        # 回 loop context 後才合併(這一行前後無 await → 無競態),不在 thread 內直寫
++        self._failed_resubs |= set(failed)
++
++    # ---- 訂閱失敗的對帳式重試(mod/subscribe-retry-recovery)----
+ 
+-        await asyncio.to_thread(_do)
++    async def _retry_subscribe_loop(self) -> None:
++        """常駐迴圈:每輪對帳「該訂而沒訂上的」並補訂。
++
++        與 futures/corr 的 pending-resub 不同,這裡的重試項目是**動態集合**(使用者
++        隨時增刪自選、切主圖),所以不留待辦清單、每輪重新對帳 —— 清單式會在
++        「使用者已移除該檔」時替不看的股票掛訂閱。
++        """
++        while True:
++            await asyncio.sleep(self._resub_interval_secs)
++            try:
++                await self._retry_round()
++            except Exception:
++                # 迴圈死掉 = 復原路徑本身靜默失效(同 corr `_run` 的 rationale)
++                logger.exception("訂閱重試輪失敗(續行)")
++
++    async def _retry_round(self) -> None:
++        """一輪對帳:快照判準(短鎖)→ 三段重試,每項各自重拿鎖重驗。
++
++        **不是整輪一鎖**:TC4 斷線時單檔 SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10s)才失敗,
++        整輪持鎖會讓 `_pool_lock` 佔用率趨近 100% → set_main / PUT watchlist 卡死。
++        每段遇到第一個 `ConnectionError` 就 `break` 出**該段**(不是整輪):`_resub` 對
++        單一壞碼可穩定 raise(與連線健康無關),round 級早停會讓一檔壞碼永久餓死後面兩段。
++        """
++        try:
++            async with self._pool_lock:
++                pending_wl = [
++                    c for c in self._watchlist if "watchlist" not in self._refs.get(c, set())
++                ]
++                # prune:已退訂的檔不再重掛(owner 都沒了,重掛等於訂閱不看的股票)
++                self._failed_resubs &= set(self._refs)
++                pending_resubs = sorted(self._failed_resubs)
++                main = self._main
++                stkfut_pending = self._stkfut_owner_missing(main)
++
++            for code in pending_wl:
++                async with self._pool_lock:
++                    # 鎖內重驗:快照後使用者可能已移除該檔,或重送名單已把它修好
++                    if code not in self._watchlist or "watchlist" in self._refs.get(code, set()):
++                        continue
++                    try:
++                        await asyncio.to_thread(self._retry_acquire, code, "watchlist")
++                    except ConnectionError:
++                        logger.warning("watchlist subscribe %s failed", code)
++                        break
++                    # 對齊 set_watchlist added 的種子:冷門股整天可能只有簿更新,
++                    # 沒有這一則就要等下一筆成交才看得到值。
++                    # 不重呼 `signal_hub.on_watchlist` —— membership 在 set_watchlist 已全量設定
++                    self._publish(self._quote_payload(code))
++
++            for code in pending_resubs:
++                async with self._pool_lock:
++                    # 後者防同輪內新的 rollover 失敗被這裡的 discard 抹掉
++                    if code not in self._refs or code not in self._failed_resubs:
++                        continue
++                    try:
++                        await asyncio.to_thread(self._retry_resubscribe, code)
++                    except ConnectionError:
++                        logger.warning("rollover resubscribe %s failed", code)
++                        break
++                    self._failed_resubs.discard(code)
++
++            if main is not None and stkfut_pending:
++                async with self._pool_lock:
++                    # 主圖切走後不得補掛:替已不看的股票掛腿 + owner refcount 洩漏
++                    if self._main == main and self._stkfut_owner_missing(main):
++                        entry = self._map[main]
++                        try:
++                            await asyncio.to_thread(
++                                self._retry_acquire, f"F:{entry['prod']}", f"stkfut:{main}"
++                            )
++                        except ConnectionError:
++                            logger.warning("stkfut subscribe %s failed", entry["prod"])
++        except _EngineClosing:
++            return  # 關機:靜默結束該輪(不得偽裝成 TC4 訂閱失敗的 warning)
++
++    def _stkfut_owner_missing(self, code: str | None) -> bool:
++        """該主圖檔有個股期對映、但期貨鍵上沒掛它的 owner(= 這一腿沒訂上)。"""
++        if code is None:
++            return False
++        entry = self._map.get(code)
++        if entry is None:
++            return False
++        return f"stkfut:{code}" not in self._refs.get(f"F:{entry['prod']}", set())
++
++    def _retry_acquire(self, code: str, owner: str) -> None:
++        """executor thread:關機中早退,縮小「close 後 source 再被呼叫」的窗。
++
++        cancel 一個正 await `to_thread` 的 task 時 asyncio 側立即回(executor future
++        無法中斷),orphan thread 可能跨過 `source.close()` 再 subscribe → TC4 重連
++        session 洩漏。此暴露與已出貨的 futures `_resub_loop` 同款,以檢查縮窗即可。
++        """
++        if self._loop is None:
++            raise _EngineClosing
++        self._acquire(code, owner)
++
++    def _retry_resubscribe(self, code: str) -> None:
++        """executor thread:owner 已在池內,只需重掛 SUB(UNSUB→SUB 冪等)。"""
++        if self._loop is None:
++            raise _EngineClosing
++        self._source.subscribe_symbol(code)
+ 
+     def _rollover_stage2(self, first_tick: StockTick) -> None:
+         """階段二:首筆新日 tick 確認 → reset 全部狀態,觸發 tick 重新 ingest。"""
+diff --git a/docs/next-time.md b/docs/next-time.md
+index 4d473c1..7d0f4e3 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -553,3 +553,15 @@
+ - [ ] `test_no_write_to_dead_transport` 其實有**兩個**獨立 flake 源(本輪實測):(a) 既知的 0.5s 固定收 frame 窗(全套負載下漏窗);(b) 新發現 — `_ws_handshake` 讀到 `\r\n\r\n` 即停,101 回應與 server 第一則 frame 落同一 TCP segment 時該 frame 被握手緩衝吞掉 → `sock.recv` 等到 5s timeout,實測 6 跑掛 1(≈17%)。新測試已用 `_ws_handshake_keep_rest`(回傳殘留位元組)免疫;修既有測試需動 `assert sock.recv(4096)` 斷言,依紀律留待專輪 — 修時兩個源一起收(窗改 deadline 迴圈 + 換 keep_rest)。
+ - [ ] `tests/conftest.py` 只中和 CAPITAL_* 與 DISCORD_BOT_TOKEN,**沒中和 `DISCORD_WEBHOOK_URL`** — 任何建 SignalHub 的測試(如 /ws/stock 整合路)在開發機 shell / .env 有該值時會真的對外發 Discord 訊息。本輪在該 case builder 內單點 monkeypatch 擋掉;建議升級成 conftest 全域中和(與既有 delenv CAPITAL_* 同型)。
+ - [ ] corr/river 兩路突斷測試讀 `engine._loop` private(engine 無公開 loop 取用面;repo 已有 `broadcaster._clients` 先例):若日後 `create_app` 透出 `corr_tick_secs`(現寫死 1.0 不經參數),兩路可改回純 source-driven 端到端 pump,一併移除 private 讀取。
++
++## 2026-08-04(subscribe-retry-recovery 收尾沉澱)
++
++- [ ] corr 腿重試成功時的補分鐘是 **best-effort**:`_schedule_backfill` 在 inflight 時是丟棄
++  不是排隊(`corr_engine.py:298-302`),重試恰好撞上 start() 那次回補未完 → 失敗窗內的
++  江波圖分鐘就此缺一段(本輪只加一行 info 留痕)。要真正補齊得讓 `_schedule_backfill`
++  可排隊,與上面第 212 行「覆寫 `_backfill_task` 參照的孤兒 task」同一次收(同一個函式)。
++- [ ] 三處重試迴圈都是**固定間隔無 backoff**(corr 10s / stock 10s / futures 10s,
++  index_engine 另有 `_schedule_retry` 的 backoff)。TC4 長時間斷線時單檔 SUBQUOTE 要等
++  `_REQ_TIMEOUT_MS`(10s)才失敗,實質退化成「每輪一次慢失敗」的串行慢輪 —— 不會打爆
++  TC4,但 log 會持續刷同一行 warning。要不要加 backoff / 降頻,等真實斷線一次再看
++  (現在改是猜)。與既有「index_engine `_schedule_retry` backoff 收斂統一」條目同批處理。
+diff --git a/tests/server/test_corr_engine.py b/tests/server/test_corr_engine.py
+index 4726ede..1dc4feb 100644
+--- a/tests/server/test_corr_engine.py
++++ b/tests/server/test_corr_engine.py
+@@ -89,6 +89,7 @@ def _engine(
+     txf_state: Callable[[], dict],
+     clock: _Clock,
+     broadcast: Callable[[dict], None] | None = None,
++    resub_interval_secs: float = 10.0,
+ ) -> CorrelationEngine:
+     return CorrelationEngine(
+         lambda: source,
+@@ -98,6 +99,7 @@ def _engine(
+         tick_secs=1.0,
+         now_fn=clock,
+         session_fn=lambda: NIGHT,
++        resub_interval_secs=resub_interval_secs,
+     )
+ 
+ 
+@@ -300,6 +302,120 @@ class TestBroadcastAndState:
+             await eng.close()
+ 
+ 
++class _FlakySource(_FakeSource):
++    """前 N 次 subscribe_raw raise ConnectionError,之後成功;attempts 記每次呼叫。
++
++    (仿 tests/server/test_futures_engine.py 的 `_FlakySource`:失敗次數本身是被鎖的行為,
++    `subscribed` 只記成功,測不到「重試了幾次」。)
++    """
++
++    def __init__(self, fail_times: dict[str, int] | None = None) -> None:
++        super().__init__()
++        self._left = dict(fail_times or {})
++        self.attempts: list[str] = []
++
++    def subscribe_raw(self, symbol: str) -> None:
++        self.attempts.append(symbol)
++        left = self._left.get(symbol, 0)
++        if left > 0:
++            self._left[symbol] = left - 1
++            raise ConnectionError(f"SUBQUOTE fail {symbol}")
++        super().subscribe_raw(symbol)
++
++
++async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
++    deadline = asyncio.get_running_loop().time() + timeout
++    while asyncio.get_running_loop().time() < deadline:
++        if pred():
++            return
++        await asyncio.sleep(0.005)
++    raise AssertionError("條件逾時未成立")
++
++
++class TestPendingResubscribe:
++    """腿訂閱失敗的**零重試路徑**(mod/subscribe-retry-recovery SC-1)。
++
++    corr 的 `_on_reconnect` 只重跑江波圖回補、不重訂閱 → 首輪 SUBQUOTE 失敗的腿整天
++    無相關係數也無 live 點,且沒有任何錯誤訊號。照抄 futures_engine 的 pending-resub 形狀。
++    """
++
++    async def test_failed_legs_retried_until_success(self) -> None:
++        src = _FlakySource({"TC.F.CME.NQ.HOT": 2})
++        eng = _engine(
++            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
++        )
++        await eng.start()
++        assert src.subscribed == ["TC.F.TWF.SXF.HOT"]  # 首輪只有費半成功
++        try:
++            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
++        finally:
++            await eng.close()
++        assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 失敗 2 次 + 成功 1 次
++        assert src.attempts.count("TC.F.TWF.SXF.HOT") == 1  # 成功腿不重訂
++
++    async def test_quote_flows_after_retry_success(self) -> None:
++        src = _FlakySource({"TC.F.CME.NQ.HOT": 1})
++        clock = _Clock()
++        eng = _engine(
++            src, txf_state=lambda: _futures_state(1, 2), clock=clock, resub_interval_secs=0.01
++        )
++        await eng.start()
++        try:
++            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
++            assert src.cb is not None
++            src.cb(_quote("TC.F.CME.NQ.HOT", 27_000_000, 27_002_000))
++            await asyncio.sleep(0)
++            eng.tick_once()
++            assert eng.state()["legs"]["NQ"]["mid"] == 27_001_000
++        finally:
++            await eng.close()
++
++    async def test_all_success_leaves_no_retry_task(self) -> None:
++        src = _FlakySource()
++        eng = _engine(
++            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
++        )
++        await eng.start()
++        try:
++            await asyncio.sleep(0.05)  # 5 個間隔
++            # 訂閱全成功時行為與修復前完全相同(SC-4);不看 `asyncio.all_tasks()` 數量 ——
++            # start() 本來就會建 tick / backfill 兩個 task
++            assert eng._resub_task is None
++            assert sorted(src.attempts) == ["TC.F.CME.NQ.HOT", "TC.F.TWF.SXF.HOT"]
++        finally:
++            await eng.close()
++
++    async def test_close_stops_retry_loop(self) -> None:
++        src = _FlakySource({"TC.F.CME.NQ.HOT": 10_000, "TC.F.TWF.SXF.HOT": 10_000})
++        eng = _engine(
++            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
++        )
++        await eng.start()
++        await _wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
++        await eng.close()
++        n = len(src.attempts)
++        await asyncio.sleep(0.05)  # 5 個間隔
++        assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
++
++    async def test_base_leg_never_subscribed_by_retry(self) -> None:
++        """白名單 1:base 腿(futures_engine 來源)永不 subscribe_raw。
++
++        重試佇列只收 `tc4_legs()` 的腿 —— base 腿本來就不進 `_subscribe_all` 迭代,
++        所以「失敗腿含 base」不可構造;這條鎖的是「重試迴圈不得自己去掃全部腿」。
++        """
++        src = _FlakySource({"TC.F.CME.NQ.HOT": 10_000})
++        eng = _engine(
++            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
++        )
++        await eng.start()
++        try:
++            await _wait_until(lambda: src.attempts.count("TC.F.CME.NQ.HOT") >= 5)
++            assert "TC.F.TWF.TXF.HOT" not in src.attempts
++            assert "TC.F.TWF.TXF.HOT" not in src.subscribed
++        finally:
++            await eng.close()
++
++
+ class TestNoHardcodedSymbols:
+     def test_engine_module_has_no_tc4_symbol_literals(self) -> None:
+         """SC-8 lock:商品清單走設定檔,引擎內不得出現 symbol 字面值。
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 4dc5669..afc68ad 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import asyncio
+ import logging
+ import threading
++import time
+ from typing import Callable
+ 
+ from copycat.server.stock_engine import StockEngine
+@@ -688,6 +689,210 @@ class FakeHub:
+         return [c for c in self.calls if c[0] == kind]
+ 
+ 
++class _RetrySource(FakeSource):
++    """記錄每次 `subscribe_symbol` 呼叫(含失敗)—— `subscribed` 只記成功,
++    測不到「重試了幾次」也測不到「已移除的檔還在被重試」。"""
++
++    def __init__(self, fail_delay: float = 0.0) -> None:
++        super().__init__()
++        self.attempts: list[str] = []
++        self._fail_delay = fail_delay
++
++    def subscribe_symbol(self, code: str) -> None:
++        self.attempts.append(code)
++        if self._fail_delay and code in self.fail_subscribe:
++            # TC4 斷線時單檔 SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10s)才失敗 —— 慢失敗
++            # 才是鎖飢餓的真實形狀,瞬間 raise 測不到持鎖時間
++            time.sleep(self._fail_delay)
++        super().subscribe_symbol(code)
++
++
++# 顯式對映表:不吃磁碟上的 `stkfut_map.json`(內容會隨期交所頁面重抓而變)
++_STKFUT_MAP = {"2330": {"prod": "CDF", "name": "台積電"}}
++
++
++async def _make_retry(
++    interval: float = 0.01, source: _RetrySource | None = None
++) -> tuple[StockEngine, _RetrySource]:
++    src = source if source is not None else _RetrySource()
++    engine = StockEngine(
++        src,
++        trade_date="2026-07-21",
++        throttle_secs=60,  # 排除 1s flush 對 watchlist_quote 計數的貢獻
++        checkpoint=False,
++        stkfut_map=_STKFUT_MAP,
++        resub_interval_secs=interval,
++    )
++    await engine.start()
++    return engine, src
++
++
++async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
++    deadline = asyncio.get_running_loop().time() + timeout
++    while asyncio.get_running_loop().time() < deadline:
++        if pred():
++            return
++        await asyncio.sleep(0.005)
++    raise AssertionError("條件逾時未成立")
++
++
++async def _collect(stream) -> list[dict]:
++    got: list[dict] = []
++    try:
++        while True:
++            got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
++    except (TimeoutError, asyncio.TimeoutError):
++        pass
++    return got
++
++
++class TestWatchlistRetry:
++    """自選訂閱失敗的背景重試(mod/subscribe-retry-recovery SC-2)。
++
++    `_acquire` 真訂失敗回滾出 `_refs` → rollover 的 `_resubscribe_all` 接不到、
++    flush 無 state 可推 → 該檔畫面永遠 `-`,唯一復原是使用者自己重送同一份名單。
++    """
++
++    async def test_failed_code_retried_and_seeded(self) -> None:
++        engine, src = await _make_retry()
++        stream = engine.stream()  # 名單仍空 → 無種子,之後收到的都是新產出
++        src.fail_subscribe.add("9999")
++        await engine.set_watchlist(["9999"])
++        assert "9999" not in src.subscribed
++        src.fail_subscribe.discard("9999")
++        await _wait_until(lambda: "9999" in src.subscribed)
++        await _drain(engine)
++        got = await _collect(stream)
++        quotes = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "9999"]
++        # 一則來自 set_watchlist 的 added 種子,一則來自重試成功(對齊 added 種子語意);
++        # 沒有後者的話這一檔在盤後完全沒有生產點
++        assert len(quotes) == 2
++        assert "watchlist" in engine._refs["9999"]
++        await engine.close()
++
++    async def test_removed_code_is_not_retried(self) -> None:
++        engine, src = await _make_retry()
++        src.fail_subscribe.add("9999")
++        await engine.set_watchlist(["9999"])
++        await engine.set_watchlist([])  # 使用者移除 → 重試判準應自然失效
++        n = len(src.attempts)
++        await asyncio.sleep(0.05)  # 5 個間隔
++        assert len(src.attempts) == n
++        assert "9999" not in src.subscribed
++        await engine.close()
++
++    async def test_manual_resend_repair_does_not_double_subscribe(self) -> None:
++        # 白名單 4:回滾語意不變 —— 現況唯一的手動復原路(重送同名單)仍要能修,
++        # 且修好之後重試輪不得再真訂一次
++        engine, src = await _make_retry()
++        src.fail_subscribe.add("9999")
++        await engine.set_watchlist(["9999"])
++        src.fail_subscribe.discard("9999")
++        await engine.set_watchlist(["9999"])  # 重送同名單 → added 以 refs 實況為準
++        await asyncio.sleep(0.05)  # 5 個間隔
++        assert src.subscribed.count("9999") == 1
++        await engine.close()
++
++    async def test_all_success_never_resubscribes(self) -> None:
++        """SC-4(stock 側實鎖):判準寫錯最典型的失效 = 每輪重複真訂。"""
++        engine, src = await _make_retry()
++        await engine.set_watchlist(["2330", "5483"])
++        await engine.set_main("2330")
++        await asyncio.sleep(0.05)  # 5 個間隔
++        for code in ("2330", "5483", "F:CDF"):
++            assert src.subscribed.count(code) == 1, code
++        await engine.close()
++
++    async def test_rollover_resubscribe_failure_retried_then_pruned(self) -> None:
++        """P1-1:`_resubscribe_all` 的失敗不動 `_refs` → 只看 owner 的對帳判準接不到。"""
++        engine, src = await _make_retry()
++        await engine.set_main("2330")
++        src.fail_subscribe.add("2330")
++        engine.rollover_stage1("2026-07-22")
++        await _wait_until(lambda: "2330" in engine._failed_resubs)
++        src.fail_subscribe.discard("2330")
++        await _wait_until(lambda: "2330" not in engine._failed_resubs)
++        assert src.subscribed.count("2330") >= 2  # 重掛真的發出去了
++        await engine.close()
++
++    async def test_failed_resub_pruned_when_code_unsubscribed(self) -> None:
++        engine, src = await _make_retry()
++        await engine.set_main("2330")
++        src.fail_subscribe.add("2330")
++        engine.rollover_stage1("2026-07-22")
++        await _wait_until(lambda: "2330" in engine._failed_resubs)
++        await engine.set_main("5483")  # 2330 last owner 退 → 已不在 _refs
++        await _wait_until(lambda: not engine._failed_resubs)
++        n = len(src.attempts)
++        await asyncio.sleep(0.05)
++        assert len(src.attempts) == n  # 已退訂的檔不再被重試
++        await engine.close()
++
++
++class TestStkfutRetry:
++    """個股期腿訂閱失敗的背景重試(SC-3)。
++
++    `_acquire_stkfut` 只在 `set_main` 呼叫,而 `set_main` 開頭 `old == code → return`
++    → 同檔重掛被擋,現況唯一復原是切走再切回。
++    """
++
++    async def test_failed_leg_retried_until_success(self) -> None:
++        engine, src = await _make_retry()
++        src.fail_subscribe.add("F:CDF")
++        await engine.set_main("2330")
++        assert "F:CDF" not in src.subscribed
++        src.fail_subscribe.discard("F:CDF")
++        await _wait_until(lambda: "F:CDF" in src.subscribed)
++        assert engine._refs["F:CDF"] == {"stkfut:2330"}
++        await engine.close()
++
++    async def test_main_switched_away_stops_retry_without_leaking_owner(self) -> None:
++        engine, src = await _make_retry()
++        src.fail_subscribe.add("F:CDF")
++        await engine.set_main("2330")
++        await engine.set_main("5483")  # 對映表無此檔 → 不該再為 2330 掛腿
++        src.fail_subscribe.discard("F:CDF")
++        await asyncio.sleep(0.05)  # 5 個間隔
++        assert "F:CDF" not in src.subscribed
++        assert all("stkfut:2330" not in owners for owners in engine._refs.values())
++        await engine.close()
++
++
++class TestRetryLoopStarvation:
++    async def test_slow_failing_subscribes_do_not_block_set_main(self) -> None:
++        """P0-1:TC4 斷線時單檔 SUBQUOTE 要 10s 才失敗,整輪一鎖會讓 `_pool_lock`
++        佔用率趨近 100% → set_main / PUT watchlist 卡死。持鎖上界必須與 N 檔無關。"""
++        src = _RetrySource(fail_delay=0.05)
++        engine, _ = await _make_retry(source=src)
++        codes = [str(9000 + i) for i in range(12)]
++        src.fail_subscribe.update(codes)
++        await engine.set_watchlist(codes)
++        await asyncio.sleep(0.05)  # 重試迴圈已在跑
++        t0 = asyncio.get_running_loop().time()
++        await engine.set_main("2330")
++        elapsed = asyncio.get_running_loop().time() - t0
++        # 整輪一鎖 = 12 × 0.05 = 0.6s;段級早停 = 至多一次失敗 subscribe 的持鎖
++        assert elapsed < 0.3, elapsed
++        await engine.close()
++
++    async def test_permanently_failing_code_does_not_starve_other_sections(self) -> None:
++        """P1-3:`tc4._resub` 對單一壞碼可穩定 raise(與連線健康無關),round 級早停
++        會讓一檔壞碼永久餓死 failed_resubs 與 stkfut 兩段。"""
++        engine, src = await _make_retry()
++        src.fail_subscribe.update({"9999", "F:CDF"})
++        await engine.set_watchlist(["9999"])  # 段 2 恆失敗
++        await engine.set_main("2330")  # 段 4 的 stkfut 腿失敗
++        src.fail_subscribe.add("2330")
++        engine.rollover_stage1("2026-07-22")  # 段 3 的 failed_resubs
++        await _wait_until(lambda: "2330" in engine._failed_resubs)
++        src.fail_subscribe.difference_update({"2330", "F:CDF"})  # 9999 仍恆失敗
++        await _wait_until(
++            lambda: "F:CDF" in src.subscribed and "2330" not in engine._failed_resubs
++        )
++        assert "9999" not in src.subscribed  # 前提:段 2 確實每輪都在失敗
++        await engine.close()
++
++
+ class TestSignalHubHooks:
+     """SC-5 / SC-6:訊號掛點只長在 live 路徑上,回補重放與換日 pending 期間不得誤觸。"""
+ 

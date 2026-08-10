@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "phase": "Phase 5 自評(雙 lens:白名單對照 + 正確性/測試強度,皆 opus)",
+  "date": "2026-08-05",
+  "findings": [
+    {"id": "F1", "severity": "P1", "lens": "correctness", "summary": "白名單 1(漲跌停域不受 high/low 影響)零覆蓋 — 突變(把 dayHigh/dayLow 洩進漲跌停分支)693 tests 全綠", "resolution": "accepted — 補 lib 測試:META + high/low 極端值 → yDomain 恰為 [lower, upper]"},
+    {"id": "F2", "severity": "P2", "lens": "correctness", "summary": "markFor 改吃 norm 值(R7 行為改動)無區分測試,還原舊寫法 134 tests 全綠", "resolution": "accepted — 補區分測試(prices 空 + meta null + low=0 且某分鐘 l=0:norm 版 null / raw 版畫價位 0 標記)"},
+    {"id": "F3", "severity": "P2", "lens": "correctness", "summary": "SC-3 臨界形狀(域外 0.02%)fixture 未落地,現有測試只有 SPIKE(域外 18%)", "resolution": "accepted — 照 SC-3 數字補一支;spec 測試節同步對齊"},
+    {"id": "F4", "severity": "P2", "lens": "correctness", "summary": "highMark.y 繪圖區斷言在 markFor guard 下恆真,註解宣稱守著不可達的失效樣態", "resolution": "accepted(註解修正)— 改標為與 markFor guard 的雙保險,不重寫斷言(SC-1 的實質守門是 highMark !== null)"},
+    {"id": "F5", "severity": "P2", "lens": "correctness", "summary": "ref 不可得(prices 空 + 無 metaRef → ref=0)時 dayHigh/dayLow 併入產生 [−1.1×high, +1.1×high] 垃圾域:負假價位刻度 + 標記錯位,係本輪新增的可見輸出路徑", "resolution": "accepted — ref > 0 才併入半幅池(無中心點可對稱,擴域只放大垃圾);補測試釘 ref=0 行為同改動前(退化域 [−1,1]、標記 null)"},
+    {"id": "WL-1", "severity": "P2", "lens": "whitelist", "summary": "StockIntradayChart.test.tsx:870 註解仍寫「autofit 域由分鐘收盤決定」— 本輪後不成立,且該測試實走漲跌停分支", "resolution": "accepted — 註解改寫為白名單 3 語意"},
+    {"id": "WL-2", "severity": "P2", "lens": "whitelist", "summary": "ref=0 負域路徑繞過 Known Risks 的 ±10% 論證(同 F5)", "resolution": "accepted — 併入 F5 修法(選項 a);Known Risks 補記"}
+  ],
+  "whitelist_check": "白名單 7 條逐條對照完成(白名單 lens 報告):1/2/3/6 逐字等價、4/5 邊界值窮舉(0/null/undefined/負/NaN)改動前後無差異、7 守門方向正確且漏 norm 會紅、geometryOf 重構驗證強度未變弱、域單調性(只擴不縮)成立。",
+  "counts": {"P0": 0, "P1": 1, "P2": 6, "accepted": 7, "rejected": 0}
+}

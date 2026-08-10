@@ -1,0 +1,304 @@
+﻿diff --git a/copycat/live/aggregate.py b/copycat/live/aggregate.py
+index 221ce05..5d61d97 100644
+--- a/copycat/live/aggregate.py
++++ b/copycat/live/aggregate.py
+@@ -37,6 +37,7 @@ class _PosState:
+     volume: int = 0
+     outer_qty: int = 0
+     inner_qty: int = 0
++    last_price_millipts: int | None = None
+ 
+ 
+ class ChainAggregator:
+@@ -84,6 +85,9 @@ class ChainAggregator:
+         self.totals.ticks += 1
+         pos = self._pos.setdefault(tick.symbol, _PosState())
+         pos.volume += tick.qty
++        # 成交價與內外盤分類無關 → 放三分支之前(未分類 tick 也是成交,一樣更新);
++        # stale-drop 已在上面早退,被丟的重複/重放 tick 不會蓋掉現價。
++        pos.last_price_millipts = tick.price_millipts
+         if tick.ask_millipts is not None and tick.price_millipts >= tick.ask_millipts:
+             pos.net_qty += tick.qty
+             pos.net_cost_millipts += tick.qty * tick.price_millipts
+@@ -128,6 +132,12 @@ class ChainAggregator:
+                     "volume": st.volume,
+                     "outer_qty": st.outer_qty,
+                     "inner_qty": st.inner_qty,
++                    # 點(對齊 spot.price 慣例);row 只在 _ingest 建 → 實務上恆非 None
++                    "last_price": (
++                        st.last_price_millipts / 1000
++                        if st.last_price_millipts is not None
++                        else None
++                    ),
+                 }
+             )
+         rows.sort(key=lambda r: (r["strike"], r["cp"]))
+diff --git a/docs/next-time.md b/docs/next-time.md
+index ae15799..62265a9 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -88,6 +88,7 @@
+ - [ ] TXO snapshot 補推 per-contract last_price(OrderPanel 市價估價目前缺值全鎖,限價不受影響;ContractRow.last_price 前端欄位已預留)
+ - [x] ~~app.py futures source 啟動旗標借用 trade_source is DEFAULT_TRADE(sentinel 語意耦合已註解;__main__ 顯式傳 DEFAULT_FUTURES 後可解耦)~~ **2026-08-04 同輪解耦**:`__main__` 顯式傳 DEFAULT_FUTURES + DEFAULT_CORR(corr 同款借用一併解),`trade_source` 參數與 DEFAULT_TRADE sentinel 刪除;`tests/server/test_main_wiring.py` 上鎖(kwargs 整份相等)
+ - [ ] 期貨平倉「範圍市價 P + IOC」候選:prod 實測 bstrPrice="P"/"M" 可送性後,可從限價貼漲跌停切回(docs/research/2026-07-28-skcom-typelib.md)
++- [ ] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價
+ - [ ] 選擇權閃電梯(本輪 out of scope,TXO 表單已群益化)
+ - [ ] 群益回報自動重連(本輪拍板不做;做之前 store 聚合非冪等 → 必先 clear 再重播 backlog)
+ - [ ] OnAccount / OnOpenInterest 欄序為 prod 未實測假定(com.py `_parse_account_row`、balance.py `parse_open_interest_line` docstring 已標)— 首次 prod 登入核對後校正
+diff --git a/tests/fixtures/txo_golden/expected_snapshot.json b/tests/fixtures/txo_golden/expected_snapshot.json
+index 2ed2e62..4875860 100644
+--- a/tests/fixtures/txo_golden/expected_snapshot.json
++++ b/tests/fixtures/txo_golden/expected_snapshot.json
+@@ -78,7 +78,8 @@
+    "net_qty": -28,
+    "volume": 96,
+    "outer_qty": 31,
+-   "inner_qty": 59
++   "inner_qty": 59,
++   "last_price": 83.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45100",
+@@ -87,7 +88,8 @@
+    "net_qty": 21,
+    "volume": 271,
+    "outer_qty": 131,
+-   "inner_qty": 110
++   "inner_qty": 110,
++   "last_price": 77.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.P.45100",
+@@ -96,7 +98,8 @@
+    "net_qty": 2,
+    "volume": 4,
+    "outer_qty": 3,
+-   "inner_qty": 1
++   "inner_qty": 1,
++   "last_price": 2170.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45150",
+@@ -105,7 +108,8 @@
+    "net_qty": -33,
+    "volume": 117,
+    "outer_qty": 36,
+-   "inner_qty": 69
++   "inner_qty": 69,
++   "last_price": 84.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45200",
+@@ -114,7 +118,8 @@
+    "net_qty": -59,
+    "volume": 295,
+    "outer_qty": 106,
+-   "inner_qty": 165
++   "inner_qty": 165,
++   "last_price": 73.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.P.45200",
+@@ -123,7 +128,8 @@
+    "net_qty": 1,
+    "volume": 1,
+    "outer_qty": 1,
+-   "inner_qty": 0
++   "inner_qty": 0,
++   "last_price": 1690.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45250",
+@@ -132,7 +138,8 @@
+    "net_qty": 4,
+    "volume": 143,
+    "outer_qty": 68,
+-   "inner_qty": 64
++   "inner_qty": 64,
++   "last_price": 64.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.P.45250",
+@@ -141,7 +148,8 @@
+    "net_qty": 0,
+    "volume": 1,
+    "outer_qty": 0,
+-   "inner_qty": 0
++   "inner_qty": 0,
++   "last_price": 1590.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45300",
+@@ -150,7 +158,8 @@
+    "net_qty": -4,
+    "volume": 227,
+    "outer_qty": 97,
+-   "inner_qty": 101
++   "inner_qty": 101,
++   "last_price": 60.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.P.45300",
+@@ -159,7 +168,8 @@
+    "net_qty": 3,
+    "volume": 4,
+    "outer_qty": 3,
+-   "inner_qty": 0
++   "inner_qty": 0,
++   "last_price": 1630.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45350",
+@@ -168,7 +178,8 @@
+    "net_qty": -3,
+    "volume": 139,
+    "outer_qty": 57,
+-   "inner_qty": 60
++   "inner_qty": 60,
++   "last_price": 50.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45400",
+@@ -177,7 +188,8 @@
+    "net_qty": -30,
+    "volume": 138,
+    "outer_qty": 44,
+-   "inner_qty": 74
++   "inner_qty": 74,
++   "last_price": 54.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45450",
+@@ -186,7 +198,8 @@
+    "net_qty": -13,
+    "volume": 84,
+    "outer_qty": 28,
+-   "inner_qty": 41
++   "inner_qty": 41,
++   "last_price": 54.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.C.45500",
+@@ -195,7 +208,8 @@
+    "net_qty": -118,
+    "volume": 993,
+    "outer_qty": 351,
+-   "inner_qty": 469
++   "inner_qty": 469,
++   "last_price": 60.0
+   },
+   {
+    "symbol": "TC.O.TWF.TX4.202607.P.45500",
+@@ -204,7 +218,8 @@
+    "net_qty": 3,
+    "volume": 3,
+    "outer_qty": 3,
+-   "inner_qty": 0
++   "inner_qty": 0,
++   "last_price": 1980.0
+   }
+  ],
+  "totals": {
+diff --git a/tests/live/test_aggregate.py b/tests/live/test_aggregate.py
+index e74056d..9a698bf 100644
+--- a/tests/live/test_aggregate.py
++++ b/tests/live/test_aggregate.py
+@@ -236,6 +236,8 @@ class TestContractsDetail:
+                 "volume": 6,
+                 "outer_qty": 2,
+                 "inner_qty": 1,
++                # 時序最後一筆是未分類的 99.5pt → 成交價與內外盤分類無關(SC-3)
++                "last_price": 99.5,
+             },
+             {
+                 "symbol": P44000.symbol,
+@@ -245,9 +247,46 @@ class TestContractsDetail:
+                 "volume": 4,
+                 "outer_qty": 0,
+                 "inner_qty": 4,
++                "last_price": 50.0,
+             },
+         ]
+ 
++    def test_last_price_is_latest_trade(self) -> None:
++        """SC-1:同一合約多筆成交 → last_price 取時序最後一筆(不是最高/最低/首筆)。"""
++        agg = make_agg()
++        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=2, t=1))
++        agg.route(tick(C44000.symbol, price=97_500, qty=1, bid=97_000, ask=98_000, cum=3, t=2))
++        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
++        assert snap["contracts"][0]["last_price"] == 97.5
++
++    def test_stale_dropped_tick_does_not_update_last_price(self) -> None:
++        """SC-3:被 cum 序 stale-drop 的 tick 不得蓋掉現價(重複推播 / 重連重放 / 回補重疊)。
++
++        `totals.ticks == 1` 是「drop 真的發生了」的證據 —— 少了它,價格相同也可能
++        只是因為兩筆碰巧同價,測試會空轉。
++        """
++        agg = make_agg()
++        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=10))
++        # cum 未推進(重複推播)+ cum 倒退(重連重放)—— 兩種 stale 樣態,價格都不同
++        agg.route(tick(C44000.symbol, price=99_000, qty=2, bid=99_000, ask=100_000, cum=10))
++        agg.route(tick(C44000.symbol, price=98_000, qty=1, bid=97_000, ask=98_000, cum=9))
++        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
++        assert snap["contracts"][0]["last_price"] == 100.0
++        assert snap["totals"]["ticks"] == 1  # 後兩筆確實被丟
++
++    def test_backfill_last_price_follows_time_order_not_input_order(self) -> None:
++        """SC-4:回補按 (symbol, precise_time, seq) 排序 → last_price 取時序較後那筆,
++        與輸入順序無關(TC4 收割分頁不保證時序)。"""
++        agg = make_agg()
++        agg.ingest_backfill(
++            [
++                tick(C44000.symbol, price=100_000, qty=1, bid=99_000, ask=100_000, t=2),
++                tick(C44000.symbol, price=99_000, qty=1, bid=99_000, ask=100_000, t=1),
++            ]
++        )
++        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
++        assert snap["contracts"][0]["last_price"] == 100.0
++
+     def test_contracts_invariants(self) -> None:
+         # 手寫固定序列覆蓋外/內/未分類三分支(IR-5:不用 random)
+         c43 = OptionContract(
+diff --git a/tests/live/test_replay_golden.py b/tests/live/test_replay_golden.py
+index 33bd919..38343da 100644
+--- a/tests/live/test_replay_golden.py
++++ b/tests/live/test_replay_golden.py
+@@ -42,3 +42,38 @@ def test_replay_golden_snapshot_locked() -> None:
+ 
+     expected = json.loads((FIXTURE_DIR / "expected_snapshot.json").read_text(encoding="utf-8"))
+     assert json.loads(json.dumps(snap)) == expected
++
++
++def test_last_price_matches_ticks_jsonl() -> None:
++    """SC-1 的獨立驗證力:**不吃 golden**,直接從 ticks.jsonl 重算每檔時序最後成交價。
++
++    `regen.py` 的自檢是把兩側 contracts 整段 pop 掉再比對 → contracts 區塊無條件覆寫,
++    重生後的 golden 對 last_price 的**值**零約束(self-fulfilling)。這條測試從原始錄檔
++    獨立算答案,golden 被覆寫後仍然成立。
++    """
++    rows = [json.loads(line) for line in (FIXTURE_DIR / "ticks.jsonl").open(encoding="utf-8")]
++    # 獨立算法:全域按 (PreciseTime, QryIndex) 升冪掃,每 symbol 最後寫入者即時序最後一筆
++    expected_last: dict[str, float] = {}
++    for r in sorted(rows, key=lambda x: (int(x["row"]["PreciseTime"]), int(x["row"]["QryIndex"]))):
++        expected_last[r["symbol"]] = float(r["row"]["TradingPrice"])
++    assert len(expected_last) == 15  # 錄檔涵蓋 15 檔(全部有成交 → 全部會出現在 contracts)
++
++    contracts: list[OptionContract] = []
++    for s in sorted(expected_last):
++        parsed = parse_option_symbol(s)
++        assert parsed is not None, s
++        _prod, _expiry, cp, strike = parsed
++        contracts.append(OptionContract(symbol=s, cp=cp, strike_millipts=strike * 1000))
++    series = SeriesInfo(
++        series_id="TX4.202607",
++        name="TX4 202607 golden",
++        expiry="202607",
++        contracts=tuple(contracts),
++    )
++    agg = ChainAggregator(contracts)
++    agg.ingest_backfill(
++        [t for r in rows if (t := parse_history_tick(r["symbol"], r["row"])) is not None]
++    )
++    snap = agg.snapshot(series=series, status="replay", accumulated_from="08:45:00")
++
++    assert {row["symbol"]: row["last_price"] for row in snap["contracts"]} == expected_last

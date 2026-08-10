@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {"id": "P0-1", "severity": "P0", "title": "stock retry loop 持 _pool_lock 跑完整輪 to_thread 訂閱 → TC4 下線時鎖幾乎恆被背景迴圈佔住,set_main / PUT watchlist 全卡死", "resolution": "accepted — spec 改「快照判準短鎖 + 逐檔重拿鎖重驗 + ConnectionError 段級早停」"},
+    {"id": "P1-1", "severity": "P1", "title": "對帳判準只看 _refs owner,rollover _resubscribe_all 的失敗完全不會被重試", "resolution": "accepted(方案 a)— 加 _failed_resubs set 納入重試"},
+    {"id": "P1-2", "severity": "P1", "title": "白名單 3「close 後 source 不再被呼叫」與 cancel 不停 to_thread 執行緒的事實衝突", "resolution": "partially rejected — 與已出貨 futures _resub_loop 同款且該輪顯式接受(test_close_stops_retry_loop「至多一個 in-flight thread」);補 _loop is None 縮窗 + 寫入 Known Risks 1"},
+    {"id": "P2-1", "severity": "P2", "title": "_schedule_backfill single-flight 是丟棄不是排隊,補分鐘動作可能靜默不執行", "resolution": "accepted(降級)— spec 標 best-effort + 被擋時 log;task 覆寫孤兒為既有 next-time 條目不擴"},
+    {"id": "P2-2", "severity": "P2", "title": "測試計畫缺 SC-4 stock 側實鎖;corr 測試 3 斷言寫法 vacuous;否定斷言無等待輪數", "resolution": "accepted — 測試清單修訂"},
+    {"id": "P2-3", "severity": "P2", "title": "首輪與重試輪 log 字串未釘死,破壞單一 grep 判準", "resolution": "accepted — 共用 format string 寫死"},
+    {"id": "P2-4", "severity": "P2", "title": "set_main 主圖真訂失敗未涵蓋也未列 out of scope;🟢 分類理由未說明", "resolution": "accepted — out of scope 增列 + commit 計畫補理由"}
+  ],
+  "summary": "現況表行號與語意逐條核對全部屬實;主要問題集中在併發(P0-1 鎖飢餓)與涵蓋面(P1-1 rollover 重掛失敗漏接)。"
+}
