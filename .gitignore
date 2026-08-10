@@ -16,6 +16,7 @@ spikes/.ruff_cache/
 !.claude/refactor/
 !.claude/perf/
 !.claude/chore/
+!.claude/skills/
 .claude/**/*.log
 .env
 spikes/out/
