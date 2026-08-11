@@ -457,13 +457,18 @@ class TestPendingResubscribe:
         await engine.start()
         await _wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
         await engine.close()
-        await asyncio.sleep(0.05)  # close 當下真正 in-flight 的 thread 結清
+        # T-9:in-flight worker(close 前已過 guard)脫鉤跑完 —— 用靜止條件取代
+        # 固定 sleep(快照連續兩次相等),斷言不再吃 OS 排程時序
+        prev = -1
         n = len(src.attempts)
+        while n != prev:
+            await asyncio.sleep(0.05)
+            prev, n = n, len(src.attempts)
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         assert pending == []
         await asyncio.sleep(0.05)  # 5 個間隔
         # P1-2:原斷言 <= n+1 把「close 後 orphan worker 再碰 source」寫成允許值;
-        # _EngineClosing 縮窗後 close 之後不得再有任何新 subscribe
+        # _EngineClosing 縮窗後靜止之後不得再有任何新 subscribe
         assert len(src.attempts) == n
 
     async def test_retry_worker_refuses_to_touch_source_after_close(self) -> None:
@@ -473,17 +478,59 @@ class TestPendingResubscribe:
         啟動的工作項仍會跑 —— 真 source 上那一下 subscribe 會經 _ensure_connected
         重建 TC4 連線,KeepAlive 洩漏 process 不退。整合層無法決定性製造「排入但
         未啟動」窗,以 worker 直呼鎖 guard 語意(stock_engine._retry_acquire 同款)。
+
+        T-8:用「close 第一步(_loop 斷、_source 尚在)」的半關狀態構造 —— 哨兵
+        必須是 _loop 而非 _source(_source 到 leaf gather 之後才斷,用它當哨兵
+        等於整段收尾期間窗子還開著)。
         """
         from copycat.server.futures_engine import _EngineClosing
 
         src = _FlakySource({"TXF": 10_000})
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await engine.close()
+        loop = engine._loop
+        engine._loop = None  # close 第一步;_source 仍在
         before = len(src.attempts)
         with pytest.raises(_EngineClosing):
             engine._retry_subscribe(src, "TXF")
         assert len(src.attempts) == before  # source 未被碰
+        engine._loop = loop
+        await engine.close()
+
+    async def test_close_swallows_dead_resub_task_exception(self) -> None:
+        """T-5:close suppress 放寬的直測 —— 迴圈圍籬失守、task 以例外終態落定時,
+        close() 不得重拋、source.close() 必達(與 _resub_loop 的 except Exception
+        正交:那道圍籬讓例外終態在整合路徑不可達,這裡直接構造終態)。"""
+        src = FakeSource()
+        engine = FuturesEngine(lambda: src)
+        await engine.start()
+
+        async def _boom() -> None:
+            raise ValueError("task 已死於非連線例外")
+
+        engine._resub_task = asyncio.get_running_loop().create_task(_boom())
+        await asyncio.sleep(0)  # 讓 task 以 ValueError 終態落定
+        await engine.close()  # 不得重拋
+        assert src.closed
+
+    async def test_engine_closing_exits_loop_without_failure_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """T-7:_EngineClosing 必須走專屬分支靜默結束 —— 落到 except Exception 會在
+        每次關機吐「訂閱重試輪失敗」假 log(3am grep 噪音;分支註解的承諾在此上鎖)。"""
+        src = _FlakySource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await _wait_until(lambda: len(src.attempts) > 3)
+        loop = engine._loop
+        task = engine._resub_task
+        assert task is not None
+        with caplog.at_level(logging.ERROR):
+            engine._loop = None  # 模擬 close 第一步(worker guard 生效)
+            await _wait_until(lambda: task.done())
+        assert "訂閱重試輪失敗" not in caplog.text
+        engine._loop = loop
+        await engine.close()
 
     async def test_retry_loop_survives_non_connection_error(self) -> None:
         """P1-1:非 ConnectionError 例外(壞電文/型別錯)不得殺掉重試路徑。
@@ -560,6 +607,14 @@ class _ReconnectSource(FakeSource):
         self.on_reconnect: Callable[[], None] | None = None
 
 
+class _FlakyReconnectSource(_FlakySource):
+    """_FlakySource + on_reconnect 屬性(重連對帳 × 重試迴圈的交互測試用)。"""
+
+    def __init__(self, fail_times: dict[str, int]) -> None:
+        super().__init__(fail_times)
+        self.on_reconnect: Callable[[], None] | None = None
+
+
 class _GatedRetrySource(FakeSource):
     """首輪全失敗;retry 的 subscribe 卡在 gate 上,放行後成功(製造 in-flight 窗)。"""
 
@@ -601,11 +656,46 @@ class TestReconnectReconciliation:
         await engine.start()  # 全成功 → 無 retry task(對帳必須能重啟迴圈,不能只靠 start)
         src.subscribed.clear()  # 模擬重連:source 端重掛全數靜默失敗,engine 不知情
         assert src.on_reconnect is not None
-        src.on_reconnect()
+        # T-4:prod 路徑是 TC4 listener thread 呼叫 —— 走 to_thread 讓
+        # 「threadsafe hop 改直呼 _handle_reconnect」的 mutant(listener 死於
+        # no running event loop → 全引擎斷流)必紅
+        await asyncio.to_thread(src.on_reconnect)
         try:
             await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
         finally:
             await engine.close()
+
+    async def test_reconnect_restarts_converged_retry_loop(self) -> None:
+        """T-2:start 曾有失敗品 → 迴圈收斂後 `_resub_task` 是 done 的 task(非 None),
+        對帳 guard 的 done() 半邊 —— 砍掉它 = 收斂後的重連零復原(原 bug 樣態)。"""
+        src = _FlakyReconnectSource({"TXF": 1})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await _wait_until(lambda: engine._resub_task is not None and engine._resub_task.done())
+        old = engine._resub_task
+        src.subscribed.clear()
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
+            assert engine._resub_task is not old
+        finally:
+            await engine.close()
+
+    async def test_reconnect_does_not_duplicate_running_loop(self) -> None:
+        """T-3:對帳打進來時 retry loop 還活著 → 不得覆寫成孤兒(close 只 cancel
+        最後一顆,孤兒在 close 進行中仍可能碰 source)。"""
+        src = _FlakyReconnectSource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await _wait_until(lambda: len(src.attempts) > 3)
+        task = engine._resub_task
+        assert task is not None and not task.done()
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        await _drain()
+        assert engine._resub_task is task
+        await engine.close()
 
     async def test_reconnect_during_close_is_noop(self) -> None:
         # close 已開始(_loop 斷)後的 on_reconnect 不得再排工作
