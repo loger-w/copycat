@@ -9,14 +9,23 @@
 - [ ] **CapitalConfirmDialog 新 caller 硬性契約**:onConfirm / onCancel 必須卸載元件
   (closedRef 一次性 settled 旗標;JSDoc 已載明,無機械防護)。
 
-## 2026-08-11(mod/react-doctor-p1 review 發現)
+## 2026-08-11(fix/watchlist-dialog-swallowed-callback 收尾留尾巴)
 
-- [ ] **WatchlistManagerDialog 連續操作吞 callback(pre-existing 真 bug,本批發現、刻意不修)**:
-  Dialog 只有一顆 `useSaveWatchlist` mutation observer,第二發 `mutate` 會覆蓋 per-call
-  callbacks → 第一發的 `onSuccess` 不執行。後果:(a) 連刪兩組只走到一次 `onGroupDeleted`
-  → 第一組組名留在 `WL_COLLAPSED_KEY`(W-20 復發路徑);(b) 第二發 PUT 以 stale `wl` 計算,
-  會把第一組還原回去。修法方向:per-action `mutateAsync` 或 mutation callbacks 去 per-call
-  化。證據:`WatchlistSidebar.dropcollapsed.test.tsx` 檔頭註解(2026-08-11)。
+- [ ] **BAD_GROUP eager 驗證與套用基底分歧(review C-4/W-3,P2)**:submitAddGroup /
+  submitRename 用 render 閉包 `wl` 做撞名 eager 檢查,套用卻在佇列 `baseRef` 上 —— 佇列
+  視窗內交錯時偽陰性(驗證放行 → 套用撞名 → 靜默零 PUT 無文案,輸入框已清空看似成功)
+  或偽陽性(誤報 BAD_GROUP)。已無資料錯(dedup 兜底),只剩無回饋的罕見交錯。要收:
+  撞名判定搬進 transform(make 回傳 reject 訊號 → setLocalError),eager 檢查降級純 UX。
+- [ ] **Dialog 佇列 onDone 在 unmount 後仍執行(review W-8,已拍板採「不漏清」語意)**:
+  promise chain 不受掛載狀態約束,PUT 在途時整頁換 tab 卸載後 `onGroupDeleted` 照跑
+  (冪等 localStorage 清理,unmount 後執行正是 W-20 要的;setSelected 是 React no-op)。
+  與 CapitalConfirmDialog「unmount 零 callback」lock 語意刻意不同(真錢下單 vs 冪等清理)。
+  若要機械釘住:補一條 unmount-after-PUT 仍清 `WL_COLLAPSED_KEY` 的 lock。
+- [ ] **跨元件並發寫者(Dialog 佇列 vs 側欄拖曳)**:兩者各持獨立 mutation observer,不互相
+  序列化;關窗後佇列殘餘的 sub-second 窗內側欄拖曳仍以 render 閉包算 next,理論上可互相
+  覆寫(modal 開著時側欄不可互動,窗口極窄)。要收 = 佇列上提到 hook 層讓三個 caller 共用。
+- [ ] **佇列交錯覆蓋缺口其餘兩類(review W-5 附帶)**:刪組+改名交錯、失敗短路後
+  「新動作以未變基底重算」的更多組合,現有 lock 只釘了連刪 / 連點 / 失敗短路三條主路徑。
 - [ ] **useBreadth / useIndexStream handler 同 tick 回寫升級(P2,自癒型)**:兩檔 ref 只在
   commit 後由 useLayoutEffect 同步,同一 macrotask 兩則 WS 訊息時第二則以舊底合併(下一格
   upsert / onopen refetch 自癒)。若要關窗:handle 內算出 next 同步回寫 ref(與
