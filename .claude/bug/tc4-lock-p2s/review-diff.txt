@@ -1,0 +1,827 @@
+﻿diff --git a/copycat/live/tc4.py b/copycat/live/tc4.py
+index b038db7a..29683e76 100644
+--- a/copycat/live/tc4.py
++++ b/copycat/live/tc4.py
+@@ -224,7 +224,16 @@ class TC4QuoteSource:
+         session: str | None = None,
+         poll_wait_secs: float = 1.0,
+         backfill_date: str | None = None,
+-        lock_timeout_secs: float = 5.0,
++        # 等鎖上界**必須大於** `_REQ_TIMEOUT_MS`/1000(X-2a):**健康慢路徑**的持鎖
++        # 上界 ≈ 吃滿 RCVTIMEO(send 在 localhost REQ 上只有對端死了才會塞到 SNDTIMEO,
++        # 那條路棄連線本來就正確;形式上的持鎖上界是 send+recv = 2×10s,且逾時方
++        # `_dispose` 會以同一把 timeout 再等鎖一次 —— 首個輸家最壞 12+12s,但 `_api`
++        # 已先 null,後來者拿到的是新鎖,級聯止於一人)。等鎖上界比健康上界小,就代表
++        # 「一個正常但慢的 REQ」必然讓其餘等鎖者 `_dispose` 整條連線 —— 三個 REQ
++        # 生產者(群組回補 / basis sweep / Fut2 目錄)在 boot 必然重疊,級聯是常態。
++        # 取捨:毒鎖(KeepAlive Pong 無 try/finally)的偵測延遲從 5s 拉長到 12s ——
++        # 那條路本來就要重建連線,晚 7 秒發現可接受;而誤殺健康連線是每次都發生。
++        lock_timeout_secs: float = 12.0,
+     ) -> None:
+         self._port = port
+         self._api = api
+diff --git a/copycat/server/signal_hub.py b/copycat/server/signal_hub.py
+index 407332d3..3b30f025 100644
+--- a/copycat/server/signal_hub.py
++++ b/copycat/server/signal_hub.py
+@@ -95,6 +95,8 @@ _ENABLED_FILE = "signals_enabled.json"
+ _RULES_FILE = "signal_rules.json"
+ _SIGNAL_DIR = "signals"
+ _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
++#: 基準取得**例外**的重試上限(per (code, basis_date, staged));超限才落 None
++_BASIS_MAX_RETRIES = 2
+ _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
+ _DISCORD_WINDOW_SECS = 60.0
+ 
+@@ -229,6 +231,12 @@ class SignalHub:
+         self._basis_cache: dict[str, tuple[str, dict[str, int] | None]] = {}
+         self._staged_cache: dict[str, dict[str, int] | None] = {}
+         self._staged_date: str | None = None  # 當前 stage1 的基準日(過期 job 的判準)
++        #: 例外路徑的重試記帳(X-2b):(code, 基準日, staged) → 已排過幾次重試。
++        #: 基準日在鍵裡 → 跨日天然作廢,再由 `on_rollover` 清掉舊日別的鍵(不長大)。
++        self._basis_retries: dict[tuple[str, str, bool], int] = {}
++        #: 在途的延遲重試(同一個鍵最多一筆:基準 worker 是序列的)。close() 要能
++        #: 全部取消 —— 關機後才觸發的 callback 會往一條再也沒有 worker 的佇列塞件。
++        self._retry_handles: dict[tuple[str, str, bool], asyncio.TimerHandle] = {}
+         # 兩條獨立佇列 + 兩個 worker(CC-5):Discord 卡住時 jsonl 這條真相源要照走
+         self._jsonl_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=JSONL_QUEUE_MAXSIZE)
+         self._discord_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=DISCORD_QUEUE_MAXSIZE)
+@@ -353,6 +361,9 @@ class SignalHub:
+         但還沒寫完,先取消就沒有任何地方找得回它(`_flush_pending` 只掃得到還在佇列裡的)。
+         """
+         self._closing = True
++        for handle in self._retry_handles.values():
++            handle.cancel()  # 在途的基準重試:關機後入列的 job 永遠不會有人消化
++        self._retry_handles.clear()
+         jsonl_task = self._jsonl_task
+         if jsonl_task is not None and not jsonl_task.done():
+             try:
+@@ -436,6 +447,17 @@ class SignalHub:
+ 
+     def on_rollover(self) -> None:
+         expected = self._trade_date_fn()  # engine 已前進到新日別(stage2 契約)
++        # 重試記帳的日別作廢:新的一天是新的鍵,舊日別的計數再也不會被讀到 ——
++        # 不清的話這張表會隨開機天數單調長大(長駐 server 的慢性洩漏)。staged 鍵
++        # 一併作廢:方法尾端 `_staged_date` 歸 None,staged 尺此後恆過期,連
++        # 「基準日 = 新日別」的 staged 鍵也是死條目,同一把尺清 timer 與計數。
++        self._basis_retries = {
++            k: v for k, v in self._basis_retries.items() if k[1] == expected and not k[2]
++        }
++        # 在途重試 timer 同尺取消:醒來也只會被 `_stale` 丟掉,但那是白走一趟
++        # 換日這個最忙窗的佇列;close() 的全清是關機路徑,換日要自己清自己的。
++        for k in [k for k in self._retry_handles if k[1] != expected or k[2]]:
++            self._retry_handles.pop(k).cancel()
+         for slot in self._slots.values():
+             slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
+         if self._staged_cache and self._staged_date == expected:
+@@ -529,6 +551,14 @@ class SignalHub:
+             slot.detector.drop_code(code)
+         self._basis_cache.pop(code, None)
+         self._staged_cache.pop(code, None)
++        # 在途重試會在移出後才醒來:重打 TC4 事小,`_basis_failed` 還會把上面剛清掉
++        # 的 cache 條目寫回去(復活成 (date, None))。計數一併清 —— 重新加入是使用者
++        # 驅動的新機會,不背舊帳。已在佇列裡的 job 攔不到(秒級窗,`_stale` 之外無
++        # 名單 gate;與 stock_engine A-1 殘留窗同構,不值得為它加新不變式)。
++        for k in [k for k in self._retry_handles if k[0] == code]:
++            self._retry_handles.pop(k).cancel()
++        for k in [k for k in self._basis_retries if k[0] == code]:
++            del self._basis_retries[k]
+ 
+     # ---- CDP 基準 ----
+ 
+@@ -565,16 +595,68 @@ class SignalHub:
+         """
+         return basis_date != (self._staged_date if staged else self._trade_date_fn())
+ 
++    def _schedule_basis_retry(self, code: str, basis_date: str, staged: bool) -> bool:
++        """例外路徑的有限重試(X-2b)。回傳「有沒有排到重試」—— False = 已達上限,
++        呼叫端照舊落 None。
++
++        **只有例外走這裡**(連線 / 傳輸層,暫時性):落 None 是**整天**的決定,而
++        basis sweep 逐檔間隔只有 0.2s —— 一次連線抖動(例:REQ 棄連線級聯)可以在
++        數秒內把十幾檔的 CDP 停掉一整天,而畫面只是「那條規則今天都沒發」。反過來
++        「日 K 回空」是資料面的答案(新上市無歷史),重抓一百次也一樣,不得重試。
++
++        重試 job 走**同一條佇列**且帶原 `basis_date`/`staged` → `_stale` 這把既有的
++        尺自然擋掉跨日殘留,不必另立一套過期判定。
++        """
++        if self._closing:
++            return False
++        key = (code, basis_date, staged)
++        tries = self._basis_retries.get(key, 0)
++        if tries >= _BASIS_MAX_RETRIES:
++            logger.warning("CDP 基準連續失敗 %d 次,%s 當日停用 CDP", tries + 1, code)
++            return False
++        self._basis_retries[key] = tries + 1
++        delay = self._cfg.basis_retry_delay_secs
++        old = self._retry_handles.get(key)
++        if old is not None:
++            # 同鍵兩筆 job 先後失敗(rollover 差集補抓 / 同檔重複 request 都造得出
++            # 同鍵並存的 job):不取消就成孤兒 timer —— 照樣醒來多打 TC4,先醒的那支
++            # 還會走到 cap 路徑把重試記帳 pop 歸零,兩支孤兒互相回充預算接近乒乓;
++            # 且孤兒 `_requeue_basis` pop 掉 dict 條目後,close() 再也看不到在途的那支。
++            old.cancel()
++        handle = asyncio.get_running_loop().call_later(delay, self._requeue_basis, key)
++        self._retry_handles[key] = handle
++        logger.info(
++            "CDP 基準取得失敗,%.0fs 後重試(第 %d 次):%s(%s,staged=%s)",
++            delay,
++            tries + 1,
++            code,
++            basis_date,
++            staged,
++        )
++        return True
++
++    def _requeue_basis(self, key: tuple[str, str, bool]) -> None:
++        """延遲到期:把原封不動的 job 放回佇列(過期與否由 worker 的 `_stale` 判)。"""
++        self._retry_handles.pop(key, None)
++        if self._closing:
++            return
++        self._basis_jobs.put_nowait(key)
++
+     def _basis_failed(self, code: str, basis_date: str, staged: bool) -> None:
+         """未預期失敗的收斂點(review A1+B2):日別符才落 None,且**經由 cache**。
+ 
+         繞過 cache 直摸 detector 有兩個獨立的坑:(a) 沒有日別尺 —— 一則 stage1
+         (次日)或 promote 前排下的舊 job 崩掉,就把當日基準停掉;(b) cache 仍寫著
+         舊值 → 之後任何 `_distribute` 都會把它再餵回去,兩份真值就此分岔。
++
++        日別符時**先試重試**(X-2b:worker 級未預期例外同屬暫時性失敗那一類),
++        超限才落 None。
+         """
+         if self._stale(basis_date, staged):
+             logger.info("捨棄過期基準 job 的失敗結果:%s(%s,staged=%s)", code, basis_date, staged)
+             return
++        if self._schedule_basis_retry(code, basis_date, staged):
++            return
+         if staged:
+             self._staged_cache[code] = None
+             return
+@@ -590,8 +672,14 @@ class SignalHub:
+         try:
+             bars = await self._daily_bars(code, _BASIS_BARS)
+         except Exception:
+-            # 具體處理 = 基準設 None(CDP 跳過、其他 kind 照常),不重試(design §4.2)
+-            logger.exception("CDP 基準日 K 取得失敗,%s 停用 CDP", code)
++            # 具體處理 = 有限重試(X-2b,收窄 design §4.2),超限才落 None
++            # (CDP 跳過、其他 kind 照常)。過期的失敗不排重試 —— 日別都換了,
++            # 這則 job 的答案已經沒有人要。
++            logger.exception("CDP 基準日 K 取得失敗:%s", code)
++            if not self._stale(basis_date, staged) and self._schedule_basis_retry(
++                code, basis_date, staged
++            ):
++                return True
+             bars = []
+         done = [b for b in bars if b["date"] < basis_date]  # 今日 partial bar 不得入計算
+         cdp: dict[str, int] | None = None
+@@ -600,6 +688,10 @@ class SignalHub:
+             cdp = compute_cdp(last["high"], last["low"], last["close"])
+         else:
+             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
++        # 走到這裡 = 這則 job 已經產出答案(含「資料面就是沒有」):抖動過去了,重試
++        # 記帳歸零。**不可提前到取得 bars 之後** —— 那之後還有 `compute_cdp`,它每次
++        # 都炸的話計數會被歸零成無限重試(這正是本輪先寫錯再被既有測試抓到的那條)。
++        self._basis_retries.pop((code, basis_date, staged), None)
+         if self._stale(basis_date, staged):
+             # 打日 K 的期間換了日別(staged:暫存區已清空 MFS-2;非 staged:promote 走完
+             # R18)→ **丟棄**。餵進去等於把舊日別的基準當今天用,而且整天不會自癒。
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index b372853f..f094eb16 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -192,6 +192,9 @@ class StockEngine:
+         # 訂閱池變更(set_watchlist/set_main/重掛)全程序列化:_refs/_main/_watchlist
+         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
+         self._pool_lock = asyncio.Lock()
++        # 已套用的自選定序號(X-3):service 在自己的鎖內取號,訂閱在鎖外送達 →
++        # 抵達順序不保證。0 = 還沒套過任何帶號的名單(取號自 1 起)。
++        self._wl_seq_applied = 0
+         # 訂閱失敗的復原路徑(mod/subscribe-retry-recovery):三處失敗各自靜默 ——
+         # watchlist 檔回滾出 `_refs` 後畫面永遠 `-`、stkfut 腿要切走再切回才會重掛、
+         # rollover 重掛失敗更是連 `_refs` 都不動,對帳判準看不到
+@@ -293,8 +296,30 @@ class StockEngine:
+ 
+     # ---- 對外操作 ----
+ 
+-    async def set_watchlist(self, codes: list[str]) -> None:
++    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None:
++        """`seq` = 呼叫端(`WatchlistService`)在**它自己的鎖內**取的定序號(X-3)。
++
++        `seq <= 已套用` = 舊名單後到 → **整段跳過**(不訂不退不廣播不通知 hub),
++        照套的話訂閱池 / hub membership / 種子廣播會一起退回上一版,而畫面上只是
++        「剛加的股票又不見了」,零錯誤訊號。
++
++        誠實記帳:現況下取號(service 鎖內,同步)到本 method 進 `_pool_lock`
++        (FIFO)之間**沒有 yield 點**(無競爭的 `asyncio.Lock.acquire` 不讓出),
++        抵達順序 = 取號順序,這個防線今天走不到 —— `seq` 是 belt-and-braces。
++        它防的是那條保證**靜默消失**的未來:任何人在該窗內插入 await(例:落檔改
++        `to_thread`)後亂序就真的可能發生,而屆時不會有任何測試驅動 service→engine
++        的 reorder 提醒你。
++
++        `None`(boot 還原 / 既有 caller)= 不參與定序,照舊全套。
++        """
+         async with self._pool_lock:  # CR2
++            if seq is not None:
++                if seq <= self._wl_seq_applied:
++                    logger.info(
++                        "watchlist seq %d 已過期(已套用 %d),跳過", seq, self._wl_seq_applied
++                    )
++                    return
++                self._wl_seq_applied = seq
+             # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
+             added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
+             removed = [c for c in self._watchlist if c not in codes]
+diff --git a/copycat/server/watchlist_service.py b/copycat/server/watchlist_service.py
+index f8dc9a4d..19d71ca1 100644
+--- a/copycat/server/watchlist_service.py
++++ b/copycat/server/watchlist_service.py
+@@ -6,6 +6,12 @@
+ 撞在一起會靜默丟掉其中一邊(後寫者以自己讀到的舊快照覆蓋)。本模組把序列與 lock 收成
+ 單一定義,route 與 bot 都只呼叫這裡。
+ 
++**鎖的範圍到落檔為止(X-3)**:`_commit` 在鎖內做「正規化 → 比對 → 落檔 → 取定序號」,
++`_settle` 在**鎖外**做「訂閱 → 廣播」。`engine.set_watchlist` 逐檔走 ZMQ,TC4 故障時
++單次最壞是數十檔 × 數十秒 —— 包在鎖內的話期間所有寫入一起堵死,而 Discord 的
++interaction token 只有 15 分鐘。並發正確性改由 `seq` 在 engine 端保證(舊名單後到整段
++跳過 = last-writer-wins),不再倚賴「訂閱也在鎖內」。
++
+ **canonical 零寫早退(§6 R18)**:比較「請求正規化後的形」與「現況正規化後的形」,
+ 相同就不落檔、不 `set_watchlist`、不廣播。這是既有 PUT 的行為改動(🔴)—— 舊碼對同
+ 內容 PUT 照樣跑一輪 `set_watchlist`,而那條路會對整份名單做 UNSUB/SUB;前端每次存檔
+@@ -43,16 +49,24 @@ def _copy_groups(groups: list[Group]) -> list[Group]:
+ class WatchlistEngine(Protocol):
+     """StockEngine 結構子集(測試注入 fake)。"""
+ 
+-    async def set_watchlist(self, codes: list[str]) -> None: ...
++    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None: ...
+ 
+     def _publish(self, msg: dict) -> None: ...
+ 
+ 
++#: `_commit` 的產出:(現況 / 落檔結果, 這次有沒有改, 定序號)。
++#: 沒改 → seq 為 None,`_settle` 直接放行(不訂閱、不廣播)。
++_Pending = tuple[Watchlist, bool, int | None]
++
++
+ class WatchlistService:
+     def __init__(self, path: Path, engine: WatchlistEngine) -> None:
+         self._path = path
+         self._engine = engine
+         self._lock = asyncio.Lock()
++        # 定序號在鎖內取(X-3);訂閱在鎖外送,抵達 engine 的順序不保證 —— engine
++        # 靠這個號認出「舊名單後到」並整段跳過(last-writer-wins)。
++        self._apply_seq = 0
+ 
+     async def apply(self, wl: Watchlist) -> Watchlist:
+         """整份取代(前端 PUT 的語意)。
+@@ -61,8 +75,9 @@ class WatchlistService:
+         現況;changed flag 只有 Discord 那條路要分文案。
+         """
+         async with self._lock:
+-            saved, _ = await self._commit(wl)
+-            return saved
++            pending = self._commit(wl)
++        saved, _ = await self._settle(pending)
++        return saved
+ 
+     async def add(self, code: str, group: str | None = None) -> tuple[Watchlist, bool]:
+         """加進自選;帶 group 則同時入該群組(群組不存在自動建)。"""
+@@ -87,7 +102,8 @@ class WatchlistService:
+                     groups.append(target)
+                 if code not in target["codes"]:
+                     target["codes"].append(code)
+-            return await self._commit({"codes": codes, "groups": groups})
++            pending = self._commit({"codes": codes, "groups": groups})
++        return await self._settle(pending)
+ 
+     async def remove(self, code: str) -> tuple[Watchlist, bool]:
+         """自自選與**所有**群組移除(留在任一群組就會被 normalize 補回 codes)。"""
+@@ -98,7 +114,8 @@ class WatchlistService:
+                 for g in current["groups"]
+             ]
+             codes = [c for c in current["codes"] if c != code]
+-            return await self._commit({"codes": codes, "groups": groups})
++            pending = self._commit({"codes": codes, "groups": groups})
++        return await self._settle(pending)
+ 
+     async def create_group(self, name: str) -> tuple[Watchlist, bool]:
+         """建立空群組;strip 後同名已存在 → no-op(不報錯 —— 使用者的意圖已經成立)。
+@@ -113,7 +130,8 @@ class WatchlistService:
+                 return current, False
+             groups = _copy_groups(current["groups"])
+             groups.append({"name": target, "codes": []})  # 存 strip 後名(比對基準同一份)
+-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
++        return await self._settle(pending)
+ 
+     async def delete_group(self, name: str) -> tuple[Watchlist, bool]:
+         """刪群組;codes 不動 —— 成員落回未分組衍生桶(刪群組不等於刪股票)。"""
+@@ -123,7 +141,8 @@ class WatchlistService:
+             if not any(g["name"] == target for g in current["groups"]):
+                 raise WatchlistError("GROUP_NOT_FOUND")
+             groups = [g for g in _copy_groups(current["groups"]) if g["name"] != target]
+-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
++        return await self._settle(pending)
+ 
+     async def rename_group(self, old: str, new: str) -> tuple[Watchlist, bool]:
+         """改名;新名撞既有名 / 保留名 / 空名 → `normalize` 拒(`BAD_GROUP`)。"""
+@@ -139,7 +158,8 @@ class WatchlistService:
+             for g in groups:
+                 if g["name"] == src:
+                     g["name"] = dst
+-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
++        return await self._settle(pending)
+ 
+     async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:
+         """自該群組移出;wl codes 不動 —— 移出群組不等於移出自選。"""
+@@ -155,7 +175,8 @@ class WatchlistService:
+             for g in groups:
+                 if g["name"] == target:
+                     g["codes"] = [c for c in g["codes"] if c != code]
+-            return await self._commit({"codes": list(current["codes"]), "groups": groups})
++            pending = self._commit({"codes": list(current["codes"]), "groups": groups})
++        return await self._settle(pending)
+ 
+     async def current(self) -> Watchlist:
+         """現況(canonical 形);壞檔回空清單。Discord `/watch list` 的讀取入口。
+@@ -166,8 +187,13 @@ class WatchlistService:
+         async with self._lock:
+             return self._snapshot()
+ 
+-    async def _commit(self, wl: Watchlist) -> tuple[Watchlist, bool]:
+-        """持 lock 呼叫。正規化 → 與現況比對 → 落檔 + 訂閱 + 廣播。
++    def _commit(self, wl: Watchlist) -> _Pending:
++        """**持 lock 呼叫**。正規化 → 與現況比對 → 落檔 → 取定序號。
++
++        鎖內到此為止(X-3):訂閱與廣播由呼叫端在**鎖外**交給 `_settle`。
++        `engine.set_watchlist` 逐檔走 ZMQ,TC4 故障時單次最壞是數十檔 × 數十秒;
++        留在鎖內的話期間所有 `/watch` 與前端 PUT 全部堆積,而 Discord 的 interaction
++        token 只有 15 分鐘 —— 使用者看到的是「應用程式沒有回應」。
+ 
+         回傳的 bool = 「這次真的改了嗎」。**唯一事實點就是這裡的比對** —— 呼叫端自己
+         比對會多一次讀檔、也就多一個 TOCTOU 窗;而 Discord 的 no-op 文案(「已在自選」
+@@ -175,9 +201,29 @@ class WatchlistService:
+         """
+         desired = normalize(wl)  # 非法碼 / 超上限在此拋,尚未落檔
+         if desired == self._current_canonical():
+-            return desired, False
++            return desired, False, None
+         saved = save_watchlist(self._path, desired)
+-        await self._engine.set_watchlist(saved["codes"])
++        self._apply_seq += 1  # 落檔順序 = 定序順序(同在鎖內,不會交錯)
++        return saved, True, self._apply_seq
++
++    async def _settle(self, pending: _Pending) -> tuple[Watchlist, bool]:
++        """**鎖外**的副作用:訂閱 + 廣播。六個公開方法共用這一份。
++
++        呼叫端仍 `await` —— 收斂的是**鎖凸出**,不是自己這一次的等待:改成
++        fire-and-forget 的話 route 回應時訂閱可能還沒掛上,前端拿到的第一份 snapshot
++        會缺。並發安全由 `seq` 在 engine 端負責(舊名單後到整段跳過)。
++
++        收斂範圍要誠實:X-3 解掉的是 **service 這把鎖**的堆積(`current()` 讀路、
++        群組操作的驗證與落檔不再排在訂閱迴圈後面);engine 端 `_pool_lock` 仍序列化
++        整段逐檔訂閱迴圈,第二個寫入者的 `_settle` 還是得等第一個的迴圈走完 ——
++        TC4 故障下 Discord 回覆仍可能拖過 interaction token 上限。深修 = 把 ZMQ
++        迴圈移出 `_pool_lock`(同檔 backfill worker 的 per-code 取鎖模式),
++        見 docs/next-time.md。
++        """
++        saved, changed, seq = pending
++        if not changed:
++            return saved, False
++        await self._engine.set_watchlist(saved["codes"], seq=seq)
+         self._engine._publish({"type": "watchlist_changed"})
+         return saved, True
+ 
+diff --git a/copycat/signals_config.py b/copycat/signals_config.py
+index 23e2cfb8..2f8ec678 100644
+--- a/copycat/signals_config.py
++++ b/copycat/signals_config.py
+@@ -37,6 +37,7 @@ class SignalsConfig:
+     # --- 接線層(SignalHub)---
+     discord_per_min: int = 30  # Discord 每分鐘送出上限(只擋 Discord,不擋 jsonl/WS)
+     basis_gap_secs: float = 0.2  # CDP 基準 worker 逐檔間隔(測試注入 0)
++    basis_retry_delay_secs: float = 30.0  # CDP 基準取得失敗後的重試間隔(X-2b;測試注入 0)
+ 
+ 
+ def load_signals_config(path: Path = CONFIG_PATH) -> SignalsConfig:
+diff --git a/docs/next-time.md b/docs/next-time.md
+index 3cb4225d..d89ffad2 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -1,4 +1,22 @@
+ 
++## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
++
++- [ ] **X-3 深修:把 ZMQ 訂閱迴圈移出 `stock_engine._pool_lock`(review 首位 finding,P2)**:
++  X-3 只收斂了 service 鎖(讀路 / 落檔不再堆積),engine 端 `_pool_lock` 仍序列化整段
++  逐檔 `to_thread(_acquire)` 迴圈 —— TC4 故障下第二個寫入者的 `_settle` 還是等第一個
++  的迴圈走完,Discord 回覆仍可能拖過 interaction token 上限。修法方向 = 同檔 backfill
++  worker 的 per-code 取鎖模式(鎖只護共享結構,ZMQ IO 在鎖外逐檔做);要重新對齊
++  「名單先指派再訂閱」(round4 項 4)與 seq 定序的不變式,獨立輪做。
++- [ ] **`set_watchlist(seq=None)` 豁免顯式化(review,latent)**:None 分支唯一生產
++  caller = app.py boot 還原,安全前提是「service 在 restore 之後才建構 + routes 前置
++  503」,這條不變式沒在任何地方斷言;Protocol 預設 None → 未來 caller 漏帶 keyword
++  零訊號。最便宜的硬化 = boot 顯式帶 sentinel(seq=0)、刪 None 分支。
++- [ ] **測試 deadline-poll helper 已有 6 份手抄(/refactor 素材)**:`_wait_until`
++  (test_stock_engine:931 / test_corr_engine:352 / test_futures_engine:359 /
++  test_breadth_engine:234)+ 本輪 `_wait_calls`(test_signal_hub:372)/ `_wait_codes`
++  (test_watchlist_service:54);fail-N-then-succeed fake 也有 3 份(_FlakyBars /
++  _FlakySource ×2)。sleep 間隔已漂移(0.01 vs 0.005)。收斂到 tests/helpers/。
++
+ ## 2026-08-11(mod/capital-confirm-native-dialog 收尾留尾巴)
+ 
+ - [ ] **確認窗開著時 Esc 不再解除階梯武裝**(刻意:窗內 Esc 以窗優先,stopPropagation
+diff --git a/tests/live/test_tc4.py b/tests/live/test_tc4.py
+index ff7e34e3..55638952 100644
+--- a/tests/live/test_tc4.py
++++ b/tests/live/test_tc4.py
+@@ -417,6 +417,21 @@ class _RaisingSocket:
+         raise AssertionError("recv 不應被呼叫")
+ 
+ 
++class TestLockTimeoutContract:
++    """X-2a:等鎖上界必須大於單次 REQ 的上界(不等式契約,不是某個數字)。
++
++    **健康慢路徑**的持鎖上界 ≈ RCVTIMEO(形式上界是 send+recv = 2×RCVTIMEO,但
++    localhost REQ 的 send 只有對端死了才塞得滿 SNDTIMEO,那條路棄連線本來就正確);
++    等鎖上界比健康上界小的話,一個**正常但慢**的 REQ(QUERYALLINSTRUMENT 實測
++    1.93s,最壞到 RCVTIMEO)就會讓所有等鎖者 `_dispose` 整條連線 —— 那是把健康慢
++    當成毒鎖治。
++    """
++
++    def test_default_lock_timeout_exceeds_req_timeout(self) -> None:
++        src = TC4QuoteSource(port="0", api=object(), session="sess-1")
++        assert src._lock_timeout * 1000 > tc4_mod._REQ_TIMEOUT_MS
++
++
+ class TestRtRequestResilience:
+     """條 1(next-time 2026-07-20):REQ 路徑錯誤收斂 ConnectionError + lock timeout。"""
+ 
+diff --git a/tests/server/test_signal_hub.py b/tests/server/test_signal_hub.py
+index 6e76a731..3cf9a0df 100644
+--- a/tests/server/test_signal_hub.py
++++ b/tests/server/test_signal_hub.py
+@@ -194,6 +194,24 @@ class _GatedBars(_FakeBars):
+         return await super().__call__(code, n)
+ 
+ 
++class _FlakyBars(_FakeBars):
++    """前 `fail_times` 次拋例外(連線 / 傳輸層抖動),之後正常回 bars。
++
++    X-2b 的分流前提:同一個 code 的同一天,失敗與成功可以在幾十秒內先後發生 ——
++    `_FakeBars(error=True)` 的「永遠失敗」測不到這件事。
++    """
++
++    def __init__(self, bars: list[DailyBar] | None = None, *, fail_times: int = 1) -> None:
++        super().__init__(bars)
++        self.fail_times = fail_times
++
++    async def __call__(self, code: str, n: int = 25) -> list[DailyBar]:
++        if len(self.calls) < self.fail_times:
++            self.calls.append((code, n))
++            raise ConnectionError("TC4 連線抖動")
++        return await super().__call__(code, n)
++
++
+ def _boom_cdp(*_args: int) -> dict[str, int]:
+     raise RuntimeError("compute_cdp 壞了")
+ 
+@@ -351,6 +369,18 @@ async def _wait_rows(h: _Harness, n: int, timeout: float = 2.0) -> None:
+     raise AssertionError(f"jsonl 只落了 {len(h.rows())} 筆,等不到 {n} 筆")
+ 
+ 
++async def _wait_calls(bars: _FakeBars, n: int, timeout: float = 2.0) -> None:
++    """等 daily_bars 被打到第 n 次 —— 重試是**延遲入列**的,不在 `settle()` 的射程內
++    (job 已 `task_done`,佇列是空的,`join()` 立刻返回)。"""
++    loop = asyncio.get_running_loop()
++    deadline = loop.time() + timeout
++    while loop.time() < deadline:
++        if len(bars.calls) >= n:
++            return
++        await asyncio.sleep(0.01)
++    raise AssertionError(f"daily_bars 只被打了 {len(bars.calls)} 次,等不到 {n} 次")
++
++
+ @pytest.fixture
+ def clock() -> _Clock:
+     return _Clock()
+@@ -1002,8 +1032,11 @@ class TestBasisWorker:
+         worker 的 outer except 繞過 cache 直摸 detector 時,一則盤前預抓的例外會把
+         今天剩下的 CDP 全部停掉;cache 還寫著正確值 → 之後任何 `_distribute` 都不會
+         自癒,而畫面只顯示「這條規則今天都沒發」,零錯誤訊號。
++
++        **落點契約不變,時點改了(X-2b)**:worker 級例外現在先走有限重試,超限
++        (第 3 次)才落暫存區 —— 故等到 daily_bars 被打滿 4 次(當日 1 + staged 3)。
+         """
+-        h = _Harness(tmp_path, clock)
++        h = _Harness(tmp_path, clock, basis_retry_delay_secs=0.0)
+         await h.hub.start()
+         try:
+             h.hub.on_watchlist(["2330"])
+@@ -1011,6 +1044,7 @@ class TestBasisWorker:
+ 
+             monkeypatch.setattr(hub_mod, "compute_cdp", _boom_cdp)
+             h.hub.on_rollover_pending(_NEXT)
++            await _wait_calls(h.bars, 4)
+             await h.settle()
+ 
+             assert _cache(h) == (_DATE, 80_000)  # 當日快照未被暫存區的例外動到
+@@ -1188,6 +1222,135 @@ class TestBasisWorker:
+             await h.hub.close()
+ 
+ 
++class TestBasisRetry:
++    """X-2b:例外(連線 / 傳輸層,暫時性)有限重試;資料面的空 bars 不重試。
++
++    落 None 是**整天**的決定(當日不再重抓),而 basis sweep 逐檔間隔只有 0.2s ——
++    一次連線抖動可以在數秒內把十幾檔的 CDP 停掉一整天,而畫面只是「規則沒發」。
++    """
++
++    async def test_transient_failure_retried_until_success(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        bars = _FlakyBars([_BAR_A], fail_times=1)
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await _wait_calls(bars, 2)
++            await h.settle()
++            assert _cache(h) == (_DATE, 80_000), "第一次失敗就把當天的 CDP 定死了"
++            h.cross_nh(_state())
++            await h.settle()
++            assert [m["levels"] for m in h.published] == [["nh"]]
++        finally:
++            await h.hub.close()
++
++    async def test_retry_capped_then_basis_none(self, tmp_path: Path, clock: _Clock) -> None:
++        """連續失敗 = 不是抖動:重試上限後落 None 定格,不得無限重打 TC4。"""
++        bars = _FakeBars([_BAR_A], error=True)
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await _wait_calls(bars, 3)
++            await h.settle()
++            assert _cache(h) == (_DATE, None)
++            await asyncio.sleep(0.05)
++            assert len(bars.calls) == 3, "重試沒有上限"
++        finally:
++            await h.hub.close()
++
++    async def test_empty_bars_not_retried(self, tmp_path: Path, clock: _Clock) -> None:
++        """新上市無歷史日 K = 資料面的答案,重抓一百次也一樣 —— 不重試。"""
++        bars = _FakeBars([])
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await h.settle()
++            assert _cache(h) == (_DATE, None)
++            await asyncio.sleep(0.05)
++            assert len(bars.calls) == 1, "空 bars 也重試 = 白打 TC4"
++        finally:
++            await h.hub.close()
++
++    async def test_stale_retry_job_discarded_after_rollover(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """重試 job 帶原 basis_date 走同一條佇列 → 跨日後由 `_stale` 丟棄,不打 TC4。"""
++        bars = _FakeBars([_BAR_A], error=True)
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.1)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await _wait_calls(bars, 1)
++            await h.settle()
++            h.date = _NEXT  # 重試還沒入列就換日了
++            await asyncio.sleep(0.25)
++            await h.settle()
++            assert len(bars.calls) == 1, "過期的重試 job 仍去打了 TC4"
++        finally:
++            await h.hub.close()
++
++    async def test_reschedule_cancels_orphaned_timer(self, tmp_path: Path, clock: _Clock) -> None:
++        """同鍵兩筆 job 先後失敗(rollover 差集補抓 race 的形)→ 第二次排程必須取消
++        第一支 timer。孤兒 timer 照樣醒來:重試預算被雙倍燒掉、TC4 被多打一次,而且
++        它 pop 掉 dict 條目後,close() 再也看不到真正在途的那支。"""
++        bars = _FakeBars([_BAR_A], error=True)
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.15)
++        await h.hub.start()
++        try:
++            h.hub.request_basis(["2330"])
++            h.hub.request_basis(["2330"])  # 同鍵第二筆:重試在途時又排了新 job
++            await _wait_calls(bars, 2)
++            await asyncio.sleep(0.4)  # 讓在途 timer 全數到期
++            await h.settle()
++            # 兩筆初始 + 一次重試(tries 已達上限)= 3;孤兒 timer 也醒的話會是 4
++            assert len(bars.calls) == 3, "孤兒 timer 也醒來重打了 TC4"
++        finally:
++            await h.hub.close()
++
++    async def test_drop_code_cancels_pending_retry(self, tmp_path: Path, clock: _Clock) -> None:
++        """移出自選後在途重試必須取消:醒來的重試不只白打 TC4,`_basis_failed` 還會把
++        `_drop_code` 刻意清掉的 cache 條目寫回去(復活成 (date, None))。"""
++        bars = _FakeBars([_BAR_A], error=True)
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.1)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await _wait_calls(bars, 1)
++            h.hub.on_watchlist([])  # 重試在途時移出
++            await asyncio.sleep(0.3)
++            await h.settle()
++            assert len(bars.calls) == 1, "移出自選後重試仍去打了 TC4"
++            assert "2330" not in h.hub._basis_cache, "被清掉的 cache 條目又被重試復活"
++        finally:
++            await h.hub.close()
++
++    async def test_rollover_prunes_pending_handles_and_staged_counters(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """換日清舊要一次清齊:舊日別與 staged 的在途 timer 取消(醒來也只會被 `_stale`
++        丟掉,白走一趟換日最忙窗的佇列);staged 計數不得帶進新的一天 —— `_staged_date`
++        此刻歸 None,那些鍵再也不會被讀到,留著就是 `on_rollover` 自己要防的慢性洩漏。"""
++        bars = _FakeBars([_BAR_A], error=True)
++        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=5.0)
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330"])
++            await _wait_calls(bars, 1)  # 當日 job 失敗 → 非 staged timer 在途
++            h.hub.on_rollover_pending(_NEXT)
++            await _wait_calls(bars, 2)  # staged job 失敗 → staged timer 在途
++            await h.settle()
++            h.date = _NEXT
++            h.hub.on_rollover()
++            assert h.hub._retry_handles == {}, "舊日別 / staged 的在途 timer 未取消"
++            assert h.hub._basis_retries == {}, "staged 計數被帶進了新的一天"
++        finally:
++            await h.hub.close()
++
++
+ class TestBookPath:
+     async def test_book_open_after_lock(self, tmp_path: Path, clock: _Clock) -> None:
+         h = _Harness(tmp_path, clock)
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index 5816992a..a9d5ef49 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -572,9 +572,9 @@ def _spy(engine: object) -> tuple[list[list[str]], list[dict]]:
+     orig_set = engine.set_watchlist  # type: ignore[attr-defined]
+     orig_publish = engine._publish  # type: ignore[attr-defined]
+ 
+-    async def spy_set(codes: list[str]) -> None:
++    async def spy_set(codes: list[str], *, seq: int | None = None) -> None:
+         calls.append(list(codes))
+-        await orig_set(codes)
++        await orig_set(codes, seq=seq)
+ 
+     def spy_publish(msg: dict) -> None:
+         published.append(msg)
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index e7682f7e..9c48e7b4 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -1619,6 +1619,49 @@ class TestSignalHubHooks:
+         await engine.close()
+ 
+ 
++class TestWatchlistSeq:
++    """X-3:`seq` = last-writer-wins 的定序尺。
++
++    service 把訂閱移到鎖外之後,兩個並發 commit 可能以任意順序抵達 engine。舊名單
++    後到時若照套,訂閱池 / hub membership / 種子廣播會**一起**退回上一版,而畫面上
++    只是「剛加的股票又不見了」,沒有任何錯誤訊號。
++    """
++
++    async def test_stale_seq_is_skipped_entirely(self) -> None:
++        engine, src = await _make()
++        hub = FakeHub()
++        engine.attach_signal_hub(hub)
++        await engine.set_watchlist(["2330"], seq=2)
++        subscribed = list(src.subscribed)
++
++        await engine.set_watchlist(["5483"], seq=1)  # 舊名單後到
++
++        assert src.subscribed == subscribed, "舊 seq 用舊名單蓋掉了訂閱池"
++        assert src.unsubscribed == [], "舊 seq 把新名單的檔退訂了"
++        assert hub.kinds("watchlist") == [("watchlist", ["2330"])]
++        await engine.close()
++
++    async def test_newer_seq_applies(self) -> None:
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"], seq=1)
++
++        await engine.set_watchlist(["5483"], seq=2)
++
++        assert "5483" in src.subscribed
++        assert "2330" in src.unsubscribed
++        await engine.close()
++
++    async def test_seq_none_does_not_participate(self) -> None:
++        """既有 caller / boot 還原不帶 seq → 不參與定序,照舊全套。"""
++        engine, src = await _make()
++        await engine.set_watchlist(["2330"], seq=5)
++
++        await engine.set_watchlist(["5483"])
++
++        assert "5483" in src.subscribed
++        await engine.close()
++
++
+ # ---- 個股期合約主圖(stkfut-contracts SC-3;instrument key = 股號 或 F:<prod>:<ym>)----
+ 
+ _CONTRACT = "F:CDF:202609"
+diff --git a/tests/server/test_watchlist_service.py b/tests/server/test_watchlist_service.py
+index 6e9e11c3..a42d5119 100644
+--- a/tests/server/test_watchlist_service.py
++++ b/tests/server/test_watchlist_service.py
+@@ -28,13 +28,18 @@ class _FakeEngine:
+ 
+     def __init__(self, delay: float = 0.0) -> None:
+         self.set_calls: list[list[str]] = []
++        self.seqs: list[int | None] = []
+         self.published: list[dict] = []
+         self._delay = delay
++        #: 第一次進到 set_watchlist(= 慢訂閱窗的起點;X-3 的並發測試靠它定錨)
++        self.entered = asyncio.Event()
+ 
+-    async def set_watchlist(self, codes: list[str]) -> None:
++    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None:
++        self.entered.set()
+         if self._delay:
+             await asyncio.sleep(self._delay)
+         self.set_calls.append(list(codes))
++        self.seqs.append(seq)
+ 
+     def _publish(self, msg: dict) -> None:
+         self.published.append(msg)
+@@ -46,6 +51,18 @@ def _service(tmp_path: Path, delay: float = 0.0) -> tuple[WatchlistService, _Fak
+     return WatchlistService(path, engine), engine, path
+ 
+ 
++async def _wait_codes(path: Path, codes: list[str], timeout: float = 0.25) -> None:
++    """等落檔變成 `codes`(不看 engine —— 這裡驗的正是「落檔不必等訂閱」)。"""
++    loop = asyncio.get_running_loop()
++    deadline = loop.time() + timeout
++    while loop.time() < deadline:
++        if path.exists() and load_watchlist(path)["codes"] == codes:
++            return
++        await asyncio.sleep(0.01)
++    got = load_watchlist(path)["codes"] if path.exists() else None
++    raise AssertionError(f"{timeout}s 內落檔仍是 {got},沒變成 {codes}(第二個 commit 被鎖擋住)")
++
++
+ class TestAdd:
+     async def test_add_with_group_persists_subscribes_and_broadcasts(self, tmp_path: Path) -> None:
+         service, engine, path = _service(tmp_path)
+@@ -300,6 +317,46 @@ class TestConcurrency:
+         assert sorted(engine.set_calls[-1]) == ["2330", "5483"]  # 最後一次是累積結果
+         assert len(engine.published) == 2
+ 
++    async def test_second_commit_persists_while_first_subscribe_in_flight(
++        self, tmp_path: Path
++    ) -> None:
++        """X-3:訂閱副作用移到鎖外 —— 落檔 + 定序留鎖內,ZMQ 往返不再擋住下一個寫入。
++
++        TC4 故障時單次 `set_watchlist` 最壞是 30 檔 × 數十秒;鎖在裡面的話,期間所有
++        `/watch` 與前端 PUT 全部堆積,而 Discord 的 interaction token 只有 15 分鐘。
++        """
++        service, engine, path = _service(tmp_path, delay=0.5)
++
++        first = asyncio.create_task(service.apply({"codes": ["2330"], "groups": []}))
++        await asyncio.wait_for(engine.entered.wait(), 1)
++        second = asyncio.create_task(service.apply({"codes": ["2317"], "groups": []}))
++
++        await _wait_codes(path, ["2317"])
++        assert not first.done(), "前提失效:第一次的訂閱已跑完,這條測不到鎖凸出"
++        await asyncio.gather(first, second)
++
++    async def test_commit_hands_engine_a_monotonic_seq(self, tmp_path: Path) -> None:
++        """定序在鎖內取號:鎖外的訂閱不論以什麼順序抵達 engine,都認得出誰比較新。"""
++        service, engine, _ = _service(tmp_path)
++
++        await service.add("2330")
++        await service.add("5483")
++
++        assert engine.seqs == [1, 2]
++
++    async def test_subscribe_done_when_call_returns(self, tmp_path: Path) -> None:
++        """語意不變(回歸):呼叫端 await 返回時 engine 那一趟已跑完、廣播已發。
++
++        收斂的是**鎖凸出**,不是自己這一次的等待 —— 改成 fire-and-forget 的話
++        route 回應時訂閱可能還沒掛上,前端拿到的第一份 snapshot 會缺。
++        """
++        service, engine, _ = _service(tmp_path, delay=0.05)
++
++        await service.add("2330")
++
++        assert engine.set_calls == [["2330"]]
++        assert engine.published == [{"type": "watchlist_changed"}]
++
+     async def test_concurrent_same_add_only_writes_once(self, tmp_path: Path) -> None:
+         service, engine, path = _service(tmp_path, delay=0.02)
+ 
