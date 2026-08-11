@@ -508,6 +508,33 @@ class TestPendingResubscribe:
         assert src.closed  # source.close() 必達(KeepAlive 不洩漏)
 
 
+class TestRetrySuccessLeafBookkeeping:
+    """P2-1:重試把 HOT 掛回後,leaf fallback 記帳(`_leaf_fed`)必須撤銷。
+
+    不撤銷的話:跨日重武裝把 leaf-fed 商品 p 清 None → 每天再補一次新月 leaf,
+    同商品 HOT + leaf 雙訂閱天天複製(兩路餵同一 _handle_quote,seq/廣播加倍、
+    tick 可短暫倒退)。當日已存在的雙訂閱接受(leaf 無退訂路、兩邊值相同)。
+    """
+
+    async def test_retry_success_discards_leaf_fed(self) -> None:
+        src = FakeSource()
+        src.fail_subscribe.add("TXF")
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.05)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") in src.leaf_subscribed  # 訂不到的品先由 leaf 接手
+        assert "TXF" in engine._leaf_fed
+        src.fail_subscribe.discard("TXF")  # TC4 恢復 → 下一輪重試成功
+        try:
+            await _wait_until(lambda: "TXF" in src.subscribed)
+            await _drain()
+            assert "TXF" not in engine._leaf_fed  # HOT 已回,跨日不得再複製 leaf
+        finally:
+            await engine.close()
+
+
 class _ReconnectSource(FakeSource):
     """帶 on_reconnect 屬性的 source(對齊 TC4QuoteSource 介面;stock/corr fake 同款)。"""
 
