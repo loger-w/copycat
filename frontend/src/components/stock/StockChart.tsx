@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
@@ -53,40 +53,40 @@ export function StockChart({
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const isFut = contract !== null;
   // 期貨態一發都不打(R5):endpoint 查的是現貨股號,K 線與畫面上的合約無關。
-  // 收斂是 effect(下一個 render 才生效),所以**不能**靠 mode 自己擋。
+  // 收斂雖然改成同一個 render pass 內完成,但這一行在收斂分支**之前**執行(hook 呼叫
+  // 順序不可調),「殘留日K + 切進合約」的第一次求值時 mode 仍是 day ——
+  // 外部否決(第四參數)仍是唯一保證,不能改成靠 mode 自己擋。
   const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS, !isFut);
   // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
   const { toggles, set } = useChartToggles();
 
   // 進期貨態前的現貨模式;null = 沒有待還原的偏好(code review A6)。
-  const spotModeRef = useRef<ChartMode | null>(null);
+  const [spotMode, setSpotMode] = useState<ChartMode | null>(null);
 
   // 期貨態只提供江波圖(D10)。模式是**持久化狀態** —— 使用者上次停在日 K 時,切進
   // 合約的第一次 render 就已經是 day,不收斂會掛著一張與合約無關的現貨 K 線。
   // **不寫回 localStorage**:那是使用者對現貨的偏好,切回現貨時要原樣回來 —— 而「原樣
-  // 回來」需要一個 ref 記著(code review A6):只靠 localStorage 不夠,收斂發生在同一個
+  // 回來」需要 `spotMode` 記著(code review A6):只靠 localStorage 不夠,收斂發生在同一個
   // session 內、`mode` state 已經被改成 intraday,切回現貨時沒有人會把它讀回來,使用者
   // 看到的是「進了一次合約,我的日 K 偏好就沒了」。
-  // (`you-might-not-need-an-effect` 的正解「render 期間直接算 effMode」在這裡不適用 ——
-  //  它會讓 mode 這個 state 與畫面長期不一致,而模式鈕的 aria-pressed 讀的是 mode。)
-  //  另註:新形狀下 `you-might-not-need-an-effect` 不再誤報,原本的 eslint-disable 對已
-  //  移除(留著會被 reportUnusedDisableDirectives 判成多餘)。
-  useEffect(() => {
-    if (isFut) {
-      if (mode !== "intraday") {
-        spotModeRef.current = mode;
-        setMode("intraday");
-      }
-      return;
+  //
+  // 收斂用**render 期間調整 state**(官方 adjust-state-on-prop-change;repo 樣板
+  // `WatchlistManagerDialog` 的 prevOpen),不用 effect:effect 要下一個 render 才生效,
+  // 回現貨時 `isFut` 已 false 而 `mode` 還停在 intraday → 會先 commit 一次「現貨態的
+  // 分時圖」再換成還原後的 K 線(閃一格)。React 在本函式 return 後、渲染子元件前就會
+  // 用新 state 重跑一次,所以那一格根本不會 commit(StockChart.futconverge.test.tsx 釘住)。
+  // 兩個分支各自收斂,不需要顯式的 prevIsFut:期貨態存偏好並收斂到 intraday(也涵蓋原
+  // effect deps 含 mode 的「期貨態內 mode 漂移」保險);回現貨還原一次並清掉待還原標記,
+  // 之後手動改模式不會被舊值再蓋一次。
+  if (isFut) {
+    if (mode !== "intraday") {
+      setSpotMode(mode);
+      setMode("intraday");
     }
-    // 回現貨:還原並清掉待還原標記(下一輪 effect 因此 no-op)。使用者若在期貨態手動
-    // 按過模式鈕(本輪按不動,但這是狀態機層的保險)也不覆蓋 —— 還原只做一次。
-    const saved = spotModeRef.current;
-    if (saved !== null) {
-      spotModeRef.current = null;
-      setMode(saved);
-    }
-  }, [isFut, mode]);
+  } else if (spotMode !== null) {
+    setSpotMode(null);
+    setMode(spotMode);
+  }
 
   function selectMode(next: ChartMode): void {
     setMode(next);
@@ -97,8 +97,10 @@ export function StockChart({
   const bars = useMemo(() => aggregateBars(data?.bars ?? [], minutesOf(mode)), [data, mode]);
 
   const isMinute = mode !== "intraday" && mode !== "day";
-  // 收斂 effect 要下一個 render 才生效,期間 mode 仍是 day/分K → 會閃一格「載入中…」
-  // (query 被 enabled:false 擋住,isPending 恆真)。畫面分支直接認 isFut,不等 state 追上。
+  // 畫面分支直接認 isFut,不只看 mode:收斂雖已在同一個 render pass 完成(理論上
+  // 走到這裡 mode 必為 intraday),但這是防禦 —— 收斂分支若被改壞,認 mode 會讓期貨態
+  // 掛出一張與合約無關的現貨 K 線 / 閃一格「載入中…」(query 被 enabled:false 擋住,
+  // isPending 恆真),而那是無錯誤訊號的假資料。
   const showIntraday = isFut || mode === "intraday";
 
   // 空 bars 且非 ok 時的替代句(null = 照舊掛 CandleChart)。bars 非空一律不分態:

@@ -79,6 +79,11 @@ export function useRiver(): RiverStreamState {
   const [state, setState] = useState<RiverState | null>(null);
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const seqRef = useRef<number>(-1);
+  /** 目前已知的盤別;`null` = 還沒有任何 snapshot。換場判定讀它而不是讀 `state` ——
+   *  判定的後果是 `load()`(REST 副作用),不能放在 `setState` 的 updater 內:updater
+   *  契約是純函式,而全站包在 StrictMode(main.tsx)下 dev 會 double-invoke,一次換場
+   *  打兩份全量快照(滿窗夜盤 60–80 KB)。先例:`useStockStream.ts` 的 statusRef(F-1)。 */
+  const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -92,6 +97,7 @@ export function useRiver(): RiverStreamState {
       // 丟掉,畫面凍在 snapshot 那一刻直到 seq 追上舊值(Phase 4 自評 finding)。
       // 資料不會因此倒退:snapshot 走 union 合併,舊值蓋不掉新值。
       seqRef.current = next.seq;
+      sessionRef.current = next.session;
       setState((prev) => mergeSnapshot(prev, next));
     };
 
@@ -109,15 +115,23 @@ export function useRiver(): RiverStreamState {
 
     void load();
 
+    // 順序固定,三段各自有理由:
+    // 1. seq 守衛先行 —— 舊 seq 的跨場 delta 整則丟掉,不觸發 load、不動 sessionRef
+    //    (與舊版等價:舊版的 updater 也看不到它)。
+    // 2. 換場判定與 `load()`(副作用)在 setState **之前**,ref 同步更新使同一場的
+    //    後續 delta 不再重複觸發回補。
+    // 3. updater 純函式:清空換窗仍以 `prev.session` 判定(state 才是畫面真相,
+    //    ref 只負責副作用的去重)。
     const onDelta = (msg: RiverDelta): void => {
       if (msg.seq < seqRef.current) return;
       seqRef.current = msg.seq;
+      if (sessionRef.current !== null && sessionRef.current !== msg.session) {
+        sessionRef.current = msg.session;
+        void load(); // 換場:先本地清空換窗,再補抓新場的回補資料
+      }
       setState((prev) => {
         if (prev === null) return prev; // 還沒有 snapshot,delta 無處可併
-        if (prev.session !== msg.session) {
-          void load(); // 換場:先本地清空換窗,再補抓新場的回補資料
-          return applyDelta(resetForSession(prev, msg), msg);
-        }
+        if (prev.session !== msg.session) return applyDelta(resetForSession(prev, msg), msg);
         return applyDelta(prev, msg);
       });
     };
