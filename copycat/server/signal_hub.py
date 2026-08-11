@@ -448,8 +448,16 @@ class SignalHub:
     def on_rollover(self) -> None:
         expected = self._trade_date_fn()  # engine 已前進到新日別(stage2 契約)
         # 重試記帳的日別作廢:新的一天是新的鍵,舊日別的計數再也不會被讀到 ——
-        # 不清的話這張表會隨開機天數單調長大(長駐 server 的慢性洩漏)。
-        self._basis_retries = {k: v for k, v in self._basis_retries.items() if k[1] == expected}
+        # 不清的話這張表會隨開機天數單調長大(長駐 server 的慢性洩漏)。staged 鍵
+        # 一併作廢:方法尾端 `_staged_date` 歸 None,staged 尺此後恆過期,連
+        # 「基準日 = 新日別」的 staged 鍵也是死條目,同一把尺清 timer 與計數。
+        self._basis_retries = {
+            k: v for k, v in self._basis_retries.items() if k[1] == expected and not k[2]
+        }
+        # 在途重試 timer 同尺取消:醒來也只會被 `_stale` 丟掉,但那是白走一趟
+        # 換日這個最忙窗的佇列;close() 的全清是關機路徑,換日要自己清自己的。
+        for k in [k for k in self._retry_handles if k[1] != expected or k[2]]:
+            self._retry_handles.pop(k).cancel()
         for slot in self._slots.values():
             slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
         if self._staged_cache and self._staged_date == expected:
@@ -543,6 +551,14 @@ class SignalHub:
             slot.detector.drop_code(code)
         self._basis_cache.pop(code, None)
         self._staged_cache.pop(code, None)
+        # 在途重試會在移出後才醒來:重打 TC4 事小,`_basis_failed` 還會把上面剛清掉
+        # 的 cache 條目寫回去(復活成 (date, None))。計數一併清 —— 重新加入是使用者
+        # 驅動的新機會,不背舊帳。已在佇列裡的 job 攔不到(秒級窗,`_stale` 之外無
+        # 名單 gate;與 stock_engine A-1 殘留窗同構,不值得為它加新不變式)。
+        for k in [k for k in self._retry_handles if k[0] == code]:
+            self._retry_handles.pop(k).cancel()
+        for k in [k for k in self._basis_retries if k[0] == code]:
+            del self._basis_retries[k]
 
     # ---- CDP 基準 ----
 
@@ -600,6 +616,13 @@ class SignalHub:
             return False
         self._basis_retries[key] = tries + 1
         delay = self._cfg.basis_retry_delay_secs
+        old = self._retry_handles.get(key)
+        if old is not None:
+            # 同鍵兩筆 job 先後失敗(rollover 差集補抓 / 同檔重複 request 都造得出
+            # 同鍵並存的 job):不取消就成孤兒 timer —— 照樣醒來多打 TC4,先醒的那支
+            # 還會走到 cap 路徑把重試記帳 pop 歸零,兩支孤兒互相回充預算接近乒乓;
+            # 且孤兒 `_requeue_basis` pop 掉 dict 條目後,close() 再也看不到在途的那支。
+            old.cancel()
         handle = asyncio.get_running_loop().call_later(delay, self._requeue_basis, key)
         self._retry_handles[key] = handle
         logger.info(
