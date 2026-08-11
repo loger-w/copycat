@@ -157,15 +157,24 @@ class FuturesEngine:
             source = self._source  # 每輪重讀:close 中會變 None
             if source is None:
                 return
-            for product in sorted(self._pending_subs):
-                try:
-                    await asyncio.to_thread(source.subscribe_symbol, product)
-                except ConnectionError:
-                    # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
-                    logger.warning("futures subscribe %s failed", product)
-                    continue
-                self._pending_subs.discard(product)
-                logger.info("futures %s subscribe retry ok", product)
+            try:
+                await self._resub_round(source)
+            except Exception:
+                # 非 ConnectionError 的例外(壞電文 / wrapper 內部型別錯)不得殺掉迴圈:
+                # 死掉 = 復原路徑本身靜默失效,而 close() 的收尾又會把 task 例外吞掉
+                # (照 corr _resub_loop 的圍籬)。CancelledError 是 BaseException,不被接住
+                logger.exception("futures 訂閱重試輪失敗(續行)")
+
+    async def _resub_round(self, source: FuturesSource) -> None:
+        for product in sorted(self._pending_subs):
+            try:
+                await asyncio.to_thread(source.subscribe_symbol, product)
+            except ConnectionError:
+                # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
+                logger.warning("futures subscribe %s failed", product)
+                continue
+            self._pending_subs.discard(product)
+            logger.info("futures %s subscribe retry ok", product)
 
     async def close(self) -> None:
         # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
@@ -176,7 +185,10 @@ class FuturesEngine:
         resub, self._resub_task = self._resub_task, None
         if resub is not None:
             resub.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            # 放寬到 Exception:task 若已死於非連線例外,只吞 CancelledError 會讓
+            # await 重拋 → 之後的 leaf gather 與 source.close() 全跳過,KeepAlive
+            # 洩漏 process 不退(回溯審 P1-1;corr close 同款)
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await resub
         if self._leaf_timer is not None:
             self._leaf_timer.cancel()
