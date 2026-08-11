@@ -691,6 +691,10 @@ class TC4QuoteSource:
                         r = self._rt_request("SUBQUOTE", sym)
                         if r.get("Success") == "OK":
                             self._subscribed.add(sym)
+                        else:
+                            # 掉訂品的復原靠 engine 端 on_reconnect 對帳(futures);
+                            # 這裡至少留 grep 判準,不再靜默蒸發(回溯審 P1-3)
+                            logger.warning("TC4 reconnect resubscribe %s failed: %s", sym, r)
                 self.reconnects += 1
                 self._last_msg = time.monotonic()
                 if self.on_reconnect is not None:

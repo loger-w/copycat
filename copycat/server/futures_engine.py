@@ -136,6 +136,9 @@ class FuturesEngine:
         self._loop = asyncio.get_running_loop()
         self._source = self._source_factory()
         self._source.set_on_message(self._on_quote_threadsafe)
+        if hasattr(self._source, "on_reconnect"):
+            # 重連對帳:_check_stale 重掛可能靜默掉訂(P1-3),engine 端回填 pending
+            self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
         await asyncio.to_thread(self._subscribe_all)
         if self._pending_subs:
             self._resub_task = asyncio.create_task(self._resub_loop())
@@ -334,6 +337,24 @@ class FuturesEngine:
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._handle_quote, quote)
+
+    def _on_reconnect_threadsafe(self) -> None:
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._handle_reconnect)
+
+    def _handle_reconnect(self) -> None:
+        """TC4 重連對帳:`_check_stale` 重掛失敗品靜默出集合(僅 warning)、迴圈中途
+        拋錯時尾段 symbol 蒸發 —— 掉訂品不進 `_pending_subs`、`_leaf_fallback` 判準
+        (p is None)也不武裝,零復原(回溯審 P1-3)。
+
+        對帳 = 全品回填 pending 交給重試迴圈:subscribe 走 UNSUB→SUB 冪等,重掛仍
+        活著的品無害;首輪重掛在一個 interval 後。leaf 訂閱的對帳不在此
+        (掉 leaf 需等跨日重武裝,記 next-time)。
+        """
+        self._pending_subs.update(self._products)
+        if self._resub_task is None or self._resub_task.done():
+            self._resub_task = asyncio.create_task(self._resub_loop())
 
     def _handle_quote(self, quote: dict) -> None:
         product = product_from_symbol(str(quote.get("Symbol", "")))
