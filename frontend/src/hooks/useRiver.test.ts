@@ -147,6 +147,37 @@ describe("useRiver", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/river/state"));
   });
 
+  // 🔴 react-doctor P1(useRiver.ts:115-122):換場的 `void load()` 寫在 `setState` 的
+  // updater 內 —— React 的 updater 契約是純函式,而全站包在 StrictMode(main.tsx)下 dev
+  // 會 double-invoke,一次換場就打兩份 `/api/river/state` 全量快照(滿窗夜盤 60–80 KB)。
+  // 上一條「盤別變更 → 清空 + 換窗 + 重抓全量」只鎖了「有打」的下界,打幾次不管。
+  it("StrictMode 下換場的 /api/river/state 恰一發(updater 必須是純函式)", async () => {
+    const hook = renderHook(() => useRiver(), { reactStrictMode: true });
+    await waitFor(() => expect(hook.result.current.state).not.toBeNull());
+    // StrictMode 的 effect double-invoke 會建兩條 FakeWS(第一條已在 cleanup 關掉)。
+    // 對 instances[0] 發訊息會假綠:那條的 `alive` 已是 false,回補的 snapshot 會被丟掉。
+    expect(FakeWS.instances.length).toBe(2);
+    const ws = FakeWS.instances.at(-1)!;
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify(snap(3, { "31": 40_600_000 }, "night"))),
+    );
+    const before = fetchMock.mock.calls.length;
+
+    act(() => ws.emit(delta(2, 30, 40_500_000, "night")));
+
+    // 換場回補是非同步的,要等它有機會發生才算數(否則斷言的是「還沒打」)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(fetchMock.mock.calls.length).toBe(before + 1);
+    // 上界不是唯一要件:換場回補的 night snapshot 必須真的併進 state,
+    // 否則「少打一發」可以靠把整條路徑拆掉來假綠。
+    await waitFor(() => expect(txfMinutes(hook.result.current.state)["31"]).toBe(40_600_000));
+    expect(hook.result.current.state?.session).toBe("night");
+    expect(hook.result.current.state?.window).toEqual(NIGHT);
+    expect(txfMinutes(hook.result.current.state)["30"]).toBe(40_500_000);
+  });
+
   it("REST 503 → state 維持 null 且不拋", async () => {
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ detail: { error: "RIVER_NOT_READY" } }), { status: 503 }),

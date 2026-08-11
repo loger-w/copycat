@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
@@ -326,6 +327,28 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
     sidebar();
     await waitGroups();
     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+  });
+
+  // 🔴 react-doctor P1(WatchlistSidebar.tsx:104-131):`persistCollapsed` 寫在
+  // `setCollapsed` 的 updater 內 —— React 的 updater 契約是純函式,而全站包在 StrictMode
+  // (main.tsx)下 dev 會 double-invoke,每次折疊都寫兩次 localStorage。上一條「折疊狀態落
+  // localStorage」只驗最終值,寫幾次不管;而 updater 內做副作用一旦遇到 React 的重播
+  // (rebase / 中止的 render),持久化值與最終 state 就可能分歧。
+  it("StrictMode 下點折疊 → 只寫一次 localStorage 且值正確", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    wrap(
+      <StrictMode>
+        <WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />
+      </StrictMode>,
+    );
+    await waitGroups();
+    setItem.mockClear();
+
+    fireEvent.click(groupHeader("主力"));
+
+    const calls = setItem.mock.calls.filter((c) => c[0] === COLLAPSED_KEY);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0]![1]))).toEqual(["主力"]);
   });
 
   // 🔴 round4 項 4(B-6):整條標題可點,不再只有 ▸/▾ 那個 3px 寬的按鈕

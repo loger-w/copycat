@@ -94,6 +94,33 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
     expect(root.className).toContain("overflow-y-auto"); // 內捲不可拿掉(W-8 載入更多要可達)
   });
 
+  // 🔴 react-doctor P1(TickTape.tsx:57):`key` 用的是反轉後陣列的**前端**索引,
+  // 而新成交是前插 —— 每一筆成交都讓所有 key 位移一格,整個 tbody(30–200 列)卸載重掛。
+  // 盤中每秒數筆,這是持續的 DOM 重建。修法是回推索引(尾端錨定),前插時既有列 key 不變。
+  it("追加新成交後,原有列的 DOM node 恆等保留(key 不隨前插位移)", () => {
+    const base: TickRow[] = [
+      { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner" },
+      { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer" },
+    ];
+    const { rerender } = render(<TickTape ticks={base} ref_={REF} />);
+    const before = screen.getAllByRole("row").slice(1); // [09:00:02, 09:00:01]
+    expect(before).toHaveLength(2);
+
+    rerender(
+      <TickTape
+        ticks={[...base, { t: "09:00:03.000", p: 2_372_000, q: 1, side: "neutral" }]}
+        ref_={REF}
+      />,
+    );
+
+    const after = screen.getAllByRole("row").slice(1);
+    expect(after).toHaveLength(3);
+    expect(after[0]!.textContent).toContain("09:00:03"); // 新的一筆在最上
+    // 同一筆成交 = 同一個 DOM node(重掛的話這裡會是新物件)
+    expect(after[1]).toBe(before[0]);
+    expect(after[2]).toBe(before[1]);
+  });
+
   // W-13 的分頁在 round4 之前零測試覆蓋 —— 誰把 PAGE 改掉或把按鈕拿掉都不會紅
   it("點「載入更多」→ 列數 +30", () => {
     const many: TickRow[] = Array.from({ length: 70 }, (_, i) => ({
