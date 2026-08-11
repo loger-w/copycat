@@ -4,11 +4,16 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useStockNames } from "@/hooks/useStockNames";
+import {
+  NAMES_MAX_ERROR_CYCLES,
+  namesRefetchInterval,
+  useStockNames,
+} from "@/hooks/useStockNames";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function wrap({ children }: { children: ReactNode }) {
@@ -82,5 +87,34 @@ describe("useStockNames", () => {
     const hook = renderHook(() => useStockNames(), { wrapper: wrap });
     await waitFor(() => expect(hook.result.current.isError).toBe(true), { timeout: 5000 });
     expect((hook.result.current.error as Error).message).toBe("HTTP_500");
+  });
+
+  // 🔴 錯誤終態輪詢收斂(SC-1,拍板:停止不是退避):server 永久不可用(404 / 舊 build)
+  // 時舊版每 3s 無限輪詢;連續失敗達上限後應停(refocus 仍是停止後的復原後門)
+  it("連續失敗達上限 → refetchInterval 求值為 false(停止)", () => {
+    expect(
+      namesRefetchInterval({ state: { data: undefined, errorUpdateCount: NAMES_MAX_ERROR_CYCLES } }),
+    ).toBe(false);
+    expect(
+      namesRefetchInterval({
+        state: { data: undefined, errorUpdateCount: NAMES_MAX_ERROR_CYCLES + 5 },
+      }),
+    ).toBe(false);
+  });
+
+  it("永久失敗:達上限後 fetch 次數收斂,不再無限輪詢", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response("proxy error", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHook(() => useStockNames(), { wrapper: wrap });
+    // 每輪 ≤ 4s(3s interval + retry:1 的 1s backoff),推進到上限輪數用盡為止
+    for (let i = 0; i < NAMES_MAX_ERROR_CYCLES + 5; i++) {
+      await vi.advanceTimersByTimeAsync(4000);
+    }
+    // 每輪恰兩次嘗試(retry: 1)→ 上限後總次數封頂
+    const settled = fetchMock.mock.calls.length;
+    expect(settled).toBe(2 * NAMES_MAX_ERROR_CYCLES);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock.mock.calls.length).toBe(settled);
   });
 });
