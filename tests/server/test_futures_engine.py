@@ -449,11 +449,33 @@ class TestPendingResubscribe:
         await engine.start()
         await _wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
         await engine.close()
+        await asyncio.sleep(0.05)  # close 當下真正 in-flight 的 thread 結清
         n = len(src.attempts)
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         assert pending == []
         await asyncio.sleep(0.05)  # 5 個間隔
-        assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
+        # P1-2:原斷言 <= n+1 把「close 後 orphan worker 再碰 source」寫成允許值;
+        # _EngineClosing 縮窗後 close 之後不得再有任何新 subscribe
+        assert len(src.attempts) == n
+
+    async def test_retry_worker_refuses_to_touch_source_after_close(self) -> None:
+        """P1-2:close 後才輪到的 executor 工作項不得再碰 source(_EngineClosing 縮窗)。
+
+        cancel 正 await to_thread 的 task 時 asyncio 立即返回,已排入 executor 但未
+        啟動的工作項仍會跑 —— 真 source 上那一下 subscribe 會經 _ensure_connected
+        重建 TC4 連線,KeepAlive 洩漏 process 不退。整合層無法決定性製造「排入但
+        未啟動」窗,以 worker 直呼鎖 guard 語意(stock_engine._retry_acquire 同款)。
+        """
+        from copycat.server.futures_engine import _EngineClosing
+
+        src = _FlakySource({"TXF": 10_000})
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await engine.close()
+        before = len(src.attempts)
+        with pytest.raises(_EngineClosing):
+            engine._retry_subscribe(src, "TXF")
+        assert len(src.attempts) == before  # source 未被碰
 
     async def test_retry_loop_survives_non_connection_error(self) -> None:
         """P1-1:非 ConnectionError 例外(壞電文/型別錯)不得殺掉重試路徑。
