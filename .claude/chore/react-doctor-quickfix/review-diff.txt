@@ -1,0 +1,416 @@
+﻿diff --git a/frontend/doctor.config.json b/frontend/doctor.config.json
+new file mode 100644
+index 00000000..9c8a3b7d
+--- /dev/null
++++ b/frontend/doctor.config.json
+@@ -0,0 +1,8 @@
++{
++  "$schema": "https://react.doctor/schema/config.json",
++  "rules": {
++    "react-doctor/effect-needs-cleanup": "off",
++    "react-doctor/no-fetch-in-effect": "off",
++    "react-doctor/js-set-map-lookups": "off"
++  }
++}
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index 1b8e4499..f5fa2d13 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -96,6 +96,12 @@ function Btn({
+   );
+ }
+ 
++/** 重疊圖兩條線的樣式與標籤;序與 `buildOverlayGeometry` 的輸入序對齊(0=加權、1=櫃買)。 */
++const OVERLAY_LINES = [
++  { color: "stroke-profit", label: "加權" },
++  { color: "stroke-idx-otc", label: "櫃買" },
++] as const;
++
+ /** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。 */
+ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+   const g = buildOverlayGeometry(
+@@ -105,8 +111,6 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+     ],
+     SIZE,
+   );
+-  const colors = ["stroke-profit", "stroke-idx-otc"];
+-  const labels = ["加權", "櫃買"];
+   return (
+     <figure className="rounded-md border border-line bg-surface p-4">
+       <div className="flex items-baseline gap-4">
+@@ -150,16 +154,21 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+           strokeWidth={1}
+         />
+         {g.lines.map((l, i) => (
+-          <g key={labels[i]}>
+-            <polyline points={pts(l.pts)} fill="none" className={colors[i]} strokeWidth={1.4} />
++          <g key={OVERLAY_LINES[i]!.label}>
++            <polyline
++              points={pts(l.pts)}
++              fill="none"
++              className={OVERLAY_LINES[i]!.color}
++              strokeWidth={1.4}
++            />
+             {l.pts.length > 0 ? (
+               <text
+                 x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
+                 y={l.pts[l.pts.length - 1]!.y + 3}
+-                className={colors[i]!.replace("stroke-", "fill-")}
++                className={OVERLAY_LINES[i]!.color.replace("stroke-", "fill-")}
+                 fontSize="0.625rem"
+               >
+-                {labels[i]}
++                {OVERLAY_LINES[i]!.label}
+               </text>
+             ) : null}
+           </g>
+diff --git a/frontend/src/components/quote/DepthBar.tsx b/frontend/src/components/quote/DepthBar.tsx
+index 0429a14f..d6c6edf3 100644
+--- a/frontend/src/components/quote/DepthBar.tsx
++++ b/frontend/src/components/quote/DepthBar.tsx
+@@ -1,5 +1,5 @@
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
+-import { bestLimit, isMarketLevel } from "@/lib/stock-tick";
++import { bestLimit, isMarketLevel, limitOnly } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+ 
+ /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
+@@ -12,6 +12,10 @@ import { cn } from "@/lib/utils";
+ 
+ const DEPTH = 5;
+ 
++// 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
++const BID_SLOTS = [...Array(DEPTH).keys()].reverse();
++const ASK_SLOTS = [...Array(DEPTH).keys()];
++
+ export interface Props {
+   /** 最佳在前([價毫元, 量]) */
+   bids: [number, number][];
+@@ -69,11 +73,8 @@ function Cell({ entry, label, side, maxVol }: CellProps) {
+ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }: Props) {
+   const b = bids.slice(0, DEPTH);
+   const a = asks.slice(0, DEPTH);
+-  // 總量與量 bar 歸一**一律只算限價量**(對齊 OrderBook,2026-07-31 user 拍板)。
+-  // 市價偽檔位混進來的話,同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」
+-  // —— 定義隨日子變,跨日 / 跨股比較靜默失真;量 bar 更慘,市價佇列可以是限價量的
+-  // 數倍,五根限價 bar 會一起被壓成看不見的短樁。
+-  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
++  // 總量與量 bar 歸一**一律只算限價量**(與 OrderBook 共用 `limitOnly`,口徑必須一致;
++  // 理由見該函式註解)。
+   const limitB = limitOnly(b);
+   const limitA = limitOnly(a);
+   const maxVol = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
+@@ -88,10 +89,6 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
+   const lockedUp = upper !== null && bestLimit(b) === upper;
+   const lockedDown = lower !== null && bestLimit(a) === lower;
+ 
+-  // 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
+-  const bidSlots = [...Array(DEPTH).keys()].reverse();
+-  const askSlots = [...Array(DEPTH).keys()];
+-
+   return (
+     <div className="rounded-md border border-line bg-surface p-3">
+       <div className="mb-1 flex justify-between border-b border-line pb-1 font-mono text-xs">
+@@ -104,7 +101,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
+           <span className="text-xs">量</span>
+           <span className="text-sm">價</span>
+         </div>
+-        {bidSlots.map((i) => (
++        {BID_SLOTS.map((i) => (
+           <div key={`bid-${i}`} className="flex min-w-0 flex-1">
+             <Cell entry={b[i]} label={`買${i + 1}`} side="bid" maxVol={maxVol} />
+           </div>
+@@ -139,7 +136,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
+             <span className="mt-0.5 rounded bg-bear/15 px-1 text-xs text-bear">鎖跌停</span>
+           ) : null}
+         </div>
+-        {askSlots.map((i) => (
++        {ASK_SLOTS.map((i) => (
+           <div key={`ask-${i}`} className="flex min-w-0 flex-1">
+             <Cell entry={a[i]} label={`賣${i + 1}`} side="ask" maxVol={maxVol} />
+           </div>
+diff --git a/frontend/src/components/stock/OrderBook.tsx b/frontend/src/components/stock/OrderBook.tsx
+index ffa23bdf..2073e073 100644
+--- a/frontend/src/components/stock/OrderBook.tsx
++++ b/frontend/src/components/stock/OrderBook.tsx
+@@ -1,5 +1,5 @@
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
+-import { bestLimit, isMarketLevel, limitState } from "@/lib/stock-tick";
++import { bestLimit, isMarketLevel, limitOnly, limitState, marketQty } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+ 
+ /** 個股五檔 —— 垂直雙欄版式(SC-1,參照 treading-king `QuoteBook.tsx`)。
+@@ -142,14 +142,8 @@ function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
+ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }: Props) {
+   const b = (book?.bids ?? []).slice(0, DEPTH);
+   const a = (book?.asks ?? []).slice(0, DEPTH);
+-  // 總量列與量 bar 歸一**一律只算限價量**(2026-07-31 user 拍板)。市價偽檔位若混進來,
+-  // 同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」(市價那格吃掉 DEPTH
+-  // 的一格)—— 定義隨日子變,跨日 / 跨股比較靜默失真。量 bar 是限價檔之間的形狀比較,
+-  // 沒有價位的市價檔本來就不在那個維度上,卻會把五根限價 bar 一起壓成看不見的短樁
+-  // (2327 實測市價 14167 vs 限價最大 11877,而市價佇列可以是限價量的數倍)。
+-  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
+-  const marketOnly = (levels: [number, number][]) =>
+-    levels.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
++  // 總量列與量 bar 歸一**一律只算限價量**(與 DepthBar 共用 `limitOnly`,口徑必須一致;
++  // 理由見該函式註解。2327 實測市價 14167 vs 限價最大 11877)。
+   const limitB = limitOnly(b);
+   const limitA = limitOnly(a);
+   // `1` 不可省:五檔全 0 量(盤前 / 剛重啟未收 snapshot)時除零 → width "NaN%",
+@@ -157,8 +151,8 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
+   const maxQty = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
+   const bidTotal = limitB.reduce((s, [, v]) => s + v, 0);
+   const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
+-  const marketBid = marketOnly(b);
+-  const marketAsk = marketOnly(a);
++  const marketBid = marketQty(b);
++  const marketAsk = marketQty(a);
+   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
+   const lastMilli = last?.p ?? null;
+   const chg = lastMilli !== null && ref_ ? chgPct(lastMilli, ref_) : null;
+diff --git a/frontend/src/components/stock/SignalRulesDialog.tsx b/frontend/src/components/stock/SignalRulesDialog.tsx
+index 43ecfe0f..930f4e17 100644
+--- a/frontend/src/components/stock/SignalRulesDialog.tsx
++++ b/frontend/src/components/stock/SignalRulesDialog.tsx
+@@ -138,6 +138,34 @@ function ruleSummary(rule: SignalRule): string {
+   return cooldown;
+ }
+ 
++/** 參數數字欄位。真元件而不是「回傳 JSX 的函式」—— 函式呼叫產出的 JSX 掛在呼叫端
++ *  的 element type 底下,React 無法以元件為單位 reconcile,DevTools 也看不到它。 */
++function NumberField({
++  label,
++  value,
++  step,
++  onChange,
++}: {
++  label: string;
++  value: string;
++  step: string;
++  onChange: (v: string) => void;
++}) {
++  return (
++    <label className="flex items-center gap-1 text-xs text-ink-muted">
++      <span className="shrink-0">{label}</span>
++      <input
++        type="number"
++        step={step}
++        aria-label={label}
++        value={value}
++        onChange={(e) => onChange(e.target.value)}
++        className="w-24 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink outline-none focus:border-accent"
++      />
++    </label>
++  );
++}
++
+ interface Props {
+   open: boolean;
+   rules: SignalRule[];
+@@ -272,22 +300,6 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
+   const errorMessage =
+     localError ?? (mutationError === null ? null : errText(mutationError));
+ 
+-  function numberField(label: string, value: string, step: string, onChange: (v: string) => void) {
+-    return (
+-      <label key={label} className="flex items-center gap-1 text-xs text-ink-muted">
+-        <span className="shrink-0">{label}</span>
+-        <input
+-          type="number"
+-          step={step}
+-          aria-label={label}
+-          value={value}
+-          onChange={(e) => onChange(e.target.value)}
+-          className="w-24 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink outline-none focus:border-accent"
+-        />
+-      </label>
+-    );
+-  }
+-
+   return (
+     <dialog
+       ref={dlgRef}
+@@ -466,11 +478,15 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
+                 </label>
+ 
+                 <div className="flex flex-wrap gap-3">
+-                  {PARAM_FIELDS[form.kind].map((field) =>
+-                    numberField(field.label, form.params[field.key] ?? "", field.step, (v) =>
+-                      patchParam(field.key, v),
+-                    ),
+-                  )}
++                  {PARAM_FIELDS[form.kind].map((field) => (
++                    <NumberField
++                      key={field.label}
++                      label={field.label}
++                      value={form.params[field.key] ?? ""}
++                      step={field.step}
++                      onChange={(v) => patchParam(field.key, v)}
++                    />
++                  ))}
+                 </div>
+ 
+                 {form.kind === "cdp_cross" ? (
+diff --git a/frontend/src/components/stock/WatchlistManagerDialog.tsx b/frontend/src/components/stock/WatchlistManagerDialog.tsx
+index 7f314fd3..0ddf412a 100644
+--- a/frontend/src/components/stock/WatchlistManagerDialog.tsx
++++ b/frontend/src/components/stock/WatchlistManagerDialog.tsx
+@@ -153,6 +153,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+         {renaming === key && real ? (
+           <input
+             autoFocus
++            aria-label={`重新命名群組 ${label}`}
+             value={renameInput}
+             onChange={(e) => setRenameInput(e.target.value)}
+             onKeyDown={(e) => {
+@@ -301,6 +302,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+               <div className="shrink-0 border-t border-line p-2">
+                 <div className="flex gap-1">
+                   <input
++                    aria-label="群組名稱"
+                     value={groupInput}
+                     onChange={(e) => setGroupInput(e.target.value)}
+                     onKeyDown={(e) => {
+@@ -325,6 +327,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
+             <section aria-label="股票" className="flex min-h-0 min-w-0 flex-1 flex-col">
+               <div className="shrink-0 border-b border-line px-3 py-2">
+                 <input
++                  aria-label="股號或名稱"
+                   value={stockInput}
+                   onChange={(e) => setStockInput(e.target.value)}
+                   placeholder={
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index d10e2bf0..88283bb7 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -185,7 +185,8 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
+   it("每組每列都有拖拉握把(不再有「全部」停用拖拉的狀態)", async () => {
+     sidebar();
+     await waitGroups();
+-    expect(screen.getAllByLabelText(/拖拉/)).toHaveLength(4); // 2+2,未分組為空
++    // 握把對 AT 隱藏(aria-hidden;無鍵盤路徑的 role="button" 是假 affordance)→ 錨 testid
++    expect(screen.getAllByTestId(/^wl-handle-/)).toHaveLength(4); // 2+2,未分組為空
+   });
+ });
+ 
+@@ -426,7 +427,7 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
+   it("拖曳中點到標題不折疊(放開瞬間的時序守衛)", async () => {
+     sidebar();
+     await waitGroups();
+-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
++    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
+     fireEvent(handle, ptrEvt("pointerdown", 10, 80));
+     fireEvent.click(groupHeader("主力"));
+     expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+@@ -650,7 +651,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     sidebar();
+     await waitGroups();
+     stubRects();
+-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
++    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
+     fireEvent(handle, ptr("pointerdown", 10, 80));
+   }
+ 
+@@ -695,7 +696,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     fireEvent.click(groupHeader("觀察"));
+     expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
+     stubRects();
+-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
++    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
+     fireEvent(handle, ptr("pointerdown", 10, 80));
+     fireEvent(window, ptr("pointermove", 100, 140));
+     fireEvent(window, ptr("pointerup", 100, 140));
+@@ -755,7 +756,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     await waitGroups();
+     stubRects();
+     // 2330 同屬主力與觀察 —— 只移除來源組的話它會從畫面上憑空消失(仍屬觀察)
+-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 2330");
++    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-2330");
+     fireEvent(handle, ptr("pointerdown", 10, 30));
+     fireEvent(window, ptr("pointermove", 100, 290));
+     fireEvent(window, ptr("pointerup", 100, 290));
+@@ -776,7 +777,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     await waitGroups();
+     stubRects();
+     // 未分組 = [5483, 3231];把 3231 拖到第一列
+-    const handle = within(screen.getByTestId("wl-list-ungrouped")).getByLabelText("拖拉 3231");
++    const handle = within(screen.getByTestId("wl-list-ungrouped")).getByTestId("wl-handle-3231");
+     fireEvent(handle, ptr("pointerdown", 10, 320));
+     fireEvent(window, ptr("pointermove", 100, 286));
+     fireEvent(window, ptr("pointerup", 100, 286));
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index f7c9c6ef..0bbd8880 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -305,9 +305,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           )}
+           onClick={() => onSelect(code)}
+         >
++          {/* 純 pointer 拖曳握把:`role="button"` 沒有 tabIndex / 鍵盤路徑,是「宣告了做不到
++              的能力」→ 對 AT 隱藏。鍵盤使用者的分組操作走「+ 加入群組」與管理 Dialog。 */}
+           <span
+-            role="button"
+-            aria-label={`拖拉 ${code}`}
++            aria-hidden="true"
++            data-testid={`wl-handle-${code}`}
+             className="shrink-0 cursor-grab select-none text-ink-dim"
+             onPointerDown={(e) => onHandleDown(group, code, e)}
+             onClick={(e) => e.stopPropagation()}
+@@ -440,6 +442,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+       <div className="sticky top-0 z-10 bg-bg pb-1">
+         <div className="flex gap-1">
+           <input
++            aria-label="股號或名稱"
+             value={input}
+             onChange={(e) => setInput(e.target.value)}
+             onKeyDown={(e) => {
+diff --git a/frontend/src/lib/format.ts b/frontend/src/lib/format.ts
+index 039b2766..62046d6a 100644
+--- a/frontend/src/lib/format.ts
++++ b/frontend/src/lib/format.ts
+@@ -1,4 +1,5 @@
+ const nf = new Intl.NumberFormat("en-US");
++const nfPts = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+ 
+ /** NTD 縮寫:≥1 億 → 兩位小數億;≥1 萬 → 整數萬(千分位);其下千分位。 */
+ export function formatNtd(value: number): string {
+@@ -15,7 +16,7 @@ export function formatNtd(value: number): string {
+ 
+ /** 指數點位:千分位,最多一位小數。 */
+ export function formatPts(value: number): string {
+-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
++  return nfPts.format(value);
+ }
+ 
+ /** 漲跌百分比 → 顯示字串:正值帶 `+`,固定兩位小數。
+diff --git a/frontend/src/lib/stock-tick.ts b/frontend/src/lib/stock-tick.ts
+index 95b41e70..027d3a18 100644
+--- a/frontend/src/lib/stock-tick.ts
++++ b/frontend/src/lib/stock-tick.ts
+@@ -52,6 +52,16 @@ export function isMarketLevel(priceMilli: number): boolean {
+   return priceMilli <= 0;
+ }
+ 
++/** 只留**限價**檔位(市價偽檔位剔除)。
++ *
++ *  五檔的總量與量 bar 歸一**一律只算限價量**(2026-07-31 user 拍板):市價偽檔位混進來,
++ *  同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」—— 定義隨日子變,
++ *  跨日 / 跨股比較靜默失真;量 bar 更慘,市價佇列可以是限價量的數倍,五根限價 bar
++ *  會一起被壓成看不見的短樁。DepthBar / OrderBook 共用這一份,口徑不可漂移。 */
++export function limitOnly(levels: [number, number][]): [number, number][] {
++  return levels.filter(([p]) => !isMarketLevel(p));
++}
++
+ /** 簿的最佳**限價**檔位(往下找第一個非市價檔);全是市價佇列 / 空簿 → null。
+  *
+  *  後端同一件事的對應函式是 `live/stock_models.py::_best_limit_price`。鎖停判定要用它
+@@ -102,7 +112,8 @@ export interface Ladder {
+   marketAskQty: number;
+ }
+ 
+-function marketQty(levels: [number, number][] | undefined): number {
++/** 市價偽檔位(價格欄 ≤ 0)的總量。閃電梯與 OrderBook 的「市價 N」列共用。 */
++export function marketQty(levels: [number, number][] | undefined): number {
+   return (levels ?? []).reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
+ }
+ 

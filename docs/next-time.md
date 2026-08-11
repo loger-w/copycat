@@ -1008,3 +1008,16 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
   `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
   系統性放大。修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
   stock/corr/index 四 source 一起回歸。
+
+## 2026-08-11(react-doctor /chore 快修批 review 留尾巴,全部既存非本批引入)
+
+- [ ] **P2:MarketPane OverlayCard 單邊 ref 缺值時線色/標籤錯位**(既存):
+  `buildOverlayGeometry` filter 掉 ref null/0 的 series,`g.lines` index 與
+  OVERLAY_LINES 錯位 —— twse.ref 缺時僅剩的櫃買線會畫成加權色標「加權」。
+  修法 = callee 帶回原始 index(或 filter 改保位 null),OVERLAY_LINES 註解已標。
+- [ ] **P2:WatchlistSidebar row div 無鍵盤路徑**(既存;doctor
+  no-static-element-interactions :298):`wl-row-*` div onClick 選股無 role/tabIndex/
+  鍵盤 handler。要嘛換 button / 補 key handler,要嘛確認選股有其他鍵盤入口後 ignore。
+- [ ] **P2:自選列組內排序無鍵盤路徑**(既存):拖拉握把是唯一排序入口(pointer
+  only;aria-hidden 化後對 AT 不可見)。管理 Dialog 只有移組/移除,無排序。
+  補鍵盤排序入口(如 Dialog 內上移/下移鈕)列排期。

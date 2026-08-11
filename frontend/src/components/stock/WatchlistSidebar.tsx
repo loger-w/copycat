@@ -306,7 +306,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           onClick={() => onSelect(code)}
         >
           {/* 純 pointer 拖曳握把:`role="button"` 沒有 tabIndex / 鍵盤路徑,是「宣告了做不到
-              的能力」→ 對 AT 隱藏。鍵盤使用者的分組操作走「+ 加入群組」與管理 Dialog。 */}
+              的能力」→ 對 AT 隱藏(改前本來就不可鍵盤操作,非本次退化)。分組指派可走
+              管理 Dialog;**組內排序目前無鍵盤路徑**,已知缺口記 docs/next-time.md。 */}
           <span
             aria-hidden="true"
             data-testid={`wl-handle-${code}`}
