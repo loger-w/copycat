@@ -1,10 +1,13 @@
 /** @vitest-environment jsdom */
+import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 
 afterEach(cleanup);
+
+const noopCb = (): void => undefined;
 
 describe("CapitalConfirmDialog", () => {
   it("渲染標題/明細列/確認/取消,點擊觸發 callbacks", () => {
@@ -43,5 +46,177 @@ describe("CapitalConfirmDialog", () => {
       <CapitalConfirmDialog title="確認平倉" rows={[]} onConfirm={noop} onCancel={noop} />,
     );
     expect(screen.getByText("確認平倉").closest("div")?.className).not.toContain("bg-loss");
+  });
+
+  // ---- 原生 <dialog> 行為(SC-1..SC-4、SC-8;jsdom 走 fallback 分支:無 showModal)----
+
+  it("以原生 <dialog> 開啟(tagName DIALOG + open attribute)", () => {
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+    );
+    const dlg = screen.getByRole("dialog");
+    expect(dlg.tagName).toBe("DIALOG");
+    expect(dlg.hasAttribute("open")).toBe(true);
+  });
+
+  it("Esc → onCancel 恰一次,onConfirm 零次", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("初始 focus 落在取消鈕", () => {
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+    );
+    expect(document.activeElement).toBe(screen.getByText("取消"));
+  });
+
+  it("原生 close 事件(backstop)→ onCancel 恰一次", () => {
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={onCancel} />,
+    );
+    fireEvent(screen.getByRole("dialog"), new Event("close"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("Esc 後補發原生 close(真瀏覽器雙路徑)去重,onCancel 仍恰一次", () => {
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={onCancel} />,
+    );
+    const dlg = screen.getByRole("dialog");
+    fireEvent.keyDown(dlg, { key: "Escape" });
+    fireEvent(dlg, new Event("close"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("class 契約:m-auto / backdrop:bg-bg/85 / max-w-sm / text-ink / p-0(display 不得被 author 層蓋寫)", () => {
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+    );
+    const dlg = screen.getByRole("dialog");
+    expect(dlg.classList.contains("m-auto")).toBe(true);
+    expect(dlg.classList.contains("backdrop:bg-bg/85")).toBe(true);
+    expect(dlg.classList.contains("max-w-sm")).toBe(true);
+    expect(dlg.classList.contains("text-ink")).toBe(true); // 抵 UA color:canvastext
+    expect(dlg.classList.contains("p-0")).toBe(true); // 抵 UA padding:1em
+  });
+
+  it("確認後的 Esc / close 不補發 onCancel(settled 旗標;真錢 in-flight 窗)", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認送單" rows={[]} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.click(screen.getByText("確認"));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    const dlg = screen.getByRole("dialog");
+    fireEvent.keyDown(dlg, { key: "Escape" });
+    fireEvent(dlg, new Event("close"));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("取消鈕點擊後補發 close 不二次 onCancel", () => {
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={onCancel} />,
+    );
+    fireEvent.click(screen.getByText("取消"));
+    fireEvent(screen.getByRole("dialog"), new Event("close"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("窗內 Esc 不外洩到 window 層 keydown(階梯武裝態不受影響)", () => {
+    const winSpy = vi.fn();
+    window.addEventListener("keydown", winSpy);
+    try {
+      render(
+        <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+      );
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      expect(winSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", winSpy);
+    }
+  });
+
+  it("focus 歸還:卸載後 activeElement 回到開窗前的觸發鈕", () => {
+    function Harness({ open }: { open: boolean }) {
+      return (
+        <>
+          <button type="button">觸發</button>
+          {open && (
+            <CapitalConfirmDialog
+              title="確認刪單"
+              rows={[]}
+              onConfirm={noopCb}
+              onCancel={noopCb}
+            />
+          )}
+        </>
+      );
+    }
+    const { rerender } = render(<Harness open={false} />);
+    const trigger = screen.getByText("觸發");
+    trigger.focus();
+    rerender(<Harness open />);
+    expect(document.activeElement).toBe(screen.getByText("取消"));
+    rerender(<Harness open={false} />);
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+
+// jsdom 26 的 HTMLDialogElement 只有 `open` 反射,無 showModal/close → 不能 vi.spyOn
+// 不存在的方法,一律手動裝 prototype、afterEach 手動 delete 拆(不拆會讓上面 describe
+// 的 fallback 分支語意漂移)。
+describe("CapitalConfirmDialog(showModal 分支,手動裝 prototype stub)", () => {
+  afterEach(() => {
+    delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
+    delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close;
+    vi.restoreAllMocks();
+  });
+
+  it("StrictMode 雙輪不炸:showModal 恰一次(!open guard 的真正鎖),focus 兩次(生效自檢)", () => {
+    // 模擬真瀏覽器語意:對已 open 元素重複 showModal 依標準拋 InvalidStateError。
+    const showModal = vi.fn(function (this: HTMLDialogElement) {
+      if (this.open) throw new DOMException("already open", "InvalidStateError");
+      this.setAttribute("open", "");
+    });
+    HTMLDialogElement.prototype.showModal = showModal;
+    // spy 釘在 HTMLButtonElement:cleanup 對非按鈕元素(body/opener)的還 focus 不計入,
+    // 期望值 = StrictMode effect 兩輪各 focus 取消鈕一次 = 恰 2(兩個數字皆不可放寬)。
+    const focusSpy = vi.spyOn(HTMLButtonElement.prototype, "focus");
+    render(
+      <StrictMode>
+        <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />
+      </StrictMode>,
+    );
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(focusSpy).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("dialog").hasAttribute("open")).toBe(true);
+  });
+
+  it("unmount 不觸發任何 callback(白名單:FuturesLadder 自動收窗零 callback 契約)", () => {
+    // close stub 模擬真瀏覽器語意(移除 open + 派發非冒泡 close 事件):若未來有人在
+    // cleanup 加 el.close(),close 事件會經 onClose → onCancel,本測試轉紅。
+    HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    });
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const { unmount } = render(
+      <CapitalConfirmDialog title="確認平倉" rows={[]} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    unmount();
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });

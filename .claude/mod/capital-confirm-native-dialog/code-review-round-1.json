@@ -1,0 +1,60 @@
+{
+  "round": 1,
+  "reviewer": "general-purpose (opus), 雙焦點 lens:implementation bug + 白名單/spec 對照,verify 同輪(reviewer 獨立重跑全 gate)",
+  "diff_range": "53511b0f..6f626e70 前身(review 當下 HEAD = bc4fbe2f)",
+  "reviewer_gate_rerun": {
+    "vitest_full": "110 files / 1719 passed(當下)",
+    "tsc": "exit 0",
+    "eslint": "exit 0",
+    "react_doctor_scope_changed": "No issues found",
+    "caller_diff": "4 caller 檔 git diff 空",
+    "whitelist_5": "既有 2 支測試零刪改行",
+    "built_css_backdrop": ".backdrop\\:bg-bg\\/85::backdrop{background-color:#0a0e14d9} 產出確認"
+  },
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "R5 settled 旗標零測試鎖(真錢契約裸奔)",
+      "disposition": "accepted → 修於 6f626e70:「確認後 Esc/close 不補發 onCancel」lock test + mutation-verified(拔旗標 → 紅)"
+    },
+    {
+      "severity": "P2",
+      "title": "R6 stopPropagation 零測試,影響面實為三處階梯(FuturesLadder:243 / PriceLadder:310 / StkfutLadder:235)",
+      "disposition": "accepted → 修於 6f626e70:「窗內 Esc 不外洩 window」lock test + mutation-verified;spec edge case 8 補記影響面;替代設計記 docs/next-time.md"
+    },
+    {
+      "severity": "P2",
+      "title": "class 契約測試漏 text-ink / p-0",
+      "disposition": "accepted → 修於 6f626e70(斷言補齊)"
+    },
+    {
+      "severity": "P2",
+      "title": "cleanup 三守衛(isConnected / !==body / preventScroll)無獨立測試",
+      "disposition": "rejected(記錄不修):jsdom 對 preventScroll 無感、opener 移除 harness 成本 > 價值;守衛屬防禦性,happy path 由測試 9 鎖"
+    },
+    {
+      "severity": "P2",
+      "title": "測試 6 的 focus 恰 2 次隱含「無觸發鈕」前提,harness 可更明確",
+      "disposition": "rejected(記錄不修):測試內註解已載明前提與不可放寬條款"
+    },
+    {
+      "severity": "P2",
+      "title": "開窗走 passive useEffect,存在一幀 display:none 空窗",
+      "disposition": "rejected(接受現狀):樣板 WatchlistManagerDialog 同款,一幀不可感知"
+    },
+    {
+      "severity": "P2",
+      "title": "closedRef 一次性:未來 caller 的 onCancel 不卸載會讓第二次 Esc 失效",
+      "disposition": "accepted → JSDoc 補「新 caller 必須在 onConfirm/onCancel 卸載本元件」硬性契約(6f626e70)+ next-time 條目"
+    },
+    {
+      "severity": "P2",
+      "title": "白名單 5 字面:測試檔頭新增 import StrictMode / noopCb(測試 body 未動)",
+      "disposition": "no_change_needed:白名單語意 =「既有 2 支測試 body 一字不改」,達成"
+    }
+  ],
+  "p0_count": 0,
+  "p1_count": 0,
+  "p2_summary": "8 P2:3 accepted 修於 6f626e70([lock] ×2 mutation-verified)、1 accepted 為 JSDoc/next-time、3 rejected 記錄、1 no_change_needed",
+  "exit": "無 P0/P1;accepted 全修畢 + 測試綠;self_review_head = 6f626e70"
+}
