@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef } from "react";
 
 import { bandSeries, bollinger, type Band } from "@/lib/bollinger";
 import {
@@ -9,15 +9,9 @@ import {
   type Bar,
   type CandleGeometry,
 } from "@/lib/candle";
-import {
-  initialViewport,
-  onTotalChange,
-  panBy,
-  zoomAt,
-  type Viewport,
-} from "@/lib/candle-viewport";
-import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+import { clampTagX, clampTagY, overlaps } from "@/lib/chart-crosshair";
 import { useCandleHover } from "@/hooks/useCandleHover";
+import { useCandleViewport } from "@/hooks/useCandleViewport";
 import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
 import { fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
@@ -32,8 +26,6 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
  *  再加上兩個 figure 的框外 chrome 逐項對稱(頂列 h-[1.375rem]+mb-1、底列 mt-1+h-4),
  *  切換模式時圖表區塊高度才不會跳(SC-6.7)。殘差 0.5px @ 容器寬 1400。 */
 const DIMS = { width: 1400, height: 578 };
-/** 滾輪每一格的縮放倍率 */
-const ZOOM_STEP = 1.15;
 /** 軸標籤尺寸;time tag 的 y = height − boxH,底邊恰貼 viewBox 底不被裁 */
 const PRICE_TAG = { w: 56, h: 16 };
 const TIME_TAG = { w: 48, h: 14 };
@@ -463,19 +455,19 @@ export function CandleChart({
 }: Props) {
   const dimW = DIMS.width;
   const dimH = height ?? DIMS.height;
+  const svgRef = useRef<SVGSVGElement | null>(null);
   // hover 座標語意與 bail-out 見 useCandleHover(存 viewBox 座標非 index,錨點守恆)
   const { hover, onMove, clearHover } = useCandleHover(dimW, dimH);
-  const [viewport, setViewport] = useState<Viewport>(() => initialViewport(bars.length, initBars));
-  const [prevTotal, setPrevTotal] = useState(bars.length);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-
-  // 序列延伸(分 K 每 60s refetch 追加新 bar)時調整窗口。用 render 期間調整 state 的
-  // 官方 pattern,不用 effect —— 專案有 react-you-might-not-need-an-effect lint。
-  // ⚠ 只處理「同一 code+mode 的延伸」;換股/換模式由 StockChart 給的 key 強制重掛。
-  if (prevTotal !== bars.length) {
-    setPrevTotal(bars.length);
-    setViewport((v) => onTotalChange(v, prevTotal, bars.length));
-  }
+  // 縮放 / 平移 / 序列延伸的窗口語意見 useCandleViewport(render 期間調整、wheel
+  // passive:false、拖曳絕對位移);拖曳每步清 hover = 兩 hook 唯一接點
+  const { viewport, onDragStart } = useCandleViewport({
+    total: bars.length,
+    initBars,
+    svgRef,
+    dimW,
+    dimH,
+    onDragMove: clearHover,
+  });
 
   // 布林上下軌**由幾何 memo 一併回傳**:同一組值原本算四次(兩次餵 y 域、兩次畫線),
   // 而「餵 y 域的那份」與「畫出來的那份」一旦不同源就是靜默錯位(L-2)。
@@ -513,58 +505,6 @@ export function CandleChart({
     () => (showBb ? seriesLine(bbLower, g) : EMPTY_LINE),
     [showBb, bbLower, g],
   );
-
-  const total = bars.length;
-
-  // 滾輪縮放。**必須掛原生 listener 且 passive: false** —— React 的 onWheel 綁在 root
-  // 且為 passive,preventDefault() 無效,頁面會跟著一起捲。
-  useEffect(() => {
-    const el = svgRef.current;
-    if (el === null) return;
-    const onWheel = (e: WheelEvent): void => {
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const { x } = toSvgPoint(e, rect, { width: dimW, height: dimH });
-      const ratio = dimW > 0 ? x / dimW : 0.5;
-      const factor = e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      setViewport((v) => zoomAt(v, total, factor, ratio));
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
-    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
-    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
-    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
-  }, [total, dimW, dimH]);
-
-  /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
-   *  維持 mouse 事件模型 —— 專案慣例是觸控靠 tap 的 synthetic mousemove,改 pointer 會破。 */
-  function onDragStart(e: React.MouseEvent<SVGSVGElement>): void {
-    if (e.button !== 0) return;
-    const el = svgRef.current;
-    if (el === null) return;
-    const rect = el.getBoundingClientRect();
-    const scale = rect.width > 0 ? dimW / rect.width : 1;
-    const startX = e.clientX;
-    // 起始窗口直接取 closure 的 viewport —— 這個 handler 來自最近一次 render,值即為當下。
-    // 不要用 `setViewport(v => { startVp = v; return v; })` 的 side effect 去讀:React 不保證
-    // updater 同步執行(只是常常如此),讀到 null 就得 fallback,等於多一條沒必要的路徑。
-    const startVp = viewport;
-    const slot = dimW / Math.max(1, startVp.count);
-    const move = (ev: MouseEvent): void => {
-      // 往右拖 = 看更早的資料 → start 往左。以「拖曳起點」為基準算絕對位移,
-      // 不是逐次累加 —— 累加會因為 clamp 而在端點附近漂移。
-      const deltaBars = -Math.round(((ev.clientX - startX) * scale) / slot);
-      setViewport(panBy(startVp, total, deltaBars));
-      clearHover(); // 拖曳中不更新十字線,避免抖動
-    };
-    const up = (): void => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  }
 
   const labelStep = Math.max(1, Math.ceil(Math.max(1, shown.length) / 6));
   // 每次 render 以當下的 g 反查索引 —— viewport 一變就自動重新對位
