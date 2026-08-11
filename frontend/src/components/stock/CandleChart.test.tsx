@@ -612,3 +612,49 @@ describe("CandleChart 內外盤量副圖(futures-allday SC-8)", () => {
     expect(count(container, "vol-bar")).toBe(0);
   });
 });
+
+// 🟢 characterization(refactor/candlechart-split-hooks 前置):拖曳事件層的既有行為上鎖。
+// 這些路徑即將抽進 useCandleViewport / useCandleHover,先拍下當前行為 —— 皆為綠上車,
+// 已各以 mutation(改壞 → 紅 → 還原)抽驗非 vacuous。
+describe("CandleChart 拖曳既有行為(characterization)", () => {
+  const MANY = Array.from({ length: 300 }, (_, i) =>
+    bar(
+      `2026-07-28 ${String(9 + Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}`,
+      100_000 + i, 100_100 + i, 99_900 + i, 100_000 + i,
+    ),
+  );
+  const firstStamp = (c: HTMLElement) =>
+    c.querySelector("[data-testid='candle-figure']")!.getAttribute("data-first");
+
+  it("拖曳中清除 hover 十字線(拖曳不更新十字線,避免抖動)", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
+    const svg = container.querySelector("svg")!;
+    fireEvent.mouseMove(svg, { clientX: 700, clientY: 200 });
+    expect(container.querySelector("[data-testid='crosshair-h']")).toBeTruthy();
+    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 720 });
+    expect(container.querySelector("[data-testid='crosshair-h']")).toBeNull();
+    fireEvent.mouseUp(window, { clientX: 720 });
+  });
+
+  it("非左鍵 mousedown 不啟動平移", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
+    const svg = container.querySelector("svg")!;
+    const before = firstStamp(container);
+    fireEvent.mouseDown(svg, { clientX: 700, button: 2 });
+    fireEvent.mouseMove(window, { clientX: 1300 });
+    fireEvent.mouseUp(window, { clientX: 1300 });
+    expect(firstStamp(container)).toBe(before);
+  });
+
+  it("mouseup 後窗口不再跟隨 mousemove(window listener 已卸)", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
+    const svg = container.querySelector("svg")!;
+    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 1100 });
+    fireEvent.mouseUp(window, { clientX: 1100 });
+    const after = firstStamp(container);
+    fireEvent.mouseMove(window, { clientX: 100 });
+    expect(firstStamp(container)).toBe(after);
+  });
+});
