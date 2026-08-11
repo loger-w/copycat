@@ -305,9 +305,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           )}
           onClick={() => onSelect(code)}
         >
+          {/* 純 pointer 拖曳握把:`role="button"` 沒有 tabIndex / 鍵盤路徑,是「宣告了做不到
+              的能力」→ 對 AT 隱藏。鍵盤使用者的分組操作走「+ 加入群組」與管理 Dialog。 */}
           <span
-            role="button"
-            aria-label={`拖拉 ${code}`}
+            aria-hidden="true"
+            data-testid={`wl-handle-${code}`}
             className="shrink-0 cursor-grab select-none text-ink-dim"
             onPointerDown={(e) => onHandleDown(group, code, e)}
             onClick={(e) => e.stopPropagation()}
@@ -440,6 +442,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       <div className="sticky top-0 z-10 bg-bg pb-1">
         <div className="flex gap-1">
           <input
+            aria-label="股號或名稱"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {

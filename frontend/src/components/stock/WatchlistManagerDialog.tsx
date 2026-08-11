@@ -153,6 +153,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
         {renaming === key && real ? (
           <input
             autoFocus
+            aria-label={`重新命名群組 ${label}`}
             value={renameInput}
             onChange={(e) => setRenameInput(e.target.value)}
             onKeyDown={(e) => {
@@ -301,6 +302,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
               <div className="shrink-0 border-t border-line p-2">
                 <div className="flex gap-1">
                   <input
+                    aria-label="群組名稱"
                     value={groupInput}
                     onChange={(e) => setGroupInput(e.target.value)}
                     onKeyDown={(e) => {
@@ -325,6 +327,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
             <section aria-label="股票" className="flex min-h-0 min-w-0 flex-1 flex-col">
               <div className="shrink-0 border-b border-line px-3 py-2">
                 <input
+                  aria-label="股號或名稱"
                   value={stockInput}
                   onChange={(e) => setStockInput(e.target.value)}
                   placeholder={
