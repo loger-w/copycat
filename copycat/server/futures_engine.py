@@ -123,9 +123,10 @@ class FuturesEngine:
         self._leaf_fed: set[str] = set()  # 曾成功補訂 leaf 的商品(換月重武裝判準)
         self._leaf_tasks: set[asyncio.Task[None]] = set()
         self._leaf_timer: asyncio.TimerHandle | None = None
-        # 訂閱失敗品的唯一重試路徑(bug startup-names-futures-resub 症狀 3):
-        # source 層 `_resub` 只重掛成功過的 symbol、`_leaf_fallback` 需先由推播解析 ym,
-        # 兩條都接不了「一開始就訂不到」的商品 → 面板整段零推播且無錯誤訊號。
+        # 訂閱失敗品的重試路徑(bug startup-names-futures-resub 症狀 3):
+        # source 層 `_resub` 只重掛成功過的 symbol;`_leaf_fallback` 需先由別品推播
+        # 解析 ym — 部分失敗時接得到,全品失敗時兩條都接不了 → 面板整段零推播且
+        # 無錯誤訊號。第二條發生路徑(_check_stale 重連掉訂)由 on_reconnect 對帳收回。
         self._resub_interval_secs = resub_interval_secs
         self._pending_subs: set[str] = set()
         self._resub_task: asyncio.Task[None] | None = None
@@ -183,6 +184,9 @@ class FuturesEngine:
                 logger.warning("futures subscribe %s failed", product)
                 continue
             self._pending_subs.discard(product)
+            # HOT 已回:撤銷 leaf fallback 記帳,跨日重武裝不再每天複製新月 leaf。
+            # 當日既存的 HOT+leaf 雙訂閱接受(leaf 無退訂路,兩邊值相同;P2-1)
+            self._leaf_fed.discard(product)
             logger.info("futures %s subscribe retry ok", product)
 
     def _retry_subscribe(self, source: FuturesSource, product: str) -> None:
