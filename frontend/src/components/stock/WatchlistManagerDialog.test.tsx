@@ -358,22 +358,30 @@ describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
 // 第二發 mutate 覆蓋(TQ v5 契約:per-call callbacks 只 fire 最新一次 mutate);且 commit
 // 一律以 render 閉包的 stale wl 算 next。兩缺陷共用同一觸發窗:第一發 PUT 在途時做第二個動作。
 describe("WatchlistManagerDialog 連續操作(吞 callback / stale 基底)", () => {
-  /** PUT 卡 gate 逐發放行:製造「第一發在途時做第二刪」的視窗。
-   *  gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
-   *  對應 resolver 必已存在,shift 放行不會撲空。 */
-  let releases: Array<() => void>;
+  /** PUT 卡 gate 逐發放行(成功 echo / 400 失敗可選):製造「第一發在途時做第二個動作」
+   *  的視窗。gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
+   *  對應 resolver 必已存在,release 不會撲空。 */
+  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }>;
   function gatePuts(): void {
-    releases = [];
+    gated = [];
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as Watchlist;
         putBodies.push(body);
-        await new Promise<void>((r) => releases.push(r));
-        return new Response(JSON.stringify(body));
+        return new Promise<Response>((resolve) => gated.push({ body, resolve }));
       }
       if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
       return new Response(JSON.stringify(WL));
     });
+  }
+  function releaseOk(): void {
+    const g = gated.shift()!;
+    g.resolve(new Response(JSON.stringify(g.body)));
+  }
+  function releaseFail(): void {
+    gated
+      .shift()!
+      .resolve(new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 }));
   }
 
   it("連刪兩組:第二發 PUT 以第一發結果為基底,不把第一組還原回去", async () => {
@@ -382,9 +390,12 @@ describe("WatchlistManagerDialog 連續操作(吞 callback / stale 基底)", () 
     fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
     fireEvent.click(screen.getByLabelText("刪除群組 主力")); // 第一發仍在途
-    releases.shift()?.();
+    // 序列化本身也是契約(review W-4):第二發不得在第一發回應前上路 ——
+    // 後端 last-write-wins,唯有序列化能保證套用順序
+    expect(putBodies).toHaveLength(1);
+    releaseOk();
     await waitFor(() => expect(putBodies).toHaveLength(2));
-    releases.shift()?.();
+    releaseOk();
     // 第二發必須含第一刪的結果:groups 全空 ——「觀察」以 stale wl 計算時會在這裡復活
     expect(putBodies[1]!.groups).toEqual([]);
   });
@@ -395,11 +406,52 @@ describe("WatchlistManagerDialog 連續操作(吞 callback / stale 基底)", () 
     fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
     fireEvent.click(screen.getByLabelText("刪除群組 主力"));
-    releases.shift()?.();
+    expect(putBodies).toHaveLength(1); // 序列化(review W-4)
+    releaseOk();
     await waitFor(() => expect(putBodies).toHaveLength(2));
-    releases.shift()?.();
+    releaseOk();
     await waitFor(() => expect(onGroupDeleted).toHaveBeenCalledTimes(2));
     expect(onGroupDeleted.mock.calls).toEqual([["觀察"], ["主力"]]);
+  });
+
+  // review W-5 lock:連點兩次同一顆刪除鈕(不耐煩的真實使用者)。第二個佇列項輪到時
+  // 基底已不含該組,deleteGroup 恆回新物件但內容相同 → 深度比對 dedup 零 PUT、
+  // onGroupDeleted 恰一次。dedup 改成 identity 比對會退化成兩發 PUT,本條要紅。
+  it("連點兩次同一刪除鈕 → 只送一筆 PUT、onGroupDeleted 恰一次", async () => {
+    gatePuts();
+    const { onGroupDeleted } = open();
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察")); // 第一發在途,列還在畫面上
+    releaseOk();
+    await waitFor(() => expect(onGroupDeleted).toHaveBeenCalledTimes(1));
+    // 第二個佇列項是靜默 dedup,無事件可等 → 短 settle 後斷言零第二發
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toHaveLength(1);
+    expect(onGroupDeleted.mock.calls).toEqual([["觀察"]]);
+  });
+
+  // review C-3/W-1:佇列前一發失敗時,錯誤必須可見、已排隊的後續動作必須作廢 ——
+  // 否則下一發 mutateAsync 立刻重設 save.error,失敗文案一幀未渲染就被洗掉,
+  // 且後續動作靜默跳過失敗那一步繼續套用,使用者以為全部成功。
+  it("第一發失敗 → 已排隊的第二發作廢、錯誤文案可見;之後的新動作照常送出", async () => {
+    gatePuts();
+    const { onGroupDeleted } = open();
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText("刪除群組 主力")); // 排隊在失敗發之後
+    releaseFail();
+    // 短路:第二發不上路(靜默 no-op,無事件可等 → 短 settle 後斷言)
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toHaveLength(1);
+    expect(onGroupDeleted).not.toHaveBeenCalled();
+    // 失敗後的「新」動作是新意圖,不受短路影響;基底未推進 →「觀察」仍在
+    fireEvent.click(screen.getByLabelText("刪除群組 主力"));
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]!.groups.map((g) => g.name)).toEqual(["觀察"]);
+    releaseOk();
+    await waitFor(() => expect(onGroupDeleted.mock.calls).toEqual([["主力"]]));
   });
 });
 
