@@ -29,15 +29,19 @@ export const NAMES_RETRY_INTERVAL_MS = 3000;
 /** 連續失敗輪數上限(每輪 = 一次 fetch cycle 含 retry:1 共兩次嘗試)。
  *
  *  server 永久不可用(未起 / 404 / 舊 build)時不無限輪詢,連續失敗達此上限即停
- *  (拍板:停止不是退避)。上限 ≈ 首輪 1-2s + 19 輪 × 3s ≈ 一分鐘涵蓋窗;停止後
- *  window refocus(無資料的 query 恆 stale)仍會再抓一次,是停止後的復原後門。 */
+ *  (拍板:停止不是退避)。每輪成本 = retry backoff 1s + interval 3s = 4s(interval
+ *  timer 在每次 query state 更新時重啟,3s 從該輪 error 起算)→ 20 輪 ≈ 77s 涵蓋窗。
+ *  停止後的復原後門 = 分頁 visibilitychange(v5 focusManager 只聽 hide→show,純
+ *  window focus 不觸發;無資料的 query 恆 stale 所以會再抓)或重新整理。 */
 export const NAMES_MAX_ERROR_CYCLES = 20;
 
 /** refetchInterval 求值。具名 export 供白盒測試鎖輪詢節奏與停止條件
  *  (skill `frontend-testing`:輪詢行為斷言 refetchInterval 求值結果)。
  *
  *  `errorUpdateCount` 每輪失敗 cycle +1 且不被單輪 retryer 覆寫(`fetchFailureCount`
- *  會,不可用);success 後不重置無妨 — data 一到即停且 gcTime Infinity 永存。 */
+ *  會,不可用);計數含 mount / visibilitychange / reconnect 觸發的失敗,不只輪詢
+ *  輪數 — 預算共用,實際涵蓋窗只會更短不會更長。success 後不重置無妨 —
+ *  data 一到即停且 gcTime Infinity 永存。 */
 export function namesRefetchInterval(query: {
   state: { data: StockName[] | undefined; errorUpdateCount: number };
 }): number | false {
