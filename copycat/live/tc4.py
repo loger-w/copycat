@@ -224,10 +224,13 @@ class TC4QuoteSource:
         session: str | None = None,
         poll_wait_secs: float = 1.0,
         backfill_date: str | None = None,
-        # 等鎖上界**必須大於** `_REQ_TIMEOUT_MS`/1000(X-2a):持鎖上界就是一次 REQ 的
-        # 上界(健康慢路徑吃滿 RCVTIMEO),等鎖上界比它小就代表「一個正常但慢的 REQ」
-        # 必然讓其餘等鎖者 `_dispose` 整條連線 —— 三個 REQ 生產者(群組回補 / basis
-        # sweep / Fut2 目錄)在 boot 必然重疊,這條級聯是常態不是意外。
+        # 等鎖上界**必須大於** `_REQ_TIMEOUT_MS`/1000(X-2a):**健康慢路徑**的持鎖
+        # 上界 ≈ 吃滿 RCVTIMEO(send 在 localhost REQ 上只有對端死了才會塞到 SNDTIMEO,
+        # 那條路棄連線本來就正確;形式上的持鎖上界是 send+recv = 2×10s,且逾時方
+        # `_dispose` 會以同一把 timeout 再等鎖一次 —— 首個輸家最壞 12+12s,但 `_api`
+        # 已先 null,後來者拿到的是新鎖,級聯止於一人)。等鎖上界比健康上界小,就代表
+        # 「一個正常但慢的 REQ」必然讓其餘等鎖者 `_dispose` 整條連線 —— 三個 REQ
+        # 生產者(群組回補 / basis sweep / Fut2 目錄)在 boot 必然重疊,級聯是常態。
         # 取捨:毒鎖(KeepAlive Pong 無 try/finally)的偵測延遲從 5s 拉長到 12s ——
         # 那條路本來就要重建連線,晚 7 秒發現可接受;而誤殺健康連線是每次都發生。
         lock_timeout_secs: float = 12.0,

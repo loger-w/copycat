@@ -1,4 +1,22 @@
 
+## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
+
+- [ ] **X-3 深修:把 ZMQ 訂閱迴圈移出 `stock_engine._pool_lock`(review 首位 finding,P2)**:
+  X-3 只收斂了 service 鎖(讀路 / 落檔不再堆積),engine 端 `_pool_lock` 仍序列化整段
+  逐檔 `to_thread(_acquire)` 迴圈 —— TC4 故障下第二個寫入者的 `_settle` 還是等第一個
+  的迴圈走完,Discord 回覆仍可能拖過 interaction token 上限。修法方向 = 同檔 backfill
+  worker 的 per-code 取鎖模式(鎖只護共享結構,ZMQ IO 在鎖外逐檔做);要重新對齊
+  「名單先指派再訂閱」(round4 項 4)與 seq 定序的不變式,獨立輪做。
+- [ ] **`set_watchlist(seq=None)` 豁免顯式化(review,latent)**:None 分支唯一生產
+  caller = app.py boot 還原,安全前提是「service 在 restore 之後才建構 + routes 前置
+  503」,這條不變式沒在任何地方斷言;Protocol 預設 None → 未來 caller 漏帶 keyword
+  零訊號。最便宜的硬化 = boot 顯式帶 sentinel(seq=0)、刪 None 分支。
+- [ ] **測試 deadline-poll helper 已有 6 份手抄(/refactor 素材)**:`_wait_until`
+  (test_stock_engine:931 / test_corr_engine:352 / test_futures_engine:359 /
+  test_breadth_engine:234)+ 本輪 `_wait_calls`(test_signal_hub:372)/ `_wait_codes`
+  (test_watchlist_service:54);fail-N-then-succeed fake 也有 3 份(_FlakyBars /
+  _FlakySource ×2)。sleep 間隔已漂移(0.01 vs 0.005)。收斂到 tests/helpers/。
+
 ## 2026-08-11(mod/capital-confirm-native-dialog 收尾留尾巴)
 
 - [ ] **確認窗開著時 Esc 不再解除階梯武裝**(刻意:窗內 Esc 以窗優先,stopPropagation

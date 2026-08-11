@@ -420,9 +420,11 @@ class _RaisingSocket:
 class TestLockTimeoutContract:
     """X-2a:等鎖上界必須大於單次 REQ 的上界(不等式契約,不是某個數字)。
 
-    持鎖上界 = 健康慢路徑的一次 REQ ≈ RCVTIMEO;等鎖上界比它小的話,一個**正常但慢**
-    的 REQ(QUERYALLINSTRUMENT 實測 1.93s,最壞到 RCVTIMEO)就會讓所有等鎖者
-    `_dispose` 整條連線 —— 那是把健康慢當成毒鎖治。
+    **健康慢路徑**的持鎖上界 ≈ RCVTIMEO(形式上界是 send+recv = 2×RCVTIMEO,但
+    localhost REQ 的 send 只有對端死了才塞得滿 SNDTIMEO,那條路棄連線本來就正確);
+    等鎖上界比健康上界小的話,一個**正常但慢**的 REQ(QUERYALLINSTRUMENT 實測
+    1.93s,最壞到 RCVTIMEO)就會讓所有等鎖者 `_dispose` 整條連線 —— 那是把健康慢
+    當成毒鎖治。
     """
 
     def test_default_lock_timeout_exceeds_req_timeout(self) -> None:
