@@ -21,10 +21,21 @@ async function fetchStockNames(): Promise<StockName[]> {
 
 /** 尚未拿到名稱表時的自動重抓間隔。
  *
- *  server 啟動期 lifespan 阻塞(TXO 全鏈回補,常態數十秒~分鐘級)時 uvicorn 還沒 bind
- *  socket,首載必然連線被拒 → `retry: 1` 兩次嘗試 1-2 秒內用完就落入 error 終態,提示列
- *  與側欄股名要等 window refocus 才復原。拿到資料(哪怕空表)即停,穩態零成本。 */
-const NAMES_RETRY_INTERVAL_MS = 3000;
+ *  server 未起(先開前端後起 server)或啟動窗內,首載連線被拒 → `retry: 1` 兩次嘗試
+ *  1-2 秒內用完就落入 error 終態,提示列與側欄股名要等 window refocus 才復原 —
+ *  所以 error 終態下仍每 3 秒重抓。拿到資料(哪怕空表)即停,穩態零成本。 */
+export const NAMES_RETRY_INTERVAL_MS = 3000;
+
+/** 連續失敗輪數上限(每輪 = 一次 fetch cycle 含 retry:1 共兩次嘗試)。 */
+export const NAMES_MAX_ERROR_CYCLES = 20;
+
+/** refetchInterval 求值。具名 export 供白盒測試鎖輪詢節奏與停止條件
+ *  (skill `frontend-testing`:輪詢行為斷言 refetchInterval 求值結果)。 */
+export function namesRefetchInterval(query: {
+  state: { data: StockName[] | undefined; errorUpdateCount: number };
+}): number | false {
+  return query.state.data === undefined ? NAMES_RETRY_INTERVAL_MS : false;
+}
 
 export function useStockNames() {
   return useQuery({
@@ -32,9 +43,9 @@ export function useStockNames() {
     queryFn: fetchStockNames,
     staleTime: Infinity,
     gcTime: Infinity,
-    // 保留 `retry: 1`:error 態要能浮現(404 / 舊 build 的錯誤碼契約靠它)
+    // `retry: 1` 只是把單輪 fetch cycle 壓在兩次嘗試;error 態目前沒有任何 consumer
+    // 在讀(兩個 caller 都只讀 data),錯誤碼僅供 devtools / query cache 查案
     retry: 1,
-    refetchInterval: (query) =>
-      query.state.data === undefined ? NAMES_RETRY_INTERVAL_MS : false,
+    refetchInterval: namesRefetchInterval,
   });
 }
