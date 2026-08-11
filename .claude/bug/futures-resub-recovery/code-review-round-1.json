@@ -1,0 +1,129 @@
+{
+  "_meta": {
+    "date": "2026-08-12",
+    "kind": "closing-review (branch-lifecycle C 節,/bug 單輪 medium)",
+    "diff": "master..HEAD(review-diff.txt,五 finding 修復後、review fix 波前)",
+    "lenses": ["concurrency-correctness", "test-efficacy"],
+    "dispatch": "2 × opus(平行 Agent)",
+    "dedupe": "C-2 = T-6(同洞,leaf 記帳被對帳誤清)"
+  },
+  "findings": [
+    {
+      "id": "C-1", "severity": "P1", "lens": "concurrency",
+      "file": "copycat/server/futures_engine.py", "line": 140,
+      "title": "on_reconnect 在 _subscribe_all 之前接線 → start() 覆寫回呼建出的 _resub_task(孤兒 task)",
+      "disposition": "accepted",
+      "resolution": "接線移到 start() 最後(照 corr;commit af024fa1)。專屬紅測試寫不出穩定版:其他 guard 下孤兒 10ms 內自終結、無穩定可觀察症狀 —— 以接線順序對齊 + T-3 去重 lock 覆蓋。"
+    },
+    {
+      "id": "C-2", "severity": "P1", "lens": "concurrency", "dup": "T-6",
+      "file": "copycat/server/futures_engine.py", "line": 189,
+      "title": "重連對帳全品回填 × 重試成功 discard _leaf_fed → 清掉活 leaf 記帳,跨日重武裝失效(凍結價零訊號)",
+      "disposition": "accepted",
+      "resolution": "撤銷判準改「收到該品 HOT 成交 tick」(_handle_quote;SUB 回 OK 不算)。紅測試 test_reconnect_does_not_clear_leaf_fed + P2-1 測試改寫(49181d22 紅 → af024fa1 綠)。"
+    },
+    {
+      "id": "C-3", "severity": "P1", "lens": "concurrency",
+      "file": "copycat/server/futures_engine.py", "line": 350,
+      "title": "_handle_reconnect 缺 _loop is None 二次檢查 → close 期間在途回呼建永不 cancel 的 task",
+      "disposition": "accepted",
+      "resolution": "補二次檢查 + create_task 綁 self._loop(corr _schedule_backfill 同款)。紅測試 test_reconnect_callback_after_close_creates_no_task。"
+    },
+    {
+      "id": "C-4", "severity": "P2", "lens": "concurrency",
+      "file": "copycat/server/futures_engine.py", "line": 186,
+      "title": "in-flight 重試的成功掛在舊連線上,discard 會撤銷對帳剛做的回填",
+      "disposition": "accepted",
+      "resolution": "_resub_epoch 世代定序:await 期間世代變更 → 不出列留下輪重掛。紅測試 test_reconcile_survives_inflight_retry_success(gated fake 決定性構造)。"
+    },
+    {
+      "id": "C-5", "severity": "P2", "lens": "concurrency",
+      "file": "copycat/server/futures_engine.py", "line": 217,
+      "title": "close suppress 全靜默,與 stock「吞但留紀錄」語意漂移",
+      "disposition": "accepted",
+      "resolution": "改 try/except + logger.exception(行為不變,保診斷)。T-5 直測上鎖。"
+    },
+    {
+      "id": "C-6", "severity": "P2", "lens": "concurrency",
+      "file": "copycat/server/futures_engine.py", "line": 359,
+      "title": "全品無條件重掛的成本(健康品多一輪 UNSUB→SUB 真空窗、首掛延遲一個 interval)",
+      "disposition": "accepted_as_documented",
+      "resolution": "成本寫進 _handle_reconnect docstring;換到「掉訂型態不用逐一枚舉」。條件回填(只回填沉默品)若 prod 觀察到真空窗掉 tick 再做。"
+    },
+    {
+      "id": "C-7", "severity": "P2", "lens": "concurrency",
+      "file": "copycat/live/tc4.py", "line": 694,
+      "title": "per-symbol reconnect warning 在 stock source(數十檔)上逐檔放大",
+      "disposition": "rejected_with_reason",
+      "resolution": "SUBQUOTE reject 屬罕見異常(TC4 對不存在 symbol 照回 OK — tc4-market-facts),量 = 每次重連輪 × 失敗品、backoff 上限 60s;逐檔可判讀 > 彙總省行數。prod 若真吵再彙總(不記 next-time,警訊出現再說)。"
+    },
+    {
+      "id": "T-1", "severity": "P1", "lens": "test-efficacy",
+      "file": "tests/live/test_tc4.py", "line": 554,
+      "title": "_check_stale 會呼叫 on_reconnect 這個對帳鏈樞紐全 repo 零斷言",
+      "disposition": "accepted",
+      "resolution": "同測試補 fired 哨兵 + reconnects==1 斷言(95709250)。"
+    },
+    {
+      "id": "T-2", "severity": "P1", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 571,
+      "title": "_handle_reconnect guard 的 done() 半邊零覆蓋(收斂後重連零復原 = 原 bug 樣態)",
+      "disposition": "accepted",
+      "resolution": "test_reconnect_restarts_converged_retry_loop;mutation M3 驗證。"
+    },
+    {
+      "id": "T-3", "severity": "P1", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 571,
+      "title": "「活迴圈不得覆寫成孤兒」去重半邊零覆蓋",
+      "disposition": "accepted",
+      "resolution": "test_reconnect_does_not_duplicate_running_loop;mutation M4 驗證。"
+    },
+    {
+      "id": "T-4", "severity": "P1", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 577,
+      "title": "on_reconnect 從未由非 loop thread 觸發(threadsafe hop 直呼 mutant 全綠,prod 下殺 listener)",
+      "disposition": "accepted",
+      "resolution": "三條 reconnect 測試改 await asyncio.to_thread(src.on_reconnect)。"
+    },
+    {
+      "id": "T-5", "severity": "P1", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 503,
+      "title": "close suppress 放寬在整合路徑不可達(迴圈圍籬先吃掉)→ 原測試對它 vacuous",
+      "disposition": "accepted",
+      "resolution": "test_close_swallows_dead_resub_task_exception 直接構造例外終態;mutation M5 驗證。原整合測試保留(覆蓋迴圈存活 + close 收尾)。"
+    },
+    {
+      "id": "T-6", "severity": "P1", "lens": "test-efficacy", "dup_of": "C-2",
+      "title": "(同 C-2)", "disposition": "accepted", "resolution": "見 C-2。"
+    },
+    {
+      "id": "T-7", "severity": "P2", "lens": "test-efficacy",
+      "file": "copycat/server/futures_engine.py", "line": 170,
+      "title": "except _EngineClosing 靜默分支零覆蓋(砍掉 = 每次關機吐假 failure log)",
+      "disposition": "accepted",
+      "resolution": "test_engine_closing_exits_loop_without_failure_log;mutation M6 驗證。"
+    },
+    {
+      "id": "T-8", "severity": "P2", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 468,
+      "title": "worker guard 哨兵選擇(_loop vs _source)沒被區分(全關狀態下兩者等價)",
+      "disposition": "accepted",
+      "resolution": "測試改半關構造(_loop 斷、_source 尚在)。"
+    },
+    {
+      "id": "T-9", "severity": "P2", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 459,
+      "title": "test_close_stops_retry_loop 的 == n 有窄 flake 窗(to_thread 脫鉤 worker vs 固定 sleep)",
+      "disposition": "accepted",
+      "resolution": "改快照靜止條件(連續兩次相等)再鎖不成長。"
+    },
+    {
+      "id": "T-10", "severity": "P2", "lens": "test-efficacy",
+      "file": "tests/server/test_futures_engine.py", "line": 526,
+      "title": "leaf 測試只斷白盒集合成員,未及跨日症狀層",
+      "disposition": "accepted",
+      "resolution": "P2-1 測試改寫含症狀層(換日 + 新 ym → 不補新月 leaf)。"
+    }
+  ],
+  "summary": "8 P1 + 8 P2(C-2=T-6 去重)。accepted 15 / rejected 1(C-7)。fix 波:紅測試 49181d22 → 修復 af024fa1(C-1~C-6)→ lock 批 95709250(T 系列,mutation M3-M6 驗證)。核心收穫:reviewer 抓到本輪自己引入的 C-2(對帳 × leaf 記帳交互,終態與原 bug 同型)—— 撤銷判準改為 HOT 成交 tick 後語意嚴格優於原 P2-1 建議解。"
+}

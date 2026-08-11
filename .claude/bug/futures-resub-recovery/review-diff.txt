@@ -1,0 +1,431 @@
+﻿diff --git a/copycat/live/tc4.py b/copycat/live/tc4.py
+index 29683e76..b9f8ca9e 100644
+--- a/copycat/live/tc4.py
++++ b/copycat/live/tc4.py
+@@ -691,6 +691,10 @@ class TC4QuoteSource:
+                         r = self._rt_request("SUBQUOTE", sym)
+                         if r.get("Success") == "OK":
+                             self._subscribed.add(sym)
++                        else:
++                            # 掉訂品的復原靠 engine 端 on_reconnect 對帳(futures);
++                            # 這裡至少留 grep 判準,不再靜默蒸發(回溯審 P1-3)
++                            logger.warning("TC4 reconnect resubscribe %s failed: %s", sym, r)
+                 self.reconnects += 1
+                 self._last_msg = time.monotonic()
+                 if self.on_reconnect is not None:
+diff --git a/copycat/server/futures_engine.py b/copycat/server/futures_engine.py
+index df646384..95730c8f 100644
+--- a/copycat/server/futures_engine.py
++++ b/copycat/server/futures_engine.py
+@@ -30,6 +30,10 @@ from copycat.live.futures_models import (
+ logger = logging.getLogger(__name__)
+ 
+ 
++class _EngineClosing(Exception):
++    """close() 已開始(_loop 已斷)— executor worker 以此早退,不得再碰 source。"""
++
++
+ class FuturesSource(Protocol):
+     """期貨行情來源抽象;TC4 實作在 copycat.live.futures_source,測試注入 fake。"""
+ 
+@@ -119,9 +123,10 @@ class FuturesEngine:
+         self._leaf_fed: set[str] = set()  # 曾成功補訂 leaf 的商品(換月重武裝判準)
+         self._leaf_tasks: set[asyncio.Task[None]] = set()
+         self._leaf_timer: asyncio.TimerHandle | None = None
+-        # 訂閱失敗品的唯一重試路徑(bug startup-names-futures-resub 症狀 3):
+-        # source 層 `_resub` 只重掛成功過的 symbol、`_leaf_fallback` 需先由推播解析 ym,
+-        # 兩條都接不了「一開始就訂不到」的商品 → 面板整段零推播且無錯誤訊號。
++        # 訂閱失敗品的重試路徑(bug startup-names-futures-resub 症狀 3):
++        # source 層 `_resub` 只重掛成功過的 symbol;`_leaf_fallback` 需先由別品推播
++        # 解析 ym — 部分失敗時接得到,全品失敗時兩條都接不了 → 面板整段零推播且
++        # 無錯誤訊號。第二條發生路徑(_check_stale 重連掉訂)由 on_reconnect 對帳收回。
+         self._resub_interval_secs = resub_interval_secs
+         self._pending_subs: set[str] = set()
+         self._resub_task: asyncio.Task[None] | None = None
+@@ -132,6 +137,9 @@ class FuturesEngine:
+         self._loop = asyncio.get_running_loop()
+         self._source = self._source_factory()
+         self._source.set_on_message(self._on_quote_threadsafe)
++        if hasattr(self._source, "on_reconnect"):
++            # 重連對帳:_check_stale 重掛可能靜默掉訂(P1-3),engine 端回填 pending
++            self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
+         await asyncio.to_thread(self._subscribe_all)
+         if self._pending_subs:
+             self._resub_task = asyncio.create_task(self._resub_loop())
+@@ -157,15 +165,42 @@ class FuturesEngine:
+             source = self._source  # 每輪重讀:close 中會變 None
+             if source is None:
+                 return
+-            for product in sorted(self._pending_subs):
+-                try:
+-                    await asyncio.to_thread(source.subscribe_symbol, product)
+-                except ConnectionError:
+-                    # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
+-                    logger.warning("futures subscribe %s failed", product)
+-                    continue
+-                self._pending_subs.discard(product)
+-                logger.info("futures %s subscribe retry ok", product)
++            try:
++                await self._resub_round(source)
++            except _EngineClosing:
++                return  # 關機:靜默結束(不得偽裝成訂閱失敗的 warning)
++            except Exception:
++                # 非 ConnectionError 的例外(壞電文 / wrapper 內部型別錯)不得殺掉迴圈:
++                # 死掉 = 復原路徑本身靜默失效,而 close() 的收尾又會把 task 例外吞掉
++                # (照 corr _resub_loop 的圍籬)。CancelledError 是 BaseException,不被接住
++                logger.exception("futures 訂閱重試輪失敗(續行)")
++
++    async def _resub_round(self, source: FuturesSource) -> None:
++        for product in sorted(self._pending_subs):
++            try:
++                await asyncio.to_thread(self._retry_subscribe, source, product)
++            except ConnectionError:
++                # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
++                logger.warning("futures subscribe %s failed", product)
++                continue
++            self._pending_subs.discard(product)
++            # HOT 已回:撤銷 leaf fallback 記帳,跨日重武裝不再每天複製新月 leaf。
++            # 當日既存的 HOT+leaf 雙訂閱接受(leaf 無退訂路,兩邊值相同;P2-1)
++            self._leaf_fed.discard(product)
++            logger.info("futures %s subscribe retry ok", product)
++
++    def _retry_subscribe(self, source: FuturesSource, product: str) -> None:
++        """executor thread:關機中早退,縮小「close 後 source 再被呼叫」的窗。
++
++        cancel 正 await `to_thread` 的 task 時 asyncio 側立即回(executor future
++        無法中斷),已排入未啟動的工作項可能跨過 `source.close()` 才跑 subscribe →
++        `_ensure_connected` 重建 TC4 連線,KeepAlive 洩漏 process 不退
++        (照 stock_engine._retry_acquire 縮窗語意;殘餘 race 的根治 =
++        tc4 `_ensure_connected` 原子化,獨立 /mod)。
++        """
++        if self._loop is None:
++            raise _EngineClosing
++        source.subscribe_symbol(product)
+ 
+     async def close(self) -> None:
+         # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
+@@ -176,7 +211,10 @@ class FuturesEngine:
+         resub, self._resub_task = self._resub_task, None
+         if resub is not None:
+             resub.cancel()
+-            with contextlib.suppress(asyncio.CancelledError):
++            # 放寬到 Exception:task 若已死於非連線例外,只吞 CancelledError 會讓
++            # await 重拋 → 之後的 leaf gather 與 source.close() 全跳過,KeepAlive
++            # 洩漏 process 不退(回溯審 P1-1;corr close 同款)
++            with contextlib.suppress(asyncio.CancelledError, Exception):
+                 await resub
+         if self._leaf_timer is not None:
+             self._leaf_timer.cancel()
+@@ -304,6 +342,24 @@ class FuturesEngine:
+         if loop is not None:
+             loop.call_soon_threadsafe(self._handle_quote, quote)
+ 
++    def _on_reconnect_threadsafe(self) -> None:
++        loop = self._loop
++        if loop is not None:
++            loop.call_soon_threadsafe(self._handle_reconnect)
++
++    def _handle_reconnect(self) -> None:
++        """TC4 重連對帳:`_check_stale` 重掛失敗品靜默出集合(僅 warning)、迴圈中途
++        拋錯時尾段 symbol 蒸發 —— 掉訂品不進 `_pending_subs`、`_leaf_fallback` 判準
++        (p is None)也不武裝,零復原(回溯審 P1-3)。
++
++        對帳 = 全品回填 pending 交給重試迴圈:subscribe 走 UNSUB→SUB 冪等,重掛仍
++        活著的品無害;首輪重掛在一個 interval 後。leaf 訂閱的對帳不在此
++        (掉 leaf 需等跨日重武裝,記 next-time)。
++        """
++        self._pending_subs.update(self._products)
++        if self._resub_task is None or self._resub_task.done():
++            self._resub_task = asyncio.create_task(self._resub_loop())
++
+     def _handle_quote(self, quote: dict) -> None:
+         product = product_from_symbol(str(quote.get("Symbol", "")))
+         if product is None:
+diff --git a/tests/live/test_tc4.py b/tests/live/test_tc4.py
+index 55638952..b76cb0fe 100644
+--- a/tests/live/test_tc4.py
++++ b/tests/live/test_tc4.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import json
++import logging
+ import threading
+ import time
+ from typing import Any
+@@ -531,6 +532,54 @@ class TestConnectInterruptible:
+         assert not worker.is_alive(), "重連迴圈不可中斷(阻塞在裸 recv)"
+ 
+ 
++class _SelectiveFailApi(FakeApi):
++    """REALTIME SUBQUOTE 對指定 symbol 回 Success != OK,其餘照 FakeApi。"""
++
++    def __init__(self, fail: set[str]) -> None:
++        super().__init__({})
++        self._fail = fail
++
++    def _handle(self, req: dict) -> bytes:
++        param = req.get("Param", {})
++        if (
++            req.get("Request") == "SUBQUOTE"
++            and param.get("SubDataType") == "REALTIME"
++            and param.get("Symbol") in self._fail
++        ):
++            self.rt_requests.append(req)
++            return b'{"Success": "FAIL", "ErrMsg": "sub reject"}\x00'
++        return super()._handle(req)
++
++
++class TestReconnectResubWarning:
++    """P1-3(共用層的「至少」防線):重連重掛 SUBQUOTE 失敗品原本靜默丟出
++    `_subscribed` 且零 log —— 失效樣態是「該檔從此零推播,log 乾乾淨淨」。
++    這裡鎖 grep 判準 warning;掉訂品的實際復原由 engine 端 on_reconnect 對帳接手。
++    """
++
++    def test_resub_failure_logs_warning_and_drops_symbol(
++        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        api = _SelectiveFailApi(fail={"TC.F.TWF.TXF.HOT"})
++        src = TC4QuoteSource(port="0", api=api, session="sess-1")
++        src._subscribed = {"TC.F.TWF.TXF.HOT", "TC.F.TWF.MXF.HOT"}
++        src._last_msg = time.monotonic() - 999.0  # 觸發 stale 判定
++
++        def _reinstall() -> None:
++            # _check_stale 先 _dispose 再 _ensure_connected;unit 層不真連線,
++            # 重灌同一顆 fake api(測的是重掛迴圈,不是連線建立)
++            with src._api_lock:
++                src._api = api
++                src._session = "sess-2"
++
++        monkeypatch.setattr(src, "_ensure_connected", _reinstall)
++        with caplog.at_level(logging.WARNING):
++            src._check_stale()
++        assert "TC.F.TWF.MXF.HOT" in src._subscribed  # 成功品照舊
++        assert "TC.F.TWF.TXF.HOT" not in src._subscribed  # 現行語意:失敗品出集合
++        assert "TC4 reconnect resubscribe TC.F.TWF.TXF.HOT failed" in caplog.text
++
++
+ class TestSpotSymbol:
+     def test_spot_symbol_uses_txf_product_code(self) -> None:
+         """item 2(2026-07-20 盤中驗證):TC4 symbol 樹的台指期產品碼是 TXF,FITX 不存在。
+diff --git a/tests/server/test_futures_engine.py b/tests/server/test_futures_engine.py
+index 0a302183..30daefa5 100644
+--- a/tests/server/test_futures_engine.py
++++ b/tests/server/test_futures_engine.py
+@@ -356,6 +356,44 @@ class _FlakySource(FakeSource):
+         super().subscribe_symbol(product)
+ 
+ 
++class _BadRetrySource(FakeSource):
++    """retry 途中拋非 ConnectionError:首輪 ConnectionError、第 2 次 ValueError、第 3 次成功。
++
++    照抄 test_corr_engine 的 _BadRetrySource 形狀(C-3 的 futures 版)。
++    """
++
++    def __init__(self, product: str) -> None:
++        super().__init__()
++        self._product = product
++        self.attempts: list[str] = []
++
++    def subscribe_symbol(self, product: str) -> None:
++        self.attempts.append(product)
++        if product != self._product:
++            super().subscribe_symbol(product)
++            return
++        n = self.attempts.count(product)
++        if n == 1:
++            raise ConnectionError(f"SUBQUOTE fail {product}")
++        if n == 2:
++            raise ValueError("wrapper 內部型別錯")
++        super().subscribe_symbol(product)
++
++
++class _AlwaysBadRetrySource(FakeSource):
++    """首輪 ConnectionError 全品進 pending,之後每次 retry 一律拋 ValueError。"""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.attempts: list[str] = []
++
++    def subscribe_symbol(self, product: str) -> None:
++        self.attempts.append(product)
++        if self.attempts.count(product) == 1:
++            raise ConnectionError(f"SUBQUOTE fail {product}")
++        raise ValueError("wrapper 內部型別錯")
++
++
+ async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+     deadline = asyncio.get_running_loop().time() + timeout
+     while asyncio.get_running_loop().time() < deadline:
+@@ -379,6 +417,12 @@ class TestPendingResubscribe:
+         assert src.subscribed == ["TMF"]  # 首輪只有 TMF 成功
+         try:
+             await _wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
++            # P2-3 收斂不變式:pending 清空後迴圈必須自然結束(while True mutant 下
++            # task 常駐洩漏,原測試無任何斷言會紅)
++            await _wait_until(
++                lambda: engine._resub_task is not None and engine._resub_task.done()
++            )
++            assert engine._pending_subs == set()
+         finally:
+             await engine.close()
+         assert sorted(src.subscribed) == ["MXF", "TMF", "TXF"]
+@@ -397,12 +441,13 @@ class TestPendingResubscribe:
+ 
+     async def test_all_success_no_retry_task(self) -> None:
+         src = _FlakySource({})
+-        baseline = len(asyncio.all_tasks())
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+         await asyncio.sleep(0.05)
+         assert src.attempts == ["TXF", "MXF", "TMF"]  # 每品恰一次
+-        assert len(asyncio.all_tasks()) == baseline  # 無 retry task 殘留
++        # P2-3:原斷言 len(all_tasks()) == baseline 對「無守衛必起 task」mutant 全綠
++        # (已完成 task 不在 all_tasks)。照 corr 版鎖結構性事實:task 根本沒被建出來
++        assert engine._resub_task is None
+         await engine.close()
+ 
+     async def test_close_stops_retry_loop(self) -> None:
+@@ -411,11 +456,141 @@ class TestPendingResubscribe:
+         await engine.start()
+         await _wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
+         await engine.close()
++        await asyncio.sleep(0.05)  # close 當下真正 in-flight 的 thread 結清
+         n = len(src.attempts)
+         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+         assert pending == []
+         await asyncio.sleep(0.05)  # 5 個間隔
+-        assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
++        # P1-2:原斷言 <= n+1 把「close 後 orphan worker 再碰 source」寫成允許值;
++        # _EngineClosing 縮窗後 close 之後不得再有任何新 subscribe
++        assert len(src.attempts) == n
++
++    async def test_retry_worker_refuses_to_touch_source_after_close(self) -> None:
++        """P1-2:close 後才輪到的 executor 工作項不得再碰 source(_EngineClosing 縮窗)。
++
++        cancel 正 await to_thread 的 task 時 asyncio 立即返回,已排入 executor 但未
++        啟動的工作項仍會跑 —— 真 source 上那一下 subscribe 會經 _ensure_connected
++        重建 TC4 連線,KeepAlive 洩漏 process 不退。整合層無法決定性製造「排入但
++        未啟動」窗,以 worker 直呼鎖 guard 語意(stock_engine._retry_acquire 同款)。
++        """
++        from copycat.server.futures_engine import _EngineClosing
++
++        src = _FlakySource({"TXF": 10_000})
++        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
++        await engine.start()
++        await engine.close()
++        before = len(src.attempts)
++        with pytest.raises(_EngineClosing):
++            engine._retry_subscribe(src, "TXF")
++        assert len(src.attempts) == before  # source 未被碰
++
++    async def test_retry_loop_survives_non_connection_error(self) -> None:
++        """P1-1:非 ConnectionError 例外(壞電文/型別錯)不得殺掉重試路徑。
++
++        迴圈死掉 = 復原路徑本身靜默失效,而 close() 的收尾又把 task 例外吞掉 ——
++        兩層靜默疊起來,該品整天零推播且 log 只有首輪一行 warning(復刻原 bug 的
++        零訊號終態)。corr 版:test_corr_engine test_retry_loop_survives_non_connection_error。
++        """
++        src = _BadRetrySource("TXF")
++        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
++        await engine.start()
++        try:
++            await _wait_until(lambda: "TXF" in src.subscribed)
++            assert src.attempts.count("TXF") == 3  # 連線類 + 非連線類 + 成功
++        finally:
++            await engine.close()
++
++    async def test_close_after_bad_retry_exception_still_closes_source(self) -> None:
++        """P1-1 後半:retry 拋過非 ConnectionError 之後,close() 仍必須關到 source。
++
++        現行 close() 只 suppress CancelledError → task 已死於 ValueError 時
++        await resub 重拋 → leaf gather 與 source.close() 全跳過 → TC4 KeepAlive
++        執行緒洩漏 process 不退(回溯審 repro 實測)。
++        """
++        src = _AlwaysBadRetrySource()
++        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
++        await engine.start()
++        await _wait_until(lambda: len(src.attempts) > 3)  # 至少一次 retry 已拋 ValueError
++        await engine.close()  # 不得重拋 ValueError
++        assert src.closed  # source.close() 必達(KeepAlive 不洩漏)
++
++
++class TestRetrySuccessLeafBookkeeping:
++    """P2-1:重試把 HOT 掛回後,leaf fallback 記帳(`_leaf_fed`)必須撤銷。
++
++    不撤銷的話:跨日重武裝把 leaf-fed 商品 p 清 None → 每天再補一次新月 leaf,
++    同商品 HOT + leaf 雙訂閱天天複製(兩路餵同一 _handle_quote,seq/廣播加倍、
++    tick 可短暫倒退)。當日已存在的雙訂閱接受(leaf 無退訂路、兩邊值相同)。
++    """
++
++    async def test_retry_success_discards_leaf_fed(self) -> None:
++        src = FakeSource()
++        src.fail_subscribe.add("TXF")
++        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.05)
++        await engine.start()
++        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
++        await asyncio.sleep(0.05)
++        await _drain()
++        assert ("TXF", "202608") in src.leaf_subscribed  # 訂不到的品先由 leaf 接手
++        assert "TXF" in engine._leaf_fed
++        src.fail_subscribe.discard("TXF")  # TC4 恢復 → 下一輪重試成功
++        try:
++            await _wait_until(lambda: "TXF" in src.subscribed)
++            await _drain()
++            assert "TXF" not in engine._leaf_fed  # HOT 已回,跨日不得再複製 leaf
++        finally:
++            await engine.close()
++
++
++class _ReconnectSource(FakeSource):
++    """帶 on_reconnect 屬性的 source(對齊 TC4QuoteSource 介面;stock/corr fake 同款)。"""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.on_reconnect: Callable[[], None] | None = None
++
++
++class TestReconnectReconciliation:
++    """P1-3:`_check_stale` 重連可能靜默掉訂(SUBQUOTE 失敗零 log / 迴圈中途拋錯
++    尾段 symbol 蒸發),掉訂品不進 `_pending_subs`、`_leaf_fallback` 判準(p is None)
++    也不武裝 —— FuturesEngine 是四引擎唯一沒接 on_reconnect 的,零復原零覆蓋。
++
++    修法 = on_reconnect 對帳:全品回填 pending 由重試迴圈重掛
++    (subscribe 走 UNSUB→SUB 冪等,重掛仍活著的品無害)。
++    """
++
++    async def test_engine_wires_on_reconnect(self) -> None:
++        src = _ReconnectSource()
++        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
++        await engine.start()
++        try:
++            assert src.on_reconnect is not None
++        finally:
++            await engine.close()
++
++    async def test_reconnect_resubscribes_dropped_products(self) -> None:
++        src = _ReconnectSource()
++        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
++        await engine.start()  # 全成功 → 無 retry task(對帳必須能重啟迴圈,不能只靠 start)
++        src.subscribed.clear()  # 模擬重連:source 端重掛全數靜默失敗,engine 不知情
++        assert src.on_reconnect is not None
++        src.on_reconnect()
++        try:
++            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
++        finally:
++            await engine.close()
++
++    async def test_reconnect_during_close_is_noop(self) -> None:
++        # close 已開始(_loop 斷)後的 on_reconnect 不得再排工作
++        src = _ReconnectSource()
++        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
++        await engine.start()
++        await engine.close()
++        n = len(src.subscribed)
++        assert src.on_reconnect is not None
++        src.on_reconnect()
++        await asyncio.sleep(0.05)
++        assert len(src.subscribed) == n
+ 
+ 
+ class TestFetchDay1kPassthrough:
