@@ -1293,6 +1293,63 @@ class TestBasisRetry:
         finally:
             await h.hub.close()
 
+    async def test_reschedule_cancels_orphaned_timer(self, tmp_path: Path, clock: _Clock) -> None:
+        """同鍵兩筆 job 先後失敗(rollover 差集補抓 race 的形)→ 第二次排程必須取消
+        第一支 timer。孤兒 timer 照樣醒來:重試預算被雙倍燒掉、TC4 被多打一次,而且
+        它 pop 掉 dict 條目後,close() 再也看不到真正在途的那支。"""
+        bars = _FakeBars([_BAR_A], error=True)
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.15)
+        await h.hub.start()
+        try:
+            h.hub.request_basis(["2330"])
+            h.hub.request_basis(["2330"])  # 同鍵第二筆:重試在途時又排了新 job
+            await _wait_calls(bars, 2)
+            await asyncio.sleep(0.4)  # 讓在途 timer 全數到期
+            await h.settle()
+            # 兩筆初始 + 一次重試(tries 已達上限)= 3;孤兒 timer 也醒的話會是 4
+            assert len(bars.calls) == 3, "孤兒 timer 也醒來重打了 TC4"
+        finally:
+            await h.hub.close()
+
+    async def test_drop_code_cancels_pending_retry(self, tmp_path: Path, clock: _Clock) -> None:
+        """移出自選後在途重試必須取消:醒來的重試不只白打 TC4,`_basis_failed` 還會把
+        `_drop_code` 刻意清掉的 cache 條目寫回去(復活成 (date, None))。"""
+        bars = _FakeBars([_BAR_A], error=True)
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.1)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await _wait_calls(bars, 1)
+            h.hub.on_watchlist([])  # 重試在途時移出
+            await asyncio.sleep(0.3)
+            await h.settle()
+            assert len(bars.calls) == 1, "移出自選後重試仍去打了 TC4"
+            assert "2330" not in h.hub._basis_cache, "被清掉的 cache 條目又被重試復活"
+        finally:
+            await h.hub.close()
+
+    async def test_rollover_prunes_pending_handles_and_staged_counters(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """換日清舊要一次清齊:舊日別與 staged 的在途 timer 取消(醒來也只會被 `_stale`
+        丟掉,白走一趟換日最忙窗的佇列);staged 計數不得帶進新的一天 —— `_staged_date`
+        此刻歸 None,那些鍵再也不會被讀到,留著就是 `on_rollover` 自己要防的慢性洩漏。"""
+        bars = _FakeBars([_BAR_A], error=True)
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=5.0)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await _wait_calls(bars, 1)  # 當日 job 失敗 → 非 staged timer 在途
+            h.hub.on_rollover_pending(_NEXT)
+            await _wait_calls(bars, 2)  # staged job 失敗 → staged timer 在途
+            await h.settle()
+            h.date = _NEXT
+            h.hub.on_rollover()
+            assert h.hub._retry_handles == {}, "舊日別 / staged 的在途 timer 未取消"
+            assert h.hub._basis_retries == {}, "staged 計數被帶進了新的一天"
+        finally:
+            await h.hub.close()
+
 
 class TestBookPath:
     async def test_book_open_after_lock(self, tmp_path: Path, clock: _Clock) -> None:
