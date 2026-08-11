@@ -299,10 +299,16 @@ class StockEngine:
     async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None:
         """`seq` = 呼叫端(`WatchlistService`)在**它自己的鎖內**取的定序號(X-3)。
 
-        訂閱副作用移出 service 的鎖之後,兩個並發 commit 可能以任意順序抵達這裡。
         `seq <= 已套用` = 舊名單後到 → **整段跳過**(不訂不退不廣播不通知 hub),
         照套的話訂閱池 / hub membership / 種子廣播會一起退回上一版,而畫面上只是
         「剛加的股票又不見了」,零錯誤訊號。
+
+        誠實記帳:現況下取號(service 鎖內,同步)到本 method 進 `_pool_lock`
+        (FIFO)之間**沒有 yield 點**(無競爭的 `asyncio.Lock.acquire` 不讓出),
+        抵達順序 = 取號順序,這個防線今天走不到 —— `seq` 是 belt-and-braces。
+        它防的是那條保證**靜默消失**的未來:任何人在該窗內插入 await(例:落檔改
+        `to_thread`)後亂序就真的可能發生,而屆時不會有任何測試驅動 service→engine
+        的 reorder 提醒你。
 
         `None`(boot 還原 / 既有 caller)= 不參與定序,照舊全套。
         """

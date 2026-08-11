@@ -212,6 +212,13 @@ class WatchlistService:
         呼叫端仍 `await` —— 收斂的是**鎖凸出**,不是自己這一次的等待:改成
         fire-and-forget 的話 route 回應時訂閱可能還沒掛上,前端拿到的第一份 snapshot
         會缺。並發安全由 `seq` 在 engine 端負責(舊名單後到整段跳過)。
+
+        收斂範圍要誠實:X-3 解掉的是 **service 這把鎖**的堆積(`current()` 讀路、
+        群組操作的驗證與落檔不再排在訂閱迴圈後面);engine 端 `_pool_lock` 仍序列化
+        整段逐檔訂閱迴圈,第二個寫入者的 `_settle` 還是得等第一個的迴圈走完 ——
+        TC4 故障下 Discord 回覆仍可能拖過 interaction token 上限。深修 = 把 ZMQ
+        迴圈移出 `_pool_lock`(同檔 backfill worker 的 per-code 取鎖模式),
+        見 docs/next-time.md。
         """
         saved, changed, seq = pending
         if not changed:
