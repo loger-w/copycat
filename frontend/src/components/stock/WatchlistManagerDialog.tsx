@@ -77,15 +77,46 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     }
   }
 
+  /** 連續操作的串行佇列(next-time 2026-08-11 第一條)。
+   *
+   *  單顆 mutation observer 的 per-call callbacks(`mutate(next, { onSuccess })`)只對
+   *  **最新一次** mutate 執行 —— 連刪兩組時第一發的 `onGroupDeleted` 會被第二發覆蓋吞掉
+   *  (W-20 復發);且以 render 閉包的 `wl` 算 next,在途 PUT 未回時是 stale 基底,
+   *  第二發會把第一發的結果原樣還原。
+   *
+   *  所以動作改傳 `(base) => next` transform,排進 promise chain:輪到時以「最新已知
+   *  內容」(上一發 PUT 回應)重算;`mutateAsync` 的 per-call promise 不受後續呼叫影響,
+   *  `onDone` 逐發執行。`baseRef` 只在無在途動作時從 `wl` 同步(`pendingRef` 計數守門)——
+   *  佇列排空後 cache 已含最後回應,兩者收斂。 */
+  const baseRef = useRef(wl);
+  const pendingRef = useRef(0);
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+
   /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
    *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
-  function commit(next: Watchlist, onDone?: () => void): void {
-    // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
-    // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
-    // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
-    if (isSameWatchlist(next, wl)) return;
-    setLocalError(null);
-    save.mutate(next, onDone === undefined ? undefined : { onSuccess: onDone });
+  function commit(make: (base: Watchlist) => Watchlist, onDone?: () => void): void {
+    if (pendingRef.current === 0) baseRef.current = wl;
+    pendingRef.current += 1;
+    chainRef.current = chainRef.current
+      .then(async () => {
+        const base = baseRef.current;
+        const next = make(base);
+        // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
+        // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
+        // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
+        if (isSameWatchlist(next, base)) return;
+        setLocalError(null);
+        try {
+          baseRef.current = await save.mutateAsync(next);
+          onDone?.();
+        } catch {
+          // 失敗已由 save.error 走 errText 呈現(W-3);基底不推進,
+          // 佇列後續動作以未變基底重算,不會疊在失敗結果上。
+        }
+      })
+      .finally(() => {
+        pendingRef.current -= 1;
+      });
   }
 
   function submitAddGroup(): void {
@@ -101,7 +132,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       return;
     }
     setGroupInput("");
-    commit(next);
+    commit((base) => addGroup(base, name));
   }
 
   function submitRename(from: string): void {
@@ -116,7 +147,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     }
     setRenaming(null);
     // 改名成功前不要動 selected —— 樂觀更新在 PUT 失敗時會留下懸空的選取
-    commit(next, () => setSelected(renameInput.trim()));
+    commit(
+      (base) => renameGroup(base, from, renameInput),
+      () => setSelected(renameInput.trim()),
+    );
   }
 
   // **右欄一律用 derived 值渲染**:`selected` 只是意圖。改名 / 刪除都是先 mutate 再更新
@@ -135,12 +169,17 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
    *  分兩次會產出「在群組但不在 codes」的中間態。 */
   function addStock(code: string): void {
     setStockInput("");
-    const withCode = addCode(wl, code);
-    commit(
-      activeGroup === null
+    const target = activeGroup?.name ?? null;
+    commit((base) => {
+      const withCode = addCode(base, code);
+      if (target === null) return withCode;
+      // 目標組員數與存在性都以套用當下的基底為準;組在佇列前段被刪 → 退化為只加進
+      // 自選(掉未分組,與刪組「成員留 codes」同一語意)
+      const group = withCode.groups.find((g) => g.name === target);
+      return group === undefined
         ? withCode
-        : assignToGroup(withCode, code, activeGroup.name, activeGroup.codes.length),
-    );
+        : assignToGroup(withCode, code, target, group.codes.length);
+    });
   }
 
   const errorMessage = localError ?? (save.error ? save.error.message : null);
@@ -213,10 +252,13 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                   type="button"
                   aria-label={`刪除群組 ${label}`}
                   onClick={() =>
-                    commit(deleteGroup(wl, key), () => {
-                      onGroupDeleted(key);
-                      setSelected((cur) => (cur === key ? null : cur));
-                    })
+                    commit(
+                      (base) => deleteGroup(base, key),
+                      () => {
+                        onGroupDeleted(key);
+                        setSelected((cur) => (cur === key ? null : cur));
+                      },
+                    )
                   }
                   className={cn(
                     "w-4 shrink-0 text-ink-dim hover:text-bear",
@@ -404,7 +446,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                       <button
                         type="button"
                         aria-label={`從 ${activeGroup.name} 移出 ${code}`}
-                        onClick={() => commit(removeFromGroup(wl, code, activeGroup.name))}
+                        onClick={() => commit((base) => removeFromGroup(base, code, activeGroup.name))}
                         className="w-4 shrink-0 text-ink-dim hover:text-ink"
                       >
                         −
@@ -413,7 +455,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                     <button
                       type="button"
                       aria-label={`從自選移除 ${code}`}
-                      onClick={() => commit(removeCode(wl, code))}
+                      onClick={() => commit((base) => removeCode(base, code))}
                       className="w-4 shrink-0 text-ink-dim hover:text-bear"
                     >
                       ×
