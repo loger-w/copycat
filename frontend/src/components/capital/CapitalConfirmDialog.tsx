@@ -21,6 +21,8 @@ interface CapitalConfirmDialogProps {
  *  原生 `<dialog>` + `showModal()`:focus trap / 背景 inert 由瀏覽器提供。
  *  caller 契約 = 條件掛載(mount = 開窗、unmount = 關窗,無 open prop);
  *  Esc / 原生 close 一律等同按一次「取消」,任何路徑都不可能觸發 onConfirm。
+ *  **新 caller 硬性契約:onConfirm / onCancel 必須卸載本元件**(closedRef 是一次性
+ *  settled 旗標,不卸載會讓第二次 Esc 失效,只剩取消鈕可關)。
  */
 export function CapitalConfirmDialog({
   title,

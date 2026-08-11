@@ -97,7 +97,7 @@ describe("CapitalConfirmDialog", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("class 契約:m-auto / backdrop:bg-bg/85 / max-w-sm(display 不得被 author 層蓋寫)", () => {
+  it("class 契約:m-auto / backdrop:bg-bg/85 / max-w-sm / text-ink / p-0(display 不得被 author 層蓋寫)", () => {
     render(
       <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
     );
@@ -105,6 +105,46 @@ describe("CapitalConfirmDialog", () => {
     expect(dlg.classList.contains("m-auto")).toBe(true);
     expect(dlg.classList.contains("backdrop:bg-bg/85")).toBe(true);
     expect(dlg.classList.contains("max-w-sm")).toBe(true);
+    expect(dlg.classList.contains("text-ink")).toBe(true); // 抵 UA color:canvastext
+    expect(dlg.classList.contains("p-0")).toBe(true); // 抵 UA padding:1em
+  });
+
+  it("確認後的 Esc / close 不補發 onCancel(settled 旗標;真錢 in-flight 窗)", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認送單" rows={[]} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.click(screen.getByText("確認"));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    const dlg = screen.getByRole("dialog");
+    fireEvent.keyDown(dlg, { key: "Escape" });
+    fireEvent(dlg, new Event("close"));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("取消鈕點擊後補發 close 不二次 onCancel", () => {
+    const onCancel = vi.fn();
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={onCancel} />,
+    );
+    fireEvent.click(screen.getByText("取消"));
+    fireEvent(screen.getByRole("dialog"), new Event("close"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("窗內 Esc 不外洩到 window 層 keydown(階梯武裝態不受影響)", () => {
+    const winSpy = vi.fn();
+    window.addEventListener("keydown", winSpy);
+    try {
+      render(
+        <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+      );
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      expect(winSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", winSpy);
+    }
   });
 
   it("focus 歸還:卸載後 activeElement 回到開窗前的觸發鈕", () => {
