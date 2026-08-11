@@ -417,6 +417,12 @@ class TestPendingResubscribe:
         assert src.subscribed == ["TMF"]  # 首輪只有 TMF 成功
         try:
             await _wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
+            # P2-3 收斂不變式:pending 清空後迴圈必須自然結束(while True mutant 下
+            # task 常駐洩漏,原測試無任何斷言會紅)
+            await _wait_until(
+                lambda: engine._resub_task is not None and engine._resub_task.done()
+            )
+            assert engine._pending_subs == set()
         finally:
             await engine.close()
         assert sorted(src.subscribed) == ["MXF", "TMF", "TXF"]
@@ -435,12 +441,13 @@ class TestPendingResubscribe:
 
     async def test_all_success_no_retry_task(self) -> None:
         src = _FlakySource({})
-        baseline = len(asyncio.all_tasks())
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
         await asyncio.sleep(0.05)
         assert src.attempts == ["TXF", "MXF", "TMF"]  # 每品恰一次
-        assert len(asyncio.all_tasks()) == baseline  # 無 retry task 殘留
+        # P2-3:原斷言 len(all_tasks()) == baseline 對「無守衛必起 task」mutant 全綠
+        # (已完成 task 不在 all_tasks)。照 corr 版鎖結構性事實:task 根本沒被建出來
+        assert engine._resub_task is None
         await engine.close()
 
     async def test_close_stops_retry_loop(self) -> None:
