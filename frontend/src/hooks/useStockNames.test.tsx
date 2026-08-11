@@ -102,6 +102,45 @@ describe("useStockNames", () => {
     ).toBe(false);
   });
 
+  // 鎖輪詢節奏(SC-2):literal 3000 不引用常數 —— interval 被改(如 1ms)必須紅
+  it("未拿到資料且未達上限 → 每 3000ms 輪詢(literal 鎖節奏)", () => {
+    expect(namesRefetchInterval({ state: { data: undefined, errorUpdateCount: 0 } })).toBe(3000);
+    expect(
+      namesRefetchInterval({
+        state: { data: undefined, errorUpdateCount: NAMES_MAX_ERROR_CYCLES - 1 },
+      }),
+    ).toBe(3000);
+  });
+
+  // 鎖停止條件(SC-2,白名單 W-2):拿到資料(含空表)即停,穩態零輪詢
+  it("拿到資料(含空表)→ refetchInterval 求值為 false", () => {
+    expect(namesRefetchInterval({ state: { data: [], errorUpdateCount: 0 } })).toBe(false);
+    expect(
+      namesRefetchInterval({
+        state: {
+          data: [{ code: "2330", name: "台積電" }],
+          errorUpdateCount: NAMES_MAX_ERROR_CYCLES,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  // next-time 2026-08-10 原案「成功案 sleep 3.5s 斷言 fetch 次數不增」的 fake-timer 等價版
+  // (決定性、免 wall-clock;樣板 useBreadthRows.test.ts)
+  it("成功後長時間推進,fetch 次數不增(停止真的生效)", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ names: [{ code: "2330", name: "台積電" }], count: 1 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderHook(() => useStockNames(), { wrapper: wrap });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock.mock.calls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000); // 超過 3 個輪詢週期
+    expect(fetchMock.mock.calls.length).toBe(1);
+  });
+
   it("永久失敗:達上限後 fetch 次數收斂,不再無限輪詢", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () => new Response("proxy error", { status: 500 }));
