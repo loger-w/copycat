@@ -85,3 +85,9 @@
 - revert 30c05d1(backend 修復)→ `TestPendingResubscribe` **4 條全紅**(25 綠)→ abort 還原。
 - revert 2d14476(frontend 修復)→ 自動復原測試 **紅**(4 綠)→ abort 還原。
 - 兩邊紅測試都確實抓得住 bug;全 gate 與真實環境證據見同目錄 `verification.md`。
+
+[amendment 2026-08-12: 30c05d1 commit message「補上唯一缺的復原路徑」措辭不成立
+(回溯審 P1-3)— pending-resub 只接了「首輪訂閱失敗」;原症狀的第二條發生路徑
+(`_check_stale` 重連時 SUBQUOTE 失敗 / 迴圈中途拋錯尾段蒸發)當時零復原零覆蓋,
+且迴圈本身只接 ConnectionError、close 不等 in-flight worker(P1-1/P1-2)。
+三洞已由 fix/futures-resub-recovery 補齊,見 `.claude/bug/futures-resub-recovery/`。]

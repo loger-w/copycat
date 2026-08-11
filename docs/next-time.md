@@ -1013,30 +1013,32 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 > (2 lens 回溯審 diff 99ef8888^..2d144765,逐條對照 HEAD e3aeda5b 現碼,全部仍成立)。
 > 三條 P1 的正解都已存在於 corr/stock 姊妹實作,照抄即可 — 建議合併成一輪 /bug 或 /mod。
 
-- [ ] **P1:`_resub_loop` 只接 ConnectionError**(futures_engine.py:155)— 壞電文
-  (tc4.py:349 JSONDecodeError / :274 KeyError)殺死復原路徑且零 log;同顆例外從
-  close() 的 `await resub` 重拋 → `source.close()` 跳過 → KeepAlive 洩漏 process
-  不退(repro 實證)。修法照 corr_engine.py:156-162(`_resub_round` + except
-  Exception 續行)+ close suppress 放寬;紅測試抄 test_corr_engine.py:429。
-- [ ] **P1:close() 不等 in-flight `to_thread`**(futures_engine.py:162)— orphan
-  thread 實測跨過 source.close() 後才 subscribe → `_ensure_connected` 重建 TC4 連線
-  無人 Disconnect。修法照 stock_engine.py:657-672(`_EngineClosing` 縮窗);
-  test_futures_engine.py:418 的 `attempts <= n+1` 是把洩漏寫成允許值,改鎖
-  「close 之後不得有 subscribe_enter」不變式。
-- [ ] **P1:`_check_stale` 重連掉訂閱零復原零覆蓋**(tc4.py:678-682)— 重掛失敗品
-  靜默丟出 `_subscribed` 且無 log;迴圈中途拋錯 → 尾段 symbol 永久蒸發;不進
-  `_pending_subs`,FuturesEngine 又是四引擎唯一沒接 on_reconnect 的。當輪 commit
-  「唯一缺的復原路徑」措辭不成立(repro.md 同句要一併更正)。
-- [ ] P2:重試成功後 HOT + leaf 雙訂閱(`_leaf_fed` 跨日每天複製)— 至少補
-  `_leaf_fed.discard(product)`(futures_engine.py:167)。
+- [x] ~~**P1:`_resub_loop` 只接 ConnectionError**(futures_engine.py:155)— 壞電文
+  殺死復原路徑且零 log;同顆例外從 close() 的 `await resub` 重拋 → `source.close()`
+  跳過 → KeepAlive 洩漏。~~ **2026-08-12 修畢(fix/futures-resub-recovery)**:照 corr
+  形狀 `_resub_round` + except Exception 續行;close suppress 放寬到 Exception。
+- [x] ~~**P1:close() 不等 in-flight `to_thread`**(futures_engine.py:162)— orphan
+  thread 跨過 source.close() 後 subscribe → 重建 TC4 連線無人 Disconnect。~~
+  **2026-08-12 修畢(同輪)**:照 stock `_EngineClosing` 縮窗(worker 先查
+  `_loop is None`);`attempts <= n+1` 允許值改鎖「close 後零新 subscribe」。
+  縮窗殘餘 race 的根治 = 下方 P2-5 tc4 `_ensure_connected` 原子化(獨立 /mod)。
+- [x] ~~**P1:`_check_stale` 重連掉訂閱零復原零覆蓋**(tc4.py:678-682)。~~
+  **2026-08-12 修畢(同輪)**:futures engine 接 on_reconnect 全品回填
+  `_pending_subs` 對帳(UNSUB→SUB 冪等,重掛活品無害);tc4 重掛失敗補 grep 判準
+  warning `TC4 reconnect resubscribe %s failed`;舊 repro.md 措辭已 amendment 更正。
+- [x] ~~P2:重試成功後 HOT + leaf 雙訂閱(`_leaf_fed` 跨日每天複製)。~~
+  **2026-08-12 修畢(同輪)**:重試成功處 `_leaf_fed.discard(product)`;當日既存
+  雙訂閱接受(leaf 無退訂路、兩邊值相同),`__init__` 過寬註解一併更正。
 - [x] ~~P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
   error 態無 consumer 在讀,註解與現實不符。~~ **2026-08-11 修畢
   (mod/stock-names-error-poll-stop):拍板「停止」不是退避 — 連續失敗
   20 輪(≈77s;每輪 = 1s backoff + 3s interval)即停,復原後門 = 分頁
   visibilitychange 或重整(v5 focusManager 不聽純 window focus,review 抓到並鎖測試);
   retry 註解改述現實(error 無 consumer)。**
-- [ ] P2:test_futures_engine 兩條收斂不變式 mutant 存活(:405 改
-  `assert engine._resub_task is None` 照 corr 版;收斂後補 pending 空 + task done)。
+- [x] ~~P2:test_futures_engine 兩條收斂不變式 mutant 存活(:405 改
+  `assert engine._resub_task is None` 照 corr 版;收斂後補 pending 空 + task done)。~~
+  **2026-08-12 修畢(同輪)**:兩斷言照 corr 版改寫,M1/M2 mutant 抽驗紅後還原綠
+  ([lock] commit body 記 mutation-verified)。
 - [x] ~~P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
   皆全綠)— 成功案 sleep 3.5s 斷言 fetch 次數不增。~~ **2026-08-11 修畢(同上輪):
   白盒 literal 3000 鎖節奏 + 上限停止;成功案改 fake-timer 推進 10s 斷言不增
@@ -1045,6 +1047,18 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
   `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
   系統性放大。修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
   stock/corr/index 四 source 一起回歸。
+
+## 2026-08-12(fix/futures-resub-recovery 收尾留尾巴)
+
+- [ ] **reconnect 對帳不含 leaf 訂閱**:`_handle_reconnect` 只回填 HOT 品;重連若掉了
+  leaf 契約訂閱(`_leaf_done` 記帳仍在、p 有舊值不武裝),要等跨日重武裝才補回。
+  影響限「HOT 因 spot 衝突零推播 + 重連掉 leaf」雙重疊加,低頻記錄備查;要收 =
+  on_reconnect 時對 `_leaf_fed` 品清 `_leaf_done` 當日鍵重走 fallback。
+- [ ] **`_check_stale` 迴圈中途拋錯尾段蒸發對 stock/corr/index 的復原完整性未逐一盤點**
+  (本輪只修 futures + tc4 warning):stock 有 `_resubscribe_all`/`_failed_resubs`
+  對帳、index 有 self-heal 鏈,corr 的 `_on_reconnect` 只重跑回補**不重訂閱**
+  (corr_engine.py:108 註解自承)— corr 腿在重連掉訂下疑似同病,下次動 corr 時
+  比照 futures 接對帳。
 
 ## 2026-08-11(react-doctor /chore 快修批 review 留尾巴,全部既存非本批引入)
 
