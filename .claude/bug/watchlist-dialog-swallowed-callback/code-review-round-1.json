@@ -1,0 +1,73 @@
+{
+  "round": 1,
+  "lenses": ["concurrency-async-correctness", "whitelist-and-test-coverage"],
+  "model": "opus",
+  "findings": [
+    {
+      "id": "C-1/W-7",
+      "severity": "P1",
+      "claim": "make() 等 try 外同步段 throw 會讓 chainRef 永久停在 rejected,之後所有 commit 靜默跳過(Dialog 失去全部寫入能力)+ unhandled rejection",
+      "disposition": "accepted(收窄:claim 中『onDone throw 會逃出』不成立 — onDone 在 try 內;make() 毒化路徑屬實,watchlist-model 純函數目前不會拋,屬韌性缺口)",
+      "fix": "chain 改為 .then(全邏輯).catch(統一收斂 + setLocalError).finally(pending--),chain 保證回到 fulfilled"
+    },
+    {
+      "id": "C-2",
+      "severity": "P1",
+      "claim": "pendingRef 歸零早於 React re-render;空窗內下一個動作以 stale 閉包 wl 覆寫 baseRef → 本次要修的還原 bug 在更窄窗口復發",
+      "disposition": "accepted(時序推演成立;WS tick + long task 下窗口可拉長)",
+      "fix": "baseRef 同步移出事件路徑:useLayoutEffect([wl]) + pendingRef===0 守門(codebase 先例:useBreadth ref 同步)"
+    },
+    {
+      "id": "C-3/W-1",
+      "severity": "P1",
+      "claim": "佇列前一發失敗的錯誤訊號(save.error 與 localError)被下一發 mutateAsync / setLocalError(null) 洗掉,失敗文案一幀未渲染即消失;W-3 白名單在連續操作路徑失守",
+      "disposition": "accepted(非舊 code 的新回歸 — 舊 code 兩發並發同樣會蓋;但佇列化正是本修法的目標場景,失敗必須可見)",
+      "fix": "[auto-default: 失敗短路後續已排隊動作(generation counter)+ catch 內 setLocalError(錯誤碼)、清除點移到成功後 | reason: 短路讓 UI 停在與 server 一致的狀態、錯誤文案可見;另一案『僅持文案不短路』會靜默跳過中間一步、繼續套用後續動作,產生使用者未預期的複合狀態]"
+    },
+    {
+      "id": "W-2",
+      "severity": "P1",
+      "claim": "addStock 目標組已刪的退化分支零測試覆蓋",
+      "disposition": "refuted(建議的重現不可達:建議列按鈕 disabled={already || save.isPending}(F1 白名單),PUT 在途時點擊是 no-op;佇列 pending 但 isPending=false 的空窗只存在於 microtask 間,使用者點不到。該分支為縱深防禦,經 UI 無法觸發)"
+    },
+    {
+      "id": "W-4",
+      "severity": "P2",
+      "claim": "兩條新測試未鎖『第二發不得在第一發回應前上路』(序列化本身)",
+      "disposition": "accepted",
+      "fix": "第二次 click 後、放行前補 expect(putBodies).toHaveLength(1)"
+    },
+    {
+      "id": "W-5",
+      "severity": "P2",
+      "claim": "連點兩次同一刪除鈕(佇列去重)無 lock;深度比對改 identity 比對會退化成兩發 PUT + 兩次 onGroupDeleted 而全綠",
+      "disposition": "accepted(最貼近真實使用者路徑)",
+      "fix": "補 lock test + mutation 抽驗(dedup 改 identity → 紅 → 還原)"
+    },
+    {
+      "id": "W-6",
+      "severity": "P2",
+      "claim": "WatchlistSidebar collapsedRef 註解與 dropcollapsed.test 檔頭的理由已被本修法作廢(同 tick 連發從 Dialog 路徑不再發生)",
+      "disposition": "accepted(純註解同步,防未來重構誤導;collapsedRef 契約本身不破 — dropCollapsed 仍是非事件路徑)"
+    },
+    {
+      "id": "C-4/W-3",
+      "severity": "P2",
+      "claim": "BAD_GROUP eager 驗證用 render 閉包 wl、套用用 baseRef,佇列交錯時偽陰性(靜默零 PUT 無文案)/ 偽陽性",
+      "disposition": "next-time(post-fix 已無資料錯,只剩無回饋的罕見交錯;收法 = 驗證搬進 transform,超出最小修改)"
+    },
+    {
+      "id": "W-8",
+      "severity": "P2",
+      "claim": "unmount 後 onDone 仍執行(pre-fix per-call callbacks 不會)— 未言明行為變更,與 CapitalConfirmDialog『unmount 零 callback』lock 語意不一致",
+      "disposition": "next-time([auto-default: 採『不漏清』新語意 | reason: onGroupDeleted 是冪等的 localStorage 孤兒清理,unmount 後執行是想要的(不漏清 W-20);CapitalConfirmDialog 是真錢下單確認,兩者風險等級不同。lock test 記 next-time])"
+    },
+    {
+      "id": "cross",
+      "severity": "P2",
+      "claim": "Dialog 佇列未排空時側欄拖曳(獨立 observer)仍可用 stale 閉包覆寫 — 跨元件並發寫者",
+      "disposition": "next-time(既有 blast radius 外;modal 開著時側欄不可互動,窗口 = 關窗後佇列殘餘的 sub-second)"
+    }
+  ],
+  "p2_summary": "7 P2:2 修(W-4/W-5)、1 註解(W-6)、4 next-time(C-4/W-3、W-8、cross、交錯覆蓋其餘)"
+}
