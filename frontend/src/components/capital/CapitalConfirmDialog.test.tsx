@@ -139,6 +139,7 @@ describe("CapitalConfirmDialog", () => {
 describe("CapitalConfirmDialog(showModal 分支,手動裝 prototype stub)", () => {
   afterEach(() => {
     delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
+    delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close;
     vi.restoreAllMocks();
   });
 
@@ -160,5 +161,22 @@ describe("CapitalConfirmDialog(showModal 分支,手動裝 prototype stub)", () =
     expect(showModal).toHaveBeenCalledTimes(1);
     expect(focusSpy).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("dialog").hasAttribute("open")).toBe(true);
+  });
+
+  it("unmount 不觸發任何 callback(白名單:FuturesLadder 自動收窗零 callback 契約)", () => {
+    // close stub 模擬真瀏覽器語意(移除 open + 派發非冒泡 close 事件):若未來有人在
+    // cleanup 加 el.close(),close 事件會經 onClose → onCancel,本測試轉紅。
+    HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    });
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const { unmount } = render(
+      <CapitalConfirmDialog title="確認平倉" rows={[]} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    unmount();
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });
