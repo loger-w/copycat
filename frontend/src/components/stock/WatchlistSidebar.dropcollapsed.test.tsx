@@ -18,6 +18,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { WL_COLLAPSED_KEY } from "@/lib/constants";
 import type { Group } from "@/lib/watchlist-model";
 
 vi.mock("@/components/stock/WatchlistManagerDialog", () => ({
@@ -34,8 +35,6 @@ vi.mock("@/components/stock/WatchlistManagerDialog", () => ({
     </button>
   ),
 }));
-
-const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 
 const GROUPS: Group[] = [
   { name: "主力", codes: ["2330"] },
@@ -61,7 +60,7 @@ afterEach(() => {
 
 describe("WatchlistSidebar dropCollapsed 同批回呼(P1-1 lock)", () => {
   it("同一 tick 連刪兩組 → localStorage 兩組名皆不留", async () => {
-    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
+    window.localStorage.setItem(WL_COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -72,6 +71,6 @@ describe("WatchlistSidebar dropCollapsed 同批回呼(P1-1 lock)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "連刪兩組" }));
 
-    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([]);
+    expect(JSON.parse(window.localStorage.getItem(WL_COLLAPSED_KEY)!)).toEqual([]);
   });
 });

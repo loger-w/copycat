@@ -16,6 +16,7 @@
  *  期貨態 / 還原的行為契約仍由 `StockChart.test.tsx` 的 D10 / A6 兩節(真身)守住。 */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockChart } from "@/components/stock/StockChart";
@@ -73,13 +74,15 @@ afterEach(() => {
 /** 進出合約要在**同一個元件實例**上驗(重掛載 = 待還原偏好歸零 = 測不到還原);
  *  `wrap` 的 rerender 會把 QueryClientProvider 一起換掉,所以自己持有 client
  *  (逐字同 StockChart.test.tsx「現貨模式還原(A6)」節的 mount)。 */
-function mount() {
+function mount(strict = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const tree = (contract: { prod: string; ym: string } | null) => (
+  const inner = (contract: { prod: string; ym: string } | null) => (
     <QueryClientProvider client={client}>
       <StockChart accum={ACCUM} code="2330" contract={contract} />
     </QueryClientProvider>
   );
+  const tree = (contract: { prod: string; ym: string } | null) =>
+    strict ? <StrictMode>{inner(contract)}</StrictMode> : inner(contract);
   const view = render(tree(null));
   return { setContract: (c: typeof CONTRACT | null) => view.rerender(tree(c)) };
 }
@@ -99,6 +102,27 @@ describe("StockChart 回現貨的收斂時點(react-doctor P1)", () => {
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
 
     // 中間那一格:isFut 已 false、mode 還沒被 effect 追上 → 現貨態分時圖被 commit 一次
+    expect(renders.filter((v) => v === false)).toEqual([]);
+    expect(screen.queryByTestId("fake-intraday")).toBeNull();
+  });
+
+  // 🔒 lock(review F-7):收斂改成「render 期間調整 state」後,**StrictMode 是最敏感的
+  //  環境** —— 元件本體 double-invoke,收斂分支跟著跑兩次;分支若不是自收斂的(第二次
+  //  求值仍成立)就會無限迴圈成 "Too many re-renders" 直接崩掉,而 App 全站正是包在
+  //  StrictMode(main.tsx)底下。上一條跑的是非 StrictMode 樹,測不到這個。
+  it("StrictMode 下同一流程:一樣不掛 stkfut=false,且不觸發無限重繪", async () => {
+    const { setContract } = mount(true);
+    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+
+    setContract(CONTRACT);
+    await waitFor(() => expect(screen.getByTestId("fake-intraday")).toBeTruthy());
+    renders.length = 0;
+
+    setContract(null);
+    // 崩潰(Too many re-renders)會讓這個 waitFor 等不到 K 線圖 → 紅,不必另外斷言
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+
     expect(renders.filter((v) => v === false)).toEqual([]);
     expect(screen.queryByTestId("fake-intraday")).toBeNull();
   });
