@@ -31,4 +31,13 @@ description: 前端 vitest / RTL 測試慣例。寫 component 或 hook 測試前
   重掛,RTL 文字斷言全抓不到 — 記住列的 element reference,rerender 後斷言 `===` 恆等
   (位移時 React 以新 key 建新 node → 必紅)。樣板 `TickTape.test.tsx`(2026-08-11)。
   Trigger:改任何 list key 策略或修 index-as-key finding。
+- **jsdom 26 的 `HTMLDialogElement` 只有 `open` 反射,無 showModal/close/原生 Esc**(2026-08-11
+  CapitalConfirmDialog 實證):(1) `vi.spyOn(prototype, "showModal")` 會炸(spy 不存在的方法)—
+  要測 showModal 分支一律**手動裝 prototype stub**(`vi.fn(function(){ if (this.open) throw new
+  DOMException(...,"InvalidStateError"); this.setAttribute("open",""); })`,close 同款派發非冒泡
+  close 事件)+ **afterEach 手動 `delete` 拆**,不拆會讓同檔 fallback 分支測試語意漂移;
+  (2) fallback 分支(元件 feature-detect 後 setAttribute("open"))與 stub 分支拆兩個 describe;
+  (3) StrictMode 雙輪鎖 `!el.open` guard 時,focus 自檢 spy 釘 `HTMLButtonElement.prototype`
+  (不計 cleanup 對 body/opener 的還 focus),showModal 恰 1 次 + focus 恰 2 次皆不可放寬成
+  不等式。樣板 `CapitalConfirmDialog.test.tsx`。Trigger:測任何 `<dialog>` 元件。
 - **RTL `waitFor` 在 vitest 下偵測不到 fake timers**(`jestFakeTimersAreEnabled()` 查全域 `jest`,vitest 恆 false → 退回真 interval):`vi.useFakeTimers()` + `findBy*`/`waitFor` 組合會 timeout(lazy 元件連 mount 都等不到)。解法:輪詢行為用「hook/元件層 fake timers + 手動 advance」測;App 級整鏈改斷言 `refetchInterval` 求值結果(白盒但可紅),或只假造 `Date` 不假造 timer。用了 fake timers 的測試檔 `afterEach` 必補 `vi.useRealTimers()`(不還原會外溢到別檔)。樣板:`useBreadthRows.test.ts` / `App.test.tsx` R3 跳轉測試。Trigger:測任何 refetchInterval / 輪詢節奏。

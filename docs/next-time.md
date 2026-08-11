@@ -1,4 +1,14 @@
 
+## 2026-08-11(mod/capital-confirm-native-dialog 收尾留尾巴)
+
+- [ ] **確認窗開著時 Esc 不再解除階梯武裝**(刻意:窗內 Esc 以窗優先,stopPropagation
+  擋掉三處 window 層 Escape 監聽 FuturesLadder:243 / PriceLadder:310 / StkfutLadder:235)。
+  窗關後階梯仍武裝,靠第二次 Esc 或 idle 計時器解除;若 user 反映心智模型脫鉤,替代
+  設計 = 拿掉 stopPropagation、改三支階梯的 listener 自查 `document.querySelector(
+  "dialog[open]")` 再決定 disarm(動 4 檔,獨立輪)。
+- [ ] **CapitalConfirmDialog 新 caller 硬性契約**:onConfirm / onCancel 必須卸載元件
+  (closedRef 一次性 settled 旗標;JSDoc 已載明,無機械防護)。
+
 ## 2026-08-11(mod/react-doctor-p1 review 發現)
 
 - [ ] **WatchlistManagerDialog 連續操作吞 callback(pre-existing 真 bug,本批發現、刻意不修)**:
