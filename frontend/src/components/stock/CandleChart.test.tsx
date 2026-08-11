@@ -657,4 +657,33 @@ describe("CandleChart 拖曳既有行為(characterization)", () => {
     fireEvent.mouseMove(window, { clientX: 100 });
     expect(firstStamp(container)).toBe(after);
   });
+
+  // review TC-1:既有拖曳測試每次拖曳只發一個 mousemove,「絕對位移(以起拖窗口為基準)」
+  // 與「逐次累加」在單 move 下不可區分 —— 累加式 mutant 會全綠。連發兩個 move 才釘得住:
+  // 拖過左端點(clamp)再拖回,絕對位移不漂移;累加式會停在 clamp 後的位置。
+  it("拖曳為絕對位移:同一次拖曳連發 move,拖過左端點再拖回不漂移", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
+    const svg = container.querySelector("svg")!;
+    // 初始 start=200(300 根取末 100);slot = 1400/100 = 14、jsdom rect 寬 0 → scale=1
+    fireEvent.mouseDown(svg, { clientX: 100, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 4000 }); // Δ=-279 → clamp 到 start=0
+    expect(firstStamp(container)).toBe(MANY[0]!.t);
+    fireEvent.mouseMove(window, { clientX: 1500 }); // 絕對 Δ=-100 → start=100(累加式停在 0 附近)
+    fireEvent.mouseUp(window, { clientX: 1500 });
+    expect(firstStamp(container)).toBe(MANY[100]!.t);
+    // 第二次拖曳:移出再移回起點 → 完全復位(累加式會殘留第一個 move 的位移)
+    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 1400 });
+    fireEvent.mouseMove(window, { clientX: 700 });
+    fireEvent.mouseUp(window, { clientX: 700 });
+    expect(firstStamp(container)).toBe(MANY[100]!.t);
+  });
+
+  // review TC-2:wheel 必須走原生 passive:false listener 且 preventDefault(否則頁面跟著捲)。
+  // fireEvent 回傳 dispatchEvent 結果:preventDefault 有被呼叫 → false。
+  it("滾輪縮放 preventDefault(原生 passive:false listener,頁面不跟著捲)", () => {
+    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
+    const svg = container.querySelector("svg")!;
+    expect(fireEvent.wheel(svg, { deltaY: 100, clientX: 700, cancelable: true })).toBe(false);
+  });
 });
