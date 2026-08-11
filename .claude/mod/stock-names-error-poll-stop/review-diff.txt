@@ -1,0 +1,172 @@
+﻿diff --git a/docs/next-time.md b/docs/next-time.md
+index f5aa6565..63ebd112 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -972,12 +972,16 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
+   「唯一缺的復原路徑」措辭不成立(repro.md 同句要一併更正)。
+ - [ ] P2:重試成功後 HOT + leaf 雙訂閱(`_leaf_fed` 跨日每天複製)— 至少補
+   `_leaf_fed.discard(product)`(futures_engine.py:167)。
+-- [ ] P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
+-  error 態無 consumer 在讀,註解與現實不符。
++- [x] ~~P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
++  error 態無 consumer 在讀,註解與現實不符。~~ **2026-08-11 修畢
++  (mod/stock-names-error-poll-stop):拍板「停止」不是退避 — 連續失敗
++  20 輪(≈60s)即停,refocus 為復原後門;retry 註解改述現實(error 無 consumer)。**
+ - [ ] P2:test_futures_engine 兩條收斂不變式 mutant 存活(:405 改
+   `assert engine._resub_task is None` 照 corr 版;收斂後補 pending 空 + task done)。
+-- [ ] P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
+-  皆全綠)— 成功案 sleep 3.5s 斷言 fetch 次數不增。
++- [x] ~~P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
++  皆全綠)— 成功案 sleep 3.5s 斷言 fetch 次數不增。~~ **2026-08-11 修畢(同上輪):
++  白盒 literal 3000 鎖節奏 + 上限停止;成功案改 fake-timer 推進 10s 斷言不增
++  (決定性等價,免 wall-clock);雙 mutation 抽驗紅後還原綠。**
+ - [ ] P2(共用層,獨立 /mod):tc4 `_ensure_connected` 無鎖 check-then-act ×
+   `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
+   系統性放大。修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
+diff --git a/frontend/src/hooks/useStockNames.test.tsx b/frontend/src/hooks/useStockNames.test.tsx
+index 7ee8fc14..78b900c1 100644
+--- a/frontend/src/hooks/useStockNames.test.tsx
++++ b/frontend/src/hooks/useStockNames.test.tsx
+@@ -4,11 +4,16 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
+ import type { ReactNode } from "react";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+-import { useStockNames } from "@/hooks/useStockNames";
++import {
++  NAMES_MAX_ERROR_CYCLES,
++  namesRefetchInterval,
++  useStockNames,
++} from "@/hooks/useStockNames";
+ 
+ afterEach(() => {
+   cleanup();
+   vi.unstubAllGlobals();
++  vi.useRealTimers();
+ });
+ 
+ function wrap({ children }: { children: ReactNode }) {
+@@ -83,4 +88,72 @@ describe("useStockNames", () => {
+     await waitFor(() => expect(hook.result.current.isError).toBe(true), { timeout: 5000 });
+     expect((hook.result.current.error as Error).message).toBe("HTTP_500");
+   });
++
++  // 🔴 錯誤終態輪詢收斂(SC-1,拍板:停止不是退避):server 永久不可用(404 / 舊 build)
++  // 時舊版每 3s 無限輪詢;連續失敗達上限後應停(refocus 仍是停止後的復原後門)
++  it("連續失敗達上限 → refetchInterval 求值為 false(停止)", () => {
++    expect(
++      namesRefetchInterval({ state: { data: undefined, errorUpdateCount: NAMES_MAX_ERROR_CYCLES } }),
++    ).toBe(false);
++    expect(
++      namesRefetchInterval({
++        state: { data: undefined, errorUpdateCount: NAMES_MAX_ERROR_CYCLES + 5 },
++      }),
++    ).toBe(false);
++  });
++
++  // 鎖輪詢節奏(SC-2):literal 3000 不引用常數 —— interval 被改(如 1ms)必須紅
++  it("未拿到資料且未達上限 → 每 3000ms 輪詢(literal 鎖節奏)", () => {
++    expect(namesRefetchInterval({ state: { data: undefined, errorUpdateCount: 0 } })).toBe(3000);
++    expect(
++      namesRefetchInterval({
++        state: { data: undefined, errorUpdateCount: NAMES_MAX_ERROR_CYCLES - 1 },
++      }),
++    ).toBe(3000);
++  });
++
++  // 鎖停止條件(SC-2,白名單 W-2):拿到資料(含空表)即停,穩態零輪詢
++  it("拿到資料(含空表)→ refetchInterval 求值為 false", () => {
++    expect(namesRefetchInterval({ state: { data: [], errorUpdateCount: 0 } })).toBe(false);
++    expect(
++      namesRefetchInterval({
++        state: {
++          data: [{ code: "2330", name: "台積電" }],
++          errorUpdateCount: NAMES_MAX_ERROR_CYCLES,
++        },
++      }),
++    ).toBe(false);
++  });
++
++  // next-time 2026-08-10 原案「成功案 sleep 3.5s 斷言 fetch 次數不增」的 fake-timer 等價版
++  // (決定性、免 wall-clock;樣板 useBreadthRows.test.ts)
++  it("成功後長時間推進,fetch 次數不增(停止真的生效)", async () => {
++    vi.useFakeTimers();
++    const fetchMock = vi.fn(
++      async () =>
++        new Response(JSON.stringify({ names: [{ code: "2330", name: "台積電" }], count: 1 })),
++    );
++    vi.stubGlobal("fetch", fetchMock);
++    renderHook(() => useStockNames(), { wrapper: wrap });
++    await vi.advanceTimersByTimeAsync(0);
++    expect(fetchMock.mock.calls.length).toBe(1);
++    await vi.advanceTimersByTimeAsync(10_000); // 超過 3 個輪詢週期
++    expect(fetchMock.mock.calls.length).toBe(1);
++  });
++
++  it("永久失敗:達上限後 fetch 次數收斂,不再無限輪詢", async () => {
++    vi.useFakeTimers();
++    const fetchMock = vi.fn(async () => new Response("proxy error", { status: 500 }));
++    vi.stubGlobal("fetch", fetchMock);
++    renderHook(() => useStockNames(), { wrapper: wrap });
++    // 每輪 ≤ 4s(3s interval + retry:1 的 1s backoff),推進到上限輪數用盡為止
++    for (let i = 0; i < NAMES_MAX_ERROR_CYCLES + 5; i++) {
++      await vi.advanceTimersByTimeAsync(4000);
++    }
++    // 每輪恰兩次嘗試(retry: 1)→ 上限後總次數封頂
++    const settled = fetchMock.mock.calls.length;
++    expect(settled).toBe(2 * NAMES_MAX_ERROR_CYCLES);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(fetchMock.mock.calls.length).toBe(settled);
++  });
+ });
+diff --git a/frontend/src/hooks/useStockNames.ts b/frontend/src/hooks/useStockNames.ts
+index 252299b2..9571f6e9 100644
+--- a/frontend/src/hooks/useStockNames.ts
++++ b/frontend/src/hooks/useStockNames.ts
+@@ -21,10 +21,30 @@ async function fetchStockNames(): Promise<StockName[]> {
+ 
+ /** 尚未拿到名稱表時的自動重抓間隔。
+  *
+- *  server 啟動期 lifespan 阻塞(TXO 全鏈回補,常態數十秒~分鐘級)時 uvicorn 還沒 bind
+- *  socket,首載必然連線被拒 → `retry: 1` 兩次嘗試 1-2 秒內用完就落入 error 終態,提示列
+- *  與側欄股名要等 window refocus 才復原。拿到資料(哪怕空表)即停,穩態零成本。 */
+-const NAMES_RETRY_INTERVAL_MS = 3000;
++ *  server 未起(先開前端後起 server)或啟動窗內,首載連線被拒 → `retry: 1` 兩次嘗試
++ *  1-2 秒內用完就落入 error 終態,提示列與側欄股名要等 window refocus 才復原 —
++ *  所以 error 終態下仍每 3 秒重抓。拿到資料(哪怕空表)即停,穩態零成本。 */
++export const NAMES_RETRY_INTERVAL_MS = 3000;
++
++/** 連續失敗輪數上限(每輪 = 一次 fetch cycle 含 retry:1 共兩次嘗試)。
++ *
++ *  server 永久不可用(未起 / 404 / 舊 build)時不無限輪詢,連續失敗達此上限即停
++ *  (拍板:停止不是退避)。上限 ≈ 首輪 1-2s + 19 輪 × 3s ≈ 一分鐘涵蓋窗;停止後
++ *  window refocus(無資料的 query 恆 stale)仍會再抓一次,是停止後的復原後門。 */
++export const NAMES_MAX_ERROR_CYCLES = 20;
++
++/** refetchInterval 求值。具名 export 供白盒測試鎖輪詢節奏與停止條件
++ *  (skill `frontend-testing`:輪詢行為斷言 refetchInterval 求值結果)。
++ *
++ *  `errorUpdateCount` 每輪失敗 cycle +1 且不被單輪 retryer 覆寫(`fetchFailureCount`
++ *  會,不可用);success 後不重置無妨 — data 一到即停且 gcTime Infinity 永存。 */
++export function namesRefetchInterval(query: {
++  state: { data: StockName[] | undefined; errorUpdateCount: number };
++}): number | false {
++  if (query.state.data !== undefined) return false;
++  if (query.state.errorUpdateCount >= NAMES_MAX_ERROR_CYCLES) return false;
++  return NAMES_RETRY_INTERVAL_MS;
++}
+ 
+ export function useStockNames() {
+   return useQuery({
+@@ -32,9 +52,9 @@ export function useStockNames() {
+     queryFn: fetchStockNames,
+     staleTime: Infinity,
+     gcTime: Infinity,
+-    // 保留 `retry: 1`:error 態要能浮現(404 / 舊 build 的錯誤碼契約靠它)
++    // `retry: 1` 只是把單輪 fetch cycle 壓在兩次嘗試;error 態目前沒有任何 consumer
++    // 在讀(兩個 caller 都只讀 data),錯誤碼僅供 devtools / query cache 查案
+     retry: 1,
+-    refetchInterval: (query) =>
+-      query.state.data === undefined ? NAMES_RETRY_INTERVAL_MS : false,
++    refetchInterval: namesRefetchInterval,
+   });
+ }
