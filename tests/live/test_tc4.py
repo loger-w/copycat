@@ -573,11 +573,17 @@ class TestReconnectResubWarning:
                 src._session = "sess-2"
 
         monkeypatch.setattr(src, "_ensure_connected", _reinstall)
+        fired: list[int] = []
+        src.on_reconnect = lambda: fired.append(1)
         with caplog.at_level(logging.WARNING):
             src._check_stale()
         assert "TC.F.TWF.MXF.HOT" in src._subscribed  # 成功品照舊
         assert "TC.F.TWF.TXF.HOT" not in src._subscribed  # 現行語意:失敗品出集合
         assert "TC4 reconnect resubscribe TC.F.TWF.TXF.HOT failed" in caplog.text
+        # T-1:engine 對帳鏈的樞紐 —— 部分重掛失敗仍算重連成功、仍必須通知
+        # on_reconnect(這一下沒發生,FuturesEngine 的對帳整條不可達)
+        assert fired == [1]
+        assert src.reconnects == 1
 
 
 class TestSpotSymbol:
