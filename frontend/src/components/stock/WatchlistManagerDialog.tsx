@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { errText, useSaveWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
@@ -86,34 +86,52 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
    *
    *  所以動作改傳 `(base) => next` transform,排進 promise chain:輪到時以「最新已知
    *  內容」(上一發 PUT 回應)重算;`mutateAsync` 的 per-call promise 不受後續呼叫影響,
-   *  `onDone` 逐發執行。`baseRef` 只在無在途動作時從 `wl` 同步(`pendingRef` 計數守門)——
-   *  佇列排空後 cache 已含最後回應,兩者收斂。 */
+   *  `onDone` 逐發執行(dialog 常駐掛載;佇列殘餘的 onDone 在關窗後執行也無害 ——
+   *  onGroupDeleted 是冪等的折疊孤兒清理,不漏清正是 W-20 要的)。 */
   const baseRef = useRef(wl);
   const pendingRef = useRef(0);
   // lazy init(null 起始):useRef(Promise.resolve()) 會在每次 render 白白配置一顆 promise
   const chainRef = useRef<Promise<void> | null>(null);
+  /** 失敗世代:佇列中某發失敗 → 世代 +1,其後**已排隊**的動作全部作廢(它們排隊時
+   *  假設前面會成功;靜默跳過失敗那步繼續套用會產生使用者未預期的複合狀態)。
+   *  失敗後的**新**動作是新意圖,拿到新世代照常執行。 */
+  const genRef = useRef(0);
+
+  /** `baseRef` 只在 React 真的 render 出新 `wl` 時同步(`pendingRef` 守門),**不在事件
+   *  路徑同步**(review C-2):`pendingRef` 歸零早於 cache 更新引發的 re-render,空窗內
+   *  的下一個動作若在 commit 內用 render 閉包的 `wl` 覆寫基底,會把剛拿到的 PUT 回應
+   *  倒回舊值 —— 本次要修的「還原」bug 在更窄的窗口復發。useLayoutEffect ref 同步是
+   *  專案既有 pattern(useBreadth / useIndexStream 同款)。 */
+  useLayoutEffect(() => {
+    if (pendingRef.current === 0) baseRef.current = wl;
+  }, [wl]);
 
   /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
    *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
   function commit(make: (base: Watchlist) => Watchlist, onDone?: () => void): void {
-    if (pendingRef.current === 0) baseRef.current = wl;
+    const gen = genRef.current;
     pendingRef.current += 1;
     chainRef.current = (chainRef.current ?? Promise.resolve())
       .then(async () => {
+        if (gen !== genRef.current) return; // 排隊期間前面有失敗 → 本動作作廢
         const base = baseRef.current;
         const next = make(base);
         // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
         // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
         // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
         if (isSameWatchlist(next, base)) return;
-        setLocalError(null);
-        try {
-          baseRef.current = await save.mutateAsync(next);
-          onDone?.();
-        } catch {
-          // 失敗已由 save.error 走 errText 呈現(W-3);基底不推進,
-          // 佇列後續動作以未變基底重算,不會疊在失敗結果上。
-        }
+        baseRef.current = await save.mutateAsync(next);
+        setLocalError(null); // 清除點在成功後,不在送出前 —— 送出前清會洗掉前一發的失敗文案
+        onDone?.();
+      })
+      .catch((e: unknown) => {
+        // 唯一收斂點,chain 保證回到 fulfilled(review C-1:任何一步 throw 若留在
+        // rejected,之後所有 commit 的 .then 一律被跳過 = Dialog 靜默失去全部寫入能力)。
+        // 失敗文案落 localError 而非依賴 save.error —— 佇列下一發 mutateAsync 會立刻
+        // 重設 observer 的 error,文案一幀未渲染就被洗掉(review C-3/W-1)。
+        // 基底不推進;已排隊的後續動作由世代檢查作廢。
+        genRef.current += 1;
+        setLocalError(e instanceof Error ? e.message : "SAVE_FAILED");
       })
       .finally(() => {
         pendingRef.current -= 1;
