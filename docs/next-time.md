@@ -975,7 +975,9 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 - [x] ~~P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
   error 態無 consumer 在讀,註解與現實不符。~~ **2026-08-11 修畢
   (mod/stock-names-error-poll-stop):拍板「停止」不是退避 — 連續失敗
-  20 輪(≈60s)即停,refocus 為復原後門;retry 註解改述現實(error 無 consumer)。**
+  20 輪(≈77s;每輪 = 1s backoff + 3s interval)即停,復原後門 = 分頁
+  visibilitychange 或重整(v5 focusManager 不聽純 window focus,review 抓到並鎖測試);
+  retry 註解改述現實(error 無 consumer)。**
 - [ ] P2:test_futures_engine 兩條收斂不變式 mutant 存活(:405 改
   `assert engine._resub_task is None` 照 corr 版;收斂後補 pending 空 + task done)。
 - [x] ~~P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
