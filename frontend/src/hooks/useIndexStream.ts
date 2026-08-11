@@ -6,7 +6,7 @@
  * reconnect → refetch /api/index/state 全量。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type WsStatus = "connecting" | "open" | "closed";
 
@@ -68,9 +68,15 @@ export function useIndexStream(): IndexStreamState {
   const twseRef = useRef<IndexSeries | null>(null);
   const otcRef = useRef<IndexSeries | null>(null);
   const tradeDateRef = useRef<string | null>(null);
-  twseRef.current = twse;
-  otcRef.current = otc;
-  tradeDateRef.current = tradeDate;
+
+  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
+  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
+  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+  useLayoutEffect(() => {
+    twseRef.current = twse;
+    otcRef.current = otc;
+    tradeDateRef.current = tradeDate;
+  }, [twse, otc, tradeDate]);
 
   const refetch = async (): Promise<void> => {
     try {

@@ -8,7 +8,7 @@
  * 期間抵達的增量格(見 `mergeSnapshot`)。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { BreadthPoint, BreadthState } from "@/types";
 
@@ -58,7 +58,13 @@ function mergeSnapshot(prev: BreadthState | null, next: BreadthState): BreadthSt
 export function useBreadth(): BreadthState | null {
   const [state, setState] = useState<BreadthState | null>(null);
   const stateRef = useRef<BreadthState | null>(null);
-  stateRef.current = state;
+
+  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這顆 ref 取當下值。同步寫在
+  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
+  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+  useLayoutEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const refetch = async (): Promise<void> => {
     try {
