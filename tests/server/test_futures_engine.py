@@ -356,6 +356,44 @@ class _FlakySource(FakeSource):
         super().subscribe_symbol(product)
 
 
+class _BadRetrySource(FakeSource):
+    """retry 途中拋非 ConnectionError:首輪 ConnectionError、第 2 次 ValueError、第 3 次成功。
+
+    照抄 test_corr_engine 的 _BadRetrySource 形狀(C-3 的 futures 版)。
+    """
+
+    def __init__(self, product: str) -> None:
+        super().__init__()
+        self._product = product
+        self.attempts: list[str] = []
+
+    def subscribe_symbol(self, product: str) -> None:
+        self.attempts.append(product)
+        if product != self._product:
+            super().subscribe_symbol(product)
+            return
+        n = self.attempts.count(product)
+        if n == 1:
+            raise ConnectionError(f"SUBQUOTE fail {product}")
+        if n == 2:
+            raise ValueError("wrapper 內部型別錯")
+        super().subscribe_symbol(product)
+
+
+class _AlwaysBadRetrySource(FakeSource):
+    """首輪 ConnectionError 全品進 pending,之後每次 retry 一律拋 ValueError。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts: list[str] = []
+
+    def subscribe_symbol(self, product: str) -> None:
+        self.attempts.append(product)
+        if self.attempts.count(product) == 1:
+            raise ConnectionError(f"SUBQUOTE fail {product}")
+        raise ValueError("wrapper 內部型別錯")
+
+
 async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -416,6 +454,36 @@ class TestPendingResubscribe:
         assert pending == []
         await asyncio.sleep(0.05)  # 5 個間隔
         assert len(src.attempts) <= n + 1  # 至多一個 in-flight thread,不再新排
+
+    async def test_retry_loop_survives_non_connection_error(self) -> None:
+        """P1-1:非 ConnectionError 例外(壞電文/型別錯)不得殺掉重試路徑。
+
+        迴圈死掉 = 復原路徑本身靜默失效,而 close() 的收尾又把 task 例外吞掉 ——
+        兩層靜默疊起來,該品整天零推播且 log 只有首輪一行 warning(復刻原 bug 的
+        零訊號終態)。corr 版:test_corr_engine test_retry_loop_survives_non_connection_error。
+        """
+        src = _BadRetrySource("TXF")
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        try:
+            await _wait_until(lambda: "TXF" in src.subscribed)
+            assert src.attempts.count("TXF") == 3  # 連線類 + 非連線類 + 成功
+        finally:
+            await engine.close()
+
+    async def test_close_after_bad_retry_exception_still_closes_source(self) -> None:
+        """P1-1 後半:retry 拋過非 ConnectionError 之後,close() 仍必須關到 source。
+
+        現行 close() 只 suppress CancelledError → task 已死於 ValueError 時
+        await resub 重拋 → leaf gather 與 source.close() 全跳過 → TC4 KeepAlive
+        執行緒洩漏 process 不退(回溯審 repro 實測)。
+        """
+        src = _AlwaysBadRetrySource()
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await _wait_until(lambda: len(src.attempts) > 3)  # 至少一次 retry 已拋 ValueError
+        await engine.close()  # 不得重拋 ValueError
+        assert src.closed  # source.close() 必達(KeepAlive 不洩漏)
 
 
 class TestFetchDay1kPassthrough:
