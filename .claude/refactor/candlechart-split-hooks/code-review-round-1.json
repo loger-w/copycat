@@ -1,0 +1,38 @@
+{
+  "round": 1,
+  "stage": "closeout (review-protocol C; /refactor 無自評輪,自 round-1 起)",
+  "diff": "review-diff.txt (origin/master..HEAD, 353 行)",
+  "lenses": [
+    {
+      "lens": "behavior-equivalence",
+      "model": "opus",
+      "findings": [],
+      "note": "白名單 7 條逐條查證無破口:closure 同步性 / clearHover identity / render-phase setState 搬遷(同 fiber 重跑語意)/ memo identity 鏈 / wheel effect 掛卸時機(shown.length===0 ⟺ total===0)/ StrictMode / lazy initializer 皆等價。"
+    },
+    {
+      "lens": "test-contract",
+      "model": "opus",
+      "findings": [
+        {
+          "id": "TC-1",
+          "severity": "P1",
+          "file": "frontend/src/hooks/useCandleViewport.ts",
+          "claim": "白名單第 2 條「絕對位移 / 端點 clamp 不漂移」零測試覆蓋 — 既有拖曳測試每次拖曳只發一個 mousemove,累加式 mutant 全綠。",
+          "disposition": "accepted",
+          "resolution": "補 characterization:同一次拖曳連發兩個 move(拖過左端點 clamp 再拖回 → start 精確復位;第二次拖曳移出移回 → 完全復位)。mutation-verified(setViewport((v)=>panBy(v,...)) 累加式 mutant 恰紅此條)。commit 03847837。"
+        },
+        {
+          "id": "TC-2",
+          "severity": "P2",
+          "file": "frontend/src/hooks/useCandleViewport.ts",
+          "claim": "白名單第 6 條 wheel preventDefault 零區辨;refactor-plan「jsdom 不可觀察」前提不準 — fireEvent 回傳值即 dispatchEvent 結果。",
+          "disposition": "accepted",
+          "resolution": "補一行斷言 fireEvent.wheel(..., cancelable:true) === false。實跑證實 jsdom 下成立(移除 preventDefault 的 mutant 恰紅此條)。commit 03847837。"
+        }
+      ],
+      "whitelist_check": "7/7 覆蓋或有明確理由(見 finder 回傳;第 2/6 條缺口即 TC-1/TC-2,已補)"
+    }
+  ],
+  "p2_summary": { "count": 1, "themes": ["TC-2 wheel preventDefault 覆蓋(已修,未遺留)"] },
+  "exit": "P0 無 / P1 1 條已修 / P2 1 條已修;fix 後全量 gate 重跑(見 verification.md)"
+}

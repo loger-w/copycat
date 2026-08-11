@@ -1,0 +1,353 @@
+﻿diff --git a/frontend/src/components/stock/CandleChart.test.tsx b/frontend/src/components/stock/CandleChart.test.tsx
+index 7337b5c1..0361cbd8 100644
+--- a/frontend/src/components/stock/CandleChart.test.tsx
++++ b/frontend/src/components/stock/CandleChart.test.tsx
+@@ -612,3 +612,49 @@ describe("CandleChart 內外盤量副圖(futures-allday SC-8)", () => {
+     expect(count(container, "vol-bar")).toBe(0);
+   });
+ });
++
++// 🟢 characterization(refactor/candlechart-split-hooks 前置):拖曳事件層的既有行為上鎖。
++// 這些路徑即將抽進 useCandleViewport / useCandleHover,先拍下當前行為 —— 皆為綠上車,
++// 已各以 mutation(改壞 → 紅 → 還原)抽驗非 vacuous。
++describe("CandleChart 拖曳既有行為(characterization)", () => {
++  const MANY = Array.from({ length: 300 }, (_, i) =>
++    bar(
++      `2026-07-28 ${String(9 + Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}`,
++      100_000 + i, 100_100 + i, 99_900 + i, 100_000 + i,
++    ),
++  );
++  const firstStamp = (c: HTMLElement) =>
++    c.querySelector("[data-testid='candle-figure']")!.getAttribute("data-first");
++
++  it("拖曳中清除 hover 十字線(拖曳不更新十字線,避免抖動)", () => {
++    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
++    const svg = container.querySelector("svg")!;
++    fireEvent.mouseMove(svg, { clientX: 700, clientY: 200 });
++    expect(container.querySelector("[data-testid='crosshair-h']")).toBeTruthy();
++    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
++    fireEvent.mouseMove(window, { clientX: 720 });
++    expect(container.querySelector("[data-testid='crosshair-h']")).toBeNull();
++    fireEvent.mouseUp(window, { clientX: 720 });
++  });
++
++  it("非左鍵 mousedown 不啟動平移", () => {
++    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
++    const svg = container.querySelector("svg")!;
++    const before = firstStamp(container);
++    fireEvent.mouseDown(svg, { clientX: 700, button: 2 });
++    fireEvent.mouseMove(window, { clientX: 1300 });
++    fireEvent.mouseUp(window, { clientX: 1300 });
++    expect(firstStamp(container)).toBe(before);
++  });
++
++  it("mouseup 後窗口不再跟隨 mousemove(window listener 已卸)", () => {
++    const { container } = render(<CandleChart bars={MANY} initBars={100} />);
++    const svg = container.querySelector("svg")!;
++    fireEvent.mouseDown(svg, { clientX: 700, button: 0 });
++    fireEvent.mouseMove(window, { clientX: 1100 });
++    fireEvent.mouseUp(window, { clientX: 1100 });
++    const after = firstStamp(container);
++    fireEvent.mouseMove(window, { clientX: 100 });
++    expect(firstStamp(container)).toBe(after);
++  });
++});
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index 47091df7..08a2b20b 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -1,4 +1,4 @@
+-import { memo, useEffect, useMemo, useRef, useState } from "react";
++import { memo, useMemo, useRef } from "react";
+ 
+ import { bandSeries, bollinger, type Band } from "@/lib/bollinger";
+ import {
+@@ -9,14 +9,9 @@ import {
+   type Bar,
+   type CandleGeometry,
+ } from "@/lib/candle";
+-import {
+-  initialViewport,
+-  onTotalChange,
+-  panBy,
+-  zoomAt,
+-  type Viewport,
+-} from "@/lib/candle-viewport";
+-import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
++import { clampTagX, clampTagY, overlaps } from "@/lib/chart-crosshair";
++import { useCandleHover } from "@/hooks/useCandleHover";
++import { useCandleViewport } from "@/hooks/useCandleViewport";
+ import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
+ import { fmt, fmtPct } from "@/lib/format";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+@@ -31,8 +26,6 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
+  *  再加上兩個 figure 的框外 chrome 逐項對稱(頂列 h-[1.375rem]+mb-1、底列 mt-1+h-4),
+  *  切換模式時圖表區塊高度才不會跳(SC-6.7)。殘差 0.5px @ 容器寬 1400。 */
+ const DIMS = { width: 1400, height: 578 };
+-/** 滾輪每一格的縮放倍率 */
+-const ZOOM_STEP = 1.15;
+ /** 軸標籤尺寸;time tag 的 y = height − boxH,底邊恰貼 viewBox 底不被裁 */
+ const PRICE_TAG = { w: 56, h: 16 };
+ const TIME_TAG = { w: 48, h: 14 };
+@@ -462,24 +455,19 @@ export function CandleChart({
+ }: Props) {
+   const dimW = DIMS.width;
+   const dimH = height ?? DIMS.height;
+-  // hover 存的是 **viewBox 座標**不是 bar index:index 是對可視窗口 shown 的,
+-  // 一旦滾輪縮放或資料延伸讓 viewport.start 改變,同一個索引就指到別根 bar —— 十字線與
+-  // 資訊列會一起指錯,而且要等下次滑鼠移動才修正(實測游標在 x=700、十字線飄到 807)。
+-  // 存座標則每次 render 都用當下的 g 重新反查,錨點守恆的縮放天然維持「指著同一根」。
+-  // y 同時是水平線位置:水平線是「自由量尺」(跟滑鼠),不鎖收盤價 —— 盤中最常做的事是
+-  // 量距離(現價到某價位差幾%),鎖收盤價的水平線與蠟燭重合、資訊冗餘。
+-  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
+-  const [viewport, setViewport] = useState<Viewport>(() => initialViewport(bars.length, initBars));
+-  const [prevTotal, setPrevTotal] = useState(bars.length);
+   const svgRef = useRef<SVGSVGElement | null>(null);
+-
+-  // 序列延伸(分 K 每 60s refetch 追加新 bar)時調整窗口。用 render 期間調整 state 的
+-  // 官方 pattern,不用 effect —— 專案有 react-you-might-not-need-an-effect lint。
+-  // ⚠ 只處理「同一 code+mode 的延伸」;換股/換模式由 StockChart 給的 key 強制重掛。
+-  if (prevTotal !== bars.length) {
+-    setPrevTotal(bars.length);
+-    setViewport((v) => onTotalChange(v, prevTotal, bars.length));
+-  }
++  // hover 座標語意與 bail-out 見 useCandleHover(存 viewBox 座標非 index,錨點守恆)
++  const { hover, onMove, clearHover } = useCandleHover(dimW, dimH);
++  // 縮放 / 平移 / 序列延伸的窗口語意見 useCandleViewport(render 期間調整、wheel
++  // passive:false、拖曳絕對位移);拖曳每步清 hover = 兩 hook 唯一接點
++  const { viewport, onDragStart } = useCandleViewport({
++    total: bars.length,
++    initBars,
++    svgRef,
++    dimW,
++    dimH,
++    onDragMove: clearHover,
++  });
+ 
+   // 布林上下軌**由幾何 memo 一併回傳**:同一組值原本算四次(兩次餵 y 域、兩次畫線),
+   // 而「餵 y 域的那份」與「畫出來的那份」一旦不同源就是靜默錯位(L-2)。
+@@ -518,67 +506,6 @@ export function CandleChart({
+     [showBb, bbLower, g],
+   );
+ 
+-  const total = bars.length;
+-
+-  // 滾輪縮放。**必須掛原生 listener 且 passive: false** —— React 的 onWheel 綁在 root
+-  // 且為 passive,preventDefault() 無效,頁面會跟著一起捲。
+-  useEffect(() => {
+-    const el = svgRef.current;
+-    if (el === null) return;
+-    const onWheel = (e: WheelEvent): void => {
+-      e.preventDefault();
+-      const rect = el.getBoundingClientRect();
+-      const { x } = toSvgPoint(e, rect, { width: dimW, height: dimH });
+-      const ratio = dimW > 0 ? x / dimW : 0.5;
+-      const factor = e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+-      setViewport((v) => zoomAt(v, total, factor, ratio));
+-    };
+-    el.addEventListener("wheel", onWheel, { passive: false });
+-    return () => el.removeEventListener("wheel", onWheel);
+-    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
+-    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
+-    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
+-    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
+-  }, [total, dimW, dimH]);
+-
+-  function onMove(e: React.MouseEvent<SVGSVGElement>): void {
+-    const rect = e.currentTarget.getBoundingClientRect();
+-    const { x, y } = toSvgPoint(e, rect, { width: dimW, height: dimH });
+-    const rx = Math.round(x);
+-    const ry = Math.round(y);
+-    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
+-    setHover((p) => (p !== null && p.x === rx && p.y === ry ? p : { x: rx, y: ry }));
+-  }
+-
+-  /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
+-   *  維持 mouse 事件模型 —— 專案慣例是觸控靠 tap 的 synthetic mousemove,改 pointer 會破。 */
+-  function onDragStart(e: React.MouseEvent<SVGSVGElement>): void {
+-    if (e.button !== 0) return;
+-    const el = svgRef.current;
+-    if (el === null) return;
+-    const rect = el.getBoundingClientRect();
+-    const scale = rect.width > 0 ? dimW / rect.width : 1;
+-    const startX = e.clientX;
+-    // 起始窗口直接取 closure 的 viewport —— 這個 handler 來自最近一次 render,值即為當下。
+-    // 不要用 `setViewport(v => { startVp = v; return v; })` 的 side effect 去讀:React 不保證
+-    // updater 同步執行(只是常常如此),讀到 null 就得 fallback,等於多一條沒必要的路徑。
+-    const startVp = viewport;
+-    const slot = dimW / Math.max(1, startVp.count);
+-    const move = (ev: MouseEvent): void => {
+-      // 往右拖 = 看更早的資料 → start 往左。以「拖曳起點」為基準算絕對位移,
+-      // 不是逐次累加 —— 累加會因為 clamp 而在端點附近漂移。
+-      const deltaBars = -Math.round(((ev.clientX - startX) * scale) / slot);
+-      setViewport(panBy(startVp, total, deltaBars));
+-      setHover(null); // 拖曳中不更新十字線,避免抖動
+-    };
+-    const up = (): void => {
+-      window.removeEventListener("mousemove", move);
+-      window.removeEventListener("mouseup", up);
+-    };
+-    window.addEventListener("mousemove", move);
+-    window.addEventListener("mouseup", up);
+-  }
+-
+   const labelStep = Math.max(1, Math.ceil(Math.max(1, shown.length) / 6));
+   // 每次 render 以當下的 g 反查索引 —— viewport 一變就自動重新對位
+   const hoverIdx = hover !== null ? g.indexOf(hover.x) : null;
+@@ -655,7 +582,7 @@ export function CandleChart({
+           role="img"
+           aria-label="K 線圖"
+           onMouseMove={onMove}
+-          onMouseLeave={() => setHover(null)}
++          onMouseLeave={clearHover}
+           onMouseDown={onDragStart}
+         >
+           <ChartStatic
+diff --git a/frontend/src/hooks/useCandleHover.ts b/frontend/src/hooks/useCandleHover.ts
+new file mode 100644
+index 00000000..de2bb87a
+--- /dev/null
++++ b/frontend/src/hooks/useCandleHover.ts
+@@ -0,0 +1,34 @@
++import { useState } from "react";
++
++import { toSvgPoint } from "@/lib/chart-crosshair";
++
++/** K 線圖 hover 十字線的事件層(自 CandleChart 抽出,行為不變)。
++ *
++ *  hover 存的是 **viewBox 座標**不是 bar index:index 是對可視窗口 shown 的,
++ *  一旦滾輪縮放或資料延伸讓 viewport.start 改變,同一個索引就指到別根 bar —— 十字線與
++ *  資訊列會一起指錯,而且要等下次滑鼠移動才修正(實測游標在 x=700、十字線飄到 807)。
++ *  存座標則每次 render 都用當下的 g 重新反查,錨點守恆的縮放天然維持「指著同一根」。
++ *  y 同時是水平線位置:水平線是「自由量尺」(跟滑鼠),不鎖收盤價 —— 盤中最常做的事是
++ *  量距離(現價到某價位差幾%),鎖收盤價的水平線與蠟燭重合、資訊冗餘。 */
++export function useCandleHover(
++  dimW: number,
++  dimH: number,
++): {
++  hover: { x: number; y: number } | null;
++  onMove: (e: React.MouseEvent<SVGSVGElement>) => void;
++  /** mouseleave 與拖曳平移中呼叫:拖曳中不更新十字線,避免抖動 */
++  clearHover: () => void;
++} {
++  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
++
++  function onMove(e: React.MouseEvent<SVGSVGElement>): void {
++    const rect = e.currentTarget.getBoundingClientRect();
++    const { x, y } = toSvgPoint(e, rect, { width: dimW, height: dimH });
++    const rx = Math.round(x);
++    const ry = Math.round(y);
++    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
++    setHover((p) => (p !== null && p.x === rx && p.y === ry ? p : { x: rx, y: ry }));
++  }
++
++  return { hover, onMove, clearHover: () => setHover(null) };
++}
+diff --git a/frontend/src/hooks/useCandleViewport.ts b/frontend/src/hooks/useCandleViewport.ts
+new file mode 100644
+index 00000000..4805743d
+--- /dev/null
++++ b/frontend/src/hooks/useCandleViewport.ts
+@@ -0,0 +1,102 @@
++import { useEffect, useState } from "react";
++
++import {
++  initialViewport,
++  onTotalChange,
++  panBy,
++  zoomAt,
++  type Viewport,
++} from "@/lib/candle-viewport";
++import { toSvgPoint } from "@/lib/chart-crosshair";
++
++/** 滾輪每一格的縮放倍率 */
++const ZOOM_STEP = 1.15;
++
++/** K 線圖可視窗口的狀態與事件層(自 CandleChart 抽出,行為不變):
++ *  viewport state + 序列延伸調整 + 滾輪縮放 + 拖曳平移。 */
++export function useCandleViewport({
++  total,
++  initBars,
++  svgRef,
++  dimW,
++  dimH,
++  onDragMove,
++}: {
++  /** 完整序列長度(bars.length) */
++  total: number;
++  /** 初始可視根數(日 K 120 / 分 K 240) */
++  initBars: number;
++  /** 圖面 svg;wheel 原生 listener 與拖曳座標換算都掛它 */
++  svgRef: React.RefObject<SVGSVGElement | null>;
++  dimW: number;
++  dimH: number;
++  /** 拖曳平移每步回呼(CandleChart 傳 clearHover:拖曳中不更新十字線,避免抖動) */
++  onDragMove: () => void;
++}): {
++  viewport: Viewport;
++  onDragStart: (e: React.MouseEvent<SVGSVGElement>) => void;
++} {
++  const [viewport, setViewport] = useState<Viewport>(() => initialViewport(total, initBars));
++  const [prevTotal, setPrevTotal] = useState(total);
++
++  // 序列延伸(分 K 每 60s refetch 追加新 bar)時調整窗口。用 render 期間調整 state 的
++  // 官方 pattern,不用 effect —— 專案有 react-you-might-not-need-an-effect lint。
++  // ⚠ 只處理「同一 code+mode 的延伸」;換股/換模式由 StockChart 給的 key 強制重掛。
++  if (prevTotal !== total) {
++    setPrevTotal(total);
++    setViewport((v) => onTotalChange(v, prevTotal, total));
++  }
++
++  // 滾輪縮放。**必須掛原生 listener 且 passive: false** —— React 的 onWheel 綁在 root
++  // 且為 passive,preventDefault() 無效,頁面會跟著一起捲。
++  useEffect(() => {
++    const el = svgRef.current;
++    if (el === null) return;
++    const onWheel = (e: WheelEvent): void => {
++      e.preventDefault();
++      const rect = el.getBoundingClientRect();
++      const { x } = toSvgPoint(e, rect, { width: dimW, height: dimH });
++      const ratio = dimW > 0 ? x / dimW : 0.5;
++      const factor = e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
++      setViewport((v) => zoomAt(v, total, factor, ratio));
++    };
++    el.addEventListener("wheel", onWheel, { passive: false });
++    return () => el.removeEventListener("wheel", onWheel);
++    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
++    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
++    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
++    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
++    // svgRef 是 ref(identity 恆定),入 deps 純為 exhaustive-deps 誠實,不會多跑。
++  }, [total, dimW, dimH, svgRef]);
++
++  /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
++   *  維持 mouse 事件模型 —— 專案慣例是觸控靠 tap 的 synthetic mousemove,改 pointer 會破。 */
++  function onDragStart(e: React.MouseEvent<SVGSVGElement>): void {
++    if (e.button !== 0) return;
++    const el = svgRef.current;
++    if (el === null) return;
++    const rect = el.getBoundingClientRect();
++    const scale = rect.width > 0 ? dimW / rect.width : 1;
++    const startX = e.clientX;
++    // 起始窗口直接取 closure 的 viewport —— 這個 handler 來自最近一次 render,值即為當下。
++    // 不要用 `setViewport(v => { startVp = v; return v; })` 的 side effect 去讀:React 不保證
++    // updater 同步執行(只是常常如此),讀到 null 就得 fallback,等於多一條沒必要的路徑。
++    const startVp = viewport;
++    const slot = dimW / Math.max(1, startVp.count);
++    const move = (ev: MouseEvent): void => {
++      // 往右拖 = 看更早的資料 → start 往左。以「拖曳起點」為基準算絕對位移,
++      // 不是逐次累加 —— 累加會因為 clamp 而在端點附近漂移。
++      const deltaBars = -Math.round(((ev.clientX - startX) * scale) / slot);
++      setViewport(panBy(startVp, total, deltaBars));
++      onDragMove(); // 拖曳中不更新十字線,避免抖動
++    };
++    const up = (): void => {
++      window.removeEventListener("mousemove", move);
++      window.removeEventListener("mouseup", up);
++    };
++    window.addEventListener("mousemove", move);
++    window.addEventListener("mouseup", up);
++  }
++
++  return { viewport, onDragStart };
++}
