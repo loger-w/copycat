@@ -17,6 +17,7 @@ import {
   type Viewport,
 } from "@/lib/candle-viewport";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+import { useCandleHover } from "@/hooks/useCandleHover";
 import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
 import { fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
@@ -462,13 +463,8 @@ export function CandleChart({
 }: Props) {
   const dimW = DIMS.width;
   const dimH = height ?? DIMS.height;
-  // hover 存的是 **viewBox 座標**不是 bar index:index 是對可視窗口 shown 的,
-  // 一旦滾輪縮放或資料延伸讓 viewport.start 改變,同一個索引就指到別根 bar —— 十字線與
-  // 資訊列會一起指錯,而且要等下次滑鼠移動才修正(實測游標在 x=700、十字線飄到 807)。
-  // 存座標則每次 render 都用當下的 g 重新反查,錨點守恆的縮放天然維持「指著同一根」。
-  // y 同時是水平線位置:水平線是「自由量尺」(跟滑鼠),不鎖收盤價 —— 盤中最常做的事是
-  // 量距離(現價到某價位差幾%),鎖收盤價的水平線與蠟燭重合、資訊冗餘。
-  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
+  // hover 座標語意與 bail-out 見 useCandleHover(存 viewBox 座標非 index,錨點守恆)
+  const { hover, onMove, clearHover } = useCandleHover(dimW, dimH);
   const [viewport, setViewport] = useState<Viewport>(() => initialViewport(bars.length, initBars));
   const [prevTotal, setPrevTotal] = useState(bars.length);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -541,15 +537,6 @@ export function CandleChart({
     // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
   }, [total, dimW, dimH]);
 
-  function onMove(e: React.MouseEvent<SVGSVGElement>): void {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const { x, y } = toSvgPoint(e, rect, { width: dimW, height: dimH });
-    const rx = Math.round(x);
-    const ry = Math.round(y);
-    // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
-    setHover((p) => (p !== null && p.x === rx && p.y === ry ? p : { x: rx, y: ry }));
-  }
-
   /** 拖曳平移:mousedown 記起點,mousemove/mouseup 掛 window(拖出圖外仍跟手)。
    *  維持 mouse 事件模型 —— 專案慣例是觸控靠 tap 的 synthetic mousemove,改 pointer 會破。 */
   function onDragStart(e: React.MouseEvent<SVGSVGElement>): void {
@@ -569,7 +556,7 @@ export function CandleChart({
       // 不是逐次累加 —— 累加會因為 clamp 而在端點附近漂移。
       const deltaBars = -Math.round(((ev.clientX - startX) * scale) / slot);
       setViewport(panBy(startVp, total, deltaBars));
-      setHover(null); // 拖曳中不更新十字線,避免抖動
+      clearHover(); // 拖曳中不更新十字線,避免抖動
     };
     const up = (): void => {
       window.removeEventListener("mousemove", move);
@@ -655,7 +642,7 @@ export function CandleChart({
           role="img"
           aria-label="K 線圖"
           onMouseMove={onMove}
-          onMouseLeave={() => setHover(null)}
+          onMouseLeave={clearHover}
           onMouseDown={onDragStart}
         >
           <ChartStatic
