@@ -30,6 +30,10 @@ from copycat.live.futures_models import (
 logger = logging.getLogger(__name__)
 
 
+class _EngineClosing(Exception):
+    """close() 已開始(_loop 已斷)— executor worker 以此早退,不得再碰 source。"""
+
+
 class FuturesSource(Protocol):
     """期貨行情來源抽象;TC4 實作在 copycat.live.futures_source,測試注入 fake。"""
 
@@ -159,6 +163,8 @@ class FuturesEngine:
                 return
             try:
                 await self._resub_round(source)
+            except _EngineClosing:
+                return  # 關機:靜默結束(不得偽裝成訂閱失敗的 warning)
             except Exception:
                 # 非 ConnectionError 的例外(壞電文 / wrapper 內部型別錯)不得殺掉迴圈:
                 # 死掉 = 復原路徑本身靜默失效,而 close() 的收尾又會把 task 例外吞掉
@@ -168,13 +174,26 @@ class FuturesEngine:
     async def _resub_round(self, source: FuturesSource) -> None:
         for product in sorted(self._pending_subs):
             try:
-                await asyncio.to_thread(source.subscribe_symbol, product)
+                await asyncio.to_thread(self._retry_subscribe, source, product)
             except ConnectionError:
                 # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
                 logger.warning("futures subscribe %s failed", product)
                 continue
             self._pending_subs.discard(product)
             logger.info("futures %s subscribe retry ok", product)
+
+    def _retry_subscribe(self, source: FuturesSource, product: str) -> None:
+        """executor thread:關機中早退,縮小「close 後 source 再被呼叫」的窗。
+
+        cancel 正 await `to_thread` 的 task 時 asyncio 側立即回(executor future
+        無法中斷),已排入未啟動的工作項可能跨過 `source.close()` 才跑 subscribe →
+        `_ensure_connected` 重建 TC4 連線,KeepAlive 洩漏 process 不退
+        (照 stock_engine._retry_acquire 縮窗語意;殘餘 race 的根治 =
+        tc4 `_ensure_connected` 原子化,獨立 /mod)。
+        """
+        if self._loop is None:
+            raise _EngineClosing
+        source.subscribe_symbol(product)
 
     async def close(self) -> None:
         # 先斷 threadsafe 入口:close 期間 TC4 推播不得再 call_soon_threadsafe
