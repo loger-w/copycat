@@ -138,6 +138,34 @@ function ruleSummary(rule: SignalRule): string {
   return cooldown;
 }
 
+/** 參數數字欄位。真元件而不是「回傳 JSX 的函式」—— 函式呼叫產出的 JSX 掛在呼叫端
+ *  的 element type 底下,React 無法以元件為單位 reconcile,DevTools 也看不到它。 */
+function NumberField({
+  label,
+  value,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  step: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1 text-xs text-ink-muted">
+      <span className="shrink-0">{label}</span>
+      <input
+        type="number"
+        step={step}
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-24 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink outline-none focus:border-accent"
+      />
+    </label>
+  );
+}
+
 interface Props {
   open: boolean;
   rules: SignalRule[];
@@ -271,22 +299,6 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
   const mutationError = save.error?.message ?? del.error?.message ?? null;
   const errorMessage =
     localError ?? (mutationError === null ? null : errText(mutationError));
-
-  function numberField(label: string, value: string, step: string, onChange: (v: string) => void) {
-    return (
-      <label key={label} className="flex items-center gap-1 text-xs text-ink-muted">
-        <span className="shrink-0">{label}</span>
-        <input
-          type="number"
-          step={step}
-          aria-label={label}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-24 rounded border border-line bg-bg px-1 py-0.5 text-right font-mono text-xs text-ink outline-none focus:border-accent"
-        />
-      </label>
-    );
-  }
 
   return (
     <dialog
@@ -466,11 +478,15 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
                 </label>
 
                 <div className="flex flex-wrap gap-3">
-                  {PARAM_FIELDS[form.kind].map((field) =>
-                    numberField(field.label, form.params[field.key] ?? "", field.step, (v) =>
-                      patchParam(field.key, v),
-                    ),
-                  )}
+                  {PARAM_FIELDS[form.kind].map((field) => (
+                    <NumberField
+                      key={field.label}
+                      label={field.label}
+                      value={form.params[field.key] ?? ""}
+                      step={field.step}
+                      onChange={(v) => patchParam(field.key, v)}
+                    />
+                  ))}
                 </div>
 
                 {form.kind === "cdp_cross" ? (

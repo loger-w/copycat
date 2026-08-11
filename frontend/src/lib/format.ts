@@ -1,4 +1,5 @@
 const nf = new Intl.NumberFormat("en-US");
+const nfPts = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 
 /** NTD 縮寫:≥1 億 → 兩位小數億;≥1 萬 → 整數萬(千分位);其下千分位。 */
 export function formatNtd(value: number): string {
@@ -15,7 +16,7 @@ export function formatNtd(value: number): string {
 
 /** 指數點位:千分位,最多一位小數。 */
 export function formatPts(value: number): string {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
+  return nfPts.format(value);
 }
 
 /** 漲跌百分比 → 顯示字串:正值帶 `+`,固定兩位小數。

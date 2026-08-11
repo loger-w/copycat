@@ -1,5 +1,5 @@
 import { chgPct, fmt, fmtPct } from "@/lib/format";
-import { bestLimit, isMarketLevel, limitState } from "@/lib/stock-tick";
+import { bestLimit, isMarketLevel, limitOnly, limitState, marketQty } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
 /** 個股五檔 —— 垂直雙欄版式(SC-1,參照 treading-king `QuoteBook.tsx`)。
@@ -142,14 +142,8 @@ function BookSide({ levels, side, maxQty, onPriceClick }: SideProps) {
 export function OrderBook({ code, book, last, ref_, upper = null, lower = null }: Props) {
   const b = (book?.bids ?? []).slice(0, DEPTH);
   const a = (book?.asks ?? []).slice(0, DEPTH);
-  // 總量列與量 bar 歸一**一律只算限價量**(2026-07-31 user 拍板)。市價偽檔位若混進來,
-  // 同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」(市價那格吃掉 DEPTH
-  // 的一格)—— 定義隨日子變,跨日 / 跨股比較靜默失真。量 bar 是限價檔之間的形狀比較,
-  // 沒有價位的市價檔本來就不在那個維度上,卻會把五根限價 bar 一起壓成看不見的短樁
-  // (2327 實測市價 14167 vs 限價最大 11877,而市價佇列可以是限價量的數倍)。
-  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
-  const marketOnly = (levels: [number, number][]) =>
-    levels.reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
+  // 總量列與量 bar 歸一**一律只算限價量**(與 DepthBar 共用 `limitOnly`,口徑必須一致;
+  // 理由見該函式註解。2327 實測市價 14167 vs 限價最大 11877)。
   const limitB = limitOnly(b);
   const limitA = limitOnly(a);
   // `1` 不可省:五檔全 0 量(盤前 / 剛重啟未收 snapshot)時除零 → width "NaN%",
@@ -157,8 +151,8 @@ export function OrderBook({ code, book, last, ref_, upper = null, lower = null }
   const maxQty = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
   const bidTotal = limitB.reduce((s, [, v]) => s + v, 0);
   const askTotal = limitA.reduce((s, [, v]) => s + v, 0);
-  const marketBid = marketOnly(b);
-  const marketAsk = marketOnly(a);
+  const marketBid = marketQty(b);
+  const marketAsk = marketQty(a);
   // 本元件的 last 是物件(DepthBar 收的是 number),漏了這層會在 6/8 既有測試炸 TypeError
   const lastMilli = last?.p ?? null;
   const chg = lastMilli !== null && ref_ ? chgPct(lastMilli, ref_) : null;
