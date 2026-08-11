@@ -62,6 +62,12 @@ export function useBreadth(): BreadthState | null {
   // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這顆 ref 取當下值。同步寫在
   // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
   // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+  //
+  // 強度說明(review TC-1):本 ref **只在 commit 之後同步,handler 內不做同 tick 回寫**
+  // —— 與 `useFuturesStream` / `useStockStream` 那種 imperative 配對(寫入點當場同步 ref)
+  // **不同級**:那種配對連「同一個 tick 內兩則訊息 read-modify-write」都守得住,這裡守不住
+  // (第二則讀到的仍是上一次 commit 的值)。本 hook 的 handler 只拿 ref 比 `trade_date`
+  // (換日一天一次),沒有同 tick 連鎖需求;日後若有,要升級成 imperative 配對。
   useLayoutEffect(() => {
     stateRef.current = state;
   }, [state]);

@@ -78,7 +78,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   /** `collapsed` 的 imperative 影子(先例:`useStockStream` 的 accumRef)。
    *
-   *  三個折疊寫入點一律「讀 ref 算 next → 同步 ref → persist → setState」,持久化因此
+   *  群組折疊的寫入點一律「讀 ref 算 next → `applyCollapsed`(同步 ref → persist →
+   *  setState)」,持久化因此
    *  移出 updater —— updater 契約是純函式,StrictMode 下 double-invoke 會寫兩次
    *  localStorage,遇到 React 重播(rebase / 中止的 render)持久化值還可能與最終 state 分歧。
    *
@@ -113,13 +114,20 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     save.mutate(next);
   }
 
+  /** `collapsed` 的**單一寫入點**:同步 ref → persist → setState 三步一律成對(review TC-4)。
+   *  算 next 的邏輯留在各 handler(語意各不相同),這裡只保證三步不漏 —— 三步散在各處手抄
+   *  時最容易漏的是 ref 同步,而漏掉的症狀是同批回呼把已清掉的組名靜默寫回 localStorage。 */
+  function applyCollapsed(next: Set<string>): void {
+    collapsedRef.current = next;
+    persistCollapsed(next);
+    setCollapsed(next);
+  }
+
   function toggleCollapsed(name: string): void {
     const next = new Set(collapsedRef.current);
     if (next.has(name)) next.delete(name);
     else next.add(name);
-    collapsedRef.current = next;
-    persistCollapsed(next);
-    setCollapsed(next);
+    applyCollapsed(next);
   }
 
   /** 未分組折疊是 boolean 且只走純點擊路徑(沒有 mutation 回呼那種同批連發),
@@ -136,9 +144,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     if (!collapsedRef.current.has(name)) return; // 本來就不在 → 零寫入
     const next = new Set(collapsedRef.current);
     next.delete(name);
-    collapsedRef.current = next;
-    persistCollapsed(next);
-    setCollapsed(next);
+    applyCollapsed(next);
   }
 
   /** 搜尋命中 → **預覽**該檔(round4 項 4)。
