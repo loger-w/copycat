@@ -508,6 +508,57 @@ class TestPendingResubscribe:
         assert src.closed  # source.close() 必達(KeepAlive 不洩漏)
 
 
+class _ReconnectSource(FakeSource):
+    """帶 on_reconnect 屬性的 source(對齊 TC4QuoteSource 介面;stock/corr fake 同款)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.on_reconnect: Callable[[], None] | None = None
+
+
+class TestReconnectReconciliation:
+    """P1-3:`_check_stale` 重連可能靜默掉訂(SUBQUOTE 失敗零 log / 迴圈中途拋錯
+    尾段 symbol 蒸發),掉訂品不進 `_pending_subs`、`_leaf_fallback` 判準(p is None)
+    也不武裝 —— FuturesEngine 是四引擎唯一沒接 on_reconnect 的,零復原零覆蓋。
+
+    修法 = on_reconnect 對帳:全品回填 pending 由重試迴圈重掛
+    (subscribe 走 UNSUB→SUB 冪等,重掛仍活著的品無害)。
+    """
+
+    async def test_engine_wires_on_reconnect(self) -> None:
+        src = _ReconnectSource()
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        try:
+            assert src.on_reconnect is not None
+        finally:
+            await engine.close()
+
+    async def test_reconnect_resubscribes_dropped_products(self) -> None:
+        src = _ReconnectSource()
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()  # 全成功 → 無 retry task(對帳必須能重啟迴圈,不能只靠 start)
+        src.subscribed.clear()  # 模擬重連:source 端重掛全數靜默失敗,engine 不知情
+        assert src.on_reconnect is not None
+        src.on_reconnect()
+        try:
+            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
+        finally:
+            await engine.close()
+
+    async def test_reconnect_during_close_is_noop(self) -> None:
+        # close 已開始(_loop 斷)後的 on_reconnect 不得再排工作
+        src = _ReconnectSource()
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await engine.close()
+        n = len(src.subscribed)
+        assert src.on_reconnect is not None
+        src.on_reconnect()
+        await asyncio.sleep(0.05)
+        assert len(src.subscribed) == n
+
+
 class TestFetchDay1kPassthrough:
     """江波圖回補(index-river-chart SC-4):台指 1K 必須從持有 TXF 訂閱的這條 session 問。"""
 

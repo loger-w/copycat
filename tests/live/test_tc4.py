@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from typing import Any
@@ -529,6 +530,54 @@ class TestConnectInterruptible:
         src._stop.set()
         worker.join(timeout=3.0)
         assert not worker.is_alive(), "重連迴圈不可中斷(阻塞在裸 recv)"
+
+
+class _SelectiveFailApi(FakeApi):
+    """REALTIME SUBQUOTE 對指定 symbol 回 Success != OK,其餘照 FakeApi。"""
+
+    def __init__(self, fail: set[str]) -> None:
+        super().__init__({})
+        self._fail = fail
+
+    def _handle(self, req: dict) -> bytes:
+        param = req.get("Param", {})
+        if (
+            req.get("Request") == "SUBQUOTE"
+            and param.get("SubDataType") == "REALTIME"
+            and param.get("Symbol") in self._fail
+        ):
+            self.rt_requests.append(req)
+            return b'{"Success": "FAIL", "ErrMsg": "sub reject"}\x00'
+        return super()._handle(req)
+
+
+class TestReconnectResubWarning:
+    """P1-3(共用層的「至少」防線):重連重掛 SUBQUOTE 失敗品原本靜默丟出
+    `_subscribed` 且零 log —— 失效樣態是「該檔從此零推播,log 乾乾淨淨」。
+    這裡鎖 grep 判準 warning;掉訂品的實際復原由 engine 端 on_reconnect 對帳接手。
+    """
+
+    def test_resub_failure_logs_warning_and_drops_symbol(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _SelectiveFailApi(fail={"TC.F.TWF.TXF.HOT"})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        src._subscribed = {"TC.F.TWF.TXF.HOT", "TC.F.TWF.MXF.HOT"}
+        src._last_msg = time.monotonic() - 999.0  # 觸發 stale 判定
+
+        def _reinstall() -> None:
+            # _check_stale 先 _dispose 再 _ensure_connected;unit 層不真連線,
+            # 重灌同一顆 fake api(測的是重掛迴圈,不是連線建立)
+            with src._api_lock:
+                src._api = api
+                src._session = "sess-2"
+
+        monkeypatch.setattr(src, "_ensure_connected", _reinstall)
+        with caplog.at_level(logging.WARNING):
+            src._check_stale()
+        assert "TC.F.TWF.MXF.HOT" in src._subscribed  # 成功品照舊
+        assert "TC.F.TWF.TXF.HOT" not in src._subscribed  # 現行語意:失敗品出集合
+        assert "TC4 reconnect resubscribe TC.F.TWF.TXF.HOT failed" in caplog.text
 
 
 class TestSpotSymbol:
