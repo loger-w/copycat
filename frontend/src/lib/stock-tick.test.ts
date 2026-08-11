@@ -4,7 +4,9 @@ import {
   buildLadder,
   fmtTickPrice,
   isMarketLevel,
+  limitOnly,
   limitState,
+  marketQty,
   snapNearest,
   snapDown,
   snapUp,
@@ -47,6 +49,37 @@ describe("snapUp / snapDown", () => {
   it("已對齊價不動", () => {
     expect(snapDown(101_500)).toBe(101_500);
     expect(snapUp(101_500)).toBe(101_500);
+  });
+});
+
+// DepthBar / OrderBook 共用的口徑契約(review B-4):元件測試只間接覆蓋,這裡直接釘死。
+describe("limitOnly / marketQty(五檔口徑)", () => {
+  it("limitOnly 剔除市價偽檔位(價格欄 ≤ 0),保留限價檔原序", () => {
+    expect(
+      limitOnly([
+        [0, 10],
+        [500_000, 3],
+        [499_000, 7],
+      ]),
+    ).toEqual([
+      [500_000, 3],
+      [499_000, 7],
+    ]);
+  });
+  it("limitOnly 空陣列 → 空陣列;全市價 → 空陣列", () => {
+    expect(limitOnly([])).toEqual([]);
+    expect(limitOnly([[0, 14_167]])).toEqual([]);
+  });
+  it("marketQty 只加總市價檔;undefined 視為空簿", () => {
+    expect(
+      marketQty([
+        [0, 10],
+        [500_000, 3],
+        [0, 5],
+      ]),
+    ).toBe(15);
+    expect(marketQty([[500_000, 3]])).toBe(0);
+    expect(marketQty(undefined)).toBe(0);
   });
 });
 
