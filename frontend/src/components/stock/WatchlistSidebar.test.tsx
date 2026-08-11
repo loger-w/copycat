@@ -186,7 +186,12 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
     sidebar();
     await waitGroups();
     // 握把對 AT 隱藏(aria-hidden;無鍵盤路徑的 role="button" 是假 affordance)→ 錨 testid
-    expect(screen.getAllByTestId(/^wl-handle-/)).toHaveLength(4); // 2+2,未分組為空
+    const handles = screen.getAllByTestId(/^wl-handle-/);
+    expect(handles).toHaveLength(4); // 2+2,未分組為空
+    // 釘死 a11y 決策:aria-hidden 且不得長回 role="button"(那是宣告了做不到的能力)
+    expect(
+      handles.every((h) => h.getAttribute("aria-hidden") === "true" && !h.hasAttribute("role")),
+    ).toBe(true);
   });
 });
 
