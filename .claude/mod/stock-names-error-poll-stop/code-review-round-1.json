@@ -1,0 +1,59 @@
+{
+  "round": 1,
+  "date": "2026-08-11",
+  "lenses": ["A: TQ v5 機制正確性 + 白名單保留(opus/high)", "B: 測試鎖強度 / mutation 存活面(opus/high)"],
+  "diff": "review-diff.txt(master..7efd04ed,5 commits)",
+  "findings": [
+    {
+      "id": "A-1+B-1",
+      "severity": "P1",
+      "claim": "停止後復原後門比 spec 假設弱:v5 focusManager 只聽 visibilitychange(純 window focus 不觸發),兩 consumer 常駐掛載無 mount 後門;且該後門零測試鎖(refetchOnWindowFocus:false mutant 全綠存活)",
+      "disposition": "accepted",
+      "resolution": "行為維持「停止」(user 拍板,不改為退避/keepalive — reviewer 選項 (b) 60s 心跳實質是退避到地板,牴觸拍板)。修:hook docstring + change-spec Edge case 2 / W-6 對齊現實(復原 = 分頁 hide→show 或 reload);整合測試用 focusManager.setFocused(false→true) 補後門雙向鎖(再失敗仍停 / 成功即復原)。[auto-default: 選項 (c) 知情接受 + 補測試鎖 | reason: 「停止」拍板本身已蘊含放棄輪詢;後門精確度屬內部機制,互換不改 SC/契約;於收尾回報顯著標註供 user 事後 audit]"
+    },
+    {
+      "id": "A-2+B-5",
+      "severity": "P2",
+      "claim": "涵蓋窗算式低估:interval timer 每次 query state 更新重啟 → 每輪 = 1s backoff + 3s = 4s,20 輪 ≈ 77s 非 ≈60s(實測佐證::58 復原測試 4040ms/輪;整合測試恰 40 次)",
+      "disposition": "accepted",
+      "resolution": "docstring / change-spec [auto-default] reason / next-time 勾銷註記三處數字更正為 ≈77s + 寫明每輪成本"
+    },
+    {
+      "id": "B-2",
+      "severity": "P2",
+      "claim": "節奏值只鎖在白盒純函式,wiring 面可被 inline 匿名函式(interval 250ms + 保留停止條件)繞過全綠",
+      "disposition": "accepted",
+      "resolution": "整合測試前段補 anchoring-agnostic 節奏探針:t=2500 恰 2 次、t=5500 恰 4 次(對 mount 起算 / state-change 重啟兩語意皆成立;interval <1500ms 必紅)"
+    },
+    {
+      "id": "B-3",
+      "severity": "P2",
+      "claim": "成功案整合測試半 vacuous:未斷言真的 success,「停止」與「卡在 fetching」同綠",
+      "disposition": "accepted",
+      "resolution": "接住 hook 回傳,首次推進(act 包裹)後斷言 data 到位再做不增斷言"
+    },
+    {
+      "id": "B-4",
+      "severity": "P2",
+      "claim": "收斂迴圈「每輪 ≤4s」實為「恰 4s」零餘裕,retryDelay 預設一動斷言即碎(會紅不會假綠)",
+      "disposition": "accepted",
+      "resolution": "改推進到不動點(fetch 次數兩輪不變)再斷言精確 40;精確值保留(殺 retry:1 / errorUpdateCount 語意 mutant 的主力)"
+    },
+    {
+      "id": "A-3",
+      "severity": "P2",
+      "claim": "errorUpdateCount 是 query 級全域累計,mount / refocus / reconnect 失敗共吃預算,註解未點出",
+      "disposition": "accepted",
+      "resolution": "註解補一句「計數含非輪詢來源失敗,涵蓋窗只短不長」;不改自有計數(成本高、誤差可接受)"
+    },
+    {
+      "id": "A-4",
+      "severity": "P2",
+      "claim": "測試 wrapper 在 component body new QueryClient(render path),跨輪計數斷言遇 re-render 即靜默失真",
+      "disposition": "accepted",
+      "resolution": "對齊 useBreadthRows 樣板:newClient() + wrapper(client) 工廠,client 移出 render path,全檔統一"
+    }
+  ],
+  "p2_summary": "P2 ×6(A-2/A-3/A-4/B-2/B-3/B-4)全 accepted,主題:註解算術對齊、測試鎖強度補洞、測試基建穩健化。無 rejected / REFUTED。雙 reviewer 皆確認核心機制成立:errorUpdateCount 選型正確、多 observer 求值一致、19/20 邊界無 off-by-one、停止後無殘留 timer、型別逆變安全。",
+  "verified_green": ["W-1 啟動窗復原(:58 真 timer)", "W-2 成功即停", "W-3 錯誤碼契約", "W-4 空表", "W-5 caller 零感知(tsc 全過)", "W-6 → 措辭修正後成立(visibilitychange 而非 focus)"]
+}
