@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from typing import Callable
 
 import pytest
@@ -516,14 +517,15 @@ class TestPendingResubscribe:
 
 
 class TestRetrySuccessLeafBookkeeping:
-    """P2-1:重試把 HOT 掛回後,leaf fallback 記帳(`_leaf_fed`)必須撤銷。
+    """P2-1 + review C-2/T-10:leaf 記帳的撤銷判準是「HOT 真的推了成交」,不是 SUB 回 OK。
 
-    不撤銷的話:跨日重武裝把 leaf-fed 商品 p 清 None → 每天再補一次新月 leaf,
-    同商品 HOT + leaf 雙訂閱天天複製(兩路餵同一 _handle_quote,seq/廣播加倍、
-    tick 可短暫倒退)。當日已存在的雙訂閱接受(leaf 無退訂路、兩邊值相同)。
+    SUBQUOTE 對 spot 衝突品恆回 OK 但零推播(leaf fallback 存在的理由)——
+    以「訂閱成功」當撤銷判準會在重連對帳後清掉還在靠 leaf 活著的品,
+    跨日重武裝失效 → 隔日凍結價零訊號。不撤銷又會讓跨日每天複製新月 leaf、
+    HOT + leaf 雙訂閱(seq/廣播加倍)。真判準 = 收到該品 HOT 成交 tick。
     """
 
-    async def test_retry_success_discards_leaf_fed(self) -> None:
+    async def test_hot_tick_after_retry_discards_leaf_fed(self) -> None:
         src = FakeSource()
         src.fail_subscribe.add("TXF")
         engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.05)
@@ -537,7 +539,15 @@ class TestRetrySuccessLeafBookkeeping:
         try:
             await _wait_until(lambda: "TXF" in src.subscribed)
             await _drain()
-            assert "TXF" not in engine._leaf_fed  # HOT 已回,跨日不得再複製 leaf
+            assert "TXF" in engine._leaf_fed  # SUB 成功 ≠ HOT 已回:記帳保留
+            _push(src, _quote())  # TXF 的 HOT 成交推播 = 真判準
+            await _drain()
+            assert "TXF" not in engine._leaf_fed  # HOT 已回:撤銷記帳
+            # 症狀層(T-10):換日 + 新 ym → TXF 不再補新月 leaf
+            _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202609", TradeDate="20260819"))
+            await asyncio.sleep(0.05)
+            await _drain()
+            assert ("TXF", "202609") not in src.leaf_subscribed
         finally:
             await engine.close()
 
@@ -548,6 +558,23 @@ class _ReconnectSource(FakeSource):
     def __init__(self) -> None:
         super().__init__()
         self.on_reconnect: Callable[[], None] | None = None
+
+
+class _GatedRetrySource(FakeSource):
+    """首輪全失敗;retry 的 subscribe 卡在 gate 上,放行後成功(製造 in-flight 窗)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.retrying = threading.Event()
+        self.first_round_done = False
+
+    def subscribe_symbol(self, product: str) -> None:
+        if not self.first_round_done:
+            raise ConnectionError("initial down")
+        self.retrying.set()
+        assert self.gate.wait(timeout=2)
+        super().subscribe_symbol(product)
 
 
 class TestReconnectReconciliation:
@@ -591,6 +618,57 @@ class TestReconnectReconciliation:
         src.on_reconnect()
         await asyncio.sleep(0.05)
         assert len(src.subscribed) == n
+
+    async def test_reconnect_callback_after_close_creates_no_task(self) -> None:
+        """review C-3:threadsafe 檢查在 listener thread、_handle_reconnect 在 loop
+        thread,中間 close() 可整段插入 —— close 讓出(await resub)期間 ready queue
+        裡的回呼被消化,不得建出 close() 永不 cancel 的孤兒 task(corr
+        _schedule_backfill 的二次檢查同款)。"""
+        src = _ReconnectSource()
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        await engine.close()
+        engine._handle_reconnect()  # 模擬 close 期間已排入、close 後才消化的在途回呼
+        assert engine._resub_task is None
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        assert pending == []
+
+    async def test_reconnect_does_not_clear_leaf_fed(self) -> None:
+        """review C-2/T-6:leaf-fed 品(SUB 恆 OK 但 HOT 零推播)在重連對帳的重掛
+        成功後,leaf 記帳必須保留 —— 清掉 = 跨日重武裝迴圈掃不到它,新月 leaf
+        不補,隔日凍結昨日價且零錯誤訊號(本 /bug 要消滅的失效樣態被重新引進)。"""
+        src = _ReconnectSource()
+        engine = FuturesEngine(lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.01)
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert "TXF" in engine._leaf_fed  # TXF HOT 零推播 → leaf 接手
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await _wait_until(lambda: src.subscribed.count("TXF") >= 2)  # 對帳重掛完成
+            await _drain()
+            assert "TXF" in engine._leaf_fed  # SUB OK ≠ HOT 已回:記帳不得清
+        finally:
+            await engine.close()
+
+    async def test_reconcile_survives_inflight_retry_success(self) -> None:
+        """review C-4:重試輪 await 期間發生重連 → 該筆成功掛在**舊連線**上
+        (SUB 隨 dispose 蒸發),不得出列 —— 出列 = 兩邊都認為已訂上、實際
+        零推播零 log,對帳在自己最需要生效的時序上被自己撤銷。"""
+        src = _GatedRetrySource()
+        engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+        await engine.start()
+        src.first_round_done = True
+        await asyncio.to_thread(src.retrying.wait, 2)  # retry in-flight(卡在 gate)
+        engine._handle_reconnect()  # 重連插入
+        src.gate.set()
+        try:
+            # 舊連線上的成功若被出列,MXF 永遠不會再被重掛(count 停在 1)
+            await _wait_until(lambda: src.subscribed.count("MXF") >= 2)
+        finally:
+            await engine.close()
 
 
 class TestFetchDay1kPassthrough:
