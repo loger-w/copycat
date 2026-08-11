@@ -90,14 +90,15 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
    *  佇列排空後 cache 已含最後回應,兩者收斂。 */
   const baseRef = useRef(wl);
   const pendingRef = useRef(0);
-  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // lazy init(null 起始):useRef(Promise.resolve()) 會在每次 render 白白配置一顆 promise
+  const chainRef = useRef<Promise<void> | null>(null);
 
   /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
    *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
   function commit(make: (base: Watchlist) => Watchlist, onDone?: () => void): void {
     if (pendingRef.current === 0) baseRef.current = wl;
     pendingRef.current += 1;
-    chainRef.current = chainRef.current
+    chainRef.current = (chainRef.current ?? Promise.resolve())
       .then(async () => {
         const base = baseRef.current;
         const next = make(base);
