@@ -972,12 +972,16 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
   「唯一缺的復原路徑」措辭不成立(repro.md 同句要一併更正)。
 - [ ] P2:重試成功後 HOT + leaf 雙訂閱(`_leaf_fed` 跨日每天複製)— 至少補
   `_leaf_fed.discard(product)`(futures_engine.py:167)。
-- [ ] P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
-  error 態無 consumer 在讀,註解與現實不符。
+- [x] ~~P2:useStockNames 永久錯誤態每 3s 無限輪詢不退避(useStockNames.ts:37);
+  error 態無 consumer 在讀,註解與現實不符。~~ **2026-08-11 修畢
+  (mod/stock-names-error-poll-stop):拍板「停止」不是退避 — 連續失敗
+  20 輪(≈60s)即停,refocus 為復原後門;retry 註解改述現實(error 無 consumer)。**
 - [ ] P2:test_futures_engine 兩條收斂不變式 mutant 存活(:405 改
   `assert engine._resub_task is None` 照 corr 版;收斂後補 pending 空 + task done)。
-- [ ] P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
-  皆全綠)— 成功案 sleep 3.5s 斷言 fetch 次數不增。
+- [x] ~~P2:useStockNames 測試不鎖輪詢節奏與停止條件(interval 改 1ms / 停止條件拿掉
+  皆全綠)— 成功案 sleep 3.5s 斷言 fetch 次數不增。~~ **2026-08-11 修畢(同上輪):
+  白盒 literal 3000 鎖節奏 + 上限停止;成功案改 fake-timer 推進 10s 斷言不增
+  (決定性等價,免 wall-clock);雙 mutation 抽驗紅後還原綠。**
 - [ ] P2(共用層,獨立 /mod):tc4 `_ensure_connected` 無鎖 check-then-act ×
   `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
   系統性放大。修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
