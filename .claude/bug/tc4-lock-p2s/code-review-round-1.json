@@ -1,0 +1,77 @@
+{
+  "round": 1,
+  "date": "2026-08-11",
+  "reviewer": "/code-review medium(收尾補齊,rebase 後全 diff master...HEAD)",
+  "stats": { "candidates": 32, "confirmed": 6, "plausible": 1, "refuted": 2 },
+  "findings": [
+    {
+      "id": "R-1",
+      "file": "copycat/server/watchlist_service.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "X-3 只把 convoy 從 service 鎖搬到 engine._pool_lock:第二個寫入者的 _settle 仍等第一個的整段訂閱迴圈,Discord interaction timeout 情境未根治(落檔/讀路已解)。",
+      "disposition": "docstring 誠實化(_settle 收斂範圍)+ 深修(ZMQ 迴圈移出 _pool_lock,per-code 取鎖)記 next-time 獨立輪 — 拍板範圍(repro.md)本就限縮在鎖凸出。"
+    },
+    {
+      "id": "R-2",
+      "file": "copycat/server/stock_engine.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "stale-seq skip 在現況生產路徑不可達(取號到 _pool_lock 進場之間無 yield 點,抵達序=取號序);docstring「抵達順序不保證」寫錯。",
+      "disposition": "docstring 改為誠實記帳:seq 是 belt-and-braces,防的是未來窗內插入 await 後保證靜默消失。分支保留。"
+    },
+    {
+      "id": "R-3",
+      "file": "copycat/live/tc4.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "X-2a 註解/測試以「持鎖上界 ≈ RCVTIMEO」立論,形式上界實為 send+recv=20s>12s;_dispose 逾時路徑再等同鎖 → 首個輸家最壞 24s(_api 先 null,級聯止於一人)。",
+      "disposition": "註解與測試 docstring 修正(健康上界 vs 形式上界分開講);行為不動 — 實務影響已被 verifier 驗證有界。"
+    },
+    {
+      "id": "R-4",
+      "file": "copycat/server/signal_hub.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "_schedule_basis_retry 覆寫 _retry_handles[key] 不取消舊 handle:同鍵兩筆 job 並存時孤兒 timer 照醒,多打 TC4;cap 路徑 pop 計數 → 兩支孤兒互相回充預算接近乒乓(紅測試實測 5 次呼叫)。",
+      "disposition": "已修(cancel-before-overwrite)+ 紅測試 test_reschedule_cancels_orphaned_timer。"
+    },
+    {
+      "id": "R-5",
+      "file": "copycat/server/signal_hub.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "on_rollover 清 _basis_retries 但不清 _retry_handles(與 close() 不對稱);filter 保留新日別 staged 鍵 — _staged_date 已歸 None,死條目多留一整天。",
+      "disposition": "已修(同尺 cancel+pop、filter 收緊 k[1]==expected and not k[2])+ 紅測試 test_rollover_prunes_pending_handles_and_staged_counters。"
+    },
+    {
+      "id": "R-6",
+      "file": "copycat/server/signal_hub.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "_drop_code 清 cache/detector 但留在途重試 timer 與計數:移出自選 30-60s 後重試醒來重打 TC4,並把剛清掉的 cache 條目復活成 (date, None)。",
+      "disposition": "已修(_drop_code cancel handles + 清計數)+ 紅測試 test_drop_code_cancels_pending_retry。已在佇列中的 job 攔不到(秒級窗、pre-existing,與 stock_engine A-1 同構)— 註解記載,不加新不變式。"
+    },
+    {
+      "id": "R-7",
+      "file": "copycat/server/stock_engine.py",
+      "severity": "P2",
+      "verdict": "PLAUSIBLE(latent)",
+      "summary": "seq=None 無條件豁免定序;唯一生產 caller 是 boot 還原,安全前提(restore 先於 service 建構 + routes 503)無處斷言;Protocol 預設 None → 未來漏帶 keyword 零訊號。",
+      "disposition": "next-time(boot 顯式 sentinel seq=0、刪 None 分支)— None 語意是本輪拍板,latent-only 不當場改契約。"
+    },
+    {
+      "id": "R-8",
+      "file": "tests/server/test_signal_hub.py",
+      "severity": "P2",
+      "verdict": "CONFIRMED",
+      "summary": "_wait_calls/_wait_codes 是 deadline-poll loop 第 5/6 份手抄(_wait_until ×4 已存在);_FlakyBars 是第 3 份 fail-N-then-succeed fake;sleep 間隔已漂移。",
+      "disposition": "next-time(/refactor 素材:收斂 tests/helpers/)— 跨 6 檔測試基建重構,不在收尾輪動。"
+    }
+  ],
+  "refuted": [
+    "pop-before-_distribute 無限重試(pop 之後無可拋語句)",
+    "send+recv 20s 使 12s 實務錯誤(localhost 慢 send = 對端死,棄連線正確)"
+  ],
+  "exit": "無 P0/P1;R-4/5/6 已修(紅綠對),R-1/2/3 docstring 對齊,R-1 深修 + R-7/8 入 next-time。"
+}
