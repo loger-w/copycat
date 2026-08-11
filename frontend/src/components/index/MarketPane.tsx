@@ -96,6 +96,12 @@ function Btn({
   );
 }
 
+/** 重疊圖兩條線的樣式與標籤;序與 `buildOverlayGeometry` 的輸入序對齊(0=加權、1=櫃買)。 */
+const OVERLAY_LINES = [
+  { color: "stroke-profit", label: "加權" },
+  { color: "stroke-idx-otc", label: "櫃買" },
+] as const;
+
 /** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。 */
 function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
   const g = buildOverlayGeometry(
@@ -105,8 +111,6 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
     ],
     SIZE,
   );
-  const colors = ["stroke-profit", "stroke-idx-otc"];
-  const labels = ["加權", "櫃買"];
   return (
     <figure className="rounded-md border border-line bg-surface p-4">
       <div className="flex items-baseline gap-4">
@@ -150,16 +154,21 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
           strokeWidth={1}
         />
         {g.lines.map((l, i) => (
-          <g key={labels[i]}>
-            <polyline points={pts(l.pts)} fill="none" className={colors[i]} strokeWidth={1.4} />
+          <g key={OVERLAY_LINES[i]!.label}>
+            <polyline
+              points={pts(l.pts)}
+              fill="none"
+              className={OVERLAY_LINES[i]!.color}
+              strokeWidth={1.4}
+            />
             {l.pts.length > 0 ? (
               <text
                 x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
                 y={l.pts[l.pts.length - 1]!.y + 3}
-                className={colors[i]!.replace("stroke-", "fill-")}
+                className={OVERLAY_LINES[i]!.color.replace("stroke-", "fill-")}
                 fontSize="0.625rem"
               >
-                {labels[i]}
+                {OVERLAY_LINES[i]!.label}
               </text>
             ) : null}
           </g>

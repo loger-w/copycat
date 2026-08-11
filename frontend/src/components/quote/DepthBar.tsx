@@ -1,5 +1,5 @@
 import { chgPct, fmt, fmtPct } from "@/lib/format";
-import { bestLimit, isMarketLevel } from "@/lib/stock-tick";
+import { bestLimit, isMarketLevel, limitOnly } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
 
 /** 水平五檔(SC-4/D-5)—— **期貨頁專用**(個股已改用 `stock/OrderBook.tsx` 的垂直雙欄版式,
@@ -11,6 +11,10 @@ import { cn } from "@/lib/utils";
  * 渲染成 div —— button 可聚焦卻點了沒反應是假 affordance(review P2-9)。 */
 
 const DEPTH = 5;
+
+// 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
+const BID_SLOTS = [...Array(DEPTH).keys()].reverse();
+const ASK_SLOTS = [...Array(DEPTH).keys()];
 
 export interface Props {
   /** 最佳在前([價毫元, 量]) */
@@ -69,11 +73,8 @@ function Cell({ entry, label, side, maxVol }: CellProps) {
 export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }: Props) {
   const b = bids.slice(0, DEPTH);
   const a = asks.slice(0, DEPTH);
-  // 總量與量 bar 歸一**一律只算限價量**(對齊 OrderBook,2026-07-31 user 拍板)。
-  // 市價偽檔位混進來的話,同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」
-  // —— 定義隨日子變,跨日 / 跨股比較靜默失真;量 bar 更慘,市價佇列可以是限價量的
-  // 數倍,五根限價 bar 會一起被壓成看不見的短樁。
-  const limitOnly = (levels: [number, number][]) => levels.filter(([p]) => !isMarketLevel(p));
+  // 總量與量 bar 歸一**一律只算限價量**(與 OrderBook 共用 `limitOnly`,口徑必須一致;
+  // 理由見該函式註解)。
   const limitB = limitOnly(b);
   const limitA = limitOnly(a);
   const maxVol = Math.max(1, ...limitB.map(([, v]) => v), ...limitA.map(([, v]) => v));
@@ -88,10 +89,6 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
   const lockedUp = upper !== null && bestLimit(b) === upper;
   const lockedDown = lower !== null && bestLimit(a) === lower;
 
-  // 買側 DOM 由左至右 = 買5..買1(最佳貼中央);賣側 = 賣1..賣5
-  const bidSlots = [...Array(DEPTH).keys()].reverse();
-  const askSlots = [...Array(DEPTH).keys()];
-
   return (
     <div className="rounded-md border border-line bg-surface p-3">
       <div className="mb-1 flex justify-between border-b border-line pb-1 font-mono text-xs">
@@ -104,7 +101,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
           <span className="text-xs">量</span>
           <span className="text-sm">價</span>
         </div>
-        {bidSlots.map((i) => (
+        {BID_SLOTS.map((i) => (
           <div key={`bid-${i}`} className="flex min-w-0 flex-1">
             <Cell entry={b[i]} label={`買${i + 1}`} side="bid" maxVol={maxVol} />
           </div>
@@ -139,7 +136,7 @@ export function DepthBar({ bids, asks, last, ref_, upper = null, lower = null }:
             <span className="mt-0.5 rounded bg-bear/15 px-1 text-xs text-bear">鎖跌停</span>
           ) : null}
         </div>
-        {askSlots.map((i) => (
+        {ASK_SLOTS.map((i) => (
           <div key={`ask-${i}`} className="flex min-w-0 flex-1">
             <Cell entry={a[i]} label={`賣${i + 1}`} side="ask" maxVol={maxVol} />
           </div>

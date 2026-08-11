@@ -52,6 +52,16 @@ export function isMarketLevel(priceMilli: number): boolean {
   return priceMilli <= 0;
 }
 
+/** 只留**限價**檔位(市價偽檔位剔除)。
+ *
+ *  五檔的總量與量 bar 歸一**一律只算限價量**(2026-07-31 user 拍板):市價偽檔位混進來,
+ *  同一個欄位在鎖停日是「市價 + 4 檔限價」、平常日是「5 檔限價」—— 定義隨日子變,
+ *  跨日 / 跨股比較靜默失真;量 bar 更慘,市價佇列可以是限價量的數倍,五根限價 bar
+ *  會一起被壓成看不見的短樁。DepthBar / OrderBook 共用這一份,口徑不可漂移。 */
+export function limitOnly(levels: [number, number][]): [number, number][] {
+  return levels.filter(([p]) => !isMarketLevel(p));
+}
+
 /** 簿的最佳**限價**檔位(往下找第一個非市價檔);全是市價佇列 / 空簿 → null。
  *
  *  後端同一件事的對應函式是 `live/stock_models.py::_best_limit_price`。鎖停判定要用它
@@ -102,7 +112,8 @@ export interface Ladder {
   marketAskQty: number;
 }
 
-function marketQty(levels: [number, number][] | undefined): number {
+/** 市價偽檔位(價格欄 ≤ 0)的總量。閃電梯與 OrderBook 的「市價 N」列共用。 */
+export function marketQty(levels: [number, number][] | undefined): number {
   return (levels ?? []).reduce((s, [p, v]) => (isMarketLevel(p) ? s + v : s), 0);
 }
 
