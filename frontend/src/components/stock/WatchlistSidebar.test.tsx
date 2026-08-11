@@ -185,7 +185,8 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
   it("每組每列都有拖拉握把(不再有「全部」停用拖拉的狀態)", async () => {
     sidebar();
     await waitGroups();
-    expect(screen.getAllByLabelText(/拖拉/)).toHaveLength(4); // 2+2,未分組為空
+    // 握把對 AT 隱藏(aria-hidden;無鍵盤路徑的 role="button" 是假 affordance)→ 錨 testid
+    expect(screen.getAllByTestId(/^wl-handle-/)).toHaveLength(4); // 2+2,未分組為空
   });
 });
 
@@ -426,7 +427,7 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
   it("拖曳中點到標題不折疊(放開瞬間的時序守衛)", async () => {
     sidebar();
     await waitGroups();
-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
+    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
     fireEvent(handle, ptrEvt("pointerdown", 10, 80));
     fireEvent.click(groupHeader("主力"));
     expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
@@ -650,7 +651,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     sidebar();
     await waitGroups();
     stubRects();
-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
+    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
     fireEvent(handle, ptr("pointerdown", 10, 80));
   }
 
@@ -695,7 +696,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     fireEvent.click(groupHeader("觀察"));
     expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
     stubRects();
-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 5483");
+    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
     fireEvent(handle, ptr("pointerdown", 10, 80));
     fireEvent(window, ptr("pointermove", 100, 140));
     fireEvent(window, ptr("pointerup", 100, 140));
@@ -755,7 +756,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     await waitGroups();
     stubRects();
     // 2330 同屬主力與觀察 —— 只移除來源組的話它會從畫面上憑空消失(仍屬觀察)
-    const handle = within(screen.getByTestId("wl-group-主力")).getByLabelText("拖拉 2330");
+    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-2330");
     fireEvent(handle, ptr("pointerdown", 10, 30));
     fireEvent(window, ptr("pointermove", 100, 290));
     fireEvent(window, ptr("pointerup", 100, 290));
@@ -776,7 +777,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     await waitGroups();
     stubRects();
     // 未分組 = [5483, 3231];把 3231 拖到第一列
-    const handle = within(screen.getByTestId("wl-list-ungrouped")).getByLabelText("拖拉 3231");
+    const handle = within(screen.getByTestId("wl-list-ungrouped")).getByTestId("wl-handle-3231");
     fireEvent(handle, ptr("pointerdown", 10, 320));
     fireEvent(window, ptr("pointermove", 100, 286));
     fireEvent(window, ptr("pointerup", 100, 286));
