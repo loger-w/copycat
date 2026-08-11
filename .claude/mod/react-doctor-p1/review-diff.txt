@@ -1,0 +1,716 @@
+﻿diff --git a/frontend/src/components/stock/StockChart.futconverge.test.tsx b/frontend/src/components/stock/StockChart.futconverge.test.tsx
+new file mode 100644
+index 00000000..43ba0829
+--- /dev/null
++++ b/frontend/src/components/stock/StockChart.futconverge.test.tsx
+@@ -0,0 +1,105 @@
++/** @vitest-environment jsdom */
++/** 🔴 react-doctor P1(StockChart.tsx:74-89):進出個股期合約的模式收斂走 `useEffect`,
++ *  也就是「下一個 render 才生效」。回現貨那一瞬間 `isFut` 已是 false 而 `mode` 還停在
++ *  收斂後的 intraday → 中間會實際 commit 一次「現貨態的分時圖」(`stkfut=false`),
++ *  下一個 render 才換成還原後的 K 線。:100-102 的註解自承這個「閃一格」。
++ *
++ *  既有的 A6 還原測試只看終態(`waitFor` K 線圖出現),中間那一格 commit 完全不可見 ——
++ *  這一檔就是補那個時間軸:把 `StockIntradayChart` 換成會記下每次 `stkfut` 的 stub,
++ *  斷言回現貨的過程中**不存在** `stkfut === false` 的紀錄。
++ *
++ *  斷言不寫成「零 render」:useContainerSize / query settle 都會製造無關的 re-render,
++ *  那種斷言會偽紅(spec review P2-4)。`CandleChart` 不 mock —— 終態「K 線圖真的掛上」
++ *  要由真身提供,否則本檔可以靠「什麼都不掛」假綠。
++ *
++ *  mock stub 與真身不能同檔(vi.mock 是檔案級 + hoisted),所以獨立成檔,
++ *  期貨態 / 還原的行為契約仍由 `StockChart.test.tsx` 的 D10 / A6 兩節(真身)守住。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { StockChart } from "@/components/stock/StockChart";
++import type { StockAccum } from "@/lib/stock-accum";
++
++/** vi.mock 的 factory 是 hoisted 且在被 mock 模組首次 import 時就執行(早於本檔的
++ *  module body)→ 紀錄陣列必須用 vi.hoisted 建,直接引用 top-level const 會踩 TDZ。 */
++const { renders } = vi.hoisted(() => ({ renders: [] as (boolean | undefined)[] }));
++
++vi.mock("@/components/stock/StockIntradayChart", () => ({
++  StockIntradayChart: (props: { stkfut?: boolean }) => {
++    renders.push(props.stkfut);
++    return <div data-testid="fake-intraday" data-stkfut={String(props.stkfut)} />;
++  },
++}));
++
++const ACCUM = {
++  code: "2330",
++  seq: 1,
++  last: { p: 2_380_000, t: "09:00:01.000", cum_vol: 1 },
++  vwap: 2_380_000,
++  minutes: new Map([[540, { c: 2_380_000, v: 1, i: 0, o: 1, u: 0 }]]),
++  ticks: [{ t: "09:00:01.000", p: 2_380_000, q: 1, side: "outer" }],
++  vp: new Map(),
++  book: { bids: [], asks: [] },
++  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++  noData: false,
++} as unknown as StockAccum;
++
++const BARS = [
++  { t: "2026-07-27", o: 100_000, h: 110_000, l: 90_000, c: 105_000, v: 10 },
++  { t: "2026-07-28", o: 105_000, h: 120_000, l: 100_000, c: 102_000, v: 20 },
++];
++
++const CONTRACT = { prod: "CDF", ym: "202609" };
++
++beforeEach(() => {
++  window.localStorage.clear();
++  renders.length = 0;
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) =>
++      String(url).includes("/api/stock/bars")
++        ? new Response(JSON.stringify({ bars: BARS }))
++        : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
++    ),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++/** 進出合約要在**同一個元件實例**上驗(重掛載 = 待還原偏好歸零 = 測不到還原);
++ *  `wrap` 的 rerender 會把 QueryClientProvider 一起換掉,所以自己持有 client
++ *  (逐字同 StockChart.test.tsx「現貨模式還原(A6)」節的 mount)。 */
++function mount() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  const tree = (contract: { prod: string; ym: string } | null) => (
++    <QueryClientProvider client={client}>
++      <StockChart accum={ACCUM} code="2330" contract={contract} />
++    </QueryClientProvider>
++  );
++  const view = render(tree(null));
++  return { setContract: (c: typeof CONTRACT | null) => view.rerender(tree(c)) };
++}
++
++describe("StockChart 回現貨的收斂時點(react-doctor P1)", () => {
++  it("回現貨還原日K:過程中不得掛上 stkfut=false 的分時圖", async () => {
++    const { setContract } = mount();
++    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
++
++    setContract(CONTRACT);
++    await waitFor(() => expect(screen.getByTestId("fake-intraday")).toBeTruthy());
++    // 進合約的紀錄(stkfut=true)與本條無關,只看「回現貨」這一段
++    renders.length = 0;
++
++    setContract(null);
++    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
++
++    // 中間那一格:isFut 已 false、mode 還沒被 effect 追上 → 現貨態分時圖被 commit 一次
++    expect(renders.filter((v) => v === false)).toEqual([]);
++    expect(screen.queryByTestId("fake-intraday")).toBeNull();
++  });
++});
+diff --git a/frontend/src/components/stock/StockChart.tsx b/frontend/src/components/stock/StockChart.tsx
+index 50b2fcfc..407bd07a 100644
+--- a/frontend/src/components/stock/StockChart.tsx
++++ b/frontend/src/components/stock/StockChart.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useMemo, useRef, useState } from "react";
++import { useMemo, useState } from "react";
+ 
+ import { CandleChart } from "@/components/stock/CandleChart";
+ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+@@ -53,40 +53,40 @@ export function StockChart({
+   const [mode, setMode] = useState<ChartMode>(initialMode);
+   const isFut = contract !== null;
+   // 期貨態一發都不打(R5):endpoint 查的是現貨股號,K 線與畫面上的合約無關。
+-  // 收斂是 effect(下一個 render 才生效),所以**不能**靠 mode 自己擋。
++  // 收斂雖然改成同一個 render pass 內完成,但這一行在收斂分支**之前**執行(hook 呼叫
++  // 順序不可調),「殘留日K + 切進合約」的第一次求值時 mode 仍是 day ——
++  // 外部否決(第四參數)仍是唯一保證,不能改成靠 mode 自己擋。
+   const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS, !isFut);
+   // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
+   const { toggles, set } = useChartToggles();
+ 
+   // 進期貨態前的現貨模式;null = 沒有待還原的偏好(code review A6)。
+-  const spotModeRef = useRef<ChartMode | null>(null);
++  const [spotMode, setSpotMode] = useState<ChartMode | null>(null);
+ 
+   // 期貨態只提供江波圖(D10)。模式是**持久化狀態** —— 使用者上次停在日 K 時,切進
+   // 合約的第一次 render 就已經是 day,不收斂會掛著一張與合約無關的現貨 K 線。
+   // **不寫回 localStorage**:那是使用者對現貨的偏好,切回現貨時要原樣回來 —— 而「原樣
+-  // 回來」需要一個 ref 記著(code review A6):只靠 localStorage 不夠,收斂發生在同一個
++  // 回來」需要 `spotMode` 記著(code review A6):只靠 localStorage 不夠,收斂發生在同一個
+   // session 內、`mode` state 已經被改成 intraday,切回現貨時沒有人會把它讀回來,使用者
+   // 看到的是「進了一次合約,我的日 K 偏好就沒了」。
+-  // (`you-might-not-need-an-effect` 的正解「render 期間直接算 effMode」在這裡不適用 ——
+-  //  它會讓 mode 這個 state 與畫面長期不一致,而模式鈕的 aria-pressed 讀的是 mode。)
+-  //  另註:新形狀下 `you-might-not-need-an-effect` 不再誤報,原本的 eslint-disable 對已
+-  //  移除(留著會被 reportUnusedDisableDirectives 判成多餘)。
+-  useEffect(() => {
+-    if (isFut) {
+-      if (mode !== "intraday") {
+-        spotModeRef.current = mode;
+-        setMode("intraday");
+-      }
+-      return;
++  //
++  // 收斂用**render 期間調整 state**(官方 adjust-state-on-prop-change;repo 樣板
++  // `WatchlistManagerDialog` 的 prevOpen),不用 effect:effect 要下一個 render 才生效,
++  // 回現貨時 `isFut` 已 false 而 `mode` 還停在 intraday → 會先 commit 一次「現貨態的
++  // 分時圖」再換成還原後的 K 線(閃一格)。React 在本函式 return 後、渲染子元件前就會
++  // 用新 state 重跑一次,所以那一格根本不會 commit(StockChart.futconverge.test.tsx 釘住)。
++  // 兩個分支各自收斂,不需要顯式的 prevIsFut:期貨態存偏好並收斂到 intraday(也涵蓋原
++  // effect deps 含 mode 的「期貨態內 mode 漂移」保險);回現貨還原一次並清掉待還原標記,
++  // 之後手動改模式不會被舊值再蓋一次。
++  if (isFut) {
++    if (mode !== "intraday") {
++      setSpotMode(mode);
++      setMode("intraday");
+     }
+-    // 回現貨:還原並清掉待還原標記(下一輪 effect 因此 no-op)。使用者若在期貨態手動
+-    // 按過模式鈕(本輪按不動,但這是狀態機層的保險)也不覆蓋 —— 還原只做一次。
+-    const saved = spotModeRef.current;
+-    if (saved !== null) {
+-      spotModeRef.current = null;
+-      setMode(saved);
+-    }
+-  }, [isFut, mode]);
++  } else if (spotMode !== null) {
++    setSpotMode(null);
++    setMode(spotMode);
++  }
+ 
+   function selectMode(next: ChartMode): void {
+     setMode(next);
+@@ -97,8 +97,10 @@ export function StockChart({
+   const bars = useMemo(() => aggregateBars(data?.bars ?? [], minutesOf(mode)), [data, mode]);
+ 
+   const isMinute = mode !== "intraday" && mode !== "day";
+-  // 收斂 effect 要下一個 render 才生效,期間 mode 仍是 day/分K → 會閃一格「載入中…」
+-  // (query 被 enabled:false 擋住,isPending 恆真)。畫面分支直接認 isFut,不等 state 追上。
++  // 畫面分支直接認 isFut,不只看 mode:收斂雖已在同一個 render pass 完成(理論上
++  // 走到這裡 mode 必為 intraday),但這是防禦 —— 收斂分支若被改壞,認 mode 會讓期貨態
++  // 掛出一張與合約無關的現貨 K 線 / 閃一格「載入中…」(query 被 enabled:false 擋住,
++  // isPending 恆真),而那是無錯誤訊號的假資料。
+   const showIntraday = isFut || mode === "intraday";
+ 
+   // 空 bars 且非 ok 時的替代句(null = 照舊掛 CandleChart)。bars 非空一律不分態:
+diff --git a/frontend/src/components/stock/TickTape.test.tsx b/frontend/src/components/stock/TickTape.test.tsx
+index 5ec8a078..99e214d9 100644
+--- a/frontend/src/components/stock/TickTape.test.tsx
++++ b/frontend/src/components/stock/TickTape.test.tsx
+@@ -94,6 +94,33 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
+     expect(root.className).toContain("overflow-y-auto"); // 內捲不可拿掉(W-8 載入更多要可達)
+   });
+ 
++  // 🔴 react-doctor P1(TickTape.tsx:57):`key` 用的是反轉後陣列的**前端**索引,
++  // 而新成交是前插 —— 每一筆成交都讓所有 key 位移一格,整個 tbody(30–200 列)卸載重掛。
++  // 盤中每秒數筆,這是持續的 DOM 重建。修法是回推索引(尾端錨定),前插時既有列 key 不變。
++  it("追加新成交後,原有列的 DOM node 恆等保留(key 不隨前插位移)", () => {
++    const base: TickRow[] = [
++      { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner" },
++      { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer" },
++    ];
++    const { rerender } = render(<TickTape ticks={base} ref_={REF} />);
++    const before = screen.getAllByRole("row").slice(1); // [09:00:02, 09:00:01]
++    expect(before).toHaveLength(2);
++
++    rerender(
++      <TickTape
++        ticks={[...base, { t: "09:00:03.000", p: 2_372_000, q: 1, side: "neutral" }]}
++        ref_={REF}
++      />,
++    );
++
++    const after = screen.getAllByRole("row").slice(1);
++    expect(after).toHaveLength(3);
++    expect(after[0]!.textContent).toContain("09:00:03"); // 新的一筆在最上
++    // 同一筆成交 = 同一個 DOM node(重掛的話這裡會是新物件)
++    expect(after[1]).toBe(before[0]);
++    expect(after[2]).toBe(before[1]);
++  });
++
+   // W-13 的分頁在 round4 之前零測試覆蓋 —— 誰把 PAGE 改掉或把按鈕拿掉都不會紅
+   it("點「載入更多」→ 列數 +30", () => {
+     const many: TickRow[] = Array.from({ length: 70 }, (_, i) => ({
+diff --git a/frontend/src/components/stock/TickTape.tsx b/frontend/src/components/stock/TickTape.tsx
+index 9a4e947a..5184dce3 100644
+--- a/frontend/src/components/stock/TickTape.tsx
++++ b/frontend/src/components/stock/TickTape.tsx
+@@ -53,8 +53,14 @@ export function TickTape({ ticks, ref_ }: { ticks: TickRow[]; ref_: number | nul
+           </tr>
+         </thead>
+         <tbody>
++          {/* key 用**尾端回推**索引:`rows` 是反轉後的清單,新成交前插 —— 用前端索引
++              (`i`)的話每來一筆成交所有 key 位移一格,整個 tbody(30–200 列)卸載重掛。
++              回推索引在前插時不變,既有列的 DOM node 因此保留。
++              已知限制:`ticks` 滿 `TAPE_MAX = 200`(stock-accum 環形丟頭)後陣列會左移,
++              回推索引一樣逐筆 −1 → 滿載時退回與現況同級(不惡化)。真解是後端帶單調
++              序號當 key,需要 API 變更,已記 next-time。 */}
+           {rows.map((t, i) => (
+-            <tr key={`${t.t}-${i}`} className="h-6">
++            <tr key={`${t.t}-${ticks.length - 1 - i}`} className="h-6">
+               <td className="text-ink-muted">{t.t.slice(0, 8)}</td>
+               <td className={cn("text-right", priceTone(t.b, ref_))}>
+                 {t.b == null ? "-" : fmt(t.b)}
+diff --git a/frontend/src/components/stock/WatchlistSidebar.dropcollapsed.test.tsx b/frontend/src/components/stock/WatchlistSidebar.dropcollapsed.test.tsx
+new file mode 100644
+index 00000000..edc3328f
+--- /dev/null
++++ b/frontend/src/components/stock/WatchlistSidebar.dropcollapsed.test.tsx
+@@ -0,0 +1,77 @@
++/** @vitest-environment jsdom */
++/** 🔒 lock(spec review P1-1):`dropCollapsed` 的呼叫者是 PUT mutation 的 `onSuccess`,
++ *  **不是事件路徑** —— 同一個 tick 內連續執行兩次時,render 閉包的 `collapsed` 還是舊的。
++ *  持久化若改成「直接讀閉包值算 next」,第二次會把第一次已清掉的組名原樣寫回 localStorage
++ *  (使用者日後建同名群組會意外呈折疊,W-20 的復發)。現況(updater 內 persist)與修法
++ *  (collapsedRef imperative 配對)都該綠,這條是防退化的鎖。
++ *
++ *  為什麼要 stub Dialog 而不從真實 UI 連按兩次刪除:實測(2026-08-11)側欄的 Dialog 只有
++ *  **一顆** `useSaveWatchlist` mutation observer,第二發 `mutate` 會覆蓋 observer 的
++ *  per-call callbacks,第一發的 `onSuccess` 因此根本不會執行 —— 真實 UI 連刪兩組只會走到
++ *  一次 `dropCollapsed`,測不到本條要守的不變式(那個 callback 遺失是另一個 pre-existing
++ *  問題,不在本批 scope)。所以這裡直接以 stub 打「同一 tick 兩次回呼」這個契約。
++ *
++ *  vi.mock 是檔案級 + hoisted → 必須獨立成檔,`WatchlistSidebar.test.tsx` 的 Dialog
++ *  相關測試(管理入口 / W-20 單組刪除)仍跑真身。 */
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
++import type { Group } from "@/lib/watchlist-model";
++
++vi.mock("@/components/stock/WatchlistManagerDialog", () => ({
++  WatchlistManagerDialog: ({ onGroupDeleted }: { onGroupDeleted: (name: string) => void }) => (
++    <button
++      type="button"
++      onClick={() => {
++        // 兩發 PUT 同批 resolve 的形狀:兩個 onSuccess 在同一個 tick 連續執行
++        onGroupDeleted("觀察");
++        onGroupDeleted("主力");
++      }}
++    >
++      連刪兩組
++    </button>
++  ),
++}));
++
++const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
++
++const GROUPS: Group[] = [
++  { name: "主力", codes: ["2330"] },
++  { name: "觀察", codes: ["3231"] },
++];
++
++beforeEach(() => {
++  window.localStorage.clear();
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) =>
++      String(url).includes("/api/stock/names")
++        ? new Response(JSON.stringify({ names: [], count: 0 }))
++        : new Response(JSON.stringify({ codes: ["2330", "3231"], groups: GROUPS })),
++    ),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("WatchlistSidebar dropCollapsed 同批回呼(P1-1 lock)", () => {
++  it("同一 tick 連刪兩組 → localStorage 兩組名皆不留", async () => {
++    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    render(
++      <QueryClientProvider client={client}>
++        <WatchlistSidebar active={null} onSelect={() => {}} quotes={{}} />
++      </QueryClientProvider>,
++    );
++    await waitFor(() => expect(screen.getByRole("button", { name: "連刪兩組" })).toBeTruthy());
++
++    fireEvent.click(screen.getByRole("button", { name: "連刪兩組" }));
++
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([]);
++  });
++});
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index 4fbdf377..f9b3f167 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -1,5 +1,6 @@
+ /** @vitest-environment jsdom */
+ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
++import { StrictMode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+@@ -328,6 +329,28 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
+     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+   });
+ 
++  // 🔴 react-doctor P1(WatchlistSidebar.tsx:104-131):`persistCollapsed` 寫在
++  // `setCollapsed` 的 updater 內 —— React 的 updater 契約是純函式,而全站包在 StrictMode
++  // (main.tsx)下 dev 會 double-invoke,每次折疊都寫兩次 localStorage。上一條「折疊狀態落
++  // localStorage」只驗最終值,寫幾次不管;而 updater 內做副作用一旦遇到 React 的重播
++  // (rebase / 中止的 render),持久化值與最終 state 就可能分歧。
++  it("StrictMode 下點折疊 → 只寫一次 localStorage 且值正確", async () => {
++    const setItem = vi.spyOn(Storage.prototype, "setItem");
++    wrap(
++      <StrictMode>
++        <WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />
++      </StrictMode>,
++    );
++    await waitGroups();
++    setItem.mockClear();
++
++    fireEvent.click(groupHeader("主力"));
++
++    const calls = setItem.mock.calls.filter((c) => c[0] === COLLAPSED_KEY);
++    expect(calls).toHaveLength(1);
++    expect(JSON.parse(String(calls[0]![1]))).toEqual(["主力"]);
++  });
++
+   // 🔴 round4 項 4(B-6):整條標題可點,不再只有 ▸/▾ 那個 3px 寬的按鈕
+   it("整條標題是一顆 button:點組名文字或計數同樣折疊", async () => {
+     sidebar();
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 4dc3bbd7..182dbe40 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -76,6 +76,18 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   /** 哪一檔未分組股票展開了「加入群組」清單 */
+   const [assigning, setAssigning] = useState<string | null>(null);
+   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
++  /** `collapsed` 的 imperative 影子(先例:`useStockStream` 的 accumRef)。
++   *
++   *  三個折疊寫入點一律「讀 ref 算 next → 同步 ref → persist → setState」,持久化因此
++   *  移出 updater —— updater 契約是純函式,StrictMode 下 double-invoke 會寫兩次
++   *  localStorage,遇到 React 重播(rebase / 中止的 render)持久化值還可能與最終 state 分歧。
++   *
++   *  為什麼是 ref 而不是直接讀 render 閉包的 `collapsed`:`dropCollapsed` 的唯一呼叫者是
++   *  PUT mutation 的 `onSuccess`(WatchlistManagerDialog 的刪組回呼),**不是事件路徑**。
++   *  連刪兩組、兩發 PUT 同批 resolve 時,兩個回呼在同一個 tick 連續執行,render 閉包還是
++   *  舊的 —— 第二次會把第一次已清掉的組名原樣寫回 localStorage。ref 是同步更新的,守得住
++   *  (useLayoutEffect 同步版守不住:同一 tick 內 layout effect 還沒跑)。 */
++  const collapsedRef = useRef(collapsed);
+   const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
+   const [dialogOpen, setDialogOpen] = useState(false);
+   // 落點 index 不入 state:插入位置在 pointerup 當下由 `dropTargetFromPointer` 現算,
+@@ -102,32 +114,31 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   }
+ 
+   function toggleCollapsed(name: string): void {
+-    setCollapsed((prev) => {
+-      const next = new Set(prev);
+-      if (next.has(name)) next.delete(name);
+-      else next.add(name);
+-      persistCollapsed(next);
+-      return next;
+-    });
++    const next = new Set(collapsedRef.current);
++    if (next.has(name)) next.delete(name);
++    else next.add(name);
++    collapsedRef.current = next;
++    persistCollapsed(next);
++    setCollapsed(next);
+   }
+ 
++  /** 未分組折疊是 boolean 且只走純點擊路徑(沒有 mutation 回呼那種同批連發),
++   *  直接用 render 閉包的值算 next 就夠,不需要影子 ref。 */
+   function toggleUngroupedCollapsed(): void {
+-    setUngroupedCollapsed((prev) => {
+-      const next = !prev;
+-      window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
+-      return next;
+-    });
++    const next = !ungroupedCollapsed;
++    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
++    setUngroupedCollapsed(next);
+   }
+ 
+-  /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。 */
++  /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。
++   *  呼叫路徑是 mutation 的 `onSuccess`(非事件),故必須讀 `collapsedRef`(見其宣告處)。 */
+   function dropCollapsed(name: string): void {
+-    setCollapsed((prev) => {
+-      if (!prev.has(name)) return prev;
+-      const next = new Set(prev);
+-      next.delete(name);
+-      persistCollapsed(next);
+-      return next;
+-    });
++    if (!collapsedRef.current.has(name)) return; // 本來就不在 → 零寫入
++    const next = new Set(collapsedRef.current);
++    next.delete(name);
++    collapsedRef.current = next;
++    persistCollapsed(next);
++    setCollapsed(next);
+   }
+ 
+   /** 搜尋命中 → **預覽**該檔(round4 項 4)。
+diff --git a/frontend/src/hooks/useBreadth.ts b/frontend/src/hooks/useBreadth.ts
+index 61054032..54c620ed 100644
+--- a/frontend/src/hooks/useBreadth.ts
++++ b/frontend/src/hooks/useBreadth.ts
+@@ -8,7 +8,7 @@
+  * 期間抵達的增量格(見 `mergeSnapshot`)。
+  */
+ 
+-import { useEffect, useRef, useState } from "react";
++import { useEffect, useLayoutEffect, useRef, useState } from "react";
+ 
+ import type { BreadthPoint, BreadthState } from "@/types";
+ 
+@@ -58,7 +58,13 @@ function mergeSnapshot(prev: BreadthState | null, next: BreadthState): BreadthSt
+ export function useBreadth(): BreadthState | null {
+   const [state, setState] = useState<BreadthState | null>(null);
+   const stateRef = useRef<BreadthState | null>(null);
+-  stateRef.current = state;
++
++  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這顆 ref 取當下值。同步寫在
++  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
++  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
++  useLayoutEffect(() => {
++    stateRef.current = state;
++  }, [state]);
+ 
+   const refetch = async (): Promise<void> => {
+     try {
+diff --git a/frontend/src/hooks/useFuturesStream.ts b/frontend/src/hooks/useFuturesStream.ts
+index 5b92b5a2..f2eef4fb 100644
+--- a/frontend/src/hooks/useFuturesStream.ts
++++ b/frontend/src/hooks/useFuturesStream.ts
+@@ -58,7 +58,6 @@ export function useFuturesStream(): FuturesStreamState {
+   const refetchingRef = useRef(false);
+   const pendingRefetchRef = useRef(false);
+   const pendingRef = useRef<FuturesWsMsg[]>([]);
+-  stateRef.current = state;
+ 
+   const refetch = async (): Promise<void> => {
+     if (refetchingRef.current) {
+diff --git a/frontend/src/hooks/useIndexStream.ts b/frontend/src/hooks/useIndexStream.ts
+index 935c1418..1901b33c 100644
+--- a/frontend/src/hooks/useIndexStream.ts
++++ b/frontend/src/hooks/useIndexStream.ts
+@@ -6,7 +6,7 @@
+  * reconnect → refetch /api/index/state 全量。
+  */
+ 
+-import { useEffect, useRef, useState } from "react";
++import { useEffect, useLayoutEffect, useRef, useState } from "react";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+ 
+@@ -68,9 +68,15 @@ export function useIndexStream(): IndexStreamState {
+   const twseRef = useRef<IndexSeries | null>(null);
+   const otcRef = useRef<IndexSeries | null>(null);
+   const tradeDateRef = useRef<string | null>(null);
+-  twseRef.current = twse;
+-  otcRef.current = otc;
+-  tradeDateRef.current = tradeDate;
++
++  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
++  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
++  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
++  useLayoutEffect(() => {
++    twseRef.current = twse;
++    otcRef.current = otc;
++    tradeDateRef.current = tradeDate;
++  }, [twse, otc, tradeDate]);
+ 
+   const refetch = async (): Promise<void> => {
+     try {
+diff --git a/frontend/src/hooks/useRiver.test.ts b/frontend/src/hooks/useRiver.test.ts
+index e4b7a787..218521a5 100644
+--- a/frontend/src/hooks/useRiver.test.ts
++++ b/frontend/src/hooks/useRiver.test.ts
+@@ -147,6 +147,37 @@ describe("useRiver", () => {
+     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/river/state"));
+   });
+ 
++  // 🔴 react-doctor P1(useRiver.ts:115-122):換場的 `void load()` 寫在 `setState` 的
++  // updater 內 —— React 的 updater 契約是純函式,而全站包在 StrictMode(main.tsx)下 dev
++  // 會 double-invoke,一次換場就打兩份 `/api/river/state` 全量快照(滿窗夜盤 60–80 KB)。
++  // 上一條「盤別變更 → 清空 + 換窗 + 重抓全量」只鎖了「有打」的下界,打幾次不管。
++  it("StrictMode 下換場的 /api/river/state 恰一發(updater 必須是純函式)", async () => {
++    const hook = renderHook(() => useRiver(), { reactStrictMode: true });
++    await waitFor(() => expect(hook.result.current.state).not.toBeNull());
++    // StrictMode 的 effect double-invoke 會建兩條 FakeWS(第一條已在 cleanup 關掉)。
++    // 對 instances[0] 發訊息會假綠:那條的 `alive` 已是 false,回補的 snapshot 會被丟掉。
++    expect(FakeWS.instances.length).toBe(2);
++    const ws = FakeWS.instances.at(-1)!;
++    fetchMock.mockImplementation(
++      async () => new Response(JSON.stringify(snap(3, { "31": 40_600_000 }, "night"))),
++    );
++    const before = fetchMock.mock.calls.length;
++
++    act(() => ws.emit(delta(2, 30, 40_500_000, "night")));
++
++    // 換場回補是非同步的,要等它有機會發生才算數(否則斷言的是「還沒打」)
++    await act(async () => {
++      await new Promise((r) => setTimeout(r, 30));
++    });
++    expect(fetchMock.mock.calls.length).toBe(before + 1);
++    // 上界不是唯一要件:換場回補的 night snapshot 必須真的併進 state,
++    // 否則「少打一發」可以靠把整條路徑拆掉來假綠。
++    await waitFor(() => expect(txfMinutes(hook.result.current.state)["31"]).toBe(40_600_000));
++    expect(hook.result.current.state?.session).toBe("night");
++    expect(hook.result.current.state?.window).toEqual(NIGHT);
++    expect(txfMinutes(hook.result.current.state)["30"]).toBe(40_500_000);
++  });
++
+   it("REST 503 → state 維持 null 且不拋", async () => {
+     fetchMock.mockImplementation(
+       async () => new Response(JSON.stringify({ detail: { error: "RIVER_NOT_READY" } }), { status: 503 }),
+diff --git a/frontend/src/hooks/useRiver.ts b/frontend/src/hooks/useRiver.ts
+index 176d6970..36d4497d 100644
+--- a/frontend/src/hooks/useRiver.ts
++++ b/frontend/src/hooks/useRiver.ts
+@@ -79,6 +79,11 @@ export function useRiver(): RiverStreamState {
+   const [state, setState] = useState<RiverState | null>(null);
+   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
+   const seqRef = useRef<number>(-1);
++  /** 目前已知的盤別;`null` = 還沒有任何 snapshot。換場判定讀它而不是讀 `state` ——
++   *  判定的後果是 `load()`(REST 副作用),不能放在 `setState` 的 updater 內:updater
++   *  契約是純函式,而全站包在 StrictMode(main.tsx)下 dev 會 double-invoke,一次換場
++   *  打兩份全量快照(滿窗夜盤 60–80 KB)。先例:`useStockStream.ts` 的 statusRef(F-1)。 */
++  const sessionRef = useRef<string | null>(null);
+ 
+   useEffect(() => {
+     let alive = true;
+@@ -92,6 +97,7 @@ export function useRiver(): RiverStreamState {
+       // 丟掉,畫面凍在 snapshot 那一刻直到 seq 追上舊值(Phase 4 自評 finding)。
+       // 資料不會因此倒退:snapshot 走 union 合併,舊值蓋不掉新值。
+       seqRef.current = next.seq;
++      sessionRef.current = next.session;
+       setState((prev) => mergeSnapshot(prev, next));
+     };
+ 
+@@ -109,15 +115,23 @@ export function useRiver(): RiverStreamState {
+ 
+     void load();
+ 
++    // 順序固定,三段各自有理由:
++    // 1. seq 守衛先行 —— 舊 seq 的跨場 delta 整則丟掉,不觸發 load、不動 sessionRef
++    //    (與舊版等價:舊版的 updater 也看不到它)。
++    // 2. 換場判定與 `load()`(副作用)在 setState **之前**,ref 同步更新使同一場的
++    //    後續 delta 不再重複觸發回補。
++    // 3. updater 純函式:清空換窗仍以 `prev.session` 判定(state 才是畫面真相,
++    //    ref 只負責副作用的去重)。
+     const onDelta = (msg: RiverDelta): void => {
+       if (msg.seq < seqRef.current) return;
+       seqRef.current = msg.seq;
++      if (sessionRef.current !== null && sessionRef.current !== msg.session) {
++        sessionRef.current = msg.session;
++        void load(); // 換場:先本地清空換窗,再補抓新場的回補資料
++      }
+       setState((prev) => {
+         if (prev === null) return prev; // 還沒有 snapshot,delta 無處可併
+-        if (prev.session !== msg.session) {
+-          void load(); // 換場:先本地清空換窗,再補抓新場的回補資料
+-          return applyDelta(resetForSession(prev, msg), msg);
+-        }
++        if (prev.session !== msg.session) return applyDelta(resetForSession(prev, msg), msg);
+         return applyDelta(prev, msg);
+       });
+     };
+diff --git a/frontend/src/hooks/useSignalAlerts.ts b/frontend/src/hooks/useSignalAlerts.ts
+index 84b63111..d1d717a4 100644
+--- a/frontend/src/hooks/useSignalAlerts.ts
++++ b/frontend/src/hooks/useSignalAlerts.ts
+@@ -3,7 +3,7 @@
+  *  掛在 App 常駐(與 tab 無關)—— 訊號涵蓋整個自選池,人在看期貨頁時個股鎖漲停
+  *  一樣要跳出來。 */
+ 
+-import { useEffect, useMemo, useRef, useState } from "react";
++import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ 
+ import { getSoundOn, useSignalSound } from "@/hooks/useSignalSound";
+ import { onSignal } from "@/lib/signal-bus";
+@@ -69,17 +69,17 @@ export function useSignalAlerts() {
+   const seqRef = useRef(0);
+   const timersRef = useRef(new Map<string, number>());
+ 
+-  function drop(key: string): void {
++  /** deps **必須恆為 `[]`**:函式體只碰 `timersRef` 與 `setQueue`(兩者恆定),而下面的
++   *  bus 訂閱 effect 以它為 dep —— 只要 `drop` 換身分,effect 就會重跑並在 cleanup 清光
++   *  還在倒數的 TTL timer。 */
++  const drop = useCallback((key: string): void => {
+     const timer = timersRef.current.get(key);
+     if (timer !== undefined) {
+       window.clearTimeout(timer);
+       timersRef.current.delete(key);
+     }
+     setQueue((prev) => prev.filter((t) => t.key !== key));
+-  }
+-
+-  const dropRef = useRef(drop);
+-  dropRef.current = drop;
++  }, []);
+ 
+   useEffect(() => {
+     const off = onSignal((sig) => {
+@@ -93,13 +93,13 @@ export function useSignalAlerts() {
+       setQueue((prev) => [{ key, sig, text }, ...prev]);
+       timersRef.current.set(
+         key,
+-        window.setTimeout(() => dropRef.current(key), TTL_MS),
++        window.setTimeout(() => drop(key), TTL_MS),
+       );
+       // 分頁在背景就發桌面通知,**不受靜音影響**(review MFS-1):靜音的語意是
+       // 「不要出聲」不是「不要通知」(design §8.3 / SC-10)—— 人離開分頁時桌面通知
+       // 是唯一的抵達路徑,被音效開關順帶關掉等於整條提示鏈斷掉。
+       if (document.hidden) notifyDesktop(text, sig.id);
+-      // 靜音只關音效。bus 訂閱只做一次(deps []),故讀當下值而不是閉包捕捉的 soundOn
++      // 靜音只關音效。bus 訂閱只做一次(deps 恆定),故讀當下值而不是閉包捕捉的 soundOn
+       if (getSoundOn()) playBeep();
+     });
+     const timers = timersRef.current;
+@@ -108,13 +108,13 @@ export function useSignalAlerts() {
+       for (const timer of timers.values()) window.clearTimeout(timer);
+       timers.clear();
+     };
+-  }, []);
++  }, [drop]);
+ 
+   const toasts = useMemo(() => queue.slice(0, VISIBLE), [queue]);
+   return {
+     toasts,
+     overflow: Math.max(0, queue.length - VISIBLE),
+-    dismiss: (key: string) => dropRef.current(key),
++    dismiss: drop,
+     soundOn,
+     setSoundOn,
+   };
+diff --git a/frontend/src/hooks/useStockBars.ts b/frontend/src/hooks/useStockBars.ts
+index 9da9b8a1..f82ed333 100644
+--- a/frontend/src/hooks/useStockBars.ts
++++ b/frontend/src/hooks/useStockBars.ts
+@@ -73,8 +73,10 @@ export function barsPollInterval(
+ 
+ /** `enabled` 是**外部否決**(D10/R5),不是「再判一次 code/mode」:個股期合約態下
+  *  這支 endpoint 查的是**現貨**股號,拿回來的 K 線與畫面上的合約無關 —— 畫得出來、
+- *  沒有錯誤,是零訊號的假資料。而模式收斂是 effect(下一個 render 才生效),
+- *  「殘留日 K + 切進合約」的**第一次 render** 仍是 day,不在這裡擋就已經打出去了。 */
++ *  沒有錯誤,是零訊號的假資料。而模式收斂雖然在同一個 render pass 內完成
++ *  (StockChart 的 render 期間調整分支),本 hook 是在那個分支**之前**被呼叫的
++ *  (hook 呼叫順序不可調)——「殘留日 K + 切進合約」的第一次求值仍是 day,
++ *  外部否決(`enabled` 參數)因此仍是唯一保證,不在這裡擋就已經打出去了。 */
+ export function useStockBars(
+   code: string | null,
+   mode: ChartMode,
+diff --git a/frontend/src/hooks/useStockStream.ts b/frontend/src/hooks/useStockStream.ts
+index c38985aa..34599678 100644
+--- a/frontend/src/hooks/useStockStream.ts
++++ b/frontend/src/hooks/useStockStream.ts
+@@ -133,7 +133,6 @@ export function useStockStream(
+   const instrumentKey = instrumentKeyOf(code, contract);
+   const instrumentKeyRef = useRef(instrumentKey);
+   instrumentKeyRef.current = instrumentKey;
+-  accumRef.current = accum;
+ 
+   // 重試排程的三道前置(F-3)。ref 而非 state:排程與取消都發生在 WS callback / async
+   // finally 裡,那些地方讀不到 render 當下的 state。
