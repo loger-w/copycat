@@ -103,7 +103,9 @@ docs/superpowers/         # spec 與 implementation plan
 
 完成前 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過
 four/five 兩份 replay)。venv = Python 3.13(`py -3.13 -m venv .venv`;`py` 預設 3.14 別直接用)。
-動到 frontend/ 另加:`npm test` + `npx tsc -b` + `npx eslint src`(在 frontend/)。
+動到 frontend/ 另加:`npm test` + `npx tsc -b` + `npx eslint src` +
+`npx react-doctor@latest --scope changed --no-telemetry`(在 frontend/;doctor 只有
+**新增** finding 算 FAIL,存量不擋;誤報處置與 rules 口徑見 auto-verify skill 4.4.0 節)。
 
 **部署前置(Touchance 特性)**:TC4 是 Windows 桌面 app,Python client 走 **ZMQ**(實測登入
 port = **50774**,SubPort 動態;官方文件 51171/51141 與現版不符)。後端 host 必須 Windows +
