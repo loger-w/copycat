@@ -84,10 +84,12 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
    *  localStorage,遇到 React 重播(rebase / 中止的 render)持久化值還可能與最終 state 分歧。
    *
    *  為什麼是 ref 而不是直接讀 render 閉包的 `collapsed`:`dropCollapsed` 的唯一呼叫者是
-   *  PUT mutation 的 `onSuccess`(WatchlistManagerDialog 的刪組回呼),**不是事件路徑**。
-   *  連刪兩組、兩發 PUT 同批 resolve 時,兩個回呼在同一個 tick 連續執行,render 閉包還是
-   *  舊的 —— 第二次會把第一次已清掉的組名原樣寫回 localStorage。ref 是同步更新的,守得住
-   *  (useLayoutEffect 同步版守不住:同一 tick 內 layout effect 還沒跑)。 */
+   *  PUT 成功後的回呼(WatchlistManagerDialog 的刪組 onDone),**不是事件路徑**。
+   *  這是防禦性契約:Dialog 現已把連續操作序列化(fix/watchlist-dialog-swallowed-callback,
+   *  2026-08-11),兩個回呼各自跟在自己的 PUT 回應後、不再同 tick 連發;但「同一 tick 內
+   *  連續執行兩次也守得住」仍是本設計要保的不變式 —— 改回讀 render 閉包的話,任何未來的
+   *  同批回呼(或第三個呼叫者)都會把已清掉的組名原樣寫回 localStorage
+   *  (useLayoutEffect 同步版同樣守不住:同一 tick 內 layout effect 還沒跑)。 */
   const collapsedRef = useRef(collapsed);
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
   const [dialogOpen, setDialogOpen] = useState(false);
