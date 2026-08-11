@@ -145,6 +145,14 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
 
   const errorMessage = localError ?? (save.error ? save.error.message : null);
 
+  /** 搜尋框的可及名稱與 placeholder **同一份字串**:accname 計算 aria-label 優先於
+   *  placeholder,兩者分開寫的話 aria-label 會把「加到哪一組」的脈絡蓋掉(review P1);
+   *  與側欄的靜態「股號或名稱」也因此天然不撞名。 */
+  const stockInputLabel =
+    activeGroup === null
+      ? "加入自選 — 股號或名稱"
+      : `加入股票到「${activeGroup.name}」— 股號或名稱`;
+
   function groupRow(label: string, count: number, key: string | null): React.ReactElement {
     const isSelected = selected === key;
     const real = key !== null;
@@ -327,14 +335,10 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
             <section aria-label="股票" className="flex min-h-0 min-w-0 flex-1 flex-col">
               <div className="shrink-0 border-b border-line px-3 py-2">
                 <input
-                  aria-label="股號或名稱"
+                  aria-label={stockInputLabel}
                   value={stockInput}
                   onChange={(e) => setStockInput(e.target.value)}
-                  placeholder={
-                    activeGroup === null
-                      ? "加入自選 — 股號或名稱"
-                      : `加入股票到「${activeGroup.name}」— 股號或名稱`
-                  }
+                  placeholder={stockInputLabel}
                   className="w-full rounded border border-line bg-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
                 />
                 {suggestions.length > 0 ? (
