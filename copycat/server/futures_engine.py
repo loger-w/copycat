@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import functools
 import logging
 from typing import Callable, Protocol
@@ -130,6 +129,9 @@ class FuturesEngine:
         self._resub_interval_secs = resub_interval_secs
         self._pending_subs: set[str] = set()
         self._resub_task: asyncio.Task[None] | None = None
+        # 重連世代:_handle_reconnect 遞增;重試輪 await 期間世代變了 = 該筆成功
+        # 掛在舊連線上(SUB 隨 dispose 蒸發),不得出列(review C-4)
+        self._resub_epoch = 0
 
     # ---- 生命週期 ----
 
@@ -137,12 +139,15 @@ class FuturesEngine:
         self._loop = asyncio.get_running_loop()
         self._source = self._source_factory()
         self._source.set_on_message(self._on_quote_threadsafe)
-        if hasattr(self._source, "on_reconnect"):
-            # 重連對帳:_check_stale 重掛可能靜默掉訂(P1-3),engine 端回填 pending
-            self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
         await asyncio.to_thread(self._subscribe_all)
         if self._pending_subs:
             self._resub_task = asyncio.create_task(self._resub_loop())
+        if hasattr(self._source, "on_reconnect"):
+            # 重連對帳(P1-3)。接線放 start() **最後**(照 corr):提早接會讓
+            # _subscribe_all 的 await 期間就有回呼打進來,_handle_reconnect 建出的
+            # task 被上面的 create_task 覆寫成孤兒,且破壞 _subscribe_all 的
+            # 「無並發讀寫」不變式(review C-1)
+            self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
 
     def _subscribe_all(self) -> None:
         assert self._source is not None
@@ -177,16 +182,19 @@ class FuturesEngine:
 
     async def _resub_round(self, source: FuturesSource) -> None:
         for product in sorted(self._pending_subs):
+            epoch = self._resub_epoch
             try:
                 await asyncio.to_thread(self._retry_subscribe, source, product)
             except ConnectionError:
                 # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
                 logger.warning("futures subscribe %s failed", product)
                 continue
+            if epoch != self._resub_epoch:
+                # await 期間發生重連:這筆成功掛在舊連線上,留在 pending 下輪重掛
+                # (review C-4)。leaf 記帳的撤銷不在這裡 —— SUB 回 OK 不代表 HOT
+                # 有推播,真判準在 _handle_quote 的 HOT 成交 tick(review C-2)
+                continue
             self._pending_subs.discard(product)
-            # HOT 已回:撤銷 leaf fallback 記帳,跨日重武裝不再每天複製新月 leaf。
-            # 當日既存的 HOT+leaf 雙訂閱接受(leaf 無退訂路,兩邊值相同;P2-1)
-            self._leaf_fed.discard(product)
             logger.info("futures %s subscribe retry ok", product)
 
     def _retry_subscribe(self, source: FuturesSource, product: str) -> None:
@@ -213,9 +221,14 @@ class FuturesEngine:
             resub.cancel()
             # 放寬到 Exception:task 若已死於非連線例外,只吞 CancelledError 會讓
             # await 重拋 → 之後的 leaf gather 與 source.close() 全跳過,KeepAlive
-            # 洩漏 process 不退(回溯審 P1-1;corr close 同款)
-            with contextlib.suppress(asyncio.CancelledError, Exception):
+            # 洩漏 process 不退(回溯審 P1-1)。吞但留紀錄(stock close 同語意;
+            # review C-5)—— 落到這裡 = 連迴圈自身的例外圍籬都沒接住
+            try:
                 await resub
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("close: futures resub task 帶例外結束")
         if self._leaf_timer is not None:
             self._leaf_timer.cancel()
             self._leaf_timer = None
@@ -353,15 +366,21 @@ class FuturesEngine:
         (p is None)也不武裝,零復原(回溯審 P1-3)。
 
         對帳 = 全品回填 pending 交給重試迴圈:subscribe 走 UNSUB→SUB 冪等,重掛仍
-        活著的品無害;首輪重掛在一個 interval 後。leaf 訂閱的對帳不在此
+        活著的品無害。成本(review C-6,接受):健康品每次重連多吃一輪 UNSUB→SUB
+        (數十 ms 真空窗 + 2 發 REQ),首輪重掛等一個 interval(prod 10s)——
+        換到的是「掉訂型態不用逐一枚舉」的無條件收回。leaf 訂閱的對帳不在此
         (掉 leaf 需等跨日重武裝,記 next-time)。
         """
+        if self._loop is None:
+            return  # close 已開始:排入在途的回呼不得再建 task(review C-3)
         self._pending_subs.update(self._products)
+        self._resub_epoch += 1
         if self._resub_task is None or self._resub_task.done():
-            self._resub_task = asyncio.create_task(self._resub_loop())
+            self._resub_task = self._loop.create_task(self._resub_loop())
 
     def _handle_quote(self, quote: dict) -> None:
-        product = product_from_symbol(str(quote.get("Symbol", "")))
+        symbol = str(quote.get("Symbol", ""))
+        product = product_from_symbol(symbol)
         if product is None:
             return
         st = self._states.get(product)
@@ -380,6 +399,11 @@ class FuturesEngine:
         if meta.lower_milli is not None:
             st.lower = meta.lower_milli
         if tick is not None:
+            if symbol.endswith(".HOT"):
+                # 「HOT 已回」的真判準:HOT 自己推了成交(SUB 回 OK 不算 —— spot 衝突品
+                # SUB 恆 OK 但零推播)。撤銷 leaf 記帳後跨日不再複製新月 leaf;
+                # 記帳保留期間的 HOT+leaf 雙訂閱接受(兩邊值相同;review C-2/P2-1)
+                self._leaf_fed.discard(product)
             if st.date is not None and tick.trade_date != st.date:
                 st.resolved_ym = None  # 跨日失效:先清,同筆有月份訊號再重解
                 # 換月重武裝(review I2):leaf-fed 商品的舊月 leaf 到期後零推播,
