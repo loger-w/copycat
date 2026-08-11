@@ -58,7 +58,6 @@ export function useFuturesStream(): FuturesStreamState {
   const refetchingRef = useRef(false);
   const pendingRefetchRef = useRef(false);
   const pendingRef = useRef<FuturesWsMsg[]>([]);
-  stateRef.current = state;
 
   const refetch = async (): Promise<void> => {
     if (refetchingRef.current) {

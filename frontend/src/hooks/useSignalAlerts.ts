@@ -3,7 +3,7 @@
  *  掛在 App 常駐(與 tab 無關)—— 訊號涵蓋整個自選池,人在看期貨頁時個股鎖漲停
  *  一樣要跳出來。 */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getSoundOn, useSignalSound } from "@/hooks/useSignalSound";
 import { onSignal } from "@/lib/signal-bus";
@@ -69,17 +69,17 @@ export function useSignalAlerts() {
   const seqRef = useRef(0);
   const timersRef = useRef(new Map<string, number>());
 
-  function drop(key: string): void {
+  /** deps **必須恆為 `[]`**:函式體只碰 `timersRef` 與 `setQueue`(兩者恆定),而下面的
+   *  bus 訂閱 effect 以它為 dep —— 只要 `drop` 換身分,effect 就會重跑並在 cleanup 清光
+   *  還在倒數的 TTL timer。 */
+  const drop = useCallback((key: string): void => {
     const timer = timersRef.current.get(key);
     if (timer !== undefined) {
       window.clearTimeout(timer);
       timersRef.current.delete(key);
     }
     setQueue((prev) => prev.filter((t) => t.key !== key));
-  }
-
-  const dropRef = useRef(drop);
-  dropRef.current = drop;
+  }, []);
 
   useEffect(() => {
     const off = onSignal((sig) => {
@@ -93,13 +93,13 @@ export function useSignalAlerts() {
       setQueue((prev) => [{ key, sig, text }, ...prev]);
       timersRef.current.set(
         key,
-        window.setTimeout(() => dropRef.current(key), TTL_MS),
+        window.setTimeout(() => drop(key), TTL_MS),
       );
       // 分頁在背景就發桌面通知,**不受靜音影響**(review MFS-1):靜音的語意是
       // 「不要出聲」不是「不要通知」(design §8.3 / SC-10)—— 人離開分頁時桌面通知
       // 是唯一的抵達路徑,被音效開關順帶關掉等於整條提示鏈斷掉。
       if (document.hidden) notifyDesktop(text, sig.id);
-      // 靜音只關音效。bus 訂閱只做一次(deps []),故讀當下值而不是閉包捕捉的 soundOn
+      // 靜音只關音效。bus 訂閱只做一次(deps 恆定),故讀當下值而不是閉包捕捉的 soundOn
       if (getSoundOn()) playBeep();
     });
     const timers = timersRef.current;
@@ -108,13 +108,13 @@ export function useSignalAlerts() {
       for (const timer of timers.values()) window.clearTimeout(timer);
       timers.clear();
     };
-  }, []);
+  }, [drop]);
 
   const toasts = useMemo(() => queue.slice(0, VISIBLE), [queue]);
   return {
     toasts,
     overflow: Math.max(0, queue.length - VISIBLE),
-    dismiss: (key: string) => dropRef.current(key),
+    dismiss: drop,
     soundOn,
     setSoundOn,
   };

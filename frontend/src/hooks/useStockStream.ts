@@ -133,7 +133,6 @@ export function useStockStream(
   const instrumentKey = instrumentKeyOf(code, contract);
   const instrumentKeyRef = useRef(instrumentKey);
   instrumentKeyRef.current = instrumentKey;
-  accumRef.current = accum;
 
   // 重試排程的三道前置(F-3)。ref 而非 state:排程與取消都發生在 WS callback / async
   // finally 裡,那些地方讀不到 render 當下的 state。

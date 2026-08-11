@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
@@ -115,6 +116,25 @@ function search(): HTMLElement {
  *  有了 `aria-expanded` 之後把狀態寫進名稱會重複播報而且可能不同步。 */
 function groupHeader(name: string): HTMLElement {
   return screen.getByRole("button", { name: new RegExp(name) });
+}
+
+/** StrictMode 下 render 側欄,附 **StrictMode 生效自檢**(review F-3)。
+ *
+ *  自檢訊號 = `useState` 的 lazy initializer 被 double-invoke:`loadCollapsed` 因此讀
+ *  **兩次** localStorage。少了它,「只寫一次」這種上界斷言在單次 render 下**恆真** ——
+ *  哪天 wrapper 被拿掉、或 React / RTL 改了 StrictMode 的行為,測試會靜默變成 vacuous
+ *  (照樣綠,但什麼都沒守)。先例:`useRiver.test.ts` 的 `FakeWS.instances.length === 2`。 */
+async function renderStrict() {
+  const getItem = vi.spyOn(Storage.prototype, "getItem");
+  const setItem = vi.spyOn(Storage.prototype, "setItem");
+  wrap(
+    <StrictMode>
+      <WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />
+    </StrictMode>,
+  );
+  expect(getItem.mock.calls.filter((c) => c[0] === COLLAPSED_KEY)).toHaveLength(2);
+  await waitGroups();
+  return { setItem };
 }
 
 /** jsdom 沒有 PointerEvent;MouseEvent 帶 clientX/clientY 且 type 對得上即可 */
@@ -326,6 +346,36 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
     sidebar();
     await waitGroups();
     expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+  });
+
+  // 🔴 react-doctor P1(WatchlistSidebar.tsx:104-131):`persistCollapsed` 寫在
+  // `setCollapsed` 的 updater 內 —— React 的 updater 契約是純函式,而全站包在 StrictMode
+  // (main.tsx)下 dev 會 double-invoke,每次折疊都寫兩次 localStorage。上一條「折疊狀態落
+  // localStorage」只驗最終值,寫幾次不管;而 updater 內做副作用一旦遇到 React 的重播
+  // (rebase / 中止的 render),持久化值與最終 state 就可能分歧。
+  it("StrictMode 下點折疊 → 只寫一次 localStorage 且值正確", async () => {
+    const { setItem } = await renderStrict();
+    setItem.mockClear();
+
+    fireEvent.click(groupHeader("主力"));
+
+    const calls = setItem.mock.calls.filter((c) => c[0] === COLLAPSED_KEY);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0]![1]))).toEqual(["主力"]);
+  });
+
+  // 🔒 lock(review F-4):`toggleUngroupedCollapsed` 走的是「直接形式」(boolean、純點擊
+  // 路徑,不經 collapsedRef),與上一條的群組折疊是**各自獨立的寫入點** —— 只鎖群組那條,
+  // 這條哪天被改回 updater 內 persist 沒有任何測試會紅。
+  it("StrictMode 下點未分組折疊 → WL_UNGROUPED_KEY 只寫一次且值正確", async () => {
+    const { setItem } = await renderStrict();
+    setItem.mockClear();
+
+    fireEvent.click(groupHeader("未分組"));
+
+    const calls = setItem.mock.calls.filter((c) => c[0] === UNGROUPED_KEY);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]).toBe("1");
   });
 
   // 🔴 round4 項 4(B-6):整條標題可點,不再只有 ▸/▾ 那個 3px 寬的按鈕

@@ -6,7 +6,7 @@
  * reconnect → refetch /api/index/state 全量。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type WsStatus = "connecting" | "open" | "closed";
 
@@ -68,9 +68,24 @@ export function useIndexStream(): IndexStreamState {
   const twseRef = useRef<IndexSeries | null>(null);
   const otcRef = useRef<IndexSeries | null>(null);
   const tradeDateRef = useRef<string | null>(null);
-  twseRef.current = twse;
-  otcRef.current = otc;
-  tradeDateRef.current = tradeDate;
+
+  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
+  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
+  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+  //
+  // 兩條維護前提(review F-6 / TC-1):
+  // 1. **凡被 WS handler 以 ref 讀取的 state,一律進本 effect 的 deps**。少列一個的症狀是
+  //    handler 永遠讀到第一輪的值(merge 基底 / 換日比對用舊值),沒有任何錯誤訊號。
+  // 2. 本 ref **只在 commit 之後同步,handler 內不做同 tick 回寫** —— 與
+  //    `useFuturesStream` / `useStockStream` 那種 imperative 配對(寫入點當場同步 ref)
+  //    **不同級**:那種配對連「同一個 tick 內兩則訊息 read-modify-write」都守得住,這裡
+  //    守不住(第二則讀到的仍是上一次 commit 的值)。本 hook 的 handler 目前沒有同 tick
+  //    連鎖需求,故可接受;日後若有,要升級成 imperative 配對,不是再加 deps。
+  useLayoutEffect(() => {
+    twseRef.current = twse;
+    otcRef.current = otc;
+    tradeDateRef.current = tradeDate;
+  }, [twse, otc, tradeDate]);
 
   const refetch = async (): Promise<void> => {
     try {

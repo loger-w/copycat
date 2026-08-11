@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "scope": "diff 7fa18d46..24208c3f(包 A db22c649 + 包 B f83a97fe/24208c3f)",
+  "lenses": ["timing-concurrency-react-semantics(opus)", "whitelist-conformance-test-coverage(opus)"],
+  "whitelist_verdicts": "7/7 preserved(lens 2 逐條 verdict 見 dispatch 紀錄;獨立跑 11 檔 177 tests 綠 + tsc 0 + eslint 0)",
+  "findings": [
+    {"id": "F-1", "severity": "P1", "file": "frontend/src/hooks/useRiver.ts", "claim": "seq 守衛先行 / 無 snapshot 不 load 兩條新不變式零測試覆蓋", "disposition": "accepted", "resolution": "補兩條 lock 測試(舊 seq 跨場 delta 不多發 fetch 且 session 不變;503 無 snapshot 時換場 delta 不發 fetch),mutation 驗證"},
+    {"id": "F-2", "severity": "P1", "file": "frontend/src/components/stock/WatchlistSidebar.dropcollapsed.test.tsx", "claim": "包 B 挖出的 pre-existing bug(Dialog 單 mutation observer,第二發 mutate 覆蓋 per-call callbacks → 第一發 onSuccess 不執行 → W-20 復發路徑)只在測試註解,未記 next-time", "disposition": "accepted", "resolution": "docs/next-time.md 補條目 + verification.md 記為本批發現、刻意不修"},
+    {"id": "F-3", "severity": "P2", "file": "frontend/src/components/stock/WatchlistSidebar.test.tsx", "claim": "StrictMode 測試缺生效自檢,環境變化時靜默 vacuous", "disposition": "accepted", "resolution": "補 StrictMode 生效自檢斷言"},
+    {"id": "F-4", "severity": "P2", "file": "frontend/src/components/stock/WatchlistSidebar.tsx", "claim": "WL_UNGROUPED_KEY 寫入恰一次無測試(三處只鎖兩處)", "disposition": "accepted", "resolution": "同一 StrictMode 測試補未分組 toggle 斷言"},
+    {"id": "F-5", "severity": "P2", "file": "frontend/src/hooks/useRiver.test.ts", "claim": "30ms 固定 sleep 非 load-bearing", "disposition": "accepted", "resolution": "刪 sleep,上界斷言移 waitFor 之後"},
+    {"id": "F-6", "severity": "P2", "file": "frontend/src/hooks/useIndexStream.ts", "claim": "useLayoutEffect deps 清單化的未來漏 dep 風險", "disposition": "accepted", "resolution": "註解明訂「WS handler 以 ref 讀的 state 一律進 deps」"},
+    {"id": "F-7", "severity": "P2", "file": "frontend/src/components/stock/StockChart.futconverge.test.tsx", "claim": "render 期間 setState 最敏感於 StrictMode,新測試卻無 StrictMode 變體", "disposition": "accepted", "resolution": "補 StrictMode 包裹的同流程變體"},
+    {"id": "F-8", "severity": "P2", "file": "frontend/src/components/stock/WatchlistSidebar.dropcollapsed.test.tsx", "claim": "硬寫 key 字面量", "disposition": "accepted", "resolution": "改 import WL_COLLAPSED_KEY"},
+    {"id": "TC-1", "severity": "P2", "file": "frontend/src/hooks/useIndexStream.ts", "claim": "layout-effect 鏡射與 imperative 配對強度不同級,同批混用易被誤讀等價;同 tick 兩則訊息 read-modify-write 窗 pre-existing 未惡化", "disposition": "accepted", "resolution": "useBreadth / useIndexStream 註解標明不同級;handler 同 tick 回寫升級記 next-time"},
+    {"id": "TC-2", "severity": "P2", "file": "frontend/src/components/stock/StockChart.tsx", "claim": "spotMode 在 prod 正式路徑(accum gate 卸載重掛)無讀者,A6 由 localStorage 兌現;same-instance 測試路徑 prod 不存在", "disposition": "accepted", "resolution": "verification.md 記已知事實;不動 code(行為保持批)"},
+    {"id": "TC-3", "severity": "P2", "file": "frontend/src/components/stock/WatchlistSidebar.tsx", "claim": "toggleUngroupedCollapsed 靠「呼叫者是事件路徑」的檔案外事實成立", "disposition": "accepted", "resolution": "verification.md 記已知取捨(註解已載前提)"},
+    {"id": "TC-4", "severity": "P2", "file": "frontend/src/components/stock/WatchlistSidebar.tsx", "claim": "collapsedRef 四步配對散在兩 handler,無單一寫入點", "disposition": "accepted", "resolution": "抽 applyCollapsed helper(🔵,行為零差異)"}
+  ],
+  "p2_summary": "12 findings 全 accepted,無 rejected / needs_more_context;無 P0。兩 lens 各自枚舉的 clean_areas(useRiver 8 場景、StockChart 全組合、setCollapsed 全寫入點、useSignalAlerts deps 穩定性、useFuturesStream/useStockStream 配對逐點)見 dispatch 回傳,佐證白名單 preserved。"
+}

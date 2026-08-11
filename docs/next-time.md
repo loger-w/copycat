@@ -1,4 +1,24 @@
 
+## 2026-08-11(mod/react-doctor-p1 review 發現)
+
+- [ ] **WatchlistManagerDialog 連續操作吞 callback(pre-existing 真 bug,本批發現、刻意不修)**:
+  Dialog 只有一顆 `useSaveWatchlist` mutation observer,第二發 `mutate` 會覆蓋 per-call
+  callbacks → 第一發的 `onSuccess` 不執行。後果:(a) 連刪兩組只走到一次 `onGroupDeleted`
+  → 第一組組名留在 `WL_COLLAPSED_KEY`(W-20 復發路徑);(b) 第二發 PUT 以 stale `wl` 計算,
+  會把第一組還原回去。修法方向:per-action `mutateAsync` 或 mutation callbacks 去 per-call
+  化。證據:`WatchlistSidebar.dropcollapsed.test.tsx` 檔頭註解(2026-08-11)。
+- [ ] **useBreadth / useIndexStream handler 同 tick 回寫升級(P2,自癒型)**:兩檔 ref 只在
+  commit 後由 useLayoutEffect 同步,同一 macrotask 兩則 WS 訊息時第二則以舊底合併(下一格
+  upsert / onopen refetch 自癒)。若要關窗:handle 內算出 next 同步回寫 ref(與
+  useFuturesStream imperative 配對同形,各 3-4 行)。註解已標明不同級。
+- [ ] **TickTape key 穩定序號真解**:回推索引 key 在 `TAPE_MAX=200` 滿載後仍逐筆位移
+  (與修前同級,未惡化)。真解 = stock-accum 累加單調 dropped 計數或後端 seq 入 TickRow,
+  key 改 `${dropped + ticks.length - 1 - i}`。
+- [ ] **StockChart spotMode 在 prod 無讀者(記錄性)**:StockPage 的 `{accum ? …}` gate 讓
+  換合約必卸載重掛,A6「還原現貨模式」實際由 localStorage 兌現;spotMode 只在
+  same-instance(測試)路徑有讀者。日後想刪它或想真驗 A6,先看 StockChart 是否已脫離
+  accum gate。
+
 ## 2026-08-06(market-overview-r4-sector-signals 收尾留尾巴)
 
 - [ ] **user 過目待做(SC-3/SC-7 雙層之二)**:綜合 tab「類股強弱」(三層清單:產業 →

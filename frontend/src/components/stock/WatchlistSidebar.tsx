@@ -76,6 +76,19 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   /** 哪一檔未分組股票展開了「加入群組」清單 */
   const [assigning, setAssigning] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+  /** `collapsed` 的 imperative 影子(先例:`useStockStream` 的 accumRef)。
+   *
+   *  群組折疊的寫入點一律「讀 ref 算 next → `applyCollapsed`(同步 ref → persist →
+   *  setState)」,持久化因此
+   *  移出 updater —— updater 契約是純函式,StrictMode 下 double-invoke 會寫兩次
+   *  localStorage,遇到 React 重播(rebase / 中止的 render)持久化值還可能與最終 state 分歧。
+   *
+   *  為什麼是 ref 而不是直接讀 render 閉包的 `collapsed`:`dropCollapsed` 的唯一呼叫者是
+   *  PUT mutation 的 `onSuccess`(WatchlistManagerDialog 的刪組回呼),**不是事件路徑**。
+   *  連刪兩組、兩發 PUT 同批 resolve 時,兩個回呼在同一個 tick 連續執行,render 閉包還是
+   *  舊的 —— 第二次會把第一次已清掉的組名原樣寫回 localStorage。ref 是同步更新的,守得住
+   *  (useLayoutEffect 同步版守不住:同一 tick 內 layout effect 還沒跑)。 */
+  const collapsedRef = useRef(collapsed);
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
   const [dialogOpen, setDialogOpen] = useState(false);
   // 落點 index 不入 state:插入位置在 pointerup 當下由 `dropTargetFromPointer` 現算,
@@ -101,33 +114,37 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     save.mutate(next);
   }
 
+  /** `collapsed` 的**單一寫入點**:同步 ref → persist → setState 三步一律成對(review TC-4)。
+   *  算 next 的邏輯留在各 handler(語意各不相同),這裡只保證三步不漏 —— 三步散在各處手抄
+   *  時最容易漏的是 ref 同步,而漏掉的症狀是同批回呼把已清掉的組名靜默寫回 localStorage。 */
+  function applyCollapsed(next: Set<string>): void {
+    collapsedRef.current = next;
+    persistCollapsed(next);
+    setCollapsed(next);
+  }
+
   function toggleCollapsed(name: string): void {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      persistCollapsed(next);
-      return next;
-    });
+    const next = new Set(collapsedRef.current);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    applyCollapsed(next);
   }
 
+  /** 未分組折疊是 boolean 且只走純點擊路徑(沒有 mutation 回呼那種同批連發),
+   *  直接用 render 閉包的值算 next 就夠,不需要影子 ref。 */
   function toggleUngroupedCollapsed(): void {
-    setUngroupedCollapsed((prev) => {
-      const next = !prev;
-      window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
-      return next;
-    });
+    const next = !ungroupedCollapsed;
+    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
+    setUngroupedCollapsed(next);
   }
 
-  /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。 */
+  /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。
+   *  呼叫路徑是 mutation 的 `onSuccess`(非事件),故必須讀 `collapsedRef`(見其宣告處)。 */
   function dropCollapsed(name: string): void {
-    setCollapsed((prev) => {
-      if (!prev.has(name)) return prev;
-      const next = new Set(prev);
-      next.delete(name);
-      persistCollapsed(next);
-      return next;
-    });
+    if (!collapsedRef.current.has(name)) return; // 本來就不在 → 零寫入
+    const next = new Set(collapsedRef.current);
+    next.delete(name);
+    applyCollapsed(next);
   }
 
   /** 搜尋命中 → **預覽**該檔(round4 項 4)。

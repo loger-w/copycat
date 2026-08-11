@@ -73,8 +73,10 @@ export function barsPollInterval(
 
 /** `enabled` 是**外部否決**(D10/R5),不是「再判一次 code/mode」:個股期合約態下
  *  這支 endpoint 查的是**現貨**股號,拿回來的 K 線與畫面上的合約無關 —— 畫得出來、
- *  沒有錯誤,是零訊號的假資料。而模式收斂是 effect(下一個 render 才生效),
- *  「殘留日 K + 切進合約」的**第一次 render** 仍是 day,不在這裡擋就已經打出去了。 */
+ *  沒有錯誤,是零訊號的假資料。而模式收斂雖然在同一個 render pass 內完成
+ *  (StockChart 的 render 期間調整分支),本 hook 是在那個分支**之前**被呼叫的
+ *  (hook 呼叫順序不可調)——「殘留日 K + 切進合約」的第一次求值仍是 day,
+ *  外部否決(`enabled` 參數)因此仍是唯一保證,不在這裡擋就已經打出去了。 */
 export function useStockBars(
   code: string | null,
   mode: ChartMode,

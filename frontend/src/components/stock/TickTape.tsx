@@ -53,8 +53,14 @@ export function TickTape({ ticks, ref_ }: { ticks: TickRow[]; ref_: number | nul
           </tr>
         </thead>
         <tbody>
+          {/* key 用**尾端回推**索引:`rows` 是反轉後的清單,新成交前插 —— 用前端索引
+              (`i`)的話每來一筆成交所有 key 位移一格,整個 tbody(30–200 列)卸載重掛。
+              回推索引在前插時不變,既有列的 DOM node 因此保留。
+              已知限制:`ticks` 滿 `TAPE_MAX = 200`(stock-accum 環形丟頭)後陣列會左移,
+              回推索引一樣逐筆 −1 → 滿載時退回與現況同級(不惡化)。真解是後端帶單調
+              序號當 key,需要 API 變更,已記 next-time。 */}
           {rows.map((t, i) => (
-            <tr key={`${t.t}-${i}`} className="h-6">
+            <tr key={`${t.t}-${ticks.length - 1 - i}`} className="h-6">
               <td className="text-ink-muted">{t.t.slice(0, 8)}</td>
               <td className={cn("text-right", priceTone(t.b, ref_))}>
                 {t.b == null ? "-" : fmt(t.b)}
