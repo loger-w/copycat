@@ -5,11 +5,12 @@
  *  (使用者日後建同名群組會意外呈折疊,W-20 的復發)。現況(updater 內 persist)與修法
  *  (collapsedRef imperative 配對)都該綠,這條是防退化的鎖。
  *
- *  為什麼要 stub Dialog 而不從真實 UI 連按兩次刪除:實測(2026-08-11)側欄的 Dialog 只有
- *  **一顆** `useSaveWatchlist` mutation observer,第二發 `mutate` 會覆蓋 observer 的
- *  per-call callbacks,第一發的 `onSuccess` 因此根本不會執行 —— 真實 UI 連刪兩組只會走到
- *  一次 `dropCollapsed`,測不到本條要守的不變式(那個 callback 遺失是另一個 pre-existing
- *  問題,不在本批 scope)。所以這裡直接以 stub 打「同一 tick 兩次回呼」這個契約。
+ *  為什麼要 stub Dialog 而不從真實 UI 連按兩次刪除:Dialog 的吞 callback bug 已修
+ *  (fix/watchlist-dialog-swallowed-callback,2026-08-11)—— 連續操作現在序列化,兩個
+ *  回呼各自跟在自己的 PUT 回應後、中間隔一次 round-trip,同 tick 連發從 Dialog 路徑
+ *  已不會發生(該路徑的契約見 WatchlistManagerDialog.test.tsx「連續操作」節)。
+ *  本條鎖的是**防禦性契約本身**:`dropCollapsed` 是非事件路徑,同一 tick 兩次回呼也要
+ *  守得住,不得改回讀 render 閉包 —— 所以維持以 stub 直打這個形狀。
  *
  *  vi.mock 是檔案級 + hoisted → 必須獨立成檔,`WatchlistSidebar.test.tsx` 的 Dialog
  *  相關測試(管理入口 / W-20 單組刪除)仍跑真身。 */
