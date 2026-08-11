@@ -354,6 +354,55 @@ describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
   });
 });
 
+// 🔴 docs/next-time.md 2026-08-11:Dialog 單顆 mutation observer,per-call callbacks 會被
+// 第二發 mutate 覆蓋(TQ v5 契約:per-call callbacks 只 fire 最新一次 mutate);且 commit
+// 一律以 render 閉包的 stale wl 算 next。兩缺陷共用同一觸發窗:第一發 PUT 在途時做第二個動作。
+describe("WatchlistManagerDialog 連續操作(吞 callback / stale 基底)", () => {
+  /** PUT 卡 gate 逐發放行:製造「第一發在途時做第二刪」的視窗。
+   *  gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
+   *  對應 resolver 必已存在,shift 放行不會撲空。 */
+  let releases: Array<() => void>;
+  function gatePuts(): void {
+    releases = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        await new Promise<void>((r) => releases.push(r));
+        return new Response(JSON.stringify(body));
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+  }
+
+  it("連刪兩組:第二發 PUT 以第一發結果為基底,不把第一組還原回去", async () => {
+    gatePuts();
+    open();
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText("刪除群組 主力")); // 第一發仍在途
+    releases.shift()?.();
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    releases.shift()?.();
+    // 第二發必須含第一刪的結果:groups 全空 ——「觀察」以 stale wl 計算時會在這裡復活
+    expect(putBodies[1]!.groups).toEqual([]);
+  });
+
+  it("連刪兩組:兩發 onGroupDeleted 都執行(W-20 折疊孤兒清理不漏)", async () => {
+    gatePuts();
+    const { onGroupDeleted } = open();
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText("刪除群組 主力"));
+    releases.shift()?.();
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    releases.shift()?.();
+    await waitFor(() => expect(onGroupDeleted).toHaveBeenCalledTimes(2));
+    expect(onGroupDeleted.mock.calls).toEqual([["觀察"], ["主力"]]);
+  });
+});
+
 describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
   it("右欄用 derived 值渲染:改名失敗留下的懸空 selected 不會讓右欄空白", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
