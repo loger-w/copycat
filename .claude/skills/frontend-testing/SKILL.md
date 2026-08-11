@@ -18,4 +18,17 @@ description: 前端 vitest / RTL 測試慣例。寫 component 或 hook 測試前
 - **TanStack Query v5 的 refetch 失敗不清 data:`isError=true` 且 `data` 仍在**(`QueryObserverRefetchErrorResult`;2026-08-06 R3 實測)。顯示層拿 `isError` 當「載入失敗」判別子會讓「已有資料 + 背景 refetch 打嗝一次」整片畫面消失 —— 要分 `isError && data === undefined`(從未成功)與 `isError && data !== undefined`(保留資料 + 「更新失敗」弱提示)。樣板:`LimitListSection.tsx`。Trigger:任何 useQuery 消費端寫 error 分支時。
 - **TQ observer 通知走 notifyManager 的 macrotask 排程**,`await act(...)` 只 flush microtask → 斷言 query state 轉換(如 refetch 轉 error)前要再補一層 `waitFor`。Trigger:測 refetch / invalidate 後的 state 轉換。
 - **TQ v5 的 refocus refetch 只聽分頁 `visibilitychange`(hide→show),純 window focus 不觸發**(v5 focusManager 移除了 v4 的 focus listener;2026-08-11 useStockNames review 實證):「停掉輪詢後靠 refocus 復原」這類假設要以此為準 — 使用者切到別的應用程式視窗但分頁仍可見時**不會**觸發。測 refocus 後門用 imperative API:`focusManager.setFocused(false); focusManager.setFocused(true)`(不依賴 jsdom 事件),`afterEach` 補 `focusManager.setFocused(undefined)` 防外溢;樣板 `useStockNames.test.tsx` 永久失敗整合測試。Trigger:寫任何依賴 refetchOnWindowFocus 的行為或其測試。
+- **StrictMode double-invoke 紅測試法(updater 純度 bug 專用)**:updater 內夾副作用(fetch /
+  localStorage 寫入)在一般測試下恆綠 — 要 `<StrictMode>` wrapper + 副作用計數斷言恰一次
+  (fetch calls 記 `before` 差值 / `vi.spyOn(Storage.prototype, "setItem")`)。三個必要件:
+  (1) **StrictMode 生效自檢**(FakeWS `instances.length === 2`,或 getItem spy 對 useState
+  lazy initializer 計 2 次)— 否則 wrapper 被拿掉時測試靜默轉 vacuous;(2) 紅態期望不寫死
+  次數(eager updater 可能 3 不是 2),斷言修後的「恰 +1」;(3) FakeWS 場景取
+  `instances.at(-1)`(對 instances[0] 發訊息會被 `alive=false` 丟掉 → 假綠)。樣板
+  `useRiver.test.ts` / `WatchlistSidebar.test.tsx` StrictMode 節(2026-08-11)。Trigger:
+  修任何「setState updater 內有副作用」bug 或寫其紅測試。
+- **key 穩定性用 DOM node 恆等測試釘**:list key 位移(index-as-key 前插)的症狀是整片卸載
+  重掛,RTL 文字斷言全抓不到 — 記住列的 element reference,rerender 後斷言 `===` 恆等
+  (位移時 React 以新 key 建新 node → 必紅)。樣板 `TickTape.test.tsx`(2026-08-11)。
+  Trigger:改任何 list key 策略或修 index-as-key finding。
 - **RTL `waitFor` 在 vitest 下偵測不到 fake timers**(`jestFakeTimersAreEnabled()` 查全域 `jest`,vitest 恆 false → 退回真 interval):`vi.useFakeTimers()` + `findBy*`/`waitFor` 組合會 timeout(lazy 元件連 mount 都等不到)。解法:輪詢行為用「hook/元件層 fake timers + 手動 advance」測;App 級整鏈改斷言 `refetchInterval` 求值結果(白盒但可紅),或只假造 `Date` 不假造 timer。用了 fake timers 的測試檔 `afterEach` 必補 `vi.useRealTimers()`(不還原會外溢到別檔)。樣板:`useBreadthRows.test.ts` / `App.test.tsx` R3 跳轉測試。Trigger:測任何 refetchInterval / 輪詢節奏。
