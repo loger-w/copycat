@@ -96,7 +96,10 @@ function Btn({
   );
 }
 
-/** 重疊圖兩條線的樣式與標籤;序與 `buildOverlayGeometry` 的輸入序對齊(0=加權、1=櫃買)。 */
+/** 重疊圖兩條線的樣式與標籤,依**輸入序**(0=加權、1=櫃買)。
+ *  ⚠ `buildOverlayGeometry` 會 filter 掉 ref 為 null/0 的 series —— 單邊 ref 缺值時
+ *  `g.lines` 的 index 與這裡錯位(僅剩的櫃買線會標成加權)。既存行為,與 hoist 前
+ *  逐值相同;修正記於 docs/next-time.md。 */
 const OVERLAY_LINES = [
   { color: "stroke-profit", label: "加權" },
   { color: "stroke-idx-otc", label: "櫃買" },
