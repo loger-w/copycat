@@ -1,0 +1,46 @@
+{
+  "round": 1,
+  "date": "2026-08-12",
+  "lenses": ["whitelist-conformance", "concurrency-lifecycle", "test-effectiveness"],
+  "model": "opus x3 parallel",
+  "diff": "review-diff.txt (master..2ccd6619)",
+  "gate_at_review": "pytest 2599 passed (full), ruff clean, pyright 0 errors",
+  "p0": [],
+  "p1": [
+    {
+      "id": "T-1",
+      "lens": "test-effectiveness",
+      "claim": "engine 在場時「hub 與 /ws/stock 共用同一顆 broadcaster」的接線(_make_stock ws=stock_ws)零測試 — 掉了注入全綠,但 prod 主用例(TC4 開)訊號靜默不上 WS",
+      "disposition": "accepted",
+      "resolution": "fix 波補 with_stock=True 接線 lock 測試(行為版:ws 收 signal + 最小版 _ws is stock_ws),mutation 抽驗"
+    },
+    {
+      "id": "T-2",
+      "lens": "test-effectiveness",
+      "claim": "_wall_clock_trade_date 的 per-call 求值與 TXO_BACKFILL_DATE 優先分支無鑑別測試(boot-time 靜態字串同樣通過;row.trade_date 斷言 vacuous)",
+      "disposition": "accepted",
+      "resolution": "fix 波補 boot 後 setenv 斷言(靜態實作必紅),mutation 抽驗"
+    },
+    {
+      "id": "C-1/W-1",
+      "lens": "concurrency-lifecycle + whitelist(獨立重合)",
+      "claim": "SC-8 隔離漏第三個 create_app 呼叫族:版控側車樣板(r3/r4 breadth_side_server)未傳 stock_watchlist_path,hub 恆建後會把真廣度事件寫進 prod data/signals(對帳 seed 汙染);ops-discipline SKILL.md 立它為標準樣板",
+      "disposition": "accepted",
+      "resolution": "fix 波:r3/r4 樣板補 stock_watchlist_path;ops-discipline 側車節寫死該 kwarg 必填 + verify 教訓條改寫(併 C-3/W-2)"
+    }
+  ],
+  "p2_summary": {
+    "count": 7,
+    "themes": [
+      "T-3/W-4(重合)/ws/stock 兩條 close 分支零測試 → accepted,補兩條輕量測試",
+      "T-4 conftest 隔離 fixture 自身無鎖 → accepted,補 hub._data_dir 斷言",
+      "T-5 WS receive_json 無上限等待(回歸 = 掛死非紅)→ accepted,有界包裝",
+      "T-6 verify fail 變體 stock_watchlist_path 無斷言 → accepted,補一行",
+      "C-2 /ws/stock 三旗標讀取跨 accept await 的 TOCTOU 窄窗 → accepted,stock 讀取移 accept 後",
+      "C-4 _empty_daily_bars 使 _resolve_basis 回傳契約失真(30 檔 ~6s 背景空轉)→ accepted,無 engine 時注入 basis_gap_secs=0",
+      "W-3 關機反序理由註解在 bus 上提後成假話 → accepted,改寫為現行真因"
+    ]
+  },
+  "refuted": [],
+  "whitelist_result": "九條逐點覆查全數守住(W lens summary);唯一破口即 C-1/W-1 的第三入口"
+}
