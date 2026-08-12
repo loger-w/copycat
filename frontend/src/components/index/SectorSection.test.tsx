@@ -371,6 +371,115 @@ describe("SectorSection 降級", () => {
   });
 });
 
+// (FE-7 拍板 2026-08-12)產業列每 10 秒依後端 avg 重排,展開/鑽取中的列會在游標下
+// 位移 —— 誤點成員 = setStockCode + set_main,代價不只看錯。拍板解:任何展開/鑽取
+// 期間**凍結排序**(數字照更新、位置不動)+ 顯示「排序已凍結」標籤,全收合才恢復。
+describe("SectorSection 排序凍結(FE-7)", () => {
+  /** 後端下一輪把航運排到最前(avg 反轉)—— 凍結時位置不得跟著跳。 */
+  const REORDERED: SectorRotation = {
+    industries: [
+      { name: "航運", members: 30, avg_change_rate: 5.0, vol_ratio: 2.2, subs: [] },
+      {
+        name: "半導體",
+        members: 120,
+        avg_change_rate: 2.5,
+        vol_ratio: 1.8,
+        subs: [
+          { name: "IC設計", members: 40, avg_change_rate: 3.25, vol_ratio: 2.1 },
+          { name: "封測", members: 20, avg_change_rate: -1.1, vol_ratio: null },
+        ],
+      },
+    ],
+  };
+
+  function rowOrder(): string[] {
+    return screen
+      .getAllByTestId(/^sector-row-btn-/)
+      .map((el) => el.getAttribute("data-testid")!.replace("sector-row-btn-", ""));
+  }
+
+  /** 下一輪 sector-state 改回傳重排後的清單,並主動觸發 refetch。 */
+  async function refetchReordered(): Promise<void> {
+    fetchSpy.mockImplementation(
+      async () => new Response(JSON.stringify(mkState({ rotation: REORDERED }))),
+    );
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["sector-state"] });
+    });
+    // 數字要照常更新(凍的是位置不是資料)—— 也是等 TQ macrotask 通知落地的錨點
+    await waitFor(() => expect(screen.getByTestId("sector-change-航運").textContent).toBe("+5.00%"));
+  }
+
+  it("展開子產業層中輪詢順序改變 → 列位置凍結、數字照更新、顯示凍結標籤", async () => {
+    await openWith();
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
+
+    await refetchReordered();
+    expect(rowOrder()).toEqual(["半導體", "航運"]);
+  });
+
+  it("全收合 → 恢復後端最新排序、凍結標籤消失", async () => {
+    await openWith();
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    await refetchReordered();
+
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    expect(screen.queryByTestId("sector-frozen")).toBeNull();
+    expect(rowOrder()).toEqual(["航運", "半導體"]);
+  });
+
+  it("鑽取成員表中(無子產業直鑽)同樣凍結 + 標籤", async () => {
+    await openWith();
+    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
+    await screen.findByTestId("sector-members-table");
+    expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
+
+    await refetchReordered();
+    expect(rowOrder()).toEqual(["半導體", "航運"]);
+  });
+
+  it("未展開任何列 → 不凍結(照後端新順序重排、無標籤)", async () => {
+    await openWith();
+    expect(screen.queryByTestId("sector-frozen")).toBeNull();
+    await refetchReordered();
+    expect(rowOrder()).toEqual(["航運", "半導體"]);
+  });
+
+  // 成員表是誤點代價最高的一層(點下去就換主圖)—— 鑽取中成員列同樣不得位移。
+  it("成員表輪詢順序改變 → 成員列位置凍結、數字照更新", async () => {
+    await openWith();
+    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
+    await screen.findByTestId("sector-members-table");
+
+    const reordered: SectorMembers = {
+      ...MEMBERS,
+      members: [
+        { stock_id: "3035", name: "智原", change_rate: 9.9, vol_ratio: 3.1, total_amount: 1e9 },
+        MEMBERS.members[0]!,
+      ],
+    };
+    fetchSpy.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.startsWith("/api/market/sector/members")) {
+        return new Response(JSON.stringify(reordered));
+      }
+      return new Response(JSON.stringify(mkState()));
+    });
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["sector-members"] });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("sector-member-change-3035").textContent).toBe("+9.90%"),
+    );
+    expect(
+      screen
+        .getAllByTestId(/^sector-member-\d+$/)
+        .map((el) => el.getAttribute("data-testid")!.replace("sector-member-", "")),
+    ).toEqual(["2454", "3035"]);
+  });
+});
+
 // 展開狀態存在 localStorage、tab 又是 `hidden` 保留而非 unmount(App 慣例)→
 // 「展開著被切走」是常態。這一組鎖的是「`active` 有真的接到 query 的 refetchInterval 上」。
 describe("SectorSection 背景輪詢 gate", () => {
