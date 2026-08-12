@@ -8,7 +8,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date as _date
 from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
@@ -516,18 +516,24 @@ def create_app(
                 供應(bus 已在 app 層、日別走牆鐘、日 K 空清單),hub 本身零改動。
                 """
                 engine = stock
+                cfg = load_signals_config()
                 if engine is None:
                     daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] = _empty_daily_bars
                     trade_date_fn: Callable[[], str] = _wall_clock_trade_date
                     # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
+                    # gap 的用途是「連發打 TC4 要讓位」,而 `_empty_daily_bars` 根本沒打
+                    # TC4 —— 但它從 `_resolve_basis` 回 True(有走完取數路徑),worker
+                    # 會照付 0.2s/檔:自選 30 檔就是 6s 的純空轉。engine 在場時 config
+                    # 逐字不變(白名單 1)。
+                    cfg = replace(cfg, basis_gap_secs=0.0)
                 else:
                     daily_bars = engine.daily_bars
                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
                     trade_date_fn = lambda: engine.trade_date  # noqa: E731
                     quotes_fn = engine.quotes
                 return SignalHub(
-                    load_signals_config(),
+                    cfg,
                     # app 層的匯流排(engine 在場時它就是 engine 自己那顆)
                     publish=stock_ws.publish,
                     daily_bars=daily_bars,
@@ -807,7 +813,10 @@ def create_app(
                 logger.exception("boot task 以例外結束(關機續行)")
             # 關機反序:breadth → signals → corr → futures → capital → index → stock →
             # runtime(corr 依賴 futures.state(),必須先收;signals 在 breadth 之後 ——
-            # fanout worker 還活著時對已收攤的 stock engine publish 會炸在關機路徑上)
+            # breadth 是 hub 的**生產者**(attach 後每輪對帳都會 publish 廣度事件),
+            # 先摘先收才不會有事件在 hub 已 close 之後才入列、靜默丟掉。
+            # 注意這條理由與 stock engine 無關了(XR-3):hub 的 WS 匯流排是 app 層
+            # 物件,不隨 engine 收攤而失效)
             if booted.breadth is not None:
                 try:
                     # **先摘掛點再 close**:hub 此刻還活著(它排在 breadth 之後才收),
@@ -1523,10 +1532,13 @@ def create_app(
         - hub 亦 None(壞規則檔 / hub start 炸)—— 這條通道確實沒有任何生產者,
           留著就是永遠無流量的殭屍連線,而前端的提示靠 `wsStatus === "closed"`。
         """
-        stock: StockEngine | None = websocket.app.state.stock
         await websocket.accept()
+        # 三個旗標(stock / boot_done / signal_hub)在 accept **之後**同一個同步區塊讀:
+        # accept 是 await,跨它讀取會拿到分屬兩個時點的快照(boot 正好在這段完成 →
+        # 讀到 stock=None 但 boot_done=True,走空流分支而永遠不送 quote seed)。
+        state = websocket.app.state
+        stock: StockEngine | None = state.stock
         if stock is None:
-            state = websocket.app.state
             if not state.boot_done or state.signal_hub is None:
                 await websocket.close()
                 return
