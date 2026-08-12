@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 _URL = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=otc_o00.tw&json=1&delay=0"
 _TIMEOUT = 5.0
 
+# 盤中偶發網路抖動(單次 timeout)只 debug;連續達此值(5s poll ≈ 15s 端點不可用)
+# 起每次 warning。歸零點 = 任何成功解析的回應(含 rtcode 異常 — 端點有回應就不是網路問題)。
+_WARN_AFTER = 3
+_fail_streak = 0
+
 
 class OtcSnap(TypedDict):
     """價格欄毫點 int;time 為 HHMMSS 字串(台北時刻)。"""
@@ -35,11 +40,13 @@ def _millipt(raw: str) -> int:
 
 def fetch_otc_snapshot(fetcher: Callable[..., Any] = urlopen) -> OtcSnap | None:
     """單次快照;任何失敗(網路/格式/暫停計算)→ None(caller 保留前值)。"""
+    global _fail_streak
     req = Request(_URL, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with_resp = fetcher(req, timeout=_TIMEOUT)
         body = with_resp.read() if hasattr(with_resp, "read") else with_resp
         payload = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+        _fail_streak = 0
         if payload.get("rtcode") != "0000":
             logger.warning("MIS rtcode 異常:%s", payload.get("rtcode"))
             return None
@@ -65,5 +72,9 @@ def fetch_otc_snapshot(fetcher: Callable[..., Any] = urlopen) -> OtcSnap | None:
         IndexError,
         ValueError,
     ) as e:
-        logger.warning("MIS 快照失敗:%s", e)
+        _fail_streak += 1
+        if _fail_streak >= _WARN_AFTER:
+            logger.warning("MIS 快照失敗(連續 %d 次):%s", _fail_streak, e)
+        else:
+            logger.debug("MIS 快照失敗:%s", e)
         return None
