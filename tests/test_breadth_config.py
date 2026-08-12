@@ -17,7 +17,9 @@ from copycat.breadth_config import CONFIG_PATH, BreadthConfig, load_breadth_conf
 def test_default_values() -> None:
     cfg = BreadthConfig()
     assert cfg.poll_secs == 10.0
-    assert cfg.window_start == "08:55"
+    # 09:00 起 = 排除 08:55–09:00 試撮窗(2026-08-12 拍板:試撮價可被假單操縱,
+    # 不進系統;開盤前畫面顯示昨日收盤資料是合理狀態)
+    assert cfg.window_start == "09:00"
     assert cfg.window_end == "13:40"
     assert cfg.stale_secs == 30.0
     assert cfg.backoff_max_secs == 60.0
@@ -52,7 +54,7 @@ def test_load_override(tmp_path: Path) -> None:
     assert cfg.poll_secs == 5.0
     assert cfg.window_end == "14:30"
     assert cfg.quota_backoff_secs == 60.0
-    assert cfg.window_start == "08:55"  # 未覆寫者保留預設
+    assert cfg.window_start == "09:00"  # 未覆寫者保留預設
     assert cfg.stale_secs == 30.0
 
 

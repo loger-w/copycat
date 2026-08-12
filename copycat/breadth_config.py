@@ -20,7 +20,9 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "breadth.json
 @dataclass(frozen=True, slots=True)
 class BreadthConfig:
     poll_secs: float = 10.0  # 輪詢間隔(FinMind snapshot)
-    window_start: str = "08:55"  # 台北;poll 窗起(HH:MM)
+    window_start: str = "09:00"  # 台北;poll 窗起(HH:MM)。09:00 = 排除 08:55–09:00
+    # 試撮窗(2026-08-12 拍板):試撮價可被假單操縱,家數/rows/連板收了會與騰落線/
+    # 事件流(分鐘域 gate 天然不收)矛盾,且試撮漲停會讓連板誤 +1 —— 一律不進系統。
     window_end: str = "13:40"  # 台北;poll 窗迄(HH:MM)
     stale_secs: float = 30.0  # 窗內距上次成功超過此秒數 → state.stale
     backoff_max_secs: float = 60.0  # 連續失敗退避上限(10→20→40→60)

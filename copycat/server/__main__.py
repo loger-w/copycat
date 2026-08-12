@@ -59,7 +59,7 @@ VERIFY_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify"
 #: 類股面板照常有內容,看起來就像 SC-3 通過了(design §8 / R9;review S-2/C-3)。
 VERIFY_FAIL_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify-fail"
 
-#: --verify 的家數帶輪詢窗:全天。prod 預設窗(08:55–13:40)之外 `_poll_loop` 只跑
+#: --verify 的家數帶輪詢窗:全天。prod 預設窗(09:00–13:40)之外 `_poll_loop` 只跑
 #: 首圈,而 verify server 幾乎都在盤後跑 —— flip 翻轉、失效注入、事件鏈路全都要
 #: 「第二輪之後」才看得到,窗照抄 prod 等於整條取證路徑只剩一格(review C-2)。
 VERIFY_WINDOW = ("00:00", "23:59")

@@ -76,7 +76,7 @@ def _fixed_now(monkeypatch: pytest.MonkeyPatch) -> None:
 
     引擎在 lifespan 內建構 → 這個檔案沒有 `now_fn` 注入點,只能 monkeypatch 模組層的
     `_now`。不釘的話兩件事會跟著實跑時刻飄:快照時刻超前本機時鐘 10 分鐘以上會被當
-    髒 row 忽略(review P1-2)→ 早上 10:14 之前跑整批紅;窗判定(08:55–13:40)也同理。
+    髒 row 忽略(review P1-2)→ 早上 10:14 之前跑整批紅;窗判定(09:00–13:40)也同理。
     """
     monkeypatch.setattr(be, "_now", lambda: _dt.datetime.combine(_TODAY, _dt.time(10, 24)))
 

@@ -128,7 +128,7 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
         cap.create_kwargs["stock_watchlist_path"]
         == main_mod.VERIFY_DATA_DIR / "stock_watchlist.json"
     )
-    # 放寬窗(review C-2):prod 預設窗 08:55–13:40 之外 `_poll_loop` 只跑首圈 ——
+    # 放寬窗(review C-2):prod 預設窗 09:00–13:40 之外 `_poll_loop` 只跑首圈 ——
     # flip 翻轉 / 失效注入 / 事件鏈路全都要「第二輪之後」才看得到,而 verify server
     # 幾乎都在盤後跑,窗照抄 prod 等於整條取證路徑只剩一格
     config = cap.create_kwargs["breadth_config"]
