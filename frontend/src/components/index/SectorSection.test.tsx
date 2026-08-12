@@ -375,18 +375,20 @@ describe("SectorSection 降級", () => {
 // 位移 —— 誤點成員 = setStockCode + set_main,代價不只看錯。拍板解:任何展開/鑽取
 // 期間**凍結排序**(數字照更新、位置不動)+ 顯示「排序已凍結」標籤,全收合才恢復。
 describe("SectorSection 排序凍結(FE-7)", () => {
-  /** 後端下一輪把航運排到最前(avg 反轉)—— 凍結時位置不得跟著跳。 */
+  /** 後端下一輪:航運排到最前(avg 反轉)、子產業反轉、多一個 ROTATION 沒有的新產業
+   *  「金融」—— 凍結時位置不得跟著跳,新 key 只能附掛在最後(review T-1/T-4)。 */
   const REORDERED: SectorRotation = {
     industries: [
       { name: "航運", members: 30, avg_change_rate: 5.0, vol_ratio: 2.2, subs: [] },
+      { name: "金融", members: 55, avg_change_rate: 1.2, vol_ratio: 1.0, subs: [] },
       {
         name: "半導體",
         members: 120,
         avg_change_rate: 2.5,
         vol_ratio: 1.8,
         subs: [
-          { name: "IC設計", members: 40, avg_change_rate: 3.25, vol_ratio: 2.1 },
           { name: "封測", members: 20, avg_change_rate: -1.1, vol_ratio: null },
+          { name: "IC設計", members: 40, avg_change_rate: 3.25, vol_ratio: 2.1 },
         ],
       },
     ],
@@ -396,6 +398,12 @@ describe("SectorSection 排序凍結(FE-7)", () => {
     return screen
       .getAllByTestId(/^sector-row-btn-/)
       .map((el) => el.getAttribute("data-testid")!.replace("sector-row-btn-", ""));
+  }
+
+  function subOrder(): string[] {
+    return screen
+      .getAllByTestId(/^sector-sub-btn-半導體-/)
+      .map((el) => el.getAttribute("data-testid")!.replace("sector-sub-btn-半導體-", ""));
   }
 
   /** 下一輪 sector-state 改回傳重排後的清單,並主動觸發 refetch。 */
@@ -410,23 +418,30 @@ describe("SectorSection 排序凍結(FE-7)", () => {
     await waitFor(() => expect(screen.getByTestId("sector-change-航運").textContent).toBe("+5.00%"));
   }
 
-  it("展開子產業層中輪詢順序改變 → 列位置凍結、數字照更新、顯示凍結標籤", async () => {
+  it("展開子產業層中輪詢順序改變 → 三層列位置凍結、新產業附掛最後、數字照更新", async () => {
     await openWith();
     fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
     expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
 
     await refetchReordered();
-    expect(rowOrder()).toEqual(["半導體", "航運"]);
+    // 產業層凍結;快照沒有的新產業(金融)排最後,不得插前把列往下推(T-4)
+    expect(rowOrder()).toEqual(["半導體", "航運", "金融"]);
+    // 子產業層同凍結:後端已反轉成 [封測, IC設計],畫面維持快照順序(T-1)
+    expect(subOrder()).toEqual(["IC設計", "封測"]);
   });
 
-  it("全收合 → 恢復後端最新排序、凍結標籤消失", async () => {
+  it("全收合 → 恢復後端最新排序(含子產業)、凍結標籤消失", async () => {
     await openWith();
     fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
     await refetchReordered();
 
     fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
     expect(screen.queryByTestId("sector-frozen")).toBeNull();
-    expect(rowOrder()).toEqual(["航運", "半導體"]);
+    expect(rowOrder()).toEqual(["航運", "金融", "半導體"]);
+
+    // 解凍後再展開:子產業照後端最新順序
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    expect(subOrder()).toEqual(["封測", "IC設計"]);
   });
 
   it("鑽取成員表中(無子產業直鑽)同樣凍結 + 標籤", async () => {
@@ -436,14 +451,48 @@ describe("SectorSection 排序凍結(FE-7)", () => {
     expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
 
     await refetchReordered();
-    expect(rowOrder()).toEqual(["半導體", "航運"]);
+    expect(rowOrder()).toEqual(["半導體", "航運", "金融"]);
   });
 
   it("未展開任何列 → 不凍結(照後端新順序重排、無標籤)", async () => {
     await openWith();
     expect(screen.queryByTestId("sector-frozen")).toBeNull();
     await refetchReordered();
-    expect(rowOrder()).toEqual(["航運", "半導體"]);
+    expect(rowOrder()).toEqual(["航運", "金融", "半導體"]);
+  });
+
+  // (review C-1)父列收合只動 expanded 不動 drill —— drill 懸空時畫面上沒有任何展開列,
+  // 凍結卻解不掉,唯一出口是再展開並重點同一個子產業,一般使用者不會知道。
+  it("鑽取子產業後收合父列 → 凍結解除(chip 消失、恢復後端排序)", async () => {
+    await openWith();
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    fireEvent.click(screen.getByTestId("sector-sub-btn-半導體-IC設計"));
+    await screen.findByTestId("sector-members-table");
+    expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
+
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    expect(screen.queryByTestId("sector-frozen")).toBeNull();
+    await refetchReordered();
+    expect(rowOrder()).toEqual(["航運", "金融", "半導體"]);
+  });
+
+  // (review T-3)展開/鑽取指到的產業從後端清單消失 → 畫面上沒有展開列,不得無限凍結。
+  it("展開中的產業從後端清單消失 → 凍結解除", async () => {
+    await openWith();
+    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
+    expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
+
+    const shrunk: SectorRotation = {
+      industries: [{ name: "航運", members: 30, avg_change_rate: -0.75, vol_ratio: 0.9, subs: [] }],
+    };
+    fetchSpy.mockImplementation(
+      async () => new Response(JSON.stringify(mkState({ rotation: shrunk }))),
+    );
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["sector-state"] });
+    });
+    await waitFor(() => expect(screen.queryByTestId("sector-row-btn-半導體")).toBeNull());
+    expect(screen.queryByTestId("sector-frozen")).toBeNull();
   });
 
   // 成員表是誤點代價最高的一層(點下去就換主圖)—— 鑽取中成員列同樣不得位移。
@@ -452,9 +501,11 @@ describe("SectorSection 排序凍結(FE-7)", () => {
     fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
     await screen.findByTestId("sector-members-table");
 
+    // 3035 竄到最前 + 新檔 1101 插在最前 —— 凍結中既有列不得位移,新檔只能附掛最後
     const reordered: SectorMembers = {
       ...MEMBERS,
       members: [
+        { stock_id: "1101", name: "台泥", change_rate: 1.5, vol_ratio: 1.1, total_amount: 5e8 },
         { stock_id: "3035", name: "智原", change_rate: 9.9, vol_ratio: 3.1, total_amount: 1e9 },
         MEMBERS.members[0]!,
       ],
@@ -476,7 +527,7 @@ describe("SectorSection 排序凍結(FE-7)", () => {
       screen
         .getAllByTestId(/^sector-member-\d+$/)
         .map((el) => el.getAttribute("data-testid")!.replace("sector-member-", "")),
-    ).toEqual(["2454", "3035"]);
+    ).toEqual(["2454", "3035", "1101"]);
   });
 });
 
