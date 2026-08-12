@@ -919,12 +919,12 @@ class TestSeriesPersistence:
         assert state["as_of"] == "09:30:30"
         assert [p["t"] for p in state["series"]] == ["0930", "0931"]  # 逐分鐘長格,不塌成一格
 
-    @pytest.mark.parametrize("stamp_time", ["14:30:00", "08:59:00"])
+    @pytest.mark.parametrize("stamp_time", ["14:30:00", "13:35:00"])
     async def test_tick_outside_minute_domain_not_appended(
         self, tmp_path: Path, stamp_time: str
     ) -> None:
-        """盤後定盤 14:30 與盤前 08:59 都在分鐘域(0901–1330)之外 —— scalar 更新、
-        序列不收、檔不寫。
+        """盤後定盤 14:30 與收盤後 13:35 都在分鐘域(0901–1330)之外 —— scalar 更新、
+        序列不收、檔不寫。(盤前時刻不在此組:試撮窗整輪拒收,另有專測。)
 
         `now` 跟著快照時刻走(P1-2 之後兩者必須自洽:快照時刻超前本機時鐘 10 分鐘
         以上即視為髒 row 忽略,而 14:30 的定盤本來就是 14:30 當下收到的)。
@@ -939,6 +939,40 @@ class TestSeriesPersistence:
         assert state["as_of"] == stamp_time
         assert state["series"] == []
         assert not _series_file(tmp_path).exists()
+
+    @pytest.mark.parametrize("stamp_time", ["08:30:00", "08:59:59"])
+    async def test_trial_window_snapshot_fully_rejected(
+        self, tmp_path: Path, stamp_time: str
+    ) -> None:
+        """資料時刻落在試撮窗 [08:30, 09:00) → **整輪不採用**,scalar 也不動(XR-5)。
+
+        輪詢窗 09:00 起只擋「取數時刻」;09:00 整的首輪仍可能拿到上游尚未刷新的
+        08:5x 試撮快照(取數在窗內、資料在試撮窗)—— 這道 gate 補的就是那條縫,
+        連板 +1 / rows / rotation 全部一起擋(review C-2)。
+        """
+        snap = FakeFetch(_snapshot_rows(f"{_TRADE_DATE} {stamp_time}"))
+        engine, *_ = _make(tmp_path, snapshot=snap, clock=Clock(now="09:00:05"))
+
+        await engine._run_cycle()
+
+        state = engine.state()
+        assert state["counts"] is None
+        assert state["as_of"] is None
+        assert state["series"] == []
+        assert not _series_file(tmp_path).exists()
+        # skip 不是 fail:上游有回應,不得進退避(退避會把 09:00:10 的下一輪推遲)
+        assert engine._fail_streak == 0
+
+    async def test_open_auction_stamp_not_trial(self, tmp_path: Path) -> None:
+        """09:00:00 整 = 開盤撮合真成交(試撮窗右端不含)—— 不得被試撮 gate 誤殺。"""
+        snap = FakeFetch(_snapshot_rows(f"{_TRADE_DATE} 09:00:00"))
+        engine, *_ = _make(tmp_path, snapshot=snap, clock=Clock(now="09:00:05"))
+
+        await engine._run_cycle()
+
+        state = engine.state()
+        assert state["counts"] == _EXPECTED
+        assert state["as_of"] == "09:00:00"
 
     async def test_same_minute_last_wins(self, tmp_path: Path) -> None:
         engine, snap, *_ = _make(tmp_path)
@@ -962,6 +996,17 @@ class TestSeriesPersistence:
 
 
 class TestPollLoop:
+    def test_default_window_starts_at_open_not_trial(self, tmp_path: Path) -> None:
+        """預設窗 09:00 起(XR-5 拍板):08:57 在窗外、09:00 整在窗內。
+
+        config 檔的斷言只是 dataclass 字面值鏡像 —— 這條釘的是**引擎端**真的以 config
+        建窗;把窗硬寫回 08:55 的 mutation 在這裡變紅(review T-2)。
+        """
+        engine, *_ = _make(tmp_path, clock=Clock(now="08:57:00"))
+        assert engine._in_window() is False
+        engine_open, *_ = _make(tmp_path, clock=Clock(now="09:00:00"))
+        assert engine_open._in_window() is True
+
     async def test_outside_window_only_first_cycle_fetches(self, tmp_path: Path) -> None:
         """首圈無條件跑(盤後開站也要有數字);之後窗外一律不打 FinMind。"""
         engine, snap, *_ = _make(
