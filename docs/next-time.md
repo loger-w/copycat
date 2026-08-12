@@ -1,4 +1,15 @@
 
+## 2026-08-12(mod/signal-hub-decouple XR-3 收尾留尾巴)
+
+- [ ] **前端 tc4="down" 文案分態**(review R2-6 accepted 偏差):StockPage 對
+  `status.tc4 === "down"` 顯示「達錢 4 連線中斷,恢復後自動回補」,但 XR-3 後無
+  engine 模式(TC4 從未開)也會收到 status down seed,而該模式 TC4 恢復**不會**
+  自癒(stock engine 只在 boot 建,需重啟 server)。候選:seed 加欄位或前端分態
+  文案(「達錢 4 未連線,啟動後需重啟 server」)。frontend 小改,順下輪前端批。
+- [ ] **`_empty_daily_bars` 語意堆疊**(C-4 已修 gap sleep;殘餘觀察):無 engine 時
+  basis job 仍逐檔跑一輪(30 檔 30 行「CDP 停用」warning,一次性)。若嫌吵,候選
+  = 無 engine 時 on_watchlist 不排 basis job(hub 加模式分支,spec 當時判不值得)。
+
 ## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
 
 - [ ] **X-3 深修:把 ZMQ 訂閱迴圈移出 `stock_engine._pool_lock`(review 首位 finding,P2)**:
@@ -959,12 +970,11 @@
 review 全文 `.claude/feat/market-overview-r4-sector-signals/code-review-round-2.json`。
 accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 
-- [ ] **XR-3(架構級,本輪最大遺留):SignalHub 深綁 stock engine**(`app.py
-  _make_signals` 用 `engine._publish`/`daily_bars`/`trade_date`/`quotes` 四處)——
-  達錢 4 沒開時純 FinMind 的廣度事件鏈連同時間軸整條靜默消失(today 503)。
-  R4 只做了「FinMind 掛 → TC4 系零波及」單向隔離,反向沒有。本輪緩解 = FE-1
-  (時間軸把 503 顯示成「訊號服務未就緒」,不再與「今日尚無訊號」同形)。
-  根治 = hub 的 bus/trade_date 與 stock engine 解耦,是獨立 /mod。
+- [x] **XR-3:SignalHub 深綁 stock engine** — **2026-08-12 已根治**(mod/signal-hub-decouple,
+  PR #43):bus 上提 app 層 stock_ws、trade_date 牆鐘 fallback、daily_bars stub、
+  gate 只看 hub;TC4 不在時廣度鏈(today/WS/jsonl)全活。衍生留尾:前端
+  `tc4="down"` 文案「恢復後自動回補」在無 engine 模式不成立(engine 只在 boot 建,
+  需重啟 server)→ 前端文案分態,見下方 2026-08-12 節。
 - [ ] **HR-6:WS 事件類訊息丟包無回補**(`ws.py` drop-oldest 對一次性 signal =
   永久遺失且不斷線,baseline 重抓只掛 onWsOpen)。候選:signal payload 加 seq +
   前端 gap 偵測觸發 invalidate,或 baseline 盤中週期重抓。R4 把漲停潮日數百則
