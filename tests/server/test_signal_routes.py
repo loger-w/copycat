@@ -14,7 +14,10 @@ Protocol,fake 複製一份就會在下次 Protocol 加方法時漂移成兩份�
 
 from __future__ import annotations
 
+import functools
 import json
+import time
+from datetime import date as _date
 from pathlib import Path
 
 import pytest
@@ -98,6 +101,56 @@ def _rules(client: BootedClient) -> list[Rule]:
     return r.json()["rules"]
 
 
+def _market_event(code: str = "1101", *, at: str = "10:01:00") -> dict:
+    """breadth `_diff_limit_events` 產出的事件形狀(`publish_market_events` 的入參)。"""
+    return {
+        "code": code,
+        "kind": "market_limit_lock",
+        "direction": "up",
+        "time": at,
+        "name": "台泥",
+        "price": 30_000,
+        "touch_count": 1,
+    }
+
+
+def _market_event_id(trade_date: str, event: dict) -> str:
+    """`publish_market_events` 的決定性 id(規則段固定 `breadth`)。"""
+    return (
+        f"{trade_date}-breadth-{event['code']}-{event['kind']}-{event['direction']}-{event['time']}"
+    )
+
+
+def _publish_market(
+    client: BootedClient, hub: SignalHub, events: list[dict], trade_date: str
+) -> None:
+    """hub 的呼叫**必須回到 event loop**:`WsBroadcaster.publish` 契約是「只能在 loop 上
+    呼叫」,jsonl 也是走 asyncio.Queue 交給 worker。測試執行緒直呼會把訊息放進另一條
+    執行緒看不到的佇列(而斷言只會逾時,看不出是接線錯還是時序問題)。
+
+    `portal.call` 只吃位置參數(anyio `call(func, *args)`)而 `trade_date` 是
+    keyword-only → 走 `functools.partial`;不得因 TypeError 改用跨執行緒直呼繞過。
+    """
+    portal = client.portal
+    assert portal is not None, "portal 只在 TestClient context 內存在(lifespan 未進場?)"
+    portal.call(functools.partial(hub.publish_market_events, events, trade_date=trade_date))
+
+
+def _wait_signal(client: BootedClient, signal_id: str, timeout: float = 5.0) -> dict:
+    """輪詢 today 直到該 id 出現(jsonl 落檔由 worker 非同步完成,不可一次性立即斷言)。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        r = client.get("/api/stock/signals/today")
+        assert r.status_code == 200
+        rows = r.json()["signals"]
+        for row in rows:
+            if row.get("id") == signal_id:
+                return row
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{signal_id} 未在 {timeout}s 內出現在 today:{rows}")
+        time.sleep(0.01)
+
+
 class TestLifespanWiring:
     """hub 掛不上去的失效樣態是「今天都沒訊號」,沒有任何錯誤訊號 → 這條測試是唯一守門。"""
 
@@ -126,11 +179,18 @@ class TestLifespanWiring:
         with BootedClient(app, raise_server_exceptions=False):
             assert app.state.signal_hub._watch == {"2330"}
 
-    def test_no_stock_leaves_hub_none(self, tmp_path: Path) -> None:
+    def test_no_stock_still_builds_hub(self, tmp_path: Path) -> None:
+        """SC-1(🔴 XR-3):TC4 不在 → hub 照建照啟,落點仍是 `wl_path.parent`。
+
+        舊行為是「stock 缺席 → hub None」,而 hub 是廣度事件鏈的唯一出口 ——
+        達錢 4 沒開的早上,全市場鎖板事件整天不產生而畫面與「今天沒有漲停」同形。
+        `watchlist_service` 仍 None(它真的依賴 engine 的訂閱池,不在解耦範圍)。
+        """
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False):
-            assert app.state.signal_hub is None
+            assert app.state.signal_hub is not None
             assert app.state.watchlist_service is None
+            assert (tmp_path / _RULES_FILE).exists(), "規則檔要落在注入的 data 根"
 
 
 class _ExplodingBot:
@@ -546,23 +606,135 @@ class TestSignalRulesRoutes:
             assert r.json()["detail"]["error"] == "NOT_READY"
 
 
-class TestSignalRoutesNotReady:
-    """hub 缺席(stock engine 未就緒)→ 訊號 route 全 503 NOT_READY,不是 500 也不是空回應。"""
+class TestSignalRoutesWithoutStock:
+    """🔴 XR-3:TC4 沒開時訊號面**全可用**(舊行為是全 503)。
 
-    def test_all_signal_routes_return_503(self, tmp_path: Path) -> None:
+    503 從此只剩一種語意:hub 自身降級(壞規則檔 / start 炸)—— 那兩條由
+    `test_bad_rules_file_degrades` / `test_hub_start_failure_isolates_signals_only` 守。
+
+    這一組守的是:規則 CRUD 是純檔案操作、廣度事件鏈是純 FinMind,兩者與達錢 4
+    一點關係都沒有,卻曾因為 hub 綁 stock engine 而一起消失。
+    """
+
+    def test_rule_crud_available_without_stock(self, tmp_path: Path) -> None:
+        """SC-3:GET 200(預設規則)/ POST 201 / PUT 200 / DELETE 204,today 200。"""
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
-            rid = "r-1-000"
-            responses = [
-                client.get("/api/stock/signals/today"),
-                client.get("/api/stock/signals/rules"),
-                client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新")),
-                client.put(f"/api/stock/signals/rules/{rid}", json=_rule_body("limit_lock", "新")),
-                client.delete(f"/api/stock/signals/rules/{rid}"),
-            ]
-        for r in responses:
-            assert r.status_code == 503
-            assert r.json()["detail"]["error"] == "NOT_READY"
+            assert [r["kind"] for r in _rules(client)] == list(RULE_KINDS)
+
+            created = client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新"))
+            assert created.status_code == 201
+            rid = created.json()["id"]
+
+            put = client.put(
+                f"/api/stock/signals/rules/{rid}", json=_rule_body("limit_lock", "改名了")
+            )
+            assert put.status_code == 200
+            assert put.json()["name"] == "改名了"
+
+            assert client.delete(f"/api/stock/signals/rules/{rid}").status_code == 204
+            assert rid not in [r["id"] for r in _rules(client)]
+
+            today = client.get("/api/stock/signals/today")
+            assert today.status_code == 200
+            assert today.json() == {"signals": []}
+
+    def test_market_events_reach_today_on_wall_clock_date(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SC-2:廣度事件鏈(REST)照活,`trade_date` 走牆鐘 fallback。
+
+        `TXO_BACKFILL_DATE` 顯式清掉:它是 fallback 的優先來源(edge §7.1),
+        開發機 shell 留著它會讓這條斷言隨環境飄。
+        """
+        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            assert client.get("/api/stock/signals/today").json() == {"signals": []}
+            hub = app.state.signal_hub
+            assert hub is not None
+            today = f"{_date.today():%Y-%m-%d}"
+            assert hub._trade_date_fn() == today, "無 engine 時日別來源 = 牆鐘"
+
+            event = _market_event()
+            _publish_market(client, hub, [event], today)
+            row = _wait_signal(client, _market_event_id(today, event))
+
+        assert row["kind"] == "market_limit_lock"
+        assert row["code"] == "1101"
+        assert row["trade_date"] == today
+
+    def test_ws_stock_stays_open_and_carries_market_events(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SC-4:`/ws/stock` 不再立即 close;首則是 tc4=down 的 status seed(review P1-2)。
+
+        沒有那則 seed 的話,前端「連線異常」提示靠 `status.tc4 === "down" ||
+        wsStatus === "closed"` 觸發,而 `status` 初值是 `{tc4: "up"}` —— 掛著的空流
+        會讓 TC4-off 完全無提示(比舊的立即 close 更糟)。
+        """
+        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            hub = app.state.signal_hub
+            assert hub is not None
+            today = f"{_date.today():%Y-%m-%d}"
+            with client.websocket_connect("/ws/stock") as ws:
+                assert ws.receive_json() == {
+                    "type": "status",
+                    "tc4": "down",
+                    "backfilling": None,
+                }
+
+                event = _market_event()
+                _publish_market(client, hub, [event], today)
+                msg = ws.receive_json()
+
+        assert msg["type"] == "signal"
+        assert msg["kind"] == "market_limit_lock"
+        assert msg["id"] == _market_event_id(today, event)
+
+    def test_basis_falls_back_to_empty_daily_bars(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T5:無 engine → `daily_bars` stub 恆回 `[]` = 「資料面就是沒有」。
+
+        hub 既有路徑因此逐檔一次「CDP 停用」warning + cache 落 `(日別, None)`,
+        **不重試**(重試留給例外路徑 X-2b)—— 自選 30 檔不會變成重試風暴。
+        """
+        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        (tmp_path / "watchlist.json").write_text(
+            json.dumps({"_cache_version": 3, "codes": ["2330"], "groups": []}),
+            encoding="utf-8",
+        )
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False):
+            hub = app.state.signal_hub
+            assert hub is not None
+            assert hub._watch == {"2330"}, "membership 種子不得因為 engine 缺席而漏掉"
+            today = f"{_date.today():%Y-%m-%d}"
+            deadline = time.monotonic() + 5.0
+            while "2330" not in hub._basis_cache:
+                if time.monotonic() > deadline:
+                    raise AssertionError(f"basis 未在 5s 內落定:{hub._basis_cache}")
+                time.sleep(0.01)
+            assert hub._basis_cache["2330"] == (today, None)
+            assert hub._basis_retries == {}, "資料面回空不得排重試"
+
+    def test_bot_built_with_none_service(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T6:bot 照建(service=None → `/watch` 回 fallback 文案),不隨 stock 一起消失。"""
+        seen: list[tuple[object, object]] = []
+
+        def _spy(service: object, hub: object) -> None:
+            seen.append((service, hub))
+            return None
+
+        monkeypatch.setattr(app_mod, "create_bot", _spy)
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False):
+            assert seen == [(None, app.state.signal_hub)]
 
 
 def _spy(engine: object) -> tuple[list[list[str]], list[dict]]:

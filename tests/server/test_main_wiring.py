@@ -116,9 +116,18 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
         "breadth_fetchers",
         "breadth_data_dir",
         "breadth_config",
+        "stock_watchlist_path",
     }
     assert len(cap.create_kwargs["breadth_fetchers"]) == 5
     assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
+    # SignalHub 解耦後(XR-3)verify server 也會建真 hub,而它的落點 = 自選檔所在目錄。
+    # 不隔離的話 verify 進程會把 fake 事件寫進 prod 的 `data/signals/*.jsonl` ——
+    # 那份是 breadth 對帳的 seed,被灌假事件之後 prod 的真鎖板事件會被判成「已發布」
+    # 而**靜默不發**(review P0-3)。與 breadth_data_dir 同一條隔離原則。
+    assert (
+        cap.create_kwargs["stock_watchlist_path"]
+        == main_mod.VERIFY_DATA_DIR / "stock_watchlist.json"
+    )
     # 放寬窗(review C-2):prod 預設窗 08:55–13:40 之外 `_poll_loop` 只跑首圈 ——
     # flip 翻轉 / 失效注入 / 事件鏈路全都要「第二輪之後」才看得到,而 verify server
     # 幾乎都在盤後跑,窗照抄 prod 等於整條取證路徑只剩一格
