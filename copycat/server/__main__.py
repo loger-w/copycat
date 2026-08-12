@@ -182,6 +182,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             # 家數帶走 fake 取數(不打真 FinMind)+ 獨立落檔目錄(不覆蓋 prod 當日序列)
             breadth_fetchers=fake_breadth_fetchers(),
             breadth_data_dir=data_dir,
+            # SignalHub 解耦後(XR-3)verify server 也會建真 hub,而 hub 的落點 =
+            # 自選檔所在目錄。不隔離的話 verify 進程會往 prod 的 `data/signals/*.jsonl`
+            # 寫 fake 事件 —— 那份是 breadth 對帳的 seed(`market_event_state`),被灌
+            # 假事件之後 prod 的真鎖板事件會被判成「已發布」而**靜默不發**。
+            # 與 breadth_data_dir 同一條隔離原則(51-54 行)。
+            stock_watchlist_path=data_dir / "stock_watchlist.json",
             breadth_config=BreadthConfig(
                 window_start=VERIFY_WINDOW[0], window_end=VERIFY_WINDOW[1]
             ),
