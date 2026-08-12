@@ -16,19 +16,23 @@ from __future__ import annotations
 
 import functools
 import json
+import threading
 import time
 from datetime import date as _date
 from pathlib import Path
+from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocketDisconnect
+from fastapi.testclient import TestClient
 
 from copycat.server import app as app_mod
 from copycat.server import signal_hub as hub_mod
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
 from copycat.signal_rules import RULE_KINDS, Rule
-from tests.helpers.boot import BootedClient
+from tests.helpers.boot import BootedClient, wait_boot
+from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.fake_txo import FakeTxoSource
 from tests.server.test_stock_routes import FakeStockSource
 
@@ -134,6 +138,62 @@ def _publish_market(
     portal = client.portal
     assert portal is not None, "portal 只在 TestClient context 內存在(lifespan 未進場?)"
     portal.call(functools.partial(hub.publish_market_events, events, trade_date=trade_date))
+
+
+def _pump_receive(ws: Any, timeout: float) -> tuple[list[dict], list[BaseException]]:
+    """在 daemon 執行緒上跑一次 `receive_json`,`join(timeout)` 封頂(T-5)。
+
+    `WebSocketTestSession.receive` 是無上限的 `portal.call(...receive)` —— 接線回歸
+    (訊號不再上這條 WS)的表現會是**整個 pytest 掛死**,CI 只看得到逾時被砍,而不是
+    一條指名道姓的紅測試。例外收進回傳值而不是就地拋:close 分支要拿它做斷言,
+    逾時分支要拿它寫進訊息(兩條路都有人讀,不是吞掉)。
+    """
+    box: list[dict] = []
+    err: list[BaseException] = []
+
+    def _pump() -> None:
+        try:
+            box.append(ws.receive_json())
+        except BaseException as exc:  # noqa: BLE001 - 進 err,由呼叫端判讀
+            err.append(exc)
+
+    worker = threading.Thread(target=_pump, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return box, err
+
+
+def _recv_json(ws: Any, timeout: float = 5.0) -> dict:
+    """有上限的 `receive_json`;沒收到就 AssertionError(不掛死)。"""
+    box, err = _pump_receive(ws, timeout)
+    if not box:
+        raise AssertionError(f"WS 未在 {timeout}s 內收到訊息(例外:{err})")
+    return box[0]
+
+
+def _expect_close(ws: Any, timeout: float = 5.0) -> None:
+    """有上限地斷言「accept 後隨即被 close」。
+
+    close 不會在 `websocket_connect` 那一步拋 —— route 先 `accept()` 才 `close()`,
+    TestClient 的 enter 只讀到 accept(既有 `/ws/breadth` 測試同款)。
+    """
+    box, err = _pump_receive(ws, timeout)
+    assert not box, f"連線沒被 close,反而收到訊息:{box}"
+    assert err and isinstance(err[0], WebSocketDisconnect), f"{timeout}s 內沒收到 close:{err}"
+
+
+def _recv_until(ws: Any, kind: str, timeout: float = 5.0) -> dict:
+    """收到指定 `type` 為止(同一顆 broadcaster 上可能夾雜 status / 節流 quote)。"""
+    deadline = time.monotonic() + timeout
+    seen: list[str] = []
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(f"{timeout}s 內未收到 type={kind} 的訊息(收到:{seen})")
+        msg = _recv_json(ws, timeout=remaining)
+        if msg.get("type") == kind:
+            return msg
+        seen.append(str(msg.get("type")))
 
 
 def _wait_signal(client: BootedClient, signal_id: str, timeout: float = 5.0) -> dict:
@@ -680,7 +740,7 @@ class TestSignalRoutesWithoutStock:
             assert hub is not None
             today = f"{_date.today():%Y-%m-%d}"
             with client.websocket_connect("/ws/stock") as ws:
-                assert ws.receive_json() == {
+                assert _recv_json(ws) == {
                     "type": "status",
                     "tc4": "down",
                     "backfilling": None,
@@ -688,7 +748,7 @@ class TestSignalRoutesWithoutStock:
 
                 event = _market_event()
                 _publish_market(client, hub, [event], today)
-                msg = ws.receive_json()
+                msg = _recv_json(ws)
 
         assert msg["type"] == "signal"
         assert msg["kind"] == "market_limit_lock"
@@ -721,6 +781,28 @@ class TestSignalRoutesWithoutStock:
             assert hub._basis_cache["2330"] == (today, None)
             assert hub._basis_retries == {}, "資料面回空不得排重試"
 
+    def test_trade_date_is_evaluated_per_call(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T-2:牆鐘 fallback 必須**每次呼叫求值**,且 `TXO_BACKFILL_DATE` 優先。
+
+        「= 今天」那條斷言對 boot 時算一次的靜態字串同樣成立 → 鑑別點只能落在
+        **boot 之後**才改 env:靜態實作會固定在 boot 當下的值。失效樣態是長跑跨日後
+        `_distribute` 的日別尺與 jsonl 檔名都停在昨天 —— 今天的事件寫進昨天的檔,
+        today 端點空白,完全靜默。
+        """
+        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False):
+            hub = app.state.signal_hub
+            assert hub is not None
+
+            monkeypatch.setenv("TXO_BACKFILL_DATE", "2026-01-02")
+            assert hub._trade_date_fn() == "2026-01-02", "boot 後改 env 要立刻反映(非靜態快照)"
+
+            monkeypatch.delenv("TXO_BACKFILL_DATE")
+            assert hub._trade_date_fn() == f"{_date.today():%Y-%m-%d}", "env 撤掉要回牆鐘"
+
     def test_bot_built_with_none_service(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -735,6 +817,135 @@ class TestSignalRoutesWithoutStock:
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False):
             assert seen == [(None, app.state.signal_hub)]
+
+
+class TestWsStockSharedBroadcaster:
+    """T-1:engine **在場**時 hub 與 `/ws/stock` 必須共用同一顆 broadcaster。
+
+    `_make_stock` 漏傳 `ws=stock_ws` 的話 engine 會自建一顆,而 hub 照樣 publish 到
+    app 層那顆 —— 整套測試仍然全綠(hub 建得起來;TC4-off 那組走的正好就是 app 層
+    那顆),壞掉的偏偏是 prod 主用例:達錢 4 開著時訊號全部不上 WS,畫面只是
+    「今天都沒跳訊號」,零錯誤訊號。
+    """
+
+    def test_hub_signal_reaches_ws_when_engine_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """行為版:同一條連線先收 engine 的自選 seed,再收 hub 發的訊號。
+
+        先斷言 seed 是關鍵鑑別:它證明這條連線走的是 **engine 的 stream**(無 engine
+        分支的首則是 status),所以之後收到訊號只可能出自「兩者同一顆」。
+        """
+        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        (tmp_path / "watchlist.json").write_text(
+            json.dumps({"_cache_version": 3, "codes": ["2330"], "groups": []}),
+            encoding="utf-8",
+        )
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            hub = app.state.signal_hub
+            assert hub is not None
+            trade_date = app.state.stock.trade_date
+            with client.websocket_connect("/ws/stock") as ws:
+                assert _recv_json(ws)["type"] == "watchlist_quote", "engine 在場 → 首則是自選 seed"
+
+                event = _market_event()
+                _publish_market(client, hub, [event], trade_date)
+                msg = _recv_until(ws, "signal")
+
+        assert msg["kind"] == "market_limit_lock"
+        assert msg["id"] == _market_event_id(trade_date, event)
+
+    def test_engine_ws_is_the_app_level_broadcaster(self, tmp_path: Path) -> None:
+        """最小版:上一條紅掉時直接指出壞在哪一根線(注入 vs. hub 那端)。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False):
+            assert app.state.stock._ws is app.state.stock_ws
+
+
+class _BlockingIndexSource(FakeIndexSource):
+    """`subscribe_symbol` 卡在 gate 上 —— boot 序列停在 **signals 之後、boot_done 之前**。
+
+    `_subscribe_and_backfill` 走 `to_thread`,所以卡的是背景 boot task 而不是測試執行緒。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+
+    def subscribe_symbol(self, code: str) -> None:
+        self.entered.set()
+        self.gate.wait(15.0)  # 測試一律自己放行;上限只是「忘了放行」時不掛死整套測試
+        super().subscribe_symbol(code)
+
+
+class TestWsStockCloseBranches:
+    """T-3/W-4:`/ws/stock` 仍會 close 的兩條分支(XR-3 只放寬了第三種情形)。
+
+    這兩條沒鎖的話,`not state.boot_done or state.signal_hub is None` 被改窄成只剩
+    前半、後半、或整段拿掉都不會紅 —— 留下的是永遠無流量的殭屍連線,而前端的
+    「連線異常」提示正是靠 `wsStatus === "closed"`。
+    """
+
+    def test_closes_when_hub_also_none(self, tmp_path: Path) -> None:
+        """(a) stock 缺席 **且** hub 降級(壞規則檔)→ 這條通道沒有任何生產者。"""
+        (tmp_path / _RULES_FILE).write_text("{壞掉的 json", encoding="utf-8")
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            assert app.state.signal_hub is None, "壞規則檔 → hub 降級(這條測試的前提)"
+            with client.websocket_connect("/ws/stock") as ws:
+                _expect_close(ws)
+
+    def test_closes_inside_boot_window(self, tmp_path: Path) -> None:
+        """(b) boot 未完成 → close(早連的 client 錯過 seed,重連自癒比空流好)。
+
+        不能用 `BootedClient`:它的語意就是「等到窗關上」,窗內路徑一次都不會執行。
+        窗**必須卡在 signals 之後**:更早卡住(runtime 的 `list_series`)時 hub 也還
+        是 None,close 由 `signal_hub is None` 那半邊接住 —— 拿掉 `boot_done` 照樣綠
+        (實測過的假紅測試)。
+        """
+        index = _BlockingIndexSource()
+        app = create_app(
+            FakeTxoSource(),
+            index_source=index,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            throttle_secs=0.01,
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            assert index.entered.wait(5), "boot 沒卡在 index 訂閱 → 窗沒開在鑑別點上"
+            assert app.state.signal_hub is not None, "窗要落在 signals 之後,否則驗不到 boot_done"
+            assert app.state.boot_done is False
+
+            with client.websocket_connect("/ws/stock") as ws:
+                _expect_close(ws)
+
+            index.gate.set()
+            wait_boot(app)
+            # 翻轉對照:窗外同一條連線活著 → 上面那個 close 確實只出自「窗內」,
+            # 而不是這個 app 的 `/ws/stock` 根本連不上
+            with client.websocket_connect("/ws/stock") as ws:
+                assert _recv_json(ws)["type"] == "status"
+
+
+class TestConftestWatchlistIsolation:
+    """T-4:`tests/server/conftest.py` 的落點隔離 fixture 自身要有鎖。
+
+    它是 SC-8 唯一的擋牆(hub 恆建之後,沒傳 `stock_watchlist_path` 的 19 個站點全會
+    把 `signal_rules.json` / fake 鎖板事件寫進 repo 真 `data/`),而 fixture 壞掉是
+    **靜默**的:所有測試照樣綠,只有 prod 的對帳 seed 被汙染。
+    """
+
+    def test_hub_data_dir_isolated_without_explicit_path(self, tmp_path: Path) -> None:
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=FakeStockSource(),
+            throttle_secs=0.01,
+        )  # 刻意不傳 stock_watchlist_path → 落點由 conftest 的 autouse fixture 決定
+        with BootedClient(app, raise_server_exceptions=False):
+            hub = app.state.signal_hub
+            assert hub is not None
+            assert hub._data_dir == tmp_path, "落點必須在 tmp_path,不得是 repo 的 data/"
 
 
 def _spy(engine: object) -> tuple[list[list[str]], list[dict]]:
