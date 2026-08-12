@@ -701,13 +701,19 @@ class TestSignalHubWiring:
             assert app.state.breadth is not None
             assert app.state.breadth._signal_hub is app.state.signal_hub
 
-    def test_no_hub_leaves_breadth_unattached(self, tmp_path: Path) -> None:
-        """stock 引擎缺席 → 沒有 hub 可掛,但 breadth 本身照常啟動(失效域隔離)。"""
+    def test_stock_absent_still_attaches_hub(self, tmp_path: Path) -> None:
+        """SC-6(🔴 XR-3):stock 引擎缺席**不再**讓 hub 消失 → breadth 照掛。
+
+        舊行為(hub 綁 stock)下,達錢 4 沒開的早上這條掛載條件不成立 → 全市場鎖板
+        事件整天不產生,而畫面上與「今天沒有漲停」完全同形。廣度鏈是純 FinMind,
+        與 TC4 在否無關,這條就是那個不變式的錨點。
+        """
         app = _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path)
         with BootedClient(app, raise_server_exceptions=False):
-            assert app.state.signal_hub is None
+            assert app.state.stock is None
+            assert app.state.signal_hub is not None
             assert app.state.breadth is not None
-            assert app.state.breadth._signal_hub is None
+            assert app.state.breadth._signal_hub is app.state.signal_hub
 
     def test_detach_happens_before_close(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
