@@ -1,0 +1,249 @@
+﻿diff --git a/copycat/breadth_config.py b/copycat/breadth_config.py
+index 30bad8e9..52205d8c 100644
+--- a/copycat/breadth_config.py
++++ b/copycat/breadth_config.py
+@@ -20,7 +20,9 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "breadth.json
+ @dataclass(frozen=True, slots=True)
+ class BreadthConfig:
+     poll_secs: float = 10.0  # 輪詢間隔(FinMind snapshot)
+-    window_start: str = "08:55"  # 台北;poll 窗起(HH:MM)
++    window_start: str = "09:00"  # 台北;poll 窗起(HH:MM)。09:00 = 排除 08:55–09:00
++    # 試撮窗(2026-08-12 拍板):試撮價可被假單操縱,家數/rows/連板收了會與騰落線/
++    # 事件流(分鐘域 gate 天然不收)矛盾,且試撮漲停會讓連板誤 +1 —— 一律不進系統。
+     window_end: str = "13:40"  # 台北;poll 窗迄(HH:MM)
+     stale_secs: float = 30.0  # 窗內距上次成功超過此秒數 → state.stale
+     backoff_max_secs: float = 60.0  # 連續失敗退避上限(10→20→40→60)
+diff --git a/copycat/server/__main__.py b/copycat/server/__main__.py
+index 938409a2..24ab0ca9 100644
+--- a/copycat/server/__main__.py
++++ b/copycat/server/__main__.py
+@@ -59,7 +59,7 @@ VERIFY_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify"
+ #: 類股面板照常有內容,看起來就像 SC-3 通過了(design §8 / R9;review S-2/C-3)。
+ VERIFY_FAIL_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify-fail"
+ 
+-#: --verify 的家數帶輪詢窗:全天。prod 預設窗(08:55–13:40)之外 `_poll_loop` 只跑
++#: --verify 的家數帶輪詢窗:全天。prod 預設窗(09:00–13:40)之外 `_poll_loop` 只跑
+ #: 首圈,而 verify server 幾乎都在盤後跑 —— flip 翻轉、失效注入、事件鏈路全都要
+ #: 「第二輪之後」才看得到,窗照抄 prod 等於整條取證路徑只剩一格(review C-2)。
+ VERIFY_WINDOW = ("00:00", "23:59")
+diff --git a/docs/next-time.md b/docs/next-time.md
+index a344f9a8..3a142eb6 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -989,9 +989,14 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
+   00:00-06:00 且需 FinMind EOD 遲發 >6h(正常 D 日傍晚已發布),`:1121` 的
+   「最新資料日不是昨日」warning 是觀測訊號;擋窗會破壞 R3-BE-3 拍板的跨午夜
+   恢復行為。真踩到再修(修法要同時保住兩個語意)。
+-- [ ] **XR-5:08:55-09:00 試撮窗四區塊 gate 互相矛盾**(家數/rows/連板收試撮價,
++- [x] ~~**XR-5:08:55-09:00 試撮窗四區塊 gate 互相矛盾**(家數/rows/連板收試撮價,
+   連板判式在試撮漲停上照 +1;騰落線與事件流不收;前端 09:01 才開輪詢 → 試撮
+-  快照殘留畫面到 09:01)。要不要排除/標示試撮窗 = 產品語意,待 user 拍板。
++  快照殘留畫面到 09:01)。要不要排除/標示試撮窗 = 產品語意,待 user 拍板。~~
++  **2026-08-12 grilling 拍板「排除」並出貨**:試撮價可被假單操縱、無決策價值 →
++  `breadth_config` 預設 `window_start` 08:55→09:00,試撮價不進系統,四區塊自動
++  一致;前端不動(開盤前顯示昨日收盤資料是誠實狀態,非殘影)。殘餘小邊角:server
++  若恰在 08:55-09:00 重啟,窗外首圈仍會拉到一發試撮快照(~1 分鐘內被窗內首輪蓋掉),
++  量級不值特判,真困擾再說。
+ - [ ] **XR-6:後端 `_in_window` 無星期維度**,週末照 10s 打 FinMind(~1,710 次/日,
+   配額安全)。加星期 gate 有週六補市日非對稱風險(rollover 教訓把週六補市當真
+   場景),暫維持現狀。
+@@ -1001,8 +1006,11 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
+ - [ ] **FE-4:SectorSection 不顯示 trade_date/as_of**(sector-model 有欄位,UI 丟
+   掉;唯一日期戳來自 BreadthBand 的 `_trade_date`,兩者可脫鉤)。加 stamp 是 UI
+   增項,待四輪 user 過目時一併拍板。
+-- [ ] **FE-7:產業列每 10s 依 avg 重排,展開/鑽取中的區塊在游標下位移**(誤點成員
+-  = setStockCode + set_main,代價不只看錯)。候選 = 鑽取中凍結排序;UX 拍板項。
++- [x] ~~**FE-7:產業列每 10s 依 avg 重排,展開/鑽取中的區塊在游標下位移**(誤點成員
++  = setStockCode + set_main,代價不只看錯)。候選 = 鑽取中凍結排序;UX 拍板項。~~
++  **2026-08-12 grilling 拍板並出貨**:任何展開/鑽取期間凍結排序(產業/子產業/成員
++  三層,數字照更新)+「排序已凍結」標籤,全收合恢復即時重排;凍結判定看「畫面上
++  真的展開著什麼」(展開目標從清單消失不會無限凍結)。
+ - [ ] **XR-2 殘餘:adopt_date=False 時家數帶標頭日期(`_trade_date`)與 counts
+   資料日錯位**——本輪已修 stale 會亮(`_last_success` 不再刷),日期標示要完全
+   誠實需 per-view date(band 用 series 日、counts 用 rows 日),等真的踩到再說。
+diff --git a/frontend/src/components/index/SectorSection.test.tsx b/frontend/src/components/index/SectorSection.test.tsx
+index bac4373a..2b98e8c2 100644
+--- a/frontend/src/components/index/SectorSection.test.tsx
++++ b/frontend/src/components/index/SectorSection.test.tsx
+@@ -371,6 +371,115 @@ describe("SectorSection 降級", () => {
+   });
+ });
+ 
++// (FE-7 拍板 2026-08-12)產業列每 10 秒依後端 avg 重排,展開/鑽取中的列會在游標下
++// 位移 —— 誤點成員 = setStockCode + set_main,代價不只看錯。拍板解:任何展開/鑽取
++// 期間**凍結排序**(數字照更新、位置不動)+ 顯示「排序已凍結」標籤,全收合才恢復。
++describe("SectorSection 排序凍結(FE-7)", () => {
++  /** 後端下一輪把航運排到最前(avg 反轉)—— 凍結時位置不得跟著跳。 */
++  const REORDERED: SectorRotation = {
++    industries: [
++      { name: "航運", members: 30, avg_change_rate: 5.0, vol_ratio: 2.2, subs: [] },
++      {
++        name: "半導體",
++        members: 120,
++        avg_change_rate: 2.5,
++        vol_ratio: 1.8,
++        subs: [
++          { name: "IC設計", members: 40, avg_change_rate: 3.25, vol_ratio: 2.1 },
++          { name: "封測", members: 20, avg_change_rate: -1.1, vol_ratio: null },
++        ],
++      },
++    ],
++  };
++
++  function rowOrder(): string[] {
++    return screen
++      .getAllByTestId(/^sector-row-btn-/)
++      .map((el) => el.getAttribute("data-testid")!.replace("sector-row-btn-", ""));
++  }
++
++  /** 下一輪 sector-state 改回傳重排後的清單,並主動觸發 refetch。 */
++  async function refetchReordered(): Promise<void> {
++    fetchSpy.mockImplementation(
++      async () => new Response(JSON.stringify(mkState({ rotation: REORDERED }))),
++    );
++    await act(async () => {
++      await client.refetchQueries({ queryKey: ["sector-state"] });
++    });
++    // 數字要照常更新(凍的是位置不是資料)—— 也是等 TQ macrotask 通知落地的錨點
++    await waitFor(() => expect(screen.getByTestId("sector-change-航運").textContent).toBe("+5.00%"));
++  }
++
++  it("展開子產業層中輪詢順序改變 → 列位置凍結、數字照更新、顯示凍結標籤", async () => {
++    await openWith();
++    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
++    expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
++
++    await refetchReordered();
++    expect(rowOrder()).toEqual(["半導體", "航運"]);
++  });
++
++  it("全收合 → 恢復後端最新排序、凍結標籤消失", async () => {
++    await openWith();
++    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
++    await refetchReordered();
++
++    fireEvent.click(screen.getByTestId("sector-row-btn-半導體"));
++    expect(screen.queryByTestId("sector-frozen")).toBeNull();
++    expect(rowOrder()).toEqual(["航運", "半導體"]);
++  });
++
++  it("鑽取成員表中(無子產業直鑽)同樣凍結 + 標籤", async () => {
++    await openWith();
++    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
++    await screen.findByTestId("sector-members-table");
++    expect(screen.getByTestId("sector-frozen").textContent).toBe("排序已凍結");
++
++    await refetchReordered();
++    expect(rowOrder()).toEqual(["半導體", "航運"]);
++  });
++
++  it("未展開任何列 → 不凍結(照後端新順序重排、無標籤)", async () => {
++    await openWith();
++    expect(screen.queryByTestId("sector-frozen")).toBeNull();
++    await refetchReordered();
++    expect(rowOrder()).toEqual(["航運", "半導體"]);
++  });
++
++  // 成員表是誤點代價最高的一層(點下去就換主圖)—— 鑽取中成員列同樣不得位移。
++  it("成員表輪詢順序改變 → 成員列位置凍結、數字照更新", async () => {
++    await openWith();
++    fireEvent.click(screen.getByTestId("sector-row-btn-航運"));
++    await screen.findByTestId("sector-members-table");
++
++    const reordered: SectorMembers = {
++      ...MEMBERS,
++      members: [
++        { stock_id: "3035", name: "智原", change_rate: 9.9, vol_ratio: 3.1, total_amount: 1e9 },
++        MEMBERS.members[0]!,
++      ],
++    };
++    fetchSpy.mockImplementation(async (url: string) => {
++      const u = String(url);
++      if (u.startsWith("/api/market/sector/members")) {
++        return new Response(JSON.stringify(reordered));
++      }
++      return new Response(JSON.stringify(mkState()));
++    });
++    await act(async () => {
++      await client.refetchQueries({ queryKey: ["sector-members"] });
++    });
++    await waitFor(() =>
++      expect(screen.getByTestId("sector-member-change-3035").textContent).toBe("+9.90%"),
++    );
++    expect(
++      screen
++        .getAllByTestId(/^sector-member-\d+$/)
++        .map((el) => el.getAttribute("data-testid")!.replace("sector-member-", "")),
++    ).toEqual(["2454", "3035"]);
++  });
++});
++
+ // 展開狀態存在 localStorage、tab 又是 `hidden` 保留而非 unmount(App 慣例)→
+ // 「展開著被切走」是常態。這一組鎖的是「`active` 有真的接到 query 的 refetchInterval 上」。
+ describe("SectorSection 背景輪詢 gate", () => {
+diff --git a/frontend/src/components/index/SectorSection.tsx b/frontend/src/components/index/SectorSection.tsx
+index dbdcfdc9..bb072553 100644
+Binary files a/frontend/src/components/index/SectorSection.tsx and b/frontend/src/components/index/SectorSection.tsx differ
+diff --git a/tests/server/test_breadth_engine.py b/tests/server/test_breadth_engine.py
+index e741aa7d..290b2ae3 100644
+--- a/tests/server/test_breadth_engine.py
++++ b/tests/server/test_breadth_engine.py
+@@ -1018,7 +1018,7 @@ class TestPollLoop:
+     async def test_streaks_armed_outside_window_via_poll_loop(
+         self, tmp_path: Path, fast_streaks: None
+     ) -> None:
+-        """**窗外**(06:30,poll 窗 08:55–13:40)照樣武裝 —— 走真的 `start()` + poll loop。
++        """**窗外**(06:30,poll 窗 09:00–13:40)照樣武裝 —— 走真的 `start()` + poll loop。
+ 
+         連板重算刻意排在盤前:`_maybe_arm_streaks()` 在傘罩**內**、窗 gate **外**。
+         直接呼叫 `_maybe_arm_streaks()` 的既有測試驗的是那個方法自己,對「它掛在迴圈的
+diff --git a/tests/server/test_breadth_routes.py b/tests/server/test_breadth_routes.py
+index a9158e3e..dee3e56c 100644
+--- a/tests/server/test_breadth_routes.py
++++ b/tests/server/test_breadth_routes.py
+@@ -76,7 +76,7 @@ def _fixed_now(monkeypatch: pytest.MonkeyPatch) -> None:
+ 
+     引擎在 lifespan 內建構 → 這個檔案沒有 `now_fn` 注入點,只能 monkeypatch 模組層的
+     `_now`。不釘的話兩件事會跟著實跑時刻飄:快照時刻超前本機時鐘 10 分鐘以上會被當
+-    髒 row 忽略(review P1-2)→ 早上 10:14 之前跑整批紅;窗判定(08:55–13:40)也同理。
++    髒 row 忽略(review P1-2)→ 早上 10:14 之前跑整批紅;窗判定(09:00–13:40)也同理。
+     """
+     monkeypatch.setattr(be, "_now", lambda: _dt.datetime.combine(_TODAY, _dt.time(10, 24)))
+ 
+diff --git a/tests/server/test_main_wiring.py b/tests/server/test_main_wiring.py
+index 8103b98a..b2448420 100644
+--- a/tests/server/test_main_wiring.py
++++ b/tests/server/test_main_wiring.py
+@@ -128,7 +128,7 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
+         cap.create_kwargs["stock_watchlist_path"]
+         == main_mod.VERIFY_DATA_DIR / "stock_watchlist.json"
+     )
+-    # 放寬窗(review C-2):prod 預設窗 08:55–13:40 之外 `_poll_loop` 只跑首圈 ——
++    # 放寬窗(review C-2):prod 預設窗 09:00–13:40 之外 `_poll_loop` 只跑首圈 ——
+     # flip 翻轉 / 失效注入 / 事件鏈路全都要「第二輪之後」才看得到,而 verify server
+     # 幾乎都在盤後跑,窗照抄 prod 等於整條取證路徑只剩一格
+     config = cap.create_kwargs["breadth_config"]
+diff --git a/tests/test_breadth_config.py b/tests/test_breadth_config.py
+index c6c0798d..2b17ce69 100644
+--- a/tests/test_breadth_config.py
++++ b/tests/test_breadth_config.py
+@@ -17,7 +17,9 @@ from copycat.breadth_config import CONFIG_PATH, BreadthConfig, load_breadth_conf
+ def test_default_values() -> None:
+     cfg = BreadthConfig()
+     assert cfg.poll_secs == 10.0
+-    assert cfg.window_start == "08:55"
++    # 09:00 起 = 排除 08:55–09:00 試撮窗(2026-08-12 拍板:試撮價可被假單操縱,
++    # 不進系統;開盤前畫面顯示昨日收盤資料是合理狀態)
++    assert cfg.window_start == "09:00"
+     assert cfg.window_end == "13:40"
+     assert cfg.stale_secs == 30.0
+     assert cfg.backoff_max_secs == 60.0
+@@ -52,7 +54,7 @@ def test_load_override(tmp_path: Path) -> None:
+     assert cfg.poll_secs == 5.0
+     assert cfg.window_end == "14:30"
+     assert cfg.quota_backoff_secs == 60.0
+-    assert cfg.window_start == "08:55"  # 未覆寫者保留預設
++    assert cfg.window_start == "09:00"  # 未覆寫者保留預設
+     assert cfg.stale_secs == 30.0
+ 
+ 
