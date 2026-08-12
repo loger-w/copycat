@@ -88,6 +88,14 @@ _MAP_RETRY_SECS = 60.0
 #: 快照時刻可超前本機時鐘的容差;越過即視為髒 row(review P1-2)。10 分鐘 = 遠寬於
 #: FinMind 的正常延遲與本機時鐘偏差,又足以擋掉「收盤時刻 / 未來日期」這類真髒值。
 _TICK_FUTURE_TOLERANCE = _dt.timedelta(minutes=10)
+
+#: 台股現貨開盤前試撮窗(08:30–09:00,右端不含;09:00:00 整 = 開盤撮合真成交)。
+#: XR-5 拍板(2026-08-12):試撮價可被假單操縱,不進系統。輪詢窗 09:00 起只擋
+#: 「取數時刻」;09:00 整的首輪仍可能拿到上游尚未刷新的 08:5x 試撮快照、窗外首圈
+#: (盤前重啟)也同款 —— `_apply` 以**資料時刻**再擋一道,scalar / rows / rotation /
+#: 連板 +1 全部一起(review C-2)。
+_TRIAL_START = _dt.time(8, 30)
+_TRIAL_END = _dt.time(9, 0)
 #: 序列落檔格式版本;不相容改動時 +1(舊檔 restore 直接略過 → 空序列起步)
 _FILE_VERSION = 1
 #: 桶序 = `[limit_up, up, flat, down, limit_down]`,與 types.ts / 前端 x 軸同一份約定
@@ -171,7 +179,7 @@ def _now() -> _dt.datetime:
 
 
 def _parse_hhmm(value: str) -> _dt.time:
-    """`"08:55"` → `time(8, 55)`;格式錯直接 raise(config 打錯字不該靜默套預設)。"""
+    """`"09:00"` → `time(9, 0)`;格式錯直接 raise(config 打錯字不該靜默套預設)。"""
     return _dt.datetime.strptime(value, "%H:%M").time()
 
 
@@ -594,6 +602,10 @@ class BreadthEngine:
             # 時刻推不出來就沒有 as_of 也沒有分鐘鍵,硬記會標成錯的時間(design R9)
             logger.warning("breadth 快照無可解析時刻(%d 列),該輪視同失敗", len(rows))
             self._fail(quota=False)
+            return None
+        if _TRIAL_START <= dt.time() < _TRIAL_END:
+            # skip 不是 fail:上游有回應,不進退避 —— 下一輪(窗內 10 秒後)就是開盤價
+            logger.info("breadth 快照時刻 %s 落在試撮窗,整輪不採用(XR-5)", dt.time())
             return None
 
         universe = assemble_universe(rows, self._sector_map, self._disposition)
