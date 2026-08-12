@@ -144,6 +144,7 @@ class StockEngine:
         checkpoint: bool = True,
         stkfut_map: dict[str, dict] | None = None,
         resub_interval_secs: float = 10.0,
+        ws: WsBroadcaster | None = None,
     ) -> None:
         self._source = source
         self._trade_date = trade_date
@@ -182,7 +183,10 @@ class StockEngine:
         self._backfill_pending: dict[str, int] = {}
         self._backfilled: set[str] = set()
         self._backfill_failed: dict[str, int] = {}
-        self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
+        # 可注入(XR-3):app 層要把同一顆 broadcaster 同時給 engine 與 SignalHub,
+        # 讓 `/ws/stock` 這條匯流排的存在性不再綁 engine 的生命週期。不傳 = 自建,
+        # 既有 caller(直接建構的測試)行為逐字不變。
+        self._ws = ws if ws is not None else WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
         self._dirty_watchlist: set[str] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         # 長駐迴圈 + 每次 rollover 的重掛 task 都進這裡:唯一持有點 = 唯一取消點,
