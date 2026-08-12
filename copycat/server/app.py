@@ -40,7 +40,7 @@ from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
-from copycat.live.stock_source import Bar
+from copycat.live.stock_source import Bar, DailyBar
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.bars import (
     BarsCache,
@@ -57,7 +57,7 @@ from copycat.server.discord_bot import Bot, create_bot
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stkfut_catalog import StkfutCatalog
-from copycat.server.stock_engine import StockEngine, StockSource
+from copycat.server.stock_engine import _CLIENT_QUEUE_MAX, StockEngine, StockSource
 from copycat.server.watchlist_service import WatchlistService
 from copycat.signal_rules import Rule, RuleError
 from copycat.signals_config import load_signals_config
@@ -329,6 +329,28 @@ def _default_corr_source() -> CorrSource:
     return CorrQuoteSource(port=_tc4_port())
 
 
+async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
+    """無 stock engine 時 SignalHub 的 `daily_bars` 替身(XR-3):恆回空清單。
+
+    空清單在 hub 既有路徑上讀成**「資料面就是沒有」**(= 新上市無歷史那一類):
+    逐檔一次「無已完成日 K,CDP 停用」warning、cache 落 `(基準日, None)`、**不重試**。
+    改成拋例外的話會被讀成暫時性失敗 → 走 X-2b 的有限重試,自選 30 檔在 TC4 關著的
+    整天變成一輪又一輪的重試,而它們永遠不可能成功。
+    """
+    return []
+
+
+def _wall_clock_trade_date() -> str:
+    """無 stock engine 時的日別來源(XR-3)。
+
+    **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
+    `_distribute` 日別尺、`today_signals` 讀取集與廣度事件的日別不符 warning 全都
+    以它為準 —— 壞掉的樣態是「今天的事件寫進昨天的檔」,完全靜默。
+    `TXO_BACKFILL_DATE` 優先,與 engine 在場時的日別語意一致(休市日回補模式)。
+    """
+    return os.environ.get("TXO_BACKFILL_DATE") or f"{_date.today():%Y-%m-%d}"
+
+
 def create_app(
     source: QuoteSource | None = None,
     *,
@@ -351,6 +373,11 @@ def create_app(
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
+    # 個股 WS 匯流排住 app 層而非 engine 內(XR-3):`/ws/stock` 同時載自選 quote
+    # (engine 產)與訊號 / 廣度事件(hub 產),而後者與達錢 4 在否無關 —— 綁在 engine
+    # 身上時 TC4 沒開就整條通道死掉。上限沿用 engine 的 `_CLIENT_QUEUE_MAX`(私名共用:
+    # 兩份上限值必然漂移,而 ws.py 的公開 `CLIENT_QUEUE_MAX` 是另一個值)。
+    stock_ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
     futures_ws = WsBroadcaster()
     corr_ws = WsBroadcaster()
     river_ws = WsBroadcaster()  # 江波圖每秒 delta(全量走 REST/WS 首則;index-river-chart SC-5)
@@ -391,8 +418,9 @@ def create_app(
 
         async def _boot_all() -> None:
             """引擎啟動序列(背景 task)。**順序即依賴**(current-state §2),不可重排、
-            不可並行:watchlist_service 先於 signals、signals 需 stock、index 綁
-            runtime.spot、capital 先 set_broadcast 再 start、corr 後於 futures。
+            不可並行:watchlist_service 先於 signals、signals **可獨立於 stock**(XR-3;
+            但 stock 在場時要在它之後才接得上掛點)、index 綁 runtime.spot、capital 先
+            set_broadcast 再 start、corr 後於 futures。
 
             每完成一段就同時寫 `app.state.X` 與 `booted.X` —— 前者給 route,後者給
             關機反序 close(兩者必須成對,漏寫 record 的引擎關機時不會被關掉)。
@@ -445,6 +473,7 @@ def create_app(
                     trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
                     throttle_secs=throttle_secs,
                     checkpoint=backfill_date is None,
+                    ws=stock_ws,  # 與 SignalHub 共用同一顆(XR-3)
                 )
 
             async def _start_stock(o: StockEngine) -> None:
@@ -482,25 +511,37 @@ def create_app(
             bot: Bot | None = None
 
             def _make_signals() -> SignalHub | None:
-                if stock is None:
-                    return None
+                """**不看 stock 在否**(XR-3):規則 CRUD 是純檔案操作、廣度事件鏈是純
+                FinMind,兩者都不該隨達錢 4 一起消失。engine 缺席時三個注入退到替代
+                供應(bus 已在 app 層、日別走牆鐘、日 K 空清單),hub 本身零改動。
+                """
                 engine = stock
+                if engine is None:
+                    daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] = _empty_daily_bars
+                    trade_date_fn: Callable[[], str] = _wall_clock_trade_date
+                    # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
+                    quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
+                else:
+                    daily_bars = engine.daily_bars
+                    # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
+                    trade_date_fn = lambda: engine.trade_date  # noqa: E731
+                    quotes_fn = engine.quotes
                 return SignalHub(
                     load_signals_config(),
-                    publish=engine._publish,
-                    daily_bars=engine.daily_bars,
+                    # app 層的匯流排(engine 在場時它就是 engine 自己那顆)
+                    publish=stock_ws.publish,
+                    daily_bars=daily_bars,
                     notify_fallback=notify_discord,
                     # 自選檔所在目錄 = 本專案的 data 根(`data/stock_watchlist.json`)→
                     # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
                     data_dir=wl_path.parent,
-                    # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
-                    trade_date_fn=lambda: engine.trade_date,
+                    trade_date_fn=trade_date_fn,
                     # 同群摘要(group-grid SC-1/2)。groups 只在 `on_watchlist` 讀檔
                     # (自選變更時),quotes 在 Discord worker 讀 engine 現值 —— 兩者
                     # 都輕同步,不進熱路徑。漏接的失效樣態是「通知少一段尾巴」而已,
                     # 所以由 booted app 的接線測試把關。
                     groups_fn=lambda: load_watchlist(wl_path)["groups"],
-                    quotes_fn=engine.quotes,
+                    quotes_fn=quotes_fn,
                 )
 
             async def _start_signals(hub: SignalHub) -> None:
@@ -515,7 +556,9 @@ def create_app(
                 # **必須是最後一行**(CC-2):attach 之後這個 hub 就在 engine 熱路徑上了,
                 # 而 `_boot` 的 except 只會把它 close 掉、不會從 engine 摘下來 —— 提早 attach
                 # 再讓後面任何一步拋,留下的是「WS 有訊號、jsonl 與 today 全空」的殭屍。
-                if stock is not None:  # `_make_signals` 已保證;narrowing 用
+                # 這道 guard 現在是 load-bearing(XR-3):hub 不再需要 stock 才建得起來,
+                # 所以 stock 缺席是常態路徑,不是「不可能發生、只為 narrowing」的殘留。
+                if stock is not None:
                     stock.attach_signal_hub(hub)
 
             async def _close_signals(hub: SignalHub) -> None:
@@ -818,6 +861,7 @@ def create_app(
         )
 
     app.state.capital_ws = capital_ws
+    app.state.stock_ws = stock_ws
     app.state.futures_ws = futures_ws
     app.state.corr_ws = corr_ws
     app.state.river_ws = river_ws
@@ -937,9 +981,12 @@ def create_app(
         return service
 
     def _signals(request: Request) -> SignalHub:
-        """訊號 route 的共同閘(design §7):先 `_stock()` 再 hub —— 兩者皆 503 NOT_READY,
-        但順序決定「達錢 4 沒開」與「訊號層單獨降級」在 log 上的可分辨性。"""
-        _stock(request)
+        """訊號 route 的共同閘(design §7)。**只看 hub**(XR-3):hub 解耦後 503 只剩
+        一種語意 —— 訊號層自身降級(壞規則檔 / start 失敗)。
+
+        舊碼在此先過 `_stock()`,達錢 4 沒開時規則 CRUD(純檔案操作)與廣度事件
+        (純 FinMind)一起 503,而兩者都與 TC4 無關。
+        """
         hub: SignalHub | None = request.app.state.signal_hub
         if hub is None:
             raise HTTPException(status_code=503, detail={"error": "NOT_READY"})
@@ -1467,10 +1514,33 @@ def create_app(
 
     @app.websocket("/ws/stock")
     async def ws_stock(websocket: WebSocket) -> None:
+        """個股 WS。engine 缺席時**不再立即 close**(XR-3):同一條通道也載訊號與
+        全市場廣度事件,而那條鏈與達錢 4 在否無關。
+
+        兩種 stock 缺席仍照舊 close:
+        - boot 未完成 —— 早連的 client 會錯過 engine 起來後的自選 seed,現況
+          「close → 前端重連 → 拿 seed」的自癒比掛著一條空流好;
+        - hub 亦 None(壞規則檔 / hub start 炸)—— 這條通道確實沒有任何生產者,
+          留著就是永遠無流量的殭屍連線,而前端的提示靠 `wsStatus === "closed"`。
+        """
         stock: StockEngine | None = websocket.app.state.stock
         await websocket.accept()
         if stock is None:
-            await websocket.close()
+            state = websocket.app.state
+            if not state.boot_done or state.signal_hub is None:
+                await websocket.close()
+                return
+            try:
+                # 首則 status seed:前端的「連線異常」提示靠 `status.tc4 === "down"`,
+                # 而 `status` 初值是 `{tc4: "up"}` —— 沒有這則,掛著的空流會讓 TC4-off
+                # 完全無提示(比舊的立即 close 更糟)。形狀與 engine 發的 status 一致。
+                # 無 quote seed:沒有 engine 就沒有現值可種。
+                await relay(
+                    websocket,
+                    stock_ws.stream(seed=[{"type": "status", "tc4": "down", "backfilling": None}]),
+                )
+            except WebSocketDisconnect:
+                return
             return
         try:
             await relay(websocket, stock.stream())
