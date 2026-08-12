@@ -1,0 +1,17 @@
+{
+  "flow": "mod (ad-hoc grilling 拍板小輪:FE-7 排序凍結 + XR-5 試撮窗排除)",
+  "date": "2026-08-12",
+  "diff": "review-diff.txt(master..HEAD,3 commits)",
+  "lenses": ["行為正確性/狀態機邊界(opus)", "測試覆蓋/mutation 可存活性(opus)"],
+  "findings": [
+    {"id": "C-1", "severity": "P1", "file": "frontend/src/components/index/SectorSection.tsx", "problem": "鑽取子產業後收合父列:toggleExpand 不清 drill,engaged 以「名字還在清單」判 → 畫面全收合仍永久凍結,無可點出口;第二路徑=展開中產業 subs 變空", "resolution": "accepted:engaged 改為與 render open 同構的「畫面上真的有列展開著」判式(industries.some),兩路徑一次涵蓋;新測試「鑽取子產業後收合父列 → 凍結解除」鎖住(紅→綠)"},
+    {"id": "C-2", "severity": "P2", "file": "copycat/server/breadth_engine.py", "problem": "window_start 09:00 只擋取數時刻,擋不住資料時刻在試撮窗:09:00 整首輪可拿到上游未刷新的 08:5x 試撮快照,scalar/rows/rotation/連板 +1 無資料時刻 gate 照收", "resolution": "accepted:_apply 於 dt 解析後加 [08:30,09:00) 整輪不採用 gate(skip 不是 fail,不退避);_parse_hhmm docstring 例子同步。順帶堵死 next-time 原記錄的「盤前重啟窗外首圈」邊角。新測試 test_trial_window_snapshot_fully_rejected(紅→綠)+ 09:00:00 右端不誤殺測試"},
+    {"id": "T-1", "severity": "P1", "file": "frontend/src/components/index/SectorSection.test.tsx", "problem": "子產業層凍結零測試鎖:REORDERED subs 與原序相同,subs frozenSort 為 no-op,mutation 直通全綠", "resolution": "accepted:REORDERED subs 反轉 + subOrder() 凍結/解凍雙斷言"},
+    {"id": "T-2", "severity": "P1", "file": "tests/test_breadth_config.py", "problem": "窗語意只有 config 字面值鏡像斷言,引擎端硬寫回 08:55 的 mutation 存活(無 fixture 落在 08:55-09:00)", "resolution": "accepted:TestPollLoop 新增 test_default_window_starts_at_open_not_trial(08:57 窗外 / 09:00 整窗內)"},
+    {"id": "T-3", "severity": "P2", "file": "frontend/src/components/index/SectorSection.tsx", "problem": "「展開目標從清單消失 → 不無限凍結」防禦零測試,對應 mutation 可存活", "resolution": "accepted:新測試「展開中的產業從後端清單消失 → 凍結解除」(對原實作即綠,為鎖)"},
+    {"id": "T-4", "severity": "P2", "file": "frontend/src/components/index/SectorSection.tsx", "problem": "frozenSort 新 key 排最後的規則零測試(?? -1 mutation 全綠),而這是凍結期間唯一合法位移路徑", "resolution": "accepted:REORDERED 加新產業「金融」、成員 fixture 加新檔 1101,斷言均附掛最後"},
+    {"id": "T-5", "severity": "P2", "file": "frontend/src/components/index/SectorSection.tsx", "problem": "MembersPanel snapKey 重拍分支不可達(每個鑽取目標的 panel 掛各自 keyed li,切換必 remount)—— 無鎖且是死碼", "resolution": "accepted:刪 key 分支,簡化為首份資料拍快照;附帶發現並清除該行誤植的 NUL 分隔字元"},
+    {"id": "T-6", "severity": "P2", "file": "tests/server/test_breadth_engine.py", "problem": "minute-domain 測試的 08:59 fixture 把「試撮快照 scalar 照收」釘成合約,與 XR-5 新口徑相反", "resolution": "accepted:param 改 13:35(與 C-2 gate 相容,原覆蓋意圖由試撮專測接手)"}
+  ],
+  "summary": "P1×3 / P2×5,全 accepted 全修畢;修後 pytest 2612 + vitest 1738 全綠(數字見 verification)"
+}
