@@ -22,16 +22,12 @@ from copycat.server import breadth_fetch
 from copycat.server.app import create_app
 from copycat.server.verify import FakeTxoSource, neutralize_external_env
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 env = pathlib.Path(r"C:\side-project\copycat\.env").read_text(encoding="utf-8-sig")
-TOKEN = [
-    ln.split("=", 1)[1].strip()
-    for ln in env.splitlines()
-    if ln.startswith("FINMIND_TOKEN")
-][0]
+TOKEN = [ln.split("=", 1)[1].strip() for ln in env.splitlines() if ln.startswith("FINMIND_TOKEN")][
+    0
+]
 
 neutralize_external_env()
 
@@ -58,6 +54,10 @@ app = create_app(
     FakeTxoSource(),
     breadth_fetchers=(_snapshot, _stock_info, _disposition, _daily),
     breadth_data_dir=DATA_DIR,
+    # XR-3 後 SignalHub 恆建(不再需要 stock engine)→ 它的落點 = 自選檔所在目錄。
+    # 不隔離的話這台側車會把真廣度事件寫進 prod 的 `data/signals/*.jsonl`,而那份是
+    # breadth 對帳的 seed:被灌事件之後 prod 的真鎖板事件會被判成「已發布」而靜默不發。
+    stock_watchlist_path=DATA_DIR / "stock_watchlist.json",
 )
 
 uvicorn.run(app, host="127.0.0.1", port=8723)

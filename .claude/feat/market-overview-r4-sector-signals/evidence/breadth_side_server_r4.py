@@ -55,6 +55,10 @@ app = create_app(
     FakeTxoSource(),
     breadth_fetchers=(_snapshot, _stock_info, _disposition, _daily, _chain),
     breadth_data_dir=DATA_DIR,
+    # XR-3 後 SignalHub 恆建(不再需要 stock engine)→ 它的落點 = 自選檔所在目錄。
+    # 不隔離的話這台側車會把真廣度事件寫進 prod 的 `data/signals/*.jsonl`,而那份是
+    # breadth 對帳的 seed:被灌事件之後 prod 的真鎖板事件會被判成「已發布」而靜默不發。
+    stock_watchlist_path=DATA_DIR / "stock_watchlist.json",
 )
 
 import os  # noqa: E402
