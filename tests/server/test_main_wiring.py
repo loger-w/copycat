@@ -161,6 +161,10 @@ def test_verify_fail_injection_uses_isolated_dir_and_clears_chain(
 
     assert cap.create_kwargs is not None
     assert cap.create_kwargs["breadth_data_dir"] == fail_dir
+    # hub 落點要跟著走同一個 fail 目錄:只鎖 breadth_data_dir 的話,失效注入變體會把
+    # 真 hub 的 jsonl 寫回預設 `market-verify`(甚至 prod data/)—— 對帳 seed 汙染
+    # (review P0-3)在這條變體上就漏掉了
+    assert cap.create_kwargs["stock_watchlist_path"] == fail_dir / "stock_watchlist.json"
     assert not stale.exists()
 
 
