@@ -1018,7 +1018,7 @@ class TestPollLoop:
     async def test_streaks_armed_outside_window_via_poll_loop(
         self, tmp_path: Path, fast_streaks: None
     ) -> None:
-        """**窗外**(06:30,poll 窗 08:55–13:40)照樣武裝 —— 走真的 `start()` + poll loop。
+        """**窗外**(06:30,poll 窗 09:00–13:40)照樣武裝 —— 走真的 `start()` + poll loop。
 
         連板重算刻意排在盤前:`_maybe_arm_streaks()` 在傘罩**內**、窗 gate **外**。
         直接呼叫 `_maybe_arm_streaks()` 的既有測試驗的是那個方法自己,對「它掛在迴圈的
