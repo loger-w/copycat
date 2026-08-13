@@ -2275,6 +2275,31 @@ async def _make_with_clock(
     return engine, src
 
 
+def _tap(stream) -> tuple[list[dict], asyncio.Task[None]]:
+    """背景消費一條 `stream()`,回 (累積清單, task)。
+
+    **不可對同一個 stream 連呼兩次 `_collect`**:那個 helper 靠 `wait_for` 逾時收尾,
+    逾時會取消掛在 `anext` 上的 await → async generator 隨之收攤,第二次 `anext` 直接
+    `StopAsyncIteration`。窗翻轉要比對「翻轉前 / 翻轉後」兩個階段,得是同一條 stream
+    (換一條會重收一輪連線種子,分不出哪一則是補推)。
+    """
+    got: list[dict] = []
+
+    async def _run() -> None:
+        async for msg in stream:
+            got.append(msg)
+
+    return got, asyncio.create_task(_run())
+
+
+async def _untap(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def _observed(caplog: pytest.LogCaptureFixture, level: int) -> list[str]:
     """`trade-status-observe` 前綴的紀錄(R10:蒐證對帳以固定前綴為準)。
 
@@ -2359,17 +2384,18 @@ class TestTrialWindowFlipPush:
         await engine.start()
         await engine.set_watchlist(["2330"])
         await engine.set_main("5483")  # 現貨主圖且**不在自選** + 全程零成交(last is None)
-        stream = engine.stream()
+        got, tap = _tap(engine.stream())
 
         # 假時鐘固定 → 窗 bool 恆定 → 不得補推(否則等於打穿 1s 節流)
         await _drain(engine)
-        before = [m for m in await _collect(stream) if m["type"] == "watchlist_quote"]
+        before = [m for m in got if m["type"] == "watchlist_quote"]
         assert [m["code"] for m in before] == ["2330"], "只該有連線種子那一則"
         assert before[0]["trial"] is False
+        mark = len(got)
 
         now["t"] = "08:30:00.000"  # 進窗
         await _drain(engine)
-        after = [m for m in await _collect(stream) if m["type"] == "watchlist_quote"]
+        after = [m for m in got[mark:] if m["type"] == "watchlist_quote"]
 
         by_code: dict[str, list[dict]] = {}
         for m in after:
@@ -2379,6 +2405,7 @@ class TestTrialWindowFlipPush:
         assert len(by_code["5483"]) == 1
         assert all(m["trial"] is True for m in after)
         assert engine._states["5483"].last is None  # 前提:這一檔走的是被 skip 的那條路
+        await _untap(tap)
         await engine.close()
 
     async def test_futures_main_is_not_pushed_on_flip(
@@ -2391,13 +2418,14 @@ class TestTrialWindowFlipPush:
         engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
         await engine.start()
         await engine.set_main_contract(_CONTRACT)
-        stream = engine.stream()
-        await _collect(stream)  # 排空種子與回補 status
+        got, tap = _tap(engine.stream())
+        await _drain(engine)  # 排空種子與回補 status
+        mark = len(got)
 
         now["t"] = "08:30:00.000"
         await _drain(engine)
-        after = [m for m in await _collect(stream) if m["type"] == "watchlist_quote"]
-        assert after == []
+        assert [m for m in got[mark:] if m["type"] == "watchlist_quote"] == []
+        await _untap(tap)
         await engine.close()
 
 
