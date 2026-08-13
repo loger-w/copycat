@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -252,6 +253,26 @@ class TestNormalize:
             "groups": [{"name": "a", "codes": ["5483", "2330"]}],
         }
         assert normalize(wl) == save_watchlist(tmp_path / "w.json", wl)
+
+
+class TestFrontendParity:
+    """跨檔契約的機械 lock(CLAUDE.md §4;review A-2).
+
+    `WATCHLIST_LIMIT` 前後端各持一份:後端是真正擋人的那個(`WATCHLIST_FULL`),
+    前端那份只餵 `hooks/useStockWatchlist.ts::errText` 的文案。兩邊漂掉的症狀是
+    使用者看到「已達 N 檔上限」而 N 不是實際擋人的數字 —— **零錯誤訊號**,
+    測試與型別都不會紅。先例:`OrderRecord.unit` 字面值(tests/capital/test_store.py)。
+    """
+
+    def test_frontend_constant_matches_backend(self) -> None:
+        path = (
+            Path(__file__).resolve().parents[1] / "frontend" / "src" / "lib" / "constants.ts"
+        )
+        # 檔案不見 / 常數改名 → **fail 不 skip**:契約 lock 靜默消失就等於沒有 lock
+        assert path.is_file(), f"前端常數檔不存在:{path}"
+        m = re.search(r"WATCHLIST_LIMIT\s*=\s*(\d+)", path.read_text(encoding="utf-8"))
+        assert m is not None, f"{path} 找不到 WATCHLIST_LIMIT 宣告(改名了?契約需同步)"
+        assert int(m.group(1)) == WATCHLIST_LIMIT
 
 
 class TestUnion:
