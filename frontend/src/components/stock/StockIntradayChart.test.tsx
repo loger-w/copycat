@@ -1168,13 +1168,19 @@ describe("StockIntradayChart 即時價位標籤(SC-1/2/3)", () => {
 
   /** 就地標示不釘右緣(review F1):VWAP 不是橫貫全寬的水平線,盤中末點在畫面中段,
    *  右緣釘標籤會與線脫節整整 640px。 */
-  it("均價開 → vwapLine 末點右側有白色 VWAP 數值(fmt 口徑,與說明列同源)", () => {
+  /** 🔴 code review A-1:標籤文字的**來源**由「vwapLine 末點(前端分鐘近似)」改為
+   *  `accum.vwap`(後端逐筆,說明列吃的同一份)。事前標記該變 —— 兩個來源在同一張圖上
+   *  印出兩個矛盾的 VWAP 數字(本 fixture 實證 2381.67 vs 2380),而 D2 要的是同源同值。
+   *  位置仍取 vwapLine 末點(分鐘粒度的位移在畫面上讀不出來,數字對不上讀得出來)。 */
+  it("均價開 → vwapLine 末點右側有白色 VWAP 數值(值 = accum.vwap,與說明列同源)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
     expect(label).toBeTruthy();
-    // 541 分 10 張 @2380 + 542 分 2 張 @2390 → Σca/Σv = 2381.667(fmt 不 snap tick:
-    // VWAP 是統計量不是可掛單價,review F3)
-    expect(label.textContent).toBe("2381.67");
+    // ACCUM 的 accum.vwap = 2_380_000 → "2380"(fmt 不 snap tick:VWAP 是統計量
+    // 不是可掛單價,review F3)。前端分鐘近似值是 2381.67,兩者刻意不同以驗來源。
+    expect(label.textContent).toBe("2380");
+    // 同源同值:說明列印的是同一個數字(兩處各取各的來源時,失效樣態是純數字不一致)
+    expect(container.querySelector("figcaption")!.textContent).toContain("VWAP 2380");
     const end = geomOf(ACCUM).vwapLine.at(-1)!;
     expect(Number(label.getAttribute("x"))).toBeCloseTo(end.x + 4, 6);
     expect(Number(label.getAttribute("y"))).toBeCloseTo(end.y, 6);
@@ -1184,6 +1190,24 @@ describe("StockIntradayChart 即時價位標籤(SC-1/2/3)", () => {
     expect(cls).toContain("fill-ink"); // 跟線色(白)
     expect(cls).toContain("stroke-surface");
     expect(label.getAttribute("paint-order")).toBe("stroke");
+  });
+
+  it("accum.vwap 不可得(null)→ 不畫標籤(與說明列的「-」一致,不退回前端近似值)", () => {
+    const noVwap = fromSnapshot({
+      code: "2330", seq: 2,
+      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
+      vwap: null,
+      minutes: {
+        "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 },
+      },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={noVwap} />);
+    // 線照畫(它是分鐘序列的幾何,與後端 VWAP 可得性無關),只是沒有數字可標
+    expect(container.querySelector('polyline[class*="stroke-ink"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeNull();
+    expect(container.querySelector("figcaption")!.textContent).toContain("VWAP -");
   });
 
   it("關均價 toggle → VWAP 標籤跟著線一起消失", () => {
