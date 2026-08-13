@@ -1346,6 +1346,27 @@ def test_balance_query_guarded_while_pending_even_if_inflight_expired(tmp_path: 
     client._balance_inflight_until = time.monotonic() - 1.0
     client._maybe_query_balance()
     assert _balance_queries(com) == 1
+    # T7:pending 段擋下同樣不得吃掉 due —— 吃掉的話鏈結束後沒人補查,該筆成交漏
+    assert client._balance_due is not None
+
+
+def test_balance_complete_hands_guard_over_to_pending(tmp_path: Path) -> None:
+    """T8(A1 交棒白箱鎖):balance 段收齊 → `_pending_sec` 接手守門、
+    `_balance_inflight_until` 同時清掉。漏清 inflight 不會馬上出錯(pending 判在前),
+    但 pending 逾時 finalize 後殘留的舊 deadline 會再擋一次重查;漏設 pending 則
+    balance 段 10s deadline 一過就放行第二次查詢(A1 要擋的正是這個)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert client._balance_inflight_until is not None  # balance 段守門已武裝
+    client._handle_balance(
+        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    )
+    client._handle_balance("##")
+    assert client._pending_sec is not None
+    assert client._balance_inflight_until is None
 
 
 def test_balance_requeried_after_chain_completes(tmp_path: Path) -> None:
