@@ -9,11 +9,14 @@
   (b) 依蒐證結果把 `trial` 推導從純時間窗升級為 per-code(TradeStatus 驅動),
   wire 契約(`watchlist_quote.trial` / snapshot `trial`)已就位不用動;(c) badge 表述
   是否分化(試撮「(緩)」vs 盤中暫緩「(暫停)」)屆時拍板。已知限制:休市日/週末
-  窗內純時間照標(無交易日曆,第二段天然消除)。
-- [ ] **`stock_engine._quote_payload` docstring「四個產出點」已漂移**:實為 7 處
+  窗內純時間照標(無交易日曆,第二段天然消除)。**蒐證判讀注意**(review D6-2):
+  窗內起 / 窗外訖的 episode(如收盤試撮窗跨越的延緩撮合)在第一段規則下全程只有
+  DEBUG — 對帳時 13:25–13:30 前後要併看 DEBUG 級,別只 grep WARNING。
+- [ ] **`stock_engine._quote_payload` docstring「四個產出點」已漂移**:實為 8 處
   (:373 set_watchlist / :457 quotes() Discord 摘要 / :647 retry 重掛種子 /
-  :767 _handle_no_data / :919 轉態補推 / :1077 連線 seed / :1091 flush;
-  2026-08-13 spec review R5 grep 證實)。下次動該函式時順修 docstring。
+  :767 _handle_no_data / :919 轉態補推 / 連線 seed / 1s flush / 本輪新增的
+  窗翻轉補推;2026-08-13 spec review R5 grep 證實 7 處 + 本輪 +1)。
+  下次動該函式時順修 docstring。
 
 ## 2026-08-13(mod/ladder-order-status review rejected 候選)
 
