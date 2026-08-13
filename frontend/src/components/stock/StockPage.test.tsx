@@ -871,3 +871,57 @@ describe("StockPage 合約下拉(SC-4)", () => {
     expect(screen.getByRole("button", { name: "江波圖" }).hasAttribute("disabled")).toBe(false);
   });
 });
+
+// 🟢 試撮/緩撮標示(SC-2)。`accum.trial` 來自 snapshot 種子 + 主圖 watchlist_quote 補寫;
+// 期貨鍵的試撮窗是空的(後端恆 False),合約態刻意不標 —— 標了就是憑空編一個狀態。
+describe("StockPage 緩撮標示(SC-2)", () => {
+  const CONTRACT: StkfutSelection = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
+
+  function trialStream(trial: boolean): StockStreamState {
+    return stream({ accum: { ...ACCUM, trial } });
+  }
+
+  it("accum.trial=true + 現貨態 → h2 內代號右側出現「(緩)」", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={trialStream(true)} contract={null} />);
+    const badge = screen.getByTestId("page-trial");
+    expect(badge.textContent).toBe("(緩)");
+    // 落點是 header 的 h2(與名稱 / 代號同一條 baseline),不是漂到報價塊旁邊
+    expect(badge.closest("h2")).toBeTruthy();
+    const cls = badge.getAttribute("class") ?? "";
+    expect(cls).toContain("amber");
+    expect(cls).not.toContain("bull");
+    expect(cls).not.toContain("bear");
+  });
+
+  it("accum.trial=false → 不出現", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={trialStream(false)} contract={null} />);
+    expect(screen.queryByTestId("page-trial")).toBeNull();
+    expect(screen.queryByText("(緩)")).toBeNull();
+  });
+
+  it("期貨合約態 → 即使 trial=true 也不標(合約無試撮窗)", () => {
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={trialStream(true)}
+        contract={CONTRACT}
+        onContract={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("page-trial")).toBeNull();
+  });
+
+  it("期貨合約態 + trial=false → 不標(四格的第四格)", () => {
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={trialStream(false)}
+        contract={CONTRACT}
+        onContract={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("page-trial")).toBeNull();
+  });
+});

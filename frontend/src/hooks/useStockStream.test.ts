@@ -320,6 +320,27 @@ describe("useStockStream", () => {
     expect(hook.result.current.watchlist["9998"]?.p).toBeNull();
   });
 
+  // 🟢 緩撮旗標(SC-1 的資料源)。與 `ref` 同理:下游元件測試都是把 quotes 當 props
+  // 直接餵,繞過 WS 解析 —— 這一層是 `trial` 解析唯一測得到的地方。
+  it("watchlist_quote 的 trial 欄位進側欄報價", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "5483",
+        p: 216_500, chg_pct: -1.2, vol: 100, no_data: false, trial: true,
+      }),
+    );
+    expect(hook.result.current.watchlist["5483"]?.trial).toBe(true);
+  });
+
+  it("舊後端不發 trial → 降級 false(不是 undefined)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({ type: "watchlist_quote", code: "9996", p: 100_000, chg_pct: 0, vol: 1, no_data: false }),
+    );
+    expect(hook.result.current.watchlist["9996"]?.trial).toBe(false);
+  });
+
   it("舊後端不發 ref → 降級 null(不是 undefined)", async () => {
     const { hook, ws } = await setup();
     act(() =>
@@ -674,6 +695,70 @@ describe("useStockStream(合約態:instrument key vs REST 路徑)", () => {
         p: null, chg_pct: null, vol: null, no_data: true,
       }),
     );
+    expect(hook.result.current.accum?.noData).toBe(true);
+  });
+});
+
+// 🟢 主圖 accum 的 trial 補寫(D4)。預覽股不在自選,開頁之後的窗轉態只有後端對
+// 「現貨主圖碼」的補推帶得進來 —— 沒有這條,badge 要等到下次全量 refetch 才會動。
+//
+// **與 no_data 補寫是兩條獨立分支**:no_data 那條是單向黏性(只 false→true,清除靠
+// refetch),而試撮窗天然要雙向(09:00 出窗就該熄)。合併兩者會把未宣告的行為改動
+// (no_data 雙向化)偷渡進來。
+describe("useStockStream(主圖 trial 補寫)", () => {
+  it("主圖碼的 trial 轉真 → 補寫進 accum(窗邊界推播)", async () => {
+    const { hook, ws } = await setup();
+    expect(hook.result.current.accum?.trial).toBe(false);
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: true,
+      }),
+    );
+    expect(hook.result.current.accum?.trial).toBe(true);
+  });
+
+  it("trial 轉假也補寫(雙向;與 no_data 的單向黏性不同)", async () => {
+    const { hook, ws } = await setup();
+    const q = (trial: boolean) => ({
+      type: "watchlist_quote", code: "2330",
+      p: null, chg_pct: null, vol: null, no_data: false, trial,
+    });
+    act(() => ws.emit(q(true)));
+    expect(hook.result.current.accum?.trial).toBe(true);
+    act(() => ws.emit(q(false)));
+    expect(hook.result.current.accum?.trial).toBe(false);
+  });
+
+  it("他檔的 trial 不影響主圖(側欄那格照收)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "9995",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: true,
+      }),
+    );
+    expect(hook.result.current.watchlist["9995"]?.trial).toBe(true);
+    expect(hook.result.current.accum?.trial).toBe(false);
+  });
+
+  it("trial 補寫不動 noData(no_data 的單向黏性不因新分支而鬆掉)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: null, chg_pct: null, vol: null, no_data: true, trial: false,
+      }),
+    );
+    expect(hook.result.current.accum?.noData).toBe(true);
+    // 同一碼再來一則 no_data=false + trial=true:trial 要跟上,noData 維持 true
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: 2_380_000, chg_pct: 1, vol: 1, no_data: false, trial: true,
+      }),
+    );
+    expect(hook.result.current.accum?.trial).toBe(true);
     expect(hook.result.current.accum?.noData).toBe(true);
   });
 });
