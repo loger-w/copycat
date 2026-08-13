@@ -79,7 +79,7 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
   const uid = safeIdToken(useId());
   const above = `${uid}-mini-a`;
   const below = `${uid}-mini-b`;
-  // 幾何算一次就好(review A6-1):`minutes` 最多 271 格,而群組頁最多 30 張卡片,
+  // 幾何算一次就好(review A6-1):`minutes` 最多 271 格,而群組頁最多 50 張卡片,
   // 父層每秒隨 `quotes` re-render 一次。deps 只列真正的輸入 —— `minutes` / `meta` 來自
   // TQ cache(60s 才換 identity),`liveP` 是每秒可能變的那一個。
   //
