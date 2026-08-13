@@ -32,5 +32,9 @@
   `code-review-round-1.json`。白名單 10 條全 PRESERVED;P0×0 / P1×4(C1 rc≠0 吃 due +
   T1/T2/T3 渲染分界無鎖)/ P2×14(accepted 大宗;C2/W2 collector 輪次化 rejected →
   docs/next-time.md 2026-08-13 節)。
-- [dispatched 2026-08-13] fix 波 → opus implementer(6 commits:rc≠0 紅綠對 + 守門落點
-  lock + LadderView filled>0 紅綠對 + 三座梯 seqs 分界 lock 批)。
+- [done 2026-08-13] fix 波:255f7552 🟢[red] / 9886013e 🔴[green] / 1e7552ed 🟢[lock] /
+  9f997844 🟢[red] / 11e0e11e 🔴[green] / 5ae047e5 🟢[lock]。gate:pytest 2631 / vitest
+  1778 / ruff / pyright / tsc / eslint 全 0;mutation 證據 5 件(a-e,見 dispatch 回報與
+  commit body);LadderView.test.tsx 新檔(prop 介面級守門案)。W4 留收尾已補
+  (CLAUDE.md §4)。self_review_head = 5ae047e5。
+- [done 2026-08-13] §8:check_feat_tags PASS(13 commits);artifact commit 5956f2d9。
