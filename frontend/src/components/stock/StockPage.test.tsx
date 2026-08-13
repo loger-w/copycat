@@ -924,4 +924,20 @@ describe("StockPage 緩撮標示(SC-2)", () => {
     );
     expect(screen.queryByTestId("page-trial")).toBeNull();
   });
+
+  // 🔴 code review IC-4:窗內的 payload 對 no_data 檔照算 trial=true,而側欄那一列
+  // (`q?.trial && !q?.no_data`)不標 —— header 標的話兩個視圖對同一狀態給相反答案,
+  // 而且是對一檔**沒有任何報價**的標的講撮合狀態。口徑統一到側欄那一邊。
+  it("no_data 檔不標(IC-4:與側欄同口徑)", () => {
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={stream({ accum: { ...ACCUM, trial: true, noData: true } })}
+        contract={null}
+      />,
+    );
+    expect(screen.queryByTestId("page-trial")).toBeNull();
+    expect(screen.queryByText("(緩)")).toBeNull();
+  });
 });
