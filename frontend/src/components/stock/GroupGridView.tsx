@@ -77,7 +77,7 @@ function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined })
 
 /** 單張卡片(review A6-1)。抽成 `memo` 子元件而不是留在父層的 `card()`:
  *  `quotes` 每秒整份換 identity → 父層每秒 re-render 一次,而每張卡片都要重跑
- *  `buildIntradayGeometry`(當日最多 271 分鐘 × 30 檔)。memo 之後只有 quote 真的
+ *  `buildIntradayGeometry`(當日最多 271 分鐘 × 50 檔)。memo 之後只有 quote 真的
  *  變了的那幾張會重畫。
  *
  *  `onPick` 由父層以穩定參照傳入(StockPage 的 handler 每次 render 都是新的,但那層
@@ -184,7 +184,7 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
       ) : isPending ? (
         // 首載未回前**不畫卡片**:卡片的三態全是**終態宣告**,而「無資料」是其中最強的
         // 一句(「這檔今天沒東西可看」)。載入中就先鋪一整面「無資料」再逐格翻回圖,
-        // 既是閃爍也是說謊 —— 30 檔的群組會有整整一輪 batch 的時間停在錯的答案上。
+        // 既是閃爍也是說謊 —— 50 檔的群組會有整整一輪 batch 的時間停在錯的答案上。
         // 錯誤終態不走這條(`isPending` 只涵蓋首載):整批失敗時卡片照畫、答「無資料」。
         <div className="flex flex-1 items-center justify-center">
           <p className="text-sm text-ink-muted">載入群組…</p>

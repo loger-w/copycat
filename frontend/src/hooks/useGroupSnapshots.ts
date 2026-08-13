@@ -7,10 +7,10 @@ import { inTradingHours } from "@/lib/trading-hours";
 /** 群組檢視的成員狀態(group-grid SC-4)。
  *
  *  **單一 batch 端點,不是 per-code query**:`/api/stock/state/{code}` 會 `set_main`,
- *  群組檢視每分鐘對最多 30 檔各要一次 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結
+ *  群組檢視每分鐘對最多 50 檔各要一次 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結
  *  而畫面上只表現為「圖不動了」,沒有任何錯誤訊號(design R1)。
  *
- *  payload 只有 minutes / meta 兩份資料(`ticks` 是數千筆,30 檔一起送等於把 batch
+ *  payload 只有 minutes / meta 兩份資料(`ticks` 是數千筆,50 檔一起送等於把 batch
  *  端點變成頻寬炸彈)+ 兩個旗標。 */
 export interface GroupSnapshot {
   minutes: Map<number, MinuteAgg>;
@@ -49,7 +49,7 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
 }
 
 /** 輪詢窗(design R7)。抽成純函式才量得到(沿 `barsPollInterval` 慣例)。
- *  盤外不輪詢:群組成員的分鐘序列收盤後就不會再變,而 30 檔的 batch 不是免費的。 */
+ *  盤外不輪詢:群組成員的分鐘序列收盤後就不會再變,而 50 檔的 batch 不是免費的。 */
 export function groupPollInterval(trading: boolean): number | false {
   return trading ? POLL_MS : false;
 }
