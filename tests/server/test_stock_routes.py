@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stock_engine import StockEngine
-from copycat.stock_watchlist import save_watchlist
+from copycat.stock_watchlist import WATCHLIST_LIMIT, save_watchlist
 from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeStockSource
 from tests.helpers.fake_txo import FakeTxoSource
@@ -195,10 +195,23 @@ class TestWatchlistRoutes:
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_GROUP"
 
+    def test_put_at_limit_ok(self, tmp_path: Path) -> None:
+        """字面 50 與 test_put_over_limit_400 的字面 51 成對釘死邊界 = 50。
+
+        兩支都引常數的話,上限值本身就沒有任何測試錨點(改常數兩支自動跟著綠)。
+        """
+        client, _ = make_client(tmp_path)
+        with client:
+            codes = [f"{1000 + i}" for i in range(50)]
+            r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
+            assert r.status_code == 200
+            assert r.json()["codes"] == codes
+
     def test_put_over_limit_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
-            codes = [f"{1000 + i}" for i in range(31)]
+            # 字面 51:與 test_put_at_limit_ok 的字面 50 成對釘死邊界 50/51
+            codes = [f"{1000 + i}" for i in range(51)]
             r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "WATCHLIST_FULL"
@@ -502,10 +515,19 @@ class TestGroupStateRoute:
             assert states["9999"]["minutes"] == {}
             assert states["9999"]["meta"] is None
 
+    def test_group_state_at_limit_ok(self, tmp_path: Path) -> None:
+        """字面 50 相異碼 → 200(與 test_too_many_codes_400 的字面 51 成對釘死邊界)。"""
+        client, _ = make_client(tmp_path)
+        with client:
+            codes = ",".join(f"{9000 + i}" for i in range(50))
+            r = client.get("/api/stock/group-state", params={"codes": codes})
+            assert r.status_code == 200
+            assert len(r.json()["states"]) == 50
+
     def test_too_many_codes_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
-            codes = ",".join(f"{9000 + i}" for i in range(31))  # 自選上限 30
+            codes = ",".join(f"{9000 + i}" for i in range(51))  # 自選上限 50(與 at-limit 成對)
             r = client.get("/api/stock/group-state", params={"codes": codes})
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_CODES"
@@ -532,7 +554,9 @@ class TestGroupStateRoute:
         client, _ = make_client(tmp_path)
         with client:
             self._put(client, ["2330", "2317"])
-            r = client.get("/api/stock/group-state", params={"codes": ",".join(["2330"] * 31)})
+            # 重複數必須 > 上限,否則失去鑑別力(考點是「去重先於驗數」的順序)
+            dup = ",".join(["2330"] * (WATCHLIST_LIMIT + 1))
+            r = client.get("/api/stock/group-state", params={"codes": dup})
             assert r.status_code == 200
             assert list(r.json()["states"]) == ["2330"]
             r = client.get("/api/stock/group-state", params={"codes": "2317,2330,2317"})
@@ -542,7 +566,7 @@ class TestGroupStateRoute:
         """去重之後仍要驗上限:相異碼超量照樣 400(去重不是放行的後門)。"""
         client, _ = make_client(tmp_path)
         with client:
-            codes = ",".join(f"{9000 + i}" for i in range(31))
+            codes = ",".join(f"{9000 + i}" for i in range(WATCHLIST_LIMIT + 1))
             r = client.get("/api/stock/group-state", params={"codes": codes})
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_CODES"
