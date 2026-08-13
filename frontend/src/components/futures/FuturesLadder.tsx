@@ -19,6 +19,7 @@ import {
   splitMyLots,
   type FutLadderRow,
 } from "@/lib/futures-ladder";
+import { ymdWindow } from "@/lib/ladder-lots";
 import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
 import { settlementCountdown } from "@/lib/settlement";
 import { tradeErrorText } from "@/lib/trade-text";
@@ -83,7 +84,13 @@ export function FuturesLadder({
 
   const resolvedYm = state?.resolved_contract ?? null;
   const contract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
-  const myLots = contract !== null ? splitMyLots(ordersData?.orders ?? [], contract) : [];
+  // 已成交量的日期界 = ±1 日窗(夜盤跨午夜時 `date` 是交易日還是日曆日尚未實證,
+  // 兩種假設都涵蓋);每 render 重算,純算術。
+  const myLots =
+    contract !== null
+      ? splitMyLots(ordersData?.orders ?? [], contract, ymdWindow(new Date(), [-1, 0, 1]))
+      : [];
+  // 只含活單 seq(filled-only 條目的 seqNos 恆空)→ 僅剩全成交徽章時全撤鈕維持 disabled
   const allSeqNos = myLots.flatMap((l) => l.seqNos);
 
   // 一鍵平倉對象:期貨 + **契約完整字串相等**(前綴比對會把 MXF 的部位掃進 TXF 的平倉)
@@ -407,15 +414,23 @@ export function FuturesLadder({
               )}
             >
               <div className="flex items-stretch">
-                {r.myQty > 0 ? (
+                {r.myQty > 0 || r.mySeqNos.length > 0 ? (
                   <button
                     type="button"
                     aria-label={`刪 ${fmt(r.priceMilli)} 掛單`}
                     onClick={() => cancelLot(r.mySeqNos)}
                     className="my-0.5 ml-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
                   >
-                    {r.myQty}
+                    {`${r.myQty}(${r.myFilled})`}
                   </button>
+                ) : r.myFilled > 0 ? (
+                  /* 全成交:無 seq 可刪 → 不可點徽章(幾何沿紅方格,降為 muted 且不吃點擊) */
+                  <span
+                    data-testid="ladder-filled-lot"
+                    className="pointer-events-none my-0.5 ml-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted"
+                  >
+                    {`(${r.myFilled})`}
+                  </span>
                 ) : null}
                 <button
                   type="button"
