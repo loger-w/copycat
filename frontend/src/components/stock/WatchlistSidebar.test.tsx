@@ -451,6 +451,45 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
   });
 });
 
+// 🔴 SC-3:標題列與個股列在畫面上混成一片(同樣是透明底 + border-b),
+// 組名字級(text-xs)甚至比代號(text-base)小 → 掃視時分不出層次。
+// **斷言用 classList token 級**:`toContain("bg-surface")` 會被既有 `hover:bg-surface`
+// 這個子字串誤命中 → 假紅 + 之後恆真的 vacuous lock。
+describe("WatchlistSidebar 標題列視覺層次(SC-3)", () => {
+  it("群組標題列整條吃 bg-surface 底色帶", async () => {
+    sidebar();
+    await waitGroups();
+    expect(groupHeader("主力").classList.contains("bg-surface")).toBe(true);
+  });
+
+  it("未分組標題列同樣吃底色帶(兩種標題列一致)", async () => {
+    sidebar();
+    await waitGroups();
+    expect(groupHeader("未分組").classList.contains("bg-surface")).toBe(true);
+  });
+
+  it("hover 換手到 bg-line/50:底色帶讓 hover:bg-surface 變成看不出來的 no-op", async () => {
+    sidebar();
+    await waitGroups();
+    expect(groupHeader("主力").className).not.toContain("hover:bg-surface");
+  });
+
+  it("組名字重加粗(font-medium),不再與個股名稱同權重", async () => {
+    sidebar();
+    await waitGroups();
+    const header = groupHeader("主力");
+    expect(within(header).getByText("主力").classList.contains("font-medium")).toBe(true);
+  });
+
+  // 🔒 lock:底色帶是「標題列 vs 個股列」的**對比**,個股列一起吃底色等於沒有對比。
+  it("個股列不吃底色帶(對比的另一半)", async () => {
+    const { container } = sidebar();
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
+    expect(row.classList.contains("bg-surface")).toBe(false);
+  });
+});
+
 describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
   it("零群組零股票時搜尋框仍在(W-16 的新實體)", async () => {
     mockWatchlist([], []);
