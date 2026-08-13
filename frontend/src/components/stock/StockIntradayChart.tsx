@@ -171,9 +171,9 @@ const ChartStatic = memo(function ChartStatic({
   );
   // MA 價位標籤的固定 obstacle = **落在右緣區的**極值文字(D3/review F2)。
   // 極值文字在左半場時與 MA 標籤的 x 範圍不相交,納入避讓只會讓標籤無故位移。
-  const maObstacles = markLabels
-    .filter((m) => m.mark.x > w - R_AXIS_W - MARK_LABEL_W)
-    .map((m) => m.y);
+  const maObstacles = markLabels.flatMap((m) =>
+    m.mark.x > w - R_AXIS_W - MARK_LABEL_W ? [m.y] : [],
+  );
   // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
   // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
   const maLabels = edgePriceLabels(oLines, maObstacles, {
