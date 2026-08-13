@@ -1289,6 +1289,20 @@ def test_pending_watchdog_publishes_sec_when_chain_stalls(tmp_path: Path) -> Non
     assert sec is not None and sec.qty == 3
 
 
+def test_consecutive_fills_merge_into_single_requery(tmp_path: Path) -> None:
+    """連續成交合併(既有語意):後到的成交推遲 due(重設),幫浦圈只在尾端查一次。
+    改成「只有第一筆設 due」= 尾端成交等不到重查,庫存停在中途數字。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._handle_reply(_fill_evt_raw())
+    first = client._balance_due
+    client._handle_reply(_fill_evt_raw(qty="2000"))
+    second = client._balance_due
+    assert first is not None and second is not None
+    assert second > first
+
+
 def test_fill_schedules_balance_requery_within_half_second(tmp_path: Path) -> None:
     """SC-5:成交後庫存重查排在 0.5s 後(上界防拖慢、下界防 debounce 被整個拿掉)。"""
     com = FakeCom()
