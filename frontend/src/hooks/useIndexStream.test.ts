@@ -147,6 +147,38 @@ describe("useIndexStream", () => {
     expect(hook.result.current.tradeDate).toBe("2026-07-29");
   });
 
+  it("先發後至的舊回應不得覆蓋新回應(review T-6 generation guard)", async () => {
+    const { hook, ws } = await setup();
+    // 慢途 refetch(舊日資料,手動控制 resolve);其後的呼叫快速回新日全量
+    let resolveSlow: ((r: Response) => void) | undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((res) => {
+          resolveSlow = res;
+        }),
+    );
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ...STATE,
+            trade_date: "2026-07-29",
+            twse: { ...STATE.twse, minutes: { "0901": 1 } },
+          }),
+        ),
+    );
+    act(() => ws.onopen?.()); // 觸發慢途 refetch(將回舊日)
+    await waitFor(() => expect(resolveSlow).toBeDefined());
+    act(() => ws.emit(wsMsg({ trade_date: "2026-07-29" } as never))); // 換日 → 新 refetch
+    await waitFor(() => expect(hook.result.current.tradeDate).toBe("2026-07-29"));
+    await act(async () => {
+      resolveSlow!(new Response(JSON.stringify(STATE))); // 舊日回應遲到
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(hook.result.current.tradeDate).toBe("2026-07-29"); // 不得被舊日整份覆蓋
+    expect(hook.result.current.twse!.minutes).toEqual({ "0901": 1 });
+  });
+
   it("WS reconnect → refetch state 全量(F3)", async () => {
     const { ws } = await setup();
     const before = fetchMock.mock.calls.length;
