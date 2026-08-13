@@ -910,6 +910,9 @@ describe("WatchlistSidebar 緩撮標示(SC-1)", () => {
     // 直接鎖住「包一層 items-baseline 的 row」這個落點,而不是只驗「badge 存在」。
     const codeSpan = within(row).getByText("2330");
     expect(badge.parentElement).toBe(codeSpan.parentElement);
+    // 這一層 wrapper 是外層 flex 的子項 → `min-w-0` 不可省(code review P2-AGG(1)),
+    // 少了它極長代號會把整格推寬、溢出到右側報價塊上(截圖才看得出來,故在此鎖 class)。
+    expect(badge.parentElement?.getAttribute("class") ?? "").toContain("min-w-0");
     // 中性警示色(D5):不可落到漲跌(bull/bear)或 accent 色系
     const cls = badge.getAttribute("class") ?? "";
     expect(cls).toContain("amber");

@@ -790,9 +790,12 @@ describe("useStockStream(主圖 trial 補寫)", () => {
   // 上一條的另一半:pending 的 trial 帶 instrumentKey 標記,切檔撞上 in-flight 時不可
   // 外洩到新標的(「2330 在試撮窗內」對 5483 / 期貨鍵不是同一個答案,期貨鍵的窗恆空)。
   //
-  // 覆蓋度誠實記帳:這條**在修前也綠**(修前根本沒有 pending 這回事),鎖的是新機制的
-  // key 標記 + 切檔 / finally 兩處清理 —— 實測把「key 比對」與「切檔 effect 的清理」
-  // 一起拿掉即紅(舊檔的窗態畫到新檔上)。
+  // 覆蓋度誠實記帳(同 pendingBook 的 review B-4 記帳):這條**修前修後都綠**,任何
+  // 單點 mutation 也殺不掉它 —— 實測把「key 比對 + 切檔 effect 清理 + finally 清理」
+  // 三處一起拿掉仍綠(`refetch` 開頭那道清理是最後的兜底),而 pending 只在
+  // `msg.code === current` 時才寫,寫入時 key 恆等於當下標的 = key 比對是可證的死碼。
+  // 留著的理由:它是「哪天多一條沒清 pending 的切檔路徑」時唯一會攔下「舊檔的窗態畫到
+  // 新檔上」的測試,而那個失效沒有任何錯誤訊號。
   it("切檔撞上 in-flight 時舊 key 的 pending trial 不外洩(IC-3)", async () => {
     let resolveFirst: (r: Response) => void = () => {};
     fetchMock.mockImplementationOnce(

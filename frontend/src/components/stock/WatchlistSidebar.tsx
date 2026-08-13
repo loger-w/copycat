@@ -332,7 +332,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                 而那一列右側顯示的是「無資料」,再標「(緩)」等於對著沒有報價的檔
                 講撮合狀態。amber = 中性警示,刻意不用 bull/bear(漲跌方向)或 accent
                 (現價線)—— 試撮不是方向性狀態。 */}
-            <span className="flex items-baseline gap-1">
+            {/* `min-w-0`(code review P2-AGG(1)):這一層是外層 flex 的子項,少了它不會
+                縮 —— 極長的 instrument key(合約鍵 / 未來的長代號)會把整格推寬並溢出
+                到右側報價塊上。與外層 `min-w-0 flex-1` 同一個理由,鏈上任一環漏掉都失效。 */}
+            <span className="flex min-w-0 items-baseline gap-1">
               <span className="font-mono text-base text-ink">{code}</span>
               {q?.trial && !q?.no_data ? (
                 <span
