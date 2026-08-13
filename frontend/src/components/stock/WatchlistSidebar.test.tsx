@@ -571,7 +571,7 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
     await waitGroups();
     // 搜尋改成預覽後不再發 PUT → 用仍會 PUT 的路徑(群組列的 ×)驗錯誤文案
     fireEvent.click(within(screen.getByTestId("wl-group-觀察")).getByLabelText("移除 3231"));
-    await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("自選已達 50 檔上限")).toBeTruthy());
   });
 });
 
