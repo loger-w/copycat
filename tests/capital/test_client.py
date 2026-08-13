@@ -1380,6 +1380,27 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) 
     assert _balance_queries(com) == 2
 
 
+def test_balance_query_rc_failure_rearms_due_with_backoff(tmp_path: Path) -> None:
+    """C1/T9:GetRealBalance rc≠0(1019「查詢處理中」)= 鏈根本沒啟動 →
+    (a) 守門旗標必須清掉,不可佔著擋下一輪;
+    (b) `_balance_due` 必須重新武裝 —— 發查詢前已把 due 清成 None,rc≠0 就這樣走掉
+    等於整筆成交的庫存重查被吃掉,要等 60s stale 輪詢才補得回來(守門的
+    「成交不漏」不變量破功)。退避 1s 而非還原舊 due:舊 due 已過期,下一圈幫浦
+    (50ms)會立刻再打 1019 成緊迴圈。"""
+    com = FakeCom()
+    com.balance_rc = 1019
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._handle_reply(_fill_evt_raw())  # D 回報 → due 排程
+    client._balance_due = time.monotonic() - 1.0  # due 到期(不 sleep;A8)
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 1
+    assert client._balance_inflight_until is None
+    assert client._balance_due is not None
+    delay = client._balance_due - time.monotonic()
+    assert 0.9 <= delay <= 1.1
+
+
 def test_maybe_query_balance_runs_in_degraded(tmp_path: Path) -> None:
     # degraded(回報斷線)也要輪詢 — 此時 60s 輪詢是部位唯一更新源
     com = FakeCom()

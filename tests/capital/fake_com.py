@@ -27,6 +27,9 @@ class FakeCom:
         self.on_profit: Callable[[str], None] | None = None
         self.on_reply_disconnect: Callable[[int], None] | None = None
         self.on_open_interest: Callable[[str], None] | None = None
+        # 查詢面 rc 可注入(GetRealBalance 吃 1019「查詢處理中」是真實失敗態,
+        # 且此時鏈完全沒啟動 → 守門旗標與 due 的收尾行為要能測)
+        self.balance_rc = 0
 
     def setup(
         self,
@@ -86,7 +89,7 @@ class FakeCom:
 
     def get_real_balance(self, user_id: str, full_account: str) -> int:
         self.sent.append(("get_real_balance", full_account))
-        return 0
+        return self.balance_rc
 
     def get_profit_loss_gw(self, user_id: str, full_account: str) -> int:
         self.sent.append(("get_profit_loss_gw", full_account))
