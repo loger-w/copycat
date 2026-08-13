@@ -481,6 +481,43 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
       { seq_no: "002", market: "sec" },
     ]);
   });
+
+  /** T1(review round-1):`isCancelable` 的 `|| seqs.length > 0` 半條在元件層無鎖 ——
+   *  拿掉它時 aggregateLots 的測試全綠,但畫面上這種單會從可點紅方格掉成不可點徽章
+   *  (甚至整格消失),使用者失去刪單入口。「殘量 0 的活單」不是理論態:P/U 先到、
+   *  N 未到,以及改量亂序期都會出現(store.py:86 註)。 */
+  it("actionable 殘 0 活單 → 仍是可點紅方格 `0(0)`,點擊照送 cancel", async () => {
+    const cancelBodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/cancel": (init) => {
+        cancelBodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () =>
+        json({ orders: [capitalOrder({ seq_no: "016", order_qty: 0, filled_qty: 0 })] }),
+    });
+    render(ladder());
+    const lot = await screen.findByLabelText("刪 100 買單");
+    expect(lot.textContent).toBe("0(0)");
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull(); // 不得降級成徽章
+    fireEvent.click(lot);
+    await waitFor(() => expect(cancelBodies.length).toBe(1));
+    expect(cancelBodies).toMatchObject([{ seq_no: "016", market: "sec" }]);
+  });
+
+  it("actionable 且已全數成交(N 未到)→ `0(2)` 仍可點", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            capitalOrder({ seq_no: "017", order_qty: 2, filled_qty: 2, date: ymd() }),
+          ],
+        }),
+    });
+    render(ladder());
+    expect((await screen.findByLabelText("刪 100 買單")).textContent).toBe("0(2)");
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
+  });
 });
 
 describe("PriceLadder 已成交徽章(SC-2)", () => {
@@ -520,6 +557,32 @@ describe("PriceLadder 已成交徽章(SC-2)", () => {
     expect(cancelBodies.length).toBe(0);
     // 徽章佔位不吃掉同列點價鈕(R8:鈕變窄是承認的偏差,不可點才是 bug)
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(false);
+  });
+
+  /** T4:徽章分支買賣側各一份(LadderView 的兩塊三元),只測買側時賣側那塊
+   *  改壞了照樣全綠 —— 賣側紅方格 / 徽章在右緣,渲染路徑獨立。 */
+  it("賣側全成交 → 右緣 `(N)` 徽章、賣側紅方格消失(對稱)", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            capitalOrder({
+              seq_no: "018",
+              buy_sell: "S",
+              price: 100.5,
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    const badge = await screen.findByTestId("ladder-filled-lot");
+    expect(badge.textContent).toBe("(2)");
+    expect(screen.queryByLabelText("刪 100.5 賣單")).toBeNull();
   });
 
   it("部分成交後刪單 → 徽章留下已成交量(成交是事實)", async () => {

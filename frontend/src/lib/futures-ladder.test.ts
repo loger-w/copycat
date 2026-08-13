@@ -188,6 +188,19 @@ describe("splitMyLots 該契約活單按價位聚合", () => {
     expect(nodate).toEqual([]);
   });
 
+  /** T3(review round-1):`addQty` 的 actionable 閘無測 —— 既有終態案都是
+   *  `order_qty === filled_qty`,`Math.max(0, 5-5)` 與閘的結果同為 0,把三元改成
+   *  無條件 `Math.max(...)` 照樣全綠。部分成交後刪單(殘量 > 0 的終態單)才分得開:
+   *  沒有閘的話期貨梯會畫出 3 口不存在的「未成交」量,而且 seqNos 空到無從刪起。 */
+  it("部分成交後刪單(終態、殘量 > 0)→ qty 0、filled 留、seqNos 空", () => {
+    const lots = splitMyLots(
+      [o({ seq_no: "K", actionable: false, order_qty: 5, filled_qty: 2, date: TODAY })],
+      "TXFI6",
+      WINDOW,
+    );
+    expect(lots).toEqual([{ priceMilli: 23_000_000, qty: 0, filled: 2, seqNos: [] }]);
+  });
+
   it("失敗 / 退單(終態、filled 0)→ 零痕跡", () => {
     const lots = splitMyLots(
       [o({ seq_no: "E", actionable: false, order_qty: 2, filled_qty: 0 })],
