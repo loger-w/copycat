@@ -17,6 +17,7 @@ import {
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
+import { aggregateLots } from "@/lib/ladder-lots";
 import {
   avgTickOf,
   clampDiscount,
@@ -30,7 +31,7 @@ import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
-import type { CapitalOrder, CapitalPosition } from "@/types";
+import type { CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
@@ -132,26 +133,6 @@ function markMap(rows: PositionRow[], pick: (r: PositionRow) => number | null): 
     else cur.push(r.label);
   }
   return map;
-}
-
-/** 本檔 actionable 活單 → 價位(毫元)聚合殘量;點紅方格逐 seq 直刪用。 */
-function aggregateLots(
-  orders: CapitalOrder[] | undefined,
-  code: string,
-): { buy: Map<number, LadderLot>; sell: Map<number, LadderLot> } {
-  const buy = new Map<number, LadderLot>();
-  const sell = new Map<number, LadderLot>();
-  for (const o of orders ?? []) {
-    if (!o.actionable || o.stock_no !== code || o.price === null) continue;
-    const map = o.buy_sell === "B" ? buy : o.buy_sell === "S" ? sell : null;
-    if (map === null) continue;
-    const key = Math.round(o.price * 1000);
-    const cur = map.get(key) ?? { qty: 0, seqs: [] };
-    cur.qty += Math.max(0, o.order_qty - o.filled_qty);
-    cur.seqs.push(o.seq_no);
-    map.set(key, cur);
-  }
-  return { buy, sell };
 }
 
 interface Props {
