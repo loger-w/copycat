@@ -68,6 +68,11 @@ interface Props {
 export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const { data, error } = useStockWatchlist();
   const wl = data ?? EMPTY_WL;
+  /** 自選成功載入過(pending / 失敗時 `wl` 是 EMPTY_WL fallback)。**兩個子樹共用同一個
+   *  判斷**:sticky 區的「全部收合」與底部的「管理」+ Dialog —— 理由與細節見底部那段長註解。
+   *  裸條件複製第二份的話,哪天改了 gate 只會改到其中一處,而危險窗只有幾百毫秒、
+   *  沒有錯誤訊號。 */
+  const wlReady = data !== undefined;
   const groups = wl.groups;
   const ungrouped = ungroupedCodes(wl);
   const { data: names = [] } = useStockNames();
@@ -144,6 +149,25 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
    *  直接用 render 閉包的值算 next 就夠,不需要影子 ref。 */
   function toggleUngroupedCollapsed(): void {
     applyUngroupedCollapsed(!ungroupedCollapsed);
+  }
+
+  /** 「未分組 + 全部群組」皆折疊。`groups.every` 對空陣列恆 true → 零群組時這個值
+   *  由 `ungroupedCollapsed` 單獨決定,鈕照樣說對話(F-1)。 */
+  const allCollapsed = ungroupedCollapsed && groups.every((g) => collapsed.has(g.name));
+
+  /** 一顆鈕切換全收 / 全展。兩個折疊狀態各自走**既有的單一寫入點**(`applyCollapsed` /
+   *  `applyUngroupedCollapsed`),不在這裡手抄 persist —— 手抄的漏法是漏掉 ref 同步。
+   *
+   *  全收寫入的是**現行組名集合(替換)**而不是併入 `collapsed` 殘留:改名 / 刪組留下的
+   *  組名沒有對應 UI,留著只會讓日後建同名群組意外呈折疊(與 `dropCollapsed` 同向)。 */
+  function toggleAll(): void {
+    if (allCollapsed) {
+      applyCollapsed(new Set());
+      applyUngroupedCollapsed(false);
+    } else {
+      applyCollapsed(new Set(groups.map((g) => g.name)));
+      applyUngroupedCollapsed(true);
+    }
   }
 
   /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。
@@ -494,6 +518,21 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
             查看
           </button>
         </div>
+        {/* 落點刻意在**搜尋列與建議清單之間**:放在 sticky 區塊下緣的話,打字時行內
+            建議清單一出現就會把它往下推,高頻操作的鈕位置跟著跳。
+            gate 同「管理」鈕(`wlReady`):EMPTY_WL 危險窗內 groups=[],一鍵全收會把
+            使用者既有的折疊清單持久化覆寫成空,而畫面上完全看不出來。 */}
+        {wlReady ? (
+          <div className="mt-1 flex justify-end">
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="text-xs text-ink-dim hover:text-ink"
+            >
+              {allCollapsed ? "全部展開" : "全部收合"}
+            </button>
+          </div>
+        ) : null}
         {suggestions.length > 0 ? (
           <ul data-testid="stock-suggest" className="mt-1 rounded border border-line bg-bg-deep">
             {suggestions.map((s) => (
@@ -606,8 +645,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           Dialog 併進**同一個** gate(而非只擋按鈕):危險窗內連掛載都不給,
           「拿得到 EMPTY_WL 的 Dialog 不存在」就成了本地可讀的不變式,不必追它內部
           有沒有其他開啟路徑。data 一旦成功載入就不會退回 undefined,所以對 Dialog 自己的
-          open/close 循環而言它仍是常駐掛載 —— 不影響其 prevOpen 重置設計。 */}
-      {data === undefined ? null : (
+          open/close 循環而言它仍是常駐掛載 —— 不影響其 prevOpen 重置設計。
+          **同一個 gate 還守著 sticky 區的「全部收合」鈕**(`wlReady` 的另一個讀者):
+          那顆鈕在危險窗內按下去會把折疊清單覆寫成空,同樣是 EMPTY_WL 當基底的寫入。 */}
+      {wlReady ? (
         <>
           <button
             type="button"
@@ -624,7 +665,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
             onGroupDeleted={dropCollapsed}
           />
         </>
-      )}
+      ) : null}
     </aside>
   );
 }

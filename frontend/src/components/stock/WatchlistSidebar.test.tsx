@@ -495,7 +495,9 @@ describe("WatchlistSidebar 全部展開 / 收合(SC-4)", () => {
   it("零群組 → 鈕仍在,且作用於未分組", async () => {
     mockWatchlist([], ["2317"]);
     sidebar();
-    await waitFor(() => expect(screen.getByTestId("wl-list-ungrouped")).toBeTruthy());
+    // 等**列**而不是等未分組清單:清單在 EMPTY_WL fallback 上也照渲染(空的),
+    // 等它會在 data 還沒到就放行 → 這支測到的其實是「未載入」那條路徑
+    await waitFor(() => expect(screen.getByTestId("wl-row-2317")).toBeTruthy());
     expect(toggleAll().textContent).toBe("全部收合");
 
     fireEvent.click(toggleAll());
