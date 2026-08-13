@@ -87,6 +87,10 @@ _CLOSE_INFLIGHT_S = 10.0
 # 零事件的靜默卡死)就以已收資料寫入,部位快取不可永久滯留在暫存區
 _PENDING_TIMEOUT_S = 8.0
 
+# balance 段(GetRealBalance 發出 → 庫存收齊)的守門 deadline:這段沒有 pending
+# 可看,鏈又可能零事件卡死(collector 沒收到任何列就不會 flush)→ 逾期即放行重查
+_BALANCE_CHAIN_TIMEOUT_S = 10.0
+
 # reply idx1 期權市場別(cancel/correct/decrease 的 market 交叉驗證用;
 # 證券側用 reply.SEC_MARKETS 同一份)
 _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
@@ -156,6 +160,7 @@ class CapitalClient:
         self._profit = BalanceCollector(on_complete=self._on_profit_complete, parse=parse_profit_line)
         self._oi = BalanceCollector(on_complete=self._on_oi_complete, parse=parse_open_interest_line)
         self._balance_due: float | None = None  # monotonic;成交後 debounce 重查
+        self._balance_inflight_until: float | None = None  # balance 段守門 deadline(None=不在段內)
         self._balance_last_ts: float = 0.0  # 定時重查用(0=啟動後第一圈就查)
         self._close_inflight: dict[str, float] = {}  # key → monotonic 解鎖時刻(只在 loop 上碰)
         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
@@ -204,6 +209,9 @@ class CapitalClient:
         if new == self._status:
             return
         self._status = new
+        if new == "ok":
+            # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查
+            self._balance_inflight_until = None
         self._emit(
             {"event": "capital_status", "data": {"status": new, "last_error": self._last_error}}
         )
@@ -320,15 +328,29 @@ class CapitalClient:
 
     # ------------------------------------------------------------------ balance 鏈(COM 執行緒)
 
-    def _mark_balance_dirty(self, delay_s: float = 2.0) -> None:
+    def _mark_balance_dirty(self, delay_s: float = 0.5) -> None:
         self._balance_due = time.monotonic() + delay_s
 
     def _maybe_query_balance(self) -> None:
         """幫浦圈呼叫:due 到了或距上次查詢逾 60s → 發查詢。
-        degraded(回報斷線)也要查 — 此時 60s 輪詢是部位唯一的更新來源。"""
+        degraded(回報斷線)也要查 — 此時 60s 輪詢是部位唯一的更新來源。
+
+        鏈(balance→profit→OI)進行中不得重發:第二次 GetRealBalance 吃群益 1019、
+        且 _pending_sec 被覆寫 → 前一輪的 profit/OI 落到「遲到丟棄」分支,該輪部位
+        均價/損益整批遺失。守門分兩段(deadline 只管 balance 段,pending 段有
+        _poll_pending 保底);擋下時**不清 `_balance_due`** — 鏈結束後下一輪補查,
+        成交不漏。"""
         if self._status not in ("ok", "degraded"):
             return
         now = time.monotonic()
+        if self._pending_sec is not None:
+            return
+        if self._balance_inflight_until is not None:
+            if now < self._balance_inflight_until:
+                return
+            # 零事件的死查詢:collector.poll 在 _last_feed is None 時早退、永不 flush,
+            # deadline 逾期是唯一解卡通道(不放行 = 庫存永久停更)
+            self._balance_inflight_until = None
         due = self._balance_due is not None and now >= self._balance_due
         stale = now - self._balance_last_ts >= 60.0
         if not due and not stale:
@@ -336,8 +358,10 @@ class CapitalClient:
         self._balance_due = None
         self._balance_last_ts = now  # 先記,失敗也不連發
         self._balance.reset()
+        self._balance_inflight_until = now + _BALANCE_CHAIN_TIMEOUT_S
         rc = self._com.get_real_balance(self._user_id, self._full_account)
         if rc != 0:
+            self._balance_inflight_until = None  # 鏈沒啟動,旗標不可佔著擋下一輪
             logger.warning("GetRealBalanceReport rc=%s: %s", rc, self._com.return_code_message(rc))
 
     def _on_balance_complete(self, positions: list[Position]) -> None:
@@ -345,6 +369,7 @@ class CapitalClient:
         同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
         self._pending_sec = positions
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
+        self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
         self._balance_last_ts = time.monotonic()
         self._profit.reset()
         rc = self._com.get_profit_loss_gw(self._user_id, self._full_account)
@@ -413,6 +438,7 @@ class CapitalClient:
             return
         self._pending_sec = None
         self._pending_deadline = None
+        self._balance_inflight_until = None  # 三個旗標同組清,且在 emit 前(例外不得滯留守門)
         merged = sec + fut_rows
         self.store.set_positions(merged)
         self._emit({"event": "capital_position", "data": {"count": len(merged)}})
