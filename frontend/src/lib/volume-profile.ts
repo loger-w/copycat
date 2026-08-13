@@ -14,15 +14,22 @@ export const VP_MAX_W_RATIO = 0.22;
  *  「這組長條在視覺層級上壓在走勢線之下」這一個決策的兩半,分開放會各自漂移。 */
 export const VP_FILL_OPACITY = 0.25;
 
+/** POC(域內量最大的那一根)的透明度。與 `VP_FILL_OPACITY` 放在一起是同一個理由 ——
+ *  兩個值的關係(POC 必須比其餘 bar 更顯眼)是一個決策的兩半,分開放會各自漂移。 */
+export const VP_POC_FILL_OPACITY = 0.45;
+
 export interface VpBar {
   /** 價位帶頂端的 y(svg 座標,愈小愈上);帶以成交價置中並 clamp 進 y 域 */
   y: number;
   h: number;
   w: number;
   priceMilli: number;
-  /** 該檔位當日總張(未歸一)。**本輪未接線** —— 留給後續的分色 / hover 用;
-   *  現在只有 `w` 上得了畫面,這個欄位是 debug 與下一步的接點。 */
+  /** 該檔位當日總張(未歸一)。SC-4 起是 POC 判定的依據(見 `poc`);
+   *  歸一後的 `w` 只上得了畫面,比大小要用這個原始值。 */
   total: number;
+  /** 這一根是不是 POC(域內 `total` 最大的價位)。**非 optional** —— 可選欄位讓
+   *  「忘了算」與「不是 POC」在型別上同形,而元件端的 `b.poc ?` 分支照樣不報錯。 */
+  poc: boolean;
 }
 
 interface Geo {
@@ -47,6 +54,23 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
   // `width` 屬性在 SVG 是靜默忽略,畫面上只是「沒有長條」看不出算壞了。
   const maxTotal = Math.max(1, ...inDomain.map(([, c]) => c.t));
   const maxW = plotWidth(width) * VP_MAX_W_RATIO;
+
+  // POC = 域內 `total` 最大的價位(SC-4)。三件事收在這個迴圈裡:
+  // (a) **不能用上面的 `maxTotal` 比對** —— 它被 `Math.max(1, ...)` clamp 過,全 0 的
+  //     當下拿它比會讓任何一根都對不上(還好),但若哪天有一檔恰為 1 張就會憑空
+  //     多出一個「POC」;判定要跟原始最大值走,而原始最大值為 0 = 無 POC。
+  // (b) tie 取**較高**價位:`w` 是歸一後的浮點數,拿它比大小在同量時不決定性,
+  //     而 React 的 key 與 class 都吃這個結果 —— 同一份資料兩次 render 挑到不同那根
+  //     的症狀是 highlight 在畫面上跳動,沒有任何錯誤訊號。
+  // (c) 域限定與歸一分母同規:域外那筆根本沒畫出來,不該奪走這張圖的 POC。
+  let pocPrice: number | null = null;
+  let pocTotal = 0;
+  for (const [priceMilli, cell] of inDomain) {
+    if (cell.t > pocTotal || (cell.t === pocTotal && pocPrice !== null && priceMilli > pocPrice)) {
+      pocTotal = cell.t;
+      pocPrice = priceMilli;
+    }
+  }
 
   const bars = inDomain.map(([priceMilli, cell]): VpBar => {
     // 價位帶 = **以成交價置中** `[p − tick/2, p + tick/2]`,兩端各自 clamp 進 y 域
@@ -81,6 +105,7 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
       w: (cell.t / maxTotal) * maxW,
       priceMilli,
       total: cell.t,
+      poc: priceMilli === pocPrice,
     };
   });
   // 降冪 = 由上而下,React key 穩定
