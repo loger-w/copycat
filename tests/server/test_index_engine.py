@@ -250,6 +250,57 @@ async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
         await eng.close()
 
 
+async def test_pending_retry_does_not_broadcast_minutes() -> None:
+    """review T-1(P1):換日 pending 期間排到的連線類 retry 成功,不得帶出 minutes
+    全量廣播 —— 此時 `_subscribe_and_backfill` 抓的是新日窗、merge 進舊日 dict,
+    廣播 trade_date 仍是舊日 → 前端不走換日分支、整份替換成混日線。"""
+    fake = FakeIndexSource()
+    fake.subscribe_error = ConnectionError("down")
+    eng = make_engine(fake)
+    await eng.start()
+    try:
+        eng._pending_date = "2026-07-29"  # rollover 已偵測新日、source 日窗已切
+        fake.subscribe_error = None
+        fake.day_minutes = {"0901": 9}  # retry 成功抓回的是「新日」資料
+        stream = eng.stream()
+        await asyncio.sleep(0.1)
+        msg = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "minutes" not in msg["twse"]
+    finally:
+        await eng.close()
+
+
+async def test_heal_active_in_closing_tail_window() -> None:
+    """review T-3:收盤尾窗(13:25–13:40)heal 必須續跑 —— 1K 域到 1330,watchdog
+    窗 13:25 凍結的理由(試撮不推成交)對「重抓 1K 回補」不成立,尾段 13:25–13:30
+    正是要補的那截。"""
+    fake = FakeIndexSource()
+    eng = make_engine(fake, in_watch_window=lambda: False, now_fn=lambda: _dt.time(13, 35))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"1330": 7}
+        await asyncio.sleep(0.3)
+        assert eng.state()["twse"]["minutes"] == {"1330": 7}
+    finally:
+        await eng.close()
+
+
+async def test_heal_backs_off_when_no_progress() -> None:
+    """review T-5:1K 持續回空(假日 / 該日資料不可得)→ heal 間隔須倍增退避,
+    不得以固定節流整窗空轉(UNSUB→SUB churn + log 噪音)。無退避時 0.8s 內
+    約 14 次抓取,退避後應 ≤ 6 次。"""
+    fake = FakeIndexSource()  # day_minutes 恆空
+    eng = make_engine(fake, in_watch_window=lambda: True)
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        await asyncio.sleep(0.8)
+        assert 2 <= fake.fetch_minutes_calls <= 6
+    finally:
+        await eng.close()
+
+
 async def test_minutes_lag_heal_not_triggered_when_current() -> None:
     """推播健康(minutes 跟上牆鐘)→ 自癒不得空轉重抓(fetch 只有 start 那一次)。"""
     fake = FakeIndexSource()
