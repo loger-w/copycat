@@ -1,4 +1,20 @@
 
+## 2026-08-13(mod/trial-pause-badge 第一段收尾留尾巴)
+
+- [ ] **緩撮標示第二段:TradeStatus-based per-code 盤中偵測**(本輪只出時間窗版,
+  **09:00–13:25 盤中暴漲暴跌觸發的暫緩撮合不會亮** → 使用者回饋 backlog 第 3 條
+  維持未勾銷):蒐證通道已埋 — engine 對每檔現貨 TradeStatus 轉態記 log,固定前綴
+  `trade-status-observe`,窗外事件 WARNING(episode 起訖成對)。等真實延緩撮合樣本
+  出現後:(a) 依 log 把值域/起訖/恢復實測事實記回 `tc4-market-facts` skill;
+  (b) 依蒐證結果把 `trial` 推導從純時間窗升級為 per-code(TradeStatus 驅動),
+  wire 契約(`watchlist_quote.trial` / snapshot `trial`)已就位不用動;(c) badge 表述
+  是否分化(試撮「(緩)」vs 盤中暫緩「(暫停)」)屆時拍板。已知限制:休市日/週末
+  窗內純時間照標(無交易日曆,第二段天然消除)。
+- [ ] **`stock_engine._quote_payload` docstring「四個產出點」已漂移**:實為 7 處
+  (:373 set_watchlist / :457 quotes() Discord 摘要 / :647 retry 重掛種子 /
+  :767 _handle_no_data / :919 轉態補推 / :1077 連線 seed / :1091 flush;
+  2026-08-13 spec review R5 grep 證實)。下次動該函式時順修 docstring。
+
 ## 2026-08-13(mod/ladder-order-status review rejected 候選)
 
 - [ ] **BalanceCollector 無輪次識別:遲到的 `##` 可 flush 空集合全量蓋部位**(review C2/W2,
