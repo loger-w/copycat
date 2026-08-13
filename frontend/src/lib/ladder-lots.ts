@@ -3,8 +3,15 @@
  *  兩個 container 原本各留一份逐字相同的 `aggregateLots`(stkfut-contracts R2-4 抽
  *  LadderView 時的遺留),本檔把它合一後擴充「已成交量」。
  *
- *  期貨梯不走這裡(`lib/futures-ladder.ts::splitMyLots`,不分買賣側),但兩邊的
- *  qty / filled / seqs 口徑必須逐條相同 —— 改一邊就要改另一邊。
+ *  期貨梯不走這裡(`lib/futures-ladder.ts::splitMyLots`)。兩邊的 **qty / filled 算式**
+ *  與 **seqs 收集規則**必須一致 —— 改一邊就要改另一邊 —— 但有兩處刻意的差異:
+ *
+ *  1. 本函式分買賣側輸出兩張 map;`splitMyLots` 不分側(期貨梯是單一紅方格,
+ *     spec auto-default 第 4 條)。
+ *  2. 本函式對 `buy_sell` 非 `"B"`/`"S"` 的單**整筆跳過**(連 seq 都不收,因為無側
+ *     可歸);`splitMyLots` 根本不看 `buy_sell`。該態僅在「刪單失敗回報先到、原單
+ *     欄位尚未補齊」的極罕留 null 情形出現,現股梯少一個刪單入口(委託列表仍在)
+ *     優於歸錯側。
  */
 import type { CapitalOrder } from "@/types";
 
@@ -45,7 +52,10 @@ export function ymdWindow(now: Date, offsets: readonly number[]): Set<string> {
  *
  *  `excludeUnit`:現股梯傳 `"股"` 把零股單整筆排除 —— 張梯混進零股單量級差一千倍。
  *  期貨 / 個股期梯不傳(契約碼含英文字母、與股號零碰撞,比對鍵已足;整筆 unit 白名單
- *  會誤殺 market 缺值 fallback 成 "張" 的期貨單,連刪單入口都砍掉)。 */
+ *  會誤殺 market 缺值 fallback 成 "張" 的期貨單,連刪單入口都砍掉)。
+ *  ⚠ `unit === "股"` 實際涵蓋的是**零股 ∪ 未知 market**(store `_to_record` 的 else
+ *  是 catch-all),寬於「排除零股」的字面承認面;現股梯靠第一道股號比對鍵二次擋住
+ *  未知 market 的契約碼單,所以擴大的那一塊落不到畫面上。 */
 export function aggregateLots(
   orders: CapitalOrder[] | undefined,
   key: string | null,
