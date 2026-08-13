@@ -14,7 +14,10 @@ const GROUPS: Group[] = [
 ];
 
 function quote(over: Partial<WatchlistQuote> = {}): WatchlistQuote {
-  return { p: null, chg_pct: null, vol: null, ref: null, upper: null, lower: null, no_data: false, ...over };
+  return {
+    p: null, chg_pct: null, vol: null, ref: null, upper: null, lower: null, no_data: false, trial: false,
+    ...over,
+  };
 }
 
 interface StateOver {

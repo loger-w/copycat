@@ -85,6 +85,7 @@ const QUOTES = {
     upper: 2_550_000,
     lower: 2_090_000,
     no_data: false,
+    trial: false,
   },
   "5483": {
     p: null,
@@ -94,9 +95,19 @@ const QUOTES = {
     upper: null,
     lower: null,
     no_data: true,
+    trial: false,
   },
   // 3231:漲跌停不可得(舊後端 / 無漲跌幅商品)—— 一律不亮,不猜
-  "3231": { p: 100_000, chg_pct: 0.5, vol: 10, ref: null, upper: null, lower: null, no_data: false },
+  "3231": {
+    p: 100_000,
+    chg_pct: 0.5,
+    vol: 10,
+    ref: null,
+    upper: null,
+    lower: null,
+    no_data: false,
+    trial: false,
+  },
 };
 
 function sidebar() {
@@ -835,6 +846,7 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
         upper: null,
         lower: null,
         no_data: false,
+        trial: false,
       },
     };
     const { container } = wrap(
@@ -859,6 +871,7 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
         upper: null,
         lower: null,
         no_data: false,
+        trial: false,
       },
     };
     const { container } = wrap(
@@ -874,5 +887,49 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
     sidebar();
     await waitGroups();
     expect(screen.getAllByText("無資料").length).toBeGreaterThan(0);
+  });
+});
+
+// 🟢 試撮/緩撮標示(SC-1)。`trial` 是後端每次組 payload 現算的時間窗旗標
+// (08:30–09:00 / 13:25–13:30 台北),前端只負責顯示,不自己判斷時間。
+describe("WatchlistSidebar 緩撮標示(SC-1)", () => {
+  function renderWith(over: Partial<typeof QUOTES>) {
+    return wrap(
+      <WatchlistSidebar active={null} onSelect={() => {}} quotes={{ ...QUOTES, ...over }} />,
+    );
+  }
+
+  it("trial=true → 代號右側出現「(緩)」,且與代號同一列", async () => {
+    const { container } = renderWith({ "2330": { ...QUOTES["2330"], trial: true } });
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
+    const badge = within(row).getByTestId("wl-trial-2330");
+    expect(badge.textContent).toBe("(緩)");
+    // **同一列**才是這條的重點:第一行原本是 flex-col 內單一 span,直接後綴 badge 會
+    // 換行把列撐高(ROW_H 固定 → 名稱被裁)。斷言 badge 與代號共用同一個 flex row 父層,
+    // 直接鎖住「包一層 items-baseline 的 row」這個落點,而不是只驗「badge 存在」。
+    const codeSpan = within(row).getByText("2330");
+    expect(badge.parentElement).toBe(codeSpan.parentElement);
+    // 中性警示色(D5):不可落到漲跌(bull/bear)或 accent 色系
+    const cls = badge.getAttribute("class") ?? "";
+    expect(cls).toContain("amber");
+    expect(cls).not.toContain("bull");
+    expect(cls).not.toContain("bear");
+  });
+
+  it("trial=false(窗外)→ 不出現", async () => {
+    const { container } = renderWith({});
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
+    expect(within(row).queryByTestId("wl-trial-2330")).toBeNull();
+    expect(within(row).queryByText("(緩)")).toBeNull();
+  });
+
+  it("no_data 列不標(SC-1)—— 窗內 payload 的 trial 照算 true", async () => {
+    const { container } = renderWith({ "5483": { ...QUOTES["5483"], trial: true } });
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-5483"]') as HTMLElement;
+    expect(within(row).getByText("無資料")).toBeTruthy();
+    expect(within(row).queryByTestId("wl-trial-5483")).toBeNull();
   });
 });

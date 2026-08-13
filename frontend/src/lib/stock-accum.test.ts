@@ -27,6 +27,27 @@ describe("fromSnapshot", () => {
   });
 });
 
+// 🟢 緩撮旗標(SC-2 的種子)。snapshot 是主圖 accum 的基底 —— 開頁就在窗內時
+// badge 要立刻在,不能等到下一則 watchlist_quote 才亮。
+describe("fromSnapshot 的 trial", () => {
+  it("snapshot 帶 trial → 原樣帶入", () => {
+    expect(fromSnapshot({ ...SNAP, trial: true }).trial).toBe(true);
+  });
+
+  it("snapshot 缺 trial(舊後端)→ false,不是 undefined", () => {
+    const acc = fromSnapshot(SNAP);
+    expect(acc.trial).toBe(false);
+  });
+
+  it("applyTick 保留 trial(tick 不帶這個欄位,spread 不可漏)", () => {
+    const acc = fromSnapshot({ ...SNAP, trial: true });
+    const next = applyTick(acc, {
+      type: "tick", code: "2330", t: "09:02:00.000", p: 2_385_000, q: 1, side: "outer", seq: 4,
+    });
+    expect(next.trial).toBe(true);
+  });
+});
+
 describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
   it("snapshot 的 high / low 讀 top-level(不是 meta)", () => {
     const acc = fromSnapshot({ ...SNAP, high: 2_395_000, low: 2_370_000 });
