@@ -83,6 +83,15 @@ function futOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
   };
 }
 
+/** 動態 YYYYMMDD:已成交量的日期界每 render 以 `new Date()` 算(個股期梯 = ±1 日窗,
+ *  夜盤跨午夜的 date 語意未實證),fixture 寫死過去日的話徽章案取不到 filled(spec A6)。 */
+function ymd(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
   return {
     market: "fut",
@@ -284,14 +293,84 @@ describe("StkfutLadder 掛單紅方格(R2-4)", () => {
     });
     render(ladder());
     const buyLot = await screen.findByLabelText("刪 100 買單");
-    expect(buyLot.textContent).toBe("4"); // 2 + (3-1);他契約與現股單不計入
-    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1");
+    expect(buyLot.textContent).toBe("4(1)"); // 未成交 2 + (3-1) / 已成交 1;他契約與現股單不計入
+    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1(0)");
     fireEvent.click(buyLot);
     await waitFor(() => expect(cancelBodies.length).toBe(2));
     expect(cancelBodies).toMatchObject([
       { seq_no: "F01", market: "fut" },
       { seq_no: "F02", market: "fut" },
     ]);
+  });
+});
+
+describe("StkfutLadder 已成交徽章(SC-3)", () => {
+  it("全成交 → `(N)` 徽章、非 button、點擊不送 cancel", async () => {
+    const cancelBodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/cancel": (init) => {
+        cancelBodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            futOrder({
+              seq_no: "F10",
+              price: 100,
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    const badge = await screen.findByTestId("ladder-filled-lot");
+    expect(badge.textContent).toBe("(2)");
+    expect(badge.tagName).toBe("SPAN");
+    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
+    fireEvent.click(badge);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(cancelBodies.length).toBe(0);
+  });
+
+  /** 個股期梯是 ±1 日窗(現股梯嚴格今日):夜盤的 date 語意未實證,兩種假設都要涵蓋 */
+  function renderFilledOn(date: string) {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            // 同步錨:orders query 未回時整梯也空 —— 沒有這筆對照單,「查無徽章」恆綠
+            futOrder({ seq_no: "F99", buy_sell: "S", price: 100.5, order_qty: 1 }),
+            futOrder({
+              seq_no: "F11",
+              price: 100,
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date,
+            }),
+          ],
+        }),
+    });
+    return render(ladder());
+  }
+
+  it("日期界 ±1 日窗:昨日的終態單仍計入(夜盤跨午夜)", async () => {
+    renderFilledOn(ymd(-1));
+    expect((await screen.findByTestId("ladder-filled-lot")).textContent).toBe("(2)");
+  });
+
+  it("日期界外(前 5 日)的終態單 → 無徽章", async () => {
+    renderFilledOn(ymd(-5));
+    await screen.findByLabelText("刪 100.5 賣單");
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
   });
 });
 

@@ -82,6 +82,15 @@ function capitalOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
   };
 }
 
+/** 動態 YYYYMMDD:已成交量的日期界以 `new Date()` 每 render 算(現股梯 = 嚴格今日),
+ *  fixture 寫死過去日的話終態徽章案永遠取不到 filled(spec A6)。 */
+function ymd(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function capitalPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
   return {
     market: "sec",
@@ -462,8 +471,8 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
     });
     render(ladder());
     const buyLot = await screen.findByLabelText("刪 100 買單");
-    expect(buyLot.textContent).toBe("4"); // 2 + (3-1)
-    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1");
+    expect(buyLot.textContent).toBe("4(1)"); // 未成交 2 + (3-1) / 已成交 1
+    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1(0)");
     expect(screen.queryByLabelText("刪 99.9 買單")).toBeNull();
     fireEvent.click(buyLot);
     await waitFor(() => expect(cancelBodies.length).toBe(2));
@@ -471,6 +480,144 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
       { seq_no: "001", market: "sec" },
       { seq_no: "002", market: "sec" },
     ]);
+  });
+});
+
+describe("PriceLadder 已成交徽章(SC-2)", () => {
+  /** 同價全部成交(終態單)→ 無 seq 可刪 → 不可點徽章;紅方格(button)必須消失 */
+  it("全成交 → `(N)` 徽章、非 button、點擊不送 cancel", async () => {
+    const cancelBodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/cancel": (init) => {
+        cancelBodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            capitalOrder({
+              seq_no: "010",
+              price: 100,
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    const badge = await screen.findByTestId("ladder-filled-lot");
+    expect(badge.textContent).toBe("(2)");
+    expect(badge.tagName).toBe("SPAN");
+    expect(badge.className).toContain("pointer-events-none");
+    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
+    fireEvent.click(badge);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(cancelBodies.length).toBe(0);
+    // 徽章佔位不吃掉同列點價鈕(R8:鈕變窄是承認的偏差,不可點才是 bug)
+    expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("部分成交後刪單 → 徽章留下已成交量(成交是事實)", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            capitalOrder({
+              seq_no: "011",
+              price: 100,
+              order_qty: 5,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "已刪單",
+              date: ymd(),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    expect((await screen.findByTestId("ladder-filled-lot")).textContent).toBe("(2)");
+  });
+
+  /** 「查無」斷言的同步錨:orders query 未回時整梯也是空的 —— 沒有這筆對照單,
+   *  三個 absence 案在「資料還沒到」的瞬間就恆綠(vacuous)。 */
+  const ANCHOR = capitalOrder({ seq_no: "099", buy_sell: "S", price: 100.5, order_qty: 1 });
+
+  it("失敗 / 退單(filled 0)→ 零痕跡(無徽章也無紅方格)", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            ANCHOR,
+            capitalOrder({
+              seq_no: "012",
+              price: 100,
+              order_qty: 2,
+              filled_qty: 0,
+              actionable: false,
+              status_label: "失敗",
+              date: ymd(),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    await screen.findByLabelText("刪 100.5 賣單");
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
+    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
+  });
+
+  it("終態單 date=昨日 → 無徽章(現股梯嚴格今日,跨日幽靈不長出來)", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            ANCHOR,
+            capitalOrder({
+              seq_no: "013",
+              price: 100,
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(-1),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    await screen.findByLabelText("刪 100.5 賣單");
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
+  });
+
+  it("零股單(unit=股)整筆不上梯 —— 張梯不混單位(R6)", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            ANCHOR,
+            capitalOrder({ seq_no: "014", price: 100, order_qty: 1_000, unit: "股" }),
+            capitalOrder({
+              seq_no: "015",
+              price: 100,
+              order_qty: 500,
+              filled_qty: 500,
+              unit: "股",
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(),
+            }),
+          ],
+        }),
+    });
+    render(ladder());
+    await screen.findByLabelText("刪 100.5 賣單");
+    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
   });
 });
 

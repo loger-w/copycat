@@ -64,7 +64,7 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
       ...wide,
       bids: [{ priceMilli: 22_999_000, qty: 45 }],
       asks: [{ priceMilli: 23_001_000, qty: 88 }],
-      myLots: [{ priceMilli: 22_998_000, qty: 3, seqNos: ["A1", "A2"] }],
+      myLots: [{ priceMilli: 22_998_000, qty: 3, filled: 2, seqNos: ["A1", "A2"] }],
       rows: 5,
     });
     const at = (p: number) => rows.find((r) => r.priceMilli === p)!;
@@ -72,10 +72,13 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
     expect(at(23_001_000).askQty).toBe(88);
     expect(at(22_998_000).myQty).toBe(3);
     expect(at(22_998_000).mySeqNos).toEqual(["A1", "A2"]);
+    // 已成交量也要烘進 row(SC-4:紅方格文字 `未成交(已成交)` 的來源)
+    expect(at(22_998_000).myFilled).toBe(2);
     expect(at(23_000_000).bidQty).toBe(0);
     expect(at(23_000_000).askQty).toBe(0);
     expect(at(23_000_000).myQty).toBe(0);
     expect(at(23_000_000).mySeqNos).toEqual([]);
+    expect(at(23_000_000).myFilled).toBe(0);
   });
 
   it("center 非 tick 對齊 → snap down 到合法檔位再置中", () => {
@@ -116,6 +119,11 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
 });
 
 describe("splitMyLots 該契約活單按價位聚合", () => {
+  const TODAY = "20260813";
+  const YESTERDAY = "20260812";
+  /** 期貨梯口徑 = ±1 日窗(夜盤跨午夜語意未實證,兩種假設皆涵蓋) */
+  const WINDOW = new Set([YESTERDAY, TODAY, "20260814"]);
+
   const o = (over: Partial<FutOrderSource>): FutOrderSource => ({
     seq_no: "S1",
     stock_no: "TXFI6",
@@ -124,6 +132,7 @@ describe("splitMyLots 該契約活單按價位聚合", () => {
     order_qty: 2,
     filled_qty: 0,
     actionable: true,
+    date: TODAY,
     ...over,
   });
 
@@ -135,29 +144,62 @@ describe("splitMyLots 該契約活單按價位聚合", () => {
         o({ seq_no: "C", price: 22_990, order_qty: 5 }),
       ],
       "TXFI6",
+      WINDOW,
     );
     expect(lots).toEqual([
-      { priceMilli: 23_000_000, qty: 3, seqNos: ["A", "B"] },
-      { priceMilli: 22_990_000, qty: 5, seqNos: ["C"] },
+      { priceMilli: 23_000_000, qty: 3, filled: 1, seqNos: ["A", "B"] },
+      { priceMilli: 22_990_000, qty: 5, filled: 0, seqNos: ["C"] },
     ]);
   });
 
-  it("過濾:他契約 / 非 actionable / 殘量 0 / 市價(price=null)全排除", () => {
+  it("過濾:他契約 / 市價(price=null)/ 終態且日期界外 全排除;actionable 殘 0 仍出 entry", () => {
     const lots = splitMyLots(
       [
         o({ seq_no: "X", stock_no: "MXFI6" }),
-        o({ seq_no: "Y", actionable: false }),
+        o({ seq_no: "Y", actionable: false, date: "20260701" }),
+        // actionable 且殘 0(N 未到):qty 不計但 seq 要收 —— 刪單入口不得消失
         o({ seq_no: "Z", order_qty: 2, filled_qty: 2 }),
         o({ seq_no: "W", price: null }),
       ],
       "TXFI6",
+      WINDOW,
+    );
+    expect(lots).toEqual([{ priceMilli: 23_000_000, qty: 0, filled: 2, seqNos: ["Z"] }]);
+  });
+
+  it("終態全成交單:日期界內 → filled entry 且 seqNos 空;界外 / date=null → 零痕跡", () => {
+    const inWindow = splitMyLots(
+      [o({ seq_no: "F", actionable: false, order_qty: 2, filled_qty: 2, date: YESTERDAY })],
+      "TXFI6",
+      WINDOW,
+    );
+    expect(inWindow).toEqual([{ priceMilli: 23_000_000, qty: 0, filled: 2, seqNos: [] }]);
+    const stale = splitMyLots(
+      [o({ seq_no: "F", actionable: false, order_qty: 2, filled_qty: 2, date: "20260701" })],
+      "TXFI6",
+      WINDOW,
+    );
+    expect(stale).toEqual([]);
+    const nodate = splitMyLots(
+      [o({ seq_no: "F", actionable: false, order_qty: 2, filled_qty: 2, date: null })],
+      "TXFI6",
+      WINDOW,
+    );
+    expect(nodate).toEqual([]);
+  });
+
+  it("失敗 / 退單(終態、filled 0)→ 零痕跡", () => {
+    const lots = splitMyLots(
+      [o({ seq_no: "E", actionable: false, order_qty: 2, filled_qty: 0 })],
+      "TXFI6",
+      WINDOW,
     );
     expect(lots).toEqual([]);
   });
 
   it("價 float → 毫點 round(100.1 × 1000 的浮點殘差收斂)", () => {
-    const lots = splitMyLots([o({ price: 100.1 })], "TXFI6");
-    expect(lots).toEqual([{ priceMilli: 100_100, qty: 2, seqNos: ["S1"] }]);
+    const lots = splitMyLots([o({ price: 100.1 })], "TXFI6", WINDOW);
+    expect(lots).toEqual([{ priceMilli: 100_100, qty: 2, filled: 0, seqNos: ["S1"] }]);
   });
 });
 
