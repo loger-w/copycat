@@ -301,6 +301,34 @@ async def test_heal_backs_off_when_no_progress() -> None:
         await eng.close()
 
 
+async def test_heal_throttled_between_attempts() -> None:
+    """lock(review T-2):heal 節流是 load-bearing —— 沒有它,推播死時 IX0001 每
+    ~retry_secs 被 UNSUB→SUB 一次(重掛正是「訂閱成功零推播」家族的觸發面)。
+    預設 _heal_secs=60 下,0.3s 內只允許 start + 首次 heal 兩次抓取。"""
+    fake = FakeIndexSource()
+    eng = make_engine(fake, in_watch_window=lambda: True)  # _heal_secs 維持預設 60
+    await eng.start()
+    try:
+        await asyncio.sleep(0.3)
+        assert fake.fetch_minutes_calls == 2
+    finally:
+        await eng.close()
+
+
+async def test_heal_stops_when_day_complete() -> None:
+    """lock(review T-3 停止條件):尾窗內 minutes 已覆蓋到 1330 = 完整,不得再觸發
+    (牆鐘期望封頂 13:30;沒有封頂的話 13:35 時 lag=5 會空轉重抓)。"""
+    fake = FakeIndexSource(day_minutes={"1330": 7})
+    eng = make_engine(fake, in_watch_window=lambda: False, now_fn=lambda: _dt.time(13, 35))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        await asyncio.sleep(0.2)
+        assert fake.fetch_minutes_calls == 1  # 只有 start 那一次
+    finally:
+        await eng.close()
+
+
 async def test_minutes_lag_heal_not_triggered_when_current() -> None:
     """推播健康(minutes 跟上牆鐘)→ 自癒不得空轉重抓(fetch 只有 start 那一次)。"""
     fake = FakeIndexSource()
