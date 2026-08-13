@@ -325,7 +325,24 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               漲幅刻意不跟著放大:四個元素同權重反而更難掃。
               `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
           <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
-            <span className="font-mono text-base text-ink">{code}</span>
+            {/* 代號 + 緩撮標示同一條 baseline(SC-1)。**外層必須是 flex row**:這一格是
+                flex-col,直接把 badge 後綴在 `<span>{code}</span>` 之後會多佔一行 ——
+                列高由 ROW_H 以 inline style 固定,多的那行等於把名稱擠出可視範圍。
+                `q?.trial && !q?.no_data`:窗內的 payload 對無資料檔照算 trial=true,
+                而那一列右側顯示的是「無資料」,再標「(緩)」等於對著沒有報價的檔
+                講撮合狀態。amber = 中性警示,刻意不用 bull/bear(漲跌方向)或 accent
+                (現價線)—— 試撮不是方向性狀態。 */}
+            <span className="flex items-baseline gap-1">
+              <span className="font-mono text-base text-ink">{code}</span>
+              {q?.trial && !q?.no_data ? (
+                <span
+                  data-testid={`wl-trial-${code}`}
+                  className="shrink-0 whitespace-nowrap text-xs text-amber-400"
+                >
+                  (緩)
+                </span>
+              ) : null}
+            </span>
             {name !== undefined ? (
               <span className="truncate text-xs text-ink-muted">{name}</span>
             ) : null}
