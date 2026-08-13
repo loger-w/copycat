@@ -474,3 +474,73 @@ export function overlayLines(
   }
   return lines;
 }
+
+/** MA 價位標籤的最小**中心距**(不是字高)。字高 @0.5625rem ≈ 9px,再留 1px 呼吸。
+ *
+ *  文字以 `dy="0.35em"` 置中於 `y`,所以佈局層一律以「中心」為單位算距離 ——
+ *  baseline 與中心混用的失效樣態是兩顆標籤看起來仍黏在一起,而數字上「距離夠」。 */
+export const EDGE_LABEL_H = 10;
+
+export interface EdgePriceLabel {
+  y: number;
+  priceMilli: number;
+  level: "ma5" | "ma20";
+}
+
+/** MA5 / MA20 的右緣價位標籤佈局(SC-1/SC-3)。
+ *
+ *  只管 MA:CDP 五線在右緣帶內已有 `價位*`,VWAP 走**就地標示**(末點右側)不經此函式。
+ *
+ *  `obstacles` = 已經佔住那條 y 的固定文字(呼叫端傳右緣區的極值文字 baseline)。
+ *  它們**不可動** —— 極值標記承載的是「最高/最低發生在哪一分鐘」,推開它就是改資訊;
+ *  能讓位的只有 MA 標籤(它的 y 只是「這條線在哪」,而線本身照畫)。
+ *
+ *  佈局 = 由上而下掃一遍推開重疊(對 obstacle 一律往下讓,方向固定才決定性),
+ *  再由下而上回推處理底部溢出,最後 clamp 進 `bounds`。標籤數 ≤ 2,不需要更聰明的解法。 */
+export function edgePriceLabels(
+  oLines: readonly OverlayLine[],
+  obstacles: readonly number[],
+  bounds: { top: number; bottom: number },
+): EdgePriceLabel[] {
+  const labels: EdgePriceLabel[] = [];
+  for (const l of oLines) {
+    // level 逐個列舉而不是 `!== cdp 系`:未來多一種 overlay 時,新 level 會**預設不進**
+    // 這組標籤(要進就得顯式加),而不是靜默多出一顆沒人設計過位置的文字。
+    if (l.level === "ma5" || l.level === "ma20") {
+      labels.push({ y: l.y, priceMilli: l.priceMilli, level: l.level });
+    }
+  }
+  if (labels.length === 0) return [];
+  // 排序穩定(Array#sort 規範保證):同 y 時維持 oLines 的 ma5 → ma20 順序,
+  // 不因浮點比較而讓兩顆標籤在兩次 render 之間互換上下。
+  labels.sort((a, b) => a.y - b.y);
+  const fixed = [...obstacles].sort((a, b) => a - b);
+
+  let floor = bounds.top;
+  for (const l of labels) {
+    let y = Math.max(l.y, floor);
+    // obstacles 由上而下逐一檢查:讓開第一個之後可能撞上第二個,所以不能只查最近的那個
+    for (const o of fixed) if (Math.abs(y - o) < EDGE_LABEL_H) y = o + EDGE_LABEL_H;
+    l.y = y;
+    floor = y + EDGE_LABEL_H;
+  }
+
+  // 回推:上面那一輪只會把標籤往下推,推到繪圖區外就等於沒畫。由下而上再走一遍,
+  // 讓最下面那顆先回到界內,上面的跟著讓位(對 obstacle 這時改往上讓)。
+  let ceil = bounds.bottom;
+  for (let i = labels.length - 1; i >= 0; i -= 1) {
+    const l = labels[i]!;
+    let y = Math.min(l.y, ceil);
+    for (let k = fixed.length - 1; k >= 0; k -= 1) {
+      const o = fixed[k]!;
+      if (Math.abs(y - o) < EDGE_LABEL_H) y = o - EDGE_LABEL_H;
+    }
+    l.y = y;
+    ceil = y - EDGE_LABEL_H;
+  }
+
+  // 最後一道 clamp:標籤比可用空間還多(退化域 + 一堆 obstacle)時,寧可讓兩顆貼近
+  // 也不讓任何一顆被 viewBox 裁掉 —— 裁掉是完全靜默的,貼近至少讀得出有兩個數字。
+  for (const l of labels) l.y = Math.min(Math.max(l.y, bounds.top), bounds.bottom);
+  return labels;
+}

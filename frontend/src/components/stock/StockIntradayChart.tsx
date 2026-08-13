@@ -14,6 +14,7 @@ import type { StockAccum } from "@/lib/stock-accum";
 import {
   buildEnergyBars,
   buildIntradayGeometry,
+  edgePriceLabels,
   lastPoint,
   LOW_DECIDED_PCT,
   minuteToX,
@@ -102,6 +103,15 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
 /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
 const MARK_LABEL_TOP = 9;
 
+/** 圖內價位文字的寬度估值 @0.5625rem(最寬內容「1005.0」≈ 34px,同 `R_AXIS_W` 的推導)。
+ *
+ *  兩個用途:(a) VWAP 就地標籤的 x 上界 —— 末點貼右界時整塊字要留在繪圖區內;
+ *  (b) 極值文字算不算「落在右緣區」(進 MA 標籤的避讓集)的判準,取一個標籤寬的餘裕。 */
+const EDGE_LABEL_W = 34;
+/** 極值文字 `textAnchor="middle"` 半寬 + 呼吸;超過 `w − R_AXIS_W − MARK_LABEL_W` 的
+ *  極值文字才與 MA 價位標籤有水平重疊,才需要進避讓集(D3/review F2)。 */
+const MARK_LABEL_W = 40;
+
 /** 漲跌停亮燈色塊的高度(項 5)。
  *
  *  **必須 ≤ 2 × PAD_Y(8)**(Phase 5 review P2):最上格的 `t.y = PAD_Y = 4`,色塊置中後
@@ -144,6 +154,37 @@ const ChartStatic = memo(function ChartStatic({
   /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
   plotBottom: number;
 }) {
+  // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
+  // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
+  // 兩段文字疊在一起,沒有任何測試會紅。
+  const markLabels = ([
+    ["day-high", g.highMark, "up"],
+    ["day-low", g.lowMark, "down"],
+  ] as const).flatMap(([id, mark, dir]) =>
+    mark === null
+      ? []
+      : [{
+          id,
+          mark,
+          y: markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom }),
+        }],
+  );
+  // MA 價位標籤的固定 obstacle = **落在右緣區的**極值文字(D3/review F2)。
+  // 極值文字在左半場時與 MA 標籤的 x 範圍不相交,納入避讓只會讓標籤無故位移。
+  const maObstacles = markLabels
+    .filter((m) => m.mark.x > w - R_AXIS_W - MARK_LABEL_W)
+    .map((m) => m.y);
+  // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
+  // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
+  const maLabels = edgePriceLabels(oLines, maObstacles, {
+    top: MARK_LABEL_TOP,
+    bottom: plotBottom - 5,
+  });
+  // VWAP 就地標示在末點右側(D2/review F1):VWAP 不是橫貫全寬的水平線,盤中末點在
+  // 畫面中段,右緣釘標籤會與線脫節 600 多 px。toggle 關 / 尚無成交 → 不畫。
+  const vwapEnd = showVwap ? (g.vwapLine[g.vwapLine.length - 1] ?? null) : null;
+  // POC(域內量最大的價位);vp toggle 關 → vpBars 空 → 自然沒有
+  const pocBar = vpBars.find((b) => b.poc) ?? null;
   return (
     <g>
       {/* 平盤上下的填色與雙色價線共用這兩個 clip(SC-2)。
@@ -335,11 +376,7 @@ const ChartStatic = memo(function ChartStatic({
           移到價線之上後,實心會把線在極值那一點截斷,空心則是套在線上。
           顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
           其日高仍低於昨收,塗紅等於假陳述。 */}
-      {([
-        ["day-high", g.highMark, "up"],
-        ["day-low", g.lowMark, "down"],
-      ] as const).map(([id, mark, dir]) => {
-        if (mark === null) return null;
+      {markLabels.map(({ id, mark, y }) => {
         // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止圓被裁,不是把它趕出價位帶
         // —— 取繪圖區的話 09:00 附近的極值會被推開,而標記的 x 承載的是「哪一分鐘」
         // 的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
@@ -362,7 +399,7 @@ const ChartStatic = memo(function ChartStatic({
             <text
               data-testid={`${id}-label`}
               x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
-              y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
+              y={y}
               textAnchor="middle"
               className={cn(tone, "stroke-surface")}
               strokeWidth={2}
@@ -374,6 +411,62 @@ const ChartStatic = memo(function ChartStatic({
           </g>
         );
       })}
+      {/* MA 即時價位數值(SC-1)。名稱 "MA5"/"MA20" 仍在右緣帶內(白名單 2),數值畫在
+          **繪圖區內側右緣** —— R_AXIS_W=40 的帶裝不下「2330」再加名稱兩份內容。
+          口徑 `fmtTickPrice`(可下單價位,round3 B4)且**不帶 `*`**:`*` 是 CDP 的記號,
+          兩者靠色(黃 / 紫 vs 紅綠金)與後綴分辨(review F3)。 */}
+      {maLabels.map((l) => (
+        <text
+          key={`ep-${l.level}`}
+          data-testid={`edge-price-${l.level}`}
+          x={w - R_AXIS_W - 2}
+          y={l.y}
+          dy="0.35em"
+          textAnchor="end"
+          className={cn(LEVEL_FILL[l.level], "stroke-surface")}
+          strokeWidth={2}
+          paintOrder="stroke"
+          fontSize="0.5625rem"
+        >
+          {fmtTickPrice(l.priceMilli)}
+        </text>
+      ))}
+      {/* VWAP 即時數值(SC-2)。就地畫在末點右側;`fmt` 不 snap tick —— VWAP 是統計量
+          不是可掛單價(review F3),與說明列的 VWAP 同一口徑。
+          x 的上界留 `EDGE_LABEL_W`:盤末末點恰在繪圖區右界上,`+4` 會把整塊字推進右緣
+          疊線標籤帶甚至出畫布,而那是「畫了但看不到」的靜默失敗。 */}
+      {vwapEnd !== null ? (
+        <text
+          data-testid="edge-price-vwap"
+          x={Math.min(vwapEnd.x + 4, w - R_AXIS_W - EDGE_LABEL_W)}
+          y={vwapEnd.y}
+          dy="0.35em"
+          textAnchor="start"
+          className="fill-ink stroke-surface"
+          strokeWidth={2}
+          paintOrder="stroke"
+          fontSize="0.5625rem"
+        >
+          {fmt(vwapEnd.vwap)}
+        </text>
+      ) : null}
+      {/* POC 價位數值(SC-4)。畫在長條**尖端右側**:尖端的 x 隨量比例走,標籤跟著它
+          才指認得出「變色那根是哪個價位」;釘左緣或塞進 yTicks 都會與長條脫節。
+          與 highlight 同一個 accent 色,halo 一律描邊(白名單 10:不得用底色 rect)。 */}
+      {pocBar !== null ? (
+        <text
+          data-testid="vp-poc-label"
+          x={Y_AXIS_W + pocBar.w + 3}
+          y={pocBar.y + pocBar.h / 2}
+          dy="0.35em"
+          className="fill-accent stroke-surface"
+          strokeWidth={2}
+          paintOrder="stroke"
+          fontSize="0.5625rem"
+        >
+          {fmt(pocBar.priceMilli)}
+        </text>
+      ) : null}
     </g>
   );
 });
