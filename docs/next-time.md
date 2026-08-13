@@ -1,4 +1,20 @@
 
+## 2026-08-13(fix/index-chart-empty-minutes 收尾留尾巴)
+
+- [ ] **`_collect_history` timeout「靜默回空」語意是家族性風險**:本次事故根源之一
+  (`history ... 30.0s 內首頁未備妥,回空` 不 raise → caller 無從排 retry)。index 側已用
+  產出面 lag 偵測繞開,但同一語意的其他 caller(river_backfill 六腿、bars_range 各處)
+  在「TC4 冷啟動忙碌」窗口同樣拿到空結果且無重試 —— river 六腿 08:23 實錄裡 TXF/TWN/SXF
+  三腿同秒 timeout 回空。候選:回傳三態(ok/timeout/empty)或 timeout 專用 exception,
+  逐 caller 決定重試;動基底 `TC4QuoteSource` 需盤 blast radius,獨立輪。
+- [ ] **盤外時段啟動踩 timeout 無自癒**:分時自癒 gate 在 watch window(09:00–13:25),
+  盤後/晚間啟動若 1K 回補 timeout,線缺到次日 09:06 才自癒。實測晚間 TC4 閒時回補快
+  (18:17 啟動無 timeout),風險低;若要覆蓋,detector 改「窗外以 min(now, 13:30) 為
+  期望覆蓋終點」,但要處理休市日恆空的輪詢噪音。
+- [ ] **櫃買(MIS)無回補來源的同症狀**:MIS 從開盤即死透的日子,otc 分時線整天空且
+  引擎無從回補(已文件化降級)。唯一可做的是 UI 分態文案(「櫃買快照源中斷」vs 現在
+  的無線靜默),順下輪前端批。
+
 ## 2026-08-12(mod/signal-hub-decouple XR-3 收尾留尾巴)
 
 - [ ] **前端 tc4="down" 文案分態**(review R2-6 accepted 偏差):StockPage 對
