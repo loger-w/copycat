@@ -1,0 +1,12 @@
+﻿== happy: GET /api/stock/state/2330(現在 19:22:30= 試撮窗外,期望 trial=false)==
+trial 鍵存在: True  值: False
+code=2330 no_data=False seq=11
+== edge1: POST /api/stock/group-state 形狀零改動(白名單 6,期望不含 trial)==
+raw(前 300): {"detail":"Method Not Allowed"}
+group-state 含 'trial': False
+== edge2: 不存在股號 → {"detail":{"error":"BAD_CODE"}}|HTTP 400 ==
+== regression1: /api/health = {"git_sha":"94382944","git_dirty":true,"started_at":"2026-08-13T19:22:08"} ==
+== regression2: /api/stock/watchlist = {"codes":["2330","2317"],"groups":[]} ==
+== edge1(補正): GET /api/stock/group-state?codes=2330(白名單 6,期望不含 trial)==
+raw(前 300): {"states":{"2330":{"minutes":{"540":{"c":1206500,"v":90,"i":90,"o":0,"u":0,"h":1206500,"l":1206500},"541":{"c":1205450,"v":97,"i":0,"o":97,"u":0,"h":1205450,"l":1205450},"542":{"c":1204100,"v":104,"i":0,"o":104,"u":0,"h":1204100,"l":1204100},"543":{"c":1202700,"v":111,"i":111,"o":0,"u":0,"h":1202700
+group-state 含 'trial': False
