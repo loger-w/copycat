@@ -4,6 +4,8 @@ import type { MinuteAgg } from "@/lib/stock-accum";
 import {
   buildEnergyBars,
   buildIntradayGeometry,
+  EDGE_LABEL_H,
+  edgePriceLabels,
   minuteToX,
   overlayLines,
   PAD_Y,
@@ -17,6 +19,8 @@ import {
   X_LABEL_H,
   X_START_MIN,
   Y_AXIS_W,
+  type OverlayLevel,
+  type OverlayLine,
 } from "@/lib/stock-intraday-svg";
 
 function minutes(entries: [number, Partial<MinuteAgg>][]): Map<number, MinuteAgg> {
@@ -949,5 +953,113 @@ describe("x 窗參數化(D9)", () => {
       STKFUT_WINDOW,
     );
     expect(g.energyBars).toEqual(sub.bars);
+  });
+});
+
+// 🟢 SC-1 / SC-3:MA 即時價位標籤的右緣佈局(mod/intraday-ma-poc-labels)。
+//
+// 佈局規則是純 1D 幾何,收在 lib 才測得到「兩顆標籤疊在一起」與「被極值文字壓住」——
+// 那兩個症狀在元件層只看得出「有 text 節點」,座標對不對完全沒有訊號。
+describe("edgePriceLabels(SC-1/SC-3)", () => {
+  /** 呼叫端(元件)實際傳的那組界:上 = 極值文字的 baseline 上界、下 = 繪圖區底再留 5px */
+  const BOUNDS = { top: 9, bottom: 246 };
+
+  function line(level: OverlayLevel, y: number, priceMilli = 2_330_000): OverlayLine {
+    return { level, y, priceMilli };
+  }
+
+  it("只收 ma5 / ma20;CDP 五線不入(它們在右緣帶內已有 `價位*`)", () => {
+    const labels = edgePriceLabels(
+      [
+        line("ah", 20),
+        line("nh", 40),
+        line("cdp", 60),
+        line("nl", 80),
+        line("al", 100),
+        line("ma5", 120, 2_330_000),
+        line("ma20", 160, 2_310_000),
+      ],
+      [],
+      BOUNDS,
+    );
+    expect(labels.map((l) => l.level)).toEqual(["ma5", "ma20"]);
+  });
+
+  it("空輸入 / 只有 CDP → []", () => {
+    expect(edgePriceLabels([], [], BOUNDS)).toEqual([]);
+    expect(edgePriceLabels([line("cdp", 60)], [], BOUNDS)).toEqual([]);
+  });
+
+  it("priceMilli 與 level 原樣帶出(顯示文字的口徑留在呼叫端)", () => {
+    const labels = edgePriceLabels([line("ma5", 120, 2_331_237)], [], BOUNDS);
+    expect(labels[0]!.priceMilli).toBe(2_331_237);
+    expect(labels[0]!.level).toBe("ma5");
+  });
+
+  it("相距夠遠 → y 原樣不動(不無故位移)", () => {
+    const labels = edgePriceLabels([line("ma5", 50), line("ma20", 120)], [], BOUNDS);
+    expect(labels.map((l) => l.y)).toEqual([50, 120]);
+  });
+
+  it("同 y(MA5 === MA20 同價)→ 中心距恰 EDGE_LABEL_H,兩顆各自可讀", () => {
+    const labels = edgePriceLabels(
+      [line("ma5", 100, 2_330_000), line("ma20", 100, 2_330_000)],
+      [],
+      BOUNDS,
+    );
+    // 上下順序取輸入順序(overlayLines 的 ma5 → ma20),不因浮點比較而不決定性
+    expect(labels.map((l) => l.level)).toEqual(["ma5", "ma20"]);
+    expect(labels[1]!.y - labels[0]!.y).toBeCloseTo(EDGE_LABEL_H, 6);
+  });
+
+  it("僅差 3px → 撐開到 EDGE_LABEL_H(上面那顆留原位)", () => {
+    const labels = edgePriceLabels([line("ma5", 100), line("ma20", 103)], [], BOUNDS);
+    expect(labels[0]!.y).toBe(100);
+    expect(labels[1]!.y).toBe(110);
+  });
+
+  it("obstacle(右緣區極值文字)不可動 → MA 讓位,中心距 ≥ EDGE_LABEL_H", () => {
+    const labels = edgePriceLabels([line("ma5", 105)], [100], BOUNDS);
+    expect(labels[0]!.y).not.toBe(105);
+    expect(Math.abs(labels[0]!.y - 100)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    // 讓位方向:先往下(top-down sweep),回推只在底部溢出時發生
+    expect(labels[0]!.y).toBe(110);
+  });
+
+  it("obstacle 夾在兩條 MA 之間 → 兩顆各自讓開,彼此也不疊", () => {
+    const labels = edgePriceLabels([line("ma5", 100), line("ma20", 118)], [115], BOUNDS);
+    for (const l of labels) expect(Math.abs(l.y - 115)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    expect(labels[1]!.y - labels[0]!.y).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+  });
+
+  it("兩個 obstacle 連續擠壓 → 仍逐一讓開(不只避讓第一個)", () => {
+    const labels = edgePriceLabels([line("ma5", 102)], [100, 112], BOUNDS);
+    for (const o of [100, 112]) {
+      expect(Math.abs(labels[0]!.y - o)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    }
+  });
+
+  it("近頂(MA 貼漲停)→ clamp 到 bounds.top", () => {
+    const labels = edgePriceLabels([line("ma5", 2)], [], BOUNDS);
+    expect(labels[0]!.y).toBe(BOUNDS.top);
+  });
+
+  it("近底(MA 貼跌停)→ clamp 到 bounds.bottom", () => {
+    const labels = edgePriceLabels([line("ma5", 400)], [], BOUNDS);
+    expect(labels[0]!.y).toBe(BOUNDS.bottom);
+  });
+
+  it("底部溢出 → 整組回推,兩顆都留在界內且仍不疊", () => {
+    const labels = edgePriceLabels([line("ma5", 240), line("ma20", 244)], [], BOUNDS);
+    for (const l of labels) {
+      expect(l.y).toBeGreaterThanOrEqual(BOUNDS.top);
+      expect(l.y).toBeLessThanOrEqual(BOUNDS.bottom);
+    }
+    expect(labels[1]!.y - labels[0]!.y).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    expect(labels[1]!.y).toBe(BOUNDS.bottom);
+  });
+
+  it("EDGE_LABEL_H 是**中心距**(字高 ≈9px + 1 呼吸),不是字高本身", () => {
+    expect(EDGE_LABEL_H).toBe(10);
   });
 });
