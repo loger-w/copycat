@@ -232,8 +232,11 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
                 {meta?.name ?? ""} <span className="font-mono text-ink-muted">{code}</span>
                 {/* 緩撮標示(SC-2):`contract === null` 才標 —— 期貨合約沒有試撮窗
                     (後端 trial 恆 false),而合約態下畫面上的標的是合約,同畫面側欄的
-                    現貨列照標是正確的(兩者並存)。色系同側欄:amber = 中性警示。 */}
-                {accum?.trial && contract === null ? (
+                    現貨列照標是正確的(兩者並存)。色系同側欄:amber = 中性警示。
+                    `!accum.noData`(code review IC-4):窗內的 payload 對無資料檔照算
+                    trial=true,而側欄那一列(`!q?.no_data`)不標 —— 少了這道,兩個視圖
+                    對同一狀態給相反答案,而且是對沒有任何報價的標的講撮合狀態。 */}
+                {accum?.trial && !accum.noData && contract === null ? (
                   <span data-testid="page-trial" className="text-sm text-amber-400">
                     (緩)
                   </span>

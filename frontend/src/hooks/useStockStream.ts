@@ -65,6 +65,13 @@ interface PendingBook {
   book: StockBook;
 }
 
+/** refetch 交錯期間看到的**最後一則** trial(code review IC-3);同 PendingBook 帶
+ *  instrumentKey 標記 —— 「2330 在試撮窗內」對別檔 / 期貨鍵(窗恆空)不是同一個答案。 */
+interface PendingTrial {
+  key: string;
+  trial: boolean;
+}
+
 interface WsMsg {
   type: string;
   code?: string;
@@ -113,6 +120,11 @@ export function useStockStream(
   //
   // 帶 instrumentKey 標記:切檔撞上 in-flight 時 key 不符即丟,不把 A 的簿蓋到 B 上。
   const pendingBookRef = useRef<PendingBook | null>(null);
+  // refetch 進行中收到的**最後一則** trial(IC-3)。與簿同一個道理:snapshot 的 trial 是
+  // 後端**處理該 request 當下**現算的窗判斷,回來時整份覆蓋 accum —— 送出後才到的翻轉
+  // 會被回捲。被吃掉的那則若是出窗(true→false),header 就掛著假的「(緩)」直到下一次
+  // 全量 refetch(靜市 / 盤前無成交時可能是整個窗),而且零錯誤訊號。
+  const pendingTrialRef = useRef<PendingTrial | null>(null);
 
   /** 取出並清掉暫存的簿。**要經過一層函式**:`refetch` 一開頭就寫 `= null`,而 TS 的
    *  屬性窄化不會被 await / 函式呼叫重置(寫進值的那條路在 WS callback 裡,TS 看不到)
@@ -120,6 +132,13 @@ export function useStockStream(
   const takePendingBook = (): PendingBook | null => {
     const pending = pendingBookRef.current;
     pendingBookRef.current = null;
+    return pending;
+  };
+
+  /** 同 `takePendingBook`(一層函式的理由一模一樣:TS 的屬性窄化 + 只用一次)。 */
+  const takePendingTrial = (): PendingTrial | null => {
+    const pending = pendingTrialRef.current;
+    pendingTrialRef.current = null;
     return pending;
   };
   // 上一則 status 的**真值**(F-1)。WS handler 是 deps `[]` 的閉包讀不到最新 state,
@@ -198,6 +217,7 @@ export function useStockStream(
     refetchingRef.current = true;
     pendingRef.current = [];
     pendingBookRef.current = null;
+    pendingTrialRef.current = null;
     // 非 2xx 與 throw 走同一條復原路徑(F-3);`finally` 讀得到才能與「切檔補發」分岔
     let failed = false;
     try {
@@ -219,6 +239,11 @@ export function useStockStream(
           if (pendingBook !== null && pendingBook.key === current) {
             next = { ...next, book: pendingBook.book };
           }
+          // 交錯期間的最後一則 trial 蓋回 snapshot 凍結的窗判斷(IC-3);key 比對同上。
+          const pendingTrial = takePendingTrial();
+          if (pendingTrial !== null && pendingTrial.key === current) {
+            next = { ...next, trial: pendingTrial.trial };
+          }
           accumRef.current = next;
           setAccum(next);
         }
@@ -235,6 +260,7 @@ export function useStockStream(
       refetchingRef.current = false;
       pendingRef.current = [];
       pendingBookRef.current = null;
+      pendingTrialRef.current = null;
       if (pendingRefetchRef.current || instrumentKeyRef.current !== current) {
         pendingRefetchRef.current = false;
         void refetch();
@@ -251,6 +277,7 @@ export function useStockStream(
     setStkfut(null);
     accumRef.current = null;
     pendingBookRef.current = null; // 舊標的的簿不可跨檔存活(F-2)
+    pendingTrialRef.current = null; // 舊標的的窗態同理(IC-3)
     cancelRetry(); // 舊標的的重試不可跨檔存活(F-3)
     if (instrumentKey === null) return;
     void refetch();
@@ -339,6 +366,15 @@ export function useStockStream(
           // 預覽股(非自選)開頁後的窗轉態只有後端對「現貨主圖碼」的補推帶得進來,
           // 沒有這段就得等下次全量 refetch,badge 遲到整個窗。
           if (msg.code === current) {
+            // refetch 進行中:snapshot 的 trial 是後端**凍結當下**的窗判斷,回來時整份
+            // 覆蓋 accum → 這裡先留最後一則的值,套完 snapshot 之後蓋回去(沿 F-2 樣板)。
+            //
+            // **記進 ref 這半刻意不受下面的去重守門管**:去重看的是 `accumRef`(還是舊
+            // snapshot 的值),而要蓋掉的是**新** snapshot 的值 —— 兩者不同源。同值時多
+            // 蓋一次是 no-op,少記一次就是回捲。
+            if (refetchingRef.current && current !== null) {
+              pendingTrialRef.current = { key: current, trial: q.trial };
+            }
             const acc = accumRef.current;
             if (acc !== null && acc.trial !== q.trial) {
               const next = { ...acc, trial: q.trial };
