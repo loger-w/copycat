@@ -374,15 +374,83 @@ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
     const badge = await screen.findByTestId("ladder-filled-lot");
     expect(badge.textContent).toBe("(2)");
     expect(badge.tagName).toBe("SPAN");
+    // T5:span 不吃點擊靠 className,`fireEvent.click` 在 jsdom 不模擬 pointer-events
+    // → 上面的「不送 cancel」斷言對「忘了加 pointer-events-none」是恆綠的
+    expect(badge.className).toContain("pointer-events-none");
     expect(screen.queryByLabelText("刪 23000 掛單")).toBeNull();
     fireEvent.click(badge);
     await act(async () => {
       await Promise.resolve();
     });
     expect(cancelBodies.length).toBe(0);
+    // R8:徽章佔位讓點價鈕變窄是明文承認的偏差,「同列點價鈕仍可點」才是驗收線
+    expect(screen.getByLabelText("買 23000").hasAttribute("disabled")).toBe(false);
     const cancelAll = screen.getByRole("button", { name: "全撤" });
     expect(cancelAll.hasAttribute("disabled")).toBe(true);
     expect(cancelAll.getAttribute("title")).toBe("無本契約活單");
+  });
+
+  /** T2:`r.myQty > 0 || r.mySeqNos.length > 0` 的後半條無鎖 —— 拿掉它時
+   *  actionable 殘 0 的活單會落進 `r.myFilled > 0` 徽章分支,而 filled 也是 0
+   *  → **整格消失**,刪單入口與可見痕跡一起沒了。 */
+  it("actionable 殘 0 活單 → 紅方格 `0(0)` 可點、全撤鈕非 disabled", async () => {
+    const cancelBodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/order/cancel": (init) => {
+        cancelBodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () =>
+        json({
+          orders: [futOrder({ seq_no: "F12", price: 23_000, order_qty: 0, filled_qty: 0 })],
+        }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    const lot = await screen.findByLabelText("刪 23000 掛單");
+    expect(lot.textContent).toBe("0(0)");
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
+    fireEvent.click(lot);
+    await waitFor(() => expect(cancelBodies.length).toBe(1));
+    expect(cancelBodies).toMatchObject([{ seq_no: "F12", market: "fut" }]);
+    // allSeqNos 收得到這筆 → 全撤鈕必須是活的(徽章案的 disabled 是對照組)
+    expect(screen.getByRole("button", { name: "全撤" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  /** T6:期貨梯的日期界是 ±1 日窗(A3;夜盤跨午夜語意未實證,兩種假設皆涵蓋)。
+   *  lib 層有 `ymdWindow` 的純函式測,但「container 真的把 ±1 窗接進去」沒有鎖 ——
+   *  接成嚴格今日或整個不傳,lib 測照樣全綠。 */
+  it("終態單 date=昨日 → 徽章仍在(±1 日窗);date=5 日前 → 無徽章", async () => {
+    const orders = (date: string) => [
+      futOrder({ seq_no: "F20", price: 22_999, order_qty: 1, filled_qty: 0 }), // 同步錨:活單
+      futOrder({
+        seq_no: "F21",
+        price: 23_000,
+        order_qty: 2,
+        filled_qty: 2,
+        actionable: false,
+        status_label: "全部成交",
+        date,
+      }),
+    ];
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: orders(ymd(-1)) }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    await screen.findByLabelText("刪 22999 掛單");
+    expect(screen.getByTestId("ladder-filled-lot").textContent).toBe("(2)");
+    cleanup();
+    vi.restoreAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: orders(ymd(-5)) }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    await screen.findByLabelText("刪 22999 掛單"); // 同步錨:資料確實到了
+    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
   });
 });
 
