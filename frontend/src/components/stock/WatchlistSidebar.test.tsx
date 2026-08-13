@@ -519,6 +519,24 @@ describe("WatchlistSidebar 全部展開 / 收合(SC-4)", () => {
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力", "觀察"]);
   });
 
+  // 🔒 lock(review B-1):`applyCollapsed` 的三步(同步 ref → persist → setState)中,
+  // **ref 同步在 toggleAll 路徑上原本零機械守門** —— 全收是替換型寫入,只看「單次點擊後的
+  // 結果」的既有五支測試對「漏掉 ref 同步」的 mutant 全綠。漏掉要**兩步序列**才顯形:
+  // 第二步的 `toggleCollapsed` 讀 `collapsedRef`,若它還停在全收**之前**的舊集合,
+  // 就會(a) 把已淨化的殘留組名原樣寫回、(b) 點的那組沒展開、(c) 另一組反而意外展開。
+  it("全收後單獨展開一組 → 讀的是全收後的集合(殘留不復活、另一組仍收合)", async () => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["已刪除的組"]));
+    sidebar();
+    await waitGroups();
+
+    fireEvent.click(toggleAll()); // 全收:替換成現行組名 ["主力","觀察"],殘留被淨化
+    fireEvent.click(groupHeader("主力")); // 再單獨展開一組:read-modify-write,必須讀新集合
+
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["觀察"]);
+    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+    expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
+  });
+
   // 🔴 與「管理」鈕同一個 gate:自選未載入時 `wl` 是 EMPTY_WL fallback,groups=[] ——
   // 這時全收會把使用者既有的折疊清單持久化覆寫成空,而畫面上完全看不出來。
   it("自選未載入(pending / 失敗)→ 鈕不渲染,既有折疊清單不被覆寫", async () => {
@@ -538,6 +556,9 @@ describe("WatchlistSidebar 全部展開 / 收合(SC-4)", () => {
       timeout: 5000,
     });
     expect(screen.queryByRole("button", { name: /^全部(展開|收合)$/ })).toBeNull();
+    // ⚠ 這句是**恆真的冗餘保險**,不是鑑別子:鈕都不在 DOM 了就沒有任何路徑會寫這把 key,
+    // 真正的鑑別力由上一句(鈕為 null)承擔。留著是為了把「覆寫成空」這個**後果**寫在測試
+    // 裡當文件 —— 哪天 gate 改成「鈕在但停用」,它才會開始有鑑別力(review B-3)。
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]);
   });
 });
@@ -559,10 +580,27 @@ describe("WatchlistSidebar 標題列視覺層次(SC-3)", () => {
     expect(groupHeader("未分組").classList.contains("bg-surface")).toBe(true);
   });
 
+  // 「換手」是一對:舊 token 走人 **且** 新 token 到位。只驗負向的話,把 hover 整個刪掉
+  // (可點的 affordance 靜默消失)同樣綠 —— 正向那句才是新行為的鑑別子(review B-2)。
   it("hover 換手到 bg-line/50:底色帶讓 hover:bg-surface 變成看不出來的 no-op", async () => {
     sidebar();
     await waitGroups();
-    expect(groupHeader("主力").className).not.toContain("hover:bg-surface");
+    const header = groupHeader("主力");
+    expect(header.className).not.toContain("hover:bg-surface");
+    // classList token 級:`toContain` 子字串比對會被別的 hover class 誤命中
+    expect(header.classList.contains("hover:bg-line/50")).toBe(true);
+  });
+
+  // 🔒 lock:拖曳中關掉 hover 亮色,否則與落點高亮(border-accent)搶語意 ——
+  // 使用者分不清「這是可放的組」還是「這是可點的鈕」。`drag === null &&` 這個守衛
+  // 被拿掉時,上面的正向斷言照樣綠(非拖曳態不受影響)→ 要在拖曳態另外釘一次。
+  it("拖曳中標題列不掛任何 hover 樣式(與落點高亮搶語意)", async () => {
+    sidebar();
+    await waitGroups();
+    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
+    fireEvent(handle, ptrEvt("pointerdown", 10, 80));
+    expect(groupHeader("主力").className).not.toContain("hover:");
+    fireEvent(window, ptrEvt("pointerup", 10, 80)); // teardown:不收尾會把 listener 留給下一支
   });
 
   it("組名字重加粗(font-medium),不再與個股名稱同權重", async () => {
