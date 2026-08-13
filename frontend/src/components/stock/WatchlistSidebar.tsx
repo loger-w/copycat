@@ -94,7 +94,16 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
    *  2026-08-11),兩個回呼各自跟在自己的 PUT 回應後、不再同 tick 連發;但「同一 tick 內
    *  連續執行兩次也守得住」仍是本設計要保的不變式 —— 改回讀 render 閉包的話,任何未來的
    *  同批回呼(或第三個呼叫者)都會把已清掉的組名原樣寫回 localStorage
-   *  (useLayoutEffect 同步版同樣守不住:同一 tick 內 layout effect 還沒跑)。 */
+   *  (useLayoutEffect 同步版同樣守不住:同一 tick 內 layout effect 還沒跑)。
+   *
+   *  **「讀 ref」的適用範圍是 read-modify-write,不是所有寫入點**(review A-1):
+   *  - `toggleCollapsed` / `dropCollapsed` 以**現有集合**為基底算 next → 必須讀 ref,
+   *    讀 render 閉包就是上面說的那個復發。
+   *  - `toggleAll` 是**替換型**寫入:next 只由現行 `groups` 產生、與舊集合無關(冪等),
+   *    所以不需要讀 ref。它仍**必須經由 `applyCollapsed`**(而不是手抄 persist)——
+   *    ref 是後續 read-modify-write 的基底,漏同步的症狀要「全收 → 再單獨展開某組」
+   *    這個序列才顯形(殘留復活 + 開合狀態錯位),鎖在 `WatchlistSidebar.test.tsx`
+   *    SC-4 節的「全收後單獨展開一組」。 */
   const collapsedRef = useRef(collapsed);
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState<boolean>(loadUngroupedCollapsed);
   const [dialogOpen, setDialogOpen] = useState(false);
