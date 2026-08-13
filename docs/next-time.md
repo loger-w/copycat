@@ -1,4 +1,18 @@
 
+## 2026-08-13(mod/watchlist-ux-limit-50 收尾留尾巴)
+
+- [ ] **側欄 sticky 遮蔽帶的拖曳落點語意**(review A-3,既有語意的量變):游標在 sticky
+  搜尋區上放開時 `dropTargetFromPointer` 取最近 zone(落未分組 index 0)而非作廢;本輪
+  全收/全展鈕使 sticky 高一列,遮蔽帶隨之加高。收斂方向 = 把 sticky 高度傳進 `zonesNow`,
+  y 落帶內回 null(拖到搜尋列 = 作廢),不動 ROW_H / bounds。
+- [ ] **conftest 自選隔離 fixture 的組合跑 flake**:`tests/server/test_signal_routes.py::
+  TestConftestWatchlistIsolation::test_hub_data_dir_isolated_without_explicit_path` 在
+  特定 8 檔組合同跑時紅(`hub._data_dir == data`,隔離未生效),單跑與全套跑皆綠;
+  master 5a1a97aa 可重現,非 watchlist-ux-limit-50 引入。它是 XR-3 SC-8 擋牆自身的鎖,
+  壞掉是靜默的(某顆 hub 讀真 `data/stock_watchlist.json`);二段 bisect 未定位到單一
+  污染源。候選:fixture 改 autouse session 級斷言、或該測試自帶 delenv/monkeypatch
+  不依賴共用 fixture。
+
 ## 2026-08-13(mod/trial-pause-badge 第一段收尾留尾巴)
 
 - [ ] **緩撮標示第二段:TradeStatus-based per-code 盤中偵測**(本輪只出時間窗版,
