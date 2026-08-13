@@ -199,7 +199,7 @@ class StockDayState:
     def light_snapshot(self) -> dict:
         """群組 batch 專用的輕量 payload(code review A1)。
 
-        `group_snapshot` 對最多 30 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
+        `group_snapshot` 對最多 50 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
         當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到 minutes / meta。
         """
         return {"minutes": self._minutes_payload(), "meta": self._meta_payload()}

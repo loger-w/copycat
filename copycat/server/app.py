@@ -334,7 +334,7 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
 
     空清單在 hub 既有路徑上讀成**「資料面就是沒有」**(= 新上市無歷史那一類):
     逐檔一次「無已完成日 K,CDP 停用」warning、cache 落 `(基準日, None)`、**不重試**。
-    改成拋例外的話會被讀成暫時性失敗 → 走 X-2b 的有限重試,自選 30 檔在 TC4 關著的
+    改成拋例外的話會被讀成暫時性失敗 → 走 X-2b 的有限重試,自選 50 檔在 TC4 關著的
     整天變成一輪又一輪的重試,而它們永遠不可能成功。
     """
     return []
@@ -524,7 +524,7 @@ def create_app(
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
                     # gap 的用途是「連發打 TC4 要讓位」,而 `_empty_daily_bars` 根本沒打
                     # TC4 —— 但它從 `_resolve_basis` 回 True(有走完取數路徑),worker
-                    # 會照付 0.2s/檔:自選 30 檔就是 6s 的純空轉。engine 在場時 config
+                    # 會照付 0.2s/檔:自選 50 檔就是 10s 的純空轉。engine 在場時 config
                     # 逐字不變(白名單 1)。
                     cfg = replace(cfg, basis_gap_secs=0.0)
                 else:
@@ -1205,11 +1205,11 @@ def create_app(
         """群組檢視的唯讀 batch(group-grid SC-4)。
 
         **刻意不重用 `/api/stock/state/{code}`**:那條路會 `set_main`,群組檢視每分鐘
-        對最多 30 檔各要一次狀態 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結,而畫面
+        對最多 50 檔各要一次狀態 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結,而畫面
         上只表現為「圖不動了」沒有任何錯誤訊號。
 
         逗號分隔的 codes 自行解析(不用 `list[str]` query):FastAPI 的重複參數形對
-        30 個 code 會長到難以閱讀,而轉換失敗回的是 422 + list 形 detail,不符全站
+        50 個 code 會長到難以閱讀,而轉換失敗回的是 422 + list 形 detail,不符全站
         `{"detail": {"error": code}}` 契約。
 
         **無 404 路徑**:未知 / 未訂閱 code → `no_data: true` 空 minutes。卡片要答的是

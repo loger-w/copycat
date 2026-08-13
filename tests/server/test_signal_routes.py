@@ -760,7 +760,7 @@ class TestSignalRoutesWithoutStock:
         """T5:無 engine → `daily_bars` stub 恆回 `[]` = 「資料面就是沒有」。
 
         hub 既有路徑因此逐檔一次「CDP 停用」warning + cache 落 `(日別, None)`,
-        **不重試**(重試留給例外路徑 X-2b)—— 自選 30 檔不會變成重試風暴。
+        **不重試**(重試留給例外路徑 X-2b)—— 自選 50 檔不會變成重試風暴。
         """
         monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
         (tmp_path / "watchlist.json").write_text(
