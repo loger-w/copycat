@@ -150,7 +150,11 @@ async def test_start_connection_error_sets_stale_then_retry_recovers() -> None:
 
 async def test_watchdog_marks_stale_and_broadcasts_without_pushes() -> None:
     fake = FakeIndexSource()
-    eng = make_engine(fake, in_watch_window=lambda: True, stale_secs=0.06)
+    # now_fn 釘在窗起點附近:預設 10:00 會讓分時自癒(lag >3 分)同場觸發,retry 成功
+    # 的早期廣播搶進 queue 首位 → 首則訊息 stale 斷言 flaky。本測試標的是 watchdog。
+    eng = make_engine(
+        fake, in_watch_window=lambda: True, stale_secs=0.06, now_fn=lambda: _dt.time(9, 1)
+    )
     await eng.start()
     try:
         stream = eng.stream()
