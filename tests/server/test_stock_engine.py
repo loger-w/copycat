@@ -2677,6 +2677,9 @@ class TestTradeStatusObserve:
         engine.rollover_stage1("2026-07-22")
         assert engine._trade_status == {}
 
+        # `caplog.records` 累積整個 test(`at_level` 只調級別不清空)→ 上面那則武裝用的
+        # WARNING 會混進來,而本 case 的斷言是**否定型**(零 WARNING)。
+        caplog.clear()
         with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
             src.on_message(_quote(cum=3))  # 仍昨日日期 → stage2 未跑;帶 "0"
             await _drain(engine)
