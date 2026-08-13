@@ -210,8 +210,15 @@ class CapitalClient:
             return
         self._status = new
         if new == "ok":
-            # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查
+            # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查。
+            # 目前唯一的 ok caller 是 _init_com(啟動時三者必為初值,此分支等同 no-op);
+            # 這裡是 reconnect 落地時的預留 —— 清點必須與 _finalize_positions 同組
+            # (三個旗標),只清 inflight 會留下半清狀態卡在 _pending_sec 守門判上,
+            # 鏈永遠不再放行(pending 段無 collector 事件時只有 _poll_pending 能解,
+            # 而它同樣看 _pending_deadline)。
             self._balance_inflight_until = None
+            self._pending_sec = None
+            self._pending_deadline = None
         self._emit(
             {"event": "capital_status", "data": {"status": new, "last_error": self._last_error}}
         )
@@ -362,6 +369,10 @@ class CapitalClient:
         rc = self._com.get_real_balance(self._user_id, self._full_account)
         if rc != 0:
             self._balance_inflight_until = None  # 鏈沒啟動,旗標不可佔著擋下一輪
+            # due 在發查詢前已清 → 不重新武裝等於整筆成交的重查被吃掉(要等 60s
+            # stale 才補),守門的「成交不漏」不變量破功。退避 1s 而非還原舊 due:
+            # 舊 due 已過期,下一圈幫浦(50ms)就會再打一次 1019 成緊迴圈。
+            self._mark_balance_dirty(1.0)
             logger.warning("GetRealBalanceReport rc=%s: %s", rc, self._com.return_code_message(rc))
 
     def _on_balance_complete(self, positions: list[Position]) -> None:
