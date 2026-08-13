@@ -1,0 +1,51 @@
+{
+  "round": 1,
+  "date": "2026-08-13",
+  "lenses": ["whitelist-regression", "aggregation-correctness", "test-coverage"],
+  "whitelist_verdict": "全 10 條 PRESERVED(白名單 lens 逐行驗證;行為擴大兩處均為 spec 明文改寫非靜默)",
+  "p0": [],
+  "p1": [
+    {
+      "id": "C1",
+      "lens": "correctness",
+      "title": "rc≠0 分支吃掉 _balance_due — 違反守門「成交不漏」不變量",
+      "file_line": "copycat/capital/client.py:358-365",
+      "resolution": "accepted",
+      "fix": "rc≠0 時 _mark_balance_dirty(1.0) 重新武裝(1s 退避重試,不還原舊 due 免緊迴圈打 1019);紅先行測試(FakeCom 可設 rc)"
+    },
+    {
+      "id": "T1",
+      "lens": "test-coverage",
+      "title": "LadderView isCancelable 的 `|| seqs.length > 0` 半條無元件層測試 — mutation 存活沒收活單刪單入口",
+      "file_line": "frontend/src/components/stock/LadderView.tsx:32/303/352",
+      "resolution": "accepted",
+      "fix": "PriceLadder 新 lock 案:actionable 殘 0 → 可點 0(0) + click 送 seq;0(2) 同型;mutation-verified"
+    },
+    {
+      "id": "T2",
+      "lens": "test-coverage",
+      "title": "FuturesLadder `|| r.mySeqNos.length > 0` 同族無鎖,且失效後整格消失",
+      "file_line": "frontend/src/components/futures/FuturesLadder.tsx:417",
+      "resolution": "accepted",
+      "fix": "FuturesLadder 新 lock 案:actionable 殘 0 → 紅方格 0(0) 可點 + 全撤鈕非 disabled;mutation-verified"
+    },
+    {
+      "id": "T3",
+      "lens": "test-coverage",
+      "title": "splitMyLots addQty 的 actionable 閘無測 — 期貨梯部分成交後刪單會畫假未成交口數",
+      "file_line": "frontend/src/lib/futures-ladder.ts:62",
+      "resolution": "accepted",
+      "fix": "futures-ladder lib 新 lock 案:終態殘量>0 → qty 0 / filled 留 / seqNos 空;mutation-verified"
+    }
+  ],
+  "p2_summary": {
+    "count": 14,
+    "themes": {
+      "test-gap(accepted)": "T4 賣側徽章分支、T5 期貨徽章 pointer-events-none className、T6 期貨 ±1 日窗 wiring、T7 pending 段擋下不清 due 斷言、T8 交棒清旗標白箱鎖、T9 rc≠0 清旗標(併 C1 紅測試)",
+      "行為級(accepted,例外展開)": "C3 LadderView 徽章分支缺 filled>0 守門(與期貨梯不對稱;prop 介面級防禦一行)+ C4 aggregateLots/splitMyLots 對 buy_sell 非 B/S 處置分歧而註解宣稱口徑相同(改註解明列差異,不改行為 — null 側僅刪單失敗回報先到的極罕態)+ C5/W3 _set_status ok 分支現為不可達死碼且清點不對稱(擴為同組清 pending + 註明 reconnect 預留)",
+      "spec/doc(accepted)": "W1 unit 閘實際涵蓋「零股∪未知 market」寬於 A4 承認面(spec Known Risk 補記,行為不動 — 第二道股號鍵擋住)+ W4 CLAUDE.md §4 補 unit 字面值跨檔契約一行(收尾補)",
+      "rejected_with_reason": "C2/W2 逾期解卡 _balance.reset() 無輪次識別、遲到 ## 可 flush 空集合蓋部位 — collector 輪次化超出本次 scope 且屬 master 既有家族(master 無守門時暴露面更大,本次已收窄到 10s 逾期窗)→ 記 docs/next-time.md 候選"
+    }
+  },
+  "gate_at_review": "backend pytest 2629 passed / ruff / pyright 0 / validate 42-42;frontend 1768 passed / tsc 0 / eslint 0 / react-doctor 零新增"
+}
