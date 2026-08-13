@@ -296,6 +296,10 @@ class TestStateRoute:
             snap = r.json()
             assert snap["code"] == "2330"
             assert snap["seq"] == 0
+            # SC-3:REST snapshot 帶 additive `trial`(單檔頁 header 的種子;側欄吃
+            # `watchlist_quote`,只加一邊會有一個消費端拿不到)
+            assert "trial" in snap
+            assert isinstance(snap["trial"], bool)
             assert "2330" in fake.subscribed  # main owner 已訂
 
     def test_get_state_bad_code_400(self, tmp_path: Path) -> None:

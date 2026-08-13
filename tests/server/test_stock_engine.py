@@ -2251,3 +2251,303 @@ class TestDirtyWatchlistScope:
         assert codes <= {"2330"}
         assert _CONTRACT not in engine._dirty_watchlist
         await engine.close()
+
+
+# ---- 試撮/緩撮標示(mod/trial-pause-badge 第一段:時間窗版)----
+
+_OBSERVE_PREFIX = "trade-status-observe"
+
+
+async def _make_with_clock(
+    monkeypatch: pytest.MonkeyPatch, clock: str, *, throttle: float = 0.01
+) -> tuple[StockEngine, FakeSource]:
+    """假時鐘**先注入再 `start()`**(D3 amendment R3)。
+
+    `_trial_on` 在 `start()` 內以現貨窗現算播種 —— 晚注入的話第一輪 flush 會看到
+    「真實時鐘 → 假時鐘」的假翻轉並補推一輪,否定型斷言(固定時鐘不補推)就永遠假綠。
+    注入的是**模組屬性**而非 engine 方法:`_now_taipei_time` 是模組級函式(同
+    `_now_taipei_hhmm` 慣例),per-code 的 `_trial_now` 走它。
+    """
+    monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: clock)
+    src = FakeSource()
+    engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=throttle, checkpoint=False)
+    await engine.start()
+    return engine, src
+
+
+def _observed(caplog: pytest.LogCaptureFixture, level: int) -> list[str]:
+    """`trade-status-observe` 前綴的紀錄(R10:蒐證對帳以固定前綴為準)。
+
+    比對前綴而不是「有沒有 WARNING」:parse 層 :215 的值域外 warning 是**同事件的
+    另一則**(它管值域、engine 管轉態時序),兩者混在一起數會讓 (c)(e)(f) 那三條
+    否定斷言在 parse 那則存在時就紅,而它是該留的。
+    """
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == level and r.getMessage().startswith(_OBSERVE_PREFIX)
+    ]
+
+
+class TestTrialFlag:
+    """SC-3:`watchlist_quote` 與 REST snapshot 的 additive `trial: bool`(D1/D2)。
+
+    現算而不落 `StockDayState`:試撮期 TC4 不推成交 tick(實測),tick 路徑萃取不到
+    「進窗」事件 —— 掛在狀態機上的話那個旗標永遠不會被翻起來。
+    """
+
+    async def test_quote_payload_trial_in_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        engine, _src = await _make_with_clock(monkeypatch, "08:50:00.000")
+        await engine.set_watchlist(["2330"])
+        got = await _collect(engine.stream())
+        seed = next(m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330")
+        assert seed["trial"] is True
+        await engine.close()
+
+    async def test_quote_payload_trial_false_out_of_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, _src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        got = await _collect(engine.stream())
+        seed = next(m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330")
+        assert seed["trial"] is False
+        await engine.close()
+
+    async def test_quote_payload_trial_false_for_futures_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """期貨鍵空窗 → 恆 False(D2),前端因此不必做 per-instrument 判斷。
+
+        走 `_quote_payload` 直呼:合約鍵**永遠不會**產生 `watchlist_quote`(D16),
+        公開路徑上沒有第二個觀測點,而這條契約正是前端「不判 instrument」的前提。
+        """
+        engine, _src = await _make_with_clock(monkeypatch, "08:50:00.000")
+        assert engine._quote_payload(_CONTRACT)["trial"] is False
+        assert engine._quote_payload("2330")["trial"] is True  # 對照:同一時刻現貨為 True
+        await engine.close()
+
+    async def test_snapshot_has_trial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """附加點在 **engine.snapshot()**(同 `no_data` 慣例),不是 `StockDayState`。"""
+        engine, _src = await _make_with_clock(monkeypatch, "13:27:00.000")
+        assert engine.snapshot("2330")["trial"] is True
+        assert engine.snapshot(_CONTRACT)["trial"] is False
+        await engine.close()
+
+    async def test_snapshot_trial_false_out_of_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, _src = await _make_with_clock(monkeypatch, "13:30:00.000")  # 右界不含
+        assert engine.snapshot("2330")["trial"] is False
+        await engine.close()
+
+
+class TestTrialWindowFlipPush:
+    """SC-4:窗邊界翻轉 → 自選各碼 + 現貨主圖碼各補推一則帶新 `trial` 的 quote(D3)。
+
+    掛既有 1s flush loop(不加新 task);**繞過 `state.last is None` 的 skip** ——
+    盤前無成交正是要標「(緩)」的時刻,而那條 skip 讓那些檔永遠不進補推路徑。
+    """
+
+    async def test_flush_loop_pushes_on_window_flip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = {"t": "08:29:59.000"}
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+        src = FakeSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        await engine.start()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("5483")  # 現貨主圖且**不在自選** + 全程零成交(last is None)
+        stream = engine.stream()
+
+        # 假時鐘固定 → 窗 bool 恆定 → 不得補推(否則等於打穿 1s 節流)
+        await _drain(engine)
+        before = [m for m in await _collect(stream) if m["type"] == "watchlist_quote"]
+        assert [m["code"] for m in before] == ["2330"], "只該有連線種子那一則"
+        assert before[0]["trial"] is False
+
+        now["t"] = "08:30:00.000"  # 進窗
+        await _drain(engine)
+        after = [m for m in await _collect(stream) if m["type"] == "watchlist_quote"]
+
+        by_code: dict[str, list[dict]] = {}
+        for m in after:
+            by_code.setdefault(m["code"], []).append(m)
+        assert set(by_code) == {"2330", "5483"}, "自選碼與現貨主圖碼都要收到"
+        assert len(by_code["2330"]) == 1  # 一天四次邊界事件,各一則
+        assert len(by_code["5483"]) == 1
+        assert all(m["trial"] is True for m in after)
+        assert engine._states["5483"].last is None  # 前提:這一檔走的是被 skip 的那條路
+        await engine.close()
+
+    async def test_futures_main_is_not_pushed_on_flip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """期貨主圖鍵不推:`trial` 恆 False,推出去是一則側欄對不上任何項目的訊息。"""
+        now = {"t": "08:29:59.000"}
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+        src = FakeSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        await engine.start()
+        await engine.set_main_contract(_CONTRACT)
+        stream = engine.stream()
+        await _collect(stream)  # 排空種子與回補 status
+
+        now["t"] = "08:30:00.000"
+        await _drain(engine)
+        after = [m for m in await _collect(stream) if m["type"] == "watchlist_quote"]
+        assert after == []
+        await engine.close()
+
+
+class TestTradeStatusObserve:
+    """SC-5:engine 層 per-code TradeStatus 轉態觀測 log(D6)= 第二段的蒐證通道。
+
+    「盤中延緩撮合」期間 TradeStatus 的值域 / 起訖 / 恢復**未實測**(2026-07-21 只測到
+    13:25–13:30 的 `TradeStatus=1` 簿更新),本輪不據此判定任何狀態,只留可 grep 的紀錄。
+    分層理由:窗內轉態是已知常態,全 INFO 會淹沒蒐證訊號;窗外事件即是要抓的 evidence。
+    """
+
+    async def test_out_of_window_transition_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(a) 窗外 "0"→"2" → WARNING 含固定前綴 + code + 兩值。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1))  # 首見 "0" → 只播種
+            await _drain(engine)
+            src.on_message(_quote(cum=2) | {"TradeStatus": "2"})
+            await _drain(engine)
+        warns = _observed(caplog, logging.WARNING)
+        assert len(warns) == 1
+        assert "code=2330" in warns[0]
+        assert "0->2" in warns[0]
+        assert "trial_window=False" in warns[0]
+        await engine.close()
+
+    async def test_recovery_to_zero_pairs_the_episode(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(b) 恢復 "2"→"0" 再一則 WARNING(起訖成對 → 蒐證看得出持續多久)。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1))
+            src.on_message(_quote(cum=2) | {"TradeStatus": "2"})
+            await _drain(engine)
+            src.on_message(_quote(cum=3))  # 回 "0"
+            await _drain(engine)
+        warns = _observed(caplog, logging.WARNING)
+        assert len(warns) == 2
+        assert "2->0" in warns[1]
+        # episode 已歸 False:下一次回 "0" 不得再記(否則每則常態推播都成對噴)
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=4) | {"TradeStatus": "1"})  # 窗外 "0"→"1" 也是異常
+            src.on_message(_quote(cum=5))
+            await _drain(engine)
+        assert len(_observed(caplog, logging.WARNING)) == 4  # 起 + 訖 各再一則
+        await engine.close()
+
+    async def test_in_window_transition_is_debug_only(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(c) 窗內 "0"→"1" = 已知常態 → DEBUG,不得進 WARNING。"""
+        engine, src = await _make_with_clock(monkeypatch, "08:50:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1))
+            src.on_message(_quote(cum=2) | {"TradeStatus": "1"})
+            await _drain(engine)
+        assert _observed(caplog, logging.WARNING) == []
+        debugs = _observed(caplog, logging.DEBUG)
+        assert len(debugs) == 1
+        assert "0->1" in debugs[0]
+        assert "trial_window=True" in debugs[0]
+        await engine.close()
+
+    async def test_same_value_is_never_logged_twice(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(d) 同值連續推播不重複記(每則 REALTIME 都記 = 蒐證檔被灌爆)。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1))
+            src.on_message(_quote(cum=2) | {"TradeStatus": "2"})
+            src.on_message(_quote(cum=3) | {"TradeStatus": "2"})
+            src.on_message(_quote(cum=4) | {"TradeStatus": "2"})
+            await _drain(engine)
+        assert len(_observed(caplog, logging.WARNING)) == 1
+        assert _observed(caplog, logging.DEBUG) == []
+        await engine.close()
+
+    async def test_observe_skips_futures_key(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(e) 期貨鍵零觀測(R1):空窗讓 `is_trial_window` 恆 False,任何轉態都會
+        誤落「窗外」分支 → 個股期整天噴假的蒐證 WARNING,把真訊號淹掉。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_fut_quote(cum=1))
+            src.on_message(_fut_quote(cum=2) | {"TradeStatus": "2"})
+            await _drain(engine)
+        assert _observed(caplog, logging.WARNING) == []
+        assert _observed(caplog, logging.DEBUG) == []
+        assert engine._trade_status == {}  # 連前值都不播種
+        await engine.close()
+
+    async def test_first_seen_value_only_seeds(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(f) 首見值(含非 "0")只播種:`None→x` 不是轉態,否則每交易日 255 檔各噴一則。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330", "5483"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1) | {"TradeStatus": "2"})  # 首見即非 "0"
+            src.on_message(_quote(code="5483", cum=1))  # 首見 "0"
+            await _drain(engine)
+        assert _observed(caplog, logging.WARNING) == []
+        assert _observed(caplog, logging.DEBUG) == []
+        assert engine._trade_status["2330"] == ("2", False)
+        assert engine._trade_status["5483"] == ("0", False)
+        await engine.close()
+
+    async def test_rollover_stage2_clears_trade_status(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """跨日殘留前值會把隔日首則推播誤判成「恢復」並帶昨日值記 WARNING(S4)——
+        污染的是蒐證樣本本身,而 log 讀起來完全像真事件。
+
+        觀測落點在 stage2 **之前**(期貨夜盤早退之後),所以觸發 stage2 的那一則自己
+        仍以昨日前值判斷;清空的效果落在**它之後**的每一則:新日重新播種。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1) | {"TradeStatus": "2"})
+        await _drain(engine)
+        assert engine._trade_status["2330"] == ("2", False)  # 前提:前值已播種
+
+        engine.rollover_stage1("2026-07-22")
+        src.on_message(_quote(cum=1, date="20260722"))  # 新日首筆 → stage2
+        await _drain(engine)
+        assert engine.trade_date == "2026-07-22"  # 前提:stage2 真的跑了
+        assert engine._trade_status == {}  # 昨日前值不得留
+
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=2, date="20260722") | {"TradeStatus": "2"})
+            await _drain(engine)
+        # 清空後這一則是新日的「首見」→ 只播種,不記(否則昨日值會生出假事件)
+        assert engine._trade_status["2330"] == ("2", False)
+        assert _observed(caplog, logging.WARNING) == []
+        assert _observed(caplog, logging.DEBUG) == []
+        await engine.close()
