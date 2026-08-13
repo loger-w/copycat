@@ -198,6 +198,25 @@ async def test_schedule_retry_single_flight() -> None:
         await eng.close()
 
 
+async def test_minutes_lag_self_heal_refetches_backfill() -> None:
+    """分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級成空
+    + 當日推播整段靜默(TC4 已知間歇失效)→ minutes 全日空白,而 TC4 端 1K 資料
+    整天可取(2026-08-13 事故實錄)。watch window 內 minutes 落後牆鐘超過門檻,
+    引擎必須自己重掛訂閱 + 重抓 1K,不能等使用者重啟。"""
+    fake = FakeIndexSource()  # day_minutes 空 = timeout 靜默回空(不 raise)
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000, "0959": 2_000}  # TC4 端其實有資料
+        await asyncio.sleep(0.3)
+        state = eng.state()
+        assert state["twse"]["minutes"] == {"0901": 1_000, "0959": 2_000}
+        assert fake.subscribed.count("IX0001") >= 2  # 重掛 = 順帶重武裝死掉的推播訂閱
+    finally:
+        await eng.close()
+
+
 async def test_watchdog_inactive_outside_window() -> None:
     fake = FakeIndexSource()
     eng = make_engine(fake, in_watch_window=lambda: False, stale_secs=0.03)
