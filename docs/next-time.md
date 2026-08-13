@@ -59,7 +59,7 @@
   自癒(stock engine 只在 boot 建,需重啟 server)。候選:seed 加欄位或前端分態
   文案(「達錢 4 未連線,啟動後需重啟 server」)。frontend 小改,順下輪前端批。
 - [ ] **`_empty_daily_bars` 語意堆疊**(C-4 已修 gap sleep;殘餘觀察):無 engine 時
-  basis job 仍逐檔跑一輪(30 檔 30 行「CDP 停用」warning,一次性)。若嫌吵,候選
+  basis job 仍逐檔跑一輪(50 檔 50 行「CDP 停用」warning,一次性)。若嫌吵,候選
   = 無 engine 時 on_watchlist 不排 basis job(hub 加模式分支,spec 當時判不值得)。
 
 ## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
@@ -405,7 +405,7 @@
 - [ ] 個股 stream 韌性候選:hook pending 重放只驗 seq>S 不驗連續性(回補期 WS 掉訊成永久缺筆);fromSnapshot 以 vwap×cum_vol 還原 VWAP 分子與後端 Σq 分母有近似差;apply_backfill 對回補列不去重(TC4 重送列會雙算);tc4_status 只靠 on_reconnect 復位(純 REQ 失敗 banner 永久誤掛)
 - [ ] 個股 UI 盤後體驗:reset() 保留 book 與 design 字面不符(rollover 後非觸發檔殘留昨日五檔)。〔2026-07-31 盤點:**後半「盤後重載側欄顯示 `-`」已做掉**,可刪 —— `stock_engine` 連線種子逐檔送 `_quote_payload`,`ref` 欄在尚無成交時給參考價,`WatchlistSidebar` 已渲染「參考」態〕
 - [ ] 個股效能/清潔候選:snapshot 每次全量序列化 20k tick deque(切檔/跳號 refetch 都全量 JSON);_states 永不清除;F:xxx 建立永不使用的 StockDayState;backfill TICKS 訂閱事後不退訂
-- [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時;backfill 首頁 30s 逾時靜默回空無 log;watchlist 啟動時 TC4 離線可被 30 檔 × 10s 拖慢 lifespan
+- [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時;backfill 首頁 30s 逾時靜默回空無 log;watchlist 啟動時 TC4 離線可被 50 檔 × 10s(≈500s)拖慢 lifespan〔2026-08-13 上限 30→50 同步;**退出準則**:若實測 TC4 離線啟動致 index/breadth 就緒 >10 分鐘 → 做 per-code timeout 縮短 / 並行訂閱〕
 
 ## 2026-07-20(backfill 雙修 review P2)
 
@@ -673,7 +673,7 @@
 - [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);pending 防護現況(2026-08-04 收尾 review F3 實測更正):StockPage 3 處有 `save.isPending` 防護、Dialog 僅「加入股票」建議列一處(:354),**Sidebar 零防護**(`commit()` 無 pending 檢查,拖曳 / × / 加入群組全裸)— 除跨元件並發外,同元件內連點 / 拖曳期間重複 PUT 亦未防〔2026-08-04 /bug 輪評估:與 K-3(fallback 狀態混淆)**非同根因**,修法域也不同(pending 防護 / 後端版本戳 vs 入口 gate),未併入該輪,維持本條待處理〕
 - [ ] EMPTY_WL 危險窗封閉的成立條件是跨檔不變式(2026-08-04 收尾 review F1,`commit()` 早退 rejected_with_reason):現況全 repo 無 `resetQueries` / `removeQueries`、StockPage 永不卸載(App visited+hidden)→ watchlist query data 成功後不會退回 undefined,入口 + Dialog 同 gate 已涵蓋;**若日後**對 `stock-watchlist` 改用 resetQueries / 改 queryKey / 讓 StockPage 可卸載(gcTime 回收),危險窗會重開且測試零訊號 — 屆時再補 `commit()` 的 `data === undefined` 早退(repo 精神:不可達防禦 = 沒有測試覆蓋的死碼,見 WatchlistSidebar.tsx 拖曳 teardown 註解,現在不加)
 - [ ] 自選載入失敗態側欄仍渲染空「未分組」區塊 +「拖曳到此移出群組」提示(2026-08-04 /bug 輪 Phase 7 截圖觀察):無寫入風險(無列可拖),純視覺突兀 — error 態可考慮整段收起只留錯誤文案
-- [ ] 預覽非自選股後 `copycat-stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)。〔2026-08-04 更名同步:key 已改 `copycat-stock-main-code`(`lib/constants.ts` MAIN_CODE_KEY);真正持久化點在 App.tsx 的 setItem useEffect,別被 LEGACY 遷移常數誤導〕
+- [ ] 預覽非自選股後 `copycat-stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 50 檔上限)。〔2026-08-04 更名同步:key 已改 `copycat-stock-main-code`(`lib/constants.ts` MAIN_CODE_KEY);真正持久化點在 App.tsx 的 setItem useEffect,別被 LEGACY 遷移常數誤導〕
 - [ ] **驗證環境阻塞:達錢 4 未開時 server 起不來,錯誤訊息不指向根因**(2026-07-31 stock-ui-round4 Phase 7):`TC4 quote connect failed: Resource temporarily unavailable`(ZMQ REQ 的 EAGAIN)——實際成因是桌面程式沒開/沒登入,不是資源競爭。當時觀察序列:port 50774 有聽 + 舊 server 有真資料 → 舊 server 消失、port 仍聽但 LOGIN 逾時 → port 關閉。**「50774 有聽」不等於 OpenAPI 可用**,排查時先確認 app 已登入再看程式碼。另:兩個 server 同時連 TC4 是否可行本輪**未證實**(觀察被 app 關閉污染),別把「單一 session」當已知事實
 
 ## 2026-07-31(stock-ui-round6:市價偽檔位 / 內外盤判定)
@@ -1030,7 +1030,8 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 - [ ] **HR-6:WS 事件類訊息丟包無回補**(`ws.py` drop-oldest 對一次性 signal =
   永久遺失且不斷線,baseline 重抓只掛 onWsOpen)。候選:signal payload 加 seq +
   前端 gap 偵測觸發 invalidate,或 baseline 盤中週期重抓。R4 把漲停潮日數百則
-  廣度事件灌進同一 per-client 佇列(上限 1000 按 30 檔自選推的),量級重估後再定。
+  廣度事件灌進同一 per-client 佇列(上限 1000 按 30 檔自選推的;2026-08-13 上限改 50 後
+  滿速緩衝 ≈ 20s 仍夠,不調參),量級重估後再定。
 - [ ] **HR-3:hub close() 逾時路徑可致 jsonl 檔內順序倒置**(cancel 後 to_thread
   的 OS thread 照樣寫完,_flush_pending 另起 thread 並寫)。後果有界(重啟後最壞
   補發一則假 open,終態收斂);修法要 thread join 機制,複雜度不成比例,先記著。

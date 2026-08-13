@@ -31,7 +31,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from copycat.stock_names import load_names
-from copycat.stock_watchlist import UNGROUPED_NAME, Watchlist, WatchlistError
+from copycat.stock_watchlist import (
+    UNGROUPED_NAME,
+    WATCHLIST_LIMIT,
+    Watchlist,
+    WatchlistError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +60,7 @@ CHANNEL_ENV = "SIGNALS_DISCORD_CHANNEL_ID"
 
 #: WatchlistError 的 error code → 繁中文案(與前端 `useStockWatchlist.errText` 同一組)
 _ERROR_TEXT = {
-    "WATCHLIST_FULL": "自選已達 30 檔上限",
+    "WATCHLIST_FULL": f"自選已達 {WATCHLIST_LIMIT} 檔上限",
     "BAD_CODE": "股號格式不正確",
     "BAD_GROUP": "群組名稱不合法",
     "GROUP_NOT_FOUND": "找不到該群組",

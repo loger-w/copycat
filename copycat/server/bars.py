@@ -240,7 +240,7 @@ class BarsCache:
     def prune(self, today: _dt.date) -> None:
         """剪掉視窗外與已過期的條目。
 
-        `_hist` / `_daily` 的成長來自**日期維度**(股號受 watchlist 30 檔上限約束)
+        `_hist` / `_daily` 的成長來自**日期維度**(股號受 watchlist 50 檔上限約束)
         —— review P2-5。`_today` 從 round3 起會存空 entry,股號維度不再被「真的有今日
         資料的股號」約束(任何通過 `validate_code` 的字串請求一次就留一筆),所以
         除了日期還要按 TTL evict —— 否則同日內累積到跨日才歸零(self-review round2 P2)。

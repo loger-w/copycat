@@ -559,11 +559,11 @@ class StockEngine:
     def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
         """群組檢視的唯讀 batch(SC-4)。**不 set_main、不改訂閱池。**
 
-        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 30 次
+        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 50 次
         會把主圖搶走 → 主圖分時線凍結。
 
         payload 走 `light_snapshot()` 的 minutes/meta 兩鍵(+ 兩個旗標,A1):`ticks`
-        是數千筆,30 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是
+        是數千筆,50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是
         白燒 CPU;而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端
         `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失)。
 
@@ -1257,7 +1257,7 @@ class StockEngine:
         # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
         # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
         # 「連線先送快照」的既成慣例一致)。種子走 `stream(seed=...)` 而非 `publish`
-        # (後者會打到所有 client);30 檔對 queue maxsize 安全。
+        # (後者會打到所有 client);50 檔對 queue maxsize 安全。
         return self._ws.stream([self._quote_payload(code) for code in self._watchlist])
 
     def _publish(self, msg: dict) -> None:

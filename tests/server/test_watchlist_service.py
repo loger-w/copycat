@@ -322,7 +322,7 @@ class TestConcurrency:
     ) -> None:
         """X-3:訂閱副作用移到鎖外 —— 落檔 + 定序留鎖內,ZMQ 往返不再擋住下一個寫入。
 
-        TC4 故障時單次 `set_watchlist` 最壞是 30 檔 × 數十秒;鎖在裡面的話,期間所有
+        TC4 故障時單次 `set_watchlist` 最壞是 50 檔 × 數十秒;鎖在裡面的話,期間所有
         `/watch` 與前端 PUT 全部堆積,而 Discord 的 interaction token 只有 15 分鐘。
         """
         service, engine, path = _service(tmp_path, delay=0.5)

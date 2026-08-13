@@ -34,7 +34,7 @@ class Watchlist(TypedDict):
     groups: list[Group]
 
 
-WATCHLIST_LIMIT = 30
+WATCHLIST_LIMIT = 50
 _CACHE_VERSION = 3
 # 4-6 位英數且至少一位數字(涵蓋 00637L 等字母尾碼 ETF;design r1-F6)。
 # 存在性不在此驗 — SUBQUOTE 對不存在 symbol 照回 OK,推播健檢才是真閘。

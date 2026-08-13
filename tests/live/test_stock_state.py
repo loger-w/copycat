@@ -305,7 +305,7 @@ class TestDayHighLow:
 class TestLightSnapshot:
     """群組 batch 專用的輕量 payload(code review A1)。
 
-    `group_snapshot` 對最多 30 檔、每 60s 各建一次全量 `snapshot()`,而那份會把當日
+    `group_snapshot` 對最多 50 檔、每 60s 各建一次全量 `snapshot()`,而那份會把當日
     數千筆 tick 逐筆組成 dict 之後**整份丟掉** —— 畫面只用得到 minutes / meta 兩鍵。
 
     抽 `_minutes_payload` / `_meta_payload` 共用而不是在 engine 那邊另寫一份對映,
@@ -334,7 +334,7 @@ class TestLightSnapshot:
     def test_light_snapshot_is_exactly_minutes_and_meta(self) -> None:
         light = self._filled().light_snapshot()
         assert set(light) == {"minutes", "meta"}
-        # ticks 是本輪要省掉的那一份(30 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
+        # ticks 是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
         assert "ticks" not in light
 
     def test_light_and_full_snapshot_share_one_key_mapping(self) -> None:

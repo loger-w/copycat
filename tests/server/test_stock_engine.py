@@ -1202,7 +1202,7 @@ class TestQuotes:
 
 class TestGroupSnapshot:
     """SC-4:群組檢視的唯讀 batch。**不 set_main、不改訂閱池**(`/api/stock/state/{code}`
-    會 set_main,群組每分鐘 30 次會把主圖搶走令主圖凍結 → 那條路不可重用)。"""
+    會 set_main,群組每分鐘 50 次會把主圖搶走令主圖凍結 → 那條路不可重用)。"""
 
     async def test_payload_is_the_lightweight_three_keys_plus_backfilling(self) -> None:
         engine, src = await _make()
@@ -1212,7 +1212,7 @@ class TestGroupSnapshot:
         await _drain(engine)
         snap = engine.group_snapshot(["2330"])["2330"]
         assert set(snap) == {"minutes", "meta", "no_data", "backfilling"}
-        # R2:ticks 是數千筆,30 檔一起送等於把 batch 端點變成頻寬炸彈
+        # R2:ticks 是數千筆,50 檔一起送等於把 batch 端點變成頻寬炸彈
         assert "ticks" not in snap
         # 鍵名沿 `StockDayState.snapshot()` 的單一定義:直接丟 dataclass 會讓前端
         # `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失
@@ -1324,7 +1324,7 @@ class TestGroupSnapshot:
     async def test_does_not_build_the_full_snapshot(self) -> None:
         """A1:batch 走 `light_snapshot()`,不得再建全量 `snapshot()`。
 
-        全量那份會把當日數千筆 tick 逐筆組成 dict 再整份丟掉 —— 30 檔 × 每 60s。
+        全量那份會把當日數千筆 tick 逐筆組成 dict 再整份丟掉 —— 50 檔 × 每 60s。
         用「把該檔 state 的 `snapshot` 換成會炸的替身」鎖:讀不到 tick 這件事沒有
         任何畫面表現,只有這樣才驗得到真的沒走那條路。
         """

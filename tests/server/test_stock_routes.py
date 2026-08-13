@@ -474,8 +474,8 @@ class TestStateRouteContract:
 class TestGroupStateRoute:
     """群組檢視的唯讀 batch(group-grid SC-4)。
 
-    **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 30 檔各要一次
-    狀態,重用 `/api/stock/state/{code}` 等於每分鐘把主圖搶走 30 次 → 主圖分時線凍結,
+    **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 50 檔各要一次
+    狀態,重用 `/api/stock/state/{code}` 等於每分鐘把主圖搶走 50 次 → 主圖分時線凍結,
     而畫面上只表現為「圖不動了」,沒有任何錯誤。所以 `_main` 的斷言是本組的核心。
     """
 
@@ -491,7 +491,7 @@ class TestGroupStateRoute:
             assert r.status_code == 200
             states = r.json()["states"]
             assert set(states) == {"2330", "2317"}
-            # payload 形寫死:ticks 不得混進來(30 檔 × 數千筆 = 頻寬炸彈)
+            # payload 形寫死:ticks 不得混進來(50 檔 × 數千筆 = 頻寬炸彈)
             assert set(states["2330"]) == {"minutes", "meta", "no_data", "backfilling"}
             assert states["2330"]["no_data"] is False
             stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
