@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,18 @@ def _fut_evt_raw(seq: str, contract: str = "TXFI6", qty: str = "2", price: str =
     arr[0], arr[1], arr[2], arr[3] = seq, "TF", "N", "N"
     arr[6], arr[8], arr[11], arr[20] = "BNR20", contract, price, qty
     return ",".join(arr)
+
+
+def _fill_evt_raw(seq: str = "S1", qty: str = "1000", price: str = "90.0000") -> str:
+    """成交回報(Type=D):觸發 balance 重查排程。"""
+    arr = [""] * 48
+    arr[0], arr[1], arr[2], arr[3] = seq, "TS", "D", "N"
+    arr[6], arr[8], arr[11], arr[20] = "B00R2", "3357", price, qty
+    return ",".join(arr)
+
+
+def _balance_queries(com: FakeCom) -> int:
+    return sum(1 for entry in com.sent if entry[0] == "get_real_balance")
 
 
 def _stock_req(qty: int = 2) -> StockOrderRequest:
@@ -1274,6 +1287,83 @@ def test_pending_watchdog_publishes_sec_when_chain_stalls(tmp_path: Path) -> Non
     client._pump_once()
     sec = client.store.position_for("3357")
     assert sec is not None and sec.qty == 3
+
+
+def test_fill_schedules_balance_requery_within_half_second(tmp_path: Path) -> None:
+    """SC-5:成交後庫存重查排在 0.5s 後(上界防拖慢、下界防 debounce 被整個拿掉)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._handle_reply(_fill_evt_raw())
+    assert client._balance_due is not None
+    delay = client._balance_due - time.monotonic()
+    assert 0.45 <= delay <= 0.55
+
+
+def test_balance_query_guarded_while_chain_in_flight(tmp_path: Path) -> None:
+    """SC-7(a):鏈進行中(balance 段)第二筆成交不得再發 GetRealBalance —
+    群益 1019 + _pending_sec 被覆寫會整輪丟失部位;due 不清,留給鏈結束後補查。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 1
+    client._balance_due = time.monotonic() - 1.0  # 鏈進行中再成交(未餵 ## → 仍在 balance 段)
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 1
+    assert client._balance_due is not None  # 補查的前提:守門不得吃掉 due
+
+
+def test_balance_query_guarded_while_pending_even_if_inflight_expired(tmp_path: Path) -> None:
+    """SC-7(b):balance 段收完換 pending 段(profit/OI 未回)後,
+    守門改由 _pending_sec 判(_poll_pending 8s 保底),inflight deadline 逾期也不放行。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    client._handle_balance(
+        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    )
+    client._handle_balance("##")
+    assert client._pending_sec is not None  # profit 尚未回,鏈掛在 pending 段
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 1
+
+
+def test_balance_requeried_after_chain_completes(tmp_path: Path) -> None:
+    """SC-7(c):鏈走完(無期貨帳號路徑)→ 下一輪幫浦圈補查,成交不漏。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    client._balance_due = time.monotonic() - 1.0  # 鏈進行中的第二筆成交
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 1
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")  # → _query_open_interest → 無期貨帳號 → finalize
+    assert client._pending_sec is None
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 2
+
+
+def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) -> None:
+    """SC-7(d):零事件死查詢(collector poll 在 _last_feed is None 早退,永不 flush)—
+    deadline 逾期是唯一解卡通道,否則庫存永久停更。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 1
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 2
 
 
 def test_maybe_query_balance_runs_in_degraded(tmp_path: Path) -> None:
