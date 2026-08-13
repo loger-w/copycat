@@ -83,6 +83,10 @@ export interface StockAccum {
   book: StockBook | null;
   meta: StockMeta | null;
   noData: boolean;
+  /** 試撮 / 緩撮窗內(後端引擎以本機時鐘現算,期貨鍵恆 false)。**必填** ——
+   *  同 `WatchlistQuote.trial`:選填會讓漏帶靜默成 false = badge 永遠不亮。
+   *  snapshot 缺欄位(舊後端)由 `fromSnapshot` 以 `?? false` 降級。 */
+  trial: boolean;
   /** 當日最高 / 最低成交價(毫元,後端 running max/min)。**top-level 不掛 meta** ——
    *  meta 是 TC4 來的靜態盤別資料,把「由成交推導的當日狀態」塞進去語意錯位,
    *  而且只跑過回補、未收 REALTIME 時 meta 為 null,高低照樣要有值 */
@@ -151,6 +155,8 @@ interface SnapshotShape {
    *  同名反義的兩個欄位同時在前端手上,誤用不會報錯只會讓 VWAP 靜默偏移(FC-2)。 */
   vwap_vol?: number | null;
   no_data?: boolean;
+  /** 緩撮旗標;**選填** —— 舊後端沒給(全 additive 契約),缺欄位一律當窗外。 */
+  trial?: boolean;
 }
 
 /** 後端 minutes(JSON 物件,key 是分鐘字串)→ 前端 Map。
@@ -193,6 +199,7 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
     high: snap.high ?? null,
     low: snap.low ?? null,
     noData: snap.no_data ?? false,
+    trial: snap.trial ?? false,
     amountMilli: snap.vwap != null ? snap.vwap * volume : 0,
     volume,
   };

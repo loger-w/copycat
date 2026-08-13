@@ -27,6 +27,12 @@ export interface WatchlistQuote {
   upper: number | null;
   lower: number | null;
   no_data: boolean;
+  /** 試撮 / 緩撮窗內(08:30–09:00 / 13:25–13:30 台北)。後端每次組 payload 以本機時鐘
+   *  現算,期貨鍵空窗恆 `false` —— 前端不做任何時間判斷,也不 per-instrument 分岔。
+   *
+   *  **必填**:選填會讓「哪天解析漏帶」靜默降級成 false = badge 永遠不亮、零錯誤訊號。
+   *  舊後端不發此欄 → `Boolean(undefined)` = false → 不標,不炸。 */
+  trial: boolean;
 }
 
 export interface StkfutQuote {
@@ -309,6 +315,7 @@ export function useStockStream(
             upper: (msg.upper as number | null) ?? null,
             lower: (msg.lower as number | null) ?? null,
             no_data: Boolean(msg.no_data),
+            trial: Boolean(msg.trial),
           };
           setWatchlist((prev) => ({ ...prev, [msg.code as string]: q }));
           // 主圖也要收這一則(code review A2)。engine 的 `_handle_no_data` 對**任何**
@@ -319,6 +326,22 @@ export function useStockStream(
             const acc = accumRef.current;
             if (acc !== null && !acc.noData) {
               const next = { ...acc, noData: true };
+              accumRef.current = next;
+              setAccum(next);
+            }
+          }
+          // 主圖的 trial 補寫走**獨立分支**,刻意不與上面那塊合併:
+          //  - 上面是**單向黏性**(只 false→true,清除靠切檔 / 重連的全量 refetch)——
+          //    「TC4 對這個 symbol 零推播」不會自己好轉,而 no_data 一旦誤清就是一張
+          //    空圖不講原因。
+          //  - trial 是**時間窗**,09:00 出窗就該熄 → 天然雙向。把它塞進上面那塊等於
+          //    順手把 no_data 也雙向化 = 未宣告的行為改動。
+          // 預覽股(非自選)開頁後的窗轉態只有後端對「現貨主圖碼」的補推帶得進來,
+          // 沒有這段就得等下次全量 refetch,badge 遲到整個窗。
+          if (msg.code === current) {
+            const acc = accumRef.current;
+            if (acc !== null && acc.trial !== q.trial) {
+              const next = { ...acc, trial: q.trial };
               accumRef.current = next;
               setAccum(next);
             }

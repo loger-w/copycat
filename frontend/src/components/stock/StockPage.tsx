@@ -230,6 +230,14 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
             <header className="flex flex-wrap items-baseline gap-3">
               <h2 className="text-lg font-bold text-ink">
                 {meta?.name ?? ""} <span className="font-mono text-ink-muted">{code}</span>
+                {/* 緩撮標示(SC-2):`contract === null` 才標 —— 期貨合約沒有試撮窗
+                    (後端 trial 恆 false),而合約態下畫面上的標的是合約,同畫面側欄的
+                    現貨列照標是正確的(兩者並存)。色系同側欄:amber = 中性警示。 */}
+                {accum?.trial && contract === null ? (
+                  <span data-testid="page-trial" className="text-sm text-amber-400">
+                    (緩)
+                  </span>
+                ) : null}
               </h2>
               {/* 合約下拉(SC-4)。三類選項都得**逐字可指認**:`現貨` / `2026/09` /
                   `小型 2026/09` —— 標準與小型的契約單位差 20 倍(2,000 vs 100 股),
