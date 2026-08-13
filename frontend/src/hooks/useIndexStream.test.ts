@@ -107,6 +107,30 @@ describe("useIndexStream", () => {
     expect(hook.result.current.twse!.minutes).toEqual({ "0901": 1 }); // 舊日 minutes 已清
   });
 
+  it("換日 refetch 失敗 → 退避重試回填,不永久缺線(fix/index-chart-empty-minutes)", async () => {
+    const { hook, ws } = await setup();
+    // 換日瞬間 state 端點打嗝一次(網路層失敗),之後恢復且已是新日全量
+    fetchMock.mockImplementationOnce(async () => {
+      throw new TypeError("network down");
+    });
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ...STATE,
+            trade_date: "2026-07-29",
+            twse: { ...STATE.twse, minutes: { "0901": 1 } },
+          }),
+        ),
+    );
+    act(() => ws.emit(wsMsg({ trade_date: "2026-07-29" } as never)));
+    // 現行 bug:失敗只 console.warn 不重試 → 失敗點之前的分鐘永久缺失(線整條不見)
+    await waitFor(() => expect(hook.result.current.twse?.minutes).toEqual({ "0901": 1 }), {
+      timeout: 5000,
+    });
+    expect(hook.result.current.tradeDate).toBe("2026-07-29");
+  });
+
   it("WS reconnect → refetch state 全量(F3)", async () => {
     const { ws } = await setup();
     const before = fetchMock.mock.calls.length;
