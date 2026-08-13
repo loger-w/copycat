@@ -221,6 +221,35 @@ async def test_minutes_lag_self_heal_refetches_backfill() -> None:
         await eng.close()
 
 
+async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
+    """自癒回補必須送達已連線前端:廣播 payload 平常是 scalar-only(無 minutes),
+    heal 後若不帶一次 minutes 全量,前端只有換日/重連才 refetch —— 引擎治好了、
+    畫面上的線卻要等使用者重整才回來。retry 成功後下一則廣播帶 minutes 一次,
+    之後回到 scalar-only(頻寬慣例不變)。"""
+    fake = FakeIndexSource()
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        stream = eng.stream()
+        fake.day_minutes = {"0901": 1_000}
+        deadline = asyncio.get_running_loop().time() + 2.0
+        carried: dict | None = None
+        while asyncio.get_running_loop().time() < deadline:
+            msg = await asyncio.wait_for(stream.__anext__(), timeout=1)
+            if "minutes" in msg["twse"]:
+                carried = msg["twse"]["minutes"]
+                break
+        assert carried == {"0901": 1_000}
+        # 之後回到 scalar-only:觸發一則 dirty 廣播,不得再帶 minutes
+        assert fake.on_message is not None
+        fake.on_message(_quote(filled="20000"))  # 02:00 UTC → key 1001,跟上牆鐘不再觸發 heal
+        msg = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "minutes" not in msg["twse"]
+    finally:
+        await eng.close()
+
+
 async def test_minutes_lag_heal_not_triggered_when_current() -> None:
     """推播健康(minutes 跟上牆鐘)→ 自癒不得空轉重抓(fetch 只有 start 那一次)。"""
     fake = FakeIndexSource()
