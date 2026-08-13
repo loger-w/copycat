@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-13",
+  "findings": [
+    {"id": "R1", "severity": "P0", "summary": "toggleAll 在 data 未載入/載入失敗(EMPTY_WL)時把 WL_COLLAPSED_KEY 覆寫成 [],靜默清空既有逐組折疊持久化;新入口未沿用既有 data===undefined gate", "disposition": "accepted", "resolution": "全收/全展鈕併入同一 data === undefined gate(危險窗內不渲染);§F 增 edge case + vitest(pending 時鈕不存在)"},
+    {"id": "R2", "severity": "P1", "summary": "wave 2 [red] 斷言 toContain(\"bg-surface\") 會被既有 hover:bg-surface 子字串誤命中 → 假紅 + 永久 vacuous lock;「個股列不含」現況即真,是 lock 不是紅", "disposition": "accepted", "resolution": "改 classList.contains token 級斷言 + 補 not-contains hover:bg-surface;總表把個股列斷言改標 lock"},
+    {"id": "R3", "severity": "P1", "summary": "test_duplicate_codes_are_deduped_before_the_count_check 的 31 個重複碼在上限 50 下失去鑑別力(先驗後去重也不會 400)= vacuous 化,白名單 7 失守", "disposition": "accepted", "resolution": "重複數參數化 WATCHLIST_LIMIT + 1 並註明鑑別力前提"},
+    {"id": "R4", "severity": "P1", "summary": "效能盤點漏 engine 在場的 signal_hub._basis_worker:自選變更/啟動/rollover 每檔一次 TC4 日 K 往返 + 0.2s gap,50 檔 ×1.67", "disposition": "accepted", "resolution": "current-state §B 補 B-9;評估結論 = 低頻事件、~15s/批可接受,0.2s gap 不調"},
+    {"id": "R5", "severity": "P2", "summary": "註解同步清單漏 useGroupSnapshots.ts(3 處)/GroupGridView.tsx(2 處)/test_stock_routes.py:508 行尾註解;SC-2 grep 太窄", "disposition": "accepted", "resolution": "同步清單補齊;SC-2 gate 改寬 grep + 人工核對無關 30"},
+    {"id": "R6", "severity": "P2", "summary": "B-1 只評種子未評穩態;HR-6(next-time:1033)明文「佇列 1000 按 30 檔推的」未收進盤點", "disposition": "accepted", "resolution": "B-1 拆種子/穩態兩問(1000 槽 ≈ 20s 滿速 50/s 流量,仍夠,不調參);next-time:1033 數字同步"},
+    {"id": "R7", "severity": "P2", "summary": "前端新增 WATCHLIST_LIMIT 常數 = 無機械守門的重複真相源,未登錄 CLAUDE.md §4 跨檔契約", "disposition": "accepted", "resolution": "登錄專案 CLAUDE.md §4(產生點 + 兩讀者),沿 OrderRecord.unit 先例"},
+    {"id": "R8", "severity": "P2", "summary": "toggle 放 sticky 區塊下緣會被行內建議清單推下跳動,與「恆在可視範圍」理由相衝", "disposition": "accepted", "resolution": "改放 input 列與建議清單之間(位置穩定)"},
+    {"id": "R9", "severity": "P2", "summary": "B-4/B-6 惡化(300s→500s)只留文件記載,無觀測驗收或回退判準", "disposition": "accepted", "resolution": "輕量形式:next-time 條目補退出準則(TC4 離線啟動實測 breadth/index 就緒 >10 分鐘 → 做 per-code timeout 縮短/並行訂閱);不做本輪實測(TC4 離線非部署常態、boot 已背景化)"},
+    {"id": "R10", "severity": "P2", "summary": "/watch list 輸出長度 ×1.67,_REPLY_LIMIT 1900 截斷假設未列白名單", "disposition": "accepted", "resolution": "白名單補「截斷語意與 _REPLY_LIMIT 不變」;驗證節估算 50 檔滿載字數(~600-900 字 < 1900,安全)"}
+  ],
+  "refuted": [],
+  "exit": "P0 已修入 spec(amendment),依 core-flow §3 觸發限縮加輪 round 2"
+}

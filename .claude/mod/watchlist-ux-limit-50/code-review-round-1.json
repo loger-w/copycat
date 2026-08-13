@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "lenses": ["A: 白名單/既有行為對照 (opus)", "B: 測試效力/實作正確性 (opus)"],
+  "date": "2026-08-13",
+  "diff": "review-diff.txt (master..HEAD, 10 commits)",
+  "p0": [],
+  "p1": [
+    {"id": "B-1", "file": "frontend/src/components/stock/WatchlistSidebar.test.tsx", "claim": "白名單 1 的 ref 同步三步不變式在 toggleAll 路徑零機械守門:漏掉 collapsedRef 同步的 mutant 對現有五支 SC-4 測試全綠(後果 = 全收後單獨展開某組時殘留組名復活、另一組意外展開)", "disposition": "accepted", "resolution": "補序列 lock 測試:預置殘留 → 全收 → 單獨展開一組 → 斷言殘留不復活 + 兩組開合狀態正確;mutation 抽驗"}
+  ],
+  "p2_summary": {
+    "count": 5,
+    "items": [
+      {"id": "B-2", "claim": "hover 換手只斷言負向;正向 hover:bg-line/50 與 drag 守衛無測試訊號", "disposition": "accepted", "resolution": "補正向 token 斷言 + 拖曳態 header 無 hover: 斷言"},
+      {"id": "B-3", "claim": "未載入測試的第二句 localStorage 斷言恆真(零鑑別力)", "disposition": "accepted", "resolution": "降級為註解明言冗餘保險,鑑別力由第一句(鈕 null)承擔"},
+      {"id": "A-1", "claim": "collapsedRef 長註解「寫入點一律讀 ref」與 toggleAll(替換型寫入,冪等,經可達性分析安全)漂移", "disposition": "accepted", "resolution": "註解補例外說明:替換型寫入不需讀 ref,read-modify-write 才必須"},
+      {"id": "A-2", "claim": "前端/後端 WATCHLIST_LIMIT 契約無機械 lock(與 OrderRecord.unit 先例不對等)", "disposition": "accepted", "resolution": "後端補 parity oracle 測試:regex 讀 frontend/src/lib/constants.ts 斷言同值"},
+      {"id": "A-3", "claim": "sticky 多一列使拖曳「遮蔽帶」加高一列(既有語意的量變;搜尋列上放開仍落最近 zone)", "disposition": "accepted_as_documentation", "resolution": "本輪不改;記 docs/next-time.md(收斂方向:sticky 帶內 pointer 回 null)"}
+    ]
+  },
+  "whitelist_check": "lens A 逐條對照 11 條全數保留(見 agent 回報);wlReady 兩處同一判斷;EMPTY_WL 危險窗無新增寫入口",
+  "verified_non_findings": "lens B 反證:at-limit 測試真達 normalize;group-state 200+50 鍵;errText 精確匹配;twMerge 不互吞;bg-line/50 可編譯;pending 測試真達未載入態"
+}
