@@ -39,7 +39,11 @@ function lotText(lot: LadderLot): string {
 }
 
 /** 全成交徽章:幾何沿紅方格(同側同緣、同級距),但降為 muted 邊框且**不吃點擊** ——
- *  沒有 seq 可刪,長得像可刪的按鈕就是假訊號。 */
+ *  沒有 seq 可刪,長得像可刪的按鈕就是假訊號。
+ *
+ *  渲染分支另判 `lot.filled > 0`(與期貨梯 `FuturesLadder.tsx` 的 `r.myFilled > 0`
+ *  同口徑):`aggregateLots` 的 entry 條件不會產出空 lot,但本元件是公開 prop 介面,
+ *  沒有這道守門時外部 caller 餵進 qty/filled/seqs 全空的 lot 會畫出 `(0)` 幽靈徽章。 */
 const FILLED_BADGE =
   "pointer-events-none my-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted";
 
@@ -309,7 +313,7 @@ export function LadderView({
                     >
                       {lotText(buyLot)}
                     </button>
-                  ) : buyLot !== undefined ? (
+                  ) : buyLot !== undefined && buyLot.filled > 0 ? (
                     <span data-testid="ladder-filled-lot" className={cn(FILLED_BADGE, "ml-0.5")}>
                       {lotText(buyLot)}
                     </span>
@@ -358,7 +362,7 @@ export function LadderView({
                     >
                       {lotText(sellLot)}
                     </button>
-                  ) : sellLot !== undefined ? (
+                  ) : sellLot !== undefined && sellLot.filled > 0 ? (
                     <span data-testid="ladder-filled-lot" className={cn(FILLED_BADGE, "mr-0.5")}>
                       {lotText(sellLot)}
                     </span>
