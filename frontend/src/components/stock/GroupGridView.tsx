@@ -135,7 +135,7 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
   // 給卡片的**穩定** onPick(review A6-1)。`quotes` 每秒換一次 → 本元件每秒 render,
   // 而父層傳進來的 handler 是 inline arrow(每次都是新參照)—— 直接往下傳的話
-  // `memo` 每一輪都比不過,30 張卡片照樣全部重畫,memo 形同虛設。
+  // `memo` 每一輪都比不過,50 張卡片照樣全部重畫,memo 形同虛設。
   // latest-ref 而不是要求父層 useCallback:這是葉節點自己的效能問題,不該讓每個
   // 呼叫端記得配合;ref 在 commit 後才更新,而 click 只會發生在 commit 之後。
   const pickRef = useRef(onPick);
