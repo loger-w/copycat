@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { VpCell } from "@/lib/stock-accum";
 import { buildIntradayGeometry, plotWidth } from "@/lib/stock-intraday-svg";
 import { tickOf } from "@/lib/stock-tick";
-import { buildVpBars, VP_MAX_W_RATIO } from "@/lib/volume-profile";
+import { buildVpBars, VP_MAX_W_RATIO, VP_POC_FILL_OPACITY } from "@/lib/volume-profile";
 
 const WIDTH = 800;
 
@@ -189,6 +189,67 @@ describe("buildVpBars", () => {
       const bars = buildVpBars(cells([[p, 5]]), g, WIDTH);
       expect(bars[0]!.y).toBeCloseTo(g.toY(p + half), 6);
       expect(bars[0]!.y + bars[0]!.h / 0.85).toBeCloseTo(g.toY(p - half), 6);
+    });
+  });
+
+  /** 🟢 SC-4:POC(域內成交量最大的價位)。
+   *
+   *  判定跟著 `total` 走而不是 `w`:`w` 是歸一後的浮點數,拿它比大小會在
+   *  「兩檔量相同」時因浮點誤差而不決定性(同一份資料兩次 render 可能挑到不同那根)。
+   *  tie 一律取**較高價位** —— 決定性是 React 渲染穩定的前提,不是美感選擇。
+   *
+   *  域限定與歸一分母同規(`Math.max(1, ...)` 那條):域外那筆量再大也不是這張圖的 POC,
+   *  因為它根本沒畫出來。 */
+  describe("POC 判定(SC-4)", () => {
+    it("域內 total 最大的價位 poc = true,其餘 false", () => {
+      const bars = buildVpBars(
+        cells([[2_310_000, 1], [2_390_000, 2], [2_350_000, 30]]),
+        geom(2_300_000, 2_400_000),
+        WIDTH,
+      );
+      expect(bars.filter((b) => b.poc).map((b) => b.priceMilli)).toEqual([2_350_000]);
+      expect(bars.length).toBe(3);
+    });
+
+    it("tie(兩檔同量)→ 取**較高**價位,輸出決定性", () => {
+      const bars = buildVpBars(
+        cells([[2_350_000, 5], [2_360_000, 5], [2_310_000, 1]]),
+        geom(2_300_000, 2_400_000),
+        WIDTH,
+      );
+      expect(bars.filter((b) => b.poc).map((b) => b.priceMilli)).toEqual([2_360_000]);
+    });
+
+    it("只算**域內**:域外那筆量再大也不奪 POC", () => {
+      const bars = buildVpBars(
+        cells([[2_500_000, 1000], [2_350_000, 40], [2_360_000, 10]]),
+        geom(2_300_000, 2_400_000),
+        WIDTH,
+      );
+      // 2_500_000 根本沒進 bars(域外),POC 落在域內最大的 2_350_000
+      expect(bars.map((b) => b.priceMilli)).toEqual([2_360_000, 2_350_000]);
+      expect(bars.filter((b) => b.poc).map((b) => b.priceMilli)).toEqual([2_350_000]);
+    });
+
+    it("t 全 0(盤前 / 整批被濾)→ 無 POC(全 false),不硬挑一根", () => {
+      const bars = buildVpBars(
+        cells([[2_350_000, 0], [2_360_000, 0]]),
+        geom(2_300_000, 2_400_000),
+        WIDTH,
+      );
+      expect(bars.length).toBe(2);
+      expect(bars.some((b) => b.poc)).toBe(false);
+    });
+
+    it("單一檔位且有量 → 它就是 POC", () => {
+      const bars = buildVpBars(cells([[2_350_000, 3]]), geom(2_300_000, 2_400_000), WIDTH);
+      expect(bars[0]!.poc).toBe(true);
+    });
+
+    it("POC 透明度常數收在 lib(元件不寫 magic number)", () => {
+      expect(VP_POC_FILL_OPACITY).toBe(0.45);
+      // highlight 必須比一般 bar 更顯眼,否則「最大量價位」在畫面上分不出來
+      expect(VP_POC_FILL_OPACITY).toBeGreaterThan(0.25);
     });
   });
 
