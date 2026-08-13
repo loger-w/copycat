@@ -20,6 +20,14 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   `neutralize_external_env()` + 落檔隔離目錄 + 非 canonical port,全程零 TC4/ZMQ → 盤中即可拿
   真數據做 real-env 驗證(重啟 restore、失效注入、同分鐘對照)。樣板:R2 evidence 的
   breadth_side_server.py。(Trigger:盤中驗不碰 ZMQ 的後端資料管線)
+- **抄側車 / fake server 樣板時,`neutralize_external_env()` 是第一個要核的行**
+  (2026-08-13 mod/trial-pause-badge 真踩):group-grid / signal-rules 世代的
+  `fake_server.py` 樣板**沒有**憑證中和,照抄起服會拿 .env 真憑證登入群益**正式環境**
+  (當次僅唯讀查詢無下單,但不該發生)。含中和的最新 stock-engine 側車樣板 =
+  `.claude/mod/trial-pause-badge/evidence/fake_server.py`(neutralize 必須在
+  `create_app` import 使用**之前**呼叫);FinMind 側車樣板見上條 r3/r4。判準:凡起真
+  `create_app` 的腳本,開頭沒有 neutralize / 顯式空字串壓制 = 不合格,先補再跑。
+  (Trigger:新開任何側車 / 一次性起 app 腳本 / 抄舊 evidence 樣板)
 - **非 prod 進程的 `create_app` 一律必傳 `stock_watchlist_path` 隔離**(2026-08-12 XR-3
   review C-1/W-1):hub 解耦後**恆建**(不再需要 stock engine),而它的落點 = `wl_path.parent`
   —— 漏傳就落在 repo 真 `data/`,把該進程的事件寫進 prod 的 `data/signals/*.jsonl`。那份 jsonl
