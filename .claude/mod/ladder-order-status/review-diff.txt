@@ -1,0 +1,1366 @@
+diff --git a/copycat/capital/client.py b/copycat/capital/client.py
+index c6572fda..ddefd46f 100644
+--- a/copycat/capital/client.py
++++ b/copycat/capital/client.py
+@@ -87,6 +87,10 @@ _CLOSE_INFLIGHT_S = 10.0
+ # 零事件的靜默卡死)就以已收資料寫入,部位快取不可永久滯留在暫存區
+ _PENDING_TIMEOUT_S = 8.0
+ 
++# balance 段(GetRealBalance 發出 → 庫存收齊)的守門 deadline:這段沒有 pending
++# 可看,鏈又可能零事件卡死(collector 沒收到任何列就不會 flush)→ 逾期即放行重查
++_BALANCE_CHAIN_TIMEOUT_S = 10.0
++
+ # reply idx1 期權市場別(cancel/correct/decrease 的 market 交叉驗證用;
+ # 證券側用 reply.SEC_MARKETS 同一份)
+ _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
+@@ -156,6 +160,7 @@ class CapitalClient:
+         self._profit = BalanceCollector(on_complete=self._on_profit_complete, parse=parse_profit_line)
+         self._oi = BalanceCollector(on_complete=self._on_oi_complete, parse=parse_open_interest_line)
+         self._balance_due: float | None = None  # monotonic;成交後 debounce 重查
++        self._balance_inflight_until: float | None = None  # balance 段守門 deadline(None=不在段內)
+         self._balance_last_ts: float = 0.0  # 定時重查用(0=啟動後第一圈就查)
+         self._close_inflight: dict[str, float] = {}  # key → monotonic 解鎖時刻(只在 loop 上碰)
+         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
+@@ -204,6 +209,9 @@ class CapitalClient:
+         if new == self._status:
+             return
+         self._status = new
++        if new == "ok":
++            # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查
++            self._balance_inflight_until = None
+         self._emit(
+             {"event": "capital_status", "data": {"status": new, "last_error": self._last_error}}
+         )
+@@ -320,15 +328,29 @@ class CapitalClient:
+ 
+     # ------------------------------------------------------------------ balance 鏈(COM 執行緒)
+ 
+-    def _mark_balance_dirty(self, delay_s: float = 2.0) -> None:
++    def _mark_balance_dirty(self, delay_s: float = 0.5) -> None:
+         self._balance_due = time.monotonic() + delay_s
+ 
+     def _maybe_query_balance(self) -> None:
+         """幫浦圈呼叫:due 到了或距上次查詢逾 60s → 發查詢。
+-        degraded(回報斷線)也要查 — 此時 60s 輪詢是部位唯一的更新來源。"""
++        degraded(回報斷線)也要查 — 此時 60s 輪詢是部位唯一的更新來源。
++
++        鏈(balance→profit→OI)進行中不得重發:第二次 GetRealBalance 吃群益 1019、
++        且 _pending_sec 被覆寫 → 前一輪的 profit/OI 落到「遲到丟棄」分支,該輪部位
++        均價/損益整批遺失。守門分兩段(deadline 只管 balance 段,pending 段有
++        _poll_pending 保底);擋下時**不清 `_balance_due`** — 鏈結束後下一輪補查,
++        成交不漏。"""
+         if self._status not in ("ok", "degraded"):
+             return
+         now = time.monotonic()
++        if self._pending_sec is not None:
++            return
++        if self._balance_inflight_until is not None:
++            if now < self._balance_inflight_until:
++                return
++            # 零事件的死查詢:collector.poll 在 _last_feed is None 時早退、永不 flush,
++            # deadline 逾期是唯一解卡通道(不放行 = 庫存永久停更)
++            self._balance_inflight_until = None
+         due = self._balance_due is not None and now >= self._balance_due
+         stale = now - self._balance_last_ts >= 60.0
+         if not due and not stale:
+@@ -336,8 +358,10 @@ class CapitalClient:
+         self._balance_due = None
+         self._balance_last_ts = now  # 先記,失敗也不連發
+         self._balance.reset()
++        self._balance_inflight_until = now + _BALANCE_CHAIN_TIMEOUT_S
+         rc = self._com.get_real_balance(self._user_id, self._full_account)
+         if rc != 0:
++            self._balance_inflight_until = None  # 鏈沒啟動,旗標不可佔著擋下一輪
+             logger.warning("GetRealBalanceReport rc=%s: %s", rc, self._com.return_code_message(rc))
+ 
+     def _on_balance_complete(self, positions: list[Position]) -> None:
+@@ -345,6 +369,7 @@ class CapitalClient:
+         同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
+         self._pending_sec = positions
+         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
++        self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
+         self._balance_last_ts = time.monotonic()
+         self._profit.reset()
+         rc = self._com.get_profit_loss_gw(self._user_id, self._full_account)
+@@ -413,6 +438,7 @@ class CapitalClient:
+             return
+         self._pending_sec = None
+         self._pending_deadline = None
++        self._balance_inflight_until = None  # 三個旗標同組清,且在 emit 前(例外不得滯留守門)
+         merged = sec + fut_rows
+         self.store.set_positions(merged)
+         self._emit({"event": "capital_position", "data": {"count": len(merged)}})
+diff --git a/frontend/src/components/futures/FuturesLadder.test.tsx b/frontend/src/components/futures/FuturesLadder.test.tsx
+index 30092342..ed80c08f 100644
+--- a/frontend/src/components/futures/FuturesLadder.test.tsx
++++ b/frontend/src/components/futures/FuturesLadder.test.tsx
+@@ -76,6 +76,15 @@ function futOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
+   };
+ }
+ 
++/** 動態 YYYYMMDD:已成交量的日期界每 render 以 `new Date()` 算(期貨梯 = ±1 日窗),
++ *  fixture 寫死過去日的話徽章案取不到 filled(spec A6)。 */
++function ymd(offsetDays = 0): string {
++  const d = new Date();
++  d.setDate(d.getDate() + offsetDays);
++  const m = String(d.getMonth() + 1).padStart(2, "0");
++  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
++}
++
+ function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+   return {
+     market: "fut",
+@@ -326,7 +335,7 @@ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
+     });
+     render(ladder());
+     const lot = await screen.findByLabelText("刪 23000 掛單");
+-    expect(lot.textContent).toBe("4"); // 2 + (3-1)
++    expect(lot.textContent).toBe("4(1)"); // 未成交 2 + (3-1) / 已成交 1
+     expect(screen.queryByLabelText("刪 23001 掛單")).toBeNull(); // 他契約
+     fireEvent.click(lot);
+     await waitFor(() => expect(cancelBodies.length).toBe(2));
+@@ -335,6 +344,46 @@ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
+       { seq_no: "F02", market: "fut" },
+     ]);
+   });
++
++  /** 全成交後無 seq 可刪:徽章不可點,且**全撤鈕必須維持 disabled**
++   *  —— allSeqNos 只含活單 seq(R4)。 */
++  it("本契約僅剩全成交 → `(N)` 徽章不可點、全撤鈕 disabled", async () => {
++    const cancelBodies: unknown[] = [];
++    mockFetch({
++      "/api/capital/order/cancel": (init) => {
++        cancelBodies.push(JSON.parse(String(init?.body)));
++        return json(OK_RESULT);
++      },
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            futOrder({
++              seq_no: "F09",
++              price: 23_000,
++              order_qty: 2,
++              filled_qty: 2,
++              actionable: false,
++              status_label: "全部成交",
++              date: ymd(),
++            }),
++          ],
++        }),
++      "/api/capital/positions": () => json({ positions: [] }),
++    });
++    render(ladder());
++    const badge = await screen.findByTestId("ladder-filled-lot");
++    expect(badge.textContent).toBe("(2)");
++    expect(badge.tagName).toBe("SPAN");
++    expect(screen.queryByLabelText("刪 23000 掛單")).toBeNull();
++    fireEvent.click(badge);
++    await act(async () => {
++      await Promise.resolve();
++    });
++    expect(cancelBodies.length).toBe(0);
++    const cancelAll = screen.getByRole("button", { name: "全撤" });
++    expect(cancelAll.hasAttribute("disabled")).toBe(true);
++    expect(cancelAll.getAttribute("title")).toBe("無本契約活單");
++  });
+ });
+ 
+ describe("FuturesLadder 全撤(SC-10)", () => {
+diff --git a/frontend/src/components/futures/FuturesLadder.tsx b/frontend/src/components/futures/FuturesLadder.tsx
+index 61d905e3..eb47499b 100644
+--- a/frontend/src/components/futures/FuturesLadder.tsx
++++ b/frontend/src/components/futures/FuturesLadder.tsx
+@@ -19,6 +19,7 @@ import {
+   splitMyLots,
+   type FutLadderRow,
+ } from "@/lib/futures-ladder";
++import { ymdWindow } from "@/lib/ladder-lots";
+ import { initialQtyState, manualQty, pressQuick, QTY_PRESETS, type QtyState } from "@/lib/qty-quick";
+ import { settlementCountdown } from "@/lib/settlement";
+ import { tradeErrorText } from "@/lib/trade-text";
+@@ -83,7 +84,13 @@ export function FuturesLadder({
+ 
+   const resolvedYm = state?.resolved_contract ?? null;
+   const contract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
+-  const myLots = contract !== null ? splitMyLots(ordersData?.orders ?? [], contract) : [];
++  // 已成交量的日期界 = ±1 日窗(夜盤跨午夜時 `date` 是交易日還是日曆日尚未實證,
++  // 兩種假設都涵蓋);每 render 重算,純算術。
++  const myLots =
++    contract !== null
++      ? splitMyLots(ordersData?.orders ?? [], contract, ymdWindow(new Date(), [-1, 0, 1]))
++      : [];
++  // 只含活單 seq(filled-only 條目的 seqNos 恆空)→ 僅剩全成交徽章時全撤鈕維持 disabled
+   const allSeqNos = myLots.flatMap((l) => l.seqNos);
+ 
+   // 一鍵平倉對象:期貨 + **契約完整字串相等**(前綴比對會把 MXF 的部位掃進 TXF 的平倉)
+@@ -407,15 +414,23 @@ export function FuturesLadder({
+               )}
+             >
+               <div className="flex items-stretch">
+-                {r.myQty > 0 ? (
++                {r.myQty > 0 || r.mySeqNos.length > 0 ? (
+                   <button
+                     type="button"
+                     aria-label={`刪 ${fmt(r.priceMilli)} 掛單`}
+                     onClick={() => cancelLot(r.mySeqNos)}
+                     className="my-0.5 ml-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
+                   >
+-                    {r.myQty}
++                    {`${r.myQty}(${r.myFilled})`}
+                   </button>
++                ) : r.myFilled > 0 ? (
++                  /* 全成交:無 seq 可刪 → 不可點徽章(幾何沿紅方格,降為 muted 且不吃點擊) */
++                  <span
++                    data-testid="ladder-filled-lot"
++                    className="pointer-events-none my-0.5 ml-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted"
++                  >
++                    {`(${r.myFilled})`}
++                  </span>
+                 ) : null}
+                 <button
+                   type="button"
+diff --git a/frontend/src/components/stock/LadderView.tsx b/frontend/src/components/stock/LadderView.tsx
+index 0705d2b5..3ec93f1c 100644
+--- a/frontend/src/components/stock/LadderView.tsx
++++ b/frontend/src/components/stock/LadderView.tsx
+@@ -11,6 +11,7 @@
+ import { useEffect, useRef, useState, type ReactNode } from "react";
+ 
+ import { fmt } from "@/lib/format";
++import type { LadderLot } from "@/lib/ladder-lots";
+ import { QTY_PRESETS } from "@/lib/qty-quick";
+ import type { LadderRow } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+@@ -22,12 +23,26 @@ export interface CenterRequest {
+   nonce: number;
+ }
+ 
+-/** 同價位活單聚合(點紅方格逐 seq 直刪用)。 */
+-export interface LadderLot {
+-  qty: number; // 殘量(order_qty - filled_qty 聚合)
+-  seqs: string[];
++/** 同價位活單聚合。型別本體在 `lib/ladder-lots.ts`(與聚合函式同居);此處 re-export
++ *  保住既有 `@/components/stock/LadderView` 的 import 路徑。 */
++export type { LadderLot };
++
++/** 有 seq 可刪(或還有殘量)→ 維持可點紅方格。`seqs` 非空是關鍵條件:actionable 但
++ *  殘量算出來是 0 的單(P/U 先到、N 未到)照樣刪得掉,轉成徽章等於沒收刪單入口。 */
++function isCancelable(lot: LadderLot): boolean {
++  return lot.qty > 0 || lot.seqs.length > 0;
++}
++
++/** 紅方格 / 徽章文字:`未成交(已成交)`;無活單時只剩 `(已成交)`。 */
++function lotText(lot: LadderLot): string {
++  return isCancelable(lot) ? `${lot.qty}(${lot.filled})` : `(${lot.filled})`;
+ }
+ 
++/** 全成交徽章:幾何沿紅方格(同側同緣、同級距),但降為 muted 邊框且**不吃點擊** ——
++ *  沒有 seq 可刪,長得像可刪的按鈕就是假訊號。 */
++const FILLED_BADGE =
++  "pointer-events-none my-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted";
++
+ /** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
+ export const DASH = "—";
+ 
+@@ -285,15 +300,19 @@ export function LadderView({
+                     合成層屬性,套在容器上時子元素無法「反淡」—— 之後要疊在 row 上的
+                     部位標記(打平 / 均價)正好都落在遠離現價的位置。 */}
+                 <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
+-                  {buyLot !== undefined ? (
++                  {buyLot !== undefined && isCancelable(buyLot) ? (
+                     <button
+                       type="button"
+                       aria-label={`刪 ${fmt(r.priceMilli)} 買單`}
+                       onClick={() => onCancelLot(buyLot)}
+                       className="my-0.5 ml-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
+                     >
+-                      {buyLot.qty}
++                      {lotText(buyLot)}
+                     </button>
++                  ) : buyLot !== undefined ? (
++                    <span data-testid="ladder-filled-lot" className={cn(FILLED_BADGE, "ml-0.5")}>
++                      {lotText(buyLot)}
++                    </span>
+                   ) : null}
+                   <button
+                     type="button"
+@@ -330,15 +349,19 @@ export function LadderView({
+                   >
+                     {r.askQty > 0 ? r.askQty : ""}
+                   </button>
+-                  {sellLot !== undefined ? (
++                  {sellLot !== undefined && isCancelable(sellLot) ? (
+                     <button
+                       type="button"
+                       aria-label={`刪 ${fmt(r.priceMilli)} 賣單`}
+                       onClick={() => onCancelLot(sellLot)}
+                       className="my-0.5 mr-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
+                     >
+-                      {sellLot.qty}
++                      {lotText(sellLot)}
+                     </button>
++                  ) : sellLot !== undefined ? (
++                    <span data-testid="ladder-filled-lot" className={cn(FILLED_BADGE, "mr-0.5")}>
++                      {lotText(sellLot)}
++                    </span>
+                   ) : null}
+                 </div>
+               </div>
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index ac52b43b..3a215252 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -82,6 +82,15 @@ function capitalOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
+   };
+ }
+ 
++/** 動態 YYYYMMDD:已成交量的日期界以 `new Date()` 每 render 算(現股梯 = 嚴格今日),
++ *  fixture 寫死過去日的話終態徽章案永遠取不到 filled(spec A6)。 */
++function ymd(offsetDays = 0): string {
++  const d = new Date();
++  d.setDate(d.getDate() + offsetDays);
++  const m = String(d.getMonth() + 1).padStart(2, "0");
++  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
++}
++
+ function capitalPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+   return {
+     market: "sec",
+@@ -462,8 +471,8 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
+     });
+     render(ladder());
+     const buyLot = await screen.findByLabelText("刪 100 買單");
+-    expect(buyLot.textContent).toBe("4"); // 2 + (3-1)
+-    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1");
++    expect(buyLot.textContent).toBe("4(1)"); // 未成交 2 + (3-1) / 已成交 1
++    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1(0)");
+     expect(screen.queryByLabelText("刪 99.9 買單")).toBeNull();
+     fireEvent.click(buyLot);
+     await waitFor(() => expect(cancelBodies.length).toBe(2));
+@@ -474,6 +483,144 @@ describe("PriceLadder 掛單紅方格(SC-7)", () => {
+   });
+ });
+ 
++describe("PriceLadder 已成交徽章(SC-2)", () => {
++  /** 同價全部成交(終態單)→ 無 seq 可刪 → 不可點徽章;紅方格(button)必須消失 */
++  it("全成交 → `(N)` 徽章、非 button、點擊不送 cancel", async () => {
++    const cancelBodies: unknown[] = [];
++    mockCapitalFetch({
++      "/api/capital/order/cancel": (init) => {
++        cancelBodies.push(JSON.parse(String(init?.body)));
++        return json(OK_RESULT);
++      },
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            capitalOrder({
++              seq_no: "010",
++              price: 100,
++              order_qty: 2,
++              filled_qty: 2,
++              actionable: false,
++              status_label: "全部成交",
++              date: ymd(),
++            }),
++          ],
++        }),
++    });
++    render(ladder());
++    const badge = await screen.findByTestId("ladder-filled-lot");
++    expect(badge.textContent).toBe("(2)");
++    expect(badge.tagName).toBe("SPAN");
++    expect(badge.className).toContain("pointer-events-none");
++    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
++    fireEvent.click(badge);
++    await act(async () => {
++      await Promise.resolve();
++    });
++    expect(cancelBodies.length).toBe(0);
++    // 徽章佔位不吃掉同列點價鈕(R8:鈕變窄是承認的偏差,不可點才是 bug)
++    expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(false);
++  });
++
++  it("部分成交後刪單 → 徽章留下已成交量(成交是事實)", async () => {
++    mockCapitalFetch({
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            capitalOrder({
++              seq_no: "011",
++              price: 100,
++              order_qty: 5,
++              filled_qty: 2,
++              actionable: false,
++              status_label: "已刪單",
++              date: ymd(),
++            }),
++          ],
++        }),
++    });
++    render(ladder());
++    expect((await screen.findByTestId("ladder-filled-lot")).textContent).toBe("(2)");
++  });
++
++  /** 「查無」斷言的同步錨:orders query 未回時整梯也是空的 —— 沒有這筆對照單,
++   *  三個 absence 案在「資料還沒到」的瞬間就恆綠(vacuous)。 */
++  const ANCHOR = capitalOrder({ seq_no: "099", buy_sell: "S", price: 100.5, order_qty: 1 });
++
++  it("失敗 / 退單(filled 0)→ 零痕跡(無徽章也無紅方格)", async () => {
++    mockCapitalFetch({
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            ANCHOR,
++            capitalOrder({
++              seq_no: "012",
++              price: 100,
++              order_qty: 2,
++              filled_qty: 0,
++              actionable: false,
++              status_label: "失敗",
++              date: ymd(),
++            }),
++          ],
++        }),
++    });
++    render(ladder());
++    await screen.findByLabelText("刪 100.5 賣單");
++    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
++    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
++  });
++
++  it("終態單 date=昨日 → 無徽章(現股梯嚴格今日,跨日幽靈不長出來)", async () => {
++    mockCapitalFetch({
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            ANCHOR,
++            capitalOrder({
++              seq_no: "013",
++              price: 100,
++              order_qty: 2,
++              filled_qty: 2,
++              actionable: false,
++              status_label: "全部成交",
++              date: ymd(-1),
++            }),
++          ],
++        }),
++    });
++    render(ladder());
++    await screen.findByLabelText("刪 100.5 賣單");
++    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
++  });
++
++  it("零股單(unit=股)整筆不上梯 —— 張梯不混單位(R6)", async () => {
++    mockCapitalFetch({
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            ANCHOR,
++            capitalOrder({ seq_no: "014", price: 100, order_qty: 1_000, unit: "股" }),
++            capitalOrder({
++              seq_no: "015",
++              price: 100,
++              order_qty: 500,
++              filled_qty: 500,
++              unit: "股",
++              actionable: false,
++              status_label: "全部成交",
++              date: ymd(),
++            }),
++          ],
++        }),
++    });
++    render(ladder());
++    await screen.findByLabelText("刪 100.5 賣單");
++    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
++    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
++  });
++});
++
+ // ---------------------------------------------------------------------------
+ // 部位列 + 未實現損益 + 含成本打平價(SC-1 / SC-4 / SC-5 / SC-6 / SC-7)
+ // ---------------------------------------------------------------------------
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index 955408e7..c1710e1c 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -17,6 +17,7 @@ import {
+ import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+ import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
++import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
+ import {
+   avgTickOf,
+   clampDiscount,
+@@ -30,7 +31,7 @@ import type { StockBook, StockMeta } from "@/lib/stock-accum";
+ import { buildLadder } from "@/lib/stock-tick";
+ import { tradeErrorText } from "@/lib/trade-text";
+ import { cn } from "@/lib/utils";
+-import type { CapitalOrder, CapitalPosition } from "@/types";
++import type { CapitalPosition } from "@/types";
+ 
+ const CLICK_DEBOUNCE_MS = 500;
+ const HINT_MS = 3_000;
+@@ -134,26 +135,6 @@ function markMap(rows: PositionRow[], pick: (r: PositionRow) => number | null):
+   return map;
+ }
+ 
+-/** 本檔 actionable 活單 → 價位(毫元)聚合殘量;點紅方格逐 seq 直刪用。 */
+-function aggregateLots(
+-  orders: CapitalOrder[] | undefined,
+-  code: string,
+-): { buy: Map<number, LadderLot>; sell: Map<number, LadderLot> } {
+-  const buy = new Map<number, LadderLot>();
+-  const sell = new Map<number, LadderLot>();
+-  for (const o of orders ?? []) {
+-    if (!o.actionable || o.stock_no !== code || o.price === null) continue;
+-    const map = o.buy_sell === "B" ? buy : o.buy_sell === "S" ? sell : null;
+-    if (map === null) continue;
+-    const key = Math.round(o.price * 1000);
+-    const cur = map.get(key) ?? { qty: 0, seqs: [] };
+-    cur.qty += Math.max(0, o.order_qty - o.filled_qty);
+-    cur.seqs.push(o.seq_no);
+-    map.set(key, cur);
+-  }
+-  return { buy, sell };
+-}
+-
+ interface Props {
+   code: string;
+   /** 股名(標題列標的顯示,D-12 降誤送風險) */
+@@ -204,7 +185,9 @@ export function PriceLadder({
+   const submitStock = useSubmitStock();
+   const cancelOrder = useCancelOrder();
+   const { data: ordersData } = useCapitalOrders();
+-  const lots = aggregateLots(ordersData?.orders, code);
++  // 現股無夜盤 → 已成交量的日期界取**嚴格今日**(跨日幽靈徽章全滅);零股單整筆排除
++  // (張梯混進零股量級差一千倍,其刪單入口仍在委託列表)。每 render 重算:純算術。
++  const lots = aggregateLots(ordersData?.orders, code, ymdWindow(new Date(), [0]), "股");
+   const { data: positionsData } = useCapitalPositions();
+   // 每 tick 重算:kinds 量級是個位數的純算術,不值得 memo
+   const posRows = positionRows(
+diff --git a/frontend/src/components/stock/StkfutLadder.test.tsx b/frontend/src/components/stock/StkfutLadder.test.tsx
+index 66cf6fe9..2dcf8367 100644
+--- a/frontend/src/components/stock/StkfutLadder.test.tsx
++++ b/frontend/src/components/stock/StkfutLadder.test.tsx
+@@ -83,6 +83,15 @@ function futOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
+   };
+ }
+ 
++/** 動態 YYYYMMDD:已成交量的日期界每 render 以 `new Date()` 算(個股期梯 = ±1 日窗,
++ *  夜盤跨午夜的 date 語意未實證),fixture 寫死過去日的話徽章案取不到 filled(spec A6)。 */
++function ymd(offsetDays = 0): string {
++  const d = new Date();
++  d.setDate(d.getDate() + offsetDays);
++  const m = String(d.getMonth() + 1).padStart(2, "0");
++  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
++}
++
+ function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+   return {
+     market: "fut",
+@@ -284,8 +293,8 @@ describe("StkfutLadder 掛單紅方格(R2-4)", () => {
+     });
+     render(ladder());
+     const buyLot = await screen.findByLabelText("刪 100 買單");
+-    expect(buyLot.textContent).toBe("4"); // 2 + (3-1);他契約與現股單不計入
+-    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1");
++    expect(buyLot.textContent).toBe("4(1)"); // 未成交 2 + (3-1) / 已成交 1;他契約與現股單不計入
++    expect(screen.getByLabelText("刪 100.5 賣單").textContent).toBe("1(0)");
+     fireEvent.click(buyLot);
+     await waitFor(() => expect(cancelBodies.length).toBe(2));
+     expect(cancelBodies).toMatchObject([
+@@ -295,6 +304,76 @@ describe("StkfutLadder 掛單紅方格(R2-4)", () => {
+   });
+ });
+ 
++describe("StkfutLadder 已成交徽章(SC-3)", () => {
++  it("全成交 → `(N)` 徽章、非 button、點擊不送 cancel", async () => {
++    const cancelBodies: unknown[] = [];
++    mockCapitalFetch({
++      "/api/capital/order/cancel": (init) => {
++        cancelBodies.push(JSON.parse(String(init?.body)));
++        return json(OK_RESULT);
++      },
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            futOrder({
++              seq_no: "F10",
++              price: 100,
++              order_qty: 2,
++              filled_qty: 2,
++              actionable: false,
++              status_label: "全部成交",
++              date: ymd(),
++            }),
++          ],
++        }),
++    });
++    render(ladder());
++    const badge = await screen.findByTestId("ladder-filled-lot");
++    expect(badge.textContent).toBe("(2)");
++    expect(badge.tagName).toBe("SPAN");
++    expect(screen.queryByLabelText("刪 100 買單")).toBeNull();
++    fireEvent.click(badge);
++    await act(async () => {
++      await Promise.resolve();
++    });
++    expect(cancelBodies.length).toBe(0);
++  });
++
++  /** 個股期梯是 ±1 日窗(現股梯嚴格今日):夜盤的 date 語意未實證,兩種假設都要涵蓋 */
++  function renderFilledOn(date: string) {
++    mockCapitalFetch({
++      "/api/capital/orders": () =>
++        json({
++          orders: [
++            // 同步錨:orders query 未回時整梯也空 —— 沒有這筆對照單,「查無徽章」恆綠
++            futOrder({ seq_no: "F99", buy_sell: "S", price: 100.5, order_qty: 1 }),
++            futOrder({
++              seq_no: "F11",
++              price: 100,
++              order_qty: 2,
++              filled_qty: 2,
++              actionable: false,
++              status_label: "全部成交",
++              date,
++            }),
++          ],
++        }),
++    });
++    return render(ladder());
++  }
++
++  it("日期界 ±1 日窗:昨日的終態單仍計入(夜盤跨午夜)", async () => {
++    renderFilledOn(ymd(-1));
++    expect((await screen.findByTestId("ladder-filled-lot")).textContent).toBe("(2)");
++  });
++
++  it("日期界外(前 5 日)的終態單 → 無徽章", async () => {
++    renderFilledOn(ymd(-5));
++    await screen.findByLabelText("刪 100.5 賣單");
++    expect(screen.queryByTestId("ladder-filled-lot")).toBeNull();
++  });
++});
++
+ describe("StkfutLadder 部位條(R2-4)", () => {
+   it("只收本合約的期貨部位;口數單位;損益走群益名目值(不套現股稅費)", async () => {
+     mockCapitalFetch({
+diff --git a/frontend/src/components/stock/StkfutLadder.tsx b/frontend/src/components/stock/StkfutLadder.tsx
+index 704d964e..128cf708 100644
+--- a/frontend/src/components/stock/StkfutLadder.tsx
++++ b/frontend/src/components/stock/StkfutLadder.tsx
+@@ -28,6 +28,7 @@ import {
+ import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
+ import { futExchangeContract } from "@/lib/futures-ladder";
++import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
+ import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
+ import {
+   instrumentKeyOf,
+@@ -39,7 +40,7 @@ import {
+ import type { StockBook, StockMeta } from "@/lib/stock-accum";
+ import { buildLadder } from "@/lib/stock-tick";
+ import { tradeErrorText } from "@/lib/trade-text";
+-import type { CapitalOrder, CapitalPosition } from "@/types";
++import type { CapitalPosition } from "@/types";
+ 
+ const CLICK_DEBOUNCE_MS = 500;
+ const HINT_MS = 3_000;
+@@ -47,30 +48,6 @@ const HINT_MS = 3_000;
+  *  (code review B3),寫死「ETF」會讓那類標的的提示變成假訊息。 */
+ const BLOCKED_TEXT = "此契約規格暫未開放下單";
+ 
+-/** 本合約 actionable 活單 → 價位(毫元)聚合殘量;點紅方格逐 seq 直刪用。
+- *
+- *  比對鍵是**期交所契約碼**(CDFI6),不是股號:群益回報的期貨單 `stock_no` 放的是
+- *  契約碼,拿股號比會一筆都對不上(而畫面上只是「沒有掛單」,零錯誤訊號)。 */
+-function aggregateLots(
+-  orders: CapitalOrder[] | undefined,
+-  contract: string | null,
+-): { buy: Map<number, LadderLot>; sell: Map<number, LadderLot> } {
+-  const buy = new Map<number, LadderLot>();
+-  const sell = new Map<number, LadderLot>();
+-  if (contract === null) return { buy, sell };
+-  for (const o of orders ?? []) {
+-    if (!o.actionable || o.stock_no !== contract || o.price === null) continue;
+-    const map = o.buy_sell === "B" ? buy : o.buy_sell === "S" ? sell : null;
+-    if (map === null) continue;
+-    const key = Math.round(o.price * 1000);
+-    const cur = map.get(key) ?? { qty: 0, seqs: [] };
+-    cur.qty += Math.max(0, o.order_qty - o.filled_qty);
+-    cur.seqs.push(o.seq_no);
+-    map.set(key, cur);
+-  }
+-  return { buy, sell };
+-}
+-
+ /** 本合約部位(fut + 契約碼相等 + qty ≠ 0)。 */
+ function contractPositions(
+   positions: CapitalPosition[] | undefined,
+@@ -139,7 +116,14 @@ export function StkfutLadder({
+   // 判準吃契約單位(與後端 `_stkfut_gates` 同一個),單位不可得才落回股號 fallback
+   const blocked = isOrderBlocked(code, contract.unit);
+ 
+-  const lots = aggregateLots(ordersData?.orders, exchangeContract);
++  // 個股期有夜盤 → 已成交量的日期界取 ±1 日窗(`date` 在夜盤跨午夜時是交易日還是
++  // 日曆日尚未實證,兩種假設都涵蓋);unit 閘不設 —— 契約碼與股號零碰撞,整筆 unit
++  // 過濾反而會誤殺 market 缺值 fallback 的期貨單。
++  const lots = aggregateLots(
++    ordersData?.orders,
++    exchangeContract,
++    ymdWindow(new Date(), [-1, 0, 1]),
++  );
+   const posRows = contractPositions(positionsData?.positions, exchangeContract);
+ 
+   const ladder = buildLadder({
+diff --git a/frontend/src/lib/futures-ladder.test.ts b/frontend/src/lib/futures-ladder.test.ts
+index 3bcfe800..5ddcff3e 100644
+--- a/frontend/src/lib/futures-ladder.test.ts
++++ b/frontend/src/lib/futures-ladder.test.ts
+@@ -64,7 +64,7 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
+       ...wide,
+       bids: [{ priceMilli: 22_999_000, qty: 45 }],
+       asks: [{ priceMilli: 23_001_000, qty: 88 }],
+-      myLots: [{ priceMilli: 22_998_000, qty: 3, seqNos: ["A1", "A2"] }],
++      myLots: [{ priceMilli: 22_998_000, qty: 3, filled: 2, seqNos: ["A1", "A2"] }],
+       rows: 5,
+     });
+     const at = (p: number) => rows.find((r) => r.priceMilli === p)!;
+@@ -72,10 +72,13 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
+     expect(at(23_001_000).askQty).toBe(88);
+     expect(at(22_998_000).myQty).toBe(3);
+     expect(at(22_998_000).mySeqNos).toEqual(["A1", "A2"]);
++    // 已成交量也要烘進 row(SC-4:紅方格文字 `未成交(已成交)` 的來源)
++    expect(at(22_998_000).myFilled).toBe(2);
+     expect(at(23_000_000).bidQty).toBe(0);
+     expect(at(23_000_000).askQty).toBe(0);
+     expect(at(23_000_000).myQty).toBe(0);
+     expect(at(23_000_000).mySeqNos).toEqual([]);
++    expect(at(23_000_000).myFilled).toBe(0);
+   });
+ 
+   it("center 非 tick 對齊 → snap down 到合法檔位再置中", () => {
+@@ -116,6 +119,11 @@ describe("buildFuturesLadder 期貨階梯生成", () => {
+ });
+ 
+ describe("splitMyLots 該契約活單按價位聚合", () => {
++  const TODAY = "20260813";
++  const YESTERDAY = "20260812";
++  /** 期貨梯口徑 = ±1 日窗(夜盤跨午夜語意未實證,兩種假設皆涵蓋) */
++  const WINDOW = new Set([YESTERDAY, TODAY, "20260814"]);
++
+   const o = (over: Partial<FutOrderSource>): FutOrderSource => ({
+     seq_no: "S1",
+     stock_no: "TXFI6",
+@@ -124,6 +132,7 @@ describe("splitMyLots 該契約活單按價位聚合", () => {
+     order_qty: 2,
+     filled_qty: 0,
+     actionable: true,
++    date: TODAY,
+     ...over,
+   });
+ 
+@@ -135,29 +144,62 @@ describe("splitMyLots 該契約活單按價位聚合", () => {
+         o({ seq_no: "C", price: 22_990, order_qty: 5 }),
+       ],
+       "TXFI6",
++      WINDOW,
+     );
+     expect(lots).toEqual([
+-      { priceMilli: 23_000_000, qty: 3, seqNos: ["A", "B"] },
+-      { priceMilli: 22_990_000, qty: 5, seqNos: ["C"] },
++      { priceMilli: 23_000_000, qty: 3, filled: 1, seqNos: ["A", "B"] },
++      { priceMilli: 22_990_000, qty: 5, filled: 0, seqNos: ["C"] },
+     ]);
+   });
+ 
+-  it("過濾:他契約 / 非 actionable / 殘量 0 / 市價(price=null)全排除", () => {
++  it("過濾:他契約 / 市價(price=null)/ 終態且日期界外 全排除;actionable 殘 0 仍出 entry", () => {
+     const lots = splitMyLots(
+       [
+         o({ seq_no: "X", stock_no: "MXFI6" }),
+-        o({ seq_no: "Y", actionable: false }),
++        o({ seq_no: "Y", actionable: false, date: "20260701" }),
++        // actionable 且殘 0(N 未到):qty 不計但 seq 要收 —— 刪單入口不得消失
+         o({ seq_no: "Z", order_qty: 2, filled_qty: 2 }),
+         o({ seq_no: "W", price: null }),
+       ],
+       "TXFI6",
++      WINDOW,
++    );
++    expect(lots).toEqual([{ priceMilli: 23_000_000, qty: 0, filled: 2, seqNos: ["Z"] }]);
++  });
++
++  it("終態全成交單:日期界內 → filled entry 且 seqNos 空;界外 / date=null → 零痕跡", () => {
++    const inWindow = splitMyLots(
++      [o({ seq_no: "F", actionable: false, order_qty: 2, filled_qty: 2, date: YESTERDAY })],
++      "TXFI6",
++      WINDOW,
++    );
++    expect(inWindow).toEqual([{ priceMilli: 23_000_000, qty: 0, filled: 2, seqNos: [] }]);
++    const stale = splitMyLots(
++      [o({ seq_no: "F", actionable: false, order_qty: 2, filled_qty: 2, date: "20260701" })],
++      "TXFI6",
++      WINDOW,
++    );
++    expect(stale).toEqual([]);
++    const nodate = splitMyLots(
++      [o({ seq_no: "F", actionable: false, order_qty: 2, filled_qty: 2, date: null })],
++      "TXFI6",
++      WINDOW,
++    );
++    expect(nodate).toEqual([]);
++  });
++
++  it("失敗 / 退單(終態、filled 0)→ 零痕跡", () => {
++    const lots = splitMyLots(
++      [o({ seq_no: "E", actionable: false, order_qty: 2, filled_qty: 0 })],
++      "TXFI6",
++      WINDOW,
+     );
+     expect(lots).toEqual([]);
+   });
+ 
+   it("價 float → 毫點 round(100.1 × 1000 的浮點殘差收斂)", () => {
+-    const lots = splitMyLots([o({ price: 100.1 })], "TXFI6");
+-    expect(lots).toEqual([{ priceMilli: 100_100, qty: 2, seqNos: ["S1"] }]);
++    const lots = splitMyLots([o({ price: 100.1 })], "TXFI6", WINDOW);
++    expect(lots).toEqual([{ priceMilli: 100_100, qty: 2, filled: 0, seqNos: ["S1"] }]);
+   });
+ });
+ 
+diff --git a/frontend/src/lib/futures-ladder.ts b/frontend/src/lib/futures-ladder.ts
+index 4173fb31..ef027bdf 100644
+--- a/frontend/src/lib/futures-ladder.ts
++++ b/frontend/src/lib/futures-ladder.ts
+@@ -12,10 +12,13 @@ export interface FutDepthLevel {
+   qty: number;
+ }
+ 
+-/** 我方同價位活單聚合(splitMyLots 產物) */
++/** 我方同價位聚合(splitMyLots 產物)。`qty` = 活單殘量、`filled` = 已成交量、
++ *  `seqNos` = **活單** seq(全撤與點刪的唯一來源;filled-only 條目恆空)。
++ *  口徑與 `lib/ladder-lots.ts::aggregateLots` 逐條相同 —— 改一邊要改另一邊。 */
+ export interface MyFutLot {
+   priceMilli: number;
+   qty: number;
++  filled: number;
+   seqNos: string[];
+ }
+ 
+@@ -24,6 +27,7 @@ export interface FutLadderRow {
+   bidQty: number;
+   askQty: number;
+   myQty: number;
++  myFilled: number;
+   mySeqNos: string[];
+   isCenter: boolean;
+   clickable: boolean;
+@@ -38,29 +42,41 @@ export interface FutOrderSource {
+   order_qty: number;
+   filled_qty: number;
+   actionable: boolean;
++  date: string | null; // 委託建立日 YYYYMMDD(已成交量的日期界)
+ }
+ 
+-/** 該契約 actionable 活單(殘量 > 0)按價位聚合;價 float → 毫點 round。 */
++/** 該契約的單按價位聚合(不分買賣側);價 float → 毫點 round。
++ *
++ *  `filledDates`:終態單的 `date` 落在集合內才計已成交量(store 跨日不清 → 無日期界
++ *  會長出昨日幽靈徽章);**活單的成交恆計**。失敗 / 退單 filled_qty 恆 0 → 零痕跡。
++ *  `seqNos` 只收 actionable 單 —— 全撤與點刪都靠它,filled 貢獻不得產生 seq。 */
+ export function splitMyLots(
+   orders: ReadonlyArray<FutOrderSource>,
+   contract: string,
++  filledDates: ReadonlySet<string>,
+ ): MyFutLot[] {
+-  const byPrice = new Map<number, { qty: number; seqNos: string[] }>();
++  const byPrice = new Map<number, { qty: number; filled: number; seqNos: string[] }>();
+   for (const o of orders) {
+-    if (o.stock_no !== contract || !o.actionable || o.price == null) continue;
+-    const remaining = o.order_qty - o.filled_qty;
+-    if (remaining <= 0) continue;
++    if (o.stock_no !== contract || o.price == null) continue;
++    // 殘量 ≤ 0 不進 qty,但 seq 仍要收:actionable 且殘 0(N 未到)刪得掉
++    const addQty = o.actionable ? Math.max(0, o.order_qty - o.filled_qty) : 0;
++    const countFilled = o.actionable || (o.date !== null && filledDates.has(o.date));
++    const addFilled = countFilled ? o.filled_qty : 0;
++    if (!o.actionable && addFilled === 0) continue; // 不產生 entry
+     const priceMilli = Math.round(o.price * 1000);
+-    const cur = byPrice.get(priceMilli);
+-    if (cur) {
+-      cur.qty += remaining;
+-      cur.seqNos.push(o.seq_no);
+-    } else {
+-      byPrice.set(priceMilli, { qty: remaining, seqNos: [o.seq_no] });
+-    }
++    const cur = byPrice.get(priceMilli) ?? { qty: 0, filled: 0, seqNos: [] };
++    cur.qty += addQty;
++    cur.filled += addFilled;
++    if (o.actionable) cur.seqNos.push(o.seq_no);
++    byPrice.set(priceMilli, cur);
+   }
+   return [...byPrice.entries()]
+-    .map(([priceMilli, v]) => ({ priceMilli, qty: v.qty, seqNos: v.seqNos }))
++    .map(([priceMilli, v]) => ({
++      priceMilli,
++      qty: v.qty,
++      filled: v.filled,
++      seqNos: v.seqNos,
++    }))
+     .sort((a, b) => b.priceMilli - a.priceMilli);
+ }
+ 
+@@ -134,6 +150,7 @@ export function buildFuturesLadder(opts: {
+     bidQty: bidMap.get(priceMilli) ?? 0,
+     askQty: askMap.get(priceMilli) ?? 0,
+     myQty: lotMap.get(priceMilli)?.qty ?? 0,
++    myFilled: lotMap.get(priceMilli)?.filled ?? 0,
+     mySeqNos: lotMap.get(priceMilli)?.seqNos ?? [],
+     isCenter: priceMilli === c,
+     clickable: Math.abs(priceMilli - opts.centerMilli) <= opts.centerMilli * CLICK_BAND + 1e-9,
+diff --git a/frontend/src/lib/ladder-lots.test.ts b/frontend/src/lib/ladder-lots.test.ts
+new file mode 100644
+index 00000000..51b65cf2
+--- /dev/null
++++ b/frontend/src/lib/ladder-lots.test.ts
+@@ -0,0 +1,202 @@
++import { describe, expect, it } from "vitest";
++
++import { aggregateLots, ymdWindow, type LadderLot } from "@/lib/ladder-lots";
++import type { CapitalOrder } from "@/types";
++
++const TODAY = "20260813";
++const YESTERDAY = "20260812";
++/** 現股梯口徑(嚴格今日);個股期梯是 ±1 日窗 */
++const STRICT = new Set([TODAY]);
++const WINDOW = new Set([YESTERDAY, TODAY, "20260814"]);
++
++function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
++  return {
++    seq_no: "S1",
++    stock_no: "2330",
++    name: "台積電",
++    market: "TS",
++    buy_sell: "B",
++    flag_label: "現股",
++    book_no: "A1",
++    status_raw: "0",
++    status_label: "已委託",
++    price: 100,
++    avg_fill_price: null,
++    order_qty: 2,
++    filled_qty: 0,
++    unit: "張",
++    date: TODAY,
++    time: "09:01:00",
++    pre_order: false,
++    error_msg: null,
++    actionable: true,
++    raw: "",
++    ...over,
++  };
++}
++
++/** 全部成交(rank 3)的終態單:actionable=false、殘量恆 0 */
++function filledOrder(over: Partial<CapitalOrder> = {}): CapitalOrder {
++  return order({
++    actionable: false,
++    status_label: "全部成交",
++    order_qty: 2,
++    filled_qty: 2,
++    ...over,
++  });
++}
++
++const buyAt = (
++  r: { buy: Map<number, LadderLot> },
++  priceMilli = 100_000,
++): LadderLot | undefined => r.buy.get(priceMilli);
++
++describe("aggregateLots 價位聚合(未成交 / 已成交)", () => {
++  it("同價活單:殘量相加、seqs 併列、已成交量同時累加", () => {
++    const r = aggregateLots(
++      [
++        order({ seq_no: "A", order_qty: 3, filled_qty: 1 }),
++        order({ seq_no: "B", order_qty: 2, filled_qty: 0 }),
++      ],
++      "2330",
++      STRICT,
++    );
++    expect(buyAt(r)).toEqual({ qty: 4, filled: 1, seqs: ["A", "B"] });
++    expect(r.sell.size).toBe(0);
++  });
++
++  it("買賣分側:B 進 buy、S 進 sell;buy_sell 非 B/S 整筆跳過", () => {
++    const r = aggregateLots(
++      [
++        order({ seq_no: "A" }),
++        order({ seq_no: "B", buy_sell: "S", price: 100.5 }),
++        order({ seq_no: "C", buy_sell: null }),
++      ],
++      "2330",
++      STRICT,
++    );
++    expect(buyAt(r)?.seqs).toEqual(["A"]);
++    expect(r.sell.get(100_500)?.seqs).toEqual(["B"]);
++    expect(r.buy.size + r.sell.size).toBe(2);
++  });
++
++  it("價 float → 毫元 round(100.1 × 1000 的浮點殘差收斂)", () => {
++    const r = aggregateLots([order({ price: 100.1 })], "2330", STRICT);
++    expect([...r.buy.keys()]).toEqual([100_100]);
++  });
++
++  it("他檔 / 市價(price=null)/ key=null 全排除", () => {
++    const orders = [
++      order({ seq_no: "X", stock_no: "2317" }),
++      order({ seq_no: "W", price: null }),
++    ];
++    const r = aggregateLots(orders, "2330", STRICT);
++    expect(r.buy.size).toBe(0);
++    const none = aggregateLots([order({ stock_no: null })], null, STRICT);
++    expect(none.buy.size).toBe(0);
++  });
++
++  it("終態全成交單(date 在日期界內)→ filled 進來、qty 0、seqs 空(無刪單入口)", () => {
++    const r = aggregateLots([filledOrder({ seq_no: "F" })], "2330", STRICT);
++    expect(buyAt(r)).toEqual({ qty: 0, filled: 2, seqs: [] });
++  });
++
++  it("終態單 date 在日期界外 / date=null → 整筆不計(跨日幽靈不長出來)", () => {
++    const stale = aggregateLots([filledOrder({ date: YESTERDAY })], "2330", STRICT);
++    expect(stale.buy.size).toBe(0);
++    const nodate = aggregateLots([filledOrder({ date: null })], "2330", STRICT);
++    expect(nodate.buy.size).toBe(0);
++    // 同一筆在 ±1 日窗(個股期 / 期貨梯口徑)下就算數
++    const win = aggregateLots([filledOrder({ date: YESTERDAY })], "2330", WINDOW);
++    expect(buyAt(win)).toEqual({ qty: 0, filled: 2, seqs: [] });
++  });
++
++  it("活單的成交恆計,不看日期界(昨日建立、今日成交中的預約單)", () => {
++    const r = aggregateLots(
++      [order({ seq_no: "P", date: YESTERDAY, order_qty: 3, filled_qty: 1 })],
++      "2330",
++      STRICT,
++    );
++    expect(buyAt(r)).toEqual({ qty: 2, filled: 1, seqs: ["P"] });
++  });
++
++  it("失敗 / 退單(終態、filled 0)→ 零痕跡", () => {
++    const r = aggregateLots(
++      [filledOrder({ seq_no: "E", status_label: "失敗", order_qty: 2, filled_qty: 0 })],
++      "2330",
++      STRICT,
++    );
++    expect(r.buy.size).toBe(0);
++  });
++
++  it("actionable 殘 0(P/U 先到、N 未到)→ 仍上梯且 seqs 有值(刪單入口不消失)", () => {
++    const r = aggregateLots(
++      [order({ seq_no: "P0", order_qty: 0, filled_qty: 0 })],
++      "2330",
++      STRICT,
++    );
++    expect(buyAt(r)).toEqual({ qty: 0, filled: 0, seqs: ["P0"] });
++  });
++
++  it("actionable 且已全部成交(N 未到)→ qty 0 但 seqs 保留", () => {
++    const r = aggregateLots(
++      [order({ seq_no: "A", order_qty: 2, filled_qty: 2 })],
++      "2330",
++      STRICT,
++    );
++    expect(buyAt(r)).toEqual({ qty: 0, filled: 2, seqs: ["A"] });
++  });
++
++  it("同價混合(活單 ×2 + 全成交 ×1):qty=Σ活單殘、filled=Σ全部、seqs=活單 only", () => {
++    const r = aggregateLots(
++      [
++        order({ seq_no: "A", order_qty: 3, filled_qty: 1 }),
++        order({ seq_no: "B", order_qty: 1, filled_qty: 0 }),
++        filledOrder({ seq_no: "F", order_qty: 5, filled_qty: 5 }),
++      ],
++      "2330",
++      STRICT,
++    );
++    expect(buyAt(r)).toEqual({ qty: 3, filled: 6, seqs: ["A", "B"] });
++  });
++
++  it("excludeUnit:現股梯傳「股」→ 零股單整筆不上梯(活單與已成交都不計)", () => {
++    const orders = [
++      order({ seq_no: "L1", unit: "股", order_qty: 1_000, filled_qty: 0 }),
++      filledOrder({ seq_no: "L2", unit: "股", order_qty: 500, filled_qty: 500 }),
++    ];
++    expect(aggregateLots(orders, "2330", STRICT, "股").buy.size).toBe(0);
++    // 不傳 excludeUnit(期貨 / 個股期梯)→ 不設單位閘
++    expect(aggregateLots(orders, "2330", STRICT).buy.size).toBe(1);
++  });
++});
++
++describe("ymdWindow 日期界(YYYYMMDD 本機時區)", () => {
++  it("offsets [0] → 只有今日", () => {
++    expect([...ymdWindow(new Date(2026, 7, 13, 9, 30), [0])]).toEqual(["20260813"]);
++  });
++
++  it("offsets [-1,0,1] → 昨 / 今 / 明 三日", () => {
++    expect([...ymdWindow(new Date(2026, 7, 13, 23, 59), [-1, 0, 1])]).toEqual([
++      "20260812",
++      "20260813",
++      "20260814",
++    ]);
++  });
++
++  it("跨月邊界:月初往前退到上個月最後一日", () => {
++    expect([...ymdWindow(new Date(2026, 2, 1, 0, 5), [-1, 0, 1])]).toEqual([
++      "20260228",
++      "20260301",
++      "20260302",
++    ]);
++  });
++
++  it("跨年邊界:1/1 往前退到去年 12/31", () => {
++    expect([...ymdWindow(new Date(2026, 0, 1, 0, 5), [-1, 0, 1])]).toEqual([
++      "20251231",
++      "20260101",
++      "20260102",
++    ]);
++  });
++});
+diff --git a/frontend/src/lib/ladder-lots.ts b/frontend/src/lib/ladder-lots.ts
+new file mode 100644
+index 00000000..2dee0118
+--- /dev/null
++++ b/frontend/src/lib/ladder-lots.ts
+@@ -0,0 +1,77 @@
++/** 閃電梯「我的單」價位聚合(現股 `PriceLadder` / 個股期 `StkfutLadder` 共用)。
++ *
++ *  兩個 container 原本各留一份逐字相同的 `aggregateLots`(stkfut-contracts R2-4 抽
++ *  LadderView 時的遺留),本檔把它合一後擴充「已成交量」。
++ *
++ *  期貨梯不走這裡(`lib/futures-ladder.ts::splitMyLots`,不分買賣側),但兩邊的
++ *  qty / filled / seqs 口徑必須逐條相同 —— 改一邊就要改另一邊。
++ */
++import type { CapitalOrder } from "@/types";
++
++/** 同價位聚合。`qty` = 活單殘量、`filled` = 已成交量、`seqs` = **活單** seq。
++ *
++ *  三者刻意分開:`seqs` 是刪單入口(只有活單刪得掉),`filled` 是既成事實(終態單、
++ *  部分成交後刪單都算)。`qty === 0 && seqs.length === 0 && filled > 0` = 全成交,
++ *  畫面轉不可點徽章;`seqs` 非空一律維持可點紅方格(actionable 殘 0 的單也刪得掉)。 */
++export interface LadderLot {
++  qty: number;
++  filled: number;
++  seqs: string[];
++}
++
++/** `now` 起算 `offsets` 天的本機日曆日集合(YYYYMMDD,與 `OrderRecord.date` 同格式)。
++ *
++ *  現股梯傳 `[0]`(嚴格今日);期貨 / 個股期梯傳 `[-1, 0, 1]` —— `date` 是**委託建立日**,
++ *  夜盤跨午夜時它是交易日還是日曆日尚未實證,±1 日窗在兩種假設下都涵蓋得到。 */
++export function ymdWindow(now: Date, offsets: readonly number[]): Set<string> {
++  const out = new Set<string>();
++  for (const off of offsets) {
++    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + off);
++    const m = String(d.getMonth() + 1).padStart(2, "0");
++    out.add(`${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`);
++  }
++  return out;
++}
++
++/** 本檔 / 本合約的單 → 價位(毫元)聚合殘量與已成交量。
++ *
++ *  比對鍵由呼叫端決定:現股是**股號**、個股期是**期交所契約碼**(CDFI6)—— 群益回報的
++ *  期貨單 `stock_no` 放的是契約碼,拿股號比會一筆都對不上(而畫面上只是「沒有掛單」,
++ *  零錯誤訊號)。
++ *
++ *  `filledDates`:終態單的 `date` 要落在此集合才計入已成交量。`CapitalStore` 跨日不清
++ *  (`clear()` 全 repo 無 caller)、prod server 長跑 → 無日期界會長出昨日的幽靈徽章。
++ *  **活單的成交恆計**,不看日期界(涵蓋昨日建立、今日成交中的預約單)。
++ *
++ *  `excludeUnit`:現股梯傳 `"股"` 把零股單整筆排除 —— 張梯混進零股單量級差一千倍。
++ *  期貨 / 個股期梯不傳(契約碼含英文字母、與股號零碰撞,比對鍵已足;整筆 unit 白名單
++ *  會誤殺 market 缺值 fallback 成 "張" 的期貨單,連刪單入口都砍掉)。 */
++export function aggregateLots(
++  orders: CapitalOrder[] | undefined,
++  key: string | null,
++  filledDates: ReadonlySet<string>,
++  excludeUnit?: string,
++): { buy: Map<number, LadderLot>; sell: Map<number, LadderLot> } {
++  const buy = new Map<number, LadderLot>();
++  const sell = new Map<number, LadderLot>();
++  if (key === null) return { buy, sell };
++  for (const o of orders ?? []) {
++    if (o.stock_no !== key || o.price === null) continue;
++    if (excludeUnit !== undefined && o.unit === excludeUnit) continue;
++    const map = o.buy_sell === "B" ? buy : o.buy_sell === "S" ? sell : null;
++    if (map === null) continue;
++    // 活單:殘量 + seq(殘量可能是 0 —— P/U 先到 N 未到,刪單入口仍必須在)
++    const addQty = o.actionable ? Math.max(0, o.order_qty - o.filled_qty) : 0;
++    // 終態單只認日期界內的(活單恆計);失敗 / 退單 filled_qty 恆 0 → 自然零痕跡
++    const countFilled = o.actionable || (o.date !== null && filledDates.has(o.date));
++    const addFilled = countFilled ? o.filled_qty : 0;
++    if (!o.actionable && addFilled === 0) continue; // 不產生 entry
++    const priceMilli = Math.round(o.price * 1000);
++    const cur = map.get(priceMilli) ?? { qty: 0, filled: 0, seqs: [] };
++    cur.qty += addQty;
++    cur.filled += addFilled;
++    if (o.actionable) cur.seqs.push(o.seq_no);
++    map.set(priceMilli, cur);
++  }
++  return { buy, sell };
++}
+diff --git a/tests/capital/test_client.py b/tests/capital/test_client.py
+index fcbac322..2a463a77 100644
+--- a/tests/capital/test_client.py
++++ b/tests/capital/test_client.py
+@@ -11,6 +11,7 @@ from __future__ import annotations
+ import asyncio
+ import json
+ import queue
++import time
+ from collections.abc import Awaitable, Callable
+ from pathlib import Path
+ from typing import Any
+@@ -118,6 +119,18 @@ def _fut_evt_raw(seq: str, contract: str = "TXFI6", qty: str = "2", price: str =
+     return ",".join(arr)
+ 
+ 
++def _fill_evt_raw(seq: str = "S1", qty: str = "1000", price: str = "90.0000") -> str:
++    """成交回報(Type=D):觸發 balance 重查排程。"""
++    arr = [""] * 48
++    arr[0], arr[1], arr[2], arr[3] = seq, "TS", "D", "N"
++    arr[6], arr[8], arr[11], arr[20] = "B00R2", "3357", price, qty
++    return ",".join(arr)
++
++
++def _balance_queries(com: FakeCom) -> int:
++    return sum(1 for entry in com.sent if entry[0] == "get_real_balance")
++
++
+ def _stock_req(qty: int = 2) -> StockOrderRequest:
+     return StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=qty)
+ 
+@@ -1276,6 +1289,97 @@ def test_pending_watchdog_publishes_sec_when_chain_stalls(tmp_path: Path) -> Non
+     assert sec is not None and sec.qty == 3
+ 
+ 
++def test_consecutive_fills_merge_into_single_requery(tmp_path: Path) -> None:
++    """連續成交合併(既有語意):後到的成交推遲 due(重設),幫浦圈只在尾端查一次。
++    改成「只有第一筆設 due」= 尾端成交等不到重查,庫存停在中途數字。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client._handle_reply(_fill_evt_raw())
++    first = client._balance_due
++    client._handle_reply(_fill_evt_raw(qty="2000"))
++    second = client._balance_due
++    assert first is not None and second is not None
++    assert second > first
++
++
++def test_fill_schedules_balance_requery_within_half_second(tmp_path: Path) -> None:
++    """SC-5:成交後庫存重查排在 0.5s 後(上界防拖慢、下界防 debounce 被整個拿掉)。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client._handle_reply(_fill_evt_raw())
++    assert client._balance_due is not None
++    delay = client._balance_due - time.monotonic()
++    assert 0.45 <= delay <= 0.55
++
++
++def test_balance_query_guarded_while_chain_in_flight(tmp_path: Path) -> None:
++    """SC-7(a):鏈進行中(balance 段)第二筆成交不得再發 GetRealBalance —
++    群益 1019 + _pending_sec 被覆寫會整輪丟失部位;due 不清,留給鏈結束後補查。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client._balance_due = time.monotonic() - 1.0
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 1
++    client._balance_due = time.monotonic() - 1.0  # 鏈進行中再成交(未餵 ## → 仍在 balance 段)
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 1
++    assert client._balance_due is not None  # 補查的前提:守門不得吃掉 due
++
++
++def test_balance_query_guarded_while_pending_even_if_inflight_expired(tmp_path: Path) -> None:
++    """SC-7(b):balance 段收完換 pending 段(profit/OI 未回)後,
++    守門改由 _pending_sec 判(_poll_pending 8s 保底),inflight deadline 逾期也不放行。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client._balance_due = time.monotonic() - 1.0
++    client._maybe_query_balance()
++    client._handle_balance(
++        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
++    )
++    client._handle_balance("##")
++    assert client._pending_sec is not None  # profit 尚未回,鏈掛在 pending 段
++    client._balance_due = time.monotonic() - 1.0
++    client._balance_inflight_until = time.monotonic() - 1.0
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 1
++
++
++def test_balance_requeried_after_chain_completes(tmp_path: Path) -> None:
++    """SC-7(c):鏈走完(無期貨帳號路徑)→ 下一輪幫浦圈補查,成交不漏。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client, futures_account=None)
++    client._balance_due = time.monotonic() - 1.0
++    client._maybe_query_balance()
++    client._balance_due = time.monotonic() - 1.0  # 鏈進行中的第二筆成交
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 1
++    client._handle_balance("##")
++    client._handle_profit("##,,,,")  # → _query_open_interest → 無期貨帳號 → finalize
++    assert client._pending_sec is None
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 2
++
++
++def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) -> None:
++    """SC-7(d):零事件死查詢(collector poll 在 _last_feed is None 早退,永不 flush)—
++    deadline 逾期是唯一解卡通道,否則庫存永久停更。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client._balance_due = time.monotonic() - 1.0
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 1
++    client._balance_due = time.monotonic() - 1.0
++    client._balance_inflight_until = time.monotonic() - 1.0
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 2
++
++
+ def test_maybe_query_balance_runs_in_degraded(tmp_path: Path) -> None:
+     # degraded(回報斷線)也要輪詢 — 此時 60s 輪詢是部位唯一更新源
+     com = FakeCom()
+diff --git a/tests/capital/test_store.py b/tests/capital/test_store.py
+index 4884a407..21a08d7a 100644
+--- a/tests/capital/test_store.py
++++ b/tests/capital/test_store.py
+@@ -175,6 +175,16 @@ def test_option_market_unit_and_no_division() -> None:
+         assert o.unit == "口" and o.order_qty == 2 and o.market == market
+ 
+ 
++def test_odd_lot_market_unit_is_share_without_division() -> None:
++    # 零股(TL/TC)= 股、不除 1000。unit 字面值自閃電梯掛單顯示起是前端過濾鍵
++    # (現股梯排除零股單),標成「張」會讓零股單漏進張梯 → 量級錯千倍。
++    for market in ("TL", "TC"):
++        s = CapitalStore()
++        s.apply_reply(_evt(market=market, stock="2330", qty="500", price="1000.0000"))
++        o = s.orders()[0]
++        assert o.unit == "股" and o.order_qty == 500 and o.market == market
++
++
+ def test_no_seq_dropped() -> None:
+     s = CapitalStore()
+     e = dataclasses.replace(_evt(), seq_no=None)

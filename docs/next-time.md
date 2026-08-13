@@ -1,4 +1,13 @@
 
+## 2026-08-13(mod/ladder-order-status review rejected 候選)
+
+- [ ] **BalanceCollector 無輪次識別:遲到的 `##` 可 flush 空集合全量蓋部位**(review C2/W2,
+  rejected — collector 輪次化超出該輪 scope):零事件死查詢 10s 逾期解卡後 `_balance.reset()`
+  再發第二次查詢,第一輪遲到的 `##` 會以空 staging flush → `set_positions([])` → 有庫存
+  顯示無部位(最壞 60s 自癒)。master 原本無守門時暴露面更大(任一筆重查都可撞),守門
+  已收窄到 10s 逾期窗。真解 = 發查詢帶輪次序號給 collector(feed/## 驗 token),或逾期
+  解卡改換新 collector 實例;動 `balance.py` 三個 collector 共用節奏,獨立小輪。
+
 ## 2026-08-13(fix/index-chart-empty-minutes 收尾留尾巴)
 
 - [ ] **`_collect_history` timeout「靜默回空」語意是家族性風險**:本次事故根源之一

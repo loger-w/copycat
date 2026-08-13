@@ -140,6 +140,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **Refresh 慣例**:`?refresh=true` → backend 跳過 cache 重抓;frontend 走
   `queryClient.invalidateQueries` + refetch with refresh flag。
 - **Cache version bump**:`_CACHE_VERSION`(各 service 內)+1 即作廢所有舊 cache。
+- **`OrderRecord.unit` 字面值(張/口/股)是前端過濾鍵**(2026-08-13 起,閃電梯零股閘
+  `ladder-lots.ts` 依 `unit === "股"` 排除):產生點 `capital/store.py::_to_record`,改字面值
+  = 改契約要同時改兩邊;`tests/capital/test_store.py` 有 lock。
 
 ## 5. 資料源
 
