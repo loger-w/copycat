@@ -1,0 +1,373 @@
+﻿diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index 086e38f8..91725eb0 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -44,6 +44,9 @@ def in_futures_session(now: _dt.time | None = None) -> bool:
+ # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
+ _WATCH_START = _dt.time(9, 0)
+ _WATCH_END = _dt.time(13, 25)
++#: 分時自癒門檻:watch window 內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
++#: 開盤頭幾分鐘 minutes 空是正常(域 0901 起),空集合以窗起點 09:00 起算即天然豁免。
++_LAG_HEAL_MIN = 3
+ 
+ 
+ class IndexSource(Protocol):
+@@ -159,6 +162,12 @@ class IndexEngine:
+         self._stale_secs = stale_secs
+         self._retry_secs = retry_secs
+         self._rollover_check_secs = 60.0
++        # 分時自癒節流:lag 觸發的 retry 排程間隔下限(retry 本身 single-flight)
++        self._heal_secs = 60.0
++        self._last_heal = float("-inf")
++        # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
++        # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
++        self._push_minutes_once = False
+ 
+         # 換日 pending(IR2):偵測新日後 realtime 分鐘先進 pending,swap 才入 minutes
+         self._pending_date: str | None = None
+@@ -220,12 +229,12 @@ class IndexEngine:
+ 
+     # ---- 重試(R5/IR8:single-flight)----
+ 
+-    def _schedule_retry(self) -> None:
++    def _schedule_retry(self, *, clear_stale: bool = True) -> None:
+         if self._retry_task is not None and not self._retry_task.done():
+             self._retry_task.cancel()
+-        self._retry_task = asyncio.create_task(self._retry_loop())
++        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale))
+ 
+-    async def _retry_loop(self) -> None:
++    async def _retry_loop(self, clear_stale: bool) -> None:
+         backoff = self._retry_secs
+         while True:
+             await asyncio.sleep(backoff)
+@@ -238,7 +247,12 @@ class IndexEngine:
+                 logger.exception("index retry 非預期失敗(續試)")
+                 backoff = min(backoff * 2, 60.0)
+                 continue
+-            self._twse.stale = False
++            if clear_stale:
++                # 連線類 retry(start 失敗 / reconnect / rollover 失敗)成功 = 樂觀清
++                # stale(推播即將恢復);分時自癒的 retry 不清 —— stale 是推播死活的
++                # 訊號(watchdog 職權),回補成功不代表推播活著。
++                self._twse.stale = False
++            self._push_minutes_once = True
+             self._dirty = True
+             return
+ 
+@@ -426,6 +440,21 @@ class IndexEngine:
+             ):
+                 self._twse.stale = True
+                 self._dirty = True
++            # 分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級
++            # 成空(_collect_history 不 raise → start 不排 retry)+ 當日推播整段靜默時,
++            # minutes 沒有任何回復路徑,而 TC4 端 1K 資料整天可取(2026-08-13 事故)。
++            # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
++            # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
++            if (
++                self._in_watch_window()
++                and self._pending_date is None
++                and self._minutes_lag_exceeded()
++                and (self._retry_task is None or self._retry_task.done())
++                and _time.monotonic() - self._last_heal >= self._heal_secs
++            ):
++                self._last_heal = _time.monotonic()
++                logger.warning("index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K", _LAG_HEAL_MIN)
++                self._schedule_retry(clear_stale=False)
+             # txf(IR1:價變動自記 wall-clock)
+             p = self._txf_getter()
+             if p is not None and p != self._txf_p:
+@@ -440,6 +469,18 @@ class IndexEngine:
+             self._twse.last_minute = None
+             self._otc.last_minute = None
+ 
++    def _minutes_lag_exceeded(self) -> bool:
++        """加權 minutes 最後一鍵是否落後牆鐘超過 `_LAG_HEAL_MIN` 分(僅窗內呼叫)。"""
++        now = self._now_fn()
++        now_min = now.hour * 60 + now.minute
++        m = self._twse.minutes
++        if m:
++            last = max(m)
++            last_min = int(last[:2]) * 60 + int(last[2:4])
++        else:
++            last_min = 9 * 60  # 空 minutes 以窗起點 09:00 起算(開盤頭幾分鐘的空是正常)
++        return now_min - last_min > _LAG_HEAL_MIN
++
+     def _check_spot_silence(self, p: int | None) -> None:
+         """盤中台指現價長時間為 None → 節流 warning(index-board review P1-1)。
+ 
+@@ -467,10 +508,14 @@ class IndexEngine:
+             logger.warning("txo spot 無 TXF 推播 %ds(右上角台指與 TXO 現貨損益皆空)", int(elapsed))
+ 
+     def _payload(self) -> dict:
++        twse = self._twse.scalar()
++        if self._push_minutes_once:
++            self._push_minutes_once = False
++            twse["minutes"] = dict(self._twse.minutes)
+         return {
+             "type": "index",
+             "trade_date": self._trade_date,
+-            "twse": self._twse.scalar(),
++            "twse": twse,
+             "otc": self._otc.scalar(),
+             "txf": self._txf(),
+         }
+diff --git a/frontend/src/hooks/useIndexStream.test.ts b/frontend/src/hooks/useIndexStream.test.ts
+index a09e64c7..819a3615 100644
+--- a/frontend/src/hooks/useIndexStream.test.ts
++++ b/frontend/src/hooks/useIndexStream.test.ts
+@@ -107,6 +107,46 @@ describe("useIndexStream", () => {
+     expect(hook.result.current.twse!.minutes).toEqual({ "0901": 1 }); // 舊日 minutes 已清
+   });
+ 
++  it("WS 訊息帶 minutes → 整份替換(引擎自癒回補的送達契約)", async () => {
++    const { hook, ws } = await setup();
++    act(() =>
++      ws.emit(
++        wsMsg({
++          twse: {
++            p: 42_000_000, ref: 43_634_190, high: 43_221_930, low: 41_815_780,
++            stale: false, last_minute: null, minutes: { "0910": 5, "0911": 6 },
++          },
++        } as never),
++      ),
++    );
++    // 初載的 {"0901": ...} 不得殘留:自癒回補是全量真相源,替換不是 merge
++    expect(hook.result.current.twse!.minutes).toEqual({ "0910": 5, "0911": 6 });
++  });
++
++  it("換日 refetch 失敗 → 退避重試回填,不永久缺線(fix/index-chart-empty-minutes)", async () => {
++    const { hook, ws } = await setup();
++    // 換日瞬間 state 端點打嗝一次(網路層失敗),之後恢復且已是新日全量
++    fetchMock.mockImplementationOnce(async () => {
++      throw new TypeError("network down");
++    });
++    fetchMock.mockImplementation(
++      async () =>
++        new Response(
++          JSON.stringify({
++            ...STATE,
++            trade_date: "2026-07-29",
++            twse: { ...STATE.twse, minutes: { "0901": 1 } },
++          }),
++        ),
++    );
++    act(() => ws.emit(wsMsg({ trade_date: "2026-07-29" } as never)));
++    // 現行 bug:失敗只 console.warn 不重試 → 失敗點之前的分鐘永久缺失(線整條不見)
++    await waitFor(() => expect(hook.result.current.twse?.minutes).toEqual({ "0901": 1 }), {
++      timeout: 5000,
++    });
++    expect(hook.result.current.tradeDate).toBe("2026-07-29");
++  });
++
+   it("WS reconnect → refetch state 全量(F3)", async () => {
+     const { ws } = await setup();
+     const before = fetchMock.mock.calls.length;
+diff --git a/frontend/src/hooks/useIndexStream.ts b/frontend/src/hooks/useIndexStream.ts
+index b9ff2d90..ce33cd04 100644
+--- a/frontend/src/hooks/useIndexStream.ts
++++ b/frontend/src/hooks/useIndexStream.ts
+@@ -69,6 +69,13 @@ export function useIndexStream(): IndexStreamState {
+   const otcRef = useRef<IndexSeries | null>(null);
+   const tradeDateRef = useRef<string | null>(null);
+ 
++  // refetch 失敗重試(fix/index-chart-empty-minutes):換日清空後 refetch 失敗若只
++  // warn 不重試,失敗點之前的分鐘永久缺失(WS merge 只補 last_minute 增量)——
++  // 分時圖殼在、線不見的前端路徑。單一 pending timer(不堆疊)+ 指數退避,成功歸零。
++  const retryTimerRef = useRef<number | undefined>(undefined);
++  const retryAttemptRef = useRef(0);
++  const aliveRef = useRef(true);
++
+   // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
+   // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
+   // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+@@ -90,19 +97,27 @@ export function useIndexStream(): IndexStreamState {
+   const refetch = async (): Promise<void> => {
+     try {
+       const res = await fetch("/api/index/state");
+-      if (!res.ok) return;
++      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+       const body = (await res.json()) as {
+         trade_date: string;
+         twse: WireSeries;
+         otc: WireSeries;
+         txf: TxfQuote | null;
+       };
++      retryAttemptRef.current = 0;
+       setTradeDate(body.trade_date);
+       setTwse(toSeries(body.twse, null));
+       setOtc(toSeries(body.otc, null));
+       setTxf(body.txf);
+     } catch (err) {
+       console.warn("index: state 載入失敗", err);
++      if (!aliveRef.current || retryTimerRef.current !== undefined) return;
++      const delay = Math.min(BACKOFF_START_MS * 2 ** retryAttemptRef.current, BACKOFF_CAP_MS);
++      retryAttemptRef.current += 1;
++      retryTimerRef.current = window.setTimeout(() => {
++        retryTimerRef.current = undefined;
++        void refetch();
++      }, delay);
+     }
+   };
+ 
+@@ -112,6 +127,7 @@ export function useIndexStream(): IndexStreamState {
+     let timer: number | undefined;
+     let backoff = BACKOFF_START_MS;
+ 
++    aliveRef.current = true; // StrictMode remount:cleanup 後重進要復活
+     void refetch();
+ 
+     const handle = (msg: {
+@@ -172,7 +188,10 @@ export function useIndexStream(): IndexStreamState {
+     connect();
+     return () => {
+       alive = false;
++      aliveRef.current = false;
+       window.clearTimeout(timer);
++      window.clearTimeout(retryTimerRef.current);
++      retryTimerRef.current = undefined;
+       ws?.close();
+     };
+   }, []);
+diff --git a/tests/helpers/fake_sources.py b/tests/helpers/fake_sources.py
+index 137612b7..28b8d662 100644
+--- a/tests/helpers/fake_sources.py
++++ b/tests/helpers/fake_sources.py
+@@ -60,6 +60,7 @@ class FakeIndexSource:
+         )
+         self.on_message: Callable[[dict], None] | None = None
+         self.subscribe_error: Exception | None = None
++        self.fetch_minutes_calls = 0
+         self.closed = False
+         self.calls: list[tuple[str, str, str, str]] = []
+         self._tag = tag
+@@ -75,6 +76,7 @@ class FakeIndexSource:
+         self.unsubscribed.append(code)
+ 
+     def fetch_day_minutes(self, code: str) -> dict[str, int]:
++        self.fetch_minutes_calls += 1
+         if isinstance(self.day_minutes, Exception):
+             raise self.day_minutes
+         return dict(self.day_minutes)
+diff --git a/tests/server/test_index_engine.py b/tests/server/test_index_engine.py
+index 103c77f1..1bf629eb 100644
+--- a/tests/server/test_index_engine.py
++++ b/tests/server/test_index_engine.py
+@@ -150,7 +150,11 @@ async def test_start_connection_error_sets_stale_then_retry_recovers() -> None:
+ 
+ async def test_watchdog_marks_stale_and_broadcasts_without_pushes() -> None:
+     fake = FakeIndexSource()
+-    eng = make_engine(fake, in_watch_window=lambda: True, stale_secs=0.06)
++    # now_fn 釘在窗起點附近:預設 10:00 會讓分時自癒(lag >3 分)同場觸發,retry 成功
++    # 的早期廣播搶進 queue 首位 → 首則訊息 stale 斷言 flaky。本測試標的是 watchdog。
++    eng = make_engine(
++        fake, in_watch_window=lambda: True, stale_secs=0.06, now_fn=lambda: _dt.time(9, 1)
++    )
+     await eng.start()
+     try:
+         stream = eng.stream()
+@@ -198,6 +202,104 @@ async def test_schedule_retry_single_flight() -> None:
+         await eng.close()
+ 
+ 
++async def test_minutes_lag_self_heal_refetches_backfill() -> None:
++    """分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級成空
++    + 當日推播整段靜默(TC4 已知間歇失效)→ minutes 全日空白,而 TC4 端 1K 資料
++    整天可取(2026-08-13 事故實錄)。watch window 內 minutes 落後牆鐘超過門檻,
++    引擎必須自己重掛訂閱 + 重抓 1K,不能等使用者重啟。"""
++    fake = FakeIndexSource()  # day_minutes 空 = timeout 靜默回空(不 raise)
++    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
++    eng._heal_secs = 0.05  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        fake.day_minutes = {"0901": 1_000, "0959": 2_000}  # TC4 端其實有資料
++        await asyncio.sleep(0.3)
++        state = eng.state()
++        assert state["twse"]["minutes"] == {"0901": 1_000, "0959": 2_000}
++        assert fake.subscribed.count("IX0001") >= 2  # 重掛 = 順帶重武裝死掉的推播訂閱
++    finally:
++        await eng.close()
++
++
++async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
++    """自癒回補必須送達已連線前端:廣播 payload 平常是 scalar-only(無 minutes),
++    heal 後若不帶一次 minutes 全量,前端只有換日/重連才 refetch —— 引擎治好了、
++    畫面上的線卻要等使用者重整才回來。retry 成功後下一則廣播帶 minutes 一次,
++    之後回到 scalar-only(頻寬慣例不變)。"""
++    fake = FakeIndexSource()
++    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
++    eng._heal_secs = 0.05  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        stream = eng.stream()
++        fake.day_minutes = {"0901": 1_000}
++        deadline = asyncio.get_running_loop().time() + 2.0
++        carried: dict | None = None
++        while asyncio.get_running_loop().time() < deadline:
++            msg = await asyncio.wait_for(stream.__anext__(), timeout=1)
++            if "minutes" in msg["twse"]:
++                carried = msg["twse"]["minutes"]
++                break
++        assert carried == {"0901": 1_000}
++        # 之後回到 scalar-only:觸發一則 dirty 廣播,不得再帶 minutes
++        assert fake.on_message is not None
++        fake.on_message(_quote(filled="20000"))  # 02:00 UTC → key 1001,跟上牆鐘不再觸發 heal
++        msg = await asyncio.wait_for(stream.__anext__(), timeout=1)
++        assert "minutes" not in msg["twse"]
++    finally:
++        await eng.close()
++
++
++async def test_minutes_lag_heal_not_triggered_when_current() -> None:
++    """推播健康(minutes 跟上牆鐘)→ 自癒不得空轉重抓(fetch 只有 start 那一次)。"""
++    fake = FakeIndexSource()
++    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(9, 30))
++    eng._heal_secs = 0.05  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        assert fake.on_message is not None
++        fake.on_message(_quote(filled="13005"))  # 01:30:05 UTC → key 0931(跟上 09:30)
++        await asyncio.sleep(0.2)
++        assert fake.fetch_minutes_calls == 1
++        assert fake.subscribed.count("IX0001") == 1
++    finally:
++        await eng.close()
++
++
++async def test_minutes_lag_heal_grace_at_open() -> None:
++    """開盤頭幾分鐘 minutes 空是正常(域 0901 起):09:02 不觸發、09:04 越門檻觸發。"""
++    fake = FakeIndexSource()
++    clock = [_dt.time(9, 2)]
++    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: clock[0])
++    eng._heal_secs = 0.05  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        await asyncio.sleep(0.15)
++        assert fake.fetch_minutes_calls == 1  # 09:02 − 09:00 = 2 ≤ 門檻,不觸發
++        clock[0] = _dt.time(9, 4)
++        await asyncio.sleep(0.15)
++        assert fake.fetch_minutes_calls >= 2  # 4 分 > 門檻 → 自癒重抓
++    finally:
++        await eng.close()
++
++
++async def test_minutes_lag_heal_does_not_clear_stale() -> None:
++    """自癒回補成功不清 stale —— stale 是推播死活訊號(watchdog 職權),
++    回補成功不代表推播活著;連線類 retry 的樂觀清 stale 語意不變。"""
++    fake = FakeIndexSource()
++    eng = make_engine(fake, in_watch_window=lambda: True, stale_secs=0.03)
++    eng._heal_secs = 0.02  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        fake.day_minutes = {"0901": 1_000}
++        await asyncio.sleep(0.25)
++        state = eng.state()
++        assert state["twse"]["minutes"] == {"0901": 1_000}  # 自癒有跑
++        assert state["twse"]["stale"] is True  # 但 stale 不被洗掉
++    finally:
++        await eng.close()
++
++
+ async def test_watchdog_inactive_outside_window() -> None:
+     fake = FakeIndexSource()
+     eng = make_engine(fake, in_watch_window=lambda: False, stale_secs=0.03)
