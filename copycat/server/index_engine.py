@@ -165,6 +165,9 @@ class IndexEngine:
         # 分時自癒節流:lag 觸發的 retry 排程間隔下限(retry 本身 single-flight)
         self._heal_secs = 60.0
         self._last_heal = float("-inf")
+        # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
+        # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
+        self._push_minutes_once = False
 
         # 換日 pending(IR2):偵測新日後 realtime 分鐘先進 pending,swap 才入 minutes
         self._pending_date: str | None = None
@@ -249,6 +252,7 @@ class IndexEngine:
                 # stale(推播即將恢復);分時自癒的 retry 不清 —— stale 是推播死活的
                 # 訊號(watchdog 職權),回補成功不代表推播活著。
                 self._twse.stale = False
+            self._push_minutes_once = True
             self._dirty = True
             return
 
@@ -504,10 +508,14 @@ class IndexEngine:
             logger.warning("txo spot 無 TXF 推播 %ds(右上角台指與 TXO 現貨損益皆空)", int(elapsed))
 
     def _payload(self) -> dict:
+        twse = self._twse.scalar()
+        if self._push_minutes_once:
+            self._push_minutes_once = False
+            twse["minutes"] = dict(self._twse.minutes)
         return {
             "type": "index",
             "trade_date": self._trade_date,
-            "twse": self._twse.scalar(),
+            "twse": twse,
             "otc": self._otc.scalar(),
             "txf": self._txf(),
         }
