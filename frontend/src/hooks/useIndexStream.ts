@@ -69,6 +69,13 @@ export function useIndexStream(): IndexStreamState {
   const otcRef = useRef<IndexSeries | null>(null);
   const tradeDateRef = useRef<string | null>(null);
 
+  // refetch 失敗重試(fix/index-chart-empty-minutes):換日清空後 refetch 失敗若只
+  // warn 不重試,失敗點之前的分鐘永久缺失(WS merge 只補 last_minute 增量)——
+  // 分時圖殼在、線不見的前端路徑。單一 pending timer(不堆疊)+ 指數退避,成功歸零。
+  const retryTimerRef = useRef<number | undefined>(undefined);
+  const retryAttemptRef = useRef(0);
+  const aliveRef = useRef(true);
+
   // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
   // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
   // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
@@ -90,19 +97,27 @@ export function useIndexStream(): IndexStreamState {
   const refetch = async (): Promise<void> => {
     try {
       const res = await fetch("/api/index/state");
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as {
         trade_date: string;
         twse: WireSeries;
         otc: WireSeries;
         txf: TxfQuote | null;
       };
+      retryAttemptRef.current = 0;
       setTradeDate(body.trade_date);
       setTwse(toSeries(body.twse, null));
       setOtc(toSeries(body.otc, null));
       setTxf(body.txf);
     } catch (err) {
       console.warn("index: state 載入失敗", err);
+      if (!aliveRef.current || retryTimerRef.current !== undefined) return;
+      const delay = Math.min(BACKOFF_START_MS * 2 ** retryAttemptRef.current, BACKOFF_CAP_MS);
+      retryAttemptRef.current += 1;
+      retryTimerRef.current = window.setTimeout(() => {
+        retryTimerRef.current = undefined;
+        void refetch();
+      }, delay);
     }
   };
 
@@ -112,6 +127,7 @@ export function useIndexStream(): IndexStreamState {
     let timer: number | undefined;
     let backoff = BACKOFF_START_MS;
 
+    aliveRef.current = true; // StrictMode remount:cleanup 後重進要復活
     void refetch();
 
     const handle = (msg: {
@@ -172,7 +188,10 @@ export function useIndexStream(): IndexStreamState {
     connect();
     return () => {
       alive = false;
+      aliveRef.current = false;
       window.clearTimeout(timer);
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = undefined;
       ws?.close();
     };
   }, []);
