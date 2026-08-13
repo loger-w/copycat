@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { fmt } from "@/lib/format";
+import type { LadderLot } from "@/lib/ladder-lots";
 import { QTY_PRESETS } from "@/lib/qty-quick";
 import type { LadderRow } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
@@ -22,11 +23,9 @@ export interface CenterRequest {
   nonce: number;
 }
 
-/** 同價位活單聚合(點紅方格逐 seq 直刪用)。 */
-export interface LadderLot {
-  qty: number; // 殘量(order_qty - filled_qty 聚合)
-  seqs: string[];
-}
+/** 同價位活單聚合。型別本體在 `lib/ladder-lots.ts`(與聚合函式同居);此處 re-export
+ *  保住既有 `@/components/stock/LadderView` 的 import 路徑。 */
+export type { LadderLot };
 
 /** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
 export const DASH = "—";

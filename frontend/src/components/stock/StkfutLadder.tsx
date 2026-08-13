@@ -28,6 +28,7 @@ import {
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import { futExchangeContract } from "@/lib/futures-ladder";
+import { aggregateLots } from "@/lib/ladder-lots";
 import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import {
   instrumentKeyOf,
@@ -39,37 +40,13 @@ import {
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
 import { tradeErrorText } from "@/lib/trade-text";
-import type { CapitalOrder, CapitalPosition } from "@/types";
+import type { CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
 /** 前置閘的唯一說明。文案不點名 ETF —— 除權息調整契約(單位 2,157)也走同一條
  *  (code review B3),寫死「ETF」會讓那類標的的提示變成假訊息。 */
 const BLOCKED_TEXT = "此契約規格暫未開放下單";
-
-/** 本合約 actionable 活單 → 價位(毫元)聚合殘量;點紅方格逐 seq 直刪用。
- *
- *  比對鍵是**期交所契約碼**(CDFI6),不是股號:群益回報的期貨單 `stock_no` 放的是
- *  契約碼,拿股號比會一筆都對不上(而畫面上只是「沒有掛單」,零錯誤訊號)。 */
-function aggregateLots(
-  orders: CapitalOrder[] | undefined,
-  contract: string | null,
-): { buy: Map<number, LadderLot>; sell: Map<number, LadderLot> } {
-  const buy = new Map<number, LadderLot>();
-  const sell = new Map<number, LadderLot>();
-  if (contract === null) return { buy, sell };
-  for (const o of orders ?? []) {
-    if (!o.actionable || o.stock_no !== contract || o.price === null) continue;
-    const map = o.buy_sell === "B" ? buy : o.buy_sell === "S" ? sell : null;
-    if (map === null) continue;
-    const key = Math.round(o.price * 1000);
-    const cur = map.get(key) ?? { qty: 0, seqs: [] };
-    cur.qty += Math.max(0, o.order_qty - o.filled_qty);
-    cur.seqs.push(o.seq_no);
-    map.set(key, cur);
-  }
-  return { buy, sell };
-}
 
 /** 本合約部位(fut + 契約碼相等 + qty ≠ 0)。 */
 function contractPositions(
