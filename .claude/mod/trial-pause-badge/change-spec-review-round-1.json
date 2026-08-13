@@ -1,0 +1,19 @@
+{
+  "review": "change-spec-reviewer round 1",
+  "date": "2026-08-13",
+  "findings": [
+    {"id": "R1", "severity": "P0", "summary": "D6 觀測 log 判準漏「期貨鍵空窗恆窗外」與「首見值即轉態」兩條誤報通道;落點寫在 _handle_quote 開頭(code 未解出、期貨早退之前)", "disposition": "accepted", "resolution": "D6 重寫:僅現貨鍵、落點移到 code 解出且期貨夜盤早退之後、首見值只播種不記錄、恢復記錄限前值非0;SC-5 增 (e)(f)"},
+    {"id": "R2", "severity": "P1", "summary": "「trial 或 noData 變化即寫」會把 noData 單向黏性語意改成雙向 = 未宣告的 🔴", "disposition": "accepted", "resolution": "no_data 分支一字不動,另立 trial-only 補寫分支"},
+    {"id": "R3", "severity": "P1", "summary": "_trial_on 初值未定(窗內啟動假翻轉)+ 時鐘注入方式未定 + 計數型既有斷言未核對", "disposition": "accepted", "resolution": "D3 明訂 start() 播種、_now_taipei_time 模組級函式供 monkeypatch、補核對句"},
+    {"id": "R4", "severity": "P1", "summary": "trial 必填會紅的 fixture 未逐檔列(WatchlistSidebar.test / GroupGridView.test / GroupGridView.memo.test)", "disposition": "accepted", "resolution": "該紅清單逐檔列 + diff 表補三檔;grep 證實 GroupGridView.test.tsx:16 全欄建構"},
+    {"id": "R5", "severity": "P1", "summary": "_quote_payload 實為 7 個產出點(373/457/647/767/919/1077/1091),現況表寫 4 個", "disposition": "accepted", "resolution": "grep 證實;current-state §3 更正,docstring 漂移記 next-time"},
+    {"id": "R6", "severity": "P2", "summary": "本輪不覆蓋原始症狀(盤中暫緩撮合),backlog 第 3 條不得勾銷;兩段共用「(緩)」表述未拍板", "disposition": "accepted", "resolution": "§0 補不勾銷句;D5 記兩段表述留待第二段拍板"},
+    {"id": "R7", "severity": "P2", "summary": "08:30 翻轉補推落在 _pending_date 武裝期,payload 值欄位為昨日殘值", "disposition": "accepted", "resolution": "edge case 補列:與既有 seed 同語意,刻意不特判"},
+    {"id": "R8", "severity": "P2", "summary": "多 client 單 _main 槽:另一 tab 的非自選預覽檔窗翻轉漏更新", "disposition": "accepted", "resolution": "Known Risks 補列(與 noData 同缺口,不展開)"},
+    {"id": "R9", "severity": "P2", "summary": "側欄第一行是 flex-col 內單 span,badge 直接後綴會換行;需 flex row 包裹 + shrink-0", "disposition": "accepted", "resolution": "§7 明寫 DOM 落點與 class"},
+    {"id": "R10", "severity": "P2", "summary": "engine 觀測 WARNING 無固定可 grep 前綴,與 parse 層 warning 同事件雙記難對帳", "disposition": "accepted", "resolution": "固定前綴 trade-status-observe;D6 註記與 parse 層關係;SC-5 斷言比前綴"},
+    {"id": "R11", "severity": "P2", "summary": "盤中截圖窗口外的結案門檻未定;python -c 降級證據與 pytest 重複", "disposition": "accepted", "resolution": "明訂降級證據結案 + 次一交易日過目登記;刪 python -c"}
+  ],
+  "p2_summary": "6 條 P2 全 accepted,均為 spec 補述類",
+  "round2": "P0 accepted → 限縮加輪 1 次(只審 [amendment] 段落)"
+}

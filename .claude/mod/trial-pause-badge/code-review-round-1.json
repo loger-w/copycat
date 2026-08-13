@@ -1,0 +1,18 @@
+{
+  "review": "code review round 1(自評;lens A = spec/白名單對照,lens B = correctness/timing/test-gap)",
+  "date": "2026-08-13",
+  "findings": [
+    {"id": "SPEC-1", "severity": "P1", "lens": "A", "summary": "docs/next-time.md 登記缺(spec §7 列了沒做)", "disposition": "rejected_with_reason", "resolution": "REFUTED(時序誤報):登記在 review-diff.txt 落檔後已 commit(7e2bfa0f);「7→8 產出點」一句已更新;殘餘 = 收尾把截圖待辦寫進 memory(流程步驟)"},
+    {"id": "D6-1", "severity": "P2", "lens": "A", "summary": "觀測窗判準用本機時鐘,窗邊界時鐘偏移 → 每檔每日最多一對假 WARNING(進窗 0→1 判窗外)", "disposition": "accepted", "resolution": "觀測專用窗 = TRIAL_WINDOWS 兩端各放寬 2s(只影響 observe 分級,不影響 payload trial);邊界寬限寫進 docstring"},
+    {"id": "D6-2", "severity": "P2", "lens": "A", "summary": "窗內起/窗外訖的 episode 全程只 DEBUG(收盤試撮窗跨越樣本靜默)", "disposition": "accepted", "resolution": "不改行為(會動 SC-5(c) 語意);docstring + next-time 註記「蒐證需併看 13:25-13:30 前後 DEBUG」"},
+    {"id": "P2-AGG", "severity": "P2", "lens": "A", "summary": "(1) sidebar wrapper 缺 min-w-0 (2) _trade_status 退訂不清無註記 (3) 截圖待辦 memory 載體", "disposition": "accepted", "resolution": "(1) 補 min-w-0;(2) 併 IC-6(3) 改為真退訂即清(對齊 _backfilled 紀律);(3) 收尾寫 memory"},
+    {"id": "IC-1", "severity": "P1", "lens": "B", "summary": "首見非 0 值零記錄 → 訂閱前已進延緩撮合的股票(最可能取樣路徑)整段 episode 蒐證消失", "disposition": "accepted", "resolution": "首見非 0 **且在觀測窗外** → WARNING(帶 first_seen=1)+ episode=True;首見非 0 窗內 → 播種 episode=False 零記錄(防冷啟動在試撮窗內 255 檔齊噴 — 對 IC-1 建議的收窄);首見 0 維持零記錄。SC-5(f) 同步改寫,test_first_seen_value_only_seeds 的 assertion 標「該變」(鐵則 E 顯式宣告)"},
+    {"id": "IC-2", "severity": "P2", "lens": "B", "summary": "_now_taipei_time 真實實作零測試覆蓋(全部 monkeypatch),格式簡化成 HH:MM 會全綠且 badge 永不亮", "disposition": "accepted", "resolution": "補格式 fullmatch 斷言 + 凍結時鐘走真實格式化路徑的窗判斷言"},
+    {"id": "IC-3", "severity": "P2", "lens": "B", "summary": "trial 補寫無 in-flight 守門,refetch 交錯時翻轉訊息被 snapshot 覆蓋(出窗被吃 → header 掛假 (緩) 至下次 refetch)", "disposition": "accepted", "resolution": "沿 pendingBook(F-2)樣板:refetching 期間記 {key, trial},snapshot 套用後 key 相符則覆寫 next.trial;補交錯測試"},
+    {"id": "IC-4", "severity": "P2", "lens": "B", "summary": "no_data 檔窗內:側欄不標、header 標 — 兩視圖對同一狀態相反答案", "disposition": "accepted", "resolution": "header 條件補 && !accum.noData(與側欄同口徑)+ vitest case;spec SC-2 補一句"},
+    {"id": "IC-5", "severity": "P2", "lens": "B", "summary": "清空只掛 stage2,stage1→stage2 之間(08:00-09:00 整段)沿用昨日 episode → 假「恢復」WARNING 且時戳今日", "disposition": "accepted", "resolution": "rollover_stage1 一併 clear(episode 是日內語意);stage2 的 clear 保留;補 stage1 後 stage2 前餵 0 推播零 WARNING 測試"},
+    {"id": "IC-6", "severity": "P2", "lens": "B", "summary": "(1) flip 去重無測試 (2) qty 缺欄輸出空字串 (3) 真退訂不清 _trade_status 與 _backfilled 紀律不一致", "disposition": "accepted", "resolution": "(1) main∈watchlist flip case;(2) 缺欄印 -;(3) 真退訂 pop(與 _backfilled.discard 同段)"}
+  ],
+  "p2_summary": "P2 共 8 條(D6-1/D6-2/P2-AGG/IC-2~IC-6),7 修 1 記錄",
+  "whitelist_check": "lens A 九條白名單逐條核對全過(含 group_snapshot 不外洩 trial、corr/futures caller 不動)"
+}

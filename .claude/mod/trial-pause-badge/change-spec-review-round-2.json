@@ -1,0 +1,16 @@
+{
+  "review": "change-spec-reviewer round 2(限縮輪,只審 amendment 段落)",
+  "date": "2026-08-13",
+  "findings": [
+    {"id": "S1", "severity": "P1", "summary": "§7 diff 表 (5) 仍寫「_handle_quote 開頭」,與 D6 amendment 落點矛盾", "disposition": "accepted", "resolution": "§7 改寫指向 D6 落點"},
+    {"id": "S2", "severity": "P1", "summary": "§7 useStockStream 列仍寫「擴充 no_data 補寫塊」,與 D4 amendment(獨立分支)互斥", "disposition": "accepted", "resolution": "§7 改寫為獨立 trial 分支、no_data 塊零改動"},
+    {"id": "S3", "severity": "P2", "summary": "新測試清單仍寫四態,缺 SC-5 (e)(f)", "disposition": "accepted", "resolution": "改六態 a-f"},
+    {"id": "S4", "severity": "P2", "summary": "episode 旗標 state 形狀與 rollover 生命週期未定", "disposition": "accepted", "resolution": "定為 dict[str, tuple[str, bool]];_rollover_stage2 一併清空"},
+    {"id": "S5", "severity": "P2", "summary": "「parse 之前後皆可」選項不存在(早退在 parse 之後)", "disposition": "accepted", "resolution": "改寫:落在 :815 早退之後"},
+    {"id": "S6", "severity": "P2", "summary": "分級規則缺 fallback(窗內值域外轉態未定級)", "disposition": "accepted", "resolution": "補「其餘所有轉態 → DEBUG」"},
+    {"id": "S7", "severity": "P2", "summary": "edge 4 與 edge 8 對同一補推事件敘述矛盾,缺互斥條件", "disposition": "accepted", "resolution": "各補 stage2 已跑/未跑限定語"},
+    {"id": "S8", "severity": "P2", "summary": "_trial_on 未定 __init__ 初值(repo 慣例屬性在 __init__ 宣告)", "disposition": "accepted", "resolution": "__init__ False;start() 現算覆寫"}
+  ],
+  "p2_summary": "6 條 P2 全 accepted",
+  "exit": "無 P0;P1 全修復 → 退出 spec review"
+}
