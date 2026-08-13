@@ -13,7 +13,7 @@ import {
   STKFUT_WINDOW,
   Y_AXIS_W,
 } from "@/lib/stock-intraday-svg";
-import { VP_FILL_OPACITY } from "@/lib/volume-profile";
+import { VP_FILL_OPACITY, VP_POC_FILL_OPACITY } from "@/lib/volume-profile";
 import { wrap } from "@/test-utils";
 
 const OVERLAY = {
@@ -1027,17 +1027,28 @@ describe("StockIntradayChart 價位別成交量(SC-3)", () => {
     return [...container.querySelectorAll('[data-testid="vp-bar"]')];
   }
 
-  it("預設開:每個成交價位一根長條,自繪圖區左緣向右、半透明中性色", () => {
+  /** 🔴 SC-4:POC(域內量最大的價位)那一根改 accent 色 + 更高透明度。
+   *  本節的樣式斷言是**事前標記該變**的既有合約 —— 其餘 bar 的樣式一字不動。
+   *  WITH_TICKS 的量分佈 7 / 3 / 2 張,降冪排序後 POC(2380,7 張)是**最後一根**。 */
+  it("預設開:每個成交價位一根長條,自繪圖區左緣向右;POC 以外半透明中性色", () => {
     const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
     const bars = vpBars(container);
     expect(bars.length).toBe(3);
-    for (const b of bars) {
+    bars.forEach((b, i) => {
       // x 恆為繪圖區左界:長條是「從價位軸長出來的」,越界進價位帶會壓到刻度數字
       expect(Number(b.getAttribute("x"))).toBe(Y_AXIS_W);
       expect(Number(b.getAttribute("width"))).toBeGreaterThan(0);
-      expect(b.getAttribute("fill-opacity")).toBe(String(VP_FILL_OPACITY));
-      expect(b.getAttribute("class")).toContain("fill-ink-muted");
-    }
+      if (i === 2) {
+        // POC:accent 桃紅 + 0.45 —— 「最長那根」在灰底上要一眼指認得出來
+        expect(b.getAttribute("fill-opacity")).toBe(String(VP_POC_FILL_OPACITY));
+        expect(b.getAttribute("class")).toContain("fill-accent");
+      } else {
+        expect(b.getAttribute("fill-opacity")).toBe(String(VP_FILL_OPACITY));
+        expect(b.getAttribute("class")).toContain("fill-ink-muted");
+      }
+    });
+    // testid 不變:POC 不另開一種節點,否則既有「vp-bar 數 / z-order」諸條全部漏算它
+    expect(bars.filter((b) => (b.getAttribute("class") ?? "").includes("fill-accent")).length).toBe(1);
   });
 
   it("長度比例 = 該價位當日成交量(量最大的那根最長)", () => {
