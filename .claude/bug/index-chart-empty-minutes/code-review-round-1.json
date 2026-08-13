@@ -1,0 +1,59 @@
+{
+  "round": 1,
+  "stage": "closing (branch-lifecycle C 節)",
+  "diff": "review-diff.txt(master..HEAD)",
+  "lenses": ["concurrency-correctness (opus)", "contract-and-coverage (opus)"],
+  "findings": [
+    {
+      "id": "T-1/C-1",
+      "severity": "P1",
+      "title": "pending 期間連線類 retry 成功設 _push_minutes_once → 混日 minutes 以舊 trade_date 廣播",
+      "disposition": "accepted",
+      "resolution": "紅測試 test_pending_retry_does_not_broadcast_minutes(ab1c4469)→ 修復:retry 成功僅 _pending_date is None 才設旗標(945db63b)。pending 期間 merge 進舊日 dict 的既有 latent 汙染(swap 會覆寫)維持原狀,記 next-time。"
+    },
+    {
+      "id": "T-3",
+      "severity": "P2",
+      "title": "heal 沿用 watchdog 13:25 端點 → 收盤尾段 13:25–13:30 永不回補",
+      "disposition": "accepted",
+      "resolution": "heal 窗 = watchdog 窗 ∪ 尾窗 13:25–13:40;lag 期望覆蓋封頂 13:30(完整即停,lock test mutation-verified)。紅測試 test_heal_active_in_closing_tail_window。"
+    },
+    {
+      "id": "T-5/C-3",
+      "severity": "P2",
+      "title": "1K 持續回空(假日/資料不可得)heal 每 60s 空轉:~260 次 UNSUB→SUB + log 噪音",
+      "disposition": "accepted",
+      "resolution": "無進展退避:連續觸發間隔倍增至 900s 封頂,覆蓋度跟上歸零(945db63b);假日噪音 ~260 → ~20 次。紅測試 test_heal_backs_off_when_no_progress。"
+    },
+    {
+      "id": "T-2",
+      "severity": "P2",
+      "title": "heal 60s 節流無測試(mutant 移除節流全綠)",
+      "disposition": "accepted",
+      "resolution": "lock test test_heal_throttled_between_attempts,mutation-verified(節流改 >=0.0 → 紅)。"
+    },
+    {
+      "id": "T-6",
+      "severity": "P2",
+      "title": "前端 refetch 無世代守門:先發後至的舊回應整份覆蓋新回應(trade_date 倒退)",
+      "disposition": "accepted",
+      "resolution": "紅測試(05685327)→ seq 世代比對,舊回應 setState 與排退避皆丟棄(54cbd5ed)。mutant (b)(retryAttempt 歸零)未鎖 → 影響僅退避起點,accepted-as-is。"
+    },
+    {
+      "id": "C-4",
+      "severity": "P2",
+      "title": "refetch 成功不取消已排退避 timer → 多一次無謂全量",
+      "disposition": "accepted",
+      "resolution": "成功路徑 clearTimeout(54cbd5ed);行為由 T-6 測試間接覆蓋。"
+    },
+    {
+      "id": "T-4/C-2",
+      "severity": "P2",
+      "title": "帶 minutes 那則廣播對佇列飽和(落後 ~32s)的 client 是 at-most-once,丟失即該分頁無回復路徑",
+      "disposition": "rejected_with_reason",
+      "resolution": "known-risk 入 docs/next-time.md:觸發窗極窄(client 需恰在 heal 那一則期間積壓 >32 則);系統性解法(per-client 補送 / 週期全量)改變頻寬慣例,獨立輪評估。"
+    }
+  ],
+  "clean_areas_summary": "single-flight 語意 / close() 路徑 / _push_minutes_once set-reset 時序 / _LAG_HEAL_MIN 雙向鎖 / clear_stale 分流 / 型別與渲染鏈(WireSeries.minutes → toSeries → MarketChart)/ otc scalar-only / watchdog flake 已根治(釘 now_fn 非賭時序)兩 lens 皆確認。",
+  "exit": "P0=0;P1=1 已修;P2 6 條(5 修 1 known-risk)。"
+}
