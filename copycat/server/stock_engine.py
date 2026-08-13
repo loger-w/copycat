@@ -17,7 +17,13 @@ import datetime as _dt
 import logging
 from typing import AsyncGenerator, Callable, Protocol
 
-from copycat.live.stock_models import StockTick, parse_stock_realtime, to_milli
+from copycat.live.stock_models import (
+    TRIAL_WINDOWS,
+    StockTick,
+    is_trial_window,
+    parse_stock_realtime,
+    to_milli,
+)
 from copycat.live.stock_source import (
     Bar,
     BarsStatus,
@@ -62,6 +68,32 @@ def _now_taipei_hhmm() -> str:
     大部分時間**只有簿在動**,不判就等於整夜的五檔覆蓋日盤收盤簿。
     """
     return f"{_dt.datetime.now():%H:%M}"
+
+
+def _now_taipei_time() -> str:
+    """本機時鐘的台北 `HH:MM:SS.fff`(部署綁本機 = 台北,同 `_now_taipei_hhmm`)。
+
+    尺寸對齊 `is_trial_window` 的入參(它做字串比對,`HH:MM` 那把尺會在
+    `"08:30" < "08:30:00.000"` 這種比較上靜默錯邊)。模組級而非 method:測試一律
+    monkeypatch 模組屬性注入假時鐘(同 `_now_taipei_hhmm` 的既成用法)。
+    """
+    return f"{_dt.datetime.now():%H:%M:%S.%f}"[:-3]
+
+
+def _spot_trial_now() -> bool:
+    """現貨那把尺的「當下在試撮窗內」——`_flush_watchlist_loop` 的翻轉偵測用。
+
+    per-instrument 判定走 `StockEngine._trial_now`(期貨空窗恆 False);這裡要的是
+    「現貨窗有沒有跨過邊界」這**單一**事件,拿某一檔的 key 去算會在自選全空 /
+    只剩期貨主圖時失去判準。窗顯式傳 `TRIAL_WINDOWS` 不吃預設值(同
+    `parse_stock_realtime` 的 keyword-only 理由:傳錯的失效是靜默的)。
+    """
+    return is_trial_window(_now_taipei_time(), TRIAL_WINDOWS)
+
+
+#: TradeStatus 轉態觀測的**固定 grep 前綴 + 格式**(D6/R10)。與 parse 層值域外 warning
+#: 是同事件兩則(那邊管值域、這邊管轉態時序),蒐證對帳一律以本前綴為準。
+_TRADE_STATUS_FMT = "trade-status-observe code=%s %s->%s t=%s trial_window=%s qty=%s"
 
 
 def _round_robin(items: list[str], round_no: int) -> list[str]:
@@ -207,6 +239,14 @@ class StockEngine:
         # 「owner 缺席」的對帳判準涵蓋不到,得另記(P1-1)
         self._failed_resubs: set[str] = set()
         self._retry_round_no = 0  # 段內輪轉起點(C-1);單調遞增,不回捲
+        # 現貨試撮窗的**上一輪**值(D3):`_flush_watchlist_loop` 每輪比對,翻轉才補推。
+        # 真值在 `start()` 內以現算播種 —— 這裡給 False 只是型別上的初值,窗內啟動時
+        # 若不播種,第一輪 flush 會看到一次「假翻轉」並替全自選各發一則。
+        self._trial_on: bool = False
+        # TradeStatus 轉態觀測狀態(D6):code → (前值, episode 已記 WARNING)。
+        # 前值是為了「只在轉態時記」;episode 旗標讓起訖成對(恢復那一則才記得住
+        # 自己有沒有對應的起點)。**日別語意**:`_rollover_stage2` 顯式清空。
+        self._trade_status: dict[str, tuple[str, bool]] = {}
         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
         # 引擎本體不得因它缺席而改變行為
         self._signal_hub: SignalSink | None = None
@@ -232,6 +272,10 @@ class StockEngine:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        # 試撮窗基準**現算播種**(D3 amendment R3):窗內啟動(08:30–09:00 / 13:25–13:30)
+        # 時若沿用 `__init__` 的 False,第一輪 flush 會判成「剛進窗」並替全自選各補推
+        # 一則 —— 那是假翻轉,而它與真翻轉在 log 與線上都無從分辨。
+        self._trial_on = _spot_trial_now()
         self._source.set_trade_date(self._trade_date)  # 休市日回補模式與 source 日窗同步
         self._source.set_on_message(self._on_raw_threadsafe)
         self._source.set_on_no_data(self._on_no_data_threadsafe)
@@ -421,11 +465,26 @@ class StockEngine:
                 await self._acquire_stkfut(key)
             self._enqueue_backfill(key)
 
+    def _trial_now(self, code: str) -> bool:
+        """該 instrument 當下是否在試撮/緩撮窗內(D1)。
+
+        **每次組 payload 當下現算**,不落 `StockDayState`:試撮期 TC4 不推成交 tick
+        (2026-07-21 實測),tick 路徑萃取不到「進窗」事件 —— 掛在狀態機上的旗標
+        永遠不會被翻起來,而畫面只是一直不標。現算也天然沒有 stale / 清除的路。
+
+        窗對映走 `trial_windows_for`(唯一定義):期貨鍵空窗 → 恆 False,前端因此
+        不必自己判 instrument 種類。
+        """
+        return is_trial_window(_now_taipei_time(), trial_windows_for(code))
+
     def snapshot(self, code: str) -> dict:
         state = self._states.get(code)
         snap = state.snapshot() if state is not None else StockDayState().snapshot()
         snap["code"] = code
         snap["no_data"] = code in self._no_data
+        # 附加點在 engine 而非 `StockDayState.snapshot()`(同 `no_data` 慣例):
+        # trial 是引擎時鐘推導的,不是日內狀態機資料。
+        snap["trial"] = self._trial_now(code)
         # tc4 / backfilling **不進 snapshot**:畫面的唯一來源是 WS `status` 訊息
         # (那邊是活碼)。同時送兩份等於讓同一個狀態有兩個真相,而 REST 那份是
         # 請求當下的凍結值,重整時機不對就會與 WS 打架。
@@ -719,6 +778,9 @@ class StockEngine:
         # (在途 job 自己會結清;跨日的 in-flight 另由 generation guard 作廢)
         self._backfilled.clear()
         self._backfill_failed.clear()
+        # TradeStatus 前值同屬**日別**(D6/S4):跨日殘留會把隔日首則推播誤判成「恢復」
+        # 並帶昨日值記一則 WARNING —— 污染的正是蒐證樣本本身,而那一則讀起來像真事件。
+        self._trade_status.clear()
         if self._main is not None:
             self._enqueue_backfill(self._main)
         logger.info("rollover stage2 → %s(首筆 %s)", self._trade_date, first_tick.code)
@@ -813,6 +875,9 @@ class StockEngine:
             # (`TradeQuantity=0`)沒有時刻欄可用,只能退到本機時鐘。代價是窗邊界前後
             # 幾秒可能誤判一兩則簿更新 —— 相對於「整夜的簿覆蓋日盤簿」,這是划算的。
             return
+        # 蒐證通道(D6):**只記錄不判定**。落點在夜盤早退之後(code 已解出、parse
+        # 已完成),不影響下面任何一條既有路徑。
+        self._observe_trade_status(code, quote)
         # 「無資料」復原:**命中才推**。寫成無條件 discard + publish 會變成每 tick 廣播,
         # 直接打穿 1s 節流(W-17)。
         recovered = code in self._no_data
@@ -925,6 +990,56 @@ class StockEngine:
         # latch 還是昨日的,對照下去會誤發 `limit_open`(design R2-2)。
         if self._signal_hub is not None and self._pending_date is None:
             self._signal_hub.on_book(code, state)
+
+    def _observe_trade_status(self, code: str, quote: dict) -> None:
+        """per-code `TradeStatus` 轉態觀測 log(D6)——「盤中延緩撮合」的蒐證工具。
+
+        本輪**不據此判定任何狀態**(值域 / 起訖 / 恢復皆未實測,第二段才做 per-code
+        偵測);這裡只留可 grep 的紀錄,前綴 `trade-status-observe`。從 raw quote dict
+        讀而不動 parse 層簽名:parse 那則 warning 管值域(r2-F5 契約,原文不動),
+        engine 這則管轉態時序,對帳時是同事件兩則。
+
+        分層(窗外 WARNING / 其餘 DEBUG):窗內 0↔1 是已知常態(2026-07-21 實測
+        13:25–13:30 共 213 筆),全部升級成 WARNING 會把真正要抓的窗外事件淹掉。
+
+        三道守門各自對應一種會污染樣本的假事件:
+        - **期貨鍵跳過**:空窗讓 `_trial_now` 恆 False → 任何轉態都誤落「窗外」分支,
+          個股期整天噴假 WARNING。
+        - **首見值只播種**:`None→x` 不是轉態,否則每交易日 255 檔各噴一則。
+        - **同值不記**:每則 REALTIME 都帶 TradeStatus,不比對前值就等於逐則記錄。
+        """
+        if is_futures_key(code):
+            return
+        # 缺欄 / 空字串視同 "0"(parse 既有 `or "0"` 語意,觀測與判定同基準)
+        status = str(quote.get("TradeStatus", "0") or "0")
+        prev = self._trade_status.get(code)
+        if prev is None:
+            self._trade_status[code] = (status, False)
+            return
+        prev_status, episode = prev
+        if status == prev_status:
+            return
+        in_window = self._trial_now(code)
+        args = (
+            code,
+            prev_status,
+            status,
+            _now_taipei_time(),
+            in_window,
+            quote.get("TradeQuantity", ""),
+        )
+        if status != "0" and not in_window:
+            # 盤中延緩撮合的候選 evidence:窗外出現非正常狀態
+            logger.warning(_TRADE_STATUS_FMT, *args)
+            episode = True
+        elif status == "0" and episode:
+            # 起訖成對(蒐證要看得出持續多久);沒有起點的恢復不記,否則常態推播
+            # 每回到 "0" 都噴一則
+            logger.warning(_TRADE_STATUS_FMT, *args)
+            episode = False
+        else:
+            logger.debug(_TRADE_STATUS_FMT, *args)
+        self._trade_status[code] = (status, episode)
 
     def _handle_stkfut(self, quote: dict) -> None:
         prod = str(quote.get("Security", ""))
@@ -1066,6 +1181,10 @@ class StockEngine:
             "upper": meta.upper_milli if meta is not None else None,
             "lower": meta.lower_milli if meta is not None else None,
             "no_data": no_data,
+            # 試撮/緩撮窗旗標(D2)。**旗標類,不受「no_data 時值欄位一律 None」約束**
+            # (同 `no_data` 自身):它答的是「這個時刻交易所在不在撮合」,與該檔有沒有
+            # 資料無關 —— no_data 列由前端規則決定不標(SC-1),不在這裡分岔。
+            "trial": self._trial_now(code),
         }
 
     def stream(self) -> AsyncGenerator[dict, None]:
@@ -1079,10 +1198,34 @@ class StockEngine:
     def _publish(self, msg: dict) -> None:
         self._ws.publish(msg)
 
+    def _trial_flip_targets(self) -> list[str]:
+        """窗翻轉要補推的收件人:自選全碼 + **現貨**主圖碼(D3)。
+
+        主圖也收 `watchlist_quote` 是既有先例(`_handle_no_data` 對任意 code 發,
+        前端靠它把 noData 帶進 accum):非自選的預覽檔開著頁時,轉態只有這條路帶得進去。
+        期貨主圖鍵不推 —— `trial` 恆 False,推出去只是一則側欄對不上任何項目的訊息。
+        去重是為了「各一則」:同一檔既是自選又是主圖時發兩則,節流語意就開始漂。
+        """
+        codes = list(self._watchlist)
+        main = self._main
+        if main is not None and not is_futures_key(main) and main not in codes:
+            codes.append(main)
+        return codes
+
     async def _flush_watchlist_loop(self) -> None:
-        """側欄節流:1s 合併一則(design §2.4)。"""
+        """側欄節流:1s 合併一則(design §2.4)+ 試撮窗翻轉補推(D3)。"""
         while True:
             await asyncio.sleep(self._throttle)
+            # 掛既有 1s loop 而不加新 task:一天僅 4 次邊界事件(08:30 / 09:00 /
+            # 13:25 / 13:30),直接 publish 不打穿節流。
+            trial_on = _spot_trial_now()
+            if trial_on != self._trial_on:
+                self._trial_on = trial_on
+                for code in self._trial_flip_targets():
+                    # **繞過下面 dirty 路徑的 `state.last is None` skip**:盤前無成交
+                    # 正是要標「(緩)」的時刻,而那條 skip 讓那些檔永遠不進補推路徑
+                    # (試撮期 TC4 也不推成交 tick → dirty 永遠不會被加進去)。
+                    self._publish(self._quote_payload(code))
             dirty, self._dirty_watchlist = self._dirty_watchlist, set()
             for code in dirty:
                 state = self._states.get(code)
