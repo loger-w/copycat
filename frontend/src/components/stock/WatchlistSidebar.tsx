@@ -132,12 +132,18 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     applyCollapsed(next);
   }
 
+  /** `ungroupedCollapsed` 的**單一寫入點**:persist → setState 成對(同 `applyCollapsed`
+   *  的理由,只是這邊是 boolean 所以沒有 ref 影子)。持久化留在這裡而不是 updater 內 ——
+   *  updater 契約是純函式,StrictMode 下 double-invoke 會寫兩次 localStorage。 */
+  function applyUngroupedCollapsed(next: boolean): void {
+    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
+    setUngroupedCollapsed(next);
+  }
+
   /** 未分組折疊是 boolean 且只走純點擊路徑(沒有 mutation 回呼那種同批連發),
    *  直接用 render 閉包的值算 next 就夠,不需要影子 ref。 */
   function toggleUngroupedCollapsed(): void {
-    const next = !ungroupedCollapsed;
-    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
-    setUngroupedCollapsed(next);
+    applyUngroupedCollapsed(!ungroupedCollapsed);
   }
 
   /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。
