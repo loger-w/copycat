@@ -272,3 +272,8 @@ CLAUDE.md §4 級契約補一行(spec 內登記):**`OrderRecord.unit` 字面值(
 或餵完 balance `##` 讓 pending 掛起;(2) due 到期 = 直接設 `_balance_due` 為過去;
 (3) 守門逾期 = 直接設 `_balance_inflight_until` 為過去。FakeCom 計
 `get_real_balance` 呼叫次數斷言。
+
+---
+
+self_review_head: 5ae047e5(code review round-1 三 lens + fix 波收斂點;其後 commit
+僅 artifacts / 文件登記,main session 自著自核,無 code 增量)
