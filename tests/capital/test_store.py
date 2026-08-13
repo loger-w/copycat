@@ -175,6 +175,16 @@ def test_option_market_unit_and_no_division() -> None:
         assert o.unit == "口" and o.order_qty == 2 and o.market == market
 
 
+def test_odd_lot_market_unit_is_share_without_division() -> None:
+    # 零股(TL/TC)= 股、不除 1000。unit 字面值自閃電梯掛單顯示起是前端過濾鍵
+    # (現股梯排除零股單),標成「張」會讓零股單漏進張梯 → 量級錯千倍。
+    for market in ("TL", "TC"):
+        s = CapitalStore()
+        s.apply_reply(_evt(market=market, stock="2330", qty="500", price="1000.0000"))
+        o = s.orders()[0]
+        assert o.unit == "股" and o.order_qty == 500 and o.market == market
+
+
 def test_no_seq_dropped() -> None:
     s = CapitalStore()
     e = dataclasses.replace(_evt(), seq_no=None)
