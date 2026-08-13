@@ -28,7 +28,7 @@ import {
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import { futExchangeContract } from "@/lib/futures-ladder";
-import { aggregateLots } from "@/lib/ladder-lots";
+import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import {
   instrumentKeyOf,
@@ -116,7 +116,14 @@ export function StkfutLadder({
   // 判準吃契約單位(與後端 `_stkfut_gates` 同一個),單位不可得才落回股號 fallback
   const blocked = isOrderBlocked(code, contract.unit);
 
-  const lots = aggregateLots(ordersData?.orders, exchangeContract);
+  // 個股期有夜盤 → 已成交量的日期界取 ±1 日窗(`date` 在夜盤跨午夜時是交易日還是
+  // 日曆日尚未實證,兩種假設都涵蓋);unit 閘不設 —— 契約碼與股號零碰撞,整筆 unit
+  // 過濾反而會誤殺 market 缺值 fallback 的期貨單。
+  const lots = aggregateLots(
+    ordersData?.orders,
+    exchangeContract,
+    ymdWindow(new Date(), [-1, 0, 1]),
+  );
   const posRows = contractPositions(positionsData?.positions, exchangeContract);
 
   const ladder = buildLadder({

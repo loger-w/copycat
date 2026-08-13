@@ -12,10 +12,13 @@ export interface FutDepthLevel {
   qty: number;
 }
 
-/** 我方同價位活單聚合(splitMyLots 產物) */
+/** 我方同價位聚合(splitMyLots 產物)。`qty` = 活單殘量、`filled` = 已成交量、
+ *  `seqNos` = **活單** seq(全撤與點刪的唯一來源;filled-only 條目恆空)。
+ *  口徑與 `lib/ladder-lots.ts::aggregateLots` 逐條相同 —— 改一邊要改另一邊。 */
 export interface MyFutLot {
   priceMilli: number;
   qty: number;
+  filled: number;
   seqNos: string[];
 }
 
@@ -24,6 +27,7 @@ export interface FutLadderRow {
   bidQty: number;
   askQty: number;
   myQty: number;
+  myFilled: number;
   mySeqNos: string[];
   isCenter: boolean;
   clickable: boolean;
@@ -38,29 +42,41 @@ export interface FutOrderSource {
   order_qty: number;
   filled_qty: number;
   actionable: boolean;
+  date: string | null; // 委託建立日 YYYYMMDD(已成交量的日期界)
 }
 
-/** 該契約 actionable 活單(殘量 > 0)按價位聚合;價 float → 毫點 round。 */
+/** 該契約的單按價位聚合(不分買賣側);價 float → 毫點 round。
+ *
+ *  `filledDates`:終態單的 `date` 落在集合內才計已成交量(store 跨日不清 → 無日期界
+ *  會長出昨日幽靈徽章);**活單的成交恆計**。失敗 / 退單 filled_qty 恆 0 → 零痕跡。
+ *  `seqNos` 只收 actionable 單 —— 全撤與點刪都靠它,filled 貢獻不得產生 seq。 */
 export function splitMyLots(
   orders: ReadonlyArray<FutOrderSource>,
   contract: string,
+  filledDates: ReadonlySet<string>,
 ): MyFutLot[] {
-  const byPrice = new Map<number, { qty: number; seqNos: string[] }>();
+  const byPrice = new Map<number, { qty: number; filled: number; seqNos: string[] }>();
   for (const o of orders) {
-    if (o.stock_no !== contract || !o.actionable || o.price == null) continue;
-    const remaining = o.order_qty - o.filled_qty;
-    if (remaining <= 0) continue;
+    if (o.stock_no !== contract || o.price == null) continue;
+    // 殘量 ≤ 0 不進 qty,但 seq 仍要收:actionable 且殘 0(N 未到)刪得掉
+    const addQty = o.actionable ? Math.max(0, o.order_qty - o.filled_qty) : 0;
+    const countFilled = o.actionable || (o.date !== null && filledDates.has(o.date));
+    const addFilled = countFilled ? o.filled_qty : 0;
+    if (!o.actionable && addFilled === 0) continue; // 不產生 entry
     const priceMilli = Math.round(o.price * 1000);
-    const cur = byPrice.get(priceMilli);
-    if (cur) {
-      cur.qty += remaining;
-      cur.seqNos.push(o.seq_no);
-    } else {
-      byPrice.set(priceMilli, { qty: remaining, seqNos: [o.seq_no] });
-    }
+    const cur = byPrice.get(priceMilli) ?? { qty: 0, filled: 0, seqNos: [] };
+    cur.qty += addQty;
+    cur.filled += addFilled;
+    if (o.actionable) cur.seqNos.push(o.seq_no);
+    byPrice.set(priceMilli, cur);
   }
   return [...byPrice.entries()]
-    .map(([priceMilli, v]) => ({ priceMilli, qty: v.qty, seqNos: v.seqNos }))
+    .map(([priceMilli, v]) => ({
+      priceMilli,
+      qty: v.qty,
+      filled: v.filled,
+      seqNos: v.seqNos,
+    }))
     .sort((a, b) => b.priceMilli - a.priceMilli);
 }
 
@@ -134,6 +150,7 @@ export function buildFuturesLadder(opts: {
     bidQty: bidMap.get(priceMilli) ?? 0,
     askQty: askMap.get(priceMilli) ?? 0,
     myQty: lotMap.get(priceMilli)?.qty ?? 0,
+    myFilled: lotMap.get(priceMilli)?.filled ?? 0,
     mySeqNos: lotMap.get(priceMilli)?.seqNos ?? [],
     isCenter: priceMilli === c,
     clickable: Math.abs(priceMilli - opts.centerMilli) <= opts.centerMilli * CLICK_BAND + 1e-9,

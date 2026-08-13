@@ -27,6 +27,22 @@ export interface CenterRequest {
  *  保住既有 `@/components/stock/LadderView` 的 import 路徑。 */
 export type { LadderLot };
 
+/** 有 seq 可刪(或還有殘量)→ 維持可點紅方格。`seqs` 非空是關鍵條件:actionable 但
+ *  殘量算出來是 0 的單(P/U 先到、N 未到)照樣刪得掉,轉成徽章等於沒收刪單入口。 */
+function isCancelable(lot: LadderLot): boolean {
+  return lot.qty > 0 || lot.seqs.length > 0;
+}
+
+/** 紅方格 / 徽章文字:`未成交(已成交)`;無活單時只剩 `(已成交)`。 */
+function lotText(lot: LadderLot): string {
+  return isCancelable(lot) ? `${lot.qty}(${lot.filled})` : `(${lot.filled})`;
+}
+
+/** 全成交徽章:幾何沿紅方格(同側同緣、同級距),但降為 muted 邊框且**不吃點擊** ——
+ *  沒有 seq 可刪,長得像可刪的按鈕就是假訊號。 */
+const FILLED_BADGE =
+  "pointer-events-none my-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted";
+
 /** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
 export const DASH = "—";
 
@@ -284,15 +300,19 @@ export function LadderView({
                     合成層屬性,套在容器上時子元素無法「反淡」—— 之後要疊在 row 上的
                     部位標記(打平 / 均價)正好都落在遠離現價的位置。 */}
                 <div className={cn("flex items-stretch", r.dimmed && "opacity-35")}>
-                  {buyLot !== undefined ? (
+                  {buyLot !== undefined && isCancelable(buyLot) ? (
                     <button
                       type="button"
                       aria-label={`刪 ${fmt(r.priceMilli)} 買單`}
                       onClick={() => onCancelLot(buyLot)}
                       className="my-0.5 ml-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
                     >
-                      {buyLot.qty}
+                      {lotText(buyLot)}
                     </button>
+                  ) : buyLot !== undefined ? (
+                    <span data-testid="ladder-filled-lot" className={cn(FILLED_BADGE, "ml-0.5")}>
+                      {lotText(buyLot)}
+                    </span>
                   ) : null}
                   <button
                     type="button"
@@ -329,15 +349,19 @@ export function LadderView({
                   >
                     {r.askQty > 0 ? r.askQty : ""}
                   </button>
-                  {sellLot !== undefined ? (
+                  {sellLot !== undefined && isCancelable(sellLot) ? (
                     <button
                       type="button"
                       aria-label={`刪 ${fmt(r.priceMilli)} 賣單`}
                       onClick={() => onCancelLot(sellLot)}
                       className="my-0.5 mr-0.5 min-w-5 rounded border border-loss bg-loss/25 px-0.5 text-[10px] font-bold text-loss"
                     >
-                      {sellLot.qty}
+                      {lotText(sellLot)}
                     </button>
+                  ) : sellLot !== undefined ? (
+                    <span data-testid="ladder-filled-lot" className={cn(FILLED_BADGE, "mr-0.5")}>
+                      {lotText(sellLot)}
+                    </span>
                   ) : null}
                 </div>
               </div>

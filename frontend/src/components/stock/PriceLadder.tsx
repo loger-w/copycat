@@ -17,7 +17,7 @@ import {
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
-import { aggregateLots } from "@/lib/ladder-lots";
+import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
   avgTickOf,
   clampDiscount,
@@ -185,7 +185,9 @@ export function PriceLadder({
   const submitStock = useSubmitStock();
   const cancelOrder = useCancelOrder();
   const { data: ordersData } = useCapitalOrders();
-  const lots = aggregateLots(ordersData?.orders, code);
+  // 現股無夜盤 → 已成交量的日期界取**嚴格今日**(跨日幽靈徽章全滅);零股單整筆排除
+  // (張梯混進零股量級差一千倍,其刪單入口仍在委託列表)。每 render 重算:純算術。
+  const lots = aggregateLots(ordersData?.orders, code, ymdWindow(new Date(), [0]), "股");
   const { data: positionsData } = useCapitalPositions();
   // 每 tick 重算:kinds 量級是個位數的純算術,不值得 memo
   const posRows = positionRows(
