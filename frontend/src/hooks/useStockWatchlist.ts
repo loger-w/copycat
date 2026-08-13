@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
+import { WATCHLIST_LIMIT } from "@/lib/constants";
 import type { Group, Watchlist } from "@/lib/watchlist-model";
 
 export type { Group, Watchlist };
@@ -24,7 +25,7 @@ function toWatchlist(body: { codes?: string[]; groups?: Group[] }): Watchlist {
 /** 三個錯誤碼的中文文案(跨檔契約 W-2)。側欄與管理 Dialog 共用**同一份**,
  *  複製兩份會漂而白名單只釘了「文案不變」。 */
 export function errText(message: string): string {
-  if (message === "WATCHLIST_FULL") return "自選已達 30 檔上限";
+  if (message === "WATCHLIST_FULL") return `自選已達 ${WATCHLIST_LIMIT} 檔上限`;
   if (message === "BAD_CODE") return "股號格式不正確";
   if (message === "BAD_GROUP") return "群組名稱不合法";
   return "儲存失敗";

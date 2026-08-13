@@ -93,6 +93,15 @@ export const WL_COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 /** 自選側欄未分組區塊的折疊("1" = 折疊)— components/stock/WatchlistSidebar.tsx */
 export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 
+/** 自選檔數上限。**跨檔契約**:與後端 `copycat/stock_watchlist.py::WATCHLIST_LIMIT`
+ *  同值,改一邊必須同步另一邊 —— 這裡只餵 `hooks/useStockWatchlist.ts::errText` 的文案,
+ *  真正擋下超限的是後端(`WATCHLIST_FULL`)。兩邊漂掉的症狀是使用者看到「已達 N 檔上限」
+ *  而 N 不是實際擋人的那個數字,零錯誤訊號。
+ *
+ *  (不是 localStorage key,放這裡是因為本檔是既有跨元件常數的聚集地,且契約註解需要
+ *  一個可 grep 的錨點。) */
+export const WATCHLIST_LIMIT = 50;
+
 /** 個股頁檢視("single" / "group")— components/stock/StockPage.tsx */
 export const STOCK_VIEW_KEY = "copycat-stock-view";
 /** 群組檢視選中的群組名 — components/stock/GroupGridView.tsx。

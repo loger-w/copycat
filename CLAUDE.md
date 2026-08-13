@@ -143,6 +143,10 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **`OrderRecord.unit` 字面值(張/口/股)是前端過濾鍵**(2026-08-13 起,閃電梯零股閘
   `ladder-lots.ts` 依 `unit === "股"` 排除):產生點 `capital/store.py::_to_record`,改字面值
   = 改契約要同時改兩邊;`tests/capital/test_store.py` 有 lock。
+- **自選上限常數雙邊同值**(2026-08-13 起 = 50):產生點 `copycat/stock_watchlist.py::
+  WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
+  WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string
+  已同源)。改值 = 改契約要同時改兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
 
 ## 5. 資料源
 

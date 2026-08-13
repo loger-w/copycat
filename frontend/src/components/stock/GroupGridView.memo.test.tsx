@@ -9,7 +9,7 @@ import type { Group } from "@/lib/watchlist-model";
 
 /** review A6-1 的 regression lock:卡片 `memo` 有沒有真的擋下重畫。
  *
- *  這件事**在畫面上完全看不出來** —— memo 失效只是每秒多算 30 次分時幾何(最多
+ *  這件事**在畫面上完全看不出來** —— memo 失效只是每秒多算 50 次分時幾何(最多
  *  271 格),圖照畫、值照對。失效的典型原因也不在卡片自己身上:父層每秒隨 `quotes`
  *  re-render,傳下去的 `onPick` 若是 inline arrow,`memo` 的比較每一輪都不會過。
  *
