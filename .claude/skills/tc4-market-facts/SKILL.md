@@ -96,6 +96,16 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   1K 的 Time 為終點標記同註於 `river_models.minute_end_from_1k`。
   (Trigger:夜盤 1K / 分鐘域 / 近全序列)
 
+- **TC4 1K 首頁 30s timeout 在早晨冷啟動是高機率事件,且 `_collect_history` 對 timeout
+  靜默回空(不 raise)**(2026-08-13 實證,連續兩早晨 2/2:08:23 / 08:58;盤後閒時啟動
+  則秒回):TC4 剛開 + server 同時搶 255 檔個股訂閱 + 6 腿 river 回補時,IX0001 1K 首頁
+  30s 內備不齊。caller 拿到空 dict 與「該日真無資料」不可分 → 任何把「開機那一次回補」
+  當唯一資料源的設計都會靜默失去全日資料。同日另實證:**REALTIME 推播可整段靜默
+  (「訂閱成功但零推播」家族)而同 session 的 1K 歷史照常可取**(盤中 minutes 全空、
+  14:52 同 session 當場取回 270 根)→ 修復用「產出面覆蓋度偵測 + 重掛/重抓自癒」
+  (index_engine 分時自癒,grep `index 分時自癒`),不是猜輸入面哪環死了。
+  (Trigger:設計任何「開機回補 + 推播增量」的資料鏈 / 排查分時線缺失)
+
 ## 指數與期指
 
 - **TC4 指數/日 K**(2026-07-28 盤中):加權 = `TC.S.TWS.IX0001`(REALTIME 含五檔/高低/漲跌停鍵);
