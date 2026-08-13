@@ -278,17 +278,22 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           o.onToggle();
         }}
         className={cn(
-          "flex w-full items-center gap-1 border-b border-line px-1 py-1 text-left",
+          // `bg-surface` 底色帶 + `font-medium` 組名:標題列與個股列原本同樣是透明底
+          // border-b、組名字級還比代號小 —— 掃視時分不出「這是一段的開頭」。
+          // `rounded-t`:section 是 `rounded border`,不補的話底色帶的方角會戳出圓角外。
+          "flex w-full items-center gap-1 rounded-t border-b border-line bg-surface px-1 py-1 text-left",
           "focus-visible:border-b-accent focus-visible:outline-none",
           // 拖曳中關掉 hover 亮色:否則會與落點高亮(border-accent)搶語意 ——
-          // 使用者分不清「這是可放的組」還是「這是可點的鈕」
-          drag === null && "hover:bg-surface",
+          // 使用者分不清「這是可放的組」還是「這是可點的鈕」。
+          // hover 色換手成 line/50:底色帶已經是 surface,原本的 `hover:bg-surface`
+          // 變成看不出來的 no-op(可點的 affordance 靜默消失)。
+          drag === null && "hover:bg-line/50",
         )}
       >
         <span aria-hidden="true" className="w-3 shrink-0 text-xs text-ink-dim">
           {o.collapsed ? "▸" : "▾"}
         </span>
-        <span className="min-w-0 flex-1 truncate text-xs text-ink">{o.label}</span>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">{o.label}</span>
         <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
       </button>
     );
