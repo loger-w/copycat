@@ -217,6 +217,56 @@ async def test_minutes_lag_self_heal_refetches_backfill() -> None:
         await eng.close()
 
 
+async def test_minutes_lag_heal_not_triggered_when_current() -> None:
+    """推播健康(minutes 跟上牆鐘)→ 自癒不得空轉重抓(fetch 只有 start 那一次)。"""
+    fake = FakeIndexSource()
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(9, 30))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        assert fake.on_message is not None
+        fake.on_message(_quote(filled="13005"))  # 01:30:05 UTC → key 0931(跟上 09:30)
+        await asyncio.sleep(0.2)
+        assert fake.fetch_minutes_calls == 1
+        assert fake.subscribed.count("IX0001") == 1
+    finally:
+        await eng.close()
+
+
+async def test_minutes_lag_heal_grace_at_open() -> None:
+    """開盤頭幾分鐘 minutes 空是正常(域 0901 起):09:02 不觸發、09:04 越門檻觸發。"""
+    fake = FakeIndexSource()
+    clock = [_dt.time(9, 2)]
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: clock[0])
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        await asyncio.sleep(0.15)
+        assert fake.fetch_minutes_calls == 1  # 09:02 − 09:00 = 2 ≤ 門檻,不觸發
+        clock[0] = _dt.time(9, 4)
+        await asyncio.sleep(0.15)
+        assert fake.fetch_minutes_calls >= 2  # 4 分 > 門檻 → 自癒重抓
+    finally:
+        await eng.close()
+
+
+async def test_minutes_lag_heal_does_not_clear_stale() -> None:
+    """自癒回補成功不清 stale —— stale 是推播死活訊號(watchdog 職權),
+    回補成功不代表推播活著;連線類 retry 的樂觀清 stale 語意不變。"""
+    fake = FakeIndexSource()
+    eng = make_engine(fake, in_watch_window=lambda: True, stale_secs=0.03)
+    eng._heal_secs = 0.02  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000}
+        await asyncio.sleep(0.25)
+        state = eng.state()
+        assert state["twse"]["minutes"] == {"0901": 1_000}  # 自癒有跑
+        assert state["twse"]["stale"] is True  # 但 stale 不被洗掉
+    finally:
+        await eng.close()
+
+
 async def test_watchdog_inactive_outside_window() -> None:
     fake = FakeIndexSource()
     eng = make_engine(fake, in_watch_window=lambda: False, stale_secs=0.03)

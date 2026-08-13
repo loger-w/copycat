@@ -44,6 +44,9 @@ def in_futures_session(now: _dt.time | None = None) -> bool:
 # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
 _WATCH_START = _dt.time(9, 0)
 _WATCH_END = _dt.time(13, 25)
+#: 分時自癒門檻:watch window 內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
+#: 開盤頭幾分鐘 minutes 空是正常(域 0901 起),空集合以窗起點 09:00 起算即天然豁免。
+_LAG_HEAL_MIN = 3
 
 
 class IndexSource(Protocol):
@@ -159,6 +162,9 @@ class IndexEngine:
         self._stale_secs = stale_secs
         self._retry_secs = retry_secs
         self._rollover_check_secs = 60.0
+        # 分時自癒節流:lag 觸發的 retry 排程間隔下限(retry 本身 single-flight)
+        self._heal_secs = 60.0
+        self._last_heal = float("-inf")
 
         # 換日 pending(IR2):偵測新日後 realtime 分鐘先進 pending,swap 才入 minutes
         self._pending_date: str | None = None
@@ -220,12 +226,12 @@ class IndexEngine:
 
     # ---- 重試(R5/IR8:single-flight)----
 
-    def _schedule_retry(self) -> None:
+    def _schedule_retry(self, *, clear_stale: bool = True) -> None:
         if self._retry_task is not None and not self._retry_task.done():
             self._retry_task.cancel()
-        self._retry_task = asyncio.create_task(self._retry_loop())
+        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale))
 
-    async def _retry_loop(self) -> None:
+    async def _retry_loop(self, clear_stale: bool) -> None:
         backoff = self._retry_secs
         while True:
             await asyncio.sleep(backoff)
@@ -238,7 +244,11 @@ class IndexEngine:
                 logger.exception("index retry 非預期失敗(續試)")
                 backoff = min(backoff * 2, 60.0)
                 continue
-            self._twse.stale = False
+            if clear_stale:
+                # 連線類 retry(start 失敗 / reconnect / rollover 失敗)成功 = 樂觀清
+                # stale(推播即將恢復);分時自癒的 retry 不清 —— stale 是推播死活的
+                # 訊號(watchdog 職權),回補成功不代表推播活著。
+                self._twse.stale = False
             self._dirty = True
             return
 
@@ -426,6 +436,21 @@ class IndexEngine:
             ):
                 self._twse.stale = True
                 self._dirty = True
+            # 分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級
+            # 成空(_collect_history 不 raise → start 不排 retry)+ 當日推播整段靜默時,
+            # minutes 沒有任何回復路徑,而 TC4 端 1K 資料整天可取(2026-08-13 事故)。
+            # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
+            # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
+            if (
+                self._in_watch_window()
+                and self._pending_date is None
+                and self._minutes_lag_exceeded()
+                and (self._retry_task is None or self._retry_task.done())
+                and _time.monotonic() - self._last_heal >= self._heal_secs
+            ):
+                self._last_heal = _time.monotonic()
+                logger.warning("index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K", _LAG_HEAL_MIN)
+                self._schedule_retry(clear_stale=False)
             # txf(IR1:價變動自記 wall-clock)
             p = self._txf_getter()
             if p is not None and p != self._txf_p:
@@ -439,6 +464,18 @@ class IndexEngine:
             self._publish(self._payload())
             self._twse.last_minute = None
             self._otc.last_minute = None
+
+    def _minutes_lag_exceeded(self) -> bool:
+        """加權 minutes 最後一鍵是否落後牆鐘超過 `_LAG_HEAL_MIN` 分(僅窗內呼叫)。"""
+        now = self._now_fn()
+        now_min = now.hour * 60 + now.minute
+        m = self._twse.minutes
+        if m:
+            last = max(m)
+            last_min = int(last[:2]) * 60 + int(last[2:4])
+        else:
+            last_min = 9 * 60  # 空 minutes 以窗起點 09:00 起算(開盤頭幾分鐘的空是正常)
+        return now_min - last_min > _LAG_HEAL_MIN
 
     def _check_spot_silence(self, p: int | None) -> None:
         """盤中台指現價長時間為 None → 節流 warning(index-board review P1-1)。

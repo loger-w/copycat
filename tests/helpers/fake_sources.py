@@ -60,6 +60,7 @@ class FakeIndexSource:
         )
         self.on_message: Callable[[dict], None] | None = None
         self.subscribe_error: Exception | None = None
+        self.fetch_minutes_calls = 0
         self.closed = False
         self.calls: list[tuple[str, str, str, str]] = []
         self._tag = tag
@@ -75,6 +76,7 @@ class FakeIndexSource:
         self.unsubscribed.append(code)
 
     def fetch_day_minutes(self, code: str) -> dict[str, int]:
+        self.fetch_minutes_calls += 1
         if isinstance(self.day_minutes, Exception):
             raise self.day_minutes
         return dict(self.day_minutes)
