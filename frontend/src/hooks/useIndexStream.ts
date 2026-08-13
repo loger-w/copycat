@@ -75,6 +75,9 @@ export function useIndexStream(): IndexStreamState {
   const retryTimerRef = useRef<number | undefined>(undefined);
   const retryAttemptRef = useRef(0);
   const aliveRef = useRef(true);
+  // 世代守門(review T-6):refetch 有四個併發呼叫源(mount / onopen / 換日 / 退避
+  // timer),先發後至的舊回應不得整份覆蓋新回應(trade_date 會倒退)。
+  const fetchSeqRef = useRef(0);
 
   // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
   // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
@@ -95,6 +98,7 @@ export function useIndexStream(): IndexStreamState {
   }, [twse, otc, tradeDate]);
 
   const refetch = async (): Promise<void> => {
+    const seq = ++fetchSeqRef.current;
     try {
       const res = await fetch("/api/index/state");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -104,14 +108,19 @@ export function useIndexStream(): IndexStreamState {
         otc: WireSeries;
         txf: TxfQuote | null;
       };
+      if (!aliveRef.current || seq !== fetchSeqRef.current) return; // 舊回應丟棄
       retryAttemptRef.current = 0;
+      window.clearTimeout(retryTimerRef.current); // 成功 → 取消已排退避(review C-4)
+      retryTimerRef.current = undefined;
       setTradeDate(body.trade_date);
       setTwse(toSeries(body.twse, null));
       setOtc(toSeries(body.otc, null));
       setTxf(body.txf);
     } catch (err) {
       console.warn("index: state 載入失敗", err);
-      if (!aliveRef.current || retryTimerRef.current !== undefined) return;
+      // 已有更新一發在跑 → 重試交給它;pending timer 只留一顆不堆疊
+      if (!aliveRef.current || seq !== fetchSeqRef.current) return;
+      if (retryTimerRef.current !== undefined) return;
       const delay = Math.min(BACKOFF_START_MS * 2 ** retryAttemptRef.current, BACKOFF_CAP_MS);
       retryAttemptRef.current += 1;
       retryTimerRef.current = window.setTimeout(() => {
