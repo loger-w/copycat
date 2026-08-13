@@ -94,6 +94,39 @@ def _spot_trial_now() -> bool:
 #: TradeStatus 轉態觀測的**固定 grep 前綴 + 格式**(D6/R10)。與 parse 層值域外 warning
 #: 是同事件兩則(那邊管值域、這邊管轉態時序),蒐證對帳一律以本前綴為準。
 _TRADE_STATUS_FMT = "trade-status-observe code=%s %s->%s t=%s trial_window=%s qty=%s"
+#: 首見值(前值不明)的形:**不套 `%s->%s`** —— 把未知前值印成 "0" 就是在蒐證檔裡
+#: 編造一次轉態,而讀 log 的人分不出來(code review IC-1)。前綴與其餘欄位相同。
+_TRADE_STATUS_FIRST_FMT = (
+    "trade-status-observe code=%s first_seen=1 status=%s t=%s trial_window=%s qty=%s"
+)
+
+#: 觀測分級用的窗寬限(秒)。**只作用於 `_observe_trade_status` 的 WARNING/DEBUG 分級**,
+#: payload 的 `trial` 一律走原窗(寬限外洩到 wire 會讓畫面的「(緩)」早亮晚熄)。
+_OBSERVE_GRACE_SECS = 2
+
+
+def _widen(t: str, secs: int) -> str:
+    """台北 `HH:MM:SS.fff` ± 秒(模組載入期用;窗都在日中,不處理跨日繞回)。"""
+    shifted = _dt.datetime.strptime(t, "%H:%M:%S.%f") + _dt.timedelta(seconds=secs)
+    return f"{shifted:%H:%M:%S.%f}"[:-3]
+
+
+#: 觀測專用窗 = `TRIAL_WINDOWS` 兩端各放寬 `_OBSERVE_GRACE_SECS`(code review D6-1)。
+#: 由 `TRIAL_WINDOWS` **推導**而不是抄一份字面值:抄的那份會在窗調整時靜默地錯邊。
+_OBSERVE_WINDOWS: tuple[tuple[str, str], ...] = tuple(
+    (_widen(lo, -_OBSERVE_GRACE_SECS), _widen(hi, _OBSERVE_GRACE_SECS)) for lo, hi in TRIAL_WINDOWS
+)
+
+
+def _observe_window_now() -> bool:
+    """觀測分級的「當下在(放寬後的)試撮窗內」。
+
+    寬限的理由:窗判準是**本機時鐘**而事件來自 **TC4 時戳**,兩者的秒級偏移會把
+    13:25:00 進窗的 0→1 判成「窗外非 0」→ 每檔每日最多產出一對假 WARNING
+    (進窗一則、出窗一則)。真要抓的盤中延緩撮合離窗邊界遠,放寬 2s 不吃掉它。
+    只有現貨會走到這裡(期貨鍵在 `_observe_trade_status` 開頭就跳過)。
+    """
+    return is_trial_window(_now_taipei_time(), _OBSERVE_WINDOWS)
 
 
 def _round_robin(items: list[str], round_no: int) -> list[str]:
@@ -245,7 +278,8 @@ class StockEngine:
         self._trial_on: bool = False
         # TradeStatus 轉態觀測狀態(D6):code → (前值, episode 已記 WARNING)。
         # 前值是為了「只在轉態時記」;episode 旗標讓起訖成對(恢復那一則才記得住
-        # 自己有沒有對應的起點)。**日別語意**:`_rollover_stage2` 顯式清空。
+        # 自己有沒有對應的起點)。**日別語意**:`rollover_stage1` 顯式清空(stage2 保留
+        # 為快路徑雙保險,IC-5);**訂閱期語意**:真退訂時 pop(IC-6,同 `_backfilled`)。
         self._trade_status: dict[str, tuple[str, bool]] = {}
         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
         # 引擎本體不得因它缺席而改變行為
@@ -410,6 +444,10 @@ class StockEngine:
                     # 不變式不是註解能帶過的,記 next-time。
                     self._backfilled.discard(code)
                     self._backfill_failed.pop(code, None)
+                    # TradeStatus 前值同以**訂閱期**為界(code review IC-6):留著的話
+                    # 重新訂閱後拿上一段訂閱期的前值跟新的第一則比對 = 一則跨訂閱期的
+                    # 假轉態,而 episode 旗標還武裝著時更會生出一則沒有起點的假「恢復」。
+                    self._trade_status.pop(code, None)
             # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
             # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
             # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
@@ -461,6 +499,8 @@ class StockEngine:
                     # 主圖槽位真退訂時,那一檔的「今日已回補 / 失敗冷卻」一併作廢。
                     self._backfilled.discard(old)
                     self._backfill_failed.pop(old, None)
+                    # TradeStatus 前值同以訂閱期為界(理由見 `set_watchlist` removed 迴圈)
+                    self._trade_status.pop(old, None)
             if not is_futures_key(key):
                 await self._acquire_stkfut(key)
             self._enqueue_backfill(key)
@@ -619,6 +659,12 @@ class StockEngine:
         self._generation += 1
         self._pending_date = new_date
         self._source.set_trade_date(new_date)
+        # TradeStatus 觀測記帳是**日內**語意,清在 stage1(code review IC-5)。只掛 stage2
+        # 的話 08:00(checkpoint 武裝)~ 新日首筆之間整段沿用昨日前值與 episode 旗標 →
+        # 今天第一則帶 "0" 的推播被判成「恢復」,記出一則帶**今日時戳**卻對照**昨日起點**
+        # 的 WARNING,而它讀起來完全像真事件(污染的正是蒐證樣本本身)。
+        # stage2 的清空保留 = 快路徑雙保險(那裡是「首筆新日 tick」才跑)。
+        self._trade_status.clear()
         # 進 `_tasks` 而非專用欄位:持有參照防 GC(asyncio 不強引用 task)之外,
         # 關機時一併被 close() 取消,且連跑兩次 rollover 不會互相覆寫掉參照
         self._tasks.append(asyncio.get_running_loop().create_task(self._resubscribe_all()))
@@ -1001,32 +1047,51 @@ class StockEngine:
 
         分層(窗外 WARNING / 其餘 DEBUG):窗內 0↔1 是已知常態(2026-07-21 實測
         13:25–13:30 共 213 筆),全部升級成 WARNING 會把真正要抓的窗外事件淹掉。
+        **蒐證要併看 DEBUG 級**:窗內起 / 窗外訖的 episode(例:13:25 試撮窗內開始、
+        跨過 13:30 才恢復的延緩撮合)在本段規則下全程只有 DEBUG —— 13:25–13:30 前後的
+        樣本只 grep WARNING 會整段看不到(code review D6-2;第一段刻意不改,改了就動到
+        SC-5(c) 的「窗內轉態不進 WARNING」口徑)。
 
-        三道守門各自對應一種會污染樣本的假事件:
+        窗判準走 `_observe_window_now`(**觀測專用窗**,兩端各寬 2s)而不是 `_trial_now`:
+        本機時鐘與 TC4 時戳的秒級偏移會在窗邊界產出成對假 WARNING(D6-1,理由詳見那支)。
+
+        守門各自對應一種會污染樣本的假事件:
         - **期貨鍵跳過**:空窗讓 `_trial_now` 恆 False → 任何轉態都誤落「窗外」分支,
           個股期整天噴假 WARNING。
-        - **首見值只播種**:`None→x` 不是轉態,否則每交易日 255 檔各噴一則。
+        - **首見值三分**(IC-1):首見 "0",或首見非 "0" 但在窗內 → 只播種
+          (`None→x` 不是轉態;冷啟動落在試撮窗內時 255 檔齊帶 "1" 更不能齊噴);
+          首見非 "0" 且窗外 → **記一則** `first_seen=1` + 武裝 episode ——「訂閱前那一檔
+          就已經在延緩撮合」是最可能的取樣路徑,靜默掉等於整段 episode 蒐證消失。
         - **同值不記**:每則 REALTIME 都帶 TradeStatus,不比對前值就等於逐則記錄。
         """
         if is_futures_key(code):
             return
         # 缺欄 / 空字串視同 "0"(parse 既有 `or "0"` 語意,觀測與判定同基準)
         status = str(quote.get("TradeStatus", "0") or "0")
+        # 缺欄印 `-`(IC-6):純簿更新沒有 `TradeQuantity`,印空字串的話蒐證檔會留下
+        # `qty=` 這種讀不出是「沒這欄」還是「零成交」的紀錄。
+        qty = quote.get("TradeQuantity") or "-"
+        in_window = _observe_window_now()
         prev = self._trade_status.get(code)
         if prev is None:
-            self._trade_status[code] = (status, False)
+            if status != "0" and not in_window:
+                logger.warning(
+                    _TRADE_STATUS_FIRST_FMT, code, status, _now_taipei_time(), in_window, qty
+                )
+                self._trade_status[code] = (status, True)
+            else:
+                self._trade_status[code] = (status, False)
             return
         prev_status, episode = prev
         if status == prev_status:
             return
-        in_window = self._trial_now(code)
         args = (
             code,
             prev_status,
             status,
             _now_taipei_time(),
             in_window,
-            quote.get("TradeQuantity", ""),
+            qty,
         )
         if status != "0" and not in_window:
             # 盤中延緩撮合的候選 evidence:窗外出現非正常狀態
