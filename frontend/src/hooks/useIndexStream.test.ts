@@ -107,6 +107,22 @@ describe("useIndexStream", () => {
     expect(hook.result.current.twse!.minutes).toEqual({ "0901": 1 }); // 舊日 minutes 已清
   });
 
+  it("WS 訊息帶 minutes → 整份替換(引擎自癒回補的送達契約)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit(
+        wsMsg({
+          twse: {
+            p: 42_000_000, ref: 43_634_190, high: 43_221_930, low: 41_815_780,
+            stale: false, last_minute: null, minutes: { "0910": 5, "0911": 6 },
+          },
+        } as never),
+      ),
+    );
+    // 初載的 {"0901": ...} 不得殘留:自癒回補是全量真相源,替換不是 merge
+    expect(hook.result.current.twse!.minutes).toEqual({ "0910": 5, "0911": 6 });
+  });
+
   it("換日 refetch 失敗 → 退避重試回填,不永久缺線(fix/index-chart-empty-minutes)", async () => {
     const { hook, ws } = await setup();
     // 換日瞬間 state 端點打嗝一次(網路層失敗),之後恢復且已是新日全量
