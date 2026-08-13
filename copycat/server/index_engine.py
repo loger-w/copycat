@@ -44,9 +44,18 @@ def in_futures_session(now: _dt.time | None = None) -> bool:
 # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
 _WATCH_START = _dt.time(9, 0)
 _WATCH_END = _dt.time(13, 25)
-#: 分時自癒門檻:watch window 內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
+#: 分時自癒門檻:heal 窗內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
 #: 開盤頭幾分鐘 minutes 空是正常(域 0901 起),空集合以窗起點 09:00 起算即天然豁免。
 _LAG_HEAL_MIN = 3
+#: heal 尾窗終點:watchdog 窗 13:25 凍結的理由(試撮不推成交)對「重抓 1K」不成立,
+#: 1K 域到 1330 —— 尾段 13:25–13:30 正是要補的那截,收盤後留 10 分鐘做最後回補
+#: (review T-3)。lag 的期望覆蓋終點同步封頂 13:30。
+_HEAL_TAIL_END = _dt.time(13, 40)
+#: 期望覆蓋終點(分鐘數):1330 = 13*60+30
+_HEAL_TARGET_MIN = 13 * 60 + 30
+#: 無進展退避封頂:1K 持續回空(假日 / 該日資料不可得)時 heal 間隔倍增至此為止,
+#: 不以固定 60s 整窗空轉(UNSUB→SUB churn + log 噪音;review T-5)。
+_HEAL_BACKOFF_CAP = 900.0
 
 
 class IndexSource(Protocol):
@@ -162,9 +171,11 @@ class IndexEngine:
         self._stale_secs = stale_secs
         self._retry_secs = retry_secs
         self._rollover_check_secs = 60.0
-        # 分時自癒節流:lag 觸發的 retry 排程間隔下限(retry 本身 single-flight)
+        # 分時自癒節流:lag 觸發的 retry 排程間隔下限(retry 本身 single-flight);
+        # _heal_interval = 無進展退避的當前間隔(None = 用基準值;恢復健康即歸零)
         self._heal_secs = 60.0
         self._last_heal = float("-inf")
+        self._heal_interval: float | None = None
         # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
         # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
         self._push_minutes_once = False
@@ -252,7 +263,11 @@ class IndexEngine:
                 # stale(推播即將恢復);分時自癒的 retry 不清 —— stale 是推播死活的
                 # 訊號(watchdog 職權),回補成功不代表推播活著。
                 self._twse.stale = False
-            self._push_minutes_once = True
+            if self._pending_date is None:
+                # pending 期間 retry 抓的是新日窗、merge 進舊日 dict(既有 latent),
+                # 廣播 trade_date 仍是舊日 → 前端不走換日分支、整份替換成混日線;
+                # 不帶出去,等 swap 後由換日 refetch 對齊(review T-1)。
+                self._push_minutes_once = True
             self._dirty = True
             return
 
@@ -445,16 +460,25 @@ class IndexEngine:
             # minutes 沒有任何回復路徑,而 TC4 端 1K 資料整天可取(2026-08-13 事故)。
             # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
-            if (
-                self._in_watch_window()
-                and self._pending_date is None
-                and self._minutes_lag_exceeded()
-                and (self._retry_task is None or self._retry_task.done())
-                and _time.monotonic() - self._last_heal >= self._heal_secs
-            ):
-                self._last_heal = _time.monotonic()
-                logger.warning("index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K", _LAG_HEAL_MIN)
-                self._schedule_retry(clear_stale=False)
+            # heal 窗 = watchdog 窗 ∪ 收盤尾窗(13:25–13:40;review T-3)。
+            if self._in_watch_window() or _WATCH_END <= self._now_fn() < _HEAL_TAIL_END:
+                if not self._minutes_lag_exceeded():
+                    self._heal_interval = None  # 覆蓋度跟上 → 退避歸零
+                elif (
+                    self._pending_date is None
+                    and (self._retry_task is None or self._retry_task.done())
+                    and _time.monotonic() - self._last_heal
+                    >= (self._heal_interval or self._heal_secs)
+                ):
+                    self._last_heal = _time.monotonic()
+                    # 連續無進展(下一拍 lag 仍在才會再進來)→ 間隔倍增(review T-5)
+                    self._heal_interval = min(
+                        (self._heal_interval or self._heal_secs) * 2, _HEAL_BACKOFF_CAP
+                    )
+                    logger.warning(
+                        "index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K", _LAG_HEAL_MIN
+                    )
+                    self._schedule_retry(clear_stale=False)
             # txf(IR1:價變動自記 wall-clock)
             p = self._txf_getter()
             if p is not None and p != self._txf_p:
@@ -470,9 +494,12 @@ class IndexEngine:
             self._otc.last_minute = None
 
     def _minutes_lag_exceeded(self) -> bool:
-        """加權 minutes 最後一鍵是否落後牆鐘超過 `_LAG_HEAL_MIN` 分(僅窗內呼叫)。"""
+        """加權 minutes 最後一鍵是否落後牆鐘超過 `_LAG_HEAL_MIN` 分(僅 heal 窗內呼叫)。
+
+        牆鐘封頂 `_HEAL_TARGET_MIN`(13:30):收盤後(尾窗 13:30–13:40)只要 minutes
+        已覆蓋到 1330 就是完整,不得再觸發(review T-3 的停止條件)。"""
         now = self._now_fn()
-        now_min = now.hour * 60 + now.minute
+        now_min = min(now.hour * 60 + now.minute, _HEAL_TARGET_MIN)
         m = self._twse.minutes
         if m:
             last = max(m)
