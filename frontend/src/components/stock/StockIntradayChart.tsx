@@ -32,7 +32,12 @@ import {
   type OverlayLine,
   type XWindow,
 } from "@/lib/stock-intraday-svg";
-import { buildVpBars, VP_FILL_OPACITY, type VpBar } from "@/lib/volume-profile";
+import {
+  buildVpBars,
+  VP_FILL_OPACITY,
+  VP_POC_FILL_OPACITY,
+  type VpBar,
+} from "@/lib/volume-profile";
 import { cn, safeIdToken } from "@/lib/utils";
 
 const MAIN = { width: 800, height: 260 };
@@ -237,6 +242,8 @@ const ChartStatic = memo(function ChartStatic({
           同一個 `fill-ink-muted` token,透明度收在 lib 常數不在這裡寫 magic number。 */}
       <g data-testid="vp-bars">
         {vpBars.map((b) => (
+          // POC(域內量最大的價位,SC-4)換 accent + 更高透明度。**同一種 testid** ——
+          // 另開節點的話,既有的「bar 數 / z-order / toggle 關掉整組消失」諸條都會漏算它。
           <rect
             key={b.priceMilli}
             data-testid="vp-bar"
@@ -244,8 +251,8 @@ const ChartStatic = memo(function ChartStatic({
             y={b.y}
             width={b.w}
             height={b.h}
-            className="fill-ink-muted"
-            fillOpacity={VP_FILL_OPACITY}
+            className={b.poc ? "fill-accent" : "fill-ink-muted"}
+            fillOpacity={b.poc ? VP_POC_FILL_OPACITY : VP_FILL_OPACITY}
           />
         ))}
       </g>
