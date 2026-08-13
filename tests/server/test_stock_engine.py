@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
+import re
 import threading
 import time
+from types import SimpleNamespace
 from typing import Callable
 
 import pytest
@@ -2408,6 +2411,33 @@ class TestTrialWindowFlipPush:
         await _untap(tap)
         await engine.close()
 
+    async def test_main_in_watchlist_is_pushed_once_on_flip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IC-6(1):同一檔既是自選又是現貨主圖 → 補推**一則**(`_trial_flip_targets` 去重)。
+
+        兩則的失效是靜默的:側欄收到重複 quote 不會報錯,只是節流語意開始漂
+        (「一天四次邊界事件、每檔各一則」這條上界失守),而去重原本無測試鎖。
+        """
+        now = {"t": "08:29:59.000"}
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+        src = FakeSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        await engine.start()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")  # 第二個 owner:自選 + 主圖
+        got, tap = _tap(engine.stream())
+        await _drain(engine)
+        mark = len(got)
+
+        now["t"] = "08:30:00.000"
+        await _drain(engine)
+        after = [m for m in got[mark:] if m["type"] == "watchlist_quote"]
+        assert [m["code"] for m in after] == ["2330"]
+        assert after[0]["trial"] is True
+        await _untap(tap)
+        await engine.close()
+
     async def test_futures_main_is_not_pushed_on_flip(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2532,50 +2562,239 @@ class TestTradeStatusObserve:
         assert engine._trade_status == {}  # 連前值都不播種
         await engine.close()
 
-    async def test_first_seen_value_only_seeds(
+    async def test_first_seen_only_seeds_when_zero_or_in_window(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """(f) 首見值(含非 "0")只播種:`None→x` 不是轉態,否則每交易日 255 檔各噴一則。"""
-        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        """(f) [IC-1 改寫,原「首見一律零記錄」assertion 已由 spec SC-5(f) 宣告該變]
+        首見 "0"(任何時刻)與首見非 "0" **且在觀測窗內** → 零記錄僅播種。
+
+        窗內那半條是對 IC-1 建議的收窄:冷啟動落在 13:25–13:30 時 255 檔齊帶 "1"
+        (2026-07-21 實測那五分鐘的常態值),齊噴等於把蒐證檔灌爆。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "08:50:00.000")
         await engine.set_watchlist(["2330", "5483"])
         assert src.on_message is not None
         with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
-            src.on_message(_quote(cum=1) | {"TradeStatus": "2"})  # 首見即非 "0"
+            src.on_message(_quote(cum=1) | {"TradeStatus": "1"})  # 首見非 "0" 但窗內
             src.on_message(_quote(code="5483", cum=1))  # 首見 "0"
             await _drain(engine)
         assert _observed(caplog, logging.WARNING) == []
         assert _observed(caplog, logging.DEBUG) == []
-        assert engine._trade_status["2330"] == ("2", False)
+        assert engine._trade_status["2330"] == ("1", False)
         assert engine._trade_status["5483"] == ("0", False)
+        await engine.close()
+
+    async def test_first_seen_non_zero_out_of_window_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(f) [IC-1] 首見非 "0" 且觀測窗外 → 一則 WARNING 帶 `first_seen=1` + episode 武裝。
+
+        這是**最可能的取樣路徑**:盤中暴漲暴跌觸發延緩撮合之後使用者才把那一檔加進
+        自選(或才開頁),訂閱當下第一則就已經是非 "0" —— 舊規則的「首見一律播種」
+        會讓整段 episode(起 + 訖)完全靜默,而蒐證看起來只是「那天沒抓到樣本」。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1) | {"TradeStatus": "2"})
+            await _drain(engine)
+        warns = _observed(caplog, logging.WARNING)
+        assert len(warns) == 1
+        assert "code=2330" in warns[0]
+        assert "first_seen=1" in warns[0]  # 與正常轉態可辨(前值不明,不能假裝是 "0"→"2")
+        assert "trial_window=False" in warns[0]
+        assert engine._trade_status["2330"] == ("2", True)  # episode 武裝 → 恢復要記
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=2))  # 回 "0"
+            await _drain(engine)
+        warns = _observed(caplog, logging.WARNING)
+        assert len(warns) == 2  # 起訖成對 → 蒐證看得出持續多久
+        assert "2->0" in warns[1]
+        await engine.close()
+
+    async def test_missing_qty_field_logs_dash(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """IC-6(2):`TradeQuantity` 缺欄 → `qty=-`(與真的 `qty=0` 可辨)。
+
+        純簿更新(延緩撮合期間最常見的推播形)缺 qty,印空字串會讓蒐證檔出現
+        `qty=` 這種讀不出是「沒有這一欄」還是「零成交」的紀錄。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        book_only = _quote(cum=1) | {"TradeStatus": "2"}
+        book_only.pop("TradeQuantity")
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(book_only)
+            await _drain(engine)
+        warns = _observed(caplog, logging.WARNING)
+        assert len(warns) == 1
+        assert "qty=-" in warns[0]
+        await engine.close()
+
+    async def test_observe_window_has_two_second_grace(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """D6-1:觀測分級走**觀測專用窗**(TRIAL_WINDOWS 兩端各放寬 2s)。
+
+        本機時鐘與 TC4 時戳的秒級偏移會把 13:25:00 進窗的 0→1 判成「窗外非 0」→
+        每檔每日最多一對假 WARNING(進窗一則、出窗一則)淹沒真訊號。
+        寬限**只影響觀測分級**:payload 的 `trial` 仍是原窗,否則畫面的「(緩)」會早亮晚熄。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "13:24:59.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1))  # 首見 "0"
+            src.on_message(_quote(cum=2) | {"TradeStatus": "1"})
+            await _drain(engine)
+        assert _observed(caplog, logging.WARNING) == []
+        debugs = _observed(caplog, logging.DEBUG)
+        assert len(debugs) == 1
+        assert "trial_window=True" in debugs[0]  # 觀測窗的答案
+        assert engine._quote_payload("2330")["trial"] is False  # wire 契約不吃寬限
+        await engine.close()
+
+    async def test_rollover_stage1_clears_trade_status(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """(g) [IC-5] 清空掛 **stage1**:episode 是日內語意。
+
+        只掛 stage2 的話 08:00(checkpoint 武裝)~09:00(新日首筆)整段沿用昨日
+        episode 旗標 → 今天第一則帶 "0" 的推播被判成「恢復」,記一則帶**今日時戳**、
+        對照**昨日起點**的 WARNING,而它讀起來完全像真事件。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 首見 "0" → 播種
+        src.on_message(_quote(cum=2) | {"TradeStatus": "2"})  # 窗外轉態 → episode 武裝
+        await _drain(engine)
+        assert engine._trade_status["2330"] == ("2", True)  # 前提:有東西可清
+
+        engine.rollover_stage1("2026-07-22")
+        assert engine._trade_status == {}
+
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=3))  # 仍昨日日期 → stage2 未跑;帶 "0"
+            await _drain(engine)
+        assert engine.trade_date == "2026-07-21"  # 前提:stage2 確實還沒跑
+        assert engine._pending_date == "2026-07-22"
+        assert _observed(caplog, logging.WARNING) == []  # 不得有假「恢復」
+        assert engine._trade_status["2330"] == ("0", False)  # 新日重新播種
         await engine.close()
 
     async def test_rollover_stage2_clears_trade_status(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """跨日殘留前值會把隔日首則推播誤判成「恢復」並帶昨日值記 WARNING(S4)——
-        污染的是蒐證樣本本身,而 log 讀起來完全像真事件。
+        """stage2 的清空保留 = 快路徑雙保險(S4 + IC-5)。
+
+        [IC-1/IC-5 附帶:本 case 的前值播種改走「首見 "0" → 轉態」兩則,因為首見非 "0"
+        窗外現在會自己記一則;stage1 已先清,所以 stage2 前要重新播種才有東西可清。]
 
         觀測落點在 stage2 **之前**(期貨夜盤早退之後),所以觸發 stage2 的那一則自己
-        仍以昨日前值判斷;清空的效果落在**它之後**的每一則:新日重新播種。
+        仍以舊前值判斷;清空的效果落在**它之後**的每一則:新日重新播種。
         """
         engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
         await engine.set_watchlist(["2330"])
         assert src.on_message is not None
-        src.on_message(_quote(cum=1) | {"TradeStatus": "2"})
-        await _drain(engine)
-        assert engine._trade_status["2330"] == ("2", False)  # 前提:前值已播種
-
         engine.rollover_stage1("2026-07-22")
+        src.on_message(_quote(cum=1))  # stage1 後 / stage2 前:重新播種
+        await _drain(engine)
+        assert engine._trade_status["2330"] == ("0", False)  # 前提:stage2 有東西可清
+
         src.on_message(_quote(cum=1, date="20260722"))  # 新日首筆 → stage2
         await _drain(engine)
         assert engine.trade_date == "2026-07-22"  # 前提:stage2 真的跑了
-        assert engine._trade_status == {}  # 昨日前值不得留
+        assert engine._trade_status == {}  # 前值不得跨過 stage2
 
         with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
-            src.on_message(_quote(cum=2, date="20260722") | {"TradeStatus": "2"})
+            src.on_message(_quote(cum=2, date="20260722"))
             await _drain(engine)
-        # 清空後這一則是新日的「首見」→ 只播種,不記(否則昨日值會生出假事件)
-        assert engine._trade_status["2330"] == ("2", False)
+        # 清空後這一則是新日的「首見 "0"」→ 只播種,不記
+        assert engine._trade_status["2330"] == ("0", False)
         assert _observed(caplog, logging.WARNING) == []
         assert _observed(caplog, logging.DEBUG) == []
         await engine.close()
+
+    async def test_trade_status_popped_when_watchlist_drops_last_owner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IC-6(3):**真退訂**才清 `_trade_status`(對齊 `_backfilled` 的清帳紀律)。
+
+        不清的話重新訂閱時拿「上一段訂閱期的前值」跟新的第一則比對 = 一則跨訂閱期的
+        假轉態;episode 旗標還武裝著時更會生出一則沒有起點的假「恢復」。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert "2330" in engine._trade_status
+        await engine.set_watchlist([])  # last owner 退 → 真退訂
+        assert "2330" not in engine._trade_status
+        await engine.close()
+
+    async def test_trade_status_kept_while_another_owner_remains(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """還有 owner 時**不清**(同 `_no_data` / `_backfilled` 的條件):訂閱還在,
+        前值就還是有效的比較基準 —— 清掉等於白丟一次轉態(下一則變成「首見」)。
+        主圖槽位轉移那一處(`set_main_contract`)的真退訂同樣要清。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "10:00:00.000")
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")  # 第二個 owner
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        await engine.set_watchlist([])  # 仍是主圖 → 不是真退訂
+        assert "2330" in engine._trade_status
+        await engine.set_main("5483")  # 最後一個 owner 退 → 真退訂
+        assert "2330" not in engine._trade_status
+        await engine.close()
+
+
+class TestObserveClockContract:
+    """SC-5(h) [IC-2]:`_now_taipei_time` 的**真實實作**(其餘 case 全 monkeypatch 掉它)。
+
+    沒有這兩條的話,把格式簡化成 `HH:MM` 全部測試照綠 —— 而 `is_trial_window` 做的是
+    字串比對,`"08:30" < "08:30:00.000"` 恆真 → 進窗那一刻判窗外,badge 永不亮。
+    """
+
+    def test_now_taipei_time_format(self) -> None:
+        assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", stock_engine_mod._now_taipei_time())
+
+    @pytest.mark.parametrize(
+        "wall,expected",
+        [
+            (_dt.datetime(2026, 8, 13, 8, 29, 59, 999_000), False),  # 左界前 1ms
+            (_dt.datetime(2026, 8, 13, 8, 30, 0, 0), True),  # 左界含
+            (_dt.datetime(2026, 8, 13, 8, 59, 59, 999_000), True),
+            (_dt.datetime(2026, 8, 13, 9, 0, 0, 0), False),  # 右界不含
+            (_dt.datetime(2026, 8, 13, 13, 27, 30, 500_000), True),
+        ],
+    )
+    def test_frozen_clock_decides_window_through_real_format(
+        self, monkeypatch: pytest.MonkeyPatch, wall: _dt.datetime, expected: bool
+    ) -> None:
+        """凍結 `datetime.now` 而不是替掉 `_now_taipei_time`:要跑的正是格式化那一步。
+
+        替的是 **engine 模組的 `_dt` 綁定**(不是 `datetime` 模組本身的屬性):後者是
+        全域突變,會連帶影響同一輪跑的其他測試。
+        """
+        monkeypatch.setattr(
+            stock_engine_mod,
+            "_dt",
+            SimpleNamespace(datetime=SimpleNamespace(now=lambda: wall), timedelta=_dt.timedelta),
+        )
+        assert stock_engine_mod._spot_trial_now() is expected
+
+    def test_observe_windows_widen_trial_windows_by_two_seconds(self) -> None:
+        """D6-1 的推導式落地值(改 `TRIAL_WINDOWS` 時這條會提醒觀測窗要跟著動)。"""
+        assert stock_engine_mod._OBSERVE_WINDOWS == (
+            ("08:29:58.000", "09:00:02.000"),
+            ("13:24:58.000", "13:30:02.000"),
+        )
