@@ -76,6 +76,15 @@ function futOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
   };
 }
 
+/** 動態 YYYYMMDD:已成交量的日期界每 render 以 `new Date()` 算(期貨梯 = ±1 日窗),
+ *  fixture 寫死過去日的話徽章案取不到 filled(spec A6)。 */
+function ymd(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
   return {
     market: "fut",
@@ -326,7 +335,7 @@ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
     });
     render(ladder());
     const lot = await screen.findByLabelText("刪 23000 掛單");
-    expect(lot.textContent).toBe("4"); // 2 + (3-1)
+    expect(lot.textContent).toBe("4(1)"); // 未成交 2 + (3-1) / 已成交 1
     expect(screen.queryByLabelText("刪 23001 掛單")).toBeNull(); // 他契約
     fireEvent.click(lot);
     await waitFor(() => expect(cancelBodies.length).toBe(2));
@@ -334,6 +343,46 @@ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
       { seq_no: "F01", market: "fut" },
       { seq_no: "F02", market: "fut" },
     ]);
+  });
+
+  /** 全成交後無 seq 可刪:徽章不可點,且**全撤鈕必須維持 disabled**
+   *  —— allSeqNos 只含活單 seq(R4)。 */
+  it("本契約僅剩全成交 → `(N)` 徽章不可點、全撤鈕 disabled", async () => {
+    const cancelBodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/order/cancel": (init) => {
+        cancelBodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            futOrder({
+              seq_no: "F09",
+              price: 23_000,
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(),
+            }),
+          ],
+        }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    const badge = await screen.findByTestId("ladder-filled-lot");
+    expect(badge.textContent).toBe("(2)");
+    expect(badge.tagName).toBe("SPAN");
+    expect(screen.queryByLabelText("刪 23000 掛單")).toBeNull();
+    fireEvent.click(badge);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(cancelBodies.length).toBe(0);
+    const cancelAll = screen.getByRole("button", { name: "全撤" });
+    expect(cancelAll.hasAttribute("disabled")).toBe(true);
+    expect(cancelAll.getAttribute("title")).toBe("無本契約活單");
   });
 });
 
