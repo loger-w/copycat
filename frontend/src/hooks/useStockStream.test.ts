@@ -761,4 +761,58 @@ describe("useStockStream(主圖 trial 補寫)", () => {
     expect(hook.result.current.accum?.trial).toBe(true);
     expect(hook.result.current.accum?.noData).toBe(true);
   });
+
+  // 🔴 code review IC-3:trial 補寫少了 `tick`/`book` 都有的 in-flight 守門。refetch 的
+  // fetch 一送出,後端的窗判斷就凍結在那一刻 —— 之後到達的翻轉補寫進 accum,再被回來的
+  // snapshot 整份覆蓋回捲。被吃掉的那則若是**出窗**(true→false),header 就掛著一個假的
+  // 「(緩)」直到下一次全量 refetch:靜市 / 盤前無成交時那可能是整個窗,而且零錯誤訊號。
+  it("refetch in-flight 期間的 trial 翻轉不被較舊的 snapshot 回捲(IC-3)", async () => {
+    const { hook, ws } = await setup();
+    let resolveRefetch: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((res) => { resolveRefetch = res; }),
+    );
+    act(() => ws.emit(T(4))); // 1→4 跳號 → refetch(fetch 已送出 = 後端窗判斷已凍結)
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: true,
+      }),
+    );
+    act(() => {
+      // snapshot 帶的是凍結當下的窗判斷(這裡不帶 trial → fromSnapshot 降級 false)
+      resolveRefetch(new Response(JSON.stringify(snap(4, [TICK1]))));
+    });
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
+    expect(hook.result.current.accum?.trial).toBe(true);
+  });
+
+  // 上一條的另一半:pending 的 trial 帶 instrumentKey 標記,切檔撞上 in-flight 時不可
+  // 外洩到新標的(「2330 在試撮窗內」對 5483 / 期貨鍵不是同一個答案,期貨鍵的窗恆空)。
+  //
+  // 覆蓋度誠實記帳:這條**在修前也綠**(修前根本沒有 pending 這回事),鎖的是新機制的
+  // key 標記 + 切檔 / finally 兩處清理 —— 實測把「key 比對」與「切檔 effect 的清理」
+  // 一起拿掉即紅(舊檔的窗態畫到新檔上)。
+  it("切檔撞上 in-flight 時舊 key 的 pending trial 不外洩(IC-3)", async () => {
+    let resolveFirst: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((res) => { resolveFirst = res; }),
+    );
+    const hook = renderHook(({ c }: { c: string }) => useStockStream(c), {
+      initialProps: { c: "2330" },
+      wrapper,
+    });
+    const ws = FakeWS.instances[0]!;
+    // 2330 的 snapshot 還在路上 → 這則翻轉進 pending
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: true,
+      }),
+    );
+    hook.rerender({ c: "5483" });
+    act(() => { resolveFirst(new Response(JSON.stringify(snap(1, [TICK1])))); });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    expect(hook.result.current.accum?.trial).toBe(false);
+  });
 });
