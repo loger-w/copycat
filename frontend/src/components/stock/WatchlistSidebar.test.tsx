@@ -451,6 +451,95 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
   });
 });
 
+// 🟢 SC-4:群組多起來之後,要把側欄收成一份目錄得逐組點一次 ▸。
+// 單顆切換鈕(不是兩顆):「有任何展開 → 全收」是掃視工作流(先收乾淨再逐組打開)。
+describe("WatchlistSidebar 全部展開 / 收合(SC-4)", () => {
+  function toggleAll(): HTMLElement {
+    return screen.getByRole("button", { name: /^全部(展開|收合)$/ });
+  }
+
+  it("部分展開 → 鈕是「全部收合」;點下去未分組與所有群組一起收,狀態落 localStorage", async () => {
+    sidebar();
+    await waitGroups();
+    expect(toggleAll().textContent).toBe("全部收合");
+
+    fireEvent.click(toggleAll());
+
+    expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
+    expect(screen.queryByTestId("wl-list-主力")).toBeNull();
+    expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力", "觀察"]);
+    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
+    expect(toggleAll().textContent).toBe("全部展開");
+  });
+
+  it("全折疊 → 鈕是「全部展開」;點下去全開、兩把 key 都清回展開態", async () => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["主力", "觀察"]));
+    window.localStorage.setItem(UNGROUPED_KEY, "1");
+    sidebar();
+    await waitGroups();
+    expect(toggleAll().textContent).toBe("全部展開");
+
+    fireEvent.click(toggleAll());
+
+    expect(screen.getByTestId("wl-list-ungrouped")).toBeTruthy();
+    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
+    expect(screen.getByTestId("wl-list-觀察")).toBeTruthy();
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([]);
+    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("0");
+    expect(toggleAll().textContent).toBe("全部收合");
+  });
+
+  // F-1:`groups.every` 對空陣列恆 true → 鈕文字此時由 ungroupedCollapsed 單獨決定。
+  // 零群組**不是**「未載入」:資料在、只是沒有群組,鈕照常渲染並作用於未分組。
+  it("零群組 → 鈕仍在,且作用於未分組", async () => {
+    mockWatchlist([], ["2317"]);
+    sidebar();
+    await waitFor(() => expect(screen.getByTestId("wl-list-ungrouped")).toBeTruthy());
+    expect(toggleAll().textContent).toBe("全部收合");
+
+    fireEvent.click(toggleAll());
+
+    expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
+    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
+    expect(toggleAll().textContent).toBe("全部展開");
+  });
+
+  // 全收是「以現行組名**替換**」而不是併入殘留:改名 / 刪組留下的組名沒有對應 UI,
+  // 保留只會讓日後建同名群組意外呈折疊(與 W-20 同向)。
+  it("全收以現行組名替換,順帶淨化已刪 / 已改名的殘留", async () => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["已刪除的組", "主力"]));
+    sidebar();
+    await waitGroups();
+
+    fireEvent.click(toggleAll());
+
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力", "觀察"]);
+  });
+
+  // 🔴 與「管理」鈕同一個 gate:自選未載入時 `wl` 是 EMPTY_WL fallback,groups=[] ——
+  // 這時全收會把使用者既有的折疊清單持久化覆寫成空,而畫面上完全看不出來。
+  it("自選未載入(pending / 失敗)→ 鈕不渲染,既有折疊清單不被覆寫", async () => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["主力"]));
+    fetchMock.mockImplementation(async () => new Promise<Response>(() => {})); // 永不 resolve
+    sidebar();
+    expect(screen.queryByRole("button", { name: /^全部(展開|收合)$/ })).toBeNull();
+
+    cleanup();
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response("boom", { status: 500 });
+    });
+    sidebar();
+    // hook 是 retry: 1(覆寫 wrap 的 retry:false),error 終態要等退避跑完
+    await waitFor(() => expect(screen.getByText("自選清單載入失敗")).toBeTruthy(), {
+      timeout: 5000,
+    });
+    expect(screen.queryByRole("button", { name: /^全部(展開|收合)$/ })).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]);
+  });
+});
+
 // 🔴 SC-3:標題列與個股列在畫面上混成一片(同樣是透明底 + border-b),
 // 組名字級(text-xs)甚至比代號(text-base)小 → 掃視時分不出層次。
 // **斷言用 classList token 級**:`toContain("bg-surface")` 會被既有 `hover:bg-surface`
