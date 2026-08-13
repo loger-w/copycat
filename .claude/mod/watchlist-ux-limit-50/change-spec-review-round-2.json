@@ -1,0 +1,15 @@
+{
+  "round": 2,
+  "scope": "限縮輪(只審 round 1 修復觸及段落)",
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-13",
+  "findings": [
+    {"id": "R11", "severity": "P1", "summary": "SC-2 放寬後的 grep gate 照字面過不了:tests/ 有 7+ 處『相關 30』敘述命中,與 §C『不動 tests docstring』互斥 → 實作時必然 scope 滑動或放水", "disposition": "accepted", "resolution": "改為一併同步 tests 內敘述性 30 檔數字(純註解,零行為);SC-2 gate 改『全 repo 命中皆為明列的無關 30』"},
+    {"id": "R12", "severity": "P1", "summary": "test_put_at_limit_ok 用 range(WATCHLIST_LIMIT) 在常數=30 時即綠,[red] 落空;參數化後無測試釘住 50 值", "disposition": "accepted", "resolution": "at-limit 用字面 50(現況紅)、over-limit 用字面 51(成對釘死邊界);dedup 支維持 WATCHLIST_LIMIT+1(考點是順序非值)"},
+    {"id": "R13", "severity": "P2", "summary": "R1 gate 與 R8 移位交互:sticky 區塊與底部管理鈕是不同子樹,會複製第二份 data===undefined 條件而無交叉標記", "disposition": "accepted", "resolution": "抽單一 `wlReady`(或同名)判斷供兩處引用,599 行既有註解補指向"},
+    {"id": "R14", "severity": "P2", "summary": "白名單 11 的字數估算把 /watch list 當每檔一次;實際逐群組列出、群組數無上限,最壞可破 1900", "disposition": "accepted", "resolution": "估算改『Σ 各組成員數』量級;結論改為『截斷是既有降級,30→50 同比例放大非新機制』,刪過度保證"},
+    {"id": "R15", "severity": "P2", "summary": "next-time.md 尚有 :62(30 檔 30 行 warning)與 :676(不佔 30 檔上限)未入同步清單", "disposition": "accepted", "resolution": "併入 §C 同步清單"}
+  ],
+  "refuted": [],
+  "exit": "無 P0;P1 全數修入 spec → spec review 退出,進 wave 0 實作"
+}

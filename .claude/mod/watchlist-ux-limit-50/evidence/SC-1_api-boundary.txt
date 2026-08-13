@@ -1,0 +1,7 @@
+[SC-1 happy: 50 檔] PUT 50 codes -> 200, saved codes=50
+[SC-1 edge: 51 檔] PUT 51 codes -> 400, body={"detail":{"error":"WATCHLIST_FULL"}}
+[regression: BAD_CODE(格式閘未動)] PUT 1 codes -> 400, body={"detail":{"error":"BAD_CODE"}}
+[SC-1: 50 相異碼] GET group-state -> 200, states/keys=50
+[SC-1 edge: 51 相異碼] GET group-state -> 400, body={"detail":{"error":"BAD_CODES"}}
+[edge: 51 重複碼先去重] GET group-state -> 200, states/keys=1
+[restore] seed watchlist -> 200

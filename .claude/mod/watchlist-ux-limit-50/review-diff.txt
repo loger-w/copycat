@@ -1,0 +1,791 @@
+﻿diff --git a/CLAUDE.md b/CLAUDE.md
+index 4f59deba..7bcb7993 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -143,6 +143,10 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
+ - **`OrderRecord.unit` 字面值(張/口/股)是前端過濾鍵**(2026-08-13 起,閃電梯零股閘
+   `ladder-lots.ts` 依 `unit === "股"` 排除):產生點 `capital/store.py::_to_record`,改字面值
+   = 改契約要同時改兩邊;`tests/capital/test_store.py` 有 lock。
++- **自選上限常數雙邊同值**(2026-08-13 起 = 50):產生點 `copycat/stock_watchlist.py::
++  WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
++  WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string
++  已同源)。改值 = 改契約要同時改兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
+ 
+ ## 5. 資料源
+ 
+diff --git a/copycat/live/stock_state.py b/copycat/live/stock_state.py
+index 5e007da9..ba52680e 100644
+--- a/copycat/live/stock_state.py
++++ b/copycat/live/stock_state.py
+@@ -199,7 +199,7 @@ class StockDayState:
+     def light_snapshot(self) -> dict:
+         """群組 batch 專用的輕量 payload(code review A1)。
+ 
+-        `group_snapshot` 對最多 30 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
++        `group_snapshot` 對最多 50 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
+         當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到 minutes / meta。
+         """
+         return {"minutes": self._minutes_payload(), "meta": self._meta_payload()}
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index f5bac9bd..9bc57a28 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -334,7 +334,7 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
+ 
+     空清單在 hub 既有路徑上讀成**「資料面就是沒有」**(= 新上市無歷史那一類):
+     逐檔一次「無已完成日 K,CDP 停用」warning、cache 落 `(基準日, None)`、**不重試**。
+-    改成拋例外的話會被讀成暫時性失敗 → 走 X-2b 的有限重試,自選 30 檔在 TC4 關著的
++    改成拋例外的話會被讀成暫時性失敗 → 走 X-2b 的有限重試,自選 50 檔在 TC4 關著的
+     整天變成一輪又一輪的重試,而它們永遠不可能成功。
+     """
+     return []
+@@ -524,7 +524,7 @@ def create_app(
+                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
+                     # gap 的用途是「連發打 TC4 要讓位」,而 `_empty_daily_bars` 根本沒打
+                     # TC4 —— 但它從 `_resolve_basis` 回 True(有走完取數路徑),worker
+-                    # 會照付 0.2s/檔:自選 30 檔就是 6s 的純空轉。engine 在場時 config
++                    # 會照付 0.2s/檔:自選 50 檔就是 10s 的純空轉。engine 在場時 config
+                     # 逐字不變(白名單 1)。
+                     cfg = replace(cfg, basis_gap_secs=0.0)
+                 else:
+@@ -1205,11 +1205,11 @@ def create_app(
+         """群組檢視的唯讀 batch(group-grid SC-4)。
+ 
+         **刻意不重用 `/api/stock/state/{code}`**:那條路會 `set_main`,群組檢視每分鐘
+-        對最多 30 檔各要一次狀態 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結,而畫面
++        對最多 50 檔各要一次狀態 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結,而畫面
+         上只表現為「圖不動了」沒有任何錯誤訊號。
+ 
+         逗號分隔的 codes 自行解析(不用 `list[str]` query):FastAPI 的重複參數形對
+-        30 個 code 會長到難以閱讀,而轉換失敗回的是 422 + list 形 detail,不符全站
++        50 個 code 會長到難以閱讀,而轉換失敗回的是 422 + list 形 detail,不符全站
+         `{"detail": {"error": code}}` 契約。
+ 
+         **無 404 路徑**:未知 / 未訂閱 code → `no_data: true` 空 minutes。卡片要答的是
+diff --git a/copycat/server/bars.py b/copycat/server/bars.py
+index 74dc72b0..213c59cc 100644
+--- a/copycat/server/bars.py
++++ b/copycat/server/bars.py
+@@ -240,7 +240,7 @@ class BarsCache:
+     def prune(self, today: _dt.date) -> None:
+         """剪掉視窗外與已過期的條目。
+ 
+-        `_hist` / `_daily` 的成長來自**日期維度**(股號受 watchlist 30 檔上限約束)
++        `_hist` / `_daily` 的成長來自**日期維度**(股號受 watchlist 50 檔上限約束)
+         —— review P2-5。`_today` 從 round3 起會存空 entry,股號維度不再被「真的有今日
+         資料的股號」約束(任何通過 `validate_code` 的字串請求一次就留一筆),所以
+         除了日期還要按 TTL evict —— 否則同日內累積到跨日才歸零(self-review round2 P2)。
+diff --git a/copycat/server/discord_bot.py b/copycat/server/discord_bot.py
+index 22080bfe..d8f551f6 100644
+--- a/copycat/server/discord_bot.py
++++ b/copycat/server/discord_bot.py
+@@ -31,7 +31,12 @@ from pathlib import Path
+ from typing import Any, Protocol
+ 
+ from copycat.stock_names import load_names
+-from copycat.stock_watchlist import UNGROUPED_NAME, Watchlist, WatchlistError
++from copycat.stock_watchlist import (
++    UNGROUPED_NAME,
++    WATCHLIST_LIMIT,
++    Watchlist,
++    WatchlistError,
++)
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -55,7 +60,7 @@ CHANNEL_ENV = "SIGNALS_DISCORD_CHANNEL_ID"
+ 
+ #: WatchlistError 的 error code → 繁中文案(與前端 `useStockWatchlist.errText` 同一組)
+ _ERROR_TEXT = {
+-    "WATCHLIST_FULL": "自選已達 30 檔上限",
++    "WATCHLIST_FULL": f"自選已達 {WATCHLIST_LIMIT} 檔上限",
+     "BAD_CODE": "股號格式不正確",
+     "BAD_GROUP": "群組名稱不合法",
+     "GROUP_NOT_FOUND": "找不到該群組",
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index d7647c8b..a5a38d6b 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -559,11 +559,11 @@ class StockEngine:
+     def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
+         """群組檢視的唯讀 batch(SC-4)。**不 set_main、不改訂閱池。**
+ 
+-        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 30 次
++        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 50 次
+         會把主圖搶走 → 主圖分時線凍結。
+ 
+         payload 走 `light_snapshot()` 的 minutes/meta 兩鍵(+ 兩個旗標,A1):`ticks`
+-        是數千筆,30 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是
++        是數千筆,50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是
+         白燒 CPU;而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端
+         `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失)。
+ 
+@@ -1257,7 +1257,7 @@ class StockEngine:
+         # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
+         # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
+         # 「連線先送快照」的既成慣例一致)。種子走 `stream(seed=...)` 而非 `publish`
+-        # (後者會打到所有 client);30 檔對 queue maxsize 安全。
++        # (後者會打到所有 client);50 檔對 queue maxsize 安全。
+         return self._ws.stream([self._quote_payload(code) for code in self._watchlist])
+ 
+     def _publish(self, msg: dict) -> None:
+diff --git a/copycat/stock_watchlist.py b/copycat/stock_watchlist.py
+index 35bd194c..beeea6a1 100644
+--- a/copycat/stock_watchlist.py
++++ b/copycat/stock_watchlist.py
+@@ -34,7 +34,7 @@ class Watchlist(TypedDict):
+     groups: list[Group]
+ 
+ 
+-WATCHLIST_LIMIT = 30
++WATCHLIST_LIMIT = 50
+ _CACHE_VERSION = 3
+ # 4-6 位英數且至少一位數字(涵蓋 00637L 等字母尾碼 ETF;design r1-F6)。
+ # 存在性不在此驗 — SUBQUOTE 對不存在 symbol 照回 OK,推播健檢才是真閘。
+diff --git a/docs/next-time.md b/docs/next-time.md
+index 580057d6..f740444e 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -59,7 +59,7 @@
+   自癒(stock engine 只在 boot 建,需重啟 server)。候選:seed 加欄位或前端分態
+   文案(「達錢 4 未連線,啟動後需重啟 server」)。frontend 小改,順下輪前端批。
+ - [ ] **`_empty_daily_bars` 語意堆疊**(C-4 已修 gap sleep;殘餘觀察):無 engine 時
+-  basis job 仍逐檔跑一輪(30 檔 30 行「CDP 停用」warning,一次性)。若嫌吵,候選
++  basis job 仍逐檔跑一輪(50 檔 50 行「CDP 停用」warning,一次性)。若嫌吵,候選
+   = 無 engine 時 on_watchlist 不排 basis job(hub 加模式分支,spec 當時判不值得)。
+ 
+ ## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
+@@ -405,7 +405,7 @@
+ - [ ] 個股 stream 韌性候選:hook pending 重放只驗 seq>S 不驗連續性(回補期 WS 掉訊成永久缺筆);fromSnapshot 以 vwap×cum_vol 還原 VWAP 分子與後端 Σq 分母有近似差;apply_backfill 對回補列不去重(TC4 重送列會雙算);tc4_status 只靠 on_reconnect 復位(純 REQ 失敗 banner 永久誤掛)
+ - [ ] 個股 UI 盤後體驗:reset() 保留 book 與 design 字面不符(rollover 後非觸發檔殘留昨日五檔)。〔2026-07-31 盤點:**後半「盤後重載側欄顯示 `-`」已做掉**,可刪 —— `stock_engine` 連線種子逐檔送 `_quote_payload`,`ref` 欄在尚無成交時給參考價,`WatchlistSidebar` 已渲染「參考」態〕
+ - [ ] 個股效能/清潔候選:snapshot 每次全量序列化 20k tick deque(切檔/跳號 refetch 都全量 JSON);_states 永不清除;F:xxx 建立永不使用的 StockDayState;backfill TICKS 訂閱事後不退訂
+-- [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時;backfill 首頁 30s 逾時靜默回空無 log;watchlist 啟動時 TC4 離線可被 30 檔 × 10s 拖慢 lifespan
++- [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時;backfill 首頁 30s 逾時靜默回空無 log;watchlist 啟動時 TC4 離線可被 50 檔 × 10s(≈500s)拖慢 lifespan〔2026-08-13 上限 30→50 同步;**退出準則**:若實測 TC4 離線啟動致 index/breadth 就緒 >10 分鐘 → 做 per-code timeout 縮短 / 並行訂閱〕
+ 
+ ## 2026-07-20(backfill 雙修 review P2)
+ 
+@@ -673,7 +673,7 @@
+ - [ ] 側欄 / Dialog / StockPage 三處 mutation 為 last-write-wins(K-4);pending 防護現況(2026-08-04 收尾 review F3 實測更正):StockPage 3 處有 `save.isPending` 防護、Dialog 僅「加入股票」建議列一處(:354),**Sidebar 零防護**(`commit()` 無 pending 檢查,拖曳 / × / 加入群組全裸)— 除跨元件並發外,同元件內連點 / 拖曳期間重複 PUT 亦未防〔2026-08-04 /bug 輪評估:與 K-3(fallback 狀態混淆)**非同根因**,修法域也不同(pending 防護 / 後端版本戳 vs 入口 gate),未併入該輪,維持本條待處理〕
+ - [ ] EMPTY_WL 危險窗封閉的成立條件是跨檔不變式(2026-08-04 收尾 review F1,`commit()` 早退 rejected_with_reason):現況全 repo 無 `resetQueries` / `removeQueries`、StockPage 永不卸載(App visited+hidden)→ watchlist query data 成功後不會退回 undefined,入口 + Dialog 同 gate 已涵蓋;**若日後**對 `stock-watchlist` 改用 resetQueries / 改 queryKey / 讓 StockPage 可卸載(gcTime 回收),危險窗會重開且測試零訊號 — 屆時再補 `commit()` 的 `data === undefined` 早退(repo 精神:不可達防禦 = 沒有測試覆蓋的死碼,見 WatchlistSidebar.tsx 拖曳 teardown 註解,現在不加)
+ - [ ] 自選載入失敗態側欄仍渲染空「未分組」區塊 +「拖曳到此移出群組」提示(2026-08-04 /bug 輪 Phase 7 截圖觀察):無寫入風險(無列可拖),純視覺突兀 — error 態可考慮整段收起只留錯誤文案
+-- [ ] 預覽非自選股後 `copycat-stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 30 檔上限)。〔2026-08-04 更名同步:key 已改 `copycat-stock-main-code`(`lib/constants.ts` MAIN_CODE_KEY);真正持久化點在 App.tsx 的 setItem useEffect,別被 LEGACY 遷移常數誤導〕
++- [ ] 預覽非自選股後 `copycat-stock-main-code` 仍會記住它(K-1):重整後主區停在該檔而側欄無對應列可反白,後端 `_main` 長期掛在非自選 code(refcount 吃得下,不佔 50 檔上限)。〔2026-08-04 更名同步:key 已改 `copycat-stock-main-code`(`lib/constants.ts` MAIN_CODE_KEY);真正持久化點在 App.tsx 的 setItem useEffect,別被 LEGACY 遷移常數誤導〕
+ - [ ] **驗證環境阻塞:達錢 4 未開時 server 起不來,錯誤訊息不指向根因**(2026-07-31 stock-ui-round4 Phase 7):`TC4 quote connect failed: Resource temporarily unavailable`(ZMQ REQ 的 EAGAIN)——實際成因是桌面程式沒開/沒登入,不是資源競爭。當時觀察序列:port 50774 有聽 + 舊 server 有真資料 → 舊 server 消失、port 仍聽但 LOGIN 逾時 → port 關閉。**「50774 有聽」不等於 OpenAPI 可用**,排查時先確認 app 已登入再看程式碼。另:兩個 server 同時連 TC4 是否可行本輪**未證實**(觀察被 app 關閉污染),別把「單一 session」當已知事實
+ 
+ ## 2026-07-31(stock-ui-round6:市價偽檔位 / 內外盤判定)
+@@ -1030,7 +1030,8 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
+ - [ ] **HR-6:WS 事件類訊息丟包無回補**(`ws.py` drop-oldest 對一次性 signal =
+   永久遺失且不斷線,baseline 重抓只掛 onWsOpen)。候選:signal payload 加 seq +
+   前端 gap 偵測觸發 invalidate,或 baseline 盤中週期重抓。R4 把漲停潮日數百則
+-  廣度事件灌進同一 per-client 佇列(上限 1000 按 30 檔自選推的),量級重估後再定。
++  廣度事件灌進同一 per-client 佇列(上限 1000 按 30 檔自選推的;2026-08-13 上限改 50 後
++  滿速緩衝 ≈ 20s 仍夠,不調參),量級重估後再定。
+ - [ ] **HR-3:hub close() 逾時路徑可致 jsonl 檔內順序倒置**(cancel 後 to_thread
+   的 OS thread 照樣寫完,_flush_pending 另起 thread 並寫)。後果有界(重啟後最壞
+   補發一則假 open,終態收斂);修法要 thread join 機制,複雜度不成比例,先記著。
+diff --git a/frontend/src/components/stock/GroupGridView.memo.test.tsx b/frontend/src/components/stock/GroupGridView.memo.test.tsx
+index 72aaa23f..1d059248 100644
+--- a/frontend/src/components/stock/GroupGridView.memo.test.tsx
++++ b/frontend/src/components/stock/GroupGridView.memo.test.tsx
+@@ -9,7 +9,7 @@ import type { Group } from "@/lib/watchlist-model";
+ 
+ /** review A6-1 的 regression lock:卡片 `memo` 有沒有真的擋下重畫。
+  *
+- *  這件事**在畫面上完全看不出來** —— memo 失效只是每秒多算 30 次分時幾何(最多
++ *  這件事**在畫面上完全看不出來** —— memo 失效只是每秒多算 50 次分時幾何(最多
+  *  271 格),圖照畫、值照對。失效的典型原因也不在卡片自己身上:父層每秒隨 `quotes`
+  *  re-render,傳下去的 `onPick` 若是 inline arrow,`memo` 的比較每一輪都不會過。
+  *
+diff --git a/frontend/src/components/stock/GroupGridView.tsx b/frontend/src/components/stock/GroupGridView.tsx
+index b13cce9b..2bfbedc9 100644
+--- a/frontend/src/components/stock/GroupGridView.tsx
++++ b/frontend/src/components/stock/GroupGridView.tsx
+@@ -77,7 +77,7 @@ function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined })
+ 
+ /** 單張卡片(review A6-1)。抽成 `memo` 子元件而不是留在父層的 `card()`:
+  *  `quotes` 每秒整份換 identity → 父層每秒 re-render 一次,而每張卡片都要重跑
+- *  `buildIntradayGeometry`(當日最多 271 分鐘 × 30 檔)。memo 之後只有 quote 真的
++ *  `buildIntradayGeometry`(當日最多 271 分鐘 × 50 檔)。memo 之後只有 quote 真的
+  *  變了的那幾張會重畫。
+  *
+  *  `onPick` 由父層以穩定參照傳入(StockPage 的 handler 每次 render 都是新的,但那層
+@@ -135,7 +135,7 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
+   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
+   // 給卡片的**穩定** onPick(review A6-1)。`quotes` 每秒換一次 → 本元件每秒 render,
+   // 而父層傳進來的 handler 是 inline arrow(每次都是新參照)—— 直接往下傳的話
+-  // `memo` 每一輪都比不過,30 張卡片照樣全部重畫,memo 形同虛設。
++  // `memo` 每一輪都比不過,50 張卡片照樣全部重畫,memo 形同虛設。
+   // latest-ref 而不是要求父層 useCallback:這是葉節點自己的效能問題,不該讓每個
+   // 呼叫端記得配合;ref 在 commit 後才更新,而 click 只會發生在 commit 之後。
+   const pickRef = useRef(onPick);
+@@ -184,7 +184,7 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
+       ) : isPending ? (
+         // 首載未回前**不畫卡片**:卡片的三態全是**終態宣告**,而「無資料」是其中最強的
+         // 一句(「這檔今天沒東西可看」)。載入中就先鋪一整面「無資料」再逐格翻回圖,
+-        // 既是閃爍也是說謊 —— 30 檔的群組會有整整一輪 batch 的時間停在錯的答案上。
++        // 既是閃爍也是說謊 —— 50 檔的群組會有整整一輪 batch 的時間停在錯的答案上。
+         // 錯誤終態不走這條(`isPending` 只涵蓋首載):整批失敗時卡片照畫、答「無資料」。
+         <div className="flex flex-1 items-center justify-center">
+           <p className="text-sm text-ink-muted">載入群組…</p>
+diff --git a/frontend/src/components/stock/MiniIntradayChart.tsx b/frontend/src/components/stock/MiniIntradayChart.tsx
+index 8f52be21..d17d6628 100644
+--- a/frontend/src/components/stock/MiniIntradayChart.tsx
++++ b/frontend/src/components/stock/MiniIntradayChart.tsx
+@@ -79,7 +79,7 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
+   const uid = safeIdToken(useId());
+   const above = `${uid}-mini-a`;
+   const below = `${uid}-mini-b`;
+-  // 幾何算一次就好(review A6-1):`minutes` 最多 271 格,而群組頁最多 30 張卡片,
++  // 幾何算一次就好(review A6-1):`minutes` 最多 271 格,而群組頁最多 50 張卡片,
+   // 父層每秒隨 `quotes` re-render 一次。deps 只列真正的輸入 —— `minutes` / `meta` 來自
+   // TQ cache(60s 才換 identity),`liveP` 是每秒可能變的那一個。
+   //
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index 6dce6f73..eb717938 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -486,7 +486,7 @@ describe("StockPage 加入自選(round4 項 4)", () => {
+     await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
+     fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
+     fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
+-    await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
++    await waitFor(() => expect(screen.getByText("自選已達 50 檔上限")).toBeTruthy());
+   });
+ });
+ 
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index d7defd87..8d4dd584 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -451,6 +451,136 @@ describe("WatchlistSidebar 折疊(round4 SC-3)", () => {
+   });
+ });
+ 
++// 🟢 SC-4:群組多起來之後,要把側欄收成一份目錄得逐組點一次 ▸。
++// 單顆切換鈕(不是兩顆):「有任何展開 → 全收」是掃視工作流(先收乾淨再逐組打開)。
++describe("WatchlistSidebar 全部展開 / 收合(SC-4)", () => {
++  function toggleAll(): HTMLElement {
++    return screen.getByRole("button", { name: /^全部(展開|收合)$/ });
++  }
++
++  it("部分展開 → 鈕是「全部收合」;點下去未分組與所有群組一起收,狀態落 localStorage", async () => {
++    sidebar();
++    await waitGroups();
++    expect(toggleAll().textContent).toBe("全部收合");
++
++    fireEvent.click(toggleAll());
++
++    expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
++    expect(screen.queryByTestId("wl-list-主力")).toBeNull();
++    expect(screen.queryByTestId("wl-list-觀察")).toBeNull();
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力", "觀察"]);
++    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
++    expect(toggleAll().textContent).toBe("全部展開");
++  });
++
++  it("全折疊 → 鈕是「全部展開」;點下去全開、兩把 key 都清回展開態", async () => {
++    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["主力", "觀察"]));
++    window.localStorage.setItem(UNGROUPED_KEY, "1");
++    sidebar();
++    await waitGroups();
++    expect(toggleAll().textContent).toBe("全部展開");
++
++    fireEvent.click(toggleAll());
++
++    expect(screen.getByTestId("wl-list-ungrouped")).toBeTruthy();
++    expect(screen.getByTestId("wl-list-主力")).toBeTruthy();
++    expect(screen.getByTestId("wl-list-觀察")).toBeTruthy();
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([]);
++    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("0");
++    expect(toggleAll().textContent).toBe("全部收合");
++  });
++
++  // F-1:`groups.every` 對空陣列恆 true → 鈕文字此時由 ungroupedCollapsed 單獨決定。
++  // 零群組**不是**「未載入」:資料在、只是沒有群組,鈕照常渲染並作用於未分組。
++  it("零群組 → 鈕仍在,且作用於未分組", async () => {
++    mockWatchlist([], ["2317"]);
++    sidebar();
++    // 等**列**而不是等未分組清單:清單在 EMPTY_WL fallback 上也照渲染(空的),
++    // 等它會在 data 還沒到就放行 → 這支測到的其實是「未載入」那條路徑
++    await waitFor(() => expect(screen.getByTestId("wl-row-2317")).toBeTruthy());
++    expect(toggleAll().textContent).toBe("全部收合");
++
++    fireEvent.click(toggleAll());
++
++    expect(screen.queryByTestId("wl-list-ungrouped")).toBeNull();
++    expect(window.localStorage.getItem(UNGROUPED_KEY)).toBe("1");
++    expect(toggleAll().textContent).toBe("全部展開");
++  });
++
++  // 全收是「以現行組名**替換**」而不是併入殘留:改名 / 刪組留下的組名沒有對應 UI,
++  // 保留只會讓日後建同名群組意外呈折疊(與 W-20 同向)。
++  it("全收以現行組名替換,順帶淨化已刪 / 已改名的殘留", async () => {
++    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["已刪除的組", "主力"]));
++    sidebar();
++    await waitGroups();
++
++    fireEvent.click(toggleAll());
++
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力", "觀察"]);
++  });
++
++  // 🔴 與「管理」鈕同一個 gate:自選未載入時 `wl` 是 EMPTY_WL fallback,groups=[] ——
++  // 這時全收會把使用者既有的折疊清單持久化覆寫成空,而畫面上完全看不出來。
++  it("自選未載入(pending / 失敗)→ 鈕不渲染,既有折疊清單不被覆寫", async () => {
++    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["主力"]));
++    fetchMock.mockImplementation(async () => new Promise<Response>(() => {})); // 永不 resolve
++    sidebar();
++    expect(screen.queryByRole("button", { name: /^全部(展開|收合)$/ })).toBeNull();
++
++    cleanup();
++    fetchMock.mockImplementation(async (url: string) => {
++      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
++      return new Response("boom", { status: 500 });
++    });
++    sidebar();
++    // hook 是 retry: 1(覆寫 wrap 的 retry:false),error 終態要等退避跑完
++    await waitFor(() => expect(screen.getByText("自選清單載入失敗")).toBeTruthy(), {
++      timeout: 5000,
++    });
++    expect(screen.queryByRole("button", { name: /^全部(展開|收合)$/ })).toBeNull();
++    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]);
++  });
++});
++
++// 🔴 SC-3:標題列與個股列在畫面上混成一片(同樣是透明底 + border-b),
++// 組名字級(text-xs)甚至比代號(text-base)小 → 掃視時分不出層次。
++// **斷言用 classList token 級**:`toContain("bg-surface")` 會被既有 `hover:bg-surface`
++// 這個子字串誤命中 → 假紅 + 之後恆真的 vacuous lock。
++describe("WatchlistSidebar 標題列視覺層次(SC-3)", () => {
++  it("群組標題列整條吃 bg-surface 底色帶", async () => {
++    sidebar();
++    await waitGroups();
++    expect(groupHeader("主力").classList.contains("bg-surface")).toBe(true);
++  });
++
++  it("未分組標題列同樣吃底色帶(兩種標題列一致)", async () => {
++    sidebar();
++    await waitGroups();
++    expect(groupHeader("未分組").classList.contains("bg-surface")).toBe(true);
++  });
++
++  it("hover 換手到 bg-line/50:底色帶讓 hover:bg-surface 變成看不出來的 no-op", async () => {
++    sidebar();
++    await waitGroups();
++    expect(groupHeader("主力").className).not.toContain("hover:bg-surface");
++  });
++
++  it("組名字重加粗(font-medium),不再與個股名稱同權重", async () => {
++    sidebar();
++    await waitGroups();
++    const header = groupHeader("主力");
++    expect(within(header).getByText("主力").classList.contains("font-medium")).toBe(true);
++  });
++
++  // 🔒 lock:底色帶是「標題列 vs 個股列」的**對比**,個股列一起吃底色等於沒有對比。
++  it("個股列不吃底色帶(對比的另一半)", async () => {
++    const { container } = sidebar();
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
++    expect(row.classList.contains("bg-surface")).toBe(false);
++  });
++});
++
+ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+   it("零群組零股票時搜尋框仍在(W-16 的新實體)", async () => {
+     mockWatchlist([], []);
+@@ -571,7 +701,7 @@ describe("WatchlistSidebar 頂部搜尋框(SC-7 / SC-8)", () => {
+     await waitGroups();
+     // 搜尋改成預覽後不再發 PUT → 用仍會 PUT 的路徑(群組列的 ×)驗錯誤文案
+     fireEvent.click(within(screen.getByTestId("wl-group-觀察")).getByLabelText("移除 3231"));
+-    await waitFor(() => expect(screen.getByText("自選已達 30 檔上限")).toBeTruthy());
++    await waitFor(() => expect(screen.getByText("自選已達 50 檔上限")).toBeTruthy());
+   });
+ });
+ 
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index fb38c3eb..b4d77681 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -68,6 +68,11 @@ interface Props {
+ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   const { data, error } = useStockWatchlist();
+   const wl = data ?? EMPTY_WL;
++  /** 自選成功載入過(pending / 失敗時 `wl` 是 EMPTY_WL fallback)。**兩個子樹共用同一個
++   *  判斷**:sticky 區的「全部收合」與底部的「管理」+ Dialog —— 理由與細節見底部那段長註解。
++   *  裸條件複製第二份的話,哪天改了 gate 只會改到其中一處,而危險窗只有幾百毫秒、
++   *  沒有錯誤訊號。 */
++  const wlReady = data !== undefined;
+   const groups = wl.groups;
+   const ungrouped = ungroupedCodes(wl);
+   const { data: names = [] } = useStockNames();
+@@ -132,12 +137,37 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     applyCollapsed(next);
+   }
+ 
++  /** `ungroupedCollapsed` 的**單一寫入點**:persist → setState 成對(同 `applyCollapsed`
++   *  的理由,只是這邊是 boolean 所以沒有 ref 影子)。持久化留在這裡而不是 updater 內 ——
++   *  updater 契約是純函式,StrictMode 下 double-invoke 會寫兩次 localStorage。 */
++  function applyUngroupedCollapsed(next: boolean): void {
++    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
++    setUngroupedCollapsed(next);
++  }
++
+   /** 未分組折疊是 boolean 且只走純點擊路徑(沒有 mutation 回呼那種同批連發),
+    *  直接用 render 閉包的值算 next 就夠,不需要影子 ref。 */
+   function toggleUngroupedCollapsed(): void {
+-    const next = !ungroupedCollapsed;
+-    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
+-    setUngroupedCollapsed(next);
++    applyUngroupedCollapsed(!ungroupedCollapsed);
++  }
++
++  /** 「未分組 + 全部群組」皆折疊。`groups.every` 對空陣列恆 true → 零群組時這個值
++   *  由 `ungroupedCollapsed` 單獨決定,鈕照樣說對話(F-1)。 */
++  const allCollapsed = ungroupedCollapsed && groups.every((g) => collapsed.has(g.name));
++
++  /** 一顆鈕切換全收 / 全展。兩個折疊狀態各自走**既有的單一寫入點**(`applyCollapsed` /
++   *  `applyUngroupedCollapsed`),不在這裡手抄 persist —— 手抄的漏法是漏掉 ref 同步。
++   *
++   *  全收寫入的是**現行組名集合(替換)**而不是併入 `collapsed` 殘留:改名 / 刪組留下的
++   *  組名沒有對應 UI,留著只會讓日後建同名群組意外呈折疊(與 `dropCollapsed` 同向)。 */
++  function toggleAll(): void {
++    if (allCollapsed) {
++      applyCollapsed(new Set());
++      applyUngroupedCollapsed(false);
++    } else {
++      applyCollapsed(new Set(groups.map((g) => g.name)));
++      applyUngroupedCollapsed(true);
++    }
+   }
+ 
+   /** 刪組成功後由 Dialog 回呼:折疊清單不留該組名,否則日後建同名群組會意外呈折疊(W-20)。
+@@ -272,17 +302,22 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           o.onToggle();
+         }}
+         className={cn(
+-          "flex w-full items-center gap-1 border-b border-line px-1 py-1 text-left",
++          // `bg-surface` 底色帶 + `font-medium` 組名:標題列與個股列原本同樣是透明底
++          // border-b、組名字級還比代號小 —— 掃視時分不出「這是一段的開頭」。
++          // `rounded-t`:section 是 `rounded border`,不補的話底色帶的方角會戳出圓角外。
++          "flex w-full items-center gap-1 rounded-t border-b border-line bg-surface px-1 py-1 text-left",
+           "focus-visible:border-b-accent focus-visible:outline-none",
+           // 拖曳中關掉 hover 亮色:否則會與落點高亮(border-accent)搶語意 ——
+-          // 使用者分不清「這是可放的組」還是「這是可點的鈕」
+-          drag === null && "hover:bg-surface",
++          // 使用者分不清「這是可放的組」還是「這是可點的鈕」。
++          // hover 色換手成 line/50:底色帶已經是 surface,原本的 `hover:bg-surface`
++          // 變成看不出來的 no-op(可點的 affordance 靜默消失)。
++          drag === null && "hover:bg-line/50",
+         )}
+       >
+         <span aria-hidden="true" className="w-3 shrink-0 text-xs text-ink-dim">
+           {o.collapsed ? "▸" : "▾"}
+         </span>
+-        <span className="min-w-0 flex-1 truncate text-xs text-ink">{o.label}</span>
++        <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">{o.label}</span>
+         <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
+       </button>
+     );
+@@ -483,6 +518,21 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+             查看
+           </button>
+         </div>
++        {/* 落點刻意在**搜尋列與建議清單之間**:放在 sticky 區塊下緣的話,打字時行內
++            建議清單一出現就會把它往下推,高頻操作的鈕位置跟著跳。
++            gate 同「管理」鈕(`wlReady`):EMPTY_WL 危險窗內 groups=[],一鍵全收會把
++            使用者既有的折疊清單持久化覆寫成空,而畫面上完全看不出來。 */}
++        {wlReady ? (
++          <div className="mt-1 flex justify-end">
++            <button
++              type="button"
++              onClick={toggleAll}
++              className="text-xs text-ink-dim hover:text-ink"
++            >
++              {allCollapsed ? "全部展開" : "全部收合"}
++            </button>
++          </div>
++        ) : null}
+         {suggestions.length > 0 ? (
+           <ul data-testid="stock-suggest" className="mt-1 rounded border border-line bg-bg-deep">
+             {suggestions.map((s) => (
+@@ -595,8 +645,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           Dialog 併進**同一個** gate(而非只擋按鈕):危險窗內連掛載都不給,
+           「拿得到 EMPTY_WL 的 Dialog 不存在」就成了本地可讀的不變式,不必追它內部
+           有沒有其他開啟路徑。data 一旦成功載入就不會退回 undefined,所以對 Dialog 自己的
+-          open/close 循環而言它仍是常駐掛載 —— 不影響其 prevOpen 重置設計。 */}
+-      {data === undefined ? null : (
++          open/close 循環而言它仍是常駐掛載 —— 不影響其 prevOpen 重置設計。
++          **同一個 gate 還守著 sticky 區的「全部收合」鈕**(`wlReady` 的另一個讀者):
++          那顆鈕在危險窗內按下去會把折疊清單覆寫成空,同樣是 EMPTY_WL 當基底的寫入。 */}
++      {wlReady ? (
+         <>
+           <button
+             type="button"
+@@ -613,7 +665,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+             onGroupDeleted={dropCollapsed}
+           />
+         </>
+-      )}
++      ) : null}
+     </aside>
+   );
+ }
+diff --git a/frontend/src/hooks/useGroupSnapshots.ts b/frontend/src/hooks/useGroupSnapshots.ts
+index cdd20563..d73dc47a 100644
+--- a/frontend/src/hooks/useGroupSnapshots.ts
++++ b/frontend/src/hooks/useGroupSnapshots.ts
+@@ -7,10 +7,10 @@ import { inTradingHours } from "@/lib/trading-hours";
+ /** 群組檢視的成員狀態(group-grid SC-4)。
+  *
+  *  **單一 batch 端點,不是 per-code query**:`/api/stock/state/{code}` 會 `set_main`,
+- *  群組檢視每分鐘對最多 30 檔各要一次 = 每分鐘把主圖搶走 30 次,主圖分時線就此凍結
++ *  群組檢視每分鐘對最多 50 檔各要一次 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結
+  *  而畫面上只表現為「圖不動了」,沒有任何錯誤訊號(design R1)。
+  *
+- *  payload 只有 minutes / meta 兩份資料(`ticks` 是數千筆,30 檔一起送等於把 batch
++ *  payload 只有 minutes / meta 兩份資料(`ticks` 是數千筆,50 檔一起送等於把 batch
+  *  端點變成頻寬炸彈)+ 兩個旗標。 */
+ export interface GroupSnapshot {
+   minutes: Map<number, MinuteAgg>;
+@@ -49,7 +49,7 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
+ }
+ 
+ /** 輪詢窗(design R7)。抽成純函式才量得到(沿 `barsPollInterval` 慣例)。
+- *  盤外不輪詢:群組成員的分鐘序列收盤後就不會再變,而 30 檔的 batch 不是免費的。 */
++ *  盤外不輪詢:群組成員的分鐘序列收盤後就不會再變,而 50 檔的 batch 不是免費的。 */
+ export function groupPollInterval(trading: boolean): number | false {
+   return trading ? POLL_MS : false;
+ }
+diff --git a/frontend/src/hooks/useStockWatchlist.ts b/frontend/src/hooks/useStockWatchlist.ts
+index 0880005a..a9d47053 100644
+--- a/frontend/src/hooks/useStockWatchlist.ts
++++ b/frontend/src/hooks/useStockWatchlist.ts
+@@ -1,6 +1,7 @@
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ 
+ import { parseError } from "@/lib/api-error";
++import { WATCHLIST_LIMIT } from "@/lib/constants";
+ import type { Group, Watchlist } from "@/lib/watchlist-model";
+ 
+ export type { Group, Watchlist };
+@@ -24,7 +25,7 @@ function toWatchlist(body: { codes?: string[]; groups?: Group[] }): Watchlist {
+ /** 三個錯誤碼的中文文案(跨檔契約 W-2)。側欄與管理 Dialog 共用**同一份**,
+  *  複製兩份會漂而白名單只釘了「文案不變」。 */
+ export function errText(message: string): string {
+-  if (message === "WATCHLIST_FULL") return "自選已達 30 檔上限";
++  if (message === "WATCHLIST_FULL") return `自選已達 ${WATCHLIST_LIMIT} 檔上限`;
+   if (message === "BAD_CODE") return "股號格式不正確";
+   if (message === "BAD_GROUP") return "群組名稱不合法";
+   return "儲存失敗";
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index d4ad90a2..9837fab1 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -93,6 +93,15 @@ export const WL_COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+ /** 自選側欄未分組區塊的折疊("1" = 折疊)— components/stock/WatchlistSidebar.tsx */
+ export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
+ 
++/** 自選檔數上限。**跨檔契約**:與後端 `copycat/stock_watchlist.py::WATCHLIST_LIMIT`
++ *  同值,改一邊必須同步另一邊 —— 這裡只餵 `hooks/useStockWatchlist.ts::errText` 的文案,
++ *  真正擋下超限的是後端(`WATCHLIST_FULL`)。兩邊漂掉的症狀是使用者看到「已達 N 檔上限」
++ *  而 N 不是實際擋人的那個數字,零錯誤訊號。
++ *
++ *  (不是 localStorage key,放這裡是因為本檔是既有跨元件常數的聚集地,且契約註解需要
++ *  一個可 grep 的錨點。) */
++export const WATCHLIST_LIMIT = 50;
++
+ /** 個股頁檢視("single" / "group")— components/stock/StockPage.tsx */
+ export const STOCK_VIEW_KEY = "copycat-stock-view";
+ /** 群組檢視選中的群組名 — components/stock/GroupGridView.tsx。
+diff --git a/tests/live/test_stock_state.py b/tests/live/test_stock_state.py
+index 0a6642e5..d7c846b1 100644
+--- a/tests/live/test_stock_state.py
++++ b/tests/live/test_stock_state.py
+@@ -305,7 +305,7 @@ class TestDayHighLow:
+ class TestLightSnapshot:
+     """群組 batch 專用的輕量 payload(code review A1)。
+ 
+-    `group_snapshot` 對最多 30 檔、每 60s 各建一次全量 `snapshot()`,而那份會把當日
++    `group_snapshot` 對最多 50 檔、每 60s 各建一次全量 `snapshot()`,而那份會把當日
+     數千筆 tick 逐筆組成 dict 之後**整份丟掉** —— 畫面只用得到 minutes / meta 兩鍵。
+ 
+     抽 `_minutes_payload` / `_meta_payload` 共用而不是在 engine 那邊另寫一份對映,
+@@ -334,7 +334,7 @@ class TestLightSnapshot:
+     def test_light_snapshot_is_exactly_minutes_and_meta(self) -> None:
+         light = self._filled().light_snapshot()
+         assert set(light) == {"minutes", "meta"}
+-        # ticks 是本輪要省掉的那一份(30 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
++        # ticks 是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
+         assert "ticks" not in light
+ 
+     def test_light_and_full_snapshot_share_one_key_mapping(self) -> None:
+diff --git a/tests/server/test_discord_bot.py b/tests/server/test_discord_bot.py
+index dcb4cb75..760c8b71 100644
+--- a/tests/server/test_discord_bot.py
++++ b/tests/server/test_discord_bot.py
+@@ -170,7 +170,7 @@ class TestAddCommand:
+         [
+             ("BAD_CODE", "股號格式不正確"),
+             ("BAD_GROUP", "群組名稱不合法"),
+-            ("WATCHLIST_FULL", "自選已達 30 檔上限"),
++            ("WATCHLIST_FULL", "自選已達 50 檔上限"),
+         ],
+     )
+     async def test_watchlist_error_maps_to_chinese_text(
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index 2129724c..73d4e9fd 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -760,7 +760,7 @@ class TestSignalRoutesWithoutStock:
+         """T5:無 engine → `daily_bars` stub 恆回 `[]` = 「資料面就是沒有」。
+ 
+         hub 既有路徑因此逐檔一次「CDP 停用」warning + cache 落 `(日別, None)`,
+-        **不重試**(重試留給例外路徑 X-2b)—— 自選 30 檔不會變成重試風暴。
++        **不重試**(重試留給例外路徑 X-2b)—— 自選 50 檔不會變成重試風暴。
+         """
+         monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+         (tmp_path / "watchlist.json").write_text(
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index a8054d5a..81113b82 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -1202,7 +1202,7 @@ class TestQuotes:
+ 
+ class TestGroupSnapshot:
+     """SC-4:群組檢視的唯讀 batch。**不 set_main、不改訂閱池**(`/api/stock/state/{code}`
+-    會 set_main,群組每分鐘 30 次會把主圖搶走令主圖凍結 → 那條路不可重用)。"""
++    會 set_main,群組每分鐘 50 次會把主圖搶走令主圖凍結 → 那條路不可重用)。"""
+ 
+     async def test_payload_is_the_lightweight_three_keys_plus_backfilling(self) -> None:
+         engine, src = await _make()
+@@ -1212,7 +1212,7 @@ class TestGroupSnapshot:
+         await _drain(engine)
+         snap = engine.group_snapshot(["2330"])["2330"]
+         assert set(snap) == {"minutes", "meta", "no_data", "backfilling"}
+-        # R2:ticks 是數千筆,30 檔一起送等於把 batch 端點變成頻寬炸彈
++        # R2:ticks 是數千筆,50 檔一起送等於把 batch 端點變成頻寬炸彈
+         assert "ticks" not in snap
+         # 鍵名沿 `StockDayState.snapshot()` 的單一定義:直接丟 dataclass 會讓前端
+         # `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失
+@@ -1324,7 +1324,7 @@ class TestGroupSnapshot:
+     async def test_does_not_build_the_full_snapshot(self) -> None:
+         """A1:batch 走 `light_snapshot()`,不得再建全量 `snapshot()`。
+ 
+-        全量那份會把當日數千筆 tick 逐筆組成 dict 再整份丟掉 —— 30 檔 × 每 60s。
++        全量那份會把當日數千筆 tick 逐筆組成 dict 再整份丟掉 —— 50 檔 × 每 60s。
+         用「把該檔 state 的 `snapshot` 換成會炸的替身」鎖:讀不到 tick 這件事沒有
+         任何畫面表現,只有這樣才驗得到真的沒走那條路。
+         """
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 74546a2a..2f44040a 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
+ from copycat.server.app import create_app
+ from copycat.server.signal_hub import SignalHub
+ from copycat.server.stock_engine import StockEngine
+-from copycat.stock_watchlist import save_watchlist
++from copycat.stock_watchlist import WATCHLIST_LIMIT, save_watchlist
+ from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeStockSource
+ from tests.helpers.fake_txo import FakeTxoSource
+@@ -195,10 +195,23 @@ class TestWatchlistRoutes:
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "BAD_GROUP"
+ 
++    def test_put_at_limit_ok(self, tmp_path: Path) -> None:
++        """字面 50 與 test_put_over_limit_400 的字面 51 成對釘死邊界 = 50。
++
++        兩支都引常數的話,上限值本身就沒有任何測試錨點(改常數兩支自動跟著綠)。
++        """
++        client, _ = make_client(tmp_path)
++        with client:
++            codes = [f"{1000 + i}" for i in range(50)]
++            r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
++            assert r.status_code == 200
++            assert r.json()["codes"] == codes
++
+     def test_put_over_limit_400(self, tmp_path: Path) -> None:
+         client, _ = make_client(tmp_path)
+         with client:
+-            codes = [f"{1000 + i}" for i in range(31)]
++            # 字面 51:與 test_put_at_limit_ok 的字面 50 成對釘死邊界 50/51
++            codes = [f"{1000 + i}" for i in range(51)]
+             r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "WATCHLIST_FULL"
+@@ -461,8 +474,8 @@ class TestStateRouteContract:
+ class TestGroupStateRoute:
+     """群組檢視的唯讀 batch(group-grid SC-4)。
+ 
+-    **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 30 檔各要一次
+-    狀態,重用 `/api/stock/state/{code}` 等於每分鐘把主圖搶走 30 次 → 主圖分時線凍結,
++    **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 50 檔各要一次
++    狀態,重用 `/api/stock/state/{code}` 等於每分鐘把主圖搶走 50 次 → 主圖分時線凍結,
+     而畫面上只表現為「圖不動了」,沒有任何錯誤。所以 `_main` 的斷言是本組的核心。
+     """
+ 
+@@ -478,7 +491,7 @@ class TestGroupStateRoute:
+             assert r.status_code == 200
+             states = r.json()["states"]
+             assert set(states) == {"2330", "2317"}
+-            # payload 形寫死:ticks 不得混進來(30 檔 × 數千筆 = 頻寬炸彈)
++            # payload 形寫死:ticks 不得混進來(50 檔 × 數千筆 = 頻寬炸彈)
+             assert set(states["2330"]) == {"minutes", "meta", "no_data", "backfilling"}
+             assert states["2330"]["no_data"] is False
+             stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+@@ -502,10 +515,19 @@ class TestGroupStateRoute:
+             assert states["9999"]["minutes"] == {}
+             assert states["9999"]["meta"] is None
+ 
++    def test_group_state_at_limit_ok(self, tmp_path: Path) -> None:
++        """字面 50 相異碼 → 200(與 test_too_many_codes_400 的字面 51 成對釘死邊界)。"""
++        client, _ = make_client(tmp_path)
++        with client:
++            codes = ",".join(f"{9000 + i}" for i in range(50))
++            r = client.get("/api/stock/group-state", params={"codes": codes})
++            assert r.status_code == 200
++            assert len(r.json()["states"]) == 50
++
+     def test_too_many_codes_400(self, tmp_path: Path) -> None:
+         client, _ = make_client(tmp_path)
+         with client:
+-            codes = ",".join(f"{9000 + i}" for i in range(31))  # 自選上限 30
++            codes = ",".join(f"{9000 + i}" for i in range(51))  # 自選上限 50(與 at-limit 成對)
+             r = client.get("/api/stock/group-state", params={"codes": codes})
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "BAD_CODES"
+@@ -532,7 +554,9 @@ class TestGroupStateRoute:
+         client, _ = make_client(tmp_path)
+         with client:
+             self._put(client, ["2330", "2317"])
+-            r = client.get("/api/stock/group-state", params={"codes": ",".join(["2330"] * 31)})
++            # 重複數必須 > 上限,否則失去鑑別力(考點是「去重先於驗數」的順序)
++            dup = ",".join(["2330"] * (WATCHLIST_LIMIT + 1))
++            r = client.get("/api/stock/group-state", params={"codes": dup})
+             assert r.status_code == 200
+             assert list(r.json()["states"]) == ["2330"]
+             r = client.get("/api/stock/group-state", params={"codes": "2317,2330,2317"})
+@@ -542,7 +566,7 @@ class TestGroupStateRoute:
+         """去重之後仍要驗上限:相異碼超量照樣 400(去重不是放行的後門)。"""
+         client, _ = make_client(tmp_path)
+         with client:
+-            codes = ",".join(f"{9000 + i}" for i in range(31))
++            codes = ",".join(f"{9000 + i}" for i in range(WATCHLIST_LIMIT + 1))
+             r = client.get("/api/stock/group-state", params={"codes": codes})
+             assert r.status_code == 400
+             assert r.json()["detail"]["error"] == "BAD_CODES"
+diff --git a/tests/server/test_watchlist_service.py b/tests/server/test_watchlist_service.py
+index a42d5119..efbbafae 100644
+--- a/tests/server/test_watchlist_service.py
++++ b/tests/server/test_watchlist_service.py
+@@ -322,7 +322,7 @@ class TestConcurrency:
+     ) -> None:
+         """X-3:訂閱副作用移到鎖外 —— 落檔 + 定序留鎖內,ZMQ 往返不再擋住下一個寫入。
+ 
+-        TC4 故障時單次 `set_watchlist` 最壞是 30 檔 × 數十秒;鎖在裡面的話,期間所有
++        TC4 故障時單次 `set_watchlist` 最壞是 50 檔 × 數十秒;鎖在裡面的話,期間所有
+         `/watch` 與前端 PUT 全部堆積,而 Discord 的 interaction token 只有 15 分鐘。
+         """
+         service, engine, path = _service(tmp_path, delay=0.5)
