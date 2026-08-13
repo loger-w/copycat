@@ -1092,6 +1092,237 @@ describe("StockIntradayChart 價位別成交量(SC-3)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     expect(vpBars(container).length).toBe(0);
   });
+
+  /** 🟢 SC-4:POC 長條**尖端右側**的價位數字。就地標示(不硬塞左緣 yTicks)——
+   *  尖端的 x 隨量比例走,標籤跟著它才指認得出「這根是哪個價位」。 */
+  it("POC 長條尖端右側有 accent 價位數字(fmt 口徑)", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    const label = container.querySelector('[data-testid="vp-poc-label"]')!;
+    expect(label).toBeTruthy();
+    expect(label.textContent).toBe("2380"); // 7 張 = 域內最大
+    const poc = vpBars(container)[2]!; // 降冪排序 → 2380 是最後一根
+    expect(Number(label.getAttribute("x"))).toBeCloseTo(
+      Y_AXIS_W + Number(poc.getAttribute("width")) + 3,
+      6,
+    );
+    // y 對準長條中心(dy 置中,不用 dominantBaseline —— 同左緣刻度的既有紀律)
+    expect(Number(label.getAttribute("y"))).toBeCloseTo(
+      Number(poc.getAttribute("y")) + Number(poc.getAttribute("height")) / 2,
+      6,
+    );
+    expect(label.getAttribute("dy")).toBe("0.35em");
+    const cls = label.getAttribute("class")!;
+    expect(cls).toContain("fill-accent"); // 與 highlight 的長條同色
+    // halo 一律描邊,**不得**用底色 rect(主圖 drawnRects === 0 的既有合約)
+    expect(cls).toContain("stroke-surface");
+    expect(label.getAttribute("paint-order")).toBe("stroke");
+  });
+
+  it("關掉量分佈 → POC 標籤跟著消失(vpBars 空 → 自然不畫)", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    expect(container.querySelector('[data-testid="vp-poc-label"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "量分佈" }));
+    expect(container.querySelector('[data-testid="vp-poc-label"]')).toBeNull();
+  });
+
+  it("尚無成交(無 bar)→ 無 POC 標籤,不崩", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelector('[data-testid="vp-poc-label"]')).toBeNull();
+  });
+
+  it("POC 標籤畫在主價線之後(D7:被 1.6px 主線壓過等於沒畫)", () => {
+    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+    const main = [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )!;
+    const nodes = [...main.querySelectorAll('polyline, [data-testid="vp-poc-label"]')];
+    const priceIdx = nodes.findIndex((n) =>
+      (n.getAttribute("class") ?? "").includes("stroke-bull"),
+    );
+    const labelIdx = nodes.findIndex((n) => n.getAttribute("data-testid") === "vp-poc-label");
+    expect(priceIdx).toBeGreaterThanOrEqual(0);
+    expect(labelIdx).toBeGreaterThan(priceIdx);
+  });
+});
+
+// 🟢 SC-1 / SC-2 / SC-3(mod/intraday-ma-poc-labels):VWAP 與 MA 的**即時價位數值**。
+//
+// 既有畫面上這兩條線都讀不出數字:VWAP 完全沒有標籤,MA 的右緣帶只印名稱。
+// 三組標籤全部由既有 props(g / oLines / showVwap / vpBars)內算,ChartStatic 不新增
+// prop —— 新增純量以外的 prop 會打穿 memo,而 hover 每個 mousemove 都 re-render 父層。
+describe("StockIntradayChart 即時價位標籤(SC-1/2/3)", () => {
+  function mainSvg(container: HTMLElement): SVGSVGElement {
+    return [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )! as SVGSVGElement;
+  }
+
+  function geomOf(accum: typeof ACCUM) {
+    return buildIntradayGeometry(
+      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+      { width: 800, height: 260 },
+    );
+  }
+
+  // ---- SC-2:VWAP 就地標籤 ----
+
+  /** 就地標示不釘右緣(review F1):VWAP 不是橫貫全寬的水平線,盤中末點在畫面中段,
+   *  右緣釘標籤會與線脫節整整 640px。 */
+  it("均價開 → vwapLine 末點右側有白色 VWAP 數值(fmt 口徑,與說明列同源)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
+    expect(label).toBeTruthy();
+    // 541 分 10 張 @2380 + 542 分 2 張 @2390 → Σca/Σv = 2381.667(fmt 不 snap tick:
+    // VWAP 是統計量不是可掛單價,review F3)
+    expect(label.textContent).toBe("2381.67");
+    const end = geomOf(ACCUM).vwapLine.at(-1)!;
+    expect(Number(label.getAttribute("x"))).toBeCloseTo(end.x + 4, 6);
+    expect(Number(label.getAttribute("y"))).toBeCloseTo(end.y, 6);
+    expect(label.getAttribute("dy")).toBe("0.35em");
+    expect(label.getAttribute("text-anchor")).toBe("start");
+    const cls = label.getAttribute("class")!;
+    expect(cls).toContain("fill-ink"); // 跟線色(白)
+    expect(cls).toContain("stroke-surface");
+    expect(label.getAttribute("paint-order")).toBe("stroke");
+  });
+
+  it("關均價 toggle → VWAP 標籤跟著線一起消失", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "均價" }));
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeNull();
+  });
+
+  /** 盤末(13:30)時末點就在繪圖區右界上,`x + 4` 會把標籤整塊推進右緣疊線標籤帶
+   *  甚至出畫布 —— 那是「畫了但看不到」的靜默失敗。 */
+  it("末點貼右界 → 標籤 x 內縮,整塊不出繪圖區右界", () => {
+    const late = fromSnapshot({
+      code: "2330", seq: 2,
+      last: { p: 2_390_000, t: "13:30:10.000", cum_vol: 12 },
+      vwap: 2_390_000,
+      minutes: {
+        "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 },
+        "810": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_390_000 },
+      },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={late} />);
+    const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
+    const end = geomOf(late).vwapLine.at(-1)!;
+    const x = Number(label.getAttribute("x"));
+    expect(end.x).toBeCloseTo(800 - R_AXIS_W, 6); // 前提:末點真的貼在右界
+    expect(x).toBeLessThan(end.x + 4);
+    // 標籤寬 ~34px(最寬內容 "1005.0" @0.5625rem)整塊留在繪圖區內
+    expect(x + 34).toBeLessThanOrEqual(800 - R_AXIS_W);
+  });
+
+  // ---- SC-1:MA 即時價位標籤 ----
+
+  it("MA 開 → 右緣內側出現 MA5 / MA20 價位數值(跟線色、halo、無 * 後綴)", async () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const ma5 = container.querySelector('[data-testid="edge-price-ma5"]')!;
+    const ma20 = container.querySelector('[data-testid="edge-price-ma20"]')!;
+    expect(ma5.textContent).toBe("2330");
+    expect(ma20.textContent).toBe("2310");
+    // `*` 是 CDP 的專屬記號(review F3):MA 靠 ma5/ma20 的黃 / 紫與 CDP 區分
+    expect(ma5.textContent).not.toContain("*");
+    expect(ma20.textContent).not.toContain("*");
+    expect(ma5.getAttribute("class")).toContain("fill-ma5");
+    expect(ma20.getAttribute("class")).toContain("fill-ma20");
+    for (const t of [ma5, ma20]) {
+      expect(t.getAttribute("class")).toContain("stroke-surface");
+      expect(t.getAttribute("paint-order")).toBe("stroke");
+      expect(t.getAttribute("text-anchor")).toBe("end");
+      expect(t.getAttribute("dy")).toBe("0.35em");
+      expect(t.getAttribute("font-size")).toBe("0.5625rem");
+      // 繪圖區**內側**右緣:R_AXIS_W=40 的帶裝不下「2330」與名稱兩份內容
+      expect(Number(t.getAttribute("x"))).toBe(800 - R_AXIS_W - 2);
+    }
+  });
+
+  it("MA 標籤是 fmtTickPrice 口徑(日線衍生值 snap 到可下單檔位;round3 B4 不推翻)", async () => {
+    // 2_331_237 → 最近合法檔位 2_330_000(5 元 tick);未 snap 會印出 2331.2 這種下不了單的價位
+    overlayResponse = { ...OVERLAY, ma5: 2_331_237, ma20: 2_310_000 };
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    expect(container.querySelector('[data-testid="edge-price-ma5"]')!.textContent).toBe("2330");
+  });
+
+  it("標籤 y 貼著對應的 MA 線(兩線相距夠遠 → 不位移)", async () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const g = geomOf(ACCUM);
+    expect(
+      Number(container.querySelector('[data-testid="edge-price-ma5"]')!.getAttribute("y")),
+    ).toBeCloseTo(g.toY(2_330_000), 6);
+    expect(
+      Number(container.querySelector('[data-testid="edge-price-ma20"]')!.getAttribute("y")),
+    ).toBeCloseTo(g.toY(2_310_000), 6);
+  });
+
+  it("右緣帶內的 MA5 / MA20 **名稱**標籤照舊(白名單 2:不推翻 round3 拍板)", async () => {
+    wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() => expect(screen.getByText("MA5", { selector: "text" })).toBeTruthy());
+    expect(screen.getByText("MA20", { selector: "text" })).toBeTruthy();
+  });
+
+  it("MA toggle 關(預設)→ 無 MA 價位標籤(CDP 的 `價位*` 不受影響)", async () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    await waitFor(() => expect(screen.getByText("2400*", { selector: "text" })).toBeTruthy());
+    expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeNull();
+    expect(container.querySelector('[data-testid="edge-price-ma20"]')).toBeNull();
+  });
+
+  // ---- SC-3 / D7:圖層與既有合約 ----
+
+  it("MA / VWAP 標籤畫在主價線之後(D7)", async () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const nodes = [...mainSvg(container).querySelectorAll('polyline, [data-testid^="edge-price-"]')];
+    const priceIdx = nodes.findIndex((n) =>
+      (n.getAttribute("class") ?? "").includes("stroke-bull"),
+    );
+    expect(priceIdx).toBeGreaterThanOrEqual(0);
+    for (const id of ["edge-price-vwap", "edge-price-ma5", "edge-price-ma20"]) {
+      expect(nodes.findIndex((n) => n.getAttribute("data-testid") === id)).toBeGreaterThan(
+        priceIdx,
+      );
+    }
+  });
+
+  /** 白名單 9/10:新標籤的文字只含價位(x > 740 不得有 %),halo 一律描邊不加底色 rect。
+   *  兩條既有合約(round3 SC-1 的 % 量法、SC-5 的 drawnRects === 0)就是靠這兩點成立。 */
+  it("新標籤不含 % 且不引入任何底色 rect(白名單 9/10)", async () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const labels = [...mainSvg(container).querySelectorAll('[data-testid^="edge-price-"]')];
+    expect(labels.length).toBe(3);
+    for (const t of labels) expect(t.textContent).not.toContain("%");
+    const drawnRects = [...mainSvg(container).querySelectorAll("rect")].filter(
+      (r) =>
+        r.closest("defs") === null &&
+        !(r.getAttribute("data-testid") ?? "").startsWith("y-tick-lamp"),
+    );
+    expect(drawnRects.length).toBe(0);
+  });
 });
 
 // 🟢 SC-5 / D10:期貨態(個股期合約主圖)。三件事同時成立才算對 ——
@@ -1234,6 +1465,20 @@ describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
     cleanup();
     const spot = wrap(<StockIntradayChart accum={FUT} />);
     expect(spot.container.querySelectorAll('[data-testid="vp-bar"]').length).toBeGreaterThan(0);
+  });
+
+  // 🟢 D6:VWAP 標籤**兩態都出**(vwap toggle 期貨態恆可用);MA 與 POC 標籤隨既有
+  // 可用性 = 僅現貨態 —— overlay 不打請求就沒有 MA 線可標,VP 整組不畫就沒有 POC。
+  it("期貨態:VWAP 標籤仍出,MA 與 POC 標籤不出(D6;對照組現貨態 POC 標籤畫得出來)", () => {
+    const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
+    expect(fut.container.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
+    expect(fut.container.querySelector('[data-testid="edge-price-ma5"]')).toBeNull();
+    expect(fut.container.querySelector('[data-testid="edge-price-ma20"]')).toBeNull();
+    expect(fut.container.querySelector('[data-testid="vp-poc-label"]')).toBeNull();
+    fut.unmount();
+    cleanup();
+    const spot = wrap(<StockIntradayChart accum={FUT} />);
+    expect(spot.container.querySelector('[data-testid="vp-poc-label"]')).toBeTruthy();
   });
 
   it("期貨態:CDP / MA / 量分佈 三顆 toggle 反灰,均價仍可用", () => {
