@@ -356,7 +356,8 @@ export function MarketPane({
       </div>
 
       {/* 高度由 SVG viewBox 比例驅動(`w-full`),**不 `flex-1` 撐滿頁高** ——
-          雙 pane 並排且下方還接相關係數區塊,撐滿會把另外兩塊擠出視窗 */}
+          雙 pane 並排且下方還接家數帶與 subtab 區(2026-08-14 改版前是相關係數等
+          收合區塊),撐滿會把下面幾塊擠出視窗 */}
       <figure className="flex flex-col rounded-md border border-line bg-surface p-4">
         <figcaption className="flex flex-wrap items-baseline gap-3">
           <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>

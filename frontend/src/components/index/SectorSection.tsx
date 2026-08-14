@@ -431,7 +431,7 @@ export function SectorSection({
   active?: boolean;
 }) {
   return (
-    <div data-testid="sector-section" className="px-4 pb-4">
+    <div data-testid="sector-section" className="pt-2">
       <SectorBody active={active} onOpenStock={onOpenStock} />
     </div>
   );

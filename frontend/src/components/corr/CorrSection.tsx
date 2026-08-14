@@ -14,7 +14,7 @@ const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
 
 export function CorrSection() {
   return (
-    <div data-testid="corr-section" className="px-4 pb-4">
+    <div data-testid="corr-section" className="px-4 pt-2 pb-4">
       {/* fallback 文字刻意不用「載入中…」(CorrPanel 空狀態就是那句)—— 測試要能
           逐字區分「仍 suspend」與「CorrPage 已 mount」,同字串會讓斷言失去鑑別力。 */}
       <Suspense fallback={<p className="py-6 text-center text-sm text-ink-muted">相關係數載入中…</p>}>

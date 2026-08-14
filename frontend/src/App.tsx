@@ -42,7 +42,8 @@ const FUT_PRODUCTS = [
 export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
 
 /** localStorage 值域**縮減一項**:`corr` 自台股綜合 R1(SC-1)起移出合法清單 ——
- *  相關係數併入台股綜合頁的收合區塊,舊值因此自然 fallback 到 `index`(刻意遷移,
+ *  相關係數併入台股綜合頁內(2026-08-14 起是該頁的一顆 subtab,改版前為收合區塊),
+ *  舊值因此自然 fallback 到 `index`(刻意遷移,
  *  不寫搬移碼)。其餘舊值仍各自還原到對應 tab;「無值」時的 fallback 同樣是
  *  `index` —— 該頁自 index-board SC-1 起排第一顆。 */
 function initialTab(): Tab {
