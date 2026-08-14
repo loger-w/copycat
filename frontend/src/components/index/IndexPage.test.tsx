@@ -125,6 +125,11 @@ function stubFetch(): void {
         return new Response(JSON.stringify({ industry: "", sub_industry: null, members: [] }));
       }
       if (u.includes("/api/market/sector")) return new Response(JSON.stringify(SECTOR_STATE));
+      // 訊號時間軸 subtab 的 baseline。缺這條會落到 `DK_BODY`,`signals` 是 undefined
+      // → 時間軸走「取數失敗」分支,而那與「路由沒寫」在畫面上同形(review A-3)。
+      if (u.includes("/api/stock/signals/today")) {
+        return new Response(JSON.stringify({ signals: [] }));
+      }
       return new Response(JSON.stringify(DK_BODY));
     }),
   );
@@ -341,6 +346,37 @@ describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
     expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("sector");
   });
 
+  // (review B-4)(s2) 只鎖了「類股強弱」一顆的點擊路徑,timeline / corr 兩顆的
+  // 掛載與寫入值零覆蓋 —— 寫錯字串(如寫成 "signal")在 (s3)(s4) 都測不出來:
+  // 非法值一律 fallback 漲跌停,症狀只有「切過去、重整卻回到漲跌停」。
+  it("(s2b) 點「訊號時間軸」→ timeline 掛載、sector 卸載,偏好寫入 timeline", async () => {
+    renderPage(TXF, BREADTH);
+    fireEvent.click(subtab("類股強弱"));
+    await screen.findByTestId("sector-section");
+
+    fireEvent.click(subtab("訊號時間軸"));
+
+    expect(await screen.findByTestId("signal-timeline")).toBeTruthy();
+    expect(screen.queryByTestId("sector-section")).toBeNull();
+    expect(subtab("訊號時間軸").getAttribute("aria-selected")).toBe("true");
+    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("timeline");
+  });
+
+  it("(s2c) 再點「相關係數」→ CorrPage 掛載,偏好寫入 corr", async () => {
+    renderPage(TXF, BREADTH);
+    fireEvent.click(subtab("訊號時間軸"));
+    await screen.findByTestId("signal-timeline");
+
+    fireEvent.click(subtab("相關係數"));
+
+    // lazy:等 stub 真 mount,不用 `queryBy === null`(suspend 與沒 render 同形)
+    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+    expect(counts.mount).toBe(1);
+    expect(screen.queryByTestId("signal-timeline")).toBeNull();
+    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
+    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("corr");
+  });
+
   it("(s3) 預存 corr → 重新 mount 停在相關係數(記憶與還原)", async () => {
     window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
     renderPage(TXF, BREADTH);
@@ -379,6 +415,29 @@ describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
     expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("limit-list")).toBeTruthy();
     expect(screen.getByTestId("breadth-band")).toBeTruthy();
+  });
+
+  // (review B-3)SC-3 的另一半:setItem 也會拋(Safari 私密視窗 / storage 被政策鎖),
+  // 而它在 onClick 裡 —— 沒接住就是「點一下整頁炸掉」。分流同 (s5):只對本頁那把 key
+  // 拋,全域 throw 會先炸在 scope 外的既有裸 setItem。
+  it("(s5b) setItem 對 subtab key 拋例外 → 切換照樣生效,不炸", async () => {
+    const orig = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === INDEX_SUBTAB_KEY) throw new Error("QuotaExceededError");
+      orig.call(this, key, value);
+    });
+
+    renderPage(TXF, BREADTH);
+    fireEvent.click(subtab("類股強弱"));
+
+    expect(await screen.findByTestId("sector-section")).toBeTruthy();
+    expect(subtab("類股強弱").getAttribute("aria-selected")).toBe("true");
+    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByTestId("limit-list")).toBeNull();
   });
 
   it("(s6) subtab 列位於騰落線之後", () => {
