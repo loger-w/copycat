@@ -138,6 +138,26 @@ class TestIndexOverlay:
             assert r.status_code == 503
             assert r.json()["detail"]["error"] == "NOT_READY"
 
+    def test_shares_daily_slot_with_market_bars(self) -> None:
+        """R2-P0-1 的核心決策機驗:overlay 與 `/api/market/bars/TWSE?tf=D` **真共用**
+        `IX0001|L` 槽 —— 同日兩端點只發一次 DK 取數。
+
+        單看 overlay 自己那幾條,退化成「overlay 開了自己的獨立槽」照樣全綠(各抓各的、
+        各自命中);只有跨端點的取數計數看得出來。順帶斷 market bars 拿到的是 overlay
+        抓進來的那份(bars 非空 + tag 沿用),否則共用可能是「共用了一格空的」。
+        """
+        client, fake = make_client(FakeIndexSource(daily_bars=_OVERLAY_DAILY))
+        with client:
+            assert client.get("/api/index/overlay").status_code == 200
+            assert fake is not None
+            assert len(fake.calls) == 1
+            r = client.get("/api/market/bars/TWSE?tf=D")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["bars"], "共用槽該回 overlay 已抓進來的日 K,不是空手"
+            assert body["meta"]["source"] == "tc4_dk", "tag 也存在同一格(daily_tag_put)"
+        assert len(fake.calls) == 1, "同日兩端點共用 IX0001|L → DK 取數只發一次"
+
     def test_does_not_pollute_stock_session_slot(self, tmp_path: Path) -> None:
         """W-12 / W-14:overlay 寫的是 `IX0001|L`,不得碰 stock session 的裸 `IX0001`。
 
