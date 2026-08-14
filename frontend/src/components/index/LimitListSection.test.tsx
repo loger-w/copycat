@@ -106,6 +106,9 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  // spy 還原放 afterEach(不是測試主體末尾):斷言先炸時,主體末尾的 mockRestore
+  // 永遠不會執行,Storage.prototype 的 spy 會漏到後續測試(review A-2)。
+  vi.restoreAllMocks();
 });
 
 // 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)——
@@ -127,8 +130,9 @@ describe("LimitListSection 掛載即工作(subtab 改版)", () => {
 
     const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
     expect(keys).not.toContain("copycat-limit-list-open");
-    getItem.mockRestore();
-    setItem.mockRestore();
+    // 正向對照:本元件確實會碰 storage(LimitListBody 讀 filter key),證明 spy 真的
+    // 在錄 —— 少了這一條,`not.toContain` 對「spy 沒掛上」也會 vacuously 通過(review B-1)。
+    expect(keys).toContain(LIMIT_LIST_FILTER_KEY);
   });
 });
 

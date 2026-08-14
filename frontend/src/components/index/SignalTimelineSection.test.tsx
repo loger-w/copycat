@@ -90,6 +90,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // spy 還原放 afterEach(不是測試主體末尾):斷言先炸時,主體末尾的 mockRestore
+  // 永遠不會執行,Storage.prototype 的 spy 會漏到後續測試(review A-2)。
+  vi.restoreAllMocks();
 });
 
 // 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)。
@@ -109,10 +112,10 @@ describe("SignalTimelineSection 掛載即工作(subtab 改版)", () => {
     renderSection();
     await screen.findByTestId("signal-timeline-body");
 
+    // 元件層真契約是「零 storage 存取」(本元件沒有任何偏好要記)—— 只寫
+    // `not.toContain(舊鍵)` 在 keys 恆空時是 vacuous:舊鍵改名或 spy 沒掛上都照樣綠。
     const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
-    expect(keys).not.toContain("copycat-signal-timeline-open");
-    getItem.mockRestore();
-    setItem.mockRestore();
+    expect(keys).toEqual([]);
   });
 });
 

@@ -435,7 +435,8 @@ describe("App(期貨 tab T15)", () => {
     renderApp();
     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
     // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;台股綜合 R1(SC-1)起
-    // 「相關係數」併入首顆分頁內的收合區塊,不再是獨立 tab。
+    // 「相關係數」併入首顆分頁內(2026-08-14 起是該頁的一顆 subtab,改版前為收合
+    // 區塊),不再是獨立 tab。
     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
       .getAllByRole("tab")
       .map((el) => el.textContent);

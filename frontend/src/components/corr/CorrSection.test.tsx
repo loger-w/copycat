@@ -35,19 +35,21 @@ vi.mock("@/components/corr/CorrPage", async () => {
   return { default: Stub };
 });
 
-const wsSpy = vi.fn();
-
 beforeEach(() => {
   window.localStorage.clear();
   counts.mount = 0;
   counts.unmount = 0;
-  wsSpy.mockClear();
-  vi.stubGlobal("WebSocket", wsSpy);
+  // 匿名 stub,純粹擋 jsdom 真的去連線 —— 「零 WS」的鎖在 IndexPage.test.tsx,
+  // 本檔不對它斷言(review B-5)。
+  vi.stubGlobal("WebSocket", vi.fn());
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // spy 還原放 afterEach(不是測試主體末尾):斷言先炸時,主體末尾的 mockRestore
+  // 永遠不會執行,Storage.prototype 的 spy 會漏到後續測試(review A-2)。
+  vi.restoreAllMocks();
 });
 
 describe("CorrSection", () => {
@@ -60,10 +62,10 @@ describe("CorrSection", () => {
     expect(counts.mount).toBe(1);
     expect(screen.queryByRole("button", { name: /相關係數/ })).toBeNull();
 
+    // 元件層真契約是「零 storage 存取」(殼只做 lazy + Suspense)—— 只寫
+    // `not.toContain(舊鍵)` 在 keys 恆空時是 vacuous:舊鍵改名或 spy 沒掛上都照樣綠。
     const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
-    expect(keys).not.toContain("copycat-corr-open");
-    getItem.mockRestore();
-    setItem.mockRestore();
+    expect(keys).toEqual([]);
   });
 
   it("(d) unmount 把 CorrPage 一起收掉(hook cleanup 才會斷線)", async () => {
