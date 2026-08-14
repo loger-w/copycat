@@ -6,6 +6,7 @@ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { fromSnapshot } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
+  EDGE_LABEL_H,
   lastPoint,
   minuteToX,
   R_AXIS_W,
@@ -1237,8 +1238,9 @@ describe("StockIntradayChart 即時價位標籤(SC-1/2/3)", () => {
     const x = Number(label.getAttribute("x"));
     expect(end.x).toBeCloseTo(800 - R_AXIS_W, 6); // 前提:末點真的貼在右界
     expect(x).toBeLessThan(end.x + 4);
-    // 標籤寬 ~34px(最寬內容 "1005.0" @0.5625rem)整塊留在繪圖區內
-    expect(x + 34).toBeLessThanOrEqual(800 - R_AXIS_W);
+    // 標籤寬用 **fmt 口徑**的 40(review B-4):VWAP 是統計量幾乎必帶兩位小數,
+    // 千元帶最長 7 字(「1405.67」);拿 fmtTickPrice 口徑的 34 當寬,字尾會溢進右緣帶
+    expect(x + 40).toBeLessThanOrEqual(800 - R_AXIS_W);
   });
 
   // ---- SC-1:MA 即時價位標籤 ----
@@ -1346,6 +1348,109 @@ describe("StockIntradayChart 即時價位標籤(SC-1/2/3)", () => {
         !(r.getAttribute("data-testid") ?? "").startsWith("y-tick-lamp"),
     );
     expect(drawnRects.length).toBe(0);
+  });
+
+  // ---- review B-6:obstacle 路徑(極值文字/圓落在右緣區 → MA 標籤讓位)----
+
+  /** 極值摸點在 13:25(x ≈ 747,落右緣區)且日高 2331 貼著 MA5 2330(相差 ~0.5px)。
+   *  未修前的兩個症狀這條都抓得到:(a) 判準漏窄帶 → obstacle 集空 → 標籤壓在極值
+   *  文字上;(b) 只避文字不避圓 → 「讓開文字」恰好把標籤推到圓上(review A-2/B-1/B-3)。 */
+  const LATE_HIGH = fromSnapshot({
+    code: "2330", seq: 2,
+    last: { p: 2_330_000, t: "13:25:10.000", cum_vol: 15 },
+    vwap: 2_330_000,
+    minutes: {
+      "541": { c: 2_320_000, v: 10, i: 0, o: 10, u: 0, h: 2_325_000, l: 2_315_000 },
+      "805": { c: 2_330_000, v: 5, i: 0, o: 5, u: 0, h: 2_331_000, l: 2_320_000 },
+    },
+    ticks: [], book: null,
+    high: 2_331_000, low: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  it("日高在右緣區且貼近 MA 線 → MA 標籤讓位(與極值文字/圓中心距都 ≥ EDGE_LABEL_H)", async () => {
+    const { container } = wrap(<StockIntradayChart accum={LATE_HIGH} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const g = geomOf(LATE_HIGH);
+    // 極值文字的**中心** = baseline − 0.35em(≈3px;極值 text 無 dy);圓心 = mark.y
+    const highLabel = container.querySelector('[data-testid="day-high-label"]')!;
+    const textCenter = Number(highLabel.getAttribute("y")) - 3;
+    const circleCenter = g.toY(2_331_000);
+    for (const id of ["edge-price-ma5", "edge-price-ma20"]) {
+      const y = Number(container.querySelector(`[data-testid="${id}"]`)!.getAttribute("y"));
+      expect(Math.abs(y - textCenter)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+      expect(Math.abs(y - circleCenter)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    }
+  });
+
+  it("對照組:日高在左半場 → MA 標籤原位不動(不無故位移)", async () => {
+    // 同一組價位,只把摸點移回 09:01(x ≈ 39,遠離右緣)
+    const earlyHigh = fromSnapshot({
+      code: "2330", seq: 2,
+      last: { p: 2_330_000, t: "09:02:10.000", cum_vol: 15 },
+      vwap: 2_330_000,
+      minutes: {
+        "541": { c: 2_320_000, v: 10, i: 0, o: 10, u: 0, h: 2_331_000, l: 2_315_000 },
+        "542": { c: 2_330_000, v: 5, i: 0, o: 5, u: 0, h: 2_330_000, l: 2_320_000 },
+      },
+      ticks: [], book: null,
+      high: 2_331_000, low: null,
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={earlyHigh} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const g = geomOf(earlyHigh);
+    expect(
+      Number(container.querySelector('[data-testid="edge-price-ma5"]')!.getAttribute("y")),
+    ).toBeCloseTo(g.toY(2_330_000), 6);
+  });
+
+  // ---- review B-7:spec edge case 2 / 6 的補鎖 ----
+
+  it("分鐘 c>0 v=0(試撮窗樣態)→ 主圖照畫、vwapLine 空 → 無 VWAP 標籤(不崩)", () => {
+    // priceLine 不看量、vwapLine 只在累計量 > 0 才 push —— 「vwapLine 空」不等於
+    // 「尚無成交」分支,`?? null` 的守門就是為這條路徑存在
+    const noVol = fromSnapshot({
+      code: "2330", seq: 1,
+      last: null,
+      vwap: 2_380_000, // 後端 VWAP 可得,標籤缺席的原因純粹是 vwapLine 空
+      minutes: { "541": { c: 2_380_000, v: 0, i: 0, o: 0, u: 0 } },
+      ticks: [], book: null,
+      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={noVol} />);
+    expect(screen.queryByText("尚無成交")).toBeNull();
+    expect(container.querySelector("polyline")).toBeTruthy();
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeNull();
+  });
+
+  it("退化域(upper === lower → toY 常數)→ 兩顆 MA 標籤同 y 起步,避讓後不疊、不崩", async () => {
+    overlayResponse = { cdp: null, ma5: 2_330_000, ma20: 2_330_000, date: "2026-07-25" };
+    const flat = fromSnapshot({
+      code: "2330", seq: 1,
+      last: { p: 2_330_000, t: "09:01:30.000", cum_vol: 5 },
+      vwap: 2_330_000,
+      minutes: { "541": { c: 2_330_000, v: 5, i: 0, o: 5, u: 0 } },
+      ticks: [], book: null,
+      // 域恰為 [lower, upper] = [X, X]:MA 要「域內」就必須恰等於 X
+      meta: { name: "一字盤", ref: 2_330_000, upper: 2_330_000, lower: 2_330_000, y_vol: 100 },
+    });
+    const { container } = wrap(<StockIntradayChart accum={flat} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const y5 = Number(container.querySelector('[data-testid="edge-price-ma5"]')!.getAttribute("y"));
+    const y20 = Number(
+      container.querySelector('[data-testid="edge-price-ma20"]')!.getAttribute("y"),
+    );
+    expect(y20 - y5).toBeGreaterThanOrEqual(EDGE_LABEL_H);
   });
 });
 
