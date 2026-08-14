@@ -51,7 +51,9 @@ function persistGroupName(name: string): void {
  *  列軌下限 `minmax(8rem,1fr)` 不可省:Tailwind 的 `grid-rows-N` = `repeat(N,minmax(0,1fr))`,
  *  列軌可被壓到低於內容高,卡片會**溢軌與下一列重疊**而不是乾淨捲動。過矮視窗時
  *  8rem(標題列 + 圖 80px + padding)撐出的內容高 > 容器高,改走外層捲軸降級。
- *  n>16 不給列軌:固定 4 欄、列高 auto(圖維持 80px 基準)往下捲。 */
+ *  n>16 不給列軌:固定 4 欄、列高 auto —— auto 軌在有確定容器高(flex-1)時會被
+ *  align-content 預設 stretch 等量撐高,所以容器 base class 帶 `content-start`
+ *  (review A-1),列高才真的回到內容高(圖 80px 基準)、超出才捲。 */
 export function gridShape(n: number): string {
   if (n <= 4) return "grid-cols-2 [grid-template-rows:repeat(2,minmax(8rem,1fr))]";
   if (n <= 6) return "grid-cols-3 [grid-template-rows:repeat(2,minmax(8rem,1fr))]";
@@ -223,11 +225,14 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
       ) : (
         // min-h-0 不可省:少了它 flex 子項不會縮,`overflow-y-auto` 算不出可捲高度。
         // flex-1 = 佔滿 main 的剩餘高 —— 矩陣的列軌是 1fr,沒有確定的容器高就無從均分。
+        // content-start 是 >16 分支的成立前提(review A-1):auto 列軌 + 確定容器高時
+        // align-content 預設 stretch 會把列等量撐高(17~24 檔不出捲軸、圖高漂離 80px);
+        // 對 1fr 矩陣分支則是 no-op(free space 已被軌道吃光)。
         // ≤16 檔:列高均分吃滿中區、不捲動;>16 檔:4 欄、列高回到基準(圖 80px)往下捲。
         <div
           data-testid="group-grid"
           className={cn(
-            "grid min-h-0 flex-1 gap-2 overflow-y-auto",
+            "grid min-h-0 flex-1 content-start gap-2 overflow-y-auto",
             gridShape(codes.length),
           )}
         >
