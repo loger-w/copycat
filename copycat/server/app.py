@@ -1242,6 +1242,35 @@ def create_app(
     async def index_state(request: Request) -> dict:
         return _index(request).state()
 
+    @app.get("/api/index/overlay")
+    async def index_overlay(request: Request) -> dict:
+        """加權的 CDP / 日均線(index-overlay SC-5);形狀同 `/api/stock/overlay/{code}`。
+
+        日 K 走 **`build_period`**(鍵自動成 `IX0001|L`)= 與 `/api/market/bars/TWSE?tf=D`
+        真共用同一格,同日兩端點只發一次 DK 取數。**不得改走 `build_daily` 的裸
+        `IX0001`** —— 那格是 `/api/stock/bars/IX0001`(**stock** session)的,共用它就
+        重開了 `|M` / `|L` 後綴當初堵住的跨 session 汙染洞(W-12 / W-14)。
+
+        另**不經 `overlay_cache`**(那是個股 overlay 專屬):日 bar 已在 `bars_cache`,
+        `build_overlay` 是常數時間,再疊一層只是多一份會漂的狀態。
+
+        bars 空(TC4 不可用)→ `build_overlay` 自然回全 null + 200:CDP/MA 是可降級的
+        疊線,把它做成 5xx 會讓前端整張圖跟著紅。引擎缺席才是 503(`_index` 既有閘)。
+        """
+        index = _index(request)
+
+        async def tagged(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
+            return TaggedBars(*await index.bars_range(tf_, s, e))
+
+        # today = 本機日界(= 台北,部署綁本機;同 stock overlay 的 design R6/R13)。
+        # 只取一次:兩處各自 `today()` 的話,跨午夜那一瞬會用兩個不同的日子。
+        today = _date.today()
+        bars, _tag = await build_period(tagged, bars_cache, "IX0001", today, "D")
+        daily: list[DailyBar] = [
+            {"date": b["t"][:10], "high": b["h"], "low": b["l"], "close": b["c"]} for b in bars
+        ]
+        return build_overlay(daily, f"{today:%Y-%m-%d}")
+
     # ---- market(大盤 K 線;index-board SC-4/5/6)----
 
     @app.get("/api/market/bars/{key}")
