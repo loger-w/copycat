@@ -1,4 +1,15 @@
-﻿## 2026-08-14(mod/index-overlay 收尾沉澱)
+﻿## 2026-08-14(mod/overview-subtabs 收尾沉澱)
+
+- [ ] **tablist 的 ARIA 半套(台股綜合 + RightRail 同型)**(review A-4):兩處
+  `role="tablist"`/`role="tab"` 都沒有 `aria-controls` / panel 的 `role="tabpanel"` +
+  `aria-labelledby` / roving tabindex(方向鍵不能切)。IndexPage 新列是照 RightRail
+  樣板抄的,非本輪回歸 — 修就兩處一併(樣板級決定),獨立小輪。
+- [ ] **RightRail `initialTab()` 與 MarketPane 四處裸 `localStorage.getItem` 無 try/catch**
+  (本輪 out-of-scope 既有債,round-2 P0-1 因此限定 (s5) 只能按 key 部分 stub):Safari
+  私密視窗下是白屏風險面;修法照四殼/IndexPage `initialSubTab()` 慣例包 try/catch,
+  純 🔵 順手批。
+
+## 2026-08-14(mod/index-overlay 收尾沉澱)
 
 - [ ] **`localYmd()` 兩份重複**(useStockOverlay.ts / useIndexOverlay.ts 各一份,包 C
   刻意不動既有檔以免擴散 diff):抽到 `@/lib/format` 或 `@/lib/utils` 單一來源;
