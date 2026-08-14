@@ -337,7 +337,10 @@ async def test_heal_escalates_window_variant_until_data_returns() -> None:
     """SC-2:無進展的下一發 heal 必須換窗口字串(variant+1)—— 重用同一個
     (session, symbol, 1K, 窗口)訂閱逃不出 TC4 的 stub 態(repro 實證:換窗口或換
     session 才逃得掉)。variant 首次帶回資料 → minutes 恢復,且下一則廣播帶 minutes
-    全量一次(#45 的送達行為銜接),退避與 variant 一併歸零。"""
+    全量一次(#45 的送達行為銜接),退避歸零。
+
+    **variant 停在成功值不歸零**(review L1-P1-3):0 號窗口已證明毒化,回到它等於
+    每兩發浪費一發;天然全新的窗口字串只有換交易日才有(`_swap_day` 才歸零)。"""
     fake = FakeIndexSource()  # 舊窗口(variant 0)恆空
     fake.variant_minutes = {1: {"0959": 2_000}}  # 換一次窗口就拿得到
     eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
@@ -350,10 +353,96 @@ async def test_heal_escalates_window_variant_until_data_returns() -> None:
         assert eng.state()["twse"]["minutes"] == {"0959": 2_000}
         # boot=0、首發 heal 沿用 0(無進展)、次發換 1(命中)
         assert fake.window_variants[:3] == [0, 0, 1]
-        assert eng._heal_variant == 0  # type: ignore[attr-defined]
+        assert eng._heal_variant == 1  # type: ignore[attr-defined]  # 黏在成功值(L1-P1-3)
         assert eng._heal_interval is None  # type: ignore[attr-defined]
     finally:
         await eng.close()
+
+
+async def test_heal_partial_progress_still_reaches_clients() -> None:
+    """SC-6(review L1-P1-1 + L1-P1-2):進展 = **新分鐘鍵**,不是「已追上牆鐘」。
+
+    推播盤中死、1K 只回補到 t-10 分(仍 lag)的那條路回的是真資料:以絕對 lag 判
+    「無進展」會把它扣在引擎內不廣播(回退 #45 的送達保證),還順手把 variant 階梯
+    燒在健康路徑上。有新鍵 → minutes 照送前端、variant 不動(該窗口在產出)。"""
+    fake = FakeIndexSource()  # boot 那發回空
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    await eng.start()  # _heal_secs 維持預設 60 → 本測試窗內只發得出一次 heal
+    try:
+        fake.day_minutes = {"0901": 1_000, "0950": 2_000}  # 有新鍵,但落後牆鐘 10 分
+        stream = eng.stream()
+        msg = await asyncio.wait_for(stream.__anext__(), timeout=2)
+        assert msg["twse"]["minutes"] == {"0901": 1_000, "0950": 2_000}
+        assert eng._heal_variant == 0  # type: ignore[attr-defined]
+        assert fake.window_variants == [0, 0]  # boot + 首發 heal,都還在 0 號窗口
+    finally:
+        await eng.close()
+
+
+async def test_frozen_stub_value_drift_is_not_progress(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SC-6(review L1-P1-2):凍結 stub 的 Close 隨現價漂 —— 同鍵不同值不是進展。
+
+    以「fetch 有沒有回東西」或「值有沒有變」判定,毒化訂閱的每一發都像治好了;
+    只有鍵集合差量看得出「一直是同一根」→ 判無進展、換窗口。"""
+    fake = FakeIndexSource()
+    # 第一發(boot)拿到那根 stub;第二發(heal)同鍵、Close 漂了
+    fake.minutes_sequence = [{"0901": 23_000_000}, {"0901": 23_050_000}]
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
+        await eng.start()
+        try:
+            stream = eng.stream()
+            await asyncio.sleep(0.3)
+            assert fake.fetch_minutes_calls == 2  # boot + 一發 heal
+            with pytest.raises(TimeoutError):  # 無進展 → 不設 dirty → 零廣播
+                await asyncio.wait_for(stream.__anext__(), timeout=0.1)
+            assert eng._heal_variant == 1  # type: ignore[attr-defined]
+        finally:
+            await eng.close()
+    assert "index 分時自癒無進展" in caplog.text
+
+
+async def test_lag_recovery_keeps_variant_and_swap_day_resets_it() -> None:
+    """SC-6(review L1-P1-3):覆蓋度追上只歸零**退避**,不歸零 variant。
+
+    0 號窗口一旦毒化就一直是毒的,恢復時打回 0 等於推播死的日子每兩發浪費一發在
+    已知死窗上。天然全新的窗口字串只有換交易日才有 → 只有 `_swap_day` 歸零。"""
+    fake = FakeIndexSource(day_minutes={"0959": 2_000})  # 已追上牆鐘 10:00
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    await eng.start()
+    try:
+        eng._heal_variant = 3  # type: ignore[attr-defined]  # 已爬過三階
+        eng._heal_interval = 240.0  # type: ignore[attr-defined]
+        await asyncio.sleep(0.1)  # 走過廣播 loop 的「覆蓋度跟上」分支
+        assert eng._heal_interval is None  # type: ignore[attr-defined]  # 退避歸零(既有)
+        assert eng._heal_variant == 3  # type: ignore[attr-defined]  # variant 黏住
+        eng._pending_date = "2026-07-29"
+        eng._swap_day(backfill={})
+        assert eng._heal_variant == 0  # type: ignore[attr-defined]
+    finally:
+        await eng.close()
+
+
+async def test_window_variant_cap_logs_separately(caplog: pytest.LogCaptureFixture) -> None:
+    """SC-6(review L1-P2-2):階梯用盡與「還在爬」必須在 log 上可分。
+
+    `fetch_day_minutes` 的 end hour 封頂 23(= variant 17),之後每一發都是同一個
+    窗口字串、再無逃逸維度,而「無進展」那行字面上與第 1 次一模一樣 —— 值班的人
+    看不出該不該換手段(換 session / 重啟 TC4)。"""
+    fake = FakeIndexSource()  # 恆空 = 恆無進展
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
+        await eng.start()
+        try:
+            eng._heal_variant = 16  # type: ignore[attr-defined]  # 下一發無進展就踏上封頂階
+            await asyncio.sleep(0.3)
+            assert fake.window_variants[-1] == 16
+            assert eng._heal_variant == 17  # type: ignore[attr-defined]
+        finally:
+            await eng.close()
+    assert "index 分時自癒:窗口階梯已達封頂" in caplog.text
 
 
 async def test_heal_throttled_between_attempts() -> None:
