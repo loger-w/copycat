@@ -77,6 +77,7 @@ interface IntradayProps {
   onToggle: (key: keyof ChartToggles, value: boolean) => void;
   /** `/api/index/overlay` 的結果;未回 → null。查詢由 MarketChart 層無條件呼叫。 */
   overlay: StockOverlay | null;
+  /** 疊線查詢失敗**且該查詢當前有效**(閘由 caller 併入,見那裡的 why)。 */
   overlayError: boolean;
 }
 
@@ -266,9 +267,8 @@ export function MarketChart({
   );
   // **無條件呼叫**(rules of hooks):閘全收在 enabled 裡 —— 只有加權分時、且至少一種
   // 疊線開著才打端點。櫃買無日 K 來源(已拍板跳過),K 線模式不畫疊線。
-  const overlayQ = useIndexOverlay(
-    mode === "intraday" && marketKey === "TWSE" && (toggles.cdp || toggles.ma),
-  );
+  const overlayGate = mode === "intraday" && marketKey === "TWSE" && (toggles.cdp || toggles.ma);
+  const overlayQ = useIndexOverlay(overlayGate);
 
   if (mode === "intraday") {
     if (series === null) {
@@ -282,7 +282,11 @@ export function MarketChart({
         toggles={toggles}
         onToggle={onToggle}
         overlay={overlayQ.data ?? null}
-        overlayError={overlayQ.isError}
+        // **error 判定必須跟著 enabled 閘走**:TanStack 在 `enabled` 轉 false 時
+        // 既不清 status 也不跑 refetchInterval —— 直接吃 `isError` 的話,「503 一次
+        // + 使用者把 CDP/MA 都關掉」會讓兩顆鈕永遠 disabled(自己再也開不回來,
+        // 只有重新整理解得開)。閘關著時本來就沒在請求,自然也沒有失敗可言。
+        overlayError={overlayGate && overlayQ.isError}
       />
     );
   }

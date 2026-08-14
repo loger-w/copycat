@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarketChart } from "@/components/index/MarketChart";
@@ -161,6 +161,81 @@ describe("MarketChart toggle 列(SC-4 / 決策 2)", () => {
       const btn = screen.getByRole("button", { name: label });
       expect(btn.getAttribute("title")).toBe("無日線資料");
     }
+  });
+
+  it("200 但三欄全 null(TC4 沒開)→ CDP / MA 反灰帶「無日線資料」", async () => {
+    stub({ cdp: null, ma5: null, ma20: null, date: null });
+    renderChart({ t: toggles({ cdp: true, ma: true }) });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "CDP" }).hasAttribute("disabled")).toBe(true),
+    );
+    for (const label of ["CDP", "MA"]) {
+      const btn = screen.getByRole("button", { name: label });
+      expect(btn.hasAttribute("disabled")).toBe(true);
+      expect(btn.getAttribute("title")).toBe("無日線資料");
+    }
+  });
+
+  it("cdp null 但 ma5 有值 → CDP 反灰、MA 仍可按(edge case 3 同個股語意)", async () => {
+    stub({ cdp: null, ma5: 23_020_000, ma20: null, date: "2026-08-13" });
+    renderChart({ t: toggles({ cdp: true, ma: true }) });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "CDP" }).hasAttribute("disabled")).toBe(true),
+    );
+    expect(screen.getByRole("button", { name: "CDP" }).getAttribute("title")).toBe("無日線資料");
+    const ma = screen.getByRole("button", { name: "MA" });
+    expect(ma.hasAttribute("disabled")).toBe(false);
+    expect(ma.getAttribute("title")).toBeNull();
+  });
+});
+
+describe("MarketChart error 態不鎖死 toggle 閘(review G-2)", () => {
+  /** 同一個 QueryClient 下換 toggles 重繪 —— `renderChart` 每次新建 client,
+   *  「error 殘留 + 閘關掉」這條路只有沿用同一份 query state 才走得到 */
+  function rerenderable(t: ChartToggles) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+    });
+    const el = (cur: ChartToggles) => (
+      <QueryClientProvider client={client}>
+        <MarketChart
+          marketKey="TWSE"
+          mode="intraday"
+          name="加權指數"
+          series={series()}
+          toggles={cur}
+          onToggle={onToggle}
+        />
+      </QueryClientProvider>
+    );
+    const onToggle = vi.fn();
+    const view = render(el(t));
+    return { onToggle, rerender: (next: ChartToggles) => view.rerender(el(next)) };
+  }
+
+  it("503 後把 toggle 全關 → CDP / MA 鈕恢復可按,點得回請求路徑", async () => {
+    stub({ detail: { error: "NOT_READY" } }, 503);
+    const { onToggle, rerender } = rerenderable(toggles({ cdp: true, ma: true }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "CDP" }).hasAttribute("disabled")).toBe(true),
+    );
+    const overlayCalls = () => urls.filter((u) => u === "/api/index/overlay").length;
+    const before = overlayCalls();
+
+    // toggle 全關 → query enabled=false。TanStack 不會因此清掉 error status,
+    // refetchInterval 也停 → 沒有閘的話這兩顆鈕從此永久 disabled(重整才解)
+    rerender(toggles({ cdp: false, ma: false }));
+    for (const label of ["CDP", "MA"]) {
+      expect(screen.getByRole("button", { name: label }).hasAttribute("disabled")).toBe(false);
+    }
+
+    // 點得下去 = 使用者自己就能把疊線開回來
+    fireEvent.click(screen.getByRole("button", { name: "CDP" }));
+    expect(onToggle).toHaveBeenCalledWith("cdp", true);
+
+    // 開回來 → 閘重開,請求路徑真的再走一次(不是只有鈕看起來能按)
+    rerender(toggles({ cdp: true, ma: false }));
+    await waitFor(() => expect(overlayCalls()).toBeGreaterThan(before));
   });
 });
 
