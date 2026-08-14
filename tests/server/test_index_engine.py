@@ -228,14 +228,17 @@ async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
     """自癒回補必須送達已連線前端:廣播 payload 平常是 scalar-only(無 minutes),
     heal 後若不帶一次 minutes 全量,前端只有換日/重連才 refetch —— 引擎治好了、
     畫面上的線卻要等使用者重整才回來。retry 成功後下一則廣播帶 minutes 一次,
-    之後回到 scalar-only(頻寬慣例不變)。"""
+    之後回到 scalar-only(頻寬慣例不變)。
+
+    治具的 minutes 必須真的**追上牆鐘**(fix/index-line-vanish 起,heal 的成功判準是
+    產出面):只回一根 0901 而牆鐘 10:00 是「無進展」,那條路徑刻意不帶 minutes 出去。"""
     fake = FakeIndexSource()
     eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
     eng._heal_secs = 0.05  # type: ignore[attr-defined]
     await eng.start()
     try:
         stream = eng.stream()
-        fake.day_minutes = {"0901": 1_000}
+        fake.day_minutes = {"0901": 1_000, "0959": 2_000}
         deadline = asyncio.get_running_loop().time() + 2.0
         carried: dict | None = None
         while asyncio.get_running_loop().time() < deadline:
@@ -243,7 +246,7 @@ async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
             if "minutes" in msg["twse"]:
                 carried = msg["twse"]["minutes"]
                 break
-        assert carried == {"0901": 1_000}
+        assert carried == {"0901": 1_000, "0959": 2_000}
         # 之後回到 scalar-only:觸發一則 dirty 廣播,不得再帶 minutes
         assert fake.on_message is not None
         fake.on_message(_quote(filled="20000"))  # 02:00 UTC → key 1001,跟上牆鐘不再觸發 heal
