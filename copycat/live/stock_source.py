@@ -520,14 +520,22 @@ class StockQuoteSource(TC4QuoteSource):
     # `_collect_history` 已上提到基底 `TC4QuoteSource`(index-board R-3):futures_source
     # 的 K 線路徑要用同一份收割/退避/deadline 邏輯,各寫一份必然漂移。
 
-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
+    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]:
         """當日 1K → {HHMM(台北,bar 終點標記): close 毫點}(index-board SC-4)。
 
         1K Time 為 UTC 終點標記(實測 09:01 起);域 0901–1330 inclusive,
-        1331–1335 clamp "1330"(收盤補正),其餘丟棄(design F5/IR4)。"""
+        1331–1335 clamp "1330"(收盤補正),其餘丟棄(design F5/IR4)。
+
+        `window_variant` = **逃出毒化 history 訂閱**的唯一便宜維度:TC4 的 history
+        訂閱一旦在「窗內無資料」時建立就進 stub 態,重送 SubHistory 逃不掉,實證逃得掉
+        的只有換窗口字串或換 session(2026-08-14 repro)。窗口 key 是
+        (session, symbol, ktype, start, end) → end hour 每 +1 就是一個全新訂閱。
+        start 不動、只推 end(`min(6 + variant, 23)`);`variant=0` 與原行為完全相同。"""
         self._ensure_connected()
         sym = stock_symbol(code)
         start, end = stock_window(self._trade_date)
+        if window_variant > 0:
+            end = f"{start[:8]}{min(6 + window_variant, 23):02d}"
         rows = self._collect_history(sym, "1K", start, end).rows
         minutes: dict[str, int] = {}
         skipped = 0
