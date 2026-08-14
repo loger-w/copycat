@@ -248,8 +248,11 @@ describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
     expect(screen.getByText("加權指數")).toBeTruthy();
     expect(screen.getByText("42039.92")).toBeTruthy();
     expect(screen.getByText(/-1594\.27/)).toBeTruthy();
-    expect(screen.getByText(/高 43221\.93/)).toBeTruthy();
-    expect(screen.getByText(/昨收 43634\.19/)).toBeTruthy();
+    // 昨收改斷言在**同一個標題列元素**上:分時圖右緣現在也有一顆「昨收 <值>」標籤
+    // (SC-6),裸 getByText 會撞兩個元素。本條要驗的是「標題列印得出昨收」,不是
+    // 「全畫面只有一處昨收」—— 收斂 scope,不放寬語意。
+    const quote = screen.getByText(/高 43221\.93/);
+    expect(quote.textContent).toContain("昨收 43634.19");
   });
 
   it("Quote 漲跌整串:跌用負號(characterization)", () => {
