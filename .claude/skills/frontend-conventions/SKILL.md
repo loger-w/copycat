@@ -45,6 +45,18 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
 - **`useContainerSize` 的 ref 必掛「恆存 wrapper」**(loading / unavailable / data 三態都 mount 的元素):hook null-ref 時 early-return 且永不重跑,ref 若只掛 data 分支,冷載入會永遠 0×0 空白。regression lock 寫法見 skill `frontend-testing`。Trigger:元件用 useContainerSize 且有多態渲染時。
 - **延遲 mount 的容器(bottom sheet / modal)內用 useContainerSize,ref + hook 必須宣告在「隨容器 mount 的元件」內部**(掛 parent 的 ref 會踩 null-ref 永不重跑陷阱)。ChipBubbleView 的 DetailPanel 是樣板。Trigger:sheet / dialog 內放需量測的 SVG 圖表。
 
+## Grid 列軌高度(2026-08-14 group-grid 矩陣沉澱)
+
+- **Tailwind `grid-rows-N` = `repeat(N,minmax(0,1fr))`,列軌可被壓到低於內容高**:item
+  (overflow visible)溢軌會與下一列**重疊**,不是乾淨捲動。要「均分但有底線」用靜態任意值
+  `[grid-template-rows:repeat(N,minmax(8rem,1fr))]`(仍是字面值,JIT 掃得到),壓到下限
+  改走外層 `overflow-y-auto` 真捲軸。Trigger:寫任何固定列數的均分 grid。
+- **grid 容器有確定高度(flex-1 / h-*)且列軌是 auto 時,`align-content` 預設
+  (normal→stretch)會把 auto 軌等量撐高填滿容器**:「列高=內容高+超出才捲」的預期靜默
+  失效(free space 被分掉、不出捲軸)。修法 = 容器加 `content-start`;對 1fr 軌是 no-op
+  (free space 已被軌道吃光),可放 base class。jsdom 驗不到,只能鎖 class 字串 + 截圖層。
+  Trigger:給 grid 容器加 flex-1 / 確定高度、或 grid 同時有「固定列軌」與「auto 列軌」兩態。
+
 ## 驗證截圖
 
 - **devtools MCP 截圖 close-up 用 PIL crop 整頁截圖,不用 `body.style.zoom`**:zoom 會污染 useContainerSize 量測(ResizeObserver 以 zoom 後幾何重排,拍完 reset 也可能留下爆版 layout)。Trigger:real-env 要 panel 級 close-up 證據時。
