@@ -1062,4 +1062,36 @@ describe("edgePriceLabels(SC-1/SC-3)", () => {
   it("EDGE_LABEL_H 是**中心距**(字高 ≈9px + 1 呼吸),不是字高本身", () => {
     expect(EDGE_LABEL_H).toBe(10);
   });
+
+  /** review B-5:退化 bounds。可達性不是純理論 —— svgBox 的 minPx 地板 + 超寬容器
+   *  會把 mainH 壓到 30px 以下,bounds 區間縮到個位數甚至反轉。 */
+  describe("退化 bounds(review B-5)", () => {
+    it("top > bottom(超壓縮畫布)→ 一律 [](clamp 語意會讓 bottom 勝出、輸出落界外)", () => {
+      expect(
+        edgePriceLabels([line("ma5", 12), line("ma20", 14)], [], { top: 9, bottom: 6 }),
+      ).toEqual([]);
+    });
+
+    it("空間裝不下兩顆(區間 < EDGE_LABEL_H)→ 只留排序在前那顆,不疊印", () => {
+      const labels = edgePriceLabels([line("ma5", 12), line("ma20", 14)], [], {
+        top: 9,
+        bottom: 15,
+      });
+      expect(labels.map((l) => l.level)).toEqual(["ma5"]);
+      expect(labels[0]!.y).toBeGreaterThanOrEqual(9);
+      expect(labels[0]!.y).toBeLessThanOrEqual(15);
+    });
+
+    it("裝得下但被 obstacle 擠到同一 y → 丟後者不疊印(疊印比少一顆更不可讀)", () => {
+      // probe 自 review B-5 evidence:未修前兩顆都被 clamp 成 y=9(完全疊印)
+      const labels = edgePriceLabels([line("ma5", 12), line("ma20", 14)], [15], {
+        top: 9,
+        bottom: 20,
+      });
+      expect(labels.length).toBe(1);
+      expect(labels[0]!.level).toBe("ma5");
+      expect(labels[0]!.y).toBeGreaterThanOrEqual(9);
+      expect(labels[0]!.y).toBeLessThanOrEqual(20);
+    });
+  });
 });
