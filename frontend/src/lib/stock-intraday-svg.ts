@@ -491,7 +491,8 @@ export interface EdgePriceLabel {
  *
  *  只管 MA:CDP 五線在右緣帶內已有 `價位*`,VWAP 走**就地標示**(末點右側)不經此函式。
  *
- *  `obstacles` = 已經佔住那條 y 的固定文字(呼叫端傳右緣區的極值文字 baseline)。
+ *  `obstacles` = 已經佔住那條 y 的固定圖元,**單位一律是視覺中心**(review B-1):
+ *  呼叫端傳右緣區極值的文字(baseline 先扣 0.35em 正規化)與標記圓(圓心即中心)。
  *  它們**不可動** —— 極值標記承載的是「最高/最低發生在哪一分鐘」,推開它就是改資訊;
  *  能讓位的只有 MA 標籤(它的 y 只是「這條線在哪」,而線本身照畫)。
  *
@@ -511,9 +512,18 @@ export function edgePriceLabels(
     }
   }
   if (labels.length === 0) return [];
+  // bounds 退化(review B-5):top > bottom 時任何 y 都在界外,clamp 的語意會讓 bottom
+  // 勝出、把標籤壓到界外 —— 一律不畫。可達性:svgBox 的 minPx 地板 + 超寬容器會把
+  // mainH 壓到 30px 以下。
+  if (bounds.top > bounds.bottom) return [];
   // 排序穩定(Array#sort 規範保證):同 y 時維持 oLines 的 ma5 → ma20 順序,
   // 不因浮點比較而讓兩顆標籤在兩次 render 之間互換上下。
   labels.sort((a, b) => a.y - b.y);
+  // 空間裝不下全部(review B-5):疊印(兩段數字印在同一 y)比少畫一顆更不可讀。
+  // 依 y 排序保留裝得下的前幾顆 —— 決定性,且與最後一道 clamp 的「寧可貼近不裁掉」
+  // 分工:那條管的是「裝得下但被 obstacle 擠到界邊」,這條管的是「根本裝不下」。
+  const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
+  if (labels.length > capacity) labels.length = capacity;
   const fixed = [...obstacles].sort((a, b) => a - b);
 
   let floor = bounds.top;
@@ -539,8 +549,15 @@ export function edgePriceLabels(
     ceil = y - EDGE_LABEL_H;
   }
 
-  // 最後一道 clamp:標籤比可用空間還多(退化域 + 一堆 obstacle)時,寧可讓兩顆貼近
-  // 也不讓任何一顆被 viewBox 裁掉 —— 裁掉是完全靜默的,貼近至少讀得出有兩個數字。
-  for (const l of labels) l.y = Math.min(Math.max(l.y, bounds.top), bounds.bottom);
-  return labels;
+  // 最後一道:clamp 進界內(裁掉是完全靜默的),再把 clamp 後仍互疊的丟掉、保留排序
+  // 在前者(review B-5)—— capacity 截斷管「根本裝不下」,這裡管「裝得下但被 obstacle
+  // 擠到界邊」的殘餘重疊;疊印(兩段數字印在同一 y)比少畫一顆更不可讀。
+  // 兩輪 sweep 各自維持遞增序、clamp 單調 → 這裡順序仍是由上而下,單趟即可。
+  const placed: EdgePriceLabel[] = [];
+  for (const l of labels) {
+    l.y = Math.min(Math.max(l.y, bounds.top), bounds.bottom);
+    const prev = placed[placed.length - 1];
+    if (prev === undefined || l.y - prev.y >= EDGE_LABEL_H) placed.push(l);
+  }
+  return placed;
 }
