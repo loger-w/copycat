@@ -224,6 +224,31 @@ export interface OverlayLine {
   level: OverlayLevel;
 }
 
+/** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
+ *  上方壓力位紅、下方支撐位綠(台股紅漲綠跌),中軸取琥珀金不與紅綠系混淆。
+ *
+ *  **住在 lib 而非某張圖的元件檔**:個股分時圖與指數分時圖畫的是同一組 CDP/MA 語意,
+ *  兩邊各留一份的失效樣態是「改了個股的紅、指數還是舊紅」——沒有 assertion 會紅。 */
+export const LEVEL_STROKE: Record<OverlayLevel, string> = {
+  ah: "stroke-bull",
+  nh: "stroke-bull/55",
+  cdp: "stroke-profit",
+  nl: "stroke-bear/55",
+  al: "stroke-bear",
+  ma5: "stroke-ma5",
+  ma20: "stroke-ma20",
+};
+
+export const LEVEL_FILL: Record<OverlayLevel, string> = {
+  ah: "fill-bull",
+  nh: "fill-bull/70",
+  cdp: "fill-profit",
+  nl: "fill-bear/70",
+  al: "fill-bear",
+  ma5: "fill-ma5",
+  ma20: "fill-ma20",
+};
+
 interface Input {
   minutes: Map<number, MinuteAgg>;
   meta: StockMeta | null;
@@ -448,10 +473,14 @@ export function lastPoint(g: IntradayGeometry): (Pt & { minute: number }) | null
   return g.priceLine[g.priceLine.length - 1] ?? null;
 }
 
-/** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。 */
+/** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。
+ *
+ *  第二參數刻意收窄成 `Pick<IntradayGeometry, "yDomain" | "toY">`(函式體只用這兩欄):
+ *  指數分時圖的 `IndexGeometry` 帶同名同義的兩欄,結構相容就能共用同一份域內判定,
+ *  不必為了型別把整包個股 geometry(vwap / energyBars / 五檔…)硬湊出來。 */
 export function overlayLines(
   overlay: StockOverlay,
-  g: IntradayGeometry,
+  g: Pick<IntradayGeometry, "yDomain" | "toY">,
   toggles: { cdp: boolean; ma: boolean },
 ): OverlayLine[] {
   const [yBottom, yTop] = g.yDomain;
