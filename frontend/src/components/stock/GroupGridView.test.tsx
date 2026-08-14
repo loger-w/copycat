@@ -208,6 +208,26 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
     expect(grid.className).toContain("flex-1");
     expect(grid.className).not.toContain("auto-fill");
   });
+
+  // review A-1:容器有 flex-1(確定高度)後,>16 分支的隱式列軌是 auto ——
+  // align-content 預設(normal → stretch)會把 auto 軌**等量撐高填滿容器**,
+  // 17~24 檔在一般桌面高度下既不出捲軸、圖也不是 80px 基準。`content-start`
+  // 把 free space 留在下方,列高才真的回到內容高、超出才捲。
+  // 矩陣分支的 1fr 軌自己吃滿 free space,content-start 對它是 no-op。
+  //
+  // 兼 review B-2:fixture 刻意讓「群組數(1)≠ 檔數(17)且落在不同 bucket」——
+  // gridShape 若誤接 groups.length 會回 grid-cols-2,這裡就紅。
+  it("元件層:17 檔群組 → 4 欄無列軌 + content-start(不被 stretch 撐高)", async () => {
+    const codes17 = Array.from({ length: 17 }, (_, i) => String(3000 + i));
+    wrap(
+      <GroupGridView groups={[{ name: "大群", codes: codes17 }]} quotes={{}} onPick={vi.fn()} />,
+    );
+    await waitFor(() => expect(screen.getByTestId("group-card-3000")).toBeTruthy());
+    const grid = screen.getByTestId("group-grid");
+    expect(grid.className).toContain("grid-cols-4");
+    expect(grid.className).toContain("content-start");
+    expect(grid.className).not.toContain("grid-template-rows");
+  });
 });
 
 // SC-2:卡片要吃滿中區高度,圖跟著長高。`h-20` 由「唯一高度來源」降為**基準高**
