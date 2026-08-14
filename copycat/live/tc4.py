@@ -62,6 +62,25 @@ class HistoryResult(NamedTuple):
     timed_out: bool
 
 
+def _row_hour_stamp(row: dict) -> str | None:
+    """歷史列 → 窗比對用的 `YYYYMMDDHH`;Date/Time 缺失或不可解析 → `None`。
+
+    `None` 的語意是「無法證明窗外」= 保守視為窗內 —— 過濾只丟**可證明**窗外的列,
+    自身有 bug 時寧可放行(下游 parser 的 skipped 機制會接手),不可反過來吃掉真資料。
+    """
+    date = str(row.get("Date", "") or "")
+    raw_time = str(row.get("Time", "") or "")
+    if len(date) != 8 or not date.isdigit() or not raw_time.isdigit():
+        return None
+    return f"{date}{raw_time.zfill(6)[:2]}"
+
+
+def _in_window(row: dict, start: str, end: str) -> bool:
+    """列是否落在 `[start, end]`(窗字串同為 `YYYYMMDDHH`,字串比較含端點)。"""
+    stamp = _row_hour_stamp(row)
+    return stamp is None or start <= stamp <= end
+
+
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
 # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
@@ -494,20 +513,40 @@ class TC4QuoteSource:
 
         回 `HistoryResult(rows, timed_out)`:逾時路徑的空與「首頁備妥但 0 rows」是
         不同的事,呼叫端要能分(bars 三態 status)。
+
+        **ready-check 看的是「首頁有無窗內列」不是「首頁非空」**:TC4 1K 對「窗內當下
+        無資料時建立的 history 訂閱」會回**窗外 stub 列**(2026-08-14 實驗 B:對空的
+        05-06 窗首問即回當下分鐘 bar),舊制的「非空即 break」被它騙過 →
+        `timed_out=False` + 一列垃圾,呼叫端零訊號(index 分時自癒因此全日空轉)。
+        收割結果同樣濾掉可證明窗外的列 —— 昨日 stub 的 `Time` 映得進今日 domain,
+        不擋在 parser 之前會偽造出「已收盤完整」的假象。
         """
         self._sub_history(sym, start, end, data_type)
         budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
         deadline = time.monotonic() + budget
         wait = min(_POLL_BACKOFF_START, self._poll_wait)
+        saw_stub = False
         while True:
-            first = self._get_history(sym, start, end, "0", data_type)
-            if first.get("HisData"):
+            page = self._get_history(sym, start, end, "0", data_type).get("HisData") or []
+            if any(_in_window(r, start, end) for r in page):
                 break
+            if page:
+                saw_stub = True
             remaining = deadline - time.monotonic()
             if wait <= 0 or remaining <= 0:
                 logger.info(
                     "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
                 )
+                if saw_stub:
+                    # 固定字串供 grep:分不出「TC4 真沒資料」與「訂閱進了 stub 態」的話,
+                    # 逃逸手段(換窗口字串 / 換 session)無從判斷該不該出手。
+                    logger.warning(
+                        "history %s(%s): 首頁只有窗外 stub 列(窗 %s..%s),視同未備妥",
+                        sym,
+                        data_type,
+                        start,
+                        end,
+                    )
                 return HistoryResult([], True)
             # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
             time.sleep(min(wait, remaining))
@@ -518,7 +557,7 @@ class TC4QuoteSource:
 
         rows: list[dict] = []
         for page in iter_qry_pages(_page):
-            rows.extend(page)
+            rows.extend(r for r in page if _in_window(r, start, end))
         return HistoryResult(rows, False)
 
     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
