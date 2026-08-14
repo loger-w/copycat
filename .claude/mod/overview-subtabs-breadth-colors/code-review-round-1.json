@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "date": "2026-08-14",
+  "lenses": ["impl-bug", "spec-whitelist"],
+  "p0": [],
+  "p1": [],
+  "p2_summary": {
+    "count": 9,
+    "themes": [
+      "A-1 三 subtab 殼與 body 疊 px-4 pb-4(機械查證 CONFIRMED)→ accepted 修",
+      "A-2 四測試檔 spy 還原放測試主體末尾、失敗即洩漏(afterEach 無 restoreAllMocks)→ accepted 修",
+      "A-3 路由式 stub 缺 /api/stock/signals/today,與註解自述契約矛盾 → accepted 修",
+      "A-4 tablist 無 aria-controls/tabpanel/roving tabindex — 與 AD-4 指定樣板 RightRail 逐字同款,非本輪回歸 → rejected_with_reason: 樣板層級決定,與 RightRail 一併處理,記 next-time",
+      "B-1 三檔「零 OPEN_KEY 讀寫」斷言結構性 vacuous(keys 恆空)→ accepted 收緊 toEqual([]) + LimitList 正向對照",
+      "B-2 三處「收合區塊」活註解漂移(App.tsx:45 / App.test.tsx:438 / MarketPane.tsx:359)→ accepted 修",
+      "B-3 SC-3 的 setItem-throw 半條零覆蓋 → accepted 補測試",
+      "B-4 訊號時間軸點擊路徑 + timeline/corr 寫入值無鎖 → accepted 補測試",
+      "B-5 CorrSection.test 的 wsSpy 淪為無斷言腳手架 → accepted 清除"
+    ]
+  },
+  "whitelist_check": "W1-W9 全 PASS(lens B 逐條,證據見 task output)",
+  "sc_check": "SC-1~SC-5 實作+測試 PASS(SC-1/SC-2 截圖屬 Phase 6 未跑;SC-3 setItem 半條見 B-3)",
+  "commit_tag_check": "PASS:9326143d [red] → 9062544a/53551f4d [green](body 均註 red→green for 9326143d),三類未混,本輪無 🔵",
+  "disposition": "8 accepted(fix 波一次處理)/ 1 rejected_with_reason(A-4 → next-time)"
+}
