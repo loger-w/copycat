@@ -1,0 +1,458 @@
+﻿diff --git a/copycat/live/stock_source.py b/copycat/live/stock_source.py
+index af92dae4..02e4230e 100644
+--- a/copycat/live/stock_source.py
++++ b/copycat/live/stock_source.py
+@@ -520,14 +520,22 @@ class StockQuoteSource(TC4QuoteSource):
+     # `_collect_history` 已上提到基底 `TC4QuoteSource`(index-board R-3):futures_source
+     # 的 K 線路徑要用同一份收割/退避/deadline 邏輯,各寫一份必然漂移。
+ 
+-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
++    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]:
+         """當日 1K → {HHMM(台北,bar 終點標記): close 毫點}(index-board SC-4)。
+ 
+         1K Time 為 UTC 終點標記(實測 09:01 起);域 0901–1330 inclusive,
+-        1331–1335 clamp "1330"(收盤補正),其餘丟棄(design F5/IR4)。"""
++        1331–1335 clamp "1330"(收盤補正),其餘丟棄(design F5/IR4)。
++
++        `window_variant` = **逃出毒化 history 訂閱**的唯一便宜維度:TC4 的 history
++        訂閱一旦在「窗內無資料」時建立就進 stub 態,重送 SubHistory 逃不掉,實證逃得掉
++        的只有換窗口字串或換 session(2026-08-14 repro)。窗口 key 是
++        (session, symbol, ktype, start, end) → end hour 每 +1 就是一個全新訂閱。
++        start 不動、只推 end(`min(6 + variant, 23)`);`variant=0` 與原行為完全相同。"""
+         self._ensure_connected()
+         sym = stock_symbol(code)
+         start, end = stock_window(self._trade_date)
++        if window_variant > 0:
++            end = f"{start[:8]}{min(6 + window_variant, 23):02d}"
+         rows = self._collect_history(sym, "1K", start, end).rows
+         minutes: dict[str, int] = {}
+         skipped = 0
+diff --git a/copycat/live/tc4.py b/copycat/live/tc4.py
+index b9f8ca9e..d689becc 100644
+--- a/copycat/live/tc4.py
++++ b/copycat/live/tc4.py
+@@ -62,6 +62,25 @@ class HistoryResult(NamedTuple):
+     timed_out: bool
+ 
+ 
++def _row_hour_stamp(row: dict) -> str | None:
++    """歷史列 → 窗比對用的 `YYYYMMDDHH`;Date/Time 缺失或不可解析 → `None`。
++
++    `None` 的語意是「無法證明窗外」= 保守視為窗內 —— 過濾只丟**可證明**窗外的列,
++    自身有 bug 時寧可放行(下游 parser 的 skipped 機制會接手),不可反過來吃掉真資料。
++    """
++    date = str(row.get("Date", "") or "")
++    raw_time = str(row.get("Time", "") or "")
++    if len(date) != 8 or not date.isdigit() or not raw_time.isdigit():
++        return None
++    return f"{date}{raw_time.zfill(6)[:2]}"
++
++
++def _in_window(row: dict, start: str, end: str) -> bool:
++    """列是否落在 `[start, end]`(窗字串同為 `YYYYMMDDHH`,字串比較含端點)。"""
++    stamp = _row_hour_stamp(row)
++    return stamp is None or start <= stamp <= end
++
++
+ _STALE_THRESHOLD_SECS = 30.0
+ _RECONNECT_BACKOFF_CAP = 60.0
+ # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
+@@ -494,20 +513,40 @@ class TC4QuoteSource:
+ 
+         回 `HistoryResult(rows, timed_out)`:逾時路徑的空與「首頁備妥但 0 rows」是
+         不同的事,呼叫端要能分(bars 三態 status)。
++
++        **ready-check 看的是「首頁有無窗內列」不是「首頁非空」**:TC4 1K 對「窗內當下
++        無資料時建立的 history 訂閱」會回**窗外 stub 列**(2026-08-14 實驗 B:對空的
++        05-06 窗首問即回當下分鐘 bar),舊制的「非空即 break」被它騙過 →
++        `timed_out=False` + 一列垃圾,呼叫端零訊號(index 分時自癒因此全日空轉)。
++        收割結果同樣濾掉可證明窗外的列 —— 昨日 stub 的 `Time` 映得進今日 domain,
++        不擋在 parser 之前會偽造出「已收盤完整」的假象。
+         """
+         self._sub_history(sym, start, end, data_type)
+         budget = deadline_secs if deadline_secs is not None else max(self._poll_wait * 30, 1.0)
+         deadline = time.monotonic() + budget
+         wait = min(_POLL_BACKOFF_START, self._poll_wait)
++        saw_stub = False
+         while True:
+-            first = self._get_history(sym, start, end, "0", data_type)
+-            if first.get("HisData"):
++            page = self._get_history(sym, start, end, "0", data_type).get("HisData") or []
++            if any(_in_window(r, start, end) for r in page):
+                 break
++            if page:
++                saw_stub = True
+             remaining = deadline - time.monotonic()
+             if wait <= 0 or remaining <= 0:
+                 logger.info(
+                     "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
+                 )
++                if saw_stub:
++                    # 固定字串供 grep:分不出「TC4 真沒資料」與「訂閱進了 stub 態」的話,
++                    # 逃逸手段(換窗口字串 / 換 session)無從判斷該不該出手。
++                    logger.warning(
++                        "history %s(%s): 首頁只有窗外 stub 列(窗 %s..%s),視同未備妥",
++                        sym,
++                        data_type,
++                        start,
++                        end,
++                    )
+                 return HistoryResult([], True)
+             # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
+             time.sleep(min(wait, remaining))
+@@ -518,7 +557,7 @@ class TC4QuoteSource:
+ 
+         rows: list[dict] = []
+         for page in iter_qry_pages(_page):
+-            rows.extend(page)
++            rows.extend(r for r in page if _in_window(r, start, end))
+         return HistoryResult(rows, False)
+ 
+     def _fetch_symbol_ticks(self, symbol: str, start: str, end: str) -> list[Tick]:
+diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index fca096d2..d92b6e21 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -65,7 +65,7 @@ class IndexSource(Protocol):
+ 
+     def unsubscribe_symbol(self, code: str) -> None: ...
+ 
+-    def fetch_day_minutes(self, code: str) -> dict[str, int]: ...
++    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]: ...
+ 
+     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
+ 
+@@ -176,6 +176,9 @@ class IndexEngine:
+         self._heal_secs = 60.0
+         self._last_heal = float("-inf")
+         self._heal_interval: float | None = None
++        # heal 的 1K 窗口 variant:無進展一次 +1(= 換窗口字串 = TC4 端全新 history
++        # 訂閱)。重用同一個訂閱逃不出 stub 態,重送 SubHistory 也不行(2026-08-14 實證)。
++        self._heal_variant = 0
+         # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
+         # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
+         self._push_minutes_once = False
+@@ -233,24 +236,24 @@ class IndexEngine:
+                 pass
+         await asyncio.to_thread(self._source.close)
+ 
+-    def _subscribe_and_backfill(self) -> None:
++    def _subscribe_and_backfill(self, variant: int = 0) -> None:
+         self._source.subscribe_symbol(_SYMBOL)
+-        minutes = self._source.fetch_day_minutes(_SYMBOL)
++        minutes = self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
+         self._twse.minutes.update(minutes)
+ 
+     # ---- 重試(R5/IR8:single-flight)----
+ 
+-    def _schedule_retry(self, *, clear_stale: bool = True) -> None:
++    def _schedule_retry(self, *, clear_stale: bool = True, variant: int = 0) -> None:
+         if self._retry_task is not None and not self._retry_task.done():
+             self._retry_task.cancel()
+-        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale))
++        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale, variant))
+ 
+-    async def _retry_loop(self, clear_stale: bool) -> None:
++    async def _retry_loop(self, clear_stale: bool, variant: int = 0) -> None:
+         backoff = self._retry_secs
+         while True:
+             await asyncio.sleep(backoff)
+             try:
+-                await asyncio.to_thread(self._subscribe_and_backfill)
++                await asyncio.to_thread(self._subscribe_and_backfill, variant)
+             except ConnectionError:
+                 backoff = min(backoff * 2, 60.0)
+                 continue
+@@ -258,6 +261,17 @@ class IndexEngine:
+                 logger.exception("index retry 非預期失敗(續試)")
+                 backoff = min(backoff * 2, 60.0)
+                 continue
++            if not clear_stale and self._minutes_lag_exceeded():
++                # heal 型的「成功」判準是**產出面**:fetch 沒丟例外不等於 minutes 前進。
++                # TC4 對毒化訂閱回窗外 stub(A 段濾光後 = 空)時,以輸入面判定會宣告
++                # 治好了、退避倍增、永遠重用同一個窗口 → 全日缺線且零 log(2026-08-14)。
++                # 不設 _push_minutes_once / _dirty,下一發由既有 heal 退避帶新 variant 出手。
++                logger.warning(
++                    "index 分時自癒無進展(window_variant=%d):minutes 仍落後,下一發換窗口",
++                    variant,
++                )
++                self._heal_variant += 1
++                return
+             if clear_stale:
+                 # 連線類 retry(start 失敗 / reconnect / rollover 失敗)成功 = 樂觀清
+                 # stale(推播即將恢復);分時自癒的 retry 不清 —— stale 是推播死活的
+@@ -464,6 +478,7 @@ class IndexEngine:
+             if self._in_watch_window() or _WATCH_END <= self._now_fn() < _HEAL_TAIL_END:
+                 if not self._minutes_lag_exceeded():
+                     self._heal_interval = None  # 覆蓋度跟上 → 退避歸零
++                    self._heal_variant = 0  # 當前窗口有效 → 下次從原窗口重來
+                 elif (
+                     self._pending_date is None
+                     and (self._retry_task is None or self._retry_task.done())
+@@ -476,9 +491,11 @@ class IndexEngine:
+                         (self._heal_interval or self._heal_secs) * 2, _HEAL_BACKOFF_CAP
+                     )
+                     logger.warning(
+-                        "index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K", _LAG_HEAL_MIN
++                        "index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K(window_variant=%d)",
++                        _LAG_HEAL_MIN,
++                        self._heal_variant,
+                     )
+-                    self._schedule_retry(clear_stale=False)
++                    self._schedule_retry(clear_stale=False, variant=self._heal_variant)
+             # txf(IR1:價變動自記 wall-clock)
+             p = self._txf_getter()
+             if p is not None and p != self._txf_p:
+diff --git a/tests/helpers/fake_sources.py b/tests/helpers/fake_sources.py
+index 28b8d662..4863b4ee 100644
+--- a/tests/helpers/fake_sources.py
++++ b/tests/helpers/fake_sources.py
+@@ -34,6 +34,10 @@ class FakeIndexSource:
+     """IndexSource fake(index engine / index routes / market routes 共用)。
+ 
+     - `day_minutes` 可指派成 `Exception` → `fetch_day_minutes` 拋(回補失敗路徑)。
++    - `variant_minutes[v]` 指派後,`window_variant=v` 那一發改回這份(其餘仍回
++      `day_minutes`)。真 TC4 的失效是「舊窗口字串的訂閱已毒化、換窗口才拿得到資料」,
++      沒有 per-variant 回傳就只驗得到「variant 有傳下去」,驗不到「換窗口真的救得回來」。
++    - `window_variants` 記錄每次 `fetch_day_minutes` 收到的 variant。
+     - `subscribe_error` 指派後 `subscribe_symbol` 拋(訂閱降級 / retry 路徑)。
+     - `fetch_bars_range_tagged` 的 tag 與日 K 內容由建構子參數決定(market route 的
+       「meta.source 必須是實際走到的分支」那組測試用)。
+@@ -58,6 +62,8 @@ class FakeIndexSource:
+         self.day_minutes: dict[str, int] | Exception = (
+             {} if day_minutes is None else dict(day_minutes)
+         )
++        self.variant_minutes: dict[int, dict[str, int]] = {}
++        self.window_variants: list[int] = []
+         self.on_message: Callable[[dict], None] | None = None
+         self.subscribe_error: Exception | None = None
+         self.fetch_minutes_calls = 0
+@@ -75,11 +81,13 @@ class FakeIndexSource:
+     def unsubscribe_symbol(self, code: str) -> None:
+         self.unsubscribed.append(code)
+ 
+-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
++    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]:
+         self.fetch_minutes_calls += 1
++        self.window_variants.append(window_variant)
+         if isinstance(self.day_minutes, Exception):
+             raise self.day_minutes
+-        return dict(self.day_minutes)
++        override = self.variant_minutes.get(window_variant)
++        return dict(self.day_minutes if override is None else override)
+ 
+     def set_on_message(self, cb: Callable[[dict], None]) -> None:
+         self.on_message = cb
+diff --git a/tests/live/test_stock_source.py b/tests/live/test_stock_source.py
+index 7fc6a1ac..dea27e2e 100644
+--- a/tests/live/test_stock_source.py
++++ b/tests/live/test_stock_source.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import json
+ import logging
+ import threading
++from typing import Callable
+ 
+ import pytest
+ 
+@@ -372,6 +373,99 @@ class TestFetchDayMinutes:
+             raise AssertionError("必須正規化為 ConnectionError")
+ 
+ 
++def _k1_pager(
++    pages: dict[str, list[dict]], sent: list[dict] | None = None
++) -> Callable[[dict], bytes]:
++    """1K GETHISDATA 分頁替身(QryIndex → rows;其餘請求回 OK)。"""
++
++    def handler(obj: dict) -> bytes:
++        if sent is not None:
++            sent.append(obj)
++        if obj["Request"] == "GETHISDATA":
++            qi = obj["Param"]["QryIndex"]
++            body = json.dumps({"Success": "OK", "HisData": pages.get(qi, [])})
++            return ("1K:" + body + "\0").encode()
++        return ok()
++
++    return handler
++
++
++def _minutes_src(handler: Callable[[dict], bytes]) -> StockQuoteSource:
++    return StockQuoteSource(
++        api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++    )
++
++
++class TestCollectHistoryWindowGuard:
++    """SC-3:TC4 1K 對「空窗期建立的 history 訂閱」回**窗外 stub 列**而非空頁
++    (2026-08-14 實驗 B:對空的 05-06 窗首問即回當下分鐘 bar)。
++
++    「首頁非空即 break」被這種列騙過 → `timed_out=False` + 一列垃圾,呼叫端零訊號,
++    而 index 引擎的自癒把「沒丟例外」當成功 → 全日空轉(repro.md)。
++    """
++
++    #: 昨日 13:30 的列:窗外(hour stamp 2026072705 < 2026072800),但 Time 恰好
++    #: 映得進今日 domain(→ 鍵 "1330")—— 不擋在窗判定會偽造「已收盤完整」。
++    STUB = {"Date": "20260727", "Time": "53000", "Close": "999", "QryIndex": "1"}
++    IN_WINDOW = {"Date": "20260728", "Time": "10100", "Close": "100.5", "QryIndex": "2"}
++
++    def test_stub_only_first_page_is_treated_as_not_ready(
++        self, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        src = _minutes_src(_k1_pager({"0": [self.STUB], "1": []}))
++        with caplog.at_level(logging.INFO, logger="copycat.live.tc4"):
++            result = src._collect_history("TC.S.TWS.IX0001", "1K", "2026072800", "2026072806")
++        assert result.rows == []
++        assert result.timed_out is True
++        assert "窗外 stub" in caplog.text  # 可 grep:期間曾見窗外 stub
++
++    def test_mixed_page_keeps_in_window_rows_only(self) -> None:
++        src = _minutes_src(_k1_pager({"0": [self.STUB, self.IN_WINDOW], "2": []}))
++        result = src._collect_history("TC.S.TWS.IX0001", "1K", "2026072800", "2026072806")
++        assert result.rows == [self.IN_WINDOW]
++        assert result.timed_out is False
++
++    def test_rows_without_date_or_time_are_kept(self) -> None:
++        """保守過濾:只丟**可證明**窗外的列,Date/Time 缺失或不可解析一律留下
++        (過濾自身有 bug 時寧可放行,交由下游 parser 的既有 skipped 機制處置)。"""
++        loose = [
++            {"Close": "1", "QryIndex": "1"},
++            {"Date": "20260728", "Time": "xx0100", "Close": "2", "QryIndex": "2"},
++            {"Date": "bad", "Time": "10100", "Close": "3", "QryIndex": "3"},
++        ]
++        src = _minutes_src(_k1_pager({"0": loose, "3": []}))
++        result = src._collect_history("TC.S.TWS.IX0001", "1K", "2026072800", "2026072806")
++        assert result.rows == loose
++        assert result.timed_out is False
++
++    def test_fetch_day_minutes_does_not_fake_a_complete_day(self) -> None:
++        """端到端:昨日 13:30 stub 不得被當成今日「已收盤」的 1330 鍵。"""
++        src = _minutes_src(_k1_pager({"0": [self.STUB], "1": []}))
++        assert src.fetch_day_minutes("IX0001") == {}
++
++
++class TestFetchDayMinutesWindowVariant:
++    """SC-4:window variant = 逃出「毒化 history 訂閱」的維度(repro 實證:換窗口字串
++    或換 session 才逃得掉,重送 SubHistory 逃不掉)。start 不變,只推 end hour。"""
++
++    def _end_time_for(self, variant: int) -> list[str]:
++        sent: list[dict] = []
++        src = _minutes_src(_k1_pager({}, sent))
++        src.fetch_day_minutes("IX0001", window_variant=variant)
++        hist = [o for o in sent if o["Request"] in ("SUBQUOTE", "GETHISDATA")]
++        assert [o["Param"]["StartTime"] for o in hist] == ["2026072800"] * len(hist)
++        return [o["Param"]["EndTime"] for o in hist]
++
++    def test_variant_zero_keeps_the_current_window(self) -> None:
++        assert self._end_time_for(0) == ["2026072806", "2026072806"]
++
++    def test_variant_extends_end_hour(self) -> None:
++        assert self._end_time_for(1) == ["2026072807", "2026072807"]
++
++    def test_variant_capped_at_23(self) -> None:
++        assert self._end_time_for(20) == ["2026072823", "2026072823"]
++
++
+ class TestRawDispatch:
+     def test_realtime_quote_dispatched(self) -> None:
+         src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+diff --git a/tests/server/test_index_engine.py b/tests/server/test_index_engine.py
+index c524c954..b964706b 100644
+--- a/tests/server/test_index_engine.py
++++ b/tests/server/test_index_engine.py
+@@ -4,8 +4,11 @@ from __future__ import annotations
+ 
+ import asyncio
+ import datetime as _dt
++import logging
+ from typing import Any, Callable
+ 
++import pytest
++
+ from copycat.server.index_engine import IndexEngine, minute_key
+ from copycat.server.mis import OtcSnap
+ from tests.helpers.fake_sources import FakeIndexSource
+@@ -225,14 +228,17 @@ async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
+     """自癒回補必須送達已連線前端:廣播 payload 平常是 scalar-only(無 minutes),
+     heal 後若不帶一次 minutes 全量,前端只有換日/重連才 refetch —— 引擎治好了、
+     畫面上的線卻要等使用者重整才回來。retry 成功後下一則廣播帶 minutes 一次,
+-    之後回到 scalar-only(頻寬慣例不變)。"""
++    之後回到 scalar-only(頻寬慣例不變)。
++
++    治具的 minutes 必須真的**追上牆鐘**(fix/index-line-vanish 起,heal 的成功判準是
++    產出面):只回一根 0901 而牆鐘 10:00 是「無進展」,那條路徑刻意不帶 minutes 出去。"""
+     fake = FakeIndexSource()
+     eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+     eng._heal_secs = 0.05  # type: ignore[attr-defined]
+     await eng.start()
+     try:
+         stream = eng.stream()
+-        fake.day_minutes = {"0901": 1_000}
++        fake.day_minutes = {"0901": 1_000, "0959": 2_000}
+         deadline = asyncio.get_running_loop().time() + 2.0
+         carried: dict | None = None
+         while asyncio.get_running_loop().time() < deadline:
+@@ -240,7 +246,7 @@ async def test_heal_backfill_reaches_connected_clients_via_broadcast() -> None:
+             if "minutes" in msg["twse"]:
+                 carried = msg["twse"]["minutes"]
+                 break
+-        assert carried == {"0901": 1_000}
++        assert carried == {"0901": 1_000, "0959": 2_000}
+         # 之後回到 scalar-only:觸發一則 dirty 廣播,不得再帶 minutes
+         assert fake.on_message is not None
+         fake.on_message(_quote(filled="20000"))  # 02:00 UTC → key 1001,跟上牆鐘不再觸發 heal
+@@ -301,6 +307,55 @@ async def test_heal_backs_off_when_no_progress() -> None:
+         await eng.close()
+ 
+ 
++async def test_heal_no_progress_is_not_claimed_as_success(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    """SC-1(fix/index-line-vanish):heal 的「成功」判準必須是**產出面**。
++
++    2026-08-14 prod 實錄:heal 觸發 9 次,每次 `fetch_day_minutes` 都快速返回、不拋、
++    帶回零有效分鐘(TC4 回窗外 stub),而 `_retry_loop` 以「沒丟例外」當成功 → 設
++    `_push_minutes_once`/`_dirty` 宣告治好了、退避倍增,全日缺線且整天零 log。
++    無進展的那一發不得帶 minutes 出去,且必須留下可 grep 的 WARNING。"""
++    fake = FakeIndexSource()  # day_minutes 恆空 = TC4 回窗外 stub 被濾光後的形狀
++    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
++    eng._heal_secs = 0.05  # type: ignore[attr-defined]
++    with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
++        await eng.start()
++        try:
++            stream = eng.stream()
++            await asyncio.sleep(0.3)
++            assert fake.fetch_minutes_calls >= 2  # heal 確實跑過
++            with pytest.raises(TimeoutError):  # 無進展 → 不設 dirty → 沒有任何廣播
++                await asyncio.wait_for(stream.__anext__(), timeout=0.1)
++            assert eng._push_minutes_once is False  # type: ignore[attr-defined]
++        finally:
++            await eng.close()
++    assert "index 分時自癒無進展" in caplog.text
++
++
++async def test_heal_escalates_window_variant_until_data_returns() -> None:
++    """SC-2:無進展的下一發 heal 必須換窗口字串(variant+1)—— 重用同一個
++    (session, symbol, 1K, 窗口)訂閱逃不出 TC4 的 stub 態(repro 實證:換窗口或換
++    session 才逃得掉)。variant 首次帶回資料 → minutes 恢復,且下一則廣播帶 minutes
++    全量一次(#45 的送達行為銜接),退避與 variant 一併歸零。"""
++    fake = FakeIndexSource()  # 舊窗口(variant 0)恆空
++    fake.variant_minutes = {1: {"0959": 2_000}}  # 換一次窗口就拿得到
++    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
++    eng._heal_secs = 0.05  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        stream = eng.stream()
++        msg = await asyncio.wait_for(stream.__anext__(), timeout=2)
++        assert msg["twse"]["minutes"] == {"0959": 2_000}  # 全量送達已連線前端
++        assert eng.state()["twse"]["minutes"] == {"0959": 2_000}
++        # boot=0、首發 heal 沿用 0(無進展)、次發換 1(命中)
++        assert fake.window_variants[:3] == [0, 0, 1]
++        assert eng._heal_variant == 0  # type: ignore[attr-defined]
++        assert eng._heal_interval is None  # type: ignore[attr-defined]
++    finally:
++        await eng.close()
++
++
+ async def test_heal_throttled_between_attempts() -> None:
+     """lock(review T-2):heal 節流是 load-bearing —— 沒有它,推播死時 IX0001 每
+     ~retry_secs 被 UNSUB→SUB 一次(重掛正是「訂閱成功零推播」家族的觸發面)。
