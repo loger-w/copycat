@@ -1,5 +1,26 @@
 
-## 2026-08-14(mod/intraday-ma-poc-labels 收尾留尾巴)
+## 2026-08-14(fix/index-line-vanish 收尾留尾巴)
+
+- [ ] **TC4 凍結 stub 的姊妹 ready-check 未收緊**(review L2-P2-4):`river_backfill.
+  collect_1k_minutes:52`、`stock_source.backfill:499`、`tc4._fetch_symbol_ticks` 仍是
+  「首頁非空即 break」;空窗毒化訂閱回凍結 stub 時同樣被騙,且 river 的
+  `minute_end_from_1k` 只讀 Time 不讀 Date — 凍結 stub 會變成今日分鐘寫進 RiverState
+  (江波圖憑空一點)。index 側已用「差量進展 + 窗口 variant」繞開;姊妹路徑要收就沿
+  `_collect_history 靜默回空家族`(2026-08-13 節)一起做三態化 + stub 簽名判定,獨立輪。
+- [ ] **heal 每個 variant 新發一個 history 訂閱、無釋放路徑**(review L1-P2-4):壞日子
+  單 session 最多累積 ~18 個 IX0001 1K 訂閱(`_unsub` 只管 REALTIME)。TC4 per-session
+  history 訂閱上限未實測;SC-5 側車重演時順手觀察連續多窗口訂閱的行為,若有上限,
+  觸頂樣態可能又是「靜默回空」。
+- [ ] **`_twse.minutes` 的 worker thread 寫 vs event loop 迭代讀無鎖**(review L1-P2-3,
+  既有家族、本輪把讀寫推得更中心):被取消 retry 的 orphan to_thread 仍會 `update()`,
+  與 `_minutes_lag_exceeded` 的 `max(m)` / `_payload` 的 `dict(...)` 理論可撞
+  `RuntimeError: dictionary changed size during iteration`(炸點在 try/except 外,
+  该發 heal 靜默消失)。收法 = worker 只回傳 dict、event loop 端合併,動 `_retry_loop`
+  與 `_subscribe_and_backfill` 簽名,小輪。
+- [ ] **SC-5 側車順驗 stub 語意**(review L1-P2-1 / L2-P1-2 Known Risk):驗「凍結
+  stub 的 Time 是否恆為訂閱建立時刻」與「盤中建立的新窗口在該窗真無 1K 時是否產生
+  in-domain 假分鐘(實際為當下真實指數價的稀疏點)」;若後者實測發生且被嫌,
+  升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。
 
 - [ ] **CDP 五個右緣帶標籤自身互疊**(盤中截圖附帶觀察,2330 實證 `2455*`…`2415*` 五個
   擠成一團字疊字):既有擁擠問題、本輪 out of scope 已列。收斂方向 = 把本輪
