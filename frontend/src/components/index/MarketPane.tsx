@@ -381,8 +381,8 @@ export function MarketPane({
               mode={mode}
               name={NAMES[marketKey]}
               series={series}
-              showBb={toggles.bb}
-              onToggleBb={(v) => onToggle("bb", v)}
+              toggles={toggles}
+              onToggle={onToggle}
               active={active}
             />
           )}

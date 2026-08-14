@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
+import type { ChartToggles } from "@/hooks/useChartToggles";
 import { useMarketBars } from "@/hooks/useMarketBars";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import { aggregateBars } from "@/lib/candle";
@@ -90,8 +91,10 @@ interface Props {
   name: string;
   /** 分時模式的資料源(加權 / 櫃買);期指不支援分時,傳 null 即可。 */
   series: IndexSeries | null;
-  showBb: boolean;
-  onToggleBb: (v: boolean) => void;
+  /** 整包下傳而不是拆成 `showBb`/`onToggleBb`:分時態接下來要用到 vwap/cdp/ma 三個鍵,
+   *  逐鍵開 props 等於每加一條疊線就改一次 caller 簽名。單一 caller(MarketPane)。 */
+  toggles: ChartToggles;
+  onToggle: (key: keyof ChartToggles, value: boolean) => void;
   /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
    *  gate 停(review round-2 XR-4);未給時預設 true。 */
   active?: boolean;
@@ -103,8 +106,8 @@ export function MarketChart({
   mode,
   name,
   series,
-  showBb,
-  onToggleBb,
+  toggles,
+  onToggle,
   active = true,
 }: Props) {
   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
@@ -152,8 +155,8 @@ export function MarketChart({
         key={`${marketKey}-${mode}`}
         bars={bars}
         initBars={minutes > 1 ? 240 : 120}
-        showBb={showBb}
-        onToggleBb={onToggleBb}
+        showBb={toggles.bb}
+        onToggleBb={(v) => onToggle("bb", v)}
         showVolume={meta.volume}
       />
       <p data-testid="market-meta" className="mt-1 font-mono text-xs text-ink-dim">
