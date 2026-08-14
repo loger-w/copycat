@@ -486,7 +486,7 @@ export function LimitListSection({
   active?: boolean;
 }) {
   return (
-    <div data-testid="limit-list" className="px-4 pb-4">
+    <div data-testid="limit-list" className="pt-2">
       <LimitListBody onOpenStock={onOpenStock} active={active} />
     </div>
   );

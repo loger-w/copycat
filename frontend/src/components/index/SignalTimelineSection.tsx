@@ -176,7 +176,7 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
 
 export function SignalTimelineSection({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
   return (
-    <div data-testid="signal-timeline" className="px-4 pb-4">
+    <div data-testid="signal-timeline" className="pt-2">
       <TimelineBody onOpenStock={onOpenStock} />
     </div>
   );
