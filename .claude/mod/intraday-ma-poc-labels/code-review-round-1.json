@@ -1,0 +1,65 @@
+{
+  "round": 1,
+  "date": "2026-08-14",
+  "lenses": ["whitelist-regression (opus)", "correctness-edge-cases (opus)"],
+  "verified_by": "both lenses ran probe calls / full vitest on touched files; main agent mechanical screen passed (no refuted)",
+  "findings": [
+    {
+      "id": "A-1", "severity": "P1", "lens": "whitelist",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx", "line": 450,
+      "issue": "VWAP 標籤(g.vwapLine 末點,前端分鐘近似)與說明列 VWAP(accum.vwap,後端逐筆)雙來源,同圖兩個矛盾數字(fixture 實證 2381.67 vs 2380);spec D2 寫「同一口徑同一來源」只做到同口徑",
+      "resolution": "accepted — 標籤文字改吃 accum.vwap(scalar prop vwapMilli 傳入 ChartStatic,memo 安全;位置仍用 vwapLine 末點 x/y);accum.vwap null → 不畫標籤(與說明列「-」一致);spec D2 補 amendment"
+    },
+    {
+      "id": "A-2/B-2", "severity": "P2", "lens": "both",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx", "line": 175,
+      "issue": "obstacle 右緣區判準 mark.x > 720 漏扣 MA 標籤自身寬度且用未 clamp 的 x;mark.x ∈ (~710, 720] 的極值文字會與 MA 標籤疊而不進避讓集(白名單 11 fail)",
+      "resolution": "accepted — 判準改顯式水平相交:clampLabelX 後的 x + EDGE_LABEL_W/2 > (w − R_AXIS_W − 2) − EDGE_LABEL_W;刪 MARK_LABEL_W 孤立常數"
+    },
+    {
+      "id": "A-3", "severity": "P2", "lens": "whitelist",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx", "line": 106,
+      "issue": "EDGE_LABEL_W doc comment 宣稱的用途 (b) 實際由 MARK_LABEL_W 承擔,註解與程式脫節",
+      "resolution": "accepted — 隨 A-2 改法一併消滅(MARK_LABEL_W 移除、註解改寫)"
+    },
+    {
+      "id": "B-1", "severity": "P2", "lens": "correctness",
+      "file": "frontend/src/lib/stock-intraday-svg.ts", "line": 536,
+      "issue": "obstacle 是極值文字 baseline、MA 標籤 y 是中心(dy 0.35em),EDGE_LABEL_H 中心距直接比 baseline;向上讓位側字框間距僅 ~0.5px(probe 實證)",
+      "resolution": "accepted — 元件側把 obstacle baseline 正規化成中心(− 0.35 × 9 ≈ 3)再傳入;lib 測試補兩方向對稱"
+    },
+    {
+      "id": "B-3", "severity": "P2", "lens": "correctness",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx", "line": 174,
+      "issue": "obstacle 只收極值文字、沒收極值圓(mark.y);日高側讓位 +10 後標籤中心恰落 mark.y + 3 = 正壓在圓上",
+      "resolution": "accepted — 右緣區極值的 obstacle 集併入圓心 y(正規化後),文字與圓都保距"
+    },
+    {
+      "id": "B-4", "severity": "P2", "lens": "correctness",
+      "file": "frontend/src/components/stock/StockIntradayChart.tsx", "line": 441,
+      "issue": "VWAP 標籤 x 上界用 EDGE_LABEL_W=34(fmtTickPrice 口徑),但 VWAP 走 fmt 最長 7 字 ≈ 40px,盤末 clamp 後仍溢出繪圖區右界壓進 R_AXIS 帶",
+      "resolution": "accepted — VWAP clamp 改用 fmt 口徑寬度常數(40);測試同步改"
+    },
+    {
+      "id": "B-5", "severity": "P2", "lens": "correctness",
+      "file": "frontend/src/lib/stock-intraday-svg.ts", "line": 544,
+      "issue": "bounds 退化:空間不足時兩標籤 clamp 成同一 y(疊印);top > bottom 時輸出落在界外(probe 實證)",
+      "resolution": "accepted — top > bottom → 回 [];空間裝不下 n 顆 → 截到裝得下的數量(保留排序在前者);補 lib 測試"
+    },
+    {
+      "id": "B-6", "severity": "P2", "lens": "correctness",
+      "file": "frontend/src/components/stock/StockIntradayChart.test.tsx", "line": 1259,
+      "issue": "obstacle 路徑元件層零測試(maObstacles 從未非空)",
+      "resolution": "accepted — 補 fixture:day-high 在 13:2x 右緣區 + MA 貼近 → 斷言讓位;左半場對照組 → 不位移"
+    },
+    {
+      "id": "B-7", "severity": "P2", "lens": "correctness",
+      "file": "frontend/src/components/stock/StockIntradayChart.test.tsx", "line": 1170,
+      "issue": "spec edge case 2 理由錯誤(priceLine 非空而 vwapLine 空是可達的:分鐘 v=0);該路徑與 flat 域 edge case 6 均零測試",
+      "resolution": "accepted — 補兩條測試(v=0 分鐘 fixture / flat 域);spec edge case 2 敘述修正"
+    }
+  ],
+  "p2_summary": { "count": 7, "themes": ["避讓幾何基準與判準(A-2/B-1/B-2/B-3)", "寬度估值口徑(B-4)", "退化輸入(B-5)", "覆蓋缺口(B-6/B-7)"] },
+  "whitelist_check": "11 條:10 pass / 1 fail(item 11,即 A-2/B-2;修復後轉 pass)",
+  "refuted": []
+}

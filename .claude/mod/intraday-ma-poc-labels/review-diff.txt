@@ -1,0 +1,845 @@
+diff --git a/frontend/src/components/stock/StockIntradayChart.test.tsx b/frontend/src/components/stock/StockIntradayChart.test.tsx
+index 455cdea8..018ac384 100644
+--- a/frontend/src/components/stock/StockIntradayChart.test.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.test.tsx
+@@ -13,7 +13,7 @@ import {
+   STKFUT_WINDOW,
+   Y_AXIS_W,
+ } from "@/lib/stock-intraday-svg";
+-import { VP_FILL_OPACITY } from "@/lib/volume-profile";
++import { VP_FILL_OPACITY, VP_POC_FILL_OPACITY } from "@/lib/volume-profile";
+ import { wrap } from "@/test-utils";
+ 
+ const OVERLAY = {
+@@ -1027,17 +1027,28 @@ describe("StockIntradayChart 價位別成交量(SC-3)", () => {
+     return [...container.querySelectorAll('[data-testid="vp-bar"]')];
+   }
+ 
+-  it("預設開:每個成交價位一根長條,自繪圖區左緣向右、半透明中性色", () => {
++  /** 🔴 SC-4:POC(域內量最大的價位)那一根改 accent 色 + 更高透明度。
++   *  本節的樣式斷言是**事前標記該變**的既有合約 —— 其餘 bar 的樣式一字不動。
++   *  WITH_TICKS 的量分佈 7 / 3 / 2 張,降冪排序後 POC(2380,7 張)是**最後一根**。 */
++  it("預設開:每個成交價位一根長條,自繪圖區左緣向右;POC 以外半透明中性色", () => {
+     const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
+     const bars = vpBars(container);
+     expect(bars.length).toBe(3);
+-    for (const b of bars) {
++    bars.forEach((b, i) => {
+       // x 恆為繪圖區左界:長條是「從價位軸長出來的」,越界進價位帶會壓到刻度數字
+       expect(Number(b.getAttribute("x"))).toBe(Y_AXIS_W);
+       expect(Number(b.getAttribute("width"))).toBeGreaterThan(0);
+-      expect(b.getAttribute("fill-opacity")).toBe(String(VP_FILL_OPACITY));
+-      expect(b.getAttribute("class")).toContain("fill-ink-muted");
+-    }
++      if (i === 2) {
++        // POC:accent 桃紅 + 0.45 —— 「最長那根」在灰底上要一眼指認得出來
++        expect(b.getAttribute("fill-opacity")).toBe(String(VP_POC_FILL_OPACITY));
++        expect(b.getAttribute("class")).toContain("fill-accent");
++      } else {
++        expect(b.getAttribute("fill-opacity")).toBe(String(VP_FILL_OPACITY));
++        expect(b.getAttribute("class")).toContain("fill-ink-muted");
++      }
++    });
++    // testid 不變:POC 不另開一種節點,否則既有「vp-bar 數 / z-order」諸條全部漏算它
++    expect(bars.filter((b) => (b.getAttribute("class") ?? "").includes("fill-accent")).length).toBe(1);
+   });
+ 
+   it("長度比例 = 該價位當日成交量(量最大的那根最長)", () => {
+@@ -1081,6 +1092,237 @@ describe("StockIntradayChart 價位別成交量(SC-3)", () => {
+     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+     expect(vpBars(container).length).toBe(0);
+   });
++
++  /** 🟢 SC-4:POC 長條**尖端右側**的價位數字。就地標示(不硬塞左緣 yTicks)——
++   *  尖端的 x 隨量比例走,標籤跟著它才指認得出「這根是哪個價位」。 */
++  it("POC 長條尖端右側有 accent 價位數字(fmt 口徑)", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    const label = container.querySelector('[data-testid="vp-poc-label"]')!;
++    expect(label).toBeTruthy();
++    expect(label.textContent).toBe("2380"); // 7 張 = 域內最大
++    const poc = vpBars(container)[2]!; // 降冪排序 → 2380 是最後一根
++    expect(Number(label.getAttribute("x"))).toBeCloseTo(
++      Y_AXIS_W + Number(poc.getAttribute("width")) + 3,
++      6,
++    );
++    // y 對準長條中心(dy 置中,不用 dominantBaseline —— 同左緣刻度的既有紀律)
++    expect(Number(label.getAttribute("y"))).toBeCloseTo(
++      Number(poc.getAttribute("y")) + Number(poc.getAttribute("height")) / 2,
++      6,
++    );
++    expect(label.getAttribute("dy")).toBe("0.35em");
++    const cls = label.getAttribute("class")!;
++    expect(cls).toContain("fill-accent"); // 與 highlight 的長條同色
++    // halo 一律描邊,**不得**用底色 rect(主圖 drawnRects === 0 的既有合約)
++    expect(cls).toContain("stroke-surface");
++    expect(label.getAttribute("paint-order")).toBe("stroke");
++  });
++
++  it("關掉量分佈 → POC 標籤跟著消失(vpBars 空 → 自然不畫)", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    expect(container.querySelector('[data-testid="vp-poc-label"]')).toBeTruthy();
++    fireEvent.click(screen.getByRole("button", { name: "量分佈" }));
++    expect(container.querySelector('[data-testid="vp-poc-label"]')).toBeNull();
++  });
++
++  it("尚無成交(無 bar)→ 無 POC 標籤,不崩", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelector('[data-testid="vp-poc-label"]')).toBeNull();
++  });
++
++  it("POC 標籤畫在主價線之後(D7:被 1.6px 主線壓過等於沒畫)", () => {
++    const { container } = wrap(<StockIntradayChart accum={WITH_TICKS} />);
++    const main = [...container.querySelectorAll("svg")].find(
++      (s) => s.getAttribute("aria-label") === "分時走勢圖",
++    )!;
++    const nodes = [...main.querySelectorAll('polyline, [data-testid="vp-poc-label"]')];
++    const priceIdx = nodes.findIndex((n) =>
++      (n.getAttribute("class") ?? "").includes("stroke-bull"),
++    );
++    const labelIdx = nodes.findIndex((n) => n.getAttribute("data-testid") === "vp-poc-label");
++    expect(priceIdx).toBeGreaterThanOrEqual(0);
++    expect(labelIdx).toBeGreaterThan(priceIdx);
++  });
++});
++
++// 🟢 SC-1 / SC-2 / SC-3(mod/intraday-ma-poc-labels):VWAP 與 MA 的**即時價位數值**。
++//
++// 既有畫面上這兩條線都讀不出數字:VWAP 完全沒有標籤,MA 的右緣帶只印名稱。
++// 三組標籤全部由既有 props(g / oLines / showVwap / vpBars)內算,ChartStatic 不新增
++// prop —— 新增純量以外的 prop 會打穿 memo,而 hover 每個 mousemove 都 re-render 父層。
++describe("StockIntradayChart 即時價位標籤(SC-1/2/3)", () => {
++  function mainSvg(container: HTMLElement): SVGSVGElement {
++    return [...container.querySelectorAll("svg")].find(
++      (s) => s.getAttribute("aria-label") === "分時走勢圖",
++    )! as SVGSVGElement;
++  }
++
++  function geomOf(accum: typeof ACCUM) {
++    return buildIntradayGeometry(
++      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
++      { width: 800, height: 260 },
++    );
++  }
++
++  // ---- SC-2:VWAP 就地標籤 ----
++
++  /** 就地標示不釘右緣(review F1):VWAP 不是橫貫全寬的水平線,盤中末點在畫面中段,
++   *  右緣釘標籤會與線脫節整整 640px。 */
++  it("均價開 → vwapLine 末點右側有白色 VWAP 數值(fmt 口徑,與說明列同源)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
++    expect(label).toBeTruthy();
++    // 541 分 10 張 @2380 + 542 分 2 張 @2390 → Σca/Σv = 2381.667(fmt 不 snap tick:
++    // VWAP 是統計量不是可掛單價,review F3)
++    expect(label.textContent).toBe("2381.67");
++    const end = geomOf(ACCUM).vwapLine.at(-1)!;
++    expect(Number(label.getAttribute("x"))).toBeCloseTo(end.x + 4, 6);
++    expect(Number(label.getAttribute("y"))).toBeCloseTo(end.y, 6);
++    expect(label.getAttribute("dy")).toBe("0.35em");
++    expect(label.getAttribute("text-anchor")).toBe("start");
++    const cls = label.getAttribute("class")!;
++    expect(cls).toContain("fill-ink"); // 跟線色(白)
++    expect(cls).toContain("stroke-surface");
++    expect(label.getAttribute("paint-order")).toBe("stroke");
++  });
++
++  it("關均價 toggle → VWAP 標籤跟著線一起消失", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
++    fireEvent.click(screen.getByRole("button", { name: "均價" }));
++    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeNull();
++  });
++
++  /** 盤末(13:30)時末點就在繪圖區右界上,`x + 4` 會把標籤整塊推進右緣疊線標籤帶
++   *  甚至出畫布 —— 那是「畫了但看不到」的靜默失敗。 */
++  it("末點貼右界 → 標籤 x 內縮,整塊不出繪圖區右界", () => {
++    const late = fromSnapshot({
++      code: "2330", seq: 2,
++      last: { p: 2_390_000, t: "13:30:10.000", cum_vol: 12 },
++      vwap: 2_390_000,
++      minutes: {
++        "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 },
++        "810": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_390_000 },
++      },
++      ticks: [], book: null,
++      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++    });
++    const { container } = wrap(<StockIntradayChart accum={late} />);
++    const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
++    const end = geomOf(late).vwapLine.at(-1)!;
++    const x = Number(label.getAttribute("x"));
++    expect(end.x).toBeCloseTo(800 - R_AXIS_W, 6); // 前提:末點真的貼在右界
++    expect(x).toBeLessThan(end.x + 4);
++    // 標籤寬 ~34px(最寬內容 "1005.0" @0.5625rem)整塊留在繪圖區內
++    expect(x + 34).toBeLessThanOrEqual(800 - R_AXIS_W);
++  });
++
++  // ---- SC-1:MA 即時價位標籤 ----
++
++  it("MA 開 → 右緣內側出現 MA5 / MA20 價位數值(跟線色、halo、無 * 後綴)", async () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.click(screen.getByRole("button", { name: "MA" }));
++    await waitFor(() =>
++      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
++    );
++    const ma5 = container.querySelector('[data-testid="edge-price-ma5"]')!;
++    const ma20 = container.querySelector('[data-testid="edge-price-ma20"]')!;
++    expect(ma5.textContent).toBe("2330");
++    expect(ma20.textContent).toBe("2310");
++    // `*` 是 CDP 的專屬記號(review F3):MA 靠 ma5/ma20 的黃 / 紫與 CDP 區分
++    expect(ma5.textContent).not.toContain("*");
++    expect(ma20.textContent).not.toContain("*");
++    expect(ma5.getAttribute("class")).toContain("fill-ma5");
++    expect(ma20.getAttribute("class")).toContain("fill-ma20");
++    for (const t of [ma5, ma20]) {
++      expect(t.getAttribute("class")).toContain("stroke-surface");
++      expect(t.getAttribute("paint-order")).toBe("stroke");
++      expect(t.getAttribute("text-anchor")).toBe("end");
++      expect(t.getAttribute("dy")).toBe("0.35em");
++      expect(t.getAttribute("font-size")).toBe("0.5625rem");
++      // 繪圖區**內側**右緣:R_AXIS_W=40 的帶裝不下「2330」與名稱兩份內容
++      expect(Number(t.getAttribute("x"))).toBe(800 - R_AXIS_W - 2);
++    }
++  });
++
++  it("MA 標籤是 fmtTickPrice 口徑(日線衍生值 snap 到可下單檔位;round3 B4 不推翻)", async () => {
++    // 2_331_237 → 最近合法檔位 2_330_000(5 元 tick);未 snap 會印出 2331.2 這種下不了單的價位
++    overlayResponse = { ...OVERLAY, ma5: 2_331_237, ma20: 2_310_000 };
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.click(screen.getByRole("button", { name: "MA" }));
++    await waitFor(() =>
++      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
++    );
++    expect(container.querySelector('[data-testid="edge-price-ma5"]')!.textContent).toBe("2330");
++  });
++
++  it("標籤 y 貼著對應的 MA 線(兩線相距夠遠 → 不位移)", async () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.click(screen.getByRole("button", { name: "MA" }));
++    await waitFor(() =>
++      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
++    );
++    const g = geomOf(ACCUM);
++    expect(
++      Number(container.querySelector('[data-testid="edge-price-ma5"]')!.getAttribute("y")),
++    ).toBeCloseTo(g.toY(2_330_000), 6);
++    expect(
++      Number(container.querySelector('[data-testid="edge-price-ma20"]')!.getAttribute("y")),
++    ).toBeCloseTo(g.toY(2_310_000), 6);
++  });
++
++  it("右緣帶內的 MA5 / MA20 **名稱**標籤照舊(白名單 2:不推翻 round3 拍板)", async () => {
++    wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.click(screen.getByRole("button", { name: "MA" }));
++    await waitFor(() => expect(screen.getByText("MA5", { selector: "text" })).toBeTruthy());
++    expect(screen.getByText("MA20", { selector: "text" })).toBeTruthy();
++  });
++
++  it("MA toggle 關(預設)→ 無 MA 價位標籤(CDP 的 `價位*` 不受影響)", async () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    await waitFor(() => expect(screen.getByText("2400*", { selector: "text" })).toBeTruthy());
++    expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeNull();
++    expect(container.querySelector('[data-testid="edge-price-ma20"]')).toBeNull();
++  });
++
++  // ---- SC-3 / D7:圖層與既有合約 ----
++
++  it("MA / VWAP 標籤畫在主價線之後(D7)", async () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.click(screen.getByRole("button", { name: "MA" }));
++    await waitFor(() =>
++      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
++    );
++    const nodes = [...mainSvg(container).querySelectorAll('polyline, [data-testid^="edge-price-"]')];
++    const priceIdx = nodes.findIndex((n) =>
++      (n.getAttribute("class") ?? "").includes("stroke-bull"),
++    );
++    expect(priceIdx).toBeGreaterThanOrEqual(0);
++    for (const id of ["edge-price-vwap", "edge-price-ma5", "edge-price-ma20"]) {
++      expect(nodes.findIndex((n) => n.getAttribute("data-testid") === id)).toBeGreaterThan(
++        priceIdx,
++      );
++    }
++  });
++
++  /** 白名單 9/10:新標籤的文字只含價位(x > 740 不得有 %),halo 一律描邊不加底色 rect。
++   *  兩條既有合約(round3 SC-1 的 % 量法、SC-5 的 drawnRects === 0)就是靠這兩點成立。 */
++  it("新標籤不含 % 且不引入任何底色 rect(白名單 9/10)", async () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    fireEvent.click(screen.getByRole("button", { name: "MA" }));
++    await waitFor(() =>
++      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
++    );
++    const labels = [...mainSvg(container).querySelectorAll('[data-testid^="edge-price-"]')];
++    expect(labels.length).toBe(3);
++    for (const t of labels) expect(t.textContent).not.toContain("%");
++    const drawnRects = [...mainSvg(container).querySelectorAll("rect")].filter(
++      (r) =>
++        r.closest("defs") === null &&
++        !(r.getAttribute("data-testid") ?? "").startsWith("y-tick-lamp"),
++    );
++    expect(drawnRects.length).toBe(0);
++  });
+ });
+ 
+ // 🟢 SC-5 / D10:期貨態(個股期合約主圖)。三件事同時成立才算對 ——
+@@ -1225,6 +1467,20 @@ describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
+     expect(spot.container.querySelectorAll('[data-testid="vp-bar"]').length).toBeGreaterThan(0);
+   });
+ 
++  // 🟢 D6:VWAP 標籤**兩態都出**(vwap toggle 期貨態恆可用);MA 與 POC 標籤隨既有
++  // 可用性 = 僅現貨態 —— overlay 不打請求就沒有 MA 線可標,VP 整組不畫就沒有 POC。
++  it("期貨態:VWAP 標籤仍出,MA 與 POC 標籤不出(D6;對照組現貨態 POC 標籤畫得出來)", () => {
++    const fut = wrap(<StockIntradayChart accum={FUT} stkfut />);
++    expect(fut.container.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
++    expect(fut.container.querySelector('[data-testid="edge-price-ma5"]')).toBeNull();
++    expect(fut.container.querySelector('[data-testid="edge-price-ma20"]')).toBeNull();
++    expect(fut.container.querySelector('[data-testid="vp-poc-label"]')).toBeNull();
++    fut.unmount();
++    cleanup();
++    const spot = wrap(<StockIntradayChart accum={FUT} />);
++    expect(spot.container.querySelector('[data-testid="vp-poc-label"]')).toBeTruthy();
++  });
++
+   it("期貨態:CDP / MA / 量分佈 三顆 toggle 反灰,均價仍可用", () => {
+     wrap(<StockIntradayChart accum={FUT} stkfut />);
+     for (const label of ["CDP", "MA", "量分佈"]) {
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 4fc5edd8..dfe71c9a 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -14,6 +14,7 @@ import type { StockAccum } from "@/lib/stock-accum";
+ import {
+   buildEnergyBars,
+   buildIntradayGeometry,
++  edgePriceLabels,
+   lastPoint,
+   LOW_DECIDED_PCT,
+   minuteToX,
+@@ -32,7 +33,12 @@ import {
+   type OverlayLine,
+   type XWindow,
+ } from "@/lib/stock-intraday-svg";
+-import { buildVpBars, VP_FILL_OPACITY, type VpBar } from "@/lib/volume-profile";
++import {
++  buildVpBars,
++  VP_FILL_OPACITY,
++  VP_POC_FILL_OPACITY,
++  type VpBar,
++} from "@/lib/volume-profile";
+ import { cn, safeIdToken } from "@/lib/utils";
+ 
+ const MAIN = { width: 800, height: 260 };
+@@ -97,6 +103,15 @@ function levelText(level: OverlayLevel, priceMilli: number): string {
+ /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
+ const MARK_LABEL_TOP = 9;
+ 
++/** 圖內價位文字的寬度估值 @0.5625rem(最寬內容「1005.0」≈ 34px,同 `R_AXIS_W` 的推導)。
++ *
++ *  兩個用途:(a) VWAP 就地標籤的 x 上界 —— 末點貼右界時整塊字要留在繪圖區內;
++ *  (b) 極值文字算不算「落在右緣區」(進 MA 標籤的避讓集)的判準,取一個標籤寬的餘裕。 */
++const EDGE_LABEL_W = 34;
++/** 極值文字 `textAnchor="middle"` 半寬 + 呼吸;超過 `w − R_AXIS_W − MARK_LABEL_W` 的
++ *  極值文字才與 MA 價位標籤有水平重疊,才需要進避讓集(D3/review F2)。 */
++const MARK_LABEL_W = 40;
++
+ /** 漲跌停亮燈色塊的高度(項 5)。
+  *
+  *  **必須 ≤ 2 × PAD_Y(8)**(Phase 5 review P2):最上格的 `t.y = PAD_Y = 4`,色塊置中後
+@@ -139,6 +154,37 @@ const ChartStatic = memo(function ChartStatic({
+   /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
+   plotBottom: number;
+ }) {
++  // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
++  // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
++  // 兩段文字疊在一起,沒有任何測試會紅。
++  const markLabels = ([
++    ["day-high", g.highMark, "up"],
++    ["day-low", g.lowMark, "down"],
++  ] as const).flatMap(([id, mark, dir]) =>
++    mark === null
++      ? []
++      : [{
++          id,
++          mark,
++          y: markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom }),
++        }],
++  );
++  // MA 價位標籤的固定 obstacle = **落在右緣區的**極值文字(D3/review F2)。
++  // 極值文字在左半場時與 MA 標籤的 x 範圍不相交,納入避讓只會讓標籤無故位移。
++  const maObstacles = markLabels.flatMap((m) =>
++    m.mark.x > w - R_AXIS_W - MARK_LABEL_W ? [m.y] : [],
++  );
++  // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
++  // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
++  const maLabels = edgePriceLabels(oLines, maObstacles, {
++    top: MARK_LABEL_TOP,
++    bottom: plotBottom - 5,
++  });
++  // VWAP 就地標示在末點右側(D2/review F1):VWAP 不是橫貫全寬的水平線,盤中末點在
++  // 畫面中段,右緣釘標籤會與線脫節 600 多 px。toggle 關 / 尚無成交 → 不畫。
++  const vwapEnd = showVwap ? (g.vwapLine[g.vwapLine.length - 1] ?? null) : null;
++  // POC(域內量最大的價位);vp toggle 關 → vpBars 空 → 自然沒有
++  const pocBar = vpBars.find((b) => b.poc) ?? null;
+   return (
+     <g>
+       {/* 平盤上下的填色與雙色價線共用這兩個 clip(SC-2)。
+@@ -237,6 +283,8 @@ const ChartStatic = memo(function ChartStatic({
+           同一個 `fill-ink-muted` token,透明度收在 lib 常數不在這裡寫 magic number。 */}
+       <g data-testid="vp-bars">
+         {vpBars.map((b) => (
++          // POC(域內量最大的價位,SC-4)換 accent + 更高透明度。**同一種 testid** ——
++          // 另開節點的話,既有的「bar 數 / z-order / toggle 關掉整組消失」諸條都會漏算它。
+           <rect
+             key={b.priceMilli}
+             data-testid="vp-bar"
+@@ -244,8 +292,8 @@ const ChartStatic = memo(function ChartStatic({
+             y={b.y}
+             width={b.w}
+             height={b.h}
+-            className="fill-ink-muted"
+-            fillOpacity={VP_FILL_OPACITY}
++            className={b.poc ? "fill-accent" : "fill-ink-muted"}
++            fillOpacity={b.poc ? VP_POC_FILL_OPACITY : VP_FILL_OPACITY}
+           />
+         ))}
+       </g>
+@@ -328,11 +376,7 @@ const ChartStatic = memo(function ChartStatic({
+           移到價線之上後,實心會把線在極值那一點截斷,空心則是套在線上。
+           顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
+           其日高仍低於昨收,塗紅等於假陳述。 */}
+-      {([
+-        ["day-high", g.highMark, "up"],
+-        ["day-low", g.lowMark, "down"],
+-      ] as const).map(([id, mark, dir]) => {
+-        if (mark === null) return null;
++      {markLabels.map(({ id, mark, y }) => {
+         // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止圓被裁,不是把它趕出價位帶
+         // —— 取繪圖區的話 09:00 附近的極值會被推開,而標記的 x 承載的是「哪一分鐘」
+         // 的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
+@@ -355,7 +399,7 @@ const ChartStatic = memo(function ChartStatic({
+             <text
+               data-testid={`${id}-label`}
+               x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
+-              y={markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom })}
++              y={y}
+               textAnchor="middle"
+               className={cn(tone, "stroke-surface")}
+               strokeWidth={2}
+@@ -367,6 +411,62 @@ const ChartStatic = memo(function ChartStatic({
+           </g>
+         );
+       })}
++      {/* MA 即時價位數值(SC-1)。名稱 "MA5"/"MA20" 仍在右緣帶內(白名單 2),數值畫在
++          **繪圖區內側右緣** —— R_AXIS_W=40 的帶裝不下「2330」再加名稱兩份內容。
++          口徑 `fmtTickPrice`(可下單價位,round3 B4)且**不帶 `*`**:`*` 是 CDP 的記號,
++          兩者靠色(黃 / 紫 vs 紅綠金)與後綴分辨(review F3)。 */}
++      {maLabels.map((l) => (
++        <text
++          key={`ep-${l.level}`}
++          data-testid={`edge-price-${l.level}`}
++          x={w - R_AXIS_W - 2}
++          y={l.y}
++          dy="0.35em"
++          textAnchor="end"
++          className={cn(LEVEL_FILL[l.level], "stroke-surface")}
++          strokeWidth={2}
++          paintOrder="stroke"
++          fontSize="0.5625rem"
++        >
++          {fmtTickPrice(l.priceMilli)}
++        </text>
++      ))}
++      {/* VWAP 即時數值(SC-2)。就地畫在末點右側;`fmt` 不 snap tick —— VWAP 是統計量
++          不是可掛單價(review F3),與說明列的 VWAP 同一口徑。
++          x 的上界留 `EDGE_LABEL_W`:盤末末點恰在繪圖區右界上,`+4` 會把整塊字推進右緣
++          疊線標籤帶甚至出畫布,而那是「畫了但看不到」的靜默失敗。 */}
++      {vwapEnd !== null ? (
++        <text
++          data-testid="edge-price-vwap"
++          x={Math.min(vwapEnd.x + 4, w - R_AXIS_W - EDGE_LABEL_W)}
++          y={vwapEnd.y}
++          dy="0.35em"
++          textAnchor="start"
++          className="fill-ink stroke-surface"
++          strokeWidth={2}
++          paintOrder="stroke"
++          fontSize="0.5625rem"
++        >
++          {fmt(vwapEnd.vwap)}
++        </text>
++      ) : null}
++      {/* POC 價位數值(SC-4)。畫在長條**尖端右側**:尖端的 x 隨量比例走,標籤跟著它
++          才指認得出「變色那根是哪個價位」;釘左緣或塞進 yTicks 都會與長條脫節。
++          與 highlight 同一個 accent 色,halo 一律描邊(白名單 10:不得用底色 rect)。 */}
++      {pocBar !== null ? (
++        <text
++          data-testid="vp-poc-label"
++          x={Y_AXIS_W + pocBar.w + 3}
++          y={pocBar.y + pocBar.h / 2}
++          dy="0.35em"
++          className="fill-accent stroke-surface"
++          strokeWidth={2}
++          paintOrder="stroke"
++          fontSize="0.5625rem"
++        >
++          {fmt(pocBar.priceMilli)}
++        </text>
++      ) : null}
+     </g>
+   );
+ });
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index 41ac9e42..0014e3f5 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -4,6 +4,8 @@ import type { MinuteAgg } from "@/lib/stock-accum";
+ import {
+   buildEnergyBars,
+   buildIntradayGeometry,
++  EDGE_LABEL_H,
++  edgePriceLabels,
+   minuteToX,
+   overlayLines,
+   PAD_Y,
+@@ -17,6 +19,8 @@ import {
+   X_LABEL_H,
+   X_START_MIN,
+   Y_AXIS_W,
++  type OverlayLevel,
++  type OverlayLine,
+ } from "@/lib/stock-intraday-svg";
+ 
+ function minutes(entries: [number, Partial<MinuteAgg>][]): Map<number, MinuteAgg> {
+@@ -951,3 +955,111 @@ describe("x 窗參數化(D9)", () => {
+     expect(g.energyBars).toEqual(sub.bars);
+   });
+ });
++
++// 🟢 SC-1 / SC-3:MA 即時價位標籤的右緣佈局(mod/intraday-ma-poc-labels)。
++//
++// 佈局規則是純 1D 幾何,收在 lib 才測得到「兩顆標籤疊在一起」與「被極值文字壓住」——
++// 那兩個症狀在元件層只看得出「有 text 節點」,座標對不對完全沒有訊號。
++describe("edgePriceLabels(SC-1/SC-3)", () => {
++  /** 呼叫端(元件)實際傳的那組界:上 = 極值文字的 baseline 上界、下 = 繪圖區底再留 5px */
++  const BOUNDS = { top: 9, bottom: 246 };
++
++  function line(level: OverlayLevel, y: number, priceMilli = 2_330_000): OverlayLine {
++    return { level, y, priceMilli };
++  }
++
++  it("只收 ma5 / ma20;CDP 五線不入(它們在右緣帶內已有 `價位*`)", () => {
++    const labels = edgePriceLabels(
++      [
++        line("ah", 20),
++        line("nh", 40),
++        line("cdp", 60),
++        line("nl", 80),
++        line("al", 100),
++        line("ma5", 120, 2_330_000),
++        line("ma20", 160, 2_310_000),
++      ],
++      [],
++      BOUNDS,
++    );
++    expect(labels.map((l) => l.level)).toEqual(["ma5", "ma20"]);
++  });
++
++  it("空輸入 / 只有 CDP → []", () => {
++    expect(edgePriceLabels([], [], BOUNDS)).toEqual([]);
++    expect(edgePriceLabels([line("cdp", 60)], [], BOUNDS)).toEqual([]);
++  });
++
++  it("priceMilli 與 level 原樣帶出(顯示文字的口徑留在呼叫端)", () => {
++    const labels = edgePriceLabels([line("ma5", 120, 2_331_237)], [], BOUNDS);
++    expect(labels[0]!.priceMilli).toBe(2_331_237);
++    expect(labels[0]!.level).toBe("ma5");
++  });
++
++  it("相距夠遠 → y 原樣不動(不無故位移)", () => {
++    const labels = edgePriceLabels([line("ma5", 50), line("ma20", 120)], [], BOUNDS);
++    expect(labels.map((l) => l.y)).toEqual([50, 120]);
++  });
++
++  it("同 y(MA5 === MA20 同價)→ 中心距恰 EDGE_LABEL_H,兩顆各自可讀", () => {
++    const labels = edgePriceLabels(
++      [line("ma5", 100, 2_330_000), line("ma20", 100, 2_330_000)],
++      [],
++      BOUNDS,
++    );
++    // 上下順序取輸入順序(overlayLines 的 ma5 → ma20),不因浮點比較而不決定性
++    expect(labels.map((l) => l.level)).toEqual(["ma5", "ma20"]);
++    expect(labels[1]!.y - labels[0]!.y).toBeCloseTo(EDGE_LABEL_H, 6);
++  });
++
++  it("僅差 3px → 撐開到 EDGE_LABEL_H(上面那顆留原位)", () => {
++    const labels = edgePriceLabels([line("ma5", 100), line("ma20", 103)], [], BOUNDS);
++    expect(labels[0]!.y).toBe(100);
++    expect(labels[1]!.y).toBe(110);
++  });
++
++  it("obstacle(右緣區極值文字)不可動 → MA 讓位,中心距 ≥ EDGE_LABEL_H", () => {
++    const labels = edgePriceLabels([line("ma5", 105)], [100], BOUNDS);
++    expect(labels[0]!.y).not.toBe(105);
++    expect(Math.abs(labels[0]!.y - 100)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
++    // 讓位方向:先往下(top-down sweep),回推只在底部溢出時發生
++    expect(labels[0]!.y).toBe(110);
++  });
++
++  it("obstacle 夾在兩條 MA 之間 → 兩顆各自讓開,彼此也不疊", () => {
++    const labels = edgePriceLabels([line("ma5", 100), line("ma20", 118)], [115], BOUNDS);
++    for (const l of labels) expect(Math.abs(l.y - 115)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
++    expect(labels[1]!.y - labels[0]!.y).toBeGreaterThanOrEqual(EDGE_LABEL_H);
++  });
++
++  it("兩個 obstacle 連續擠壓 → 仍逐一讓開(不只避讓第一個)", () => {
++    const labels = edgePriceLabels([line("ma5", 102)], [100, 112], BOUNDS);
++    for (const o of [100, 112]) {
++      expect(Math.abs(labels[0]!.y - o)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
++    }
++  });
++
++  it("近頂(MA 貼漲停)→ clamp 到 bounds.top", () => {
++    const labels = edgePriceLabels([line("ma5", 2)], [], BOUNDS);
++    expect(labels[0]!.y).toBe(BOUNDS.top);
++  });
++
++  it("近底(MA 貼跌停)→ clamp 到 bounds.bottom", () => {
++    const labels = edgePriceLabels([line("ma5", 400)], [], BOUNDS);
++    expect(labels[0]!.y).toBe(BOUNDS.bottom);
++  });
++
++  it("底部溢出 → 整組回推,兩顆都留在界內且仍不疊", () => {
++    const labels = edgePriceLabels([line("ma5", 240), line("ma20", 244)], [], BOUNDS);
++    for (const l of labels) {
++      expect(l.y).toBeGreaterThanOrEqual(BOUNDS.top);
++      expect(l.y).toBeLessThanOrEqual(BOUNDS.bottom);
++    }
++    expect(labels[1]!.y - labels[0]!.y).toBeGreaterThanOrEqual(EDGE_LABEL_H);
++    expect(labels[1]!.y).toBe(BOUNDS.bottom);
++  });
++
++  it("EDGE_LABEL_H 是**中心距**(字高 ≈9px + 1 呼吸),不是字高本身", () => {
++    expect(EDGE_LABEL_H).toBe(10);
++  });
++});
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index 1982fe53..d34dcdad 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -474,3 +474,73 @@ export function overlayLines(
+   }
+   return lines;
+ }
++
++/** MA 價位標籤的最小**中心距**(不是字高)。字高 @0.5625rem ≈ 9px,再留 1px 呼吸。
++ *
++ *  文字以 `dy="0.35em"` 置中於 `y`,所以佈局層一律以「中心」為單位算距離 ——
++ *  baseline 與中心混用的失效樣態是兩顆標籤看起來仍黏在一起,而數字上「距離夠」。 */
++export const EDGE_LABEL_H = 10;
++
++export interface EdgePriceLabel {
++  y: number;
++  priceMilli: number;
++  level: "ma5" | "ma20";
++}
++
++/** MA5 / MA20 的右緣價位標籤佈局(SC-1/SC-3)。
++ *
++ *  只管 MA:CDP 五線在右緣帶內已有 `價位*`,VWAP 走**就地標示**(末點右側)不經此函式。
++ *
++ *  `obstacles` = 已經佔住那條 y 的固定文字(呼叫端傳右緣區的極值文字 baseline)。
++ *  它們**不可動** —— 極值標記承載的是「最高/最低發生在哪一分鐘」,推開它就是改資訊;
++ *  能讓位的只有 MA 標籤(它的 y 只是「這條線在哪」,而線本身照畫)。
++ *
++ *  佈局 = 由上而下掃一遍推開重疊(對 obstacle 一律往下讓,方向固定才決定性),
++ *  再由下而上回推處理底部溢出,最後 clamp 進 `bounds`。標籤數 ≤ 2,不需要更聰明的解法。 */
++export function edgePriceLabels(
++  oLines: readonly OverlayLine[],
++  obstacles: readonly number[],
++  bounds: { top: number; bottom: number },
++): EdgePriceLabel[] {
++  const labels: EdgePriceLabel[] = [];
++  for (const l of oLines) {
++    // level 逐個列舉而不是 `!== cdp 系`:未來多一種 overlay 時,新 level 會**預設不進**
++    // 這組標籤(要進就得顯式加),而不是靜默多出一顆沒人設計過位置的文字。
++    if (l.level === "ma5" || l.level === "ma20") {
++      labels.push({ y: l.y, priceMilli: l.priceMilli, level: l.level });
++    }
++  }
++  if (labels.length === 0) return [];
++  // 排序穩定(Array#sort 規範保證):同 y 時維持 oLines 的 ma5 → ma20 順序,
++  // 不因浮點比較而讓兩顆標籤在兩次 render 之間互換上下。
++  labels.sort((a, b) => a.y - b.y);
++  const fixed = [...obstacles].sort((a, b) => a - b);
++
++  let floor = bounds.top;
++  for (const l of labels) {
++    let y = Math.max(l.y, floor);
++    // obstacles 由上而下逐一檢查:讓開第一個之後可能撞上第二個,所以不能只查最近的那個
++    for (const o of fixed) if (Math.abs(y - o) < EDGE_LABEL_H) y = o + EDGE_LABEL_H;
++    l.y = y;
++    floor = y + EDGE_LABEL_H;
++  }
++
++  // 回推:上面那一輪只會把標籤往下推,推到繪圖區外就等於沒畫。由下而上再走一遍,
++  // 讓最下面那顆先回到界內,上面的跟著讓位(對 obstacle 這時改往上讓)。
++  let ceil = bounds.bottom;
++  for (let i = labels.length - 1; i >= 0; i -= 1) {
++    const l = labels[i]!;
++    let y = Math.min(l.y, ceil);
++    for (let k = fixed.length - 1; k >= 0; k -= 1) {
++      const o = fixed[k]!;
++      if (Math.abs(y - o) < EDGE_LABEL_H) y = o - EDGE_LABEL_H;
++    }
++    l.y = y;
++    ceil = y - EDGE_LABEL_H;
++  }
++
++  // 最後一道 clamp:標籤比可用空間還多(退化域 + 一堆 obstacle)時,寧可讓兩顆貼近
++  // 也不讓任何一顆被 viewBox 裁掉 —— 裁掉是完全靜默的,貼近至少讀得出有兩個數字。
++  for (const l of labels) l.y = Math.min(Math.max(l.y, bounds.top), bounds.bottom);
++  return labels;
++}
+diff --git a/frontend/src/lib/volume-profile.test.ts b/frontend/src/lib/volume-profile.test.ts
+index 85889002..eddf8428 100644
+--- a/frontend/src/lib/volume-profile.test.ts
++++ b/frontend/src/lib/volume-profile.test.ts
+@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
+ import type { VpCell } from "@/lib/stock-accum";
+ import { buildIntradayGeometry, plotWidth } from "@/lib/stock-intraday-svg";
+ import { tickOf } from "@/lib/stock-tick";
+-import { buildVpBars, VP_MAX_W_RATIO } from "@/lib/volume-profile";
++import { buildVpBars, VP_MAX_W_RATIO, VP_POC_FILL_OPACITY } from "@/lib/volume-profile";
+ 
+ const WIDTH = 800;
+ 
+@@ -192,6 +192,67 @@ describe("buildVpBars", () => {
+     });
+   });
+ 
++  /** 🟢 SC-4:POC(域內成交量最大的價位)。
++   *
++   *  判定跟著 `total` 走而不是 `w`:`w` 是歸一後的浮點數,拿它比大小會在
++   *  「兩檔量相同」時因浮點誤差而不決定性(同一份資料兩次 render 可能挑到不同那根)。
++   *  tie 一律取**較高價位** —— 決定性是 React 渲染穩定的前提,不是美感選擇。
++   *
++   *  域限定與歸一分母同規(`Math.max(1, ...)` 那條):域外那筆量再大也不是這張圖的 POC,
++   *  因為它根本沒畫出來。 */
++  describe("POC 判定(SC-4)", () => {
++    it("域內 total 最大的價位 poc = true,其餘 false", () => {
++      const bars = buildVpBars(
++        cells([[2_310_000, 1], [2_390_000, 2], [2_350_000, 30]]),
++        geom(2_300_000, 2_400_000),
++        WIDTH,
++      );
++      expect(bars.filter((b) => b.poc).map((b) => b.priceMilli)).toEqual([2_350_000]);
++      expect(bars.length).toBe(3);
++    });
++
++    it("tie(兩檔同量)→ 取**較高**價位,輸出決定性", () => {
++      const bars = buildVpBars(
++        cells([[2_350_000, 5], [2_360_000, 5], [2_310_000, 1]]),
++        geom(2_300_000, 2_400_000),
++        WIDTH,
++      );
++      expect(bars.filter((b) => b.poc).map((b) => b.priceMilli)).toEqual([2_360_000]);
++    });
++
++    it("只算**域內**:域外那筆量再大也不奪 POC", () => {
++      const bars = buildVpBars(
++        cells([[2_500_000, 1000], [2_350_000, 40], [2_360_000, 10]]),
++        geom(2_300_000, 2_400_000),
++        WIDTH,
++      );
++      // 2_500_000 根本沒進 bars(域外),POC 落在域內最大的 2_350_000
++      expect(bars.map((b) => b.priceMilli)).toEqual([2_360_000, 2_350_000]);
++      expect(bars.filter((b) => b.poc).map((b) => b.priceMilli)).toEqual([2_350_000]);
++    });
++
++    it("t 全 0(盤前 / 整批被濾)→ 無 POC(全 false),不硬挑一根", () => {
++      const bars = buildVpBars(
++        cells([[2_350_000, 0], [2_360_000, 0]]),
++        geom(2_300_000, 2_400_000),
++        WIDTH,
++      );
++      expect(bars.length).toBe(2);
++      expect(bars.some((b) => b.poc)).toBe(false);
++    });
++
++    it("單一檔位且有量 → 它就是 POC", () => {
++      const bars = buildVpBars(cells([[2_350_000, 3]]), geom(2_300_000, 2_400_000), WIDTH);
++      expect(bars[0]!.poc).toBe(true);
++    });
++
++    it("POC 透明度常數收在 lib(元件不寫 magic number)", () => {
++      expect(VP_POC_FILL_OPACITY).toBe(0.45);
++      // highlight 必須比一般 bar 更顯眼,否則「最大量價位」在畫面上分不出來
++      expect(VP_POC_FILL_OPACITY).toBeGreaterThan(0.25);
++    });
++  });
++
+   describe("高密度域的縫(R6)", () => {
+     it("(a) dist ≈ 1.19px(域 200 檔)→ h ≤ dist 且 ≥ dist × 0.8(相鄰不重疊)", () => {
+       // 250 元帶 tick = 0.5 元(500 毫元);200 檔 = 100_000 毫元域寬
+diff --git a/frontend/src/lib/volume-profile.ts b/frontend/src/lib/volume-profile.ts
+index 04ba1c17..394538fa 100644
+--- a/frontend/src/lib/volume-profile.ts
++++ b/frontend/src/lib/volume-profile.ts
+@@ -14,15 +14,22 @@ export const VP_MAX_W_RATIO = 0.22;
+  *  「這組長條在視覺層級上壓在走勢線之下」這一個決策的兩半,分開放會各自漂移。 */
+ export const VP_FILL_OPACITY = 0.25;
+ 
++/** POC(域內量最大的那一根)的透明度。與 `VP_FILL_OPACITY` 放在一起是同一個理由 ——
++ *  兩個值的關係(POC 必須比其餘 bar 更顯眼)是一個決策的兩半,分開放會各自漂移。 */
++export const VP_POC_FILL_OPACITY = 0.45;
++
+ export interface VpBar {
+   /** 價位帶頂端的 y(svg 座標,愈小愈上);帶以成交價置中並 clamp 進 y 域 */
+   y: number;
+   h: number;
+   w: number;
+   priceMilli: number;
+-  /** 該檔位當日總張(未歸一)。**本輪未接線** —— 留給後續的分色 / hover 用;
+-   *  現在只有 `w` 上得了畫面,這個欄位是 debug 與下一步的接點。 */
++  /** 該檔位當日總張(未歸一)。SC-4 起是 POC 判定的依據(見 `poc`);
++   *  歸一後的 `w` 只上得了畫面,比大小要用這個原始值。 */
+   total: number;
++  /** 這一根是不是 POC(域內 `total` 最大的價位)。**非 optional** —— 可選欄位讓
++   *  「忘了算」與「不是 POC」在型別上同形,而元件端的 `b.poc ?` 分支照樣不報錯。 */
++  poc: boolean;
+ }
+ 
+ interface Geo {
+@@ -48,6 +55,23 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
+   const maxTotal = Math.max(1, ...inDomain.map(([, c]) => c.t));
+   const maxW = plotWidth(width) * VP_MAX_W_RATIO;
+ 
++  // POC = 域內 `total` 最大的價位(SC-4)。三件事收在這個迴圈裡:
++  // (a) **不能用上面的 `maxTotal` 比對** —— 它被 `Math.max(1, ...)` clamp 過,全 0 的
++  //     當下拿它比會讓任何一根都對不上(還好),但若哪天有一檔恰為 1 張就會憑空
++  //     多出一個「POC」;判定要跟原始最大值走,而原始最大值為 0 = 無 POC。
++  // (b) tie 取**較高**價位:`w` 是歸一後的浮點數,拿它比大小在同量時不決定性,
++  //     而 React 的 key 與 class 都吃這個結果 —— 同一份資料兩次 render 挑到不同那根
++  //     的症狀是 highlight 在畫面上跳動,沒有任何錯誤訊號。
++  // (c) 域限定與歸一分母同規:域外那筆根本沒畫出來,不該奪走這張圖的 POC。
++  let pocPrice: number | null = null;
++  let pocTotal = 0;
++  for (const [priceMilli, cell] of inDomain) {
++    if (cell.t > pocTotal || (cell.t === pocTotal && pocPrice !== null && priceMilli > pocPrice)) {
++      pocTotal = cell.t;
++      pocPrice = priceMilli;
++    }
++  }
++
+   const bars = inDomain.map(([priceMilli, cell]): VpBar => {
+     // 價位帶 = **以成交價置中** `[p − tick/2, p + tick/2]`,兩端各自 clamp 進 y 域
+     // (review A1/A2/B2;design v2 amendment 2026-08-05)。
+@@ -81,6 +105,7 @@ export function buildVpBars(vp: ReadonlyMap<number, VpCell>, g: Geo, width: numb
+       w: (cell.t / maxTotal) * maxW,
+       priceMilli,
+       total: cell.t,
++      poc: priceMilli === pocPrice,
+     };
+   });
+   // 降冪 = 由上而下,React key 穩定
