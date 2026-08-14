@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import logging
 from typing import Any, Callable
+
+import pytest
 
 from copycat.server.index_engine import IndexEngine, minute_key
 from copycat.server.mis import OtcSnap
@@ -297,6 +300,55 @@ async def test_heal_backs_off_when_no_progress() -> None:
     try:
         await asyncio.sleep(0.8)
         assert 2 <= fake.fetch_minutes_calls <= 6
+    finally:
+        await eng.close()
+
+
+async def test_heal_no_progress_is_not_claimed_as_success(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SC-1(fix/index-line-vanish):heal 的「成功」判準必須是**產出面**。
+
+    2026-08-14 prod 實錄:heal 觸發 9 次,每次 `fetch_day_minutes` 都快速返回、不拋、
+    帶回零有效分鐘(TC4 回窗外 stub),而 `_retry_loop` 以「沒丟例外」當成功 → 設
+    `_push_minutes_once`/`_dirty` 宣告治好了、退避倍增,全日缺線且整天零 log。
+    無進展的那一發不得帶 minutes 出去,且必須留下可 grep 的 WARNING。"""
+    fake = FakeIndexSource()  # day_minutes 恆空 = TC4 回窗外 stub 被濾光後的形狀
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
+        await eng.start()
+        try:
+            stream = eng.stream()
+            await asyncio.sleep(0.3)
+            assert fake.fetch_minutes_calls >= 2  # heal 確實跑過
+            with pytest.raises(TimeoutError):  # 無進展 → 不設 dirty → 沒有任何廣播
+                await asyncio.wait_for(stream.__anext__(), timeout=0.1)
+            assert eng._push_minutes_once is False  # type: ignore[attr-defined]
+        finally:
+            await eng.close()
+    assert "index 分時自癒無進展" in caplog.text
+
+
+async def test_heal_escalates_window_variant_until_data_returns() -> None:
+    """SC-2:無進展的下一發 heal 必須換窗口字串(variant+1)—— 重用同一個
+    (session, symbol, 1K, 窗口)訂閱逃不出 TC4 的 stub 態(repro 實證:換窗口或換
+    session 才逃得掉)。variant 首次帶回資料 → minutes 恢復,且下一則廣播帶 minutes
+    全量一次(#45 的送達行為銜接),退避與 variant 一併歸零。"""
+    fake = FakeIndexSource()  # 舊窗口(variant 0)恆空
+    fake.variant_minutes = {1: {"0959": 2_000}}  # 換一次窗口就拿得到
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        stream = eng.stream()
+        msg = await asyncio.wait_for(stream.__anext__(), timeout=2)
+        assert msg["twse"]["minutes"] == {"0959": 2_000}  # 全量送達已連線前端
+        assert eng.state()["twse"]["minutes"] == {"0959": 2_000}
+        # boot=0、首發 heal 沿用 0(無進展)、次發換 1(命中)
+        assert fake.window_variants[:3] == [0, 0, 1]
+        assert eng._heal_variant == 0  # type: ignore[attr-defined]
+        assert eng._heal_interval is None  # type: ignore[attr-defined]
     finally:
         await eng.close()
 

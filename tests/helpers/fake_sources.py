@@ -34,6 +34,10 @@ class FakeIndexSource:
     """IndexSource fake(index engine / index routes / market routes 共用)。
 
     - `day_minutes` 可指派成 `Exception` → `fetch_day_minutes` 拋(回補失敗路徑)。
+    - `variant_minutes[v]` 指派後,`window_variant=v` 那一發改回這份(其餘仍回
+      `day_minutes`)。真 TC4 的失效是「舊窗口字串的訂閱已毒化、換窗口才拿得到資料」,
+      沒有 per-variant 回傳就只驗得到「variant 有傳下去」,驗不到「換窗口真的救得回來」。
+    - `window_variants` 記錄每次 `fetch_day_minutes` 收到的 variant。
     - `subscribe_error` 指派後 `subscribe_symbol` 拋(訂閱降級 / retry 路徑)。
     - `fetch_bars_range_tagged` 的 tag 與日 K 內容由建構子參數決定(market route 的
       「meta.source 必須是實際走到的分支」那組測試用)。
@@ -58,6 +62,8 @@ class FakeIndexSource:
         self.day_minutes: dict[str, int] | Exception = (
             {} if day_minutes is None else dict(day_minutes)
         )
+        self.variant_minutes: dict[int, dict[str, int]] = {}
+        self.window_variants: list[int] = []
         self.on_message: Callable[[dict], None] | None = None
         self.subscribe_error: Exception | None = None
         self.fetch_minutes_calls = 0
@@ -75,11 +81,13 @@ class FakeIndexSource:
     def unsubscribe_symbol(self, code: str) -> None:
         self.unsubscribed.append(code)
 
-    def fetch_day_minutes(self, code: str) -> dict[str, int]:
+    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]:
         self.fetch_minutes_calls += 1
+        self.window_variants.append(window_variant)
         if isinstance(self.day_minutes, Exception):
             raise self.day_minutes
-        return dict(self.day_minutes)
+        override = self.variant_minutes.get(window_variant)
+        return dict(self.day_minutes if override is None else override)
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.on_message = cb
