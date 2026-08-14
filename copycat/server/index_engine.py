@@ -13,7 +13,11 @@ import logging
 import time as _time
 from typing import AsyncGenerator, Callable, Protocol
 
-from copycat.live.stock_source import Bar
+from copycat.live.stock_source import (
+    WINDOW_VARIANT_END_BASE,
+    WINDOW_VARIANT_END_CAP,
+    Bar,
+)
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.ws import WsBroadcaster
 
@@ -178,6 +182,7 @@ class IndexEngine:
         self._heal_interval: float | None = None
         # heal 的 1K 窗口 variant:無進展一次 +1(= 換窗口字串 = TC4 端全新 history
         # 訂閱)。重用同一個訂閱逃不出 stub 態,重送 SubHistory 也不行(2026-08-14 實證)。
+        # 唯一的歸零點是 `_swap_day`(新交易日窗口字串天然全新);lag 恢復**不**歸零。
         self._heal_variant = 0
         # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
         # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
@@ -236,10 +241,19 @@ class IndexEngine:
                 pass
         await asyncio.to_thread(self._source.close)
 
-    def _subscribe_and_backfill(self, variant: int = 0) -> None:
+    def _subscribe_and_backfill(self, variant: int = 0) -> bool:
+        """訂閱 + 回補當日 1K;回傳「本次是否帶來**新分鐘鍵**」。
+
+        判準是鍵集合差而非值(review L1-P1-2):毒化訂閱回的凍結 stub 只有一根,
+        但它的 Close 隨現價漂 —— 以值比對會把同一根 stub 每發都算成進展,自癒又回到
+        「宣告治好、重用死窗口」的原狀。回傳 False 只代表「零新鍵」,不代表 fetch 失敗
+        (失敗一律是 ConnectionError)。
+        """
         self._source.subscribe_symbol(_SYMBOL)
         minutes = self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
+        new_keys = minutes.keys() - self._twse.minutes.keys()
         self._twse.minutes.update(minutes)
+        return bool(new_keys)
 
     # ---- 重試(R5/IR8:single-flight)----
 
@@ -253,7 +267,7 @@ class IndexEngine:
         while True:
             await asyncio.sleep(backoff)
             try:
-                await asyncio.to_thread(self._subscribe_and_backfill, variant)
+                progressed = await asyncio.to_thread(self._subscribe_and_backfill, variant)
             except ConnectionError:
                 backoff = min(backoff * 2, 60.0)
                 continue
@@ -261,16 +275,26 @@ class IndexEngine:
                 logger.exception("index retry 非預期失敗(續試)")
                 backoff = min(backoff * 2, 60.0)
                 continue
-            if not clear_stale and self._minutes_lag_exceeded():
-                # heal 型的「成功」判準是**產出面**:fetch 沒丟例外不等於 minutes 前進。
-                # TC4 對毒化訂閱回窗外 stub(A 段濾光後 = 空)時,以輸入面判定會宣告
-                # 治好了、退避倍增、永遠重用同一個窗口 → 全日缺線且零 log(2026-08-14)。
+            if not clear_stale and not progressed:
+                # heal 型的「成功」判準是**產出面的差量**:fetch 沒丟例外不等於 minutes
+                # 前進(TC4 對毒化訂閱回的是凍結 stub),而「有沒有追上牆鐘」也不是判準
+                # ——「回補到 t-10 分」是真進展,拿它當失敗會把真資料扣住不廣播、還把
+                # 窗口階梯燒在健康路徑上(review L1-P1-1/L1-P1-2)。零新鍵才是無進展:
                 # 不設 _push_minutes_once / _dirty,下一發由既有 heal 退避帶新 variant 出手。
                 logger.warning(
-                    "index 分時自癒無進展(window_variant=%d):minutes 仍落後,下一發換窗口",
+                    "index 分時自癒無進展(window_variant=%d):零新分鐘鍵,下一發換窗口",
                     variant,
                 )
                 self._heal_variant += 1
+                if WINDOW_VARIANT_END_BASE + self._heal_variant >= WINDOW_VARIANT_END_CAP:
+                    # 與上一行分開的獨立固定字串:封頂後每一發都是同一個窗口字串、
+                    # 再無逃逸維度,而「無進展」那行字面上與第 1 次一模一樣 ——
+                    # 值班的人看不出該不該換手段(換 session / 重啟 TC4)(review L1-P2-2)。
+                    logger.warning(
+                        "index 分時自癒:窗口階梯已達封頂(window_variant=%d,end hour %d)",
+                        self._heal_variant,
+                        WINDOW_VARIANT_END_CAP,
+                    )
                 return
             if clear_stale:
                 # 連線類 retry(start 失敗 / reconnect / rollover 失敗)成功 = 樂觀清
@@ -453,6 +477,9 @@ class IndexEngine:
         self._otc.minutes = {}
         self._otc.last_minute = None
         self._otc.ohlc = {}  # 換日必清:否則昨日的合成分 bar 會混進新交易日(review P1-9)
+        # 新交易日的窗口字串天然全新(start/end 都帶日期)→ 昨日爬過的階梯不必沿用,
+        # 這是 variant 唯一的歸零點(review L1-P1-3)。
+        self._heal_variant = 0
         self._dirty = True
         logger.info("index rollover → %s(回補 %d 分鐘)", self._trade_date, len(backfill))
 
@@ -477,8 +504,11 @@ class IndexEngine:
             # heal 窗 = watchdog 窗 ∪ 收盤尾窗(13:25–13:40;review T-3)。
             if self._in_watch_window() or _WATCH_END <= self._now_fn() < _HEAL_TAIL_END:
                 if not self._minutes_lag_exceeded():
-                    self._heal_interval = None  # 覆蓋度跟上 → 退避歸零
-                    self._heal_variant = 0  # 當前窗口有效 → 下次從原窗口重來
+                    # 覆蓋度跟上 → 退避歸零。**variant 不歸零**(review L1-P1-3):
+                    # 0 號窗口一旦毒化就一直是毒的,恢復時打回 0 等於推播死的日子每兩發
+                    # 浪費一發在已知死窗上;天然全新的窗口字串只有換交易日才有,
+                    # 所以歸零點在 `_swap_day`。
+                    self._heal_interval = None
                 elif (
                     self._pending_date is None
                     and (self._retry_task is None or self._retry_task.done())

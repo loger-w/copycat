@@ -38,6 +38,12 @@ _MIN_DOMAIN_START = "0901"
 _MIN_DOMAIN_END = "1330"
 _MIN_CLAMP_END = "1335"
 
+#: `fetch_day_minutes(window_variant=v)` 的窗口 end hour = `min(BASE + v, CAP)`。
+#: **公開常數**:index_engine 要判「階梯用盡」才打得出與「還在爬」可分的 log,
+#: 兩邊各寫一份數字就會漂(review L1-P2-2)。
+WINDOW_VARIANT_END_BASE = 6
+WINDOW_VARIANT_END_CAP = 23
+
 
 class DailyBar(TypedDict):
     """overlay 用日 bar(毫元;date = YYYY-MM-DD)。定義在 source 層避免 live→server 逆依賴。"""
@@ -526,16 +532,23 @@ class StockQuoteSource(TC4QuoteSource):
         1K Time 為 UTC 終點標記(實測 09:01 起);域 0901–1330 inclusive,
         1331–1335 clamp "1330"(收盤補正),其餘丟棄(design F5/IR4)。
 
+        **「rows 非空但 minutes 全空」= 毒化訂閱的簽名**(fix/index-line-vanish A′):
+        TC4 對「窗內當下無資料時建立的 history 訂閱」回的是凍結 stub 列(2026-08-14
+        實驗 B),它的 Time 落在日內域外(boot stub ≈ 台北 08:30)→ 被域外靜默丟棄後
+        呼叫端只看得到一個空 dict,與「TC4 真沒這天的資料」無從分辨、全鏈零 log
+        (index 分時自癒因此全日空轉)。固定字串供 grep:`疑似凍結 stub`。
+
         `window_variant` = **逃出毒化 history 訂閱**的唯一便宜維度:TC4 的 history
         訂閱一旦在「窗內無資料」時建立就進 stub 態,重送 SubHistory 逃不掉,實證逃得掉
         的只有換窗口字串或換 session(2026-08-14 repro)。窗口 key 是
         (session, symbol, ktype, start, end) → end hour 每 +1 就是一個全新訂閱。
-        start 不動、只推 end(`min(6 + variant, 23)`);`variant=0` 與原行為完全相同。"""
+        start 不動、只推 end(`min(BASE + variant, CAP)`);`variant=0` 與原行為完全相同。"""
         self._ensure_connected()
         sym = stock_symbol(code)
         start, end = stock_window(self._trade_date)
         if window_variant > 0:
-            end = f"{start[:8]}{min(6 + window_variant, 23):02d}"
+            hour = min(WINDOW_VARIANT_END_BASE + window_variant, WINDOW_VARIANT_END_CAP)
+            end = f"{start[:8]}{hour:02d}"
         rows = self._collect_history(sym, "1K", start, end).rows
         minutes: dict[str, int] = {}
         skipped = 0
@@ -551,6 +564,8 @@ class StockQuoteSource(TC4QuoteSource):
             minutes[key] = value
         if skipped:
             logger.warning("1K minutes 解析略過 %d/%d 列", skipped, len(rows))
+        if rows and not minutes:
+            logger.warning("1K minutes:%d 列全數域外(疑似凍結 stub)", len(rows))
         return minutes
 
     def fetch_bars_range(
