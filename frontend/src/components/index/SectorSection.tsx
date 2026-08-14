@@ -1,7 +1,8 @@
-/** 台股綜合頁的類股強弱收合區塊(market-overview R4 SC-3;design §9.1)。
+/** 台股綜合頁的類股強弱 subtab panel(market-overview R4 SC-3;design §9.1)。
  *
- *  **收合 = unmount**(`LimitListSection` / `CorrSection` 同款):輪動快照盤中每 10 秒
- *  一份,收合即 unmount → query 連同輪詢一起消失,頻寬跟著消費者走。
+ *  **非 active subtab = unmount**(`LimitListSection` / `CorrSection` 同款;2026-08-14
+ *  subtab 改版前是「收合 = unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):
+ *  輪動快照盤中每 10 秒一份,切走即 unmount → query 連同輪詢一起消失,頻寬跟著消費者走。
  *
  *  **三層而不是三個面板**:產業 → 子產業 → 成員股全部內嵌在同一棵清單裡,而且
  *  **同時只有一個成員表**。成員層各自獨立展開的話,展開 N 個群組就是 N 個並發鑽取
@@ -13,7 +14,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { SECTOR_OPEN_KEY } from "@/lib/constants";
 import { fmtPct } from "@/lib/format";
 import {
   fetchSectorMembers,
@@ -416,12 +416,13 @@ function SectorBody({
 }
 
 // ---------------------------------------------------------------------------
-// 收合殼
+// subtab panel 殼
 // ---------------------------------------------------------------------------
 
-/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。收合是
- *  unmount、但 tab 切換不是 —— 展開狀態又存在 localStorage,所以「展開著被切走」
- *  是常態,那條路要靠這道 gate 停背景輪詢。未給時預設 true。 */
+/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。非 active
+ *  subtab 是 unmount、但**主 tab 切換不是**(App 以 `hidden` 保留 DOM)—— 選中的
+ *  subtab 又存在 localStorage,所以「掛著被切走」是常態,那條路要靠這道 gate 停背景
+ *  輪詢。未給時預設 true。 */
 export function SectorSection({
   onOpenStock,
   active = true,
@@ -429,39 +430,10 @@ export function SectorSection({
   onOpenStock?: (code: string) => void;
   active?: boolean;
 }) {
-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(LimitListSection 同慣例)。
-  const [open, setOpen] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem(SECTOR_OPEN_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  function toggle(): void {
-    const next = !open;
-    setOpen(next);
-    try {
-      window.localStorage.setItem(SECTOR_OPEN_KEY, next ? "1" : "0");
-    } catch {
-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
-    }
-  }
-
   return (
-    <section data-testid="sector-section" className="rounded-md border border-line bg-surface">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={toggle}
-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
-      >
-        <span className="text-sm font-bold text-ink">類股強弱</span>
-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
-      </button>
-      {open ? <SectorBody active={active} onOpenStock={onOpenStock} /> : null}
-    </section>
+    <div data-testid="sector-section" className="px-4 pb-4">
+      <SectorBody active={active} onOpenStock={onOpenStock} />
+    </div>
   );
 }
 

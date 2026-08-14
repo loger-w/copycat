@@ -1,7 +1,8 @@
-/** 台股綜合頁的訊號時間軸收合區塊(market-overview R4 SC-7;design §9.2)。
+/** 台股綜合頁的訊號時間軸 subtab panel(market-overview R4 SC-7;design §9.2)。
  *
- *  **收合 = unmount**(`LimitListSection` / `SectorSection` 同款),但這裡沒有 `active`
- *  prop:資料是**一次性 query + WS bus 推播**,沒有輪詢可以 gate —— 加一個 gate 進來
+ *  **非 active subtab = unmount**(`LimitListSection` / `SectorSection` 同款;2026-08-14
+ *  subtab 改版前是「收合 = unmount」),但這裡**刻意沒有** `active` prop:資料是
+ *  **一次性 query + WS bus 推播**,沒有輪詢可以 gate —— 加一個 gate 進來
  *  只會擋掉 bus 的即時列,而畫面上看起來像「盤中沒有訊號」。
  *
  *  **兩族同軸,但廣度列要自我標示**:`market_*` 來自 FinMind 快照 diff(精度 5-10s),
@@ -14,7 +15,6 @@
 import { useMemo, useState } from "react";
 
 import { useSignalFeed } from "@/hooks/useSignalFeed";
-import { SIGNAL_TIMELINE_OPEN_KEY } from "@/lib/constants";
 import { isMarketKind, kindLabel, type SignalMsg } from "@/lib/signal-model";
 import { cn } from "@/lib/utils";
 
@@ -171,43 +171,14 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
 }
 
 // ---------------------------------------------------------------------------
-// 收合殼
+// subtab panel 殼
 // ---------------------------------------------------------------------------
 
 export function SignalTimelineSection({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(SectorSection 同慣例)。
-  const [open, setOpen] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem(SIGNAL_TIMELINE_OPEN_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  function toggle(): void {
-    const next = !open;
-    setOpen(next);
-    try {
-      window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, next ? "1" : "0");
-    } catch {
-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
-    }
-  }
-
   return (
-    <section data-testid="signal-timeline" className="rounded-md border border-line bg-surface">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={toggle}
-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
-      >
-        <span className="text-sm font-bold text-ink">訊號時間軸</span>
-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
-      </button>
-      {open ? <TimelineBody onOpenStock={onOpenStock} /> : null}
-    </section>
+    <div data-testid="signal-timeline" className="px-4 pb-4">
+      <TimelineBody onOpenStock={onOpenStock} />
+    </div>
   );
 }
 
