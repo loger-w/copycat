@@ -13,7 +13,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SignalTimelineSection } from "@/components/index/SignalTimelineSection";
-import { SIGNAL_TIMELINE_OPEN_KEY } from "@/lib/constants";
 import { emitSignal } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 
@@ -62,20 +61,15 @@ function renderSection(onOpenStock?: (code: string) => void) {
   );
 }
 
-/** 直接以「已展開」開場(收合閘門另有專測),等 baseline 落地後回傳。 */
+/** render 即掛載(subtab 改版後本元件不再有收合殼),等 baseline 落地後回傳。 */
 async function openWith(
   signals: SignalMsg[] = [],
   onOpenStock?: (code: string) => void,
 ): Promise<void> {
-  window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, "1");
   stubFetch(signals);
   renderSection(onOpenStock);
   await screen.findByTestId("signal-timeline-body");
   await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
-}
-
-function header(): HTMLElement {
-  return screen.getByRole("button", { name: /訊號時間軸/ });
 }
 
 function rowIds(): string[] {
@@ -98,36 +92,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("SignalTimelineSection 收合閘門", () => {
-  it("預設收合:body 不 mount、零 fetch", async () => {
-    renderSection();
-    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
-    expect(screen.queryByTestId("signal-timeline-body")).toBeNull();
-    expect(fetchMock.mock.calls.length).toBe(0);
-  });
-
-  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
-    renderSection();
-    fireEvent.click(header());
-    await screen.findByTestId("signal-timeline-body");
-    expect(window.localStorage.getItem(SIGNAL_TIMELINE_OPEN_KEY)).toBe("1");
-    expect(header().getAttribute("aria-expanded")).toBe("true");
-
-    cleanup();
+// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)。
+// 本元件**刻意沒有** `active` gate(一次性 query + WS bus,沒有輪詢可停)—— 這件事
+// 不因 subtab 改版而變。
+describe("SignalTimelineSection 掛載即工作(subtab 改版)", () => {
+  it("render 即掛 body 並取 baseline(無收合鈕)", async () => {
     renderSection();
     expect(await screen.findByTestId("signal-timeline-body")).toBeTruthy();
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: /展開|收合/ })).toBeNull();
   });
 
-  it("收合把 body unmount 並寫回 0", async () => {
-    await openWith([sig({ id: "a" })]);
-    await screen.findByTestId("signal-timeline-row-a");
+  it("零 OPEN_KEY 讀寫(廢止的鍵不得留旁路)", async () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    renderSection();
+    await screen.findByTestId("signal-timeline-body");
 
-    fireEvent.click(header());
-
-    expect(screen.queryByTestId("signal-timeline-body")).toBeNull();
-    expect(screen.queryByTestId("signal-timeline-row-a")).toBeNull();
-    expect(window.localStorage.getItem(SIGNAL_TIMELINE_OPEN_KEY)).toBe("0");
-    expect(header().getAttribute("aria-expanded")).toBe("false");
+    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
+    expect(keys).not.toContain("copycat-signal-timeline-open");
+    getItem.mockRestore();
+    setItem.mockRestore();
   });
 });
 
@@ -332,9 +317,8 @@ describe("SignalTimelineSection 空態", () => {
 // 而「baseline 抓不到」與「今天真的沒訊號」在畫面上完全同形 —— 使用者看到「今日尚無
 // 訊號」不會去查服務,只會以為今天很安靜。這一組鎖的是「降級說得出口」。
 describe("SignalTimelineSection baseline 取數失敗", () => {
-  /** 展開 + baseline 端點 503(hub 未就緒)。retry: 1 是 hook 內建 → 要等第二次 fetch。 */
+  /** baseline 端點 503(hub 未就緒)。retry: 1 是 hook 內建 → 要等第二次 fetch。 */
   async function openWith503(): Promise<void> {
-    window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, "1");
     fetchMock = vi.fn(
       async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
     );

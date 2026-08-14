@@ -124,7 +124,8 @@ function appFetch(
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
-    // 漲跌停列表(R3 SC-5 的跳轉起點)。列表預設收合 → 其餘測試不會走到這條分支。
+    // 漲跌停列表(R3 SC-5 的跳轉起點)。2026-08-14 subtab 改版後**預設 subtab 就是漲跌停**
+    // → 任何停在台股綜合 tab 的測試都會走這條分支(不再是「僅跳轉測試才用到」)。
     if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
     // 成員層在前:兩條路由共前綴,順序反過來會讓成員請求被類股狀態那條吃掉。
     if (u.includes("/api/market/sector/members")) {
@@ -226,7 +227,7 @@ describe("App 台股綜合 tab 整併(SC-1)", () => {
 describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
   async function openList() {
     window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-limit-list-open", "1");
+    // 預設 subtab 即漲跌停(2026-08-14 改版)—— 不再需要 seed 展開狀態
     renderApp();
     return await screen.findByTestId("limit-row-1101");
   }
@@ -256,7 +257,6 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
     window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-limit-list-open", "1");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -305,7 +305,7 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
    *  必須走這條,否則 IndexPage / SectorSection 之間少接一根線也驗不出來。 */
   async function openSectorMember(): Promise<HTMLElement> {
     window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-sector-open", "1");
+    window.localStorage.setItem("copycat-index-subtab", "sector");
     renderApp();
     fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
     fireEvent.click(await screen.findByTestId("sector-sub-btn-航運-貨櫃航運"));
@@ -316,7 +316,7 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
   async function openTimelineRow(): Promise<HTMLElement> {
     vi.stubGlobal("fetch", appFetch(undefined, [TIMELINE_SIGNAL]));
     window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-signal-timeline-open", "1");
+    window.localStorage.setItem("copycat-index-subtab", "timeline");
     renderApp();
     return await screen.findByTestId("signal-timeline-row-tl-1");
   }
@@ -362,7 +362,7 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
     window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-sector-open", "1");
+    window.localStorage.setItem("copycat-index-subtab", "sector");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -590,12 +590,22 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
   // 用 `vi.resetModules()` + 動態 import 重跑 App 模組會讓這條依賴 module registry
   // 的重置順序,脆得沒必要。「App.tsx 頂層有呼叫」這件事由該檔的一行呼叫負責,
   // 行為則由本單元測試 + 真環境驗證共同守住。
-  it("purgeOrphanKeys 清掉孤兒鍵(stock-ladder-open / stock-wl-group)", () => {
-    window.localStorage.setItem("stock-ladder-open", "1");
-    window.localStorage.setItem("stock-wl-group", "科技股");
+  it("purgeOrphanKeys 清掉孤兒鍵(停用功能 + 2026-08-14 subtab 改版廢止的四支)", () => {
+    const orphans = [
+      "stock-ladder-open",
+      "stock-wl-group",
+      "copycat-corr-open",
+      "copycat-limit-list-open",
+      "copycat-sector-open",
+      "copycat-signal-timeline-open",
+    ];
+    for (const key of orphans) window.localStorage.setItem(key, "1");
     purgeOrphanKeys();
-    expect(window.localStorage.getItem("stock-ladder-open")).toBeNull();
-    expect(window.localStorage.getItem("stock-wl-group")).toBeNull();
+    for (const key of orphans) expect(window.localStorage.getItem(key)).toBeNull();
+    // 新鍵是活的,不得被順手清掉
+    window.localStorage.setItem("copycat-index-subtab", "sector");
+    purgeOrphanKeys();
+    expect(window.localStorage.getItem("copycat-index-subtab")).toBe("sector");
   });
 });
 

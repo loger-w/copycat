@@ -109,6 +109,53 @@ describe("BreadthBand 格值與版面(SC-4)", () => {
   });
 });
 
+/** 🔴 2026-08-14 拍板配色:上漲 / 下跌兩格**沒有底色**,識別完全落在數字上 ——
+ *  這兩格的數字染紅綠與 (f)(g) 的「停板格底染色、停板數字留 ink」不衝突,兩者是
+ *  「有底色的格不重複染字」與「沒底色的格由字承擔」的一體兩面。 */
+describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
+  it("(l) 上漲數字紅字(text-bull),兩市場皆然", () => {
+    render(<BreadthBand breadth={state()} />);
+    for (const market of ["twse", "tpex"] as const) {
+      const cls = screen.getByTestId(`breadth-value-${market}-up`).className;
+      expect(cls).toContain("text-bull");
+      expect(cls).not.toContain("text-bear");
+    }
+  });
+
+  it("(m) 下跌數字綠字(text-bear),兩市場皆然", () => {
+    render(<BreadthBand breadth={state()} />);
+    for (const market of ["twse", "tpex"] as const) {
+      const cls = screen.getByTestId(`breadth-value-${market}-down`).className;
+      expect(cls).toContain("text-bear");
+      expect(cls).not.toContain("text-bull");
+    }
+  });
+
+  it("(n) 平盤數字維持中性 ink,不沾紅綠", () => {
+    render(<BreadthBand breadth={state()} />);
+    const cls = screen.getByTestId("breadth-value-twse-flat").className;
+    expect(cls).toContain("text-ink");
+    expect(cls).not.toContain("text-bull");
+    expect(cls).not.toContain("text-bear");
+  });
+
+  it("(o) 跌停數字仍是 ink(綠底上的綠字讀不出來;與 (g) 互補)", () => {
+    render(<BreadthBand breadth={state()} />);
+    const cls = screen.getByTestId("breadth-value-twse-limit_down").className;
+    expect(cls).toContain("text-ink");
+    expect(cls).not.toContain("text-bear");
+  });
+
+  it("(p) 上漲 / 下跌格仍然沒有底色(染色不與字色疊加)", () => {
+    render(<BreadthBand breadth={state()} />);
+    for (const b of ["up", "down"] as const) {
+      const cls = screen.getByTestId(`breadth-cell-twse-${b}`).className;
+      expect(cls).not.toContain("bg-bull");
+      expect(cls).not.toContain("bg-bear");
+    }
+  });
+});
+
 describe("BreadthBand stale 徽章(SC-3)", () => {
   it("(h) stale=true → 顯示「資料延遲」且前值仍在", () => {
     render(<BreadthBand breadth={state({ stale: true })} />);
