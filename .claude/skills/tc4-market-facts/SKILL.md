@@ -97,7 +97,7 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   (Trigger:夜盤 1K / 分鐘域 / 近全序列)
 
 - **TC4 1K 首頁 30s timeout 在早晨冷啟動是高機率事件,且 `_collect_history` 對 timeout
-  靜默回空(不 raise)**(2026-08-13 實證,連續兩早晨 2/2:08:23 / 08:58;盤後閒時啟動
+  靜默回空(不 raise)**(2026-08-13 實證,連三早晨 3/3:08:23 / 08:58 / 08:01;盤後閒時啟動
   則秒回):TC4 剛開 + server 同時搶 255 檔個股訂閱 + 6 腿 river 回補時,IX0001 1K 首頁
   30s 內備不齊。caller 拿到空 dict 與「該日真無資料」不可分 → 任何把「開機那一次回補」
   當唯一資料源的設計都會靜默失去全日資料。同日另實證:**REALTIME 推播可整段靜默
@@ -105,6 +105,20 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   14:52 同 session 當場取回 270 根)→ 修復用「產出面覆蓋度偵測 + 重掛/重抓自癒」
   (index_engine 分時自癒,grep `index 分時自癒`),不是猜輸入面哪環死了。
   (Trigger:設計任何「開機回補 + 推播增量」的資料鏈 / 排查分時線缺失)
+- **1K history 訂閱在「窗內無資料時建立」會進「凍結 stub 態」,同窗口重送 SubHistory
+  永不恢復**(2026-08-14 實證,fix/index-line-vanish 三組受控實驗 + prod 全日事故):
+  (a) 毒化態下 GETHISDATA 回**單列凍結 stub**(Time = 訂閱建立時刻、Close 隨當下現價
+  漂)而**非空頁** — 「首頁非空即 break」的 ready-check 會被騙,`timed_out=False` +
+  一列垃圾,全鏈零 log;symbol 本身也死(pre-open)時才是恆空 → 30s timeout。
+  (b) 窗內資料出現後,同窗口重送 SubHistory + GETHISDATA("0") 依然只回那根凍結 stub
+  (實測 40 分鐘後仍凍在建立分鐘)。(c) **逃逸維度只有兩個**:換窗口字串(同 session、
+  同 symbol、僅 end hour +1 即是全新訂閱,實測立即取回全量)或換 session。(d) 健康
+  訂閱(建立時窗內有資料)不受影響:分頁 cursor 消耗殆盡後重問 "0" 永遠從頭給。
+  對策 pattern:`fetch_day_minutes(window_variant=)` 窗口階梯 + 引擎「新分鐘鍵差量」
+  進展判定(值漂不算進展;絕對 lag 也不是判準 — 部分回補是真進展);log 簽名 =
+  「rows 非空但解析後全域外」grep `疑似凍結 stub`。**姊妹 ready-check(river_backfill /
+  stock backfill / _fetch_symbol_ticks)未收緊**,見 docs/next-time.md 2026-08-14 節。
+  (Trigger:任何 SubHistory/GETHISDATA 輪詢迴圈 / 空窗訂閱重試設計 / 排查「回補回垃圾」)
 
 ## 指數與期指
 
