@@ -102,7 +102,9 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
     //
     // 變的是尺度:矩陣佈局後卡片高度隨格高走(`grow`,h-20 只剩基準),y 向縮放可達
     // ~3×,原本「尺度差 <5%、線寬失真不可見」的前提不再成立。線寬改由
-    // `vectorEffect="non-scaling-stroke"` 釘在螢幕像素,不隨 viewBox 縮放變粗。
+    // `vectorEffect="non-scaling-stroke"` 釘在螢幕像素,不隨 viewBox 縮放變粗;
+    // 平盤虛線的 `strokeDasharray` 也一併改以螢幕像素計(non-scaling-stroke 把整個
+    // stroke 運算移到 viewport 座標)—— 疏密不再隨卡片寬縮放,是明示決定(review A-2)。
     // y 向斜率跟著視覺放大則是「圖吃滿卡片」的本意,不補償。
     <svg
       viewBox={`${Y_AXIS_W} 0 ${MINI_W} ${MINI_H}`}
