@@ -1,3 +1,15 @@
+﻿## 2026-08-14(mod/index-overlay 收尾沉澱)
+
+- [ ] **`localYmd()` 兩份重複**(useStockOverlay.ts / useIndexOverlay.ts 各一份,包 C
+  刻意不動既有檔以免擴散 diff):抽到 `@/lib/format` 或 `@/lib/utils` 單一來源;
+  漂掉的失效是兩 hook 的 queryKey 換日時刻不一致,靜默。純 🔵,/refactor 順手批。
+- [ ] **個股 CDP 右緣標籤帶疊字修法可借 index 側 rightEdgeLabels**:index-chart-svg 的
+  rightEdgeLabels(fixed 錨 + 三段式 + 殘餘丟棄)與個股 edgePriceLabels 擴到 CDP 的
+  既有 next-time 項(2026-08-14 fix/index-line-vanish 節)同族,動工時先比對兩份演算法
+  可否合一,不要各長一套。
+- [ ] **rightEdgeLabels 的 clamp-vs-fixed 隱性前提**(自評 correctness lens 註記):
+  (d) 段 clamp 後只對前一顆 movable 查距離、不回查 fixed 昨收;現標籤上限 8 顆不可達,
+  未來 index overlay 加種類(如 VWAP 掛牌)時要補回查或補測試。
 
 ## 2026-08-14(fix/index-line-vanish 收尾留尾巴)
 
