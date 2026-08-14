@@ -396,6 +396,35 @@ def _minutes_src(handler: Callable[[dict], bytes]) -> StockQuoteSource:
     )
 
 
+class TestFetchDayMinutesStubSignature:
+    """SC-3′(amendment 2026-08-14;review L2-P1-1 撤除 tc4 窗過濾後由此承接可視性)。
+
+    TC4 1K 對「空窗期建立的 history 訂閱」回**凍結 stub 列**而非空頁(2026-08-14
+    實驗 B),而 `_collect_history` 的「首頁非空即 break」被它騙過 → `timed_out=False`
+    + 一列垃圾;`fetch_day_minutes` 再對域外列靜默丟棄 → 呼叫端拿到空 dict、全鏈零
+    log。「rows 非空但 minutes 全空」正是這個毒化態的簽名,必須留固定字串供 grep。
+    """
+
+    #: prod boot stub 的形狀:Time 是 UTC,00:30 → 台北 08:30 → 域(0901–1330)外。
+    STUB = {"Date": "20260728", "Time": "003000", "Close": "23000", "QryIndex": "1"}
+
+    def test_all_rows_out_of_domain_logs_stub_signature(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        src = _minutes_src(_k1_pager({"0": [self.STUB], "1": []}))
+        with caplog.at_level(logging.WARNING, logger="copycat.live.stock_source"):
+            assert src.fetch_day_minutes("IX0001") == {}
+        assert "疑似凍結 stub" in caplog.text  # 可 grep 的毒化訂閱簽名
+        assert "1 列" in caplog.text  # 帶列數:一列 stub 與整批格式異動不同量級
+
+    def test_empty_rows_do_not_log_stub_signature(self, caplog: pytest.LogCaptureFixture) -> None:
+        """真「當日無資料」(rows 本來就空)不是 stub 態,不得誤報。"""
+        src = _minutes_src(_k1_pager({}))
+        with caplog.at_level(logging.WARNING, logger="copycat.live.stock_source"):
+            assert src.fetch_day_minutes("IX0001") == {}
+        assert "疑似凍結 stub" not in caplog.text
+
+
 class TestFetchDayMinutesWindowVariant:
     """SC-4:window variant = 逃出「毒化 history 訂閱」的維度(repro 實證:換窗口字串
     或換 session 才逃得掉,重送 SubHistory 逃不掉)。start 不變,只推 end hour。"""

@@ -37,6 +37,9 @@ class FakeIndexSource:
     - `variant_minutes[v]` 指派後,`window_variant=v` 那一發改回這份(其餘仍回
       `day_minutes`)。真 TC4 的失效是「舊窗口字串的訂閱已毒化、換窗口才拿得到資料」,
       沒有 per-variant 回傳就只驗得到「variant 有傳下去」,驗不到「換窗口真的救得回來」。
+    - `minutes_sequence` 指派後,**逐發**依序消耗一份(耗盡後退回上面兩條規則)。
+      凍結 stub 的 Close 隨現價漂 = 同鍵不同值,只有逐發序列表達得出「fetch 有回東西
+      但零新鍵」這個形狀(review L1-P1-2 的差量判定)。
     - `window_variants` 記錄每次 `fetch_day_minutes` 收到的 variant。
     - `subscribe_error` 指派後 `subscribe_symbol` 拋(訂閱降級 / retry 路徑)。
     - `fetch_bars_range_tagged` 的 tag 與日 K 內容由建構子參數決定(market route 的
@@ -63,6 +66,7 @@ class FakeIndexSource:
             {} if day_minutes is None else dict(day_minutes)
         )
         self.variant_minutes: dict[int, dict[str, int]] = {}
+        self.minutes_sequence: list[dict[str, int]] = []
         self.window_variants: list[int] = []
         self.on_message: Callable[[dict], None] | None = None
         self.subscribe_error: Exception | None = None
@@ -86,6 +90,8 @@ class FakeIndexSource:
         self.window_variants.append(window_variant)
         if isinstance(self.day_minutes, Exception):
             raise self.day_minutes
+        if self.minutes_sequence:
+            return dict(self.minutes_sequence.pop(0))
         override = self.variant_minutes.get(window_variant)
         return dict(self.day_minutes if override is None else override)
 
