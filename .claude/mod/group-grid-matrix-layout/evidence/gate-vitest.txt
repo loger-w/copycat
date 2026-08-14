@@ -1,0 +1,325 @@
+﻿
+> copycat-frontend@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 C:/side-project/copycat/frontend
+
+node.exe : stderr | src/hooks/useIndexStream.test.ts > useIndexStream > 換日 refetch 失敗 → 退避重試回填,不永久缺線(fix/index-chart-empty-minutes)
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (stderr | src/ho...-empty-minutes):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+index: state 載入失敗 TypeError: network down
+    at C:\side-project\copycat\frontend\src\hooks\useIndexStream.test.ts:130:13
+    at mockCall (file:///C:/side-project/copycat/frontend/node_modules/@vitest/spy/dist/index.js:96:15)
+    at spy (file:///C:/side-project/copycat/frontend/node_modules/tinyspy/dist/index.js:47:80)
+    at refetch (C:\side-project\copycat\frontend\src\hooks\useIndexStream.ts:103:25)
+    at handle (C:\side-project\copycat\frontend\src\hooks\useIndexStream.ts:161:14)
+    at FakeWS.ws.onmessage (C:\side-project\copycat\frontend\src\hooks\useIndexStream.ts:181:11)
+    at FakeWS.emit (C:\side-project\copycat\frontend\src\hooks\useIndexStream.test.ts:24:10)
+    at C:\side-project\copycat\frontend\src\hooks\useIndexStream.test.ts:142:18
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act (C:\side-project\copycat\frontend\node_modules\react\cjs\react.development.js:814:22)
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 失敗重試後的 snapshot 簿不被前一輪的 pending 簿蓋回(F-2 跨輪不殘留)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/App.test.tsx > App 漲跌停列表跳轉個股(R3 SC-5) > 點列 → tab 切到「個股(期)」
+stock: snapshot refetch 非 2xx 404
+
+stderr | src/App.test.tsx > App 漲跌停列表跳轉個股(R3 SC-5) > 點列 → 個股頁收到該檔(打 /api/stock/state/1101,含 set_main)
+stock: snapshot refetch 非 2xx 404
+
+stderr | src/App.test.tsx > App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7) > 點類股成員列 → tab 切到「個股(期)」且個股頁收到該檔
+stock: snapshot refetch 非 2xx 404
+
+stderr | src/App.test.tsx > App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7) > 點訊號時間軸列 → tab 切到「個股(期)」且個股頁收到該檔
+stock: snapshot refetch 非 2xx 404
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > refetch 503 → backoff 重試,成功後 accum 就緒(F-3)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 切檔取消 pending 重試(1s 後只有新標的自己的那一次)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 切檔取消 pending 重試(1s 後只有新標的自己的那一次)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > unmount 後不排重試(元件存活檢查)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > WS 斷線期間不排重試(重連的 onopen 本來就會發一次全量對齊)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 重試間隔遞增、有上限、成功一次後歸零
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/App.test.tsx > App 資料流上提(D-3 / D-16) > 切到個股 tab 後才建立 stock WS 並取 snapshot
+stock: snapshot refetch 非 2xx 404
+
+stderr | src/hooks/useStockStream.test.ts > useStockStream > 舊 socket 的 onclose 不得清掉新 socket 的 open 旗標(A-2)
+stock: snapshot refetch 非 2xx 503
+
+stderr | src/App.test.tsx > App localStorage key 遷移 / 孤兒清除 > 新 key 有值時優先採用,不被舊 key 的殘值蓋回去
+stock: snapshot refetch 非 2xx 404
+
+ ✓ src/hooks/useSignalFeed.test.tsx (9 tests) 2736ms
+   ✓ useSignalFeed > today 抓失敗 → signals 空陣列(不 throw,live 訊號照樣進得來)  1103ms
+   ✓ useSignalFeed > today 抓失敗 → baselineError 為 true(降級要可見,不只是靜靜地空著)  1093ms
+ ✓ src/hooks/useIndexStream.test.ts (7 tests) 2803ms
+   ✓ useIndexStream > 換日 refetch 失敗 → 退避重試回填,不永久缺線(fix/index-chart-empty-minutes)  1165ms
+   ✓ useIndexStream > WS reconnect → refetch state 全量(F3)  1156ms
+ ✓ src/components/index/LimitListSection.test.tsx (34 tests) 2753ms
+   ✓ LimitListSection 空狀態(判別子 = as_of) > HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)  1047ms
+   ✓ LimitListSection 空狀態(判別子 = as_of) > 已有資料後 refetch 失敗 → 表格保留,改以「更新失敗」膠囊示警  1034ms
+ ✓ src/components/index/SignalTimelineSection.test.tsx (21 tests) 2804ms
+   ✓ SignalTimelineSection baseline 取數失敗 > 零訊號 + 取數失敗 → 說是失敗,不是「今日尚無訊號」  1038ms
+   ✓ SignalTimelineSection baseline 取數失敗 > 取數失敗但已有 live 訊號 → 清單照畫,頂部加一行「僅顯示即時訊號」提示  1076ms
+ ✓ src/App.test.tsx (37 tests) 2671ms
+   ✓ App(index-board T9) > localStorage 記住 index tab,重載復原(review B8)  325ms
+   ✓ App(capital WS 唯一掛載 review B2) > App 掛載即建 capital WS;個股+期貨 tab 都訪過仍單一連線  704ms
+ ✓ src/components/stock/StkfutLadder.test.tsx (20 tests) 2928ms
+ ✓ src/components/stock/StockChart.test.tsx (28 tests) 3314ms
+   ✓ StockChart 模式切換(SC-7) > 取數失敗顯示「K 線載入失敗」+ 錯誤碼,不崩  1056ms
+   ✓ StockChart 模式切換(SC-7) > 錯誤碼 fallback:body 無 detail.error → 顯示 HTTP_<status>  1060ms
+ ✓ src/components/stock/StockPage.test.tsx (49 tests) 3377ms
+   ✓ StockPage 群組檢視(group-grid SC-3) > 自選載入失敗 → 群組檢視說「自選載入失敗」,不冒充零群組  1062ms
+ ✓ src/hooks/useStockStream.test.ts (40 tests) 3669ms
+ ✓ src/components/index/SectorSection.test.tsx (32 tests) 4086ms
+   ✓ SectorSection 成員層(lazy drill-down) > 成員請求 500 → 成員載入失敗(清單其餘部分照常)  1071ms
+   ✓ SectorSection 降級 > 已有資料後 refetch 失敗 → 清單保留,改以「更新失敗」膠囊示警  1045ms
+   ✓ SectorSection 降級 > HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)  1046ms
+ ✓ src/components/rail/RightRail.test.tsx (32 tests) 4319ms
+   ✓ RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13) > 個股武裝後切到期貨 context 再切回 → 鈕回到「武裝」  367ms
+   ✓ RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13) > 武裝後切右欄 tab 再切回閃電 → 鈕回到「武裝」  331ms
+   ✓ RightRail 個股期態 market 貫穿(stkfut-contracts R4) > 現貨態切到合約 → 閃電梯換成合約梯且未武裝(整合面煙霧測試,非 R2-5 鎖)  365ms
+   ✓ RightRail 個股期口數不跨合約(A5) > 換產品腿(標準 ↔ 小型)口數回初值,切回時各自記得自己那格  336ms
+   ✓ RightRail 置中請求不跨 instrument(A7a) > 合約態點價置中後切回現貨 → 現股梯掛載時跟隨仍開啟(舊請求已清)  450ms
+ ✓ src/hooks/useBreadthRows.test.ts (8 tests) 1293ms
+   ✓ useBreadthRows(SC-1) > HTTP 錯誤 → error 終態帶 detail.error 錯誤碼  1072ms
+ ✓ src/components/stock/WatchlistSidebar.test.tsx (72 tests) 4969ms
+   ✓ WatchlistSidebar 全部展開 / 收合(SC-4) > 自選未載入(pending / 失敗)→ 鈕不渲染,既有折疊清單不被覆寫  1039ms
+   ✓ WatchlistSidebar 管理入口(SC-13 / SC-15) > 載入失敗 → 管理鈕不渲染(EMPTY_WL 上開 Dialog 新增群組會整份 PUT 清空自選)  1036ms
+ ✓ src/hooks/useStkfutContracts.test.tsx (4 tests) 1268ms
+   ✓ useStkfutContracts > 502 TC4_DOWN 是錯誤,不降級成「沒期貨」  1076ms
+ ✓ src/hooks/useStockBars.test.tsx (18 tests) 1195ms
+   ✓ useStockBars 取數條件 > 錯誤碼依專案契約自 detail.error 解析  1076ms
+ ✓ src/components/stock/StockIntradayChart.test.tsx (110 tests) 1698ms
+ ✓ src/hooks/useBreadth.test.ts (10 tests) 1961ms
+   ✓ useBreadth > WS reconnect onopen → refetch 全量(補回斷線期間漏格)  1157ms
+ ✓ src/components/index/MarketPane.test.tsx (30 tests) 940ms
+ ✓ src/components/stock/WatchlistManagerDialog.test.tsx (36 tests) 1012ms
+ ✓ src/hooks/useOiLevels.test.ts (3 tests) 1183ms
+   ✓ useOiLevels(SC-11) > HTTP 500 → 不 throw、data 維持 undefined(線消失即降級)  1080ms
+ ✓ src/components/futures/FuturesLadder.test.tsx (29 tests) 5975ms
+   ✓ FuturesLadder 武裝直送(SC-8) > 武裝點價:1 次 API call;payload 帶 HOT symbol + day_trade 預設 false  429ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > 送單 400:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除  306ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > 200 但 ok:false(結果未知 code=-1)→ hint 顯示 message 且 failStreak 累積  348ms
+   ✓ FuturesLadder 武裝防護(review C3/C4) > qty 快捷「3」按兩下累加 → payload qty 6(review C4)  325ms
+   ✓ FuturesLadder 一鍵平倉(SC-10) > 平倉失敗不動武裝狀態(平倉不是武裝路徑)  459ms
+ ✓ src/components/stock/GroupGridView.test.tsx (38 tests) 1056ms
+ ✓ src/components/stock/CandleChart.test.tsx (52 tests) 2713ms
+   ✓ CandleChart 縮放與平移(SC-6.3/6.4) > 縮放下限 20 根、上限 min(total, 700) 根  1451ms
+ ✓ src/hooks/useFuturesBars.test.ts (9 tests) 1145ms
+   ✓ useFuturesBars(SC-1/2/3) > HTTP 錯誤 → error 帶 detail.error 錯誤碼  1073ms
+ ✓ src/hooks/useStockNames.test.tsx (10 tests) 6439ms
+   ✓ useStockNames > 404 → error 態帶錯誤碼  1084ms
+   ✓ useStockNames > 啟動窗內連續失敗後應自動復原(不需 focus / remount)  4096ms
+   ✓ useStockNames > body 為合法 JSON null → 退回 HTTP_<status>,不讓 TypeError 逸出  1079ms
+stderr | src/hooks/useRiver.test.ts > useRiver > 非 river 型別的訊息忽略,壞 JSON 不崩
+river ws: 無法解析訊息 SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at FakeWS.ws.onmessage (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:149:28)
+    at C:\side-project\copycat\frontend\src\hooks\useRiver.test.ts:230:18
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act (C:\side-project\copycat\frontend\node_modules\react\cjs\react.development.js:814:22)
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:46:25
+    at C:\side-project\copycat\frontend\src\hooks\useRiver.test.ts:230:5
+    at file:///C:/side-project/copycat/frontend/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20
+
+ ✓ src/hooks/useRiver.test.ts (12 tests) 882ms
+ ✓ src/components/futures/FuturesChart.test.tsx (20 tests) 778ms
+stderr | src/hooks/useCorrelation.test.ts > useCorrelation > 壞 JSON 不讓 hook 崩潰
+corr ws: 無法解析訊息 SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at FakeWS.ws.onmessage (C:\side-project\copycat\frontend\src\hooks\useCorrelation.ts:63:28)
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.test.ts:105:18
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:47:24
+    at process.env.NODE_ENV.exports.act (C:\side-project\copycat\frontend\node_modules\react\cjs\react.development.js:814:22)
+    at C:\side-project\copycat\frontend\node_modules\@testing-library\react\dist\act-compat.js:46:25
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.test.ts:105:5
+    at file:///C:/side-project/copycat/frontend/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20
+
+ ✓ src/components/index/IndexPage.test.tsx (21 tests) 908ms
+ ✓ src/hooks/useMarketBars.test.ts (8 tests) 1134ms
+   ✓ useMarketBars > HTTP 錯誤 → error 帶 detail.error 錯誤碼  1081ms
+ ✓ src/components/stock/SignalRulesDialog.test.tsx (21 tests) 710ms
+ ✓ src/hooks/useFuturesStream.test.ts (11 tests) 506ms
+stderr | src/hooks/useCorrelation.test.ts > useCorrelation > REST 失敗不拋,等推播補上
+corr: state 載入失敗 Error: boom
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.test.ts:122:13
+    at mockCall (file:///C:/side-project/copycat/frontend/node_modules/@vitest/spy/dist/index.js:96:15)
+    at spy (file:///C:/side-project/copycat/frontend/node_modules/tinyspy/dist/index.js:47:80)
+    at load (C:\side-project\copycat\frontend\src\hooks\useCorrelation.ts:41:27)
+    at C:\side-project\copycat\frontend\src\hooks\useCorrelation.ts:51:10
+    at Object.react_stack_bottom_frame (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:25989:20)
+    at runWithFiberInDEV (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:874:13)
+    at commitHookEffectListMount (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:13249:29)
+    at commitHookPassiveMountEffects (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:13336:11)
+    at commitPassiveMountOnFiber (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:15484:13)
+
+ ✓ src/hooks/useCorrelation.test.ts (7 tests) 495ms
+ ✓ src/components/capital/CapitalOrdersList.test.tsx (11 tests) 687ms
+ ✓ src/components/OrderPanel.test.tsx (11 tests) 722ms
+ ✓ src/hooks/useStockWatchlist.test.tsx (4 tests) 479ms
+ ✓ src/components/corr/CorrSection.test.tsx (3 tests) 508ms
+   ✓ CorrSection > (c) 展開寫入 localStorage,重新 mount 仍展開  396ms
+ ✓ src/components/stock/PriceLadder.test.tsx (55 tests) 7743ms
+   ✓ PriceLadder 武裝直送(SC-7) > qty 快捷同鍵累加 + 手動輸入重置;payload 帶累加後張數  696ms
+   ✓ PriceLadder 武裝直送(SC-7) > 送單失敗:hint 顯示 tradeErrorText 文案;連 3 次失敗自動解除  572ms
+ ✓ src/components/corr/CorrSection.lazy.test.tsx (2 tests) 424ms
+   ✓ CorrSection(lazy 真身) > (b) 展開後真的 mount CorrPage,不是停在 Suspense fallback  395ms
+ ✓ src/hooks/useServerBuild.test.tsx (13 tests) 459ms
+ ✓ src/components/capital/CapitalPositionsList.test.tsx (9 tests) 415ms
+ ✓ src/hooks/useSignalRules.test.tsx (9 tests) 361ms
+ ✓ src/hooks/useGroupSnapshots.test.tsx (6 tests) 404ms
+ ✓ src/components/stock/StockChart.futconverge.test.tsx (2 tests) 268ms
+ ✓ src/components/corr/RiverPanel.test.tsx (12 tests) 252ms
+ ✓ src/components/VersionDriftBadge.test.tsx (11 tests) 289ms
+ ✓ src/components/stock/OrderBook.test.tsx (30 tests) 345ms
+ ✓ src/components/quote/DepthBar.test.tsx (19 tests) 220ms
+ ✓ src/components/stock/TickTape.test.tsx (10 tests) 235ms
+ ✓ src/components/futures/FuturesPage.test.tsx (20 tests) 381ms
+ ✓ src/hooks/useStockOverlay.test.tsx (2 tests) 159ms
+ ✓ src/components/stock/SignalRail.test.tsx (18 tests) 228ms
+ ✓ src/components/PnlChart.test.tsx (5 tests) 105ms
+ ✓ src/components/capital/CapitalConfirmDialog.test.tsx (14 tests) 157ms
+ ✓ src/components/stock/WatchlistSidebar.dropcollapsed.test.tsx (1 test) 143ms
+ ✓ src/components/stock/GroupGridView.memo.test.tsx (2 tests) 100ms
+ ✓ src/components/index/BreadthBand.test.tsx (11 tests) 88ms
+ ✓ src/components/corr/CorrPanel.test.tsx (10 tests) 72ms
+ ✓ src/components/index/AdvanceDeclineChart.test.tsx (10 tests) 81ms
+stderr | src/components/corr/CorrPage.test.tsx > CorrPage > 把 hook 的 state 傳進面板
+river: state 載入失敗 TypeError: Failed to parse URL from /api/river/state
+    at node:internal/deps/undici/undici:16416:13
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:106:21) {
+  [cause]: TypeError: Invalid URL: /api/river/state
+      at new URLImpl (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL-impl.js:20:13)
+      at Object.exports.setup (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:54:12)
+      at new URL (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:115:22)
+      at new Request (node:internal/deps/undici/undici:10971:25)
+      at fetch (node:internal/deps/undici/undici:11891:25)
+      at fetch (node:internal/deps/undici/undici:16414:10)
+      at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)
+      at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:106:27)
+      at C:\side-project\copycat\frontend\src\hooks\useRiver.ts:116:10
+      at Object.react_stack_bottom_frame (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:25989:20)
+}
+
+stderr | src/components/corr/CorrPage.test.tsx > CorrPage > hook 尚未取得資料時顯示載入中
+river: state 載入失敗 TypeError: Failed to parse URL from /api/river/state
+    at node:internal/deps/undici/undici:16416:13
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:106:21) {
+  [cause]: TypeError: Invalid URL: /api/river/state
+      at new URLImpl (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL-impl.js:20:13)
+      at Object.exports.setup (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:54:12)
+      at new URL (C:\side-project\copycat\frontend\node_modules\whatwg-url\lib\URL.js:115:22)
+      at new Request (node:internal/deps/undici/undici:10971:25)
+      at fetch (node:internal/deps/undici/undici:11891:25)
+      at fetch (node:internal/deps/undici/undici:16414:10)
+      at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)
+      at load (C:\side-project\copycat\frontend\src\hooks\useRiver.ts:106:27)
+      at C:\side-project\copycat\frontend\src\hooks\useRiver.ts:116:10
+      at Object.react_stack_bottom_frame (C:\side-project\copycat\frontend\node_modules\react-dom\cjs\react-dom-client.development.js:25989:20)
+}
+
+ ✓ src/components/corr/CorrPage.test.tsx (2 tests) 93ms
+ ✓ src/components/QuoteTable.test.tsx (5 tests) 74ms
+ ✓ src/components/stock/LadderView.test.tsx (4 tests) 58ms
+ ✓ src/components/MetricsBar.test.tsx (3 tests) 51ms
+ ✓ src/hooks/useCapital.test.tsx (14 tests) 49ms
+ ✓ src/components/IndexBar.test.tsx (6 tests) 55ms
+ ✓ src/components/chart/ChartReadout.test.tsx (5 tests) 48ms
+ ✓ src/components/ToastStack.test.tsx (4 tests) 39ms
+ ✓ src/lib/stock-tick.test.ts (28 tests) 10ms
+ ✓ src/components/ConnectionBadge.test.tsx (5 tests) 38ms
+ ✓ src/lib/candle.test.ts (63 tests) 88ms
+ ✓ src/lib/sector-model.test.ts (6 tests) 10ms
+ ✓ src/hooks/useSignalAlerts.test.tsx (14 tests) 46ms
+ ✓ src/components/stock/MiniIntradayChart.test.tsx (11 tests) 51ms
+ ✓ src/lib/stock-intraday-svg.test.ts (83 tests) 22ms
+ ✓ src/hooks/useChartToggles.test.ts (12 tests) 35ms
+ ✓ src/lib/river-chart-svg.test.ts (23 tests) 10ms
+ ✓ src/lib/stock-accum.test.ts (28 tests) 9ms
+ ✓ src/lib/futures-ladder.test.ts (19 tests) 8ms
+ ✓ src/lib/allday.test.ts (19 tests) 7ms
+ ✓ src/hooks/useSignalSound.test.tsx (3 tests) 24ms
+ ✓ src/lib/volume-profile.test.ts (24 tests) 8ms
+ ✓ src/lib/watchlist-model.test.ts (31 tests) 7ms
+ ✓ src/lib/api-error.test.ts (5 tests) 7ms
+ ✓ src/lib/ladder-position.test.ts (28 tests) 7ms
+ ✓ src/lib/ladder-lots.test.ts (16 tests) 6ms
+ ✓ src/lib/fut-chart-mode.test.ts (8 tests) 5ms
+ ✓ src/lib/candle-viewport.test.ts (23 tests) 8ms
+ ✓ src/hooks/useTxoSnapshot.test.ts (3 tests) 24ms
+ ✓ src/hooks/useContainerSize.test.tsx (1 test) 15ms
+ ✓ src/lib/pnl-svg.test.ts (9 tests) 6ms
+ ✓ src/lib/signal-model.test.ts (22 tests) 6ms
+ ✓ src/lib/stkfut.test.ts (20 tests) 5ms
+ ✓ src/lib/tquote.test.ts (11 tests) 5ms
+ ✓ src/lib/settlement.test.ts (13 tests) 4ms
+ ✓ src/lib/oi-levels.test.ts (14 tests) 5ms
+ ✓ src/lib/chart-extreme.test.ts (16 tests) 5ms
+ ✓ src/lib/index-chart-svg.test.ts (5 tests) 5ms
+ ✓ src/lib/time-labels.test.ts (6 tests) 5ms
+ ✓ src/lib/bollinger.test.ts (9 tests) 5ms
+ ✓ src/lib/stock-search.test.ts (10 tests) 4ms
+ ✓ src/lib/version-drift.test.ts (9 tests) 4ms
+ ✓ src/lib/close-order.test.ts (10 tests) 5ms
+ ✓ src/lib/chart-crosshair.test.ts (10 tests) 4ms
+ ✓ src/lib/trading-hours.test.ts (7 tests) 4ms
+ ✓ src/lib/format.test.ts (8 tests) 4ms
+ ✓ src/lib/trade-text.test.ts (8 tests) 4ms
+ ✓ src/lib/list-drag.test.ts (7 tests) 4ms
+ ✓ src/lib/chart-frame.test.ts (7 tests) 3ms
+ ✓ src/lib/spot-session.test.ts (5 tests) 3ms
+ ✓ src/lib/signal-bus.test.ts (5 tests) 4ms
+ ✓ src/lib/flash-arm.test.ts (6 tests) 3ms
+ ✓ src/lib/qty-quick.test.ts (6 tests) 3ms
+ ✓ src/lib/sha-plugin.test.ts (11 tests) 1428ms
+   ✓ buildShaPlugin(SC-6) > ?since=<舊 sha> → behind true;?since=<HEAD> → behind false  405ms
+
+ Test Files  112 passed (112)
+      Tests  1868 passed (1868)
+   Start at  11:25:59
+   Duration  13.03s (transform 3.87s, setup 0ms, collect 22.24s, tests 91.49s, environment 44.38s, prepare 10.56s)
+
