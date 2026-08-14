@@ -1,4 +1,13 @@
 
+## 2026-08-14(mod/intraday-ma-poc-labels 收尾留尾巴)
+
+- [ ] **CDP 五個右緣帶標籤自身互疊**(盤中截圖附帶觀察,2330 實證 `2455*`…`2415*` 五個
+  擠成一團字疊字):既有擁擠問題、本輪 out of scope 已列。收斂方向 = 把本輪
+  `edgePriceLabels` 的 1D 避讓推廣到右緣帶內 CDP 標籤(同一支函式換 bounds),或
+  近價合併顯示;動既有 CDP 標籤位置屬行為改動,獨立 /mod 輪。
+- [ ] **期貨態 POC(D6 若 user 要)**:需 `foldVp` 分鐘窗參數化(現硬編現貨窗)+
+  期貨態 vp toggle 解禁,連動 stock_state 折入層;本輪拍板 POC 僅現貨態。
+
 ## 2026-08-13(mod/watchlist-ux-limit-50 收尾留尾巴)
 
 - [ ] **側欄 sticky 遮蔽帶的拖曳落點語意**(review A-3,既有語意的量變):游標在 sticky
