@@ -1,0 +1,19 @@
+{
+  "round": 2,
+  "type": "限縮輪(只審 round-1 amendments)",
+  "reviewer": "change-spec-reviewer (opus, 同 agent 續 context)",
+  "date": "2026-08-14",
+  "findings": [
+    {"id": "R2-P0-1", "severity": "P0", "claim": "決策 4 誤讀 bars.py:market bars 日K 走 build_period(鍵 IX0001|L、窗 1825d)非 build_daily;裸鍵 IX0001 反而與 /api/stock/bars/IX0001(stock session)共用 _daily/_empty 槽,重開 W-12 跨 session 汙染洞", "evidence": "bars.py:397,286-308;app.py:1065,1319-1323", "resolution": "accepted — 採首選:改呼叫 build_period(…,'IX0001',today,'D'),真共用 IX0001|L 槽;SC-5 補互不汙染測試"},
+    {"id": "R2-P0-2", "severity": "P0", "claim": "rightEdgeLabels 單向下推 + clamp 在「全域外(常態)」時把 ≥2 個域底掛牌壓成同一 y,SC-6 互不疊字失守;只抄了 edgePriceLabels 三段式的第一段", "evidence": "stock-intraday-svg.ts:538-561", "resolution": "accepted — 決策 6 改三段式(capacity 截斷→下推→由下而上回推→殘餘丟棄)+ 三條測試"},
+    {"id": "R2-P1-3", "severity": "P1", "claim": "bars_range 的 source tag 接到 BarsFetcher status 欄:_coerce_status 假 warning、unavailable 被洗白成 ok 存進 empty_mark", "evidence": "bars.py:105-125;app.py:1313-1317", "resolution": "accepted — 隨 build_period 方案自然消失(吃 TaggedBarsFetcher)"},
+    {"id": "R2-P1-4", "severity": "P1", "claim": "SC-6「昨收虛線右端」與全量堆疊互斥:昨收被推開就指錯線", "resolution": "accepted — 昨收設 fixed(y 恆 refY,其餘讓位)+ 測試"},
+    {"id": "R2-P1-5", "severity": "P1", "claim": "決策 10 條件式在 error 態恆 false(error 時 data 是 undefined)→ 503 永不重試;v5.62 函式簽名本身相容", "evidence": "package.json ^5.62;useMarketBars.ts:61", "resolution": "accepted — 條件式改查 q.state.status === 'error';測試拆兩條"},
+    {"id": "R2-P1-6", "severity": "P1", "claim": "W-14「只讀共用」與 build_daily 實際會寫入矛盾,無法遵守也無法機驗", "evidence": "bars.py:303-307", "resolution": "accepted — W-14 改寫:一律經既有 build_period、鍵 IX0001|L、test_bars.py 不該紅 = 機驗"},
+    {"id": "R2-P2-7", "severity": "P2", "claim": "SC-7「yDomain 前後不變」是恆真斷言(overlay 非 buildIndexGeometry 輸入)", "resolution": "accepted — 改元件測試 toggle 開關 yTicks/refY 逐字相同"},
+    {"id": "R2-P2-8", "severity": "P2", "claim": "掛牌初始 y / 排序鍵 / 丟棄順序未定義,測不出位置", "resolution": "accepted — 決策 6 補:↑=top、↓=bottom、排序=初始 y(tie 依 ah→…→ma20)、丟棄=排序末端"},
+    {"id": "R2-P2-9", "severity": "P2", "claim": "「overlay_cache 廢除」措辭可被讀成刪 stock overlay 依賴", "resolution": "accepted — 措辭改寫:index 不使用;類別與實例保留不動(W-6)"},
+    {"id": "R2-P2-10", "severity": "P2", "claim": "W-12 無機驗(現無任何測試碰 aria-label)", "resolution": "accepted — MarketChart.test 補 getByRole svg 機驗"}
+  ],
+  "summary": "兩條新 P0 均出在 round-1 amendment 新引入的決策(build_daily 共用槽誤讀 / 堆疊演算法抄半套),修法逐字採 reviewer 處方;無第三輪(新 P0 的修復 = reviewer 自身處方,再審等於審自己的處方;main session 已對 build_period/bars.py 逐行核實處方主張)。"
+}

@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-14",
+  "findings": [
+    {"id": "P0-1", "severity": "P0", "claim": "overlayLines 第二參數是完整 IntradayGeometry,IndexGeometry 結構不相容 → tsc 紅;簽名放寬未列入 🔵 表", "evidence": "stock-intraday-svg.ts:452-456;StockIntradayChart.tsx:706-715", "resolution": "accepted — 🔵 表補 overlayLines 簽名放寬成 Pick<IntradayGeometry,'yDomain'|'toY'>;W-9 補機驗"},
+    {"id": "P0-2", "severity": "P0", "claim": "指數 autofit y 域約 ±1%,CDP ah/al 與 MA20 常態域外,SC-3 純 clip 語意下多數日不可見 — 方向性抉擇不可 auto-default", "evidence": "index-chart-svg.ts:52-56;overlay.py:13-23", "resolution": "accepted — 停等 user 拍板,拍板『右緣掛牌』(決策 9);SC-3/SC-7 驗收改寫"},
+    {"id": "P1-3", "severity": "P1", "claim": "「不該紅:全部」可證偽:MarketPane.test (f) aria-pressed×aria-disabled 合約會被 MarketPane.Btn 寫法的新 CDP 鈕打破", "evidence": "MarketPane.test.tsx:195-207;StockIntradayChart.tsx:815", "resolution": "accepted — 決策 2 明定個股 aria 口徑;既有測試判定改逐檔"},
+    {"id": "P1-4", "severity": "P1", "claim": "_index 缺席 → 503 NOT_READY 分支未進 SC/測試/前端態", "evidence": "app.py:1235-1239", "resolution": "accepted — SC-5 補 503;測試 +1;前端 isError → 反灰"},
+    {"id": "P1-5", "severity": "P1", "claim": "staleTime Infinity 讓「TC4 恢復後重試可得」不成立(整天不 unmount 永不 refetch)", "evidence": "useStockOverlay.ts:19-27", "resolution": "accepted — 決策 10 refetchInterval 60s(全 null/error)"},
+    {"id": "P1-6", "severity": "P1", "claim": "右緣文字版面未定義:指數圖無 R_AXIS 帶,昨收與疊線文字必疊", "evidence": "MarketChart.tsx:30-32;stock-intraday-svg.ts:501-563", "resolution": "accepted — 決策 6 rightEdgeLabels 系統(round-2 再修)"},
+    {"id": "P1-7", "severity": "P1", "claim": "白名單漏列 svg aria 錨點 / useMarketBars active gate / overlay_cache 共用實例", "evidence": "MarketChart.tsx:36-42,110;app.py:373", "resolution": "accepted — 補 W-12/W-13/W-14"},
+    {"id": "P2-8", "severity": "P2", "claim": "反灰 title 文案三版本不一致", "resolution": "accepted — 決策 11 唯一化"},
+    {"id": "P2-9", "severity": "P2", "claim": "直呼 bars_range 40 日窗與 market bars 併發不同窗 DK 請求,安全性未評估", "resolution": "accepted — 改共用 cache 路徑(round-2 修正為 build_period)"},
+    {"id": "P2-10", "severity": "P2", "claim": "vwap 鍵語意漂移(VWAP vs 算術平均)+ 均價定義在缺分鐘時不明", "resolution": "accepted — SC-1 精確化 + 鈕 title"},
+    {"id": "P2-11", "severity": "P2", "claim": "40 日曆日窗長假時 <20 根,ma20 靜默 null", "resolution": "accepted — 隨 build_period 窗 1825 日併消"}
+  ],
+  "summary": "P0×2 P1×5 P2×4 全採納;P0-2 經 user 拍板右緣掛牌。"
+}
