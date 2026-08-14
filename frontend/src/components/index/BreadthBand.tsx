@@ -3,9 +3,14 @@
  *  純展示元件 —— 資料由 App 層 `useBreadth()` 取得後經 IndexPage 下傳(design R8)。
  *  桶序 `漲停 / 上漲 / 平盤 / 下跌 / 跌停` 與後端 `_series_list()` 同一份順序,**不得重排**。
  *
- *  染色只落在**格底**(漲停紅底 / 跌停綠底,台股紅漲綠跌),數字一律 ink token:
- *  數字若跟著染成同色系,紅底上的紅字在暗色盤面幾乎讀不出來(dataviz:文字穿 text
- *  token,顏色由旁邊的色塊承擔識別)。中間三格保持中性 —— 五格全染等於沒有重點。 */
+ *  **染色與底色互斥,一格只用一種手段**(2026-08-14 拍板配色):
+ *  - 停板兩格染**格底**(漲停紅底 / 跌停綠底,台股紅漲綠跌),數字留 ink token ——
+ *    數字若跟著染成同色系,紅底上的紅字在暗色盤面幾乎讀不出來(dataviz:文字穿
+ *    text token,顏色由旁邊的色塊承擔識別)。
+ *  - 上漲 / 下跌兩格**沒有底色**,所以識別改由**數字**承擔(上漲 `text-bull` /
+ *    下跌 `text-bear`)—— 這不是推翻上一條,是同一條規則的另一半:有色塊的格不重複
+ *    染字,沒色塊的格才由字說話。
+ *  - 平盤維持中性 ink:五格全染等於沒有重點,而「沒漲沒跌」本來就不需要顏色。 */
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
@@ -13,13 +18,19 @@ import type { BreadthCounts, BreadthState } from "@/types";
 
 type Bucket = keyof BreadthCounts["twse"];
 
-/** `tone` 只給格底與框線;`null` = 中性(沿用面板既有 surface/line)。 */
-const BUCKETS: readonly { key: Bucket; label: string; tone: string | null }[] = [
-  { key: "limit_up", label: "漲停", tone: "border-bull/40 bg-bull/15" },
-  { key: "up", label: "上漲", tone: null },
-  { key: "flat", label: "平盤", tone: null },
-  { key: "down", label: "下跌", tone: null },
-  { key: "limit_down", label: "跌停", tone: "border-bear/40 bg-bear/15" },
+/** `tone` 只給格底與框線(`null` = 中性,沿用面板既有 surface/line);
+ *  `valueTone` 只給數字(`null` = `text-ink`)。兩欄**刻意不會同時有值**:見檔頭。 */
+const BUCKETS: readonly {
+  key: Bucket;
+  label: string;
+  tone: string | null;
+  valueTone: string | null;
+}[] = [
+  { key: "limit_up", label: "漲停", tone: "border-bull/40 bg-bull/15", valueTone: null },
+  { key: "up", label: "上漲", tone: null, valueTone: "text-bull" },
+  { key: "flat", label: "平盤", tone: null, valueTone: null },
+  { key: "down", label: "下跌", tone: null, valueTone: "text-bear" },
+  { key: "limit_down", label: "跌停", tone: "border-bear/40 bg-bear/15", valueTone: null },
 ];
 
 const MARKETS: readonly { key: keyof BreadthCounts; label: string }[] = [
@@ -91,7 +102,7 @@ export function BreadthBand({ breadth }: { breadth: BreadthState | null }) {
               <span className="text-xs text-ink-dim">{b.label}</span>
               <span
                 data-testid={`breadth-value-${m.key}-${b.key}`}
-                className="font-mono text-sm text-ink"
+                className={cn("font-mono text-sm", b.valueTone ?? "text-ink")}
               >
                 {counts[m.key][b.key]}
               </span>
