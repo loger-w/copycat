@@ -65,7 +65,7 @@ class IndexSource(Protocol):
 
     def unsubscribe_symbol(self, code: str) -> None: ...
 
-    def fetch_day_minutes(self, code: str) -> dict[str, int]: ...
+    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]: ...
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None: ...
 
@@ -176,6 +176,9 @@ class IndexEngine:
         self._heal_secs = 60.0
         self._last_heal = float("-inf")
         self._heal_interval: float | None = None
+        # heal 的 1K 窗口 variant:無進展一次 +1(= 換窗口字串 = TC4 端全新 history
+        # 訂閱)。重用同一個訂閱逃不出 stub 態,重送 SubHistory 也不行(2026-08-14 實證)。
+        self._heal_variant = 0
         # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
         # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
         self._push_minutes_once = False
@@ -233,24 +236,24 @@ class IndexEngine:
                 pass
         await asyncio.to_thread(self._source.close)
 
-    def _subscribe_and_backfill(self) -> None:
+    def _subscribe_and_backfill(self, variant: int = 0) -> None:
         self._source.subscribe_symbol(_SYMBOL)
-        minutes = self._source.fetch_day_minutes(_SYMBOL)
+        minutes = self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
         self._twse.minutes.update(minutes)
 
     # ---- 重試(R5/IR8:single-flight)----
 
-    def _schedule_retry(self, *, clear_stale: bool = True) -> None:
+    def _schedule_retry(self, *, clear_stale: bool = True, variant: int = 0) -> None:
         if self._retry_task is not None and not self._retry_task.done():
             self._retry_task.cancel()
-        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale))
+        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale, variant))
 
-    async def _retry_loop(self, clear_stale: bool) -> None:
+    async def _retry_loop(self, clear_stale: bool, variant: int = 0) -> None:
         backoff = self._retry_secs
         while True:
             await asyncio.sleep(backoff)
             try:
-                await asyncio.to_thread(self._subscribe_and_backfill)
+                await asyncio.to_thread(self._subscribe_and_backfill, variant)
             except ConnectionError:
                 backoff = min(backoff * 2, 60.0)
                 continue
@@ -258,6 +261,17 @@ class IndexEngine:
                 logger.exception("index retry 非預期失敗(續試)")
                 backoff = min(backoff * 2, 60.0)
                 continue
+            if not clear_stale and self._minutes_lag_exceeded():
+                # heal 型的「成功」判準是**產出面**:fetch 沒丟例外不等於 minutes 前進。
+                # TC4 對毒化訂閱回窗外 stub(A 段濾光後 = 空)時,以輸入面判定會宣告
+                # 治好了、退避倍增、永遠重用同一個窗口 → 全日缺線且零 log(2026-08-14)。
+                # 不設 _push_minutes_once / _dirty,下一發由既有 heal 退避帶新 variant 出手。
+                logger.warning(
+                    "index 分時自癒無進展(window_variant=%d):minutes 仍落後,下一發換窗口",
+                    variant,
+                )
+                self._heal_variant += 1
+                return
             if clear_stale:
                 # 連線類 retry(start 失敗 / reconnect / rollover 失敗)成功 = 樂觀清
                 # stale(推播即將恢復);分時自癒的 retry 不清 —— stale 是推播死活的
@@ -464,6 +478,7 @@ class IndexEngine:
             if self._in_watch_window() or _WATCH_END <= self._now_fn() < _HEAL_TAIL_END:
                 if not self._minutes_lag_exceeded():
                     self._heal_interval = None  # 覆蓋度跟上 → 退避歸零
+                    self._heal_variant = 0  # 當前窗口有效 → 下次從原窗口重來
                 elif (
                     self._pending_date is None
                     and (self._retry_task is None or self._retry_task.done())
@@ -476,9 +491,11 @@ class IndexEngine:
                         (self._heal_interval or self._heal_secs) * 2, _HEAL_BACKOFF_CAP
                     )
                     logger.warning(
-                        "index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K", _LAG_HEAL_MIN
+                        "index 分時自癒:minutes 落後 >%d 分,重掛訂閱+重抓 1K(window_variant=%d)",
+                        _LAG_HEAL_MIN,
+                        self._heal_variant,
                     )
-                    self._schedule_retry(clear_stale=False)
+                    self._schedule_retry(clear_stale=False, variant=self._heal_variant)
             # txf(IR1:價變動自記 wall-clock)
             p = self._txf_getter()
             if p is not None and p != self._txf_p:
