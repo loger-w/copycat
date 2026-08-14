@@ -1,17 +1,28 @@
-"""index routes 測試 — index-board SC-4 接線."""
+"""index routes 測試 — index-board SC-4 接線 + index-overlay SC-5."""
 
 from __future__ import annotations
+
+import datetime as _dt
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
+from copycat.server.overlay import compute_cdp
 from tests.helpers.boot import BootedClient
-from tests.helpers.fake_sources import FakeIndexSource
+from tests.helpers.fake_sources import FakeIndexSource, FakeStockSource, dbar
 from tests.helpers.fake_txo import FakeTxoSource
 
 #: 本檔的當日回補固定給一根分鐘 —— `/api/index/state` 與 `/ws/index` 都靠它斷言接線
 _DAY_MINUTES = {"0901": 43_000_000}
+
+#: overlay 用的日 K 治具:22 根(≥21)遞增收盤,`dbar` 的 h/l 各 ±1000。
+#: 固定過去日期 —— 相對「今天」算的話,MA 的期望值會隨執行日漂掉。
+_OVERLAY_DAILY = [
+    dbar(f"2026-07-{d:02d}", 23_000_000 + i * 10_000) for i, d in enumerate(range(1, 23))
+]
+_LAST_CLOSE = 23_210_000  # = _OVERLAY_DAILY[-1]["c"]
 
 
 def _mis() -> OtcSnap | None:
@@ -65,3 +76,89 @@ class TestIndexState:
                 msg = ws.receive_json()
                 assert msg["type"] == "index"
                 assert msg["twse"]["p"] == 42_039_920
+
+
+class TestIndexOverlay:
+    """`GET /api/index/overlay`(index-overlay SC-5)。
+
+    形狀同 `/api/stock/overlay/{code}`,但日 K 走 index engine session 的
+    `build_period`(鍵 `IX0001|L`)—— 與 market bars 日 K 同槽、與 stock session 的
+    裸 `IX0001` 槽隔離(W-12 / W-14)。
+    """
+
+    def test_happy_returns_cdp_and_mas(self) -> None:
+        client, fake = make_client(FakeIndexSource(daily_bars=_OVERLAY_DAILY))
+        with client:
+            r = client.get("/api/index/overlay")
+            assert r.status_code == 200
+            body = r.json()
+            assert set(body) == {"cdp", "ma5", "ma20", "date"}
+            # 口徑對 overlay.compute_cdp(重抄一份算式 = 兩邊各自漂移時測試照綠)
+            assert body["cdp"] == compute_cdp(_LAST_CLOSE + 1000, _LAST_CLOSE - 1000, _LAST_CLOSE)
+            assert body["ma5"] == 23_190_000
+            assert body["ma20"] == 23_115_000
+            assert body["date"] == "2026-07-22"
+        assert fake is not None
+        assert [c[1] for c in fake.calls] == ["D"], "日 K 必須向 index engine 問(W-7)"
+
+    def test_tc4_down_returns_all_null_200(self) -> None:
+        """bars 空(TC4 不可用)→ 200 全 null,不 5xx(edge case 1)。"""
+        client, _ = make_client(FakeIndexSource(daily_bars=[], tag="unavailable"))
+        with client:
+            r = client.get("/api/index/overlay")
+            assert r.status_code == 200
+            assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
+
+    def test_today_partial_bar_excluded(self) -> None:
+        """盤中今日 partial 日 K 不得入計算(edge case 7)。"""
+        today = f"{_dt.date.today():%Y-%m-%d}"
+        client, _ = make_client(
+            FakeIndexSource(daily_bars=[*_OVERLAY_DAILY, dbar(today, 99_000_000)])
+        )
+        with client:
+            body = client.get("/api/index/overlay").json()
+            assert body["date"] == "2026-07-22", "date 取最後一根**已完成** bar"
+            assert body["ma5"] == 23_190_000, "今日 partial 混進 MA 會把值整個拉走"
+
+    def test_second_call_hits_cache(self) -> None:
+        """同日第二次呼叫不再打 bars_range(決策 3:日 bar 已在 bars_cache)。"""
+        client, fake = make_client(FakeIndexSource(daily_bars=_OVERLAY_DAILY))
+        with client:
+            first = client.get("/api/index/overlay").json()
+            assert fake is not None
+            assert len(fake.calls) == 1
+            second = client.get("/api/index/overlay").json()
+            assert second == first
+            assert len(fake.calls) == 1, "第二發應命中 bars_cache"
+
+    def test_engine_absent_503(self) -> None:
+        client, _ = make_client(None)
+        with client:
+            r = client.get("/api/index/overlay")
+            assert r.status_code == 503
+            assert r.json()["detail"]["error"] == "NOT_READY"
+
+    def test_does_not_pollute_stock_session_slot(self, tmp_path: Path) -> None:
+        """W-12 / W-14:overlay 寫的是 `IX0001|L`,不得碰 stock session 的裸 `IX0001`。
+
+        機驗方式 = 打完 overlay 後從 `/api/stock/bars/IX0001?tf=D`(走 `build_daily`
+        的裸鍵)要日 K:若 overlay 汙染了那格,stock source 就一次都不會被問到,
+        畫面上是「個股 K 線悄悄拿到了大盤 session 的資料」,零錯誤訊號。
+        """
+        stock = FakeStockSource()
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=stock,
+            index_source=FakeIndexSource(daily_bars=_OVERLAY_DAILY),
+            index_mis_fetch=_mis,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            throttle_secs=0.01,
+        )
+        client = BootedClient(app, raise_server_exceptions=False)
+        with client:
+            assert client.get("/api/index/overlay").status_code == 200
+            r = client.get("/api/stock/bars/IX0001?tf=D")
+            assert r.status_code == 200
+        assert [c[:2] for c in stock.bars_calls] == [("IX0001", "D")], (
+            "stock session 的裸 IX0001 槽必須仍是空的(overlay 不得寫它)"
+        )
