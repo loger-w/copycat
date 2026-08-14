@@ -98,12 +98,16 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
   const line = pts(g.priceLine);
   return (
     // `preserveAspectRatio="none"` = 非等比拉伸:卡片寬度隨 grid 欄數變,等比縮放
-    // (letterbox)會讓同一列的圖高忽大忽小。尺度差不到 5%(220×76 → 約 224×80),
-    // sparkline 的線寬失真肉眼不可見。
+    // (letterbox)會讓同一列的圖高忽大忽小 —— 這條不變。
+    //
+    // 變的是尺度:矩陣佈局後卡片高度隨格高走(`grow`,h-20 只剩基準),y 向縮放可達
+    // ~3×,原本「尺度差 <5%、線寬失真不可見」的前提不再成立。線寬改由
+    // `vectorEffect="non-scaling-stroke"` 釘在螢幕像素,不隨 viewBox 縮放變粗。
+    // y 向斜率跟著視覺放大則是「圖吃滿卡片」的本意,不補償。
     <svg
       viewBox={`${Y_AXIS_W} 0 ${MINI_W} ${MINI_H}`}
       preserveAspectRatio="none"
-      className="block h-20 w-full"
+      className="block h-20 w-full grow"
     >
       {g.hasRef ? (
         <defs>
@@ -131,6 +135,7 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
           className="stroke-line"
           strokeDasharray="2 3"
           strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
         />
       ) : null}
       {g.hasRef && g.areaPolygon !== "" ? (
@@ -159,6 +164,7 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
             fill="none"
             className="stroke-bull"
             strokeWidth={1.4}
+            vectorEffect="non-scaling-stroke"
             clipPath={`url(#${above})`}
           />
           <polyline
@@ -167,6 +173,7 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
             fill="none"
             className="stroke-bear"
             strokeWidth={1.4}
+            vectorEffect="non-scaling-stroke"
             clipPath={`url(#${below})`}
           />
         </>
@@ -178,6 +185,7 @@ export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
           fill="none"
           className="stroke-accent"
           strokeWidth={1.4}
+          vectorEffect="non-scaling-stroke"
         />
       )}
     </svg>
