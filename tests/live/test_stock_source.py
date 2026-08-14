@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from typing import Callable
 
 import pytest
 
@@ -370,6 +371,99 @@ class TestFetchDayMinutes:
             pass
         else:
             raise AssertionError("必須正規化為 ConnectionError")
+
+
+def _k1_pager(
+    pages: dict[str, list[dict]], sent: list[dict] | None = None
+) -> Callable[[dict], bytes]:
+    """1K GETHISDATA 分頁替身(QryIndex → rows;其餘請求回 OK)。"""
+
+    def handler(obj: dict) -> bytes:
+        if sent is not None:
+            sent.append(obj)
+        if obj["Request"] == "GETHISDATA":
+            qi = obj["Param"]["QryIndex"]
+            body = json.dumps({"Success": "OK", "HisData": pages.get(qi, [])})
+            return ("1K:" + body + "\0").encode()
+        return ok()
+
+    return handler
+
+
+def _minutes_src(handler: Callable[[dict], bytes]) -> StockQuoteSource:
+    return StockQuoteSource(
+        api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+    )
+
+
+class TestCollectHistoryWindowGuard:
+    """SC-3:TC4 1K 對「空窗期建立的 history 訂閱」回**窗外 stub 列**而非空頁
+    (2026-08-14 實驗 B:對空的 05-06 窗首問即回當下分鐘 bar)。
+
+    「首頁非空即 break」被這種列騙過 → `timed_out=False` + 一列垃圾,呼叫端零訊號,
+    而 index 引擎的自癒把「沒丟例外」當成功 → 全日空轉(repro.md)。
+    """
+
+    #: 昨日 13:30 的列:窗外(hour stamp 2026072705 < 2026072800),但 Time 恰好
+    #: 映得進今日 domain(→ 鍵 "1330")—— 不擋在窗判定會偽造「已收盤完整」。
+    STUB = {"Date": "20260727", "Time": "53000", "Close": "999", "QryIndex": "1"}
+    IN_WINDOW = {"Date": "20260728", "Time": "10100", "Close": "100.5", "QryIndex": "2"}
+
+    def test_stub_only_first_page_is_treated_as_not_ready(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        src = _minutes_src(_k1_pager({"0": [self.STUB], "1": []}))
+        with caplog.at_level(logging.INFO, logger="copycat.live.tc4"):
+            result = src._collect_history("TC.S.TWS.IX0001", "1K", "2026072800", "2026072806")
+        assert result.rows == []
+        assert result.timed_out is True
+        assert "窗外 stub" in caplog.text  # 可 grep:期間曾見窗外 stub
+
+    def test_mixed_page_keeps_in_window_rows_only(self) -> None:
+        src = _minutes_src(_k1_pager({"0": [self.STUB, self.IN_WINDOW], "2": []}))
+        result = src._collect_history("TC.S.TWS.IX0001", "1K", "2026072800", "2026072806")
+        assert result.rows == [self.IN_WINDOW]
+        assert result.timed_out is False
+
+    def test_rows_without_date_or_time_are_kept(self) -> None:
+        """保守過濾:只丟**可證明**窗外的列,Date/Time 缺失或不可解析一律留下
+        (過濾自身有 bug 時寧可放行,交由下游 parser 的既有 skipped 機制處置)。"""
+        loose = [
+            {"Close": "1", "QryIndex": "1"},
+            {"Date": "20260728", "Time": "xx0100", "Close": "2", "QryIndex": "2"},
+            {"Date": "bad", "Time": "10100", "Close": "3", "QryIndex": "3"},
+        ]
+        src = _minutes_src(_k1_pager({"0": loose, "3": []}))
+        result = src._collect_history("TC.S.TWS.IX0001", "1K", "2026072800", "2026072806")
+        assert result.rows == loose
+        assert result.timed_out is False
+
+    def test_fetch_day_minutes_does_not_fake_a_complete_day(self) -> None:
+        """端到端:昨日 13:30 stub 不得被當成今日「已收盤」的 1330 鍵。"""
+        src = _minutes_src(_k1_pager({"0": [self.STUB], "1": []}))
+        assert src.fetch_day_minutes("IX0001") == {}
+
+
+class TestFetchDayMinutesWindowVariant:
+    """SC-4:window variant = 逃出「毒化 history 訂閱」的維度(repro 實證:換窗口字串
+    或換 session 才逃得掉,重送 SubHistory 逃不掉)。start 不變,只推 end hour。"""
+
+    def _end_time_for(self, variant: int) -> list[str]:
+        sent: list[dict] = []
+        src = _minutes_src(_k1_pager({}, sent))
+        src.fetch_day_minutes("IX0001", window_variant=variant)
+        hist = [o for o in sent if o["Request"] in ("SUBQUOTE", "GETHISDATA")]
+        assert [o["Param"]["StartTime"] for o in hist] == ["2026072800"] * len(hist)
+        return [o["Param"]["EndTime"] for o in hist]
+
+    def test_variant_zero_keeps_the_current_window(self) -> None:
+        assert self._end_time_for(0) == ["2026072806", "2026072806"]
+
+    def test_variant_extends_end_hour(self) -> None:
+        assert self._end_time_for(1) == ["2026072807", "2026072807"]
+
+    def test_variant_capped_at_23(self) -> None:
+        assert self._end_time_for(20) == ["2026072823", "2026072823"]
 
 
 class TestRawDispatch:
