@@ -11,7 +11,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SectorSection } from "@/components/index/SectorSection";
-import { SECTOR_OPEN_KEY } from "@/lib/constants";
 import type { SectorMembers, SectorRotation, SectorState } from "@/lib/sector-model";
 
 const ROTATION: SectorRotation = {
@@ -93,29 +92,23 @@ function renderSection(onOpenStock?: (code: string) => void, active?: boolean) {
   );
 }
 
-/** 直接以「已展開 + 已鑽取單層產業(航運)」開場,等成員層落定後回傳。 */
+/** 直接以「已鑽取單層產業(航運)」開場,等成員層落定後回傳。 */
 async function drillMembers(members: SectorMembers): Promise<void> {
-  window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
   stubFetch(mkState(), members);
   renderSection();
   await screen.findByTestId("sector-body");
   fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
 }
 
-/** 直接以「已展開」開場(收合閘門另有專測),等資料落地後回傳。 */
+/** render 即掛載(subtab 改版後本元件不再有收合殼),等資料落地後回傳。 */
 async function openWith(
   state: SectorState = mkState(),
   onOpenStock?: (code: string) => void,
 ): Promise<void> {
-  window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
   stubFetch(state);
   renderSection(onOpenStock);
   await screen.findByTestId("sector-body");
   await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
-}
-
-function header(): HTMLElement {
-  return screen.getByRole("button", { name: /類股強弱/ });
 }
 
 beforeEach(() => {
@@ -129,36 +122,26 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("SectorSection 收合閘門", () => {
-  it("預設收合:body 不 mount、零 fetch", async () => {
-    renderSection();
-    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
-    expect(screen.queryByTestId("sector-body")).toBeNull();
-    expect(fetchSpy.mock.calls.length).toBe(0);
-  });
-
-  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
-    renderSection();
-    fireEvent.click(header());
-    await screen.findByTestId("sector-body");
-    expect(window.localStorage.getItem(SECTOR_OPEN_KEY)).toBe("1");
-    expect(header().getAttribute("aria-expanded")).toBe("true");
-
-    cleanup();
+// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)——
+// 「非 active subtab = unmount」的省輪詢語意由 IndexPage.test.tsx (s2) 鎖。
+describe("SectorSection 掛載即工作(subtab 改版)", () => {
+  it("render 即掛 body 並取數(無收合鈕)", async () => {
     renderSection();
     expect(await screen.findByTestId("sector-body")).toBeTruthy();
+    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: /展開|收合/ })).toBeNull();
   });
 
-  it("收合把 body unmount 並寫回 0(query 隨之消失)", async () => {
-    await openWith();
-    expect(screen.queryByTestId("sector-list")).toBeTruthy();
+  it("零 OPEN_KEY 讀寫(廢止的鍵不得留旁路)", async () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    renderSection();
+    await screen.findByTestId("sector-body");
 
-    fireEvent.click(header());
-
-    expect(screen.queryByTestId("sector-body")).toBeNull();
-    expect(screen.queryByTestId("sector-list")).toBeNull();
-    expect(window.localStorage.getItem(SECTOR_OPEN_KEY)).toBe("0");
-    expect(header().getAttribute("aria-expanded")).toBe("false");
+    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
+    expect(keys).not.toContain("copycat-sector-open");
+    getItem.mockRestore();
+    setItem.mockRestore();
   });
 });
 
@@ -263,7 +246,6 @@ describe("SectorSection 成員層(lazy drill-down)", () => {
   // 成員鑽取是 404(查無 industry / sub)/ 500(後端全 universe 掃描炸掉)都到得了的路。
   // 少了這條分流,失敗會永遠停在「載入中…」—— 看起來像還在等,其實已經放棄了。
   it("成員請求 500 → 成員載入失敗(清單其餘部分照常)", async () => {
-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
     urls = [];
     fetchSpy = vi.fn(async (url: string) => {
       const u = String(url);
@@ -360,7 +342,6 @@ describe("SectorSection 降級", () => {
   });
 
   it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
     fetchSpy = vi.fn(async () => new Response("boom", { status: 500 }));
     vi.stubGlobal("fetch", fetchSpy);
     renderSection();
@@ -537,7 +518,6 @@ describe("SectorSection 背景輪詢 gate", () => {
   function openWithTimers(active?: boolean): void {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
     stubFetch(mkState());
     renderSection(undefined, active);
   }
@@ -587,7 +567,6 @@ describe("SectorSection 背景輪詢 gate", () => {
   it("盤外(週六)→ 成員表不輪詢", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
     stubFetch(mkState());
     renderSection(undefined, true);
     await vi.advanceTimersByTimeAsync(0);
@@ -601,7 +580,6 @@ describe("SectorSection 背景輪詢 gate", () => {
   it("盤外(週六)→ 展開且 active 也不輪詢", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
     stubFetch(mkState());
     renderSection(undefined, true);
     await vi.advanceTimersByTimeAsync(0);

@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LimitListSection } from "@/components/index/LimitListSection";
-import { LIMIT_LIST_FILTER_KEY, LIMIT_LIST_OPEN_KEY } from "@/lib/constants";
+import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
 import type { BreadthRow, BreadthRowsState } from "@/types";
 
 function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
@@ -80,12 +80,11 @@ function renderSection(onOpenStock?: (code: string) => void, active?: boolean) {
   );
 }
 
-/** 直接以「已展開」狀態開場(收合閘門另有專測),等資料落地後回傳。 */
+/** render 即掛載(subtab 改版後本元件不再有收合殼),等資料落地後回傳。 */
 async function openWith(
   state: BreadthRowsState,
   onOpenStock?: (code: string) => void,
 ): Promise<void> {
-  window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
   stubFetch(state);
   renderSection(onOpenStock);
   await screen.findByTestId("limit-list-body");
@@ -96,10 +95,6 @@ function rowIds(): string[] {
   return screen
     .getAllByTestId(/^limit-row-/)
     .map((el) => el.getAttribute("data-testid")!.replace("limit-row-", ""));
-}
-
-function header(): HTMLElement {
-  return screen.getByRole("button", { name: /漲跌停/ });
 }
 
 beforeEach(() => {
@@ -113,38 +108,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("LimitListSection 收合閘門", () => {
-  it("預設收合:body 不 mount、零 fetch", async () => {
-    renderSection();
-    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
-    expect(screen.queryByTestId("limit-list-body")).toBeNull();
-    expect(fetchSpy.mock.calls.length).toBe(0);
-    expect(header().textContent).toContain("展開");
-  });
-
-  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
-    renderSection();
-    fireEvent.click(header());
-    await screen.findByTestId("limit-list-body");
-    expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("1");
-    expect(header().getAttribute("aria-expanded")).toBe("true");
-    expect(header().textContent).toContain("收合");
-
-    cleanup();
+// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)——
+// 「非 active subtab = unmount」的省輪詢語意由 IndexPage.test.tsx (s2)(s7) 鎖。
+// 這裡剩下的元件級契約是:掛上就直接工作,且**完全不碰**那把已廢止的 open key。
+describe("LimitListSection 掛載即工作(subtab 改版)", () => {
+  it("render 即掛 body 並取數(無收合鈕)", async () => {
     renderSection();
     expect(await screen.findByTestId("limit-list-body")).toBeTruthy();
+    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: /展開|收合/ })).toBeNull();
   });
 
-  it("收合把列表 unmount(query 隨之消失)", async () => {
-    await openWith(mkState(ROWS));
-    expect(screen.queryByTestId("limit-list-table")).toBeTruthy();
+  it("零 OPEN_KEY 讀寫(廢止的鍵不得留旁路)", async () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    renderSection();
+    await screen.findByTestId("limit-list-body");
 
-    fireEvent.click(header());
-
-    expect(screen.queryByTestId("limit-list-body")).toBeNull();
-    expect(screen.queryByTestId("limit-list-table")).toBeNull();
-    expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("0");
-    expect(header().getAttribute("aria-expanded")).toBe("false");
+    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
+    expect(keys).not.toContain("copycat-limit-list-open");
+    getItem.mockRestore();
+    setItem.mockRestore();
   });
 });
 
@@ -155,7 +139,6 @@ describe("LimitListSection 背景輪詢 gate(FE-2)", () => {
   function openWithTimers(active?: boolean): void {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
-    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
     stubFetch(mkState(ROWS));
     renderSection(undefined, active);
   }
@@ -205,7 +188,6 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
   // 端點設計上恆 200,能走到 error 的只有網路 / proxy 斷。少了這條分流,失敗會停在
   // 「載入中…」永遠不動 —— 那是誠實度問題(看起來像還在等,其實已經放棄了)。
   it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
-    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
     fetchSpy = vi.fn(async () => new Response("boom", { status: 500 }));
     vi.stubGlobal("fetch", fetchSpy);
     renderSection();
