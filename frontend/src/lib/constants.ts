@@ -16,9 +16,20 @@ export const MAIN_CODE_KEY = "copycat-stock-main-code";
 export const LEGACY_MAIN_CODE_KEY = "stock-main-code";
 
 /** 已停用功能留下的孤兒鍵:`stock-ladder-open`(2026-07-29 閃電梯改條件 render 後零讀寫)、
- *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)。App 啟動時清除,
- *  避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
-export const ORPHAN_STORAGE_KEYS = ["stock-ladder-open", "stock-wl-group"] as const;
+ *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)、以及
+ *  **2026-08-14 subtab 改版**廢止的四支台股綜合區塊展開狀態(`copycat-corr-open` /
+ *  `copycat-limit-list-open` / `copycat-sector-open` / `copycat-signal-timeline-open`)——
+ *  四顆獨立 bool(可同時 0-4 顆展開)對映不到「一次只能選一個」的 subtab,任何遷移規則
+ *  都是猜,故直接廢止;丟失代價 = 首訪回預設 subtab 一次(見 `INDEX_SUBTAB_KEY`)。
+ *  App 啟動時清除,避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
+export const ORPHAN_STORAGE_KEYS = [
+  "stock-ladder-open",
+  "stock-wl-group",
+  "copycat-corr-open",
+  "copycat-limit-list-open",
+  "copycat-sector-open",
+  "copycat-signal-timeline-open",
+] as const;
 
 /** 清除孤兒鍵。冪等(removeItem 對不存在的 key 是 no-op),由 App.tsx 的 module scope
  *  呼叫一次 —— 它與元件生命週期無關,也不該隨 re-render 重跑。
@@ -61,24 +72,18 @@ export const MARKET2_MODE_STORE = "copycat-market2-tf";
 /** 台股綜合**右圖**的期貨商品 — components/index/IndexPage.tsx */
 export const MARKET2_FUT_STORE = "copycat-market2-fut";
 
-/** 相關係數收合區塊的展開狀態("1" = 展開)— components/corr/CorrSection.tsx */
-export const CORR_OPEN_KEY = "copycat-corr-open";
+/** 台股綜合頁下半部選中的 subtab — components/index/IndexPage.tsx。
+ *  值域 `"limit" | "sector" | "timeline" | "corr"`,非白名單值 fallback `"limit"`
+ *  (漲跌停;恆有一顆 active,不提供「全收」態)。
+ *
+ *  **非 active subtab = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場
+ *  rows / 類股輪動」與「要不要掛 corr + river 兩條 WS」—— 它取代了 2026-08-14 之前的
+ *  四支獨立 `*_OPEN_KEY`(已進 `ORPHAN_STORAGE_KEYS`)。 */
+export const INDEX_SUBTAB_KEY = "copycat-index-subtab";
 
-/** 漲跌停列表收合區塊的展開狀態("1" = 展開)— components/index/LimitListSection.tsx。
- *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場 rows」。 */
-export const LIMIT_LIST_OPEN_KEY = "copycat-limit-list-open";
 /** 漲跌停列表的篩選條件(JSON:市場 / 狀態三旗標 + 金額 / 股價門檻字串)
  *  — components/index/LimitListSection.tsx */
 export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";
-
-/** 類股強弱收合區塊的展開狀態("1" = 展開)— components/index/SectorSection.tsx。
- *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份類股輪動」。 */
-export const SECTOR_OPEN_KEY = "copycat-sector-open";
-
-/** 訊號時間軸收合區塊的展開狀態("1" = 展開)— components/index/SignalTimelineSection.tsx。
- *  **收合 = unmount**,所以這把鍵同時決定「要不要抓一份含全市場廣度事件的當日訊號」
- *  (自選那份由個股頁的 rail 各自抓,兩者 queryKey 不同族)。 */
-export const SIGNAL_TIMELINE_OPEN_KEY = "copycat-signal-timeline-open";
 
 /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
 export const RAIL_TAB_KEY = "copycat-rail-tab";

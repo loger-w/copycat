@@ -1,9 +1,10 @@
-/** 台股綜合頁的漲跌停列表收合區塊(market-overview R3;design §5.2)。
+/** 台股綜合頁的漲跌停列表 subtab panel(market-overview R3;design §5.2)。
  *
- *  **收合 = unmount,不是 `hidden`**(CorrSection 同款慣例):payload 是全市場約 2800 列
- *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於所有開站的人都持續吃
- *  這份頻寬,而它只有列表展開時才有人看。收合即 unmount → `useBreadthRows` 連同 query
- *  一起消失。與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
+ *  **非 active subtab = unmount,不是 `hidden`**(2026-08-14 subtab 改版前是「收合 =
+ *  unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):payload 是全市場約 2800 列
+ *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於切到別的 subtab 也
+ *  持續吃這份頻寬。切走即 unmount → `useBreadthRows` 連同 query 一起消失。
+ *  與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
  *  無重依賴,lazy 只會多一個 Suspense 空窗與一條測不到的非同步路徑。
  *
  *  **前端零日期推理**(design R1):`streak` / `streak_capped` 都由後端算完,這裡只負責
@@ -12,7 +13,7 @@
 import { useMemo, useState } from "react";
 
 import { useBreadthRows } from "@/hooks/useBreadthRows";
-import { LIMIT_LIST_FILTER_KEY, LIMIT_LIST_OPEN_KEY } from "@/lib/constants";
+import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { BreadthRow } from "@/types";
 
@@ -470,12 +471,13 @@ function LimitListBody({
 }
 
 // ---------------------------------------------------------------------------
-// 收合殼
+// subtab panel 殼
 // ---------------------------------------------------------------------------
 
-/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。收合是
- *  unmount、但 tab 切換不是 —— 展開狀態又存在 localStorage,所以「展開著被切走」
- *  是常態,那條路要靠這道 gate 停背景輪詢(review FE-2)。未給時預設 true。 */
+/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。非 active
+ *  subtab 是 unmount、但**主 tab 切換不是**(App 以 `hidden` 保留 DOM)—— 選中的
+ *  subtab 又存在 localStorage,所以「掛著被切走」是常態,那條路要靠這道 gate 停背景
+ *  輪詢(review FE-2)。未給時預設 true。 */
 export function LimitListSection({
   onOpenStock,
   active = true,
@@ -483,39 +485,10 @@ export function LimitListSection({
   onOpenStock?: (code: string) => void;
   active?: boolean;
 }) {
-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(CorrSection 同慣例)。
-  const [open, setOpen] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem(LIMIT_LIST_OPEN_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  function toggle(): void {
-    const next = !open;
-    setOpen(next);
-    try {
-      window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, next ? "1" : "0");
-    } catch {
-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
-    }
-  }
-
   return (
-    <section data-testid="limit-list" className="rounded-md border border-line bg-surface">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={toggle}
-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
-      >
-        <span className="text-sm font-bold text-ink">漲跌停</span>
-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
-      </button>
-      {open ? <LimitListBody onOpenStock={onOpenStock} active={active} /> : null}
-    </section>
+    <div data-testid="limit-list" className="px-4 pb-4">
+      <LimitListBody onOpenStock={onOpenStock} active={active} />
+    </div>
   );
 }
 

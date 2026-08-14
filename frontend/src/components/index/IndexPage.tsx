@@ -1,8 +1,18 @@
-/** 台股綜合頁的薄容器:基差列 + 兩張並排指數圖 + 相關係數收合區塊。
+/** 台股綜合頁的薄容器:常駐區(基差列 + 兩張並排指數圖 + 家數帶 + 騰落線)
+ *  + 其下一列 subtab(漲跌停 / 類股強弱 / 訊號時間軸 / 相關係數)。
  *
  *  單圖的狀態邏輯與版面全在 `MarketPane`(本檔只決定「哪個 pane 用哪組 localStorage key、
  *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
- *  「同一段程式碼寫兩遍」。 */
+ *  「同一段程式碼寫兩遍」。
+ *
+ *  **subtab 是掛載閘,不是 `hidden`**(2026-08-14 改版):四個 panel 原本各自有收合殼、
+ *  可同時展開 0-4 個,現在收斂成「恆有一顆 active、一次只掛載一個」。專案慣例是
+ *  「`hidden` > 條件 render」保留 DOM,**這裡刻意違反** —— 四個 panel 分別是全市場
+ *  2800 列 / 10 秒、類股輪動 / 10 秒、當日訊號、corr + river 兩條 WS,保 DOM 等於
+ *  四份成本同時常駐。切走即 unmount,輪詢與連線跟著消費者走(原「收合 = unmount」
+ *  設計的等價轉移)。 */
+import { useState } from "react";
+
 import { CorrSection } from "@/components/corr/CorrSection";
 import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
 import { BreadthBand } from "@/components/index/BreadthBand";
@@ -14,6 +24,7 @@ import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import {
   INDEX_OVERLAY_STORE,
+  INDEX_SUBTAB_KEY,
   MARKET2_FUT_STORE,
   MARKET2_KEY_STORE,
   MARKET2_MODE_STORE,
@@ -23,6 +34,30 @@ import {
 } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { BreadthState } from "@/types";
+
+/** subtab 值域與標籤的單一來源。順序 = 畫面順序,也是改版前四個區塊的上下順序。 */
+const SUBTABS = [
+  ["limit", "漲跌停"],
+  ["sector", "類股強弱"],
+  ["timeline", "訊號時間軸"],
+  ["corr", "相關係數"],
+] as const;
+type SubTab = (typeof SUBTABS)[number][0];
+
+/** 白名單還原:非法值(改版前的 "1"、亂碼)一律回預設「漲跌停」。
+ *
+ *  **整段包 try/catch**:getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,
+ *  而這裡是 `useState` 的 initializer —— 拋出去就是整頁白屏。降回預設 subtab 遠好過白屏
+ *  (改版前四個殼與 `useChartToggles` 同慣例)。 */
+function initialSubTab(): SubTab {
+  try {
+    const saved = window.localStorage.getItem(INDEX_SUBTAB_KEY);
+    if (SUBTABS.some(([id]) => id === saved)) return saved as SubTab;
+  } catch {
+    // 讀不到就用預設 —— 偏好還原不了遠好於白屏
+  }
+  return "limit";
+}
 
 /** 左圖沿用改版前那四支 key —— 舊使用者的標的 / 週期 / 期指商品 / 重疊開關零丟失。 */
 const LEFT_STORES: PaneStores = {
@@ -103,6 +138,16 @@ export function IndexPage({
   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
   const { toggles, set } = useChartToggles();
+  const [subtab, setSubtab] = useState<SubTab>(initialSubTab);
+
+  function selectSubtab(next: SubTab): void {
+    setSubtab(next);
+    try {
+      window.localStorage.setItem(INDEX_SUBTAB_KEY, next);
+    } catch {
+      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
+    }
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
@@ -138,17 +183,49 @@ export function IndexPage({
         <BreadthBand breadth={breadth} />
         <AdvanceDeclineChart series={breadth?.series ?? []} />
       </section>
-      {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
-          點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
-      <LimitListSection onOpenStock={onOpenStock} active={active} />
-      {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
-          點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
-      <SectorSection onOpenStock={onOpenStock} active={active} />
-      {/* 同一條銜接路徑的第三半:列表 / 類股是「現在的橫切面」,時間軸是「今天依序
-          發生了什麼」—— 自選訊號與全市場廣度事件同軸(R4 SC-7)。無 `active` gate:
-          資料是一次性 query + WS bus,沒有輪詢可停。 */}
-      <SignalTimelineSection onOpenStock={onOpenStock} />
-      <CorrSection />
+      {/* 下半部:一列 subtab + 當前 panel,共用**一個**外框盒(AD-4)——
+          四個 panel 是同一個問題的四種切面(廣度發現 → 深度盯盤),各自一個框
+          會讓它們看起來像四個彼此無關的區塊。 */}
+      <section className="rounded-md border border-line bg-surface">
+        {/* aria-label 必帶:全站已有「主要分頁」「交易面板分頁」兩個具名 tablist,
+            無名 tablist 會讓全域 `getAllByRole("tab")` 撞名(App.test.tsx 的教訓)。
+            造型與 role/aria 沿 `RightRail.tsx` 的右欄分頁樣板 —— repo 內唯一既例。 */}
+        <div
+          data-testid="index-subtabs"
+          role="tablist"
+          aria-label="台股綜合分頁"
+          className="flex items-center gap-1 border-b border-line px-2 py-1.5"
+        >
+          {SUBTABS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={subtab === id}
+              onClick={() => selectSubtab(id)}
+              className={cn(
+                "rounded px-3 py-1 text-sm",
+                subtab === id ? "bg-bg-deep text-ink" : "text-ink-dim hover:text-ink",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
+            點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
+        {subtab === "limit" ? (
+          <LimitListSection onOpenStock={onOpenStock} active={active} />
+        ) : null}
+        {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
+            點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
+        {subtab === "sector" ? <SectorSection onOpenStock={onOpenStock} active={active} /> : null}
+        {/* 同一條銜接路徑的第三半:列表 / 類股是「現在的橫切面」,時間軸是「今天依序
+            發生了什麼」—— 自選訊號與全市場廣度事件同軸(R4 SC-7)。無 `active` gate:
+            資料是一次性 query + WS bus,沒有輪詢可停。 */}
+        {subtab === "timeline" ? <SignalTimelineSection onOpenStock={onOpenStock} /> : null}
+        {subtab === "corr" ? <CorrSection /> : null}
+      </section>
     </div>
   );
 }

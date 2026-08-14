@@ -8,7 +8,9 @@ import type { BreadthRowsState } from "@/types";
  *
  * **REST on-demand 不進 WS**(brainstorm Q2):payload 是全市場 ~2800 列 × 15 欄,
  * 掛上 `/ws/breadth` 等於所有開站的人都吃這份頻寬,而它只有列表展開時才有人看。
- * 消費端(`LimitListSection`)收合即 unmount,query 隨之消失 —— 頻寬跟著消費者走。
+ * 消費端(`LimitListSection`)在非 active subtab 時即 unmount(掛載閘在 `IndexPage`
+ * 的 subtab 列;2026-08-14 改版前是「收合即 unmount」),query 隨之消失 ——
+ * 頻寬跟著消費者走。
  *
  * `refetchInterval` 用**函式形式**(R10,`useMarketBars` 同慣例):TQ 每次 interval
  * 到期都重新求值,開盤 / 收盤的開關不依賴外部 re-render 才會生效。收盤後回 false
