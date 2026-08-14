@@ -1,0 +1,13 @@
+﻿probe(12:16, 全新 session, 窗 2026081400-2026081406):
+  timed_out=False rows=197;parsed 197(0901..1217)skipped=0 domain-dropped=0
+
+exp A(12:20, 全新 session, 同窗):
+  [1] 首抓 rows=201 last_qry=201
+  [2] 不重送、直接 GETHISDATA(0) → 50 rows(從頭給,QryIndex=1 起)
+  [3] 重送 SubHistory 後 GETHISDATA(0) → 50 rows(同上,從頭給)
+  [4] 從 QryIndex=201 續抓 → 0 rows
+  結論:健康訂閱(建立時窗內有資料)不受 cursor 消耗影響。
+
+exp B 摘要見 exp-b-boot-poison-out.txt;heal 輪僅跑 2/6 係腳本把 stub 列誤計為
+「拿到資料」提前 break(腳本瑕疵,不影響結論);C2 因腳本漏 _ensure_connected 未跑成
+(「新 session 可取」由 probe 獨立證明)。

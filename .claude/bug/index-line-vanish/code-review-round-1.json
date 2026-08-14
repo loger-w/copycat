@@ -1,0 +1,113 @@
+{
+  "round": 1,
+  "scope": "diff 98063f82..3510bb6d(4 commits)",
+  "lenses": ["async/狀態機正確性(opus)", "跨 caller 契約與波及面(opus)"],
+  "findings": [
+    {
+      "id": "L1-P1-1",
+      "severity": "P1",
+      "file": "copycat/server/index_engine.py",
+      "line": "264-274",
+      "summary": "heal 無進展分支把「已前進但仍落後」的 minutes 扣在引擎內不廣播,回退 #45 的送達保證",
+      "resolution": "accepted → fix 波:fetch 有帶回新分鐘鍵時仍設 _push_minutes_once(pending 守門)/_dirty"
+    },
+    {
+      "id": "L1-P1-2",
+      "severity": "P1",
+      "file": "copycat/server/index_engine.py",
+      "line": "264",
+      "summary": "「進展」以絕對 lag 判定而非 minutes 差量,真有進展也被判無進展,階梯被健康路徑燒掉",
+      "resolution": "accepted → fix 波:進展 = fetch 前後新分鐘鍵差量(頻凍結 stub 的值漂動不算);spec edge case 2 以 [amendment] 修訂"
+    },
+    {
+      "id": "L1-P1-3",
+      "severity": "P1",
+      "file": "copycat/server/index_engine.py",
+      "line": "481",
+      "summary": "lag 恢復把 _heal_variant 歸零 = 歸到已證明毒化的窗口;推播死的日子每兩發浪費一發",
+      "resolution": "accepted → fix 波:恢復不歸零(variant 黏在最後值),僅 _swap_day(新交易日窗口天然全新)歸零;同步改 test 契約"
+    },
+    {
+      "id": "L2-P1-1",
+      "severity": "P1",
+      "file": "copycat/live/tc4.py",
+      "line": "531",
+      "summary": "A 段窗過濾對 prod boot stub(stamp <today>00 ∈ 00..06 窗)是 no-op;本 repo 所有 1K/DK 窗都自 hour 00 起,今日 stub 恆在窗內;真正修復本案的是 B+C 段",
+      "resolution": "accepted → fix 波:revert _collect_history 窗過濾整段(消滅 L2-P2-3/P2-5 的副作用);可視性改由 fetch_day_minutes 的「非空但全域外」stub 簽名 log 承接"
+    },
+    {
+      "id": "L2-P1-2",
+      "severity": "P1",
+      "file": "copycat/live/stock_source.py",
+      "line": "537",
+      "summary": "variant 新窗於盤中建立且窗內真無 1K 時,stub 凍結鍵落在 domain 內 → 偽造分鐘 → 宣告治好",
+      "resolution": "downgraded to known-risk:差量階梯下自我收斂 — stub 只貢獻一次新鍵(其後值漂不算進展)→ 下一發即無進展換窗;殘留為「1K 壞而指數活」日的稀疏真價點(價格為當下真實指數),非假價。記 fix-spec Known Risks + SC-5 側車驗 stub 語意"
+    },
+    {
+      "id": "L2-P2-1",
+      "severity": "P2",
+      "file": "copycat/server/index_engine.py",
+      "line": "264",
+      "summary": "部分回補資料已 update 進 state 但不廣播(與 L1-P1-1 同根)",
+      "resolution": "accepted → 併 L1-P1-1 修"
+    },
+    {
+      "id": "L1-P2-2",
+      "severity": "P2",
+      "file": "copycat/live/stock_source.py",
+      "line": "537-538",
+      "summary": "variant 封頂 23 後階梯耗盡,與「還在爬」在 log 上不可分",
+      "resolution": "accepted → fix 波:variant 觸頂時打一行獨立固定字串"
+    },
+    {
+      "id": "L1-P2-1",
+      "severity": "P2",
+      "file": "copycat/live/tc4.py",
+      "line": "38-54",
+      "summary": "(推測)heal 窗內建立的 stub 恰在窗內,繞過 ready-check",
+      "resolution": "superseded:A 段 revert 後 ready-check 不再承擔此職;stub 語意驗證項併入 SC-5 側車"
+    },
+    {
+      "id": "L1-P2-3",
+      "severity": "P2",
+      "file": "copycat/server/index_engine.py",
+      "line": "242",
+      "summary": "被取消 retry 的 orphan worker thread 與 event loop 對 _twse.minutes 的併發迭代(既有家族,本輪推近中心)",
+      "resolution": "deferred → docs/next-time.md:worker thread 只回傳、event loop 端合併"
+    },
+    {
+      "id": "L1-P2-4",
+      "severity": "P2",
+      "file": "copycat/live/stock_source.py",
+      "line": "539",
+      "summary": "每 variant 新發一個 history 訂閱且無釋放路徑(單日最多 ~18 個)",
+      "resolution": "deferred → docs/next-time.md + SC-5 側車觀察 TC4 對多窗口訂閱的行為"
+    },
+    {
+      "id": "L2-P2-4",
+      "severity": "P2",
+      "file": "copycat/live/river_backfill.py",
+      "line": "52",
+      "summary": "river_backfill / stock backfill / _fetch_symbol_ticks 三份姊妹 ready-check 同型 stub 漏洞;river 的 minute_end_from_1k 不看 Date",
+      "resolution": "deferred → docs/next-time.md(既有 _collect_history 靜默回空家族條目擴充 stub 機制);A 段 revert 後兩邊處理一致,無「同 repo 相反處理」問題"
+    },
+    {
+      "id": "L2-P2-3",
+      "severity": "P2",
+      "file": "tests/live/test_stock_bars.py",
+      "line": "33",
+      "summary": "DK 路徑對窗過濾的安全性靠未釘住的巧合、fixtures 不帶 Time",
+      "resolution": "resolved by revert:A 段撤除後 DK 路徑行為與 master 全等"
+    },
+    {
+      "id": "L2-P2-5",
+      "severity": "P2",
+      "file": "copycat/live/tc4.py",
+      "line": "550",
+      "summary": "stub-only 改走 timeout 翻轉 bars 三態語意 + 負向快取 churn",
+      "resolution": "resolved by revert:同上"
+    }
+  ],
+  "p2_summary": "P2 共 8 條:2 修(封頂 log/送達併修)、3 deferred(併發/訂閱累積/姊妹實作 → next-time)、3 隨 A 段 revert 消滅或併 SC-5",
+  "notes": "L2-P1-1 是本輪最重要 finding:A 段對實際事故是 no-op(機械核實:boot stub stamp <today>00 ∈ [<today>00, <today>06];本 repo 全部歷史窗 start hour = 00)。決策 = revert A、保 B+C、進展判定改差量。"
+}

@@ -1,0 +1,7 @@
+[12:21:45] S2 REALTIME 訂閱完成;開始空窗 SubHistory(05-06)輪詢 30s
+[12:21:45] boot 重演結果:1 rows head={'Date': '20260814', 'Time': '42100', 'Close': '46074.86', 'QryIndex': '1'} tail={'Date': '20260814', 'Time': '42100', 'Close': '46074.86', 'QryIndex': '1'}(預期 EMPTY = timeout 靜默回空)
+[12:21:45] 等待 2365s 至 13:01:10(窗內首根 1301 應已生成)
+[13:01:10] heal 重演 #1:1 rows head={'Date': '20260814', 'Time': '42100', 'Close': '45966.14', 'QryIndex': '1'} tail={'Date': '20260814', 'Time': '42100', 'Close': '45966.14', 'QryIndex': '1'}
+[13:02:10] heal 重演 #2:1 rows head={'Date': '20260814', 'Time': '42100', 'Close': '45952.13', 'QryIndex': '1'} tail={'Date': '20260814', 'Time': '42100', 'Close': '45952.13', 'QryIndex': '1'}
+[13:02:10] 對照 C1(同 session、換窗口 00-06):243 rows head={'Date': '20260814', 'Time': '10100', 'Close': '46344.78', 'QryIndex': '1'} tail={'Date': '20260814', 'Time': '50300', 'Close': '45952.13', 'QryIndex': '243'}
+[13:02:10] closed
