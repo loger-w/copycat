@@ -1,0 +1,1404 @@
+﻿diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 9bc57a28..8f75d914 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -1242,6 +1242,35 @@ def create_app(
+     async def index_state(request: Request) -> dict:
+         return _index(request).state()
+ 
++    @app.get("/api/index/overlay")
++    async def index_overlay(request: Request) -> dict:
++        """加權的 CDP / 日均線(index-overlay SC-5);形狀同 `/api/stock/overlay/{code}`。
++
++        日 K 走 **`build_period`**(鍵自動成 `IX0001|L`)= 與 `/api/market/bars/TWSE?tf=D`
++        真共用同一格,同日兩端點只發一次 DK 取數。**不得改走 `build_daily` 的裸
++        `IX0001`** —— 那格是 `/api/stock/bars/IX0001`(**stock** session)的,共用它就
++        重開了 `|M` / `|L` 後綴當初堵住的跨 session 汙染洞(W-12 / W-14)。
++
++        另**不經 `overlay_cache`**(那是個股 overlay 專屬):日 bar 已在 `bars_cache`,
++        `build_overlay` 是常數時間,再疊一層只是多一份會漂的狀態。
++
++        bars 空(TC4 不可用)→ `build_overlay` 自然回全 null + 200:CDP/MA 是可降級的
++        疊線,把它做成 5xx 會讓前端整張圖跟著紅。引擎缺席才是 503(`_index` 既有閘)。
++        """
++        index = _index(request)
++
++        async def tagged(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
++            return TaggedBars(*await index.bars_range(tf_, s, e))
++
++        # today = 本機日界(= 台北,部署綁本機;同 stock overlay 的 design R6/R13)。
++        # 只取一次:兩處各自 `today()` 的話,跨午夜那一瞬會用兩個不同的日子。
++        today = _date.today()
++        bars, _tag = await build_period(tagged, bars_cache, "IX0001", today, "D")
++        daily: list[DailyBar] = [
++            {"date": b["t"][:10], "high": b["h"], "low": b["l"], "close": b["c"]} for b in bars
++        ]
++        return build_overlay(daily, f"{today:%Y-%m-%d}")
++
+     # ---- market(大盤 K 線;index-board SC-4/5/6)----
+ 
+     @app.get("/api/market/bars/{key}")
+diff --git a/frontend/src/components/index/MarketChart.test.tsx b/frontend/src/components/index/MarketChart.test.tsx
+new file mode 100644
+index 00000000..d81392eb
+--- /dev/null
++++ b/frontend/src/components/index/MarketChart.test.tsx
+@@ -0,0 +1,234 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { MarketChart } from "@/components/index/MarketChart";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import type { IndexSeries } from "@/hooks/useIndexStream";
++import type { MarketKey } from "@/lib/timeframe";
++
++/** 域:yTop = 23_100_000×1.003 = 23_169_300、yBottom = 22_990_000×0.997 = 22_920_970 */
++function series(over: Partial<IndexSeries> = {}): IndexSeries {
++  return {
++    p: 23_100_000,
++    ref: 23_000_000,
++    high: 23_100_000,
++    low: 22_990_000,
++    stale: false,
++    minutes: { "0901": 23_000_000, "0930": 23_100_000 },
++    ...over,
++  };
++}
++
++/** 五條 CDP + 兩條 MA 全在域內 */
++const OVERLAY_IN = {
++  cdp: { cdp: 23_050_000, ah: 23_150_000, nh: 23_100_000, nl: 22_995_000, al: 22_950_000 },
++  ma5: 23_020_000,
++  ma20: 22_930_000,
++  date: "2026-08-13",
++};
++
++/** ah / cdp 在域上方、al / ma20 在域下方;nh / nl / ma5 仍在域內 */
++const OVERLAY_OUT = {
++  cdp: { cdp: 24_000_000, ah: 24_100_000, nh: 23_100_000, nl: 22_995_000, al: 22_000_000 },
++  ma5: 23_020_000,
++  ma20: 22_000_000,
++  date: "2026-08-13",
++};
++
++const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
++
++function toggles(over: Partial<ChartToggles> = {}): ChartToggles {
++  return { ...TOGGLES, ...over };
++}
++
++let urls: string[] = [];
++
++function stub(body: unknown, status = 200): void {
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      urls.push(String(url));
++      return new Response(JSON.stringify(body), { status });
++    }),
++  );
++}
++
++function renderChart(opts: {
++  marketKey?: MarketKey;
++  name?: string;
++  s?: IndexSeries | null;
++  t?: ChartToggles;
++}) {
++  const client = new QueryClient({
++    // retryDelay 0:hook 自帶 retry:1,error 終態才不用等 exponential backoff
++    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
++  });
++  return render(
++    <QueryClientProvider client={client}>
++      <MarketChart
++        marketKey={opts.marketKey ?? "TWSE"}
++        mode="intraday"
++        name={opts.name ?? "加權指數"}
++        series={opts.s === undefined ? series() : opts.s}
++        toggles={opts.t ?? toggles()}
++        onToggle={() => undefined}
++      />
++    </QueryClientProvider>,
++  );
++}
++
++function dashedOverlayLines(root: HTMLElement): NodeListOf<Element> {
++  return root.querySelectorAll('line[stroke-dasharray="3 2"]');
++}
++
++beforeEach(() => {
++  urls = [];
++  stub(OVERLAY_IN);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("MarketChart 分時疊線(SC-3)", () => {
++  it("加權 + CDP 開 → 域內疊線畫水平虛線,右緣印帶 * 的價位", async () => {
++    const { container } = renderChart({ t: toggles({ cdp: true, ma: false }) });
++    await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(5));
++    expect(urls).toContain("/api/index/overlay");
++    const starred = [...container.querySelectorAll("text")]
++      .map((t) => t.textContent ?? "")
++      .filter((s) => s.endsWith("*"));
++    expect(starred.sort()).toEqual(["22950*", "22995*", "23050*", "23100*", "23150*"]);
++    // 線體橫貫全寬(指數圖無 R_AXIS 保留帶)
++    expect(dashedOverlayLines(container)[0]!.getAttribute("x1")).toBe("0");
++    expect(dashedOverlayLines(container)[0]!.getAttribute("x2")).toBe("640");
++  });
++
++  it("域外 → 不畫線體,右緣掛牌帶名稱與方向", async () => {
++    stub(OVERLAY_OUT);
++    const { container } = renderChart({ t: toggles({ cdp: true, ma: true }) });
++    // 域內只剩 nh / nl / ma5
++    await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(3));
++    expect(screen.getByText("AH 24100↑")).toBeTruthy();
++    expect(screen.getByText("CDP 24000↑")).toBeTruthy();
++    expect(screen.getByText("AL 22000↓")).toBeTruthy();
++    expect(screen.getByText("MA20 22000↓")).toBeTruthy();
++    // 域外的值不得出現線體價位標(那是「畫了線」的語彙)
++    expect(screen.queryByText("24000*")).toBeNull();
++  });
++
++  it("MA 開 → 右緣印 MA5 / MA20 名稱加價位", async () => {
++    const { container } = renderChart({ t: toggles({ cdp: false, ma: true }) });
++    await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(2));
++    expect(screen.getByText("MA5 23020")).toBeTruthy();
++    expect(screen.getByText("MA20 22930")).toBeTruthy();
++  });
++});
++
++describe("MarketChart toggle 列(SC-4 / 決策 2)", () => {
++  it("櫃買 → CDP / MA 反灰帶 title,均價可按", () => {
++    renderChart({
++      marketKey: "OTC",
++      name: "櫃買指數",
++      s: series({ minutes: { "1017": 359_800 }, ref: 378_090, high: 373_420, low: 358_430 }),
++      t: toggles({ cdp: true, ma: true }),
++    });
++    for (const label of ["CDP", "MA"]) {
++      const btn = screen.getByRole("button", { name: label });
++      expect(btn.hasAttribute("disabled")).toBe(true);
++      expect(btn.getAttribute("title")).toBe("櫃買無日 K 資料源");
++      // 決策 2:aria-pressed 與 available 連動,不並存 aria-disabled 字串
++      expect(btn.getAttribute("aria-pressed")).toBe("false");
++      expect(btn.getAttribute("aria-disabled")).toBeNull();
++    }
++    const vwap = screen.getByRole("button", { name: "均價" });
++    expect(vwap.hasAttribute("disabled")).toBe(false);
++    expect(vwap.getAttribute("title")).toBe("分鐘收盤均價(指數無成交量)");
++    // 櫃買不打 overlay 端點
++    expect(urls.some((u) => u.includes("/api/index/overlay"))).toBe(false);
++  });
++
++  it("加權但端點 503 → CDP / MA 反灰帶「無日線資料」", async () => {
++    stub({ detail: { error: "NOT_READY" } }, 503);
++    renderChart({ t: toggles({ cdp: true, ma: true }) });
++    await waitFor(() =>
++      expect(screen.getByRole("button", { name: "CDP" }).hasAttribute("disabled")).toBe(true),
++    );
++    for (const label of ["CDP", "MA"]) {
++      const btn = screen.getByRole("button", { name: label });
++      expect(btn.getAttribute("title")).toBe("無日線資料");
++    }
++  });
++});
++
++describe("MarketChart 昨收標籤(SC-6)", () => {
++  it("有 ref → 右緣印「昨收 <值>」", async () => {
++    renderChart({ t: toggles({ cdp: false, ma: false }) });
++    await waitFor(() => expect(screen.getByText("昨收 23000")).toBeTruthy());
++  });
++
++  it("ref null → 不畫昨收標籤(fallback 虛線照畫)", async () => {
++    const { container } = renderChart({
++      s: series({ ref: null }),
++      t: toggles({ cdp: false, ma: false }),
++    });
++    await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
++    expect(screen.queryByText(/昨收/)).toBeNull();
++    expect(container.querySelector('line[stroke-dasharray="2 3"]')).toBeTruthy();
++  });
++});
++
++describe("MarketChart y 域不受疊線影響(SC-7)", () => {
++  async function snapshot(t: ChartToggles, expectLines: number) {
++    const { container, unmount } = renderChart({ t });
++    if (expectLines > 0) {
++      await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(expectLines));
++    } else {
++      await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
++    }
++    const ticks = [...container.querySelectorAll('[data-testid="index-ytick"]')].map(
++      (e) => `${e.getAttribute("y")}|${e.textContent}`,
++    );
++    const refY = container
++      .querySelector('line[stroke-dasharray="2 3"]')!
++      .getAttribute("y1");
++    unmount();
++    return { ticks, refY };
++  }
++
++  it("同一 series 下 CDP/MA 開 vs 關,yTicks 與昨收線位置逐字相同", async () => {
++    const off = await snapshot(toggles({ cdp: false, ma: false }), 0);
++    const on = await snapshot(toggles({ cdp: true, ma: true }), 7);
++    expect(off.ticks).toHaveLength(3);
++    expect(on.ticks).toEqual(off.ticks);
++    expect(on.refY).toBe(off.refY);
++  });
++});
++
++describe("MarketChart a11y 錨點(W-12)", () => {
++  it("role=img + aria-label 掛在 svg 節點,toggle 鈕不在其內", () => {
++    renderChart({ t: toggles({ cdp: false, ma: false }) });
++    const node = screen.getByRole("img", { name: "加權指數分時走勢" });
++    expect(node.tagName).toBe("svg");
++    expect(node.querySelectorAll("button")).toHaveLength(0);
++    expect(screen.getByRole("button", { name: "均價" })).toBeTruthy();
++  });
++});
++
++describe("MarketChart 均價線(SC-1)", () => {
++  it("均價 toggle 開 → 畫 stroke-ink 1.2 寬的均價線;關 → 不畫", () => {
++    const { container, unmount } = renderChart({
++      t: toggles({ vwap: true, cdp: false, ma: false }),
++    });
++    expect(container.querySelectorAll("polyline.stroke-ink")).toHaveLength(1);
++    expect(container.querySelector("polyline.stroke-ink")!.getAttribute("stroke-width")).toBe(
++      "1.2",
++    );
++    unmount();
++    const off = renderChart({ t: toggles({ vwap: false, cdp: false, ma: false }) });
++    expect(off.container.querySelectorAll("polyline.stroke-ink")).toHaveLength(0);
++  });
++});
+diff --git a/frontend/src/components/index/MarketChart.tsx b/frontend/src/components/index/MarketChart.tsx
+index f80d4d29..93f6dec2 100644
+--- a/frontend/src/components/index/MarketChart.tsx
++++ b/frontend/src/components/index/MarketChart.tsx
+@@ -1,13 +1,29 @@
+ import { useMemo } from "react";
+ 
+ import { CandleChart } from "@/components/stock/CandleChart";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import { useIndexOverlay } from "@/hooks/useIndexOverlay";
+ import { useMarketBars } from "@/hooks/useMarketBars";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
+ import { aggregateBars } from "@/lib/candle";
+-import { buildIndexGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
++import {
++  buildIndexGeometry,
++  outOfDomainLevels,
++  type RightEdgeLabel,
++  rightEdgeLabels,
++  X_END_MIN,
++  X_START_MIN,
++} from "@/lib/index-chart-svg";
++import {
++  LEVEL_FILL,
++  LEVEL_STROKE,
++  overlayLines,
++  type StockOverlay,
++} from "@/lib/stock-intraday-svg";
+ import { pts } from "@/lib/svg-points";
+ import { HOUR_TICKS } from "@/lib/time-labels";
+ import { type MarketKey, type MarketMode, marketMinutesOf } from "@/lib/timeframe";
++import { cn } from "@/lib/utils";
+ 
+ const SIZE = { width: 640, height: 220 };
+ 
+@@ -31,54 +47,187 @@ function toX(minute: number): number {
+   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
+ }
+ 
+-function IntradayChart({ name, s }: { name: string; s: IndexSeries }) {
++/** 右緣標籤文字。**唯一組法** —— 三種 kind 的字面(昨收 / `價位*` / `名稱 價位↑↓`)
++ *  各自散在 JSX 裡的話,改一種語彙時另外兩種會靜默留在舊版。 */
++function labelText(l: RightEdgeLabel): string {
++  if (l.kind === "ref") return l.text;
++  if (l.kind === "peg") {
++    return `${l.level.toUpperCase()} ${fmt(l.priceMilli)}${l.dir === "up" ? "↑" : "↓"}`;
++  }
++  // CDP 系印「價位*」(`*` 是 CDP 記號,同個股語彙);MA 系名稱不可省 —— 兩條 MA 同色系
++  return l.level === "ma5" || l.level === "ma20"
++    ? `${l.level.toUpperCase()} ${fmt(l.priceMilli)}`
++    : `${fmt(l.priceMilli)}*`;
++}
++
++function labelKey(l: RightEdgeLabel): string {
++  return l.kind === "ref" ? "ref" : `${l.kind}-${l.level}`;
++}
++
++/** 右緣標籤帶的上下界。與 yTicks 的夾制同值(`[8, height − 14]`)—— 兩處各寫一次的話,
++ *  同一個角落的兩種文字會夾制到不同位置。 */
++const LABEL_BOUNDS = { top: 8, bottom: SIZE.height - 14 };
++
++interface IntradayProps {
++  name: string;
++  s: IndexSeries;
++  /** 疊線只做加權(櫃買無日 K 來源,已拍板跳過)—— 這個判別子同時決定 toggle 反灰文案 */
++  marketKey: MarketKey;
++  toggles: ChartToggles;
++  onToggle: (key: keyof ChartToggles, value: boolean) => void;
++  /** `/api/index/overlay` 的結果;未回 → null。查詢由 MarketChart 層無條件呼叫。 */
++  overlay: StockOverlay | null;
++  overlayError: boolean;
++}
++
++function IntradayChart({
++  name,
++  s,
++  marketKey,
++  toggles,
++  onToggle,
++  overlay,
++  overlayError,
++}: IntradayProps) {
+   const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, SIZE);
++  const isTwse = marketKey === "TWSE";
++  // 可用性同個股語意:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰
++  const cdpAvailable =
++    isTwse && (overlayError ? false : overlay ? overlay.cdp !== null : true);
++  const maAvailable =
++    isTwse &&
++    (overlayError ? false : overlay ? overlay.ma5 !== null || overlay.ma20 !== null : true);
++  const offTitle = isTwse ? "無日線資料" : "櫃買無日 K 資料源";
++  const toggleDefs: {
++    key: keyof ChartToggles;
++    label: string;
++    available: boolean;
++    title?: string;
++  }[] = [
++    // 指數沒有成交量 → 這條線是**分鐘收盤的算術平均**而不是 VWAP;title 就是用來區辨的
++    { key: "vwap", label: "均價", available: true, title: "分鐘收盤均價(指數無成交量)" },
++    { key: "cdp", label: "CDP", available: cdpAvailable, title: cdpAvailable ? undefined : offTitle },
++    { key: "ma", label: "MA", available: maAvailable, title: maAvailable ? undefined : offTitle },
++  ];
++
++  const on = { cdp: toggles.cdp && cdpAvailable, ma: toggles.ma && maAvailable };
++  const oLines = overlay !== null && isTwse ? overlayLines(overlay, g, on) : [];
++  const pegs = overlay !== null && isTwse ? outOfDomainLevels(overlay, g, on) : [];
++  const labels = rightEdgeLabels({
++    ref: s.ref !== null ? { y: g.refY, text: `昨收 ${fmt(s.ref)}` } : null,
++    oLines,
++    outOfDomain: pegs,
++    bounds: LABEL_BOUNDS,
++  });
++
+   return (
+-    <svg
+-      viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
+-      className="w-full"
+-      role="img"
+-      aria-label={`${name}分時走勢`}
+-    >
+-      {HOUR_TICKS.map(({ minute, label }) => (
+-        <g key={minute}>
++    <div className="flex min-h-0 flex-1 flex-col">
++      {/* toggle 列在 **svg 外**:圖的 a11y 錨點是 svg 本身(W-12),把鈕包進去會讓
++          role="img" 的子樹含互動元素 */}
++      <div className="mb-1 flex h-[1.375rem] items-center justify-end gap-1">
++        {toggleDefs.map(({ key, label, available, title }) => (
++          <button
++            key={key}
++            type="button"
++            aria-pressed={toggles[key] && available}
++            disabled={!available}
++            title={title}
++            onClick={() => onToggle(key, !toggles[key])}
++            className={cn(
++              "rounded border px-2 py-0.5 text-xs",
++              toggles[key] && available ? "border-accent text-accent" : "border-line text-ink-dim",
++              !available && "opacity-40",
++            )}
++          >
++            {label}
++          </button>
++        ))}
++      </div>
++      <svg
++        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
++        className="w-full"
++        role="img"
++        aria-label={`${name}分時走勢`}
++      >
++        {HOUR_TICKS.map(({ minute, label }) => (
++          <g key={minute}>
++            <line
++              x1={toX(minute)}
++              x2={toX(minute)}
++              y1={0}
++              y2={SIZE.height - 12}
++              className="stroke-line"
++              strokeWidth={0.4}
++            />
++            <text
++              x={toX(minute) + 2}
++              y={SIZE.height - 2}
++              className="fill-ink-dim"
++              fontSize="0.625rem"
++            >
++              {label}
++            </text>
++          </g>
++        ))}
++        <line
++          x1={0}
++          x2={SIZE.width}
++          y1={g.refY}
++          y2={g.refY}
++          className="stroke-line"
++          strokeDasharray="2 3"
++          strokeWidth={1}
++        />
++        {g.yTicks.map((t) => (
++          <text
++            key={t.priceMilli}
++            data-testid="index-ytick"
++            x={2}
++            y={Math.min(Math.max(t.y - 2, 8), SIZE.height - 14)}
++            className="fill-ink-dim"
++            fontSize="0.625rem"
++          >
++            {fmt(t.priceMilli)}
++          </text>
++        ))}
++        {/* 域內疊線;線體橫貫全寬(指數圖無 R_AXIS 保留帶) */}
++        {oLines.map((l) => (
++          // key 用 level 不用文字:兩條線同價時文字會撞 key
+           <line
+-            x1={toX(minute)}
+-            x2={toX(minute)}
+-            y1={0}
+-            y2={SIZE.height - 12}
+-            className="stroke-line"
+-            strokeWidth={0.4}
++            key={`o-${l.level}`}
++            x1={0}
++            x2={SIZE.width}
++            y1={l.y}
++            y2={l.y}
++            className={LEVEL_STROKE[l.level]}
++            strokeDasharray="3 2"
++            strokeWidth={0.8}
+           />
+-          <text x={toX(minute) + 2} y={SIZE.height - 2} className="fill-ink-dim" fontSize="0.625rem">
+-            {label}
++        ))}
++        {toggles.vwap && g.avgLine.length > 0 ? (
++          <polyline points={pts(g.avgLine)} fill="none" className="stroke-ink" strokeWidth={1.2} />
++        ) : null}
++        {g.line.length > 0 ? (
++          <polyline points={pts(g.line)} fill="none" className="stroke-accent" strokeWidth={1.4} />
++        ) : null}
++        {/* 右緣文字(昨收 + 疊線價位 + 域外掛牌)一律走 `rightEdgeLabels` 的 y */}
++        {labels.map((l) => (
++          <text
++            key={labelKey(l)}
++            x={SIZE.width - 2}
++            y={l.y}
++            dy="0.35em"
++            textAnchor="end"
++            className={cn(l.kind === "ref" ? "fill-ink-dim" : LEVEL_FILL[l.level], "stroke-surface")}
++            strokeWidth={2}
++            paintOrder="stroke"
++            fontSize="0.5625rem"
++          >
++            {labelText(l)}
+           </text>
+-        </g>
+-      ))}
+-      <line
+-        x1={0}
+-        x2={SIZE.width}
+-        y1={g.refY}
+-        y2={g.refY}
+-        className="stroke-line"
+-        strokeDasharray="2 3"
+-        strokeWidth={1}
+-      />
+-      {g.yTicks.map((t) => (
+-        <text
+-          key={t.priceMilli}
+-          x={2}
+-          y={Math.min(Math.max(t.y - 2, 8), SIZE.height - 14)}
+-          className="fill-ink-dim"
+-          fontSize="0.625rem"
+-        >
+-          {fmt(t.priceMilli)}
+-        </text>
+-      ))}
+-      {g.line.length > 0 ? (
+-        <polyline points={pts(g.line)} fill="none" className="stroke-accent" strokeWidth={1.4} />
+-      ) : null}
+-    </svg>
++        ))}
++      </svg>
++    </div>
+   );
+ }
+ 
+@@ -90,8 +239,10 @@ interface Props {
+   name: string;
+   /** 分時模式的資料源(加權 / 櫃買);期指不支援分時,傳 null 即可。 */
+   series: IndexSeries | null;
+-  showBb: boolean;
+-  onToggleBb: (v: boolean) => void;
++  /** 整包下傳而不是拆成 `showBb`/`onToggleBb`:分時態接下來要用到 vwap/cdp/ma 三個鍵,
++   *  逐鍵開 props 等於每加一條疊線就改一次 caller 簽名。單一 caller(MarketPane)。 */
++  toggles: ChartToggles;
++  onToggle: (key: keyof ChartToggles, value: boolean) => void;
+   /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
+    *  gate 停(review round-2 XR-4);未給時預設 true。 */
+   active?: boolean;
+@@ -103,8 +254,8 @@ export function MarketChart({
+   mode,
+   name,
+   series,
+-  showBb,
+-  onToggleBb,
++  toggles,
++  onToggle,
+   active = true,
+ }: Props) {
+   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
+@@ -113,12 +264,27 @@ export function MarketChart({
+     () => aggregateBars(data?.bars ?? [], minutes),
+     [data?.bars, minutes],
+   );
++  // **無條件呼叫**(rules of hooks):閘全收在 enabled 裡 —— 只有加權分時、且至少一種
++  // 疊線開著才打端點。櫃買無日 K 來源(已拍板跳過),K 線模式不畫疊線。
++  const overlayQ = useIndexOverlay(
++    mode === "intraday" && marketKey === "TWSE" && (toggles.cdp || toggles.ma),
++  );
+ 
+   if (mode === "intraday") {
+     if (series === null) {
+       return <p className="py-10 text-center text-sm text-ink-muted">等待指數資料…</p>;
+     }
+-    return <IntradayChart name={name} s={series} />;
++    return (
++      <IntradayChart
++        name={name}
++        s={series}
++        marketKey={marketKey}
++        toggles={toggles}
++        onToggle={onToggle}
++        overlay={overlayQ.data ?? null}
++        overlayError={overlayQ.isError}
++      />
++    );
+   }
+ 
+   if (data?.meta.refusal === "NO_HISTORICAL_SOURCE") {
+@@ -152,8 +318,8 @@ export function MarketChart({
+         key={`${marketKey}-${mode}`}
+         bars={bars}
+         initBars={minutes > 1 ? 240 : 120}
+-        showBb={showBb}
+-        onToggleBb={onToggleBb}
++        showBb={toggles.bb}
++        onToggleBb={(v) => onToggle("bb", v)}
+         showVolume={meta.volume}
+       />
+       <p data-testid="market-meta" className="mt-1 font-mono text-xs text-ink-dim">
+diff --git a/frontend/src/components/index/MarketPane.test.tsx b/frontend/src/components/index/MarketPane.test.tsx
+index 912e1067..c89335dc 100644
+--- a/frontend/src/components/index/MarketPane.test.tsx
++++ b/frontend/src/components/index/MarketPane.test.tsx
+@@ -248,8 +248,11 @@ describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
+     expect(screen.getByText("加權指數")).toBeTruthy();
+     expect(screen.getByText("42039.92")).toBeTruthy();
+     expect(screen.getByText(/-1594\.27/)).toBeTruthy();
+-    expect(screen.getByText(/高 43221\.93/)).toBeTruthy();
+-    expect(screen.getByText(/昨收 43634\.19/)).toBeTruthy();
++    // 昨收改斷言在**同一個標題列元素**上:分時圖右緣現在也有一顆「昨收 <值>」標籤
++    // (SC-6),裸 getByText 會撞兩個元素。本條要驗的是「標題列印得出昨收」,不是
++    // 「全畫面只有一處昨收」—— 收斂 scope,不放寬語意。
++    const quote = screen.getByText(/高 43221\.93/);
++    expect(quote.textContent).toContain("昨收 43634.19");
+   });
+ 
+   it("Quote 漲跌整串:跌用負號(characterization)", () => {
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index 2397b09b..93b188f5 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -381,8 +381,8 @@ export function MarketPane({
+               mode={mode}
+               name={NAMES[marketKey]}
+               series={series}
+-              showBb={toggles.bb}
+-              onToggleBb={(v) => onToggle("bb", v)}
++              toggles={toggles}
++              onToggle={onToggle}
+               active={active}
+             />
+           )}
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 2b1c4867..28d57188 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -16,6 +16,8 @@ import {
+   buildIntradayGeometry,
+   edgePriceLabels,
+   lastPoint,
++  LEVEL_FILL,
++  LEVEL_STROKE,
+   LOW_DECIDED_PCT,
+   minuteToX,
+   overlayLines,
+@@ -60,28 +62,6 @@ function barW(width: number, xw: XWindow = SPOT_WINDOW): number {
+   return Math.max(1, plotWidth(width) / (xw.end - xw.start) - 0.4);
+ }
+ 
+-/** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
+- *  上方壓力位紅、下方支撐位綠(台股紅漲綠跌),中軸取琥珀金不與紅綠系混淆。 */
+-const LEVEL_STROKE: Record<OverlayLevel, string> = {
+-  ah: "stroke-bull",
+-  nh: "stroke-bull/55",
+-  cdp: "stroke-profit",
+-  nl: "stroke-bear/55",
+-  al: "stroke-bear",
+-  ma5: "stroke-ma5",
+-  ma20: "stroke-ma20",
+-};
+-
+-const LEVEL_FILL: Record<OverlayLevel, string> = {
+-  ah: "fill-bull",
+-  nh: "fill-bull/70",
+-  cdp: "fill-profit",
+-  nl: "fill-bear/70",
+-  al: "fill-bear",
+-  ma5: "fill-ma5",
+-  ma20: "fill-ma20",
+-};
+-
+ /** 左緣價位刻度的配色(round5 C):高於平盤紅、低於平盤綠、平盤白。
+  *  刻度值本身不變 —— 它們本來就是 ±10/8/6/4/2/0% 對應的價位,user 要的是「對應百分比的
+  *  數字」而不是顯示百分比字樣。`ref` 不可得(無昨收)時全部退回中性灰:那時沒有「平盤」
+diff --git a/frontend/src/hooks/useIndexOverlay.test.tsx b/frontend/src/hooks/useIndexOverlay.test.tsx
+new file mode 100644
+index 00000000..17f9308f
+--- /dev/null
++++ b/frontend/src/hooks/useIndexOverlay.test.tsx
+@@ -0,0 +1,99 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { useIndexOverlay } from "@/hooks/useIndexOverlay";
++
++const OVERLAY = {
++  cdp: { cdp: 23_050_000, ah: 23_150_000, nh: 23_100_000, nl: 23_000_000, al: 22_950_000 },
++  ma5: 23_020_000,
++  ma20: 22_930_000,
++  date: "2026-08-13",
++};
++
++const ALL_NULL = { cdp: null, ma5: null, ma20: null, date: null };
++
++let urls: string[] = [];
++
++function wrapper({ children }: { children: ReactNode }) {
++  const client = new QueryClient({
++    // retryDelay 0:hook 自帶 retry:1(覆寫 defaultOptions 的 retry),不歸零延遲的話
++    // error 終態要等 exponential backoff 的 1s,fake timer 的推進語意會與重試糾纏
++    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
++  });
++  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++}
++
++beforeEach(() => {
++  urls = [];
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.useRealTimers();
++});
++
++function stub(handler: (n: number) => Response): void {
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      urls.push(String(url));
++      return handler(urls.length);
++    }),
++  );
++}
++
++describe("useIndexOverlay(決策 10)", () => {
++  it("enabled=false 不發請求", async () => {
++    stub(() => new Response(JSON.stringify(OVERLAY)));
++    renderHook(() => useIndexOverlay(false), { wrapper });
++    await new Promise((r) => setTimeout(r, 50));
++    expect(urls).toEqual([]);
++  });
++
++  it("enabled=true 抓 /api/index/overlay 一次", async () => {
++    stub(() => new Response(JSON.stringify(OVERLAY)));
++    const hook = renderHook(() => useIndexOverlay(true), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toEqual(OVERLAY));
++    expect(urls).toEqual(["/api/index/overlay"]);
++  });
++
++  // ⚠ RTL 的 waitFor 偵測不到 vitest fake timers(退回真 interval → timeout),
++  //   以下兩條一律「手動 advance + 直接斷言」,不混用 waitFor(skill frontend-testing)。
++  it("全 null(TC4 未起)→ 60s 後自動 refetch 補上", async () => {
++    vi.useFakeTimers();
++    stub((n) => new Response(JSON.stringify(n === 1 ? ALL_NULL : OVERLAY)));
++    const hook = renderHook(() => useIndexOverlay(true), { wrapper });
++    await vi.advanceTimersByTimeAsync(50);
++    expect(urls.length).toBe(1);
++    expect(hook.result.current.data).toEqual(ALL_NULL);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(urls.length).toBe(2);
++    expect(hook.result.current.data).toEqual(OVERLAY);
++    // 補上之後停掉輪詢(refetchInterval 是函式,每次到期重新求值)
++    await vi.advanceTimersByTimeAsync(180_000);
++    expect(urls.length).toBe(2);
++  });
++
++  it("503 error(engine 未就緒)→ 60s 後自動 refetch 補上", async () => {
++    vi.useFakeTimers();
++    stub((n) =>
++      n <= 2
++        ? new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 })
++        : new Response(JSON.stringify(OVERLAY)),
++    );
++    const hook = renderHook(() => useIndexOverlay(true), { wrapper });
++    // 首抓 + retry:1 的重試(wrapper 已把 retryDelay 歸零)
++    await vi.advanceTimersByTimeAsync(50);
++    expect(urls.length).toBe(2);
++    expect(hook.result.current.isError).toBe(true);
++    // error 態 data 是 undefined → 條件式必須查 status,查 data 會漏掉這條路
++    expect(hook.result.current.data).toBeUndefined();
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(urls.length).toBe(3);
++    expect(hook.result.current.data).toEqual(OVERLAY);
++  });
++});
+diff --git a/frontend/src/hooks/useIndexOverlay.ts b/frontend/src/hooks/useIndexOverlay.ts
+new file mode 100644
+index 00000000..a6d0c0e5
+--- /dev/null
++++ b/frontend/src/hooks/useIndexOverlay.ts
+@@ -0,0 +1,45 @@
++import { useQuery } from "@tanstack/react-query";
++
++import type { StockOverlay } from "@/lib/stock-intraday-svg";
++
++function localYmd(): string {
++  // 本機日界 = 台北(部署綁本機);跨日換 queryKey 自然失效(同 useStockOverlay)
++  const d = new Date();
++  const mm = String(d.getMonth() + 1).padStart(2, "0");
++  const dd = String(d.getDate()).padStart(2, "0");
++  return `${d.getFullYear()}-${mm}-${dd}`;
++}
++
++async function fetchIndexOverlay(): Promise<StockOverlay> {
++  const res = await fetch("/api/index/overlay");
++  if (!res.ok) throw new Error(`HTTP_${res.status}`);
++  return (await res.json()) as StockOverlay;
++}
++
++/** 加權指數的 CDP / 日均線(決策 10)。形狀與 `/api/stock/overlay/{code}` 同,
++ *  故直接重用 `StockOverlay` 型別 —— 另立一份同欄位的型別,兩邊漂掉時是靜默的。
++ *
++ *  **回復用的 60s 輪詢**:資料是「昨日以前的日 K 衍生量」,常態下一天只需一份
++ *  (staleTime Infinity)。但兩種可回復的失效會讓首抓拿到空手 ——
++ *  TC4 沒開(200 但三欄全 null)與 index engine 未就緒(503)。兩者都會在使用者
++ *  什麼都不做的情況下自行恢復,沒有這道輪詢就得手動重新整理才看得到疊線。
++ *
++ *  **error 態必須查 `status` 不能查 `data`**:失敗時 `data` 是 undefined,
++ *  只寫 `data != null && 全 null` 的條件會讓 503 那條路永遠不輪詢。 */
++export function useIndexOverlay(enabled: boolean) {
++  return useQuery({
++    queryKey: ["index-overlay", localYmd()],
++    queryFn: fetchIndexOverlay,
++    enabled,
++    staleTime: Infinity,
++    retry: 1,
++    refetchInterval: (q) =>
++      q.state.status === "error" ||
++      (q.state.data != null &&
++        q.state.data.cdp === null &&
++        q.state.data.ma5 === null &&
++        q.state.data.ma20 === null)
++        ? 60_000
++        : false,
++  });
++}
+diff --git a/frontend/src/lib/index-chart-svg.test.ts b/frontend/src/lib/index-chart-svg.test.ts
+index 8ddd3835..45394f9a 100644
+--- a/frontend/src/lib/index-chart-svg.test.ts
++++ b/frontend/src/lib/index-chart-svg.test.ts
+@@ -1,6 +1,12 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { buildIndexGeometry, buildOverlayGeometry } from "@/lib/index-chart-svg";
++import {
++  buildIndexGeometry,
++  buildOverlayGeometry,
++  outOfDomainLevels,
++  rightEdgeLabels,
++} from "@/lib/index-chart-svg";
++import { overlayLines, type OverlayLine, type StockOverlay } from "@/lib/stock-intraday-svg";
+ 
+ const SIZE = { width: 270, height: 100 };
+ 
+@@ -79,3 +85,174 @@ describe("buildOverlayGeometry", () => {
+     expect(g.lines).toHaveLength(1);
+   });
+ });
++
++describe("buildIndexGeometry avgLine(SC-1/2)", () => {
++  it("第 k 個已有分鐘的值 = 前 k 個已有分鐘收盤的算術平均(缺分鐘不補值)", () => {
++    const g = buildIndexGeometry(
++      {
++        minutes: minutes([
++          ["0901", 43_000_000],
++          ["0902", 43_000_200],
++          // 0903/0904 缺 —— 不補值,均價只走「已有」分鐘
++          ["0905", 43_000_400],
++          ["0906", 43_000_800],
++        ]),
++        ref: 43_000_000,
++        high: null,
++        low: null,
++      },
++      SIZE,
++    );
++    expect(g.avgLine.map((p) => p.p)).toEqual([
++      43_000_000, 43_000_100, 43_000_200, 43_000_350,
++    ]);
++    expect(g.avgLine.map((p) => p.minute)).toEqual(["0901", "0902", "0905", "0906"]);
++    // x 與走勢線逐點同源(缺分鐘不佔位)
++    expect(g.avgLine.map((p) => p.x)).toEqual(g.line.map((p) => p.x));
++    expect(g.avgLine[1]!.y).toBeCloseTo(g.toY(43_000_100), 6);
++  });
++
++  it("minutes 空 → avgLine 空陣列", () => {
++    const g = buildIndexGeometry({ minutes: {}, ref: 43_000_000, high: null, low: null }, SIZE);
++    expect(g.avgLine).toEqual([]);
++  });
++
++  it("toY 匯出與 yTicks / refY / yDomain 同源", () => {
++    const g = buildIndexGeometry(
++      {
++        minutes: minutes([["0901", 43_000_000]]),
++        ref: 43_634_190,
++        high: 43_221_930,
++        low: 41_815_780,
++      },
++      SIZE,
++    );
++    expect(g.toY(g.yDomain[1])).toBeCloseTo(0, 6);
++    expect(g.toY(g.yDomain[0])).toBeCloseTo(SIZE.height, 6);
++    expect(g.toY(43_634_190)).toBeCloseTo(g.refY, 6);
++    for (const t of g.yTicks) expect(g.toY(t.priceMilli)).toBeCloseTo(t.y, 2);
++  });
++});
++
++const BOUNDS = { top: 8, bottom: 206 };
++
++function line(level: OverlayLine["level"], y: number): OverlayLine {
++  return { y, priceMilli: 23_000_000, level };
++}
++
++describe("rightEdgeLabels(決策 6:右緣標籤唯一佈局來源)", () => {
++  it("3 項同時貼底 → y 兩兩相距 ≥10 且全在界內", () => {
++    const out = rightEdgeLabels({
++      ref: null,
++      oLines: [],
++      outOfDomain: [
++        { level: "nl", priceMilli: 22_000_000, dir: "down" },
++        { level: "al", priceMilli: 21_000_000, dir: "down" },
++        { level: "ma20", priceMilli: 20_000_000, dir: "down" },
++      ],
++      bounds: BOUNDS,
++    });
++    expect(out).toHaveLength(3);
++    const ys = out.map((l) => l.y).sort((a, b) => a - b);
++    expect(ys[1]! - ys[0]!).toBeGreaterThanOrEqual(10);
++    expect(ys[2]! - ys[1]!).toBeGreaterThanOrEqual(10);
++    for (const y of ys) {
++      expect(y).toBeGreaterThanOrEqual(BOUNDS.top);
++      expect(y).toBeLessThanOrEqual(BOUNDS.bottom);
++    }
++  });
++
++  it("8 項(昨收 + 七條域內線)全塞得下", () => {
++    const out = rightEdgeLabels({
++      ref: { y: 100, text: "昨收 23000" },
++      oLines: [
++        line("ah", 20),
++        line("nh", 40),
++        line("cdp", 60),
++        line("nl", 130),
++        line("al", 150),
++        line("ma5", 170),
++        line("ma20", 190),
++      ],
++      outOfDomain: [],
++      bounds: BOUNDS,
++    });
++    expect(out).toHaveLength(8);
++    // 互不相撞就不推擠:域內線的 y 原封不動
++    expect(
++      out.filter((l) => l.kind === "line").map((l) => l.y),
++    ).toEqual([20, 40, 60, 130, 150, 170, 190]);
++  });
++
++  it("cdp 與昨收同 y±3px → 昨收 y 不動、cdp 被推開", () => {
++    const out = rightEdgeLabels({
++      ref: { y: 100, text: "昨收 23000" },
++      oLines: [line("cdp", 102)],
++      outOfDomain: [],
++      bounds: BOUNDS,
++    });
++    const refLabel = out.find((l) => l.kind === "ref");
++    const cdpLabel = out.find((l) => l.kind === "line");
++    expect(refLabel?.y).toBe(100);
++    expect(cdpLabel).toBeTruthy();
++    expect(Math.abs(cdpLabel!.y - 100)).toBeGreaterThanOrEqual(10);
++  });
++
++  it("容量不足 → 依排序末端優先丟棄", () => {
++    const out = rightEdgeLabels({
++      ref: null,
++      oLines: [line("ah", 10), line("nh", 20), line("cdp", 30)],
++      outOfDomain: [],
++      // 容量 = floor((25−10)/10)+1 = 2
++      bounds: { top: 10, bottom: 25 },
++    });
++    expect(out).toHaveLength(2);
++    expect(out.map((l) => (l.kind === "line" ? l.level : null))).toEqual(["ah", "nh"]);
++  });
++});
++
++describe("outOfDomainLevels(SC-7 域內/域外分類)", () => {
++  const g = buildIndexGeometry(
++    {
++      minutes: minutes([["0901", 23_000_000]]),
++      ref: 23_000_000,
++      high: 23_100_000,
++      low: 22_990_000,
++    },
++    SIZE,
++  );
++  const [yBottom, yTop] = g.yDomain;
++  const overlay: StockOverlay = {
++    cdp: {
++      cdp: 23_050_000,
++      ah: yTop + 1_000_000,
++      nh: 23_100_000,
++      nl: 23_000_000,
++      al: yBottom - 1_000_000,
++    },
++    ma5: 23_020_000,
++    ma20: yBottom - 500_000,
++    date: "2026-08-13",
++  };
++
++  it("域外值 → 掛牌項含正確 dir;域內值只進 overlayLines", () => {
++    expect(outOfDomainLevels(overlay, g, { cdp: true, ma: true })).toEqual([
++      { level: "ah", priceMilli: yTop + 1_000_000, dir: "up" },
++      { level: "al", priceMilli: yBottom - 1_000_000, dir: "down" },
++      { level: "ma20", priceMilli: yBottom - 500_000, dir: "down" },
++    ]);
++    expect(overlayLines(overlay, g, { cdp: true, ma: true }).map((l) => l.level)).toEqual([
++      "nh",
++      "cdp",
++      "nl",
++      "ma5",
++    ]);
++  });
++
++  it("toggle 關的類別不掛牌", () => {
++    expect(outOfDomainLevels(overlay, g, { cdp: false, ma: true })).toEqual([
++      { level: "ma20", priceMilli: yBottom - 500_000, dir: "down" },
++    ]);
++    expect(outOfDomainLevels(overlay, g, { cdp: false, ma: false })).toEqual([]);
++  });
++});
+diff --git a/frontend/src/lib/index-chart-svg.ts b/frontend/src/lib/index-chart-svg.ts
+index 0077e70f..9f07c639 100644
+--- a/frontend/src/lib/index-chart-svg.ts
++++ b/frontend/src/lib/index-chart-svg.ts
+@@ -4,6 +4,13 @@
+  * minutes 鍵 = "HHMM"(bar 終點標記,後端契約)。
+  */
+ 
++import {
++  EDGE_LABEL_H,
++  type OverlayLevel,
++  type OverlayLine,
++  type StockOverlay,
++} from "@/lib/stock-intraday-svg";
++
+ export const X_START_MIN = 9 * 60;
+ export const X_END_MIN = 13 * 60 + 30;
+ 
+@@ -28,9 +35,17 @@ export interface IndexPt {
+ 
+ export interface IndexGeometry {
+   line: IndexPt[];
++  /** 分鐘收盤的**累計算術平均**線(SC-1;指數無成交量 → 不是 VWAP)。
++   *
++   *  第 k 點 = 前 k 個**已有**分鐘收盤的平均。缺分鐘不補值 —— 補了就等於替沒發生的
++   *  分鐘捏造一筆收盤,而分母被灌水的失效樣態是「均價線在午盤缺報價時緩慢偏向昨收」,
++   *  目視完全看不出來。點的 x 與 `line` 逐點同源。 */
++  avgLine: IndexPt[];
+   refY: number;
+   yDomain: [number, number];
+   yTicks: { y: number; priceMilli: number }[];
++  /** 價格 → y(疊線 / 標籤共用同一縮放;內部閉包直接掛出,不讓呼叫端自行重算) */
++  toY: (p: number) => number;
+ }
+ 
+ function sortedEntries(minutes: Record<string, number>): [string, number][] {
+@@ -57,8 +72,153 @@ export function buildIndexGeometry(input: SeriesInput, size: Size): IndexGeometr
+   const toY = (p: number): number => ((yTop - p) / span) * size.height;
+ 
+   const line = entries.map(([minute, p]) => ({ minute, p, x: toX(minute, size.width), y: toY(p) }));
++  let sum = 0;
++  const avgLine = entries.map(([minute, p], i) => {
++    sum += p;
++    const avg = sum / (i + 1);
++    return { minute, p: avg, x: toX(minute, size.width), y: toY(avg) };
++  });
+   const yTicks = [yBottom, ref, yTop].map((p) => ({ y: toY(p), priceMilli: Math.round(p) }));
+-  return { line, refY: toY(ref), yDomain: [yBottom, yTop], yTicks };
++  return { line, avgLine, refY: toY(ref), yDomain: [yBottom, yTop], yTicks, toY };
++}
++
++/** 疊線層級的固定次序(由上而下)。右緣標籤同 y 時的決勝鍵 —— 少了它,兩條同 y 的線
++ *  誰被推開會由 `Array#sort` 對相等鍵的處理決定,兩次 render 之間可能互換上下。 */
++const LEVEL_ORDER: readonly OverlayLevel[] = ["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"];
++
++/** 落在 y 域外的疊線(SC-7)。`dir` = 在域上方 / 下方 —— 線體不畫,改在右緣掛牌。 */
++export interface OutOfDomainLevel {
++  level: OverlayLevel;
++  priceMilli: number;
++  dir: "up" | "down";
++}
++
++/** overlay 各值的域外分類。**與 `overlayLines` 互補且共用同一組域判定**:
++ *  同一個值只會落進其中一邊(域內 → 畫線,域外 → 掛牌),兩邊各判各的話會出現
++ *  「線也畫了、又掛一次牌」或「兩邊都不要」的靜默漏畫。
++ *  push 次序刻意與 `overlayLines` 逐行對齊(ah→nh→cdp→nl→al→ma5→ma20)。 */
++export function outOfDomainLevels(
++  overlay: StockOverlay,
++  g: Pick<IndexGeometry, "yDomain">,
++  toggles: { cdp: boolean; ma: boolean },
++): OutOfDomainLevel[] {
++  const [yBottom, yTop] = g.yDomain;
++  const out: OutOfDomainLevel[] = [];
++  const push = (p: number | null | undefined, level: OverlayLevel): void => {
++    if (p == null) return;
++    if (p > yTop) out.push({ level, priceMilli: p, dir: "up" });
++    else if (p < yBottom) out.push({ level, priceMilli: p, dir: "down" });
++  };
++  if (toggles.cdp && overlay.cdp) {
++    push(overlay.cdp.ah, "ah");
++    push(overlay.cdp.nh, "nh");
++    push(overlay.cdp.cdp, "cdp");
++    push(overlay.cdp.nl, "nl");
++    push(overlay.cdp.al, "al");
++  }
++  if (toggles.ma) {
++    push(overlay.ma5, "ma5");
++    push(overlay.ma20, "ma20");
++  }
++  return out;
++}
++
++/** 右緣標籤(決策 6)。`kind` 決定文字組法與配色,y 一律由 `rightEdgeLabels` 給。 */
++export type RightEdgeLabel =
++  | { kind: "ref"; y: number; text: string }
++  | { kind: "line"; y: number; level: OverlayLevel; priceMilli: number }
++  | { kind: "peg"; y: number; level: OverlayLevel; priceMilli: number; dir: "up" | "down" };
++
++export interface RightEdgeInput {
++  /** 昨收標籤。**fixed** —— y 恆為 refY,其餘標籤對它讓位(它與昨收虛線是同一條資訊,
++   *  被推開就等於指著錯的價位)。缺 ref → null = 不畫。 */
++  ref: { y: number; text: string } | null;
++  /** 域內疊線(`overlayLines` 的結果);初始 y = 線 y */
++  oLines: readonly OverlayLine[];
++  /** 域外掛牌(`outOfDomainLevels` 的結果);初始 y = 上緣 / 下緣 */
++  outOfDomain: readonly OutOfDomainLevel[];
++  bounds: { top: number; bottom: number };
++}
++
++/** 指數分時圖**所有**右緣文字的唯一佈局來源(決策 6)。
++ *
++ *  刻意不重用個股的 `edgePriceLabels`:那支只收 ma5/ma20,且 `obstacles` 是「極值標記
++ *  圓 + 文字」語意,與這裡的「昨收 fixed 標籤」不同 —— 硬套會讓昨收既不在輸入也不在
++ *  輸出,而它正是最容易與 cdp 疊字的那一顆。
++ *
++ *  三段式(與 `edgePriceLabels` 同精神,逐段可測):
++ *  (a) 容量截斷 —— 根本裝不下的,依排序末端優先丟(疊印比少畫一顆更不可讀);
++ *  (b) 由上而下 10px 最小距下推,撞到 fixed 昨收一律往下讓(方向固定才決定性);
++ *  (c) 由下而上回推 —— (b) 只會往下推,推出界就等於沒畫;
++ *  (d) clamp 進界後仍相距 <10px 者丟棄。 */
++export function rightEdgeLabels(input: RightEdgeInput): RightEdgeLabel[] {
++  const { bounds } = input;
++  // 界退化(容器被壓到極矮)→ 任何 y 都在界外,clamp 會把全部標籤壓成一坨,不如不畫
++  if (bounds.top > bounds.bottom) {
++    return input.ref !== null ? [{ kind: "ref", y: input.ref.y, text: input.ref.text }] : [];
++  }
++  interface Movable {
++    y: number;
++    rank: number;
++    label: RightEdgeLabel;
++  }
++  const movable: Movable[] = [];
++  for (const l of input.oLines) {
++    movable.push({
++      y: l.y,
++      rank: LEVEL_ORDER.indexOf(l.level),
++      label: { kind: "line", y: l.y, level: l.level, priceMilli: l.priceMilli },
++    });
++  }
++  for (const o of input.outOfDomain) {
++    const y = o.dir === "up" ? bounds.top : bounds.bottom;
++    movable.push({
++      y,
++      rank: LEVEL_ORDER.indexOf(o.level),
++      label: { kind: "peg", y, level: o.level, priceMilli: o.priceMilli, dir: o.dir },
++    });
++  }
++  movable.sort((a, b) => a.y - b.y || a.rank - b.rank);
++
++  // (a) 容量
++  const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
++  if (movable.length > capacity) movable.length = capacity;
++
++  const fixed = input.ref !== null ? [input.ref.y] : [];
++
++  // (b) 由上而下
++  let floor = bounds.top;
++  for (const m of movable) {
++    let y = Math.max(m.y, floor);
++    for (const o of fixed) if (Math.abs(y - o) < EDGE_LABEL_H) y = o + EDGE_LABEL_H;
++    m.y = y;
++    floor = y + EDGE_LABEL_H;
++  }
++
++  // (c) 由下而上回推
++  let ceil = bounds.bottom;
++  for (let i = movable.length - 1; i >= 0; i -= 1) {
++    const m = movable[i]!;
++    let y = Math.min(m.y, ceil);
++    for (let k = fixed.length - 1; k >= 0; k -= 1) {
++      const o = fixed[k]!;
++      if (Math.abs(y - o) < EDGE_LABEL_H) y = o - EDGE_LABEL_H;
++    }
++    m.y = y;
++    ceil = y - EDGE_LABEL_H;
++  }
++
++  // (d) clamp + 殘餘重疊丟棄
++  const out: RightEdgeLabel[] = [];
++  if (input.ref !== null) out.push({ kind: "ref", y: input.ref.y, text: input.ref.text });
++  let prevY: number | null = null;
++  for (const m of movable) {
++    const y = Math.min(Math.max(m.y, bounds.top), bounds.bottom);
++    if (prevY !== null && y - prevY < EDGE_LABEL_H) continue;
++    prevY = y;
++    out.push({ ...m.label, y });
++  }
++  return out;
+ }
+ 
+ export interface OverlayLinePts {
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index aa884869..d1eab83d 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -224,6 +224,31 @@ export interface OverlayLine {
+   level: OverlayLevel;
+ }
+ 
++/** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
++ *  上方壓力位紅、下方支撐位綠(台股紅漲綠跌),中軸取琥珀金不與紅綠系混淆。
++ *
++ *  **住在 lib 而非某張圖的元件檔**:個股分時圖與指數分時圖畫的是同一組 CDP/MA 語意,
++ *  兩邊各留一份的失效樣態是「改了個股的紅、指數還是舊紅」——沒有 assertion 會紅。 */
++export const LEVEL_STROKE: Record<OverlayLevel, string> = {
++  ah: "stroke-bull",
++  nh: "stroke-bull/55",
++  cdp: "stroke-profit",
++  nl: "stroke-bear/55",
++  al: "stroke-bear",
++  ma5: "stroke-ma5",
++  ma20: "stroke-ma20",
++};
++
++export const LEVEL_FILL: Record<OverlayLevel, string> = {
++  ah: "fill-bull",
++  nh: "fill-bull/70",
++  cdp: "fill-profit",
++  nl: "fill-bear/70",
++  al: "fill-bear",
++  ma5: "fill-ma5",
++  ma20: "fill-ma20",
++};
++
+ interface Input {
+   minutes: Map<number, MinuteAgg>;
+   meta: StockMeta | null;
+@@ -448,10 +473,14 @@ export function lastPoint(g: IntradayGeometry): (Pt & { minute: number }) | null
+   return g.priceLine[g.priceLine.length - 1] ?? null;
+ }
+ 
+-/** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。 */
++/** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。
++ *
++ *  第二參數刻意收窄成 `Pick<IntradayGeometry, "yDomain" | "toY">`(函式體只用這兩欄):
++ *  指數分時圖的 `IndexGeometry` 帶同名同義的兩欄,結構相容就能共用同一份域內判定,
++ *  不必為了型別把整包個股 geometry(vwap / energyBars / 五檔…)硬湊出來。 */
+ export function overlayLines(
+   overlay: StockOverlay,
+-  g: IntradayGeometry,
++  g: Pick<IntradayGeometry, "yDomain" | "toY">,
+   toggles: { cdp: boolean; ma: boolean },
+ ): OverlayLine[] {
+   const [yBottom, yTop] = g.yDomain;
+diff --git a/tests/server/test_index_routes.py b/tests/server/test_index_routes.py
+index e9e04726..4f6b8725 100644
+--- a/tests/server/test_index_routes.py
++++ b/tests/server/test_index_routes.py
+@@ -1,18 +1,29 @@
+-"""index routes 測試 — index-board SC-4 接線."""
++"""index routes 測試 — index-board SC-4 接線 + index-overlay SC-5."""
+ 
+ from __future__ import annotations
+ 
++import datetime as _dt
++from pathlib import Path
++
+ from fastapi.testclient import TestClient
+ 
+ from copycat.server.app import create_app
+ from copycat.server.mis import OtcSnap
++from copycat.server.overlay import compute_cdp
+ from tests.helpers.boot import BootedClient
+-from tests.helpers.fake_sources import FakeIndexSource
++from tests.helpers.fake_sources import FakeIndexSource, FakeStockSource, dbar
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
+ #: 本檔的當日回補固定給一根分鐘 —— `/api/index/state` 與 `/ws/index` 都靠它斷言接線
+ _DAY_MINUTES = {"0901": 43_000_000}
+ 
++#: overlay 用的日 K 治具:22 根(≥21)遞增收盤,`dbar` 的 h/l 各 ±1000。
++#: 固定過去日期 —— 相對「今天」算的話,MA 的期望值會隨執行日漂掉。
++_OVERLAY_DAILY = [
++    dbar(f"2026-07-{d:02d}", 23_000_000 + i * 10_000) for i, d in enumerate(range(1, 23))
++]
++_LAST_CLOSE = 23_210_000  # = _OVERLAY_DAILY[-1]["c"]
++
+ 
+ def _mis() -> OtcSnap | None:
+     return OtcSnap(p=359_800, ref=378_090, open=373_420, high=373_420, low=358_430, time="101610")
+@@ -65,3 +76,89 @@ class TestIndexState:
+                 msg = ws.receive_json()
+                 assert msg["type"] == "index"
+                 assert msg["twse"]["p"] == 42_039_920
++
++
++class TestIndexOverlay:
++    """`GET /api/index/overlay`(index-overlay SC-5)。
++
++    形狀同 `/api/stock/overlay/{code}`,但日 K 走 index engine session 的
++    `build_period`(鍵 `IX0001|L`)—— 與 market bars 日 K 同槽、與 stock session 的
++    裸 `IX0001` 槽隔離(W-12 / W-14)。
++    """
++
++    def test_happy_returns_cdp_and_mas(self) -> None:
++        client, fake = make_client(FakeIndexSource(daily_bars=_OVERLAY_DAILY))
++        with client:
++            r = client.get("/api/index/overlay")
++            assert r.status_code == 200
++            body = r.json()
++            assert set(body) == {"cdp", "ma5", "ma20", "date"}
++            # 口徑對 overlay.compute_cdp(重抄一份算式 = 兩邊各自漂移時測試照綠)
++            assert body["cdp"] == compute_cdp(_LAST_CLOSE + 1000, _LAST_CLOSE - 1000, _LAST_CLOSE)
++            assert body["ma5"] == 23_190_000
++            assert body["ma20"] == 23_115_000
++            assert body["date"] == "2026-07-22"
++        assert fake is not None
++        assert [c[1] for c in fake.calls] == ["D"], "日 K 必須向 index engine 問(W-7)"
++
++    def test_tc4_down_returns_all_null_200(self) -> None:
++        """bars 空(TC4 不可用)→ 200 全 null,不 5xx(edge case 1)。"""
++        client, _ = make_client(FakeIndexSource(daily_bars=[], tag="unavailable"))
++        with client:
++            r = client.get("/api/index/overlay")
++            assert r.status_code == 200
++            assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
++
++    def test_today_partial_bar_excluded(self) -> None:
++        """盤中今日 partial 日 K 不得入計算(edge case 7)。"""
++        today = f"{_dt.date.today():%Y-%m-%d}"
++        client, _ = make_client(
++            FakeIndexSource(daily_bars=[*_OVERLAY_DAILY, dbar(today, 99_000_000)])
++        )
++        with client:
++            body = client.get("/api/index/overlay").json()
++            assert body["date"] == "2026-07-22", "date 取最後一根**已完成** bar"
++            assert body["ma5"] == 23_190_000, "今日 partial 混進 MA 會把值整個拉走"
++
++    def test_second_call_hits_cache(self) -> None:
++        """同日第二次呼叫不再打 bars_range(決策 3:日 bar 已在 bars_cache)。"""
++        client, fake = make_client(FakeIndexSource(daily_bars=_OVERLAY_DAILY))
++        with client:
++            first = client.get("/api/index/overlay").json()
++            assert fake is not None
++            assert len(fake.calls) == 1
++            second = client.get("/api/index/overlay").json()
++            assert second == first
++            assert len(fake.calls) == 1, "第二發應命中 bars_cache"
++
++    def test_engine_absent_503(self) -> None:
++        client, _ = make_client(None)
++        with client:
++            r = client.get("/api/index/overlay")
++            assert r.status_code == 503
++            assert r.json()["detail"]["error"] == "NOT_READY"
++
++    def test_does_not_pollute_stock_session_slot(self, tmp_path: Path) -> None:
++        """W-12 / W-14:overlay 寫的是 `IX0001|L`,不得碰 stock session 的裸 `IX0001`。
++
++        機驗方式 = 打完 overlay 後從 `/api/stock/bars/IX0001?tf=D`(走 `build_daily`
++        的裸鍵)要日 K:若 overlay 汙染了那格,stock source 就一次都不會被問到,
++        畫面上是「個股 K 線悄悄拿到了大盤 session 的資料」,零錯誤訊號。
++        """
++        stock = FakeStockSource()
++        app = create_app(
++            FakeTxoSource(),
++            stock_source=stock,
++            index_source=FakeIndexSource(daily_bars=_OVERLAY_DAILY),
++            index_mis_fetch=_mis,
++            stock_watchlist_path=tmp_path / "watchlist.json",
++            throttle_secs=0.01,
++        )
++        client = BootedClient(app, raise_server_exceptions=False)
++        with client:
++            assert client.get("/api/index/overlay").status_code == 200
++            r = client.get("/api/stock/bars/IX0001?tf=D")
++            assert r.status_code == 200
++        assert [c[:2] for c in stock.bars_calls] == [("IX0001", "D")], (
++            "stock session 的裸 IX0001 槽必須仍是空的(overlay 不得寫它)"
++        )

@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "phase": "self-review(core-flow §5)",
+  "date": "2026-08-14",
+  "lenses": [
+    {"lens": "correctness/implementation-bug (opus)", "findings": 0, "note": "六焦點逐一構造反例未破:rightEdgeLabels 佈局互鎖成立(clamp 頂端觸發不可達)、avgLine 同源 x、域內外分類端點互補、refetchInterval 涵蓋 503、hooks 順序/enabled 閘正確、後端鍵 IX0001|L 與空態負向快取語意成立"},
+    {"lens": "whitelist+test-gap (opus)", "whitelist": "W-1~W-14 全 PASS(逐條碼位依據見 agent 回報)", "findings": 3}
+  ],
+  "findings": [
+    {"id": "G-1", "severity": "P2", "file": "tests/server/test_index_routes.py", "claim": "R2-P0-1 核心決策(overlay 與 market bars 真共用 IX0001|L 槽、同日一次 DK)無機驗,退化成獨立槽六條照綠", "resolution": "accepted — 補第 7 條:overlay → market bars tf=D 斷言 fake.calls 長度 1"},
+    {"id": "G-2", "severity": "P2(行為級)", "file": "frontend/src/components/index/MarketChart.tsx", "claim": "isError 殘留 + toggles 全關(enabled=false 停輪詢)→ CDP/MA 鈕永久 disabled 無法再開(死鎖)", "resolution": "accepted — available 的 error 判定加 gateOn 閘(toggles.cdp||toggles.ma);補元件測試"},
+    {"id": "G-3", "severity": "P2", "file": "frontend/src/components/index/MarketChart.test.tsx", "claim": "200-全-null 反灰路徑(TC4 down 最常態)與 ma5-only 分支零覆蓋", "resolution": "accepted — 補兩條元件測試(全 null 反灰+文案 / ma5-only MA 仍可按)"}
+  ],
+  "p2_summary": "3 條全 accepted 進 fix 波;另 lens 各自查證後不列的觀察(clamp-vs-fixed 不可達前提、MA 合併印法合規、build_period 無 dedup 屬既有性質)記於 agent 回報原文",
+  "summary": "無 P0/P1;白名單 14/14 PASS;3 P2 全修。"
+}

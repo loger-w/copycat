@@ -1,0 +1,4 @@
+﻿== regression /api/index/state ==
+trade_date=2026-08-14 twse.ref=24300000 twse.minutes count=270 otc.minutes count=270
+== regression /api/market/bars/TWSE?tf=D(共用 IX0001|L 槽)==
+source=tc4_dk bars=26
