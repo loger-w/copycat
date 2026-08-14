@@ -80,6 +80,10 @@ describe("MiniIntradayChart 幾何補償(design v3 R5/R13)", () => {
     );
     expect(container.querySelector('[data-testid="mini-ref"]')).toBeTruthy();
     expect(container.querySelectorAll('[data-testid="mini-area"]').length).toBeGreaterThan(0);
+    // 平盤虛線的線寬/疏密釘螢幕像素(review A-4):矩陣卡片變高後掉了它是純視覺回歸
+    expect(
+      container.querySelector('[data-testid="mini-ref"]')?.getAttribute("vector-effect"),
+    ).toBe("non-scaling-stroke");
   });
 
   it("meta.ref 缺 → 無平盤可言:不畫虛線也不填色", () => {
@@ -91,6 +95,11 @@ describe("MiniIntradayChart 幾何補償(design v3 R5/R13)", () => {
     expect(container.querySelectorAll('[data-testid="mini-area"]').length).toBe(0);
     // 走勢線本身仍要畫得出來
     expect(priceLinePoints(container)).not.toBe("");
+    // 無 ref 分支是**第三條** polyline(stroke-accent),GroupGridView 的元件測試
+    // 只蓋得到有 ref 的兩條 —— 這裡不鎖,冷門股(無昨收)的線寬回歸零訊號(review A-4)
+    expect(
+      container.querySelector('[data-testid="mini-price"]')?.getAttribute("vector-effect"),
+    ).toBe("non-scaling-stroke");
   });
 
   // 卡片只有 15rem 寬,任何刻度文字都塞不下也讀不到 —— 「無座標軸」是 SC-3 的明文要求。

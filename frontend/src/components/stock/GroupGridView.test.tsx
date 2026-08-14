@@ -130,6 +130,11 @@ describe("GroupGridView 群組切換 pill", () => {
     expect(
       screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
     ).toBe("true");
+    // 反向斷言不可省(review B-5):少了它,「每顆 pill 恆 pressed」全綠 ——
+    // aria-pressed 是 SC-3 指名的選中態真相源,兩側都要釘
+    expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
     // 容器名稱契約 + select 真的走了(留著兩套切換 UI 才是最糟的中間態)
     const rail = screen.getByLabelText("選擇群組");
     expect(rail.getAttribute("role")).toBe("group");
@@ -146,6 +151,20 @@ describe("GroupGridView 群組切換 pill", () => {
     fireEvent.click(screen.getByRole("button", { name: "金融" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
     expect(groupCalls().some((u) => u.includes("codes=2881"))).toBe(true);
+    // 寫入側也要鎖(review B-1):刪掉 persistGroupName 整條路徑,其餘測試照樣全綠,
+    // 而使用者下次開頁會靜默回到第一個群組
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
+  });
+
+  // review A-3:舊 <select> 的 change 事件在 value 未變時不發火,localStorage 的
+  // 失效舊名會永遠留著;pill 的 click 無條件回寫 —— 這是**刻意的 stale-key 清理**
+  // (spec 白名單 #7 amendment),不是不變行為,所以要有測試把新語意釘住。
+  it("點已選中的 pill 也回寫 localStorage(清掉 stale 舊名)", async () => {
+    window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "半導體" }));
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("半導體");
+    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
   });
 
   // edge 5(R10):群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名。
@@ -241,9 +260,16 @@ describe("GroupGridView 高度均分 class", () => {
     const svgClass = card.querySelector("svg")?.getAttribute("class") ?? "";
     expect(svgClass).toContain("grow");
     expect(svgClass).toContain("h-20");
-    expect(
-      card.querySelector('[data-testid="mini-price"]')?.getAttribute("vector-effect"),
-    ).toBe("non-scaling-stroke");
+    // 有 ref 時價線是紅綠 clip 的**兩條** polyline(review A-4/B-3):querySelector
+    // 只驗得到 bull 那條,bear 掉了 vector-effect 是零錯誤訊號的視覺回歸
+    const lines = card.querySelectorAll('[data-testid="mini-price"]');
+    expect(lines.length).toBe(2);
+    for (const el of lines) {
+      expect(el.getAttribute("vector-effect")).toBe("non-scaling-stroke");
+    }
+    expect(card.querySelector('[data-testid="mini-ref"]')?.getAttribute("vector-effect")).toBe(
+      "non-scaling-stroke",
+    );
   });
 
   it("無資料佔位也跟著長高(不然整列高度對不齊)", async () => {
@@ -270,6 +296,11 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
     const card = await screen.findByTestId("group-card-2330");
     await waitFor(() => expect(card.textContent).toContain("回補中…"));
     expect(card.querySelector("svg")).toBeNull();
+    // 佔位也要 grow(review B-4):「無資料」那支已鎖,這支掉了 grow 的失效樣態是
+    // 回補中的卡片縮回 80px、與同列其他卡片高度對不齊
+    const ph = screen.getByText("回補中…");
+    expect(ph.className).toContain("grow");
+    expect(ph.className).toContain("h-20");
   });
 
   // 優先序:回補中同時 no_data 時要說「回補中…」—— 回補完就會有資料,說「無資料」是錯的
