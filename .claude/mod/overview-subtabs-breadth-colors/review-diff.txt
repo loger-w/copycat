@@ -1,0 +1,1687 @@
+﻿diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index 08b807ca..e935ec7a 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -124,7 +124,8 @@ function appFetch(
+   return vi.fn(async (url: string) => {
+     const u = String(url);
+     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
+-    // 漲跌停列表(R3 SC-5 的跳轉起點)。列表預設收合 → 其餘測試不會走到這條分支。
++    // 漲跌停列表(R3 SC-5 的跳轉起點)。2026-08-14 subtab 改版後**預設 subtab 就是漲跌停**
++    // → 任何停在台股綜合 tab 的測試都會走這條分支(不再是「僅跳轉測試才用到」)。
+     if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
+     // 成員層在前:兩條路由共前綴,順序反過來會讓成員請求被類股狀態那條吃掉。
+     if (u.includes("/api/market/sector/members")) {
+@@ -226,7 +227,7 @@ describe("App 台股綜合 tab 整併(SC-1)", () => {
+ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
+   async function openList() {
+     window.localStorage.setItem("copycat-tab", "index");
+-    window.localStorage.setItem("copycat-limit-list-open", "1");
++    // 預設 subtab 即漲跌停(2026-08-14 改版)—— 不再需要 seed 展開狀態
+     renderApp();
+     return await screen.findByTestId("limit-row-1101");
+   }
+@@ -256,7 +257,6 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
+     vi.useFakeTimers({ toFake: ["Date"] });
+     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+     window.localStorage.setItem("copycat-tab", "index");
+-    window.localStorage.setItem("copycat-limit-list-open", "1");
+     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+     render(
+       <QueryClientProvider client={client}>
+@@ -305,7 +305,7 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
+    *  必須走這條,否則 IndexPage / SectorSection 之間少接一根線也驗不出來。 */
+   async function openSectorMember(): Promise<HTMLElement> {
+     window.localStorage.setItem("copycat-tab", "index");
+-    window.localStorage.setItem("copycat-sector-open", "1");
++    window.localStorage.setItem("copycat-index-subtab", "sector");
+     renderApp();
+     fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
+     fireEvent.click(await screen.findByTestId("sector-sub-btn-航運-貨櫃航運"));
+@@ -316,7 +316,7 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
+   async function openTimelineRow(): Promise<HTMLElement> {
+     vi.stubGlobal("fetch", appFetch(undefined, [TIMELINE_SIGNAL]));
+     window.localStorage.setItem("copycat-tab", "index");
+-    window.localStorage.setItem("copycat-signal-timeline-open", "1");
++    window.localStorage.setItem("copycat-index-subtab", "timeline");
+     renderApp();
+     return await screen.findByTestId("signal-timeline-row-tl-1");
+   }
+@@ -362,7 +362,7 @@ describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
+     vi.useFakeTimers({ toFake: ["Date"] });
+     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+     window.localStorage.setItem("copycat-tab", "index");
+-    window.localStorage.setItem("copycat-sector-open", "1");
++    window.localStorage.setItem("copycat-index-subtab", "sector");
+     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+     render(
+       <QueryClientProvider client={client}>
+@@ -590,12 +590,22 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
+   // 用 `vi.resetModules()` + 動態 import 重跑 App 模組會讓這條依賴 module registry
+   // 的重置順序,脆得沒必要。「App.tsx 頂層有呼叫」這件事由該檔的一行呼叫負責,
+   // 行為則由本單元測試 + 真環境驗證共同守住。
+-  it("purgeOrphanKeys 清掉孤兒鍵(stock-ladder-open / stock-wl-group)", () => {
+-    window.localStorage.setItem("stock-ladder-open", "1");
+-    window.localStorage.setItem("stock-wl-group", "科技股");
++  it("purgeOrphanKeys 清掉孤兒鍵(停用功能 + 2026-08-14 subtab 改版廢止的四支)", () => {
++    const orphans = [
++      "stock-ladder-open",
++      "stock-wl-group",
++      "copycat-corr-open",
++      "copycat-limit-list-open",
++      "copycat-sector-open",
++      "copycat-signal-timeline-open",
++    ];
++    for (const key of orphans) window.localStorage.setItem(key, "1");
+     purgeOrphanKeys();
+-    expect(window.localStorage.getItem("stock-ladder-open")).toBeNull();
+-    expect(window.localStorage.getItem("stock-wl-group")).toBeNull();
++    for (const key of orphans) expect(window.localStorage.getItem(key)).toBeNull();
++    // 新鍵是活的,不得被順手清掉
++    window.localStorage.setItem("copycat-index-subtab", "sector");
++    purgeOrphanKeys();
++    expect(window.localStorage.getItem("copycat-index-subtab")).toBe("sector");
+   });
+ });
+ 
+diff --git a/frontend/src/components/corr/CorrSection.lazy.test.tsx b/frontend/src/components/corr/CorrSection.lazy.test.tsx
+index 20025d10..a414c800 100644
+--- a/frontend/src/components/corr/CorrSection.lazy.test.tsx
++++ b/frontend/src/components/corr/CorrSection.lazy.test.tsx
+@@ -5,7 +5,7 @@
+  *  錨點取 RiverPanel 無資料時的「等待六腿資料…」:它只有真的 CorrPage mount 才會出現,
+  *  與 Suspense fallback 的「相關係數載入中…」逐字可區分(CorrPanel 空狀態是「載入中…」,
+  *  刻意不拿它當錨點)。 */
+-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { act, cleanup, render, screen } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { CorrSection } from "@/components/corr/CorrSection";
+@@ -16,7 +16,7 @@ class FakeWS {
+   onmessage: ((ev: { data: string }) => void) | null = null;
+   onclose: (() => void) | null = null;
+   onerror: (() => void) | null = null;
+-  /** 收合 = 斷線的唯一把關點:空的 `close()` 會讓整條「收合後真的斷線」無人驗證。 */
++  /** unmount = 斷線的唯一把關點:空的 `close()` 會讓整條「切走後真的斷線」無人驗證。 */
+   closed = false;
+ 
+   constructor(public url: string) {
+@@ -45,32 +45,23 @@ afterEach(() => {
+ });
+ 
+ describe("CorrSection(lazy 真身)", () => {
+-  it("(b) 展開後真的 mount CorrPage,不是停在 Suspense fallback", async () => {
++  it("(b) render 後真的 mount CorrPage 並建 corr + river 兩條線,不是停在 Suspense fallback", async () => {
+     render(<CorrSection />);
+-    expect(screen.queryByText("等待六腿資料…")).toBeNull();
+-    // 收合態零 WS 的真身斷言(光看不到文字不代表沒建線)
+-    expect(FakeWS.instances).toEqual([]);
+-
+-    fireEvent.click(screen.getByRole("button", { name: /相關係數/ }));
+ 
+     expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
+     expect(screen.queryByText("相關係數載入中…")).toBeNull();
+-    // 展開才建線:corr + river 各一條
+     expect(FakeWS.instances.map((w) => w.url.replace(/^ws:\/\/[^/]+/, ""))).toEqual([
+       "/ws/corr",
+       "/ws/river",
+     ]);
+   });
+ 
+-  it("(c) 收合後兩條 WS 都真的斷線(不是只是元件消失)", async () => {
+-    render(<CorrSection />);
+-    const toggle = screen.getByRole("button", { name: /相關係數/ });
+-
+-    fireEvent.click(toggle);
++  it("(c) unmount 後兩條 WS 都真的斷線(不是只是元件消失)", async () => {
++    const view = render(<CorrSection />);
+     expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
+     expect(FakeWS.instances.length).toBe(2);
+ 
+-    fireEvent.click(toggle);
++    view.unmount();
+     // unmount 的 cleanup 是同步的,但 lazy/Suspense 的收尾要讓出一次 microtask
+     await act(async () => {});
+ 
+diff --git a/frontend/src/components/corr/CorrSection.test.tsx b/frontend/src/components/corr/CorrSection.test.tsx
+index e5a94a37..9f1c135c 100644
+--- a/frontend/src/components/corr/CorrSection.test.tsx
++++ b/frontend/src/components/corr/CorrSection.test.tsx
+@@ -1,16 +1,20 @@
+ /** @vitest-environment jsdom */
+-/** 閘門行為(展開/收合/持久化)—— CorrPage 換成同步 stub,測的是殼本身。
++/** 殼行為 —— CorrPage 換成同步 stub,測的是殼本身。
++ *
++ *  **2026-08-14 subtab 改版**:收合殼卸掉,掛載閘上移到 `IndexPage` 的 subtab 列 ——
++ *  「非 corr subtab 零 mount / 零 WS」的鎖因此搬到 `IndexPage.test.tsx` (s1)(s7) 與
++ *  `IndexPage.corr-lazy.test.tsx`。本檔剩下的是元件層最小契約:掛上就 mount 真身、
++ *  unmount 就把 CorrPage 一起收掉(兩條 WS 靠 hook cleanup 才會斷)。
+  *
+  *  **為什麼要 stub 計數而不是 query DOM 就好**:lazy + Suspense 的失敗樣態是「永遠停在
+  *  fallback」,而 `queryByTestId(...) === null` 對「沒 render」與「還在 suspend」是同一個
+- *  答案 —— 斷言會 vacuously pass。故 (c)(d) 一律先 `findByTestId` 等 stub 真的 mount,
+- *  收合則斷言 unmount **計數 +1**(不是查不到)。
++ *  答案 —— 斷言會 vacuously pass。故一律先 `findByTestId` 等 stub 真的 mount,
++ *  卸載則斷言 unmount **計數 +1**(不是查不到)。
+  *  lazy 真身(確認 mock 沒把整條路徑架空)另在 `CorrSection.lazy.test.tsx`。 */
+-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { act, cleanup, render, screen } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { CorrSection } from "@/components/corr/CorrSection";
+-import { CORR_OPEN_KEY } from "@/lib/constants";
+ 
+ const counts = vi.hoisted(() => ({ mount: 0, unmount: 0 }));
+ 
+@@ -46,51 +50,31 @@ afterEach(() => {
+   vi.unstubAllGlobals();
+ });
+ 
+-function header(): HTMLElement {
+-  return screen.getByRole("button", { name: /相關係數/ });
+-}
+-
+ describe("CorrSection", () => {
+-  it("(a) 預設收合:CorrPage 零 mount、零 WebSocket 建構", async () => {
+-    render(<CorrSection />);
+-    await act(async () => {});
+-
+-    expect(header().getAttribute("aria-expanded")).toBe("false");
+-    expect(header().textContent).toContain("展開");
+-    expect(counts.mount).toBe(0);
+-    expect(wsSpy.mock.calls.length).toBe(0);
+-    expect(screen.queryByTestId("corr-stub")).toBeNull();
+-  });
+-
+-  it("(c) 展開寫入 localStorage,重新 mount 仍展開", async () => {
++  it("(a) render 即 mount CorrPage(無收合鈕、零 OPEN_KEY 讀寫)", async () => {
++    const getItem = vi.spyOn(Storage.prototype, "getItem");
++    const setItem = vi.spyOn(Storage.prototype, "setItem");
+     render(<CorrSection />);
+-    fireEvent.click(header());
+ 
+     expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+     expect(counts.mount).toBe(1);
+-    expect(window.localStorage.getItem(CORR_OPEN_KEY)).toBe("1");
+-    expect(header().getAttribute("aria-expanded")).toBe("true");
+-    expect(header().textContent).toContain("收合");
+-
+-    cleanup();
+-    render(<CorrSection />);
++    expect(screen.queryByRole("button", { name: /相關係數/ })).toBeNull();
+ 
+-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+-    expect(header().getAttribute("aria-expanded")).toBe("true");
++    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
++    expect(keys).not.toContain("copycat-corr-open");
++    getItem.mockRestore();
++    setItem.mockRestore();
+   });
+ 
+-  it("(d) 收合把 CorrPage unmount(hook cleanup 才會斷線)", async () => {
+-    render(<CorrSection />);
+-    fireEvent.click(header());
++  it("(d) unmount 把 CorrPage 一起收掉(hook cleanup 才會斷線)", async () => {
++    const view = render(<CorrSection />);
+     await screen.findByTestId("corr-stub");
+     expect(counts.unmount).toBe(0);
+ 
+-    fireEvent.click(header());
++    view.unmount();
+     await act(async () => {});
+ 
+     expect(counts.unmount).toBe(1);
+     expect(screen.queryByTestId("corr-stub")).toBeNull();
+-    expect(window.localStorage.getItem(CORR_OPEN_KEY)).toBe("0");
+-    expect(header().getAttribute("aria-expanded")).toBe("false");
+   });
+ });
+diff --git a/frontend/src/components/corr/CorrSection.tsx b/frontend/src/components/corr/CorrSection.tsx
+index b21f5670..635138c8 100644
+--- a/frontend/src/components/corr/CorrSection.tsx
++++ b/frontend/src/components/corr/CorrSection.tsx
+@@ -1,60 +1,25 @@
+-/** 台股綜合頁尾的相關係數收合區塊(SC-4)。
++/** 台股綜合頁的相關係數 subtab panel(SC-4)。
+  *
+- *  **收合 = unmount,不是 `hidden`**:corr / river 兩條 WS 活在 `CorrPage` 內,不 render
+- *  就沒有 hook、沒有連線 —— 這個區塊在預設頁常駐,若用專案慣例的 `hidden` 保 DOM,
+- *  等於所有人開站就吃兩條每秒推播。代價是重展開有 lazy 載入 + WS 重連的短暫空窗
+- *  (design Known Risks KR-2,判定可接受:corr 是即時推播資料,重建即恢復)。
++ *  **非 active subtab = unmount,不是 `hidden`**(2026-08-14 subtab 改版前是「收合 =
++ *  unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):corr / river 兩條 WS 活在
++ *  `CorrPage` 內,不 render 就沒有 hook、沒有連線 —— 台股綜合是預設落地頁,若用專案
++ *  慣例的 `hidden` 保 DOM,等於所有人開站就吃兩條每秒推播。代價是切回來有 lazy 載入 +
++ *  WS 重連的短暫空窗(design Known Risks KR-2,判定可接受:corr 是即時推播資料,
++ *  重建即恢復)。
+  *
+  *  lazy chunk 邊界不變 —— 原本在 App 層的 `lazy(() => import("./CorrPage"))` 只是移到這裡。 */
+-import { lazy, Suspense, useState } from "react";
+-
+-import { CORR_OPEN_KEY } from "@/lib/constants";
++import { lazy, Suspense } from "react";
+ 
+ const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
+ 
+ export function CorrSection() {
+-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
+-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(同 useChartToggles 慣例)。
+-  const [open, setOpen] = useState<boolean>(() => {
+-    try {
+-      return window.localStorage.getItem(CORR_OPEN_KEY) === "1";
+-    } catch {
+-      return false;
+-    }
+-  });
+-
+-  function toggle(): void {
+-    const next = !open;
+-    setOpen(next);
+-    try {
+-      window.localStorage.setItem(CORR_OPEN_KEY, next ? "1" : "0");
+-    } catch {
+-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
+-    }
+-  }
+-
+   return (
+-    <section className="rounded-md border border-line bg-surface">
+-      <button
+-        type="button"
+-        aria-expanded={open}
+-        onClick={toggle}
+-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
+-      >
+-        <span className="text-sm font-bold text-ink">相關係數</span>
+-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
+-      </button>
+-      {open ? (
+-        <div className="px-4 pb-4">
+-          {/* fallback 文字刻意不用「載入中…」(CorrPanel 空狀態就是那句)—— 測試要能
+-              逐字區分「仍 suspend」與「CorrPage 已 mount」,同字串會讓斷言失去鑑別力。 */}
+-          <Suspense
+-            fallback={<p className="py-6 text-center text-sm text-ink-muted">相關係數載入中…</p>}
+-          >
+-            <CorrPage />
+-          </Suspense>
+-        </div>
+-      ) : null}
+-    </section>
++    <div data-testid="corr-section" className="px-4 pb-4">
++      {/* fallback 文字刻意不用「載入中…」(CorrPanel 空狀態就是那句)—— 測試要能
++          逐字區分「仍 suspend」與「CorrPage 已 mount」,同字串會讓斷言失去鑑別力。 */}
++      <Suspense fallback={<p className="py-6 text-center text-sm text-ink-muted">相關係數載入中…</p>}>
++        <CorrPage />
++      </Suspense>
++    </div>
+   );
+ }
+diff --git a/frontend/src/components/index/BreadthBand.test.tsx b/frontend/src/components/index/BreadthBand.test.tsx
+index ecb60ee2..ada536db 100644
+--- a/frontend/src/components/index/BreadthBand.test.tsx
++++ b/frontend/src/components/index/BreadthBand.test.tsx
+@@ -109,6 +109,53 @@ describe("BreadthBand 格值與版面(SC-4)", () => {
+   });
+ });
+ 
++/** 🔴 2026-08-14 拍板配色:上漲 / 下跌兩格**沒有底色**,識別完全落在數字上 ——
++ *  這兩格的數字染紅綠與 (f)(g) 的「停板格底染色、停板數字留 ink」不衝突,兩者是
++ *  「有底色的格不重複染字」與「沒底色的格由字承擔」的一體兩面。 */
++describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
++  it("(l) 上漲數字紅字(text-bull),兩市場皆然", () => {
++    render(<BreadthBand breadth={state()} />);
++    for (const market of ["twse", "tpex"] as const) {
++      const cls = screen.getByTestId(`breadth-value-${market}-up`).className;
++      expect(cls).toContain("text-bull");
++      expect(cls).not.toContain("text-bear");
++    }
++  });
++
++  it("(m) 下跌數字綠字(text-bear),兩市場皆然", () => {
++    render(<BreadthBand breadth={state()} />);
++    for (const market of ["twse", "tpex"] as const) {
++      const cls = screen.getByTestId(`breadth-value-${market}-down`).className;
++      expect(cls).toContain("text-bear");
++      expect(cls).not.toContain("text-bull");
++    }
++  });
++
++  it("(n) 平盤數字維持中性 ink,不沾紅綠", () => {
++    render(<BreadthBand breadth={state()} />);
++    const cls = screen.getByTestId("breadth-value-twse-flat").className;
++    expect(cls).toContain("text-ink");
++    expect(cls).not.toContain("text-bull");
++    expect(cls).not.toContain("text-bear");
++  });
++
++  it("(o) 跌停數字仍是 ink(綠底上的綠字讀不出來;與 (g) 互補)", () => {
++    render(<BreadthBand breadth={state()} />);
++    const cls = screen.getByTestId("breadth-value-twse-limit_down").className;
++    expect(cls).toContain("text-ink");
++    expect(cls).not.toContain("text-bear");
++  });
++
++  it("(p) 上漲 / 下跌格仍然沒有底色(染色不與字色疊加)", () => {
++    render(<BreadthBand breadth={state()} />);
++    for (const b of ["up", "down"] as const) {
++      const cls = screen.getByTestId(`breadth-cell-twse-${b}`).className;
++      expect(cls).not.toContain("bg-bull");
++      expect(cls).not.toContain("bg-bear");
++    }
++  });
++});
++
+ describe("BreadthBand stale 徽章(SC-3)", () => {
+   it("(h) stale=true → 顯示「資料延遲」且前值仍在", () => {
+     render(<BreadthBand breadth={state({ stale: true })} />);
+diff --git a/frontend/src/components/index/BreadthBand.tsx b/frontend/src/components/index/BreadthBand.tsx
+index 0b0244a0..a423ade5 100644
+--- a/frontend/src/components/index/BreadthBand.tsx
++++ b/frontend/src/components/index/BreadthBand.tsx
+@@ -3,9 +3,14 @@
+  *  純展示元件 —— 資料由 App 層 `useBreadth()` 取得後經 IndexPage 下傳(design R8)。
+  *  桶序 `漲停 / 上漲 / 平盤 / 下跌 / 跌停` 與後端 `_series_list()` 同一份順序,**不得重排**。
+  *
+- *  染色只落在**格底**(漲停紅底 / 跌停綠底,台股紅漲綠跌),數字一律 ink token:
+- *  數字若跟著染成同色系,紅底上的紅字在暗色盤面幾乎讀不出來(dataviz:文字穿 text
+- *  token,顏色由旁邊的色塊承擔識別)。中間三格保持中性 —— 五格全染等於沒有重點。 */
++ *  **染色與底色互斥,一格只用一種手段**(2026-08-14 拍板配色):
++ *  - 停板兩格染**格底**(漲停紅底 / 跌停綠底,台股紅漲綠跌),數字留 ink token ——
++ *    數字若跟著染成同色系,紅底上的紅字在暗色盤面幾乎讀不出來(dataviz:文字穿
++ *    text token,顏色由旁邊的色塊承擔識別)。
++ *  - 上漲 / 下跌兩格**沒有底色**,所以識別改由**數字**承擔(上漲 `text-bull` /
++ *    下跌 `text-bear`)—— 這不是推翻上一條,是同一條規則的另一半:有色塊的格不重複
++ *    染字,沒色塊的格才由字說話。
++ *  - 平盤維持中性 ink:五格全染等於沒有重點,而「沒漲沒跌」本來就不需要顏色。 */
+ import type { ReactNode } from "react";
+ 
+ import { cn } from "@/lib/utils";
+@@ -13,13 +18,19 @@ import type { BreadthCounts, BreadthState } from "@/types";
+ 
+ type Bucket = keyof BreadthCounts["twse"];
+ 
+-/** `tone` 只給格底與框線;`null` = 中性(沿用面板既有 surface/line)。 */
+-const BUCKETS: readonly { key: Bucket; label: string; tone: string | null }[] = [
+-  { key: "limit_up", label: "漲停", tone: "border-bull/40 bg-bull/15" },
+-  { key: "up", label: "上漲", tone: null },
+-  { key: "flat", label: "平盤", tone: null },
+-  { key: "down", label: "下跌", tone: null },
+-  { key: "limit_down", label: "跌停", tone: "border-bear/40 bg-bear/15" },
++/** `tone` 只給格底與框線(`null` = 中性,沿用面板既有 surface/line);
++ *  `valueTone` 只給數字(`null` = `text-ink`)。兩欄**刻意不會同時有值**:見檔頭。 */
++const BUCKETS: readonly {
++  key: Bucket;
++  label: string;
++  tone: string | null;
++  valueTone: string | null;
++}[] = [
++  { key: "limit_up", label: "漲停", tone: "border-bull/40 bg-bull/15", valueTone: null },
++  { key: "up", label: "上漲", tone: null, valueTone: "text-bull" },
++  { key: "flat", label: "平盤", tone: null, valueTone: null },
++  { key: "down", label: "下跌", tone: null, valueTone: "text-bear" },
++  { key: "limit_down", label: "跌停", tone: "border-bear/40 bg-bear/15", valueTone: null },
+ ];
+ 
+ const MARKETS: readonly { key: keyof BreadthCounts; label: string }[] = [
+@@ -91,7 +102,7 @@ export function BreadthBand({ breadth }: { breadth: BreadthState | null }) {
+               <span className="text-xs text-ink-dim">{b.label}</span>
+               <span
+                 data-testid={`breadth-value-${m.key}-${b.key}`}
+-                className="font-mono text-sm text-ink"
++                className={cn("font-mono text-sm", b.valueTone ?? "text-ink")}
+               >
+                 {counts[m.key][b.key]}
+               </span>
+diff --git a/frontend/src/components/index/IndexPage.corr-lazy.test.tsx b/frontend/src/components/index/IndexPage.corr-lazy.test.tsx
+new file mode 100644
+index 00000000..a97eb300
+--- /dev/null
++++ b/frontend/src/components/index/IndexPage.corr-lazy.test.tsx
+@@ -0,0 +1,107 @@
++/** @vitest-environment jsdom */
++/** 真身級「非 corr subtab = 零 WebSocket」鎖(SC-5;round-2 P1-1)。
++ *
++ *  改版前這條保護在 `CorrSection.lazy.test.tsx` (b)(「收合態零建線」),而收合殼被
++ *  subtab 取代後,唯一的掛載閘移到了 `IndexPage` —— 鎖必須跟著搬到新的掛載點。
++ *
++ *  **本檔刻意不 mock CorrPage**:`IndexPage.test.tsx` 的檔案級 stub 不會建線,
++ *  「stub 下 WS 數為 0」恆真 = 沒有鑑別力。錨點文字取 RiverPanel 的「等待六腿資料…」,
++ *  與 Suspense fallback 的「相關係數載入中…」逐字可區分。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { IndexPage } from "@/components/index/IndexPage";
++import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
++
++class FakeWS {
++  static instances: FakeWS[] = [];
++  onopen: (() => void) | null = null;
++  onmessage: ((ev: { data: string }) => void) | null = null;
++  onclose: (() => void) | null = null;
++  onerror: (() => void) | null = null;
++  closed = false;
++
++  constructor(public url: string) {
++    FakeWS.instances.push(this);
++  }
++
++  close(): void {
++    this.closed = true;
++  }
++}
++
++const TWSE: IndexSeries = {
++  p: 42_039_920,
++  ref: 43_634_190,
++  high: 43_221_930,
++  low: 41_815_780,
++  stale: false,
++  minutes: { "0901": 43_000_000 },
++};
++const TXF: TxfQuote = { p: 42_142_000, time: "10:16:10" };
++
++/** 預設 subtab = 漲跌停 → `LimitListBody` 每次都真掛且真打這條路由(P0-2)。 */
++const BREADTH_ROWS = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  streaks_ready: true,
++  rows: [],
++};
++
++beforeEach(() => {
++  window.localStorage.clear();
++  FakeWS.instances = [];
++  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      const u = String(url);
++      if (u.includes("/api/market/breadth/rows")) {
++        return new Response(JSON.stringify(BREADTH_ROWS));
++      }
++      // corr / river 兩支 hook 的初載 REST 回 404 → state 維持 null(引擎未就緒的正常降級)
++      return new Response(null, { status: 404 });
++    }),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function renderPage() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <IndexPage twse={TWSE} otc={null} txf={TXF} breadth={null} />
++    </QueryClientProvider>,
++  );
++}
++
++function subtab(name: string): HTMLElement {
++  return within(screen.getByRole("tablist", { name: "台股綜合分頁" })).getByRole("tab", { name });
++}
++
++describe("IndexPage × CorrPage(lazy 真身)", () => {
++  it("預設 subtab(漲跌停)零 WebSocket;切到相關係數才建 corr + river 兩條", async () => {
++    renderPage();
++    await act(async () => {});
++
++    expect(screen.queryByText("等待六腿資料…")).toBeNull();
++    expect(FakeWS.instances).toEqual([]);
++
++    // 正向對照:少了這半,「零 WS」對「corr 整條路徑壞掉」也會綠(vacuous)
++    fireEvent.click(subtab("相關係數"));
++
++    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
++    expect(screen.queryByText("相關係數載入中…")).toBeNull();
++    expect(FakeWS.instances.map((w) => w.url.replace(/^ws:\/\/[^/]+/, ""))).toEqual([
++      "/ws/corr",
++      "/ws/river",
++    ]);
++  });
++});
+diff --git a/frontend/src/components/index/IndexPage.test.tsx b/frontend/src/components/index/IndexPage.test.tsx
+index edd4026f..6bda6214 100644
+--- a/frontend/src/components/index/IndexPage.test.tsx
++++ b/frontend/src/components/index/IndexPage.test.tsx
+@@ -1,12 +1,13 @@
+ /** @vitest-environment jsdom */
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { IndexPage } from "@/components/index/IndexPage";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+ import type { BreadthState } from "@/types";
+ import {
++  INDEX_SUBTAB_KEY,
+   MARKET2_FUT_STORE,
+   MARKET2_KEY_STORE,
+   MARKET2_MODE_STORE,
+@@ -15,6 +16,27 @@ import {
+   MARKET_MODE_STORE,
+ } from "@/lib/constants";
+ 
++/** CorrPage 走**檔案級 hoisted mock**(`CorrSection.test.tsx` 樣板):lazy + Suspense 的
++ *  失敗樣態是「永遠停在 fallback」,而 `queryBy(...) === null` 對「沒 render」與「還在
++ *  suspend」是同一個答案 —— 掛載一律 `findBy*` 等真 mount,卸載斷言 unmount **計數 +1**。
++ *  真身級(不 mock)的「非 corr subtab 零 WS」鎖在 `IndexPage.corr-lazy.test.tsx`:
++ *  本檔的 stub 不建線,「stub WS 建構數 0」在這裡恆真 = 沒有鑑別力。 */
++const counts = vi.hoisted(() => ({ mount: 0, unmount: 0 }));
++
++vi.mock("@/components/corr/CorrPage", async () => {
++  const React = await import("react");
++  function Stub() {
++    React.useEffect(() => {
++      counts.mount += 1;
++      return () => {
++        counts.unmount += 1;
++      };
++    }, []);
++    return React.createElement("div", { "data-testid": "corr-stub" });
++  }
++  return { default: Stub };
++});
++
+ function series(over: Partial<IndexSeries> = {}): IndexSeries {
+   return {
+     p: 42_039_920,
+@@ -50,16 +72,6 @@ function bars(n = 3) {
+ 
+ let lastUrls: string[] = [];
+ 
+-function stubFetch(body: unknown) {
+-  vi.stubGlobal(
+-    "fetch",
+-    vi.fn(async (url: string) => {
+-      lastUrls.push(String(url));
+-      return new Response(JSON.stringify(body));
+-    }),
+-  );
+-}
+-
+ const DK_BODY = {
+   key: "TWSE",
+   tf: "D",
+@@ -75,15 +87,61 @@ const DK_BODY = {
+   },
+ };
+ 
++/** 漲跌停列表(**預設 subtab**)的合法 payload。改版後每次 render 都真掛 `LimitListBody`
++ *  並打這條路由 —— 回 `DK_BODY` 會讓 `data.rows` 是 undefined,`buildEntries` 直接
++ *  TypeError 把整頁炸掉(P0-2)。`rows: []` 走「今日尚無漲跌停」空態,不與其他斷言撞字。 */
++const BREADTH_ROWS = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  streaks_ready: true,
++  rows: [],
++};
++
++/** 類股 subtab 的合法 payload。`rotation` **不得缺**:`SectorSection` 以
++ *  `rotation === null` 分流空態,undefined 會直接拋(與 P0-2 同型;round-2 P1-2)。 */
++const SECTOR_STATE = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  rotation: { industries: [] },
++};
++
++/** 路由表**寫死**(App.test.tsx 樣板),不留「依測試需要才加」的空間:
++ *  哪個 subtab 被掛上是測試的自由度,而每個 panel 的 payload 形狀不是。 */
++function stubFetch(): void {
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      const u = String(url);
++      lastUrls.push(u);
++      if (u.includes("/api/market/breadth/rows")) {
++        return new Response(JSON.stringify(BREADTH_ROWS));
++      }
++      // 成員層在前:兩條路由共前綴,順序反過來會讓成員請求被類股狀態那條吃掉。
++      if (u.includes("/api/market/sector/members")) {
++        return new Response(JSON.stringify({ industry: "", sub_industry: null, members: [] }));
++      }
++      if (u.includes("/api/market/sector")) return new Response(JSON.stringify(SECTOR_STATE));
++      return new Response(JSON.stringify(DK_BODY));
++    }),
++  );
++}
++
+ beforeEach(() => {
+   window.localStorage.clear();
+   lastUrls = [];
+-  stubFetch(DK_BODY);
++  counts.mount = 0;
++  counts.unmount = 0;
++  stubFetch();
+ });
+ 
+ afterEach(() => {
+   cleanup();
+   vi.unstubAllGlobals();
++  vi.restoreAllMocks();
+ });
+ 
+ const BREADTH: BreadthState = {
+@@ -113,6 +171,16 @@ function pane(id: "left" | "right") {
+   return within(screen.getByTestId(`market-pane-${id}`));
+ }
+ 
++/** subtab 列。**必帶 aria-label**:repo 內已有「主要分頁」「交易面板分頁」兩個具名
++ *  tablist,全域 `getAllByRole("tab")` 撞名是寫進 App.test.tsx 的教訓(AD-4)。 */
++function subtabs() {
++  return screen.getByRole("tablist", { name: "台股綜合分頁" });
++}
++
++function subtab(name: string): HTMLElement {
++  return within(subtabs()).getByRole("tab", { name });
++}
++
+ describe("IndexPage 雙 pane 容器(SC-2)", () => {
+   it("(a) 兩個 pane 同屏:左加權、右櫃買", () => {
+     renderPage();
+@@ -212,21 +280,6 @@ describe("IndexPage 基差列(SC-3)", () => {
+   });
+ });
+ 
+-describe("IndexPage 相關係數區塊(SC-4)", () => {
+-  it("(e) 尾端有相關係數收合鈕,預設收合", () => {
+-    renderPage();
+-    const toggle = screen.getByRole("button", { name: /相關係數/ });
+-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+-  });
+-
+-  it("(e2) 相關係數區塊位於基差列之後", () => {
+-    renderPage();
+-    const row = screen.getByTestId("basis-row");
+-    const toggle = screen.getByRole("button", { name: /相關係數/ });
+-    expect(row.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+-  });
+-});
+-
+ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+   it("(f) 中段出現家數帶與騰落線,數字取自 breadth props", () => {
+     renderPage(TXF, BREADTH);
+@@ -237,13 +290,14 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+     expect(screen.getByTestId("adl-last").textContent).toContain("+216");
+   });
+ 
+-  it("(f2) 家數帶位於雙 pane 之後、相關係數區塊之前", () => {
++  // 常駐區彼此的落點原文不動;下錨從「相關係數收合鈕」(改版後不存在)換成 subtab
++  // 列容器 —— 換錨不是常駐區被動到(review P0-1 / round-2 P2-1)。
++  it("(f2) 家數帶位於雙 pane 之後、subtab 列之前", () => {
+     renderPage(TXF, BREADTH);
+     const left = screen.getByTestId("market-pane-left");
+     const band = screen.getByTestId("breadth-band");
+-    const toggle = screen.getByRole("button", { name: /相關係數/ });
+     expect(left.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+-    expect(band.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    expect(band.compareDocumentPosition(subtabs()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   });
+ 
+   it("(f3) breadth 為 null 時家數帶照樣在位(載入中),不炸圖", () => {
+@@ -253,68 +307,99 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+   });
+ });
+ 
+-// 🟢 台股綜合 R3(SC-3 / SC-5):漲跌停列表落在家數 section 與相關係數之間。
+-// 本檔只驗**落點**(元件自身行為在 LimitListSection.test.tsx,跳轉全鏈在 App.test.tsx)——
+-// 列表預設收合 = body 不 mount、零 fetch,所以這裡不需要 breadth rows 的 stub。
+-describe("IndexPage 漲跌停列表落點(R3 SC-3)", () => {
+-  it("(g) 列表區塊在頁面內,預設收合", () => {
++// 🔴 2026-08-14 subtab 改版:四個各自收合的區塊改為一列 subtab,**一次只掛載一個**。
++// 原本四組「預設收合 + 落點」describe((e)(e2)(g)(g2)(h)(h2)(i)(i2))隨收合殼一起汰換 ——
++// 「收合 = unmount」的省輪詢語意等價轉移到「非 active subtab = unmount」。
++describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
++  it("(s1) 四顆 tab,預設「漲跌停」active 且只掛載 limit panel", async () => {
+     renderPage(TXF, BREADTH);
++    await act(async () => {});
++
++    expect(within(subtabs()).getAllByRole("tab").map((el) => el.textContent)).toEqual([
++      "漲跌停",
++      "類股強弱",
++      "訊號時間軸",
++      "相關係數",
++    ]);
++    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
++    expect(subtab("類股強弱").getAttribute("aria-selected")).toBe("false");
+     expect(screen.getByTestId("limit-list")).toBeTruthy();
+-    expect(screen.getByRole("button", { name: /漲跌停/ }).getAttribute("aria-expanded")).toBe(
+-      "false",
+-    );
++    expect(screen.queryByTestId("sector-section")).toBeNull();
++    expect(screen.queryByTestId("signal-timeline")).toBeNull();
++    // CorrPage 真身不 mount(stub 計數 0 才是有鑑別力的斷言;真身級零 WS 見 corr-lazy 檔)
++    expect(counts.mount).toBe(0);
+   });
+ 
+-  it("(g2) 列表位於騰落線之後、相關係數區塊之前", () => {
++  it("(s2) 點「類股強弱」→ sector 掛載、limit 卸載,偏好寫入 localStorage", async () => {
+     renderPage(TXF, BREADTH);
+-    const adl = screen.getByTestId("adl-chart");
+-    const list = screen.getByTestId("limit-list");
+-    const corr = screen.getByRole("button", { name: /相關係數/ });
+-    expect(adl.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+-    expect(list.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    fireEvent.click(subtab("類股強弱"));
++
++    expect(await screen.findByTestId("sector-section")).toBeTruthy();
++    expect(screen.queryByTestId("limit-list")).toBeNull();
++    expect(subtab("類股強弱").getAttribute("aria-selected")).toBe("true");
++    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
++    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("sector");
+   });
+-});
+ 
+-// 🟢 台股綜合 R4(SC-3):類股強弱落在漲跌停列表與相關係數之間。
+-// 本檔只驗**落點**(元件自身行為在 SectorSection.test.tsx)—— 區塊預設收合 = body 不
+-// mount、零 fetch,所以這裡不需要 sector 的 stub。
+-describe("IndexPage 類股強弱落點(R4 SC-3)", () => {
+-  it("(h) 類股強弱區塊在頁面內,預設收合", () => {
++  it("(s3) 預存 corr → 重新 mount 停在相關係數(記憶與還原)", async () => {
++    window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
+     renderPage(TXF, BREADTH);
+-    expect(screen.getByTestId("sector-section")).toBeTruthy();
+-    expect(screen.getByRole("button", { name: /類股強弱/ }).getAttribute("aria-expanded")).toBe(
+-      "false",
+-    );
++
++    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
++    expect(counts.mount).toBe(1);
++    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
++    expect(screen.queryByTestId("limit-list")).toBeNull();
+   });
+ 
+-  it("(h2) 類股強弱位於漲跌停列表之後、相關係數區塊之前", () => {
++  it("(s4) localStorage 非法值 → fallback 漲跌停", async () => {
++    window.localStorage.setItem(INDEX_SUBTAB_KEY, "1");
+     renderPage(TXF, BREADTH);
+-    const list = screen.getByTestId("limit-list");
+-    const sector = screen.getByTestId("sector-section");
+-    const corr = screen.getByRole("button", { name: /相關係數/ });
+-    expect(list.compareDocumentPosition(sector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+-    expect(sector.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    await act(async () => {});
++
++    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
++    expect(screen.getByTestId("limit-list")).toBeTruthy();
+   });
+-});
+ 
+-// 🟢 台股綜合 R4(SC-7):訊號時間軸落在類股強弱與相關係數之間。
+-// 本檔只驗**落點**(元件自身行為在 SignalTimelineSection.test.tsx)—— 區塊預設收合
+-// = body 不 mount、零 fetch,所以這裡不需要訊號 feed 的 stub。
+-describe("IndexPage 訊號時間軸落點(R4 SC-7)", () => {
+-  it("(i) 時間軸區塊在頁面內,預設收合", () => {
++  // Safari 私密視窗:getItem 光是存取就會拋,而它在 useState 的 initializer 裡 = 整頁白屏。
++  // **只對本頁那把 key 拋**:全域 throw 會先炸在 MarketPane 的四處裸 getItem(既有債,
++  // 本輪 out of scope),測不到目標還誘發 scope 外的修補(round-2 P0-1)。
++  it("(s5) getItem 對 subtab key 拋例外 → 不白屏,fallback 漲跌停", async () => {
++    const orig = Storage.prototype.getItem;
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
++      this: Storage,
++      key: string,
++    ) {
++      if (key === INDEX_SUBTAB_KEY) throw new Error("SecurityError");
++      return orig.call(this, key);
++    });
++
+     renderPage(TXF, BREADTH);
+-    expect(screen.getByTestId("signal-timeline")).toBeTruthy();
+-    expect(screen.getByRole("button", { name: /訊號時間軸/ }).getAttribute("aria-expanded")).toBe(
+-      "false",
+-    );
++    await act(async () => {});
++
++    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
++    expect(screen.getByTestId("limit-list")).toBeTruthy();
++    expect(screen.getByTestId("breadth-band")).toBeTruthy();
++  });
++
++  it("(s6) subtab 列位於騰落線之後", () => {
++    renderPage(TXF, BREADTH);
++    const adl = screen.getByTestId("adl-chart");
++    expect(adl.compareDocumentPosition(subtabs()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   });
+ 
+-  it("(i2) 時間軸位於類股強弱之後、相關係數區塊之前", () => {
++  // SC-5:切走 = 舊 panel unmount(corr 的兩條 WS 靠 hook cleanup 才會斷)。
++  // 用 unmount **計數 +1** 而不是 `queryBy === null` —— 後者在 lazy 下 vacuously pass。
++  it("(s7) corr → 漲跌停:CorrPage 真的被 unmount", async () => {
++    window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
+     renderPage(TXF, BREADTH);
+-    const sector = screen.getByTestId("sector-section");
+-    const timeline = screen.getByTestId("signal-timeline");
+-    const corr = screen.getByRole("button", { name: /相關係數/ });
+-    expect(sector.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+-    expect(timeline.compareDocumentPosition(corr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    await screen.findByTestId("corr-stub");
++    expect(counts.unmount).toBe(0);
++
++    fireEvent.click(subtab("漲跌停"));
++    await act(async () => {});
++
++    expect(counts.unmount).toBe(1);
++    expect(screen.getByTestId("limit-list")).toBeTruthy();
++    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("limit");
+   });
+ });
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index 0c0f8a01..12953422 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -1,8 +1,18 @@
+-/** 台股綜合頁的薄容器:基差列 + 兩張並排指數圖 + 相關係數收合區塊。
++/** 台股綜合頁的薄容器:常駐區(基差列 + 兩張並排指數圖 + 家數帶 + 騰落線)
++ *  + 其下一列 subtab(漲跌停 / 類股強弱 / 訊號時間軸 / 相關係數)。
+  *
+  *  單圖的狀態邏輯與版面全在 `MarketPane`(本檔只決定「哪個 pane 用哪組 localStorage key、
+  *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
+- *  「同一段程式碼寫兩遍」。 */
++ *  「同一段程式碼寫兩遍」。
++ *
++ *  **subtab 是掛載閘,不是 `hidden`**(2026-08-14 改版):四個 panel 原本各自有收合殼、
++ *  可同時展開 0-4 個,現在收斂成「恆有一顆 active、一次只掛載一個」。專案慣例是
++ *  「`hidden` > 條件 render」保留 DOM,**這裡刻意違反** —— 四個 panel 分別是全市場
++ *  2800 列 / 10 秒、類股輪動 / 10 秒、當日訊號、corr + river 兩條 WS,保 DOM 等於
++ *  四份成本同時常駐。切走即 unmount,輪詢與連線跟著消費者走(原「收合 = unmount」
++ *  設計的等價轉移)。 */
++import { useState } from "react";
++
+ import { CorrSection } from "@/components/corr/CorrSection";
+ import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
+ import { BreadthBand } from "@/components/index/BreadthBand";
+@@ -14,6 +24,7 @@ import { useChartToggles } from "@/hooks/useChartToggles";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+ import {
+   INDEX_OVERLAY_STORE,
++  INDEX_SUBTAB_KEY,
+   MARKET2_FUT_STORE,
+   MARKET2_KEY_STORE,
+   MARKET2_MODE_STORE,
+@@ -24,6 +35,30 @@ import {
+ import { cn } from "@/lib/utils";
+ import type { BreadthState } from "@/types";
+ 
++/** subtab 值域與標籤的單一來源。順序 = 畫面順序,也是改版前四個區塊的上下順序。 */
++const SUBTABS = [
++  ["limit", "漲跌停"],
++  ["sector", "類股強弱"],
++  ["timeline", "訊號時間軸"],
++  ["corr", "相關係數"],
++] as const;
++type SubTab = (typeof SUBTABS)[number][0];
++
++/** 白名單還原:非法值(改版前的 "1"、亂碼)一律回預設「漲跌停」。
++ *
++ *  **整段包 try/catch**:getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,
++ *  而這裡是 `useState` 的 initializer —— 拋出去就是整頁白屏。降回預設 subtab 遠好過白屏
++ *  (改版前四個殼與 `useChartToggles` 同慣例)。 */
++function initialSubTab(): SubTab {
++  try {
++    const saved = window.localStorage.getItem(INDEX_SUBTAB_KEY);
++    if (SUBTABS.some(([id]) => id === saved)) return saved as SubTab;
++  } catch {
++    // 讀不到就用預設 —— 偏好還原不了遠好於白屏
++  }
++  return "limit";
++}
++
+ /** 左圖沿用改版前那四支 key —— 舊使用者的標的 / 週期 / 期指商品 / 重疊開關零丟失。 */
+ const LEFT_STORES: PaneStores = {
+   key: MARKET_KEY_STORE,
+@@ -103,6 +138,16 @@ export function IndexPage({
+   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
+   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
+   const { toggles, set } = useChartToggles();
++  const [subtab, setSubtab] = useState<SubTab>(initialSubTab);
++
++  function selectSubtab(next: SubTab): void {
++    setSubtab(next);
++    try {
++      window.localStorage.setItem(INDEX_SUBTAB_KEY, next);
++    } catch {
++      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
++    }
++  }
+ 
+   return (
+     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+@@ -138,17 +183,49 @@ export function IndexPage({
+         <BreadthBand breadth={breadth} />
+         <AdvanceDeclineChart series={breadth?.series ?? []} />
+       </section>
+-      {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
+-          點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
+-      <LimitListSection onOpenStock={onOpenStock} active={active} />
+-      {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
+-          點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
+-      <SectorSection onOpenStock={onOpenStock} active={active} />
+-      {/* 同一條銜接路徑的第三半:列表 / 類股是「現在的橫切面」,時間軸是「今天依序
+-          發生了什麼」—— 自選訊號與全市場廣度事件同軸(R4 SC-7)。無 `active` gate:
+-          資料是一次性 query + WS bus,沒有輪詢可停。 */}
+-      <SignalTimelineSection onOpenStock={onOpenStock} />
+-      <CorrSection />
++      {/* 下半部:一列 subtab + 當前 panel,共用**一個**外框盒(AD-4)——
++          四個 panel 是同一個問題的四種切面(廣度發現 → 深度盯盤),各自一個框
++          會讓它們看起來像四個彼此無關的區塊。 */}
++      <section className="rounded-md border border-line bg-surface">
++        {/* aria-label 必帶:全站已有「主要分頁」「交易面板分頁」兩個具名 tablist,
++            無名 tablist 會讓全域 `getAllByRole("tab")` 撞名(App.test.tsx 的教訓)。
++            造型與 role/aria 沿 `RightRail.tsx` 的右欄分頁樣板 —— repo 內唯一既例。 */}
++        <div
++          data-testid="index-subtabs"
++          role="tablist"
++          aria-label="台股綜合分頁"
++          className="flex items-center gap-1 border-b border-line px-2 py-1.5"
++        >
++          {SUBTABS.map(([id, label]) => (
++            <button
++              key={id}
++              type="button"
++              role="tab"
++              aria-selected={subtab === id}
++              onClick={() => selectSubtab(id)}
++              className={cn(
++                "rounded px-3 py-1 text-sm",
++                subtab === id ? "bg-bg-deep text-ink" : "text-ink-dim hover:text-ink",
++              )}
++            >
++              {label}
++            </button>
++          ))}
++        </div>
++        {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
++            點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
++        {subtab === "limit" ? (
++          <LimitListSection onOpenStock={onOpenStock} active={active} />
++        ) : null}
++        {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
++            點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
++        {subtab === "sector" ? <SectorSection onOpenStock={onOpenStock} active={active} /> : null}
++        {/* 同一條銜接路徑的第三半:列表 / 類股是「現在的橫切面」,時間軸是「今天依序
++            發生了什麼」—— 自選訊號與全市場廣度事件同軸(R4 SC-7)。無 `active` gate:
++            資料是一次性 query + WS bus,沒有輪詢可停。 */}
++        {subtab === "timeline" ? <SignalTimelineSection onOpenStock={onOpenStock} /> : null}
++        {subtab === "corr" ? <CorrSection /> : null}
++      </section>
+     </div>
+   );
+ }
+diff --git a/frontend/src/components/index/LimitListSection.test.tsx b/frontend/src/components/index/LimitListSection.test.tsx
+index 7d159eec..75f9701f 100644
+--- a/frontend/src/components/index/LimitListSection.test.tsx
++++ b/frontend/src/components/index/LimitListSection.test.tsx
+@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { LimitListSection } from "@/components/index/LimitListSection";
+-import { LIMIT_LIST_FILTER_KEY, LIMIT_LIST_OPEN_KEY } from "@/lib/constants";
++import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
+ import type { BreadthRow, BreadthRowsState } from "@/types";
+ 
+ function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
+@@ -80,12 +80,11 @@ function renderSection(onOpenStock?: (code: string) => void, active?: boolean) {
+   );
+ }
+ 
+-/** 直接以「已展開」狀態開場(收合閘門另有專測),等資料落地後回傳。 */
++/** render 即掛載(subtab 改版後本元件不再有收合殼),等資料落地後回傳。 */
+ async function openWith(
+   state: BreadthRowsState,
+   onOpenStock?: (code: string) => void,
+ ): Promise<void> {
+-  window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
+   stubFetch(state);
+   renderSection(onOpenStock);
+   await screen.findByTestId("limit-list-body");
+@@ -98,10 +97,6 @@ function rowIds(): string[] {
+     .map((el) => el.getAttribute("data-testid")!.replace("limit-row-", ""));
+ }
+ 
+-function header(): HTMLElement {
+-  return screen.getByRole("button", { name: /漲跌停/ });
+-}
+-
+ beforeEach(() => {
+   window.localStorage.clear();
+   stubFetch(mkState(ROWS));
+@@ -113,38 +108,27 @@ afterEach(() => {
+   vi.useRealTimers();
+ });
+ 
+-describe("LimitListSection 收合閘門", () => {
+-  it("預設收合:body 不 mount、零 fetch", async () => {
++// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)——
++// 「非 active subtab = unmount」的省輪詢語意由 IndexPage.test.tsx (s2)(s7) 鎖。
++// 這裡剩下的元件級契約是:掛上就直接工作,且**完全不碰**那把已廢止的 open key。
++describe("LimitListSection 掛載即工作(subtab 改版)", () => {
++  it("render 即掛 body 並取數(無收合鈕)", async () => {
+     renderSection();
+-    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
+-    expect(screen.queryByTestId("limit-list-body")).toBeNull();
+-    expect(fetchSpy.mock.calls.length).toBe(0);
+-    expect(header().textContent).toContain("展開");
++    expect(await screen.findByTestId("limit-list-body")).toBeTruthy();
++    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
++    expect(screen.queryByRole("button", { name: /展開|收合/ })).toBeNull();
+   });
+ 
+-  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
++  it("零 OPEN_KEY 讀寫(廢止的鍵不得留旁路)", async () => {
++    const getItem = vi.spyOn(Storage.prototype, "getItem");
++    const setItem = vi.spyOn(Storage.prototype, "setItem");
+     renderSection();
+-    fireEvent.click(header());
+     await screen.findByTestId("limit-list-body");
+-    expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("1");
+-    expect(header().getAttribute("aria-expanded")).toBe("true");
+-    expect(header().textContent).toContain("收合");
+ 
+-    cleanup();
+-    renderSection();
+-    expect(await screen.findByTestId("limit-list-body")).toBeTruthy();
+-  });
+-
+-  it("收合把列表 unmount(query 隨之消失)", async () => {
+-    await openWith(mkState(ROWS));
+-    expect(screen.queryByTestId("limit-list-table")).toBeTruthy();
+-
+-    fireEvent.click(header());
+-
+-    expect(screen.queryByTestId("limit-list-body")).toBeNull();
+-    expect(screen.queryByTestId("limit-list-table")).toBeNull();
+-    expect(window.localStorage.getItem(LIMIT_LIST_OPEN_KEY)).toBe("0");
+-    expect(header().getAttribute("aria-expanded")).toBe("false");
++    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
++    expect(keys).not.toContain("copycat-limit-list-open");
++    getItem.mockRestore();
++    setItem.mockRestore();
+   });
+ });
+ 
+@@ -155,7 +139,6 @@ describe("LimitListSection 背景輪詢 gate(FE-2)", () => {
+   function openWithTimers(active?: boolean): void {
+     vi.useFakeTimers();
+     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+-    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
+     stubFetch(mkState(ROWS));
+     renderSection(undefined, active);
+   }
+@@ -205,7 +188,6 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
+   // 端點設計上恆 200,能走到 error 的只有網路 / proxy 斷。少了這條分流,失敗會停在
+   // 「載入中…」永遠不動 —— 那是誠實度問題(看起來像還在等,其實已經放棄了)。
+   it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
+-    window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, "1");
+     fetchSpy = vi.fn(async () => new Response("boom", { status: 500 }));
+     vi.stubGlobal("fetch", fetchSpy);
+     renderSection();
+diff --git a/frontend/src/components/index/LimitListSection.tsx b/frontend/src/components/index/LimitListSection.tsx
+index 6619a29b..269d7993 100644
+--- a/frontend/src/components/index/LimitListSection.tsx
++++ b/frontend/src/components/index/LimitListSection.tsx
+@@ -1,9 +1,10 @@
+-/** 台股綜合頁的漲跌停列表收合區塊(market-overview R3;design §5.2)。
++/** 台股綜合頁的漲跌停列表 subtab panel(market-overview R3;design §5.2)。
+  *
+- *  **收合 = unmount,不是 `hidden`**(CorrSection 同款慣例):payload 是全市場約 2800 列
+- *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於所有開站的人都持續吃
+- *  這份頻寬,而它只有列表展開時才有人看。收合即 unmount → `useBreadthRows` 連同 query
+- *  一起消失。與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
++ *  **非 active subtab = unmount,不是 `hidden`**(2026-08-14 subtab 改版前是「收合 =
++ *  unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):payload 是全市場約 2800 列
++ *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於切到別的 subtab 也
++ *  持續吃這份頻寬。切走即 unmount → `useBreadthRows` 連同 query 一起消失。
++ *  與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
+  *  無重依賴,lazy 只會多一個 Suspense 空窗與一條測不到的非同步路徑。
+  *
+  *  **前端零日期推理**(design R1):`streak` / `streak_capped` 都由後端算完,這裡只負責
+@@ -12,7 +13,7 @@
+ import { useMemo, useState } from "react";
+ 
+ import { useBreadthRows } from "@/hooks/useBreadthRows";
+-import { LIMIT_LIST_FILTER_KEY, LIMIT_LIST_OPEN_KEY } from "@/lib/constants";
++import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
+ import { cn } from "@/lib/utils";
+ import type { BreadthRow } from "@/types";
+ 
+@@ -470,12 +471,13 @@ function LimitListBody({
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// 收合殼
++// subtab panel 殼
+ // ---------------------------------------------------------------------------
+ 
+-/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。收合是
+- *  unmount、但 tab 切換不是 —— 展開狀態又存在 localStorage,所以「展開著被切走」
+- *  是常態,那條路要靠這道 gate 停背景輪詢(review FE-2)。未給時預設 true。 */
++/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。非 active
++ *  subtab 是 unmount、但**主 tab 切換不是**(App 以 `hidden` 保留 DOM)—— 選中的
++ *  subtab 又存在 localStorage,所以「掛著被切走」是常態,那條路要靠這道 gate 停背景
++ *  輪詢(review FE-2)。未給時預設 true。 */
+ export function LimitListSection({
+   onOpenStock,
+   active = true,
+@@ -483,39 +485,10 @@ export function LimitListSection({
+   onOpenStock?: (code: string) => void;
+   active?: boolean;
+ }) {
+-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
+-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(CorrSection 同慣例)。
+-  const [open, setOpen] = useState<boolean>(() => {
+-    try {
+-      return window.localStorage.getItem(LIMIT_LIST_OPEN_KEY) === "1";
+-    } catch {
+-      return false;
+-    }
+-  });
+-
+-  function toggle(): void {
+-    const next = !open;
+-    setOpen(next);
+-    try {
+-      window.localStorage.setItem(LIMIT_LIST_OPEN_KEY, next ? "1" : "0");
+-    } catch {
+-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
+-    }
+-  }
+-
+   return (
+-    <section data-testid="limit-list" className="rounded-md border border-line bg-surface">
+-      <button
+-        type="button"
+-        aria-expanded={open}
+-        onClick={toggle}
+-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
+-      >
+-        <span className="text-sm font-bold text-ink">漲跌停</span>
+-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
+-      </button>
+-      {open ? <LimitListBody onOpenStock={onOpenStock} active={active} /> : null}
+-    </section>
++    <div data-testid="limit-list" className="px-4 pb-4">
++      <LimitListBody onOpenStock={onOpenStock} active={active} />
++    </div>
+   );
+ }
+ 
+diff --git a/frontend/src/components/index/SectorSection.test.tsx b/frontend/src/components/index/SectorSection.test.tsx
+index 94aca8a6..81e8fe44 100644
+--- a/frontend/src/components/index/SectorSection.test.tsx
++++ b/frontend/src/components/index/SectorSection.test.tsx
+@@ -11,7 +11,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { SectorSection } from "@/components/index/SectorSection";
+-import { SECTOR_OPEN_KEY } from "@/lib/constants";
+ import type { SectorMembers, SectorRotation, SectorState } from "@/lib/sector-model";
+ 
+ const ROTATION: SectorRotation = {
+@@ -93,31 +92,25 @@ function renderSection(onOpenStock?: (code: string) => void, active?: boolean) {
+   );
+ }
+ 
+-/** 直接以「已展開 + 已鑽取單層產業(航運)」開場,等成員層落定後回傳。 */
++/** 直接以「已鑽取單層產業(航運)」開場,等成員層落定後回傳。 */
+ async function drillMembers(members: SectorMembers): Promise<void> {
+-  window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+   stubFetch(mkState(), members);
+   renderSection();
+   await screen.findByTestId("sector-body");
+   fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
+ }
+ 
+-/** 直接以「已展開」開場(收合閘門另有專測),等資料落地後回傳。 */
++/** render 即掛載(subtab 改版後本元件不再有收合殼),等資料落地後回傳。 */
+ async function openWith(
+   state: SectorState = mkState(),
+   onOpenStock?: (code: string) => void,
+ ): Promise<void> {
+-  window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+   stubFetch(state);
+   renderSection(onOpenStock);
+   await screen.findByTestId("sector-body");
+   await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
+ }
+ 
+-function header(): HTMLElement {
+-  return screen.getByRole("button", { name: /類股強弱/ });
+-}
+-
+ beforeEach(() => {
+   window.localStorage.clear();
+   stubFetch(mkState());
+@@ -129,36 +122,26 @@ afterEach(() => {
+   vi.useRealTimers();
+ });
+ 
+-describe("SectorSection 收合閘門", () => {
+-  it("預設收合:body 不 mount、零 fetch", async () => {
++// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)——
++// 「非 active subtab = unmount」的省輪詢語意由 IndexPage.test.tsx (s2) 鎖。
++describe("SectorSection 掛載即工作(subtab 改版)", () => {
++  it("render 即掛 body 並取數(無收合鈕)", async () => {
+     renderSection();
+-    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
+-    expect(screen.queryByTestId("sector-body")).toBeNull();
+-    expect(fetchSpy.mock.calls.length).toBe(0);
++    expect(await screen.findByTestId("sector-body")).toBeTruthy();
++    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(0));
++    expect(screen.queryByRole("button", { name: /展開|收合/ })).toBeNull();
+   });
+ 
+-  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
++  it("零 OPEN_KEY 讀寫(廢止的鍵不得留旁路)", async () => {
++    const getItem = vi.spyOn(Storage.prototype, "getItem");
++    const setItem = vi.spyOn(Storage.prototype, "setItem");
+     renderSection();
+-    fireEvent.click(header());
+     await screen.findByTestId("sector-body");
+-    expect(window.localStorage.getItem(SECTOR_OPEN_KEY)).toBe("1");
+-    expect(header().getAttribute("aria-expanded")).toBe("true");
+-
+-    cleanup();
+-    renderSection();
+-    expect(await screen.findByTestId("sector-body")).toBeTruthy();
+-  });
+-
+-  it("收合把 body unmount 並寫回 0(query 隨之消失)", async () => {
+-    await openWith();
+-    expect(screen.queryByTestId("sector-list")).toBeTruthy();
+-
+-    fireEvent.click(header());
+ 
+-    expect(screen.queryByTestId("sector-body")).toBeNull();
+-    expect(screen.queryByTestId("sector-list")).toBeNull();
+-    expect(window.localStorage.getItem(SECTOR_OPEN_KEY)).toBe("0");
+-    expect(header().getAttribute("aria-expanded")).toBe("false");
++    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
++    expect(keys).not.toContain("copycat-sector-open");
++    getItem.mockRestore();
++    setItem.mockRestore();
+   });
+ });
+ 
+@@ -263,7 +246,6 @@ describe("SectorSection 成員層(lazy drill-down)", () => {
+   // 成員鑽取是 404(查無 industry / sub)/ 500(後端全 universe 掃描炸掉)都到得了的路。
+   // 少了這條分流,失敗會永遠停在「載入中…」—— 看起來像還在等,其實已經放棄了。
+   it("成員請求 500 → 成員載入失敗(清單其餘部分照常)", async () => {
+-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+     urls = [];
+     fetchSpy = vi.fn(async (url: string) => {
+       const u = String(url);
+@@ -360,7 +342,6 @@ describe("SectorSection 降級", () => {
+   });
+ 
+   it("HTTP 失敗 → 載入失敗(不可永遠停在「載入中…」)", async () => {
+-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+     fetchSpy = vi.fn(async () => new Response("boom", { status: 500 }));
+     vi.stubGlobal("fetch", fetchSpy);
+     renderSection();
+@@ -537,7 +518,6 @@ describe("SectorSection 背景輪詢 gate", () => {
+   function openWithTimers(active?: boolean): void {
+     vi.useFakeTimers();
+     vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
+-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+     stubFetch(mkState());
+     renderSection(undefined, active);
+   }
+@@ -587,7 +567,6 @@ describe("SectorSection 背景輪詢 gate", () => {
+   it("盤外(週六)→ 成員表不輪詢", async () => {
+     vi.useFakeTimers();
+     vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
+-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+     stubFetch(mkState());
+     renderSection(undefined, true);
+     await vi.advanceTimersByTimeAsync(0);
+@@ -601,7 +580,6 @@ describe("SectorSection 背景輪詢 gate", () => {
+   it("盤外(週六)→ 展開且 active 也不輪詢", async () => {
+     vi.useFakeTimers();
+     vi.setSystemTime(new Date(2026, 7, 8, 10, 0)); // 週六
+-    window.localStorage.setItem(SECTOR_OPEN_KEY, "1");
+     stubFetch(mkState());
+     renderSection(undefined, true);
+     await vi.advanceTimersByTimeAsync(0);
+diff --git a/frontend/src/components/index/SectorSection.tsx b/frontend/src/components/index/SectorSection.tsx
+index 5997a1bf..cf4d6e4e 100644
+--- a/frontend/src/components/index/SectorSection.tsx
++++ b/frontend/src/components/index/SectorSection.tsx
+@@ -1,7 +1,8 @@
+-/** 台股綜合頁的類股強弱收合區塊(market-overview R4 SC-3;design §9.1)。
++/** 台股綜合頁的類股強弱 subtab panel(market-overview R4 SC-3;design §9.1)。
+  *
+- *  **收合 = unmount**(`LimitListSection` / `CorrSection` 同款):輪動快照盤中每 10 秒
+- *  一份,收合即 unmount → query 連同輪詢一起消失,頻寬跟著消費者走。
++ *  **非 active subtab = unmount**(`LimitListSection` / `CorrSection` 同款;2026-08-14
++ *  subtab 改版前是「收合 = unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):
++ *  輪動快照盤中每 10 秒一份,切走即 unmount → query 連同輪詢一起消失,頻寬跟著消費者走。
+  *
+  *  **三層而不是三個面板**:產業 → 子產業 → 成員股全部內嵌在同一棵清單裡,而且
+  *  **同時只有一個成員表**。成員層各自獨立展開的話,展開 N 個群組就是 N 個並發鑽取
+@@ -13,7 +14,6 @@
+ import { useQuery } from "@tanstack/react-query";
+ import { useState } from "react";
+ 
+-import { SECTOR_OPEN_KEY } from "@/lib/constants";
+ import { fmtPct } from "@/lib/format";
+ import {
+   fetchSectorMembers,
+@@ -416,12 +416,13 @@ function SectorBody({
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// 收合殼
++// subtab panel 殼
+ // ---------------------------------------------------------------------------
+ 
+-/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。收合是
+- *  unmount、但 tab 切換不是 —— 展開狀態又存在 localStorage,所以「展開著被切走」
+- *  是常態,那條路要靠這道 gate 停背景輪詢。未給時預設 true。 */
++/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。非 active
++ *  subtab 是 unmount、但**主 tab 切換不是**(App 以 `hidden` 保留 DOM)—— 選中的
++ *  subtab 又存在 localStorage,所以「掛著被切走」是常態,那條路要靠這道 gate 停背景
++ *  輪詢。未給時預設 true。 */
+ export function SectorSection({
+   onOpenStock,
+   active = true,
+@@ -429,39 +430,10 @@ export function SectorSection({
+   onOpenStock?: (code: string) => void;
+   active?: boolean;
+ }) {
+-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
+-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(LimitListSection 同慣例)。
+-  const [open, setOpen] = useState<boolean>(() => {
+-    try {
+-      return window.localStorage.getItem(SECTOR_OPEN_KEY) === "1";
+-    } catch {
+-      return false;
+-    }
+-  });
+-
+-  function toggle(): void {
+-    const next = !open;
+-    setOpen(next);
+-    try {
+-      window.localStorage.setItem(SECTOR_OPEN_KEY, next ? "1" : "0");
+-    } catch {
+-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
+-    }
+-  }
+-
+   return (
+-    <section data-testid="sector-section" className="rounded-md border border-line bg-surface">
+-      <button
+-        type="button"
+-        aria-expanded={open}
+-        onClick={toggle}
+-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
+-      >
+-        <span className="text-sm font-bold text-ink">類股強弱</span>
+-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
+-      </button>
+-      {open ? <SectorBody active={active} onOpenStock={onOpenStock} /> : null}
+-    </section>
++    <div data-testid="sector-section" className="px-4 pb-4">
++      <SectorBody active={active} onOpenStock={onOpenStock} />
++    </div>
+   );
+ }
+ 
+diff --git a/frontend/src/components/index/SignalTimelineSection.test.tsx b/frontend/src/components/index/SignalTimelineSection.test.tsx
+index 7fcc7914..29a978da 100644
+--- a/frontend/src/components/index/SignalTimelineSection.test.tsx
++++ b/frontend/src/components/index/SignalTimelineSection.test.tsx
+@@ -13,7 +13,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { SignalTimelineSection } from "@/components/index/SignalTimelineSection";
+-import { SIGNAL_TIMELINE_OPEN_KEY } from "@/lib/constants";
+ import { emitSignal } from "@/lib/signal-bus";
+ import type { SignalMsg } from "@/lib/signal-model";
+ 
+@@ -62,22 +61,17 @@ function renderSection(onOpenStock?: (code: string) => void) {
+   );
+ }
+ 
+-/** 直接以「已展開」開場(收合閘門另有專測),等 baseline 落地後回傳。 */
++/** render 即掛載(subtab 改版後本元件不再有收合殼),等 baseline 落地後回傳。 */
+ async function openWith(
+   signals: SignalMsg[] = [],
+   onOpenStock?: (code: string) => void,
+ ): Promise<void> {
+-  window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, "1");
+   stubFetch(signals);
+   renderSection(onOpenStock);
+   await screen.findByTestId("signal-timeline-body");
+   await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
+ }
+ 
+-function header(): HTMLElement {
+-  return screen.getByRole("button", { name: /訊號時間軸/ });
+-}
+-
+ function rowIds(): string[] {
+   return screen
+     .queryAllByTestId(/^signal-timeline-row-/)
+@@ -98,36 +92,27 @@ afterEach(() => {
+   vi.unstubAllGlobals();
+ });
+ 
+-describe("SignalTimelineSection 收合閘門", () => {
+-  it("預設收合:body 不 mount、零 fetch", async () => {
++// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)。
++// 本元件**刻意沒有** `active` gate(一次性 query + WS bus,沒有輪詢可停)—— 這件事
++// 不因 subtab 改版而變。
++describe("SignalTimelineSection 掛載即工作(subtab 改版)", () => {
++  it("render 即掛 body 並取 baseline(無收合鈕)", async () => {
+     renderSection();
+-    await waitFor(() => expect(header().getAttribute("aria-expanded")).toBe("false"));
+-    expect(screen.queryByTestId("signal-timeline-body")).toBeNull();
+-    expect(fetchMock.mock.calls.length).toBe(0);
++    expect(await screen.findByTestId("signal-timeline-body")).toBeTruthy();
++    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
++    expect(screen.queryByRole("button", { name: /展開|收合/ })).toBeNull();
+   });
+ 
+-  it("展開寫入 localStorage,重新 mount 仍展開", async () => {
++  it("零 OPEN_KEY 讀寫(廢止的鍵不得留旁路)", async () => {
++    const getItem = vi.spyOn(Storage.prototype, "getItem");
++    const setItem = vi.spyOn(Storage.prototype, "setItem");
+     renderSection();
+-    fireEvent.click(header());
+     await screen.findByTestId("signal-timeline-body");
+-    expect(window.localStorage.getItem(SIGNAL_TIMELINE_OPEN_KEY)).toBe("1");
+-    expect(header().getAttribute("aria-expanded")).toBe("true");
+-
+-    cleanup();
+-    renderSection();
+-    expect(await screen.findByTestId("signal-timeline-body")).toBeTruthy();
+-  });
+-
+-  it("收合把 body unmount 並寫回 0", async () => {
+-    await openWith([sig({ id: "a" })]);
+-    await screen.findByTestId("signal-timeline-row-a");
+-
+-    fireEvent.click(header());
+ 
+-    expect(screen.queryByTestId("signal-timeline-body")).toBeNull();
+-    expect(screen.queryByTestId("signal-timeline-row-a")).toBeNull();
+-    expect(window.localStorage.getItem(SIGNAL_TIMELINE_OPEN_KEY)).toBe("0");
+-    expect(header().getAttribute("aria-expanded")).toBe("false");
++    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
++    expect(keys).not.toContain("copycat-signal-timeline-open");
++    getItem.mockRestore();
++    setItem.mockRestore();
+   });
+ });
+ 
+@@ -332,9 +317,8 @@ describe("SignalTimelineSection 空態", () => {
+ // 而「baseline 抓不到」與「今天真的沒訊號」在畫面上完全同形 —— 使用者看到「今日尚無
+ // 訊號」不會去查服務,只會以為今天很安靜。這一組鎖的是「降級說得出口」。
+ describe("SignalTimelineSection baseline 取數失敗", () => {
+-  /** 展開 + baseline 端點 503(hub 未就緒)。retry: 1 是 hook 內建 → 要等第二次 fetch。 */
++  /** baseline 端點 503(hub 未就緒)。retry: 1 是 hook 內建 → 要等第二次 fetch。 */
+   async function openWith503(): Promise<void> {
+-    window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, "1");
+     fetchMock = vi.fn(
+       async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
+     );
+diff --git a/frontend/src/components/index/SignalTimelineSection.tsx b/frontend/src/components/index/SignalTimelineSection.tsx
+index d5c6927e..9fa84af2 100644
+--- a/frontend/src/components/index/SignalTimelineSection.tsx
++++ b/frontend/src/components/index/SignalTimelineSection.tsx
+@@ -1,7 +1,8 @@
+-/** 台股綜合頁的訊號時間軸收合區塊(market-overview R4 SC-7;design §9.2)。
++/** 台股綜合頁的訊號時間軸 subtab panel(market-overview R4 SC-7;design §9.2)。
+  *
+- *  **收合 = unmount**(`LimitListSection` / `SectorSection` 同款),但這裡沒有 `active`
+- *  prop:資料是**一次性 query + WS bus 推播**,沒有輪詢可以 gate —— 加一個 gate 進來
++ *  **非 active subtab = unmount**(`LimitListSection` / `SectorSection` 同款;2026-08-14
++ *  subtab 改版前是「收合 = unmount」),但這裡**刻意沒有** `active` prop:資料是
++ *  **一次性 query + WS bus 推播**,沒有輪詢可以 gate —— 加一個 gate 進來
+  *  只會擋掉 bus 的即時列,而畫面上看起來像「盤中沒有訊號」。
+  *
+  *  **兩族同軸,但廣度列要自我標示**:`market_*` 來自 FinMind 快照 diff(精度 5-10s),
+@@ -14,7 +15,6 @@
+ import { useMemo, useState } from "react";
+ 
+ import { useSignalFeed } from "@/hooks/useSignalFeed";
+-import { SIGNAL_TIMELINE_OPEN_KEY } from "@/lib/constants";
+ import { isMarketKind, kindLabel, type SignalMsg } from "@/lib/signal-model";
+ import { cn } from "@/lib/utils";
+ 
+@@ -171,43 +171,14 @@ function TimelineBody({ onOpenStock }: { onOpenStock?: (code: string) => void })
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// 收合殼
++// subtab panel 殼
+ // ---------------------------------------------------------------------------
+ 
+ export function SignalTimelineSection({ onOpenStock }: { onOpenStock?: (code: string) => void }) {
+-  // getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,而這裡是 useState 的
+-  // initializer —— 拋出去就是整頁白屏。降回「收合」遠好過白屏(SectorSection 同慣例)。
+-  const [open, setOpen] = useState<boolean>(() => {
+-    try {
+-      return window.localStorage.getItem(SIGNAL_TIMELINE_OPEN_KEY) === "1";
+-    } catch {
+-      return false;
+-    }
+-  });
+-
+-  function toggle(): void {
+-    const next = !open;
+-    setOpen(next);
+-    try {
+-      window.localStorage.setItem(SIGNAL_TIMELINE_OPEN_KEY, next ? "1" : "0");
+-    } catch {
+-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
+-    }
+-  }
+-
+   return (
+-    <section data-testid="signal-timeline" className="rounded-md border border-line bg-surface">
+-      <button
+-        type="button"
+-        aria-expanded={open}
+-        onClick={toggle}
+-        className="flex w-full items-center gap-2 px-4 py-2 text-left"
+-      >
+-        <span className="text-sm font-bold text-ink">訊號時間軸</span>
+-        <span className="text-xs text-ink-dim">{open ? "收合" : "展開"}</span>
+-      </button>
+-      {open ? <TimelineBody onOpenStock={onOpenStock} /> : null}
+-    </section>
++    <div data-testid="signal-timeline" className="px-4 pb-4">
++      <TimelineBody onOpenStock={onOpenStock} />
++    </div>
+   );
+ }
+ 
+diff --git a/frontend/src/hooks/useBreadthRows.ts b/frontend/src/hooks/useBreadthRows.ts
+index b34b52d8..96482c9f 100644
+--- a/frontend/src/hooks/useBreadthRows.ts
++++ b/frontend/src/hooks/useBreadthRows.ts
+@@ -8,7 +8,9 @@ import type { BreadthRowsState } from "@/types";
+  *
+  * **REST on-demand 不進 WS**(brainstorm Q2):payload 是全市場 ~2800 列 × 15 欄,
+  * 掛上 `/ws/breadth` 等於所有開站的人都吃這份頻寬,而它只有列表展開時才有人看。
+- * 消費端(`LimitListSection`)收合即 unmount,query 隨之消失 —— 頻寬跟著消費者走。
++ * 消費端(`LimitListSection`)在非 active subtab 時即 unmount(掛載閘在 `IndexPage`
++ * 的 subtab 列;2026-08-14 改版前是「收合即 unmount」),query 隨之消失 ——
++ * 頻寬跟著消費者走。
+  *
+  * `refetchInterval` 用**函式形式**(R10,`useMarketBars` 同慣例):TQ 每次 interval
+  * 到期都重新求值,開盤 / 收盤的開關不依賴外部 re-render 才會生效。收盤後回 false
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index 9837fab1..bf1cf144 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -16,9 +16,20 @@ export const MAIN_CODE_KEY = "copycat-stock-main-code";
+ export const LEGACY_MAIN_CODE_KEY = "stock-main-code";
+ 
+ /** 已停用功能留下的孤兒鍵:`stock-ladder-open`(2026-07-29 閃電梯改條件 render 後零讀寫)、
+- *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)。App 啟動時清除,
+- *  避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
+-export const ORPHAN_STORAGE_KEYS = ["stock-ladder-open", "stock-wl-group"] as const;
++ *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)、以及
++ *  **2026-08-14 subtab 改版**廢止的四支台股綜合區塊展開狀態(`copycat-corr-open` /
++ *  `copycat-limit-list-open` / `copycat-sector-open` / `copycat-signal-timeline-open`)——
++ *  四顆獨立 bool(可同時 0-4 顆展開)對映不到「一次只能選一個」的 subtab,任何遷移規則
++ *  都是猜,故直接廢止;丟失代價 = 首訪回預設 subtab 一次(見 `INDEX_SUBTAB_KEY`)。
++ *  App 啟動時清除,避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
++export const ORPHAN_STORAGE_KEYS = [
++  "stock-ladder-open",
++  "stock-wl-group",
++  "copycat-corr-open",
++  "copycat-limit-list-open",
++  "copycat-sector-open",
++  "copycat-signal-timeline-open",
++] as const;
+ 
+ /** 清除孤兒鍵。冪等(removeItem 對不存在的 key 是 no-op),由 App.tsx 的 module scope
+  *  呼叫一次 —— 它與元件生命週期無關,也不該隨 re-render 重跑。
+@@ -61,25 +72,19 @@ export const MARKET2_MODE_STORE = "copycat-market2-tf";
+ /** 台股綜合**右圖**的期貨商品 — components/index/IndexPage.tsx */
+ export const MARKET2_FUT_STORE = "copycat-market2-fut";
+ 
+-/** 相關係數收合區塊的展開狀態("1" = 展開)— components/corr/CorrSection.tsx */
+-export const CORR_OPEN_KEY = "copycat-corr-open";
++/** 台股綜合頁下半部選中的 subtab — components/index/IndexPage.tsx。
++ *  值域 `"limit" | "sector" | "timeline" | "corr"`,非白名單值 fallback `"limit"`
++ *  (漲跌停;恆有一顆 active,不提供「全收」態)。
++ *
++ *  **非 active subtab = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場
++ *  rows / 類股輪動」與「要不要掛 corr + river 兩條 WS」—— 它取代了 2026-08-14 之前的
++ *  四支獨立 `*_OPEN_KEY`(已進 `ORPHAN_STORAGE_KEYS`)。 */
++export const INDEX_SUBTAB_KEY = "copycat-index-subtab";
+ 
+-/** 漲跌停列表收合區塊的展開狀態("1" = 展開)— components/index/LimitListSection.tsx。
+- *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場 rows」。 */
+-export const LIMIT_LIST_OPEN_KEY = "copycat-limit-list-open";
+ /** 漲跌停列表的篩選條件(JSON:市場 / 狀態三旗標 + 金額 / 股價門檻字串)
+  *  — components/index/LimitListSection.tsx */
+ export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";
+ 
+-/** 類股強弱收合區塊的展開狀態("1" = 展開)— components/index/SectorSection.tsx。
+- *  **收合 = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份類股輪動」。 */
+-export const SECTOR_OPEN_KEY = "copycat-sector-open";
+-
+-/** 訊號時間軸收合區塊的展開狀態("1" = 展開)— components/index/SignalTimelineSection.tsx。
+- *  **收合 = unmount**,所以這把鍵同時決定「要不要抓一份含全市場廣度事件的當日訊號」
+- *  (自選那份由個股頁的 rail 各自抓,兩者 queryKey 不同族)。 */
+-export const SIGNAL_TIMELINE_OPEN_KEY = "copycat-signal-timeline-open";
+-
+ /** 右欄 tab(閃電 / 委託 / 部位)— components/rail/RightRail.tsx */
+ export const RAIL_TAB_KEY = "copycat-rail-tab";
+ 
