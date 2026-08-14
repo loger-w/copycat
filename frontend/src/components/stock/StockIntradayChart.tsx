@@ -16,6 +16,8 @@ import {
   buildIntradayGeometry,
   edgePriceLabels,
   lastPoint,
+  LEVEL_FILL,
+  LEVEL_STROKE,
   LOW_DECIDED_PCT,
   minuteToX,
   overlayLines,
@@ -59,28 +61,6 @@ const TIME_TAG = { w: 40, h: 24 };
 function barW(width: number, xw: XWindow = SPOT_WINDOW): number {
   return Math.max(1, plotWidth(width) / (xw.end - xw.start) - 0.4);
 }
-
-/** 疊線配色(SC-2)。名稱從右緣移除後,五條 CDP 只剩顏色可分辨 ——
- *  上方壓力位紅、下方支撐位綠(台股紅漲綠跌),中軸取琥珀金不與紅綠系混淆。 */
-const LEVEL_STROKE: Record<OverlayLevel, string> = {
-  ah: "stroke-bull",
-  nh: "stroke-bull/55",
-  cdp: "stroke-profit",
-  nl: "stroke-bear/55",
-  al: "stroke-bear",
-  ma5: "stroke-ma5",
-  ma20: "stroke-ma20",
-};
-
-const LEVEL_FILL: Record<OverlayLevel, string> = {
-  ah: "fill-bull",
-  nh: "fill-bull/70",
-  cdp: "fill-profit",
-  nl: "fill-bear/70",
-  al: "fill-bear",
-  ma5: "fill-ma5",
-  ma20: "fill-ma20",
-};
 
 /** 左緣價位刻度的配色(round5 C):高於平盤紅、低於平盤綠、平盤白。
  *  刻度值本身不變 —— 它們本來就是 ±10/8/6/4/2/0% 對應的價位,user 要的是「對應百分比的
