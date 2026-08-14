@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GroupGridView } from "@/components/stock/GroupGridView";
+import { GroupGridView, gridShape } from "@/components/stock/GroupGridView";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
 import type { Group } from "@/lib/watchlist-model";
@@ -119,11 +119,21 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
   });
 });
 
-describe("GroupGridView 群組下拉", () => {
+// SC-3:`<select>` 換成一排 pill(與 StockPage 的「單檔/群組」view pill 同語彙)。
+// 選中態的真相源改成 `aria-pressed`,切換靠 click —— 但**可及名稱契約不變**:
+// pill 列容器保留 `role="group" aria-label="選擇群組"`,StockPage.test.tsx 的
+// 671/713/746/750 四處 `ByLabelText("選擇群組")` 靠它接住(改成別的名字 = 那四條
+// 斷言靜默 vacuous:查不到元素與「群組檢視沒渲染」在 queryBy 下長得一模一樣)。
+describe("GroupGridView 群組切換 pill", () => {
   it("預設第一個群組;成員卡片全數渲染", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
-    const select = screen.getByLabelText("選擇群組") as HTMLSelectElement;
-    expect(select.value).toBe("半導體");
+    expect(
+      screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    // 容器名稱契約 + select 真的走了(留著兩套切換 UI 才是最糟的中間態)
+    const rail = screen.getByLabelText("選擇群組");
+    expect(rail.getAttribute("role")).toBe("group");
+    expect(screen.queryByRole("combobox")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.getByTestId("group-card-2317")).toBeTruthy();
     expect(screen.queryByTestId("group-card-2881")).toBeNull();
@@ -133,7 +143,7 @@ describe("GroupGridView 群組下拉", () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
     await waitFor(() => expect(groupCalls()).toHaveLength(1));
     expect(groupCalls()[0]).toContain("codes=2330,2317");
-    fireEvent.change(screen.getByLabelText("選擇群組"), { target: { value: "金融" } });
+    fireEvent.click(screen.getByRole("button", { name: "金融" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
     expect(groupCalls().some((u) => u.includes("codes=2881"))).toBe(true);
   });
@@ -143,15 +153,85 @@ describe("GroupGridView 群組下拉", () => {
   it("記住的群組已被刪 → fallback 第一個群組", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
-    expect((screen.getByLabelText("選擇群組") as HTMLSelectElement).value).toBe("半導體");
+    expect(
+      screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
   });
 
   it("記住的群組仍在 → 沿用它(不重設回第一個)", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "金融");
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
-    expect((screen.getByLabelText("選擇群組") as HTMLSelectElement).value).toBe("金融");
+    expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
+  });
+});
+
+// SC-1:欄數不再由容器寬 ÷ 15rem 決定,而是由檔數選「最小可容納矩陣」——
+// 同一群組每次打開都是同一個版面,眼睛才記得住哪張卡片在哪。class 必須是**靜態
+// 字面值**(Tailwind JIT 掃原始碼,`grid-cols-${n}` 拼出來的 class 不會被產出)。
+describe("GroupGridView 矩陣佈局(gridShape)", () => {
+  const ROWS2 = "[grid-template-rows:repeat(2,minmax(8rem,1fr))]";
+  const ROWS3 = "[grid-template-rows:repeat(3,minmax(8rem,1fr))]";
+  const ROWS4 = "[grid-template-rows:repeat(4,minmax(8rem,1fr))]";
+  const TABLE: [number, string][] = [
+    // n=0 元件層由空群組空態擋住不會呼叫,函式仍須有定義行為(spec P2-2)
+    [0, `grid-cols-2 ${ROWS2}`],
+    [1, `grid-cols-2 ${ROWS2}`],
+    [4, `grid-cols-2 ${ROWS2}`],
+    [5, `grid-cols-3 ${ROWS2}`],
+    [6, `grid-cols-3 ${ROWS2}`],
+    [7, `grid-cols-3 ${ROWS3}`],
+    [9, `grid-cols-3 ${ROWS3}`],
+    [10, `grid-cols-4 ${ROWS3}`],
+    [12, `grid-cols-4 ${ROWS3}`],
+    [13, `grid-cols-4 ${ROWS4}`],
+    [16, `grid-cols-4 ${ROWS4}`],
+    // >16:固定 4 欄、列高 auto(基準高)往下捲 —— 不再有列軌下限
+    [17, "grid-cols-4"],
+  ];
+
+  for (const [n, expected] of TABLE) {
+    it(`n=${n} → ${expected}`, () => {
+      expect(gridShape(n)).toBe(expected);
+    });
+  }
+
+  it("元件層:2 檔群組 → 2×2 矩陣格線,不走 auto-fill", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+    const grid = screen.getByTestId("group-grid");
+    expect(grid.className).toContain("grid-cols-2");
+    expect(grid.className).toContain(ROWS2);
+    expect(grid.className).toContain("flex-1");
+    expect(grid.className).not.toContain("auto-fill");
+  });
+});
+
+// SC-2:卡片要吃滿中區高度,圖跟著長高。`h-20` 由「唯一高度來源」降為**基準高**
+// (`grow` 的 flex-basis 是 auto)—— 矩陣模式下長高吃滿格,捲動模式維持 80px。
+// 變高後 y 向縮放可達 ~3×,線寬得靠 `vector-effect` 釘在螢幕像素(P1-5)。
+describe("GroupGridView 高度均分 class", () => {
+  it("常態卡片:svg 帶 grow + h-20,價線不隨拉伸變粗", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    const card = await screen.findByTestId("group-card-2330");
+    // SVG 的 `className` 是 SVGAnimatedString,子字串斷言得走 getAttribute(spec P2-1)
+    const svgClass = card.querySelector("svg")?.getAttribute("class") ?? "";
+    expect(svgClass).toContain("grow");
+    expect(svgClass).toContain("h-20");
+    expect(
+      card.querySelector('[data-testid="mini-price"]')?.getAttribute("vector-effect"),
+    ).toBe("non-scaling-stroke");
+  });
+
+  it("無資料佔位也跟著長高(不然整列高度對不齊)", async () => {
+    states["2330"] = state({ no_data: true, minutes: {} });
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    const el = await screen.findByText("無資料");
+    expect(el.className).toContain("grow");
+    expect(el.className).toContain("h-20");
   });
 });
 
