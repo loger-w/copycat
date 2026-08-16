@@ -1,3 +1,14 @@
+## 2026-08-17(mod/ladder-pills-avgpct R6 留尾)
+
+- [ ] **aria-pressed pill 群的單選語意 → radiogroup**(review A3):交易別 pill(PriceLadder)、
+  StockPage 檢視切換、GroupGridView 檔數、OrderPanel 四處同構 `role=group + aria-pressed button`,
+  對 AT 是「四個互不相干的開關」且 tab stop ×4;正解 = sr-only radio + label(單選 / 方向鍵 / roving
+  tabindex 免費)。與 08-14 tablist ARIA 半套條同批處理(樣板級決定,四處一併)。
+- [ ] **零態 `text-ink-dim` 對 `bg-surface` 對比 2.92:1 未達 AA**(review A6):群組平均漲幅 0.00% /
+  stockRow / GroupGridView QuoteCell 零態同口徑;改 `text-ink-muted`(6.06:1)要三處一起,獨立 chore。
+- [ ] 群組平均漲幅**不設覆蓋率門檻**(review C4 auto-default):1/10 檔有成交仍顯示,靠 title「n/N 檔有成交」
+  可查證;若 user 盤前掃側欄覺得誤導,候選 = n < ceil(N/2) 時降 ink-dim。
+
 ## 2026-08-17(mod/flash-arm-lock 留尾)
 
 - [ ] **鎖定態換標的 / 換梯的掛載瞬間禁送窗**(spec E-8 / R-7 / R-8,review 建議 (b)):鎖定拿掉了
