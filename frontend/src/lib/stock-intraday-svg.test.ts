@@ -6,6 +6,7 @@ import {
   buildIntradayGeometry,
   EDGE_LABEL_H,
   edgePriceLabels,
+  hasWindowedMinutes,
   minuteToX,
   overlayLines,
   PAD_Y,
@@ -1093,5 +1094,39 @@ describe("edgePriceLabels(SC-1/SC-3)", () => {
       expect(labels[0]!.y).toBeGreaterThanOrEqual(9);
       expect(labels[0]!.y).toBeLessThanOrEqual(20);
     });
+  });
+});
+
+/** 卡片「尚無成交」佔位的判準(change-spec edge 9 / R2-6)。
+ *
+ *  **不是 `minutes.size === 0`**:盤前只有 08:59、盤後只有 13:31+ 的分鐘同樣落在窗外,
+ *  `windowedEntries` 會濾光 → priceLine 空,而 `size > 0` 讓卡片以為有圖可畫,
+ *  結果掛出一張空圖(或撞進 StockIntradayChart 帶框的早退框 = 卡片內框中框)。 */
+describe("hasWindowedMinutes", () => {
+  const agg = (): MinuteAgg => ({ c: 2_320_000, v: 1, i: 0, o: 1, u: 0, h: null, l: null });
+
+  it("空 Map → false", () => {
+    expect(hasWindowedMinutes(new Map())).toBe(false);
+  });
+
+  it("只有 08:59(盤前試撮)→ false —— size > 0 但窗內無分鐘", () => {
+    const minutes = new Map<number, MinuteAgg>([[X_START_MIN - 1, agg()]]);
+    expect(minutes.size).toBe(1);
+    expect(hasWindowedMinutes(minutes)).toBe(false);
+  });
+
+  it("只有 13:31(盤後)→ false", () => {
+    expect(hasWindowedMinutes(new Map([[X_END_MIN + 1, agg()]]))).toBe(false);
+  });
+
+  it("09:00 → true(窗含兩端)", () => {
+    expect(hasWindowedMinutes(new Map([[X_START_MIN, agg()]]))).toBe(true);
+    expect(hasWindowedMinutes(new Map([[X_END_MIN, agg()]]))).toBe(true);
+  });
+
+  it("吃得下期貨窗(判準與幾何同一把尺)", () => {
+    const minutes = new Map<number, MinuteAgg>([[STKFUT_WINDOW.start, agg()]]);
+    expect(hasWindowedMinutes(minutes, SPOT_WINDOW)).toBe(false);
+    expect(hasWindowedMinutes(minutes, STKFUT_WINDOW)).toBe(true);
   });
 });
