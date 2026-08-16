@@ -268,6 +268,18 @@ function windowedEntries(minutes: Map<number, MinuteAgg>, xw: XWindow): [number,
     .sort(([a], [b]) => a - b);
 }
 
+/** 窗內是否有可畫的分鐘(change-spec edge 9)。
+ *
+ *  **包 `windowedEntries` 而不是讓呼叫端自己比 `minutes.size`**:窗的定義只有這一份,
+ *  呼叫端各寫一次的失效樣態是「盤前只有 08:59 的檔在卡片上掛一張空圖」——
+ *  `size > 0` 為真而 `priceLine` 為空,畫面上是一張有軸沒線的圖,沒有錯誤訊號。 */
+export function hasWindowedMinutes(
+  minutes: Map<number, MinuteAgg>,
+  xw: XWindow = SPOT_WINDOW,
+): boolean {
+  return windowedEntries(minutes, xw).length > 0;
+}
+
 function energyFrom(
   entries: readonly [number, MinuteAgg][],
   size: Size,
