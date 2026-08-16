@@ -1,0 +1,22 @@
+== pytest
+2563 passed, 1 warning in 141.87s (0:02:21)
+== ruff
+All checks passed!
+== pyright
+0 errors, 0 warnings, 0 informations
+== validate
+42/42 PASS
+== vitest
+[2m Test Files [22m [1m[32m112 passed[39m[22m[90m (112)[39m
+[2m      Tests [22m [1m[32m1830 passed[39m[22m[90m (1830)[39m
+== tsc
+tsc exit=0
+== eslint
+eslint exit=0
+== doctor
+[90m  - Ignore pure style preferences, theoretical issues without real impact, missing features, and unrelated pre-existing code.[39m
+[90m  - For confirmed issues that cannot be fixed now, create GitHub issues with the rule, file/line, confidence, impact, and proposed fix.[39m
+[32m✔[39m Scanned 12 files in 2.3s
+[32m✔ No issues found![39m
+[2m  Learn more about fixing issues, setting up CI/CD, and[22m
+[2m  Report issues and star the repository![22m

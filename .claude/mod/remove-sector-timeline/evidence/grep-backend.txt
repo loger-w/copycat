@@ -1,0 +1,151 @@
+=== SC-5 / SC-6 後端死碼掃描(2026-08-16 /mod remove-sector-timeline commit B/C 後)===
+範圍:copycat/ 與 tests/ 的 *.py
+
+=== grep A(英文關鍵字集)===
+$ grep -rn --include=*.py "sector\|chain\|market_limit\|market_kind\|timeline\|rotation\|industry" copycat tests
+copycat/capital/client.py:661:            # route task 取消(cancel-chain):單可能已出手,晚到結果補審計;取消不可吞
+copycat/live/models.py:1:"""tick / 合約資料模型與 TC4 訊息對映(欄位事實:docs/research/2026-07-18-txo-chain-probe.md)."""
+copycat/live/tc4.py:3:實測事實(docs/research/2026-07-18-txo-chain-probe.md):
+copycat/market_breadth.py:7:  `_dedup_sector_map`(含 override 表)/ `_max_tick_date` / `_do_fetch_market_snapshot`
+copycat/market_breadth.py:30:#: 非直覺 sector;此表覆蓋十檔常用權值股。value 必須是 TaiwanStockInfo 的真實
+copycat/market_breadth.py:31:#: `industry_category` 字串(「金融保險」無「業」尾),否則自成幽靈 sector。
+copycat/market_breadth.py:135:def dedup_sector_map(rows: list[dict]) -> dict[str, str]:
+copycat/market_breadth.py:141:    3. stable 兩段排序:industry_category ASC 先、date DESC 後
+copycat/market_breadth.py:142:    4. 每個 stock_id 取第一列;industry 空 → `"其他"`
+copycat/market_breadth.py:148:        sorted(filtered, key=lambda r: r.get("industry_category") or ""),
+copycat/market_breadth.py:159:            cat = row.get("industry_category")
+copycat/market_breadth.py:238:    primary_sector: dict[str, str],
+copycat/market_breadth.py:243:    1. **白名單**:`stock_id in primary_sector` —— 天然排除 tick snapshot 內的
+copycat/market_breadth.py:248:    `primary_sector` 為空(sector map 冷啟動失敗)→ 回空 list,呼叫端以 degraded
+copycat/market_breadth.py:251:    whitelisted = [r for r in rows if r.get("stock_id") in primary_sector]
+copycat/server/breadth_engine.py:48:    dedup_sector_map,
+copycat/server/breadth_engine.py:220:        self._sector_map: dict[str, str] = {}
+copycat/server/breadth_engine.py:364:                # `dedup_sector_map` 對非 dict 列)是裸呼叫(review round-3 CR-4)。
+copycat/server/breadth_engine.py:445:        self._sector_map = dedup_sector_map(rows)
+copycat/server/breadth_engine.py:497:        universe = assemble_universe(rows, self._sector_map, self._disposition)
+copycat/server/breadth_engine.py:592:        if not self._sector_map or not self._disposition_ok:
+copycat/server/verify.py:123:    {"stock_id": "1101", "stock_name": "台泥", "type": "twse", "industry_category": "水泥工業"},
+copycat/server/verify.py:124:    {"stock_id": "2330", "stock_name": "台積電", "type": "twse", "industry_category": "半導體業"},
+copycat/server/verify.py:125:    {"stock_id": "2317", "stock_name": "鴻海", "type": "twse", "industry_category": "其他電子業"},
+copycat/server/verify.py:126:    {"stock_id": "2454", "stock_name": "聯發科", "type": "twse", "industry_category": "半導體業"},
+copycat/server/verify.py:127:    {"stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "industry_category": "半導體業"},
+copycat/server/verify.py:128:    {"stock_id": "3105", "stock_name": "穩懋", "type": "tpex", "industry_category": "半導體業"},
+copycat/server/verify.py:129:    {"stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "industry_category": "ETF"},
+tests/capital/test_client.py:726:    # review B1:route task 取消(cancel-chain)時真錢單可能已送出 —
+tests/capital/test_client.py:1065:def test_balance_chain_keeps_both_kinds_of_same_stock(tmp_path: Path) -> None:
+tests/capital/test_client.py:1177:def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
+tests/capital/test_client.py:1264:def test_balance_chain_without_futures_account_publishes_sec_only(tmp_path: Path) -> None:
+tests/capital/test_client.py:1277:def test_pending_watchdog_publishes_sec_when_chain_stalls(tmp_path: Path) -> None:
+tests/capital/test_client.py:1317:def test_balance_query_guarded_while_chain_in_flight(tmp_path: Path) -> None:
+tests/capital/test_client.py:1372:def test_balance_requeried_after_chain_completes(tmp_path: Path) -> None:
+tests/capital/test_client.py:1389:def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) -> None:
+tests/fixtures/record_breadth_parity.py:8:   (`_dedup_sector_map` → 白名單 → `filter_universe` → `compute_breadth`)算出
+tests/fixtures/record_breadth_parity.py:9:   expected —— 這是 copycat 側 `dedup_sector_map` → `assemble_universe` →
+tests/fixtures/record_breadth_parity.py:62:_STOCK_INFO_FIELDS = ("stock_id", "stock_name", "type", "industry_category", "date")
+tests/fixtures/record_breadth_parity.py:127:        _dedup_sector_map,
+tests/fixtures/record_breadth_parity.py:132:    primary_sector = _dedup_sector_map(stock_info)
+tests/fixtures/record_breadth_parity.py:138:    stock_universe = [r for r in snapshot if r.get("stock_id") in primary_sector]
+tests/live/test_live_models.py:14:# spike 真實樣本(docs/research/2026-07-18-txo-chain-probe.md)
+tests/server/test_app.py:140:    def test_contracts_after_select_full_chain_no_spot(self) -> None:
+tests/server/test_breadth_engine.py:41:        "industry_category": "半導體業",
+tests/server/test_breadth_engine.py:48:        "industry_category": "水泥工業",
+tests/server/test_breadth_engine.py:55:        "industry_category": "其他電子業",
+tests/server/test_breadth_engine.py:62:        "industry_category": "半導體業",
+tests/server/test_breadth_engine.py:69:        "industry_category": "ETF",
+tests/server/test_breadth_engine.py:76:        "industry_category": "其他",
+tests/server/test_breadth_engine.py:476:    async def test_empty_sector_map_is_degraded(self, tmp_path: Path) -> None:
+tests/server/test_breadth_fetch.py:93:        {"industry_category": "半導體業", "stock_id": f"{1000 + i}", "stock_name": "X", "type": "twse"}
+tests/server/test_breadth_routes.py:46:        "industry_category": "水泥工業",
+tests/server/test_breadth_routes.py:53:        "industry_category": "半導體業",
+tests/server/test_breadth_routes.py:60:        "industry_category": "半導體業",
+tests/server/test_breadth_routes.py:359:        """舊五元組(repo 外的側車樣板還帶著已刪的 industry_chain 槽)同樣要炸。"""
+tests/server/test_breadth_routes.py:507:    """`/api/market/sector*` 已隨類股強弱 subtab 一併刪除(2026-08-16 R1)→ 404。
+tests/server/test_breadth_routes.py:513:    def test_sector_state_is_404(self, tmp_path: Path) -> None:
+tests/server/test_breadth_routes.py:515:            assert c.get("/api/market/sector").status_code == 404
+tests/server/test_breadth_routes.py:517:    def test_sector_members_is_404(self, tmp_path: Path) -> None:
+tests/server/test_breadth_routes.py:519:            r = c.get("/api/market/sector/members", params={"industry": "半導體"})
+tests/server/test_main_wiring.py:146:    專用 fail 目錄的唯一存在理由是「chain 快取檔跨 run 持久會吸收掉注入」,而 chain
+tests/server/test_main_wiring.py:167:    assert leftover.exists()  # 開機清檔的行為已隨 chain 一併移除
+tests/server/test_verify.py:35:    dedup_sector_map,
+tests/server/test_verify.py:159:    universe = assemble_universe(snapshot_rows, dedup_sector_map(info_rows), watch_list)
+tests/test_market_breadth.py:22:    dedup_sector_map,
+tests/test_market_breadth.py:65:# build_type_map / build_name_map / dedup_sector_map(neigui finmind_realtime 搬)
+tests/test_market_breadth.py:98:def test_dedup_sector_map_override_and_tie_break() -> None:
+tests/test_market_breadth.py:100:        # override 命中 → 忽略 row 上的 industry_category
+tests/test_market_breadth.py:101:        {"stock_id": "2330", "type": "twse", "industry_category": "光電業", "date": "2026-01-01"},
+tests/test_market_breadth.py:102:        # 同 date tie → industry ASC(光 U+5149 < 電 U+96FB)
+tests/test_market_breadth.py:103:        {"stock_id": "1234", "type": "twse", "industry_category": "電子工業", "date": "2026-01-01"},
+tests/test_market_breadth.py:104:        {"stock_id": "1234", "type": "twse", "industry_category": "光電業", "date": "2026-01-01"},
+tests/test_market_breadth.py:105:        # date DESC 優先於 industry ASC(水 U+6C34 < 食 U+98DF,但 02-01 較新)
+tests/test_market_breadth.py:106:        {"stock_id": "4321", "type": "twse", "industry_category": "水泥工業", "date": "2026-01-01"},
+tests/test_market_breadth.py:107:        {"stock_id": "4321", "type": "twse", "industry_category": "食品工業", "date": "2026-02-01"},
+tests/test_market_breadth.py:108:        # industry 空 → 其他
+tests/test_market_breadth.py:109:        {"stock_id": "5678", "type": "tpex", "industry_category": None, "date": "2026-01-01"},
+tests/test_market_breadth.py:111:        {"stock_id": "9999", "type": "otc", "industry_category": "電子工業", "date": "2026-01-01"},
+tests/test_market_breadth.py:113:    assert dedup_sector_map(rows) == {
+tests/test_market_breadth.py:121:def test_primary_industry_override_table_shape() -> None:
+tests/test_market_breadth.py:123:    # bug sector-override-phantom:金融保險無「業」尾(TaiwanStockInfo 真實字串)
+tests/test_market_breadth.py:228:    primary_sector = {"2330": "半導體業", "0050": "其他", "2317": "其他電子業"}
+tests/test_market_breadth.py:229:    out = assemble_universe(rows, primary_sector, watch_list={"2317"})
+tests/test_market_breadth.py:235:def test_assemble_universe_empty_sector_map_removes_all() -> None:
+tests/test_market_breadth.py:711:    primary_sector = dedup_sector_map(stock_info)
+tests/test_market_breadth.py:716:    universe = assemble_universe(fixture["snapshot_rows"], primary_sector, watch_list)
+
+命中數:87
+
+=== grep B(中文死註解掃描)===
+$ grep -rn --include=*.py "廣度事件\|類股\|輪動\|時間軸\|鎖板事件\|產業鏈\|對帳 seed\|attach_signal_hub\|五元組\|五個\|五支\|清檔\|market-verify-fail\|VERIFY_FAIL_DATA_DIR" copycat tests
+copycat/live/river_backfill.py:6:語意與參數已被四個呼叫點綁住,不在本輪動它;共用化條件記 `docs/next-time.md`)。
+copycat/live/river_state.py:14:時間軸上最後那一分鐘,而回補的寫入順序與時間序無關。`delta` 反過來只帶**最後寫入**的那
+copycat/live/signal_state.py:6:  (台北牆鐘,恆單調);`SignalEvent.time` 只放 tick 時刻,純顯示用。兩條時間軸
+copycat/market_breadth.py:244:       指數 row(001 加權 / 036 類股 等 3 位代號,TaiwanStockInfo 未收錄)。
+copycat/server/app.py:554:                    stock.attach_signal_hub(hub)
+copycat/server/stock_engine.py:298:    def attach_signal_hub(self, hub: SignalSink) -> None:
+copycat/server/stock_engine.py:1128:        """入列回補 job 的**唯一**接點(五個產出點共用:set_main / rollover stage2 /
+tests/live/test_signal_state.py:3:時鐘一律注入 `_Clock`(design §3.1 時間軸單一化):窗 / elapsed / cooldown / rearm
+tests/server/test_breadth_routes.py:359:        """舊五元組(repo 外的側車樣板還帶著已刪的 industry_chain 槽)同樣要炸。"""
+tests/server/test_breadth_routes.py:507:    """`/api/market/sector*` 已隨類股強弱 subtab 一併刪除(2026-08-16 R1)→ 404。
+tests/server/test_main_wiring.py:167:    assert leftover.exists()  # 開機清檔的行為已隨 chain 一併移除
+tests/server/test_stock_engine.py:1532:        engine.attach_signal_hub(hub)
+tests/server/test_stock_engine.py:1547:        engine.attach_signal_hub(hub)
+tests/server/test_stock_engine.py:1570:        engine.attach_signal_hub(hub)
+tests/server/test_stock_engine.py:1585:        engine.attach_signal_hub(hub)
+tests/server/test_stock_engine.py:1597:        engine.attach_signal_hub(hub)
+tests/server/test_stock_engine.py:1615:        engine.attach_signal_hub(hub)
+tests/server/test_stock_engine.py:1636:        engine.attach_signal_hub(hub)
+
+命中數:18
+
+
+=== 殘留命中歸類(要刪但沒刪 = 0)===
+
+[grep A]
+- copycat/market_breadth.py:7,30,31,135,141-159,238-251 `dedup_sector_map` / `primary_sector`
+  / `industry_category` → W-1 家數帶 R2 核心(名稱含 sector 但職責是全市場廣度 universe
+  白名單),保留。
+- copycat/server/breadth_engine.py:48,220,364,445,497,592 `_sector_map` / `dedup_sector_map`
+  → 同上(universe 白名單 + `_stale` degraded 判定),保留。
+- copycat/server/verify.py:123-129 `_BREADTH_INFO_ROWS` 的 `industry_category` 欄 → W-7
+  (fake TaiwanStockInfo 的真實欄名,與已刪的 `_BREADTH_CHAIN` 是兩份),保留。
+- copycat/capital/client.py:661、tests/capital/test_client.py:726,1065-1389 `cancel-chain` /
+  `balance chain` → W-9 群益下單鏈,語意無關,保留。
+- copycat/live/models.py:1、live/tc4.py:3、tests/live/test_live_models.py:14、
+  tests/server/test_app.py:140 `txo-chain-probe` / `full_chain` → W-9 TXO option chain,保留。
+- tests/fixtures/record_breadth_parity.py:8-138 → W-10 R2 parity oracle 錄製腳本,保留。
+- tests/server/test_breadth_engine.py:41-76,476、test_breadth_fetch.py:93、
+  test_breadth_routes.py:46-60、test_verify.py:35,160、test_market_breadth.py:22-235,711
+  → 家數帶 fixture 的 `industry_category` 欄與 sector map 測試(W-1/W-10),保留。
+- tests/server/test_breadth_routes.py:359,507-519、test_main_wiring.py:146,167
+  → **本次新增/改寫**的刪除鎖(五元組要炸 / sector 兩 URL 404 / 不再清檔),保留。
+
+[grep B]
+- copycat/live/river_backfill.py:6 「不在本輪動它」→ 「本輪」+「動」的假命中,保留。
+- copycat/live/river_state.py:14、live/signal_state.py:6、tests/live/test_signal_state.py:3
+  「時間軸」= time axis(江波圖 / detector 時鐘),與已刪的訊號時間軸 subtab 無關,保留。
+- copycat/market_breadth.py:244 「036 類股」= 台灣證交所類股指數代號(universe 排除規則的
+  舉例),是市場事實不是已刪機制,保留。
+- copycat/server/app.py:554、server/stock_engine.py:298、tests/server/test_stock_engine.py
+  (7 處)`attach_signal_hub` → W-3 **StockEngine 同名不同 class** 的個股訊號掛點,保留。
+- copycat/server/stock_engine.py:1128 「五個產出點」= 回補 job 的入列點計數,與 fetcher
+  元組無關,保留。
+- tests/server/test_breadth_routes.py:359,507、test_main_wiring.py:167 → 同 grep A 末條。

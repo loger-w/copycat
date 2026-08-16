@@ -1,0 +1,94 @@
+=== grep A(英文):sector|chain|market_limit|market_kind|timeline|rotation|industry|isMarketKind|mergeByFamily|FAMILY_CAP|MarketMode  範圍 frontend/src ===
+cwd=/c/side-project/copycat/.claude/worktrees/rst-fe  branch=mod/remove-sector-timeline-fe  date=2026-08-16T16:18:04+08:00
+frontend/src/App.test.tsx:453:      "copycat-sector-open",
+frontend/src/App.test.tsx:454:      "copycat-signal-timeline-open",
+frontend/src/App.test.tsx:490:    // 負例 settle 點:等 health 真的打過再把 promise chain 排乾
+frontend/src/components/index/IndexPage.test.tsx:317:  it("(s2) 殘值 sector(已刪的 subtab)→ 落回漲跌停", async () => {
+frontend/src/components/index/IndexPage.test.tsx:318:    window.localStorage.setItem(INDEX_SUBTAB_KEY, "sector");
+frontend/src/components/index/IndexPage.test.tsx:327:  it("(s2b) 殘值 timeline(已刪的 subtab)→ 落回漲跌停", async () => {
+frontend/src/components/index/IndexPage.test.tsx:328:    window.localStorage.setItem(INDEX_SUBTAB_KEY, "timeline");
+frontend/src/components/index/MarketChart.tsx:25:import { type MarketKey, type MarketMode, marketMinutesOf } from "@/lib/timeframe";
+frontend/src/components/index/MarketChart.tsx:239:  mode: MarketMode;
+frontend/src/components/index/MarketPane.tsx:13:  isMarketMode,
+frontend/src/components/index/MarketPane.tsx:17:  type MarketMode,
+frontend/src/components/index/MarketPane.tsx:268:  const [mode, setModeState] = useState<MarketMode>(() => {
+frontend/src/components/index/MarketPane.tsx:273:      isMarketMode(savedMode) ? savedMode : "intraday",
+frontend/src/components/index/MarketPane.tsx:295:  function selectMode(next: MarketMode): void {
+frontend/src/components/OrderPanel.tsx:41:  const chain = useTxoContracts();
+frontend/src/components/OrderPanel.tsx:54:  const chainSymbols = chain.data?.contracts ?? [];
+frontend/src/components/OrderPanel.tsx:55:  const symbols = chainSymbols.length > 0 ? chainSymbols : (contracts ?? []).map((c) => c.symbol);
+frontend/src/components/stock/WatchlistManagerDialog.tsx:87:   *  所以動作改傳 `(base) => next` transform,排進 promise chain:輪到時以「最新已知
+frontend/src/components/stock/WatchlistManagerDialog.tsx:94:  const chainRef = useRef<Promise<void> | null>(null);
+frontend/src/components/stock/WatchlistManagerDialog.tsx:114:    chainRef.current = (chainRef.current ?? Promise.resolve())
+frontend/src/components/stock/WatchlistManagerDialog.tsx:128:        // 唯一收斂點,chain 保證回到 fulfilled(review C-1:任何一步 throw 若留在
+frontend/src/components/VersionDriftBadge.test.tsx:52:/** 負例的 settle 點(design R9):先確認 fetch 真的發生,再把 promise chain 排乾
+frontend/src/components/VersionDriftBadge.test.tsx:165:  /** 推進一輪 60s 輪詢並把 promise chain 排乾。
+frontend/src/hooks/useMarketBars.ts:5:import { type MarketKey, type MarketMode, tfOf } from "@/lib/timeframe";
+frontend/src/hooks/useMarketBars.ts:46:export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
+frontend/src/hooks/useServerBuild.test.tsx:53:/** fake timers 下把 promise chain 排乾(fetch mock 回的是已解決的 promise)。 */
+frontend/src/lib/constants.ts:21: *  `copycat-limit-list-open` / `copycat-sector-open` / `copycat-signal-timeline-open`)——
+frontend/src/lib/constants.ts:30:  "copycat-sector-open",
+frontend/src/lib/constants.ts:31:  "copycat-signal-timeline-open",
+frontend/src/lib/timeframe.ts:10:export type MarketMode =
+frontend/src/lib/timeframe.ts:18:export const MARKET_MODES: readonly (readonly [MarketMode, string])[] = [
+frontend/src/lib/timeframe.ts:26:const DAILY_MODES = new Set<MarketMode>(["day", "week", "month"]);
+frontend/src/lib/timeframe.ts:29:export function marketMinutesOf(mode: MarketMode): number {
+frontend/src/lib/timeframe.ts:36:export function tfOf(mode: MarketMode): "1" | "D" | "W" | "M" | null {
+frontend/src/lib/timeframe.ts:50:export function isModeAvailable(key: MarketKey, mode: MarketMode): boolean {
+frontend/src/lib/timeframe.ts:58:export function defaultMode(key: MarketKey): MarketMode {
+frontend/src/lib/timeframe.ts:63:export function coerceMode(key: MarketKey, mode: MarketMode): MarketMode {
+frontend/src/lib/timeframe.ts:71:export function isMarketMode(v: string | null): v is MarketMode {
+
+=== grep B(中文):廣度事件|類股|輪動|時間軸|鎖板事件|產業鏈  範圍 frontend/src ===
+frontend/src/components/index/IndexPage.test.tsx:314:  // (s2)(s2b) 2026-08-16 刪除「類股強弱」/「訊號時間軸」兩顆 subtab 後,舊使用者的
+frontend/src/components/stock/StockChart.futconverge.test.tsx:8: *  這一檔就是補那個時間軸:把 `StockIntradayChart` 換成會記下每次 `stkfut` 的 stub,
+frontend/src/components/stock/StockIntradayChart.test.tsx:213:    // 左緣價位刻度共 11 個(不能用 x="2" 選 —— 會撞到 09:00 的時間軸標籤 toX(540)+2)
+frontend/src/components/stock/StockIntradayChart.test.tsx:272:    // 「底部沿時間軸的量 bar」。此處 ACCUM 的 ticks 為空所以現在一根都沒有,但把它
+frontend/src/components/stock/StockIntradayChart.test.tsx:345:  // 🔴 SC-4:在圖上拖曳是「拉一段來看」的自然手勢,不該把時間軸 / 價位刻度 / 內外盤文字反白
+frontend/src/components/stock/StockIntradayChart.tsx:784:    // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
+frontend/src/hooks/useSignalFeed.test.tsx:124:// 2026-08-16:分族(全市場廣度事件 vs 自選訊號)整套刪除後,feed 只剩單一 baseline
+frontend/src/index.css:18:  --color-time: #f0b429; /* 江波圖時間軸黃(語意獨立於 ma5;同色值是刻意的) */
+frontend/src/lib/stock-intraday-svg.ts:321:  // 間接擋下的,而本輪動的正是決定 yBottom 的那條路,不能再依賴它。
+
+=== 殘留命中逐條歸類(全部「無關保留」;對照 current-state §4 與 change-spec §2 白名單) ===
+
+[grep A]
+1. App.test.tsx:453-454  "copycat-sector-open" / "copycat-signal-timeline-open"
+   → 無關保留:W-6 `ORPHAN_STORAGE_KEYS` 六鍵回歸測試。這兩支是 2026-08-14 subtab 改版
+     廢止的**展開殼鍵**(與本次刪的 subtab 值域無關),一個都不刪、不新增。
+2. App.test.tsx:460,462  "copycat-index-subtab"
+   → 無關保留:`INDEX_SUBTAB_KEY` 本身是活鍵,測「purge 不得順手清掉它」。
+     (原本以殘值 "sector" 當佔位值,本 commit 改為 "corr" —— 純佔位,測試意圖不變。)
+3. App.test.tsx:490  "promise chain"
+   → 無關保留:W-9 promise chain(非 industry chain)。
+4. IndexPage.test.tsx:317-318,327-328  "sector" / "timeline"
+   → **刻意保留**:SC-1 的殘值 fallback 測試,把已刪 subtab 的舊 localStorage 值當非法值,
+     鎖「落回漲跌停、不白屏」。字面值消失就等於這條遷移路徑沒有測試。
+5. MarketChart.tsx:25,239 / MarketPane.tsx:13,17,268,273,295 / useMarketBars.ts:5,46 /
+   timeframe.ts:10,18,26,29,36,50,58,63,71  `MarketMode` / `isMarketMode`
+   → 無關保留:W-9 同名撞名 —— `timeframe.ts::MarketMode` 是 K 線刻度(intraday/day/week/
+     month),與已刪的 `useSignalFeed::MarketMode`("include"|"exclude")毫無關係。
+6. OrderPanel.tsx:41,54,55  `chain` / `chainSymbols`
+   → 無關保留:W-9 TXO option chain(合約鏈),非 industry chain。
+7. WatchlistManagerDialog.tsx:87,94,114,128 / VersionDriftBadge.test.tsx:52,165 /
+   useServerBuild.test.tsx:53  "promise chain" / `chainRef`
+   → 無關保留:W-9 promise chain 串行佇列。
+8. constants.ts:21,30,31  孤兒鍵字面值與其 docstring
+   → 無關保留:同第 1 條(W-6)。
+
+[grep B]
+9.  IndexPage.test.tsx:314  「類股強弱」/「訊號時間軸」
+    → **刻意保留**:第 4 條那兩支 fallback 測試的由來註解(說明殘值從何而來)。
+10. useSignalFeed.test.tsx:124  「全市場廣度事件」
+    → **刻意保留**:記錄「分族整套已於 2026-08-16 刪除、feed 只剩單一 baseline」的
+      不變式理由;是新契約的說明,不是舊機制的殘留描述。
+11. StockChart.futconverge.test.tsx:8 / StockIntradayChart.test.tsx:213,272,345 /
+    StockIntradayChart.tsx:784 / index.css:18  「時間軸」
+    → 無關保留:圖表 X 軸(time axis),與已刪的「訊號時間軸 subtab」同詞不同義。
+12. stock-intraday-svg.ts:321  「本輪動的正是…」
+    → 無關保留:偶然子字串(「本輪」+「動的」),非「輪動」語意。
+
+結論:SC-2 前端零引用達成(`SectorSection` / `SignalTimelineSection` / `sector-model` /
+`isMarketKind` / `mergeByFamily` / `FAMILY_CAP` / `market_limit_*` 全庫零命中,
+`useSignalFeed` 只打裸 `/api/stock/signals/today`);SC-6 殘留命中全部歸類為無關保留或
+刻意保留,無死碼。
