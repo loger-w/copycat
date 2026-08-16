@@ -25,14 +25,22 @@ interface StateOver {
   meta?: unknown;
   no_data?: boolean;
   backfilling?: boolean;
+  vp?: Record<string, [number, number, number]>;
 }
 
+/** group-state 的**後端 wire 形**(字串鍵 + 緊湊陣列),不是 hook 產出的 Map ——
+ *  本檔走真 `useGroupSnapshots`,四個加鍵(vwap/high/low/vp)刻意在這裡以原始 JSON
+ *  形給,讓「後端鍵 → hook 解析 → accum → svg」整條線由這一份 fixture 串起來。 */
 function state(over: StateOver = {}) {
   return {
     minutes: { "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } },
     meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
     no_data: false,
     backfilling: false,
+    vwap: 2_380_000,
+    high: 2_385_000,
+    low: 2_375_000,
+    vp: { "2380000": [10, 7, 3] } as Record<string, [number, number, number]>,
     ...over,
   };
 }
@@ -390,6 +398,22 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
       expect(screen.getByTestId("group-card-2330").textContent).toContain("無資料"),
     );
     expect(screen.getByTestId("group-card-2317").textContent).toContain("無資料");
+  });
+});
+
+// review A-p2-1:後端加鍵 → hook 解析 → accum → svg 這條線,原本每一段各有測試而
+// **整條沒有任何一條**(toggle 測試 mock 掉 hook 直接餵 Map,parity fixture 只管折法)。
+// 中間任一段漏帶的失效樣態是「卡片上少了 VP 條 / VWAP 標」—— 圖照樣畫得出來,
+// 沒有型別錯誤也沒有 console 訊息。
+describe("GroupGridView 後端 vp/vwap 全鏈(不 mock hook)", () => {
+  it("wire 形 vp/vwap → 卡片畫出 VP 條與右緣 VWAP 價位標", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const card = await screen.findByTestId("group-card-2330");
+    // vp / vwap 兩個 toggle 預設都是開的(useChartToggles 預設),localStorage 已清空
+    await waitFor(() =>
+      expect(card.querySelectorAll('[data-testid="vp-bar"]').length).toBeGreaterThanOrEqual(1),
+    );
+    expect(card.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
   });
 });
 
