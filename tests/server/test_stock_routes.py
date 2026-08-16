@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import threading
+import time
 from pathlib import Path
 from typing import cast
 
@@ -303,6 +305,68 @@ class TestOverlayRoute:
             r = client.get("/api/stock/overlay/2330")
             assert r.status_code == 200
             assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
+
+
+class _GatedDailyBarsSource(FakeStockSource):
+    """`fetch_daily_bars` 記併發峰值,且**等到本批到齊 `cap` 個才放行**。
+
+    純 `sleep` + 計數在慢機器上會退化成「剛好沒重疊」的假綠(峰值 1 也算通過)。
+    等待條件讓上限變成可觀察的終態:有節流時恰好 4 個同時卡在門內,沒節流時 8 個
+    一起進來(峰值 8)。`timeout` 是不讓測試在真的壞掉時吊死,不是正常路徑。
+    """
+
+    def __init__(self, cap: int = 4) -> None:
+        super().__init__()
+        self._cap = cap
+        self._cond = threading.Condition()
+        self.in_flight = 0
+        self.peak = 0
+
+    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+        with self._cond:
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            self._cond.notify_all()
+            self._cond.wait_for(lambda: self.in_flight >= self._cap, timeout=2.0)
+        try:
+            time.sleep(0.01)  # 讓下一批有機會與本批重疊(峰值才量得出來)
+            return []
+        finally:
+            with self._cond:
+                self.in_flight -= 1
+                self._cond.notify_all()
+
+
+class TestOverlayConcurrencyGate:
+    """AD-5 amendment(review R5):`cdp` 預設開,進群組會對 ≤50 檔同時打 overlay,
+    而 `daily_bars` 走 `to_thread` 無上限、共用同一條 TC4 歷史通道。
+
+    節流刻意放在 **route 層**而不是 `engine.daily_bars`:後者另有 `signal_hub` 的
+    basis 取數在用,擋在引擎會連訊號的 basis 一起拖慢(round 2 R2-3)。
+    """
+
+    def test_daily_bars_in_flight_capped_at_four(self, tmp_path: Path) -> None:
+        source = _GatedDailyBarsSource()
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=source,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            throttle_secs=0.01,
+        )
+        codes = [str(9000 + i) for i in range(8)]  # 相異碼:cache 不得吃掉併發
+        results: dict[str, int] = {}
+        with BootedClient(app, raise_server_exceptions=False) as client:
+
+            def _hit(code: str) -> None:
+                results[code] = client.get(f"/api/stock/overlay/{code}").status_code
+
+            threads = [threading.Thread(target=_hit, args=(c,)) for c in codes]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=15)
+        assert list(results.values()) == [200] * 8
+        assert source.peak == 4, f"overlay 併發上限應為 4,實測峰值 {source.peak}"
 
 
 class TestStateRoute:
