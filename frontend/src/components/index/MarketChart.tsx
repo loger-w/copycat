@@ -65,12 +65,17 @@ function labelKey(l: RightEdgeLabel): string {
 }
 
 /** 右緣標籤帶的上下界。與 yTicks 的夾制同值(`[8, height − 14]`)—— 兩處各寫一次的話,
- *  同一個角落的兩種文字會夾制到不同位置。 */
-const LABEL_BOUNDS = { top: 8, bottom: SIZE.height - 14 };
+ *  同一個角落的兩種文字會夾制到不同位置。**吃 height 參數**:圖高改由 caller 指派後
+ *  寫死 `SIZE.height` 會讓標籤帶停在 220 那條線上,高圖的右緣文字全擠在上半部。 */
+function labelBounds(height: number): { top: number; bottom: number } {
+  return { top: 8, bottom: height - 14 };
+}
 
 interface IntradayProps {
   name: string;
   s: IndexSeries;
+  /** viewBox 單位的圖高;未給 → 220(見 `MarketChart.height` 的 JSDoc)。 */
+  height?: number;
   /** 疊線只做加權(櫃買無日 K 來源,已拍板跳過)—— 這個判別子同時決定 toggle 反灰文案 */
   marketKey: MarketKey;
   toggles: ChartToggles;
@@ -84,13 +89,17 @@ interface IntradayProps {
 function IntradayChart({
   name,
   s,
+  height,
   marketKey,
   toggles,
   onToggle,
   overlay,
   overlayError,
 }: IntradayProps) {
-  const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, SIZE);
+  // 寬恆定(x 是固定時間域),只有高隨容器剩餘空間走 —— 幾何、刻度夾制、viewBox
+  // 三處必須同源同高,分別寫死會讓線畫在一個高度、文字夾制在另一個高度。
+  const size = { width: SIZE.width, height: height ?? SIZE.height };
+  const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, size);
   const isTwse = marketKey === "TWSE";
   // 可用性同個股語意:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰
   const cdpAvailable =
@@ -114,11 +123,12 @@ function IntradayChart({
   const on = { cdp: toggles.cdp && cdpAvailable, ma: toggles.ma && maAvailable };
   const oLines = overlay !== null && isTwse ? overlayLines(overlay, g, on) : [];
   const pegs = overlay !== null && isTwse ? outOfDomainLevels(overlay, g, on) : [];
+  const bounds = labelBounds(size.height);
   const labels = rightEdgeLabels({
     ref: s.ref !== null ? { y: g.refY, text: `昨收 ${fmt(s.ref)}` } : null,
     oLines,
     outOfDomain: pegs,
-    bounds: LABEL_BOUNDS,
+    bounds,
   });
 
   return (
@@ -145,7 +155,7 @@ function IntradayChart({
         ))}
       </div>
       <svg
-        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
+        viewBox={`0 0 ${size.width} ${size.height}`}
         className="w-full"
         role="img"
         aria-label={`${name}分時走勢`}
@@ -156,13 +166,13 @@ function IntradayChart({
               x1={toX(minute)}
               x2={toX(minute)}
               y1={0}
-              y2={SIZE.height - 12}
+              y2={size.height - 12}
               className="stroke-line"
               strokeWidth={0.4}
             />
             <text
               x={toX(minute) + 2}
-              y={SIZE.height - 2}
+              y={size.height - 2}
               className="fill-ink-dim"
               fontSize="0.625rem"
             >
@@ -184,7 +194,7 @@ function IntradayChart({
             key={t.priceMilli}
             data-testid="index-ytick"
             x={2}
-            y={Math.min(Math.max(t.y - 2, 8), SIZE.height - 14)}
+            y={Math.min(Math.max(t.y - 2, bounds.top), bounds.bottom)}
             className="fill-ink-dim"
             fontSize="0.625rem"
           >
@@ -247,6 +257,12 @@ interface Props {
   /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
    *  gate 停(review round-2 XR-4);未給時預設 true。 */
   active?: boolean;
+  /** 圖高,單位是 **viewBox 單位**不是 px(§4.1 CS-1 口徑):caller(`MarketPane`)
+   *  已經扣掉 figure / toggle 列的 chrome,並用「viewBox 寬 ÷ 容器寬」把 px 反解成
+   *  viewBox 單位。**刻意無預設值** —— 兩條分支的 fallback 不同:intraday 未給 → 220
+   *  (本檔的 `SIZE.height`),candle 未給 → 直接透傳 undefined 讓 `CandleChart` 用它
+   *  自己的 578。在這裡給一個預設,就等於替 CandleChart 決定了它的高。 */
+  height?: number;
 }
 
 /** 大盤主圖:分時走勢 or 蠟燭圖 + 一行來源/涵蓋期間 meta(SC-4/5/6)。 */
@@ -258,6 +274,7 @@ export function MarketChart({
   toggles,
   onToggle,
   active = true,
+  height,
 }: Props) {
   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
   const minutes = marketMinutesOf(mode);
@@ -278,6 +295,7 @@ export function MarketChart({
       <IntradayChart
         name={name}
         s={series}
+        height={height}
         marketKey={marketKey}
         toggles={toggles}
         onToggle={onToggle}
@@ -325,6 +343,7 @@ export function MarketChart({
         showBb={toggles.bb}
         onToggleBb={(v) => onToggle("bb", v)}
         showVolume={meta.volume}
+        height={height}
       />
       <p data-testid="market-meta" className="mt-1 font-mono text-xs text-ink-dim">
         {SOURCE_TEXT[meta.source] ?? meta.source} · {coverage}
