@@ -1138,6 +1138,38 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
     expect(name.compareDocumentPosition(avg) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(avg.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(headerOf("觀察")).getByText("+1.50%").className).toContain("text-bull");
+    // 可及名稱 / title(review A4 / C3 / C4):分母與檔數是兩個母體,hover 與 SR 都要分得出
+    expect(avg.getAttribute("aria-label")).toBe("平均漲幅 +2.59%");
+    expect(avg.getAttribute("title")).toBe("平均漲幅 +2.59%(1/2 檔有成交)");
+    expect(main.getAttribute("aria-expanded")).toBe("true"); // header 仍是同一顆 button
+  });
+
+  it("試撮檔入分母 → title 註明含 N 檔試撮(review C3)", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        quotes={quotesFor({ "2330": { trial: true } })}
+      />,
+    );
+    await waitGroups();
+    expect(within(headerOf("主力")).getByText("+2.59%").getAttribute("title")).toBe(
+      "平均漲幅 +2.59%(1/2 檔有成交,含 1 檔試撮)",
+    );
+  });
+
+  it("tone 以顯示精度判(review C5):平均 -0.003 → 顯示「0.00%」灰字(四捨五入到顯示精度後無號),不上綠", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        quotes={quotesFor({ "2330": { p: 2_380_000, chg_pct: -0.003 } })}
+      />,
+    );
+    await waitGroups();
+    const z = within(headerOf("主力")).getByText("0.00%");
+    expect(z.className).toContain("text-ink-dim");
+    expect(z.className).not.toContain("text-bear");
   });
 
   it("負值綠字;零 = ink-dim", async () => {
