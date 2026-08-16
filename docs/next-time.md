@@ -1,4 +1,26 @@
-﻿## 2026-08-16(mod/trading-calendar 留尾)
+## 2026-08-17(mod/group-grid-full-chart R4 留尾)
+
+- [ ] **群組圖牆真 TC4 層待 prod 重啟 + 盤中 user 過目**(PR 試用指引):卡片單檔同款圖(VWAP 標 /
+  VP+POC / 高低 / CDP·MA)、圖牆頂 toggle 列同步、點卡片只換閃電目標。盤中順量:冷 cache
+  進群組 overlay 真耗時(route Semaphore(4)+ 15s 逾時降級)、50 檔 group-state 真 payload
+  (fake 17 檔 319 KB → 換算 940 KB;上界 1.5 MB)、liveP 每秒真機 paint 成本(fake 量到 JS
+  longtask 0,paint 未含)。
+- [ ] **1080p 4×4 卡片刻度互疊**(SC-1-4x4-1080p 截圖):卡 266×182 px 時左緣 11 條 y 刻度成團、
+  右緣 CDP/MA 標籤疊。R2-1 決議不動共用 ChartStatic(W-1);候選 = card 變體 y 刻度減量(±10/6/2 三條)
+  或 chrome 依可用高分級。user 實機 2560 寬 4×4(430×262)可讀。
+- [ ] **群組檢視點卡片仍拉全量 tape snapshot**(review B7):`/api/stock/state/{code}` 含整份 ticks
+  而群組檢視無主圖讀者;候選 `?tape=0` 或群組檢視輕量換檔(W-4 要求 onSelect 仍換訂閱)。
+- [ ] **冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
+  balance / group-state 最大延遲。
+- [ ] **>20k tick 日單檔頁 vp 偏小**(review R2-5):單檔頁 vp 折自已被 deque(20k)截斷的 snapshot
+  ticks,後端增量 vp 全日 → 該類日子卡片與單檔頁 POC 可能不同;parity fixture 只鎖同輸入折法。
+- [ ] **react-doctor `prefer-tag-over-role` GroupGridView 卡片**:刻意 div role=button(button 內容
+  模型放不下 chart 區塊),triage 為本例誤報未關規則;若再有同類需求再評估 config。
+- [x] ~~mini 圖沿用 ±10% 漲跌停域,1% 波動僅 ~3.4px~~ **2026-08-17 隨 R4 換單檔同款圖消滅**(同域同尺,
+  1:1 像素;2026-08-06 group-grid 條目連帶勾銷)。
+- 文案殘留:`GroupGridView.test.tsx` 仍有「mini 分時圖」字樣的 describe 敘述(行為無涉);順手時改。
+
+## 2026-08-16(mod/trading-calendar 留尾)
 
 - [ ] **TXO 面的 `backfill_date` 仍是手動 env**:`_default_source` / `session_rollover` /
   `live/tc4.py:404` 沒接日曆 —— TXO 有夜盤 session 語意,自動填一個固定日會把 rollover
@@ -323,7 +345,7 @@
 
 ## 2026-08-06(group-grid 題5 收尾留尾巴)
 
-- [ ] **群組檢視待 user 過目**(PR #27 試用指引):個股頁「單檔｜群組」pill、mini 分時圖牆、
+- [ ] **群組檢視待 user 過目**(2026-08-17 註:mini 圖已由 R4 換成單檔同款,±10% 域議題消滅,過目改看 R4 條目)(PR #27 試用指引):個股頁「單檔｜群組」pill、mini 分時圖牆、
   點卡切檔;盤中 Discord 訊號同群摘要實發。過目時順看:mini 圖沿用 ±10% 漲跌停域,
   1% 波動僅 ~3.4px(主圖 1/5.5)— 若「看不出誰在動」,候選解 = mini 圖改 autofit 域。
 - [ ] **reconnect 不清 `_backfill_failed`**(fix 輪 deviation 2):斷線期間成員連 3 次
