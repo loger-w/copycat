@@ -1029,7 +1029,7 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
     const armBtn = screen.getByRole("button", { name: "武裝" });
     expect(lock.parentElement).toBe(armBtn.parentElement);
     expect(lock.className).toContain("shrink-0");
-    // SC-1 的次序:武裝鈕 → 鎖定鈕 → 商品別控制項(交易別 select)
+    // SC-1 的次序:武裝鈕 → 鎖定鈕 → 商品別控制項(交易別 pill 群,R6 起;容器 aria-label 同名)
     expect(armBtn.compareDocumentPosition(lock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       lock.compareDocumentPosition(screen.getByLabelText("交易別")) &
@@ -1160,17 +1160,39 @@ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
     const group = screen.getByRole("group", { name: "交易別" });
     const labels = ["現股", "融資", "融券", "無券"];
     const pills = labels.map((l) => within(group).getByRole("button", { name: l }));
+    // DOM 次序 = TRADE_KINDS 次序(review A7:無券在最右,不與最常用的現股對調)
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(labels);
     expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
-    expect(pills[0]!.className).toContain("border-accent");
+    expect(pills[0]!.className).toContain("border-accent"); // 現股選中 = accent
     expect(pills[1]!.className).toContain("border-line");
     fireEvent.click(pills[2]!);
     expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false", "true", "false"]);
-    expect(pills[2]!.className).toContain("border-accent");
+    // 非現股選中 = warn 琥珀(review C1:改送單語意的單擊必須在梯面外就刺眼)
+    expect(pills[2]!.className).toContain("border-warn");
+    expect(pills[2]!.className).not.toContain("border-accent");
+    expect(pills[0]!.className).toContain("border-line");
     // 舊 select 已退場
     expect(group.querySelector("select")).toBeNull();
     // 與鎖定鈕同列,pill 群 shrink-0(288px 右欄由武裝鈕吸收壓縮)
     const lock = screen.getByRole("button", { name: "鎖定" });
     expect(group.parentElement).toBe(lock.parentElement);
     expect(group.className).toContain("shrink-0");
+  });
+
+  it("點 pill 觸碰閒置計時(SC-2 後半;review A1/C7):武裝後 4 分挑交易別,再 4 分仍武裝", () => {
+    mockCapitalFetch();
+    vi.useFakeTimers();
+    try {
+      render(ladder());
+      armUp();
+      act(() => vi.advanceTimersByTime(ARM_IDLE_MS - 60_000));
+      fireEvent.click(screen.getByRole("button", { name: "融資" }));
+      act(() => vi.advanceTimersByTime(ARM_IDLE_MS - 60_000));
+      expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+      act(() => vi.advanceTimersByTime(60_001));
+      expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
