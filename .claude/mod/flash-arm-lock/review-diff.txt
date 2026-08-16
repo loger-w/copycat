@@ -1,0 +1,1543 @@
+diff --git a/frontend/src/components/futures/FuturesLadder.test.tsx b/frontend/src/components/futures/FuturesLadder.test.tsx
+index 29042d2b..f02ad960 100644
+--- a/frontend/src/components/futures/FuturesLadder.test.tsx
++++ b/frontend/src/components/futures/FuturesLadder.test.tsx
+@@ -316,6 +316,62 @@ describe("FuturesLadder 武裝防護(review C3/C4)", () => {
+   });
+ });
+ 
++describe("FuturesLadder 鎖定武裝(SC-1 / SC-12a)", () => {
++  it("SC-1:按鎖定 → 武裝 +「鎖定中」(期貨梯自帶的第三份武裝列 JSX 同款有鈕)", () => {
++    mockFetch({
++      "/api/capital/orders": () => json({ orders: [] }),
++      "/api/capital/positions": () => json({ positions: [] }),
++    });
++    setCapitalWsStatus("open");
++    render(ladder());
++    const lock = screen.getByRole("button", { name: "鎖定" });
++    expect(lock.parentElement).toBe(screen.getByRole("button", { name: "武裝" }).parentElement);
++    fireEvent.click(lock);
++    expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
++    const locked = screen.getByRole("button", { name: "鎖定中" });
++    expect(locked.getAttribute("aria-pressed")).toBe("true");
++    expect(locked.className).toContain("bg-accent");
++  });
++
++  it("鎖定後換 product → 仍武裝(未鎖定時的 symbol_changed 解除是對照組)", () => {
++    mockFetch({
++      "/api/capital/orders": () => json({ orders: [] }),
++      "/api/capital/positions": () => json({ positions: [] }),
++    });
++    setCapitalWsStatus("open");
++    const { rerender } = render(ladder());
++    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
++    rerender(ladder(MXF_STATE, "MXF"));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++  });
++
++  it("SC-12(a):resolved_contract null(未武裝)→ 武裝鈕與鎖定鈕同 disabled", () => {
++    mockFetch({
++      "/api/capital/orders": () => json({ orders: [] }),
++      "/api/capital/positions": () => json({ positions: [] }),
++    });
++    setCapitalWsStatus("open");
++    render(ladder({ ...TXF_STATE, resolved_contract: null }));
++    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(true);
++    expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(true);
++  });
++
++  /** E-3:安全優先 —— 鎖定中合約失解析仍 disarm 並清鎖定(合約一解析要重新武裝) */
++  it("鎖定中 resolved_contract 轉 null → 解除且清鎖定", () => {
++    mockFetch({
++      "/api/capital/orders": () => json({ orders: [] }),
++      "/api/capital/positions": () => json({ positions: [] }),
++    });
++    setCapitalWsStatus("open");
++    const { rerender } = render(ladder());
++    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
++    rerender(ladder({ ...TXF_STATE, resolved_contract: null }));
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++});
++
+ describe("FuturesLadder 掛單紅方格(SC-8)", () => {
+   it("本契約活單聚合口數;他契約不顯示;點擊逐 seq 直刪(market=fut)", async () => {
+     const cancelBodies: unknown[] = [];
+diff --git a/frontend/src/components/futures/FuturesLadder.tsx b/frontend/src/components/futures/FuturesLadder.tsx
+index eb47499b..94e99432 100644
+--- a/frontend/src/components/futures/FuturesLadder.tsx
++++ b/frontend/src/components/futures/FuturesLadder.tsx
+@@ -1,16 +1,16 @@
+-import { useEffect, useReducer, useRef, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ 
+ import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
+ import {
+   useCancelOrder,
+   useCapitalOrders,
+   useCapitalPositions,
+-  useCapitalWsStatus,
+   useClosePosition,
+   useSubmitFuture,
+ } from "@/hooks/useCapital";
++import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
+ import { closeBodyOf } from "@/lib/close-order";
+-import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
++import { LOCK_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
+ import {
+   buildFuturesLadder,
+@@ -45,6 +45,8 @@ interface Props {
+    *  未給時退回元件內部 state(獨立使用與既有測試路徑)。 */
+   qtyState?: QtyState;
+   onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
++  /** 武裝狀態由 RightRail 持有(useFlashArm);未給時退回元件內部 hook。 */
++  armCtl?: FlashArmControl;
+ }
+ 
+ /** 期貨閃電梯:武裝機制與 PriceLadder 同款(見該檔註解);差異 = 當沖 checkbox、量單位口、
+@@ -55,11 +57,15 @@ export function FuturesLadder({
+   contractLabel = null,
+   qtyState: qtyStateProp,
+   onQtyState,
++  armCtl,
+ }: Props) {
+   const [follow, setFollow] = useState(true);
+   // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換商品/斷線/idle/Esc/連 3 次失敗/合約失解析/
+-  // 離開畫面(RightRail 條件 render 讓本元件 unmount,arm state 隨之消滅;change-spec D-13)
+-  const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
++  // 離開畫面(本元件卸載時 dispatch `left_view`;state 在 RightRail,見 useFlashArm)
++  const localArm = useFlashArm(armCtl === undefined);
++  const arm = armCtl ?? localArm;
++  const dispatchArm = arm.dispatch;
++  const touchIdle = arm.touch;
+   const [qtyLocal, setQtyLocal] = useState(initialQtyState);
+   const qtyState = qtyStateProp ?? qtyLocal;
+   // 保持 functional updater:同一批次內連按快捷鍵要逐次累加(W-A12),
+@@ -70,12 +76,10 @@ export function FuturesLadder({
+   const [hint, setHint] = useState<string | null>(null);
+   const centerRef = useRef<HTMLDivElement | null>(null);
+   const progScroll = useRef(false);
+-  const idleTimer = useRef<number | undefined>(undefined);
+   const hintTimer = useRef<number | undefined>(undefined);
+   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
+ 
+-  const wsStatus = useCapitalWsStatus();
+   const submitFuture = useSubmitFuture();
+   const cancelOrder = useCancelOrder();
+   const closePosition = useClosePosition();
+@@ -126,14 +130,8 @@ export function FuturesLadder({
+         })
+       : [];
+   const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
+-
+-  function touchIdle(): void {
+-    window.clearTimeout(idleTimer.current);
+-    idleTimer.current = window.setTimeout(
+-      () => dispatchArm({ type: "idle_timeout" }),
+-      ARM_IDLE_MS,
+-    );
+-  }
++  // 合約失解析只擋**進入**鎖定;已鎖定時解鎖鈕恆可按(review R2)。WS 非 open 一律擋(SC-13)
++  const lockDisabled = (contract === null && !arm.state.locked) || arm.wsStatus !== "open";
+ 
+   function showHint(text: string, autoClear = false): void {
+     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
+@@ -144,7 +142,7 @@ export function FuturesLadder({
+ 
+   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
+     touchIdle();
+-    if (!arm.armed) {
++    if (!arm.state.armed) {
+       showHint("未武裝 — 點價不送單", true);
+       return;
+     }
+@@ -171,8 +169,8 @@ export function FuturesLadder({
+         day_trade: dayTrade,
+         source: "flash",
+       })
++      // arm 事件不受 aliveRef 守門(review R3;理由見 PriceLadder 同段註)
+       .then((r) => {
+-        if (!aliveRef.current) return; // review B8
+         if (r.ok) {
+           dispatchArm({ type: "send_ok" });
+           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`);
+@@ -182,7 +180,6 @@ export function FuturesLadder({
+         }
+       })
+       .catch((err: unknown) => {
+-        if (!aliveRef.current) return; // review B8
+         dispatchArm({ type: "send_fail" });
+         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
+       });
+@@ -228,37 +225,33 @@ export function FuturesLadder({
+     }
+   }
+ 
++  // 送出口走 ref:觸發條件是換商品 / 合約失解析 / 卸載,不是 dispatch 本身
++  // (理由見 PriceLadder 同段註)
++  const armDispatchRef = useRef(dispatchArm);
++  useEffect(() => {
++    armDispatchRef.current = dispatchArm;
++  }, [dispatchArm]);
++
+   // 自動解除:換商品
+   useEffect(() => {
+-    dispatchArm({ type: "symbol_changed" });
++    armDispatchRef.current({ type: "symbol_changed" });
+   }, [product]);
+ 
+   // 自動解除:合約失解析(武裝鈕 disabled 之外的雙保險)
+   useEffect(() => {
+-    if (contract === null) dispatchArm({ type: "disarm" });
++    if (contract === null) armDispatchRef.current({ type: "disarm" });
+   }, [contract]);
+ 
+-  // 自動解除:capital WS 斷線
++  // 離開畫面(卸載)= 解除武裝(state 已上提到 RightRail,見 useFlashArm)
+   useEffect(() => {
+-    if (wsStatus === "closed") dispatchArm({ type: "conn_lost" });
+-  }, [wsStatus]);
+-
+-  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
+-  useEffect(() => {
+-    if (!arm.armed) return;
+-    const onKey = (e: KeyboardEvent): void => {
+-      if (e.key === "Escape") dispatchArm({ type: "disarm" });
+-    };
+-    window.addEventListener("keydown", onKey);
+-    return () => window.removeEventListener("keydown", onKey);
+-  }, [arm.armed]);
++    return () => armDispatchRef.current({ type: "left_view" });
++  }, []);
+ 
+-  // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
++  // unmount 清 hint 計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
+   useEffect(() => {
+     aliveRef.current = true;
+     return () => {
+       aliveRef.current = false;
+-      window.clearTimeout(idleTimer.current);
+       window.clearTimeout(hintTimer.current);
+     };
+   }, []);
+@@ -306,22 +299,43 @@ export function FuturesLadder({
+         <div className="flex items-center gap-2">
+           <button
+             type="button"
+-            aria-pressed={arm.armed}
+-            disabled={contract === null}
++            aria-pressed={arm.state.armed}
++            /* disabled 只擋進入方向:已武裝時解除鈕恆可按(review R2) */
++            disabled={contract === null && !arm.state.armed}
+             title={contract === null ? "合約未解析" : undefined}
+             onClick={() => {
+               touchIdle();
+               dispatchArm({ type: "toggle" });
+             }}
+             className={cn(
+-              "flex-1 rounded border px-2 py-1 text-xs font-bold",
+-              arm.armed
++              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
++              arm.state.armed
+                 ? "border-loss bg-loss text-bg"
+                 : "border-line text-ink-dim hover:border-accent hover:text-ink",
+-              contract === null && "opacity-40",
++              contract === null && !arm.state.armed && "opacity-40",
++            )}
++          >
++            {arm.state.armed ? "解除" : "武裝"}
++          </button>
++          {/* 鎖定鈕(LadderView 的第三份複本;三梯合一屬 out of scope,見 change-spec §8) */}
++          <button
++            type="button"
++            aria-pressed={arm.state.locked}
++            disabled={lockDisabled}
++            title={arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
++            onClick={() => {
++              touchIdle();
++              dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
++            }}
++            className={cn(
++              "shrink-0 rounded border px-2 py-1 text-xs font-bold",
++              arm.state.locked
++                ? "border-accent bg-accent text-bg"
++                : "border-line text-ink-dim hover:border-accent hover:text-ink",
++              lockDisabled && "opacity-40",
+             )}
+           >
+-            {arm.armed ? "解除" : "武裝"}
++            {arm.state.locked ? "鎖定中" : "鎖定"}
+           </button>
+           <label className="flex items-center gap-1 text-xs text-ink-muted">
+             <input
+diff --git a/frontend/src/components/rail/RightRail.test.tsx b/frontend/src/components/rail/RightRail.test.tsx
+index 363bfce9..f76fd5b1 100644
+--- a/frontend/src/components/rail/RightRail.test.tsx
++++ b/frontend/src/components/rail/RightRail.test.tsx
+@@ -81,13 +81,23 @@ function position(over: Partial<CapitalPosition> = {}): CapitalPosition {
+ let qc: QueryClient;
+ let orders: CapitalOrder[] = [];
+ let positions: CapitalPosition[] = [];
++/** 送單路由行為:ok = 立即成功 / fail = 400 券商拒單(err_code 逐發遞增,好逐次等待)/
++ *  pending = 永不自行結束,由測試持有 reject 決定何時回應(R3 卸載後才回應的情境)。 */
++let orderMode: "ok" | "fail" | "pending" = "ok";
++let orderCalls = 0;
++let pendingOrders: ((reason: unknown) => void)[] = [];
+ 
+ beforeEach(() => {
+   window.localStorage.clear();
+   setCapitalWsStatus("connecting");
+   orders = [];
+   positions = [];
+-  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  orderMode = "ok";
++  orderCalls = 0;
++  pendingOrders = [];
++  qc = new QueryClient({
++    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
++  });
+   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+     if (url.includes("/api/capital/orders")) return new Response(JSON.stringify({ orders }));
+@@ -95,6 +105,19 @@ beforeEach(() => {
+     if (url.includes("/api/capital/status")) {
+       return new Response(JSON.stringify({ status: "ok", env: "test", order_enabled: true }));
+     }
++    if (url.includes("/api/capital/order/")) {
++      orderCalls += 1;
++      if (orderMode === "pending") {
++        return new Promise<Response>((_resolve, reject) => pendingOrders.push(reject));
++      }
++      if (orderMode === "fail") {
++        return new Response(
++          JSON.stringify({ detail: { error: "BROKER_REJECTED", err_code: `109${orderCalls}` } }),
++          { status: 400, headers: { "Content-Type": "application/json" } },
++        );
++      }
++      return new Response(JSON.stringify({ ok: true, code: 0, message: "ok", seq_no: "x" }));
++    }
+     throw new Error(`unexpected fetch: ${url}`);
+   });
+   // jsdom 無 scrollIntoView(spyOn 需方法存在)→ 直接指派 stub,同 PriceLadder.test
+@@ -495,3 +518,138 @@ describe("RightRail 平倉閘用估價(W-A8 / W-A10;自 StockPage/FuturesPage 
+     for (const b of closes) expect(b.hasAttribute("disabled")).toBe(true);
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// 鎖定武裝(R5)。上面三則「武裝不跨畫面殘留」是**未鎖定**時的合約,一條都不動;
++// 鎖定是新語意:同樣的換梯 / 切 tab 動作改成保留武裝,而斷線 / Esc / 連 3 敗照舊清除。
++// state 住在 RightRail(常駐全部 tab)→ 停在無梯頁時 Esc 與斷線一樣收得到。
++// ---------------------------------------------------------------------------
++
++/** blocked 個股期契約(ETF 單位 10,000):後端 `_stkfut_gates` 一律拒單 */
++const BLOCKED_STKFUT_CTX: RailContext = {
++  ...STOCK_CTX,
++  code: "0050",
++  contract: { prod: "NYF", ym: "202609", mini: false, unit: 10000 },
++};
++
++function lockUp(): void {
++  fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
++}
++
++describe("RightRail 鎖定武裝跨梯保留(SC-3 / SC-4 / SC-10)", () => {
++  it("SC-3:鎖定後 現貨 → 個股期 → 期貨 → 現貨,每一座新梯掛載即武裝", () => {
++    setCapitalWsStatus("open");
++    const { rerender } = render(rail(STOCK_CTX));
++    lockUp();
++    rerender(rail(STKFUT_CTX));
++    expect(screen.getByLabelText("口數")).toBeTruthy(); // 真的換成合約梯
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++    rerender(rail(FUT_CTX));
++    expect(screen.getByText("TXFH6")).toBeTruthy(); // 真的換成期貨梯
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++    rerender(rail(STOCK_CTX));
++    expect(screen.getByLabelText("交易別")).toBeTruthy(); // 真的換回現股梯
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++  });
++
++  it("SC-4:鎖定後切右欄 tab(閃電 → 委託 → 閃電)→ 仍武裝", () => {
++    setCapitalWsStatus("open");
++    render(rail(STOCK_CTX));
++    lockUp();
++    fireEvent.click(screen.getByRole("tab", { name: "委託" }));
++    fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++  });
++
++  it("SC-10:鎖定後整個右欄 unmount 再重新 render → 未武裝未鎖定(純 in-memory)", () => {
++    setCapitalWsStatus("open");
++    const { unmount } = render(rail(STOCK_CTX));
++    lockUp();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++    unmount();
++    cleanup();
++    render(rail(STOCK_CTX));
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++});
++
++describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () => {
++  it("SC-6:鎖定中停在無梯頁時 WS 轉 closed → 回個股頁是未武裝未鎖定", () => {
++    setCapitalWsStatus("open");
++    const { rerender } = render(rail(STOCK_CTX));
++    lockUp();
++    rerender(rail(NONE_CTX));
++    expect(screen.getByText("此頁無可下單標的")).toBeTruthy(); // 前提:真的沒有梯
++    act(() => setCapitalWsStatus("closed"));
++    rerender(rail(STOCK_CTX));
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++
++  it("SC-7:鎖定中停在無梯頁按 Esc → 回個股頁是未武裝未鎖定", () => {
++    setCapitalWsStatus("open");
++    const { rerender } = render(rail(STOCK_CTX));
++    lockUp();
++    rerender(rail(NONE_CTX));
++    expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
++    fireEvent.keyDown(window, { key: "Escape" });
++    rerender(rail(STOCK_CTX));
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++
++  /** SC-12(b):disabled 只擋**進入**方向 —— 兩鈕都鎖死的話,鎖定態在 blocked 契約上
++   *  沒有任何 UI 出口。點價本身仍由 priceLocked 擋。 */
++  it("SC-12(b):鎖定中切到 blocked 個股期契約 → 解除 / 解鎖兩鈕仍可按,點價仍擋", () => {
++    setCapitalWsStatus("open");
++    const { rerender } = render(rail(STOCK_CTX));
++    lockUp();
++    rerender(rail(BLOCKED_STKFUT_CTX));
++    expect(screen.getByRole("button", { name: "解除" }).hasAttribute("disabled")).toBe(false);
++    expect(screen.getByRole("button", { name: "鎖定中" }).hasAttribute("disabled")).toBe(false);
++    expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
++    expect(orderCalls).toBe(0);
++  });
++
++  /** E-7:鎖定態的 failStreak **刻意不隨換梯歸零**(安全方向)—— 換梯歸零的話,
++   *  一直換梯就能無限重試,而連 3 敗自動解除正是為了擋住「後端在拒單但使用者在連點」。 */
++  it("E-7:鎖定態 failStreak 跨梯累積(梯 A 敗 2 次 + 梯 B 敗 1 次 → 解除且清鎖定)", async () => {
++    orderMode = "fail";
++    setCapitalWsStatus("open");
++    const { rerender } = render(rail(STOCK_CTX));
++    lockUp();
++    fireEvent.click(screen.getByLabelText("買 100"));
++    await waitFor(() => expect(screen.getByText("券商拒單(1091)")).toBeTruthy());
++    fireEvent.click(screen.getByLabelText("賣 100.5"));
++    await waitFor(() => expect(screen.getByText("券商拒單(1092)")).toBeTruthy());
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // 2 次仍鎖定
++    rerender(rail(FUT_CTX));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 換梯保留武裝
++    fireEvent.click(screen.getByLabelText("買 21041"));
++    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++
++  /** R3:send_fail 的 dispatch 若留在 `aliveRef` 守門內,「送出後切走、回應才到」的失敗
++   *  在鎖定態會整批漏計 —— 使用者一路換梯連點,連 3 敗這道閘就永遠不會關上。 */
++  it("R3:鎖定中送出後切走、回應才到的三次失敗仍計數 → 解除且清鎖定", async () => {
++    orderMode = "pending";
++    setCapitalWsStatus("open");
++    render(rail(STOCK_CTX));
++    lockUp();
++    fireEvent.click(screen.getByLabelText("買 100"));
++    fireEvent.click(screen.getByLabelText("賣 100.5"));
++    fireEvent.click(screen.getByLabelText("買 99.9"));
++    await waitFor(() => expect(pendingOrders.length).toBe(3));
++    fireEvent.click(screen.getByRole("tab", { name: "部位" })); // ladder 卸載,回應還沒到
++    for (const reject of pendingOrders) reject(new Error("NETWORK_DOWN"));
++    fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
++    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/rail/RightRail.tsx b/frontend/src/components/rail/RightRail.tsx
+index 6f3a3d72..1e24187d 100644
+--- a/frontend/src/components/rail/RightRail.tsx
++++ b/frontend/src/components/rail/RightRail.tsx
+@@ -6,6 +6,7 @@ import { FuturesLadder } from "@/components/futures/FuturesLadder";
+ import type { CenterRequest } from "@/components/stock/LadderView";
+ import { PriceLadder, type TradeKind } from "@/components/stock/PriceLadder";
+ import { StkfutLadder } from "@/components/stock/StkfutLadder";
++import { useFlashArm } from "@/hooks/useFlashArm";
+ import { RAIL_TAB_KEY } from "@/lib/constants";
+ import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
+ import { initialQtyState, type QtyState } from "@/lib/qty-quick";
+@@ -17,9 +18,11 @@ import type { FuturesProductState } from "@/types";
+ /** 右欄(SC-2/SC-3;D1 三 tab 平行、D2 內容跟隨當前主 tab、D6 無標的頁顯空狀態)。
+  *
+  * ⚠ **閃電 tab 的 ladder 一律條件 render,不可改成 `hidden`**(change-spec D-13)。
+- * 專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反**:ladder 的武裝
+- * (arm)state 存活於元件內,unmount 是「離開畫面即解除武裝」(W-A2 第 6 條)的實現手段。
+- * 改成 hidden 會讓武裝跨主 tab / 跨右欄 tab 存活 → 使用者在無脈絡下點價即真錢直送。
++ * 專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反**:條件 render 仍是
++ * 「離開畫面即解除武裝」(W-A2 第 6 條)的實現手段之一。arm state 本身已上提到本元件
++ * (`useFlashArm`)—— 離開畫面的解除改由 ladder 卸載時 dispatch `left_view` 完成,
++ * 改成 hidden 會讓 ladder 永不卸載、事件永不發出 → 武裝跨主 tab / 跨右欄 tab 存活,
++ * 使用者在無脈絡下點價即真錢直送。
+  *
+  * 相對地,交易別 / 數量由本元件持有(R2-10):它們沒有「誤觸即送單」的性質,
+  * 靜默重置(融券 → 現股)反而是風險。 */
+@@ -76,6 +79,9 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
+   // 直接變成 20 倍規模的單,而畫面上那個數字本來就是使用者自己按的 —— 沒有任何異狀。
+   // 每個合約各一格 = 切合約回到初值(1 口),要多少自己按。
+   const [stkfutQty, setStkfutQty] = useState<Record<string, QtyState>>({});
++  // 武裝狀態上提到常駐元件:Esc / 斷線監聽在這一層,連停在無梯頁(TXO / 指數)也收得到。
++  // 三座梯共用同一份(同時只有一座掛著);未鎖定時 ladder 卸載即 `left_view` 重置。
++  const armCtl = useFlashArm();
+ 
+   function selectTab(next: RailTab): void {
+     setTab(next);
+@@ -147,6 +153,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
+           onQtyState={(updater) =>
+             setStkfutQty((m) => ({ ...m, [key]: updater(m[key] ?? initialQtyState()) }))
+           }
++          armCtl={armCtl}
+         />
+       );
+     }
+@@ -163,6 +170,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
+           onTradeKind={setTradeKind}
+           qtyState={stockQty}
+           onQtyState={setStockQty}
++          armCtl={armCtl}
+         />
+       );
+     }
+@@ -174,6 +182,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
+           contractLabel={ctx.contract}
+           qtyState={futQty}
+           onQtyState={setFutQty}
++          armCtl={armCtl}
+         />
+       );
+     }
+diff --git a/frontend/src/components/stock/LadderView.tsx b/frontend/src/components/stock/LadderView.tsx
+index 76cb73de..1aad7574 100644
+--- a/frontend/src/components/stock/LadderView.tsx
++++ b/frontend/src/components/stock/LadderView.tsx
+@@ -10,6 +10,7 @@
+  */
+ import { useEffect, useRef, useState, type ReactNode } from "react";
+ 
++import { LOCK_TITLE } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
+ import type { LadderLot } from "@/lib/ladder-lots";
+ import { QTY_PRESETS } from "@/lib/qty-quick";
+@@ -81,6 +82,13 @@ interface Props {
+   armDisabled?: boolean;
+   armTitle?: string;
+   onToggleArm: () => void;
++  /** 鎖定中(換標的 / 換梯 / 閒置不解除);見 lib/flash-arm.ts */
++  locked?: boolean;
++  /** **未給 = 不渲染鎖定鈕**。三座梯之外的 caller(與既有裸 render 測試)維持原樣。 */
++  onToggleLock?: () => void;
++  lockDisabled?: boolean;
++  /** 覆寫鎖定鈕 tooltip(如連線未就緒);未給用 LOCK_TITLE */
++  lockTitle?: string;
+   /** 武裝鈕右側的商品別控制項(現股交易別 select / 個股期當沖 checkbox) */
+   armControls?: ReactNode;
+   /** 買側全鎖(現股無券);與 `dimmed` 疊加 */
+@@ -116,6 +124,10 @@ export function LadderView({
+   armDisabled = false,
+   armTitle,
+   onToggleArm,
++  locked = false,
++  onToggleLock,
++  lockDisabled = false,
++  lockTitle,
+   armControls = null,
+   buyLocked = false,
+   priceLocked = false,
+@@ -180,25 +192,47 @@ export function LadderView({
+         </div>
+       </div>
+       {banner}
+-      {/* 武裝列:武裝/解除 + 商品別控制項 + 數量快捷 */}
++      {/* 武裝列:武裝/解除 + 鎖定/鎖定中 + 商品別控制項 + 數量快捷 */}
+       <div className="border-b border-line px-2 py-1.5">
+         <div className="flex items-center gap-1">
+           <button
+             type="button"
+             aria-pressed={armed}
+-            disabled={armDisabled}
++            /* disabled 只擋**進入**方向:已武裝時解除鈕恆可按,否則 blocked 契約上
++               武裝態就沒有 UI 出口(change-spec review R2)。 */
++            disabled={armDisabled && !armed}
+             title={armTitle}
+             onClick={onToggleArm}
+             className={cn(
+-              "flex-1 rounded border px-2 py-1 text-xs font-bold",
++              // min-w-0:288px 右欄下與鎖定鈕 + 商品別控制項同列,長出去會把列擠換行
++              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
+               armed
+                 ? "border-loss bg-loss text-bg"
+                 : "border-line text-ink-dim hover:border-accent hover:text-ink",
+-              armDisabled && "opacity-40",
++              armDisabled && !armed && "opacity-40",
+             )}
+           >
+             {armed ? "解除" : "武裝"}
+           </button>
++          {onToggleLock !== undefined ? (
++            <button
++              type="button"
++              aria-pressed={locked}
++              disabled={lockDisabled}
++              title={lockTitle ?? LOCK_TITLE}
++              onClick={onToggleLock}
++              className={cn(
++                // shrink-0:武裝鈕才是可壓縮的那顆 —— 鎖定鈕被壓到看不出字就等於沒有訊號
++                "shrink-0 rounded border px-2 py-1 text-xs font-bold",
++                locked
++                  ? "border-accent bg-accent text-bg"
++                  : "border-line text-ink-dim hover:border-accent hover:text-ink",
++                lockDisabled && "opacity-40",
++              )}
++            >
++              {locked ? "鎖定中" : "鎖定"}
++            </button>
++          ) : null}
+           {armControls}
+         </div>
+         <div className="mt-1 flex items-center gap-1">
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index 3731a07f..a007d9e4 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -1003,3 +1003,101 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
+     expect(spy).not.toHaveBeenCalled();
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// 鎖定武裝(R5)。鎖定 = 換標的 / 換梯 / 閒置都不解除 —— 誤觸半徑放到最大,所以
++// 「鎖定態畫面可指認」與「清除路徑照舊」兩件事都要在元件層釘住。
++// ---------------------------------------------------------------------------
++
++function lockUp(): void {
++  fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
++}
++
++describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
++  it("SC-1:按鎖定 → 梯立即武裝且鎖定鈕轉「鎖定中」桃紅底 aria-pressed=true", () => {
++    mockCapitalFetch();
++    setCapitalWsStatus("open");
++    render(ladder());
++    const lock = screen.getByRole("button", { name: "鎖定" });
++    expect(lock.getAttribute("aria-pressed")).toBe("false");
++    expect(lock.hasAttribute("disabled")).toBe(false);
++    // 武裝鈕與鎖定鈕同列(288px 右欄下三控制項不換行的前提;寬度本身走截圖層)
++    expect(lock.parentElement).toBe(screen.getByRole("button", { name: "武裝" }).parentElement);
++    expect(lock.className).toContain("shrink-0");
++    lockUp();
++    expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
++    const locked = screen.getByRole("button", { name: "鎖定中" });
++    expect(locked.getAttribute("aria-pressed")).toBe("true");
++    expect(locked.className).toContain("bg-accent");
++  });
++
++  it("SC-2:鎖定後換自選股(code 變)→ 仍武裝,點價照送 1 call", async () => {
++    const bodies: unknown[] = [];
++    mockCapitalFetch({
++      "/api/capital/order/stock": (init) => {
++        bodies.push(JSON.parse(String(init?.body)));
++        return json(OK_RESULT);
++      },
++    });
++    setCapitalWsStatus("open");
++    const { rerender } = render(ladder());
++    lockUp();
++    rerender(ladder("2317"));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++    fireEvent.click(screen.getByLabelText("買 100"));
++    await waitFor(() => expect(bodies.length).toBe(1));
++    expect(bodies[0]).toMatchObject({ stock_no: "2317", buy_sell: "buy" });
++  });
++
++  it("SC-9:按「鎖定中」→ 解鎖但保持武裝;再按「解除」→ 兩旗全清", () => {
++    mockCapitalFetch();
++    setCapitalWsStatus("open");
++    render(ladder());
++    lockUp();
++    fireEvent.click(screen.getByRole("button", { name: "鎖定中" }));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 仍武裝
++    expect(screen.getByRole("button", { name: "鎖定" }).getAttribute("aria-pressed")).toBe("false");
++    fireEvent.click(screen.getByRole("button", { name: "解除" }));
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++
++  it("SC-8:鎖定中連 3 次送單失敗 → 解除且清鎖定", async () => {
++    mockCapitalFetch({
++      "/api/capital/order/stock": () =>
++        json({ detail: { error: "ORDER_BLOCKED", reason: "order_disabled" } }, 403),
++    });
++    setCapitalWsStatus("open");
++    render(ladder());
++    lockUp();
++    fireEvent.click(screen.getByLabelText("買 100"));
++    await waitFor(() => expect(screen.getByText("安全閘拒絕(order_disabled)")).toBeTruthy());
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // 1 次失敗仍鎖定
++    fireEvent.click(screen.getByLabelText("賣 100.5"));
++    fireEvent.click(screen.getByLabelText("買 99.9"));
++    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
++    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
++  });
++
++  it("SC-13:capital WS 非 open 時鎖定鈕 disabled + 文案;轉 open 才可按", () => {
++    mockCapitalFetch();
++    render(ladder()); // beforeEach = connecting
++    const lock = screen.getByRole("button", { name: "鎖定" });
++    expect(lock.hasAttribute("disabled")).toBe(true);
++    expect(lock.getAttribute("title")).toBe("連線未就緒,無法鎖定");
++    act(() => setCapitalWsStatus("open"));
++    expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(false);
++  });
++
++  /** R4:上提後 `dispatch` 的 identity 若隨 render 漂移,卸載 effect 的 cleanup 會在
++   *  每次 re-render 跑一遍 —— 每收一則報價就解除一次武裝,而報價每秒都在來。 */
++  it("R4:武裝後連續換報價 rerender 兩次,仍維持「解除」態", () => {
++    mockCapitalFetch();
++    const { rerender } = render(ladder());
++    armUp();
++    rerender(ladder("2330", { ...LAST, p: 100_500 }));
++    rerender(ladder("2330", { ...LAST, p: 101_000 }));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index c1710e1c..12828212 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useReducer, useRef, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ 
+ import {
+   LadderView,
+@@ -11,11 +11,11 @@ import {
+   useCancelOrder,
+   useCapitalOrders,
+   useCapitalPositions,
+-  useCapitalWsStatus,
+   useSubmitStock,
+ } from "@/hooks/useCapital";
++import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
+ import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+-import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
++import { LOCK_WS_TITLE } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
+ import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
+ import {
+@@ -149,6 +149,9 @@ interface Props {
+   onTradeKind?: (kind: TradeKind) => void;
+   qtyState?: QtyState;
+   onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
++  /** 武裝狀態由 RightRail 持有(useFlashArm)→ 換梯 / 切 tab 時不隨本元件消滅;
++   *  未給時退回元件內部 hook(獨立使用與既有測試路徑)。 */
++  armCtl?: FlashArmControl;
+ }
+ 
+ export function PriceLadder({
+@@ -162,10 +165,14 @@ export function PriceLadder({
+   onTradeKind,
+   qtyState: qtyStateProp,
+   onQtyState,
++  armCtl,
+ }: Props) {
+   // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換股/斷線/idle/Esc/連 3 次失敗/離開畫面
+-  // (離開畫面 = RightRail 條件 render 讓本元件 unmount,arm state 隨之消滅;change-spec D-13)
+-  const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
++  // (離開畫面 = 本元件卸載時 dispatch `left_view`;state 本身在 RightRail,見 useFlashArm)
++  const localArm = useFlashArm(armCtl === undefined);
++  const arm = armCtl ?? localArm;
++  const dispatchArm = arm.dispatch;
++  const touchIdle = arm.touch;
+   const [qtyLocal, setQtyLocal] = useState(initialQtyState);
+   const [tradeKindLocal, setTradeKindLocal] = useState<TradeKind>("cash");
+   const tradeKind = tradeKindProp ?? tradeKindLocal;
+@@ -176,12 +183,10 @@ export function PriceLadder({
+   const setQtyState = onQtyState ?? setQtyLocal;
+   const [hint, setHint] = useState<string | null>(null);
+   const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
+-  const idleTimer = useRef<number | undefined>(undefined);
+   const hintTimer = useRef<number | undefined>(undefined);
+   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
+ 
+-  const wsStatus = useCapitalWsStatus();
+   const submitStock = useSubmitStock();
+   const cancelOrder = useCancelOrder();
+   const { data: ordersData } = useCapitalOrders();
+@@ -207,14 +212,6 @@ export function PriceLadder({
+     book,
+   });
+ 
+-  function touchIdle(): void {
+-    window.clearTimeout(idleTimer.current);
+-    idleTimer.current = window.setTimeout(
+-      () => dispatchArm({ type: "idle_timeout" }),
+-      ARM_IDLE_MS,
+-    );
+-  }
+-
+   function showHint(text: string, autoClear = false): void {
+     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
+     window.clearTimeout(hintTimer.current);
+@@ -225,7 +222,7 @@ export function PriceLadder({
+   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
+     touchIdle();
+     if (tradeKind === "daytrade_sell" && side === "buy") return; // UI 已 disabled,雙保險
+-    if (!arm.armed) {
++    if (!arm.state.armed) {
+       showHint("未武裝 — 點價不送單", true);
+       return;
+     }
+@@ -253,8 +250,10 @@ export function PriceLadder({
+         trade_kind: tradeKind,
+         source: "flash",
+       })
++      // arm 事件**不受 aliveRef 守門**:state 已上提,卸載後 dispatch 到父層 reducer 合法,
++      // 而鎖定態下「送出後切走、回應才到」的失敗漏計就等於連 3 敗那道閘永遠關不上
++      // (change-spec review R3)。守門只留在 showHint(它碰的是本元件的 state)。
+       .then((r) => {
+-        if (!aliveRef.current) return; // review B8
+         if (r.ok) {
+           dispatchArm({ type: "send_ok" });
+           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`);
+@@ -264,7 +263,6 @@ export function PriceLadder({
+         }
+       })
+       .catch((err: unknown) => {
+-        if (!aliveRef.current) return; // review B8
+         dispatchArm({ type: "send_fail" });
+         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
+       });
+@@ -276,32 +274,31 @@ export function PriceLadder({
+     for (const seq of lot.seqs) cancelOrder.mutate({ seq_no: seq, market: "sec" });
+   }
+ 
+-  // 自動解除:換股
++  // arm 事件的送出口走 ref:武裝事件的觸發條件是**換股 / 卸載**,不是 dispatch 這個函式本身。
++  // 放進 deps 的話,任何一次 identity 漂移(未來把 armCtl 包一層就會發生)都會讓下面的
++  // cleanup 在每次 re-render 跑一遍 = 每收一則報價就解除一次武裝(change-spec review R4)。
++  // 同步寫在 effect 內不寫在 render 期間(render 期間改 ref 在並行渲染下不保證只跑一次)。
++  const armDispatchRef = useRef(dispatchArm);
+   useEffect(() => {
+-    dispatchArm({ type: "symbol_changed" });
+-  }, [code]);
++    armDispatchRef.current = dispatchArm;
++  }, [dispatchArm]);
+ 
+-  // 自動解除:capital WS 斷線
++  // 自動解除:換股
+   useEffect(() => {
+-    if (wsStatus === "closed") dispatchArm({ type: "conn_lost" });
+-  }, [wsStatus]);
++    armDispatchRef.current({ type: "symbol_changed" });
++  }, [code]);
+ 
+-  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
++  // 離開畫面(RightRail 條件 render → 本元件卸載)= 解除武裝。state 已上提到 RightRail,
++  // unmount 不再消滅它 → 這裡顯式送事件(deps 空 → cleanup 只在真卸載跑)。
+   useEffect(() => {
+-    if (!arm.armed) return;
+-    const onKey = (e: KeyboardEvent): void => {
+-      if (e.key === "Escape") dispatchArm({ type: "disarm" });
+-    };
+-    window.addEventListener("keydown", onKey);
+-    return () => window.removeEventListener("keydown", onKey);
+-  }, [arm.armed]);
++    return () => armDispatchRef.current({ type: "left_view" });
++  }, []);
+ 
+-  // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
++  // unmount 清 hint 計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
+   useEffect(() => {
+     aliveRef.current = true;
+     return () => {
+       aliveRef.current = false;
+-      window.clearTimeout(idleTimer.current);
+       window.clearTimeout(hintTimer.current);
+     };
+   }, []);
+@@ -317,11 +314,19 @@ export function PriceLadder({
+       avgMarks={avgMarks}
+       buyLots={lots.buy}
+       sellLots={lots.sell}
+-      armed={arm.armed}
++      armed={arm.state.armed}
+       onToggleArm={() => {
+         touchIdle();
+         dispatchArm({ type: "toggle" });
+       }}
++      locked={arm.state.locked}
++      // 鎖定鈕在 WS 非 open 時 disabled(SC-13):連得上才談得上「一路盯著下單」
++      lockDisabled={arm.wsStatus !== "open"}
++      lockTitle={arm.wsStatus !== "open" ? LOCK_WS_TITLE : undefined}
++      onToggleLock={() => {
++        touchIdle();
++        dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
++      }}
+       buyLocked={tradeKind === "daytrade_sell"}
+       qty={qtyState.qty}
+       qtyLabel="張數"
+diff --git a/frontend/src/components/stock/StkfutLadder.test.tsx b/frontend/src/components/stock/StkfutLadder.test.tsx
+index 2dcf8367..dd506bff 100644
+--- a/frontend/src/components/stock/StkfutLadder.test.tsx
++++ b/frontend/src/components/stock/StkfutLadder.test.tsx
+@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { StkfutLadder } from "@/components/stock/StkfutLadder";
+ import { setCapitalWsStatus } from "@/hooks/useCapital";
++import { ARM_IDLE_MS } from "@/lib/flash-arm";
+ import type { StkfutSelection } from "@/lib/stkfut";
+ import type { CapitalOrder, CapitalPosition } from "@/types";
+ 
+@@ -465,3 +466,70 @@ describe("StkfutLadder 非標準契約單位不開放下單(SC-6)", () => {
+     expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
+   });
+ });
++
++// 個股期梯的武裝防護原本只鎖了 conn_lost 與換合約兩條 —— Esc / idle / 連 3 敗三條在
++// 現股梯與期貨梯都有測、這裡沒有(current-state §1)。鎖定會讓武裝活得更久,先把
++// 這三條在本梯補齊,再加鎖定本身的案例。
++describe("StkfutLadder 武裝防護補齊(Esc / idle / 連 3 敗)", () => {
++  it("Esc 鍵解除武裝", () => {
++    mockCapitalFetch();
++    render(ladder());
++    armUp();
++    fireEvent.keyDown(window, { key: "Escape" });
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++  });
++
++  it("idle 5 分鐘自動解除", () => {
++    vi.useFakeTimers();
++    mockCapitalFetch();
++    render(ladder());
++    armUp();
++    act(() => {
++      vi.advanceTimersByTime(ARM_IDLE_MS + 1);
++    });
++    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
++  });
++
++  it("連 3 次送單失敗自動解除", async () => {
++    mockCapitalFetch({
++      "/api/capital/order/future": () => json({ detail: { error: "BAD_TICK" } }, 400),
++    });
++    render(ladder());
++    armUp();
++    fireEvent.click(screen.getByLabelText("買 100"));
++    await waitFor(() => expect(screen.getByText("價格非合法檔位")).toBeTruthy());
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 1 次失敗仍武裝
++    fireEvent.click(screen.getByLabelText("賣 100.5"));
++    fireEvent.click(screen.getByLabelText("買 99.9"));
++    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
++  });
++});
++
++describe("StkfutLadder 鎖定武裝(SC-1 / SC-12a)", () => {
++  it("SC-1:按鎖定 → 武裝 +「鎖定中」", () => {
++    mockCapitalFetch();
++    setCapitalWsStatus("open");
++    render(ladder());
++    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
++    expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
++    expect(screen.getByRole("button", { name: "鎖定中" }).getAttribute("aria-pressed")).toBe("true");
++  });
++
++  it("鎖定後換合約月份 → 仍武裝(未鎖定時的自動解除是對照組)", () => {
++    mockCapitalFetch();
++    setCapitalWsStatus("open");
++    const { rerender } = render(ladder());
++    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
++    rerender(ladder({ prod: "CDF", ym: "202610", mini: false, unit: 2000 }));
++    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
++  });
++
++  it("SC-12(a):未武裝 + blocked 契約 → 武裝鈕與鎖定鈕同 disabled", () => {
++    mockCapitalFetch();
++    setCapitalWsStatus("open");
++    render(ladder({ prod: "NYF", ym: "202609", mini: false, unit: 10000 }, "0050"));
++    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(true);
++    expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(true);
++  });
++});
+diff --git a/frontend/src/components/stock/StkfutLadder.tsx b/frontend/src/components/stock/StkfutLadder.tsx
+index 128cf708..6d94fe8b 100644
+--- a/frontend/src/components/stock/StkfutLadder.tsx
++++ b/frontend/src/components/stock/StkfutLadder.tsx
+@@ -8,7 +8,7 @@
+  *  與 FuturesLadder 的差異:symbol 是**月份 leaf** 不是 HOT(使用者選的月份就要送
+  *  那個月),且武裝解除鍵是 instrumentKey 不是 product —— 見下方 R2-5 註。
+  */
+-import { useEffect, useReducer, useRef, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ 
+ import {
+   DASH,
+@@ -22,10 +22,10 @@ import {
+   useCancelOrder,
+   useCapitalOrders,
+   useCapitalPositions,
+-  useCapitalWsStatus,
+   useSubmitFuture,
+ } from "@/hooks/useCapital";
+-import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
++import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
++import { LOCK_WS_TITLE } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
+ import { futExchangeContract } from "@/lib/futures-ladder";
+ import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
+@@ -71,6 +71,8 @@ interface Props {
+   /** 口數由 RightRail 持有 → 切 rail tab 不靜默重置(同 FuturesLadder R2-10) */
+   qtyState?: QtyState;
+   onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
++  /** 武裝狀態由 RightRail 持有(useFlashArm);未給時退回元件內部 hook。 */
++  armCtl?: FlashArmControl;
+ }
+ 
+ export function StkfutLadder({
+@@ -83,20 +85,22 @@ export function StkfutLadder({
+   centerRequest = null,
+   qtyState: qtyStateProp,
+   onQtyState,
++  armCtl,
+ }: Props) {
+-  const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
++  const localArm = useFlashArm(armCtl === undefined);
++  const arm = armCtl ?? localArm;
++  const dispatchArm = arm.dispatch;
++  const touchIdle = arm.touch;
+   const [qtyLocal, setQtyLocal] = useState(initialQtyState);
+   const qtyState = qtyStateProp ?? qtyLocal;
+   // 保持 functional updater:同一批次內連按快捷鍵要逐次累加(W-A12)
+   const setQtyState = onQtyState ?? setQtyLocal;
+   const [dayTrade, setDayTrade] = useState(false);
+   const [hint, setHint] = useState<string | null>(null);
+-  const idleTimer = useRef<number | undefined>(undefined);
+   const hintTimer = useRef<number | undefined>(undefined);
+   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
+ 
+-  const wsStatus = useCapitalWsStatus();
+   const submitFuture = useSubmitFuture();
+   const cancelOrder = useCancelOrder();
+   const { data: ordersData } = useCapitalOrders();
+@@ -134,14 +138,6 @@ export function StkfutLadder({
+     book,
+   });
+ 
+-  function touchIdle(): void {
+-    window.clearTimeout(idleTimer.current);
+-    idleTimer.current = window.setTimeout(
+-      () => dispatchArm({ type: "idle_timeout" }),
+-      ARM_IDLE_MS,
+-    );
+-  }
+-
+   function showHint(text: string, autoClear = false): void {
+     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
+     window.clearTimeout(hintTimer.current);
+@@ -152,7 +148,7 @@ export function StkfutLadder({
+   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
+     touchIdle();
+     if (blocked) return; // UI 已 disabled,雙保險(後端亦拒 PRODUCT_NOT_ALLOWED)
+-    if (!arm.armed) {
++    if (!arm.state.armed) {
+       showHint("未武裝 — 點價不送單", true);
+       return;
+     }
+@@ -179,8 +175,8 @@ export function StkfutLadder({
+         day_trade: dayTrade,
+         source: "flash",
+       })
++      // arm 事件不受 aliveRef 守門(review R3;理由見 PriceLadder 同段註)
+       .then((r) => {
+-        if (!aliveRef.current) return; // review B8
+         if (r.ok) {
+           dispatchArm({ type: "send_ok" });
+           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`);
+@@ -190,7 +186,6 @@ export function StkfutLadder({
+         }
+       })
+       .catch((err: unknown) => {
+-        if (!aliveRef.current) return; // review B8
+         dispatchArm({ type: "send_fail" });
+         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
+       });
+@@ -202,32 +197,27 @@ export function StkfutLadder({
+     for (const seq of lot.seqs) cancelOrder.mutate({ seq_no: seq, market: "fut" });
+   }
+ 
+-  // 自動解除:換標的 / 換合約(R2-5)
++  // 送出口走 ref:觸發條件是換合約 / 卸載,不是 dispatch 本身(理由見 PriceLadder 同段註)
++  const armDispatchRef = useRef(dispatchArm);
+   useEffect(() => {
+-    dispatchArm({ type: "symbol_changed" });
+-  }, [instrumentKey]);
++    armDispatchRef.current = dispatchArm;
++  }, [dispatchArm]);
+ 
+-  // 自動解除:capital WS 斷線
++  // 自動解除:換標的 / 換合約(R2-5)
+   useEffect(() => {
+-    if (wsStatus === "closed") dispatchArm({ type: "conn_lost" });
+-  }, [wsStatus]);
++    armDispatchRef.current({ type: "symbol_changed" });
++  }, [instrumentKey]);
+ 
+-  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
++  // 離開畫面(卸載)= 解除武裝(state 已上提到 RightRail,見 useFlashArm)
+   useEffect(() => {
+-    if (!arm.armed) return;
+-    const onKey = (e: KeyboardEvent): void => {
+-      if (e.key === "Escape") dispatchArm({ type: "disarm" });
+-    };
+-    window.addEventListener("keydown", onKey);
+-    return () => window.removeEventListener("keydown", onKey);
+-  }, [arm.armed]);
++    return () => armDispatchRef.current({ type: "left_view" });
++  }, []);
+ 
+-  // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
++  // unmount 清 hint 計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
+   useEffect(() => {
+     aliveRef.current = true;
+     return () => {
+       aliveRef.current = false;
+-      window.clearTimeout(idleTimer.current);
+       window.clearTimeout(hintTimer.current);
+     };
+   }, []);
+@@ -245,13 +235,21 @@ export function StkfutLadder({
+       marketAskQty={ladder.marketAskQty}
+       buyLots={lots.buy}
+       sellLots={lots.sell}
+-      armed={arm.armed}
++      armed={arm.state.armed}
+       armDisabled={blocked}
+       armTitle={blocked ? BLOCKED_TEXT : undefined}
+       onToggleArm={() => {
+         touchIdle();
+         dispatchArm({ type: "toggle" });
+       }}
++      locked={arm.state.locked}
++      // blocked 只擋**進入**鎖定;已鎖定時解鎖鈕恆可按(R2),點價另有 priceLocked 擋
++      lockDisabled={(blocked && !arm.state.locked) || arm.wsStatus !== "open"}
++      lockTitle={arm.wsStatus !== "open" ? LOCK_WS_TITLE : undefined}
++      onToggleLock={() => {
++        touchIdle();
++        dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
++      }}
+       priceLocked={blocked}
+       qty={qtyState.qty}
+       qtyLabel="口數"
+diff --git a/frontend/src/hooks/useFlashArm.test.tsx b/frontend/src/hooks/useFlashArm.test.tsx
+new file mode 100644
+index 00000000..21729382
+--- /dev/null
++++ b/frontend/src/hooks/useFlashArm.test.tsx
+@@ -0,0 +1,116 @@
++/** @vitest-environment jsdom */
++/** `useFlashArm` 的行為合約。
++ *
++ *  這支 hook 是**唯一**掛 Esc / conn_lost 監聽與閒置計時的地方(自三座梯上提),
++ *  而武裝是唯一繞過確認彈窗的路徑 —— 監聽掛錯層或 `active` 閘寫反,畫面上都毫無異狀。
++ */
++import { act, cleanup, fireEvent, renderHook } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { setCapitalWsStatus } from "@/hooks/useCapital";
++import { useFlashArm } from "@/hooks/useFlashArm";
++import { ARM_IDLE_MS } from "@/lib/flash-arm";
++
++beforeEach(() => {
++  setCapitalWsStatus("connecting"); // wsStatus module store 跨測試重置
++});
++
++afterEach(() => {
++  cleanup();
++  vi.useRealTimers();
++  setCapitalWsStatus("connecting");
++});
++
++describe("useFlashArm active(RightRail 持有的那一份)", () => {
++  it("touch 後閒置 5 分鐘 → idle_timeout 解除", () => {
++    vi.useFakeTimers();
++    const { result } = renderHook(() => useFlashArm());
++    act(() => {
++      result.current.touch();
++      result.current.dispatch({ type: "toggle" });
++    });
++    expect(result.current.state.armed).toBe(true);
++    act(() => {
++      vi.advanceTimersByTime(ARM_IDLE_MS + 1);
++    });
++    expect(result.current.state.armed).toBe(false);
++  });
++
++  it("Esc 解除(監聽只在武裝期間掛)", () => {
++    const { result } = renderHook(() => useFlashArm());
++    fireEvent.keyDown(window, { key: "Escape" }); // 未武裝時按也不該爆
++    act(() => result.current.dispatch({ type: "toggle" }));
++    fireEvent.keyDown(window, { key: "Escape" });
++    expect(result.current.state.armed).toBe(false);
++  });
++
++  it("capital WS 轉 closed → conn_lost 解除", () => {
++    const { result } = renderHook(() => useFlashArm());
++    act(() => result.current.dispatch({ type: "toggle" }));
++    act(() => setCapitalWsStatus("open"));
++    expect(result.current.state.armed).toBe(true);
++    act(() => setCapitalWsStatus("closed"));
++    expect(result.current.state.armed).toBe(false);
++  });
++
++  /** SC-13:conn_lost 只看 wsStatus 邊沿的話,「已經斷線了才鎖定」會讓鎖定態在斷線上
++   *  無限存活(此後不再有 closed 的邊沿可觸發)。deps 帶 locked = level 觸發。 */
++  it("WS 已是 closed 時鎖定 → 立即解除並清鎖定(level 觸發,非只邊沿)", () => {
++    setCapitalWsStatus("closed");
++    const { result } = renderHook(() => useFlashArm());
++    act(() => result.current.dispatch({ type: "lock" }));
++    expect(result.current.state).toEqual({ armed: false, locked: false, failStreak: 0 });
++  });
++});
++
++describe("useFlashArm inactive(ladder 的本地備援)", () => {
++  it("idle / Esc / conn_lost 三者皆不觸發(監聽不掛、計時不排)", () => {
++    vi.useFakeTimers();
++    const { result } = renderHook(() => useFlashArm(false));
++    act(() => {
++      result.current.dispatch({ type: "toggle" });
++      result.current.touch();
++    });
++    expect(result.current.state.armed).toBe(true);
++    act(() => {
++      vi.advanceTimersByTime(ARM_IDLE_MS + 1);
++    });
++    expect(result.current.state.armed).toBe(true);
++    fireEvent.keyDown(window, { key: "Escape" });
++    expect(result.current.state.armed).toBe(true);
++    act(() => setCapitalWsStatus("closed"));
++    expect(result.current.state.armed).toBe(true);
++  });
++});
++
++describe("useFlashArm 回傳契約(change-spec review R4 / SC-10)", () => {
++  it("dispatch / touch 的 identity 跨 rerender 恆定", () => {
++    const { result, rerender } = renderHook(() => useFlashArm());
++    const dispatch = result.current.dispatch;
++    const touch = result.current.touch;
++    act(() => result.current.dispatch({ type: "toggle" }));
++    rerender();
++    rerender();
++    expect(result.current.dispatch).toBe(dispatch);
++    expect(result.current.touch).toBe(touch);
++  });
++
++  it("dispatch identity 不因 active 改變(ladder 從備援切成受控時不得換函式)", () => {
++    const { result, rerender } = renderHook(({ a }) => useFlashArm(a), {
++      initialProps: { a: true },
++    });
++    const dispatch = result.current.dispatch;
++    rerender({ a: false });
++    expect(result.current.dispatch).toBe(dispatch);
++  });
++
++  /** SC-10:state 純 in-memory 且**不在 module scope** —— 放到 module scope 的話
++   *  reload 之外看不出差別,但同頁兩份 hook 會互相污染,而那是真錢武裝態。 */
++  it("兩個獨立實例不共享 state", () => {
++    const a = renderHook(() => useFlashArm());
++    const b = renderHook(() => useFlashArm());
++    act(() => a.result.current.dispatch({ type: "lock" }));
++    expect(a.result.current.state).toEqual({ armed: true, locked: true, failStreak: 0 });
++    expect(b.result.current.state).toEqual({ armed: false, locked: false, failStreak: 0 });
++  });
++});
+diff --git a/frontend/src/hooks/useFlashArm.ts b/frontend/src/hooks/useFlashArm.ts
+new file mode 100644
+index 00000000..2460cce2
+--- /dev/null
++++ b/frontend/src/hooks/useFlashArm.ts
+@@ -0,0 +1,69 @@
++/** 閃電武裝狀態的共用 hook(自三座梯上提;flash-arm-lock 包 1)。
++ *
++ *  上提前:PriceLadder / StkfutLadder / FuturesLadder **各自**持有 `useReducer(reduceArm)`
++ *  + 閒置計時 ref + Esc / conn_lost 監聽,而「離開畫面即解除武裝」靠元件 unmount 讓 state
++ *  一起消滅(RightRail 對閃電 tab 的 ladder 一律條件 render;D-13)。
++ *
++ *  上提後 state 由 **RightRail** 持有 → ladder 卸載不再消滅 state,「離開畫面即解除」改由
++ *  ladder 的卸載 effect 顯式 dispatch `left_view` 完成(語意與舊的 unmount 等價)。
++ *
++ *  `active=false` = ladder 拿到外部 `armCtl` 時的**本地備援**:reducer 仍建(型別與獨立
++ *  使用路徑齊全),但不掛 Esc / conn_lost 監聽、`touch` 不排計時 —— 同一個畫面上有兩份
++ *  window 監聽的話,一次 Esc 會被兩個 reducer 各收一遍。
++ */
++import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
++
++import { useCapitalWsStatus, type WsStatus } from "@/hooks/useCapital";
++import { ARM_IDLE_MS, initialArm, reduceArm, type ArmEvent, type ArmState } from "@/lib/flash-arm";
++
++export interface FlashArmControl {
++  state: ArmState;
++  /** **useReducer 的原始 dispatch**,identity 恆定。ladder 的 `left_view` 卸載 effect 以它
++   *  作 deps —— 包裝一層(例如依 `active` 分支)會讓 identity 每 render 都變,cleanup 於是
++   *  每次 re-render 都跑一次 = 每收一則報價就解除一次武裝。 */
++  dispatch: Dispatch<ArmEvent>;
++  /** 閒置計時重新起算。identity 恆定(`useCallback([])` + timer ref),同上理由。 */
++  touch: () => void;
++  /** capital WS 連線狀態(鎖定鈕 disabled 判定等;讀自 module store)。 */
++  wsStatus: WsStatus;
++}
++
++export function useFlashArm(active = true): FlashArmControl {
++  const [state, dispatch] = useReducer(reduceArm, undefined, initialArm);
++  const idleTimer = useRef<number | undefined>(undefined);
++
++  const wsStatus = useCapitalWsStatus();
++
++  // deps 只有 `active`(每個 ladder 實例恆定:armCtl 給不給不會中途變)→ identity 實質恆定。
++  // 計時器 ref 是**同一顆**:上一個 ladder 留下的計時被下一次 touch 直接清掉,不會跨梯亂放。
++  const touch = useCallback(() => {
++    window.clearTimeout(idleTimer.current);
++    if (!active) return;
++    idleTimer.current = window.setTimeout(() => dispatch({ type: "idle_timeout" }), ARM_IDLE_MS);
++  }, [active]);
++
++  // 自動解除:capital WS 斷線。deps 帶 `state.locked` = **level 觸發**(SC-13):只看
++  // wsStatus 邊沿的話,「已經斷線了才鎖定」之後不再有 closed 邊沿可觸發,鎖定態就在
++  // 斷線上無限存活。未鎖定的既有邊沿語意不變(deps 含 wsStatus 即涵蓋)。
++  useEffect(() => {
++    if (!active) return;
++    if (wsStatus === "closed") dispatch({ type: "conn_lost" });
++  }, [active, wsStatus, state.locked]);
++
++  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
++  useEffect(() => {
++    if (!active || !state.armed) return;
++    const onKey = (e: KeyboardEvent): void => {
++      if (e.key === "Escape") dispatch({ type: "disarm" });
++    };
++    window.addEventListener("keydown", onKey);
++    return () => window.removeEventListener("keydown", onKey);
++  }, [active, state.armed]);
++
++  // unmount 清閒置計時器
++  useEffect(() => {
++    return () => window.clearTimeout(idleTimer.current);
++  }, []);
++
++  return { state, dispatch, touch, wsStatus };
++}
+diff --git a/frontend/src/lib/flash-arm.test.ts b/frontend/src/lib/flash-arm.test.ts
+index 66525d73..92e5f344 100644
+--- a/frontend/src/lib/flash-arm.test.ts
++++ b/frontend/src/lib/flash-arm.test.ts
+@@ -1,26 +1,26 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
++import { ARM_IDLE_MS, initialArm, reduceArm, type ArmState } from "@/lib/flash-arm";
+ 
+ describe("武裝開關狀態機", () => {
+   it("預設未武裝", () => expect(initialArm().armed).toBe(false));
+ 
+   it("toggle 開/關,開時失敗計數歸零", () => {
+-    let s = reduceArm({ armed: false, failStreak: 2 }, { type: "toggle" });
+-    expect(s).toEqual({ armed: true, failStreak: 0 });
++    let s = reduceArm({ armed: false, locked: false, failStreak: 2 }, { type: "toggle" });
++    expect(s).toEqual({ armed: true, locked: false, failStreak: 0 });
+     s = reduceArm(s, { type: "toggle" });
+     expect(s.armed).toBe(false);
+   });
+ 
+   it("換標的 / 連線斷 / 閒置逾時 → 解除武裝", () => {
+-    const armed = { armed: true, failStreak: 0 };
++    const armed = { armed: true, locked: false, failStreak: 0 };
+     for (const t of ["symbol_changed", "conn_lost", "idle_timeout"] as const) {
+       expect(reduceArm(armed, { type: t }).armed).toBe(false);
+     }
+   });
+ 
+   it("連續 3 次送單失敗 → 自動解除;成功會重置計數", () => {
+-    let s = { armed: true, failStreak: 0 };
++    let s = { armed: true, locked: false, failStreak: 0 };
+     s = reduceArm(s, { type: "send_fail" });
+     s = reduceArm(s, { type: "send_fail" });
+     expect(s.armed).toBe(true);
+@@ -34,10 +34,74 @@ describe("武裝開關狀態機", () => {
+   });
+ 
+   it("disarm 只會解除、不會反向武裝(與 toggle 的差異所在)", () => {
+-    expect(reduceArm({ armed: true, failStreak: 1 }, { type: "disarm" }).armed).toBe(false);
++    expect(
++      reduceArm({ armed: true, locked: false, failStreak: 1 }, { type: "disarm" }).armed,
++    ).toBe(false);
+     // 已解除時冪等 — 解除列/Esc 連按絕不能把狀態翻回武裝
+-    expect(reduceArm({ armed: false, failStreak: 0 }, { type: "disarm" }).armed).toBe(false);
++    expect(
++      reduceArm({ armed: false, locked: false, failStreak: 0 }, { type: "disarm" }).armed,
++    ).toBe(false);
+   });
+ 
+   it("閒置時限 = 5 分鐘", () => expect(ARM_IDLE_MS).toBe(5 * 60 * 1000));
+ });
++
++// 鎖定 = 「換標的 / 換梯 / 閒置都不解除」的武裝。放大了武裝的時間 × 空間範圍,所以
++// **清除路徑必須比進入路徑寬**:斷線 / 連 3 敗 / Esc / 手動解除一律連 locked 一起清。
++describe("武裝鎖定(R5)", () => {
++  const ARMED_LOCKED = { armed: true, locked: true, failStreak: 0 } as const;
++
++  it("預設未鎖定", () => expect(initialArm().locked).toBe(false));
++
++  it("lock = 一鍵「武裝 + 鎖定」且失敗計數歸零(同 toggle 武裝語意)", () => {
++    expect(reduceArm({ armed: false, locked: false, failStreak: 2 }, { type: "lock" })).toEqual({
++      armed: true,
++      locked: true,
++      failStreak: 0,
++    });
++  });
++
++  it("unlock 只收回「免解除」特權,武裝保留(要解除有解除鈕 / Esc)", () => {
++    expect(reduceArm(ARMED_LOCKED, { type: "unlock" })).toEqual({
++      armed: true,
++      locked: false,
++      failStreak: 0,
++    });
++  });
++
++  it("鎖定中:換標的 / 閒置逾時 / 離開畫面 皆 no-op(state 原樣)", () => {
++    for (const t of ["symbol_changed", "idle_timeout", "left_view"] as const) {
++      expect(reduceArm(ARMED_LOCKED, { type: t })).toEqual(ARMED_LOCKED);
++    }
++  });
++
++  it("鎖定中:斷線 / 手動解除 / 按解除鈕 一律清 armed **且**清 locked", () => {
++    for (const t of ["conn_lost", "disarm", "toggle"] as const) {
++      const s = reduceArm(ARMED_LOCKED, { type: t });
++      expect(s.armed).toBe(false);
++      expect(s.locked).toBe(false);
++    }
++  });
++
++  it("鎖定中連 3 次送單失敗 → 解除且清鎖定", () => {
++    let s: ArmState = ARMED_LOCKED;
++    s = reduceArm(s, { type: "send_fail" });
++    s = reduceArm(s, { type: "send_fail" });
++    expect(s).toEqual({ armed: true, locked: true, failStreak: 2 }); // 鎖定態 failStreak 照累積
++    s = reduceArm(s, { type: "send_fail" });
++    expect(s).toEqual({ armed: false, locked: false, failStreak: 0 });
++  });
++
++  it("鎖定中 send_ok 不動鎖定,只歸零失敗計數", () => {
++    expect(reduceArm({ ...ARMED_LOCKED, failStreak: 2 }, { type: "send_ok" })).toEqual(
++      ARMED_LOCKED,
++    );
++  });
++
++  // 未鎖定的 left_view = 舊「unmount 讓 state 消滅」語意:連 failStreak 一起歸零(E-6)
++  it("未鎖定時 left_view 整份重置(等價舊 unmount)", () => {
++    expect(reduceArm({ armed: true, locked: false, failStreak: 2 }, { type: "left_view" })).toEqual(
++      initialArm(),
++    );
++  });
++});
+diff --git a/frontend/src/lib/flash-arm.ts b/frontend/src/lib/flash-arm.ts
+index 02d8dd44..4e34c179 100644
+--- a/frontend/src/lib/flash-arm.ts
++++ b/frontend/src/lib/flash-arm.ts
+@@ -1,10 +1,24 @@
+ // 閃電武裝開關狀態機。武裝=點價直送(無確認彈窗),是唯一繞過二次確認的路徑,
+-// 所以解除要寬鬆觸發:換標的/斷線/閒置 5 分鐘/連 3 次失敗。切分頁=unmount,state 自然消失。
++// 所以解除要寬鬆觸發:換標的/斷線/閒置 5 分鐘/連 3 次失敗。切分頁 = ladder 卸載 → `left_view`
++// (state 已上提到 RightRail,不再靠 unmount 自然消失 —— 見 hooks/useFlashArm.ts)。
++//
++// **鎖定(locked)**= 使用者明示「我要一路盯著下單」:換標的 / 換梯 / 閒置都不解除。
++// 它放大了武裝的時間 × 空間範圍,所以進入路徑只有一顆鈕,而**清除路徑一條都不減**:
++// 斷線 / 連 3 敗 / Esc / 手動解除一律連 locked 一起清(清得比進入寬,是刻意的不對稱)。
+ export const ARM_IDLE_MS = 5 * 60 * 1000;
+ const FAIL_LIMIT = 3;
+ 
++/** 鎖定鈕的常態 tooltip。放這裡不放元件:LadderView(現股 / 個股期)與 FuturesLadder
++ *  自帶的第三份武裝列 JSX 是兩處渲染點,文案漂掉時畫面不會有任何訊號。 */
++export const LOCK_TITLE =
++  "鎖定:換標的 / 換梯 / 閒置不解除;斷線 / 連 3 敗 / Esc / 解除仍會解除";
++/** capital WS 非 `open` 時鎖定鈕 disabled 的說明(SC-13)。 */
++export const LOCK_WS_TITLE = "連線未就緒,無法鎖定";
++
+ export interface ArmState {
+   armed: boolean;
++  /** 鎖定中:換標的 / 換梯 / 閒置不解除。恆隨 armed 一起被清,不會有 armed=false + locked=true。 */
++  locked: boolean;
+   failStreak: number;
+ }
+ 
+@@ -15,26 +29,46 @@ export type ArmEvent =
+   | { type: "conn_lost" }
+   | { type: "idle_timeout" }
+   | { type: "send_ok" }
+-  | { type: "send_fail" };
++  | { type: "send_fail" }
++  /** ladder 離開畫面(卸載)。state 上提到 RightRail 後 unmount 不再消滅它,
++   *  這個事件就是舊「unmount = state 消失」語意的顯式版本。 */
++  | { type: "left_view" }
++  /** 一鍵「武裝 + 鎖定」 */
++  | { type: "lock" }
++  /** 只收回「免解除」特權,武裝保留(要解除有解除鈕 / Esc,兩顆鈕語意各自單一) */
++  | { type: "unlock" };
+ 
+ export function initialArm(): ArmState {
+-  return { armed: false, failStreak: 0 };
++  return { armed: false, locked: false, failStreak: 0 };
+ }
+ 
+ export function reduceArm(s: ArmState, e: ArmEvent): ArmState {
+   switch (e.type) {
+     case "toggle":
+-      return { armed: !s.armed, failStreak: 0 };
++      // 解除方向連 locked 一起清:解除鈕是鎖定態的主要 UI 出口,留著 locked 等於解不掉
++      return s.armed
++        ? { armed: false, locked: false, failStreak: 0 }
++        : { armed: true, locked: false, failStreak: 0 };
++    case "lock":
++      // 鎖定是一次新的武裝意圖 → failStreak 歸零(沿 toggle 武裝語意)
++      return { armed: true, locked: true, failStreak: 0 };
++    case "unlock":
++      return { ...s, locked: false };
+     case "disarm":
+-    case "symbol_changed":
+     case "conn_lost":
++      return { ...s, armed: false, locked: false };
++    case "symbol_changed":
+     case "idle_timeout":
+-      return { ...s, armed: false };
++      return s.locked ? s : { ...s, armed: false };
++    case "left_view":
++      return s.locked ? s : initialArm();
+     case "send_ok":
+       return { ...s, failStreak: 0 };
+     case "send_fail": {
++      // 鎖定態的 failStreak **跨梯累積、不隨換梯歸零**(E-7):換梯歸零的話,一直換梯
++      // 就能無限重試,而連 3 敗自動解除正是為了擋「後端在拒單、使用者在連點」。
+       const n = s.failStreak + 1;
+-      if (n >= FAIL_LIMIT) return { armed: false, failStreak: 0 };
++      if (n >= FAIL_LIMIT) return { armed: false, locked: false, failStreak: 0 };
+       return { ...s, failStreak: n };
+     }
+   }

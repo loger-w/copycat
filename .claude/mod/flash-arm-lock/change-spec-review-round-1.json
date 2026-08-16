@@ -1,0 +1,13 @@
+{"round":1,"reviewer":"change-spec-reviewer(opus)","findings":[
+{"id":"R1","severity":"P1","section":"§7 R-5 / §2.2","problem":"conn_lost 邊沿觸發;WS 已 closed 時仍可鎖定且此後無事件清除 → 鎖定態在斷線上無限存活","fix":"lock 進入時看 wsStatus(level 觸發)+ UI disabled","disposition":"accepted","resolution":"SC-13 + §2.2 deps [wsStatus, locked] + 鎖定鈕非 open disabled"},
+{"id":"R2","severity":"P1","section":"§2.4 / SC-12 / E-2","problem":"armed+locked 但兩鈕 disabled(blocked 契約)→ 唯一 UI 解除出口鎖死","fix":"disabled 只擋進入方向","disposition":"accepted","resolution":"SC-12 拆 (a)/(b)"},
+{"id":"R3","severity":"P1","section":"§2.3 aliveRef","problem":"send_fail dispatch 在 aliveRef 守門內,上提後鎖定中卸載的梯漏計 failStreak","fix":"dispatch 移出守門","disposition":"accepted","resolution":"§2.3 + 測試"},
+{"id":"R4","severity":"P1","section":"§2.2 / §2.3","problem":"active=false 不 dispatch 與 left_view effect deps 矛盾;包裝 dispatch identity 漂 → 每 render 觸發 left_view","fix":"dispatch 原始、touch useCallback","disposition":"accepted","resolution":"§2.2 回傳契約 + rerender 回歸測試"},
+{"id":"R5","severity":"P1","section":"§2.4 / §5","problem":"LadderView 新 props 必填 → LadderView.test 兩處裸 render tsc 紅,未標該變","fix":"optional 或明列該變","disposition":"accepted(a)","resolution":"optional,未給不渲染"},
+{"id":"R6","severity":"P2","section":"§5","problem":"flash-arm.test 該變行號錯漏(實際 :9 :10 :16 :23 :37 :39)","disposition":"accepted","resolution":"§5 重核"},
+{"id":"R7","severity":"P2","section":"§7 R-1(b)","problem":"CapitalConfirmDialog Esc stopPropagation → 鎖定中開窗時 Esc 不解除","disposition":"accepted","resolution":"R-6 殘留風險 + 回報"},
+{"id":"R8","severity":"P2","section":"§7","problem":"換標的/換梯掛載瞬間即武裝的新誤觸窗未列","disposition":"accepted(a)","resolution":"E-8 接受 + 回報;禁送窗 next-time"},
+{"id":"R9","severity":"P2","section":"§2.1 left_view","problem":"鎖定態 failStreak 跨梯累積是新語意未寫下,易被順手歸零","disposition":"accepted","resolution":"E-7 + 測試"},
+{"id":"R10","severity":"P2","section":"SC-1 / §2.4","problem":"288px 右欄三控制項同列的截斷/位移風險未驗","disposition":"accepted","resolution":"SC-1 條件 + shrink-0 + 截圖"},
+{"id":"R11","severity":"P2","section":"SC-10","problem":"grep 無 localStorage 不是行為測試;module-level 殘留擋不住","disposition":"accepted","resolution":"SC-10 行為斷言"}
+]}

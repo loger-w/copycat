@@ -1,0 +1,19 @@
+{"round":1,"lenses":["security-state(opus)","test-spec(opus)"],"scope":"git diff master...HEAD(3 commits a6085e2f/8c9b9184/26741df5)",
+"findings":[
+{"id":"S1","severity":"P1","file":"PriceLadder.tsx:258 / StkfutLadder.tsx:181 / FuturesLadder.tsx:175","claim":"send_ok 一併移出 aliveRef 守門 → 遲到的成功回應把跨梯 failStreak 歸零,鎖定態連 3 敗斷路器可被繞過","disposition":"accepted","fix":"send_ok 恢復 aliveRef 守門(遲到成功不計入),send_fail 維持無條件 dispatch;三梯同改;RightRail 測試:pending ok + 兩 fail 交錯 → streak 不歸零"},
+{"id":"S2","severity":"P1","file":"RightRail.tsx:74-75","claim":"鎖定態換自選股(同座現股梯)沿用共用 stockQty/tradeKind,失去『重按武裝』檢查點 → 名目放大無訊號","disposition":"accepted(a)","fix":"[auto-default] 鎖定態下 instrument 變更(現股 code / 期貨 product)→ 該梯 qty 回 initialQtyState();未鎖定不動(W-7);tradeKind 不動(券商拒單);測試鎖住;收尾回報明講"},
+{"id":"S3","severity":"P2","file":"三梯 lockDisabled","claim":"WS 子句缺 && !locked,違反『disabled 只擋進入』不變式","disposition":"accepted","fix":"整條 lockDisabled 加 && !locked;useFlashArm/PriceLadder 測試:locked 下 wsStatus→connecting 鎖定中鈕不 disabled"},
+{"id":"S4","severity":"P2","file":"FuturesLadder.tsx:242","claim":"真實環境切期貨頁若 resolved_contract 未到即清鎖定(E-3),SC-3 vitest 與真實環境不互證","disposition":"accepted(doc)","fix":"verification.md 註明;收尾回報告知『合約未解析會自動解鎖需重按』"},
+{"id":"S5","severity":"P2","file":"RightRail.tsx:122","claim":"stock-price-click 在鎖定態把使用者帶到已武裝且置中的梯,§7 未列","disposition":"accepted(doc)","fix":"§7 R-8 補列 + 回報"},
+{"id":"S-p2","severity":"P2","claim":"R-3 文字擴及 rail 委託/部位 tab;未鎖定卸載後 send_fail 計入下一輪(影響有限);dayTrade/lastClick 本地 state 換梯回預設;futExchangeContract 未 try/catch(既有,next-time)","disposition":"accepted(doc)/next-time"},
+{"id":"T1","severity":"P1","file":"useFlashArm.test.tsx","claim":"SC-5 鎖定閒置 6 分仍武裝無測試;timer 送 disarm 而非 idle_timeout 全綠","disposition":"accepted","fix":"hook 測試:lock → touch → advance 6min → 仍 {armed:true,locked:true}"},
+{"id":"T2","severity":"P1","file":"PriceLadder.test.tsx:1053","claim":"解鎖後閒置計時重新起算(SC-9 後半 / E-5)零覆蓋;刪 onToggleLock 內 touchIdle 全綠","disposition":"accepted","fix":"hook 或元件測試:lock → advance 6min → unlock → advance ARM_IDLE_MS+1 → armed false"},
+{"id":"T3","severity":"P1","file":"RightRail.test.tsx:582","claim":"SC-6 測試分不出『無梯頁當下清除』vs『掛載時才清』","disposition":"accepted","fix":"closed 後、rerender 前補 setCapitalWsStatus('open')"},
+{"id":"T4","severity":"P2","file":"RightRail.test.tsx:618","claim":"SC-12(b) orderCalls 斷言 vacuous、未按下解鎖驗結果","disposition":"accepted","fix":"點 買 100 後斷 0;點 鎖定中 → 鎖定 且 解除 仍在"},
+{"id":"T5","severity":"P2","file":"三梯 SC-1 測試","claim":"LOCK_TITLE 零斷言","disposition":"accepted","fix":"三支 SC-1 案補 title === LOCK_TITLE(import 常數)"},
+{"id":"T6","severity":"P2","file":"LadderView.test.tsx","claim":"onToggleLock 未給不渲染鎖定鈕 無測試","disposition":"accepted","fix":"補 queryByRole 鎖定 null + 給 onToggleLock 才出現"},
+{"id":"T7","severity":"P2","file":"PriceLadder.test.tsx:1095","claim":"R4 回歸案永不紅(真鎖在 useFlashArm.test:87/98)","disposition":"accepted(comment)","fix":"註解標明真鎖位置,保留"},
+{"id":"T8","severity":"P2","file":"PriceLadder.test.tsx:1017","claim":"SC-1 缺鈕序 / 未鎖態 class 斷言;截圖當時未產出","disposition":"accepted(partial)","fix":"補 DOM 次序 + border-line 斷言;截圖已於 02:20 產出 evidence/SC-1_stock_288_*.png"},
+{"id":"T9","severity":"P2","file":"三梯 useFlashArm(armCtl===undefined)","claim":"備援閘無元件層測試;E-2 無測試","disposition":"accepted(E-2 only)","fix":"RightRail:SC-12(b) 後 rerender 回可交易合約 → 仍 解除/鎖定中 且點價 1 call;備援閘 listener spy 略(rejected_with_reason:hook 層 inactive 案已鎖,元件層 spy 脆弱)"}
+],
+"p2_summary":"P2 共 10(S3/S4/S5/S-p2 四項 + T4..T9 六項);主題:disabled 不變式、文件/回報補列、測試 vacuous/覆蓋缺口。既有測試 assertion 檢查乾淨(僅 §5 該變 6 處字面值 + 測試基建新增)。"}
