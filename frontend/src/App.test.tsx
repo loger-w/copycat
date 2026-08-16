@@ -74,7 +74,7 @@ function appFetch(sha?: { fe: string | null; be: string | null; behind: boolean 
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
-    // 漲跌停列表(R3 SC-5 的跳轉起點)。2026-08-14 subtab 改版後**預設 subtab 就是漲跌停**
+    // 漲跌停列表(R3 SC-5 的跳轉起點)。2026-08-16 一頁總覽後列表**恆掛在右欄**
     // → 任何停在台股綜合 tab 的測試都會走這條分支(不再是「僅跳轉測試才用到」)。
     if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
     if (u.includes("/api/stock/signals/today")) {
@@ -174,7 +174,7 @@ describe("App 相關係數升回頂層 tab(R2 SC-1)", () => {
 describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
   async function openList() {
     window.localStorage.setItem("copycat-tab", "index");
-    // 預設 subtab 即漲跌停(2026-08-14 改版)—— 不再需要 seed 展開狀態
+    // 列表恆掛右欄(2026-08-16 一頁總覽)—— 不必 seed 任何展開 / subtab 狀態
     renderApp();
     return await screen.findByTestId("limit-row-1101");
   }
@@ -191,7 +191,7 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
     );
   });
 
-  // FE-2:tab 是 `hidden` 保留而非 unmount → 列表展開過一次就會跨 tab 存活,沒有
+  // FE-2:tab 是 `hidden` 保留而非 unmount → 列表恆掛且跨 tab 一直活著,沒有
   // `active` gate 的話使用者看著別的 tab 時它照樣整個盤中每 10 秒抓一份全市場 payload。
   // 走全鏈(App → IndexPage → LimitListSection → useBreadthRows):少接一根線在
   // hook / 元件級測試各自都是綠的,只有這裡會紅。
