@@ -169,6 +169,7 @@ class BreadthEngine:
         data_dir: Path | None = None,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
         now_fn: Callable[[], _dt.datetime] | None = None,
+        is_trading_day: Callable[[_dt.date], bool] | None = None,
     ) -> None:
         self._token = token
         self._config = config
@@ -181,6 +182,10 @@ class BreadthEngine:
         self._today_fn = today_fn
         # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
         self._now_fn = now_fn if now_fn is not None else _now
+        # 交易日曆注入(mod/trading-calendar SC-5)。**預設 `lambda d: True` = 現行的
+        # 純時間窗語意逐字**(W9):直接建構的既有 caller 行為不得有一絲變化;
+        # 真日曆只由 app 層在 prod 顯式傳(與 `today_fn` = 最近交易日成對)。
+        self._is_trading_day = is_trading_day if is_trading_day is not None else (lambda _d: True)
         self._window = (_parse_hhmm(config.window_start), _parse_hhmm(config.window_end))
 
         # ---- scalar 狀態 ----
@@ -279,8 +284,11 @@ class BreadthEngine:
 
         日期基準 = `_rows_date`(rows 的資料日),不是 `_trade_date`:
         - `rows_date > data_end` → rows 是今日盤中,昨日止的 streak 要 +1。
+          **假日開站也走這條**(mod/trading-calendar R5):`today_fn` = 最近交易日之後,
+          那天算出的 streak 其 `data_end` 比 rows 的資料日少一天,+1 後與「該交易日
+          盤中即時算出」的值逐字相同。
         - `rows_date == data_end` → rows 是上一交易日的收盤快照,該日**已在** streak
-          內(盤前 / 假日開站),再 +1 就是憑空多一板。
+          內(交易日盤前),再 +1 就是憑空多一板。
         - `rows_date ∈ skipped` → 那天在掃描時被當假日跳過,關係不明 → null(R15)。
         """
         today = self._today_fn().isoformat()
@@ -581,7 +589,17 @@ class BreadthEngine:
         return min(grown, self._config.backoff_max_secs)
 
     def _in_window(self) -> bool:
-        t = self._now_fn().time()
+        """台北取數窗 —— **交易日 gate 與時間窗同一把尺**,兩個呼叫端都吃(R4)。
+
+        `_poll_loop`(該不該取數)與 `_stale`(沒有新資料算不算異常)共用它是刻意的:
+        非交易日「沒有新資料是正常態」與 docstring 寫的窗外語意同款。若 `_stale` 保留
+        純時間窗,週六窗內首圈成功後 `_last_success` 一老化就亮一顆假的「延遲」膠囊,
+        而那天本來就不會有第二筆資料。
+        """
+        now = self._now_fn()
+        if not self._is_trading_day(now.date()):
+            return False
+        t = now.time()
         return self._window[0] <= t <= self._window[1]
 
     def _stale(self) -> bool:
