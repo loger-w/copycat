@@ -31,18 +31,20 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
 - **非 prod 進程的 `create_app` 一律必傳 `stock_watchlist_path` 隔離**(2026-08-12 XR-3
   review C-1/W-1):hub 解耦後**恆建**(不再需要 stock engine),而它的落點 = `wl_path.parent`
   —— 漏傳就落在 repo 真 `data/`,把該進程的事件寫進 prod 的 `data/signals/*.jsonl`。那份 jsonl
-  是 breadth 對帳的 seed(`market_event_state`),被灌事件之後 **prod 的真鎖板事件會被判成
-  「已發布」而靜默不發**。與 `breadth_data_dir` 同一條隔離原則,指向同一個隔離目錄:
+  是 prod today 端點 / 自選 rail 的 baseline 真相源,被灌 fake 訊號後 **prod 畫面會出現假訊號且
+  同 id 去重會吃掉真訊號**(2026-08-16 前另有 breadth 對帳 seed 語意,R1 刪除後不再存在,隔離
+  紀律不變)。與 `breadth_data_dir` 同一條隔離原則,指向同一個隔離目錄:
   `stock_watchlist_path=DATA_DIR / "stock_watchlist.json"`。側車樣板(r3/r4
   breadth_side_server)與 `--verify` 分支均已補;新開任何側車 / 一次性腳本照抄。
   (Trigger:寫任何非 prod 的 create_app 呼叫點)
-- **`--verify` 模式的訊號 / 廣度事件鏈**:2026-08-06 R4 實測「沒有 stock engine → SignalHub
-  恆 None → 事件鏈不可達」的教訓 **已於 XR-3(2026-08-12)勾銷** —— `_make_signals` 不再看
-  stock 在否,verify server 上 hub 恆建、today 端點 200、事件鏈可達,落點在 `VERIFY_DATA_DIR`
-  (上一條的隔離)。仍需 FakeStockSource 的只剩「要餵真 tick 走個股訊號偵測」那類;純廣度
-  事件鏈取證直接用官方 `--verify`。舊的 FakeStockSource 樣板
-  `.claude/feat/market-overview-r4-sector-signals/evidence/events_side_server_r4.py` 保留備用。
-  (Trigger:驗 signal_hub / 廣度事件改動、或 spec 含「verify 取證」字樣)
+- **`--verify` 模式的訊號鏈**:2026-08-06 R4 實測「沒有 stock engine → SignalHub 恆 None →
+  訊號鏈不可達」的教訓 **已於 XR-3(2026-08-12)勾銷** —— `_make_signals` 不再看 stock 在否,
+  verify server 上 hub 恆建、today 端點 200,落點在 `VERIFY_DATA_DIR`(上一條的隔離)。
+  要餵真 tick 走個股訊號偵測仍需 FakeStockSource(舊樣板
+  `.claude/feat/market-overview-r4-sector-signals/evidence/events_side_server_r4.py` 保留備用,
+  其廣度事件段已隨 2026-08-16 R1 刪除失效)。**`--verify` 的家數帶 fake fetchers 是四元組**
+  (2026-08-16 起;舊側車樣板 `sidecar_server.py` 的五元組 + `fetch_industry_chain` 已失效,
+  不可照抄)。(Trigger:驗 signal_hub 改動、起 verify / 側車、或 spec 含「verify 取證」字樣)
 - **跑著的 server 是哪一版**:`curl -s localhost:8721/api/health` → `{git_sha, git_dirty,
   started_at}`;`git log <git_sha>..HEAD -- copycat/` 有輸出 = 後端 code 比跑著的新,該重啟。
   啟動 banner 也印同一份(`copycat server build <sha> [+dirty] started_at=…`,不用 curl 也能判)。

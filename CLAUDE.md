@@ -61,13 +61,11 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   signal_hub(雙佇列 fanout:jsonl 真相源+Discord 節流)、discord_bot
 │                         #   (/watch slash,token 缺降級)、watchlist_service(PUT/bot 同鎖 +
 │                         #   canonical 零寫早退)、oi_levels(TXO 月契約 OI 撐壓)、breadth_engine
-│                         #   (FinMind 家數 poller + 連板 EOD task + 類股輪動 chain cache +
-│                         #   全市場鎖板事件 kind=market_limit_lock/open,**硬性不進 Discord**)、
-│                         #   breadth_fetch、chain_store、
+│                         #   (FinMind 家數 poller + 連板 EOD task;類股輪動 / 全市場鎖板事件
+│                         #   已於 2026-08-16 刪除)、breadth_fetch、
 │                         #   finmind_token、__main__(port env TXO_SERVER_PORT 預設 8721)
 │                         #   /api/trade/* 已刪(2026-08-04)→ 404,下單全走群益 capital
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
-├── sector_rotation.py    #   類股輪動純函式(零 IO;neigui 邏輯全等搬移)
 ├── market_breadth.py     #   全市場廣度純函式(零 IO;parity oracle fixture 對照)
 ├── limit_streaks.py      #   連板數純函式(prev_close = close − spread)
 ├── breadth_config.py / signals_config.py / corr_config.py / strategy_config.py  # configs/*.json 覆寫

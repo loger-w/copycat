@@ -188,6 +188,9 @@
 
 ## 2026-08-06(market-overview-r4-sector-signals 收尾留尾巴)
 
+> **〔2026-08-16 整節作廢〕** R4 類股強弱 / 訊號時間軸 / 全市場鎖板事件已整組刪除
+> (mod/remove-sector-timeline),下列 8 條全部失去標的,不再處理。
+
 - [ ] **user 過目待做(SC-3/SC-7 雙層之二)**:綜合 tab「類股強弱」(三層清單:產業 →
   子產業 → 成員,著色漲跌% + 量比,點成員跳個股)與「訊號時間軸」(倒序、kind chips、
   market 列「廣度」badge)兩個收合區塊,位於漲跌停列表與相關係數之間。AI 截圖見
@@ -1088,6 +1091,9 @@
 
 review 全文 `.claude/feat/market-overview-r4-sector-signals/code-review-round-2.json`。
 accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
+〔2026-08-16 註:R4 類股 / 時間軸 / 廣度事件已整組刪除(mod/remove-sector-timeline)——
+XR-7、FE-4 隨之作廢;HR-6 / HR-3 / HR-5 是 hub 通用議題仍成立,但「漲停潮日數百則廣度
+事件」的量級前提已消失,只剩自選規則訊號量級。〕
 
 - [x] **XR-3:SignalHub 深綁 stock engine** — **2026-08-12 已根治**(mod/signal-hub-decouple,
   PR #43):bus 上提 app 層 stock_ws、trade_date 牆鐘 fallback、daily_bars stub、
@@ -1120,10 +1126,10 @@ accepted 13 組已修(同日 fix/r4-review-round2);以下 rejected / 遞延:
 - [ ] **XR-6:後端 `_in_window` 無星期維度**,週末照 10s 打 FinMind(~1,710 次/日,
   配額安全)。加星期 gate 有週六補市日非對稱風險(rollover 教訓把週六補市當真
   場景),暫維持現狀。
-- [ ] **XR-7:開盤首輪廣度事件逐則 WS frame → 時間軸 N 則各自重排重繪**(漲停潮
+- [x] ~~**XR-7:開盤首輪廣度事件逐則 WS frame → 時間軸 N 則各自重排重繪**~~〔2026-08-16 作廢:時間軸已刪〕(漲停潮
   日 ~200 則擠在 09:01 一秒)。未 profile 先不動;若真 jank,候選 = hub 批次
   publish 或前端 buffer 一個 frame 再 setState。
-- [ ] **FE-4:SectorSection 不顯示 trade_date/as_of**(sector-model 有欄位,UI 丟
+- [x] ~~**FE-4:SectorSection 不顯示 trade_date/as_of**~~〔2026-08-16 作廢:SectorSection 已刪〕(sector-model 有欄位,UI 丟
   掉;唯一日期戳來自 BreadthBand 的 `_trade_date`,兩者可脫鉤)。加 stamp 是 UI
   增項,待四輪 user 過目時一併拍板。
 - [x] ~~**FE-7:產業列每 10s 依 avg 重排,展開/鑽取中的區塊在游標下位移**(誤點成員

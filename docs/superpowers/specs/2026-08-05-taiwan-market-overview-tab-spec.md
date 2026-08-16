@@ -165,6 +165,10 @@ TC4 系(指數圖/corr/個股/既有訊號)完全不受影響。
 
 ### Round 4 — 類股強弱 + 訊號事件流(規模 M)
 
+> **〔2026-08-16 已刪除〕** R4 全部產出(類股強弱 subtab、訊號時間軸 subtab、`/api/market/sector*`、
+> industry chain poller / 快取、全市場鎖板事件 `market_limit_*`、verify FLIP 通道)已依 user
+> 回饋第二批(`2026-08-15-user-feedback-batch2-rounds.md` R1)整組刪除。本節保留為決策記錄。
+
 〔2026-08-06 R4 實作輪更正:sector_rotation 吃的是 `TaiwanStockIndustryChain`
 chain_map(新 dataset,7 天 cache),**不是** industry_category —— 「industry
 override 表與幽靈 sector 教訓」屬 dedup_sector_map 鏈路,R2 已搬,與 rotation
