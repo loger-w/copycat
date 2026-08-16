@@ -68,7 +68,10 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── market_breadth.py     #   全市場廣度純函式(零 IO;parity oracle fixture 對照)
 ├── limit_streaks.py      #   連板數純函式(prev_close = close − spread)
+├── trading_calendar.py   #   台股交易日曆純判定(configs/trading_holidays.json;檔缺=只擋
+│                         #   週末+WARNING、壞檔 raise;缺年 WARNING 每年節流一次)
 ├── breadth_config.py / signals_config.py / corr_config.py / strategy_config.py  # configs/*.json 覆寫
+│                         #   (另 configs/trading_holidays.json = 交易日曆資料,非 dataclass 覆寫)
 │                         #   (signals:檔缺=全預設、壞檔 raise;corr:base 腿必須 source=
 │                         #   futures_engine — 同 symbol 衝突;notify:429 Retry-After 重試一次)
 ├── notify.py             #   Discord webhook(URL 未設 no-op、never-raise;CLI notify-test)

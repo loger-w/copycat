@@ -10,6 +10,13 @@
   breadth streak 06:00 三個時序 → 待 user 決定是否開 R3b。
 - [ ] **試撮(緩)badge 假日仍純時間照標**(next-time:97 第二段的殘留):同一份日曆
   (`GET /api/calendar` 的 holidays)可直接餵給那條判定,本輪 scope 外。
+- [ ] **錯標日目前沒有可見訊號**(review S5 / spec KR-1 影響面):日曆把真交易日標成假日時,
+  breadth 全天不取數且 stale 被壓成 False、前端三支時段函式全 false = 全站輪詢停擺,而唯一提示是
+  SC-7 的 boot WARNING(沒重啟就什麼都沒有)。補法:前端拿 `/api/calendar.holidays` 命中本機今日 →
+  標頭掛一顆膠囊「日曆判今日休市」,讓「畫面不動」有個解釋。
+- [ ] **SignalRail 標題在非交易日仍寫「今日訊號」**(review S6,與 SC-10 同族):假日開站掛的是
+  **上一交易日**的訊號(hub 的 jsonl 日別已跟著日曆走),標題卻寫今日 → 同 LimitList 那組處理,
+  改成「`MM-DD` 訊號」(等於今日時仍顯示「今日訊號」)。
 
 ## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
 
