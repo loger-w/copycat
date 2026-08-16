@@ -108,6 +108,20 @@ class RaisingHistoryIndexSource(FakeIndexSource):
         raise RuntimeError("history boom")
 
 
+class _CrosscheckBomb(BaseException):
+    """刻意不是 `Exception` 子類 —— 只有這種例外能同時穿過 `_calendar_crosscheck`
+    自吞的傘與關機路徑的 `except Exception`,正是 C2 要釘的那一格。"""
+
+
+class BaseExcHistoryIndexSource(FakeIndexSource):
+    """日 K probe 拋 BaseException:交叉檢查 task 以例外結束 → 走關機的 await。"""
+
+    def fetch_bars_range_tagged(
+        self, code: str, tf: str, start: str, end: str
+    ) -> tuple[list[dict], str, str]:
+        raise _CrosscheckBomb("crosscheck boom")
+
+
 def _empty_fetchers() -> BreadthFetchers:
     """家數帶取數四元組:全空(本檔只驗 today_fn 佈線,不驗家數算術)。"""
     return (
@@ -364,6 +378,28 @@ class TestCrosscheck:
             _wait_crosscheck(app)
             warnings = _app_warnings(caplog)
         assert not any("可能過期" in w or "臨時休市" in w for w in warnings), warnings
+
+    def test_crosscheck_base_exception_still_closes_engines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """C2:交叉檢查以 BaseException 結束時,關機仍走完反序 close。
+
+        它在反序 close 的**最前面** await —— 例外從那裡逃出去就等於六段 close 全部
+        不執行(TC4 session / COM 執行緒 / hub worker 一次全洩漏),與 `boot_task`
+        上面那段是同一個不變式。觀察點取 breadth `_task`(close 後歸 None)。
+        """
+        _freeze(monkeypatch, SAT)
+        app = _app(
+            tmp_path,
+            cal=load_trading_calendar(),
+            index=BaseExcHistoryIndexSource(),
+            breadth=_empty_fetchers(),
+        )
+        with _client(app):
+            _wait_crosscheck(app)
+            assert app.state.breadth is not None
+            assert app.state.breadth._task is not None
+        assert app.state.breadth._task is None, "crosscheck 的例外把反序 close 整串跳過了"
 
 
 class TestOverlayBasis:
