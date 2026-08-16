@@ -357,6 +357,21 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
     expect(card.textContent).not.toContain("回補中…");
   });
 
+  // review A-1:「已經有東西可畫」在三態裡必須是**同一把尺**。回補中的閘用
+  // `minutes.size`、edge 9 的閘用 `hasWindowedMinutes` 時,盤前只有 08:59 那格的
+  // 卡片會落進兩尺之間:回補明明還在跑,卡片卻宣告「尚無成交」(終態),而下一輪
+  // 回補落地才改口 —— 兩把尺同時存在時這個窗永遠關不起來。
+  it("backfilling 且只有窗外分鐘(08:59)→ 仍是「回補中…」而非「尚無成交」", async () => {
+    states["2330"] = state({
+      backfilling: true,
+      minutes: { "539": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } },
+    });
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const card = await screen.findByTestId("group-card-2330");
+    await waitFor(() => expect(card.textContent).toContain("回補中…"));
+    expect(card.textContent).not.toContain("尚無成交");
+  });
+
   it("noData → 「無資料」占位", async () => {
     states["2330"] = state({ no_data: true, minutes: {} });
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
