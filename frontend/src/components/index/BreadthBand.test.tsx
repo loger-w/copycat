@@ -101,17 +101,25 @@ describe("BreadthBand 格值與版面(SC-4)", () => {
     }
   });
 
-  it("(g) 數字用 ink token,不與底色同色(染色只在格底)", () => {
+  // 🔴 2026-08-16(D8):停板兩桶改**實心**底(bg-bull / bg-bear 滿版,不再是 /15 淡底),
+  // 白字是隨之而來的可讀性條件 —— ink token 在滿版紅綠上對比不足。標籤與數字都要白:
+  // 只染數字會留下一個 ink-dim 的「漲停」字浮在實心紅底上,比改版前更難讀。
+  // 樣板 = 個股期漲跌停燈(WatchlistSidebar.tsx:405-406 的 bg-bull … text-white)。
+  it("(g) 漲停桶標籤與數字都是白字(實心紅底上的可讀性)", () => {
     render(<BreadthBand breadth={state()} />);
+    const cell = screen.getByTestId("breadth-cell-twse-limit_up");
+    const label = within(cell).getByText("漲停");
+    expect(label.className).toContain("text-white");
     const num = screen.getByTestId("breadth-value-twse-limit_up").className;
-    expect(num).toContain("text-ink");
+    expect(num).toContain("text-white");
     expect(num).not.toContain("text-bull");
+    expect(num).not.toContain("text-bear");
   });
 });
 
-/** 🔴 2026-08-14 拍板配色:上漲 / 下跌兩格**沒有底色**,識別完全落在數字上 ——
- *  這兩格的數字染紅綠與 (f)(g) 的「停板格底染色、停板數字留 ink」不衝突,兩者是
- *  「有底色的格不重複染字」與「沒底色的格由字承擔」的一體兩面。 */
+/** 🔴 2026-08-14 拍板配色(D8:本輪不動):上漲 / 下跌兩格**沒有底色**,識別完全落在
+ *  數字上 —— 這兩格的數字染紅綠與 (f)(g)(o) 的「停板格實心底 + 白字」不衝突,兩者是
+ *  「有底色的格靠色塊、字退成白」與「沒底色的格由字承擔」的一體兩面。 */
 describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
   it("(l) 上漲數字紅字(text-bull),兩市場皆然", () => {
     render(<BreadthBand breadth={state()} />);
@@ -139,11 +147,14 @@ describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
     expect(cls).not.toContain("text-bear");
   });
 
-  it("(o) 跌停數字仍是 ink(綠底上的綠字讀不出來;與 (g) 互補)", () => {
+  it("(o) 跌停桶標籤與數字都是白字(與 (g) 同一條規則的另一邊)", () => {
     render(<BreadthBand breadth={state()} />);
+    const cell = screen.getByTestId("breadth-cell-twse-limit_down");
+    expect(within(cell).getByText("跌停").className).toContain("text-white");
     const cls = screen.getByTestId("breadth-value-twse-limit_down").className;
-    expect(cls).toContain("text-ink");
+    expect(cls).toContain("text-white");
     expect(cls).not.toContain("text-bear");
+    expect(cls).not.toContain("text-bull");
   });
 
   it("(p) 上漲 / 下跌格仍然沒有底色(染色不與字色疊加)", () => {
