@@ -466,7 +466,7 @@ describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
     expect(tableScroll.querySelector('[data-testid="limit-list-table"]')).toBeTruthy();
   });
 
-  it("九欄表頭各自 sticky;thead tr 的 border 移除(border-collapse 下不隨 sticky 黏)", async () => {
+  it("九欄表頭各自 sticky;分隔線走 inset shadow(border-collapse 下 border 不隨 sticky 黏)", async () => {
     await openWith(mkState(ROWS));
     const table = screen.getByTestId("limit-list-table");
     const ths = [...table.querySelectorAll("th")];
@@ -476,8 +476,19 @@ describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
       expect(th.className).toContain("top-0");
       // 捲動時表頭底下是列內容,沒有底色會直接透出來
       expect(th.className).toContain("bg-surface");
-      expect(th.className).toContain("border-b");
+      // WL-4:`border-collapse` 會把 th 的 border 併進表格的邊框模型交給 table 畫,
+      // 而 table 不跟著 sticky 黏 → 捲到中段底線消失(finder 實測 scrollTop=260)。
+      // inset shadow 畫在 th 自己的 box 上,黏到哪畫到哪。
+      expect(th.className).toContain("shadow-[inset_0_-1px_0_var(--color-line)]");
+      expect(th.className).not.toContain("border-b");
+      // 右欄 475px(1536 兩欄態)時「金額(億)」會折成兩行,表頭高度隨之跳動
+      expect(th.className).toContain("whitespace-nowrap");
     }
     expect(table.querySelector("thead tr")!.className).not.toContain("border-b");
+  });
+
+  it("狀態徽章不折行(窄欄下「觸及未鎖」會被拆成直排)", async () => {
+    await openWith(mkState(ROWS));
+    expect(screen.getByTestId("limit-badge-2330").className).toContain("whitespace-nowrap");
   });
 });
