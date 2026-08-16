@@ -130,8 +130,9 @@ export function FuturesLadder({
         })
       : [];
   const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
-  // 合約失解析只擋**進入**鎖定;已鎖定時解鎖鈕恆可按(review R2)。WS 非 open 一律擋(SC-13)
-  const lockDisabled = (contract === null && !arm.state.locked) || arm.wsStatus !== "open";
+  // 鎖定鈕 disabled 只擋**進入**方向,**整條**都要 `&& !locked`(R2 + code review r1 S3):
+  // 合約失解析與 WS 非 open(SC-13)都只是「不得進入鎖定」的理由,已鎖定時解鎖鈕恆可按。
+  const lockDisabled = (contract === null || arm.wsStatus !== "open") && !arm.state.locked;
 
   function showHint(text: string, autoClear = false): void {
     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
@@ -169,9 +170,10 @@ export function FuturesLadder({
         day_trade: dayTrade,
         source: "flash",
       })
-      // arm 事件不受 aliveRef 守門(review R3;理由見 PriceLadder 同段註)
+      // 失敗無條件計數、成功留 aliveRef 守門(review R3 + r1 S1;理由見 PriceLadder 同段註)
       .then((r) => {
         if (r.ok) {
+          if (!aliveRef.current) return;
           dispatchArm({ type: "send_ok" });
           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`);
         } else {
@@ -322,7 +324,7 @@ export function FuturesLadder({
             type="button"
             aria-pressed={arm.state.locked}
             disabled={lockDisabled}
-            title={arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
+            title={lockDisabled && arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
             onClick={() => {
               touchIdle();
               dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
