@@ -38,15 +38,18 @@ def make_engine(
     today_fn: Any = None,
     in_watch_window: Any = None,
     now_fn: Any = None,
+    is_trading_day: Any = None,
     stale_secs: float = 999.0,
     retry_secs: float = 0.01,
 ) -> IndexEngine:
+    extra = {} if is_trading_day is None else {"is_trading_day": is_trading_day}
     return IndexEngine(
         fake,  # type: ignore[arg-type]
         txf_getter=txf_getter,
         mis_fetch=mis_fetch,
         trade_date=trade_date,
         rollover=rollover,
+        **extra,
         today_fn=today_fn or (lambda: _dt.date(2026, 7, 28)),
         in_watch_window=in_watch_window or (lambda: False),
         # 換日 08:30 門檻的時鐘也必須注入:預設固定 10:00(門檻後),否則整份測試
@@ -605,6 +608,59 @@ async def test_rollover_gate_opens_at_0830() -> None:
         clock[0] = _dt.time(8, 30)  # 門檻含界(now < 08:30 才擋)
         await asyncio.sleep(0.15)
         assert eng.state()["trade_date"] == "2026-07-29"
+    finally:
+        await eng.close()
+
+
+async def test_rollover_skips_non_trading_day() -> None:
+    """SC-3:非交易日不設 pending、不 `set_trade_date`、不重掛、不 `fetch_day_minutes`。
+
+    現行判準是**純日曆日**(`new_date > trade_date`)—— 週末 / 國定假日整天每 60s 打一次
+    TC4 1K,恆空、不 swap,凍在上一交易日。畫面「看起來對」是副作用而非設計,而那條
+    空打是真的在燒 TC4 請求。
+    """
+    fake = FakeIndexSource()
+    fake.day_minutes = {"0901": 1_000}
+    eng = make_engine(
+        fake,
+        rollover=True,
+        trade_date="2026-08-14",
+        today_fn=lambda: _dt.date(2026, 8, 15),  # 週六
+        is_trading_day=lambda d: d.weekday() < 5,
+    )
+    eng._rollover_check_secs = 0.03  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        calls_after_start = fake.fetch_minutes_calls  # start() 的回補那一次
+        await asyncio.sleep(0.15)  # 夠跑約 5 拍
+        assert eng.state()["trade_date"] == "2026-08-14"
+        assert eng._pending_date is None  # type: ignore[attr-defined]
+        assert fake.trade_dates == ["2026-08-14"]  # 只有 start 同步那次
+        assert fake.subscribed == ["IX0001"]  # 沒有重掛
+        assert fake.fetch_minutes_calls == calls_after_start  # 沒有多打 1K
+    finally:
+        await eng.close()
+
+
+async def test_rollover_runs_on_trading_day() -> None:
+    """對照組:注入日曆且今天是交易日 → 兩段式換日語意逐字不變(W1)。"""
+    fake = FakeIndexSource()
+    fake.day_minutes = {"0901": 2_000}
+    eng = make_engine(
+        fake,
+        rollover=True,
+        trade_date="2026-08-13",
+        today_fn=lambda: _dt.date(2026, 8, 14),  # 週五
+        is_trading_day=lambda d: d.weekday() < 5,
+    )
+    eng._rollover_check_secs = 0.03  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        await asyncio.sleep(0.15)
+        state = eng.state()
+        assert state["trade_date"] == "2026-08-14"
+        assert state["twse"]["minutes"] == {"0901": 2_000}
+        assert "2026-08-14" in fake.trade_dates
     finally:
         await eng.close()
 
