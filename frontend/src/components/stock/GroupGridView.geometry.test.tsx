@@ -7,10 +7,12 @@
  *
  *  量法 = 把 `buildIntradayGeometry` 換成計次的同一份實作(`importOriginal` 保留行為)。
  *  `vi.mock` 是檔案級 + hoisted → 獨立檔。 */
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GroupGridView } from "@/components/stock/GroupGridView";
+import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { buildIntradayGeometry } from "@/lib/stock-intraday-svg";
 import type { Group } from "@/lib/watchlist-model";
 import { wrap } from "@/test-utils";
@@ -72,9 +74,37 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers(); // 只假造 Date 的測試也要還原,否則外溢到同檔後續 it
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+function quote(p: number): WatchlistQuote {
+  return {
+    p,
+    chg_pct: 2.59,
+    vol: 12_000,
+    ref: null,
+    upper: null,
+    lower: null,
+    no_data: false,
+    trial: false,
+  };
+}
+
+/** 保留**同一個** QueryClient 的 rerender。`wrap` 每次呼叫都建新 client —— 用它 rerender
+ *  會連 group-state 的 cache 一起換掉,`snap` 跟著換 identity,量到的就不是「報價換了
+ *  一份新物件」這件事,而是「快取被清掉」。 */
+function renderGrid(quotes: Record<string, WatchlistQuote>) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const ui = (q: Record<string, WatchlistQuote>) => (
+    <QueryClientProvider client={client}>
+      <GroupGridView groups={GROUPS} quotes={q} onPick={vi.fn()} active={null} />
+    </QueryClientProvider>
+  );
+  const { rerender } = render(ui(quotes));
+  return { rerender: (q: Record<string, WatchlistQuote>) => rerender(ui(q)) };
+}
 
 describe("GroupGridView hover 不重算幾何(SC-6d)", () => {
   it("4 張卡掛好後,對其中一張連發 3 個 mousemove → 幾何重算次數不變", async () => {
@@ -94,6 +124,39 @@ describe("GroupGridView hover 不重算幾何(SC-6d)", () => {
     for (const clientX of [10, 40, 90]) {
       fireEvent.mouseMove(svg, { clientX, clientY: 20 });
     }
+
+    expect(counted.mock.calls.length).toBe(before);
+  });
+
+  it("每秒報價重送(新物件、值相同)→ 幾何重算次數不變(accum useMemo 護欄)", async () => {
+    // 每秒 `watchlist_quote` 進來時 `quotes` 是**整份新物件**(WS handler 重建 record),
+    // 即使某一檔的價格一格都沒動 —— `quotes[code]` 是新 identity,memo 擋不住,
+    // 卡片必然重 render。這時擋在中間的只剩 `CardIntradayChart` 的 accum useMemo:
+    // 少了它,accum 每輪新 identity → core 內吃 accum 的幾何 useMemo 全部重算,
+    // 16 張卡每秒重算 16 次 271 格。**畫面完全看不出來**,只是掉幀。
+    // 時鐘鎖在窗內(只假造 Date、不假造 timer:RTL 的 waitFor 偵測不到 vitest fake
+    // timers,連 setInterval 一起假造會讓 findBy* 直接吊死)。窗外時 `extendMinutes`
+    // **原樣回傳**傳入的 Map → `accum.minutes` identity 不變,護欄拿掉也不會重算,
+    // 這條測試會靜默變成永遠綠的假證據。
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 7, 17, 10, 30, 0));
+    const { rerender } = renderGrid({});
+    for (const code of CODES) {
+      const card = await screen.findByTestId(`group-card-${code}`);
+      await waitFor(() => expect(card.querySelector('svg[role="img"]')).toBeTruthy());
+    }
+    const counted = vi.mocked(buildIntradayGeometry);
+
+    // 自檢:報價**真的**通到幾何(值變 → 重算)。少了這一段,下面那句「次數不變」
+    // 在卡片根本沒接上 `quotes` 時也會綠。
+    const beforeLive = counted.mock.calls.length;
+    expect(beforeLive).toBeGreaterThan(0);
+    rerender({ "2330": quote(2_400_000) });
+    expect(counted.mock.calls.length).toBeGreaterThan(beforeLive);
+
+    // 字面上新建、值完全相同 —— useMemo 的 deps(code / snap / liveP)一個都沒變
+    const before = counted.mock.calls.length;
+    rerender({ "2330": quote(2_400_000) });
 
     expect(counted.mock.calls.length).toBe(before);
   });
