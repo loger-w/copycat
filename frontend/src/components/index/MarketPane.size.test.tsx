@@ -149,6 +149,31 @@ describe("MarketPane 量測 → 圖高(SC-4)", () => {
   });
 });
 
+// 🔴 WL-3:svg 帶 viewBox + `w-full` → 內容整份等比縮放,pane 變窄時 rem 字級跟著縮
+// (1536 兩欄態 svgW 312 → 0.625rem 只剩 ~4.9px,不可讀)。補償 = 把 `vbW / svgW` 這個
+// 縮放比乘回 viewBox 內的字級,渲染 px 因此與 pane 寬無關。
+describe("MarketPane svg 字級補償(WL-3)", () => {
+  /** 左 pane 分時 svg 內第一個 `<text>`(整點刻度標籤)的 font-size。 */
+  function firstTextFontSize(): string | null {
+    const svg = screen.getByRole("img", { name: "加權指數分時走勢" });
+    return svg.querySelector("text")!.getAttribute("font-size");
+  }
+
+  it("量得到:字級 × (vbW / svgW) —— 430px 寬的 pane 把 0.625rem 放大回可讀", () => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    renderPane();
+    // insetX = 0(分時 svg 直接在 wrapper 內)→ svgW = 430
+    const expected = `${(0.625 * (640 / 430)).toFixed(4)}rem`;
+    expect(firstTextFontSize()).toBe(expected);
+  });
+
+  it("量不到(jsdom 無 ResizeObserver)→ scale 1,與改版前的字級數值等價", () => {
+    expect(typeof ResizeObserver).toBe("undefined");
+    renderPane();
+    expect(Number(firstTextFontSize()!.replace("rem", ""))).toBeCloseTo(0.625, 6);
+  });
+});
+
 // 🔴 amendment r3:pane 在單欄態(< 1050px 容器)不可縮 —— 那時高度由內容決定,無條件
 // `min-h-0` 會讓 pane 被壓到低於自身內容,圖卡(overflow visible)溢出壓在家數帶上。
 // figure 的地板同步降到 12rem:wrapper 130 → svg render 102,仍在 paneSvgHeight 的 96 地板之上。
