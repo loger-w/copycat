@@ -354,13 +354,17 @@ export function MarketPane({
       data-testid={`market-pane-${paneId}`}
       role="group"
       aria-label={paneId === "left" ? "左圖" : "右圖"}
-      // `min-h-0` 條件化(amendment r3):無條件掛著時 pane 會被壓到低於自身內容,
-      // 圖卡(overflow visible)直接溢出壓在家數帶上,而不是把左欄撐高讓主 grid 出捲軸。
-      // ⚠ 這個門檻量的是**左欄**(最近的 `@container` 祖先)而不是 IndexPage root ——
-      // 兩欄態下左欄約是容器寬的 6 成,故實務上只有超寬螢幕的 pane 真的可縮。窄於此
-      // 由雙圖 grid 的 `min-h-80` 與本檔 figure 的 `min-h-48` 兩層地板定高,超出的部分
-      // 走主 grid 的 `overflow-y-auto`(§7 edge 2 逃生口);兩種路徑都不會溢出重疊。
-      className="flex min-w-0 flex-col gap-3 @[1050px]:min-h-0"
+      // `min-h-0` **無條件**:pane 必須永遠可縮,地板由「顯式 min-height」提供 ——
+      // 雙圖 grid 的 `min-h-80` 與本檔 figure 的 `min-h-48`,不是靠 pane 自己不可縮。
+      // ⚠ 這裡不可寫成 `@[1050px]:min-h-0`:container query 的門檻量的是**左欄**
+      // (左欄自己掛了 `@container`,是最近的 container 祖先),兩欄態左欄只有 630–930px
+      // → 門檻永不成立 → pane 退回 grid item 的 `min-height: auto`,軌高被撐到 ≥ pane
+      // 內容高(figure 內的 svg 畫的是「當前高」,不會自己縮)→ 雙圖 grid 到 min-h-80
+      // 地板後軌道照樣撐開 → 溢出蓋家數帶。
+      // 兩種版面下的收斂:兩欄態 pane 縮到軌高,figure / wrapper 跟著縮 → 下一輪量測
+      // 讓 svg 跟著矮;單欄態 pane 由內容驅動高,沿 `wrapper − 2` 收斂到 figure 的
+      // `min-h-48` 地板(每輪只會變矮不會回彈,不形成迴圈)。
+      className="flex min-h-0 min-w-0 flex-col gap-3"
     >
       {/* 標的列(SC-2) */}
       <div className="flex flex-wrap items-center gap-3">
