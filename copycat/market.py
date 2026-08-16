@@ -28,6 +28,20 @@ def tick_size_milli(price_milli: int) -> int:
     return _tick_milli(price_milli)
 
 
+def snap_down_milli(price_milli: int) -> int:
+    """向下貼齊該價位所在段的合法檔位(VP 直方圖的 key;change-spec AD-2)。
+
+    tick 段取**該價位自己所在段**(不是 snap 後所在段):99.999 元屬 50–100 元段
+    (tick 0.1)→ 99.9;拿 snap 後那一段去算會讓段界附近的成交量歸到不存在的檔位。
+
+    前端對應函式是 `frontend/src/lib/stock-tick.ts::snapDown` —— 兩份規則各自漂移的
+    失效樣態是「同一檔在單檔頁與卡片上 POC 不同」,兩個數字都看起來對,零錯誤訊號。
+    parity 由 `tests/fixtures/vp_parity.json` 兩側各自斷言鎖住。
+    """
+    tick = _tick_milli(price_milli)
+    return price_milli // tick * tick
+
+
 def tick_size(price: float) -> float:
     return _tick_milli(round(price * 1000)) / 1000
 
