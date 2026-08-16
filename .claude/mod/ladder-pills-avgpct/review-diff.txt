@@ -1,0 +1,283 @@
+diff --git a/frontend/src/components/rail/RightRail.test.tsx b/frontend/src/components/rail/RightRail.test.tsx
+index 818429bb..2660a733 100644
+--- a/frontend/src/components/rail/RightRail.test.tsx
++++ b/frontend/src/components/rail/RightRail.test.tsx
+@@ -255,10 +255,11 @@ describe("RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13)", ()
+ describe("RightRail 交易別 / 數量不隨 tab 重置(R2-10)", () => {
+   it("選融券後切 tab 再切回,交易別仍是融券(真錢:靜默回現股會出事)", () => {
+     render(rail(STOCK_CTX));
+-    fireEvent.change(screen.getByLabelText("交易別"), { target: { value: "short" } });
++    // 🔴 R6 該變:交易別 select → pill,選取 = 點「融券」鈕、狀態 = aria-pressed
++    fireEvent.click(screen.getByRole("button", { name: "融券" }));
+     fireEvent.click(screen.getByRole("tab", { name: "委託" }));
+     fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+-    expect((screen.getByLabelText("交易別") as HTMLSelectElement).value).toBe("short");
++    expect(screen.getByRole("button", { name: "融券" }).getAttribute("aria-pressed")).toBe("true");
+   });
+ 
+   it("張數快捷值切 tab 後保留", () => {
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index 868dd1e0..dfddc834 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -398,7 +398,9 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+     });
+     render(ladder());
+     armUp();
+-    fireEvent.change(screen.getByLabelText("交易別"), { target: { value: "daytrade_sell" } });
++    // 🔴 R6 該變:交易別 select → 四顆 pill,選取 = 點「無券」鈕(舊 fireEvent.change 已無 select 可改)
++    fireEvent.click(screen.getByRole("button", { name: "無券" }));
++    expect(screen.getByRole("button", { name: "無券" }).getAttribute("aria-pressed")).toBe("true");
+     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
+     expect(screen.getByLabelText("賣 100.5").hasAttribute("disabled")).toBe(false);
+     fireEvent.click(screen.getByLabelText("買 100"));
+@@ -1150,3 +1152,25 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
+     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+   });
+ });
++
++describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
++  it("四顆並列 pill 現股/融資/融券/無券,單選 aria-pressed 轉移;容器 role=group aria-label=交易別", () => {
++    mockCapitalFetch();
++    render(ladder());
++    const group = screen.getByRole("group", { name: "交易別" });
++    const labels = ["現股", "融資", "融券", "無券"];
++    const pills = labels.map((l) => within(group).getByRole("button", { name: l }));
++    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
++    expect(pills[0]!.className).toContain("border-accent");
++    expect(pills[1]!.className).toContain("border-line");
++    fireEvent.click(pills[2]!);
++    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false", "true", "false"]);
++    expect(pills[2]!.className).toContain("border-accent");
++    // 舊 select 已退場
++    expect(group.querySelector("select")).toBeNull();
++    // 與鎖定鈕同列,pill 群 shrink-0(288px 右欄由武裝鈕吸收壓縮)
++    const lock = screen.getByRole("button", { name: "鎖定" });
++    expect(group.parentElement).toBe(lock.parentElement);
++    expect(group.className).toContain("shrink-0");
++  });
++});
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index 5fd7453b..a9f1292d 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -389,21 +389,32 @@ export function PriceLadder({
+         </label>
+       }
+       armControls={
+-        <select
+-          aria-label="交易別"
+-          value={tradeKind}
+-          onChange={(e) => {
+-            touchIdle();
+-            setTradeKind(e.target.value as TradeKind);
+-          }}
+-          className="rounded border border-line bg-bg-deep px-1 py-1 text-xs text-ink"
+-        >
++        /* 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,
++           pill 讓「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。
++           `aria-label` 掛在 role=group 容器(同 GroupGridView),既有以「交易別」定位的
++           測試 / a11y 關聯不變;`shrink-0` + 窄 padding:288px 右欄下由武裝鈕(flex-1
++           min-w-0)吸收壓縮,pill 群與鎖定鈕不換行(R5 SC-1 同策略)。 */
++        <div role="group" aria-label="交易別" className="flex shrink-0 items-center gap-0.5">
+           {TRADE_KINDS.map(([v, label]) => (
+-            <option key={v} value={v}>
++            <button
++              key={v}
++              type="button"
++              aria-pressed={tradeKind === v}
++              onClick={() => {
++                touchIdle();
++                setTradeKind(v);
++              }}
++              className={cn(
++                "rounded border px-1 py-0.5 text-xs",
++                tradeKind === v
++                  ? "border-accent text-accent"
++                  : "border-line text-ink-dim hover:text-ink",
++              )}
++            >
+               {label}
+-            </option>
++            </button>
+           ))}
+-        </select>
++        </div>
+       }
+       footer={
+         posRows.length > 0 ? (
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index 2ad2f095..0b548297 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -1,5 +1,7 @@
+ /** @vitest-environment jsdom */
+ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
++
++import type { WatchlistQuote } from "@/hooks/useStockStream";
+ import { StrictMode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+@@ -1104,3 +1106,64 @@ describe("WatchlistSidebar 緩撮標示(SC-1)", () => {
+     expect(within(row).queryByTestId("wl-trial-5483")).toBeNull();
+   });
+ });
++
++// batch2 R6 SC-4:群組標題列組名右側 = 該群等權平均漲幅(排除 p==null),未分組不顯示
++describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
++  function quotesFor(over: Record<string, Partial<WatchlistQuote>>): Record<string, WatchlistQuote> {
++    const out: Record<string, WatchlistQuote> = { ...QUOTES };
++    for (const [code, o] of Object.entries(over)) out[code] = { ...QUOTES["2330"], ...o };
++    return out;
++  }
++  function headerOf(group: string): HTMLElement {
++    return within(screen.getByTestId(`wl-group-${group}`)).getByRole("button", {
++      name: new RegExp(`^${group}`),
++    });
++  }
++
++  it("主力 = 2330(+2.59)+ 5483(無成交,排除)→ +2.59% 紅字;觀察 = (0.41+2.59)/2 → +1.50%", async () => {
++    wrap(
++      <WatchlistSidebar
++        active={null}
++        onSelect={() => {}}
++        quotes={quotesFor({ "3231": { p: 100_000, chg_pct: 0.41 } })}
++      />,
++    );
++    await waitGroups();
++    const main = headerOf("主力");
++    const avg = within(main).getByText("+2.59%");
++    expect(avg.className).toContain("text-bull");
++    // 位置:組名之後、檔數之前
++    const name = within(main).getByText("主力");
++    const count = within(main).getByText("2");
++    expect(name.compareDocumentPosition(avg) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    expect(avg.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    expect(within(headerOf("觀察")).getByText("+1.50%").className).toContain("text-bull");
++  });
++
++  it("負值綠字;零 = ink-dim", async () => {
++    wrap(
++      <WatchlistSidebar
++        active={null}
++        onSelect={() => {}}
++        quotes={quotesFor({
++          "2330": { p: 2_300_000, chg_pct: -3 },
++          "3231": { p: 100_000, chg_pct: 3 },
++        })}
++      />,
++    );
++    await waitGroups();
++    expect(within(headerOf("主力")).getByText("-3.00%").className).toContain("text-bear");
++    const zero = within(headerOf("觀察")).getByText("0.00%");
++    expect(zero.className).toContain("text-ink-dim");
++    expect(zero.className).not.toContain("text-bull");
++  });
++
++  it("全組無成交(只有參考價 / no_data)→ 不渲染平均;未分組列永遠不顯示", async () => {
++    mockWatchlist([{ name: "空組", codes: ["5483"] }], ["5483", "2330"]);
++    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
++    await waitFor(() => expect(screen.getByTestId("wl-group-空組")).toBeTruthy());
++    expect(within(headerOf("空組")).queryByText(/%$/)).toBeNull();
++    const ung = within(screen.getByTestId("wl-ungrouped")).getByRole("button", { name: /^未分組/ });
++    expect(within(ung).queryByText(/%$/)).toBeNull();
++  });
++});
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index d2c70e35..aad57196 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -10,6 +10,7 @@ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
+ import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
+ import { limitState } from "@/lib/stock-tick";
+ import { cn, safeIdToken } from "@/lib/utils";
++import { groupAvgPct } from "@/lib/watchlist-avg";
+ import {
+   assignToGroup,
+   detachFromGroups,
+@@ -297,6 +298,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     collapsed: boolean;
+     listId: string;
+     onToggle: () => void;
++    /** 群組等權平均漲幅(R6 SC-4);未分組不傳、全組無成交為 null → 兩者皆不渲染 */
++    avgPct?: number | null;
+   }): React.ReactElement {
+     return (
+       <button
+@@ -327,6 +330,17 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           {o.collapsed ? "▸" : "▾"}
+         </span>
+         <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">{o.label}</span>
++        {o.avgPct != null ? (
++          // 色沿個股列 / GroupGridView 同構三態:>0 紅 / <0 綠 / 0 灰;不套亮燈白字(標題列無底色)
++          <span
++            className={cn(
++              "shrink-0 font-mono text-[0.625rem]",
++              o.avgPct > 0 ? "text-bull" : o.avgPct < 0 ? "text-bear" : "text-ink-dim",
++            )}
++          >
++            {fmtPct(o.avgPct)}
++          </span>
++        ) : null}
+         <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
+       </button>
+     );
+@@ -624,6 +638,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+               collapsed: isCollapsed,
+               listId,
+               onToggle: () => toggleCollapsed(g.name),
++              // 每 render 重算:群組數 × 檔數是兩位數量級的純算術,不值得 memo
++              avgPct: groupAvgPct(g.codes, quotes),
+             })}
+ 
+             {isCollapsed ? null : (
+diff --git a/frontend/src/lib/watchlist-avg.test.ts b/frontend/src/lib/watchlist-avg.test.ts
+new file mode 100644
+index 00000000..5a267464
+--- /dev/null
++++ b/frontend/src/lib/watchlist-avg.test.ts
+@@ -0,0 +1,19 @@
++import { describe, expect, it } from "vitest";
++
++import { groupAvgPct } from "@/lib/watchlist-avg";
++
++const q = (p: number | null, chg_pct: number | null) => ({ p, chg_pct });
++
++describe("groupAvgPct(batch2 R6 SC-4:群組等權平均漲幅)", () => {
++  it("等權平均;p==null(含只有 ref 的盤前檔)與 chg_pct==null 不入分母", () => {
++    const quotes = { A: q(100_000, 2), B: q(200_000, -1), C: q(null, null), D: q(300_000, null) };
++    expect(groupAvgPct(["A", "B", "C", "D"], quotes)).toBe(0.5);
++  });
++  it("缺 quote 的代碼跳過;全組無成交 → null(呼叫端不渲染)", () => {
++    expect(groupAvgPct(["X", "C"], { C: q(null, null) })).toBeNull();
++    expect(groupAvgPct([], {})).toBeNull();
++  });
++  it("單檔群組 = 該檔本身", () => {
++    expect(groupAvgPct(["A"], { A: q(1, -3.25) })).toBe(-3.25);
++  });
++});
+diff --git a/frontend/src/lib/watchlist-avg.ts b/frontend/src/lib/watchlist-avg.ts
+new file mode 100644
+index 00000000..9958adc3
+--- /dev/null
++++ b/frontend/src/lib/watchlist-avg.ts
+@@ -0,0 +1,19 @@
++/** 自選群組標題列的等權平均漲幅(batch2 R6 SC-4)。
++ *
++ *  分母只算「今日有成交」的檔(`p != null` 且 `chg_pct != null`):盤前只有參考價的檔、
++ *  無資料的檔都不入分母 —— 把它們當 0% 會把整組平均往 0 拉、看起來像「這組今天沒動」。
++ *  全組都沒成交 → null,呼叫端不渲染(標題列已有檔數,空值再佔一格是噪音)。 */
++export function groupAvgPct(
++  codes: readonly string[],
++  quotes: Record<string, { p: number | null; chg_pct: number | null } | undefined>,
++): number | null {
++  let sum = 0;
++  let n = 0;
++  for (const code of codes) {
++    const q = quotes[code];
++    if (q === undefined || q.p == null || q.chg_pct == null) continue;
++    sum += q.chg_pct;
++    n += 1;
++  }
++  return n === 0 ? null : sum / n;
++}

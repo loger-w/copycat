@@ -1,0 +1,18 @@
+{"round":1,"lenses":["correctness-whitelist(opus)","a11y-test(opus)"],"scope":"git diff master...HEAD(4 commits)",
+"findings":[
+{"id":"C1","severity":"P1","claim":"pill 把改送單語意降成武裝列單擊,融資/融券互切梯面零回饋","disposition":"accepted(b)","resolution":"非現股選中 border-warn text-warn(琥珀),現股 accent;不採 (a) 切交易別即解除(與 R5 鎖定語意衝突、且既有 select 亦不解除)"},
+{"id":"C2","severity":"P2","claim":"armed+locked 態 288px 未取證;實測 row 貼齊零餘裕","disposition":"accepted","resolution":"pill px-1→px-0.5(+16px 餘裕,實測 arm 69px 無溢出);截圖 evidence/SC-1_pills_288_armed_locked_*.png"},
+{"id":"C3","severity":"P2","claim":"試撮價入平均無標示","disposition":"accepted","resolution":"groupAvgPct 回 trial 數;title 註明含 k 檔試撮"},
+{"id":"C4","severity":"P2","claim":"分母與檔數兩母體無標示","disposition":"accepted(title)","resolution":"title「n/N 檔有成交」;[auto-default] 不設覆蓋率門檻不隱藏"},
+{"id":"C5","severity":"P2","claim":"tone 與顯示精度不同源(-0.003 綠字 -0.00%)","disposition":"accepted","resolution":"tone 以四捨五入後值判(且 -0 印 0.00%)"},
+{"id":"C6","severity":"P2","claim":"header 可及名稱多一裸數字","disposition":"accepted","resolution":"span aria-label「平均漲幅 +x%」(不動 header aria-label)"},
+{"id":"C7","severity":"P2","claim":"pill touchIdle 無測試","disposition":"accepted","resolution":"= A1,fake timers 案 + mutation-verified"},
+{"id":"A1","severity":"P1","claim":"SC-2 後半 touchIdle 零覆蓋","disposition":"accepted","resolution":"PriceLadder 閒置案(拿掉 touchIdle 紅)"},
+{"id":"A2","severity":"P2","claim":"p==null 守衛無測試","disposition":"accepted","resolution":"fixture E q(null,0);mutation 紅"},
+{"id":"A3","severity":"P2","claim":"role=group + aria-pressed 非單選語意(radiogroup 更對)","disposition":"next-time","resolution":"四處同構 pattern(StockPage/GroupGridView/OrderPanel/本處),與既有 tablist a11y 半套條同批處理"},
+{"id":"A4","severity":"P2","claim":"= C6","disposition":"accepted","resolution":"同 C6"},
+{"id":"A5","severity":"P2","claim":"7 處存在性斷言降級命中空殼容器","disposition":"accepted(partial)","resolution":"RightRail 3 錨點加「現股」button 斷言(只加不改);缺席斷言維持"},
+{"id":"A6","severity":"P2","claim":"零態 ink-dim 對比 2.92:1(系統性)","disposition":"next-time","resolution":"與 stockRow / QuoteCell 零態一起改 chore"},
+{"id":"A7","severity":"P2","claim":"SC-1 無 DOM 次序;RightRail 單顆斷言","disposition":"accepted","resolution":"四元組 + 次序斷言"}
+],
+"p2_summary":"既有 assertion 改動 = 該變 2 處,無超收(兩 lens 皆確認);其餘 P2 皆已修或入 next-time。"}
