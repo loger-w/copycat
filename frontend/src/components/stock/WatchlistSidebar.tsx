@@ -10,6 +10,7 @@ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
 import { cn, safeIdToken } from "@/lib/utils";
+import { groupAvgPct } from "@/lib/watchlist-avg";
 import {
   assignToGroup,
   detachFromGroups,
@@ -297,6 +298,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     collapsed: boolean;
     listId: string;
     onToggle: () => void;
+    /** 群組等權平均漲幅(R6 SC-4);未分組不傳、全組無成交為 null → 兩者皆不渲染 */
+    avgPct?: number | null;
   }): React.ReactElement {
     return (
       <button
@@ -327,6 +330,17 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           {o.collapsed ? "▸" : "▾"}
         </span>
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">{o.label}</span>
+        {o.avgPct != null ? (
+          // 色沿個股列 / GroupGridView 同構三態:>0 紅 / <0 綠 / 0 灰;不套亮燈白字(標題列無底色)
+          <span
+            className={cn(
+              "shrink-0 font-mono text-[0.625rem]",
+              o.avgPct > 0 ? "text-bull" : o.avgPct < 0 ? "text-bear" : "text-ink-dim",
+            )}
+          >
+            {fmtPct(o.avgPct)}
+          </span>
+        ) : null}
         <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
       </button>
     );
@@ -624,6 +638,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               collapsed: isCollapsed,
               listId,
               onToggle: () => toggleCollapsed(g.name),
+              // 每 render 重算:群組數 × 檔數是兩位數量級的純算術,不值得 memo
+              avgPct: groupAvgPct(g.codes, quotes),
             })}
 
             {isCollapsed ? null : (
