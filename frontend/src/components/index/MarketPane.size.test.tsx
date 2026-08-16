@@ -30,6 +30,38 @@ const TWSE: IndexSeries = {
   minutes: { "0901": 43_000_000, "0930": 42_039_920 },
 };
 
+const OTC: IndexSeries = {
+  p: 359_800,
+  ref: 378_090,
+  high: 373_420,
+  low: 358_430,
+  stale: false,
+  minutes: { "1017": 359_800 },
+};
+
+/** 日 K 態的合法 payload(`/api/index/bars`;fixture 沿 IndexPage.test.tsx)。 */
+const DK_BODY = {
+  key: "TWSE",
+  tf: "D",
+  bars: Array.from({ length: 3 }, (_, i) => ({
+    t: `2026-07-2${7 + i}`,
+    o: 100,
+    h: 110,
+    l: 90,
+    c: 105,
+    v: 10,
+  })),
+  meta: {
+    source: "tc4_dk",
+    coverage_from: "2026-07-27",
+    coverage_to: "2026-07-29",
+    partial_last: false,
+    volume: true,
+    refusal: null,
+    synth_since: null,
+  },
+};
+
 const LEFT_STORES: PaneStores = {
   key: MARKET_KEY_STORE,
   mode: MARKET_MODE_STORE,
@@ -63,14 +95,16 @@ class FakeResizeObserver {
   disconnect(): void {}
 }
 
-function renderPane() {
+/** `otc` 只有重疊態需要(`buildOverlayGeometry` 兩條 series 都得非 null)—— 其餘測試維持
+ *  單邊,避免多一份資料改變分時態的幾何。 */
+function renderPane(otc: IndexSeries | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MarketPane
         paneId="left"
         twse={TWSE}
-        otc={null}
+        otc={otc}
         futures={null}
         stores={LEFT_STORES}
         defaultKey="TWSE"
@@ -146,6 +180,41 @@ describe("MarketPane 量測 → 圖高(SC-4)", () => {
     expect(typeof ResizeObserver).toBe("undefined");
     renderPane();
     expect(svgViewBoxHeight()).toBe(220);
+  });
+});
+
+/** 🔒 lock(review TD-7):**選對 frame** 這件事原本零測試 —— 三態的 chrome 差 30-70px,
+ *  選錯的症狀是圖比容器高一點點、於是主 grid 長出一條誰也解釋不了的捲軸,而算式本身
+ *  (`paneSvgHeight` 三態)照樣全綠。這兩支走整條真鏈:localStorage 預設 → 模式判別 →
+ *  frame → 下傳 → 各自的 svg viewBox。 */
+describe("MarketPane 依模式選 frame(TD-7)", () => {
+  const SIZE = { width: 430, height: 300 };
+
+  it("重疊態 → 用 overlay frame(巢狀 figure 再吃 62 高 34 寬)", () => {
+    window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    renderPane(OTC);
+
+    const svg = screen.getByRole("img", { name: "指數重疊走勢" });
+    const expected = paneSvgHeight(SIZE, PANE_FRAMES.overlay);
+    expect(expected).toBeDefined();
+    expect(svg.getAttribute("viewBox")).toBe(`0 0 640 ${expected}`);
+  });
+
+  it("K 線態 → 用 candle frame,且 viewBox 寬是 CandleChart 的 1400", async () => {
+    window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
+    window.localStorage.setItem(MARKET_MODE_STORE, "day");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(DK_BODY))),
+    );
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    renderPane();
+
+    const figure = await screen.findByTestId("candle-figure");
+    const expected = paneSvgHeight(SIZE, PANE_FRAMES.candle);
+    expect(expected).toBeDefined();
+    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe(`0 0 1400 ${expected}`);
   });
 });
 
