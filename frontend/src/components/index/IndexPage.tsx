@@ -114,19 +114,30 @@ export function IndexPage({
       {/* 1050px 是**容器寬**不是視窗寬(容器 = 視窗 − 349:右欄 rail 288 + pl-3 12 +
           border 1 + 外層 px-4 32 + gap-4 16)。窄於此退回單欄堆疊 = 改版前的整頁捲
           行為(SC-7);兩欄態不覆寫 overflow —— 正常尺寸內容恰填滿不出捲軸,極矮
-          視窗時這道 overflow 就是逃生口(§7 edge 2)。 */}
+          視窗時這道 overflow 就是逃生口(§7 edge 2)。
+
+          **單欄態是 flex-col 不是 grid-cols-1**(amendment r3):grid 的兩條 auto 列會把
+          自由空間**等分**給左右欄,列高與內容完全無關 —— 左欄內容再多也只拿到一半高、
+          溢出的部分由 overflow visible 直接壓在下一列上,而主 grid 的 scrollHeight 恆
+          等於 clientHeight,這道逃生口永遠不啟動(截圖 SC-7 1280 實測 642/642)。
+          flex-col 的列高由內容決定,溢出才真的捲得起來。 */}
       <div
         data-testid="index-main-grid"
-        className="grid min-h-0 flex-1 gap-3 grid-cols-1 overflow-y-auto @[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto @[1050px]:grid @[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
       >
-        {/* 左欄自己也是 container:雙圖的 700px 斷點量的是**左欄寬**,掛在 root 上量到的
-            會是整頁寬(右欄佔掉的 2fr 也算進去)→ 兩張圖在真正塞不下時仍硬並排。 */}
-        <div className="@container flex min-h-0 flex-col gap-3">
+        {/* 左欄自己也是 container:雙圖的 640px 斷點量的是**左欄寬**,掛在 root 上量到的
+            會是整頁寬(右欄佔掉的 2fr 也算進去)→ 兩張圖在真正塞不下時仍硬並排。
+            `min-h-0` **只在兩欄態**:單欄態下它會讓左欄再也撐不高主 grid(同上)。 */}
+        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0">
           <BasisRow txf={txf} twse={twse} />
           {/* 顯式斷點取代舊 auto-fit minmax(480px):auto-fit 量的是這個 grid 自己的寬,
               與左欄 container 同寬故語意等價,但斷點值得寫在看得見的地方(W-12)。
-              `min-h-0 flex-1` = 雙圖吃掉左欄扣掉基差列 / 家數帶 / 騰落線後的剩餘高。 */}
-          <div className="grid grid-cols-1 gap-3 min-h-0 flex-1 @[700px]:grid-cols-2">
+              640 而非 700:1440×900 兩欄態左欄 655px 也要並排,否則兩圖直排 + 捲動。
+
+              `flex-1 min-h-80` 而非 `flex-1 min-h-0`(amendment r3):min-h-0 的軌可以被
+              壓到低於內容高,圖卡溢出壓在家數帶上;20rem 地板 = 標的列 28 + 週期列折 2 行
+              56 + gap 24 + figure 192,到地板後左欄總高超過主 grid → 逃生口才接得住。 */}
+          <div className="grid grid-cols-1 gap-3 flex-1 min-h-80 @[640px]:grid-cols-2">
             <MarketPane
               paneId="left"
               twse={twse}
@@ -162,9 +173,11 @@ export function IndexPage({
         {/* 右欄漲跌停列表恆掛(2026-08-16 subtab 退役),沿用改版前那個外框盒。
             廣度發現 → 深度盯盤的銜接點 —— 家數帶說「今天有幾檔鎖住」,列表說「是哪
             幾檔」,點下去就跳到個股(期)頁看那一檔的五檔與分時。
-            `min-h-0 flex-col`:整高交給列表自己內捲(表頭 sticky),列表長度不再把
-            左欄推出視窗。`active` 直傳:輪詢的唯一 gate 是主 tab,不再經 subtab 條件。 */}
-        <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
+            `@[1050px]:min-h-0 flex-col`:兩欄態整高交給列表自己內捲(表頭 sticky),列表
+            長度不再把左欄推出視窗;單欄態(堆疊)不可縮 —— 那時右欄在左欄下面,壓成
+            0 高等於列表消失,舊行為是整頁捲著看完。
+            `active` 直傳:輪詢的唯一 gate 是主 tab,不再經 subtab 條件。 */}
+        <div className="flex flex-col rounded-md border border-line bg-surface @[1050px]:min-h-0">
           <LimitListSection onOpenStock={onOpenStock} active={active} />
         </div>
       </div>
