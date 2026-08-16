@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  accumFromGroupSnapshot,
   applyTick,
   extendMinutes,
   fromSnapshot,
@@ -388,5 +389,132 @@ describe("extendMinutes(R10 現價延伸)", () => {
     expect(extendMinutes(src, null, at(10, 0))).toBe(src);
     expect(extendMinutes(src, 0, at(10, 0))).toBe(src);
     expect(extendMinutes(src, -5, at(10, 0))).toBe(src);
+  });
+});
+
+/** 群組卡片的 accum 組裝(change-spec §6 A)。卡片走 `/api/stock/group-state` 的精簡
+ *  snapshot(沒有 ticks),而 `IntradayChartCore` 吃的是 `StockAccum` —— 這支把前者
+ *  補成後者。缺鍵一律降級成「不可得」而不是猜:舊後端還沒送 vwap/high/low/vp 時,
+ *  卡片應該少畫那幾層,而不是拿分鐘資料近似出一份與單檔頁不同的數字。 */
+describe("accumFromGroupSnapshot", () => {
+  const at = (h: number, m: number, s: number) => new Date(2026, 7, 6, h, m, s);
+  const META = { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 };
+  const MIN = (): Map<number, MinuteAgg> =>
+    new Map<number, MinuteAgg>([
+      [540, { c: 2_330_000, v: 10, i: 4, o: 6, u: 0, h: 2_335_000, l: 2_325_000 }],
+      [541, { c: 2_340_000, v: 5, i: 1, o: 4, u: 0, h: null, l: null }],
+    ]);
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("缺鍵(舊後端)→ vwap/high/low 為 null、vp 空 Map,其餘欄位取零值", () => {
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      { minutes: MIN(), meta: META, noData: false },
+      null,
+    );
+    expect(acc.code).toBe("2330");
+    expect(acc.vwap).toBeNull();
+    expect(acc.high).toBeNull();
+    expect(acc.low).toBeNull();
+    expect(acc.vp.size).toBe(0);
+    expect(acc.ticks).toEqual([]);
+    expect(acc.book).toBeNull();
+    expect(acc.seq).toBe(0);
+    expect(acc.trial).toBe(false);
+    expect(acc.amountMilli).toBe(0);
+    expect(acc.volume).toBe(0);
+    expect(acc.noData).toBe(false);
+    expect(acc.meta).toBe(META);
+  });
+
+  it("新後端四鍵齊 → 原樣帶入(不重算、不近似)", () => {
+    const vp = new Map([[2_330_000, { t: 10, o: 6, i: 4 }]]);
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      {
+        minutes: MIN(),
+        meta: META,
+        noData: false,
+        vwap: 2_333_000,
+        high: 2_345_000,
+        low: 2_320_000,
+        vp,
+      },
+      null,
+    );
+    expect(acc.vwap).toBe(2_333_000);
+    expect(acc.high).toBe(2_345_000);
+    expect(acc.low).toBe(2_320_000);
+    expect(acc.vp.get(2_330_000)).toEqual({ t: 10, o: 6, i: 4 });
+  });
+
+  it("noData 原樣帶入(卡片三態的判準之一)", () => {
+    const acc = accumFromGroupSnapshot(
+      "9999",
+      { minutes: new Map(), meta: null, noData: true },
+      null,
+    );
+    expect(acc.noData).toBe(true);
+    expect(acc.meta).toBeNull();
+  });
+
+  // last 分支 A:liveP 是每秒都在動的那一份,現價圈與末點要同源(AD-9)
+  it("liveP > 0 → last 取 liveP,時間戳是本機時鐘 HH:MM:SS", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(at(10, 5, 7));
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      { minutes: MIN(), meta: META, noData: false },
+      2_355_000,
+    );
+    expect(acc.last).toEqual({ p: 2_355_000, t: "10:05:07", cum_vol: 0 });
+  });
+
+  // last 分支 B(edge 10):liveP 不可得 → 退回**最後一格**的收盤,不是第一格也不是 null
+  it("liveP null / ≤0 → last 退回最大分鐘鍵那格的 close,t 為該分鐘整秒", () => {
+    const snap = { minutes: MIN(), meta: META, noData: false };
+    expect(accumFromGroupSnapshot("2330", snap, null).last).toEqual({
+      p: 2_340_000,
+      t: "09:01:00",
+      cum_vol: 0,
+    });
+    // 0 是 TC4 的「不可得」不是價格
+    expect(accumFromGroupSnapshot("2330", snap, 0).last?.p).toBe(2_340_000);
+  });
+
+  it("liveP 不可得且 minutes 空 → last 為 null(不冒充)", () => {
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      { minutes: new Map(), meta: META, noData: false },
+      null,
+    );
+    expect(acc.last).toBeNull();
+  });
+
+  it("minutes 走 extendMinutes:窗內 liveP 多一格,且**不污染**輸入的 Map", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(at(10, 0, 30));
+    const src = MIN();
+    const acc = accumFromGroupSnapshot("2330", { minutes: src, meta: META, noData: false }, 2_355_000);
+    expect(acc.minutes.size).toBe(3);
+    expect(acc.minutes.get(600)?.c).toBe(2_355_000);
+    // 來源是 TQ cache 的物件 —— 被就地改過的話,下一次 render 拿到的「快取」已經髒了
+    expect(src.size).toBe(2);
+    expect(src.has(600)).toBe(false);
+  });
+
+  it("窗外時刻 + liveP > 0 → 分鐘不延伸,但 last 仍是 liveP(現價圈照畫)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(at(14, 30, 0));
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      { minutes: MIN(), meta: META, noData: false },
+      2_355_000,
+    );
+    expect(acc.minutes.size).toBe(2);
+    expect(acc.last?.p).toBe(2_355_000);
   });
 });
