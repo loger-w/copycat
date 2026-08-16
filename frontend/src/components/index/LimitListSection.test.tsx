@@ -492,4 +492,13 @@ describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
     await openWith(mkState(ROWS));
     expect(screen.getByTestId("limit-badge-2330").className).toContain("whitespace-nowrap");
   });
+
+  // 截圖(1920 / 1536 皆可見):右欄寬度下「連 4 板」被拆成「連 4」/「板」兩行、名稱欄
+  // 的四字檔名(台聯電 / 長榮航太)同樣折行 → 列高由 24 撐到 40px,一屏看得到的檔數少
+  // 掉三分之一。**只鎖這兩欄**:其餘欄位是數字 / 兩字標籤,本來就折不了。
+  it("連板與名稱資料格不折行(列高不被撐開)", async () => {
+    await openWith(mkState(ROWS));
+    expect(screen.getByTestId("limit-streak-1101").className).toContain("whitespace-nowrap");
+    expect(screen.getByTestId("limit-name-1101").className).toContain("whitespace-nowrap");
+  });
 });
