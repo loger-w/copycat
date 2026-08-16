@@ -333,11 +333,15 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
 
 
 def _today() -> _date:
-    """牆鐘今天 —— **app 內唯一的日期取樣點**(mod/trading-calendar Q9)。
+    """牆鐘今天 —— **日曆推導的唯一取樣點**(mod/trading-calendar Q9)。
 
-    散在各處的 `date.today()` 讓「跨午夜那一瞬用了兩個不同的日子」無法被測試釘住,
-    也讓假日冷啟動的整條推導沒有注入點。所有日期推導一律從這裡起算,測試只要
-    monkeypatch 這一個函式。
+    涵蓋範圍逐條:`trade_date` 推導(`_resolve_trade_date`)、overlay 基準日、
+    `/api/calendar.today`。散在各處的 `date.today()` 讓「跨午夜那一瞬用了兩個不同的
+    日子」無法被測試釘住,也讓假日冷啟動的整條推導沒有注入點。
+
+    **例外(刻意保留)**:`/api/stock/bars` 與 `/api/market/bars` 依 W3 仍直呼
+    `_date.today()` —— K 線的日期邏輯本輪不動,把它們一起收進來就是改 W3 白名單內的
+    行為。要動 K 線日期時再一起搬,不要以為這裡已經涵蓋了。
     """
     return _date.today()
 
