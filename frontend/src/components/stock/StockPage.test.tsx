@@ -688,7 +688,11 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     expect(screen.queryByText("載入中…")).toBeNull();
   });
 
-  it("點卡片 → onSelect 該股 + 自動切回單檔檢視", async () => {
+  // 🔴 group-grid-full-chart SC-3:點卡片的意圖改了。卡片上現在是**單檔同款**的完整
+  // 分時圖 —— 要看的細節就在圖牆上,點下去是「把右欄閃電梯的標的換成這一檔」,不是
+  // 「離開圖牆去看單檔頁」。自動切走的舊行為會讓每次換標的都得再點一次「群組」回來,
+  // 而盯盤時圖牆本身就是主畫面。進單檔的路徑只剩檢視 pill(D3)。
+  it("點卡片 → onSelect 該股,檢視仍停在群組", async () => {
     mockGroupApi();
     const onSelect = vi.fn();
     wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
@@ -696,8 +700,9 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     const card = await screen.findByTestId("group-card-2317");
     fireEvent.click(card);
     expect(onSelect).toHaveBeenCalledWith("2317");
-    await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
-    expect(screen.queryByLabelText("選擇群組")).toBeNull();
+    // 兩側都要釘:群組列還在(沒被切走)+ 單檔的下半列沒有回來(不是兩個檢視同時掛)
+    expect(screen.getByLabelText("選擇群組")).toBeTruthy();
+    expect(screen.queryByTestId("stock-lower-row")).toBeNull();
   });
 
   // review A4 的接線半:三態要分得出來,`wl` 的 isPending / isError 就得真的傳下去。
