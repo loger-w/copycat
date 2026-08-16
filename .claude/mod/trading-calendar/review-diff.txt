@@ -1,0 +1,2463 @@
+﻿diff --git a/CLAUDE.md b/CLAUDE.md
+index 85b44547..6ee00b53 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -92,7 +92,7 @@ docs/superpowers/         # spec 與 implementation plan
+ | 種子匯入(一次性) | `.venv\Scripts\python -m copycat import-neigui --src C:\side-project\neigui\backend\data\research\five-tigers` | repo root |
+ | Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
+ | Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
+-| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;休市日補 env `TXO_BACKFILL_DATE=<上一交易日>`) | repo root |
++| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;非交易日自動取最近交易日(`configs/trading_holidays.json`,`GET /api/calendar` 可查;`years_loaded` 不含當年 = 日曆過期要更新);`TXO_BACKFILL_DATE` 仍為手動覆寫,TXO 面與交易日盤前冷啟動仍需要它) | repo root |
+ | 跑著的 server 是哪一版 | `curl -s localhost:8721/api/health` → `{git_sha,...}`;判法與教訓見 skill `ops-discipline` | repo root |
+ | Frontend dev / 測試 / build | `npm run dev` / `npm test` / `npm run build` | frontend/ |
+ | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
+diff --git a/configs/trading_holidays.json b/configs/trading_holidays.json
+new file mode 100644
+index 00000000..e3ac8aec
+--- /dev/null
++++ b/configs/trading_holidays.json
+@@ -0,0 +1,29 @@
++{
++  "_source": "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule?date=<YYYY>&response=json",
++  "_updated": "2026-08-16",
++  "years": {
++    "2026": {
++      "holidays": [
++        "2026-01-01",
++        "2026-02-12",
++        "2026-02-13",
++        "2026-02-16",
++        "2026-02-17",
++        "2026-02-18",
++        "2026-02-19",
++        "2026-02-20",
++        "2026-02-27",
++        "2026-04-03",
++        "2026-04-06",
++        "2026-05-01",
++        "2026-06-19",
++        "2026-09-25",
++        "2026-09-28",
++        "2026-10-09",
++        "2026-10-26",
++        "2026-12-25"
++      ],
++      "extra_trading_days": []
++    }
++  }
++}
+diff --git a/copycat/server/__main__.py b/copycat/server/__main__.py
+index 2c6a8723..ea0d0cf0 100644
+--- a/copycat/server/__main__.py
++++ b/copycat/server/__main__.py
+@@ -37,6 +37,7 @@ from copycat.server.verify import (
+     fake_breadth_fetchers,
+     neutralize_external_env,
+ )
++from copycat.trading_calendar import load_trading_calendar
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -179,6 +180,9 @@ def main(argv: Sequence[str] | None = None) -> None:
+             futures_source=DEFAULT_FUTURES,
+             corr_source=DEFAULT_CORR,
+             breadth_fetchers=DEFAULT_BREADTH,
++            # 交易日曆只在 prod 顯式載(SC-8):假日 / 週末冷啟動時各引擎改抓最近
++            # 交易日。--verify 的 fake 資料綁牆鐘 today,傳了反而整片空。
++            trading_calendar=load_trading_calendar(),
+         )
+         port = int(os.environ.get("TXO_SERVER_PORT", str(PROD_PORT_DEFAULT)))
+         if log_path is not None:
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index f8850e97..802079b9 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -10,6 +10,9 @@ import time
+ from contextlib import asynccontextmanager
+ from dataclasses import dataclass, replace
+ from datetime import date as _date
++from datetime import datetime as _datetime
++from datetime import time as _clock_time
++from datetime import timedelta as _timedelta
+ from pathlib import Path
+ from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
+ 
+@@ -73,6 +76,7 @@ from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
+ from copycat.stock_names import load_names as load_stock_names
+ from copycat.stkfut_map import lookup_product
+ from copycat.tc4common import TC4_DEFAULT_PORT
++from copycat.trading_calendar import TradingCalendar, resolve_trade_date
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -279,6 +283,9 @@ class _Booted:
+     futures: FuturesEngine | None = None
+     corr: CorrelationEngine | None = None
+     breadth: BreadthEngine | None = None
++    #: SC-7 的背景交叉檢查(不是引擎,但關機一樣要 cancel —— 沒人 await 的 task
++    #: 會在 loop 關閉時留下「Task was destroyed but it is pending」)
++    crosscheck_task: asyncio.Task[None] | None = None
+ 
+ 
+ def _default_source() -> QuoteSource:
+@@ -325,15 +332,19 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
+     return []
+ 
+ 
+-def _wall_clock_trade_date() -> str:
+-    """無 stock engine 時的日別來源(XR-3)。
++def _today() -> _date:
++    """牆鐘今天 —— **app 內唯一的日期取樣點**(mod/trading-calendar Q9)。
+ 
+-    **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
+-    `_distribute` 日別尺、jsonl 檔名與 `today_signals` 讀取集全都以它為準 ——
+-    壞掉的樣態是「今天的訊號寫進昨天的檔」,完全靜默。
+-    `TXO_BACKFILL_DATE` 優先,與 engine 在場時的日別語意一致(休市日回補模式)。
++    散在各處的 `date.today()` 讓「跨午夜那一瞬用了兩個不同的日子」無法被測試釘住,
++    也讓假日冷啟動的整條推導沒有注入點。所有日期推導一律從這裡起算,測試只要
++    monkeypatch 這一個函式。
+     """
+-    return os.environ.get("TXO_BACKFILL_DATE") or f"{_date.today():%Y-%m-%d}"
++    return _date.today()
++
++
++def _now() -> _datetime:
++    """牆鐘現在(SC-7 交叉檢查的 14:00 門檻);同 `_today` 的單一取樣點理由。"""
++    return _datetime.now()
+ 
+ 
+ def create_app(
+@@ -349,9 +360,16 @@ def create_app(
+     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
+     stock_watchlist_path: Path | None = None,
+     stock_names_path: Path | None = None,
++    trading_calendar: TradingCalendar | None = None,
+     throttle_secs: float = 1.0,
+     queue_maxsize: int = 10_000,
+ ) -> FastAPI:
++    """`trading_calendar=None`(預設)= 無日曆 = 牆鐘,逐字等於改動前的行為。
++
++    prod 由 `__main__` 顯式傳 `load_trading_calendar()`(對齊 DEFAULT_STOCK /
++    DEFAULT_BREADTH 的「prod 顯式、測試預設關」慣例):39 個既有測試呼叫點以
++    `date.today()` 對照,預設載真日曆會讓整批測試在週末全紅。
++    """
+     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
+     # 名稱表是版控檔(必然存在)→ 沒有注入點的話「表不可用」這條降級路徑無法測
+     names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
+@@ -367,6 +385,75 @@ def create_app(
+     corr_ws = WsBroadcaster()
+     river_ws = WsBroadcaster()  # 江波圖每秒 delta(全量走 REST/WS 首則;index-river-chart SC-5)
+ 
++    def _resolve_trade_date() -> str:
++        """引擎 / overlay / hub fallback 共用的「今天在看哪一天」(Q9)。
++
++        **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
++        `_distribute` 日別尺、jsonl 檔名與 `today_signals` 讀取集全都以它為準 ——
++        壞掉的樣態是「今天的訊號寫進昨天的檔」,完全靜默。
++
++        `TXO_BACKFILL_DATE` **最高優先**(W2:手動回補是 ops 通道,日曆不得蓋掉它);
++        其次走日曆的最近交易日;無日曆 = 牆鐘 = 改動前行為。日曆推導一律經
++        `resolve_trade_date` —— 缺當年的 WARNING 節流入口就在那裡,自己呼
++        `last_trading_day` 會靜默跳過提醒。
++        """
++        env = os.environ.get("TXO_BACKFILL_DATE")
++        if env:
++            return env
++        if trading_calendar is None:
++            return _today().isoformat()
++        return resolve_trade_date(_today(), trading_calendar).isoformat()
++
++    async def _calendar_crosscheck(index: IndexEngine) -> None:
++        """日曆 vs 實際 DK 的雙向交叉檢查(SC-7)—— 靜態 config 唯一的體檢管道。
++
++        兩個方向對應兩種故障:DK 比日曆新 = 日曆把真交易日標成了假日(KR-1,當天
++        index 不換日);最近交易日沒有 DK = 臨時休市(颱風假,靜態 config 預知不了,
++        KR-3)→ 提示改設 `TXO_BACKFILL_DATE`。
++
++        期望日刻意**不含今天**(除非今天非交易日或已過 14:00):交易日盤中今天的 DK
++        本來就還不存在,拿今天當期望會讓每天早上重啟都誤報一次 —— 天天亮的 WARNING
++        等於沒有 WARNING。
++
++        probe 直呼 `index.bars_range` 不經 `bars_cache`:boot 當下的結果灌進共用格會
++        污染 `/api/market/bars` 與 index overlay。整段自吞例外只 log:它是一則提示,
++        不是 index 的啟動條件(`_boot` 的傘不得因它把 index 收掉)。
++        """
++        cal = trading_calendar
++        if cal is None:
++            return
++        try:
++            today = _today()
++            bars, _tag = await index.bars_range(
++                "D", (today - _timedelta(days=14)).isoformat(), today.isoformat()
++            )
++            if not bars:
++                logger.info("交易日曆交叉檢查:IX0001 無日 K 可比對(TC4 不可用?),略過")
++                return
++            last = _date.fromisoformat(bars[-1]["t"][:10])
++            latest_trading = cal.last_trading_day(today)
++            if last > latest_trading:
++                logger.warning(
++                    "交易日曆可能過期:IX0001 DK 有 %s 但日曆判非交易日,"
++                    "請更新 configs/trading_holidays.json",
++                    last,
++                )
++                return
++            if not cal.is_trading_day(today) or _now().time() >= _clock_time(14, 0):
++                expected = latest_trading
++            else:
++                expected = cal.last_trading_day(today - _timedelta(days=1))
++            if last < expected:
++                logger.warning(
++                    "最近交易日 %s 無 IX0001 DK 資料(臨時休市?請設 TXO_BACKFILL_DATE "
++                    "或更新交易日曆)",
++                    expected,
++                )
++        except asyncio.CancelledError:
++            raise  # 關機中斷:不得被下面的傘吃掉(那會讓 close 路徑以為它正常結束)
++        except Exception as e:
++            logger.warning("交易日曆交叉檢查失敗(略過):%r", e)
++
+     @asynccontextmanager
+     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+         # 最先做:引擎起不來時 banner 也要印得出來(「這台是哪一版」是排查的第一個問題)
+@@ -395,6 +482,7 @@ def create_app(
+         app.state.futures = None
+         app.state.corr = None
+         app.state.breadth = None
++        app.state.calendar_crosscheck = None  # SC-7 背景 task(有日曆時才建)
+         # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
+         # AttributeError → 被全域 handler 轉成 502
+         app.state.boot_done = False
+@@ -450,15 +538,17 @@ def create_app(
+                 if resolved_stock is None:
+                     return None
+                 stkfut_source = resolved_stock
+-                import datetime as _dt
+-
+                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+                 return StockEngine(
+                     cast(StockSource, resolved_stock),
+-                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
++                    trade_date=_resolve_trade_date(),
+                     throttle_secs=throttle_secs,
+                     checkpoint=backfill_date is None,
+                     ws=stock_ws,  # 與 SignalHub 共用同一顆(XR-3)
++                    # 無日曆 → None = engine 預設的 `weekday() < 5`(W9 逐字不變)
++                    is_trading_day=(
++                        trading_calendar.is_trading_day if trading_calendar is not None else None
++                    ),
+                 )
+ 
+             async def _start_stock(o: StockEngine) -> None:
+@@ -505,7 +595,7 @@ def create_app(
+                 cfg = load_signals_config()
+                 if engine is None:
+                     daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] = _empty_daily_bars
+-                    trade_date_fn: Callable[[], str] = _wall_clock_trade_date
++                    trade_date_fn: Callable[[], str] = _resolve_trade_date
+                     # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
+                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
+                     # gap 的用途是「連發打 TC4 要讓位」,而 `_empty_daily_bars` 根本沒打
+@@ -584,24 +674,36 @@ def create_app(
+                 )
+                 if resolved_index is None:
+                     return None
+-                import datetime as _dt
+-
+                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
+                 return IndexEngine(
+                     cast(IndexSource, resolved_index),
+                     # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
+                     txf_getter=runtime.spot_millipts,
+                     mis_fetch=index_mis_fetch,
+-                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
++                    trade_date=_resolve_trade_date(),
+                     rollover=backfill_date is None,
+                     throttle_secs=throttle_secs,
++                    # 無日曆 → None = engine 預設的「純日曆日」(W9 逐字不變)
++                    is_trading_day=(
++                        trading_calendar.is_trading_day if trading_calendar is not None else None
++                    ),
+                 )
+ 
++            async def _start_index(o: IndexEngine) -> None:
++                await o.start()
++                if trading_calendar is not None:
++                    # **背景跑、不 await**(SC-7):probe 要打一次 TC4 歷史(秒級),
++                    # 擋在序列上會把 capital / futures / corr / breadth 整串往後推,
++                    # 而它產出的只是一則 log。
++                    booted.crosscheck_task = asyncio.create_task(_calendar_crosscheck(o))
++                    # 另掛 app.state:唯一能問「檢查跑完了沒」的地方(測試的同步點)
++                    app.state.calendar_crosscheck = booted.crosscheck_task
++
+             index = await _boot(
+                 "index",
+                 "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
+                 _make_index,
+-                lambda o: o.start(),
++                _start_index,
+                 lambda o: o.close(),
+             )
+             app.state.index = index
+@@ -733,6 +835,15 @@ def create_app(
+                     disposition_fetch,
+                     daily_fetch,
+                 ) = fetchers
++                cal = trading_calendar
++
++                def _breadth_today() -> _date:
++                    """**純日曆、不吃 env**(Q9 / KR-5):`TXO_BACKFILL_DATE` 是 TXO 回補
++                    的 ops 通道,breadth 現行本就不讀它,本輪不擴張它的語意。
++                    無日曆時 = 牆鐘 = 引擎預設語意。
++                    """
++                    return _today() if cal is None else resolve_trade_date(_today(), cal)
++
+                 return BreadthEngine(
+                     token=token,
+                     # None → configs/breadth.json(prod 唯一路徑);顯式注入只服務
+@@ -745,6 +856,8 @@ def create_app(
+                     disposition_fetch=disposition_fetch,
+                     daily_fetch=daily_fetch,
+                     data_dir=breadth_data_dir,  # None → repo root data/market
++                    today_fn=_breadth_today,
++                    is_trading_day=None if cal is None else cal.is_trading_day,
+                 )
+ 
+             breadth = await _boot(
+@@ -792,6 +905,15 @@ def create_app(
+             # signals 段的 `_close_signals` 會呼 `stock.detach_signal_hub()`,也必須排在
+             # stock 之前收(stock engine 還活著才解得掉掛點)。其餘各段無此類依賴,但
+             # 一律照建立的反序收,新增引擎時才有一條唯一的規則可循。
++            if booted.crosscheck_task is not None:
++                # 引擎之前先收:它只讀 index 的歷史,關機時沒有任何理由讓它跑完
++                booted.crosscheck_task.cancel()
++                try:
++                    await booted.crosscheck_task
++                except asyncio.CancelledError:
++                    pass
++                except Exception:
++                    logger.exception("交易日曆交叉檢查以例外結束(關機續行)")
+             if booted.breadth is not None:
+                 try:
+                     await booted.breadth.close()
+@@ -878,6 +1000,35 @@ def create_app(
+             "error": getattr(state, "boot_error", None),
+         }
+ 
++    @app.get("/api/calendar")
++    async def calendar() -> dict:
++        """交易日曆狀態(SC-6)—— 「這台今天在看哪一天、日曆載到了沒」的唯一可視管道。
++
++        欄位語意(**兩個日期刻意分開**):
++        - `trade_date` = **stock / index / signals hub 實際採用**的日別
++          (`TXO_BACKFILL_DATE` 有值時就是它)。
++        - `calendar_trade_date` = 純日曆推導(不看 env)= **breadth 一律採用**的日別。
++          env 模式下兩者會不一致(KR-5),合成一個欄位就沒有任何管道分辨得出來。
++        - `years_loaded` 不含當年 = 日曆過期(此後只擋週末),要更新
++          `configs/trading_holidays.json`。
++
++        **不依賴任何引擎**:純 config 推導,boot 窗內(引擎還在起)也答得出來 —— 前端
++        開站第一件事就是問它,拿 503 會讓假日集合整天不進前端(E7)。
++        """
++        today = _today()
++        cal = trading_calendar
++        return {
++            "today": today.isoformat(),
++            "trade_date": _resolve_trade_date(),
++            "calendar_trade_date": (
++                today.isoformat() if cal is None else resolve_trade_date(today, cal).isoformat()
++            ),
++            "backfill_env": os.environ.get("TXO_BACKFILL_DATE"),
++            "holidays": sorted(d.isoformat() for d in cal.holidays) if cal is not None else [],
++            "years_loaded": sorted(cal.years_loaded) if cal is not None else [],
++            "calendar_loaded": cal is not None,
++        }
++
+     def _runtime(request: Request) -> EngineRuntime:
+         return request.app.state.runtime
+ 
+@@ -1012,8 +1163,10 @@ def create_app(
+     async def stock_overlay(request: Request, code: str) -> dict:
+         stock = _stock(request)
+         _valid_code(code)
+-        # today = 本機日界(= 台北,部署綁本機;design R6/R13);backfill 模式亦以本機為準
+-        today = f"{_date.today():%Y-%m-%d}"
++        # 基準日 = **顯示中的交易日**(SC-13),不是牆鐘:假日看的是最近交易日那張圖,
++        # 疊線基準卻用今天的話,週六會把週五的 bar 當成「今日 partial」整根剔掉。
++        # cache 鍵同源(日別沒變就不該重算);交易日 env 未設時逐字等於牆鐘。
++        today = _resolve_trade_date()
+         cached = overlay_cache.get(code, today)
+         if cached is not None:
+             return cached
+@@ -1228,14 +1381,14 @@ def create_app(
+         async def tagged(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
+             return TaggedBars(*await index.bars_range(tf_, s, e))
+ 
+-        # today = 本機日界(= 台北,部署綁本機;同 stock overlay 的 design R6/R13)。
+-        # 只取一次:兩處各自 `today()` 的話,跨午夜那一瞬會用兩個不同的日子。
+-        today = _date.today()
++        # bars 抓取仍走**牆鐘**(W3:K 線的日期邏輯本輪不動 —— 多抓一天不會少資料);
++        # 疊線基準日則走顯示中的交易日(SC-13),與個股 overlay 同源。
++        today = _today()
+         bars, _tag = await build_period(tagged, bars_cache, "IX0001", today, "D")
+         daily: list[DailyBar] = [
+             {"date": b["t"][:10], "high": b["h"], "low": b["l"], "close": b["c"]} for b in bars
+         ]
+-        return build_overlay(daily, f"{today:%Y-%m-%d}")
++        return build_overlay(daily, _resolve_trade_date())
+ 
+     # ---- market(大盤 K 線;index-board SC-4/5/6)----
+ 
+diff --git a/copycat/server/breadth_engine.py b/copycat/server/breadth_engine.py
+index 85fe0295..4c0dadc2 100644
+--- a/copycat/server/breadth_engine.py
++++ b/copycat/server/breadth_engine.py
+@@ -169,6 +169,7 @@ class BreadthEngine:
+         data_dir: Path | None = None,
+         today_fn: Callable[[], _dt.date] = _dt.date.today,
+         now_fn: Callable[[], _dt.datetime] | None = None,
++        is_trading_day: Callable[[_dt.date], bool] | None = None,
+     ) -> None:
+         self._token = token
+         self._config = config
+@@ -181,6 +182,10 @@ class BreadthEngine:
+         self._today_fn = today_fn
+         # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
+         self._now_fn = now_fn if now_fn is not None else _now
++        # 交易日曆注入(mod/trading-calendar SC-5)。**預設 `lambda d: True` = 現行的
++        # 純時間窗語意逐字**(W9):直接建構的既有 caller 行為不得有一絲變化;
++        # 真日曆只由 app 層在 prod 顯式傳(與 `today_fn` = 最近交易日成對)。
++        self._is_trading_day = is_trading_day if is_trading_day is not None else (lambda _d: True)
+         self._window = (_parse_hhmm(config.window_start), _parse_hhmm(config.window_end))
+ 
+         # ---- scalar 狀態 ----
+@@ -279,8 +284,11 @@ class BreadthEngine:
+ 
+         日期基準 = `_rows_date`(rows 的資料日),不是 `_trade_date`:
+         - `rows_date > data_end` → rows 是今日盤中,昨日止的 streak 要 +1。
++          **假日開站也走這條**(mod/trading-calendar R5):`today_fn` = 最近交易日之後,
++          那天算出的 streak 其 `data_end` 比 rows 的資料日少一天,+1 後與「該交易日
++          盤中即時算出」的值逐字相同。
+         - `rows_date == data_end` → rows 是上一交易日的收盤快照,該日**已在** streak
+-          內(盤前 / 假日開站),再 +1 就是憑空多一板。
++          內(交易日盤前),再 +1 就是憑空多一板。
+         - `rows_date ∈ skipped` → 那天在掃描時被當假日跳過,關係不明 → null(R15)。
+         """
+         today = self._today_fn().isoformat()
+@@ -581,7 +589,17 @@ class BreadthEngine:
+         return min(grown, self._config.backoff_max_secs)
+ 
+     def _in_window(self) -> bool:
+-        t = self._now_fn().time()
++        """台北取數窗 —— **交易日 gate 與時間窗同一把尺**,兩個呼叫端都吃(R4)。
++
++        `_poll_loop`(該不該取數)與 `_stale`(沒有新資料算不算異常)共用它是刻意的:
++        非交易日「沒有新資料是正常態」與 docstring 寫的窗外語意同款。若 `_stale` 保留
++        純時間窗,週六窗內首圈成功後 `_last_success` 一老化就亮一顆假的「延遲」膠囊,
++        而那天本來就不會有第二筆資料。
++        """
++        now = self._now_fn()
++        if not self._is_trading_day(now.date()):
++            return False
++        t = now.time()
+         return self._window[0] <= t <= self._window[1]
+ 
+     def _stale(self) -> bool:
+diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index 0cc97561..02a1cbac 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -153,6 +153,7 @@ class IndexEngine:
+         trade_date: str,
+         rollover: bool = True,
+         today_fn: Callable[[], _dt.date] = _dt.date.today,
++        is_trading_day: Callable[[_dt.date], bool] | None = None,
+         in_watch_window: Callable[[], bool] = in_watch_window_now,
+         in_futures_session: Callable[[], bool] = in_futures_session,
+         now_fn: Callable[[], _dt.time] = now_time,
+@@ -167,6 +168,10 @@ class IndexEngine:
+         self._trade_date = trade_date
+         self._rollover_enabled = rollover
+         self._today_fn = today_fn
++        # 交易日曆注入(mod/trading-calendar SC-3)。**預設 `lambda d: True` = 現行的
++        # 純日曆日語意逐字**(W9):本引擎現行完全不看星期,直接建構的既有 caller
++        # 行為不得有一絲變化;真日曆只由 app 層在 prod 顯式傳。
++        self._is_trading_day = is_trading_day if is_trading_day is not None else (lambda _d: True)
+         self._in_watch_window = in_watch_window
+         self._in_futures_session = in_futures_session
+         self._now_fn = now_fn
+@@ -433,6 +438,11 @@ class IndexEngine:
+             await asyncio.sleep(self._rollover_check_secs)
+             try:
+                 today = self._today_fn()
++                # 交易日 gate 在最前面(SC-3):非交易日一律整拍跳過 —— 不設 pending、
++                # 不切 source 日窗、不重掛、不打 1K。放在門檻判定之後就等於沒放:
++                # 週末 / 假日的 `new_date > trade_date` 恆真,每 60s 空打一次 TC4。
++                if not self._is_trading_day(today):
++                    continue
+                 new_date = f"{today:%Y-%m-%d}"
+                 now = self._now_fn()
+                 if new_date <= self._trade_date or now < _dt.time(8, 30):
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index a5a38d6b..ac91187c 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -210,12 +210,25 @@ class StockEngine:
+         stkfut_map: dict[str, dict] | None = None,
+         resub_interval_secs: float = 10.0,
+         ws: WsBroadcaster | None = None,
++        is_trading_day: Callable[[_dt.date], bool] | None = None,
++        now_fn: Callable[[], _dt.datetime] | None = None,
+     ) -> None:
+         self._source = source
+         self._trade_date = trade_date
+         self._pending_date: str | None = None
+         self._throttle = throttle_secs
+         self._checkpoint_enabled = checkpoint
++        # 交易日曆注入(mod/trading-calendar SC-4)。**預設 = 現行 `weekday() < 5` 逐字**
++        # (W9):engine 直接建構的既有 caller 行為不得有一絲變化,真日曆只由 app 層在
++        # prod 顯式傳(測試預設關,同 DEFAULT_STOCK / DEFAULT_BREADTH 慣例)。
++        self._is_trading_day = (
++            is_trading_day if is_trading_day is not None else (lambda d: d.weekday() < 5)
++        )
++        # checkpoint 的時鐘同樣可注入:換日窗判定唯一的時間讀取點,不注入就只能靠真
++        # 牆鐘決定測試綠不綠(index `now_fn` 的同款理由)。
++        self._now_fn = now_fn if now_fn is not None else _dt.datetime.now
++        #: checkpoint 迴圈間隔(秒)。測試把它調小以換得「迴圈真的轉過 N 拍」的觀察點。
++        self._checkpoint_secs = 60.0
+         self._map = stkfut_map if stkfut_map is not None else load_map()
+         self._prod_to_code = {v["prod"]: k for k, v in self._map.items()}
+         self._refs: dict[str, set[str]] = {}
+@@ -836,14 +849,15 @@ class StockEngine:
+             self._signal_hub.on_rollover()
+ 
+     async def _checkpoint_loop(self) -> None:
+-        import datetime as _dt
+-
+         while True:
+-            await asyncio.sleep(60)
+-            now = _dt.datetime.now()
++            await asyncio.sleep(self._checkpoint_secs)
++            now = self._now_fn()
+             today = f"{now:%Y-%m-%d}"
+             if (
+-                now.weekday() < 5  # 候選交易日(週一~五;假日靠階段二天然不清空)
++                # 候選交易日(假日靠階段二天然不清空)。判準由 `is_trading_day` 注入:
++                # 週末靠 `weekday()` 擋得住,國定假日(平日)擋不住 —— 那天 08:00 一到
++                # 就把 source 日窗切到假日,而 stage2 等的新日首筆永遠不會來。
++                self._is_trading_day(now.date())
+                 and now.hour >= 8
+                 and today != self._trade_date
+                 and self._pending_date != today
+diff --git a/copycat/trading_calendar.py b/copycat/trading_calendar.py
+new file mode 100644
+index 00000000..3d663e19
+--- /dev/null
++++ b/copycat/trading_calendar.py
+@@ -0,0 +1,167 @@
++"""台股交易日曆(mod/trading-calendar SC-1)— 純判定 + 版控假日表。
++
++為什麼要這支:引擎原本用「牆鐘今天」當 trade_date,週末 / 國定假日冷啟動會去要一份
++不存在的當日資料 → 空圖。這裡把「哪天有開盤」收斂成單一事實來源
++(`configs/trading_holidays.json`,TWSE 官方 JSON 手動維護),讓各引擎共用同一份判定。
++
++三個刻意的設計選擇:
++
++1. **只列平日休市**:週末本來就由 `weekday()` 擋掉,清單再塞週末只會讓維護時對不上
++   官方表。`extra_trading_days` 反向存在 —— 補班交易日(週末有開盤)是唯一需要覆寫
++   週末規則的情形(2026 無,欄位先備著,模組零成本支援)。
++2. **檔缺 = 只擋週末 + WARNING,不是錯誤**:日曆漂掉最壞是退回改動前的行為(假日被
++   當交易日),絕不能因為少一個 config 就讓整個 server 起不來。壞檔(JSON 壞 / 形狀
++   錯)則 raise —— 那是打錯字,靜默套預設會讓人以為日曆生效了(對齊 `signals_config`)。
++3. **缺當年只 WARNING 不猜**:2027 官方表未公布時自動外推假日等於編資料,寧可只擋
++   週末(永不多擋一天)並在 log 提醒更新 config。
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++from dataclasses import dataclass
++from datetime import date, timedelta
++from pathlib import Path
++
++__all__ = [
++    "DEFAULT_PATH",
++    "WEEKEND_ONLY",
++    "TradingCalendar",
++    "load_trading_calendar",
++    "resolve_trade_date",
++    "warn_if_year_missing",
++]
++
++logger = logging.getLogger(__name__)
++
++DEFAULT_PATH = Path(__file__).resolve().parent.parent / "configs" / "trading_holidays.json"
++
++# 往回找最近交易日的步數上限。實務最長連假 ~11 天,60 天純粹是「資料錯掉時要炸,
++# 不要無窮迴圈」的保險絲。
++_LOOKBACK_LIMIT_DAYS = 60
++
++
++@dataclass(frozen=True, slots=True)
++class TradingCalendar:
++    """不可變的假日集合;所有方法零 IO(load 之後就只是純函式)。"""
++
++    holidays: frozenset[date]
++    extra_trading_days: frozenset[date]
++    years_loaded: frozenset[int]
++
++    def is_trading_day(self, d: date) -> bool:
++        """補班日優先於週末規則,其餘 = 平日且不在假日表。"""
++        return d in self.extra_trading_days or (d.weekday() < 5 and d not in self.holidays)
++
++    def last_trading_day(self, d: date) -> date:
++        """含 d 本身往回找最近交易日;超過保險絲仍找不到 = 日曆資料錯,raise。"""
++        cur = d
++        for _ in range(_LOOKBACK_LIMIT_DAYS):
++            if self.is_trading_day(cur):
++                return cur
++            cur -= timedelta(days=1)
++        raise RuntimeError(f"往回 {_LOOKBACK_LIMIT_DAYS} 天仍找不到交易日(起點 {d}),交易日曆資料有誤")
++
++    def has_year(self, y: int) -> bool:
++        """該年有沒有載到假日資料 —— 沒有代表此後只擋週末。"""
++        return y in self.years_loaded
++
++
++# 沒有日曆時的退化版本:只擋週末,永不多擋(等於改動前的行為)。
++WEEKEND_ONLY = TradingCalendar(frozenset(), frozenset(), frozenset())
++
++# 缺年 WARNING 的節流狀態:長跑 server 跨年時要再提醒一次,所以是「每個年份一次」
++# 而不是「整個 process 一次」。
++_warned_years: set[int] = set()
++
++
++def _reset_year_warnings() -> None:
++    """測試用:清掉節流狀態(module-level 狀態會跨測試殘留)。"""
++    _warned_years.clear()
++
++
++def _parse_days(raw: object, *, path: Path, year_key: str, field: str) -> set[date]:
++    if not isinstance(raw, list):
++        raise ValueError(
++            f"交易日曆設定檔 {path} 形狀錯:years.{year_key}.{field} 應為 list,"
++            f"實得 {type(raw).__name__}"
++        )
++    days: set[date] = set()
++    for item in raw:
++        if not isinstance(item, str):
++            raise ValueError(
++                f"交易日曆設定檔 {path} 形狀錯:years.{year_key}.{field} 元素應為 ISO 日期字串,"
++                f"實得 {item!r}"
++            )
++        try:
++            days.add(date.fromisoformat(item))
++        except ValueError as exc:
++            raise ValueError(
++                f"交易日曆設定檔 {path} 日期無效:years.{year_key}.{field} 的 {item!r}"
++            ) from exc
++    return days
++
++
++def load_trading_calendar(path: Path = DEFAULT_PATH) -> TradingCalendar:
++    """讀假日表;檔缺 → WARNING + 只擋週末;JSON 壞 / 形狀錯 → ValueError(訊息帶路徑)。"""
++    if not path.exists():
++        logger.warning("交易日曆設定檔不存在(%s),只擋週末;國定假日將被當成交易日", path)
++        return WEEKEND_ONLY
++
++    try:
++        raw = json.loads(path.read_text(encoding="utf-8-sig"))
++    except json.JSONDecodeError as exc:
++        raise ValueError(f"交易日曆設定檔 {path} 不是合法 JSON:{exc}") from exc
++    if not isinstance(raw, dict):
++        raise ValueError(f"交易日曆設定檔 {path} 形狀錯:最外層應為物件")
++
++    years_raw = raw.get("years")
++    if not isinstance(years_raw, dict):
++        raise ValueError(f"交易日曆設定檔 {path} 形狀錯:缺 years 物件")
++
++    holidays: set[date] = set()
++    extra: set[date] = set()
++    years_loaded: set[int] = set()
++    for year_key, entry in years_raw.items():
++        if not isinstance(year_key, str) or not year_key.isdigit():
++            raise ValueError(f"交易日曆設定檔 {path} 形狀錯:years 的鍵 {year_key!r} 不是年份")
++        if not isinstance(entry, dict):
++            raise ValueError(
++                f"交易日曆設定檔 {path} 形狀錯:years.{year_key} 應為物件,"
++                f"實得 {type(entry).__name__}"
++            )
++        holidays |= _parse_days(
++            entry.get("holidays", []), path=path, year_key=year_key, field="holidays"
++        )
++        extra |= _parse_days(
++            entry.get("extra_trading_days", []),
++            path=path,
++            year_key=year_key,
++            field="extra_trading_days",
++        )
++        years_loaded.add(int(year_key))
++
++    return TradingCalendar(
++        holidays=frozenset(holidays),
++        extra_trading_days=frozenset(extra),
++        years_loaded=frozenset(years_loaded),
++    )
++
++
++def warn_if_year_missing(cal: TradingCalendar, today: date) -> None:
++    """缺當年資料時提醒更新 config;同一年只叫一次(長跑 server 跨年會再叫)。"""
++    year = today.year
++    if cal.has_year(year) or year in _warned_years:
++        return
++    _warned_years.add(year)
++    logger.warning(
++        "交易日曆缺 %d 年資料,只擋週末;請更新 configs/trading_holidays.json",
++        year,
++    )
++
++
++def resolve_trade_date(today: date, cal: TradingCalendar) -> date:
++    """引擎要用的交易日 = 含今天往回的最近交易日(順手做缺年提醒)。"""
++    warn_if_year_missing(cal, today)
++    return cal.last_trading_day(today)
+diff --git a/docs/next-time.md b/docs/next-time.md
+index 901191bc..e1ce1fcb 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -1,4 +1,17 @@
+-﻿## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
++﻿## 2026-08-16(mod/trading-calendar 留尾)
++
++- [ ] **TXO 面的 `backfill_date` 仍是手動 env**:`_default_source` / `session_rollover` /
++  `live/tc4.py:404` 沒接日曆 —— TXO 有夜盤 session 語意,自動填一個固定日會把 rollover
++  關掉並跨到下週一(自動化前要先設計「哪一段夜盤算哪一天」)。休市日要看 TXO 仍靠
++  `TXO_BACKFILL_DATE=<上一交易日>`。
++- [ ] **交易日盤前(00:00–08:30)冷啟動仍空圖到開盤**(spec KR-4 / Q3-R8):long-running
++  server 不受影響(兩段式 rollover stage2 前不清狀態),但那個時段**重啟**的話 source
++  日窗 = 今天而今天還沒開盤。要做需同時對齊 stock stage1 08:00 / index 08:30 /
++  breadth streak 06:00 三個時序 → 待 user 決定是否開 R3b。
++- [ ] **試撮(緩)badge 假日仍純時間照標**(next-time:97 第二段的殘留):同一份日曆
++  (`GET /api/calendar` 的 holidays)可直接餵給那條判定,本輪 scope 外。
++
++## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
+ 
+ - [ ] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**(review WL-3
+   partial / KR-3):CandleChart 是共用元件、viewBox 寬 1400 寫死,一頁總覽後 pane svg 寬
+@@ -534,7 +547,7 @@
+ - [x] ~~`BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除~~ **2026-07-31 盤點:已由後續輪次順手解掉** — `server/bars.py:158-183` 有 `prune(today)`:`_hist` 按 `today - DAYS_MAX*2` 刪、`_daily`/`_daily_tag` 非今日即刪、`_today` 按日期 + TTL evict、`_empty` 過期即刪;三個呼叫點(bars.py:207/312/337)在每次 `build_*` 開頭。註解記來源為「review P2-5」「self-review round2 P2」
+ - [x] ~~🔴 **既有 bug:`_SPOT_PREFIX = "TC.F."` 讓任何期貨 tick 覆寫台指現價**~~ **已於 2026-07-30 修畢(mod/index-board)**:收斂為 `TC.F.TWF.TXF.`(台指期產品樹,含月份 leaf,常數單一定義在 `models.SPOT_PREFIX`)。real-env 夜盤實證:IndexBar 台指 41750.0 vs 期貨 tab TXF 41749.0(差 1.0 點),TXO snapshot spot 同值,`dropped_foreign_ticks` 4057 筆 = 被正確擋掉的個股期/海外六腿/小台微台。另加節流 warning `txo spot 無 TXF 推播`(盤中連續 3 分鐘無現價才印)—— 收斂後多了「靜默空白」的新失效態,比亂跳更難察覺
+ - [ ] K 線 endpoint 未做 inflight dedup(專案 `_run_once` 慣例):同 code 併發請求會各自打一輪 TC4。單人本機用量下未觀察到問題,若之後多分頁/多 client 再補
+-- [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**。〔2026-07-31 盤點:兩個子前提已漂移但**結論不變** —— 後端短負向快取已做(`bars.py:45` `EMPTY_TTL_SECS = 15.0`,空結果也存)、deadline 已縮到 10s,但 **15s TTL < 前端 60s 輪詢**,假日每輪仍會真打 TC4〕。要根治需要交易日曆
++- [x] ~~`inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**。〔2026-07-31 盤點:兩個子前提已漂移但**結論不變** —— 後端短負向快取已做(`bars.py:45` `EMPTY_TTL_SECS = 15.0`,空結果也存)、deadline 已縮到 10s,但 **15s TTL < 前端 60s 輪詢**,假日每輪仍會真打 TC4〕。要根治需要交易日曆~~ **2026-08-16 mod/trading-calendar 根治(後端 + 前端接 `/api/calendar`)**
+ - [x] ~~`_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s~~ **2026-07-31 盤點:已做** — `live/tc4.py:40` `BARS_POLL_DEADLINE = 10.0`,`_collect_history` 簽名加 `deadline_secs`(tc4.py:337-343、:358 fallback 回舊預算),另加退避輪詢(:353-354);K 線呼叫點皆已改傳(`stock_source.py:451/454/464`、`futures_source.py:130/133`,overlay 共用路徑一併評估過)。**注意**:`_collect_history` 已自 `stock_source` 上提到 `live/tc4.py`,舊條目引用的檔名過期
+ 
+ ## 2026-07-29(stock-ui-round2 批一 順手清單)
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 91150076..59f3567a 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -16,6 +16,7 @@ import { useSignalAlerts } from "@/hooks/useSignalAlerts";
+ import { useFuturesStream } from "@/hooks/useFuturesStream";
+ import { useIndexStream } from "@/hooks/useIndexStream";
+ import { useStockStream } from "@/hooks/useStockStream";
++import { useTradingCalendar } from "@/hooks/useTradingCalendar";
+ import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
+ import {
+   LEGACY_MAIN_CODE_KEY,
+@@ -122,6 +123,11 @@ export default function App() {
+     setStkfutContract(null);
+   }
+ 
++  // 交易日曆(mod/trading-calendar SC-9):**唯一**掛載點。消費端(lib/trading-hours 的
++  // 三支函式)是模組級的,多掛幾份只是多打一次同一個端點;而少了這一支,國定假日整天
++  // 每 60s 空打當日段(當日段恆空 → don't-cache-empty → 每次都真的走 TC4)。
++  // 取數失敗 / 後端沒載日曆 = 空集合 = 只擋週末 = 改動前行為(W8),不擋 App 起站。
++  useTradingCalendar();
+   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
+   const { twse, otc, txf } = useIndexStream();
+   // 家數 / 騰落流同樣常駐 App 層(design R8):IndexPage 維持純展示,tab 切走也不斷線
+diff --git a/frontend/src/components/index/LimitListSection.test.tsx b/frontend/src/components/index/LimitListSection.test.tsx
+index 162c692f..74cdc6ae 100644
+--- a/frontend/src/components/index/LimitListSection.test.tsx
++++ b/frontend/src/components/index/LimitListSection.test.tsx
+@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { LimitListSection } from "@/components/index/LimitListSection";
+ import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
++import { isoLocalDate } from "@/lib/trading-calendar";
+ import type { BreadthRow, BreadthRowsState } from "@/types";
+ 
+ function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
+@@ -31,10 +32,13 @@ function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
+   };
+ }
+ 
++/** fixture 的語意是「**今日**資料」—— 自 mod/trading-calendar SC-10 起 `trade_date` 是
++ *  畫面上的判別子(≠ 本機今日就多一顆日期膠囊、空態文案也帶日期),寫死的日期會讓
++ *  這份 fixture 隨時間漂成「非今日」。要測非今日一律在 `over` 明寫日期。 */
+ function mkState(rows: BreadthRow[], over: Partial<BreadthRowsState> = {}): BreadthRowsState {
+   return {
+     enabled: true,
+-    trade_date: "2026-08-06",
++    trade_date: isoLocalDate(new Date()),
+     as_of: "10:31:00",
+     stale: false,
+     streaks_ready: true,
+@@ -245,6 +249,34 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
+   });
+ });
+ 
++// SC-10(R3/R12):非交易日開站時 rows 是**上一交易日收盤**的快照,而畫面上原本沒有
++// 任何線索 —— 使用者看到的是一張「今天的漲跌停」。日期膠囊與空態文案把資料日說出來。
++describe("LimitListSection 非今日資料的日期膠囊(SC-10)", () => {
++  it("trade_date ≠ 本機今日 → MM-DD 收盤 膠囊(testid 獨立於 stale)", async () => {
++    await openWith(mkState(ROWS, { trade_date: "2026-08-06" }));
++    expect(screen.getByTestId("limit-list-asof-date").textContent).toBe("08-06 收盤");
++    // R2-8:不得沿用 stale 的 testid / 語意 —— 「上一交易日的完整收盤資料」與
++    // 「今天的資料延遲了」是兩件事,共用一顆膠囊會把前者說成後者(琥珀色警示)。
++    expect(screen.queryByTestId("limit-list-stale")).toBeNull();
++  });
++
++  it("trade_date = 本機今日 → 無膠囊", async () => {
++    await openWith(mkState(ROWS));
++    expect(screen.queryByTestId("limit-list-asof-date")).toBeNull();
++  });
++
++  it("非今日且狀態池為 0 → 空態文案帶日期(不說成「今日」)", async () => {
++    await openWith(mkState([mkRow("9999"), mkRow("8888")], { trade_date: "2026-08-06" }));
++    expect(screen.getByTestId("limit-list-msg").textContent).toBe("08-06 尚無漲跌停");
++    expect(screen.getByTestId("limit-list-asof-date").textContent).toBe("08-06 收盤");
++  });
++
++  it("trade_date 為 null(冷啟動未定)→ 不當成非今日,無膠囊", async () => {
++    await openWith(mkState(ROWS, { trade_date: null }));
++    expect(screen.queryByTestId("limit-list-asof-date")).toBeNull();
++  });
++});
++
+ describe("LimitListSection 表格內容", () => {
+   it("預設排序:漲停(streak desc,null 視為 -1)→ 跌停 → 觸及,組內金額 desc", async () => {
+     await openWith(mkState(ROWS));
+diff --git a/frontend/src/components/index/LimitListSection.tsx b/frontend/src/components/index/LimitListSection.tsx
+index 7728b185..04b5f2c8 100644
+--- a/frontend/src/components/index/LimitListSection.tsx
++++ b/frontend/src/components/index/LimitListSection.tsx
+@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
+ 
+ import { useBreadthRows } from "@/hooks/useBreadthRows";
+ import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
++import { isoLocalDate } from "@/lib/trading-calendar";
+ import { cn } from "@/lib/utils";
+ import type { BreadthRow } from "@/types";
+ 
+@@ -240,6 +241,12 @@ function decimalText(v: number | null): string {
+   return v === null ? "—" : v.toFixed(2);
+ }
+ 
++/** `YYYY-MM-DD` → `MM-DD`(SC-10)。年份在盤面上是雜訊,而月日是「這是哪一天的收盤」
++ *  唯一需要的資訊;形狀不合就原樣印出來(寧可醜也不要靜默切錯字串)。 */
++function monthDay(iso: string): string {
++  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.slice(5) : iso;
++}
++
+ // ---------------------------------------------------------------------------
+ // 篩選列元件
+ // ---------------------------------------------------------------------------
+@@ -334,18 +341,40 @@ function LimitListBody({
+   // 有 data 就保表,失敗改由標題列的「更新失敗」膠囊說。
+   const loadFailed = isError && data === undefined;
+   const refetchFailed = isError && data !== undefined;
++
++  // SC-10:非交易日(週末 / 國定假日)開站時 rows 是**上一交易日收盤**的快照,而畫面
++  // 上原本沒有任何線索 —— 看到的是一張「今天的漲跌停」。`trade_date` 為 null(冷啟動
++  // 未定)不算非今日:那是「還不知道」,標一個日期出來等於編造。
++  // 判別走 `isoLocalDate`(本機時區)不是 `toISOString()`:後者是 UTC,台北 08:00 前
++  // 會退成前一天 → 每天早盤都會誤標「昨天收盤」。
++  const todayIso = isoLocalDate(new Date());
++  const tradeDate = data?.trade_date ?? null;
++  const tradeMonthDay = tradeDate !== null && tradeDate !== todayIso ? monthDay(tradeDate) : null;
++  const notToday = tradeMonthDay !== null;
++
+   let message: string | null = null;
+   if (loadFailed) message = "載入失敗";
+   else if (data === undefined) message = "載入中…";
+   else if (!data.enabled) message = "FinMind 未設定";
+   else if (data.as_of === null) message = "載入中…";
+   else if (data.rows.length === 0) message = "暫無資料(延遲)";
+-  else if (pool === 0) message = "今日尚無漲跌停";
++  else if (pool === 0) message = notToday ? `${tradeMonthDay} 尚無漲跌停` : "今日尚無漲跌停";
+   else if (entries.length === 0) message = "無符合條件";
+ 
+   return (
+     <div data-testid="limit-list-body" className="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-4">
+       <div className="flex shrink-0 flex-wrap items-center gap-2">
++        {/* 資料日膠囊(SC-10):與「延遲」同排同形狀,但**中性灰**而非琥珀色 ——
++            「這是上一交易日的完整收盤資料」是陳述,不是警示;沿用 stale 的顏色 /
++            testid 會把兩件事說成同一件(R2-8 明訂 testid 不得共用)。 */}
++        {notToday ? (
++          <span
++            data-testid="limit-list-asof-date"
++            className="rounded bg-bg-deep px-1.5 text-xs text-ink-muted"
++          >
++            {tradeMonthDay} 收盤
++          </span>
++        ) : null}
+         {data?.stale ? (
+           <span
+             data-testid="limit-list-stale"
+diff --git a/frontend/src/hooks/useTradingCalendar.test.tsx b/frontend/src/hooks/useTradingCalendar.test.tsx
+new file mode 100644
+index 00000000..581aead6
+--- /dev/null
++++ b/frontend/src/hooks/useTradingCalendar.test.tsx
+@@ -0,0 +1,75 @@
++/** @vitest-environment jsdom */
++/** `/api/calendar` → 模組級假日集合的接線(SC-9)。
++ *
++ *  這裡鎖的是「線有沒有接上」:純函式面在 lib/trading-calendar.test.ts,少了這一根線
++ *  那邊照樣全綠、畫面上假日卻整天不進前端。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { useTradingCalendar } from "@/hooks/useTradingCalendar";
++import { clearHolidays, isTradingDay } from "@/lib/trading-calendar";
++
++const HOLIDAY = new Date(2026, 9, 9, 10, 0); // 2026-10-09 週五
++
++const PAYLOAD = {
++  today: "2026-08-16",
++  trade_date: "2026-08-14",
++  calendar_trade_date: "2026-08-14",
++  backfill_env: null,
++  holidays: ["2026-10-09", "2026-12-25"],
++  years_loaded: [2026],
++  calendar_loaded: true,
++};
++
++let fetchMock: ReturnType<typeof vi.fn>;
++
++function stubFetch(body: unknown, status = 200): void {
++  fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status }));
++  vi.stubGlobal("fetch", fetchMock);
++}
++
++function wrapper({ children }: { children: ReactNode }) {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++}
++
++beforeEach(() => {
++  clearHolidays();
++  stubFetch(PAYLOAD);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  clearHolidays();
++});
++
++describe("useTradingCalendar", () => {
++  it("取數成功後把 holidays 灌進模組級集合", async () => {
++    // 前提自檢:灌進去之前該日仍是交易日,否則下面的斷言對「本來就 false」也會通過
++    expect(isTradingDay(HOLIDAY)).toBe(true);
++
++    const { result } = renderHook(() => useTradingCalendar(), { wrapper });
++    await waitFor(() => expect(result.current.data?.calendar_loaded).toBe(true));
++    await waitFor(() => expect(isTradingDay(HOLIDAY)).toBe(false));
++    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toContain("/api/calendar");
++  });
++
++  it("HTTP 失敗 → 集合不動(退回只擋週末,不是整組日期判定崩掉)", async () => {
++    stubFetch({ detail: { error: "BOOM" } }, 500);
++    const { result } = renderHook(() => useTradingCalendar(), { wrapper });
++    // hook 內 retry:1(蓋過 client 的 retry:false)→ 要等一次重試(退避初次 1s),
++    // 而 waitFor 預設 timeout 就是 1s(frontend-testing skill 的 TQ error 終態條目)
++    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
++    expect(isTradingDay(HOLIDAY)).toBe(true);
++  });
++
++  it("後端未載日曆(holidays 空)→ 集合清空,只擋週末", async () => {
++    stubFetch({ ...PAYLOAD, holidays: [], years_loaded: [], calendar_loaded: false });
++    const { result } = renderHook(() => useTradingCalendar(), { wrapper });
++    await waitFor(() => expect(result.current.data).toBeTruthy());
++    expect(isTradingDay(HOLIDAY)).toBe(true);
++  });
++});
+diff --git a/frontend/src/hooks/useTradingCalendar.ts b/frontend/src/hooks/useTradingCalendar.ts
+new file mode 100644
+index 00000000..e523489f
+--- /dev/null
++++ b/frontend/src/hooks/useTradingCalendar.ts
+@@ -0,0 +1,46 @@
++import { useQuery } from "@tanstack/react-query";
++import { useEffect } from "react";
++
++import { parseError } from "@/lib/api-error";
++import { setHolidays } from "@/lib/trading-calendar";
++import type { CalendarState } from "@/types";
++
++/** 交易日曆取數(SC-9):開站問一次 `/api/calendar`,把假日集合灌進 `lib/trading-calendar`。
++ *
++ *  **掛在 App 層且只掛一支**:消費端(三支交易時段函式)是模組級的,多掛幾份只是多打
++ *  幾次同一個端點。
++ *
++ *  `staleTime: Infinity` + 6 小時 `refetchInterval`:日曆是靜態 config,盤中不會變;
++ *  留一個長週期重取是給**長跑分頁跨日**用的(開著不關的看盤機,隔天要吃到同一份即可,
++ *  但也要能在後端更新 config 重啟後跟上)。
++ *
++ *  `retry: 1`:失敗的樣態是後端不在 —— 重試三輪只是延後降級,而降級本身是安全的
++ *  (空集合 = 只擋週末 = 改動前行為)。
++ *
++ *  寫入放 `useEffect` 而不是 `queryFn` 內:queryFn 也會在 refetch / 背景重取時跑,
++ *  但它是「取資料」的位置;副作用綁在 data 上,重取到同一份 reference 時不重複寫。 */
++
++const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
++
++async function fetchCalendar(): Promise<CalendarState> {
++  const res = await fetch("/api/calendar");
++  if (!res.ok) throw new Error(await parseError(res));
++  return (await res.json()) as CalendarState;
++}
++
++export function useTradingCalendar() {
++  const query = useQuery({
++    queryKey: ["calendar"],
++    queryFn: fetchCalendar,
++    staleTime: Infinity,
++    retry: 1,
++    refetchInterval: SIX_HOURS_MS,
++  });
++
++  const holidays = query.data?.holidays;
++  useEffect(() => {
++    if (holidays !== undefined) setHolidays(holidays);
++  }, [holidays]);
++
++  return query;
++}
+diff --git a/frontend/src/lib/trading-calendar.test.ts b/frontend/src/lib/trading-calendar.test.ts
+new file mode 100644
+index 00000000..366f7939
+--- /dev/null
++++ b/frontend/src/lib/trading-calendar.test.ts
+@@ -0,0 +1,64 @@
++/** 前端交易日曆(SC-9 的純函式面)。
++ *
++ *  模組級集合會跨 it 外溢 → `beforeEach` 一律清空(未載入 = 空集合 = 只擋週末,
++ *  也是「日曆沒回來」時該有的行為)。 */
++import { beforeEach, describe, expect, it } from "vitest";
++
++import { clearHolidays, isTradingDay, isoLocalDate, setHolidays } from "@/lib/trading-calendar";
++
++/** 2026-10-08 四 / 10-09 五(國慶調整假)/ 10-10 六 / 10-11 日。 */
++const THU = new Date(2026, 9, 8, 10, 0);
++const FRI = new Date(2026, 9, 9, 10, 0);
++const SAT = new Date(2026, 9, 10, 10, 0);
++const SUN = new Date(2026, 9, 11, 10, 0);
++
++beforeEach(() => {
++  clearHolidays();
++});
++
++describe("isoLocalDate(本機時區,非 UTC)", () => {
++  it("月 / 日補零", () => {
++    expect(isoLocalDate(new Date(2026, 0, 1, 23, 30))).toBe("2026-01-01");
++    expect(isoLocalDate(new Date(2026, 8, 5, 0, 0))).toBe("2026-09-05");
++  });
++
++  // toISOString() 是 UTC:台北 08:00 前會退成前一天,整個早盤的假日判定錯位一天。
++  it("台北早上 07:00 仍是當天(toISOString 會退一天)", () => {
++    const d = new Date(2026, 9, 9, 7, 0);
++    expect(isoLocalDate(d)).toBe("2026-10-09");
++  });
++});
++
++describe("isTradingDay", () => {
++  it("未載入日曆 = 只擋週末(改動前行為逐字相同,W8)", () => {
++    expect(isTradingDay(THU)).toBe(true);
++    expect(isTradingDay(FRI)).toBe(true);
++    expect(isTradingDay(SAT)).toBe(false);
++    expect(isTradingDay(SUN)).toBe(false);
++  });
++
++  it("setHolidays 後該日轉非交易日,鄰近平日不受影響", () => {
++    setHolidays(["2026-10-09"]);
++    expect(isTradingDay(FRI)).toBe(false);
++    expect(isTradingDay(THU)).toBe(true);
++  });
++
++  it("clearHolidays 還原成只擋週末", () => {
++    setHolidays(["2026-10-09"]);
++    expect(isTradingDay(FRI)).toBe(false);
++    clearHolidays();
++    expect(isTradingDay(FRI)).toBe(true);
++  });
++
++  it("setHolidays 是覆寫不是累加(第二次取數的清單即全部)", () => {
++    setHolidays(["2026-10-09"]);
++    setHolidays(["2026-10-08"]);
++    expect(isTradingDay(FRI)).toBe(true);
++    expect(isTradingDay(THU)).toBe(false);
++  });
++
++  it("假日集合含週末日期時週末仍為假(不重複判定也不翻轉)", () => {
++    setHolidays(["2026-10-10"]);
++    expect(isTradingDay(SAT)).toBe(false);
++  });
++});
+diff --git a/frontend/src/lib/trading-calendar.ts b/frontend/src/lib/trading-calendar.ts
+new file mode 100644
+index 00000000..5910b0f0
+--- /dev/null
++++ b/frontend/src/lib/trading-calendar.ts
+@@ -0,0 +1,43 @@
++/** 前端交易日曆(mod/trading-calendar Q7 / SC-9)。
++ *
++ *  **模組級可變集合,不是 context / hook 回傳值**:消費端是 `lib/trading-hours.ts` 的
++ *  三支純函式,而它們被 5 個 `refetchInterval` callback(useBreadthRows / useMarketBars /
++ *  useStockBars / useFuturesBars / useIndexOverlay 一路下去)以「零參數、非 React 情境」
++ *  求值 —— 要把假日集合送到那裡,不是把整條鏈改成吃 props(每個呼叫點都要改、且
++ *  callback 內拿不到 hook),就是放一顆模組級狀態。取後者:寫入點唯一
++ *  (`useTradingCalendar` 取數成功),讀取點是純函式。
++ *
++ *  **未載入 = 空集合 = 只擋週末 = 改動前逐字相同**(白名單 W8):`/api/calendar` 還沒回、
++ *  後端沒載日曆、或這支 hook 根本沒掛(元件級測試)時,判定退回純週末 —— 失效方向
++ *  永遠是「少擋」(照現行空跑),不會「多擋」把真交易日的輪詢關掉。
++ *
++ *  日期一律 **本機時區** ISO(`isoLocalDate`),不用 `toISOString()`:那是 UTC,台北
++ *  08:00 前會退成前一天,整個早盤的假日比對錯位一天。 */
++
++let holidaySet: ReadonlySet<string> = new Set();
++
++/** 覆寫(不是累加)假日集合;`useTradingCalendar` 每次取數成功後呼叫。
++ *  覆寫語意讓「日曆更新後移除某天」也能生效。 */
++export function setHolidays(dates: readonly string[]): void {
++  holidaySet = new Set(dates);
++}
++
++/** 清回空集合。測試 `beforeEach` 用 —— 模組級狀態會跨 it / 跨 describe 外溢。 */
++export function clearHolidays(): void {
++  holidaySet = new Set();
++}
++
++/** 本機時區的 `YYYY-MM-DD`(月 / 日補零)。 */
++export function isoLocalDate(d: Date): string {
++  const y = d.getFullYear();
++  const m = String(d.getMonth() + 1).padStart(2, "0");
++  const day = String(d.getDate()).padStart(2, "0");
++  return `${y}-${m}-${day}`;
++}
++
++/** 非週末且不在假日集合。 */
++export function isTradingDay(d: Date): boolean {
++  const day = d.getDay(); // 0 = 週日
++  if (day === 0 || day === 6) return false;
++  return !holidaySet.has(isoLocalDate(d));
++}
+diff --git a/frontend/src/lib/trading-hours.test.ts b/frontend/src/lib/trading-hours.test.ts
+index d2785ac7..86a8ed33 100644
+--- a/frontend/src/lib/trading-hours.test.ts
++++ b/frontend/src/lib/trading-hours.test.ts
+@@ -1,6 +1,11 @@
+-import { describe, expect, it } from "vitest";
++import { beforeEach, describe, expect, it } from "vitest";
+ 
+-import { inFuturesAllDayHours } from "@/lib/trading-hours";
++import { clearHolidays, setHolidays } from "@/lib/trading-calendar";
++import {
++  inFuturesAllDayHours,
++  inFuturesTradingHours,
++  inTradingHours,
++} from "@/lib/trading-hours";
+ 
+ /** 2026-08 月曆:01 六 / 02 日 / 03 一 / 04 二 / 05 三 / 06 四 / 07 五 / 08 六。
+  *  月/日直接寫死,測的是「星期維度」而不是某個絕對時刻。 */
+@@ -14,6 +19,12 @@ const SAT = 8;
+ const SUN = 9;
+ const MON = 10;
+ 
++/** 假日集合是模組級狀態,會跨 it / 跨 describe 外溢 —— 每條測試從空集合開始
++ *  (空集合 = 只擋週末 = 改動前行為,上面既有的星期維度測點全部靠這個前提)。 */
++beforeEach(() => {
++  clearHolidays();
++});
++
+ describe("inFuturesAllDayHours(SC-12;design §4.2 星期維度)", () => {
+   it("brainstorm SC-12 的 11 個(星期,時刻)測點", () => {
+     expect(inFuturesAllDayHours(at(WED, 10, 0))).toBe(true);
+@@ -65,3 +76,52 @@ describe("inFuturesAllDayHours(SC-12;design §4.2 星期維度)", () => {
+     expect(typeof inFuturesAllDayHours()).toBe("boolean");
+   });
+ });
++
++/** 2026-10-09(五)國慶調整假;10-08 四為交易日、10-10 六、10-12 一。
++ *
++ *  少了假日這一維,國定假日整天每 60s 空打當日段(當日段恆空 → don't-cache-empty
++ *  → 每次都真的走 TC4 SubHistory)—— 與週末那條路同一種浪費,只是原本擋不掉。 */
++describe("三支時段函式吃交易日曆(SC-9)", () => {
++  const HOL = (hh: number, mm: number) => new Date(2026, 9, 9, hh, mm);
++  const SAT_AFTER_HOL = (hh: number, mm: number) => new Date(2026, 9, 10, hh, mm);
++  const MON_AFTER = (hh: number, mm: number) => new Date(2026, 9, 12, hh, mm);
++
++  it("前提自檢:未載日曆時 10-09(五)照現行判定為交易日", () => {
++    expect(HOL(10, 0).getDay()).toBe(5);
++    expect(inTradingHours(HOL(10, 0))).toBe(true);
++    expect(inFuturesTradingHours(HOL(10, 0))).toBe(true);
++    expect(inFuturesAllDayHours(HOL(10, 0))).toBe(true);
++  });
++
++  it("假日當天日盤窗全關(個股 / 期指日盤 / 近全時段)", () => {
++    setHolidays(["2026-10-09"]);
++    expect(inTradingHours(HOL(10, 0))).toBe(false);
++    expect(inFuturesTradingHours(HOL(10, 0))).toBe(false);
++    expect(inFuturesAllDayHours(HOL(10, 0))).toBe(false);
++    expect(inFuturesAllDayHours(HOL(16, 0))).toBe(false); // 假日當晚無夜盤
++  });
++
++  it("00:00–05:05 屬前一日夜盤 → 判的是前一天(R1)", () => {
++    setHolidays(["2026-10-09"]);
++    // 假日凌晨:前一日(10-08 四)是交易日 → 那是週四的夜盤,照開
++    expect(inFuturesAllDayHours(HOL(1, 0))).toBe(true);
++    expect(inFuturesAllDayHours(HOL(5, 5))).toBe(true);
++    // 假日次日凌晨:前一日是假日 → 沒有夜盤可收
++    expect(inFuturesAllDayHours(SAT_AFTER_HOL(1, 0))).toBe(false);
++  });
++
++  it("週末語意不變:未設假日時週六 01:00 開、週一 01:00 關", () => {
++    expect(inFuturesAllDayHours(SAT_AFTER_HOL(1, 0))).toBe(true);
++    expect(inFuturesAllDayHours(MON_AFTER(1, 0))).toBe(false);
++  });
++
++  it("假日集合不含的平日逐字不變(只疊加否決,不改既有維度)", () => {
++    setHolidays(["2026-10-09"]);
++    expect(inTradingHours(new Date(2026, 9, 8, 10, 0))).toBe(true);
++    expect(inFuturesTradingHours(new Date(2026, 9, 8, 10, 0))).toBe(true);
++    expect(inFuturesAllDayHours(new Date(2026, 9, 8, 16, 0))).toBe(true);
++    // 週末仍恆假(假日集合空與否都一樣)
++    expect(inTradingHours(SAT_AFTER_HOL(11, 0))).toBe(false);
++    expect(inFuturesTradingHours(SAT_AFTER_HOL(11, 0))).toBe(false);
++  });
++});
+diff --git a/frontend/src/lib/trading-hours.ts b/frontend/src/lib/trading-hours.ts
+index b9efb639..a08f9c5e 100644
+--- a/frontend/src/lib/trading-hours.ts
++++ b/frontend/src/lib/trading-hours.ts
+@@ -4,16 +4,18 @@
+  * 而 `lib/` 才是純函式的落點 —— 讓新 hook 去 import 一個 hooks 模組只為拿一個 helper
+  * 是反向依賴。`useStockBars` 仍 re-export,個股側 import 路徑不變。
+  *
+- * 週末必須擋掉:少了星期判定,週六日整個上午都會每 60s 打一次當日段,而當日段恆空
+- * → `today_put` don't-cache-empty → 每次都真的走 TC4 SubHistory(首頁 poll deadline
+- * ≈ 30s、約 30 個 REQ,搶同一個 source 的 `api.lock`)。
++ * 非交易日必須擋掉:少了這一維,週末與國定假日整個上午都會每 60s 打一次當日段,
++ * 而當日段恆空 → `today_put` don't-cache-empty → 每次都真的走 TC4 SubHistory
++ * (首頁 poll deadline ≈ 30s、約 30 個 REQ,搶同一個 source 的 `api.lock`)。
+  *
+  * 起點取 09:01 而非 08:45:當日第一根 1K 就是 09:01,更早輪詢必定空手而回。
+- * (國定假日仍會空跑 —— 需要交易日曆才擋得掉,列入 docs/next-time.md。)
++ * (國定假日自 mod/trading-calendar 起由 `isTradingDay` 一併擋掉 —— 假日集合來自
++ * `/api/calendar`;未載入時退回只擋週末 = 改動前行為。)
+  */
++import { isTradingDay } from "@/lib/trading-calendar";
++
+ export function inTradingHours(now: Date = new Date()): boolean {
+-  const day = now.getDay();
+-  if (day === 0 || day === 6) return false;
++  if (!isTradingDay(now)) return false;
+   const mins = now.getHours() * 60 + now.getMinutes();
+   return mins >= 9 * 60 + 1 && mins <= 13 * 60 + 35;
+ }
+@@ -23,25 +25,34 @@ export function inTradingHours(now: Date = new Date()): boolean {
+  * 個股那把尺(09:01–13:35)套在期指上,開盤前 15 分與 13:36–13:45 的分 K 不會自動
+  * 更新,要手動切模式才重取(review P2-5)。夜盤不在本輪 scope(期指 K 線只取日盤窗)。 */
+ export function inFuturesTradingHours(now: Date = new Date()): boolean {
+-  const day = now.getDay();
+-  if (day === 0 || day === 6) return false;
++  if (!isTradingDay(now)) return false;
+   const mins = now.getHours() * 60 + now.getMinutes();
+   return mins >= 8 * 60 + 46 && mins <= 13 * 60 + 46;
+ }
+ 
++/** 前一日(本機時區)。00:00–05:05 那段夜盤屬前一交易日,判的是它。 */
++function prevDay(now: Date): Date {
++  const d = new Date(now);
++  d.setDate(d.getDate() - 1);
++  return d;
++}
++
+ /** 台指期**近全時段**(日盤 + 夜盤)輪詢窗(SC-12;design §4.2)。
+  *
+- * **星期是必要的一維,不是加分項**:夜盤後半(00:00–05:00)屬**前一交易日**,所以
++ * **日別是必要的一維,不是加分項**:夜盤後半(00:00–05:00)屬**前一交易日**,所以
+  * 「週六凌晨 = 週五夜盤」要開、「週一凌晨 = 週日無夜盤」要關。少了這一維,週末兩天
+  * 會整夜每 60s 空打當日段(當日段恆空 → don't-cache-empty → 每次都真的走 TC4)。
+  *
+- * 兩段停輪詢窗:13:51–14:54(日盤收→夜盤開,含收尾餘裕)與 05:06–08:39。
+- * 國定假日不處理(既有兩支同;需要交易日曆才擋得掉)。 */
++ * 該段改判 `isTradingDay(前一日)`(mod/trading-calendar R1):對純週末與原本的
++ * `day >= 2 && day <= 6` **完全等價**(週二〜週六的前一日恰是週一〜週五),
++ * 只是多疊一層假日否決 —— 假日次日凌晨沒有夜盤可收,而假日**當天**凌晨照收前一
++ * 交易日的夜盤。
++ *
++ * 兩段停輪詢窗:13:51–14:54(日盤收→夜盤開,含收尾餘裕)與 05:06–08:39。 */
+ export function inFuturesAllDayHours(now: Date = new Date()): boolean {
+-  const day = now.getDay(); // 0 = 週日
+   const mins = now.getHours() * 60 + now.getMinutes();
+-  // 00:00–05:05 先判:這段屬前一日的夜盤,所以放行的是週二〜週六(週一凌晨要關)
+-  if (mins <= 5 * 60 + 5) return day >= 2 && day <= 6;
+-  if (day === 0 || day === 6) return false;
++  // 00:00–05:05 先判:這段屬前一日的夜盤,所以看的是前一天是不是交易日
++  if (mins <= 5 * 60 + 5) return isTradingDay(prevDay(now));
++  if (!isTradingDay(now)) return false;
+   return (mins >= 8 * 60 + 40 && mins <= 13 * 60 + 50) || mins >= 14 * 60 + 55;
+ }
+diff --git a/frontend/src/types.ts b/frontend/src/types.ts
+index f1e2885a..61e26c62 100644
+--- a/frontend/src/types.ts
++++ b/frontend/src/types.ts
+@@ -250,6 +250,26 @@ export interface OiLevelsResponse {
+   strikes: OiStrikeRow[]; // strike 升冪
+ }
+ 
++// ---- 交易日曆(對應 copycat/trading_calendar.py;mod/trading-calendar SC-6)----
++
++/** `GET /api/calendar`(恆 200,純 config 推導、不依賴任何引擎 → boot 窗內也答得出來)。
++ *
++ *  **兩個日期刻意分開**:`trade_date` = stock / index / signals hub 實際採用的日別
++ *  (`TXO_BACKFILL_DATE` 有值時就是它);`calendar_trade_date` = 純日曆推導 = breadth
++ *  一律採用的日別。env 模式下兩者會不一致(KR-5)。
++ *
++ *  前端只吃 `holidays`(灌進 `lib/trading-calendar`);其餘欄位是可視化 / 診斷用
++ *  (`years_loaded` 不含當年 = 日曆過期,此後只擋週末)。 */
++export interface CalendarState {
++  today: string; // 牆鐘 YYYY-MM-DD
++  trade_date: string;
++  calendar_trade_date: string;
++  backfill_env: string | null;
++  holidays: string[]; // YYYY-MM-DD 升冪
++  years_loaded: number[];
++  calendar_loaded: boolean;
++}
++
+ // ---- 全市場家數帶 / 騰落線(對應 copycat/server/breadth_engine.py;market-overview R2)----
+ 
+ /** 一格分鐘的五桶計數,桶序固定 `[limit_up, up, flat, down, limit_down]`
+diff --git a/tests/server/test_breadth_engine.py b/tests/server/test_breadth_engine.py
+index 85651069..880d7417 100644
+--- a/tests/server/test_breadth_engine.py
++++ b/tests/server/test_breadth_engine.py
+@@ -205,11 +205,14 @@ def _make(
+     daily: FakeDaily | None = None,
+     clock: Clock | None = None,
+     config: BreadthConfig | None = None,
++    is_trading_day: Callable[[_dt.date], bool] | None = None,
+ ) -> tuple[Any, FakeFetch, FakeFetch, FakeFetch, Clock]:
+     snap = snapshot if snapshot is not None else FakeFetch(_snapshot_rows())
+     inf = info if info is not None else FakeFetch(list(_INFO_ROWS))
+     disp = disposition if disposition is not None else FakeFetch(list(_DISPOSITION_ROWS))
+     clk = clock if clock is not None else Clock()
++    # 不傳就**不帶這個 kwarg**(不是傳 None):W9 的預設鎖要驗的正是「呼叫端沒給」
++    extra = {} if is_trading_day is None else {"is_trading_day": is_trading_day}
+     engine = be.BreadthEngine(
+         token="tok",
+         config=config if config is not None else BreadthConfig(),
+@@ -220,6 +223,7 @@ def _make(
+         data_dir=tmp_path,
+         today_fn=clk.today_fn,
+         now_fn=clk.now_fn,
++        **extra,
+     )
+     return engine, snap, inf, disp, clk
+ 
+@@ -1844,3 +1848,206 @@ class TestRowsState:
+ 
+         assert state["streaks_ready"] is False
+         assert _row_of(state, "1101")["streak"] is None
++
++
++# ---------------------------------------------------------------------------
++# 交易日 gate(mod/trading-calendar SC-5)
++# ---------------------------------------------------------------------------
++
++#: 週五(最近交易日)/ 週六(牆鐘假日開站)
++_FRI = "2026-08-14"
++_SAT = "2026-08-15"
++
++
++def _weekend_clock(now_time: str = "10:00:00") -> Clock:
++    """today_fn = 最近交易日(週五)、now_fn = 牆鐘(週六)——app 層在假日的實況。
++
++    `Clock` 建構時把兩者綁同一天,這裡顯式拆開:SC-5 要驗的正是「資料日與牆鐘日
++    不同」的那一格,綁在一起就什麼都測不出來。
++    """
++    clock = Clock(today=_FRI, now=now_time)
++    clock.now = _dt.datetime.fromisoformat(f"{_SAT} {now_time}")
++    return clock
++
++
++class TestTradingDayGate:
++    """SC-5:`_in_window` 加交易日判定;today_fn = 最近交易日時假日仍還原得出序列。
++
++    現行 `_in_window` 是純時間窗 → 週六 09:00–13:40 每 10 秒打一次 FinMind,拿回的
++    永遠是週五那份收盤快照(配額純浪費,W5)。
++    """
++
++    def _write_series(self, tmp_path: Path) -> list[dict]:
++        points = [
++            {"t": "0931", "twse": [0, 1, 2, 3, 0], "tpex": [0, 0, 0, 0, 0]},
++            {"t": "0932", "twse": [0, 2, 2, 2, 0], "tpex": [0, 0, 0, 0, 0]},
++        ]
++        _series_file(tmp_path, _FRI).write_text(
++            json.dumps({"_version": 1, "trade_date": _FRI, "series": points}),
++            encoding="utf-8",
++        )
++        return points
++
++    async def test_holiday_boot_restores_last_session_series(self, tmp_path: Path) -> None:
++        """週六開站:`breadth-2026-08-14.json` 還原得出週五序列(今日 = 最近交易日)。
++
++        今日基準若是牆鐘週六,檔名鍵就是 `breadth-2026-08-15.json`(不存在)→ 空序列,
++        而 counts 照樣有數字 —— 畫面是「有家數、沒騰落線」,零錯誤訊號。
++        """
++        points = self._write_series(tmp_path)
++        engine, snap, *_ = _make(
++            tmp_path,
++            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
++            clock=_weekend_clock(),
++            config=BreadthConfig(poll_secs=60.0),
++            is_trading_day=lambda d: d.weekday() < 5,
++        )
++
++        await engine.start()
++        try:
++            await _wait_until(lambda: engine.state()["counts"] is not None)
++        finally:
++            await engine.close()
++
++        state = engine.state()
++        assert state["trade_date"] == _FRI
++        assert state["series"][: len(points)] == points  # restore 命中
++        assert state["series"] != []
++        assert snap.calls == 1  # 首圈仍無條件跑(counts 要有數字)
++        assert state["stale"] is False  # R4:非交易日不亮「延遲」膠囊
++
++    async def test_holiday_suppresses_polling_after_first_cycle(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """窗內但非交易日 → 只有首圈那一次取數(W5:假日 poll 次數下降)。
++
++        圈數用 `_maybe_arm_streaks` 的呼叫次數當觀察點(它在傘罩內、窗 gate 外,每圈
++        必經):用牆鐘 sleep 換圈數在 Windows 上是假的(timer 解析度 15.6ms),
++        「沒多打」有可能只是因為迴圈根本沒轉。
++        """
++        rounds = {"n": 0}
++
++        def _count(_self: object) -> None:
++            rounds["n"] += 1
++
++        monkeypatch.setattr(be.BreadthEngine, "_maybe_arm_streaks", _count)
++        engine, snap, *_ = _make(
++            tmp_path,
++            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
++            clock=_weekend_clock(),
++            config=BreadthConfig(poll_secs=0.01),
++            is_trading_day=lambda d: d.weekday() < 5,
++        )
++
++        await engine.start()
++        try:
++            await _wait_until(lambda: rounds["n"] >= 4)
++        finally:
++            await engine.close()
++
++        assert snap.calls == 1
++        assert engine._in_window() is False  # 10:00 在時間窗內、但那天不是交易日
++
++    async def test_trading_day_keeps_polling(self, tmp_path: Path) -> None:
++        """對照組:同一份注入、今天是交易日 → 窗內照舊每圈取數(交易日節奏不變)。"""
++        engine, snap, *_ = _make(
++            tmp_path,
++            config=BreadthConfig(poll_secs=0.01),
++            is_trading_day=lambda d: d.weekday() < 5,
++        )
++
++        await engine.start()
++        try:
++            await _wait_until(lambda: snap.calls >= 3)
++        finally:
++            await engine.close()
++
++        assert snap.calls >= 3
++        assert engine._in_window() is True
++
++    async def test_default_keeps_pure_time_window(self, tmp_path: Path) -> None:
++        """W9:不注入 `is_trading_day` 時逐字保留純時間窗(週六窗內照樣 poll)。"""
++        engine, snap, *_ = _make(
++            tmp_path,
++            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
++            clock=_weekend_clock(),
++            config=BreadthConfig(poll_secs=0.01),
++        )
++
++        await engine.start()
++        try:
++            await _wait_until(lambda: snap.calls >= 3)
++        finally:
++            await engine.close()
++
++        assert snap.calls >= 3
++        assert engine._in_window() is True
++
++    @pytest.mark.parametrize(
++        "today,now,computed_for,data_end,dates,streaks",
++        [
++            pytest.param(
++                _FRI,
++                "13:35:00",
++                _FRI,
++                "2026-08-13",
++                ["2026-08-13", "2026-08-12", "2026-08-11", "2026-08-10"],
++                {"1101": 2},
++                id="交易日基準(改動後;rows_date > data_end,+1 分支)",
++            ),
++            pytest.param(
++                _SAT,
++                "10:00:00",
++                _SAT,
++                _FRI,
++                [_FRI, "2026-08-13", "2026-08-12", "2026-08-11"],
++                {"1101": 3},
++                id="牆鐘日基準(改動前;rows_date == data_end,不 +1 分支)",
++            ),
++        ],
++    )
++    async def test_streak_identical_across_holiday_branch(
++        self,
++        tmp_path: Path,
++        today: str,
++        now: str,
++        computed_for: str,
++        data_end: str,
++        dates: list[str],
++        streaks: dict[str, int],
++    ) -> None:
++        """R5 回歸:today 基準由牆鐘日改成最近交易日之後,連板數值逐字不變。
++
++        同一個週六開站的畫面,兩種 today 基準會算出**不同分支**的 streak:
++        - 改動後(today = 最近交易日 08-14)→ 那份 streak 的 `data_end` = 08-13,
++          rows 資料日 08-14 走 `>` 分支 +1。
++        - 改動前(today = 牆鐘 08-15)→ `data_end` = 08-14 = rows 資料日,走 `==` 分支。
++
++        兩條算術路徑不同、結果必須相同 —— 不同就是「假日開站多一板 / 少一板」,而畫面上
++        那是個看起來很正常的數字。演算法本身不動(W4)。
++        """
++        _write_streaks_cache(
++            tmp_path,
++            computed_for=computed_for,
++            data_end=data_end,
++            dates=dates,
++            skipped=[],
++            streaks=streaks,
++            file_day=today,
++        )
++        engine, *_ = _make(
++            tmp_path,
++            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 13:30:00")),
++            daily=FakeDaily({}),
++            clock=Clock(today=today, now=now),
++            is_trading_day=lambda d: d.weekday() < 5,
++        )
++        engine._restore_streaks()
++
++        await engine._run_cycle()
++        state = engine.rows_state()
++
++        assert state["streaks_ready"] is True
++        assert state["trade_date"] == _FRI
++        assert _row_of(state, "1101")["streak"] == 3
++        assert _row_of(state, "1101")["streak_capped"] is False
+diff --git a/tests/server/test_calendar_wiring.py b/tests/server/test_calendar_wiring.py
+new file mode 100644
+index 00000000..c1932888
+--- /dev/null
++++ b/tests/server/test_calendar_wiring.py
+@@ -0,0 +1,424 @@
++"""交易日曆在 app 層的佈線(mod/trading-calendar SC-2 / SC-6 / SC-7 / SC-13)。
++
++四件事各自的失效樣態都是「畫面一片空而零錯誤訊號」,所以逐條釘住:
++
++- **SC-2**:週六 / 假日冷啟動時 stock / index / hub / breadth 各自拿到哪一天
++  (`TXO_BACKFILL_DATE` 對前三者最高優先、breadth 一律純日曆 —— KR-5)。
++- **SC-6**:`GET /api/calendar` 是「這台今天在看哪一天」的唯一可視管道(含日曆是否載到)。
++- **SC-7**:boot 後的 DK 雙向交叉檢查 —— 日曆過期 / 臨時休市各一句 WARNING,而**正常
++  交易日盤前不得誤報**(這條偽陽性鎖是整組最重要的一條:每天早上都會走到)。
++- **SC-13**:overlay 的基準日跟著顯示中的交易日走(cache 鍵同源)。
++
++牆鐘取樣一律 monkeypatch `app_mod._today` / `_now` 這**兩個模組層函式**(app 內唯一的
++兩個取樣點);`TXO_BACKFILL_DATE` 由 autouse fixture 清掉 —— 開發機 shell 留著它會讓
++整檔斷言隨環境飄。
++"""
++
++from __future__ import annotations
++
++import datetime as _dt
++import logging
++import time
++from pathlib import Path
++
++import pytest
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
++
++from copycat.server import app as app_mod
++from copycat.server.app import BreadthFetchers, create_app
++from copycat.trading_calendar import TradingCalendar, load_trading_calendar
++from tests.helpers.boot import BootedClient
++from tests.helpers.fake_sources import FakeIndexSource, FakeStockSource, dbar
++from tests.helpers.fake_txo import FakeTxoSource
++
++#: 2026-08-15 = 週六;前一交易日 = 08-14(週五)。連假 / 國定假日的推導由
++#: `tests/test_trading_calendar.py` 覆蓋,這裡只驗「app 有沒有把它接上去」。
++SAT = _dt.date(2026, 8, 15)
++FRI = _dt.date(2026, 8, 14)
++FRI_ISO = "2026-08-14"
++
++#: 個股 overlay 的日 K 治具:08-11 ~ 08-14(≥5 根才有 ma5,20 根以下 ma20 為 null)。
++_DAILY = [
++    {"date": f"2026-08-{d:02d}", "high": 103_000, "low": 100_000, "close": 100_000 + d * 100}
++    for d in range(11, 15)
++]
++
++
++@pytest.fixture(autouse=True)
++def _no_backfill_env(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
++
++
++def _freeze(
++    monkeypatch: pytest.MonkeyPatch, today: _dt.date, *, at: _dt.time = _dt.time(9, 30)
++) -> None:
++    """牆鐘的兩個取樣點一起釘 —— `_now` 只釘一半的話 SC-7 的 14:00 門檻會隨實跑時刻飄。"""
++    monkeypatch.setattr(app_mod, "_today", lambda: today)
++    monkeypatch.setattr(app_mod, "_now", lambda: _dt.datetime.combine(today, at))
++
++
++class RecordingStockSource(FakeStockSource):
++    """記錄 `set_trade_date` 與日 K 取數次數。
++
++    共用 fake 的兩支都是靜默 no-op —— 而「trade_date 有沒有真的傳到 source 日窗」正是
++    本輪要驗的那件事(engine 屬性對了但 source 沒收到 = 回補仍打錯日,畫面照樣空)。
++    """
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.trade_dates: list[str] = []
++        self.daily_calls = 0
++
++    def set_trade_date(self, trade_date: str) -> None:
++        self.trade_dates.append(trade_date)
++
++    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
++        self.daily_calls += 1
++        return super().fetch_daily_bars(code, n)
++
++
++class DayKeyedIndexSource(FakeIndexSource):
++    """`fetch_day_minutes` 依**最後一次 `set_trade_date`** 回不同資料。
++
++    共用 fake 恆回同一份 → 「日窗切對了沒」驗不出來(trade_date 標成假日、回補仍回
++    週五資料的假綠)。這裡讓 08-14 那份才有分鐘,冷啟動後分時非空 = 日窗真的對上。
++    """
++
++    def __init__(self, by_date: dict[str, dict[str, int]]) -> None:
++        super().__init__()
++        self._by_date = {k: dict(v) for k, v in by_date.items()}
++
++    def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]:
++        super().fetch_day_minutes(code, window_variant=window_variant)  # 計數 / variant 記錄
++        current = self.trade_dates[-1] if self.trade_dates else ""
++        return dict(self._by_date.get(current, {}))
++
++
++class RaisingHistoryIndexSource(FakeIndexSource):
++    """日 K 取數拋非 ConnectionError —— SC-7 的「交叉檢查自己炸掉」路徑。
++
++    ConnectionError 會被 `IndexEngine.bars_range` 收成空清單(那是另一條:bars 空),
++    要驗自吞傘就必須是它接不住的例外。
++    """
++
++    def fetch_bars_range_tagged(
++        self, code: str, tf: str, start: str, end: str
++    ) -> tuple[list[dict], str, str]:
++        raise RuntimeError("history boom")
++
++
++def _empty_fetchers() -> BreadthFetchers:
++    """家數帶取數四元組:全空(本檔只驗 today_fn 佈線,不驗家數算術)。"""
++    return (
++        lambda _token: [],
++        lambda _token: [],
++        lambda _token, _today: [],
++        None,
++    )
++
++
++def _app(
++    tmp_path: Path,
++    *,
++    cal: TradingCalendar | None = None,
++    stock: object | None = None,
++    index: object | None = None,
++    breadth: object | None = None,
++) -> FastAPI:
++    return create_app(
++        FakeTxoSource(),
++        stock_source=stock,
++        index_source=index,
++        index_mis_fetch=lambda: None,
++        breadth_fetchers=breadth,
++        breadth_data_dir=tmp_path / "market",
++        # 非 prod create_app 一律隔離自選檔路徑(XR-3 紀律:hub 恆建,落點跟著它走)
++        stock_watchlist_path=tmp_path / "watchlist.json",
++        trading_calendar=cal,
++        throttle_secs=0.01,
++    )
++
++
++def _client(app: FastAPI) -> TestClient:
++    return BootedClient(app, raise_server_exceptions=False)
++
++
++def _wait_crosscheck(app: FastAPI, timeout: float = 5.0) -> None:
++    """等到 SC-7 的背景交叉檢查結束。
++
++    它刻意**不擋 boot 鏈**(probe 要打 TC4 歷史)→ `boot_done` 不代表它跑完,不等的話
++    「無 WARNING」那幾條會變成「還沒跑到」的假綠。
++    """
++    deadline = time.monotonic() + timeout
++    while True:
++        task = getattr(app.state, "calendar_crosscheck", None)
++        if task is not None and task.done():
++            return
++        if time.monotonic() > deadline:
++            raise AssertionError(f"交叉檢查未在 {timeout}s 內結束:{task}")
++        time.sleep(0.01)
++
++
++def _app_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
++    return [
++        r.getMessage()
++        for r in caplog.records
++        if r.name == "copycat.server.app" and r.levelno >= logging.WARNING
++    ]
++
++
++class TestEngineTradeDate:
++    """SC-2:引擎冷啟動拿到的日別。"""
++
++    def test_stock_and_index_use_last_trading_day_on_saturday(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        _freeze(monkeypatch, SAT)
++        stock = RecordingStockSource()
++        index = DayKeyedIndexSource({FRI_ISO: {"0901": 43_000_000}})
++        app = _app(tmp_path, cal=load_trading_calendar(), stock=stock, index=index)
++        with _client(app) as c:
++            assert app.state.stock is not None
++            assert app.state.stock.trade_date == FRI_ISO
++            # engine 屬性對了但 source 日窗沒切 = 回補照樣打週六(畫面空、零錯誤訊號)
++            assert stock.trade_dates == [FRI_ISO]
++            body = c.get("/api/index/state").json()
++            assert body["trade_date"] == FRI_ISO
++            assert body["twse"]["minutes"] == {"0901": 43_000_000}, "日窗切對才拿得到週五那份"
++
++    def test_backfill_env_beats_calendar_for_stock_and_index(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """W2:手動 `TXO_BACKFILL_DATE` 仍是最高優先(日曆不得蓋掉 ops 通道)。"""
++        _freeze(monkeypatch, SAT)
++        monkeypatch.setenv("TXO_BACKFILL_DATE", "2026-08-10")
++        stock = RecordingStockSource()
++        index = DayKeyedIndexSource({"2026-08-10": {"0902": 1}})
++        app = _app(tmp_path, cal=load_trading_calendar(), stock=stock, index=index)
++        with _client(app) as c:
++            assert app.state.stock is not None
++            assert app.state.stock.trade_date == "2026-08-10"
++            assert stock.trade_dates == ["2026-08-10"]
++            assert c.get("/api/index/state").json()["trade_date"] == "2026-08-10"
++
++    def test_hub_fallback_uses_calendar_without_stock(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """stock 缺席時 hub 的日別 fallback(jsonl 檔名 / today 端點的尺)也吃日曆。"""
++        _freeze(monkeypatch, SAT)
++        app = _app(tmp_path, cal=load_trading_calendar())
++        with _client(app):
++            hub = app.state.signal_hub
++            assert hub is not None
++            assert hub._trade_date_fn() == FRI_ISO
++            # 每次呼叫求值(非 boot 當下快照):env 後設也要立刻反映
++            monkeypatch.setenv("TXO_BACKFILL_DATE", "2026-08-10")
++            assert hub._trade_date_fn() == "2026-08-10"
++
++    def test_breadth_today_fn_is_last_trading_day_and_ignores_env(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """KR-5:breadth 一律純日曆 —— env 是 TXO 回補通道,不擴張到 FinMind 面。"""
++        _freeze(monkeypatch, SAT)
++        monkeypatch.setenv("TXO_BACKFILL_DATE", "2026-08-10")
++        app = _app(tmp_path, cal=load_trading_calendar(), breadth=_empty_fetchers())
++        with _client(app):
++            breadth = app.state.breadth
++            assert breadth is not None
++            assert breadth._today_fn() == FRI
++
++
++class TestCalendarRoute:
++    """SC-6:`GET /api/calendar`。"""
++
++    def test_payload_with_calendar_on_saturday(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        _freeze(monkeypatch, SAT)
++        app = _app(tmp_path, cal=load_trading_calendar())
++        with _client(app) as c:
++            body = c.get("/api/calendar").json()
++        assert set(body) == {
++            "today",
++            "trade_date",
++            "calendar_trade_date",
++            "backfill_env",
++            "holidays",
++            "years_loaded",
++            "calendar_loaded",
++        }
++        assert body["today"] == "2026-08-15"
++        assert body["trade_date"] == FRI_ISO
++        assert body["calendar_trade_date"] == FRI_ISO
++        assert body["backfill_env"] is None
++        assert body["calendar_loaded"] is True
++        assert body["years_loaded"] == [2026]
++        assert len(body["holidays"]) == 18
++        assert "2026-10-09" in body["holidays"]
++
++    def test_env_shifts_trade_date_only(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """`trade_date` = 引擎實際採用;`calendar_trade_date` = 純日曆(breadth 那份)。
++
++        兩者分開才看得出 KR-5 的日別不一致 —— 合成一個欄位就沒有任何管道分辨。
++        """
++        _freeze(monkeypatch, SAT)
++        monkeypatch.setenv("TXO_BACKFILL_DATE", "2026-08-10")
++        app = _app(tmp_path, cal=load_trading_calendar())
++        with _client(app) as c:
++            body = c.get("/api/calendar").json()
++        assert body["trade_date"] == "2026-08-10"
++        assert body["calendar_trade_date"] == FRI_ISO
++        assert body["backfill_env"] == "2026-08-10"
++
++    def test_without_calendar_degrades_to_wall_clock(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """W6:預設(測試 / 未注入)= 牆鐘,且看得出來日曆沒載到。"""
++        _freeze(monkeypatch, SAT)
++        app = _app(tmp_path)
++        with _client(app) as c:
++            body = c.get("/api/calendar").json()
++        assert body["calendar_loaded"] is False
++        assert body["holidays"] == [] and body["years_loaded"] == []
++        assert body["today"] == "2026-08-15"
++        assert body["trade_date"] == "2026-08-15"
++        assert body["calendar_trade_date"] == "2026-08-15"
++
++    def test_health_payload_unchanged(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """W7:日曆是新端點的事,`/api/health` 的「只答建置身分」契約不得被沾到。"""
++        _freeze(monkeypatch, SAT)
++        app = _app(tmp_path, cal=load_trading_calendar())
++        with _client(app) as c:
++            body = c.get("/api/health").json()
++        assert set(body) == set(app.state.build.as_dict())
++        assert "trade_date" not in body and "holidays" not in body
++
++
++class TestCrosscheck:
++    """SC-7:boot 後的 DK 雙向交叉檢查(背景 task,自吞例外)。"""
++
++    def test_dk_newer_than_calendar_warns_stale_calendar(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """日曆把真交易日標成假日 → DK 比日曆新 → 「可能過期」(KR-1 的唯一提示)。"""
++        caplog.set_level(logging.INFO)
++        _freeze(monkeypatch, FRI)
++        wrong = TradingCalendar(
++            holidays=frozenset({FRI}),
++            extra_trading_days=frozenset(),
++            years_loaded=frozenset({2026}),
++        )
++        index = FakeIndexSource(daily_bars=[dbar("2026-08-13", 1), dbar(FRI_ISO, 2)])
++        app = _app(tmp_path, cal=wrong, index=index)
++        with _client(app):
++            _wait_crosscheck(app)
++            warnings = _app_warnings(caplog)
++        assert any("可能過期" in w and FRI_ISO in w for w in warnings), warnings
++
++    def test_dk_older_than_expected_warns_unscheduled_close(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """最近交易日沒有 DK → 臨時休市(颱風假)提示改設 env / 更新日曆(KR-3)。"""
++        caplog.set_level(logging.INFO)
++        _freeze(monkeypatch, SAT)
++        index = FakeIndexSource(daily_bars=[dbar("2026-08-11", 1), dbar("2026-08-12", 2)])
++        app = _app(tmp_path, cal=load_trading_calendar(), index=index)
++        with _client(app):
++            _wait_crosscheck(app)
++            warnings = _app_warnings(caplog)
++        assert any("臨時休市" in w and FRI_ISO in w for w in warnings), warnings
++
++    def test_probe_failure_never_takes_index_down(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """probe 拋 → 只留一句「略過」,index 照樣掛著(它只是一則 log,不是啟動條件)。"""
++        caplog.set_level(logging.INFO)
++        _freeze(monkeypatch, SAT)
++        app = _app(tmp_path, cal=load_trading_calendar(), index=RaisingHistoryIndexSource())
++        with _client(app) as c:
++            _wait_crosscheck(app)
++            assert app.state.index is not None
++            assert c.get("/api/index/state").status_code == 200
++            warnings = _app_warnings(caplog)
++        assert any("交叉檢查失敗" in w for w in warnings), warnings
++        assert not any("可能過期" in w or "臨時休市" in w for w in warnings), warnings
++
++    def test_trading_day_pre_open_does_not_warn(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """偽陽性鎖:交易日盤前(今天的 DK 本來就還不存在)一句都不能報。
++
++        期望日若用「含今天」的最近交易日,每天早上重啟都會誤報一次臨時休市 ——
++        那種天天亮的 WARNING 三天內就會被當雜訊,真的臨時休市時反而看不見。
++        """
++        caplog.set_level(logging.INFO)
++        _freeze(monkeypatch, FRI, at=_dt.time(8, 0))
++        index = FakeIndexSource(daily_bars=[dbar("2026-08-12", 1), dbar("2026-08-13", 2)])
++        app = _app(tmp_path, cal=load_trading_calendar(), index=index)
++        with _client(app):
++            _wait_crosscheck(app)
++            warnings = _app_warnings(caplog)
++        assert not any("可能過期" in w or "臨時休市" in w for w in warnings), warnings
++
++
++class TestOverlayBasis:
++    """SC-13:overlay 基準日 = 顯示中的交易日(cache 鍵同源)。"""
++
++    def test_stock_overlay_basis_and_cache_key_follow_trade_date(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """週六看的是週五那天的圖 → 基準 = 08-14 之前最後一根已完成 bar = 08-13。
++
++        cache 鍵的鑑別點在**第二發時把牆鐘推到週日**:鍵若還是牆鐘,08-16 ≠ 08-15 會
++        重算(日別沒變卻多打一次 TC4,且與圖上疊線的基準脫鉤)。
++        """
++        _freeze(monkeypatch, SAT)
++        stock = RecordingStockSource()
++        stock.daily_bars_result = list(_DAILY)
++        app = _app(tmp_path, cal=load_trading_calendar(), stock=stock)
++        with _client(app) as c:
++            body = c.get("/api/stock/overlay/2330").json()
++            assert body["date"] == "2026-08-13"
++            assert stock.daily_calls == 1
++            _freeze(monkeypatch, _dt.date(2026, 8, 16))  # 週日:日曆推導仍是 08-14
++            assert c.get("/api/stock/overlay/2330").json() == body
++            assert stock.daily_calls == 1, "同一交易日第二發應命中 overlay cache"
++
++    def test_index_overlay_basis_follows_trade_date(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        _freeze(monkeypatch, SAT)
++        index = FakeIndexSource(
++            daily_bars=[dbar(f"2026-08-{d:02d}", 23_000_000 + d) for d in range(11, 15)]
++        )
++        app = _app(tmp_path, cal=load_trading_calendar(), index=index)
++        with _client(app) as c:
++            assert c.get("/api/index/overlay").json()["date"] == "2026-08-13"
++
++    def test_env_day_shifts_overlay_basis(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """env 模式下 overlay 與 stock/index 日別同源(刻意對齊,SC-13)。"""
++        _freeze(monkeypatch, SAT)
++        monkeypatch.setenv("TXO_BACKFILL_DATE", "2026-08-13")
++        stock = RecordingStockSource()
++        stock.daily_bars_result = list(_DAILY)
++        app = _app(tmp_path, cal=load_trading_calendar(), stock=stock)
++        with _client(app) as c:
++            assert c.get("/api/stock/overlay/2330").json()["date"] == "2026-08-12"
++
++    def test_no_calendar_weekday_unchanged(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """W6/SC-13:未注入日曆的交易日逐字不變(基準 = 牆鐘今天之前最後一根)。"""
++        _freeze(monkeypatch, FRI)
++        stock = RecordingStockSource()
++        stock.daily_bars_result = list(_DAILY)
++        app = _app(tmp_path, stock=stock)
++        with _client(app) as c:
++            assert c.get("/api/stock/overlay/2330").json()["date"] == "2026-08-13"
+diff --git a/tests/server/test_index_engine.py b/tests/server/test_index_engine.py
+index 8053e5aa..ed0c040c 100644
+--- a/tests/server/test_index_engine.py
++++ b/tests/server/test_index_engine.py
+@@ -38,15 +38,18 @@ def make_engine(
+     today_fn: Any = None,
+     in_watch_window: Any = None,
+     now_fn: Any = None,
++    is_trading_day: Any = None,
+     stale_secs: float = 999.0,
+     retry_secs: float = 0.01,
+ ) -> IndexEngine:
++    extra = {} if is_trading_day is None else {"is_trading_day": is_trading_day}
+     return IndexEngine(
+         fake,  # type: ignore[arg-type]
+         txf_getter=txf_getter,
+         mis_fetch=mis_fetch,
+         trade_date=trade_date,
+         rollover=rollover,
++        **extra,
+         today_fn=today_fn or (lambda: _dt.date(2026, 7, 28)),
+         in_watch_window=in_watch_window or (lambda: False),
+         # 換日 08:30 門檻的時鐘也必須注入:預設固定 10:00(門檻後),否則整份測試
+@@ -609,6 +612,59 @@ async def test_rollover_gate_opens_at_0830() -> None:
+         await eng.close()
+ 
+ 
++async def test_rollover_skips_non_trading_day() -> None:
++    """SC-3:非交易日不設 pending、不 `set_trade_date`、不重掛、不 `fetch_day_minutes`。
++
++    現行判準是**純日曆日**(`new_date > trade_date`)—— 週末 / 國定假日整天每 60s 打一次
++    TC4 1K,恆空、不 swap,凍在上一交易日。畫面「看起來對」是副作用而非設計,而那條
++    空打是真的在燒 TC4 請求。
++    """
++    fake = FakeIndexSource()
++    fake.day_minutes = {"0901": 1_000}
++    eng = make_engine(
++        fake,
++        rollover=True,
++        trade_date="2026-08-14",
++        today_fn=lambda: _dt.date(2026, 8, 15),  # 週六
++        is_trading_day=lambda d: d.weekday() < 5,
++    )
++    eng._rollover_check_secs = 0.03  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        calls_after_start = fake.fetch_minutes_calls  # start() 的回補那一次
++        await asyncio.sleep(0.15)  # 夠跑約 5 拍
++        assert eng.state()["trade_date"] == "2026-08-14"
++        assert eng._pending_date is None  # type: ignore[attr-defined]
++        assert fake.trade_dates == ["2026-08-14"]  # 只有 start 同步那次
++        assert fake.subscribed == ["IX0001"]  # 沒有重掛
++        assert fake.fetch_minutes_calls == calls_after_start  # 沒有多打 1K
++    finally:
++        await eng.close()
++
++
++async def test_rollover_runs_on_trading_day() -> None:
++    """對照組:注入日曆且今天是交易日 → 兩段式換日語意逐字不變(W1)。"""
++    fake = FakeIndexSource()
++    fake.day_minutes = {"0901": 2_000}
++    eng = make_engine(
++        fake,
++        rollover=True,
++        trade_date="2026-08-13",
++        today_fn=lambda: _dt.date(2026, 8, 14),  # 週五
++        is_trading_day=lambda d: d.weekday() < 5,
++    )
++    eng._rollover_check_secs = 0.03  # type: ignore[attr-defined]
++    await eng.start()
++    try:
++        await asyncio.sleep(0.15)
++        state = eng.state()
++        assert state["trade_date"] == "2026-08-14"
++        assert state["twse"]["minutes"] == {"0901": 2_000}
++        assert "2026-08-14" in fake.trade_dates
++    finally:
++        await eng.close()
++
++
+ async def test_rollover_disabled_does_nothing() -> None:
+     fake = FakeIndexSource()
+     today = [_dt.date(2026, 7, 29)]
+diff --git a/tests/server/test_main_wiring.py b/tests/server/test_main_wiring.py
+index 82ba0181..6cbe43bb 100644
+--- a/tests/server/test_main_wiring.py
++++ b/tests/server/test_main_wiring.py
+@@ -6,6 +6,10 @@
+ 
+ --verify 模式(chore server-launch-wrapper)同檔上鎖:fake source、env 壓制有跑、
+ port 錯開、不落 log 檔 —— 漏任一項的失效樣態都是「盤中驗證悄悄變成第二台真 server」。
++
++交易日曆(mod/trading-calendar SC-8)同理只在 prod 傳:verify 的 fake 資料綁牆鐘
++today,傳真日曆會讓 verify server 在假日整片空 —— 而 prod 漏傳的失效樣態正是本輪
++要根治的那一個(假日冷啟動全空圖、零錯誤訊號)。
+ """
+ 
+ from __future__ import annotations
+@@ -25,6 +29,7 @@ from copycat.server.app import (
+     DEFAULT_STOCK,
+ )
+ from copycat.server.verify import FAIL_ENV_KEY, FakeTxoSource
++from copycat.trading_calendar import TradingCalendar
+ 
+ 
+ class _Capture:
+@@ -69,7 +74,11 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
+     main_mod.main([])
+ 
+     assert cap.create_args == ()
+-    assert cap.create_kwargs == {
++    assert cap.create_kwargs is not None
++    # 日曆是實例(不是 sentinel)→ 先抽出來單獨驗型別,其餘仍逐鍵鎖死整份 dict
++    calendar = cap.create_kwargs.get("trading_calendar")
++    assert isinstance(calendar, TradingCalendar), "prod 必須顯式載入交易日曆"
++    assert {k: v for k, v in cap.create_kwargs.items() if k != "trading_calendar"} == {
+         "stock_source": DEFAULT_STOCK,
+         "index_source": DEFAULT_INDEX,
+         "futures_source": DEFAULT_FUTURES,
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 81113b82..22b49de6 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -2801,3 +2801,84 @@ class TestObserveClockContract:
+             ("08:29:58.000", "09:00:02.000"),
+             ("13:24:58.000", "13:30:02.000"),
+         )
++
++
++class _TickClock:
++    """凍結時鐘 + **迴圈拍數計數器**(`now_fn` 注入點)。
++
++    否定型斷言(「不 stage1」)需要一個可觀察的計數器來確定迴圈真的轉過幾拍:
++    在 Windows 上 `await asyncio.sleep(0.1)` 對 interval=0.01 實際只跑 ~3 拍
++    (timer 解析度 15.6ms,同 `_wait_rounds` 的 W-4 理由),用牆鐘換拍數的話
++    「沒 stage1」有可能只是因為迴圈根本沒轉。
++    """
++
++    def __init__(self, wall: _dt.datetime) -> None:
++        self.wall = wall
++        self.ticks = 0
++
++    def __call__(self) -> _dt.datetime:
++        self.ticks += 1
++        return self.wall
++
++
++class TestCheckpointTradingDay:
++    """SC-4:checkpoint 的「候選交易日」判定改吃注入的 `is_trading_day`。
++
++    現行是 `now.weekday() < 5` —— 國定假日(平日)08:00 照樣 stage1,把 source 日窗切到
++    假日,而 stage2 永遠等不到新日首筆(假日無推播)→ 狀態不清、但其後任何回補都走
++    假日窗回空,畫面只是空著沒有任何錯誤訊號。
++    """
++
++    async def _armed(
++        self,
++        wall: _dt.datetime,
++        *,
++        is_trading_day: Callable[[_dt.date], bool] | None = None,
++    ) -> tuple[StockEngine, FakeSource, _TickClock]:
++        """起一個 checkpoint 開著的 engine,等迴圈確實轉過 3 拍後回傳現況。"""
++        clock = _TickClock(wall)
++        src = FakeSource()
++        extra = {} if is_trading_day is None else {"is_trading_day": is_trading_day}
++        engine = StockEngine(
++            src,
++            trade_date="2026-08-12",
++            throttle_secs=0.01,
++            checkpoint=True,
++            now_fn=clock,
++            **extra,  # type: ignore[arg-type]
++        )
++        engine._checkpoint_secs = 0.01  # type: ignore[attr-defined]
++        await engine.start()
++        await _wait_until(lambda: clock.ticks >= 3)
++        return engine, src, clock
++
++    async def test_non_trading_weekday_does_not_arm_stage1(self) -> None:
++        """平日但日曆說非交易日(國定假日)→ 不 stage1、不動 source 日窗。"""
++        engine, src, _ = await self._armed(
++            _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: False
++        )
++        try:
++            assert engine._pending_date is None
++            assert src.trade_dates == ["2026-08-12"]  # 只有 start() 同步那次
++        finally:
++            await engine.close()
++
++    async def test_trading_day_arms_stage1(self) -> None:
++        """同一個時鐘、日曆說是交易日 → 照舊 stage1(否定型斷言的對照組)。"""
++        engine, src, _ = await self._armed(
++            _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: True
++        )
++        try:
++            await _wait_until(lambda: engine._pending_date == "2026-08-13")
++            assert src.trade_dates == ["2026-08-12", "2026-08-13"]
++        finally:
++            await engine.close()
++
++    async def test_default_keeps_weekday_semantic(self) -> None:
++        """W9:不注入 `is_trading_day` 時逐字保留現行 `weekday() < 5`(週六不 stage1)。"""
++        engine, src, _ = await self._armed(_dt.datetime(2026, 8, 15, 9, 0))
++        try:
++            assert engine._pending_date is None
++            assert src.trade_dates == ["2026-08-12"]
++        finally:
++            await engine.close()
+diff --git a/tests/test_trading_calendar.py b/tests/test_trading_calendar.py
+new file mode 100644
+index 00000000..25cc0d14
+--- /dev/null
++++ b/tests/test_trading_calendar.py
+@@ -0,0 +1,236 @@
++"""交易日曆純模組(mod/trading-calendar SC-1)。
++
++三塊契約:(1) 純判定 `is_trading_day` / `last_trading_day` 不碰 IO;
++(2) `load_trading_calendar` 檔缺 = 只擋週末 + WARNING、壞檔 raise(對齊
++`signals_config` 慣例);(3) 版控 `configs/trading_holidays.json` 的資料本身
++(2026 平日休市 18 天)也被鎖住 —— 假日清單漂掉是零錯誤訊號的靜默故障。
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++from datetime import date, timedelta
++from pathlib import Path
++
++import pytest
++
++from copycat.trading_calendar import (
++    DEFAULT_PATH,
++    WEEKEND_ONLY,
++    TradingCalendar,
++    _reset_year_warnings,
++    load_trading_calendar,
++    resolve_trade_date,
++    warn_if_year_missing,
++)
++
++
++@pytest.fixture(autouse=True)
++def _clear_year_warnings() -> None:
++    """節流狀態是 module-level,測試間必須清乾淨。"""
++    _reset_year_warnings()
++
++
++def _cal(
++    holidays: list[str] | None = None,
++    extra: list[str] | None = None,
++    years: list[int] | None = None,
++) -> TradingCalendar:
++    return TradingCalendar(
++        holidays=frozenset(date.fromisoformat(s) for s in holidays or []),
++        extra_trading_days=frozenset(date.fromisoformat(s) for s in extra or []),
++        years_loaded=frozenset(years or []),
++    )
++
++
++# --- is_trading_day ---------------------------------------------------------
++
++
++def test_is_trading_day_weekday() -> None:
++    assert _cal().is_trading_day(date(2026, 8, 14)) is True  # 週五
++
++
++def test_is_trading_day_weekend() -> None:
++    cal = _cal()
++    assert cal.is_trading_day(date(2026, 8, 15)) is False  # 週六
++    assert cal.is_trading_day(date(2026, 8, 16)) is False  # 週日
++
++
++def test_is_trading_day_holiday_weekday() -> None:
++    cal = _cal(holidays=["2026-10-09"])
++    assert cal.is_trading_day(date(2026, 10, 9)) is False
++
++
++def test_is_trading_day_extra_trading_day_saturday() -> None:
++    """補班交易日:週六但有交易(2026 無,模組先支援)。"""
++    cal = _cal(extra=["2026-08-15"])
++    assert cal.is_trading_day(date(2026, 8, 15)) is True
++
++
++# --- last_trading_day -------------------------------------------------------
++
++
++def test_last_trading_day_returns_self_when_trading() -> None:
++    assert _cal().last_trading_day(date(2026, 8, 14)) == date(2026, 8, 14)
++
++
++def test_last_trading_day_sunday_walks_back_to_friday() -> None:
++    assert _cal().last_trading_day(date(2026, 8, 16)) == date(2026, 8, 14)
++
++
++def test_last_trading_day_across_lunar_new_year() -> None:
++    """連假(02-12 四 ~ 02-22 日)任一天 → 02-11(用版控真日曆)。"""
++    cal = load_trading_calendar()
++    assert cal.last_trading_day(date(2026, 2, 22)) == date(2026, 2, 11)
++
++
++def test_last_trading_day_monday_after_lunar_new_year_is_self() -> None:
++    cal = load_trading_calendar()
++    assert cal.last_trading_day(date(2026, 2, 23)) == date(2026, 2, 23)
++
++
++def test_last_trading_day_raises_when_no_trading_day_within_bound() -> None:
++    """全休的假日曆 = 資料錯,寧可炸也不要無窮迴圈。"""
++    start = date(2026, 1, 1)
++    cal = _cal(holidays=[(start - timedelta(days=i)).isoformat() for i in range(90)])
++    with pytest.raises(RuntimeError):
++        cal.last_trading_day(start)
++
++
++# --- 版控 config 的資料本身 --------------------------------------------------
++
++
++def test_real_config_shape() -> None:
++    cal = load_trading_calendar()
++    assert cal.years_loaded == frozenset({2026})
++    assert cal.has_year(2026) is True
++    assert cal.has_year(2027) is False
++    assert len([d for d in cal.holidays if d.year == 2026]) == 18
++    assert cal.extra_trading_days == frozenset()
++
++
++def test_real_config_has_no_weekend_holidays() -> None:
++    """週末本來就不開盤,清單塞週末 = 抄錯來源。"""
++    cal = load_trading_calendar()
++    assert [d for d in sorted(cal.holidays) if d.weekday() >= 5] == []
++
++
++@pytest.mark.parametrize(
++    ("day", "trading"),
++    [
++        (date(2026, 1, 1), False),  # 元旦
++        (date(2026, 2, 16), False),  # 春節
++        (date(2026, 10, 9), False),  # 國慶補假
++        (date(2026, 8, 14), True),  # 平常週五
++    ],
++)
++def test_real_config_samples(day: date, trading: bool) -> None:
++    assert load_trading_calendar().is_trading_day(day) is trading
++
++
++def test_default_path_points_at_versioned_config() -> None:
++    assert DEFAULT_PATH.name == "trading_holidays.json"
++    assert DEFAULT_PATH.exists()
++
++
++# --- load:檔缺 / 壞檔 -------------------------------------------------------
++
++
++def test_load_missing_file_returns_weekend_only_with_warning(
++    tmp_path: Path, caplog: pytest.LogCaptureFixture
++) -> None:
++    with caplog.at_level(logging.WARNING, logger="copycat.trading_calendar"):
++        cal = load_trading_calendar(tmp_path / "nope.json")
++    assert cal == WEEKEND_ONLY
++    assert cal.holidays == frozenset()
++    assert cal.years_loaded == frozenset()
++    assert len(caplog.records) == 1
++    assert caplog.records[0].levelno == logging.WARNING
++
++
++def test_weekend_only_still_blocks_weekend() -> None:
++    assert WEEKEND_ONLY.is_trading_day(date(2026, 8, 15)) is False
++    assert WEEKEND_ONLY.is_trading_day(date(2026, 10, 9)) is True  # 沒日曆就不多擋
++
++
++def test_load_malformed_json_raises(tmp_path: Path) -> None:
++    path = tmp_path / "bad.json"
++    path.write_text("{not json", encoding="utf-8")
++    with pytest.raises(ValueError) as exc:
++        load_trading_calendar(path)
++    assert str(path) in str(exc.value)
++
++
++@pytest.mark.parametrize(
++    "payload",
++    [
++        {"years": []},  # years 不是 dict
++        {"years": {"2026": ["2026-01-01"]}},  # 年份值不是 dict
++        {"years": {"twenty": {"holidays": []}}},  # 年份鍵不是數字
++        {"years": {"2026": {"holidays": "2026-01-01"}}},  # holidays 不是 list
++        {"years": {"2026": {"holidays": [20260101]}}},  # 元素不是字串
++        {"years": {"2026": {"holidays": ["2026-13-01"]}}},  # 日期無效
++        {"years": {"2026": {"holidays": [], "extra_trading_days": "x"}}},
++    ],
++    ids=[
++        "years-list",
++        "year-list",
++        "year-key",
++        "holidays-str",
++        "elem-int",
++        "bad-date",
++        "extra-str",
++    ],
++)
++def test_load_wrong_shape_raises(tmp_path: Path, payload: dict[str, object]) -> None:
++    path = tmp_path / "shape.json"
++    path.write_text(json.dumps(payload), encoding="utf-8")
++    with pytest.raises(ValueError) as exc:
++        load_trading_calendar(path)
++    assert str(path) in str(exc.value)
++
++
++def test_load_missing_years_key_raises(tmp_path: Path) -> None:
++    path = tmp_path / "noyears.json"
++    path.write_text(json.dumps({"_updated": "2026-08-16"}), encoding="utf-8")
++    with pytest.raises(ValueError):
++        load_trading_calendar(path)
++
++
++# --- 缺年 WARNING 節流 ------------------------------------------------------
++
++
++def test_warn_if_year_missing_throttles_per_year(caplog: pytest.LogCaptureFixture) -> None:
++    cal = load_trading_calendar()
++    with caplog.at_level(logging.WARNING, logger="copycat.trading_calendar"):
++        warn_if_year_missing(cal, date(2027, 1, 4))
++        assert len(caplog.records) == 1
++        warn_if_year_missing(cal, date(2027, 6, 30))  # 同年 → 不再叫
++        assert len(caplog.records) == 1
++        warn_if_year_missing(cal, date(2028, 1, 3))  # 跨年 → 再叫一次
++        assert len(caplog.records) == 2
++
++
++def test_warn_if_year_missing_silent_when_year_loaded(caplog: pytest.LogCaptureFixture) -> None:
++    cal = load_trading_calendar()
++    with caplog.at_level(logging.WARNING, logger="copycat.trading_calendar"):
++        warn_if_year_missing(cal, date(2026, 8, 16))
++    assert caplog.records == []
++
++
++# --- resolve_trade_date -----------------------------------------------------
++
++
++def test_resolve_trade_date_returns_last_trading_day() -> None:
++    cal = load_trading_calendar()
++    assert resolve_trade_date(date(2026, 8, 16), cal) == date(2026, 8, 14)
++    assert resolve_trade_date(date(2026, 8, 14), cal) == date(2026, 8, 14)
++
++
++def test_resolve_trade_date_warns_on_missing_year(caplog: pytest.LogCaptureFixture) -> None:
++    cal = load_trading_calendar()
++    with caplog.at_level(logging.WARNING, logger="copycat.trading_calendar"):
++        # 2027-01-02 = 週六 → 只擋週末回 01-01(週五);日曆缺 2027 故 WARNING
++        assert resolve_trade_date(date(2027, 1, 2), cal) == date(2027, 1, 1)
++    assert len(caplog.records) == 1

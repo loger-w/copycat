@@ -1,0 +1,16 @@
+{
+  "reviewer": "change-spec-reviewer (opus), 限縮輪(只審 [amendment R1-R12] 段落)",
+  "date": "2026-08-16",
+  "findings": [
+    {"id": "R2-1", "severity": "P1", "summary": "SC-2/E4 寫「三引擎吃 env」與 Q9「breadth 純日曆」矛盾", "disposition": "accepted", "resolution": "SC-2/E4 改寫:stock/index/hub 吃 env;breadth 純日曆;KR-5 記 env 模式下日別不一致(breadth 現行本就不讀 env)"},
+    {"id": "R2-2", "severity": "P1", "summary": "resolve_trade_date 零呼叫端 → 缺年 WARNING 永不觸發", "disposition": "accepted (b)", "resolution": "_resolve_trade_date() 與 breadth today_fn 都經 resolve_trade_date();刪 load(today=None) 那句"},
+    {"id": "R2-3", "severity": "P1", "summary": "臨時休市當天上午重啟不會 WARNING,KR-3 mitigation 描述過強", "disposition": "accepted (b)", "resolution": "維持 14:00 門檻;KR-3 改寫成只有 14:00 後重啟才提示"},
+    {"id": "R2-4", "severity": "P2", "summary": "節流狀態落點未定義(frozen / 共用常數)", "disposition": "accepted (already shipped variant)", "resolution": "Pkg1 已落地:模組層 _warned_years + _reset_year_warnings();測試已含同年不重複 / 換年再警"},
+    {"id": "R2-5", "severity": "P2", "summary": "index overlay 明文不經 overlay_cache", "disposition": "accepted", "resolution": "限定 OverlayCache 鍵只在 stock overlay;index 只改 build_overlay today"},
+    {"id": "R2-6", "severity": "P2", "summary": "/api/calendar.trade_date 對 breadth 面在 env 模式說謊", "disposition": "accepted", "resolution": "payload 註明 trade_date = stock/index/hub;breadth 採 calendar_trade_date;路由測補對照"},
+    {"id": "R2-7", "severity": "P2", "summary": "DK probe 放序列 boot 鏈會拖後續引擎;取數路徑未定", "disposition": "accepted", "resolution": "probe 直呼 index.bars_range('D', today-14d, today) 不經 bars_cache;以 asyncio.create_task 背景跑,不擋序列;task 進 booted 生命週期(關機 cancel)"},
+    {"id": "R2-8", "severity": "P2", "summary": "日期膠囊 testid 未指定,可能撞 limit-list-stale", "disposition": "accepted", "resolution": "testid `limit-list-asof-date`;新測同時斷言 limit-list-stale 為 null"},
+    {"id": "R2-9", "severity": "P2", "summary": "SC-13「交易日逐字不變」未限定 env 未設", "disposition": "accepted", "resolution": "措辭改寫;路由測補 env 設定日斷言"}
+  ],
+  "summary": {"P0": 0, "P1": 3, "P2": 6, "accepted": 9, "rejected": 0, "exit": "無 P0,P1 全部修復入 spec → 進實作"}
+}

@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "date": "2026-08-16",
+  "base": "8771667e",
+  "head_reviewed": "fd2941be",
+  "lenses": ["correctness (opus)", "spec-whitelist (opus)"],
+  "findings": [
+    {"id": "C1", "lens": "correctness", "severity": "P1", "file": "copycat/server/breadth_engine.py", "line": 357, "summary": "非交易日首圈取數失敗 → gate 恆 False → 整天不重試,counts 永遠 None(改動前窗內會退避重試)", "quick_screen": "CONFIRMED by reading _poll_loop + _in_window", "disposition": "accepted", "resolution": "gate 放寬:first or _in_window() or (_last_success is None and not is_trading_day(now.date()))(只在交易日 gate 擋住且尚未成功過時續用退避重試;交易日窗外行為逐字不變 W1/W5)+ 測試:非交易日首圈拋 → 第二圈仍打"},
+    {"id": "C2", "lens": "correctness", "severity": "P2", "file": "copycat/server/app.py", "line": 908, "summary": "關機 await crosscheck task 的 except 分支與同函式 boot_task 的 BaseException 不變式不一致", "disposition": "accepted", "resolution": "改 except BaseException + logger.exception;CancelledError 分支 log info 不靜默"},
+    {"id": "C3", "lens": "correctness", "severity": "P2", "file": "tests/server/test_index_engine.py", "line": 615, "summary": "新 rollover 兩測用 sleep 換圈數(否定型假綠 / 正向 flake)", "disposition": "accepted", "resolution": "today_fn 改計數 callable + _wait_until;正向測等 trade_date 變更"},
+    {"id": "C4", "lens": "correctness", "severity": "P2", "file": "copycat/trading_calendar.py", "line": 53, "summary": "load 不驗 holidays∩extra 衝突 / 年份錯置", "disposition": "accepted", "resolution": "load 尾端兩道 ValueError 驗證 + 測試"},
+    {"id": "C5", "lens": "correctness", "severity": "P2", "file": "copycat/server/app.py", "line": 335, "summary": "_today docstring「唯一取樣點」不實(K 線兩處仍 date.today)", "disposition": "accepted (docstring only)", "resolution": "docstring 改「日曆推導的唯一取樣點;K 線路徑依 W3 保留牆鐘」,不動 K 線 route(= S3)"},
+    {"id": "S1", "lens": "spec-whitelist", "severity": "P1", "file": "tests/server/test_breadth_engine.py", "line": 1917, "summary": "R4 的 stale 斷言空轉(stale_secs 預設 30 → 純時間窗實作也回 False),_stale 呼叫端 gate 無測試保護", "disposition": "accepted", "resolution": "該測 config 加 stale_secs=0.0(或回推 _last_success)使斷言有鑑別力;mutation 抽驗"},
+    {"id": "S2", "lens": "spec-whitelist", "severity": "P2", "file": "frontend/src/App.tsx", "line": 130, "summary": "App 掛 useTradingCalendar 無測試鎖", "disposition": "accepted", "resolution": "App.test.tsx fetch stub 加 /api/calendar 分支 + it: renderApp 後 isTradingDay(假日) 變 false;afterEach clearHolidays"},
+    {"id": "S3", "lens": "spec-whitelist", "severity": "P2", "file": "copycat/server/app.py", "line": 336, "summary": "同 C5", "disposition": "accepted (merged into C5)", "resolution": "同 C5"},
+    {"id": "S4", "lens": "spec-whitelist", "severity": "P2", "file": "CLAUDE.md", "line": 70, "summary": "§0 模組樹漏 trading_calendar.py / configs/trading_holidays.json", "disposition": "accepted", "resolution": "模組樹加一列 + configs 覆寫列補 trading_holidays"},
+    {"id": "S5", "lens": "spec-whitelist", "severity": "P2", "file": ".claude/mod/trading-calendar/change-spec.md", "line": 207, "summary": "KR-1 影響面寫窄(錯標日 breadth 全天不取數且 stale 壓 False、前端全站輪詢停擺)", "disposition": "accepted (doc)", "resolution": "KR-1 補影響面;next-time 留「錯標日可見訊號」一條"},
+    {"id": "S6", "lens": "spec-whitelist", "severity": "P2", "file": "frontend/src/components/stock/SignalRail.tsx", "line": 97, "summary": "SignalRail「今日訊號」在非交易日掛上一交易日訊號(本輪新畫面)", "disposition": "accepted (out of scope → next-time)", "resolution": "next-time 留尾:標題改 MM-DD 訊號"},
+    {"id": "S7", "lens": "spec-whitelist", "severity": "P2", "file": "tests/server/test_index_engine.py", "line": 615, "summary": "index 預設 is_trading_day=True 無鑑別測(誤寫成 weekday 版不會紅)", "disposition": "accepted", "resolution": "加 test_default_rolls_over_on_weekend(不注入、today_fn 週六 → 仍換日)"}
+  ],
+  "p2_summary": "correctness lens 4 P2(關機例外分類 / 測試 sleep 換圈 / config 資料矛盾零驗證 / docstring 宣稱不實);spec-whitelist lens 6 P2(App 掛載未鎖 / docstring / CLAUDE.md 模組樹 / KR-1 影響面 / SignalRail 同族殘留→next-time / index 預設值未鎖)。兩 lens 皆確認交易日(env 未設)W1–W9 逐字未變、無 P0。",
+  "self_review_head": "5147f864"
+}

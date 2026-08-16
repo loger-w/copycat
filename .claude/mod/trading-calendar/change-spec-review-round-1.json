@@ -1,0 +1,19 @@
+{
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-16",
+  "findings": [
+    {"id": "R1", "severity": "P0", "summary": "inFuturesAllDayHours 00:00–05:05 分支判的是前一日;一律改 isTradingDay(now) 會關掉週六凌晨(週五夜盤尾段)", "disposition": "accepted", "resolution": "該分支改 isTradingDay(now − 1 天);SC-9 加兩條斷言(週六 01:00 true / 假日前一日 01:00 false)。spec §5 [amendment R1]"},
+    {"id": "R2", "severity": "P0", "summary": "overlay 的 today 是 CDP/MA 基準日選擇器(overlay.py:34 date < today),牆鐘 today 在假日會把最近交易日當已完成 bar → 畫的是下一交易日的 CDP", "disposition": "accepted", "resolution": "兩條 overlay 路由的 build_overlay / OverlayCache 鍵改吃 _resolve_trade_date()(交易日 = today,逐字不變);index overlay 的 build_period 仍用牆鐘(bars 不動)。W3 改寫;新 SC-13。[amendment R2]"},
+    {"id": "R3", "severity": "P1", "summary": "LimitListSection.test:234 fixture trade_date=2026-08-06 ≠ 本機今日 → 依 SC-10 必紅,卻列在不該紅", "disposition": "accepted", "resolution": "移到該紅清單;修法 = mkState 的 trade_date 改動態本機今日 + 新增非今日用例。[amendment R3]"},
+    {"id": "R4", "severity": "P1", "summary": "_in_window 有 _poll_loop 與 _stale 兩個呼叫端,spec 只評估 poll 面", "disposition": "accepted (resolution differs)", "resolution": "兩個呼叫端都吃交易日 gate(非交易日「沒有新資料是正常態」,同 docstring 窗外語意;否則週六窗內首圈後 _last_success 老化會亮假『延遲』)。adopt_date=False 的假日 stale 訊號在新 today_fn 下不再發生(restore 日 = 快照日)。SC-5 加斷言:週六窗內首圈成功後 state()['stale'] == False 且不 poll。[amendment R4]"},
+    {"id": "R5", "severity": "P1", "summary": "W4 宣稱 streak 不動,但 today_fn 改基準會讓 rows_state 走 > 分支而非 == 分支(數值推算相等但未測)", "disposition": "accepted", "resolution": "W4 改寫;SC-5 加回歸測(today_fn=週五、rows_date=週五、streak data_end=週四 → 連板數與週五盤中即時值逐字同);rows_state docstring 假日開站段更新。[amendment R5]"},
+    {"id": "R6", "severity": "P1", "summary": "_resolve_today() 命名歧義,同時餵五個消費端", "disposition": "accepted", "resolution": "定義兩支:_today() 牆鐘;_resolve_trade_date() = env or last_trading_day(_today())。逐一標注消費端。breadth today_fn = 純日曆(不吃 env,現行本就不吃)。[amendment R6]"},
+    {"id": "R7", "severity": "P1", "summary": "/api/calendar 未定義與 TXO_BACKFILL_DATE 的關係,env 殘留時端點會說謊", "disposition": "accepted", "resolution": "payload:trade_date = env or 日曆;另帶 calendar_trade_date / backfill_env。SC-6/SC-11 更新。[amendment R7]"},
+    {"id": "R8", "severity": "P1", "summary": "Q3 理由只對長跑 server 成立;交易日盤前冷啟動仍空圖", "disposition": "accepted (b)", "resolution": "維持不做(user 已拍板文件明寫盤前不動;納入會動三引擎時序,屬方向性擴張)→ 理由改寫成事實、入 Out of scope + KR-4 + next-time + CLAUDE.md 文件明寫「交易日盤前冷啟動仍需 env」;收尾回報標給 user 決定是否開 R3b。[amendment R8]"},
+    {"id": "R9", "severity": "P1", "summary": "boot 交叉檢查只單向;臨時休市(颱風)方向無偵測", "disposition": "accepted", "resolution": "SC-7 改雙向 WARNING;KR-3。[amendment R9]"},
+    {"id": "R10", "severity": "P2", "summary": "SC-2/3 沒斷言假日冷啟動後 index minutes / stock 回補窗真的切到最近交易日", "disposition": "accepted", "resolution": "SC-2 補 fake source 依 set_trade_date 回不同資料的斷言。[amendment R10]"},
+    {"id": "R11", "severity": "P2", "summary": "config 資料本身無測;缺年 WARNING 只在 load 當下", "disposition": "accepted", "resolution": "SC-1 加資料測(18 天 / 無週末 / 抽 3 日);缺年 WARNING 改為 resolve 時每年一次節流;/api/calendar years_loaded 監看寫入文件。[amendment R11]"},
+    {"id": "R12", "severity": "P2", "summary": "假日常態是非空榜單卻無日期線索", "disposition": "accepted", "resolution": "SC-10 擴:trade_date ≠ 本機今日 → 標題列 as_of 旁顯示 `MM-DD 收盤` 日期膠囊(BreadthBand 慣例)。[amendment R12]"}
+  ],
+  "summary": {"P0": 2, "P1": 7, "P2": 3, "accepted": 12, "rejected": 0, "round2_needed": true, "round2_scope": "限縮輪:只審 [amendment R1-R12] 段落(round 1 有 accepted P0)"}
+}

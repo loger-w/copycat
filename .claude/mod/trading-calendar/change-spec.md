@@ -218,3 +218,6 @@ D9 default)。現況:`current-state.md`。規模:**L**(≥ 5 檔、跨前後端�
 - KR-4 `[amendment R8]` 交易日盤前冷啟動仍空圖到 09:00(需 env);見 Out of scope。
 - KR-5 `[amendment R2-1]` env 模式(`TXO_BACKFILL_DATE`)下 stock / index / hub 用 env 日,breadth 用日曆最近交易日,
   畫面日別不一致 —— breadth 現行本就不讀 env,env 是 TXO 回補用的 ops 通道,不擴張其語意。
+
+---
+self_review_head: 5147f864(code review round 1:P1×2 / P2×10 全 accepted 修畢;fix 波 11 commits fd2941be..5147f864)
