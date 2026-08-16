@@ -20,13 +20,15 @@ description: FinMind 接入慣例與配額真相。接新 FinMind dataset、寫 
 - `TaiwanStockInfo`:實錄 **4300 列**(舊估 1.6 萬是錯的);`breadth_fetch.fetch_stock_info`
   的截斷觀測門檻因此定 `< 3000` warning。
 - `TaiwanStockDispositionSecuritiesPeriod`:60d 窗實錄 235 列;參數名 `start_date`/`end_date`。
-- `TaiwanStockIndustryChain`(2026-08-06 R4 probe + 落地):**單一 request 回全表 6861 列**
-  (47 industries / 512 subs),欄位 `date/industry/stock_id/sub_industry`;**一檔可屬多
-  產業**(2317 落 4 個)、同 (industry,sub) 內可有重複列(parse 去重);**缺 `sub_industry`
-  的列 neigui 口徑是整列丟不是進 "" 桶**(`sector_rotation.rows_to_chain_map`)。靜態表
-  7 天 disk cache 即可(`chain_store` + `breadth_engine` 獨立刷新 task,不掛 poll 輪)。
+- `TaiwanStockIndustryChain`(2026-08-06 R4 probe;**2026-08-16 已不接** — 類股強弱功能
+  整組刪除,`sector_rotation` / `chain_store` / `fetch_industry_chain` 已不存在):dataset 事實
+  留作日後重接參考 — **單一 request 回全表 6861 列**(47 industries / 512 subs),欄位
+  `date/industry/stock_id/sub_industry`;**一檔可屬多產業**(2317 落 4 個)、同 (industry,sub)
+  內可有重複列(要去重);缺 `sub_industry` 的列 neigui 口徑是整列丟不是進 "" 桶;靜態表
+  7 天 disk cache 即可。
 - 本專案接入樣板:`copycat/server/breadth_fetch.py`(urllib + Bearer、402 不重試、
-  TimeoutError 獨立列)+ `server/finmind_token.py`(token 解析單一份)+
+  TimeoutError 獨立列;四支 fetch = snapshot / stock_info / disposition / daily_prices)+
+  `server/finmind_token.py`(token 解析單一份)+
   `breadth_engine`(退避 10→60s、quota 300s、map 失敗保前值不動 TTL)。
 - 盤中驗證走側車 server(CLAUDE.md §8 2026-08-06 條)。
 
