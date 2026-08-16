@@ -210,12 +210,25 @@ class StockEngine:
         stkfut_map: dict[str, dict] | None = None,
         resub_interval_secs: float = 10.0,
         ws: WsBroadcaster | None = None,
+        is_trading_day: Callable[[_dt.date], bool] | None = None,
+        now_fn: Callable[[], _dt.datetime] | None = None,
     ) -> None:
         self._source = source
         self._trade_date = trade_date
         self._pending_date: str | None = None
         self._throttle = throttle_secs
         self._checkpoint_enabled = checkpoint
+        # 交易日曆注入(mod/trading-calendar SC-4)。**預設 = 現行 `weekday() < 5` 逐字**
+        # (W9):engine 直接建構的既有 caller 行為不得有一絲變化,真日曆只由 app 層在
+        # prod 顯式傳(測試預設關,同 DEFAULT_STOCK / DEFAULT_BREADTH 慣例)。
+        self._is_trading_day = (
+            is_trading_day if is_trading_day is not None else (lambda d: d.weekday() < 5)
+        )
+        # checkpoint 的時鐘同樣可注入:換日窗判定唯一的時間讀取點,不注入就只能靠真
+        # 牆鐘決定測試綠不綠(index `now_fn` 的同款理由)。
+        self._now_fn = now_fn if now_fn is not None else _dt.datetime.now
+        #: checkpoint 迴圈間隔(秒)。測試把它調小以換得「迴圈真的轉過 N 拍」的觀察點。
+        self._checkpoint_secs = 60.0
         self._map = stkfut_map if stkfut_map is not None else load_map()
         self._prod_to_code = {v["prod"]: k for k, v in self._map.items()}
         self._refs: dict[str, set[str]] = {}
@@ -836,14 +849,15 @@ class StockEngine:
             self._signal_hub.on_rollover()
 
     async def _checkpoint_loop(self) -> None:
-        import datetime as _dt
-
         while True:
-            await asyncio.sleep(60)
-            now = _dt.datetime.now()
+            await asyncio.sleep(self._checkpoint_secs)
+            now = self._now_fn()
             today = f"{now:%Y-%m-%d}"
             if (
-                now.weekday() < 5  # 候選交易日(週一~五;假日靠階段二天然不清空)
+                # 候選交易日(假日靠階段二天然不清空)。判準由 `is_trading_day` 注入:
+                # 週末靠 `weekday()` 擋得住,國定假日(平日)擋不住 —— 那天 08:00 一到
+                # 就把 source 日窗切到假日,而 stage2 等的新日首筆永遠不會來。
+                self._is_trading_day(now.date())
                 and now.hour >= 8
                 and today != self._trade_date
                 and self._pending_date != today
