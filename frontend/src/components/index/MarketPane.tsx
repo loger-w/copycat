@@ -2,7 +2,9 @@ import { useState } from "react";
 
 import { MarketChart } from "@/components/index/MarketChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
+import { useContainerSize } from "@/hooks/useContainerSize";
 import type { IndexSeries } from "@/hooks/useIndexStream";
+import type { Size } from "@/lib/chart-frame";
 import { chgPct, fmtPct } from "@/lib/format";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
 import { pts } from "@/lib/svg-points";
@@ -19,6 +21,52 @@ import {
 import { cn } from "@/lib/utils";
 
 const SIZE = { width: 640, height: 220 };
+
+/** 一種圖模式的「量測 → viewBox 高」換算參數。
+ *
+ *  - `chromeY`:svg 以外、但**在被量測 wrapper 之內**的垂直用量(px)。
+ *  - `insetX`:同上的水平用量(px);svg 實際可用寬 = 容器寬 − 這個值。
+ *  - `vbW`:該模式 svg 的 viewBox 寬 —— px 高要換成 viewBox 單位得乘 `vbW / svgW`。 */
+export interface PaneFrame {
+  chromeY: number;
+  insetX: number;
+  vbW: number;
+}
+
+/** 三種圖模式各自的 chrome 用量。**逐條列舉不共用一組數字**:三者的 DOM 巢狀深度不同,
+ *  用同一組會讓其中兩種各差 30-70px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
+ *  誰也解釋不了的捲軸。
+ *
+ *  - intraday:toggle 列 `h-[1.375rem]` 22 + `mb-1` 4 = 26;svg 直接在 wrapper 內,不內縮。
+ *  - overlay:`OverlayCard` 是巢狀 figure —— border 2 + `p-4` 32 + 標題列 20 + svg `mt-2` 8
+ *    = 62;水平 border 2 + p-4 32 = 34。
+ *  - candle:`CandleChart` 自身 figure(border 2 + p-4 32 + 頂列 26 + figcaption 20 = 80)
+ *    + `MarketChart` 的 meta 列(text-xs 16 + `mt-1` 4 = 20)= 100;水平同 overlay 34;
+ *    **viewBox 寬是 CandleChart 的 `DIMS.width` = 1400**,不是 640。 */
+export const PANE_FRAMES: Record<"intraday" | "overlay" | "candle", PaneFrame> = {
+  intraday: { chromeY: 26, insetX: 0, vbW: 640 },
+  overlay: { chromeY: 62, insetX: 34, vbW: 640 },
+  candle: { chromeY: 100, insetX: 34, vbW: 1400 },
+};
+
+/** 量到的容器尺寸(px)→ 圖的 viewBox 高(viewBox 單位)。
+ *
+ *  **反解只此一處**(§4.1 CS-1):`MarketChart` / `OverlayCard` 收到的 `height` 一律是
+ *  viewBox 單位,兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
+ *
+ *  地板 96:容器矮到連 chrome 都放不下時,回 0 / 負高會畫出一張沒有高度的圖(svg 不報錯,
+ *  純粹消失)。−2 是抗抖動餘裕 —— 反解後的 px 高恰等於量到的高時,亞像素進位會讓內容比
+ *  容器高半格,觸發 ResizeObserver 的「量測 → 設高 → 再量測」迴圈。
+ *
+ *  量不到(任一邊 ≤ 0,jsdom / ResizeObserver 缺席 / 首幀)或寬度扣不出 svg 寬 → `undefined`,
+ *  呼叫端走各自的固定 fallback(W-10)。 */
+export function paneSvgHeight(size: Size, frame: PaneFrame): number | undefined {
+  if (size.width <= 0 || size.height <= 0) return undefined;
+  const svgW = size.width - frame.insetX;
+  if (svgW <= 0) return undefined;
+  const renderPx = Math.max(96, Math.floor(size.height - frame.chromeY) - 2);
+  return Math.round((renderPx * frame.vbW) / svgW);
+}
 
 type FutKey = "TXF" | "MXF" | "TMF";
 const FUT_LABELS: readonly (readonly [FutKey, string])[] = [
@@ -105,14 +153,26 @@ const OVERLAY_LINES = [
   { color: "stroke-idx-otc", label: "櫃買" },
 ] as const;
 
-/** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。 */
-function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+/** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。
+ *
+ *  `height` 同 `MarketChart.height` 的口徑:**viewBox 單位**,caller 已扣 chrome、
+ *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。 */
+function OverlayCard({
+  twse,
+  otc,
+  height = SIZE.height,
+}: {
+  twse: IndexSeries;
+  otc: IndexSeries;
+  height?: number;
+}) {
+  const size = { width: SIZE.width, height };
   const g = buildOverlayGeometry(
     [
       { minutes: twse.minutes, ref: twse.ref },
       { minutes: otc.minutes, ref: otc.ref },
     ],
-    SIZE,
+    size,
   );
   return (
     <figure className="rounded-md border border-line bg-surface p-4">
@@ -122,7 +182,7 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
         <span className="font-mono text-xs text-idx-otc">─ 櫃買</span>
       </div>
       <svg
-        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
+        viewBox={`0 0 ${size.width} ${size.height}`}
         className="mt-2 w-full"
         role="img"
         aria-label="指數重疊走勢"
@@ -133,13 +193,13 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
               x1={toX(minute)}
               x2={toX(minute)}
               y1={0}
-              y2={SIZE.height - 12}
+              y2={size.height - 12}
               className="stroke-line"
               strokeWidth={0.4}
             />
             <text
               x={toX(minute) + 2}
-              y={SIZE.height - 2}
+              y={size.height - 2}
               className="fill-ink-dim"
               fontSize="0.625rem"
             >
@@ -314,12 +374,28 @@ export function MarketPane({
   const series = marketKey === "TWSE" ? twse : marketKey === "OTC" ? otc : null;
   const futState = isFut ? (futures?.[marketKey] ?? null) : null;
 
+  // 量的是「圖還剩多少空間」而不是「圖現在多高」——ref 掛在高度由外層 flex 指派的
+  // wrapper 上(useContainerSize 呼叫端契約 2),且該 wrapper 三種模式都在(契約 1)。
+  const [sizeRef, size] = useContainerSize<HTMLDivElement>();
+  // 物件而非布林:同一個判別子既要選 chrome 參數表、又要餵 OverlayCard 兩條非 null
+  // series,拆成布林會讓 JSX 那側得再判一次 null(或掛 `!` 賭它)。
+  const overlayPair =
+    overlay && mode === "intraday" && twse !== null && otc !== null ? { twse, otc } : null;
+  const svgHeight = paneSvgHeight(
+    size,
+    overlayPair !== null
+      ? PANE_FRAMES.overlay
+      : mode === "intraday"
+        ? PANE_FRAMES.intraday
+        : PANE_FRAMES.candle,
+  );
+
   return (
     <section
       data-testid={`market-pane-${paneId}`}
       role="group"
       aria-label={paneId === "left" ? "左圖" : "右圖"}
-      className="flex min-w-0 flex-col gap-3"
+      className="flex min-h-0 min-w-0 flex-col gap-3"
     >
       {/* 標的列(SC-2) */}
       <div className="flex flex-wrap items-center gap-3">
@@ -355,10 +431,12 @@ export function MarketPane({
         ) : null}
       </div>
 
-      {/* 高度由 SVG viewBox 比例驅動(`w-full`),**不 `flex-1` 撐滿頁高** ——
-          雙 pane 並排且下方還接家數帶與 subtab 區(2026-08-14 改版前是相關係數等
-          收合區塊),撐滿會把下面幾塊擠出視窗 */}
-      <figure className="flex flex-col rounded-md border border-line bg-surface p-4">
+      {/* 2026-08-16 一頁總覽:圖高改吃**容器剩餘高**(`flex-1`),不再是「寬 × 220/640」
+          的固定比例 —— 改版前不 flex-1 是因為整頁可捲、撐滿會把家數帶擠出視窗;現在
+          左欄自己就是有界的 flex 欄,撐滿正是要的。`min-h-60`(15rem)是**唯一**一條
+          min-height:堆疊 / 內容決定高的模式下給 figure 一個地板,量測 → 內容 → 量測
+          才會收斂;同時掛 `min-h-0` 會把地板消掉,退回「圖可以被壓成 0 高」。 */}
+      <figure className="flex min-h-60 flex-1 flex-col rounded-md border border-line bg-surface p-4">
         <figcaption className="flex flex-wrap items-baseline gap-3">
           <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
           {isFut ? (
@@ -373,9 +451,11 @@ export function MarketPane({
           )}
           {series?.stale ? <span className="text-xs text-ink-dim">資料中斷</span> : null}
         </figcaption>
-        <div className="mt-2 flex min-h-0 flex-1 flex-col">
-          {overlay && mode === "intraday" && twse !== null && otc !== null ? (
-            <OverlayCard twse={twse} otc={otc} />
+        {/* 量測用的恆存 wrapper:重疊 / 分時 / K 線三種模式都掛在它底下(ref 只掛其中
+            一支的話,切模式那一幀會量到 0×0 而 hook 不再重跑)。 */}
+        <div ref={sizeRef} className="mt-2 flex min-h-0 flex-1 flex-col">
+          {overlayPair !== null ? (
+            <OverlayCard twse={overlayPair.twse} otc={overlayPair.otc} height={svgHeight} />
           ) : (
             <MarketChart
               marketKey={marketKey}
@@ -385,6 +465,7 @@ export function MarketPane({
               toggles={toggles}
               onToggle={onToggle}
               active={active}
+              height={svgHeight}
             />
           )}
         </div>
