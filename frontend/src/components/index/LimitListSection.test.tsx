@@ -446,3 +446,38 @@ describe("LimitListSection 篩選(OR 狀態 × AND 門檻)", () => {
     expect((screen.getByLabelText("金額(億)") as HTMLInputElement).value).toBe("");
   });
 });
+
+// 🔴 2026-08-16 一頁總覽:列表移進右欄框內、整高自帶捲軸。jsdom 不載 Tailwind CSS,
+// 「有沒有真的捲」量不到(那條由 SC-3 的 DevTools 量測收),這裡鎖的是**捲動容器恆存**
+// (文案態與表格態同一個節點,不是只有 rows 態才包)與 **sticky 掛在每個 th 上**。
+describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
+  it("捲動容器恆存:文案態與表格態都包在 limit-list-scroll 內", async () => {
+    await openWith(mkState([]));
+    const msgScroll = screen.getByTestId("limit-list-scroll");
+    expect(msgScroll.className).toContain("overflow-auto");
+    expect(msgScroll.className).toContain("min-h-0");
+    expect(msgScroll.querySelector('[data-testid="limit-list-msg"]')).toBeTruthy();
+
+    cleanup();
+    await openWith(mkState(ROWS));
+    const tableScroll = screen.getByTestId("limit-list-scroll");
+    expect(tableScroll.className).toContain("overflow-auto");
+    expect(tableScroll.className).toContain("min-h-0");
+    expect(tableScroll.querySelector('[data-testid="limit-list-table"]')).toBeTruthy();
+  });
+
+  it("九欄表頭各自 sticky;thead tr 的 border 移除(border-collapse 下不隨 sticky 黏)", async () => {
+    await openWith(mkState(ROWS));
+    const table = screen.getByTestId("limit-list-table");
+    const ths = [...table.querySelectorAll("th")];
+    expect(ths.length).toBe(9);
+    for (const th of ths) {
+      expect(th.className).toContain("sticky");
+      expect(th.className).toContain("top-0");
+      // 捲動時表頭底下是列內容,沒有底色會直接透出來
+      expect(th.className).toContain("bg-surface");
+      expect(th.className).toContain("border-b");
+    }
+    expect(table.querySelector("thead tr")!.className).not.toContain("border-b");
+  });
+});
