@@ -501,7 +501,8 @@ describe("GroupGridView 點卡片切主檔", () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     expect(card.getAttribute("role")).toBe("button");
-    expect(card.getAttribute("aria-label")).toBe("查看 2330 台積電");
+    // test-infra-fix:文案隨 A-p2-7 改「選取」(點卡片換的是右欄閃電目標,不是換頁)
+    expect(card.getAttribute("aria-label")).toBe("選取 2330 台積電");
     fireEvent.click(card);
     expect(onPick).toHaveBeenCalledWith("2330");
   });

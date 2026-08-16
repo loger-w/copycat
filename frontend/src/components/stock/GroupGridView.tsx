@@ -152,7 +152,10 @@ const GroupCard = memo(function GroupCard({
       role="button"
       tabIndex={0}
       data-testid={`group-card-${code}`}
-      aria-label={name === "" ? `查看 ${code}` : `查看 ${code} ${name}`}
+      // 「選取」而不是「查看」(review A-p2-7):點卡片**不再進單檔頁**(D3),做的
+      // 是把右欄閃電梯的標的換成這一檔。螢幕閱讀器使用者聽到「查看」會以為要換頁,
+      // 而實際發生的是下單目標換了 —— 那是真錢那一側,語意錯得起的代價不對稱。
+      aria-label={name === "" ? `選取 ${code}` : `選取 ${code} ${name}`}
       aria-pressed={active}
       onClick={() => onPick(code)}
       onKeyDown={(e) => {
