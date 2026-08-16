@@ -243,14 +243,23 @@ describe("MarketPane svg 字級補償(WL-3)", () => {
   });
 });
 
-// 🔴 amendment r3:pane 在單欄態(< 1050px 容器)不可縮 —— 那時高度由內容決定,無條件
-// `min-h-0` 會讓 pane 被壓到低於自身內容,圖卡(overflow visible)溢出壓在家數帶上。
-// figure 的地板同步降到 12rem:wrapper 130 → svg render 102,仍在 paneSvgHeight 的 96 地板之上。
+// 🔴 amendment r3:可縮鏈的地板改由**顯式 min-height** 提供(雙圖 grid `min-h-80`、
+// figure `min-h-48`),不是靠某一段不可縮。
+//
+// **pane root 的 `min-h-0` 必須無條件**:條件化成 `@[1050px]:min-h-0` 時,那個門檻量到的
+// 是**左欄**(左欄自己是 `@container`,是最近的 container 祖先;兩欄態左欄僅 630–930px)
+// → 永不成立 → pane 退回 grid item 的 `min-height: auto` → 軌高被撐到 ≥ pane 內容高
+// (figure 內的 svg 是「當前高」不是地板,不會自己縮),雙圖 grid 到 min-h-80 地板後軌道
+// 照樣撐開 → 溢出蓋家數帶,與修前同症狀。無條件 min-h-0 下:兩欄態 pane 縮到軌高、
+// figure / wrapper 跟著縮 → svg 跟著矮;單欄態 pane 內容驅動高,沿 wrapper−2 收斂到
+// figure 的 `min-h-48` 地板,不形成迴圈。
 describe("MarketPane 可縮鏈(amendment r3)", () => {
-  it("root 的 min-h-0 條件化到 @[1050px];figure 掛地板 min-h-48 而非 min-h-0", () => {
+  it("root 無條件 min-h-0(門檻不可條件化);figure 掛地板 min-h-48 而非 min-h-0", () => {
     renderPane();
     const root = screen.getByTestId("market-pane-left");
-    expect(root.className).toContain("@[1050px]:min-h-0");
+    expect(root.className).toContain("min-h-0");
+    // 條件化的版本量錯 container(見上)→ 兩欄態縮矮時圖卡溢出
+    expect(root.className).not.toContain("@[1050px]:min-h-0");
 
     const figure = root.querySelector("figure")!;
     expect(figure.className).toContain("min-h-48");
