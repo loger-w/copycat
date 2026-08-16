@@ -10,6 +10,9 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import date as _date
+from datetime import datetime as _datetime
+from datetime import time as _clock_time
+from datetime import timedelta as _timedelta
 from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable, Final, TypeVar, cast
 
@@ -73,6 +76,7 @@ from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
 from copycat.stock_names import load_names as load_stock_names
 from copycat.stkfut_map import lookup_product
 from copycat.tc4common import TC4_DEFAULT_PORT
+from copycat.trading_calendar import TradingCalendar, resolve_trade_date
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +283,9 @@ class _Booted:
     futures: FuturesEngine | None = None
     corr: CorrelationEngine | None = None
     breadth: BreadthEngine | None = None
+    #: SC-7 的背景交叉檢查(不是引擎,但關機一樣要 cancel —— 沒人 await 的 task
+    #: 會在 loop 關閉時留下「Task was destroyed but it is pending」)
+    crosscheck_task: asyncio.Task[None] | None = None
 
 
 def _default_source() -> QuoteSource:
@@ -325,15 +332,19 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
     return []
 
 
-def _wall_clock_trade_date() -> str:
-    """無 stock engine 時的日別來源(XR-3)。
+def _today() -> _date:
+    """牆鐘今天 —— **app 內唯一的日期取樣點**(mod/trading-calendar Q9)。
 
-    **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
-    `_distribute` 日別尺、jsonl 檔名與 `today_signals` 讀取集全都以它為準 ——
-    壞掉的樣態是「今天的訊號寫進昨天的檔」,完全靜默。
-    `TXO_BACKFILL_DATE` 優先,與 engine 在場時的日別語意一致(休市日回補模式)。
+    散在各處的 `date.today()` 讓「跨午夜那一瞬用了兩個不同的日子」無法被測試釘住,
+    也讓假日冷啟動的整條推導沒有注入點。所有日期推導一律從這裡起算,測試只要
+    monkeypatch 這一個函式。
     """
-    return os.environ.get("TXO_BACKFILL_DATE") or f"{_date.today():%Y-%m-%d}"
+    return _date.today()
+
+
+def _now() -> _datetime:
+    """牆鐘現在(SC-7 交叉檢查的 14:00 門檻);同 `_today` 的單一取樣點理由。"""
+    return _datetime.now()
 
 
 def create_app(
@@ -349,9 +360,16 @@ def create_app(
     index_mis_fetch: Callable[[], OtcSnap | None] = fetch_otc_snapshot,
     stock_watchlist_path: Path | None = None,
     stock_names_path: Path | None = None,
+    trading_calendar: TradingCalendar | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
+    """`trading_calendar=None`(預設)= 無日曆 = 牆鐘,逐字等於改動前的行為。
+
+    prod 由 `__main__` 顯式傳 `load_trading_calendar()`(對齊 DEFAULT_STOCK /
+    DEFAULT_BREADTH 的「prod 顯式、測試預設關」慣例):39 個既有測試呼叫點以
+    `date.today()` 對照,預設載真日曆會讓整批測試在週末全紅。
+    """
     wl_path = stock_watchlist_path if stock_watchlist_path is not None else WATCHLIST_DEFAULT_PATH
     # 名稱表是版控檔(必然存在)→ 沒有注入點的話「表不可用」這條降級路徑無法測
     names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
@@ -366,6 +384,75 @@ def create_app(
     futures_ws = WsBroadcaster()
     corr_ws = WsBroadcaster()
     river_ws = WsBroadcaster()  # 江波圖每秒 delta(全量走 REST/WS 首則;index-river-chart SC-5)
+
+    def _resolve_trade_date() -> str:
+        """引擎 / overlay / hub fallback 共用的「今天在看哪一天」(Q9)。
+
+        **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
+        `_distribute` 日別尺、jsonl 檔名與 `today_signals` 讀取集全都以它為準 ——
+        壞掉的樣態是「今天的訊號寫進昨天的檔」,完全靜默。
+
+        `TXO_BACKFILL_DATE` **最高優先**(W2:手動回補是 ops 通道,日曆不得蓋掉它);
+        其次走日曆的最近交易日;無日曆 = 牆鐘 = 改動前行為。日曆推導一律經
+        `resolve_trade_date` —— 缺當年的 WARNING 節流入口就在那裡,自己呼
+        `last_trading_day` 會靜默跳過提醒。
+        """
+        env = os.environ.get("TXO_BACKFILL_DATE")
+        if env:
+            return env
+        if trading_calendar is None:
+            return _today().isoformat()
+        return resolve_trade_date(_today(), trading_calendar).isoformat()
+
+    async def _calendar_crosscheck(index: IndexEngine) -> None:
+        """日曆 vs 實際 DK 的雙向交叉檢查(SC-7)—— 靜態 config 唯一的體檢管道。
+
+        兩個方向對應兩種故障:DK 比日曆新 = 日曆把真交易日標成了假日(KR-1,當天
+        index 不換日);最近交易日沒有 DK = 臨時休市(颱風假,靜態 config 預知不了,
+        KR-3)→ 提示改設 `TXO_BACKFILL_DATE`。
+
+        期望日刻意**不含今天**(除非今天非交易日或已過 14:00):交易日盤中今天的 DK
+        本來就還不存在,拿今天當期望會讓每天早上重啟都誤報一次 —— 天天亮的 WARNING
+        等於沒有 WARNING。
+
+        probe 直呼 `index.bars_range` 不經 `bars_cache`:boot 當下的結果灌進共用格會
+        污染 `/api/market/bars` 與 index overlay。整段自吞例外只 log:它是一則提示,
+        不是 index 的啟動條件(`_boot` 的傘不得因它把 index 收掉)。
+        """
+        cal = trading_calendar
+        if cal is None:
+            return
+        try:
+            today = _today()
+            bars, _tag = await index.bars_range(
+                "D", (today - _timedelta(days=14)).isoformat(), today.isoformat()
+            )
+            if not bars:
+                logger.info("交易日曆交叉檢查:IX0001 無日 K 可比對(TC4 不可用?),略過")
+                return
+            last = _date.fromisoformat(bars[-1]["t"][:10])
+            latest_trading = cal.last_trading_day(today)
+            if last > latest_trading:
+                logger.warning(
+                    "交易日曆可能過期:IX0001 DK 有 %s 但日曆判非交易日,"
+                    "請更新 configs/trading_holidays.json",
+                    last,
+                )
+                return
+            if not cal.is_trading_day(today) or _now().time() >= _clock_time(14, 0):
+                expected = latest_trading
+            else:
+                expected = cal.last_trading_day(today - _timedelta(days=1))
+            if last < expected:
+                logger.warning(
+                    "最近交易日 %s 無 IX0001 DK 資料(臨時休市?請設 TXO_BACKFILL_DATE "
+                    "或更新交易日曆)",
+                    expected,
+                )
+        except asyncio.CancelledError:
+            raise  # 關機中斷:不得被下面的傘吃掉(那會讓 close 路徑以為它正常結束)
+        except Exception as e:
+            logger.warning("交易日曆交叉檢查失敗(略過):%r", e)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -395,6 +482,7 @@ def create_app(
         app.state.futures = None
         app.state.corr = None
         app.state.breadth = None
+        app.state.calendar_crosscheck = None  # SC-7 背景 task(有日曆時才建)
         # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
         # AttributeError → 被全域 handler 轉成 502
         app.state.boot_done = False
@@ -450,15 +538,17 @@ def create_app(
                 if resolved_stock is None:
                     return None
                 stkfut_source = resolved_stock
-                import datetime as _dt
-
                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
                 return StockEngine(
                     cast(StockSource, resolved_stock),
-                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+                    trade_date=_resolve_trade_date(),
                     throttle_secs=throttle_secs,
                     checkpoint=backfill_date is None,
                     ws=stock_ws,  # 與 SignalHub 共用同一顆(XR-3)
+                    # 無日曆 → None = engine 預設的 `weekday() < 5`(W9 逐字不變)
+                    is_trading_day=(
+                        trading_calendar.is_trading_day if trading_calendar is not None else None
+                    ),
                 )
 
             async def _start_stock(o: StockEngine) -> None:
@@ -505,7 +595,7 @@ def create_app(
                 cfg = load_signals_config()
                 if engine is None:
                     daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] = _empty_daily_bars
-                    trade_date_fn: Callable[[], str] = _wall_clock_trade_date
+                    trade_date_fn: Callable[[], str] = _resolve_trade_date
                     # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
                     # gap 的用途是「連發打 TC4 要讓位」,而 `_empty_daily_bars` 根本沒打
@@ -584,24 +674,36 @@ def create_app(
                 )
                 if resolved_index is None:
                     return None
-                import datetime as _dt
-
                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
                 return IndexEngine(
                     cast(IndexSource, resolved_index),
                     # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
                     txf_getter=runtime.spot_millipts,
                     mis_fetch=index_mis_fetch,
-                    trade_date=backfill_date or f"{_dt.date.today():%Y-%m-%d}",
+                    trade_date=_resolve_trade_date(),
                     rollover=backfill_date is None,
                     throttle_secs=throttle_secs,
+                    # 無日曆 → None = engine 預設的「純日曆日」(W9 逐字不變)
+                    is_trading_day=(
+                        trading_calendar.is_trading_day if trading_calendar is not None else None
+                    ),
                 )
+
+            async def _start_index(o: IndexEngine) -> None:
+                await o.start()
+                if trading_calendar is not None:
+                    # **背景跑、不 await**(SC-7):probe 要打一次 TC4 歷史(秒級),
+                    # 擋在序列上會把 capital / futures / corr / breadth 整串往後推,
+                    # 而它產出的只是一則 log。
+                    booted.crosscheck_task = asyncio.create_task(_calendar_crosscheck(o))
+                    # 另掛 app.state:唯一能問「檢查跑完了沒」的地方(測試的同步點)
+                    app.state.calendar_crosscheck = booted.crosscheck_task
 
             index = await _boot(
                 "index",
                 "index engine 初始化非預期失敗,指數功能停用(其餘不受影響)",
                 _make_index,
-                lambda o: o.start(),
+                _start_index,
                 lambda o: o.close(),
             )
             app.state.index = index
@@ -733,6 +835,15 @@ def create_app(
                     disposition_fetch,
                     daily_fetch,
                 ) = fetchers
+                cal = trading_calendar
+
+                def _breadth_today() -> _date:
+                    """**純日曆、不吃 env**(Q9 / KR-5):`TXO_BACKFILL_DATE` 是 TXO 回補
+                    的 ops 通道,breadth 現行本就不讀它,本輪不擴張它的語意。
+                    無日曆時 = 牆鐘 = 引擎預設語意。
+                    """
+                    return _today() if cal is None else resolve_trade_date(_today(), cal)
+
                 return BreadthEngine(
                     token=token,
                     # None → configs/breadth.json(prod 唯一路徑);顯式注入只服務
@@ -745,6 +856,8 @@ def create_app(
                     disposition_fetch=disposition_fetch,
                     daily_fetch=daily_fetch,
                     data_dir=breadth_data_dir,  # None → repo root data/market
+                    today_fn=_breadth_today,
+                    is_trading_day=None if cal is None else cal.is_trading_day,
                 )
 
             breadth = await _boot(
@@ -792,6 +905,15 @@ def create_app(
             # signals 段的 `_close_signals` 會呼 `stock.detach_signal_hub()`,也必須排在
             # stock 之前收(stock engine 還活著才解得掉掛點)。其餘各段無此類依賴,但
             # 一律照建立的反序收,新增引擎時才有一條唯一的規則可循。
+            if booted.crosscheck_task is not None:
+                # 引擎之前先收:它只讀 index 的歷史,關機時沒有任何理由讓它跑完
+                booted.crosscheck_task.cancel()
+                try:
+                    await booted.crosscheck_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("交易日曆交叉檢查以例外結束(關機續行)")
             if booted.breadth is not None:
                 try:
                     await booted.breadth.close()
@@ -876,6 +998,35 @@ def create_app(
         return {
             "ready": bool(getattr(state, "boot_done", False)),
             "error": getattr(state, "boot_error", None),
+        }
+
+    @app.get("/api/calendar")
+    async def calendar() -> dict:
+        """交易日曆狀態(SC-6)—— 「這台今天在看哪一天、日曆載到了沒」的唯一可視管道。
+
+        欄位語意(**兩個日期刻意分開**):
+        - `trade_date` = **stock / index / signals hub 實際採用**的日別
+          (`TXO_BACKFILL_DATE` 有值時就是它)。
+        - `calendar_trade_date` = 純日曆推導(不看 env)= **breadth 一律採用**的日別。
+          env 模式下兩者會不一致(KR-5),合成一個欄位就沒有任何管道分辨得出來。
+        - `years_loaded` 不含當年 = 日曆過期(此後只擋週末),要更新
+          `configs/trading_holidays.json`。
+
+        **不依賴任何引擎**:純 config 推導,boot 窗內(引擎還在起)也答得出來 —— 前端
+        開站第一件事就是問它,拿 503 會讓假日集合整天不進前端(E7)。
+        """
+        today = _today()
+        cal = trading_calendar
+        return {
+            "today": today.isoformat(),
+            "trade_date": _resolve_trade_date(),
+            "calendar_trade_date": (
+                today.isoformat() if cal is None else resolve_trade_date(today, cal).isoformat()
+            ),
+            "backfill_env": os.environ.get("TXO_BACKFILL_DATE"),
+            "holidays": sorted(d.isoformat() for d in cal.holidays) if cal is not None else [],
+            "years_loaded": sorted(cal.years_loaded) if cal is not None else [],
+            "calendar_loaded": cal is not None,
         }
 
     def _runtime(request: Request) -> EngineRuntime:
@@ -1012,8 +1163,10 @@ def create_app(
     async def stock_overlay(request: Request, code: str) -> dict:
         stock = _stock(request)
         _valid_code(code)
-        # today = 本機日界(= 台北,部署綁本機;design R6/R13);backfill 模式亦以本機為準
-        today = f"{_date.today():%Y-%m-%d}"
+        # 基準日 = **顯示中的交易日**(SC-13),不是牆鐘:假日看的是最近交易日那張圖,
+        # 疊線基準卻用今天的話,週六會把週五的 bar 當成「今日 partial」整根剔掉。
+        # cache 鍵同源(日別沒變就不該重算);交易日 env 未設時逐字等於牆鐘。
+        today = _resolve_trade_date()
         cached = overlay_cache.get(code, today)
         if cached is not None:
             return cached
@@ -1228,14 +1381,14 @@ def create_app(
         async def tagged(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
             return TaggedBars(*await index.bars_range(tf_, s, e))
 
-        # today = 本機日界(= 台北,部署綁本機;同 stock overlay 的 design R6/R13)。
-        # 只取一次:兩處各自 `today()` 的話,跨午夜那一瞬會用兩個不同的日子。
-        today = _date.today()
+        # bars 抓取仍走**牆鐘**(W3:K 線的日期邏輯本輪不動 —— 多抓一天不會少資料);
+        # 疊線基準日則走顯示中的交易日(SC-13),與個股 overlay 同源。
+        today = _today()
         bars, _tag = await build_period(tagged, bars_cache, "IX0001", today, "D")
         daily: list[DailyBar] = [
             {"date": b["t"][:10], "high": b["h"], "low": b["l"], "close": b["c"]} for b in bars
         ]
-        return build_overlay(daily, f"{today:%Y-%m-%d}")
+        return build_overlay(daily, _resolve_trade_date())
 
     # ---- market(大盤 K 線;index-board SC-4/5/6)----
 
