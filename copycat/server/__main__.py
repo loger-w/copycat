@@ -37,6 +37,7 @@ from copycat.server.verify import (
     fake_breadth_fetchers,
     neutralize_external_env,
 )
+from copycat.trading_calendar import load_trading_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             futures_source=DEFAULT_FUTURES,
             corr_source=DEFAULT_CORR,
             breadth_fetchers=DEFAULT_BREADTH,
+            # 交易日曆只在 prod 顯式載(SC-8):假日 / 週末冷啟動時各引擎改抓最近
+            # 交易日。--verify 的 fake 資料綁牆鐘 today,傳了反而整片空。
+            trading_calendar=load_trading_calendar(),
         )
         port = int(os.environ.get("TXO_SERVER_PORT", str(PROD_PORT_DEFAULT)))
         if log_path is not None:
