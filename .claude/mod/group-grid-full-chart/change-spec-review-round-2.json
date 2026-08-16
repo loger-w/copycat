@@ -1,0 +1,14 @@
+{
+  "round": 2,
+  "scope": "限縮輪:只審 round 1 修復段落",
+  "reviewer": "change-spec-reviewer (opus)",
+  "findings": [
+    {"id": "R2-1", "severity": "P1", "claim": "1:1 絕對 px 下 4×4 小格 chrome 吃掉畫布、標籤重疊;cardSvgBox 無安全邊", "quick_check": "PLAUSIBLE(user 實機 2560×1271 下 4×4 卡約 470×280 可讀;1080p 極端會擠)", "disposition": "accepted_partial", "resolution": "cardSvgBox 加 −2 安全邊;不做幾何降級(動 ChartStatic 會波及單檔頁 W-1,且 D4 拍板完全同款);SC-1 截圖改「最好格 2×2 + 最壞格 4×4(user 實機視窗)+ 1080p 模擬 4×4」三張,4×4@1080p 若不可讀 → next-time 記「卡片變體 y 刻度減量」並回報 user,不擋出貨"},
+    {"id": "R2-2", "severity": "P1", "claim": "liveP 每秒變 → 每卡每秒全幾何+VP+能量重算+ChartStatic 重繪,SC-6 未量", "quick_check": "CONFIRMED(deps 掛 accum.minutes,extendMinutes 回新 Map)", "disposition": "accepted", "resolution": "SC-6 加 (e):fake server 16 卡 2s 推播下 DevTools Performance 10s 錄製,主執行緒 scripting+rendering 佔比 < 30% 且無 >50ms long task 連發;超標對策(寫進 spec 備用)= CardIntradayChart 對 liveP 做 5s 量化(`Math.floor(now/5000)` 進 deps)降頻"},
+    {"id": "R2-3", "severity": "P1", "claim": "engine.daily_bars 另有 caller signal_hub;Semaphore 會拖慢 hub basis", "quick_check": "CONFIRMED signal_hub.py:662 / app.py:611", "disposition": "accepted", "resolution": "節流下沉到 `/api/stock/overlay` route(app 內 `overlay_sem = asyncio.Semaphore(4)` 包住 `stock.daily_bars`),engine.daily_bars 不動;測試改為 route 層 in-flight 峰值 ≤ 4"},
+    {"id": "R2-4", "severity": "P1", "claim": "test_light_snapshot_is_exactly_minutes_and_meta / without_meta 兩條必紅未預告", "quick_check": "CONFIRMED :334 / :351", "disposition": "accepted", "resolution": "測試清單標 🔴 該紅:兩條改鎖六鍵集合 / 空態 vp=={} 其餘 None;:340 key-mapping 測試擴到 vwap/high/low 與 snapshot() 逐鍵相同"},
+    {"id": "R2-5", "severity": "P2", "claim": "單檔頁 vp 折自已截斷的 snapshot ticks,>20k 日與卡片不同", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "AD-2 殘餘差異改列兩條(時間差 / >20k 截斷),本輪不處理記 next-time"},
+    {"id": "R2-6", "severity": "P2", "claim": "edge 9 判準 minutes.size===0 弱於 priceLine 空(窗外分鐘)", "quick_check": "CONFIRMED windowedEntries 私有 :265", "disposition": "accepted", "resolution": "edge 9 判準改「窗內無分鐘」:export `hasWindowedMinutes(minutes, xw)`(stock-intraday-svg.ts,包 windowedEntries),GroupCard 用之;測試補「只有 08:59 分鐘 → 自佔位無 border 框」"}
+  ],
+  "summary": {"P0": 0, "P1": 4, "P2": 2, "accepted": 6, "rejected": 0, "exit": "無 P0;P1 逐條處置 → 進實作"}
+}

@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "findings": [
+    {"id": "R1", "severity": "P0", "claim": "group_snapshot out dict 逐鍵手挑,light_snapshot 加鍵不會出現在 API", "quick_check": "CONFIRMED stock_engine.py:618-623", "disposition": "accepted", "resolution": "B 節改為 out = {**light, no_data, backfilling} + tests/server 端點層契約測試"},
+    {"id": "R2", "severity": "P1", "claim": "SUB.width 未參數化,副圖字級同樣不可讀", "quick_check": "CONFIRMED :619/:954", "disposition": "accepted", "resolution": "core 主副圖共用單一 w;variant test 斷言兩 svg viewBox 寬相等"},
+    {"id": "R3", "severity": "P1", "claim": "card 高度公式未扣 readout 列 chrome,溢軌", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "AD-3 扣 CARD_CHROME(readout 22 + mb-1 4)後再拆;SC-7 加不溢軌條件"},
+    {"id": "R4", "severity": "P1", "claim": "accum 每 render 新物件打穿 useMemo/memo", "quick_check": "CONFIRMED extendMinutes 回新 Map", "disposition": "accepted", "resolution": "CardIntradayChart 內 useMemo([code,snap,liveP]);SC-6 加 hover 不重算幾何的測試(spy buildIntradayGeometry 次數)"},
+    {"id": "R5", "severity": "P1", "claim": "cdp 預設 true → 進群組冷 cache 50 發 daily_bars 併發打 TC4 歷史通道", "quick_check": "CONFIRMED DEFAULTS cdp:true;daily_bars to_thread 無上限", "disposition": "accepted", "resolution": "後端 daily_bars 加 asyncio.Semaphore(4)(engine 層);SC-6 加冷 cache 進群組總耗時量測"},
+    {"id": "R6", "severity": "P1", "claim": "請求時全掃 ticks 折 vp 跑在事件迴圈", "quick_check": "CONFIRMED async def + 同步 group_snapshot", "disposition": "accepted", "resolution": "改 (b):StockDayState 增量維護 vp dict(ingest 累加 / reset 清 / apply_backfill 重放自然重建),light_snapshot 只序列化"},
+    {"id": "R7", "severity": "P1", "claim": "無 GZipMiddleware,--compressed 量法不成立;門檻未按 50 檔", "quick_check": "CONFIRMED grep GZip 零命中", "disposition": "accepted", "resolution": "SC-6 改量未壓縮 bytes、以 50 檔(或現有最大群組)為準;vp 序列化用緊湊陣列 [t,o,i];超標降級 = t-only(判準寫進 SC-6)"},
+    {"id": "R8", "severity": "P2", "claim": "該紅測試行號錯(實為 691-701)", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "改引測試標題 + 更正行號(spec + current-state)"},
+    {"id": "R9", "severity": "P2", "claim": "foldVp 未 export;跨語言 fixture 無先例、tsc 無 resolveJsonModule", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "export foldVp;vitest 以 node:fs readFileSync 讀 repo 根 fixture;AD-2 措辭修正"},
+    {"id": "R10", "severity": "P2", "claim": "後端 last 無讀者 / liveP null 降級未定義", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "拿掉後端 last(四鍵 vwap/high/low/vp);前端 last = liveP>0 ? liveP : 最後一格分鐘 close;紅測補分支"},
+    {"id": "R11", "severity": "P2", "claim": "button 內塞 figure/div 不合法;priceLine 空早退框中框", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "card 變體 figure→div;GroupCard 外層改 <div role=\"button\" tabIndex={0} aria-label aria-pressed onClick onKeyDown(Enter/Space)>(既有測試 `card.tagName === 'BUTTON'` 為 test-infra 調整 → 改斷言 role=button;行為契約「可及名稱 + 點了回呼」不變);edge 9:minutes 空(非 noData/backfilling)→ 卡片自佔位「尚無成交」不掛圖"},
+    {"id": "R12", "severity": "P2", "claim": "0 新請求依賴 gcTime;首幀 800 寬跳動", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "SC-6 加『5 分鐘內切回』;AD-3 量到前不畫圖(佔位)"},
+    {"id": "R13", "severity": "P2", "claim": "_EMPTY_LIGHT 自動衍生,不得手抄", "quick_check": "CONFIRMED :49", "disposition": "accepted", "resolution": "措辭改為衍生自動涵蓋"},
+    {"id": "R14", "severity": "P2", "claim": "deque 截斷造成 vp 不同源", "quick_check": "CONFIRMED maxlen 20k", "disposition": "accepted", "resolution": "R6-(b) 增量 vp 不受 deque 截斷影響(與前端同不截斷);AD-2 明寫 parity 保證範圍"}
+  ],
+  "summary": {"P0": 1, "P1": 6, "P2": 7, "accepted": 14, "rejected": 0}
+}

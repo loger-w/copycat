@@ -1,0 +1,3249 @@
+diff --git a/copycat/live/stock_state.py b/copycat/live/stock_state.py
+index ba52680e..182da3ef 100644
+--- a/copycat/live/stock_state.py
++++ b/copycat/live/stock_state.py
+@@ -12,11 +12,17 @@ from collections import deque
+ from dataclasses import dataclass, field
+ 
+ from copycat.live.stock_models import StockBook, StockMeta, StockTick, relabel_locked_side
++from copycat.market import snap_down_milli
+ 
+ logger = logging.getLogger(__name__)
+ 
+ _TICKS_MAXLEN = 20_000  # 熱門股單日 6.2k 實測、漲停攻防股更高(design r1-F8)
+ _BACKFILL_SEQ_MARGIN = 1_000  # seq 跳增下限,確保前端必偵測到跳號
++#: VP 的分鐘窗 = 前端分時圖幾何的 x 窗(`stock-intraday-svg.ts` 的 X_START_MIN /
++#: X_END_MIN,含端點)。窗外的盤前試撮與 13:31 收盤撮合不進 VP —— 否則卡片 VP 的
++#: 總張與說明列的外/內/未分類三數對不起來,而兩個數字都「看起來對」。
++_VP_START_MIN = 9 * 60  # 09:00
++_VP_END_MIN = 13 * 60 + 30  # 13:30
+ 
+ 
+ @dataclass
+@@ -51,6 +57,12 @@ class StockDayState:
+     _last_cum: int = -1
+     _amount_milli: int = 0  # Σ(價毫元 × 量),VWAP 分子
+     _volume: int = 0
++    #: 價位別成交量直方圖(VP):key = `snap_down_milli` 後的檔位,value = [總張, 外, 內]。
++    #: **逐 tick 增量維護,不在請求時掃 `ticks`**(change-spec AD-1 amendment R6):
++    #: 群組 batch 對最多 50 檔各要一次,請求時全掃最壞是 50 × 20k 的同步迴圈跑在事件
++    #: 迴圈上 → WS fanout 被卡住,而畫面上只表現為「圖偶爾頓一下」。
++    #: 附帶好處是不受 `ticks` deque 的 20k 截斷影響(前端折的是不截斷的全量)。
++    _vp: dict[int, list[int]] = field(default_factory=dict)
+ 
+     @property
+     def last(self) -> StockTick | None:
+@@ -67,6 +79,9 @@ class StockDayState:
+         self._last_cum = -1
+         self._amount_milli = 0
+         self._volume = 0
++        # VP 與 vwap / 高低同批清:`apply_backfill` 走 reset + 重放,漏了這行回補量會
++        # 疊在 live 期間的量上變兩倍,而畫面上只是 VP 條變長,沒有任何錯誤訊號
++        self._vp = {}
+         # book/meta 保留 — 盤外顯示昨收靜態值依賴 meta(design §2.4 rollover 階段一不清)
+ 
+     def ingest(self, tick: StockTick) -> bool:
+@@ -158,6 +173,29 @@ class StockDayState:
+             agg.inner += tick.qty
+         else:
+             agg.unch += tick.qty
++        self._fold_vp(tick, minute_key)
++
++    def _fold_vp(self, tick: StockTick, minute_key: int) -> None:
++        """把一筆成交折進 VP。**規則逐條對齊前端 `stock-accum.ts::foldVp`**
++        (parity 由 `tests/fixtures/vp_parity.json` 兩側各自斷言鎖住):
++
++        - `price_milli <= 0` 剔除:鎖漲跌停時 TC4 在簿的第一檔推市價佇列,價格欄是 `0`。
++          `snap_down_milli(0)` 是合法運算,不剔就憑空長出一個 0 元檔位。
++        - 分鐘窗 `[09:00, 13:30]`(含端點)= 前端幾何的 x 窗,窗外不計。
++        - key 走 `snap_down_milli`(單一定義,不在這裡再寫一次 tick 表)。
++        - cell `[總張, 外盤張, 內盤張]`:`neutral`(開盤集合競價無 Bid/Ask 可比)
++          只進總張 —— 與 `MinuteAgg.unch` 同語意,故總張 ≠ 外 + 內。
++        """
++        if tick.price_milli <= 0:
++            return
++        if not (_VP_START_MIN <= minute_key <= _VP_END_MIN):
++            return
++        cell = self._vp.setdefault(snap_down_milli(tick.price_milli), [0, 0, 0])
++        cell[0] += tick.qty
++        if tick.side == "outer":
++            cell[1] += tick.qty
++        elif tick.side == "inner":
++            cell[2] += tick.qty
+ 
+     def _minutes_payload(self) -> dict[str, dict]:
+         """分鐘序列的 wire 形。**鍵名的單一定義** —— 全量 snapshot 與群組 batch 共用。
+@@ -200,9 +238,24 @@ class StockDayState:
+         """群組 batch 專用的輕量 payload(code review A1)。
+ 
+         `group_snapshot` 對最多 50 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
+-        當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到 minutes / meta。
++        當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到這幾鍵。
++
++        `vwap` / `high` / `low` / `vp` 是「卡片圖與單檔頁完全同款」的必要輸入
++        (change-spec AD-1):`ticks` 仍然不送(頻寬),而由 minutes 在前端近似出一份
++        VWAP / VP,畫面上會與單檔頁的同一檔對不上,且兩個數字都「看起來對」。
++        `vp` 是 tick 的**聚合**(O(當日成交過的檔位數)),與 tick 筆數脫鉤。
+         """
+-        return {"minutes": self._minutes_payload(), "meta": self._meta_payload()}
++        return {
++            "minutes": self._minutes_payload(),
++            "meta": self._meta_payload(),
++            # 與 `snapshot()` 同口徑(同一份欄位,不另算):兩邊岔開的樣態是卡片的
++            # VWAP 線與單檔頁差一截,而兩條線都畫得出來
++            "vwap": self.vwap_milli,
++            "high": self.high_milli,
++            "low": self.low_milli,
++            # JSON 物件的鍵只能是字串;前端 `useGroupSnapshots` 轉回 number key 的 Map
++            "vp": {str(price): list(cell) for price, cell in sorted(self._vp.items())},
++        }
+ 
+     def snapshot(self) -> dict:
+         """REST 全量(design §4:snapshot 為前端累算基底)。"""
+diff --git a/copycat/market.py b/copycat/market.py
+index 2e4f21fa..c43eef73 100644
+--- a/copycat/market.py
++++ b/copycat/market.py
+@@ -28,6 +28,20 @@ def tick_size_milli(price_milli: int) -> int:
+     return _tick_milli(price_milli)
+ 
+ 
++def snap_down_milli(price_milli: int) -> int:
++    """向下貼齊該價位所在段的合法檔位(VP 直方圖的 key;change-spec AD-2)。
++
++    tick 段取**該價位自己所在段**(不是 snap 後所在段):99.999 元屬 50–100 元段
++    (tick 0.1)→ 99.9;拿 snap 後那一段去算會讓段界附近的成交量歸到不存在的檔位。
++
++    前端對應函式是 `frontend/src/lib/stock-tick.ts::snapDown` —— 兩份規則各自漂移的
++    失效樣態是「同一檔在單檔頁與卡片上 POC 不同」,兩個數字都看起來對,零錯誤訊號。
++    parity 由 `tests/fixtures/vp_parity.json` 兩側各自斷言鎖住。
++    """
++    tick = _tick_milli(price_milli)
++    return price_milli // tick * tick
++
++
+ def tick_size(price: float) -> float:
+     return _tick_milli(round(price * 1000)) / 1000
+ 
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 588e7bc3..37156fe4 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -378,6 +378,12 @@ def create_app(
+     # 名稱表是版控檔(必然存在)→ 沒有注入點的話「表不可用」這條降級路徑無法測
+     names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
+     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
++    # overlay 的 TC4 歷史取數節流(group-grid AD-5 amendment R5)。群組檢視的 `cdp`
++    # 預設是開的 → 一進群組就對最多 50 檔同時打 `/api/stock/overlay`,而
++    # `daily_bars` 走 `to_thread` 沒有上限、50 條請求共用同一條 TC4 歷史通道。
++    # 擋在 **route 層**而不是 `engine.daily_bars`:後者另有 `signal_hub` 的 basis
++    # 取數在用(signal_hub.py:662),節流下沉到引擎會連訊號的 basis 一起拖慢。
++    overlay_sem = asyncio.Semaphore(4)
+     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
+     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
+     # 個股 WS 匯流排住 app 層而非 engine 內(XR-3):`/ws/stock` 同時載自選 quote
+@@ -1177,8 +1183,10 @@ def create_app(
+         today = _resolve_trade_date()
+         cached = overlay_cache.get(code, today)
+         if cached is not None:
+-            return cached
+-        result = build_overlay(await stock.daily_bars(code), today)
++            return cached  # cache 命中不進 semaphore(沒有 TC4 取數就沒有要節流的東西)
++        async with overlay_sem:
++            bars = await stock.daily_bars(code)
++        result = build_overlay(bars, today)
+         overlay_cache.put(code, today, result)  # 空結果不 cache(overlay.py 規則)
+         return result
+ 
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index ac91187c..e31d8ab1 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -575,10 +575,11 @@ class StockEngine:
+         不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 50 次
+         會把主圖搶走 → 主圖分時線凍結。
+ 
+-        payload 走 `light_snapshot()` 的 minutes/meta 兩鍵(+ 兩個旗標,A1):`ticks`
+-        是數千筆,50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是
+-        白燒 CPU;而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端
+-        `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失)。
++        payload = `light_snapshot()` **整份展開** + 兩個旗標(A1):`ticks` 是數千筆,
++        50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是白燒 CPU;
++        而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端 `meta.ref`
++        undefined → hasRef=false → 紅綠面積靜默消失)。`vp` 是 tick 的**聚合**
++        (O(當日成交過的檔位數)),與 tick 筆數脫鉤,故它進得了 light 而 `ticks` 不行。
+ 
+         ⚠ `no_data` 的推導式**刻意與別處不同**:這裡把「未訂閱」也算 no_data。
+         `StockDayState.snapshot()` 根本沒這個鍵,而 `engine.snapshot()` 對未知 code
+@@ -615,9 +616,11 @@ class StockEngine:
+                 # 先入列再讀旗標:順序反了的話第一次請求會回 backfilling=False,
+                 # 卡片顯示「無資料」而不是「回補中…」,而下一輪(60s 後)才會更正
+                 self._enqueue_backfill(code)
++            # `{**light, ...}`:鍵名的**單一定義**留在 `light_snapshot()`,這裡只轉發。
++            # 逐鍵手抄的漂移樣態是後端補了鍵(vwap/high/low/vp)、卡片卻收不到 ——
++            # 圖照樣畫得出來,只是少了 VWAP 線 / 高低圈 / VP 條,沒有任何錯誤訊號。
+             out[code] = {
+-                "minutes": light["minutes"],
+-                "meta": light["meta"],
++                **light,
+                 "no_data": code in self._no_data or not subscribed,
+                 "backfilling": self._backfill_pending.get(code, 0) > 0,
+             }
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index 7734a7dd..c80bda53 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -267,6 +267,75 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
+   });
+ });
+ 
++// 🔴 group-grid-full-chart SC-3:群組圖牆點卡片 = **只換右欄閃電梯的標的**,檢視停在
++// 群組。走整條真鏈(App → StockPage → GroupGridView → 卡片 → App.setStockCode →
++// useStockStream 換檔訂閱):少接一根線(StockPage 沒把 onSelect 往下傳、App 沒
++// setStockCode)在元件級測試各自都是綠的,只有這裡會紅。
++describe("App 群組圖牆點卡片換主檔(group-grid-full-chart SC-3)", () => {
++  const GROUP_WL = {
++    codes: ["2330", "2317"],
++    groups: [{ name: "半導體", codes: ["2330", "2317"] }],
++  };
++
++  function groupState(name: string, ref: number) {
++    return {
++      minutes: { "540": { c: ref, v: 10, i: 3, o: 7, u: 0 } },
++      meta: { name, ref, upper: null, lower: null, y_vol: 1 },
++      no_data: false,
++      backfilling: false,
++    };
++  }
++
++  /** 個股頁那幾條路由疊在 `appFetch` 之上(其餘路由行為逐字不變) */
++  function stockFetch() {
++    const base = appFetch();
++    return vi.fn(async (url: string) => {
++      const u = String(url);
++      if (u.includes("/api/stock/watchlist")) return new Response(JSON.stringify(GROUP_WL));
++      if (u.includes("/api/stock/group-state")) {
++        return new Response(
++          JSON.stringify({
++            states: {
++              "2330": groupState("台積電", 2_320_000),
++              "2317": groupState("鴻海", 2_000_000),
++            },
++          }),
++        );
++      }
++      if (u.includes("/api/stock/state/")) {
++        return new Response(
++          JSON.stringify({ code: "2317", seq: 0, minutes: {}, ticks: [], book: null, meta: null }),
++        );
++      }
++      if (u.includes("/api/stock/overlay/")) {
++        return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
++      }
++      if (u.includes("/api/stock/names")) return new Response(JSON.stringify({ names: [], count: 0 }));
++      if (u.includes("/api/stock/signals/rules")) return new Response(JSON.stringify({ rules: [] }));
++      return base(u);
++    });
++  }
++
++  it("點卡片 → 打 /api/stock/state/2317 + 主檔落 localStorage,且檢視仍停在群組", async () => {
++    window.localStorage.setItem("copycat-tab", "stock");
++    window.localStorage.setItem("copycat-stock-view", "group");
++    vi.stubGlobal("fetch", stockFetch());
++    renderApp();
++
++    fireEvent.click(await screen.findByTestId("group-card-2317"));
++
++    await waitFor(() => {
++      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
++        String(c[0]),
++      );
++      expect(calls.some((u) => u.includes("/api/stock/state/2317"))).toBe(true);
++    });
++    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("2317");
++    // 檢視沒跳走:圖牆的群組列還在(切回單檔的話這條會查不到)
++    expect(screen.getByLabelText("選擇群組")).toBeTruthy();
++  });
++});
++
+ // 台股綜合頁背景輪詢的 active gate 全鏈鎖。
+ describe("App 台股綜合 active gate(round-2 XR-4)", () => {
+   // (review round-2 XR-4)R1 的兩張指數圖是同頁**唯一**沒吃 `active` gate 的輪詢:
+diff --git a/frontend/src/components/stock/CardIntradayChart.tsx b/frontend/src/components/stock/CardIntradayChart.tsx
+new file mode 100644
+index 00000000..efd3bc15
+--- /dev/null
++++ b/frontend/src/components/stock/CardIntradayChart.tsx
+@@ -0,0 +1,53 @@
++import { useMemo } from "react";
++
++import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import { useContainerSize } from "@/hooks/useContainerSize";
++import { cardSvgBox } from "@/lib/chart-frame";
++import { accumFromGroupSnapshot, type GroupLikeSnapshot } from "@/lib/stock-accum";
++
++/** 群組卡片內的分時圖 = **單檔頁同一份渲染碼**的 card 變體(D4)。
++ *
++ *  這一層只做三件事:量卡片圖區、把 group-state 的精簡 snapshot 折成 `StockAccum`、
++ *  把量到的尺寸換成主 / 副圖的 viewBox。圖形語彙(價線 / VP / 高低標 / hover 十字線)
++ *  一律由 `IntradayChartCore` 供給 —— 卡片另寫一份小尺寸幾何的代價是「同一檔股票在
++ *  卡片與單檔頁上是兩張不一樣的圖」,而且沒有任何測試比得到兩者。 */
++
++interface Props {
++  code: string;
++  snap: GroupLikeSnapshot;
++  /** `watchlist_quote` 的現價(毫元);末點延伸與現價圈同源(AD-9) */
++  liveP: number | null;
++  /** 圖牆頂那一份(SC-2)。**卡片不持有 storage 狀態** —— 50 張卡各持一份會同時讀寫
++   *  同一個 localStorage key,而 `set` 每次 render 都是新 identity,傳進來還會打穿 memo。 */
++  toggles: ChartToggles;
++}
++
++export function CardIntradayChart({ code, snap, liveP, toggles }: Props) {
++  const [ref, size] = useContainerSize<HTMLDivElement>();
++  const box = cardSvgBox(size);
++  // **必經 useMemo**(review R4):就地建一個 accum 的話,父層每秒隨報價 re-render 時
++  // `accum` 每輪都是新 identity → core 內所有吃 accum 的 useMemo(幾何 / 量副圖 / VP)
++  // 全部重算,memo 護欄形同虛設。deps 只列真正的輸入。
++  const accum = useMemo(() => accumFromGroupSnapshot(code, snap, liveP), [code, snap, liveP]);
++  return (
++    // 恆存 wrapper(useContainerSize 契約 1):量測分支與繪圖分支都掛在它底下,
++    // 只掛「量到之後」那一支的話冷載入會永遠停在 0×0。
++    // 高度由外層指派(契約 2):`flex-1 min-h-0` 吃卡片扣掉標題列的剩餘高,
++    // 不是由內容撐出來 —— 由內容決定會形成「量到多高 → 設多高」的回饋迴圈。
++    <div ref={ref} className="flex min-h-0 flex-1 flex-col">
++      {/* 量到之前不畫(AD-3 / R12):先用 800 寬的預設 viewBox 畫一幀再跳回 1:1,
++          畫面上是每次進圖牆都閃一下的縮放跳動。空白一幀不會有人看見。 */}
++      {box.usable ? (
++        <IntradayChartCore
++          accum={accum}
++          toggles={toggles}
++          variant="card"
++          width={box.width}
++          mainHeight={box.mainH}
++          subHeight={box.subH}
++        />
++      ) : null}
++    </div>
++  );
++}
+diff --git a/frontend/src/components/stock/GroupGridView.geometry.test.tsx b/frontend/src/components/stock/GroupGridView.geometry.test.tsx
+new file mode 100644
+index 00000000..769245f0
+--- /dev/null
++++ b/frontend/src/components/stock/GroupGridView.geometry.test.tsx
+@@ -0,0 +1,100 @@
++/** @vitest-environment jsdom */
++/** SC-6(d):hover 不重算幾何。
++ *
++ *  卡片上的圖與單檔頁是同一份渲染碼,而那份碼的 hover 每個 mousemove 都會 setState ——
++ *  少了 `useMemo` 護欄,圖牆上 16 張卡片時滑過任何一張都會重算一次分時幾何(最多 271
++ *  格 × 每次 mousemove)。**畫面上完全看不出來**:圖照畫、值照對,只是掉幀。
++ *
++ *  量法 = 把 `buildIntradayGeometry` 換成計次的同一份實作(`importOriginal` 保留行為)。
++ *  `vi.mock` 是檔案級 + hoisted → 獨立檔。 */
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { GroupGridView } from "@/components/stock/GroupGridView";
++import { buildIntradayGeometry } from "@/lib/stock-intraday-svg";
++import type { Group } from "@/lib/watchlist-model";
++import { wrap } from "@/test-utils";
++
++vi.mock("@/lib/stock-intraday-svg", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("@/lib/stock-intraday-svg")>();
++  return { ...actual, buildIntradayGeometry: vi.fn(actual.buildIntradayGeometry) };
++});
++
++const CODES = ["2330", "2317", "2454", "2308"];
++const GROUPS: Group[] = [{ name: "半導體", codes: CODES }];
++
++class FakeResizeObserver {
++  private readonly cb: ResizeObserverCallback;
++
++  constructor(cb: ResizeObserverCallback) {
++    this.cb = cb;
++  }
++
++  observe(node: Element): void {
++    this.cb(
++      [{ target: node, contentRect: { width: 300, height: 200 } } as ResizeObserverEntry],
++      this as unknown as ResizeObserver,
++    );
++  }
++
++  unobserve(): void {}
++
++  disconnect(): void {}
++}
++
++function state() {
++  return {
++    minutes: {
++      "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 },
++      "541": { c: 2_390_000, v: 6, i: 2, o: 4, u: 0 },
++    },
++    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++    no_data: false,
++    backfilling: false,
++  };
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      if (String(url).includes("/api/stock/overlay/")) {
++        return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
++      }
++      const picked: Record<string, unknown> = {};
++      for (const c of CODES) picked[c] = state();
++      return new Response(JSON.stringify({ states: picked }));
++    }),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.restoreAllMocks();
++});
++
++describe("GroupGridView hover 不重算幾何(SC-6d)", () => {
++  it("4 張卡掛好後,對其中一張連發 3 個 mousemove → 幾何重算次數不變", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
++    for (const code of CODES) {
++      const card = await screen.findByTestId(`group-card-${code}`);
++      // 錨點:卡片上真的是**單檔同款**那張圖(有 role=img 的主圖),不是舊 mini 圖 ——
++      // 少了這條,「hover 沒重算」在根本沒有 hover 事件的元件上也會綠
++      await waitFor(() => expect(card.querySelector('svg[role="img"]')).toBeTruthy());
++    }
++    const counted = vi.mocked(buildIntradayGeometry);
++    const before = counted.mock.calls.length;
++    // 計次自檢:mock 沒接上時「次數沒變」是 0 → 0,恆綠而毫無意義
++    expect(before).toBeGreaterThan(0);
++
++    const svg = screen.getByTestId("group-card-2330").querySelector('svg[role="img"]')!;
++    for (const clientX of [10, 40, 90]) {
++      fireEvent.mouseMove(svg, { clientX, clientY: 20 });
++    }
++
++    expect(counted.mock.calls.length).toBe(before);
++  });
++});
+diff --git a/frontend/src/components/stock/GroupGridView.memo.test.tsx b/frontend/src/components/stock/GroupGridView.memo.test.tsx
+index 1d059248..b3abb027 100644
+--- a/frontend/src/components/stock/GroupGridView.memo.test.tsx
++++ b/frontend/src/components/stock/GroupGridView.memo.test.tsx
+@@ -13,13 +13,13 @@ import type { Group } from "@/lib/watchlist-model";
+  *  271 格),圖照畫、值照對。失效的典型原因也不在卡片自己身上:父層每秒隨 `quotes`
+  *  re-render,傳下去的 `onPick` 若是 inline arrow,`memo` 的比較每一輪都不會過。
+  *
+- *  量法 = 把 `MiniIntradayChart` 換成計次替身。**獨立檔**:`vi.mock` 是檔案級 + hoisted,
++ *  量法 = 把卡片內的圖換成計次替身。**獨立檔**:`vi.mock` 是檔案級 + hoisted,
+  *  與同目錄那份「要看到真 svg」的測試不能共存(frontend-testing skill 的 lazy 三坑同理)。 */
+ 
+ const hoisted = vi.hoisted(() => ({ renders: [] as (number | null)[] }));
+ 
+-vi.mock("@/components/stock/MiniIntradayChart", () => ({
+-  MiniIntradayChart: ({ liveP }: { liveP: number | null }) => {
++vi.mock("@/components/stock/CardIntradayChart", () => ({
++  CardIntradayChart: ({ liveP }: { liveP: number | null }) => {
+     hoisted.renders.push(liveP);
+     return <span data-testid="mini-stub" />;
+   },
+@@ -76,7 +76,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
+     // 每次都現做一個 inline arrow —— 正是 StockPage 的寫法,也是 memo 最容易破功的地方
+     const ui = (quotes: Record<string, WatchlistQuote>) => (
+       <QueryClientProvider client={client}>
+-        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} />
++        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
+       </QueryClientProvider>
+     );
+ 
+@@ -96,7 +96,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
+     const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
+     const ui = () => (
+       <QueryClientProvider client={client}>
+-        <GroupGridView groups={GROUPS} quotes={q1} onPick={() => {}} />
++        <GroupGridView groups={GROUPS} quotes={q1} onPick={() => {}} active={null} />
+       </QueryClientProvider>
+     );
+     const { rerender } = render(ui());
+diff --git a/frontend/src/components/stock/GroupGridView.test.tsx b/frontend/src/components/stock/GroupGridView.test.tsx
+index 83b3cad4..6c67aa96 100644
+--- a/frontend/src/components/stock/GroupGridView.test.tsx
++++ b/frontend/src/components/stock/GroupGridView.test.tsx
+@@ -37,17 +37,51 @@ function state(over: StateOver = {}) {
+   };
+ }
+ 
++/** ResizeObserver 的最小替身(樣板 `components/index/MarketPane.size.test.tsx`)。
++ *
++ *  卡片的分時圖走 `useContainerSize` 量測後才畫(AD-3:量到之前不畫,否則 800 寬的
++ *  viewBox 會先塞進 250px 卡片再跳回 1:1)—— jsdom 沒有 RO,不 stub 的話整面卡片的
++ *  圖區都是空白,本檔所有「圖畫出來了」的斷言會靜默 vacuous(查不到 svg 與「這一態
++ *  本來就不該有 svg」在 queryBy 下長得一模一樣)。
++ *
++ *  **必須同步餵**:`useContainerSize` 是 callback ref,節點掛上當下才 observe;
++ *  非同步餵在 RTL 的同步斷言之前不會到達。 */
++class FakeResizeObserver {
++  private readonly cb: ResizeObserverCallback;
++
++  constructor(cb: ResizeObserverCallback) {
++    this.cb = cb;
++  }
++
++  observe(node: Element): void {
++    this.cb(
++      [{ target: node, contentRect: { width: 300, height: 200 } } as ResizeObserverEntry],
++      this as unknown as ResizeObserver,
++    );
++  }
++
++  unobserve(): void {}
++
++  disconnect(): void {}
++}
++
+ let fetchMock: ReturnType<typeof vi.fn>;
+ let states: Record<string, unknown>;
+ 
+ beforeEach(() => {
+   window.localStorage.clear();
++  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+   states = {
+     "2330": state(),
+     "2317": state({ meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 5 } }),
+     "2881": state({ meta: { name: "富邦金", ref: 800_000, upper: null, lower: null, y_vol: 5 } }),
+   };
+   fetchMock = vi.fn(async (url: string) => {
++    // 卡片圖與單檔頁同一份渲染碼 → `cdp` 預設開時每張卡都會打一次 overlay。
++    // 不接這條路由的話它會拿到 group-state 的殼(`{states:{}}`)當 overlay 用。
++    if (String(url).includes("/api/stock/overlay/")) {
++      return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
++    }
+     const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
+     const picked: Record<string, unknown> = {};
+     for (const c of codes.split(",").filter(Boolean)) picked[c] = states[c] ?? state({ no_data: true });
+@@ -69,7 +103,7 @@ function groupCalls(): string[] {
+ 
+ describe("GroupGridView 空態(文案逐字)", () => {
+   it("零群組 → 尚無群組空態,且零請求", async () => {
+-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} />);
+     expect(screen.getByText("尚無群組 — 到自選欄建立群組")).toBeTruthy();
+     await new Promise((r) => setTimeout(r, 30));
+     expect(groupCalls()).toHaveLength(0);
+@@ -78,7 +112,7 @@ describe("GroupGridView 空態(文案逐字)", () => {
+   // R17:空群組的 codes 是空陣列,打端點只會拿回 `{"states":{}}` —— 沒有任何卡片可畫,
+   // 卻每 60s 燒一次來回。gate 在 hook 的 `enabled`,不是在畫面。
+   it("空群組(成員 0)→ 專屬空態,且零請求", async () => {
+-    wrap(<GroupGridView groups={[{ name: "空組", codes: [] }]} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={[{ name: "空組", codes: [] }]} quotes={{}} onPick={vi.fn()} active={null} />);
+     expect(screen.getByText("這個群組還沒有成員")).toBeTruthy();
+     await new Promise((r) => setTimeout(r, 30));
+     expect(groupCalls()).toHaveLength(0);
+@@ -90,7 +124,7 @@ describe("GroupGridView 空態(文案逐字)", () => {
+ // 對著一份還沒讀到的資料下結論,失敗時更會讓人以為群組被清光了。
+ describe("GroupGridView 自選三態前置(review A4)", () => {
+   it("自選載入中 → 「載入群組…」,不下結論也不請求", async () => {
+-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} wlPending />);
++    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} wlPending />);
+     expect(screen.getByText("載入群組…")).toBeTruthy();
+     expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
+     await new Promise((r) => setTimeout(r, 30));
+@@ -98,7 +132,7 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
+   });
+ 
+   it("自選載入失敗 → 「自選載入失敗」,不冒充空清單", async () => {
+-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} wlError />);
++    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} wlError />);
+     expect(screen.getByText("自選載入失敗")).toBeTruthy();
+     expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
+     await new Promise((r) => setTimeout(r, 30));
+@@ -106,14 +140,14 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
+   });
+ 
+   it("終態零群組(非載入中、非失敗)→ 才說「尚無群組」", () => {
+-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} wlPending={false} wlError={false} />);
++    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} wlPending={false} wlError={false} />);
+     expect(screen.getByText("尚無群組 — 到自選欄建立群組")).toBeTruthy();
+   });
+ 
+   // 失敗但**手上還有舊資料**(TQ 的 error + cached data)時照畫 —— 群組結構是慢變數,
+   // 上一份仍然有用;把它換成一句錯誤訊息是拿走使用者唯一能看的東西。
+   it("有群組資料時,wlError 不遮掉既有卡片", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} wlError />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} wlError />);
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+     expect(screen.queryByText("自選載入失敗")).toBeNull();
+   });
+@@ -126,7 +160,7 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
+ // 斷言靜默 vacuous:查不到元素與「群組檢視沒渲染」在 queryBy 下長得一模一樣)。
+ describe("GroupGridView 群組切換 pill", () => {
+   it("預設第一個群組;成員卡片全數渲染", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     expect(
+       screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
+     ).toBe("true");
+@@ -145,7 +179,7 @@ describe("GroupGridView 群組切換 pill", () => {
+   });
+ 
+   it("切換群組 → 改打新群組的 codes", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     await waitFor(() => expect(groupCalls()).toHaveLength(1));
+     expect(groupCalls()[0]).toContain("codes=2330,2317");
+     fireEvent.click(screen.getByRole("button", { name: "金融" }));
+@@ -161,7 +195,7 @@ describe("GroupGridView 群組切換 pill", () => {
+   // (spec 白名單 #7 amendment),不是不變行為,所以要有測試把新語意釘住。
+   it("點已選中的 pill 也回寫 localStorage(清掉 stale 舊名)", async () => {
+     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     fireEvent.click(screen.getByRole("button", { name: "半導體" }));
+     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("半導體");
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+@@ -171,7 +205,7 @@ describe("GroupGridView 群組切換 pill", () => {
+   // 不 fallback 的話畫面會停在「這個群組還沒有成員」而使用者根本沒有那一組。
+   it("記住的群組已被刪 → fallback 第一個群組", async () => {
+     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     expect(
+       screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
+     ).toBe("true");
+@@ -180,7 +214,7 @@ describe("GroupGridView 群組切換 pill", () => {
+ 
+   it("記住的群組仍在 → 沿用它(不重設回第一個)", async () => {
+     window.localStorage.setItem(STOCK_GROUP_KEY, "金融");
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
+       "true",
+     );
+@@ -219,7 +253,7 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
+   }
+ 
+   it("元件層:2 檔群組 → 2×2 矩陣格線,不走 auto-fill", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+     const grid = screen.getByTestId("group-grid");
+     expect(grid.className).toContain("grid-cols-2");
+@@ -239,7 +273,7 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
+   it("元件層:17 檔群組 → 4 欄無列軌 + content-start(不被 stretch 撐高)", async () => {
+     const codes17 = Array.from({ length: 17 }, (_, i) => String(3000 + i));
+     wrap(
+-      <GroupGridView groups={[{ name: "大群", codes: codes17 }]} quotes={{}} onPick={vi.fn()} />,
++      <GroupGridView groups={[{ name: "大群", codes: codes17 }]} quotes={{}} onPick={vi.fn()} active={null} />,
+     );
+     await waitFor(() => expect(screen.getByTestId("group-card-3000")).toBeTruthy());
+     const grid = screen.getByTestId("group-grid");
+@@ -249,32 +283,32 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
+   });
+ });
+ 
+-// SC-2:卡片要吃滿中區高度,圖跟著長高。`h-20` 由「唯一高度來源」降為**基準高**
+-// (`grow` 的 flex-basis 是 auto)—— 矩陣模式下長高吃滿格,捲動模式維持 80px。
+-// 變高後 y 向縮放可達 ~3×,線寬得靠 `vector-effect` 釘在螢幕像素(P1-5)。
++// SC-2:卡片要吃滿中區高度,圖跟著長高。
++//
++// test-infra-fix(圖換成單檔同款之後):`vector-effect` / `mini-price` 那組斷言鎖的是
++// mini 圖「viewBox 固定、靠非等比拉伸吃滿卡片」的縮放模型 —— 新的卡片圖是 **1:1**
++// (viewBox 尺寸 = 量到的 px),沒有縮放也就沒有線寬失真可補償。契約改由這一條承接:
++// 圖區 wrapper 的高**由外層指派**(useContainerSize 契約 2),而主副圖的 viewBox 寬
++// 等於量到的寬(AD-3)—— 這兩件事漂掉的症狀同樣是「卡片內容溢出格軌與下一列重疊」。
+ describe("GroupGridView 高度均分 class", () => {
+-  it("常態卡片:svg 帶 grow + h-20,價線不隨拉伸變粗", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++  it("常態卡片:圖區 wrapper 由外層指派高度,主副圖 viewBox 寬 = 量到的寬(1:1)", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+-    // SVG 的 `className` 是 SVGAnimatedString,子字串斷言得走 getAttribute(spec P2-1)
+-    const svgClass = card.querySelector("svg")?.getAttribute("class") ?? "";
+-    expect(svgClass).toContain("grow");
+-    expect(svgClass).toContain("h-20");
+-    // 有 ref 時價線是紅綠 clip 的**兩條** polyline(review A-4/B-3):querySelector
+-    // 只驗得到 bull 那條,bear 掉了 vector-effect 是零錯誤訊號的視覺回歸
+-    const lines = card.querySelectorAll('[data-testid="mini-price"]');
+-    expect(lines.length).toBe(2);
+-    for (const el of lines) {
+-      expect(el.getAttribute("vector-effect")).toBe("non-scaling-stroke");
++    const svgs = [...card.querySelectorAll("svg")];
++    expect(svgs.length).toBe(2); // 主圖 + 量副圖
++    // FakeResizeObserver 餵的是 300×200(見檔頭)
++    for (const svg of svgs) {
++      expect(svg.getAttribute("viewBox")!.split(" ")[2]).toBe("300");
+     }
+-    expect(card.querySelector('[data-testid="mini-ref"]')?.getAttribute("vector-effect")).toBe(
+-      "non-scaling-stroke",
+-    );
++    // 恆存 wrapper 的高由 flex 指派:掛成 h-20 之類的內容高會形成「量多高就設多高」
++    const wrapper = svgs[0]!.parentElement!.parentElement!;
++    expect(wrapper.className).toContain("flex-1");
++    expect(wrapper.className).toContain("min-h-0");
+   });
+ 
+   it("無資料佔位也跟著長高(不然整列高度對不齊)", async () => {
+     states["2330"] = state({ no_data: true, minutes: {} });
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const el = await screen.findByText("無資料");
+     expect(el.className).toContain("grow");
+     expect(el.className).toContain("h-20");
+@@ -283,7 +317,7 @@ describe("GroupGridView 高度均分 class", () => {
+ 
+ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => {
+   it("常態 → 代碼 + 名稱 + mini 分時圖", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+     expect(card.textContent).toContain("2330");
+     expect(card.textContent).toContain("台積電");
+@@ -292,7 +326,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () =>
+ 
+   it("backfilling → 「回補中…」,不呈現半截圖", async () => {
+     states["2330"] = state({ backfilling: true, minutes: {} });
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+     await waitFor(() => expect(card.textContent).toContain("回補中…"));
+     expect(card.querySelector("svg")).toBeNull();
+@@ -306,7 +340,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () =>
+   // 優先序:回補中同時 no_data 時要說「回補中…」—— 回補完就會有資料,說「無資料」是錯的
+   it("backfilling 與 noData 同時為真 → 顯示「回補中…」", async () => {
+     states["2330"] = state({ backfilling: true, no_data: true, minutes: {} });
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+     await waitFor(() => expect(card.textContent).toContain("回補中…"));
+     expect(card.textContent).not.toContain("無資料");
+@@ -317,7 +351,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () =>
+   // 而重回補在鎖停日的漲跌停值變化上是常態。
+   it("backfilling 但已有分鐘資料 → 照畫圖,不蓋「回補中…」", async () => {
+     states["2330"] = state({ backfilling: true });
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+     await waitFor(() => expect(card.querySelector("svg")).toBeTruthy());
+     expect(card.textContent).not.toContain("回補中…");
+@@ -325,7 +359,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () =>
+ 
+   it("noData → 「無資料」占位", async () => {
+     states["2330"] = state({ no_data: true, minutes: {} });
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+     await waitFor(() => expect(card.textContent).toContain("無資料"));
+     expect(card.querySelector("svg")).toBeNull();
+@@ -336,7 +370,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () =>
+     fetchMock.mockImplementation(
+       async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
+     );
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     await waitFor(() =>
+       expect(screen.getByTestId("group-card-2330").textContent).toContain("無資料"),
+     );
+@@ -350,7 +384,7 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
+       "2330": quote({ p: 2_400_000, chg_pct: 3.45 }),
+       "2317": quote({ p: 1_900_000, chg_pct: -5 }),
+     };
+-    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />);
+     const a = await screen.findByTestId("group-quote-2330");
+     expect(a.textContent).toContain("2400");
+     expect(a.textContent).toContain("+3.45%");
+@@ -364,7 +398,7 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
+   // —— 那會讓昨收看起來像今天的走勢(同側欄既有紀律)。
+   it("尚無成交 → 顯示參考價 + 「參考」,中性色不套漲跌", async () => {
+     const quotes = { "2330": quote({ p: null, ref: 2_320_000 }) };
+-    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />);
+     const el = await screen.findByTestId("group-quote-2330");
+     expect(el.textContent).toContain("2320");
+     expect(el.textContent).toContain("參考");
+@@ -375,27 +409,31 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
+   // B3-b:`toContain("-")` 對 `-5.00%`、`2,380-` 之類的內容全都會通過 —— 缺值占位要
+   // 的是**整格只有一個 `-`**,寫成全等才鎖得住
+   it("p 與 ref 皆缺 → 整格只有「-」", async () => {
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const el = await screen.findByTestId("group-quote-2330");
+     expect(el.textContent).toBe("-");
+   });
+ });
+ 
+-// review B1:mini 圖的末點延伸(design R10)靠 `quotes[code].p` 餵進去。這條接線斷掉
++// review B1:卡片圖的末點延伸(design R10)靠 `quotes[code].p` 餵進去。這條接線斷掉
+ // 的失效樣態是「卡片上的線最久停在一分鐘前」—— 圖還在、值也對,只是不動;而群組檢視
+-// 存在的理由正是「現在有沒有一起動」。元件單測只驗到 `MiniIntradayChart` 收到 liveP
+-// 之後會延伸,驗不到 GroupGridView 有沒有真的把 quote 接上去。
++// 存在的理由正是「現在有沒有一起動」。lib 層的 `extendMinutes` 測試驗不到 GroupGridView
++// 有沒有真的把 quote 接上去。
++//
++// test-infra-fix:`mini-price` testid 隨 MiniIntradayChart 一起消失,改以主價線
++// (有昨收 → 紅綠 clip 兩條中的 bull 那條)的 points 數計 —— 契約「liveP 有值 →
++// 多一點」逐字不變。
+ describe("GroupGridView 現價延伸接線(review B1)", () => {
+   function pointCount(card: HTMLElement): number {
+-    const el = card.querySelector('[data-testid="mini-price"]');
++    const el = card.querySelector('polyline[class*="stroke-bull"]');
+     return (el?.getAttribute("points") ?? "").split(" ").filter(Boolean).length;
+   }
+ 
+-  it("盤中且 quote 有現價 → mini 圖比 snapshot 多一個延伸點", async () => {
++  it("盤中且 quote 有現價 → 卡片圖比 snapshot 多一個延伸點", async () => {
+     vi.useFakeTimers({ shouldAdvanceTime: true });
+     vi.setSystemTime(new Date(2026, 7, 6, 10, 0, 30)); // 10:00,窗內且非 09:00 那一格
+     try {
+-      const { unmount } = wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
++      const { unmount } = wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+       const bare = await screen.findByTestId("group-card-2330");
+       await waitFor(() => expect(pointCount(bare)).toBe(1)); // 基準:snapshot 只有 09:00 一格
+       unmount();
+@@ -404,7 +442,7 @@ describe("GroupGridView 現價延伸接線(review B1)", () => {
+         <GroupGridView
+           groups={GROUPS}
+           quotes={{ "2330": quote({ p: 2_400_000, chg_pct: 3.45 }) }}
+-          onPick={vi.fn()}
++          onPick={vi.fn()} active={null}
+         />,
+       );
+       const live = await screen.findByTestId("group-card-2330");
+@@ -416,13 +454,102 @@ describe("GroupGridView 現價延伸接線(review B1)", () => {
+ });
+ 
+ describe("GroupGridView 點卡片切主檔", () => {
++  // test-infra-fix:卡片內容改成整張分時圖後外層由 `<button>` 換成
++  // `<div role="button">`(review R11:button 的內容模型只吃 phrasing content)——
++  // 斷言改看 role,「整張卡片可點且有可及名稱」這個契約不變。
+   it("整張卡片是一顆 button(有可及名稱),點了回呼該股", async () => {
+     const onPick = vi.fn();
+-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} />);
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} active={null} />);
+     const card = await screen.findByTestId("group-card-2330");
+-    expect(card.tagName).toBe("BUTTON");
++    expect(card.getAttribute("role")).toBe("button");
+     expect(card.getAttribute("aria-label")).toBe("查看 2330 台積電");
+     fireEvent.click(card);
+     expect(onPick).toHaveBeenCalledWith("2330");
+   });
+ });
++
++// 🟢 SC-3 / AD-6:選中態。點卡片不再切回單檔(檢視停在圖牆)之後,「右欄閃電梯現在
++// 瞄的是哪一檔」在畫面上就沒有別的指認方式了 —— 沒有選中框的失效樣態是使用者按下
++// 買賣鍵才發現打到別檔,而那是真錢。
++describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
++  it("active 的那張卡 aria-pressed=true,其餘 false", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2330" />);
++    const picked = await screen.findByTestId("group-card-2330");
++    expect(picked.getAttribute("aria-pressed")).toBe("true");
++    // 反向斷言不可省:少了它,「每張卡恆 pressed」照樣全綠
++    expect(screen.getByTestId("group-card-2317").getAttribute("aria-pressed")).toBe("false");
++  });
++
++  // 視覺層(D):`ring` 是 box-shadow **不佔版面** —— 換成加粗 border 的話選中那一格
++  // 的內容寬會少 2px,矩陣上看得出一格在跳。這條鎖的是「選中看得見 + 不動版面」。
++  it("選中的卡片畫 accent 框(ring 不佔版面),未選中維持 border-line", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2330" />);
++    const picked = await screen.findByTestId("group-card-2330");
++    expect(picked.className).toContain("border-accent");
++    expect(picked.className).toContain("ring-accent");
++    const other = screen.getByTestId("group-card-2317");
++    expect(other.className).toContain("border-line");
++    expect(other.className).not.toContain("ring-accent");
++  });
++
++  it("active 不在當前群組 → 全部未選中(edge 6)", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2881" />);
++    const first = await screen.findByTestId("group-card-2330");
++    expect(first.getAttribute("aria-pressed")).toBe("false");
++    expect(screen.getByTestId("group-card-2317").getAttribute("aria-pressed")).toBe("false");
++  });
++
++  it("卡片是 role=button 容器(不是 <button>)且鍵盤按 Enter / Space 也切得動", async () => {
++    const onPick = vi.fn();
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} active={null} />);
++    const card = await screen.findByTestId("group-card-2330");
++    // AD-4 / review R11:卡片內有完整分時圖(svg + 標籤),`<button>` 的內容模型只吃
++    // phrasing content —— 巢狀互動元素在瀏覽器裡是未定義行為
++    expect(card.getAttribute("role")).toBe("button");
++    expect(card.getAttribute("tabindex")).toBe("0");
++    fireEvent.keyDown(card, { key: "Enter" });
++    expect(onPick).toHaveBeenCalledWith("2330");
++    fireEvent.keyDown(card, { key: " " });
++    expect(onPick).toHaveBeenCalledTimes(2);
++  });
++});
++
++// 🟢 SC-2 / D4:toggle 四鈕上提到圖牆頂(卡片內不得有 button —— 點它會連帶切主檔)。
++describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
++  it("pill 列右側有均價 / CDP / MA / 量分佈 四鈕", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
++    await screen.findByTestId("group-card-2330");
++    for (const [key, label] of [
++      ["vwap", "均價"],
++      ["cdp", "CDP"],
++      ["ma", "MA"],
++      ["vp", "量分佈"],
++    ] as const) {
++      const btn = screen.getByTestId(`grid-toggle-${key}`);
++      expect(btn.textContent).toBe(label);
++      // AD-5:可用性是 per-code 的(某一檔沒日線 ≠ 整列不能按),整列一律可按
++      expect(btn.hasAttribute("disabled")).toBe(false);
++    }
++  });
++
++  it("卡片內不得有 button(巢狀互動元素 + 點 toggle 會連帶切主檔)", async () => {
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
++    const card = await screen.findByTestId("group-card-2330");
++    expect(card.querySelectorAll("button").length).toBe(0);
++  });
++});
++
++// 🟢 edge 9:已訂閱、非 noData、非回補中,但**窗內**一格分鐘都沒有(盤前只有 08:59
++// 的試撮分鐘 / 盤後只剩 13:31+)。整份幾何的 priceLine 會是空的,而 StockIntradayChart
++// 自己的早退框帶 border/bg —— 掛在卡片內就是框中框。卡片自己接住,佔位樣式同三態。
++describe("GroupGridView 窗內無分鐘(edge 9)", () => {
++  it("只有 08:59 的窗外分鐘 → 卡片自佔位「尚無成交」,不掛圖", async () => {
++    states["2330"] = state({ minutes: { "539": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } } });
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
++    const card = await screen.findByTestId("group-card-2330");
++    await waitFor(() => expect(card.textContent).toContain("尚無成交"));
++    expect(card.querySelector("svg")).toBeNull();
++    // 同群組的另一檔窗內有分鐘 → 照畫(佔位是 per-card 的,不是整面)
++    expect(screen.getByTestId("group-card-2317").querySelector("svg")).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/stock/GroupGridView.toggle.test.tsx b/frontend/src/components/stock/GroupGridView.toggle.test.tsx
+new file mode 100644
+index 00000000..8528a7cf
+--- /dev/null
++++ b/frontend/src/components/stock/GroupGridView.toggle.test.tsx
+@@ -0,0 +1,122 @@
++/** @vitest-environment jsdom */
++/** SC-2:圖牆頂那一列 toggle → **每一張卡**同步顯示 / 隱藏該層。
++ *
++ *  **獨立檔**:vp 直方圖的資料來自 group-state 的 `vp` 鍵(包 B,尚未落地),
++ *  `useGroupSnapshots` 現在還不解析它 —— 走真 fetch 的話 `snap.vp` 恆空,
++ *  「開了 toggle 有沒有出現長條」永遠測不到(全綠但 vacuous)。改 mock hook 直接餵一份
++ *  含 vp 的 Map:這裡要鎖的是「圖牆頂的 toggle 狀態有沒有傳到每一張卡」這條線,
++ *  不是 vp 的折法(那是包 B 的 parity fixture 在管)。
++ *  `vi.mock` 是檔案級 + hoisted,與同目錄走真 hook 的測試不能共存。 */
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { GroupGridView } from "@/components/stock/GroupGridView";
++import { CHART_TOGGLES_KEY } from "@/lib/constants";
++import type { MinuteAgg, VpCell } from "@/lib/stock-accum";
++import type { Group } from "@/lib/watchlist-model";
++import { wrap } from "@/test-utils";
++
++const GROUPS: Group[] = [{ name: "半導體", codes: ["2330", "2317"] }];
++
++function snap() {
++  return {
++    minutes: new Map<number, MinuteAgg>([
++      [540, { c: 2_380_000, v: 10, i: 3, o: 7, u: 0, h: 2_385_000, l: 2_375_000 }],
++      [541, { c: 2_390_000, v: 6, i: 2, o: 4, u: 0, h: 2_392_000, l: 2_386_000 }],
++    ]),
++    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++    noData: false,
++    backfilling: false,
++    vwap: 2_385_000,
++    high: 2_392_000,
++    low: 2_375_000,
++    vp: new Map<number, VpCell>([
++      [2_380_000, { t: 10, o: 7, i: 3 }],
++      [2_390_000, { t: 6, o: 4, i: 2 }],
++    ]),
++  };
++}
++
++vi.mock("@/hooks/useGroupSnapshots", () => ({
++  useGroupSnapshots: () => ({ data: { "2330": snap(), "2317": snap() }, isPending: false }),
++}));
++
++/** 同 GroupGridView.test.tsx:量到尺寸卡片才畫圖(AD-3),jsdom 沒有 RO。 */
++class FakeResizeObserver {
++  private readonly cb: ResizeObserverCallback;
++
++  constructor(cb: ResizeObserverCallback) {
++    this.cb = cb;
++  }
++
++  observe(node: Element): void {
++    this.cb(
++      [{ target: node, contentRect: { width: 300, height: 200 } } as ResizeObserverEntry],
++      this as unknown as ResizeObserver,
++    );
++  }
++
++  unobserve(): void {}
++
++  disconnect(): void {}
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(
++      async () => new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
++    ),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++function vpBarCount(): number {
++  return document.querySelectorAll('[data-testid="vp-bar"]').length;
++}
++
++describe("GroupGridView toggle 列同步每張卡(SC-2)", () => {
++  it("localStorage 預種 vp:false → 掛載即無長條;按「量分佈」→ 兩張卡同時出現、再按同時消失", async () => {
++    window.localStorage.setItem(
++      CHART_TOGGLES_KEY,
++      JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, vp: false, v: 2 }),
++    );
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
++    await screen.findByTestId("group-card-2330");
++    // 存檔優先於預設(vp 預設是開的)—— 這條同時鎖住「重整後狀態保留」
++    expect(vpBarCount()).toBe(0);
++
++    fireEvent.click(screen.getByTestId("grid-toggle-vp"));
++    // 兩張卡各兩根:同步是**每一張**卡都吃到,不是只有第一張(卡片各持一份 toggles
++    // 的話點一次只會亮一張,而那正是把 useChartToggles 留在卡片內的失效樣態)
++    await waitFor(() => expect(vpBarCount()).toBe(4));
++    expect(screen.getByTestId("grid-toggle-vp").getAttribute("aria-pressed")).toBe("true");
++
++    fireEvent.click(screen.getByTestId("grid-toggle-vp"));
++    await waitFor(() => expect(vpBarCount()).toBe(0));
++    expect(
++      JSON.parse(window.localStorage.getItem(CHART_TOGGLES_KEY) ?? "{}") as { vp?: boolean },
++    ).toMatchObject({ vp: false });
++  });
++
++  it("均價 toggle 同樣傳到每張卡(VWAP 白線 + 右緣價位標)", async () => {
++    window.localStorage.setItem(
++      CHART_TOGGLES_KEY,
++      JSON.stringify({ vwap: false, cdp: false, ma: false, bb: true, vp: false, v: 2 }),
++    );
++    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
++    await screen.findByTestId("group-card-2330");
++    expect(document.querySelectorAll('[data-testid="edge-price-vwap"]').length).toBe(0);
++
++    fireEvent.click(screen.getByTestId("grid-toggle-vwap"));
++    await waitFor(() =>
++      expect(document.querySelectorAll('[data-testid="edge-price-vwap"]').length).toBe(2),
++    );
++  });
++});
+diff --git a/frontend/src/components/stock/GroupGridView.tsx b/frontend/src/components/stock/GroupGridView.tsx
+index 859cd442..540e0580 100644
+--- a/frontend/src/components/stock/GroupGridView.tsx
++++ b/frontend/src/components/stock/GroupGridView.tsx
+@@ -1,23 +1,29 @@
+ import { memo, useCallback, useEffect, useRef, useState } from "react";
+ 
+-import { MiniIntradayChart } from "@/components/stock/MiniIntradayChart";
++import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
++import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
+ import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
+ import type { WatchlistQuote } from "@/hooks/useStockStream";
+ import { STOCK_GROUP_KEY } from "@/lib/constants";
+ import { fmt, fmtPct } from "@/lib/format";
++import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
+ import { cn } from "@/lib/utils";
+ import type { Group } from "@/lib/watchlist-model";
+ 
+-/** 群組檢視:自選群組成員的 mini 分時圖牆(group-grid SC-3)。
++/** 群組檢視:自選群組成員的分時圖牆(group-grid SC-3)。
+  *
+- *  要回答的問題是「同產業今天有沒有一起動」—— 所以卡片只留代碼 / 名稱 / 現價 /
+- *  一條分時線,沒有座標軸、沒有五檔、沒有明細。點任一張卡片切回單檔檢視看細節。 */
++ *  要回答的問題是「同產業今天有沒有一起動」。卡片上的圖是**單檔頁同一份渲染碼**
++ *  (D4):價位刻度 / VWAP / CDP / 量分佈 / 高低標 / hover 十字線全在 —— 圖牆就是
++ *  盯盤主畫面,細節在這裡看得完。點卡片只換右欄閃電梯的標的(D3),檢視不跳;
++ *  要進單檔頁走檢視 pill。 */
+ 
+ interface Props {
+   groups: Group[];
+-  /** WS `watchlist_quote`(每秒);現價與漲跌幅來源,同時餵 mini 圖的末點延伸 */
++  /** WS `watchlist_quote`(每秒);現價與漲跌幅來源,同時餵卡片圖的末點延伸 */
+   quotes: Record<string, WatchlistQuote>;
+   onPick: (code: string) => void;
++  /** 右欄閃電梯現在瞄的股號 → 該卡畫選中框(AD-6)。不在當前群組 = 全部未選中(edge 6) */
++  active: string | null;
+   /** 自選 query 首載中(review A4)。`groups` 空陣列有三種意思,分不出來的話「還在載」
+    *  與「後端出事」都會被講成「你還沒建群組」—— 而只有真的零群組才該叫人去建。 */
+   wlPending?: boolean;
+@@ -107,11 +113,21 @@ const GroupCard = memo(function GroupCard({
+   code,
+   snap,
+   quote,
++  active,
++  toggles,
++  sizeClass,
+   onPick,
+ }: {
+   code: string;
+   snap: GroupSnapshot | undefined;
+   quote: WatchlistQuote | undefined;
++  active: boolean;
++  /** 圖牆頂那一份(**不含 `set`**:`useChartToggles.set` 每次 render 都是新 identity,
++   *  傳進來會讓 memo 每輪都比不過 —— 而 toggle 鈕不在卡片內,卡片只讀) */
++  toggles: ChartToggles;
++  /** ≤16 檔 = `min-h-0`(高度由 1fr 列軌指派);>16 檔 = `h-56` 固定高(AD-7)。
++   *  字面值由父層挑好傳進來:Tailwind JIT 掃的是原始碼字面,拼出來的 class 不會被產出。 */
++  sizeClass: string;
+   onPick: (code: string) => void;
+ }) {
+   const name = snap?.meta?.name ?? "";
+@@ -123,12 +139,33 @@ const GroupCard = memo(function GroupCard({
+   // 而重回補在鎖停日的漲跌停值變化上是常態。
+   const backfilling = snap?.backfilling === true && (snap?.minutes.size ?? 0) === 0;
+   return (
+-    <button
+-      type="button"
++    // `<div role="button">` 而不是 `<button>`(review R11):卡片內容從一條線變成一整張
++    // 分時圖(svg + 文字標籤 + hover 十字線),而 `<button>` 的內容模型只吃 phrasing
++    // content —— 巢狀非 phrasing 內容在瀏覽器裡是未定義行為。可及性靠 role + tabIndex
++    // + aria-label + 鍵盤 handler 自己補回來(原生 button 免費附帶的那三件)。
++    <div
++      role="button"
++      tabIndex={0}
+       data-testid={`group-card-${code}`}
+       aria-label={name === "" ? `查看 ${code}` : `查看 ${code} ${name}`}
++      aria-pressed={active}
+       onClick={() => onPick(code)}
+-      className="flex flex-col gap-1 rounded border border-line p-2 text-left hover:border-accent"
++      onKeyDown={(e) => {
++        // Space 的 preventDefault 不可省:role=button 的 div 不吃原生鍵盤語意,
++        // 空白鍵的預設行為是捲動頁面 —— 圖牆會在選檔的同時往下跳一屏。
++        if (e.key === "Enter" || e.key === " ") {
++          e.preventDefault();
++          onPick(code);
++        }
++      }}
++      className={cn(
++        "flex cursor-pointer flex-col gap-1 rounded border p-2 text-left hover:border-accent",
++        // 選中框(AD-6):`ring` 是 box-shadow,**不佔版面** —— 用 border-2 加粗的話
++        // 選中的那一格會比別格少 2px 內容寬,矩陣上看得出來一格在跳。
++        // hover 只換 border 色,選中另加一圈 ring:兩者疊在同一張卡時仍分得出來。
++        active ? "border-accent ring-1 ring-accent" : "border-line",
++        sizeClass,
++      )}
+     >
+       <span className="flex min-w-0 items-baseline gap-1">
+         <span className="font-mono text-sm text-ink">{code}</span>
+@@ -139,15 +176,39 @@ const GroupCard = memo(function GroupCard({
+         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">回補中…</span>
+       ) : snap === undefined || snap.noData ? (
+         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">無資料</span>
++      ) : !hasWindowedMinutes(snap.minutes) ? (
++        // edge 9:已訂閱、有 meta,但**窗內**一格分鐘都沒有(盤前只有 08:59 的試撮分鐘、
++        // 盤後只剩 13:31+)。判準不是 `minutes.size === 0` —— 窗外分鐘照樣讓它非空,
++        // 而幾何的 priceLine 仍是空的。卡片自己接住:進 StockIntradayChart 會撞它自己
++        // 那個帶 border/bg 的早退框,在卡片裡就是框中框。
++        <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">尚無成交</span>
+       ) : (
+-        <MiniIntradayChart minutes={snap.minutes} meta={snap.meta} liveP={quote?.p ?? null} />
++        <CardIntradayChart
++          code={code}
++          snap={snap}
++          liveP={quote?.p ?? null}
++          toggles={toggles}
++        />
+       )}
+-    </button>
++    </div>
+   );
+ });
+ 
+-export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Props) {
++/** 圖牆頂 toggle 列的四鈕(SC-2)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
++ *  叫不同名字,使用者得自己對照。**恆可按**(AD-5):可用性是 per-code 的(某一檔沒
++ *  日線 ≠ 整列該反灰),個別卡片取不到 overlay 時該卡不畫,整列不動。 */
++const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp"; label: string }[] = [
++  { key: "vwap", label: "均價" },
++  { key: "cdp", label: "CDP" },
++  { key: "ma", label: "MA" },
++  { key: "vp", label: "量分佈" },
++];
++
++export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError }: Props) {
+   const [picked, setPicked] = useState<string | null>(loadGroupName);
++  // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
++  // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
++  const { toggles, set } = useChartToggles();
+   // 群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名(edge 5)——
+   // fallback 第一個而不是停在空態,否則畫面會說「這個群組還沒有成員」而使用者
+   // 根本沒有那一組。衍生值不入 state:同步 state 與 props 正是 effect anti-pattern。
+@@ -184,10 +245,11 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
+           不渲染群組檢視」)與 746/750(鎖「重掛後還原群組檢視」)四處都靠它接住 ——
+           拿掉的失效樣態是那四條斷言靜默 vacuous(查不到元素與「沒渲染」在 queryBy 下
+           長得一模一樣),不是紅燈。 */}
++      <div className="flex shrink-0 flex-wrap items-center gap-2">
+       <div
+         role="group"
+         aria-label="選擇群組"
+-        className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-ink-muted"
++        className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
+       >
+         <span>群組</span>
+         {groups.map((g) => (
+@@ -209,6 +271,27 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
+             {g.name}
+           </button>
+         ))}
++      </div>
++        {/* toggle 列與群組 pill 同一行(SC-2):圖牆頂只有一列 chrome,兩列會吃掉
++            卡片的高。**不放進 `role="group"` 容器內** —— 那個容器的可及名稱是
++            「選擇群組」,圖層開關不屬於它。 */}
++        <div className="ml-auto flex shrink-0 gap-1">
++          {GRID_TOGGLES.map(({ key, label }) => (
++            <button
++              key={key}
++              type="button"
++              data-testid={`grid-toggle-${key}`}
++              aria-pressed={toggles[key]}
++              onClick={() => set(key, !toggles[key])}
++              className={cn(
++                "rounded border px-2 py-0.5 text-xs",
++                toggles[key] ? "border-accent text-accent" : "border-line text-ink-dim",
++              )}
++            >
++              {label}
++            </button>
++          ))}
++        </div>
+       </div>
+       {codes.length === 0 ? (
+         <div className="flex flex-1 items-center justify-center">
+@@ -242,6 +325,12 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
+               code={code}
+               snap={data?.[code]}
+               quote={quotes[code]}
++              active={code === active}
++              toggles={toggles}
++              // >16 檔走捲動軌:列高是 auto,卡片得自己有確定高度,否則
++              // `useContainerSize` 量到的高由內容決定 → 「量多高就設多高」的回饋迴圈
++              // (RO loop 告警)。≤16 檔由 1fr 列軌指派高,卡片只要能縮(min-h-0)。
++              sizeClass={codes.length > 16 ? "h-56" : "min-h-0"}
+               onPick={pick}
+             />
+           ))}
+diff --git a/frontend/src/components/stock/MiniIntradayChart.test.tsx b/frontend/src/components/stock/MiniIntradayChart.test.tsx
+deleted file mode 100644
+index a888b4f5..00000000
+--- a/frontend/src/components/stock/MiniIntradayChart.test.tsx
++++ /dev/null
+@@ -1,166 +0,0 @@
+-/** @vitest-environment jsdom */
+-import { cleanup, render } from "@testing-library/react";
+-import { afterEach, describe, expect, it, vi } from "vitest";
+-
+-import { extendMinutes, MiniIntradayChart, MINI_H, MINI_W } from "@/components/stock/MiniIntradayChart";
+-import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
+-import { PAD_Y, X_END_MIN, X_START_MIN, Y_AXIS_W } from "@/lib/stock-intraday-svg";
+-
+-afterEach(() => {
+-  cleanup();
+-  vi.useRealTimers();
+-});
+-
+-const META: StockMeta = {
+-  name: "台積電",
+-  ref: 2_320_000,
+-  upper: 2_550_000,
+-  lower: 2_090_000,
+-  y_vol: 100,
+-};
+-
+-function agg(over: Partial<MinuteAgg> = {}): MinuteAgg {
+-  return { c: 2_320_000, v: 1, i: 0, o: 1, u: 0, h: null, l: null, ...over };
+-}
+-
+-function xs(points: string): number[] {
+-  return points.split(" ").map((p) => Number(p.split(",")[0]));
+-}
+-
+-function ys(points: string): number[] {
+-  return points.split(" ").map((p) => Number(p.split(",")[1]));
+-}
+-
+-function priceLinePoints(container: HTMLElement): string {
+-  const el = container.querySelector('[data-testid="mini-price"]');
+-  return el?.getAttribute("points") ?? "";
+-}
+-
+-describe("MiniIntradayChart 幾何補償(design v3 R5/R13)", () => {
+-  it("viewBox 平移裁掉左右軸帶 —— 只留繪圖區", () => {
+-    const { container } = render(
+-      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={META} liveP={null} />,
+-    );
+-    const svg = container.querySelector("svg")!;
+-    expect(svg.getAttribute("viewBox")).toBe(`${Y_AXIS_W} 0 ${MINI_W} ${MINI_H}`);
+-  });
+-
+-  it("走勢線 x 滿版:09:00 貼左緣、13:30 貼右緣", () => {
+-    const minutes = new Map<number, MinuteAgg>([
+-      [X_START_MIN, agg()],
+-      [X_END_MIN, agg()],
+-    ]);
+-    const { container } = render(<MiniIntradayChart minutes={minutes} meta={META} liveP={null} />);
+-    const x = xs(priceLinePoints(container));
+-    expect(x[0]).toBeCloseTo(Y_AXIS_W, 1);
+-    expect(x[x.length - 1]!).toBeCloseTo(Y_AXIS_W + MINI_W, 1);
+-  });
+-
+-  // R13:height 帶 X_LABEL_H 補償 → 內容落在 [PAD_Y, MINI_H − PAD_Y],上下對稱各留一份。
+-  // v2 的「上緣 0、下緣 4px」不對稱會讓漲停那根貼頂的 stroke 被裁掉半條。
+-  it("漲停 / 跌停都不被裁:所有 y ∈ [PAD_Y, MINI_H − PAD_Y] 且兩端恰貼邊", () => {
+-    const minutes = new Map<number, MinuteAgg>([
+-      [X_START_MIN, agg({ c: META.upper! })],
+-      [X_START_MIN + 1, agg({ c: META.ref! })],
+-      [X_END_MIN, agg({ c: META.lower! })],
+-    ]);
+-    const { container } = render(<MiniIntradayChart minutes={minutes} meta={META} liveP={null} />);
+-    const y = ys(priceLinePoints(container));
+-    for (const v of y) {
+-      expect(v).toBeGreaterThanOrEqual(PAD_Y);
+-      expect(v).toBeLessThanOrEqual(MINI_H - PAD_Y);
+-    }
+-    expect(y[0]).toBeCloseTo(PAD_Y, 1);
+-    expect(y[y.length - 1]!).toBeCloseTo(MINI_H - PAD_Y, 1);
+-  });
+-
+-  it("meta.ref 有值 → 畫平盤虛線 + 紅綠面積", () => {
+-    const { container } = render(
+-      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={META} liveP={null} />,
+-    );
+-    expect(container.querySelector('[data-testid="mini-ref"]')).toBeTruthy();
+-    expect(container.querySelectorAll('[data-testid="mini-area"]').length).toBeGreaterThan(0);
+-    // 平盤虛線的線寬/疏密釘螢幕像素(review A-4):矩陣卡片變高後掉了它是純視覺回歸
+-    expect(
+-      container.querySelector('[data-testid="mini-ref"]')?.getAttribute("vector-effect"),
+-    ).toBe("non-scaling-stroke");
+-  });
+-
+-  it("meta.ref 缺 → 無平盤可言:不畫虛線也不填色", () => {
+-    const noRef: StockMeta = { ...META, ref: null };
+-    const { container } = render(
+-      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={noRef} liveP={null} />,
+-    );
+-    expect(container.querySelector('[data-testid="mini-ref"]')).toBeNull();
+-    expect(container.querySelectorAll('[data-testid="mini-area"]').length).toBe(0);
+-    // 走勢線本身仍要畫得出來
+-    expect(priceLinePoints(container)).not.toBe("");
+-    // 無 ref 分支是**第三條** polyline(stroke-accent),GroupGridView 的元件測試
+-    // 只蓋得到有 ref 的兩條 —— 這裡不鎖,冷門股(無昨收)的線寬回歸零訊號(review A-4)
+-    expect(
+-      container.querySelector('[data-testid="mini-price"]')?.getAttribute("vector-effect"),
+-    ).toBe("non-scaling-stroke");
+-  });
+-
+-  // 卡片只有 15rem 寬,任何刻度文字都塞不下也讀不到 —— 「無座標軸」是 SC-3 的明文要求。
+-  // (clipPath 內的 <rect> 是紅綠切半的機制,不是版面元素,所以只鎖文字。)
+-  it("mini 圖不掛座標軸文字(SC-3:無座標軸)", () => {
+-    const { container } = render(
+-      <MiniIntradayChart minutes={new Map([[X_START_MIN, agg()]])} meta={META} liveP={null} />,
+-    );
+-    expect(container.querySelectorAll("text").length).toBe(0);
+-  });
+-});
+-
+-// R10 延伸規則:分鐘鍵 = 本機時鐘分鐘,僅當落在 [09:00, 13:30] 且 liveP > 0 才延伸。
+-describe("extendMinutes(R10 現價延伸)", () => {
+-  const at = (h: number, m: number) => new Date(2026, 7, 6, h, m, 30);
+-
+-  it("既有 bucket → 只覆寫 c,量與高低原樣", () => {
+-    const src = new Map<number, MinuteAgg>([
+-      [600, { c: 2_300_000, v: 12, i: 5, o: 6, u: 1, h: 2_310_000, l: 2_295_000 }],
+-    ]);
+-    const out = extendMinutes(src, 2_345_000, at(10, 0));
+-    expect(out.get(600)).toEqual({
+-      c: 2_345_000,
+-      v: 12,
+-      i: 5,
+-      o: 6,
+-      u: 1,
+-      h: 2_310_000,
+-      l: 2_295_000,
+-    });
+-    // 淺拷不就地改:原 Map 不可被污染
+-    expect(src.get(600)?.c).toBe(2_300_000);
+-  });
+-
+-  it("無 bucket → 新建零量點(h/l 為 null,不冒充)", () => {
+-    const out = extendMinutes(new Map(), 2_345_000, at(10, 0));
+-    expect(out.get(600)).toEqual({ c: 2_345_000, v: 0, i: 0, o: 0, u: 0, h: null, l: null });
+-  });
+-
+-  it("窗外時刻(13:31 之後 / 09:00 之前)不延伸", () => {
+-    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
+-    expect(extendMinutes(src, 2_345_000, at(14, 0))).toBe(src);
+-    expect(extendMinutes(src, 2_345_000, at(8, 50))).toBe(src);
+-  });
+-
+-  it("liveP 為 null / 0 / 負 → 不延伸(0 是 TC4 的「不可得」不是價格)", () => {
+-    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
+-    expect(extendMinutes(src, null, at(10, 0))).toBe(src);
+-    expect(extendMinutes(src, 0, at(10, 0))).toBe(src);
+-    expect(extendMinutes(src, -5, at(10, 0))).toBe(src);
+-  });
+-
+-  // 元件不開「注入 now」的測試專用 prop —— 那條路只有測試會走,鎖不到真實時鐘那一支。
+-  // 改動系統時鐘,測到的是元件內真的呼叫了 `new Date()`。
+-  it("延伸後的點真的畫進走勢線(不是只算不畫)", () => {
+-    vi.useFakeTimers({ shouldAdvanceTime: true });
+-    vi.setSystemTime(at(10, 0));
+-    const minutes = new Map<number, MinuteAgg>([[X_START_MIN, agg()]]);
+-    const { container } = render(
+-      <MiniIntradayChart minutes={minutes} meta={META} liveP={2_500_000} />,
+-    );
+-    expect(xs(priceLinePoints(container)).length).toBe(2);
+-  });
+-});
+diff --git a/frontend/src/components/stock/MiniIntradayChart.tsx b/frontend/src/components/stock/MiniIntradayChart.tsx
+deleted file mode 100644
+index 164e670d..00000000
+--- a/frontend/src/components/stock/MiniIntradayChart.tsx
++++ /dev/null
+@@ -1,195 +0,0 @@
+-import { useId, useMemo } from "react";
+-
+-import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
+-import {
+-  buildIntradayGeometry,
+-  R_AXIS_W,
+-  X_END_MIN,
+-  X_LABEL_H,
+-  X_START_MIN,
+-  Y_AXIS_W,
+-} from "@/lib/stock-intraday-svg";
+-import { pts } from "@/lib/svg-points";
+-import { safeIdToken } from "@/lib/utils";
+-
+-/** 群組卡片內的迷你分時圖(group-grid SC-3)。
+- *
+- *  **重用 `buildIntradayGeometry` 而不是另寫一份小尺寸幾何**:y 域(漲跌停 vs 對稱
+- *  autofit)、`hasRef` 的紅綠語意、0 = 不可得的歸一,這幾條規則各自漂一份的代價是
+- *  「主圖與卡片對同一檔股票畫出不同的圖」,而且沒有任何測試比得到兩者。
+- *
+- *  代價是那份幾何自帶左右軸帶(`Y_AXIS_W` / `R_AXIS_W`)與底部時間帶(`X_LABEL_H`)
+- *  ——卡片只有 15rem 寬,軸帶會吃掉近半。**幾何補償(design R5/R13)**:
+- *  傳進去的尺寸把三條帶都加回去,再用 viewBox 把它們裁掉。
+- *
+- *    width  = MINI_W + Y_AXIS_W + R_AXIS_W  → `plotWidth` 恰為 MINI_W,x ∈ [Y_AXIS_W, Y_AXIS_W+MINI_W]
+- *    height = MINI_H + X_LABEL_H            → `plotH` = MINI_H − 2·PAD_Y,y ∈ [PAD_Y, MINI_H−PAD_Y]
+- *    viewBox = "Y_AXIS_W 0 MINI_W MINI_H"
+- *
+- *  `height` 的 `+ X_LABEL_H` 是必要的(R13 修正 v2):不加的話上下留邊變成
+- *  「上緣 0、下緣 PAD_Y」的不對稱,漲停那根貼頂的 stroke 會被裁掉半條。 */
+-
+-export const MINI_W = 220;
+-export const MINI_H = 76;
+-
+-interface Props {
+-  minutes: Map<number, MinuteAgg>;
+-  meta: StockMeta | null;
+-  /** `watchlist_quote` 的現價(毫元);null / ≤0 = 不延伸 */
+-  liveP: number | null;
+-}
+-
+-/** 現價延伸(design R10)。分鐘級 snapshot 每 60s 才更新一次,不延伸的話卡片上的線
+- *  最久會停在一分鐘前 —— 而群組檢視的用途就是「現在有沒有一起動」。
+- *
+- *  三道限制都不是防禦性補丁:
+- *  - 分鐘鍵取**本機時鐘**(部署綁台北),窗外(盤前 / 盤後 / 隔天早上還開著頁面)
+- *    一律不延伸 —— 幾何的窗是 [09:00, 13:30],延伸到窗外的點會被 `windowedEntries`
+- *    濾掉,但延伸到**窗內錯的分鐘**(例如隔日 09:05 用的是昨天的 minutes)會靜默
+- *    畫出一條假的尾巴。
+- *  - `liveP > 0`:TC4 會送 0 表示「不可得」(鎖漲跌停的市價佇列同理),毫元價恆 > 0。
+- *  - 既有 bucket **只覆寫 `c`**:量 / 內外盤 / 高低都是後端聚合的真值,拿現價去改
+- *    它們等於偽造成交明細。無 bucket 才新建,且 `h`/`l` 給 `null` = 「這一分鐘的
+- *    高低不可知」而不是冒充等於現價。
+- *
+- *  不就地改傳入的 Map(淺拷後寫):來源是 TQ cache 的物件,污染它會讓下一次
+- *  render 拿到被改過的「快取」而看不出來。 */
+-export function extendMinutes(
+-  minutes: Map<number, MinuteAgg>,
+-  liveP: number | null,
+-  now: Date = new Date(),
+-): Map<number, MinuteAgg> {
+-  if (liveP === null || liveP <= 0) return minutes;
+-  const key = now.getHours() * 60 + now.getMinutes();
+-  if (key < X_START_MIN || key > X_END_MIN) return minutes;
+-  const next = new Map(minutes);
+-  const prev = next.get(key);
+-  next.set(
+-    key,
+-    prev === undefined
+-      ? { c: liveP, v: 0, i: 0, o: 0, u: 0, h: null, l: null }
+-      : { ...prev, c: liveP },
+-  );
+-  return next;
+-}
+-
+-export function MiniIntradayChart({ minutes, meta, liveP }: Props) {
+-  // clip id 必須全域唯一(SVG id 是 document 範圍)且只含識別字元 —— React 19 的
+-  // useId 產出 «r0» 形態,而 `url(#…)` 解析失敗在 SVG 規範下是「該元素不繪製」= 全靜默
+-  const uid = safeIdToken(useId());
+-  const above = `${uid}-mini-a`;
+-  const below = `${uid}-mini-b`;
+-  // 幾何算一次就好(review A6-1):`minutes` 最多 271 格,而群組頁最多 50 張卡片,
+-  // 父層每秒隨 `quotes` re-render 一次。deps 只列真正的輸入 —— `minutes` / `meta` 來自
+-  // TQ cache(60s 才換 identity),`liveP` 是每秒可能變的那一個。
+-  //
+-  // ⚠ `extendMinutes` 內部讀**本機時鐘**,而時鐘不在 deps 裡:整分鐘一到,只要
+-  // `liveP` 沒變就不會重算,延伸點會停在上一分鐘的格子裡最多 60 秒。可接受 ——
+-  // 盤中每秒都有報價的檔 `liveP` 本來就一直在動;真的一分鐘零成交的冷門股,
+-  // 那條線本來也沒有新資訊可畫。
+-  const g = useMemo(
+-    () =>
+-      buildIntradayGeometry(
+-        { minutes: extendMinutes(minutes, liveP), meta },
+-        { width: MINI_W + Y_AXIS_W + R_AXIS_W, height: MINI_H + X_LABEL_H },
+-      ),
+-    [minutes, liveP, meta],
+-  );
+-  const line = pts(g.priceLine);
+-  return (
+-    // `preserveAspectRatio="none"` = 非等比拉伸:卡片寬度隨 grid 欄數變,等比縮放
+-    // (letterbox)會讓同一列的圖高忽大忽小 —— 這條不變。
+-    //
+-    // 變的是尺度:矩陣佈局後卡片高度隨格高走(`grow`,h-20 只剩基準),y 向縮放可達
+-    // ~3×,原本「尺度差 <5%、線寬失真不可見」的前提不再成立。線寬改由
+-    // `vectorEffect="non-scaling-stroke"` 釘在螢幕像素,不隨 viewBox 縮放變粗;
+-    // 平盤虛線的 `strokeDasharray` 也一併改以螢幕像素計(non-scaling-stroke 把整個
+-    // stroke 運算移到 viewport 座標)—— 疏密不再隨卡片寬縮放,是明示決定(review A-2)。
+-    // y 向斜率跟著視覺放大則是「圖吃滿卡片」的本意,不補償。
+-    <svg
+-      viewBox={`${Y_AXIS_W} 0 ${MINI_W} ${MINI_H}`}
+-      preserveAspectRatio="none"
+-      className="block h-20 w-full grow"
+-    >
+-      {g.hasRef ? (
+-        <defs>
+-          {/* 平盤上下切兩半:面積與價線共用,紅漲綠跌與主圖同一套語彙 */}
+-          <clipPath id={above}>
+-            <rect x={Y_AXIS_W} y={0} width={MINI_W} height={Math.max(0, g.refY)} />
+-          </clipPath>
+-          <clipPath id={below}>
+-            <rect
+-              x={Y_AXIS_W}
+-              y={g.refY}
+-              width={MINI_W}
+-              height={Math.max(0, MINI_H - g.refY)}
+-            />
+-          </clipPath>
+-        </defs>
+-      ) : null}
+-      {g.hasRef ? (
+-        <line
+-          data-testid="mini-ref"
+-          x1={Y_AXIS_W}
+-          x2={Y_AXIS_W + MINI_W}
+-          y1={g.refY}
+-          y2={g.refY}
+-          className="stroke-line"
+-          strokeDasharray="2 3"
+-          strokeWidth={1}
+-          vectorEffect="non-scaling-stroke"
+-        />
+-      ) : null}
+-      {g.hasRef && g.areaPolygon !== "" ? (
+-        <>
+-          <polygon
+-            data-testid="mini-area"
+-            points={g.areaPolygon}
+-            className="fill-bull"
+-            fillOpacity="0.15"
+-            clipPath={`url(#${above})`}
+-          />
+-          <polygon
+-            data-testid="mini-area"
+-            points={g.areaPolygon}
+-            className="fill-bear"
+-            fillOpacity="0.15"
+-            clipPath={`url(#${below})`}
+-          />
+-        </>
+-      ) : null}
+-      {g.hasRef ? (
+-        <>
+-          <polyline
+-            data-testid="mini-price"
+-            points={line}
+-            fill="none"
+-            className="stroke-bull"
+-            strokeWidth={1.4}
+-            vectorEffect="non-scaling-stroke"
+-            clipPath={`url(#${above})`}
+-          />
+-          <polyline
+-            data-testid="mini-price"
+-            points={line}
+-            fill="none"
+-            className="stroke-bear"
+-            strokeWidth={1.4}
+-            vectorEffect="non-scaling-stroke"
+-            clipPath={`url(#${below})`}
+-          />
+-        </>
+-      ) : (
+-        // 沒有昨收就沒有「平盤」可言,紅綠會把「開盤後漲跌」誤指為「相對昨收漲跌」
+-        <polyline
+-          data-testid="mini-price"
+-          points={line}
+-          fill="none"
+-          className="stroke-accent"
+-          strokeWidth={1.4}
+-          vectorEffect="non-scaling-stroke"
+-        />
+-      )}
+-    </svg>
+-  );
+-}
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 28d57188..2245d785 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -2,7 +2,7 @@ import { memo, useId, useMemo, useState } from "react";
+ 
+ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+ import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
+-import { useChartToggles } from "@/hooks/useChartToggles";
++import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
+ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+@@ -43,8 +43,11 @@ import {
+ } from "@/lib/volume-profile";
+ import { cn, safeIdToken } from "@/lib/utils";
+ 
+-const MAIN = { width: 800, height: 260 };
+-const SUB = { width: 800, height: 70 };
++/** viewBox 寬的預設(單檔頁)。**主圖與副圖共用同一個值**,由 `width` prop 覆寫 ——
++ *  兩張圖各持一個常數的話,x 對位只是靠「兩個數字碰巧相等」在維持(見副圖 hover 線)。 */
++const DEFAULT_W = 800;
++const MAIN = { height: 260 };
++const SUB = { height: 70 };
+ /** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁。
+  *  寬度**直接取 `Y_AXIS_W`** 不另寫一份數字:兩份靠註解維持相等的話,任一方改動就讓
+  *  「hover 價位標壓在走勢線上」這個本輪要修的症狀復發,而且沒有測試會發現。 */
+@@ -612,11 +615,36 @@ interface Props {
+   stkfut?: boolean;
+ }
+ 
+-export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = false }: Props) {
+-  const { toggles, set } = useChartToggles();
+-  const mainW = MAIN.width;
++export type ChartVariant = "page" | "card";
++
++interface CoreProps extends Props {
++  /** toggles **受控**:單檔頁由 `useChartToggles` 餵、群組圖牆由圖牆頂那一份餵。
++   *  core 自己不持有 storage 狀態 —— 卡片各持一份的話,同一張圖牆上 50 張卡會各自
++   *  讀寫同一個 localStorage key(W-7)。 */
++  toggles: ChartToggles;
++  /** 未傳 = 唯讀(card 變體:toggle 鈕在圖牆頂,卡片內不得有 button) */
++  onToggle?: (key: keyof ChartToggles, value: boolean) => void;
++  /** `"page"` = 單檔頁完整 chrome(figure + toggle 鈕列 + 說明列 + readout 六欄);
++   *  `"card"` = 群組卡片(div + readout 前四欄),圖形語彙完全相同。 */
++  variant: ChartVariant;
++  /** viewBox 寬(主副圖共用)。未傳 = `DEFAULT_W`。 */
++  width?: number;
++}
++
++export function IntradayChartCore({
++  accum,
++  toggles,
++  onToggle,
++  variant,
++  width,
++  mainHeight,
++  subHeight,
++  stkfut = false,
++}: CoreProps) {
++  const card = variant === "card";
++  // 主副圖共用同一個 viewBox 寬:分開兩份的話,副圖 hover 線的 x 換算與主圖會各自漂
++  const w = width ?? DEFAULT_W;
+   const mainH = mainHeight ?? MAIN.height;
+-  const subW = SUB.width;
+   const subH = subHeight ?? SUB.height;
+   // 模組層常數 → identity 穩定,直接進 memo 子元件的 props 不會打穿 memo
+   const xw = stkfut ? STKFUT_WINDOW : SPOT_WINDOW;
+@@ -644,34 +672,34 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+     () =>
+       buildIntradayGeometry(
+         { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+-        { width: mainW, height: mainH },
++        { width: w, height: mainH },
+         xw,
+       ),
+-    // mainW / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
++    // w / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
+     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)。
+     // `xw` 同理 —— 漏了它,現貨↔期貨切換時幾何會停在舊窗上。
+-    [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH, xw],
++    [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw],
+   );
+ 
+   // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
+   // 價線 / 刻度 / 反演算完即丟。`meta` 不影響量的幾何,故不入 deps。
+   const subEnergy = useMemo(
+-    () => buildEnergyBars(accum.minutes, { width: subW, height: subH }, xw),
+-    [accum.minutes, subW, subH, xw],
++    () => buildEnergyBars(accum.minutes, { width: w, height: subH }, xw),
++    [accum.minutes, w, subH, xw],
+   );
+ 
+   // 價位別成交量(SC-3)。**必經 useMemo**:hover 每個 mousemove 都 re-render 本元件,
+   // 陣列每次新 identity 會打穿 ChartStatic 的 memo,整層線圖跟著重建。
+   // 關掉時回**同一個空陣列語意**的重算即可 —— 依賴沒變就不會重算,不需要另設常數。
+-  // `mainW` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
++  // `w` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
+   // 幾何與長條會各自依據不同的畫布寬算,bar 的滿寬比例靜默漂掉。
+   // 期貨態不畫 VP:`accum.vp` 由 `foldVp` 折出,而 foldVp 的分鐘窗仍是現貨窗
+   // (本輪不參數化 —— 期貨態既然不畫,參數化只是加一條沒人走的分支)。
+   // 直方圖若照畫,08:45–08:59 與 13:31–13:45 的成交會整段缺席而畫面看不出來。
+   const vpEnabled = toggles.vp && !stkfut;
+   const vpBars = useMemo(
+-    () => (vpEnabled ? buildVpBars(accum.vp, g, mainW) : []),
+-    [accum.vp, g, vpEnabled, mainW],
++    () => (vpEnabled ? buildVpBars(accum.vp, g, w) : []),
++    [accum.vp, g, vpEnabled, w],
+   );
+ 
+   const overlay = overlayQ.data ?? null;
+@@ -728,7 +756,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+   const shownAgg = hoverAgg ?? (shownMin !== null ? accum.minutes.get(shownMin) : undefined);
+   const shownChg =
+     shownAgg !== undefined && ref ? chgPct(shownAgg.c, ref) : null;
+-  const fields: ReadoutField[] =
++  const allFields: ReadoutField[] =
+     shownAgg === undefined || shownMin === null
+       ? [
+           { label: "", value: "-" },
+@@ -754,16 +782,19 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+           { label: "外", value: String(shownAgg.o), tone: "bull" },
+           { label: "內", value: String(shownAgg.i), tone: "bear" },
+         ];
++  // 卡片只有 ~250px 寬,六欄會擠成一團 —— 砍的是**外 / 內**兩欄(說明列已同時省略,
++  // 內外盤在卡片上完全不出現,語意一致),留下時間 / 價 / % / 量(AD-4)。
++  const fields = card ? allFields.slice(0, 4) : allFields;
+ 
+   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
+   const timeTagX =
+-    hoverMin !== null ? clampTagX(minuteToX(hoverMin, mainW, xw), TIME_TAG.w, mainW) : null;
++    hoverMin !== null ? clampTagX(minuteToX(hoverMin, w, xw), TIME_TAG.w, w) : null;
+   const timeTagSpan: [number, number] | null =
+     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
+ 
+   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
+     const rect = e.currentTarget.getBoundingClientRect();
+-    const { x, y } = toSvgPoint(e, rect, { width: mainW, height: mainH });
++    const { x, y } = toSvgPoint(e, rect, { width: w, height: mainH });
+     const min = g.minuteOf(x);
+     const ry = Math.round(y);
+     // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
+@@ -780,13 +811,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+     { key: "vp", label: "量分佈", available: !stkfut },
+   ];
+ 
+-  return (
+-    // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
+-    // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
+-    <figure className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4">
++  const body = (
++    <>
+       {/* 頂列:左資訊條、右 toggle。高度以 rem 固定,與 K 線頂列逐項對稱(SC-6.7) */}
+       <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
+         <ChartReadout fields={fields} hovering={hoverAgg !== undefined} />
++        {/* card 變體**不得有 button**:卡片外層自己是 role=button(點卡片切主檔),
++            內層再放按鈕會讓點 toggle 同時切主檔,而且巢狀互動元素不合法 */}
++        {card ? null : (
+         <div className="flex shrink-0 gap-1">
+         {toggleDefs.map(({ key, label, available }) => (
+           <button
+@@ -795,7 +827,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+             aria-pressed={toggles[key] && available}
+             disabled={!available}
+             title={available ? undefined : stkfut ? "期貨合約本輪不提供" : "無日線資料"}
+-            onClick={() => set(key, !toggles[key])}
++            onClick={() => onToggle?.(key, !toggles[key])}
+             className={cn(
+               "rounded border px-2 py-0.5 text-xs",
+               toggles[key] && available
+@@ -808,9 +840,10 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+           </button>
+         ))}
+         </div>
++        )}
+       </div>
+       <svg
+-        viewBox={`0 0 ${mainW} ${mainH}`}
++        viewBox={`0 0 ${w} ${mainH}`}
+         className="w-full"
+         style={{ touchAction: "pan-y" }}
+         role="img"
+@@ -820,7 +853,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+       >
+         <ChartStatic
+           g={g}
+-          w={mainW}
++          w={w}
+           h={mainH}
+           refMilli={ref}
+           showVwap={toggles.vwap}
+@@ -833,7 +866,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+           xw={xw}
+           hourTicks={hourTicks}
+         />
+-        <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
++        <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
+         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
+             會與右緣疊線價位標(R_AXIS_W 帶)重疊;現價本來就在資訊列與報價 header
+             各有一份,圈的作用是「線走到哪」而不是再報一次價。 */}
+@@ -851,8 +884,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+               <>
+                 <line
+                   data-testid="crosshair-v"
+-                  x1={minuteToX(hoverMin, mainW, xw)}
+-                  x2={minuteToX(hoverMin, mainW, xw)}
++                  x1={minuteToX(hoverMin, w, xw)}
++                  x2={minuteToX(hoverMin, w, xw)}
+                   y1={0}
+                   y2={plotBottom}
+                   className="stroke-ink-muted"
+@@ -861,7 +894,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+                 />
+                 {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
+                 <circle
+-                  cx={minuteToX(hoverMin, mainW, xw)}
++                  cx={minuteToX(hoverMin, w, xw)}
+                   cy={g.toY(hoverAgg.c)}
+                   r={2.5}
+                   className="fill-ink"
+@@ -871,7 +904,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+             <line
+               data-testid="crosshair-h"
+               x1={Y_AXIS_W}
+-              x2={mainW - R_AXIS_W}
++              x2={w - R_AXIS_W}
+               y1={hover.y}
+               y2={hover.y}
+               className="stroke-ink-muted"
+@@ -951,15 +984,15 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+       </svg>
+       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
+           多出的固定 4px 會讓比例隨容器寬漂移。 */}
+-      <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="成交量">
+-        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={subW} h={subH} xw={xw} />
++      <svg viewBox={`0 0 ${w} ${subH}`} className="w-full" role="img" aria-label="成交量">
++        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={w} h={subH} xw={xw} />
+         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
+         {hoverMin !== null ? (
+-          // 這條線畫在 subW 的 viewBox 裡 → x 必須用 subW 換算(L-19)。今日 MAIN.width
+-          // 與 SUB.width 同值,故輸出逐值相同;用 mainW 只是靠兩個常數碰巧相等在維持對位。
++          // 這條線畫在副圖的 viewBox 裡 → x 必須用副圖的寬換算(L-19)。主副圖現在共用
++          // **同一個 `w`**(不再是兩個「碰巧相等」的常數),對位由建構保證。
+           <line
+-            x1={minuteToX(hoverMin, subW, xw)}
+-            x2={minuteToX(hoverMin, subW, xw)}
++            x1={minuteToX(hoverMin, w, xw)}
++            x2={minuteToX(hoverMin, w, xw)}
+             y1={0}
+             y2={subH}
+             className="stroke-ink-muted"
+@@ -978,7 +1011,9 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+           降對比,讓失真的數字自己承認。 */}
+       {/* `h-4` 是固定 16px,任何換行都會直接溢出壓到下方元素(Phase 5 review P2)——
+           左段本輪從 ~33 字元長到 ~46 字元,窄容器時會換行。兩段各自 nowrap,
+-          左段可截斷、右段不縮。 */}
++          左段可截斷、右段不縮。
++          card 變體整列省略(AD-4):卡片寬度裝不下,且 `<figcaption>` 在 `<div>` 下無語意。 */}
++      {card ? null : (
+       <figcaption className="mt-1 flex h-4 items-center justify-between gap-2 font-mono text-xs text-ink-dim">
+         <span className="min-w-0 truncate whitespace-nowrap">
+           外盤 <span className="text-bull">{side.outer}</span> · 內盤{" "}
+@@ -1004,6 +1039,36 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
+           VWAP {accum.vwap != null ? fmt(accum.vwap) : "-"}
+         </span>
+       </figcaption>
++      )}
++    </>
++  );
++
++  // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
++  // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
++  // card 變體外層是 `<div>` 且無 border / bg / padding(AD-4):卡片自己已經有框,
++  // 再套一層就是框中框;`<figure>` 也失去語意(說明列已省略)。
++  return card ? (
++    <div className="flex min-h-0 flex-1 flex-col select-none">{body}</div>
++  ) : (
++    <figure className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4">
++      {body}
+     </figure>
+   );
+ }
++
++/** 單檔頁分時圖(非受控:toggles 自持)。**簽名不變**(W-1/SC-4)—— 圖牆的卡片走
++ *  `IntradayChartCore` 的 card 變體,兩者是同一份渲染碼。 */
++export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = false }: Props) {
++  const { toggles, set } = useChartToggles();
++  return (
++    <IntradayChartCore
++      accum={accum}
++      toggles={toggles}
++      onToggle={set}
++      variant="page"
++      mainHeight={mainHeight}
++      subHeight={subHeight}
++      stkfut={stkfut}
++    />
++  );
++}
+diff --git a/frontend/src/components/stock/StockIntradayChart.variant.test.tsx b/frontend/src/components/stock/StockIntradayChart.variant.test.tsx
+new file mode 100644
+index 00000000..3576b56f
+--- /dev/null
++++ b/frontend/src/components/stock/StockIntradayChart.variant.test.tsx
+@@ -0,0 +1,129 @@
++/** @vitest-environment jsdom */
++import { cleanup } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { IntradayChartCore, StockIntradayChart } from "@/components/stock/StockIntradayChart";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import { fromSnapshot } from "@/lib/stock-accum";
++import { wrap } from "@/test-utils";
++
++/** 圖牆卡片與單檔頁共用同一份渲染碼(change-spec §6 A):**圖形語彙全同、文字 chrome 精簡**。
++ *
++ *  這一檔鎖的是兩個變體的差集(AD-4)。差集若靜默漂掉,症狀是卡片內長出 toggle 鈕
++ *  (點它會同時把主檔切走,巢狀互動元素)或多一層框中框 —— 既有的 StockIntradayChart
++ *  測試全在 page 變體上,對 card 變體零覆蓋。 */
++
++const OVERLAY = { cdp: null, ma5: null, ma20: null, date: "2026-08-14" };
++
++beforeEach(() => {
++  window.localStorage.removeItem("copycat-chart-toggles");
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async () => new Response(JSON.stringify(OVERLAY))),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.restoreAllMocks();
++});
++
++const ACCUM = fromSnapshot({
++  code: "2330",
++  seq: 2,
++  last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 12 },
++  vwap: 2_380_000,
++  minutes: {
++    "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_395_000, l: 2_370_000 },
++    "542": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_385_000 },
++  },
++  ticks: [],
++  book: null,
++  // 當日高低是 day-high / day-low 標記的來源(等值反查 minute 的 h / l)
++  high: 2_395_000,
++  low: 2_370_000,
++  meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++});
++
++const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: true };
++
++const CARD_W = 246;
++
++function card() {
++  return wrap(
++    <IntradayChartCore
++      accum={ACCUM}
++      toggles={TOGGLES}
++      variant="card"
++      width={CARD_W}
++      mainHeight={140}
++      subHeight={38}
++    />,
++  );
++}
++
++describe("IntradayChartCore variant=card", () => {
++  it("不 render toggle 鈕列 —— 卡片外層自己是 role=button,內層不得有 button", () => {
++    const { container } = card();
++    expect(container.querySelectorAll("button").length).toBe(0);
++  });
++
++  it("不 render figcaption 說明列(卡片寬度裝不下外/內盤/判定率)", () => {
++    const { container } = card();
++    expect(container.querySelector("figcaption")).toBeNull();
++  });
++
++  it("外層是 div 不是 figure,且無 border / bg / padding(卡片自己已有框)", () => {
++    const { container } = card();
++    const root = container.firstElementChild!;
++    expect(root.tagName).toBe("DIV");
++    expect(container.querySelector("figure")).toBeNull();
++    const cls = root.className;
++    expect(cls).not.toContain("border");
++    expect(cls).not.toContain("bg-surface");
++    expect(cls).not.toContain("p-4");
++  });
++
++  it("readout 只給前 4 欄(時間 / 價 / % / 量),外與內兩欄省略", () => {
++    const { container } = card();
++    const readout = container.querySelector('[data-testid="chart-readout"]')!;
++    expect(readout.children.length).toBe(4);
++    expect(readout.textContent).not.toContain("外");
++    expect(readout.textContent).not.toContain("內");
++  });
++
++  it("主圖與副圖的 viewBox 寬相等且等於 width prop(共用單一 w,不再靠兩常數碰巧相等)", () => {
++    const { container } = card();
++    const svgs = [...container.querySelectorAll("svg")];
++    expect(svgs.length).toBe(2);
++    const widths = svgs.map((s) => s.getAttribute("viewBox")!.split(" ")[2]);
++    expect(widths).toEqual([String(CARD_W), String(CARD_W)]);
++  });
++
++  it("圖形語彙與單檔頁相同:價線 / VP 長條 / 高低標記 / 現價圈 / 量副圖 / 時間標都在", () => {
++    const { container } = card();
++    expect(container.querySelector('polyline[class*="stroke-bull"]')).toBeTruthy();
++    expect(container.querySelector('[data-testid="day-high"]')).toBeTruthy();
++    expect(container.querySelector('[data-testid="last-dot"]')).toBeTruthy();
++    expect(container.querySelector('[data-testid="energy-bar"]')).toBeTruthy();
++    expect(container.querySelector('[data-testid="y-tick-price"]')).toBeTruthy();
++  });
++});
++
++describe("IntradayChartCore variant=page(單檔頁 chrome 全在)", () => {
++  it("toggle 四鈕 + figcaption + figure 外層", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    expect(container.querySelectorAll("button").length).toBe(4);
++    expect(container.querySelector("figcaption")).toBeTruthy();
++    expect(container.firstElementChild!.tagName).toBe("FIGURE");
++  });
++
++  it("readout 六欄(外 / 內兩欄在)", () => {
++    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
++    const readout = container.querySelector('[data-testid="chart-readout"]')!;
++    expect(readout.children.length).toBe(6);
++    expect(readout.textContent).toContain("外");
++    expect(readout.textContent).toContain("內");
++  });
++});
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index af97c031..d9c1efdc 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -688,7 +688,11 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+     expect(screen.queryByText("載入中…")).toBeNull();
+   });
+ 
+-  it("點卡片 → onSelect 該股 + 自動切回單檔檢視", async () => {
++  // 🔴 group-grid-full-chart SC-3:點卡片的意圖改了。卡片上現在是**單檔同款**的完整
++  // 分時圖 —— 要看的細節就在圖牆上,點下去是「把右欄閃電梯的標的換成這一檔」,不是
++  // 「離開圖牆去看單檔頁」。自動切走的舊行為會讓每次換標的都得再點一次「群組」回來,
++  // 而盯盤時圖牆本身就是主畫面。進單檔的路徑只剩檢視 pill(D3)。
++  it("點卡片 → onSelect 該股,檢視仍停在群組", async () => {
+     mockGroupApi();
+     const onSelect = vi.fn();
+     wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
+@@ -696,8 +700,9 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+     const card = await screen.findByTestId("group-card-2317");
+     fireEvent.click(card);
+     expect(onSelect).toHaveBeenCalledWith("2317");
+-    await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
+-    expect(screen.queryByLabelText("選擇群組")).toBeNull();
++    // 兩側都要釘:群組列還在(沒被切走)+ 單檔的下半列沒有回來(不是兩個檢視同時掛)
++    expect(screen.getByLabelText("選擇群組")).toBeTruthy();
++    expect(screen.queryByTestId("stock-lower-row")).toBeNull();
+   });
+ 
+   // review A4 的接線半:三態要分得出來,`wl` 的 isPending / isError 就得真的傳下去。
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 3c996531..5f461435 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -215,11 +215,14 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+             wlPending={wlPending}
+             wlError={wlError}
+             quotes={watchlist}
+-            onPick={(picked) => {
+-              onSelect(picked);
+-              // 點卡片的意圖是「看這一檔的細節」,留在群組檢視等於沒反應
+-              selectView("single");
+-            }}
++            // 選中框的真相源(AD-6):檢視停在群組後,「閃電梯瞄的是哪一檔」在畫面上
++            // 沒有別的指認方式 —— 與主圖 / 右欄同一個 `code`,不另存一份。
++            active={code}
++            // 點卡片 = **只換右欄閃電梯的標的**,檢視停在群組(SC-3 / D3)。卡片上已是
++            // 單檔同款的完整分時圖,細節就在圖牆上看得完;自動切回單檔的舊行為會讓每次
++            // 換標的都得再點一次「群組」回來,而盯盤時圖牆本身就是主畫面。
++            // 進單檔的路徑只剩檢視 pill。
++            onPick={onSelect}
+           />
+         ) : code === null ? (
+           <div className="flex flex-1 items-center justify-center">
+diff --git a/frontend/src/hooks/useGroupSnapshots.test.tsx b/frontend/src/hooks/useGroupSnapshots.test.tsx
+index b503e50f..3a2dd654 100644
+--- a/frontend/src/hooks/useGroupSnapshots.test.tsx
++++ b/frontend/src/hooks/useGroupSnapshots.test.tsx
+@@ -6,12 +6,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { groupPollInterval, useGroupSnapshots } from "@/hooks/useGroupSnapshots";
+ 
+-/** 後端 `/api/stock/group-state` 的 payload 形(design v3 SC-4;R15 寫死三鍵 + backfilling) */
++/** 後端 `/api/stock/group-state` 的 payload 形(design v3 SC-4;R15 寫死三鍵 + backfilling)。
++ *
++ *  `2330` 帶 light_snapshot 的四個加鍵(vwap/high/low/vp);`2317` **刻意不帶** ——
++ *  那一格同時是「舊後端」的降級路徑(change-spec §3),缺鍵必須降成 null / 空 Map
++ *  而不是 undefined:卡片對 undefined 與 null 的分支不同,而漏帶不會有任何錯誤。 */
+ const BODY = {
+   states: {
+     "2330": {
+       minutes: { "540": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0, h: 2_385_000, l: 2_375_000 } },
+       meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++      vwap: 2_379_000,
++      high: 2_385_000,
++      low: 2_375_000,
++      vp: { "2380000": [10, 7, 3], "2375000": [4, 1, 3] },
+       no_data: false,
+       backfilling: false,
+     },
+@@ -67,6 +75,31 @@ describe("useGroupSnapshots", () => {
+     expect(b.backfilling).toBe(true);
+   });
+ 
++  it("vwap / high / low 帶出;vp 轉成 number key 的 Map(卡片圖與單檔頁同款所需)", async () => {
++    const hook = renderHook(() => useGroupSnapshots(["2330", "2317"], true), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toBeTruthy());
++    const a = hook.result.current.data!["2330"]!;
++    expect(a.vwap).toBe(2_379_000);
++    expect(a.high).toBe(2_385_000);
++    expect(a.low).toBe(2_375_000);
++    expect(a.vp instanceof Map).toBe(true);
++    // key 是 number 不是字串:幾何層拿它與毫元價位比對,字串鍵的 Map 永遠 miss
++    expect(a.vp.get(2_380_000)).toEqual({ t: 10, o: 7, i: 3 });
++    expect(a.vp.get(2_375_000)).toEqual({ t: 4, o: 1, i: 3 });
++    expect(a.vp.size).toBe(2);
++  });
++
++  it("舊後端缺四鍵 → null / 空 Map 降級(不是 undefined)", async () => {
++    const hook = renderHook(() => useGroupSnapshots(["2330", "2317"], true), { wrapper });
++    await waitFor(() => expect(hook.result.current.data).toBeTruthy());
++    const b = hook.result.current.data!["2317"]!;
++    expect(b.vwap).toBeNull();
++    expect(b.high).toBeNull();
++    expect(b.low).toBeNull();
++    expect(b.vp instanceof Map).toBe(true);
++    expect(b.vp.size).toBe(0);
++  });
++
+   it("空 codes → 零請求(R17:空群組不打端點)", async () => {
+     renderHook(() => useGroupSnapshots([], true), { wrapper });
+     await new Promise((r) => setTimeout(r, 50));
+diff --git a/frontend/src/hooks/useGroupSnapshots.ts b/frontend/src/hooks/useGroupSnapshots.ts
+index d73dc47a..4660c233 100644
+--- a/frontend/src/hooks/useGroupSnapshots.ts
++++ b/frontend/src/hooks/useGroupSnapshots.ts
+@@ -1,7 +1,7 @@
+ import { useQuery } from "@tanstack/react-query";
+ 
+ import { parseError } from "@/lib/api-error";
+-import { minutesFromRecord, type MinuteAgg, type StockMeta } from "@/lib/stock-accum";
++import { minutesFromRecord, type MinuteAgg, type StockMeta, type VpCell } from "@/lib/stock-accum";
+ import { inTradingHours } from "@/lib/trading-hours";
+ 
+ /** 群組檢視的成員狀態(group-grid SC-4)。
+@@ -10,8 +10,13 @@ import { inTradingHours } from "@/lib/trading-hours";
+  *  群組檢視每分鐘對最多 50 檔各要一次 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結
+  *  而畫面上只表現為「圖不動了」,沒有任何錯誤訊號(design R1)。
+  *
+- *  payload 只有 minutes / meta 兩份資料(`ticks` 是數千筆,50 檔一起送等於把 batch
+- *  端點變成頻寬炸彈)+ 兩個旗標。 */
++ *  payload 沒有 `ticks`(數千筆,50 檔一起送等於把 batch 端點變成頻寬炸彈),但帶
++ *  它的**聚合**:`vwap` / `high` / `low` / `vp` —— 卡片圖要與單檔頁「完全同款」
++ *  (VWAP 白線 / 日高低圈 / VP 條 + POC),而由 minutes 在前端近似會畫出與單檔頁
++ *  對不上的圖,兩份數字都看起來對(change-spec AD-1)。
++ *
++ *  **結構相容 `GroupLikeSnapshot`**(`lib/stock-accum.ts`)—— `accumFromGroupSnapshot`
++ *  吃的是那個結構型別,lib 不反向 import 本檔。 */
+ export interface GroupSnapshot {
+   minutes: Map<number, MinuteAgg>;
+   meta: StockMeta | null;
+@@ -19,6 +24,13 @@ export interface GroupSnapshot {
+   noData: boolean;
+   /** 今日回補尚未落地:卡片顯示「回補中…」而不是呈現半截圖 */
+   backfilling: boolean;
++  /** 後端逐 tick 維護的當日 VWAP / 高 / 低(毫元);舊後端缺鍵 → `null` = 不可得 */
++  vwap: number | null;
++  high: number | null;
++  low: number | null;
++  /** 價位別成交量(key = 已 snap 的毫元檔位)。**必填**:缺鍵降級成空 Map 而不是
++   *  undefined —— 消費端對兩者的分支不同,而漏帶不會有任何錯誤訊號。 */
++  vp: Map<number, VpCell>;
+ }
+ 
+ const POLL_MS = 60_000;
+@@ -28,6 +40,30 @@ interface RawState {
+   meta?: StockMeta | null;
+   no_data?: boolean;
+   backfilling?: boolean;
++  /** 以下四鍵為後端 light_snapshot 的加鍵;**選填** —— 舊後端不送(§3 additive) */
++  vwap?: number | null;
++  high?: number | null;
++  low?: number | null;
++  /** 緊湊陣列形 `{ "<毫元檔位>": [總張, 外, 內] }`(JSON 物件鍵只能是字串) */
++  vp?: Record<string, [number, number, number]>;
++}
++
++/** 後端 vp(字串鍵 + 緊湊陣列)→ 前端 Map。
++ *
++ *  **key 轉 number 不可省**:幾何層拿毫元價位去 `vp.get(priceMilli)`,字串鍵的 Map
++ *  對它永遠 miss —— VP 條整排消失,而沒有任何型別或測試會抗議(`Map.get` 的鍵型別
++ *  在 `Map<number, …>` 宣告下由 TS 擋,但這份 Map 是從 JSON 現建的)。
++ *
++ *  緊湊陣列而不是 `{t,o,i}` 物件是 wire 形的選擇(50 檔 × 數百檔位 × 三個鍵名);
++ *  展開成具名欄位就在這裡一次做完,消費端看到的與 `foldVp` 的產物同形。 */
++function vpFromRecord(
++  rec: Record<string, [number, number, number]> | undefined | null,
++): Map<number, VpCell> {
++  const vp = new Map<number, VpCell>();
++  for (const [price, [t, o, i]] of Object.entries(rec ?? {})) {
++    vp.set(Number(price), { t, o, i });
++  }
++  return vp;
+ }
+ 
+ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapshot>> {
+@@ -43,6 +79,12 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
+       meta: raw.meta ?? null,
+       noData: raw.no_data ?? false,
+       backfilling: raw.backfilling ?? false,
++      // 缺鍵(舊後端)一律降級成「不可得」而不是近似:拿分鐘資料折一份前端版 VWAP /
++      // VP 出來,畫面會與單檔頁的同一檔對不上,而兩個數字都看起來對(§3)
++      vwap: raw.vwap ?? null,
++      high: raw.high ?? null,
++      low: raw.low ?? null,
++      vp: vpFromRecord(raw.vp),
+     };
+   }
+   return out;
+diff --git a/frontend/src/lib/chart-frame.card.test.ts b/frontend/src/lib/chart-frame.card.test.ts
+new file mode 100644
+index 00000000..b52c5e05
+--- /dev/null
++++ b/frontend/src/lib/chart-frame.card.test.ts
+@@ -0,0 +1,51 @@
++import { describe, expect, it } from "vitest";
++
++import { CARD_CHROME, cardSvgBox } from "@/lib/chart-frame";
++
++/** 群組卡片變體的尺度換算(change-spec AD-3)。
++ *
++ *  卡片與單檔頁的模型不同:單檔頁是「viewBox 寬固定 800、反解 viewBox 高」,
++ *  卡片是**1:1**(viewBox 寬 = 量到的 px 寬),讓 svg 內的 rem 字級與單檔頁同量級 ——
++ *  800 寬的 viewBox 掛進 250px 卡片,0.5625rem 的刻度會縮成 3px。 */
++
++describe("cardSvgBox", () => {
++  it("量測為 0 / 可用高 ≤ 0 → usable:false(量到之前不畫圖)", () => {
++    expect(cardSvgBox({ width: 0, height: 200 }).usable).toBe(false);
++    expect(cardSvgBox({ width: -1, height: 200 }).usable).toBe(false);
++    // 高度只夠 readout 列 + 安全邊 → 沒有畫圖的空間
++    expect(cardSvgBox({ width: 240, height: CARD_CHROME.readoutRow + 2 }).usable).toBe(false);
++    expect(cardSvgBox({ width: 240, height: 0 }).usable).toBe(false);
++  });
++
++  it("width = 量到的 px 寬(1:1,四捨五入成整數)", () => {
++    expect(cardSvgBox({ width: 246.4, height: 200 }).width).toBe(246);
++    expect(cardSvgBox({ width: 246.6, height: 200 }).width).toBe(247);
++  });
++
++  it("主 + 副圖高相加 = 可用高(減法拆,不會因四捨五入溢出軌道)", () => {
++    for (const h of [120, 173, 224, 300, 451]) {
++      const box = cardSvgBox({ width: 250, height: h });
++      const usable = h - CARD_CHROME.readoutRow - 2;
++      expect(box.mainH + box.subH).toBe(usable);
++      expect(box.usable).toBe(true);
++    }
++  });
++
++  it("主 : 副 = 260 : 330(與單檔頁 MAIN/SUB 同比例)", () => {
++    const usable = 330;
++    const box = cardSvgBox({ width: 250, height: usable + CARD_CHROME.readoutRow + 2 });
++    expect(box.mainH).toBe(260);
++    expect(box.subH).toBe(70);
++  });
++
++  it("readoutRow = h-[1.375rem](22)+ mb-1(4)—— 與 CHART_FRAME.topRow 同一份口徑", () => {
++    expect(CARD_CHROME.readoutRow).toBe(26);
++  });
++
++  it("usable:false 時尺寸全為 0(呼叫端拿去畫也不會生出負的 viewBox)", () => {
++    const box = cardSvgBox({ width: 0, height: 0 });
++    expect(box.width).toBe(0);
++    expect(box.mainH).toBe(0);
++    expect(box.subH).toBe(0);
++  });
++});
+diff --git a/frontend/src/lib/chart-frame.ts b/frontend/src/lib/chart-frame.ts
+index 19530fdf..aee99eec 100644
+--- a/frontend/src/lib/chart-frame.ts
++++ b/frontend/src/lib/chart-frame.ts
+@@ -29,6 +29,42 @@ export const CHART_FRAME = {
+   bottomRow: 20,
+ } as const;
+ 
++/** 群組卡片變體的框外 chrome(px @ root font-size 16)。**與 `CHART_FRAME` 分開** ——
++ *  卡片沒有 figure 的 padding / border,也沒有底部說明列,只剩 readout 那一列;
++ *  硬套 `CHART_FRAME` 會多扣 84px,在 250px 高的卡片上等於三分之一張圖。 */
++export const CARD_CHROME = {
++  /** readout 列 h-[1.375rem](22)+ mb-1(4);與 `CHART_FRAME.topRow` 同一份口徑 */
++  readoutRow: 26,
++} as const;
++
++/** 主圖佔可用高的比例分子 / 分母 = 單檔頁 `MAIN.height` : `MAIN.height + SUB.height`。
++ *  比例寫在這裡而不是元件裡:元件端另算一次的話,卡片的主副比會與單檔頁靜默岔開。 */
++const CARD_MAIN_RATIO = 260 / 330;
++
++export interface CardSvgBox {
++  /** viewBox 寬 = 量到的 px 寬(1:1);**主圖與副圖共用** */
++  width: number;
++  mainH: number;
++  subH: number;
++  usable: boolean;
++}
++
++/** 卡片圖區 wrapper 的量測尺寸 → 主 / 副圖的 viewBox 尺寸(1:1)。
++ *
++ *  `−2` 安全邊與 `svgBox` 同理:誤差方向恆為「略短」,多 1px 就會讓卡片內容溢出格軌
++ *  (矩陣佈局的列軌壓不住 overflow visible 的 item,會與下一列重疊而不是乾淨捲動)。
++ *
++ *  兩張圖的高用**減法**拆而不是各自 round:各自 round 時 `mainH + subH` 可能比可用高
++ *  多 1px,而那 1px 正好是溢軌的臨界。 */
++export function cardSvgBox(size: Size): CardSvgBox {
++  const usable = size.height - CARD_CHROME.readoutRow - 2;
++  if (size.width <= 0 || usable <= 0) {
++    return { width: 0, mainH: 0, subH: 0, usable: false };
++  }
++  const mainH = Math.round(usable * CARD_MAIN_RATIO);
++  return { width: Math.round(size.width), mainH, subH: usable - mainH, usable: true };
++}
++
+ export interface SvgBox {
+   /** svg 該渲染多高(px) */
+   renderPx: number;
+diff --git a/frontend/src/lib/stock-accum.test.ts b/frontend/src/lib/stock-accum.test.ts
+index 907674f2..94372c7e 100644
+--- a/frontend/src/lib/stock-accum.test.ts
++++ b/frontend/src/lib/stock-accum.test.ts
+@@ -1,6 +1,14 @@
+-import { describe, expect, it } from "vitest";
++import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+-import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
++import {
++  accumFromGroupSnapshot,
++  applyTick,
++  extendMinutes,
++  fromSnapshot,
++  type MinuteAgg,
++  type StockAccum,
++  type StockTickMsg,
++} from "@/lib/stock-accum";
+ import { sideSummary } from "@/lib/stock-intraday-svg";
+ 
+ const SNAP = {
+@@ -340,3 +348,173 @@ describe("vp(價位別成交量 fold,SC-1)", () => {
+     expect(vpTotal).toBeLessThan(s.outer + s.inner + s.unch); // ← 截斷簽名
+   });
+ });
++
++// R10 延伸規則:分鐘鍵 = 本機時鐘分鐘,僅當落在 [09:00, 13:30] 且 liveP > 0 才延伸。
++// (自 `components/stock/MiniIntradayChart.test.tsx` 原樣搬家 —— 函式本體已移入本檔
++//  所屬模組;元件層「延伸後的點真的畫進走勢線」那條需要 jsdom,留在原檔。)
++describe("extendMinutes(R10 現價延伸)", () => {
++  const at = (h: number, m: number) => new Date(2026, 7, 6, h, m, 30);
++
++  it("既有 bucket → 只覆寫 c,量與高低原樣", () => {
++    const src = new Map<number, MinuteAgg>([
++      [600, { c: 2_300_000, v: 12, i: 5, o: 6, u: 1, h: 2_310_000, l: 2_295_000 }],
++    ]);
++    const out = extendMinutes(src, 2_345_000, at(10, 0));
++    expect(out.get(600)).toEqual({
++      c: 2_345_000,
++      v: 12,
++      i: 5,
++      o: 6,
++      u: 1,
++      h: 2_310_000,
++      l: 2_295_000,
++    });
++    // 淺拷不就地改:原 Map 不可被污染
++    expect(src.get(600)?.c).toBe(2_300_000);
++  });
++
++  it("無 bucket → 新建零量點(h/l 為 null,不冒充)", () => {
++    const out = extendMinutes(new Map(), 2_345_000, at(10, 0));
++    expect(out.get(600)).toEqual({ c: 2_345_000, v: 0, i: 0, o: 0, u: 0, h: null, l: null });
++  });
++
++  it("窗外時刻(13:31 之後 / 09:00 之前)不延伸", () => {
++    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
++    expect(extendMinutes(src, 2_345_000, at(14, 0))).toBe(src);
++    expect(extendMinutes(src, 2_345_000, at(8, 50))).toBe(src);
++  });
++
++  it("liveP 為 null / 0 / 負 → 不延伸(0 是 TC4 的「不可得」不是價格)", () => {
++    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
++    expect(extendMinutes(src, null, at(10, 0))).toBe(src);
++    expect(extendMinutes(src, 0, at(10, 0))).toBe(src);
++    expect(extendMinutes(src, -5, at(10, 0))).toBe(src);
++  });
++});
++
++/** 群組卡片的 accum 組裝(change-spec §6 A)。卡片走 `/api/stock/group-state` 的精簡
++ *  snapshot(沒有 ticks),而 `IntradayChartCore` 吃的是 `StockAccum` —— 這支把前者
++ *  補成後者。缺鍵一律降級成「不可得」而不是猜:舊後端還沒送 vwap/high/low/vp 時,
++ *  卡片應該少畫那幾層,而不是拿分鐘資料近似出一份與單檔頁不同的數字。 */
++describe("accumFromGroupSnapshot", () => {
++  const at = (h: number, m: number, s: number) => new Date(2026, 7, 6, h, m, s);
++  const META = { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 };
++  const MIN = (): Map<number, MinuteAgg> =>
++    new Map<number, MinuteAgg>([
++      [540, { c: 2_330_000, v: 10, i: 4, o: 6, u: 0, h: 2_335_000, l: 2_325_000 }],
++      [541, { c: 2_340_000, v: 5, i: 1, o: 4, u: 0, h: null, l: null }],
++    ]);
++
++  afterEach(() => {
++    vi.useRealTimers();
++  });
++
++  it("缺鍵(舊後端)→ vwap/high/low 為 null、vp 空 Map,其餘欄位取零值", () => {
++    const acc = accumFromGroupSnapshot(
++      "2330",
++      { minutes: MIN(), meta: META, noData: false },
++      null,
++    );
++    expect(acc.code).toBe("2330");
++    expect(acc.vwap).toBeNull();
++    expect(acc.high).toBeNull();
++    expect(acc.low).toBeNull();
++    expect(acc.vp.size).toBe(0);
++    expect(acc.ticks).toEqual([]);
++    expect(acc.book).toBeNull();
++    expect(acc.seq).toBe(0);
++    expect(acc.trial).toBe(false);
++    expect(acc.amountMilli).toBe(0);
++    expect(acc.volume).toBe(0);
++    expect(acc.noData).toBe(false);
++    expect(acc.meta).toBe(META);
++  });
++
++  it("新後端四鍵齊 → 原樣帶入(不重算、不近似)", () => {
++    const vp = new Map([[2_330_000, { t: 10, o: 6, i: 4 }]]);
++    const acc = accumFromGroupSnapshot(
++      "2330",
++      {
++        minutes: MIN(),
++        meta: META,
++        noData: false,
++        vwap: 2_333_000,
++        high: 2_345_000,
++        low: 2_320_000,
++        vp,
++      },
++      null,
++    );
++    expect(acc.vwap).toBe(2_333_000);
++    expect(acc.high).toBe(2_345_000);
++    expect(acc.low).toBe(2_320_000);
++    expect(acc.vp.get(2_330_000)).toEqual({ t: 10, o: 6, i: 4 });
++  });
++
++  it("noData 原樣帶入(卡片三態的判準之一)", () => {
++    const acc = accumFromGroupSnapshot(
++      "9999",
++      { minutes: new Map(), meta: null, noData: true },
++      null,
++    );
++    expect(acc.noData).toBe(true);
++    expect(acc.meta).toBeNull();
++  });
++
++  // last 分支 A:liveP 是每秒都在動的那一份,現價圈與末點要同源(AD-9)
++  it("liveP > 0 → last 取 liveP,時間戳是本機時鐘 HH:MM:SS", () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(at(10, 5, 7));
++    const acc = accumFromGroupSnapshot(
++      "2330",
++      { minutes: MIN(), meta: META, noData: false },
++      2_355_000,
++    );
++    expect(acc.last).toEqual({ p: 2_355_000, t: "10:05:07", cum_vol: 0 });
++  });
++
++  // last 分支 B(edge 10):liveP 不可得 → 退回**最後一格**的收盤,不是第一格也不是 null
++  it("liveP null / ≤0 → last 退回最大分鐘鍵那格的 close,t 為該分鐘整秒", () => {
++    const snap = { minutes: MIN(), meta: META, noData: false };
++    expect(accumFromGroupSnapshot("2330", snap, null).last).toEqual({
++      p: 2_340_000,
++      t: "09:01:00",
++      cum_vol: 0,
++    });
++    // 0 是 TC4 的「不可得」不是價格
++    expect(accumFromGroupSnapshot("2330", snap, 0).last?.p).toBe(2_340_000);
++  });
++
++  it("liveP 不可得且 minutes 空 → last 為 null(不冒充)", () => {
++    const acc = accumFromGroupSnapshot(
++      "2330",
++      { minutes: new Map(), meta: META, noData: false },
++      null,
++    );
++    expect(acc.last).toBeNull();
++  });
++
++  it("minutes 走 extendMinutes:窗內 liveP 多一格,且**不污染**輸入的 Map", () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(at(10, 0, 30));
++    const src = MIN();
++    const acc = accumFromGroupSnapshot("2330", { minutes: src, meta: META, noData: false }, 2_355_000);
++    expect(acc.minutes.size).toBe(3);
++    expect(acc.minutes.get(600)?.c).toBe(2_355_000);
++    // 來源是 TQ cache 的物件 —— 被就地改過的話,下一次 render 拿到的「快取」已經髒了
++    expect(src.size).toBe(2);
++    expect(src.has(600)).toBe(false);
++  });
++
++  it("窗外時刻 + liveP > 0 → 分鐘不延伸,但 last 仍是 liveP(現價圈照畫)", () => {
++    vi.useFakeTimers();
++    vi.setSystemTime(at(14, 30, 0));
++    const acc = accumFromGroupSnapshot(
++      "2330",
++      { minutes: MIN(), meta: META, noData: false },
++      2_355_000,
++    );
++    expect(acc.minutes.size).toBe(2);
++    expect(acc.last?.p).toBe(2_355_000);
++  });
++});
+diff --git a/frontend/src/lib/stock-accum.ts b/frontend/src/lib/stock-accum.ts
+index 40e6e515..5123ac49 100644
+--- a/frontend/src/lib/stock-accum.ts
++++ b/frontend/src/lib/stock-accum.ts
+@@ -119,8 +119,11 @@ export function minuteKey(t: string): number {
+  *  「VP 全部 bar 的總張 = 說明列 外+內+未分類 三數之和」成立(可互驗)。前提不成立時
+  *  VP 是偏小的那一邊 —— 截斷的簽名見 `stock-accum.test.ts` 的 B1 characterization。
+  *
+- *  cell 一律重建不就地改:memo 比較與時間旅行安全。 */
+-function foldVp(
++ *  cell 一律重建不就地改:memo 比較與時間旅行安全。
++ *
++ *  **export 是給後端 parity fixture 用的**(change-spec AD-2):後端 `StockDayState._vp`
++ *  折的是同一份規則,兩份各漂各的樣態是「同一檔在單檔頁與卡片上 POC 不同」,零錯誤訊號。 */
++export function foldVp(
+   vp: Map<number, VpCell>,
+   t: string,
+   p: number,
+@@ -205,6 +208,108 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
+   };
+ }
+ 
++/** 現價延伸(design R10)。分鐘級 snapshot 每 60s 才更新一次,不延伸的話卡片上的線
++ *  最久會停在一分鐘前 —— 而群組檢視的用途就是「現在有沒有一起動」。
++ *
++ *  三道限制都不是防禦性補丁:
++ *  - 分鐘鍵取**本機時鐘**(部署綁台北),窗外(盤前 / 盤後 / 隔天早上還開著頁面)
++ *    一律不延伸 —— 幾何的窗是 [09:00, 13:30],延伸到窗外的點會被 `windowedEntries`
++ *    濾掉,但延伸到**窗內錯的分鐘**(例如隔日 09:05 用的是昨天的 minutes)會靜默
++ *    畫出一條假的尾巴。
++ *  - `liveP > 0`:TC4 會送 0 表示「不可得」(鎖漲跌停的市價佇列同理),毫元價恆 > 0。
++ *  - 既有 bucket **只覆寫 `c`**:量 / 內外盤 / 高低都是後端聚合的真值,拿現價去改
++ *    它們等於偽造成交明細。無 bucket 才新建,且 `h`/`l` 給 `null` = 「這一分鐘的
++ *    高低不可知」而不是冒充等於現價。
++ *
++ *  不就地改傳入的 Map(淺拷後寫):來源是 TQ cache 的物件,污染它會讓下一次
++ *  render 拿到被改過的「快取」而看不出來。 */
++export function extendMinutes(
++  minutes: Map<number, MinuteAgg>,
++  liveP: number | null,
++  now: Date = new Date(),
++): Map<number, MinuteAgg> {
++  if (liveP === null || liveP <= 0) return minutes;
++  const key = now.getHours() * 60 + now.getMinutes();
++  if (key < X_START_MIN || key > X_END_MIN) return minutes;
++  const next = new Map(minutes);
++  const prev = next.get(key);
++  next.set(
++    key,
++    prev === undefined
++      ? { c: liveP, v: 0, i: 0, o: 0, u: 0, h: null, l: null }
++      : { ...prev, c: liveP },
++  );
++  return next;
++}
++
++/** 群組卡片的 snapshot 形狀。**結構型別不 import `GroupSnapshot`** —— lib 反向依賴
++ *  hooks 會讓純函式綁上 TanStack Query 那一層;結構相容就夠了,後端補鍵時
++ *  `useGroupSnapshots` 那邊加欄位即可,本檔的選填欄位自動接上。 */
++export interface GroupLikeSnapshot {
++  minutes: Map<number, MinuteAgg>;
++  meta: StockMeta | null;
++  noData: boolean;
++  /** 以下四鍵為後端 light_snapshot 的加鍵;**選填** —— 舊後端缺 → 降級不畫那幾層 */
++  vwap?: number | null;
++  high?: number | null;
++  low?: number | null;
++  vp?: Map<number, VpCell>;
++}
++
++function pad2(n: number): string {
++  return String(n).padStart(2, "0");
++}
++
++/** group-state 的精簡 snapshot → `StockAccum`(卡片變體的分時圖吃的型別)。
++ *
++ *  **缺鍵一律降級成「不可得」而不是近似**:拿分鐘資料折一份前端版 VWAP / VP 出來,
++ *  畫面上會與單檔頁的同一檔對不上(單檔頁走後端逐筆),而兩個數字都「看起來對」——
++ *  沒有任何錯誤訊號。少畫一層是誠實的降級。
++ *
++ *  `ticks` 恆空(group-state 刻意不送:50 檔 × 數千筆 = 頻寬炸彈),故 `amountMilli`
++ *  / `volume` / `seq` 全取零值 —— 這份 accum 是**唯讀渲染輸入**,不會再吃 `applyTick`。
++ *
++ *  `last` 兩分支(edge 10):`liveP` 是每秒更新的那一份,現價圈與末點同源;不可得時
++ *  退回**最大分鐘鍵**那格的收盤(不是第一格,也不是 null —— 60s 快照間的空窗照樣要有
++ *  現價圈)。 */
++export function accumFromGroupSnapshot(
++  code: string,
++  snap: GroupLikeSnapshot,
++  liveP: number | null,
++): StockAccum {
++  const minutes = extendMinutes(snap.minutes, liveP);
++  let last: StockAccum["last"] = null;
++  if (liveP !== null && liveP > 0) {
++    const now = new Date();
++    last = {
++      p: liveP,
++      t: `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
++      cum_vol: 0,
++    };
++  } else if (minutes.size > 0) {
++    const lastMin = Math.max(...minutes.keys());
++    const agg = minutes.get(lastMin)!;
++    last = { p: agg.c, t: `${pad2(Math.floor(lastMin / 60))}:${pad2(lastMin % 60)}:00`, cum_vol: 0 };
++  }
++  return {
++    code,
++    seq: 0,
++    last,
++    vwap: snap.vwap ?? null,
++    minutes,
++    ticks: [],
++    vp: snap.vp ?? new Map(),
++    book: null,
++    meta: snap.meta,
++    noData: snap.noData,
++    trial: false,
++    high: snap.high ?? null,
++    low: snap.low ?? null,
++    amountMilli: 0,
++    volume: 0,
++  };
++}
++
+ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
+   const key = minuteKey(msg.t);
+   const minutes = new Map(acc.minutes);
+diff --git a/frontend/src/lib/stock-intraday-svg.test.ts b/frontend/src/lib/stock-intraday-svg.test.ts
+index 3d2f0f73..4075a634 100644
+--- a/frontend/src/lib/stock-intraday-svg.test.ts
++++ b/frontend/src/lib/stock-intraday-svg.test.ts
+@@ -6,6 +6,7 @@ import {
+   buildIntradayGeometry,
+   EDGE_LABEL_H,
+   edgePriceLabels,
++  hasWindowedMinutes,
+   minuteToX,
+   overlayLines,
+   PAD_Y,
+@@ -1095,3 +1096,37 @@ describe("edgePriceLabels(SC-1/SC-3)", () => {
+     });
+   });
+ });
++
++/** 卡片「尚無成交」佔位的判準(change-spec edge 9 / R2-6)。
++ *
++ *  **不是 `minutes.size === 0`**:盤前只有 08:59、盤後只有 13:31+ 的分鐘同樣落在窗外,
++ *  `windowedEntries` 會濾光 → priceLine 空,而 `size > 0` 讓卡片以為有圖可畫,
++ *  結果掛出一張空圖(或撞進 StockIntradayChart 帶框的早退框 = 卡片內框中框)。 */
++describe("hasWindowedMinutes", () => {
++  const agg = (): MinuteAgg => ({ c: 2_320_000, v: 1, i: 0, o: 1, u: 0, h: null, l: null });
++
++  it("空 Map → false", () => {
++    expect(hasWindowedMinutes(new Map())).toBe(false);
++  });
++
++  it("只有 08:59(盤前試撮)→ false —— size > 0 但窗內無分鐘", () => {
++    const minutes = new Map<number, MinuteAgg>([[X_START_MIN - 1, agg()]]);
++    expect(minutes.size).toBe(1);
++    expect(hasWindowedMinutes(minutes)).toBe(false);
++  });
++
++  it("只有 13:31(盤後)→ false", () => {
++    expect(hasWindowedMinutes(new Map([[X_END_MIN + 1, agg()]]))).toBe(false);
++  });
++
++  it("09:00 → true(窗含兩端)", () => {
++    expect(hasWindowedMinutes(new Map([[X_START_MIN, agg()]]))).toBe(true);
++    expect(hasWindowedMinutes(new Map([[X_END_MIN, agg()]]))).toBe(true);
++  });
++
++  it("吃得下期貨窗(判準與幾何同一把尺)", () => {
++    const minutes = new Map<number, MinuteAgg>([[STKFUT_WINDOW.start, agg()]]);
++    expect(hasWindowedMinutes(minutes, SPOT_WINDOW)).toBe(false);
++    expect(hasWindowedMinutes(minutes, STKFUT_WINDOW)).toBe(true);
++  });
++});
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index d1eab83d..315f5bf5 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -268,6 +268,18 @@ function windowedEntries(minutes: Map<number, MinuteAgg>, xw: XWindow): [number,
+     .sort(([a], [b]) => a - b);
+ }
+ 
++/** 窗內是否有可畫的分鐘(change-spec edge 9)。
++ *
++ *  **包 `windowedEntries` 而不是讓呼叫端自己比 `minutes.size`**:窗的定義只有這一份,
++ *  呼叫端各寫一次的失效樣態是「盤前只有 08:59 的檔在卡片上掛一張空圖」——
++ *  `size > 0` 為真而 `priceLine` 為空,畫面上是一張有軸沒線的圖,沒有錯誤訊號。 */
++export function hasWindowedMinutes(
++  minutes: Map<number, MinuteAgg>,
++  xw: XWindow = SPOT_WINDOW,
++): boolean {
++  return windowedEntries(minutes, xw).length > 0;
++}
++
+ function energyFrom(
+   entries: readonly [number, MinuteAgg][],
+   size: Size,
+diff --git a/frontend/src/lib/vp-parity.test.ts b/frontend/src/lib/vp-parity.test.ts
+new file mode 100644
+index 00000000..f81ebd67
+--- /dev/null
++++ b/frontend/src/lib/vp-parity.test.ts
+@@ -0,0 +1,51 @@
++/** VP 折法的跨語言 parity(change-spec AD-2)。
++ *
++ *  後端 `copycat/live/stock_state.py::StockDayState._fold_vp` 與本檔的 `foldVp` 折的是
++ *  同一份規則。兩份各自漂移的失效樣態是「同一檔在單檔頁與卡片上 POC 不同」—— 兩張圖
++ *  都畫得出來、兩個數字都看起來對,沒有任何錯誤訊號。所以 parity 只能靠**共用 fixture**
++ *  釘住:`tests/fixtures/vp_parity.json` 的 `expected` 是手算寫死的(不是任一邊跑出來
++ *  回填的),pytest 側 `tests/live/test_stock_state.py::test_vp_parity_with_frontend_fold`
++ *  與本檔各自對它斷言,改壞任一邊就只有那一邊紅。
++ *
++ *  用 `node:fs` 讀而不是 `import` JSON:tsconfig 沒開 `resolveJsonModule`,而為了一個
++ *  測試檔改編譯選項會影響全站型別解析。vitest 的 environment 是 node(vite.config.ts),
++ *  fs 可用;本檔**不放在 jsdom 檔內**也是這個理由。 */
++import { readFileSync } from "node:fs";
++import path from "node:path";
++import { fileURLToPath } from "node:url";
++
++import { describe, expect, it } from "vitest";
++
++import { foldVp, type VpCell } from "@/lib/stock-accum";
++
++interface Fixture {
++  ticks: { t: string; p: number; q: number; side: string }[];
++  expected: Record<string, [number, number, number]>;
++}
++
++// `import.meta.url` 而不是 `__dirname`:vitest 把測試檔轉成 ESM,`__dirname` 不保證存在
++const HERE = path.dirname(fileURLToPath(import.meta.url));
++const FIXTURE_PATH = path.resolve(HERE, "../../../tests/fixtures/vp_parity.json");
++
++describe("VP parity(共用 fixture,後端 pytest 側斷言同一份 expected)", () => {
++  const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as Fixture;
++
++  it("fixture 自身健檢:涵蓋窗外 / p=0 / 跨 tick 段 / 三種 side", () => {
++    // 沒有這條的話 fixture 被改瘦(只剩一筆窗內成交)時 parity 仍然全綠 = 空談
++    const ticks = fixture.ticks;
++    expect(ticks.some((t) => t.p <= 0)).toBe(true);
++    expect(ticks.some((t) => t.t < "09:00:00")).toBe(true);
++    expect(ticks.some((t) => t.t > "13:30:59")).toBe(true);
++    expect(new Set(ticks.map((t) => t.side))).toEqual(new Set(["outer", "inner", "neutral"]));
++    // 跨 tick 段:0.01 / 0.05 / 0.1 / 0.5 / 5 元檔各有代表(key 的段界判定才有鑑別力)
++    expect(Object.keys(fixture.expected).length).toBeGreaterThanOrEqual(5);
++  });
++
++  it("逐筆 foldVp 後的直方圖 === 手算 expected", () => {
++    const vp = new Map<number, VpCell>();
++    for (const row of fixture.ticks) foldVp(vp, row.t, row.p, row.q, row.side);
++    const got: Record<string, [number, number, number]> = {};
++    for (const [price, cell] of vp) got[String(price)] = [cell.t, cell.o, cell.i];
++    expect(got).toEqual(fixture.expected);
++  });
++});
+diff --git a/tests/fixtures/vp_parity.json b/tests/fixtures/vp_parity.json
+new file mode 100644
+index 00000000..40eadb91
+--- /dev/null
++++ b/tests/fixtures/vp_parity.json
+@@ -0,0 +1,42 @@
++{
++  "_doc": [
++    "VP(價位別成交量)折法的跨語言 parity fixture(change-spec AD-2)。",
++    "後端 `StockDayState._vp` 與前端 `stock-accum.ts::foldVp` 折同一份 ticks,兩邊各自",
++    "對 `expected` 斷言 —— 不是其中一邊跑出來回填的,`expected` 全部手算(見下)。",
++    "兩份規則各自漂移的失效樣態是「同一檔在單檔頁與卡片上 POC 不同」,兩個數字都看起來",
++    "對,沒有任何錯誤訊號。",
++    "",
++    "規則:剔 p<=0(鎖停市價佇列)、分鐘窗 [540, 810](09:00–13:30 含端點)、",
++    "key = 向下貼齊該價位所在段的 tick、cell = [總張, 外盤張, 內盤張](neutral 只進總張)。",
++    "",
++    "手算對照:",
++    "  9990   = 9.99 元(tick 0.01)  : #13 → [9, 9, 0]",
++    "  23450  = 23.45 元(tick 0.05) : #10 8外 + #11 2內 + #12 1未分類 → [11, 8, 2]",
++    "  99900  = 99.9 元(tick 0.1)   : #4 10未分類 + #5(99.999 snap 下來)4外 → [14, 4, 0]",
++    "  100000 = 100 元(tick 0.5)    : #6 6內 + #7(100.499 snap 下來)2外 → [8, 2, 6]",
++    "  1005000= 1005 元(tick 5)     : #8 1外 + #9(1009.999 snap 下來)3內 → [4, 1, 3]",
++    "剔除:#1 08:59:30(窗前)、#2 13:31:00(窗後)、#3 p=0(市價佇列)"
++  ],
++  "ticks": [
++    { "t": "08:59:30.000", "p": 100000, "q": 5, "side": "outer" },
++    { "t": "13:31:00.000", "p": 100000, "q": 7, "side": "inner" },
++    { "t": "09:00:00.000", "p": 0, "q": 3, "side": "neutral" },
++    { "t": "09:00:00.500", "p": 99900, "q": 10, "side": "neutral" },
++    { "t": "09:00:05.000", "p": 99999, "q": 4, "side": "outer" },
++    { "t": "09:01:00.000", "p": 100000, "q": 6, "side": "inner" },
++    { "t": "09:01:30.000", "p": 100499, "q": 2, "side": "outer" },
++    { "t": "10:00:00.000", "p": 1005000, "q": 1, "side": "outer" },
++    { "t": "10:00:01.000", "p": 1009999, "q": 3, "side": "inner" },
++    { "t": "11:00:00.000", "p": 23456, "q": 8, "side": "outer" },
++    { "t": "11:00:10.000", "p": 23450, "q": 2, "side": "inner" },
++    { "t": "13:30:00.000", "p": 23499, "q": 1, "side": "neutral" },
++    { "t": "09:00:00.000", "p": 9990, "q": 9, "side": "outer" }
++  ],
++  "expected": {
++    "9990": [9, 9, 0],
++    "23450": [11, 8, 2],
++    "99900": [14, 4, 0],
++    "100000": [8, 2, 6],
++    "1005000": [4, 1, 3]
++  }
++}
+diff --git a/tests/live/test_stock_state.py b/tests/live/test_stock_state.py
+index d7c846b1..ea1be8f8 100644
+--- a/tests/live/test_stock_state.py
++++ b/tests/live/test_stock_state.py
+@@ -1,8 +1,14 @@
+ from __future__ import annotations
+ 
++import json
++from pathlib import Path
++
+ from copycat.live.stock_models import StockMeta, StockTick
+ from copycat.live.stock_state import StockDayState
+ 
++#: VP 折法的跨語言 parity fixture(前端 `src/lib/vp-parity.test.ts` 讀同一個檔)
++_VP_PARITY_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "vp_parity.json"
++
+ 
+ def _tick(
+     cum: int,
+@@ -333,23 +339,115 @@ class TestLightSnapshot:
+ 
+     def test_light_snapshot_is_exactly_minutes_and_meta(self) -> None:
+         light = self._filled().light_snapshot()
+-        assert set(light) == {"minutes", "meta"}
+-        # ticks 是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
++        # 🔴 group-grid-full-chart:卡片要畫「完全同款」的分時圖 → VWAP 白線 / 日高低圈 /
++        # VP 水平條所需的四鍵一併帶出。由 minutes 在前端近似會畫出與單檔頁不同的圖。
++        assert set(light) == {"minutes", "meta", "vwap", "high", "low", "vp"}
++        # ticks 仍是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費);
++        # vp 是**它的聚合**(O(當日成交檔位數),與 tick 筆數脫鉤)才進得了 light
+         assert "ticks" not in light
+ 
+     def test_light_and_full_snapshot_share_one_key_mapping(self) -> None:
+-        """同一份資料兩條路產出的 minutes / meta 必須逐鍵相同 —— 這條測試就是
+-        「單一定義」的證明;兩邊各自維護時它會第一個紅。"""
++        """同一份資料兩條路產出的 minutes / meta / vwap / high / low 必須逐鍵相同 ——
++        這條測試就是「單一定義」的證明;兩邊各自維護時它會第一個紅。"""
+         st = self._filled()
+         light = st.light_snapshot()
+         full = st.snapshot()
+         assert light["minutes"] == full["minutes"]
+         assert light["meta"] == full["meta"]
++        assert light["vwap"] == full["vwap"]
++        assert light["high"] == full["high"]
++        assert light["low"] == full["low"]
+         assert light["minutes"]["541"]["c"] == 2_380_000  # 非空基準:比對的不是兩個空 dict
+         assert light["meta"]["ref"] == 2_320_000
++        assert light["vwap"] is not None  # 同上:三個 None 互等是 vacuous
++        assert light["high"] == 2_400_000
++        assert light["low"] == 2_380_000
+ 
+     def test_light_snapshot_without_meta_is_none_not_missing(self) -> None:
+         """缺 meta 回 `None` 而不是漏鍵:前端 `raw.meta ?? null` 對兩者同解,但
+-        route 的 response 形若少一個鍵,契約測試與 pyright 都看不出來。"""
++        route 的 response 形若少一個鍵,契約測試與 pyright 都看不出來。
++
++        空態的 `vp` 是 `{}` 而不是 `None`:前端型別是 `Map`,兩者在 `?? new Map()`
++        之後才等價,而少一個鍵時端點契約測試看不出來(同 meta 的理由)。"""
+         light = StockDayState().light_snapshot()
+-        assert light == {"minutes": {}, "meta": None}
++        assert light == {
++            "minutes": {},
++            "meta": None,
++            "vwap": None,
++            "high": None,
++            "low": None,
++            "vp": {},
++        }
++
++
++class TestVolumeProfile:
++    """價位別成交量(VP)由狀態機**增量維護**(change-spec AD-1 amendment R6)。
++
++    請求時全掃 `ticks` 跑在事件迴圈上,最壞 50 檔 × 20k 筆的同步迴圈會卡住 WS fanout;
++    而 `_apply` 內累加是 O(1)/tick 且 `ticks` deque 的 20k 截斷影響不到它。
++
++    折法與前端 `stock-accum.ts::foldVp` 同規(parity fixture 鎖):剔 p<=0、
++    分鐘窗 [540, 810]、key = `snap_down_milli`、cell = [總張, 外盤張, 內盤張]。
++    """
++
++    def test_ingest_accumulates_by_snapped_price(self) -> None:
++        st = StockDayState()
++        st.ingest(_tick(10, price=23_456, qty=8, time="09:05:00.000", side="outer"))
++        st.ingest(_tick(20, price=23_450, qty=2, time="09:06:00.000", side="inner"))
++        st.ingest(_tick(30, price=23_499, qty=1, time="09:07:00.000", side="neutral"))
++        # 23.456 / 23.45 / 23.499 全部歸到 23.45 元那一檔;neutral 只進總張
++        assert st.light_snapshot()["vp"] == {"23450": [11, 8, 2]}
++
++    def test_market_queue_price_zero_is_dropped(self) -> None:
++        """鎖漲跌停時 TC4 會推價格欄 `0` 的市價佇列 —— `snap_down_milli(0)` 是合法運算,
++        不剔的話 VP 會憑空長出一個 0 元檔位(前端 `isMarketLevel` 同一條規則)。"""
++        st = StockDayState()
++        st.ingest(_tick(10, price=0, qty=5, time="09:05:00.000"))
++        assert st.light_snapshot()["vp"] == {}
++
++    def test_out_of_window_ticks_are_dropped(self) -> None:
++        """窗 = 前端幾何的 [09:00, 13:30](含端點);盤前試撮成交與 13:31 的收盤
++        撮合不進 VP,否則卡片 VP 的總張與說明列的外/內/未分類三數對不起來。"""
++        st = StockDayState()
++        st.ingest(_tick(10, price=99_900, qty=5, time="08:59:59.999", side="outer"))
++        st.ingest(_tick(20, price=99_900, qty=7, time="13:31:00.000", side="outer"))
++        assert st.light_snapshot()["vp"] == {}
++        st.ingest(_tick(30, price=99_900, qty=1, time="09:00:00.000", side="outer"))
++        st.ingest(_tick(40, price=99_900, qty=1, time="13:30:59.999", side="outer"))
++        assert st.light_snapshot()["vp"] == {"99900": [2, 2, 0]}  # 兩個端點都在窗內
++
++    def test_reset_clears_vp(self) -> None:
++        st = StockDayState()
++        st.ingest(_tick(10, price=99_900, qty=5, time="09:05:00.000", side="outer"))
++        st.reset()
++        assert st.light_snapshot()["vp"] == {}
++
++    def test_apply_backfill_rebuilds_vp_identically_to_live_ingest(self) -> None:
++        """回補走 reset + 重放 → VP 自然重建。這條是「增量維護」的核心風險:
++        漏了 reset 就會與 live 期間的量疊加成兩倍,而畫面上只是 VP 條變長,零訊號。"""
++        ticks = [
++            _tick(10, price=23_456, qty=8, time="09:05:00.000", side="outer"),
++            _tick(20, price=23_450, qty=2, time="09:06:00.000", side="inner"),
++        ]
++        live = StockDayState()
++        for t in ticks:
++            live.ingest(t)
++
++        rebuilt = StockDayState()
++        for t in ticks:
++            rebuilt.ingest(t)  # 回補前已有 live 狀態(重疊窗)
++        rebuilt.apply_backfill(ticks)
++        assert rebuilt.light_snapshot()["vp"] == live.light_snapshot()["vp"]
++
++
++def test_vp_parity_with_frontend_fold() -> None:
++    """跨語言 parity:同一份 ticks 折出同一份直方圖(change-spec AD-2)。
++
++    `expected` 是**手算寫死**在 fixture 裡的(不是跑程式回填),前端
++    `src/lib/vp-parity.test.ts` 對同一個檔各自斷言 —— 任一邊改了規則就只有一邊紅。
++    """
++    fixture = json.loads(_VP_PARITY_PATH.read_text(encoding="utf-8"))
++    st = StockDayState()
++    for i, row in enumerate(fixture["ticks"]):
++        st.ingest(_tick(i + 1, price=row["p"], qty=row["q"], time=row["t"], side=row["side"]))
++    assert st.light_snapshot()["vp"] == fixture["expected"]
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 22b49de6..3a6da1a9 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -1211,9 +1211,23 @@ class TestGroupSnapshot:
+         src.on_message(_quote(cum=7, price="2380"))
+         await _drain(engine)
+         snap = engine.group_snapshot(["2330"])["2330"]
+-        assert set(snap) == {"minutes", "meta", "no_data", "backfilling"}
++        # 🔴 group-grid-full-chart:卡片改畫「完全同款」的分時圖 → light_snapshot 的
++        # 四個加鍵(vwap/high/low/vp)必須原封轉發。鍵名單一定義在 `light_snapshot()`,
++        # 這裡只 `{**light, ...}` 展開 —— 逐鍵手抄的漂移樣態是後端補了鍵、卡片卻收不到
++        assert set(snap) == {
++            "minutes",
++            "meta",
++            "vwap",
++            "high",
++            "low",
++            "vp",
++            "no_data",
++            "backfilling",
++        }
+         # R2:ticks 是數千筆,50 檔一起送等於把 batch 端點變成頻寬炸彈
+         assert "ticks" not in snap
++        assert snap["vwap"] == 2_380_000
++        assert snap["vp"] == {"2380000": [1, 1, 0]}
+         # 鍵名沿 `StockDayState.snapshot()` 的單一定義:直接丟 dataclass 會讓前端
+         # `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失
+         assert snap["meta"] == {
+@@ -1353,7 +1367,18 @@ class TestGroupSnapshot:
+ 
+         monkeypatch.setattr(stock_engine_mod, "StockDayState", _boom)
+         snap = engine.group_snapshot(["9999"])["9999"]
+-        assert snap == {"minutes": {}, "meta": None, "no_data": True, "backfilling": False}
++        # 空 payload 的加鍵一律「不可得」而不是漏鍵(`_EMPTY_LIGHT` 由 light_snapshot()
++        # 自己產,鍵集合跟著它走 —— 手抄一份字面 dict 就是下一個會漂的地方)
++        assert snap == {
++            "minutes": {},
++            "meta": None,
++            "vwap": None,
++            "high": None,
++            "low": None,
++            "vp": {},
++            "no_data": True,
++            "backfilling": False,
++        }
+         await engine.close()
+ 
+     async def test_released_member_is_no_data_and_not_enqueued(self) -> None:
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 2f44040a..81536141 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -1,12 +1,16 @@
+ from __future__ import annotations
+ 
+ import datetime as _dt
++import json
++import threading
++import time
+ from pathlib import Path
+ from typing import cast
+ 
+ import pytest
+ from fastapi.testclient import TestClient
+ 
++from copycat.live.stock_models import StockTick
+ from copycat.server.app import create_app
+ from copycat.server.signal_hub import SignalHub
+ from copycat.server.stock_engine import StockEngine
+@@ -15,6 +19,9 @@ from tests.helpers.boot import BootedClient
+ from tests.helpers.fake_sources import FakeStockSource
+ from tests.helpers.fake_txo import FakeTxoSource
+ 
++#: VP 折法的跨語言 parity fixture(前端 `src/lib/vp-parity.test.ts` 讀同一個檔)
++VP_PARITY_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "vp_parity.json"
++
+ 
+ def make_client(
+     tmp_path: Path, *, names_path: Path | None = None
+@@ -300,6 +307,68 @@ class TestOverlayRoute:
+             assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
+ 
+ 
++class _GatedDailyBarsSource(FakeStockSource):
++    """`fetch_daily_bars` 記併發峰值,且**等到本批到齊 `cap` 個才放行**。
++
++    純 `sleep` + 計數在慢機器上會退化成「剛好沒重疊」的假綠(峰值 1 也算通過)。
++    等待條件讓上限變成可觀察的終態:有節流時恰好 4 個同時卡在門內,沒節流時 8 個
++    一起進來(峰值 8)。`timeout` 是不讓測試在真的壞掉時吊死,不是正常路徑。
++    """
++
++    def __init__(self, cap: int = 4) -> None:
++        super().__init__()
++        self._cap = cap
++        self._cond = threading.Condition()
++        self.in_flight = 0
++        self.peak = 0
++
++    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
++        with self._cond:
++            self.in_flight += 1
++            self.peak = max(self.peak, self.in_flight)
++            self._cond.notify_all()
++            self._cond.wait_for(lambda: self.in_flight >= self._cap, timeout=2.0)
++        try:
++            time.sleep(0.01)  # 讓下一批有機會與本批重疊(峰值才量得出來)
++            return []
++        finally:
++            with self._cond:
++                self.in_flight -= 1
++                self._cond.notify_all()
++
++
++class TestOverlayConcurrencyGate:
++    """AD-5 amendment(review R5):`cdp` 預設開,進群組會對 ≤50 檔同時打 overlay,
++    而 `daily_bars` 走 `to_thread` 無上限、共用同一條 TC4 歷史通道。
++
++    節流刻意放在 **route 層**而不是 `engine.daily_bars`:後者另有 `signal_hub` 的
++    basis 取數在用,擋在引擎會連訊號的 basis 一起拖慢(round 2 R2-3)。
++    """
++
++    def test_daily_bars_in_flight_capped_at_four(self, tmp_path: Path) -> None:
++        source = _GatedDailyBarsSource()
++        app = create_app(
++            FakeTxoSource(),
++            stock_source=source,
++            stock_watchlist_path=tmp_path / "watchlist.json",
++            throttle_secs=0.01,
++        )
++        codes = [str(9000 + i) for i in range(8)]  # 相異碼:cache 不得吃掉併發
++        results: dict[str, int] = {}
++        with BootedClient(app, raise_server_exceptions=False) as client:
++
++            def _hit(code: str) -> None:
++                results[code] = client.get(f"/api/stock/overlay/{code}").status_code
++
++            threads = [threading.Thread(target=_hit, args=(c,)) for c in codes]
++            for t in threads:
++                t.start()
++            for t in threads:
++                t.join(timeout=15)
++        assert list(results.values()) == [200] * 8
++        assert source.peak == 4, f"overlay 併發上限應為 4,實測峰值 {source.peak}"
++
++
+ class TestStateRoute:
+     def test_get_state_sets_main_and_returns_snapshot(self, tmp_path: Path) -> None:
+         client, fake = make_client(tmp_path)
+@@ -491,8 +560,19 @@ class TestGroupStateRoute:
+             assert r.status_code == 200
+             states = r.json()["states"]
+             assert set(states) == {"2330", "2317"}
+-            # payload 形寫死:ticks 不得混進來(50 檔 × 數千筆 = 頻寬炸彈)
+-            assert set(states["2330"]) == {"minutes", "meta", "no_data", "backfilling"}
++            # payload 形寫死:ticks 不得混進來(50 檔 × 數千筆 = 頻寬炸彈),但
++            # light_snapshot 的四個加鍵(vwap/high/low/vp)必須到得了前端 —— 卡片圖
++            # 的 VWAP 白線 / 日高低圈 / VP 條全靠它們(🔴 group-grid-full-chart SC-5)
++            assert set(states["2330"]) == {
++                "minutes",
++                "meta",
++                "vwap",
++                "high",
++                "low",
++                "vp",
++                "no_data",
++                "backfilling",
++            }
+             assert states["2330"]["no_data"] is False
+             stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+             assert stock._main is None, "群組 batch 不得 set_main(會把主圖搶走)"
+@@ -514,6 +594,41 @@ class TestGroupStateRoute:
+             assert states["9999"]["no_data"] is True
+             assert states["9999"]["minutes"] == {}
+             assert states["9999"]["meta"] is None
++            # 空卡的四個加鍵一律是「不可得」而不是漏鍵:前端 `?? null` 對漏鍵與 null
++            # 同解,但少一個鍵時契約測試與型別都看不出來(同 meta 的理由)
++            assert states["9999"]["vwap"] is None
++            assert states["9999"]["high"] is None
++            assert states["9999"]["low"] is None
++            assert states["9999"]["vp"] == {}
++
++    def test_vp_reaches_the_wire_matching_the_shared_parity_fixture(self, tmp_path: Path) -> None:
++        """端到端 parity(SC-5):同一份 ticks 進狀態機 → 端點吐出的 `vp` 必須逐鍵等於
++        手算的 `expected`,而前端 `src/lib/vp-parity.test.ts` 對同一個檔各自斷言。
++
++        兩份折法各漂各的樣態是「同一檔在單檔頁與卡片上 POC 不同」——兩個數字都畫得出
++        來、都看起來對,沒有任何錯誤訊號。JSON 鍵是字串:序列化這一段也在 parity 內。
++        """
++        fixture = json.loads(VP_PARITY_PATH.read_text(encoding="utf-8"))
++        client, _ = make_client(tmp_path)
++        with client:
++            self._put(client, ["2330"])
++            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
++            state = stock._states["2330"]
++            for i, row in enumerate(fixture["ticks"]):
++                state.ingest(
++                    StockTick(
++                        code="2330",
++                        price_milli=row["p"],
++                        qty=row["q"],
++                        cum_vol=i + 1,
++                        time=row["t"],
++                        trade_date="2026-07-21",
++                        side=row["side"],
++                        is_trial=False,
++                    )
++                )
++            states = client.get("/api/stock/group-state", params={"codes": "2330"}).json()["states"]
++        assert states["2330"]["vp"] == fixture["expected"]
+ 
+     def test_group_state_at_limit_ok(self, tmp_path: Path) -> None:
+         """字面 50 相異碼 → 200(與 test_too_many_codes_400 的字面 51 成對釘死邊界)。"""
+diff --git a/tests/test_market.py b/tests/test_market.py
+index 3718cdd0..0da6def6 100644
+--- a/tests/test_market.py
++++ b/tests/test_market.py
+@@ -4,6 +4,7 @@ from copycat.market import (
+     limit_down_milli,
+     limit_up_milli,
+     limit_up_price,
++    snap_down_milli,
+     tick_size,
+     tick_size_milli,
+ )
+@@ -34,6 +35,26 @@ def test_tick_size_milli_matches_float_version() -> None:
+         assert tick_size_milli(price_milli) == round(tick_size(price_milli / 1000) * 1000)
+ 
+ 
++def test_snap_down_milli_zone_boundaries() -> None:
++    """VP 檔位歸一(change-spec AD-2)。前端對應函式 = `stock-tick.ts::snapDown`,
++    兩份折法各漂各的樣態是「同一檔在單檔頁與卡片上 POC 不同」,零錯誤訊號。
++
++    段界一律取**該價位自己所在段**的 tick(不是 snap 後所在段):99.999 元屬
++    50–100 元段(tick 0.1)→ 99.9,而不是拿 100 元以上段的 0.5 去算。
++    """
++    assert snap_down_milli(1_000_000) == 1_000_000  # 1000 元整 → tick 5 元,恰在檔上
++    assert snap_down_milli(999_999) == 999_000  # 999.999 元 → 500–1000 元段 tick 1 元
++    assert snap_down_milli(23_456) == 23_450  # 23.456 元 → 10–50 元段 tick 0.05 元
++    assert snap_down_milli(9_990) == 9_990  # 9.99 元 → tick 0.01 元,恰在檔上
++    assert snap_down_milli(100_000) == 100_000  # 100 元整 → tick 0.5 元,恰在檔上
++    assert snap_down_milli(99_999) == 99_900  # 99.999 元 → 50–100 元段 tick 0.1 元
++
++
++def test_snap_down_milli_is_idempotent_on_legal_ticks() -> None:
++    for milli in (9_990, 23_450, 99_900, 100_000, 999_000, 1_000_000, 1_005_000):
++        assert snap_down_milli(milli) == milli
++
++
+ def test_limit_up_known_cases() -> None:
+     assert limit_up_price(100.0) == 110.0
+     assert limit_up_price(29.1) == 32.0  # 32.01 → tick 0.05 向下貼
