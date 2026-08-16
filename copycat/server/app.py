@@ -911,8 +911,12 @@ def create_app(
                 try:
                     await booted.crosscheck_task
                 except asyncio.CancelledError:
-                    pass
-                except Exception:
+                    logger.info("交易日曆交叉檢查已取消(關機)")
+                except BaseException:
+                    # 與上面 boot_task 同一個不變式:任何逃出來的 BaseException
+                    # (含 SystemExit / KeyboardInterrupt)都會跳過下面整串反序
+                    # close → TC4 session / COM 執行緒 / hub worker 一次全洩漏。
+                    # 這條旁支是「只讀 index 歷史的 log 任務」,更沒有資格擋關機。
                     logger.exception("交易日曆交叉檢查以例外結束(關機續行)")
             if booted.breadth is not None:
                 try:
