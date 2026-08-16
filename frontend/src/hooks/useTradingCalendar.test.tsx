@@ -60,7 +60,9 @@ describe("useTradingCalendar", () => {
   it("HTTP 失敗 → 集合不動(退回只擋週末,不是整組日期判定崩掉)", async () => {
     stubFetch({ detail: { error: "BOOM" } }, 500);
     const { result } = renderHook(() => useTradingCalendar(), { wrapper });
-    await waitFor(() => expect(result.current.isError).toBe(true));
+    // hook 內 retry:1(蓋過 client 的 retry:false)→ 要等一次重試(退避初次 1s),
+    // 而 waitFor 預設 timeout 就是 1s(frontend-testing skill 的 TQ error 終態條目)
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
     expect(isTradingDay(HOLIDAY)).toBe(true);
   });
 

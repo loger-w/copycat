@@ -16,6 +16,7 @@ import { useSignalAlerts } from "@/hooks/useSignalAlerts";
 import { useFuturesStream } from "@/hooks/useFuturesStream";
 import { useIndexStream } from "@/hooks/useIndexStream";
 import { useStockStream } from "@/hooks/useStockStream";
+import { useTradingCalendar } from "@/hooks/useTradingCalendar";
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
 import {
   LEGACY_MAIN_CODE_KEY,
@@ -122,6 +123,11 @@ export default function App() {
     setStkfutContract(null);
   }
 
+  // 交易日曆(mod/trading-calendar SC-9):**唯一**掛載點。消費端(lib/trading-hours 的
+  // 三支函式)是模組級的,多掛幾份只是多打一次同一個端點;而少了這一支,國定假日整天
+  // 每 60s 空打當日段(當日段恆空 → don't-cache-empty → 每次都真的走 TC4)。
+  // 取數失敗 / 後端沒載日曆 = 空集合 = 只擋週末 = 改動前行為(W8),不擋 App 起站。
+  useTradingCalendar();
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
   const { twse, otc, txf } = useIndexStream();
   // 家數 / 騰落流同樣常駐 App 層(design R8):IndexPage 維持純展示,tab 切走也不斷線
