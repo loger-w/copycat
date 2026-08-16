@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "scope": "自評(core-flow §5,medium 檔位;lens A 正確性+白名單 / lens B 渲染成本+test-coverage;opus)",
+  "diff": "review-diff.txt(6a31af57..d4991b3e,26 commits)",
+  "findings": [
+    {"id": "B1", "lens": "B", "severity": "P1", "file": "frontend/src/components/stock/CardIntradayChart.tsx", "line": 32, "claim": "accum useMemo 護欄零測試覆蓋(memo.test mock 掉元件;geometry.test 只 hover,CardIntradayChart 不重跑)", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "geometry.test 補:rerender 餵值相同的新 quotes 物件 → buildIntradayGeometry 計次不增"},
+    {"id": "B2", "lens": "B", "severity": "P1", "file": "copycat/server/app.py", "line": 386, "claim": "overlay_sem 無 timeout;TC4 查無此檔每請求 60s + 空結果不 cache → 4 個慢檔 head-of-line 凍住全 overlay 端點", "quick_check": "CONFIRMED(fetch_daily_bars deadline 30s×2;route 空不 cache)", "disposition": "accepted", "resolution": "route 內 `asyncio.wait_for(stock.daily_bars(code), 15)` 逾時 → 回全 null overlay(不 cache)+ warning log;slot 佔用上界 15s;測試:fake source sleep > timeout → 200 全 null 且鎖釋放"},
+    {"id": "A-1", "lens": "A", "severity": "P2", "file": "frontend/src/components/stock/GroupGridView.tsx", "line": "140/179", "claim": "backfilling gate 用 minutes.size 而 edge-9 用 hasWindowedMinutes,兩把尺", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "三態共用 `hasBars = hasWindowedMinutes(...)`;測試 backfilling:true + 只有 08:59 → 回補中…"},
+    {"id": "A-2", "lens": "A", "severity": "P2", "file": "frontend/src/components/stock/GroupGridView.test.tsx", "line": "655-691", "claim": "「高度均分 class」describe 改寫未在 spec 預告;新斷言兩層皆過鎖太鬆", "quick_check": "CONFIRMED", "disposition": "accepted", "resolution": "spec §8 補 amendment(縮放模型消滅→non-scaling-stroke 契約失效);斷言收緊到唯一 wrapper"},
+    {"id": "A-p2-1", "lens": "A", "severity": "P2", "file": "frontend/src/components/stock/GroupGridView.test.tsx", "claim": "後端 vp JSON → hook Map → accum → vp-bar 全鏈無單一測試", "disposition": "accepted", "resolution": "GroupGridView.test fixture 加 vp 鍵 + 斷言 vp-bar 出現(不 mock hook)"},
+    {"id": "A-p2-6", "lens": "A", "severity": "P2", "file": "tests/server/test_stock_engine.py:1214, test_stock_routes.py:563/597", "claim": "additive 加鍵必改的 set== 斷言未在 spec 該紅名單", "disposition": "accepted", "resolution": "spec §測試清單 amendment 補記(實作已依同性質改)"},
+    {"id": "A-p2-7", "lens": "A", "severity": "P2", "file": "frontend/src/components/stock/GroupGridView.tsx", "claim": "aria-label 仍「查看 …」而點擊語意已是換閃電目標", "disposition": "accepted", "resolution": "aria-label 改「選取 {code} {name}」+ 同步測試斷言(🟢 D 類 UI 文案)"},
+    {"id": "A-p2-2/3/4/5/8/9/10", "lens": "A", "severity": "P2", "claim": "cardSvgBox 無 minPx 地板 / _EMPTY_LIGHT 共用空 dict / snap_down_milli 負值 / geometry.test NaN 座標 / >16 捲動長度 / toggle 列換行 / 測試敘述殘留", "disposition": "rejected_with_reason", "resolution": "實務不可達或已由 grid 約束 / 只序列化 / _fold_vp 已擋 <=0 / 有自檢非 vacuous / AD-7 已拍板 / 可接受降級 / 文案殘留 → 記 next-time 不擋"},
+    {"id": "B3", "lens": "B", "severity": "P2", "file": "frontend/src/lib/stock-intraday-svg.ts", "line": 276, "claim": "hasWindowedMinutes 複製+排序整份 minutes 只為 boolean,GroupCard 每秒跑", "disposition": "accepted", "resolution": "改 for-of keys 提前退出;既有 4 測不變"},
+    {"id": "B4", "lens": "B", "severity": "P2", "file": "frontend/src/components/stock/StockIntradayChart.tsx", "line": 733, "claim": "card 變體 sideSummary 死計算(每 render 271 圈)", "disposition": "accepted", "resolution": "`card ? null : sideSummary(...)`,page 分支逐值不變"},
+    {"id": "B5", "lens": "B", "severity": "P2", "file": "tests/server/test_stock_routes.py", "line": 369, "claim": "sem 測試 2s wait_for + peak==4 精確斷言,慢機器假紅", "disposition": "accepted", "resolution": "timeout 10s;斷言 peak<=4 且 peak>=2"},
+    {"id": "B6", "lens": "B", "severity": "P2", "file": "frontend/src/App.test.tsx", "line": 319, "claim": "全鏈測試未斷言右欄 railCtx 換檔", "disposition": "accepted", "resolution": "補右欄 DOM 斷言(閃電梯標題含 2317)"},
+    {"id": "B7", "lens": "B", "severity": "P2", "file": "frontend/src/components/stock/StockPage.tsx", "line": 218, "claim": "群組檢視點卡片仍拉全量 tape snapshot 無讀者", "disposition": "accepted_deferred", "resolution": "記 next-time(`?tape=0` 或輕量換檔);W-4 要求 onSelect 仍換訂閱,本輪不動"},
+    {"id": "B8", "lens": "B", "severity": "needs_measurement", "claim": "SC-6(e) 10s 窗量不到 60s group-state 全卡 snapshot 換 identity 的重算 commit", "disposition": "accepted", "resolution": "實測改為 30s liveP + 群組切換(16↔17 全卡 remount)兩段皆 longtask 0(hidden tab 只量 JS);記 verification.md"},
+    {"id": "B9", "lens": "B", "severity": "needs_measurement", "claim": "SC-6(a) payload 未量、無自動化上界", "disposition": "accepted_partial", "resolution": "實測 17 檔 319,513 B(fake,每檔 273 分鐘 + vp 8~47 檔位)→ 50 檔換算 ≈ 940 KB < 1.5 MB;自動化上界測試不加(fixture 密度與真實不可比)"},
+    {"id": "B10", "lens": "B", "severity": "needs_measurement", "claim": "冷 cache 50 overlay 排隊佔滿瀏覽器 6 條連線,拖慢 balance/group-state", "disposition": "accepted_deferred", "resolution": "配 B2 逾時降級;記 next-time 盤中實機量 waterfall(fake 6/16 卡量不到)"}
+  ],
+  "p2_summary": {"count": 14, "themes": ["熱路徑無讀者計算(B3/B4)", "測試強度(B1/B5/B6/A-p2-1)", "spec 預告缺口(A-2/A-p2-6)", "文案語意(A-p2-7)", "資料流副作用記 next-time(B7/B10)"]},
+  "summary": {"P0": 0, "P1": 2, "P2": 14, "needs_measurement": 3, "accepted": 12, "rejected": 1, "deferred": 2}
+}
