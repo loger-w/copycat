@@ -232,6 +232,21 @@ describe("useRiver", () => {
     expect(txfMinutes(hook.result.current.state)).toEqual({ "10": 40_000_000 });
   });
 
+  // 🔒 lock(review TD-4):同 `useCorrelation.test.ts` —— 「unmount → 連線關閉」原本只由
+  // 已刪除的 `CorrSection.lazy.test.tsx` 間接守著。江波圖這條更貴:留著的連線會持續收
+  // delta(滿窗夜盤的全量回補 60–80 KB 也可能被觸發)。斷 `closed` 而非「元件消失」;
+  // `instances.length` 不變 = cleanup 的 close 沒有反過來排一次重連。
+  it("unmount → WS 關閉且不重連(instances 數不增)", async () => {
+    const { hook, ws } = await setup();
+    expect(ws.closed).toBe(false);
+    const before = FakeWS.instances.length;
+
+    hook.unmount();
+
+    expect(ws.closed).toBe(true);
+    expect(FakeWS.instances.length).toBe(before);
+  });
+
   it("onopen → open;onclose → closed", async () => {
     const { hook, ws } = await setup();
 

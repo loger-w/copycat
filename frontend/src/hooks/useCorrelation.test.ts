@@ -117,6 +117,22 @@ describe("useCorrelation", () => {
     expect(hook.result.current.wsStatus).toBe("closed");
   });
 
+  // 🔒 lock(review TD-4):「unmount → 連線關閉」的保護原本掛在 `CorrSection.lazy.test.tsx`
+  // 上,那支測試隨 CorrSection 一起刪除後就沒有任何測試守著這條路。**必須斷 FakeWS 的
+  // `closed`**:只驗「元件不見了」對「cleanup 被拿掉」是 vacuous —— 連線會留著每秒收一份
+  // 全量快照直到分頁關閉。`instances.length` 不變則守住另一半:cleanup 內的 close 觸發
+  // `onclose`,那條路若沒被 `alive` 擋住就會排一次重連(關掉又立刻連回來)。
+  it("unmount → WS 關閉且不重連(instances 數不增)", async () => {
+    const { hook, ws } = await setup();
+    expect(ws.closed).toBe(false);
+    const before = FakeWS.instances.length;
+
+    hook.unmount();
+
+    expect(ws.closed).toBe(true);
+    expect(FakeWS.instances.length).toBe(before);
+  });
+
   it("REST 失敗不拋,等推播補上", async () => {
     fetchMock.mockImplementationOnce(async () => {
       throw new Error("boom");
