@@ -1,4 +1,22 @@
-﻿## 2026-08-14(mod/overview-subtabs 收尾沉澱)
+﻿## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
+
+- [ ] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**(review WL-3
+  partial / KR-3):CandleChart 是共用元件、viewBox 寬 1400 寫死,一頁總覽後 pane svg 寬
+  ≈ 312–420px(改版前 ≈ 550,當時也已 3.9px)。本輪只補了 intraday / overlay 的
+  `unitScale` 字級補償(`lib/pane-frame.ts::paneUnitScale` + `svgFontRem`)。修法候選:
+  CandleChart 收 `unitScale` prop 套進五處 fontSize;或 MarketPane 在窄 pane 時傳較小
+  viewBox 寬(需 CandleChart 開 `width` prop)。個股頁 CandleChart 不受影響。
+- [ ] **`rightEdgeLabels` 的 `EDGE_LABEL_H` 未隨 unitScale 縮放**(fix 波偏離 2):字放大後右緣
+  標籤(昨收 / CDP / MA)間距相對變密,極端時可能相疊;`lib/index-chart-svg.ts` 是個股圖共用
+  契約故本輪不動。修法:clamp 高度也乘 unitScale(需連 StockIntradayChart 的呼叫端一起看)。
+- [ ] **1536 寬右欄(≈475px)漲跌停表仍可能出現水平捲軸**(截圖觀察):th / 徽章已 `whitespace-nowrap`
+  防折行截字;9 欄在 475px 內本就擠。候選:金額(億)/ 量比 兩欄在窄容器 `@[…]:hidden`,或縮
+  px-2 → px-1。看 user 實際使用感受再決定。
+- [ ] `frontend-conventions` skill 可沉澱本輪兩條版面教訓(已寫進 skill,見該檔 2026-08-16 節):
+  container query 變體量的是**最近 `@container` 祖先**(MarketPane 的 `@[1050px]:min-h-0`
+  量到左欄寬永不成立);grid 單欄態 auto 列會把自由空間等分給 min-h-0 的項目。
+
+## 2026-08-14(mod/overview-subtabs 收尾沉澱)
 
 - [ ] **tablist 的 ARIA 半套(台股綜合 + RightRail 同型)**(review A-4):兩處
   `role="tablist"`/`role="tab"` 都沒有 `aria-controls` / panel 的 `role="tabpanel"` +
@@ -993,7 +1011,8 @@
   〔2026-08-06 R4 輪加證:全套又目擊 3 次(Task 2/7/8 各一,單檔與重跑皆綠),
   另一 implementer 定位到第二觸發路徑 — 牆鐘落在 09:00–13:25 時 watchdog 分支把
   `stale` 翻真 → `_dirty` → 搶在測試 quote 前 publish `p=None`。重現率已高到
-  幾乎每次全套必中一次,建議升優先度處理。〕
+  幾乎每次全套必中一次,建議升優先度處理。〕〔2026-08-16 mod/overview-onepage-corr-tab
+  輪再加證:後端零 diff,全套 1 failed/2563 目擊同一 `None == 42039920`,單測 ×3 皆綠。〕
 - [ ] **個股頁現價旁加漲跌額(絕對點數)**:本輪(mod/stock-price-prominence)只放大字級,
   % 旁沒有漲跌額;要加時連同 fmtPct 慣例一起看(2026-08-04 change-spec out of scope)。
 - [ ] **三頁現價字級是否統一**:個股頁現價已改 text-3xl,期貨頁 FuturesPage.tsx L54 仍

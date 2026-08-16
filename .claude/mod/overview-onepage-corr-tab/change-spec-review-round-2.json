@@ -1,0 +1,22 @@
+{
+  "round": 2,
+  "scope": "限縮輪:只審 [amendment r1] 段落 + cross-round",
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-16",
+  "findings": [
+    {"id": "R2-1", "severity": "P1", "summary": "candle 態 viewBox 寬是 1400 不是 640;candle chrome 漏算 CandleChart figure", "disposition": "accepted", "resolution": "paneSvgHeight(size, {chromeY, insetX, vbW});per-mode 表:intraday {26,0,640} / overlay {62,34,640} / candle {100(CandleChart figure border2+p32+頂列26+底列20 + MarketChart meta 20),34,1400};SC-4 candle 斷言改 viewBox 第 4 欄"},
+    {"id": "R2-2", "severity": "P1", "summary": "height 預設 220 會覆蓋 CandleChart 自有預設", "disposition": "accepted", "resolution": "prop 無預設;intraday `height ?? 220`;candle 透傳 undefined"},
+    {"id": "R2-3", "severity": "P1", "summary": "figure 同掛 min-h-0 + min-h-60 互斥", "disposition": "accepted", "resolution": "figure 只留 `min-h-60 flex-1`;min-h-0 只在 pane root 與 chart wrapper"},
+    {"id": "R2-4", "severity": "P2", "summary": "svgW 未扣 candle/overlay 巢狀 figure 的水平 inset 34", "disposition": "accepted", "resolution": "併入 R2-1 的 insetX 欄"},
+    {"id": "R2-5", "severity": "P2", "summary": "limit-list-scroll 只在有列分支存在", "disposition": "accepted", "resolution": "把 message 與 table 兩分支包進同一個恆存 `limit-list-scroll` 容器(min-h-0 flex-1 overflow-auto);lock 測試帶 rows fixture 另驗 th sticky"},
+    {"id": "R2-6", "severity": "P2", "summary": "CS-11 截圖條件未落 SC", "disposition": "accepted", "resolution": "SC-3 驗證方式補「右欄捲到中段表頭九欄仍可見」截圖 evidence/SC-3-sticky.png"},
+    {"id": "R2-7", "severity": "P2", "summary": "App.corr-tab 不得以「載入中…」反向斷言", "disposition": "accepted", "resolution": "改為明確禁令"},
+    {"id": "R2-8", "severity": "P2", "summary": "ResizeObserver stub 殘留", "disposition": "accepted", "resolution": "stub 只在該 it 內 + afterEach vi.unstubAllGlobals();對照案不 stub"},
+    {"id": "R2-9", "severity": "P2", "summary": "高度預算算術與量綱", "disposition": "accepted", "resolution": "svg 198~226;figure = svg + 88 ≈ 286~314 > 240"},
+    {"id": "R2-10", "severity": "P2", "summary": "🔵 註解可併入 🔴 commit 的例外牴觸鐵則 B", "disposition": "accepted", "resolution": "刪例外;IndexPage + LimitListSection 檔頭註解同一顆 🔵 commit"},
+    {"id": "R2-11", "severity": "P2", "summary": "騰落線 H≈66 時固定字級標籤可能重疊", "disposition": "accepted", "resolution": "SC-3 截圖驗收補「0 軸與 ±span 標籤不重疊可辨識」;備案:H<90 時省略 ±span 標籤(只留 0)寫入 spec"},
+    {"id": "R2-12", "severity": "P2", "summary": "next-time 改指後自我指涉", "disposition": "accepted", "resolution": "改寫為不依賴單一樣板檔的描述"}
+  ],
+  "counts": {"P0": 0, "P1": 3, "P2": 9, "accepted": 12, "rejected": 0},
+  "exit": "無新 P0;P1 三條全修入 spec(標 [amendment r2]);不加輪"
+}

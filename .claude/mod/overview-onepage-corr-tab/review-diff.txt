@@ -1,0 +1,2387 @@
+diff --git a/docs/next-time.md b/docs/next-time.md
+index f54314f5..35c22e06 100644
+--- a/docs/next-time.md
++++ b/docs/next-time.md
+@@ -260,9 +260,11 @@
+   三刻度 key 唯一)。
+ - [ ] `MarketPane.tsx` 七個 localStorage 呼叫點裸奔無 try/catch(review SI-2,
+   rejected — design 明文「照抄現邏輯」):storage 被政策鎖時預設頁首 render 即白屏,
+-  且全 frontend 零 ErrorBoundary。要修就把 `CorrSection.tsx:18-34` 那對守衛抽
+-  `@/lib/storage`(readKey/writeKey)供兩處共用,順帶收斂 App.tsx / useChartToggles
+-  的同型 try/catch。
++  且全 frontend 零 ErrorBoundary。要修就抽 `@/lib/storage`(`readKey` / `writeKey`,
++  讀寫兩側都包 try/catch),既有同型 try/catch(`App.tsx::initialStockCode` 的
++  setItem/removeItem、`hooks/useChartToggles.ts::persist`、
++  `LimitListSection.tsx::loadFilter` / `persistFilter`)一併收斂。
++  (原文引用的樣板 `CorrSection.tsx:18-34` 已於 2026-08-16 subtab 退役時刪檔。)
+ - [ ] 舊存檔 `copycat-market-key="OTC"` 的使用者升版首載左右兩張都櫃買(review SI-3,
+   rejected — 點一下左圖「加權」即永久自癒):若真嫌,IndexPage 做一次性 seed
+   (MARKET2_KEY_STORE 未設時依左值選互補標的),冪等不引入持續耦合。
+diff --git a/frontend/src/App.corr-tab.test.tsx b/frontend/src/App.corr-tab.test.tsx
+new file mode 100644
+index 00000000..0896fdb5
+--- /dev/null
++++ b/frontend/src/App.corr-tab.test.tsx
+@@ -0,0 +1,142 @@
++/** @vitest-environment jsdom */
++/** 真身級「相關係數頂層 tab」鎖(R2 SC-1)。
++ *
++ *  前身是 `IndexPage.corr-lazy.test.tsx`(subtab 時代的「非 corr subtab = 零 WebSocket」),
++ *  subtab 退役後掛載閘回到 `App` 的 `visited.corr` + `hidden`,鎖跟著搬到新的掛載點。
++ *
++ *  **本檔刻意不 mock CorrPage**:stub 不建線,「stub 下 WS 數為 0」恆真 = 沒有鑑別力。
++ *  錨點文字固定取 RiverPanel 的「等待六腿資料…」—— App 的 Suspense fallback 與
++ *  CorrPanel 空態同為「載入中…」,**不可**用該字串做反向斷言(spec r2: R2-7)。
++ *
++ *  與 subtab 時代的關鍵行為差異:切走**不** unmount(hidden 保留 DOM),兩條 WS 常駐
++ *  —— 與其他三顆 lazy tab 同慣例,也與 R1 前的 corr 頂層 tab 逐字相同。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import App from "@/App";
++
++class FakeWS {
++  static instances: FakeWS[] = [];
++  onopen: (() => void) | null = null;
++  onmessage: ((ev: { data: string }) => void) | null = null;
++  onclose: (() => void) | null = null;
++  onerror: (() => void) | null = null;
++  closed = false;
++
++  constructor(public url: string) {
++    FakeWS.instances.push(this);
++  }
++
++  close(): void {
++    this.closed = true;
++  }
++}
++
++const INDEX_STATE = {
++  trade_date: "2026-07-28",
++  twse: {
++    p: 42_039_920, ref: 43_634_190, high: 43_221_930, low: 41_815_780,
++    stale: false, last_minute: null, minutes: { "0901": 43_000_000 },
++  },
++  otc: {
++    p: 359_800, ref: 378_090, high: 373_420, low: 358_430,
++    stale: false, last_minute: null, minutes: { "1017": 359_800 },
++  },
++  txf: { p: 42_142_000, time: "10:16:10" },
++};
++
++/** 台股綜合頁的漲跌停列表恆掛(subtab 退役後)→ 這條路由每次都真被打。 */
++const BREADTH_ROWS = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  streaks_ready: true,
++  rows: [],
++};
++
++beforeEach(() => {
++  window.localStorage.clear();
++  FakeWS.instances = [];
++  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async (url: string) => {
++      const u = String(url);
++      if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
++      if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
++      if (u.includes("/api/stock/signals/today")) {
++        return new Response(JSON.stringify({ signals: [] }));
++      }
++      if (u.includes("/api/health")) {
++        return new Response(JSON.stringify({ git_sha: null, git_dirty: false }));
++      }
++      if (u.includes("/__build/sha")) {
++        return new Response(JSON.stringify({ git_sha: null, behind: null }));
++      }
++      // corr / river 兩支 hook 的初載 REST 回 404 → state 維持 null(引擎未就緒的正常降級)
++      return new Response(JSON.stringify({}), { status: 404 });
++    }),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.restoreAllMocks();
++});
++
++function renderApp() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <App />
++    </QueryClientProvider>,
++  );
++}
++
++/** App 層另有 index / stock / futures / capital / signals 等常駐連線 → 只挑 corr 這兩條。 */
++function corrWs(): FakeWS[] {
++  return FakeWS.instances.filter((w) => /\/ws\/(corr|river)$/.test(w.url));
++}
++
++function corrWsPaths(): string[] {
++  return corrWs().map((w) => w.url.replace(/^ws:\/\/[^/]+/, ""));
++}
++
++describe("App × CorrPage 頂層 tab(R2 SC-1;lazy 真身)", () => {
++  it("沒點相關係數時零 corr WebSocket;點進去才建 corr + river 兩條", async () => {
++    renderApp();
++    await act(async () => {});
++
++    expect(screen.queryByText("等待六腿資料…")).toBeNull();
++    expect(corrWs()).toEqual([]);
++
++    // 正向對照:少了這半,「零 WS」對「corr 整條路徑壞掉」也會綠(vacuous)
++    fireEvent.click(screen.getByRole("tab", { name: "相關係數" }));
++
++    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
++    expect(corrWsPaths()).toEqual(["/ws/corr", "/ws/river"]);
++  });
++
++  it("切回台股綜合後兩條 WS 仍活著(hidden 保留 DOM,不 unmount)", async () => {
++    renderApp();
++    fireEvent.click(screen.getByRole("tab", { name: "相關係數" }));
++    await screen.findByText("等待六腿資料…");
++
++    fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
++    await act(async () => {});
++
++    expect(corrWsPaths()).toEqual(["/ws/corr", "/ws/river"]); // 沒重連,也沒多開
++    expect(corrWs().map((w) => w.closed)).toEqual([false, false]);
++  });
++
++  it("相關係數 tab 的右欄閃電顯「此頁無可下單標的」(railCtx 落 none)", async () => {
++    renderApp();
++    fireEvent.click(screen.getByRole("tab", { name: "相關係數" }));
++    await screen.findByText("等待六腿資料…");
++
++    expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index 82f80efc..bad1e33c 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -147,21 +147,23 @@ describe("App(index-board T9)", () => {
+   });
+ });
+ 
+-// 🟢 台股綜合 R1(SC-1):corr tab 併入台股綜合頁 → nav 少一顆,
+-// localStorage 值域縮減一項(舊值 "corr" 刻意 fallback 到 index)。
+-describe("App 台股綜合 tab 整併(SC-1)", () => {
+-  it("舊 localStorage 值 corr 落到「台股綜合」(值域縮減的刻意遷移)", () => {
++// 🟢 一頁總覽 R2(SC-1):相關係數自台股綜合頁的 subtab **升回頂層 tab**(排最後一顆)
++// —— R1 曾把它併進台股綜合頁,本輪 subtab 機制退役後改以第 5 顆頂層 tab 承接,
++// localStorage 值域同步**加回** `corr`(R1 前的舊值因此重新還原到相關係數頁,D7 預期)。
++describe("App 相關係數升回頂層 tab(R2 SC-1)", () => {
++  it("舊 localStorage 值 corr 還原到「相關係數」(值域加回)", () => {
+     window.localStorage.setItem("copycat-tab", "corr");
+     renderApp();
+-    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
++    expect(screen.getByRole("tab", { name: "相關係數" }).getAttribute("aria-selected")).toBe(
+       "true",
+     );
+   });
+ 
+-  it("nav 不再有「相關係數」tab", () => {
++  it("nav 有「相關係數」tab 且排在最後一顆", () => {
+     renderApp();
+     const nav = within(screen.getByRole("tablist", { name: "主要分頁" }));
+-    expect(nav.queryByRole("tab", { name: "相關係數" })).toBeNull();
++    expect(nav.getByRole("tab", { name: "相關係數" })).toBeTruthy();
++    expect(nav.getAllByRole("tab").at(-1)?.textContent).toBe("相關係數");
+   });
+ });
+ 
+@@ -284,16 +286,15 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
+ });
+ 
+ describe("App(期貨 tab T15)", () => {
+-  it("nav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨", () => {
++  it("nav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨 / 相關係數", () => {
+     renderApp();
+     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
+-    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;台股綜合 R1(SC-1)起
+-    // 「相關係數」併入首顆分頁內(2026-08-14 起是該頁的一顆 subtab,改版前為收合
+-    // 區塊),不再是獨立 tab。
++    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;一頁總覽 R2(SC-1)起
++    // 「相關係數」自台股綜合頁的 subtab 升回**最後一顆頂層 tab**(D7),前四顆順序不動。
+     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
+       .getAllByRole("tab")
+       .map((el) => el.textContent);
+-    expect(labels).toEqual(["台股綜合", "個股(期)", "選擇權", "期貨"]);
++    expect(labels).toEqual(["台股綜合", "個股(期)", "選擇權", "期貨", "相關係數"]);
+   });
+ 
+   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
+@@ -353,11 +354,11 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
+     expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
+   });
+ 
+-  it("nav 有 4 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
++  it("nav 有 5 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
+     renderApp();
+-    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 5 → 4 是台股綜合 R1(SC-1)
+-    // 把「相關係數」分頁併入台股綜合頁的預期行為改變,右欄三顆不受影響。
+-    expect(navTabs().length).toBe(4);
++    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 4 → 5 是一頁總覽 R2(SC-1)
++    // 把「相關係數」自 subtab 升回頂層 tab 的預期行為改變,右欄三顆不受影響。
++    expect(navTabs().length).toBe(5);
+     expect(railTabs().length).toBe(3);
+   });
+ });
+@@ -444,7 +445,7 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
+   // 用 `vi.resetModules()` + 動態 import 重跑 App 模組會讓這條依賴 module registry
+   // 的重置順序,脆得沒必要。「App.tsx 頂層有呼叫」這件事由該檔的一行呼叫負責,
+   // 行為則由本單元測試 + 真環境驗證共同守住。
+-  it("purgeOrphanKeys 清掉孤兒鍵(停用功能 + 2026-08-14 subtab 改版廢止的四支)", () => {
++  it("purgeOrphanKeys 清掉孤兒鍵(停用功能 + 2026-08-14 收合殼四支 + 2026-08-16 退役的 subtab 鍵)", () => {
+     const orphans = [
+       "stock-ladder-open",
+       "stock-wl-group",
+@@ -452,14 +453,15 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
+       "copycat-limit-list-open",
+       "copycat-sector-open",
+       "copycat-signal-timeline-open",
++      "copycat-index-subtab",
+     ];
+     for (const key of orphans) window.localStorage.setItem(key, "1");
+     purgeOrphanKeys();
+     for (const key of orphans) expect(window.localStorage.getItem(key)).toBeNull();
+-    // 新鍵是活的,不得被順手清掉
+-    window.localStorage.setItem("copycat-index-subtab", "corr");
++    // 活鍵不得被順手清掉(漲跌停列表的篩選偏好在改版後照樣天天讀寫)
++    window.localStorage.setItem("copycat-limit-list-filter", "{}");
+     purgeOrphanKeys();
+-    expect(window.localStorage.getItem("copycat-index-subtab")).toBe("corr");
++    expect(window.localStorage.getItem("copycat-limit-list-filter")).toBe("{}");
+   });
+ });
+ 
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 85789cc0..91150076 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -31,8 +31,9 @@ import { cn } from "@/lib/utils";
+ const StockPage = lazy(() => import("@/components/stock/StockPage"));
+ const FuturesPage = lazy(() => import("@/components/futures/FuturesPage"));
+ const IndexPage = lazy(() => import("@/components/index/IndexPage"));
++const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
+ 
+-type Tab = "txo" | "stock" | "futures" | "index";
++type Tab = "txo" | "stock" | "futures" | "index" | "corr";
+ 
+ const FUT_PRODUCTS = [
+   ["TXF", "大台"],
+@@ -41,14 +42,16 @@ const FUT_PRODUCTS = [
+ ] as const;
+ export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
+ 
+-/** localStorage 值域**縮減一項**:`corr` 自台股綜合 R1(SC-1)起移出合法清單 ——
+- *  相關係數併入台股綜合頁內(2026-08-14 起是該頁的一顆 subtab,改版前為收合區塊),
+- *  舊值因此自然 fallback 到 `index`(刻意遷移,
+- *  不寫搬移碼)。其餘舊值仍各自還原到對應 tab;「無值」時的 fallback 同樣是
+- *  `index` —— 該頁自 index-board SC-1 起排第一顆。 */
++/** localStorage 值域**加回** `corr`(2026-08-16 R2 SC-1):相關係數升為第 5 顆頂層 tab。
++ *  沿革:R1 曾把它併入台股綜合頁(先收合區塊、後 subtab),那段期間 `corr` 不在合法
++ *  清單內、舊值一律 fallback 到 `index`;subtab 機制本輪退役後值域回到 R1 前的樣子,
++ *  停在該值的瀏覽器重新還原到相關係數頁(D7 預期,零遷移碼)。其餘舊值仍各自還原到
++ *  對應 tab;「無值」時的 fallback 是 `index` —— 該頁自 index-board SC-1 起排第一顆。 */
+ function initialTab(): Tab {
+   const saved = window.localStorage.getItem(TAB_KEY);
+-  return saved === "stock" || saved === "futures" || saved === "txo" ? saved : "index";
++  return saved === "stock" || saved === "futures" || saved === "txo" || saved === "corr"
++    ? saved
++    : "index";
+ }
+ 
+ function initialProduct(): FutProduct {
+@@ -101,6 +104,7 @@ export default function App() {
+     txo: true,
+     stock: tab === "stock",
+     futures: tab === "futures",
++    corr: tab === "corr",
+   });
+   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
+   const [stockCode, setStockCode] = useState<string | null>(initialStockCode);
+@@ -201,6 +205,7 @@ export default function App() {
+             ["stock", "個股(期)"],
+             ["txo", "選擇權"],
+             ["futures", "期貨"],
++            ["corr", "相關係數"],
+           ] as [Tab, string][]
+         ).map(([id, label]) => (
+           <button
+@@ -291,6 +296,15 @@ export default function App() {
+               </Suspense>
+             </div>
+           ) : null}
++          {visited.corr ? (
++            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
++              <Suspense
++                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
++              >
++                <CorrPage />
++              </Suspense>
++            </div>
++          ) : null}
+         </div>
+         <RightRail ctx={railCtx} />
+       </div>
+diff --git a/frontend/src/components/corr/CorrPage.tsx b/frontend/src/components/corr/CorrPage.tsx
+index 0efcce75..69a01f29 100644
+--- a/frontend/src/components/corr/CorrPage.tsx
++++ b/frontend/src/components/corr/CorrPage.tsx
+@@ -3,8 +3,9 @@ import { RiverPanel } from "@/components/corr/RiverPanel";
+ import { useCorrelation } from "@/hooks/useCorrelation";
+ import { useRiver } from "@/hooks/useRiver";
+ 
+-/** 台股綜合頁 CorrSection 收合區塊的 lazy body:兩條 WS 都在此建立 —— 收合狀態下
+- * 本元件不 mount,就不會有每秒推播的流量(gate 在 CorrSection 的展開狀態)。
++/** 頂層相關係數 tab 的 lazy body(2026-08-16 R2 升回頂層;首訪後 hidden 保留 DOM,
++ * 兩條 WS 常駐 —— 與其他 lazy tab 同慣例)。兩條 WS 都在此建立,沒點進來過就不 mount,
++ * 也就沒有每秒推播的流量(gate 在 App 的 `visited.corr`)。
+  *
+  * 版面:上半 六腿江波圖(方向與時點)/ 下半 相關係數表(連動強度)。兩者互補 ——
+  * 係數是數字,看不出哪條腿先動;圖看得出時點,看不出強度。
+diff --git a/frontend/src/components/corr/CorrSection.lazy.test.tsx b/frontend/src/components/corr/CorrSection.lazy.test.tsx
+deleted file mode 100644
+index a414c800..00000000
+--- a/frontend/src/components/corr/CorrSection.lazy.test.tsx
++++ /dev/null
+@@ -1,73 +0,0 @@
+-/** @vitest-environment jsdom */
+-/** (b) lazy 真身:**不** mock CorrPage —— 證明 `CorrSection.test.tsx` 的 stub 沒把整條
+- *  lazy 路徑架空(vi.mock 是檔案級 + hoisted,故獨立成檔)。
+- *
+- *  錨點取 RiverPanel 無資料時的「等待六腿資料…」:它只有真的 CorrPage mount 才會出現,
+- *  與 Suspense fallback 的「相關係數載入中…」逐字可區分(CorrPanel 空狀態是「載入中…」,
+- *  刻意不拿它當錨點)。 */
+-import { act, cleanup, render, screen } from "@testing-library/react";
+-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+-
+-import { CorrSection } from "@/components/corr/CorrSection";
+-
+-class FakeWS {
+-  static instances: FakeWS[] = [];
+-  onopen: (() => void) | null = null;
+-  onmessage: ((ev: { data: string }) => void) | null = null;
+-  onclose: (() => void) | null = null;
+-  onerror: (() => void) | null = null;
+-  /** unmount = 斷線的唯一把關點:空的 `close()` 會讓整條「切走後真的斷線」無人驗證。 */
+-  closed = false;
+-
+-  constructor(public url: string) {
+-    FakeWS.instances.push(this);
+-  }
+-
+-  close(): void {
+-    this.closed = true;
+-  }
+-}
+-
+-beforeEach(() => {
+-  window.localStorage.clear();
+-  FakeWS.instances = [];
+-  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
+-  // 兩支 hook 的初載 REST 都回 404 → state 維持 null(引擎未就緒的正常降級路徑)
+-  vi.stubGlobal(
+-    "fetch",
+-    vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))),
+-  );
+-});
+-
+-afterEach(() => {
+-  cleanup();
+-  vi.unstubAllGlobals();
+-});
+-
+-describe("CorrSection(lazy 真身)", () => {
+-  it("(b) render 後真的 mount CorrPage 並建 corr + river 兩條線,不是停在 Suspense fallback", async () => {
+-    render(<CorrSection />);
+-
+-    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
+-    expect(screen.queryByText("相關係數載入中…")).toBeNull();
+-    expect(FakeWS.instances.map((w) => w.url.replace(/^ws:\/\/[^/]+/, ""))).toEqual([
+-      "/ws/corr",
+-      "/ws/river",
+-    ]);
+-  });
+-
+-  it("(c) unmount 後兩條 WS 都真的斷線(不是只是元件消失)", async () => {
+-    const view = render(<CorrSection />);
+-    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
+-    expect(FakeWS.instances.length).toBe(2);
+-
+-    view.unmount();
+-    // unmount 的 cleanup 是同步的,但 lazy/Suspense 的收尾要讓出一次 microtask
+-    await act(async () => {});
+-
+-    expect(screen.queryByText("等待六腿資料…")).toBeNull();
+-    // 沒有重連補建的第三條;且兩條都收乾淨(hook cleanup 的 ws?.close())
+-    expect(FakeWS.instances.length).toBe(2);
+-    expect(FakeWS.instances.every((w) => w.closed)).toBe(true);
+-  });
+-});
+diff --git a/frontend/src/components/corr/CorrSection.test.tsx b/frontend/src/components/corr/CorrSection.test.tsx
+deleted file mode 100644
+index 5f2e9075..00000000
+--- a/frontend/src/components/corr/CorrSection.test.tsx
++++ /dev/null
+@@ -1,82 +0,0 @@
+-/** @vitest-environment jsdom */
+-/** 殼行為 —— CorrPage 換成同步 stub,測的是殼本身。
+- *
+- *  **2026-08-14 subtab 改版**:收合殼卸掉,掛載閘上移到 `IndexPage` 的 subtab 列 ——
+- *  「非 corr subtab 零 mount / 零 WS」的鎖因此搬到 `IndexPage.test.tsx` (s1)(s7) 與
+- *  `IndexPage.corr-lazy.test.tsx`。本檔剩下的是元件層最小契約:掛上就 mount 真身、
+- *  unmount 就把 CorrPage 一起收掉(兩條 WS 靠 hook cleanup 才會斷)。
+- *
+- *  **為什麼要 stub 計數而不是 query DOM 就好**:lazy + Suspense 的失敗樣態是「永遠停在
+- *  fallback」,而 `queryByTestId(...) === null` 對「沒 render」與「還在 suspend」是同一個
+- *  答案 —— 斷言會 vacuously pass。故一律先 `findByTestId` 等 stub 真的 mount,
+- *  卸載則斷言 unmount **計數 +1**(不是查不到)。
+- *  lazy 真身(確認 mock 沒把整條路徑架空)另在 `CorrSection.lazy.test.tsx`。 */
+-import { act, cleanup, render, screen } from "@testing-library/react";
+-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+-
+-import { CorrSection } from "@/components/corr/CorrSection";
+-
+-const counts = vi.hoisted(() => ({ mount: 0, unmount: 0 }));
+-
+-// factory 回 `{ default: Stub }` —— CorrPage 是 default export,漏了 lazy 解析直接炸。
+-// react 走 factory 內動態 import:vi.mock 被提升到 import 之上,直接引用檔頂的 binding
+-// 會在初始化前存取。
+-vi.mock("@/components/corr/CorrPage", async () => {
+-  const React = await import("react");
+-  function Stub() {
+-    React.useEffect(() => {
+-      counts.mount += 1;
+-      return () => {
+-        counts.unmount += 1;
+-      };
+-    }, []);
+-    return React.createElement("div", { "data-testid": "corr-stub" });
+-  }
+-  return { default: Stub };
+-});
+-
+-beforeEach(() => {
+-  window.localStorage.clear();
+-  counts.mount = 0;
+-  counts.unmount = 0;
+-  // 匿名 stub,純粹擋 jsdom 真的去連線 —— 「零 WS」的鎖在 IndexPage.test.tsx,
+-  // 本檔不對它斷言(review B-5)。
+-  vi.stubGlobal("WebSocket", vi.fn());
+-});
+-
+-afterEach(() => {
+-  cleanup();
+-  vi.unstubAllGlobals();
+-  // spy 還原放 afterEach(不是測試主體末尾):斷言先炸時,主體末尾的 mockRestore
+-  // 永遠不會執行,Storage.prototype 的 spy 會漏到後續測試(review A-2)。
+-  vi.restoreAllMocks();
+-});
+-
+-describe("CorrSection", () => {
+-  it("(a) render 即 mount CorrPage(無收合鈕、零 OPEN_KEY 讀寫)", async () => {
+-    const getItem = vi.spyOn(Storage.prototype, "getItem");
+-    const setItem = vi.spyOn(Storage.prototype, "setItem");
+-    render(<CorrSection />);
+-
+-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+-    expect(counts.mount).toBe(1);
+-    expect(screen.queryByRole("button", { name: /相關係數/ })).toBeNull();
+-
+-    // 元件層真契約是「零 storage 存取」(殼只做 lazy + Suspense)—— 只寫
+-    // `not.toContain(舊鍵)` 在 keys 恆空時是 vacuous:舊鍵改名或 spy 沒掛上都照樣綠。
+-    const keys = [...getItem.mock.calls, ...setItem.mock.calls].map((c) => String(c[0]));
+-    expect(keys).toEqual([]);
+-  });
+-
+-  it("(d) unmount 把 CorrPage 一起收掉(hook cleanup 才會斷線)", async () => {
+-    const view = render(<CorrSection />);
+-    await screen.findByTestId("corr-stub");
+-    expect(counts.unmount).toBe(0);
+-
+-    view.unmount();
+-    await act(async () => {});
+-
+-    expect(counts.unmount).toBe(1);
+-    expect(screen.queryByTestId("corr-stub")).toBeNull();
+-  });
+-});
+diff --git a/frontend/src/components/corr/CorrSection.tsx b/frontend/src/components/corr/CorrSection.tsx
+deleted file mode 100644
+index 809e02f1..00000000
+--- a/frontend/src/components/corr/CorrSection.tsx
++++ /dev/null
+@@ -1,25 +0,0 @@
+-/** 台股綜合頁的相關係數 subtab panel(SC-4)。
+- *
+- *  **非 active subtab = unmount,不是 `hidden`**(2026-08-14 subtab 改版前是「收合 =
+- *  unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):corr / river 兩條 WS 活在
+- *  `CorrPage` 內,不 render 就沒有 hook、沒有連線 —— 台股綜合是預設落地頁,若用專案
+- *  慣例的 `hidden` 保 DOM,等於所有人開站就吃兩條每秒推播。代價是切回來有 lazy 載入 +
+- *  WS 重連的短暫空窗(design Known Risks KR-2,判定可接受:corr 是即時推播資料,
+- *  重建即恢復)。
+- *
+- *  lazy chunk 邊界不變 —— 原本在 App 層的 `lazy(() => import("./CorrPage"))` 只是移到這裡。 */
+-import { lazy, Suspense } from "react";
+-
+-const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
+-
+-export function CorrSection() {
+-  return (
+-    <div data-testid="corr-section" className="px-4 pt-2 pb-4">
+-      {/* fallback 文字刻意不用「載入中…」(CorrPanel 空狀態就是那句)—— 測試要能
+-          逐字區分「仍 suspend」與「CorrPage 已 mount」,同字串會讓斷言失去鑑別力。 */}
+-      <Suspense fallback={<p className="py-6 text-center text-sm text-ink-muted">相關係數載入中…</p>}>
+-        <CorrPage />
+-      </Suspense>
+-    </div>
+-  );
+-}
+diff --git a/frontend/src/components/index/AdvanceDeclineChart.test.tsx b/frontend/src/components/index/AdvanceDeclineChart.test.tsx
+index 8a0a9931..b4fb74c7 100644
+--- a/frontend/src/components/index/AdvanceDeclineChart.test.tsx
++++ b/frontend/src/components/index/AdvanceDeclineChart.test.tsx
+@@ -10,8 +10,10 @@ function pt(t: string, twse: BreadthBuckets, tpex: BreadthBuckets): BreadthPoint
+   return { t, twse, tpex };
+ }
+ 
++/** 線拆成 0 軸上下兩段後,**兩段的 points 完全相同**(可見範圍由 clip 決定,不是各畫
++ *  一半)—— 幾何類斷言一律錨 `adl-line-up`,兩段都查等於同一件事驗兩次。 */
+ function pointCount(): number {
+-  const line = screen.getByTestId("adl-line");
++  const line = screen.getByTestId("adl-line-up");
+   const raw = (line.getAttribute("points") ?? "").trim();
+   return raw === "" ? 0 : raw.split(/\s+/).length;
+ }
+@@ -87,7 +89,7 @@ describe("AdvanceDeclineChart 域與防禦(SC-4)", () => {
+ 
+   it("(f) x 是固定域不隨資料伸縮:同一分鐘鍵在不同 series 下 x 相同", () => {
+     render(<AdvanceDeclineChart series={[pt("1000", [0, 5, 0, 0, 0], [0, 0, 0, 0, 0])]} />);
+-    const solo = (screen.getByTestId("adl-line").getAttribute("points") ?? "").split(",")[0];
++    const solo = (screen.getByTestId("adl-line-up").getAttribute("points") ?? "").split(",")[0];
+     cleanup();
+     render(
+       <AdvanceDeclineChart
+@@ -98,7 +100,7 @@ describe("AdvanceDeclineChart 域與防禦(SC-4)", () => {
+         ]}
+       />,
+     );
+-    const many = (screen.getByTestId("adl-line").getAttribute("points") ?? "").split(/\s+/)[1];
++    const many = (screen.getByTestId("adl-line-up").getAttribute("points") ?? "").split(/\s+/)[1];
+     expect(many?.split(",")[0]).toBe(solo);
+   });
+ 
+@@ -107,16 +109,20 @@ describe("AdvanceDeclineChart 域與防禦(SC-4)", () => {
+     expect(screen.getByTestId("adl-zero")).toBeTruthy();
+   });
+ 
++  // 兩段線都要斷:只查舊的單一 `adl-line` 在改名後恆為 null,測試會靜默轉 vacuous
++  // (實作把線畫出來了照樣綠)。
+   it("(h) 空 series → 佔位文字、無折線", () => {
+     render(<AdvanceDeclineChart series={[]} />);
+     expect(screen.getByTestId("adl-chart").textContent).toContain("盤中累積後顯示");
+-    expect(screen.queryByTestId("adl-line")).toBeNull();
++    expect(screen.queryByTestId("adl-line-up")).toBeNull();
++    expect(screen.queryByTestId("adl-line-down")).toBeNull();
+   });
+ 
+   it("(i) 全部域外 → 同樣走佔位(沒有可畫的點)", () => {
+     render(<AdvanceDeclineChart series={[pt("1430", [0, 9, 0, 0, 0], [0, 0, 0, 0, 0])]} />);
+     expect(screen.getByTestId("adl-chart").textContent).toContain("盤中累積後顯示");
+-    expect(screen.queryByTestId("adl-line")).toBeNull();
++    expect(screen.queryByTestId("adl-line-up")).toBeNull();
++    expect(screen.queryByTestId("adl-line-down")).toBeNull();
+   });
+ 
+   it("(j) 單序列不放 legend(標題即名)", () => {
+@@ -125,3 +131,54 @@ describe("AdvanceDeclineChart 域與防禦(SC-4)", () => {
+     expect(screen.queryByTestId("adl-legend")).toBeNull();
+   });
+ });
++
++// 分時圖(StockIntradayChart)同款手法:一條完整的線 / 一塊完整的面積各畫兩份,可見
++// 範圍交給 0 軸上下兩個 clipPath 決定。**兩份恆 render** —— 依 net 正負條件 render 的話,
++// 全紅那天的 `adl-line-down` 會消失,錨點隨資料時有時無。
++describe("AdvanceDeclineChart 紅綠雙色(SC-6)", () => {
++  const MIXED = [
++    pt("0930", [0, 30, 0, 1, 0], [0, 0, 0, 0, 0]), // net +29
++    pt("1000", [0, 1, 0, 40, 0], [0, 0, 0, 0, 0]), // net −39
++  ];
++
++  it("(k) 線拆兩段:上段 stroke-bull / 下段 stroke-bear,各自 clip 到 defs 內同 id", () => {
++    const { container } = render(<AdvanceDeclineChart series={MIXED} />);
++    const up = screen.getByTestId("adl-line-up");
++    const down = screen.getByTestId("adl-line-down");
++    expect(up.getAttribute("class")).toContain("stroke-bull");
++    expect(down.getAttribute("class")).toContain("stroke-bear");
++    // 單色 accent 線已退役:留著等於改壞雙色時仍有一條線在,零錯誤訊號
++    expect(container.querySelector(".stroke-accent")).toBeNull();
++
++    const clips = [...container.querySelectorAll("clipPath")];
++    expect(clips.length).toBe(2);
++    for (const clip of clips) {
++      const id = clip.getAttribute("id")!;
++      // url(#…) 解析失敗在 SVG 規範下是「該元素不繪製」,完全靜默 → id 字元集要鎖
++      expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
++    }
++    const [above, below] = clips.map((c) => c.getAttribute("id")!);
++    expect(above!.endsWith("-above")).toBe(true);
++    expect(below!.endsWith("-below")).toBe(true);
++    expect(up.getAttribute("clip-path")).toBe(`url(#${above})`);
++    expect(down.getAttribute("clip-path")).toBe(`url(#${below})`);
++  });
++
++  it("(l) 面積同樣兩段:fill-bull / fill-bear,半透明 0.15", () => {
++    render(<AdvanceDeclineChart series={MIXED} />);
++    const upArea = screen.getByTestId("adl-area-up");
++    const downArea = screen.getByTestId("adl-area-down");
++    expect(upArea.getAttribute("class")).toContain("fill-bull");
++    expect(downArea.getAttribute("class")).toContain("fill-bear");
++    expect(upArea.getAttribute("fill-opacity")).toBe("0.15");
++    expect(downArea.getAttribute("fill-opacity")).toBe("0.15");
++  });
++
++  it("(k2) 全正 / 全負也照畫兩段(錨點不隨資料正負消失)", () => {
++    render(<AdvanceDeclineChart series={[pt("0930", [0, 30, 0, 0, 0], [0, 0, 0, 0, 0])]} />);
++    expect(screen.getByTestId("adl-line-up")).toBeTruthy();
++    expect(screen.getByTestId("adl-line-down")).toBeTruthy();
++    expect(screen.getByTestId("adl-area-up")).toBeTruthy();
++    expect(screen.getByTestId("adl-area-down")).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/components/index/AdvanceDeclineChart.tsx b/frontend/src/components/index/AdvanceDeclineChart.tsx
+index f206fcc1..39764765 100644
+--- a/frontend/src/components/index/AdvanceDeclineChart.tsx
++++ b/frontend/src/components/index/AdvanceDeclineChart.tsx
+@@ -6,13 +6,22 @@
+  *  dataviz:單序列 → **不放 legend**(標題「騰落線」即名),只在右端直接標末值,
+  *  不逐點標數字;格線退隱、0 軸比格線明顯一級(騰落線的意義完全繫於零線的哪一側)。
+  *  x 用**固定域**(與同頁分時圖同一組 `X_START_MIN`/`X_END_MIN` 常數),盤中累積時
+- *  已畫出的點不會隨新資料橫向漂移。 */
++ *  已畫出的點不會隨新資料橫向漂移。
++ *
++ *  **紅綠雙色**(2026-08-16):0 軸之上 bull 紅、之下 bear 綠,線與面積都是「整條畫兩份 +
++ *  clipPath 切上下」——與 `StockIntradayChart` 的昨收上下同一套手法。單色 accent 讀不出
++ *  多空側,而騰落線的全部意義就是那一側。 */
++import { useId } from "react";
++
++import { useContainerSize } from "@/hooks/useContainerSize";
+ import { X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+ import { pts } from "@/lib/svg-points";
+ import { HOUR_TICKS } from "@/lib/time-labels";
+-import { cn } from "@/lib/utils";
++import { cn, safeIdToken } from "@/lib/utils";
+ import type { BreadthPoint } from "@/types";
+ 
++/** `width` 是恆定的 viewBox 寬(x 是固定時間域);`height` 只當**量測不可用時的
++ *  fallback**(舊常數 150),量得到時 viewBox 高改由容器長寬比反推。 */
+ const SIZE = { width: 640, height: 150 };
+ const PAD_TOP = 10;
+ const PAD_BOTTOM = 14; // 底部留給 X 軸時刻標籤
+@@ -55,49 +64,83 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
+     })
+     .filter((v): v is { minute: number; net: number } => v !== null);
+ 
++  // 高度改由 CSS 固定(h-24),viewBox 高反推自實際長寬比 —— 改版前是「寬決定高」
++  // (寬 × 150/640),左欄 930px 時這條線獨佔 218px,一頁總覽的高度預算吃不下。
++  const [sizeRef, size] = useContainerSize<HTMLDivElement>();
++  const vbHeight =
++    size.width > 0 && size.height > 0
++      ? Math.round((SIZE.width * size.height) / size.width)
++      : SIZE.height;
++
+   return (
+     <div data-testid="adl-chart" className="flex flex-col gap-1">
+       <span className="text-sm text-ink">騰落線</span>
+-      {points.length === 0 ? (
+-        <p className="py-8 text-center text-sm text-ink-muted">盤中累積後顯示</p>
+-      ) : (
+-        <Plot points={points} />
+-      )}
++      {/* 恆存 wrapper(空態文案也在其中):ref 只掛有資料那支的話,盤前那段量到 0×0
++          而 hook 不會重跑 —— 第一筆資料進來時圖仍是 fallback 比例(useContainerSize
++          呼叫端契約 1)。fallback 態由 svg `h-full w-full` + preserveAspectRatio 預設
++          meet 縮放置中承接,不溢出(W-10)。 */}
++      <div ref={sizeRef} className="flex h-24 shrink-0 items-center justify-center">
++        {points.length === 0 ? (
++          <p className="text-sm text-ink-muted">盤中累積後顯示</p>
++        ) : (
++          <Plot points={points} height={vbHeight} />
++        )}
++      </div>
+     </div>
+   );
+ }
+ 
+-function Plot({ points }: { points: { minute: number; net: number }[] }) {
++function Plot({
++  points,
++  height,
++}: {
++  points: { minute: number; net: number }[];
++  height: number;
++}) {
+   // 對稱域:零線恆在正中,「多空哪邊佔優」用一眼的高低就讀得出來,不必先找基準線。
+   // 下限 1 避免全零時 span=0 除零。
+   const span = Math.max(1, ...points.map((p) => Math.abs(p.net)));
+-  const plotH = SIZE.height - PAD_TOP - PAD_BOTTOM;
++  const plotH = height - PAD_TOP - PAD_BOTTOM;
+   const toY = (net: number): number => PAD_TOP + ((span - net) / (2 * span)) * plotH;
+   const zeroY = toY(0);
+   const line = points.map((p) => ({ x: toX(p.minute), y: toY(p.net) }));
+   const last = points[points.length - 1]!;
+   const lastPt = line[line.length - 1]!;
++  // 面積 = 線 + 沿 0 軸回到起點的封閉多邊形;上下兩半各塗一次,可見範圍交給 clip
++  const areaPolygon = `${pts(line)} ${lastPt.x.toFixed(1)},${zeroY.toFixed(1)} ${line[0]!.x.toFixed(1)},${zeroY.toFixed(1)}`;
++  // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
++  const uid = safeIdToken(useId());
++  const clipAbove = `${uid}-above`;
++  const clipBelow = `${uid}-below`;
+ 
+   return (
+     <svg
+-      viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
+-      className="w-full"
++      viewBox={`0 0 ${SIZE.width} ${height}`}
++      className="h-full w-full"
+       role="img"
+       aria-label="全市場騰落線"
+     >
++      <defs>
++        <clipPath id={clipAbove}>
++          <rect x={0} y={0} width={SIZE.width} height={Math.max(0, zeroY)} />
++        </clipPath>
++        <clipPath id={clipBelow}>
++          <rect x={0} y={zeroY} width={SIZE.width} height={Math.max(0, height - zeroY)} />
++        </clipPath>
++      </defs>
+       {HOUR_TICKS.map(({ minute, label }) => (
+         <g key={minute}>
+           <line
+             x1={toX(minute)}
+             x2={toX(minute)}
+             y1={PAD_TOP}
+-            y2={SIZE.height - PAD_BOTTOM}
++            y2={height - PAD_BOTTOM}
+             className="stroke-line"
+             strokeWidth={0.4}
+           />
+           <text
+             x={toX(minute) + 2}
+-            y={SIZE.height - 2}
++            y={height - 2}
+             className="fill-ink-dim"
+             fontSize="0.625rem"
+           >
+@@ -121,20 +164,45 @@ function Plot({ points }: { points: { minute: number; net: number }[] }) {
+       <text x={2} y={PAD_TOP + 8} className="fill-ink-dim" fontSize="0.625rem">
+         {signed(span)}
+       </text>
+-      <text x={2} y={SIZE.height - PAD_BOTTOM - 2} className="fill-ink-dim" fontSize="0.625rem">
++      <text x={2} y={height - PAD_BOTTOM - 2} className="fill-ink-dim" fontSize="0.625rem">
+         {signed(-span)}
+       </text>
++      {/* 面積與線都是「整份畫兩遍 + clip 切上下」,**恆 render**:依 net 正負條件 render
++          的話,全紅那天的下半段元素整個消失,錨點會隨資料時有時無。 */}
++      <polygon
++        data-testid="adl-area-up"
++        points={areaPolygon}
++        className="fill-bull"
++        fillOpacity="0.15"
++        clipPath={`url(#${clipAbove})`}
++      />
++      <polygon
++        data-testid="adl-area-down"
++        points={areaPolygon}
++        className="fill-bear"
++        fillOpacity="0.15"
++        clipPath={`url(#${clipBelow})`}
++      />
++      <polyline
++        data-testid="adl-line-up"
++        points={pts(line)}
++        fill="none"
++        className="stroke-bull"
++        strokeWidth={2}
++        clipPath={`url(#${clipAbove})`}
++      />
+       <polyline
+-        data-testid="adl-line"
++        data-testid="adl-line-down"
+         points={pts(line)}
+         fill="none"
+-        className="stroke-accent"
++        className="stroke-bear"
+         strokeWidth={2}
++        clipPath={`url(#${clipBelow})`}
+       />
+       <text
+         data-testid="adl-last"
+         x={lastPt.x + 4}
+-        y={Math.min(Math.max(lastPt.y + 3, PAD_TOP + 8), SIZE.height - PAD_BOTTOM)}
++        y={Math.min(Math.max(lastPt.y + 3, PAD_TOP + 8), height - PAD_BOTTOM)}
+         className={cn(
+           "font-mono",
+           // SVG `<text>` 吃的是 fill,不是 color —— `text-bull` 在這裡是 no-op(MarketChart 同慣例)
+diff --git a/frontend/src/components/index/BreadthBand.test.tsx b/frontend/src/components/index/BreadthBand.test.tsx
+index ada536db..3cf51788 100644
+--- a/frontend/src/components/index/BreadthBand.test.tsx
++++ b/frontend/src/components/index/BreadthBand.test.tsx
+@@ -101,17 +101,25 @@ describe("BreadthBand 格值與版面(SC-4)", () => {
+     }
+   });
+ 
+-  it("(g) 數字用 ink token,不與底色同色(染色只在格底)", () => {
++  // 🔴 2026-08-16(D8):停板兩桶改**實心**底(bg-bull / bg-bear 滿版,不再是 /15 淡底),
++  // 白字是隨之而來的可讀性條件 —— ink token 在滿版紅綠上對比不足。標籤與數字都要白:
++  // 只染數字會留下一個 ink-dim 的「漲停」字浮在實心紅底上,比改版前更難讀。
++  // 樣板 = 個股期漲跌停燈(WatchlistSidebar.tsx:405-406 的 bg-bull … text-white)。
++  it("(g) 漲停桶標籤與數字都是白字(實心紅底上的可讀性)", () => {
+     render(<BreadthBand breadth={state()} />);
++    const cell = screen.getByTestId("breadth-cell-twse-limit_up");
++    const label = within(cell).getByText("漲停");
++    expect(label.className).toContain("text-white");
+     const num = screen.getByTestId("breadth-value-twse-limit_up").className;
+-    expect(num).toContain("text-ink");
++    expect(num).toContain("text-white");
+     expect(num).not.toContain("text-bull");
++    expect(num).not.toContain("text-bear");
+   });
+ });
+ 
+-/** 🔴 2026-08-14 拍板配色:上漲 / 下跌兩格**沒有底色**,識別完全落在數字上 ——
+- *  這兩格的數字染紅綠與 (f)(g) 的「停板格底染色、停板數字留 ink」不衝突,兩者是
+- *  「有底色的格不重複染字」與「沒底色的格由字承擔」的一體兩面。 */
++/** 🔴 2026-08-14 拍板配色(D8:本輪不動):上漲 / 下跌兩格**沒有底色**,識別完全落在
++ *  數字上 —— 這兩格的數字染紅綠與 (f)(g)(o) 的「停板格實心底 + 白字」不衝突,兩者是
++ *  「有底色的格靠色塊、字退成白」與「沒底色的格由字承擔」的一體兩面。 */
+ describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
+   it("(l) 上漲數字紅字(text-bull),兩市場皆然", () => {
+     render(<BreadthBand breadth={state()} />);
+@@ -139,11 +147,14 @@ describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
+     expect(cls).not.toContain("text-bear");
+   });
+ 
+-  it("(o) 跌停數字仍是 ink(綠底上的綠字讀不出來;與 (g) 互補)", () => {
++  it("(o) 跌停桶標籤與數字都是白字(與 (g) 同一條規則的另一邊)", () => {
+     render(<BreadthBand breadth={state()} />);
++    const cell = screen.getByTestId("breadth-cell-twse-limit_down");
++    expect(within(cell).getByText("跌停").className).toContain("text-white");
+     const cls = screen.getByTestId("breadth-value-twse-limit_down").className;
+-    expect(cls).toContain("text-ink");
++    expect(cls).toContain("text-white");
+     expect(cls).not.toContain("text-bear");
++    expect(cls).not.toContain("text-bull");
+   });
+ 
+   it("(p) 上漲 / 下跌格仍然沒有底色(染色不與字色疊加)", () => {
+diff --git a/frontend/src/components/index/BreadthBand.tsx b/frontend/src/components/index/BreadthBand.tsx
+index a423ade5..6039dc68 100644
+--- a/frontend/src/components/index/BreadthBand.tsx
++++ b/frontend/src/components/index/BreadthBand.tsx
+@@ -3,13 +3,14 @@
+  *  純展示元件 —— 資料由 App 層 `useBreadth()` 取得後經 IndexPage 下傳(design R8)。
+  *  桶序 `漲停 / 上漲 / 平盤 / 下跌 / 跌停` 與後端 `_series_list()` 同一份順序,**不得重排**。
+  *
+- *  **染色與底色互斥,一格只用一種手段**(2026-08-14 拍板配色):
+- *  - 停板兩格染**格底**(漲停紅底 / 跌停綠底,台股紅漲綠跌),數字留 ink token ——
+- *    數字若跟著染成同色系,紅底上的紅字在暗色盤面幾乎讀不出來(dataviz:文字穿
+- *    text token,顏色由旁邊的色塊承擔識別)。
++ *  **識別手段一格只用一種**(2026-08-14 拍板 + 2026-08-16 D8 加深停板桶):
++ *  - 停板兩格是**實心格底**(漲停 `bg-bull` 紅底 / 跌停 `bg-bear` 綠底,台股紅漲綠跌),
++ *    標籤與數字一律 `text-white` —— 滿版紅綠上 ink token 對比不足,而字若跟著染成同
++ *    色系更是完全讀不出來(dataviz:顏色由色塊承擔,文字只要在色塊上讀得到)。同款
++ *    實心燈的既有樣板是個股期漲跌停標(`WatchlistSidebar.tsx:405-406`)。
+  *  - 上漲 / 下跌兩格**沒有底色**,所以識別改由**數字**承擔(上漲 `text-bull` /
+- *    下跌 `text-bear`)—— 這不是推翻上一條,是同一條規則的另一半:有色塊的格不重複
+- *    染字,沒色塊的格才由字說話。
++ *    下跌 `text-bear`)—— 這不是推翻上一條,是同一條規則的另一半:有色塊的格由色塊
++ *    說話、字退成白,沒色塊的格才由字說話。
+  *  - 平盤維持中性 ink:五格全染等於沒有重點,而「沒漲沒跌」本來就不需要顏色。 */
+ import type { ReactNode } from "react";
+ 
+@@ -18,19 +19,33 @@ import type { BreadthCounts, BreadthState } from "@/types";
+ 
+ type Bucket = keyof BreadthCounts["twse"];
+ 
+-/** `tone` 只給格底與框線(`null` = 中性,沿用面板既有 surface/line);
+- *  `valueTone` 只給數字(`null` = `text-ink`)。兩欄**刻意不會同時有值**:見檔頭。 */
++/** `tone` 給格底與框線(`null` = 中性,沿用面板既有 surface/line);`labelTone` 給標籤
++ *  (`null` = `text-ink-dim`)、`valueTone` 給數字(`null` = `text-ink`)。實心底的格
++ *  兩支 tone 一起給白,無底色的格只給 `valueTone`:見檔頭的「一格只用一種手段」。 */
+ const BUCKETS: readonly {
+   key: Bucket;
+   label: string;
+   tone: string | null;
++  labelTone?: string;
+   valueTone: string | null;
+ }[] = [
+-  { key: "limit_up", label: "漲停", tone: "border-bull/40 bg-bull/15", valueTone: null },
++  {
++    key: "limit_up",
++    label: "漲停",
++    tone: "border-bull bg-bull",
++    labelTone: "text-white",
++    valueTone: "text-white",
++  },
+   { key: "up", label: "上漲", tone: null, valueTone: "text-bull" },
+   { key: "flat", label: "平盤", tone: null, valueTone: null },
+   { key: "down", label: "下跌", tone: null, valueTone: "text-bear" },
+-  { key: "limit_down", label: "跌停", tone: "border-bear/40 bg-bear/15", valueTone: null },
++  {
++    key: "limit_down",
++    label: "跌停",
++    tone: "border-bear bg-bear",
++    labelTone: "text-white",
++    valueTone: "text-white",
++  },
+ ];
+ 
+ const MARKETS: readonly { key: keyof BreadthCounts; label: string }[] = [
+@@ -99,7 +114,7 @@ export function BreadthBand({ breadth }: { breadth: BreadthState | null }) {
+                 b.tone ?? "border-line bg-surface",
+               )}
+             >
+-              <span className="text-xs text-ink-dim">{b.label}</span>
++              <span className={cn("text-xs", b.labelTone ?? "text-ink-dim")}>{b.label}</span>
+               <span
+                 data-testid={`breadth-value-${m.key}-${b.key}`}
+                 className={cn("font-mono text-sm", b.valueTone ?? "text-ink")}
+diff --git a/frontend/src/components/index/IndexPage.corr-lazy.test.tsx b/frontend/src/components/index/IndexPage.corr-lazy.test.tsx
+deleted file mode 100644
+index a97eb300..00000000
+--- a/frontend/src/components/index/IndexPage.corr-lazy.test.tsx
++++ /dev/null
+@@ -1,107 +0,0 @@
+-/** @vitest-environment jsdom */
+-/** 真身級「非 corr subtab = 零 WebSocket」鎖(SC-5;round-2 P1-1)。
+- *
+- *  改版前這條保護在 `CorrSection.lazy.test.tsx` (b)(「收合態零建線」),而收合殼被
+- *  subtab 取代後,唯一的掛載閘移到了 `IndexPage` —— 鎖必須跟著搬到新的掛載點。
+- *
+- *  **本檔刻意不 mock CorrPage**:`IndexPage.test.tsx` 的檔案級 stub 不會建線,
+- *  「stub 下 WS 數為 0」恆真 = 沒有鑑別力。錨點文字取 RiverPanel 的「等待六腿資料…」,
+- *  與 Suspense fallback 的「相關係數載入中…」逐字可區分。 */
+-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+-
+-import { IndexPage } from "@/components/index/IndexPage";
+-import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+-
+-class FakeWS {
+-  static instances: FakeWS[] = [];
+-  onopen: (() => void) | null = null;
+-  onmessage: ((ev: { data: string }) => void) | null = null;
+-  onclose: (() => void) | null = null;
+-  onerror: (() => void) | null = null;
+-  closed = false;
+-
+-  constructor(public url: string) {
+-    FakeWS.instances.push(this);
+-  }
+-
+-  close(): void {
+-    this.closed = true;
+-  }
+-}
+-
+-const TWSE: IndexSeries = {
+-  p: 42_039_920,
+-  ref: 43_634_190,
+-  high: 43_221_930,
+-  low: 41_815_780,
+-  stale: false,
+-  minutes: { "0901": 43_000_000 },
+-};
+-const TXF: TxfQuote = { p: 42_142_000, time: "10:16:10" };
+-
+-/** 預設 subtab = 漲跌停 → `LimitListBody` 每次都真掛且真打這條路由(P0-2)。 */
+-const BREADTH_ROWS = {
+-  enabled: true,
+-  trade_date: "2026-08-06",
+-  as_of: "10:31:00",
+-  stale: false,
+-  streaks_ready: true,
+-  rows: [],
+-};
+-
+-beforeEach(() => {
+-  window.localStorage.clear();
+-  FakeWS.instances = [];
+-  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
+-  vi.stubGlobal(
+-    "fetch",
+-    vi.fn(async (url: string) => {
+-      const u = String(url);
+-      if (u.includes("/api/market/breadth/rows")) {
+-        return new Response(JSON.stringify(BREADTH_ROWS));
+-      }
+-      // corr / river 兩支 hook 的初載 REST 回 404 → state 維持 null(引擎未就緒的正常降級)
+-      return new Response(null, { status: 404 });
+-    }),
+-  );
+-});
+-
+-afterEach(() => {
+-  cleanup();
+-  vi.unstubAllGlobals();
+-});
+-
+-function renderPage() {
+-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+-  return render(
+-    <QueryClientProvider client={client}>
+-      <IndexPage twse={TWSE} otc={null} txf={TXF} breadth={null} />
+-    </QueryClientProvider>,
+-  );
+-}
+-
+-function subtab(name: string): HTMLElement {
+-  return within(screen.getByRole("tablist", { name: "台股綜合分頁" })).getByRole("tab", { name });
+-}
+-
+-describe("IndexPage × CorrPage(lazy 真身)", () => {
+-  it("預設 subtab(漲跌停)零 WebSocket;切到相關係數才建 corr + river 兩條", async () => {
+-    renderPage();
+-    await act(async () => {});
+-
+-    expect(screen.queryByText("等待六腿資料…")).toBeNull();
+-    expect(FakeWS.instances).toEqual([]);
+-
+-    // 正向對照:少了這半,「零 WS」對「corr 整條路徑壞掉」也會綠(vacuous)
+-    fireEvent.click(subtab("相關係數"));
+-
+-    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
+-    expect(screen.queryByText("相關係數載入中…")).toBeNull();
+-    expect(FakeWS.instances.map((w) => w.url.replace(/^ws:\/\/[^/]+/, ""))).toEqual([
+-      "/ws/corr",
+-      "/ws/river",
+-    ]);
+-  });
+-});
+diff --git a/frontend/src/components/index/IndexPage.test.tsx b/frontend/src/components/index/IndexPage.test.tsx
+index b31406d4..4728bd70 100644
+--- a/frontend/src/components/index/IndexPage.test.tsx
++++ b/frontend/src/components/index/IndexPage.test.tsx
+@@ -7,7 +7,6 @@ import { IndexPage } from "@/components/index/IndexPage";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+ import type { BreadthState } from "@/types";
+ import {
+-  INDEX_SUBTAB_KEY,
+   MARKET2_FUT_STORE,
+   MARKET2_KEY_STORE,
+   MARKET2_MODE_STORE,
+@@ -16,27 +15,6 @@ import {
+   MARKET_MODE_STORE,
+ } from "@/lib/constants";
+ 
+-/** CorrPage 走**檔案級 hoisted mock**(`CorrSection.test.tsx` 樣板):lazy + Suspense 的
+- *  失敗樣態是「永遠停在 fallback」,而 `queryBy(...) === null` 對「沒 render」與「還在
+- *  suspend」是同一個答案 —— 掛載一律 `findBy*` 等真 mount,卸載斷言 unmount **計數 +1**。
+- *  真身級(不 mock)的「非 corr subtab 零 WS」鎖在 `IndexPage.corr-lazy.test.tsx`:
+- *  本檔的 stub 不建線,「stub WS 建構數 0」在這裡恆真 = 沒有鑑別力。 */
+-const counts = vi.hoisted(() => ({ mount: 0, unmount: 0 }));
+-
+-vi.mock("@/components/corr/CorrPage", async () => {
+-  const React = await import("react");
+-  function Stub() {
+-    React.useEffect(() => {
+-      counts.mount += 1;
+-      return () => {
+-        counts.unmount += 1;
+-      };
+-    }, []);
+-    return React.createElement("div", { "data-testid": "corr-stub" });
+-  }
+-  return { default: Stub };
+-});
+-
+ function series(over: Partial<IndexSeries> = {}): IndexSeries {
+   return {
+     p: 42_039_920,
+@@ -87,7 +65,7 @@ const DK_BODY = {
+   },
+ };
+ 
+-/** 漲跌停列表(**預設 subtab**)的合法 payload。改版後每次 render 都真掛 `LimitListBody`
++/** 漲跌停列表(**恆掛右欄**)的合法 payload。每次 render 都真掛 `LimitListBody`
+  *  並打這條路由 —— 回 `DK_BODY` 會讓 `data.rows` 是 undefined,`buildEntries` 直接
+  *  TypeError 把整頁炸掉(P0-2)。`rows: []` 走「今日尚無漲跌停」空態,不與其他斷言撞字。 */
+ const BREADTH_ROWS = {
+@@ -100,7 +78,7 @@ const BREADTH_ROWS = {
+ };
+ 
+ /** 路由表**寫死**(App.test.tsx 樣板),不留「依測試需要才加」的空間:
+- *  哪個 subtab 被掛上是測試的自由度,而每個 panel 的 payload 形狀不是。 */
++ *  各測試怎麼點是自由度,而每條路由的 payload 形狀不是。 */
+ function stubFetch(): void {
+   vi.stubGlobal(
+     "fetch",
+@@ -118,8 +96,6 @@ function stubFetch(): void {
+ beforeEach(() => {
+   window.localStorage.clear();
+   lastUrls = [];
+-  counts.mount = 0;
+-  counts.unmount = 0;
+   stubFetch();
+ });
+ 
+@@ -156,16 +132,6 @@ function pane(id: "left" | "right") {
+   return within(screen.getByTestId(`market-pane-${id}`));
+ }
+ 
+-/** subtab 列。**必帶 aria-label**:repo 內已有「主要分頁」「交易面板分頁」兩個具名
+- *  tablist,全域 `getAllByRole("tab")` 撞名是寫進 App.test.tsx 的教訓(AD-4)。 */
+-function subtabs() {
+-  return screen.getByRole("tablist", { name: "台股綜合分頁" });
+-}
+-
+-function subtab(name: string): HTMLElement {
+-  return within(subtabs()).getByRole("tab", { name });
+-}
+-
+ describe("IndexPage 雙 pane 容器(SC-2)", () => {
+   it("(a) 兩個 pane 同屏:左加權、右櫃買", () => {
+     renderPage();
+@@ -275,14 +241,14 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+     expect(screen.getByTestId("adl-last").textContent).toContain("+216");
+   });
+ 
+-  // 常駐區彼此的落點原文不動;下錨從「相關係數收合鈕」(改版後不存在)換成 subtab
+-  // 列容器 —— 換錨不是常駐區被動到(review P0-1 / round-2 P2-1)。
+-  it("(f2) 家數帶位於雙 pane 之後、subtab 列之前", () => {
++  // 常駐區彼此的落點原文不動;下錨(2026-08-14 是「相關係數收合鈕」、2026-08-16 是
++  // subtab 列容器)隨 subtab 機制退役一起拿掉 —— 家數帶在左欄內的順序由本條守,
++  // 左右兩欄的相對位置屬佈局包(§5.2b (y2)),不在這裡混著鎖。
++  it("(f2) 家數帶位於雙 pane 之後", () => {
+     renderPage(TXF, BREADTH);
+     const left = screen.getByTestId("market-pane-left");
+     const band = screen.getByTestId("breadth-band");
+     expect(left.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+-    expect(band.compareDocumentPosition(subtabs()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   });
+ 
+   it("(f3) breadth 為 null 時家數帶照樣在位(載入中),不炸圖", () => {
+@@ -292,143 +258,66 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
+   });
+ });
+ 
+-// 🔴 2026-08-14 subtab 改版:四個各自收合的區塊改為一列 subtab,**一次只掛載一個**。
+-// 原本四組「預設收合 + 落點」describe((e)(e2)(g)(g2)(h)(h2)(i)(i2))隨收合殼一起汰換 ——
+-// 「收合 = unmount」的省輪詢語意等價轉移到「非 active subtab = unmount」。
+-describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
+-  it("(s1) 兩顆 tab,預設「漲跌停」active 且只掛載 limit panel", async () => {
+-    renderPage(TXF, BREADTH);
+-    await act(async () => {});
+-
+-    expect(within(subtabs()).getAllByRole("tab").map((el) => el.textContent)).toEqual([
+-      "漲跌停",
+-      "相關係數",
+-    ]);
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
+-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("false");
+-    expect(screen.getByTestId("limit-list")).toBeTruthy();
+-    // CorrPage 真身不 mount(stub 計數 0 才是有鑑別力的斷言;真身級零 WS 見 corr-lazy 檔)
+-    expect(counts.mount).toBe(0);
+-  });
+-
+-  // (s2)(s2b) 2026-08-16 刪除「類股強弱」/「訊號時間軸」兩顆 subtab 後,舊使用者的
+-  // localStorage 裡還躺著那兩個值 —— 白名單 fallback 是唯一的遷移機制(零遷移碼),
+-  // 漏掉就是「開頁沒有任何 panel」。兩個值各鎖一支:白名單若只補一半,另一半無聲。
+-  it("(s2) 殘值 sector(已刪的 subtab)→ 落回漲跌停", async () => {
+-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "sector");
++// 🔴 2026-08-16 subtab 機制退役(一頁總覽):整組「IndexPage subtab 列」describe
++// (s1)-(s7) 連同 `subtabs()` / `subtab()` helper 與 CorrPage 的 hoisted mock 一起刪除 ——
++// tablist、`INDEX_SUBTAB_KEY` 白名單還原、「切走即 unmount」都不再是本頁的行為。
++// 相關係數改由 App 的頂層 tab 掛載,其 lazy / WS 語意由 App 層測試接手。
++describe("IndexPage 一頁總覽(subtab 退役)", () => {
++  it("(l1) 沒有 subtab 列,漲跌停列表恆掛", async () => {
+     renderPage(TXF, BREADTH);
+     await act(async () => {});
+ 
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
++    expect(screen.queryByRole("tablist", { name: "台股綜合分頁" })).toBeNull();
++    expect(screen.queryByTestId("index-subtabs")).toBeNull();
+     expect(screen.getByTestId("limit-list")).toBeTruthy();
+-    expect(counts.mount).toBe(0);
+   });
+ 
+-  it("(s2b) 殘值 timeline(已刪的 subtab)→ 落回漲跌停", async () => {
+-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "timeline");
++  // 偏好鍵整支退役:讀寫兩側都要斷,只鎖 setItem 會漏掉 `useState` initializer 那次
++  // getItem(留著它 = 白名單還原邏輯仍在,殘值照樣有語意)。`keys.length` 自檢確保
++  // spy 真的掛上(兩個 pane 的標的 / 週期 key 必有讀取),否則本條靜默轉 vacuous。
++  it("(l2) 不再讀寫 copycat-index-subtab(殘值交給 App 的 orphan purge)", async () => {
++    const getSpy = vi.spyOn(Storage.prototype, "getItem");
++    const setSpy = vi.spyOn(Storage.prototype, "setItem");
+     renderPage(TXF, BREADTH);
+     await act(async () => {});
+ 
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
+-    expect(screen.getByTestId("limit-list")).toBeTruthy();
+-    expect(counts.mount).toBe(0);
+-  });
+-
+-  it("(s2c) 點「相關係數」→ CorrPage 掛載、limit 卸載,偏好寫入 corr", async () => {
+-    renderPage(TXF, BREADTH);
+-    fireEvent.click(subtab("相關係數"));
+-
+-    // lazy:等 stub 真 mount,不用 `queryBy === null`(suspend 與沒 render 同形)
+-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+-    expect(counts.mount).toBe(1);
+-    expect(screen.queryByTestId("limit-list")).toBeNull();
+-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
+-    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("corr");
+-  });
+-
+-  it("(s3) 預存 corr → 重新 mount 停在相關係數(記憶與還原)", async () => {
+-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
+-    renderPage(TXF, BREADTH);
+-
+-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+-    expect(counts.mount).toBe(1);
+-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
+-    expect(screen.queryByTestId("limit-list")).toBeNull();
++    const keys = [...getSpy.mock.calls, ...setSpy.mock.calls].map(([key]) => key);
++    expect(keys.length).toBeGreaterThan(0);
++    expect(keys).not.toContain("copycat-index-subtab");
+   });
++});
+ 
+-  it("(s4) localStorage 非法值 → fallback 漲跌停", async () => {
+-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "1");
+-    renderPage(TXF, BREADTH);
+-    await act(async () => {});
+-
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
+-    expect(screen.getByTestId("limit-list")).toBeTruthy();
++// 版面 class 只能用字串鎖:jsdom 不載 Tailwind CSS,「有沒有捲軸」「兩欄還是一欄」在
++// 這裡量不到(真值由 SC-3 / SC-7 的截圖 + JS 量測收)。這三條守的是**捲軸的唯一落點**
++// 與**兩個斷點的存在**,改壞任何一項都會靜默回到「整頁捲」的舊行為。
++describe("IndexPage 一頁總覽版面(§4.1)", () => {
++  it("(y1) 捲軸只掛在主 grid:root 不捲,主 grid 捲並帶 1050px 兩欄斷點", () => {
++    const { container } = renderPage(TXF, BREADTH);
++    const root = container.firstElementChild!;
++    expect(root.className).toContain("@container");
++    expect(root.className).not.toContain("overflow-y-auto");
++
++    const grid = screen.getByTestId("index-main-grid");
++    expect(grid.className).toContain("overflow-y-auto");
++    expect(grid.className).toContain("min-h-0");
++    expect(grid.className).toContain("grid-cols-1");
++    expect(grid.className).toContain("@[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]");
+   });
+ 
+-  // Safari 私密視窗:getItem 光是存取就會拋,而它在 useState 的 initializer 裡 = 整頁白屏。
+-  // **只對本頁那把 key 拋**:全域 throw 會先炸在 MarketPane 的四處裸 getItem(既有債,
+-  // 本輪 out of scope),測不到目標還誘發 scope 外的修補(round-2 P0-1)。
+-  it("(s5) getItem 對 subtab key 拋例外 → 不白屏,fallback 漲跌停", async () => {
+-    const orig = Storage.prototype.getItem;
+-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
+-      this: Storage,
+-      key: string,
+-    ) {
+-      if (key === INDEX_SUBTAB_KEY) throw new Error("SecurityError");
+-      return orig.call(this, key);
+-    });
+-
++  it("(y2) DOM 序:左欄(騰落線)在右欄漲跌停列表之前", async () => {
+     renderPage(TXF, BREADTH);
+     await act(async () => {});
+ 
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
+-    expect(screen.getByTestId("limit-list")).toBeTruthy();
+-    expect(screen.getByTestId("breadth-band")).toBeTruthy();
+-  });
+-
+-  // (review B-3)SC-3 的另一半:setItem 也會拋(Safari 私密視窗 / storage 被政策鎖),
+-  // 而它在 onClick 裡 —— 沒接住就是「點一下整頁炸掉」。分流同 (s5):只對本頁那把 key
+-  // 拋,全域 throw 會先炸在 scope 外的既有裸 setItem。
+-  it("(s5b) setItem 對 subtab key 拋例外 → 切換照樣生效,不炸", async () => {
+-    const orig = Storage.prototype.setItem;
+-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+-      this: Storage,
+-      key: string,
+-      value: string,
+-    ) {
+-      if (key === INDEX_SUBTAB_KEY) throw new Error("QuotaExceededError");
+-      orig.call(this, key, value);
+-    });
+-
+-    renderPage(TXF, BREADTH);
+-    fireEvent.click(subtab("相關係數"));
+-
+-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
+-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
+-    expect(screen.queryByTestId("limit-list")).toBeNull();
+-  });
+-
+-  it("(s6) subtab 列位於騰落線之後", () => {
+-    renderPage(TXF, BREADTH);
+     const adl = screen.getByTestId("adl-chart");
+-    expect(adl.compareDocumentPosition(subtabs()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++    const list = screen.getByTestId("limit-list");
++    expect(adl.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   });
+ 
+-  // SC-5:切走 = 舊 panel unmount(corr 的兩條 WS 靠 hook cleanup 才會斷)。
+-  // 用 unmount **計數 +1** 而不是 `queryBy === null` —— 後者在 lazy 下 vacuously pass。
+-  it("(s7) corr → 漲跌停:CorrPage 真的被 unmount", async () => {
+-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
++  it("(y3) 雙圖 grid 改用左欄容器寬 700px 顯式斷點(取代 auto-fit;W-12)", () => {
+     renderPage(TXF, BREADTH);
+-    await screen.findByTestId("corr-stub");
+-    expect(counts.unmount).toBe(0);
+-
+-    fireEvent.click(subtab("漲跌停"));
+-    await act(async () => {});
+-
+-    expect(counts.unmount).toBe(1);
+-    expect(screen.getByTestId("limit-list")).toBeTruthy();
+-    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("limit");
++    const grid = screen.getByTestId("market-pane-left").parentElement!;
++    expect(grid.className).toContain("grid-cols-1");
++    expect(grid.className).toContain("@[700px]:grid-cols-2");
++    expect(grid.className).not.toContain("auto-fit");
+   });
+ });
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index a5f4f3c0..006a98ae 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -1,18 +1,14 @@
+-/** 台股綜合頁的薄容器:常駐區(基差列 + 兩張並排指數圖 + 家數帶 + 騰落線)
+- *  + 其下一列 subtab(漲跌停 / 相關係數)。
++/** 台股綜合頁的薄容器 —— **一頁總覽兩欄**:左欄基差列 + 兩張並排指數圖 + 家數帶 +
++ *  騰落線,右欄漲跌停列表**恆掛**。
+  *
+  *  單圖的狀態邏輯與版面全在 `MarketPane`(本檔只決定「哪個 pane 用哪組 localStorage key、
+  *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
+  *  「同一段程式碼寫兩遍」。
+  *
+- *  **subtab 是掛載閘,不是 `hidden`**(2026-08-14 改版;2026-08-16 收成兩個 panel):
+- *  panel 原本各自有收合殼、可同時展開多個,現在是「恆有一顆 active、一次只掛載一個」。
+- *  專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反** —— 兩個 panel 分別是
+- *  全市場 2800 列 / 10 秒、corr + river 兩條 WS,保 DOM 等於兩份成本同時常駐。切走即
+- *  unmount,輪詢與連線跟著消費者走(原「收合 = unmount」設計的等價轉移)。 */
+-import { useState } from "react";
+-
+-import { CorrSection } from "@/components/corr/CorrSection";
++ *  **沒有 subtab**(2026-08-16 退役,相關係數升為頂層 tab):改版前下半部是一列 subtab
++ *  + 一次只掛載一個 panel,現在漲跌停列表與左欄同屏常駐,省輪詢的責任整條落到
++ *  `active` —— 本頁的 DOM 由 App 以 `hidden` 保留,主 tab 切離時 `active` 轉 false,
++ *  列表輪詢與兩張圖的分 K 一起停(原「非 active subtab = unmount」的等價轉移)。 */
+ import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
+ import { BreadthBand } from "@/components/index/BreadthBand";
+ import { LimitListSection } from "@/components/index/LimitListSection";
+@@ -21,7 +17,6 @@ import { useChartToggles } from "@/hooks/useChartToggles";
+ import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
+ import {
+   INDEX_OVERLAY_STORE,
+-  INDEX_SUBTAB_KEY,
+   MARKET2_FUT_STORE,
+   MARKET2_KEY_STORE,
+   MARKET2_MODE_STORE,
+@@ -32,29 +27,6 @@ import {
+ import { cn } from "@/lib/utils";
+ import type { BreadthState } from "@/types";
+ 
+-/** subtab 值域與標籤的單一來源。順序 = 畫面順序,也是改版前各區塊的上下順序。 */
+-const SUBTABS = [
+-  ["limit", "漲跌停"],
+-  ["corr", "相關係數"],
+-] as const;
+-type SubTab = (typeof SUBTABS)[number][0];
+-
+-/** 白名單還原:非法值(改版前的 "1"、2026-08-16 刪掉的兩顆 subtab 殘值、亂碼)一律回
+- *  預設「漲跌停」—— 這道白名單就是值域縮減時的**唯一**遷移機制,零遷移碼。
+- *
+- *  **整段包 try/catch**:getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,
+- *  而這裡是 `useState` 的 initializer —— 拋出去就是整頁白屏。降回預設 subtab 遠好過白屏
+- *  (改版前四個殼與 `useChartToggles` 同慣例)。 */
+-function initialSubTab(): SubTab {
+-  try {
+-    const saved = window.localStorage.getItem(INDEX_SUBTAB_KEY);
+-    if (SUBTABS.some(([id]) => id === saved)) return saved as SubTab;
+-  } catch {
+-    // 讀不到就用預設 —— 偏好還原不了遠好於白屏
+-  }
+-  return "limit";
+-}
+-
+ /** 左圖沿用改版前那四支 key —— 舊使用者的標的 / 週期 / 期指商品 / 重疊開關零丟失。 */
+ const LEFT_STORES: PaneStores = {
+   key: MARKET_KEY_STORE,
+@@ -82,7 +54,7 @@ function fmt(millipts: number): string {
+ function BasisRow({ txf, twse }: { txf: TxfQuote | null; twse: IndexSeries | null }) {
+   const basis = txf !== null && twse?.p != null ? (txf.p - twse.p) / 1000 : null;
+   return (
+-    <div className="flex flex-wrap items-center gap-3">
++    <div className="flex shrink-0 flex-wrap items-center gap-3">
+       <span data-testid="basis-row" className="font-mono text-xs text-ink-dim">
+         台指期 <span className="text-ink">{txf !== null ? fmt(txf.p) : "-"}</span>{" "}
+         <span
+@@ -134,87 +106,68 @@ export function IndexPage({
+   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
+   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
+   const { toggles, set } = useChartToggles();
+-  const [subtab, setSubtab] = useState<SubTab>(initialSubTab);
+-
+-  function selectSubtab(next: SubTab): void {
+-    setSubtab(next);
+-    try {
+-      window.localStorage.setItem(INDEX_SUBTAB_KEY, next);
+-    } catch {
+-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
+-    }
+-  }
+ 
+   return (
+-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+-      <BasisRow txf={txf} twse={twse} />
+-      {/* auto-fit + minmax:寬視窗並排,窄視窗自動疊成單欄,不必 JS 判斷斷點 */}
+-      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(480px,1fr))]">
+-        <MarketPane
+-          paneId="left"
+-          twse={twse}
+-          otc={otc}
+-          futures={futures}
+-          stores={LEFT_STORES}
+-          defaultKey="TWSE"
+-          toggles={toggles}
+-          onToggle={set}
+-          active={active}
+-        />
+-        <MarketPane
+-          paneId="right"
+-          twse={twse}
+-          otc={otc}
+-          futures={futures}
+-          stores={RIGHT_STORES}
+-          defaultKey="OTC"
+-          toggles={toggles}
+-          onToggle={set}
+-          active={active}
+-        />
+-      </div>
+-      {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
+-          section 讓「當下十個數字」與「一整天的走向」在版面上是同一塊。 */}
+-      <section className="flex flex-col gap-2">
+-        <BreadthBand breadth={breadth} />
+-        <AdvanceDeclineChart series={breadth?.series ?? []} />
+-      </section>
+-      {/* 下半部:一列 subtab + 當前 panel,共用**一個**外框盒(AD-4)——
+-          兩個 panel 是同一個問題的兩種切面(廣度發現 → 深度盯盤),各自一個框
+-          會讓它們看起來像兩個彼此無關的區塊。 */}
+-      <section className="rounded-md border border-line bg-surface">
+-        {/* aria-label 必帶:全站已有「主要分頁」「交易面板分頁」兩個具名 tablist,
+-            無名 tablist 會讓全域 `getAllByRole("tab")` 撞名(App.test.tsx 的教訓)。
+-            造型與 role/aria 沿 `RightRail.tsx` 的右欄分頁樣板 —— repo 內唯一既例。 */}
+-        <div
+-          data-testid="index-subtabs"
+-          role="tablist"
+-          aria-label="台股綜合分頁"
+-          className="flex items-center gap-1 border-b border-line px-2 py-1.5"
+-        >
+-          {SUBTABS.map(([id, label]) => (
+-            <button
+-              key={id}
+-              type="button"
+-              role="tab"
+-              aria-selected={subtab === id}
+-              onClick={() => selectSubtab(id)}
+-              className={cn(
+-                "rounded px-3 py-1 text-sm",
+-                subtab === id ? "bg-bg-deep text-ink" : "text-ink-dim hover:text-ink",
+-              )}
+-            >
+-              {label}
+-            </button>
+-          ))}
++    // root 是 container 但**自己不捲**:整頁唯一的垂直捲軸落在主 grid 上(§4.1)。
++    // 兩處都能捲的話,極矮視窗會出現兩層捲軸、且 SC-3 量到的「主 grid 沒捲」是假的。
++    <div className="@container flex min-h-0 flex-1 flex-col">
++      {/* 1050px 是**容器寬**不是視窗寬(容器 = 視窗 − 349:右欄 rail 288 + pl-3 12 +
++          border 1 + 外層 px-4 32 + gap-4 16)。窄於此退回單欄堆疊 = 改版前的整頁捲
++          行為(SC-7);兩欄態不覆寫 overflow —— 正常尺寸內容恰填滿不出捲軸,極矮
++          視窗時這道 overflow 就是逃生口(§7 edge 2)。 */}
++      <div
++        data-testid="index-main-grid"
++        className="grid min-h-0 flex-1 gap-3 grid-cols-1 overflow-y-auto @[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
++      >
++        {/* 左欄自己也是 container:雙圖的 700px 斷點量的是**左欄寬**,掛在 root 上量到的
++            會是整頁寬(右欄佔掉的 2fr 也算進去)→ 兩張圖在真正塞不下時仍硬並排。 */}
++        <div className="@container flex min-h-0 flex-col gap-3">
++          <BasisRow txf={txf} twse={twse} />
++          {/* 顯式斷點取代舊 auto-fit minmax(480px):auto-fit 量的是這個 grid 自己的寬,
++              與左欄 container 同寬故語意等價,但斷點值得寫在看得見的地方(W-12)。
++              `min-h-0 flex-1` = 雙圖吃掉左欄扣掉基差列 / 家數帶 / 騰落線後的剩餘高。 */}
++          <div className="grid grid-cols-1 gap-3 min-h-0 flex-1 @[700px]:grid-cols-2">
++            <MarketPane
++              paneId="left"
++              twse={twse}
++              otc={otc}
++              futures={futures}
++              stores={LEFT_STORES}
++              defaultKey="TWSE"
++              toggles={toggles}
++              onToggle={set}
++              active={active}
++            />
++            <MarketPane
++              paneId="right"
++              twse={twse}
++              otc={otc}
++              futures={futures}
++              stores={RIGHT_STORES}
++              defaultKey="OTC"
++              toggles={toggles}
++              onToggle={set}
++              active={active}
++            />
++          </div>
++          {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
++              section 讓「當下十個數字」與「一整天的走向」在版面上是同一塊。
++              `shrink-0`:這塊的高度是內容決定的常數,壓縮它換不到多少圖高,卻會讓
++              家數字與騰落線先糊掉。 */}
++          <section className="flex shrink-0 flex-col gap-2">
++            <BreadthBand breadth={breadth} />
++            <AdvanceDeclineChart series={breadth?.series ?? []} />
++          </section>
+         </div>
+-        {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
+-            點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
+-        {subtab === "limit" ? (
++        {/* 右欄漲跌停列表恆掛(2026-08-16 subtab 退役),沿用改版前那個外框盒。
++            廣度發現 → 深度盯盤的銜接點 —— 家數帶說「今天有幾檔鎖住」,列表說「是哪
++            幾檔」,點下去就跳到個股(期)頁看那一檔的五檔與分時。
++            `min-h-0 flex-col`:整高交給列表自己內捲(表頭 sticky),列表長度不再把
++            左欄推出視窗。`active` 直傳:輪詢的唯一 gate 是主 tab,不再經 subtab 條件。 */}
++        <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
+           <LimitListSection onOpenStock={onOpenStock} active={active} />
+-        ) : null}
+-        {subtab === "corr" ? <CorrSection /> : null}
+-      </section>
++        </div>
++      </div>
+     </div>
+   );
+ }
+diff --git a/frontend/src/components/index/LimitListSection.test.tsx b/frontend/src/components/index/LimitListSection.test.tsx
+index 4533cdab..8751a281 100644
+--- a/frontend/src/components/index/LimitListSection.test.tsx
++++ b/frontend/src/components/index/LimitListSection.test.tsx
+@@ -446,3 +446,38 @@ describe("LimitListSection 篩選(OR 狀態 × AND 門檻)", () => {
+     expect((screen.getByLabelText("金額(億)") as HTMLInputElement).value).toBe("");
+   });
+ });
++
++// 🔴 2026-08-16 一頁總覽:列表移進右欄框內、整高自帶捲軸。jsdom 不載 Tailwind CSS,
++// 「有沒有真的捲」量不到(那條由 SC-3 的 DevTools 量測收),這裡鎖的是**捲動容器恆存**
++// (文案態與表格態同一個節點,不是只有 rows 態才包)與 **sticky 掛在每個 th 上**。
++describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
++  it("捲動容器恆存:文案態與表格態都包在 limit-list-scroll 內", async () => {
++    await openWith(mkState([]));
++    const msgScroll = screen.getByTestId("limit-list-scroll");
++    expect(msgScroll.className).toContain("overflow-auto");
++    expect(msgScroll.className).toContain("min-h-0");
++    expect(msgScroll.querySelector('[data-testid="limit-list-msg"]')).toBeTruthy();
++
++    cleanup();
++    await openWith(mkState(ROWS));
++    const tableScroll = screen.getByTestId("limit-list-scroll");
++    expect(tableScroll.className).toContain("overflow-auto");
++    expect(tableScroll.className).toContain("min-h-0");
++    expect(tableScroll.querySelector('[data-testid="limit-list-table"]')).toBeTruthy();
++  });
++
++  it("九欄表頭各自 sticky;thead tr 的 border 移除(border-collapse 下不隨 sticky 黏)", async () => {
++    await openWith(mkState(ROWS));
++    const table = screen.getByTestId("limit-list-table");
++    const ths = [...table.querySelectorAll("th")];
++    expect(ths.length).toBe(9);
++    for (const th of ths) {
++      expect(th.className).toContain("sticky");
++      expect(th.className).toContain("top-0");
++      // 捲動時表頭底下是列內容,沒有底色會直接透出來
++      expect(th.className).toContain("bg-surface");
++      expect(th.className).toContain("border-b");
++    }
++    expect(table.querySelector("thead tr")!.className).not.toContain("border-b");
++  });
++});
+diff --git a/frontend/src/components/index/LimitListSection.tsx b/frontend/src/components/index/LimitListSection.tsx
+index 38f18faf..787442d3 100644
+--- a/frontend/src/components/index/LimitListSection.tsx
++++ b/frontend/src/components/index/LimitListSection.tsx
+@@ -1,11 +1,11 @@
+-/** 台股綜合頁的漲跌停列表 subtab panel(market-overview R3;design §5.2)。
++/** 台股綜合頁右欄的漲跌停列表(market-overview R3;design §5.2)。
+  *
+- *  **非 active subtab = unmount,不是 `hidden`**(2026-08-14 subtab 改版前是「收合 =
+- *  unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):payload 是全市場約 2800 列
+- *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於切到別的 subtab 也
+- *  持續吃這份頻寬。切走即 unmount → `useBreadthRows` 連同 query 一起消失。
+- *  與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
+- *  無重依賴,lazy 只會多一個 Suspense 空窗與一條測不到的非同步路徑。
++ *  **恆掛在台股綜合右欄**(2026-08-16 subtab 機制退役,一頁總覽):不再有「切走即
++ *  unmount」那道閘,payload 是全市場約 2800 列 × 15 欄、盤中每 10 秒一份,省頻寬
++ *  全靠 `active` —— App 以 `hidden` 保留本頁 DOM,切到別的主 tab 時 `active` 轉
++ *  false,`useBreadthRows` 的輪詢跟著停(頁內其餘背景輪詢同一道 gate)。
++ *  **這裡不需要 `React.lazy`**:本元件無 WS、無圖表、無重依賴,lazy 只會多一個
++ *  Suspense 空窗與一條測不到的非同步路徑。
+  *
+  *  **前端零日期推理**(design R1):`streak` / `streak_capped` 都由後端算完,這裡只負責
+  *  把 null / capped 翻成文案。任何「今天是不是還要 +1」的算術一旦在前端重做一份,
+@@ -40,6 +40,10 @@ const STATUS_TONE: Record<RowStatus, string> = {
+ 
+ const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpex: "上櫃" };
+ 
++/** 表頭儲存格的共用 class(對齊方向逐欄另加)。列表整高內捲後表頭必須黏住,否則
++ *  捲兩列就只剩九欄無名數字。 */
++const TH = "sticky top-0 z-10 border-b border-line bg-surface px-2 py-1 font-normal";
++
+ /** 一列的唯一狀態;三者皆無 → null(該列不入表)。
+  *
+  *  「觸及漲停後殺到跌停」這種多狀態列必須歸唯一一類,否則同一檔會在兩個篩選分類下
+@@ -332,8 +336,8 @@ function LimitListBody({
+   else if (entries.length === 0) message = "無符合條件";
+ 
+   return (
+-    <div data-testid="limit-list-body" className="flex flex-col gap-2 px-4 pb-4">
+-      <div className="flex flex-wrap items-center gap-2">
++    <div data-testid="limit-list-body" className="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-4">
++      <div className="flex shrink-0 flex-wrap items-center gap-2">
+         {data?.stale ? (
+           <span
+             data-testid="limit-list-stale"
+@@ -352,7 +356,7 @@ function LimitListBody({
+         ) : null}
+       </div>
+ 
+-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
++      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+         <Check label="上市" checked={filter.twse} onChange={(v) => update({ twse: v })} />
+         <Check label="上櫃" checked={filter.tpex} onChange={(v) => update({ tpex: v })} />
+         <span className="h-3 w-px bg-line" />
+@@ -381,24 +385,30 @@ function LimitListBody({
+         />
+       </div>
+ 
+-      {message !== null ? (
+-        <p data-testid="limit-list-msg" className="py-6 text-center text-sm text-ink-muted">
+-          {message}
+-        </p>
+-      ) : (
+-        <div className="overflow-x-auto">
++      {/* 捲動容器**恆存**(文案與表格兩分支都包在裡面):只包表格的話,空態那一幀
++          容器消失 → flex 高度重算 → 資料回來又長回去,右欄會抖一下;SC-3 的量測也
++          會在空態量不到節點。整高內捲 = 列表再長也不把左欄推出視窗。 */}
++      <div data-testid="limit-list-scroll" className="min-h-0 flex-1 overflow-auto">
++        {message !== null ? (
++          <p data-testid="limit-list-msg" className="py-6 text-center text-sm text-ink-muted">
++            {message}
++          </p>
++        ) : (
+           <table data-testid="limit-list-table" className="w-full border-collapse text-sm">
+             <thead>
+-              <tr className="border-b border-line text-ink-dim">
+-                <th className="px-2 py-1 text-left font-normal">代號</th>
+-                <th className="px-2 py-1 text-left font-normal">名稱</th>
+-                <th className="px-2 py-1 text-left font-normal">市場</th>
+-                <th className="px-2 py-1 text-right font-normal">現價</th>
+-                <th className="px-2 py-1 text-right font-normal">漲跌幅</th>
+-                <th className="px-2 py-1 text-right font-normal">連板</th>
+-                <th className="px-2 py-1 text-right font-normal">金額(億)</th>
+-                <th className="px-2 py-1 text-right font-normal">量比</th>
+-                <th className="px-2 py-1 text-left font-normal">狀態</th>
++              {/* sticky 掛在**每個 th** 而不是 tr:`border-collapse` 下 tr 不建立自己的
++                  背景 / 邊框層,黏住的只有 th —— tr 上的 border-b 捲動時會留在原地,
++                  底色也透不出來。九欄各自帶 bg-surface + border-b 才是完整的表頭列。 */}
++              <tr className="text-ink-dim">
++                <th className={cn(TH, "text-left")}>代號</th>
++                <th className={cn(TH, "text-left")}>名稱</th>
++                <th className={cn(TH, "text-left")}>市場</th>
++                <th className={cn(TH, "text-right")}>現價</th>
++                <th className={cn(TH, "text-right")}>漲跌幅</th>
++                <th className={cn(TH, "text-right")}>連板</th>
++                <th className={cn(TH, "text-right")}>金額(億)</th>
++                <th className={cn(TH, "text-right")}>量比</th>
++                <th className={cn(TH, "text-left")}>狀態</th>
+               </tr>
+             </thead>
+             <tbody>
+@@ -464,20 +474,21 @@ function LimitListBody({
+               ))}
+             </tbody>
+           </table>
+-        </div>
+-      )}
++        )}
++      </div>
+     </div>
+   );
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// subtab panel 殼
++// 右欄外殼
+ // ---------------------------------------------------------------------------
+ 
+-/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。非 active
+- *  subtab 是 unmount、但**主 tab 切換不是**(App 以 `hidden` 保留 DOM)—— 選中的
+- *  subtab 又存在 localStorage,所以「掛著被切走」是常態,那條路要靠這道 gate 停背景
+- *  輪詢(review FE-2)。未給時預設 true。 */
++/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。本元件**恆掛**
++ *  在右欄,主 tab 切換又不 unmount(App 以 `hidden` 保留 DOM)——「掛著被切走」是常態,
++ *  那條路要靠這道 gate 停背景輪詢(review FE-2)。未給時預設 true。
++ *
++ *  `flex min-h-0 flex-1`:高度由右欄框指派,列表自己在框內捲(§4.1)。 */
+ export function LimitListSection({
+   onOpenStock,
+   active = true,
+@@ -486,7 +497,7 @@ export function LimitListSection({
+   active?: boolean;
+ }) {
+   return (
+-    <div data-testid="limit-list" className="pt-2">
++    <div data-testid="limit-list" className="flex min-h-0 flex-1 flex-col pt-2">
+       <LimitListBody onOpenStock={onOpenStock} active={active} />
+     </div>
+   );
+diff --git a/frontend/src/components/index/MarketChart.test.tsx b/frontend/src/components/index/MarketChart.test.tsx
+index 2e7bb8dc..6a5c4dca 100644
+--- a/frontend/src/components/index/MarketChart.test.tsx
++++ b/frontend/src/components/index/MarketChart.test.tsx
+@@ -60,6 +60,7 @@ function renderChart(opts: {
+   name?: string;
+   s?: IndexSeries | null;
+   t?: ChartToggles;
++  height?: number;
+ }) {
+   const client = new QueryClient({
+     // retryDelay 0:hook 自帶 retry:1,error 終態才不用等 exponential backoff
+@@ -74,6 +75,50 @@ function renderChart(opts: {
+         series={opts.s === undefined ? series() : opts.s}
+         toggles={opts.t ?? toggles()}
+         onToggle={() => undefined}
++        height={opts.height}
++      />
++    </QueryClientProvider>,
++  );
++}
++
++/** 日 K 態的合法 payload(`/api/index/bars`)。intraday 那條路不打這支端點,
++ *  所以只有 candle 測試需要換 stub。 */
++const DK_BODY = {
++  key: "TWSE",
++  tf: "D",
++  bars: Array.from({ length: 3 }, (_, i) => ({
++    t: `2026-07-2${7 + i}`,
++    o: 100,
++    h: 110,
++    l: 90,
++    c: 105,
++    v: 10,
++  })),
++  meta: {
++    source: "tc4_dk",
++    coverage_from: "2026-07-27",
++    coverage_to: "2026-07-29",
++    partial_last: false,
++    volume: true,
++    refusal: null,
++    synth_since: null,
++  },
++};
++
++function renderCandle(height: number | undefined) {
++  const client = new QueryClient({
++    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
++  });
++  return render(
++    <QueryClientProvider client={client}>
++      <MarketChart
++        marketKey="TWSE"
++        mode="day"
++        name="加權指數"
++        series={null}
++        toggles={toggles()}
++        onToggle={() => undefined}
++        height={height}
+       />
+     </QueryClientProvider>,
+   );
+@@ -307,3 +352,32 @@ describe("MarketChart 均價線(SC-1)", () => {
+     expect(off.container.querySelectorAll("polyline.stroke-ink")).toHaveLength(0);
+   });
+ });
++
++// `height` 的單位是 **viewBox 單位**,不是 px —— caller(MarketPane)已經扣掉 figure /
++// toggle 列的 chrome 並用 `viewBox 寬 / 容器寬` 反解過(§4.1 CS-1 釘死的口徑)。本檔
++// 只驗「拿到什麼就照畫」,px→viewBox 那段的算術由 MarketPane.size.test.tsx 鎖。
++describe("MarketChart height prop(SC-4)", () => {
++  function intradaySvg(container: HTMLElement): Element {
++    return container.querySelector('svg[role="img"]')!;
++  }
++
++  it("intraday:傳 height → svg viewBox 用該高;未傳 → 220", () => {
++    const withH = renderChart({ t: toggles({ cdp: false, ma: false }), height: 300 });
++    expect(intradaySvg(withH.container).getAttribute("viewBox")).toBe("0 0 640 300");
++    cleanup();
++    const noH = renderChart({ t: toggles({ cdp: false, ma: false }) });
++    expect(intradaySvg(noH.container).getAttribute("viewBox")).toBe("0 0 640 220");
++  });
++
++  it("candle:height 透傳 CandleChart(未傳 → CandleChart 自有 578)", async () => {
++    stub(DK_BODY);
++    const withH = renderCandle(300);
++    const figure = await screen.findByTestId("candle-figure");
++    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 300");
++    withH.unmount();
++    cleanup();
++    renderCandle(undefined);
++    const plain = await screen.findByTestId("candle-figure");
++    expect(plain.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 578");
++  });
++});
+diff --git a/frontend/src/components/index/MarketChart.tsx b/frontend/src/components/index/MarketChart.tsx
+index 7c73641c..344e572c 100644
+--- a/frontend/src/components/index/MarketChart.tsx
++++ b/frontend/src/components/index/MarketChart.tsx
+@@ -65,12 +65,17 @@ function labelKey(l: RightEdgeLabel): string {
+ }
+ 
+ /** 右緣標籤帶的上下界。與 yTicks 的夾制同值(`[8, height − 14]`)—— 兩處各寫一次的話,
+- *  同一個角落的兩種文字會夾制到不同位置。 */
+-const LABEL_BOUNDS = { top: 8, bottom: SIZE.height - 14 };
++ *  同一個角落的兩種文字會夾制到不同位置。**吃 height 參數**:圖高改由 caller 指派後
++ *  寫死 `SIZE.height` 會讓標籤帶停在 220 那條線上,高圖的右緣文字全擠在上半部。 */
++function labelBounds(height: number): { top: number; bottom: number } {
++  return { top: 8, bottom: height - 14 };
++}
+ 
+ interface IntradayProps {
+   name: string;
+   s: IndexSeries;
++  /** viewBox 單位的圖高;未給 → 220(見 `MarketChart.height` 的 JSDoc)。 */
++  height?: number;
+   /** 疊線只做加權(櫃買無日 K 來源,已拍板跳過)—— 這個判別子同時決定 toggle 反灰文案 */
+   marketKey: MarketKey;
+   toggles: ChartToggles;
+@@ -84,13 +89,17 @@ interface IntradayProps {
+ function IntradayChart({
+   name,
+   s,
++  height,
+   marketKey,
+   toggles,
+   onToggle,
+   overlay,
+   overlayError,
+ }: IntradayProps) {
+-  const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, SIZE);
++  // 寬恆定(x 是固定時間域),只有高隨容器剩餘空間走 —— 幾何、刻度夾制、viewBox
++  // 三處必須同源同高,分別寫死會讓線畫在一個高度、文字夾制在另一個高度。
++  const size = { width: SIZE.width, height: height ?? SIZE.height };
++  const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, size);
+   const isTwse = marketKey === "TWSE";
+   // 可用性同個股語意:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰
+   const cdpAvailable =
+@@ -114,11 +123,12 @@ function IntradayChart({
+   const on = { cdp: toggles.cdp && cdpAvailable, ma: toggles.ma && maAvailable };
+   const oLines = overlay !== null && isTwse ? overlayLines(overlay, g, on) : [];
+   const pegs = overlay !== null && isTwse ? outOfDomainLevels(overlay, g, on) : [];
++  const bounds = labelBounds(size.height);
+   const labels = rightEdgeLabels({
+     ref: s.ref !== null ? { y: g.refY, text: `昨收 ${fmt(s.ref)}` } : null,
+     oLines,
+     outOfDomain: pegs,
+-    bounds: LABEL_BOUNDS,
++    bounds,
+   });
+ 
+   return (
+@@ -145,7 +155,7 @@ function IntradayChart({
+         ))}
+       </div>
+       <svg
+-        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
++        viewBox={`0 0 ${size.width} ${size.height}`}
+         className="w-full"
+         role="img"
+         aria-label={`${name}分時走勢`}
+@@ -156,13 +166,13 @@ function IntradayChart({
+               x1={toX(minute)}
+               x2={toX(minute)}
+               y1={0}
+-              y2={SIZE.height - 12}
++              y2={size.height - 12}
+               className="stroke-line"
+               strokeWidth={0.4}
+             />
+             <text
+               x={toX(minute) + 2}
+-              y={SIZE.height - 2}
++              y={size.height - 2}
+               className="fill-ink-dim"
+               fontSize="0.625rem"
+             >
+@@ -184,7 +194,7 @@ function IntradayChart({
+             key={t.priceMilli}
+             data-testid="index-ytick"
+             x={2}
+-            y={Math.min(Math.max(t.y - 2, 8), SIZE.height - 14)}
++            y={Math.min(Math.max(t.y - 2, bounds.top), bounds.bottom)}
+             className="fill-ink-dim"
+             fontSize="0.625rem"
+           >
+@@ -247,6 +257,12 @@ interface Props {
+   /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
+    *  gate 停(review round-2 XR-4);未給時預設 true。 */
+   active?: boolean;
++  /** 圖高,單位是 **viewBox 單位**不是 px(§4.1 CS-1 口徑):caller(`MarketPane`)
++   *  已經扣掉 figure / toggle 列的 chrome,並用「viewBox 寬 ÷ 容器寬」把 px 反解成
++   *  viewBox 單位。**刻意無預設值** —— 兩條分支的 fallback 不同:intraday 未給 → 220
++   *  (本檔的 `SIZE.height`),candle 未給 → 直接透傳 undefined 讓 `CandleChart` 用它
++   *  自己的 578。在這裡給一個預設,就等於替 CandleChart 決定了它的高。 */
++  height?: number;
+ }
+ 
+ /** 大盤主圖:分時走勢 or 蠟燭圖 + 一行來源/涵蓋期間 meta(SC-4/5/6)。 */
+@@ -258,6 +274,7 @@ export function MarketChart({
+   toggles,
+   onToggle,
+   active = true,
++  height,
+ }: Props) {
+   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
+   const minutes = marketMinutesOf(mode);
+@@ -278,6 +295,7 @@ export function MarketChart({
+       <IntradayChart
+         name={name}
+         s={series}
++        height={height}
+         marketKey={marketKey}
+         toggles={toggles}
+         onToggle={onToggle}
+@@ -325,6 +343,7 @@ export function MarketChart({
+         showBb={toggles.bb}
+         onToggleBb={(v) => onToggle("bb", v)}
+         showVolume={meta.volume}
++        height={height}
+       />
+       <p data-testid="market-meta" className="mt-1 font-mono text-xs text-ink-dim">
+         {SOURCE_TEXT[meta.source] ?? meta.source} · {coverage}
+diff --git a/frontend/src/components/index/MarketPane.size.test.tsx b/frontend/src/components/index/MarketPane.size.test.tsx
+new file mode 100644
+index 00000000..797c4cc2
+--- /dev/null
++++ b/frontend/src/components/index/MarketPane.size.test.tsx
+@@ -0,0 +1,154 @@
++/** @vitest-environment jsdom */
++/** MarketPane 的「容器剩餘高 → 圖 viewBox 高」量測鏈(SC-4)。
++ *
++ *  **與 MarketPane.test.tsx 拆開**:本檔在其中一個 it 內把全域 `ResizeObserver` 換成
++ *  同步回呼的假物件,那是整個檔案唯一需要量測態的地方 —— 混進主檔會讓所有既有測試的
++ *  fallback 語意(jsdom 無 ResizeObserver → 退回固定 640×220,W-10)靜默改變。
++ *  對照案(不 stub)就掛在同一個 describe 裡,兩者一起讀才看得出「量得到 / 量不到」
++ *  真的分岔。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import {
++  MarketPane,
++  PANE_FRAMES,
++  paneSvgHeight,
++  type PaneStores,
++} from "@/components/index/MarketPane";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import type { IndexSeries } from "@/hooks/useIndexStream";
++import {
++  INDEX_OVERLAY_STORE,
++  MARKET_FUT_STORE,
++  MARKET_KEY_STORE,
++  MARKET_MODE_STORE,
++} from "@/lib/constants";
++
++const TWSE: IndexSeries = {
++  p: 42_039_920,
++  ref: 43_634_190,
++  high: 43_221_930,
++  low: 41_815_780,
++  stale: false,
++  minutes: { "0901": 43_000_000, "0930": 42_039_920 },
++};
++
++const LEFT_STORES: PaneStores = {
++  key: MARKET_KEY_STORE,
++  mode: MARKET_MODE_STORE,
++  fut: MARKET_FUT_STORE,
++  overlay: INDEX_OVERLAY_STORE,
++};
++
++// cdp / ma 全關:分時態不打 `/api/index/overlay`,本檔只關心 viewBox 幾何
++const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: false };
++
++/** ResizeObserver 的最小替身:`observe` 當下就同步餵一筆 contentRect。
++ *
++ *  **必須同步**:`useContainerSize` 是 callback ref,節點掛上時才 observe;非同步餵
++ *  在 RTL 的同步斷言之前不會到達,測試會靜默退回 fallback 值(= 綠得毫無意義)。 */
++class FakeResizeObserver {
++  private readonly cb: ResizeObserverCallback;
++
++  constructor(cb: ResizeObserverCallback) {
++    this.cb = cb;
++  }
++
++  observe(node: Element): void {
++    this.cb(
++      [{ target: node, contentRect: { width: 430, height: 300 } } as ResizeObserverEntry],
++      this as unknown as ResizeObserver,
++    );
++  }
++
++  unobserve(): void {}
++
++  disconnect(): void {}
++}
++
++function renderPane() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <MarketPane
++        paneId="left"
++        twse={TWSE}
++        otc={null}
++        futures={null}
++        stores={LEFT_STORES}
++        defaultKey="TWSE"
++        toggles={TOGGLES}
++        onToggle={() => undefined}
++      />
++    </QueryClientProvider>,
++  );
++}
++
++/** 分時圖 svg 的 viewBox 高(第 4 欄)。 */
++function svgViewBoxHeight(): number {
++  const svg = screen.getByRole("img", { name: "加權指數分時走勢" });
++  return Number((svg.getAttribute("viewBox") ?? "").split(" ")[3]);
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async () => new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }))),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("paneSvgHeight 三態算式(§4.1)", () => {
++  const size = { width: 430, height: 300 };
++
++  it("intraday:chrome 26 / 不內縮 / vbW 640", () => {
++    // renderPx = max(96, floor(300 − 26) − 2) = 272;vbH = round(272 × 640 / 430)
++    expect(paneSvgHeight(size, PANE_FRAMES.intraday)).toBe(405);
++  });
++
++  it("overlay:巢狀 figure 再吃 62 高 34 寬", () => {
++    // svgW = 430 − 34 = 396;renderPx = max(96, floor(300 − 62) − 2) = 236
++    expect(paneSvgHeight(size, PANE_FRAMES.overlay)).toBe(381);
++  });
++
++  it("candle:vbW 是 CandleChart 的 1400,不是 640", () => {
++    // svgW = 396;renderPx = max(96, floor(300 − 100) − 2) = 198;198 × 1400 / 396
++    expect(paneSvgHeight(size, PANE_FRAMES.candle)).toBe(700);
++  });
++
++  it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
++    expect(paneSvgHeight({ width: 430, height: 30 }, PANE_FRAMES.intraday)).toBe(143);
++    expect(paneSvgHeight({ width: 430, height: 10 }, PANE_FRAMES.candle)).toBe(339);
++  });
++
++  it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → undefined(呼叫端走各自 fallback)", () => {
++    expect(paneSvgHeight({ width: 0, height: 300 }, PANE_FRAMES.intraday)).toBeUndefined();
++    expect(paneSvgHeight({ width: 430, height: 0 }, PANE_FRAMES.intraday)).toBeUndefined();
++    expect(paneSvgHeight({ width: 30, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
++    expect(paneSvgHeight({ width: 34, height: 300 }, PANE_FRAMES.candle)).toBeUndefined();
++  });
++});
++
++describe("MarketPane 量測 → 圖高(SC-4)", () => {
++  it("有 ResizeObserver:分時 svg 高 = paneSvgHeight(量到的容器尺寸),不再是固定 220", () => {
++    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
++    renderPane();
++
++    const expected = paneSvgHeight({ width: 430, height: 300 }, PANE_FRAMES.intraday);
++    expect(expected).toBeDefined();
++    expect(expected).not.toBe(220);
++    expect(svgViewBoxHeight()).toBe(expected);
++  });
++
++  it("無 ResizeObserver(jsdom 預設 / 舊瀏覽器)→ 退回固定 220(W-10)", () => {
++    expect(typeof ResizeObserver).toBe("undefined");
++    renderPane();
++    expect(svgViewBoxHeight()).toBe(220);
++  });
++});
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index b3e7bfe7..f5d0d655 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -2,7 +2,9 @@ import { useState } from "react";
+ 
+ import { MarketChart } from "@/components/index/MarketChart";
+ import type { ChartToggles } from "@/hooks/useChartToggles";
++import { useContainerSize } from "@/hooks/useContainerSize";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
++import type { Size } from "@/lib/chart-frame";
+ import { chgPct, fmtPct } from "@/lib/format";
+ import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+ import { pts } from "@/lib/svg-points";
+@@ -20,6 +22,52 @@ import { cn } from "@/lib/utils";
+ 
+ const SIZE = { width: 640, height: 220 };
+ 
++/** 一種圖模式的「量測 → viewBox 高」換算參數。
++ *
++ *  - `chromeY`:svg 以外、但**在被量測 wrapper 之內**的垂直用量(px)。
++ *  - `insetX`:同上的水平用量(px);svg 實際可用寬 = 容器寬 − 這個值。
++ *  - `vbW`:該模式 svg 的 viewBox 寬 —— px 高要換成 viewBox 單位得乘 `vbW / svgW`。 */
++export interface PaneFrame {
++  chromeY: number;
++  insetX: number;
++  vbW: number;
++}
++
++/** 三種圖模式各自的 chrome 用量。**逐條列舉不共用一組數字**:三者的 DOM 巢狀深度不同,
++ *  用同一組會讓其中兩種各差 30-70px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
++ *  誰也解釋不了的捲軸。
++ *
++ *  - intraday:toggle 列 `h-[1.375rem]` 22 + `mb-1` 4 = 26;svg 直接在 wrapper 內,不內縮。
++ *  - overlay:`OverlayCard` 是巢狀 figure —— border 2 + `p-4` 32 + 標題列 20 + svg `mt-2` 8
++ *    = 62;水平 border 2 + p-4 32 = 34。
++ *  - candle:`CandleChart` 自身 figure(border 2 + p-4 32 + 頂列 26 + figcaption 20 = 80)
++ *    + `MarketChart` 的 meta 列(text-xs 16 + `mt-1` 4 = 20)= 100;水平同 overlay 34;
++ *    **viewBox 寬是 CandleChart 的 `DIMS.width` = 1400**,不是 640。 */
++export const PANE_FRAMES: Record<"intraday" | "overlay" | "candle", PaneFrame> = {
++  intraday: { chromeY: 26, insetX: 0, vbW: 640 },
++  overlay: { chromeY: 62, insetX: 34, vbW: 640 },
++  candle: { chromeY: 100, insetX: 34, vbW: 1400 },
++};
++
++/** 量到的容器尺寸(px)→ 圖的 viewBox 高(viewBox 單位)。
++ *
++ *  **反解只此一處**(§4.1 CS-1):`MarketChart` / `OverlayCard` 收到的 `height` 一律是
++ *  viewBox 單位,兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
++ *
++ *  地板 96:容器矮到連 chrome 都放不下時,回 0 / 負高會畫出一張沒有高度的圖(svg 不報錯,
++ *  純粹消失)。−2 是抗抖動餘裕 —— 反解後的 px 高恰等於量到的高時,亞像素進位會讓內容比
++ *  容器高半格,觸發 ResizeObserver 的「量測 → 設高 → 再量測」迴圈。
++ *
++ *  量不到(任一邊 ≤ 0,jsdom / ResizeObserver 缺席 / 首幀)或寬度扣不出 svg 寬 → `undefined`,
++ *  呼叫端走各自的固定 fallback(W-10)。 */
++export function paneSvgHeight(size: Size, frame: PaneFrame): number | undefined {
++  if (size.width <= 0 || size.height <= 0) return undefined;
++  const svgW = size.width - frame.insetX;
++  if (svgW <= 0) return undefined;
++  const renderPx = Math.max(96, Math.floor(size.height - frame.chromeY) - 2);
++  return Math.round((renderPx * frame.vbW) / svgW);
++}
++
+ type FutKey = "TXF" | "MXF" | "TMF";
+ const FUT_LABELS: readonly (readonly [FutKey, string])[] = [
+   ["TXF", "大台"],
+@@ -105,14 +153,26 @@ const OVERLAY_LINES = [
+   { color: "stroke-idx-otc", label: "櫃買" },
+ ] as const;
+ 
+-/** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。 */
+-function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
++/** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。
++ *
++ *  `height` 同 `MarketChart.height` 的口徑:**viewBox 單位**,caller 已扣 chrome、
++ *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。 */
++function OverlayCard({
++  twse,
++  otc,
++  height = SIZE.height,
++}: {
++  twse: IndexSeries;
++  otc: IndexSeries;
++  height?: number;
++}) {
++  const size = { width: SIZE.width, height };
+   const g = buildOverlayGeometry(
+     [
+       { minutes: twse.minutes, ref: twse.ref },
+       { minutes: otc.minutes, ref: otc.ref },
+     ],
+-    SIZE,
++    size,
+   );
+   return (
+     <figure className="rounded-md border border-line bg-surface p-4">
+@@ -122,7 +182,7 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+         <span className="font-mono text-xs text-idx-otc">─ 櫃買</span>
+       </div>
+       <svg
+-        viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
++        viewBox={`0 0 ${size.width} ${size.height}`}
+         className="mt-2 w-full"
+         role="img"
+         aria-label="指數重疊走勢"
+@@ -133,13 +193,13 @@ function OverlayCard({ twse, otc }: { twse: IndexSeries; otc: IndexSeries }) {
+               x1={toX(minute)}
+               x2={toX(minute)}
+               y1={0}
+-              y2={SIZE.height - 12}
++              y2={size.height - 12}
+               className="stroke-line"
+               strokeWidth={0.4}
+             />
+             <text
+               x={toX(minute) + 2}
+-              y={SIZE.height - 2}
++              y={size.height - 2}
+               className="fill-ink-dim"
+               fontSize="0.625rem"
+             >
+@@ -314,12 +374,28 @@ export function MarketPane({
+   const series = marketKey === "TWSE" ? twse : marketKey === "OTC" ? otc : null;
+   const futState = isFut ? (futures?.[marketKey] ?? null) : null;
+ 
++  // 量的是「圖還剩多少空間」而不是「圖現在多高」——ref 掛在高度由外層 flex 指派的
++  // wrapper 上(useContainerSize 呼叫端契約 2),且該 wrapper 三種模式都在(契約 1)。
++  const [sizeRef, size] = useContainerSize<HTMLDivElement>();
++  // 物件而非布林:同一個判別子既要選 chrome 參數表、又要餵 OverlayCard 兩條非 null
++  // series,拆成布林會讓 JSX 那側得再判一次 null(或掛 `!` 賭它)。
++  const overlayPair =
++    overlay && mode === "intraday" && twse !== null && otc !== null ? { twse, otc } : null;
++  const svgHeight = paneSvgHeight(
++    size,
++    overlayPair !== null
++      ? PANE_FRAMES.overlay
++      : mode === "intraday"
++        ? PANE_FRAMES.intraday
++        : PANE_FRAMES.candle,
++  );
++
+   return (
+     <section
+       data-testid={`market-pane-${paneId}`}
+       role="group"
+       aria-label={paneId === "left" ? "左圖" : "右圖"}
+-      className="flex min-w-0 flex-col gap-3"
++      className="flex min-h-0 min-w-0 flex-col gap-3"
+     >
+       {/* 標的列(SC-2) */}
+       <div className="flex flex-wrap items-center gap-3">
+@@ -355,10 +431,12 @@ export function MarketPane({
+         ) : null}
+       </div>
+ 
+-      {/* 高度由 SVG viewBox 比例驅動(`w-full`),**不 `flex-1` 撐滿頁高** ——
+-          雙 pane 並排且下方還接家數帶與 subtab 區(2026-08-14 改版前是相關係數等
+-          收合區塊),撐滿會把下面幾塊擠出視窗 */}
+-      <figure className="flex flex-col rounded-md border border-line bg-surface p-4">
++      {/* 2026-08-16 一頁總覽:圖高改吃**容器剩餘高**(`flex-1`),不再是「寬 × 220/640」
++          的固定比例 —— 改版前不 flex-1 是因為整頁可捲、撐滿會把家數帶擠出視窗;現在
++          左欄自己就是有界的 flex 欄,撐滿正是要的。`min-h-60`(15rem)是**唯一**一條
++          min-height:堆疊 / 內容決定高的模式下給 figure 一個地板,量測 → 內容 → 量測
++          才會收斂;同時掛 `min-h-0` 會把地板消掉,退回「圖可以被壓成 0 高」。 */}
++      <figure className="flex min-h-60 flex-1 flex-col rounded-md border border-line bg-surface p-4">
+         <figcaption className="flex flex-wrap items-baseline gap-3">
+           <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
+           {isFut ? (
+@@ -373,9 +451,11 @@ export function MarketPane({
+           )}
+           {series?.stale ? <span className="text-xs text-ink-dim">資料中斷</span> : null}
+         </figcaption>
+-        <div className="mt-2 flex min-h-0 flex-1 flex-col">
+-          {overlay && mode === "intraday" && twse !== null && otc !== null ? (
+-            <OverlayCard twse={twse} otc={otc} />
++        {/* 量測用的恆存 wrapper:重疊 / 分時 / K 線三種模式都掛在它底下(ref 只掛其中
++            一支的話,切模式那一幀會量到 0×0 而 hook 不再重跑)。 */}
++        <div ref={sizeRef} className="mt-2 flex min-h-0 flex-1 flex-col">
++          {overlayPair !== null ? (
++            <OverlayCard twse={overlayPair.twse} otc={overlayPair.otc} height={svgHeight} />
+           ) : (
+             <MarketChart
+               marketKey={marketKey}
+@@ -385,6 +465,7 @@ export function MarketPane({
+               toggles={toggles}
+               onToggle={onToggle}
+               active={active}
++              height={svgHeight}
+             />
+           )}
+         </div>
+diff --git a/frontend/src/lib/constants.ts b/frontend/src/lib/constants.ts
+index 699d13fd..8c80c619 100644
+--- a/frontend/src/lib/constants.ts
++++ b/frontend/src/lib/constants.ts
+@@ -16,11 +16,13 @@ export const MAIN_CODE_KEY = "copycat-stock-main-code";
+ export const LEGACY_MAIN_CODE_KEY = "stock-main-code";
+ 
+ /** 已停用功能留下的孤兒鍵:`stock-ladder-open`(2026-07-29 閃電梯改條件 render 後零讀寫)、
+- *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)、以及
++ *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)、
+  *  **2026-08-14 subtab 改版**廢止的四支台股綜合區塊展開狀態(`copycat-corr-open` /
+  *  `copycat-limit-list-open` / `copycat-sector-open` / `copycat-signal-timeline-open`)——
+  *  四顆獨立 bool(可同時 0-4 顆展開)對映不到「一次只能選一個」的 subtab,任何遷移規則
+- *  都是猜,故直接廢止;丟失代價 = 首訪回預設 subtab 一次(見 `INDEX_SUBTAB_KEY`)。
++ *  都是猜,故直接廢止;以及 **2026-08-16 subtab 機制整個退役**(台股綜合改一頁總覽、
++ *  漲跌停列表恆掛右欄、相關係數升為頂層 tab)後的 `copycat-index-subtab` —— 沒有 subtab
++ *  可選,值就沒有語意;停在「相關係數」的使用者改由頂層 tab 取回,零遷移碼。
+  *  App 啟動時清除,避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
+ export const ORPHAN_STORAGE_KEYS = [
+   "stock-ladder-open",
+@@ -29,6 +31,7 @@ export const ORPHAN_STORAGE_KEYS = [
+   "copycat-limit-list-open",
+   "copycat-sector-open",
+   "copycat-signal-timeline-open",
++  "copycat-index-subtab",
+ ] as const;
+ 
+ /** 清除孤兒鍵。冪等(removeItem 對不存在的 key 是 no-op),由 App.tsx 的 module scope
+@@ -72,16 +75,6 @@ export const MARKET2_MODE_STORE = "copycat-market2-tf";
+ /** 台股綜合**右圖**的期貨商品 — components/index/IndexPage.tsx */
+ export const MARKET2_FUT_STORE = "copycat-market2-fut";
+ 
+-/** 台股綜合頁下半部選中的 subtab — components/index/IndexPage.tsx。
+- *  值域 `"limit" | "corr"`,非白名單值 fallback `"limit"`
+- *  (漲跌停;恆有一顆 active,不提供「全收」態)。**值域縮減靠這道 fallback 遷移**:
+- *  2026-08-16 拿掉兩顆 subtab 後,舊瀏覽器裡的殘值就是靠它落回漲跌停,零遷移碼。
+- *
+- *  **非 active subtab = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場
+- *  rows」與「要不要掛 corr + river 兩條 WS」—— 它取代了 2026-08-14 之前的
+- *  四支獨立 `*_OPEN_KEY`(已進 `ORPHAN_STORAGE_KEYS`)。 */
+-export const INDEX_SUBTAB_KEY = "copycat-index-subtab";
+-
+ /** 漲跌停列表的篩選條件(JSON:市場 / 狀態三旗標 + 金額 / 股價門檻字串)
+  *  — components/index/LimitListSection.tsx */
+ export const LIMIT_LIST_FILTER_KEY = "copycat-limit-list-filter";

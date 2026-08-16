@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-16",
+  "findings": [
+    {"id": "CS-1", "severity": "P0", "summary": "MarketChart height prop 口徑三讀互斥(px vs viewBox、chrome 誰扣)", "disposition": "accepted", "resolution": "釘死:height = viewBox 單位;px→viewBox 反解與 chrome 扣除全在 MarketPane 的 paneSvgHeight;SC-4 斷言改「viewBox = 0 0 640 H」;OverlayCard 同口徑(另扣 OVERLAY_CHROME,見 CS-9)"},
+    {"id": "CS-2", "severity": "P1", "summary": "SC-3 量測恆綠(主 grid 自帶 overflow-y-auto)", "disposition": "accepted", "resolution": "主 grid 加 data-testid index-main-grid;SC-3 三段量測(document / 主 grid scrollHeight<=clientHeight+1 / 右欄表格容器 scrollHeight>clientHeight)"},
+    {"id": "CS-3", "severity": "P1", "summary": "AdvanceDeclineChart 既有測試該紅/不該紅判錯 4/6", "disposition": "accepted", "resolution": "改判:該紅 (d)(e)(f);不該紅 (a)(b)(c)(g)(j);(h)(i) 不紅但改寫錨 up/down 皆 null;兩段線/面積恆 render"},
+    {"id": "CS-4", "severity": "P1", "summary": "🔵 節混入行為改動且節內自相矛盾", "disposition": "accepted", "resolution": "🔵 只留註解/等價重構;subtab 刪除、CorrSection 刪除、INDEX_SUBTAB_KEY 退役、orphan 加鍵、tablist 移除全移 🔴;backward compat 補「舊值 corr 使用者改由頂層 tab 取回」;刪打架的注意句"},
+    {"id": "CS-5", "severity": "P1", "summary": "MarketColdLoad.test.tsx 樣板不存在、量測管道未定義", "disposition": "accepted", "resolution": "改為 fake ResizeObserver(observe 時同步 callback 餵 contentRect)+ vi.stubGlobal;補未 stub 對照;current-state §1.4 更正;verification.md 記 frontend-testing skill :15 樣板檔名失效"},
+    {"id": "CS-6", "severity": "P1", "summary": "騰落線 h-24 wrapper 與 fallback 寬決定高互斥 → 溢出出捲軸", "disposition": "accepted", "resolution": "svg 改 h-full w-full(preserveAspectRatio 預設 meet:fallback 態縮放置中不溢出;量測態 viewBox 比例=wrapper 比例故填滿);W-10 補句"},
+    {"id": "CS-7", "severity": "P1", "summary": "clipPath id 用裸 useId 會靜默不繪", "disposition": "accepted", "resolution": "id = safeIdToken(useId()) + -above/-below;測試斷言 defs 內同 id clipPath 且 id 只含 [A-Za-z0-9_-]"},
+    {"id": "CS-8", "severity": "P2", "summary": "BreadthBand label span 寫死 text-ink-dim;BUCKETS jsdoc 舊話", "disposition": "accepted", "resolution": "補 labelTone 欄 + jsdoc 改寫"},
+    {"id": "CS-9", "severity": "P2", "summary": "OverlayCard 巢狀 figure chrome 未扣", "disposition": "accepted", "resolution": "paneSvgHeight 對 overlay 態多扣 OVERLAY_CHROME(border 2 + p 32 + 標題列 20 + mt-2 8 = 62)"},
+    {"id": "CS-10", "severity": "P2", "summary": "斷點量綱(容器 vs 視窗)未換算,1440 視窗落堆疊", "disposition": "accepted", "resolution": "容器寬 = 視窗 − 349 明寫;斷點改 @[1050px](≈ 視窗 1400,1440×900 走兩欄);SC-7 補 1440 截圖為邊界證據"},
+    {"id": "CS-11", "severity": "P2", "summary": "thead sticky 在 border-collapse 表退化", "disposition": "accepted", "resolution": "sticky 掛每個 th(sticky top-0 z-10 bg-surface + th 自帶 border-b);截圖驗收加「捲到中段表頭仍可讀」"},
+    {"id": "CS-12", "severity": "P2", "summary": "雙圖恆兩欄刪掉既有窄容器堆疊行為未入白名單", "disposition": "accepted", "resolution": "左欄加 @container;雙圖 grid grid-cols-1 @[700px]:grid-cols-2;figure min-h-60 保量測穩定;白名單補 W-12"},
+    {"id": "CS-13", "severity": "P2", "summary": "測試指示不精確(s 系列集合 / WS 過濾)", "disposition": "accepted", "resolution": "整個 describe 十支列名;App.corr-tab 用 url regex 過濾 + closed 慣例"},
+    {"id": "CS-14", "severity": "P2", "summary": "next-time.md:261-265 引用 CorrSection 樣板將成死引用", "disposition": "accepted", "resolution": "同批改指 App.tsx initialStockCode / useChartToggles persist 守衛"},
+    {"id": "CS-15", "severity": "P2", "summary": "高度預算 root 18px 假設錯 / edge 2 懸空引用 / 騰落線空態 wrapper", "disposition": "accepted", "resolution": "index.css 無 root font 覆寫已核實 → 1920 段改「同 16px 可用高多 ~216px」;edge 2 括號句改寫;騰落線空態文案置於同一 h-24 恆存 wrapper"}
+  ],
+  "counts": {"P0": 1, "P1": 6, "P2": 8, "accepted": 15, "rejected": 0},
+  "next": "P0 accepted → 限縮 round 2(只審 [amendment 2026-08-16 r1] 段落)"
+}
