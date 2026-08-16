@@ -131,20 +131,27 @@ def _tick(
     )
 
 
-def _state(*, upper: int = 110_000, locked_up: bool = True) -> StockDayState:
+def _state(
+    *,
+    name: str | None = "台積電",
+    upper: int = 200_000,
+    lower: int = 50_000,
+    locked_up: bool = False,
+) -> StockDayState:
     st = StockDayState()
-    st.update_meta(
-        StockMeta(
-            name="台積電",
-            ref_milli=100_000,
-            upper_milli=upper,
-            lower_milli=50_000,
-            y_close_milli=None,
-            y_volume=None,
-            open_time="09:00:00",
-            close_time="13:30:00",
+    if name is not None:
+        st.update_meta(
+            StockMeta(
+                name=name,
+                ref_milli=100_000,
+                upper_milli=upper,
+                lower_milli=lower,
+                y_close_milli=None,
+                y_volume=None,
+                open_time="09:00:00",
+                close_time="13:30:00",
+            )
         )
-    )
     if locked_up:
         # 真鎖漲停簽名:ask 側無限價檔 + bids[0] 是市價佇列的 0(CLAUDE.md §8)
         st.update_book(StockBook(bids=[(0, 800)], asks=[]))
