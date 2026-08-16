@@ -25,6 +25,7 @@ import {
   useSubmitFuture,
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
+import { LOCK_WS_TITLE } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
@@ -174,8 +175,8 @@ export function StkfutLadder({
         day_trade: dayTrade,
         source: "flash",
       })
+      // arm 事件不受 aliveRef 守門(review R3;理由見 PriceLadder 同段註)
       .then((r) => {
-        if (!aliveRef.current) return; // review B8
         if (r.ok) {
           dispatchArm({ type: "send_ok" });
           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`);
@@ -185,7 +186,6 @@ export function StkfutLadder({
         }
       })
       .catch((err: unknown) => {
-        if (!aliveRef.current) return; // review B8
         dispatchArm({ type: "send_fail" });
         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
       });
@@ -199,7 +199,9 @@ export function StkfutLadder({
 
   // 送出口走 ref:觸發條件是換合約 / 卸載,不是 dispatch 本身(理由見 PriceLadder 同段註)
   const armDispatchRef = useRef(dispatchArm);
-  armDispatchRef.current = dispatchArm;
+  useEffect(() => {
+    armDispatchRef.current = dispatchArm;
+  }, [dispatchArm]);
 
   // 自動解除:換標的 / 換合約(R2-5)
   useEffect(() => {
@@ -239,6 +241,14 @@ export function StkfutLadder({
       onToggleArm={() => {
         touchIdle();
         dispatchArm({ type: "toggle" });
+      }}
+      locked={arm.state.locked}
+      // blocked 只擋**進入**鎖定;已鎖定時解鎖鈕恆可按(R2),點價另有 priceLocked 擋
+      lockDisabled={(blocked && !arm.state.locked) || arm.wsStatus !== "open"}
+      lockTitle={arm.wsStatus !== "open" ? LOCK_WS_TITLE : undefined}
+      onToggleLock={() => {
+        touchIdle();
+        dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
       }}
       priceLocked={blocked}
       qty={qtyState.qty}

@@ -15,6 +15,7 @@ import {
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+import { LOCK_WS_TITLE } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
@@ -249,8 +250,10 @@ export function PriceLadder({
         trade_kind: tradeKind,
         source: "flash",
       })
+      // arm 事件**不受 aliveRef 守門**:state 已上提,卸載後 dispatch 到父層 reducer 合法,
+      // 而鎖定態下「送出後切走、回應才到」的失敗漏計就等於連 3 敗那道閘永遠關不上
+      // (change-spec review R3)。守門只留在 showHint(它碰的是本元件的 state)。
       .then((r) => {
-        if (!aliveRef.current) return; // review B8
         if (r.ok) {
           dispatchArm({ type: "send_ok" });
           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`);
@@ -260,7 +263,6 @@ export function PriceLadder({
         }
       })
       .catch((err: unknown) => {
-        if (!aliveRef.current) return; // review B8
         dispatchArm({ type: "send_fail" });
         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
       });
@@ -275,8 +277,11 @@ export function PriceLadder({
   // arm 事件的送出口走 ref:武裝事件的觸發條件是**換股 / 卸載**,不是 dispatch 這個函式本身。
   // 放進 deps 的話,任何一次 identity 漂移(未來把 armCtl 包一層就會發生)都會讓下面的
   // cleanup 在每次 re-render 跑一遍 = 每收一則報價就解除一次武裝(change-spec review R4)。
+  // 同步寫在 effect 內不寫在 render 期間(render 期間改 ref 在並行渲染下不保證只跑一次)。
   const armDispatchRef = useRef(dispatchArm);
-  armDispatchRef.current = dispatchArm;
+  useEffect(() => {
+    armDispatchRef.current = dispatchArm;
+  }, [dispatchArm]);
 
   // 自動解除:換股
   useEffect(() => {
@@ -313,6 +318,14 @@ export function PriceLadder({
       onToggleArm={() => {
         touchIdle();
         dispatchArm({ type: "toggle" });
+      }}
+      locked={arm.state.locked}
+      // 鎖定鈕在 WS 非 open 時 disabled(SC-13):連得上才談得上「一路盯著下單」
+      lockDisabled={arm.wsStatus !== "open"}
+      lockTitle={arm.wsStatus !== "open" ? LOCK_WS_TITLE : undefined}
+      onToggleLock={() => {
+        touchIdle();
+        dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
       }}
       buyLocked={tradeKind === "daytrade_sell"}
       qty={qtyState.qty}

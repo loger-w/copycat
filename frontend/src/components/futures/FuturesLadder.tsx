@@ -10,6 +10,7 @@ import {
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { closeBodyOf } from "@/lib/close-order";
+import { LOCK_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import {
   buildFuturesLadder,
@@ -129,6 +130,8 @@ export function FuturesLadder({
         })
       : [];
   const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
+  // 合約失解析只擋**進入**鎖定;已鎖定時解鎖鈕恆可按(review R2)。WS 非 open 一律擋(SC-13)
+  const lockDisabled = (contract === null && !arm.state.locked) || arm.wsStatus !== "open";
 
   function showHint(text: string, autoClear = false): void {
     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
@@ -166,8 +169,8 @@ export function FuturesLadder({
         day_trade: dayTrade,
         source: "flash",
       })
+      // arm 事件不受 aliveRef 守門(review R3;理由見 PriceLadder 同段註)
       .then((r) => {
-        if (!aliveRef.current) return; // review B8
         if (r.ok) {
           dispatchArm({ type: "send_ok" });
           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`);
@@ -177,7 +180,6 @@ export function FuturesLadder({
         }
       })
       .catch((err: unknown) => {
-        if (!aliveRef.current) return; // review B8
         dispatchArm({ type: "send_fail" });
         showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
       });
@@ -226,7 +228,9 @@ export function FuturesLadder({
   // 送出口走 ref:觸發條件是換商品 / 合約失解析 / 卸載,不是 dispatch 本身
   // (理由見 PriceLadder 同段註)
   const armDispatchRef = useRef(dispatchArm);
-  armDispatchRef.current = dispatchArm;
+  useEffect(() => {
+    armDispatchRef.current = dispatchArm;
+  }, [dispatchArm]);
 
   // 自動解除:換商品
   useEffect(() => {
@@ -296,21 +300,42 @@ export function FuturesLadder({
           <button
             type="button"
             aria-pressed={arm.state.armed}
-            disabled={contract === null}
+            /* disabled 只擋進入方向:已武裝時解除鈕恆可按(review R2) */
+            disabled={contract === null && !arm.state.armed}
             title={contract === null ? "合約未解析" : undefined}
             onClick={() => {
               touchIdle();
               dispatchArm({ type: "toggle" });
             }}
             className={cn(
-              "flex-1 rounded border px-2 py-1 text-xs font-bold",
+              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
               arm.state.armed
                 ? "border-loss bg-loss text-bg"
                 : "border-line text-ink-dim hover:border-accent hover:text-ink",
-              contract === null && "opacity-40",
+              contract === null && !arm.state.armed && "opacity-40",
             )}
           >
             {arm.state.armed ? "解除" : "武裝"}
+          </button>
+          {/* 鎖定鈕(LadderView 的第三份複本;三梯合一屬 out of scope,見 change-spec §8) */}
+          <button
+            type="button"
+            aria-pressed={arm.state.locked}
+            disabled={lockDisabled}
+            title={arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
+            onClick={() => {
+              touchIdle();
+              dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
+            }}
+            className={cn(
+              "shrink-0 rounded border px-2 py-1 text-xs font-bold",
+              arm.state.locked
+                ? "border-accent bg-accent text-bg"
+                : "border-line text-ink-dim hover:border-accent hover:text-ink",
+              lockDisabled && "opacity-40",
+            )}
+          >
+            {arm.state.locked ? "鎖定中" : "鎖定"}
           </button>
           <label className="flex items-center gap-1 text-xs text-ink-muted">
             <input
