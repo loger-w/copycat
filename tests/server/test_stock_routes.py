@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 from pathlib import Path
 from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 
+from copycat.live.stock_models import StockTick
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stock_engine import StockEngine
@@ -14,6 +16,9 @@ from copycat.stock_watchlist import WATCHLIST_LIMIT, save_watchlist
 from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeStockSource
 from tests.helpers.fake_txo import FakeTxoSource
+
+#: VP 折法的跨語言 parity fixture(前端 `src/lib/vp-parity.test.ts` 讀同一個檔)
+VP_PARITY_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "vp_parity.json"
 
 
 def make_client(
@@ -491,8 +496,19 @@ class TestGroupStateRoute:
             assert r.status_code == 200
             states = r.json()["states"]
             assert set(states) == {"2330", "2317"}
-            # payload 形寫死:ticks 不得混進來(50 檔 × 數千筆 = 頻寬炸彈)
-            assert set(states["2330"]) == {"minutes", "meta", "no_data", "backfilling"}
+            # payload 形寫死:ticks 不得混進來(50 檔 × 數千筆 = 頻寬炸彈),但
+            # light_snapshot 的四個加鍵(vwap/high/low/vp)必須到得了前端 —— 卡片圖
+            # 的 VWAP 白線 / 日高低圈 / VP 條全靠它們(🔴 group-grid-full-chart SC-5)
+            assert set(states["2330"]) == {
+                "minutes",
+                "meta",
+                "vwap",
+                "high",
+                "low",
+                "vp",
+                "no_data",
+                "backfilling",
+            }
             assert states["2330"]["no_data"] is False
             stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
             assert stock._main is None, "群組 batch 不得 set_main(會把主圖搶走)"
@@ -514,6 +530,41 @@ class TestGroupStateRoute:
             assert states["9999"]["no_data"] is True
             assert states["9999"]["minutes"] == {}
             assert states["9999"]["meta"] is None
+            # 空卡的四個加鍵一律是「不可得」而不是漏鍵:前端 `?? null` 對漏鍵與 null
+            # 同解,但少一個鍵時契約測試與型別都看不出來(同 meta 的理由)
+            assert states["9999"]["vwap"] is None
+            assert states["9999"]["high"] is None
+            assert states["9999"]["low"] is None
+            assert states["9999"]["vp"] == {}
+
+    def test_vp_reaches_the_wire_matching_the_shared_parity_fixture(self, tmp_path: Path) -> None:
+        """端到端 parity(SC-5):同一份 ticks 進狀態機 → 端點吐出的 `vp` 必須逐鍵等於
+        手算的 `expected`,而前端 `src/lib/vp-parity.test.ts` 對同一個檔各自斷言。
+
+        兩份折法各漂各的樣態是「同一檔在單檔頁與卡片上 POC 不同」——兩個數字都畫得出
+        來、都看起來對,沒有任何錯誤訊號。JSON 鍵是字串:序列化這一段也在 parity 內。
+        """
+        fixture = json.loads(VP_PARITY_PATH.read_text(encoding="utf-8"))
+        client, _ = make_client(tmp_path)
+        with client:
+            self._put(client, ["2330"])
+            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+            state = stock._states["2330"]
+            for i, row in enumerate(fixture["ticks"]):
+                state.ingest(
+                    StockTick(
+                        code="2330",
+                        price_milli=row["p"],
+                        qty=row["q"],
+                        cum_vol=i + 1,
+                        time=row["t"],
+                        trade_date="2026-07-21",
+                        side=row["side"],
+                        is_trial=False,
+                    )
+                )
+            states = client.get("/api/stock/group-state", params={"codes": "2330"}).json()["states"]
+        assert states["2330"]["vp"] == fixture["expected"]
 
     def test_group_state_at_limit_ok(self, tmp_path: Path) -> None:
         """字面 50 相異碼 → 200(與 test_too_many_codes_400 的字面 51 成對釘死邊界)。"""

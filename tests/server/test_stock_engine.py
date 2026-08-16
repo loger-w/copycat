@@ -1211,9 +1211,23 @@ class TestGroupSnapshot:
         src.on_message(_quote(cum=7, price="2380"))
         await _drain(engine)
         snap = engine.group_snapshot(["2330"])["2330"]
-        assert set(snap) == {"minutes", "meta", "no_data", "backfilling"}
+        # 🔴 group-grid-full-chart:卡片改畫「完全同款」的分時圖 → light_snapshot 的
+        # 四個加鍵(vwap/high/low/vp)必須原封轉發。鍵名單一定義在 `light_snapshot()`,
+        # 這裡只 `{**light, ...}` 展開 —— 逐鍵手抄的漂移樣態是後端補了鍵、卡片卻收不到
+        assert set(snap) == {
+            "minutes",
+            "meta",
+            "vwap",
+            "high",
+            "low",
+            "vp",
+            "no_data",
+            "backfilling",
+        }
         # R2:ticks 是數千筆,50 檔一起送等於把 batch 端點變成頻寬炸彈
         assert "ticks" not in snap
+        assert snap["vwap"] == 2_380_000
+        assert snap["vp"] == {"2380000": [1, 1, 0]}
         # 鍵名沿 `StockDayState.snapshot()` 的單一定義:直接丟 dataclass 會讓前端
         # `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失
         assert snap["meta"] == {
@@ -1353,7 +1367,18 @@ class TestGroupSnapshot:
 
         monkeypatch.setattr(stock_engine_mod, "StockDayState", _boom)
         snap = engine.group_snapshot(["9999"])["9999"]
-        assert snap == {"minutes": {}, "meta": None, "no_data": True, "backfilling": False}
+        # 空 payload 的加鍵一律「不可得」而不是漏鍵(`_EMPTY_LIGHT` 由 light_snapshot()
+        # 自己產,鍵集合跟著它走 —— 手抄一份字面 dict 就是下一個會漂的地方)
+        assert snap == {
+            "minutes": {},
+            "meta": None,
+            "vwap": None,
+            "high": None,
+            "low": None,
+            "vp": {},
+            "no_data": True,
+            "backfilling": False,
+        }
         await engine.close()
 
     async def test_released_member_is_no_data_and_not_enqueued(self) -> None:
