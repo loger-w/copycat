@@ -188,8 +188,10 @@
 
 ## 2026-08-06(market-overview-r4-sector-signals 收尾留尾巴)
 
-> **〔2026-08-16 整節作廢〕** R4 類股強弱 / 訊號時間軸 / 全市場鎖板事件已整組刪除
-> (mod/remove-sector-timeline),下列 8 條全部失去標的,不再處理。
+> **〔2026-08-16 部分作廢〕** R4 類股強弱 / 訊號時間軸 / 全市場鎖板事件已整組刪除
+> (mod/remove-sector-timeline)。下列 9 條中,**除「同頁 stale 標記兩款並存」外的 8 條**
+> 全部失去標的、不再處理;該條的 SectorSection 已隨刪除消失,但 BreadthBand(bull 色
+> 「資料延遲」)vs LimitListSection(amber「延遲」)的不一致仍在,條目改寫為只提這兩者。
 
 - [ ] **user 過目待做(SC-3/SC-7 雙層之二)**:綜合 tab「類股強弱」(三層清單:產業 →
   子產業 → 成員,著色漲跌% + 量比,點成員跳個股)與「訊號時間軸」(倒序、kind chips、
@@ -199,7 +201,7 @@
   `data/market/industry_chain.json` 開始落檔、盤中時間軸出現全市場鎖板事件。
 - [ ] **「觸及未鎖」事件不做**(R4 Phase 0 拍板):touched 是當日不可逆 latch,開板已由
   open 事件涵蓋;若日後要,從 breadth rows 的 touched_* 旗標 diff 起。
-- [ ] **同頁 stale 標記兩款並存**:SectorSection 沿 BreadthBand 版(bull 色「資料延遲」),
+- [ ] **同頁 stale 標記兩款並存(仍成立)**:BreadthBand 是 bull 色「資料延遲」,
   LimitListSection 是 amber「延遲」— 視覺是否統一待 user 過目時定。
 - [ ] **時間軸歷史日回看不做**(R4 out of scope):jsonl 按日分檔,要做時 today 端點
   加 `?date=` 即可。
