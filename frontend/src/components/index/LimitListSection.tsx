@@ -41,8 +41,16 @@ const STATUS_TONE: Record<RowStatus, string> = {
 const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpex: "上櫃" };
 
 /** 表頭儲存格的共用 class(對齊方向逐欄另加)。列表整高內捲後表頭必須黏住,否則
- *  捲兩列就只剩九欄無名數字。 */
-const TH = "sticky top-0 z-10 border-b border-line bg-surface px-2 py-1 font-normal";
+ *  捲兩列就只剩九欄無名數字。
+ *
+ *  **分隔線走 inset shadow 不用 `border-b`**(WL-4):`border-collapse` 下 th 的 border
+ *  被併進表格的邊框模型、由 `<table>` 這個不黏的元素畫 —— 捲到中段時底線留在原地,
+ *  黏住的表頭底下就沒有分隔了(1px 的差別,但那是「表頭到哪為止」的唯一線索)。
+ *  box-shadow 畫在 th 自己的 box 上,黏到哪畫到哪;`var(--color-line)` 直接取同一顆
+ *  token(Tailwind 任意值語法不吃 `theme()` 之外的別名)。
+ *  `whitespace-nowrap`:窄右欄(1536 兩欄態 475px)下「金額(億)」會折行把表頭撐高。 */
+const TH =
+  "sticky top-0 z-10 whitespace-nowrap bg-surface px-2 py-1 font-normal shadow-[inset_0_-1px_0_var(--color-line)]";
 
 /** 一列的唯一狀態;三者皆無 → null(該列不入表)。
  *
@@ -398,7 +406,8 @@ function LimitListBody({
             <thead>
               {/* sticky 掛在**每個 th** 而不是 tr:`border-collapse` 下 tr 不建立自己的
                   背景 / 邊框層,黏住的只有 th —— tr 上的 border-b 捲動時會留在原地,
-                  底色也透不出來。九欄各自帶 bg-surface + border-b 才是完整的表頭列。 */}
+                  底色也透不出來。九欄各自帶 bg-surface + inset shadow 分隔線(WL-4:
+                  border 同樣不黏,見 `TH`)才是完整的表頭列。 */}
               <tr className="text-ink-dim">
                 <th className={cn(TH, "text-left")}>代號</th>
                 <th className={cn(TH, "text-left")}>名稱</th>
@@ -465,7 +474,11 @@ function LimitListBody({
                   <td className="px-2 py-1">
                     <span
                       data-testid={`limit-badge-${row.stock_id}`}
-                      className={cn("rounded px-1.5 text-xs", STATUS_TONE[status])}
+                      // nowrap:窄欄下「觸及未鎖」會被拆成一字一行的直排
+                      className={cn(
+                        "rounded whitespace-nowrap px-1.5 text-xs",
+                        STATUS_TONE[status],
+                      )}
                     >
                       {STATUS_LABEL[status]}
                     </span>
