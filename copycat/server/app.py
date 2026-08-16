@@ -378,6 +378,12 @@ def create_app(
     # 名稱表是版控檔(必然存在)→ 沒有注入點的話「表不可用」這條降級路徑無法測
     names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
+    # overlay 的 TC4 歷史取數節流(group-grid AD-5 amendment R5)。群組檢視的 `cdp`
+    # 預設是開的 → 一進群組就對最多 50 檔同時打 `/api/stock/overlay`,而
+    # `daily_bars` 走 `to_thread` 沒有上限、50 條請求共用同一條 TC4 歷史通道。
+    # 擋在 **route 層**而不是 `engine.daily_bars`:後者另有 `signal_hub` 的 basis
+    # 取數在用(signal_hub.py:662),節流下沉到引擎會連訊號的 basis 一起拖慢。
+    overlay_sem = asyncio.Semaphore(4)
     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
     # 個股 WS 匯流排住 app 層而非 engine 內(XR-3):`/ws/stock` 同時載自選 quote
@@ -1177,8 +1183,10 @@ def create_app(
         today = _resolve_trade_date()
         cached = overlay_cache.get(code, today)
         if cached is not None:
-            return cached
-        result = build_overlay(await stock.daily_bars(code), today)
+            return cached  # cache 命中不進 semaphore(沒有 TC4 取數就沒有要節流的東西)
+        async with overlay_sem:
+            bars = await stock.daily_bars(code)
+        result = build_overlay(bars, today)
         overlay_cache.put(code, today, result)  # 空結果不 cache(overlay.py 規則)
         return result
 
