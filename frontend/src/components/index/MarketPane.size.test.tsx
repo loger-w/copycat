@@ -1,0 +1,154 @@
+/** @vitest-environment jsdom */
+/** MarketPane 的「容器剩餘高 → 圖 viewBox 高」量測鏈(SC-4)。
+ *
+ *  **與 MarketPane.test.tsx 拆開**:本檔在其中一個 it 內把全域 `ResizeObserver` 換成
+ *  同步回呼的假物件,那是整個檔案唯一需要量測態的地方 —— 混進主檔會讓所有既有測試的
+ *  fallback 語意(jsdom 無 ResizeObserver → 退回固定 640×220,W-10)靜默改變。
+ *  對照案(不 stub)就掛在同一個 describe 裡,兩者一起讀才看得出「量得到 / 量不到」
+ *  真的分岔。 */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  MarketPane,
+  PANE_FRAMES,
+  paneSvgHeight,
+  type PaneStores,
+} from "@/components/index/MarketPane";
+import type { ChartToggles } from "@/hooks/useChartToggles";
+import type { IndexSeries } from "@/hooks/useIndexStream";
+import {
+  INDEX_OVERLAY_STORE,
+  MARKET_FUT_STORE,
+  MARKET_KEY_STORE,
+  MARKET_MODE_STORE,
+} from "@/lib/constants";
+
+const TWSE: IndexSeries = {
+  p: 42_039_920,
+  ref: 43_634_190,
+  high: 43_221_930,
+  low: 41_815_780,
+  stale: false,
+  minutes: { "0901": 43_000_000, "0930": 42_039_920 },
+};
+
+const LEFT_STORES: PaneStores = {
+  key: MARKET_KEY_STORE,
+  mode: MARKET_MODE_STORE,
+  fut: MARKET_FUT_STORE,
+  overlay: INDEX_OVERLAY_STORE,
+};
+
+// cdp / ma 全關:分時態不打 `/api/index/overlay`,本檔只關心 viewBox 幾何
+const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: false };
+
+/** ResizeObserver 的最小替身:`observe` 當下就同步餵一筆 contentRect。
+ *
+ *  **必須同步**:`useContainerSize` 是 callback ref,節點掛上時才 observe;非同步餵
+ *  在 RTL 的同步斷言之前不會到達,測試會靜默退回 fallback 值(= 綠得毫無意義)。 */
+class FakeResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(node: Element): void {
+    this.cb(
+      [{ target: node, contentRect: { width: 430, height: 300 } } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+}
+
+function renderPane() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <MarketPane
+        paneId="left"
+        twse={TWSE}
+        otc={null}
+        futures={null}
+        stores={LEFT_STORES}
+        defaultKey="TWSE"
+        toggles={TOGGLES}
+        onToggle={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+/** 分時圖 svg 的 viewBox 高(第 4 欄)。 */
+function svgViewBoxHeight(): number {
+  const svg = screen.getByRole("img", { name: "加權指數分時走勢" });
+  return Number((svg.getAttribute("viewBox") ?? "").split(" ")[3]);
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }))),
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe("paneSvgHeight 三態算式(§4.1)", () => {
+  const size = { width: 430, height: 300 };
+
+  it("intraday:chrome 26 / 不內縮 / vbW 640", () => {
+    // renderPx = max(96, floor(300 − 26) − 2) = 272;vbH = round(272 × 640 / 430)
+    expect(paneSvgHeight(size, PANE_FRAMES.intraday)).toBe(405);
+  });
+
+  it("overlay:巢狀 figure 再吃 62 高 34 寬", () => {
+    // svgW = 430 − 34 = 396;renderPx = max(96, floor(300 − 62) − 2) = 236
+    expect(paneSvgHeight(size, PANE_FRAMES.overlay)).toBe(381);
+  });
+
+  it("candle:vbW 是 CandleChart 的 1400,不是 640", () => {
+    // svgW = 396;renderPx = max(96, floor(300 − 100) − 2) = 198;198 × 1400 / 396
+    expect(paneSvgHeight(size, PANE_FRAMES.candle)).toBe(700);
+  });
+
+  it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
+    expect(paneSvgHeight({ width: 430, height: 30 }, PANE_FRAMES.intraday)).toBe(143);
+    expect(paneSvgHeight({ width: 430, height: 10 }, PANE_FRAMES.candle)).toBe(339);
+  });
+
+  it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → undefined(呼叫端走各自 fallback)", () => {
+    expect(paneSvgHeight({ width: 0, height: 300 }, PANE_FRAMES.intraday)).toBeUndefined();
+    expect(paneSvgHeight({ width: 430, height: 0 }, PANE_FRAMES.intraday)).toBeUndefined();
+    expect(paneSvgHeight({ width: 30, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
+    expect(paneSvgHeight({ width: 34, height: 300 }, PANE_FRAMES.candle)).toBeUndefined();
+  });
+});
+
+describe("MarketPane 量測 → 圖高(SC-4)", () => {
+  it("有 ResizeObserver:分時 svg 高 = paneSvgHeight(量到的容器尺寸),不再是固定 220", () => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    renderPane();
+
+    const expected = paneSvgHeight({ width: 430, height: 300 }, PANE_FRAMES.intraday);
+    expect(expected).toBeDefined();
+    expect(expected).not.toBe(220);
+    expect(svgViewBoxHeight()).toBe(expected);
+  });
+
+  it("無 ResizeObserver(jsdom 預設 / 舊瀏覽器)→ 退回固定 220(W-10)", () => {
+    expect(typeof ResizeObserver).toBe("undefined");
+    renderPane();
+    expect(svgViewBoxHeight()).toBe(220);
+  });
+});
