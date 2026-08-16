@@ -575,10 +575,11 @@ class StockEngine:
         不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 50 次
         會把主圖搶走 → 主圖分時線凍結。
 
-        payload 走 `light_snapshot()` 的 minutes/meta 兩鍵(+ 兩個旗標,A1):`ticks`
-        是數千筆,50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是
-        白燒 CPU;而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端
-        `meta.ref` undefined → hasRef=false → 紅綠面積靜默消失)。
+        payload = `light_snapshot()` **整份展開** + 兩個旗標(A1):`ticks` 是數千筆,
+        50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是白燒 CPU;
+        而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端 `meta.ref`
+        undefined → hasRef=false → 紅綠面積靜默消失)。`vp` 是 tick 的**聚合**
+        (O(當日成交過的檔位數)),與 tick 筆數脫鉤,故它進得了 light 而 `ticks` 不行。
 
         ⚠ `no_data` 的推導式**刻意與別處不同**:這裡把「未訂閱」也算 no_data。
         `StockDayState.snapshot()` 根本沒這個鍵,而 `engine.snapshot()` 對未知 code
@@ -615,9 +616,11 @@ class StockEngine:
                 # 先入列再讀旗標:順序反了的話第一次請求會回 backfilling=False,
                 # 卡片顯示「無資料」而不是「回補中…」,而下一輪(60s 後)才會更正
                 self._enqueue_backfill(code)
+            # `{**light, ...}`:鍵名的**單一定義**留在 `light_snapshot()`,這裡只轉發。
+            # 逐鍵手抄的漂移樣態是後端補了鍵(vwap/high/low/vp)、卡片卻收不到 ——
+            # 圖照樣畫得出來,只是少了 VWAP 線 / 高低圈 / VP 條,沒有任何錯誤訊號。
             out[code] = {
-                "minutes": light["minutes"],
-                "meta": light["meta"],
+                **light,
                 "no_data": code in self._no_data or not subscribed,
                 "backfilling": self._backfill_pending.get(code, 0) > 0,
             }
