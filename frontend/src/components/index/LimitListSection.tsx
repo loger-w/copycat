@@ -40,6 +40,10 @@ const STATUS_TONE: Record<RowStatus, string> = {
 
 const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpex: "上櫃" };
 
+/** 表頭儲存格的共用 class(對齊方向逐欄另加)。列表整高內捲後表頭必須黏住,否則
+ *  捲兩列就只剩九欄無名數字。 */
+const TH = "sticky top-0 z-10 border-b border-line bg-surface px-2 py-1 font-normal";
+
 /** 一列的唯一狀態;三者皆無 → null(該列不入表)。
  *
  *  「觸及漲停後殺到跌停」這種多狀態列必須歸唯一一類,否則同一檔會在兩個篩選分類下
@@ -332,8 +336,8 @@ function LimitListBody({
   else if (entries.length === 0) message = "無符合條件";
 
   return (
-    <div data-testid="limit-list-body" className="flex flex-col gap-2 px-4 pb-4">
-      <div className="flex flex-wrap items-center gap-2">
+    <div data-testid="limit-list-body" className="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-4">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         {data?.stale ? (
           <span
             data-testid="limit-list-stale"
@@ -352,7 +356,7 @@ function LimitListBody({
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
         <Check label="上市" checked={filter.twse} onChange={(v) => update({ twse: v })} />
         <Check label="上櫃" checked={filter.tpex} onChange={(v) => update({ tpex: v })} />
         <span className="h-3 w-px bg-line" />
@@ -381,24 +385,30 @@ function LimitListBody({
         />
       </div>
 
-      {message !== null ? (
-        <p data-testid="limit-list-msg" className="py-6 text-center text-sm text-ink-muted">
-          {message}
-        </p>
-      ) : (
-        <div className="overflow-x-auto">
+      {/* 捲動容器**恆存**(文案與表格兩分支都包在裡面):只包表格的話,空態那一幀
+          容器消失 → flex 高度重算 → 資料回來又長回去,右欄會抖一下;SC-3 的量測也
+          會在空態量不到節點。整高內捲 = 列表再長也不把左欄推出視窗。 */}
+      <div data-testid="limit-list-scroll" className="min-h-0 flex-1 overflow-auto">
+        {message !== null ? (
+          <p data-testid="limit-list-msg" className="py-6 text-center text-sm text-ink-muted">
+            {message}
+          </p>
+        ) : (
           <table data-testid="limit-list-table" className="w-full border-collapse text-sm">
             <thead>
-              <tr className="border-b border-line text-ink-dim">
-                <th className="px-2 py-1 text-left font-normal">代號</th>
-                <th className="px-2 py-1 text-left font-normal">名稱</th>
-                <th className="px-2 py-1 text-left font-normal">市場</th>
-                <th className="px-2 py-1 text-right font-normal">現價</th>
-                <th className="px-2 py-1 text-right font-normal">漲跌幅</th>
-                <th className="px-2 py-1 text-right font-normal">連板</th>
-                <th className="px-2 py-1 text-right font-normal">金額(億)</th>
-                <th className="px-2 py-1 text-right font-normal">量比</th>
-                <th className="px-2 py-1 text-left font-normal">狀態</th>
+              {/* sticky 掛在**每個 th** 而不是 tr:`border-collapse` 下 tr 不建立自己的
+                  背景 / 邊框層,黏住的只有 th —— tr 上的 border-b 捲動時會留在原地,
+                  底色也透不出來。九欄各自帶 bg-surface + border-b 才是完整的表頭列。 */}
+              <tr className="text-ink-dim">
+                <th className={cn(TH, "text-left")}>代號</th>
+                <th className={cn(TH, "text-left")}>名稱</th>
+                <th className={cn(TH, "text-left")}>市場</th>
+                <th className={cn(TH, "text-right")}>現價</th>
+                <th className={cn(TH, "text-right")}>漲跌幅</th>
+                <th className={cn(TH, "text-right")}>連板</th>
+                <th className={cn(TH, "text-right")}>金額(億)</th>
+                <th className={cn(TH, "text-right")}>量比</th>
+                <th className={cn(TH, "text-left")}>狀態</th>
               </tr>
             </thead>
             <tbody>
@@ -464,20 +474,21 @@ function LimitListBody({
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// subtab panel 殼
+// 右欄外殼
 // ---------------------------------------------------------------------------
 
-/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。非 active
- *  subtab 是 unmount、但**主 tab 切換不是**(App 以 `hidden` 保留 DOM)—— 選中的
- *  subtab 又存在 localStorage,所以「掛著被切走」是常態,那條路要靠這道 gate 停背景
- *  輪詢(review FE-2)。未給時預設 true。 */
+/** @param active 使用者是否正看著台股綜合 tab(App 的 `tab === "index"`)。本元件**恆掛**
+ *  在右欄,主 tab 切換又不 unmount(App 以 `hidden` 保留 DOM)——「掛著被切走」是常態,
+ *  那條路要靠這道 gate 停背景輪詢(review FE-2)。未給時預設 true。
+ *
+ *  `flex min-h-0 flex-1`:高度由右欄框指派,列表自己在框內捲(§4.1)。 */
 export function LimitListSection({
   onOpenStock,
   active = true,
@@ -486,7 +497,7 @@ export function LimitListSection({
   active?: boolean;
 }) {
   return (
-    <div data-testid="limit-list" className="pt-2">
+    <div data-testid="limit-list" className="flex min-h-0 flex-1 flex-col pt-2">
       <LimitListBody onOpenStock={onOpenStock} active={active} />
     </div>
   );
