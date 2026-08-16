@@ -75,3 +75,15 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
 - **mutation 驗證的同秒 pycache 陷阱**(2026-08-05 真踩到):「改壞→跑測試→還原」同一秒內完成,
   pyc 只比對 `int(mtime)`+size 視為 fresh → 還原後不重編,出現與改動無關的假紅。還原後 `sleep 1`
   或清 `__pycache__`。(Trigger:快速 mutation 驗證迴圈)
+- **claude-in-chrome 截圖驗證下 tab 多半是 `visibilityState=hidden`**(2026-08-17 R4 真踩到):
+  背景 tab 不 render frame → `ResizeObserver` **不投遞** → 走 `useContainerSize` 的元件
+  (StockChart / CardIntradayChart 卡片圖)量不到尺寸就不畫、視窗 resize 後 viewBox 不更新;
+  `screenshot` 動作會逼出一幀(RO 隨之投遞),JS 端 `PerformanceObserver longtask` 仍量得到
+  render/commit 但不含 paint。判法:`document.visibilityState` / 自掛 RO 零 hit;處置:先 screenshot
+  一次再查 DOM,或 `AppActivate` Chrome 視窗;效能結論一律標「hidden tab,JS 成本」。
+  (Trigger:截圖驗證含 ResizeObserver 元件、量 UI 效能)
+- **stock-engine fake server 最新樣板 = `.claude/mod/group-grid-full-chart/evidence/fake_server.py`**
+  (2026-08-17):含 neutralize、20 檔 / 多群組、合成日 bar(overlay 可算)、全日回補不看時鐘、
+  realtime ±1 tick 抖動(liveP 路徑真的變);port 走 argv。盤外 `useGroupSnapshots` 不輪詢 →
+  fake 重啟後首輪 snapshot 若還在回補,卡片停「回補中…」直到重整(非 bug)。
+  (Trigger:起 fake server 驗個股 / 群組 UI)
