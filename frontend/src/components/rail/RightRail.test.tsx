@@ -86,6 +86,8 @@ let positions: CapitalPosition[] = [];
 let orderMode: "ok" | "fail" | "pending" = "ok";
 let orderCalls = 0;
 let pendingOrders: ((reason: unknown) => void)[] = [];
+/** 與 `pendingOrders` 同序:同一發 pending 送單的「成功回應」出口(review r1 S1) */
+let pendingOks: (() => void)[] = [];
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -95,6 +97,7 @@ beforeEach(() => {
   orderMode = "ok";
   orderCalls = 0;
   pendingOrders = [];
+  pendingOks = [];
   qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -108,7 +111,12 @@ beforeEach(() => {
     if (url.includes("/api/capital/order/")) {
       orderCalls += 1;
       if (orderMode === "pending") {
-        return new Promise<Response>((_resolve, reject) => pendingOrders.push(reject));
+        return new Promise<Response>((resolve, reject) => {
+          pendingOks.push(() =>
+            resolve(new Response(JSON.stringify({ ok: true, code: 0, message: "ok", seq_no: "x" }))),
+          );
+          pendingOrders.push(reject);
+        });
       }
       if (orderMode === "fail") {
         return new Response(
@@ -649,6 +657,35 @@ describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () 
     fireEvent.click(screen.getByRole("tab", { name: "部位" })); // ladder 卸載,回應還沒到
     for (const reject of pendingOrders) reject(new Error("NETWORK_DOWN"));
     fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  /** S1(review r1):失敗要無條件計數,**成功卻要守門** —— 兩邊不對稱是刻意的。
+   *  「送出後切走、回應才到」的成功若照樣把 failStreak 歸零,連 3 敗那道斷路器就能被
+   *  一發早先送出的舊單洗掉:使用者在後端持續拒單期間一路換梯連點,而閘永遠關不上。
+   *  這裡的成功來自**已卸載的現股梯**,它對「現在這座梯還能不能送」不構成任何證據。 */
+  it("S1:遲到的成功回應不歸零跨梯 failStreak(A 送出→切梯→2 敗→A 成功→第 3 敗仍解除)", async () => {
+    orderMode = "pending";
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    fireEvent.click(screen.getByLabelText("買 100")); // A:現股梯送出,回應未到
+    await waitFor(() => expect(pendingOks.length).toBe(1));
+    orderMode = "fail";
+    rerender(rail(FUT_CTX)); // 現股梯卸載(A 的回應這時才會回來)
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("買 21041"));
+    await waitFor(() => expect(screen.getByText("券商拒單(1092)")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("賣 21043"));
+    await waitFor(() => expect(screen.getByText("券商拒單(1093)")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // streak 2
+    await act(async () => {
+      pendingOks[0](); // A 的成功遲到
+    });
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    rerender(rail(STOCK_CTX));
+    fireEvent.click(screen.getByLabelText("買 100")); // 第 3 敗
     await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
     expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
   });
