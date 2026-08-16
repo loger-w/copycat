@@ -1,12 +1,10 @@
 import { useId, useMemo } from "react";
 
-import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
+import { extendMinutes, type MinuteAgg, type StockMeta } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
   R_AXIS_W,
-  X_END_MIN,
   X_LABEL_H,
-  X_START_MIN,
   Y_AXIS_W,
 } from "@/lib/stock-intraday-svg";
 import { pts } from "@/lib/svg-points";
@@ -37,40 +35,6 @@ interface Props {
   meta: StockMeta | null;
   /** `watchlist_quote` 的現價(毫元);null / ≤0 = 不延伸 */
   liveP: number | null;
-}
-
-/** 現價延伸(design R10)。分鐘級 snapshot 每 60s 才更新一次,不延伸的話卡片上的線
- *  最久會停在一分鐘前 —— 而群組檢視的用途就是「現在有沒有一起動」。
- *
- *  三道限制都不是防禦性補丁:
- *  - 分鐘鍵取**本機時鐘**(部署綁台北),窗外(盤前 / 盤後 / 隔天早上還開著頁面)
- *    一律不延伸 —— 幾何的窗是 [09:00, 13:30],延伸到窗外的點會被 `windowedEntries`
- *    濾掉,但延伸到**窗內錯的分鐘**(例如隔日 09:05 用的是昨天的 minutes)會靜默
- *    畫出一條假的尾巴。
- *  - `liveP > 0`:TC4 會送 0 表示「不可得」(鎖漲跌停的市價佇列同理),毫元價恆 > 0。
- *  - 既有 bucket **只覆寫 `c`**:量 / 內外盤 / 高低都是後端聚合的真值,拿現價去改
- *    它們等於偽造成交明細。無 bucket 才新建,且 `h`/`l` 給 `null` = 「這一分鐘的
- *    高低不可知」而不是冒充等於現價。
- *
- *  不就地改傳入的 Map(淺拷後寫):來源是 TQ cache 的物件,污染它會讓下一次
- *  render 拿到被改過的「快取」而看不出來。 */
-export function extendMinutes(
-  minutes: Map<number, MinuteAgg>,
-  liveP: number | null,
-  now: Date = new Date(),
-): Map<number, MinuteAgg> {
-  if (liveP === null || liveP <= 0) return minutes;
-  const key = now.getHours() * 60 + now.getMinutes();
-  if (key < X_START_MIN || key > X_END_MIN) return minutes;
-  const next = new Map(minutes);
-  const prev = next.get(key);
-  next.set(
-    key,
-    prev === undefined
-      ? { c: liveP, v: 0, i: 0, o: 0, u: 0, h: null, l: null }
-      : { ...prev, c: liveP },
-  );
-  return next;
 }
 
 export function MiniIntradayChart({ minutes, meta, liveP }: Props) {

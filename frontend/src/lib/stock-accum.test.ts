@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { applyTick, fromSnapshot, type StockAccum, type StockTickMsg } from "@/lib/stock-accum";
+import {
+  applyTick,
+  extendMinutes,
+  fromSnapshot,
+  type MinuteAgg,
+  type StockAccum,
+  type StockTickMsg,
+} from "@/lib/stock-accum";
 import { sideSummary } from "@/lib/stock-intraday-svg";
 
 const SNAP = {
@@ -338,5 +345,48 @@ describe("vp(價位別成交量 fold,SC-1)", () => {
     expect(vpTotal).toBe(30); // fromSnapshot 路徑:vp 與**手上這批 ticks** 合計一致
     expect(s.outer + s.inner + s.unch).toBe(530);
     expect(vpTotal).toBeLessThan(s.outer + s.inner + s.unch); // ← 截斷簽名
+  });
+});
+
+// R10 延伸規則:分鐘鍵 = 本機時鐘分鐘,僅當落在 [09:00, 13:30] 且 liveP > 0 才延伸。
+// (自 `components/stock/MiniIntradayChart.test.tsx` 原樣搬家 —— 函式本體已移入本檔
+//  所屬模組;元件層「延伸後的點真的畫進走勢線」那條需要 jsdom,留在原檔。)
+describe("extendMinutes(R10 現價延伸)", () => {
+  const at = (h: number, m: number) => new Date(2026, 7, 6, h, m, 30);
+
+  it("既有 bucket → 只覆寫 c,量與高低原樣", () => {
+    const src = new Map<number, MinuteAgg>([
+      [600, { c: 2_300_000, v: 12, i: 5, o: 6, u: 1, h: 2_310_000, l: 2_295_000 }],
+    ]);
+    const out = extendMinutes(src, 2_345_000, at(10, 0));
+    expect(out.get(600)).toEqual({
+      c: 2_345_000,
+      v: 12,
+      i: 5,
+      o: 6,
+      u: 1,
+      h: 2_310_000,
+      l: 2_295_000,
+    });
+    // 淺拷不就地改:原 Map 不可被污染
+    expect(src.get(600)?.c).toBe(2_300_000);
+  });
+
+  it("無 bucket → 新建零量點(h/l 為 null,不冒充)", () => {
+    const out = extendMinutes(new Map(), 2_345_000, at(10, 0));
+    expect(out.get(600)).toEqual({ c: 2_345_000, v: 0, i: 0, o: 0, u: 0, h: null, l: null });
+  });
+
+  it("窗外時刻(13:31 之後 / 09:00 之前)不延伸", () => {
+    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
+    expect(extendMinutes(src, 2_345_000, at(14, 0))).toBe(src);
+    expect(extendMinutes(src, 2_345_000, at(8, 50))).toBe(src);
+  });
+
+  it("liveP 為 null / 0 / 負 → 不延伸(0 是 TC4 的「不可得」不是價格)", () => {
+    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
+    expect(extendMinutes(src, null, at(10, 0))).toBe(src);
+    expect(extendMinutes(src, 0, at(10, 0))).toBe(src);
+    expect(extendMinutes(src, -5, at(10, 0))).toBe(src);
   });
 });
