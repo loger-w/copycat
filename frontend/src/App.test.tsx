@@ -7,6 +7,7 @@ import App from "@/App";
 import { purgeOrphanKeys } from "@/lib/constants";
 import { emitSignal } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
+import { clearHolidays, isTradingDay } from "@/lib/trading-calendar";
 
 function renderApp() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -86,12 +87,30 @@ function appFetch(sha?: { fe: string | null; be: string | null; behind: boolean 
     if (u.includes("/__build/sha")) {
       return new Response(JSON.stringify({ git_sha: sha?.fe ?? null, behind: sha?.behind ?? null }));
     }
+    // 交易日曆(SC-6 payload)。10-09 是版控 config 內的國定假日(平日),用它當
+    // 「日曆真的灌進去了」的鑑別點 —— 週末在空集合下本來就擋得住,測不出東西。
+    if (u.includes("/api/calendar")) {
+      return new Response(
+        JSON.stringify({
+          today: "2026-08-16",
+          trade_date: "2026-08-14",
+          calendar_trade_date: "2026-08-14",
+          backfill_env: null,
+          holidays: ["2026-10-09"],
+          years_loaded: [2026],
+          calendar_loaded: true,
+        }),
+      );
+    }
     return new Response(JSON.stringify({}), { status: 404 });
   });
 }
 
 afterEach(() => {
   cleanup();
+  // 模組級假日集合會跨 it / 跨檔外溢(寫入點是模組單例)—— 不清會讓後面的
+  // trading-hours 測試隨執行順序飄。
+  clearHolidays();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -144,6 +163,19 @@ describe("App(index-board T9)", () => {
     expect(left.getByRole("button", { name: "櫃買" })).toBeTruthy();
     expect(left.getByRole("button", { name: "台指期" })).toBeTruthy();
     expect(left.getByRole("button", { name: "日K" })).toBeTruthy();
+  });
+});
+
+// 🟢 交易日曆(SC-9 / S2):App 有沒有真的掛 `useTradingCalendar`。
+// 這條線斷掉時 hook 自己的測試、`lib/trading-calendar` 的測試全綠 —— 只是假日集合
+// 永遠是空的,三支時段函式退回只擋週末:國定假日整天照輪詢,零可見訊號。
+describe("App 掛交易日曆(SC-9)", () => {
+  it("開站取 /api/calendar 後,國定假日(平日)判為非交易日", async () => {
+    renderApp();
+    // 10-09(五)本身是平日 → 空集合時 isTradingDay 為 true,灌進去才會翻 false
+    await waitFor(() => expect(isTradingDay(new Date(2026, 9, 9, 10, 0))).toBe(false));
+    // 對照:同週的平常週四不受影響(不是整片被關掉)
+    expect(isTradingDay(new Date(2026, 9, 8, 10, 0))).toBe(true);
   });
 });
 
