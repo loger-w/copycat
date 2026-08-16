@@ -340,6 +340,18 @@ class BreadthEngine:
 
     # ---- poll loop ----
 
+    def _seed_pending(self) -> bool:
+        """非交易日首圈失敗要沿既有退避重試,到成功一次為止(C1)。
+
+        `_in_window` 吃了交易日 gate 之後,假日的取數機會只剩「首圈無條件」那一次;
+        那一次撞上 FinMind 打嗝,counts 就整天是 None(改動前窗內會退避重試),畫面
+        永遠停在「載入中」且零錯誤訊號。
+
+        **交易日窗外行為逐字不變(W1/W5)**:條件刻意含 `not is_trading_day`,交易日
+        盤前起站失敗仍等窗開才重試,不會把盤前變成狂打。
+        """
+        return self._last_success is None and not self._is_trading_day(self._now_fn().date())
+
     async def _poll_loop(self) -> None:
         """首圈無條件跑一輪(盤後開站也要有數字),之後只在台北窗內取數。
 
@@ -354,7 +366,7 @@ class BreadthEngine:
                 # 拋例外絕不能殺掉整條 poll task —— 那會讓家數面板為了連板數這條旁支
                 # 凍在最後一則且零錯誤訊號(review R9)。
                 self._maybe_arm_streaks()
-                if first or self._in_window():
+                if first or self._in_window() or self._seed_pending():
                     await self._run_cycle()
             except Exception:
                 logger.exception("breadth poll loop 非預期失敗(續行)")
