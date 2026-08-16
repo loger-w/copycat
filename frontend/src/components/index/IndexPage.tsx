@@ -1,15 +1,14 @@
-/** 台股綜合頁的薄容器:常駐區(基差列 + 兩張並排指數圖 + 家數帶 + 騰落線)
- *  + 其下一列 subtab(漲跌停 / 相關係數)。
+/** 台股綜合頁的薄容器 —— **一頁總覽兩欄**:左欄基差列 + 兩張並排指數圖 + 家數帶 +
+ *  騰落線,右欄漲跌停列表**恆掛**。
  *
  *  單圖的狀態邏輯與版面全在 `MarketPane`(本檔只決定「哪個 pane 用哪組 localStorage key、
  *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
  *  「同一段程式碼寫兩遍」。
  *
- *  **subtab 是掛載閘,不是 `hidden`**(2026-08-14 改版;2026-08-16 收成兩個 panel):
- *  panel 原本各自有收合殼、可同時展開多個,現在是「恆有一顆 active、一次只掛載一個」。
- *  專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反** —— 兩個 panel 分別是
- *  全市場 2800 列 / 10 秒、corr + river 兩條 WS,保 DOM 等於兩份成本同時常駐。切走即
- *  unmount,輪詢與連線跟著消費者走(原「收合 = unmount」設計的等價轉移)。 */
+ *  **沒有 subtab**(2026-08-16 退役,相關係數升為頂層 tab):改版前下半部是一列 subtab
+ *  + 一次只掛載一個 panel,現在漲跌停列表與左欄同屏常駐,省輪詢的責任整條落到
+ *  `active` —— 本頁的 DOM 由 App 以 `hidden` 保留,主 tab 切離時 `active` 轉 false,
+ *  列表輪詢與兩張圖的分 K 一起停(原「非 active subtab = unmount」的等價轉移)。 */
 import { useState } from "react";
 
 import { CorrSection } from "@/components/corr/CorrSection";

@@ -1,11 +1,11 @@
-/** 台股綜合頁的漲跌停列表 subtab panel(market-overview R3;design §5.2)。
+/** 台股綜合頁右欄的漲跌停列表(market-overview R3;design §5.2)。
  *
- *  **非 active subtab = unmount,不是 `hidden`**(2026-08-14 subtab 改版前是「收合 =
- *  unmount」,掛載閘上移到 `IndexPage` 後語意等價轉移):payload 是全市場約 2800 列
- *  × 15 欄,盤中每 10 秒一份 —— 用專案慣例的 `hidden` 保 DOM 等於切到別的 subtab 也
- *  持續吃這份頻寬。切走即 unmount → `useBreadthRows` 連同 query 一起消失。
- *  與 CorrSection 不同的是**這裡不需要 `React.lazy`**:本元件無 WS、無圖表、
- *  無重依賴,lazy 只會多一個 Suspense 空窗與一條測不到的非同步路徑。
+ *  **恆掛在台股綜合右欄**(2026-08-16 subtab 機制退役,一頁總覽):不再有「切走即
+ *  unmount」那道閘,payload 是全市場約 2800 列 × 15 欄、盤中每 10 秒一份,省頻寬
+ *  全靠 `active` —— App 以 `hidden` 保留本頁 DOM,切到別的主 tab 時 `active` 轉
+ *  false,`useBreadthRows` 的輪詢跟著停(頁內其餘背景輪詢同一道 gate)。
+ *  **這裡不需要 `React.lazy`**:本元件無 WS、無圖表、無重依賴,lazy 只會多一個
+ *  Suspense 空窗與一條測不到的非同步路徑。
  *
  *  **前端零日期推理**(design R1):`streak` / `streak_capped` 都由後端算完,這裡只負責
  *  把 null / capped 翻成文案。任何「今天是不是還要 +1」的算術一旦在前端重做一份,

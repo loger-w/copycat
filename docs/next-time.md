@@ -260,9 +260,11 @@
   三刻度 key 唯一)。
 - [ ] `MarketPane.tsx` 七個 localStorage 呼叫點裸奔無 try/catch(review SI-2,
   rejected — design 明文「照抄現邏輯」):storage 被政策鎖時預設頁首 render 即白屏,
-  且全 frontend 零 ErrorBoundary。要修就把 `CorrSection.tsx:18-34` 那對守衛抽
-  `@/lib/storage`(readKey/writeKey)供兩處共用,順帶收斂 App.tsx / useChartToggles
-  的同型 try/catch。
+  且全 frontend 零 ErrorBoundary。要修就抽 `@/lib/storage`(`readKey` / `writeKey`,
+  讀寫兩側都包 try/catch),既有同型 try/catch(`App.tsx::initialStockCode` 的
+  setItem/removeItem、`hooks/useChartToggles.ts::persist`、
+  `LimitListSection.tsx::loadFilter` / `persistFilter`)一併收斂。
+  (原文引用的樣板 `CorrSection.tsx:18-34` 已於 2026-08-16 subtab 退役時刪檔。)
 - [ ] 舊存檔 `copycat-market-key="OTC"` 的使用者升版首載左右兩張都櫃買(review SI-3,
   rejected — 點一下左圖「加權」即永久自癒):若真嫌,IndexPage 做一次性 seed
   (MARKET2_KEY_STORE 未設時依左值選互補標的),冪等不引入持續耦合。
