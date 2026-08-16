@@ -90,6 +90,14 @@ MARKET_KEYS = ("TWSE", "OTC") + FUTURES_MARKET_KEYS
 #: `?session=` 的值域。
 MARKET_SESSIONS = ("day", "allday")
 
+#: `/api/stock/overlay/{code}` 單檔取數的時間上界(group-grid review B2)。
+#: TC4 對「查無此檔」不是快速失敗 —— `fetch_daily_bars` 內部兩段 deadline 各 30s,
+#: 而空結果依 `overlay.py` 規則不進 cache,於是每次請求都重付一次 60s。配上 route 層
+#: `Semaphore(4)`,四檔這種股號就足以把整個端點凍住(head-of-line):進群組時 50 張卡
+#: 的 CDP/MA 全排在後面,而畫面上只是「疊線一直沒出來」,零錯誤訊號。
+#: 15s > 正常取數(實測 <1s)一個數量級,又遠短於 TC4 的 60s。
+OVERLAY_FETCH_TIMEOUT_S = 15.0
+
 #: `/api/stock/state/{code}?contract=` 的形檢:`<prod>:<YYYYMM>`(stkfut-contracts D7)。
 #: 只是第一道 —— 「這個合約屬不屬於這檔股票」必須另外查 catalog 白名單。
 _CONTRACT_RE = re.compile(r"^[A-Z0-9]{2,4}:20\d{2}(0[1-9]|1[0-2])$")
@@ -1185,7 +1193,21 @@ def create_app(
         if cached is not None:
             return cached  # cache 命中不進 semaphore(沒有 TC4 取數就沒有要節流的東西)
         async with overlay_sem:
-            bars = await stock.daily_bars(code)
+            try:
+                bars = await asyncio.wait_for(
+                    stock.daily_bars(code), timeout=OVERLAY_FETCH_TIMEOUT_S
+                )
+            except TimeoutError:
+                # 逾時 = 「這一檔現在取不到」,與 TC4 離線同一種降級:全 null + 200。
+                # **不寫 cache**(沿 overlay.py 空結果不 cache):快取一則空值等於
+                # 這檔今天再也拿不到疊線。放掉的是 semaphore 名額 —— `to_thread` 的
+                # 工作執行緒中斷不了,但後面排隊的股號不必陪它一起等(head-of-line)。
+                logger.warning(
+                    "stock_overlay %s: daily_bars 逾時 %.0fs,疊線降級全 null",
+                    code,
+                    OVERLAY_FETCH_TIMEOUT_S,
+                )
+                return build_overlay([], today)
         result = build_overlay(bars, today)
         overlay_cache.put(code, today, result)  # 空結果不 cache(overlay.py 規則)
         return result
