@@ -405,9 +405,15 @@ export function PriceLadder({
                 setTradeKind(v);
               }}
               className={cn(
-                "rounded border px-1 py-0.5 text-xs",
+                "rounded border px-0.5 py-0.5 text-xs",
+                // 選中色分兩檔(review C1):現股 = accent(預設態);融資 / 融券 / 無券 = warn 琥珀
+                // —— pill 把「改送單語意」降成武裝列上的單擊,非現股必須在梯面外就刺眼,
+                // 手滑點到才不會被當成「沒事」。px-0.5:288px 下 解除+鎖定中+四顆 pill 同列
+                // 實測剛好貼齊(review C2),收 2px 換餘裕。
                 tradeKind === v
-                  ? "border-accent text-accent"
+                  ? v === "cash"
+                    ? "border-accent text-accent"
+                    : "border-warn text-warn"
                   : "border-line text-ink-dim hover:text-ink",
               )}
             >
