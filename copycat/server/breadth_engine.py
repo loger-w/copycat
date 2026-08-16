@@ -16,20 +16,6 @@ WS 廣播。純函式在 `copycat.market_breadth`,取數在 `copycat.server.brea
 1331–1335 clamp):同一頁的指數分時圖用同一把尺,兩張圖的 x 軸才對得起來;域外
 (盤後定盤 14:30、盤前)一律丟棄。
 
-**產業鏈(R4 design §4.3/§5)**:第三條背景 task —— `TaiwanStockIndustryChain`
-的 7 天 TTL 快取,成功即換表 + 落檔。刷新**刻意不 await**:那張表壞掉或上游卡住
-只該讓類股面板 degraded,家數輪一秒都不能被它拖住(§1 失效域的前提)。載入紀律
-是「**過期也先用**」—— stale 的產業對照勝於整片空白,而空白與「FinMind 掛了」
-在畫面上完全同形。取數成功但 parse 後為空(欄位語意變 / 上游回殘表)時**不換表
-也不落檔**:照樣換的話,一份可用的舊快取會被空表覆寫並固化到磁碟。
-
-**全市場鎖板事件(R4 design §6)**:每輪 append 成功後對 rows 做一次**對帳** ——
-比的是「事件流已對外宣告的狀態」(`_mkt_last_emitted`,重啟時自 jsonl 回放)而不是
-「上一輪的實況」。差別在兩個邊界上是致命的:開盤即鎖(一價到底)沒有轉移可偵測、
-盤中重啟後記憶體是空的 —— 兩者在 raw 轉移偵測下都靜默漏發,而漏發的表現就是畫面
-少一列。冷卻(`event_cooldown_secs`)只**延後**對帳不丟棄,所以抖動有上界而終態
-仍收斂到實況。
-
 **連板數(R3 design §3.3)**:另有一條每日一次的背景 task —— FinMind EOD 回看
 10 個交易日算連續漲停日數,成果落 `streaks-<today>.json`。與 poll 迴圈共用同一個
 FinMind 失效域(壞了只讓連板欄 null),排程狀態刻意與成果分離:`_streak_armed_day`
@@ -46,7 +32,7 @@ import logging
 import os
 import time as _time
 from pathlib import Path
-from typing import AsyncGenerator, Callable, Protocol, TypeGuard
+from typing import AsyncGenerator, Callable, TypeGuard
 
 from copycat.breadth_config import BreadthConfig
 from copycat.limit_streaks import (
@@ -61,17 +47,9 @@ from copycat.market_breadth import (
     compute_breadth,
     dedup_sector_map,
     max_tick_datetime,
-    normalize_universe_rows,
     parse_active_disposition,
 )
-from copycat.sector_rotation import (
-    ChainMap,
-    compute_sector_members,
-    compute_sector_rotation,
-    rows_to_chain_map,
-)
-from copycat.server.breadth_fetch import CHAIN_MIN_ROWS, BreadthFetchError
-from copycat.server.chain_store import CHAIN_FILENAME, load_chain, save_chain
+from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.index_engine import minute_key
 from copycat.server.ws import WsBroadcaster
 
@@ -92,8 +70,8 @@ _TICK_FUTURE_TOLERANCE = _dt.timedelta(minutes=10)
 #: 台股現貨開盤前試撮窗(08:30–09:00,右端不含;09:00:00 整 = 開盤撮合真成交)。
 #: XR-5 拍板(2026-08-12):試撮價可被假單操縱,不進系統。輪詢窗 09:00 起只擋
 #: 「取數時刻」;09:00 整的首輪仍可能拿到上游尚未刷新的 08:5x 試撮快照、窗外首圈
-#: (盤前重啟)也同款 —— `_apply` 以**資料時刻**再擋一道,scalar / rows / rotation /
-#: 連板 +1 全部一起(review C-2)。
+#: (盤前重啟)也同款 —— `_apply` 以**資料時刻**再擋一道,scalar / rows / 連板 +1
+#: 全部一起(review C-2)。
 _TRIAL_START = _dt.time(8, 30)
 _TRIAL_END = _dt.time(9, 0)
 #: 序列落檔格式版本;不相容改動時 +1(舊檔 restore 直接略過 → 空序列起步)
@@ -126,36 +104,10 @@ _STREAK_GAP_CAL_DAYS = 12
 _STREAK_REQ_GAP_SECS = 0.3
 _STREAK_RETRY_SECS = 60.0
 
-# ---- 產業鏈(chain)刷新 ----
-#: chain 快取檔名(格式與讀寫在 `chain_store`,檔名也由它擁有 —— 見 `CHAIN_FILENAME`)
-_CHAIN_FILE = CHAIN_FILENAME
-
-# ---- 全市場鎖板事件(diff)----
-#: 事件 kind。與自選股那條路的 `limit_lock` / `limit_open` **只差前綴**且刻意如此:
-#: hub 的 seed 回放依這兩個字串把兩條路分開(signal_hub `_MARKET_LOCK` 同值)。
-_MARKET_LOCK = "market_limit_lock"
-_MARKET_OPEN = "market_limit_open"
-
 SnapshotFetch = Callable[[str], list[dict]]
 StockInfoFetch = Callable[[str], list[dict]]
 DispositionFetch = Callable[[str, _dt.date], list[dict]]
 DailyPricesFetch = Callable[[str, _dt.date], list[dict]]
-ChainFetch = Callable[[str], list[dict]]
-
-
-class MarketSignalSink(Protocol):
-    """訊號匯流排掛點(實作 = `copycat.server.signal_hub.SignalHub`;測試注入 fake)。
-
-    結構型協定而非直接 import `SignalHub`(`stock_engine.SignalSink` 同款):引擎不該
-    為了型別去相依整個訊號層,測試也才能注入不繼承任何東西的替身。**全部同步方法** ——
-    這條路徑跑在 poll 輪內,不 await。
-    """
-
-    def publish_market_events(self, events: list[dict], *, trade_date: str) -> None: ...
-
-    def market_event_state(
-        self, trade_date: str
-    ) -> tuple[dict[tuple[str, str], bool], dict[tuple[str, str, str], int]]: ...
 
 
 def _monotonic() -> float:
@@ -214,7 +166,6 @@ class BreadthEngine:
         stock_info_fetch: StockInfoFetch,
         disposition_fetch: DispositionFetch,
         daily_fetch: DailyPricesFetch | None = None,
-        chain_fetch: ChainFetch | None = None,
         data_dir: Path | None = None,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
         now_fn: Callable[[], _dt.datetime] | None = None,
@@ -226,8 +177,6 @@ class BreadthEngine:
         self._disposition_fetch = disposition_fetch
         #: None = 連板數停用(rows 端點照常,`streak` 恆 null)
         self._daily_fetch = daily_fetch
-        #: None = 類股輪動停用(`sector_state().rotation` 恆 null,家數面板不受影響)
-        self._chain_fetch = chain_fetch
         self._data_dir = data_dir if data_dir is not None else _DEFAULT_DATA_DIR
         self._today_fn = today_fn
         # 預設走模組層 `_now`(不是直接綁 `datetime.now`)—— 測試 monkeypatch 的是那個名字
@@ -238,7 +187,7 @@ class BreadthEngine:
         self._trade_date: str | None = None
         self._as_of: str | None = None
         self._counts: dict[str, dict[str, int]] | None = None
-        #: 全量逐檔 rows(漲跌停列表 / 類股熱力圖的原料 — R3 輪用)。
+        #: 全量逐檔 rows(漲跌停列表的原料 — R3 輪用)。
         #: 刻意**不進 `state()`**:本輪對外契約只有 counts + series,四千列 rows
         #: 每 10 秒進一次 REST payload 是純浪費(`rows_state()` 才給)。
         self.rows: list[dict] = []
@@ -262,37 +211,12 @@ class BreadthEngine:
         #: 武裝時清空:同一日期的 EOD 不會變,但成果只服務當次武裝日的窗。
         self._streak_memo: dict[str, set[str] | None] = {}
 
-        # ---- 產業鏈 / 類股輪動(design §4.3;成果 vs 排程同樣分離)----
-        self._chain_map: ChainMap = {}
-        #: **epoch**(不是單調鐘):TTL 要跨重啟算得準,而單調鐘的原點每次重啟都不同。
-        #: None = 從未成功(含快取檔壞掉)→ 武裝判定視同過期。
-        self._chain_fetched_at: float | None = None
-        self._chain_task: asyncio.Task[None] | None = None
-        #: 取數失敗後的重試不早於此**單調**時刻(對照表的 `_info_retry_at` 同語意)
-        self._chain_retry_at: float | None = None
-        #: 最近一輪成功的 rotation(None = chain 缺 / 首輪未成 → 面板 degraded)
-        self._rotation: dict | None = None
-        #: members drill-down 的原料 = `assemble_universe` 輸出(**不是** `self.rows`:
-        #: 後者的量欄已收成 `volume_ratio`,分子分母不可再同步剔除)
-        self._universe_rows: list[dict] = []
-
-        # ---- 全市場鎖板事件的對帳狀態(design §6.2)----
-        #: `(code, direction)` → **事件流已對外宣告的**鎖定狀態(不是「當下實況」)。
-        #: 兩者的差就是還沒發出去的帳,對帳制的全部語意都建立在這個區別上。
-        self._mkt_last_emitted: dict[tuple[str, str], bool] = {}
-        #: `_mkt_last_emitted` 服務的資料日;不符即重 seed(首輪 / 換日 / 重啟)
-        self._mkt_emitted_date: str | None = None
-        #: `(code, kind, direction)` → 冷卻**單調** deadline。冷卻只延後對帳不丟棄
-        self._mkt_cooldown: dict[tuple[str, str, str], float] = {}
-        #: `(code, kind, direction)` → 當日第 N 次(seed 自 jsonl,重啟後不從 1 重數)
-        self._mkt_touch: dict[tuple[str, str, str], int] = {}
-        #: 未 attach 時整條路早退:發布通道與狀態機推進不得解耦(design R2-1)
-        self._signal_hub: MarketSignalSink | None = None
-
         # ---- 當日分鐘序列(分鐘鍵 → point,last-wins)----
         self._series: dict[str, dict] = {}
 
         # ---- 對照表快取 ----
+        #: 代號 → 產業別(TaiwanStockInfo)。家數帶 universe 的**白名單**(不在表內的
+        #: 代號整列不進統計)兼 degraded 判定的依據(`_stale`:表空 = 對照層殘缺)。
         self._sector_map: dict[str, str] = {}
         self._type_map: dict[str, str] = {}
         self._name_map: dict[str, str] = {}
@@ -315,36 +239,24 @@ class BreadthEngine:
         self._task: asyncio.Task[None] | None = None
         self._ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
 
-    # ---- 訊號匯流排掛點(鏡射 `stock_engine`)----
-
-    def attach_signal_hub(self, hub: MarketSignalSink) -> None:
-        self._signal_hub = hub
-
-    def detach_signal_hub(self) -> None:
-        """摘掉掛點(hub 收攤前呼叫):對已收攤的 hub 繼續發事件 = 靜默全丟。"""
-        self._signal_hub = None
-
     # ---- 生命週期 ----
 
     async def start(self) -> None:
-        """restore 本地落檔(序列 + streak + chain)+ 起 poll task。**零網路 IO** ——
+        """restore 本地落檔(序列 + streak)+ 起 poll task。**零網路 IO** ——
         首輪 fetch 在 task 上跑,FinMind 慢或掛都不得延後 lifespan(design R6)。
 
-        streak / chain task 刻意**不在這裡起**:武裝條件含時間閘與 TTL,交給
-        `_poll_loop` 每圈檢查才只有一處判定(start() 另起一份就會繞過那些閘)。
+        streak task 刻意**不在這裡起**:武裝條件含時間閘,交給 `_poll_loop` 每圈檢查
+        才只有一處判定(start() 另起一份就會繞過那些閘)。
         """
         self._restore()
         self._restore_streaks()
-        self._restore_chain()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def close(self) -> None:
         task, self._task = self._task, None
         streak, self._streak_task = self._streak_task, None
-        chain, self._chain_task = self._chain_task, None
         await _cancel(task)
         await _cancel(streak)
-        await _cancel(chain)
 
     # ---- 對外狀態 ----
 
@@ -402,31 +314,6 @@ class BreadthEngine:
             "rows": rows_out,
         }
 
-    def sector_state(self) -> dict:
-        """REST 全量類股輪動(`GET /api/market/sector`)。`rotation` None = 未就緒。
-
-        日期基準 = `_rows_date`(與 rotation 同一輪的資料日),不是 `_trade_date`:
-        `adopt_date=False` 路徑會讓後者與 rows 脫鉤,而 rotation 是從那一輪的
-        universe 算的 —— 報錯日期的表現是「畫面全對、只有標頭日期是別天的」。
-        """
-        return {
-            "enabled": True,
-            "trade_date": self._rows_date,
-            "as_of": self._as_of,
-            "stale": self._stale(),
-            "rotation": self._rotation,
-        }
-
-    def sector_members(self, industry: str, sub_industry: str | None) -> dict | None:
-        """成員股 drill-down;未知 industry / sub_industry → None(呼叫端轉 404)。"""
-        return compute_sector_members(
-            self._universe_rows,
-            self._chain_map,
-            self._name_map,
-            industry,
-            sub_industry,
-        )
-
     def payload(self, last_minute: dict | None = None) -> dict:
         """WS scalar 訊息;`last_minute` 只在本輪真的 append 了一格時帶值。"""
         return {
@@ -459,7 +346,6 @@ class BreadthEngine:
                 # 拋例外絕不能殺掉整條 poll task —— 那會讓家數面板為了連板數這條旁支
                 # 凍在最後一則且零錯誤訊號(review R9)。
                 self._maybe_arm_streaks()
-                self._maybe_arm_chain()
                 if first or self._in_window():
                     await self._run_cycle()
             except Exception:
@@ -649,13 +535,6 @@ class BreadthEngine:
         # 與 rows 同行、**無條件**更新(含 adopt_date=False 路徑)—— 這正是它存在的
         # 理由:rows 換了而日期沒換的話,連板判式會拿舊日期去比 data_end(R14)
         self._rows_date = trade_date
-        # 類股輪動與 rows 同輪同源(design §5):`sector_state()` 報的 trade_date /
-        # as_of 就是這一輪的,rotation 落後一輪的話兩者會在畫面上互相矛盾。
-        # 存**清洗過**的那份:原始快照列的髒數值欄(整日未成交 = `""` / `"-"`)會在
-        # `_group_stats` 的 `sum()` 當場炸,而那種髒列是持續性的 → 傘罩每輪把 rotation
-        # 打成 None,類股面板整個交易日「未就緒」(review round-3 CR-2)
-        self._universe_rows = normalize_universe_rows(universe)
-        self._recompute_rotation()
         # 退避與 quota 旗標**無條件**重置:上游有回應,不該退避。
         self._fail_streak = 0
         self._quota = False
@@ -665,41 +544,7 @@ class BreadthEngine:
             # 錯位是殘餘已知,stale 旗標是唯一看得見的那個(review round-2 XR-2)。
             return None  # scalar 已更新;序列與落檔一概不動
         self._last_success = _monotonic()
-        point = self._append(dt, trade_date, counts)
-        if point is not None:
-            # 事件的觸發 gate = **append 成功**(design §6.3):盤前試撮輪(分鐘域外)
-            # 與他日快照輪天然不觸發,「試撮殘留假事件」整個分支因此不存在。
-            # 傘罩:事件流是旁支,它炸掉不得把家數輪一起帶走(逐列容錯在裡面另有一層)。
-            try:
-                self._diff_limit_events(trade_date, breadth["rows"], as_of)
-            except Exception:
-                logger.exception("breadth 廣度事件對帳非預期失敗(本輪事件丟棄,家數不受影響)")
-        return point
-
-    def _recompute_rotation(self) -> None:
-        """`_universe_rows` × `_chain_map` → `_rotation`。**`_rotation` 的單一寫入點**。
-
-        兩個輸入各自更新(universe 每輪 `_apply`、chain 由背景 task 換表),所以兩邊
-        都得回到這裡重算:chain 換表不重算的話 rotation 要等下一次 `_apply`,而盤後
-        首次部署(無快取)窗外根本沒有下一輪 —— 整晚 rotation 恆 null,與「chain
-        取數失敗」在畫面上完全同形(review C-1)。
-
-        universe 空(首輪未成)→ 保持 **None** 而不是算出 `{"industries": []}`:後者
-        在前端是「產業算得出來、只是沒有成員」,None 才是「類股資料未就緒」。
-        """
-        if not self._universe_rows:
-            self._rotation = None
-            return
-        try:
-            self._rotation = compute_sector_rotation(self._universe_rows, self._chain_map)
-        except Exception:
-            # `compute_sector_rotation` 是 neigui parity 全等搬移(不得在其內加防禦),
-            # 而 universe 的髒列(非數值 `change_rate`)會在 `sum()` 當場炸。rotation 是
-            # 旁支:炸掉不得把兩個呼叫端(`_apply` 的家數輪 / `_refresh_chain` 的 task)
-            # 一起帶走。清成 None 而非沿用舊值 —— 舊 rotation 會頂著新 as_of 說謊,
-            # None(= 未就緒)才誠實(review round-2 XR-1a)。
-            logger.exception("breadth 類股輪動計算失敗(rotation 標未就緒,家數不受影響)")
-            self._rotation = None
+        return self._append(dt, trade_date, counts)
 
     def _append(
         self, dt: _dt.datetime, trade_date: str, counts: dict[str, dict[str, int]]
@@ -718,97 +563,6 @@ class BreadthEngine:
         self._series[key] = point  # 同分鐘 last-wins
         self._save()
         return point
-
-    # ---- 全市場鎖板事件 diff(design §6.3 / §6.4)----
-
-    def _diff_limit_events(self, trade_date: str, rows_out: list[dict], as_of: str) -> None:
-        """`compute_breadth` 的 rows 對帳 → 鎖板 / 開板事件批次交給匯流排。
-
-        **入參是 `compute_breadth` 的輸出**(帶 `limit_*` 與 `name`),不是 `_apply` 收到的
-        原始快照 —— 餵錯那份的表現是事件流永遠空著,而空事件流與「今天沒人鎖板」同形,
-        所以缺鍵在收尾記一則 warning(逐列記會在四千列的輪次把 log 洗掉)。
-
-        `last_emitted` = 事件流**已對外宣告**的狀態(不是當下實況):
-        - 開盤首輪 seed 空 → 一價到底的檔照發 lock(raw 轉移偵測會靜默漏掉)。
-        - 重啟 seed 自 jsonl 回放 → 已發過的不重發、停機期間的轉移補發一則。
-        - 冷卻中**只跳過本輪、不動 `last_emitted`** → 帳還欠著,冷卻一過自然補發,
-          事件流終態恆收斂到實況(冷卻是抖動上界,不是丟棄)。
-        """
-        hub = self._signal_hub
-        if hub is None:
-            # 未 attach:不 seed、不 latch 日別、不動任何狀態(design R2-1)。推進了狀態
-            # 等於把這些轉移當成「已發布」,當日不再回放 seed → 開盤那一批永遠不見。
-            return
-        if self._mkt_emitted_date != trade_date:
-            self._mkt_last_emitted, self._mkt_touch = hub.market_event_state(trade_date)
-            self._mkt_cooldown.clear()  # 昨日的冷卻不得壓掉今日開盤的第一則
-            self._mkt_emitted_date = trade_date
-            logger.info(
-                "breadth 廣度事件 seed %s:%d 檔已發布狀態 / %d 桶計數",
-                trade_date,
-                len(self._mkt_last_emitted),
-                len(self._mkt_touch),
-            )
-
-        now = _monotonic()
-        cooldown = self._config.event_cooldown_secs
-        events: list[dict] = []
-        unjudged = 0
-        for row in rows_out:
-            try:
-                if "limit_judged" not in row:
-                    unjudged += 1
-                    continue
-                if row["limit_judged"] is not True:
-                    # 缺值列的 `limit_up` 恆 False,與「真的打開了」同形 → 整列跳過,
-                    # 對帳狀態不動(不然缺欄輪會產假 open,下一輪再補一則假 lock)
-                    continue
-                code = row["stock_id"]
-                name = row["name"]
-                # 先算出這列要用的值再動狀態:壞值在這裡就拋,`last_emitted` 不會被
-                # 推進到一個「已宣告」卻沒有事件出去的位置(那筆帳會永遠對不回來)
-                price = round(row["close"] * 1000)
-                for direction, desired in (
-                    ("up", bool(row["limit_up"])),
-                    ("down", bool(row["limit_down"])),
-                ):
-                    key = (code, direction)
-                    if desired == self._mkt_last_emitted.get(key, False):
-                        continue
-                    kind = _MARKET_LOCK if desired else _MARKET_OPEN
-                    bucket = (code, kind, direction)
-                    deadline = self._mkt_cooldown.get(bucket)
-                    if deadline is not None and now < deadline:
-                        continue  # 本輪不發;desired 持續不符則冷卻結束後補發
-                    self._mkt_cooldown[bucket] = now + cooldown
-                    self._mkt_last_emitted[key] = desired
-                    touch = self._mkt_touch.get(bucket, 0) + 1
-                    self._mkt_touch[bucket] = touch
-                    events.append(
-                        {
-                            "kind": kind,
-                            "code": code,
-                            "name": name,
-                            "price": price,
-                            "time": as_of,
-                            "direction": direction,
-                            "touch_count": touch,
-                        }
-                    )
-            except Exception:
-                # 逐列容錯:一列髒值只丟那一列,同輪其他檔照發(design R5)
-                logger.warning("breadth 廣度事件單列處理失敗(丟棄該列):%r", row, exc_info=True)
-        if unjudged:
-            # 文案必須與逐列 `continue` 的行為一致(review S-5):寫「該批不發事件」
-            # 會把排查的人帶去找「整批為何消失」,而真相是只少了缺鍵的那幾列
-            logger.warning(
-                "breadth 廣度事件:%d/%d 列缺 limit_judged 鍵(疑似餵入原始快照 rows"
-                " 而非 compute_breadth 輸出),該些列不發事件(其餘照常)",
-                unjudged,
-                len(rows_out),
-            )
-        if events:
-            hub.publish_market_events(events, trade_date=trade_date)
 
     def _fail(self, *, quota: bool) -> None:
         self._fail_streak += 1
@@ -842,149 +596,6 @@ class BreadthEngine:
         if self._last_success is None:
             return True
         return _monotonic() - self._last_success > self._config.stale_secs
-
-    # ---- 產業鏈刷新(design §4.3)----
-
-    def _chain_path(self) -> Path:
-        return self._data_dir / _CHAIN_FILE
-
-    def _restore_chain(self) -> None:
-        """讀本地 chain 快取進表 —— **過期也先用**(TTL 只決定要不要重取,不決定能不能用)。
-
-        列數低於門檻 / parse 後為空(舊格式 / 殘表)則當沒有快取:時戳留 None →
-        下一圈立刻武裝重取。
-        """
-        loaded = load_chain(self._chain_path())
-        if loaded is None:
-            return
-        rows, fetched_at = loaded
-        if len(rows) < CHAIN_MIN_ROWS:
-            # `_refresh_chain` 的門檻只擋得住「這一次取到殘表」:門檻之前的版本落下的
-            # 殘表 restore 照收的話,會帶著自己的時戳回來 → 7 天 TTL 內不重取,而少掉
-            # 的產業歸類在畫面上零錯誤訊號,重啟一次就再續命 7 天(review round-3 CR-3)
-            logger.warning(
-                "breadth industry_chain 快取只有 %d 列(門檻 %d),視同無快取(下一圈重取)",
-                len(rows),
-                CHAIN_MIN_ROWS,
-            )
-            return
-        try:
-            chain_map = rows_to_chain_map(rows)
-        except Exception:
-            # 這裡跑在 boot 路徑上(`start()`):一份髒快取打穿 parse 就讓整台 server
-            # 起不來 —— 失效半徑從類股面板擴到全部面板(review S-3/C-4)
-            logger.exception("breadth industry_chain 快取解析失敗(視同無快取)")
-            return
-        if not chain_map:
-            logger.warning("breadth industry_chain 快取解析後為空(%d 列),視同無快取", len(rows))
-            return
-        self._chain_map = chain_map
-        self._chain_fetched_at = fetched_at
-        logger.info(
-            "breadth industry_chain restore:%d 列 / %d 產業(取數於 epoch %.0f)",
-            len(rows),
-            len(chain_map),
-            fetched_at,
-        )
-
-    def _maybe_arm_chain(self) -> None:
-        """該不該起 chain 刷新 task。四個條件缺一不可(順序即語意):
-
-        1. `chain_fetch` 有值 —— None = 類股停用。
-        2. task 不在跑 —— 上游卡住時不重複武裝(`is None` 分支不可省:第一次武裝前
-           task 從未存在)。
-        3. TTL 過期(`chain_ttl_hours`;`_chain_fetched_at is None` = 從未成功 → 視同
-           過期)。TTL 走 **epoch**,重啟後照樣算得準。
-        4. 退避冷卻已過 —— 壞上游不跟著 poll 節奏(10s)重打。
-        """
-        if self._chain_fetch is None:
-            return
-        task = self._chain_task
-        if task is not None and not task.done():
-            return
-        fetched_at = self._chain_fetched_at
-        ttl = self._config.chain_ttl_hours * 3600.0
-        if fetched_at is not None:
-            # 未來時戳(本機時鐘曾超前後回退)視同過期:`age < ttl` 對負 age 恆真 →
-            # chain 永不重取且零 log,表現只是「類股表停在很久以前」而畫面完全正常
-            # (`market_breadth.max_tick_datetime` 的 upper_bound 同一類未來髒值防禦;
-            # review round-2 EC-3/PS-4)
-            age = _time.time() - fetched_at
-            if 0 <= age < ttl:
-                return
-        retry_at = self._chain_retry_at
-        if retry_at is not None and _monotonic() < retry_at:
-            return
-        self._chain_task = asyncio.create_task(self._refresh_chain())
-
-    async def _refresh_chain(self) -> None:
-        """一次刷新:取數 → parse → 落檔 → 換表。**失敗一律沿用舊表**。
-
-        整個 method 是 fire-and-forget task 的身體,所以每條失敗路徑都自己收尾(退避
-        時刻),不外拋 —— 逃出去的例外只會變成 asyncio 的「Task exception was never
-        retrieved」,而類股面板停在舊表上零錯誤訊號。
-        """
-        fetch = self._chain_fetch
-        if fetch is None:  # pragma: no cover - 武裝條件已擋掉
-            return
-        try:
-            rows = await asyncio.to_thread(fetch, self._token)
-        except BreadthFetchError as e:
-            wait = self._map_backoff(e.quota)
-            logger.warning(
-                "breadth industry_chain 取數失敗(沿用舊表,%.0fs 後重試):%s", wait, e
-            )
-            self._chain_retry_at = _monotonic() + wait
-            return
-        except Exception:
-            logger.exception(
-                "breadth industry_chain 取數非預期失敗(沿用舊表,%.0fs 後重試)", _MAP_RETRY_SECS
-            )
-            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
-            return
-        if len(rows) < CHAIN_MIN_ROWS:
-            # 部分截斷(HTTP 200 但少一截)parse 得出來、rotation 照算,而換表會把殘表
-            # 釘進 7 天 TTL 的磁碟快取,重啟 restore 還是同一份 —— 少掉的產業歸類在
-            # 畫面上零錯誤訊號(連板路 `_DAILY_MIN_ROWS` 同一道防線;review round-2 PS-1)
-            logger.warning(
-                "breadth industry_chain 只有 %d 列(門檻 %d),視同取數失敗"
-                "(沿用舊表不落檔,%.0fs 後重試)",
-                len(rows),
-                CHAIN_MIN_ROWS,
-                _MAP_RETRY_SECS,
-            )
-            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
-            return
-        try:
-            chain_map = rows_to_chain_map(rows)
-            if not chain_map:
-                # 換表 = 連磁碟那份一起覆寫;空表照換的話重啟後連 stale 的類股都沒有
-                logger.warning(
-                    "breadth industry_chain 解析後為空(%d 列;沿用舊表不落檔,%.0fs 後重試)",
-                    len(rows),
-                    _MAP_RETRY_SECS,
-                )
-                self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
-                return
-            fetched_at = _time.time()
-            save_chain(self._chain_path(), rows, fetched_at)
-        except Exception:
-            # parse / 落檔的髒值路徑也要自己收尾退避(docstring 的「不外拋」在此成真):
-            # 例外逃出去只會變成 asyncio 的「Task exception was never retrieved」,而
-            # `_chain_retry_at` 沒設 → 下一圈立刻重武裝,以 poll 節奏(10s)對著壞上游
-            # 重打而類股面板停在舊表上零錯誤訊號(review S-3/C-4)
-            logger.exception(
-                "breadth industry_chain 解析 / 落檔失敗(沿用舊表,%.0fs 後重試)",
-                _MAP_RETRY_SECS,
-            )
-            self._chain_retry_at = _monotonic() + _MAP_RETRY_SECS
-            return
-        self._chain_map = chain_map
-        self._chain_fetched_at = fetched_at
-        self._chain_retry_at = None
-        # 換表即重算(`_apply` 之外的第二個 rotation 輸入;review C-1)
-        self._recompute_rotation()
-        logger.info("breadth industry_chain 刷新:%d 列 / %d 產業", len(rows), len(chain_map))
 
     # ---- 連板數重算(design §3.3)----
 

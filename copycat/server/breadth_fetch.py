@@ -4,8 +4,6 @@
 - `fetch_snapshot`:全市場即時快照(專屬 endpoint,**無 query 參數**),每輪都打。
 - `fetch_stock_info`:代碼 → 名稱 / 市場別 / 產業別對照(24h TTL,一天打幾次)。
 - `fetch_disposition`:近 60 日處置股期間表(參數名 **start_date / end_date**)。
-- `fetch_industry_chain`:代碼 → 產業 / 次產業對照(R4 類股強弱用,**無 query 參數**)。
-  7 天 TTL,一天最多打幾次。
 - `fetch_daily_prices`:單日全市場 EOD(連板數回看用)。一天只武裝一輪,掃描窗上限
   25 個日曆日,而**已成功取得的日跨重試由引擎的 memo 重用** → 成功取數 ≤ 25 次;
   每次失敗的嘗試最多多打 1 次(嘗試上限 10)→ 一天上界 ≈ 35 次。
@@ -33,7 +31,6 @@ _SNAPSHOT_API = f"{_BASE}/taiwan_stock_tick_snapshot"
 _INFO_DATASET = "TaiwanStockInfo"
 _DISPOSITION_DATASET = "TaiwanStockDispositionSecuritiesPeriod"
 _PRICE_DATASET = "TaiwanStockPrice"
-_CHAIN_DATASET = "TaiwanStockIndustryChain"
 _DISPOSITION_LOOKBACK_DAYS = 60
 _TIMEOUT = 30.0
 #: 單日全市場 EOD 專用:回應是 MB 級(~3 萬列含權證),秒級輪詢用的 30s 會在正常日
@@ -45,11 +42,6 @@ _ATTEMPTS = 2  # 秒級輪詢的量級,重試一次即可;402 完全不重試(�
 #: 上游分頁截斷會讓對照表悄悄少一截,而缺代碼的表現是「那些股票從家數統計裡消失」——
 #: 回應形狀合法、HTTP 200、畫面照畫,沒有這道觀測就只能靠猜。
 INFO_MIN_ROWS = 3000
-
-#: `TaiwanStockIndustryChain` 少於這麼多列即升 warning。實測約 6861 列,腰斬即異常;
-#: 少一截的表現是「那些股票的產業歸類消失、類股強弱少幾個業別」—— 回應形狀合法、
-#: HTTP 200、rotation 照算,沒有這道觀測就只能靠猜(`INFO_MIN_ROWS` 同理)。
-CHAIN_MIN_ROWS = 1000
 
 
 class BreadthFetchError(RuntimeError):
@@ -107,15 +99,6 @@ def fetch_stock_info(token: str) -> list[dict]:
     rows = _get_rows(f"{_DATA_API}?{query}", token, label="stock_info")
     log = logger.info if len(rows) >= INFO_MIN_ROWS else logger.warning
     log("breadth stock_info:%d rows(門檻 %d)", len(rows), INFO_MIN_ROWS)
-    return rows
-
-
-def fetch_industry_chain(token: str) -> list[dict]:
-    """產業鏈對照表(全檔一次,**無其他 query 參數**);列數過少即升 warning。"""
-    query = urllib.parse.urlencode({"dataset": _CHAIN_DATASET})
-    rows = _get_rows(f"{_DATA_API}?{query}", token, label="industry_chain")
-    log = logger.info if len(rows) >= CHAIN_MIN_ROWS else logger.warning
-    log("breadth industry_chain:%d rows(門檻 %d)", len(rows), CHAIN_MIN_ROWS)
     return rows
 
 
