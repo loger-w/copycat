@@ -153,6 +153,7 @@ class IndexEngine:
         trade_date: str,
         rollover: bool = True,
         today_fn: Callable[[], _dt.date] = _dt.date.today,
+        is_trading_day: Callable[[_dt.date], bool] | None = None,
         in_watch_window: Callable[[], bool] = in_watch_window_now,
         in_futures_session: Callable[[], bool] = in_futures_session,
         now_fn: Callable[[], _dt.time] = now_time,
@@ -167,6 +168,10 @@ class IndexEngine:
         self._trade_date = trade_date
         self._rollover_enabled = rollover
         self._today_fn = today_fn
+        # 交易日曆注入(mod/trading-calendar SC-3)。**預設 `lambda d: True` = 現行的
+        # 純日曆日語意逐字**(W9):本引擎現行完全不看星期,直接建構的既有 caller
+        # 行為不得有一絲變化;真日曆只由 app 層在 prod 顯式傳。
+        self._is_trading_day = is_trading_day if is_trading_day is not None else (lambda _d: True)
         self._in_watch_window = in_watch_window
         self._in_futures_session = in_futures_session
         self._now_fn = now_fn
@@ -433,6 +438,11 @@ class IndexEngine:
             await asyncio.sleep(self._rollover_check_secs)
             try:
                 today = self._today_fn()
+                # 交易日 gate 在最前面(SC-3):非交易日一律整拍跳過 —— 不設 pending、
+                # 不切 source 日窗、不重掛、不打 1K。放在門檻判定之後就等於沒放:
+                # 週末 / 假日的 `new_date > trade_date` 恆真,每 60s 空打一次 TC4。
+                if not self._is_trading_day(today):
+                    continue
                 new_date = f"{today:%Y-%m-%d}"
                 now = self._now_fn()
                 if new_date <= self._trade_date or now < _dt.time(8, 30):
