@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StkfutLadder } from "@/components/stock/StkfutLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
-import { ARM_IDLE_MS } from "@/lib/flash-arm";
+import { ARM_IDLE_MS, LOCK_TITLE } from "@/lib/flash-arm";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { CapitalOrder, CapitalPosition } from "@/types";
 
@@ -510,7 +510,9 @@ describe("StkfutLadder 鎖定武裝(SC-1 / SC-12a)", () => {
     mockCapitalFetch();
     setCapitalWsStatus("open");
     render(ladder());
-    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    const lock = screen.getByRole("button", { name: "鎖定" });
+    expect(lock.getAttribute("title")).toBe(LOCK_TITLE); // 常態 tooltip(兩處渲染點同源)
+    fireEvent.click(lock);
     expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "鎖定中" }).getAttribute("aria-pressed")).toBe("true");
   });
