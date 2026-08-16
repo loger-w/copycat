@@ -328,7 +328,7 @@ class _GatedDailyBarsSource(FakeStockSource):
             self.in_flight += 1
             self.peak = max(self.peak, self.in_flight)
             self._cond.notify_all()
-            self._cond.wait_for(lambda: self.in_flight >= self._cap, timeout=2.0)
+            self._cond.wait_for(lambda: self.in_flight >= self._cap, timeout=10.0)
         try:
             time.sleep(0.01)  # 讓下一批有機會與本批重疊(峰值才量得出來)
             return []
@@ -367,7 +367,11 @@ class TestOverlayConcurrencyGate:
             for t in threads:
                 t.join(timeout=15)
         assert list(results.values()) == [200] * 8
-        assert source.peak == 4, f"overlay 併發上限應為 4,實測峰值 {source.peak}"
+        # 上界是契約(節流拿掉 → 峰值 8),下界只求「真的有重疊」—— 慢機器上第 4 個
+        # 執行緒可能等到 `wait_for` 逾時才進門,此時峰值 2~3 而節流仍然是對的。
+        # `peak == 4` 的精確斷言把「機器慢」誤報成「節流壞了」(review B5)。
+        assert source.peak <= 4, f"overlay 併發上限應為 4,實測峰值 {source.peak}"
+        assert source.peak >= 2, f"完全沒重疊 = 沒量到併發,這條測試 vacuous(峰值 {source.peak})"
 
 
 class _SlowDailyBarsSource(FakeStockSource):
