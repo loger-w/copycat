@@ -4,9 +4,9 @@ import { MarketChart } from "@/components/index/MarketChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import type { IndexSeries } from "@/hooks/useIndexStream";
-import type { Size } from "@/lib/chart-frame";
 import { chgPct, fmtPct } from "@/lib/format";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+import { PANE_FRAMES, paneSvgHeight } from "@/lib/pane-frame";
 import { pts } from "@/lib/svg-points";
 import { HOUR_TICKS } from "@/lib/time-labels";
 import {
@@ -21,52 +21,6 @@ import {
 import { cn } from "@/lib/utils";
 
 const SIZE = { width: 640, height: 220 };
-
-/** 一種圖模式的「量測 → viewBox 高」換算參數。
- *
- *  - `chromeY`:svg 以外、但**在被量測 wrapper 之內**的垂直用量(px)。
- *  - `insetX`:同上的水平用量(px);svg 實際可用寬 = 容器寬 − 這個值。
- *  - `vbW`:該模式 svg 的 viewBox 寬 —— px 高要換成 viewBox 單位得乘 `vbW / svgW`。 */
-export interface PaneFrame {
-  chromeY: number;
-  insetX: number;
-  vbW: number;
-}
-
-/** 三種圖模式各自的 chrome 用量。**逐條列舉不共用一組數字**:三者的 DOM 巢狀深度不同,
- *  用同一組會讓其中兩種各差 30-70px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
- *  誰也解釋不了的捲軸。
- *
- *  - intraday:toggle 列 `h-[1.375rem]` 22 + `mb-1` 4 = 26;svg 直接在 wrapper 內,不內縮。
- *  - overlay:`OverlayCard` 是巢狀 figure —— border 2 + `p-4` 32 + 標題列 20 + svg `mt-2` 8
- *    = 62;水平 border 2 + p-4 32 = 34。
- *  - candle:`CandleChart` 自身 figure(border 2 + p-4 32 + 頂列 26 + figcaption 20 = 80)
- *    + `MarketChart` 的 meta 列(text-xs 16 + `mt-1` 4 = 20)= 100;水平同 overlay 34;
- *    **viewBox 寬是 CandleChart 的 `DIMS.width` = 1400**,不是 640。 */
-export const PANE_FRAMES: Record<"intraday" | "overlay" | "candle", PaneFrame> = {
-  intraday: { chromeY: 26, insetX: 0, vbW: 640 },
-  overlay: { chromeY: 62, insetX: 34, vbW: 640 },
-  candle: { chromeY: 100, insetX: 34, vbW: 1400 },
-};
-
-/** 量到的容器尺寸(px)→ 圖的 viewBox 高(viewBox 單位)。
- *
- *  **反解只此一處**(§4.1 CS-1):`MarketChart` / `OverlayCard` 收到的 `height` 一律是
- *  viewBox 單位,兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
- *
- *  地板 96:容器矮到連 chrome 都放不下時,回 0 / 負高會畫出一張沒有高度的圖(svg 不報錯,
- *  純粹消失)。−2 是抗抖動餘裕 —— 反解後的 px 高恰等於量到的高時,亞像素進位會讓內容比
- *  容器高半格,觸發 ResizeObserver 的「量測 → 設高 → 再量測」迴圈。
- *
- *  量不到(任一邊 ≤ 0,jsdom / ResizeObserver 缺席 / 首幀)或寬度扣不出 svg 寬 → `undefined`,
- *  呼叫端走各自的固定 fallback(W-10)。 */
-export function paneSvgHeight(size: Size, frame: PaneFrame): number | undefined {
-  if (size.width <= 0 || size.height <= 0) return undefined;
-  const svgW = size.width - frame.insetX;
-  if (svgW <= 0) return undefined;
-  const renderPx = Math.max(96, Math.floor(size.height - frame.chromeY) - 2);
-  return Math.round((renderPx * frame.vbW) / svgW);
-}
 
 type FutKey = "TXF" | "MXF" | "TMF";
 const FUT_LABELS: readonly (readonly [FutKey, string])[] = [

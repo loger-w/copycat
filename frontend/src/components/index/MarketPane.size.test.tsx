@@ -10,12 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  MarketPane,
-  PANE_FRAMES,
-  paneSvgHeight,
-  type PaneStores,
-} from "@/components/index/MarketPane";
+import { MarketPane, type PaneStores } from "@/components/index/MarketPane";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import {
@@ -24,6 +19,7 @@ import {
   MARKET_KEY_STORE,
   MARKET_MODE_STORE,
 } from "@/lib/constants";
+import { PANE_FRAMES, paneSvgHeight } from "@/lib/pane-frame";
 
 const TWSE: IndexSeries = {
   p: 42_039_920,
