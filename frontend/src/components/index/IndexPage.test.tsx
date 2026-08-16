@@ -286,3 +286,38 @@ describe("IndexPage 一頁總覽(subtab 退役)", () => {
     expect(keys).not.toContain("copycat-index-subtab");
   });
 });
+
+// 版面 class 只能用字串鎖:jsdom 不載 Tailwind CSS,「有沒有捲軸」「兩欄還是一欄」在
+// 這裡量不到(真值由 SC-3 / SC-7 的截圖 + JS 量測收)。這三條守的是**捲軸的唯一落點**
+// 與**兩個斷點的存在**,改壞任何一項都會靜默回到「整頁捲」的舊行為。
+describe("IndexPage 一頁總覽版面(§4.1)", () => {
+  it("(y1) 捲軸只掛在主 grid:root 不捲,主 grid 捲並帶 1050px 兩欄斷點", () => {
+    const { container } = renderPage(TXF, BREADTH);
+    const root = container.firstElementChild!;
+    expect(root.className).toContain("@container");
+    expect(root.className).not.toContain("overflow-y-auto");
+
+    const grid = screen.getByTestId("index-main-grid");
+    expect(grid.className).toContain("overflow-y-auto");
+    expect(grid.className).toContain("min-h-0");
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("@[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]");
+  });
+
+  it("(y2) DOM 序:左欄(騰落線)在右欄漲跌停列表之前", async () => {
+    renderPage(TXF, BREADTH);
+    await act(async () => {});
+
+    const adl = screen.getByTestId("adl-chart");
+    const list = screen.getByTestId("limit-list");
+    expect(adl.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("(y3) 雙圖 grid 改用左欄容器寬 700px 顯式斷點(取代 auto-fit;W-12)", () => {
+    renderPage(TXF, BREADTH);
+    const grid = screen.getByTestId("market-pane-left").parentElement!;
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("@[700px]:grid-cols-2");
+    expect(grid.className).not.toContain("auto-fit");
+  });
+});
