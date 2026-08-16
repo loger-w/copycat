@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from copycat.live.stock_models import StockTick
+from copycat.server import app as app_module
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stock_engine import StockEngine
@@ -367,6 +368,63 @@ class TestOverlayConcurrencyGate:
                 t.join(timeout=15)
         assert list(results.values()) == [200] * 8
         assert source.peak == 4, f"overlay 併發上限應為 4,實測峰值 {source.peak}"
+
+
+class _SlowDailyBarsSource(FakeStockSource):
+    """`fetch_daily_bars` 對 `slow` 內的股號睡 `delay` 秒(其餘照常回 bar)。
+
+    模擬 TC4 「查無此檔」:不是快速失敗,而是把 deadline 睡好睡滿。
+    """
+
+    def __init__(self, slow: set[str], delay: float = 1.0) -> None:
+        super().__init__()
+        self.slow = slow
+        self._delay = delay
+        self.daily_calls: list[str] = []
+
+    def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+        self.daily_calls.append(code)
+        if code in self.slow:
+            time.sleep(self._delay)
+        return list(TestOverlayRoute.BARS)
+
+
+class TestOverlayFetchTimeout:
+    """review B2:`overlay_sem` 名額沒有時間上界 → head-of-line。
+
+    TC4 對查無此檔的股號會把 deadline 睡滿(30s×2),而空結果依 overlay.py 規則
+    不進 cache → 每次請求都重付一次。四檔這種股號就能把 Semaphore(4) 佔滿,
+    整個端點凍住;畫面上只是「疊線一直沒出來」,零錯誤訊號。
+    """
+
+    def test_slow_code_times_out_all_null_and_frees_slot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(app_module, "OVERLAY_FETCH_TIMEOUT_S", 0.2)
+        source = _SlowDailyBarsSource({"2330"})
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=source,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            throttle_secs=0.01,
+        )
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            r = client.get("/api/stock/overlay/2330")
+            assert r.status_code == 200
+            assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
+
+            # 名額已放掉:後面排隊的股號照常取得(head-of-line 的反面)
+            other = client.get("/api/stock/overlay/2317")
+            assert other.status_code == 200
+            assert other.json()["cdp"] is not None
+
+            # 逾時**不寫 cache**(沿 overlay.py 空結果不 cache):同一檔恢復後
+            # 再打一次要真的重新取數,而不是今天再也拿不到疊線
+            source.slow.discard("2330")
+            again = client.get("/api/stock/overlay/2330")
+            assert again.status_code == 200
+            assert again.json()["cdp"] is not None
+        assert source.daily_calls.count("2330") == 2, "逾時那次若被 cache 住,第二次就不會取數"
 
 
 class TestStateRoute:
