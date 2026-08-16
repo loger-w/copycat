@@ -650,6 +650,10 @@ describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () 
     rerender(rail(NONE_CTX));
     expect(screen.getByText("此頁無可下單標的")).toBeTruthy(); // 前提:真的沒有梯
     act(() => setCapitalWsStatus("closed"));
+    // 斷線**當下**就要清掉(hook 住在常駐的 RightRail)。這裡先把 WS 拉回 open 再回個股頁,
+    // 否則「掛載時才發現是 closed」的實作也會綠 —— 兩者差在「斷線後又連上」的真實時序:
+    // 使用者回到梯上時 WS 已恢復,鎖定卻必須是清的(T3)。
+    act(() => setCapitalWsStatus("open"));
     rerender(rail(STOCK_CTX));
     expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
@@ -676,8 +680,29 @@ describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () 
     rerender(rail(BLOCKED_STKFUT_CTX));
     expect(screen.getByRole("button", { name: "解除" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByRole("button", { name: "鎖定中" }).hasAttribute("disabled")).toBe(false);
-    expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
+    const buy = screen.getByLabelText("買 100");
+    expect(buy.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(buy); // 真的按下去才問「送了幾發」,否則 orderCalls===0 是 vacuous
     expect(orderCalls).toBe(0);
+    // 兩鈕可按 = 真的按得動:解鎖鈕按下去要有效果(鎖定態的 UI 出口)
+    fireEvent.click(screen.getByRole("button", { name: "鎖定中" }));
+    expect(screen.getByRole("button", { name: "鎖定" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 解鎖不解除武裝
+  });
+
+  /** E-2:blocked 契約只擋點價,**不解除武裝** —— 換回可交易合約要能直接點價。
+   *  安全閘在 priceLocked + 後端 PRODUCT_NOT_ALLOWED,不靠「順手解除」。 */
+  it("E-2:鎖定中經 blocked 契約再換回可交易合約 → 仍武裝鎖定且點價送出 1 call", async () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    rerender(rail(BLOCKED_STKFUT_CTX));
+    expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true); // 前提:真 blocked
+    rerender(rail(STKFUT_CTX));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    await waitFor(() => expect(orderCalls).toBe(1));
   });
 
   /** E-7:鎖定態的 failStreak **刻意不隨換梯歸零**(安全方向)—— 換梯歸零的話,
@@ -737,7 +762,7 @@ describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () 
     await waitFor(() => expect(screen.getByText("券商拒單(1093)")).toBeTruthy());
     expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // streak 2
     await act(async () => {
-      pendingOks[0](); // A 的成功遲到
+      for (const ok of pendingOks) ok(); // A 的成功遲到(上面已釘住只有 A 這一發)
     });
     expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
     rerender(rail(STOCK_CTX));

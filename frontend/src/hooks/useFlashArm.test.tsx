@@ -36,6 +36,22 @@ describe("useFlashArm active(RightRail 持有的那一份)", () => {
     expect(result.current.state.armed).toBe(false);
   });
 
+  /** SC-5:鎖定態的閒置計時 **照排**,只是 `idle_timeout` 對它是 no-op —— 這則守的是
+   *  「計時器送出去的到底是哪個事件」。改成送 `disarm`(或任何連 locked 一起清的事件)
+   *  上面那則 5 分解除案照樣綠,鎖定態卻會在 5 分鐘後靜默解除。 */
+  it("SC-5:鎖定後閒置 6 分鐘仍武裝且仍鎖定(idle_timeout 對鎖定態 no-op)", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useFlashArm());
+    act(() => {
+      result.current.dispatch({ type: "lock" });
+      result.current.touch();
+    });
+    act(() => {
+      vi.advanceTimersByTime(ARM_IDLE_MS + 60_000);
+    });
+    expect(result.current.state).toEqual({ armed: true, locked: true, failStreak: 0 });
+  });
+
   it("Esc 解除(監聽只在武裝期間掛)", () => {
     const { result } = renderHook(() => useFlashArm());
     fireEvent.keyDown(window, { key: "Escape" }); // 未武裝時按也不該爆

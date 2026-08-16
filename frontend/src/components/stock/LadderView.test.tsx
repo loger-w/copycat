@@ -20,6 +20,8 @@ const ROWS: LadderRow[] = [
 function renderView(props: {
   buyLots?: Map<number, LadderLot>;
   sellLots?: Map<number, LadderLot>;
+  locked?: boolean;
+  onToggleLock?: () => void;
 }) {
   return render(
     <LadderView
@@ -93,5 +95,43 @@ describe("LadderView 徽章守門(C3)", () => {
     expect(btn.textContent).toBe("0(0)");
     fireEvent.click(btn);
     expect(calls.map((l) => l.seqs)).toEqual([["016"]]);
+  });
+});
+
+/** 鎖定鈕的渲染閘(change-spec review R5):`onToggleLock` 未給就不渲染 —— 這是「既有
+ *  裸 render 的呼叫端零改動」的實現手段。改成無條件渲染的話,本檔上面那些裸 render 案
+ *  會多長一顆按不動的「鎖定」鈕,而它們一條都不會紅。 */
+describe("LadderView 鎖定鈕的渲染閘(R5)", () => {
+  it("未給 onToggleLock → 不渲染鎖定鈕", () => {
+    renderView({});
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy(); // 同步錨:武裝列在
+    expect(screen.queryByRole("button", { name: "鎖定" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "鎖定中" })).toBeNull();
+  });
+
+  it("給了 onToggleLock → 鎖定鈕出現且點擊回呼;locked=true 顯示「鎖定中」", () => {
+    const calls: number[] = [];
+    const { rerender } = renderView({ onToggleLock: () => calls.push(1) });
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    expect(calls.length).toBe(1);
+    rerender(
+      <LadderView
+        code="2330"
+        rows={ROWS}
+        marketBidQty={0}
+        marketAskQty={0}
+        armed
+        onToggleArm={() => {}}
+        locked
+        onToggleLock={() => calls.push(1)}
+        qty={1}
+        qtyLabel="張數"
+        onQtyPreset={() => {}}
+        onQtyInput={() => {}}
+        onClickPrice={() => {}}
+        onCancelLot={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "鎖定中" }).getAttribute("aria-pressed")).toBe("true");
   });
 });

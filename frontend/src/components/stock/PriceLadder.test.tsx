@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PriceLadder } from "@/components/stock/PriceLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
-import { ARM_IDLE_MS } from "@/lib/flash-arm";
+import { ARM_IDLE_MS, LOCK_TITLE } from "@/lib/flash-arm";
 import type { CapitalOrder, CapitalPosition } from "@/types";
 
 const META = {
@@ -1021,9 +1021,18 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
     const lock = screen.getByRole("button", { name: "鎖定" });
     expect(lock.getAttribute("aria-pressed")).toBe("false");
     expect(lock.hasAttribute("disabled")).toBe(false);
+    expect(lock.getAttribute("title")).toBe(LOCK_TITLE); // 常態 tooltip(兩處渲染點同源)
+    expect(lock.className).toContain("border-line"); // 未鎖定 = 灰框灰字,與武裝態可辨
     // 武裝鈕與鎖定鈕同列(288px 右欄下三控制項不換行的前提;寬度本身走截圖層)
-    expect(lock.parentElement).toBe(screen.getByRole("button", { name: "武裝" }).parentElement);
+    const armBtn = screen.getByRole("button", { name: "武裝" });
+    expect(lock.parentElement).toBe(armBtn.parentElement);
     expect(lock.className).toContain("shrink-0");
+    // SC-1 的次序:武裝鈕 → 鎖定鈕 → 商品別控制項(交易別 select)
+    expect(armBtn.compareDocumentPosition(lock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      lock.compareDocumentPosition(screen.getByLabelText("交易別")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     lockUp();
     expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
     const locked = screen.getByRole("button", { name: "鎖定中" });
@@ -1061,6 +1070,27 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
     fireEvent.click(screen.getByRole("button", { name: "解除" }));
     expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  /** SC-9 後半 / E-5:解鎖 = 回到一般武裝語意,**閒置計時要重新起算**。鎖定期間的
+   *  idle_timeout 是 no-op 且不再排下一輪,所以解鎖那一下若沒 `touchIdle()`,就再也
+   *  沒有計時器 —— 一路武裝到天亮,而畫面上與「剛剛才武裝」完全一樣。 */
+  it("E-5:鎖定閒置 6 分仍武裝 → 按「鎖定中」解鎖 → 再閒置 5 分才解除", () => {
+    vi.useFakeTimers();
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder());
+    lockUp();
+    act(() => {
+      vi.advanceTimersByTime(ARM_IDLE_MS + 60_000);
+    });
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // 6 分仍鎖定
+    fireEvent.click(screen.getByRole("button", { name: "鎖定中" })); // 解鎖,保持武裝
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(ARM_IDLE_MS + 1);
+    });
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
   });
 
   it("SC-8:鎖定中連 3 次送單失敗 → 解除且清鎖定", async () => {
@@ -1106,7 +1136,11 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
   });
 
   /** R4:上提後 `dispatch` 的 identity 若隨 render 漂移,卸載 effect 的 cleanup 會在
-   *  每次 re-render 跑一遍 —— 每收一則報價就解除一次武裝,而報價每秒都在來。 */
+   *  每次 re-render 跑一遍 —— 每收一則報價就解除一次武裝,而報價每秒都在來。
+   *  ⚠ **這則不是 R4 的真鎖**(code review r1 T7):裸 render 的 PriceLadder 走本地備援
+   *  `useFlashArm(true)`,identity 本來就恆定,把 `armCtl` 包一層也不會經過這裡。真鎖是
+   *  `useFlashArm.test.tsx`「dispatch / touch 的 identity 跨 rerender 恆定」與「identity
+   *  不因 active 改變」兩案。留著它是元件整合面的煙霧測試。 */
   it("R4:武裝後連續換報價 rerender 兩次,仍維持「解除」態", () => {
     mockCapitalFetch();
     const { rerender } = render(ladder());

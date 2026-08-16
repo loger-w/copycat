@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
-import { ARM_IDLE_MS } from "@/lib/flash-arm";
+import { ARM_IDLE_MS, LOCK_TITLE } from "@/lib/flash-arm";
 import type { CapitalOrder, CapitalPosition, FuturesProductState } from "@/types";
 
 const TXF_STATE: FuturesProductState = {
@@ -326,6 +326,7 @@ describe("FuturesLadder 鎖定武裝(SC-1 / SC-12a)", () => {
     render(ladder());
     const lock = screen.getByRole("button", { name: "鎖定" });
     expect(lock.parentElement).toBe(screen.getByRole("button", { name: "武裝" }).parentElement);
+    expect(lock.getAttribute("title")).toBe(LOCK_TITLE); // 常態 tooltip(兩處渲染點同源)
     fireEvent.click(lock);
     expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
     const locked = screen.getByRole("button", { name: "鎖定中" });
