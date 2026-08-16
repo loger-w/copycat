@@ -389,21 +389,32 @@ export function PriceLadder({
         </label>
       }
       armControls={
-        <select
-          aria-label="交易別"
-          value={tradeKind}
-          onChange={(e) => {
-            touchIdle();
-            setTradeKind(e.target.value as TradeKind);
-          }}
-          className="rounded border border-line bg-bg-deep px-1 py-1 text-xs text-ink"
-        >
+        /* 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,
+           pill 讓「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。
+           `aria-label` 掛在 role=group 容器(同 GroupGridView),既有以「交易別」定位的
+           測試 / a11y 關聯不變;`shrink-0` + 窄 padding:288px 右欄下由武裝鈕(flex-1
+           min-w-0)吸收壓縮,pill 群與鎖定鈕不換行(R5 SC-1 同策略)。 */
+        <div role="group" aria-label="交易別" className="flex shrink-0 items-center gap-0.5">
           {TRADE_KINDS.map(([v, label]) => (
-            <option key={v} value={v}>
+            <button
+              key={v}
+              type="button"
+              aria-pressed={tradeKind === v}
+              onClick={() => {
+                touchIdle();
+                setTradeKind(v);
+              }}
+              className={cn(
+                "rounded border px-1 py-0.5 text-xs",
+                tradeKind === v
+                  ? "border-accent text-accent"
+                  : "border-line text-ink-dim hover:text-ink",
+              )}
+            >
               {label}
-            </option>
+            </button>
           ))}
-        </select>
+        </div>
       }
       footer={
         posRows.length > 0 ? (
