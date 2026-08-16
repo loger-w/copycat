@@ -6,13 +6,22 @@
  *  dataviz:單序列 → **不放 legend**(標題「騰落線」即名),只在右端直接標末值,
  *  不逐點標數字;格線退隱、0 軸比格線明顯一級(騰落線的意義完全繫於零線的哪一側)。
  *  x 用**固定域**(與同頁分時圖同一組 `X_START_MIN`/`X_END_MIN` 常數),盤中累積時
- *  已畫出的點不會隨新資料橫向漂移。 */
+ *  已畫出的點不會隨新資料橫向漂移。
+ *
+ *  **紅綠雙色**(2026-08-16):0 軸之上 bull 紅、之下 bear 綠,線與面積都是「整條畫兩份 +
+ *  clipPath 切上下」——與 `StockIntradayChart` 的昨收上下同一套手法。單色 accent 讀不出
+ *  多空側,而騰落線的全部意義就是那一側。 */
+import { useId } from "react";
+
+import { useContainerSize } from "@/hooks/useContainerSize";
 import { X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
 import { pts } from "@/lib/svg-points";
 import { HOUR_TICKS } from "@/lib/time-labels";
-import { cn } from "@/lib/utils";
+import { cn, safeIdToken } from "@/lib/utils";
 import type { BreadthPoint } from "@/types";
 
+/** `width` 是恆定的 viewBox 寬(x 是固定時間域);`height` 只當**量測不可用時的
+ *  fallback**(舊常數 150),量得到時 viewBox 高改由容器長寬比反推。 */
 const SIZE = { width: 640, height: 150 };
 const PAD_TOP = 10;
 const PAD_BOTTOM = 14; // 底部留給 X 軸時刻標籤
@@ -55,49 +64,83 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
     })
     .filter((v): v is { minute: number; net: number } => v !== null);
 
+  // 高度改由 CSS 固定(h-24),viewBox 高反推自實際長寬比 —— 改版前是「寬決定高」
+  // (寬 × 150/640),左欄 930px 時這條線獨佔 218px,一頁總覽的高度預算吃不下。
+  const [sizeRef, size] = useContainerSize<HTMLDivElement>();
+  const vbHeight =
+    size.width > 0 && size.height > 0
+      ? Math.round((SIZE.width * size.height) / size.width)
+      : SIZE.height;
+
   return (
     <div data-testid="adl-chart" className="flex flex-col gap-1">
       <span className="text-sm text-ink">騰落線</span>
-      {points.length === 0 ? (
-        <p className="py-8 text-center text-sm text-ink-muted">盤中累積後顯示</p>
-      ) : (
-        <Plot points={points} />
-      )}
+      {/* 恆存 wrapper(空態文案也在其中):ref 只掛有資料那支的話,盤前那段量到 0×0
+          而 hook 不會重跑 —— 第一筆資料進來時圖仍是 fallback 比例(useContainerSize
+          呼叫端契約 1)。fallback 態由 svg `h-full w-full` + preserveAspectRatio 預設
+          meet 縮放置中承接,不溢出(W-10)。 */}
+      <div ref={sizeRef} className="flex h-24 shrink-0 items-center justify-center">
+        {points.length === 0 ? (
+          <p className="text-sm text-ink-muted">盤中累積後顯示</p>
+        ) : (
+          <Plot points={points} height={vbHeight} />
+        )}
+      </div>
     </div>
   );
 }
 
-function Plot({ points }: { points: { minute: number; net: number }[] }) {
+function Plot({
+  points,
+  height,
+}: {
+  points: { minute: number; net: number }[];
+  height: number;
+}) {
   // 對稱域:零線恆在正中,「多空哪邊佔優」用一眼的高低就讀得出來,不必先找基準線。
   // 下限 1 避免全零時 span=0 除零。
   const span = Math.max(1, ...points.map((p) => Math.abs(p.net)));
-  const plotH = SIZE.height - PAD_TOP - PAD_BOTTOM;
+  const plotH = height - PAD_TOP - PAD_BOTTOM;
   const toY = (net: number): number => PAD_TOP + ((span - net) / (2 * span)) * plotH;
   const zeroY = toY(0);
   const line = points.map((p) => ({ x: toX(p.minute), y: toY(p.net) }));
   const last = points[points.length - 1]!;
   const lastPt = line[line.length - 1]!;
+  // 面積 = 線 + 沿 0 軸回到起點的封閉多邊形;上下兩半各塗一次,可見範圍交給 clip
+  const areaPolygon = `${pts(line)} ${lastPt.x.toFixed(1)},${zeroY.toFixed(1)} ${line[0]!.x.toFixed(1)},${zeroY.toFixed(1)}`;
+  // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
+  const uid = safeIdToken(useId());
+  const clipAbove = `${uid}-above`;
+  const clipBelow = `${uid}-below`;
 
   return (
     <svg
-      viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
-      className="w-full"
+      viewBox={`0 0 ${SIZE.width} ${height}`}
+      className="h-full w-full"
       role="img"
       aria-label="全市場騰落線"
     >
+      <defs>
+        <clipPath id={clipAbove}>
+          <rect x={0} y={0} width={SIZE.width} height={Math.max(0, zeroY)} />
+        </clipPath>
+        <clipPath id={clipBelow}>
+          <rect x={0} y={zeroY} width={SIZE.width} height={Math.max(0, height - zeroY)} />
+        </clipPath>
+      </defs>
       {HOUR_TICKS.map(({ minute, label }) => (
         <g key={minute}>
           <line
             x1={toX(minute)}
             x2={toX(minute)}
             y1={PAD_TOP}
-            y2={SIZE.height - PAD_BOTTOM}
+            y2={height - PAD_BOTTOM}
             className="stroke-line"
             strokeWidth={0.4}
           />
           <text
             x={toX(minute) + 2}
-            y={SIZE.height - 2}
+            y={height - 2}
             className="fill-ink-dim"
             fontSize="0.625rem"
           >
@@ -121,20 +164,45 @@ function Plot({ points }: { points: { minute: number; net: number }[] }) {
       <text x={2} y={PAD_TOP + 8} className="fill-ink-dim" fontSize="0.625rem">
         {signed(span)}
       </text>
-      <text x={2} y={SIZE.height - PAD_BOTTOM - 2} className="fill-ink-dim" fontSize="0.625rem">
+      <text x={2} y={height - PAD_BOTTOM - 2} className="fill-ink-dim" fontSize="0.625rem">
         {signed(-span)}
       </text>
+      {/* 面積與線都是「整份畫兩遍 + clip 切上下」,**恆 render**:依 net 正負條件 render
+          的話,全紅那天的下半段元素整個消失,錨點會隨資料時有時無。 */}
+      <polygon
+        data-testid="adl-area-up"
+        points={areaPolygon}
+        className="fill-bull"
+        fillOpacity="0.15"
+        clipPath={`url(#${clipAbove})`}
+      />
+      <polygon
+        data-testid="adl-area-down"
+        points={areaPolygon}
+        className="fill-bear"
+        fillOpacity="0.15"
+        clipPath={`url(#${clipBelow})`}
+      />
       <polyline
-        data-testid="adl-line"
+        data-testid="adl-line-up"
         points={pts(line)}
         fill="none"
-        className="stroke-accent"
+        className="stroke-bull"
         strokeWidth={2}
+        clipPath={`url(#${clipAbove})`}
+      />
+      <polyline
+        data-testid="adl-line-down"
+        points={pts(line)}
+        fill="none"
+        className="stroke-bear"
+        strokeWidth={2}
+        clipPath={`url(#${clipBelow})`}
       />
       <text
         data-testid="adl-last"
         x={lastPt.x + 4}
-        y={Math.min(Math.max(lastPt.y + 3, PAD_TOP + 8), SIZE.height - PAD_BOTTOM)}
+        y={Math.min(Math.max(lastPt.y + 3, PAD_TOP + 8), height - PAD_BOTTOM)}
         className={cn(
           "font-mono",
           // SVG `<text>` 吃的是 fill,不是 color —— `text-bull` 在這裡是 no-op(MarketChart 同慣例)
