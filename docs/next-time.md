@@ -1,4 +1,17 @@
-﻿## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
+﻿## 2026-08-16(mod/trading-calendar 留尾)
+
+- [ ] **TXO 面的 `backfill_date` 仍是手動 env**:`_default_source` / `session_rollover` /
+  `live/tc4.py:404` 沒接日曆 —— TXO 有夜盤 session 語意,自動填一個固定日會把 rollover
+  關掉並跨到下週一(自動化前要先設計「哪一段夜盤算哪一天」)。休市日要看 TXO 仍靠
+  `TXO_BACKFILL_DATE=<上一交易日>`。
+- [ ] **交易日盤前(00:00–08:30)冷啟動仍空圖到開盤**(spec KR-4 / Q3-R8):long-running
+  server 不受影響(兩段式 rollover stage2 前不清狀態),但那個時段**重啟**的話 source
+  日窗 = 今天而今天還沒開盤。要做需同時對齊 stock stage1 08:00 / index 08:30 /
+  breadth streak 06:00 三個時序 → 待 user 決定是否開 R3b。
+- [ ] **試撮(緩)badge 假日仍純時間照標**(next-time:97 第二段的殘留):同一份日曆
+  (`GET /api/calendar` 的 holidays)可直接餵給那條判定,本輪 scope 外。
+
+## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
 
 - [ ] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**(review WL-3
   partial / KR-3):CandleChart 是共用元件、viewBox 寬 1400 寫死,一頁總覽後 pane svg 寬
@@ -534,7 +547,7 @@
 - [x] ~~`BarsCache` 三個 dict(`_hist` / `_today` / `_daily`)永不清除~~ **2026-07-31 盤點:已由後續輪次順手解掉** — `server/bars.py:158-183` 有 `prune(today)`:`_hist` 按 `today - DAYS_MAX*2` 刪、`_daily`/`_daily_tag` 非今日即刪、`_today` 按日期 + TTL evict、`_empty` 過期即刪;三個呼叫點(bars.py:207/312/337)在每次 `build_*` 開頭。註解記來源為「review P2-5」「self-review round2 P2」
 - [x] ~~🔴 **既有 bug:`_SPOT_PREFIX = "TC.F."` 讓任何期貨 tick 覆寫台指現價**~~ **已於 2026-07-30 修畢(mod/index-board)**:收斂為 `TC.F.TWF.TXF.`(台指期產品樹,含月份 leaf,常數單一定義在 `models.SPOT_PREFIX`)。real-env 夜盤實證:IndexBar 台指 41750.0 vs 期貨 tab TXF 41749.0(差 1.0 點),TXO snapshot spot 同值,`dropped_foreign_ticks` 4057 筆 = 被正確擋掉的個股期/海外六腿/小台微台。另加節流 warning `txo spot 無 TXF 推播`(盤中連續 3 分鐘無現價才印)—— 收斂後多了「靜默空白」的新失效態,比亂跳更難察覺
 - [ ] K 線 endpoint 未做 inflight dedup(專案 `_run_once` 慣例):同 code 併發請求會各自打一輪 TC4。單人本機用量下未觀察到問題,若之後多分頁/多 client 再補
-- [ ] `inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**。〔2026-07-31 盤點:兩個子前提已漂移但**結論不變** —— 後端短負向快取已做(`bars.py:45` `EMPTY_TTL_SECS = 15.0`,空結果也存)、deadline 已縮到 10s,但 **15s TTL < 前端 60s 輪詢**,假日每輪仍會真打 TC4〕。要根治需要交易日曆
+- [x] ~~`inTradingHours` 只擋週末,**國定假日仍會每 60s 空跑**。〔2026-07-31 盤點:兩個子前提已漂移但**結論不變** —— 後端短負向快取已做(`bars.py:45` `EMPTY_TTL_SECS = 15.0`,空結果也存)、deadline 已縮到 10s,但 **15s TTL < 前端 60s 輪詢**,假日每輪仍會真打 TC4〕。要根治需要交易日曆~~ **2026-08-16 mod/trading-calendar 根治(後端 + 前端接 `/api/calendar`)**
 - [x] ~~`_collect_history` 對「真的沒資料」與「TC4 沒回」都等滿 `poll_wait*30` ≈ 30s~~ **2026-07-31 盤點:已做** — `live/tc4.py:40` `BARS_POLL_DEADLINE = 10.0`,`_collect_history` 簽名加 `deadline_secs`(tc4.py:337-343、:358 fallback 回舊預算),另加退避輪詢(:353-354);K 線呼叫點皆已改傳(`stock_source.py:451/454/464`、`futures_source.py:130/133`,overlay 共用路徑一併評估過)。**注意**:`_collect_history` 已自 `stock_source` 上提到 `live/tc4.py`,舊條目引用的檔名過期
 
 ## 2026-07-29(stock-ui-round2 批一 順手清單)
