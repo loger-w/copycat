@@ -81,19 +81,42 @@ function position(over: Partial<CapitalPosition> = {}): CapitalPosition {
 let qc: QueryClient;
 let orders: CapitalOrder[] = [];
 let positions: CapitalPosition[] = [];
+/** 送單路由行為:ok = 立即成功 / fail = 400 券商拒單(err_code 逐發遞增,好逐次等待)/
+ *  pending = 永不自行結束,由測試持有 reject 決定何時回應(R3 卸載後才回應的情境)。 */
+let orderMode: "ok" | "fail" | "pending" = "ok";
+let orderCalls = 0;
+let pendingOrders: ((reason: unknown) => void)[] = [];
 
 beforeEach(() => {
   window.localStorage.clear();
   setCapitalWsStatus("connecting");
   orders = [];
   positions = [];
-  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  orderMode = "ok";
+  orderCalls = 0;
+  pendingOrders = [];
+  qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.includes("/api/capital/orders")) return new Response(JSON.stringify({ orders }));
     if (url.includes("/api/capital/positions")) return new Response(JSON.stringify({ positions }));
     if (url.includes("/api/capital/status")) {
       return new Response(JSON.stringify({ status: "ok", env: "test", order_enabled: true }));
+    }
+    if (url.includes("/api/capital/order/")) {
+      orderCalls += 1;
+      if (orderMode === "pending") {
+        return new Promise<Response>((_resolve, reject) => pendingOrders.push(reject));
+      }
+      if (orderMode === "fail") {
+        return new Response(
+          JSON.stringify({ detail: { error: "BROKER_REJECTED", err_code: `109${orderCalls}` } }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, code: 0, message: "ok", seq_no: "x" }));
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -493,5 +516,140 @@ describe("RightRail 平倉閘用估價(W-A8 / W-A10;自 StockPage/FuturesPage �
     const closes = await screen.findAllByRole("button", { name: "平倉" });
     expect(closes.length).toBe(2);
     for (const b of closes) expect(b.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 鎖定武裝(R5)。上面三則「武裝不跨畫面殘留」是**未鎖定**時的合約,一條都不動;
+// 鎖定是新語意:同樣的換梯 / 切 tab 動作改成保留武裝,而斷線 / Esc / 連 3 敗照舊清除。
+// state 住在 RightRail(常駐全部 tab)→ 停在無梯頁時 Esc 與斷線一樣收得到。
+// ---------------------------------------------------------------------------
+
+/** blocked 個股期契約(ETF 單位 10,000):後端 `_stkfut_gates` 一律拒單 */
+const BLOCKED_STKFUT_CTX: RailContext = {
+  ...STOCK_CTX,
+  code: "0050",
+  contract: { prod: "NYF", ym: "202609", mini: false, unit: 10000 },
+};
+
+function lockUp(): void {
+  fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+}
+
+describe("RightRail 鎖定武裝跨梯保留(SC-3 / SC-4 / SC-10)", () => {
+  it("SC-3:鎖定後 現貨 → 個股期 → 期貨 → 現貨,每一座新梯掛載即武裝", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    rerender(rail(STKFUT_CTX));
+    expect(screen.getByLabelText("口數")).toBeTruthy(); // 真的換成合約梯
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    rerender(rail(FUT_CTX));
+    expect(screen.getByText("TXFH6")).toBeTruthy(); // 真的換成期貨梯
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    rerender(rail(STOCK_CTX));
+    expect(screen.getByLabelText("交易別")).toBeTruthy(); // 真的換回現股梯
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+  });
+
+  it("SC-4:鎖定後切右欄 tab(閃電 → 委託 → 閃電)→ 仍武裝", () => {
+    setCapitalWsStatus("open");
+    render(rail(STOCK_CTX));
+    lockUp();
+    fireEvent.click(screen.getByRole("tab", { name: "委託" }));
+    fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+  });
+
+  it("SC-10:鎖定後整個右欄 unmount 再重新 render → 未武裝未鎖定(純 in-memory)", () => {
+    setCapitalWsStatus("open");
+    const { unmount } = render(rail(STOCK_CTX));
+    lockUp();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    unmount();
+    cleanup();
+    render(rail(STOCK_CTX));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+});
+
+describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () => {
+  it("SC-6:鎖定中停在無梯頁時 WS 轉 closed → 回個股頁是未武裝未鎖定", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    rerender(rail(NONE_CTX));
+    expect(screen.getByText("此頁無可下單標的")).toBeTruthy(); // 前提:真的沒有梯
+    act(() => setCapitalWsStatus("closed"));
+    rerender(rail(STOCK_CTX));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  it("SC-7:鎖定中停在無梯頁按 Esc → 回個股頁是未武裝未鎖定", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    rerender(rail(NONE_CTX));
+    expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    rerender(rail(STOCK_CTX));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  /** SC-12(b):disabled 只擋**進入**方向 —— 兩鈕都鎖死的話,鎖定態在 blocked 契約上
+   *  沒有任何 UI 出口。點價本身仍由 priceLocked 擋。 */
+  it("SC-12(b):鎖定中切到 blocked 個股期契約 → 解除 / 解鎖兩鈕仍可按,點價仍擋", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    rerender(rail(BLOCKED_STKFUT_CTX));
+    expect(screen.getByRole("button", { name: "解除" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "鎖定中" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
+    expect(orderCalls).toBe(0);
+  });
+
+  /** E-7:鎖定態的 failStreak **刻意不隨換梯歸零**(安全方向)—— 換梯歸零的話,
+   *  一直換梯就能無限重試,而連 3 敗自動解除正是為了擋住「後端在拒單但使用者在連點」。 */
+  it("E-7:鎖定態 failStreak 跨梯累積(梯 A 敗 2 次 + 梯 B 敗 1 次 → 解除且清鎖定)", async () => {
+    orderMode = "fail";
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    await waitFor(() => expect(screen.getByText("券商拒單(1091)")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("賣 100.5"));
+    await waitFor(() => expect(screen.getByText("券商拒單(1092)")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // 2 次仍鎖定
+    rerender(rail(FUT_CTX));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 換梯保留武裝
+    fireEvent.click(screen.getByLabelText("買 21041"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  /** R3:send_fail 的 dispatch 若留在 `aliveRef` 守門內,「送出後切走、回應才到」的失敗
+   *  在鎖定態會整批漏計 —— 使用者一路換梯連點,連 3 敗這道閘就永遠不會關上。 */
+  it("R3:鎖定中送出後切走、回應才到的三次失敗仍計數 → 解除且清鎖定", async () => {
+    orderMode = "pending";
+    setCapitalWsStatus("open");
+    render(rail(STOCK_CTX));
+    lockUp();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    fireEvent.click(screen.getByLabelText("賣 100.5"));
+    fireEvent.click(screen.getByLabelText("買 99.9"));
+    await waitFor(() => expect(pendingOrders.length).toBe(3));
+    fireEvent.click(screen.getByRole("tab", { name: "部位" })); // ladder 卸載,回應還沒到
+    for (const reject of pendingOrders) reject(new Error("NETWORK_DOWN"));
+    fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
   });
 });

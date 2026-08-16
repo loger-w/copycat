@@ -1003,3 +1003,101 @@ describe("PriceLadder 置中請求(centerRequest prop)", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 鎖定武裝(R5)。鎖定 = 換標的 / 換梯 / 閒置都不解除 —— 誤觸半徑放到最大,所以
+// 「鎖定態畫面可指認」與「清除路徑照舊」兩件事都要在元件層釘住。
+// ---------------------------------------------------------------------------
+
+function lockUp(): void {
+  fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+}
+
+describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
+  it("SC-1:按鎖定 → 梯立即武裝且鎖定鈕轉「鎖定中」桃紅底 aria-pressed=true", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder());
+    const lock = screen.getByRole("button", { name: "鎖定" });
+    expect(lock.getAttribute("aria-pressed")).toBe("false");
+    expect(lock.hasAttribute("disabled")).toBe(false);
+    // 武裝鈕與鎖定鈕同列(288px 右欄下三控制項不換行的前提;寬度本身走截圖層)
+    expect(lock.parentElement).toBe(screen.getByRole("button", { name: "武裝" }).parentElement);
+    expect(lock.className).toContain("shrink-0");
+    lockUp();
+    expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
+    const locked = screen.getByRole("button", { name: "鎖定中" });
+    expect(locked.getAttribute("aria-pressed")).toBe("true");
+    expect(locked.className).toContain("bg-accent");
+  });
+
+  it("SC-2:鎖定後換自選股(code 變)→ 仍武裝,點價照送 1 call", async () => {
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    setCapitalWsStatus("open");
+    const { rerender } = render(ladder());
+    lockUp();
+    rerender(ladder("2317"));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({ stock_no: "2317", buy_sell: "buy" });
+  });
+
+  it("SC-9:按「鎖定中」→ 解鎖但保持武裝;再按「解除」→ 兩旗全清", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder());
+    lockUp();
+    fireEvent.click(screen.getByRole("button", { name: "鎖定中" }));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 仍武裝
+    expect(screen.getByRole("button", { name: "鎖定" }).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "解除" }));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  it("SC-8:鎖定中連 3 次送單失敗 → 解除且清鎖定", async () => {
+    mockCapitalFetch({
+      "/api/capital/order/stock": () =>
+        json({ detail: { error: "ORDER_BLOCKED", reason: "order_disabled" } }, 403),
+    });
+    setCapitalWsStatus("open");
+    render(ladder());
+    lockUp();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    await waitFor(() => expect(screen.getByText("安全閘拒絕(order_disabled)")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // 1 次失敗仍鎖定
+    fireEvent.click(screen.getByLabelText("賣 100.5"));
+    fireEvent.click(screen.getByLabelText("買 99.9"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+
+  it("SC-13:capital WS 非 open 時鎖定鈕 disabled + 文案;轉 open 才可按", () => {
+    mockCapitalFetch();
+    render(ladder()); // beforeEach = connecting
+    const lock = screen.getByRole("button", { name: "鎖定" });
+    expect(lock.hasAttribute("disabled")).toBe(true);
+    expect(lock.getAttribute("title")).toBe("連線未就緒,無法鎖定");
+    act(() => setCapitalWsStatus("open"));
+    expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  /** R4:上提後 `dispatch` 的 identity 若隨 render 漂移,卸載 effect 的 cleanup 會在
+   *  每次 re-render 跑一遍 —— 每收一則報價就解除一次武裝,而報價每秒都在來。 */
+  it("R4:武裝後連續換報價 rerender 兩次,仍維持「解除」態", () => {
+    mockCapitalFetch();
+    const { rerender } = render(ladder());
+    armUp();
+    rerender(ladder("2330", { ...LAST, p: 100_500 }));
+    rerender(ladder("2330", { ...LAST, p: 101_000 }));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+  });
+});
