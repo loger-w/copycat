@@ -1,0 +1,16 @@
+{
+  "round": 2, "mode": "narrowed (amendment segments only)", "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-16",
+  "findings": [
+    {"id": "R2-1", "severity": "P1", "problem": "locked_up 複合簽名要求成交價 == upper_milli;spec 未指定 tick 價", "disposition": "accepted", "resolution": "裁決 6 釘死 _state(upper=110_000, locked_up=True) + 109_000/110_000 兩筆,照抄 _Harness.lock_up"},
+    {"id": "R2-2", "severity": "P1", "problem": "規則訊號 notify_discord 預設 True → notify.resolve_webhook_url 讀 .env 路徑 conftest 沒罩", "disposition": "accepted", "resolution": "helper 內 monkeypatch copycat.notify._URL_RESOLVED=True/_WEBHOOK_URL=None(實查本機 .env 無 webhook key,仍不依賴)"},
+    {"id": "R2-3", "severity": "P1", "problem": "vite BACKEND 寫死 8721,--verify 8722 取證會全空", "disposition": "accepted", "resolution": "SC-1 補臨時改 8722 + 還原 + git status 檢查"},
+    {"id": "R2-4", "severity": "P2", "problem": "verify.py FAIL_ENV_KEY 註解仍寫五個取數點與 __main__ 自動化清檔", "disposition": "accepted", "resolution": "整段重寫;SC-6 中文 grep 加六詞"},
+    {"id": "R2-5", "severity": "P2", "problem": "test_signal_routes import functools / _wait_signal signature 未列", "disposition": "accepted", "resolution": "刪 functools;_wait_signal 改 predicate 版"},
+    {"id": "R2-6", "severity": "P2", "problem": "helper 拿不到 monkeypatch;23:59 end-exclusive 留一分鐘窗", "disposition": "accepted", "resolution": "簽名帶 monkeypatch;time.min/time.max"},
+    {"id": "R2-7", "severity": "P2", "problem": "tests/ 無 __init__.py,跨檔 import _tick 讓 pyright 紅", "disposition": "accepted", "resolution": "自帶副本"},
+    {"id": "R2-8", "severity": "P2", "problem": "_emit 備援入參未寫", "disposition": "accepted", "resolution": "寫明 rule/event 來源"},
+    {"id": "R2-9", "severity": "P2", "problem": "三支測試函式名仍含 market_events", "disposition": "accepted", "resolution": "改名 + docstring 同步"}
+  ],
+  "summary": {"P0": 0, "P1": 3, "P2": 6, "accepted": 9},
+  "exit": "無 P0,P1 全部修入 spec → 進實作"
+}

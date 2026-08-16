@@ -1,0 +1,26 @@
+== pytest
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2561 passed, 1 warning in 143.35s (0:02:23)
+== ruff
+All checks passed!
+ruff exit=0
+== pyright
+0 errors, 0 warnings, 0 informations
+== validate
+| SC-6 | 競價 >=8% med gap | +9.00% | +8.53% | ±0.5pp | PASS |
+
+42/42 PASS
+validate exit=0
+== vitest
+[2m Test Files [22m [1m[32m112 passed[39m[22m[90m (112)[39m
+[2m      Tests [22m [1m[32m1830 passed[39m[22m[90m (1830)[39m
+== tsc
+tsc exit=0
+== eslint
+eslint exit=0
+== doctor
+
+  [1mGitHub:[22m [36mhttps://github.com/millionco/react-doctor[39m
+[2m  Report issues and star the repository![22m
+

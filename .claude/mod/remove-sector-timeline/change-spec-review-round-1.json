@@ -1,0 +1,19 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-16",
+  "findings": [
+    {"id": "R1", "severity": "P0", "problem": "hub.on_tick 載具受 detector `_in_session`(09:00–13:30)gate;create_app 未注入 now_fn → XR-3 三支測試盤後恆紅", "evidence": "copycat/live/signal_state.py:47-48,192,230,251-252;app.py:535-551 無 now_fn", "disposition": "accepted", "resolution": "spec §0 裁決 6 改寫:helper 內 monkeypatch signal_state._SESSION_START/_SESSION_END 為 00:00/23:59;tick.trade_date = 牆鐘日;送兩筆 tick;備援 = 直呼 hub._emit(既有測試已慣例碰 hub 私有面)"},
+    {"id": "R2", "severity": "P1", "problem": "備援 on_book+limit_lock 不成立(evaluate_book 只產 limit_open 且需 latch)", "evidence": "signal_state.py:219-247", "disposition": "accepted", "resolution": "備援改為 on_tick + _state(locked_up=True) 產 limit_lock(不依賴 CDP / cum_vol);簿路方案刪除"},
+    {"id": "R3", "severity": "P1", "problem": "useSignalFeed.test.tsx 模組級 helper mkt()/isMarket() 漏列,改完零引用 → eslint no-unused-vars", "evidence": "useSignalFeed.test.tsx:125-142", "disposition": "accepted", "resolution": "§6 commit A 補列;describe 改名"},
+    {"id": "R4", "severity": "P1", "problem": "__main__ FAIL_ENV_KEY if 區塊只含兩行,照字面刪成空 body;注入不經 __main__", "evidence": "__main__.py:176-179;verify.py:278-280", "disposition": "accepted", "resolution": "if 保留、body 改為單行 logger.info(注入模式落檔目錄);test_main_wiring 斷言改 data_dir 不變"},
+    {"id": "R5", "severity": "P1", "problem": "app.py L814-825 行號範圍含 breadth close 收攤,照刪誤傷 W-1", "evidence": "app.py:814-828", "disposition": "accepted", "resolution": "§6 改為只刪 L825 + L822-824 註解;L814-819 反序註解改寫;if/try/close/except 全留"},
+    {"id": "R6", "severity": "P1", "problem": "SC-6 grep 全英文,中文死註解掃不到(app.py 5 處 / signal_hub 2 處 / breadth_engine:241 / test_signal_routes class docstring)", "evidence": "grep 廣度事件|類股|輪動|時間軸|鎖板事件", "disposition": "accepted", "resolution": "SC-6 加中文關鍵字集;§6 補註解改寫清單;today_signals docstring 改寫保留理由"},
+    {"id": "R7", "severity": "P2", "problem": "舊 sidecar_server.py 樣板五元組 + fetch_industry_chain,照抄取證會壞", "disposition": "accepted", "resolution": "SC-1/SC-7 釘死走 --verify(8722),不抄舊側車"},
+    {"id": "R8", "severity": "P2", "problem": "jsonl 殘留列的 cap 200 擠壓風險未寫", "disposition": "accepted", "resolution": "§3 補部署時機建議(非交易日 / 收盤後;或另存當日 jsonl)"},
+    {"id": "R9", "severity": "P2", "problem": "三處刪 assertion 未事前標「該變」", "disposition": "accepted", "resolution": "§6 commit B 「該紅」補列 test_truncated_multibyte / TestProdWiring / test_default_values 三處並附理由"},
+    {"id": "R10", "severity": "P2", "problem": "W-6 寫「兩鍵」實為六鍵", "evidence": "constants.ts:25-32", "disposition": "accepted", "resolution": "W-6 改寫六鍵一個不刪、不新增"}
+  ],
+  "summary": {"P0": 1, "P1": 5, "P2": 4, "accepted": 10, "rejected": 0},
+  "next": "P0 修復後限縮加輪(只審 [amendment 2026-08-16] 段落)"
+}

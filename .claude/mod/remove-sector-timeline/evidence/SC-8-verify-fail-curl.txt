@@ -1,0 +1,14 @@
+# SC-8 VERIFY_BREADTH_FAIL=1 (port 8723) 2026-08-16T16:45:25+08:00
+{"git_sha":"8948dc67","git_dirty":true,"started_at":"2026-08-16T16:45:00"}
+breadth -> {"enabled":true,"trade_date":"2026-08-16","as_of":null,"stale":true,"counts":null,"series":[{"t":"1314","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]},{"t":"1315","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]},{"t":"1316","twse":[1,1,1,1,0],"tpex":[0,1,0,0,1]}]} [200]
+
+rows -> 200
+sector -> 404
+# log lines with å¤±æ•ˆ/injected/data dir:
+2026-08-16 16:45:00,548 __main__ INFO verify ¥¢®Äª`¤J¼Ò¦¡:¥|¤ä¨ú¼Æ¥þ©ß,¸¨ÀÉ¥Ø¿ý C:\side-project\copycat\data\market-verify
+2026-08-16 16:45:00,637 copycat.server.breadth_engine INFO breadth restore 2026-08-16:3 ¤ÀÄÁ
+2026-08-16 16:45:00,645 copycat.server.breadth_engine INFO breadth streak restore 2026-08-16:1 ÀÉ / 10 ¥æ©ö¤é(¸ê®Æ¦Ü 2026-08-15)
+2026-08-16 16:45:00,646 copycat.server.breadth_engine WARNING breadth snapshot ¨ú¼Æ¥¢±Ñ(quota=False):VERIFY_BREADTH_FAIL=1 ª`¤Jªº¨ú¼Æ¥¢±Ñ
+2026-08-16 16:45:10,656 copycat.server.breadth_engine WARNING breadth snapshot ¨ú¼Æ¥¢±Ñ(quota=False):VERIFY_BREADTH_FAIL=1 ª`¤Jªº¨ú¼Æ¥¢±Ñ
+INFO:     127.0.0.1:56713 - "GET /api/market/breadth HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54882 - "GET /api/market/breadth/rows HTTP/1.1" 200 OK

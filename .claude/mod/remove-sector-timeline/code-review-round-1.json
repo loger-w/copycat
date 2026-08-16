@@ -1,0 +1,18 @@
+{
+  "round": 1, "stage": "self-review (core-flow §5)", "tier": "medium", "lenses": ["whitelist", "correctness-deadcode"], "model": "opus x2", "date": "2026-08-16",
+  "diff": "review-diff.txt (e1e33ca5..8948dc67; 45 files, +398/-5723)",
+  "findings": [
+    {"id": "CD-1", "severity": "P1", "lens": "correctness-deadcode", "file": "copycat/server/__main__.py:56 + tests/server/test_main_wiring.py:131", "problem": "VERIFY_WINDOW 理由註解仍提「flip 翻轉」「事件鏈路」(本 PR 已刪的 FLIP 通道 / 鎖板事件鏈);grep B 關鍵字集漏 flip / 事件鏈路", "disposition": "accepted", "resolution": "兩處改寫只留仍成立理由(失效注入 + 家數序列第二格)"},
+    {"id": "WL-1", "severity": "P2", "lens": "whitelist", "file": "copycat/server/app.py:793", "problem": "刪 TestSignalHubWiring 連帶帶走全庫唯一「關機序呼叫 breadth.close()」斷言,W-1 lifespan 收攤零鎖", "disposition": "accepted", "resolution": "補最小 lifespan 測試(monkeypatch close 旗標,BootedClient 離開後為 True)"},
+    {"id": "WL-2/CD-P2-1", "severity": "P2", "lens": "both", "file": "tests/server/test_signal_routes.py", "problem": "?market=exclude 相容性(SC-3 後半)零自動化鎖", "disposition": "accepted", "resolution": "TestSignalsTodayRoute 補一行同結果 + 200 斷言"},
+    {"id": "CD-P2-2/WL-P2-2", "severity": "P2", "file": "frontend/src/lib/signal-model.ts:76-78", "problem": "「與後端 _kind_text 逐字對齊」註解懸在 return kind 之上,敘述對象錯", "disposition": "accepted", "resolution": "上移到 limit_lock/limit_open 之前"},
+    {"id": "CD-P2-3", "severity": "P2", "file": "docs/next-time.md:191", "problem": "「8 條」數錯(9 條);「同頁 stale 標記兩款並存」在 BreadthBand vs LimitListSection 仍成立,不該整節作廢", "disposition": "accepted", "resolution": "作廢註記改寫:9 條中除 stale 兩款並存(改寫為 BreadthBand/LimitListSection)外作廢"},
+    {"id": "CD-P2-4", "severity": "P2", "file": ".claude/worktrees/rst-fe", "problem": "前端 worktree 未清(diff 已全帶回)", "disposition": "accepted", "resolution": "收尾 §8 git worktree remove + branch -d"},
+    {"id": "CD-P2-5", "severity": "P2", "file": "tests/server/test_signal_routes.py", "problem": "_state 副本 locked_up 預設 True、去 name 參數,與來源 test_signal_hub 漂移", "disposition": "accepted", "resolution": "副本與來源逐字對齊(呼叫點顯式傳 locked_up=True 不變)"},
+    {"id": "WL-P2-1", "severity": "P2", "file": "copycat/server/app.py:790-792", "problem": "改寫後關機反序註解「其餘各段互不依賴」過強(_close_signals 內有 stock.detach_signal_hub 依賴)", "disposition": "accepted", "resolution": "註解補回 signals→stock 依賴一句"},
+    {"id": "WL-P2-3", "severity": "P2", "file": "tests/server/test_signal_routes.py::test_ws_stock_stays_open_and_carries_rule_signals", "problem": "_recv_json → _recv_until 事實上弱化「seed 後緊接訊號」", "disposition": "accepted_as_documented", "resolution": "無 engine 時中間無他訊息;記 verification.md,不改"},
+    {"id": "OPS", "severity": "note", "problem": "__pycache__ 殘留 sector_rotation / chain_store pyc;prod 重啟前清", "disposition": "noted", "resolution": "verification.md 部署提醒"}
+  ],
+  "summary": {"P0": 0, "P1": 1, "P2": 8, "accepted": 8, "documented": 1, "rejected": 0},
+  "whitelist_check": "W-1~W-10 逐條核過(whitelist lens 報告全文見 agent result;摘要:_apply/close/start 等價、StockEngine 掛點未誤刪、useSignalFeed queryKey/retry/invalidate 等價、XR-3 意圖仍鎖、ORPHAN 六鍵、FAIL_ENV_KEY 四支注入)"
+}

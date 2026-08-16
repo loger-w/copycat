@@ -1,0 +1,9 @@
+# SC-3 / SC-7 curl (verify server 8722, git_sha 8948dc67) 2026-08-16T16:43:05+08:00
+{"git_sha":"8948dc67","git_dirty":true,"started_at":"2026-08-16T16:42:34"}
+/api/market/sector -> 404 {"detail":"Not Found"}
+/api/market/sector/members?industry=x&sub=y -> 404 {"detail":"Not Found"}
+/api/market/breadth -> 200 {"enabled":true,"trade_date":"2026-08-16","as_of":"13:14:00","stale":false,"counts":{"twse":{"limit_up":1,"up":1,"flat":1,"down":1,"limit_down":0},"tpex":{"limi
+/api/market/breadth/rows -> 200 {"enabled":true,"trade_date":"2026-08-16","as_of":"13:14:00","stale":false,"streaks_ready":true,"rows":[{"stock_id":"1101","name":"台泥","market":"twse","clos
+/api/stock/signals/today -> 200 {"signals":[]}
+/api/stock/signals/today?market=exclude -> 200 {"signals":[]}
+/api/stock/signals/rules -> 200 {"rules":[{"id":"r-1786504172-000","name":"CDP 穿越","kind":"cdp_cross","enabled":true,"notify_discord":true,"cooldown_secs":600,"params":{"rearm_ticks":5.0},
