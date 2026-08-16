@@ -1,5 +1,7 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+
+import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1107,8 +1109,8 @@ describe("WatchlistSidebar 緩撮標示(SC-1)", () => {
 
 // batch2 R6 SC-4:群組標題列組名右側 = 該群等權平均漲幅(排除 p==null),未分組不顯示
 describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
-  function quotesFor(over: Record<string, Partial<(typeof QUOTES)["2330"]>>) {
-    const out = { ...QUOTES } as Record<string, (typeof QUOTES)["2330"]>;
+  function quotesFor(over: Record<string, Partial<WatchlistQuote>>): Record<string, WatchlistQuote> {
+    const out: Record<string, WatchlistQuote> = { ...QUOTES };
     for (const [code, o] of Object.entries(over)) out[code] = { ...QUOTES["2330"], ...o };
     return out;
   }
