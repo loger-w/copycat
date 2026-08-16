@@ -6,6 +6,10 @@
 
 --verify 模式(chore server-launch-wrapper)同檔上鎖:fake source、env 壓制有跑、
 port 錯開、不落 log 檔 —— 漏任一項的失效樣態都是「盤中驗證悄悄變成第二台真 server」。
+
+交易日曆(mod/trading-calendar SC-8)同理只在 prod 傳:verify 的 fake 資料綁牆鐘
+today,傳真日曆會讓 verify server 在假日整片空 —— 而 prod 漏傳的失效樣態正是本輪
+要根治的那一個(假日冷啟動全空圖、零錯誤訊號)。
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from copycat.server.app import (
     DEFAULT_STOCK,
 )
 from copycat.server.verify import FAIL_ENV_KEY, FakeTxoSource
+from copycat.trading_calendar import TradingCalendar
 
 
 class _Capture:
@@ -69,7 +74,11 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
     main_mod.main([])
 
     assert cap.create_args == ()
-    assert cap.create_kwargs == {
+    assert cap.create_kwargs is not None
+    # 日曆是實例(不是 sentinel)→ 先抽出來單獨驗型別,其餘仍逐鍵鎖死整份 dict
+    calendar = cap.create_kwargs.get("trading_calendar")
+    assert isinstance(calendar, TradingCalendar), "prod 必須顯式載入交易日曆"
+    assert {k: v for k, v in cap.create_kwargs.items() if k != "trading_calendar"} == {
         "stock_source": DEFAULT_STOCK,
         "index_source": DEFAULT_INDEX,
         "futures_source": DEFAULT_FUTURES,
