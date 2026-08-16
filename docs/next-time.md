@@ -1,3 +1,19 @@
+## 2026-08-17(mod/flash-arm-lock 留尾)
+
+- [ ] **鎖定態換標的 / 換梯的掛載瞬間禁送窗**(spec E-8 / R-7 / R-8,review 建議 (b)):鎖定拿掉了
+  「換標的必須重按武裝」的時間緩衝,新梯掛載即直送態、座標與前一梯重疊,主圖五檔
+  `stock-price-click` 也會把使用者帶到已武裝且置中的梯。候選:換 instrumentKey / 換梯後前
+  N 百毫秒點價只 hint 不送(沿 `lastClick` 防抖機制),需新 SC → user 拍板。
+- [ ] **鎖定態全域指示器**(spec R-3):停在 TXO / 指數頁或右欄委託 / 部位 tab 時畫面上沒有任何
+  「鎖定中」訊號,回到梯上才看得到。候選:RightRail tablist 旁小徽章(UI 拍板)。
+- [ ] **CapitalConfirmDialog 開著時 Esc 不解除鎖定**(spec R-6;next-time:190 既有語意的鎖定版):
+  窗內 stopPropagation → 鎖定中 + 平倉確認窗開著時 Esc 只關窗。改 capture 監聽屬 🔴,另案。
+- [ ] **未鎖定時「WS closed 期間仍可武裝」的既有邊沿語意**(spec review R1 衍生):鎖定鈕已在非 open
+  時 disabled + level 觸發,武裝鈕未跟進(維持既有);要一致化可把 `armDisabled` 也吃 wsStatus。
+- [ ] **後端 source="flash-locked" 稽核**(spec §8):payload source 可擴,讓審計檔看得出鎖定態送單。
+- [ ] `FuturesLadder.tsx` 內 `futExchangeContract` 未 try/catch(App.tsx 那份有;既有問題,review p2 (d))。
+- [ ] 三梯武裝列 JSX 三份(LadderView + FuturesLadder 自帶)可合一(/refactor 素材)。
+
 ## 2026-08-17(mod/group-grid-full-chart R4 留尾)
 
 - [ ] **群組圖牆真 TC4 層待 prod 重啟 + 盤中 user 過目**(PR 試用指引):卡片單檔同款圖(VWAP 標 /
