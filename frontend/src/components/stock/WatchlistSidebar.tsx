@@ -10,7 +10,7 @@ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
 import { cn, safeIdToken } from "@/lib/utils";
-import { groupAvgPct } from "@/lib/watchlist-avg";
+import { type GroupAvg, groupAvgPct } from "@/lib/watchlist-avg";
 import {
   assignToGroup,
   detachFromGroups,
@@ -299,7 +299,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     listId: string;
     onToggle: () => void;
     /** 群組等權平均漲幅(R6 SC-4);未分組不傳、全組無成交為 null → 兩者皆不渲染 */
-    avgPct?: number | null;
+    avg?: GroupAvg | null;
   }): React.ReactElement {
     return (
       <button
@@ -330,19 +330,32 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           {o.collapsed ? "▸" : "▾"}
         </span>
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">{o.label}</span>
-        {o.avgPct != null ? (
-          // 色沿個股列 / GroupGridView 同構三態:>0 紅 / <0 綠 / 0 灰;不套亮燈白字(標題列無底色)
-          <span
-            className={cn(
-              "shrink-0 font-mono text-[0.625rem]",
-              o.avgPct > 0 ? "text-bull" : o.avgPct < 0 ? "text-bear" : "text-ink-dim",
-            )}
-          >
-            {fmtPct(o.avgPct)}
-          </span>
-        ) : null}
+        {o.avg != null ? avgBadge(o.avg) : null}
         <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
       </button>
+    );
+  }
+
+  /** 群組平均漲幅徽章(R6 SC-4)。色沿個股列 / GroupGridView 同構三態:>0 紅 / <0 綠 / 0 灰,
+   *  但 tone 以**顯示精度**(兩位小數)判(review C5):平均是連續值,-0.003 印成「-0.00%」
+   *  卻上綠字 = 同一格兩個矛盾訊號。`aria-label` 讓 header 的可及名稱從「主力 +2.59% 2」
+   *  變成「主力 平均漲幅 +2.59% 2」(review A4/C6;不動 header 本身的 aria-label —— 既有測試
+   *  以可見文字比對可及名稱);`title` 帶分母 / 試撮數(review C3/C4)。 */
+  function avgBadge(a: GroupAvg): React.ReactElement {
+    const shown = Math.round(a.avg * 100) / 100;
+    const text = fmtPct(shown);
+    const trialNote = a.trial > 0 ? `,含 ${a.trial} 檔試撮` : "";
+    return (
+      <span
+        aria-label={`平均漲幅 ${text}`}
+        title={`平均漲幅 ${text}(${a.n}/${a.total} 檔有成交${trialNote})`}
+        className={cn(
+          "shrink-0 font-mono text-[0.625rem]",
+          shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-dim",
+        )}
+      >
+        {text}
+      </span>
     );
   }
 
@@ -639,7 +652,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
               listId,
               onToggle: () => toggleCollapsed(g.name),
               // 每 render 重算:群組數 × 檔數是兩位數量級的純算術,不值得 memo
-              avgPct: groupAvgPct(g.codes, quotes),
+              avg: groupAvgPct(g.codes, quotes),
             })}
 
             {isCollapsed ? null : (
