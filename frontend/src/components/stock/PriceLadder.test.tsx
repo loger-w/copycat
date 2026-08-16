@@ -1090,6 +1090,21 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
     expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(false);
   });
 
+  /** S3(review r1):`disabled` 只擋**進入**方向。WS 掉到 connecting 不清鎖定(既有語意,
+   *  只有 closed 才 conn_lost)—— 若這時把「鎖定中」一併鎖死,使用者就處在「還在鎖定態、
+   *  卻按不掉」的位置,而解鎖鈕正是縮小誤觸半徑的那個出口。 */
+  it("S3:鎖定中 WS 轉 connecting → 「鎖定中」鈕不 disabled 且仍鎖定", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder());
+    lockUp();
+    act(() => setCapitalWsStatus("connecting"));
+    const locked = screen.getByRole("button", { name: "鎖定中" });
+    expect(locked.hasAttribute("disabled")).toBe(false);
+    expect(locked.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // connecting 不解除
+  });
+
   /** R4:上提後 `dispatch` 的 identity 若隨 render 漂移,卸載 effect 的 cleanup 會在
    *  每次 re-render 跑一遍 —— 每收一則報價就解除一次武裝,而報價每秒都在來。 */
   it("R4:武裝後連續換報價 rerender 兩次,仍維持「解除」態", () => {
