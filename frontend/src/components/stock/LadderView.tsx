@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { LOCK_TITLE } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import type { LadderLot } from "@/lib/ladder-lots";
 import { QTY_PRESETS } from "@/lib/qty-quick";
@@ -81,6 +82,13 @@ interface Props {
   armDisabled?: boolean;
   armTitle?: string;
   onToggleArm: () => void;
+  /** 鎖定中(換標的 / 換梯 / 閒置不解除);見 lib/flash-arm.ts */
+  locked?: boolean;
+  /** **未給 = 不渲染鎖定鈕**。三座梯之外的 caller(與既有裸 render 測試)維持原樣。 */
+  onToggleLock?: () => void;
+  lockDisabled?: boolean;
+  /** 覆寫鎖定鈕 tooltip(如連線未就緒);未給用 LOCK_TITLE */
+  lockTitle?: string;
   /** 武裝鈕右側的商品別控制項(現股交易別 select / 個股期當沖 checkbox) */
   armControls?: ReactNode;
   /** 買側全鎖(現股無券);與 `dimmed` 疊加 */
@@ -116,6 +124,10 @@ export function LadderView({
   armDisabled = false,
   armTitle,
   onToggleArm,
+  locked = false,
+  onToggleLock,
+  lockDisabled = false,
+  lockTitle,
   armControls = null,
   buyLocked = false,
   priceLocked = false,
@@ -180,25 +192,47 @@ export function LadderView({
         </div>
       </div>
       {banner}
-      {/* 武裝列:武裝/解除 + 商品別控制項 + 數量快捷 */}
+      {/* 武裝列:武裝/解除 + 鎖定/鎖定中 + 商品別控制項 + 數量快捷 */}
       <div className="border-b border-line px-2 py-1.5">
         <div className="flex items-center gap-1">
           <button
             type="button"
             aria-pressed={armed}
-            disabled={armDisabled}
+            /* disabled 只擋**進入**方向:已武裝時解除鈕恆可按,否則 blocked 契約上
+               武裝態就沒有 UI 出口(change-spec review R2)。 */
+            disabled={armDisabled && !armed}
             title={armTitle}
             onClick={onToggleArm}
             className={cn(
-              "flex-1 rounded border px-2 py-1 text-xs font-bold",
+              // min-w-0:288px 右欄下與鎖定鈕 + 商品別控制項同列,長出去會把列擠換行
+              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
               armed
                 ? "border-loss bg-loss text-bg"
                 : "border-line text-ink-dim hover:border-accent hover:text-ink",
-              armDisabled && "opacity-40",
+              armDisabled && !armed && "opacity-40",
             )}
           >
             {armed ? "解除" : "武裝"}
           </button>
+          {onToggleLock !== undefined ? (
+            <button
+              type="button"
+              aria-pressed={locked}
+              disabled={lockDisabled}
+              title={lockTitle ?? LOCK_TITLE}
+              onClick={onToggleLock}
+              className={cn(
+                // shrink-0:武裝鈕才是可壓縮的那顆 —— 鎖定鈕被壓到看不出字就等於沒有訊號
+                "shrink-0 rounded border px-2 py-1 text-xs font-bold",
+                locked
+                  ? "border-accent bg-accent text-bg"
+                  : "border-line text-ink-dim hover:border-accent hover:text-ink",
+                lockDisabled && "opacity-40",
+              )}
+            >
+              {locked ? "鎖定中" : "鎖定"}
+            </button>
+          ) : null}
           {armControls}
         </div>
         <div className="mt-1 flex items-center gap-1">

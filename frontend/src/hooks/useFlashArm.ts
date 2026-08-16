@@ -31,23 +31,24 @@ export interface FlashArmControl {
 export function useFlashArm(active = true): FlashArmControl {
   const [state, dispatch] = useReducer(reduceArm, undefined, initialArm);
   const idleTimer = useRef<number | undefined>(undefined);
-  // touch 的 identity 必須恆定 → `active` 只能經 ref 讀,不能進 useCallback deps
-  const activeRef = useRef(active);
-  activeRef.current = active;
 
   const wsStatus = useCapitalWsStatus();
 
+  // deps 只有 `active`(每個 ladder 實例恆定:armCtl 給不給不會中途變)→ identity 實質恆定。
+  // 計時器 ref 是**同一顆**:上一個 ladder 留下的計時被下一次 touch 直接清掉,不會跨梯亂放。
   const touch = useCallback(() => {
     window.clearTimeout(idleTimer.current);
-    if (!activeRef.current) return;
+    if (!active) return;
     idleTimer.current = window.setTimeout(() => dispatch({ type: "idle_timeout" }), ARM_IDLE_MS);
-  }, []);
+  }, [active]);
 
-  // 自動解除:capital WS 斷線
+  // 自動解除:capital WS 斷線。deps 帶 `state.locked` = **level 觸發**(SC-13):只看
+  // wsStatus 邊沿的話,「已經斷線了才鎖定」之後不再有 closed 邊沿可觸發,鎖定態就在
+  // 斷線上無限存活。未鎖定的既有邊沿語意不變(deps 含 wsStatus 即涵蓋)。
   useEffect(() => {
     if (!active) return;
     if (wsStatus === "closed") dispatch({ type: "conn_lost" });
-  }, [active, wsStatus]);
+  }, [active, wsStatus, state.locked]);
 
   // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
   useEffect(() => {
