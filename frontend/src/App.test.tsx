@@ -322,6 +322,11 @@ describe("App 群組圖牆點卡片換主檔(group-grid-full-chart SC-3)", () =>
     vi.stubGlobal("fetch", stockFetch());
     renderApp();
 
+    // 點之前右欄沒有標的 —— 少了這句,下面的「右欄變成 2317」在右欄一開始就顯示
+    // 2317 的世界裡也會綠(review B6)
+    const rail = await screen.findByLabelText("交易面板");
+    expect(within(rail).queryByLabelText("交易別")).toBeNull();
+
     fireEvent.click(await screen.findByTestId("group-card-2317"));
 
     await waitFor(() => {
@@ -333,6 +338,12 @@ describe("App 群組圖牆點卡片換主檔(group-grid-full-chart SC-3)", () =>
     expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("2317");
     // 檢視沒跳走:圖牆的群組列還在(切回單檔的話這條會查不到)
     expect(screen.getByLabelText("選擇群組")).toBeTruthy();
+    // 右欄真的換到 2317(review B6)。點卡片的**唯一目的**就是換閃電梯標的(D3),
+    // 而 `railCtx` 只在 App 這一層組得起來 —— App 少接一根線(setStockCode → railCtx)
+    // 時上面兩句照樣綠:state 打到了、檢視也沒跳,只有下單面還瞄著別檔,而那是真錢。
+    // 錨點取 `交易別`(個股閃電梯專屬控制;`此頁無可下單標的` 空態沒有它)+ 標題列股號。
+    await waitFor(() => expect(within(rail).getByLabelText("交易別")).toBeTruthy());
+    expect(rail.textContent).toContain("2317");
   });
 });
 
