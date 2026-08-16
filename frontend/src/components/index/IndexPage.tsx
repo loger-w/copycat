@@ -1,16 +1,15 @@
 /** 台股綜合頁的薄容器:常駐區(基差列 + 兩張並排指數圖 + 家數帶 + 騰落線)
- *  + 其下一列 subtab(漲跌停 / 類股強弱 / 訊號時間軸 / 相關係數)。
+ *  + 其下一列 subtab(漲跌停 / 相關係數)。
  *
  *  單圖的狀態邏輯與版面全在 `MarketPane`(本檔只決定「哪個 pane 用哪組 localStorage key、
  *  預設看哪個標的」)—— 兩張圖除了 key 組與預設標的以外完全同構,邏輯留在這裡就會變成
  *  「同一段程式碼寫兩遍」。
  *
- *  **subtab 是掛載閘,不是 `hidden`**(2026-08-14 改版):四個 panel 原本各自有收合殼、
- *  可同時展開 0-4 個,現在收斂成「恆有一顆 active、一次只掛載一個」。專案慣例是
- *  「`hidden` > 條件 render」保留 DOM,**這裡刻意違反** —— 四個 panel 分別是全市場
- *  2800 列 / 10 秒、類股輪動 / 10 秒、當日訊號、corr + river 兩條 WS,保 DOM 等於
- *  四份成本同時常駐。切走即 unmount,輪詢與連線跟著消費者走(原「收合 = unmount」
- *  設計的等價轉移)。 */
+ *  **subtab 是掛載閘,不是 `hidden`**(2026-08-14 改版;2026-08-16 收成兩個 panel):
+ *  panel 原本各自有收合殼、可同時展開多個,現在是「恆有一顆 active、一次只掛載一個」。
+ *  專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反** —— 兩個 panel 分別是
+ *  全市場 2800 列 / 10 秒、corr + river 兩條 WS,保 DOM 等於兩份成本同時常駐。切走即
+ *  unmount,輪詢與連線跟著消費者走(原「收合 = unmount」設計的等價轉移)。 */
 import { useState } from "react";
 
 import { CorrSection } from "@/components/corr/CorrSection";
@@ -18,8 +17,6 @@ import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
 import { BreadthBand } from "@/components/index/BreadthBand";
 import { LimitListSection } from "@/components/index/LimitListSection";
 import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
-import { SectorSection } from "@/components/index/SectorSection";
-import { SignalTimelineSection } from "@/components/index/SignalTimelineSection";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import {
@@ -35,16 +32,15 @@ import {
 import { cn } from "@/lib/utils";
 import type { BreadthState } from "@/types";
 
-/** subtab 值域與標籤的單一來源。順序 = 畫面順序,也是改版前四個區塊的上下順序。 */
+/** subtab 值域與標籤的單一來源。順序 = 畫面順序,也是改版前各區塊的上下順序。 */
 const SUBTABS = [
   ["limit", "漲跌停"],
-  ["sector", "類股強弱"],
-  ["timeline", "訊號時間軸"],
   ["corr", "相關係數"],
 ] as const;
 type SubTab = (typeof SUBTABS)[number][0];
 
-/** 白名單還原:非法值(改版前的 "1"、亂碼)一律回預設「漲跌停」。
+/** 白名單還原:非法值(改版前的 "1"、2026-08-16 刪掉的兩顆 subtab 殘值、亂碼)一律回
+ *  預設「漲跌停」—— 這道白名單就是值域縮減時的**唯一**遷移機制,零遷移碼。
  *
  *  **整段包 try/catch**:getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,
  *  而這裡是 `useState` 的 initializer —— 拋出去就是整頁白屏。降回預設 subtab 遠好過白屏
@@ -120,7 +116,7 @@ interface Props {
   onOpenStock?: (code: string) => void;
   /** 使用者是否正看著本 tab(App 的 `tab === "index"`)。本頁的 DOM 由 App 以 `hidden`
    *  保留 → 頁內所有背景輪詢都要靠這道 gate 停(review FE-2;FuturesPage 同慣例):
-   *  漲跌停列表、類股強弱(含鑽開的成員表),以及**兩張指數圖的分 K**
+   *  漲跌停列表,以及**兩張指數圖的分 K**
    *  —— 最後那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME 搶同一把
    *  `api.lock`(review round-2 XR-4)。未給時預設 true(既有呼叫路徑不靜默停更)。 */
   active?: boolean;
@@ -184,8 +180,8 @@ export function IndexPage({
         <AdvanceDeclineChart series={breadth?.series ?? []} />
       </section>
       {/* 下半部:一列 subtab + 當前 panel,共用**一個**外框盒(AD-4)——
-          四個 panel 是同一個問題的四種切面(廣度發現 → 深度盯盤),各自一個框
-          會讓它們看起來像四個彼此無關的區塊。 */}
+          兩個 panel 是同一個問題的兩種切面(廣度發現 → 深度盯盤),各自一個框
+          會讓它們看起來像兩個彼此無關的區塊。 */}
       <section className="rounded-md border border-line bg-surface">
         {/* aria-label 必帶:全站已有「主要分頁」「交易面板分頁」兩個具名 tablist,
             無名 tablist 會讓全域 `getAllByRole("tab")` 撞名(App.test.tsx 的教訓)。
@@ -217,13 +213,6 @@ export function IndexPage({
         {subtab === "limit" ? (
           <LimitListSection onOpenStock={onOpenStock} active={active} />
         ) : null}
-        {/* 同一條銜接路徑的另一半:列表回答「是哪幾檔」,類股回答「錢往哪個族群跑」——
-            點成員列同樣跳到個股(期)頁(R4 SC-3)。 */}
-        {subtab === "sector" ? <SectorSection onOpenStock={onOpenStock} active={active} /> : null}
-        {/* 同一條銜接路徑的第三半:列表 / 類股是「現在的橫切面」,時間軸是「今天依序
-            發生了什麼」—— 自選訊號與全市場廣度事件同軸(R4 SC-7)。無 `active` gate:
-            資料是一次性 query + WS bus,沒有輪詢可停。 */}
-        {subtab === "timeline" ? <SignalTimelineSection onOpenStock={onOpenStock} /> : null}
         {subtab === "corr" ? <CorrSection /> : null}
       </section>
     </div>

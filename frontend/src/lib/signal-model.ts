@@ -13,22 +13,7 @@ export type SignalKind =
   | "crash"
   | "vol_burst"
   | "limit_lock"
-  | "limit_open"
-  /** 全市場廣度事件(market-overview R4 SC-6):來源是 FinMind 快照 diff,不是自選池的
-   *  tick —— 精度 5-10s、量可達自選訊號的百倍,消費端一律先分族再處理。 */
-  | "market_limit_lock"
-  | "market_limit_open";
-
-/** 全市場廣度事件的判別子。**前綴約定是唯一依據**(不是列舉):後端之後補新的廣度
- *  kind 時,前端不必同步改就能維持「不進 toast、不進自選 rail」的分族語意。 */
-export function isMarketKind(kind: string): boolean {
-  // **runtime guard 不是多餘的**(review round-2 FE-2):型別上 `kind` 是 string,但這份
-  // 資料的來源是 jsonl 檔的一行與 WS 訊息 —— runtime 沒有任何人保證。裸 `startsWith`
-  // 對非字串會拋,而呼叫點在 `useSignalFeed` 的 useMemo 內、上頭沒有 ErrorBoundary
-  // → 整頁白屏,且壞行還留在檔案裡,重整也不會自癒。後端對應的 `app._is_market_kind`
-  // 就是先 `isinstance(kind, str)`,兩邊同一道防禦。
-  return typeof kind === "string" && kind.startsWith("market_");
-}
+  | "limit_open";
 
 export interface SignalMsg {
   type: "signal";
@@ -90,10 +75,6 @@ export function kindLabel(sig: SignalMsg): string {
   if (kind === "limit_open") return sig.direction === "up" ? "漲停打開" : "跌停打開";
   // 與後端 `signal_hub._kind_text` 逐字對齊(design §7):同一則事件在 WS 列、jsonl
   // 與 Discord 上的文案漂掉時,對帳會變成人工比對。
-  if (kind === "market_limit_lock") return sig.direction === "up" ? "全市場鎖漲停" : "全市場鎖跌停";
-  if (kind === "market_limit_open") {
-    return sig.direction === "up" ? "全市場漲停打開" : "全市場跌停打開";
-  }
   return kind;
 }
 

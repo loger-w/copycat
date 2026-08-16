@@ -99,16 +99,6 @@ const BREADTH_ROWS = {
   rows: [],
 };
 
-/** 類股 subtab 的合法 payload。`rotation` **不得缺**:`SectorSection` 以
- *  `rotation === null` 分流空態,undefined 會直接拋(與 P0-2 同型;round-2 P1-2)。 */
-const SECTOR_STATE = {
-  enabled: true,
-  trade_date: "2026-08-06",
-  as_of: "10:31:00",
-  stale: false,
-  rotation: { industries: [] },
-};
-
 /** 路由表**寫死**(App.test.tsx 樣板),不留「依測試需要才加」的空間:
  *  哪個 subtab 被掛上是測試的自由度,而每個 panel 的 payload 形狀不是。 */
 function stubFetch(): void {
@@ -119,16 +109,6 @@ function stubFetch(): void {
       lastUrls.push(u);
       if (u.includes("/api/market/breadth/rows")) {
         return new Response(JSON.stringify(BREADTH_ROWS));
-      }
-      // 成員層在前:兩條路由共前綴,順序反過來會讓成員請求被類股狀態那條吃掉。
-      if (u.includes("/api/market/sector/members")) {
-        return new Response(JSON.stringify({ industry: "", sub_industry: null, members: [] }));
-      }
-      if (u.includes("/api/market/sector")) return new Response(JSON.stringify(SECTOR_STATE));
-      // 訊號時間軸 subtab 的 baseline。缺這條會落到 `DK_BODY`,`signals` 是 undefined
-      // → 時間軸走「取數失敗」分支,而那與「路由沒寫」在畫面上同形(review A-3)。
-      if (u.includes("/api/stock/signals/today")) {
-        return new Response(JSON.stringify({ signals: [] }));
       }
       return new Response(JSON.stringify(DK_BODY));
     }),
@@ -316,64 +296,54 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
 // 原本四組「預設收合 + 落點」describe((e)(e2)(g)(g2)(h)(h2)(i)(i2))隨收合殼一起汰換 ——
 // 「收合 = unmount」的省輪詢語意等價轉移到「非 active subtab = unmount」。
 describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
-  it("(s1) 四顆 tab,預設「漲跌停」active 且只掛載 limit panel", async () => {
+  it("(s1) 兩顆 tab,預設「漲跌停」active 且只掛載 limit panel", async () => {
     renderPage(TXF, BREADTH);
     await act(async () => {});
 
     expect(within(subtabs()).getAllByRole("tab").map((el) => el.textContent)).toEqual([
       "漲跌停",
-      "類股強弱",
-      "訊號時間軸",
       "相關係數",
     ]);
     expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
-    expect(subtab("類股強弱").getAttribute("aria-selected")).toBe("false");
+    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("false");
     expect(screen.getByTestId("limit-list")).toBeTruthy();
-    expect(screen.queryByTestId("sector-section")).toBeNull();
-    expect(screen.queryByTestId("signal-timeline")).toBeNull();
     // CorrPage 真身不 mount(stub 計數 0 才是有鑑別力的斷言;真身級零 WS 見 corr-lazy 檔)
     expect(counts.mount).toBe(0);
   });
 
-  it("(s2) 點「類股強弱」→ sector 掛載、limit 卸載,偏好寫入 localStorage", async () => {
+  // (s2)(s2b) 2026-08-16 刪除「類股強弱」/「訊號時間軸」兩顆 subtab 後,舊使用者的
+  // localStorage 裡還躺著那兩個值 —— 白名單 fallback 是唯一的遷移機制(零遷移碼),
+  // 漏掉就是「開頁沒有任何 panel」。兩個值各鎖一支:白名單若只補一半,另一半無聲。
+  it("(s2) 殘值 sector(已刪的 subtab)→ 落回漲跌停", async () => {
+    window.localStorage.setItem(INDEX_SUBTAB_KEY, "sector");
     renderPage(TXF, BREADTH);
-    fireEvent.click(subtab("類股強弱"));
+    await act(async () => {});
 
-    expect(await screen.findByTestId("sector-section")).toBeTruthy();
-    expect(screen.queryByTestId("limit-list")).toBeNull();
-    expect(subtab("類股強弱").getAttribute("aria-selected")).toBe("true");
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
-    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("sector");
+    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("limit-list")).toBeTruthy();
+    expect(counts.mount).toBe(0);
   });
 
-  // (review B-4)(s2) 只鎖了「類股強弱」一顆的點擊路徑,timeline / corr 兩顆的
-  // 掛載與寫入值零覆蓋 —— 寫錯字串(如寫成 "signal")在 (s3)(s4) 都測不出來:
-  // 非法值一律 fallback 漲跌停,症狀只有「切過去、重整卻回到漲跌停」。
-  it("(s2b) 點「訊號時間軸」→ timeline 掛載、sector 卸載,偏好寫入 timeline", async () => {
+  it("(s2b) 殘值 timeline(已刪的 subtab)→ 落回漲跌停", async () => {
+    window.localStorage.setItem(INDEX_SUBTAB_KEY, "timeline");
     renderPage(TXF, BREADTH);
-    fireEvent.click(subtab("類股強弱"));
-    await screen.findByTestId("sector-section");
+    await act(async () => {});
 
-    fireEvent.click(subtab("訊號時間軸"));
-
-    expect(await screen.findByTestId("signal-timeline")).toBeTruthy();
-    expect(screen.queryByTestId("sector-section")).toBeNull();
-    expect(subtab("訊號時間軸").getAttribute("aria-selected")).toBe("true");
-    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("timeline");
+    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("limit-list")).toBeTruthy();
+    expect(counts.mount).toBe(0);
   });
 
-  it("(s2c) 再點「相關係數」→ CorrPage 掛載,偏好寫入 corr", async () => {
+  it("(s2c) 點「相關係數」→ CorrPage 掛載、limit 卸載,偏好寫入 corr", async () => {
     renderPage(TXF, BREADTH);
-    fireEvent.click(subtab("訊號時間軸"));
-    await screen.findByTestId("signal-timeline");
-
     fireEvent.click(subtab("相關係數"));
 
     // lazy:等 stub 真 mount,不用 `queryBy === null`(suspend 與沒 render 同形)
     expect(await screen.findByTestId("corr-stub")).toBeTruthy();
     expect(counts.mount).toBe(1);
-    expect(screen.queryByTestId("signal-timeline")).toBeNull();
+    expect(screen.queryByTestId("limit-list")).toBeNull();
     expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
+    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
     expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("corr");
   });
 
@@ -432,10 +402,10 @@ describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
     });
 
     renderPage(TXF, BREADTH);
-    fireEvent.click(subtab("類股強弱"));
+    fireEvent.click(subtab("相關係數"));
 
-    expect(await screen.findByTestId("sector-section")).toBeTruthy();
-    expect(subtab("類股強弱").getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
+    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
     expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
     expect(screen.queryByTestId("limit-list")).toBeNull();
   });

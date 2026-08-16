@@ -42,7 +42,7 @@ async function fetchMarketBars(key: MarketKey, tf: string): Promise<MarketBars> 
 /** @param active 使用者是否正看著這張圖所在的 tab。**預設 true**(保守:既有呼叫路徑
  *  不因為新參數而靜默停更)。分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME
  *  搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發是看不見的成本(review round-2 XR-4;
- *  `FuturesPage` / `SectorSection` / `LimitListSection` 同慣例)。 */
+ *  `FuturesPage` / `LimitListSection` 同慣例)。 */
 export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
   const tf = tfOf(mode);
   const isMinute = tf === "1";

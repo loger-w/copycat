@@ -198,27 +198,6 @@ describe("useSignalAlerts — 音效與靜音", () => {
     expect(hook.result.current.toasts.length).toBe(1);
   });
 
-  // 🟢 market-overview R4(SC-8):全市場廣度事件是「看盤背景資訊」,不是自選池的
-  // 提醒 —— 漲停潮日一分鐘湧進上百則,toast / 嗶聲 / 桌面通知全部免疫。
-  // (`playBeep` 的呼叫以 oscillators 計數為證:hook 內是同檔直呼,spy 攔不到。)
-  it("market 事件全免疫:toast 佇列不變、不出聲、不發桌面通知(SC-8)", () => {
-    hidden = true;
-    const hook = renderHook(() => useSignalAlerts());
-    act(() => {
-      emitSignal({ ...sig("m1"), kind: "market_limit_lock", code: "1101", direction: "up" });
-      emitSignal({ ...sig("m2"), kind: "market_limit_open", code: "2603", direction: "down" });
-    });
-    expect(hook.result.current.toasts).toEqual([]);
-    expect(hook.result.current.overflow).toBe(0);
-    expect(oscillators).toBe(0);
-    expect(notified).toEqual([]);
-
-    // 同一條 bus 上的自選訊號照常提醒(早退不能把整個 handler 關掉)
-    act(() => emitSignal(sig("own")));
-    expect(hook.result.current.toasts.length).toBe(1);
-    expect(oscillators).toBe(1);
-  });
-
   it("unmount 後不再收訊號(bus 有退訂)", () => {
     const hook = renderHook(() => useSignalAlerts());
     hook.unmount();
