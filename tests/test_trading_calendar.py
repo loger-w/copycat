@@ -191,6 +191,49 @@ def test_load_wrong_shape_raises(tmp_path: Path, payload: dict[str, object]) -> 
     assert str(path) in str(exc.value)
 
 
+def test_load_conflicting_day_raises(tmp_path: Path) -> None:
+    """同一天同時掛 holidays 與 extra_trading_days = 資料矛盾,不能靜默挑一邊(C4)。
+
+    `is_trading_day` 讓 `extra_trading_days` 優先 —— 撞在一起就是「休市日被判成
+    交易日」,而那是零訊號的:畫面照常、只是那天沒資料。
+    """
+    path = tmp_path / "conflict.json"
+    path.write_text(
+        json.dumps(
+            {
+                "years": {
+                    "2026": {
+                        "holidays": ["2026-01-01", "2026-10-09"],
+                        "extra_trading_days": ["2026-10-09"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as exc:
+        load_trading_calendar(path)
+    assert "2026-10-09" in str(exc.value)
+    assert str(path) in str(exc.value)
+
+
+def test_load_year_mismatch_raises(tmp_path: Path) -> None:
+    """年份鍵下掛別年的日期 = 抄錯 / 貼錯格(C4)。
+
+    2027 的假日被塞進 2026 那格時 `years_loaded` 仍是 {2026} → 缺年 WARNING 照樣會叫,
+    但那些日期已經默默生效了,兩個訊號互相打架。
+    """
+    path = tmp_path / "mismatch.json"
+    path.write_text(
+        json.dumps({"years": {"2026": {"holidays": ["2026-01-01", "2027-01-01"]}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as exc:
+        load_trading_calendar(path)
+    assert "2027-01-01" in str(exc.value)
+    assert str(path) in str(exc.value)
+
+
 def test_load_missing_years_key_raises(tmp_path: Path) -> None:
     path = tmp_path / "noyears.json"
     path.write_text(json.dumps({"_updated": "2026-08-16"}), encoding="utf-8")
