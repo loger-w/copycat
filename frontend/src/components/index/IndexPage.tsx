@@ -54,7 +54,7 @@ function fmt(millipts: number): string {
 function BasisRow({ txf, twse }: { txf: TxfQuote | null; twse: IndexSeries | null }) {
   const basis = txf !== null && twse?.p != null ? (txf.p - twse.p) / 1000 : null;
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="flex shrink-0 flex-wrap items-center gap-3">
       <span data-testid="basis-row" className="font-mono text-xs text-ink-dim">
         台指期 <span className="text-ink">{txf !== null ? fmt(txf.p) : "-"}</span>{" "}
         <span
@@ -108,46 +108,66 @@ export function IndexPage({
   const { toggles, set } = useChartToggles();
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <BasisRow txf={txf} twse={twse} />
-      {/* auto-fit + minmax:寬視窗並排,窄視窗自動疊成單欄,不必 JS 判斷斷點 */}
-      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(480px,1fr))]">
-        <MarketPane
-          paneId="left"
-          twse={twse}
-          otc={otc}
-          futures={futures}
-          stores={LEFT_STORES}
-          defaultKey="TWSE"
-          toggles={toggles}
-          onToggle={set}
-          active={active}
-        />
-        <MarketPane
-          paneId="right"
-          twse={twse}
-          otc={otc}
-          futures={futures}
-          stores={RIGHT_STORES}
-          defaultKey="OTC"
-          toggles={toggles}
-          onToggle={set}
-          active={active}
-        />
+    // root 是 container 但**自己不捲**:整頁唯一的垂直捲軸落在主 grid 上(§4.1)。
+    // 兩處都能捲的話,極矮視窗會出現兩層捲軸、且 SC-3 量到的「主 grid 沒捲」是假的。
+    <div className="@container flex min-h-0 flex-1 flex-col">
+      {/* 1050px 是**容器寬**不是視窗寬(容器 = 視窗 − 349:右欄 rail 288 + pl-3 12 +
+          border 1 + 外層 px-4 32 + gap-4 16)。窄於此退回單欄堆疊 = 改版前的整頁捲
+          行為(SC-7);兩欄態不覆寫 overflow —— 正常尺寸內容恰填滿不出捲軸,極矮
+          視窗時這道 overflow 就是逃生口(§7 edge 2)。 */}
+      <div
+        data-testid="index-main-grid"
+        className="grid min-h-0 flex-1 gap-3 grid-cols-1 overflow-y-auto @[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
+      >
+        {/* 左欄自己也是 container:雙圖的 700px 斷點量的是**左欄寬**,掛在 root 上量到的
+            會是整頁寬(右欄佔掉的 2fr 也算進去)→ 兩張圖在真正塞不下時仍硬並排。 */}
+        <div className="@container flex min-h-0 flex-col gap-3">
+          <BasisRow txf={txf} twse={twse} />
+          {/* 顯式斷點取代舊 auto-fit minmax(480px):auto-fit 量的是這個 grid 自己的寬,
+              與左欄 container 同寬故語意等價,但斷點值得寫在看得見的地方(W-12)。
+              `min-h-0 flex-1` = 雙圖吃掉左欄扣掉基差列 / 家數帶 / 騰落線後的剩餘高。 */}
+          <div className="grid grid-cols-1 gap-3 min-h-0 flex-1 @[700px]:grid-cols-2">
+            <MarketPane
+              paneId="left"
+              twse={twse}
+              otc={otc}
+              futures={futures}
+              stores={LEFT_STORES}
+              defaultKey="TWSE"
+              toggles={toggles}
+              onToggle={set}
+              active={active}
+            />
+            <MarketPane
+              paneId="right"
+              twse={twse}
+              otc={otc}
+              futures={futures}
+              stores={RIGHT_STORES}
+              defaultKey="OTC"
+              toggles={toggles}
+              onToggle={set}
+              active={active}
+            />
+          </div>
+          {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
+              section 讓「當下十個數字」與「一整天的走向」在版面上是同一塊。
+              `shrink-0`:這塊的高度是內容決定的常數,壓縮它換不到多少圖高,卻會讓
+              家數字與騰落線先糊掉。 */}
+          <section className="flex shrink-0 flex-col gap-2">
+            <BreadthBand breadth={breadth} />
+            <AdvanceDeclineChart series={breadth?.series ?? []} />
+          </section>
+        </div>
+        {/* 右欄漲跌停列表恆掛(2026-08-16 subtab 退役),沿用改版前那個外框盒。
+            廣度發現 → 深度盯盤的銜接點 —— 家數帶說「今天有幾檔鎖住」,列表說「是哪
+            幾檔」,點下去就跳到個股(期)頁看那一檔的五檔與分時。
+            `min-h-0 flex-col`:整高交給列表自己內捲(表頭 sticky),列表長度不再把
+            左欄推出視窗。`active` 直傳:輪詢的唯一 gate 是主 tab,不再經 subtab 條件。 */}
+        <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
+          <LimitListSection onOpenStock={onOpenStock} active={active} />
+        </div>
       </div>
-      {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
-          section 讓「當下十個數字」與「一整天的走向」在版面上是同一塊。 */}
-      <section className="flex flex-col gap-2">
-        <BreadthBand breadth={breadth} />
-        <AdvanceDeclineChart series={breadth?.series ?? []} />
-      </section>
-      {/* 漲跌停列表恆掛(2026-08-16 subtab 退役),沿用改版前那個外框盒。
-          廣度發現 → 深度盯盤的銜接點 —— 家數帶說「今天有幾檔鎖住」,列表說「是哪
-          幾檔」,點下去就跳到個股(期)頁看那一檔的五檔與分時。
-          `active` 直傳:輪詢的唯一 gate 現在是主 tab,不再經 subtab 條件。 */}
-      <section className="rounded-md border border-line bg-surface">
-        <LimitListSection onOpenStock={onOpenStock} active={active} />
-      </section>
     </div>
   );
 }
