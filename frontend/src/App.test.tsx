@@ -267,6 +267,75 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
   });
 });
 
+// 🔴 group-grid-full-chart SC-3:群組圖牆點卡片 = **只換右欄閃電梯的標的**,檢視停在
+// 群組。走整條真鏈(App → StockPage → GroupGridView → 卡片 → App.setStockCode →
+// useStockStream 換檔訂閱):少接一根線(StockPage 沒把 onSelect 往下傳、App 沒
+// setStockCode)在元件級測試各自都是綠的,只有這裡會紅。
+describe("App 群組圖牆點卡片換主檔(group-grid-full-chart SC-3)", () => {
+  const GROUP_WL = {
+    codes: ["2330", "2317"],
+    groups: [{ name: "半導體", codes: ["2330", "2317"] }],
+  };
+
+  function groupState(name: string, ref: number) {
+    return {
+      minutes: { "540": { c: ref, v: 10, i: 3, o: 7, u: 0 } },
+      meta: { name, ref, upper: null, lower: null, y_vol: 1 },
+      no_data: false,
+      backfilling: false,
+    };
+  }
+
+  /** 個股頁那幾條路由疊在 `appFetch` 之上(其餘路由行為逐字不變) */
+  function stockFetch() {
+    const base = appFetch();
+    return vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/api/stock/watchlist")) return new Response(JSON.stringify(GROUP_WL));
+      if (u.includes("/api/stock/group-state")) {
+        return new Response(
+          JSON.stringify({
+            states: {
+              "2330": groupState("台積電", 2_320_000),
+              "2317": groupState("鴻海", 2_000_000),
+            },
+          }),
+        );
+      }
+      if (u.includes("/api/stock/state/")) {
+        return new Response(
+          JSON.stringify({ code: "2317", seq: 0, minutes: {}, ticks: [], book: null, meta: null }),
+        );
+      }
+      if (u.includes("/api/stock/overlay/")) {
+        return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+      }
+      if (u.includes("/api/stock/names")) return new Response(JSON.stringify({ names: [], count: 0 }));
+      if (u.includes("/api/stock/signals/rules")) return new Response(JSON.stringify({ rules: [] }));
+      return base(u);
+    });
+  }
+
+  it("點卡片 → 打 /api/stock/state/2317 + 主檔落 localStorage,且檢視仍停在群組", async () => {
+    window.localStorage.setItem("copycat-tab", "stock");
+    window.localStorage.setItem("copycat-stock-view", "group");
+    vi.stubGlobal("fetch", stockFetch());
+    renderApp();
+
+    fireEvent.click(await screen.findByTestId("group-card-2317"));
+
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
+        String(c[0]),
+      );
+      expect(calls.some((u) => u.includes("/api/stock/state/2317"))).toBe(true);
+    });
+    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("2317");
+    // 檢視沒跳走:圖牆的群組列還在(切回單檔的話這條會查不到)
+    expect(screen.getByLabelText("選擇群組")).toBeTruthy();
+  });
+});
+
 // 台股綜合頁背景輪詢的 active gate 全鏈鎖。
 describe("App 台股綜合 active gate(round-2 XR-4)", () => {
   // (review round-2 XR-4)R1 的兩張指數圖是同頁**唯一**沒吃 `active` gate 的輪詢:
