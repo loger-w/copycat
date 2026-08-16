@@ -60,6 +60,7 @@ function renderChart(opts: {
   name?: string;
   s?: IndexSeries | null;
   t?: ChartToggles;
+  height?: number;
 }) {
   const client = new QueryClient({
     // retryDelay 0:hook 自帶 retry:1,error 終態才不用等 exponential backoff
@@ -74,6 +75,50 @@ function renderChart(opts: {
         series={opts.s === undefined ? series() : opts.s}
         toggles={opts.t ?? toggles()}
         onToggle={() => undefined}
+        height={opts.height}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+/** 日 K 態的合法 payload(`/api/index/bars`)。intraday 那條路不打這支端點,
+ *  所以只有 candle 測試需要換 stub。 */
+const DK_BODY = {
+  key: "TWSE",
+  tf: "D",
+  bars: Array.from({ length: 3 }, (_, i) => ({
+    t: `2026-07-2${7 + i}`,
+    o: 100,
+    h: 110,
+    l: 90,
+    c: 105,
+    v: 10,
+  })),
+  meta: {
+    source: "tc4_dk",
+    coverage_from: "2026-07-27",
+    coverage_to: "2026-07-29",
+    partial_last: false,
+    volume: true,
+    refusal: null,
+    synth_since: null,
+  },
+};
+
+function renderCandle(height: number | undefined) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <MarketChart
+        marketKey="TWSE"
+        mode="day"
+        name="加權指數"
+        series={null}
+        toggles={toggles()}
+        onToggle={() => undefined}
+        height={height}
       />
     </QueryClientProvider>,
   );
@@ -305,5 +350,34 @@ describe("MarketChart 均價線(SC-1)", () => {
     unmount();
     const off = renderChart({ t: toggles({ vwap: false, cdp: false, ma: false }) });
     expect(off.container.querySelectorAll("polyline.stroke-ink")).toHaveLength(0);
+  });
+});
+
+// `height` 的單位是 **viewBox 單位**,不是 px —— caller(MarketPane)已經扣掉 figure /
+// toggle 列的 chrome 並用 `viewBox 寬 / 容器寬` 反解過(§4.1 CS-1 釘死的口徑)。本檔
+// 只驗「拿到什麼就照畫」,px→viewBox 那段的算術由 MarketPane.size.test.tsx 鎖。
+describe("MarketChart height prop(SC-4)", () => {
+  function intradaySvg(container: HTMLElement): Element {
+    return container.querySelector('svg[role="img"]')!;
+  }
+
+  it("intraday:傳 height → svg viewBox 用該高;未傳 → 220", () => {
+    const withH = renderChart({ t: toggles({ cdp: false, ma: false }), height: 300 });
+    expect(intradaySvg(withH.container).getAttribute("viewBox")).toBe("0 0 640 300");
+    cleanup();
+    const noH = renderChart({ t: toggles({ cdp: false, ma: false }) });
+    expect(intradaySvg(noH.container).getAttribute("viewBox")).toBe("0 0 640 220");
+  });
+
+  it("candle:height 透傳 CandleChart(未傳 → CandleChart 自有 578)", async () => {
+    stub(DK_BODY);
+    const withH = renderCandle(300);
+    const figure = await screen.findByTestId("candle-figure");
+    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 300");
+    withH.unmount();
+    cleanup();
+    renderCandle(undefined);
+    const plain = await screen.findByTestId("candle-figure");
+    expect(plain.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 578");
   });
 });
