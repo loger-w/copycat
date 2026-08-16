@@ -12,11 +12,17 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from copycat.live.stock_models import StockBook, StockMeta, StockTick, relabel_locked_side
+from copycat.market import snap_down_milli
 
 logger = logging.getLogger(__name__)
 
 _TICKS_MAXLEN = 20_000  # 熱門股單日 6.2k 實測、漲停攻防股更高(design r1-F8)
 _BACKFILL_SEQ_MARGIN = 1_000  # seq 跳增下限,確保前端必偵測到跳號
+#: VP 的分鐘窗 = 前端分時圖幾何的 x 窗(`stock-intraday-svg.ts` 的 X_START_MIN /
+#: X_END_MIN,含端點)。窗外的盤前試撮與 13:31 收盤撮合不進 VP —— 否則卡片 VP 的
+#: 總張與說明列的外/內/未分類三數對不起來,而兩個數字都「看起來對」。
+_VP_START_MIN = 9 * 60  # 09:00
+_VP_END_MIN = 13 * 60 + 30  # 13:30
 
 
 @dataclass
@@ -51,6 +57,12 @@ class StockDayState:
     _last_cum: int = -1
     _amount_milli: int = 0  # Σ(價毫元 × 量),VWAP 分子
     _volume: int = 0
+    #: 價位別成交量直方圖(VP):key = `snap_down_milli` 後的檔位,value = [總張, 外, 內]。
+    #: **逐 tick 增量維護,不在請求時掃 `ticks`**(change-spec AD-1 amendment R6):
+    #: 群組 batch 對最多 50 檔各要一次,請求時全掃最壞是 50 × 20k 的同步迴圈跑在事件
+    #: 迴圈上 → WS fanout 被卡住,而畫面上只表現為「圖偶爾頓一下」。
+    #: 附帶好處是不受 `ticks` deque 的 20k 截斷影響(前端折的是不截斷的全量)。
+    _vp: dict[int, list[int]] = field(default_factory=dict)
 
     @property
     def last(self) -> StockTick | None:
@@ -67,6 +79,9 @@ class StockDayState:
         self._last_cum = -1
         self._amount_milli = 0
         self._volume = 0
+        # VP 與 vwap / 高低同批清:`apply_backfill` 走 reset + 重放,漏了這行回補量會
+        # 疊在 live 期間的量上變兩倍,而畫面上只是 VP 條變長,沒有任何錯誤訊號
+        self._vp = {}
         # book/meta 保留 — 盤外顯示昨收靜態值依賴 meta(design §2.4 rollover 階段一不清)
 
     def ingest(self, tick: StockTick) -> bool:
@@ -158,6 +173,29 @@ class StockDayState:
             agg.inner += tick.qty
         else:
             agg.unch += tick.qty
+        self._fold_vp(tick, minute_key)
+
+    def _fold_vp(self, tick: StockTick, minute_key: int) -> None:
+        """把一筆成交折進 VP。**規則逐條對齊前端 `stock-accum.ts::foldVp`**
+        (parity 由 `tests/fixtures/vp_parity.json` 兩側各自斷言鎖住):
+
+        - `price_milli <= 0` 剔除:鎖漲跌停時 TC4 在簿的第一檔推市價佇列,價格欄是 `0`。
+          `snap_down_milli(0)` 是合法運算,不剔就憑空長出一個 0 元檔位。
+        - 分鐘窗 `[09:00, 13:30]`(含端點)= 前端幾何的 x 窗,窗外不計。
+        - key 走 `snap_down_milli`(單一定義,不在這裡再寫一次 tick 表)。
+        - cell `[總張, 外盤張, 內盤張]`:`neutral`(開盤集合競價無 Bid/Ask 可比)
+          只進總張 —— 與 `MinuteAgg.unch` 同語意,故總張 ≠ 外 + 內。
+        """
+        if tick.price_milli <= 0:
+            return
+        if not (_VP_START_MIN <= minute_key <= _VP_END_MIN):
+            return
+        cell = self._vp.setdefault(snap_down_milli(tick.price_milli), [0, 0, 0])
+        cell[0] += tick.qty
+        if tick.side == "outer":
+            cell[1] += tick.qty
+        elif tick.side == "inner":
+            cell[2] += tick.qty
 
     def _minutes_payload(self) -> dict[str, dict]:
         """分鐘序列的 wire 形。**鍵名的單一定義** —— 全量 snapshot 與群組 batch 共用。
@@ -200,9 +238,24 @@ class StockDayState:
         """群組 batch 專用的輕量 payload(code review A1)。
 
         `group_snapshot` 對最多 50 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
-        當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到 minutes / meta。
+        當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到這幾鍵。
+
+        `vwap` / `high` / `low` / `vp` 是「卡片圖與單檔頁完全同款」的必要輸入
+        (change-spec AD-1):`ticks` 仍然不送(頻寬),而由 minutes 在前端近似出一份
+        VWAP / VP,畫面上會與單檔頁的同一檔對不上,且兩個數字都「看起來對」。
+        `vp` 是 tick 的**聚合**(O(當日成交過的檔位數)),與 tick 筆數脫鉤。
         """
-        return {"minutes": self._minutes_payload(), "meta": self._meta_payload()}
+        return {
+            "minutes": self._minutes_payload(),
+            "meta": self._meta_payload(),
+            # 與 `snapshot()` 同口徑(同一份欄位,不另算):兩邊岔開的樣態是卡片的
+            # VWAP 線與單檔頁差一截,而兩條線都畫得出來
+            "vwap": self.vwap_milli,
+            "high": self.high_milli,
+            "low": self.low_milli,
+            # JSON 物件的鍵只能是字串;前端 `useGroupSnapshots` 轉回 number key 的 Map
+            "vp": {str(price): list(cell) for price, cell in sorted(self._vp.items())},
+        }
 
     def snapshot(self) -> dict:
         """REST 全量(design §4:snapshot 為前端累算基底)。"""
