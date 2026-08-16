@@ -18,7 +18,7 @@
 | 個3 + 綜5 | 非交易日顯示最近交易日分時圖/資料**〔2026-08-16 已出貨:mod/trading-calendar PR #56;交易日盤前冷啟動仍空圖 → 待拍板 R3b〕** | 🔴 行為(/mod) | R3 | L | 同一根因:**全庫無交易日曆**,`trade_date=date.today()`;`TXO_BACKFILL_DATE` 是手動 env |
 | 個4 | 群組圖牆分時圖 = 單檔分時圖同款設定**〔2026-08-17 已出貨:mod/group-grid-full-chart PR #57;1080p 4×4 刻度互疊記 next-time〕** | 🔴 UI(/mod) | R4 | M | `MiniIntradayChart` 是精簡獨立實作,不讀 `useChartToggles` |
 | 個5 | 群組頁點卡片只切閃電目標,不跳單檔**〔2026-08-17 已出貨:同上〕** | 🔴 行為(/mod) | R4 | S | `StockPage.tsx:213-223` `selectView("single")` 一行 + 選中態視覺 |
-| 個1 | 鎖定全程武裝 | 🟢 新功能 + 🔴(/mod) | R5 | M | 三座梯各自 `useReducer(reduceArm)`,無共用層;安全敏感 |
+| 個1 | 鎖定全程武裝**〔2026-08-17 已出貨:mod/flash-arm-lock PR #58;鎖定態換標的 qty 回 1(review S2 auto-default)、禁送窗 / 全域徽章 / dialog Esc 記 next-time〕** | 🟢 新功能 + 🔴(/mod) | R5 | M | 三座梯各自 `useReducer(reduceArm)`,無共用層;安全敏感 |
 | 個2 | 現股/融資/融券/無券 改 4 顆按鈕 | 🔴 UI(/mod) | R6 | S | `PriceLadder.tsx:378-393` select;pill 樣板現成 |
 | 個6 | 自選群組右側平均漲幅(未分組不做) | 🟢 新功能(/mod) | R6 | S | 全清單已訂閱,`quotes[code].chg_pct` 現成,純前端算 |
 
