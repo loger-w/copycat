@@ -131,16 +131,35 @@ def load_trading_calendar(path: Path = DEFAULT_PATH) -> TradingCalendar:
                 f"交易日曆設定檔 {path} 形狀錯:years.{year_key} 應為物件,"
                 f"實得 {type(entry).__name__}"
             )
-        holidays |= _parse_days(
+        year_holidays = _parse_days(
             entry.get("holidays", []), path=path, year_key=year_key, field="holidays"
         )
-        extra |= _parse_days(
+        year_extra = _parse_days(
             entry.get("extra_trading_days", []),
             path=path,
             year_key=year_key,
             field="extra_trading_days",
         )
+        # 年份錯置(貼錯格 / 抄錯年)必須炸:那些日期照樣生效,但 `years_loaded` 只記
+        # 鍵的年 → 缺年 WARNING 與「其實已載到」互相打架,兩個訊號都失去意義。
+        misplaced = sorted(d for d in year_holidays | year_extra if d.year != int(year_key))
+        if misplaced:
+            raise ValueError(
+                f"交易日曆設定檔 {path} 年份錯置:years.{year_key} 底下有非 {year_key} 年的日期 "
+                + ", ".join(d.isoformat() for d in misplaced)
+            )
+        holidays |= year_holidays
+        extra |= year_extra
         years_loaded.add(int(year_key))
+
+    # 同一天兩邊都列 = 資料矛盾。`is_trading_day` 讓補班日優先,靜默挑一邊等於把休市日
+    # 判成交易日 —— 畫面照常、只是那天沒資料,零錯誤訊號。
+    clash = sorted(holidays & extra)
+    if clash:
+        raise ValueError(
+            f"交易日曆設定檔 {path} 資料矛盾:同時列為 holidays 與 extra_trading_days 的日期 "
+            + ", ".join(d.isoformat() for d in clash)
+        )
 
     return TradingCalendar(
         holidays=frozenset(holidays),
