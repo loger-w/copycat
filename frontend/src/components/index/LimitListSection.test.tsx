@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LimitListSection } from "@/components/index/LimitListSection";
 import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
+import { isoLocalDate } from "@/lib/trading-calendar";
 import type { BreadthRow, BreadthRowsState } from "@/types";
 
 function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
@@ -31,10 +32,13 @@ function mkRow(stock_id: string, over: Partial<BreadthRow> = {}): BreadthRow {
   };
 }
 
+/** fixture 的語意是「**今日**資料」—— 自 mod/trading-calendar SC-10 起 `trade_date` 是
+ *  畫面上的判別子(≠ 本機今日就多一顆日期膠囊、空態文案也帶日期),寫死的日期會讓
+ *  這份 fixture 隨時間漂成「非今日」。要測非今日一律在 `over` 明寫日期。 */
 function mkState(rows: BreadthRow[], over: Partial<BreadthRowsState> = {}): BreadthRowsState {
   return {
     enabled: true,
-    trade_date: "2026-08-06",
+    trade_date: isoLocalDate(new Date()),
     as_of: "10:31:00",
     stale: false,
     streaks_ready: true,
@@ -242,6 +246,34 @@ describe("LimitListSection 空狀態(判別子 = as_of)", () => {
     fireEvent.change(screen.getByLabelText("金額(億)"), { target: { value: "999" } });
     expect(screen.queryByTestId("limit-list-table")).toBeNull();
     expect(screen.getByTestId("limit-list-msg").textContent).toBe("無符合條件");
+  });
+});
+
+// SC-10(R3/R12):非交易日開站時 rows 是**上一交易日收盤**的快照,而畫面上原本沒有
+// 任何線索 —— 使用者看到的是一張「今天的漲跌停」。日期膠囊與空態文案把資料日說出來。
+describe("LimitListSection 非今日資料的日期膠囊(SC-10)", () => {
+  it("trade_date ≠ 本機今日 → MM-DD 收盤 膠囊(testid 獨立於 stale)", async () => {
+    await openWith(mkState(ROWS, { trade_date: "2026-08-06" }));
+    expect(screen.getByTestId("limit-list-asof-date").textContent).toBe("08-06 收盤");
+    // R2-8:不得沿用 stale 的 testid / 語意 —— 「上一交易日的完整收盤資料」與
+    // 「今天的資料延遲了」是兩件事,共用一顆膠囊會把前者說成後者(琥珀色警示)。
+    expect(screen.queryByTestId("limit-list-stale")).toBeNull();
+  });
+
+  it("trade_date = 本機今日 → 無膠囊", async () => {
+    await openWith(mkState(ROWS));
+    expect(screen.queryByTestId("limit-list-asof-date")).toBeNull();
+  });
+
+  it("非今日且狀態池為 0 → 空態文案帶日期(不說成「今日」)", async () => {
+    await openWith(mkState([mkRow("9999"), mkRow("8888")], { trade_date: "2026-08-06" }));
+    expect(screen.getByTestId("limit-list-msg").textContent).toBe("08-06 尚無漲跌停");
+    expect(screen.getByTestId("limit-list-asof-date").textContent).toBe("08-06 收盤");
+  });
+
+  it("trade_date 為 null(冷啟動未定)→ 不當成非今日,無膠囊", async () => {
+    await openWith(mkState(ROWS, { trade_date: null }));
+    expect(screen.queryByTestId("limit-list-asof-date")).toBeNull();
   });
 });
 
