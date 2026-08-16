@@ -14,18 +14,22 @@ Protocol,fake 複製一份就會在下次 Protocol 加方法時漂移成兩份�
 
 from __future__ import annotations
 
-import functools
+import datetime as _dt
 import json
 import threading
 import time
 from datetime import date as _date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
+import copycat.notify as notify_mod
+from copycat.live import signal_state
+from copycat.live.stock_models import StockBook, StockMeta, StockTick
+from copycat.live.stock_state import StockDayState
 from copycat.server import app as app_mod
 from copycat.server import signal_hub as hub_mod
 from copycat.server.app import create_app
@@ -105,39 +109,94 @@ def _rules(client: BootedClient) -> list[Rule]:
     return r.json()["rules"]
 
 
-def _market_event(code: str = "1101", *, at: str = "10:01:00") -> dict:
-    """breadth `_diff_limit_events` 產出的事件形狀(`publish_market_events` 的入參)。"""
-    return {
-        "code": code,
-        "kind": "market_limit_lock",
-        "direction": "up",
-        "time": at,
-        "name": "台泥",
-        "price": 30_000,
-        "touch_count": 1,
-    }
-
-
-def _market_event_id(trade_date: str, event: dict) -> str:
-    """`publish_market_events` 的決定性 id(規則段固定 `breadth`)。"""
-    return (
-        f"{trade_date}-breadth-{event['code']}-{event['kind']}-{event['direction']}-{event['time']}"
+#: `test_signal_hub.py` 同名 helper 的**自帶副本**(tests/ 無 `__init__.py`,跨檔
+#: import 那兩個私有 helper 會讓 pyright 紅)。值刻意與該檔 `_Harness.lock_up` 逐字
+#: 對齊:鎖漲停的複合簽名 = 成交價 == `ctx.upper_milli` **且** ask 側無限價檔。
+def _tick(
+    price: int,
+    *,
+    code: str = "2330",
+    cum: int = 1,
+    trade_date: str,
+) -> StockTick:
+    return StockTick(
+        code=code,
+        price_milli=price,
+        qty=1,
+        cum_vol=cum,
+        time="10:00:00.123",
+        trade_date=trade_date,
+        side="neutral",
+        is_trial=False,
     )
 
 
-def _publish_market(
-    client: BootedClient, hub: SignalHub, events: list[dict], trade_date: str
+def _state(*, upper: int = 110_000, locked_up: bool = True) -> StockDayState:
+    st = StockDayState()
+    st.update_meta(
+        StockMeta(
+            name="台積電",
+            ref_milli=100_000,
+            upper_milli=upper,
+            lower_milli=50_000,
+            y_close_milli=None,
+            y_volume=None,
+            open_time="09:00:00",
+            close_time="13:30:00",
+        )
+    )
+    if locked_up:
+        # 真鎖漲停簽名:ask 側無限價檔 + bids[0] 是市價佇列的 0(CLAUDE.md §8)
+        st.update_book(StockBook(bids=[(0, 800)], asks=[]))
+    else:
+        st.update_book(StockBook(bids=[(99_000, 5)], asks=[(101_000, 5)]))
+    return st
+
+
+def _emit_rule_signal(
+    client: BootedClient,
+    hub: SignalHub,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    trade_date: str,
 ) -> None:
-    """hub 的呼叫**必須回到 event loop**:`WsBroadcaster.publish` 契約是「只能在 loop 上
+    """把一則**規則訊號**(`limit_lock`)灌進 hub —— XR-3 三條測試的共用載具。
+
+    hub 的呼叫**必須回到 event loop**:`WsBroadcaster.publish` 契約是「只能在 loop 上
     呼叫」,jsonl 也是走 asyncio.Queue 交給 worker。測試執行緒直呼會把訊息放進另一條
     執行緒看不到的佇列(而斷言只會逾時,看不出是接線錯還是時序問題)。
 
-    `portal.call` 只吃位置參數(anyio `call(func, *args)`)而 `trade_date` 是
-    keyword-only → 走 `functools.partial`;不得因 TypeError 改用跨執行緒直呼繞過。
+    三個前置缺一不可:
+
+    1. **`code` 必須在 `hub._watch`** —— `on_tick` 首行就 gate 掉非自選(呼叫端負責
+       種 watchlist 並先斷言)。
+    2. **盤別閘**:`SignalDetector._in_session` 是 09:00–13:30(end-exclusive),而
+       `create_app` 沒有 `now_fn` 注入點 → 只能 monkeypatch `signal_state` 的模組層
+       常數。用 `time.min`/`time.max` 而不是 `23:59`:後者會在最後一分鐘偶發紅。
+    3. **Discord 出口中和**:規則訊號依 `rule["notify_discord"]`(預設 True)入 Discord
+       佇列,而 webhook 走 `notify` 的 `.env` fallback —— conftest 沒罩那條路(本機
+       `.env` 目前無 `DISCORD_WEBHOOK_URL`,但不得依賴)。
+
+    兩筆 tick:首筆只初始化 detector 的 `_prev`,第二筆成交在漲停價才產生事件。
     """
+    monkeypatch.setattr(signal_state, "_SESSION_START", _dt.time.min)
+    monkeypatch.setattr(signal_state, "_SESSION_END", _dt.time.max)
+    monkeypatch.setattr(notify_mod, "_URL_RESOLVED", True)
+    monkeypatch.setattr(notify_mod, "_WEBHOOK_URL", None)
+
     portal = client.portal
     assert portal is not None, "portal 只在 TestClient context 內存在(lifespan 未進場?)"
-    portal.call(functools.partial(hub.publish_market_events, events, trade_date=trade_date))
+    state = _state(upper=110_000, locked_up=True)
+    portal.call(hub.on_tick, "2330", _tick(109_000, trade_date=trade_date), state)
+    portal.call(hub.on_tick, "2330", _tick(110_000, cum=2, trade_date=trade_date), state)
+
+
+def _seed_watchlist(tmp_path: Path) -> None:
+    """`on_tick` 載具的前置:2330 必須在自選裡,否則 hub 首行就早退。"""
+    (tmp_path / "watchlist.json").write_text(
+        json.dumps({"_cache_version": 3, "codes": ["2330"], "groups": []}),
+        encoding="utf-8",
+    )
 
 
 def _pump_receive(ws: Any, timeout: float) -> tuple[list[dict], list[BaseException]]:
@@ -196,18 +255,24 @@ def _recv_until(ws: Any, kind: str, timeout: float = 5.0) -> dict:
         seen.append(str(msg.get("type")))
 
 
-def _wait_signal(client: BootedClient, signal_id: str, timeout: float = 5.0) -> dict:
-    """輪詢 today 直到該 id 出現(jsonl 落檔由 worker 非同步完成,不可一次性立即斷言)。"""
+def _wait_signal(
+    client: BootedClient, match: Callable[[dict], bool], timeout: float = 5.0
+) -> dict:
+    """輪詢 today 直到符合 `match` 的列出現(jsonl 落檔由 worker 非同步完成)。
+
+    predicate 而非 id:規則訊號的 id 含 `rule_id`(執行期生成),釘 id 等於把測試綁在
+    規則檔的產生順序上 —— 那與這幾條要守的行為(訊號到得了 today / WS)無關。
+    """
     deadline = time.monotonic() + timeout
     while True:
         r = client.get("/api/stock/signals/today")
         assert r.status_code == 200
         rows = r.json()["signals"]
         for row in rows:
-            if row.get("id") == signal_id:
+            if match(row):
                 return row
         if time.monotonic() > deadline:
-            raise AssertionError(f"{signal_id} 未在 {timeout}s 內出現在 today:{rows}")
+            raise AssertionError(f"符合條件的訊號未在 {timeout}s 內出現在 today:{rows}")
         time.sleep(0.01)
 
 
@@ -242,8 +307,8 @@ class TestLifespanWiring:
     def test_no_stock_still_builds_hub(self, tmp_path: Path) -> None:
         """SC-1(🔴 XR-3):TC4 不在 → hub 照建照啟,落點仍是 `wl_path.parent`。
 
-        舊行為是「stock 缺席 → hub None」,而 hub 是廣度事件鏈的唯一出口 ——
-        達錢 4 沒開的早上,全市場鎖板事件整天不產生而畫面與「今天沒有漲停」同形。
+        舊行為是「stock 缺席 → hub None」,而 hub 是規則 CRUD 與 today 端點的唯一
+        出口 —— 達錢 4 沒開的早上這兩條路一起 503,而它們都是純檔案操作。
         `watchlist_service` 仍 None(它真的依賴 engine 的訂閱池,不在解耦範圍)。
         """
         app, _ = make_app(tmp_path, with_stock=False)
@@ -357,92 +422,6 @@ class TestSignalsTodayRoute:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
-
-
-class TestSignalsTodayMarketParam:
-    """`?market=exclude` 後端過濾(R4 design §7 / R2-7)。
-
-    SignalRail 那個消費端只要自選訊號,而全市場鎖板事件在漲停潮日可以是數百則 ——
-    整包下載後 client 丟棄會讓 cap 200 在過濾**之前**發生,自選訊號被擠光。
-    """
-
-    def _seed(self, app: FastAPI, tmp_path: Path) -> tuple[dict, dict]:
-        trade_date = app.state.stock.trade_date
-        own = _signal_row(trade_date)
-        market = {
-            **_signal_row(trade_date),
-            "id": f"{trade_date}-breadth-1101-market_limit_lock-up-10:01:00",
-            "kind": "market_limit_lock",
-            "code": "1101",
-            "name": "台泥",
-            "direction": "up",
-            "levels": [],
-        }
-        path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in (own, market)),
-            encoding="utf-8",
-        )
-        return own, market
-
-    def test_default_includes_market_rows(self, tmp_path: Path) -> None:
-        """預設(不帶參數)= include —— 既有呼叫端零改動,行為逐字不變。"""
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            own, market = self._seed(app, tmp_path)
-            body = client.get("/api/stock/signals/today").json()
-        assert body == {"signals": [own, market]}
-
-    def test_explicit_include_matches_default(self, tmp_path: Path) -> None:
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            own, market = self._seed(app, tmp_path)
-            body = client.get("/api/stock/signals/today", params={"market": "include"}).json()
-        assert body == {"signals": [own, market]}
-
-    def test_exclude_drops_market_kinds(self, tmp_path: Path) -> None:
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            own, _market = self._seed(app, tmp_path)
-            body = client.get("/api/stock/signals/today", params={"market": "exclude"}).json()
-        assert body == {"signals": [own]}
-
-    def test_unknown_value_falls_back_to_include(self, tmp_path: Path) -> None:
-        """未知值 = include(T-5):這個參數是效能取捨,不是安全閘。
-
-        擋成 400 的話,舊 client(或打錯字的手測)只會白掉一整條自癒 baseline ——
-        而 baseline 空掉的表現是「重連後訊號欄突然少了一段」,沒有錯誤訊號。
-        """
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            own, market = self._seed(app, tmp_path)
-            r = client.get("/api/stock/signals/today", params={"market": "whatever"})
-        assert r.status_code == 200
-        assert r.json() == {"signals": [own, market]}
-
-    def test_bad_kind_rows_survive_exclude(self, tmp_path: Path) -> None:
-        """`kind` 不是字串 / 整個缺鍵的列:過濾要**留著**它們且不得 500(T-5)。
-
-        jsonl 是檔案,`kind` 的型別無人保證(壞行只擋到 JSON 層)。`str.startswith`
-        對 int 會 AttributeError → 整條端點 502,而肇因只是一列髒資料;而「留著」是
-        因為它已經不是可辨識的廣度事件 —— 這條路徑的預設是 include。
-        """
-        app, _ = make_app(tmp_path)
-        with BootedClient(app, raise_server_exceptions=False) as client:
-            trade_date = app.state.stock.trade_date
-            numeric = {**_signal_row(trade_date), "id": "bad-1", "kind": 123}
-            missing = {k: v for k, v in _signal_row(trade_date).items() if k != "kind"}
-            missing["id"] = "bad-2"
-            path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in (numeric, missing)),
-                encoding="utf-8",
-            )
-            r = client.get("/api/stock/signals/today", params={"market": "exclude"})
-        assert r.status_code == 200
-        assert [row["id"] for row in r.json()["signals"]] == ["bad-1", "bad-2"]
 
 
 class TestLegacyEnabledRouteGone:
@@ -672,8 +651,8 @@ class TestSignalRoutesWithoutStock:
     503 從此只剩一種語意:hub 自身降級(壞規則檔 / start 炸)—— 那兩條由
     `test_bad_rules_file_degrades` / `test_hub_start_failure_isolates_signals_only` 守。
 
-    這一組守的是:規則 CRUD 是純檔案操作、廣度事件鏈是純 FinMind,兩者與達錢 4
-    一點關係都沒有,卻曾因為 hub 綁 stock engine 而一起消失。
+    這一組守的是:規則 CRUD 是純檔案操作、today / `/ws/stock` 的匯流排住在 app 層,
+    三者與達錢 4 一點關係都沒有,卻曾因為 hub 綁 stock engine 而一起消失。
     """
 
     def test_rule_crud_available_without_stock(self, tmp_path: Path) -> None:
@@ -699,32 +678,33 @@ class TestSignalRoutesWithoutStock:
             assert today.status_code == 200
             assert today.json() == {"signals": []}
 
-    def test_market_events_reach_today_on_wall_clock_date(
+    def test_rule_signal_reaches_today_on_wall_clock_date(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """SC-2:廣度事件鏈(REST)照活,`trade_date` 走牆鐘 fallback。
+        """SC-2:訊號鏈(REST)照活,`trade_date` 走牆鐘 fallback。
 
         `TXO_BACKFILL_DATE` 顯式清掉:它是 fallback 的優先來源(edge §7.1),
         開發機 shell 留著它會讓這條斷言隨環境飄。
         """
         monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        _seed_watchlist(tmp_path)
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
             assert client.get("/api/stock/signals/today").json() == {"signals": []}
             hub = app.state.signal_hub
             assert hub is not None
+            assert hub._watch == {"2330"}, "membership 種子不得因為 engine 缺席而漏掉"
             today = f"{_date.today():%Y-%m-%d}"
             assert hub._trade_date_fn() == today, "無 engine 時日別來源 = 牆鐘"
 
-            event = _market_event()
-            _publish_market(client, hub, [event], today)
-            row = _wait_signal(client, _market_event_id(today, event))
+            _emit_rule_signal(client, hub, monkeypatch, trade_date=today)
+            row = _wait_signal(
+                client, lambda r: r.get("kind") == "limit_lock" and r.get("code") == "2330"
+            )
 
-        assert row["kind"] == "market_limit_lock"
-        assert row["code"] == "1101"
         assert row["trade_date"] == today
 
-    def test_ws_stock_stays_open_and_carries_market_events(
+    def test_ws_stock_stays_open_and_carries_rule_signals(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """SC-4:`/ws/stock` 不再立即 close;首則是 tc4=down 的 status seed(review P1-2)。
@@ -734,10 +714,12 @@ class TestSignalRoutesWithoutStock:
         會讓 TC4-off 完全無提示(比舊的立即 close 更糟)。
         """
         monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        _seed_watchlist(tmp_path)
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
             hub = app.state.signal_hub
             assert hub is not None
+            assert hub._watch == {"2330"}
             today = f"{_date.today():%Y-%m-%d}"
             with client.websocket_connect("/ws/stock") as ws:
                 assert _recv_json(ws) == {
@@ -746,13 +728,11 @@ class TestSignalRoutesWithoutStock:
                     "backfilling": None,
                 }
 
-                event = _market_event()
-                _publish_market(client, hub, [event], today)
-                msg = _recv_json(ws)
+                _emit_rule_signal(client, hub, monkeypatch, trade_date=today)
+                msg = _recv_until(ws, "signal")
 
-        assert msg["type"] == "signal"
-        assert msg["kind"] == "market_limit_lock"
-        assert msg["id"] == _market_event_id(today, event)
+        assert msg["kind"] == "limit_lock"
+        assert msg["code"] == "2330"
 
     def test_basis_falls_back_to_empty_daily_bars(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -837,24 +817,21 @@ class TestWsStockSharedBroadcaster:
         分支的首則是 status),所以之後收到訊號只可能出自「兩者同一顆」。
         """
         monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
-        (tmp_path / "watchlist.json").write_text(
-            json.dumps({"_cache_version": 3, "codes": ["2330"], "groups": []}),
-            encoding="utf-8",
-        )
+        _seed_watchlist(tmp_path)
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
             hub = app.state.signal_hub
             assert hub is not None
+            assert hub._watch == {"2330"}
             trade_date = app.state.stock.trade_date
             with client.websocket_connect("/ws/stock") as ws:
                 assert _recv_json(ws)["type"] == "watchlist_quote", "engine 在場 → 首則是自選 seed"
 
-                event = _market_event()
-                _publish_market(client, hub, [event], trade_date)
+                _emit_rule_signal(client, hub, monkeypatch, trade_date=trade_date)
                 msg = _recv_until(ws, "signal")
 
-        assert msg["kind"] == "market_limit_lock"
-        assert msg["id"] == _market_event_id(trade_date, event)
+        assert msg["kind"] == "limit_lock"
+        assert msg["code"] == "2330"
 
     def test_engine_ws_is_the_app_level_broadcaster(self, tmp_path: Path) -> None:
         """最小版:上一條紅掉時直接指出壞在哪一根線(注入 vs. hub 那端)。"""
@@ -932,8 +909,8 @@ class TestConftestWatchlistIsolation:
     """T-4:`tests/server/conftest.py` 的落點隔離 fixture 自身要有鎖。
 
     它是 SC-8 唯一的擋牆(hub 恆建之後,沒傳 `stock_watchlist_path` 的 19 個站點全會
-    把 `signal_rules.json` / fake 鎖板事件寫進 repo 真 `data/`),而 fixture 壞掉是
-    **靜默**的:所有測試照樣綠,只有 prod 的對帳 seed 被汙染。
+    把 `signal_rules.json` / fake 訊號寫進 repo 真 `data/`),而 fixture 壞掉是
+    **靜默**的:所有測試照樣綠,只有 prod 的 today 端點多出從未發生過的訊號列。
     """
 
     def test_hub_data_dir_isolated_without_explicit_path(self, tmp_path: Path) -> None:

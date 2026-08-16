@@ -27,7 +27,6 @@ from copycat.server.audit import AuditWriteError
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.breadth_engine import (
     BreadthEngine,
-    ChainFetch,
     DailyPricesFetch,
     DispositionFetch,
     SnapshotFetch,
@@ -106,17 +105,6 @@ def _with_unit(leg: dict | None) -> dict | None:
     return {**leg, "unit": None if found is None else found.get("unit")}
 
 
-#: 全市場廣度事件的 kind 前綴(`breadth_engine` 的 `market_limit_lock` / `market_limit_open`
-#: 同族)。前綴而非窮舉清單:新增廣度 kind 時 `?market=exclude` 的過濾自然涵蓋 ——
-#: 漏改清單的失效樣態是「自選訊號欄突然混進全市場的列」,而那不會有任何錯誤訊號。
-_MARKET_KIND_PREFIX = "market_"
-
-
-def _is_market_kind(kind: object) -> bool:
-    """jsonl row 來自檔案 —— `kind` 型別無人保證(壞行只擋到 JSON 層),先驗型別再比前綴。"""
-    return isinstance(kind, str) and kind.startswith(_MARKET_KIND_PREFIX)
-
-
 def _market_payload(
     key: str,
     tf: str,
@@ -162,17 +150,14 @@ DEFAULT_FUTURES: Final = object()  # 同語意(capital-order SC-8)
 DEFAULT_CORR: Final = object()  # 同語意(realtime-correlation SC-6)
 DEFAULT_BREADTH: Final = object()  # 同語意(market-overview R2 SC-3;→ 真 FinMind 取數層)
 
-#: breadth 引擎的注入點五元組(snapshot / stock_info / disposition / daily_prices /
-#: industry_chain)。
-#: 第四槽 `None` = 連板數停用(rows 端點照常、`streak` 恆 null);第五槽 `None` = 類股
-#: 輪動停用(`/api/market/sector` 照常、`rotation` 恆 null)—— 停用是契約的一部分,
-#: 不用 cast 掩蓋(R3 design R20;R4 沿用)。長度固定 5。
+#: breadth 引擎的注入點四元組(snapshot / stock_info / disposition / daily_prices)。
+#: 第四槽 `None` = 連板數停用(rows 端點照常、`streak` 恆 null)—— 停用是契約的一部分,
+#: 不用 cast 掩蓋(R3 design R20)。長度固定 4。
 BreadthFetchers = tuple[
     SnapshotFetch,
     StockInfoFetch,
     DispositionFetch,
     DailyPricesFetch | None,
-    ChainFetch | None,
 ]
 
 
@@ -344,8 +329,8 @@ def _wall_clock_trade_date() -> str:
     """無 stock engine 時的日別來源(XR-3)。
 
     **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
-    `_distribute` 日別尺、`today_signals` 讀取集與廣度事件的日別不符 warning 全都
-    以它為準 —— 壞掉的樣態是「今天的事件寫進昨天的檔」,完全靜默。
+    `_distribute` 日別尺、jsonl 檔名與 `today_signals` 讀取集全都以它為準 ——
+    壞掉的樣態是「今天的訊號寫進昨天的檔」,完全靜默。
     `TXO_BACKFILL_DATE` 優先,與 engine 在場時的日別語意一致(休市日回補模式)。
     """
     return os.environ.get("TXO_BACKFILL_DATE") or f"{_date.today():%Y-%m-%d}"
@@ -374,7 +359,7 @@ def create_app(
     bars_cache = BarsCache()  # 同上;K 線兩段式 cache(server/bars.py)
     capital_ws = WsBroadcaster()  # capital/futures WS fanout(lifespan 綁 publish)
     # 個股 WS 匯流排住 app 層而非 engine 內(XR-3):`/ws/stock` 同時載自選 quote
-    # (engine 產)與訊號 / 廣度事件(hub 產),而後者與達錢 4 在否無關 —— 綁在 engine
+    # (engine 產)與訊號(hub 產),而 hub 恆建、與達錢 4 在否無關 —— 綁在 engine
     # 身上時 TC4 沒開就整條通道死掉。上限沿用 engine 的 `_CLIENT_QUEUE_MAX`(私名共用:
     # 兩份上限值必然漂移,而 ws.py 的公開 `CLIENT_QUEUE_MAX` 是另一個值)。
     stock_ws = WsBroadcaster(maxsize=_CLIENT_QUEUE_MAX)
@@ -511,9 +496,10 @@ def create_app(
             bot: Bot | None = None
 
             def _make_signals() -> SignalHub | None:
-                """**不看 stock 在否**(XR-3):規則 CRUD 是純檔案操作、廣度事件鏈是純
-                FinMind,兩者都不該隨達錢 4 一起消失。engine 缺席時三個注入退到替代
-                供應(bus 已在 app 層、日別走牆鐘、日 K 空清單),hub 本身零改動。
+                """**不看 stock 在否**(XR-3):規則 CRUD 是純檔案操作、today 端點與
+                `/ws/stock` 的匯流排都住在 app 層,三者都不該隨達錢 4 一起消失。
+                engine 缺席時三個注入退到替代供應(bus 已在 app 層、日別走牆鐘、
+                日 K 空清單),hub 本身零改動。
                 """
                 engine = stock
                 cfg = load_signals_config()
@@ -723,14 +709,13 @@ def create_app(
                         breadth_fetch.fetch_stock_info,
                         breadth_fetch.fetch_disposition,
                         breadth_fetch.fetch_daily_prices,
-                        breadth_fetch.fetch_industry_chain,
                     )
                 else:
-                    # 顯式注入的五元組**跳過 token 閘**:fake 取數層根本不看 token,
+                    # 顯式注入的四元組**跳過 token 閘**:fake 取數層根本不看 token,
                     # 而 verify server / 測試環境本來就沒有(有閘就恆停用 → 驗不到)
                     token = "fake-token"
                     injected = cast("tuple[object, ...]", breadth_fetchers)
-                    if len(injected) != 5:
+                    if len(injected) != 4:
                         # 光讓解包自己拋 ValueError 不夠:`_boot` 的傘罩會把它收成
                         # 「breadth 停用」,與「FINMIND_TOKEN 未設」在畫面上同形 ——
                         # repo 外的側車樣板漏改第四槽時,症狀會是家數面板整段悄悄
@@ -738,16 +723,15 @@ def create_app(
                         # (出處 = impl-spec review R8「arity 防呆」;design §3.3a v3
                         # 未載,實作期補強 —— design 的 R8 是另一件事:排序優先序)
                         logger.error(
-                            "breadth 取數元組長度 %d,預期 5(呼叫端未更新)", len(injected)
+                            "breadth 取數元組長度 %d,預期 4(呼叫端未更新)", len(injected)
                         )
-                        raise ValueError("breadth_fetchers 必須是五元組")
+                        raise ValueError("breadth_fetchers 必須是四元組")
                     fetchers = cast("BreadthFetchers", breadth_fetchers)
                 (
                     snapshot_fetch,
                     stock_info_fetch,
                     disposition_fetch,
                     daily_fetch,
-                    chain_fetch,
                 ) = fetchers
                 return BreadthEngine(
                     token=token,
@@ -760,7 +744,6 @@ def create_app(
                     stock_info_fetch=stock_info_fetch,
                     disposition_fetch=disposition_fetch,
                     daily_fetch=daily_fetch,
-                    chain_fetch=chain_fetch,
                     data_dir=breadth_data_dir,  # None → repo root data/market
                 )
 
@@ -773,13 +756,6 @@ def create_app(
             )
             app.state.breadth = breadth
             booted.breadth = breadth
-            # 廣度事件入訊號匯流排(R4 design §8):hub 早在序列前段就緒,所以只有
-            # breadth 這一端決定得了時機。漏掛的失效樣態 = 全市場鎖板事件整天不產生
-            # (`_diff_limit_events` 對 hub None 早退,連狀態機都不推進)—— 畫面上與
-            # 「今天沒有漲停」完全同形。attach 前的輪次不推進狀態,故晚掛只是少幾則,
-            # 不會留下「已發布」的假帳。
-            if breadth is not None and signals is not None:
-                breadth.attach_signal_hub(signals)
 
             # 序列尾段:合約目錄預熱一次(A3)。放在**最後**而不是接線當下 —— 它是
             # 秒級查詢,插在引擎序列中間會把後面每一段都往後推(capital 登入、corr
@@ -812,17 +788,10 @@ def create_app(
                 # COM 執行緒 / hub worker 一次全洩漏(同白名單「各自 try/except 續行」)
                 logger.exception("boot task 以例外結束(關機續行)")
             # 關機反序:breadth → signals → corr → futures → capital → index → stock →
-            # runtime(corr 依賴 futures.state(),必須先收;signals 在 breadth 之後 ——
-            # breadth 是 hub 的**生產者**(attach 後每輪對帳都會 publish 廣度事件),
-            # 先摘先收才不會有事件在 hub 已 close 之後才入列、靜默丟掉。
-            # 注意這條理由與 stock engine 無關了(XR-3):hub 的 WS 匯流排是 app 層
-            # 物件,不隨 engine 收攤而失效)
+            # runtime。順序即依賴:corr 讀 futures.state(),必須排在 futures 之前收;
+            # 其餘各段互不依賴,但一律照建立的反序收,新增引擎時才有一條唯一的規則可循。
             if booted.breadth is not None:
                 try:
-                    # **先摘掛點再 close**:hub 此刻還活著(它排在 breadth 之後才收),
-                    # 所以這裡沒有 use-after-close 窗;反過來寫的話,收攤中的最後一輪
-                    # 會把事件發給正要收攤的 hub,而那條路的失效是靜默丟棄
-                    booted.breadth.detach_signal_hub()
                     await booted.breadth.close()
                 except Exception:
                     logger.exception("breadth close 失敗(關機續行)")
@@ -993,8 +962,8 @@ def create_app(
         """訊號 route 的共同閘(design §7)。**只看 hub**(XR-3):hub 解耦後 503 只剩
         一種語意 —— 訊號層自身降級(壞規則檔 / start 失敗)。
 
-        舊碼在此先過 `_stock()`,達錢 4 沒開時規則 CRUD(純檔案操作)與廣度事件
-        (純 FinMind)一起 503,而兩者都與 TC4 無關。
+        舊碼在此先過 `_stock()`,達錢 4 沒開時規則 CRUD(純檔案操作)與 today 端點
+        一起 503,而兩者都與 TC4 無關。
         """
         hub: SignalHub | None = request.app.state.signal_hub
         if hub is None:
@@ -1080,20 +1049,15 @@ def create_app(
     # ---- stock signals(stock-signals design §7)----
 
     @app.get("/api/stock/signals/today")
-    async def stock_signals_today(request: Request, market: str = "include") -> dict:
+    async def stock_signals_today(request: Request) -> dict:
         """當日訊號歷史(SC-7):讀 hub 的 jsonl,壞行跳過。
 
         前端 reconnect 後拿它當 baseline 自癒 —— WS 斷線期間丟掉的訊號由這裡補回。
 
-        `market=exclude` 濾掉全市場廣度事件(R4 design §7):SignalRail 那個消費端只要
-        自選訊號,而廣度事件在漲停潮日可以是數百則 —— 整包下載後 client 丟棄會讓
-        cap 200 發生在過濾**之前**,自選訊號被擠光。預設 `include` = 既有行為逐字不變;
-        未知值一律當 include(這個參數是效能取捨,不是安全閘,擋下來只會讓舊 client 白掉)。
+        **無查參**:未宣告的查參 FastAPI 一律忽略,舊 bundle 打 `?market=exclude`
+        照樣 200(前後端部署順序無關)。
         """
-        rows = _signals(request).today_signals()
-        if market == "exclude":
-            rows = [r for r in rows if not _is_market_kind(r.get("kind"))]
-        return {"signals": rows}
+        return {"signals": _signals(request).today_signals()}
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
 
@@ -1425,48 +1389,6 @@ def create_app(
             }
         return breadth.rows_state()
 
-    @app.get("/api/market/sector")
-    async def market_sector(request: Request) -> dict:
-        """類股強弱(R4 design §5)—— 三態判式與 `/api/market/breadth` 同款(恆 200)。
-
-        `rotation` 是**第四態**且與前三態正交:引擎在、家數也有數字,但產業鏈快取尚未
-        就緒(或 `chain_fetch` 未接 = 類股停用)時 `rotation: null`。空 `industries`
-        會被前端讀成「今天所有產業都沒成員」,null 才是「還沒有資料」。
-        """
-        breadth = _breadth(request)
-        if breadth is None:
-            loading = not _breadth_booted(request)
-            return {
-                "enabled": loading,
-                "trade_date": None,
-                "as_of": None,
-                "stale": loading,
-                "rotation": None,
-            }
-        return breadth.sector_state()
-
-    @app.get("/api/market/sector/members")
-    async def market_sector_members(request: Request, industry: str, sub: str = "") -> dict:
-        """成員股 drill-down。三種語意刻意分開(design §5 / R10):
-
-        - `industry` **缺席** = 呼叫端寫錯 → FastAPI required query 的 422(不是 404:
-          那會把程式 bug 講成「資料還沒到」)。
-        - `industry` 空字串或查無 → 404 `SECTOR_NOT_FOUND`(chain_map 沒有 `""` 桶 ——
-          缺 `sub_industry` 的列在 `rows_to_chain_map` 就整列丟掉了)。
-        - `sub` 空字串 **當未指定**:前端不鑽取子產業時送空字串是最容易寫出的形狀,
-          當成「子產業名為空」查會回 404,而畫面上與「這個產業沒有成員」同形。
-
-        引擎缺席同樣 404(沒有引擎就沒有任何產業),不用 503:這條路是使用者點出來的
-        鑽取,回「服務未就緒」會讓前端留著舊 UI 等一個永遠不會來的結果。
-        """
-        breadth = _breadth(request)
-        members = (
-            None if breadth is None else breadth.sector_members(industry, sub if sub else None)
-        )
-        if members is None:
-            raise HTTPException(status_code=404, detail={"error": "SECTOR_NOT_FOUND"})
-        return members
-
     @app.websocket("/ws/breadth")
     async def ws_breadth(websocket: WebSocket) -> None:
         breadth = _breadth(websocket)
@@ -1552,8 +1474,8 @@ def create_app(
 
     @app.websocket("/ws/stock")
     async def ws_stock(websocket: WebSocket) -> None:
-        """個股 WS。engine 缺席時**不再立即 close**(XR-3):同一條通道也載訊號與
-        全市場廣度事件,而那條鏈與達錢 4 在否無關。
+        """個股 WS。engine 缺席時**不再立即 close**(XR-3):同一條通道也載 hub 的
+        訊號,而 hub 的匯流排住在 app 層,與達錢 4 在否無關。
 
         兩種 stock 缺席仍照舊 close:
         - boot 未完成 —— 早連的 client 會錯過 engine 起來後的自選 seed,現況

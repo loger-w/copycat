@@ -22,7 +22,6 @@ from copycat.market_breadth import (
     dedup_sector_map,
     filter_universe,
     max_tick_datetime,
-    normalize_universe_rows,
     parse_active_disposition,
 )
 
@@ -236,57 +235,6 @@ def test_assemble_universe_whitelist_then_filter() -> None:
 def test_assemble_universe_empty_sector_map_removes_all() -> None:
     rows = [{"stock_id": "2330"}]
     assert assemble_universe(rows, {}, watch_list=set()) == []
-
-
-# ---------------------------------------------------------------------------
-# normalize_universe_rows(餵進 sector_rotation 前的防髒清洗;review round-3 CR-2)
-# ---------------------------------------------------------------------------
-
-
-def test_normalize_universe_rows_cleans_three_numeric_fields() -> None:
-    """三個會被 `_group_stats` 做算術的欄位過 `_to_number`,其餘原樣直通。"""
-    rows = [
-        {
-            "stock_id": "2330",
-            "change_rate": "-",  # 整日未成交的實務樣態
-            "total_volume": "",
-            "yesterday_volume": "500",
-            "close": "1000.0",  # 非算術欄:清洗不碰
-            "total_amount": 12_345,
-        }
-    ]
-
-    out = normalize_universe_rows(rows)
-
-    assert out == [
-        {
-            "stock_id": "2330",
-            "change_rate": None,
-            "total_volume": None,
-            "yesterday_volume": 500.0,
-            "close": "1000.0",
-            "total_amount": 12_345,
-        }
-    ]
-
-
-def test_normalize_universe_rows_does_not_mutate_input() -> None:
-    """淺複製:呼叫端手上那份(`assemble_universe` 的原始 rows)不得被改。"""
-    rows = [
-        {"stock_id": "2330", "change_rate": "-", "total_volume": 1000, "yesterday_volume": 500}
-    ]
-
-    out = normalize_universe_rows(rows)
-
-    assert rows[0]["change_rate"] == "-"
-    assert out[0] is not rows[0]
-
-
-def test_normalize_universe_rows_keeps_missing_keys_absent() -> None:
-    """缺欄不補 None:`_group_stats` 走 `row.get` 兩者等價,無謂改形狀反而失真。"""
-    out = normalize_universe_rows([{"stock_id": "2330", "change_rate": 1.5}])
-
-    assert out == [{"stock_id": "2330", "change_rate": 1.5}]
 
 
 # ---------------------------------------------------------------------------

@@ -106,11 +106,6 @@ _LEVEL_ROLE = {"ah": "壓力", "nh": "壓力", "nl": "支撐", "al": "支撐"}
 #: 同群摘要最多印幾檔其他成員(group-grid SC-1);超過就只補一句總數
 _GROUP_PEERS = 4
 
-#: 全市場廣度事件的兩個 kind(market-overview R4 SC-6);id 的規則段固定 `breadth`
-_MARKET_LOCK = "market_limit_lock"
-_MARKET_OPEN = "market_limit_open"
-_MARKET_RULE_TAG = "breadth"
-
 
 def _levels_of(row: dict[str, Any]) -> list[str]:
     raw = row.get("levels") or []
@@ -137,10 +132,6 @@ def _kind_text(row: dict[str, Any]) -> str:
         return "鎖漲停" if direction == "up" else "鎖跌停"
     if kind == "limit_open":
         return "漲停打開" if direction == "up" else "跌停打開"
-    if kind == _MARKET_LOCK:
-        return "全市場鎖漲停" if direction == "up" else "全市場鎖跌停"
-    if kind == _MARKET_OPEN:
-        return "全市場漲停打開" if direction == "up" else "全市場跌停打開"
     return kind
 
 
@@ -244,8 +235,6 @@ class SignalHub:
         self._jsonl_task: asyncio.Task[None] | None = None
         self._closing = False
         self._discord_sender: Callable[[str], Any] | None = None
-        #: 已為哪些「傳入 trade_date」記過日別不符的 warning(每日別一次,不是每則一次)
-        self._market_date_warned: set[str] = set()
         self._discord_sent: deque[_dt.datetime] = deque()
         self.dropped_jsonl = 0
         self.dropped_discord = 0
@@ -764,86 +753,6 @@ class SignalHub:
         self._publish(payload)  # WS 同步先送(前端要即時)
         self._enqueue({**payload, "trade_date": trade_date}, notify=rule["notify_discord"])
 
-    # ---- 全市場廣度事件(SC-6)----
-
-    def publish_market_events(self, events: list[dict], *, trade_date: str) -> None:
-        """全市場廣度事件(breadth diff)入匯流排:WS + jsonl,**硬性**不進 Discord。
-
-        `trade_date` 由 breadth 端傳入(R7):純 FinMind 事件不得綁 TC4 engine 的日別 ——
-        engine 的 trade_date 只在當日首 tick 前進,空自選 / 零推播時它會靜默停在昨日,
-        綁上去就是整批事件落錯檔而且沒有任何錯誤訊號。與 `self._trade_date_fn()` 不符
-        時記 warning(**每日別一次**:一輪數百則的廣度事件逐則記會把 log 洗掉,反而更
-        看不見),仍以**傳入值**落檔。
-
-        繞過規則 slots(這條路徑沒有規則,也不該被規則的開關影響);逐則 try/except
-        —— 呼叫端是 breadth `_poll_loop`,往外拋等於整條家數輪停擺。
-
-        **入列(jsonl)先行、WS 後行,兩者各自 try**(review S-4/C-5):jsonl 是歷史
-        真相源**也是重啟後對帳 seed 的唯一來源**。共用一個 try 而 WS 先跑的話,WS
-        拋一次就連 jsonl 一起丟 —— 那則事件從此不存在,重啟後 seed 讀不到它,對帳
-        會把已經發生過的鎖板當成新的再發一次(而畫面上只是多一列,沒有錯誤訊號)。
-        """
-        if self._closing:  # 關機已開始:收了也不會被寫出去
-            return
-        if trade_date != self._trade_date_fn() and trade_date not in self._market_date_warned:
-            self._market_date_warned.add(trade_date)
-            logger.warning(
-                "廣度事件日別(%s)與 engine 日別(%s)不符,以傳入值落檔",
-                trade_date,
-                self._trade_date_fn(),
-            )
-        for event in events:
-            try:
-                payload = {
-                    "type": "signal",
-                    "id": (
-                        f"{trade_date}-{_MARKET_RULE_TAG}-{event['code']}"
-                        f"-{event['kind']}-{event['direction']}-{event['time']}"
-                    ),
-                    "kind": event["kind"],
-                    "code": event["code"],
-                    "name": event["name"],
-                    "price": event["price"],
-                    "time": event["time"],
-                    "levels": [],
-                    "direction": event["direction"],
-                    "pct": None,
-                    "touch_count": event["touch_count"],
-                }
-                self._enqueue({**payload, "trade_date": trade_date}, notify=False)
-            except Exception:
-                # 這裡拋 = 連 payload 都組不出來(髒欄位)→ 這則真的沒有東西可發
-                logger.exception("廣度事件入列失敗(丟棄該則):%s", event)
-                continue
-            try:
-                self._publish(payload)  # WS 後送:斷線 / 佇列爆不得回頭吃掉 jsonl
-            except Exception:
-                logger.exception("廣度事件 WS 發布失敗(jsonl 已留紀錄):%s", event)
-
-    def market_event_state(
-        self, trade_date: str
-    ) -> tuple[dict[tuple[str, str], bool], dict[tuple[str, str, str], int]]:
-        """當日 jsonl 的 market_* rows → engine 對帳制的 seed(design §6.3)。
-
-        回 `((code, direction) → 已發布鎖定狀態, (code, kind, direction) → 事件計數)`,
-        **依檔內順序後者勝** —— 這份就是「事件流已對外宣告的狀態」,重啟後照它回放才
-        不會把已發過的 lock 再發一次。檔缺 / 壞 → 空 seed(視同全 False):最壞是重發
-        一則 lock,而漏發是靜默的,兩者不對稱。
-        """
-        emitted: dict[tuple[str, str], bool] = {}
-        counts: dict[tuple[str, str, str], int] = {}
-        for row in self.read_signals(trade_date):
-            kind = str(row.get("kind", ""))
-            if kind not in (_MARKET_LOCK, _MARKET_OPEN):
-                continue  # 自選股那條路的 limit_lock / limit_open 只差前綴,不得混入
-            code = str(row.get("code", ""))
-            direction = str(row.get("direction", ""))
-            if not code or not direction:
-                continue
-            emitted[(code, direction)] = kind == _MARKET_LOCK
-            counts[(code, kind, direction)] = counts.get((code, kind, direction), 0) + 1
-        return emitted, counts
-
     def _enqueue(self, row: dict, *, notify: bool) -> None:
         """`notify` 只擋 Discord:jsonl 是歷史真相源,關通知不等於不留紀錄。"""
         if self._closing:  # 關機已開始:再收件就永遠不會被寫出去
@@ -916,9 +825,10 @@ class SignalHub:
     def today_signals(self) -> list[dict]:
         """讀取日集合 = {engine 日別, 牆鐘日}(R2-3);通常同一天 = **單檔讀**。
 
-        stock engine 的 trade_date 只在 stage2(當日首 tick)前進,空自選 / 訂閱零推播
-        時它會靜默停在昨日 —— 那不是可見的大故障,但廣度事件(純 FinMind,寫在本機
-        牆鐘日檔)會因此整批從 today 端點消失。
+        寫檔的日別有兩個來源(XR-3):engine 在場時走 engine 的 trade_date,engine
+        缺席時 hub 以牆鐘為日別。而 engine 的 trade_date 只在 stage2(當日首 tick)
+        前進 —— 空自選 / 訂閱零推播時它會靜默停在昨日,於是同一天內兩種來源可能落在
+        不同的檔。取聯集讓 today 端點兩邊都看得到,不必去猜這一輪是誰寫的。
 
         兩日不同時依**日期字串升冪**串接(舊日在前)並以 `id` 去重、保檔內順序。
         同日走單檔讀而不是「聯集後去重」:當日檔本來就可能有同 id 兩列(重啟後重發
@@ -944,7 +854,7 @@ class SignalHub:
 
         `errors="replace"` 而非嚴格解碼:半寫入切在中文多位元組序列中間時嚴格解碼丟
         `UnicodeDecodeError`(ValueError 系,**不在** `except OSError` 內)→ 整個當日檔
-        一起消失,三條消費路(breadth 對帳 seed / today 端點 / 前端自癒)整天壞著。
+        一起消失,兩條消費路(today 端點 / 前端自癒)整天壞著。
         壞位元組換成 U+FFFD 後只有那一行 `json.loads` 失敗、被既有「壞行跳過」吃掉,
         好行全數保留 —— 把 except 擴成 `(OSError, ValueError)` 則是整檔丟掉,更差
         (review round-2 HR-1)。

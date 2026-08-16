@@ -24,7 +24,6 @@ from copycat.server.app import (
     DEFAULT_INDEX,
     DEFAULT_STOCK,
 )
-from copycat.server.chain_store import CHAIN_FILENAME
 from copycat.server.verify import FAIL_ENV_KEY, FakeTxoSource
 
 
@@ -110,7 +109,7 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
     # fake source 單一位置參數;其餘 source 全部不傳(= None = 引擎不啟動、零 ZMQ)
     assert cap.create_args is not None and len(cap.create_args) == 1
     assert isinstance(cap.create_args[0], FakeTxoSource)
-    # breadth 是唯一的例外:走 fake 五元組(不打真 FinMind)+ 獨立落檔目錄
+    # breadth 是唯一的例外:走 fake 四元組(不打真 FinMind)+ 獨立落檔目錄
     # ——共用 prod 的 data/market/ 會讓 fake 快照有機會蓋掉當日真序列
     assert cap.create_kwargs is not None and set(cap.create_kwargs) == {
         "breadth_fetchers",
@@ -118,12 +117,12 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
         "breadth_config",
         "stock_watchlist_path",
     }
-    assert len(cap.create_kwargs["breadth_fetchers"]) == 5
+    assert len(cap.create_kwargs["breadth_fetchers"]) == 4
     assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
     # SignalHub 解耦後(XR-3)verify server 也會建真 hub,而它的落點 = 自選檔所在目錄。
-    # 不隔離的話 verify 進程會把 fake 事件寫進 prod 的 `data/signals/*.jsonl` ——
-    # 那份是 breadth 對帳的 seed,被灌假事件之後 prod 的真鎖板事件會被判成「已發布」
-    # 而**靜默不發**(review P0-3)。與 breadth_data_dir 同一條隔離原則。
+    # 不隔離的話 verify 進程會把 fake 訊號寫進 prod 的 `data/signals/*.jsonl` ——
+    # 那份是 today 端點的歷史真相源(前端斷線自癒的 baseline),prod 畫面上會多出
+    # 從未發生過的訊號列(review P0-3)。與 breadth_data_dir 同一條隔離原則。
     assert (
         cap.create_kwargs["stock_watchlist_path"]
         == main_mod.VERIFY_DATA_DIR / "stock_watchlist.json"
@@ -139,33 +138,33 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
     assert cap.run_kwargs is not None and cap.run_kwargs["port"] == 8722
 
 
-def test_verify_fail_injection_uses_isolated_dir_and_clears_chain(
+def test_verify_fail_injection_keeps_default_dir_and_clears_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`VERIFY_BREADTH_FAIL=1` → 隔離目錄 + 開機清 chain 快取(review S-2/C-3)。
+    """`VERIFY_BREADTH_FAIL=1` → **落檔目錄不變**(`VERIFY_DATA_DIR`),且不清任何檔。
 
-    verify 的 data_dir 跨 run 持久:上一次成功的 `industry_chain.json` 還在的話,
-    chain fake 拋不拋都一樣有表 —— 「FinMind 整段掛掉」的注入漏了一條路,而畫面上
-    類股面板照常有內容,看起來就像 SC-3 通過了(design §8 / R9 的前置)。
+    專用 fail 目錄的唯一存在理由是「chain 快取檔跨 run 持久會吸收掉注入」,而 chain
+    整條鏈已於 2026-08-16 刪除 —— 剩下的四支取數點沒有任何跨 run 落檔會吸收注入,
+    分兩個目錄只會讓 verify 的家數序列在兩個目錄之間跳。落點隔離(不寫 prod)由
+    `VERIFY_DATA_DIR` 本身保證,那條紀律不變。
     """
     cap = _Capture()
     cap.install(monkeypatch)
-    fail_dir = tmp_path / "market-verify-fail"
-    fail_dir.mkdir()
-    stale = fail_dir / CHAIN_FILENAME
-    stale.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(main_mod, "VERIFY_FAIL_DATA_DIR", fail_dir)
+    leftover = tmp_path / "leftover.json"
+    leftover.write_text("{}", encoding="utf-8")
     monkeypatch.setenv(FAIL_ENV_KEY, "1")
 
     main_mod.main(["--verify"])
 
     assert cap.create_kwargs is not None
-    assert cap.create_kwargs["breadth_data_dir"] == fail_dir
-    # hub 落點要跟著走同一個 fail 目錄:只鎖 breadth_data_dir 的話,失效注入變體會把
-    # 真 hub 的 jsonl 寫回預設 `market-verify`(甚至 prod data/)—— 對帳 seed 汙染
-    # (review P0-3)在這條變體上就漏掉了
-    assert cap.create_kwargs["stock_watchlist_path"] == fail_dir / "stock_watchlist.json"
-    assert not stale.exists()
+    assert cap.create_kwargs["breadth_data_dir"] == main_mod.VERIFY_DATA_DIR
+    # hub 落點跟著同一個目錄:只鎖 breadth_data_dir 的話,失效注入變體會把真 hub 的
+    # jsonl 寫回 prod `data/signals/`(review P0-3)—— 那條隔離在本變體上也要成立
+    assert (
+        cap.create_kwargs["stock_watchlist_path"]
+        == main_mod.VERIFY_DATA_DIR / "stock_watchlist.json"
+    )
+    assert leftover.exists()  # 開機清檔的行為已隨 chain 一併移除
 
 
 def test_verify_without_fail_env_keeps_default_dir(monkeypatch: pytest.MonkeyPatch) -> None:

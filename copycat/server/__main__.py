@@ -31,7 +31,6 @@ from copycat.server.app import (
     DEFAULT_STOCK,
     create_app,
 )
-from copycat.server.chain_store import CHAIN_FILENAME
 from copycat.server.verify import (
     FAIL_ENV_KEY,
     FakeTxoSource,
@@ -52,12 +51,6 @@ LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 #: 同一個 `breadth-<date>.json`,verify 的 fake 六檔快照有機會蓋掉 prod 當日的完整
 #: 序列(prod 下一輪雖會寫回,但夾縫中重啟 prod 就會 restore 到那一格 fake)。
 VERIFY_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify"
-
-#: `VERIFY_BREADTH_FAIL=1` 專用的落檔目錄。與常態 verify 目錄分開 + 開機清 chain 檔:
-#: verify 的 data_dir 跨 run 持久,上一次成功的 `industry_chain.json` 還在的話 chain
-#: fake 拋不拋都一樣有表 —— 「FinMind 整段掛掉」的注入漏了 chain 那條路,而畫面上
-#: 類股面板照常有內容,看起來就像 SC-3 通過了(design §8 / R9;review S-2/C-3)。
-VERIFY_FAIL_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify-fail"
 
 #: --verify 的家數帶輪詢窗:全天。prod 預設窗(09:00–13:40)之外 `_poll_loop` 只跑
 #: 首圈,而 verify server 幾乎都在盤後跑 —— flip 翻轉、失效注入、事件鏈路全都要
@@ -137,21 +130,6 @@ def _setup_prod_log() -> Path | None:
     return path
 
 
-def _clear_chain_cache(data_dir: Path) -> None:
-    """失效注入的前置:刪掉 chain 快取檔。
-
-    never-raise —— 這是取證的前置而不是啟動條件,刪不掉只要說得夠大聲即可(留著
-    舊表的話 chain 那條注入會被靜默吸收,而畫面上與「注入沒生效」完全同形)。
-    """
-    path = data_dir / CHAIN_FILENAME
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as e:
-        logger.warning("verify chain 快取清除失敗(chain 失效注入可能被舊表吸收):%r", e)
-        return
-    logger.info("verify 失效注入模式:落檔目錄 %s(已清 %s)", data_dir, CHAIN_FILENAME)
-
-
 def main(argv: Sequence[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     unknown = [a for a in args if a != "--verify"]
@@ -175,8 +153,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
         data_dir = VERIFY_DATA_DIR
         if os.environ.get(FAIL_ENV_KEY) == "1":
-            data_dir = VERIFY_FAIL_DATA_DIR
-            _clear_chain_cache(data_dir)
+            # 注入本身由 `verify._fail_if_injected` 直讀 env,這裡只留可觀測性:
+            # 「四支取數全拋」與「FinMind 真的掛了」在畫面上同形,log 是唯一的分辨點。
+            logger.info("verify 失效注入模式:四支取數全拋,落檔目錄 %s", data_dir)
         app = create_app(
             FakeTxoSource(),
             # 家數帶走 fake 取數(不打真 FinMind)+ 獨立落檔目錄(不覆蓋 prod 當日序列)
@@ -184,9 +163,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             breadth_data_dir=data_dir,
             # SignalHub 解耦後(XR-3)verify server 也會建真 hub,而 hub 的落點 =
             # 自選檔所在目錄。不隔離的話 verify 進程會往 prod 的 `data/signals/*.jsonl`
-            # 寫 fake 事件 —— 那份是 breadth 對帳的 seed(`market_event_state`),被灌
-            # 假事件之後 prod 的真鎖板事件會被判成「已發布」而**靜默不發**。
-            # 與 breadth_data_dir 同一條隔離原則(51-54 行)。
+            # 寫 fake 訊號 —— 那份是 `/api/stock/signals/today` 的歷史真相源(前端斷線
+            # 自癒的 baseline),prod 畫面上會多出從未發生過的訊號列。
+            # 與 breadth_data_dir 同一條隔離原則(上方 VERIFY_DATA_DIR)。
             stock_watchlist_path=data_dir / "stock_watchlist.json",
             breadth_config=BreadthConfig(
                 window_start=VERIFY_WINDOW[0], window_end=VERIFY_WINDOW[1]

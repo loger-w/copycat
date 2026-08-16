@@ -102,13 +102,6 @@ def _eod_rows(n: int = 2) -> list[dict]:
     ]
 
 
-def _chain_rows(n: int) -> list[dict]:
-    return [
-        {"stock_id": f"{1000 + i}", "industry": "半導體", "sub_industry": "IC 設計"}
-        for i in range(n)
-    ]
-
-
 # ---------- URL / header / timeout 契約 ----------
 
 
@@ -192,34 +185,6 @@ class TestRequestShape:
         monkeypatch.setattr(bf, "urlopen", http)
 
         assert bf.fetch_daily_prices("tok", _TODAY) == []
-
-    def test_industry_chain_dataset_query_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """產業鏈對照表:`dataset=TaiwanStockIndustryChain` **無其他參數**;沿 30s timeout。"""
-        http = FakeHttp(_payload(_chain_rows(6861)))
-        monkeypatch.setattr(bf, "urlopen", http)
-
-        rows = bf.fetch_industry_chain("tok")
-
-        assert len(rows) == 6861
-        assert rows[0] == _chain_rows(1)[0]
-        assert http.calls == 1
-        assert http.path() == "/api/v4/data"
-        assert http.query() == {"dataset": ["TaiwanStockIndustryChain"]}
-        assert http.headers[0]["Authorization"] == "Bearer tok"
-        assert http.timeouts[0] == 30.0
-
-    def test_industry_chain_402_marks_quota_and_does_not_retry(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """錯誤分類沿 `_get_rows`:402 → quota=True 不重試(引擎據此走長退避)。"""
-        http = FakeHttp(_http_error(402))
-        monkeypatch.setattr(bf, "urlopen", http)
-
-        with pytest.raises(bf.BreadthFetchError) as exc:
-            bf.fetch_industry_chain("tok")
-
-        assert exc.value.quota is True
-        assert http.calls == 1
 
     def test_disposition_range_query_param_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """參數名必為 start_date / end_date(oi_levels / neigui 同款;PLAN R6)。"""
@@ -321,30 +286,4 @@ class TestStockInfoRowCountLog:
             bf.fetch_stock_info("tok")
 
         recs = [r for r in caplog.records if "2999" in r.getMessage()]
-        assert recs and any(r.levelno == logging.WARNING for r in recs)
-
-
-class TestIndustryChainRowCountLog:
-    def test_normal_row_count_logs_info(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """實錄約 6861 列 —— 常態走 info,門檻常數對外可讀(引擎/測試共用同一個數)。"""
-        assert bf.CHAIN_MIN_ROWS == 1000
-        monkeypatch.setattr(bf, "urlopen", FakeHttp(_payload(_chain_rows(6861))))
-        with caplog.at_level(logging.INFO, logger=bf.__name__):
-            bf.fetch_industry_chain("tok")
-
-        recs = [r for r in caplog.records if "6861" in r.getMessage()]
-        assert recs and all(r.levelno == logging.INFO for r in recs)
-
-    def test_short_row_count_logs_warning(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """腰斬即異常:回應形狀合法、HTTP 200、rotation 照算,沒有這道觀測就只能靠猜。"""
-        monkeypatch.setattr(bf, "urlopen", FakeHttp(_payload(_chain_rows(999))))
-        with caplog.at_level(logging.INFO, logger=bf.__name__):
-            rows = bf.fetch_industry_chain("tok")
-
-        assert len(rows) == 999  # 照樣回傳 —— 少一截仍比沒有好
-        recs = [r for r in caplog.records if "999" in r.getMessage()]
         assert recs and any(r.levelno == logging.WARNING for r in recs)
