@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from copycat.live.stock_models import StockMeta, StockTick
 from copycat.live.stock_state import StockDayState
+
+#: VP 折法的跨語言 parity fixture(前端 `src/lib/vp-parity.test.ts` 讀同一個檔)
+_VP_PARITY_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "vp_parity.json"
 
 
 def _tick(
@@ -333,23 +339,115 @@ class TestLightSnapshot:
 
     def test_light_snapshot_is_exactly_minutes_and_meta(self) -> None:
         light = self._filled().light_snapshot()
-        assert set(light) == {"minutes", "meta"}
-        # ticks 是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費)
+        # 🔴 group-grid-full-chart:卡片要畫「完全同款」的分時圖 → VWAP 白線 / 日高低圈 /
+        # VP 水平條所需的四鍵一併帶出。由 minutes 在前端近似會畫出與單檔頁不同的圖。
+        assert set(light) == {"minutes", "meta", "vwap", "high", "low", "vp"}
+        # ticks 仍是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費);
+        # vp 是**它的聚合**(O(當日成交檔位數),與 tick 筆數脫鉤)才進得了 light
         assert "ticks" not in light
 
     def test_light_and_full_snapshot_share_one_key_mapping(self) -> None:
-        """同一份資料兩條路產出的 minutes / meta 必須逐鍵相同 —— 這條測試就是
-        「單一定義」的證明;兩邊各自維護時它會第一個紅。"""
+        """同一份資料兩條路產出的 minutes / meta / vwap / high / low 必須逐鍵相同 ——
+        這條測試就是「單一定義」的證明;兩邊各自維護時它會第一個紅。"""
         st = self._filled()
         light = st.light_snapshot()
         full = st.snapshot()
         assert light["minutes"] == full["minutes"]
         assert light["meta"] == full["meta"]
+        assert light["vwap"] == full["vwap"]
+        assert light["high"] == full["high"]
+        assert light["low"] == full["low"]
         assert light["minutes"]["541"]["c"] == 2_380_000  # 非空基準:比對的不是兩個空 dict
         assert light["meta"]["ref"] == 2_320_000
+        assert light["vwap"] is not None  # 同上:三個 None 互等是 vacuous
+        assert light["high"] == 2_400_000
+        assert light["low"] == 2_380_000
 
     def test_light_snapshot_without_meta_is_none_not_missing(self) -> None:
         """缺 meta 回 `None` 而不是漏鍵:前端 `raw.meta ?? null` 對兩者同解,但
-        route 的 response 形若少一個鍵,契約測試與 pyright 都看不出來。"""
+        route 的 response 形若少一個鍵,契約測試與 pyright 都看不出來。
+
+        空態的 `vp` 是 `{}` 而不是 `None`:前端型別是 `Map`,兩者在 `?? new Map()`
+        之後才等價,而少一個鍵時端點契約測試看不出來(同 meta 的理由)。"""
         light = StockDayState().light_snapshot()
-        assert light == {"minutes": {}, "meta": None}
+        assert light == {
+            "minutes": {},
+            "meta": None,
+            "vwap": None,
+            "high": None,
+            "low": None,
+            "vp": {},
+        }
+
+
+class TestVolumeProfile:
+    """價位別成交量(VP)由狀態機**增量維護**(change-spec AD-1 amendment R6)。
+
+    請求時全掃 `ticks` 跑在事件迴圈上,最壞 50 檔 × 20k 筆的同步迴圈會卡住 WS fanout;
+    而 `_apply` 內累加是 O(1)/tick 且 `ticks` deque 的 20k 截斷影響不到它。
+
+    折法與前端 `stock-accum.ts::foldVp` 同規(parity fixture 鎖):剔 p<=0、
+    分鐘窗 [540, 810]、key = `snap_down_milli`、cell = [總張, 外盤張, 內盤張]。
+    """
+
+    def test_ingest_accumulates_by_snapped_price(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(10, price=23_456, qty=8, time="09:05:00.000", side="outer"))
+        st.ingest(_tick(20, price=23_450, qty=2, time="09:06:00.000", side="inner"))
+        st.ingest(_tick(30, price=23_499, qty=1, time="09:07:00.000", side="neutral"))
+        # 23.456 / 23.45 / 23.499 全部歸到 23.45 元那一檔;neutral 只進總張
+        assert st.light_snapshot()["vp"] == {"23450": [11, 8, 2]}
+
+    def test_market_queue_price_zero_is_dropped(self) -> None:
+        """鎖漲跌停時 TC4 會推價格欄 `0` 的市價佇列 —— `snap_down_milli(0)` 是合法運算,
+        不剔的話 VP 會憑空長出一個 0 元檔位(前端 `isMarketLevel` 同一條規則)。"""
+        st = StockDayState()
+        st.ingest(_tick(10, price=0, qty=5, time="09:05:00.000"))
+        assert st.light_snapshot()["vp"] == {}
+
+    def test_out_of_window_ticks_are_dropped(self) -> None:
+        """窗 = 前端幾何的 [09:00, 13:30](含端點);盤前試撮成交與 13:31 的收盤
+        撮合不進 VP,否則卡片 VP 的總張與說明列的外/內/未分類三數對不起來。"""
+        st = StockDayState()
+        st.ingest(_tick(10, price=99_900, qty=5, time="08:59:59.999", side="outer"))
+        st.ingest(_tick(20, price=99_900, qty=7, time="13:31:00.000", side="outer"))
+        assert st.light_snapshot()["vp"] == {}
+        st.ingest(_tick(30, price=99_900, qty=1, time="09:00:00.000", side="outer"))
+        st.ingest(_tick(40, price=99_900, qty=1, time="13:30:59.999", side="outer"))
+        assert st.light_snapshot()["vp"] == {"99900": [2, 2, 0]}  # 兩個端點都在窗內
+
+    def test_reset_clears_vp(self) -> None:
+        st = StockDayState()
+        st.ingest(_tick(10, price=99_900, qty=5, time="09:05:00.000", side="outer"))
+        st.reset()
+        assert st.light_snapshot()["vp"] == {}
+
+    def test_apply_backfill_rebuilds_vp_identically_to_live_ingest(self) -> None:
+        """回補走 reset + 重放 → VP 自然重建。這條是「增量維護」的核心風險:
+        漏了 reset 就會與 live 期間的量疊加成兩倍,而畫面上只是 VP 條變長,零訊號。"""
+        ticks = [
+            _tick(10, price=23_456, qty=8, time="09:05:00.000", side="outer"),
+            _tick(20, price=23_450, qty=2, time="09:06:00.000", side="inner"),
+        ]
+        live = StockDayState()
+        for t in ticks:
+            live.ingest(t)
+
+        rebuilt = StockDayState()
+        for t in ticks:
+            rebuilt.ingest(t)  # 回補前已有 live 狀態(重疊窗)
+        rebuilt.apply_backfill(ticks)
+        assert rebuilt.light_snapshot()["vp"] == live.light_snapshot()["vp"]
+
+
+def test_vp_parity_with_frontend_fold() -> None:
+    """跨語言 parity:同一份 ticks 折出同一份直方圖(change-spec AD-2)。
+
+    `expected` 是**手算寫死**在 fixture 裡的(不是跑程式回填),前端
+    `src/lib/vp-parity.test.ts` 對同一個檔各自斷言 —— 任一邊改了規則就只有一邊紅。
+    """
+    fixture = json.loads(_VP_PARITY_PATH.read_text(encoding="utf-8"))
+    st = StockDayState()
+    for i, row in enumerate(fixture["ticks"]):
+        st.ingest(_tick(i + 1, price=row["p"], qty=row["q"], time=row["t"], side=row["side"]))
+    assert st.light_snapshot()["vp"] == fixture["expected"]
