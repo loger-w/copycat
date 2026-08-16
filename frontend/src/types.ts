@@ -250,6 +250,26 @@ export interface OiLevelsResponse {
   strikes: OiStrikeRow[]; // strike 升冪
 }
 
+// ---- 交易日曆(對應 copycat/trading_calendar.py;mod/trading-calendar SC-6)----
+
+/** `GET /api/calendar`(恆 200,純 config 推導、不依賴任何引擎 → boot 窗內也答得出來)。
+ *
+ *  **兩個日期刻意分開**:`trade_date` = stock / index / signals hub 實際採用的日別
+ *  (`TXO_BACKFILL_DATE` 有值時就是它);`calendar_trade_date` = 純日曆推導 = breadth
+ *  一律採用的日別。env 模式下兩者會不一致(KR-5)。
+ *
+ *  前端只吃 `holidays`(灌進 `lib/trading-calendar`);其餘欄位是可視化 / 診斷用
+ *  (`years_loaded` 不含當年 = 日曆過期,此後只擋週末)。 */
+export interface CalendarState {
+  today: string; // 牆鐘 YYYY-MM-DD
+  trade_date: string;
+  calendar_trade_date: string;
+  backfill_env: string | null;
+  holidays: string[]; // YYYY-MM-DD 升冪
+  years_loaded: number[];
+  calendar_loaded: boolean;
+}
+
 // ---- 全市場家數帶 / 騰落線(對應 copycat/server/breadth_engine.py;market-overview R2)----
 
 /** 一格分鐘的五桶計數,桶序固定 `[limit_up, up, flat, down, limit_down]`
