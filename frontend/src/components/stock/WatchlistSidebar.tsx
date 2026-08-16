@@ -66,6 +66,29 @@ interface Props {
   quotes: Record<string, WatchlistQuote>;
 }
 
+/** 群組平均漲幅徽章(R6 SC-4)。色沿個股列 / GroupGridView 同構三態:>0 紅 / <0 綠 / 0 灰,
+ *  但 tone 以**顯示精度**(兩位小數)判(review C5):平均是連續值,-0.003 印成「-0.00%」
+ *  卻上綠字 = 同一格兩個矛盾訊號。`aria-label` 讓 header 的可及名稱從「主力 +2.59% 2」
+ *  變成「主力 平均漲幅 +2.59% 2」(review A4/C6;不動 header 本身的 aria-label —— 既有測試
+ *  以可見文字比對可及名稱);`title` 帶分母 / 試撮數(review C3/C4)。 */
+function avgBadge(a: GroupAvg): React.ReactElement {
+  const shown = Math.round(a.avg * 100) / 100;
+  const text = fmtPct(shown);
+  const trialNote = a.trial > 0 ? `,含 ${a.trial} 檔試撮` : "";
+  return (
+    <span
+      aria-label={`平均漲幅 ${text}`}
+      title={`平均漲幅 ${text}(${a.n}/${a.total} 檔有成交${trialNote})`}
+      className={cn(
+        "shrink-0 font-mono text-[0.625rem]",
+        shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-dim",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
 export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const { data, error } = useStockWatchlist();
   const wl = data ?? EMPTY_WL;
@@ -333,29 +356,6 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
         {o.avg != null ? avgBadge(o.avg) : null}
         <span className="shrink-0 font-mono text-[0.625rem] text-ink-dim">{o.count}</span>
       </button>
-    );
-  }
-
-  /** 群組平均漲幅徽章(R6 SC-4)。色沿個股列 / GroupGridView 同構三態:>0 紅 / <0 綠 / 0 灰,
-   *  但 tone 以**顯示精度**(兩位小數)判(review C5):平均是連續值,-0.003 印成「-0.00%」
-   *  卻上綠字 = 同一格兩個矛盾訊號。`aria-label` 讓 header 的可及名稱從「主力 +2.59% 2」
-   *  變成「主力 平均漲幅 +2.59% 2」(review A4/C6;不動 header 本身的 aria-label —— 既有測試
-   *  以可見文字比對可及名稱);`title` 帶分母 / 試撮數(review C3/C4)。 */
-  function avgBadge(a: GroupAvg): React.ReactElement {
-    const shown = Math.round(a.avg * 100) / 100;
-    const text = fmtPct(shown);
-    const trialNote = a.trial > 0 ? `,含 ${a.trial} 檔試撮` : "";
-    return (
-      <span
-        aria-label={`平均漲幅 ${text}`}
-        title={`平均漲幅 ${text}(${a.n}/${a.total} 檔有成交${trialNote})`}
-        className={cn(
-          "shrink-0 font-mono text-[0.625rem]",
-          shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-dim",
-        )}
-      >
-        {text}
-      </span>
     );
   }
 

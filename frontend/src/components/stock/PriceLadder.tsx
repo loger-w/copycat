@@ -53,6 +53,45 @@ function kindLabel(kind: string): string {
   return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
 }
 
+/** 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,pill 讓
+ *  「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。`aria-label` 掛在
+ *  role=group 容器(同 GroupGridView),既有以「交易別」定位的測試 / a11y 關聯不變;`shrink-0`
+ *  + 窄 padding:288px 右欄下由武裝鈕(flex-1 min-w-0)吸收壓縮,pill 群與鎖定鈕不換行
+ *  (R5 SC-1 同策略;px-0.5 = review C2 實測 解除+鎖定中+四顆 pill 貼齊零餘裕後收的 16px)。
+ *  選中色分兩檔(review C1):現股 = accent(預設態);融資 / 融券 / 無券 = warn 琥珀 ——
+ *  pill 把「改送單語意」降成武裝列上的單擊,非現股必須在梯面外就刺眼。
+ *  抽成模組層元件:PriceLadder 主體已達 react-doctor no-giant-component 門檻(R5+R6 累積)。 */
+function TradeKindPills({
+  value,
+  onChange,
+}: {
+  value: TradeKind;
+  onChange: (kind: TradeKind) => void;
+}) {
+  return (
+    <div role="group" aria-label="交易別" className="flex shrink-0 items-center gap-0.5">
+      {TRADE_KINDS.map(([v, label]) => (
+        <button
+          key={v}
+          type="button"
+          aria-pressed={value === v}
+          onClick={() => onChange(v)}
+          className={cn(
+            "rounded border px-0.5 py-0.5 text-xs",
+            value === v
+              ? v === "cash"
+                ? "border-accent text-accent"
+                : "border-warn text-warn"
+              : "border-line text-ink-dim hover:text-ink",
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface DiscountState {
   /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
   raw: string;
@@ -389,38 +428,13 @@ export function PriceLadder({
         </label>
       }
       armControls={
-        /* 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,
-           pill 讓「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。
-           `aria-label` 掛在 role=group 容器(同 GroupGridView),既有以「交易別」定位的
-           測試 / a11y 關聯不變;`shrink-0` + 窄 padding:288px 右欄下由武裝鈕(flex-1
-           min-w-0)吸收壓縮,pill 群與鎖定鈕不換行(R5 SC-1 同策略)。 */
-        <div role="group" aria-label="交易別" className="flex shrink-0 items-center gap-0.5">
-          {TRADE_KINDS.map(([v, label]) => (
-            <button
-              key={v}
-              type="button"
-              aria-pressed={tradeKind === v}
-              onClick={() => {
-                touchIdle();
-                setTradeKind(v);
-              }}
-              className={cn(
-                "rounded border px-0.5 py-0.5 text-xs",
-                // 選中色分兩檔(review C1):現股 = accent(預設態);融資 / 融券 / 無券 = warn 琥珀
-                // —— pill 把「改送單語意」降成武裝列上的單擊,非現股必須在梯面外就刺眼,
-                // 手滑點到才不會被當成「沒事」。px-0.5:288px 下 解除+鎖定中+四顆 pill 同列
-                // 實測剛好貼齊(review C2),收 2px 換餘裕。
-                tradeKind === v
-                  ? v === "cash"
-                    ? "border-accent text-accent"
-                    : "border-warn text-warn"
-                  : "border-line text-ink-dim hover:text-ink",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <TradeKindPills
+          value={tradeKind}
+          onChange={(v) => {
+            touchIdle();
+            setTradeKind(v);
+          }}
+        />
       }
       footer={
         posRows.length > 0 ? (
