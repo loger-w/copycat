@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 
 import { useBreadthRows } from "@/hooks/useBreadthRows";
 import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
+import { isoLocalDate } from "@/lib/trading-calendar";
 import { cn } from "@/lib/utils";
 import type { BreadthRow } from "@/types";
 
@@ -240,6 +241,12 @@ function decimalText(v: number | null): string {
   return v === null ? "—" : v.toFixed(2);
 }
 
+/** `YYYY-MM-DD` → `MM-DD`(SC-10)。年份在盤面上是雜訊,而月日是「這是哪一天的收盤」
+ *  唯一需要的資訊;形狀不合就原樣印出來(寧可醜也不要靜默切錯字串)。 */
+function monthDay(iso: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.slice(5) : iso;
+}
+
 // ---------------------------------------------------------------------------
 // 篩選列元件
 // ---------------------------------------------------------------------------
@@ -334,18 +341,40 @@ function LimitListBody({
   // 有 data 就保表,失敗改由標題列的「更新失敗」膠囊說。
   const loadFailed = isError && data === undefined;
   const refetchFailed = isError && data !== undefined;
+
+  // SC-10:非交易日(週末 / 國定假日)開站時 rows 是**上一交易日收盤**的快照,而畫面
+  // 上原本沒有任何線索 —— 看到的是一張「今天的漲跌停」。`trade_date` 為 null(冷啟動
+  // 未定)不算非今日:那是「還不知道」,標一個日期出來等於編造。
+  // 判別走 `isoLocalDate`(本機時區)不是 `toISOString()`:後者是 UTC,台北 08:00 前
+  // 會退成前一天 → 每天早盤都會誤標「昨天收盤」。
+  const todayIso = isoLocalDate(new Date());
+  const tradeDate = data?.trade_date ?? null;
+  const tradeMonthDay = tradeDate !== null && tradeDate !== todayIso ? monthDay(tradeDate) : null;
+  const notToday = tradeMonthDay !== null;
+
   let message: string | null = null;
   if (loadFailed) message = "載入失敗";
   else if (data === undefined) message = "載入中…";
   else if (!data.enabled) message = "FinMind 未設定";
   else if (data.as_of === null) message = "載入中…";
   else if (data.rows.length === 0) message = "暫無資料(延遲)";
-  else if (pool === 0) message = "今日尚無漲跌停";
+  else if (pool === 0) message = notToday ? `${tradeMonthDay} 尚無漲跌停` : "今日尚無漲跌停";
   else if (entries.length === 0) message = "無符合條件";
 
   return (
     <div data-testid="limit-list-body" className="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-4">
       <div className="flex shrink-0 flex-wrap items-center gap-2">
+        {/* 資料日膠囊(SC-10):與「延遲」同排同形狀,但**中性灰**而非琥珀色 ——
+            「這是上一交易日的完整收盤資料」是陳述,不是警示;沿用 stale 的顏色 /
+            testid 會把兩件事說成同一件(R2-8 明訂 testid 不得共用)。 */}
+        {notToday ? (
+          <span
+            data-testid="limit-list-asof-date"
+            className="rounded bg-bg-deep px-1.5 text-xs text-ink-muted"
+          >
+            {tradeMonthDay} 收盤
+          </span>
+        ) : null}
         {data?.stale ? (
           <span
             data-testid="limit-list-stale"
