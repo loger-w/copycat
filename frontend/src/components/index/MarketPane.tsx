@@ -6,7 +6,7 @@ import { useContainerSize } from "@/hooks/useContainerSize";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import { chgPct, fmtPct } from "@/lib/format";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
-import { PANE_FRAMES, paneSvgHeight } from "@/lib/pane-frame";
+import { PANE_FRAMES, paneSvgHeight, paneUnitScale, svgFontRem } from "@/lib/pane-frame";
 import { pts } from "@/lib/svg-points";
 import { HOUR_TICKS } from "@/lib/time-labels";
 import {
@@ -110,17 +110,21 @@ const OVERLAY_LINES = [
 /** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。
  *
  *  `height` 同 `MarketChart.height` 的口徑:**viewBox 單位**,caller 已扣 chrome、
- *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。 */
+ *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。
+ *  `unitScale` 同 `MarketChart.unitScale`:抵銷 svg 等比縮放,未給 → 1(WL-3)。 */
 function OverlayCard({
   twse,
   otc,
   height = SIZE.height,
+  unitScale = 1,
 }: {
   twse: IndexSeries;
   otc: IndexSeries;
   height?: number;
+  unitScale?: number;
 }) {
   const size = { width: SIZE.width, height };
+  const font = svgFontRem(0.625, unitScale);
   const g = buildOverlayGeometry(
     [
       { minutes: twse.minutes, ref: twse.ref },
@@ -155,7 +159,7 @@ function OverlayCard({
               x={toX(minute) + 2}
               y={size.height - 2}
               className="fill-ink-dim"
-              fontSize="0.625rem"
+              fontSize={font}
             >
               {label}
             </text>
@@ -183,7 +187,7 @@ function OverlayCard({
                 x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
                 y={l.pts[l.pts.length - 1]!.y + 3}
                 className={OVERLAY_LINES[i]!.color.replace("stroke-", "fill-")}
-                fontSize="0.625rem"
+                fontSize={font}
               >
                 {OVERLAY_LINES[i]!.label}
               </text>
@@ -335,14 +339,15 @@ export function MarketPane({
   // series,拆成布林會讓 JSX 那側得再判一次 null(或掛 `!` 賭它)。
   const overlayPair =
     overlay && mode === "intraday" && twse !== null && otc !== null ? { twse, otc } : null;
-  const svgHeight = paneSvgHeight(
-    size,
+  const frame =
     overlayPair !== null
       ? PANE_FRAMES.overlay
       : mode === "intraday"
         ? PANE_FRAMES.intraday
-        : PANE_FRAMES.candle,
-  );
+        : PANE_FRAMES.candle;
+  const svgHeight = paneSvgHeight(size, frame);
+  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變)
+  const unitScale = paneUnitScale(size, frame) ?? 1;
 
   return (
     <section
@@ -418,7 +423,12 @@ export function MarketPane({
             一支的話,切模式那一幀會量到 0×0 而 hook 不再重跑)。 */}
         <div ref={sizeRef} className="mt-2 flex min-h-0 flex-1 flex-col">
           {overlayPair !== null ? (
-            <OverlayCard twse={overlayPair.twse} otc={overlayPair.otc} height={svgHeight} />
+            <OverlayCard
+              twse={overlayPair.twse}
+              otc={overlayPair.otc}
+              height={svgHeight}
+              unitScale={unitScale}
+            />
           ) : (
             <MarketChart
               marketKey={marketKey}
@@ -429,6 +439,7 @@ export function MarketPane({
               onToggle={onToggle}
               active={active}
               height={svgHeight}
+              unitScale={unitScale}
             />
           )}
         </div>
