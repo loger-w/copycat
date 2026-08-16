@@ -1104,3 +1104,64 @@ describe("WatchlistSidebar 緩撮標示(SC-1)", () => {
     expect(within(row).queryByTestId("wl-trial-5483")).toBeNull();
   });
 });
+
+// batch2 R6 SC-4:群組標題列組名右側 = 該群等權平均漲幅(排除 p==null),未分組不顯示
+describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
+  function quotesFor(over: Record<string, Partial<(typeof QUOTES)["2330"]>>) {
+    const out = { ...QUOTES } as Record<string, (typeof QUOTES)["2330"]>;
+    for (const [code, o] of Object.entries(over)) out[code] = { ...QUOTES["2330"], ...o };
+    return out;
+  }
+  function headerOf(group: string): HTMLElement {
+    return within(screen.getByTestId(`wl-group-${group}`)).getByRole("button", {
+      name: new RegExp(`^${group}`),
+    });
+  }
+
+  it("主力 = 2330(+2.59)+ 5483(無成交,排除)→ +2.59% 紅字;觀察 = (0.41+2.59)/2 → +1.50%", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        quotes={quotesFor({ "3231": { p: 100_000, chg_pct: 0.41 } })}
+      />,
+    );
+    await waitGroups();
+    const main = headerOf("主力");
+    const avg = within(main).getByText("+2.59%");
+    expect(avg.className).toContain("text-bull");
+    // 位置:組名之後、檔數之前
+    const name = within(main).getByText("主力");
+    const count = within(main).getByText("2");
+    expect(name.compareDocumentPosition(avg) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(avg.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(headerOf("觀察")).getByText("+1.50%").className).toContain("text-bull");
+  });
+
+  it("負值綠字;零 = ink-dim", async () => {
+    wrap(
+      <WatchlistSidebar
+        active={null}
+        onSelect={() => {}}
+        quotes={quotesFor({
+          "2330": { p: 2_300_000, chg_pct: -3 },
+          "3231": { p: 100_000, chg_pct: 3 },
+        })}
+      />,
+    );
+    await waitGroups();
+    expect(within(headerOf("主力")).getByText("-3.00%").className).toContain("text-bear");
+    const zero = within(headerOf("觀察")).getByText("0.00%");
+    expect(zero.className).toContain("text-ink-dim");
+    expect(zero.className).not.toContain("text-bull");
+  });
+
+  it("全組無成交(只有參考價 / no_data)→ 不渲染平均;未分組列永遠不顯示", async () => {
+    mockWatchlist([{ name: "空組", codes: ["5483"] }], ["5483", "2330"]);
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
+    await waitFor(() => expect(screen.getByTestId("wl-group-空組")).toBeTruthy());
+    expect(within(headerOf("空組")).queryByText(/%$/)).toBeNull();
+    const ung = within(screen.getByTestId("wl-ungrouped")).getByRole("button", { name: /^未分組/ });
+    expect(within(ung).queryByText(/%$/)).toBeNull();
+  });
+});
