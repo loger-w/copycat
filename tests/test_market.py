@@ -4,6 +4,7 @@ from copycat.market import (
     limit_down_milli,
     limit_up_milli,
     limit_up_price,
+    snap_down_milli,
     tick_size,
     tick_size_milli,
 )
@@ -32,6 +33,26 @@ def test_tick_size_milli_zones() -> None:
 def test_tick_size_milli_matches_float_version() -> None:
     for price_milli in (9_990, 23_450, 123_450):
         assert tick_size_milli(price_milli) == round(tick_size(price_milli / 1000) * 1000)
+
+
+def test_snap_down_milli_zone_boundaries() -> None:
+    """VP 檔位歸一(change-spec AD-2)。前端對應函式 = `stock-tick.ts::snapDown`,
+    兩份折法各漂各的樣態是「同一檔在單檔頁與卡片上 POC 不同」,零錯誤訊號。
+
+    段界一律取**該價位自己所在段**的 tick(不是 snap 後所在段):99.999 元屬
+    50–100 元段(tick 0.1)→ 99.9,而不是拿 100 元以上段的 0.5 去算。
+    """
+    assert snap_down_milli(1_000_000) == 1_000_000  # 1000 元整 → tick 5 元,恰在檔上
+    assert snap_down_milli(999_999) == 999_000  # 999.999 元 → 500–1000 元段 tick 1 元
+    assert snap_down_milli(23_456) == 23_450  # 23.456 元 → 10–50 元段 tick 0.05 元
+    assert snap_down_milli(9_990) == 9_990  # 9.99 元 → tick 0.01 元,恰在檔上
+    assert snap_down_milli(100_000) == 100_000  # 100 元整 → tick 0.5 元,恰在檔上
+    assert snap_down_milli(99_999) == 99_900  # 99.999 元 → 50–100 元段 tick 0.1 元
+
+
+def test_snap_down_milli_is_idempotent_on_legal_ticks() -> None:
+    for milli in (9_990, 23_450, 99_900, 100_000, 999_000, 1_000_000, 1_005_000):
+        assert snap_down_milli(milli) == milli
 
 
 def test_limit_up_known_cases() -> None:
