@@ -148,3 +148,20 @@ describe("MarketPane 量測 → 圖高(SC-4)", () => {
     expect(svgViewBoxHeight()).toBe(220);
   });
 });
+
+// 🔴 amendment r3:pane 在單欄態(< 1050px 容器)不可縮 —— 那時高度由內容決定,無條件
+// `min-h-0` 會讓 pane 被壓到低於自身內容,圖卡(overflow visible)溢出壓在家數帶上。
+// figure 的地板同步降到 12rem:wrapper 130 → svg render 102,仍在 paneSvgHeight 的 96 地板之上。
+describe("MarketPane 可縮鏈(amendment r3)", () => {
+  it("root 的 min-h-0 條件化到 @[1050px];figure 掛地板 min-h-48 而非 min-h-0", () => {
+    renderPane();
+    const root = screen.getByTestId("market-pane-left");
+    expect(root.className).toContain("@[1050px]:min-h-0");
+
+    const figure = root.querySelector("figure")!;
+    expect(figure.className).toContain("min-h-48");
+    expect(figure.className).toContain("flex-1");
+    // 同時掛 min-h-0 會把地板消掉(twMerge 不會擋 —— 兩者是不同 utility),退回「圖可以被壓成 0 高」
+    expect(figure.className).not.toContain("min-h-0");
+  });
+});
