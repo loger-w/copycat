@@ -13,13 +13,13 @@ import type { Group } from "@/lib/watchlist-model";
  *  271 格),圖照畫、值照對。失效的典型原因也不在卡片自己身上:父層每秒隨 `quotes`
  *  re-render,傳下去的 `onPick` 若是 inline arrow,`memo` 的比較每一輪都不會過。
  *
- *  量法 = 把 `MiniIntradayChart` 換成計次替身。**獨立檔**:`vi.mock` 是檔案級 + hoisted,
+ *  量法 = 把卡片內的圖換成計次替身。**獨立檔**:`vi.mock` 是檔案級 + hoisted,
  *  與同目錄那份「要看到真 svg」的測試不能共存(frontend-testing skill 的 lazy 三坑同理)。 */
 
 const hoisted = vi.hoisted(() => ({ renders: [] as (number | null)[] }));
 
-vi.mock("@/components/stock/MiniIntradayChart", () => ({
-  MiniIntradayChart: ({ liveP }: { liveP: number | null }) => {
+vi.mock("@/components/stock/CardIntradayChart", () => ({
+  CardIntradayChart: ({ liveP }: { liveP: number | null }) => {
     hoisted.renders.push(liveP);
     return <span data-testid="mini-stub" />;
   },

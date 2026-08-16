@@ -283,27 +283,27 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
   });
 });
 
-// SC-2:卡片要吃滿中區高度,圖跟著長高。`h-20` 由「唯一高度來源」降為**基準高**
-// (`grow` 的 flex-basis 是 auto)—— 矩陣模式下長高吃滿格,捲動模式維持 80px。
-// 變高後 y 向縮放可達 ~3×,線寬得靠 `vector-effect` 釘在螢幕像素(P1-5)。
+// SC-2:卡片要吃滿中區高度,圖跟著長高。
+//
+// test-infra-fix(圖換成單檔同款之後):`vector-effect` / `mini-price` 那組斷言鎖的是
+// mini 圖「viewBox 固定、靠非等比拉伸吃滿卡片」的縮放模型 —— 新的卡片圖是 **1:1**
+// (viewBox 尺寸 = 量到的 px),沒有縮放也就沒有線寬失真可補償。契約改由這一條承接:
+// 圖區 wrapper 的高**由外層指派**(useContainerSize 契約 2),而主副圖的 viewBox 寬
+// 等於量到的寬(AD-3)—— 這兩件事漂掉的症狀同樣是「卡片內容溢出格軌與下一列重疊」。
 describe("GroupGridView 高度均分 class", () => {
-  it("常態卡片:svg 帶 grow + h-20,價線不隨拉伸變粗", async () => {
+  it("常態卡片:圖區 wrapper 由外層指派高度,主副圖 viewBox 寬 = 量到的寬(1:1)", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
-    // SVG 的 `className` 是 SVGAnimatedString,子字串斷言得走 getAttribute(spec P2-1)
-    const svgClass = card.querySelector("svg")?.getAttribute("class") ?? "";
-    expect(svgClass).toContain("grow");
-    expect(svgClass).toContain("h-20");
-    // 有 ref 時價線是紅綠 clip 的**兩條** polyline(review A-4/B-3):querySelector
-    // 只驗得到 bull 那條,bear 掉了 vector-effect 是零錯誤訊號的視覺回歸
-    const lines = card.querySelectorAll('[data-testid="mini-price"]');
-    expect(lines.length).toBe(2);
-    for (const el of lines) {
-      expect(el.getAttribute("vector-effect")).toBe("non-scaling-stroke");
+    const svgs = [...card.querySelectorAll("svg")];
+    expect(svgs.length).toBe(2); // 主圖 + 量副圖
+    // FakeResizeObserver 餵的是 300×200(見檔頭)
+    for (const svg of svgs) {
+      expect(svg.getAttribute("viewBox")!.split(" ")[2]).toBe("300");
     }
-    expect(card.querySelector('[data-testid="mini-ref"]')?.getAttribute("vector-effect")).toBe(
-      "non-scaling-stroke",
-    );
+    // 恆存 wrapper 的高由 flex 指派:掛成 h-20 之類的內容高會形成「量多高就設多高」
+    const wrapper = svgs[0]!.parentElement!.parentElement!;
+    expect(wrapper.className).toContain("flex-1");
+    expect(wrapper.className).toContain("min-h-0");
   });
 
   it("無資料佔位也跟著長高(不然整列高度對不齊)", async () => {
@@ -415,17 +415,21 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
   });
 });
 
-// review B1:mini 圖的末點延伸(design R10)靠 `quotes[code].p` 餵進去。這條接線斷掉
+// review B1:卡片圖的末點延伸(design R10)靠 `quotes[code].p` 餵進去。這條接線斷掉
 // 的失效樣態是「卡片上的線最久停在一分鐘前」—— 圖還在、值也對,只是不動;而群組檢視
-// 存在的理由正是「現在有沒有一起動」。元件單測只驗到 `MiniIntradayChart` 收到 liveP
-// 之後會延伸,驗不到 GroupGridView 有沒有真的把 quote 接上去。
+// 存在的理由正是「現在有沒有一起動」。lib 層的 `extendMinutes` 測試驗不到 GroupGridView
+// 有沒有真的把 quote 接上去。
+//
+// test-infra-fix:`mini-price` testid 隨 MiniIntradayChart 一起消失,改以主價線
+// (有昨收 → 紅綠 clip 兩條中的 bull 那條)的 points 數計 —— 契約「liveP 有值 →
+// 多一點」逐字不變。
 describe("GroupGridView 現價延伸接線(review B1)", () => {
   function pointCount(card: HTMLElement): number {
-    const el = card.querySelector('[data-testid="mini-price"]');
+    const el = card.querySelector('polyline[class*="stroke-bull"]');
     return (el?.getAttribute("points") ?? "").split(" ").filter(Boolean).length;
   }
 
-  it("盤中且 quote 有現價 → mini 圖比 snapshot 多一個延伸點", async () => {
+  it("盤中且 quote 有現價 → 卡片圖比 snapshot 多一個延伸點", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(2026, 7, 6, 10, 0, 30)); // 10:00,窗內且非 09:00 那一格
     try {
@@ -450,11 +454,14 @@ describe("GroupGridView 現價延伸接線(review B1)", () => {
 });
 
 describe("GroupGridView 點卡片切主檔", () => {
+  // test-infra-fix:卡片內容改成整張分時圖後外層由 `<button>` 換成
+  // `<div role="button">`(review R11:button 的內容模型只吃 phrasing content)——
+  // 斷言改看 role,「整張卡片可點且有可及名稱」這個契約不變。
   it("整張卡片是一顆 button(有可及名稱),點了回呼該股", async () => {
     const onPick = vi.fn();
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
-    expect(card.tagName).toBe("BUTTON");
+    expect(card.getAttribute("role")).toBe("button");
     expect(card.getAttribute("aria-label")).toBe("查看 2330 台積電");
     fireEvent.click(card);
     expect(onPick).toHaveBeenCalledWith("2330");

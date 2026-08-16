@@ -1,23 +1,29 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
-import { MiniIntradayChart } from "@/components/stock/MiniIntradayChart";
+import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
+import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
 import { fmt, fmtPct } from "@/lib/format";
+import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
 import { cn } from "@/lib/utils";
 import type { Group } from "@/lib/watchlist-model";
 
-/** 群組檢視:自選群組成員的 mini 分時圖牆(group-grid SC-3)。
+/** 群組檢視:自選群組成員的分時圖牆(group-grid SC-3)。
  *
- *  要回答的問題是「同產業今天有沒有一起動」—— 所以卡片只留代碼 / 名稱 / 現價 /
- *  一條分時線,沒有座標軸、沒有五檔、沒有明細。點任一張卡片切回單檔檢視看細節。 */
+ *  要回答的問題是「同產業今天有沒有一起動」。卡片上的圖是**單檔頁同一份渲染碼**
+ *  (D4):價位刻度 / VWAP / CDP / 量分佈 / 高低標 / hover 十字線全在 —— 圖牆就是
+ *  盯盤主畫面,細節在這裡看得完。點卡片只換右欄閃電梯的標的(D3),檢視不跳;
+ *  要進單檔頁走檢視 pill。 */
 
 interface Props {
   groups: Group[];
-  /** WS `watchlist_quote`(每秒);現價與漲跌幅來源,同時餵 mini 圖的末點延伸 */
+  /** WS `watchlist_quote`(每秒);現價與漲跌幅來源,同時餵卡片圖的末點延伸 */
   quotes: Record<string, WatchlistQuote>;
   onPick: (code: string) => void;
+  /** 右欄閃電梯現在瞄的股號 → 該卡畫選中框(AD-6)。不在當前群組 = 全部未選中(edge 6) */
+  active: string | null;
   /** 自選 query 首載中(review A4)。`groups` 空陣列有三種意思,分不出來的話「還在載」
    *  與「後端出事」都會被講成「你還沒建群組」—— 而只有真的零群組才該叫人去建。 */
   wlPending?: boolean;
@@ -107,11 +113,21 @@ const GroupCard = memo(function GroupCard({
   code,
   snap,
   quote,
+  active,
+  toggles,
+  sizeClass,
   onPick,
 }: {
   code: string;
   snap: GroupSnapshot | undefined;
   quote: WatchlistQuote | undefined;
+  active: boolean;
+  /** 圖牆頂那一份(**不含 `set`**:`useChartToggles.set` 每次 render 都是新 identity,
+   *  傳進來會讓 memo 每輪都比不過 —— 而 toggle 鈕不在卡片內,卡片只讀) */
+  toggles: ChartToggles;
+  /** ≤16 檔 = `min-h-0`(高度由 1fr 列軌指派);>16 檔 = `h-56` 固定高(AD-7)。
+   *  字面值由父層挑好傳進來:Tailwind JIT 掃的是原始碼字面,拼出來的 class 不會被產出。 */
+  sizeClass: string;
   onPick: (code: string) => void;
 }) {
   const name = snap?.meta?.name ?? "";
@@ -123,12 +139,29 @@ const GroupCard = memo(function GroupCard({
   // 而重回補在鎖停日的漲跌停值變化上是常態。
   const backfilling = snap?.backfilling === true && (snap?.minutes.size ?? 0) === 0;
   return (
-    <button
-      type="button"
+    // `<div role="button">` 而不是 `<button>`(review R11):卡片內容從一條線變成一整張
+    // 分時圖(svg + 文字標籤 + hover 十字線),而 `<button>` 的內容模型只吃 phrasing
+    // content —— 巢狀非 phrasing 內容在瀏覽器裡是未定義行為。可及性靠 role + tabIndex
+    // + aria-label + 鍵盤 handler 自己補回來(原生 button 免費附帶的那三件)。
+    <div
+      role="button"
+      tabIndex={0}
       data-testid={`group-card-${code}`}
       aria-label={name === "" ? `查看 ${code}` : `查看 ${code} ${name}`}
+      aria-pressed={active}
       onClick={() => onPick(code)}
-      className="flex flex-col gap-1 rounded border border-line p-2 text-left hover:border-accent"
+      onKeyDown={(e) => {
+        // Space 的 preventDefault 不可省:role=button 的 div 不吃原生鍵盤語意,
+        // 空白鍵的預設行為是捲動頁面 —— 圖牆會在選檔的同時往下跳一屏。
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onPick(code);
+        }
+      }}
+      className={cn(
+        "flex cursor-pointer flex-col gap-1 rounded border border-line p-2 text-left hover:border-accent",
+        sizeClass,
+      )}
     >
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="font-mono text-sm text-ink">{code}</span>
@@ -139,15 +172,39 @@ const GroupCard = memo(function GroupCard({
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">回補中…</span>
       ) : snap === undefined || snap.noData ? (
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">無資料</span>
+      ) : !hasWindowedMinutes(snap.minutes) ? (
+        // edge 9:已訂閱、有 meta,但**窗內**一格分鐘都沒有(盤前只有 08:59 的試撮分鐘、
+        // 盤後只剩 13:31+)。判準不是 `minutes.size === 0` —— 窗外分鐘照樣讓它非空,
+        // 而幾何的 priceLine 仍是空的。卡片自己接住:進 StockIntradayChart 會撞它自己
+        // 那個帶 border/bg 的早退框,在卡片裡就是框中框。
+        <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">尚無成交</span>
       ) : (
-        <MiniIntradayChart minutes={snap.minutes} meta={snap.meta} liveP={quote?.p ?? null} />
+        <CardIntradayChart
+          code={code}
+          snap={snap}
+          liveP={quote?.p ?? null}
+          toggles={toggles}
+        />
       )}
-    </button>
+    </div>
   );
 });
 
-export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Props) {
+/** 圖牆頂 toggle 列的四鈕(SC-2)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
+ *  叫不同名字,使用者得自己對照。**恆可按**(AD-5):可用性是 per-code 的(某一檔沒
+ *  日線 ≠ 整列該反灰),個別卡片取不到 overlay 時該卡不畫,整列不動。 */
+const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp"; label: string }[] = [
+  { key: "vwap", label: "均價" },
+  { key: "cdp", label: "CDP" },
+  { key: "ma", label: "MA" },
+  { key: "vp", label: "量分佈" },
+];
+
+export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError }: Props) {
   const [picked, setPicked] = useState<string | null>(loadGroupName);
+  // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
+  // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
+  const { toggles, set } = useChartToggles();
   // 群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名(edge 5)——
   // fallback 第一個而不是停在空態,否則畫面會說「這個群組還沒有成員」而使用者
   // 根本沒有那一組。衍生值不入 state:同步 state 與 props 正是 effect anti-pattern。
@@ -184,10 +241,11 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
           不渲染群組檢視」)與 746/750(鎖「重掛後還原群組檢視」)四處都靠它接住 ——
           拿掉的失效樣態是那四條斷言靜默 vacuous(查不到元素與「沒渲染」在 queryBy 下
           長得一模一樣),不是紅燈。 */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
       <div
         role="group"
         aria-label="選擇群組"
-        className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-ink-muted"
+        className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
       >
         <span>群組</span>
         {groups.map((g) => (
@@ -209,6 +267,27 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
             {g.name}
           </button>
         ))}
+      </div>
+        {/* toggle 列與群組 pill 同一行(SC-2):圖牆頂只有一列 chrome,兩列會吃掉
+            卡片的高。**不放進 `role="group"` 容器內** —— 那個容器的可及名稱是
+            「選擇群組」,圖層開關不屬於它。 */}
+        <div className="flex shrink-0 gap-1">
+          {GRID_TOGGLES.map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              data-testid={`grid-toggle-${key}`}
+              aria-pressed={toggles[key]}
+              onClick={() => set(key, !toggles[key])}
+              className={cn(
+                "rounded border px-2 py-0.5 text-xs",
+                toggles[key] ? "border-accent text-accent" : "border-line text-ink-dim",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       {codes.length === 0 ? (
         <div className="flex flex-1 items-center justify-center">
@@ -242,6 +321,12 @@ export function GroupGridView({ groups, quotes, onPick, wlPending, wlError }: Pr
               code={code}
               snap={data?.[code]}
               quote={quotes[code]}
+              active={code === active}
+              toggles={toggles}
+              // >16 檔走捲動軌:列高是 auto,卡片得自己有確定高度,否則
+              // `useContainerSize` 量到的高由內容決定 → 「量多高就設多高」的回饋迴圈
+              // (RO loop 告警)。≤16 檔由 1fr 列軌指派高,卡片只要能縮(min-h-0)。
+              sizeClass={codes.length > 16 ? "h-56" : "min-h-0"}
               onPick={pick}
             />
           ))}

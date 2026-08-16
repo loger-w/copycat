@@ -215,6 +215,9 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
             wlPending={wlPending}
             wlError={wlError}
             quotes={watchlist}
+            // 選中框的真相源(AD-6):檢視停在群組後,「閃電梯瞄的是哪一檔」在畫面上
+            // 沒有別的指認方式 —— 與主圖 / 右欄同一個 `code`,不另存一份。
+            active={code}
             // 點卡片 = **只換右欄閃電梯的標的**,檢視停在群組(SC-3 / D3)。卡片上已是
             // 單檔同款的完整分時圖,細節就在圖牆上看得完;自動切回單檔的舊行為會讓每次
             // 換標的都得再點一次「群組」回來,而盯盤時圖牆本身就是主畫面。
