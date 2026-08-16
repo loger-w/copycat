@@ -242,6 +242,74 @@ export function extendMinutes(
   return next;
 }
 
+/** 群組卡片的 snapshot 形狀。**結構型別不 import `GroupSnapshot`** —— lib 反向依賴
+ *  hooks 會讓純函式綁上 TanStack Query 那一層;結構相容就夠了,後端補鍵時
+ *  `useGroupSnapshots` 那邊加欄位即可,本檔的選填欄位自動接上。 */
+export interface GroupLikeSnapshot {
+  minutes: Map<number, MinuteAgg>;
+  meta: StockMeta | null;
+  noData: boolean;
+  /** 以下四鍵為後端 light_snapshot 的加鍵;**選填** —— 舊後端缺 → 降級不畫那幾層 */
+  vwap?: number | null;
+  high?: number | null;
+  low?: number | null;
+  vp?: Map<number, VpCell>;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** group-state 的精簡 snapshot → `StockAccum`(卡片變體的分時圖吃的型別)。
+ *
+ *  **缺鍵一律降級成「不可得」而不是近似**:拿分鐘資料折一份前端版 VWAP / VP 出來,
+ *  畫面上會與單檔頁的同一檔對不上(單檔頁走後端逐筆),而兩個數字都「看起來對」——
+ *  沒有任何錯誤訊號。少畫一層是誠實的降級。
+ *
+ *  `ticks` 恆空(group-state 刻意不送:50 檔 × 數千筆 = 頻寬炸彈),故 `amountMilli`
+ *  / `volume` / `seq` 全取零值 —— 這份 accum 是**唯讀渲染輸入**,不會再吃 `applyTick`。
+ *
+ *  `last` 兩分支(edge 10):`liveP` 是每秒更新的那一份,現價圈與末點同源;不可得時
+ *  退回**最大分鐘鍵**那格的收盤(不是第一格,也不是 null —— 60s 快照間的空窗照樣要有
+ *  現價圈)。 */
+export function accumFromGroupSnapshot(
+  code: string,
+  snap: GroupLikeSnapshot,
+  liveP: number | null,
+): StockAccum {
+  const minutes = extendMinutes(snap.minutes, liveP);
+  let last: StockAccum["last"] = null;
+  if (liveP !== null && liveP > 0) {
+    const now = new Date();
+    last = {
+      p: liveP,
+      t: `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
+      cum_vol: 0,
+    };
+  } else if (minutes.size > 0) {
+    const lastMin = Math.max(...minutes.keys());
+    const agg = minutes.get(lastMin)!;
+    last = { p: agg.c, t: `${pad2(Math.floor(lastMin / 60))}:${pad2(lastMin % 60)}:00`, cum_vol: 0 };
+  }
+  return {
+    code,
+    seq: 0,
+    last,
+    vwap: snap.vwap ?? null,
+    minutes,
+    ticks: [],
+    vp: snap.vp ?? new Map(),
+    book: null,
+    meta: snap.meta,
+    noData: snap.noData,
+    trial: false,
+    high: snap.high ?? null,
+    low: snap.low ?? null,
+    amountMilli: 0,
+    volume: 0,
+  };
+}
+
 export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
   const key = minuteKey(msg.t);
   const minutes = new Map(acc.minutes);
