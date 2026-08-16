@@ -114,6 +114,18 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
   if (prevInstrument !== instrumentKey) {
     setPrevInstrument(instrumentKey);
     setCenterRequest(null);
+    // 鎖定態換標的 → 張數回初值(code review r1 S2)。未鎖定時換標的會解除武裝,下一單
+    // 必須先重按武裝 —— 那顆鈕就是「你正要在這檔送 N 張」的檢查點,所以 qty 可以留著
+    // (W-7 / R2-10)。鎖定把檢查點拿掉了:留著 qty 等於「在 A 檔按到 10 張、切到 B 檔」
+    // 就是 B 檔 10 張直送,而畫面上那個數字是使用者自己按的,名目放大零訊號。
+    if (armCtl.state.locked) setStockQty(initialQtyState());
+  }
+  // 期貨腿同理(qty 各梯各自持有,所以要各自打回初值)
+  const futProduct = ctx.kind === "futures" ? ctx.product : null;
+  const [prevProduct, setPrevProduct] = useState(futProduct);
+  if (prevProduct !== futProduct) {
+    setPrevProduct(futProduct);
+    if (armCtl.state.locked) setFutQty(initialQtyState());
   }
 
   // 五檔點價的唯一 window listener(W-C1 / R2-5):ladder 在非閃電 tab 已 unmount,
