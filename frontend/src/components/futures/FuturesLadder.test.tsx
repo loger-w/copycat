@@ -316,6 +316,62 @@ describe("FuturesLadder 武裝防護(review C3/C4)", () => {
   });
 });
 
+describe("FuturesLadder 鎖定武裝(SC-1 / SC-12a)", () => {
+  it("SC-1:按鎖定 → 武裝 +「鎖定中」(期貨梯自帶的第三份武裝列 JSX 同款有鈕)", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    setCapitalWsStatus("open");
+    render(ladder());
+    const lock = screen.getByRole("button", { name: "鎖定" });
+    expect(lock.parentElement).toBe(screen.getByRole("button", { name: "武裝" }).parentElement);
+    fireEvent.click(lock);
+    expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
+    const locked = screen.getByRole("button", { name: "鎖定中" });
+    expect(locked.getAttribute("aria-pressed")).toBe("true");
+    expect(locked.className).toContain("bg-accent");
+  });
+
+  it("鎖定後換 product → 仍武裝(未鎖定時的 symbol_changed 解除是對照組)", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    setCapitalWsStatus("open");
+    const { rerender } = render(ladder());
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    rerender(ladder(MXF_STATE, "MXF"));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+  });
+
+  it("SC-12(a):resolved_contract null(未武裝)→ 武裝鈕與鎖定鈕同 disabled", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    setCapitalWsStatus("open");
+    render(ladder({ ...TXF_STATE, resolved_contract: null }));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  /** E-3:安全優先 —— 鎖定中合約失解析仍 disarm 並清鎖定(合約一解析要重新武裝) */
+  it("鎖定中 resolved_contract 轉 null → 解除且清鎖定", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    setCapitalWsStatus("open");
+    const { rerender } = render(ladder());
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    rerender(ladder({ ...TXF_STATE, resolved_contract: null }));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定" })).toBeTruthy();
+  });
+});
+
 describe("FuturesLadder 掛單紅方格(SC-8)", () => {
   it("本契約活單聚合口數;他契約不顯示;點擊逐 seq 直刪(market=fut)", async () => {
     const cancelBodies: unknown[] = [];

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StkfutLadder } from "@/components/stock/StkfutLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
+import { ARM_IDLE_MS } from "@/lib/flash-arm";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { CapitalOrder, CapitalPosition } from "@/types";
 
@@ -463,5 +464,72 @@ describe("StkfutLadder 非標準契約單位不開放下單(SC-6)", () => {
     mockCapitalFetch();
     render(ladder({ prod: "QFF", ym: "202609", mini: true, unit: 100 }));
     expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
+  });
+});
+
+// 個股期梯的武裝防護原本只鎖了 conn_lost 與換合約兩條 —— Esc / idle / 連 3 敗三條在
+// 現股梯與期貨梯都有測、這裡沒有(current-state §1)。鎖定會讓武裝活得更久,先把
+// 這三條在本梯補齊,再加鎖定本身的案例。
+describe("StkfutLadder 武裝防護補齊(Esc / idle / 連 3 敗)", () => {
+  it("Esc 鍵解除武裝", () => {
+    mockCapitalFetch();
+    render(ladder());
+    armUp();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+  });
+
+  it("idle 5 分鐘自動解除", () => {
+    vi.useFakeTimers();
+    mockCapitalFetch();
+    render(ladder());
+    armUp();
+    act(() => {
+      vi.advanceTimersByTime(ARM_IDLE_MS + 1);
+    });
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+  });
+
+  it("連 3 次送單失敗自動解除", async () => {
+    mockCapitalFetch({
+      "/api/capital/order/future": () => json({ detail: { error: "BAD_TICK" } }, 400),
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    await waitFor(() => expect(screen.getByText("價格非合法檔位")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 1 次失敗仍武裝
+    fireEvent.click(screen.getByLabelText("賣 100.5"));
+    fireEvent.click(screen.getByLabelText("買 99.9"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+  });
+});
+
+describe("StkfutLadder 鎖定武裝(SC-1 / SC-12a)", () => {
+  it("SC-1:按鎖定 → 武裝 +「鎖定中」", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder());
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    expect(screen.getByRole("button", { name: "解除" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "鎖定中" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("鎖定後換合約月份 → 仍武裝(未鎖定時的自動解除是對照組)", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    const { rerender } = render(ladder());
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    rerender(ladder({ prod: "CDF", ym: "202610", mini: false, unit: 2000 }));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+  });
+
+  it("SC-12(a):未武裝 + blocked 契約 → 武裝鈕與鎖定鈕同 disabled", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder({ prod: "NYF", ym: "202609", mini: false, unit: 10000 }, "0050"));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(true);
   });
 });
