@@ -147,21 +147,23 @@ describe("App(index-board T9)", () => {
   });
 });
 
-// 🟢 台股綜合 R1(SC-1):corr tab 併入台股綜合頁 → nav 少一顆,
-// localStorage 值域縮減一項(舊值 "corr" 刻意 fallback 到 index)。
-describe("App 台股綜合 tab 整併(SC-1)", () => {
-  it("舊 localStorage 值 corr 落到「台股綜合」(值域縮減的刻意遷移)", () => {
+// 🟢 一頁總覽 R2(SC-1):相關係數自台股綜合頁的 subtab **升回頂層 tab**(排最後一顆)
+// —— R1 曾把它併進台股綜合頁,本輪 subtab 機制退役後改以第 5 顆頂層 tab 承接,
+// localStorage 值域同步**加回** `corr`(R1 前的舊值因此重新還原到相關係數頁,D7 預期)。
+describe("App 相關係數升回頂層 tab(R2 SC-1)", () => {
+  it("舊 localStorage 值 corr 還原到「相關係數」(值域加回)", () => {
     window.localStorage.setItem("copycat-tab", "corr");
     renderApp();
-    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
+    expect(screen.getByRole("tab", { name: "相關係數" }).getAttribute("aria-selected")).toBe(
       "true",
     );
   });
 
-  it("nav 不再有「相關係數」tab", () => {
+  it("nav 有「相關係數」tab 且排在最後一顆", () => {
     renderApp();
     const nav = within(screen.getByRole("tablist", { name: "主要分頁" }));
-    expect(nav.queryByRole("tab", { name: "相關係數" })).toBeNull();
+    expect(nav.getByRole("tab", { name: "相關係數" })).toBeTruthy();
+    expect(nav.getAllByRole("tab").at(-1)?.textContent).toBe("相關係數");
   });
 });
 
@@ -284,16 +286,15 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
 });
 
 describe("App(期貨 tab T15)", () => {
-  it("nav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨", () => {
+  it("nav tab 順序 = 台股綜合 / 個股(期) / 選擇權 / 期貨 / 相關係數", () => {
     renderApp();
     // 🔴-1:右欄也是 tablist(閃電/委託/部位)→ 全域 getAllByRole("tab") 會撞名,
-    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;台股綜合 R1(SC-1)起
-    // 「相關係數」併入首顆分頁內(2026-08-14 起是該頁的一顆 subtab,改版前為收合
-    // 區塊),不再是獨立 tab。
+    // 收斂到 nav。斷言意圖(nav 各 tab 的文字與順序)不變;一頁總覽 R2(SC-1)起
+    // 「相關係數」自台股綜合頁的 subtab 升回**最後一顆頂層 tab**(D7),前四顆順序不動。
     const labels = within(screen.getByRole("tablist", { name: "主要分頁" }))
       .getAllByRole("tab")
       .map((el) => el.textContent);
-    expect(labels).toEqual(["台股綜合", "個股(期)", "選擇權", "期貨"]);
+    expect(labels).toEqual(["台股綜合", "個股(期)", "選擇權", "期貨", "相關係數"]);
   });
 
   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
@@ -353,11 +354,11 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
     expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
   });
 
-  it("nav 有 4 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
+  it("nav 有 5 顆 tab、右欄有 3 顆,兩者互不干擾", () => {
     renderApp();
-    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 5 → 4 是台股綜合 R1(SC-1)
-    // 把「相關係數」分頁併入台股綜合頁的預期行為改變,右欄三顆不受影響。
-    expect(navTabs().length).toBe(4);
+    // 斷言意圖不變(兩個 tablist 各自獨立);nav 由 4 → 5 是一頁總覽 R2(SC-1)
+    // 把「相關係數」自 subtab 升回頂層 tab 的預期行為改變,右欄三顆不受影響。
+    expect(navTabs().length).toBe(5);
     expect(railTabs().length).toBe(3);
   });
 });
