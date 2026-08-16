@@ -92,7 +92,7 @@ docs/superpowers/         # spec 與 implementation plan
 | 種子匯入(一次性) | `.venv\Scripts\python -m copycat import-neigui --src C:\side-project\neigui\backend\data\research\five-tigers` | repo root |
 | Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
 | Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
-| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;休市日補 env `TXO_BACKFILL_DATE=<上一交易日>`) | repo root |
+| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;非交易日自動取最近交易日(`configs/trading_holidays.json`,`GET /api/calendar` 可查;`years_loaded` 不含當年 = 日曆過期要更新);`TXO_BACKFILL_DATE` 仍為手動覆寫,TXO 面與交易日盤前冷啟動仍需要它) | repo root |
 | 跑著的 server 是哪一版 | `curl -s localhost:8721/api/health` → `{git_sha,...}`;判法與教訓見 skill `ops-discipline` | repo root |
 | Frontend dev / 測試 / build | `npm run dev` / `npm test` / `npm run build` | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
