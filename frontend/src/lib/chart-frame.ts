@@ -29,6 +29,42 @@ export const CHART_FRAME = {
   bottomRow: 20,
 } as const;
 
+/** 群組卡片變體的框外 chrome(px @ root font-size 16)。**與 `CHART_FRAME` 分開** ——
+ *  卡片沒有 figure 的 padding / border,也沒有底部說明列,只剩 readout 那一列;
+ *  硬套 `CHART_FRAME` 會多扣 84px,在 250px 高的卡片上等於三分之一張圖。 */
+export const CARD_CHROME = {
+  /** readout 列 h-[1.375rem](22)+ mb-1(4);與 `CHART_FRAME.topRow` 同一份口徑 */
+  readoutRow: 26,
+} as const;
+
+/** 主圖佔可用高的比例分子 / 分母 = 單檔頁 `MAIN.height` : `MAIN.height + SUB.height`。
+ *  比例寫在這裡而不是元件裡:元件端另算一次的話,卡片的主副比會與單檔頁靜默岔開。 */
+const CARD_MAIN_RATIO = 260 / 330;
+
+export interface CardSvgBox {
+  /** viewBox 寬 = 量到的 px 寬(1:1);**主圖與副圖共用** */
+  width: number;
+  mainH: number;
+  subH: number;
+  usable: boolean;
+}
+
+/** 卡片圖區 wrapper 的量測尺寸 → 主 / 副圖的 viewBox 尺寸(1:1)。
+ *
+ *  `−2` 安全邊與 `svgBox` 同理:誤差方向恆為「略短」,多 1px 就會讓卡片內容溢出格軌
+ *  (矩陣佈局的列軌壓不住 overflow visible 的 item,會與下一列重疊而不是乾淨捲動)。
+ *
+ *  兩張圖的高用**減法**拆而不是各自 round:各自 round 時 `mainH + subH` 可能比可用高
+ *  多 1px,而那 1px 正好是溢軌的臨界。 */
+export function cardSvgBox(size: Size): CardSvgBox {
+  const usable = size.height - CARD_CHROME.readoutRow - 2;
+  if (size.width <= 0 || usable <= 0) {
+    return { width: 0, mainH: 0, subH: 0, usable: false };
+  }
+  const mainH = Math.round(usable * CARD_MAIN_RATIO);
+  return { width: Math.round(size.width), mainH, subH: usable - mainH, usable: true };
+}
+
 export interface SvgBox {
   /** svg 該渲染多高(px) */
   renderPx: number;
