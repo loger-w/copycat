@@ -105,9 +105,13 @@ describe("BreadthBand 格值與版面(SC-4)", () => {
   // 白字是隨之而來的可讀性條件 —— ink token 在滿版紅綠上對比不足。標籤與數字都要白:
   // 只染數字會留下一個 ink-dim 的「漲停」字浮在實心紅底上,比改版前更難讀。
   // 樣板 = 個股期漲跌停燈(WatchlistSidebar.tsx:405-406 的 bg-bull … text-white)。
-  it("(g) 漲停桶標籤與數字都是白字(實心紅底上的可讀性)", () => {
+  it("(g) 漲停桶實心紅底,標籤與數字都是白字(實心底上的可讀性)", () => {
     render(<BreadthBand breadth={state()} />);
     const cell = screen.getByTestId("breadth-cell-twse-limit_up");
+    // TD-8:「實心」原本沒鎖 —— `bg-bull/15`(改版前的淡底)也含子字串 `bg-bull`,
+    // 退回淡底時 (f) 與這一條都照樣綠,而白字配淡底才是真正讀不出來的組合。
+    expect(cell.className).toContain("bg-bull");
+    expect(cell.className).not.toContain("bg-bull/");
     const label = within(cell).getByText("漲停");
     expect(label.className).toContain("text-white");
     const num = screen.getByTestId("breadth-value-twse-limit_up").className;
@@ -147,9 +151,11 @@ describe("BreadthBand 上漲 / 下跌字色(SC-1)", () => {
     expect(cls).not.toContain("text-bear");
   });
 
-  it("(o) 跌停桶標籤與數字都是白字(與 (g) 同一條規則的另一邊)", () => {
+  it("(o) 跌停桶實心綠底 + 白字(與 (g) 同一條規則的另一邊)", () => {
     render(<BreadthBand breadth={state()} />);
     const cell = screen.getByTestId("breadth-cell-twse-limit_down");
+    expect(cell.className).toContain("bg-bear");
+    expect(cell.className).not.toContain("bg-bear/"); // 同 (g):淡底 `bg-bear/15` 也含 `bg-bear`
     expect(within(cell).getByText("跌停").className).toContain("text-white");
     const cls = screen.getByTestId("breadth-value-twse-limit_down").className;
     expect(cls).toContain("text-white");
