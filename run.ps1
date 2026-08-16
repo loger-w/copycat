@@ -1,7 +1,7 @@
 ﻿# 一鍵啟動看盤工具:同一個 shell 內同時跑 backend(FastAPI)+ frontend(Vite)。
 #
-#   .\run.ps1                              一般交易日
-#   .\run.ps1 -BackfillDate 2026-07-28     休市日(補 TXO_BACKFILL_DATE 才有回補資料)
+#   .\run.ps1                              一般交易日 / 非交易日(自動取最近交易日;configs/trading_holidays.json)
+#   .\run.ps1 -BackfillDate 2026-07-28     手動指定回補日(TXO 面、或交易日盤前冷啟動想看前一日時)
 #
 # 前置:達錢 4(Touchance 4.0)桌面 app 已開啟並登入,否則 TC4 訂閱拿不到推播。
 # Ctrl+C 一次同時收掉兩邊(finally 會補殺殘留的 node / python 子樹)。
@@ -13,7 +13,7 @@
 
 [CmdletBinding()]
 param(
-    # 休市日回補基準日(YYYY-MM-DD),對應 env TXO_BACKFILL_DATE
+    # 手動回補基準日(YYYY-MM-DD),對應 env TXO_BACKFILL_DATE;非交易日已由交易日曆自動處理,只在 TXO 面 / 盤前冷啟動需要
     [string]$BackfillDate
 )
 
