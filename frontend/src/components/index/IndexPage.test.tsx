@@ -288,10 +288,11 @@ describe("IndexPage 一頁總覽(subtab 退役)", () => {
 });
 
 // 版面 class 只能用字串鎖:jsdom 不載 Tailwind CSS,「有沒有捲軸」「兩欄還是一欄」在
-// 這裡量不到(真值由 SC-3 / SC-7 的截圖 + JS 量測收)。這三條守的是**捲軸的唯一落點**
-// 與**兩個斷點的存在**,改壞任何一項都會靜默回到「整頁捲」的舊行為。
-describe("IndexPage 一頁總覽版面(§4.1)", () => {
-  it("(y1) 捲軸只掛在主 grid:root 不捲,主 grid 捲並帶 1050px 兩欄斷點", () => {
+// 這裡量不到(真值由 SC-3 / SC-7 的截圖 + JS 量測收)。這四條守的是**捲軸的唯一落點**、
+// **兩個斷點的存在**與**可縮鏈的條件化**,改壞任何一項都會靜默回到「圖卡溢出壓在家數帶
+// 上、捲軸永遠不出現」的 r3 前狀態。
+describe("IndexPage 一頁總覽版面(§4.1 + amendment r3)", () => {
+  it("(y1) 捲軸只掛在主 grid;單欄態是 flex-col,1050px 才切 grid", () => {
     const { container } = renderPage(TXF, BREADTH);
     const root = container.firstElementChild!;
     expect(root.className).toContain("@container");
@@ -300,7 +301,12 @@ describe("IndexPage 一頁總覽版面(§4.1)", () => {
     const grid = screen.getByTestId("index-main-grid");
     expect(grid.className).toContain("overflow-y-auto");
     expect(grid.className).toContain("min-h-0");
-    expect(grid.className).toContain("grid-cols-1");
+    // 單欄態必須是 flex-col:grid 的兩條 auto 列會把自由空間**等分**給左右欄,列高與
+    // 內容無關 → 左欄溢出而主 grid 的 scrollHeight 恆等於 clientHeight(逃生口失效,
+    // code review WL-1 的根因)。`grid-cols-1` 回來就是回到那個狀態。
+    expect(grid.className).toContain("flex-col");
+    expect(grid.className).not.toContain("grid-cols-1");
+    expect(grid.className).toContain("@[1050px]:grid");
     expect(grid.className).toContain("@[1050px]:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]");
   });
 
@@ -313,11 +319,30 @@ describe("IndexPage 一頁總覽版面(§4.1)", () => {
     expect(adl.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("(y3) 雙圖 grid 改用左欄容器寬 700px 顯式斷點(取代 auto-fit;W-12)", () => {
+  it("(y3) 雙圖 grid:640px 顯式斷點 + 顯式地板,不再掛 min-h-0", () => {
     renderPage(TXF, BREADTH);
     const grid = screen.getByTestId("market-pane-left").parentElement!;
     expect(grid.className).toContain("grid-cols-1");
-    expect(grid.className).toContain("@[700px]:grid-cols-2");
+    expect(grid.className).toContain("@[640px]:grid-cols-2");
     expect(grid.className).not.toContain("auto-fit");
+    // `min-h-0` + `flex-1` 的組合讓雙圖軌可以被壓到低於內容高 → 圖卡(overflow visible)
+    // 溢出壓在家數帶上,而不是把左欄撐高讓主 grid 出捲軸。地板 20rem 換掉它。
+    expect(grid.className).toContain("min-h-80");
+    expect(grid.className).not.toContain("min-h-0");
+  });
+
+  // TD-5:可縮鏈原本只鎖三個節點,鏈中任一段的 `min-h-0` 被無條件化(r3 前的狀態)都
+  // 不會有測試變紅。左欄 / 右欄框各自要「兩欄態才可縮」——單欄態下 min-h-0 一路傳到
+  // 底,內容就再也撐不高主 grid。
+  it("(y4) 左欄與右欄框的 min-h-0 都條件化到 @[1050px](單欄態內容決定高)", () => {
+    renderPage(TXF, BREADTH);
+    const leftCol = screen.getByTestId("market-pane-left").parentElement!.parentElement!;
+    // 左欄自己也是 container:雙圖斷點量的是左欄寬,不是整頁寬
+    expect(leftCol.className).toContain("@container");
+    expect(leftCol.className).toContain("@[1050px]:min-h-0");
+
+    const rightBox = screen.getByTestId("limit-list").parentElement!;
+    expect(rightBox.className).toContain("@[1050px]:min-h-0");
+    expect(rightBox.className).toContain("border-line");
   });
 });
