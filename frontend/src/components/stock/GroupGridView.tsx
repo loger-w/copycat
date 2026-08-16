@@ -159,7 +159,11 @@ const GroupCard = memo(function GroupCard({
         }
       }}
       className={cn(
-        "flex cursor-pointer flex-col gap-1 rounded border border-line p-2 text-left hover:border-accent",
+        "flex cursor-pointer flex-col gap-1 rounded border p-2 text-left hover:border-accent",
+        // 選中框(AD-6):`ring` 是 box-shadow,**不佔版面** —— 用 border-2 加粗的話
+        // 選中的那一格會比別格少 2px 內容寬,矩陣上看得出來一格在跳。
+        // hover 只換 border 色,選中另加一圈 ring:兩者疊在同一張卡時仍分得出來。
+        active ? "border-accent ring-1 ring-accent" : "border-line",
         sizeClass,
       )}
     >
@@ -271,7 +275,7 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
         {/* toggle 列與群組 pill 同一行(SC-2):圖牆頂只有一列 chrome,兩列會吃掉
             卡片的高。**不放進 `role="group"` 容器內** —— 那個容器的可及名稱是
             「選擇群組」,圖層開關不屬於它。 */}
-        <div className="flex shrink-0 gap-1">
+        <div className="ml-auto flex shrink-0 gap-1">
           {GRID_TOGGLES.map(({ key, label }) => (
             <button
               key={key}

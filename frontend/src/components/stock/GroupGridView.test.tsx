@@ -480,6 +480,18 @@ describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
     expect(screen.getByTestId("group-card-2317").getAttribute("aria-pressed")).toBe("false");
   });
 
+  // 視覺層(D):`ring` 是 box-shadow **不佔版面** —— 換成加粗 border 的話選中那一格
+  // 的內容寬會少 2px,矩陣上看得出一格在跳。這條鎖的是「選中看得見 + 不動版面」。
+  it("選中的卡片畫 accent 框(ring 不佔版面),未選中維持 border-line", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2330" />);
+    const picked = await screen.findByTestId("group-card-2330");
+    expect(picked.className).toContain("border-accent");
+    expect(picked.className).toContain("ring-accent");
+    const other = screen.getByTestId("group-card-2317");
+    expect(other.className).toContain("border-line");
+    expect(other.className).not.toContain("ring-accent");
+  });
+
   it("active 不在當前群組 → 全部未選中(edge 6)", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2881" />);
     const first = await screen.findByTestId("group-card-2330");
