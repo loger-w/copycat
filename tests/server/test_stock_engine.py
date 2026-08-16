@@ -2801,3 +2801,84 @@ class TestObserveClockContract:
             ("08:29:58.000", "09:00:02.000"),
             ("13:24:58.000", "13:30:02.000"),
         )
+
+
+class _TickClock:
+    """凍結時鐘 + **迴圈拍數計數器**(`now_fn` 注入點)。
+
+    否定型斷言(「不 stage1」)需要一個可觀察的計數器來確定迴圈真的轉過幾拍:
+    在 Windows 上 `await asyncio.sleep(0.1)` 對 interval=0.01 實際只跑 ~3 拍
+    (timer 解析度 15.6ms,同 `_wait_rounds` 的 W-4 理由),用牆鐘換拍數的話
+    「沒 stage1」有可能只是因為迴圈根本沒轉。
+    """
+
+    def __init__(self, wall: _dt.datetime) -> None:
+        self.wall = wall
+        self.ticks = 0
+
+    def __call__(self) -> _dt.datetime:
+        self.ticks += 1
+        return self.wall
+
+
+class TestCheckpointTradingDay:
+    """SC-4:checkpoint 的「候選交易日」判定改吃注入的 `is_trading_day`。
+
+    現行是 `now.weekday() < 5` —— 國定假日(平日)08:00 照樣 stage1,把 source 日窗切到
+    假日,而 stage2 永遠等不到新日首筆(假日無推播)→ 狀態不清、但其後任何回補都走
+    假日窗回空,畫面只是空著沒有任何錯誤訊號。
+    """
+
+    async def _armed(
+        self,
+        wall: _dt.datetime,
+        *,
+        is_trading_day: Callable[[_dt.date], bool] | None = None,
+    ) -> tuple[StockEngine, FakeSource, _TickClock]:
+        """起一個 checkpoint 開著的 engine,等迴圈確實轉過 3 拍後回傳現況。"""
+        clock = _TickClock(wall)
+        src = FakeSource()
+        extra = {} if is_trading_day is None else {"is_trading_day": is_trading_day}
+        engine = StockEngine(
+            src,
+            trade_date="2026-08-12",
+            throttle_secs=0.01,
+            checkpoint=True,
+            now_fn=clock,
+            **extra,  # type: ignore[arg-type]
+        )
+        engine._checkpoint_secs = 0.01  # type: ignore[attr-defined]
+        await engine.start()
+        await _wait_until(lambda: clock.ticks >= 3)
+        return engine, src, clock
+
+    async def test_non_trading_weekday_does_not_arm_stage1(self) -> None:
+        """平日但日曆說非交易日(國定假日)→ 不 stage1、不動 source 日窗。"""
+        engine, src, _ = await self._armed(
+            _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: False
+        )
+        try:
+            assert engine._pending_date is None
+            assert src.trade_dates == ["2026-08-12"]  # 只有 start() 同步那次
+        finally:
+            await engine.close()
+
+    async def test_trading_day_arms_stage1(self) -> None:
+        """同一個時鐘、日曆說是交易日 → 照舊 stage1(否定型斷言的對照組)。"""
+        engine, src, _ = await self._armed(
+            _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: True
+        )
+        try:
+            await _wait_until(lambda: engine._pending_date == "2026-08-13")
+            assert src.trade_dates == ["2026-08-12", "2026-08-13"]
+        finally:
+            await engine.close()
+
+    async def test_default_keeps_weekday_semantic(self) -> None:
+        """W9:不注入 `is_trading_day` 時逐字保留現行 `weekday() < 5`(週六不 stage1)。"""
+        engine, src, _ = await self._armed(_dt.datetime(2026, 8, 15, 9, 0))
+        try:
+            assert engine._pending_date is None
+            assert src.trade_dates == ["2026-08-12"]
+        finally:
+            await engine.close()
