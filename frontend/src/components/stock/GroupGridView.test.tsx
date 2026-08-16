@@ -37,17 +37,51 @@ function state(over: StateOver = {}) {
   };
 }
 
+/** ResizeObserver 的最小替身(樣板 `components/index/MarketPane.size.test.tsx`)。
+ *
+ *  卡片的分時圖走 `useContainerSize` 量測後才畫(AD-3:量到之前不畫,否則 800 寬的
+ *  viewBox 會先塞進 250px 卡片再跳回 1:1)—— jsdom 沒有 RO,不 stub 的話整面卡片的
+ *  圖區都是空白,本檔所有「圖畫出來了」的斷言會靜默 vacuous(查不到 svg 與「這一態
+ *  本來就不該有 svg」在 queryBy 下長得一模一樣)。
+ *
+ *  **必須同步餵**:`useContainerSize` 是 callback ref,節點掛上當下才 observe;
+ *  非同步餵在 RTL 的同步斷言之前不會到達。 */
+class FakeResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(node: Element): void {
+    this.cb(
+      [{ target: node, contentRect: { width: 300, height: 200 } } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 let states: Record<string, unknown>;
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   states = {
     "2330": state(),
     "2317": state({ meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 5 } }),
     "2881": state({ meta: { name: "富邦金", ref: 800_000, upper: null, lower: null, y_vol: 5 } }),
   };
   fetchMock = vi.fn(async (url: string) => {
+    // 卡片圖與單檔頁同一份渲染碼 → `cdp` 預設開時每張卡都會打一次 overlay。
+    // 不接這條路由的話它會拿到 group-state 的殼(`{states:{}}`)當 overlay 用。
+    if (String(url).includes("/api/stock/overlay/")) {
+      return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+    }
     const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
     const picked: Record<string, unknown> = {};
     for (const c of codes.split(",").filter(Boolean)) picked[c] = states[c] ?? state({ no_data: true });
@@ -69,7 +103,7 @@ function groupCalls(): string[] {
 
 describe("GroupGridView 空態(文案逐字)", () => {
   it("零群組 → 尚無群組空態,且零請求", async () => {
-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} />);
     expect(screen.getByText("尚無群組 — 到自選欄建立群組")).toBeTruthy();
     await new Promise((r) => setTimeout(r, 30));
     expect(groupCalls()).toHaveLength(0);
@@ -78,7 +112,7 @@ describe("GroupGridView 空態(文案逐字)", () => {
   // R17:空群組的 codes 是空陣列,打端點只會拿回 `{"states":{}}` —— 沒有任何卡片可畫,
   // 卻每 60s 燒一次來回。gate 在 hook 的 `enabled`,不是在畫面。
   it("空群組(成員 0)→ 專屬空態,且零請求", async () => {
-    wrap(<GroupGridView groups={[{ name: "空組", codes: [] }]} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={[{ name: "空組", codes: [] }]} quotes={{}} onPick={vi.fn()} active={null} />);
     expect(screen.getByText("這個群組還沒有成員")).toBeTruthy();
     await new Promise((r) => setTimeout(r, 30));
     expect(groupCalls()).toHaveLength(0);
@@ -90,7 +124,7 @@ describe("GroupGridView 空態(文案逐字)", () => {
 // 對著一份還沒讀到的資料下結論,失敗時更會讓人以為群組被清光了。
 describe("GroupGridView 自選三態前置(review A4)", () => {
   it("自選載入中 → 「載入群組…」,不下結論也不請求", async () => {
-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} wlPending />);
+    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} wlPending />);
     expect(screen.getByText("載入群組…")).toBeTruthy();
     expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
     await new Promise((r) => setTimeout(r, 30));
@@ -98,7 +132,7 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
   });
 
   it("自選載入失敗 → 「自選載入失敗」,不冒充空清單", async () => {
-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} wlError />);
+    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} wlError />);
     expect(screen.getByText("自選載入失敗")).toBeTruthy();
     expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
     await new Promise((r) => setTimeout(r, 30));
@@ -106,14 +140,14 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
   });
 
   it("終態零群組(非載入中、非失敗)→ 才說「尚無群組」", () => {
-    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} wlPending={false} wlError={false} />);
+    wrap(<GroupGridView groups={[]} quotes={{}} onPick={vi.fn()} active={null} wlPending={false} wlError={false} />);
     expect(screen.getByText("尚無群組 — 到自選欄建立群組")).toBeTruthy();
   });
 
   // 失敗但**手上還有舊資料**(TQ 的 error + cached data)時照畫 —— 群組結構是慢變數,
   // 上一份仍然有用;把它換成一句錯誤訊息是拿走使用者唯一能看的東西。
   it("有群組資料時,wlError 不遮掉既有卡片", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} wlError />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} wlError />);
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.queryByText("自選載入失敗")).toBeNull();
   });
@@ -126,7 +160,7 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
 // 斷言靜默 vacuous:查不到元素與「群組檢視沒渲染」在 queryBy 下長得一模一樣)。
 describe("GroupGridView 群組切換 pill", () => {
   it("預設第一個群組;成員卡片全數渲染", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     expect(
       screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
     ).toBe("true");
@@ -145,7 +179,7 @@ describe("GroupGridView 群組切換 pill", () => {
   });
 
   it("切換群組 → 改打新群組的 codes", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await waitFor(() => expect(groupCalls()).toHaveLength(1));
     expect(groupCalls()[0]).toContain("codes=2330,2317");
     fireEvent.click(screen.getByRole("button", { name: "金融" }));
@@ -161,7 +195,7 @@ describe("GroupGridView 群組切換 pill", () => {
   // (spec 白名單 #7 amendment),不是不變行為,所以要有測試把新語意釘住。
   it("點已選中的 pill 也回寫 localStorage(清掉 stale 舊名)", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     fireEvent.click(screen.getByRole("button", { name: "半導體" }));
     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("半導體");
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
@@ -171,7 +205,7 @@ describe("GroupGridView 群組切換 pill", () => {
   // 不 fallback 的話畫面會停在「這個群組還沒有成員」而使用者根本沒有那一組。
   it("記住的群組已被刪 → fallback 第一個群組", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     expect(
       screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
     ).toBe("true");
@@ -180,7 +214,7 @@ describe("GroupGridView 群組切換 pill", () => {
 
   it("記住的群組仍在 → 沿用它(不重設回第一個)", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "金融");
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
@@ -219,7 +253,7 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
   }
 
   it("元件層:2 檔群組 → 2×2 矩陣格線,不走 auto-fill", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     const grid = screen.getByTestId("group-grid");
     expect(grid.className).toContain("grid-cols-2");
@@ -239,7 +273,7 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
   it("元件層:17 檔群組 → 4 欄無列軌 + content-start(不被 stretch 撐高)", async () => {
     const codes17 = Array.from({ length: 17 }, (_, i) => String(3000 + i));
     wrap(
-      <GroupGridView groups={[{ name: "大群", codes: codes17 }]} quotes={{}} onPick={vi.fn()} />,
+      <GroupGridView groups={[{ name: "大群", codes: codes17 }]} quotes={{}} onPick={vi.fn()} active={null} />,
     );
     await waitFor(() => expect(screen.getByTestId("group-card-3000")).toBeTruthy());
     const grid = screen.getByTestId("group-grid");
@@ -254,7 +288,7 @@ describe("GroupGridView 矩陣佈局(gridShape)", () => {
 // 變高後 y 向縮放可達 ~3×,線寬得靠 `vector-effect` 釘在螢幕像素(P1-5)。
 describe("GroupGridView 高度均分 class", () => {
   it("常態卡片:svg 帶 grow + h-20,價線不隨拉伸變粗", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     // SVG 的 `className` 是 SVGAnimatedString,子字串斷言得走 getAttribute(spec P2-1)
     const svgClass = card.querySelector("svg")?.getAttribute("class") ?? "";
@@ -274,7 +308,7 @@ describe("GroupGridView 高度均分 class", () => {
 
   it("無資料佔位也跟著長高(不然整列高度對不齊)", async () => {
     states["2330"] = state({ no_data: true, minutes: {} });
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const el = await screen.findByText("無資料");
     expect(el.className).toContain("grow");
     expect(el.className).toContain("h-20");
@@ -283,7 +317,7 @@ describe("GroupGridView 高度均分 class", () => {
 
 describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => {
   it("常態 → 代碼 + 名稱 + mini 分時圖", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     expect(card.textContent).toContain("2330");
     expect(card.textContent).toContain("台積電");
@@ -292,7 +326,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
 
   it("backfilling → 「回補中…」,不呈現半截圖", async () => {
     states["2330"] = state({ backfilling: true, minutes: {} });
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     await waitFor(() => expect(card.textContent).toContain("回補中…"));
     expect(card.querySelector("svg")).toBeNull();
@@ -306,7 +340,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
   // 優先序:回補中同時 no_data 時要說「回補中…」—— 回補完就會有資料,說「無資料」是錯的
   it("backfilling 與 noData 同時為真 → 顯示「回補中…」", async () => {
     states["2330"] = state({ backfilling: true, no_data: true, minutes: {} });
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     await waitFor(() => expect(card.textContent).toContain("回補中…"));
     expect(card.textContent).not.toContain("無資料");
@@ -317,7 +351,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
   // 而重回補在鎖停日的漲跌停值變化上是常態。
   it("backfilling 但已有分鐘資料 → 照畫圖,不蓋「回補中…」", async () => {
     states["2330"] = state({ backfilling: true });
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     await waitFor(() => expect(card.querySelector("svg")).toBeTruthy());
     expect(card.textContent).not.toContain("回補中…");
@@ -325,7 +359,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
 
   it("noData → 「無資料」占位", async () => {
     states["2330"] = state({ no_data: true, minutes: {} });
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     await waitFor(() => expect(card.textContent).toContain("無資料"));
     expect(card.querySelector("svg")).toBeNull();
@@ -336,7 +370,7 @@ describe("GroupGridView 卡片三態(backfilling → noData → 常態)", () => 
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 }),
     );
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await waitFor(() =>
       expect(screen.getByTestId("group-card-2330").textContent).toContain("無資料"),
     );
@@ -350,7 +384,7 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
       "2330": quote({ p: 2_400_000, chg_pct: 3.45 }),
       "2317": quote({ p: 1_900_000, chg_pct: -5 }),
     };
-    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />);
     const a = await screen.findByTestId("group-quote-2330");
     expect(a.textContent).toContain("2400");
     expect(a.textContent).toContain("+3.45%");
@@ -364,7 +398,7 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
   // —— 那會讓昨收看起來像今天的走勢(同側欄既有紀律)。
   it("尚無成交 → 顯示參考價 + 「參考」,中性色不套漲跌", async () => {
     const quotes = { "2330": quote({ p: null, ref: 2_320_000 }) };
-    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />);
     const el = await screen.findByTestId("group-quote-2330");
     expect(el.textContent).toContain("2320");
     expect(el.textContent).toContain("參考");
@@ -375,7 +409,7 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
   // B3-b:`toContain("-")` 對 `-5.00%`、`2,380-` 之類的內容全都會通過 —— 缺值占位要
   // 的是**整格只有一個 `-`**,寫成全等才鎖得住
   it("p 與 ref 皆缺 → 整格只有「-」", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const el = await screen.findByTestId("group-quote-2330");
     expect(el.textContent).toBe("-");
   });
@@ -395,7 +429,7 @@ describe("GroupGridView 現價延伸接線(review B1)", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(2026, 7, 6, 10, 0, 30)); // 10:00,窗內且非 09:00 那一格
     try {
-      const { unmount } = wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} />);
+      const { unmount } = wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
       const bare = await screen.findByTestId("group-card-2330");
       await waitFor(() => expect(pointCount(bare)).toBe(1)); // 基準:snapshot 只有 09:00 一格
       unmount();
@@ -404,7 +438,7 @@ describe("GroupGridView 現價延伸接線(review B1)", () => {
         <GroupGridView
           groups={GROUPS}
           quotes={{ "2330": quote({ p: 2_400_000, chg_pct: 3.45 }) }}
-          onPick={vi.fn()}
+          onPick={vi.fn()} active={null}
         />,
       );
       const live = await screen.findByTestId("group-card-2330");
@@ -418,11 +452,85 @@ describe("GroupGridView 現價延伸接線(review B1)", () => {
 describe("GroupGridView 點卡片切主檔", () => {
   it("整張卡片是一顆 button(有可及名稱),點了回呼該股", async () => {
     const onPick = vi.fn();
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} />);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} active={null} />);
     const card = await screen.findByTestId("group-card-2330");
     expect(card.tagName).toBe("BUTTON");
     expect(card.getAttribute("aria-label")).toBe("查看 2330 台積電");
     fireEvent.click(card);
     expect(onPick).toHaveBeenCalledWith("2330");
+  });
+});
+
+// 🟢 SC-3 / AD-6:選中態。點卡片不再切回單檔(檢視停在圖牆)之後,「右欄閃電梯現在
+// 瞄的是哪一檔」在畫面上就沒有別的指認方式了 —— 沒有選中框的失效樣態是使用者按下
+// 買賣鍵才發現打到別檔,而那是真錢。
+describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
+  it("active 的那張卡 aria-pressed=true,其餘 false", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2330" />);
+    const picked = await screen.findByTestId("group-card-2330");
+    expect(picked.getAttribute("aria-pressed")).toBe("true");
+    // 反向斷言不可省:少了它,「每張卡恆 pressed」照樣全綠
+    expect(screen.getByTestId("group-card-2317").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("active 不在當前群組 → 全部未選中(edge 6)", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active="2881" />);
+    const first = await screen.findByTestId("group-card-2330");
+    expect(first.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTestId("group-card-2317").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("卡片是 role=button 容器(不是 <button>)且鍵盤按 Enter / Space 也切得動", async () => {
+    const onPick = vi.fn();
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={onPick} active={null} />);
+    const card = await screen.findByTestId("group-card-2330");
+    // AD-4 / review R11:卡片內有完整分時圖(svg + 標籤),`<button>` 的內容模型只吃
+    // phrasing content —— 巢狀互動元素在瀏覽器裡是未定義行為
+    expect(card.getAttribute("role")).toBe("button");
+    expect(card.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(card, { key: "Enter" });
+    expect(onPick).toHaveBeenCalledWith("2330");
+    fireEvent.keyDown(card, { key: " " });
+    expect(onPick).toHaveBeenCalledTimes(2);
+  });
+});
+
+// 🟢 SC-2 / D4:toggle 四鈕上提到圖牆頂(卡片內不得有 button —— 點它會連帶切主檔)。
+describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
+  it("pill 列右側有均價 / CDP / MA / 量分佈 四鈕", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    await screen.findByTestId("group-card-2330");
+    for (const [key, label] of [
+      ["vwap", "均價"],
+      ["cdp", "CDP"],
+      ["ma", "MA"],
+      ["vp", "量分佈"],
+    ] as const) {
+      const btn = screen.getByTestId(`grid-toggle-${key}`);
+      expect(btn.textContent).toBe(label);
+      // AD-5:可用性是 per-code 的(某一檔沒日線 ≠ 整列不能按),整列一律可按
+      expect(btn.hasAttribute("disabled")).toBe(false);
+    }
+  });
+
+  it("卡片內不得有 button(巢狀互動元素 + 點 toggle 會連帶切主檔)", async () => {
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const card = await screen.findByTestId("group-card-2330");
+    expect(card.querySelectorAll("button").length).toBe(0);
+  });
+});
+
+// 🟢 edge 9:已訂閱、非 noData、非回補中,但**窗內**一格分鐘都沒有(盤前只有 08:59
+// 的試撮分鐘 / 盤後只剩 13:31+)。整份幾何的 priceLine 會是空的,而 StockIntradayChart
+// 自己的早退框帶 border/bg —— 掛在卡片內就是框中框。卡片自己接住,佔位樣式同三態。
+describe("GroupGridView 窗內無分鐘(edge 9)", () => {
+  it("只有 08:59 的窗外分鐘 → 卡片自佔位「尚無成交」,不掛圖", async () => {
+    states["2330"] = state({ minutes: { "539": { c: 2_380_000, v: 10, i: 3, o: 7, u: 0 } } });
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const card = await screen.findByTestId("group-card-2330");
+    await waitFor(() => expect(card.textContent).toContain("尚無成交"));
+    expect(card.querySelector("svg")).toBeNull();
+    // 同群組的另一檔窗內有分鐘 → 照畫(佔位是 per-card 的,不是整面)
+    expect(screen.getByTestId("group-card-2317").querySelector("svg")).toBeTruthy();
   });
 });

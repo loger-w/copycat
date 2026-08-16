@@ -76,7 +76,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     // 每次都現做一個 inline arrow —— 正是 StockPage 的寫法,也是 memo 最容易破功的地方
     const ui = (quotes: Record<string, WatchlistQuote>) => (
       <QueryClientProvider client={client}>
-        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} />
+        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
       </QueryClientProvider>
     );
 
@@ -96,7 +96,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
     const ui = () => (
       <QueryClientProvider client={client}>
-        <GroupGridView groups={GROUPS} quotes={q1} onPick={() => {}} />
+        <GroupGridView groups={GROUPS} quotes={q1} onPick={() => {}} active={null} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui());
