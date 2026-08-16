@@ -270,14 +270,21 @@ function windowedEntries(minutes: Map<number, MinuteAgg>, xw: XWindow): [number,
 
 /** 窗內是否有可畫的分鐘(change-spec edge 9)。
  *
- *  **包 `windowedEntries` 而不是讓呼叫端自己比 `minutes.size`**:窗的定義只有這一份,
- *  呼叫端各寫一次的失效樣態是「盤前只有 08:59 的檔在卡片上掛一張空圖」——
- *  `size > 0` 為真而 `priceLine` 為空,畫面上是一張有軸沒線的圖,沒有錯誤訊號。 */
+ *  **窗的定義與 `windowedEntries` 同一組 `xw`**,不讓呼叫端自己比 `minutes.size`:
+ *  各寫一次的失效樣態是「盤前只有 08:59 的檔在卡片上掛一張空圖」——
+ *  `size > 0` 為真而 `priceLine` 為空,畫面上是一張有軸沒線的圖,沒有錯誤訊號。
+ *
+ *  只問「有沒有」就別建整份陣列(review B3):圖牆最多 50 張卡、每秒隨報價
+ *  re-render 各問一次,而 `windowedEntries` 會拷貝 + 排序當日最多 271 格。
+ *  第一格命中就退出 —— 盤中常態是第一個 key 就在窗內。 */
 export function hasWindowedMinutes(
   minutes: Map<number, MinuteAgg>,
   xw: XWindow = SPOT_WINDOW,
 ): boolean {
-  return windowedEntries(minutes, xw).length > 0;
+  for (const k of minutes.keys()) {
+    if (k >= xw.start && k <= xw.end) return true;
+  }
+  return false;
 }
 
 function energyFrom(
