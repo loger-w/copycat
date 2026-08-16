@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
 import type { BreadthBuckets, BreadthPoint } from "@/types";
@@ -18,7 +18,12 @@ function pointCount(): number {
   return raw === "" ? 0 : raw.split(/\s+/).length;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // ResizeObserver 只在量測那一組測試裡 stub —— 其餘測試要留在「jsdom 沒有 RO」的
+  // fallback 語意下(W-10),不還原會讓後面的檔案跟著漂。
+  vi.unstubAllGlobals();
+});
 
 describe("AdvanceDeclineChart net 計算(SC-4)", () => {
   it("(a) net = (漲停+上漲) − (下跌+跌停),上市 + 上櫃合計", () => {
@@ -180,5 +185,64 @@ describe("AdvanceDeclineChart 紅綠雙色(SC-6)", () => {
     expect(screen.getByTestId("adl-line-down")).toBeTruthy();
     expect(screen.getByTestId("adl-area-up")).toBeTruthy();
     expect(screen.getByTestId("adl-area-down")).toBeTruthy();
+  });
+});
+
+/** 🔒 lock(review TD-6):「量測 → viewBox 高」這條路整條沒有測試 —— 改版前是「寬決定
+ *  高」(寬 × 150/640),左欄 930px 時這條線獨佔 218px,一頁總覽的高度預算吃不下。
+ *  現在高度由 CSS 固定(`h-24`)、viewBox 高反推自實際長寬比;算式退回舊值 / wrapper 的
+ *  固定高被拿掉 / svg 少了 `h-full`(退回由 viewBox 比例決定渲染高)三種改壞法,在
+ *  jsdom 下都是「畫面看起來一樣」的靜默失效。 */
+describe("AdvanceDeclineChart 高度量測(TD-6)", () => {
+  const ONE = [pt("0930", [0, 10, 0, 0, 0], [0, 0, 0, 0, 0])];
+
+  /** `observe` 當下同步餵一筆 —— useContainerSize 是 callback ref,非同步餵在 RTL 的
+   *  同步斷言之前不會到達(測試會靜默退回 fallback 值 = 綠得毫無意義)。 */
+  class FakeResizeObserver {
+    private readonly cb: ResizeObserverCallback;
+
+    constructor(cb: ResizeObserverCallback) {
+      this.cb = cb;
+    }
+
+    observe(node: Element): void {
+      this.cb(
+        [{ target: node, contentRect: { width: 640, height: 96 } } as unknown as ResizeObserverEntry],
+        this as unknown as ResizeObserver,
+      );
+    }
+
+    unobserve(): void {}
+
+    disconnect(): void {}
+  }
+
+  function viewBoxHeight(): number {
+    const svg = screen.getByRole("img", { name: "全市場騰落線" });
+    return Number((svg.getAttribute("viewBox") ?? "").split(" ")[3]);
+  }
+
+  it("量得到 640×96 → viewBox 高 96(不是 fallback 150)", () => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    render(<AdvanceDeclineChart series={ONE} />);
+    expect(viewBoxHeight()).toBe(96);
+  });
+
+  it("量不到(jsdom 無 ResizeObserver)→ 退回 150,由 preserveAspectRatio 縮放置中(W-10)", () => {
+    expect(typeof ResizeObserver).toBe("undefined");
+    render(<AdvanceDeclineChart series={ONE} />);
+    expect(viewBoxHeight()).toBe(150);
+  });
+
+  it("wrapper 固定高 h-24 且不可壓縮;svg 撐滿它(h-full w-full)", () => {
+    render(<AdvanceDeclineChart series={ONE} />);
+    const wrapper = screen.getByRole("img", { name: "全市場騰落線" }).parentElement!;
+    expect(wrapper.className).toContain("h-24");
+    // 家數帶 / 騰落線那一段是 shrink-0:壓縮它換不到多少圖高,卻會先糊掉
+    expect(wrapper.className).toContain("shrink-0");
+    const svg = screen.getByRole("img", { name: "全市場騰落線" });
+    // 只有 `w-full` 的話渲染高退回「寬 × viewBox 比例」,量測算出來的高就白算了
+    expect(svg.getAttribute("class")).toContain("h-full");
+    expect(svg.getAttribute("class")).toContain("w-full");
   });
 });
