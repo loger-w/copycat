@@ -430,6 +430,25 @@ class TestSignalsTodayRoute:
             path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
 
+    def test_legacy_market_query_param_is_ignored(self, tmp_path: Path) -> None:
+        """舊 bundle 打 `?market=exclude` 照樣 200 且結果與裸 URL 全等(spec §3)。
+
+        market 分族刪掉後,瀏覽器裡還開著舊分頁的 client 會繼續帶那個查參自癒;route
+        若哪天宣告了 `market` 查參(或加 pattern 驗證),舊 bundle 會在斷線後拿到 422
+        —— 前端的 baseline 自癒整條靜默失效,而 WS 仍活著,畫面上看不出任何異常。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            trade_date = app.state.stock.trade_date
+            row = _signal_row(trade_date)
+            path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+            bare = client.get("/api/stock/signals/today")
+            legacy = client.get("/api/stock/signals/today", params={"market": "exclude"})
+        assert legacy.status_code == 200
+        assert legacy.json() == bare.json() == {"signals": [row]}
+
 
 class TestLegacyEnabledRouteGone:
     """SC-4:四鍵開關家族退役 —— 規則自帶 `enabled`,兩套開關並存會互相蓋掉。

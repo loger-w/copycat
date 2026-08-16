@@ -502,6 +502,31 @@ class TestFailureIsolation:
         assert body["counts"] is None
         assert body["stale"] is True
 
+    def test_lifespan_closes_breadth_engine(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """關機反序第一段:lifespan 離場必須 `await breadth.close()`。
+
+        失效樣態安靜且長命:漏 close 的引擎其 poll task 不會停,測試 process 裡是每
+        10s 一輪對 FinMind 的真實請求(prod 則是舊 server 的殘留 task 與新 server 搶
+        配額、搶同一份 `breadth-<date>.json`)—— 而所有 route 斷言照樣綠。
+
+        `close` 包原件後照呼:只加旗標,不改關機語意(收攤本身仍要真的發生)。
+        """
+        app = _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path)
+        closed: list[bool] = []
+        with BootedClient(app, raise_server_exceptions=False):
+            engine = app.state.breadth
+            assert engine is not None, "注入取數層後引擎必存在(否則測到的是停用態)"
+            inner = engine.close
+
+            async def _close() -> None:
+                closed.append(True)
+                await inner()
+
+            monkeypatch.setattr(engine, "close", _close)
+        assert closed == [True]
+
 
 class TestSectorRemoved:
     """`/api/market/sector*` 已隨類股強弱 subtab 一併刪除(2026-08-16 R1)→ 404。
