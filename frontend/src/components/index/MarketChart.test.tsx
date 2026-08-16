@@ -369,6 +369,17 @@ describe("MarketChart height prop(SC-4)", () => {
     expect(intradaySvg(noH.container).getAttribute("viewBox")).toBe("0 0 640 220");
   });
 
+  // WL-2:`PANE_FRAMES.candle` 的 chromeY 把 meta 列算成 20px(text-xs 16 + mt-1 4),
+  // 而它原本沒有高度限制 —— 窄 pane(1536 兩欄態 312px)下最長的來源字串超過 400px 會
+  // 折成兩行,chromeY 少算 16 → svg 溢出 figure。折不折得掉由這一列自己保證。
+  it("candle:meta 列固定一行(h-4 + truncate),chromeY 才算得準", async () => {
+    stub(DK_BODY);
+    renderCandle(undefined);
+    const meta = await screen.findByTestId("market-meta");
+    expect(meta.className).toContain("h-4");
+    expect(meta.className).toContain("truncate");
+  });
+
   it("candle:height 透傳 CandleChart(未傳 → CandleChart 自有 578)", async () => {
     stub(DK_BODY);
     const withH = renderCandle(300);
