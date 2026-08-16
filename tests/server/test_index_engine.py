@@ -690,6 +690,30 @@ async def test_rollover_runs_on_trading_day() -> None:
         await eng.close()
 
 
+async def test_default_rolls_over_on_weekend() -> None:
+    """W9 預設鎖(S7):**不注入** `is_trading_day` 時語意逐字是純日曆日 —— 週六照換。
+
+    預設值若被寫成 `weekday() < 5`(直覺上「更合理」),直接建構的既有 caller 會在
+    週末靜默改行為,而所有既有測試都不會紅(它們都在平日日期上跑)。這條反向鎖住:
+    週六仍要換日。
+    """
+    fake = FakeIndexSource()
+    fake.day_minutes = {"0901": 2_000}
+    eng = make_engine(
+        fake,
+        rollover=True,
+        trade_date="2026-08-14",
+        today_fn=lambda: _dt.date(2026, 8, 15),  # 週六
+    )
+    eng._rollover_check_secs = 0.005  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        await _wait_until(lambda: eng.state()["trade_date"] == "2026-08-15")
+        assert eng.state()["twse"]["minutes"] == {"0901": 2_000}
+    finally:
+        await eng.close()
+
+
 async def test_rollover_disabled_does_nothing() -> None:
     fake = FakeIndexSource()
     today = [_dt.date(2026, 7, 29)]
