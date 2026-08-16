@@ -205,11 +205,14 @@ def _make(
     daily: FakeDaily | None = None,
     clock: Clock | None = None,
     config: BreadthConfig | None = None,
+    is_trading_day: Callable[[_dt.date], bool] | None = None,
 ) -> tuple[Any, FakeFetch, FakeFetch, FakeFetch, Clock]:
     snap = snapshot if snapshot is not None else FakeFetch(_snapshot_rows())
     inf = info if info is not None else FakeFetch(list(_INFO_ROWS))
     disp = disposition if disposition is not None else FakeFetch(list(_DISPOSITION_ROWS))
     clk = clock if clock is not None else Clock()
+    # 不傳就**不帶這個 kwarg**(不是傳 None):W9 的預設鎖要驗的正是「呼叫端沒給」
+    extra = {} if is_trading_day is None else {"is_trading_day": is_trading_day}
     engine = be.BreadthEngine(
         token="tok",
         config=config if config is not None else BreadthConfig(),
@@ -220,6 +223,7 @@ def _make(
         data_dir=tmp_path,
         today_fn=clk.today_fn,
         now_fn=clk.now_fn,
+        **extra,
     )
     return engine, snap, inf, disp, clk
 
@@ -1844,3 +1848,206 @@ class TestRowsState:
 
         assert state["streaks_ready"] is False
         assert _row_of(state, "1101")["streak"] is None
+
+
+# ---------------------------------------------------------------------------
+# 交易日 gate(mod/trading-calendar SC-5)
+# ---------------------------------------------------------------------------
+
+#: 週五(最近交易日)/ 週六(牆鐘假日開站)
+_FRI = "2026-08-14"
+_SAT = "2026-08-15"
+
+
+def _weekend_clock(now_time: str = "10:00:00") -> Clock:
+    """today_fn = 最近交易日(週五)、now_fn = 牆鐘(週六)——app 層在假日的實況。
+
+    `Clock` 建構時把兩者綁同一天,這裡顯式拆開:SC-5 要驗的正是「資料日與牆鐘日
+    不同」的那一格,綁在一起就什麼都測不出來。
+    """
+    clock = Clock(today=_FRI, now=now_time)
+    clock.now = _dt.datetime.fromisoformat(f"{_SAT} {now_time}")
+    return clock
+
+
+class TestTradingDayGate:
+    """SC-5:`_in_window` 加交易日判定;today_fn = 最近交易日時假日仍還原得出序列。
+
+    現行 `_in_window` 是純時間窗 → 週六 09:00–13:40 每 10 秒打一次 FinMind,拿回的
+    永遠是週五那份收盤快照(配額純浪費,W5)。
+    """
+
+    def _write_series(self, tmp_path: Path) -> list[dict]:
+        points = [
+            {"t": "0931", "twse": [0, 1, 2, 3, 0], "tpex": [0, 0, 0, 0, 0]},
+            {"t": "0932", "twse": [0, 2, 2, 2, 0], "tpex": [0, 0, 0, 0, 0]},
+        ]
+        _series_file(tmp_path, _FRI).write_text(
+            json.dumps({"_version": 1, "trade_date": _FRI, "series": points}),
+            encoding="utf-8",
+        )
+        return points
+
+    async def test_holiday_boot_restores_last_session_series(self, tmp_path: Path) -> None:
+        """週六開站:`breadth-2026-08-14.json` 還原得出週五序列(今日 = 最近交易日)。
+
+        今日基準若是牆鐘週六,檔名鍵就是 `breadth-2026-08-15.json`(不存在)→ 空序列,
+        而 counts 照樣有數字 —— 畫面是「有家數、沒騰落線」,零錯誤訊號。
+        """
+        points = self._write_series(tmp_path)
+        engine, snap, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
+            clock=_weekend_clock(),
+            config=BreadthConfig(poll_secs=60.0),
+            is_trading_day=lambda d: d.weekday() < 5,
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: engine.state()["counts"] is not None)
+        finally:
+            await engine.close()
+
+        state = engine.state()
+        assert state["trade_date"] == _FRI
+        assert state["series"][: len(points)] == points  # restore 命中
+        assert state["series"] != []
+        assert snap.calls == 1  # 首圈仍無條件跑(counts 要有數字)
+        assert state["stale"] is False  # R4:非交易日不亮「延遲」膠囊
+
+    async def test_holiday_suppresses_polling_after_first_cycle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """窗內但非交易日 → 只有首圈那一次取數(W5:假日 poll 次數下降)。
+
+        圈數用 `_maybe_arm_streaks` 的呼叫次數當觀察點(它在傘罩內、窗 gate 外,每圈
+        必經):用牆鐘 sleep 換圈數在 Windows 上是假的(timer 解析度 15.6ms),
+        「沒多打」有可能只是因為迴圈根本沒轉。
+        """
+        rounds = {"n": 0}
+
+        def _count(_self: object) -> None:
+            rounds["n"] += 1
+
+        monkeypatch.setattr(be.BreadthEngine, "_maybe_arm_streaks", _count)
+        engine, snap, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
+            clock=_weekend_clock(),
+            config=BreadthConfig(poll_secs=0.01),
+            is_trading_day=lambda d: d.weekday() < 5,
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: rounds["n"] >= 4)
+        finally:
+            await engine.close()
+
+        assert snap.calls == 1
+        assert engine._in_window() is False  # 10:00 在時間窗內、但那天不是交易日
+
+    async def test_trading_day_keeps_polling(self, tmp_path: Path) -> None:
+        """對照組:同一份注入、今天是交易日 → 窗內照舊每圈取數(交易日節奏不變)。"""
+        engine, snap, *_ = _make(
+            tmp_path,
+            config=BreadthConfig(poll_secs=0.01),
+            is_trading_day=lambda d: d.weekday() < 5,
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: snap.calls >= 3)
+        finally:
+            await engine.close()
+
+        assert snap.calls >= 3
+        assert engine._in_window() is True
+
+    async def test_default_keeps_pure_time_window(self, tmp_path: Path) -> None:
+        """W9:不注入 `is_trading_day` 時逐字保留純時間窗(週六窗內照樣 poll)。"""
+        engine, snap, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
+            clock=_weekend_clock(),
+            config=BreadthConfig(poll_secs=0.01),
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: snap.calls >= 3)
+        finally:
+            await engine.close()
+
+        assert snap.calls >= 3
+        assert engine._in_window() is True
+
+    @pytest.mark.parametrize(
+        "today,now,computed_for,data_end,dates,streaks",
+        [
+            pytest.param(
+                _FRI,
+                "13:35:00",
+                _FRI,
+                "2026-08-13",
+                ["2026-08-13", "2026-08-12", "2026-08-11", "2026-08-10"],
+                {"1101": 2},
+                id="交易日基準(改動後;rows_date > data_end,+1 分支)",
+            ),
+            pytest.param(
+                _SAT,
+                "10:00:00",
+                _SAT,
+                _FRI,
+                [_FRI, "2026-08-13", "2026-08-12", "2026-08-11"],
+                {"1101": 3},
+                id="牆鐘日基準(改動前;rows_date == data_end,不 +1 分支)",
+            ),
+        ],
+    )
+    async def test_streak_identical_across_holiday_branch(
+        self,
+        tmp_path: Path,
+        today: str,
+        now: str,
+        computed_for: str,
+        data_end: str,
+        dates: list[str],
+        streaks: dict[str, int],
+    ) -> None:
+        """R5 回歸:today 基準由牆鐘日改成最近交易日之後,連板數值逐字不變。
+
+        同一個週六開站的畫面,兩種 today 基準會算出**不同分支**的 streak:
+        - 改動後(today = 最近交易日 08-14)→ 那份 streak 的 `data_end` = 08-13,
+          rows 資料日 08-14 走 `>` 分支 +1。
+        - 改動前(today = 牆鐘 08-15)→ `data_end` = 08-14 = rows 資料日,走 `==` 分支。
+
+        兩條算術路徑不同、結果必須相同 —— 不同就是「假日開站多一板 / 少一板」,而畫面上
+        那是個看起來很正常的數字。演算法本身不動(W4)。
+        """
+        _write_streaks_cache(
+            tmp_path,
+            computed_for=computed_for,
+            data_end=data_end,
+            dates=dates,
+            skipped=[],
+            streaks=streaks,
+            file_day=today,
+        )
+        engine, *_ = _make(
+            tmp_path,
+            snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 13:30:00")),
+            daily=FakeDaily({}),
+            clock=Clock(today=today, now=now),
+            is_trading_day=lambda d: d.weekday() < 5,
+        )
+        engine._restore_streaks()
+
+        await engine._run_cycle()
+        state = engine.rows_state()
+
+        assert state["streaks_ready"] is True
+        assert state["trade_date"] == _FRI
+        assert _row_of(state, "1101")["streak"] == 3
+        assert _row_of(state, "1101")["streak_capped"] is False
