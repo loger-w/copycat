@@ -15,7 +15,7 @@
 | 綜1 | 家數帶漲跌停底色 = 個股期漲停色(實心)**〔2026-08-16 已出貨:mod/overview-onepage-corr-tab〕** | 🔴 UI(/mod) | R2 | S | 只改 `BreadthBand.tsx:29,33` tone class |
 | 綜2 | 相關係數升為頂層 tab**〔2026-08-16 已出貨:同上〕** | 🔴 UI(/mod) | R2 | S | 曾是頂層,R1 spec 併入;兩處測試鎖順序 |
 | 綜3 | 一頁總覽:左壓縮雙圖+家數,右漲跌停列表**〔2026-08-16 已出貨:同上;斷點 @[1050px] 容器寬≈視窗 1400,見 change-spec r3〕** | 🔴 UI 佈局(/mod) | R2 | L | 現況整頁 `overflow-y-auto` 上下堆疊,無單螢幕約束 |
-| 個3 + 綜5 | 非交易日顯示最近交易日分時圖/資料 | 🔴 行為(/mod) | R3 | L | 同一根因:**全庫無交易日曆**,`trade_date=date.today()`;`TXO_BACKFILL_DATE` 是手動 env |
+| 個3 + 綜5 | 非交易日顯示最近交易日分時圖/資料**〔2026-08-16 已出貨:mod/trading-calendar PR #56;交易日盤前冷啟動仍空圖 → 待拍板 R3b〕** | 🔴 行為(/mod) | R3 | L | 同一根因:**全庫無交易日曆**,`trade_date=date.today()`;`TXO_BACKFILL_DATE` 是手動 env |
 | 個4 | 群組圖牆分時圖 = 單檔分時圖同款設定 | 🔴 UI(/mod) | R4 | M | `MiniIntradayChart` 是精簡獨立實作,不讀 `useChartToggles` |
 | 個5 | 群組頁點卡片只切閃電目標,不跳單檔 | 🔴 行為(/mod) | R4 | S | `StockPage.tsx:213-223` `selectView("single")` 一行 + 選中態視覺 |
 | 個1 | 鎖定全程武裝 | 🟢 新功能 + 🔴(/mod) | R5 | M | 三座梯各自 `useReducer(reduceArm)`,無共用層;安全敏感 |
