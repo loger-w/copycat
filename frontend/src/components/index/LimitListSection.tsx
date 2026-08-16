@@ -429,7 +429,13 @@ function LimitListBody({
                   className="cursor-pointer border-b border-line/50 hover:bg-bg-deep"
                 >
                   <td className="px-2 py-1 font-mono text-ink">{row.stock_id}</td>
-                  <td data-testid={`limit-name-${row.stock_id}`} className="px-2 py-1 text-ink">
+                  {/* 名稱與連板兩欄 nowrap:四字檔名(台聯電 / 長榮航太)與「連 4 板」
+                      在右欄寬度下會折成兩行,列高從 24 撐到 40px —— 折的是「一屏看得到
+                      幾檔」。其餘欄位是數字或兩字標籤,折不了也就不掛。 */}
+                  <td
+                    data-testid={`limit-name-${row.stock_id}`}
+                    className="px-2 py-1 whitespace-nowrap text-ink"
+                  >
                     {row.name}
                   </td>
                   <td
@@ -455,7 +461,7 @@ function LimitListBody({
                   </td>
                   <td
                     data-testid={`limit-streak-${row.stock_id}`}
-                    className="px-2 py-1 text-right text-ink"
+                    className="px-2 py-1 text-right whitespace-nowrap text-ink"
                   >
                     {streakText(row)}
                   </td>
