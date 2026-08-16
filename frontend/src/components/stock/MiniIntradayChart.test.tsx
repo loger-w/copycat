@@ -2,7 +2,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { extendMinutes, MiniIntradayChart, MINI_H, MINI_W } from "@/components/stock/MiniIntradayChart";
+import { MiniIntradayChart, MINI_H, MINI_W } from "@/components/stock/MiniIntradayChart";
 import type { MinuteAgg, StockMeta } from "@/lib/stock-accum";
 import { PAD_Y, X_END_MIN, X_START_MIN, Y_AXIS_W } from "@/lib/stock-intraday-svg";
 
@@ -112,45 +112,10 @@ describe("MiniIntradayChart 幾何補償(design v3 R5/R13)", () => {
   });
 });
 
-// R10 延伸規則:分鐘鍵 = 本機時鐘分鐘,僅當落在 [09:00, 13:30] 且 liveP > 0 才延伸。
-describe("extendMinutes(R10 現價延伸)", () => {
+// R10 延伸規則的純函式部分已隨 `extendMinutes` 搬到 `lib/stock-accum.test.ts`
+// (assertion 原樣)。留在這裡的是**元件真的呼叫了它**那一條 —— 需要 jsdom 渲染。
+describe("extendMinutes(R10 現價延伸)—— 元件層", () => {
   const at = (h: number, m: number) => new Date(2026, 7, 6, h, m, 30);
-
-  it("既有 bucket → 只覆寫 c,量與高低原樣", () => {
-    const src = new Map<number, MinuteAgg>([
-      [600, { c: 2_300_000, v: 12, i: 5, o: 6, u: 1, h: 2_310_000, l: 2_295_000 }],
-    ]);
-    const out = extendMinutes(src, 2_345_000, at(10, 0));
-    expect(out.get(600)).toEqual({
-      c: 2_345_000,
-      v: 12,
-      i: 5,
-      o: 6,
-      u: 1,
-      h: 2_310_000,
-      l: 2_295_000,
-    });
-    // 淺拷不就地改:原 Map 不可被污染
-    expect(src.get(600)?.c).toBe(2_300_000);
-  });
-
-  it("無 bucket → 新建零量點(h/l 為 null,不冒充)", () => {
-    const out = extendMinutes(new Map(), 2_345_000, at(10, 0));
-    expect(out.get(600)).toEqual({ c: 2_345_000, v: 0, i: 0, o: 0, u: 0, h: null, l: null });
-  });
-
-  it("窗外時刻(13:31 之後 / 09:00 之前)不延伸", () => {
-    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
-    expect(extendMinutes(src, 2_345_000, at(14, 0))).toBe(src);
-    expect(extendMinutes(src, 2_345_000, at(8, 50))).toBe(src);
-  });
-
-  it("liveP 為 null / 0 / 負 → 不延伸(0 是 TC4 的「不可得」不是價格)", () => {
-    const src = new Map<number, MinuteAgg>([[600, { c: 2_300_000, v: 1, i: 0, o: 1, u: 0 }]]);
-    expect(extendMinutes(src, null, at(10, 0))).toBe(src);
-    expect(extendMinutes(src, 0, at(10, 0))).toBe(src);
-    expect(extendMinutes(src, -5, at(10, 0))).toBe(src);
-  });
 
   // 元件不開「注入 now」的測試專用 prop —— 那條路只有測試會走,鎖不到真實時鐘那一支。
   // 改動系統時鐘,測到的是元件內真的呼叫了 `new Date()`。
