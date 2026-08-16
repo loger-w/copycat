@@ -789,7 +789,9 @@ def create_app(
                 logger.exception("boot task 以例外結束(關機續行)")
             # 關機反序:breadth → signals → corr → futures → capital → index → stock →
             # runtime。順序即依賴:corr 讀 futures.state(),必須排在 futures 之前收;
-            # 其餘各段互不依賴,但一律照建立的反序收,新增引擎時才有一條唯一的規則可循。
+            # signals 段的 `_close_signals` 會呼 `stock.detach_signal_hub()`,也必須排在
+            # stock 之前收(stock engine 還活著才解得掉掛點)。其餘各段無此類依賴,但
+            # 一律照建立的反序收,新增引擎時才有一條唯一的規則可循。
             if booted.breadth is not None:
                 try:
                     await booted.breadth.close()

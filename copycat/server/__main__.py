@@ -53,7 +53,7 @@ LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 VERIFY_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "market-verify"
 
 #: --verify 的家數帶輪詢窗:全天。prod 預設窗(09:00–13:40)之外 `_poll_loop` 只跑
-#: 首圈,而 verify server 幾乎都在盤後跑 —— flip 翻轉、失效注入、事件鏈路全都要
+#: 首圈,而 verify server 幾乎都在盤後跑 —— 失效注入、家數序列第二格都要
 #: 「第二輪之後」才看得到,窗照抄 prod 等於整條取證路徑只剩一格(review C-2)。
 VERIFY_WINDOW = ("00:00", "23:59")
 

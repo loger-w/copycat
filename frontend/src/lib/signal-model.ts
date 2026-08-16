@@ -71,10 +71,10 @@ export function kindLabel(sig: SignalMsg): string {
   if (kind === "vol_burst") {
     return sig.pct === null ? "爆量" : `爆量 ${sig.pct.toFixed(1)} 倍`;
   }
-  if (kind === "limit_lock") return sig.direction === "up" ? "鎖漲停" : "鎖跌停";
-  if (kind === "limit_open") return sig.direction === "up" ? "漲停打開" : "跌停打開";
   // 與後端 `signal_hub._kind_text` 逐字對齊(design §7):同一則事件在 WS 列、jsonl
   // 與 Discord 上的文案漂掉時,對帳會變成人工比對。
+  if (kind === "limit_lock") return sig.direction === "up" ? "鎖漲停" : "鎖跌停";
+  if (kind === "limit_open") return sig.direction === "up" ? "漲停打開" : "跌停打開";
   return kind;
 }
 
