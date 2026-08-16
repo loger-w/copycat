@@ -2,7 +2,7 @@ import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
-import { useChartToggles } from "@/hooks/useChartToggles";
+import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
@@ -43,8 +43,11 @@ import {
 } from "@/lib/volume-profile";
 import { cn, safeIdToken } from "@/lib/utils";
 
-const MAIN = { width: 800, height: 260 };
-const SUB = { width: 800, height: 70 };
+/** viewBox 寬的預設(單檔頁)。**主圖與副圖共用同一個值**,由 `width` prop 覆寫 ——
+ *  兩張圖各持一個常數的話,x 對位只是靠「兩個數字碰巧相等」在維持(見副圖 hover 線)。 */
+const DEFAULT_W = 800;
+const MAIN = { height: 260 };
+const SUB = { height: 70 };
 /** 軸標籤尺寸;time tag 的 y = mainH − boxH,底邊恰貼 viewBox 底不被裁。
  *  寬度**直接取 `Y_AXIS_W`** 不另寫一份數字:兩份靠註解維持相等的話,任一方改動就讓
  *  「hover 價位標壓在走勢線上」這個本輪要修的症狀復發,而且沒有測試會發現。 */
@@ -612,11 +615,36 @@ interface Props {
   stkfut?: boolean;
 }
 
-export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = false }: Props) {
-  const { toggles, set } = useChartToggles();
-  const mainW = MAIN.width;
+export type ChartVariant = "page" | "card";
+
+interface CoreProps extends Props {
+  /** toggles **受控**:單檔頁由 `useChartToggles` 餵、群組圖牆由圖牆頂那一份餵。
+   *  core 自己不持有 storage 狀態 —— 卡片各持一份的話,同一張圖牆上 50 張卡會各自
+   *  讀寫同一個 localStorage key(W-7)。 */
+  toggles: ChartToggles;
+  /** 未傳 = 唯讀(card 變體:toggle 鈕在圖牆頂,卡片內不得有 button) */
+  onToggle?: (key: keyof ChartToggles, value: boolean) => void;
+  /** `"page"` = 單檔頁完整 chrome(figure + toggle 鈕列 + 說明列 + readout 六欄);
+   *  `"card"` = 群組卡片(div + readout 前四欄),圖形語彙完全相同。 */
+  variant: ChartVariant;
+  /** viewBox 寬(主副圖共用)。未傳 = `DEFAULT_W`。 */
+  width?: number;
+}
+
+export function IntradayChartCore({
+  accum,
+  toggles,
+  onToggle,
+  variant,
+  width,
+  mainHeight,
+  subHeight,
+  stkfut = false,
+}: CoreProps) {
+  const card = variant === "card";
+  // 主副圖共用同一個 viewBox 寬:分開兩份的話,副圖 hover 線的 x 換算與主圖會各自漂
+  const w = width ?? DEFAULT_W;
   const mainH = mainHeight ?? MAIN.height;
-  const subW = SUB.width;
   const subH = subHeight ?? SUB.height;
   // 模組層常數 → identity 穩定,直接進 memo 子元件的 props 不會打穿 memo
   const xw = stkfut ? STKFUT_WINDOW : SPOT_WINDOW;
@@ -644,34 +672,34 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
     () =>
       buildIntradayGeometry(
         { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
-        { width: mainW, height: mainH },
+        { width: w, height: mainH },
         xw,
       ),
-    // mainW / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
+    // w / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)。
     // `xw` 同理 —— 漏了它,現貨↔期貨切換時幾何會停在舊窗上。
-    [accum.minutes, accum.meta, accum.high, accum.low, mainW, mainH, xw],
+    [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw],
   );
 
   // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
   // 價線 / 刻度 / 反演算完即丟。`meta` 不影響量的幾何,故不入 deps。
   const subEnergy = useMemo(
-    () => buildEnergyBars(accum.minutes, { width: subW, height: subH }, xw),
-    [accum.minutes, subW, subH, xw],
+    () => buildEnergyBars(accum.minutes, { width: w, height: subH }, xw),
+    [accum.minutes, w, subH, xw],
   );
 
   // 價位別成交量(SC-3)。**必經 useMemo**:hover 每個 mousemove 都 re-render 本元件,
   // 陣列每次新 identity 會打穿 ChartStatic 的 memo,整層線圖跟著重建。
   // 關掉時回**同一個空陣列語意**的重算即可 —— 依賴沒變就不會重算,不需要另設常數。
-  // `mainW` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
+  // `w` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
   // 幾何與長條會各自依據不同的畫布寬算,bar 的滿寬比例靜默漂掉。
   // 期貨態不畫 VP:`accum.vp` 由 `foldVp` 折出,而 foldVp 的分鐘窗仍是現貨窗
   // (本輪不參數化 —— 期貨態既然不畫,參數化只是加一條沒人走的分支)。
   // 直方圖若照畫,08:45–08:59 與 13:31–13:45 的成交會整段缺席而畫面看不出來。
   const vpEnabled = toggles.vp && !stkfut;
   const vpBars = useMemo(
-    () => (vpEnabled ? buildVpBars(accum.vp, g, mainW) : []),
-    [accum.vp, g, vpEnabled, mainW],
+    () => (vpEnabled ? buildVpBars(accum.vp, g, w) : []),
+    [accum.vp, g, vpEnabled, w],
   );
 
   const overlay = overlayQ.data ?? null;
@@ -728,7 +756,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
   const shownAgg = hoverAgg ?? (shownMin !== null ? accum.minutes.get(shownMin) : undefined);
   const shownChg =
     shownAgg !== undefined && ref ? chgPct(shownAgg.c, ref) : null;
-  const fields: ReadoutField[] =
+  const allFields: ReadoutField[] =
     shownAgg === undefined || shownMin === null
       ? [
           { label: "", value: "-" },
@@ -754,16 +782,19 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
           { label: "外", value: String(shownAgg.o), tone: "bull" },
           { label: "內", value: String(shownAgg.i), tone: "bear" },
         ];
+  // 卡片只有 ~250px 寬,六欄會擠成一團 —— 砍的是**外 / 內**兩欄(說明列已同時省略,
+  // 內外盤在卡片上完全不出現,語意一致),留下時間 / 價 / % / 量(AD-4)。
+  const fields = card ? allFields.slice(0, 4) : allFields;
 
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const timeTagX =
-    hoverMin !== null ? clampTagX(minuteToX(hoverMin, mainW, xw), TIME_TAG.w, mainW) : null;
+    hoverMin !== null ? clampTagX(minuteToX(hoverMin, w, xw), TIME_TAG.w, w) : null;
   const timeTagSpan: [number, number] | null =
     timeTagX === null ? null : [timeTagX, timeTagX + TIME_TAG.w];
 
   function onMove(e: React.MouseEvent<SVGSVGElement>): void {
     const rect = e.currentTarget.getBoundingClientRect();
-    const { x, y } = toSvgPoint(e, rect, { width: mainW, height: mainH });
+    const { x, y } = toSvgPoint(e, rect, { width: w, height: mainH });
     const min = g.minuteOf(x);
     const ry = Math.round(y);
     // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
@@ -780,13 +811,14 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
     { key: "vp", label: "量分佈", available: !stkfut },
   ];
 
-  return (
-    // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
-    // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
-    <figure className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4">
+  const body = (
+    <>
       {/* 頂列:左資訊條、右 toggle。高度以 rem 固定,與 K 線頂列逐項對稱(SC-6.7) */}
       <div className="mb-1 flex h-[1.375rem] items-center justify-between gap-2">
         <ChartReadout fields={fields} hovering={hoverAgg !== undefined} />
+        {/* card 變體**不得有 button**:卡片外層自己是 role=button(點卡片切主檔),
+            內層再放按鈕會讓點 toggle 同時切主檔,而且巢狀互動元素不合法 */}
+        {card ? null : (
         <div className="flex shrink-0 gap-1">
         {toggleDefs.map(({ key, label, available }) => (
           <button
@@ -795,7 +827,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
             aria-pressed={toggles[key] && available}
             disabled={!available}
             title={available ? undefined : stkfut ? "期貨合約本輪不提供" : "無日線資料"}
-            onClick={() => set(key, !toggles[key])}
+            onClick={() => onToggle?.(key, !toggles[key])}
             className={cn(
               "rounded border px-2 py-0.5 text-xs",
               toggles[key] && available
@@ -808,9 +840,10 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
           </button>
         ))}
         </div>
+        )}
       </div>
       <svg
-        viewBox={`0 0 ${mainW} ${mainH}`}
+        viewBox={`0 0 ${w} ${mainH}`}
         className="w-full"
         style={{ touchAction: "pan-y" }}
         role="img"
@@ -820,7 +853,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
       >
         <ChartStatic
           g={g}
-          w={mainW}
+          w={w}
           h={mainH}
           refMilli={ref}
           showVwap={toggles.vwap}
@@ -833,7 +866,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
           xw={xw}
           hourTicks={hourTicks}
         />
-        <XAxisLabels w={mainW} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
+        <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
             會與右緣疊線價位標(R_AXIS_W 帶)重疊;現價本來就在資訊列與報價 header
             各有一份,圈的作用是「線走到哪」而不是再報一次價。 */}
@@ -851,8 +884,8 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
               <>
                 <line
                   data-testid="crosshair-v"
-                  x1={minuteToX(hoverMin, mainW, xw)}
-                  x2={minuteToX(hoverMin, mainW, xw)}
+                  x1={minuteToX(hoverMin, w, xw)}
+                  x2={minuteToX(hoverMin, w, xw)}
                   y1={0}
                   y2={plotBottom}
                   className="stroke-ink-muted"
@@ -861,7 +894,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
                 />
                 {/* 該分鐘收盤的視覺錨 —— 水平線變量尺後,收盤位置改由這顆點承接 */}
                 <circle
-                  cx={minuteToX(hoverMin, mainW, xw)}
+                  cx={minuteToX(hoverMin, w, xw)}
                   cy={g.toY(hoverAgg.c)}
                   r={2.5}
                   className="fill-ink"
@@ -871,7 +904,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
             <line
               data-testid="crosshair-h"
               x1={Y_AXIS_W}
-              x2={mainW - R_AXIS_W}
+              x2={w - R_AXIS_W}
               y1={hover.y}
               y2={hover.y}
               className="stroke-ink-muted"
@@ -951,15 +984,15 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
       </svg>
       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
           多出的固定 4px 會讓比例隨容器寬漂移。 */}
-      <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full" role="img" aria-label="成交量">
-        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={subW} h={subH} xw={xw} />
+      <svg viewBox={`0 0 ${w} ${subH}`} className="w-full" role="img" aria-label="成交量">
+        <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={w} h={subH} xw={xw} />
         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
         {hoverMin !== null ? (
-          // 這條線畫在 subW 的 viewBox 裡 → x 必須用 subW 換算(L-19)。今日 MAIN.width
-          // 與 SUB.width 同值,故輸出逐值相同;用 mainW 只是靠兩個常數碰巧相等在維持對位。
+          // 這條線畫在副圖的 viewBox 裡 → x 必須用副圖的寬換算(L-19)。主副圖現在共用
+          // **同一個 `w`**(不再是兩個「碰巧相等」的常數),對位由建構保證。
           <line
-            x1={minuteToX(hoverMin, subW, xw)}
-            x2={minuteToX(hoverMin, subW, xw)}
+            x1={minuteToX(hoverMin, w, xw)}
+            x2={minuteToX(hoverMin, w, xw)}
             y1={0}
             y2={subH}
             className="stroke-ink-muted"
@@ -978,7 +1011,9 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
           降對比,讓失真的數字自己承認。 */}
       {/* `h-4` 是固定 16px,任何換行都會直接溢出壓到下方元素(Phase 5 review P2)——
           左段本輪從 ~33 字元長到 ~46 字元,窄容器時會換行。兩段各自 nowrap,
-          左段可截斷、右段不縮。 */}
+          左段可截斷、右段不縮。
+          card 變體整列省略(AD-4):卡片寬度裝不下,且 `<figcaption>` 在 `<div>` 下無語意。 */}
+      {card ? null : (
       <figcaption className="mt-1 flex h-4 items-center justify-between gap-2 font-mono text-xs text-ink-dim">
         <span className="min-w-0 truncate whitespace-nowrap">
           外盤 <span className="text-bull">{side.outer}</span> · 內盤{" "}
@@ -1004,6 +1039,36 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
           VWAP {accum.vwap != null ? fmt(accum.vwap) : "-"}
         </span>
       </figcaption>
+      )}
+    </>
+  );
+
+  // select-none:SVG 的 <text>(時間軸 / 價位 / % / 疊線 label)與下方內外盤 figcaption
+  // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
+  // card 變體外層是 `<div>` 且無 border / bg / padding(AD-4):卡片自己已經有框,
+  // 再套一層就是框中框;`<figure>` 也失去語意(說明列已省略)。
+  return card ? (
+    <div className="flex min-h-0 flex-1 flex-col select-none">{body}</div>
+  ) : (
+    <figure className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4">
+      {body}
     </figure>
+  );
+}
+
+/** 單檔頁分時圖(非受控:toggles 自持)。**簽名不變**(W-1/SC-4)—— 圖牆的卡片走
+ *  `IntradayChartCore` 的 card 變體,兩者是同一份渲染碼。 */
+export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = false }: Props) {
+  const { toggles, set } = useChartToggles();
+  return (
+    <IntradayChartCore
+      accum={accum}
+      toggles={toggles}
+      onToggle={set}
+      variant="page"
+      mainHeight={mainHeight}
+      subHeight={subHeight}
+      stkfut={stkfut}
+    />
   );
 }
