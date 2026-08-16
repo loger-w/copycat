@@ -730,8 +730,11 @@ export function IntradayChartCore({
     );
   }
 
-  const side = sideSummary(accum.minutes, xw);
-  const lowDecided = side.decidedPct !== null && side.decidedPct < LOW_DECIDED_PCT;
+  // card 變體整條說明列都不 render(AD-4)→ 這份聚合沒有讀者(review B4)。
+  // `sideSummary` 走一遍當日最多 271 格,而圖牆最多 50 張卡、每秒隨報價 re-render 各跑
+  // 一次;算完直接丟掉。page 變體逐值不變。
+  const side = card ? null : sideSummary(accum.minutes, xw);
+  const lowDecided = side !== null && side.decidedPct !== null && side.decidedPct < LOW_DECIDED_PCT;
 
   const hoverMin = hover?.min ?? null;
   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
@@ -1013,7 +1016,9 @@ export function IntradayChartCore({
           左段本輪從 ~33 字元長到 ~46 字元,窄容器時會換行。兩段各自 nowrap,
           左段可截斷、右段不縮。
           card 變體整列省略(AD-4):卡片寬度裝不下,且 `<figcaption>` 在 `<div>` 下無語意。 */}
-      {card ? null : (
+      {/* 閘用 `side === null`(= card 變體)而不是再讀一次 `card`:兩個判準各寫一次時
+          TS 也 narrow 不出 `side` 非空,而 `side!` 會把「哪天忘了算」變成 runtime 崩潰 */}
+      {side === null ? null : (
       <figcaption className="mt-1 flex h-4 items-center justify-between gap-2 font-mono text-xs text-ink-dim">
         <span className="min-w-0 truncate whitespace-nowrap">
           外盤 <span className="text-bull">{side.outer}</span> · 內盤{" "}
