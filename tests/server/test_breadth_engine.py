@@ -1913,7 +1913,9 @@ class TestTradingDayGate:
             tmp_path,
             snapshot=FakeFetch(_snapshot_rows(f"{_FRI} 10:23:45")),
             clock=_weekend_clock(),
-            config=BreadthConfig(poll_secs=60.0),
+            # `stale_secs=0.0`:預設 30 秒下「剛剛才成功」本來就不 stale,斷言對
+            # 「`_stale` 有沒有吃交易日 gate」零鑑別力(S1)。歸零後只剩 gate 撐著。
+            config=BreadthConfig(poll_secs=60.0, stale_secs=0.0),
             is_trading_day=lambda d: d.weekday() < 5,
         )
 
