@@ -586,6 +586,62 @@ describe("RightRail 鎖定武裝跨梯保留(SC-3 / SC-4 / SC-10)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// S2(code review r1):qty 由 RightRail 持有、不隨換標的重置(W-7 / R2-10)—— 未鎖定時
+// 那是對的:換標的會解除武裝,下一單一定得先重按武裝,那顆鈕就是檢查點。鎖定態把檢查點
+// 拿掉了,於是「在 A 檔按到 10 張、切到 B 檔」變成 B 檔直接 10 張直送,而畫面上那個數字
+// 本來就是使用者自己按的 —— 名目放大零訊號。所以只在**鎖定態**換標的時把 qty 打回初值。
+// ---------------------------------------------------------------------------
+describe("RightRail 鎖定態換標的 qty 回初值(review r1 S2)", () => {
+  const OTHER_STOCK_CTX: RailContext = { ...STOCK_CTX, code: "2317", name: "鴻海" };
+  const MXF_CTX: RailContext = {
+    kind: "futures",
+    product: "MXF",
+    state: { ...FUT_STATE, product: "MXF", name: "小型台指" },
+    contract: "MXFH6",
+  };
+
+  it("鎖定 + 張數 5 → 換自選股 → 張數回 1", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    lockUp();
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect((screen.getByLabelText("張數") as HTMLInputElement).value).toBe("5");
+    rerender(rail(OTHER_STOCK_CTX));
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy(); // 仍鎖定(SC-2)
+    expect((screen.getByLabelText("張數") as HTMLInputElement).value).toBe("1");
+  });
+
+  it("未鎖定 + 張數 5 → 換自選股 → 仍 5(W-7 對照組:換標的已解除武裝,武裝鈕就是檢查點)", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(STOCK_CTX));
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    rerender(rail(OTHER_STOCK_CTX));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect((screen.getByLabelText("張數") as HTMLInputElement).value).toBe("5");
+  });
+
+  it("鎖定 + 口數 5 → 換期貨商品 → 口數回 1", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(FUT_CTX));
+    lockUp();
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect((screen.getByLabelText("口數") as HTMLInputElement).value).toBe("5");
+    rerender(rail(MXF_CTX));
+    expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+    expect((screen.getByLabelText("口數") as HTMLInputElement).value).toBe("1");
+  });
+
+  it("未鎖定 + 口數 5 → 換期貨商品 → 仍 5(W-7 對照組)", () => {
+    setCapitalWsStatus("open");
+    const { rerender } = render(rail(FUT_CTX));
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    rerender(rail(MXF_CTX));
+    expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy();
+    expect((screen.getByLabelText("口數") as HTMLInputElement).value).toBe("5");
+  });
+});
+
 describe("RightRail 鎖定的清除路徑(SC-6 / SC-7 / SC-12b / E-7 / R3)", () => {
   it("SC-6:鎖定中停在無梯頁時 WS 轉 closed → 回個股頁是未武裝未鎖定", () => {
     setCapitalWsStatus("open");
