@@ -36,7 +36,7 @@ describe("useContainerSize", () => {
     const emit = (width: number, height: number): void => {
       act(() =>
         fire!(
-          [{ target: node, contentRect: { width, height } } as ResizeObserverEntry],
+          [{ target: node, contentRect: { width, height } } as unknown as ResizeObserverEntry],
           {} as ResizeObserver,
         ),
       );

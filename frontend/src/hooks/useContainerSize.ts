@@ -31,6 +31,11 @@ export function useContainerSize<T extends HTMLElement>(): [
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
       if (rect === undefined) return;
+      // 0×0 = 「這個節點現在看不見」,不是「沒有空間了」:主 tab 以 `hidden` 保留 DOM
+      // (專案慣例),隱藏的那一刻 RO 會回一報 0×0。照收就把上一組有效量測沖掉 ——
+      // 切回來的第一幀畫的是呼叫端的 fallback 尺寸,圖跳一下才回到正確比例。
+      // 保留舊值:反正節點看不見時畫多大都無所謂,顯示回來若真的變了 RO 會再報一次。
+      if (rect.width <= 0 || rect.height <= 0) return;
       const next = { width: rect.width, height: rect.height };
       // 1px 去抖:亞像素抖動不該觸發 re-render,也避免與「呼叫端據此設高度」形成
       // 每輪 ±0.5px 的無盡回饋。
