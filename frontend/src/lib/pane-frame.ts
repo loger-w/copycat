@@ -57,3 +57,25 @@ export function paneSvgHeight(size: Size, frame: PaneFrame): number | undefined 
   const renderPx = Math.max(96, Math.floor(size.height - frame.chromeY) - 2);
   return Math.round((renderPx * frame.vbW) / svgW);
 }
+
+/** 一個 viewBox 單位在畫面上是幾 px 的**倒數** —— 也就是「要抵銷 svg 的等比縮放,
+ *  viewBox 內的尺寸該乘多少」。
+ *
+ *  svg 帶 `viewBox="0 0 vbW H"` + `className="w-full"` 時整份內容等比縮放到容器寬,
+ *  字級也跟著縮:pane 窄到 312px(1536 兩欄態)時 `0.625rem` 只剩約 4.9px,誰也讀不出
+ *  刻度寫什麼。把這個比例乘回字級,渲染 px 就與 pane 寬無關(WL-3)。
+ *
+ *  量不到 → `undefined`,呼叫端當 1(= 改版前的行為,字級數值逐字不變)。 */
+export function paneUnitScale(size: Size, frame: PaneFrame): number | undefined {
+  if (size.width <= 0 || size.height <= 0) return undefined;
+  const svgW = size.width - frame.insetX;
+  if (svgW <= 0) return undefined;
+  return frame.vbW / svgW;
+}
+
+/** viewBox 內的字級字串。**一律走這支不要手寫 rem 字面值**:補償漏一處的症狀是同一張
+ *  圖裡有兩種大小的字,而不是報錯。`scale` 預設 1 → 輸出與改版前的字面值數值等價
+ *  (`0.625` → `"0.6250rem"`,SVG 解析同值)。 */
+export function svgFontRem(base: number, scale = 1): string {
+  return `${(base * scale).toFixed(4)}rem`;
+}

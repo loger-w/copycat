@@ -14,6 +14,7 @@ import {
   X_END_MIN,
   X_START_MIN,
 } from "@/lib/index-chart-svg";
+import { svgFontRem } from "@/lib/pane-frame";
 import {
   LEVEL_FILL,
   LEVEL_STROKE,
@@ -76,6 +77,8 @@ interface IntradayProps {
   s: IndexSeries;
   /** viewBox 單位的圖高;未給 → 220(見 `MarketChart.height` 的 JSDoc)。 */
   height?: number;
+  /** viewBox → 畫面的縮放補償(見 `MarketChart.unitScale`);未給 → 1。 */
+  unitScale?: number;
   /** 疊線只做加權(櫃買無日 K 來源,已拍板跳過)—— 這個判別子同時決定 toggle 反灰文案 */
   marketKey: MarketKey;
   toggles: ChartToggles;
@@ -90,6 +93,7 @@ function IntradayChart({
   name,
   s,
   height,
+  unitScale = 1,
   marketKey,
   toggles,
   onToggle,
@@ -124,6 +128,11 @@ function IntradayChart({
   const oLines = overlay !== null && isTwse ? overlayLines(overlay, g, on) : [];
   const pegs = overlay !== null && isTwse ? outOfDomainLevels(overlay, g, on) : [];
   const bounds = labelBounds(size.height);
+  // ⚠ `rightEdgeLabels` 的堆疊間距 `EDGE_LABEL_H` 是 viewBox 單位的常數,**不隨 unitScale
+  // 走**:字放大後標籤間距相對變密。這裡刻意只補字級不動 bounds —— 動了就等於改
+  // `index-chart-svg` 的排版契約(個股圖共用),而那是另一顆 commit 的事(next-time)。
+  const tickFont = svgFontRem(0.625, unitScale);
+  const edgeFont = svgFontRem(0.5625, unitScale);
   const labels = rightEdgeLabels({
     ref: s.ref !== null ? { y: g.refY, text: `昨收 ${fmt(s.ref)}` } : null,
     oLines,
@@ -174,7 +183,7 @@ function IntradayChart({
               x={toX(minute) + 2}
               y={size.height - 2}
               className="fill-ink-dim"
-              fontSize="0.625rem"
+              fontSize={tickFont}
             >
               {label}
             </text>
@@ -196,7 +205,7 @@ function IntradayChart({
             x={2}
             y={Math.min(Math.max(t.y - 2, bounds.top), bounds.bottom)}
             className="fill-ink-dim"
-            fontSize="0.625rem"
+            fontSize={tickFont}
           >
             {fmt(t.priceMilli)}
           </text>
@@ -232,7 +241,7 @@ function IntradayChart({
             className={cn(l.kind === "ref" ? "fill-ink-dim" : LEVEL_FILL[l.level], "stroke-surface")}
             strokeWidth={2}
             paintOrder="stroke"
-            fontSize="0.5625rem"
+            fontSize={edgeFont}
           >
             {labelText(l)}
           </text>
@@ -263,6 +272,10 @@ interface Props {
    *  (本檔的 `SIZE.height`),candle 未給 → 直接透傳 undefined 讓 `CandleChart` 用它
    *  自己的 578。在這裡給一個預設,就等於替 CandleChart 決定了它的高。 */
   height?: number;
+  /** svg 等比縮放的字級補償係數 = `viewBox 寬 ÷ svg 渲染寬`(由 `paneUnitScale` 算,
+   *  caller 已扣 chrome)。未給 → 1 = 改版前行為。**只作用在分時態**:K 線態的字在
+   *  `CandleChart` 內(共用元件、viewBox 寬寫死 1400),補償列 next-time(KR-3)。 */
+  unitScale?: number;
 }
 
 /** 大盤主圖:分時走勢 or 蠟燭圖 + 一行來源/涵蓋期間 meta(SC-4/5/6)。 */
@@ -275,6 +288,7 @@ export function MarketChart({
   onToggle,
   active = true,
   height,
+  unitScale,
 }: Props) {
   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
   const minutes = marketMinutesOf(mode);
@@ -296,6 +310,7 @@ export function MarketChart({
         name={name}
         s={series}
         height={height}
+        unitScale={unitScale}
         marketKey={marketKey}
         toggles={toggles}
         onToggle={onToggle}
@@ -345,7 +360,10 @@ export function MarketChart({
         showVolume={meta.volume}
         height={height}
       />
-      <p data-testid="market-meta" className="mt-1 font-mono text-xs text-ink-dim">
+      {/* `h-4 truncate` 是**契約不是裝飾**:`PANE_FRAMES.candle` 的 chromeY 把這一列
+          算成固定 20px(h-4 16 + mt-1 4)。窄 pane 下最長的來源字串超過欄寬,不限高就
+          折成兩行 → chromeY 少算一行 → svg 溢出 figure(WL-2)。 */}
+      <p data-testid="market-meta" className="mt-1 h-4 truncate font-mono text-xs text-ink-dim">
         {SOURCE_TEXT[meta.source] ?? meta.source} · {coverage}
         {meta.synth_since !== null ? ` · 自 ${meta.synth_since} 起` : ""}
         {meta.partial_last ? " · 最後一根未收盤" : ""}
