@@ -1,0 +1,26 @@
+{
+  "round": 1,
+  "scope": "自評(medium 檔位):lens whitelist-layout + tests-deadcode(opus finder ×2)+ Phase 6 real-env 截圖 finding + react-doctor 新增 finding",
+  "diff": "review-diff.txt(master..2cb1fc37)",
+  "findings": [
+    {"id": "WL-1", "severity": "P0", "file": "frontend/src/components/index/IndexPage.tsx", "summary": "單欄態主 grid 兩條 auto 列等分自由空間(左右欄皆 min-h-0)→ 雙圖溢出蓋家數帶/列表、主 grid 不出捲軸;與截圖 SC-7 1280 FAIL 同根因", "verdict": "CONFIRMED(截圖 subagent 實測 1280:grid 642/642 不可捲、pane 溢出 315px)", "disposition": "accepted", "resolution": "主 grid 單欄改 flex-col、@[1050px] 才 grid;左欄/雙圖 grid/MarketPane 的 min-h-0 條件化 @[1050px]:min-h-0;+ r3 顯式地板(雙圖 grid min-h-80、figure min-h-48)"},
+    {"id": "RE-1", "severity": "P1", "file": "frontend/src/components/index/IndexPage.tsx", "summary": "兩欄態可用高不足(1536×664 / 1440×900 左欄<700 兩圖直排)時 pane 被壓到低於內容 → 溢出重疊、逃生口不啟動", "verdict": "CONFIRMED(截圖 SC-4-short / SC-7-1440)", "disposition": "accepted", "resolution": "spec amendment r3:雙圖 grid 去 min-h-0 改 min-h-80、figure min-h-48、雙圖斷點 @[640px];SC-4 改寫(縮 60 不捲 / 縮 200 進逃生口可捲不重疊)"},
+    {"id": "WL-2", "severity": "P1", "file": "frontend/src/components/index/MarketChart.tsx", "line": 348, "summary": "candle 態 meta 列會折行 → chromeY 少算 → svg 溢出 16px", "verdict": "PLAUSIBLE(1536 下 wrapper 312px,最長字串 >400px)", "disposition": "accepted", "resolution": "meta 列 `mt-1 h-4 truncate`;PANE_FRAMES 註解標明每項必須固定高"},
+    {"id": "WL-3", "severity": "P1", "file": "frontend/src/components/index/MarketChart.tsx", "line": 158, "summary": "pane 變窄後 svg 內 rem 字級隨 viewBox 縮放(1536 下 ~4.9px)不可讀", "verdict": "CONFIRMED(算術:svgW 312/640)", "disposition": "accepted(intraday/overlay);candle 態 partial", "resolution": "MarketPane 下傳 unitScale=vbW/svgW,IntradayChart / OverlayCard 文字 fontSize × unitScale 鎖渲染 px;CandleChart(共用元件、vbW 1400、改版前 pane 也已 3.9px)本輪不動 → next-time + Known Risks KR-3"},
+    {"id": "WL-4", "severity": "P2", "file": "frontend/src/components/index/LimitListSection.tsx", "summary": "border-collapse 下 th border-b 不隨 sticky 黏", "verdict": "CONFIRMED(finder 實測 scrollTop=260 底線消失)", "disposition": "accepted", "resolution": "th 改 shadow-[inset_0_-1px_0_var(--color-line)];class lock 同步"},
+    {"id": "WL-5", "severity": "P2", "file": "frontend/src/hooks/useContainerSize.ts", "summary": "主 tab hidden 時 RO 回 0×0 → 切回先畫 fallback 一幀(圖跳一下)", "verdict": "PLAUSIBLE", "disposition": "accepted", "resolution": "hook 忽略 0×0 回呼(保留上一組非零);補 hook 測試"},
+    {"id": "DR-1", "severity": "P2", "file": "frontend/src/components/index/MarketPane.tsx", "line": 46, "summary": "react-doctor 新增 only-export-components ×2(PANE_FRAMES / paneSvgHeight)", "verdict": "CONFIRMED", "disposition": "accepted", "resolution": "搬到 lib/pane-frame.ts(純函式抽 lib 慣例);測試 import 改指"},
+    {"id": "TD-1", "severity": "P2", "file": "frontend/src/hooks/useBreadthRows.ts", "line": 11, "summary": "檔頭仍寫 subtab unmount 閘", "disposition": "accepted", "resolution": "改寫為恆掛 + active gate"},
+    {"id": "TD-2", "severity": "P2", "file": "frontend/src/components/index/LimitListSection.test.tsx", "line": 114, "summary": "註解指向已刪 (s2)(s7)", "disposition": "accepted", "resolution": "改寫"},
+    {"id": "TD-3", "severity": "P2", "file": ".claude/skills/frontend-testing/SKILL.md", "line": 16, "summary": "lazy 三坑樣板引用已刪的 CorrSection 測試", "disposition": "accepted", "resolution": "改指 App.corr-tab.test.tsx(真身)/ IndexPage.test.tsx;收尾沉澱一併處理 KR-2"},
+    {"id": "TD-4", "severity": "P2", "file": "frontend/src/hooks/useCorrelation.test.ts", "summary": "「unmount → WS close」保護隨 CorrSection.lazy 刪除消失", "disposition": "accepted", "resolution": "useCorrelation / useRiver 各補 hook 級 unmount→closed lock(mutation 驗)"},
+    {"id": "TD-5", "severity": "P2", "file": "frontend/src/components/index/IndexPage.test.tsx", "summary": "min-h-0/flex-1 鏈只鎖三節點", "disposition": "accepted", "resolution": "補鏈式 class lock(含 r3 新地板 / 條件化 min-h-0)"},
+    {"id": "TD-6", "severity": "P2", "file": "frontend/src/components/index/AdvanceDeclineChart.tsx", "summary": "騰落線量測→viewBox 路徑零測試", "disposition": "accepted", "resolution": "fake RO 640×96 → viewBox 高 96;class lock h-24 / h-full"},
+    {"id": "TD-7", "severity": "P2", "file": "frontend/src/components/index/MarketPane.size.test.tsx", "summary": "overlay / candle frame 選擇未鎖", "disposition": "accepted", "resolution": "補兩支整合 it"},
+    {"id": "TD-8", "severity": "P2", "file": "frontend/src/components/index/BreadthBand.test.tsx", "line": 91, "summary": "「實心」未鎖(bg-bull/15 也含 bg-bull)", "disposition": "accepted", "resolution": "(g)(o) 加 not.toContain('bg-bull/')"},
+    {"id": "TD-9", "severity": "P2", "file": "frontend/src/App.test.tsx", "line": 77, "summary": "三處註解仍描述 subtab", "disposition": "accepted", "resolution": "改寫"}
+  ],
+  "p2_summary": "P2 ×11(註解殘留 ×4、測試補鎖 ×5、hook 守衛 ×1、doctor 匯出 ×1);死碼掃描乾淨;白名單 W-1~W-12 除 WL-1 單欄態外全保;鐵則 E 自查通過。",
+  "counts": {"P0": 1, "P1": 3, "P2": 11, "accepted": 15},
+  "fix_wave": "單一 implementer(opus)一波;完成後全套 gate + 截圖補驗 SC-3(1536/1920 回歸)/ SC-4 新判準 / SC-7 1280+1380+1440"
+}

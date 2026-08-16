@@ -57,6 +57,28 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   (free space 已被軌道吃光),可放 base class。jsdom 驗不到,只能鎖 class 字串 + 截圖層。
   Trigger:給 grid 容器加 flex-1 / 確定高度、或 grid 同時有「固定列軌」與「auto 列軌」兩態。
 
+## 一頁式版面:可縮鏈 / 地板 / container query 目標(2026-08-16 overview-onepage 沉澱)
+
+- **grid 單欄態(auto 列 + 容器有確定高)會把自由空間「等分」給 min-h-0 的項目,列高與內容
+  無關**(CSS Grid §12.6 Maximize Tracks):兩列各拿一半高,內容多的那列溢出蓋到下一列,而 grid
+  的 `scrollHeight == clientHeight`(溢出在 box 內)→ `overflow-y-auto` 逃生口永不啟動。
+  單欄態要「內容決定高、整頁可捲」一律改 **flex-col**(`flex flex-col … @[Npx]:grid`),
+  兩欄態才用 grid。Trigger:同一容器要在窄 / 寬兩態切 grid 欄數且窄態要可捲。
+- **可縮鏈(min-h-0 一路到底)必須配「顯式地板」,不能靠內容當地板**:量測型圖表
+  (useContainerSize → viewBox 高)的內容高就是「當前高」,拿它當 min-content 只會鎖死不能縮
+  (回饋迴圈)。地板寫成明確 `min-h-*`(雙圖 grid `min-h-80` / figure `min-h-48`),地板以下
+  由最外層 `overflow-y-auto` 接手;地板值 = 固定 chrome + 週期列折行上限 + svg 地板 96。
+  Trigger:任何 `flex-1 min-h-0` 內放量測型 svg 的版面。
+- **container query 變體量的是最近的 `@container` 祖先,不是頁面 root**:左欄自身若也是
+  `@container`(為了雙圖斷點),掛在 pane 上的 `@[1050px]:min-h-0` 量到的是左欄寬(兩欄態
+  ≈ 630–930px)永不成立 → 語意「單欄 / 兩欄」的變體只能掛在以 root 為最近容器的元素上
+  (左欄 / 右欄框),pane 層要無條件 `min-h-0`。Trigger:巢狀 `@container` 下寫任何 `@[…]:` 變體。
+- **`border-collapse` 表的 sticky th,`border-b` 不隨 sticky 黏**(邊框歸表格 border grid 繪製):
+  分隔線改 `shadow-[inset_0_-1px_0_var(--color-line)]` 由 cell 自繪。Trigger:內捲表格加 sticky 表頭。
+- **svg 內 rem 字級隨 viewBox 縮放**:pane 變窄(svg 渲染寬 ÷ viewBox 寬 < 0.5)後 0.625rem
+  只剩 ~5px;要鎖渲染 px 得把 `unitScale = vbW / svgW` 乘進 fontSize(`lib/pane-frame.ts::
+  paneUnitScale` + `svgFontRem`)。Trigger:把固定 viewBox 圖放進會變窄的欄位。
+
 ## 驗證截圖
 
 - **devtools MCP 截圖 close-up 用 PIL crop 整頁截圖,不用 `body.style.zoom`**:zoom 會污染 useContainerSize 量測(ResizeObserver 以 zoom 後幾何重排,拍完 reset 也可能留下爆版 layout)。Trigger:real-env 要 panel 級 close-up 證據時。
