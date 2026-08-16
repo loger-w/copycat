@@ -136,6 +136,20 @@ class FakeFetch:
         return self.rows
 
 
+class _FailOnceFetch(FakeFetch):
+    """首次呼叫拋 `BreadthFetchError`、其後正常 —— 「首圈打嗝」的最小重現。
+
+    用 `FakeFetch.error` 開關做不到:那是全域旗標,測試要在 loop 轉動途中改它就得
+    自己跟 loop 賽跑(換圈時機不可控)。
+    """
+
+    def __call__(self, token: str, *args: Any) -> list[dict]:
+        if self.calls == 0:
+            self.calls += 1
+            raise BreadthFetchError("首圈打嗝")
+        return super().__call__(token, *args)
+
+
 class FakeDaily:
     """單日全市場 EOD 取數替身(`daily_fetch`)。
 
@@ -1982,6 +1996,65 @@ class TestTradingDayGate:
 
         assert snap.calls >= 3
         assert engine._in_window() is True
+
+    async def test_holiday_first_cycle_failure_keeps_retrying(self, tmp_path: Path) -> None:
+        """C1:非交易日首圈取數失敗 → 沿既有退避重試,直到成功一次為止。
+
+        `_in_window` 吃了交易日 gate 之後,「首圈無條件 + 之後看窗」的組合在假日只給
+        **一次**機會:那一次撞上 FinMind 打嗝,counts 就整天是 None(改動前窗內會退避
+        重試)。畫面是「家數帶永遠載入中」且零錯誤訊號。
+        """
+        snap = _FailOnceFetch(_snapshot_rows(f"{_FRI} 10:23:45"))
+        engine, *_ = _make(
+            tmp_path,
+            snapshot=snap,
+            clock=_weekend_clock(),
+            config=BreadthConfig(poll_secs=0.01),
+            is_trading_day=lambda d: d.weekday() < 5,
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: engine.state()["counts"] is not None)
+        finally:
+            await engine.close()
+
+        assert snap.calls >= 2  # 首圈拋 → 第二圈仍打
+        assert engine.state()["counts"] is not None
+
+    async def test_trading_day_premarket_failure_still_waits_for_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """W1 對照鎖:交易日**窗外**首圈失敗照樣只打一次(等窗開,不搶跑)。
+
+        C1 的放寬只准鬆開「非交易日尚未成功過」那一格;若寫成「沒成功過就重試」,
+        交易日盤前 08:00 起站會從 09:00 才開始取數變成整個盤前狂打 —— W1/W5 皆破。
+        圈數同 `test_holiday_suppresses_polling_after_first_cycle` 用 `_maybe_arm_streaks`
+        當觀察點(牆鐘 sleep 換圈在 Windows 上量不準)。
+        """
+        rounds = {"n": 0}
+
+        def _count(_self: object) -> None:
+            rounds["n"] += 1
+
+        monkeypatch.setattr(be.BreadthEngine, "_maybe_arm_streaks", _count)
+        snap = _FailOnceFetch(_snapshot_rows())
+        engine, *_ = _make(
+            tmp_path,
+            snapshot=snap,
+            clock=Clock(now="08:00:00"),
+            config=BreadthConfig(poll_secs=0.01),
+            is_trading_day=lambda d: d.weekday() < 5,
+        )
+
+        await engine.start()
+        try:
+            await _wait_until(lambda: rounds["n"] >= 4)
+        finally:
+            await engine.close()
+
+        assert snap.calls == 1
+        assert engine.state()["counts"] is None
 
     @pytest.mark.parametrize(
         "today,now,computed_for,data_end,dates,streaks",
