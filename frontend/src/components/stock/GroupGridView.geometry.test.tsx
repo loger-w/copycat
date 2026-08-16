@@ -87,6 +87,8 @@ describe("GroupGridView hover 不重算幾何(SC-6d)", () => {
     }
     const counted = vi.mocked(buildIntradayGeometry);
     const before = counted.mock.calls.length;
+    // 計次自檢:mock 沒接上時「次數沒變」是 0 → 0,恆綠而毫無意義
+    expect(before).toBeGreaterThan(0);
 
     const svg = screen.getByTestId("group-card-2330").querySelector('svg[role="img"]')!;
     for (const clientX of [10, 40, 90]) {
