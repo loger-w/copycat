@@ -250,11 +250,15 @@ export function PriceLadder({
         trade_kind: tradeKind,
         source: "flash",
       })
-      // arm 事件**不受 aliveRef 守門**:state 已上提,卸載後 dispatch 到父層 reducer 合法,
-      // 而鎖定態下「送出後切走、回應才到」的失敗漏計就等於連 3 敗那道閘永遠關不上
-      // (change-spec review R3)。守門只留在 showHint(它碰的是本元件的 state)。
+      // arm 事件的守門**刻意不對稱**(change-spec review R3 + code review r1 S1):
+      //   失敗 → 無條件 dispatch(state 已上提,卸載後 dispatch 到父層 reducer 合法)。
+      //     鎖定態下「送出後切走、回應才到」的失敗漏計 = 連 3 敗那道閘永遠關不上。
+      //   成功 → 留 `aliveRef` 守門。遲到的成功來自**已經離開的那座梯**,對「現在這座梯
+      //     還能不能送」不構成證據,計進去等於讓一發舊單把斷路器洗回 0。
+      // showHint 兩邊都在守門內(它碰的是本元件的 state)。
       .then((r) => {
         if (r.ok) {
+          if (!aliveRef.current) return;
           dispatchArm({ type: "send_ok" });
           showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`);
         } else {
@@ -303,6 +307,11 @@ export function PriceLadder({
     };
   }, []);
 
+  // 鎖定鈕 disabled 只擋**進入**方向(SC-13 + code review r1 S3):WS 非 open 不得進入
+  // 鎖定,但已鎖定時解鎖鈕恆可按 —— connecting 閃一下就把唯一的解鎖出口鎖死,使用者
+  // 會停在「還在鎖定態、卻按不掉」的位置(connecting 本身不清鎖定,只有 closed 才清)。
+  const lockDisabled = arm.wsStatus !== "open" && !arm.state.locked;
+
   return (
     <LadderView
       code={code}
@@ -320,9 +329,8 @@ export function PriceLadder({
         dispatchArm({ type: "toggle" });
       }}
       locked={arm.state.locked}
-      // 鎖定鈕在 WS 非 open 時 disabled(SC-13):連得上才談得上「一路盯著下單」
-      lockDisabled={arm.wsStatus !== "open"}
-      lockTitle={arm.wsStatus !== "open" ? LOCK_WS_TITLE : undefined}
+      lockDisabled={lockDisabled}
+      lockTitle={lockDisabled ? LOCK_WS_TITLE : undefined}
       onToggleLock={() => {
         touchIdle();
         dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
