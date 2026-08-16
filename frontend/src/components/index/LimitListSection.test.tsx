@@ -111,10 +111,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// 🔴 2026-08-14 subtab 改版:收合殼卸掉(掛載閘上移到 IndexPage 的 subtab 列)——
-// 「非 active subtab = unmount」的省輪詢語意由 IndexPage.test.tsx (s2)(s7) 鎖。
+// 🔴 2026-08-14 收合殼卸掉 → 2026-08-16 subtab 機制整組退役:本元件現在**恆掛**在台股
+// 綜合右欄,省輪詢完全靠 `active`(下一個 describe 鎖「線有沒有接上」,全鏈那一段在
+// App.test.tsx「切離台股綜合 tab → 列表停止背景輪詢」)。
 // 這裡剩下的元件級契約是:掛上就直接工作,且**完全不碰**那把已廢止的 open key。
-describe("LimitListSection 掛載即工作(subtab 改版)", () => {
+describe("LimitListSection 掛載即工作(收合殼退役)", () => {
   it("render 即掛 body 並取數(無收合鈕)", async () => {
     renderSection();
     expect(await screen.findByTestId("limit-list-body")).toBeTruthy();
@@ -136,7 +137,7 @@ describe("LimitListSection 掛載即工作(subtab 改版)", () => {
   });
 });
 
-// FE-2:tab 是 `hidden` 保留而非 unmount(App 慣例)→ 展開狀態會跨 tab 存活。
+// FE-2:tab 是 `hidden` 保留而非 unmount(App 慣例)→ 本元件跨 tab 一直掛著。
 // 這一組鎖的是「`active` 有真的接到 hook 上」,不是 hook 自己的 gate(那在
 // useBreadthRows.test.ts)—— 少接這一根線,hook 測試照樣全綠。
 describe("LimitListSection 背景輪詢 gate(FE-2)", () => {

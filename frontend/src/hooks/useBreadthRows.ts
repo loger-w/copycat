@@ -7,10 +7,10 @@ import type { BreadthRowsState } from "@/types";
 /** 漲跌停列表資料流(market-overview R3 SC-1;design §5.2)。
  *
  * **REST on-demand 不進 WS**(brainstorm Q2):payload 是全市場 ~2800 列 × 15 欄,
- * 掛上 `/ws/breadth` 等於所有開站的人都吃這份頻寬,而它只有列表展開時才有人看。
- * 消費端(`LimitListSection`)在非 active subtab 時即 unmount(掛載閘在 `IndexPage`
- * 的 subtab 列;2026-08-14 改版前是「收合即 unmount」),query 隨之消失 ——
- * 頻寬跟著消費者走。
+ * 掛上 `/ws/breadth` 等於所有開站的人都吃這份頻寬,而它只有人在台股綜合頁時才有人看。
+ * 消費端(`LimitListSection`)自 2026-08-16 一頁總覽起**恆掛**在右欄(subtab 機制退役,
+ * 改版前是「非 active subtab 即 unmount」)—— 省頻寬的責任整條落到下面的 `active` gate,
+ * 不再有 unmount 這條退路。
  *
  * `refetchInterval` 用**函式形式**(R10,`useMarketBars` 同慣例):TQ 每次 interval
  * 到期都重新求值,開盤 / 收盤的開關不依賴外部 re-render 才會生效。收盤後回 false
@@ -29,8 +29,8 @@ async function fetchBreadthRows(): Promise<BreadthRowsState> {
 }
 
 /** @param active 使用者是否正看著台股綜合 tab。該 tab 的 DOM 由 App 以 `hidden` 保留
- *  (不 unmount),列表又把展開狀態記在 localStorage —— 沒有這道 gate,展開過一次的人
- *  只要開著站台,整個盤中每 10 秒都在抓一份全市場 ~2800 列的 payload(review FE-2)。
+ *  (不 unmount),列表又恆掛在右欄 —— 沒有這道 gate,只要開過站台一次,整個盤中每
+ *  10 秒都在抓一份全市場 ~2800 列的 payload(review FE-2)。
  *
  *  **只停 `refetchInterval`,不關 `enabled`**(`useFuturesBars` 同慣例):輪詢是這支
  *  query 唯一的背景請求來源,停掉即達成目的;而 `enabled: false` 會讓切回 tab 時
