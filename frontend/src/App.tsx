@@ -31,8 +31,9 @@ import { cn } from "@/lib/utils";
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
 const FuturesPage = lazy(() => import("@/components/futures/FuturesPage"));
 const IndexPage = lazy(() => import("@/components/index/IndexPage"));
+const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
 
-type Tab = "txo" | "stock" | "futures" | "index";
+type Tab = "txo" | "stock" | "futures" | "index" | "corr";
 
 const FUT_PRODUCTS = [
   ["TXF", "大台"],
@@ -41,14 +42,16 @@ const FUT_PRODUCTS = [
 ] as const;
 export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
 
-/** localStorage 值域**縮減一項**:`corr` 自台股綜合 R1(SC-1)起移出合法清單 ——
- *  相關係數併入台股綜合頁內(2026-08-14 起是該頁的一顆 subtab,改版前為收合區塊),
- *  舊值因此自然 fallback 到 `index`(刻意遷移,
- *  不寫搬移碼)。其餘舊值仍各自還原到對應 tab;「無值」時的 fallback 同樣是
- *  `index` —— 該頁自 index-board SC-1 起排第一顆。 */
+/** localStorage 值域**加回** `corr`(2026-08-16 R2 SC-1):相關係數升為第 5 顆頂層 tab。
+ *  沿革:R1 曾把它併入台股綜合頁(先收合區塊、後 subtab),那段期間 `corr` 不在合法
+ *  清單內、舊值一律 fallback 到 `index`;subtab 機制本輪退役後值域回到 R1 前的樣子,
+ *  停在該值的瀏覽器重新還原到相關係數頁(D7 預期,零遷移碼)。其餘舊值仍各自還原到
+ *  對應 tab;「無值」時的 fallback 是 `index` —— 該頁自 index-board SC-1 起排第一顆。 */
 function initialTab(): Tab {
   const saved = window.localStorage.getItem(TAB_KEY);
-  return saved === "stock" || saved === "futures" || saved === "txo" ? saved : "index";
+  return saved === "stock" || saved === "futures" || saved === "txo" || saved === "corr"
+    ? saved
+    : "index";
 }
 
 function initialProduct(): FutProduct {
@@ -101,6 +104,7 @@ export default function App() {
     txo: true,
     stock: tab === "stock",
     futures: tab === "futures",
+    corr: tab === "corr",
   });
   // 主檔 / 期貨商品上提到 App(D-3):右欄常駐且內容跟隨當前 tab,資料留在頁面內就餵不到右欄
   const [stockCode, setStockCode] = useState<string | null>(initialStockCode);
@@ -201,6 +205,7 @@ export default function App() {
             ["stock", "個股(期)"],
             ["txo", "選擇權"],
             ["futures", "期貨"],
+            ["corr", "相關係數"],
           ] as [Tab, string][]
         ).map(([id, label]) => (
           <button
@@ -288,6 +293,15 @@ export default function App() {
                   // gate 停(review FE-2;FuturesPage 的 active 同慣例)
                   active={tab === "index"}
                 />
+              </Suspense>
+            </div>
+          ) : null}
+          {visited.corr ? (
+            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
+              <Suspense
+                fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+              >
+                <CorrPage />
               </Suspense>
             </div>
           ) : null}
