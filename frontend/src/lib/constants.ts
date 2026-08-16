@@ -73,11 +73,12 @@ export const MARKET2_MODE_STORE = "copycat-market2-tf";
 export const MARKET2_FUT_STORE = "copycat-market2-fut";
 
 /** 台股綜合頁下半部選中的 subtab — components/index/IndexPage.tsx。
- *  值域 `"limit" | "sector" | "timeline" | "corr"`,非白名單值 fallback `"limit"`
- *  (漲跌停;恆有一顆 active,不提供「全收」態)。
+ *  值域 `"limit" | "corr"`,非白名單值 fallback `"limit"`
+ *  (漲跌停;恆有一顆 active,不提供「全收」態)。**值域縮減靠這道 fallback 遷移**:
+ *  2026-08-16 拿掉兩顆 subtab 後,舊瀏覽器裡的殘值就是靠它落回漲跌停,零遷移碼。
  *
  *  **非 active subtab = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場
- *  rows / 類股輪動」與「要不要掛 corr + river 兩條 WS」—— 它取代了 2026-08-14 之前的
+ *  rows」與「要不要掛 corr + river 兩條 WS」—— 它取代了 2026-08-14 之前的
  *  四支獨立 `*_OPEN_KEY`(已進 `ORPHAN_STORAGE_KEYS`)。 */
 export const INDEX_SUBTAB_KEY = "copycat-index-subtab";
 

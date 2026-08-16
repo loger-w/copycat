@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getSoundOn, useSignalSound } from "@/hooks/useSignalSound";
 import { onSignal } from "@/lib/signal-bus";
-import { formatToastText, isMarketKind, type SignalMsg } from "@/lib/signal-model";
+import { formatToastText, type SignalMsg } from "@/lib/signal-model";
 
 /** 同時顯示上限(design R7):再多就疊成一片沒人讀得完,其餘走「+N」計數。 */
 const VISIBLE = 4;
@@ -83,10 +83,6 @@ export function useSignalAlerts() {
 
   useEffect(() => {
     const off = onSignal((sig) => {
-      // 全市場廣度事件不打擾(market-overview R4 SC-8):它是看盤背景資訊,不是自選池的
-      // 提醒 —— 漲停潮日一分鐘上百則,toast 會蓋滿畫面、嗶聲會連成一片,連帶把真正該
-      // 注意的自選訊號淹掉。要看這些事件請去綜合 tab 的訊號時間軸。
-      if (isMarketKind(sig.kind)) return;
       seqRef.current += 1;
       const key = `${sig.id}#${seqRef.current}`;
       const text = formatToastText(sig);

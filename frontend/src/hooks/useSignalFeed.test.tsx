@@ -54,9 +54,8 @@ describe("useSignalFeed", () => {
     const hook = renderHook(() => useSignalFeed(), { wrapper });
     await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
     expect(ids(hook.result.current.signals)).toEqual(["new", "mid", "old"]);
-    // 預設模式 = exclude(design §9.3):baseline 由**後端**濾掉 market 族,
-    // 前端只再擋 live 那條。URL 與 queryKey 的變更是事前拍板該變的(SC-8)。
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/stock/signals/today?market=exclude");
+    // 裸 URL:後端不再有可分族的事件源,today 端點回的就是當日全部訊號。
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/stock/signals/today");
   });
 
   it("live 訊號 prepend 在最前,且同 id 不重複入列", async () => {
@@ -95,7 +94,7 @@ describe("useSignalFeed", () => {
     // 失敗降級(review TQ-5)。retryDelay 預設 1s,waitFor 預設 timeout 1s 抓不到 → 給 5s。
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 5_000 });
     await waitFor(() =>
-      expect(client.getQueryState(["stock-signals-today", "exclude"])?.status).toBe("error"),
+      expect(client.getQueryState(["stock-signals-today"])?.status).toBe("error"),
     );
     expect(hook.result.current.signals).toEqual([]);
     act(() => emitSignal(sig("live-1")));
@@ -122,105 +121,24 @@ describe("useSignalFeed", () => {
   });
 });
 
-// 🟢 market-overview R4(SC-8):全市場廣度事件與自選訊號同一條匯流排,
-// 由 feed 層依模式分流 —— 過濾/分族都發生在 `mergeSignals` 的 cap 之前。
-function mkt(id: string, time = "09:30:00"): SignalMsg {
-  return {
-    ...sig(id, time),
-    kind: "market_limit_lock",
-    code: "1101",
-    name: "台泥",
-    direction: "up",
-    pct: null,
-  };
-}
+// 2026-08-16:分族(全市場廣度事件 vs 自選訊號)整套刪除後,feed 只剩單一 baseline
+// 來源 —— 沒有模式參數、沒有查參、queryKey 固定一支。這支釘的是「不再有第二族」:
+// 若哪天又有人給 queryKey 加維度,兩個掛載點就會各抓一份、各拿到不同內容。
+describe("useSignalFeed — 單一 baseline 來源", () => {
+  it("裸 URL 無查參、queryKey 固定一支:兩個掛載點共用同一份 baseline", async () => {
+    today = [sig("old"), sig("new")];
+    const hook = renderHook(() => ({ a: useSignalFeed(), b: useSignalFeed() }), { wrapper });
 
-/** 測試側自帶判別子:紅階段 `isMarketKind` 尚不存在,不從 model 匯入(具名 import
- *  一個不存在的 export 在 Vite SSR transform 下是載入期例外 = 整檔 error)。 */
-function isMarket(s: SignalMsg): boolean {
-  return (s.kind as string).startsWith("market_");
-}
-
-describe("useSignalFeed — market 分流(SC-8)", () => {
-  it("exclude(預設):live 的 market 事件在合併前就被擋掉,不吃自選的 cap", async () => {
-    today = [];
-    const hook = renderHook(() => useSignalFeed(), { wrapper });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-
-    act(() => {
-      // 漲停潮日:250 則全市場事件擠進來。沒有 feed 層過濾時,cap 200 會把
-      // 自選那 3 則整批擠出畫面(而畫面上完全看不出「被擠掉」)。
-      for (let i = 0; i < 250; i += 1) emitSignal(mkt(`m${i}`));
-      emitSignal(sig("own-1", "09:20:01"));
-      emitSignal(sig("own-2", "09:20:02"));
-      emitSignal(sig("own-3", "09:20:03"));
-    });
-
-    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
-    expect(ids(hook.result.current.signals).sort()).toEqual(["own-1", "own-2", "own-3"]);
-    expect(hook.result.current.signals.some(isMarket)).toBe(false);
-  });
-
-  it("include:分族各自 cap 200 —— market 族擠不掉自選族", async () => {
-    today = [];
-    const hook = renderHook(() => useSignalFeed({ market: "include" }), { wrapper });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-
-    act(() => {
-      for (let i = 0; i < 250; i += 1) emitSignal(mkt(`m${i}`));
-      emitSignal(sig("own-1", "09:20:01"));
-      emitSignal(sig("own-2", "09:20:02"));
-      emitSignal(sig("own-3", "09:20:03"));
-    });
-
-    await waitFor(() =>
-      expect(hook.result.current.signals.filter((s) => !isMarket(s)).length).toBe(3),
-    );
-    // market 族自己吃滿 200 的 cap,但不越界吃到另一族
-    expect(hook.result.current.signals.filter(isMarket).length).toBe(200);
-  });
-
-  it("同一 QueryClient 兩消費端:各自 fetch、URL 不同、內容不同(queryKey 帶模式)", async () => {
-    const own = sig("own-1", "09:20:01");
-    const market = mkt("m-1", "09:21:00");
-    // 這支要看 URL 才知道回什麼 → 另立一個帶參數的 mock(beforeEach 那支不吃參數)
-    const urlFetch = vi.fn(
-      async (url: string) =>
-        new Response(
-          JSON.stringify({
-            signals: url.includes("market=exclude") ? [own] : [own, market],
-          }),
-        ),
-    );
-    vi.stubGlobal("fetch", urlFetch);
-
-    const hook = renderHook(
-      () => ({
-        excluded: useSignalFeed(),
-        included: useSignalFeed({ market: "include" }),
-      }),
-      { wrapper },
-    );
-
-    await waitFor(() => expect(hook.result.current.included.signals.length).toBe(2));
-    // 共用固定 key 時第二個掛載點會直接吃到第一個的 cache → 只會有一次 fetch
-    const urls = urlFetch.mock.calls.map((c) => c[0]);
-    expect(urls.length).toBe(2);
-    expect([...urls].sort()).toEqual([
-      "/api/stock/signals/today",
-      "/api/stock/signals/today?market=exclude",
+    await waitFor(() => expect(hook.result.current.a.signals.length).toBe(2));
+    // 兩個掛載點同 key → 只發一次 fetch,且 URL 上沒有任何查參
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(["/api/stock/signals/today"]);
+    expect(client.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([
+      ["stock-signals-today"],
     ]);
-    expect(ids(hook.result.current.excluded.signals)).toEqual(["own-1"]);
-    expect(ids(hook.result.current.included.signals)).toEqual(["m-1", "own-1"]);
 
-    // ws-open 的 invalidate 用 prefix key:兩族一起自癒,不是只救其中一掛載點。
-    // 次數不寫死(兩個掛載點各自 invalidate 一次前綴 → TQ 會重抓不只一輪),
-    // 契約是「兩族都被重抓到」。
-    act(() => emitWsOpen());
-    await waitFor(() => {
-      const after = urlFetch.mock.calls.map((c) => c[0]);
-      expect(after.filter((u) => u.includes("market=exclude")).length).toBeGreaterThanOrEqual(2);
-      expect(after.filter((u) => !u.includes("market=exclude")).length).toBeGreaterThanOrEqual(2);
-    });
+    // live 訊號兩邊都收得到(沒有任何 kind 會在 feed 層被早退掉)
+    act(() => emitSignal(sig("live-1", "09:20:01")));
+    expect(ids(hook.result.current.a.signals)).toEqual(["live-1", "new", "old"]);
+    expect(ids(hook.result.current.b.signals)).toEqual(["live-1", "new", "old"]);
   });
 });

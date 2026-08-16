@@ -59,53 +59,6 @@ const BREADTH_ROWS = {
   ],
 };
 
-/** 類股輪動(R4 SC-3 的跳轉起點)。**產業必須帶子產業**(review round-2 FE-6):
- *  後端 `compute_sector_rotation` 產不出 `subs: []` 這個形狀 —— 有成員的產業至少會有
- *  一個非空子產業。原本的 fixture 用空 subs 讓全鏈走 `!hasSubs → 直接鑽產業` 那條分支,
- *  而那條在 prod 是死碼:真正會走到的「展開產業 → 點子產業 → 成員列」全鏈零覆蓋,
- *  中間任一根線斷掉這支測試照樣綠。 */
-const SECTOR_STATE = {
-  enabled: true,
-  trade_date: "2026-08-06",
-  as_of: "10:31:00",
-  stale: false,
-  rotation: {
-    industries: [
-      {
-        name: "航運",
-        members: 30,
-        avg_change_rate: -0.75,
-        vol_ratio: 0.9,
-        subs: [{ name: "貨櫃航運", members: 12, avg_change_rate: -1.2, vol_ratio: 1.1 }],
-      },
-    ],
-  },
-};
-
-const SECTOR_MEMBERS = {
-  industry: "航運",
-  sub_industry: "貨櫃航運",
-  members: [
-    { stock_id: "2603", name: "長榮", change_rate: 4.12, vol_ratio: 2.4, total_amount: 3.64e9 },
-  ],
-};
-
-/** 訊號時間軸(R4 SC-7 的跳轉起點)的 jsonl baseline —— 廣度族刻意選 `market_*`:
- *  時間軸是唯一收得到這族的掛載點(rail 走 exclude)。 */
-const TIMELINE_SIGNAL: SignalMsg = {
-  type: "signal",
-  id: "tl-1",
-  kind: "market_limit_lock",
-  code: "1101",
-  name: "台泥",
-  price: 5_000_000,
-  time: "09:30:00",
-  levels: [],
-  direction: "up",
-  pct: null,
-  touch_count: 1,
-};
-
 beforeEach(() => {
   window.localStorage.clear();
   FakeWS.instances = [];
@@ -116,24 +69,16 @@ beforeEach(() => {
 /** 版本落差偵測的兩條路由預設回 `git_sha: null` = 「不可得」→ 全域無膠囊、無 warn
  *  (後端 sha 為 null 時 badge 連 /__build/sha 都不會問)。
  *  傳 `{fe, be, behind}` 進來即成 dev range 判別的 fixture(design C3)。
- *  `signals` = 當日訊號 jsonl 的 baseline(預設空 = 與 404 時的畫面同義)。 */
-function appFetch(
-  sha?: { fe: string | null; be: string | null; behind: boolean | null },
-  signals: SignalMsg[] = [],
-) {
+ *  當日訊號 jsonl 的 baseline 恆為空(= 與 404 時的畫面同義);rail 的訊號一律走 bus。 */
+function appFetch(sha?: { fe: string | null; be: string | null; behind: boolean | null }) {
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
     // 漲跌停列表(R3 SC-5 的跳轉起點)。2026-08-14 subtab 改版後**預設 subtab 就是漲跌停**
     // → 任何停在台股綜合 tab 的測試都會走這條分支(不再是「僅跳轉測試才用到」)。
     if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
-    // 成員層在前:兩條路由共前綴,順序反過來會讓成員請求被類股狀態那條吃掉。
-    if (u.includes("/api/market/sector/members")) {
-      return new Response(JSON.stringify(SECTOR_MEMBERS));
-    }
-    if (u.includes("/api/market/sector")) return new Response(JSON.stringify(SECTOR_STATE));
     if (u.includes("/api/stock/signals/today")) {
-      return new Response(JSON.stringify({ signals }));
+      return new Response(JSON.stringify({ signals: [] }));
     }
     if (u.includes("/api/health")) {
       return new Response(JSON.stringify({ git_sha: sha?.be ?? null, git_dirty: false }));
@@ -288,100 +233,8 @@ describe("App 漲跌停列表跳轉個股(R3 SC-5)", () => {
   });
 });
 
-// 🟢 台股綜合 R4(SC-3 / SC-7):類股成員列與訊號時間軸列 → 個股(期)的一鍵銜接。
-// 與 R3 漲跌停列表同款走**整條真鏈**(App → IndexPage → SectorSection /
-// SignalTimelineSection → 列 onClick),不 mock 中間任何一層 —— 少接一根線
-// (IndexPage 沒把 onOpenStock 往下傳、App 沒 setStockCode)在元件級測試各自都是綠的,
-// 只有這裡會紅。
-describe("App 類股 / 訊號時間軸跳轉個股(R4 SC-3 / SC-7)", () => {
-  function stockStateUrls(): string[] {
-    return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
-      .map((c) => String(c[0]))
-      .filter((u) => u.includes("/api/stock/state/"));
-  }
-
-  /** 走**真實的三層路徑**:產業列展開 → 子產業列鑽取 → 成員列(review round-2 FE-6)。
-   *  後端產不出空 subs,所以「點產業列直接鑽成員」那條分支在 prod 到不了 —— 全鏈測試
-   *  必須走這條,否則 IndexPage / SectorSection 之間少接一根線也驗不出來。 */
-  async function openSectorMember(): Promise<HTMLElement> {
-    window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-index-subtab", "sector");
-    renderApp();
-    fireEvent.click(await screen.findByTestId("sector-row-btn-航運"));
-    fireEvent.click(await screen.findByTestId("sector-sub-btn-航運-貨櫃航運"));
-    await screen.findByTestId("sector-members-table");
-    return await screen.findByTestId("sector-member-2603");
-  }
-
-  async function openTimelineRow(): Promise<HTMLElement> {
-    vi.stubGlobal("fetch", appFetch(undefined, [TIMELINE_SIGNAL]));
-    window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-index-subtab", "timeline");
-    renderApp();
-    return await screen.findByTestId("signal-timeline-row-tl-1");
-  }
-
-  it("點類股成員列 → tab 切到「個股(期)」且個股頁收到該檔", async () => {
-    fireEvent.click(await openSectorMember());
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "個股(期)" }).getAttribute("aria-selected")).toBe(
-        "true",
-      ),
-    );
-    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
-      "false",
-    );
-    await waitFor(() =>
-      expect(stockStateUrls().some((u) => u.includes("/api/stock/state/2603"))).toBe(true),
-    );
-    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("2603");
-  });
-
-  it("點訊號時間軸列 → tab 切到「個股(期)」且個股頁收到該檔", async () => {
-    fireEvent.click(await openTimelineRow());
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "個股(期)" }).getAttribute("aria-selected")).toBe(
-        "true",
-      ),
-    );
-    await waitFor(() =>
-      expect(stockStateUrls().some((u) => u.includes("/api/stock/state/1101"))).toBe(true),
-    );
-    expect(window.localStorage.getItem("copycat-stock-main-code")).toBe("1101");
-  });
-
-  // 類股區塊的展開狀態存在 localStorage,而 tab 是 `hidden` 保留而非 unmount → 展開過
-  // 一次就會跨 tab 存活,沒有 `active` gate 的話使用者看著別的 tab 時它照樣整個盤中
-  // 每 10 秒抓一份類股輪動(每份都是一次後端全 universe 掃描)。走全鏈
-  // (App → IndexPage → SectorSection):少接一根線在元件級測試是綠的,只有這裡會紅。
-  it("切離台股綜合 tab → 類股區塊停止背景輪詢(active gate 全鏈)", async () => {
-    // 只假造 `Date`(交易時段判別要可決定),**不假造 timer** —— RTL 的 waitFor 在
-    // vitest 下偵測不到 fake timers(它查的是全域 `jest`),整支 fake 會讓 findBy 永遠
-    // 等不到、lazy 的 IndexPage 也掛不上。輪詢節奏本身在 SectorSection.test.tsx 已用
-    // fake timers 驗過,這裡要鎖的是**線有沒有接上**:tab 切走後輪詢間隔要真的變 false。
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date(2026, 7, 6, 10, 0)); // 週四 10:00,盤中
-    window.localStorage.setItem("copycat-tab", "index");
-    window.localStorage.setItem("copycat-index-subtab", "sector");
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={client}>
-        <App />
-      </QueryClientProvider>,
-    );
-    await screen.findByTestId("sector-list");
-
-    const query = client.getQueryCache().find({ queryKey: ["sector-state"] })!;
-    const pollMs = () => {
-      const ri = query.observers[0]!.options.refetchInterval;
-      return typeof ri === "function" ? ri(query) : ri;
-    };
-    expect(pollMs()).toBe(10_000); // 人在台股綜合 tab:照輪詢
-
-    fireEvent.click(screen.getByRole("tab", { name: "選擇權" }));
-    await waitFor(() => expect(pollMs()).toBe(false));
-  });
-
+// 台股綜合頁背景輪詢的 active gate 全鏈鎖。
+describe("App 台股綜合 active gate(round-2 XR-4)", () => {
   // (review round-2 XR-4)R1 的兩張指數圖是同頁**唯一**沒吃 `active` gate 的輪詢:
   // 分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME 搶同一把 `api.lock`
   // —— tab 切走後照打是看不見的成本。走全鏈(App → IndexPage → MarketPane →
@@ -604,9 +457,9 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
     purgeOrphanKeys();
     for (const key of orphans) expect(window.localStorage.getItem(key)).toBeNull();
     // 新鍵是活的,不得被順手清掉
-    window.localStorage.setItem("copycat-index-subtab", "sector");
+    window.localStorage.setItem("copycat-index-subtab", "corr");
     purgeOrphanKeys();
-    expect(window.localStorage.getItem("copycat-index-subtab")).toBe("sector");
+    expect(window.localStorage.getItem("copycat-index-subtab")).toBe("corr");
   });
 });
 
