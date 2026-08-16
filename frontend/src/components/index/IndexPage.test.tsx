@@ -7,7 +7,6 @@ import { IndexPage } from "@/components/index/IndexPage";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import type { BreadthState } from "@/types";
 import {
-  INDEX_SUBTAB_KEY,
   MARKET2_FUT_STORE,
   MARKET2_KEY_STORE,
   MARKET2_MODE_STORE,
@@ -15,27 +14,6 @@ import {
   MARKET_KEY_STORE,
   MARKET_MODE_STORE,
 } from "@/lib/constants";
-
-/** CorrPage 走**檔案級 hoisted mock**(`CorrSection.test.tsx` 樣板):lazy + Suspense 的
- *  失敗樣態是「永遠停在 fallback」,而 `queryBy(...) === null` 對「沒 render」與「還在
- *  suspend」是同一個答案 —— 掛載一律 `findBy*` 等真 mount,卸載斷言 unmount **計數 +1**。
- *  真身級(不 mock)的「非 corr subtab 零 WS」鎖在 `IndexPage.corr-lazy.test.tsx`:
- *  本檔的 stub 不建線,「stub WS 建構數 0」在這裡恆真 = 沒有鑑別力。 */
-const counts = vi.hoisted(() => ({ mount: 0, unmount: 0 }));
-
-vi.mock("@/components/corr/CorrPage", async () => {
-  const React = await import("react");
-  function Stub() {
-    React.useEffect(() => {
-      counts.mount += 1;
-      return () => {
-        counts.unmount += 1;
-      };
-    }, []);
-    return React.createElement("div", { "data-testid": "corr-stub" });
-  }
-  return { default: Stub };
-});
 
 function series(over: Partial<IndexSeries> = {}): IndexSeries {
   return {
@@ -87,7 +65,7 @@ const DK_BODY = {
   },
 };
 
-/** 漲跌停列表(**預設 subtab**)的合法 payload。改版後每次 render 都真掛 `LimitListBody`
+/** 漲跌停列表(**恆掛右欄**)的合法 payload。每次 render 都真掛 `LimitListBody`
  *  並打這條路由 —— 回 `DK_BODY` 會讓 `data.rows` 是 undefined,`buildEntries` 直接
  *  TypeError 把整頁炸掉(P0-2)。`rows: []` 走「今日尚無漲跌停」空態,不與其他斷言撞字。 */
 const BREADTH_ROWS = {
@@ -100,7 +78,7 @@ const BREADTH_ROWS = {
 };
 
 /** 路由表**寫死**(App.test.tsx 樣板),不留「依測試需要才加」的空間:
- *  哪個 subtab 被掛上是測試的自由度,而每個 panel 的 payload 形狀不是。 */
+ *  各測試怎麼點是自由度,而每條路由的 payload 形狀不是。 */
 function stubFetch(): void {
   vi.stubGlobal(
     "fetch",
@@ -118,8 +96,6 @@ function stubFetch(): void {
 beforeEach(() => {
   window.localStorage.clear();
   lastUrls = [];
-  counts.mount = 0;
-  counts.unmount = 0;
   stubFetch();
 });
 
@@ -154,16 +130,6 @@ function renderPage(txf: TxfQuote | null = TXF, breadth: BreadthState | null = n
  *  再查,裸 `screen.getByRole` 必撞 ambiguous。 */
 function pane(id: "left" | "right") {
   return within(screen.getByTestId(`market-pane-${id}`));
-}
-
-/** subtab 列。**必帶 aria-label**:repo 內已有「主要分頁」「交易面板分頁」兩個具名
- *  tablist,全域 `getAllByRole("tab")` 撞名是寫進 App.test.tsx 的教訓(AD-4)。 */
-function subtabs() {
-  return screen.getByRole("tablist", { name: "台股綜合分頁" });
-}
-
-function subtab(name: string): HTMLElement {
-  return within(subtabs()).getByRole("tab", { name });
 }
 
 describe("IndexPage 雙 pane 容器(SC-2)", () => {
@@ -275,14 +241,14 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
     expect(screen.getByTestId("adl-last").textContent).toContain("+216");
   });
 
-  // 常駐區彼此的落點原文不動;下錨從「相關係數收合鈕」(改版後不存在)換成 subtab
-  // 列容器 —— 換錨不是常駐區被動到(review P0-1 / round-2 P2-1)。
-  it("(f2) 家數帶位於雙 pane 之後、subtab 列之前", () => {
+  // 常駐區彼此的落點原文不動;下錨(2026-08-14 是「相關係數收合鈕」、2026-08-16 是
+  // subtab 列容器)隨 subtab 機制退役一起拿掉 —— 家數帶在左欄內的順序由本條守,
+  // 左右兩欄的相對位置屬佈局包(§5.2b (y2)),不在這裡混著鎖。
+  it("(f2) 家數帶位於雙 pane 之後", () => {
     renderPage(TXF, BREADTH);
     const left = screen.getByTestId("market-pane-left");
     const band = screen.getByTestId("breadth-band");
     expect(left.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(band.compareDocumentPosition(subtabs()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("(f3) breadth 為 null 時家數帶照樣在位(載入中),不炸圖", () => {
@@ -292,143 +258,31 @@ describe("IndexPage 家數帶 + 騰落線(R2 SC-4)", () => {
   });
 });
 
-// 🔴 2026-08-14 subtab 改版:四個各自收合的區塊改為一列 subtab,**一次只掛載一個**。
-// 原本四組「預設收合 + 落點」describe((e)(e2)(g)(g2)(h)(h2)(i)(i2))隨收合殼一起汰換 ——
-// 「收合 = unmount」的省輪詢語意等價轉移到「非 active subtab = unmount」。
-describe("IndexPage subtab 列(SC-2 / SC-3 / SC-5)", () => {
-  it("(s1) 兩顆 tab,預設「漲跌停」active 且只掛載 limit panel", async () => {
+// 🔴 2026-08-16 subtab 機制退役(一頁總覽):整組「IndexPage subtab 列」describe
+// (s1)-(s7) 連同 `subtabs()` / `subtab()` helper 與 CorrPage 的 hoisted mock 一起刪除 ——
+// tablist、`INDEX_SUBTAB_KEY` 白名單還原、「切走即 unmount」都不再是本頁的行為。
+// 相關係數改由 App 的頂層 tab 掛載,其 lazy / WS 語意由 App 層測試接手。
+describe("IndexPage 一頁總覽(subtab 退役)", () => {
+  it("(l1) 沒有 subtab 列,漲跌停列表恆掛", async () => {
     renderPage(TXF, BREADTH);
     await act(async () => {});
 
-    expect(within(subtabs()).getAllByRole("tab").map((el) => el.textContent)).toEqual([
-      "漲跌停",
-      "相關係數",
-    ]);
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByRole("tablist", { name: "台股綜合分頁" })).toBeNull();
+    expect(screen.queryByTestId("index-subtabs")).toBeNull();
     expect(screen.getByTestId("limit-list")).toBeTruthy();
-    // CorrPage 真身不 mount(stub 計數 0 才是有鑑別力的斷言;真身級零 WS 見 corr-lazy 檔)
-    expect(counts.mount).toBe(0);
   });
 
-  // (s2)(s2b) 2026-08-16 刪除「類股強弱」/「訊號時間軸」兩顆 subtab 後,舊使用者的
-  // localStorage 裡還躺著那兩個值 —— 白名單 fallback 是唯一的遷移機制(零遷移碼),
-  // 漏掉就是「開頁沒有任何 panel」。兩個值各鎖一支:白名單若只補一半,另一半無聲。
-  it("(s2) 殘值 sector(已刪的 subtab)→ 落回漲跌停", async () => {
-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "sector");
+  // 偏好鍵整支退役:讀寫兩側都要斷,只鎖 setItem 會漏掉 `useState` initializer 那次
+  // getItem(留著它 = 白名單還原邏輯仍在,殘值照樣有語意)。`keys.length` 自檢確保
+  // spy 真的掛上(兩個 pane 的標的 / 週期 key 必有讀取),否則本條靜默轉 vacuous。
+  it("(l2) 不再讀寫 copycat-index-subtab(殘值交給 App 的 orphan purge)", async () => {
+    const getSpy = vi.spyOn(Storage.prototype, "getItem");
+    const setSpy = vi.spyOn(Storage.prototype, "setItem");
     renderPage(TXF, BREADTH);
     await act(async () => {});
 
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("limit-list")).toBeTruthy();
-    expect(counts.mount).toBe(0);
-  });
-
-  it("(s2b) 殘值 timeline(已刪的 subtab)→ 落回漲跌停", async () => {
-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "timeline");
-    renderPage(TXF, BREADTH);
-    await act(async () => {});
-
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("limit-list")).toBeTruthy();
-    expect(counts.mount).toBe(0);
-  });
-
-  it("(s2c) 點「相關係數」→ CorrPage 掛載、limit 卸載,偏好寫入 corr", async () => {
-    renderPage(TXF, BREADTH);
-    fireEvent.click(subtab("相關係數"));
-
-    // lazy:等 stub 真 mount,不用 `queryBy === null`(suspend 與沒 render 同形)
-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
-    expect(counts.mount).toBe(1);
-    expect(screen.queryByTestId("limit-list")).toBeNull();
-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
-    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("corr");
-  });
-
-  it("(s3) 預存 corr → 重新 mount 停在相關係數(記憶與還原)", async () => {
-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
-    renderPage(TXF, BREADTH);
-
-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
-    expect(counts.mount).toBe(1);
-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
-    expect(screen.queryByTestId("limit-list")).toBeNull();
-  });
-
-  it("(s4) localStorage 非法值 → fallback 漲跌停", async () => {
-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "1");
-    renderPage(TXF, BREADTH);
-    await act(async () => {});
-
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("limit-list")).toBeTruthy();
-  });
-
-  // Safari 私密視窗:getItem 光是存取就會拋,而它在 useState 的 initializer 裡 = 整頁白屏。
-  // **只對本頁那把 key 拋**:全域 throw 會先炸在 MarketPane 的四處裸 getItem(既有債,
-  // 本輪 out of scope),測不到目標還誘發 scope 外的修補(round-2 P0-1)。
-  it("(s5) getItem 對 subtab key 拋例外 → 不白屏,fallback 漲跌停", async () => {
-    const orig = Storage.prototype.getItem;
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
-      this: Storage,
-      key: string,
-    ) {
-      if (key === INDEX_SUBTAB_KEY) throw new Error("SecurityError");
-      return orig.call(this, key);
-    });
-
-    renderPage(TXF, BREADTH);
-    await act(async () => {});
-
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("limit-list")).toBeTruthy();
-    expect(screen.getByTestId("breadth-band")).toBeTruthy();
-  });
-
-  // (review B-3)SC-3 的另一半:setItem 也會拋(Safari 私密視窗 / storage 被政策鎖),
-  // 而它在 onClick 裡 —— 沒接住就是「點一下整頁炸掉」。分流同 (s5):只對本頁那把 key
-  // 拋,全域 throw 會先炸在 scope 外的既有裸 setItem。
-  it("(s5b) setItem 對 subtab key 拋例外 → 切換照樣生效,不炸", async () => {
-    const orig = Storage.prototype.setItem;
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
-      this: Storage,
-      key: string,
-      value: string,
-    ) {
-      if (key === INDEX_SUBTAB_KEY) throw new Error("QuotaExceededError");
-      orig.call(this, key, value);
-    });
-
-    renderPage(TXF, BREADTH);
-    fireEvent.click(subtab("相關係數"));
-
-    expect(await screen.findByTestId("corr-stub")).toBeTruthy();
-    expect(subtab("相關係數").getAttribute("aria-selected")).toBe("true");
-    expect(subtab("漲跌停").getAttribute("aria-selected")).toBe("false");
-    expect(screen.queryByTestId("limit-list")).toBeNull();
-  });
-
-  it("(s6) subtab 列位於騰落線之後", () => {
-    renderPage(TXF, BREADTH);
-    const adl = screen.getByTestId("adl-chart");
-    expect(adl.compareDocumentPosition(subtabs()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  // SC-5:切走 = 舊 panel unmount(corr 的兩條 WS 靠 hook cleanup 才會斷)。
-  // 用 unmount **計數 +1** 而不是 `queryBy === null` —— 後者在 lazy 下 vacuously pass。
-  it("(s7) corr → 漲跌停:CorrPage 真的被 unmount", async () => {
-    window.localStorage.setItem(INDEX_SUBTAB_KEY, "corr");
-    renderPage(TXF, BREADTH);
-    await screen.findByTestId("corr-stub");
-    expect(counts.unmount).toBe(0);
-
-    fireEvent.click(subtab("漲跌停"));
-    await act(async () => {});
-
-    expect(counts.unmount).toBe(1);
-    expect(screen.getByTestId("limit-list")).toBeTruthy();
-    expect(window.localStorage.getItem(INDEX_SUBTAB_KEY)).toBe("limit");
+    const keys = [...getSpy.mock.calls, ...setSpy.mock.calls].map(([key]) => key);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys).not.toContain("copycat-index-subtab");
   });
 });

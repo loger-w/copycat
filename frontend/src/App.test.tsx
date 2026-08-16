@@ -444,7 +444,7 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
   // 用 `vi.resetModules()` + 動態 import 重跑 App 模組會讓這條依賴 module registry
   // 的重置順序,脆得沒必要。「App.tsx 頂層有呼叫」這件事由該檔的一行呼叫負責,
   // 行為則由本單元測試 + 真環境驗證共同守住。
-  it("purgeOrphanKeys 清掉孤兒鍵(停用功能 + 2026-08-14 subtab 改版廢止的四支)", () => {
+  it("purgeOrphanKeys 清掉孤兒鍵(停用功能 + 2026-08-14 收合殼四支 + 2026-08-16 退役的 subtab 鍵)", () => {
     const orphans = [
       "stock-ladder-open",
       "stock-wl-group",
@@ -452,14 +452,15 @@ describe("App localStorage key 遷移 / 孤兒清除", () => {
       "copycat-limit-list-open",
       "copycat-sector-open",
       "copycat-signal-timeline-open",
+      "copycat-index-subtab",
     ];
     for (const key of orphans) window.localStorage.setItem(key, "1");
     purgeOrphanKeys();
     for (const key of orphans) expect(window.localStorage.getItem(key)).toBeNull();
-    // 新鍵是活的,不得被順手清掉
-    window.localStorage.setItem("copycat-index-subtab", "corr");
+    // 活鍵不得被順手清掉(漲跌停列表的篩選偏好在改版後照樣天天讀寫)
+    window.localStorage.setItem("copycat-limit-list-filter", "{}");
     purgeOrphanKeys();
-    expect(window.localStorage.getItem("copycat-index-subtab")).toBe("corr");
+    expect(window.localStorage.getItem("copycat-limit-list-filter")).toBe("{}");
   });
 });
 
