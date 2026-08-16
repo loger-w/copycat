@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   LadderView,
@@ -11,11 +11,10 @@ import {
   useCancelOrder,
   useCapitalOrders,
   useCapitalPositions,
-  useCapitalWsStatus,
   useSubmitStock,
 } from "@/hooks/useCapital";
+import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
-import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
@@ -149,6 +148,9 @@ interface Props {
   onTradeKind?: (kind: TradeKind) => void;
   qtyState?: QtyState;
   onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
+  /** 武裝狀態由 RightRail 持有(useFlashArm)→ 換梯 / 切 tab 時不隨本元件消滅;
+   *  未給時退回元件內部 hook(獨立使用與既有測試路徑)。 */
+  armCtl?: FlashArmControl;
 }
 
 export function PriceLadder({
@@ -162,10 +164,14 @@ export function PriceLadder({
   onTradeKind,
   qtyState: qtyStateProp,
   onQtyState,
+  armCtl,
 }: Props) {
   // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換股/斷線/idle/Esc/連 3 次失敗/離開畫面
-  // (離開畫面 = RightRail 條件 render 讓本元件 unmount,arm state 隨之消滅;change-spec D-13)
-  const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
+  // (離開畫面 = 本元件卸載時 dispatch `left_view`;state 本身在 RightRail,見 useFlashArm)
+  const localArm = useFlashArm(armCtl === undefined);
+  const arm = armCtl ?? localArm;
+  const dispatchArm = arm.dispatch;
+  const touchIdle = arm.touch;
   const [qtyLocal, setQtyLocal] = useState(initialQtyState);
   const [tradeKindLocal, setTradeKindLocal] = useState<TradeKind>("cash");
   const tradeKind = tradeKindProp ?? tradeKindLocal;
@@ -176,12 +182,10 @@ export function PriceLadder({
   const setQtyState = onQtyState ?? setQtyLocal;
   const [hint, setHint] = useState<string | null>(null);
   const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
-  const idleTimer = useRef<number | undefined>(undefined);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
 
-  const wsStatus = useCapitalWsStatus();
   const submitStock = useSubmitStock();
   const cancelOrder = useCancelOrder();
   const { data: ordersData } = useCapitalOrders();
@@ -207,14 +211,6 @@ export function PriceLadder({
     book,
   });
 
-  function touchIdle(): void {
-    window.clearTimeout(idleTimer.current);
-    idleTimer.current = window.setTimeout(
-      () => dispatchArm({ type: "idle_timeout" }),
-      ARM_IDLE_MS,
-    );
-  }
-
   function showHint(text: string, autoClear = false): void {
     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
     window.clearTimeout(hintTimer.current);
@@ -225,7 +221,7 @@ export function PriceLadder({
   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
     touchIdle();
     if (tradeKind === "daytrade_sell" && side === "buy") return; // UI 已 disabled,雙保險
-    if (!arm.armed) {
+    if (!arm.state.armed) {
       showHint("未武裝 — 點價不送單", true);
       return;
     }
@@ -276,32 +272,28 @@ export function PriceLadder({
     for (const seq of lot.seqs) cancelOrder.mutate({ seq_no: seq, market: "sec" });
   }
 
+  // arm 事件的送出口走 ref:武裝事件的觸發條件是**換股 / 卸載**,不是 dispatch 這個函式本身。
+  // 放進 deps 的話,任何一次 identity 漂移(未來把 armCtl 包一層就會發生)都會讓下面的
+  // cleanup 在每次 re-render 跑一遍 = 每收一則報價就解除一次武裝(change-spec review R4)。
+  const armDispatchRef = useRef(dispatchArm);
+  armDispatchRef.current = dispatchArm;
+
   // 自動解除:換股
   useEffect(() => {
-    dispatchArm({ type: "symbol_changed" });
+    armDispatchRef.current({ type: "symbol_changed" });
   }, [code]);
 
-  // 自動解除:capital WS 斷線
+  // 離開畫面(RightRail 條件 render → 本元件卸載)= 解除武裝。state 已上提到 RightRail,
+  // unmount 不再消滅它 → 這裡顯式送事件(deps 空 → cleanup 只在真卸載跑)。
   useEffect(() => {
-    if (wsStatus === "closed") dispatchArm({ type: "conn_lost" });
-  }, [wsStatus]);
+    return () => armDispatchRef.current({ type: "left_view" });
+  }, []);
 
-  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
-  useEffect(() => {
-    if (!arm.armed) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") dispatchArm({ type: "disarm" });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [arm.armed]);
-
-  // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
+  // unmount 清 hint 計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
   useEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      window.clearTimeout(idleTimer.current);
       window.clearTimeout(hintTimer.current);
     };
   }, []);
@@ -317,7 +309,7 @@ export function PriceLadder({
       avgMarks={avgMarks}
       buyLots={lots.buy}
       sellLots={lots.sell}
-      armed={arm.armed}
+      armed={arm.state.armed}
       onToggleArm={() => {
         touchIdle();
         dispatchArm({ type: "toggle" });

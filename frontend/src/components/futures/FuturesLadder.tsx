@@ -1,16 +1,15 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 import {
   useCancelOrder,
   useCapitalOrders,
   useCapitalPositions,
-  useCapitalWsStatus,
   useClosePosition,
   useSubmitFuture,
 } from "@/hooks/useCapital";
+import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { closeBodyOf } from "@/lib/close-order";
-import { ARM_IDLE_MS, initialArm, reduceArm } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import {
   buildFuturesLadder,
@@ -45,6 +44,8 @@ interface Props {
    *  未給時退回元件內部 state(獨立使用與既有測試路徑)。 */
   qtyState?: QtyState;
   onQtyState?: (updater: (prev: QtyState) => QtyState) => void;
+  /** 武裝狀態由 RightRail 持有(useFlashArm);未給時退回元件內部 hook。 */
+  armCtl?: FlashArmControl;
 }
 
 /** 期貨閃電梯:武裝機制與 PriceLadder 同款(見該檔註解);差異 = 當沖 checkbox、量單位口、
@@ -55,11 +56,15 @@ export function FuturesLadder({
   contractLabel = null,
   qtyState: qtyStateProp,
   onQtyState,
+  armCtl,
 }: Props) {
   const [follow, setFollow] = useState(true);
   // 武裝 = 唯一繞過確認彈窗的路徑 → 解除從寬:換商品/斷線/idle/Esc/連 3 次失敗/合約失解析/
-  // 離開畫面(RightRail 條件 render 讓本元件 unmount,arm state 隨之消滅;change-spec D-13)
-  const [arm, dispatchArm] = useReducer(reduceArm, undefined, initialArm);
+  // 離開畫面(本元件卸載時 dispatch `left_view`;state 在 RightRail,見 useFlashArm)
+  const localArm = useFlashArm(armCtl === undefined);
+  const arm = armCtl ?? localArm;
+  const dispatchArm = arm.dispatch;
+  const touchIdle = arm.touch;
   const [qtyLocal, setQtyLocal] = useState(initialQtyState);
   const qtyState = qtyStateProp ?? qtyLocal;
   // 保持 functional updater:同一批次內連按快捷鍵要逐次累加(W-A12),
@@ -70,12 +75,10 @@ export function FuturesLadder({
   const [hint, setHint] = useState<string | null>(null);
   const centerRef = useRef<HTMLDivElement | null>(null);
   const progScroll = useRef(false);
-  const idleTimer = useRef<number | undefined>(undefined);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
 
-  const wsStatus = useCapitalWsStatus();
   const submitFuture = useSubmitFuture();
   const cancelOrder = useCancelOrder();
   const closePosition = useClosePosition();
@@ -127,14 +130,6 @@ export function FuturesLadder({
       : [];
   const centerPrice = rows.find((r) => r.isCenter)?.priceMilli ?? null;
 
-  function touchIdle(): void {
-    window.clearTimeout(idleTimer.current);
-    idleTimer.current = window.setTimeout(
-      () => dispatchArm({ type: "idle_timeout" }),
-      ARM_IDLE_MS,
-    );
-  }
-
   function showHint(text: string, autoClear = false): void {
     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
     window.clearTimeout(hintTimer.current);
@@ -144,7 +139,7 @@ export function FuturesLadder({
 
   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
     touchIdle();
-    if (!arm.armed) {
+    if (!arm.state.armed) {
       showHint("未武裝 — 點價不送單", true);
       return;
     }
@@ -228,37 +223,31 @@ export function FuturesLadder({
     }
   }
 
+  // 送出口走 ref:觸發條件是換商品 / 合約失解析 / 卸載,不是 dispatch 本身
+  // (理由見 PriceLadder 同段註)
+  const armDispatchRef = useRef(dispatchArm);
+  armDispatchRef.current = dispatchArm;
+
   // 自動解除:換商品
   useEffect(() => {
-    dispatchArm({ type: "symbol_changed" });
+    armDispatchRef.current({ type: "symbol_changed" });
   }, [product]);
 
   // 自動解除:合約失解析(武裝鈕 disabled 之外的雙保險)
   useEffect(() => {
-    if (contract === null) dispatchArm({ type: "disarm" });
+    if (contract === null) armDispatchRef.current({ type: "disarm" });
   }, [contract]);
 
-  // 自動解除:capital WS 斷線
+  // 離開畫面(卸載)= 解除武裝(state 已上提到 RightRail,見 useFlashArm)
   useEffect(() => {
-    if (wsStatus === "closed") dispatchArm({ type: "conn_lost" });
-  }, [wsStatus]);
+    return () => armDispatchRef.current({ type: "left_view" });
+  }, []);
 
-  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
-  useEffect(() => {
-    if (!arm.armed) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") dispatchArm({ type: "disarm" });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [arm.armed]);
-
-  // unmount 清計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
+  // unmount 清 hint 計時器 + aliveRef(StrictMode remount 時 effect 本體重設 true)
   useEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      window.clearTimeout(idleTimer.current);
       window.clearTimeout(hintTimer.current);
     };
   }, []);
@@ -306,7 +295,7 @@ export function FuturesLadder({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            aria-pressed={arm.armed}
+            aria-pressed={arm.state.armed}
             disabled={contract === null}
             title={contract === null ? "合約未解析" : undefined}
             onClick={() => {
@@ -315,13 +304,13 @@ export function FuturesLadder({
             }}
             className={cn(
               "flex-1 rounded border px-2 py-1 text-xs font-bold",
-              arm.armed
+              arm.state.armed
                 ? "border-loss bg-loss text-bg"
                 : "border-line text-ink-dim hover:border-accent hover:text-ink",
               contract === null && "opacity-40",
             )}
           >
-            {arm.armed ? "解除" : "武裝"}
+            {arm.state.armed ? "解除" : "武裝"}
           </button>
           <label className="flex items-center gap-1 text-xs text-ink-muted">
             <input

@@ -6,6 +6,7 @@ import { FuturesLadder } from "@/components/futures/FuturesLadder";
 import type { CenterRequest } from "@/components/stock/LadderView";
 import { PriceLadder, type TradeKind } from "@/components/stock/PriceLadder";
 import { StkfutLadder } from "@/components/stock/StkfutLadder";
+import { useFlashArm } from "@/hooks/useFlashArm";
 import { RAIL_TAB_KEY } from "@/lib/constants";
 import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
@@ -17,9 +18,11 @@ import type { FuturesProductState } from "@/types";
 /** 右欄(SC-2/SC-3;D1 三 tab 平行、D2 內容跟隨當前主 tab、D6 無標的頁顯空狀態)。
  *
  * ⚠ **閃電 tab 的 ladder 一律條件 render,不可改成 `hidden`**(change-spec D-13)。
- * 專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反**:ladder 的武裝
- * (arm)state 存活於元件內,unmount 是「離開畫面即解除武裝」(W-A2 第 6 條)的實現手段。
- * 改成 hidden 會讓武裝跨主 tab / 跨右欄 tab 存活 → 使用者在無脈絡下點價即真錢直送。
+ * 專案慣例是「`hidden` > 條件 render」保留 DOM,**這裡刻意違反**:條件 render 仍是
+ * 「離開畫面即解除武裝」(W-A2 第 6 條)的實現手段之一。arm state 本身已上提到本元件
+ * (`useFlashArm`)—— 離開畫面的解除改由 ladder 卸載時 dispatch `left_view` 完成,
+ * 改成 hidden 會讓 ladder 永不卸載、事件永不發出 → 武裝跨主 tab / 跨右欄 tab 存活,
+ * 使用者在無脈絡下點價即真錢直送。
  *
  * 相對地,交易別 / 數量由本元件持有(R2-10):它們沒有「誤觸即送單」的性質,
  * 靜默重置(融券 → 現股)反而是風險。 */
@@ -76,6 +79,9 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
   // 直接變成 20 倍規模的單,而畫面上那個數字本來就是使用者自己按的 —— 沒有任何異狀。
   // 每個合約各一格 = 切合約回到初值(1 口),要多少自己按。
   const [stkfutQty, setStkfutQty] = useState<Record<string, QtyState>>({});
+  // 武裝狀態上提到常駐元件:Esc / 斷線監聽在這一層,連停在無梯頁(TXO / 指數)也收得到。
+  // 三座梯共用同一份(同時只有一座掛著);未鎖定時 ladder 卸載即 `left_view` 重置。
+  const armCtl = useFlashArm();
 
   function selectTab(next: RailTab): void {
     setTab(next);
@@ -147,6 +153,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
           onQtyState={(updater) =>
             setStkfutQty((m) => ({ ...m, [key]: updater(m[key] ?? initialQtyState()) }))
           }
+          armCtl={armCtl}
         />
       );
     }
@@ -163,6 +170,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
           onTradeKind={setTradeKind}
           qtyState={stockQty}
           onQtyState={setStockQty}
+          armCtl={armCtl}
         />
       );
     }
@@ -174,6 +182,7 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
           contractLabel={ctx.contract}
           qtyState={futQty}
           onQtyState={setFutQty}
+          armCtl={armCtl}
         />
       );
     }
