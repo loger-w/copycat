@@ -349,7 +349,13 @@ export function MarketPane({
       data-testid={`market-pane-${paneId}`}
       role="group"
       aria-label={paneId === "left" ? "左圖" : "右圖"}
-      className="flex min-h-0 min-w-0 flex-col gap-3"
+      // `min-h-0` 條件化(amendment r3):無條件掛著時 pane 會被壓到低於自身內容,
+      // 圖卡(overflow visible)直接溢出壓在家數帶上,而不是把左欄撐高讓主 grid 出捲軸。
+      // ⚠ 這個門檻量的是**左欄**(最近的 `@container` 祖先)而不是 IndexPage root ——
+      // 兩欄態下左欄約是容器寬的 6 成,故實務上只有超寬螢幕的 pane 真的可縮。窄於此
+      // 由雙圖 grid 的 `min-h-80` 與本檔 figure 的 `min-h-48` 兩層地板定高,超出的部分
+      // 走主 grid 的 `overflow-y-auto`(§7 edge 2 逃生口);兩種路徑都不會溢出重疊。
+      className="flex min-w-0 flex-col gap-3 @[1050px]:min-h-0"
     >
       {/* 標的列(SC-2) */}
       <div className="flex flex-wrap items-center gap-3">
@@ -387,10 +393,13 @@ export function MarketPane({
 
       {/* 2026-08-16 一頁總覽:圖高改吃**容器剩餘高**(`flex-1`),不再是「寬 × 220/640」
           的固定比例 —— 改版前不 flex-1 是因為整頁可捲、撐滿會把家數帶擠出視窗;現在
-          左欄自己就是有界的 flex 欄,撐滿正是要的。`min-h-60`(15rem)是**唯一**一條
-          min-height:堆疊 / 內容決定高的模式下給 figure 一個地板,量測 → 內容 → 量測
-          才會收斂;同時掛 `min-h-0` 會把地板消掉,退回「圖可以被壓成 0 高」。 */}
-      <figure className="flex min-h-60 flex-1 flex-col rounded-md border border-line bg-surface p-4">
+          左欄自己就是有界的 flex 欄,撐滿正是要的。`min-h-48`(12rem,amendment r3 自
+          15rem 下修)是**唯一**一條 min-height:堆疊 / 內容決定高的模式下給 figure 一個
+          地板,量測 → 內容 → 量測才會收斂;同時掛 `min-h-0` 會把地板消掉,退回「圖可以
+          被壓成 0 高」。12rem 的算式:192 − chrome 62(border 2 + p-4 32 + caption 20)
+          = wrapper 130 → svg render 128 − 26 toggle 列 = 102,仍高於 `paneSvgHeight`
+          的 96 地板(地板一旦吃到,反解出的高就與容器脫鉤)。 */}
+      <figure className="flex min-h-48 flex-1 flex-col rounded-md border border-line bg-surface p-4">
         <figcaption className="flex flex-wrap items-baseline gap-3">
           <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
           {isFut ? (
