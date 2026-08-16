@@ -9,9 +9,6 @@
  *  + 一次只掛載一個 panel,現在漲跌停列表與左欄同屏常駐,省輪詢的責任整條落到
  *  `active` —— 本頁的 DOM 由 App 以 `hidden` 保留,主 tab 切離時 `active` 轉 false,
  *  列表輪詢與兩張圖的分 K 一起停(原「非 active subtab = unmount」的等價轉移)。 */
-import { useState } from "react";
-
-import { CorrSection } from "@/components/corr/CorrSection";
 import { AdvanceDeclineChart } from "@/components/index/AdvanceDeclineChart";
 import { BreadthBand } from "@/components/index/BreadthBand";
 import { LimitListSection } from "@/components/index/LimitListSection";
@@ -20,7 +17,6 @@ import { useChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries, TxfQuote } from "@/hooks/useIndexStream";
 import {
   INDEX_OVERLAY_STORE,
-  INDEX_SUBTAB_KEY,
   MARKET2_FUT_STORE,
   MARKET2_KEY_STORE,
   MARKET2_MODE_STORE,
@@ -30,29 +26,6 @@ import {
 } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { BreadthState } from "@/types";
-
-/** subtab 值域與標籤的單一來源。順序 = 畫面順序,也是改版前各區塊的上下順序。 */
-const SUBTABS = [
-  ["limit", "漲跌停"],
-  ["corr", "相關係數"],
-] as const;
-type SubTab = (typeof SUBTABS)[number][0];
-
-/** 白名單還原:非法值(改版前的 "1"、2026-08-16 刪掉的兩顆 subtab 殘值、亂碼)一律回
- *  預設「漲跌停」—— 這道白名單就是值域縮減時的**唯一**遷移機制,零遷移碼。
- *
- *  **整段包 try/catch**:getItem 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋,
- *  而這裡是 `useState` 的 initializer —— 拋出去就是整頁白屏。降回預設 subtab 遠好過白屏
- *  (改版前四個殼與 `useChartToggles` 同慣例)。 */
-function initialSubTab(): SubTab {
-  try {
-    const saved = window.localStorage.getItem(INDEX_SUBTAB_KEY);
-    if (SUBTABS.some(([id]) => id === saved)) return saved as SubTab;
-  } catch {
-    // 讀不到就用預設 —— 偏好還原不了遠好於白屏
-  }
-  return "limit";
-}
 
 /** 左圖沿用改版前那四支 key —— 舊使用者的標的 / 週期 / 期指商品 / 重疊開關零丟失。 */
 const LEFT_STORES: PaneStores = {
@@ -133,16 +106,6 @@ export function IndexPage({
   // 上提到容器層:兩 pane 共用同一份 bb 開關(與改版前的全域單開關行為一致),
   // 各 pane 自己呼叫會變成兩份獨立狀態寫同一支 localStorage key。
   const { toggles, set } = useChartToggles();
-  const [subtab, setSubtab] = useState<SubTab>(initialSubTab);
-
-  function selectSubtab(next: SubTab): void {
-    setSubtab(next);
-    try {
-      window.localStorage.setItem(INDEX_SUBTAB_KEY, next);
-    } catch {
-      // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉
-    }
-  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
@@ -178,41 +141,12 @@ export function IndexPage({
         <BreadthBand breadth={breadth} />
         <AdvanceDeclineChart series={breadth?.series ?? []} />
       </section>
-      {/* 下半部:一列 subtab + 當前 panel,共用**一個**外框盒(AD-4)——
-          兩個 panel 是同一個問題的兩種切面(廣度發現 → 深度盯盤),各自一個框
-          會讓它們看起來像兩個彼此無關的區塊。 */}
+      {/* 漲跌停列表恆掛(2026-08-16 subtab 退役),沿用改版前那個外框盒。
+          廣度發現 → 深度盯盤的銜接點 —— 家數帶說「今天有幾檔鎖住」,列表說「是哪
+          幾檔」,點下去就跳到個股(期)頁看那一檔的五檔與分時。
+          `active` 直傳:輪詢的唯一 gate 現在是主 tab,不再經 subtab 條件。 */}
       <section className="rounded-md border border-line bg-surface">
-        {/* aria-label 必帶:全站已有「主要分頁」「交易面板分頁」兩個具名 tablist,
-            無名 tablist 會讓全域 `getAllByRole("tab")` 撞名(App.test.tsx 的教訓)。
-            造型與 role/aria 沿 `RightRail.tsx` 的右欄分頁樣板 —— repo 內唯一既例。 */}
-        <div
-          data-testid="index-subtabs"
-          role="tablist"
-          aria-label="台股綜合分頁"
-          className="flex items-center gap-1 border-b border-line px-2 py-1.5"
-        >
-          {SUBTABS.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={subtab === id}
-              onClick={() => selectSubtab(id)}
-              className={cn(
-                "rounded px-3 py-1 text-sm",
-                subtab === id ? "bg-bg-deep text-ink" : "text-ink-dim hover:text-ink",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {/* 廣度發現 → 深度盯盤的銜接點:家數帶說「今天有幾檔鎖住」,列表說「是哪幾檔」,
-            點下去就跳到個股(期)頁看那一檔的五檔與分時(總 spec §4 下方區塊帶)。 */}
-        {subtab === "limit" ? (
-          <LimitListSection onOpenStock={onOpenStock} active={active} />
-        ) : null}
-        {subtab === "corr" ? <CorrSection /> : null}
+        <LimitListSection onOpenStock={onOpenStock} active={active} />
       </section>
     </div>
   );

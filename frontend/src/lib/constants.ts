@@ -16,11 +16,13 @@ export const MAIN_CODE_KEY = "copycat-stock-main-code";
 export const LEGACY_MAIN_CODE_KEY = "stock-main-code";
 
 /** 已停用功能留下的孤兒鍵:`stock-ladder-open`(2026-07-29 閃電梯改條件 render 後零讀寫)、
- *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)、以及
+ *  `stock-wl-group`(2026-07-30 自選分組改後端 schema v2 後零讀寫)、
  *  **2026-08-14 subtab 改版**廢止的四支台股綜合區塊展開狀態(`copycat-corr-open` /
  *  `copycat-limit-list-open` / `copycat-sector-open` / `copycat-signal-timeline-open`)——
  *  四顆獨立 bool(可同時 0-4 顆展開)對映不到「一次只能選一個」的 subtab,任何遷移規則
- *  都是猜,故直接廢止;丟失代價 = 首訪回預設 subtab 一次(見 `INDEX_SUBTAB_KEY`)。
+ *  都是猜,故直接廢止;以及 **2026-08-16 subtab 機制整個退役**(台股綜合改一頁總覽、
+ *  漲跌停列表恆掛右欄、相關係數升為頂層 tab)後的 `copycat-index-subtab` —— 沒有 subtab
+ *  可選,值就沒有語意;停在「相關係數」的使用者改由頂層 tab 取回,零遷移碼。
  *  App 啟動時清除,避免使用者瀏覽器裡永久留著再也沒人讀的殘值。 */
 export const ORPHAN_STORAGE_KEYS = [
   "stock-ladder-open",
@@ -29,6 +31,7 @@ export const ORPHAN_STORAGE_KEYS = [
   "copycat-limit-list-open",
   "copycat-sector-open",
   "copycat-signal-timeline-open",
+  "copycat-index-subtab",
 ] as const;
 
 /** 清除孤兒鍵。冪等(removeItem 對不存在的 key 是 no-op),由 App.tsx 的 module scope
@@ -71,16 +74,6 @@ export const MARKET2_KEY_STORE = "copycat-market2-key";
 export const MARKET2_MODE_STORE = "copycat-market2-tf";
 /** 台股綜合**右圖**的期貨商品 — components/index/IndexPage.tsx */
 export const MARKET2_FUT_STORE = "copycat-market2-fut";
-
-/** 台股綜合頁下半部選中的 subtab — components/index/IndexPage.tsx。
- *  值域 `"limit" | "corr"`,非白名單值 fallback `"limit"`
- *  (漲跌停;恆有一顆 active,不提供「全收」態)。**值域縮減靠這道 fallback 遷移**:
- *  2026-08-16 拿掉兩顆 subtab 後,舊瀏覽器裡的殘值就是靠它落回漲跌停,零遷移碼。
- *
- *  **非 active subtab = unmount**,所以這把鍵同時決定「今天要不要每 10 秒抓一份全市場
- *  rows」與「要不要掛 corr + river 兩條 WS」—— 它取代了 2026-08-14 之前的
- *  四支獨立 `*_OPEN_KEY`(已進 `ORPHAN_STORAGE_KEYS`)。 */
-export const INDEX_SUBTAB_KEY = "copycat-index-subtab";
 
 /** 漲跌停列表的篩選條件(JSON:市場 / 狀態三旗標 + 金額 / 股價門檻字串)
  *  — components/index/LimitListSection.tsx */
