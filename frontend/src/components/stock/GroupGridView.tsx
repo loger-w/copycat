@@ -137,7 +137,12 @@ const GroupCard = memo(function GroupCard({
   // 「回補中…」是**佔位**,只在真的沒東西可畫時才蓋圖(review A5):已經有分鐘資料
   // (live tick 進來了、或前一輪回補已落地)還蓋掉,等於每次重回補都讓卡片閃回空白,
   // 而重回補在鎖停日的漲跌停值變化上是常態。
-  const backfilling = snap?.backfilling === true && (snap?.minutes.size ?? 0) === 0;
+  //
+  // 「有沒有東西可畫」只有**一把尺**(review A-1):`minutes.size` 與
+  // `hasWindowedMinutes` 兩把並用時,盤前只有 08:59 那格的卡片會落進兩尺之間 ——
+  // 回補明明還在跑,卡片卻先宣告終態「尚無成交」。
+  const hasBars = snap !== undefined && hasWindowedMinutes(snap.minutes);
+  const backfilling = snap?.backfilling === true && !hasBars;
   return (
     // `<div role="button">` 而不是 `<button>`(review R11):卡片內容從一條線變成一整張
     // 分時圖(svg + 文字標籤 + hover 十字線),而 `<button>` 的內容模型只吃 phrasing
@@ -176,7 +181,7 @@ const GroupCard = memo(function GroupCard({
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">回補中…</span>
       ) : snap === undefined || snap.noData ? (
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">無資料</span>
-      ) : !hasWindowedMinutes(snap.minutes) ? (
+      ) : !hasBars ? (
         // edge 9:已訂閱、有 meta,但**窗內**一格分鐘都沒有(盤前只有 08:59 的試撮分鐘、
         // 盤後只剩 13:31+)。判準不是 `minutes.size === 0` —— 窗外分鐘照樣讓它非空,
         // 而幾何的 priceLine 仍是空的。卡片自己接住:進 StockIntradayChart 會撞它自己
