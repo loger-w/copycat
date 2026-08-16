@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { inFuturesAllDayHours } from "@/lib/trading-hours";
+import { clearHolidays, setHolidays } from "@/lib/trading-calendar";
+import {
+  inFuturesAllDayHours,
+  inFuturesTradingHours,
+  inTradingHours,
+} from "@/lib/trading-hours";
 
 /** 2026-08 月曆:01 六 / 02 日 / 03 一 / 04 二 / 05 三 / 06 四 / 07 五 / 08 六。
  *  月/日直接寫死,測的是「星期維度」而不是某個絕對時刻。 */
@@ -13,6 +18,12 @@ const THU = 6;
 const SAT = 8;
 const SUN = 9;
 const MON = 10;
+
+/** 假日集合是模組級狀態,會跨 it / 跨 describe 外溢 —— 每條測試從空集合開始
+ *  (空集合 = 只擋週末 = 改動前行為,上面既有的星期維度測點全部靠這個前提)。 */
+beforeEach(() => {
+  clearHolidays();
+});
 
 describe("inFuturesAllDayHours(SC-12;design §4.2 星期維度)", () => {
   it("brainstorm SC-12 的 11 個(星期,時刻)測點", () => {
@@ -63,5 +74,54 @@ describe("inFuturesAllDayHours(SC-12;design §4.2 星期維度)", () => {
 
   it("不帶參數時吃當下時鐘(不崩、回布林)", () => {
     expect(typeof inFuturesAllDayHours()).toBe("boolean");
+  });
+});
+
+/** 2026-10-09(五)國慶調整假;10-08 四為交易日、10-10 六、10-12 一。
+ *
+ *  少了假日這一維,國定假日整天每 60s 空打當日段(當日段恆空 → don't-cache-empty
+ *  → 每次都真的走 TC4 SubHistory)—— 與週末那條路同一種浪費,只是原本擋不掉。 */
+describe("三支時段函式吃交易日曆(SC-9)", () => {
+  const HOL = (hh: number, mm: number) => new Date(2026, 9, 9, hh, mm);
+  const SAT_AFTER_HOL = (hh: number, mm: number) => new Date(2026, 9, 10, hh, mm);
+  const MON_AFTER = (hh: number, mm: number) => new Date(2026, 9, 12, hh, mm);
+
+  it("前提自檢:未載日曆時 10-09(五)照現行判定為交易日", () => {
+    expect(HOL(10, 0).getDay()).toBe(5);
+    expect(inTradingHours(HOL(10, 0))).toBe(true);
+    expect(inFuturesTradingHours(HOL(10, 0))).toBe(true);
+    expect(inFuturesAllDayHours(HOL(10, 0))).toBe(true);
+  });
+
+  it("假日當天日盤窗全關(個股 / 期指日盤 / 近全時段)", () => {
+    setHolidays(["2026-10-09"]);
+    expect(inTradingHours(HOL(10, 0))).toBe(false);
+    expect(inFuturesTradingHours(HOL(10, 0))).toBe(false);
+    expect(inFuturesAllDayHours(HOL(10, 0))).toBe(false);
+    expect(inFuturesAllDayHours(HOL(16, 0))).toBe(false); // 假日當晚無夜盤
+  });
+
+  it("00:00–05:05 屬前一日夜盤 → 判的是前一天(R1)", () => {
+    setHolidays(["2026-10-09"]);
+    // 假日凌晨:前一日(10-08 四)是交易日 → 那是週四的夜盤,照開
+    expect(inFuturesAllDayHours(HOL(1, 0))).toBe(true);
+    expect(inFuturesAllDayHours(HOL(5, 5))).toBe(true);
+    // 假日次日凌晨:前一日是假日 → 沒有夜盤可收
+    expect(inFuturesAllDayHours(SAT_AFTER_HOL(1, 0))).toBe(false);
+  });
+
+  it("週末語意不變:未設假日時週六 01:00 開、週一 01:00 關", () => {
+    expect(inFuturesAllDayHours(SAT_AFTER_HOL(1, 0))).toBe(true);
+    expect(inFuturesAllDayHours(MON_AFTER(1, 0))).toBe(false);
+  });
+
+  it("假日集合不含的平日逐字不變(只疊加否決,不改既有維度)", () => {
+    setHolidays(["2026-10-09"]);
+    expect(inTradingHours(new Date(2026, 9, 8, 10, 0))).toBe(true);
+    expect(inFuturesTradingHours(new Date(2026, 9, 8, 10, 0))).toBe(true);
+    expect(inFuturesAllDayHours(new Date(2026, 9, 8, 16, 0))).toBe(true);
+    // 週末仍恆假(假日集合空與否都一樣)
+    expect(inTradingHours(SAT_AFTER_HOL(11, 0))).toBe(false);
+    expect(inFuturesTradingHours(SAT_AFTER_HOL(11, 0))).toBe(false);
   });
 });
