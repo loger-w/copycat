@@ -215,11 +215,11 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
             wlPending={wlPending}
             wlError={wlError}
             quotes={watchlist}
-            onPick={(picked) => {
-              onSelect(picked);
-              // 點卡片的意圖是「看這一檔的細節」,留在群組檢視等於沒反應
-              selectView("single");
-            }}
+            // 點卡片 = **只換右欄閃電梯的標的**,檢視停在群組(SC-3 / D3)。卡片上已是
+            // 單檔同款的完整分時圖,細節就在圖牆上看得完;自動切回單檔的舊行為會讓每次
+            // 換標的都得再點一次「群組」回來,而盯盤時圖牆本身就是主畫面。
+            // 進單檔的路徑只剩檢視 pill。
+            onPick={onSelect}
           />
         ) : code === null ? (
           <div className="flex flex-1 items-center justify-center">
