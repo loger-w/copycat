@@ -398,7 +398,9 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
     });
     render(ladder());
     armUp();
-    fireEvent.change(screen.getByLabelText("交易別"), { target: { value: "daytrade_sell" } });
+    // 🔴 R6 該變:交易別 select → 四顆 pill,選取 = 點「無券」鈕(舊 fireEvent.change 已無 select 可改)
+    fireEvent.click(screen.getByRole("button", { name: "無券" }));
+    expect(screen.getByRole("button", { name: "無券" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
     expect(screen.getByLabelText("賣 100.5").hasAttribute("disabled")).toBe(false);
     fireEvent.click(screen.getByLabelText("買 100"));
@@ -1148,5 +1150,27 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
     rerender(ladder("2330", { ...LAST, p: 100_500 }));
     rerender(ladder("2330", { ...LAST, p: 101_000 }));
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+  });
+});
+
+describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
+  it("四顆並列 pill 現股/融資/融券/無券,單選 aria-pressed 轉移;容器 role=group aria-label=交易別", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const group = screen.getByRole("group", { name: "交易別" });
+    const labels = ["現股", "融資", "融券", "無券"];
+    const pills = labels.map((l) => within(group).getByRole("button", { name: l }));
+    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
+    expect(pills[0]!.className).toContain("border-accent");
+    expect(pills[1]!.className).toContain("border-line");
+    fireEvent.click(pills[2]!);
+    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false", "true", "false"]);
+    expect(pills[2]!.className).toContain("border-accent");
+    // 舊 select 已退場
+    expect(group.querySelector("select")).toBeNull();
+    // 與鎖定鈕同列,pill 群 shrink-0(288px 右欄由武裝鈕吸收壓縮)
+    const lock = screen.getByRole("button", { name: "鎖定" });
+    expect(group.parentElement).toBe(lock.parentElement);
+    expect(group.className).toContain("shrink-0");
   });
 });

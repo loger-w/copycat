@@ -255,10 +255,11 @@ describe("RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13)", () 
 describe("RightRail 交易別 / 數量不隨 tab 重置(R2-10)", () => {
   it("選融券後切 tab 再切回,交易別仍是融券(真錢:靜默回現股會出事)", () => {
     render(rail(STOCK_CTX));
-    fireEvent.change(screen.getByLabelText("交易別"), { target: { value: "short" } });
+    // 🔴 R6 該變:交易別 select → pill,選取 = 點「融券」鈕、狀態 = aria-pressed
+    fireEvent.click(screen.getByRole("button", { name: "融券" }));
     fireEvent.click(screen.getByRole("tab", { name: "委託" }));
     fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
-    expect((screen.getByLabelText("交易別") as HTMLSelectElement).value).toBe("short");
+    expect(screen.getByRole("button", { name: "融券" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("張數快捷值切 tab 後保留", () => {
