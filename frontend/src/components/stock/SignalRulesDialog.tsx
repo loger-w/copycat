@@ -132,7 +132,7 @@ function ruleSummary(rule: SignalRule): string {
   const p = rule.params;
   if (rule.kind === "cdp_cross") {
     const levels = rule.cdp_levels.map((x) => LEVEL_LABEL[x] ?? x.toUpperCase()).join("+");
-    return `${levels} · 重新武裝 ${num(p.rearm_ticks)} tick · ${cooldown}`;
+    return `${levels} · 重新武裝 ${num(p.rearm_ticks)} tick · 駐留 ${num(p.rearm_dwell_secs)} 秒 · ${cooldown}`;
   }
   if (rule.kind === "surge_crash") {
     return `±${num(p.pct)}% / ${num(p.window_secs)} 秒 · ${cooldown}`;
