@@ -4,6 +4,7 @@ import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { cardSvgBox } from "@/lib/chart-frame";
+import type { FillPoint } from "@/lib/fill-marks";
 import { accumFromGroupSnapshot, type GroupLikeSnapshot } from "@/lib/stock-accum";
 
 /** 群組卡片內的分時圖 = **單檔頁同一份渲染碼**的 card 變體(D4)。
@@ -21,9 +22,13 @@ interface Props {
   /** 圖牆頂那一份(SC-2)。**卡片不持有 storage 狀態** —— 50 張卡各持一份會同時讀寫
    *  同一個 localStorage key,而 `set` 每次 render 都是新 identity,傳進來還會打穿 memo。 */
   toggles: ChartToggles;
+  /** 這一檔今天的成交點(SC-6)。圖牆層一次折完所有 code 再分給每卡 —— 卡片各折一次
+   *  的話同一份 orders 會被走 50 遍。零筆時是 `EMPTY_FILLS`(單一 identity),否則
+   *  無成交的卡每秒都會因為新陣列而打穿 `GroupCard` 的 memo(W-5)。 */
+  fills: readonly FillPoint[];
 }
 
-export function CardIntradayChart({ code, snap, liveP, toggles }: Props) {
+export function CardIntradayChart({ code, snap, liveP, toggles, fills }: Props) {
   const [ref, size] = useContainerSize<HTMLDivElement>();
   const box = cardSvgBox(size);
   // **必經 useMemo**(review R4):就地建一個 accum 的話,父層每秒隨報價 re-render 時
@@ -46,6 +51,7 @@ export function CardIntradayChart({ code, snap, liveP, toggles }: Props) {
           width={box.width}
           mainHeight={box.mainH}
           subHeight={box.subH}
+          fills={fills}
         />
       ) : null}
     </div>
