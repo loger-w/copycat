@@ -5,6 +5,7 @@ import {
   buildFuturesLadder,
   edgeMilli,
   futExchangeContract,
+  futMarketEdgeMilli,
   splitMyLots,
   type FutOrderSource,
 } from "@/lib/futures-ladder";
@@ -247,5 +248,22 @@ describe("edgeMilli 貼漲跌停選邊(raw,不 snap)", () => {
   it("不 snap 到合法檔位:非整 tick 的界原樣回傳", () => {
     expect(edgeMilli("buy", 25_300_500, 20_699_500)).toBe(25_300_500);
     expect(edgeMilli("sell", 25_300_500, 20_699_500)).toBe(20_699_500);
+  });
+});
+
+describe("futMarketEdgeMilli 期貨市價邊價(FUT_TICK 對齊)", () => {
+  it("buy → 漲停 floor 到 1 點、sell → 跌停 ceil 到 1 點(與 buildFuturesLadder 同口徑)", () => {
+    expect(futMarketEdgeMilli("buy", 25_300_500, 20_699_500)).toBe(25_300_000);
+    expect(futMarketEdgeMilli("sell", 25_300_500, 20_699_500)).toBe(20_700_000);
+  });
+
+  it("界已在合法檔位 → 原值不動", () => {
+    expect(futMarketEdgeMilli("buy", 25_080_000, 20_520_000)).toBe(25_080_000);
+    expect(futMarketEdgeMilli("sell", 25_080_000, 20_520_000)).toBe(20_520_000);
+  });
+
+  it("該側界缺 → null(另一側有值不代打)", () => {
+    expect(futMarketEdgeMilli("buy", null, 20_520_000)).toBeNull();
+    expect(futMarketEdgeMilli("sell", 25_080_000, null)).toBeNull();
   });
 });

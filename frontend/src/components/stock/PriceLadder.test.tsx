@@ -1197,3 +1197,184 @@ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 梯頂市價鈕(SC-1 / SC-2 / SC-5 / SC-6 / SC-7 / SC-9)。恆常可見 + 位置固定 = 誤觸
+// 半徑最大的一顆鈕(R-A);唯一的閘是武裝態,所以每一條守門在元件層都要有鎖。
+// ---------------------------------------------------------------------------
+
+const STOCK_MARKET_TITLE = "以市價送出:掃對手方(簿薄時可能以漲/跌停價成交);估價 = 最近成交價";
+
+function marketBtn(side: "買" | "賣"): HTMLElement {
+  return within(screen.getByTestId("ladder-market-buttons")).getByRole("button", {
+    name: `市價${side}`,
+  });
+}
+
+describe("PriceLadder 梯頂市價鈕", () => {
+  it("SC-1:武裝列之後、scroll 容器之前恆常一列;左買右賣、外框不填色", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const row = screen.getByTestId("ladder-market-buttons");
+    expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "市價買",
+      "市價賣",
+    ]);
+    // 捲動價格梯時該列不動 → 必須在 scroll 容器**之外**且在它之前
+    const scroller = screen.getByLabelText("買 100").closest(".overflow-y-auto")!;
+    expect(scroller.contains(row)).toBe(false);
+    expect(row.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4);
+    const armBtn = screen.getByRole("button", { name: "武裝" });
+    expect(armBtn.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // R-A:外框樣式與武裝鈕的填色(bg-loss)區隔 —— 填了色就與「已武裝」同型
+    const buy = marketBtn("買");
+    const sell = marketBtn("賣");
+    expect(buy.className).toContain("border-bull");
+    expect(buy.className.split(" ")).not.toContain("bg-bull");
+    expect(sell.className).toContain("border-bear");
+    expect(sell.className.split(" ")).not.toContain("bg-bear");
+    // 可用態 title(SC-8 現股版)
+    expect(buy.getAttribute("title")).toBe(STOCK_MARKET_TITLE);
+    expect(sell.getAttribute("title")).toBe(STOCK_MARKET_TITLE);
+  });
+
+  it("SC-2:武裝後按市價買 → market/ROD payload(price = last.p)+ hint 帶股號", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toEqual({
+      stock_no: "2330",
+      buy_sell: "buy",
+      price: 100,
+      qty: 1,
+      price_type: "market",
+      time_in_force: "ROD",
+      trade_kind: "cash",
+      source: "flash",
+    });
+    // hint 帶標的(R-H:鎖定態換標的後仍可送 → 誤送到哪一檔必須當下可見)
+    await waitFor(() => expect(screen.getByText("已送 2330 市價買 × 1")).toBeTruthy());
+  });
+
+  it("SC-2 對稱:市價賣同 payload 形狀,hint 文案改「市價賣」", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({
+      buy_sell: "sell",
+      price: 100,
+      price_type: "market",
+      time_in_force: "ROD",
+    });
+    await waitFor(() => expect(screen.getByText("已送 2330 市價賣 × 1")).toBeTruthy());
+  });
+
+  it("SC-5:未武裝按市價鈕 → 零請求 + hint「未武裝 — 市價不送單」3s 自清", () => {
+    vi.useFakeTimers();
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    // 未武裝時兩顆**可按**(與價格格一致,AD-8)—— disabled 的話按了沒有任何回饋
+    expect(marketBtn("買").hasAttribute("disabled")).toBe(false);
+    fireEvent.click(marketBtn("買"));
+    expect(screen.getByText("未武裝 — 市價不送單")).toBeTruthy();
+    expect(bodies.length).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(screen.queryByText("未武裝 — 市價不送單")).toBeNull();
+  });
+
+  it("SC-6:last 缺 → 兩顆 disabled + title「無成交價,市價鈕鎖定」", () => {
+    mockCapitalFetch();
+    render(ladder("2330", null));
+    for (const side of ["買", "賣"] as const) {
+      const b = marketBtn(side);
+      expect(b.hasAttribute("disabled")).toBe(true);
+      expect(b.getAttribute("title")).toBe("無成交價,市價鈕鎖定");
+    }
+  });
+
+  it("SC-7:無券 → 市價買 disabled(賣可用);賣側照送 market payload", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(screen.getByRole("button", { name: "無券" }));
+    const buy = marketBtn("買");
+    expect(buy.hasAttribute("disabled")).toBe(true);
+    expect(buy.getAttribute("title")).toBe("無券當沖不可買進");
+    expect(marketBtn("賣").hasAttribute("disabled")).toBe(false);
+    fireEvent.click(buy); // disabled 之外的雙保險:handler 直接呼叫也不得送出
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({
+      buy_sell: "sell",
+      price_type: "market",
+      trade_kind: "daytrade_sell",
+    });
+  });
+
+  it("SC-9:同一顆 500ms 內連按只送一次;另一顆照送", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies).toMatchObject([{ buy_sell: "buy" }, { buy_sell: "sell" }]);
+  });
+
+  /** R9:市價鈕若與點價共用單槽 `lastClick`,中間插一次點價就會把市價的槽位洗掉 ——
+   *  「市價買 → 點價 → 市價買」在 500ms 內會送出**兩張市價單**,而防抖測試(連按)全綠。 */
+  it("SC-9:交錯「市價買 → 點價格格 → 市價買」500ms 內,市價只送一次", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(screen.getByLabelText("買 100"));
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies.filter((b) => b.price_type === "market").length).toBe(1);
+    expect(bodies.filter((b) => b.price_type === "limit").length).toBe(1);
+  });
+});
