@@ -207,15 +207,18 @@ export function StkfutLadder({
       showHint("未武裝 — 市價不送單", true);
       return;
     }
+    // key 併入契約(review r1 IMPL-1):換合約 / 換標的時元件不重掛,只認 side 會把
+    // 「切過去立刻按同一顆」靜默吞掉 —— 不同契約是兩張不同的單
+    const key = `${stkfutTc4Symbol(contract)}:${side}`;
     const now = Date.now();
     if (
       lastMarketClick.current !== null &&
-      lastMarketClick.current.key === side &&
+      lastMarketClick.current.key === key &&
       now - lastMarketClick.current.ts < CLICK_DEBOUNCE_MS
     ) {
-      return; // 同一顆 500ms 防抖
+      return; // 同一契約同一顆 500ms 防抖
     }
-    lastMarketClick.current = { key: side, ts: now };
+    lastMarketClick.current = { key, ts: now };
     const qty = qtyState.qty;
     settleFlashSend(
       submitFuture.mutateAsync({

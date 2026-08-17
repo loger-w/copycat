@@ -343,7 +343,10 @@ export function PriceLadder({
    *  金額閘的估價 —— 成交價是對手價,與它無關(D5;KL-1)。
    *
    *  防抖走**獨立**槽位:與點價共用 `lastClick` 時,「市價買 → 點價 → 市價買」中間那
-   *  一下會把市價的槽位洗掉,500ms 內就送得出兩張市價單(review R9)。 */
+   *  一下會把市價的槽位洗掉,500ms 內就送得出兩張市價單(review R9)。
+   *  key 併入股號(review r1 IMPL-1):換股時本元件不重掛、ref 跟著留著,只認 side
+   *  的話「A 檔按市價買 → 切到 B 檔立刻按市價買」會被**靜默**吞掉(舊 hint 還掛著,
+   *  看起來像送出去了)—— 不同標的本來就是兩張不同的單。 */
   function marketOrder(side: "buy" | "sell"): void {
     touchIdle();
     if (tradeKind === "daytrade_sell" && side === "buy") return; // UI 已 disabled,雙保險
@@ -352,15 +355,16 @@ export function PriceLadder({
       showHint("未武裝 — 市價不送單", true);
       return;
     }
+    const key = `${code}:${side}`;
     const now = Date.now();
     if (
       lastMarketClick.current !== null &&
-      lastMarketClick.current.key === side &&
+      lastMarketClick.current.key === key &&
       now - lastMarketClick.current.ts < CLICK_DEBOUNCE_MS
     ) {
-      return; // 同一顆 500ms 防抖
+      return; // 同一標的同一顆 500ms 防抖
     }
-    lastMarketClick.current = { key: side, ts: now };
+    lastMarketClick.current = { key, ts: now };
     const qty = qtyState.qty;
     settleFlashSend(
       submitStock.mutateAsync({
