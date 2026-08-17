@@ -105,6 +105,10 @@ export interface CapitalPosition {
   pnl_base: number | null;
   pnl_base_price: number | null;
   pnl_cost: number | null;
+  /** 後端在 API 邊界附的衍生欄(非 Position dataclass 欄位):sec = stock_no;
+   *  fut = 契約碼反查到的股號,反查不到(未知產品 / 除權息調整碼)= null。
+   *  前端沒有契約碼→股號的反查,以股號為鍵的顯示只能靠這欄。 */
+  code: string | null;
 }
 
 /** OrderResult asdict(寫入動作共同回傳形)。 */

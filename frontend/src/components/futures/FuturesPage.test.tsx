@@ -61,6 +61,7 @@ function futPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition 
     pnl_base: null,
     pnl_base_price: null,
     pnl_cost: null,
+    code: null,
     ...overrides,
   };
 }

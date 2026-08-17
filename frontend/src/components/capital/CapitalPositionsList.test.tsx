@@ -22,6 +22,7 @@ function pos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
     pnl_base: 1500,
     pnl_base_price: 1050,
     pnl_cost: 2000000,
+    code: null,
     ...overrides,
   };
 }
