@@ -15,7 +15,7 @@ import {
   type FillMark,
   type FillPoint,
 } from "@/lib/fill-marks";
-import { chgPct, fmt, fmtPct } from "@/lib/format";
+import { chgPct, fmt, fmtIndexPts, fmtPct } from "@/lib/format";
 // index 態限定:對稱域讓 CDP 常態落在域外,線畫不出來 → 右緣掛牌是唯一訊號(KR-1)。
 // 判定與 `overlayLines` 互補(同一組 yDomain,一個值只會進其中一邊),所以共用那支。
 import { outOfDomainLevels } from "@/lib/index-chart-svg";
@@ -93,17 +93,10 @@ function tickTone(priceMilli: number, refMilli: number | null): string {
   return "fill-ink";
 }
 
-/** index 態的價位文字口徑:**整數點**。指數毫點走 `fmt` 會印「24283.54」(8 字),
- *  而左緣價位帶 `Y_AXIS_W` = 36px、右緣帶 `R_AXIS_W` = 40px 都是為個股「1005.0」設計的 ——
- *  @0.5625rem 8 字 ≈ 40px,y 刻度 / hover 價標右對齊在 x=32 會把開頭 1-2 位裁出畫布
- *  (code review C-2;R4 real-env 截圖「4285.42」)。兩位小數在 readout 已有一份,
- *  軸上的刻度 / 掛牌 / CDP / MA 全部收整數點即可(指數的 1 點 ≈ 0.004%)。 */
-const fmtIndexPts = (milli: number): string => String(Math.round(milli / 1000));
-
 /** 右緣文字:CDP 五線印價位 + `*`(一眼分出是 CDP 不是 MA);MA 維持名稱。
  *
- *  價位口徑由 `priceText` 注入(stock = `fmtTickPrice` 可下單檔位、index = `fmtIndexPts`
- *  整數點)—— 指數沒有 tick 表,snap 出來的點位是憑空捏造的。**注入而不是就地判 mode**:
+ *  價位口徑由 `priceText` 注入(stock = `fmtTickPrice` 可下單檔位、index = `fmtIndexPts`,
+ *  見 lib/format)—— 指數沒有 tick 表,snap 出來的點位是憑空捏造的。**注入而不是就地判 mode**:
  *  同一份口徑在 MA 價位標(`edge-price-*`)也要用,兩處各判各的話會出現「CDP snap 了、
  *  MA 沒 snap」這種同圖兩套口徑,沒有任何錯誤訊號。 */
 function levelText(
@@ -1006,16 +999,12 @@ export function IntradayChartCore({
   );
 
   // index 態不 snap tick:tick 表是個股的可下單檔位,指數的價位量尺是連續的 ——
-  // snap 出來的點位是憑空捏造的(同右緣 `priceText` 的口徑分權)。但**收成整數點**:
-  // 左緣價標盒寬 = `Y_AXIS_W`(36px,為「1005.0」這種個股價位設計),指數毫點走 `fmt`
-  // 會印「24285.42」8 字 ≈ 40px,盒子裝不下、字往左溢出畫布外(R4 real-env 截圖:
-  // 「4285.42」被裁掉開頭的 2)。量尺精度到 1 點對指數已足夠(左緣三格刻度本身就只到小數一位)。
+  // snap 出來的點位是憑空捏造的(同右緣 `priceText` 的口徑分權)。文字口徑走 `fmtIndexPts`
+  // (加權 8 字會溢出 36px 價標盒 → 收整數點;櫃買 6 字保留小數),見 lib/format。
   const hoverPrice =
-    hover === null
-      ? null
-      : index
-        ? Math.round(g.priceAtY(hover.y) / 1000) * 1000
-        : snapDown(g.priceAtY(hover.y));
+    hover === null ? null : index ? g.priceAtY(hover.y) : snapDown(g.priceAtY(hover.y));
+  const hoverPriceText =
+    hoverPrice === null ? "" : index ? fmtIndexPts(hoverPrice) : fmt(hoverPrice);
   const timeTagX =
     hoverMin !== null ? clampTagX(minuteToX(hoverMin, w, xw), TIME_TAG.w, w) : null;
   const timeTagSpan: [number, number] | null =
@@ -1190,7 +1179,7 @@ export function IntradayChartCore({
                 className="fill-ink"
                 fontSize="0.5625rem"
               >
-                {hoverPrice !== null ? fmt(hoverPrice) : ""}
+                {hoverPriceText}
               </text>
             </g>
             {/* 底部標籤:上行時間、下行該分鐘成交價(round4 項 3)。

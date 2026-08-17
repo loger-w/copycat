@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chgPct, fmtPct, formatNtd, formatPts } from "@/lib/format";
+import { chgPct, fmtIndexPts, fmtPct, formatNtd, formatPts } from "@/lib/format";
 
 describe("formatNtd", () => {
   it("億級縮寫", () => {
@@ -39,5 +39,15 @@ describe("fmtPct", () => {
 describe("chgPct", () => {
   it("相對參考價的漲跌百分比", () => {
     expect(chgPct(40_400_000, 40_000_000)).toBeCloseTo(1);
+  });
+});
+
+describe("fmtIndexPts(指數軸帶價位口徑)", () => {
+  it("超過 6 字(加權五位數帶小數)收整數點;6 字以內(櫃買 / 個股量級)保留 fmt 小數", () => {
+    expect(fmtIndexPts(24_283_540)).toBe("24284");
+    expect(fmtIndexPts(24_300_000)).toBe("24300");
+    expect(fmtIndexPts(238_970)).toBe("238.97");
+    expect(fmtIndexPts(1_005_000)).toBe("1005");
+    expect(fmtIndexPts(1_234_560)).toBe("1235");
   });
 });
