@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IntradayChartCore, StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
+import type { FillPoint } from "@/lib/fill-marks";
 import { fromSnapshot } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
 
@@ -50,7 +51,13 @@ const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp:
 
 const CARD_W = 246;
 
-function card() {
+/** 刻意落在**最新分鐘**(542,= 未 hover 時 readout 顯示的那一格):放在別的分鐘的話
+ *  「card 不追加成交欄」會因為「那一格本來就沒有成交」而恆綠(vacuous)。 */
+const CARD_FILLS: readonly FillPoint[] = [
+  { minute: 542, priceMilli: 2_385_000, side: "B", qty: 2 },
+];
+
+function card(fills?: readonly FillPoint[]) {
   return wrap(
     <IntradayChartCore
       accum={ACCUM}
@@ -59,6 +66,7 @@ function card() {
       width={CARD_W}
       mainHeight={140}
       subHeight={38}
+      fills={fills}
     />,
   );
 }
@@ -101,6 +109,16 @@ describe("IntradayChartCore variant=card", () => {
     expect(widths).toEqual([String(CARD_W), String(CARD_W)]);
   });
 
+  /** 🟢 R2 SC-4:246px 寬的 readout 是 `overflow-hidden`,追加第五欄必被裁 = 靜默失敗。
+   *  標記本身已承載「這裡成交了」,與 card 砍外 / 內兩欄同理(page 才追加)。 */
+  it("有成交點時:三角照畫在卡片上,但 readout 仍四欄且不含「成交」", () => {
+    const { container } = card(CARD_FILLS);
+    expect(container.querySelectorAll('polygon[data-testid^="fill-"]').length).toBe(1);
+    const readout = container.querySelector('[data-testid="chart-readout"]')!;
+    expect(readout.children.length).toBe(4);
+    expect(readout.textContent).not.toContain("成交");
+  });
+
   it("圖形語彙與單檔頁相同:價線 / VP 長條 / 高低標記 / 現價圈 / 量副圖 / 時間標都在", () => {
     const { container } = card();
     expect(container.querySelector('polyline[class*="stroke-bull"]')).toBeTruthy();
@@ -112,9 +130,10 @@ describe("IntradayChartCore variant=card", () => {
 });
 
 describe("IntradayChartCore variant=page(單檔頁 chrome 全在)", () => {
-  it("toggle 四鈕 + figcaption + figure 外層", () => {
+  // 🟢 R2 SC-5:多一顆「成交點」→ 四鈕變**五鈕**(事前標記的該紅:schema 擴充)
+  it("toggle 五鈕 + figcaption + figure 外層", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    expect(container.querySelectorAll("button").length).toBe(4);
+    expect(container.querySelectorAll("button").length).toBe(5);
     expect(container.querySelector("figcaption")).toBeTruthy();
     expect(container.firstElementChild!.tagName).toBe("FIGURE");
   });
