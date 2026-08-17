@@ -241,6 +241,33 @@ class TestOrdersPositions:
             assert [p["stock_no"] for p in positions] == ["2330"]
             assert positions[0]["market"] == "sec"
 
+    def test_positions_carry_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """每列附 `code`(股號)—— 前端沒有契約碼→股號的反查,只能由後端給(SC-1)。
+
+        個股期用**真版控對映表**(不 monkeypatch DEFAULT_PATH):這條要在期交所改碼 /
+        對映表沒 refresh 時跟著紅,那正是 `code` 會靜默變 null 的情境。
+        """
+        cap, _com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions(
+                [
+                    Position(market="sec", stock_no="2330", qty=2),
+                    Position(market="fut", stock_no="CDFI6", qty=1),
+                    Position(market="fut", stock_no="EE1I6", qty=1),
+                ]
+            )
+            positions = client.get("/api/capital/positions").json()["positions"]
+            assert [(p["stock_no"], p["code"]) for p in positions] == [
+                ("2330", "2330"),  # sec:股號直接沿用
+                ("CDFI6", "2330"),  # fut 標準:CDF → 2330
+                ("EE1I6", None),  # 除權息調整碼進不了對映表 → 不猜
+            ]
+            # 既有欄位仍在(加欄是 additive)
+            assert positions[0]["market"] == "sec"
+            assert positions[0]["qty"] == 2
+            assert positions[0]["kind"] == "cash"
+
     def test_positions_keep_both_kinds_of_same_stock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
