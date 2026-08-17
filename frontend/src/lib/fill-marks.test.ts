@@ -297,6 +297,14 @@ describe("projectFills", () => {
     expect(projectFills([pt({ minute: 8 * 60 + 44 })], GEO, W, SPOT_WINDOW)).toBe(EMPTY_MARKS);
   });
 
+  /** 🔴 cr1 A-1:窗過濾必須寫成**正向條件的否定**(同 `stock-accum.ts::foldVp` review A3)。
+   *  `minute < start || minute > end` 對 `NaN` 的兩個比較都是 false —— 時間戳解不出分鐘的
+   *  壞單會整筆漏進渲染,長出一個 `x = NaN` 的 polygon(SVG 對 NaN points 靜默不畫,
+   *  但 readout 的「成交」欄照樣追加,而畫面上沒有三角可對照)。 */
+  it("minute 為 NaN(時間戳解不出分鐘)→ 不畫", () => {
+    expect(projectFills([pt({ minute: NaN })], GEO, W, SPOT_WINDOW)).toBe(EMPTY_MARKS);
+  });
+
   it("價格落在 yDomain 外 → 不畫(同 overlay / 極值既有規則)", () => {
     expect(projectFills([pt({ priceMilli: 99_999 })], GEO, W, SPOT_WINDOW)).toBe(EMPTY_MARKS);
     expect(projectFills([pt({ priceMilli: 110_001 })], GEO, W, SPOT_WINDOW)).toBe(EMPTY_MARKS);

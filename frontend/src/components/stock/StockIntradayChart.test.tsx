@@ -1788,6 +1788,26 @@ describe("StockIntradayChart 當日成交點(SC-3/4/5/9)", () => {
     expect(last.getAttribute("class")).not.toContain("text-bear");
   });
 
+  /** 🔴 cr1 A-2:readout 與三角**同一把尺**。readout 若吃未過濾的 `fills`,價格落在
+   *  `g.yDomain` 外時圖上一個三角都沒有、readout 卻報「成交 賣 1@9999」——
+   *  使用者在圖上找不到那一筆,而兩邊都不會有測試紅。 */
+  it("SC-4:成交價落在 y 域外 → 圖無三角且 readout 不追加(與三角同一把尺)", () => {
+    const { container } = wrap(
+      <StockIntradayChart
+        accum={ACCUM}
+        fills={[{ minute: 541, priceMilli: 9_999_000, side: "S", qty: 1 }]}
+      />,
+    );
+    expect(fillPolys(container).length).toBe(0);
+    fireEvent.mouseMove(container.querySelector("svg")!, {
+      clientX: minuteToX(541, 800, SPOT_WINDOW),
+      clientY: 100,
+    });
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.children.length).toBe(6);
+    expect(readout.textContent).not.toContain("成交");
+  });
+
   it("SC-4:hover 到無成交的分鐘 → 不追加(六欄不變)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={[FILLS[0]!]} />);
     fireEvent.mouseMove(container.querySelector("svg")!, {
