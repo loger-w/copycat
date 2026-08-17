@@ -847,7 +847,7 @@ describe("FuturesLadder 梯頂市價鈕", () => {
     await waitFor(() => expect(screen.getByText("已送 TXFI6 市價賣 × 1 口")).toBeTruthy());
   });
 
-  it("SC-5:未武裝 → 零請求 + hint「未武裝 — 市價不送單」", () => {
+  it("SC-5:未武裝 → 零請求 + hint「未武裝 — 市價不送單」", async () => {
     const bodies: unknown[] = [];
     mockFetch({
       "/api/capital/order/future": (init) => {
@@ -860,6 +860,7 @@ describe("FuturesLadder 梯頂市價鈕", () => {
     render(ladder());
     fireEvent.click(marketBtn("買"));
     expect(screen.getByText("未武裝 — 市價不送單")).toBeTruthy();
+    await act(async () => {}); // 排空 microtask 再斷言零請求(IMPL-8)
     expect(bodies.length).toBe(0);
   });
 
@@ -884,5 +885,91 @@ describe("FuturesLadder 梯頂市價鈕", () => {
     render(ladder({ ...TXF_STATE, upper: null }));
     expect(marketBtn("買").hasAttribute("disabled")).toBe(true);
     expect(marketBtn("賣").hasAttribute("disabled")).toBe(true);
+  });
+
+  /** IMPL-2:render 可用態 → rerender 成應鎖態(界從有值變缺,合約仍解析 = 武裝不受影響)。
+   *  React 的 disabled 攔截看 props 不看 DOM 屬性(見 PriceLadder 同案註)→ 這案鎖的是
+   *  「行情轉成缺界後 marketState 立刻跟著鎖」,而不是 handler 內那道打不到的雙保險。 */
+  it("IMPL-2:武裝中界轉缺 → 兩顆立刻鎖,拔 DOM disabled 也點不出請求", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    const { rerender } = render(ladder());
+    armUp();
+    expect(marketBtn("買").hasAttribute("disabled")).toBe(false);
+    rerender(ladder({ ...TXF_STATE, upper: null, lower: null }));
+    for (const side of ["買", "賣"] as const) {
+      const b = marketBtn(side);
+      expect(b.hasAttribute("disabled")).toBe(true);
+      b.removeAttribute("disabled");
+      fireEvent.click(b);
+    }
+    await act(async () => {});
+    expect(bodies.length).toBe(0);
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 仍武裝(鎖的是鈕)
+  });
+
+  /** F2:防抖在現股梯有測、期貨梯沒有 —— 三梯各寫一份 marketOrder,漏一梯就是
+   *  「同一顆連按兩下送出兩口」而沒有任何測試會紅。 */
+  it("F2:同一顆 500ms 內連按只送一次;另一顆照送", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies).toMatchObject([{ buy_sell: "buy" }, { buy_sell: "sell" }]);
+  });
+
+  it("F2:交錯「市價買 → 點價格格 → 市價買」500ms 內,市價只送一次", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(screen.getByLabelText("買 22999"));
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies.filter((b) => b.time_in_force === "IOC").length).toBe(1); // 市價鈕
+    expect(bodies.filter((b) => b.time_in_force === "ROD").length).toBe(1); // 點價
+  });
+
+  /** F4:中心價的兩個來源(成交價 p / 參考價 ref)都缺 → 沒有可估的價,兩顆全鎖;
+   *  state 整包缺(WS 未回)時 rows 為空,鈕列照樣要在(鈕自身由估價鎖)。 */
+  it("F4:p 與 ref 全缺 → 兩顆 disabled;state 缺(rows 空)仍渲染鈕列", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    const { rerender } = render(ladder({ ...TXF_STATE, p: null, ref: null }));
+    for (const side of ["買", "賣"] as const) {
+      expect(marketBtn(side).hasAttribute("disabled")).toBe(true);
+    }
+    rerender(ladder(null));
+    expect(screen.getByText("無資料")).toBeTruthy();
+    expect(screen.getByTestId("ladder-market-buttons")).toBeTruthy();
+    expect(marketBtn("買").hasAttribute("disabled")).toBe(true);
   });
 });

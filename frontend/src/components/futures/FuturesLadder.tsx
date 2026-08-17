@@ -197,7 +197,8 @@ export function FuturesLadder({
   }
 
   /** 梯頂市價鈕(SC-4)。與個股期同一條(D3a):限價貼漲跌停 + IOC,邊價已對齊 FUT_TICK。
-   *  防抖走獨立槽位(理由見 PriceLadder 同段註)。 */
+   *  防抖走獨立槽位、key 併入契約(理由見 PriceLadder 同段註);下面的早退同樣是
+   *  **程式面**雙保險(DOM 路徑打不到,React 依 props 擋 disabled 的 onClick)。 */
   function marketOrder(side: "buy" | "sell"): void {
     touchIdle();
     const edge = marketEdge(side);

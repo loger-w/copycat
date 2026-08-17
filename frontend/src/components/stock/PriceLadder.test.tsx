@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PriceLadder } from "@/components/stock/PriceLadder";
+import { PriceLadder, type TradeKind } from "@/components/stock/PriceLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
 import { ARM_IDLE_MS, LOCK_TITLE } from "@/lib/flash-arm";
 import type { CapitalOrder, CapitalPosition } from "@/types";
@@ -1285,7 +1285,7 @@ describe("PriceLadder 梯頂市價鈕", () => {
     await waitFor(() => expect(screen.getByText("已送 2330 市價賣 × 1")).toBeTruthy());
   });
 
-  it("SC-5:未武裝按市價鈕 → 零請求 + hint「未武裝 — 市價不送單」3s 自清", () => {
+  it("SC-5:未武裝按市價鈕 → 零請求 + hint「未武裝 — 市價不送單」3s 自清", async () => {
     vi.useFakeTimers();
     const bodies: unknown[] = [];
     mockCapitalFetch({
@@ -1299,6 +1299,10 @@ describe("PriceLadder 梯頂市價鈕", () => {
     expect(marketBtn("買").hasAttribute("disabled")).toBe(false);
     fireEvent.click(marketBtn("買"));
     expect(screen.getByText("未武裝 — 市價不送單")).toBeTruthy();
+    // 排空 microtask 再斷言零請求(IMPL-8):同步幀檢查對「送出去了但還沒 resolve」
+    // 與「根本沒送」是同一個答案 —— fetch mock 的呼叫本身雖同步,但守門若改成 async
+    // 早退就會靜默失去鑑別力
+    await act(async () => {});
     expect(bodies.length).toBe(0);
     act(() => {
       vi.advanceTimersByTime(3_000);
@@ -1331,7 +1335,12 @@ describe("PriceLadder 梯頂市價鈕", () => {
     expect(buy.hasAttribute("disabled")).toBe(true);
     expect(buy.getAttribute("title")).toBe("無券當沖不可買進");
     expect(marketBtn("賣").hasAttribute("disabled")).toBe(false);
-    fireEvent.click(buy); // disabled 之外的雙保險:handler 直接呼叫也不得送出
+    // IMPL-2 實測:React 的 onClick 依**props**(不是 DOM 屬性)擋 disabled 互動元素 ——
+    // 拔掉 DOM 上的 disabled 也打不到 handler。所以這一按鎖住的是「無券時買側確實被
+    // marketState 鎖住」(marketState 接線斷掉 → 鈕變可按 → 這裡會多一筆請求而紅),
+    // 不是 handler 內的雙保險(那條 DOM 路徑打不到,見同檔 IMPL-2 案的註)。
+    buy.removeAttribute("disabled");
+    fireEvent.click(buy);
     fireEvent.click(marketBtn("賣"));
     await waitFor(() => expect(bodies.length).toBe(1));
     expect(bodies[0]).toMatchObject({
@@ -1398,5 +1407,70 @@ describe("PriceLadder 梯頂市價鈕", () => {
     fireEvent.click(marketBtn("買"));
     await waitFor(() => expect(bodies.length).toBe(2));
     expect(bodies[1]).toMatchObject({ stock_no: "2454", price_type: "market" });
+  });
+
+  /** IMPL-2:對 `disabled` 鈕 fireEvent.click,React 根本不派發。**實測(本輪 probe)**:
+   *  連 `removeAttribute("disabled")` 都繞不過去 —— React 的 `shouldPreventMouseEvent`
+   *  看的是元件 **props**,不是 DOM 屬性(拔掉屬性後 `el.disabled === false`,click 照樣
+   *  不進 onClick;拔掉 handler 內守門的 mutant 仍全綠)。
+   *  → handler 裡的 `if (…) return` 是給**程式面**誤接(caller 傳出與守門不一致的
+   *    `MarketBtnState`)用的雙保險,DOM 路徑打不到,無法從 RTL 驗。
+   *  這案改鎖真正會壞的那一環:props 轉成應鎖態後 `marketState` 必須跟著鎖 ——
+   *  接線斷掉時鈕變可按,click 會真的送出一張市價單 → 紅。 */
+  it("IMPL-2:武裝中 props 轉無券 → 買側鎖住,拔 DOM disabled 也點不出請求", async () => {
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    // 交易別走 prop(RightRail 持有態)→ 才能用 rerender 換成應鎖態
+    const view = (kind: TradeKind) => (
+      <QueryClientProvider client={qc}>
+        <PriceLadder
+          code="2330"
+          book={BOOK}
+          last={LAST}
+          meta={META}
+          tradeKind={kind}
+          onTradeKind={() => {}}
+        />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view("cash"));
+    armUp();
+    rerender(view("daytrade_sell"));
+    const buy = marketBtn("買");
+    expect(buy.hasAttribute("disabled")).toBe(true);
+    buy.removeAttribute("disabled");
+    fireEvent.click(buy);
+    await act(async () => {});
+    expect(bodies.length).toBe(0);
+  });
+
+  /** F3:市價鈕與點價共用同一套武裝守門(W2),但接線是各自寫的 —— 連敗計數沒接上時
+   *  「連按 3 次全被拒卻還維持武裝」在畫面上與正常態長得一模一樣。
+   *  Date.now 走可控值:同一顆的 500ms 防抖窗要跨過才送得出第 3 發。 */
+  it("F3:市價鈕連 3 次被拒(403)→ 自動解除武裝", async () => {
+    let now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ detail: { error: "ORDER_BLOCKED", reason: "order_disabled" } }, 403);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 2 敗仍武裝
+    now += 600; // 過同顆防抖窗
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "武裝" })).toBeTruthy());
+    expect(bodies.length).toBe(3);
   });
 });

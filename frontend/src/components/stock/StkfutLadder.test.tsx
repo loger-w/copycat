@@ -614,7 +614,7 @@ describe("StkfutLadder 梯頂市價鈕", () => {
     await waitFor(() => expect(screen.getByText("已送 CDFI6 市價買 × 1 口")).toBeTruthy());
   });
 
-  it("SC-5:未武裝 → 零請求 + hint「未武裝 — 市價不送單」", () => {
+  it("SC-5:未武裝 → 零請求 + hint「未武裝 — 市價不送單」", async () => {
     const bodies: unknown[] = [];
     mockCapitalFetch({
       "/api/capital/order/future": (init) => {
@@ -625,6 +625,7 @@ describe("StkfutLadder 梯頂市價鈕", () => {
     render(ladder());
     fireEvent.click(marketBtn("賣"));
     expect(screen.getByText("未武裝 — 市價不送單")).toBeTruthy();
+    await act(async () => {}); // 排空 microtask 再斷言零請求(IMPL-8)
     expect(bodies.length).toBe(0);
   });
 
@@ -649,7 +650,7 @@ describe("StkfutLadder 梯頂市價鈕", () => {
     }
   });
 
-  it("SC-7:blocked 契約 → 兩顆 disabled + title 同前置閘文案;點擊零請求", () => {
+  it("SC-7:blocked 契約 → 兩顆 disabled + title 同前置閘文案;點擊零請求", async () => {
     const bodies: unknown[] = [];
     mockCapitalFetch({
       "/api/capital/order/future": (init) => {
@@ -662,8 +663,124 @@ describe("StkfutLadder 梯頂市價鈕", () => {
       const b = marketBtn(side);
       expect(b.hasAttribute("disabled")).toBe(true);
       expect(b.getAttribute("title")).toBe("此契約規格暫未開放下單");
-      fireEvent.click(b); // 雙保險:即使 disabled 被繞過也不得送出
+      // IMPL-2 實測:React 依 **props** 擋 disabled 元素的 onClick,拔掉 DOM 屬性也
+      // 打不到 handler → 這一按鎖的是「blocked 契約確實被 marketState 鎖住」
+      // (接線斷掉 → 鈕可按 → 這裡會冒出請求而紅),不是 handler 內的雙保險。
+      b.removeAttribute("disabled");
+      fireEvent.click(b);
     }
+    await act(async () => {}); // 排空 microtask 再斷言零請求(IMPL-8)
     expect(bodies.length).toBe(0);
+  });
+
+  /** IMPL-2:render 可用態 → rerender 成應鎖態(漲停從有值變缺,武裝不受影響)。
+   *  React 的 disabled 攔截看 props 不看 DOM 屬性(見 PriceLadder 同案註),所以這案
+   *  鎖的是「行情轉成缺界後 marketState 必須立刻跟著鎖」—— 沒跟上就會拿假想界送真單。 */
+  it("IMPL-2:武裝中漲停轉缺 → 兩顆立刻鎖,拔 DOM disabled 也點不出請求", async () => {
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    const view = (upper: number | null) => (
+      <QueryClientProvider client={qc}>
+        <StkfutLadder
+          code="2330"
+          name="台積電"
+          contract={CDF_202609}
+          book={BOOK}
+          last={LAST}
+          meta={{ ...META, upper }}
+        />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view(110_000));
+    armUp();
+    expect(marketBtn("買").hasAttribute("disabled")).toBe(false);
+    rerender(view(null));
+    for (const side of ["買", "賣"] as const) {
+      const b = marketBtn(side);
+      expect(b.hasAttribute("disabled")).toBe(true);
+      b.removeAttribute("disabled");
+      fireEvent.click(b);
+    }
+    await act(async () => {});
+    expect(bodies.length).toBe(0);
+    expect(screen.getByRole("button", { name: "解除" })).toBeTruthy(); // 仍武裝(鎖的是鈕不是武裝)
+  });
+
+  /** F2:防抖在現股梯有測、個股期沒有 —— 三梯各寫一份 marketOrder,漏一梯就是
+   *  「同一顆連按兩下送出兩口」而沒有任何測試會紅。 */
+  it("F2:同一顆 500ms 內連按只送一次;另一顆照送", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies).toMatchObject([{ buy_sell: "buy" }, { buy_sell: "sell" }]);
+  });
+
+  it("F2:交錯「市價買 → 點價格格 → 市價買」500ms 內,市價只送一次", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    fireEvent.click(screen.getByLabelText("買 100"));
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies.filter((b) => b.time_in_force === "IOC").length).toBe(1); // 市價鈕
+    expect(bodies.filter((b) => b.time_in_force === "ROD").length).toBe(1); // 點價
+  });
+
+  /** F4:估價缺的兩條分支各有各的鎖法 —— `last` 缺(無成交價)與界缺(SC-6)不同源。 */
+  it("F4:last 缺 → 兩顆 disabled;rows 為空(界與成交價全缺)仍渲染鈕列", () => {
+    mockCapitalFetch();
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <StkfutLadder
+          code="2330"
+          name="台積電"
+          contract={CDF_202609}
+          book={BOOK}
+          last={null}
+          meta={META}
+        />
+      </QueryClientProvider>,
+    );
+    for (const side of ["買", "賣"] as const) {
+      expect(marketBtn(side).hasAttribute("disabled")).toBe(true);
+    }
+    // 「無資料」態:鈕列照樣在(鈕自身由估價鎖,無資料不是「不該有鈕」)
+    rerender(
+      <QueryClientProvider client={qc}>
+        <StkfutLadder
+          code="2330"
+          name="台積電"
+          contract={CDF_202609}
+          book={null}
+          last={null}
+          meta={null}
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("無資料")).toBeTruthy();
+    expect(screen.getByTestId("ladder-market-buttons")).toBeTruthy();
+    expect(marketBtn("買").hasAttribute("disabled")).toBe(true);
   });
 });
