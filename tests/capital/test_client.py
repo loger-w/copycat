@@ -1468,3 +1468,60 @@ async def test_audit_files_use_capital_prefix(tmp_path: Path) -> None:
     files = sorted(client._audit_base.glob("*.jsonl"))
     assert files, "審計檔未落地"
     assert all(f.name.startswith("capital-") for f in files)
+
+
+# ---------------------------------------------------------------------------
+# 本 app 送出的市價單記憶(SC-10):回報無價格別欄 → 送單成功時把 price_type 記進 store
+# ---------------------------------------------------------------------------
+
+
+def _dated(raw: str, date: str | None = None) -> str:
+    """把委託建立日(idx23)塞進回報字串;預設今日 — store 只在日期相符時帶出 price_type。"""
+    arr = raw.split(",")
+    arr[23] = date if date is not None else time.strftime("%Y%m%d")
+    return ",".join(arr)
+
+
+async def test_submit_notes_price_type_into_store(tmp_path: Path) -> None:
+    """證券 + 期貨兩條送單路徑成功後,對應 seq 的委託列都帶得出 price_type。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    sec = await _drive(
+        client,
+        lambda: client.submit_stock_order(
+            StockOrderRequest(
+                stock_no="2330", buy_sell="buy", price=590.0, qty=2, price_type="market"
+            )
+        ),
+    )
+    fut = await _drive(
+        client,
+        lambda: client.submit_future_order(
+            _fut_req(price_type="limit", time_in_force="IOC"), contract="TXFI6", multiplier=200
+        ),
+    )
+    assert sec.seq_no == "SEQ0001" and fut.seq_no == "SEQF001"
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    client.store.apply_reply(parse_onnewdata(_dated(_fut_evt_raw("SEQF001"))))
+    by_seq = {o.seq_no: o for o in client.store.orders()}
+    assert by_seq["SEQ0001"].price_type == "market"
+    assert by_seq["SEQF001"].price_type == "limit"
+
+
+async def test_broker_reject_does_not_note_price_type(tmp_path: Path) -> None:
+    """群益拒單(code≠0)→ 沒有委託在市場上,不得留下「市價」標籤(E6)。"""
+    com = RejectingCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with pytest.raises(BrokerRejectedError):
+        await _drive(
+            client,
+            lambda: client.submit_stock_order(
+                StockOrderRequest(
+                    stock_no="2330", buy_sell="buy", price=590.0, qty=2, price_type="market"
+                )
+            ),
+        )
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    assert client.store.orders()[0].price_type is None
