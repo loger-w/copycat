@@ -49,7 +49,7 @@ _SIGNAL_KEYS = {
 }
 
 _RULE_PARAMS: dict[str, dict[str, float]] = {
-    "cdp_cross": {"rearm_ticks": 5},
+    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
     "surge_crash": {"pct": 2.0, "window_secs": 300},
     "vol_burst": {
         "ratio": 3,
