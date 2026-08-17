@@ -535,6 +535,52 @@ export interface EdgePriceLabel {
   level: "ma5" | "ma20";
 }
 
+/** 域外疊線掛牌的輸入(結構與 `lib/index-chart-svg.ts::OutOfDomainLevel` 逐欄相同)。
+ *
+ *  **刻意寫成本檔自己的結構型別、不 import 那支**:index-chart-svg 已經 import 本檔的
+ *  `EDGE_LABEL_H` / `OverlayLevel`,反向 import 會成環。結構相容 → `outOfDomainLevels()`
+ *  的結果可以直接餵進來,不需要任何轉接。 */
+export interface PegInput {
+  level: OverlayLevel;
+  priceMilli: number;
+  dir: "up" | "down";
+}
+
+export interface PegLabel extends PegInput {
+  y: number;
+}
+
+/** 域外疊線掛牌的定位(指數分時圖 mode="index")。
+ *
+ *  y 域是以昨收置中的對稱域,平靜日的 CDP 常態整組落在域外 —— 線體畫不出來,**掛牌
+ *  就是唯一的訊號**。所以定位規則簡單且不可被推:向上域外的由 `top` 往下疊、向下域外
+ *  的由 `bottom` 往上疊,各自獨立計數(兩個方向共用一個計數器的話,一邊多一顆會把
+ *  另一邊整組往中間擠,而擠出來的位置與「在域上/下」的語意無關)。
+ *
+ *  `edgePriceLabels` 的 MA 標籤反過來要**避開**這裡算出的 y(呼叫端把本函式的結果併進
+ *  它的 obstacles):MA 的線本身照畫,標籤只是「這條線在哪」,讓位的成本遠低於掛牌。
+ *
+ *  矮圖時堆疊會超出界 → 一律 clamp 進界內(疊印可讀性差,但飛出 viewBox 是完全靜默的
+ *  不見)。界退化(top > bottom)→ 一顆都不畫,同 `edgePriceLabels` 的紀律。 */
+export function pegLabels(
+  pegs: readonly PegInput[],
+  bounds: { top: number; bottom: number },
+): PegLabel[] {
+  if (bounds.top > bounds.bottom) return [];
+  const clamp = (y: number): number => Math.min(Math.max(y, bounds.top), bounds.bottom);
+  let ups = 0;
+  let downs = 0;
+  const out: PegLabel[] = [];
+  for (const p of pegs) {
+    const raw =
+      p.dir === "up"
+        ? bounds.top + ups++ * EDGE_LABEL_H
+        : bounds.bottom - downs++ * EDGE_LABEL_H;
+    out.push({ level: p.level, priceMilli: p.priceMilli, dir: p.dir, y: clamp(raw) });
+  }
+  return out;
+}
+
 /** MA5 / MA20 的右緣價位標籤佈局(SC-1/SC-3)。
  *
  *  只管 MA:CDP 五線在右緣帶內已有 `價位*`,VWAP 走**就地標示**(末點右側)不經此函式。
