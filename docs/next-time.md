@@ -1,3 +1,21 @@
+## 2026-08-18(mod/signal-denoise 個股訊號降噪留尾)
+
+- [ ] **真 tick 減量對照(驗證窗口 2026-08-18 盤中)**:回放(1 分 K 近似)dwell 300 讓 CDP 事件 127→89(−29.9%);
+  prod 重啟後拿當日 `data/signals/<date>.jsonl` 與 08-17(192 則 / CDP 120)對照,若減量 < 20% 或單穿股漏發,
+  回頭看 `cdp_rearm_dwell_secs`(規則 UI 可調)與側別 seed。Discord 同 tick 合併真發也待這天過目。
+- [ ] **toast / 桌面通知不合併**(spec D5 刻意 out of scope):同 tick 三則仍跳三張 toast;若盤中覺得吵,
+  候選 = `useSignalAlerts` 走同一個 `groupSignals` 口徑合成一張。
+- [ ] **規則 UI `rearm_dwell_secs` step="1" 且前端不擋 0–3600 值域**(code review T-10 rejected):沿
+  `window_secs` 既有慣例(值域由後端 INVALID_RULE 擋、文案泛用);要做就連 rearm_ticks / window_secs 一起
+  加前端值域提示。
+- [ ] **合併列 title 只有整組合併字串**(T-12 partial):kind 段與規則名段的一對一對應在 hover 提示上看不出;
+  候選 = 逐段 span 各帶自己的 title「kind(rule)」。
+- [ ] **合併列在 200px rail 內易被 truncate**(真環境過目:「突破 CDP AH・爆量 5.9 倍」被截成「突破 CDP AH・…」),
+  full text 在 title;若嫌難讀,候選 = 合併列允許換行或縮字級。
+- [ ] **conftest `TestConftestWatchlistIsolation::test_hub_data_dir_isolated_without_explicit_path` 順序脆弱**
+  (correctness lens 附帶觀察,非本輪 diff):以 test_signal_hub + test_signal_rules + test_signal_routes 三檔
+  子集跑會紅、單檔 / 全套綠;既有測試基建順序依賴,另案追。
+
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
 - [ ] **相關係數 tab 七腿 prod 重啟後過目**:小日經 fuchsia(river-7)與標普薰衣草紫 / accent 桃紅可辨度;
