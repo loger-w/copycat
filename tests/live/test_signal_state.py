@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 from dataclasses import replace
+
+import pytest
 
 from copycat.live.signal_state import SignalDetector, TickContext
 from copycat.live.stock_models import StockTick
@@ -368,6 +371,59 @@ class TestCdpCross:
         events = det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
         assert len(events) == 1
         assert events[0].touch_count == 1  # 停用期間未寫入計數
+
+
+class TestCdpMixedSides:
+    """SC-2 (c) 混向防禦(review C-2 / T-5)。
+
+    不變式:同一 tick 所有 level 由同一個價格序列推進,不可能同時上穿與下穿。這個
+    分支只在不變式已經破了(狀態被外力汙染)時才走得到 —— 白箱直接塞 `_side` 造出
+    矛盾是唯一測得到它的方式。防禦的目標是 W2「單一 direction」:寧可少發也不能發
+    出一則方向錯的訊號。
+    """
+
+    @staticmethod
+    def _poison(det: SignalDetector) -> None:
+        """nh 記在線下、ah 記在線上 —— 下一筆落在兩線之間就同時「上穿 nh」「下穿 ah」。"""
+        det._side = {("2330", "nh"): (75_000, -1), ("2330", "ah"): (80_000, 1)}
+
+    def test_mixed_sides_keep_direction_of_price_move(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """價格有動 → 只保留與 `sign(price − prev)` 一致的那一邊,並留 warning。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", {"nh": 75_000, "ah": 80_000})
+        det.evaluate("2330", _tick(78_000), _ctx(), _CDP)  # 首 tick 只初始化
+        self._poison(det)
+
+        with caplog.at_level(logging.WARNING, logger="copycat.live.signal_state"):
+            events = det.evaluate("2330", _tick(78_500), _ctx(), _CDP)
+
+        assert len(events) == 1
+        assert events[0].direction == "from_below"
+        assert events[0].levels == ("nh",)
+        assert "側別混向" in caplog.text
+
+    def test_mixed_sides_with_flat_price_emits_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`price == prev`(keep == 0)→ 沒有任何依據可以選邊,兩邊都不發。
+
+        任選一邊等於擲硬幣決定訊號方向:發錯方向的 CDP 訊號比不發傷得多(user 依它
+        判多空),而狀態已經汙染了,這一筆的正確性本來就無從保證。
+        """
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", {"nh": 75_000, "ah": 80_000})
+        det.evaluate("2330", _tick(78_000), _ctx(), _CDP)
+        self._poison(det)
+
+        with caplog.at_level(logging.WARNING, logger="copycat.live.signal_state"):
+            events = det.evaluate("2330", _tick(78_000), _ctx(), _CDP)
+
+        assert events == []
+        assert "側別混向" in caplog.text
 
 
 class TestSurgeCrash:
