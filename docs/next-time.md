@@ -1,3 +1,21 @@
+## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
+
+- [ ] **D4 現股市價安全首單未做**(user 盤中):現股 `nSpecialTradeType=1 + bstrPrice=估價 + ROD` 端到端從未 prod 驗;
+  首單 = 低價股 1 張市價買/賣 → 群益 APP 核對成交型別 + 委託列表「市價」標籤 → 截圖回填
+  `.claude/mod/ladder-market-buttons/verification.md` §4。個股期 / 期貨市價鈕(limit@貼漲跌停 + IOC,
+  走 `/api/capital/order/future` 經 `_stkfut_gates`,**與平倉路由不同**)prod 首發同待。
+- [ ] **「貼漲跌停」snap 口徑兩份**:市價鈕(個股期 `stkfutMarketEdgeMilli` snapDown/snapUp、期貨
+  `futMarketEdgeMilli` floor/ceil FUT tick)vs 個股期平倉 `RightRail.tsx:256` 用未 snap 的 `meta.upper/lower`
+  (平倉路由無 tick 閘從未報錯)→ 同一標的兩個「邊價」可能差一檔;收斂時把平倉也改吃 snap 版(🔴,
+  `FuturesPage.test.tsx:150-168` 值斷言該紅)。
+- [ ] **委託列表「市價」標籤的日界語意**(KL-4):`store.note_price_type` 記本機日曆日,`_price_type_of`
+  要求與回報 `_Agg.date`(委託建立日)相等;夜盤跨午夜 / 盤後預約單未實證 → 不符只缺標籤不誤標。
+  收斂候選:交易日口徑(`trading_calendar`)或 ±1 日窗(與前端 `ymdWindow` 同口徑)。
+- [ ] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
+  屆時 OrdersList 標籤對這兩梯才會出現(現在 wire 就是限價 IOC,不標)。
+- [ ] `futMarketEdgeMilli` 對 `upper/lower ≤ 0` 不回 null(只對 null;stkfut 版有 ≤0 守門)—— 後端
+  `_bad_price` 會擋,前端不鎖鈕;統一口徑時順手。
+
 ## 2026-08-17(mod/ladder-pills-avgpct R6 留尾)
 
 - [ ] **aria-pressed pill 群的單選語意 → radiogroup**(review A3):交易別 pill(PriceLadder)、

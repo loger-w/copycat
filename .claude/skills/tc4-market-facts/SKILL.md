@@ -187,5 +187,7 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   `FUTUREORDER` struct(`SendFutureOrder`/`SendOptionOrder` 同簽名);刪改減共用證券 BySeqNo
   家族(帳號換期貨戶)。(b) **test 沙盒此帳號未開通**,登入恆 1097 — 送單面驗證只能 FakeCom +
   prod 安全首單(遠價 1 單位 → APP 核對 → 刪單)。(c) nQty:證券=張 / 期貨=口。(d) 期交所市價單
-  限 IOC/FOK(ROD+市價會退單);期貨平倉走限價貼漲跌停+IOC。(e) OnAccount/OnOpenInterest 欄序
+  限 IOC/FOK(ROD+市價會退單);期貨平倉走限價貼漲跌停+IOC。**此條只對期交所**:證交所逐筆交易的
+  現股市價 ROD 合法(鎖停日簿頂 price=0 的「市價佇列」就是留存簿中的未成交市價 ROD 單;2026-08-17
+  batch3 R1 review 曾誤套此條,機械反證後現股閃電梯市價鈕維持 market+ROD)。(e) OnAccount/OnOpenInterest 欄序
   為未實測假定,首次 prod 登入要核對。(Trigger:碰 copycat/capital / 群益送單欄位 / 驗證方式)
