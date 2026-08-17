@@ -5,7 +5,7 @@
  *  subtab 退役後掛載閘回到 `App` 的 `visited.corr` + `hidden`,鎖跟著搬到新的掛載點。
  *
  *  **本檔刻意不 mock CorrPage**:stub 不建線,「stub 下 WS 數為 0」恆真 = 沒有鑑別力。
- *  錨點文字固定取 RiverPanel 的「等待六腿資料…」—— App 的 Suspense fallback 與
+ *  錨點文字固定取 RiverPanel 的「等待各腿資料…」—— App 的 Suspense fallback 與
  *  CorrPanel 空態同為「載入中…」,**不可**用該字串做反向斷言(spec r2: R2-7)。
  *
  *  與 subtab 時代的關鍵行為差異:切走**不** unmount(hidden 保留 DOM),兩條 WS 常駐
@@ -110,20 +110,20 @@ describe("App × CorrPage 頂層 tab(R2 SC-1;lazy 真身)", () => {
     renderApp();
     await act(async () => {});
 
-    expect(screen.queryByText("等待六腿資料…")).toBeNull();
+    expect(screen.queryByText("等待各腿資料…")).toBeNull();
     expect(corrWs()).toEqual([]);
 
     // 正向對照:少了這半,「零 WS」對「corr 整條路徑壞掉」也會綠(vacuous)
     fireEvent.click(screen.getByRole("tab", { name: "相關係數" }));
 
-    expect(await screen.findByText("等待六腿資料…")).toBeTruthy();
+    expect(await screen.findByText("等待各腿資料…")).toBeTruthy();
     expect(corrWsPaths()).toEqual(["/ws/corr", "/ws/river"]);
   });
 
   it("切回台股綜合後兩條 WS 仍活著(hidden 保留 DOM,不 unmount)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "相關係數" }));
-    await screen.findByText("等待六腿資料…");
+    await screen.findByText("等待各腿資料…");
 
     fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
     await act(async () => {});
@@ -135,7 +135,7 @@ describe("App × CorrPage 頂層 tab(R2 SC-1;lazy 真身)", () => {
   it("相關係數 tab 的右欄閃電顯「此頁無可下單標的」(railCtx 落 none)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "相關係數" }));
-    await screen.findByText("等待六腿資料…");
+    await screen.findByText("等待各腿資料…");
 
     expect(screen.getByText("此頁無可下單標的")).toBeTruthy();
   });
