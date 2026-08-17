@@ -64,8 +64,9 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
     })
     .filter((v): v is { minute: number; net: number } => v !== null);
 
-  // 高度改由 CSS 固定(h-24),viewBox 高反推自實際長寬比 —— 改版前是「寬決定高」
-  // (寬 × 150/640),左欄 930px 時這條線獨佔 218px,一頁總覽的高度預算吃不下。
+  // 高度由 CSS 決定(單欄態 `h-24`、兩欄態由外層 flex 指派,見下方 wrapper 註解),
+  // viewBox 高一律反推自量到的長寬比 —— 改版前是「寬決定高」(寬 × 150/640),左欄
+  // 930px 時這條線獨佔 218px 且與版面預算無關,一頁總覽吃不下。
   const [sizeRef, size] = useContainerSize<HTMLDivElement>();
   const vbHeight =
     size.width > 0 && size.height > 0
@@ -73,13 +74,28 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
       : SIZE.height;
 
   return (
-    <div data-testid="adl-chart" className="flex flex-col gap-1">
+    // `min-h-0 flex-1`:兩欄態時 IndexPage 的 section 拿到「左欄剩餘高的 2/5」,這一層
+    // 要把它一路傳給下面那支量測 wrapper(可縮鏈斷一段,wrapper 就吃不到高)。單欄態
+    // 的 section 是 auto 高、沒有自由空間,`flex-1` 於是等同內容高 = 改動前行為。
+    <div data-testid="adl-chart" className="flex min-h-0 flex-1 flex-col gap-1">
       <span className="text-sm text-ink">騰落線</span>
       {/* 恆存 wrapper(空態文案也在其中):ref 只掛有資料那支的話,盤前那段量到 0×0
           而 hook 不會重跑 —— 第一筆資料進來時圖仍是 fallback 比例(useContainerSize
           呼叫端契約 1)。fallback 態由 svg `h-full w-full` + preserveAspectRatio 預設
-          meet 縮放置中承接,不溢出(W-10)。 */}
-      <div ref={sizeRef} className="flex h-24 shrink-0 items-center justify-center">
+          meet 縮放置中承接,不溢出(W-10)。
+
+          高度是兩態的:**單欄態** `--idx-*` 未設 → `[flex:var(…,0 0 auto)]` 展開成
+          `shrink-0` 的舊值,`h-24` 生效 = 改動前的 96px 逐值不變(SC-6 1366×768)。
+          **兩欄態** IndexPage 左欄把 `--idx-adl-wrap-flex` 設成 `1 1 0%`,basis 0% 蓋掉
+          `h-24`,實際高改由外層 flex 指派(= section 扣掉家數帶後的剩餘);地板改由
+          `--idx-adl-min` 的 10rem 給 —— 它是 min-height 地板,不是指定高,分配權仍在
+          外層 flex(useContainerSize 呼叫端契約 2:量測型 svg 的高必須由容器決定)。
+          變數為何掛在左欄而不是這裡:最近的 `@container` 祖先是左欄,`@[1050px]:`
+          寫在這一層量到的是左欄寬(630–930px)永不成立。 */}
+      <div
+        ref={sizeRef}
+        className="flex h-24 items-center justify-center [flex:var(--idx-adl-wrap-flex,0_0_auto)] [min-height:var(--idx-adl-min,auto)]"
+      >
         {points.length === 0 ? (
           <p className="text-sm text-ink-muted">盤中累積後顯示</p>
         ) : (
