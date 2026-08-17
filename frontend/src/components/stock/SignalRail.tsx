@@ -143,7 +143,12 @@ export function SignalRail({
                       <span className="min-w-0 truncate text-xs">
                         {segments.map((seg, i) => (
                           <Fragment key={seg.label}>
-                            {i === 0 ? null : <span className="text-ink-muted">・</span>}
+                            {/* 分隔符是視覺用的:讀螢幕器唸出來只會把兩段文案黏成一句 */}
+                            {i === 0 ? null : (
+                              <span aria-hidden="true" className="text-ink-muted">
+                                ・
+                              </span>
+                            )}
                             <span className={toneOf(seg.sig)}>{seg.label}</span>
                           </Fragment>
                         ))}

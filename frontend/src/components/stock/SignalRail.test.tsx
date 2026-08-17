@@ -183,6 +183,13 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
     expect(texts[0]).toContain("CDP 穿越・爆拉爆跌"); // 規則名同樣去重後串接
   });
 
+  // T-12:「・」只是視覺分隔,讀螢幕器唸出來會把兩段文案黏成一句聽不懂的字串
+  it("段間分隔符對輔助技術隱藏(aria-hidden)", () => {
+    renderRail({ signals: [CDP, CRASH] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText("・").getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("合併列每段各自著色(整段套同一色會把爆跌畫成紅的)", () => {
     renderRail({ signals: [CDP, CRASH] });
     const list = within(screen.getByTestId("signal-rail-list"));
