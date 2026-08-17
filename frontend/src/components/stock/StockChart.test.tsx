@@ -4,7 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockChart } from "@/components/stock/StockChart";
+import { ymdOf } from "@/lib/ladder-lots";
 import type { StockAccum } from "@/lib/stock-accum";
+import type { CapitalOrder } from "@/types";
 import { wrap } from "@/test-utils";
 
 const ACCUM = {
@@ -30,11 +32,42 @@ const BARS = [
   { t: "2026-07-28", o: 105_000, h: 120_000, l: 100_000, c: 102_000, v: 20 },
 ];
 
+/** 委託記錄 fixture(SC-7)。`date` **必須動態算** —— 寫死日期會在隔天靜默轉紅。
+ *  `avg_fill_price` 是**元**;個股期的 `stock_no` 放的是期交所契約碼。 */
+function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
+  return {
+    seq_no: "s1",
+    stock_no: "2330",
+    name: "台積電",
+    market: "TS",
+    buy_sell: "B",
+    flag_label: null,
+    book_no: null,
+    status_raw: null,
+    status_label: null,
+    price: 2380,
+    avg_fill_price: 2380,
+    order_qty: 2,
+    filled_qty: 2,
+    unit: "張",
+    date: ymdOf(new Date()),
+    time: "09:00:30",
+    pre_order: false,
+    error_msg: null,
+    actionable: false,
+    price_type: "limit",
+    raw: "",
+    ...over,
+  };
+}
+
 let barsUrls: string[];
+let orders: CapitalOrder[];
 
 beforeEach(() => {
   window.localStorage.clear();
   barsUrls = [];
+  orders = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
@@ -42,6 +75,11 @@ beforeEach(() => {
       if (u.includes("/api/stock/bars")) {
         barsUrls.push(u);
         return new Response(JSON.stringify({ bars: BARS }));
+      }
+      // 單檔頁在這一層掛 `useCapitalOrders`(SC-7);不接路由的話它會拿到 overlay 的殼
+      // 當委託列表用(`orders` undefined → 恆零標記,SC-7 靜默 vacuous)。
+      if (u.includes("/api/capital/orders")) {
+        return new Response(JSON.stringify({ orders }));
       }
       return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
     }),
@@ -422,5 +460,61 @@ describe("StockChart 現貨模式還原(A6)", () => {
     await waitFor(() => expect(pressed("日K")).toBe("true"));
     fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
     expect(pressed("江波圖")).toBe("true");
+  });
+});
+
+// 🟢 R2 SC-7:單檔頁的成交點比對鍵。現貨態 = 股號 + 排除零股;個股期態 = **選定契約的
+// 期交所契約碼**(群益回報的期貨單 `stock_no` 放的就是它)且不排除單位「口」。
+//
+// 鍵選錯的失效樣態是「圖上多了別的商品的成交點」—— 畫面照樣有東西,零錯誤訊號。
+describe("StockChart 成交點比對鍵(SC-7)", () => {
+  const SPOT = order({ seq_no: "spot", time: "09:00:30" }); // 2330 現股 @540
+  const FUT = order({
+    seq_no: "fut",
+    stock_no: "CDFH6", // futExchangeContract("CDF", "202608") —— 月碼 A..L,8 月 = H
+    buy_sell: "S",
+    unit: "口",
+    price: 2390,
+    avg_fill_price: 2390,
+    filled_qty: 1,
+    time: "09:01:30", // @541
+  });
+
+  function marks(container: HTMLElement): string[] {
+    return [...container.querySelectorAll('polygon[data-testid^="fill-"]')].map(
+      (n) => n.getAttribute("data-testid")!,
+    );
+  }
+
+  it("現貨態:只畫股號那筆(同一份 orders 內的個股期契約單不畫)", async () => {
+    orders = [SPOT, FUT];
+    const { container } = wrap(<StockChart accum={ACCUM} code="2330" />);
+    await waitFor(() => expect(marks(container)).toEqual(["fill-B-540"]));
+  });
+
+  it("個股期態:只畫該契約碼那筆(現貨股號那筆不畫)", async () => {
+    orders = [SPOT, FUT];
+    const { container } = wrap(
+      <StockChart accum={ACCUM} code="2330" contract={{ prod: "CDF", ym: "202608" }} />,
+    );
+    await waitFor(() => expect(marks(container)).toEqual(["fill-S-541"]));
+  });
+
+  it("現貨態:零股(unit「股」)不畫;同批的現股單照畫(與現股梯同口徑)", async () => {
+    orders = [
+      order({ seq_no: "odd", unit: "股", filled_qty: 1000, time: "09:00:30" }),
+      order({ seq_no: "lot", time: "09:01:30" }),
+    ];
+    const { container } = wrap(<StockChart accum={ACCUM} code="2330" />);
+    await waitFor(() => expect(marks(container)).toEqual(["fill-B-541"]));
+  });
+
+  it("個股期態合約月份非法 → 鍵解不出來 = 零標記,圖不白屏", async () => {
+    orders = [SPOT, FUT];
+    const { container } = wrap(
+      <StockChart accum={ACCUM} code="2330" contract={{ prod: "CDF", ym: "2026" }} />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+    expect(marks(container)).toEqual([]);
   });
 });
