@@ -21,7 +21,7 @@ function rule(o: Partial<SignalRule> = {}): SignalRule {
     enabled: true,
     notify_discord: true,
     cooldown_secs: 300,
-    params: { rearm_ticks: 2 },
+    params: { rearm_ticks: 2, rearm_dwell_secs: 300 },
     cdp_levels: ["ah", "nh", "cdp", "nl", "al"],
     ...o,
   };
