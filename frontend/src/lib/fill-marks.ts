@@ -232,7 +232,10 @@ export function projectFills(
   const [lo, hi] = geo.yDomain;
   const out: FillMark[] = [];
   for (const f of fills) {
-    if (f.minute < xw.start || f.minute > xw.end) continue;
+    // **正向條件的否定**,不寫 `minute < start || minute > end`(沿 `stock-accum.ts::foldVp`
+    // review A3 的同一理由):後者對 `NaN` 的兩個比較都是 false,時間戳解不出分鐘的壞單
+    // 會整筆漏進來,長出 `x = NaN` 的 polygon(SVG 靜默不畫,readout 卻照樣追加一欄)。
+    if (!(f.minute >= xw.start && f.minute <= xw.end)) continue;
     if (f.priceMilli < lo || f.priceMilli > hi) continue;
     out.push({ ...f, x: clampFillX(minuteToX(f.minute, w, xw), w), y: geo.toY(f.priceMilli) });
   }
