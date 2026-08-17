@@ -1,0 +1,20 @@
+{"round":1,"reviewer":"change-spec-reviewer(opus)","summary":{"P0":1,"P1":4,"P2":12},
+"dispositions":[
+{"id":"R1","sev":"P0","claim":"TradeKind 型別 caller(RightRail.tsx:7)未盤點","check":"grep 證實 RightRail import type TradeKind from PriceLadder","disposition":"accepted","resolution":"lib/trade-kinds.ts export TRADE_KINDS+TradeKind+kindLabel;PriceLadder re-export 兩者;current-state §5 補"},
+{"id":"R2","sev":"P1","claim":"CDF=2330 非 2002","check":"stkfut_map.json 2330 prod CDF","disposition":"accepted","resolution":"SC-1 例改 CDFI6→2330 / QFFI6→2330;加真表 lock"},
+{"id":"R3","sev":"P1","claim":"memo 驗收 vacuous","disposition":"accepted","resolution":"memo.test 加 positions 路由 + 有倉/無倉增量對照"},
+{"id":"R4","sev":"P1","claim":"stub fallback 是 200 殼非 404","disposition":"accepted","resolution":"§7 改寫事實;三 stub 各加路由 + 自檢斷言"},
+{"id":"R5","sev":"P1","claim":"左欄 flex-col 第三子項多一行","disposition":"accepted","resolution":"第二行改 flex row 包名稱+chip;name 缺仍渲染該 row"},
+{"id":"R6","sev":"P2","disposition":"accepted","resolution":"嚴格制 (a)"},
+{"id":"R7","sev":"P2","disposition":"accepted","resolution":"現價缺值降級僅 sec"},
+{"id":"R8","sev":"P2","disposition":"accepted","resolution":"DASH/pnlText/pnlTone 搬 lib/pnl-format.ts,LadderView re-export"},
+{"id":"R9","sev":"P2","disposition":"accepted","resolution":"fut 段逐契約:多契約 chip `期 2口/1口`,tooltip 逐契約碼;fixture std+mini"},
+{"id":"R10","sev":"P2","disposition":"accepted","resolution":"聚合 qty=0 → `多n/空m張`"},
+{"id":"R11","sev":"P2","disposition":"accepted","resolution":"R-3 補除權息 EE1 形;fixture EE1I6"},
+{"id":"R12","sev":"P2","disposition":"accepted","resolution":"queryAllByTestId"},
+{"id":"R13","sev":"P2","disposition":"accepted","resolution":"10 個 fixture 位置寫進 §7,code 必填"},
+{"id":"R14","sev":"P2","disposition":"accepted","resolution":"W-5 改寫成可驗證敘述"},
+{"id":"R15","sev":"P2","disposition":"accepted","resolution":"AD-7 補高度評估 + SC-4 過矮視窗截圖案"},
+{"id":"R16","sev":"P2","disposition":"accepted","resolution":"改 useFeeDiscount() useSyncExternalStore(storage 事件 + persistDiscount 通知),render 不讀 localStorage"},
+{"id":"R17","sev":"P2","disposition":"accepted","resolution":"SC-5 加 WatchlistSidebar 元件級 discount=3 對照"}
+]}

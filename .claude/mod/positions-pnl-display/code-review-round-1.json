@@ -1,0 +1,7 @@
+{"round":1,"lenses":["correctness/React(opus)","spec/whitelist/test-gap(opus)"],"diff":"review-diff.txt (master..3aa2f426)",
+"findings":[
+{"id":"C-1/SPEC-1","sev":"P1","file":"frontend/src/components/stock/StockPage.tsx","line":119,"claim":"個股期態 header 現股段用主圖(期貨)last 算 positionEcon → 錯數字;測試只跑 contract=null","quick_screen":"Read StockPage.tsx:103,116-119 + useStockStream stateUrl(code,contract) 證實 accum 是合約簿 → CONFIRMED","disposition":"accepted","resolution":"secLast = contract===null ? last?.p : watchlist[code]?.p;取不到 null 走 AD-9;補 contract 態測試(紅先行)"},
+{"id":"C-2/TEST-1","sev":"P2","file":"frontend/src/components/stock/StockPage.test.tsx","line":1016,"claim":"無倉案等 page-quote(props 驅動)= vacuous","disposition":"accepted","resolution":"先有倉自檢再無倉斷言"},
+{"id":"C-3","sev":"P2","file":"frontend/src/components/stock/GroupGridView.tsx","line":213,"claim":"卡片倉位行無 nowrap/truncate,長字串換行吃圖高","disposition":"accepted","resolution":"加 truncate + title=chipTitle"},
+{"id":"TEST-2","sev":"P2","file":"frontend/src/lib/position-summary.test.ts","line":220,"claim":"cardText/headerSegments 無 fut-only 案","disposition":"accepted","resolution":"各補一案"}
+],"p2_summary":{"count":3,"themes":["測試 vacuous 自檢","卡片截斷","fut-only 格式案"]}}

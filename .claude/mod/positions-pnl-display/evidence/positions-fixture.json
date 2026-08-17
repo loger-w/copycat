@@ -1,0 +1,7 @@
+[{"market":"sec","stock_no":"2330","qty":3,"avg_price":1180.0,"kind":"cash","name":"台積電"},
+ {"market":"sec","stock_no":"2330","qty":-1,"avg_price":1210.0,"kind":"short","name":"台積電"},
+ {"market":"fut","stock_no":"CDFI6","qty":2,"avg_price":1185.0,"kind":"cash","pnl_base":3000.0,"name":"台積電期"},
+ {"market":"fut","stock_no":"QFFI6","qty":-1,"avg_price":1190.0,"kind":"cash","pnl_base":-250.0},
+ {"market":"sec","stock_no":"2317","qty":5,"avg_price":null,"kind":"cash","name":"鴻海"},
+ {"market":"sec","stock_no":"2454","qty":-2,"avg_price":1450.0,"kind":"short","name":"聯發科"},
+ {"market":"fut","stock_no":"EE1I6","qty":1,"avg_price":100.0,"kind":"cash","pnl_base":10.0}]
