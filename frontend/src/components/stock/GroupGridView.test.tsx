@@ -764,6 +764,15 @@ describe("GroupGridView 卡片倉位(SC-4)", () => {
     expect(line.textContent).toBe(`${expectedCard(FEE_DISCOUNT_DEFAULT)} · 期 2口 +500`);
   });
 
+  // review C-3:卡片只有 266px 寬,對鎖 + 雙契約 + 六位數損益的字串會換行 → 多吃一行
+  // 圖高(AD-7 的高度評估前提是「新行 12px」)。截斷 + title 補全文。
+  it("倉位行單行截斷,全文掛 title", async () => {
+    positions = [pos(), pos({ market: "fut", stock_no: "CDFI6", qty: 2, pnl_base: 500 })];
+    const line = await renderGrid();
+    expect(line.className).toContain("truncate");
+    expect(line.getAttribute("title")).toContain("現股");
+  });
+
   it("無倉的卡 → 沒有倉位行(卡片高度不因空佔位縮圖)", async () => {
     positions = [pos()];
     await renderGrid(); // 先自檢有倉的那張真的長出來了

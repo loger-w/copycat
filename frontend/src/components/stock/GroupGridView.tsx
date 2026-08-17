@@ -12,6 +12,7 @@ import { fmt, fmtPct } from "@/lib/format";
 import { ymdOf } from "@/lib/ladder-lots";
 import {
   cardText,
+  chipTitle,
   chipTone,
   EMPTY_POSITIONS,
   futSummary,
@@ -210,9 +211,13 @@ const GroupCard = memo(function GroupCard({
         <QuoteCell code={code} q={quote} />
       </span>
       {sec !== null || fut !== null ? (
+        // 一行不得換行(review C-3):對鎖(`多3/空3張`)+ 雙契約 + 六位數損益的字串
+        // 塞得進兩行,而 AD-7 的高度評估是「新行 12px」—— 換行就多吃一行圖高,
+        // `flex-1 min-h-0` 會把圖再壓矮一截。截斷後全文靠 title 補(與側欄 chip 同一支)。
         <span
           data-testid={`group-pos-${code}`}
-          className={cn("font-mono text-[0.625rem] leading-tight", chipTone(sec, fut))}
+          title={chipTitle(sec, fut)}
+          className={cn("truncate font-mono text-[0.625rem] leading-tight", chipTone(sec, fut))}
         >
           {cardText(sec, fut)}
         </span>
