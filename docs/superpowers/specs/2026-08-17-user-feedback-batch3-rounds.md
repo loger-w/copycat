@@ -15,8 +15,8 @@
 | 個1 | ~~閃電下單加「市價買 / 市價賣」~~ **已出貨 2026-08-17(PR #60;D4 現股安全首單待 user 盤中)** | 🟢 新功能 + 🔴(/mod,**安全敏感**) | R1 | M(D2 拍板三梯) | 型別/後端 `price_type:"market"` 全鏈已存在,三梯 `clickPrice` 寫死 `"limit"`;缺 UI 觸發點 + 閘用估價;期貨/個股期市價 literal 從未實測 |
 | 個2 | ~~分時圖標出使用者買賣成交點~~ **已出貨 2026-08-17(mod/intraday-fill-marks;近似版;真成交截圖待 user 盤中)** | 🟢 新功能(/mod) | R2 | S(拍板近似版) | `CapitalStore._Agg` 把逐筆 D 回報聚合掉,只剩 `avg_fill_price`+最新事件時間 → **D7 拍板近似版:每張委託一點,不動後端**;圖層幾何工具現成(`minuteKey`/`minuteToX`/`toY`、高低點標記範式) |
 | 個3 | ~~自選清單 / 單檔 / 群組卡顯示倉位與損益~~ **已出貨 2026-08-17(PR #62;SC-6 真倉位截圖待 user 盤中)** | 🟢 新功能(/mod) | R3 | M | 部位資料與 `positionEcon()`(含費稅損益)已在閃電梯內;三處 UI 目前零倉位資訊;sec 用股號 / 個股期用契約碼兩套鍵 |
-| 綜1 | 加權/櫃買分時圖直接改用個股分時圖 | 🔴 UI 換元件(/mod) | R4 | L | `MarketChart.IntradayChart` 是獨立自繪(無 hover/readout/副圖),`IndexSeries.minutes` 只有 HHMM→收盤價、**無量**(D11 拍板不要量能副圖,免 probe)→ 需 adapter + core 可注入 overlay;PANE_FRAMES 常數重算 |
-| 綜2 | 左欄雙圖縮小、騰落線增高 | 🔴 UI 佈局(/mod) | R4 | S | 騰落線是固定 `h-24` 不參與 flex 分配;雙圖 `min-h-80`/`min-h-48` 地板算式連動 → 與綜1 同輪(換元件後 chrome 高度才定,避免地板算兩次) |
+| 綜1 | ~~加權/櫃買分時圖直接改用個股分時圖~~ **已出貨 2026-08-17(PR #63;真 TC4 層與 SC-5 個股頁前後對照待 prod 重啟過目)** | 🔴 UI 換元件(/mod) | R4 | L | `MarketChart.IntradayChart` 是獨立自繪(無 hover/readout/副圖),`IndexSeries.minutes` 只有 HHMM→收盤價、**無量**(D11 拍板不要量能副圖,免 probe)→ 需 adapter + core 可注入 overlay;PANE_FRAMES 常數重算 |
+| 綜2 | ~~左欄雙圖縮小、騰落線增高~~ **已出貨 2026-08-17(PR #63;兩欄態 6:5,CSS 變數收進 @[1050px])** | 🔴 UI 佈局(/mod) | R4 | S | 騰落線是固定 `h-24` 不參與 flex 分配;雙圖 `min-h-80`/`min-h-48` 地板算式連動 → 與綜1 同輪(換元件後 chrome 高度才定,避免地板算兩次) |
 | 相1 | 達錢有沒有韓指 / 日經即時資料 | 事實問答 → 🟢 config 加腿(/mod) | R5 | S | **日經有**(TC4 Fut 樹 OSE `NK225`/`NK225M`/`NK225MC`/`NK400` + SGX `NK` + CME `NKD`);**韓指無**(2026-06-30 全量 dump 17 個交易所段無 KRX、三檔 catalog 零命中 KOSPI);加腿只改 `configs/correlation.json`(SC-8 契約已鎖) |
 
 沒有一條是「線上 bug」(全是行為新增/改動),故全走 `/mod`;user 若指某條實為 bug(例如綜1
