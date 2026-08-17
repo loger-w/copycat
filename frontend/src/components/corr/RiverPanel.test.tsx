@@ -40,7 +40,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("RiverPanel", () => {
-  it("預設並排:兩顆鈕都在,並排為 accent,六腿名皆出現", () => {
+  it("預設並排:兩顆鈕都在,並排為 accent,各腿名皆出現", () => {
     render(<RiverPanel state={state()} />);
 
     const side = screen.getByRole("button", { name: "並排" });
@@ -92,7 +92,7 @@ describe("RiverPanel", () => {
       "false",
     );
     // 圖上腿名標籤消失(SVG 內的 text),checkbox 上的字不算
-    const svg = screen.getByRole("img", { name: "六腿重疊走勢" });
+    const svg = screen.getByRole("img", { name: "各腿重疊走勢" });
     expect(svg.textContent).not.toContain("富台");
     expect(svg.textContent).toContain("台指");
   });
@@ -101,7 +101,7 @@ describe("RiverPanel", () => {
     render(<RiverPanel state={state()} />);
     fireEvent.click(screen.getByRole("button", { name: "重疊" }));
 
-    const svg = screen.getByRole("img", { name: "六腿重疊走勢" });
+    const svg = screen.getByRole("img", { name: "各腿重疊走勢" });
     expect(svg.textContent).toContain("+1.05%");
     expect(svg.textContent).toContain("-1.05%");
   });
@@ -130,7 +130,7 @@ describe("RiverPanel", () => {
   it("state 為 null → 等待文案", () => {
     render(<RiverPanel state={null} />);
 
-    expect(screen.getByText("等待六腿資料…")).toBeTruthy();
+    expect(screen.getByText("等待各腿資料…")).toBeTruthy();
   });
 
   it("盤別顯示在標題", () => {
