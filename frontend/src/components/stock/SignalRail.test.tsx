@@ -178,7 +178,8 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
     renderRail({ signals: [CDP, CRASH] });
     const texts = rowTexts();
     expect(texts.length).toBe(1);
-    expect(texts[0]).toContain("突破 CDP 中軸・爆跌 -2.10%");
+    // 段序 = 到達序(輸入新在前 → 反序),與 Discord 合併訊息 rows[0] 同一則
+    expect(texts[0]).toContain("爆跌 -2.10%・突破 CDP 中軸");
     expect(texts[0]).toContain("CDP 穿越・爆拉爆跌"); // 規則名同樣去重後串接
   });
 
@@ -189,13 +190,13 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
     expect(list.getByText("爆跌 -2.10%").className).toContain("text-bear");
   });
 
-  it("合併列的價格 / 時間取組內第一則,點列仍 onSelect(code)", () => {
+  it("合併列的價格 / 時間取組內最早到的那則,點列仍 onSelect(code)", () => {
     const { onSelect } = renderRail({
-      signals: [CDP, sig({ ...CRASH, price: 999_000 })],
+      signals: [sig({ ...CDP, price: 1_050_000 }), sig({ ...CRASH, price: 999_000 })],
     });
     const [text = ""] = rowTexts();
-    expect(text).toContain("1050"); // 第一則的價格,不是第二則的 999
-    expect(text).not.toContain("999");
+    expect(text).toContain("999"); // 最早到(輸入末筆)的價格,不是最新到的 1050
+    expect(text).not.toContain("1050");
     fireEvent.click(screen.getByText("2330"));
     expect(onSelect.mock.calls).toEqual([["2330"]]);
   });
