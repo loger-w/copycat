@@ -13,7 +13,7 @@ const CDP: SignalRule = {
   enabled: true,
   notify_discord: true,
   cooldown_secs: 300,
-  params: { rearm_ticks: 2 },
+  params: { rearm_ticks: 2, rearm_dwell_secs: 300 },
   cdp_levels: ["ah", "nl"],
 };
 
@@ -104,6 +104,9 @@ describe("SignalRulesDialog 列表", () => {
     const text = screen.getByTestId("rule-row-r1").textContent ?? "";
     expect(text).toContain("AH+NL"); // 監看線
     expect(text).toContain("重新武裝 2 tick");
+    // 🔴 SC-7:駐留秒數是 rearm 能不能解除的另一半門檻,摘要不印它 = 兩條規則
+    // 只差在這一欄時列表上長得一模一樣
+    expect(text).toContain("駐留 300 秒");
     expect(text).toContain("冷卻 300 秒");
   });
 
