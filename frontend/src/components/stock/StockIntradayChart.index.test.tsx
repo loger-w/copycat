@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { IntradayChartCore, StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries } from "@/hooks/useIndexStream";
-import { fmt } from "@/lib/format";
+import { fmt, fmtIndexPts } from "@/lib/format";
 import { indexSeriesToAccum } from "@/lib/index-accum-adapter";
 import { fromSnapshot } from "@/lib/stock-accum";
 import {
@@ -210,12 +210,11 @@ describe("IntradayChartCore mode=\"index\"", () => {
       SPOT_WINDOW,
     );
     const raw = g.priceAtY(100);
-    const rounded = Math.round(raw / 1000) * 1000;
-    expect(screen.getByTestId("price-tag-text").textContent).toBe(fmt(rounded));
-    // 整數點:不帶小數(R4 real-env:「24285.42」溢出價標盒)
+    expect(screen.getByTestId("price-tag-text").textContent).toBe(fmtIndexPts(raw));
+    // 加權量級(五位數)收整數點:不帶小數(R4 real-env:「24285.42」溢出價標盒)
     expect(screen.getByTestId("price-tag-text").textContent).not.toMatch(/\./);
     // 自檢:這個 y 上 tick-snap 與整數點真的不同(否則本案恆綠)
-    expect(fmt(rounded)).not.toBe(fmt(snapDown(raw)));
+    expect(fmtIndexPts(raw)).not.toBe(fmt(snapDown(raw)));
   });
 
   it("左緣 y 刻度 / CDP 價位標 / 掛牌一律整數點(軸帶 36/40px 裝不下「24283.54」;review C-2)", () => {

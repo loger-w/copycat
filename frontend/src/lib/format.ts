@@ -35,3 +35,14 @@ export function fmt(milli: number): string {
   const v = milli / 1000;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
+
+/** 指數軸帶用的價位文字(index 態的 y 刻度 / CDP `價位*` / MA 價位標 / 掛牌 / hover 價標)。
+ *
+ *  `fmt` 口徑但**超過 6 字就收整數點**:左緣價位帶 `Y_AXIS_W` 36px / 右緣 40px 是為個股
+ *  「1005.0」(6 字)設計的,加權「24283.54」8 字 @0.5625rem ≈ 40px 會把開頭裁出畫布
+ *  (code review C-2 / R4 real-env 截圖);櫃買「238.97」6 字裝得下、且 1 點 = 0.4% 收整數
+ *  會失真,所以不是一律整數。閾值 6 = 個股既有最寬內容,與 `EDGE_LABEL_W` 的推導同源。 */
+export function fmtIndexPts(milli: number): string {
+  const full = fmt(milli);
+  return full.length > 6 ? String(Math.round(milli / 1000)) : full;
+}
