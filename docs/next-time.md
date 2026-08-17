@@ -1,3 +1,17 @@
+## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
+
+- [ ] **相關係數 tab 七腿 prod 重啟後過目**:小日經 fuchsia(river-7)與標普薰衣草紫 / accent 桃紅可辨度;
+  並排模式三欄格局第 7 卡獨佔第 4 列(1080p 側車截圖 `.claude/mod/corr-nk225m-leg/evidence/SC-3-cards-nk225m.jpg`)—
+  若嫌浪費,候選 = 卡片 grid 改 `auto-fit minmax` 或 4 欄;本輪 out of scope。
+- [ ] **每日台北 14:45–16:00 小日經腿必 stale / corr「—」/ 江波圖夜盤窗前 60 格空**(OSE 日盤收 → 夜盤開;
+  台指夜盤 15:00 已開)= 預期行為非訂閱失效(判別:16:00 後恢復推播)。若覺得刺眼,候選 = 腿級「休市中」
+  標示(需 OpenTime/CloseTime 語意,另案)。
+- [ ] 🔵 程式碼註解 / docstring「六腿」字樣批次改腿數無關(review R7):`corr_engine.py:1,125` /
+  `river_models.py:1` / `river_state.py:1` / `app.py:1633` / `frontend/src/types.ts:217` / `CorrPage.tsx:10` /
+  `RiverCards.tsx:3` / `RiverOverlay.tsx:1,49`。純註解,零行為。
+- [ ] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
+  可帶 `--listen-secs` 拉長在 13:5x 起跑順帶驗。
+
 ## 2026-08-17(mod/index-intraday-core batch3 R4 留尾)
 
 - [ ] **真 TC4 指數推播下的 core 圖 + 個股頁 / 群組圖牆前後對照待 prod 重啟過目**(側車 fake 序列已驗;
