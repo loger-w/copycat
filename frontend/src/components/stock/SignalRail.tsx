@@ -4,9 +4,16 @@
  *  元件內不呼叫 `useSignalFeed` / `useSignalRules`,免得每個測試都要架 TQ provider,
  *  也讓規則切換的送出只有一個註冊點。 */
 
+import { Fragment } from "react";
+
 import { errText, type SignalRule } from "@/hooks/useSignalRules";
 import { fmt } from "@/lib/format";
-import { kindLabel, type SignalMsg } from "@/lib/signal-model";
+import {
+  groupKindLabels,
+  groupRuleNames,
+  groupSignals,
+  type SignalMsg,
+} from "@/lib/signal-model";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -99,47 +106,60 @@ export function SignalRail({
             那些列帶規則名、來源可辨識,而原本的隱藏語意會讓「剛剛看到的訊號」
             在關掉規則的瞬間整批消失,看起來像資料掉了。 */}
         <ul data-testid="signal-rail-list" className="min-h-0 flex-1 overflow-y-auto">
-          {signals.map((sig) => (
-            <li key={sig.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(sig.code)}
-                className="flex w-full flex-col gap-0.5 border-b border-line px-1 py-1 text-left leading-tight hover:bg-surface"
-              >
-                {/* 兩行式:200px 欄寬一行塞不下時間 + 代號 + 名稱 + 訊號名 + 價格。
-                    第一行是「誰、幾點」,第二行是「哪條規則發的、在什麼價位」。 */}
-                <span className="flex w-full items-baseline gap-1">
-                  <span className="shrink-0 font-mono text-xs text-ink-dim">{hhmm(sig.time)}</span>
-                  <span className="shrink-0 font-mono text-sm text-ink">{sig.code}</span>
-                  <span className="min-w-0 truncate text-xs text-ink-muted">{sig.name}</span>
-                </span>
-                <span className="flex w-full items-baseline justify-between gap-1">
-                  {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
-                      漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
-                      規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
-                      升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
-                  <span
-                    title={
-                      sig.rule_name === undefined || sig.rule_name === ""
-                        ? kindLabel(sig)
-                        : `${kindLabel(sig)}(${sig.rule_name})`
-                    }
-                    className="flex min-w-0 items-baseline gap-1"
-                  >
-                    <span className={cn("min-w-0 truncate text-xs", toneOf(sig))}>
-                      {kindLabel(sig)}
+          {/* **同一 tick 合併成一列**(SC-5):CDP 穿越與爆拉/爆跌常常由同一筆成交
+              同時觸發,逐則一列時同一秒同一檔就吃掉三四列,而 200px 欄寬本來就只
+              放得下十來列。合併只發生在顯示層 —— WS payload / jsonl / toast 仍逐則。 */}
+          {groupSignals(signals).map((group) => {
+            const segments = groupKindLabels(group);
+            const kindText = segments.map((seg) => seg.label).join("・");
+            const ruleText = groupRuleNames(group).join("・");
+            return (
+              <li key={group.key}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(group.code)}
+                  className="flex w-full flex-col gap-0.5 border-b border-line px-1 py-1 text-left leading-tight hover:bg-surface"
+                >
+                  {/* 兩行式:200px 欄寬一行塞不下時間 + 代號 + 名稱 + 訊號名 + 價格。
+                      第一行是「誰、幾點」,第二行是「哪條規則發的、在什麼價位」。 */}
+                  <span className="flex w-full items-baseline gap-1">
+                    <span className="shrink-0 font-mono text-xs text-ink-dim">
+                      {hhmm(group.time)}
                     </span>
-                    {sig.rule_name !== undefined && sig.rule_name !== "" ? (
-                      <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
-                        {sig.rule_name}
-                      </span>
-                    ) : null}
+                    <span className="shrink-0 font-mono text-sm text-ink">{group.code}</span>
+                    <span className="min-w-0 truncate text-xs text-ink-muted">{group.name}</span>
                   </span>
-                  <span className="shrink-0 font-mono text-xs text-ink">{fmt(sig.price)}</span>
-                </span>
-              </button>
-            </li>
-          ))}
+                  <span className="flex w-full items-baseline justify-between gap-1">
+                    {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
+                        漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
+                        規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
+                        升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
+                    <span
+                      title={ruleText === "" ? kindText : `${kindText}(${ruleText})`}
+                      className="flex min-w-0 items-baseline gap-1"
+                    >
+                      {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
+                          整段套第一則的 tone 會把其中一半畫成相反的方向。 */}
+                      <span className="min-w-0 truncate text-xs">
+                        {segments.map((seg, i) => (
+                          <Fragment key={seg.label}>
+                            {i === 0 ? null : <span className="text-ink-muted">・</span>}
+                            <span className={toneOf(seg.sig)}>{seg.label}</span>
+                          </Fragment>
+                        ))}
+                      </span>
+                      {ruleText === "" ? null : (
+                        <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
+                          {ruleText}
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 font-mono text-xs text-ink">{fmt(group.price)}</span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
           {signals.length === 0 ? (
             <li className="px-1 py-2 text-xs text-ink-dim">尚無訊號</li>
           ) : null}
