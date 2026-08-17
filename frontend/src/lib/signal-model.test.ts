@@ -250,6 +250,15 @@ describe("groupKindLabels / groupRuleNames", () => {
     expect(segments[0]?.sig.id).toBe("k2");
   });
 
+  // 同一列的 kind 段與規則名段並排顯示,兩段順序相反時讀起來會對不上號
+  it("規則名序 = 到達序,與 kind 段序一致", () => {
+    const dive = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急殺" });
+    const [group] = groupSignals([base, dive]);
+    expect(groupRuleNames(group!)).toEqual(["早盤急殺", "早盤急拉"]);
+    // 與 kind 段的代表 sig 逐位對齊(段序相同)
+    expect(groupKindLabels(group!).map((s) => s.sig.rule_name)).toEqual(groupRuleNames(group!));
+  });
+
   it("規則名去重、保留首見順序", () => {
     const twin = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急拉" });
     const [group] = groupSignals([base, twin]);
