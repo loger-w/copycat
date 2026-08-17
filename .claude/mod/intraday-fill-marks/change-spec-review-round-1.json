@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "findings": [
+    {"id":"R1","severity":"P0","claim":"ChartToggles 加必填 fills → 4 個整包 literal 測試檔(MarketChart.test:40 / MarketPane.test:40 / MarketPane.size.test:73 / StockIntradayChart.variant.test:49)tsc 紅,未列該紅清單","triage":"CONFIRMED(grep `ChartToggles = {`)","disposition":"accepted","resolution":"§5 該紅清單補四檔(各補 fills:true);current-state §2 敘述修正"},
+    {"id":"R2","severity":"P1","claim":"avg_fill_price 為元、priceMilli 換算點未寫,edge case 1 單位錯","triage":"CONFIRMED","disposition":"accepted","resolution":"SC-1 明寫逐筆 Math.round(avg*1000) 再加權 Math.round;edge case 改毫元算例"},
+    {"id":"R3","severity":"P1","claim":"ChartStatic memo 無既有機械閘;deps 省略;零筆需回 EMPTY_FILLS","triage":"CONFIRMED(test 只有註解)","disposition":"accepted","resolution":"新增 SC-9 memo 閘測試(vi.mock 計次 fillTrianglePoints,hover 連發不增);deps 顯式;fillPoints 零筆回 EMPTY_FILLS"},
+    {"id":"R4","severity":"P1","claim":"geometry.test / futconverge.test / ladder-lots.test / 三梯測試未逐一標不該紅","triage":"CONFIRMED","disposition":"accepted","resolution":"§5 補四組不該紅 + 理由"},
+    {"id":"R5","severity":"P1","claim":"date===today 漏『昨日建立今日成交的活單』,與 aggregateLots 語意不一致","triage":"CONFIRMED(ladder-lots.ts:50-51)","disposition":"accepted","resolution":"SC-1 日期條件改 date===today ∨ actionable;edge case + 測試案補"},
+    {"id":"R6","severity":"P1","claim":"AD-2『個股期無夜盤』與 StkfutLadder.tsx:123 註解矛盾","triage":"CONFIRMED(註解存在;事實未核)","disposition":"accepted","resolution":"AD-2 理由改為 x 窗只有日盤;current-state §1 該列改為『有無夜盤未實證,不作為依據』"},
+    {"id":"R7","severity":"P1","claim":"card readout 246px 追加成交欄必被 overflow-hidden 裁掉,測試恆綠","triage":"CONFIRMED(ChartReadout overflow-hidden + nowrap)","disposition":"accepted","resolution":"SC-4 改:card 變體不追加成交欄(標記承載);variant test 改鎖『card 不追加』"},
+    {"id":"R8","severity":"P2","claim":"markCenterX 型別與 FILL_MARK 不相容","triage":"CONFIRMED","disposition":"accepted","resolution":"fill-marks.ts 自帶 clampFillX(x, w, style);SC-1 補測試案"},
+    {"id":"R9","severity":"P2","claim":"project / fillsAtMinute 未列 SC-1;readout 無 toggles.fills 閘","triage":"CONFIRMED","disposition":"accepted","resolution":"SC-1 補 projectFills / fillsAtMinute;§5 fillField 加閘;SC-5 補 readout 斷言"},
+    {"id":"R10","severity":"P2","claim":"未規定 yDomain 域外不畫;三角 y 未夾制","triage":"CONFIRMED","disposition":"accepted","resolution":"projectFills 域外不畫(同 overlay/極值);尖端 y 不夾(接受最多 ~2px 裁切,明寫);測試案補"},
+    {"id":"R11","severity":"P2","claim":"『極值標記之後』≠ 最上層(MA/VWAP/POC 標籤與現價圈在後)","triage":"CONFIRMED","disposition":"accepted","resolution":"插入點改 ChartStatic 最末一組;SC-3 補 document 順序斷言(polygon 在 day-high 與 MA 標籤之後)"},
+    {"id":"R12","severity":"P2","claim":"safeFutContract 不存在 / data?.orders 解包未寫 / ymdOf 零測試","triage":"CONFIRMED","disposition":"accepted","resolution":"fill-marks.ts 新增 stkfutFillKey(prod, ym) try/catch;§5 寫明 .data?.orders;ymdOf 補 2 案"},
+    {"id":"R13","severity":"P2","claim":"testid 無股號 → 跨卡 getByTestId 會 throw","triage":"CONFIRMED","disposition":"accepted","resolution":"SC-5/SC-6 量法定為 per-card querySelectorAll('[data-testid^=\"fill-\"]') 計數"}
+  ],
+  "summary": {"P0":1,"P1":6,"P2":6,"accepted":13,"rejected":0},
+  "next": "amend spec 各段標 [amendment 2026-08-17: R#] → 限縮 round 2(只審 amendment 段)"
+}

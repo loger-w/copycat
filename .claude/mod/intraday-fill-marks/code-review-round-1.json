@@ -1,0 +1,19 @@
+{
+  "round": 1, "mode": "medium, 2 lens (A 白名單/行為對照, B 測試覆蓋/mutation), opus",
+  "diff": "review-diff.txt (master..22d9420c, frontend only)",
+  "findings": [
+    {"id":"B-1","severity":"P1","file":"StockIntradayChart.tsx:740","claim":"stkfut 態 fillMarks 的 xw 無測試(寫死 SPOT_WINDOW 全綠)","triage":"CONFIRMED(mutation M43 存活)","disposition":"accepted","resolution":"補 stkfut fills 案:08:50 點存在 + 541 x 以 STKFUT_WINDOW 反算"},
+    {"id":"A-1","severity":"P2","file":"fill-marks.ts projectFills","claim":"窗過濾用 `< || >`,NaN 分鐘漏進渲染(review A3 已否決式)","triage":"CONFIRMED","disposition":"accepted","resolution":"改 `!(m >= start && m <= end)` + NaN 案"},
+    {"id":"A-2","severity":"P2","file":"StockIntradayChart.tsx:855","claim":"readout 吃未過濾 fills,域外時圖無三角但 readout 有欄","triage":"CONFIRMED(B M33 同)","disposition":"accepted","resolution":"readout 改吃 fillMarks(同一把尺:窗/域/toggle 一致);spec SC-4 amendment;鎖域外→無欄"},
+    {"id":"A-3","severity":"P2","file":"fill-marks.ts 註解 / spec AD-2","claim":"`date` 實為最新事件日(store 每回報覆寫),非建立日","triage":"CONFIRMED(store.py apply_reply)","disposition":"accepted","resolution":"註解改『最新事件日』;spec AD-2 / edge 10 amendment;next-time 精確版理由補此條"},
+    {"id":"A-4","severity":"P2","file":"fill-marks.ts clampFillX","claim":"夾制在真實寬度下 no-op,註解誇大","triage":"CONFIRMED","disposition":"accepted(僅註解)","resolution":"註解改『僅退化寬度下生效;spec AD-6 字面公式』"},
+    {"id":"B-p2-1","severity":"P2","claim":"key null guard 測試同義反覆","disposition":"rejected_with_reason","resolution":"guard 與 aggregateLots 同形、防禦性;不為它造人工路徑"},
+    {"id":"B-p2-2","severity":"P2","claim":"readout 單側賣 tone bear 無斷言","disposition":"accepted","resolution":"hover 542 → text-bear"},
+    {"id":"B-p2-3","severity":"P2","claim":"toggle 關時 EMPTY_MARKS identity 無閘","disposition":"rejected_with_reason","resolution":"無便宜 oracle(關態不呼叫任何可計次函式);症狀僅掉幀;記 p2_summary"},
+    {"id":"B-p2-4","severity":"P2","claim":"pointerEvents=none 無屬性斷言","disposition":"accepted","resolution":"fills-layer 屬性斷言一行"},
+    {"id":"B-p2-5","severity":"P2","claim":"有成交卡的 memo identity 無覆蓋(fillsMap useMemo 拿掉全綠;StockChart deps 放 contract 全綠)","disposition":"accepted","resolution":"GroupGridView.memo.test 加案:orders 路由回 2330 一筆 → quotes 換 identity 兩輪,2330 卡 render 次數與現況相同(fills identity 穩定)"},
+    {"id":"A-doc","severity":"P2","claim":"GroupGridView 註解仍寫『四鈕』","disposition":"accepted","resolution":"改五鈕"}
+  ],
+  "p2_summary": "A:4(1 code+test / 1 code+spec / 2 註解);B:6(接受 3 / 拒 2 / 併 A-2 1)。白名單 W-1..W-9 lens A 逐條核為全數未破。",
+  "whitelist_check": "PASS(lens A 逐條)"
+}

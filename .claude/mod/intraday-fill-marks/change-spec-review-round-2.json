@@ -1,0 +1,15 @@
+{
+  "round": 2, "scope": "限縮輪(只審 round-1 amendment 段)", "reviewer": "change-spec-reviewer (opus)",
+  "findings": [
+    {"id":"R2-1","severity":"P1","claim":"群組 testid fill-marks 與量法 [data-testid^=fill-] 互撞 off-by-one","disposition":"accepted","resolution":"群組改 fills-layer(恆 render);量法收窄 polygon[data-testid^=\"fill-\"]"},
+    {"id":"R2-2","severity":"P1","claim":"vi.mock 檔案級,替身不 delegate 會弄紅同檔 SC-3 頂點斷言","disposition":"accepted","resolution":"SC-9 明寫 vi.fn(actual.fillTrianglePoints) delegate"},
+    {"id":"R2-3","severity":"P1","claim":"SC-9 N 可為 0 → 恆綠","disposition":"accepted","resolution":"fixture ≥2 窗內域內點,先斷言 calls === 筆數"},
+    {"id":"R2-4","severity":"P1","claim":"∨ actionable 無日期界,幽靈單畫上今日圖","disposition":"accepted","resolution":"改 date===today ∨ (actionable ∧ date===yesterday);FillDates/fillDates 供給;殘餘風險明列"},
+    {"id":"R2-5","severity":"P2","claim":"key null 無 guard","disposition":"accepted","resolution":"key null → EMPTY_FILLS + 測試案"},
+    {"id":"R2-6","severity":"P2","claim":"W-6 未同步 card 不追加","disposition":"accepted","resolution":"W-6 補 page 限定"},
+    {"id":"R2-7","severity":"P2","claim":"futconverge 列條件式逃逸口","disposition":"accepted","resolution":"改無條件不該紅,理由 :105/:126 存在性斷言"},
+    {"id":"R2-8","severity":"P2","claim":"新 hook 落點可能在早退之後","disposition":"accepted","resolution":"§5 兩列補位置約束"}
+  ],
+  "summary": {"P0":0,"P1":4,"P2":4,"accepted":8},
+  "exit": "無 P0;P1 全修於 spec(不再加輪,依 core-flow §3 預設);進 §4 實作"
+}
