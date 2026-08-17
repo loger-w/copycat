@@ -95,6 +95,13 @@ _BALANCE_CHAIN_TIMEOUT_S = 10.0
 # 證券側用 reply.SEC_MARKETS 同一份)
 _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
 
+def _today_ymd() -> str:
+    """價格別記憶的日界 = 本機日曆日(與回報的委託建立日同時區)。
+    抽成 module 函式讓測試注入固定值 —— 測試自己也算 `time.strftime` 的話,
+    等於拿被測程式的實作驗它自己(review r1 IMPL-5)。"""
+    return time.strftime("%Y%m%d")
+
+
 _WriteReq = (
     StockOrderRequest
     | FutureOrderRequest
@@ -264,7 +271,8 @@ class CapitalClient:
         self, action: str, req: _WriteReq, fut: asyncio.Future[tuple[str, int]]
     ) -> None:
         """timeout / route 取消後 COM 晚到的結果:補一行後置審計(late=true)+ warning
-        (review B1)。done_callback 在 loop 上跑,同步 append_audit 可接受(罕見路徑)。"""
+        (review B1),並補記價格別(review r1 IMPL-4)。
+        done_callback 在 loop 上跑,同步 append_audit 可接受(罕見路徑)。"""
         if fut.cancelled():
             return
         exc = fut.exception()
@@ -283,6 +291,12 @@ class CapitalClient:
             "寫入結果晚到(action=%s, seq_no=%s, ok=%s)— 補記審計 late 行",
             action, result.seq_no, result.ok,
         )
+        # 晚到的成功結果同樣要記價格別(review r1 IMPL-4):timeout / route 取消時
+        # 「結果未知」不記是對的,但單真的成立了就得補 —— 否則一次 timeout 讓這張
+        # 市價單在委託列表永久失標。刪/改/減量的 req 沒有 price_type → 不記。
+        price_type = getattr(req, "price_type", None)
+        if isinstance(price_type, str):
+            self._note_price_type(result, price_type)
         record = self._record(action, req, result=result)
         record["late"] = True
         try:
@@ -684,13 +698,20 @@ class CapitalClient:
 
     # ------------------------------------------------------------------ 送單
 
-    def _note_price_type(self, result: OrderResult, price_type: str) -> None:
+    def _note_price_type(self, result: OrderResult, price_type: str | None) -> None:
         """送單成功且拿到委託序號 → 把價格別記進 store(SC-10)。
-        群益回報無價格別欄,委託列表要標「市價」只能靠這一手;拒單 / timeout
-        (seq_no=None)不記 —— 沒有委託在市場上的標籤是假訊息。
-        日期用本機日,與回報的委託建立日同時區。平倉路徑也經過送單函式 → 一併標。"""
-        if result.ok and result.seq_no:
-            self.store.note_price_type(result.seq_no, price_type, time.strftime("%Y%m%d"))
+        群益回報無價格別欄,委託列表要標「市價」只能靠這一手。
+
+        兩條不記的路徑語意不同(review r1 IMPL-4):
+        - **拒單**(code≠0,seq_no=None):市場上沒有這張單,標籤會是假訊息。
+        - **timeout**(結果未知):單可能已在市場上,只是結果還沒回來 —— 當下不記,
+          但 COM 晚到結果若帶 seq 就補記(`_on_late_result`),否則本 app 送出的市價單
+          會因為一次 timeout 就永久失標。
+        `price_type` 為 None = 該請求沒有價格別(刪單 / 改價 / 減量)→ 不記。
+        日期用本機日,與回報的委託建立日同時區(日界語意的已知限制見 store.note_price_type)。
+        平倉路徑也經過送單函式 → 一併標。"""
+        if price_type and result.ok and result.seq_no:
+            self.store.note_price_type(result.seq_no, price_type, _today_ymd())
 
     async def submit_stock_order(
         self, req: StockOrderRequest, *, action: str = "order"
@@ -811,7 +832,15 @@ class CapitalClient:
         def _do() -> tuple[str, int]:
             return self._com.correct_price(self._user_id, account, req.seq_no, price_str)
 
-        return await self._execute_write(action="correct_price", req=req, gate=gate, com_call=_do)
+        result = await self._execute_write(
+            action="correct_price", req=req, gate=gate, com_call=_do
+        )
+        # 改價成功 = 這張單現在是**限價**單(改價帶的就是限價),原本的「市價」記憶留著
+        # 就會誤標(review r1 IMPL-6)—— 這是唯一一條 false positive 路徑,其餘失效方向
+        # 都只是少標。這裡不看 result.ok:非 ok 能走到這只有 timeout(拒單一律 raise),
+        # 而「結果未知」時改價可能已成立 → 一併作廢,寧可少一個標籤也不誤標。
+        self.store.forget_price_type(req.seq_no)
+        return result
 
     async def decrease_qty(self, req: DecreaseQtyRequest) -> OrderResult:
         gate, account = self._routing(
