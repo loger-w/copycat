@@ -1475,15 +1475,27 @@ async def test_audit_files_use_capital_prefix(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _dated(raw: str, date: str | None = None) -> str:
-    """把委託建立日(idx23)塞進回報字串;預設今日 — store 只在日期相符時帶出 price_type。"""
+_FIXED_YMD = "20260610"
+
+
+def _freeze_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把 client 的日界釘死(review r1 IMPL-5):測試自己算 `time.strftime` 的話,
+    等於拿被測程式的實作去驗它自己 —— 日界口徑改掉也照樣綠。"""
+    monkeypatch.setattr(client_mod, "_today_ymd", lambda: _FIXED_YMD)
+
+
+def _dated(raw: str, date: str = _FIXED_YMD) -> str:
+    """把委託建立日(idx23)塞進回報字串;store 只在日期相符時帶出 price_type。"""
     arr = raw.split(",")
-    arr[23] = date if date is not None else time.strftime("%Y%m%d")
+    arr[23] = date
     return ",".join(arr)
 
 
-async def test_submit_notes_price_type_into_store(tmp_path: Path) -> None:
+async def test_submit_notes_price_type_into_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """證券 + 期貨兩條送單路徑成功後,對應 seq 的委託列都帶得出 price_type。"""
+    _freeze_today(monkeypatch)
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
@@ -1509,8 +1521,11 @@ async def test_submit_notes_price_type_into_store(tmp_path: Path) -> None:
     assert by_seq["SEQF001"].price_type == "limit"
 
 
-async def test_broker_reject_does_not_note_price_type(tmp_path: Path) -> None:
+async def test_broker_reject_does_not_note_price_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """群益拒單(code≠0)→ 沒有委託在市場上,不得留下「市價」標籤(E6)。"""
+    _freeze_today(monkeypatch)
     com = RejectingCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
@@ -1524,4 +1539,58 @@ async def test_broker_reject_does_not_note_price_type(tmp_path: Path) -> None:
             ),
         )
     client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    assert client.store.orders()[0].price_type is None
+
+
+async def test_late_result_notes_price_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """timeout 當下「結果未知」不記,COM 晚回帶 seq → 補記(review r1 IMPL-4)。
+    不補的話,一次 timeout 就讓這張市價單在委託列表**永久**失標。"""
+    _freeze_today(monkeypatch)
+    monkeypatch.setattr(client_mod, "_WRITE_TIMEOUT_S", 0.01)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._loop = asyncio.get_running_loop()
+    # 不 drain 佇列 = COM 卡死 → 結果未知
+    res = await client.submit_stock_order(
+        StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=2, price_type="market")
+    )
+    assert res.ok is False and res.seq_no is None
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    assert client.store.orders()[0].price_type is None  # 結果未知的當下不記
+    cmd = client._cmd_q.get_nowait()
+    assert cmd is not None
+    fn, fut = cmd
+    fut.set_result(fn())  # COM 晚回(執行緒側 _settle 等價)
+    await asyncio.sleep(0)  # 消化 done_callback
+    assert client.store.orders()[0].price_type == "market"
+
+
+async def test_correct_price_forgets_price_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """改價成功 → 這張單現在是限價單,「市價」標籤必須消失(review r1 IMPL-6):
+    留著就是委託列表上唯一一條會**誤標**的路徑。"""
+    _freeze_today(monkeypatch)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    await _drive(
+        client,
+        lambda: client.submit_stock_order(
+            StockOrderRequest(
+                stock_no="2330", buy_sell="buy", price=590.0, qty=2, price_type="market"
+            )
+        ),
+    )
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    assert client.store.orders()[0].price_type == "market"
+    await _drive(
+        client,
+        lambda: client.correct_price(
+            CorrectPriceRequest(seq_no="SEQ0001", market="sec", price=580.0)
+        ),
+    )
     assert client.store.orders()[0].price_type is None

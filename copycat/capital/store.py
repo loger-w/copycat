@@ -162,12 +162,29 @@ class CapitalStore:
     def note_price_type(self, seq_no: str, price_type: str, date: str) -> None:
         """記下本 app 送出的價格別(送單成功且拿到 seq 時呼叫)。
         `date` = 送出當日 YYYYMMDD:server 長跑跨日、券商 seq 若重用,
-        沒有日期界就會把今日的限價單標成昨日那張的「市價」(review R7)。"""
+        沒有日期界就會把今日的限價單標成昨日那張的「市價」(review R7)。
+
+        ⚠ 這個 `date` 與回報的**委託建立日**(`_Agg.date`)是否恆等,夜盤(跨午夜的個股期
+        / 期貨)與預約單兩種情形**未實證**(review r1 IMPL-5)。不符時 `_price_type_of`
+        帶不出標籤 —— fail-safe 方向:只會缺「市價」標籤,不會把限價單誤標成市價。
+
+        同鎖內順手 prune 掉**其他日期**的舊項(review r1 IMPL-7):它們早已因日期不符而
+        不會帶出,留著只是讓 dict 隨 server 長跑單調成長。"""
         with self._lock:
+            stale = [s for s, (_pt, d) in self._price_types.items() if d != date]
+            for s in stale:
+                del self._price_types[s]
             self._price_types[seq_no] = (price_type, date)
 
+    def forget_price_type(self, seq_no: str) -> None:
+        """作廢某筆的價格別記憶(改價成功時呼叫)。
+        市價單被改成限價後標籤還在 = 唯一一條會**誤標**的路徑(其餘失效方向都只是少標)。"""
+        with self._lock:
+            self._price_types.pop(seq_no, None)
+
     def _price_type_of(self, a: _Agg) -> str | None:
-        """委託日與記錄日相符才帶出;委託日缺(None)無從比對 → 不帶,不猜。"""
+        """委託日與記錄日相符才帶出;委託日缺(None)無從比對 → 不帶,不猜。
+        兩者的日界語意(夜盤 / 預約單)未實證 — 見 `note_price_type` 的 ⚠。"""
         noted = self._price_types.get(a.seq_no)
         if noted is None or a.date is None:
             return None

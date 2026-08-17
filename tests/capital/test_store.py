@@ -463,6 +463,31 @@ def test_price_type_not_applied_across_days() -> None:
     assert s2.orders()[0].price_type is None
 
 
+def test_note_price_type_prunes_other_days() -> None:
+    """review r1 IMPL-7:_price_types 只增不減,server 長跑數週就是一路長。
+    寫入時同鎖 prune 掉其他日期的項 —— 它們早已因日期不符而不會帶出。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260610")
+    s.note_price_type(SEQ_B, "market", "20260611")  # 換日 → 昨日那筆該被清掉
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
+    s.apply_reply(_evt(seq=SEQ_B, date="20260611"))
+    by_seq = {o.seq_no: o for o in s.orders()}
+    assert by_seq[SEQ_A].price_type is None  # 已 prune(即使日期本來相符)
+    assert by_seq[SEQ_B].price_type == "market"
+
+
+def test_forget_price_type_drops_label() -> None:
+    """review r1 IMPL-6:改價後標籤必須作廢 —— 市價單改成限價還標「市價」
+    是唯一一條會誤標的路徑。查無此 seq 時 forget 是 no-op(不 raise)。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260610")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
+    assert s.orders()[0].price_type == "market"
+    s.forget_price_type(SEQ_A)
+    assert s.orders()[0].price_type is None
+    s.forget_price_type("NO_SUCH_SEQ")
+
+
 def test_price_type_survives_clear_and_replay() -> None:
     """clear() 只清委託聚合(回報重連重播前必做);送單意圖不是回報事件,
     清掉的話重播後本 app 送的市價單全體失標。"""
