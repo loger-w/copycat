@@ -106,6 +106,24 @@ describe("RiverPanel", () => {
     expect(svg.textContent).toContain("-1.05%");
   });
 
+  it("重疊圖:首筆晚於最早腿的腿標示「自 HH:MM 起算 0%」(基準時點分歧;小日經 16:00 開盤)", () => {
+    const s = state();
+    // 納指 09:55 才有第一筆(offset 70 → 525+70),台指 / 富台 08:55(offset 10)
+    s.legs.NQ = {
+      label: "納指",
+      minutes: { "70": 30_000_000, "80": 30_300_000 },
+      last: 30_300_000,
+      last_minute: 80,
+    };
+    render(<RiverPanel state={s} />);
+    fireEvent.click(screen.getByRole("button", { name: "重疊" }));
+
+    expect(screen.getByText("納指 自 09:55 起算 0%")).toBeTruthy();
+    // 同時起算的腿不標
+    expect(screen.queryByText(/台指 自 .* 起算/)).toBeNull();
+    expect(screen.queryByText(/富台 自 .* 起算/)).toBeNull();
+  });
+
   it("重掛後模式與勾選狀態復原", () => {
     window.localStorage.setItem("copycat-river-mode", "overlay");
     window.localStorage.setItem("copycat-river-legs", JSON.stringify(["TWN"]));
