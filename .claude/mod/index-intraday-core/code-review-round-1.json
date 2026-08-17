@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "base": "c958b141",
+  "head_reviewed": "26f83a53",
+  "lenses": ["correctness-memo (opus)", "test-coverage-whitelist (opus)"],
+  "findings": [
+    {"id":"C-1","severity":"P1","file":"frontend/src/lib/stock-intraday-svg.ts","claim":"pegLabels down 側槽位次序與價位倒反(較低價畫在較高價上面),新測試把倒序鎖成正確","disposition":"accepted","fix":"9002a935:down 側由該側最後一顆貼下緣起算;pegs.test 改期望 + 補 nl.y < al.y 語意鎖"},
+    {"id":"C-2","severity":"P1","file":"frontend/src/components/stock/StockIntradayChart.tsx","claim":"index 態左緣價位帶 36px 裝不下「23018.44」8 字,y 刻度 / hover 價標右對齊被裁;fixture 全整千測不到","disposition":"accepted(與 real-env 截圖同一發現:「4285.42」被裁)","fix":"9002a935 + c326dee0:lib/format::fmtIndexPts(fmt 超過 6 字才收整數點;櫃買 238.97 保留小數)套 y 刻度(ChartStatic 新 tickText prop,stock 預設 fmt 不變)/ CDP 價位* / MA 價位標 / 掛牌 / hover 價標;fixture 改帶小數(cdp 23_051_440 / ma5 23_018_440)"},
+    {"id":"C-3","severity":"P2(行為級)","file":"frontend/src/components/index/IndexPage.tsx","claim":"section 改 flex 分配 + min-h-0 後,兩欄態較矮視窗 section 分到的高 < 家數帶 + 騰落線 10rem 地板 → 溢出由主 grid 捲軸接住(舊 shrink-0 永不被壓)","disposition":"accepted_as_known_risk","fix":"實測:3:2 在 864p 已溢出 18px(印證),調 6:5 後 1080p / 864p 皆不捲(689c0a6a);更矮的兩欄視窗(容器 ≥1050 且高 < ~800)會出現主 grid 捲軸 = 既有逃生口語意(spec §4 edge 3),記 Known Risks KR-3;min 地板維持 10rem(D12 拍板 min-h-40)"},
+    {"id":"T-1","severity":"P1","file":"frontend/src/components/index/MarketChart.test.tsx","claim":"SC-2 的 priceText 兩落點只鎖了 MA;CDP fixture 全為 5 點倍數 → levelText 改回 fmtTickPrice 仍全綠","disposition":"accepted","fix":"9002a935:OVERLAY_IN.cdp.cdp = 23_051_440(印 23051*),自檢 fmtTickPrice(23_051_440) !== \"23051\";index.test OVERLAY_IDX.cdp.cdp = 23_001_440(印 23001*)"}
+  ],
+  "p2_summary": {
+    "correctness": "(1) adapter 不擋 0 值(後端 _millipt(\"0\") 回 0)→ 已修 4d16f307(value > 0 / p > 0 + 測試);(2) 掛牌文字寫死 fmt 不吃 priceText → 已修 9002a935;(3) 說明列閘註解過時 → 已修;(4) MarketPane 分時態 unitScale=1 死值 → 實查:只在 overlay/candle 分支計算,無死值(REFUTED);(5) 每 tick 重折 adapter 打穿 ChartStatic memo → 與 KR-2 一致,可接受。",
+    "test-coverage": "(1) index-chart-svg.ts 的 IndexPt / RightEdgeLabel / RightEdgeInput / buildIndexGeometry / rightEdgeLabels + index-chart-svg.test 3 個 describe 自本輪起失去 production caller → next-time 擴寫成整個 cluster;(2) INTRADAY_CHROME_Y export 無外部讀者 → next-time(測試改 import 它);(3) AdvanceDeclineChart 根 flex 0 1 auto → 1 1 0% 非逐值等價(單欄態由 auto 高 section 論證等價)→ 768p 實測 adlRootH 120 / wrapper 96 與改前一致(evidence SC-6-layout-768p.json);(4) SC-1 readout tone / SC-2 掛牌配色 / SC-3 高===低 在 index 態無專屬斷言 → 截圖對照承接;(5) outOfDomainLevels 與 overlayLines 邊界等值互斥無測試 → 既有債;(6) MarketChart.test refLine 取第一條 2 3 虛線靠 render 順序 → 已註記;(7) 既有 assertion 改動全落 spec §3.5 該紅格,無放寬;(8) 六顆 commit 分類 / tag 逐一相符;(9) MarketPane.size 量測案期望值由 paneIntradayBox 現算但算式另有字面鎖 → 非 vacuous。"
+  },
+  "post_fix_head": "c326dee0",
+  "verification_after_fix": "vitest src/components src/lib App.test 1934 passed;tsc 0;eslint 0(見 verification.md 全量 gate)"
+}

@@ -1,0 +1,1207 @@
+diff --git a/frontend/src/components/index/AdvanceDeclineChart.tsx b/frontend/src/components/index/AdvanceDeclineChart.tsx
+index 39764765..912a7d59 100644
+--- a/frontend/src/components/index/AdvanceDeclineChart.tsx
++++ b/frontend/src/components/index/AdvanceDeclineChart.tsx
+@@ -64,8 +64,9 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
+     })
+     .filter((v): v is { minute: number; net: number } => v !== null);
+ 
+-  // 高度改由 CSS 固定(h-24),viewBox 高反推自實際長寬比 —— 改版前是「寬決定高」
+-  // (寬 × 150/640),左欄 930px 時這條線獨佔 218px,一頁總覽的高度預算吃不下。
++  // 高度由 CSS 決定(單欄態 `h-24`、兩欄態由外層 flex 指派,見下方 wrapper 註解),
++  // viewBox 高一律反推自量到的長寬比 —— 改版前是「寬決定高」(寬 × 150/640),左欄
++  // 930px 時這條線獨佔 218px 且與版面預算無關,一頁總覽吃不下。
+   const [sizeRef, size] = useContainerSize<HTMLDivElement>();
+   const vbHeight =
+     size.width > 0 && size.height > 0
+@@ -73,13 +74,28 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
+       : SIZE.height;
+ 
+   return (
+-    <div data-testid="adl-chart" className="flex flex-col gap-1">
++    // `min-h-0 flex-1`:兩欄態時 IndexPage 的 section 拿到「左欄剩餘高的 2/5」,這一層
++    // 要把它一路傳給下面那支量測 wrapper(可縮鏈斷一段,wrapper 就吃不到高)。單欄態
++    // 的 section 是 auto 高、沒有自由空間,`flex-1` 於是等同內容高 = 改動前行為。
++    <div data-testid="adl-chart" className="flex min-h-0 flex-1 flex-col gap-1">
+       <span className="text-sm text-ink">騰落線</span>
+       {/* 恆存 wrapper(空態文案也在其中):ref 只掛有資料那支的話,盤前那段量到 0×0
+           而 hook 不會重跑 —— 第一筆資料進來時圖仍是 fallback 比例(useContainerSize
+           呼叫端契約 1)。fallback 態由 svg `h-full w-full` + preserveAspectRatio 預設
+-          meet 縮放置中承接,不溢出(W-10)。 */}
+-      <div ref={sizeRef} className="flex h-24 shrink-0 items-center justify-center">
++          meet 縮放置中承接,不溢出(W-10)。
++
++          高度是兩態的:**單欄態** `--idx-*` 未設 → `[flex:var(…,0 0 auto)]` 展開成
++          `shrink-0` 的舊值,`h-24` 生效 = 改動前的 96px 逐值不變(SC-6 1366×768)。
++          **兩欄態** IndexPage 左欄把 `--idx-adl-wrap-flex` 設成 `1 1 0%`,basis 0% 蓋掉
++          `h-24`,實際高改由外層 flex 指派(= section 扣掉家數帶後的剩餘);地板改由
++          `--idx-adl-min` 的 10rem 給 —— 它是 min-height 地板,不是指定高,分配權仍在
++          外層 flex(useContainerSize 呼叫端契約 2:量測型 svg 的高必須由容器決定)。
++          變數為何掛在左欄而不是這裡:最近的 `@container` 祖先是左欄,`@[1050px]:`
++          寫在這一層量到的是左欄寬(630–930px)永不成立。 */}
++      <div
++        ref={sizeRef}
++        className="flex h-24 items-center justify-center [flex:var(--idx-adl-wrap-flex,0_0_auto)] [min-height:var(--idx-adl-min,auto)]"
++      >
+         {points.length === 0 ? (
+           <p className="text-sm text-ink-muted">盤中累積後顯示</p>
+         ) : (
+diff --git a/frontend/src/components/index/IndexPage.tsx b/frontend/src/components/index/IndexPage.tsx
+index ad1c5903..0aab71d5 100644
+--- a/frontend/src/components/index/IndexPage.tsx
++++ b/frontend/src/components/index/IndexPage.tsx
+@@ -127,17 +127,33 @@ export function IndexPage({
+       >
+         {/* 左欄自己也是 container:雙圖的 640px 斷點量的是**左欄寬**,掛在 root 上量到的
+             會是整頁寬(右欄佔掉的 2fr 也算進去)→ 兩張圖在真正塞不下時仍硬並排。
+-            `min-h-0` **只在兩欄態**:單欄態下它會讓左欄再也撐不高主 grid(同上)。 */}
+-        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0">
++            `min-h-0` **只在兩欄態**:單欄態下它會讓左欄再也撐不高主 grid(同上)。
++
++            **四個 `--idx-*` 變數就是「兩欄態 3:2」的發點**:雙圖 grid / 家數帶 section /
++            騰落線 wrapper 的最近 `@container` 祖先正是左欄自己(見上一句),兩欄態左欄
++            只有 630–930px → 直接寫在它們身上的 `@[1050px]:flex-[3]` 永遠不成立
++            (frontend-conventions「巢狀 container」陷阱,與 pane 層 min-h-0 同一個教訓)。
++            量得到 root 寬的只有左欄本身,所以由左欄設變數、子節點讀變數;**每個變數的
++            預設值 = 改動前那個 class 的展開值**,單欄態逐值不變由建構保證(W-4)。
++            比例 3:2 = 兩張指數圖比一條騰落線資訊密度高;1080p 左欄約 900px 時騰落線
++            約 270px(現 96px 的 2.8 倍),仍滿足 SC-6「≥ 0.6 × figure 高」。 */}
++        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0 @[1050px]:[--idx-chart-flex:3_1_0%] @[1050px]:[--idx-adl-flex:2_1_0%] @[1050px]:[--idx-adl-wrap-flex:1_1_0%] @[1050px]:[--idx-adl-min:10rem]">
+           <BasisRow txf={txf} twse={twse} />
+           {/* 顯式斷點取代舊 auto-fit minmax(480px):auto-fit 量的是這個 grid 自己的寬,
+               與左欄 container 同寬故語意等價,但斷點值得寫在看得見的地方(W-12)。
+               640 而非 700:1440×900 兩欄態左欄 655px 也要並排,否則兩圖直排 + 捲動。
+ 
+-              `flex-1 min-h-80` 而非 `flex-1 min-h-0`(amendment r3):min-h-0 的軌可以被
+-              壓到低於內容高,圖卡溢出壓在家數帶上;20rem 地板 = 標的列 28 + 週期列折 2 行
+-              56 + gap 24 + figure 192,到地板後左欄總高超過主 grid → 逃生口才接得住。 */}
+-          <div className="grid grid-cols-1 gap-3 flex-1 min-h-80 @[640px]:grid-cols-2">
++              `[flex:var(--idx-chart-flex,1_1_0%)]` 取代原本的 `flex-1`:**預設值就是
++              `flex-1` 的展開值**,單欄態(左欄沒設變數)逐值不變;兩欄態左欄把它設成
++              `3 1 0%`,與家數帶 section 的 `2 1 0%` 湊成 3:2。不寫成 `@[1050px]:flex-[3]`
++              的理由見左欄那段註解(最近 container 是左欄,那個變體永不成立)。
++              **不能同時留獨立的 `flex-1` token**:兩支 flex utility 誰蓋誰由 Tailwind 產出
++              順序決定,留著就有一半機率把 shorthand 蓋掉、3:2 靜默失效。
++
++              `min-h-80` 而非 `min-h-0`(amendment r3):min-h-0 的軌可以被壓到低於內容高,
++              圖卡溢出壓在家數帶上;20rem 地板 = 標的列 28 + 週期列折 2 行 56 + gap 24 +
++              figure 192,到地板後左欄總高超過主 grid → 逃生口才接得住。 */}
++          <div className="grid grid-cols-1 gap-3 min-h-80 [flex:var(--idx-chart-flex,1_1_0%)] @[640px]:grid-cols-2">
+             <MarketPane
+               paneId="left"
+               twse={twse}
+@@ -163,9 +179,14 @@ export function IndexPage({
+           </div>
+           {/* 中段:家數帶 + 其下騰落線(SC-4)。兩者同一個資料源(`breadth`),放同一個
+               section 讓「當下十個數字」與「一整天的走向」在版面上是同一塊。
+-              `shrink-0`:這塊的高度是內容決定的常數,壓縮它換不到多少圖高,卻會讓
+-              家數字與騰落線先糊掉。 */}
+-          <section className="flex shrink-0 flex-col gap-2">
++
++              `[flex:var(--idx-adl-flex,0_0_auto)]` 取代原本的 `shrink-0`:**預設值 `0 0 auto`
++              就是 `shrink-0` 的展開值**,單欄態逐值不變(高度仍由內容決定 = 家數帶 + 固定
++              96px 騰落線)。兩欄態左欄把它設成 `2 1 0%`,這塊改吃「左欄剩餘高的 2/5」,
++              騰落線才不再被鎖在 96px。
++              `min-h-0` 無條件加:兩欄態要讓 basis 0% 的軌真的縮得下去(可縮鏈少一段就
++              退回 min-content 鎖死);單欄態 flex 不縮,min-height 不作用 → 安全。 */}
++          <section className="flex min-h-0 flex-col gap-2 [flex:var(--idx-adl-flex,0_0_auto)]">
+             <BreadthBand breadth={breadth} />
+             <AdvanceDeclineChart series={breadth?.series ?? []} />
+           </section>
+diff --git a/frontend/src/components/index/MarketChart.tsx b/frontend/src/components/index/MarketChart.tsx
+index 6718788e..327b1fba 100644
+--- a/frontend/src/components/index/MarketChart.tsx
++++ b/frontend/src/components/index/MarketChart.tsx
+@@ -1,32 +1,14 @@
+ import { useMemo } from "react";
+ 
+ import { CandleChart } from "@/components/stock/CandleChart";
++import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
+ import type { ChartToggles } from "@/hooks/useChartToggles";
+ import { useIndexOverlay } from "@/hooks/useIndexOverlay";
+ import { useMarketBars } from "@/hooks/useMarketBars";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
+ import { aggregateBars } from "@/lib/candle";
+-import {
+-  buildIndexGeometry,
+-  outOfDomainLevels,
+-  type RightEdgeLabel,
+-  rightEdgeLabels,
+-  X_END_MIN,
+-  X_START_MIN,
+-} from "@/lib/index-chart-svg";
+-import { svgFontRem } from "@/lib/pane-frame";
+-import {
+-  LEVEL_FILL,
+-  LEVEL_STROKE,
+-  overlayLines,
+-  type StockOverlay,
+-} from "@/lib/stock-intraday-svg";
+-import { pts } from "@/lib/svg-points";
+-import { HOUR_TICKS } from "@/lib/time-labels";
++import { indexSeriesToAccum } from "@/lib/index-accum-adapter";
+ import { type MarketKey, type MarketMode, marketMinutesOf } from "@/lib/timeframe";
+-import { cn } from "@/lib/utils";
+-
+-const SIZE = { width: 640, height: 220 };
+ 
+ /** 資料源代碼 → 畫面文字。**必須逐一列舉**:未知碼原樣顯示(安全漂移),
+  *  不要 fallback 成「TC4」之類的漂亮字 —— 那等於替沒把握的來源背書。 */
+@@ -39,218 +21,6 @@ const SOURCE_TEXT: Record<string, string> = {
+   none: "無資料源",
+ };
+ 
+-function fmt(millipts: number): string {
+-  const v = millipts / 1000;
+-  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+-}
+-
+-function toX(minute: number): number {
+-  return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
+-}
+-
+-/** 右緣標籤文字。**唯一組法** —— 三種 kind 的字面(昨收 / `價位*` / `名稱 價位↑↓`)
+- *  各自散在 JSX 裡的話,改一種語彙時另外兩種會靜默留在舊版。 */
+-function labelText(l: RightEdgeLabel): string {
+-  if (l.kind === "ref") return l.text;
+-  if (l.kind === "peg") {
+-    return `${l.level.toUpperCase()} ${fmt(l.priceMilli)}${l.dir === "up" ? "↑" : "↓"}`;
+-  }
+-  // CDP 系印「價位*」(`*` 是 CDP 記號,同個股語彙);MA 系名稱不可省 —— 兩條 MA 同色系
+-  return l.level === "ma5" || l.level === "ma20"
+-    ? `${l.level.toUpperCase()} ${fmt(l.priceMilli)}`
+-    : `${fmt(l.priceMilli)}*`;
+-}
+-
+-function labelKey(l: RightEdgeLabel): string {
+-  return l.kind === "ref" ? "ref" : `${l.kind}-${l.level}`;
+-}
+-
+-/** 右緣標籤帶的上下界。與 yTicks 的夾制同值(`[8, height − 14]`)—— 兩處各寫一次的話,
+- *  同一個角落的兩種文字會夾制到不同位置。**吃 height 參數**:圖高改由 caller 指派後
+- *  寫死 `SIZE.height` 會讓標籤帶停在 220 那條線上,高圖的右緣文字全擠在上半部。 */
+-function labelBounds(height: number): { top: number; bottom: number } {
+-  return { top: 8, bottom: height - 14 };
+-}
+-
+-interface IntradayProps {
+-  name: string;
+-  s: IndexSeries;
+-  /** viewBox 單位的圖高;未給 → 220(見 `MarketChart.height` 的 JSDoc)。 */
+-  height?: number;
+-  /** viewBox → 畫面的縮放補償(見 `MarketChart.unitScale`);未給 → 1。 */
+-  unitScale?: number;
+-  /** 疊線只做加權(櫃買無日 K 來源,已拍板跳過)—— 這個判別子同時決定 toggle 反灰文案 */
+-  marketKey: MarketKey;
+-  toggles: ChartToggles;
+-  onToggle: (key: keyof ChartToggles, value: boolean) => void;
+-  /** `/api/index/overlay` 的結果;未回 → null。查詢由 MarketChart 層無條件呼叫。 */
+-  overlay: StockOverlay | null;
+-  /** 疊線查詢失敗**且該查詢當前有效**(閘由 caller 併入,見那裡的 why)。 */
+-  overlayError: boolean;
+-}
+-
+-function IntradayChart({
+-  name,
+-  s,
+-  height,
+-  unitScale = 1,
+-  marketKey,
+-  toggles,
+-  onToggle,
+-  overlay,
+-  overlayError,
+-}: IntradayProps) {
+-  // 寬恆定(x 是固定時間域),只有高隨容器剩餘空間走 —— 幾何、刻度夾制、viewBox
+-  // 三處必須同源同高,分別寫死會讓線畫在一個高度、文字夾制在另一個高度。
+-  const size = { width: SIZE.width, height: height ?? SIZE.height };
+-  const g = buildIndexGeometry({ minutes: s.minutes, ref: s.ref, high: s.high, low: s.low }, size);
+-  const isTwse = marketKey === "TWSE";
+-  // 可用性同個股語意:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰
+-  const cdpAvailable =
+-    isTwse && (overlayError ? false : overlay ? overlay.cdp !== null : true);
+-  const maAvailable =
+-    isTwse &&
+-    (overlayError ? false : overlay ? overlay.ma5 !== null || overlay.ma20 !== null : true);
+-  const offTitle = isTwse ? "無日線資料" : "櫃買無日 K 資料源";
+-  const toggleDefs: {
+-    key: keyof ChartToggles;
+-    label: string;
+-    available: boolean;
+-    title?: string;
+-  }[] = [
+-    // 指數沒有成交量 → 這條線是**分鐘收盤的算術平均**而不是 VWAP;title 就是用來區辨的
+-    { key: "vwap", label: "均價", available: true, title: "分鐘收盤均價(指數無成交量)" },
+-    { key: "cdp", label: "CDP", available: cdpAvailable, title: cdpAvailable ? undefined : offTitle },
+-    { key: "ma", label: "MA", available: maAvailable, title: maAvailable ? undefined : offTitle },
+-  ];
+-
+-  const on = { cdp: toggles.cdp && cdpAvailable, ma: toggles.ma && maAvailable };
+-  const oLines = overlay !== null && isTwse ? overlayLines(overlay, g, on) : [];
+-  const pegs = overlay !== null && isTwse ? outOfDomainLevels(overlay, g, on) : [];
+-  const bounds = labelBounds(size.height);
+-  // ⚠ `rightEdgeLabels` 的堆疊間距 `EDGE_LABEL_H` 是 viewBox 單位的常數,**不隨 unitScale
+-  // 走**:字放大後標籤間距相對變密。這裡刻意只補字級不動 bounds —— 動了就等於改
+-  // `index-chart-svg` 的排版契約(個股圖共用),而那是另一顆 commit 的事(next-time)。
+-  const tickFont = svgFontRem(0.625, unitScale);
+-  const edgeFont = svgFontRem(0.5625, unitScale);
+-  const labels = rightEdgeLabels({
+-    ref: s.ref !== null ? { y: g.refY, text: `昨收 ${fmt(s.ref)}` } : null,
+-    oLines,
+-    outOfDomain: pegs,
+-    bounds,
+-  });
+-
+-  return (
+-    <div className="flex min-h-0 flex-1 flex-col">
+-      {/* toggle 列在 **svg 外**:圖的 a11y 錨點是 svg 本身(W-12),把鈕包進去會讓
+-          role="img" 的子樹含互動元素 */}
+-      <div className="mb-1 flex h-[1.375rem] items-center justify-end gap-1">
+-        {toggleDefs.map(({ key, label, available, title }) => (
+-          <button
+-            key={key}
+-            type="button"
+-            aria-pressed={toggles[key] && available}
+-            disabled={!available}
+-            title={title}
+-            onClick={() => onToggle(key, !toggles[key])}
+-            className={cn(
+-              "rounded border px-2 py-0.5 text-xs",
+-              toggles[key] && available ? "border-accent text-accent" : "border-line text-ink-dim",
+-              !available && "opacity-40",
+-            )}
+-          >
+-            {label}
+-          </button>
+-        ))}
+-      </div>
+-      <svg
+-        viewBox={`0 0 ${size.width} ${size.height}`}
+-        className="w-full"
+-        role="img"
+-        aria-label={`${name}分時走勢`}
+-      >
+-        {HOUR_TICKS.map(({ minute, label }) => (
+-          <g key={minute}>
+-            <line
+-              x1={toX(minute)}
+-              x2={toX(minute)}
+-              y1={0}
+-              y2={size.height - 12}
+-              className="stroke-line"
+-              strokeWidth={0.4}
+-            />
+-            <text
+-              x={toX(minute) + 2}
+-              y={size.height - 2}
+-              className="fill-ink-dim"
+-              fontSize={tickFont}
+-            >
+-              {label}
+-            </text>
+-          </g>
+-        ))}
+-        <line
+-          x1={0}
+-          x2={SIZE.width}
+-          y1={g.refY}
+-          y2={g.refY}
+-          className="stroke-line"
+-          strokeDasharray="2 3"
+-          strokeWidth={1}
+-        />
+-        {g.yTicks.map((t) => (
+-          <text
+-            key={t.priceMilli}
+-            data-testid="index-ytick"
+-            x={2}
+-            y={Math.min(Math.max(t.y - 2, bounds.top), bounds.bottom)}
+-            className="fill-ink-dim"
+-            fontSize={tickFont}
+-          >
+-            {fmt(t.priceMilli)}
+-          </text>
+-        ))}
+-        {/* 域內疊線;線體橫貫全寬(指數圖無 R_AXIS 保留帶) */}
+-        {oLines.map((l) => (
+-          // key 用 level 不用文字:兩條線同價時文字會撞 key
+-          <line
+-            key={`o-${l.level}`}
+-            x1={0}
+-            x2={SIZE.width}
+-            y1={l.y}
+-            y2={l.y}
+-            className={LEVEL_STROKE[l.level]}
+-            strokeDasharray="3 2"
+-            strokeWidth={0.8}
+-          />
+-        ))}
+-        {toggles.vwap && g.avgLine.length > 0 ? (
+-          <polyline points={pts(g.avgLine)} fill="none" className="stroke-ink" strokeWidth={1.2} />
+-        ) : null}
+-        {g.line.length > 0 ? (
+-          <polyline points={pts(g.line)} fill="none" className="stroke-accent" strokeWidth={1.4} />
+-        ) : null}
+-        {/* 右緣文字(昨收 + 疊線價位 + 域外掛牌)一律走 `rightEdgeLabels` 的 y */}
+-        {labels.map((l) => (
+-          <text
+-            key={labelKey(l)}
+-            x={SIZE.width - 2}
+-            y={l.y}
+-            dy="0.35em"
+-            textAnchor="end"
+-            className={cn(l.kind === "ref" ? "fill-ink-dim" : LEVEL_FILL[l.level], "stroke-surface")}
+-            strokeWidth={2}
+-            paintOrder="stroke"
+-            fontSize={edgeFont}
+-          >
+-            {labelText(l)}
+-          </text>
+-        ))}
+-      </svg>
+-    </div>
+-  );
+-}
+-
+ interface Props {
+   /** **不能叫 `key`** —— React 會把它抽走當 reconciliation key,元件永遠收到 undefined
+    *  且 TS 不報錯(review P0-3)。 */
+@@ -267,15 +37,16 @@ interface Props {
+    *  gate 停(review round-2 XR-4);未給時預設 true。 */
+   active?: boolean;
+   /** 圖高,單位是 **viewBox 單位**不是 px(§4.1 CS-1 口徑):caller(`MarketPane`)
+-   *  已經扣掉 figure / toggle 列的 chrome,並用「viewBox 寬 ÷ 容器寬」把 px 反解成
+-   *  viewBox 單位。**刻意無預設值** —— 兩條分支的 fallback 不同:intraday 未給 → 220
+-   *  (本檔的 `SIZE.height`),candle 未給 → 直接透傳 undefined 讓 `CandleChart` 用它
+-   *  自己的 578。在這裡給一個預設,就等於替 CandleChart 決定了它的高。 */
++   *  已經扣掉 figure / K 線頂列的 chrome,並用「viewBox 寬 ÷ 容器寬」把 px 反解成
++   *  viewBox 單位。**K 線態專用,intraday 不讀**(分時走 1:1 的 `intradayBox`)——
++   *  同一個 prop 不帶兩種單位。**刻意無預設值**:未給 → 直接透傳 undefined 讓
++   *  `CandleChart` 用它自己的 578,在這裡給預設就等於替它決定了它的高。 */
+   height?: number;
+-  /** svg 等比縮放的字級補償係數 = `viewBox 寬 ÷ svg 渲染寬`(由 `paneUnitScale` 算,
+-   *  caller 已扣 chrome)。未給 → 1 = 改版前行為。**只作用在分時態**:K 線態的字在
+-   *  `CandleChart` 內(共用元件、viewBox 寬寫死 1400),補償列 next-time(KR-3)。 */
+-  unitScale?: number;
++  /** 分時圖的 viewBox 尺寸,單位是 **px(1:1)**,由 `paneIntradayBox` 量出來。
++   *  **分時態限定**;未給(jsdom / 量不到)→ core 走它自己的 800×260 預設。
++   *  1:1 之後 svg 的縮放比恆 1,字級與 pane 寬無關 —— 舊的 `unitScale` 補償隨自繪版
++   *  一起退場(K 線態本來就不吃它)。 */
++  intradayBox?: { width: number; height: number };
+ }
+ 
+ /** 大盤主圖:分時走勢 or 蠟燭圖 + 一行來源/涵蓋期間 meta(SC-4/5/6)。 */
+@@ -288,7 +59,7 @@ export function MarketChart({
+   onToggle,
+   active = true,
+   height,
+-  unitScale,
++  intradayBox,
+ }: Props) {
+   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
+   const minutes = marketMinutesOf(mode);
+@@ -300,26 +71,43 @@ export function MarketChart({
+   // 疊線開著才打端點。櫃買無日 K 來源(已拍板跳過),K 線模式不畫疊線。
+   const overlayGate = mode === "intraday" && marketKey === "TWSE" && (toggles.cdp || toggles.ma);
+   const overlayQ = useIndexOverlay(overlayGate);
++  // 指數序列 → core 吃的 `StockAccum`。**hook 不可條件化**(本 repo 沒裝 react-hooks
++  // lint,漏了不會被擋),所以擺在 `mode === "intraday"` 早退之前;K 線態 series 恆 null
++  // → 這裡是常數 null,不折。
++  // deps 帶 `series` identity:`useIndexStream` 每個 tick 給新物件,271 格 O(n) 折一次
++  // 與群組卡片同量級(KR-2)。
++  const accum = useMemo(
++    () => (series === null ? null : indexSeriesToAccum(series, `IX:${marketKey}`, name)),
++    [series, marketKey, name],
++  );
+ 
+   if (mode === "intraday") {
+-    if (series === null) {
++    if (accum === null) {
+       return <p className="py-10 text-center text-sm text-ink-muted">等待指數資料…</p>;
+     }
+     return (
+-      <IntradayChart
+-        name={name}
+-        s={series}
+-        height={height}
+-        unitScale={unitScale}
+-        marketKey={marketKey}
++      // 個股頁 / 群組圖牆同一份 core(mode="index":副圖 / VP / 成交點 / 說明列全關,
++      // readout 三欄,右緣文字走 `fmt` 不 snap tick)。疊線由這裡注入 ——
++      // `IX:TWSE` 不是股號,core 內建的 `/api/stock/overlay` 那條路打不得。
++      <IntradayChartCore
++        accum={accum}
+         toggles={toggles}
+         onToggle={onToggle}
++        variant="page"
++        mode="index"
++        width={intradayBox?.width}
++        mainHeight={intradayBox?.height}
+         overlay={overlayQ.data ?? null}
+         // **error 判定必須跟著 enabled 閘走**:TanStack 在 `enabled` 轉 false 時
+         // 既不清 status 也不跑 refetchInterval —— 直接吃 `isError` 的話,「503 一次
+         // + 使用者把 CDP/MA 都關掉」會讓兩顆鈕永遠 disabled(自己再也開不回來,
+         // 只有重新整理解得開)。閘關著時本來就沒在請求,自然也沒有失敗可言。
+         overlayError={overlayGate && overlayQ.isError}
++        // 櫃買沒有日 K 來源(已拍板跳過)→ CDP/MA 恆反灰,文案講得出為什麼
++        overlaySupported={marketKey === "TWSE"}
++        overlayOffTitle={marketKey === "TWSE" ? "無日線資料" : "櫃買無日 K 資料源"}
++        // 兩個 pane 可能同時選加權 —— aria-label 帶標的名才指認得出是哪一張
++        ariaLabel={`${name}分時走勢`}
+       />
+     );
+   }
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index daafe3c3..b409baca 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -1,4 +1,4 @@
+-import { useState } from "react";
++import { useMemo, useState } from "react";
+ 
+ import { MarketChart } from "@/components/index/MarketChart";
+ import type { ChartToggles } from "@/hooks/useChartToggles";
+@@ -6,7 +6,13 @@ import { useContainerSize } from "@/hooks/useContainerSize";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
+ import { chgPct, fmtPct } from "@/lib/format";
+ import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+-import { PANE_FRAMES, paneSvgHeight, paneUnitScale, svgFontRem } from "@/lib/pane-frame";
++import {
++  PANE_FRAMES,
++  paneIntradayBox,
++  paneSvgHeight,
++  paneUnitScale,
++  svgFontRem,
++} from "@/lib/pane-frame";
+ import { pts } from "@/lib/svg-points";
+ import { HOUR_TICKS } from "@/lib/time-labels";
+ import {
+@@ -109,9 +115,11 @@ const OVERLAY_LINES = [
+ 
+ /** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。
+  *
+- *  `height` 同 `MarketChart.height` 的口徑:**viewBox 單位**,caller 已扣 chrome、
++ *  `height` 同 `MarketChart.height`(K 線態)的口徑:**viewBox 單位**,caller 已扣 chrome、
+  *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。
+- *  `unitScale` 同 `MarketChart.unitScale`:抵銷 svg 等比縮放,未給 → 1(WL-3)。 */
++ *  `unitScale` = `paneUnitScale` 算出的字級補償:抵銷 svg 等比縮放,未給 → 1(WL-3)。
++ *  **本卡是這條補償僅存的讀者** —— 分時態 2026-08-17 換 `IntradayChartCore` 後走 1:1 px,
++ *  縮放比恆 1,補償無用武之地(見 `paneIntradayBox`)。 */
+ function OverlayCard({
+   twse,
+   otc,
+@@ -339,15 +347,29 @@ export function MarketPane({
+   // series,拆成布林會讓 JSX 那側得再判一次 null(或掛 `!` 賭它)。
+   const overlayPair =
+     overlay && mode === "intraday" && twse !== null && otc !== null ? { twse, otc } : null;
+-  const frame =
+-    overlayPair !== null
++  // 分時圖(非重疊)改吃 **1:1 px box**,不再有 viewBox 反解與字級補償可言。
++  const paneIntraday = overlayPair === null && mode === "intraday";
++  // `frame` 在分時態是 **null 而不是 `PANE_FRAMES.candle`**:分時已退出這張表,讓它
++  // 落到 candle 那格會算出一個沒人讀、但看起來很正常的高度 —— 哪天有人把它接回
++  // `MarketChart` 時症狀是圖高差一個 `1400 / svgW` 倍率而畫面照畫。
++  const frame = paneIntraday
++    ? null
++    : overlayPair !== null
+       ? PANE_FRAMES.overlay
+-      : mode === "intraday"
+-        ? PANE_FRAMES.intraday
+-        : PANE_FRAMES.candle;
+-  const svgHeight = paneSvgHeight(size, frame);
+-  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變)
+-  const unitScale = paneUnitScale(size, frame) ?? 1;
++      : PANE_FRAMES.candle;
++  const svgHeight = frame === null ? undefined : paneSvgHeight(size, frame);
++  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變);只剩 OverlayCard 讀
++  const unitScale = frame === null ? 1 : (paneUnitScale(size, frame) ?? 1);
++  // **必經 useMemo**:物件 prop 每 render 新 identity 會一路打穿下游的 memo,而症狀
++  // 只是 hover 掉幀、沒有任何測試會紅。deps 拆成兩個純量 —— `size` 物件本身每次量測
++  // 都是新的,拿它當 dep 等於沒 memo。
++  // 量不到 → `undefined`:讓 core 走它自己的 800×260 預設,而不是傳一組 0(svg 不報錯,
++  // 純粹畫不出來)。
++  const intradayBox = useMemo(() => {
++    if (!paneIntraday) return undefined;
++    const box = paneIntradayBox({ width: size.width, height: size.height });
++    return box.usable ? { width: box.width, height: box.height } : undefined;
++  }, [paneIntraday, size.width, size.height]);
+ 
+   return (
+     <section
+@@ -406,8 +428,10 @@ export function MarketPane({
+           15rem 下修)是**唯一**一條 min-height:堆疊 / 內容決定高的模式下給 figure 一個
+           地板,量測 → 內容 → 量測才會收斂;同時掛 `min-h-0` 會把地板消掉,退回「圖可以
+           被壓成 0 高」。12rem 的算式:192 − chrome 62(border 2 + p-4 32 + caption 20)
+-          = wrapper 130 → svg render 128 − 26 toggle 列 = 102,仍高於 `paneSvgHeight`
+-          的 96 地板(地板一旦吃到,反解出的高就與容器脫鉤)。 */}
++          = wrapper 130 → 分時圖 1:1 高 = floor(130 − 26 頂列) − 2 = 102,仍高於
++          `paneIntradayBox` 的 96 地板(地板一旦吃到,圖高就與容器脫鉤)。
++          **頂列 26 沒隨換元件變**:`IntradayChartCore` 的 readout 列與舊 toggle 列是
++          同一組 class(`h-[1.375rem]` + `mb-1`),所以這條算式逐值沿用。 */}
+       <figure className="flex min-h-48 flex-1 flex-col rounded-md border border-line bg-surface p-4">
+         <figcaption className="flex flex-wrap items-baseline gap-3">
+           <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
+@@ -442,8 +466,11 @@ export function MarketPane({
+               toggles={toggles}
+               onToggle={onToggle}
+               active={active}
++              // 兩種單位分兩個 prop:`height` = K 線態的 viewBox 單位(已反解),
++              // `intradayBox` = 分時態的 px(1:1)。同一個 prop 帶兩種單位時,
++              // 改其中一態的換算會靜默改到另一態。
+               height={svgHeight}
+-              unitScale={unitScale}
++              intradayBox={intradayBox}
+             />
+           )}
+         </div>
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 069bbc58..60bbf86e 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -16,6 +16,9 @@ import {
+   type FillPoint,
+ } from "@/lib/fill-marks";
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
++// index 態限定:對稱域讓 CDP 常態落在域外,線畫不出來 → 右緣掛牌是唯一訊號(KR-1)。
++// 判定與 `overlayLines` 互補(同一組 yDomain,一個值只會進其中一邊),所以共用那支。
++import { outOfDomainLevels } from "@/lib/index-chart-svg";
+ import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
+ import { pts } from "@/lib/svg-points";
+ import { hhmm, hourTicksOf, type HourTick } from "@/lib/time-labels";
+@@ -32,6 +35,7 @@ import {
+   LOW_DECIDED_PCT,
+   minuteToX,
+   overlayLines,
++  pegLabels,
+   plotWidth,
+   R_AXIS_W,
+   sideSummary,
+@@ -44,6 +48,8 @@ import {
+   type IntradayGeometry,
+   type OverlayLevel,
+   type OverlayLine,
++  type PegInput,
++  type StockOverlay,
+   type XWindow,
+ } from "@/lib/stock-intraday-svg";
+ import {
+@@ -87,13 +93,29 @@ function tickTone(priceMilli: number, refMilli: number | null): string {
+   return "fill-ink";
+ }
+ 
+-/** 右緣文字:CDP 五線印合法價位 + `*`(一眼分出是 CDP 不是 MA);MA 維持名稱 */
+-function levelText(level: OverlayLevel, priceMilli: number): string {
++/** 右緣文字:CDP 五線印價位 + `*`(一眼分出是 CDP 不是 MA);MA 維持名稱。
++ *
++ *  價位口徑由 `priceText` 注入(stock = `fmtTickPrice` 可下單檔位、index = `fmt`)——
++ *  指數沒有 tick 表,snap 出來的點位是憑空捏造的。**注入而不是就地判 mode**:
++ *  同一份口徑在 MA 價位標(`edge-price-*`)也要用,兩處各判各的話會出現「CDP snap 了、
++ *  MA 沒 snap」這種同圖兩套口徑,沒有任何錯誤訊號。 */
++function levelText(
++  level: OverlayLevel,
++  priceMilli: number,
++  priceText: (milli: number) => string,
++): string {
+   return level === "ma5" || level === "ma20"
+     ? level.toUpperCase()
+-    : `${fmtTickPrice(priceMilli)}*`;
++    : `${priceText(priceMilli)}*`;
+ }
+ 
++/** 域外掛牌的空集合。**模組層常數**(identity 穩定)—— 行內 `[]` 會打穿 ChartStatic 的
++ *  memo,而症狀只是 hover 掉幀,沒有任何測試會紅(同 `EMPTY_MARKS` 的理由)。 */
++const EMPTY_PEGS: readonly PegInput[] = [];
++
++/** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
++const EMPTY_ENERGY: { bars: EnergyBar[]; maxTotal: number } = { bars: [], maxTotal: 1 };
++
+ /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
+ const MARK_LABEL_TOP = 9;
+ 
+@@ -135,6 +157,8 @@ const ChartStatic = memo(function ChartStatic({
+   xw,
+   hourTicks,
+   fillMarks,
++  priceText,
++  pegs = EMPTY_PEGS,
+ }: {
+   g: IntradayGeometry;
+   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
+@@ -162,6 +186,12 @@ const ChartStatic = memo(function ChartStatic({
+    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定)—— 行內字面值會打穿本 memo,
+    *  而症狀只是 hover 掉幀,沒有任何測試會紅(SC-9 就是補這道機械閘)。 */
+   fillMarks: readonly FillMark[];
++  /** 價位文字口徑(見 `levelText`)。**必經模組層函式**(`fmtTickPrice` / `fmt`)——
++   *  行內箭頭函式每次 render 新 identity,會打穿本 memo。 */
++  priceText: (milli: number) => string;
++  /** 域外疊線掛牌(index 態限定;stock 態恆為 `EMPTY_PEGS` → 零渲染、obstacles 不變)。
++   *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
++  pegs?: readonly PegInput[];
+ }) {
+   // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
+   // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
+@@ -187,17 +217,21 @@ const ChartStatic = memo(function ChartStatic({
+   // 與標記圓(圓心即中心)—— 只避文字的話,「讓開文字」的動作恰好把標籤推到圓上
+   // (日高側文字在圓上方 7px,往下讓 EDGE_LABEL_H 後正落在圓心 +3)。
+   const maLabelLeft = w - R_AXIS_W - 2 - EDGE_LABEL_W;
+-  const maObstacles = markLabels.flatMap((m) =>
+-    clampLabelX(m.mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16) + EDGE_LABEL_W / 2 > maLabelLeft
+-      ? [m.y - BASELINE_TO_CENTER, m.mark.y]
+-      : [],
+-  );
+   // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
+   // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
+-  const maLabels = edgePriceLabels(oLines, maObstacles, {
+-    top: MARK_LABEL_TOP,
+-    bottom: plotBottom - 5,
+-  });
++  const edgeBounds = { top: MARK_LABEL_TOP, bottom: plotBottom - 5 };
++  // 掛牌**先定位**:它是「CDP 在域外」的唯一訊號(KR-1),不能被 MA 標籤推開。
++  // 兩者同一條走廊(x = w − R_AXIS_W − 2、anchor=end)、同一組界。
++  const pegList = pegLabels(pegs, edgeBounds);
++  const maObstacles = markLabels
++    .flatMap((m) =>
++      clampLabelX(m.mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16) + EDGE_LABEL_W / 2 > maLabelLeft
++        ? [m.y - BASELINE_TO_CENTER, m.mark.y]
++        : [],
++    )
++    // 掛牌的 y 併入 obstacles → MA 讓位。stock 態 pegList 恆空,這一段是 no-op。
++    .concat(pegList.map((p) => p.y));
++  const maLabels = edgePriceLabels(oLines, maObstacles, edgeBounds);
+   // VWAP 就地標示在末點右側(D2/review F1):VWAP 不是橫貫全寬的水平線,盤中末點在
+   // 畫面中段,右緣釘標籤會與線脫節 600 多 px。toggle 關 / 尚無成交 / 後端 VWAP
+   // 不可得(vwapMilli null,與說明列的「-」同步)→ 不畫。**不退回前端近似值**:
+@@ -357,7 +391,7 @@ const ChartStatic = memo(function ChartStatic({
+             className={LEVEL_FILL[l.level]}
+             fontSize="0.5625rem"
+           >
+-            {levelText(l.level, l.priceMilli)}
++            {levelText(l.level, l.priceMilli, priceText)}
+           </text>
+         </g>
+       ))}
+@@ -452,7 +486,28 @@ const ChartStatic = memo(function ChartStatic({
+           paintOrder="stroke"
+           fontSize="0.5625rem"
+         >
+-          {fmtTickPrice(l.priceMilli)}
++          {priceText(l.priceMilli)}
++        </text>
++      ))}
++      {/* 域外疊線掛牌(index 態限定)。與 MA 價位標同一條走廊、同一組界,但**先定位**
++          (見上面 `pegList`):對稱域下 CDP 常態整組域外,線體畫不出來時這行字是唯一
++          的訊號 —— 被 MA 推開就等於指著錯的位置。
++          文字 = `名稱 點位↑/↓`(↑ = 在域上方、↓ = 在域下方),與現版 `MarketChart` 的
++          `labelText` peg 分支逐字相同(換元件不換語彙)。 */}
++      {pegList.map((p) => (
++        <text
++          key={`peg-${p.level}`}
++          data-testid={`overlay-peg-${p.level}`}
++          x={w - R_AXIS_W - 2}
++          y={p.y}
++          dy="0.35em"
++          textAnchor="end"
++          className={cn(LEVEL_FILL[p.level], "stroke-surface")}
++          strokeWidth={2}
++          paintOrder="stroke"
++          fontSize="0.5625rem"
++        >
++          {`${p.level.toUpperCase()} ${fmt(p.priceMilli)}${p.dir === "up" ? "↑" : "↓"}`}
+         </text>
+       ))}
+       {/* VWAP 即時數值(SC-2)。就地畫在末點右側;值 = `vwapMilli`(後端逐筆,與說明列
+@@ -677,6 +732,21 @@ interface CoreProps extends Props {
+   variant: ChartVariant;
+   /** viewBox 寬(主副圖共用)。未傳 = `DEFAULT_W`。 */
+   width?: number;
++  /** `"index"` = 指數分時(台股綜合):副圖 / VP / 成交點 / 說明列一律關,readout 三欄,
++   *  疊線由 caller 注入(**不打 `/api/stock/overlay`** —— `IX:TWSE` 不是股號),
++   *  右緣與 hover 的價位文字走 `fmt` 不 snap tick(指數沒有可下單檔位)。預設 `"stock"`。 */
++  mode?: "stock" | "index";
++  /** index 態注入的疊線;stock 態忽略(仍走內建 `useStockOverlay`)。 */
++  overlay?: StockOverlay | null;
++  /** 疊線查詢失敗**且該查詢當前有效**(語意同 `MarketChart.overlayError`:閘關時不鎖鈕)。 */
++  overlayError?: boolean;
++  /** 該標的有沒有疊線資料源(櫃買無日 K → false,CDP/MA 恆反灰)。預設 true。 */
++  overlaySupported?: boolean;
++  /** 反灰時的 tooltip(index 態);預設 `"無日線資料"`。 */
++  overlayOffTitle?: string;
++  /** svg aria-label;預設 `"分時走勢圖"`(index 態 caller 傳 `${name}分時走勢`,
++   *  兩個 pane 同頁時要指認得出是哪一檔)。 */
++  ariaLabel?: string;
+ }
+ 
+ export function IntradayChartCore({
+@@ -689,8 +759,17 @@ export function IntradayChartCore({
+   subHeight,
+   stkfut = false,
+   fills = EMPTY_FILLS,
++  mode = "stock",
++  overlay: overlayProp = null,
++  overlayError = false,
++  overlaySupported = true,
++  overlayOffTitle = "無日線資料",
++  ariaLabel,
+ }: CoreProps) {
+   const card = variant === "card";
++  // index 態的**唯一**判別子。一處求值、下面各分支共用 —— 各處各寫一次 `mode === "index"`
++  // 的話,漏改一處的樣態是「指數圖只有某一半換了語彙」(例如 readout 三欄了、副圖卻還在)。
++  const index = mode === "index";
+   // 主副圖共用同一個 viewBox 寬:分開兩份的話,副圖 hover 線的 x 換算與主圖會各自漂
+   const w = width ?? DEFAULT_W;
+   const mainH = mainHeight ?? MAIN.height;
+@@ -705,9 +784,12 @@ export function IntradayChartCore({
+   // WS 推來的 `accum` 晚一拍還是合約 snapshot,只靠 `stkfut` 會拿 `F:CDF:202608` 當
+   // 股號打進路徑段吃 400(Phase 6 real-env finding,實測 2/2 必現)。兩個判準不重複:
+   // prop 管「模式」、code 形狀管「這個字串能不能當股號送出去」。
++  //
++  // 第三道閘 `index`:指數的 code 是 `IX:TWSE` / `IX:OTC`,既不是股號也取不到現股日線
++  // —— 疊線由 caller(`MarketChart`)從 `/api/index/overlay` 注入。
+   const overlayQ = useStockOverlay(
+-    accum.code || null,
+-    !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
++    index ? null : accum.code || null,
++    !index && !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
+   );
+   // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
+   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
+@@ -743,9 +825,10 @@ export function IntradayChartCore({
+ 
+   // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
+   // 價線 / 刻度 / 反演算完即丟。`meta` 不影響量的幾何,故不入 deps。
++  // index 態不 render 副圖(指數無量),但 hook 不可條件化 → 回模組層常數而不是新物件。
+   const subEnergy = useMemo(
+-    () => buildEnergyBars(accum.minutes, { width: w, height: subH }, xw),
+-    [accum.minutes, w, subH, xw],
++    () => (index ? EMPTY_ENERGY : buildEnergyBars(accum.minutes, { width: w, height: subH }, xw)),
++    [index, accum.minutes, w, subH, xw],
+   );
+ 
+   // 價位別成交量(SC-3)。**必經 useMemo**:hover 每個 mousemove 都 re-render 本元件,
+@@ -756,20 +839,25 @@ export function IntradayChartCore({
+   // 期貨態不畫 VP:`accum.vp` 由 `foldVp` 折出,而 foldVp 的分鐘窗仍是現貨窗
+   // (本輪不參數化 —— 期貨態既然不畫,參數化只是加一條沒人走的分支)。
+   // 直方圖若照畫,08:45–08:59 與 13:31–13:45 的成交會整段缺席而畫面看不出來。
+-  const vpEnabled = toggles.vp && !stkfut;
++  // index 態同樣不畫:`accum.vp` 是空 Map(指數沒有逐筆量),畫出來是一片空白的假圖層。
++  const vpEnabled = toggles.vp && !stkfut && !index;
+   const vpBars = useMemo(
+     () => (vpEnabled ? buildVpBars(accum.vp, g, w) : []),
+     [accum.vp, g, vpEnabled, w],
+   );
+ 
+-  const overlay = overlayQ.data ?? null;
++  // index 態:資料源與失敗旗標都換一邊(caller 注入),**判準本身逐字相同** ——
++  // 兩態各寫一份 available 判定的話,「未回前視為可用」這條紀律會在其中一態靜默漂掉。
++  const overlay = index ? overlayProp : (overlayQ.data ?? null);
++  const overlayFailed = index ? overlayError : overlayQ.isError;
++  // index 態多一道資料源閘:櫃買沒有日 K 來源(已拍板跳過),CDP/MA 恆反灰。
++  const supported = !index || overlaySupported;
+   // 可用性:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰 + 顯示 off
+-  const cdpAvailable = overlayQ.isError ? false : overlay ? overlay.cdp !== null : true;
+-  const maAvailable = overlayQ.isError
+-    ? false
+-    : overlay
+-      ? overlay.ma5 !== null || overlay.ma20 !== null
+-      : true;
++  const cdpAvailable =
++    supported && (overlayFailed ? false : overlay ? overlay.cdp !== null : true);
++  const maAvailable =
++    supported &&
++    (overlayFailed ? false : overlay ? overlay.ma5 !== null || overlay.ma20 !== null : true);
+ 
+   const oLines = useMemo(
+     () =>
+@@ -782,10 +870,32 @@ export function IntradayChartCore({
+     [overlay, g, toggles.cdp, toggles.ma, cdpAvailable, maAvailable],
+   );
+ 
++  // 域外掛牌(index 態限定)。與 `oLines` 互補:同一個值只會進其中一邊。
++  // 位置必須在 `g` 之後、`priceLine.length === 0` 早退**之前**:hook 不可條件化
++  // (本 repo 沒裝 react-hooks lint,漏了不會被擋)—— 同 `fillMarks` 的理由。
++  // stock 態回**模組層常數**而不是新的 `[]`(打穿 ChartStatic 的 memo 只會掉幀,沒有測試會紅)。
++  const pegs = useMemo(
++    () =>
++      index && overlay
++        ? outOfDomainLevels(overlay, g, {
++            cdp: toggles.cdp && cdpAvailable,
++            ma: toggles.ma && maAvailable,
++          })
++        : EMPTY_PEGS,
++    [index, overlay, g, toggles.cdp, toggles.ma, cdpAvailable, maAvailable],
++  );
++
+   if (g.priceLine.length === 0) {
+     return (
+-      <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
+-        <p className="text-sm text-ink-muted">尚無成交</p>
++      // index 態**去框**:MarketPane 的 figure 已經是外框,再套一層就是盤前每個 pane
++      // 框中框(同 card 變體的理由)。
++      <div
++        className={cn(
++          "flex min-h-0 flex-1 items-center justify-center",
++          !index && "rounded-md border border-line bg-surface",
++        )}
++      >
++        <p className="text-sm text-ink-muted">{index ? "等待指數資料…" : "尚無成交"}</p>
+       </div>
+     );
+   }
+@@ -793,7 +903,8 @@ export function IntradayChartCore({
+   // card 變體整條說明列都不 render(AD-4)→ 這份聚合沒有讀者(review B4)。
+   // `sideSummary` 走一遍當日最多 271 格,而圖牆最多 50 張卡、每秒隨報價 re-render 各跑
+   // 一次;算完直接丟掉。page 變體逐值不變。
+-  const side = card ? null : sideSummary(accum.minutes, xw);
++  // index 態同樣不 render 說明列:指數沒有內外盤可言,印出來的四個數字全是 0(假陳述)。
++  const side = card || index ? null : sideSummary(accum.minutes, xw);
+   const lowDecided = side !== null && side.decidedPct !== null && side.decidedPct < LOW_DECIDED_PCT;
+ 
+   const hoverMin = hover?.min ?? null;
+@@ -875,11 +986,16 @@ export function IntradayChartCore({
+         };
+   // 卡片只有 ~250px 寬,六欄會擠成一團 —— 砍的是**外 / 內**兩欄(說明列已同時省略,
+   // 內外盤在卡片上完全不出現,語意一致),留下時間 / 價 / % / 量(AD-4)。
+-  const fields = (card ? allFields.slice(0, 4) : allFields).concat(
++  // index 態切**前三欄**(時間 / 點位 / 漲跌%):量 / 外 / 內在指數上恆為 0,
++  // 印出來是三個假數字而不是「沒有這項資訊」。
++  const fields = (card || index ? allFields.slice(0, index ? 3 : 4) : allFields).concat(
+     fillField === null ? [] : [fillField],
+   );
+ 
+-  const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
++  // index 態不 snap:tick 表是個股的可下單檔位,指數的價位量尺是連續的 ——
++  // snap 出來的點位是憑空捏造的(同右緣 `priceText` 的口徑分權)。
++  const hoverPrice =
++    hover === null ? null : index ? g.priceAtY(hover.y) : snapDown(g.priceAtY(hover.y));
+   const timeTagX =
+     hoverMin !== null ? clampTagX(minuteToX(hoverMin, w, xw), TIME_TAG.w, w) : null;
+   const timeTagSpan: [number, number] | null =
+@@ -896,20 +1012,31 @@ export function IntradayChartCore({
+ 
+   // 期貨態三顆一律反灰(D10):CDP/MA 是現股日線衍生、VP 的折入窗仍是現貨窗。
+   // 「按得下去但沒反應」比「按不下去」難懂 —— 反灰 + tooltip 才講得出為什麼。
++  //
++  // index 態只三顆:量分佈 / 成交點都需要逐筆量或委託,指數兩者皆無。
++  // 均價鈕帶 `hint`(可用時仍顯示的 tooltip):指數的「均價」是**分鐘收盤算術平均**
++  // 不是 VWAP,不講清楚會被當成加權均價讀。
+   const toggleDefs: {
+     key: "vwap" | "cdp" | "ma" | "vp" | "fills";
+     label: string;
+     available: boolean;
+-  }[] = [
+-    { key: "vwap", label: "均價", available: true },
+-    { key: "cdp", label: "CDP", available: !stkfut && cdpAvailable },
+-    { key: "ma", label: "MA", available: !stkfut && maAvailable },
+-    // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
+-    { key: "vp", label: "量分佈", available: !stkfut },
+-    // 成交點同樣零外部資料依賴(orders 已在手上),**期貨態也不反灰**(AD-5):
+-    // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
+-    { key: "fills", label: "成交點", available: true },
+-  ];
++    hint?: string;
++  }[] = index
++    ? [
++        { key: "vwap", label: "均價", available: true, hint: "分鐘收盤均價(指數無成交量)" },
++        { key: "cdp", label: "CDP", available: cdpAvailable },
++        { key: "ma", label: "MA", available: maAvailable },
++      ]
++    : [
++        { key: "vwap", label: "均價", available: true },
++        { key: "cdp", label: "CDP", available: !stkfut && cdpAvailable },
++        { key: "ma", label: "MA", available: !stkfut && maAvailable },
++        // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
++        { key: "vp", label: "量分佈", available: !stkfut },
++        // 成交點同樣零外部資料依賴(orders 已在手上),**期貨態也不反灰**(AD-5):
++        // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
++        { key: "fills", label: "成交點", available: true },
++      ];
+ 
+   const body = (
+     <>
+@@ -920,13 +1047,21 @@ export function IntradayChartCore({
+             內層再放按鈕會讓點 toggle 同時切主檔,而且巢狀互動元素不合法 */}
+         {card ? null : (
+         <div className="flex shrink-0 gap-1">
+-        {toggleDefs.map(({ key, label, available }) => (
++        {toggleDefs.map(({ key, label, available, hint }) => (
+           <button
+             key={key}
+             type="button"
+             aria-pressed={toggles[key] && available}
+             disabled={!available}
+-            title={available ? undefined : stkfut ? "期貨合約本輪不提供" : "無日線資料"}
++            title={
++              available
++                ? hint
++                : index
++                  ? overlayOffTitle
++                  : stkfut
++                    ? "期貨合約本輪不提供"
++                    : "無日線資料"
++            }
+             onClick={() => onToggle?.(key, !toggles[key])}
+             className={cn(
+               "rounded border px-2 py-0.5 text-xs",
+@@ -947,7 +1082,7 @@ export function IntradayChartCore({
+         className="w-full"
+         style={{ touchAction: "pan-y" }}
+         role="img"
+-        aria-label="分時走勢圖"
++        aria-label={ariaLabel ?? "分時走勢圖"}
+         onMouseMove={onMove}
+         onMouseLeave={() => setHover(null)}
+       >
+@@ -966,6 +1101,9 @@ export function IntradayChartCore({
+           xw={xw}
+           hourTicks={hourTicks}
+           fillMarks={fillMarks}
++          // 模組層函式 → identity 穩定,不打穿 memo(行內箭頭函式會)
++          priceText={index ? fmt : fmtTickPrice}
++          pegs={pegs}
+         />
+         <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
+         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
+@@ -1084,7 +1222,10 @@ export function IntradayChartCore({
+         ) : null}
+       </svg>
+       {/* 內外盤能量副圖。**不加 mt-1**:兩張圖的 svg 佔容器寬比例要相同(SC-6.7),
+-          多出的固定 4px 會讓比例隨容器寬漂移。 */}
++          多出的固定 4px 會讓比例隨容器寬漂移。
++          index 態整張不 render(不是畫一張空的):指數沒有成交量,空副圖佔著版面又
++          讓人以為「今天沒量」,而不是「這個商品沒有這項資料」。 */}
++      {index ? null : (
+       <svg viewBox={`0 0 ${w} ${subH}`} className="w-full" role="img" aria-label="成交量">
+         <EnergySub bars={subEnergy.bars} maxTotal={subEnergy.maxTotal} w={w} h={subH} xw={xw} />
+         {/* 垂直線延伸進副圖,讓該分鐘的內外盤 bar 可對位;畫在 memo 之外 */}
+@@ -1103,6 +1244,7 @@ export function IntradayChartCore({
+           />
+         ) : null}
+       </svg>
++      )}
+       {/* 說明列(round6 項 2)。四個數字全部同源走 `sideSummary(accum.minutes)` ——
+           舊版的外 / 內取自後端 running 值而未分類根本沒印,補印未分類就必須從分鐘聚合算,
+           那時混用兩個來源的失效樣態是純數字不一致,沒有任何測試會紅。
+@@ -1150,7 +1292,8 @@ export function IntradayChartCore({
+   // 預設可選,在圖上拖曳會整片反白(SC-4)。不影響 hover(W-10)。
+   // card 變體外層是 `<div>` 且無 border / bg / padding(AD-4):卡片自己已經有框,
+   // 再套一層就是框中框;`<figure>` 也失去語意(說明列已省略)。
+-  return card ? (
++  // index 態同款:MarketPane 的 figure 已是外框,說明列同樣省略。
++  return card || index ? (
+     <div className="flex min-h-0 flex-1 flex-col select-none">{body}</div>
+   ) : (
+     <figure className="flex min-h-0 flex-1 flex-col select-none rounded-md border border-line bg-surface p-4">
+diff --git a/frontend/src/lib/index-accum-adapter.ts b/frontend/src/lib/index-accum-adapter.ts
+new file mode 100644
+index 00000000..2a9ba429
+--- /dev/null
++++ b/frontend/src/lib/index-accum-adapter.ts
+@@ -0,0 +1,70 @@
++import type { IndexSeries } from "@/hooks/useIndexStream";
++import type { MinuteAgg, StockAccum } from "@/lib/stock-accum";
++import { SPOT_WINDOW } from "@/lib/stock-intraday-svg";
++
++/** 指數序列 → `StockAccum`,讓台股綜合的加權 / 櫃買分時圖直接吃個股同一份
++ *  `IntradayChartCore`(mode="index";R4 D11)。
++ *
++ *  指數沒有成交量,這裡填的每一個「假值」都是為了讓 core 的既有幾何在 index 態產出
++ *  **正確語意**,不是佔位:
++ *  - `v = 1`:`buildIntradayGeometry` 的 vwapLine 以 `c × v` 加權,等權後就是**分鐘收盤
++ *    算術平均** —— 與舊 `MarketChart` 自繪的均價線同一定義(v = 0 會讓均價線整條消失)。
++ *  - `h = l = c`:高低標記走等值反查(`m.h === accum.high`),沒有 per-minute 高低就只能
++ *    以收盤代替;`high / low` 同步取**分鐘收盤極值**而不是 `series.high/low`(那是 tick
++ *    極值,鮮少恰等於任一分鐘收盤 → 反查落空 = 標記靜默缺席)。figcaption 的 Quote 仍
++ *    顯示 tick 高低,兩者差異 ≤ 分鐘內振幅(change-spec §5)。
++ *  - `upper / lower = null`:y 域走以昨收置中的對稱 autofit,且不亮漲跌停燈(指數沒有)。
++ *  - 只收 `SPOT_WINDOW` 內的分鐘(review R6):`vwap` / `high` / `low` 與幾何的 `windowedEntries`
++ *    必須同一把尺 —— 窗外鍵(落檔舊格式 / 未來 14:30 定盤)混進來時,均價末點標籤(唯一文字
++ *    來源 = `accum.vwap`)會與 `g.vwapLine` 末點脫節、日高標記找不到等值分鐘而靜默缺席。
++ *
++ *  純函式、零 IO;caller(`MarketChart`)以 `useMemo` 依 series identity 折,271 格 O(n)。 */
++export function indexSeriesToAccum(series: IndexSeries, code: string, name: string): StockAccum {
++  const rows: [number, number][] = [];
++  for (const [key, value] of Object.entries(series.minutes)) {
++    const minute = minuteOf(key);
++    if (minute !== null && minute >= SPOT_WINDOW.start && minute <= SPOT_WINDOW.end) {
++      rows.push([minute, value]);
++    }
++  }
++  rows.sort((a, b) => a[0] - b[0]);
++
++  const minutes = new Map<number, MinuteAgg>();
++  let sum = 0;
++  let high: number | null = null;
++  let low: number | null = null;
++  for (const [minute, c] of rows) {
++    minutes.set(minute, { c, v: 1, i: 0, o: 0, u: 0, h: c, l: c });
++    sum += c;
++    high = high === null || c > high ? c : high;
++    low = low === null || c < low ? c : low;
++  }
++
++  return {
++    code,
++    seq: 0,
++    last: series.p !== null ? { p: series.p, t: "", cum_vol: 0 } : null,
++    vwap: rows.length > 0 ? Math.round(sum / rows.length) : null,
++    minutes,
++    ticks: [],
++    vp: new Map(),
++    book: null,
++    meta: { name, ref: series.ref, upper: null, lower: null, y_vol: null },
++    noData: false,
++    trial: false,
++    high,
++    low,
++    amountMilli: 0,
++    volume: 0,
++  };
++}
++
++/** `HHMM` → 分鐘數;非四位數字 / 分鐘 ≥ 60 → null(略過)。時間窗過濾在呼叫端
++ *  (`SPOT_WINDOW`,與幾何同源),這裡只擋「解不出來」的鍵。 */
++function minuteOf(key: string): number | null {
++  if (!/^\d{4}$/.test(key)) return null;
++  const hh = Number(key.slice(0, 2));
++  const mm = Number(key.slice(2));
++  if (mm > 59) return null;
++  return hh * 60 + mm;
++}
+diff --git a/frontend/src/lib/pane-frame.ts b/frontend/src/lib/pane-frame.ts
+index 723e1a8b..23bea8ab 100644
+--- a/frontend/src/lib/pane-frame.ts
++++ b/frontend/src/lib/pane-frame.ts
+@@ -19,30 +19,69 @@ export interface PaneFrame {
+   vbW: number;
+ }
+ 
+-/** 三種圖模式各自的 chrome 用量。**逐條列舉不共用一組數字**:三者的 DOM 巢狀深度不同,
+- *  用同一組會讓其中兩種各差 30-70px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
++/** 兩種**等比縮放**圖模式各自的 chrome 用量。**逐條列舉不共用一組數字**:兩者的 DOM
++ *  巢狀深度不同,用同一組會差 38px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
+  *  誰也解釋不了的捲軸。
+  *
+  *  **每一項都必須是固定高的元素**:會折行的東西(K 線態那條 meta 列曾是 `text-xs`
+  *  無高度限制)在窄 pane 下折成兩行,chromeY 就少算一行的高度,svg 溢出 figure。
+  *  折不折得掉由該元素自己保證(meta 列 `h-4` + `truncate`),不是靠這裡多留餘裕。
+  *
+- *  - intraday:toggle 列 `h-[1.375rem]` 22 + `mb-1` 4 = 26;svg 直接在 wrapper 內,不內縮。
++ *  **分時態不在這張表裡**(2026-08-17 換 `IntradayChartCore`):它改走 1:1 px box
++ *  (`paneIntradayBox`),沒有 viewBox 反解也沒有縮放比可言。留一筆用不到的
++ *  `intraday` 條目在這裡,下一個人會以為兩條路都還在,而錯用的症狀是圖高差一個
++ *  `vbW / svgW` 倍率、畫面照畫。
++ *
+  *  - overlay:`OverlayCard` 是巢狀 figure —— border 2 + `p-4` 32 + 標題列 20 + svg `mt-2` 8
+  *    = 62;水平 border 2 + p-4 32 = 34。
+  *  - candle:`CandleChart` 自身 figure(border 2 + `p-4` 32 + 頂列 26 + figcaption 20 = 80)
+  *    + `MarketChart` 的 meta 列(`h-4` 16 + `mt-1` 4 = 20)= 100;水平同 overlay 34;
+  *    **viewBox 寬是 CandleChart 的 `DIMS.width` = 1400**,不是 640。 */
+-export const PANE_FRAMES: Record<"intraday" | "overlay" | "candle", PaneFrame> = {
+-  intraday: { chromeY: 26, insetX: 0, vbW: 640 },
++export const PANE_FRAMES: Record<"overlay" | "candle", PaneFrame> = {
+   overlay: { chromeY: 62, insetX: 34, vbW: 640 },
+   candle: { chromeY: 100, insetX: 34, vbW: 1400 },
+ };
+ 
++/** 分時態 svg 以外、但在被量測 wrapper 之內的垂直用量(px):`IntradayChartCore` 的
++ *  頂列(readout + toggle)`h-[1.375rem]` 22 + `mb-1` 4 = 26。
++ *
++ *  數值與舊自繪版的 toggle 列相同(兩者都是同一組 tailwind class)—— 所以 `MarketPane`
++ *  的 figure `min-h-48` 算式不必跟著改。 */
++export const INTRADAY_CHROME_Y = 26;
++
++export interface IntradayBox {
++  /** viewBox 寬 = 量到的 px 寬(1:1) */
++  width: number;
++  /** viewBox 高 = 可用 px 高(1:1) */
++  height: number;
++  /** 量測有效與否;false → 呼叫端傳 undefined,由 core 走它自己的預設尺寸 */
++  usable: boolean;
++}
++
++/** 量到的容器尺寸(px)→ 分時圖的 viewBox 尺寸(**1:1,同 `cardSvgBox` 的精神**)。
++ *
++ *  1:1 的意義:viewBox 寬 = 渲染寬 → 縮放比恆 1 → viewBox 內的 rem 字級在畫面上就是
++ *  它字面的大小,與 pane 寬無關。等比縮放版本要靠 `paneUnitScale` 把字級乘回去(WL-3),
++ *  而那條補償只補得了字、補不了 `EDGE_LABEL_H` 這種排版常數 —— 群組卡片早已走 1:1,
++ *  分時 pane 跟上之後兩邊的圖是同一份像素語彙。
++ *
++ *  地板 96 與 −2 抗抖動的理由同 `paneSvgHeight`:容器矮到 chrome 都放不下時回 0 / 負高
++ *  會畫出一張沒有高度的圖(svg 不報錯,純粹消失);反解後的高恰等於量到的高時,亞像素
++ *  進位會讓內容比容器高半格,觸發 ResizeObserver 的「量測 → 設高 → 再量測」迴圈。 */
++export function paneIntradayBox(size: Size): IntradayBox {
++  if (size.width <= 0 || size.height <= 0) return { width: 0, height: 0, usable: false };
++  return {
++    width: Math.round(size.width),
++    height: Math.max(96, Math.floor(size.height - INTRADAY_CHROME_Y) - 2),
++    usable: true,
++  };
++}
++
+ /** 量到的容器尺寸(px)→ 圖的 viewBox 高(viewBox 單位)。
+  *
+- *  **反解只此一處**(§4.1 CS-1):`MarketChart` / `OverlayCard` 收到的 `height` 一律是
+- *  viewBox 單位,兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
++ *  **反解只此一處**(§4.1 CS-1):`MarketChart`(K 線態)/ `OverlayCard` 收到的 `height`
++ *  一律是 viewBox 單位,兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
++ *  分時態不走這支(1:1,見 `paneIntradayBox`)。
+  *
+  *  地板 96:容器矮到連 chrome 都放不下時,回 0 / 負高會畫出一張沒有高度的圖(svg 不報錯,
+  *  純粹消失)。−2 是抗抖動餘裕 —— 反解後的 px 高恰等於量到的高時,亞像素進位會讓內容比
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index f8b7b6ff..29808eba 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -535,6 +535,52 @@ export interface EdgePriceLabel {
+   level: "ma5" | "ma20";
+ }
+ 
++/** 域外疊線掛牌的輸入(結構與 `lib/index-chart-svg.ts::OutOfDomainLevel` 逐欄相同)。
++ *
++ *  **刻意寫成本檔自己的結構型別、不 import 那支**:index-chart-svg 已經 import 本檔的
++ *  `EDGE_LABEL_H` / `OverlayLevel`,反向 import 會成環。結構相容 → `outOfDomainLevels()`
++ *  的結果可以直接餵進來,不需要任何轉接。 */
++export interface PegInput {
++  level: OverlayLevel;
++  priceMilli: number;
++  dir: "up" | "down";
++}
++
++export interface PegLabel extends PegInput {
++  y: number;
++}
++
++/** 域外疊線掛牌的定位(指數分時圖 mode="index")。
++ *
++ *  y 域是以昨收置中的對稱域,平靜日的 CDP 常態整組落在域外 —— 線體畫不出來,**掛牌
++ *  就是唯一的訊號**。所以定位規則簡單且不可被推:向上域外的由 `top` 往下疊、向下域外
++ *  的由 `bottom` 往上疊,各自獨立計數(兩個方向共用一個計數器的話,一邊多一顆會把
++ *  另一邊整組往中間擠,而擠出來的位置與「在域上/下」的語意無關)。
++ *
++ *  `edgePriceLabels` 的 MA 標籤反過來要**避開**這裡算出的 y(呼叫端把本函式的結果併進
++ *  它的 obstacles):MA 的線本身照畫,標籤只是「這條線在哪」,讓位的成本遠低於掛牌。
++ *
++ *  矮圖時堆疊會超出界 → 一律 clamp 進界內(疊印可讀性差,但飛出 viewBox 是完全靜默的
++ *  不見)。界退化(top > bottom)→ 一顆都不畫,同 `edgePriceLabels` 的紀律。 */
++export function pegLabels(
++  pegs: readonly PegInput[],
++  bounds: { top: number; bottom: number },
++): PegLabel[] {
++  if (bounds.top > bounds.bottom) return [];
++  const clamp = (y: number): number => Math.min(Math.max(y, bounds.top), bounds.bottom);
++  let ups = 0;
++  let downs = 0;
++  const out: PegLabel[] = [];
++  for (const p of pegs) {
++    const raw =
++      p.dir === "up"
++        ? bounds.top + ups++ * EDGE_LABEL_H
++        : bounds.bottom - downs++ * EDGE_LABEL_H;
++    out.push({ level: p.level, priceMilli: p.priceMilli, dir: p.dir, y: clamp(raw) });
++  }
++  return out;
++}
++
+ /** MA5 / MA20 的右緣價位標籤佈局(SC-1/SC-3)。
+  *
+  *  只管 MA:CDP 五線在右緣帶內已有 `價位*`,VWAP 走**就地標示**(末點右側)不經此函式。

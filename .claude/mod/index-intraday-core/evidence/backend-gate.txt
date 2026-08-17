@@ -1,0 +1,6 @@
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2650 passed, 1 warning in 144.16s (0:02:24)
+PYTEST_DONE
+All checks passed!
+0 errors, 0 warnings, 0 informations

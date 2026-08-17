@@ -1,0 +1,116 @@
+{
+ "SC-1 hover (1080p host, 加權 svg 55%,50%)": {
+  "crossV": true,
+  "crossH": true,
+  "priceTag": "24285.42 (不 tick-snap)",
+  "timeTag": "11:36",
+  "timePrice": "24400.94",
+  "readout_hovering": "11:36 24400.94 +0.42%",
+  "otc_readout_idle": "13:30 238.97 -0.43%"
+ },
+ "SC-4 toggles": {
+  "left(加權)": [
+   {
+    "t": "均價",
+    "dis": false,
+    "title": "分鐘收盤均價(指數無成交量)"
+   },
+   {
+    "t": "CDP",
+    "dis": false
+   },
+   {
+    "t": "MA",
+    "dis": false
+   }
+  ],
+  "right(櫃買)": [
+   {
+    "t": "均價",
+    "dis": false,
+    "title": "分鐘收盤均價(指數無成交量)"
+   },
+   {
+    "t": "CDP",
+    "dis": true,
+    "title": "櫃買無日 K 資料源"
+   },
+   {
+    "t": "MA",
+    "dis": true,
+    "title": "櫃買無日 K 資料源"
+   }
+  ]
+ },
+ "SC-2/3 DOM": {
+  "twse_yticks": [
+   "24567.3",
+   "24300",
+   "24032.7"
+  ],
+  "twse_cdp_ma_lines_in_domain": 5,
+  "pegs": [
+   "AL 23950↓",
+   "MA20 24022.92↓"
+  ],
+  "edge": [
+   "edge-price-ma5:24241.67",
+   "edge-price-vwap:24361.09",
+   "edge-price-vwap:240.97"
+  ],
+  "marks(day-high/day-low/last-dot ×2 pane)": 6,
+  "subSvg": false,
+  "aria": [
+   "加權指數分時走勢",
+   "櫃買指數分時走勢"
+  ]
+ },
+ "overlay fixture": {
+  "cdp": 24250000,
+  "ah": 24550000,
+  "nh": 24450000,
+  "nl": 24150000,
+  "al": 23950000,
+  "ma5": 24241666,
+  "ma20": 24022916,
+  "twse_minutes_range": [
+   24283538,
+   24415282
+  ],
+  "ref": 24300000,
+  "domain": "對稱 autofit ±1% 地板 → [24032.7, 24567.3](日振幅 0.5% 時 1% 地板主導,§5 觀感差異)"
+ },
+ "after fmtIndexPts (c326dee0)": {
+  "ticks": [
+   "24567",
+   "24300",
+   "24033",
+   "244.45",
+   "240",
+   "235.55"
+  ],
+  "pegs": [
+   "AL 23950↓",
+   "MA20 24023↓"
+  ],
+  "edge": [
+   "edge-price-ma5:24242",
+   "edge-price-vwap:24361.09",
+   "edge-price-vwap:240.97"
+  ],
+  "starred": [
+   "24550*",
+   "24450*",
+   "24250*",
+   "24150*"
+  ],
+  "twse_hover": {
+   "priceTag": "24285",
+   "readout": "11:36 24400.94 +0.42%"
+  },
+  "otc_hover": {
+   "priceTag": "240.32",
+   "readout": "11:00 242.64 +1.10%"
+  }
+ }
+}

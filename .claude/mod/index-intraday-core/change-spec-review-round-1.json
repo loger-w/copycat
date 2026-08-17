@@ -1,0 +1,124 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-17",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "P1",
+      "section": "3.1 右緣 / MA 價位文字",
+      "problem": "index 態 MA 價位標籤 maLabels(:442-457)直接呼叫 fmtTickPrice,spec 只寫 levelText 改吃 priceText → MA5=23_018_000 會 snap 成 23020,靜默。",
+      "fix": "兩個落點都吃 priceText;fixture 放非 5 點整除的 MA 值。",
+      "disposition": "accepted",
+      "resolution": "spec §3.1 [amendment] 明列兩落點;SC-2 fixture ma5=23_018_000 斷言 23018。"
+    },
+    {
+      "id": "R2",
+      "severity": "P1",
+      "section": "3.1 域外掛牌",
+      "problem": "pegs 與 maLabels / 極值標籤同一條 x 走廊各自堆疊,會疊印且無 assertion 會紅。",
+      "fix": "pegs 進 edgePriceLabels obstacles 或單一佈局器;補 vitest。",
+      "disposition": "accepted",
+      "resolution": "pegs 先定位(上緣往下 / 下緣往上),其 y 併入 edgePriceLabels 的 obstacles(MA 讓位);補測試 peg 與 edge-price-ma5 y 差 ≥ EDGE_LABEL_H。"
+    },
+    {
+      "id": "R3",
+      "severity": "P1",
+      "section": "3.4 佈局 W-4",
+      "problem": "flex-[3]/flex-[2]/min-h-40 皆無條件,單欄態左欄由內容決定高,grow 比例改變 intrinsic 尺寸(+約 60-120px)且 AD 地板 96→160,打穿 W-4 單欄退化不動;SC-6 只量兩欄態。",
+      "fix": "收進兩欄態斷點;SC-6 加 <1050px 量測。",
+      "disposition": "accepted_with_modification",
+      "resolution": "reviewer 建議的 `@[1050px]:flex-[3]` 掛在 grid/section/AD wrapper 上**量不到 root**(它們的最近 @container 是左欄,兩欄態左欄 630-930px 永不成立 — frontend-conventions 巢狀 container 陷阱)。改為左欄(最近 container = root)以 `@[1050px]:[--idx-*:…]` 設 4 個 CSS 變數,子節點 `[flex:var(--idx-…,<舊值>)]` 讀取,預設值 = 改動前行為 → 單欄態由建構保證不變。SC-6 加 1366×768(單欄態)量測:wrapper 96px、變數未套用。"
+    },
+    {
+      "id": "R4",
+      "severity": "P1",
+      "section": "3.3 測試逐一標記",
+      "problem": "MarketPane.test 只寫「逐案跑」;MarketPane.size.test TD-7/可縮鏈未標;AD 測試範圍切在斷言中間;StockChart.test 未列。",
+      "fix": "逐案表。",
+      "disposition": "accepted",
+      "resolution": "快篩:MarketPane.test.tsx grep 無 分時走勢/viewBox/polyline/index-ytick 依賴 → 全檔不該紅;逐案表寫進 spec §3.5。"
+    },
+    {
+      "id": "R5",
+      "severity": "P1",
+      "section": "6 commit 分類",
+      "problem": "core 加 mode 是新增能力(🟢),不是 🔵;且無 [red] commit。",
+      "fix": "拆 🟢 [red] → [green]。",
+      "disposition": "accepted",
+      "resolution": "§6 改:🟢 test core index 契約 [red] → 🟢 feat core mode [green](個股零變化仍是 SC-5 白名單驗證);SC-8 同步。"
+    },
+    {
+      "id": "R6",
+      "severity": "P2",
+      "section": "3.2 adapter 窗",
+      "problem": "vwap/high/low 以全部鍵折,幾何只吃 SPOT_WINDOW → 兩把尺。",
+      "fix": "adapter 只收窗內分鐘。",
+      "disposition": "accepted",
+      "resolution": "adapter import SPOT_WINDOW 過濾;測試補窗外鍵案。"
+    },
+    {
+      "id": "R7",
+      "severity": "P2",
+      "section": "3.3 刪除清單",
+      "problem": "漏 module-private fmt 與 svgFontRem import。",
+      "fix": "補列。",
+      "disposition": "accepted",
+      "resolution": "spec 補列;以 eslint 零殘留為準。"
+    },
+    {
+      "id": "R8",
+      "severity": "P2",
+      "section": "3.1 overlay 注入",
+      "problem": "`|| null` 是 stock 路徑順手改。",
+      "fix": "`index ? null : accum.code`。",
+      "disposition": "REFUTED",
+      "resolution": "快篩(實作時):master c958b141 :709 現碼已是 `accum.code || null`,spec 原句抄漏;保留現碼即 W-1,無 next-time 項。"
+    },
+    {
+      "id": "R9",
+      "severity": "P2",
+      "section": "3.1 pegs useMemo",
+      "problem": "位置與 deps 未標。",
+      "fix": "比照 fillMarks 標註。",
+      "disposition": "accepted",
+      "resolution": "spec 明寫位置(g 之後、早退之前)與 deps。"
+    },
+    {
+      "id": "R10",
+      "severity": "P2",
+      "section": "3.4 min-h-40 / SC-6",
+      "problem": "地板 96→160 讓 1366×768 開始出捲軸。",
+      "fix": "加 1366×768 量測或條件化。",
+      "disposition": "accepted",
+      "resolution": "隨 R3 條件化:1366×768 為單欄態(容器 1017 < 1050)→ 變數不套用、地板維持 96;SC-6 加該尺寸量測。"
+    },
+    {
+      "id": "R11",
+      "severity": "P2",
+      "section": "3.1 空態",
+      "problem": "index 態空態沿用帶 border/bg 的框 → figure 內框中框。",
+      "fix": "index 態去框。",
+      "disposition": "accepted",
+      "resolution": "index 態空態容器 `flex flex-1 items-center justify-center`(無 border/bg);.index.test 鎖。"
+    },
+    {
+      "id": "R12",
+      "severity": "P2",
+      "section": "3.3 MarketChart height 語意",
+      "problem": "同一 prop 兩種單位;MarketPane intraday 態仍算 candle frame 死值。",
+      "fix": "分 prop;分支內計算。",
+      "disposition": "accepted",
+      "resolution": "MarketChart 新 prop `intradayBox?: {width; height}`(px 1:1),`height` 只給 candle;MarketPane 的 frame/svgHeight/unitScale 只在非 intraday 分支計算。"
+    },
+    {
+      "id": "R13",
+      "severity": "P2",
+      "section": "SC-3 / §5",
+      "problem": "高 === 低只畫日高;p null 無現價圈;§5 漏左緣刻度紅綠 + 格線。",
+      "fix": "補文字。",
+      "disposition": "accepted",
+      "resolution": "SC-3 / edge / §5 補。"
+    }
+  ]
+}
