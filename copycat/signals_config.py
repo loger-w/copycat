@@ -21,6 +21,8 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "signals.json
 class SignalsConfig:
     # --- CDP 穿越(SC-1)---
     cdp_rearm_ticks: int = 5  # 觸發後需離開該線 N 個 tick 才解除 suppressed
+    # 觸發後需**連續**待在線外 N 秒才解除 suppressed;0 = 離線即解除(舊行為)
+    cdp_rearm_dwell_secs: float = 300.0
     cdp_cooldown_secs: float = 600.0  # per (code, level) 冷卻
     # --- 爆拉 / 爆跌(SC-2)---
     surge_pct: float = 2.0  # 窗內漲跌幅門檻(%)
