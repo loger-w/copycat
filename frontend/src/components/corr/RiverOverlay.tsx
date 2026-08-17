@@ -20,6 +20,8 @@ const SIZE: RiverSize = { width: 960, height: 340 };
 /** base 腿(序位 0)畫粗線,其餘細線 */
 const BASE_STROKE_W = 2;
 const LEG_STROKE_W = 1.2;
+/** 首筆晚於最早腿超過此分鐘數才標「自 HH:MM 起算 0%」(同場開盤的腿差 1–2 格不算) */
+const LATE_START_MIN = 5;
 
 function hhmm(minuteOfDay: number): string {
   const m = ((minuteOfDay % 1440) + 1440) % 1440;
@@ -53,6 +55,15 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     SIZE.height - 14,
   );
 
+  // 基準時點分歧註記:每腿以「本場自己的第一筆」為 0%(buildOverlayGeometry),開盤時間不同的腿
+  // (小日經 OSE 夜盤台北 16:00 開,其餘腿 15:00)基準時點就不同,線的絕對高度不可比、只有
+  // 斜率可比。首筆晚於最早腿超過 LATE_START_MIN 分鐘者在標頭列標示起算時刻;零改幾何。
+  const firstOffsets = g.lines.filter((l) => l.pts.length > 0).map((l) => l.pts[0]!.offset);
+  const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
+  const lateStarts = g.lines
+    .filter((l) => l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN)
+    .map((l) => ({ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }));
+
   const readout =
     cursor === null
       ? null
@@ -70,6 +81,15 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
         {readout?.map(({ key, label, colorIndex, hit }) => (
           <span key={key} className={cn("font-mono", RIVER_TEXTS[colorIndex % RIVER_TEXTS.length])}>
             {label} {hit ? fmtPct(hit.pct) : "—"}
+          </span>
+        ))}
+        {lateStarts.map(({ key, label, colorIndex, at }) => (
+          <span
+            key={`late-${key}`}
+            className={cn("ml-auto text-ink-dim", RIVER_TEXTS[colorIndex % RIVER_TEXTS.length])}
+            title="重疊圖各腿以本場首筆為 0%;開盤時間不同的腿基準時點不同,只比斜率不比高度"
+          >
+            {label} 自 {hhmm(win.start_min + at)} 起算 0%
           </span>
         ))}
       </div>
