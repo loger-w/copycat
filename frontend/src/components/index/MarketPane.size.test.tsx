@@ -3,7 +3,8 @@
  *
  *  **與 MarketPane.test.tsx 拆開**:本檔在其中一個 it 內把全域 `ResizeObserver` 換成
  *  同步回呼的假物件,那是整個檔案唯一需要量測態的地方 —— 混進主檔會讓所有既有測試的
- *  fallback 語意(jsdom 無 ResizeObserver → 退回固定 640×220,W-10)靜默改變。
+ *  fallback 語意(jsdom 無 ResizeObserver → 分時退回 core 預設 800×260、重疊退回 640×220,
+ *  W-10)靜默改變。
  *  對照案(不 stub)就掛在同一個 describe 裡,兩者一起讀才看得出「量得到 / 量不到」
  *  真的分岔。 */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -19,7 +20,7 @@ import {
   MARKET_KEY_STORE,
   MARKET_MODE_STORE,
 } from "@/lib/constants";
-import { PANE_FRAMES, paneSvgHeight } from "@/lib/pane-frame";
+import { PANE_FRAMES, paneIntradayBox, paneSvgHeight } from "@/lib/pane-frame";
 
 const TWSE: IndexSeries = {
   p: 42_039_920,
@@ -115,10 +116,10 @@ function renderPane(otc: IndexSeries | null = null) {
   );
 }
 
-/** 分時圖 svg 的 viewBox 高(第 4 欄)。 */
-function svgViewBoxHeight(): number {
-  const svg = screen.getByRole("img", { name: "加權指數分時走勢" });
-  return Number((svg.getAttribute("viewBox") ?? "").split(" ")[3]);
+/** 分時圖 svg 的 viewBox 字串。分時態改吃 1:1 px box 後,**寬也是變數**
+ *  (不再是恆定的 640),只比高會漏掉「寬沒跟著量測走」這個失效樣態。 */
+function intradayViewBox(): string | null {
+  return screen.getByRole("img", { name: "加權指數分時走勢" }).getAttribute("viewBox");
 }
 
 beforeEach(() => {
@@ -134,13 +135,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("paneSvgHeight 三態算式(§4.1)", () => {
+describe("paneSvgHeight 兩態算式(§4.1)", () => {
   const size = { width: 430, height: 300 };
-
-  it("intraday:chrome 26 / 不內縮 / vbW 640", () => {
-    // renderPx = max(96, floor(300 − 26) − 2) = 272;vbH = round(272 × 640 / 430)
-    expect(paneSvgHeight(size, PANE_FRAMES.intraday)).toBe(405);
-  });
 
   it("overlay:巢狀 figure 再吃 62 高 34 寬", () => {
     // svgW = 430 − 34 = 396;renderPx = max(96, floor(300 − 62) − 2) = 236
@@ -153,33 +149,56 @@ describe("paneSvgHeight 三態算式(§4.1)", () => {
   });
 
   it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
-    expect(paneSvgHeight({ width: 430, height: 30 }, PANE_FRAMES.intraday)).toBe(143);
+    // svgW = 396;renderPx 夾到 96 → 96 × 640 / 396
+    expect(paneSvgHeight({ width: 430, height: 30 }, PANE_FRAMES.overlay)).toBe(155);
     expect(paneSvgHeight({ width: 430, height: 10 }, PANE_FRAMES.candle)).toBe(339);
   });
 
   it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → undefined(呼叫端走各自 fallback)", () => {
-    expect(paneSvgHeight({ width: 0, height: 300 }, PANE_FRAMES.intraday)).toBeUndefined();
-    expect(paneSvgHeight({ width: 430, height: 0 }, PANE_FRAMES.intraday)).toBeUndefined();
+    expect(paneSvgHeight({ width: 0, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
+    expect(paneSvgHeight({ width: 430, height: 0 }, PANE_FRAMES.overlay)).toBeUndefined();
     expect(paneSvgHeight({ width: 30, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
     expect(paneSvgHeight({ width: 34, height: 300 }, PANE_FRAMES.candle)).toBeUndefined();
   });
 });
 
+/** 分時態退出 `PANE_FRAMES`(不再有 viewBox 反解):量到多少 px 就畫多少 px,
+ *  與群組卡片的 `cardSvgBox` 同法 —— 字級因此與 pane 寬無關,`unitScale` 那條補償
+ *  對分時態隨之退場。 */
+describe("paneIntradayBox 算式(1:1)", () => {
+  it("量得到:寬 = 量到的寬、高 = max(96, floor(高 − 26) − 2)", () => {
+    // chrome 26 = core readout 列 h-[1.375rem] 22 + mb-1 4;−2 抗抖
+    expect(paneIntradayBox({ width: 430, height: 300 })).toEqual({
+      width: 430,
+      height: 272,
+      usable: true,
+    });
+  });
+
+  it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
+    expect(paneIntradayBox({ width: 430, height: 30 }).height).toBe(96);
+  });
+
+  it("量不到(0 寬 / 0 高)→ usable false(呼叫端傳 undefined 讓 core 走預設)", () => {
+    expect(paneIntradayBox({ width: 0, height: 300 }).usable).toBe(false);
+    expect(paneIntradayBox({ width: 430, height: 0 }).usable).toBe(false);
+  });
+});
+
 describe("MarketPane 量測 → 圖高(SC-4)", () => {
-  it("有 ResizeObserver:分時 svg 高 = paneSvgHeight(量到的容器尺寸),不再是固定 220", () => {
+  it("有 ResizeObserver:分時 svg 走 1:1 box(寬高都跟著量測),不再是固定 640×220", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     renderPane();
 
-    const expected = paneSvgHeight({ width: 430, height: 300 }, PANE_FRAMES.intraday);
-    expect(expected).toBeDefined();
-    expect(expected).not.toBe(220);
-    expect(svgViewBoxHeight()).toBe(expected);
+    const box = paneIntradayBox({ width: 430, height: 300 });
+    expect(box.usable).toBe(true);
+    expect(intradayViewBox()).toBe(`0 0 ${box.width} ${box.height}`);
   });
 
-  it("無 ResizeObserver(jsdom 預設 / 舊瀏覽器)→ 退回固定 220(W-10)", () => {
+  it("無 ResizeObserver(jsdom 預設 / 舊瀏覽器)→ 退回 core 預設 800×260(W-10)", () => {
     expect(typeof ResizeObserver).toBe("undefined");
     renderPane();
-    expect(svgViewBoxHeight()).toBe(220);
+    expect(intradayViewBox()).toBe("0 0 800 260");
   });
 });
 
@@ -221,24 +240,30 @@ describe("MarketPane 依模式選 frame(TD-7)", () => {
 // 🔴 WL-3:svg 帶 viewBox + `w-full` → 內容整份等比縮放,pane 變窄時 rem 字級跟著縮
 // (1536 兩欄態 svgW 312 → 0.625rem 只剩 ~4.9px,不可讀)。補償 = 把 `vbW / svgW` 這個
 // 縮放比乘回 viewBox 內的字級,渲染 px 因此與 pane 寬無關。
-describe("MarketPane svg 字級補償(WL-3)", () => {
-  /** 左 pane 分時 svg 內第一個 `<text>`(整點刻度標籤)的 font-size。 */
+//
+// **分時態已不在本條的射程內**:改吃 1:1 px box 後 viewBox 寬 = 渲染寬,縮放比恆 1,
+// 字級與 pane 寬天生無關(取代補償)。仍走等比縮放的只剩 `OverlayCard`(viewBox 寬
+// 寫死 640),補償留在那裡。
+describe("MarketPane svg 字級補償(WL-3;overlay 態)", () => {
+  /** 重疊圖 svg 內第一個 `<text>`(整點刻度標籤)的 font-size。 */
   function firstTextFontSize(): string | null {
-    const svg = screen.getByRole("img", { name: "加權指數分時走勢" });
+    const svg = screen.getByRole("img", { name: "指數重疊走勢" });
     return svg.querySelector("text")!.getAttribute("font-size");
   }
 
   it("量得到:字級 × (vbW / svgW) —— 430px 寬的 pane 把 0.625rem 放大回可讀", () => {
+    window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    renderPane();
-    // insetX = 0(分時 svg 直接在 wrapper 內)→ svgW = 430
-    const expected = `${(0.625 * (640 / 430)).toFixed(4)}rem`;
+    renderPane(OTC);
+    // insetX = 34(巢狀 figure 的 border + p-4)→ svgW = 430 − 34 = 396
+    const expected = `${(0.625 * (640 / 396)).toFixed(4)}rem`;
     expect(firstTextFontSize()).toBe(expected);
   });
 
   it("量不到(jsdom 無 ResizeObserver)→ scale 1,與改版前的字級數值等價", () => {
+    window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
     expect(typeof ResizeObserver).toBe("undefined");
-    renderPane();
+    renderPane(OTC);
     expect(Number(firstTextFontSize()!.replace("rem", ""))).toBeCloseTo(0.625, 6);
   });
 });
