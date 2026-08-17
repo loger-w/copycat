@@ -10,6 +10,8 @@ export interface ChartToggles {
   bb: boolean;
   /** 價位別成交量長條(江波圖專用) */
   vp: boolean;
+  /** 分時圖上「我當日有成交的委託」▲/▼ 標記(個股 / 個股期單檔頁 + 群組圖牆) */
+  fills: boolean;
 }
 
 /** 存檔 schema 版本。**storage-only,不屬 `ChartToggles`** —— 洩進 toggles 物件會讓
@@ -28,8 +30,19 @@ const TOGGLES_VERSION = 2;
  *  `load()` 的 `{...DEFAULTS, ...saved}` 讓存檔覆蓋預設 —— 對「使用者選過」的項目是
  *  對的,但對**新改的預設**是錯的:舊存檔裡的 `bb: false` 是「當時的預設」而不是
  *  「使用者選了關」,照樣覆蓋的話 user 的畫面永遠不會變成新預設。
- *  故只對 `bb` 做一次性升級(見 `load`),其餘欄位維持「存檔優先、不強制升級」。 */
-const DEFAULTS: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
+ *  故只對 `bb` 做一次性升級(見 `load`),其餘欄位維持「存檔優先、不強制升級」。
+ *
+ *  `fills` 預設開(成交點 SC-2,D8 user 拍板)。**同樣不 bump `TOGGLES_VERSION`** ——
+ *  理由與 `vp` 那條逐字相同:它是全新的鍵,舊存檔沒有它,`{...DEFAULTS, ...flags}` 自然
+ *  補上;bump 反而會讓所有人的 `bb` 被再打開一次(升級分支不分辨是誰觸發的)。 */
+const DEFAULTS: ChartToggles = {
+  vwap: true,
+  cdp: true,
+  ma: false,
+  bb: true,
+  vp: true,
+  fills: true,
+};
 
 interface Stored extends Partial<ChartToggles> {
   v?: number;
