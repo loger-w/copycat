@@ -37,7 +37,7 @@ const OTC = series({
   minutes: { "1017": 359_800 },
 });
 const FUTURES: Record<string, PaneFutState> = { TXF: { p: 42_142_000, ref: 42_000_000 } };
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false, fills: true };
 
 const LEFT_STORES: PaneStores = {
   key: MARKET_KEY_STORE,
