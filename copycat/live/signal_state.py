@@ -15,7 +15,8 @@
   尚未起算);穿越當筆若已在線外(跳空)即從該筆起算。`dwell = 0` 完全等於舊語意。
 - **穿越判定看側別不看不等式**(signal-denoise SC-2):`_side[(code, level)] =
   (線價, −1/0/+1)`,`price == 線價` 是「線上」—— 不觸發也不改變側別,穿越 = 上一個
-  非線上側別與本 tick 側別相反。側別存了線價,基準換線即自動失效(改由 `prev` 推定)。
+  非線上側別與本 tick 側別相反。側別存了線價,基準換線即自動失效;`set_basis` 另外
+  一律清該檔側別(盲窗 None 之後同線價回來,線價比對擋不住 —— review C-1)。
   側別推進與駐留計時同屬狀態推進,在 `enabled` gate **之前**跑。
 - **接線層(SignalHub)持有所有 IO 與 membership gate**,本模組不認得自選清單。
 
@@ -136,8 +137,15 @@ class SignalDetector:
     # ---- 基準(CDP)----
 
     def set_basis(self, code: str, cdp: dict[str, int] | None) -> None:
-        """None = 該檔基準不可得(抓取失敗),CDP 跳過、其他 kind 照常。"""
+        """None = 該檔基準不可得(抓取失敗),CDP 跳過、其他 kind 照常。
+
+        換基準**一律清該檔側別**(review C-1):側別存的線價只擋得住「換了線價」,
+        擋不住「盲窗(None)之後同一條線回來」—— 盲窗期間 CDP 整段跳過、側別不推進,
+        價格卻照走,殘留的舊側別會讓恢復後的首筆假發一則穿越。清掉之後首筆退回
+        `prev` 推定,與基準第一次到位時同一條路徑(舊語意)。
+        """
         self._basis[code] = dict(cdp) if cdp else None
+        self._side = {k: v for k, v in self._side.items() if k[0] != code}
 
     def stage_basis(self, code: str, cdp: dict[str, int] | None, basis_date: str) -> None:
         """換日 stage1 預抓:寫暫存區,`swap_staged_basis` 才生效(design R2-4)。
