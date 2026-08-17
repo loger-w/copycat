@@ -92,6 +92,44 @@ function TradeKindPills({
   );
 }
 
+/** 部位條(卡片最底,D5)。空手 → 整段不渲染(零痕跡)。
+ *  抽成模組層元件:PriceLadder 主體已在 react-doctor no-giant-component 門檻上,而
+ *  這一塊是純展示 —— 主體要留給拿得到 arm / qty / mutation 的送單邏輯。 */
+function PositionBar({ rows }: { rows: PositionRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div
+      data-testid="ladder-position-bar"
+      className="border-t border-line px-2 py-1 font-mono text-xs"
+    >
+      {rows.map((r) => (
+        <div key={r.key} data-testid="ladder-position-row">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-ink">{r.head}</span>
+            <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
+          </div>
+          {/* 兩顆色點分別對應梯內兩根標線,讓「梯上那根線是什麼」不必猜。
+              均價**只給標籤不給數字**(CALC-3):第一行 @ 顯示的是真均價原值,
+              標線位置是 snapNearest 後的近似檔位 —— 兩個口徑的數字並列會讓人
+              以為均價變了。 */}
+          <div className="flex items-center gap-1 text-ink-muted">
+            {r.beTick !== null ? (
+              <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
+            ) : null}
+            <span>{r.beText}</span>
+            {r.avgTick !== null ? (
+              <>
+                <span aria-hidden="true" className="ml-1 inline-block h-2 w-0.5 bg-ma20" />
+                <span>均價</span>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface DiscountState {
   /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
   raw: string;
@@ -424,39 +462,7 @@ export function PriceLadder({
           }}
         />
       }
-      footer={
-        posRows.length > 0 ? (
-          <div
-            data-testid="ladder-position-bar"
-            className="border-t border-line px-2 py-1 font-mono text-xs"
-          >
-            {posRows.map((r) => (
-              <div key={r.key} data-testid="ladder-position-row">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-ink">{r.head}</span>
-                  <span className={pnlTone(r.pnl)}>{pnlText(r.pnl)}</span>
-                </div>
-                {/* 兩顆色點分別對應梯內兩根標線,讓「梯上那根線是什麼」不必猜。
-                    均價**只給標籤不給數字**(CALC-3):第一行 @ 顯示的是真均價原值,
-                    標線位置是 snapNearest 後的近似檔位 —— 兩個口徑的數字並列會讓人
-                    以為均價變了。 */}
-                <div className="flex items-center gap-1 text-ink-muted">
-                  {r.beTick !== null ? (
-                    <span aria-hidden="true" className="inline-block h-2 w-0.5 bg-warn" />
-                  ) : null}
-                  <span>{r.beText}</span>
-                  {r.avgTick !== null ? (
-                    <>
-                      <span aria-hidden="true" className="ml-1 inline-block h-2 w-0.5 bg-ma20" />
-                      <span>均價</span>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : null
-      }
+      footer={<PositionBar rows={posRows} />}
     />
   );
 }
