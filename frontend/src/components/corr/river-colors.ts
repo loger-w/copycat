@@ -2,7 +2,8 @@
  *
  * 腿清單走 `configs/correlation.json`(realtime-correlation SC-8:加第七腿只改設定檔),
  * 所以顏色不能寫成 `{TXF: ..., TWN: ...}` 對照表 —— 那會讓新腿沒有顏色。序位 0 = base 腿
- * (重疊圖畫粗線)。腿數超過調色盤時取模循環。
+ * (重疊圖畫粗線)。腿數超過調色盤時取模循環(2026-08-17 起七腿含小日經,
+ * 調色盤同步補到 7 組,第 7 腿不再取模撞回 base 近白色)。
  *
  * class 名必須是**原始碼裡的字面值**(Tailwind v4 掃描原始碼),故寫成常數陣列而非動態拼接。
  */
@@ -14,6 +15,7 @@ export const RIVER_STROKES = [
   "stroke-river-4",
   "stroke-river-5",
   "stroke-river-6",
+  "stroke-river-7",
 ] as const;
 
 export const RIVER_FILLS = [
@@ -23,6 +25,7 @@ export const RIVER_FILLS = [
   "fill-river-4",
   "fill-river-5",
   "fill-river-6",
+  "fill-river-7",
 ] as const;
 
 export const RIVER_TEXTS = [
@@ -32,4 +35,5 @@ export const RIVER_TEXTS = [
   "text-river-4",
   "text-river-5",
   "text-river-6",
+  "text-river-7",
 ] as const;
