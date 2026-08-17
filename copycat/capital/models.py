@@ -129,6 +129,9 @@ class OrderRecord:
     pre_order: bool = False
     error_msg: str | None = None
     actionable: bool = False  # 活單可刪/改。store 由 _RANK 算,前端不要自己抄狀態表
+    # 價格別:**本 app 送出才知道**(群益回報無此欄)→ APP 下單 / 跨日的單恆 None。
+    # store 由送單結果記憶(note_price_type),回報事件不會產生它。
+    price_type: str | None = None
     raw: str = ""  # 最新事件原始字串(debug)
 
 
