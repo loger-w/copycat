@@ -43,7 +43,7 @@ from tests.server.test_stock_routes import FakeStockSource
 _RULES_FILE = "signal_rules.json"
 
 _RULE_PARAMS: dict[str, dict[str, float]] = {
-    "cdp_cross": {"rearm_ticks": 5},
+    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
     "surge_crash": {"pct": 2.0, "window_secs": 300},
     "vol_burst": {
         "ratio": 3,
@@ -574,6 +574,25 @@ class TestSignalRulesRoutes:
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "INVALID_RULE"
             assert _rules(client) == before, "被拒的請求不得留下半套狀態"
+
+    def test_cdp_body_missing_rearm_dwell_secs_400(self, tmp_path: Path) -> None:
+        """W9 R15:精確鍵集合對新鍵一樣嚴 —— server 更新後未重新整理的舊分頁送 cdp 規則
+        會缺 `rearm_dwell_secs`,預期降級成 INVALID_RULE(重新整理即恢復)。
+
+        這裡不是可容忍的寬鬆點:放行等於使用者以為調得動駐留秒數,實際套的是 detector 預設。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            before = _rules(client)
+
+            r = client.post(
+                "/api/stock/signals/rules",
+                json=_rule_body("cdp_cross", "舊分頁送的", params={"rearm_ticks": 5}),
+            )
+
+            assert r.status_code == 400
+            assert r.json()["detail"]["error"] == "INVALID_RULE"
+            assert _rules(client) == before
 
     @pytest.mark.parametrize("missing", ["name", "kind", "cooldown_secs", "params", "cdp_levels"])
     def test_missing_field_400(self, tmp_path: Path, missing: str) -> None:

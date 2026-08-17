@@ -25,7 +25,7 @@ from copycat.signal_rules import (
 from copycat.signals_config import SignalsConfig
 
 VALID_PARAMS: dict[str, dict[str, float]] = {
-    "cdp_cross": {"rearm_ticks": 5},
+    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
     "surge_crash": {"pct": 2.0, "window_secs": 300},
     "vol_burst": {
         "ratio": 3,
@@ -73,7 +73,7 @@ class TestConstants:
         樣態是使用者填得進去的值被後端拒收(或反過來,拒收本來合法的值)。
         """
         assert PARAM_SPECS == {
-            "cdp_cross": {"rearm_ticks": (0, 50)},
+            "cdp_cross": {"rearm_ticks": (0, 50), "rearm_dwell_secs": (0, 3600)},
             "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
             "vol_burst": {
                 "ratio": (1, 100),
@@ -203,6 +203,23 @@ class TestNormalizeParams:
         params["pct"] = 2.5
         assert normalize_rule(make("surge_crash", params=params), {})["params"]["pct"] == 2.5
 
+    def test_rearm_dwell_secs_is_float_not_integer_key(self) -> None:
+        """D7:駐留秒數與 `window_secs` 同型 —— 秒不需要整數限制,2.5 秒必須收得下。
+
+        誤加進 `INT_PARAM_KEYS` 的失效樣態是使用者填 2.5 拿到 INVALID_RULE,
+        而畫面上只會顯示「規則設定不合法」,看不出是哪一欄。
+        """
+        params = dict(VALID_PARAMS["cdp_cross"])
+        params["rearm_dwell_secs"] = 2.5
+        out = normalize_rule(make("cdp_cross", params=params), {})
+        assert out["params"]["rearm_dwell_secs"] == 2.5
+
+    def test_rearm_dwell_secs_above_max_rejected(self) -> None:
+        params = dict(VALID_PARAMS["cdp_cross"])
+        params["rearm_dwell_secs"] = 3601
+        with pytest.raises(RuleError, match="INVALID_RULE"):
+            normalize_rule(make("cdp_cross", params=params), {})
+
 
 class TestNormalizeFields:
     def test_unknown_kind_rejected(self) -> None:
@@ -307,6 +324,7 @@ class TestDefaultRules:
     def test_params_seeded_from_config(self) -> None:
         cfg = SignalsConfig(
             cdp_rearm_ticks=7,
+            cdp_rearm_dwell_secs=180.0,
             surge_pct=3.5,
             surge_window_secs=120.0,
             vol_ratio=4.0,
@@ -316,6 +334,7 @@ class TestDefaultRules:
         )
         by_kind = {r["kind"]: r for r in default_rules(cfg, {})}
         assert by_kind["cdp_cross"]["params"]["rearm_ticks"] == 7
+        assert by_kind["cdp_cross"]["params"]["rearm_dwell_secs"] == 180.0
         assert by_kind["cdp_cross"]["cdp_levels"] == list(CDP_LEVELS)
         assert by_kind["surge_crash"]["params"] == {"pct": 3.5, "window_secs": 120.0}
         assert by_kind["vol_burst"]["params"] == {
@@ -373,7 +392,7 @@ class TestLoadSaveRules:
         path = tmp_path / "rules.json"
         save_rules(path, [])
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 1
+        assert payload["_cache_version"] == 2
         assert payload["rules"] == []
 
     def test_bad_json_raises(self, tmp_path: Path) -> None:
@@ -448,17 +467,127 @@ class TestLoadSaveRules:
             save_rules(blocker / "rules.json", [])
 
 
+class TestMigrationV1ToV2:
+    """SC-8:既有 v1 規則檔在載入期補 `rearm_dwell_secs`,不回寫檔案(§7 回退窗)。
+
+    沒有這條轉換,升級後第一次啟動就是 `load_rules` raise → hub None →
+    `/api/stock/signals/*` 全數 503,而且盤中才會發現。
+    """
+
+    def _write(self, path: Path, version: int, rules: list[Any]) -> None:
+        path.write_text(
+            json.dumps({"_cache_version": version, "rules": rules}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _v1_cdp(self) -> dict[str, Any]:
+        rule = make("cdp_cross", id="r-1-000", name="舊 CDP")
+        rule["params"] = {"rearm_ticks": 5}  # v1 形:沒有 rearm_dwell_secs
+        return rule
+
+    def test_v1_file_loads_with_dwell_backfilled(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        self._write(path, 1, [self._v1_cdp(), make("limit_lock", id="r-1-001", name="鎖停")])
+
+        loaded = load_rules(path)
+
+        assert loaded is not None and len(loaded) == 2
+        assert loaded[0]["params"] == {"rearm_ticks": 5.0, "rearm_dwell_secs": 300.0}
+        assert loaded[1]["params"] == {}
+
+    def test_v1_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
+        """不回寫 = upsert 前還留著回退窗(§7):舊碼可以直接讀回原檔。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 1, [self._v1_cdp()])
+        before = path.read_text(encoding="utf-8")
+
+        load_rules(path)
+
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_v1_migration_logs_rule_id_and_value(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """補值與種子路徑(`cfg.cdp_rearm_dwell_secs`)可能不同 → 補了什麼要留痕(§7 已知分歧)。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 1, [self._v1_cdp()])
+        with caplog.at_level("INFO"):
+            load_rules(path)
+        assert "r-1-000" in caplog.text
+        assert "300" in caplog.text
+
+    def test_v2_file_missing_new_key_rejected(self, tmp_path: Path) -> None:
+        """精確集合仍在(W9):v2 檔缺鍵不是「舊檔」,是壞檔 —— 不得順手補。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [self._v1_cdp()])
+        with pytest.raises(RuleError, match="INVALID_RULE"):
+            load_rules(path)
+
+    def test_v2_file_with_new_key_loads(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [make("cdp_cross", id="r-1-000", name="新 CDP")])
+        loaded = load_rules(path)
+        assert loaded is not None
+        assert loaded[0]["params"]["rearm_dwell_secs"] == 300.0
+
+    def test_v1_file_with_new_key_kept_as_is(self, tmp_path: Path) -> None:
+        """v1 檔已帶新鍵(手改過)→ 不覆蓋成預設。"""
+        path = tmp_path / "rules.json"
+        rule = make("cdp_cross", id="r-1-000", name="手改")
+        rule["params"] = {"rearm_ticks": 5, "rearm_dwell_secs": 60}
+        self._write(path, 1, [rule])
+        loaded = load_rules(path)
+        assert loaded is not None
+        assert loaded[0]["params"]["rearm_dwell_secs"] == 60.0
+
+    def test_v1_invalid_rule_still_raises(self, tmp_path: Path) -> None:
+        """遷移只補鍵,不放寬其他驗證。"""
+        path = tmp_path / "rules.json"
+        bad = self._v1_cdp()
+        bad["cooldown_secs"] = 5
+        self._write(path, 1, [bad])
+        with pytest.raises(RuleError, match="INVALID_RULE"):
+            load_rules(path)
+
+    def test_save_after_v1_load_lands_v2(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        self._write(path, 1, [self._v1_cdp()])
+        loaded = load_rules(path)
+        assert loaded is not None
+        save_rules(path, loaded)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["_cache_version"] == 2
+        assert payload["rules"][0]["params"]["rearm_dwell_secs"] == 300.0
+
+    def test_version_zero_and_three_still_raise(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        for version in (0, 3):
+            self._write(path, version, [])
+            with pytest.raises(RuleError, match="INVALID_RULE"):
+                load_rules(path)
+
+
 class TestRuleConfig:
     def test_cdp_cross_mapping(self) -> None:
         base = SignalsConfig()
         rule = normalize_rule(
-            make("cdp_cross", cooldown_secs=900, params={"rearm_ticks": 8}), {}
+            make("cdp_cross", cooldown_secs=900, params={"rearm_ticks": 8, "rearm_dwell_secs": 120}),
+            {},
         )
         cfg = rule_config(rule, base)
         assert cfg.cdp_rearm_ticks == 8
         assert isinstance(cfg.cdp_rearm_ticks, int)
+        assert cfg.cdp_rearm_dwell_secs == 120.0
         assert cfg.cdp_cooldown_secs == 900
         assert cfg.surge_pct == base.surge_pct  # 其他 kind 欄位不動
+
+    def test_cdp_rearm_dwell_secs_zero_maps_through(self) -> None:
+        """W3:0 = 舊行為(離線即解除);0 是合法值,不得被當成「沒設」而落回 base 預設。"""
+        base = SignalsConfig(cdp_rearm_dwell_secs=300.0)
+        rule = normalize_rule(
+            make("cdp_cross", params={"rearm_ticks": 5, "rearm_dwell_secs": 0}), {}
+        )
+        assert rule_config(rule, base).cdp_rearm_dwell_secs == 0.0
 
     def test_surge_crash_mapping(self) -> None:
         rule = normalize_rule(
@@ -509,5 +638,11 @@ class TestRuleConfig:
 
     def test_base_config_not_mutated(self) -> None:
         base = SignalsConfig()
-        rule_config(normalize_rule(make("cdp_cross", params={"rearm_ticks": 9}), {}), base)
+        rule_config(
+            normalize_rule(
+                make("cdp_cross", params={"rearm_ticks": 9, "rearm_dwell_secs": 30}), {}
+            ),
+            base,
+        )
         assert base.cdp_rearm_ticks == SignalsConfig().cdp_rearm_ticks
+        assert base.cdp_rearm_dwell_secs == SignalsConfig().cdp_rearm_dwell_secs
