@@ -7,7 +7,7 @@ import { GroupGridView } from "@/components/stock/GroupGridView";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
-import type { CapitalOrder } from "@/types";
+import type { CapitalOrder, CapitalPosition } from "@/types";
 
 /** review A6-1 的 regression lock:卡片 `memo` 有沒有真的擋下重畫。
  *
@@ -96,11 +96,14 @@ function filledOrder(): CapitalOrder {
 
 /** 本輪的委託列表(預設空:既有兩案不該因為多了一條路由而改變行為)。 */
 let orders: CapitalOrder[] = [];
+/** 本輪的部位列(預設空,同上)。 */
+let positions: CapitalPosition[] = [];
 
 beforeEach(() => {
   hoisted.renders.length = 0;
   hoisted.byCode.length = 0;
   orders = [];
+  positions = [];
   window.localStorage.clear();
   vi.stubGlobal(
     "fetch",
@@ -108,6 +111,9 @@ beforeEach(() => {
       const u = String(url);
       if (u.includes("/api/capital/orders")) {
         return new Response(JSON.stringify({ orders }));
+      }
+      if (u.includes("/api/capital/positions")) {
+        return new Response(JSON.stringify({ positions }));
       }
       const codes = new URL(u, "http://x").searchParams.get("codes") ?? "";
       const picked: Record<string, unknown> = {};
@@ -183,6 +189,44 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     const count = (code: string) => hoisted.byCode.filter((r) => r.code === code).length;
     const [b2330, b2317] = [count("2330"), count("2317")];
     // `quotes` 換整份 identity、每一格 entry 維持同參照(= `setWatchlist` 每秒的樣態)
+    rerender(ui({ ...q1 }));
+    rerender(ui({ ...q1 }));
+    expect(count("2330") - b2330).toBe(count("2317") - b2317);
+  });
+  /** batch3 R3 SC-4 [lock]:**有倉**的那張卡 memo 還在不在。`positionsByCode` 每 render
+   *  現折的話它回的是新 Map + 新陣列 → 有倉的 code 每輪 `positions` 都是新 identity,
+   *  那張卡每秒重畫(無倉的卡拿的是模組常數 `EMPTY_POSITIONS`,照樣被 memo 擋住)。
+   *  失效只有「我今天有部位」的那幾張會掉幀 —— 正是盯得最兇的那幾張,而畫面看不出來。
+   *  量法同上:拿無倉卡當同輪對照組,兩者增量相同才算 memo 沒被倉位打穿。 */
+  it("有倉的卡:quotes 換 identity 兩輪 → 重畫次數與無倉卡相同(positions identity 穩定)", async () => {
+    positions = [
+      {
+        market: "sec",
+        stock_no: "2330",
+        qty: 3,
+        name: "台積電",
+        avg_price: 2350,
+        kind: "cash",
+        pnl_base: null,
+        pnl_base_price: null,
+        pnl_cost: null,
+        code: "2330",
+      },
+    ];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
+    const ui = (quotes: Record<string, WatchlistQuote>) => (
+      <QueryClientProvider client={client}>
+        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(q1));
+    // 自檢:倉位真的抵達 2330 那張卡(positions query settle 後才有)。沒抵達的話
+    // 兩張卡都是 EMPTY_POSITIONS,下面量的東西與倉位無關而恆綠
+    await screen.findByTestId("group-pos-2330");
+    expect(screen.queryByTestId("group-pos-2317")).toBeNull();
+    const count = (code: string) => hoisted.byCode.filter((r) => r.code === code).length;
+    const [b2330, b2317] = [count("2330"), count("2317")];
     rerender(ui({ ...q1 }));
     rerender(ui({ ...q1 }));
     expect(count("2330") - b2330).toBe(count("2317") - b2317);

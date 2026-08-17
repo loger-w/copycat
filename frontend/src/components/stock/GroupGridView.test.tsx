@@ -7,7 +7,11 @@ import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
-import type { CapitalOrder } from "@/types";
+import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+import { fmtPct } from "@/lib/format";
+import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
+import { pnlText } from "@/lib/pnl-format";
+import type { CapitalOrder, CapitalPosition } from "@/types";
 import { wrap } from "@/test-utils";
 
 const GROUPS: Group[] = [
@@ -108,11 +112,14 @@ function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
 let fetchMock: ReturnType<typeof vi.fn>;
 let states: Record<string, unknown>;
 let orders: CapitalOrder[];
+/** 卡片倉位行(SC-4)的部位列。預設空 —— 既有案不該因為多了一條路由而長出內容。 */
+let positions: CapitalPosition[] = [];
 
 beforeEach(() => {
   window.localStorage.clear();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   orders = [];
+  positions = [];
   states = {
     "2330": state(),
     "2317": state({ meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 5 } }),
@@ -128,6 +135,11 @@ beforeEach(() => {
     // 的殼當委託列表用(`orders` undefined → 恆零標記,SC-6 靜默 vacuous)。
     if (String(url).includes("/api/capital/orders")) {
       return new Response(JSON.stringify({ orders }));
+    }
+    // 圖牆層另掛一份 `useCapitalPositions`(SC-4)。不接這條的話它會拿到 group-state
+    // 的殼當部位列表用 → 恆無倉,倉位行的斷言全部靜默 vacuous。
+    if (String(url).includes("/api/capital/positions")) {
+      return new Response(JSON.stringify({ positions }));
     }
     const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
     const picked: Record<string, unknown> = {};
@@ -694,5 +706,75 @@ describe("GroupGridView 群組卡成交點(SC-6)", () => {
     const c2330 = await screen.findByTestId("group-card-2330");
     await waitFor(() => expect(c2330.querySelector('svg[role="img"]')).toBeTruthy());
     expect(c2330.querySelectorAll('polygon[data-testid^="fill-"]').length).toBe(0);
+  });
+});
+
+// batch3 R3 SC-4:卡片標題列下的倉位行。圖牆是盯盤主畫面 —— 「哪一檔我有倉、現在
+// 賺賠多少」在這裡看不到的話,得逐檔點回單檔頁才知道。
+describe("GroupGridView 卡片倉位(SC-4)", () => {
+  const P = 2_380_000; // quotes 現價(毫元)
+  const AVG = 2350;
+
+  function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
+    return {
+      market: "sec",
+      stock_no: "2330",
+      qty: 3,
+      name: "台積電",
+      avg_price: AVG,
+      kind: "cash",
+      pnl_base: null,
+      pnl_base_price: null,
+      pnl_cost: null,
+      code: "2330",
+      ...over,
+    };
+  }
+
+  /** 期望值由 `positionEcon` 現算(不寫死):寫死的話折數 / 費率改了測試照樣綠,
+   *  而那正是「卡片數字與閃電梯對不上」的失效樣態。 */
+  function expectedCard(discount: number): string {
+    const econ = positionEcon(3, AVG, P, discount, "cash");
+    const pct = ((econ.pnl ?? 0) / (AVG * 3 * 1000)) * 100;
+    return `現 3張 ${pnlText(econ.pnl)} (${fmtPct(pct)})`;
+  }
+
+  async function renderGrid(): Promise<HTMLElement> {
+    wrap(
+      <GroupGridView
+        groups={GROUPS}
+        quotes={{ "2330": quote({ p: P }), "2317": quote({ p: 2_000_000 }) }}
+        onPick={vi.fn()}
+        active={null}
+      />,
+    );
+    return await screen.findByTestId("group-pos-2330");
+  }
+
+  it("有倉的卡:張數 + 含費稅損益 + 報酬率(與 positionEcon 同折數)", async () => {
+    positions = [pos()];
+    const line = await renderGrid();
+    expect(line.textContent).toBe(expectedCard(FEE_DISCOUNT_DEFAULT));
+    expect(line.className).toContain("text-bull");
+  });
+
+  it("同檔另有個股期 → 接一段期貨口數與名目損益", async () => {
+    positions = [pos(), pos({ market: "fut", stock_no: "CDFI6", qty: 2, pnl_base: 500 })];
+    const line = await renderGrid();
+    expect(line.textContent).toBe(`${expectedCard(FEE_DISCOUNT_DEFAULT)} · 期 2口 +500`);
+  });
+
+  it("無倉的卡 → 沒有倉位行(卡片高度不因空佔位縮圖)", async () => {
+    positions = [pos()];
+    await renderGrid(); // 先自檢有倉的那張真的長出來了
+    expect(screen.queryByTestId("group-pos-2317")).toBeNull();
+  });
+
+  it("折數改成 3 折 → 卡片損益跟著換(SC-5 元件級)", async () => {
+    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
+    positions = [pos()];
+    const line = await renderGrid();
+    expect(line.textContent).toBe(expectedCard(3));
+    expect(line.textContent).not.toBe(expectedCard(FEE_DISCOUNT_DEFAULT));
   });
 });
