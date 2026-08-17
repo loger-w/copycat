@@ -17,7 +17,7 @@
 | 個3 | ~~自選清單 / 單檔 / 群組卡顯示倉位與損益~~ **已出貨 2026-08-17(PR #62;SC-6 真倉位截圖待 user 盤中)** | 🟢 新功能(/mod) | R3 | M | 部位資料與 `positionEcon()`(含費稅損益)已在閃電梯內;三處 UI 目前零倉位資訊;sec 用股號 / 個股期用契約碼兩套鍵 |
 | 綜1 | ~~加權/櫃買分時圖直接改用個股分時圖~~ **已出貨 2026-08-17(PR #63;真 TC4 層與 SC-5 個股頁前後對照待 prod 重啟過目)** | 🔴 UI 換元件(/mod) | R4 | L | `MarketChart.IntradayChart` 是獨立自繪(無 hover/readout/副圖),`IndexSeries.minutes` 只有 HHMM→收盤價、**無量**(D11 拍板不要量能副圖,免 probe)→ 需 adapter + core 可注入 overlay;PANE_FRAMES 常數重算 |
 | 綜2 | ~~左欄雙圖縮小、騰落線增高~~ **已出貨 2026-08-17(PR #63;兩欄態 6:5,CSS 變數收進 @[1050px])** | 🔴 UI 佈局(/mod) | R4 | S | 騰落線是固定 `h-24` 不參與 flex 分配;雙圖 `min-h-80`/`min-h-48` 地板算式連動 → 與綜1 同輪(換元件後 chrome 高度才定,避免地板算兩次) |
-| 相1 | 達錢有沒有韓指 / 日經即時資料 | 事實問答 → 🟢 config 加腿(/mod) | R5 | S | **日經有**(TC4 Fut 樹 OSE `NK225`/`NK225M`/`NK225MC`/`NK400` + SGX `NK` + CME `NKD`);**韓指無**(2026-06-30 全量 dump 17 個交易所段無 KRX、三檔 catalog 零命中 KOSPI);加腿只改 `configs/correlation.json`(SC-8 契約已鎖) |
+| 相1 | ~~達錢有沒有韓指 / 日經即時資料~~ **已出貨 2026-08-17(mod/corr-nk225m-leg;小日經第七腿 + river-7;韓指 TC4 無 KRX 段不做;prod 重啟後過目)** | 事實問答 → 🟢 config 加腿(/mod) | R5 | S | **日經有**(TC4 Fut 樹 OSE `NK225`/`NK225M`/`NK225MC`/`NK400` + SGX `NK` + CME `NKD`);**韓指無**(2026-06-30 全量 dump 17 個交易所段無 KRX、三檔 catalog 零命中 KOSPI);加腿只改 `configs/correlation.json`(SC-8 契約已鎖) |
 
 沒有一條是「線上 bug」(全是行為新增/改動),故全走 `/mod`;user 若指某條實為 bug(例如綜1
 背後是加權圖畫錯),請點名,該輪改走 `/bug`(紅測試先行)。順序:D7 拍板近似版後 R2 不動後端,
