@@ -1,0 +1,4 @@
+{"round": 2, "mode": "收尾增量 review(self_review_head 9f6171a6..HEAD,frontend 57 行)", "date": "2026-08-18",
+ "summary": {"P0": 0, "P1": 0, "P2": 1},
+ "findings": [{"id":"I-1","severity":"P2","claim":"SC-5 白名單/amendment 未寫規則名段序改到達序","disposition":"accepted","resolution":"change-spec SC-5 amendment r4 補「規則名段序同取到達序」"}],
+ "notes": "reverse 複本 / 去重首見序 / 缺值略過皆實測成立;mutation(拿掉 reverse)2 failed 後還原綠"}

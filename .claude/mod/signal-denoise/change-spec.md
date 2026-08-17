@@ -57,8 +57,8 @@
   `onSelect(code)`。單則列外觀不變。
   [amendment 2026-08-18: R8/R11] 合併列第二行**逐段各自著色**(每段 kind 文案一個 span 帶自己的
   `toneOf`,「・」分隔符 muted 且 `aria-hidden`);`<li key>` = 組內**最早到達**那則 id(輸入為「新在前」序 →
-  組內最後一則;新成員前插不改 key,[amendment 2026-08-18 r3: C-4/T-11/T-12]);`price` / 段序同取到達序
-  (與 Discord `rows[0]` 一致);kind 文案去重(同 kind 同文案只印一段)。截圖檔名實際為
+  組內最後一則;新成員前插不改 key,[amendment 2026-08-18 r3: C-4/T-11/T-12]);`price` / kind 段序 / **規則名段序**同取到達序
+  (與 Discord `rows[0]` 一致;[amendment 2026-08-18 r4: I-1]);kind 文案去重(同 kind 同文案只印一段)。截圖檔名實際為
   `evidence/SC-5-rail-merged.jpg`、`SC-7-rules-summary.jpg` + `SC-7-rules-edit-dwell.jpg`(T-6)。
   驗證:`signal-model.test.ts` 新 `groupSignals` 測試(相鄰同組併 / 不同 code 不併 / 同 code 不同
   time 不併 / 保序 / 同文案去重);`SignalRail.test.tsx` 兩則同 tick → 一 `<li>` 且文案含「・」、

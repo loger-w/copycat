@@ -1,0 +1,57 @@
+diff --git a/frontend/src/components/stock/SignalRail.test.tsx b/frontend/src/components/stock/SignalRail.test.tsx
+index 7a8ac93f..1419b1d2 100644
+--- a/frontend/src/components/stock/SignalRail.test.tsx
++++ b/frontend/src/components/stock/SignalRail.test.tsx
+@@ -180,7 +180,7 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
+     expect(texts.length).toBe(1);
+     // 段序 = 到達序(輸入新在前 → 反序),與 Discord 合併訊息 rows[0] 同一則
+     expect(texts[0]).toContain("爆跌 -2.10%・突破 CDP 中軸");
+-    expect(texts[0]).toContain("CDP 穿越・爆拉爆跌"); // 規則名同樣去重後串接
++    expect(texts[0]).toContain("爆拉爆跌・CDP 穿越"); // 規則名段序與 kind 段一致(到達序)
+   });
+ 
+   // T-12:「・」只是視覺分隔,讀螢幕器唸出來會把兩段文案黏成一句聽不懂的字串
+diff --git a/frontend/src/lib/signal-model.test.ts b/frontend/src/lib/signal-model.test.ts
+index 403d5ee2..9a775943 100644
+--- a/frontend/src/lib/signal-model.test.ts
++++ b/frontend/src/lib/signal-model.test.ts
+@@ -250,6 +250,15 @@ describe("groupKindLabels / groupRuleNames", () => {
+     expect(segments[0]?.sig.id).toBe("k2");
+   });
+ 
++  // 同一列的 kind 段與規則名段並排顯示,兩段順序相反時讀起來會對不上號
++  it("規則名序 = 到達序,與 kind 段序一致", () => {
++    const dive = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急殺" });
++    const [group] = groupSignals([base, dive]);
++    expect(groupRuleNames(group!)).toEqual(["早盤急殺", "早盤急拉"]);
++    // 與 kind 段的代表 sig 逐位對齊(段序相同)
++    expect(groupKindLabels(group!).map((s) => s.sig.rule_name)).toEqual(groupRuleNames(group!));
++  });
++
+   it("規則名去重、保留首見順序", () => {
+     const twin = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急拉" });
+     const [group] = groupSignals([base, twin]);
+diff --git a/frontend/src/lib/signal-model.ts b/frontend/src/lib/signal-model.ts
+index 5a213b67..5b94b03b 100644
+--- a/frontend/src/lib/signal-model.ts
++++ b/frontend/src/lib/signal-model.ts
+@@ -178,12 +178,16 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
+   return out;
+ }
+ 
+-/** 組內規則名去重(首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,整段略過
+- *  —— 留下來只會變成一個沒有內容的分隔符。 */
++/** 組內規則名去重(**到達序**的首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,
++ *  整段略過 —— 留下來只會變成一個沒有內容的分隔符。
++ *
++ *  **口徑必須與 `groupKindLabels` 同為到達序**(`items` 反序):同一列上 kind 段與
++ *  規則名段並排顯示,兩段順序相反時讀起來對不上號(「突破 CDP AH・爆量」配
++ *  「爆量・CDP 穿越」)。 */
+ export function groupRuleNames(group: SignalGroup): string[] {
+   const seen = new Set<string>();
+   const out: string[] = [];
+-  for (const sig of group.items) {
++  for (const sig of [...group.items].reverse()) {
+     const name = sig.rule_name;
+     if (name === undefined || name === "" || seen.has(name)) continue;
+     seen.add(name);
