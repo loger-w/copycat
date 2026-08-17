@@ -1013,6 +1013,51 @@ describe("StockPage header 倉位(SC-3)", () => {
     expect(segs[0]?.textContent).not.toContain(`損益 ${pnlText(at18.pnl)}`);
   });
 
+  // 🔴 code review C-1(P1):個股期態下主圖 accum 是**合約簿**的價 —— 拿它算現股損益
+  // 就是「用期貨價算的現股部位」,一個看起來很正常的錯數字。現股段一律吃側欄現貨報價。
+  it("期貨態現股段吃側欄現貨價、不用合約簿價(C-1)", async () => {
+    const SEC_LAST = 1_190_000; // 側欄現貨報價(毫元)
+    const FUT_LAST = 1_150_000; // 主圖 = 合約簿成交價(毫元)
+    const AVG_SEC = 1180;
+    const CONTRACT: StkfutSelection = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
+    positions = [pos({ avg_price: AVG_SEC })];
+    const both = stream({
+      accum: { ...ACCUM, last: { p: FUT_LAST, t: "09:00:01.000", cum_vol: 1 } } as StockAccum,
+      watchlist: {
+        "2330": {
+          p: SEC_LAST,
+          chg_pct: null,
+          vol: null,
+          ref: null,
+          upper: null,
+          lower: null,
+          no_data: false,
+          trial: false,
+        },
+      },
+    });
+    const pnlAt = (lastMilli: number) =>
+      pnlText(positionEcon(3, AVG_SEC, lastMilli, FEE_DISCOUNT_DEFAULT, "cash").pnl);
+    async function secText(contract: StkfutSelection | null): Promise<string> {
+      wrap(
+        <StockPage
+          code="2330"
+          onSelect={vi.fn()}
+          stream={both}
+          contract={contract}
+          onContract={vi.fn()}
+        />,
+      );
+      const text = (await screen.findByTestId("page-position")).textContent ?? "";
+      cleanup(); // 兩次 render 在同一個 it 內,不清會撞 getMultipleElementsFound
+      return text;
+    }
+    // 現貨態:accum 本來就是現貨簿 → 期望值取主圖那口價(現況已對,不該因修改而變)
+    expect(await secText(null)).toContain(`損益 ${pnlAt(FUT_LAST)}`);
+    // 期貨態:accum 已換成合約簿 → 現股段必須改吃側欄現貨價
+    expect(await secText(CONTRACT)).toContain(`損益 ${pnlAt(SEC_LAST)}`);
+  });
+
   it("無倉 → 整段不渲染(零佔位)", async () => {
     positions = [];
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} />);
