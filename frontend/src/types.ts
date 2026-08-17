@@ -85,6 +85,8 @@ export interface CapitalOrder {
   pre_order: boolean;
   error_msg: string | null;
   actionable: boolean; // store 算好;前端不要自己抄狀態表
+  /** 價格別:**本 app 送出才知道**(群益回報無此欄)→ 群益 APP 下的單 / 跨日的單恆 null。 */
+  price_type: "limit" | "market" | null;
   raw: string;
 }
 

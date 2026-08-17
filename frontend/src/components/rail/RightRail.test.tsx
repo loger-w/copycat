@@ -65,7 +65,7 @@ function secOrder(): CapitalOrder {
     flag_label: "現股", book_no: "A1", status_raw: "0", status_label: "已委託",
     price: 100, avg_fill_price: null, order_qty: 2, filled_qty: 0, unit: "張",
     date: "20260728", time: "09:01:00", pre_order: false, error_msg: null,
-    actionable: true, raw: "",
+    actionable: true, price_type: null, raw: "",
   };
 }
 function futOrder(): CapitalOrder {
