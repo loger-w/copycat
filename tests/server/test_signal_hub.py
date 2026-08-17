@@ -1422,8 +1422,20 @@ class TestRuleEngine:
         只有 A 能再發。順帶釘 `_seed_slot` —— 新 detector 沒被餵基準的話這裡零事件。
         """
         rules = [
-            _rule("cdp_cross", "r-1-000", cooldown_secs=86_400, params={"rearm_ticks": 0}),
-            _rule("cdp_cross", "r-1-001", cooldown_secs=86_400, params={"rearm_ticks": 0}),
+            # dwell 0 = W3 舊語意(離線即解除),與本測試原本的 rearm_ticks 0 意圖一致;
+            # 這個 dict 之後直接餵進 upsert_rule,params 必須是完整的精確鍵集合。
+            _rule(
+                "cdp_cross",
+                "r-1-000",
+                cooldown_secs=86_400,
+                params={"rearm_ticks": 0, "rearm_dwell_secs": 0},
+            ),
+            _rule(
+                "cdp_cross",
+                "r-1-001",
+                cooldown_secs=86_400,
+                params={"rearm_ticks": 0, "rearm_dwell_secs": 0},
+            ),
         ]
         _write_rules(tmp_path, rules)
         h = _Harness(tmp_path, clock)

@@ -44,12 +44,17 @@ CDP_LEVELS: tuple[str, ...] = ("ah", "nh", "cdp", "nl", "al")
 COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
 #: REST 可寫入的無界量要有上限(R11)—— 熱路徑是 per-tick N × evaluate。
 MAX_RULES = 30
-_CACHE_VERSION = 1
+#: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`(見 `load_rules` 的遷移)。
+_CACHE_VERSION = 2
+#: v1→v2 補值。刻意是模組常數而非 `cfg.cdp_rearm_dwell_secs`:`load_rules(path)` 的簽名
+#: 不吃 config,為了遷移多接一個參數會讓所有呼叫端跟著改。與種子路徑(`_seed_params` 走
+#: cfg)的分歧在 `configs/signals.json` 覆寫該鍵時才會出現 —— 所以補值要 log 出來。
+_DEFAULT_REARM_DWELL_SECS = 300.0
 
 #: 逐 kind 的 params 鍵集合與閉區間值域(R1)。鍵集合是**精確集合**:多鍵 / 缺鍵同樣是
 #: INVALID_RULE —— 多鍵放行等於使用者以為調到的參數其實沒接上,缺鍵則會靜默套 detector 預設。
 PARAM_SPECS: dict[str, dict[str, tuple[float, float]]] = {
-    "cdp_cross": {"rearm_ticks": (0, 50)},
+    "cdp_cross": {"rearm_ticks": (0, 50), "rearm_dwell_secs": (0, 3600)},
     "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
     "vol_burst": {
         "ratio": (1, 100),
@@ -219,7 +224,10 @@ def _clamp(label: str, value: float, lo: float, hi: float) -> float:
 def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
     raw: dict[str, float] = {}
     if kind == "cdp_cross":
-        raw = {"rearm_ticks": float(cfg.cdp_rearm_ticks)}
+        raw = {
+            "rearm_ticks": float(cfg.cdp_rearm_ticks),
+            "rearm_dwell_secs": float(cfg.cdp_rearm_dwell_secs),
+        }
     elif kind == "surge_crash":
         raw = {"pct": float(cfg.surge_pct), "window_secs": float(cfg.surge_window_secs)}
     elif kind == "vol_burst":
@@ -269,12 +277,48 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
     return rules
 
 
+def _migrate_v1(items: list[Any]) -> list[Any]:
+    """v1 → v2:`kind == "cdp_cross"` 且 params 缺 `rearm_dwell_secs` 的規則補預設。
+
+    只補鍵,不放寬任何驗證(補完照走 `normalize_rule`);非 dict / 非 cdp / 已帶該鍵
+    的項目原樣傳遞。輸入不就地修改 —— 呼叫端手上的 payload 還要拿來與磁碟原檔比對。
+    """
+    out: list[Any] = []
+    for item in items:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        obj = cast(dict[str, Any], item)
+        params = obj.get("params")
+        if obj.get("kind") != "cdp_cross" or not isinstance(params, dict):
+            out.append(obj)
+            continue
+        existing = cast(dict[str, Any], params)
+        if "rearm_dwell_secs" in existing:
+            out.append(obj)
+            continue
+        logger.info(
+            "訊號規則檔 v1→v2:規則 %r 補 rearm_dwell_secs=%s",
+            obj.get("id"),
+            _DEFAULT_REARM_DWELL_SECS,
+        )
+        out.append({**obj, "params": {**existing, "rearm_dwell_secs": _DEFAULT_REARM_DWELL_SECS}})
+    return out
+
+
 def load_rules(path: Path) -> list[Rule] | None:
     """三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。
 
     「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活四條預設。
     壞檔 / 驗證失敗 / 版本不符 / 超過 MAX_RULES 一律 raise —— 靜默套預設會在盤中
     無預警地改變推播行為;raise 走 `_boot` 傘 → hub None → routes 503,大聲。
+
+    **v1 → v2 遷移(D6)**:`_cache_version == 1` 的檔案在記憶體裡補上 cdp 規則的
+    `rearm_dwell_secs`(= `_DEFAULT_REARM_DWELL_SECS`)後照常驗證;**載入時不回寫檔案**,
+    磁碟要到第一次 upsert 才以 v2 落檔 —— 這段就是回退窗:期間舊碼可直接讀原檔。
+    回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`,刪掉每條 cdp
+    規則的 `rearm_dwell_secs` 鍵、`_cache_version` 改回 1 → 起舊碼。
+    v2 檔缺該鍵不走遷移(是壞檔,不是舊檔);1 / 2 以外的版本一律 raise(既有語意)。
     """
     if not path.exists():
         return None
@@ -287,9 +331,10 @@ def load_rules(path: Path) -> list[Rule] | None:
         logger.error("訊號規則檔格式非物件:%s", path)
         raise _bad()
     obj = cast(dict[str, Any], payload)
-    if obj.get("_cache_version") != _CACHE_VERSION:
+    version = obj.get("_cache_version")
+    if version not in (_CACHE_VERSION, 1):
         # 版本 bump 屬開發期動作,屆時必須同時寫轉換 —— 沒寫就該在啟動時被發現。
-        logger.error("訊號規則檔版本不符(%s):%r", path, obj.get("_cache_version"))
+        logger.error("訊號規則檔版本不符(%s):%r", path, version)
         raise _bad()
     raw = obj.get("rules")
     if not isinstance(raw, list):
@@ -299,6 +344,8 @@ def load_rules(path: Path) -> list[Rule] | None:
     if len(items) > MAX_RULES:
         logger.error("訊號規則檔 %s 條超過上限 %s:%s", len(items), MAX_RULES, path)
         raise _bad()
+    if version != _CACHE_VERSION:
+        items = _migrate_v1(items)
     rules: dict[str, Rule] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -343,6 +390,7 @@ def rule_config(rule: Rule, base: SignalsConfig) -> SignalsConfig:
         return replace(
             base,
             cdp_rearm_ticks=int(params["rearm_ticks"]),
+            cdp_rearm_dwell_secs=params["rearm_dwell_secs"],
             cdp_cooldown_secs=cooldown,
         )
     if kind == "surge_crash":
