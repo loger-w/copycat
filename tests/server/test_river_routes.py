@@ -22,7 +22,8 @@ class TestRiverStateRoute:
             assert r.status_code == 503
             assert r.json()["detail"]["error"] == "RIVER_NOT_READY"
 
-    def test_returns_window_and_six_legs(self) -> None:
+    def test_returns_window_and_seven_legs(self) -> None:
+        """腿集合 = repo `configs/correlation.json`(2026-08-17 起七腿含小日經 NK225M)。"""
         with _client(FakeCorrSource()) as client:
             r = client.get("/api/river/state")
 
@@ -30,7 +31,7 @@ class TestRiverStateRoute:
             body = r.json()
             assert body["type"] == "river"
             assert body["base"] == "TXF"
-            assert set(body["legs"]) == {"TXF", "TWN", "YM", "ES", "NQ", "SXF"}
+            assert set(body["legs"]) == {"TXF", "TWN", "YM", "ES", "NQ", "SXF", "NK225M"}
             assert set(body["window"]) == {"start_min", "end_min"}
             assert body["session"] in ("day", "night")
 
@@ -80,4 +81,4 @@ class TestExistingCorrRouteUnaffected:
         with _client(FakeCorrSource()) as client:
             body = client.get("/api/corr/state").json()
             assert body["type"] == "corr"
-            assert set(body["pairs"]) == {"TWN", "YM", "ES", "NQ", "SXF"}
+            assert set(body["pairs"]) == {"TWN", "YM", "ES", "NQ", "SXF", "NK225M"}
