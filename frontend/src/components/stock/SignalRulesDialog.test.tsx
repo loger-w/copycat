@@ -255,6 +255,22 @@ describe("SignalRulesDialog 編輯表單", () => {
     expect(body.cdp_levels).toEqual([]);
   });
 
+  // SC-7:CDP 的 rearm 加了「線外駐留」門檻,params 鍵集必須與後端 PARAM_SPECS
+  // 完全相同(缺鍵同樣是 INVALID_RULE)—— 欄位在畫面上、值在 payload 裡各釘一次
+  it("CDP 規則有「線外駐留秒數」欄位(預設 300),送出 payload 帶 rearm_dwell_secs", async () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
+    const dwell = screen.getByLabelText("線外駐留秒數") as HTMLInputElement;
+    expect(dwell.value).toBe("300");
+
+    fireEvent.change(screen.getByLabelText("名稱"), { target: { value: "CDP 新規" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    const body = JSON.parse(String(writes()[0]!.init.body)) as Record<string, unknown>;
+    expect(body.params).toEqual({ rearm_ticks: 2, rearm_dwell_secs: 300 });
+  });
+
   it("名稱空白 / 數字欄位非數字 → 零送出並顯示文案", async () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
