@@ -3,6 +3,13 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+import { CHART_TOGGLES_KEY } from "@/lib/constants";
+import {
+  clampFillX,
+  FILL_MARK,
+  fillTrianglePoints,
+  type FillPoint,
+} from "@/lib/fill-marks";
 import { fromSnapshot } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
@@ -16,6 +23,14 @@ import {
 } from "@/lib/stock-intraday-svg";
 import { VP_FILL_OPACITY, VP_POC_FILL_OPACITY } from "@/lib/volume-profile";
 import { wrap } from "@/test-utils";
+
+/** SC-9 的計次通道。**delegate 原實作**(`vi.fn(actual.…)` 只多記一次呼叫)——
+ *  換成假回傳值的話同檔 SC-3 的頂點座標斷言全部變成在量假資料,而它們照樣會綠。
+ *  `vi.mock` 是檔案級 + hoisted,所以整檔的 `fillTrianglePoints` 都是這個計次版。 */
+vi.mock("@/lib/fill-marks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/fill-marks")>();
+  return { ...actual, fillTrianglePoints: vi.fn(actual.fillTrianglePoints) };
+});
 
 const OVERLAY = {
   // ah / nh 刻意用**非合法檔位**(後端 CDP 公式不保證對齊 tick,這正是顯示層要
@@ -1621,5 +1636,211 @@ describe("StockIntradayChart 期貨態(SC-5/D10)", () => {
     const vwap = screen.getByRole("button", { name: "均價" });
     expect(vwap.hasAttribute("disabled")).toBe(false);
     expect(vwap.getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+// 🟢 R2 SC-3 / SC-4 / SC-5 / SC-9:當日成交點(▲ 買 / ▼ 賣)疊在分時主圖上。
+//
+// 資料由 caller 折好以 `fills` prop 傳入(core 不沾 capital / TQ,白名單 W-7)——
+// 所以本節一律直接注入 prop,既有那份「不分 URL 回 overlay」的 fetch stub 免改。
+describe("StockIntradayChart 當日成交點(SC-3/4/5/9)", () => {
+  /** B@541 2380 元、S@542 2385 元;兩者都在 ACCUM 的 y 域 [2090000, 2550000] 與現貨窗內 */
+  const FILLS: readonly FillPoint[] = [
+    { minute: 541, priceMilli: 2_380_000, side: "B", qty: 2 },
+    { minute: 542, priceMilli: 2_385_000, side: "S", qty: 1 },
+  ];
+
+  /** 量法一律 `polygon[data-testid^="fill-"]`(不含恆存的 `fills-layer` 群組本身),
+   *  與圖牆的 per-card 計數同一把尺。 */
+  function fillPolys(container: HTMLElement): Element[] {
+    return [...container.querySelectorAll('polygon[data-testid^="fill-"]')];
+  }
+
+  /** 參考幾何吃**該測試實際渲染的那份 accum**(同「當日高低」節的理由)。 */
+  function geoOf(container: HTMLElement, accum: typeof ACCUM) {
+    const [, , w, h] = container
+      .querySelector("svg")!
+      .getAttribute("viewBox")!
+      .split(" ")
+      .map(Number);
+    return {
+      w: w!,
+      g: buildIntradayGeometry(
+        { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+        { width: w!, height: h! },
+      ),
+    };
+  }
+
+  function tipOf(poly: Element): [number, number] {
+    const [x, y] = poly.getAttribute("points")!.split(" ")[0]!.split(",").map(Number);
+    return [x!, y!];
+  }
+
+  function baseY(poly: Element): number {
+    return Number(poly.getAttribute("points")!.split(" ")[1]!.split(",")[1]);
+  }
+
+  it("SC-3:買畫 fill-bull ▲、賣畫 fill-bear ▼,各帶同底色 halo", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    const buy = container.querySelector('polygon[data-testid="fill-B-541"]');
+    const sell = container.querySelector('polygon[data-testid="fill-S-542"]');
+    expect(buy).toBeTruthy();
+    expect(sell).toBeTruthy();
+    expect(buy!.getAttribute("class")).toContain("fill-bull");
+    expect(sell!.getAttribute("class")).toContain("fill-bear");
+    // halo:描邊先畫、填色蓋上(同極值圓的 paintOrder 紀律),三角在走勢線 / 填色上才讀得出來
+    expect(buy!.getAttribute("class")).toContain("stroke-surface");
+    expect(buy!.getAttribute("paint-order")).toBe("stroke");
+    expect(Number(buy!.getAttribute("stroke-width"))).toBe(FILL_MARK.halo);
+  });
+
+  it("SC-3:三角尖端 = (成交分鐘 x, 成交價 y);買體朝下、賣體朝上", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    const { w, g } = geoOf(container, ACCUM);
+    const buy = container.querySelector('polygon[data-testid="fill-B-541"]')!;
+    const [bx, by] = tipOf(buy);
+    expect(bx).toBeCloseTo(clampFillX(minuteToX(541, w, SPOT_WINDOW), w), 5);
+    expect(by).toBeCloseTo(g.toY(2_380_000), 5);
+    // 底邊 y:買在尖端**下方**(體背離價線),賣在上方
+    expect(baseY(buy)).toBeGreaterThan(by);
+    const sell = container.querySelector('polygon[data-testid="fill-S-542"]')!;
+    const [, sy] = tipOf(sell);
+    expect(sy).toBeCloseTo(g.toY(2_385_000), 5);
+    expect(baseY(sell)).toBeLessThan(sy);
+  });
+
+  it("SC-3:分鐘落在 x 窗外(14:30 盤後零股)→ 不畫,層本身仍在", () => {
+    const { container } = wrap(
+      <StockIntradayChart
+        accum={ACCUM}
+        fills={[{ minute: 870, priceMilli: 2_380_000, side: "B", qty: 1 }]}
+      />,
+    );
+    expect(fillPolys(container).length).toBe(0);
+    expect(container.querySelector('[data-testid="fills-layer"]')).toBeTruthy();
+  });
+
+  it("SC-3:成交價落在 y 域外 → 不畫(同 overlay / 極值既有規則,不夾到邊上)", () => {
+    const { container } = wrap(
+      <StockIntradayChart
+        accum={ACCUM}
+        fills={[{ minute: 541, priceMilli: 3_000_000, side: "S", qty: 1 }]}
+      />,
+    );
+    expect(fillPolys(container).length).toBe(0);
+  });
+
+  it("SC-3:未傳 fills → 零三角(層恆 render,空集合時內容為空)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    expect(fillPolys(container).length).toBe(0);
+    expect(container.querySelector('[data-testid="fills-layer"]')).toBeTruthy();
+  });
+
+  /** z-order:svg 沒有 z-index,圖層完全由文件順序決定。成交點是「我的單在哪成交」——
+   *  被極值標記或 MA 價位標壓過就等於沒畫,而畫面上照樣「有東西」,零錯誤訊號。 */
+  it("SC-3:成交點層在 day-high 與 MA 價位標之後(ChartStatic 內最上層)", async () => {
+    const withHL = { ...ACCUM, high: 2_395_000, low: 2_370_000 };
+    const { container } = wrap(<StockIntradayChart accum={withHL} fills={FILLS} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const main = [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )!;
+    const nodes = [...main.querySelectorAll("*")];
+    const idx = (sel: string) => nodes.indexOf(main.querySelector(sel)!);
+    expect(idx('[data-testid="fills-layer"]')).toBeGreaterThan(idx('[data-testid="day-high"]'));
+    expect(idx('[data-testid="fills-layer"]')).toBeGreaterThan(
+      idx('[data-testid="edge-price-ma5"]'),
+    );
+  });
+
+  it("SC-4:hover 到有成交的分鐘 → readout 尾端追加「成交 買 2@2380」(bull)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, {
+      clientX: minuteToX(541, 800, SPOT_WINDOW),
+      clientY: 100,
+    });
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.children.length).toBe(7);
+    expect(readout.textContent).toContain("成交");
+    expect(readout.textContent).toContain("買 2@2380");
+    const last = readout.children[readout.children.length - 1]!;
+    expect(last.getAttribute("class")).toContain("text-bull");
+  });
+
+  it("SC-4:同分鐘買賣各一 → 「買 2@2380 賣 1@2385」且不判色(雙側無單一 tone)", () => {
+    const both: readonly FillPoint[] = [
+      { minute: 541, priceMilli: 2_380_000, side: "B", qty: 2 },
+      { minute: 541, priceMilli: 2_385_000, side: "S", qty: 1 },
+    ];
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={both} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, {
+      clientX: minuteToX(541, 800, SPOT_WINDOW),
+      clientY: 100,
+    });
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.textContent).toContain("買 2@2380 賣 1@2385");
+    const last = readout.children[readout.children.length - 1]!;
+    expect(last.getAttribute("class")).not.toContain("text-bull");
+    expect(last.getAttribute("class")).not.toContain("text-bear");
+  });
+
+  it("SC-4:hover 到無成交的分鐘 → 不追加(六欄不變)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={[FILLS[0]!]} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, {
+      clientX: minuteToX(542, 800, SPOT_WINDOW),
+      clientY: 100,
+    });
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.textContent).toContain("09:02");
+    expect(readout.children.length).toBe(6);
+    expect(readout.textContent).not.toContain("成交");
+  });
+
+  it("SC-5:toggle 列多一顆「成交點」預設亮;關掉 → 三角全消失 + readout 不追加", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    const btn = screen.getByRole("button", { name: "成交點" });
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(fillPolys(container).length).toBe(2);
+    // 即時態(未 hover)顯示最新分鐘 542,其上有賣單 → 關之前 readout 本來就有「成交」欄
+    expect(screen.getByTestId("chart-readout").textContent).toContain("賣 1@2385");
+    fireEvent.click(btn);
+    expect(screen.getByRole("button", { name: "成交點" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(fillPolys(container).length).toBe(0);
+    expect(screen.getByTestId("chart-readout").textContent).not.toContain("成交");
+  });
+
+  it("SC-5:期貨態「成交點」不反灰(成交資料不依賴日線 overlay)", () => {
+    wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} stkfut />);
+    const btn = screen.getByRole("button", { name: "成交點" });
+    expect(btn.hasAttribute("disabled")).toBe(false);
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  /** SC-9:`ChartStatic` 多一個 prop 之後 memo 還在不在。**畫面上完全看不出來** ——
+   *  失效只是每個 mousemove 重建整層線圖(最多 271 格 × 每次移動),圖照畫、值照對。
+   *  行內字面值 / 每 render 新陣列都會讓這條紅。 */
+  it("SC-9:hover 連發不重建靜態層(fillTrianglePoints 計次不變)", () => {
+    // cdp / ma 預種關:overlay query 一 settle 就換 oLines identity,ChartStatic 會**合法**
+    // 重建一次,那與本條要量的東西無關,留著會讓計數不可預期。
+    window.localStorage.setItem(
+      CHART_TOGGLES_KEY,
+      JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, vp: true, fills: true, v: 2 }),
+    );
+    const counted = vi.mocked(fillTrianglePoints);
+    counted.mockClear();
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    // 計次自檢:mock 沒接上時「次數沒變」是 0 → 0,恆綠而毫無意義
+    expect(counted.mock.calls.length).toBe(FILLS.length);
+    const svg = container.querySelector("svg")!;
+    for (const clientX of [39, 60, 120]) {
+      fireEvent.mouseMove(svg, { clientX, clientY: 40 });
+    }
+    expect(counted.mock.calls.length).toBe(FILLS.length);
   });
 });
