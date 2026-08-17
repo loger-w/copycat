@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { aggregateLots, ymdWindow, type LadderLot } from "@/lib/ladder-lots";
+import { aggregateLots, ymdOf, ymdWindow, type LadderLot } from "@/lib/ladder-lots";
 import type { CapitalOrder } from "@/types";
 
 const TODAY = "20260813";
@@ -199,5 +199,17 @@ describe("ymdWindow 日期界(YYYYMMDD 本機時區)", () => {
       "20260101",
       "20260102",
     ]);
+  });
+});
+
+// 🔵 `ymdOf` 由 `ymdWindow` 抽出(分時圖成交點的日期界共用同一格式化)。
+// 上面的 `ymdWindow` 四案即這次抽出的行為鎖(輸出逐字不變),下面兩案直接鎖 helper 本身。
+describe("ymdOf(YYYYMMDD 本機時區)", () => {
+  it("月 / 日補零到兩位", () => {
+    expect(ymdOf(new Date(2026, 8, 5, 23, 59))).toBe("20260905");
+  });
+
+  it("Date 建構子溢出正規化:2/28 + 1 天 → 3/1(非閏年)", () => {
+    expect(ymdOf(new Date(2026, 1, 28 + 1))).toBe("20260301");
   });
 });
