@@ -10,6 +10,11 @@ import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
+import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+import { fmtPct } from "@/lib/format";
+import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
+import { pnlText } from "@/lib/pnl-format";
+import type { CapitalPosition } from "@/types";
 
 // 🔴-3:code / 資料流已上提到 App(D-3)→ 本元件改吃 props,不再自建 WS、不再讀 localStorage。
 // 「TC4 斷線告警列(W-B5)」文案斷言原本掛在此檔的 WS 驅動路徑上,改以 props 直接驅動,
@@ -47,11 +52,20 @@ function stream(over: Partial<StockStreamState> = {}): StockStreamState {
   };
 }
 
+/** header 倉位段(SC-3)的部位列。預設空 —— 既有案不該因為多了一條路由而長出內容。 */
+let positions: CapitalPosition[] = [];
+
 beforeEach(() => {
   window.localStorage.clear();
+  positions = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
+      // 不接這條的話 useCapitalPositions 掉進 404 → data undefined → 恆無倉,SC-3
+      // 的斷言會靜默 vacuous(而「沒渲染」與「查不到」在 queryBy 下長得一模一樣)
+      if (String(url).includes("/api/capital/positions")) {
+        return new Response(JSON.stringify({ positions }));
+      }
       if (String(url).includes("/api/stock/watchlist")) {
         return new Response(JSON.stringify({ groups: [{ name: "自選", codes: ["2330"] }] }));
       }
@@ -931,5 +945,79 @@ describe("StockPage 緩撮標示(SC-2)", () => {
     );
     expect(screen.queryByTestId("page-trial")).toBeNull();
     expect(screen.queryByText("(緩)")).toBeNull();
+  });
+});
+
+// batch3 R3 SC-3:header 的倉位段。**逐 kind / 逐契約各一段**(不聚合)——
+// 右欄閃電梯的部位列就在旁邊,一對一才能並排核對數字。
+describe("StockPage header 倉位(SC-3)", () => {
+  const LAST = 2_380_000; // ACCUM.last.p(毫元)
+  const AVG = 2350;
+
+  function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
+    return {
+      market: "sec",
+      stock_no: "2330",
+      qty: 3,
+      name: "台積電",
+      avg_price: AVG,
+      kind: "cash",
+      pnl_base: null,
+      pnl_base_price: null,
+      pnl_cost: null,
+      code: "2330",
+      ...over,
+    };
+  }
+
+  async function segments(): Promise<HTMLElement[]> {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} />);
+    const bar = await screen.findByTestId("page-position");
+    return [...bar.children] as HTMLElement[];
+  }
+
+  it("現股段 = 交易別 + 張數 + 均價 + 含費稅損益(與 positionEcon 同折數)", async () => {
+    positions = [pos()];
+    const segs = await segments();
+    const econ = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash");
+    const pct = ((econ.pnl ?? 0) / (AVG * 3 * 1000)) * 100;
+    expect(segs).toHaveLength(1);
+    expect(segs[0]?.textContent).toBe(`現股 3張 · 均價 2350 · 損益 ${pnlText(econ.pnl)} (${fmtPct(pct)})`);
+    expect(segs[0]?.className).toContain(econ.pnl !== null && econ.pnl > 0 ? "text-bull" : "text-bear");
+  });
+
+  // 現貨態也要看得到個股期倉:右欄梯一次只顯示一個合約,header 不列全就看不到
+  // 「我這檔還有期倉」。期貨用群益名目損益(pnl_base),不套現股稅費口徑。
+  it("個股期段逐契約列出(含合約碼),與現股段並存", async () => {
+    positions = [pos(), pos({ market: "fut", stock_no: "CDFI6", qty: 2, avg_price: 2360, pnl_base: 500 })];
+    const segs = await segments();
+    expect(segs).toHaveLength(2);
+    expect(segs[1]?.textContent).toBe("期 CDFI6 多 2口 · 均價 2360 · 損益 +500");
+    expect(segs[1]?.className).toContain("text-bull");
+  });
+
+  it("均價缺 → 均價與損益皆破折號、不印百分比(張數照顯示)", async () => {
+    positions = [pos({ avg_price: null })];
+    const segs = await segments();
+    expect(segs[0]?.textContent).toBe("現股 3張 · 均價 — · 損益 —");
+    expect(segs[0]?.className).toContain("text-ink-dim");
+  });
+
+  it("折數改成 3 折 → 損益跟著換(SC-5 元件級)", async () => {
+    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
+    positions = [pos()];
+    const segs = await segments();
+    const at3 = positionEcon(3, AVG, LAST, 3, "cash");
+    const at18 = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash");
+    expect(segs[0]?.textContent).toContain(`損益 ${pnlText(at3.pnl)}`);
+    expect(segs[0]?.textContent).not.toContain(`損益 ${pnlText(at18.pnl)}`);
+  });
+
+  it("無倉 → 整段不渲染(零佔位)", async () => {
+    positions = [];
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} />);
+    // 先等一個同批查詢落地,確認「不是還沒回來」而是真的沒有倉位
+    await waitFor(() => expect(screen.getByTestId("page-quote")).toBeTruthy());
+    expect(screen.queryByTestId("page-position")).toBeNull();
   });
 });
