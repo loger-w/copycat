@@ -2,12 +2,15 @@ import { useMemo, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+import { useCapitalOrders } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { aggregateBars } from "@/lib/candle";
 import { CHART_MODE_KEY } from "@/lib/constants";
 import { svgBox } from "@/lib/chart-frame";
+import { fillDates, fillPoints, stkfutFillKey } from "@/lib/fill-marks";
+import { ymdOf } from "@/lib/ladder-lots";
 import type { StockAccum } from "@/lib/stock-accum";
 import { cn } from "@/lib/utils";
 
@@ -59,6 +62,22 @@ export function StockChart({
   const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS, !isFut);
   // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
   const { toggles, set } = useChartToggles();
+
+  // 當日成交點(R2 SC-7)。比對鍵分兩態:
+  //   現貨 = 股號 + `excludeUnit="股"`(與現股梯同口徑 AD-3,張梯混零股量級差千倍);
+  //   個股期 = **選定契約**的期交所契約碼(群益回報的期貨單 `stock_no` 放的就是它),
+  //   不排除單位「口」。契約 ym 非法時 `stkfutFillKey` 回 null → `fillPoints` 走 guard
+  //   回零筆(圖比成交點重要,不白屏)。
+  // 判準用 `contract !== null` 而不是 `isFut`:兩者等值,但前者讓 TS 直接窄化出 `prod`/`ym`。
+  // deps **不放 `contract` 物件**:它是 StockPage 每 render 現造的字面值,放進去等於每輪重算;
+  // `key` 是字串,值一樣就不重算。`today` 每 render 現算,跨午夜時字串一變自然失效(AD-9)。
+  const orders = useCapitalOrders().data?.orders;
+  const today = ymdOf(new Date());
+  const key = contract !== null ? stkfutFillKey(contract.prod, contract.ym) : code;
+  const fills = useMemo(
+    () => fillPoints(orders, key, fillDates(today), isFut ? undefined : "股"),
+    [orders, key, today, isFut],
+  );
 
   // 進期貨態前的現貨模式;null = 沒有待還原的偏好(code review A6)。
   const [spotMode, setSpotMode] = useState<ChartMode | null>(null);
@@ -154,7 +173,13 @@ export function StockChart({
           的呼叫端契約 —— ref 只掛 data 分支的話,冷載入會量到 0×0 而 hook 不再重跑)。 */}
       <div ref={sizeRef} className="flex min-h-0 flex-1 flex-col">
       {showIntraday ? (
-        <StockIntradayChart accum={accum} mainHeight={mainH} subHeight={subH} stkfut={isFut} />
+        <StockIntradayChart
+          accum={accum}
+          mainHeight={mainH}
+          subHeight={subH}
+          stkfut={isFut}
+          fills={fills}
+        />
       ) : isPending ? (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
           <p className="text-sm text-ink-muted">載入中…</p>
