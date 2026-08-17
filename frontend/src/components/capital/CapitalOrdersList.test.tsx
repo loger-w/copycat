@@ -32,6 +32,7 @@ function order(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
     pre_order: false,
     error_msg: null,
     actionable: true,
+    price_type: null,
     raw: "",
     ...overrides,
   };
@@ -128,6 +129,30 @@ describe("CapitalOrdersList", () => {
     expect(screen.getAllByText("1050").length).toBe(2);
     expect(screen.getAllByText("0/3 張").length).toBe(2);
     expect(screen.getAllByText("已委託").length).toBe(2);
+  });
+
+  it("市價單列價格欄前綴「市價」標籤,price 仍印;limit / null 不顯示(SC-10)", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(STATUS),
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            order({ seq_no: "001", price_type: "market" }),
+            order({ seq_no: "002", stock_no: "2317", name: "鴻海", price_type: "limit" }),
+            order({ seq_no: "003", stock_no: "2454", name: "聯發科", price_type: null }),
+          ],
+        }),
+    });
+    renderList("sec");
+    await screen.findByText(/2330/);
+    const tags = screen.getAllByTestId("order-market-tag");
+    expect(tags.length).toBe(1);
+    expect(tags[0]!.textContent).toBe("市價");
+    expect(tags[0]!.getAttribute("title")).toBe("市價單");
+    // 標籤是**前綴**不是取代:回報價仍在同一格印出
+    expect(tags[0]!.parentElement?.textContent).toBe("市價1050");
+    // 另兩列沒有標籤 → 價格格文字恰為價格本身
+    expect(screen.getAllByText("1050").length).toBe(2);
   });
 
   it("空列表顯示無委託", async () => {

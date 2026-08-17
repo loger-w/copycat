@@ -79,6 +79,7 @@ function futOrder(overrides: Partial<CapitalOrder> = {}): CapitalOrder {
     pre_order: false,
     error_msg: null,
     actionable: true,
+    price_type: null,
     raw: "",
     ...overrides,
   };
