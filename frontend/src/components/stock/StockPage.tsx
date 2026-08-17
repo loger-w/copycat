@@ -113,10 +113,16 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
   const posMap = useMemo(() => positionsByCode(positions), [positions]);
   const discount = useFeeDiscount();
   const posRows = code === null ? undefined : posMap.get(code);
+  // 現股段的現價**不能**用主圖的 `last`:個股期態下 accum 是**合約簿**的價,拿它算
+  // positionEcon 會印出一個「用期貨價算的現股損益」—— 看起來很正常的錯數字。期貨態
+  // 改吃側欄現貨報價(同一條 watchlist_quote,與側欄 chip 同源);非自選碼取不到 →
+  // null → 走 AD-9 降級印 `—`,破折號比錯數字好。fut 段吃 pnl_base 不受影響。
+  // (同款「期貨態要另尋現貨基準」的分岔先例:RightRail.tsx:242-268 的平倉估價。)
+  const secLast = contract === null ? (last?.p ?? null) : (watchlist[code ?? ""]?.p ?? null);
   const posSegments =
     posRows === undefined
       ? []
-      : headerSegments(secSummary(posRows, last?.p ?? null, discount), futSummary(posRows));
+      : headerSegments(secSummary(posRows, secLast, discount), futSummary(posRows));
 
   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
   // 靜默清空。這是新入口才有的 gate,不是既有行為。
