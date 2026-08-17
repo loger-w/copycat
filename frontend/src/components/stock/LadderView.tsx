@@ -48,19 +48,9 @@ function lotText(lot: LadderLot): string {
 const FILLED_BADGE =
   "pointer-events-none my-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted";
 
-/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
-export const DASH = "—";
-
-export function pnlText(pnl: number | null): string {
-  if (pnl === null) return DASH;
-  return `${pnl > 0 ? "+" : ""}${pnl.toLocaleString("en-US")}`;
-}
-
-/** 台股慣例:賺紅賠綠。 */
-export function pnlTone(pnl: number | null): string {
-  if (pnl === null) return "text-ink-dim";
-  return pnl > 0 ? "text-bull" : pnl < 0 ? "text-bear" : "text-ink";
-}
+/** 損益顯示格式本體搬到 `lib/pnl-format.ts`(自選列 / header / 群組卡也要同一份規則);
+ *  此處 re-export 保住既有 `@/components/stock/LadderView` 的 import 路徑。 */
+export { DASH, pnlText, pnlTone } from "@/lib/pnl-format";
 
 interface Props {
   /** 標題列標的(D-12):右欄內容隨主 tab 切換,標的必須畫面可指認以降誤送風險 */
