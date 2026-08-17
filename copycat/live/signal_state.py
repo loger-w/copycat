@@ -9,6 +9,14 @@
   `_limit_latch` 無條件推進,`enabled` 只決定該 kind 是否「產出事件 + 寫
   cooldown/touch_count/suppressed」。關掉爆拉不影響共用同一個窗的爆量;停用期間
   鎖上→打開的 latch 照常轉移,重開後不會補發一則過期的打開。
+- **CDP rearm 是「距離 + 駐留」兩道**(signal-denoise SC-1):解除 suppressed 要
+  **連續**待在線外(`|price − 線價| ≥ cdp_rearm_ticks × tick`)滿 `cdp_rearm_dwell_secs`,
+  中途任一筆回到帶內即歸零重算。起算時點就記在 `_suppressed` 的值上(None = 帶內 /
+  尚未起算);穿越當筆若已在線外(跳空)即從該筆起算。`dwell = 0` 完全等於舊語意。
+- **穿越判定看側別不看不等式**(signal-denoise SC-2):`_side[(code, level)] =
+  (線價, −1/0/+1)`,`price == 線價` 是「線上」—— 不觸發也不改變側別,穿越 = 上一個
+  非線上側別與本 tick 側別相反。側別存了線價,基準換線即自動失效(改由 `prev` 推定)。
+  側別推進與駐留計時同屬狀態推進,在 `enabled` gate **之前**跑。
 - **接線層(SignalHub)持有所有 IO 與 membership gate**,本模組不認得自選清單。
 
 呼叫順序契約(換日,design §4.1 stage2):**先 `reset_day()` 再 promote 暫存基準**
@@ -98,6 +106,11 @@ def _clock_key(now: _dt.datetime) -> str:
     return f"{now:%H:%M:%S}.{now.microsecond // 1000:03d}"
 
 
+def _sign(value: int) -> int:
+    """−1 / 0 / +1;0 = 「在線上」,不是任何一側。"""
+    return (value > 0) - (value < 0)
+
+
 class SignalDetector:
     def __init__(
         self,
@@ -114,6 +127,8 @@ class SignalDetector:
         self._window: dict[str, deque[tuple[float, int, int]]] = {}
         # 值 = 「連續線外」的起算 mono(None = 目前在帶內 / 尚未起算)
         self._suppressed: dict[tuple[str, str], float | None] = {}
+        # (code, level) → (線價, 側別 −1/0/+1);線價一起存,基準換線即自動失效
+        self._side: dict[tuple[str, str], tuple[int, int]] = {}
         self._cooldown: dict[tuple[str, str, str], float] = {}
         self._touch: dict[tuple[str, str, str], int] = {}
         self._latch: dict[tuple[str, str], bool] = {}
@@ -165,6 +180,7 @@ class SignalDetector:
         self._prev.clear()
         self._window.clear()
         self._suppressed.clear()
+        self._side.clear()
         self._cooldown.clear()
         self._touch.clear()
         self._latch.clear()
@@ -175,6 +191,7 @@ class SignalDetector:
         self._prev.pop(code, None)
         self._window.pop(code, None)
         self._suppressed = {k: v for k, v in self._suppressed.items() if k[0] != code}
+        self._side = {k: v for k, v in self._side.items() if k[0] != code}
         self._cooldown = {k: v for k, v in self._cooldown.items() if k[0] != code}
         self._touch = {k: v for k, v in self._touch.items() if k[0] != code}
         self._latch = {k: v for k, v in self._latch.items() if k[0] != code}
@@ -277,24 +294,12 @@ class SignalDetector:
         basis = self._basis.get(code)
         if not basis:
             return []
-        # rearm 解除是無條件檢查(停用期間也照解,重開後語意才對)
+        # 駐留計時與側別推進都是**狀態推進**,在 enabled gate 之前無條件跑(停用期間
+        # 也照走,重開後語意才對:不補發、方向也不會因為漏掉幾筆而反過來)。
         gap = self._cfg.cdp_rearm_ticks * tick_size_milli(price)
-        for name, value in basis.items():
-            if (code, name) in self._suppressed and abs(price - value) >= gap:
-                self._suppressed.pop((code, name), None)
-        if "cdp_cross" not in enabled:
-            return []
-
-        crossed: list[tuple[int, str]] = []
-        direction: str | None = None
-        for name, value in basis.items():
-            if prev < value <= price:
-                direction = "from_below"
-                crossed.append((value, name))
-            elif prev > value >= price:
-                direction = "from_above"
-                crossed.append((value, name))
-        if not crossed or direction is None:
+        self._advance_rearm(code, basis, price, gap, mono)
+        direction, crossed = self._advance_sides(code, basis, prev, price)
+        if "cdp_cross" not in enabled or direction is None:
             return []
         # 固定序(id 決定性的前提):from_below 線價低→高、from_above 高→低
         crossed.sort(key=lambda item: (item[0], item[1]), reverse=direction == "from_above")
@@ -309,7 +314,9 @@ class SignalDetector:
             return []
         counts: dict[str, int] = {}
         for name in levels:
-            self._suppressed[(code, name)] = None
+            # 起算時點:當筆已在線外(跳空穿越)就從這一筆算,否則等第一筆線外 tick
+            outside = abs(price - basis[name]) >= gap
+            self._suppressed[(code, name)] = mono if outside else None
             self._arm((code, "cdp_cross", name), mono, self._cfg.cdp_cooldown_secs)
             counts[name] = self._bump((code, "cdp_cross", name))
         return [
@@ -325,6 +332,82 @@ class SignalDetector:
                 touch_count=counts[levels[0]],  # 合併事件取 levels[0] 的計數
             )
         ]
+
+    def _advance_rearm(
+        self,
+        code: str,
+        basis: dict[str, int],
+        price: int,
+        gap: int,
+        mono: float,
+    ) -> None:
+        """suppressed 的解除:**連續**待在線外滿 `cdp_rearm_dwell_secs` 才解,回帶內即歸零。
+
+        起算時點記在 `_suppressed` 的值上(None = 目前在帶內 / 尚未起算)。只看
+        `|price − 線價| ≥ gap` 的絕對距離、不分上下側(跨側跳空本身會產生新的穿越判定,
+        分側只會讓稀疏 tick 誤歸零)。`cdp_rearm_dwell_secs = 0` 完全等於舊語意
+        「第一筆線外 tick 即解除」。
+        """
+        dwell = self._cfg.cdp_rearm_dwell_secs
+        for name, value in basis.items():
+            key = (code, name)
+            if key not in self._suppressed:
+                continue
+            if abs(price - value) < gap:
+                self._suppressed[key] = None  # 回帶內 → 駐留歸零重算
+                continue
+            since = self._suppressed[key]
+            if since is None:
+                since = mono
+                self._suppressed[key] = since
+            if mono - since >= dwell:
+                del self._suppressed[key]
+
+    def _advance_sides(
+        self,
+        code: str,
+        basis: dict[str, int],
+        prev: int,
+        price: int,
+    ) -> tuple[str | None, list[tuple[int, str]]]:
+        """推進「價格在線的哪一側」並回傳本 tick 的穿越(碰線點透明,SC-2)。
+
+        `price == 線價` 是「線上」:不觸發、也不改變側別。故逐 tick 走過線價的真穿越
+        (79.5 → 80.0 → 80.5)仍算一次 from_below,而「貼著線價來回」不算。側別連同
+        線價一起存(`_side[(code, level)] = (線價, 側別)`):基準盤中重設後線價一變,
+        舊側別自動失效,改由 `prev` 推定(等價舊式 `prev < v <= price`,每檔每日第一次
+        穿越照發)。`prev` 本身在線上且無存值 → 上一側別未知,只記側別不判穿越。
+        """
+        below: list[tuple[int, str]] = []
+        above: list[tuple[int, str]] = []
+        for name, value in basis.items():
+            key = (code, name)
+            stored = self._side.get(key)
+            last = stored[1] if stored is not None and stored[0] == value else _sign(prev - value)
+            cur = _sign(price - value)
+            self._side[key] = (value, cur if cur else last)  # 線上點保留上一側別
+            if not last or not cur or last == cur:
+                continue
+            (below if cur > 0 else above).append((value, name))
+        if below and above:  # 同一價格序列不可能同時上下穿 —— 不變式破了,保單一方向
+            keep = _sign(price - prev)
+            logger.warning(
+                "CDP 側別混向 code=%s prev=%s price=%s below=%s above=%s",
+                code,
+                prev,
+                price,
+                [name for _v, name in below],
+                [name for _v, name in above],
+            )
+            if keep > 0:
+                above = []
+            else:
+                below = []
+        if below:
+            return "from_below", below
+        if above:
+            return "from_above", above
+        return None, []
 
     # ---- 爆拉 / 爆跌(SC-2)----
 
@@ -349,9 +432,12 @@ class SignalDetector:
             kind = "crash"
         else:
             return []
-        if self._cooling((code, kind, ""), mono):
+        # 冷卻桶 surge / crash 共用(SC-3):拉上去又摔下來是同一段行情,兩則訊號的
+        # 資訊量不獨立。`touch_count` 仍分 kind 計(`_bump` 用各自的鍵)。
+        bucket = (code, "surge_crash", "")
+        if self._cooling(bucket, mono):
             return []
-        self._arm((code, kind, ""), mono, self._cfg.surge_cooldown_secs)
+        self._arm(bucket, mono, self._cfg.surge_cooldown_secs)
         return [
             SignalEvent(
                 kind=kind,
