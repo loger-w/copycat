@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   FUT_TICK_MILLI,
   buildFuturesLadder,
+  edgeMilli,
   futExchangeContract,
   splitMyLots,
   type FutOrderSource,
@@ -229,5 +230,22 @@ describe("futExchangeContract 商品 + YYYYMM → 期交所契約碼", () => {
   it("非法月份 throw", () => {
     expect(() => futExchangeContract("TXF", "202613")).toThrow();
     expect(() => futExchangeContract("TXF", "bad")).toThrow();
+  });
+});
+
+describe("edgeMilli 貼漲跌停選邊(raw,不 snap)", () => {
+  it("buy → 漲停、sell → 跌停", () => {
+    expect(edgeMilli("buy", 25_300_000, 20_700_000)).toBe(25_300_000);
+    expect(edgeMilli("sell", 25_300_000, 20_700_000)).toBe(20_700_000);
+  });
+
+  it("該側界缺 → null(另一側有值不代打)", () => {
+    expect(edgeMilli("buy", null, 20_700_000)).toBeNull();
+    expect(edgeMilli("sell", 25_300_000, null)).toBeNull();
+  });
+
+  it("不 snap 到合法檔位:非整 tick 的界原樣回傳", () => {
+    expect(edgeMilli("buy", 25_300_500, 20_699_500)).toBe(25_300_500);
+    expect(edgeMilli("sell", 25_300_500, 20_699_500)).toBe(20_699_500);
   });
 });

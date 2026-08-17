@@ -26,6 +26,7 @@ import {
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { LOCK_WS_TITLE } from "@/lib/flash-arm";
+import { settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
@@ -39,7 +40,6 @@ import {
 } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
-import { tradeErrorText } from "@/lib/trade-text";
 import type { CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
@@ -163,9 +163,10 @@ export function StkfutLadder({
     }
     lastClick.current = { key, ts: now };
     const qty = qtyState.qty;
-    // mutateAsync + 自行 then/catch:連發點價逐次計數 send_ok/send_fail(PriceLadder 同註)
-    submitFuture
-      .mutateAsync({
+    // mutateAsync + settleFlashSend:連發點價逐次計數 send_ok/send_fail(PriceLadder 同註);
+    // 失敗無條件計數、成功留 aliveRef 守門的理由收在 lib/flash-send.ts
+    settleFlashSend(
+      submitFuture.mutateAsync({
         tc4_symbol: stkfutTc4Symbol(contract),
         buy_sell: side,
         price: priceMilli / 1000,
@@ -174,22 +175,14 @@ export function StkfutLadder({
         time_in_force: "ROD",
         day_trade: dayTrade,
         source: "flash",
-      })
-      // 失敗無條件計數、成功留 aliveRef 守門(review R3 + r1 S1;理由見 PriceLadder 同段註)
-      .then((r) => {
-        if (r.ok) {
-          if (!aliveRef.current) return;
-          dispatchArm({ type: "send_ok" });
-          showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`);
-        } else {
-          dispatchArm({ type: "send_fail" });
-          showHint(r.message !== "" ? r.message : "送單失敗");
-        }
-      })
-      .catch((err: unknown) => {
-        dispatchArm({ type: "send_fail" });
-        showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
-      });
+      }),
+      {
+        alive: () => aliveRef.current,
+        dispatch: dispatchArm,
+        showHint,
+        okText: `已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`,
+      },
+    );
   }
 
   // 紅方格點刪:閃電規則直刪(無彈窗),逐 seq 送 cancel(market=fut)

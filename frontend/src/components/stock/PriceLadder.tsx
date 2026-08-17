@@ -16,6 +16,7 @@ import {
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { LOCK_WS_TITLE } from "@/lib/flash-arm";
+import { settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
@@ -29,7 +30,6 @@ import {
 import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
-import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { CapitalPosition } from "@/types";
 
@@ -276,10 +276,11 @@ export function PriceLadder({
     }
     lastClick.current = { key, ts: now };
     const qty = qtyState.qty;
-    // mutateAsync + 自行 then/catch:TQ 的 mutate 層 callback 只對「最後一次」呼叫
-    // 觸發,連發點價會漏算 send_ok/send_fail(武裝連 3 敗自動解除依賴逐次計數)
-    submitStock
-      .mutateAsync({
+    // mutateAsync + 自行 then/catch(settleFlashSend):TQ 的 mutate 層 callback 只對
+    // 「最後一次」呼叫觸發,連發點價會漏算 send_ok/send_fail(武裝連 3 敗自動解除依賴
+    // 逐次計數)。尾段守門的不對稱語意收在 lib/flash-send.ts(三梯同一份)。
+    settleFlashSend(
+      submitStock.mutateAsync({
         stock_no: code,
         buy_sell: side,
         price: priceMilli / 1000,
@@ -288,27 +289,14 @@ export function PriceLadder({
         time_in_force: "ROD",
         trade_kind: tradeKind,
         source: "flash",
-      })
-      // arm 事件的守門**刻意不對稱**(change-spec review R3 + code review r1 S1):
-      //   失敗 → 無條件 dispatch(state 已上提,卸載後 dispatch 到父層 reducer 合法)。
-      //     鎖定態下「送出後切走、回應才到」的失敗漏計 = 連 3 敗那道閘永遠關不上。
-      //   成功 → 留 `aliveRef` 守門。遲到的成功來自**已經離開的那座梯**,對「現在這座梯
-      //     還能不能送」不構成證據,計進去等於讓一發舊單把斷路器洗回 0。
-      // showHint 兩邊都在守門內(它碰的是本元件的 state)。
-      .then((r) => {
-        if (r.ok) {
-          if (!aliveRef.current) return;
-          dispatchArm({ type: "send_ok" });
-          showHint(`已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`);
-        } else {
-          dispatchArm({ type: "send_fail" });
-          showHint(r.message !== "" ? r.message : "送單失敗");
-        }
-      })
-      .catch((err: unknown) => {
-        dispatchArm({ type: "send_fail" });
-        showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
-      });
+      }),
+      {
+        alive: () => aliveRef.current,
+        dispatch: dispatchArm,
+        showHint,
+        okText: `已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`,
+      },
+    );
   }
 
   // 紅方格點刪:閃電規則直刪(無彈窗),逐 seq 送 cancel
