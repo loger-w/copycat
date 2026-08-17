@@ -1075,6 +1075,47 @@ class TestDiscordMerge:
 
         assert h.bot == [format_signal_text(rows[0])]
 
+    async def test_blocked_merged_message_is_logged_with_id(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """review C-5:未分批的合併訊息被節流擋下 = 一次吞掉整組 N 則。
+
+        `_allow_discord` 自己那句 log 只說「本則」—— 合併之後「一則」已經不等於
+        「一筆訊號」,缺角有多大、是哪一組,只有這裡記得下來(分批路徑早就有記)。
+        """
+        h = _Harness(tmp_path, clock, discord_per_min=1)
+        h.attach_bot()
+        rows = _long_rows(n=2, pad=0)  # 短文本 → 不分批,走「一則送出」那條路
+        assert len(format_signal_group_text(rows)) <= 1900
+
+        await h.hub._send_discord([rows[0]])  # 用掉這一分鐘唯一的額度
+        with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+            await h.hub._send_discord(rows)
+
+        assert len(h.bot) == 1  # 合併那則整組被擋下
+        assert "節流擋下合併 2 則" in caplog.text
+        assert "sig-0" in caplog.text
+
+    async def test_close_accounts_for_pending_row(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """review C-3:單槽 pending 那一則已經 `get()` 出來、還沒 `task_done()`。
+
+        關機時 worker 被取消 → 它既沒送出也沒記帳:`_discord_queue.join()` 的計數
+        永遠掛著一格,關機屏障(與測試的 `settle()`)從此吊死,而丟掉的是哪一則
+        全無痕跡。
+        """
+        h = _Harness(tmp_path, clock)
+        h.hub._discord_queue.put_nowait(_long_rows(n=1, pad=0)[0])
+        h.hub._discord_pending = h.hub._discord_queue.get_nowait()  # 模擬 worker 的單槽
+
+        with caplog.at_level(logging.INFO, logger="copycat.server.signal_hub"):
+            await h.hub.close()
+
+        assert h.hub._discord_pending is None
+        await asyncio.wait_for(h.hub._discord_queue.join(), 1)
+        assert "sig-0" in caplog.text
+
 
 class TestBasisWorker:
     async def test_staged_prefetch_swaps_in_on_rollover(
