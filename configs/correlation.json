@@ -38,6 +38,12 @@
       "label": "費半",
       "symbol": "TC.F.TWF.SXF.HOT",
       "source": "tc4"
+    },
+    {
+      "key": "NK225M",
+      "label": "小日經",
+      "symbol": "TC.F.OSE.NK225M.HOT",
+      "source": "tc4"
     }
   ]
 }
