@@ -8,8 +8,9 @@
 3. UNSUB→SUB REALTIME(全天窗,同 corr_source.all_day_window)監聽 N 秒推播計數,比較
    OSE NK225 / OSE NK225M / SGX NK 流動性;每檔留一則原始 quote,並實跑
    `parse_stock_realtime` + `minute_end_from_utc_hhmmss`(新交易所段必實跑 parse 層,
-   core-flow §1)。對照組 = CME MES(未被 :8721 訂閱;**不碰六腿本體** — 同 symbol 跨 session
-   只推一邊,會搶走 prod 推播)。
+   core-flow §1)。對照組 = CME MES。**同 symbol 跨 session 只推一邊,會搶走 prod 推播**:
+   NK225M 自 2026-08-17 起已是 prod 第七腿 → 本腳本 `main()` 開頭檢查 :8721 是否有 server 在跑,
+   有就拒跑(`--force` 才放行);其餘候選(NK225 / SGX NK / MES)不在 prod 訂閱清單。
 4. 1K 當日窗回補支援度(SubHistory 1K → 首頁 rows)+ `parse_1k_minutes` 實跑。
 
 用法:.venv\\Scripts\\python spikes\\nk225_leg_probe.py [--port 50774] [--listen-secs 60] [--out <path>]
@@ -139,13 +140,37 @@ def probe_1k(
     }
 
 
+def _port_in_use(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="50774")
     ap.add_argument("--listen-secs", type=int, default=60)
     ap.add_argument("--poll-secs", type=float, default=8.0)
     ap.add_argument("--out", default=str(OUT_DIR / "nk225_leg_probe.json"))
+    ap.add_argument(
+        "--force", action="store_true", help="prod :8721 在跑時仍要探測(會搶走 prod 小日經推播)"
+    )
     args = ap.parse_args()
+
+    if not args.force and _port_in_use(8721):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "fail": "prod :8721 在跑;NK225M 是 prod 第七腿,探測會搶走推播。"
+                    "停 prod 或加 --force。",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
 
     OUT_DIR.mkdir(exist_ok=True)
     out: dict = {
