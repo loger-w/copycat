@@ -1,17 +1,27 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
-import { useCapitalOrders } from "@/hooks/useCapital";
+import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
+import { useFeeDiscount } from "@/lib/fee-discount";
 import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
 import { ymdOf } from "@/lib/ladder-lots";
+import {
+  cardText,
+  chipTone,
+  EMPTY_POSITIONS,
+  futSummary,
+  positionsByCode,
+  secSummary,
+} from "@/lib/position-summary";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
 import { cn } from "@/lib/utils";
 import type { Group } from "@/lib/watchlist-model";
+import type { CapitalPosition } from "@/types";
 
 /** 群組檢視:自選群組成員的分時圖牆(group-grid SC-3)。
  *
@@ -119,6 +129,8 @@ const GroupCard = memo(function GroupCard({
   active,
   toggles,
   fills,
+  positions,
+  discount,
   sizeClass,
   onPick,
 }: {
@@ -132,6 +144,12 @@ const GroupCard = memo(function GroupCard({
   /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
    *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */
   fills: readonly FillPoint[];
+  /** 這一檔的部位列(SC-4)。無倉的卡一律拿到同一個 `EMPTY_POSITIONS` —— 理由同
+   *  `fills`:每卡各建一個 `[]` 的話 memo 每輪都比不過。 */
+  positions: readonly CapitalPosition[];
+  /** 手續費折數(primitive):與閃電梯同一個 localStorage 真相源。物件傳下來的話
+   *  memo 每輪都會比不過,而折數是使用者一年動一次的設定。 */
+  discount: number;
   /** ≤16 檔 = `min-h-0`(高度由 1fr 列軌指派);>16 檔 = `h-56` 固定高(AD-7)。
    *  字面值由父層挑好傳進來:Tailwind JIT 掃的是原始碼字面,拼出來的 class 不會被產出。 */
   sizeClass: string;
@@ -150,6 +168,10 @@ const GroupCard = memo(function GroupCard({
   // 回補明明還在跑,卡片卻先宣告終態「尚無成交」。
   const hasBars = snap !== undefined && hasWindowedMinutes(snap.minutes);
   const backfilling = snap?.backfilling === true && !hasBars;
+  // 倉位(SC-4)。證券損益吃卡片自己那則 quote 現算(quote 本來就是 memo 的 dep),
+  // 個股期走群益 pnl_base。兩者皆無 → 整行不渲染(高度差由圖區的 flex-1 吸收)。
+  const sec = secSummary(positions, quote?.p ?? null, discount);
+  const fut = futSummary(positions);
   return (
     // `<div role="button">` 而不是 `<button>`(review R11):卡片內容從一條線變成一整張
     // 分時圖(svg + 文字標籤 + hover 十字線),而 `<button>` 的內容模型只吃 phrasing
@@ -187,6 +209,14 @@ const GroupCard = memo(function GroupCard({
         <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">{name}</span>
         <QuoteCell code={code} q={quote} />
       </span>
+      {sec !== null || fut !== null ? (
+        <span
+          data-testid={`group-pos-${code}`}
+          className={cn("font-mono text-[0.625rem] leading-tight", chipTone(sec, fut))}
+        >
+          {cardText(sec, fut)}
+        </span>
+      ) : null}
       {backfilling ? (
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">回補中…</span>
       ) : snap === undefined || snap.noData ? (
@@ -256,6 +286,13 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
   const orders = useCapitalOrders().data?.orders;
   const today = ymdOf(new Date());
   const fillsMap = useMemo(() => fillsByCode(orders, fillDates(today), "股"), [orders, today]);
+
+  // 倉位(SC-4)同款:圖牆層取一份、一次折完所有 code,每卡只取自己那個 key。
+  // 折數在這一層讀一次(primitive)往下傳 —— 每張卡各掛一份 hook 的話,50 張卡會
+  // 各訂閱一次同一個 store。位置同樣必須在 `groups.length === 0` 早退**之前**。
+  const positions = useCapitalPositions().data?.positions;
+  const posMap = useMemo(() => positionsByCode(positions), [positions]);
+  const discount = useFeeDiscount();
 
   // 空態三分(review A4)。**只在真的沒有群組可畫時**才走這三條:`groups` 一旦有內容
   // (含 TQ 失敗但仍握著上一份 cache)就照畫,錯誤不遮既有資料。
@@ -360,6 +397,9 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
               toggles={toggles}
               // 零筆的 code 不入 map → 一律回同一個 `EMPTY_FILLS`(identity 穩定)
               fills={fillsMap.get(code) ?? EMPTY_FILLS}
+              // 無倉的 code 不入 map → 一律回同一個 `EMPTY_POSITIONS`(identity 穩定)
+              positions={posMap.get(code) ?? EMPTY_POSITIONS}
+              discount={discount}
               // >16 檔走捲動軌:列高是 auto,卡片得自己有確定高度,否則
               // `useContainerSize` 量到的高由內容決定 → 「量多高就設多高」的回饋迴圈
               // (RO loop 告警)。≤16 檔由 1fr 列軌指派高,卡片只要能縮(min-h-0)。
