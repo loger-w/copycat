@@ -51,6 +51,13 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   「改了沒生效」先查這條再查 code(2026-07-29 曾誤查一輪;middleware range 判別含
   `-- :/copycat` 過濾)。dev(vite)下 nav 右緣 amber
   「版本落差」膠囊亮 = 同一判法命中,uncommitted 改動仍不可測。(Trigger:懷疑改動沒生效)
+- **要驗「吃群益委託 / 成交」的前端功能,側車樣板 = `.claude/mod/intraday-fill-marks/evidence/
+  sidecar_server.py`**(2026-08-17):真 `CapitalClient` + `FakeCom`(零 COM / 零真錢,含
+  `neutralize_external_env`)、`POST /_fake/fill?seq&stock&side&price&qty&time&market=TS|TF` 一次注入
+  N+D 兩筆回報 → `/api/capital/orders` 出現 `filled_qty>0` 的當日成交;`SeededStockSource` 已掛
+  2330 的 stkfut catalog(CDF/QFF)並讓 `F:CDF:*` 走 2330 種子價 → 個股期合約下拉可選、合約主圖有價。
+  注意種子價域(2330 ref 1200 ±2%):注入價落在 y 域外會被圖層合法丟掉(不是 bug),先算好再注入。
+  (Trigger:驗三梯徽章 / 成交點 / 委託列表等吃 orders 的畫面)
 
 ## Worktree 三險(2026-07-30 全數真踩到)
 

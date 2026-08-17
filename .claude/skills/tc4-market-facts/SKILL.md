@@ -191,3 +191,9 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   現股市價 ROD 合法(鎖停日簿頂 price=0 的「市價佇列」就是留存簿中的未成交市價 ROD 單;2026-08-17
   batch3 R1 review 曾誤套此條,機械反證後現股閃電梯市價鈕維持 market+ROD)。(e) OnAccount/OnOpenInterest 欄序
   為未實測假定,首次 prod 登入要核對。(Trigger:碰 copycat/capital / 群益送單欄位 / 驗證方式)
+- **`OrderRecord.date` / `time` 是最新事件日 / 時,不是委託建立日**(2026-08-17 R2 review 實證:
+  `CapitalStore.apply_reply` 對每筆回報「有值就覆寫」`date`/`time`)。後果:昨日建立今日成交的單
+  `date` 已是今日;昨日部分成交今日刪單的單 `date` 也是今日而 `avg_fill_price` 是昨日的 → 任何
+  以 `date` 當日期界的前端聚合(`ladder-lots.ts` 三梯徽章、`fill-marks.ts` 成交點)擋不住這種跨日
+  均價;要真擋只能後端留逐筆 D 事件(精確版,next-time)。`store.py:65` 註解「委託建立日」是舊敘述。
+  (Trigger:任何吃 CapitalOrder date/time 做日期界或時間定位的功能)
