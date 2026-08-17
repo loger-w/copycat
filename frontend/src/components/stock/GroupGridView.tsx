@@ -1,11 +1,14 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
+import { useCapitalOrders } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
+import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
+import { ymdOf } from "@/lib/ladder-lots";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
 import { cn } from "@/lib/utils";
 import type { Group } from "@/lib/watchlist-model";
@@ -115,6 +118,7 @@ const GroupCard = memo(function GroupCard({
   quote,
   active,
   toggles,
+  fills,
   sizeClass,
   onPick,
 }: {
@@ -125,6 +129,9 @@ const GroupCard = memo(function GroupCard({
   /** 圖牆頂那一份(**不含 `set`**:`useChartToggles.set` 每次 render 都是新 identity,
    *  傳進來會讓 memo 每輪都比不過 —— 而 toggle 鈕不在卡片內,卡片只讀) */
   toggles: ChartToggles;
+  /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
+   *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */
+  fills: readonly FillPoint[];
   /** ≤16 檔 = `min-h-0`(高度由 1fr 列軌指派);>16 檔 = `h-56` 固定高(AD-7)。
    *  字面值由父層挑好傳進來:Tailwind JIT 掃的是原始碼字面,拼出來的 class 不會被產出。 */
   sizeClass: string;
@@ -196,6 +203,7 @@ const GroupCard = memo(function GroupCard({
           snap={snap}
           liveP={quote?.p ?? null}
           toggles={toggles}
+          fills={fills}
         />
       )}
     </div>
@@ -205,11 +213,12 @@ const GroupCard = memo(function GroupCard({
 /** 圖牆頂 toggle 列的四鈕(SC-2)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
  *  叫不同名字,使用者得自己對照。**恆可按**(AD-5):可用性是 per-code 的(某一檔沒
  *  日線 ≠ 整列該反灰),個別卡片取不到 overlay 時該卡不畫,整列不動。 */
-const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp"; label: string }[] = [
+const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp" | "fills"; label: string }[] = [
   { key: "vwap", label: "均價" },
   { key: "cdp", label: "CDP" },
   { key: "ma", label: "MA" },
   { key: "vp", label: "量分佈" },
+  { key: "fills", label: "成交點" },
 ];
 
 export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError }: Props) {
@@ -233,6 +242,20 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
     pickRef.current = onPick;
   }, [onPick]);
   const pick = useCallback((code: string) => pickRef.current(code), []);
+
+  // 當日成交點(SC-6)。委託列表在**圖牆層取一份**、一次折完所有 code,每卡只取自己
+  // 那個 key —— 卡片各掛一份 hook 的話 50 張卡會各折一次同一份 orders。
+  //
+  // `today` 每 render 現算(AD-9):跨午夜開著頁面時字串一變,下面的 useMemo 自然失效
+  // 重算,昨天的成交點跟著消失(deps 放 `new Date()` 物件就永遠失效、放空陣列就永不失效)。
+  // 現股口徑 `excludeUnit="股"` 與現股梯一致(AD-3);群組卡只認現股(契約碼→股號
+  // 反查留給精確版),所以不必分態。
+  //
+  // 位置必須在 `groups.length === 0` 早退**之前**:hook 不可條件化(本 repo 沒裝
+  // react-hooks lint,漏了不會被擋)。
+  const orders = useCapitalOrders().data?.orders;
+  const today = ymdOf(new Date());
+  const fillsMap = useMemo(() => fillsByCode(orders, fillDates(today), "股"), [orders, today]);
 
   // 空態三分(review A4)。**只在真的沒有群組可畫時**才走這三條:`groups` 一旦有內容
   // (含 TQ 失敗但仍握著上一份 cache)就照畫,錯誤不遮既有資料。
@@ -335,6 +358,8 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
               quote={quotes[code]}
               active={code === active}
               toggles={toggles}
+              // 零筆的 code 不入 map → 一律回同一個 `EMPTY_FILLS`(identity 穩定)
+              fills={fillsMap.get(code) ?? EMPTY_FILLS}
               // >16 檔走捲動軌:列高是 auto,卡片得自己有確定高度,否則
               // `useContainerSize` 量到的高由內容決定 → 「量多高就設多高」的回饋迴圈
               // (RO loop 告警)。≤16 檔由 1fr 列軌指派高,卡片只要能縮(min-h-0)。
