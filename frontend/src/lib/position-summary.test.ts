@@ -229,6 +229,20 @@ describe("chip / 卡片 / header 文字", () => {
     expect(cardText(secOf([pos()], null), futOf([fut()]))).toBe(`現 3張 ${DASH} · 期 2口 +500`);
   });
 
+  // review TEST-2:只有期倉(現股全平、只留個股期)是真實會發生的組合,而 fut-only
+  // 走的是「sec 段整段不 push」那條分支 —— 沒案子的話多插一個空的「現 」前綴不會紅。
+  it("cardText:只有期倉 → 只有期那段(不留現股段的殘影)", () => {
+    expect(cardText(null, futOf([fut()]))).toBe("期 2口 +500");
+  });
+
+  it("headerSegments:只有期倉 → 只有契約那幾段", () => {
+    const segs = headerSegments(null, futOf([fut()]));
+    expect(segs).toHaveLength(1);
+    expect(segs[0]?.text).toBe(`期 CDFI6 多 2口 · 均價 ${fmt(985_000)} · 損益 +500`);
+    expect(segs[0]?.key).toBe("fut:CDFI6");
+    expect(segs[0]?.pnl).toBe(500);
+  });
+
   it("headerSegments:逐 kind / 逐契約各一段,tone 跟著各段自己的損益", () => {
     const sec = secOf([pos({ kind: "cash", qty: 3 }), pos({ kind: "short", qty: -2 })]);
     const f = futOf([fut()]);
