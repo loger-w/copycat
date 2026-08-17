@@ -77,6 +77,18 @@ describe("indexSeriesToAccum", () => {
     expect(a.vwap).toBe(1_050_000);
   });
 
+  it("值為 0 的分鐘 / p=0 視為不可得(後端 _millipt(\"0\") 回 0 不回 None):不進 minutes、last null", () => {
+    const a = indexSeriesToAccum(
+      series({ p: 0, minutes: { "0901": 1_000_000, "0902": 0, "0903": 1_200_000 } }),
+      "IX:TWSE",
+      "加權指數",
+    );
+    expect([...a.minutes.keys()]).toEqual([541, 543]);
+    expect(a.low).toBe(1_000_000);
+    expect(a.vwap).toBe(1_100_000);
+    expect(a.last).toBeNull();
+  });
+
   it("空 minutes → 空 Map、vwap / high / low 皆 null", () => {
     const a = indexSeriesToAccum(series({ minutes: {} }), "IX:TWSE", "加權指數");
     expect(a.minutes.size).toBe(0);
