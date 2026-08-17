@@ -106,6 +106,36 @@ def exchange_product_of(contract: str) -> str:
     return m.group(0)
 
 
+def stock_code_of(market: str, stock_no: str) -> str | None:
+    """部位列的 `stock_no` → 台股股號;對映不出來回 None(**不 raise**)。
+
+    `Position.stock_no` 在 sec 是股號、在 fut 是期交所契約碼,兩者不同語意;自選列 /
+    單檔 header / 群組卡都以股號為鍵,要顯示個股期倉位就得有這一段反查。反查鏈
+    (契約碼 → 產品碼 → 對映表 → 股號)全在後端,前端自建對照等於第二份真相。
+
+    回 None 的三條路都表示「無法對映」,呼叫端據此把該列排除在股號索引外(顯示層
+    不顯示、閃電梯不受影響),而不是拿一個猜的股號去標倉位:
+
+    1. 契約碼解不出產品碼(`exchange_product_of` 拋 ValueError);
+    2. 產品碼不在 `stkfut_map`(新上市未 refresh、或除權息調整後第三碼由 F 改數字);
+    3. 對映表列缺 `code`。
+
+    這是 `GET /api/capital/positions` 每列都要跑的衍生欄 —— 一列反查失敗就 500 掉
+    整條部位查詢,等於讓一檔冷門契約癱瘓整個看盤面。
+    """
+    if market == "sec":
+        return stock_no
+    try:
+        prod = exchange_product_of(stock_no)
+    except ValueError:
+        return None  # 契約碼形狀不認得 → 無法對映(見 docstring 1.)
+    entry = lookup_product(prod)
+    if entry is None:
+        return None
+    code = entry.get("code")
+    return code if isinstance(code, str) else None
+
+
 def is_option_contract(contract: str) -> bool:
     """期交所契約碼 → 是否為選擇權(送單分流 SendOptionOrder vs SendFutureOrder)。
 
