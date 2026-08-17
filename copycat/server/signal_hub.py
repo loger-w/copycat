@@ -402,7 +402,22 @@ class SignalHub:
         for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        self._discard_discord_pending()
         await self._flush_pending()  # worker 沒起來(或逾時)時的保底
+
+    def _discard_discord_pending(self) -> None:
+        """單槽 pending 已 `get()` 未 `task_done()`,worker 一取消它就無人記帳。
+
+        少記那一格 `_discord_queue.join()` 就永遠不返回(關機屏障吊死);Discord
+        關機本來就放棄不送,所以是「記帳 + 留痕」而不是補送 —— 丟掉的是哪一則要在
+        log 找得回來。
+        """
+        pending = self._discord_pending
+        if pending is None:
+            return
+        self._discord_pending = None
+        logger.info("關機丟棄 Discord 待合併訊號:%s", pending.get("id"))
+        self._discord_queue.task_done()
 
     def attach_discord(self, sender: Callable[[str], Any]) -> None:
         """sender 可為同步或 async(`bot.send_signal`);回傳 falsy = 未送出。"""
@@ -973,6 +988,10 @@ class SignalHub:
         text = format_signal_group_text(rows) + suffix
         if len(rows) == 1 or len(text) <= _DISCORD_MAX_CHARS:
             if not self._allow_discord():
+                # 合併之後「一則」不等於「一筆訊號」:`_allow_discord` 那句「本則」
+                # 看不出缺角有多大,也認不出是哪一組(C-5)
+                if len(rows) > 1:
+                    logger.warning("Discord 節流擋下合併 %d 則:%s", len(rows), head.get("id"))
                 return
             await self._send_text(text, head)
             return
