@@ -89,6 +89,15 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   render/commit 但不含 paint。判法:`document.visibilityState` / 自掛 RO 零 hit;處置:先 screenshot
   一次再查 DOM,或 `AppActivate` Chrome 視窗;效能結論一律標「hidden tab,JS 成本」。
   (Trigger:截圖驗證含 ResizeObserver 元件、量 UI 效能)
+- **claude-in-chrome 截圖驗證三個坑**(2026-08-17 R4 真踩到):(a) `computer.zoom` 會把該 tab 的
+  device metrics 覆寫成 zoom 區域尺寸且**不還原**(量到 innerWidth 662×588,版面退成單欄還以為是 bug)
+  → close-up 一律 PIL crop 整頁截圖,不用 zoom;(b) `resize_window` 對**最大化**的 Chrome 視窗回
+  success 但無效(innerWidth 仍 2560)→ 要驗 1920×1080 / 1536×864 用**同源 iframe host**
+  (`frontend/public/__viewport_host.html?w=&h=`,臨時檔收尾刪;同源才能 `contentDocument` 量測,
+  container query / RO 在 iframe 內照常);(c) 收尾清 vite / 側車**不要 `taskkill //IM node.exe`**
+  —— MCP server 也是 node,會一起被殺;用 `netstat -ano | grep :<port>` 取 PID 逐一 kill。
+  樣板:`.claude/mod/index-intraday-core/evidence/host.html` + `__measure()` 量測 JS(SC-6 json)。
+  (Trigger:claude-in-chrome 要驗特定 viewport / 要 close-up / 收尾清背景 server)
 - **stock-engine fake server 最新樣板 = `.claude/mod/group-grid-full-chart/evidence/fake_server.py`**
   (2026-08-17):含 neutralize、20 檔 / 多群組、合成日 bar(overlay 可算)、全日回補不看時鐘、
   realtime ±1 tick 抖動(liveP 路徑真的變);port 走 argv。盤外 `useGroupSnapshots` 不輪詢 →
