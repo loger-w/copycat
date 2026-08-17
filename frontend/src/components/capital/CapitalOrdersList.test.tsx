@@ -151,8 +151,9 @@ describe("CapitalOrdersList", () => {
     expect(tags[0]!.getAttribute("title")).toBe("市價單");
     // 標籤是**前綴**不是取代:回報價仍在同一格印出
     expect(tags[0]!.parentElement?.textContent).toBe("市價1050");
-    // 另兩列沒有標籤 → 價格格文字恰為價格本身
-    expect(screen.getAllByText("1050").length).toBe(2);
+    // 三列的價格都照印(RTL 的 getByText 只看**直接**子文字節點,巢狀的「市價」小標
+    // 不進比對 → 市價列也算一個);「另兩列無標籤」由上面 tags.length === 1 釘住
+    expect(screen.getAllByText("1050").length).toBe(3);
   });
 
   it("空列表顯示無委託", async () => {
