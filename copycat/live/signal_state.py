@@ -112,7 +112,8 @@ class SignalDetector:
         self._staged_date: str | None = None  # 暫存區的基準日(MFS-2:跨日殘渣的唯一辨識)
         self._prev: dict[str, int] = {}
         self._window: dict[str, deque[tuple[float, int, int]]] = {}
-        self._suppressed: set[tuple[str, str]] = set()
+        # 值 = 「連續線外」的起算 mono(None = 目前在帶內 / 尚未起算)
+        self._suppressed: dict[tuple[str, str], float | None] = {}
         self._cooldown: dict[tuple[str, str, str], float] = {}
         self._touch: dict[tuple[str, str, str], int] = {}
         self._latch: dict[tuple[str, str], bool] = {}
@@ -173,7 +174,7 @@ class SignalDetector:
         self._staged.pop(code, None)
         self._prev.pop(code, None)
         self._window.pop(code, None)
-        self._suppressed = {k for k in self._suppressed if k[0] != code}
+        self._suppressed = {k: v for k, v in self._suppressed.items() if k[0] != code}
         self._cooldown = {k: v for k, v in self._cooldown.items() if k[0] != code}
         self._touch = {k: v for k, v in self._touch.items() if k[0] != code}
         self._latch = {k: v for k, v in self._latch.items() if k[0] != code}
@@ -280,7 +281,7 @@ class SignalDetector:
         gap = self._cfg.cdp_rearm_ticks * tick_size_milli(price)
         for name, value in basis.items():
             if (code, name) in self._suppressed and abs(price - value) >= gap:
-                self._suppressed.discard((code, name))
+                self._suppressed.pop((code, name), None)
         if "cdp_cross" not in enabled:
             return []
 
@@ -308,7 +309,7 @@ class SignalDetector:
             return []
         counts: dict[str, int] = {}
         for name in levels:
-            self._suppressed.add((code, name))
+            self._suppressed[(code, name)] = None
             self._arm((code, "cdp_cross", name), mono, self._cfg.cdp_cooldown_secs)
             counts[name] = self._bump((code, "cdp_cross", name))
         return [
