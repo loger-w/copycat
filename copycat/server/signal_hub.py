@@ -82,6 +82,7 @@ __all__ = [
     "DISCORD_QUEUE_MAXSIZE",
     "JSONL_QUEUE_MAXSIZE",
     "SignalHub",
+    "format_signal_group_text",
     "format_signal_text",
 ]
 
@@ -99,6 +100,10 @@ _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
 _BASIS_MAX_RETRIES = 2
 _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
 _DISCORD_WINDOW_SECS = 60.0
+#: 單則 Discord 訊息的字數上限(留在 2000 硬上限之下);超過依 row 分批,不截斷
+_DISCORD_MAX_CHARS = 1900
+#: 分批時預留給批尾 ` (i/N)` 的字數 —— 批數要切完才知道,先扣掉才不會切出超標的批
+_BATCH_TAG_RESERVE = 16
 
 _LEVEL_LABEL = {"cdp": "中軸", "ah": "AH", "nh": "NH", "nl": "NL", "al": "AL"}
 _LEVEL_ROLE = {"ah": "壓力", "nh": "壓力", "nl": "支撐", "al": "支撐"}
@@ -147,6 +152,33 @@ def format_signal_text(row: dict[str, Any]) -> str:
     text = f"🔔 {_kind_text(row)}｜{who}｜{price_text}｜{row.get('time', '')}"
     rule_name = row.get("rule_name")
     return f"{text}｜{rule_name}" if rule_name else text
+
+
+def _dedup(items: list[str]) -> list[str]:
+    """保序去重(dict 保插入序):同 kind 兩規則同一 tick 只該印一段文案。"""
+    return list(dict.fromkeys(items))
+
+
+def format_signal_group_text(rows: list[dict[str, Any]]) -> str:
+    """同 (code, time) 多則的合併文案(SC-4)。
+
+    單則**逐字**委派給 `format_signal_text` —— 絕大多數訊號走的是這條路,合併版
+    自己重組一遍就等於開了第二份格式定義,漂掉時只會在真實推播上看見。
+
+    多則:kind 文案與規則名各自**去重**後以「・」串接(同 kind 兩規則同一 tick 印
+    兩段一模一樣的字沒有資訊);`price` / `name` / `code` / `time` 取 rows[0]
+    (同一秒同一檔,差別只在最後一筆的價位)。規則名段沿用「有才附」語意。
+    """
+    if len(rows) == 1:
+        return format_signal_text(rows[0])
+    head = rows[0]
+    price = head.get("price")
+    price_text = f"{price / 1000:.2f}" if isinstance(price, int) else "-"
+    who = f"{head.get('name') or ''} {head.get('code', '')}".strip()
+    kinds = "・".join(_dedup([_kind_text(row) for row in rows]))
+    text = f"🔔 {kinds}｜{who}｜{price_text}｜{head.get('time', '')}"
+    names = _dedup([str(row["rule_name"]) for row in rows if row.get("rule_name")])
+    return f"{text}｜{'・'.join(names)}" if names else text
 
 
 @dataclass(frozen=True)
@@ -234,6 +266,9 @@ class SignalHub:
         self._tasks: list[asyncio.Task[None]] = []
         self._jsonl_task: asyncio.Task[None] | None = None
         self._closing = False
+        #: Discord worker 的單槽緩衝(SC-4):取到不同 (code, time) 的那一則存這裡,
+        #: 下一輪當 head。回塞佇列會排到隊尾 → 順序亂掉,所以只能存在槽裡。
+        self._discord_pending: dict | None = None
         self._discord_sender: Callable[[str], Any] | None = None
         self._discord_sent: deque[_dt.datetime] = deque()
         self.dropped_jsonl = 0
@@ -785,16 +820,42 @@ class SignalHub:
                 self._jsonl_queue.task_done()
 
     async def _discord_worker(self) -> None:
+        """同 (code, time) 且**相鄰**的多 row 合成一則送出(SC-4)。
+
+        單槽 `_discord_pending`:取到不同組的那一則時把它**存起來**(不回塞佇列 ——
+        `put_nowait` 會排到隊尾,順序就亂了),下一輪直接當 head,不再 `get()`。
+
+        `task_done()` 一律在**送出之後**、batch 內每 row 恰一次;pending 那則要等它
+        自己當 head 送完才記。少記一格 `join()` 永遠不返回(關機卡住),多記一格則
+        `task_done() called too many times` 當場打死 worker(之後整天 Discord 無聲,
+        而 WS/jsonl 都正常)—— 兩種失效都不會指向這裡。
+        """
         while True:
-            row = await self._discord_queue.get()
+            head = self._discord_pending
+            if head is None:
+                head = await self._discord_queue.get()
+            else:
+                self._discord_pending = None
+            batch = [head]
+            while True:
+                try:
+                    row = self._discord_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if _same_tick(row, head):
+                    batch.append(row)
+                else:
+                    self._discord_pending = row
+                    break
             try:
-                await self._send_discord(row)
+                await self._send_discord(batch)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Discord 發送失敗(worker 續行):%s", row.get("id"))
+                logger.exception("Discord 發送失敗(worker 續行):%s", head.get("id"))
             finally:
-                self._discord_queue.task_done()
+                for _ in batch:
+                    self._discord_queue.task_done()
 
     async def _flush_pending(self) -> None:
         """關機盡力落檔:jsonl 是歷史真相源,Discord 這時不再送。"""
@@ -900,11 +961,41 @@ class SignalHub:
         self._discord_sent.append(now)
         return True
 
-    async def _send_discord(self, row: dict) -> None:
-        if not self._allow_discord():
-            return
+    async def _send_discord(self, rows: list[dict]) -> None:
+        """一組(已確認同 code 同 time)row → 一則訊息;超長才依 row 分批。
+
+        分批的每一批**各計一次節流**(它們是各自獨立的一則訊息);後續批被擋下時
+        缺角要在 log 看得見 —— 截斷是更差的選項:被砍掉的那幾則在任何地方都不留痕。
+        """
+        head = rows[0]
         # 摘要**只接在 Discord 這一段**:WS/jsonl 是歷史真相源,格式不隨通知裝飾漂移
-        text = format_signal_text(row) + self._group_suffix(row)
+        suffix = self._group_suffix(head)
+        text = format_signal_group_text(rows) + suffix
+        if len(rows) == 1 or len(text) <= _DISCORD_MAX_CHARS:
+            if not self._allow_discord():
+                return
+            await self._send_text(text, head)
+            return
+        batches = _split_batches(rows, suffix)
+        total = len(batches)
+        blocked = 0
+        for index, batch in enumerate(batches, 1):
+            if not self._allow_discord():
+                blocked += 1
+                continue
+            await self._send_text(
+                f"{format_signal_group_text(batch)}{suffix} ({index}/{total})", head
+            )
+        if blocked:
+            logger.warning(
+                "Discord 合併訊息分 %d 批,其中 %d 批被節流擋下(缺角):%s",
+                total,
+                blocked,
+                head.get("id"),
+            )
+
+    async def _send_text(self, text: str, row: dict) -> None:
+        """單則送出:bot 優先,未送出 / 例外都降級走 webhook(log 用 row 的 id 追)。"""
         sender = self._discord_sender
         if sender is not None:
             try:
@@ -969,6 +1060,31 @@ def _peer_text(code: str, quote: tuple[str, float | None] | None) -> str:
     """`{代碼}{名稱} {+x.x%}`;名稱缺(盤前 / 未訂閱)→ 只印代碼,不留尾隨空白。"""
     name, chg = quote if quote is not None else ("", None)
     return f"{code}{name} {'-' if chg is None else f'{chg:+.1f}%'}"
+
+
+def _same_tick(row: dict, head: dict) -> bool:
+    """合併粒度(D4):同 code + 同 `time`(秒)。row 不帶 time_key,秒是能拿到的最細。"""
+    return row.get("code") == head.get("code") and row.get("time") == head.get("time")
+
+
+def _split_batches(rows: list[dict], suffix: str) -> list[list[dict]]:
+    """依 row 貪婪切批,每批(含摘要與批尾標記的預留)不超過上限(edge 8)。
+
+    切不動的單 row(自己就超長)照樣自成一批送出 —— 現況本來就沒有截斷,本輪不改。
+    """
+    limit = _DISCORD_MAX_CHARS - _BATCH_TAG_RESERVE
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    for row in rows:
+        candidate = [*current, row]
+        if current and len(format_signal_group_text(candidate)) + len(suffix) > limit:
+            batches.append(current)
+            current = [row]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
