@@ -132,19 +132,144 @@ class TestCdpCross:
         assert det.evaluate("2330", _tick(80_050), _ctx(), _ALL) == []  # 再穿回,仍未解除
 
     def test_rearm_released_at_five_ticks(self) -> None:
-        """79.50 距 AH 0.5 元 = 5 × 0.1 元 → 解除。解除在同一筆 tick 生效,
-        故該筆跌破 AH 照發(方向過濾是獨立一層,from_above 本身就是有效訊號)。"""
+        """距離門檻仍是 5 × 0.1 元,但解除多一道「連續線外滿 `cdp_rearm_dwell_secs`」
+        (SC-1;預設 300s)。穿越當筆 80.50 已距 AH 0.5 元 → 駐留自該筆起算:
+        100s 時 79.50 雖已離線 5 tick 仍不解除,700s 後才解除,重觸照發。"""
         clock = _Clock()
         det = _det(clock)
         det.set_basis("2330", _BASIS)
         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
         det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
-        clock.advance(700)
+        clock.advance(100)
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []  # 駐留未滿 300s
+        clock.advance(600)
+        events = det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
+        assert len(events) == 1
+        assert events[0].levels == ("ah",)
+        assert events[0].direction == "from_below"
+        assert events[0].touch_count == 2
+
+    def test_dwell_resets_when_price_returns_inside_band(self) -> None:
+        """線外 260s 後回到帶內 → 駐留歸零重算(SC-1 edge 2):冷卻早過了也不解除,
+        要再從歸零後那筆線外 tick 起連續滿 300s。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
+        det.evaluate("2330", _tick(80_500), _ctx(), _CDP)  # 穿 AH,駐留自此起算
+        clock.advance(250)
+        assert det.evaluate("2330", _tick(80_600), _ctx(), _CDP) == []  # 線外 250s
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(80_100), _ctx(), _CDP) == []  # 回帶內 → 歸零
+        clock.advance(400)  # 距首次穿越 660s(冷卻已過),但駐留自本筆才重新起算
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
+        clock.advance(300)
+        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
+        assert [e.levels for e in events] == [("ah",)]
+
+    def test_dwell_zero_releases_immediately(self) -> None:
+        """W3:`cdp_rearm_dwell_secs = 0` 完全等於現行「離線即解除」。"""
+        clock = _Clock()
+        det = _det(clock, cdp_rearm_dwell_secs=0.0, cdp_cooldown_secs=0.0)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
+        det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
+        clock.advance(10)
         events = det.evaluate("2330", _tick(79_500), _ctx(), _ALL)
+        assert len(events) == 1
+        assert events[0].direction == "from_above"
+        assert events[0].touch_count == 2
+
+    def test_dwell_starts_at_crossing_tick_when_outside_band(self) -> None:
+        """跳空穿越:寫入 suppressed 的當筆已距線 ≥ gap → 駐留自該筆起算,
+        不必等下一筆線外 tick(SC-1 起算時點)。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
+        det.evaluate("2330", _tick(85_000), _ctx(), _CDP)  # 距 AH 5 元 ≫ gap
+        clock.advance(700)  # 冷卻 600 + 駐留 300 都靠這一筆的起算滿足
+        events = det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
         assert len(events) == 1
         assert events[0].levels == ("ah",)
         assert events[0].direction == "from_above"
-        assert events[0].touch_count == 2
+
+    def test_dwell_starts_at_first_outside_tick_when_cross_inside_band(self) -> None:
+        """穿越當筆仍在帶內(80.10 距 AH 0.1 元 < 0.5 元)→ 起算值 None,
+        之後第一筆線外 tick 才起算。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
+        det.evaluate("2330", _tick(80_100), _ctx(), _CDP)  # 穿 AH 但仍貼線
+        clock.advance(700)
+        assert det.evaluate("2330", _tick(79_900), _ctx(), _CDP) == []  # 帶內 → 未起算
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(79_400), _ctx(), _CDP) == []  # 線外首筆 → 起算
+        clock.advance(300)
+        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
+        assert [e.levels for e in events] == [("ah",)]
+
+    def test_touch_line_is_not_a_cross(self) -> None:
+        """SC-2:price == 線價是「線上」,不觸發也不改變側別。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
+        assert det.evaluate("2330", _tick(80_000), _ctx(), _CDP) == []
+
+    def test_cross_through_line_point_emits_once(self) -> None:
+        """逐 tick 走過線價(79.50 → 80.00 → 80.50)仍算一次 from_below —— 事件落在
+        真正到達線另一側的那一筆。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(79_500), _ctx(), _CDP)
+        assert det.evaluate("2330", _tick(80_000), _ctx(), _CDP) == []
+        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
+        assert len(events) == 1
+        assert events[0].levels == ("ah",)
+        assert events[0].direction == "from_below"
+
+    def test_touching_line_round_trip_no_event(self) -> None:
+        """80.00(線上)→ 79.50 → 80.00 → 79.50:全程只在線下與線上之間來回,
+        沒有到過線的另一側 → 一則都不發(user 指名的噪音樣態)。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        det.evaluate("2330", _tick(80_000), _ctx(), _CDP)
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
+        assert det.evaluate("2330", _tick(80_000), _ctx(), _CDP) == []
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
+
+    def test_basis_reset_midday_does_not_fake_cross(self) -> None:
+        """SC-2 edge 3:`set_basis` 換了線價 → 舊側別連同舊線價一起失效(不會把
+        「在 80.00 之上」當成「在 79.00 之上」),首筆不假發;新線的真穿越照發。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", {"ah": 80_000})
+        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []  # 線下,側別 = −1
+        det.set_basis("2330", {"ah": 79_000})  # 盤中重設:價格現在在新線之上
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
+        events = det.evaluate("2330", _tick(78_500), _ctx(), _CDP)
+        assert len(events) == 1
+        assert events[0].direction == "from_above"
+
+    def test_side_advances_while_disabled_without_backfill(self) -> None:
+        """SC-2 (b):側別推進在 enabled gate 之前 —— 停用期間的穿越不發、重開也不補發,
+        但重開後的反向穿越方向要對(側別在停用期間已經推進到線上方)。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", _BASIS)
+        off = frozenset({"surge_crash", "vol_burst", "limit_lock"})
+        det.evaluate("2330", _tick(79_000), _ctx(), off)
+        assert det.evaluate("2330", _tick(80_500), _ctx(), off) == []  # 停用期間穿越
+        assert det.evaluate("2330", _tick(80_600), _ctx(), _CDP) == []  # 重開不補發
+        events = det.evaluate("2330", _tick(79_500), _ctx(), _CDP)
+        assert len(events) == 1
+        assert events[0].levels == ("ah",)
+        assert events[0].direction == "from_above"
 
     def test_cooldown_blocks_second_cross(self) -> None:
         clock = _Clock()
@@ -153,7 +278,7 @@ class TestCdpCross:
         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
         det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
         clock.advance(100)
-        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []  # rearm 解除
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []  # 駐留未滿,仍 suppressed
         assert det.evaluate("2330", _tick(80_500), _ctx(), _ALL) == []  # 仍在 600s cooldown
 
     def test_same_tick_merges_levels_ascending(self) -> None:
@@ -260,6 +385,31 @@ class TestSurgeCrash:
         assert len(det.evaluate("2330", _tick(102_100), _ctx(), _ALL)) == 1
         clock.advance(60)
         assert det.evaluate("2330", _tick(105_000), _ctx(), _ALL) == []
+
+    def test_crash_blocked_by_surge_cooldown(self) -> None:
+        """SC-3:同 code 的爆拉 / 爆跌共用一個冷卻桶 —— 拉上去又摔下來是同一段行情,
+        兩則訊號的資訊量不獨立。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.evaluate("2330", _tick(100_000), _ctx(), _ALL)
+        clock.advance(60)
+        assert [e.kind for e in det.evaluate("2330", _tick(102_100), _ctx(), _ALL)] == ["surge"]
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(97_900), _ctx(), _ALL) == []
+
+    def test_crash_after_shared_cooldown_expires(self) -> None:
+        """共用桶滿 1800s 後照發,且 `touch_count` 仍分 kind 計。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.evaluate("2330", _tick(100_000), _ctx(), _ALL)
+        clock.advance(60)
+        assert [e.kind for e in det.evaluate("2330", _tick(102_100), _ctx(), _ALL)] == ["surge"]
+        clock.advance(1741)  # 距 surge 1741s;窗內舊點已被裁掉,本筆只重建窗
+        assert det.evaluate("2330", _tick(100_000), _ctx(), _ALL) == []
+        clock.advance(60)  # 距 surge 1801s
+        events = det.evaluate("2330", _tick(97_900), _ctx(), _ALL)
+        assert [e.kind for e in events] == ["crash"]
+        assert events[0].touch_count == 1
 
     def test_window_trims_old_points(self) -> None:
         clock = _Clock()
