@@ -112,13 +112,15 @@ export function mergeSignals(
 
 /** 同一 tick(同 code、同 `time`)的一組訊號 —— 清單上顯示成一列(SC-5)。 */
 export interface SignalGroup {
-  /** 組內第一則的 id。**用它當 list key**:組員數會隨新訊號到達而變,
-   *  以「id 串接」當 key 時同一列每多一則就換一次 key = 整列卸載重掛。 */
+  /** 組內**最早到**那則的 id(輸入是「新在前」,即 `items` 的最後一則)。
+   *
+   *  **用它當 list key**:新訊號插在組首,取組首 id(或「id 串接」)當 key 時,
+   *  同一列每多一則就換一次 key = 整列卸載重掛(review C-4 / T-11)。 */
   key: string;
   code: string;
   name: string;
   time: string;
-  /** 組內第一則的價格(輸入是「新在前」,即該 tick 最新的那筆)。 */
+  /** 組內最早到那則的價格 —— 與 Discord 合併訊息的 `rows[0]` 同一則。 */
   price: number;
   items: SignalMsg[];
 }
@@ -140,6 +142,11 @@ export function groupSignals(signals: SignalMsg[]): SignalGroup[] {
     const last = groups.at(-1);
     if (last !== undefined && last.code === sig.code && last.time === sig.time) {
       last.items.push(sig);
+      // 輸入是「新在前」→ 後接上來的反而是**更早到**的那則,錨點(key / 名稱 / 價格)
+      // 跟著換成它:錨在最早到的那則,新訊號前插時 key 才不會變(review C-4 / T-11)。
+      last.key = sig.id;
+      last.name = sig.name;
+      last.price = sig.price;
       continue;
     }
     groups.push({
@@ -154,12 +161,15 @@ export function groupSignals(signals: SignalMsg[]): SignalGroup[] {
   return groups;
 }
 
-/** 組內 kind 文案分段(首見順序),**同文案只留一段**:同 kind 兩條規則在同一
- *  tick 各發一則時文案一模一樣,印兩段只是雜訊(規則名另外列)。 */
+/** 組內 kind 文案分段(**到達序**的首見順序),**同文案只留一段**:同 kind 兩條規則
+ *  在同一 tick 各發一則時文案一模一樣,印兩段只是雜訊(規則名另外列)。
+ *
+ *  `items` 是「新在前」,反序即到達序 —— 與 Discord 合併訊息(`rows[0]` = 最早到)
+ *  同一個口徑;段序跟著到達序後,新訊號前插只會在尾端多一段,已顯示的段不重排。 */
 export function groupKindLabels(group: SignalGroup): KindSegment[] {
   const seen = new Set<string>();
   const out: KindSegment[] = [];
-  for (const sig of group.items) {
+  for (const sig of [...group.items].reverse()) {
     const label = kindLabel(sig);
     if (seen.has(label)) continue;
     seen.add(label);
