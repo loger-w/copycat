@@ -30,9 +30,10 @@ class TestCorrStateRoute:
             body = r.json()
             assert body["base"] == "TXF"
             assert body["type"] == "corr"
-            assert set(body["legs"]) == {"TXF", "TWN", "YM", "ES", "NQ", "SXF"}
+            # 腿集合 = repo configs/correlation.json(2026-08-17 起七腿含小日經 NK225M)
+            assert set(body["legs"]) == {"TXF", "TWN", "YM", "ES", "NQ", "SXF", "NK225M"}
             # 配對 = 各腿 vs 台指(base 不與自己配對)
-            assert set(body["pairs"]) == {"TWN", "YM", "ES", "NQ", "SXF"}
+            assert set(body["pairs"]) == {"TWN", "YM", "ES", "NQ", "SXF", "NK225M"}
 
     def test_leg_labels_are_traditional_chinese(self) -> None:
         """前端不寫死對照表 → label 必須由後端帶(SC-7)。"""
@@ -41,13 +42,14 @@ class TestCorrStateRoute:
             assert legs["SXF"]["label"] == "費半"
             assert legs["TWN"]["label"] == "富台"
 
-    def test_engine_subscribes_five_tc4_legs_not_the_base(self) -> None:
-        """SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱。"""
+    def test_engine_subscribes_six_tc4_legs_not_the_base(self) -> None:
+        """SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱(七腿 → 本引擎訂六)。"""
         src = FakeCorrSource()
         with _client(src) as client:
             client.get("/api/corr/state")
             assert "TC.F.TWF.TXF.HOT" not in src.subscribed
-            assert len(src.subscribed) == 5
+            assert "TC.F.OSE.NK225M.HOT" in src.subscribed
+            assert len(src.subscribed) == 6
 
 
 class TestCorrWebSocket:
