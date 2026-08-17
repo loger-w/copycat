@@ -256,6 +256,30 @@ class TestCdpCross:
         assert len(events) == 1
         assert events[0].direction == "from_above"
 
+    def test_basis_blind_window_leaves_no_stale_side(self) -> None:
+        """review C-1:`set_basis(None)` 的盲窗期間 CDP 整段跳過(側別不推進),等基準
+        回來時線價**一模一樣** —— 「線價比對」這道自動失效機制在這裡完全失靈,殘留的
+        舊側別(線下)配上盲窗中已經走到線上方的價格,首筆就假發一則 from_below。
+        清側別後首筆退回 `prev` 推定 = 舊語意(不發),之後的真穿越照發。"""
+        clock = _Clock()
+        det = _det(clock)
+        det.set_basis("2330", {"ah": 80_000})
+        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
+        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []  # 線下,側別 = −1
+        det.set_basis("2330", None)  # 盲窗:基準不可得,CDP 整段跳過
+        assert det.evaluate("2330", _tick(85_000), _ctx(), _CDP) == []
+        det.set_basis("2330", {"ah": 80_000})  # 同一條線回來
+        assert det.evaluate("2330", _tick(85_500), _ctx(), _CDP) == []  # 不得拿舊側別誤發
+        # 恢復後的真穿越照發:85.50 → 78.00 是 from_above,駐留 300s + 冷卻 600s 過後
+        # 78.00 → 80.50 再發一次 from_below
+        events = det.evaluate("2330", _tick(78_000), _ctx(), _CDP)
+        assert len(events) == 1
+        assert events[0].direction == "from_above"
+        clock.advance(700)
+        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
+        assert len(events) == 1
+        assert events[0].direction == "from_below"
+
     def test_side_advances_while_disabled_without_backfill(self) -> None:
         """SC-2 (b):側別推進在 enabled gate 之前 —— 停用期間的穿越不發、重開也不補發,
         但重開後的反向穿越方向要對(側別在停用期間已經推進到線上方)。"""
