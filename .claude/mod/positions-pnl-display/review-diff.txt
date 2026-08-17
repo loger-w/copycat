@@ -1,0 +1,1868 @@
+diff --git a/copycat/capital/mapping.py b/copycat/capital/mapping.py
+index 6db068c2..08ff43aa 100644
+--- a/copycat/capital/mapping.py
++++ b/copycat/capital/mapping.py
+@@ -106,6 +106,36 @@ def exchange_product_of(contract: str) -> str:
+     return m.group(0)
+ 
+ 
++def stock_code_of(market: str, stock_no: str) -> str | None:
++    """部位列的 `stock_no` → 台股股號;對映不出來回 None(**不 raise**)。
++
++    `Position.stock_no` 在 sec 是股號、在 fut 是期交所契約碼,兩者不同語意;自選列 /
++    單檔 header / 群組卡都以股號為鍵,要顯示個股期倉位就得有這一段反查。反查鏈
++    (契約碼 → 產品碼 → 對映表 → 股號)全在後端,前端自建對照等於第二份真相。
++
++    回 None 的三條路都表示「無法對映」,呼叫端據此把該列排除在股號索引外(顯示層
++    不顯示、閃電梯不受影響),而不是拿一個猜的股號去標倉位:
++
++    1. 契約碼解不出產品碼(`exchange_product_of` 拋 ValueError);
++    2. 產品碼不在 `stkfut_map`(新上市未 refresh、或除權息調整後第三碼由 F 改數字);
++    3. 對映表列缺 `code`。
++
++    這是 `GET /api/capital/positions` 每列都要跑的衍生欄 —— 一列反查失敗就 500 掉
++    整條部位查詢,等於讓一檔冷門契約癱瘓整個看盤面。
++    """
++    if market == "sec":
++        return stock_no
++    try:
++        prod = exchange_product_of(stock_no)
++    except ValueError:
++        return None  # 契約碼形狀不認得 → 無法對映(見 docstring 1.)
++    entry = lookup_product(prod)
++    if entry is None:
++        return None
++    code = entry.get("code")
++    return code if isinstance(code, str) else None
++
++
+ def is_option_contract(contract: str) -> bool:
+     """期交所契約碼 → 是否為選擇權(送單分流 SendOptionOrder vs SendFutureOrder)。
+ 
+diff --git a/copycat/server/capital_api.py b/copycat/server/capital_api.py
+index d571dcce..196a71ac 100644
+--- a/copycat/server/capital_api.py
++++ b/copycat/server/capital_api.py
+@@ -28,6 +28,7 @@ from copycat.capital.mapping import (
+     exchange_product_of,
+     multiplier_of,
+     product_of,
++    stock_code_of,
+     to_exchange_symbol,
+ )
+ from copycat.capital.models import (
+@@ -217,8 +218,19 @@ async def capital_orders(request: Request) -> dict:
+ 
+ @router.get("/api/capital/positions")
+ async def capital_positions(request: Request) -> dict:
++    """部位列表;每列附衍生欄 `code`(股號)。
++
++    `code` 附在 API 邊界而不是進 `Position` dataclass:建構點散在 balance / store /
++    測試多處,加欄要嘛給預設值(於是「沒反查」與「反查不到」同形)、要嘛連 store
++    序列化面一起擴。衍生欄留在邊界,唯一讀者是前端。
++    """
+     client = _capital(request)
+-    return {"positions": [dataclasses.asdict(p) for p in client.store.positions()]}
++    return {
++        "positions": [
++            {**dataclasses.asdict(p), "code": stock_code_of(p.market, p.stock_no)}
++            for p in client.store.positions()
++        ]
++    }
+ 
+ 
+ @router.post("/api/capital/order/stock")
+diff --git a/frontend/src/components/capital/CapitalPositionsList.test.tsx b/frontend/src/components/capital/CapitalPositionsList.test.tsx
+index a360a5bb..e3e83a3b 100644
+--- a/frontend/src/components/capital/CapitalPositionsList.test.tsx
++++ b/frontend/src/components/capital/CapitalPositionsList.test.tsx
+@@ -22,6 +22,7 @@ function pos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+     pnl_base: 1500,
+     pnl_base_price: 1050,
+     pnl_cost: 2000000,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/components/futures/FuturesChart.test.tsx b/frontend/src/components/futures/FuturesChart.test.tsx
+index b8b3aa8a..aa232b7a 100644
+--- a/frontend/src/components/futures/FuturesChart.test.tsx
++++ b/frontend/src/components/futures/FuturesChart.test.tsx
+@@ -51,6 +51,7 @@ function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+     pnl_base: null,
+     pnl_base_price: null,
+     pnl_cost: null,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/components/futures/FuturesLadder.test.tsx b/frontend/src/components/futures/FuturesLadder.test.tsx
+index ce270900..88749ca7 100644
+--- a/frontend/src/components/futures/FuturesLadder.test.tsx
++++ b/frontend/src/components/futures/FuturesLadder.test.tsx
+@@ -97,6 +97,7 @@ function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+     pnl_base: -800,
+     pnl_base_price: 23_000,
+     pnl_cost: null,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/components/futures/FuturesPage.test.tsx b/frontend/src/components/futures/FuturesPage.test.tsx
+index 161b30c2..d974b370 100644
+--- a/frontend/src/components/futures/FuturesPage.test.tsx
++++ b/frontend/src/components/futures/FuturesPage.test.tsx
+@@ -61,6 +61,7 @@ function futPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosition
+     pnl_base: null,
+     pnl_base_price: null,
+     pnl_cost: null,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/components/rail/RightRail.test.tsx b/frontend/src/components/rail/RightRail.test.tsx
+index 4ab9e8ea..a1dc816a 100644
+--- a/frontend/src/components/rail/RightRail.test.tsx
++++ b/frontend/src/components/rail/RightRail.test.tsx
+@@ -74,7 +74,7 @@ function futOrder(): CapitalOrder {
+ function position(over: Partial<CapitalPosition> = {}): CapitalPosition {
+   return {
+     market: "sec", stock_no: "2330", qty: 2, name: "台積電", avg_price: 100,
+-    kind: "cash", pnl_base: 0, pnl_base_price: null, pnl_cost: null, ...over,
++    kind: "cash", pnl_base: 0, pnl_base_price: null, pnl_cost: null, code: null, ...over,
+   };
+ }
+ 
+diff --git a/frontend/src/components/stock/GroupGridView.memo.test.tsx b/frontend/src/components/stock/GroupGridView.memo.test.tsx
+index 03864d74..7f1903b1 100644
+--- a/frontend/src/components/stock/GroupGridView.memo.test.tsx
++++ b/frontend/src/components/stock/GroupGridView.memo.test.tsx
+@@ -7,7 +7,7 @@ import { GroupGridView } from "@/components/stock/GroupGridView";
+ import type { WatchlistQuote } from "@/hooks/useStockStream";
+ import { ymdOf } from "@/lib/ladder-lots";
+ import type { Group } from "@/lib/watchlist-model";
+-import type { CapitalOrder } from "@/types";
++import type { CapitalOrder, CapitalPosition } from "@/types";
+ 
+ /** review A6-1 的 regression lock:卡片 `memo` 有沒有真的擋下重畫。
+  *
+@@ -96,11 +96,14 @@ function filledOrder(): CapitalOrder {
+ 
+ /** 本輪的委託列表(預設空:既有兩案不該因為多了一條路由而改變行為)。 */
+ let orders: CapitalOrder[] = [];
++/** 本輪的部位列(預設空,同上)。 */
++let positions: CapitalPosition[] = [];
+ 
+ beforeEach(() => {
+   hoisted.renders.length = 0;
+   hoisted.byCode.length = 0;
+   orders = [];
++  positions = [];
+   window.localStorage.clear();
+   vi.stubGlobal(
+     "fetch",
+@@ -109,6 +112,9 @@ beforeEach(() => {
+       if (u.includes("/api/capital/orders")) {
+         return new Response(JSON.stringify({ orders }));
+       }
++      if (u.includes("/api/capital/positions")) {
++        return new Response(JSON.stringify({ positions }));
++      }
+       const codes = new URL(u, "http://x").searchParams.get("codes") ?? "";
+       const picked: Record<string, unknown> = {};
+       for (const c of codes.split(",").filter(Boolean)) picked[c] = state();
+@@ -187,4 +193,42 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
+     rerender(ui({ ...q1 }));
+     expect(count("2330") - b2330).toBe(count("2317") - b2317);
+   });
++  /** batch3 R3 SC-4 [lock]:**有倉**的那張卡 memo 還在不在。`positionsByCode` 每 render
++   *  現折的話它回的是新 Map + 新陣列 → 有倉的 code 每輪 `positions` 都是新 identity,
++   *  那張卡每秒重畫(無倉的卡拿的是模組常數 `EMPTY_POSITIONS`,照樣被 memo 擋住)。
++   *  失效只有「我今天有部位」的那幾張會掉幀 —— 正是盯得最兇的那幾張,而畫面看不出來。
++   *  量法同上:拿無倉卡當同輪對照組,兩者增量相同才算 memo 沒被倉位打穿。 */
++  it("有倉的卡:quotes 換 identity 兩輪 → 重畫次數與無倉卡相同(positions identity 穩定)", async () => {
++    positions = [
++      {
++        market: "sec",
++        stock_no: "2330",
++        qty: 3,
++        name: "台積電",
++        avg_price: 2350,
++        kind: "cash",
++        pnl_base: null,
++        pnl_base_price: null,
++        pnl_cost: null,
++        code: "2330",
++      },
++    ];
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
++    const ui = (quotes: Record<string, WatchlistQuote>) => (
++      <QueryClientProvider client={client}>
++        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
++      </QueryClientProvider>
++    );
++    const { rerender } = render(ui(q1));
++    // 自檢:倉位真的抵達 2330 那張卡(positions query settle 後才有)。沒抵達的話
++    // 兩張卡都是 EMPTY_POSITIONS,下面量的東西與倉位無關而恆綠
++    await screen.findByTestId("group-pos-2330");
++    expect(screen.queryByTestId("group-pos-2317")).toBeNull();
++    const count = (code: string) => hoisted.byCode.filter((r) => r.code === code).length;
++    const [b2330, b2317] = [count("2330"), count("2317")];
++    rerender(ui({ ...q1 }));
++    rerender(ui({ ...q1 }));
++    expect(count("2330") - b2330).toBe(count("2317") - b2317);
++  });
+ });
+diff --git a/frontend/src/components/stock/GroupGridView.test.tsx b/frontend/src/components/stock/GroupGridView.test.tsx
+index b8e9b501..ddbf6b98 100644
+--- a/frontend/src/components/stock/GroupGridView.test.tsx
++++ b/frontend/src/components/stock/GroupGridView.test.tsx
+@@ -7,7 +7,11 @@ import type { WatchlistQuote } from "@/hooks/useStockStream";
+ import { STOCK_GROUP_KEY } from "@/lib/constants";
+ import { ymdOf } from "@/lib/ladder-lots";
+ import type { Group } from "@/lib/watchlist-model";
+-import type { CapitalOrder } from "@/types";
++import { FEE_DISCOUNT_KEY } from "@/lib/constants";
++import { fmtPct } from "@/lib/format";
++import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
++import { pnlText } from "@/lib/pnl-format";
++import type { CapitalOrder, CapitalPosition } from "@/types";
+ import { wrap } from "@/test-utils";
+ 
+ const GROUPS: Group[] = [
+@@ -108,11 +112,14 @@ function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
+ let fetchMock: ReturnType<typeof vi.fn>;
+ let states: Record<string, unknown>;
+ let orders: CapitalOrder[];
++/** 卡片倉位行(SC-4)的部位列。預設空 —— 既有案不該因為多了一條路由而長出內容。 */
++let positions: CapitalPosition[] = [];
+ 
+ beforeEach(() => {
+   window.localStorage.clear();
+   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+   orders = [];
++  positions = [];
+   states = {
+     "2330": state(),
+     "2317": state({ meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 5 } }),
+@@ -129,6 +136,11 @@ beforeEach(() => {
+     if (String(url).includes("/api/capital/orders")) {
+       return new Response(JSON.stringify({ orders }));
+     }
++    // 圖牆層另掛一份 `useCapitalPositions`(SC-4)。不接這條的話它會拿到 group-state
++    // 的殼當部位列表用 → 恆無倉,倉位行的斷言全部靜默 vacuous。
++    if (String(url).includes("/api/capital/positions")) {
++      return new Response(JSON.stringify({ positions }));
++    }
+     const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
+     const picked: Record<string, unknown> = {};
+     for (const c of codes.split(",").filter(Boolean)) picked[c] = states[c] ?? state({ no_data: true });
+@@ -696,3 +708,73 @@ describe("GroupGridView 群組卡成交點(SC-6)", () => {
+     expect(c2330.querySelectorAll('polygon[data-testid^="fill-"]').length).toBe(0);
+   });
+ });
++
++// batch3 R3 SC-4:卡片標題列下的倉位行。圖牆是盯盤主畫面 —— 「哪一檔我有倉、現在
++// 賺賠多少」在這裡看不到的話,得逐檔點回單檔頁才知道。
++describe("GroupGridView 卡片倉位(SC-4)", () => {
++  const P = 2_380_000; // quotes 現價(毫元)
++  const AVG = 2350;
++
++  function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
++    return {
++      market: "sec",
++      stock_no: "2330",
++      qty: 3,
++      name: "台積電",
++      avg_price: AVG,
++      kind: "cash",
++      pnl_base: null,
++      pnl_base_price: null,
++      pnl_cost: null,
++      code: "2330",
++      ...over,
++    };
++  }
++
++  /** 期望值由 `positionEcon` 現算(不寫死):寫死的話折數 / 費率改了測試照樣綠,
++   *  而那正是「卡片數字與閃電梯對不上」的失效樣態。 */
++  function expectedCard(discount: number): string {
++    const econ = positionEcon(3, AVG, P, discount, "cash");
++    const pct = ((econ.pnl ?? 0) / (AVG * 3 * 1000)) * 100;
++    return `現 3張 ${pnlText(econ.pnl)} (${fmtPct(pct)})`;
++  }
++
++  async function renderGrid(): Promise<HTMLElement> {
++    wrap(
++      <GroupGridView
++        groups={GROUPS}
++        quotes={{ "2330": quote({ p: P }), "2317": quote({ p: 2_000_000 }) }}
++        onPick={vi.fn()}
++        active={null}
++      />,
++    );
++    return await screen.findByTestId("group-pos-2330");
++  }
++
++  it("有倉的卡:張數 + 含費稅損益 + 報酬率(與 positionEcon 同折數)", async () => {
++    positions = [pos()];
++    const line = await renderGrid();
++    expect(line.textContent).toBe(expectedCard(FEE_DISCOUNT_DEFAULT));
++    expect(line.className).toContain("text-bull");
++  });
++
++  it("同檔另有個股期 → 接一段期貨口數與名目損益", async () => {
++    positions = [pos(), pos({ market: "fut", stock_no: "CDFI6", qty: 2, pnl_base: 500 })];
++    const line = await renderGrid();
++    expect(line.textContent).toBe(`${expectedCard(FEE_DISCOUNT_DEFAULT)} · 期 2口 +500`);
++  });
++
++  it("無倉的卡 → 沒有倉位行(卡片高度不因空佔位縮圖)", async () => {
++    positions = [pos()];
++    await renderGrid(); // 先自檢有倉的那張真的長出來了
++    expect(screen.queryByTestId("group-pos-2317")).toBeNull();
++  });
++
++  it("折數改成 3 折 → 卡片損益跟著換(SC-5 元件級)", async () => {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
++    positions = [pos()];
++    const line = await renderGrid();
++    expect(line.textContent).toBe(expectedCard(3));
++    expect(line.textContent).not.toBe(expectedCard(FEE_DISCOUNT_DEFAULT));
++  });
++});
+diff --git a/frontend/src/components/stock/GroupGridView.tsx b/frontend/src/components/stock/GroupGridView.tsx
+index ff8aa81b..3eeba3fd 100644
+--- a/frontend/src/components/stock/GroupGridView.tsx
++++ b/frontend/src/components/stock/GroupGridView.tsx
+@@ -1,17 +1,27 @@
+ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+ 
+ import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
+-import { useCapitalOrders } from "@/hooks/useCapital";
++import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
+ import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
+ import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
+ import type { WatchlistQuote } from "@/hooks/useStockStream";
+ import { STOCK_GROUP_KEY } from "@/lib/constants";
++import { useFeeDiscount } from "@/lib/fee-discount";
+ import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
+ import { fmt, fmtPct } from "@/lib/format";
+ import { ymdOf } from "@/lib/ladder-lots";
++import {
++  cardText,
++  chipTone,
++  EMPTY_POSITIONS,
++  futSummary,
++  positionsByCode,
++  secSummary,
++} from "@/lib/position-summary";
+ import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
+ import { cn } from "@/lib/utils";
+ import type { Group } from "@/lib/watchlist-model";
++import type { CapitalPosition } from "@/types";
+ 
+ /** 群組檢視:自選群組成員的分時圖牆(group-grid SC-3)。
+  *
+@@ -119,6 +129,8 @@ const GroupCard = memo(function GroupCard({
+   active,
+   toggles,
+   fills,
++  positions,
++  discount,
+   sizeClass,
+   onPick,
+ }: {
+@@ -132,6 +144,12 @@ const GroupCard = memo(function GroupCard({
+   /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
+    *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */
+   fills: readonly FillPoint[];
++  /** 這一檔的部位列(SC-4)。無倉的卡一律拿到同一個 `EMPTY_POSITIONS` —— 理由同
++   *  `fills`:每卡各建一個 `[]` 的話 memo 每輪都比不過。 */
++  positions: readonly CapitalPosition[];
++  /** 手續費折數(primitive):與閃電梯同一個 localStorage 真相源。物件傳下來的話
++   *  memo 每輪都會比不過,而折數是使用者一年動一次的設定。 */
++  discount: number;
+   /** ≤16 檔 = `min-h-0`(高度由 1fr 列軌指派);>16 檔 = `h-56` 固定高(AD-7)。
+    *  字面值由父層挑好傳進來:Tailwind JIT 掃的是原始碼字面,拼出來的 class 不會被產出。 */
+   sizeClass: string;
+@@ -150,6 +168,10 @@ const GroupCard = memo(function GroupCard({
+   // 回補明明還在跑,卡片卻先宣告終態「尚無成交」。
+   const hasBars = snap !== undefined && hasWindowedMinutes(snap.minutes);
+   const backfilling = snap?.backfilling === true && !hasBars;
++  // 倉位(SC-4)。證券損益吃卡片自己那則 quote 現算(quote 本來就是 memo 的 dep),
++  // 個股期走群益 pnl_base。兩者皆無 → 整行不渲染(高度差由圖區的 flex-1 吸收)。
++  const sec = secSummary(positions, quote?.p ?? null, discount);
++  const fut = futSummary(positions);
+   return (
+     // `<div role="button">` 而不是 `<button>`(review R11):卡片內容從一條線變成一整張
+     // 分時圖(svg + 文字標籤 + hover 十字線),而 `<button>` 的內容模型只吃 phrasing
+@@ -187,6 +209,14 @@ const GroupCard = memo(function GroupCard({
+         <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">{name}</span>
+         <QuoteCell code={code} q={quote} />
+       </span>
++      {sec !== null || fut !== null ? (
++        <span
++          data-testid={`group-pos-${code}`}
++          className={cn("font-mono text-[0.625rem] leading-tight", chipTone(sec, fut))}
++        >
++          {cardText(sec, fut)}
++        </span>
++      ) : null}
+       {backfilling ? (
+         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">回補中…</span>
+       ) : snap === undefined || snap.noData ? (
+@@ -257,6 +287,13 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
+   const today = ymdOf(new Date());
+   const fillsMap = useMemo(() => fillsByCode(orders, fillDates(today), "股"), [orders, today]);
+ 
++  // 倉位(SC-4)同款:圖牆層取一份、一次折完所有 code,每卡只取自己那個 key。
++  // 折數在這一層讀一次(primitive)往下傳 —— 每張卡各掛一份 hook 的話,50 張卡會
++  // 各訂閱一次同一個 store。位置同樣必須在 `groups.length === 0` 早退**之前**。
++  const positions = useCapitalPositions().data?.positions;
++  const posMap = useMemo(() => positionsByCode(positions), [positions]);
++  const discount = useFeeDiscount();
++
+   // 空態三分(review A4)。**只在真的沒有群組可畫時**才走這三條:`groups` 一旦有內容
+   // (含 TQ 失敗但仍握著上一份 cache)就照畫,錯誤不遮既有資料。
+   if (groups.length === 0) {
+@@ -360,6 +397,9 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
+               toggles={toggles}
+               // 零筆的 code 不入 map → 一律回同一個 `EMPTY_FILLS`(identity 穩定)
+               fills={fillsMap.get(code) ?? EMPTY_FILLS}
++              // 無倉的 code 不入 map → 一律回同一個 `EMPTY_POSITIONS`(identity 穩定)
++              positions={posMap.get(code) ?? EMPTY_POSITIONS}
++              discount={discount}
+               // >16 檔走捲動軌:列高是 auto,卡片得自己有確定高度,否則
+               // `useContainerSize` 量到的高由內容決定 → 「量多高就設多高」的回饋迴圈
+               // (RO loop 告警)。≤16 檔由 1fr 列軌指派高,卡片只要能縮(min-h-0)。
+diff --git a/frontend/src/components/stock/LadderView.tsx b/frontend/src/components/stock/LadderView.tsx
+index d896ceed..1ce29a4a 100644
+--- a/frontend/src/components/stock/LadderView.tsx
++++ b/frontend/src/components/stock/LadderView.tsx
+@@ -48,19 +48,9 @@ function lotText(lot: LadderLot): string {
+ const FILLED_BADGE =
+   "pointer-events-none my-0.5 flex min-w-5 items-center justify-center rounded border border-line px-0.5 text-[10px] font-bold text-ink-muted";
+ 
+-/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
+-export const DASH = "—";
+-
+-export function pnlText(pnl: number | null): string {
+-  if (pnl === null) return DASH;
+-  return `${pnl > 0 ? "+" : ""}${pnl.toLocaleString("en-US")}`;
+-}
+-
+-/** 台股慣例:賺紅賠綠。 */
+-export function pnlTone(pnl: number | null): string {
+-  if (pnl === null) return "text-ink-dim";
+-  return pnl > 0 ? "text-bull" : pnl < 0 ? "text-bear" : "text-ink";
+-}
++/** 損益顯示格式本體搬到 `lib/pnl-format.ts`(自選列 / header / 群組卡也要同一份規則);
++ *  此處 re-export 保住既有 `@/components/stock/LadderView` 的 import 路徑。 */
++export { DASH, pnlText, pnlTone } from "@/lib/pnl-format";
+ 
+ interface Props {
+   /** 標題列標的(D-12):右欄內容隨主 tab 切換,標的必須畫面可指認以降誤送風險 */
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index 30404ae9..1e45307e 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -103,6 +103,7 @@ function capitalPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosit
+     pnl_base: null,
+     pnl_base_price: null,
+     pnl_cost: null,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index c6d1f2e1..87690fe5 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -15,7 +15,7 @@ import {
+   useSubmitStock,
+ } from "@/hooks/useCapital";
+ import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
+-import { FEE_DISCOUNT_KEY } from "@/lib/constants";
++import { loadDiscount, persistDiscount, type DiscountState } from "@/lib/fee-discount";
+ import { LOCK_WS_TITLE } from "@/lib/flash-arm";
+ import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
+ import { fmt } from "@/lib/format";
+@@ -23,36 +23,25 @@ import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
+ import {
+   avgTickOf,
+   clampDiscount,
+-  FEE_DISCOUNT_DEFAULT,
+   positionEcon,
+   secPositionsOf,
+   snapBreakEven,
+ } from "@/lib/ladder-position";
++import { DASH } from "@/lib/pnl-format";
+ import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
+ import type { StockBook, StockMeta } from "@/lib/stock-accum";
+ import { buildLadder } from "@/lib/stock-tick";
++import { kindLabel, TRADE_KINDS, type TradeKind } from "@/lib/trade-kinds";
+ import { cn } from "@/lib/utils";
+ import type { CapitalPosition } from "@/types";
+ 
+ const CLICK_DEBOUNCE_MS = 500;
+ const HINT_MS = 3_000;
+ 
+-export const TRADE_KINDS = [
+-  ["cash", "現股"],
+-  ["margin", "融資"],
+-  ["short", "融券"],
+-  ["daytrade_sell", "無券"],
+-] as const;
+-export type TradeKind = (typeof TRADE_KINDS)[number][0];
+-
+-/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
+-const DASH = "—";
+-
+-/** kind → 顯示標籤,查表未命中就顯示原字串:群益 `Position.kind` 的值域比本檔的
+- *  交易別寬(D13),不認得的部位寧可標籤怪也不要靜默消失。 */
+-function kindLabel(kind: string): string {
+-  return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
+-}
++/** 交易別值域 / 標籤本體搬到 `lib/trade-kinds.ts`(三處倉位顯示共用);此處 re-export
++ *  保住既有 `@/components/stock/PriceLadder` 的 import 路徑(`RightRail` / 測試)。 */
++export { TRADE_KINDS } from "@/lib/trade-kinds";
++export type { TradeKind } from "@/lib/trade-kinds";
+ 
+ /** 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,pill 讓
+  *  「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。`aria-label` 掛在
+@@ -131,35 +120,6 @@ function PositionBar({ rows }: { rows: PositionRow[] }) {
+   );
+ }
+ 
+-interface DiscountState {
+-  /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
+-  raw: string;
+-  /** 最後一次通過 clampDiscount 的值;計算恆用它。 */
+-  value: number;
+-}
+-
+-/** 讀存檔折數。**整段包 try/catch**:localStorage 在私密視窗 / storage 被政策鎖時
+- *  光是存取就會拋,而這是 useState initializer —— 拋出去就是閃電梯首次 render 掛掉
+- *  (同 `hooks/useChartToggles.ts::load`)。 */
+-function loadDiscount(): DiscountState {
+-  let raw: string | null = null;
+-  try {
+-    raw = window.localStorage.getItem(FEE_DISCOUNT_KEY);
+-  } catch {
+-    raw = null; // 讀不到 → 走預設,記憶體內照常運作
+-  }
+-  const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
+-  return { raw: String(value), value };
+-}
+-
+-function persistDiscount(value: number): void {
+-  try {
+-    window.localStorage.setItem(FEE_DISCOUNT_KEY, String(value));
+-  } catch {
+-    // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉(同 useChartToggles::persist)
+-  }
+-}
+-
+ interface PositionRow {
+   key: string;
+   /** kind 標籤(部位條與標記 title 共用同一份字彙) */
+diff --git a/frontend/src/components/stock/StkfutLadder.test.tsx b/frontend/src/components/stock/StkfutLadder.test.tsx
+index 4e1f24e7..36c95637 100644
+--- a/frontend/src/components/stock/StkfutLadder.test.tsx
++++ b/frontend/src/components/stock/StkfutLadder.test.tsx
+@@ -105,6 +105,7 @@ function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+     pnl_base: 800,
+     pnl_base_price: null,
+     pnl_cost: null,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index d9c1efdc..f91c0581 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -10,6 +10,11 @@ import type { SignalMsg } from "@/lib/signal-model";
+ import type { StkfutSelection } from "@/lib/stkfut";
+ import type { StockAccum } from "@/lib/stock-accum";
+ import { wrap } from "@/test-utils";
++import { FEE_DISCOUNT_KEY } from "@/lib/constants";
++import { fmtPct } from "@/lib/format";
++import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
++import { pnlText } from "@/lib/pnl-format";
++import type { CapitalPosition } from "@/types";
+ 
+ // 🔴-3:code / 資料流已上提到 App(D-3)→ 本元件改吃 props,不再自建 WS、不再讀 localStorage。
+ // 「TC4 斷線告警列(W-B5)」文案斷言原本掛在此檔的 WS 驅動路徑上,改以 props 直接驅動,
+@@ -47,11 +52,20 @@ function stream(over: Partial<StockStreamState> = {}): StockStreamState {
+   };
+ }
+ 
++/** header 倉位段(SC-3)的部位列。預設空 —— 既有案不該因為多了一條路由而長出內容。 */
++let positions: CapitalPosition[] = [];
++
+ beforeEach(() => {
+   window.localStorage.clear();
++  positions = [];
+   vi.stubGlobal(
+     "fetch",
+     vi.fn(async (url: string) => {
++      // 不接這條的話 useCapitalPositions 掉進 404 → data undefined → 恆無倉,SC-3
++      // 的斷言會靜默 vacuous(而「沒渲染」與「查不到」在 queryBy 下長得一模一樣)
++      if (String(url).includes("/api/capital/positions")) {
++        return new Response(JSON.stringify({ positions }));
++      }
+       if (String(url).includes("/api/stock/watchlist")) {
+         return new Response(JSON.stringify({ groups: [{ name: "自選", codes: ["2330"] }] }));
+       }
+@@ -933,3 +947,77 @@ describe("StockPage 緩撮標示(SC-2)", () => {
+     expect(screen.queryByText("(緩)")).toBeNull();
+   });
+ });
++
++// batch3 R3 SC-3:header 的倉位段。**逐 kind / 逐契約各一段**(不聚合)——
++// 右欄閃電梯的部位列就在旁邊,一對一才能並排核對數字。
++describe("StockPage header 倉位(SC-3)", () => {
++  const LAST = 2_380_000; // ACCUM.last.p(毫元)
++  const AVG = 2350;
++
++  function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
++    return {
++      market: "sec",
++      stock_no: "2330",
++      qty: 3,
++      name: "台積電",
++      avg_price: AVG,
++      kind: "cash",
++      pnl_base: null,
++      pnl_base_price: null,
++      pnl_cost: null,
++      code: "2330",
++      ...over,
++    };
++  }
++
++  async function segments(): Promise<HTMLElement[]> {
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} />);
++    const bar = await screen.findByTestId("page-position");
++    return [...bar.children] as HTMLElement[];
++  }
++
++  it("現股段 = 交易別 + 張數 + 均價 + 含費稅損益(與 positionEcon 同折數)", async () => {
++    positions = [pos()];
++    const segs = await segments();
++    const econ = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash");
++    const pct = ((econ.pnl ?? 0) / (AVG * 3 * 1000)) * 100;
++    expect(segs).toHaveLength(1);
++    expect(segs[0]?.textContent).toBe(`現股 3張 · 均價 2350 · 損益 ${pnlText(econ.pnl)} (${fmtPct(pct)})`);
++    expect(segs[0]?.className).toContain(econ.pnl !== null && econ.pnl > 0 ? "text-bull" : "text-bear");
++  });
++
++  // 現貨態也要看得到個股期倉:右欄梯一次只顯示一個合約,header 不列全就看不到
++  // 「我這檔還有期倉」。期貨用群益名目損益(pnl_base),不套現股稅費口徑。
++  it("個股期段逐契約列出(含合約碼),與現股段並存", async () => {
++    positions = [pos(), pos({ market: "fut", stock_no: "CDFI6", qty: 2, avg_price: 2360, pnl_base: 500 })];
++    const segs = await segments();
++    expect(segs).toHaveLength(2);
++    expect(segs[1]?.textContent).toBe("期 CDFI6 多 2口 · 均價 2360 · 損益 +500");
++    expect(segs[1]?.className).toContain("text-bull");
++  });
++
++  it("均價缺 → 均價與損益皆破折號、不印百分比(張數照顯示)", async () => {
++    positions = [pos({ avg_price: null })];
++    const segs = await segments();
++    expect(segs[0]?.textContent).toBe("現股 3張 · 均價 — · 損益 —");
++    expect(segs[0]?.className).toContain("text-ink-dim");
++  });
++
++  it("折數改成 3 折 → 損益跟著換(SC-5 元件級)", async () => {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
++    positions = [pos()];
++    const segs = await segments();
++    const at3 = positionEcon(3, AVG, LAST, 3, "cash");
++    const at18 = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash");
++    expect(segs[0]?.textContent).toContain(`損益 ${pnlText(at3.pnl)}`);
++    expect(segs[0]?.textContent).not.toContain(`損益 ${pnlText(at18.pnl)}`);
++  });
++
++  it("無倉 → 整段不渲染(零佔位)", async () => {
++    positions = [];
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} />);
++    // 先等一個同批查詢落地,確認「不是還沒回來」而是真的沒有倉位
++    await waitFor(() => expect(screen.getByTestId("page-quote")).toBeTruthy());
++    expect(screen.queryByTestId("page-position")).toBeNull();
++  });
++});
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 5f461435..177ad4aa 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -1,4 +1,4 @@
+-import { useState } from "react";
++import { useMemo, useState } from "react";
+ 
+ import { GroupGridView } from "@/components/stock/GroupGridView";
+ import { OrderBook } from "@/components/stock/OrderBook";
+@@ -7,6 +7,7 @@ import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
+ import { StockChart } from "@/components/stock/StockChart";
+ import { TickTape } from "@/components/stock/TickTape";
+ import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
++import { useCapitalPositions } from "@/hooks/useCapital";
+ import { useSignalFeed } from "@/hooks/useSignalFeed";
+ import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
+ import { useSignalSound } from "@/hooks/useSignalSound";
+@@ -14,7 +15,10 @@ import { useStkfutContracts } from "@/hooks/useStkfutContracts";
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import type { StockStreamState } from "@/hooks/useStockStream";
+ import { STOCK_VIEW_KEY } from "@/lib/constants";
++import { useFeeDiscount } from "@/lib/fee-discount";
+ import { chgPct, fmt, fmtPct } from "@/lib/format";
++import { pnlTone } from "@/lib/pnl-format";
++import { futSummary, headerSegments, positionsByCode, secSummary } from "@/lib/position-summary";
+ import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/lib/stkfut";
+ import { limitState } from "@/lib/stock-tick";
+ import { cn } from "@/lib/utils";
+@@ -102,6 +106,18 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+   // 回補中的旗標由後端以**槽位鍵**發出,期貨態是 `F:<prod>:<ym>` 不是股號
+   const instrumentKey = instrumentKeyOf(code, contract);
+ 
++  // header 倉位段(SC-3)。**現貨態與個股期態都列出該股號的全部證券列 + 全部期貨列**:
++  // 右欄梯一次只顯示一個合約 / 只顯示現股,header 不列全就看不到「我這檔還有別的腿」。
++  // 證券損益吃現價現算(與右欄同 positionEcon 同折數),期貨走群益 pnl_base。
++  const positions = useCapitalPositions().data?.positions;
++  const posMap = useMemo(() => positionsByCode(positions), [positions]);
++  const discount = useFeeDiscount();
++  const posRows = code === null ? undefined : posMap.get(code);
++  const posSegments =
++    posRows === undefined
++      ? []
++      : headerSegments(secSummary(posRows, last?.p ?? null, discount), futSummary(posRows));
++
+   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
+   // 靜默清空。這是新入口才有的 gate,不是既有行為。
+   const canAdd = wl !== undefined && code !== null && !wl.codes.includes(code);
+@@ -292,6 +308,21 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+                   ) : null}
+                 </span>
+               ) : null}
++              {/* 倉位段(SC-3):現價之後、期現價差之前。每段自己上色 —— 一檔可能
++                  同時有賺錢的現股與賠錢的融券,整段共用一個色會把兩件事講成一件。
++                  無倉時整個節點不渲染(header 是一列 flex-wrap,空 span 也會吃 gap)。 */}
++              {posSegments.length > 0 ? (
++                <span
++                  data-testid="page-position"
++                  className="flex flex-wrap items-baseline gap-2 font-mono text-xs"
++                >
++                  {posSegments.map((seg) => (
++                    <span key={seg.key} className={pnlTone(seg.pnl)}>
++                      {seg.text}
++                    </span>
++                  ))}
++                </span>
++              ) : null}
+               {accum?.noData ? <span className="text-xs text-ink-dim">無資料</span> : null}
+               {status.backfilling === instrumentKey ? (
+                 <span className="text-xs text-ink-dim">回補中…</span>
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index 7196ca49..506675e1 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -6,8 +6,12 @@ import { StrictMode } from "react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
++import { FEE_DISCOUNT_KEY } from "@/lib/constants";
++import { fmtPct } from "@/lib/format";
++import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
+ import type { Group, Watchlist } from "@/lib/watchlist-model";
+ import { wrap } from "@/test-utils";
++import type { CapitalPosition } from "@/types";
+ 
+ let fetchMock: ReturnType<typeof vi.fn>;
+ /** 整包 PUT body(v3 起 codes 與 groups 都是契約的一部分,只推 groups 會漏掉未分組) */
+@@ -33,9 +37,15 @@ const NAMES = {
+ const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
+ const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
+ 
++/** 倉位 chip(SC-2)的部位列。**預設空**:既有案不該因為多了一條路由而長出 chip。 */
++let positions: CapitalPosition[] = [];
++
+ /** 名稱表分支不能回空表 —— 空表下「名稱命中」的提示列永遠不可能成立(review R19)。 */
+ function respond(url: string, groups: Group[] = GROUPS, codes: string[] = CODES): Response {
+   if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
++  // 倉位路由不接的話,`useCapitalPositions` 會拿到自選的殼(`{codes,groups}`)當部位
++  // 列表用 → `positions` undefined → 恆無倉,SC-2 的斷言全部靜默 vacuous
++  if (url.includes("/api/capital/positions")) return new Response(JSON.stringify({ positions }));
+   return new Response(JSON.stringify({ codes, groups }));
+ }
+ 
+@@ -54,6 +64,8 @@ function mockWatchlist(groups: Group[], codes: string[]): void {
+ beforeEach(() => {
+   window.localStorage.removeItem(COLLAPSED_KEY);
+   window.localStorage.removeItem(UNGROUPED_KEY);
++  window.localStorage.removeItem(FEE_DISCOUNT_KEY);
++  positions = [];
+   putBodies = [];
+   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+     if (init?.method === "PUT") {
+@@ -1199,3 +1211,106 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
+     expect(within(ung).queryByText(/%$/)).toBeNull();
+   });
+ });
++
++// batch3 R3 SC-2:自選列第二行的倉位 chip。**有倉才顯示** —— 側欄 240px 寬,
++// 給每一列留一個空佔位等於全年 95% 的時間都在浪費那半行。
++describe("WatchlistSidebar 倉位 chip(SC-2)", () => {
++  const P = 1_000_000; // 現價 1000 元(毫元)
++  const AVG = 985.2;
++
++  const POS_QUOTES: Record<string, WatchlistQuote> = {
++    "2330": {
++      p: P,
++      chg_pct: 1.5,
++      vol: 100,
++      ref: null,
++      upper: null,
++      lower: null,
++      no_data: false,
++      trial: false,
++    },
++  };
++
++  function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
++    return {
++      market: "sec",
++      stock_no: "2330",
++      qty: 3,
++      name: "台積電",
++      avg_price: AVG,
++      kind: "cash",
++      pnl_base: null,
++      pnl_base_price: null,
++      pnl_cost: null,
++      code: "2330",
++      ...over,
++    };
++  }
++
++  /** 期望值一律由 `positionEcon` 現算(不寫死字串):寫死的話折數 / 費率口徑改了
++   *  測試照樣綠,而那正是「畫面數字與閃電梯對不上」的失效樣態。 */
++  function expectedSec(qty: number, discount: number, kind = "cash"): string {
++    const econ = positionEcon(qty, AVG, P, discount, kind);
++    const pct = ((econ.pnl ?? 0) / (AVG * Math.abs(qty) * 1000)) * 100;
++    return `${qty}張 ${fmtPct(pct)}`;
++  }
++
++  async function renderWithPositions(): Promise<HTMLElement[]> {
++    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={POS_QUOTES} />);
++    await waitGroups();
++    await waitFor(() => expect(screen.queryAllByTestId("wl-pos-2330").length).toBeGreaterThan(0));
++    return screen.queryAllByTestId("wl-pos-2330");
++  }
++
++  it("有現股倉 → chip 印張數 + 含費稅損益%,tone 依損益、title 逐 kind 明細", async () => {
++    positions = [pos()];
++    const chips = await renderWithPositions();
++    // 2330 同時在「主力」與「觀察」兩組 → 兩份 chip(同一檔多組是常態)
++    expect(chips).toHaveLength(2);
++    expect(chips[0]?.textContent).toBe(expectedSec(3, FEE_DISCOUNT_DEFAULT));
++    expect(chips[0]?.className).toContain("text-bull");
++    expect(chips[0]?.getAttribute("title")).toContain("現股 3張");
++    expect(chips[0]?.getAttribute("title")).toContain("均價 985.2");
++  });
++
++  it("均價缺(尚未回填)→ 百分比破折號,張數照顯示", async () => {
++    positions = [pos({ avg_price: null })];
++    const chips = await renderWithPositions();
++    expect(chips[0]?.textContent).toBe("3張 —");
++    expect(chips[0]?.className).toContain("text-ink-dim");
++  });
++
++  it("同股號標準 + 小型個股期 → 逐契約列出(單位差 20 倍,不可聚合)", async () => {
++    positions = [
++      pos(),
++      pos({ market: "fut", stock_no: "CDFI6", qty: 2, pnl_base: 500 }),
++      pos({ market: "fut", stock_no: "QFFI6", qty: -1, pnl_base: -200 }),
++    ];
++    const chips = await renderWithPositions();
++    expect(chips[0]?.textContent).toContain("期 2口/空1口");
++    expect(chips[0]?.getAttribute("title")).toContain("CDFI6 多2口");
++  });
++
++  it("沒有報價(盤前)且只有期倉 → chip 仍在(pnl_base 不吃現價)", async () => {
++    positions = [pos({ market: "fut", stock_no: "QQFI6", qty: 2, pnl_base: 500, code: "5483" })];
++    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={POS_QUOTES} />);
++    await waitGroups();
++    await waitFor(() => expect(screen.queryAllByTestId("wl-pos-5483").length).toBeGreaterThan(0));
++    expect(screen.queryAllByTestId("wl-pos-5483")[0]?.textContent).toBe("期 2口");
++  });
++
++  it("無倉的列 → DOM 完全沒有 chip 節點(零佔位)", async () => {
++    positions = [pos()];
++    await renderWithPositions(); // 先自檢有倉的那檔真的長出來了
++    expect(screen.queryAllByTestId("wl-pos-3231")).toHaveLength(0);
++  });
++
++  // SC-5 元件級:折數的真相源是同一個 localStorage key,側欄與閃電梯同 tick 同數字
++  it("折數改成 3 折 → chip 的損益跟著換(與 positionEcon 同折數)", async () => {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
++    positions = [pos()];
++    const chips = await renderWithPositions();
++    expect(chips[0]?.textContent).toBe(expectedSec(3, 3));
++    expect(chips[0]?.textContent).not.toBe(expectedSec(3, FEE_DISCOUNT_DEFAULT));
++  });
++});
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 0a653368..96fa9501 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -1,12 +1,22 @@
+ import { useId, useMemo, useRef, useState } from "react";
+ 
+ import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
++import { useCapitalPositions } from "@/hooks/useCapital";
+ import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+ import { useStockNames } from "@/hooks/useStockNames";
+ import type { WatchlistQuote } from "@/hooks/useStockStream";
+ import { WL_COLLAPSED_KEY, WL_UNGROUPED_KEY } from "@/lib/constants";
++import { useFeeDiscount } from "@/lib/fee-discount";
+ import { fmt, fmtPct } from "@/lib/format";
+ import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
++import {
++  chipText,
++  chipTitle,
++  chipTone,
++  futSummary,
++  positionsByCode,
++  secSummary,
++} from "@/lib/position-summary";
+ import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
+ import { limitState } from "@/lib/stock-tick";
+ import { cn, safeIdToken } from "@/lib/utils";
+@@ -147,6 +157,13 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   // 名冊 2,401 筆;每列 `names.find(...)` 是 O(列數 × 2401),而側欄每則 quote 都會 re-render
+   const nameOf = useMemo(() => new Map(names.map((n) => [n.code, n.name])), [names]);
+ 
++  // 倉位 chip(SC-2)。**側欄取一份、一次折完所有 code**,每列只取自己那個 key ——
++  // 每列各掛一份 hook 的話 50 列會各折一次同一份部位表(同圖牆 fillsMap 的理由)。
++  // 折數與閃電梯同一個 localStorage key:梯上改了折數,這裡同 tick 跟著換。
++  const positions = useCapitalPositions().data?.positions;
++  const posMap = useMemo(() => positionsByCode(positions), [positions]);
++  const discount = useFeeDiscount();
++
+   /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
+    *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
+   function commit(next: Watchlist): void {
+@@ -366,6 +383,12 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     // 後者是 `bids[0] === upper`(委買掛在漲停排隊),需要五檔,側欄沒有。
+     // 兩者刻意不共用,共用會逼側欄拿不存在的資料或稀釋 badge 語意。
+     const limit = limitState(q?.p ?? null, q?.upper ?? null, q?.lower ?? null);
++    // 倉位(SC-2)。證券損益吃現價現算(含費稅、與閃電梯同折數);個股期走群益
++    // `pnl_base`,不吃現價 —— 盤前沒有報價時期倉那段照樣有數字可看。
++    const posRows = posMap.get(code);
++    const sec = posRows === undefined ? null : secSummary(posRows, q?.p ?? null, discount);
++    const fut = posRows === undefined ? null : futSummary(posRows);
++    const hasPos = sec !== null || fut !== null;
+     return (
+       <li key={code}>
+         <div
+@@ -417,8 +440,30 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+                 </span>
+               ) : null}
+             </span>
+-            {name !== undefined ? (
+-              <span className="truncate text-xs text-ink-muted">{name}</span>
++            {/* 第二行:名稱 + 倉位 chip 同一條 baseline(SC-2)。**外層必須是 flex row**
++                (同上面代號那行的理由):這一格是 flex-col,把 chip 後綴在名稱之後會
++                多佔一行,而列高由 ROW_H 以 inline style 固定 —— 多的那行會被擠出可視
++                範圍。名稱 `min-w-0 truncate` 吸收壓縮、chip `shrink-0` 不被切掉:
++                長名稱該截斷,張數與損益少一個字就變成另一個數字。
++                兩者都沒有時整行不渲染(W-7:無倉的列 DOM 與改前逐字相同)。 */}
++            {name !== undefined || hasPos ? (
++              <span className="flex min-w-0 items-baseline gap-1">
++                {name !== undefined ? (
++                  <span className="min-w-0 truncate text-xs text-ink-muted">{name}</span>
++                ) : null}
++                {hasPos ? (
++                  <span
++                    data-testid={`wl-pos-${code}`}
++                    title={chipTitle(sec, fut)}
++                    className={cn(
++                      "shrink-0 whitespace-nowrap text-[0.625rem]",
++                      chipTone(sec, fut),
++                    )}
++                  >
++                    {chipText(sec, fut)}
++                  </span>
++                ) : null}
++              </span>
+             ) : null}
+           </div>
+           {q?.no_data ? (
+diff --git a/frontend/src/lib/close-order.test.ts b/frontend/src/lib/close-order.test.ts
+index c53ee14f..d197c570 100644
+--- a/frontend/src/lib/close-order.test.ts
++++ b/frontend/src/lib/close-order.test.ts
+@@ -14,6 +14,7 @@ function pos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
+     pnl_base: 1500,
+     pnl_base_price: 1050,
+     pnl_cost: 2_000_000,
++    code: null,
+     ...overrides,
+   };
+ }
+diff --git a/frontend/src/lib/fee-discount.test.ts b/frontend/src/lib/fee-discount.test.ts
+new file mode 100644
+index 00000000..2ca4f501
+--- /dev/null
++++ b/frontend/src/lib/fee-discount.test.ts
+@@ -0,0 +1,73 @@
++/** @vitest-environment jsdom */
++import { act, cleanup, renderHook } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { FEE_DISCOUNT_KEY } from "@/lib/constants";
++import { persistDiscount, readFeeDiscount, useFeeDiscount } from "@/lib/fee-discount";
++import { FEE_DISCOUNT_DEFAULT } from "@/lib/ladder-position";
++
++beforeEach(() => {
++  window.localStorage.clear();
++});
++
++afterEach(() => {
++  cleanup();
++  vi.restoreAllMocks();
++  window.localStorage.clear();
++});
++
++describe("readFeeDiscount", () => {
++  it("未設過 → 預設折數", () => {
++    expect(readFeeDiscount()).toBe(FEE_DISCOUNT_DEFAULT);
++  });
++
++  it("合法值照讀", () => {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
++    expect(readFeeDiscount()).toBe(3);
++  });
++
++  it("壞值(非數 / 出界)→ 預設,不是 NaN", () => {
++    for (const bad of ["abc", "", "0", "-1", "11"]) {
++      window.localStorage.setItem(FEE_DISCOUNT_KEY, bad);
++      expect(readFeeDiscount()).toBe(FEE_DISCOUNT_DEFAULT);
++    }
++  });
++
++  // 私密視窗 / storage 被政策鎖時光是存取就會拋 —— 三處倉位顯示在 render 期間讀它,
++  // 拋出去就是整個側欄 / 圖牆掛掉
++  it("localStorage 拋錯 → 預設(不往外拋)", () => {
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
++      throw new Error("blocked");
++    });
++    expect(readFeeDiscount()).toBe(FEE_DISCOUNT_DEFAULT);
++  });
++});
++
++describe("useFeeDiscount", () => {
++  it("初值 = 存檔折數", () => {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, "2.5");
++    const hook = renderHook(() => useFeeDiscount());
++    expect(hook.result.current).toBe(2.5);
++  });
++
++  /** 折數的唯一輸入口在閃電梯的折數框(persistDiscount)。三處倉位顯示要在同一 tick
++   *  收斂到同一個數字 —— 少了通知就是「梯上改了折數,側欄 / 卡片還印著舊損益」,
++   *  兩個數字並存而畫面上看不出哪個才對。 */
++  it("persistDiscount 之後拿到新值(同分頁通知)", () => {
++    const hook = renderHook(() => useFeeDiscount());
++    expect(hook.result.current).toBe(FEE_DISCOUNT_DEFAULT);
++    act(() => {
++      persistDiscount(3);
++    });
++    expect(hook.result.current).toBe(3);
++  });
++
++  it("多個訂閱者同時收到通知", () => {
++    const a = renderHook(() => useFeeDiscount());
++    const b = renderHook(() => useFeeDiscount());
++    act(() => {
++      persistDiscount(4.5);
++    });
++    expect([a.result.current, b.result.current]).toEqual([4.5, 4.5]);
++  });
++});
+diff --git a/frontend/src/lib/fee-discount.ts b/frontend/src/lib/fee-discount.ts
+new file mode 100644
+index 00000000..2886f188
+--- /dev/null
++++ b/frontend/src/lib/fee-discount.ts
+@@ -0,0 +1,78 @@
++/** 手續費折數的存取(自 `components/stock/PriceLadder.tsx` 搬出,**行為零變更**)。
++ *
++ *  折數原本是閃電梯的元件內私有 loader;自選列 / 單檔 header / 群組卡要算出「與梯上
++ *  同一個含費稅損益」就得讀同一個來源 —— localStorage key 仍是唯一真相,只是讀者變多。
++ */
++import { useSyncExternalStore } from "react";
++
++import { FEE_DISCOUNT_KEY } from "@/lib/constants";
++import { clampDiscount, FEE_DISCOUNT_DEFAULT } from "@/lib/ladder-position";
++
++export interface DiscountState {
++  /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
++  raw: string;
++  /** 最後一次通過 clampDiscount 的值;計算恆用它。 */
++  value: number;
++}
++
++/** 讀存檔折數。**整段包 try/catch**:localStorage 在私密視窗 / storage 被政策鎖時
++ *  光是存取就會拋,而這是 useState initializer —— 拋出去就是閃電梯首次 render 掛掉
++ *  (同 `hooks/useChartToggles.ts::load`)。 */
++export function loadDiscount(): DiscountState {
++  let raw: string | null = null;
++  try {
++    raw = window.localStorage.getItem(FEE_DISCOUNT_KEY);
++  } catch {
++    raw = null; // 讀不到 → 走預設,記憶體內照常運作
++  }
++  const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
++  return { raw: String(value), value };
++}
++
++/** 同分頁的訂閱者。**localStorage 本身不會對寫入它的那個分頁發 `storage` 事件** ——
++ *  閃電梯改完折數後,同一頁的自選列 / 群組卡 / header 收不到任何通知,畫面上會有
++ *  兩個口徑的損益並存(而且看不出哪個是舊的)。 */
++const listeners = new Set<() => void>();
++
++export function persistDiscount(value: number): void {
++  try {
++    window.localStorage.setItem(FEE_DISCOUNT_KEY, String(value));
++  } catch {
++    // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉(同 useChartToggles::persist)。
++    // 寫失敗就沒有新值可通知:通知了只會讓訂閱者再讀一次舊值,白跑一輪。
++    return;
++  }
++  // 快照複本:訂閱者在通知中退訂(元件卸載)會邊迭代邊改集合
++  for (const notify of [...listeners]) notify();
++}
++
++/** 只要計算用的折數值(不需要輸入框的原始字串)。 */
++export function readFeeDiscount(): number {
++  return loadDiscount().value;
++}
++
++/** `useSyncExternalStore` 的 subscribe 必須是穩定參照(每 render 換一個會讓 React
++ *  每輪重訂閱)→ 放模組層。`storage` 事件負責別的分頁改折數的情形。 */
++function subscribe(onStoreChange: () => void): () => void {
++  listeners.add(onStoreChange);
++  window.addEventListener("storage", onStoreChange);
++  return () => {
++    listeners.delete(onStoreChange);
++    window.removeEventListener("storage", onStoreChange);
++  };
++}
++
++/**
++ * 計算用折數,外部變更會觸發重畫。
++ *
++ * **為什麼是 `useSyncExternalStore` 而不是元件各自 `useState(readFeeDiscount)`**:
++ * localStorage 是元件樹之外的可變狀態,複製進 state 就得自己維護同步(而漏同步的
++ * 症狀是「梯上 3 折、側欄還是 1.8 折」這種靜默錯值)。getSnapshot 回的是 primitive
++ * number,React 以 Object.is 比對 —— 每次 render 讀一次 localStorage 不會造成迴圈。
++ *
++ * SSR 快照回預設值:本專案沒有 SSR,但 `useSyncExternalStore` 的型別要求給一個,
++ * 而「伺服器上沒有 localStorage」的正確答案就是預設折數。
++ */
++export function useFeeDiscount(): number {
++  return useSyncExternalStore(subscribe, readFeeDiscount, () => FEE_DISCOUNT_DEFAULT);
++}
+diff --git a/frontend/src/lib/ladder-position.test.ts b/frontend/src/lib/ladder-position.test.ts
+index c853af6b..3d298848 100644
+--- a/frontend/src/lib/ladder-position.test.ts
++++ b/frontend/src/lib/ladder-position.test.ts
+@@ -22,6 +22,7 @@ function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
+     pnl_base: null,
+     pnl_base_price: null,
+     pnl_cost: null,
++    code: null,
+     ...over,
+   };
+ }
+diff --git a/frontend/src/lib/pnl-format.ts b/frontend/src/lib/pnl-format.ts
+new file mode 100644
+index 00000000..56bf7ada
+--- /dev/null
++++ b/frontend/src/lib/pnl-format.ts
+@@ -0,0 +1,20 @@
++/** 損益顯示格式(自 `components/stock/LadderView.tsx` 搬出,**行為零變更**)。
++ *
++ *  閃電梯部位列以外,自選列 / 單檔 header / 群組卡也要印同一組數字 —— 顯示規則
++ *  (缺值破折號、正號、千分位、賺紅賠綠)只能有一份定義,不然三處會各自漂。
++ *  `LadderView` 仍 re-export 這三個名字,既有 import 路徑不變。
++ */
++
++/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
++export const DASH = "—";
++
++export function pnlText(pnl: number | null): string {
++  if (pnl === null) return DASH;
++  return `${pnl > 0 ? "+" : ""}${pnl.toLocaleString("en-US")}`;
++}
++
++/** 台股慣例:賺紅賠綠。 */
++export function pnlTone(pnl: number | null): string {
++  if (pnl === null) return "text-ink-dim";
++  return pnl > 0 ? "text-bull" : pnl < 0 ? "text-bear" : "text-ink";
++}
+diff --git a/frontend/src/lib/position-summary.test.ts b/frontend/src/lib/position-summary.test.ts
+new file mode 100644
+index 00000000..811026bd
+--- /dev/null
++++ b/frontend/src/lib/position-summary.test.ts
+@@ -0,0 +1,254 @@
++import { describe, expect, it } from "vitest";
++
++import { fmt, fmtPct } from "@/lib/format";
++import { positionEcon } from "@/lib/ladder-position";
++import { DASH, pnlText } from "@/lib/pnl-format";
++import {
++  cardText,
++  chipText,
++  chipTitle,
++  chipTone,
++  futQtyText,
++  futSummary,
++  headerSegments,
++  positionsByCode,
++  secQtyText,
++  secSummary,
++  type FutSummary,
++  type SecSummary,
++} from "@/lib/position-summary";
++import type { CapitalPosition } from "@/types";
++
++/** 現價 1000 元(毫元通貨)。均價 985.2 → 多方小賺,含費稅後才知道賺多少。 */
++const LAST = 1_000_000;
++const DISCOUNT = 1.8;
++
++function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
++  return {
++    market: "sec",
++    stock_no: "2330",
++    qty: 3,
++    name: "台積電",
++    avg_price: 985.2,
++    kind: "cash",
++    pnl_base: null,
++    pnl_base_price: null,
++    pnl_cost: null,
++    code: "2330",
++    ...over,
++  };
++}
++
++function fut(over: Partial<CapitalPosition> = {}): CapitalPosition {
++  return pos({
++    market: "fut",
++    stock_no: "CDFI6",
++    qty: 2,
++    avg_price: 985,
++    pnl_base: 500,
++    code: "2330",
++    ...over,
++  });
++}
++
++/** 非 null 斷言的替身:回 null 就是「這組 fixture 根本沒有 sec 倉」,測試該炸而不是靜默略過。 */
++function secOf(
++  rows: readonly CapitalPosition[],
++  last: number | null = LAST,
++  discount = DISCOUNT,
++): SecSummary {
++  const s = secSummary(rows, last, discount);
++  if (s === null) throw new Error("expected sec summary");
++  return s;
++}
++
++function futOf(rows: readonly CapitalPosition[]): FutSummary {
++  const f = futSummary(rows);
++  if (f === null) throw new Error("expected fut summary");
++  return f;
++}
++
++describe("positionsByCode", () => {
++  it("sec 以股號為鍵、fut 以後端附的 code 為鍵 → 同一檔的現股與個股期落在同一格", () => {
++    const map = positionsByCode([pos(), fut()]);
++    expect([...map.keys()]).toEqual(["2330"]);
++    expect(map.get("2330")?.map((p) => p.stock_no)).toEqual(["2330", "CDFI6"]);
++  });
++
++  it("qty 0 的列過濾掉(不是部位)", () => {
++    expect(positionsByCode([pos({ qty: 0 })]).size).toBe(0);
++  });
++
++  // 除權息調整碼 / 對映表沒 refresh → code null。猜一個股號比不顯示更糟
++  it("fut 的 code null → 跳過(前端沒有契約碼→股號的反查)", () => {
++    const map = positionsByCode([fut({ stock_no: "EE1I6", code: null })]);
++    expect(map.size).toBe(0);
++  });
++
++  it("undefined(capital 未啟用 / 查詢失敗)→ 空 map", () => {
++    expect(positionsByCode(undefined).size).toBe(0);
++  });
++});
++
++describe("secSummary(SC-5:與 positionEcon 同一把尺)", () => {
++  it("單列的 pnl 逐字等於 positionEcon 直算", () => {
++    const sec = secOf([pos()]);
++    const econ = positionEcon(3, 985.2, LAST, DISCOUNT, "cash");
++    expect(sec.pnl).toBe(econ.pnl);
++    expect(sec.kinds).toHaveLength(1);
++    expect(sec.kinds[0]?.pnl).toBe(econ.pnl);
++    expect(sec.kinds[0]?.label).toBe("現股");
++  });
++
++  it("折數換一個值 → pnl 跟著 positionEcon 換(折數不是寫死的)", () => {
++    const sec = secOf([pos()], LAST, 3);
++    expect(sec.pnl).toBe(positionEcon(3, 985.2, LAST, 3, "cash").pnl);
++    expect(sec.pnl).not.toBe(positionEcon(3, 985.2, LAST, DISCOUNT, "cash").pnl);
++  });
++
++  it("pct = pnl / (均價 × |張數| × 1000) × 100(成本基準)", () => {
++    const sec = secOf([pos()]);
++    const econ = positionEcon(3, 985.2, LAST, DISCOUNT, "cash");
++    expect(sec.pct).toBeCloseTo(((econ.pnl ?? 0) / (985.2 * 3 * 1000)) * 100, 10);
++  });
++
++  it("同股號多 kind → qty 帶號和、pnl 逐列和、依 KIND_ORDER 排序", () => {
++    const rows = [pos({ kind: "short", qty: -2 }), pos({ kind: "cash", qty: 3 })];
++    const sec = secOf(rows);
++    const cash = positionEcon(3, 985.2, LAST, DISCOUNT, "cash");
++    const short = positionEcon(-2, 985.2, LAST, DISCOUNT, "short");
++    expect(sec.kinds.map((k) => k.label)).toEqual(["現股", "融券"]);
++    expect(sec.qty).toBe(1);
++    expect(sec.pnl).toBe((cash.pnl ?? 0) + (short.pnl ?? 0));
++    expect(sec.pct).toBeCloseTo(
++      (((cash.pnl ?? 0) + (short.pnl ?? 0)) / (985.2 * 3 * 1000 + 985.2 * 2 * 1000)) * 100,
++      10,
++    );
++  });
++
++  /** 嚴格制:一列算不出來,聚合就沒有意義 —— 只加非 null 的那幾列會端出一個
++   *  「看起來完整」的數字,而它少算了一整筆部位。 */
++  it("任一列均價缺 → 聚合 pnl / pct 皆 null(張數照顯示)", () => {
++    const sec = secOf([pos({ kind: "cash", qty: 3 }), pos({ kind: "margin", avg_price: null, qty: 2 })]);
++    expect(sec.pnl).toBeNull();
++    expect(sec.pct).toBeNull();
++    expect(sec.qty).toBe(5);
++    expect(sec.kinds[1]?.avg).toBeNull();
++    expect(sec.kinds[1]?.pnl).toBeNull();
++  });
++
++  it("現價缺(盤前)→ pnl / pct null,部位本身仍在", () => {
++    const sec = secOf([pos()], null);
++    expect(sec.pnl).toBeNull();
++    expect(sec.pct).toBeNull();
++    expect(sec.qty).toBe(3);
++  });
++
++  it("沒有 sec 列(只有個股期)→ null", () => {
++    expect(secSummary([fut()], LAST, DISCOUNT)).toBeNull();
++  });
++});
++
++describe("futSummary(AD-5:逐契約,pnl_base 名目損益)", () => {
++  it("標準 + 小型兩契約:依契約碼排序、pnl 為 pnl_base 之和", () => {
++    const f = futOf([fut({ stock_no: "QFFI6", qty: -1, pnl_base: -200 }), fut()]);
++    expect(f.rows.map((r) => r.contract)).toEqual(["CDFI6", "QFFI6"]);
++    expect(f.pnl).toBe(300);
++    expect(f.rows[1]?.qty).toBe(-1);
++  });
++
++  it("任一契約的 pnl_base 缺 → 合計 null(不當 0 加)", () => {
++    const f = futOf([fut(), fut({ stock_no: "QFFI6", qty: -1, pnl_base: null })]);
++    expect(f.pnl).toBeNull();
++    expect(f.rows[0]?.pnl).toBe(500);
++  });
++
++  it("沒有 fut 列 → null", () => {
++    expect(futSummary([pos()])).toBeNull();
++  });
++});
++
++describe("張數 / 口數文字", () => {
++  it("多方 / 空方 / 對鎖", () => {
++    expect(secQtyText(secOf([pos({ qty: 3 })]))).toBe("3張");
++    expect(secQtyText(secOf([pos({ kind: "short", qty: -2 })]))).toBe("空2張");
++    // 對鎖聚合成 0 張會像「沒有部位」,而手上其實壓著兩筆
++    expect(secQtyText(secOf([pos({ qty: 3 }), pos({ kind: "short", qty: -3 })]))).toBe("多3/空3張");
++  });
++
++  it("單一契約 / 多契約(標準與小型差 20 倍,不可聚合)", () => {
++    expect(futQtyText(futOf([fut()]))).toBe("期 2口");
++    expect(futQtyText(futOf([fut({ qty: -1 })]))).toBe("期 空1口");
++    expect(futQtyText(futOf([fut(), fut({ stock_no: "QFFI6", qty: -1 })]))).toBe("期 2口/空1口");
++  });
++});
++
++describe("chip / 卡片 / header 文字", () => {
++  it("chipText:張數 + 百分比,有期倉再接一段", () => {
++    const sec = secOf([pos()]);
++    const f = futOf([fut()]);
++    expect(chipText(sec, null)).toBe(`3張 ${fmtPct(sec.pct ?? 0)}`);
++    expect(chipText(sec, f)).toBe(`3張 ${fmtPct(sec.pct ?? 0)} · 期 2口`);
++  });
++
++  it("chipText:只有期倉 → 只有期那段;pct 缺 → 破折號", () => {
++    expect(chipText(null, futOf([fut()]))).toBe("期 2口");
++    expect(chipText(secOf([pos()], null), null)).toBe(`3張 ${DASH}`);
++  });
++
++  it("chipTitle:逐 kind 一行 + 逐契約一行(標明群益名目)", () => {
++    const sec = secOf([pos()]);
++    const f = futOf([fut()]);
++    const lines = chipTitle(sec, f).split("\n");
++    expect(lines[0]).toBe(
++      `現股 3張 均價 ${fmt(Math.round(985.2 * 1000))} 損益 ${pnlText(sec.pnl)} (${fmtPct(sec.pct ?? 0)})`,
++    );
++    expect(lines[1]).toBe("CDFI6 多2口 損益 +500(群益名目,報告時點)");
++  });
++
++  it("chipTitle:均價缺 → 均價破折號、損益破折號、不印百分比", () => {
++    const sec = secOf([pos({ avg_price: null })]);
++    expect(chipTitle(sec, null)).toBe(`現股 3張 均價 ${DASH} 損益 ${DASH}`);
++  });
++
++  it("chipTone:有 sec 看 sec 損益,沒有才看期倉", () => {
++    expect(chipTone(secOf([pos()]), null)).toBe("text-bull");
++    expect(chipTone(secOf([pos()], null), null)).toBe("text-ink-dim");
++    expect(chipTone(null, futOf([fut({ pnl_base: -200 })]))).toBe("text-bear");
++  });
++
++  it("cardText:現股段 + 期貨段(卡片一行放得下的密度)", () => {
++    const sec = secOf([pos()]);
++    const f = futOf([fut()]);
++    expect(cardText(sec, f)).toBe(
++      `現 3張 ${pnlText(sec.pnl)} (${fmtPct(sec.pct ?? 0)}) · 期 2口 +500`,
++    );
++  });
++
++  it("cardText:現價缺 → 現股段破折號,期貨段照顯示(pnl_base 不吃現價)", () => {
++    expect(cardText(secOf([pos()], null), futOf([fut()]))).toBe(`現 3張 ${DASH} · 期 2口 +500`);
++  });
++
++  it("headerSegments:逐 kind / 逐契約各一段,tone 跟著各段自己的損益", () => {
++    const sec = secOf([pos({ kind: "cash", qty: 3 }), pos({ kind: "short", qty: -2 })]);
++    const f = futOf([fut()]);
++    const segs = headerSegments(sec, f);
++    expect(segs).toHaveLength(3);
++    expect(segs[0]?.text).toBe(
++      `現股 3張 · 均價 ${fmt(Math.round(985.2 * 1000))} · 損益 ${pnlText(sec.kinds[0]?.pnl ?? null)} (${fmtPct(sec.kinds[0]?.pct ?? 0)})`,
++    );
++    expect(segs[1]?.text.startsWith("融券 空2張 · 均價 ")).toBe(true);
++    expect(segs[2]?.text).toBe(`期 CDFI6 多 2口 · 均價 ${fmt(985_000)} · 損益 +500`);
++    expect(segs.map((s) => s.pnl)).toEqual([
++      sec.kinds[0]?.pnl,
++      sec.kinds[1]?.pnl,
++      500,
++    ]);
++    // key 由 kind / 契約碼決定 —— 位移不會讓 React 把整段當新節點重掛
++    expect(segs.map((s) => s.key)).toEqual(["sec:cash", "sec:short", "fut:CDFI6"]);
++  });
++
++  it("headerSegments:無倉兩側皆 null → 空陣列(整段不渲染)", () => {
++    expect(headerSegments(null, null)).toEqual([]);
++  });
++});
+diff --git a/frontend/src/lib/position-summary.ts b/frontend/src/lib/position-summary.ts
+new file mode 100644
+index 00000000..b519b50a
+--- /dev/null
++++ b/frontend/src/lib/position-summary.ts
+@@ -0,0 +1,269 @@
++/** 三處倉位顯示(自選列 chip / 單檔 header / 群組卡)的聚合與文字格式(零 React 純函式)。
++ *
++ *  **為什麼集中在一支 lib**:同一筆部位會同時出現在閃電梯部位列、側欄 chip、圖牆卡片
++ *  與 header 上。四個地方各算一次的失效樣態不是崩潰而是「同一檔在畫面上有兩個損益」——
++ *  使用者無從判斷哪個才對,而這是真錢那一側。所以:
++ *
++ *  - 證券損益一律走 `ladder-position::positionEcon`(含手續費 / 證交稅 / 借券費,折數
++ *    來自 `fee-discount`),與現股閃電梯同一函式同一折數;
++ *  - 個股期損益一律走群益回報的 `pnl_base`(名目、報告時點快照),與個股期閃電梯同一
++ *    數字 —— **不自創期貨費稅口徑**(期交稅 + 每口手續費是另一套規則,算錯比不算更糟);
++ *  - 缺值 / 正負號 / 千分位 / 賺紅賠綠一律走 `pnl-format`,百分比走 `format::fmtPct`。
++ */
++import { fmt, fmtPct } from "@/lib/format";
++import { positionEcon, secPositionsOf } from "@/lib/ladder-position";
++import { DASH, pnlText, pnlTone } from "@/lib/pnl-format";
++import { kindLabel } from "@/lib/trade-kinds";
++import type { CapitalPosition } from "@/types";
++
++/** 無倉的 code 一律拿這一個(identity 穩定)—— 每次現做 `[]` 會讓吃它的 `memo` 元件
++ *  每輪都比不過,50 張卡片照樣每秒全部重畫(同 `fill-marks::EMPTY_FILLS` 的理由)。 */
++export const EMPTY_POSITIONS: readonly CapitalPosition[] = [];
++
++/** 聚合後的證券部位(同股號、跨交易別)。 */
++export interface SecSummary {
++  /** 帶號張數和(多 − 空)。對鎖時是 0,顯示層另走 `secQtyText`。 */
++  qty: number;
++  /** 多方張數合計 */
++  long: number;
++  /** 空方張數合計(正數) */
++  short: number;
++  /** 含費稅損益合計。**嚴格制**:任一列算不出來就是 null(見 `secSummary`)。 */
++  pnl: number | null;
++  /** 損益 / 成本 × 100;pnl null 時 null。 */
++  pct: number | null;
++  kinds: SecKind[];
++}
++
++export interface SecKind {
++  /** 群益原始交易別(顯示 key 用,標籤走 `label`) */
++  kind: string;
++  label: string;
++  qty: number;
++  /** 均價(元);缺值 / ≤0 → null */
++  avg: number | null;
++  pnl: number | null;
++  pct: number | null;
++}
++
++/** 同股號的個股期部位(**逐契約不聚合**:標準與小型的契約單位差 20 倍)。 */
++export interface FutSummary {
++  /** 各契約 `pnl_base` 之和;任一契約缺值 → null(不當 0 加)。 */
++  pnl: number | null;
++  rows: FutRow[];
++}
++
++export interface FutRow {
++  /** 期交所契約碼(CDFI6 / QFFI6) */
++  contract: string;
++  qty: number;
++  avg: number | null;
++  pnl: number | null;
++}
++
++/** 單檔 header 的一段(逐 kind / 逐契約)。`pnl` 給呼叫端上色,`key` 給 React ——
++ *  用陣列索引當 key 的話,新開一筆排在前面的部位會讓整排段落重掛。 */
++export interface HeaderSegment {
++  key: string;
++  text: string;
++  pnl: number | null;
++}
++
++/** 均價的缺值判定與 `positionEcon` 同一條規則(0 不是價格)。 */
++function px(v: number | null): number | null {
++  return v !== null && v > 0 ? v : null;
++}
++
++/** 成本基準報酬率(AD-3):`pnl / (均價 × |張數| × 1000) × 100`。 */
++function pctOf(pnl: number | null, cost: number | null): number | null {
++  if (pnl === null || cost === null || cost <= 0) return null;
++  return (pnl / cost) * 100;
++}
++
++/** 股號 → 該股號的部位列(sec 以股號為鍵;fut 以後端在 API 邊界附的 `code` 為鍵)。
++ *
++ *  `code` 是唯一的反查來源:前端只有「股號 + 選月 → 契約碼」的正向組法,沒有反向。
++ *  `code` null(未知產品 / 除權息調整碼)的期貨列直接跳過 —— 猜一個股號會把部位掛到
++ *  別檔頭上,比不顯示糟得多。`qty === 0` 的列不是部位(同 `secPositionsOf`)。 */
++export function positionsByCode(
++  positions: CapitalPosition[] | undefined,
++): Map<string, CapitalPosition[]> {
++  const map = new Map<string, CapitalPosition[]>();
++  for (const p of positions ?? []) {
++    if (p.qty === 0) continue;
++    const key = p.market === "sec" ? p.stock_no : p.code;
++    if (key === null || key === "") continue;
++    const cur = map.get(key);
++    if (cur === undefined) map.set(key, [p]);
++    else cur.push(p);
++  }
++  return map;
++}
++
++/**
++ * 同股號的證券部位聚合;沒有 sec 列 → `null`(呼叫端據此決定整段渲不渲染)。
++ *
++ * **嚴格制**(AD-4):任一列的 pnl 算不出來(均價缺 / 現價缺),聚合 pnl 與 pct 就是
++ * null。只加算得出來的那幾列會端出一個「看起來完整」的合計,而它少了一整筆部位 ——
++ * 破折號至少誠實。
++ */
++export function secSummary(
++  rows: readonly CapitalPosition[],
++  lastMilli: number | null,
++  discount: number,
++): SecSummary | null {
++  // 過濾與排序都借 `secPositionsOf`(閃電梯部位列同一支):兩處各寫一份 KIND_ORDER
++  // 會靜默漂成不同順序。`rows` 依 `positionsByCode` 的建構已是同一股號。
++  const code = rows.find((p) => p.market === "sec")?.stock_no;
++  if (code === undefined) return null;
++  const secRows = secPositionsOf([...rows], code);
++  if (secRows.length === 0) return null;
++
++  let qty = 0;
++  let long = 0;
++  let short = 0;
++  let pnl: number | null = 0;
++  let cost = 0;
++  const kinds = secRows.map((p) => {
++    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind);
++    const avg = px(p.avg_price);
++    const rowCost = avg === null ? null : avg * Math.abs(p.qty) * 1000;
++    qty += p.qty;
++    if (p.qty > 0) long += p.qty;
++    else short += -p.qty;
++    if (econ.pnl === null || rowCost === null) pnl = null;
++    else if (pnl !== null) {
++      pnl += econ.pnl;
++      cost += rowCost;
++    }
++    return {
++      kind: p.kind,
++      label: kindLabel(p.kind),
++      qty: p.qty,
++      avg,
++      pnl: econ.pnl,
++      pct: pctOf(econ.pnl, rowCost),
++    };
++  });
++
++  return { qty, long, short, pnl, pct: pctOf(pnl, cost), kinds };
++}
++
++/** 同股號的個股期部位,依契約碼排序;沒有 fut 列 → `null`。 */
++export function futSummary(rows: readonly CapitalPosition[]): FutSummary | null {
++  const futRows = rows
++    .filter((p) => p.market === "fut" && p.qty !== 0)
++    .sort((a, b) => a.stock_no.localeCompare(b.stock_no));
++  if (futRows.length === 0) return null;
++  const pnl = futRows.some((p) => p.pnl_base === null)
++    ? null
++    : futRows.reduce((sum, p) => sum + (p.pnl_base ?? 0), 0);
++  return {
++    pnl,
++    rows: futRows.map((p) => ({
++      contract: p.stock_no,
++      qty: p.qty,
++      avg: px(p.avg_price),
++      pnl: p.pnl_base,
++    })),
++  };
++}
++
++/** `3張` / `空2張` / `多2口` 這類量詞。空方以「空」字標,不用負號 —— `-2張` 在盤中
++ *  一眼會被讀成「跌了 2」。 */
++function lotText(qty: number, unit: string): string {
++  return `${qty < 0 ? "空" : ""}${Math.abs(qty)}${unit}`;
++}
++
++/** 期貨口數的**明細**寫法:`多2口` / `空1口`。chip 上的 `期 2口` 省略「多」是因為
++ *  多方是常態、側欄要省字;tooltip 與 header 兩側都寫全,那裡是拿來核對方向的。 */
++function futLotText(qty: number): string {
++  return `${qty < 0 ? "空" : "多"}${Math.abs(qty)}口`;
++}
++
++/** 均價顯示(同 `PriceLadder` 的 avgText):`avg_price` 是**元**,`fmt` 吃毫元。 */
++function avgText(avg: number | null): string {
++  return avg === null ? DASH : fmt(Math.round(avg * 1000));
++}
++
++/** `損益 +12,345 (+1.20%)`;pnl 缺 → `損益 —`,pct 缺 → 不印括號。 */
++function pnlPart(pnl: number | null, pct: number | null): string {
++  return `損益 ${pnlText(pnl)}${pct === null ? "" : ` (${fmtPct(pct)})`}`;
++}
++
++/** 聚合張數。**對鎖(多空相抵成 0)另印 `多3/空3張`** —— 印成 `0張` 會像「沒有部位」,
++ *  而手上其實壓著兩筆、任一腿的價格都在動。 */
++export function secQtyText(sec: SecSummary): string {
++  if (sec.qty === 0) return `多${sec.long}/空${sec.short}張`;
++  return lotText(sec.qty, "張");
++}
++
++/** `期 2口` / `期 空1口` / 多契約 `期 2口/空1口`(依契約碼排序)。 */
++export function futQtyText(fut: FutSummary): string {
++  return `期 ${fut.rows.map((r) => lotText(r.qty, "口")).join("/")}`;
++}
++
++/** 自選列 chip(240px 側欄,只放得下一行):`3張 +1.20%` + 有期倉再接 ` · 期 2口`。
++ *  期貨段**不印百分比**:保證金制沒有成本基準,拿名目損益除一個假分母只會騙人。 */
++export function chipText(sec: SecSummary | null, fut: FutSummary | null): string {
++  const parts: string[] = [];
++  if (sec !== null) parts.push(`${secQtyText(sec)} ${sec.pct === null ? DASH : fmtPct(sec.pct)}`);
++  if (fut !== null) parts.push(futQtyText(fut));
++  return parts.join(" · ");
++}
++
++/** chip 的 `title`:逐 kind / 逐契約列出明細(chip 上只有聚合值,細節靠停留看)。 */
++export function chipTitle(sec: SecSummary | null, fut: FutSummary | null): string {
++  const lines: string[] = [];
++  for (const k of sec?.kinds ?? []) {
++    lines.push(`${k.label} ${lotText(k.qty, "張")} 均價 ${avgText(k.avg)} ${pnlPart(k.pnl, k.pct)}`);
++  }
++  for (const r of fut?.rows ?? []) {
++    // 「群益名目,報告時點」不可省:這個數字既不含期交稅也不是即時的,與上面幾行
++    // 的含費稅即時損益混在同一個 tooltip 裡,不標就會被當成同一種數字看
++    lines.push(`${r.contract} ${futLotText(r.qty)} 損益 ${pnlText(r.pnl)}(群益名目,報告時點)`);
++  }
++  return lines.join("\n");
++}
++
++/** chip / 卡片的字色。有證券倉時看證券損益(那是含費稅的真答案),否則退期貨名目損益。 */
++export function chipTone(sec: SecSummary | null, fut: FutSummary | null): string {
++  return pnlTone(sec !== null ? sec.pnl : (fut?.pnl ?? null));
++}
++
++/** 群組卡標題列下那一行:`現 3張 +12,345 (+1.20%) · 期 2口 +500`。
++ *  卡片比側欄寬一點,放得下絕對金額 —— 圖牆上要比較的是「哪一檔在賺」。 */
++export function cardText(sec: SecSummary | null, fut: FutSummary | null): string {
++  const parts: string[] = [];
++  if (sec !== null) {
++    parts.push(
++      `現 ${secQtyText(sec)} ${pnlText(sec.pnl)}${sec.pct === null ? "" : ` (${fmtPct(sec.pct)})`}`,
++    );
++  }
++  if (fut !== null) parts.push(`${futQtyText(fut)} ${pnlText(fut.pnl)}`);
++  return parts.join(" · ");
++}
++
++/** 單檔 header:**逐 kind / 逐契約各一段**(不聚合)—— header 旁邊就是右欄閃電梯的
++ *  部位列,一對一才能並排核對數字。 */
++export function headerSegments(
++  sec: SecSummary | null,
++  fut: FutSummary | null,
++): HeaderSegment[] {
++  const segs: HeaderSegment[] = [];
++  for (const k of sec?.kinds ?? []) {
++    segs.push({
++      key: `sec:${k.kind}`,
++      pnl: k.pnl,
++      text: `${k.label} ${lotText(k.qty, "張")} · 均價 ${avgText(k.avg)} · ${pnlPart(k.pnl, k.pct)}`,
++    });
++  }
++  for (const r of fut?.rows ?? []) {
++    segs.push({
++      key: `fut:${r.contract}`,
++      pnl: r.pnl,
++      text: `期 ${r.contract} ${r.qty < 0 ? "空" : "多"} ${Math.abs(r.qty)}口 · 均價 ${avgText(r.avg)} · 損益 ${pnlText(r.pnl)}`,
++    });
++  }
++  return segs;
++}
+diff --git a/frontend/src/lib/trade-kinds.ts b/frontend/src/lib/trade-kinds.ts
+new file mode 100644
+index 00000000..0eaf54c1
+--- /dev/null
++++ b/frontend/src/lib/trade-kinds.ts
+@@ -0,0 +1,20 @@
++/** 交易別值域與標籤(自 `components/stock/PriceLadder.tsx` 搬出,**行為零變更**)。
++ *
++ *  閃電梯之外,自選列 / 單檔 header / 群組卡也要把 `Position.kind` 印成人看得懂的
++ *  標籤 —— 值域與標籤表只能有一份。`PriceLadder` 仍 re-export `TRADE_KINDS` 與
++ *  `TradeKind`,既有 import 路徑(`RightRail` 等)不變。
++ */
++
++export const TRADE_KINDS = [
++  ["cash", "現股"],
++  ["margin", "融資"],
++  ["short", "融券"],
++  ["daytrade_sell", "無券"],
++] as const;
++export type TradeKind = (typeof TRADE_KINDS)[number][0];
++
++/** kind → 顯示標籤,查表未命中就顯示原字串:群益 `Position.kind` 的值域比本檔的
++ *  交易別寬(D13),不認得的部位寧可標籤怪也不要靜默消失。 */
++export function kindLabel(kind: string): string {
++  return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
++}
+diff --git a/frontend/src/types.ts b/frontend/src/types.ts
+index 323b62a7..c9468f40 100644
+--- a/frontend/src/types.ts
++++ b/frontend/src/types.ts
+@@ -105,6 +105,10 @@ export interface CapitalPosition {
+   pnl_base: number | null;
+   pnl_base_price: number | null;
+   pnl_cost: number | null;
++  /** 後端在 API 邊界附的衍生欄(非 Position dataclass 欄位):sec = stock_no;
++   *  fut = 契約碼反查到的股號,反查不到(未知產品 / 除權息調整碼)= null。
++   *  前端沒有契約碼→股號的反查,以股號為鍵的顯示只能靠這欄。 */
++  code: string | null;
+ }
+ 
+ /** OrderResult asdict(寫入動作共同回傳形)。 */
+diff --git a/tests/capital/test_mapping.py b/tests/capital/test_mapping.py
+index bd9244b5..8d36e1c9 100644
+--- a/tests/capital/test_mapping.py
++++ b/tests/capital/test_mapping.py
+@@ -18,6 +18,7 @@ from copycat.capital.mapping import (
+     is_option_contract,
+     multiplier_of,
+     product_of,
++    stock_code_of,
+     to_exchange_symbol,
+     to_futureorder_fields,
+     to_stockorder_fields,
+@@ -350,6 +351,23 @@ def test_exchange_product_of_known_prefix_wins(contract: str, product: str) -> N
+     assert exchange_product_of(contract) == product
+ 
+ 
++def test_stock_code_of() -> None:
++    """部位列 → 股號(SC-1)。**打真 `stkfut_map.DEFAULT_PATH` 不 monkeypatch**:
++
++    這條 helper 的價值就在「版控對映表現在真的認得這個契約碼」,拿 tmp map 測等於
++    只測了自己寫的假資料;版控表哪天沒 refresh 掉了 CDF,這條要跟著紅。
++    """
++    # 證券:stock_no 本身就是股號
++    assert stock_code_of("sec", "2330") == "2330"
++    # 個股期:標準(CDF)與小型(QFF)契約碼都反查到同一檔股號
++    assert stock_code_of("fut", "CDFI6") == "2330"
++    assert stock_code_of("fut", "QFFI6") == "2330"
++    # 除權息調整後商品代號第三碼由 F 改數字(EE1)→ 進不了對映表 → 不猜
++    assert stock_code_of("fut", "EE1I6") is None
++    # 契約碼壞到 exchange_product_of 都 raise → 吞成 None,不擋整條 positions API
++    assert stock_code_of("fut", "1") is None
++
++
+ class TestIsOptionContract:
+     """送單分流(SendOptionOrder vs SendFutureOrder)的單一定義,直接單元測試。
+ 
+diff --git a/tests/server/test_capital_api.py b/tests/server/test_capital_api.py
+index 6e4cc8f8..e801a3fa 100644
+--- a/tests/server/test_capital_api.py
++++ b/tests/server/test_capital_api.py
+@@ -241,6 +241,35 @@ class TestOrdersPositions:
+             assert [p["stock_no"] for p in positions] == ["2330"]
+             assert positions[0]["market"] == "sec"
+ 
++    def test_positions_carry_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++        """每列附 `code`(股號)—— 前端沒有契約碼→股號的反查,只能由後端給(SC-1)。
++
++        個股期用**真版控對映表**(不 monkeypatch DEFAULT_PATH):這條要在期交所改碼 /
++        對映表沒 refresh 時跟著紅,那正是 `code` 會靜默變 null 的情境。
++        """
++        cap, _com = _capital_client(tmp_path)
++        with make_client(monkeypatch, capital=cap) as client:
++            _wait_status(cap)
++            cap.store.set_positions(
++                [
++                    Position(market="sec", stock_no="2330", qty=2),
++                    Position(market="fut", stock_no="CDFI6", qty=1),
++                    Position(market="fut", stock_no="QFFI6", qty=-1),
++                    Position(market="fut", stock_no="EE1I6", qty=1),
++                ]
++            )
++            positions = client.get("/api/capital/positions").json()["positions"]
++            assert [(p["stock_no"], p["code"]) for p in positions] == [
++                ("2330", "2330"),  # sec:股號直接沿用
++                ("CDFI6", "2330"),  # fut 標準:CDF → 2330
++                ("QFFI6", "2330"),  # fut 小型:QFF → 同一檔股號(單位差 20 倍,前端逐契約顯示)
++                ("EE1I6", None),  # 除權息調整碼進不了對映表 → 不猜
++            ]
++            # 既有欄位仍在(加欄是 additive)
++            assert positions[0]["market"] == "sec"
++            assert positions[0]["qty"] == 2
++            assert positions[0]["kind"] == "cash"
++
+     def test_positions_keep_both_kinds_of_same_stock(
+         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+     ) -> None:

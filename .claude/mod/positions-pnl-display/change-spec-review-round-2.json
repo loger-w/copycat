@@ -1,0 +1,10 @@
+{"round":2,"scope":"限縮輪(amendment 段落)","reviewer":"change-spec-reviewer(opus)","summary":{"P0":0,"P1":2,"P2":5},
+"dispositions":[
+{"id":"R18","sev":"P1","claim":"§7 三處 UI 仍寫 readFeeDiscount 與 AD-2 矛盾","disposition":"accepted","resolution":"§7 三條改 useFeeDiscount;R-1 改寫"},
+{"id":"R19","sev":"P1","claim":"§5 out-of-scope 仍列跨元件同步","disposition":"accepted","resolution":"改為跨分頁不保證 / PriceLadder 輸入框不受控"},
+{"id":"R20","sev":"P2","disposition":"accepted","resolution":"AD-2 措辭改 getSnapshot 收斂"},
+{"id":"R21","sev":"P2","claim":"PriceLadder:49 local DASH 落在搬家行號內","check":"grep 證實 :49 const DASH","disposition":"accepted","resolution":"行號改 40-46+51-55;DASH 改 import pnl-format"},
+{"id":"R22","sev":"P2","disposition":"accepted","resolution":"W-7 改寫成無可見內容 / 無三個 testid"},
+{"id":"R23","sev":"P2","disposition":"accepted","resolution":"current-state §1 改寫;§9 補側車量測"},
+{"id":"R24","sev":"P2","disposition":"accepted","resolution":"AD-7 高度算式補 gap,結論改為圖區矮 16px 被 flex-1 吸收"}
+],"exit":"無 P0;P1 已修 → 進實作"}
