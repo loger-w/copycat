@@ -23,7 +23,10 @@ export function indexSeriesToAccum(series: IndexSeries, code: string, name: stri
   const rows: [number, number][] = [];
   for (const [key, value] of Object.entries(series.minutes)) {
     const minute = minuteOf(key);
-    if (minute !== null && minute >= SPOT_WINDOW.start && minute <= SPOT_WINDOW.end) {
+    // `value > 0`:後端 `_millipt("0")` 回 0 不回 None(TC4 偶發送 "0"),毫點恆 > 0 → 0 = 不可得。
+    // 幾何的 `norm` 只護 meta.ref/upper/lower/high/low,護不到 minutes 與 last(review p2-1),
+    // 這裡收口才不會讓一格 0 把 low / vwap 拉走、現價圈塗綠。
+    if (minute !== null && minute >= SPOT_WINDOW.start && minute <= SPOT_WINDOW.end && value > 0) {
       rows.push([minute, value]);
     }
   }
@@ -43,7 +46,7 @@ export function indexSeriesToAccum(series: IndexSeries, code: string, name: stri
   return {
     code,
     seq: 0,
-    last: series.p !== null ? { p: series.p, t: "", cum_vol: 0 } : null,
+    last: series.p !== null && series.p > 0 ? { p: series.p, t: "", cum_vol: 0 } : null,
     vwap: rows.length > 0 ? Math.round(sum / rows.length) : null,
     minutes,
     ticks: [],
