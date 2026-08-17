@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { formatToastText, kindLabel, mergeSignals, type SignalMsg } from "@/lib/signal-model";
+import {
+  formatToastText,
+  groupKindLabels,
+  groupRuleNames,
+  groupSignals,
+  kindLabel,
+  mergeSignals,
+  type SignalMsg,
+} from "@/lib/signal-model";
 
 function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
   return {
@@ -121,5 +129,105 @@ describe("mergeSignals", () => {
 
   it("空輸入回空陣列", () => {
     expect(mergeSignals([], [])).toEqual([]);
+  });
+});
+
+/** SC-5:同一 tick 打出多則訊號(CDP 穿越 + 爆拉…)時清單一列一組。
+ *  輸入已是 `mergeSignals` 的輸出(新在前),分組只看**相鄰**:不相鄰的同 (code, time)
+ *  各自成組(edge 7)—— 跨列搜尋會把中間那則別檔的列擠掉,顯示保守正確優先。 */
+describe("groupSignals", () => {
+  const cdp = sig({
+    id: "g1",
+    kind: "cdp_cross",
+    levels: ["cdp"],
+    direction: "from_above",
+    pct: null,
+    time: "09:31:22",
+    price: 1_000_000,
+    rule_name: "CDP 穿越",
+  });
+  const crash = sig({
+    id: "g2",
+    kind: "crash",
+    pct: -2.1,
+    time: "09:31:22",
+    price: 999_000,
+    rule_name: "爆跌",
+  });
+
+  it("相鄰且同 (code, time) 併成一組", () => {
+    const groups = groupSignals([cdp, crash]);
+    expect(groups.length).toBe(1);
+    expect(groups[0]?.items.map((s) => s.id)).toEqual(["g1", "g2"]);
+  });
+
+  it("組的 key / 價格 / 名稱 / 時間取組內第一則", () => {
+    const [group] = groupSignals([cdp, crash]);
+    expect(group?.key).toBe("g1");
+    expect(group?.code).toBe("2330");
+    expect(group?.name).toBe("台積電");
+    expect(group?.time).toBe("09:31:22");
+    expect(group?.price).toBe(1_000_000);
+  });
+
+  it("不同 code 不併(同一秒兩檔各自成列)", () => {
+    const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
+    expect(groupSignals([cdp, other]).length).toBe(2);
+  });
+
+  it("同 code 不同 time 不併", () => {
+    const later = sig({ id: "g4", time: "09:31:23" });
+    expect(groupSignals([cdp, later]).length).toBe(2);
+  });
+
+  it("保序:組序 = 輸入序,組內序 = 輸入序", () => {
+    const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
+    const groups = groupSignals([other, cdp, crash]);
+    expect(groups.map((g) => g.key)).toEqual(["g3", "g1"]);
+    expect(groups[1]?.items.map((s) => s.id)).toEqual(["g1", "g2"]);
+  });
+
+  // edge 7:被別檔同秒 row 隔開的同 (code, time) 不跨列搜尋
+  it("不相鄰的同 (code, time) 各自成組", () => {
+    const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
+    expect(groupSignals([cdp, other, crash]).map((g) => g.key)).toEqual(["g1", "g3", "g2"]);
+  });
+
+  it("空輸入回空陣列", () => {
+    expect(groupSignals([])).toEqual([]);
+  });
+});
+
+describe("groupKindLabels / groupRuleNames", () => {
+  const base = sig({ id: "k1", kind: "surge", pct: 1.2, time: "09:31:22", rule_name: "早盤急拉" });
+
+  it("每段 kind 文案帶自己的代表 sig(逐段著色的輸入)", () => {
+    const dive = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急殺" });
+    const [group] = groupSignals([base, dive]);
+    const segments = groupKindLabels(group!);
+    expect(segments.map((s) => s.label)).toEqual(["爆拉 +1.20%", "爆跌 -1.20%"]);
+    expect(segments.map((s) => s.sig.id)).toEqual(["k1", "k2"]);
+  });
+
+  // 同 kind 兩條規則同 tick 各發一則 → 文案一模一樣,印兩段只是雜訊
+  it("同文案只留一段(保留首見順序)", () => {
+    const twin = sig({ id: "k2", kind: "surge", pct: 1.2, time: "09:31:22", rule_name: "另一條" });
+    const [group] = groupSignals([base, twin]);
+    const segments = groupKindLabels(group!);
+    expect(segments.map((s) => s.label)).toEqual(["爆拉 +1.20%"]);
+    expect(segments[0]?.sig.id).toBe("k1");
+  });
+
+  it("規則名去重、保留首見順序", () => {
+    const twin = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急拉" });
+    const [group] = groupSignals([base, twin]);
+    expect(groupRuleNames(group!)).toEqual(["早盤急拉"]);
+  });
+
+  it("規則名缺值 / 空字串不入清單(升級當日的舊 jsonl 行)", () => {
+    const old = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "" });
+    const older = sig({ id: "k3", kind: "vol_burst", pct: 3, time: "09:31:22" });
+    const [group] = groupSignals([base, old, older]);
+    expect(groupRuleNames(group!)).toEqual(["早盤急拉"]);
   });
 });
