@@ -28,6 +28,7 @@ from copycat.capital.mapping import (
     exchange_product_of,
     multiplier_of,
     product_of,
+    stock_code_of,
     to_exchange_symbol,
 )
 from copycat.capital.models import (
@@ -217,8 +218,19 @@ async def capital_orders(request: Request) -> dict:
 
 @router.get("/api/capital/positions")
 async def capital_positions(request: Request) -> dict:
+    """部位列表;每列附衍生欄 `code`(股號)。
+
+    `code` 附在 API 邊界而不是進 `Position` dataclass:建構點散在 balance / store /
+    測試多處,加欄要嘛給預設值(於是「沒反查」與「反查不到」同形)、要嘛連 store
+    序列化面一起擴。衍生欄留在邊界,唯一讀者是前端。
+    """
     client = _capital(request)
-    return {"positions": [dataclasses.asdict(p) for p in client.store.positions()]}
+    return {
+        "positions": [
+            {**dataclasses.asdict(p), "code": stock_code_of(p.market, p.stock_no)}
+            for p in client.store.positions()
+        ]
+    }
 
 
 @router.post("/api/capital/order/stock")
