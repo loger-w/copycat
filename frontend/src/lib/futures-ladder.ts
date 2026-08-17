@@ -106,6 +106,18 @@ export interface FutCloseQuote {
   lower: number | null;
 }
 
+/** 「貼漲跌停」的選邊(raw,不 snap 檔位):買 → 漲停、賣 → 跌停;缺界 → null。
+ *  平倉估價與市價鈕邊價共用同一條選邊規則 —— 兩處各寫一次時,改一邊漏另一邊
+ *  的症狀是「送到反方向的極端價」。snap 到合法檔位是各路徑自己的事(期貨 FUT_TICK /
+ *  個股期現股 tick 表口徑不同),本函式只回原始界值。 */
+export function edgeMilli(
+  side: "buy" | "sell",
+  upper: number | null,
+  lower: number | null,
+): number | null {
+  return side === "buy" ? upper : lower;
+}
+
 /** 平倉閘用估價(design amendment:期貨平倉限價貼漲跌停)——
  *  多單平倉(賣)用跌停價、空單平倉(買)用漲停價;單位元 = Milli/1000。
  *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。 */
@@ -115,7 +127,7 @@ export function futCloseEstimate(
   prod: FutCloseQuote | null,
 ): number | null {
   if (contract === null || prod === null || pos.stock_no !== contract) return null;
-  const edge = pos.qty > 0 ? prod.lower : prod.upper;
+  const edge = edgeMilli(pos.qty > 0 ? "sell" : "buy", prod.upper, prod.lower);
   return edge !== null ? edge / 1000 : null;
 }
 
