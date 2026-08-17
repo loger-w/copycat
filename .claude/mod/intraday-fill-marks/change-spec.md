@@ -117,3 +117,7 @@
 - UI 一致性優先:只用既有 token(`fill-bull` / `fill-bear` / `stroke-surface`),不新增色票 / 動效;字級與既有 readout 同。
 - 白名單 W-4/W-5 的 memo 契約以既有 memo 測試為機械閘;新 prop 一律 useMemo / module 常數。
 - 收尾:next-time 追加精確版 + FuturesChart 兩條;memory `user-feedback-batch-2026-08-17` 勾 R2;batch3 spec §0 個2 標已出貨。
+
+---
+## self_review_head
+`self_review_head: 73ca0ab4`(code review round 1 + fix 波 1 收斂;JSON `code-review-round-1.json`;真實環境 verification.md)
