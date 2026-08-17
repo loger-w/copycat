@@ -1,12 +1,22 @@
 import { useId, useMemo, useRef, useState } from "react";
 
 import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
+import { useCapitalPositions } from "@/hooks/useCapital";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { WL_COLLAPSED_KEY, WL_UNGROUPED_KEY } from "@/lib/constants";
+import { useFeeDiscount } from "@/lib/fee-discount";
 import { fmt, fmtPct } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
+import {
+  chipText,
+  chipTitle,
+  chipTone,
+  futSummary,
+  positionsByCode,
+  secSummary,
+} from "@/lib/position-summary";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
 import { cn, safeIdToken } from "@/lib/utils";
@@ -146,6 +156,13 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const suggestions = searchStocks(input, names, SUGGEST_LIMIT);
   // 名冊 2,401 筆;每列 `names.find(...)` 是 O(列數 × 2401),而側欄每則 quote 都會 re-render
   const nameOf = useMemo(() => new Map(names.map((n) => [n.code, n.name])), [names]);
+
+  // 倉位 chip(SC-2)。**側欄取一份、一次折完所有 code**,每列只取自己那個 key ——
+  // 每列各掛一份 hook 的話 50 列會各折一次同一份部位表(同圖牆 fillsMap 的理由)。
+  // 折數與閃電梯同一個 localStorage key:梯上改了折數,這裡同 tick 跟著換。
+  const positions = useCapitalPositions().data?.positions;
+  const posMap = useMemo(() => positionsByCode(positions), [positions]);
+  const discount = useFeeDiscount();
 
   /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
    *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
@@ -366,6 +383,12 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     // 後者是 `bids[0] === upper`(委買掛在漲停排隊),需要五檔,側欄沒有。
     // 兩者刻意不共用,共用會逼側欄拿不存在的資料或稀釋 badge 語意。
     const limit = limitState(q?.p ?? null, q?.upper ?? null, q?.lower ?? null);
+    // 倉位(SC-2)。證券損益吃現價現算(含費稅、與閃電梯同折數);個股期走群益
+    // `pnl_base`,不吃現價 —— 盤前沒有報價時期倉那段照樣有數字可看。
+    const posRows = posMap.get(code);
+    const sec = posRows === undefined ? null : secSummary(posRows, q?.p ?? null, discount);
+    const fut = posRows === undefined ? null : futSummary(posRows);
+    const hasPos = sec !== null || fut !== null;
     return (
       <li key={code}>
         <div
@@ -417,8 +440,30 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                 </span>
               ) : null}
             </span>
-            {name !== undefined ? (
-              <span className="truncate text-xs text-ink-muted">{name}</span>
+            {/* 第二行:名稱 + 倉位 chip 同一條 baseline(SC-2)。**外層必須是 flex row**
+                (同上面代號那行的理由):這一格是 flex-col,把 chip 後綴在名稱之後會
+                多佔一行,而列高由 ROW_H 以 inline style 固定 —— 多的那行會被擠出可視
+                範圍。名稱 `min-w-0 truncate` 吸收壓縮、chip `shrink-0` 不被切掉:
+                長名稱該截斷,張數與損益少一個字就變成另一個數字。
+                兩者都沒有時整行不渲染(W-7:無倉的列 DOM 與改前逐字相同)。 */}
+            {name !== undefined || hasPos ? (
+              <span className="flex min-w-0 items-baseline gap-1">
+                {name !== undefined ? (
+                  <span className="min-w-0 truncate text-xs text-ink-muted">{name}</span>
+                ) : null}
+                {hasPos ? (
+                  <span
+                    data-testid={`wl-pos-${code}`}
+                    title={chipTitle(sec, fut)}
+                    className={cn(
+                      "shrink-0 whitespace-nowrap text-[0.625rem]",
+                      chipTone(sec, fut),
+                    )}
+                  >
+                    {chipText(sec, fut)}
+                  </span>
+                ) : null}
+              </span>
             ) : null}
           </div>
           {q?.no_data ? (
