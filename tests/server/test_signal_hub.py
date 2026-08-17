@@ -999,6 +999,36 @@ class TestDiscordMerge:
         finally:
             await h.hub.close()
 
+    async def test_same_code_different_second_not_merged(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """T-1:同 code、**不同秒**的兩筆 tick 各發一則 —— 合併粒度是 (code, time)。
+
+        既有「不合併」測試用的是兩個不同 code,把 `_same_tick` 的 time 比對整條拿掉
+        也照樣綠;而錯合併的代價是第二筆的價位與時刻被第一筆蓋掉(同一檔連續兩次
+        穿越在 Discord 上只剩一則,且印的是舊價)。
+        """
+        _write_rules(tmp_path, _merge_rules())
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+
+            state = _state()
+            h.hub.on_tick("2330", _tick(79_000, time="10:00:00.100"), state)
+            h.hub.on_tick("2330", _tick(80_500, cum=2, time="10:00:01.000"), state)  # 穿 nh
+            h.hub.on_tick("2330", _tick(86_000, cum=3, time="10:00:02.000"), state)  # 穿 ah
+            await h.settle()
+
+            assert h.bot == [
+                "🔔 突破 CDP NH(壓力・第1次)｜台積電 2330｜80.50｜10:00:01｜NH 規則",
+                "🔔 突破 CDP AH(壓力・第1次)｜台積電 2330｜86.00｜10:00:02｜AH 規則",
+            ]
+        finally:
+            await h.hub.close()
+
     async def test_three_pending_rounds_keep_worker_alive(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
