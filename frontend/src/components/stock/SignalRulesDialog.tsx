@@ -44,7 +44,12 @@ interface ParamField {
  *  同樣是 INVALID_RULE)。`vol_burst.window_secs` 對到後端的 `surge_window_secs`,
  *  那是 detector 的共用欄,per-rule detector 讓兩者得以各自獨立。 */
 const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
-  cdp_cross: [{ key: "rearm_ticks", label: "重新武裝 tick 數", step: "1" }],
+  cdp_cross: [
+    { key: "rearm_ticks", label: "重新武裝 tick 數", step: "1" },
+    // 距離門檻(tick)與時間門檻(秒)是同一個 rearm 的兩半 —— 擺在一起才看得出
+    // 「離線 N tick 且撐滿 M 秒才解除」是一句話,不是兩條獨立設定
+    { key: "rearm_dwell_secs", label: "線外駐留秒數", step: "1" },
+  ],
   surge_crash: [
     { key: "pct", label: "漲跌幅 %", step: "0.1" },
     { key: "window_secs", label: "時間窗(秒)", step: "1" },
@@ -60,7 +65,7 @@ const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
 };
 
 const PARAM_DEFAULTS: Record<RuleKind, Record<string, string>> = {
-  cdp_cross: { rearm_ticks: "2" },
+  cdp_cross: { rearm_ticks: "2", rearm_dwell_secs: "300" },
   surge_crash: { pct: "1.5", window_secs: "60" },
   vol_burst: {
     ratio: "3",
