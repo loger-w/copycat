@@ -22,7 +22,7 @@ from copycat.live.stock_models import StockBook, StockMeta, StockTick
 from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.server import signal_hub as hub_mod
-from copycat.server.signal_hub import SignalHub, format_signal_text
+from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
 from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
 from copycat.signals_config import SignalsConfig
 from copycat.stock_watchlist import Group
@@ -335,6 +335,46 @@ def _seed_jsonl(tmp_path: Path, date: str, rows: list[dict[str, Any]]) -> None:
     path.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
     )
+
+
+def _merge_rules() -> list[dict[str, Any]]:
+    """SC-4 的最小「同 tick 兩事件」組合:兩條 CDP 規則各訂一條線,一筆 tick 同時穿過兩條。
+
+    用兩條**不同線**的規則(而非同線兩規則)是為了讓兩段 kind 文案不同 —— 去重
+    邏輯若寫成「無條件砍成一段」,同線版本會綠而這版會紅。
+    """
+    return [
+        _rule("cdp_cross", "r-1-000", name="NH 規則", cdp_levels=["nh"]),
+        _rule("cdp_cross", "r-1-001", name="AH 規則", cdp_levels=["ah"]),
+    ]
+
+
+def _cross_both(h: _Harness, code: str = "2330", time: str = "10:00:00") -> None:
+    """一筆 tick 同時穿過 nh(80.00)與 ah(85.00):兩條規則同一 (code, time) 各發一則。"""
+    state = _state()
+    h.hub.on_tick(code, _tick(79_000, code=code, time=f"{time}.100"), state)
+    h.hub.on_tick(code, _tick(86_000, code=code, cum=2, time=f"{time}.123"), state)
+
+
+def _long_rows(n: int = 2, pad: int = 1200) -> list[dict[str, Any]]:
+    """同 (code, time) 的多則,規則名刻意很長 → 合併文本必然超過 1900 字元(edge 8)。
+
+    規則名沒有長度上限,而 bot / webhook 兩層都沒有截斷 —— 不分批就是整則被 Discord
+    退回(缺角靜默)。`pad=1200` 讓單則約 1.2k 字:兩則必然分成兩批,一則必然不分。
+    """
+    return [
+        {
+            "id": f"sig-{i}",
+            "kind": "vol_burst",
+            "code": "2330",
+            "name": "台積電",
+            "price": 100_000,
+            "time": "10:00:00",
+            "pct": 3.0 + i,  # 每則 kind 文案不同 → 去重不得把它們併掉
+            "rule_name": f"規則{i}" + "長" * pad,
+        }
+        for i in range(n)
+    ]
 
 
 def _cache(h: _Harness, code: str = "2330") -> tuple[str, int | None]:
@@ -897,6 +937,145 @@ class TestDiscordFanout:
             await h.hub.close()
 
 
+class TestDiscordMerge:
+    """SC-4:同 code、同 time 且在 Discord 佇列中**相鄰**的多 row → 一則訊息。
+
+    合併只發生在**送出端**:WS / jsonl / id 逐 row 不變(W6)—— emit 端合併會改 id,
+    重連 refetch jsonl 就會出現合併前後兩份不同 id 的重複列。
+    """
+
+    async def test_same_tick_two_events_send_once(self, tmp_path: Path, clock: _Clock) -> None:
+        """同一 tick 兩則 → sender 只被打一次,文案含兩段 kind + 兩個規則名 + 同群摘要。"""
+        _write_rules(tmp_path, _merge_rules())
+        wl = _Watch(
+            groups=[{"name": "半導體", "codes": ["2330", "2317"]}],
+            quotes={"2330": ("台積電", 1.5), "2317": ("鴻海", 0.8)},
+        )
+        h = _Harness(tmp_path, clock, wl=wl)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+            _cross_both(h)
+            await h.settle()
+
+            assert len(h.published) == 2  # W6:WS 逐 row
+            assert len(h.rows()) == 2  # W6:jsonl 逐 row
+            assert h.bot == [
+                "🔔 突破 CDP NH(壓力・第1次)・突破 CDP AH(壓力・第1次)"
+                "｜台積電 2330｜86.00｜10:00:00｜NH 規則・AH 規則"
+                "｜同群 半導體:2317鴻海 +0.8%"
+            ]
+        finally:
+            await h.hub.close()
+
+    async def test_different_tick_not_merged_and_order_kept(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """同 tick A(兩則)+ 不同 tick B(一則)混排 → 2 則、順序不變。
+
+        B 是被存進 pending 那一則:`settle()`(= `_discord_queue.join()`)返回時它必須
+        **已送出** —— 送出前就 `task_done` 的話 join 會提早返回,關機與測試屏障同時失真。
+        """
+        _write_rules(tmp_path, _merge_rules())
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+
+            _cross_both(h)  # 2330:同一 tick 兩則
+            state = _state()  # 2317:另一個 tick,只穿 nh → 一則
+            h.hub.on_tick("2317", _tick(79_000, code="2317", time="10:00:05.100"), state)
+            h.hub.on_tick("2317", _tick(80_500, code="2317", cum=2, time="10:00:06.000"), state)
+            await h.settle()
+
+            assert len(h.published) == 3
+            assert len(h.bot) == 2
+            assert "2330" in h.bot[0] and "NH 規則・AH 規則" in h.bot[0]
+            assert h.bot[1] == "🔔 突破 CDP NH(壓力・第1次)｜台積電 2317｜80.50｜10:00:06｜NH 規則"
+        finally:
+            await h.hub.close()
+
+    async def test_three_pending_rounds_keep_worker_alive(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """連續三輪含 pending 的混排:每輪都把下一組的頭一則存進 pending。
+
+        記帳錯一格就會 `task_done() called too many times`(ValueError)→ worker 當場
+        死掉,之後整天 Discord 無聲而 WS/jsonl 都正常(最難查的那種靜默)。
+        `close()` 會把 worker 的例外 re-raise,ValueError 在這裡逃不掉。
+        """
+        _write_rules(tmp_path, _merge_rules())
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            codes = ["2330", "2317", "2454", "1101"]
+            h.hub.on_watchlist(codes)
+            await h.settle()
+
+            for code in codes[:3]:  # 三組,每組同 tick 兩則(六則一次入列)
+                _cross_both(h, code=code)
+            await h.settle()
+            assert len(h.published) == 6
+            assert len(h.bot) == 3
+            assert all("NH 規則・AH 規則" in text for text in h.bot)
+            assert [text.split("｜")[1].split(" ")[1] for text in h.bot] == codes[:3]
+
+            _cross_both(h, code="1101")  # worker 還活著:之後再發一組仍送出
+            await h.settle()
+            assert len(h.bot) == 4
+        finally:
+            await h.hub.close()
+
+    async def test_oversized_merge_splits_into_batches(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """edge 8:合併文本 > 1900 字元 → 依 row 分批,批尾標 `(i/N)`,**不截斷**。"""
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        rows = _long_rows()
+        assert len(format_signal_group_text(rows)) > 1900  # 前提:治具真的造出超長文本
+
+        await h.hub._send_discord(rows)
+
+        assert len(h.bot) == 2
+        assert h.bot[0].endswith(" (1/2)")
+        assert h.bot[1].endswith(" (2/2)")
+        assert all(len(text) <= 1900 for text in h.bot)
+        assert rows[0]["rule_name"] in h.bot[0]
+        assert rows[1]["rule_name"] in h.bot[1]  # 第二則沒有被截掉
+
+    async def test_blocked_batch_is_logged_with_id(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """各批各計一次節流 → 後續批可能被擋下:缺角必須在 log 可見(帶 rows[0] 的 id)。"""
+        h = _Harness(tmp_path, clock, discord_per_min=1)
+        h.attach_bot()
+        rows = _long_rows()
+
+        with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+            await h.hub._send_discord(rows)
+
+        assert len(h.bot) == 1
+        assert h.bot[0].endswith(" (1/2)")
+        assert "sig-0" in caplog.text
+        assert "1 批被節流擋下" in caplog.text
+
+    async def test_single_row_text_unchanged(self, tmp_path: Path, clock: _Clock) -> None:
+        """單則(含超長單則)照現行路徑走:不分批、不加 `(i/N)`、文案逐字不變。"""
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        rows = _long_rows(n=1, pad=2000)
+
+        await h.hub._send_discord(rows)
+
+        assert h.bot == [format_signal_text(rows[0])]
+
+
 class TestBasisWorker:
     async def test_staged_prefetch_swaps_in_on_rollover(
         self, tmp_path: Path, clock: _Clock
@@ -1398,7 +1577,11 @@ class TestRuleEngine:
         assert load_rules(tmp_path / _RULES_FILE) == []
 
     async def test_two_rules_same_kind_both_fire(self, tmp_path: Path, clock: _Clock) -> None:
-        """邊界 2:同 kind 兩規則同 tick → 兩則事件,id 因 rule 段不撞。"""
+        """邊界 2:同 kind 兩規則同 tick → 兩則事件,id 因 rule 段不撞。
+
+        Discord 那一則是**事前標為該變**的斷言(SC-4):同 (code, time) 相鄰兩 row 現在
+        合成一則,kind 文案相同 → 去重成一段,兩條規則名以「・」串接。WS / jsonl 仍逐 row。
+        """
         _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
         h = _Harness(tmp_path, clock)
         h.attach_bot()
@@ -1411,7 +1594,10 @@ class TestRuleEngine:
             assert [m["rule_id"] for m in h.published] == ["r-1-000", "r-1-001"]
             assert len({m["id"] for m in h.published}) == 2
             assert len(h.rows()) == 2
-            assert len(h.bot) == 2
+            assert h.bot == [
+                "🔔 突破 CDP NH(壓力・第1次)｜台積電 2330｜80.50｜10:00:00"
+                "｜cdp_cross-r-1-000・cdp_cross-r-1-001"
+            ]
         finally:
             await h.hub.close()
 
@@ -1662,6 +1848,13 @@ class TestDiscordText:
     def test_legacy_row_without_rule_name(self) -> None:
         """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
         assert format_signal_text(self._row()).endswith("10:00:00")
+
+    def test_group_text_of_single_row_is_verbatim(self) -> None:
+        """SC-4:單則走合併版仍**逐字**等於單則版 —— 絕大多數訊號走的正是這條路。"""
+        assert format_signal_group_text([self._row(rule_name="爆量-緊")]) == format_signal_text(
+            self._row(rule_name="爆量-緊")
+        )
+        assert format_signal_group_text([self._row()]) == format_signal_text(self._row())
 
 
 class TestGroupSuffix:
