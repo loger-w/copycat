@@ -197,7 +197,8 @@ export function StkfutLadder({
   /** 梯頂市價鈕(SC-3)。個股期沒有可用的真市價路徑(後端 fut market → `"M"` literal,
    *  OrderPanel 的 TXO 在用)→ 這裡直送**限價貼漲跌停 + IOC**(D3a):有對手就一路吃穿
    *  各檔位、無對手即刻取消。邊價已 snap 到合法檔位,否則 `_stkfut_gates` 回 BAD_TICK。
-   *  防抖走獨立槽位(理由見 PriceLadder 同段註)。 */
+   *  防抖走獨立槽位、key 併入契約(理由見 PriceLadder 同段註);下面的早退同樣是
+   *  **程式面**雙保險(DOM 路徑打不到,React 依 props 擋 disabled 的 onClick)。 */
   function marketOrder(side: "buy" | "sell"): void {
     touchIdle();
     if (blocked) return; // UI 已 disabled,雙保險(後端亦拒 PRODUCT_NOT_ALLOWED)
