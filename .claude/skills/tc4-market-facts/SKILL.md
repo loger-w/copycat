@@ -152,6 +152,14 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   合計涵蓋 UTC 00–22,海外近 23 小時交易的時段幾乎都落在其中之一,訂閱當下不會落窗外;
   真正的風險是「跨過窗結束邊界(UTC 06 或 22)推播是否停止」,需跨邊界連續觀察才能驗。
 - SXF 推播密度隨時段差異極大(146 則/60s vs 2 則/40s)。
+- **日經有、韓指無(2026-08-17 重跑 Fut 全量 dump 實證)**:17 個交易所段與 06-30 快照零增減,
+  **無 KRX 段、全樹零命中 KOSPI** → 韓指做不到(D14 拍板不做不追蹤)。日經三處:OSE
+  `TC.F.OSE.{NK225,NK225M,NK225MC,NK400}.HOT`、SGX `TC.F.SGX.NK.HOT`、CME `NKD`。夜盤 60s 推播
+  MES 219 / NK225 102 / **NK225M 175** / SGX NK 78,首分鐘 1K Volume NK225M 3285 vs NK225 182 →
+  相關係數第七腿選**小日經 `NK225M`**。OSE 段 `FilledTime` 6 位 HHMMSS(同 CME/SGX)、
+  `PreciseTime` 12 位、五檔 Bid/Ask 同欄名,`parse_stock_realtime` / `minute_end_from_utc_hhmmss`
+  / 1K `parse_1k_minutes` 零改即通;OSE `OpenTime=160000 / CloseTime=144500`(台北時刻,夜盤
+  16:00 → 次日 14:45)。腳本 `spikes/nk225_leg_probe.py`(記得只 probe 未被 prod 訂閱的 symbol)。
 - **CME single stock futures(含 TSMC ADR)2026-07-27 上市,達錢 4 尚未上架**:55 檔美股 +
   22 檔微型、現金結算、**一天 23 小時交易 — 台股盤中也會有 TSM 連續報價(ADR 現貨在台股
   盤中休市),這是值得定期回頭確認上架的原因**。實測 64 種命名組合全 fail(對照組 ES 回 OK);
