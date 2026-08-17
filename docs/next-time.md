@@ -1,3 +1,20 @@
+## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
+
+- [ ] **側欄 chip 過長時股名被 truncate 到看不見**(2330 有現股 + 雙契約個股期:`2張 +0.26% · 期 2口/空1口`
+  在 240px 側欄把「台積電」整個擠掉;AD-6 拍定「名稱 truncate、chip shrink-0」)。user 過目後若嫌,候選:
+  期段收進 tooltip 只留 `· 期`、或 chip 上限寬 + truncate。
+- [ ] **個股期均價字面兩份**:header / chip 用 `fmt(Math.round(avg*1000))`(`1185`),`StkfutLadder` 部位列用
+  `toFixed(2)`(`1185.00`);同值不同字面,收斂時二選一(建議 ladder 改 fmt,🔴 `StkfutLadder.test.tsx` 值斷言該紅)。
+- [ ] **`code` null 的個股期倉位(除權息調整碼 EE1/CD1 形、新上市未 refresh)三處靜默不顯示**,閃電梯照舊;
+  無任何提示。候選:positions 回傳 `code_missing` 計數 → 側欄底一行「n 筆個股期倉位無法對映」。
+- [ ] **成交點精確版 / 群組卡個股期委託標記可直接吃 `code`**(R2 留尾的「契約碼→股號反查」已由本輪後端
+  `stock_code_of` 提供;`GET /api/capital/positions` 有欄,orders 尚無 —— 精確版加 `code` 到 orders 同款)。
+- [ ] `useFeeDiscount` 跨分頁 `storage` 事件有掛未驗收(spec §5);另 `PriceLadder` 折數輸入框仍是元件內
+  state(改值時 persist 通知其他三處,但另一分頁的 PriceLadder 不會跟)。
+- [ ] `useCapitalPositions` 現有 ≥ 4 個 observer(側欄 / header / 圖牆 / 梯):實測同 tick 掛載去重成 15s 一發;
+  若日後有 observer 在不同時點掛載(lazy 頁面),15s 窗內可能多打 —— 要收斂就把 refetchInterval 移到單一
+  provider hook。
+
 ## 2026-08-17(mod/intraday-fill-marks batch3 R2 留尾)
 
 - [ ] **成交點精確版**(D7 拍板近似版的替代):後端 `CapitalStore` 保留逐筆 D 事件
