@@ -161,6 +161,65 @@ describe("SignalRail 訊號列", () => {
   });
 });
 
+/** SC-5:同一 tick 常常同時打出 CDP 穿越 + 爆拉/爆跌,逐則一列時同一個時間點就吃掉
+ *  三四列 —— 200px 寬的欄位一眼看過去全是同一秒同一檔。 */
+describe("SignalRail 同 tick 合併列(SC-5)", () => {
+  const CDP = sig({
+    id: "a",
+    kind: "cdp_cross",
+    levels: ["cdp"],
+    direction: "from_below",
+    pct: null,
+    rule_name: "CDP 穿越",
+  });
+  const CRASH = sig({ id: "b", kind: "crash", direction: null, pct: -2.1, rule_name: "爆拉爆跌" });
+
+  it("同 code 同 time 的多則 → 一列,kind 文案以「・」串接", () => {
+    renderRail({ signals: [CDP, CRASH] });
+    const texts = rowTexts();
+    expect(texts.length).toBe(1);
+    expect(texts[0]).toContain("突破 CDP 中軸・爆跌 -2.10%");
+    expect(texts[0]).toContain("CDP 穿越・爆拉爆跌"); // 規則名同樣去重後串接
+  });
+
+  it("合併列每段各自著色(整段套同一色會把爆跌畫成紅的)", () => {
+    renderRail({ signals: [CDP, CRASH] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText("突破 CDP 中軸").className).toContain("text-bull");
+    expect(list.getByText("爆跌 -2.10%").className).toContain("text-bear");
+  });
+
+  it("合併列的價格 / 時間取組內第一則,點列仍 onSelect(code)", () => {
+    const { onSelect } = renderRail({
+      signals: [CDP, sig({ ...CRASH, price: 999_000 })],
+    });
+    const [text = ""] = rowTexts();
+    expect(text).toContain("1050"); // 第一則的價格,不是第二則的 999
+    expect(text).not.toContain("999");
+    fireEvent.click(screen.getByText("2330"));
+    expect(onSelect.mock.calls).toEqual([["2330"]]);
+  });
+
+  it("同 code 不同 time → 各自成列(不跨秒合併)", () => {
+    renderRail({
+      signals: [
+        sig({ id: "t1", time: "09:31:24" }),
+        sig({ id: "t2", time: "09:31:23" }),
+        sig({ id: "t3", time: "09:31:22" }),
+      ],
+    });
+    expect(rowTexts().length).toBe(3);
+  });
+
+  // edge 7:被別檔同秒 row 隔開的同 (code, time) 不跨列搜尋(顯示保守正確)
+  it("同 (code, time) 但不相鄰 → 不合併", () => {
+    renderRail({
+      signals: [CDP, sig({ id: "x", code: "2317", name: "鴻海" }), CRASH],
+    });
+    expect(rowTexts().length).toBe(3);
+  });
+});
+
 describe("SignalRail 規則區", () => {
   const RULES = [
     rule({ id: "r1", name: "CDP 穿越", kind: "cdp_cross", cdp_levels: ["ah"] }),
