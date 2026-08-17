@@ -26,6 +26,17 @@ export interface LadderLot {
   seqs: string[];
 }
 
+/** 本機日曆日 → `YYYYMMDD`(與 `OrderRecord.date` 同格式)。
+ *
+ *  `ymdWindow` 原本把這段格式化內嵌在迴圈裡,而分時圖的成交點也要同一格式的「今日」字串
+ *  (`lib/fill-marks.ts` 的日期界)。各抄一份的失效樣態是「其中一處忘了 padStart」——
+ *  九月變成 `20269` 而不是 `202609`,兩邊的日期界從此永遠對不上,而畫面只是「沒有我的單」,
+ *  零錯誤訊號(同 `aggregateLots` 比對鍵抄錯的教訓)。 */
+export function ymdOf(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /** `now` 起算 `offsets` 天的本機日曆日集合(YYYYMMDD,與 `OrderRecord.date` 同格式)。
  *
  *  現股梯傳 `[0]`(嚴格今日);期貨 / 個股期梯傳 `[-1, 0, 1]` —— `date` 是**委託建立日**,
@@ -33,9 +44,8 @@ export interface LadderLot {
 export function ymdWindow(now: Date, offsets: readonly number[]): Set<string> {
   const out = new Set<string>();
   for (const off of offsets) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + off);
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    out.add(`${d.getFullYear()}${m}${String(d.getDate()).padStart(2, "0")}`);
+    // `Date` 建構子自己會把溢出的日數正規化(月初 −1 天 → 上個月最後一日)
+    out.add(ymdOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() + off)));
   }
   return out;
 }
