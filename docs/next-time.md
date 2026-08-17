@@ -1,3 +1,23 @@
+## 2026-08-17(mod/index-intraday-core batch3 R4 留尾)
+
+- [ ] **真 TC4 指數推播下的 core 圖 + 個股頁 / 群組圖牆前後對照待 prod 重啟過目**(側車 fake 序列已驗;
+  SC-5 截圖層未做:FakeStockSource 無個股資料)。看點:對稱 autofit 域含 ±1% 地板 —— 加權日振幅 < 1%
+  時線的視覺振幅比舊「hi×1.003 / lo×0.997 緊貼域」小(spec §5);若 user 覺得太平,候選 = index 態
+  幾何加「地板 %」參數(core `buildIntradayGeometry` 需開 option,另案)。
+- [ ] **兩欄態較矮視窗(容器 ≥ 1050 但主 grid 高 < ~800px)家數帶 section 溢出走主 grid 捲軸**(KR-3,
+  code review C-3):`--idx-adl-min` 10rem 地板 + 家數帶兩列固定 chrome ≈ 306px > 分到的 5/11。1080p /
+  864p 實測不捲;命中再降地板或 section 改 `5 1 auto`。
+- [ ] **`lib/index-chart-svg.ts` 死碼 cluster**:`buildIndexGeometry` / `rightEdgeLabels` / `IndexPt` /
+  `RightEdgeLabel` / `RightEdgeInput` 自本輪起無 production caller(`outOfDomainLevels` / `IndexGeometry` /
+  `buildOverlayGeometry` 仍活),`index-chart-svg.test.ts` 有 3 個 describe 只測沒人走的碼 → 🔵 清理連測試一起。
+- [ ] `INTRADAY_CHROME_Y` export 無外部讀者(`MarketPane.size.test` 硬寫 26 / 272)→ 測試改 import 它,
+  免常數與註解各漂各的。
+- [ ] 加權 pane 週期列在 ~350px 寬 pane 折 3 行(1536 兩欄態),吃掉 35px 圖高(TWSE svg 121 vs OTC 156);
+  既有折行行為,可考慮週期鈕收窄或折疊。
+- [ ] claude-in-chrome 驗證教訓(已入 ops-discipline?否 → 本次記這裡,收尾 8.5 併入 skill):`computer.zoom`
+  會把 tab 的 device metrics 覆寫成 zoom 區域尺寸且不還原(量到 662×588);`resize_window` 對最大化視窗無效
+  → 用同源 iframe host 控 viewport;`taskkill //IM node.exe` 會連 MCP server 一起殺(改用 port → PID)。
+
 ## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
 
 - [ ] **側欄 chip 過長時股名被 truncate 到看不見**(2330 有現股 + 雙契約個股期:`2張 +0.26% · 期 2口/空1口`
