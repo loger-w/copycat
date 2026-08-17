@@ -178,12 +178,16 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
   return out;
 }
 
-/** 組內規則名去重(首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,整段略過
- *  —— 留下來只會變成一個沒有內容的分隔符。 */
+/** 組內規則名去重(**到達序**的首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,
+ *  整段略過 —— 留下來只會變成一個沒有內容的分隔符。
+ *
+ *  **口徑必須與 `groupKindLabels` 同為到達序**(`items` 反序):同一列上 kind 段與
+ *  規則名段並排顯示,兩段順序相反時讀起來對不上號(「突破 CDP AH・爆量」配
+ *  「爆量・CDP 穿越」)。 */
 export function groupRuleNames(group: SignalGroup): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const sig of group.items) {
+  for (const sig of [...group.items].reverse()) {
     const name = sig.rule_name;
     if (name === undefined || name === "" || seen.has(name)) continue;
     seen.add(name);
