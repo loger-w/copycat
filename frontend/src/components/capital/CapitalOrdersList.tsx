@@ -139,7 +139,7 @@ function OrderRow({ order, danger, busy, onCancel, onCorrectPrice, onDecrease }:
             <span
               data-testid="order-market-tag"
               title="市價單"
-              className="mr-0.5 text-[10px] leading-none text-ink-muted"
+              className="mr-0.5 text-[0.625rem] leading-none text-ink-muted"
             >
               市價
             </span>
