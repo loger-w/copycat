@@ -1,0 +1,36 @@
+{
+  "round": 2,
+  "scope": "限縮輪(amendment 段落)",
+  "findings": [
+    {
+      "id": "R2-1",
+      "severity": "P1",
+      "disposition": "accepted",
+      "resolution": "§6 加 🔴 兩列 + 該紅清單改寫"
+    },
+    {
+      "id": "R2-2",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "§3 加限定"
+    },
+    {
+      "id": "R2-3",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "E5 分窗描述;next-time 同步"
+    },
+    {
+      "id": "R2-4",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "KR-3 改 grep 判準;next-time 同步"
+    },
+    {
+      "id": "R2-5",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "SC-3 記視窗 1568×778,七卡溢出已觀察到並落 next-time"
+    }
+  ]
+}
