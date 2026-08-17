@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GroupGridView, gridShape } from "@/components/stock/GroupGridView";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
+import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
+import type { CapitalOrder } from "@/types";
 import { wrap } from "@/test-utils";
 
 const GROUPS: Group[] = [
@@ -73,12 +75,44 @@ class FakeResizeObserver {
   disconnect(): void {}
 }
 
+/** 委託記錄 fixture(SC-6)。`date` **必須動態算** —— 寫死日期的測試會在隔天靜默
+ *  轉綠 / 轉紅(日期界是 `fillPoints` 的過濾條件之一)。
+ *  `avg_fill_price` 是**元**(2380 → 毫元 2_380_000);`filled_qty` 現股是張。 */
+function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
+  return {
+    seq_no: "s1",
+    stock_no: "2330",
+    name: "台積電",
+    market: "TS",
+    buy_sell: "B",
+    flag_label: null,
+    book_no: null,
+    status_raw: null,
+    status_label: null,
+    price: 2380,
+    avg_fill_price: 2380,
+    order_qty: 2,
+    filled_qty: 2,
+    unit: "張",
+    date: ymdOf(new Date()),
+    time: "09:00:30",
+    pre_order: false,
+    error_msg: null,
+    actionable: false,
+    price_type: "limit",
+    raw: "",
+    ...over,
+  };
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 let states: Record<string, unknown>;
+let orders: CapitalOrder[];
 
 beforeEach(() => {
   window.localStorage.clear();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  orders = [];
   states = {
     "2330": state(),
     "2317": state({ meta: { name: "鴻海", ref: 2_000_000, upper: null, lower: null, y_vol: 5 } }),
@@ -89,6 +123,11 @@ beforeEach(() => {
     // 不接這條路由的話它會拿到 group-state 的殼(`{states:{}}`)當 overlay 用。
     if (String(url).includes("/api/stock/overlay/")) {
       return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+    }
+    // 圖牆層掛一份 `useCapitalOrders`(SC-6)。不接這條路由的話它會拿到 group-state
+    // 的殼當委託列表用(`orders` undefined → 恆零標記,SC-6 靜默 vacuous)。
+    if (String(url).includes("/api/capital/orders")) {
+      return new Response(JSON.stringify({ orders }));
     }
     const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
     const picked: Record<string, unknown> = {};
@@ -556,7 +595,7 @@ describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
 
 // 🟢 SC-2 / D4:toggle 四鈕上提到圖牆頂(卡片內不得有 button —— 點它會連帶切主檔)。
 describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
-  it("pill 列右側有均價 / CDP / MA / 量分佈 四鈕", async () => {
+  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 五鈕", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await screen.findByTestId("group-card-2330");
     for (const [key, label] of [
@@ -564,6 +603,8 @@ describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
       ["cdp", "CDP"],
       ["ma", "MA"],
       ["vp", "量分佈"],
+      // 🟢 R2 SC-5:label 與單檔頁逐字相同(同一個圖層兩個畫面不同名字要使用者自己對照)
+      ["fills", "成交點"],
     ] as const) {
       const btn = screen.getByTestId(`grid-toggle-${key}`);
       expect(btn.textContent).toBe(label);
@@ -591,5 +632,67 @@ describe("GroupGridView 窗內無分鐘(edge 9)", () => {
     expect(card.querySelector("svg")).toBeNull();
     // 同群組的另一檔窗內有分鐘 → 照畫(佔位是 per-card 的,不是整面)
     expect(screen.getByTestId("group-card-2317").querySelector("svg")).toBeTruthy();
+  });
+});
+
+// 🟢 R2 SC-6:群組卡上的當日成交點。圖牆層掛**一份** `useCapitalOrders` + 一次
+// `fillsByCode`,每卡只取自己那個 key —— 50 張卡各折一次的話同一份 orders 會被走 50 遍。
+//
+// 量法一律 **per-card** `polygon[data-testid^="fill-"]`:兩張卡同一分鐘各有成交時
+// testid 會撞,document 級的 getByTestId 直接拋 multiple-elements(或更糟:數錯)。
+describe("GroupGridView 群組卡成交點(SC-6)", () => {
+  it("2330 當日成交 → 2330 卡一個三角、同群組的 2317 卡零個", async () => {
+    orders = [order()];
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const c2330 = await screen.findByTestId("group-card-2330");
+    await waitFor(() =>
+      expect(c2330.querySelectorAll('polygon[data-testid^="fill-"]').length).toBe(1),
+    );
+    expect(
+      screen
+        .getByTestId("group-card-2317")
+        .querySelectorAll('polygon[data-testid^="fill-"]').length,
+    ).toBe(0);
+  });
+
+  /** 零股(`unit === "股"`)整筆排除 —— 與現股梯同口徑(AD-3),「我的單」在梯與圖上
+   *  才一致。同一份 orders 內放一筆現股單當**正對照**:少了它,「0 個」在 query 還沒
+   *  settle 的時候也成立,測試靜默 vacuous。 */
+  it("零股委託(unit「股」)不畫;同一份 orders 內的現股單照畫", async () => {
+    orders = [
+      order({ unit: "股", filled_qty: 1000 }),
+      order({ seq_no: "s2", stock_no: "2317", name: "鴻海" }),
+    ];
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const c2317 = await screen.findByTestId("group-card-2317");
+    await waitFor(() =>
+      expect(c2317.querySelectorAll('polygon[data-testid^="fill-"]').length).toBe(1),
+    );
+    expect(
+      screen
+        .getByTestId("group-card-2330")
+        .querySelectorAll('polygon[data-testid^="fill-"]').length,
+    ).toBe(0);
+  });
+
+  /** edge 6:capital 未設定 / endpoint 500 → `orders` undefined → 零標記,圖照畫。
+   *  TQ 的 error 不可冒泡成整面卡片消失。 */
+  it("委託列表取數失敗 → 零標記但卡片圖照畫(error 不冒泡)", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/api/stock/overlay/")) {
+        return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+      }
+      if (String(url).includes("/api/capital/orders")) {
+        return new Response("{}", { status: 500 });
+      }
+      const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";
+      const picked: Record<string, unknown> = {};
+      for (const c of codes.split(",").filter(Boolean)) picked[c] = states[c];
+      return new Response(JSON.stringify({ states: picked }));
+    });
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const c2330 = await screen.findByTestId("group-card-2330");
+    await waitFor(() => expect(c2330.querySelector('svg[role="img"]')).toBeTruthy());
+    expect(c2330.querySelectorAll('polygon[data-testid^="fill-"]').length).toBe(0);
   });
 });

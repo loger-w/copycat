@@ -12,8 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GroupGridView } from "@/components/stock/GroupGridView";
 import { CHART_TOGGLES_KEY } from "@/lib/constants";
+import { ymdOf } from "@/lib/ladder-lots";
 import type { MinuteAgg, VpCell } from "@/lib/stock-accum";
 import type { Group } from "@/lib/watchlist-model";
+import type { CapitalOrder } from "@/types";
 import { wrap } from "@/test-utils";
 
 const GROUPS: Group[] = [{ name: "半導體", codes: ["2330", "2317"] }];
@@ -61,13 +63,45 @@ class FakeResizeObserver {
   disconnect(): void {}
 }
 
+/** SC-5 的委託 fixture:2330 / 2317 各一筆當日成交(minute 540,價 2380 元落在
+ *  `snap()` 的 y 域 [2090000, 2550000] 內)。`date` 動態算 —— 寫死會在隔天靜默轉紅。 */
+function order(code: string, seqNo: string): CapitalOrder {
+  return {
+    seq_no: seqNo,
+    stock_no: code,
+    name: "",
+    market: "TS",
+    buy_sell: "B",
+    flag_label: null,
+    book_no: null,
+    status_raw: null,
+    status_label: null,
+    price: 2380,
+    avg_fill_price: 2380,
+    order_qty: 1,
+    filled_qty: 1,
+    unit: "張",
+    date: ymdOf(new Date()),
+    time: "09:00:30",
+    pre_order: false,
+    error_msg: null,
+    actionable: false,
+    price_type: "limit",
+    raw: "",
+  };
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      async () => new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
+    vi.fn(async (url: string) =>
+      // 圖牆層掛一份 `useCapitalOrders`(SC-6);不分 URL 回 overlay 的話它會拿 overlay
+      // 的殼當委託列表用 → `orders` undefined → 恆零標記,SC-5 的成交點案靜默 vacuous。
+      String(url).includes("/api/capital/orders")
+        ? new Response(JSON.stringify({ orders: [order("2330", "s1"), order("2317", "s2")] }))
+        : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
     ),
   );
 });
@@ -103,6 +137,36 @@ describe("GroupGridView toggle 列同步每張卡(SC-2)", () => {
     expect(
       JSON.parse(window.localStorage.getItem(CHART_TOGGLES_KEY) ?? "{}") as { vp?: boolean },
     ).toMatchObject({ vp: false });
+  });
+
+  /** 🟢 R2 SC-5:成交點 toggle 同樣是圖牆頂一顆管所有卡。
+   *  量法一律 **per-card** `polygon[data-testid^="fill-"]` —— 兩張卡同一分鐘同一側時
+   *  testid 會撞,document 級的 getByTestId 直接拋 multiple-elements。
+   *  `fills-layer` 群組不入計數(它恆存,數進去就永遠 > 0)。 */
+  it("localStorage 預種 fills:false → 掛載即無三角;按「成交點」→ 兩張卡同時出現", async () => {
+    window.localStorage.setItem(
+      CHART_TOGGLES_KEY,
+      JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, v: 2 }),
+    );
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const cards = [
+      await screen.findByTestId("group-card-2330"),
+      screen.getByTestId("group-card-2317"),
+    ];
+    const marks = (el: HTMLElement) =>
+      el.querySelectorAll('polygon[data-testid^="fill-"]').length;
+    // 存檔優先於預設(fills 預設是開的)—— 這條同時鎖住「重整後狀態保留」
+    for (const c of cards) expect(marks(c)).toBe(0);
+
+    fireEvent.click(screen.getByTestId("grid-toggle-fills"));
+    // **每一張**卡都要吃到(卡片各持一份 toggles 的話點一次只會亮一張)
+    await waitFor(() => expect(marks(cards[0]!)).toBeGreaterThan(0));
+    expect(marks(cards[1]!)).toBeGreaterThan(0);
+    expect(screen.getByTestId("grid-toggle-fills").getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByTestId("grid-toggle-fills"));
+    await waitFor(() => expect(marks(cards[0]!)).toBe(0));
+    expect(marks(cards[1]!)).toBe(0);
   });
 
   it("均價 toggle 同樣傳到每張卡(VWAP 白線 + 右緣價位標)", async () => {
