@@ -424,3 +424,52 @@ def test_fut_position_keyed_by_contract() -> None:
     p = s.position_for("TXFI6")
     assert p is not None
     assert p.market == "fut" and p.qty == -2
+
+
+# ---------------------------------------------------------------------------
+# 本 app 送出的市價單記憶(SC-10):回報無價格別欄 → 送單結果與回報到達序不保證
+# ---------------------------------------------------------------------------
+
+
+def test_price_type_noted_before_reply_arrives() -> None:
+    """送單結果先回、N 回報後到(E5):dict 獨立於 _Agg,回報建立列時仍帶得出來。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260610")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
+    assert s.orders()[0].price_type == "market"
+
+
+def test_price_type_noted_after_reply_arrives() -> None:
+    """N 回報先到、送單結果後回:同樣要帶得出來(兩序皆成立才是與到達序無關)。"""
+    s = CapitalStore()
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
+    assert s.orders()[0].price_type is None
+    s.note_price_type(SEQ_A, "market", "20260610")
+    assert s.orders()[0].price_type == "market"
+
+
+def test_price_type_not_applied_across_days() -> None:
+    """server 長跑跨日、seq 重用(review R7):記錄日與委託日不符一律不帶 —
+    今日的限價單被標成「市價」是憑空的假訊息,寧可缺標籤。日期缺(None)同樣不帶。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260610")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260611"))
+    assert s.orders()[0].price_type is None
+    # 委託日缺值 → 無從比對,不帶
+    s2 = CapitalStore()
+    s2.note_price_type(SEQ_B, "market", "20260610")
+    s2.apply_reply(_evt(seq=SEQ_B, date=""))
+    assert s2.orders()[0].date is None
+    assert s2.orders()[0].price_type is None
+
+
+def test_price_type_survives_clear_and_replay() -> None:
+    """clear() 只清委託聚合(回報重連重播前必做);送單意圖不是回報事件,
+    清掉的話重播後本 app 送的市價單全體失標。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260610")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
+    s.clear()
+    assert s.orders() == []
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
+    assert s.orders()[0].price_type == "market"
