@@ -37,3 +37,69 @@ export function settleFlashSend(
     ctx.showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
   });
 }
+
+// ---------------------------------------------------------------------------
+// 梯頂市價鈕的三態(SC-6 / SC-7 / SC-8)。三座梯各自算一次的話,「什麼時候鎖」這條
+// 安全規則會有三份且必然漂移 —— 純函式收在這裡,元件只餵判準。
+// ---------------------------------------------------------------------------
+
+/** 個股期前置閘的唯一說明。文案不點名 ETF —— 除權息調整契約(單位 2,157)也走同一條,
+ *  寫死「ETF」會讓那類標的的提示變成假訊息。`StkfutLadder` 的武裝鈕與市價鈕同源。 */
+export const BLOCKED_TEXT = "此契約規格暫未開放下單";
+
+/** 估價不可得 = fail-safe 鎖鈕。**不用假想界**:現股缺漲跌停時 buildLadder 會用 ±10%
+ *  假想界畫梯,拿它送單就是把一個猜出來的價格當真錢價位(current-state §4)。 */
+const MISSING_TEXT = "無成交價,市價鈕鎖定";
+const BUY_LOCKED_TEXT = "無券當沖不可買進";
+/** 現股:群益 `nSpecialTradeType=1` 真市價,估價只餵名目金額閘(KL-1)。 */
+const STOCK_OK_TEXT = "以市價送出:掃對手方(簿薄時可能以漲/跌停價成交);估價 = 最近成交價";
+/** 個股期 / 期貨:後端 fut market 映射是 `"M"` literal(OrderPanel 在用),本路徑改由
+ *  前端直送限價貼漲跌停 + IOC(D3a / current-state §3)。 */
+const EDGE_OK_TEXT =
+  "市價 = 限價貼漲/跌停 + IOC:掃對手方至成交完(簿薄時可能以漲/跌停價成交),餘量取消";
+
+export interface MarketBtnState {
+  buyDisabled: boolean;
+  sellDisabled: boolean;
+  buyTitle: string;
+  sellTitle: string;
+}
+
+/** 市價買 / 市價賣兩顆鈕的 disabled + title。
+ *
+ *  優先序 **blocked > estimateMissing > buyLocked**:前兩者兩顆全鎖,無券只鎖買側。
+ *  順序不可調 —— 估價缺時若讓「無券」文案蓋過去,使用者會以為只是買不了、賣得出去。 */
+export function marketButtonState(input: {
+  kind: "stock" | "stkfut" | "futures";
+  /** 現股 last===null;個股期 last===null || edge===null;期貨 center/edge/contract 任一缺 */
+  estimateMissing: boolean;
+  /** 現股無券當沖(`tradeKind === "daytrade_sell"`) */
+  buyLocked?: boolean;
+  /** 個股期非標準契約單位(後端 `_stkfut_gates` 必拒) */
+  blocked?: boolean;
+}): MarketBtnState {
+  if (input.blocked === true) {
+    return {
+      buyDisabled: true,
+      sellDisabled: true,
+      buyTitle: BLOCKED_TEXT,
+      sellTitle: BLOCKED_TEXT,
+    };
+  }
+  if (input.estimateMissing) {
+    return {
+      buyDisabled: true,
+      sellDisabled: true,
+      buyTitle: MISSING_TEXT,
+      sellTitle: MISSING_TEXT,
+    };
+  }
+  const okText = input.kind === "stock" ? STOCK_OK_TEXT : EDGE_OK_TEXT;
+  const buyLocked = input.buyLocked === true;
+  return {
+    buyDisabled: buyLocked,
+    sellDisabled: false,
+    buyTitle: buyLocked ? BUY_LOCKED_TEXT : okText,
+    sellTitle: okText,
+  };
+}

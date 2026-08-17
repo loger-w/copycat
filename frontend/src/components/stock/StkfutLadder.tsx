@@ -24,9 +24,10 @@ import {
   useCapitalPositions,
   useSubmitFuture,
 } from "@/hooks/useCapital";
+import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { LOCK_WS_TITLE } from "@/lib/flash-arm";
-import { settleFlashSend } from "@/lib/flash-send";
+import { BLOCKED_TEXT, marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
@@ -34,6 +35,7 @@ import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty
 import {
   instrumentKeyOf,
   isOrderBlocked,
+  stkfutMarketEdgeMilli,
   stkfutTc4Symbol,
   ymLabel,
   type StkfutSelection,
@@ -44,9 +46,6 @@ import type { CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
-/** 前置閘的唯一說明。文案不點名 ETF —— 除權息調整契約(單位 2,157)也走同一條
- *  (code review B3),寫死「ETF」會讓那類標的的提示變成假訊息。 */
-const BLOCKED_TEXT = "此契約規格暫未開放下單";
 
 /** 本合約部位(fut + 契約碼相等 + qty ≠ 0)。 */
 function contractPositions(
@@ -99,6 +98,7 @@ export function StkfutLadder({
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+  const lastMarketClick = useRef<{ key: string; ts: number } | null>(null);
   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
 
   const submitFuture = useSubmitFuture();
@@ -136,6 +136,15 @@ export function StkfutLadder({
     upper: meta?.upper ?? null,
     lower: meta?.lower ?? null,
     book,
+  });
+
+  // 市價鈕的貼漲跌停邊價(已 snap 到合法檔位);漲跌停缺 → null = 鎖鈕
+  const marketEdge = (side: "buy" | "sell") =>
+    stkfutMarketEdgeMilli(side, { upper: meta?.upper ?? null, lower: meta?.lower ?? null });
+  const marketState = marketButtonState({
+    kind: "stkfut",
+    estimateMissing: last === null || marketEdge("buy") === null || marketEdge("sell") === null,
+    blocked,
   });
 
   function showHint(text: string, autoClear = false): void {
@@ -181,6 +190,52 @@ export function StkfutLadder({
         dispatch: dispatchArm,
         showHint,
         okText: `已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`,
+      },
+    );
+  }
+
+  /** 梯頂市價鈕(SC-3)。個股期沒有可用的真市價路徑(後端 fut market → `"M"` literal,
+   *  OrderPanel 的 TXO 在用)→ 這裡直送**限價貼漲跌停 + IOC**(D3a):有對手就一路吃穿
+   *  各檔位、無對手即刻取消。邊價已 snap 到合法檔位,否則 `_stkfut_gates` 回 BAD_TICK。
+   *  防抖走獨立槽位(理由見 PriceLadder 同段註)。 */
+  function marketOrder(side: "buy" | "sell"): void {
+    touchIdle();
+    if (blocked) return; // UI 已 disabled,雙保險(後端亦拒 PRODUCT_NOT_ALLOWED)
+    const edge = marketEdge(side);
+    if (last === null || edge === null) return; // 估價缺:鈕已 disabled,雙保險
+    if (!arm.state.armed) {
+      showHint("未武裝 — 市價不送單", true);
+      return;
+    }
+    const now = Date.now();
+    if (
+      lastMarketClick.current !== null &&
+      lastMarketClick.current.key === side &&
+      now - lastMarketClick.current.ts < CLICK_DEBOUNCE_MS
+    ) {
+      return; // 同一顆 500ms 防抖
+    }
+    lastMarketClick.current = { key: side, ts: now };
+    const qty = qtyState.qty;
+    settleFlashSend(
+      submitFuture.mutateAsync({
+        tc4_symbol: stkfutTc4Symbol(contract),
+        buy_sell: side,
+        price: edge / 1000,
+        qty,
+        price_type: "limit",
+        time_in_force: "IOC",
+        day_trade: dayTrade,
+        source: "flash",
+      }),
+      {
+        alive: () => aliveRef.current,
+        dispatch: dispatchArm,
+        showHint,
+        // 契約碼缺(YYYYMM 解析失敗)才退回股號 —— hint 不得沒有標的(R-H)
+        okText: `已送 ${exchangeContract ?? code} 市價${
+          side === "buy" ? "買" : "賣"
+        } × ${qty} 口`,
       },
     );
   }
@@ -263,6 +318,7 @@ export function StkfutLadder({
       onClickPrice={clickPrice}
       onCancelLot={cancelLot}
       centerRequest={centerRequest}
+      ladderTop={<MarketOrderButtons onMarket={marketOrder} state={marketState} />}
       armControls={
         <label className="flex items-center gap-1 text-xs text-ink-muted">
           <input
