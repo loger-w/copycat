@@ -1,0 +1,26 @@
+{
+  "round": 1, "mode": "自評 §5 medium;2 lens(correctness / test-coverage-spec),opus", "date": "2026-08-18",
+  "diff": "3c580358..1602a739(review-diff.txt)",
+  "summary": {"P0": 0, "P1": 2, "P2": 15},
+  "findings": [
+    {"id":"C-1","severity":"P1","file":"copycat/live/signal_state.py:386","claim":"set_basis(None) 盲窗後同線價恢復,_side 殘留舊側別 → 舊碼不會發的穿越(重現:85.50 發 from_below ah=80)","disposition":"accepted","resolution":"set_basis 對該 code 清 _side(缺項退回 prev 推定 = 舊語意)+ 測試:有值→None→同線價恢復首筆不發"},
+    {"id":"T-1","severity":"P1","file":"copycat/server/signal_hub.py:1065","claim":"_same_tick 的 time 比對 mutation 存活(無同 code 不同 time 測試)","disposition":"accepted","resolution":"補 lock test:同 code 兩不同秒 tick → 2 則、第二則帶第二筆 time/price;mutation-verified"},
+    {"id":"C-2","severity":"P2","claim":"混向防禦 keep==0 任意保 above","disposition":"accepted","resolution":"keep==0 → 兩邊都不發 + warning;白箱測試塞 _side 造矛盾"},
+    {"id":"C-3","severity":"P2","claim":"_discord_pending 在 cancel/close 路徑未記帳/未 flush","disposition":"accepted","resolution":"close() 取消 worker 後清 pending + logger.info 記 id;測試 close 後 join 不吊死"},
+    {"id":"C-4","severity":"P2","claim":"group.key 取組首(最新到)→ 新成員前插即 remount;段序/價格與 Discord rows[0](最早)相反","disposition":"accepted","resolution":"key/price/段序改取組內最早到(items 反序 = 到達序);spec SC-5 amendment;測試釘 key 穩定"},
+    {"id":"C-5","severity":"P2","claim":"未分批合併被節流擋下無 id log","disposition":"accepted","resolution":"補 warning 含則數 + head id"},
+    {"id":"T-2","severity":"P2","claim":"後端規則名去重無測試","disposition":"accepted","resolution":"lock test"},
+    {"id":"T-3","severity":"P2","claim":"_BATCH_TAG_RESERVE 無測試","disposition":"accepted","resolution":"_split_batches 純函式測試 len(text)+tag ≤ 1900"},
+    {"id":"T-4","severity":"P2","claim":"合併節流計 1 則無斷言","disposition":"accepted","resolution":"lock test discord_per_min=1"},
+    {"id":"T-5","severity":"P2","claim":"混向防禦分支無測試","disposition":"accepted","resolution":"併 C-2"},
+    {"id":"T-6","severity":"P2","claim":"SC-7 截圖缺","disposition":"no_change_needed","resolution":"已補 evidence/SC-7-rules-summary.jpg + SC-7-rules-edit-dwell.jpg(reviewer 跑時尚未產出);SC-5 檔名 SC-5-rail-merged.jpg 記 spec"},
+    {"id":"T-7","severity":"P2","claim":"replay 腳本 + bars 未進版控;未印 jsonl 旁證","disposition":"accepted","resolution":"主 session 補印 jsonl 120 旁證;收尾 artifact commit 一併進版控"},
+    {"id":"T-8","severity":"P2","claim":"0d81d670 [green] 夾帶 test fixture 補鍵","disposition":"accepted_recorded","resolution":"不改歷史;fixture 補鍵斷言未動(W3);記 progress"},
+    {"id":"T-9","severity":"P2","claim":"commit 順序偏離 §6 🔵→🟢→🔴","disposition":"accepted_recorded","resolution":"以包為單位切分所致;三類不混未破;記 progress"},
+    {"id":"T-10","severity":"P2","claim":"rearm_dwell_secs step=1 與 D7 float 不一致;前端不擋值域","disposition":"rejected_with_reason","resolution":"沿既有 window_secs 同款慣例(step 1、值域由後端擋);記 next-time"},
+    {"id":"T-11","severity":"P2","claim":"同 C-4 key 穩定性","disposition":"accepted","resolution":"併 C-4"},
+    {"id":"T-12","severity":"P2","claim":"「・」分隔符無 aria-hidden;title 對應關係丟失","disposition":"accepted(partial)","resolution":"分隔符加 aria-hidden;title 維持整組合併字串(顯示層取捨)"}
+  ],
+  "whitelist_check": "W1–W10 皆 ok(correctness lens 逐條對照,見 agent 回報)",
+  "p2_summary": "15 條:測試強度 ×5、交付物/流程 ×4、狀態機邊界 ×2、Discord 記帳/log ×2、前端 key/a11y ×2"
+}

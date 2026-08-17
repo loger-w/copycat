@@ -1,0 +1,21 @@
+{
+  "round": 1, "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-18",
+  "summary": {"P0": 1, "P1": 9, "P2": 5},
+  "findings": [
+    {"id":"R1","severity":"P0","topic":"SC-4 合併訊息漏 _group_suffix","disposition":"accepted","resolution":"SC-4 文案補 + _group_suffix(rows[0]);W7 改寫;§6 註明 _send_discord(rows) 仍接摘要"},
+    {"id":"R2","severity":"P1","topic":"Discord lookahead 的 task_done 記帳與 leftover 去向未定","disposition":"accepted","resolution":"SC-4 明訂 pending 單槽、get_nowait 後立即 task_done、不回塞;補混排測試 + join 可完成"},
+    {"id":"R3","severity":"P1","topic":"合併後超長無既有截斷(bot/webhook 皆無)","disposition":"accepted","resolution":"edge 8 改具體規格:>1900 字分批送(各計一次節流),測試釘住"},
+    {"id":"R4","severity":"P1","topic":"_side 與 set_basis 生命週期不同步 / 混向 levels","disposition":"accepted","resolution":"side 存 (line_value, side);線價不同視為未知;同 tick 混向時 direction 以「多數/首線」不可 → 改為:各線各自判定但事件仍需單一 direction → 規定:同 tick 混向時只取與 prev→price 位移方向一致的線(位移向上取 from_below 線)。W2 補不變式 + 測試"},
+    {"id":"R5","severity":"P1","topic":"_side 更新須在 enabled gate 之前","disposition":"accepted","resolution":"§6 明寫;補停用期間穿越→重開不補發測試"},
+    {"id":"R6","severity":"P1","topic":"SC-6 兩臂只差 dwell,舊穿越臂做不出來;門檻校準錯位","disposition":"accepted","resolution":"SC-6 改為 baseline = 側別追蹤 + dwell 0;門檻 25% 保留但註明重量;腳本另印 jsonl 實際則數旁證"},
+    {"id":"R7","severity":"P1","topic":"必紅測試未列名(test_two_rules_same_kind_both_fire / SignalRail 著色 / useSignalRules fixture)","disposition":"accepted","resolution":"§6 逐條列名 + 處置"},
+    {"id":"R8","severity":"P1","topic":"合併列顏色未定","disposition":"accepted","resolution":"SC-5 逐段各自 toneOf;li key = 組內第一則 id;W8 補著色不變"},
+    {"id":"R9","severity":"P1","topic":"spec 缺 migration/回退章節","disposition":"accepted","resolution":"新增 §8 Migration / 回退"},
+    {"id":"R10","severity":"P1","topic":"補值來源不一致(cfg vs 常數)","disposition":"accepted","resolution":"採模組常數 _DEFAULT_REARM_DWELL_SECS=300.0,load_rules 簽名不動;current-state 同步"},
+    {"id":"R11","severity":"P2","topic":"合併訊息 price/name 來源、同 kind 文案重複","disposition":"accepted","resolution":"SC-4/SC-5 皆:price/name 取 rows[0];kind 文案去重、規則名去重"},
+    {"id":"R12","severity":"P2","topic":"dwell 起算時點","disposition":"accepted","resolution":"寫入 suppressed 當筆若已 ≥gap 以該 mono 起算,否則 None;加測試"},
+    {"id":"R13","severity":"P2","topic":"side 缺項通則","disposition":"accepted","resolution":"通則:缺項時以本 tick 決定;price==v 維持缺項;首筆早退不寫"},
+    {"id":"R14","severity":"P2","topic":"commit 順序與相依相反 / SignalRulesDialog 分類","disposition":"accepted","resolution":"順序改 🔵 → 🟢(純新增無 caller)→ 🔴,顯式覆寫 /mod 預設順序並註理由;Dialog 拆 🟢 欄位 + 🔴 摘要"},
+    {"id":"R15","severity":"P2","topic":"舊分頁送缺鍵 → INVALID_RULE","disposition":"accepted","resolution":"W9 註明預期降級(重新整理即可),不另做"}
+  ]
+}

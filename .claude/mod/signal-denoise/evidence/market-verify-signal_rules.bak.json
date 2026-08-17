@@ -1,0 +1,62 @@
+{
+ "_cache_version": 1,
+ "rules": [
+  {
+   "id": "r-1786504172-000",
+   "name": "CDP 穿越",
+   "kind": "cdp_cross",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 600,
+   "params": {
+    "rearm_ticks": 5.0
+   },
+   "cdp_levels": [
+    "ah",
+    "nh",
+    "cdp",
+    "nl",
+    "al"
+   ]
+  },
+  {
+   "id": "r-1786504172-001",
+   "name": "爆拉爆跌",
+   "kind": "surge_crash",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 1800,
+   "params": {
+    "pct": 2.0,
+    "window_secs": 300.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1786504172-002",
+   "name": "爆量",
+   "kind": "vol_burst",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 1800,
+   "params": {
+    "ratio": 3.0,
+    "window_secs": 300.0,
+    "min_elapsed_min": 15.0,
+    "min_window_lots": 100.0,
+    "min_day_lots": 500.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1786504172-003",
+   "name": "鎖漲跌停",
+   "kind": "limit_lock",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 600,
+   "params": {},
+   "cdp_levels": []
+  }
+ ]
+}

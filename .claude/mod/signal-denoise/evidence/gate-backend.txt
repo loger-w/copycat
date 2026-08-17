@@ -1,0 +1,9 @@
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2696 passed, 1 warning in 151.28s (0:02:31)
+PYTEST_EXIT=0
+All checks passed!
+RUFF_EXIT=0
+0 errors, 0 warnings, 0 informations
+compare.md
+doctor-after.txt
+doctor-baseline.txt

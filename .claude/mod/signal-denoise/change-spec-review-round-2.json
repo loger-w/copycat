@@ -1,0 +1,13 @@
+{
+  "round": 2, "scope": "限縮輪:只審 [amendment 2026-08-18] 段落", "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-18",
+  "summary": {"P0": 1, "P1": 1, "P2": 5},
+  "findings": [
+    {"id":"R16","severity":"P0","topic":"側別缺項『不判穿越』會吃掉每檔每日首次穿越(fresh 首筆早退 → 第二筆缺項)","disposition":"accepted","resolution":"SC-2 (a) 改為缺項時以 prev 推定側別(等價舊語意),僅 prev==v 且無存值才視為未知;R13 的 sentinel 不再需要。屬 spec 措辭缺陷,修法恢復向後相容、無方向性抉擇 → 主 session 直接修,不停下問 user(core-flow §3『限縮輪後仍有 P0 → 三選一』的前提是 scope/架構級 P0;此處記錄為流程備註)"},
+    {"id":"R17","severity":"P1","topic":"取出即 task_done 讓 join() 在 pending 未送前返回","disposition":"accepted","resolution":"task_done 一律送出後;pending 在下一輪送完才 task_done;join 語意保留"},
+    {"id":"R18","severity":"P2","topic":"head 為 pending 時的重複 task_done","disposition":"accepted","resolution":"每 row 恰一次、在送出後;補『三輪含 pending 混排不拋、worker 存活』測試"},
+    {"id":"R19","severity":"P2","topic":"§6 清單順序與宣告不一致","disposition":"accepted","resolution":"🟢 signals_config / signal-model 上移;🔴 條目標前置"},
+    {"id":"R20","severity":"P2","topic":"基準數字 134/136 不一致、25% 分母未定","disposition":"accepted","resolution":"SC-6 明寫分母 = dwell 0 臂實測;三個數字來源逐一註明;current-state 同步"},
+    {"id":"R21","severity":"P2","topic":"遷移補值(常數)與種子(cfg)可能不同源","disposition":"accepted","resolution":"§7 註記已知分歧 + 遷移 logger.info 留痕"},
+    {"id":"R22","severity":"P2","topic":"分批 × 節流 → 半截訊息靜默","disposition":"accepted","resolution":"批尾 (i/N) + 被擋批 logger.warning"}
+  ]
+}

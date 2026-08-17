@@ -1,0 +1,7 @@
+[2m Test Files [22m [1m[32m127 passed[39m[22m[90m (127)[39m
+[2m      Tests [22m [1m[32m2220 passed[39m[22m[90m (2220)[39m
+TSC_EXIT=0
+ESLINT_EXIT=0
+  [1mGitHub:[22m [36mhttps://github.com/millionco/react-doctor[39m
+[2m  Report issues and star the repository![22m
+

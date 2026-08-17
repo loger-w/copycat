@@ -1,0 +1,1763 @@
+diff --git a/copycat/live/signal_state.py b/copycat/live/signal_state.py
+index 89c40503..14229ba6 100644
+--- a/copycat/live/signal_state.py
++++ b/copycat/live/signal_state.py
+@@ -9,6 +9,14 @@
+   `_limit_latch` 無條件推進,`enabled` 只決定該 kind 是否「產出事件 + 寫
+   cooldown/touch_count/suppressed」。關掉爆拉不影響共用同一個窗的爆量;停用期間
+   鎖上→打開的 latch 照常轉移,重開後不會補發一則過期的打開。
++- **CDP rearm 是「距離 + 駐留」兩道**(signal-denoise SC-1):解除 suppressed 要
++  **連續**待在線外(`|price − 線價| ≥ cdp_rearm_ticks × tick`)滿 `cdp_rearm_dwell_secs`,
++  中途任一筆回到帶內即歸零重算。起算時點就記在 `_suppressed` 的值上(None = 帶內 /
++  尚未起算);穿越當筆若已在線外(跳空)即從該筆起算。`dwell = 0` 完全等於舊語意。
++- **穿越判定看側別不看不等式**(signal-denoise SC-2):`_side[(code, level)] =
++  (線價, −1/0/+1)`,`price == 線價` 是「線上」—— 不觸發也不改變側別,穿越 = 上一個
++  非線上側別與本 tick 側別相反。側別存了線價,基準換線即自動失效(改由 `prev` 推定)。
++  側別推進與駐留計時同屬狀態推進,在 `enabled` gate **之前**跑。
+ - **接線層(SignalHub)持有所有 IO 與 membership gate**,本模組不認得自選清單。
+ 
+ 呼叫順序契約(換日,design §4.1 stage2):**先 `reset_day()` 再 promote 暫存基準**
+@@ -98,6 +106,11 @@ def _clock_key(now: _dt.datetime) -> str:
+     return f"{now:%H:%M:%S}.{now.microsecond // 1000:03d}"
+ 
+ 
++def _sign(value: int) -> int:
++    """−1 / 0 / +1;0 = 「在線上」,不是任何一側。"""
++    return (value > 0) - (value < 0)
++
++
+ class SignalDetector:
+     def __init__(
+         self,
+@@ -112,7 +125,10 @@ class SignalDetector:
+         self._staged_date: str | None = None  # 暫存區的基準日(MFS-2:跨日殘渣的唯一辨識)
+         self._prev: dict[str, int] = {}
+         self._window: dict[str, deque[tuple[float, int, int]]] = {}
+-        self._suppressed: set[tuple[str, str]] = set()
++        # 值 = 「連續線外」的起算 mono(None = 目前在帶內 / 尚未起算)
++        self._suppressed: dict[tuple[str, str], float | None] = {}
++        # (code, level) → (線價, 側別 −1/0/+1);線價一起存,基準換線即自動失效
++        self._side: dict[tuple[str, str], tuple[int, int]] = {}
+         self._cooldown: dict[tuple[str, str, str], float] = {}
+         self._touch: dict[tuple[str, str, str], int] = {}
+         self._latch: dict[tuple[str, str], bool] = {}
+@@ -164,6 +180,7 @@ class SignalDetector:
+         self._prev.clear()
+         self._window.clear()
+         self._suppressed.clear()
++        self._side.clear()
+         self._cooldown.clear()
+         self._touch.clear()
+         self._latch.clear()
+@@ -173,7 +190,8 @@ class SignalDetector:
+         self._staged.pop(code, None)
+         self._prev.pop(code, None)
+         self._window.pop(code, None)
+-        self._suppressed = {k for k in self._suppressed if k[0] != code}
++        self._suppressed = {k: v for k, v in self._suppressed.items() if k[0] != code}
++        self._side = {k: v for k, v in self._side.items() if k[0] != code}
+         self._cooldown = {k: v for k, v in self._cooldown.items() if k[0] != code}
+         self._touch = {k: v for k, v in self._touch.items() if k[0] != code}
+         self._latch = {k: v for k, v in self._latch.items() if k[0] != code}
+@@ -276,24 +294,12 @@ class SignalDetector:
+         basis = self._basis.get(code)
+         if not basis:
+             return []
+-        # rearm 解除是無條件檢查(停用期間也照解,重開後語意才對)
++        # 駐留計時與側別推進都是**狀態推進**,在 enabled gate 之前無條件跑(停用期間
++        # 也照走,重開後語意才對:不補發、方向也不會因為漏掉幾筆而反過來)。
+         gap = self._cfg.cdp_rearm_ticks * tick_size_milli(price)
+-        for name, value in basis.items():
+-            if (code, name) in self._suppressed and abs(price - value) >= gap:
+-                self._suppressed.discard((code, name))
+-        if "cdp_cross" not in enabled:
+-            return []
+-
+-        crossed: list[tuple[int, str]] = []
+-        direction: str | None = None
+-        for name, value in basis.items():
+-            if prev < value <= price:
+-                direction = "from_below"
+-                crossed.append((value, name))
+-            elif prev > value >= price:
+-                direction = "from_above"
+-                crossed.append((value, name))
+-        if not crossed or direction is None:
++        self._advance_rearm(code, basis, price, gap, mono)
++        direction, crossed = self._advance_sides(code, basis, prev, price)
++        if "cdp_cross" not in enabled or direction is None:
+             return []
+         # 固定序(id 決定性的前提):from_below 線價低→高、from_above 高→低
+         crossed.sort(key=lambda item: (item[0], item[1]), reverse=direction == "from_above")
+@@ -308,7 +314,9 @@ class SignalDetector:
+             return []
+         counts: dict[str, int] = {}
+         for name in levels:
+-            self._suppressed.add((code, name))
++            # 起算時點:當筆已在線外(跳空穿越)就從這一筆算,否則等第一筆線外 tick
++            outside = abs(price - basis[name]) >= gap
++            self._suppressed[(code, name)] = mono if outside else None
+             self._arm((code, "cdp_cross", name), mono, self._cfg.cdp_cooldown_secs)
+             counts[name] = self._bump((code, "cdp_cross", name))
+         return [
+@@ -325,6 +333,82 @@ class SignalDetector:
+             )
+         ]
+ 
++    def _advance_rearm(
++        self,
++        code: str,
++        basis: dict[str, int],
++        price: int,
++        gap: int,
++        mono: float,
++    ) -> None:
++        """suppressed 的解除:**連續**待在線外滿 `cdp_rearm_dwell_secs` 才解,回帶內即歸零。
++
++        起算時點記在 `_suppressed` 的值上(None = 目前在帶內 / 尚未起算)。只看
++        `|price − 線價| ≥ gap` 的絕對距離、不分上下側(跨側跳空本身會產生新的穿越判定,
++        分側只會讓稀疏 tick 誤歸零)。`cdp_rearm_dwell_secs = 0` 完全等於舊語意
++        「第一筆線外 tick 即解除」。
++        """
++        dwell = self._cfg.cdp_rearm_dwell_secs
++        for name, value in basis.items():
++            key = (code, name)
++            if key not in self._suppressed:
++                continue
++            if abs(price - value) < gap:
++                self._suppressed[key] = None  # 回帶內 → 駐留歸零重算
++                continue
++            since = self._suppressed[key]
++            if since is None:
++                since = mono
++                self._suppressed[key] = since
++            if mono - since >= dwell:
++                del self._suppressed[key]
++
++    def _advance_sides(
++        self,
++        code: str,
++        basis: dict[str, int],
++        prev: int,
++        price: int,
++    ) -> tuple[str | None, list[tuple[int, str]]]:
++        """推進「價格在線的哪一側」並回傳本 tick 的穿越(碰線點透明,SC-2)。
++
++        `price == 線價` 是「線上」:不觸發、也不改變側別。故逐 tick 走過線價的真穿越
++        (79.5 → 80.0 → 80.5)仍算一次 from_below,而「貼著線價來回」不算。側別連同
++        線價一起存(`_side[(code, level)] = (線價, 側別)`):基準盤中重設後線價一變,
++        舊側別自動失效,改由 `prev` 推定(等價舊式 `prev < v <= price`,每檔每日第一次
++        穿越照發)。`prev` 本身在線上且無存值 → 上一側別未知,只記側別不判穿越。
++        """
++        below: list[tuple[int, str]] = []
++        above: list[tuple[int, str]] = []
++        for name, value in basis.items():
++            key = (code, name)
++            stored = self._side.get(key)
++            last = stored[1] if stored is not None and stored[0] == value else _sign(prev - value)
++            cur = _sign(price - value)
++            self._side[key] = (value, cur if cur else last)  # 線上點保留上一側別
++            if not last or not cur or last == cur:
++                continue
++            (below if cur > 0 else above).append((value, name))
++        if below and above:  # 同一價格序列不可能同時上下穿 —— 不變式破了,保單一方向
++            keep = _sign(price - prev)
++            logger.warning(
++                "CDP 側別混向 code=%s prev=%s price=%s below=%s above=%s",
++                code,
++                prev,
++                price,
++                [name for _v, name in below],
++                [name for _v, name in above],
++            )
++            if keep > 0:
++                above = []
++            else:
++                below = []
++        if below:
++            return "from_below", below
++        if above:
++            return "from_above", above
++        return None, []
++
+     # ---- 爆拉 / 爆跌(SC-2)----
+ 
+     def _eval_surge(
+@@ -348,9 +432,12 @@ class SignalDetector:
+             kind = "crash"
+         else:
+             return []
+-        if self._cooling((code, kind, ""), mono):
++        # 冷卻桶 surge / crash 共用(SC-3):拉上去又摔下來是同一段行情,兩則訊號的
++        # 資訊量不獨立。`touch_count` 仍分 kind 計(`_bump` 用各自的鍵)。
++        bucket = (code, "surge_crash", "")
++        if self._cooling(bucket, mono):
+             return []
+-        self._arm((code, kind, ""), mono, self._cfg.surge_cooldown_secs)
++        self._arm(bucket, mono, self._cfg.surge_cooldown_secs)
+         return [
+             SignalEvent(
+                 kind=kind,
+diff --git a/copycat/server/signal_hub.py b/copycat/server/signal_hub.py
+index ed98be8d..3991e476 100644
+--- a/copycat/server/signal_hub.py
++++ b/copycat/server/signal_hub.py
+@@ -82,6 +82,7 @@ __all__ = [
+     "DISCORD_QUEUE_MAXSIZE",
+     "JSONL_QUEUE_MAXSIZE",
+     "SignalHub",
++    "format_signal_group_text",
+     "format_signal_text",
+ ]
+ 
+@@ -99,6 +100,10 @@ _BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
+ _BASIS_MAX_RETRIES = 2
+ _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
+ _DISCORD_WINDOW_SECS = 60.0
++#: 單則 Discord 訊息的字數上限(留在 2000 硬上限之下);超過依 row 分批,不截斷
++_DISCORD_MAX_CHARS = 1900
++#: 分批時預留給批尾 ` (i/N)` 的字數 —— 批數要切完才知道,先扣掉才不會切出超標的批
++_BATCH_TAG_RESERVE = 16
+ 
+ _LEVEL_LABEL = {"cdp": "中軸", "ah": "AH", "nh": "NH", "nl": "NL", "al": "AL"}
+ _LEVEL_ROLE = {"ah": "壓力", "nh": "壓力", "nl": "支撐", "al": "支撐"}
+@@ -149,6 +154,33 @@ def format_signal_text(row: dict[str, Any]) -> str:
+     return f"{text}｜{rule_name}" if rule_name else text
+ 
+ 
++def _dedup(items: list[str]) -> list[str]:
++    """保序去重(dict 保插入序):同 kind 兩規則同一 tick 只該印一段文案。"""
++    return list(dict.fromkeys(items))
++
++
++def format_signal_group_text(rows: list[dict[str, Any]]) -> str:
++    """同 (code, time) 多則的合併文案(SC-4)。
++
++    單則**逐字**委派給 `format_signal_text` —— 絕大多數訊號走的是這條路,合併版
++    自己重組一遍就等於開了第二份格式定義,漂掉時只會在真實推播上看見。
++
++    多則:kind 文案與規則名各自**去重**後以「・」串接(同 kind 兩規則同一 tick 印
++    兩段一模一樣的字沒有資訊);`price` / `name` / `code` / `time` 取 rows[0]
++    (同一秒同一檔,差別只在最後一筆的價位)。規則名段沿用「有才附」語意。
++    """
++    if len(rows) == 1:
++        return format_signal_text(rows[0])
++    head = rows[0]
++    price = head.get("price")
++    price_text = f"{price / 1000:.2f}" if isinstance(price, int) else "-"
++    who = f"{head.get('name') or ''} {head.get('code', '')}".strip()
++    kinds = "・".join(_dedup([_kind_text(row) for row in rows]))
++    text = f"🔔 {kinds}｜{who}｜{price_text}｜{head.get('time', '')}"
++    names = _dedup([str(row["rule_name"]) for row in rows if row.get("rule_name")])
++    return f"{text}｜{'・'.join(names)}" if names else text
++
++
+ @dataclass(frozen=True)
+ class _RuleSlot:
+     """規則 / detector / 開關集合是**不可分割**的一組(R2)。
+@@ -234,6 +266,9 @@ class SignalHub:
+         self._tasks: list[asyncio.Task[None]] = []
+         self._jsonl_task: asyncio.Task[None] | None = None
+         self._closing = False
++        #: Discord worker 的單槽緩衝(SC-4):取到不同 (code, time) 的那一則存這裡,
++        #: 下一輪當 head。回塞佇列會排到隊尾 → 順序亂掉,所以只能存在槽裡。
++        self._discord_pending: dict | None = None
+         self._discord_sender: Callable[[str], Any] | None = None
+         self._discord_sent: deque[_dt.datetime] = deque()
+         self.dropped_jsonl = 0
+@@ -785,16 +820,42 @@ class SignalHub:
+                 self._jsonl_queue.task_done()
+ 
+     async def _discord_worker(self) -> None:
++        """同 (code, time) 且**相鄰**的多 row 合成一則送出(SC-4)。
++
++        單槽 `_discord_pending`:取到不同組的那一則時把它**存起來**(不回塞佇列 ——
++        `put_nowait` 會排到隊尾,順序就亂了),下一輪直接當 head,不再 `get()`。
++
++        `task_done()` 一律在**送出之後**、batch 內每 row 恰一次;pending 那則要等它
++        自己當 head 送完才記。少記一格 `join()` 永遠不返回(關機卡住),多記一格則
++        `task_done() called too many times` 當場打死 worker(之後整天 Discord 無聲,
++        而 WS/jsonl 都正常)—— 兩種失效都不會指向這裡。
++        """
+         while True:
+-            row = await self._discord_queue.get()
++            head = self._discord_pending
++            if head is None:
++                head = await self._discord_queue.get()
++            else:
++                self._discord_pending = None
++            batch = [head]
++            while True:
++                try:
++                    row = self._discord_queue.get_nowait()
++                except asyncio.QueueEmpty:
++                    break
++                if _same_tick(row, head):
++                    batch.append(row)
++                else:
++                    self._discord_pending = row
++                    break
+             try:
+-                await self._send_discord(row)
++                await self._send_discord(batch)
+             except asyncio.CancelledError:
+                 raise
+             except Exception:
+-                logger.exception("Discord 發送失敗(worker 續行):%s", row.get("id"))
++                logger.exception("Discord 發送失敗(worker 續行):%s", head.get("id"))
+             finally:
+-                self._discord_queue.task_done()
++                for _ in batch:
++                    self._discord_queue.task_done()
+ 
+     async def _flush_pending(self) -> None:
+         """關機盡力落檔:jsonl 是歷史真相源,Discord 這時不再送。"""
+@@ -900,11 +961,41 @@ class SignalHub:
+         self._discord_sent.append(now)
+         return True
+ 
+-    async def _send_discord(self, row: dict) -> None:
+-        if not self._allow_discord():
+-            return
++    async def _send_discord(self, rows: list[dict]) -> None:
++        """一組(已確認同 code 同 time)row → 一則訊息;超長才依 row 分批。
++
++        分批的每一批**各計一次節流**(它們是各自獨立的一則訊息);後續批被擋下時
++        缺角要在 log 看得見 —— 截斷是更差的選項:被砍掉的那幾則在任何地方都不留痕。
++        """
++        head = rows[0]
+         # 摘要**只接在 Discord 這一段**:WS/jsonl 是歷史真相源,格式不隨通知裝飾漂移
+-        text = format_signal_text(row) + self._group_suffix(row)
++        suffix = self._group_suffix(head)
++        text = format_signal_group_text(rows) + suffix
++        if len(rows) == 1 or len(text) <= _DISCORD_MAX_CHARS:
++            if not self._allow_discord():
++                return
++            await self._send_text(text, head)
++            return
++        batches = _split_batches(rows, suffix)
++        total = len(batches)
++        blocked = 0
++        for index, batch in enumerate(batches, 1):
++            if not self._allow_discord():
++                blocked += 1
++                continue
++            await self._send_text(
++                f"{format_signal_group_text(batch)}{suffix} ({index}/{total})", head
++            )
++        if blocked:
++            logger.warning(
++                "Discord 合併訊息分 %d 批,其中 %d 批被節流擋下(缺角):%s",
++                total,
++                blocked,
++                head.get("id"),
++            )
++
++    async def _send_text(self, text: str, row: dict) -> None:
++        """單則送出:bot 優先,未送出 / 例外都降級走 webhook(log 用 row 的 id 追)。"""
+         sender = self._discord_sender
+         if sender is not None:
+             try:
+@@ -971,6 +1062,31 @@ def _peer_text(code: str, quote: tuple[str, float | None] | None) -> str:
+     return f"{code}{name} {'-' if chg is None else f'{chg:+.1f}%'}"
+ 
+ 
++def _same_tick(row: dict, head: dict) -> bool:
++    """合併粒度(D4):同 code + 同 `time`(秒)。row 不帶 time_key,秒是能拿到的最細。"""
++    return row.get("code") == head.get("code") and row.get("time") == head.get("time")
++
++
++def _split_batches(rows: list[dict], suffix: str) -> list[list[dict]]:
++    """依 row 貪婪切批,每批(含摘要與批尾標記的預留)不超過上限(edge 8)。
++
++    切不動的單 row(自己就超長)照樣自成一批送出 —— 現況本來就沒有截斷,本輪不改。
++    """
++    limit = _DISCORD_MAX_CHARS - _BATCH_TAG_RESERVE
++    batches: list[list[dict]] = []
++    current: list[dict] = []
++    for row in rows:
++        candidate = [*current, row]
++        if current and len(format_signal_group_text(candidate)) + len(suffix) > limit:
++            batches.append(current)
++            current = [row]
++        else:
++            current = candidate
++    if current:
++        batches.append(current)
++    return batches
++
++
+ def _put_drop_oldest(queue: asyncio.Queue[dict], row: dict) -> bool:
+     """有界佇列滿載策略(design R14):丟最舊再放入,熱路徑零反壓。回傳「是否丟了一筆」。"""
+     try:
+diff --git a/copycat/signal_rules.py b/copycat/signal_rules.py
+index e0edc787..3a023cc0 100644
+--- a/copycat/signal_rules.py
++++ b/copycat/signal_rules.py
+@@ -44,12 +44,17 @@ CDP_LEVELS: tuple[str, ...] = ("ah", "nh", "cdp", "nl", "al")
+ COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
+ #: REST 可寫入的無界量要有上限(R11)—— 熱路徑是 per-tick N × evaluate。
+ MAX_RULES = 30
+-_CACHE_VERSION = 1
++#: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`(見 `load_rules` 的遷移)。
++_CACHE_VERSION = 2
++#: v1→v2 補值。刻意是模組常數而非 `cfg.cdp_rearm_dwell_secs`:`load_rules(path)` 的簽名
++#: 不吃 config,為了遷移多接一個參數會讓所有呼叫端跟著改。與種子路徑(`_seed_params` 走
++#: cfg)的分歧在 `configs/signals.json` 覆寫該鍵時才會出現 —— 所以補值要 log 出來。
++_DEFAULT_REARM_DWELL_SECS = 300.0
+ 
+ #: 逐 kind 的 params 鍵集合與閉區間值域(R1)。鍵集合是**精確集合**:多鍵 / 缺鍵同樣是
+ #: INVALID_RULE —— 多鍵放行等於使用者以為調到的參數其實沒接上,缺鍵則會靜默套 detector 預設。
+ PARAM_SPECS: dict[str, dict[str, tuple[float, float]]] = {
+-    "cdp_cross": {"rearm_ticks": (0, 50)},
++    "cdp_cross": {"rearm_ticks": (0, 50), "rearm_dwell_secs": (0, 3600)},
+     "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
+     "vol_burst": {
+         "ratio": (1, 100),
+@@ -219,7 +224,10 @@ def _clamp(label: str, value: float, lo: float, hi: float) -> float:
+ def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
+     raw: dict[str, float] = {}
+     if kind == "cdp_cross":
+-        raw = {"rearm_ticks": float(cfg.cdp_rearm_ticks)}
++        raw = {
++            "rearm_ticks": float(cfg.cdp_rearm_ticks),
++            "rearm_dwell_secs": float(cfg.cdp_rearm_dwell_secs),
++        }
+     elif kind == "surge_crash":
+         raw = {"pct": float(cfg.surge_pct), "window_secs": float(cfg.surge_window_secs)}
+     elif kind == "vol_burst":
+@@ -269,12 +277,48 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
+     return rules
+ 
+ 
++def _migrate_v1(items: list[Any]) -> list[Any]:
++    """v1 → v2:`kind == "cdp_cross"` 且 params 缺 `rearm_dwell_secs` 的規則補預設。
++
++    只補鍵,不放寬任何驗證(補完照走 `normalize_rule`);非 dict / 非 cdp / 已帶該鍵
++    的項目原樣傳遞。輸入不就地修改 —— 呼叫端手上的 payload 還要拿來與磁碟原檔比對。
++    """
++    out: list[Any] = []
++    for item in items:
++        if not isinstance(item, dict):
++            out.append(item)
++            continue
++        obj = cast(dict[str, Any], item)
++        params = obj.get("params")
++        if obj.get("kind") != "cdp_cross" or not isinstance(params, dict):
++            out.append(obj)
++            continue
++        existing = cast(dict[str, Any], params)
++        if "rearm_dwell_secs" in existing:
++            out.append(obj)
++            continue
++        logger.info(
++            "訊號規則檔 v1→v2:規則 %r 補 rearm_dwell_secs=%s",
++            obj.get("id"),
++            _DEFAULT_REARM_DWELL_SECS,
++        )
++        out.append({**obj, "params": {**existing, "rearm_dwell_secs": _DEFAULT_REARM_DWELL_SECS}})
++    return out
++
++
+ def load_rules(path: Path) -> list[Rule] | None:
+     """三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。
+ 
+     「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活四條預設。
+     壞檔 / 驗證失敗 / 版本不符 / 超過 MAX_RULES 一律 raise —— 靜默套預設會在盤中
+     無預警地改變推播行為;raise 走 `_boot` 傘 → hub None → routes 503,大聲。
++
++    **v1 → v2 遷移(D6)**:`_cache_version == 1` 的檔案在記憶體裡補上 cdp 規則的
++    `rearm_dwell_secs`(= `_DEFAULT_REARM_DWELL_SECS`)後照常驗證;**載入時不回寫檔案**,
++    磁碟要到第一次 upsert 才以 v2 落檔 —— 這段就是回退窗:期間舊碼可直接讀原檔。
++    回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`,刪掉每條 cdp
++    規則的 `rearm_dwell_secs` 鍵、`_cache_version` 改回 1 → 起舊碼。
++    v2 檔缺該鍵不走遷移(是壞檔,不是舊檔);1 / 2 以外的版本一律 raise(既有語意)。
+     """
+     if not path.exists():
+         return None
+@@ -287,9 +331,10 @@ def load_rules(path: Path) -> list[Rule] | None:
+         logger.error("訊號規則檔格式非物件:%s", path)
+         raise _bad()
+     obj = cast(dict[str, Any], payload)
+-    if obj.get("_cache_version") != _CACHE_VERSION:
++    version = obj.get("_cache_version")
++    if version not in (_CACHE_VERSION, 1):
+         # 版本 bump 屬開發期動作,屆時必須同時寫轉換 —— 沒寫就該在啟動時被發現。
+-        logger.error("訊號規則檔版本不符(%s):%r", path, obj.get("_cache_version"))
++        logger.error("訊號規則檔版本不符(%s):%r", path, version)
+         raise _bad()
+     raw = obj.get("rules")
+     if not isinstance(raw, list):
+@@ -299,6 +344,8 @@ def load_rules(path: Path) -> list[Rule] | None:
+     if len(items) > MAX_RULES:
+         logger.error("訊號規則檔 %s 條超過上限 %s:%s", len(items), MAX_RULES, path)
+         raise _bad()
++    if version != _CACHE_VERSION:
++        items = _migrate_v1(items)
+     rules: dict[str, Rule] = {}
+     for item in items:
+         if not isinstance(item, dict):
+@@ -343,6 +390,7 @@ def rule_config(rule: Rule, base: SignalsConfig) -> SignalsConfig:
+         return replace(
+             base,
+             cdp_rearm_ticks=int(params["rearm_ticks"]),
++            cdp_rearm_dwell_secs=params["rearm_dwell_secs"],
+             cdp_cooldown_secs=cooldown,
+         )
+     if kind == "surge_crash":
+diff --git a/copycat/signals_config.py b/copycat/signals_config.py
+index 2f8ec678..8f224373 100644
+--- a/copycat/signals_config.py
++++ b/copycat/signals_config.py
+@@ -21,6 +21,8 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "signals.json
+ class SignalsConfig:
+     # --- CDP 穿越(SC-1)---
+     cdp_rearm_ticks: int = 5  # 觸發後需離開該線 N 個 tick 才解除 suppressed
++    # 觸發後需**連續**待在線外 N 秒才解除 suppressed;0 = 離線即解除(舊行為)
++    cdp_rearm_dwell_secs: float = 300.0
+     cdp_cooldown_secs: float = 600.0  # per (code, level) 冷卻
+     # --- 爆拉 / 爆跌(SC-2)---
+     surge_pct: float = 2.0  # 窗內漲跌幅門檻(%)
+diff --git a/frontend/src/components/stock/SignalRail.test.tsx b/frontend/src/components/stock/SignalRail.test.tsx
+index 8f4e827e..db2b0b40 100644
+--- a/frontend/src/components/stock/SignalRail.test.tsx
++++ b/frontend/src/components/stock/SignalRail.test.tsx
+@@ -161,6 +161,65 @@ describe("SignalRail 訊號列", () => {
+   });
+ });
+ 
++/** SC-5:同一 tick 常常同時打出 CDP 穿越 + 爆拉/爆跌,逐則一列時同一個時間點就吃掉
++ *  三四列 —— 200px 寬的欄位一眼看過去全是同一秒同一檔。 */
++describe("SignalRail 同 tick 合併列(SC-5)", () => {
++  const CDP = sig({
++    id: "a",
++    kind: "cdp_cross",
++    levels: ["cdp"],
++    direction: "from_below",
++    pct: null,
++    rule_name: "CDP 穿越",
++  });
++  const CRASH = sig({ id: "b", kind: "crash", direction: null, pct: -2.1, rule_name: "爆拉爆跌" });
++
++  it("同 code 同 time 的多則 → 一列,kind 文案以「・」串接", () => {
++    renderRail({ signals: [CDP, CRASH] });
++    const texts = rowTexts();
++    expect(texts.length).toBe(1);
++    expect(texts[0]).toContain("突破 CDP 中軸・爆跌 -2.10%");
++    expect(texts[0]).toContain("CDP 穿越・爆拉爆跌"); // 規則名同樣去重後串接
++  });
++
++  it("合併列每段各自著色(整段套同一色會把爆跌畫成紅的)", () => {
++    renderRail({ signals: [CDP, CRASH] });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    expect(list.getByText("突破 CDP 中軸").className).toContain("text-bull");
++    expect(list.getByText("爆跌 -2.10%").className).toContain("text-bear");
++  });
++
++  it("合併列的價格 / 時間取組內第一則,點列仍 onSelect(code)", () => {
++    const { onSelect } = renderRail({
++      signals: [CDP, sig({ ...CRASH, price: 999_000 })],
++    });
++    const [text = ""] = rowTexts();
++    expect(text).toContain("1050"); // 第一則的價格,不是第二則的 999
++    expect(text).not.toContain("999");
++    fireEvent.click(screen.getByText("2330"));
++    expect(onSelect.mock.calls).toEqual([["2330"]]);
++  });
++
++  it("同 code 不同 time → 各自成列(不跨秒合併)", () => {
++    renderRail({
++      signals: [
++        sig({ id: "t1", time: "09:31:24" }),
++        sig({ id: "t2", time: "09:31:23" }),
++        sig({ id: "t3", time: "09:31:22" }),
++      ],
++    });
++    expect(rowTexts().length).toBe(3);
++  });
++
++  // edge 7:被別檔同秒 row 隔開的同 (code, time) 不跨列搜尋(顯示保守正確)
++  it("同 (code, time) 但不相鄰 → 不合併", () => {
++    renderRail({
++      signals: [CDP, sig({ id: "x", code: "2317", name: "鴻海" }), CRASH],
++    });
++    expect(rowTexts().length).toBe(3);
++  });
++});
++
+ describe("SignalRail 規則區", () => {
+   const RULES = [
+     rule({ id: "r1", name: "CDP 穿越", kind: "cdp_cross", cdp_levels: ["ah"] }),
+diff --git a/frontend/src/components/stock/SignalRail.tsx b/frontend/src/components/stock/SignalRail.tsx
+index 049dff69..3d4575d5 100644
+--- a/frontend/src/components/stock/SignalRail.tsx
++++ b/frontend/src/components/stock/SignalRail.tsx
+@@ -4,9 +4,16 @@
+  *  元件內不呼叫 `useSignalFeed` / `useSignalRules`,免得每個測試都要架 TQ provider,
+  *  也讓規則切換的送出只有一個註冊點。 */
+ 
++import { Fragment } from "react";
++
+ import { errText, type SignalRule } from "@/hooks/useSignalRules";
+ import { fmt } from "@/lib/format";
+-import { kindLabel, type SignalMsg } from "@/lib/signal-model";
++import {
++  groupKindLabels,
++  groupRuleNames,
++  groupSignals,
++  type SignalMsg,
++} from "@/lib/signal-model";
+ import { cn } from "@/lib/utils";
+ 
+ interface Props {
+@@ -99,47 +106,60 @@ export function SignalRail({
+             那些列帶規則名、來源可辨識,而原本的隱藏語意會讓「剛剛看到的訊號」
+             在關掉規則的瞬間整批消失,看起來像資料掉了。 */}
+         <ul data-testid="signal-rail-list" className="min-h-0 flex-1 overflow-y-auto">
+-          {signals.map((sig) => (
+-            <li key={sig.id}>
+-              <button
+-                type="button"
+-                onClick={() => onSelect(sig.code)}
+-                className="flex w-full flex-col gap-0.5 border-b border-line px-1 py-1 text-left leading-tight hover:bg-surface"
+-              >
+-                {/* 兩行式:200px 欄寬一行塞不下時間 + 代號 + 名稱 + 訊號名 + 價格。
+-                    第一行是「誰、幾點」,第二行是「哪條規則發的、在什麼價位」。 */}
+-                <span className="flex w-full items-baseline gap-1">
+-                  <span className="shrink-0 font-mono text-xs text-ink-dim">{hhmm(sig.time)}</span>
+-                  <span className="shrink-0 font-mono text-sm text-ink">{sig.code}</span>
+-                  <span className="min-w-0 truncate text-xs text-ink-muted">{sig.name}</span>
+-                </span>
+-                <span className="flex w-full items-baseline justify-between gap-1">
+-                  {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
+-                      漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
+-                      規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
+-                      升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
+-                  <span
+-                    title={
+-                      sig.rule_name === undefined || sig.rule_name === ""
+-                        ? kindLabel(sig)
+-                        : `${kindLabel(sig)}(${sig.rule_name})`
+-                    }
+-                    className="flex min-w-0 items-baseline gap-1"
+-                  >
+-                    <span className={cn("min-w-0 truncate text-xs", toneOf(sig))}>
+-                      {kindLabel(sig)}
++          {/* **同一 tick 合併成一列**(SC-5):CDP 穿越與爆拉/爆跌常常由同一筆成交
++              同時觸發,逐則一列時同一秒同一檔就吃掉三四列,而 200px 欄寬本來就只
++              放得下十來列。合併只發生在顯示層 —— WS payload / jsonl / toast 仍逐則。 */}
++          {groupSignals(signals).map((group) => {
++            const segments = groupKindLabels(group);
++            const kindText = segments.map((seg) => seg.label).join("・");
++            const ruleText = groupRuleNames(group).join("・");
++            return (
++              <li key={group.key}>
++                <button
++                  type="button"
++                  onClick={() => onSelect(group.code)}
++                  className="flex w-full flex-col gap-0.5 border-b border-line px-1 py-1 text-left leading-tight hover:bg-surface"
++                >
++                  {/* 兩行式:200px 欄寬一行塞不下時間 + 代號 + 名稱 + 訊號名 + 價格。
++                      第一行是「誰、幾點」,第二行是「哪條規則發的、在什麼價位」。 */}
++                  <span className="flex w-full items-baseline gap-1">
++                    <span className="shrink-0 font-mono text-xs text-ink-dim">
++                      {hhmm(group.time)}
+                     </span>
+-                    {sig.rule_name !== undefined && sig.rule_name !== "" ? (
+-                      <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
+-                        {sig.rule_name}
++                    <span className="shrink-0 font-mono text-sm text-ink">{group.code}</span>
++                    <span className="min-w-0 truncate text-xs text-ink-muted">{group.name}</span>
++                  </span>
++                  <span className="flex w-full items-baseline justify-between gap-1">
++                    {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
++                        漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
++                        規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
++                        升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
++                    <span
++                      title={ruleText === "" ? kindText : `${kindText}(${ruleText})`}
++                      className="flex min-w-0 items-baseline gap-1"
++                    >
++                      {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
++                          整段套第一則的 tone 會把其中一半畫成相反的方向。 */}
++                      <span className="min-w-0 truncate text-xs">
++                        {segments.map((seg, i) => (
++                          <Fragment key={seg.label}>
++                            {i === 0 ? null : <span className="text-ink-muted">・</span>}
++                            <span className={toneOf(seg.sig)}>{seg.label}</span>
++                          </Fragment>
++                        ))}
+                       </span>
+-                    ) : null}
++                      {ruleText === "" ? null : (
++                        <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
++                          {ruleText}
++                        </span>
++                      )}
++                    </span>
++                    <span className="shrink-0 font-mono text-xs text-ink">{fmt(group.price)}</span>
+                   </span>
+-                  <span className="shrink-0 font-mono text-xs text-ink">{fmt(sig.price)}</span>
+-                </span>
+-              </button>
+-            </li>
+-          ))}
++                </button>
++              </li>
++            );
++          })}
+           {signals.length === 0 ? (
+             <li className="px-1 py-2 text-xs text-ink-dim">尚無訊號</li>
+           ) : null}
+diff --git a/frontend/src/components/stock/SignalRulesDialog.test.tsx b/frontend/src/components/stock/SignalRulesDialog.test.tsx
+index 4a4ca02e..a747fd7b 100644
+--- a/frontend/src/components/stock/SignalRulesDialog.test.tsx
++++ b/frontend/src/components/stock/SignalRulesDialog.test.tsx
+@@ -13,7 +13,7 @@ const CDP: SignalRule = {
+   enabled: true,
+   notify_discord: true,
+   cooldown_secs: 300,
+-  params: { rearm_ticks: 2 },
++  params: { rearm_ticks: 2, rearm_dwell_secs: 300 },
+   cdp_levels: ["ah", "nl"],
+ };
+ 
+@@ -104,6 +104,9 @@ describe("SignalRulesDialog 列表", () => {
+     const text = screen.getByTestId("rule-row-r1").textContent ?? "";
+     expect(text).toContain("AH+NL"); // 監看線
+     expect(text).toContain("重新武裝 2 tick");
++    // 🔴 SC-7:駐留秒數是 rearm 能不能解除的另一半門檻,摘要不印它 = 兩條規則
++    // 只差在這一欄時列表上長得一模一樣
++    expect(text).toContain("駐留 300 秒");
+     expect(text).toContain("冷卻 300 秒");
+   });
+ 
+@@ -255,6 +258,22 @@ describe("SignalRulesDialog 編輯表單", () => {
+     expect(body.cdp_levels).toEqual([]);
+   });
+ 
++  // SC-7:CDP 的 rearm 加了「線外駐留」門檻,params 鍵集必須與後端 PARAM_SPECS
++  // 完全相同(缺鍵同樣是 INVALID_RULE)—— 欄位在畫面上、值在 payload 裡各釘一次
++  it("CDP 規則有「線外駐留秒數」欄位(預設 300),送出 payload 帶 rearm_dwell_secs", async () => {
++    open();
++    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
++    const dwell = screen.getByLabelText("線外駐留秒數") as HTMLInputElement;
++    expect(dwell.value).toBe("300");
++
++    fireEvent.change(screen.getByLabelText("名稱"), { target: { value: "CDP 新規" } });
++    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
++
++    await waitFor(() => expect(writes()).toHaveLength(1));
++    const body = JSON.parse(String(writes()[0]!.init.body)) as Record<string, unknown>;
++    expect(body.params).toEqual({ rearm_ticks: 2, rearm_dwell_secs: 300 });
++  });
++
+   it("名稱空白 / 數字欄位非數字 → 零送出並顯示文案", async () => {
+     open();
+     fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
+diff --git a/frontend/src/components/stock/SignalRulesDialog.tsx b/frontend/src/components/stock/SignalRulesDialog.tsx
+index 930f4e17..ee3aeb1e 100644
+--- a/frontend/src/components/stock/SignalRulesDialog.tsx
++++ b/frontend/src/components/stock/SignalRulesDialog.tsx
+@@ -44,7 +44,12 @@ interface ParamField {
+  *  同樣是 INVALID_RULE)。`vol_burst.window_secs` 對到後端的 `surge_window_secs`,
+  *  那是 detector 的共用欄,per-rule detector 讓兩者得以各自獨立。 */
+ const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
+-  cdp_cross: [{ key: "rearm_ticks", label: "重新武裝 tick 數", step: "1" }],
++  cdp_cross: [
++    { key: "rearm_ticks", label: "重新武裝 tick 數", step: "1" },
++    // 距離門檻(tick)與時間門檻(秒)是同一個 rearm 的兩半 —— 擺在一起才看得出
++    // 「離線 N tick 且撐滿 M 秒才解除」是一句話,不是兩條獨立設定
++    { key: "rearm_dwell_secs", label: "線外駐留秒數", step: "1" },
++  ],
+   surge_crash: [
+     { key: "pct", label: "漲跌幅 %", step: "0.1" },
+     { key: "window_secs", label: "時間窗(秒)", step: "1" },
+@@ -60,7 +65,7 @@ const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
+ };
+ 
+ const PARAM_DEFAULTS: Record<RuleKind, Record<string, string>> = {
+-  cdp_cross: { rearm_ticks: "2" },
++  cdp_cross: { rearm_ticks: "2", rearm_dwell_secs: "300" },
+   surge_crash: { pct: "1.5", window_secs: "60" },
+   vol_burst: {
+     ratio: "3",
+@@ -127,7 +132,7 @@ function ruleSummary(rule: SignalRule): string {
+   const p = rule.params;
+   if (rule.kind === "cdp_cross") {
+     const levels = rule.cdp_levels.map((x) => LEVEL_LABEL[x] ?? x.toUpperCase()).join("+");
+-    return `${levels} · 重新武裝 ${num(p.rearm_ticks)} tick · ${cooldown}`;
++    return `${levels} · 重新武裝 ${num(p.rearm_ticks)} tick · 駐留 ${num(p.rearm_dwell_secs)} 秒 · ${cooldown}`;
+   }
+   if (rule.kind === "surge_crash") {
+     return `±${num(p.pct)}% / ${num(p.window_secs)} 秒 · ${cooldown}`;
+diff --git a/frontend/src/hooks/useSignalRules.test.tsx b/frontend/src/hooks/useSignalRules.test.tsx
+index 699680a7..090f5837 100644
+--- a/frontend/src/hooks/useSignalRules.test.tsx
++++ b/frontend/src/hooks/useSignalRules.test.tsx
+@@ -21,7 +21,7 @@ function rule(o: Partial<SignalRule> = {}): SignalRule {
+     enabled: true,
+     notify_discord: true,
+     cooldown_secs: 300,
+-    params: { rearm_ticks: 2 },
++    params: { rearm_ticks: 2, rearm_dwell_secs: 300 },
+     cdp_levels: ["ah", "nh", "cdp", "nl", "al"],
+     ...o,
+   };
+diff --git a/frontend/src/lib/signal-model.test.ts b/frontend/src/lib/signal-model.test.ts
+index 2913ae4b..c9bd1e4c 100644
+--- a/frontend/src/lib/signal-model.test.ts
++++ b/frontend/src/lib/signal-model.test.ts
+@@ -1,6 +1,14 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { formatToastText, kindLabel, mergeSignals, type SignalMsg } from "@/lib/signal-model";
++import {
++  formatToastText,
++  groupKindLabels,
++  groupRuleNames,
++  groupSignals,
++  kindLabel,
++  mergeSignals,
++  type SignalMsg,
++} from "@/lib/signal-model";
+ 
+ function sig(overrides: Partial<SignalMsg> = {}): SignalMsg {
+   return {
+@@ -123,3 +131,103 @@ describe("mergeSignals", () => {
+     expect(mergeSignals([], [])).toEqual([]);
+   });
+ });
++
++/** SC-5:同一 tick 打出多則訊號(CDP 穿越 + 爆拉…)時清單一列一組。
++ *  輸入已是 `mergeSignals` 的輸出(新在前),分組只看**相鄰**:不相鄰的同 (code, time)
++ *  各自成組(edge 7)—— 跨列搜尋會把中間那則別檔的列擠掉,顯示保守正確優先。 */
++describe("groupSignals", () => {
++  const cdp = sig({
++    id: "g1",
++    kind: "cdp_cross",
++    levels: ["cdp"],
++    direction: "from_above",
++    pct: null,
++    time: "09:31:22",
++    price: 1_000_000,
++    rule_name: "CDP 穿越",
++  });
++  const crash = sig({
++    id: "g2",
++    kind: "crash",
++    pct: -2.1,
++    time: "09:31:22",
++    price: 999_000,
++    rule_name: "爆跌",
++  });
++
++  it("相鄰且同 (code, time) 併成一組", () => {
++    const groups = groupSignals([cdp, crash]);
++    expect(groups.length).toBe(1);
++    expect(groups[0]?.items.map((s) => s.id)).toEqual(["g1", "g2"]);
++  });
++
++  it("組的 key / 價格 / 名稱 / 時間取組內第一則", () => {
++    const [group] = groupSignals([cdp, crash]);
++    expect(group?.key).toBe("g1");
++    expect(group?.code).toBe("2330");
++    expect(group?.name).toBe("台積電");
++    expect(group?.time).toBe("09:31:22");
++    expect(group?.price).toBe(1_000_000);
++  });
++
++  it("不同 code 不併(同一秒兩檔各自成列)", () => {
++    const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
++    expect(groupSignals([cdp, other]).length).toBe(2);
++  });
++
++  it("同 code 不同 time 不併", () => {
++    const later = sig({ id: "g4", time: "09:31:23" });
++    expect(groupSignals([cdp, later]).length).toBe(2);
++  });
++
++  it("保序:組序 = 輸入序,組內序 = 輸入序", () => {
++    const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
++    const groups = groupSignals([other, cdp, crash]);
++    expect(groups.map((g) => g.key)).toEqual(["g3", "g1"]);
++    expect(groups[1]?.items.map((s) => s.id)).toEqual(["g1", "g2"]);
++  });
++
++  // edge 7:被別檔同秒 row 隔開的同 (code, time) 不跨列搜尋
++  it("不相鄰的同 (code, time) 各自成組", () => {
++    const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
++    expect(groupSignals([cdp, other, crash]).map((g) => g.key)).toEqual(["g1", "g3", "g2"]);
++  });
++
++  it("空輸入回空陣列", () => {
++    expect(groupSignals([])).toEqual([]);
++  });
++});
++
++describe("groupKindLabels / groupRuleNames", () => {
++  const base = sig({ id: "k1", kind: "surge", pct: 1.2, time: "09:31:22", rule_name: "早盤急拉" });
++
++  it("每段 kind 文案帶自己的代表 sig(逐段著色的輸入)", () => {
++    const dive = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急殺" });
++    const [group] = groupSignals([base, dive]);
++    const segments = groupKindLabels(group!);
++    expect(segments.map((s) => s.label)).toEqual(["爆拉 +1.20%", "爆跌 -1.20%"]);
++    expect(segments.map((s) => s.sig.id)).toEqual(["k1", "k2"]);
++  });
++
++  // 同 kind 兩條規則同 tick 各發一則 → 文案一模一樣,印兩段只是雜訊
++  it("同文案只留一段(保留首見順序)", () => {
++    const twin = sig({ id: "k2", kind: "surge", pct: 1.2, time: "09:31:22", rule_name: "另一條" });
++    const [group] = groupSignals([base, twin]);
++    const segments = groupKindLabels(group!);
++    expect(segments.map((s) => s.label)).toEqual(["爆拉 +1.20%"]);
++    expect(segments[0]?.sig.id).toBe("k1");
++  });
++
++  it("規則名去重、保留首見順序", () => {
++    const twin = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急拉" });
++    const [group] = groupSignals([base, twin]);
++    expect(groupRuleNames(group!)).toEqual(["早盤急拉"]);
++  });
++
++  it("規則名缺值 / 空字串不入清單(升級當日的舊 jsonl 行)", () => {
++    const old = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "" });
++    const older = sig({ id: "k3", kind: "vol_burst", pct: 3, time: "09:31:22" });
++    const [group] = groupSignals([base, old, older]);
++    expect(groupRuleNames(group!)).toEqual(["早盤急拉"]);
++  });
++});
+diff --git a/frontend/src/lib/signal-model.ts b/frontend/src/lib/signal-model.ts
+index f0db0348..54e553c9 100644
+--- a/frontend/src/lib/signal-model.ts
++++ b/frontend/src/lib/signal-model.ts
+@@ -109,3 +109,75 @@ export function mergeSignals(
+   out.sort((a, b) => (a.time === b.time ? 0 : a.time > b.time ? -1 : 1));
+   return out.length > cap ? out.slice(0, cap) : out;
+ }
++
++/** 同一 tick(同 code、同 `time`)的一組訊號 —— 清單上顯示成一列(SC-5)。 */
++export interface SignalGroup {
++  /** 組內第一則的 id。**用它當 list key**:組員數會隨新訊號到達而變,
++   *  以「id 串接」當 key 時同一列每多一則就換一次 key = 整列卸載重掛。 */
++  key: string;
++  code: string;
++  name: string;
++  time: string;
++  /** 組內第一則的價格(輸入是「新在前」,即該 tick 最新的那筆)。 */
++  price: number;
++  items: SignalMsg[];
++}
++
++/** kind 文案的一段 + 產生它的訊號(著色要的是**該段自己**的 tone,不是整組的)。 */
++export interface KindSegment {
++  label: string;
++  sig: SignalMsg;
++}
++
++/** 相鄰且同 (code, time) 的訊號併成一組;輸入即輸出序(不排序、不去重)。
++ *
++ *  **只看相鄰**:輸入是 `mergeSignals` 的輸出(依 time 降冪、同秒維持插入序),
++ *  同一秒兩檔交錯時(edge 7)跨列搜尋會把中間那檔的列吃掉 —— 顯示上寧可多一列
++ *  也不要把不同標的的訊號併進同一列。 */
++export function groupSignals(signals: SignalMsg[]): SignalGroup[] {
++  const groups: SignalGroup[] = [];
++  for (const sig of signals) {
++    const last = groups.at(-1);
++    if (last !== undefined && last.code === sig.code && last.time === sig.time) {
++      last.items.push(sig);
++      continue;
++    }
++    groups.push({
++      key: sig.id,
++      code: sig.code,
++      name: sig.name,
++      time: sig.time,
++      price: sig.price,
++      items: [sig],
++    });
++  }
++  return groups;
++}
++
++/** 組內 kind 文案分段(首見順序),**同文案只留一段**:同 kind 兩條規則在同一
++ *  tick 各發一則時文案一模一樣,印兩段只是雜訊(規則名另外列)。 */
++export function groupKindLabels(group: SignalGroup): KindSegment[] {
++  const seen = new Set<string>();
++  const out: KindSegment[] = [];
++  for (const sig of group.items) {
++    const label = kindLabel(sig);
++    if (seen.has(label)) continue;
++    seen.add(label);
++    out.push({ label, sig });
++  }
++  return out;
++}
++
++/** 組內規則名去重(首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,整段略過
++ *  —— 留下來只會變成一個沒有內容的分隔符。 */
++export function groupRuleNames(group: SignalGroup): string[] {
++  const seen = new Set<string>();
++  const out: string[] = [];
++  for (const sig of group.items) {
++    const name = sig.rule_name;
++    if (name === undefined || name === "" || seen.has(name)) continue;
++    seen.add(name);
++    out.push(name);
++  }
++  return out;
++}
+diff --git a/tests/live/test_signal_state.py b/tests/live/test_signal_state.py
+index b2d5041c..aa3724a5 100644
+--- a/tests/live/test_signal_state.py
++++ b/tests/live/test_signal_state.py
+@@ -132,20 +132,145 @@ class TestCdpCross:
+         assert det.evaluate("2330", _tick(80_050), _ctx(), _ALL) == []  # 再穿回,仍未解除
+ 
+     def test_rearm_released_at_five_ticks(self) -> None:
+-        """79.50 距 AH 0.5 元 = 5 × 0.1 元 → 解除。解除在同一筆 tick 生效,
+-        故該筆跌破 AH 照發(方向過濾是獨立一層,from_above 本身就是有效訊號)。"""
++        """距離門檻仍是 5 × 0.1 元,但解除多一道「連續線外滿 `cdp_rearm_dwell_secs`」
++        (SC-1;預設 300s)。穿越當筆 80.50 已距 AH 0.5 元 → 駐留自該筆起算:
++        100s 時 79.50 雖已離線 5 tick 仍不解除,700s 後才解除,重觸照發。"""
+         clock = _Clock()
+         det = _det(clock)
+         det.set_basis("2330", _BASIS)
+         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
+         det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
+-        clock.advance(700)
+-        events = det.evaluate("2330", _tick(79_500), _ctx(), _ALL)
++        clock.advance(100)
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []  # 駐留未滿 300s
++        clock.advance(600)
++        events = det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
+         assert len(events) == 1
+         assert events[0].levels == ("ah",)
++        assert events[0].direction == "from_below"
++        assert events[0].touch_count == 2
++
++    def test_dwell_resets_when_price_returns_inside_band(self) -> None:
++        """線外 260s 後回到帶內 → 駐留歸零重算(SC-1 edge 2):冷卻早過了也不解除,
++        要再從歸零後那筆線外 tick 起連續滿 300s。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
++        det.evaluate("2330", _tick(80_500), _ctx(), _CDP)  # 穿 AH,駐留自此起算
++        clock.advance(250)
++        assert det.evaluate("2330", _tick(80_600), _ctx(), _CDP) == []  # 線外 250s
++        clock.advance(10)
++        assert det.evaluate("2330", _tick(80_100), _ctx(), _CDP) == []  # 回帶內 → 歸零
++        clock.advance(400)  # 距首次穿越 660s(冷卻已過),但駐留自本筆才重新起算
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
++        clock.advance(300)
++        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
++        assert [e.levels for e in events] == [("ah",)]
++
++    def test_dwell_zero_releases_immediately(self) -> None:
++        """W3:`cdp_rearm_dwell_secs = 0` 完全等於現行「離線即解除」。"""
++        clock = _Clock()
++        det = _det(clock, cdp_rearm_dwell_secs=0.0, cdp_cooldown_secs=0.0)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
++        det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
++        clock.advance(10)
++        events = det.evaluate("2330", _tick(79_500), _ctx(), _ALL)
++        assert len(events) == 1
+         assert events[0].direction == "from_above"
+         assert events[0].touch_count == 2
+ 
++    def test_dwell_starts_at_crossing_tick_when_outside_band(self) -> None:
++        """跳空穿越:寫入 suppressed 的當筆已距線 ≥ gap → 駐留自該筆起算,
++        不必等下一筆線外 tick(SC-1 起算時點)。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
++        det.evaluate("2330", _tick(85_000), _ctx(), _CDP)  # 距 AH 5 元 ≫ gap
++        clock.advance(700)  # 冷卻 600 + 駐留 300 都靠這一筆的起算滿足
++        events = det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
++        assert len(events) == 1
++        assert events[0].levels == ("ah",)
++        assert events[0].direction == "from_above"
++
++    def test_dwell_starts_at_first_outside_tick_when_cross_inside_band(self) -> None:
++        """穿越當筆仍在帶內(80.10 距 AH 0.1 元 < 0.5 元)→ 起算值 None,
++        之後第一筆線外 tick 才起算。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
++        det.evaluate("2330", _tick(80_100), _ctx(), _CDP)  # 穿 AH 但仍貼線
++        clock.advance(700)
++        assert det.evaluate("2330", _tick(79_900), _ctx(), _CDP) == []  # 帶內 → 未起算
++        clock.advance(10)
++        assert det.evaluate("2330", _tick(79_400), _ctx(), _CDP) == []  # 線外首筆 → 起算
++        clock.advance(300)
++        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
++        assert [e.levels for e in events] == [("ah",)]
++
++    def test_touch_line_is_not_a_cross(self) -> None:
++        """SC-2:price == 線價是「線上」,不觸發也不改變側別。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
++        assert det.evaluate("2330", _tick(80_000), _ctx(), _CDP) == []
++
++    def test_cross_through_line_point_emits_once(self) -> None:
++        """逐 tick 走過線價(79.50 → 80.00 → 80.50)仍算一次 from_below —— 事件落在
++        真正到達線另一側的那一筆。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(79_500), _ctx(), _CDP)
++        assert det.evaluate("2330", _tick(80_000), _ctx(), _CDP) == []
++        events = det.evaluate("2330", _tick(80_500), _ctx(), _CDP)
++        assert len(events) == 1
++        assert events[0].levels == ("ah",)
++        assert events[0].direction == "from_below"
++
++    def test_touching_line_round_trip_no_event(self) -> None:
++        """80.00(線上)→ 79.50 → 80.00 → 79.50:全程只在線下與線上之間來回,
++        沒有到過線的另一側 → 一則都不發(user 指名的噪音樣態)。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        det.evaluate("2330", _tick(80_000), _ctx(), _CDP)
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
++        assert det.evaluate("2330", _tick(80_000), _ctx(), _CDP) == []
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
++
++    def test_basis_reset_midday_does_not_fake_cross(self) -> None:
++        """SC-2 edge 3:`set_basis` 換了線價 → 舊側別連同舊線價一起失效(不會把
++        「在 80.00 之上」當成「在 79.00 之上」),首筆不假發;新線的真穿越照發。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", {"ah": 80_000})
++        det.evaluate("2330", _tick(79_000), _ctx(), _CDP)
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []  # 線下,側別 = −1
++        det.set_basis("2330", {"ah": 79_000})  # 盤中重設:價格現在在新線之上
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _CDP) == []
++        events = det.evaluate("2330", _tick(78_500), _ctx(), _CDP)
++        assert len(events) == 1
++        assert events[0].direction == "from_above"
++
++    def test_side_advances_while_disabled_without_backfill(self) -> None:
++        """SC-2 (b):側別推進在 enabled gate 之前 —— 停用期間的穿越不發、重開也不補發,
++        但重開後的反向穿越方向要對(側別在停用期間已經推進到線上方)。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.set_basis("2330", _BASIS)
++        off = frozenset({"surge_crash", "vol_burst", "limit_lock"})
++        det.evaluate("2330", _tick(79_000), _ctx(), off)
++        assert det.evaluate("2330", _tick(80_500), _ctx(), off) == []  # 停用期間穿越
++        assert det.evaluate("2330", _tick(80_600), _ctx(), _CDP) == []  # 重開不補發
++        events = det.evaluate("2330", _tick(79_500), _ctx(), _CDP)
++        assert len(events) == 1
++        assert events[0].levels == ("ah",)
++        assert events[0].direction == "from_above"
++
+     def test_cooldown_blocks_second_cross(self) -> None:
+         clock = _Clock()
+         det = _det(clock)
+@@ -153,7 +278,7 @@ class TestCdpCross:
+         det.evaluate("2330", _tick(79_000), _ctx(), _ALL)
+         det.evaluate("2330", _tick(80_500), _ctx(), _ALL)
+         clock.advance(100)
+-        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []  # rearm 解除
++        assert det.evaluate("2330", _tick(79_500), _ctx(), _ALL) == []  # 駐留未滿,仍 suppressed
+         assert det.evaluate("2330", _tick(80_500), _ctx(), _ALL) == []  # 仍在 600s cooldown
+ 
+     def test_same_tick_merges_levels_ascending(self) -> None:
+@@ -261,6 +386,31 @@ class TestSurgeCrash:
+         clock.advance(60)
+         assert det.evaluate("2330", _tick(105_000), _ctx(), _ALL) == []
+ 
++    def test_crash_blocked_by_surge_cooldown(self) -> None:
++        """SC-3:同 code 的爆拉 / 爆跌共用一個冷卻桶 —— 拉上去又摔下來是同一段行情,
++        兩則訊號的資訊量不獨立。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.evaluate("2330", _tick(100_000), _ctx(), _ALL)
++        clock.advance(60)
++        assert [e.kind for e in det.evaluate("2330", _tick(102_100), _ctx(), _ALL)] == ["surge"]
++        clock.advance(60)
++        assert det.evaluate("2330", _tick(97_900), _ctx(), _ALL) == []
++
++    def test_crash_after_shared_cooldown_expires(self) -> None:
++        """共用桶滿 1800s 後照發,且 `touch_count` 仍分 kind 計。"""
++        clock = _Clock()
++        det = _det(clock)
++        det.evaluate("2330", _tick(100_000), _ctx(), _ALL)
++        clock.advance(60)
++        assert [e.kind for e in det.evaluate("2330", _tick(102_100), _ctx(), _ALL)] == ["surge"]
++        clock.advance(1741)  # 距 surge 1741s;窗內舊點已被裁掉,本筆只重建窗
++        assert det.evaluate("2330", _tick(100_000), _ctx(), _ALL) == []
++        clock.advance(60)  # 距 surge 1801s
++        events = det.evaluate("2330", _tick(97_900), _ctx(), _ALL)
++        assert [e.kind for e in events] == ["crash"]
++        assert events[0].touch_count == 1
++
+     def test_window_trims_old_points(self) -> None:
+         clock = _Clock()
+         det = _det(clock)
+diff --git a/tests/server/test_signal_hub.py b/tests/server/test_signal_hub.py
+index 82e23a0e..b69f01a4 100644
+--- a/tests/server/test_signal_hub.py
++++ b/tests/server/test_signal_hub.py
+@@ -22,7 +22,7 @@ from copycat.live.stock_models import StockBook, StockMeta, StockTick
+ from copycat.live.stock_source import DailyBar
+ from copycat.live.stock_state import StockDayState
+ from copycat.server import signal_hub as hub_mod
+-from copycat.server.signal_hub import SignalHub, format_signal_text
++from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
+ from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
+ from copycat.signals_config import SignalsConfig
+ from copycat.stock_watchlist import Group
+@@ -49,7 +49,7 @@ _SIGNAL_KEYS = {
+ }
+ 
+ _RULE_PARAMS: dict[str, dict[str, float]] = {
+-    "cdp_cross": {"rearm_ticks": 5},
++    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
+     "surge_crash": {"pct": 2.0, "window_secs": 300},
+     "vol_burst": {
+         "ratio": 3,
+@@ -337,6 +337,46 @@ def _seed_jsonl(tmp_path: Path, date: str, rows: list[dict[str, Any]]) -> None:
+     )
+ 
+ 
++def _merge_rules() -> list[dict[str, Any]]:
++    """SC-4 的最小「同 tick 兩事件」組合:兩條 CDP 規則各訂一條線,一筆 tick 同時穿過兩條。
++
++    用兩條**不同線**的規則(而非同線兩規則)是為了讓兩段 kind 文案不同 —— 去重
++    邏輯若寫成「無條件砍成一段」,同線版本會綠而這版會紅。
++    """
++    return [
++        _rule("cdp_cross", "r-1-000", name="NH 規則", cdp_levels=["nh"]),
++        _rule("cdp_cross", "r-1-001", name="AH 規則", cdp_levels=["ah"]),
++    ]
++
++
++def _cross_both(h: _Harness, code: str = "2330", time: str = "10:00:00") -> None:
++    """一筆 tick 同時穿過 nh(80.00)與 ah(85.00):兩條規則同一 (code, time) 各發一則。"""
++    state = _state()
++    h.hub.on_tick(code, _tick(79_000, code=code, time=f"{time}.100"), state)
++    h.hub.on_tick(code, _tick(86_000, code=code, cum=2, time=f"{time}.123"), state)
++
++
++def _long_rows(n: int = 2, pad: int = 1200) -> list[dict[str, Any]]:
++    """同 (code, time) 的多則,規則名刻意很長 → 合併文本必然超過 1900 字元(edge 8)。
++
++    規則名沒有長度上限,而 bot / webhook 兩層都沒有截斷 —— 不分批就是整則被 Discord
++    退回(缺角靜默)。`pad=1200` 讓單則約 1.2k 字:兩則必然分成兩批,一則必然不分。
++    """
++    return [
++        {
++            "id": f"sig-{i}",
++            "kind": "vol_burst",
++            "code": "2330",
++            "name": "台積電",
++            "price": 100_000,
++            "time": "10:00:00",
++            "pct": 3.0 + i,  # 每則 kind 文案不同 → 去重不得把它們併掉
++            "rule_name": f"規則{i}" + "長" * pad,
++        }
++        for i in range(n)
++    ]
++
++
+ def _cache(h: _Harness, code: str = "2330") -> tuple[str, int | None]:
+     """hub 的 basis cache 摘要 → (基準日, nh 線價);cdp 不可得時 nh 為 None。"""
+     basis_date, cdp = h.hub._basis_cache[code]
+@@ -897,6 +937,145 @@ class TestDiscordFanout:
+             await h.hub.close()
+ 
+ 
++class TestDiscordMerge:
++    """SC-4:同 code、同 time 且在 Discord 佇列中**相鄰**的多 row → 一則訊息。
++
++    合併只發生在**送出端**:WS / jsonl / id 逐 row 不變(W6)—— emit 端合併會改 id,
++    重連 refetch jsonl 就會出現合併前後兩份不同 id 的重複列。
++    """
++
++    async def test_same_tick_two_events_send_once(self, tmp_path: Path, clock: _Clock) -> None:
++        """同一 tick 兩則 → sender 只被打一次,文案含兩段 kind + 兩個規則名 + 同群摘要。"""
++        _write_rules(tmp_path, _merge_rules())
++        wl = _Watch(
++            groups=[{"name": "半導體", "codes": ["2330", "2317"]}],
++            quotes={"2330": ("台積電", 1.5), "2317": ("鴻海", 0.8)},
++        )
++        h = _Harness(tmp_path, clock, wl=wl)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330", "2317"])
++            await h.settle()
++            _cross_both(h)
++            await h.settle()
++
++            assert len(h.published) == 2  # W6:WS 逐 row
++            assert len(h.rows()) == 2  # W6:jsonl 逐 row
++            assert h.bot == [
++                "🔔 突破 CDP NH(壓力・第1次)・突破 CDP AH(壓力・第1次)"
++                "｜台積電 2330｜86.00｜10:00:00｜NH 規則・AH 規則"
++                "｜同群 半導體:2317鴻海 +0.8%"
++            ]
++        finally:
++            await h.hub.close()
++
++    async def test_different_tick_not_merged_and_order_kept(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """同 tick A(兩則)+ 不同 tick B(一則)混排 → 2 則、順序不變。
++
++        B 是被存進 pending 那一則:`settle()`(= `_discord_queue.join()`)返回時它必須
++        **已送出** —— 送出前就 `task_done` 的話 join 會提早返回,關機與測試屏障同時失真。
++        """
++        _write_rules(tmp_path, _merge_rules())
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            h.hub.on_watchlist(["2330", "2317"])
++            await h.settle()
++
++            _cross_both(h)  # 2330:同一 tick 兩則
++            state = _state()  # 2317:另一個 tick,只穿 nh → 一則
++            h.hub.on_tick("2317", _tick(79_000, code="2317", time="10:00:05.100"), state)
++            h.hub.on_tick("2317", _tick(80_500, code="2317", cum=2, time="10:00:06.000"), state)
++            await h.settle()
++
++            assert len(h.published) == 3
++            assert len(h.bot) == 2
++            assert "2330" in h.bot[0] and "NH 規則・AH 規則" in h.bot[0]
++            assert h.bot[1] == "🔔 突破 CDP NH(壓力・第1次)｜台積電 2317｜80.50｜10:00:06｜NH 規則"
++        finally:
++            await h.hub.close()
++
++    async def test_three_pending_rounds_keep_worker_alive(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """連續三輪含 pending 的混排:每輪都把下一組的頭一則存進 pending。
++
++        記帳錯一格就會 `task_done() called too many times`(ValueError)→ worker 當場
++        死掉,之後整天 Discord 無聲而 WS/jsonl 都正常(最難查的那種靜默)。
++        `close()` 會把 worker 的例外 re-raise,ValueError 在這裡逃不掉。
++        """
++        _write_rules(tmp_path, _merge_rules())
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        await h.hub.start()
++        try:
++            codes = ["2330", "2317", "2454", "1101"]
++            h.hub.on_watchlist(codes)
++            await h.settle()
++
++            for code in codes[:3]:  # 三組,每組同 tick 兩則(六則一次入列)
++                _cross_both(h, code=code)
++            await h.settle()
++            assert len(h.published) == 6
++            assert len(h.bot) == 3
++            assert all("NH 規則・AH 規則" in text for text in h.bot)
++            assert [text.split("｜")[1].split(" ")[1] for text in h.bot] == codes[:3]
++
++            _cross_both(h, code="1101")  # worker 還活著:之後再發一組仍送出
++            await h.settle()
++            assert len(h.bot) == 4
++        finally:
++            await h.hub.close()
++
++    async def test_oversized_merge_splits_into_batches(
++        self, tmp_path: Path, clock: _Clock
++    ) -> None:
++        """edge 8:合併文本 > 1900 字元 → 依 row 分批,批尾標 `(i/N)`,**不截斷**。"""
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        rows = _long_rows()
++        assert len(format_signal_group_text(rows)) > 1900  # 前提:治具真的造出超長文本
++
++        await h.hub._send_discord(rows)
++
++        assert len(h.bot) == 2
++        assert h.bot[0].endswith(" (1/2)")
++        assert h.bot[1].endswith(" (2/2)")
++        assert all(len(text) <= 1900 for text in h.bot)
++        assert rows[0]["rule_name"] in h.bot[0]
++        assert rows[1]["rule_name"] in h.bot[1]  # 第二則沒有被截掉
++
++    async def test_blocked_batch_is_logged_with_id(
++        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """各批各計一次節流 → 後續批可能被擋下:缺角必須在 log 可見(帶 rows[0] 的 id)。"""
++        h = _Harness(tmp_path, clock, discord_per_min=1)
++        h.attach_bot()
++        rows = _long_rows()
++
++        with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
++            await h.hub._send_discord(rows)
++
++        assert len(h.bot) == 1
++        assert h.bot[0].endswith(" (1/2)")
++        assert "sig-0" in caplog.text
++        assert "1 批被節流擋下" in caplog.text
++
++    async def test_single_row_text_unchanged(self, tmp_path: Path, clock: _Clock) -> None:
++        """單則(含超長單則)照現行路徑走:不分批、不加 `(i/N)`、文案逐字不變。"""
++        h = _Harness(tmp_path, clock)
++        h.attach_bot()
++        rows = _long_rows(n=1, pad=2000)
++
++        await h.hub._send_discord(rows)
++
++        assert h.bot == [format_signal_text(rows[0])]
++
++
+ class TestBasisWorker:
+     async def test_staged_prefetch_swaps_in_on_rollover(
+         self, tmp_path: Path, clock: _Clock
+@@ -1398,7 +1577,11 @@ class TestRuleEngine:
+         assert load_rules(tmp_path / _RULES_FILE) == []
+ 
+     async def test_two_rules_same_kind_both_fire(self, tmp_path: Path, clock: _Clock) -> None:
+-        """邊界 2:同 kind 兩規則同 tick → 兩則事件,id 因 rule 段不撞。"""
++        """邊界 2:同 kind 兩規則同 tick → 兩則事件,id 因 rule 段不撞。
++
++        Discord 那一則是**事前標為該變**的斷言(SC-4):同 (code, time) 相鄰兩 row 現在
++        合成一則,kind 文案相同 → 去重成一段,兩條規則名以「・」串接。WS / jsonl 仍逐 row。
++        """
+         _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001")])
+         h = _Harness(tmp_path, clock)
+         h.attach_bot()
+@@ -1411,7 +1594,10 @@ class TestRuleEngine:
+             assert [m["rule_id"] for m in h.published] == ["r-1-000", "r-1-001"]
+             assert len({m["id"] for m in h.published}) == 2
+             assert len(h.rows()) == 2
+-            assert len(h.bot) == 2
++            assert h.bot == [
++                "🔔 突破 CDP NH(壓力・第1次)｜台積電 2330｜80.50｜10:00:00"
++                "｜cdp_cross-r-1-000・cdp_cross-r-1-001"
++            ]
+         finally:
+             await h.hub.close()
+ 
+@@ -1422,8 +1608,20 @@ class TestRuleEngine:
+         只有 A 能再發。順帶釘 `_seed_slot` —— 新 detector 沒被餵基準的話這裡零事件。
+         """
+         rules = [
+-            _rule("cdp_cross", "r-1-000", cooldown_secs=86_400, params={"rearm_ticks": 0}),
+-            _rule("cdp_cross", "r-1-001", cooldown_secs=86_400, params={"rearm_ticks": 0}),
++            # dwell 0 = W3 舊語意(離線即解除),與本測試原本的 rearm_ticks 0 意圖一致;
++            # 這個 dict 之後直接餵進 upsert_rule,params 必須是完整的精確鍵集合。
++            _rule(
++                "cdp_cross",
++                "r-1-000",
++                cooldown_secs=86_400,
++                params={"rearm_ticks": 0, "rearm_dwell_secs": 0},
++            ),
++            _rule(
++                "cdp_cross",
++                "r-1-001",
++                cooldown_secs=86_400,
++                params={"rearm_ticks": 0, "rearm_dwell_secs": 0},
++            ),
+         ]
+         _write_rules(tmp_path, rules)
+         h = _Harness(tmp_path, clock)
+@@ -1651,6 +1849,13 @@ class TestDiscordText:
+         """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
+         assert format_signal_text(self._row()).endswith("10:00:00")
+ 
++    def test_group_text_of_single_row_is_verbatim(self) -> None:
++        """SC-4:單則走合併版仍**逐字**等於單則版 —— 絕大多數訊號走的正是這條路。"""
++        assert format_signal_group_text([self._row(rule_name="爆量-緊")]) == format_signal_text(
++            self._row(rule_name="爆量-緊")
++        )
++        assert format_signal_group_text([self._row()]) == format_signal_text(self._row())
++
+ 
+ class TestGroupSuffix:
+     """同群摘要(group-grid SC-1/2)。
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index 5b3b08d0..d8a774ba 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -43,7 +43,7 @@ from tests.server.test_stock_routes import FakeStockSource
+ _RULES_FILE = "signal_rules.json"
+ 
+ _RULE_PARAMS: dict[str, dict[str, float]] = {
+-    "cdp_cross": {"rearm_ticks": 5},
++    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
+     "surge_crash": {"pct": 2.0, "window_secs": 300},
+     "vol_burst": {
+         "ratio": 3,
+@@ -575,6 +575,25 @@ class TestSignalRulesRoutes:
+             assert r.json()["detail"]["error"] == "INVALID_RULE"
+             assert _rules(client) == before, "被拒的請求不得留下半套狀態"
+ 
++    def test_cdp_body_missing_rearm_dwell_secs_400(self, tmp_path: Path) -> None:
++        """W9 R15:精確鍵集合對新鍵一樣嚴 —— server 更新後未重新整理的舊分頁送 cdp 規則
++        會缺 `rearm_dwell_secs`,預期降級成 INVALID_RULE(重新整理即恢復)。
++
++        這裡不是可容忍的寬鬆點:放行等於使用者以為調得動駐留秒數,實際套的是 detector 預設。
++        """
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            before = _rules(client)
++
++            r = client.post(
++                "/api/stock/signals/rules",
++                json=_rule_body("cdp_cross", "舊分頁送的", params={"rearm_ticks": 5}),
++            )
++
++            assert r.status_code == 400
++            assert r.json()["detail"]["error"] == "INVALID_RULE"
++            assert _rules(client) == before
++
+     @pytest.mark.parametrize("missing", ["name", "kind", "cooldown_secs", "params", "cdp_levels"])
+     def test_missing_field_400(self, tmp_path: Path, missing: str) -> None:
+         """缺欄同樣走 400 INVALID_RULE(review B8)。
+diff --git a/tests/test_signal_rules.py b/tests/test_signal_rules.py
+index aa670241..7236cc6e 100644
+--- a/tests/test_signal_rules.py
++++ b/tests/test_signal_rules.py
+@@ -25,7 +25,7 @@ from copycat.signal_rules import (
+ from copycat.signals_config import SignalsConfig
+ 
+ VALID_PARAMS: dict[str, dict[str, float]] = {
+-    "cdp_cross": {"rearm_ticks": 5},
++    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
+     "surge_crash": {"pct": 2.0, "window_secs": 300},
+     "vol_burst": {
+         "ratio": 3,
+@@ -73,7 +73,7 @@ class TestConstants:
+         樣態是使用者填得進去的值被後端拒收(或反過來,拒收本來合法的值)。
+         """
+         assert PARAM_SPECS == {
+-            "cdp_cross": {"rearm_ticks": (0, 50)},
++            "cdp_cross": {"rearm_ticks": (0, 50), "rearm_dwell_secs": (0, 3600)},
+             "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
+             "vol_burst": {
+                 "ratio": (1, 100),
+@@ -203,6 +203,23 @@ class TestNormalizeParams:
+         params["pct"] = 2.5
+         assert normalize_rule(make("surge_crash", params=params), {})["params"]["pct"] == 2.5
+ 
++    def test_rearm_dwell_secs_is_float_not_integer_key(self) -> None:
++        """D7:駐留秒數與 `window_secs` 同型 —— 秒不需要整數限制,2.5 秒必須收得下。
++
++        誤加進 `INT_PARAM_KEYS` 的失效樣態是使用者填 2.5 拿到 INVALID_RULE,
++        而畫面上只會顯示「規則設定不合法」,看不出是哪一欄。
++        """
++        params = dict(VALID_PARAMS["cdp_cross"])
++        params["rearm_dwell_secs"] = 2.5
++        out = normalize_rule(make("cdp_cross", params=params), {})
++        assert out["params"]["rearm_dwell_secs"] == 2.5
++
++    def test_rearm_dwell_secs_above_max_rejected(self) -> None:
++        params = dict(VALID_PARAMS["cdp_cross"])
++        params["rearm_dwell_secs"] = 3601
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            normalize_rule(make("cdp_cross", params=params), {})
++
+ 
+ class TestNormalizeFields:
+     def test_unknown_kind_rejected(self) -> None:
+@@ -307,6 +324,7 @@ class TestDefaultRules:
+     def test_params_seeded_from_config(self) -> None:
+         cfg = SignalsConfig(
+             cdp_rearm_ticks=7,
++            cdp_rearm_dwell_secs=180.0,
+             surge_pct=3.5,
+             surge_window_secs=120.0,
+             vol_ratio=4.0,
+@@ -316,6 +334,7 @@ class TestDefaultRules:
+         )
+         by_kind = {r["kind"]: r for r in default_rules(cfg, {})}
+         assert by_kind["cdp_cross"]["params"]["rearm_ticks"] == 7
++        assert by_kind["cdp_cross"]["params"]["rearm_dwell_secs"] == 180.0
+         assert by_kind["cdp_cross"]["cdp_levels"] == list(CDP_LEVELS)
+         assert by_kind["surge_crash"]["params"] == {"pct": 3.5, "window_secs": 120.0}
+         assert by_kind["vol_burst"]["params"] == {
+@@ -373,7 +392,7 @@ class TestLoadSaveRules:
+         path = tmp_path / "rules.json"
+         save_rules(path, [])
+         payload = json.loads(path.read_text(encoding="utf-8"))
+-        assert payload["_cache_version"] == 1
++        assert payload["_cache_version"] == 2
+         assert payload["rules"] == []
+ 
+     def test_bad_json_raises(self, tmp_path: Path) -> None:
+@@ -448,18 +467,128 @@ class TestLoadSaveRules:
+             save_rules(blocker / "rules.json", [])
+ 
+ 
++class TestMigrationV1ToV2:
++    """SC-8:既有 v1 規則檔在載入期補 `rearm_dwell_secs`,不回寫檔案(§7 回退窗)。
++
++    沒有這條轉換,升級後第一次啟動就是 `load_rules` raise → hub None →
++    `/api/stock/signals/*` 全數 503,而且盤中才會發現。
++    """
++
++    def _write(self, path: Path, version: int, rules: list[Any]) -> None:
++        path.write_text(
++            json.dumps({"_cache_version": version, "rules": rules}, ensure_ascii=False),
++            encoding="utf-8",
++        )
++
++    def _v1_cdp(self) -> dict[str, Any]:
++        rule = make("cdp_cross", id="r-1-000", name="舊 CDP")
++        rule["params"] = {"rearm_ticks": 5}  # v1 形:沒有 rearm_dwell_secs
++        return rule
++
++    def test_v1_file_loads_with_dwell_backfilled(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        self._write(path, 1, [self._v1_cdp(), make("limit_lock", id="r-1-001", name="鎖停")])
++
++        loaded = load_rules(path)
++
++        assert loaded is not None and len(loaded) == 2
++        assert loaded[0]["params"] == {"rearm_ticks": 5.0, "rearm_dwell_secs": 300.0}
++        assert loaded[1]["params"] == {}
++
++    def test_v1_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
++        """不回寫 = upsert 前還留著回退窗(§7):舊碼可以直接讀回原檔。"""
++        path = tmp_path / "rules.json"
++        self._write(path, 1, [self._v1_cdp()])
++        before = path.read_text(encoding="utf-8")
++
++        load_rules(path)
++
++        assert path.read_text(encoding="utf-8") == before
++
++    def test_v1_migration_logs_rule_id_and_value(
++        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        """補值與種子路徑(`cfg.cdp_rearm_dwell_secs`)可能不同 → 補了什麼要留痕(§7 已知分歧)。"""
++        path = tmp_path / "rules.json"
++        self._write(path, 1, [self._v1_cdp()])
++        with caplog.at_level("INFO"):
++            load_rules(path)
++        assert "r-1-000" in caplog.text
++        assert "300" in caplog.text
++
++    def test_v2_file_missing_new_key_rejected(self, tmp_path: Path) -> None:
++        """精確集合仍在(W9):v2 檔缺鍵不是「舊檔」,是壞檔 —— 不得順手補。"""
++        path = tmp_path / "rules.json"
++        self._write(path, 2, [self._v1_cdp()])
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_v2_file_with_new_key_loads(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        self._write(path, 2, [make("cdp_cross", id="r-1-000", name="新 CDP")])
++        loaded = load_rules(path)
++        assert loaded is not None
++        assert loaded[0]["params"]["rearm_dwell_secs"] == 300.0
++
++    def test_v1_file_with_new_key_kept_as_is(self, tmp_path: Path) -> None:
++        """v1 檔已帶新鍵(手改過)→ 不覆蓋成預設。"""
++        path = tmp_path / "rules.json"
++        rule = make("cdp_cross", id="r-1-000", name="手改")
++        rule["params"] = {"rearm_ticks": 5, "rearm_dwell_secs": 60}
++        self._write(path, 1, [rule])
++        loaded = load_rules(path)
++        assert loaded is not None
++        assert loaded[0]["params"]["rearm_dwell_secs"] == 60.0
++
++    def test_v1_invalid_rule_still_raises(self, tmp_path: Path) -> None:
++        """遷移只補鍵,不放寬其他驗證。"""
++        path = tmp_path / "rules.json"
++        bad = self._v1_cdp()
++        bad["cooldown_secs"] = 5
++        self._write(path, 1, [bad])
++        with pytest.raises(RuleError, match="INVALID_RULE"):
++            load_rules(path)
++
++    def test_save_after_v1_load_lands_v2(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        self._write(path, 1, [self._v1_cdp()])
++        loaded = load_rules(path)
++        assert loaded is not None
++        save_rules(path, loaded)
++        payload = json.loads(path.read_text(encoding="utf-8"))
++        assert payload["_cache_version"] == 2
++        assert payload["rules"][0]["params"]["rearm_dwell_secs"] == 300.0
++
++    def test_version_zero_and_three_still_raise(self, tmp_path: Path) -> None:
++        path = tmp_path / "rules.json"
++        for version in (0, 3):
++            self._write(path, version, [])
++            with pytest.raises(RuleError, match="INVALID_RULE"):
++                load_rules(path)
++
++
+ class TestRuleConfig:
+     def test_cdp_cross_mapping(self) -> None:
+         base = SignalsConfig()
+         rule = normalize_rule(
+-            make("cdp_cross", cooldown_secs=900, params={"rearm_ticks": 8}), {}
++            make("cdp_cross", cooldown_secs=900, params={"rearm_ticks": 8, "rearm_dwell_secs": 120}),
++            {},
+         )
+         cfg = rule_config(rule, base)
+         assert cfg.cdp_rearm_ticks == 8
+         assert isinstance(cfg.cdp_rearm_ticks, int)
++        assert cfg.cdp_rearm_dwell_secs == 120.0
+         assert cfg.cdp_cooldown_secs == 900
+         assert cfg.surge_pct == base.surge_pct  # 其他 kind 欄位不動
+ 
++    def test_cdp_rearm_dwell_secs_zero_maps_through(self) -> None:
++        """W3:0 = 舊行為(離線即解除);0 是合法值,不得被當成「沒設」而落回 base 預設。"""
++        base = SignalsConfig(cdp_rearm_dwell_secs=300.0)
++        rule = normalize_rule(
++            make("cdp_cross", params={"rearm_ticks": 5, "rearm_dwell_secs": 0}), {}
++        )
++        assert rule_config(rule, base).cdp_rearm_dwell_secs == 0.0
++
+     def test_surge_crash_mapping(self) -> None:
+         rule = normalize_rule(
+             make("surge_crash", cooldown_secs=900, params={"pct": 3.5, "window_secs": 120}), {}
+@@ -509,5 +638,11 @@ class TestRuleConfig:
+ 
+     def test_base_config_not_mutated(self) -> None:
+         base = SignalsConfig()
+-        rule_config(normalize_rule(make("cdp_cross", params={"rearm_ticks": 9}), {}), base)
++        rule_config(
++            normalize_rule(
++                make("cdp_cross", params={"rearm_ticks": 9, "rearm_dwell_secs": 30}), {}
++            ),
++            base,
++        )
+         assert base.cdp_rearm_ticks == SignalsConfig().cdp_rearm_ticks
++        assert base.cdp_rearm_dwell_secs == SignalsConfig().cdp_rearm_dwell_secs
+diff --git a/tests/test_signals_config.py b/tests/test_signals_config.py
+index ff687a46..f1b8c12a 100644
+--- a/tests/test_signals_config.py
++++ b/tests/test_signals_config.py
+@@ -12,6 +12,7 @@ from copycat.signals_config import CONFIG_PATH, SignalsConfig, load_signals_conf
+ def test_default_values() -> None:
+     cfg = SignalsConfig()
+     assert cfg.cdp_rearm_ticks == 5
++    assert cfg.cdp_rearm_dwell_secs == 300.0
+     assert cfg.cdp_cooldown_secs == 600
+     assert cfg.surge_pct == 2.0
+     assert cfg.surge_window_secs == 300
+@@ -44,10 +45,14 @@ def test_missing_file_falls_back_to_defaults(tmp_path: Path) -> None:
+ 
+ def test_load_override(tmp_path: Path) -> None:
+     p = tmp_path / "signals.json"
+-    p.write_text(json.dumps({"surge_pct": 3.5, "cdp_rearm_ticks": 7}), encoding="utf-8")
++    p.write_text(
++        json.dumps({"surge_pct": 3.5, "cdp_rearm_ticks": 7, "cdp_rearm_dwell_secs": 120.0}),
++        encoding="utf-8",
++    )
+     cfg = load_signals_config(p)
+     assert cfg.surge_pct == 3.5
+     assert cfg.cdp_rearm_ticks == 7
++    assert cfg.cdp_rearm_dwell_secs == 120.0
+     assert cfg.vol_ratio == 3.0  # 未覆寫者保留預設
+ 
+ 
