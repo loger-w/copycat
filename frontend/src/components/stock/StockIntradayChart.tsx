@@ -4,6 +4,17 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
 import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+import {
+  EMPTY_FILLS,
+  EMPTY_MARKS,
+  FILL_MARK,
+  fillLabel,
+  fillsAtMinute,
+  fillTrianglePoints,
+  projectFills,
+  type FillMark,
+  type FillPoint,
+} from "@/lib/fill-marks";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
@@ -123,6 +134,7 @@ const ChartStatic = memo(function ChartStatic({
   plotBottom,
   xw,
   hourTicks,
+  fillMarks,
 }: {
   g: IntradayGeometry;
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -146,6 +158,10 @@ const ChartStatic = memo(function ChartStatic({
   clipBelow: string;
   /** 繪圖區底(極值文字翻面判定用);純量,memo 安全 */
   plotBottom: number;
+  /** 當日成交點的 SVG 座標(SC-3);toggle 關 / 零筆時是模組層 `EMPTY_MARKS`。
+   *  **必經呼叫端 useMemo 或模組常數**(identity 穩定)—— 行內字面值會打穿本 memo,
+   *  而症狀只是 hover 掉幀,沒有任何測試會紅(SC-9 就是補這道機械閘)。 */
+  fillMarks: readonly FillMark[];
 }) {
   // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
   // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
@@ -475,6 +491,33 @@ const ChartStatic = memo(function ChartStatic({
           {fmt(pocBar.priceMilli)}
         </text>
       ) : null}
+      {/* 當日成交點(R2 SC-3):我的委託在哪一分鐘、什麼價位成交。買 ▲ 紅 / 賣 ▼ 綠,
+          尖端指在成交價上(`projectFills` 已把窗外 / 域外的濾掉)。
+
+          **必須是本層最後一組**:svg 沒有 z-index,圖層完全由文件順序決定 —— 排在極值
+          標記 / MA 價位標 / VWAP / POC 之前的話,那些帶 2px halo 的文字會把三角吃掉,
+          而畫面上照樣「有東西」,零錯誤訊號(同極值標記要畫在主價線之後的理由)。
+          現價圈與 hover 十字仍在 ChartStatic 之外、圖層更上,那兩者是即時態游標語彙,
+          蓋住某一個成交點可接受。
+
+          群組 `<g>` **恆 render**(空集合時內容為空):條件 render 的話「層不見了」與
+          「今天沒成交」在測試裡是同一個答案。testid 刻意不與 `fill-` 前綴共用 ——
+          per-card 計數一律 `polygon[data-testid^="fill-"]`,群組不得混進計數。
+          `pointerEvents="none"`:三角壓在價線上,不可攔掉 svg 的 hover。 */}
+      <g data-testid="fills-layer" pointerEvents="none">
+        {fillMarks.map((m) => (
+          <polygon
+            // key 與 testid 同字串:同分鐘同向已在 `fillPoints` 合併成一點,
+            // 所以 `分鐘 × 側` 在同一張圖上唯一
+            key={`fill-${m.side}-${m.minute}`}
+            data-testid={`fill-${m.side}-${m.minute}`}
+            points={fillTrianglePoints(m.x, m.y, m.side)}
+            className={cn(m.side === "B" ? "fill-bull" : "fill-bear", "stroke-surface")}
+            strokeWidth={FILL_MARK.halo}
+            paintOrder="stroke"
+          />
+        ))}
+      </g>
     </g>
   );
 });
@@ -613,6 +656,11 @@ interface Props {
    *  契約,拿它當渲染分支的判準會讓兩層耦合 —— 後端哪天改 key 形狀,前端就靜默退回
    *  現貨窗(圖照畫、只是窗錯了),而沒有任何錯誤訊號。 */
   stkfut?: boolean;
+  /** 使用者當日有成交的委託(R2 SC-3)。**由 caller 折好傳入**,core 不掛
+   *  `useCapitalOrders`(白名單 W-7:core 不沾 capital / TQ;既有測試的 fetch stub
+   *  不必為此加路由)。identity 必須穩定(caller 的 useMemo,零筆一律 `EMPTY_FILLS`)
+   *  —— 每 render 新陣列會打穿 `ChartStatic` 與 `GroupCard` 兩層 memo。 */
+  fills?: readonly FillPoint[];
 }
 
 export type ChartVariant = "page" | "card";
@@ -640,6 +688,7 @@ export function IntradayChartCore({
   mainHeight,
   subHeight,
   stkfut = false,
+  fills = EMPTY_FILLS,
 }: CoreProps) {
   const card = variant === "card";
   // 主副圖共用同一個 viewBox 寬:分開兩份的話,副圖 hover 線的 x 換算與主圖會各自漂
@@ -679,6 +728,17 @@ export function IntradayChartCore({
     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)。
     // `xw` 同理 —— 漏了它,現貨↔期貨切換時幾何會停在舊窗上。
     [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw],
+  );
+
+  // 成交點 → SVG 座標(SC-3)。**必經 useMemo**,理由同 `vpBars`:hover 每個 mousemove
+  // 都 re-render 本元件,每輪新陣列會打穿 ChartStatic 的 memo(SC-9 的機械閘)。
+  // toggle 關時回**模組層常數**而不是新的 `[]` —— 關著的圖每秒仍隨報價 re-render,
+  // 回新陣列一樣打穿 memo,而症狀只是掉幀、沒有測試會紅。
+  // 位置必須在 `g` 之後、`priceLine.length === 0` 早退**之前**:hook 不可條件化
+  // (本 repo 沒裝 react-hooks lint,漏了不會被擋)。
+  const fillMarks = useMemo(
+    () => (toggles.fills ? projectFills(fills, g, w, xw) : EMPTY_MARKS),
+    [fills, g, w, xw, toggles.fills],
   );
 
   // 副圖只需要 bar 與歸一分母 —— 原本整份跑一次 buildIntradayGeometry(L-1),
@@ -785,9 +845,32 @@ export function IntradayChartCore({
           { label: "外", value: String(shownAgg.o), tone: "bull" },
           { label: "內", value: String(shownAgg.i), tone: "bear" },
         ];
+  // 「成交」欄(R2 SC-4):shown 分鐘上有我的成交時**尾端追加**一欄。
+  //
+  // **page 變體限定**:card 的 readout 只有 246px 寬且 `overflow-hidden`,追加第五欄
+  // 必被裁 = 靜默失敗(與 card 砍外 / 內兩欄同理)。標記本身已承載「這裡成交了」,
+  // 卡片上少的只是數字。
+  // tone:單側跟該側漲跌色,雙側不判色 —— 一欄兩個方向塗成任一色都是假陳述。
+  const fillPts = !card && toggles.fills && shownMin !== null
+    ? fillsAtMinute(fills, shownMin)
+    : EMPTY_FILLS;
+  const fillField: ReadoutField | null =
+    fillPts.length === 0
+      ? null
+      : {
+          label: "成交",
+          value: fillLabel(fillPts, fmt),
+          tone: fillPts.every((p) => p.side === "B")
+            ? "bull"
+            : fillPts.every((p) => p.side === "S")
+              ? "bear"
+              : undefined,
+        };
   // 卡片只有 ~250px 寬,六欄會擠成一團 —— 砍的是**外 / 內**兩欄(說明列已同時省略,
   // 內外盤在卡片上完全不出現,語意一致),留下時間 / 價 / % / 量(AD-4)。
-  const fields = card ? allFields.slice(0, 4) : allFields;
+  const fields = (card ? allFields.slice(0, 4) : allFields).concat(
+    fillField === null ? [] : [fillField],
+  );
 
   const hoverPrice = hover !== null ? snapDown(g.priceAtY(hover.y)) : null;
   const timeTagX =
@@ -806,12 +889,19 @@ export function IntradayChartCore({
 
   // 期貨態三顆一律反灰(D10):CDP/MA 是現股日線衍生、VP 的折入窗仍是現貨窗。
   // 「按得下去但沒反應」比「按不下去」難懂 —— 反灰 + tooltip 才講得出為什麼。
-  const toggleDefs: { key: "vwap" | "cdp" | "ma" | "vp"; label: string; available: boolean }[] = [
+  const toggleDefs: {
+    key: "vwap" | "cdp" | "ma" | "vp" | "fills";
+    label: string;
+    available: boolean;
+  }[] = [
     { key: "vwap", label: "均價", available: true },
     { key: "cdp", label: "CDP", available: !stkfut && cdpAvailable },
     { key: "ma", label: "MA", available: !stkfut && maAvailable },
     // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
     { key: "vp", label: "量分佈", available: !stkfut },
+    // 成交點同樣零外部資料依賴(orders 已在手上),**期貨態也不反灰**(AD-5):
+    // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
+    { key: "fills", label: "成交點", available: true },
   ];
 
   const body = (
@@ -868,6 +958,7 @@ export function IntradayChartCore({
           plotBottom={plotBottom}
           xw={xw}
           hourTicks={hourTicks}
+          fillMarks={fillMarks}
         />
         <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
@@ -1063,7 +1154,13 @@ export function IntradayChartCore({
 
 /** 單檔頁分時圖(非受控:toggles 自持)。**簽名不變**(W-1/SC-4)—— 圖牆的卡片走
  *  `IntradayChartCore` 的 card 變體,兩者是同一份渲染碼。 */
-export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = false }: Props) {
+export function StockIntradayChart({
+  accum,
+  mainHeight,
+  subHeight,
+  stkfut = false,
+  fills,
+}: Props) {
   const { toggles, set } = useChartToggles();
   return (
     <IntradayChartCore
@@ -1074,6 +1171,7 @@ export function StockIntradayChart({ accum, mainHeight, subHeight, stkfut = fals
       mainHeight={mainHeight}
       subHeight={subHeight}
       stkfut={stkfut}
+      fills={fills}
     />
   );
 }
