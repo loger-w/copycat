@@ -851,9 +851,16 @@ export function IntradayChartCore({
   // 必被裁 = 靜默失敗(與 card 砍外 / 內兩欄同理)。標記本身已承載「這裡成交了」,
   // 卡片上少的只是數字。
   // tone:單側跟該側漲跌色,雙側不判色 —— 一欄兩個方向塗成任一色都是假陳述。
-  const fillPts = !card && toggles.fills && shownMin !== null
-    ? fillsAtMinute(fills, shownMin)
-    : EMPTY_FILLS;
+  //
+  // 吃的是 **`fillMarks` 而不是 `fills`**(cr1 A-2):readout 與三角必須同一把尺。
+  // 吃未過濾的 `fills` 時,價格落在 `g.yDomain` 外(autofit 域 / card 較窄域)或分鐘落在
+  // x 窗外的那一筆,圖上一個三角都沒有而 readout 照樣報「成交 賣 1@9999」——
+  // 使用者在圖上找不到那一筆,兩邊都不會有錯誤訊號。`FillMark extends FillPoint`,
+  // 所以 `fillsAtMinute` / `fillLabel` 直接吃得下。
+  // `toggles.fills` 不必再判一次:關著時 `fillMarks` 已是 `EMPTY_MARKS`(同一把尺的意思
+  // 就是只留一個判準;再寫一次的話兩處哪天漂掉,症狀是「圖關了 readout 還在報」)。
+  const fillPts =
+    !card && shownMin !== null ? fillsAtMinute(fillMarks, shownMin) : EMPTY_FILLS;
   const fillField: ReadoutField | null =
     fillPts.length === 0
       ? null
