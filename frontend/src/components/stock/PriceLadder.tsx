@@ -15,7 +15,7 @@ import {
   useSubmitStock,
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
-import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+import { loadDiscount, persistDiscount, type DiscountState } from "@/lib/fee-discount";
 import { LOCK_WS_TITLE } from "@/lib/flash-arm";
 import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
@@ -23,36 +23,25 @@ import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
   avgTickOf,
   clampDiscount,
-  FEE_DISCOUNT_DEFAULT,
   positionEcon,
   secPositionsOf,
   snapBreakEven,
 } from "@/lib/ladder-position";
+import { DASH } from "@/lib/pnl-format";
 import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
+import { kindLabel, TRADE_KINDS, type TradeKind } from "@/lib/trade-kinds";
 import { cn } from "@/lib/utils";
 import type { CapitalPosition } from "@/types";
 
 const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
 
-export const TRADE_KINDS = [
-  ["cash", "現股"],
-  ["margin", "融資"],
-  ["short", "融券"],
-  ["daytrade_sell", "無券"],
-] as const;
-export type TradeKind = (typeof TRADE_KINDS)[number][0];
-
-/** 缺值顯示。部位條上「沒有這個數字」與「這個數字是 0」必須看得出差別。 */
-const DASH = "—";
-
-/** kind → 顯示標籤,查表未命中就顯示原字串:群益 `Position.kind` 的值域比本檔的
- *  交易別寬(D13),不認得的部位寧可標籤怪也不要靜默消失。 */
-function kindLabel(kind: string): string {
-  return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
-}
+/** 交易別值域 / 標籤本體搬到 `lib/trade-kinds.ts`(三處倉位顯示共用);此處 re-export
+ *  保住既有 `@/components/stock/PriceLadder` 的 import 路徑(`RightRail` / 測試)。 */
+export { TRADE_KINDS } from "@/lib/trade-kinds";
+export type { TradeKind } from "@/lib/trade-kinds";
 
 /** 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,pill 讓
  *  「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。`aria-label` 掛在
@@ -129,35 +118,6 @@ function PositionBar({ rows }: { rows: PositionRow[] }) {
       ))}
     </div>
   );
-}
-
-interface DiscountState {
-  /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
-  raw: string;
-  /** 最後一次通過 clampDiscount 的值;計算恆用它。 */
-  value: number;
-}
-
-/** 讀存檔折數。**整段包 try/catch**:localStorage 在私密視窗 / storage 被政策鎖時
- *  光是存取就會拋,而這是 useState initializer —— 拋出去就是閃電梯首次 render 掛掉
- *  (同 `hooks/useChartToggles.ts::load`)。 */
-function loadDiscount(): DiscountState {
-  let raw: string | null = null;
-  try {
-    raw = window.localStorage.getItem(FEE_DISCOUNT_KEY);
-  } catch {
-    raw = null; // 讀不到 → 走預設,記憶體內照常運作
-  }
-  const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
-  return { raw: String(value), value };
-}
-
-function persistDiscount(value: number): void {
-  try {
-    window.localStorage.setItem(FEE_DISCOUNT_KEY, String(value));
-  } catch {
-    // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉(同 useChartToggles::persist)
-  }
 }
 
 interface PositionRow {
