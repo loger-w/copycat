@@ -1,0 +1,10 @@
+[2m Test Files [22m [1m[32m126 passed[39m[22m[90m (126)[39m
+[2m      Tests [22m [1m[32m2195 passed[39m[22m[90m (2195)[39m
+[2m   Start at [22m 19:56:14
+[2m   Duration [22m 20.59s[2m (transform 7.08s, setup 0ms, collect 32.74s, tests 135.24s, environment 60.44s, prepare 13.84s)[22m
+
+VITEST_DONE
+TSC_EXIT=0
+ESLINT_DONE
+[32m✔[39m Scanned 18 files in 2.8s
+[32m✔ No issues found![39m

@@ -1,0 +1,2 @@
+{"viewport":"1366x768 (iframe host) = 單欄態(容器 1017 < 1050)","measure":{"win":[1366,768],"grid":{"sh":2097,"ch":690,"noScroll":false},"leftColW":1020,"figs":[270,273],"sectionH":252,"adlRootH":120,"adlWrap":96,"svgs":[{"vb":"0 0 470 142"},{"vb":"0 0 470 145"}],"vars":{"chart":"","adl":"","wrapf":"","min":""},"gridFlex":"1 1 0%","sectionFlex":"0 0 auto","wrapFlex":"0 0 auto","wrapMinH":"auto"},
+ "verdict":"--idx-* 未套用;grid flex 1 1 0%(= 舊 flex-1)、section 0 0 auto(= 舊 shrink-0)、騰落線 wrapper 96px / min-height auto(= 舊 h-24 shrink-0)→ 單欄退化逐值不變(W-4);整頁可捲為既有單欄行為"}
