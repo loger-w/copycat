@@ -377,6 +377,33 @@ def _long_rows(n: int = 2, pad: int = 1200) -> list[dict[str, Any]]:
     ]
 
 
+def _tight_rows() -> list[dict[str, Any]]:
+    """貼著上限的治具(T-3):配 `_TIGHT_SUFFIX` 時合併文本 2 則 = 1282 字、
+    3 則 = **1900 字**(= 上限)、4 則 = 2518 字。
+
+    3 則落在 (1884, 1900] 這個窄帶裡 —— 正是「不預留批尾 ` (i/N)` 就會切出超標批」
+    的唯一區間。少了 `_BATCH_TAG_RESERVE`,貪婪切批會把 3 則收成一批,加上批尾 6 字
+    就是 1906 字(Discord 2000 硬上限之下、本專案 1900 之上)。
+    """
+    return [
+        {
+            "id": f"sig-{i}",
+            "kind": "vol_burst",
+            "code": "2330",
+            "name": "台積電",
+            "price": 100_000,
+            "time": "10:00:00",
+            "pct": 3.0 + i,  # kind 文案逐則不同 → 去重不得把它們併掉
+            "rule_name": f"規{i}" + "長" * 606,
+        }
+        for i in range(4)
+    ]
+
+
+#: `_tight_rows` 的長度計算把摘要一起算進去(`_split_batches` 也是)
+_TIGHT_SUFFIX = "｜同群 半導體:2317鴻海 +0.8%"
+
+
 def _cache(h: _Harness, code: str = "2330") -> tuple[str, int | None]:
     """hub 的 basis cache 摘要 → (基準日, nh 線價);cdp 不可得時 nh 為 None。"""
     basis_date, cdp = h.hub._basis_cache[code]
@@ -1078,6 +1105,65 @@ class TestDiscordMerge:
         assert all(len(text) <= 1900 for text in h.bot)
         assert rows[0]["rule_name"] in h.bot[0]
         assert rows[1]["rule_name"] in h.bot[1]  # 第二則沒有被截掉
+
+    def test_split_batches_leave_room_for_tag(self) -> None:
+        """T-3:每批「文本 + 摘要 + 批尾 ` (i/N)`」都要 ≤ 1900 —— 批數要切完才知道,
+        所以 `_split_batches` 得先扣掉 `_BATCH_TAG_RESERVE` 再切。
+
+        不預留的失效樣態:某一批剛好落在 (1884, 1900] 就會被 Discord 退回,而
+        `test_oversized_merge_splits_into_batches` 的治具離上限太遠,永遠測不到。
+        """
+        rows = _tight_rows()
+        suffix = _TIGHT_SUFFIX
+        assert len(format_signal_group_text(rows)) + len(suffix) > 1900  # 前提:真的要分批
+        # 前提:三則剛好貼在上限上 —— 沒有預留就會被貪婪收成一批
+        assert len(format_signal_group_text(rows[:3])) + len(suffix) == 1900
+
+        batches = hub_mod._split_batches(rows, suffix)
+
+        total = len(batches)
+        assert total > 1
+        assert [row for batch in batches for row in batch] == rows  # 不漏不重不換序
+        for index, batch in enumerate(batches, 1):
+            text = f"{format_signal_group_text(batch)}{suffix} ({index}/{total})"
+            assert len(text) <= 1900, f"第 {index}/{total} 批 {len(text)} 字超標"
+
+    async def test_merged_message_counts_as_one_throttle_unit(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """T-4(SC-4「節流計 1 則」):同 tick 三則合併只吃掉一格額度。
+
+        逐 row 計一次的話,`discord_per_min=1` 下第一組就只送得出第一則(或整組被
+        擋),而合併的用意正是「一次穿多線不該把當分鐘的額度用光」。第二組(不同
+        tick)被擋下則釘住額度**確實只有一格** —— 少了它,把節流整條拿掉也會綠。
+        """
+        _write_rules(
+            tmp_path,
+            [
+                _rule("cdp_cross", "r-1-000", name="NL 規則", cdp_levels=["nl"]),
+                _rule("cdp_cross", "r-1-001", name="CDP 規則", cdp_levels=["cdp"]),
+                _rule("cdp_cross", "r-1-002", name="NH 規則", cdp_levels=["nh"]),
+            ],
+        )
+        h = _Harness(tmp_path, clock, discord_per_min=1)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330", "2317"])
+            await h.settle()
+
+            state = _state()  # 一筆 tick 同時穿 nl(70)/ cdp(75)/ nh(80)→ 三條規則各一則
+            h.hub.on_tick("2330", _tick(69_000, time="10:00:00.100"), state)
+            h.hub.on_tick("2330", _tick(86_000, cum=2, time="10:00:00.123"), state)
+            h.hub.on_tick("2317", _tick(79_000, code="2317", time="10:00:05.100"), state)
+            h.hub.on_tick("2317", _tick(80_500, code="2317", cum=2, time="10:00:06.000"), state)
+            await h.settle()
+
+            assert len(h.published) == 4  # W6:WS 逐 row,不受節流影響
+            assert len(h.bot) == 1  # 合併那則送出,第二組(2317)被擋 → 額度確實只有一格
+            assert "NL 規則・CDP 規則・NH 規則" in h.bot[0]
+        finally:
+            await h.hub.close()
 
     async def test_blocked_batch_is_logged_with_id(
         self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
@@ -1919,6 +2005,20 @@ class TestDiscordText:
     def test_legacy_row_without_rule_name(self) -> None:
         """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
         assert format_signal_text(self._row()).endswith("10:00:00")
+
+    def test_group_text_dedups_rule_name_across_kinds(self) -> None:
+        """SC-4(T-2):同一條規則同一 tick 觸發兩種 kind → kind 兩段、規則名只印一次。
+
+        kind 文案去重有專測(`_merge_rules` 刻意用兩條不同線),規則名去重沒有:
+        「爆拉…・爆量…｜當沖組・當沖組」在 Discord 上是純噪音,而任何測試都不會紅。
+        """
+        rows = [
+            self._row(kind="surge", pct=2.5, rule_name="當沖組"),
+            self._row(kind="vol_burst", pct=3.0, rule_name="當沖組"),
+        ]
+        text = format_signal_group_text(rows)
+        assert "爆拉 +2.50%・爆量 3.0 倍" in text  # kind 不同 → 兩段都在
+        assert text.count("當沖組") == 1
 
     def test_group_text_of_single_row_is_verbatim(self) -> None:
         """SC-4:單則走合併版仍**逐字**等於單則版 —— 絕大多數訊號走的正是這條路。"""
