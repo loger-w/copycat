@@ -180,7 +180,7 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
     expect(texts.length).toBe(1);
     // 段序 = 到達序(輸入新在前 → 反序),與 Discord 合併訊息 rows[0] 同一則
     expect(texts[0]).toContain("爆跌 -2.10%・突破 CDP 中軸");
-    expect(texts[0]).toContain("CDP 穿越・爆拉爆跌"); // 規則名同樣去重後串接
+    expect(texts[0]).toContain("爆拉爆跌・CDP 穿越"); // 規則名段序與 kind 段一致(到達序)
   });
 
   // T-12:「・」只是視覺分隔,讀螢幕器唸出來會把兩段文案黏成一句聽不懂的字串
