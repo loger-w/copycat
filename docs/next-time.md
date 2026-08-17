@@ -6,6 +6,13 @@
 - [ ] **每日台北 14:45–16:00 小日經腿 stale / corr 三窗依窗長先後轉「—」(w1800 最長 30 分後)/ 江波圖夜盤窗前 60 格空**(OSE 日盤收 → 夜盤開;
   台指夜盤 15:00 已開)= 預期行為非訂閱失效(判別:16:00 後恢復推播)。若覺得刺眼,候選 = 腿級「休市中」
   標示(需 OpenTime/CloseTime 語意,另案)。
+- [ ] **重疊圖 readout 對「全窗無值」腿不列**(code review R-2):`buildOverlayGeometry` 濾掉空腿 → pill 亮著、
+  圖與 readout 都沒它,呈現為「腿消失」;並排卡同狀態顯示「無資料」→ 兩模式不一致。每日 14:45–16:00 小日經
+  必命中。修法:readout 改由未過濾 entries 產生,空腿印「—」。
+- [ ] **日盤收盤 clamp 對交易到 14:45 的腿覆蓋 13:45 末格**(code review R-3,pre-existing 類):
+  `river_models.offset_of` 的 `end < m <= end+5 → end` 是為台期交 13:45 收盤寫的,小日經(OSE 日盤 14:45 收)
+  13:45–13:50 成交會 last-write-wins 蓋掉 13:45 收盤價 → 日盤圖小日經末點 ≈ 13:50;ES/NQ/YM 同類既有。
+  候選修法:clamp 只在 end 格尚無值時套用(把 apply_backfill 的 don't-overwrite 語意搬進 clamp 分支)。
 - [ ] 🔵 程式碼註解 / docstring「六腿」字樣批次改腿數無關(review R7/R2-4):判準 `grep -rn 六腿 copycat frontend/src`
   (corr_engine / river_models / river_state / app.py / types.ts / CorrPage / RiverCards / RiverOverlay / useRiver /
   river-chart-svg(+test)/ RiverPanel 檔頭 …),不寫死行號。純註解,零行為。
