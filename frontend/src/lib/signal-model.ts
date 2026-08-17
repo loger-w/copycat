@@ -109,3 +109,75 @@ export function mergeSignals(
   out.sort((a, b) => (a.time === b.time ? 0 : a.time > b.time ? -1 : 1));
   return out.length > cap ? out.slice(0, cap) : out;
 }
+
+/** 同一 tick(同 code、同 `time`)的一組訊號 —— 清單上顯示成一列(SC-5)。 */
+export interface SignalGroup {
+  /** 組內第一則的 id。**用它當 list key**:組員數會隨新訊號到達而變,
+   *  以「id 串接」當 key 時同一列每多一則就換一次 key = 整列卸載重掛。 */
+  key: string;
+  code: string;
+  name: string;
+  time: string;
+  /** 組內第一則的價格(輸入是「新在前」,即該 tick 最新的那筆)。 */
+  price: number;
+  items: SignalMsg[];
+}
+
+/** kind 文案的一段 + 產生它的訊號(著色要的是**該段自己**的 tone,不是整組的)。 */
+export interface KindSegment {
+  label: string;
+  sig: SignalMsg;
+}
+
+/** 相鄰且同 (code, time) 的訊號併成一組;輸入即輸出序(不排序、不去重)。
+ *
+ *  **只看相鄰**:輸入是 `mergeSignals` 的輸出(依 time 降冪、同秒維持插入序),
+ *  同一秒兩檔交錯時(edge 7)跨列搜尋會把中間那檔的列吃掉 —— 顯示上寧可多一列
+ *  也不要把不同標的的訊號併進同一列。 */
+export function groupSignals(signals: SignalMsg[]): SignalGroup[] {
+  const groups: SignalGroup[] = [];
+  for (const sig of signals) {
+    const last = groups.at(-1);
+    if (last !== undefined && last.code === sig.code && last.time === sig.time) {
+      last.items.push(sig);
+      continue;
+    }
+    groups.push({
+      key: sig.id,
+      code: sig.code,
+      name: sig.name,
+      time: sig.time,
+      price: sig.price,
+      items: [sig],
+    });
+  }
+  return groups;
+}
+
+/** 組內 kind 文案分段(首見順序),**同文案只留一段**:同 kind 兩條規則在同一
+ *  tick 各發一則時文案一模一樣,印兩段只是雜訊(規則名另外列)。 */
+export function groupKindLabels(group: SignalGroup): KindSegment[] {
+  const seen = new Set<string>();
+  const out: KindSegment[] = [];
+  for (const sig of group.items) {
+    const label = kindLabel(sig);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    out.push({ label, sig });
+  }
+  return out;
+}
+
+/** 組內規則名去重(首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,整段略過
+ *  —— 留下來只會變成一個沒有內容的分隔符。 */
+export function groupRuleNames(group: SignalGroup): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const sig of group.items) {
+    const name = sig.rule_name;
+    if (name === undefined || name === "" || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
