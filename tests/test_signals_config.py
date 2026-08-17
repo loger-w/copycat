@@ -12,6 +12,7 @@ from copycat.signals_config import CONFIG_PATH, SignalsConfig, load_signals_conf
 def test_default_values() -> None:
     cfg = SignalsConfig()
     assert cfg.cdp_rearm_ticks == 5
+    assert cfg.cdp_rearm_dwell_secs == 300.0
     assert cfg.cdp_cooldown_secs == 600
     assert cfg.surge_pct == 2.0
     assert cfg.surge_window_secs == 300
@@ -44,10 +45,14 @@ def test_missing_file_falls_back_to_defaults(tmp_path: Path) -> None:
 
 def test_load_override(tmp_path: Path) -> None:
     p = tmp_path / "signals.json"
-    p.write_text(json.dumps({"surge_pct": 3.5, "cdp_rearm_ticks": 7}), encoding="utf-8")
+    p.write_text(
+        json.dumps({"surge_pct": 3.5, "cdp_rearm_ticks": 7, "cdp_rearm_dwell_secs": 120.0}),
+        encoding="utf-8",
+    )
     cfg = load_signals_config(p)
     assert cfg.surge_pct == 3.5
     assert cfg.cdp_rearm_ticks == 7
+    assert cfg.cdp_rearm_dwell_secs == 120.0
     assert cfg.vol_ratio == 3.0  # 未覆寫者保留預設
 
 
