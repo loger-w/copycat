@@ -44,8 +44,9 @@ const IDX = indexSeriesToAccum(SERIES, "IX:TWSE", "加權指數");
 /** ma5 刻意取 **23018**(非合法檔位):`fmtTickPrice` 會 snap 成 23020,
  *  `fmt` 才印 23018 —— 指數沒有 tick 表可言,snap 出來的價位是憑空捏造的(SC-2)。 */
 const OVERLAY_IDX: StockOverlay = {
-  cdp: { cdp: 23_000_000, ah: 24_100_000, nh: 23_500_000, nl: 22_700_000, al: 22_500_000 },
-  ma5: 23_018_000,
+  // cdp / ma5 非 5 點整數倍且帶小數(review T-1 / C-2:整數倍 fixture 讓 snap 與整數點同值)
+  cdp: { cdp: 23_001_440, ah: 24_100_000, nh: 23_500_000, nl: 22_700_000, al: 22_500_000 },
+  ma5: 23_018_440,
   ma20: null,
   date: "2026-08-15",
 };
@@ -153,7 +154,7 @@ describe("IntradayChartCore mode=\"index\"", () => {
     const ma = container.querySelector('[data-testid="edge-price-ma5"]')!;
     expect(ma.textContent).toBe("23018");
     // 自檢:fixture 真的區分得出兩種口徑(否則本案恆綠)
-    expect(fmtTickPrice(23_018_000)).not.toBe("23018");
+    expect(fmtTickPrice(23_018_440)).not.toBe("23018");
   });
 
   it("overlaySupported=false(櫃買無日 K)→ CDP / MA 反灰 + overlayOffTitle", () => {
@@ -200,7 +201,7 @@ describe("IntradayChartCore mode=\"index\"", () => {
     expect(container.firstElementChild!.tagName).toBe("DIV");
   });
 
-  it("hover 價位標不 snap tick(指數的價位量尺是連續的)", () => {
+  it("hover 價位標不 snap tick,但收成整數點(量尺連續;36px 價標盒裝不下 8 字)", () => {
     const { container } = renderIndex();
     fireEvent.mouseMove(container.querySelector("svg")!, { clientX: 300, clientY: 100 });
     const g = buildIntradayGeometry(
@@ -209,9 +210,22 @@ describe("IntradayChartCore mode=\"index\"", () => {
       SPOT_WINDOW,
     );
     const raw = g.priceAtY(100);
-    expect(screen.getByTestId("price-tag-text").textContent).toBe(fmt(raw));
-    // 自檢:這個 y 上兩種口徑真的不同(否則本案恆綠)
-    expect(fmt(raw)).not.toBe(fmt(snapDown(raw)));
+    const rounded = Math.round(raw / 1000) * 1000;
+    expect(screen.getByTestId("price-tag-text").textContent).toBe(fmt(rounded));
+    // 整數點:不帶小數(R4 real-env:「24285.42」溢出價標盒)
+    expect(screen.getByTestId("price-tag-text").textContent).not.toMatch(/\./);
+    // 自檢:這個 y 上 tick-snap 與整數點真的不同(否則本案恆綠)
+    expect(fmt(rounded)).not.toBe(fmt(snapDown(raw)));
+  });
+
+  it("左緣 y 刻度 / CDP 價位標 / 掛牌一律整數點(軸帶 36/40px 裝不下「24283.54」;review C-2)", () => {
+    renderIndex();
+    const ticks = screen.getAllByTestId("y-tick-price").map((t) => t.textContent ?? "");
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const t of ticks) expect(t).not.toMatch(/\./);
+    // CDP 23_001_440 → 「23001*」(不 snap 成 23000、不印 .44)
+    expect(screen.getByText("23001*")).toBeTruthy();
+    for (const p of screen.getAllByTestId(/^overlay-peg-/)) expect(p.textContent).not.toMatch(/\./);
   });
 
   it("不打 /api/stock/overlay(疊線由 caller 注入;IX:TWSE 不是股號)", async () => {

@@ -31,8 +31,10 @@ function series(over: Partial<IndexSeries> = {}): IndexSeries {
  *  `ma5` 刻意取 **23018**(非合法檔位):`fmtTickPrice` 會 snap 成 23020,`fmt` 才印
  *  23018 —— 指數沒有 tick 表,snap 出來的點位是憑空捏造的(SC-2)。 */
 const OVERLAY_IN = {
-  cdp: { cdp: 23_050_000, ah: 23_150_000, nh: 23_100_000, nl: 22_995_000, al: 22_950_000 },
-  ma5: 23_018_000,
+  // cdp 本尊 / ma5 刻意**非 5 點整數倍且帶小數**(review T-1 / C-2):tick 表對 ≥1000 元帶
+  // 是 5 元檔,整數倍的 fixture 讓 fmtTickPrice 與整數點口徑同值,priceText 改回 snap 也全綠。
+  cdp: { cdp: 23_051_440, ah: 23_150_000, nh: 23_100_000, nl: 22_995_000, al: 22_950_000 },
+  ma5: 23_018_440,
   ma20: 22_930_000,
   date: "2026-08-13",
 };
@@ -160,7 +162,9 @@ describe("MarketChart 分時疊線(SC-3)", () => {
     const starred = [...container.querySelectorAll("text")]
       .map((t) => t.textContent ?? "")
       .filter((s) => s.endsWith("*"));
-    expect(starred.sort()).toEqual(["22950*", "22995*", "23050*", "23100*", "23150*"]);
+    expect(starred.sort()).toEqual(["22950*", "22995*", "23051*", "23100*", "23150*"]);
+    // 自檢:cdp 23_051_440 在 tick 口徑會 snap 成 23050,整數點口徑印 23051 —— fixture 區分得出兩者
+    expect(fmtTickPrice(23_051_440)).not.toBe("23051");
     // 線體止於繪圖區(core 的左緣價位帶 / 右緣疊線帶都不被覆蓋),不再橫貫全寬
     expect(dashedOverlayLines(container)[0]!.getAttribute("x1")).toBe(String(Y_AXIS_W));
     expect(dashedOverlayLines(container)[0]!.getAttribute("x2")).toBe(String(800 - R_AXIS_W));
@@ -182,17 +186,18 @@ describe("MarketChart 分時疊線(SC-3)", () => {
     expect(screen.queryByText("24000*")).toBeNull();
   });
 
-  it("MA 開 → 右緣帶名稱 + 繪圖區內側價位標,價位走 fmt 不 snap tick", async () => {
+  it("MA 開 → 右緣帶名稱 + 繪圖區內側價位標,價位走整數點不 snap tick", async () => {
     const { container } = renderChart({ t: toggles({ cdp: false, ma: true }) });
     await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(2));
     // 右緣帶內是名稱(R_AXIS_W 裝不下名稱 + 四位數價位)
     expect(screen.getByText("MA5")).toBeTruthy();
     expect(screen.getByText("MA20")).toBeTruthy();
-    // 價位標:23018 不得被 snap 成 23020(指數沒有可下單檔位)
+    // 價位標:23018.44 → 整數點 23018,不得被 snap 成 23020(指數沒有可下單檔位),
+    // 也不印小數(36/40px 的軸帶裝不下 8 字,review C-2)
     expect(container.querySelector('[data-testid="edge-price-ma5"]')!.textContent).toBe("23018");
     expect(container.querySelector('[data-testid="edge-price-ma20"]')!.textContent).toBe("22930");
     // 自檢:fixture 真的區分得出兩種口徑(否則本案恆綠)
-    expect(fmtTickPrice(23_018_000)).not.toBe("23018");
+    expect(fmtTickPrice(23_018_440)).not.toBe("23018");
   });
 });
 

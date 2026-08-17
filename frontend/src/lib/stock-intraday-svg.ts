@@ -568,6 +568,12 @@ export function pegLabels(
 ): PegLabel[] {
   if (bounds.top > bounds.bottom) return [];
   const clamp = (y: number): number => Math.min(Math.max(y, bounds.top), bounds.bottom);
+  // 兩側各自堆疊,**槽位次序都與價位一致**:up 側輸入序已是價位由高到低(`outOfDomainLevels`
+  // 的 push 次序 ah→nh→cdp→nl→al→ma5→ma20),第一顆貼上緣、其後往下;down 側同一輸入序
+  // 是「較高的先來」,若也照輸入序由下緣往上疊,較高的 NL 會壓在最下、較低的 AL 反而在上
+  // (code review C-1)—— 所以 down 側由**該側最後一顆**貼下緣起算,前面的往上排。
+  // 只用 push 次序不另做價位排序:兩側都靠 `outOfDomainLevels` 的固定次序,再排一次是第二把尺。
+  const downTotal = pegs.filter((p) => p.dir === "down").length;
   let ups = 0;
   let downs = 0;
   const out: PegLabel[] = [];
@@ -575,7 +581,7 @@ export function pegLabels(
     const raw =
       p.dir === "up"
         ? bounds.top + ups++ * EDGE_LABEL_H
-        : bounds.bottom - downs++ * EDGE_LABEL_H;
+        : bounds.bottom - (downTotal - 1 - downs++) * EDGE_LABEL_H;
     out.push({ level: p.level, priceMilli: p.priceMilli, dir: p.dir, y: clamp(raw) });
   }
   return out;
