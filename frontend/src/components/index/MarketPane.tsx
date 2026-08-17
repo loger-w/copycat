@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { MarketChart } from "@/components/index/MarketChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
@@ -6,7 +6,13 @@ import { useContainerSize } from "@/hooks/useContainerSize";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import { chgPct, fmtPct } from "@/lib/format";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
-import { PANE_FRAMES, paneSvgHeight, paneUnitScale, svgFontRem } from "@/lib/pane-frame";
+import {
+  PANE_FRAMES,
+  paneIntradayBox,
+  paneSvgHeight,
+  paneUnitScale,
+  svgFontRem,
+} from "@/lib/pane-frame";
 import { pts } from "@/lib/svg-points";
 import { HOUR_TICKS } from "@/lib/time-labels";
 import {
@@ -109,9 +115,11 @@ const OVERLAY_LINES = [
 
 /** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。
  *
- *  `height` 同 `MarketChart.height` 的口徑:**viewBox 單位**,caller 已扣 chrome、
+ *  `height` 同 `MarketChart.height`(K 線態)的口徑:**viewBox 單位**,caller 已扣 chrome、
  *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。
- *  `unitScale` 同 `MarketChart.unitScale`:抵銷 svg 等比縮放,未給 → 1(WL-3)。 */
+ *  `unitScale` = `paneUnitScale` 算出的字級補償:抵銷 svg 等比縮放,未給 → 1(WL-3)。
+ *  **本卡是這條補償僅存的讀者** —— 分時態 2026-08-17 換 `IntradayChartCore` 後走 1:1 px,
+ *  縮放比恆 1,補償無用武之地(見 `paneIntradayBox`)。 */
 function OverlayCard({
   twse,
   otc,
@@ -339,15 +347,29 @@ export function MarketPane({
   // series,拆成布林會讓 JSX 那側得再判一次 null(或掛 `!` 賭它)。
   const overlayPair =
     overlay && mode === "intraday" && twse !== null && otc !== null ? { twse, otc } : null;
-  const frame =
-    overlayPair !== null
+  // 分時圖(非重疊)改吃 **1:1 px box**,不再有 viewBox 反解與字級補償可言。
+  const paneIntraday = overlayPair === null && mode === "intraday";
+  // `frame` 在分時態是 **null 而不是 `PANE_FRAMES.candle`**:分時已退出這張表,讓它
+  // 落到 candle 那格會算出一個沒人讀、但看起來很正常的高度 —— 哪天有人把它接回
+  // `MarketChart` 時症狀是圖高差一個 `1400 / svgW` 倍率而畫面照畫。
+  const frame = paneIntraday
+    ? null
+    : overlayPair !== null
       ? PANE_FRAMES.overlay
-      : mode === "intraday"
-        ? PANE_FRAMES.intraday
-        : PANE_FRAMES.candle;
-  const svgHeight = paneSvgHeight(size, frame);
-  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變)
-  const unitScale = paneUnitScale(size, frame) ?? 1;
+      : PANE_FRAMES.candle;
+  const svgHeight = frame === null ? undefined : paneSvgHeight(size, frame);
+  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變);只剩 OverlayCard 讀
+  const unitScale = frame === null ? 1 : (paneUnitScale(size, frame) ?? 1);
+  // **必經 useMemo**:物件 prop 每 render 新 identity 會一路打穿下游的 memo,而症狀
+  // 只是 hover 掉幀、沒有任何測試會紅。deps 拆成兩個純量 —— `size` 物件本身每次量測
+  // 都是新的,拿它當 dep 等於沒 memo。
+  // 量不到 → `undefined`:讓 core 走它自己的 800×260 預設,而不是傳一組 0(svg 不報錯,
+  // 純粹畫不出來)。
+  const intradayBox = useMemo(() => {
+    if (!paneIntraday) return undefined;
+    const box = paneIntradayBox({ width: size.width, height: size.height });
+    return box.usable ? { width: box.width, height: box.height } : undefined;
+  }, [paneIntraday, size.width, size.height]);
 
   return (
     <section
@@ -406,8 +428,10 @@ export function MarketPane({
           15rem 下修)是**唯一**一條 min-height:堆疊 / 內容決定高的模式下給 figure 一個
           地板,量測 → 內容 → 量測才會收斂;同時掛 `min-h-0` 會把地板消掉,退回「圖可以
           被壓成 0 高」。12rem 的算式:192 − chrome 62(border 2 + p-4 32 + caption 20)
-          = wrapper 130 → svg render 128 − 26 toggle 列 = 102,仍高於 `paneSvgHeight`
-          的 96 地板(地板一旦吃到,反解出的高就與容器脫鉤)。 */}
+          = wrapper 130 → 分時圖 1:1 高 = floor(130 − 26 頂列) − 2 = 102,仍高於
+          `paneIntradayBox` 的 96 地板(地板一旦吃到,圖高就與容器脫鉤)。
+          **頂列 26 沒隨換元件變**:`IntradayChartCore` 的 readout 列與舊 toggle 列是
+          同一組 class(`h-[1.375rem]` + `mb-1`),所以這條算式逐值沿用。 */}
       <figure className="flex min-h-48 flex-1 flex-col rounded-md border border-line bg-surface p-4">
         <figcaption className="flex flex-wrap items-baseline gap-3">
           <h3 className="text-sm font-bold text-ink">{NAMES[marketKey]}</h3>
@@ -442,8 +466,11 @@ export function MarketPane({
               toggles={toggles}
               onToggle={onToggle}
               active={active}
+              // 兩種單位分兩個 prop:`height` = K 線態的 viewBox 單位(已反解),
+              // `intradayBox` = 分時態的 px(1:1)。同一個 prop 帶兩種單位時,
+              // 改其中一態的換算會靜默改到另一態。
               height={svgHeight}
-              unitScale={unitScale}
+              intradayBox={intradayBox}
             />
           )}
         </div>
