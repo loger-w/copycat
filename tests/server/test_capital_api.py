@@ -254,6 +254,7 @@ class TestOrdersPositions:
                 [
                     Position(market="sec", stock_no="2330", qty=2),
                     Position(market="fut", stock_no="CDFI6", qty=1),
+                    Position(market="fut", stock_no="QFFI6", qty=-1),
                     Position(market="fut", stock_no="EE1I6", qty=1),
                 ]
             )
@@ -261,6 +262,7 @@ class TestOrdersPositions:
             assert [(p["stock_no"], p["code"]) for p in positions] == [
                 ("2330", "2330"),  # sec:股號直接沿用
                 ("CDFI6", "2330"),  # fut 標準:CDF → 2330
+                ("QFFI6", "2330"),  # fut 小型:QFF → 同一檔股號(單位差 20 倍,前端逐契約顯示)
                 ("EE1I6", None),  # 除權息調整碼進不了對映表 → 不猜
             ]
             # 既有欄位仍在(加欄是 additive)
