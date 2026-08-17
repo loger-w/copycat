@@ -6,6 +6,7 @@
  *  後端 `_valid_code` 對 key 會 400,而 TC4 對不存在的 symbol 一律回 `Success: OK`
  *  —— 兩者互換時都不會有錯誤訊號,只會畫錯商品。
  */
+import { snapDown, snapUp } from "@/lib/stock-tick";
 
 /** 一腿產品(標準或小型)。`contracts` = 可訂閱的月份(YYYYMM)。
  *
@@ -95,6 +96,22 @@ export function isEtfUnderlying(code: string): boolean {
 export function isOrderBlocked(code: string, unit: number | null): boolean {
   if (unit === null) return isEtfUnderlying(code);
   return !STOCK_FUTURE_UNITS.includes(unit);
+}
+
+/** 個股期「市價」鈕的送單價(毫元)—— 貼漲跌停 + IOC(D3a),不是真市價單。
+ *
+ *  **必須 snap 到合法檔位**:這條路徑走 `POST /api/capital/order/future`,後端
+ *  `_stkfut_gates` 對 limit 單會 `_require_legal_tick` → 未對齊就是 400 BAD_TICK(R-D)。
+ *  買側往下、賣側往上,兩邊都是**往簿內收**:越界的檔位券商一律退單。
+ *  界值 null / ≤ 0(後端缺值以 0 給)→ null = 鎖鈕,不用假想界送真錢單。 */
+export function stkfutMarketEdgeMilli(
+  side: "buy" | "sell",
+  meta: { upper: number | null; lower: number | null } | null,
+): number | null {
+  if (meta === null) return null;
+  const raw = side === "buy" ? meta.upper : meta.lower;
+  if (raw === null || raw <= 0) return null;
+  return side === "buy" ? snapDown(raw) : snapUp(raw);
 }
 
 /** `202609` → `2026/09`(下拉選項文字)。 */

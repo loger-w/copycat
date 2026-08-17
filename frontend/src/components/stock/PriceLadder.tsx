@@ -7,6 +7,7 @@ import {
   type CenterRequest,
   type LadderLot,
 } from "@/components/stock/LadderView";
+import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
 import {
   useCancelOrder,
   useCapitalOrders,
@@ -16,7 +17,7 @@ import {
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { LOCK_WS_TITLE } from "@/lib/flash-arm";
-import { settleFlashSend } from "@/lib/flash-send";
+import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
@@ -262,6 +263,7 @@ export function PriceLadder({
   const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+  const lastMarketClick = useRef<{ key: string; ts: number } | null>(null);
   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
 
   const submitStock = useSubmitStock();
@@ -333,6 +335,50 @@ export function PriceLadder({
         dispatch: dispatchArm,
         showHint,
         okText: `已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty}`,
+      },
+    );
+  }
+
+  /** 梯頂市價鈕(SC-2)。現股走群益真市價(`nSpecialTradeType=1`),`price` 只是名目
+   *  金額閘的估價 —— 成交價是對手價,與它無關(D5;KL-1)。
+   *
+   *  防抖走**獨立**槽位:與點價共用 `lastClick` 時,「市價買 → 點價 → 市價買」中間那
+   *  一下會把市價的槽位洗掉,500ms 內就送得出兩張市價單(review R9)。 */
+  function marketOrder(side: "buy" | "sell"): void {
+    touchIdle();
+    if (tradeKind === "daytrade_sell" && side === "buy") return; // UI 已 disabled,雙保險
+    if (last === null) return; // 估價缺:鈕已 disabled,雙保險(不拿假想價送真單)
+    if (!arm.state.armed) {
+      showHint("未武裝 — 市價不送單", true);
+      return;
+    }
+    const now = Date.now();
+    if (
+      lastMarketClick.current !== null &&
+      lastMarketClick.current.key === side &&
+      now - lastMarketClick.current.ts < CLICK_DEBOUNCE_MS
+    ) {
+      return; // 同一顆 500ms 防抖
+    }
+    lastMarketClick.current = { key: side, ts: now };
+    const qty = qtyState.qty;
+    settleFlashSend(
+      submitStock.mutateAsync({
+        stock_no: code,
+        buy_sell: side,
+        price: last.p / 1000,
+        qty,
+        price_type: "market",
+        time_in_force: "ROD",
+        trade_kind: tradeKind,
+        source: "flash",
+      }),
+      {
+        alive: () => aliveRef.current,
+        dispatch: dispatchArm,
+        showHint,
+        // hint 帶股號:鎖定態換標的不解除武裝(R-H),誤送到哪一檔必須當下可見
+        okText: `已送 ${code} 市價${side === "buy" ? "買" : "賣"} × ${qty}`,
       },
     );
   }
@@ -415,6 +461,16 @@ export function PriceLadder({
       onClickPrice={clickPrice}
       onCancelLot={cancelLot}
       centerRequest={centerRequest}
+      ladderTop={
+        <MarketOrderButtons
+          onMarket={marketOrder}
+          state={marketButtonState({
+            kind: "stock",
+            estimateMissing: last === null,
+            buyLocked: tradeKind === "daytrade_sell",
+          })}
+        />
+      }
       titleExtra={
         /* 折數框放**標題列**不放武裝列(ORD-1):武裝列上它會與張數框變成同型相鄰的
            兩個數字框,而其中一個是真錢張數 —— 誤打折數時張數靜默留舊值,下一次點價

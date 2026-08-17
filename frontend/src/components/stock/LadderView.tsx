@@ -91,6 +91,10 @@ interface Props {
   lockTitle?: string;
   /** 武裝鈕右側的商品別控制項(現股交易別 select / 個股期當沖 checkbox) */
   armControls?: ReactNode;
+  /** 武裝列與價格梯之間的固定列(梯頂市價鈕)。**在 scroll 容器之外** —— 捲動價格梯
+   *  時它不動,也不進 rowRefs / 不影響置中目標(W6)。`rows` 為空時照樣渲染:鈕自身
+   *  由 container 依估價鎖,「無資料」不是「不該有鈕」。 */
+  ladderTop?: ReactNode;
   /** 買側全鎖(現股無券);與 `dimmed` 疊加 */
   buyLocked?: boolean;
   /** 買賣兩側全鎖(商品本身不開放下單,如 ETF 期貨);與 `dimmed` 疊加 */
@@ -129,6 +133,7 @@ export function LadderView({
   lockDisabled = false,
   lockTitle,
   armControls = null,
+  ladderTop = null,
   buyLocked = false,
   priceLocked = false,
   qty,
@@ -259,6 +264,7 @@ export function LadderView({
           <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
         ) : null}
       </div>
+      {ladderTop}
       {rows.length === 0 ? (
         <p className="px-2 py-4 text-center text-xs text-ink-dim">無資料</p>
       ) : (

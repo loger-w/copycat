@@ -118,6 +118,23 @@ export function edgeMilli(
   return side === "buy" ? upper : lower;
 }
 
+/** 期貨「市價」鈕的送單價(毫點)—— 貼漲跌停 + IOC(D3a),不是真市價單。
+ *
+ *  邊價 floor / ceil 到 `FUT_TICK_MILLI`,與 `buildFuturesLadder` 的界截斷同口徑
+ *  (:144-145):`state.upper` 不保證落在合法檔位,而期貨路徑後端**沒有** tick 閘 ——
+ *  未對齊只會被券商退單,而那時使用者已經按下去了。兩側都往簿內收。 */
+export function futMarketEdgeMilli(
+  side: "buy" | "sell",
+  upper: number | null,
+  lower: number | null,
+): number | null {
+  const e = edgeMilli(side, upper, lower);
+  if (e === null) return null;
+  return side === "buy"
+    ? Math.floor(e / FUT_TICK_MILLI) * FUT_TICK_MILLI
+    : Math.ceil(e / FUT_TICK_MILLI) * FUT_TICK_MILLI;
+}
+
 /** 平倉閘用估價(design amendment:期貨平倉限價貼漲跌停)——
  *  多單平倉(賣)用跌停價、空單平倉(買)用漲停價;單位元 = Milli/1000。
  *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。 */

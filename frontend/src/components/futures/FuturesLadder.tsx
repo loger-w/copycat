@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
+import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
 import {
   useCancelOrder,
   useCapitalOrders,
@@ -11,12 +12,13 @@ import {
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { closeBodyOf } from "@/lib/close-order";
 import { LOCK_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
-import { settleFlashSend } from "@/lib/flash-send";
+import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import {
   buildFuturesLadder,
   futCloseEstimate,
   futExchangeContract,
+  futMarketEdgeMilli,
   splitMyLots,
   type FutLadderRow,
 } from "@/lib/futures-ladder";
@@ -79,6 +81,7 @@ export function FuturesLadder({
   const progScroll = useRef(false);
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
+  const lastMarketClick = useRef<{ key: string; ts: number } | null>(null);
   const aliveRef = useRef(true); // unmount 後 mutateAsync 尾段不再碰 state(review B8)
 
   const submitFuture = useSubmitFuture();
@@ -135,6 +138,18 @@ export function FuturesLadder({
   // 合約失解析與 WS 非 open(SC-13)都只是「不得進入鎖定」的理由,已鎖定時解鎖鈕恆可按。
   const lockDisabled = (contract === null || arm.wsStatus !== "open") && !arm.state.locked;
 
+  // 市價鈕的貼漲跌停邊價(已對齊 FUT_TICK);合約未解析 / 界缺 / 無中心價 → 鎖鈕
+  const marketEdge = (side: "buy" | "sell") =>
+    futMarketEdgeMilli(side, state?.upper ?? null, state?.lower ?? null);
+  const marketState = marketButtonState({
+    kind: "futures",
+    estimateMissing:
+      contract === null ||
+      centerMilli === null ||
+      marketEdge("buy") === null ||
+      marketEdge("sell") === null,
+  });
+
   function showHint(text: string, autoClear = false): void {
     if (!aliveRef.current) return; // unmount 後不設 timer / state(review B8)
     window.clearTimeout(hintTimer.current);
@@ -177,6 +192,46 @@ export function FuturesLadder({
         dispatch: dispatchArm,
         showHint,
         okText: `已送 ${side === "buy" ? "買" : "賣"} ${fmt(priceMilli)} × ${qty} 口`,
+      },
+    );
+  }
+
+  /** 梯頂市價鈕(SC-4)。與個股期同一條(D3a):限價貼漲跌停 + IOC,邊價已對齊 FUT_TICK。
+   *  防抖走獨立槽位(理由見 PriceLadder 同段註)。 */
+  function marketOrder(side: "buy" | "sell"): void {
+    touchIdle();
+    const edge = marketEdge(side);
+    if (contract === null || centerMilli === null || edge === null) return; // 鈕已 disabled,雙保險
+    if (!arm.state.armed) {
+      showHint("未武裝 — 市價不送單", true);
+      return;
+    }
+    const now = Date.now();
+    if (
+      lastMarketClick.current !== null &&
+      lastMarketClick.current.key === side &&
+      now - lastMarketClick.current.ts < CLICK_DEBOUNCE_MS
+    ) {
+      return; // 同一顆 500ms 防抖
+    }
+    lastMarketClick.current = { key: side, ts: now };
+    const qty = qtyState.qty;
+    settleFlashSend(
+      submitFuture.mutateAsync({
+        tc4_symbol: `TC.F.TWF.${product}.HOT`,
+        buy_sell: side,
+        price: edge / 1000,
+        qty,
+        price_type: "limit",
+        time_in_force: "IOC",
+        day_trade: dayTrade,
+        source: "flash",
+      }),
+      {
+        alive: () => aliveRef.current,
+        dispatch: dispatchArm,
+        showHint,
+        okText: `已送 ${contract} 市價${side === "buy" ? "買" : "賣"} × ${qty} 口`,
       },
     );
   }
@@ -401,6 +456,8 @@ export function FuturesLadder({
           <p className="mt-1 text-center text-xs text-ink-muted">{hint}</p>
         ) : null}
       </div>
+      {/* 梯頂市價鈕:在 scroll 容器之外 → 捲動價格梯時不動(SC-1) */}
+      <MarketOrderButtons onMarket={marketOrder} state={marketState} />
       {rows.length === 0 ? (
         <p className="px-2 py-4 text-center text-xs text-ink-dim">無資料</p>
       ) : (
