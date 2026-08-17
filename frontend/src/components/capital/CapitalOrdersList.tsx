@@ -131,7 +131,21 @@ function OrderRow({ order, danger, busy, onCancel, onCorrectPrice, onDecrease }:
       <div className={GRID}>
         <span className="truncate text-ink">{title}</span>
         <span className={cn(isBuy ? "text-bull" : "text-bear")}>{isBuy ? "買" : "賣"}</span>
-        <span className="text-ink">{priceText}</span>
+        <span className="text-ink">
+          {/* 市價單的 price 欄印的是**閘用估價**,與限價單的委託價長得一模一樣 ——
+              沒有標籤就無從分辨這張單會掃到什麼價。緊湊前綴不換行(288px 右欄下
+              標的名仍要可辨,review R12);非本 app 送出 / 跨日的單恆 null → 不標。 */}
+          {order.price_type === "market" && (
+            <span
+              data-testid="order-market-tag"
+              title="市價單"
+              className="mr-0.5 text-[10px] leading-none text-ink-muted"
+            >
+              市價
+            </span>
+          )}
+          {priceText}
+        </span>
         <span className="text-ink-muted">{qtyText}</span>
         <span className={cn("text-right", order.error_msg ? "text-loss" : "text-ink-muted")}>
           {order.status_label ?? order.status_raw ?? "—"}
