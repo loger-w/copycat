@@ -23,18 +23,28 @@ export function settleFlashSend(
   p: Promise<{ ok: boolean; message: string }>,
   ctx: FlashSendCtx,
 ): void {
-  p.then((r) => {
-    if (r.ok) {
-      if (!ctx.alive()) return;
-      ctx.dispatch({ type: "send_ok" });
-      ctx.showHint(ctx.okText);
-    } else {
+  // **兩參數 then,不是 `.then().catch()`**(code review r1 IMPL-3):串接時成功分支自己
+  // 拋出的例外(showHint 內 setState 炸)會掉進 catch → 同一次送單既 send_ok 又 send_fail,
+  // 一張成功的單把武裝斷路器往「連敗」推。錯誤處理只該看 promise 本身的結果。
+  p.then(
+    (r) => {
+      if (r.ok) {
+        if (!ctx.alive()) return;
+        ctx.dispatch({ type: "send_ok" });
+        ctx.showHint(ctx.okText);
+      } else {
+        ctx.dispatch({ type: "send_fail" });
+        ctx.showHint(r.message !== "" ? r.message : "送單失敗");
+      }
+    },
+    (err: unknown) => {
       ctx.dispatch({ type: "send_fail" });
-      ctx.showHint(r.message !== "" ? r.message : "送單失敗");
-    }
-  }).catch((err: unknown) => {
-    ctx.dispatch({ type: "send_fail" });
-    ctx.showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
+      ctx.showHint(tradeErrorText(err instanceof Error ? err.message : String(err)));
+    },
+  ).catch((err: unknown) => {
+    // 只有上面兩個回呼**自己**拋才會到這裡:送單結果已處理完,不得回頭補 send_fail。
+    // 無從補救(state 已 dispatch),但也不能靜默 —— 留 console.error 讓它在 devtools 可見。
+    console.error("閃電送單尾段回呼例外(送單結果已處理,不改判成敗)", err);
   });
 }
 

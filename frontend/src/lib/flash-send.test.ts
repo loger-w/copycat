@@ -68,6 +68,23 @@ describe("settleFlashSend 閃電送單尾段守門", () => {
     expect(showHint.mock.calls).toEqual([["券商拒單"]]);
   });
 
+  /** IMPL-3:`.then().catch()` 串接下,成功分支自己拋的例外會落進 catch → 同一次送單
+   *  既 send_ok 又 send_fail,武裝斷路器被一張**成功**的單往連敗推(第 3 次就自動解除)。 */
+  it("成功分支的 showHint 拋 → dispatch 恰一次 send_ok,不得補 send_fail", async () => {
+    const { ctx, dispatch, showHint } = ctxOf(true);
+    showHint.mockImplementation(() => {
+      throw new Error("setState 炸了");
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    settleFlashSend(Promise.resolve({ ok: true, message: "" }), ctx);
+    await flush();
+    expect(dispatch.mock.calls).toEqual([[{ type: "send_ok" }]]);
+    expect(showHint).toHaveBeenCalledTimes(1);
+    // 不靜默:回呼自身的例外走 console.error(unhandled rejection 會炸掉整個測試檔)
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   it("throw 非 Error 值 → String(err) 進 tradeErrorText", async () => {
     const { ctx, showHint } = ctxOf(true);
     settleFlashSend(rejectWith("怪東西"), ctx);
