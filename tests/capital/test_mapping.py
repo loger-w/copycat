@@ -18,6 +18,7 @@ from copycat.capital.mapping import (
     is_option_contract,
     multiplier_of,
     product_of,
+    stock_code_of,
     to_exchange_symbol,
     to_futureorder_fields,
     to_stockorder_fields,
@@ -348,6 +349,23 @@ def test_exchange_product_of_known_prefix_wins(contract: str, product: str) -> N
     # 週選契約(TX422000T6)的「去尾 2 碼取字母段」啟發式會截成 "TX" →
     # 乘數反查 ValueError → fallback 1,金額閘鬆 50 倍(review A1)
     assert exchange_product_of(contract) == product
+
+
+def test_stock_code_of() -> None:
+    """部位列 → 股號(SC-1)。**打真 `stkfut_map.DEFAULT_PATH` 不 monkeypatch**:
+
+    這條 helper 的價值就在「版控對映表現在真的認得這個契約碼」,拿 tmp map 測等於
+    只測了自己寫的假資料;版控表哪天沒 refresh 掉了 CDF,這條要跟著紅。
+    """
+    # 證券:stock_no 本身就是股號
+    assert stock_code_of("sec", "2330") == "2330"
+    # 個股期:標準(CDF)與小型(QFF)契約碼都反查到同一檔股號
+    assert stock_code_of("fut", "CDFI6") == "2330"
+    assert stock_code_of("fut", "QFFI6") == "2330"
+    # 除權息調整後商品代號第三碼由 F 改數字(EE1)→ 進不了對映表 → 不猜
+    assert stock_code_of("fut", "EE1I6") is None
+    # 契約碼壞到 exchange_product_of 都 raise → 吞成 None,不擋整條 positions API
+    assert stock_code_of("fut", "1") is None
 
 
 class TestIsOptionContract:
