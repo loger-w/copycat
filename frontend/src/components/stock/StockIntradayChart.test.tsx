@@ -1731,6 +1731,16 @@ describe("StockIntradayChart 當日成交點(SC-3/4/5/9)", () => {
     expect(fillPolys(container).length).toBe(0);
   });
 
+  /** cr1 B-p2-4 [lock]:三角不吃指標事件。整張主圖的 hover 十字線 / readout 都靠 svg 的
+   *  `onMouseMove`,而 polygon 蓋在價線上 —— 少了 `pointerEvents="none"`,滑過成交點的
+   *  那一瞬 readout 會停格(事件被三角吃掉),而畫面「有圖有值」零錯誤訊號。
+   *  沿 `PriceLadder.test.tsx` 的 `pointer-events-none` 屬性鎖先例。 */
+  it("SC-3:fills-layer 不吃指標事件(pointerEvents=none)", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    const layer = container.querySelector('[data-testid="fills-layer"]')!;
+    expect(layer.getAttribute("pointer-events")).toBe("none");
+  });
+
   it("SC-3:未傳 fills → 零三角(層恆 render,空集合時內容為空)", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     expect(fillPolys(container).length).toBe(0);
@@ -1769,6 +1779,20 @@ describe("StockIntradayChart 當日成交點(SC-3/4/5/9)", () => {
     expect(readout.textContent).toContain("買 2@2380");
     const last = readout.children[readout.children.length - 1]!;
     expect(last.getAttribute("class")).toContain("text-bull");
+  });
+
+  /** cr1 B-p2-2 [lock]:賣單單側的 tone。買側(bull)與雙側(無 tone)本節已鎖,
+   *  中間那條 `every(S) → bear` 分支沒有斷言 —— 掉成 undefined 或跟著買側塗紅都不會紅。 */
+  it("SC-4:hover 到只有賣的分鐘 → 成交欄 tone bear", () => {
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} fills={FILLS} />);
+    fireEvent.mouseMove(container.querySelector("svg")!, {
+      clientX: minuteToX(542, 800, SPOT_WINDOW),
+      clientY: 100,
+    });
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.textContent).toContain("賣 1@2385");
+    const last = readout.children[readout.children.length - 1]!;
+    expect(last.getAttribute("class")).toContain("text-bear");
   });
 
   it("SC-4:同分鐘買賣各一 → 「買 2@2380 賣 1@2385」且不判色(雙側無單一 tone)", () => {
@@ -1833,6 +1857,27 @@ describe("StockIntradayChart 當日成交點(SC-3/4/5/9)", () => {
     );
     expect(fillPolys(container).length).toBe(0);
     expect(screen.getByTestId("chart-readout").textContent).not.toContain("成交");
+  });
+
+  /** cr1 B-1 [lock]:期貨態的 `xw`。`projectFills` 的窗參數寫死 `SPOT_WINDOW` 時本節其餘
+   *  案子全綠(它們的分鐘 541 / 542 兩窗皆內),而畫面上 08:45–08:59 的成交整段消失、
+   *  留下來的那些 x 還全部偏掉 —— 期貨窗比現貨窗長 30 分鐘,同一分鐘的 x 不同。
+   *  兩個斷言各鎖一半:530 鎖「窗界」、541 鎖「x 換算的分母」。 */
+  it("SC-5:期貨態成交點走 STKFUT_WINDOW(08:50 畫得出來、x 以期貨窗反算)", () => {
+    const stkfutFills: readonly FillPoint[] = [
+      { minute: 8 * 60 + 50, priceMilli: 2_380_000, side: "B", qty: 1 },
+      { minute: 541, priceMilli: 2_380_000, side: "B", qty: 1 },
+    ];
+    const { container } = wrap(
+      <StockIntradayChart accum={ACCUM} stkfut fills={stkfutFills} />,
+    );
+    // 08:50 在期貨窗內、現貨窗外:寫死現貨窗的話這顆會被丟掉
+    expect(container.querySelector('polygon[data-testid="fill-B-530"]')).toBeTruthy();
+    const { w } = geoOf(container, ACCUM);
+    const [x] = tipOf(container.querySelector('polygon[data-testid="fill-B-541"]')!);
+    expect(x).toBeCloseTo(clampFillX(minuteToX(541, w, STKFUT_WINDOW), w), 5);
+    // 自檢:兩窗對 541 算出的 x 確實不同(相同的話上一行恆綠而毫無意義)
+    expect(x).not.toBeCloseTo(clampFillX(minuteToX(541, w, SPOT_WINDOW), w), 5);
   });
 
   it("SC-5:期貨態「成交點」不反灰(成交資料不依賴日線 overlay)", () => {
