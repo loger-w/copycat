@@ -58,11 +58,13 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
   // 基準時點分歧註記:每腿以「本場自己的第一筆」為 0%(buildOverlayGeometry),開盤時間不同的腿
   // (小日經 OSE 夜盤台北 16:00 開,其餘腿 15:00)基準時點就不同,線的絕對高度不可比、只有
   // 斜率可比。首筆晚於最早腿超過 LATE_START_MIN 分鐘者在標頭列標示起算時刻;零改幾何。
-  const firstOffsets = g.lines.filter((l) => l.pts.length > 0).map((l) => l.pts[0]!.offset);
+  const firstOffsets = g.lines.flatMap((l) => (l.pts.length > 0 ? [l.pts[0]!.offset] : []));
   const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
-  const lateStarts = g.lines
-    .filter((l) => l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN)
-    .map((l) => ({ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }));
+  const lateStarts = g.lines.flatMap((l) =>
+    l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
+      ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
+      : [],
+  );
 
   const readout =
     cursor === null
