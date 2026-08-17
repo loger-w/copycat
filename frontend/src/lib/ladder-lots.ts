@@ -39,7 +39,8 @@ export function ymdOf(d: Date): string {
 
 /** `now` 起算 `offsets` 天的本機日曆日集合(YYYYMMDD,與 `OrderRecord.date` 同格式)。
  *
- *  現股梯傳 `[0]`(嚴格今日);期貨 / 個股期梯傳 `[-1, 0, 1]` —— `date` 是**委託建立日**,
+ *  現股梯傳 `[0]`(嚴格今日);期貨 / 個股期梯傳 `[-1, 0, 1]` —— `date` 是**最新事件日**
+ *  (`CapitalStore.apply_reply` 每筆回報有值即覆寫,不是委託建立日;cr1 A-3),
  *  夜盤跨午夜時它是交易日還是日曆日尚未實證,±1 日窗在兩種假設下都涵蓋得到。 */
 export function ymdWindow(now: Date, offsets: readonly number[]): Set<string> {
   const out = new Set<string>();

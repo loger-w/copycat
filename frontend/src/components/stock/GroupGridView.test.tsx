@@ -593,7 +593,7 @@ describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
   });
 });
 
-// 🟢 SC-2 / D4:toggle 四鈕上提到圖牆頂(卡片內不得有 button —— 點它會連帶切主檔)。
+// 🟢 SC-2 / D4:toggle 五鈕上提到圖牆頂(R2 SC-6 加入「成交點」)(卡片內不得有 button —— 點它會連帶切主檔)。
 describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
   it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 五鈕", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
