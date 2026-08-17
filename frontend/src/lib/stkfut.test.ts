@@ -5,6 +5,7 @@ import {
   isEtfUnderlying,
   isOrderBlocked,
   selectionOf,
+  stkfutMarketEdgeMilli,
   stkfutTc4Symbol,
   ymLabel,
   type StkfutContracts,
@@ -125,5 +126,37 @@ describe("isOrderBlocked(下單前置閘)", () => {
 describe("ymLabel", () => {
   it("202609 → 2026/09(下拉選項要逐字可指認)", () => {
     expect(ymLabel("202609")).toBe("2026/09");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 市價鈕邊價(SC-3)。個股期「市價」= 限價貼漲跌停 + IOC(D3a),而後端 `_stkfut_gates`
+// 對 limit 單會驗 tick → 邊界值不 snap 到合法檔位就是 400 BAD_TICK(R-D)。
+// ---------------------------------------------------------------------------
+
+describe("stkfutMarketEdgeMilli 個股期市價邊價", () => {
+  it("buy → 漲停 snapDown、sell → 跌停 snapUp(合法檔位原值不動)", () => {
+    const meta = { upper: 110_000, lower: 90_000 };
+    expect(stkfutMarketEdgeMilli("buy", meta)).toBe(110_000);
+    expect(stkfutMarketEdgeMilli("sell", meta)).toBe(90_000);
+  });
+
+  /** 非法檔位的界:110.3 元落在 500 毫元級距(≥100 元)→ 買側必須往**內**收到 110,
+   *  越界的 110.5 會被後端退單;賣側 90.03 元(100 毫元級距)往內收到 90.1。 */
+  it("非法檔位 → 買側 snapDown、賣側 snapUp(皆往簿內收,不越界)", () => {
+    expect(stkfutMarketEdgeMilli("buy", { upper: 110_300, lower: 90_030 })).toBe(110_000);
+    expect(stkfutMarketEdgeMilli("sell", { upper: 110_300, lower: 90_030 })).toBe(90_100);
+  });
+
+  it("該側界 null / 0 / 負 → null(缺界不用假想界送單)", () => {
+    expect(stkfutMarketEdgeMilli("buy", { upper: null, lower: 90_000 })).toBeNull();
+    expect(stkfutMarketEdgeMilli("sell", { upper: 110_000, lower: null })).toBeNull();
+    expect(stkfutMarketEdgeMilli("buy", { upper: 0, lower: 90_000 })).toBeNull();
+    expect(stkfutMarketEdgeMilli("sell", { upper: 110_000, lower: -1 })).toBeNull();
+  });
+
+  it("meta 整份缺 → null", () => {
+    expect(stkfutMarketEdgeMilli("buy", null)).toBeNull();
+    expect(stkfutMarketEdgeMilli("sell", null)).toBeNull();
   });
 });

@@ -536,3 +536,134 @@ describe("StkfutLadder 鎖定武裝(SC-1 / SC-12a)", () => {
     expect(screen.getByRole("button", { name: "鎖定" }).hasAttribute("disabled")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 梯頂市價鈕(SC-1 / SC-3 / SC-5 / SC-6 / SC-7 / SC-8)。個股期的「市價」= 限價貼漲跌停
+// + IOC(D3a):後端 fut market 映射是 "M" literal(OrderPanel 在用),不能借道。
+// ---------------------------------------------------------------------------
+
+const EDGE_MARKET_TITLE =
+  "市價 = 限價貼漲/跌停 + IOC:掃對手方至成交完(簿薄時可能以漲/跌停價成交),餘量取消";
+
+function marketBtn(side: "買" | "賣"): HTMLElement {
+  return within(screen.getByTestId("ladder-market-buttons")).getByRole("button", {
+    name: `市價${side}`,
+  });
+}
+
+describe("StkfutLadder 梯頂市價鈕", () => {
+  it("SC-1 / SC-8:兩顆鈕在 scroll 容器之前;可用態 title = 貼漲跌停 + IOC 文案", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const row = screen.getByTestId("ladder-market-buttons");
+    expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "市價買",
+      "市價賣",
+    ]);
+    const scroller = screen.getByLabelText("買 100").closest(".overflow-y-auto")!;
+    expect(scroller.contains(row)).toBe(false);
+    expect(row.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4);
+    expect(marketBtn("買").getAttribute("title")).toBe(EDGE_MARKET_TITLE);
+    expect(marketBtn("賣").getAttribute("title")).toBe(EDGE_MARKET_TITLE);
+  });
+
+  it("SC-3:武裝後按市價賣 → limit/IOC + price = snapUp(跌停);hint 帶契約碼", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    fireEvent.click(screen.getByLabelText("當沖"));
+    armUp();
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toEqual({
+      tc4_symbol: "TC.F.TWF.CDF.202609",
+      buy_sell: "sell",
+      price: 90, // snapUp(90_000) / 1000 —— 跌停已在合法檔位
+      qty: 1,
+      price_type: "limit",
+      time_in_force: "IOC",
+      day_trade: true,
+      source: "flash",
+    });
+    await waitFor(() => expect(screen.getByText("已送 CDFI6 市價賣 × 1 口")).toBeTruthy());
+  });
+
+  it("SC-3:市價買 → price = snapDown(漲停)", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({
+      buy_sell: "buy",
+      price: 110,
+      price_type: "limit",
+      time_in_force: "IOC",
+    });
+    await waitFor(() => expect(screen.getByText("已送 CDFI6 市價買 × 1 口")).toBeTruthy());
+  });
+
+  it("SC-5:未武裝 → 零請求 + hint「未武裝 — 市價不送單」", () => {
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder());
+    fireEvent.click(marketBtn("賣"));
+    expect(screen.getByText("未武裝 — 市價不送單")).toBeTruthy();
+    expect(bodies.length).toBe(0);
+  });
+
+  it("SC-6:漲停缺(meta.upper null)→ 兩顆 disabled + 鎖定文案(不用假想界)", () => {
+    mockCapitalFetch();
+    render(
+      <QueryClientProvider client={qc}>
+        <StkfutLadder
+          code="2330"
+          name="台積電"
+          contract={CDF_202609}
+          book={BOOK}
+          last={LAST}
+          meta={{ ...META, upper: null }}
+        />
+      </QueryClientProvider>,
+    );
+    for (const side of ["買", "賣"] as const) {
+      const b = marketBtn(side);
+      expect(b.hasAttribute("disabled")).toBe(true);
+      expect(b.getAttribute("title")).toBe("無成交價,市價鈕鎖定");
+    }
+  });
+
+  it("SC-7:blocked 契約 → 兩顆 disabled + title 同前置閘文案;點擊零請求", () => {
+    const bodies: unknown[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    render(ladder({ prod: "NYF", ym: "202609", mini: false, unit: 10000 }, "0050"));
+    for (const side of ["買", "賣"] as const) {
+      const b = marketBtn(side);
+      expect(b.hasAttribute("disabled")).toBe(true);
+      expect(b.getAttribute("title")).toBe("此契約規格暫未開放下單");
+      fireEvent.click(b); // 雙保險:即使 disabled 被繞過也不得送出
+    }
+    expect(bodies.length).toBe(0);
+  });
+});

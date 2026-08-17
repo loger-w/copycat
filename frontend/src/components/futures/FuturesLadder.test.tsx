@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FuturesLadder } from "@/components/futures/FuturesLadder";
@@ -761,5 +761,128 @@ describe("FuturesLadder 結算 T-0 警示(SC-6)", () => {
     });
     render(ladder({ ...TXF_STATE, resolved_contract: null }));
     expect(screen.queryByText("⚠ 今日結算")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 梯頂市價鈕(SC-1 / SC-4 / SC-5 / SC-6 / SC-8)。期貨的「市價」= 限價貼漲跌停 + IOC
+// (D3a);邊價 floor/ceil 到 FUT_TICK,與 buildFuturesLadder 同口徑(R8)。
+// ---------------------------------------------------------------------------
+
+const EDGE_MARKET_TITLE =
+  "市價 = 限價貼漲/跌停 + IOC:掃對手方至成交完(簿薄時可能以漲/跌停價成交),餘量取消";
+
+function marketBtn(side: "買" | "賣"): HTMLElement {
+  return within(screen.getByTestId("ladder-market-buttons")).getByRole("button", {
+    name: `市價${side}`,
+  });
+}
+
+describe("FuturesLadder 梯頂市價鈕", () => {
+  it("SC-1 / SC-8:兩顆鈕在 scroll 容器之前;可用態 title = 貼漲跌停 + IOC 文案", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    const row = screen.getByTestId("ladder-market-buttons");
+    expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "市價買",
+      "市價賣",
+    ]);
+    const scroller = screen.getByLabelText("買 22999").closest(".overflow-y-auto")!;
+    expect(scroller.contains(row)).toBe(false);
+    expect(row.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4);
+    expect(marketBtn("買").getAttribute("title")).toBe(EDGE_MARKET_TITLE);
+    expect(marketBtn("賣").getAttribute("title")).toBe(EDGE_MARKET_TITLE);
+  });
+
+  it("SC-4:武裝後按市價買 → limit/IOC + price = floor(漲停/FUT_TICK);hint 帶契約碼", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toEqual({
+      tc4_symbol: "TC.F.TWF.TXF.HOT",
+      buy_sell: "buy",
+      price: 25_080, // upper 25_080_000 已對齊 1 點
+      qty: 1,
+      price_type: "limit",
+      time_in_force: "IOC",
+      day_trade: false,
+      source: "flash",
+    });
+    await waitFor(() => expect(screen.getByText("已送 TXFI6 市價買 × 1 口")).toBeTruthy());
+  });
+
+  it("SC-4:市價賣 → price = ceil(跌停/FUT_TICK),非整點的界往簿內收", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder({ ...TXF_STATE, lower: 20_520_500 }));
+    armUp();
+    fireEvent.click(marketBtn("賣"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({
+      buy_sell: "sell",
+      price: 20_521,
+      price_type: "limit",
+      time_in_force: "IOC",
+    });
+    await waitFor(() => expect(screen.getByText("已送 TXFI6 市價賣 × 1 口")).toBeTruthy());
+  });
+
+  it("SC-5:未武裝 → 零請求 + hint「未武裝 — 市價不送單」", () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder());
+    fireEvent.click(marketBtn("買"));
+    expect(screen.getByText("未武裝 — 市價不送單")).toBeTruthy();
+    expect(bodies.length).toBe(0);
+  });
+
+  it("SC-6:resolved_contract null(合約未解析)→ 兩顆 disabled + 鎖定文案", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder({ ...TXF_STATE, resolved_contract: null }));
+    for (const side of ["買", "賣"] as const) {
+      const b = marketBtn(side);
+      expect(b.hasAttribute("disabled")).toBe(true);
+      expect(b.getAttribute("title")).toBe("無成交價,市價鈕鎖定");
+    }
+  });
+
+  it("SC-6:漲停缺 → 兩顆 disabled(不用假想界貼邊)", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    render(ladder({ ...TXF_STATE, upper: null }));
+    expect(marketBtn("買").hasAttribute("disabled")).toBe(true);
+    expect(marketBtn("賣").hasAttribute("disabled")).toBe(true);
   });
 });
