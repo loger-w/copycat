@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { GroupGridView } from "@/components/stock/GroupGridView";
 import { OrderBook } from "@/components/stock/OrderBook";
@@ -7,6 +7,7 @@ import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
 import { StockChart } from "@/components/stock/StockChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { useCapitalPositions } from "@/hooks/useCapital";
 import { useSignalFeed } from "@/hooks/useSignalFeed";
 import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
 import { useSignalSound } from "@/hooks/useSignalSound";
@@ -14,7 +15,10 @@ import { useStkfutContracts } from "@/hooks/useStkfutContracts";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
+import { useFeeDiscount } from "@/lib/fee-discount";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
+import { pnlTone } from "@/lib/pnl-format";
+import { futSummary, headerSegments, positionsByCode, secSummary } from "@/lib/position-summary";
 import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/lib/stkfut";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
@@ -101,6 +105,18 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
   const limit = limitState(last?.p ?? null, meta?.upper ?? null, meta?.lower ?? null);
   // 回補中的旗標由後端以**槽位鍵**發出,期貨態是 `F:<prod>:<ym>` 不是股號
   const instrumentKey = instrumentKeyOf(code, contract);
+
+  // header 倉位段(SC-3)。**現貨態與個股期態都列出該股號的全部證券列 + 全部期貨列**:
+  // 右欄梯一次只顯示一個合約 / 只顯示現股,header 不列全就看不到「我這檔還有別的腿」。
+  // 證券損益吃現價現算(與右欄同 positionEcon 同折數),期貨走群益 pnl_base。
+  const positions = useCapitalPositions().data?.positions;
+  const posMap = useMemo(() => positionsByCode(positions), [positions]);
+  const discount = useFeeDiscount();
+  const posRows = code === null ? undefined : posMap.get(code);
+  const posSegments =
+    posRows === undefined
+      ? []
+      : headerSegments(secSummary(posRows, last?.p ?? null, discount), futSummary(posRows));
 
   // **`wl` 未載入(loading / 失敗)時不渲染按鈕**:退回空自選再送 PUT 會把整份自選
   // 靜默清空。這是新入口才有的 gate,不是既有行為。
@@ -290,6 +306,21 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
                       {fmtPct(chg)}
                     </span>
                   ) : null}
+                </span>
+              ) : null}
+              {/* 倉位段(SC-3):現價之後、期現價差之前。每段自己上色 —— 一檔可能
+                  同時有賺錢的現股與賠錢的融券,整段共用一個色會把兩件事講成一件。
+                  無倉時整個節點不渲染(header 是一列 flex-wrap,空 span 也會吃 gap)。 */}
+              {posSegments.length > 0 ? (
+                <span
+                  data-testid="page-position"
+                  className="flex flex-wrap items-baseline gap-2 font-mono text-xs"
+                >
+                  {posSegments.map((seg) => (
+                    <span key={seg.key} className={pnlTone(seg.pnl)}>
+                      {seg.text}
+                    </span>
+                  ))}
                 </span>
               ) : null}
               {accum?.noData ? <span className="text-xs text-ink-dim">無資料</span> : null}
