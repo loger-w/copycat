@@ -210,7 +210,7 @@ const GroupCard = memo(function GroupCard({
   );
 });
 
-/** 圖牆頂 toggle 列的四鈕(SC-2)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
+/** 圖牆頂 toggle 列的五鈕(SC-2;成交點於 R2 SC-6 加入)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
  *  叫不同名字,使用者得自己對照。**恆可按**(AD-5):可用性是 per-code 的(某一檔沒
  *  日線 ≠ 整列該反灰),個別卡片取不到 overlay 時該卡不畫,整列不動。 */
 const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp" | "fills"; label: string }[] = [

@@ -8,6 +8,10 @@
  *
  *  - 分批成交多筆會被壓成同一點(時間取最後那筆事件)。
  *  - 尾段事件是刪單(部分成交後刪)時,點落在**刪單時刻**而不是成交時刻。
+ *  - `date` 同樣是**最新事件日**(`CapitalStore.apply_reply` 每筆回報有值即覆寫)——
+ *    昨日部分成交、今日刪單的單,`date` 會變成今日,於是以「今日刪單分鐘 × 昨日均價」
+ *    畫上今日圖。日期界怎麼收都躲不掉(它與成交事件本身不同源);唯一乾淨解 = 精確版
+ *    逐筆 D 事件(下方 next-time)。
  *
  *  精確版(後端保留逐筆 D 事件 + `GET /api/capital/fills`)記 next-time,不在本輪。
  *
@@ -89,10 +93,14 @@ interface RawFill extends FillPoint {
  *  `excludeUnit`:現股(單檔頁現貨態 + 群組卡)傳 `"股"` 把零股單整筆排除 —— 與現股梯同
  *  口徑(AD-3),「我的單」在梯與圖上才一致。個股期不傳(契約碼與股號零碰撞,比對鍵已足)。
  *
- *  日期界(AD-2):`今日` ∨(`actionable` ∧ `昨日`)。後半條涵蓋「盤後預約單今日成交」——
- *  `date` 是委託**建立日**,那種單昨天就建好了。不放寬到「活單恆計」是因為 `CapitalStore`
- *  跨日不清 + prod server 長跑,更早的幽靈活單會在今日圖上畫出假成交。
- *  殘餘風險:昨日建立、昨日部分成交、今日仍 actionable 的單會被畫上(理論上收盤即終態)。 */
+ *  日期界(AD-2):`今日` ∨(`actionable` ∧ `昨日`)。`date` 是**最新事件日**
+ *  (`CapitalStore.apply_reply` 每筆回報有值即覆寫),**不是委託建立日**(cr1 A-3)——
+ *  所以「盤後預約單今日成交」那種單在成交回報進來的同時 `date` 就已經是今日,前半條
+ *  就收得到。後半條真正收的是「最後一次回報停在昨日、今日仍 actionable」的單,而
+ *  `filled_qty > 0` 意味那筆成交發生在昨日 —— 它會以昨日的均價 × 昨日的分鐘畫在今日
+ *  圖上,是明示接受的殘餘風險(理論上收盤即終態,活單不該跨日留著)。
+ *  不放寬到「活單恆計」是因為 `CapitalStore` 跨日不清 + prod server 長跑,更早的幽靈
+ *  活單會在今日圖上畫出假成交。 */
 function rawFill(o: CapitalOrder, dates: FillDates, excludeUnit?: string): RawFill | null {
   if (o.stock_no === null || o.time === null || o.avg_fill_price === null) return null;
   if (o.filled_qty <= 0) return null;
@@ -198,9 +206,14 @@ export function stkfutFillKey(prod: string, ym: string): string | null {
   }
 }
 
-/** 三角中心 x 的夾制。**整個圖案一起平移**(同 `markCenterX` 的理由):第一 / 最後一分鐘
- *  落在繪圖區邊緣時,沒有夾制的話三角有一半在 viewBox 外被裁成缺角。
- *  位移最多一個外緣半寬(`halfW + halo/2`),仍指得到那一分鐘。 */
+/** 三角中心 x 的夾制。**整個圖案一起平移**(同 `markCenterX` 的理由),位移最多一個外緣
+ *  半寬(`halfW + halo/2` = 4),仍指得到那一分鐘。
+ *
+ *  ⚠ **常態路徑上是 no-op**(cr1 A-4):正常寬度下 `minuteToX` 的值域是
+ *  `[Y_AXIS_W, w − R_AXIS_W]` = `[36, w − 40]`,兩端離 viewBox 邊都已 ≥ 36px ≫ 4 ——
+ *  夾制實際只在**退化寬度**(`plotWidth` 被 clamp 成 1,即 `w ≤ 77`)下生效。
+ *  留著的理由是它就是 spec AD-6 的字面公式 + 那條退化路徑的守衛,不是常態需求;
+ *  讀者不要以為第一 / 最後一分鐘的三角平常會被平移。 */
 export function clampFillX(x: number, w: number, style: FillMarkStyle = FILL_MARK): number {
   const edge = style.halfW + style.halo / 2;
   return Math.min(Math.max(x, edge), w - edge);
