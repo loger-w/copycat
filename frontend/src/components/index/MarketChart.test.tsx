@@ -6,9 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MarketChart } from "@/components/index/MarketChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import type { IndexSeries } from "@/hooks/useIndexStream";
+import { fmt } from "@/lib/format";
+import { R_AXIS_W, Y_AXIS_W } from "@/lib/stock-intraday-svg";
+import { fmtTickPrice } from "@/lib/stock-tick";
 import type { MarketKey } from "@/lib/timeframe";
 
-/** 域:yTop = 23_100_000×1.003 = 23_169_300、yBottom = 22_990_000×0.997 = 22_920_970 */
+/** 分時圖改吃 `IntradayChartCore`(mode="index")後,**域是對稱 autofit 不是緊貼**:
+ *  ref 23000、分鐘收盤 [23000, 23100]、當日高低同池
+ *  → 半幅 = max(hi−ref = 100, ref−lo = 0, ref×1% = 230) × 1.1 = 253
+ *  → y 域 [22747, 23253]。下面兩份 overlay fixture 的域內 / 域外都以這個域為準。 */
 function series(over: Partial<IndexSeries> = {}): IndexSeries {
   return {
     p: 23_100_000,
@@ -21,10 +27,12 @@ function series(over: Partial<IndexSeries> = {}): IndexSeries {
   };
 }
 
-/** 五條 CDP + 兩條 MA 全在域內 */
+/** 五條 CDP + 兩條 MA 全在域內。
+ *  `ma5` 刻意取 **23018**(非合法檔位):`fmtTickPrice` 會 snap 成 23020,`fmt` 才印
+ *  23018 —— 指數沒有 tick 表,snap 出來的點位是憑空捏造的(SC-2)。 */
 const OVERLAY_IN = {
   cdp: { cdp: 23_050_000, ah: 23_150_000, nh: 23_100_000, nl: 22_995_000, al: 22_950_000 },
-  ma5: 23_020_000,
+  ma5: 23_018_000,
   ma20: 22_930_000,
   date: "2026-08-13",
 };
@@ -60,7 +68,7 @@ function renderChart(opts: {
   name?: string;
   s?: IndexSeries | null;
   t?: ChartToggles;
-  height?: number;
+  intradayBox?: { width: number; height: number };
 }) {
   const client = new QueryClient({
     // retryDelay 0:hook 自帶 retry:1,error 終態才不用等 exponential backoff
@@ -75,7 +83,7 @@ function renderChart(opts: {
         series={opts.s === undefined ? series() : opts.s}
         toggles={opts.t ?? toggles()}
         onToggle={() => undefined}
-        height={opts.height}
+        intradayBox={opts.intradayBox}
       />
     </QueryClientProvider>,
   );
@@ -128,6 +136,11 @@ function dashedOverlayLines(root: HTMLElement): NodeListOf<Element> {
   return root.querySelectorAll('line[stroke-dasharray="3 2"]');
 }
 
+/** 昨收線:`2 3` 虛線裡**第一條**(ChartStatic 先畫昨收再畫 y 格線)。 */
+function refLine(root: HTMLElement): Element {
+  return root.querySelector('line[stroke-dasharray="2 3"]')!;
+}
+
 beforeEach(() => {
   urls = [];
   stub(OVERLAY_IN);
@@ -136,6 +149,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("MarketChart 分時疊線(SC-3)", () => {
@@ -147,29 +161,38 @@ describe("MarketChart 分時疊線(SC-3)", () => {
       .map((t) => t.textContent ?? "")
       .filter((s) => s.endsWith("*"));
     expect(starred.sort()).toEqual(["22950*", "22995*", "23050*", "23100*", "23150*"]);
-    // 線體橫貫全寬(指數圖無 R_AXIS 保留帶)
-    expect(dashedOverlayLines(container)[0]!.getAttribute("x1")).toBe("0");
-    expect(dashedOverlayLines(container)[0]!.getAttribute("x2")).toBe("640");
+    // 線體止於繪圖區(core 的左緣價位帶 / 右緣疊線帶都不被覆蓋),不再橫貫全寬
+    expect(dashedOverlayLines(container)[0]!.getAttribute("x1")).toBe(String(Y_AXIS_W));
+    expect(dashedOverlayLines(container)[0]!.getAttribute("x2")).toBe(String(800 - R_AXIS_W));
   });
 
-  it("域外 → 不畫線體,右緣掛牌帶名稱與方向", async () => {
+  it("域外 → 不畫線體,繪圖區右緣掛牌帶名稱與方向", async () => {
     stub(OVERLAY_OUT);
     const { container } = renderChart({ t: toggles({ cdp: true, ma: true }) });
     // 域內只剩 nh / nl / ma5
     await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(3));
-    expect(screen.getByText("AH 24100↑")).toBeTruthy();
-    expect(screen.getByText("CDP 24000↑")).toBeTruthy();
-    expect(screen.getByText("AL 22000↓")).toBeTruthy();
-    expect(screen.getByText("MA20 22000↓")).toBeTruthy();
+    expect(screen.getByTestId("overlay-peg-ah").textContent).toBe("AH 24100↑");
+    expect(screen.getByTestId("overlay-peg-cdp").textContent).toBe("CDP 24000↑");
+    expect(screen.getByTestId("overlay-peg-al").textContent).toBe("AL 22000↓");
+    expect(screen.getByTestId("overlay-peg-ma20").textContent).toBe("MA20 22000↓");
+    // 域內的值不得同時掛牌(掛牌與線體互補)
+    expect(container.querySelector('[data-testid="overlay-peg-nh"]')).toBeNull();
+    expect(container.querySelector('[data-testid="overlay-peg-ma5"]')).toBeNull();
     // 域外的值不得出現線體價位標(那是「畫了線」的語彙)
     expect(screen.queryByText("24000*")).toBeNull();
   });
 
-  it("MA 開 → 右緣印 MA5 / MA20 名稱加價位", async () => {
+  it("MA 開 → 右緣帶名稱 + 繪圖區內側價位標,價位走 fmt 不 snap tick", async () => {
     const { container } = renderChart({ t: toggles({ cdp: false, ma: true }) });
     await waitFor(() => expect(dashedOverlayLines(container)).toHaveLength(2));
-    expect(screen.getByText("MA5 23020")).toBeTruthy();
-    expect(screen.getByText("MA20 22930")).toBeTruthy();
+    // 右緣帶內是名稱(R_AXIS_W 裝不下名稱 + 四位數價位)
+    expect(screen.getByText("MA5")).toBeTruthy();
+    expect(screen.getByText("MA20")).toBeTruthy();
+    // 價位標:23018 不得被 snap 成 23020(指數沒有可下單檔位)
+    expect(container.querySelector('[data-testid="edge-price-ma5"]')!.textContent).toBe("23018");
+    expect(container.querySelector('[data-testid="edge-price-ma20"]')!.textContent).toBe("22930");
+    // 自檢:fixture 真的區分得出兩種口徑(否則本案恆綠)
+    expect(fmtTickPrice(23_018_000)).not.toBe("23018");
   });
 });
 
@@ -194,6 +217,12 @@ describe("MarketChart toggle 列(SC-4 / 決策 2)", () => {
     expect(vwap.getAttribute("title")).toBe("分鐘收盤均價(指數無成交量)");
     // 櫃買不打 overlay 端點
     expect(urls.some((u) => u.includes("/api/index/overlay"))).toBe(false);
+    // 指數態只三顆(量分佈 / 成交點需要逐筆量與委託,指數兩者皆無)
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "均價",
+      "CDP",
+      "MA",
+    ]);
   });
 
   it("加權但端點 503 → CDP / MA 反灰帶「無日線資料」", async () => {
@@ -284,20 +313,28 @@ describe("MarketChart error 態不鎖死 toggle 閘(review G-2)", () => {
   });
 });
 
-describe("MarketChart 昨收標籤(SC-6)", () => {
-  it("有 ref → 右緣印「昨收 <值>」", async () => {
-    renderChart({ t: toggles({ cdp: false, ma: false }) });
-    await waitFor(() => expect(screen.getByText("昨收 23000")).toBeTruthy());
+describe("MarketChart 昨收(SC-2)", () => {
+  it("有 ref → 左緣中格刻度 = 昨收,昨收虛線畫在同一條 y 上", async () => {
+    const { container } = renderChart({ t: toggles({ cdp: false, ma: false }) });
+    await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
+    const ticks = [...container.querySelectorAll('[data-testid="y-tick-price"]')];
+    expect(ticks).toHaveLength(3);
+    // 3 格 fallback = [yTop, ref, yBottom] → 中格恆是昨收
+    expect(ticks[1]!.textContent).toBe(fmt(23_000_000));
+    expect(ticks[1]!.getAttribute("y")).toBe(refLine(container).getAttribute("y1"));
   });
 
-  it("ref null → 不畫昨收標籤(fallback 虛線照畫)", async () => {
+  it("ref null → hasRef false:不填色、走勢線退回單條 accent", async () => {
     const { container } = renderChart({
       s: series({ ref: null }),
       t: toggles({ cdp: false, ma: false }),
     });
     await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
-    expect(screen.queryByText(/昨收/)).toBeNull();
-    expect(container.querySelector('line[stroke-dasharray="2 3"]')).toBeTruthy();
+    // 平盤上下的紅綠填色需要 `<defs>` 內的兩個 clipPath;沒有昨收就沒有「平盤」可言
+    expect(container.querySelector("defs")).toBeNull();
+    expect(container.querySelectorAll("polygon")).toHaveLength(0);
+    expect(container.querySelectorAll("polyline.stroke-accent")).toHaveLength(1);
+    expect(container.querySelectorAll("polyline.stroke-bull")).toHaveLength(0);
   });
 });
 
@@ -309,12 +346,10 @@ describe("MarketChart y 域不受疊線影響(SC-7)", () => {
     } else {
       await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
     }
-    const ticks = [...container.querySelectorAll('[data-testid="index-ytick"]')].map(
+    const ticks = [...container.querySelectorAll('[data-testid="y-tick-price"]')].map(
       (e) => `${e.getAttribute("y")}|${e.textContent}`,
     );
-    const refY = container
-      .querySelector('line[stroke-dasharray="2 3"]')!
-      .getAttribute("y1");
+    const refY = refLine(container).getAttribute("y1");
     unmount();
     return { ticks, refY };
   }
@@ -347,26 +382,97 @@ describe("MarketChart 均價線(SC-1)", () => {
     expect(container.querySelector("polyline.stroke-ink")!.getAttribute("stroke-width")).toBe(
       "1.2",
     );
+    // 末點價位標 = 分鐘收盤算術平均((23000 + 23100) / 2)
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')!.textContent).toBe("23050");
     unmount();
     const off = renderChart({ t: toggles({ vwap: false, cdp: false, ma: false }) });
     expect(off.container.querySelectorAll("polyline.stroke-ink")).toHaveLength(0);
   });
 });
 
-// `height` 的單位是 **viewBox 單位**,不是 px —— caller(MarketPane)已經扣掉 figure /
-// toggle 列的 chrome 並用 `viewBox 寬 / 容器寬` 反解過(§4.1 CS-1 釘死的口徑)。本檔
-// 只驗「拿到什麼就照畫」,px→viewBox 那段的算術由 MarketPane.size.test.tsx 鎖。
-describe("MarketChart height prop(SC-4)", () => {
+describe("MarketChart 高低點與現價圈(SC-3)", () => {
+  it("當日高 / 低空心環 + 現價圈都在(高低取分鐘收盤極值,等值反查必命中)", () => {
+    const { container } = renderChart({ t: toggles({ cdp: false, ma: false }) });
+    expect(container.querySelector('[data-testid="day-high"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="day-low"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="last-dot"]')).toBeTruthy();
+  });
+
+  it("series.p 為 null → 不畫現價圈(沒有現價可指)", () => {
+    const { container } = renderChart({
+      s: series({ p: null }),
+      t: toggles({ cdp: false, ma: false }),
+    });
+    expect(container.querySelector('[data-testid="last-dot"]')).toBeNull();
+  });
+});
+
+describe("MarketChart hover(SC-1)", () => {
+  /** jsdom 的 `getBoundingClientRect` 恆 0 → hover 座標換算需要真實寬高
+   *  (frontend-testing 慣例;只在本 describe 內裝,避免影響 candle 態的事件測試)。 */
+  function mockRect(): void {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, right: 800, bottom: 260,
+      width: 800, height: 260, x: 0, y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+  }
+
+  it("游標移入 → 十字線 + 左緣價位標 + readout 切到該分鐘", () => {
+    mockRect();
+    const { container } = renderChart({ t: toggles({ cdp: false, ma: false }) });
+    const readout = () => screen.getByTestId("chart-readout");
+    expect(readout().children.length).toBe(3);
+    expect(readout().getAttribute("data-hovering")).toBe("false");
+
+    const svg = container.querySelector("svg")!;
+    // 09:01 的 x = Y_AXIS_W + 1/270 × (800 − 36 − 40) ≈ 38.7
+    fireEvent.mouseMove(svg, { clientX: 39, clientY: 100 });
+    expect(container.querySelector('[data-testid="crosshair-v"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="crosshair-h"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="price-tag-text"]')).toBeTruthy();
+    expect(readout().getAttribute("data-hovering")).toBe("true");
+    expect(readout().children[0]!.textContent).toBe("09:01");
+
+    fireEvent.mouseLeave(svg);
+    expect(container.querySelector('[data-testid="crosshair-h"]')).toBeNull();
+    expect(readout().getAttribute("data-hovering")).toBe("false");
+  });
+});
+
+describe("MarketChart 空態", () => {
+  it("series null → 「等待指數資料…」", () => {
+    renderChart({ s: null, t: toggles({ cdp: false, ma: false }) });
+    expect(screen.getByText("等待指數資料…")).toBeTruthy();
+  });
+
+  it("series 非 null 但 minutes 空 → core 空態同一句文案(不畫空軸)", () => {
+    const { container } = renderChart({
+      s: series({ minutes: {} }),
+      t: toggles({ cdp: false, ma: false }),
+    });
+    expect(screen.getByText("等待指數資料…")).toBeTruthy();
+    expect(container.querySelector("svg")).toBeNull();
+  });
+});
+
+// `intradayBox` 的單位是 **px(1:1)**,不是 viewBox 單位 —— caller(MarketPane)已經扣掉
+// figure / readout 列的 chrome。本檔只驗「拿到什麼就照畫」,px 那段的算術由
+// MarketPane.size.test.tsx 鎖。`height` 則維持 candle 專用(intraday 不讀)。
+describe("MarketChart intradayBox prop(SC-7)", () => {
   function intradaySvg(container: HTMLElement): Element {
     return container.querySelector('svg[role="img"]')!;
   }
 
-  it("intraday:傳 height → svg viewBox 用該高;未傳 → 220", () => {
-    const withH = renderChart({ t: toggles({ cdp: false, ma: false }), height: 300 });
-    expect(intradaySvg(withH.container).getAttribute("viewBox")).toBe("0 0 640 300");
+  it("intraday:傳 intradayBox → svg viewBox 1:1;未傳 → core 預設 800×260", () => {
+    const withBox = renderChart({
+      t: toggles({ cdp: false, ma: false }),
+      intradayBox: { width: 430, height: 272 },
+    });
+    expect(intradaySvg(withBox.container).getAttribute("viewBox")).toBe("0 0 430 272");
     cleanup();
-    const noH = renderChart({ t: toggles({ cdp: false, ma: false }) });
-    expect(intradaySvg(noH.container).getAttribute("viewBox")).toBe("0 0 640 220");
+    const noBox = renderChart({ t: toggles({ cdp: false, ma: false }) });
+    expect(intradaySvg(noBox.container).getAttribute("viewBox")).toBe("0 0 800 260");
   });
 
   // WL-2:`PANE_FRAMES.candle` 的 chromeY 把 meta 列算成 20px(text-xs 16 + mt-1 4),

@@ -246,13 +246,15 @@ describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
     expect(btn("櫃買")).toBeTruthy();
     expect(btn("台指期")).toBeTruthy();
     expect(screen.getByText("加權指數")).toBeTruthy();
-    expect(screen.getByText("42039.92")).toBeTruthy();
     expect(screen.getByText(/-1594\.27/)).toBeTruthy();
     // 昨收改斷言在**同一個標題列元素**上:分時圖右緣現在也有一顆「昨收 <值>」標籤
     // (SC-6),裸 getByText 會撞兩個元素。本條要驗的是「標題列印得出昨收」,不是
     // 「全畫面只有一處昨收」—— 收斂 scope,不放寬語意。
     const quote = screen.getByText(/高 43221\.93/);
     expect(quote.textContent).toContain("昨收 43634.19");
+    // 現值同理收斂到標題列:分時圖換 `IntradayChartCore` 後 readout 也印「該分鐘點位」,
+    // 而最新分鐘的收盤恰等於現值 —— 裸 getByText 撞兩個元素。
+    expect(within(quote.closest("figcaption")!).getByText("42039.92")).toBeTruthy();
   });
 
   it("Quote 漲跌整串:跌用負號(characterization)", () => {
