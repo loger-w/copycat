@@ -77,7 +77,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
         viewBox={`0 0 ${SIZE.width} ${SIZE.height}`}
         className="mt-1 w-full"
         role="img"
-        aria-label="六腿重疊走勢"
+        aria-label="各腿重疊走勢"
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setCursor(null)}
       >

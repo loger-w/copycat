@@ -54,7 +54,7 @@ export function RiverPanel({ state }: Props) {
   if (state === null) {
     return (
       <div className="flex items-center justify-center py-8 text-sm text-ink-muted">
-        等待六腿資料…
+        等待各腿資料…
       </div>
     );
   }
@@ -69,7 +69,7 @@ export function RiverPanel({ state }: Props) {
   return (
     <section className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-3">
-        <h3 className="text-sm text-ink">六腿走勢</h3>
+        <h3 className="text-sm text-ink">各腿走勢</h3>
         <span className="font-mono text-xs text-ink-dim">{sessionText}</span>
         <div className="flex gap-1">
           {(
