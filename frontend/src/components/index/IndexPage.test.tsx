@@ -345,4 +345,41 @@ describe("IndexPage 一頁總覽版面(§4.1 + amendment r3)", () => {
     expect(rightBox.className).toContain("@[1050px]:min-h-0");
     expect(rightBox.className).toContain("border-line");
   });
+
+  // 兩欄態的 3:2 分配只能由**左欄**發出:雙圖 grid / 家數帶 section / 騰落線 wrapper 的
+  // 最近 `@container` 祖先是左欄自己(它為了 640px 雙圖斷點就是 container),兩欄態左欄
+  // 僅 630–930px → 直接掛在它們身上的 `@[1050px]:` 永不成立(frontend-conventions
+  // 「巢狀 container」陷阱,與 pane 層 min-h-0 同一個教訓)。量得到 root 的只有左欄本身,
+  // 所以由左欄以 `@[1050px]:` 設 CSS 變數、子節點讀變數;變數的預設值 = 改動前 class 的
+  // 展開值,單欄態(SC-6 1366×768)逐值不變由建構保證。
+  // 這條守的是「變數的發點與三個讀點都在」——jsdom 量不到真高,任一段掉了都是
+  // 「畫面看起來一樣」的靜默回退(騰落線又變回固定 96px)。
+  it("(y5) 兩欄態 3:2 由左欄的 --idx-* 變數發出,雙圖 grid / 家數帶 section 讀變數", () => {
+    renderPage(TXF, BREADTH);
+    const grid = screen.getByTestId("market-pane-left").parentElement!;
+    const leftCol = grid.parentElement!;
+
+    for (const v of [
+      "@[1050px]:[--idx-chart-flex:3_1_0%]",
+      "@[1050px]:[--idx-adl-flex:2_1_0%]",
+      "@[1050px]:[--idx-adl-wrap-flex:1_1_0%]",
+      "@[1050px]:[--idx-adl-min:10rem]",
+    ]) {
+      expect(leftCol.className).toContain(v);
+    }
+
+    // 雙圖 grid 讀 `--idx-chart-flex`(預設 `1 1 0%` = 原 `flex-1` 的展開值)。獨立的
+    // `flex-1` token 不能留:兩支 flex utility 誰先誰後由 Tailwind 產出順序決定,留著
+    // 就有一半機率把 shorthand 蓋掉、3:2 靜默失效。
+    expect(grid.className).toContain("[flex:var(--idx-chart-flex,1_1_0%)]");
+    expect(grid.className.split(/\s+/)).not.toContain("flex-1");
+
+    // 家數帶 + 騰落線那段:`shrink-0` → 變數 flex(預設 `0 0 auto` 逐值等價)+ `min-h-0`
+    // (兩欄態才真的縮出空間給騰落線;單欄態 flex 不縮,min-height 不作用 → 無條件安全)。
+    const section = screen.getByTestId("adl-chart").parentElement!;
+    expect(section.tagName).toBe("SECTION");
+    expect(section.className).toContain("[flex:var(--idx-adl-flex,0_0_auto)]");
+    expect(section.className).toContain("min-h-0");
+    expect(section.className.split(/\s+/)).not.toContain("shrink-0");
+  });
 });

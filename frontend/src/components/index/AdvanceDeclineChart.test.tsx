@@ -234,12 +234,22 @@ describe("AdvanceDeclineChart 高度量測(TD-6)", () => {
     expect(viewBoxHeight()).toBe(150);
   });
 
-  it("wrapper 固定高 h-24 且不可壓縮;svg 撐滿它(h-full w-full)", () => {
+  it("wrapper 預設 h-24 不縮,兩欄態由 --idx-* 變數接管;svg 撐滿它(h-full w-full)", () => {
     render(<AdvanceDeclineChart series={ONE} />);
     const wrapper = screen.getByRole("img", { name: "全市場騰落線" }).parentElement!;
+    // `h-24` 保留:它是**單欄態**的高度(變數未設 → flex 走預設 `0 0 auto`,height 生效)。
     expect(wrapper.className).toContain("h-24");
-    // 家數帶 / 騰落線那一段是 shrink-0:壓縮它換不到多少圖高,卻會先糊掉
-    expect(wrapper.className).toContain("shrink-0");
+    // `shrink-0` 換成變數 flex —— 兩欄態要讓這支 wrapper 吃 section 的剩餘高
+    // (左欄設 `--idx-adl-wrap-flex:1 1 0%`),留著 shrink-0 的 `flex-shrink:0` 會與
+    // shorthand 打架(Tailwind 產出的先後順序不可控)。預設值 `0 0 auto` 與 shrink-0 等值。
+    expect(wrapper.className).not.toContain("shrink-0");
+    expect(wrapper.className).toContain("[flex:var(--idx-adl-wrap-flex,0_0_auto)]");
+    // 兩欄態 basis 0% 會蓋掉 `h-24`,地板改由 min-height 10rem 給(單欄態預設 auto = 無地板)。
+    expect(wrapper.className).toContain("[min-height:var(--idx-adl-min,auto)]");
+    // 根:兩欄態要把 section 分到的高一路傳給 wrapper,可縮鏈少一段就傳不下去。
+    const root = screen.getByTestId("adl-chart");
+    expect(root.className).toContain("flex-1");
+    expect(root.className).toContain("min-h-0");
     const svg = screen.getByRole("img", { name: "全市場騰落線" });
     // 只有 `w-full` 的話渲染高退回「寬 × viewBox 比例」,量測算出來的高就白算了
     expect(svg.getAttribute("class")).toContain("h-full");
