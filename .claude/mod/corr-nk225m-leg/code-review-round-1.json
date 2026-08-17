@@ -1,0 +1,47 @@
+{
+  "round": 1,
+  "lenses": [
+    "whitelist/spec+test-coverage(opus)",
+    "runtime correctness+前端呈現(opus)"
+  ],
+  "diff": "review-diff.txt (master..5f150459..694f8c35)",
+  "findings": [
+    {
+      "id": "R-1",
+      "severity": "P1",
+      "disposition": "accepted",
+      "resolution": "重疊圖標頭列標示首筆較晚腿「自 HH:MM 起算 0%」;紅先行 4ad8e031 → b423af7b;零改幾何"
+    },
+    {
+      "id": "C-1",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "river-colors.test.ts 加 index.css token 守衛 [lock] mutation-verified c1b62fff"
+    },
+    {
+      "id": "C-2",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "FILLS/TEXTS 前六鎖,同 commit"
+    },
+    {
+      "id": "R-2",
+      "severity": "P2",
+      "disposition": "accepted(記 next-time)",
+      "resolution": "重疊圖 readout 對全空腿不列(pill 亮著、圖與 readout 無它)vs 並排卡「無資料」不一致;14:45–16:00 每日出現;本輪不改"
+    },
+    {
+      "id": "R-3",
+      "severity": "P2",
+      "disposition": "accepted(記 next-time;pre-existing 類)",
+      "resolution": "日盤收盤 clamp end<m<=end+5 → 小日經(OSE 交易到 14:45)13:45–13:50 成交覆蓋 13:45 末格(CME 腿同類既有);候選修法 clamp 只在 end 格尚無值時套用"
+    },
+    {
+      "id": "R-4",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "probe 加 :8721 佔用守衛 + docstring 更正 694f8c35"
+    }
+  ],
+  "p2_summary": "finder 已查證無問題:Tailwind 掃描 / json 合法 / OSE 窗外分鐘丟棄不 crash / _by_symbol .HOT 路由 / RIVER_OFF_KEY off-list 語意 / 側車讀真檔。其餘記錄:load_config 重複 key 無防護、E1 下架只 stale 無告警、回補七腿序列 +10s。"
+}

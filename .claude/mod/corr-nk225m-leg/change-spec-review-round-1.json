@@ -1,0 +1,54 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer(opus)",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "P0",
+      "disposition": "accepted",
+      "resolution": "gate 已先抓到;五條 assertion 全改(5c1bd984 / 70f26dca),spec §6 amendment、current-state 補 caller"
+    },
+    {
+      "id": "R2",
+      "severity": "P1",
+      "disposition": "accepted(§3 補契約說明)/ rejected_with_reason(改標 🔴)",
+      "resolution": "§3 amendment:加法式 payload 變動、RIVER_OFF_KEY 舊值行為;既有鍵值零改故維持 🟢,理由寫入 §3"
+    },
+    {
+      "id": "R3",
+      "severity": "P1",
+      "disposition": "accepted",
+      "resolution": "SC-3 刪 --verify 降級路徑;實際用 evidence/corr_sidecar.py 真 TC4 側車(窗內)"
+    },
+    {
+      "id": "R4",
+      "severity": "P1",
+      "disposition": "accepted",
+      "resolution": "三處文案改「各腿」,🔴 紅先行 c818fba1 → 8168fba7;W3 amendment"
+    },
+    {
+      "id": "R5",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "SC-2 oracle 改 utility 三選擇器各 ≥1"
+    },
+    {
+      "id": "R6",
+      "severity": "P2",
+      "disposition": "accepted",
+      "resolution": "E5 14:45–16:00 空窗預期行為"
+    },
+    {
+      "id": "R7",
+      "severity": "P2",
+      "disposition": "accepted(記錄不改)",
+      "resolution": "KR-3 + next-time 一條;W5 引擎零改"
+    },
+    {
+      "id": "R8",
+      "severity": "P2",
+      "disposition": "accepted(記錄不改)",
+      "resolution": "KR-4;不 amend 既成 commit"
+    }
+  ]
+}
