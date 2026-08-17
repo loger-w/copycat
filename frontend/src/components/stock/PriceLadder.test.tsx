@@ -1377,4 +1377,26 @@ describe("PriceLadder 梯頂市價鈕", () => {
     expect(bodies.filter((b) => b.price_type === "market").length).toBe(1);
     expect(bodies.filter((b) => b.price_type === "limit").length).toBe(1);
   });
+
+  /** IMPL-1:換股時本元件不重掛(`code` 是 prop),防抖 ref 跟著留下 —— key 只認 side
+   *  的話「A 檔按市價買 → 切到 B 檔立刻按同一顆」會被**靜默**吞掉,而畫面上還掛著 A 檔
+   *  的成功 hint = 使用者以為 B 檔那張送出去了。 */
+  it("IMPL-1:換股後 500ms 內按同一顆市價鈕 → 仍送出(防抖 key 併入股號)", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(OK_RESULT);
+      },
+    });
+    const { rerender } = render(ladder("2330"));
+    armUp();
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    rerender(ladder("2454"));
+    armUp(); // 換股自動解除武裝(W2)→ 重新武裝後仍在同一個 500ms 窗內
+    fireEvent.click(marketBtn("買"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies[1]).toMatchObject({ stock_no: "2454", price_type: "market" });
+  });
 });
