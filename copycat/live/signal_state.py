@@ -409,8 +409,11 @@ class SignalDetector:
             )
             if keep > 0:
                 above = []
-            else:
+            elif keep < 0:
                 below = []
+            else:  # price == prev:沒有任何依據可以選邊 → 寧可少發,不擲硬幣決定方向
+                below = []
+                above = []
         if below:
             return "from_below", below
         if above:
