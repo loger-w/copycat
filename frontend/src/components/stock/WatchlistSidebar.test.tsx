@@ -6,8 +6,12 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROW_H, WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+import { fmtPct } from "@/lib/format";
+import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
 import type { Group, Watchlist } from "@/lib/watchlist-model";
 import { wrap } from "@/test-utils";
+import type { CapitalPosition } from "@/types";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 /** 整包 PUT body(v3 起 codes 與 groups 都是契約的一部分,只推 groups 會漏掉未分組) */
@@ -33,9 +37,15 @@ const NAMES = {
 const COLLAPSED_KEY = "copycat-stock-wl-collapsed";
 const UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
 
+/** 倉位 chip(SC-2)的部位列。**預設空**:既有案不該因為多了一條路由而長出 chip。 */
+let positions: CapitalPosition[] = [];
+
 /** 名稱表分支不能回空表 —— 空表下「名稱命中」的提示列永遠不可能成立(review R19)。 */
 function respond(url: string, groups: Group[] = GROUPS, codes: string[] = CODES): Response {
   if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+  // 倉位路由不接的話,`useCapitalPositions` 會拿到自選的殼(`{codes,groups}`)當部位
+  // 列表用 → `positions` undefined → 恆無倉,SC-2 的斷言全部靜默 vacuous
+  if (url.includes("/api/capital/positions")) return new Response(JSON.stringify({ positions }));
   return new Response(JSON.stringify({ codes, groups }));
 }
 
@@ -54,6 +64,8 @@ function mockWatchlist(groups: Group[], codes: string[]): void {
 beforeEach(() => {
   window.localStorage.removeItem(COLLAPSED_KEY);
   window.localStorage.removeItem(UNGROUPED_KEY);
+  window.localStorage.removeItem(FEE_DISCOUNT_KEY);
+  positions = [];
   putBodies = [];
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "PUT") {
@@ -1197,5 +1209,108 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
     expect(within(headerOf("空組")).queryByText(/%$/)).toBeNull();
     const ung = within(screen.getByTestId("wl-ungrouped")).getByRole("button", { name: /^未分組/ });
     expect(within(ung).queryByText(/%$/)).toBeNull();
+  });
+});
+
+// batch3 R3 SC-2:自選列第二行的倉位 chip。**有倉才顯示** —— 側欄 240px 寬,
+// 給每一列留一個空佔位等於全年 95% 的時間都在浪費那半行。
+describe("WatchlistSidebar 倉位 chip(SC-2)", () => {
+  const P = 1_000_000; // 現價 1000 元(毫元)
+  const AVG = 985.2;
+
+  const POS_QUOTES: Record<string, WatchlistQuote> = {
+    "2330": {
+      p: P,
+      chg_pct: 1.5,
+      vol: 100,
+      ref: null,
+      upper: null,
+      lower: null,
+      no_data: false,
+      trial: false,
+    },
+  };
+
+  function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
+    return {
+      market: "sec",
+      stock_no: "2330",
+      qty: 3,
+      name: "台積電",
+      avg_price: AVG,
+      kind: "cash",
+      pnl_base: null,
+      pnl_base_price: null,
+      pnl_cost: null,
+      code: "2330",
+      ...over,
+    };
+  }
+
+  /** 期望值一律由 `positionEcon` 現算(不寫死字串):寫死的話折數 / 費率口徑改了
+   *  測試照樣綠,而那正是「畫面數字與閃電梯對不上」的失效樣態。 */
+  function expectedSec(qty: number, discount: number, kind = "cash"): string {
+    const econ = positionEcon(qty, AVG, P, discount, kind);
+    const pct = ((econ.pnl ?? 0) / (AVG * Math.abs(qty) * 1000)) * 100;
+    return `${qty}張 ${fmtPct(pct)}`;
+  }
+
+  async function renderWithPositions(): Promise<HTMLElement[]> {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={POS_QUOTES} />);
+    await waitGroups();
+    await waitFor(() => expect(screen.queryAllByTestId("wl-pos-2330").length).toBeGreaterThan(0));
+    return screen.queryAllByTestId("wl-pos-2330");
+  }
+
+  it("有現股倉 → chip 印張數 + 含費稅損益%,tone 依損益、title 逐 kind 明細", async () => {
+    positions = [pos()];
+    const chips = await renderWithPositions();
+    // 2330 同時在「主力」與「觀察」兩組 → 兩份 chip(同一檔多組是常態)
+    expect(chips).toHaveLength(2);
+    expect(chips[0]?.textContent).toBe(expectedSec(3, FEE_DISCOUNT_DEFAULT));
+    expect(chips[0]?.className).toContain("text-bull");
+    expect(chips[0]?.getAttribute("title")).toContain("現股 3張");
+    expect(chips[0]?.getAttribute("title")).toContain("均價 985.2");
+  });
+
+  it("均價缺(尚未回填)→ 百分比破折號,張數照顯示", async () => {
+    positions = [pos({ avg_price: null })];
+    const chips = await renderWithPositions();
+    expect(chips[0]?.textContent).toBe("3張 —");
+    expect(chips[0]?.className).toContain("text-ink-dim");
+  });
+
+  it("同股號標準 + 小型個股期 → 逐契約列出(單位差 20 倍,不可聚合)", async () => {
+    positions = [
+      pos(),
+      pos({ market: "fut", stock_no: "CDFI6", qty: 2, pnl_base: 500 }),
+      pos({ market: "fut", stock_no: "QFFI6", qty: -1, pnl_base: -200 }),
+    ];
+    const chips = await renderWithPositions();
+    expect(chips[0]?.textContent).toContain("期 2口/空1口");
+    expect(chips[0]?.getAttribute("title")).toContain("CDFI6 多2口");
+  });
+
+  it("沒有報價(盤前)且只有期倉 → chip 仍在(pnl_base 不吃現價)", async () => {
+    positions = [pos({ market: "fut", stock_no: "QQFI6", qty: 2, pnl_base: 500, code: "5483" })];
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={POS_QUOTES} />);
+    await waitGroups();
+    await waitFor(() => expect(screen.queryAllByTestId("wl-pos-5483").length).toBeGreaterThan(0));
+    expect(screen.queryAllByTestId("wl-pos-5483")[0]?.textContent).toBe("期 2口");
+  });
+
+  it("無倉的列 → DOM 完全沒有 chip 節點(零佔位)", async () => {
+    positions = [pos()];
+    await renderWithPositions(); // 先自檢有倉的那檔真的長出來了
+    expect(screen.queryAllByTestId("wl-pos-3231")).toHaveLength(0);
+  });
+
+  // SC-5 元件級:折數的真相源是同一個 localStorage key,側欄與閃電梯同 tick 同數字
+  it("折數改成 3 折 → chip 的損益跟著換(與 positionEcon 同折數)", async () => {
+    window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
+    positions = [pos()];
+    const chips = await renderWithPositions();
+    expect(chips[0]?.textContent).toBe(expectedSec(3, 3));
+    expect(chips[0]?.textContent).not.toBe(expectedSec(3, FEE_DISCOUNT_DEFAULT));
   });
 });
