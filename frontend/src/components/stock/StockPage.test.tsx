@@ -1058,11 +1058,20 @@ describe("StockPage header 倉位(SC-3)", () => {
     expect(await secText(CONTRACT)).toContain(`損益 ${pnlAt(SEC_LAST)}`);
   });
 
+  // review C-2:等 `page-quote` 是 props 驅動的節點,對「倉位查詢還沒回來」與「真的沒倉」
+  // 給同一個答案 = vacuous。改成先以有倉的檔自檢節點真的長得出來(同一份已落地的 positions),
+  // 再切到沒倉的檔斷言消失 —— 兩次斷言吃同一次查詢結果,無倉是資料判定不是時序。
   it("無倉 → 整段不渲染(零佔位)", async () => {
-    positions = [];
-    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} contract={null} />);
-    // 先等一個同批查詢落地,確認「不是還沒回來」而是真的沒有倉位
-    await waitFor(() => expect(screen.getByTestId("page-quote")).toBeTruthy());
+    positions = [pos()]; // 只有 2330 有倉
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = (code: string) => (
+      <QueryClientProvider client={client}>
+        <StockPage code={code} onSelect={vi.fn()} stream={stream()} contract={null} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(page("2330"));
+    await screen.findByTestId("page-position"); // 自檢:有倉時真的渲染
+    rerender(page("2317")); // 切到沒倉的檔(查詢已落地,同一份 data)
     expect(screen.queryByTestId("page-position")).toBeNull();
   });
 });
