@@ -28,28 +28,35 @@ describe("pegLabels", () => {
     expect(pegLabels([], BOUNDS)).toEqual([]);
   });
 
-  it("up 由 top 往下、down 由 bottom 往上,各自每 EDGE_LABEL_H 疊一層", () => {
+  it("up 由 top 往下、down 由 bottom 往上,各自每 EDGE_LABEL_H 疊一層;**槽位次序與價位一致**", () => {
     const out = pegLabels(
       [up("ah", 24_100_000), up("nh", 23_500_000), down("nl", 22_700_000), down("al", 22_500_000)],
       BOUNDS,
     );
     expect(out.map((p) => p.level)).toEqual(["ah", "nh", "nl", "al"]);
+    // 輸入序 = `outOfDomainLevels` 的固定次序(價位由高到低)。up 側第一顆(最高)貼上緣;
+    // down 側**最後一顆(最低)貼下緣**,較高的 NL 排在 AL 之上 —— 兩顆以上域下掛牌時
+    // 「較低的價位畫在較高的上面」是 code review C-1 抓到的倒序,這裡鎖住語意。
     expect(out.map((p) => p.y)).toEqual([
       BOUNDS.top,
       BOUNDS.top + EDGE_LABEL_H,
-      BOUNDS.bottom,
       BOUNDS.bottom - EDGE_LABEL_H,
+      BOUNDS.bottom,
     ]);
+    const nl = out.find((p) => p.level === "nl")!;
+    const al = out.find((p) => p.level === "al")!;
+    expect(nl.y).toBeLessThan(al.y);
   });
 
   it("兩個方向各自計數,不互相推擠(up 只看 up、down 只看 down)", () => {
     const out = pegLabels([down("al", 1), up("ah", 2), down("nl", 3), up("nh", 4)], BOUNDS);
-    // 輸入次序保留(文字與配色靠 level,次序只決定同向的第幾層)
+    // 輸入次序保留(文字與配色靠 level,次序只決定同向的第幾層):down 側依輸入序
+    // 「最後一顆貼下緣」→ al(第一顆 down)在上、nl(第二顆 down)貼下緣
     expect(out.map((p) => p.level)).toEqual(["al", "ah", "nl", "nh"]);
     expect(out.map((p) => p.y)).toEqual([
-      BOUNDS.bottom,
-      BOUNDS.top,
       BOUNDS.bottom - EDGE_LABEL_H,
+      BOUNDS.top,
+      BOUNDS.bottom,
       BOUNDS.top + EDGE_LABEL_H,
     ]);
   });

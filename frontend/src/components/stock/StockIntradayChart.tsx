@@ -93,10 +93,17 @@ function tickTone(priceMilli: number, refMilli: number | null): string {
   return "fill-ink";
 }
 
+/** index 態的價位文字口徑:**整數點**。指數毫點走 `fmt` 會印「24283.54」(8 字),
+ *  而左緣價位帶 `Y_AXIS_W` = 36px、右緣帶 `R_AXIS_W` = 40px 都是為個股「1005.0」設計的 ——
+ *  @0.5625rem 8 字 ≈ 40px,y 刻度 / hover 價標右對齊在 x=32 會把開頭 1-2 位裁出畫布
+ *  (code review C-2;R4 real-env 截圖「4285.42」)。兩位小數在 readout 已有一份,
+ *  軸上的刻度 / 掛牌 / CDP / MA 全部收整數點即可(指數的 1 點 ≈ 0.004%)。 */
+const fmtIndexPts = (milli: number): string => String(Math.round(milli / 1000));
+
 /** 右緣文字:CDP 五線印價位 + `*`(一眼分出是 CDP 不是 MA);MA 維持名稱。
  *
- *  價位口徑由 `priceText` 注入(stock = `fmtTickPrice` 可下單檔位、index = `fmt`)——
- *  指數沒有 tick 表,snap 出來的點位是憑空捏造的。**注入而不是就地判 mode**:
+ *  價位口徑由 `priceText` 注入(stock = `fmtTickPrice` 可下單檔位、index = `fmtIndexPts`
+ *  整數點)—— 指數沒有 tick 表,snap 出來的點位是憑空捏造的。**注入而不是就地判 mode**:
  *  同一份口徑在 MA 價位標(`edge-price-*`)也要用,兩處各判各的話會出現「CDP snap 了、
  *  MA 沒 snap」這種同圖兩套口徑,沒有任何錯誤訊號。 */
 function levelText(
@@ -158,6 +165,7 @@ const ChartStatic = memo(function ChartStatic({
   hourTicks,
   fillMarks,
   priceText,
+  tickText = fmt,
   pegs = EMPTY_PEGS,
 }: {
   g: IntradayGeometry;
@@ -186,9 +194,14 @@ const ChartStatic = memo(function ChartStatic({
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定)—— 行內字面值會打穿本 memo,
    *  而症狀只是 hover 掉幀,沒有任何測試會紅(SC-9 就是補這道機械閘)。 */
   fillMarks: readonly FillMark[];
-  /** 價位文字口徑(見 `levelText`)。**必經模組層函式**(`fmtTickPrice` / `fmt`)——
-   *  行內箭頭函式每次 render 新 identity,會打穿本 memo。 */
+  /** 價位文字口徑(見 `levelText`;CDP `價位*` / MA 價位標 / 掛牌三處同源)。
+   *  **必經模組層函式**(`fmtTickPrice` / `fmtIndexPts`)—— 行內箭頭函式每次 render 新
+   *  identity,會打穿本 memo。 */
   priceText: (milli: number) => string;
+  /** 左緣 y 刻度的文字口徑。stock 態預設 `fmt`(既有:不 snap、最多兩位小數,個股價位
+   *  裝得下);index 態 `fmtIndexPts`(見該常數的 why)。與 `priceText` 分開:stock 態的
+   *  刻度本來就不是 `fmtTickPrice` 口徑,合成一個 prop 會改到個股頁(W-1)。 */
+  tickText?: (milli: number) => string;
   /** 域外疊線掛牌(index 態限定;stock 態恆為 `EMPTY_PEGS` → 零渲染、obstacles 不變)。
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
   pegs?: readonly PegInput[];
@@ -329,7 +342,7 @@ const ChartStatic = memo(function ChartStatic({
             className={t.kind !== undefined ? "fill-white" : tickTone(t.priceMilli, refMilli)}
             fontSize="0.5625rem"
           >
-            {fmt(t.priceMilli)}
+            {tickText(t.priceMilli)}
           </text>
         </g>
       ))}
@@ -507,7 +520,7 @@ const ChartStatic = memo(function ChartStatic({
           paintOrder="stroke"
           fontSize="0.5625rem"
         >
-          {`${p.level.toUpperCase()} ${fmt(p.priceMilli)}${p.dir === "up" ? "↑" : "↓"}`}
+          {`${p.level.toUpperCase()} ${priceText(p.priceMilli)}${p.dir === "up" ? "↑" : "↓"}`}
         </text>
       ))}
       {/* VWAP 即時數值(SC-2)。就地畫在末點右側;值 = `vwapMilli`(後端逐筆,與說明列
@@ -992,10 +1005,17 @@ export function IntradayChartCore({
     fillField === null ? [] : [fillField],
   );
 
-  // index 態不 snap:tick 表是個股的可下單檔位,指數的價位量尺是連續的 ——
-  // snap 出來的點位是憑空捏造的(同右緣 `priceText` 的口徑分權)。
+  // index 態不 snap tick:tick 表是個股的可下單檔位,指數的價位量尺是連續的 ——
+  // snap 出來的點位是憑空捏造的(同右緣 `priceText` 的口徑分權)。但**收成整數點**:
+  // 左緣價標盒寬 = `Y_AXIS_W`(36px,為「1005.0」這種個股價位設計),指數毫點走 `fmt`
+  // 會印「24285.42」8 字 ≈ 40px,盒子裝不下、字往左溢出畫布外(R4 real-env 截圖:
+  // 「4285.42」被裁掉開頭的 2)。量尺精度到 1 點對指數已足夠(左緣三格刻度本身就只到小數一位)。
   const hoverPrice =
-    hover === null ? null : index ? g.priceAtY(hover.y) : snapDown(g.priceAtY(hover.y));
+    hover === null
+      ? null
+      : index
+        ? Math.round(g.priceAtY(hover.y) / 1000) * 1000
+        : snapDown(g.priceAtY(hover.y));
   const timeTagX =
     hoverMin !== null ? clampTagX(minuteToX(hoverMin, w, xw), TIME_TAG.w, w) : null;
   const timeTagSpan: [number, number] | null =
@@ -1102,7 +1122,8 @@ export function IntradayChartCore({
           hourTicks={hourTicks}
           fillMarks={fillMarks}
           // 模組層函式 → identity 穩定,不打穿 memo(行內箭頭函式會)
-          priceText={index ? fmt : fmtTickPrice}
+          priceText={index ? fmtIndexPts : fmtTickPrice}
+          tickText={index ? fmtIndexPts : undefined}
           pegs={pegs}
         />
         <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
@@ -1256,7 +1277,7 @@ export function IntradayChartCore({
           左段本輪從 ~33 字元長到 ~46 字元,窄容器時會換行。兩段各自 nowrap,
           左段可截斷、右段不縮。
           card 變體整列省略(AD-4):卡片寬度裝不下,且 `<figcaption>` 在 `<div>` 下無語意。 */}
-      {/* 閘用 `side === null`(= card 變體)而不是再讀一次 `card`:兩個判準各寫一次時
+      {/* 閘用 `side === null`(= card 或 index 態)而不是再讀一次 `card || index`:兩個判準各寫一次時
           TS 也 narrow 不出 `side` 非空,而 `side!` 會把「哪天忘了算」變成 runtime 崩潰 */}
       {side === null ? null : (
       <figcaption className="mt-1 flex h-4 items-center justify-between gap-2 font-mono text-xs text-ink-dim">
