@@ -684,15 +684,25 @@ class CapitalClient:
 
     # ------------------------------------------------------------------ 送單
 
+    def _note_price_type(self, result: OrderResult, price_type: str) -> None:
+        """送單成功且拿到委託序號 → 把價格別記進 store(SC-10)。
+        群益回報無價格別欄,委託列表要標「市價」只能靠這一手;拒單 / timeout
+        (seq_no=None)不記 —— 沒有委託在市場上的標籤是假訊息。
+        日期用本機日,與回報的委託建立日同時區。平倉路徑也經過送單函式 → 一併標。"""
+        if result.ok and result.seq_no:
+            self.store.note_price_type(result.seq_no, price_type, time.strftime("%Y%m%d"))
+
     async def submit_stock_order(
         self, req: StockOrderRequest, *, action: str = "order"
     ) -> OrderResult:
         def _do() -> tuple[str, int]:
             return self._com.send_stock_order(self._user_id, to_stockorder_fields(req, self._full_account))
 
-        return await self._execute_write(
+        result = await self._execute_write(
             action=action, req=req, gate=check_stock_order(req, self._safety), com_call=_do
         )
+        self._note_price_type(result, req.price_type)
+        return result
 
     async def submit_future_order(
         self,
@@ -725,9 +735,11 @@ class CapitalClient:
             )
             return self._com.send_future_order(self._user_id, fields, is_option=is_option)
 
-        return await self._execute_write(
+        result = await self._execute_write(
             action=action, req=req, gate=gate, com_call=_do, message_prefix=prefix
         )
+        self._note_price_type(result, req.price_type)
+        return result
 
     # ------------------------------------------------------------------ 刪/改/減(雙帳號路由)
 

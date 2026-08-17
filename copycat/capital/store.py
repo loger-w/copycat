@@ -74,6 +74,10 @@ class CapitalStore:
         self._lock = threading.Lock()
         self._orders: dict[str, _Agg] = {}
         self._order_seq: list[str] = []  # 到達順序
+        # 本 app 送出的價格別:seq → (price_type, 送出日 YYYYMMDD)。與 _Agg 分開放,
+        # 因為它不是回報事件的產物 —— 送單結果與 N 回報的到達序不保證(COM 執行緒 vs
+        # async),掛在 _Agg 上會在「結果先回」時無處可放。`clear()` 不清(見該方法註)。
+        self._price_types: dict[str, tuple[str, str]] = {}
         # 鍵 = (stock_no, kind):同檔資+集保並存各佔一列,兩種類都平倉鍵得到
         self._positions: dict[tuple[str, str], Position] = {}
 
@@ -155,6 +159,20 @@ class CapitalStore:
             elif t == "S":
                 self._set_status(a, "退單")
 
+    def note_price_type(self, seq_no: str, price_type: str, date: str) -> None:
+        """記下本 app 送出的價格別(送單成功且拿到 seq 時呼叫)。
+        `date` = 送出當日 YYYYMMDD:server 長跑跨日、券商 seq 若重用,
+        沒有日期界就會把今日的限價單標成昨日那張的「市價」(review R7)。"""
+        with self._lock:
+            self._price_types[seq_no] = (price_type, date)
+
+    def _price_type_of(self, a: _Agg) -> str | None:
+        """委託日與記錄日相符才帶出;委託日缺(None)無從比對 → 不帶,不猜。"""
+        noted = self._price_types.get(a.seq_no)
+        if noted is None or a.date is None:
+            return None
+        return noted[0] if noted[1] == a.date else None
+
     def _to_record(self, a: _Agg) -> OrderRecord:
         if a.market in _SEC_LOT_MARKETS or a.market is None:
             div, unit = 1000, "張"
@@ -182,6 +200,7 @@ class CapitalStore:
             pre_order=a.pre_order,
             error_msg=a.error_msg,
             actionable=_RANK.get(a.status_label or "", 0) in (1, 2),
+            price_type=self._price_type_of(a),
             raw=a.raw,
         )
 
@@ -215,7 +234,10 @@ class CapitalStore:
             return a.market if a else None
 
     def clear(self) -> None:
-        """清空委託聚合(部位不動)。回報重連重播前必須呼叫,否則成交量重複累計。"""
+        """清空委託聚合(部位不動)。回報重連重播前必須呼叫,否則成交量重複累計。
+
+        `_price_types` **不清**:它是送單意圖不是回報事件,重播不會重建它 ——
+        清掉等於本 app 送出的市價單在重連後全體失標。"""
         with self._lock:
             self._orders.clear()
             self._order_seq.clear()
