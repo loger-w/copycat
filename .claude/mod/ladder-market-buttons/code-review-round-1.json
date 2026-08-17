@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "scope": "master..d84fd0bc (review-diff.txt)",
+  "lenses": ["whitelist+security (opus)", "correctness/react/backend (opus)"],
+  "whitelist_verdict": {"W1":"保留","W2":"保留","W3":"保留","W4":"保留","W5":"保留","W6":"保留","W7":"保留(附帶:TXO 市價單經 submit_future_order 也標市價,新增顯示非破壞)","W8":"保留","W9":"保留","W10":"保留"},
+  "findings": [
+    {"id":"IMPL-1","severity":"P1","file":"三梯 marketOrder","claim":"市價鈕防抖 key 只有 side,不含標的;PriceLadder 換股不重掛 → 換標的後 500ms 內同側被靜默吞、舊 hint 仍在","disposition":"accepted","resolution":"防抖 key 併入標的(現股 code / 個股期 tc4 symbol / 期貨 contract);測試補『改 code 後立即按仍送出』"},
+    {"id":"IMPL-2/F1","severity":"P1","file":"三梯 *.test.tsx","claim":"SC-7 雙保險測試對 disabled button fireEvent.click,React 不派發 → handler 守門零覆蓋","disposition":"accepted","resolution":"測試改為 render 後 `removeAttribute('disabled')` 再 click(模擬 stale DOM 繞過 disabled),斷言零請求;三梯各一案"},
+    {"id":"IMPL-3","severity":"P2","file":"lib/flash-send.ts","claim":"then().catch() 串接 → then 內拋錯會二次 dispatch send_fail(成功被洗成失敗)","disposition":"accepted","resolution":"改 `p.then(onOk, onErr)` 兩參數形式;flash-send.test 補『dispatch 後 showHint 拋 → dispatch 恰一次』"},
+    {"id":"IMPL-4","severity":"P2","file":"capital/client.py _on_late_result","claim":"timeout / cancel 路徑晚到結果有 seq_no 卻不記 price_type","disposition":"accepted","resolution":"_on_late_result 內 ok+seq_no → note_price_type(getattr(req,'price_type',None) 收斂);docstring 改寫;test_client 補一案"},
+    {"id":"IMPL-5/F6","severity":"P2","file":"capital/client.py:_note_price_type","claim":"本機日曆日 vs 回報委託日(夜盤/預約單)語意未實證 → 標籤靜默消失(fail-safe)","disposition":"accepted(known-limit)","resolution":"註解標明未實證 + spec §7 KL-4;test_store 用寫死日期字串;不改交易日口徑(留 next-time)"},
+    {"id":"IMPL-6","severity":"P2","file":"capital/client.py correct_price","claim":"改價後 _price_types 不失效 → 市價單改成限價仍標『市價』(唯一 false positive 路徑)","disposition":"accepted","resolution":"correct_price 成功 → store.forget_price_type(seq);pytest 補一案"},
+    {"id":"IMPL-7/F5","severity":"P2","file":"capital/store.py","claim":"_price_types 只增不減","disposition":"accepted","resolution":"note_price_type 寫入時 prune date 不同的舊項(同鎖內);pytest 補一案"},
+    {"id":"IMPL-8","severity":"P2","file":"三梯 *.test.tsx SC-5","claim":"零請求斷言在同步幀檢查,無鑑別力","disposition":"accepted","resolution":"斷言前 `await act(async()=>{})` 排空 microtask"},
+    {"id":"F2","severity":"P2","file":"StkfutLadder/FuturesLadder.test","claim":"SC-9 防抖只在現股有測","disposition":"accepted","resolution":"兩梯各補連按 + 交錯案例"},
+    {"id":"F3","severity":"P2","file":"三梯 test","claim":"市價鈕路徑無 arm dispatch 接線斷言","disposition":"accepted","resolution":"任一梯補『市價鈕 400 連 3 次 → 自動解除』"},
+    {"id":"F4","severity":"P2","file":"Stkfut/Futures test + LadderView","claim":"stkfut last=null / futures p&ref null / rows 空仍渲染鈕列 未覆蓋","disposition":"accepted","resolution":"各補一案"}
+  ],
+  "p2_summary": "9 條 P2 全 accepted(store 生命週期 3、測試強度 5、flash-send 例外流 1)",
+  "clean_checks": ["store 鎖無重入死鎖", "aliveRef StrictMode 重設", "PositionBar 抽出無多餘容器", "fixture price_type 無 cast 逃逸", "ladderTop 不進 rowRefs"]
+}
