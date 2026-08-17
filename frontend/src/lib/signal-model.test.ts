@@ -161,13 +161,32 @@ describe("groupSignals", () => {
     expect(groups[0]?.items.map((s) => s.id)).toEqual(["g1", "g2"]);
   });
 
-  it("組的 key / 價格 / 名稱 / 時間取組內第一則", () => {
+  // review C-4:輸入是「新在前」,組內最後一則 = 最早到的那則。取組首當 key 時,
+  // 同 tick 再來一則就換 key = 整列卸載重掛;價格也要與 Discord 合併訊息的 rows[0] 同一則。
+  it("組的 key / 價格 / 名稱 / 時間取組內最後一則(= 最早到)", () => {
     const [group] = groupSignals([cdp, crash]);
-    expect(group?.key).toBe("g1");
+    expect(group?.key).toBe("g2");
     expect(group?.code).toBe("2330");
     expect(group?.name).toBe("台積電");
     expect(group?.time).toBe("09:31:22");
-    expect(group?.price).toBe(1_000_000);
+    expect(group?.price).toBe(999_000);
+  });
+
+  // T-11:同一 tick 又到一則(前插)時,列的身分不能變 —— 否則 React 以新 key 重建整列
+  it("同組前插新到訊號:key 與 price 不變", () => {
+    const fresh = sig({
+      id: "g5",
+      kind: "vol_burst",
+      pct: 3,
+      time: "09:31:22",
+      price: 1_002_000,
+    });
+    const [before] = groupSignals([cdp, crash]);
+    const [after] = groupSignals([fresh, cdp, crash]);
+    expect(after?.key).toBe(before?.key);
+    expect(after?.key).toBe("g2");
+    expect(after?.price).toBe(999_000);
+    expect(after?.items.map((s) => s.id)).toEqual(["g5", "g1", "g2"]);
   });
 
   it("不同 code 不併(同一秒兩檔各自成列)", () => {
@@ -183,7 +202,7 @@ describe("groupSignals", () => {
   it("保序:組序 = 輸入序,組內序 = 輸入序", () => {
     const other = sig({ id: "g3", code: "2317", name: "鴻海", time: "09:31:22" });
     const groups = groupSignals([other, cdp, crash]);
-    expect(groups.map((g) => g.key)).toEqual(["g3", "g1"]);
+    expect(groups.map((g) => g.key)).toEqual(["g3", "g2"]);
     expect(groups[1]?.items.map((s) => s.id)).toEqual(["g1", "g2"]);
   });
 
@@ -201,21 +220,34 @@ describe("groupSignals", () => {
 describe("groupKindLabels / groupRuleNames", () => {
   const base = sig({ id: "k1", kind: "surge", pct: 1.2, time: "09:31:22", rule_name: "早盤急拉" });
 
-  it("每段 kind 文案帶自己的代表 sig(逐段著色的輸入)", () => {
+  // 段序 = 到達序(items 反序):與 Discord 合併訊息 rows[0] = 最早到的那則同一個口徑
+  it("每段 kind 文案帶自己的代表 sig,段序為到達序", () => {
     const dive = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22", rule_name: "早盤急殺" });
     const [group] = groupSignals([base, dive]);
     const segments = groupKindLabels(group!);
-    expect(segments.map((s) => s.label)).toEqual(["爆拉 +1.20%", "爆跌 -1.20%"]);
-    expect(segments.map((s) => s.sig.id)).toEqual(["k1", "k2"]);
+    expect(segments.map((s) => s.label)).toEqual(["爆跌 -1.20%", "爆拉 +1.20%"]);
+    expect(segments.map((s) => s.sig.id)).toEqual(["k2", "k1"]);
+  });
+
+  // 前插一則新到訊號只會加在**尾段**,已顯示的段序不動
+  it("同組前插新到訊號:既有段序不變、新段接在尾端", () => {
+    const dive = sig({ id: "k2", kind: "crash", pct: -1.2, time: "09:31:22" });
+    const fresh = sig({ id: "k3", kind: "vol_burst", pct: 3, time: "09:31:22" });
+    const [group] = groupSignals([fresh, base, dive]);
+    expect(groupKindLabels(group!).map((s) => s.label)).toEqual([
+      "爆跌 -1.20%",
+      "爆拉 +1.20%",
+      "爆量 3.0 倍",
+    ]);
   });
 
   // 同 kind 兩條規則同 tick 各發一則 → 文案一模一樣,印兩段只是雜訊
-  it("同文案只留一段(保留首見順序)", () => {
+  it("同文案只留一段(保留到達序的首見順序)", () => {
     const twin = sig({ id: "k2", kind: "surge", pct: 1.2, time: "09:31:22", rule_name: "另一條" });
     const [group] = groupSignals([base, twin]);
     const segments = groupKindLabels(group!);
     expect(segments.map((s) => s.label)).toEqual(["爆拉 +1.20%"]);
-    expect(segments[0]?.sig.id).toBe("k1");
+    expect(segments[0]?.sig.id).toBe("k2");
   });
 
   it("規則名去重、保留首見順序", () => {
