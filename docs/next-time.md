@@ -1,3 +1,17 @@
+## 2026-08-17(mod/intraday-fill-marks batch3 R2 留尾)
+
+- [ ] **成交點精確版**(D7 拍板近似版的替代):後端 `CapitalStore` 保留逐筆 D 事件
+  `(seq_no, time, price, qty, buy_sell, stock_no)`(只留當日)+ `GET /api/capital/fills`,前端每筆一標記;
+  近似版已知失真:分批成交壓成一點(最新事件時間 × 均價)、尾段事件是刪單時點落在刪單時刻、
+  **昨日部分成交今日刪單的單會以(今日刪單分鐘 × 昨日均價)畫上今日圖**(`date` 是最新事件日,
+  日期界擋不到;cr1 A-3)。`copycat/capital/store.py:65` 的註解「委託建立日」同樣不精確,精確版一併改。
+- [ ] **期貨 tab `FuturesChart` 成交點**:另一套幾何,本輪未做;資料源同 `fillPoints`(契約碼 key)。
+- [ ] **群組卡個股期委託不標**(契約碼→股號反查留給精確版一起做)。
+- [ ] **▲/▼ 可見度**待 user 盤中過目:尺寸沿 `INTRADAY_MARK`(外緣 3px 級),fake 鋸齒價線下 ▼ 綠疊
+  綠線不易辨識;真盤若仍不顯眼,調 `lib/fill-marks.ts::FILL_MARK` 或 halo 色(一行)。
+- [ ] **toggle 關態 `EMPTY_MARKS` identity 無機械閘**(cr1 B-p2-3 rejected:關態沒有可計次函式);
+  症狀僅掉幀。若日後改 ChartStatic memo 契約,順手補 render-count 閘。
+
 ## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
 
 - [ ] **D4 現股市價安全首單未做**(user 盤中):現股 `nSpecialTradeType=1 + bstrPrice=估價 + ROD` 端到端從未 prod 驗;
