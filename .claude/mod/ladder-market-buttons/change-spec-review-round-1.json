@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "findings_raw": "見 agent 回傳(R1–R12);此檔記主 agent 處置",
+  "dispositions": [
+    {"id":"R1","severity":"P0","disposition":"rejected_with_reason","resolution":"REFUTED(機械快篩):skill tc4-market-facts:189 (d) 寫的是「期交所」市價限 IOC/FOK,對象是期權;現股在 TWSE 逐筆交易制度下市價 ROD 合法(2026-07-31 鎖停實錄的 bids[0] 15966 張『市價佇列』正是留存簿中的未成交市價 ROD 委託;IOC/FOK 不會留在簿上)。現股 payload 維持 market+ROD;D4 安全首單仍為端到端驗證點(R-F 保留)。"},
+    {"id":"R2","severity":"P1","disposition":"accepted","resolution":"current-state §1 補 caller(RightRail:256/275、FuturesPage re-export、FuturesPage.test:150-168、RightRail.test:384/519);W8 改錨 FuturesPage.test。"},
+    {"id":"R3","severity":"P1","disposition":"accepted","resolution":"§3 改寫為事實(兩路由閘不同、new_close 不同、平倉驗收不覆蓋新鏈路);snap 不一致記 known-limit + next-time,不改 RightRail 平倉路徑(out of scope)。"},
+    {"id":"R4","severity":"P1","disposition":"accepted","resolution":"R-B 補薄簿掃單;R-E 補現股方向金額閘零保護;SC-8 title 明寫『可能以漲/跌停價成交』;§7 列 known-limit。"},
+    {"id":"R5","severity":"P1","disposition":"accepted","resolution":"新增 R-H(鎖定態×固定位置);hint 帶標的(現股股號 / 期貨契約碼);不加二段確認(D6 不推翻)。"},
+    {"id":"R6","severity":"P1","disposition":"accepted","resolution":"§6 指定:送單守門抽 lib 純函式 settleFlashSend;鈕三態算式抽 lib 純函式 marketButtonState;react-doctor 列入驗證清單與 SC-11。"},
+    {"id":"R7","severity":"P2","disposition":"accepted","resolution":"note_price_type 帶 date(YYYYMMDD,client 以本機日期傳入);_to_record 只在 a.date 相符時帶出;pytest 補跨日不套用案例。"},
+    {"id":"R8","severity":"P2","disposition":"accepted","resolution":"期貨市價邊價 floor/ceil 到 FUT_TICK_MILLI(與 buildFuturesLadder 同口徑);edgeMilli 仍為 raw 選邊(futCloseEstimate 行為不變)。"},
+    {"id":"R9","severity":"P2","disposition":"accepted","resolution":"市價鈕獨立防抖 ref;SC-9 補交錯案例。"},
+    {"id":"R10","severity":"P2","disposition":"accepted","resolution":"§5 新增 R-I(±5% 反灰 / 平倉確認框兩道既有遠價防線在新路徑不適用);§7 列出。"},
+    {"id":"R11","severity":"P2","disposition":"accepted","resolution":"commit 切分節標題改為實際順序。"},
+    {"id":"R12","severity":"P2","disposition":"accepted","resolution":"標籤改 text-[10px] 緊湊字 + title;SC-10 補 288px 右欄標的名可辨識的截圖驗收。"}
+  ],
+  "accepted_p0": 0,
+  "round2_needed": false
+}
