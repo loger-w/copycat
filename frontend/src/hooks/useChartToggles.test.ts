@@ -16,7 +16,8 @@ afterEach(cleanup);
 // 🟢 SC-3:新增 vp(量分佈)預設開。這份 local 常數是「整包預設長什麼樣」的鏡像,
 // 新增欄位屬預期變更(事前標記),不是把失敗的斷言改綠 —— 6 處 toEqual(DEFAULTS)
 // 與下方一處硬列鍵集連動。
-const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true, vp: true };
+// 🟢 intraday-fill-marks SC-2:新增 fills(成交點)預設開 —— 同款事前標記的 schema 擴充。
+const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true, vp: true, fills: true };
 /** 存檔 schema 版本(storage-only 欄位,不屬 ChartToggles) */
 const V = 2;
 
@@ -27,7 +28,7 @@ function stored(): Record<string, unknown> {
 describe("useChartToggles", () => {
   // 🟢 SC-3:測試名補上 `vp`(事前標記的預期變更)—— 名字沒跟上時,整包 toEqual 明明
   // 也在驗 vp,讀測試清單的人卻以為 vp 沒有預設值的覆蓋
-  it("預設 vwap/cdp/bb/vp 開、ma 關", () => {
+  it("預設 vwap/cdp/bb/vp/fills 開、ma 關", () => {
     const hook = renderHook(() => useChartToggles());
     expect(hook.result.current.toggles).toEqual(DEFAULTS);
   });
@@ -146,7 +147,35 @@ describe("useChartToggles", () => {
       ma: false,
       bb: false,
       vp: true, // 🟢 SC-3:整包寫回會含新欄位(事前標記的預期變更)
+      fills: true, // 🟢 intraday-fill-marks SC-2:同款
       v: V,
+    });
+  });
+
+  // 🟢 intraday-fill-marks SC-2:新增 `fills`(分時圖成交點)預設開。**刻意不 bump
+  // TOGGLES_VERSION**(同 vp 的理由:全新鍵,舊存檔沒有它,`{...DEFAULTS, ...flags}`
+  // 自然補上;無謂 bump 的代價是所有人的 bb 被再打開一次)。
+  describe("fills(成交點)預設開、免 bump", () => {
+    it("舊存檔沒有 fills 鍵 → 預設開,v 仍是 2(不觸發升級分支)", () => {
+      window.localStorage.setItem(
+        KEY,
+        JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, vp: false, v: V }),
+      );
+      const hook = renderHook(() => useChartToggles());
+      expect(hook.result.current.toggles.fills).toBe(true);
+      // 既有選擇不被新鍵的加入洗掉
+      expect(hook.result.current.toggles.cdp).toBe(false);
+      expect(hook.result.current.toggles.vp).toBe(false);
+      expect(stored().v).toBe(V);
+    });
+
+    it("set fills false → 記憶體與存檔都是關", () => {
+      const hook = renderHook(() => useChartToggles());
+      act(() => hook.result.current.set("fills", false));
+      expect(hook.result.current.toggles.fills).toBe(false);
+      expect(stored()).toEqual({ ...DEFAULTS, fills: false, v: V });
+      const hook2 = renderHook(() => useChartToggles());
+      expect(hook2.result.current.toggles.fills).toBe(false);
     });
   });
 });

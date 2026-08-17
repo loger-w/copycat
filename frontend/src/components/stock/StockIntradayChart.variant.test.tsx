@@ -46,7 +46,7 @@ const ACCUM = fromSnapshot({
   meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
 });
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: true };
+const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: true, fills: true };
 
 const CARD_W = 246;
 
