@@ -129,15 +129,16 @@ export function IndexPage({
             會是整頁寬(右欄佔掉的 2fr 也算進去)→ 兩張圖在真正塞不下時仍硬並排。
             `min-h-0` **只在兩欄態**:單欄態下它會讓左欄再也撐不高主 grid(同上)。
 
-            **四個 `--idx-*` 變數就是「兩欄態 3:2」的發點**:雙圖 grid / 家數帶 section /
+            **四個 `--idx-*` 變數就是「兩欄態 6:5」的發點**:雙圖 grid / 家數帶 section /
             騰落線 wrapper 的最近 `@container` 祖先正是左欄自己(見上一句),兩欄態左欄
             只有 630–930px → 直接寫在它們身上的 `@[1050px]:flex-[3]` 永遠不成立
             (frontend-conventions「巢狀 container」陷阱,與 pane 層 min-h-0 同一個教訓)。
             量得到 root 寬的只有左欄本身,所以由左欄設變數、子節點讀變數;**每個變數的
             預設值 = 改動前那個 class 的展開值**,單欄態逐值不變由建構保證(W-4)。
-            比例 3:2 = 兩張指數圖比一條騰落線資訊密度高;1080p 左欄約 900px 時騰落線
-            約 270px(現 96px 的 2.8 倍),仍滿足 SC-6「≥ 0.6 × figure 高」。 */}
-        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0 @[1050px]:[--idx-chart-flex:3_1_0%] @[1050px]:[--idx-adl-flex:2_1_0%] @[1050px]:[--idx-adl-wrap-flex:1_1_0%] @[1050px]:[--idx-adl-min:10rem]">
+            比例 6:5(兩張指數圖比一條騰落線資訊密度略高;原案 3:2 實測 1080p 騰落線 / figure
+            只有 0.47、864p 還溢出 18px 出捲軸,6:5 在 1080p / 864p 皆 ≥ 0.6 且不捲 —— 家數帶
+            兩列 + 標題 ≈ 150px 固定 chrome 是吃掉比例的主因)。 */}
+        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0 @[1050px]:[--idx-chart-flex:6_1_0%] @[1050px]:[--idx-adl-flex:5_1_0%] @[1050px]:[--idx-adl-wrap-flex:1_1_0%] @[1050px]:[--idx-adl-min:10rem]">
           <BasisRow txf={txf} twse={twse} />
           {/* 顯式斷點取代舊 auto-fit minmax(480px):auto-fit 量的是這個 grid 自己的寬,
               與左欄 container 同寬故語意等價,但斷點值得寫在看得見的地方(W-12)。
@@ -145,10 +146,10 @@ export function IndexPage({
 
               `[flex:var(--idx-chart-flex,1_1_0%)]` 取代原本的 `flex-1`:**預設值就是
               `flex-1` 的展開值**,單欄態(左欄沒設變數)逐值不變;兩欄態左欄把它設成
-              `3 1 0%`,與家數帶 section 的 `2 1 0%` 湊成 3:2。不寫成 `@[1050px]:flex-[3]`
+              `6 1 0%`,與家數帶 section 的 `5 1 0%` 湊成 6:5。不寫成 `@[1050px]:flex-[3]`
               的理由見左欄那段註解(最近 container 是左欄,那個變體永不成立)。
               **不能同時留獨立的 `flex-1` token**:兩支 flex utility 誰蓋誰由 Tailwind 產出
-              順序決定,留著就有一半機率把 shorthand 蓋掉、3:2 靜默失效。
+              順序決定,留著就有一半機率把 shorthand 蓋掉、6:5 靜默失效。
 
               `min-h-80` 而非 `min-h-0`(amendment r3):min-h-0 的軌可以被壓到低於內容高,
               圖卡溢出壓在家數帶上;20rem 地板 = 標的列 28 + 週期列折 2 行 56 + gap 24 +
@@ -182,7 +183,7 @@ export function IndexPage({
 
               `[flex:var(--idx-adl-flex,0_0_auto)]` 取代原本的 `shrink-0`:**預設值 `0 0 auto`
               就是 `shrink-0` 的展開值**,單欄態逐值不變(高度仍由內容決定 = 家數帶 + 固定
-              96px 騰落線)。兩欄態左欄把它設成 `2 1 0%`,這塊改吃「左欄剩餘高的 2/5」,
+              96px 騰落線)。兩欄態左欄把它設成 `5 1 0%`,這塊改吃「左欄剩餘高的 5/11」,
               騰落線才不再被鎖在 96px。
               `min-h-0` 無條件加:兩欄態要讓 basis 0% 的軌真的縮得下去(可縮鏈少一段就
               退回 min-content 鎖死);單欄態 flex 不縮,min-height 不作用 → 安全。 */}

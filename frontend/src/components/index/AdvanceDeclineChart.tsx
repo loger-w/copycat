@@ -74,7 +74,7 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
       : SIZE.height;
 
   return (
-    // `min-h-0 flex-1`:兩欄態時 IndexPage 的 section 拿到「左欄剩餘高的 2/5」,這一層
+    // `min-h-0 flex-1`:兩欄態時 IndexPage 的 section 拿到「左欄剩餘高的 5/11」,這一層
     // 要把它一路傳給下面那支量測 wrapper(可縮鏈斷一段,wrapper 就吃不到高)。單欄態
     // 的 section 是 auto 高、沒有自由空間,`flex-1` 於是等同內容高 = 改動前行為。
     <div data-testid="adl-chart" className="flex min-h-0 flex-1 flex-col gap-1">
