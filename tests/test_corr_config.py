@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from copycat.corr_config import DEFAULT_CONFIG, load_config
+from copycat.corr_config import CONFIG_PATH, DEFAULT_CONFIG, load_config
 
 
 class TestDefaultConfig:
@@ -94,3 +94,31 @@ class TestLoadConfig:
         path = tmp_path / "correlation.json"
         path.write_text(json.dumps({"base": "TXF", "legs": []}), encoding="utf-8")
         assert load_config(path) == DEFAULT_CONFIG
+
+
+class TestRepoConfigFile:
+    """repo 真檔 `configs/correlation.json`(不是 tmp 假檔)的腿契約。
+
+    2026-08-17 R5:第七腿小日經 `TC.F.OSE.NK225M.HOT`(D13 拍板;OSE 夜盤實測 175 則/60s,
+    高於 NK225 102 / SGX NK 78)。DEFAULT_CONFIG 仍六腿(設定檔壞掉的降級路徑不變)。
+    """
+
+    def test_repo_config_has_seven_legs_with_nk225m(self) -> None:
+        cfg = load_config(CONFIG_PATH)
+
+        assert cfg is not DEFAULT_CONFIG, "真檔應成功載入,不得落回預設六腿"
+        assert len(cfg.legs) == 7
+        nk = cfg.legs[-1]
+        assert (nk.key, nk.label, nk.symbol, nk.source) == (
+            "NK225M",
+            "小日經",
+            "TC.F.OSE.NK225M.HOT",
+            "tc4",
+        )
+
+    def test_repo_config_first_six_legs_match_default(self) -> None:
+        """白名單 W1:六腿現有 key/label/symbol/source 與順序不動,base 仍 TXF。"""
+        cfg = load_config(CONFIG_PATH)
+
+        assert cfg.legs[:6] == DEFAULT_CONFIG.legs
+        assert cfg.base == "TXF"
