@@ -409,11 +409,16 @@ class TC4QuoteSource:
         return session_window(session_key())
 
     def _apply_variant(self, symbol: str, window: tuple[str, str]) -> tuple[str, str]:
-        """套自癒的窗變體:variant k > 0 → EndTime 小時 +k(封頂 23,已滿則改推 StartTime −k)。
+        """套自癒的窗變體:總位移 k 先加在 EndTime,吃不下的餘量再推 StartTime。
 
         TC4 的訂閱 refcount 鍵是 `symbol|DataType|StartTime|EndTime`,**換窗 = 換一把
-        count 0 的新 key**,才會觸發上游 `ReqSubQuote`(repro.md 實驗 D/G)。窗只推小時、
-        方向單一,好讓 UNSUBQUOTE 與 SUBQUOTE 恆用同一把鍵。
+        count 0 的新 key**,才會觸發上游 `ReqSubQuote`(repro.md 實驗 D/G)。所以規則
+        唯一的硬要求是「k = 1/2/3 與原窗**恆為四把互異的鍵**」——
+
+        - EndTime += min(k, 23−end);餘量 r = k − 位移量。
+        - r > 0 且 StartTime − r ≥ 00 → StartTime −= r(夜盤窗 06–22 走這條)。
+        - StartTime 已頂到 00(全天窗 00–23)→ 改 StartTime += r(往前推是 no-op,
+          舊實作在這裡整組塌成同一把 key,而失效樣態是自癒照跑但上游永不重掛)。
 
         **歷史路徑(`_sub_history` / `_get_history`)不吃 variant** —— 回補窗與 REALTIME
         窗是不同 DataType 的兩把鍵,動它只會讓回補改抓別的區間。
@@ -422,11 +427,14 @@ class TC4QuoteSource:
         if k <= 0:
             return window
         start, end = window
-        end_hour = int(end[8:10])
-        if end_hour < _WINDOW_HOUR_MAX:
-            return start, f"{end[:8]}{min(end_hour + k, _WINDOW_HOUR_MAX):02d}"
-        start_hour = int(start[8:10])
-        return f"{start[:8]}{max(start_hour - k, _WINDOW_HOUR_MIN):02d}", end
+        start_hour, end_hour = int(start[8:10]), int(end[8:10])
+        shift = min(k, _WINDOW_HOUR_MAX - end_hour)
+        end_hour += shift
+        rest = k - shift
+        if rest:
+            back = start_hour - rest
+            start_hour = back if back >= _WINDOW_HOUR_MIN else start_hour + rest
+        return f"{start[:8]}{start_hour:02d}", f"{end[:8]}{end_hour:02d}"
 
     def _rt_request(self, request: str, symbol: str) -> dict:
         window = self._apply_variant(symbol, self._rt_window(symbol))
@@ -452,19 +460,31 @@ class TC4QuoteSource:
 
     def _heal_loop(self) -> None:
         while not self._stop.wait(self._heal_poll):
-            self._heal_tick(time.monotonic())
+            try:
+                self._heal_tick(time.monotonic())
+            except Exception:  # noqa: BLE001 - watchdog 邊界:漏接一次 = 自癒從此消失
+                # `_heal` 只吞 TC4 通訊類例外;邏輯 bug(KeyError / 型別)逃到這裡
+                # 就是 thread 靜靜死掉,而它守的正是「零推播且零錯誤訊號」那條路。
+                logger.exception("TC4 自癒 watchdog 巡檢例外(續行)")
 
     def _heal_tick(self, now: float) -> None:
         """一輪判定(`now` 可注入 → 測試不靠真時鐘)。
 
         R1(session 級):訂閱非空、**全部** symbol 都靜默超過門檻、且最近一次重掛也
-        超過門檻 → 整批重掛。09:01 那次事故(reap 殭屍 → 上游整批退訂)就是這個形狀。
-        R2(symbol 級):曾有推播、之後單獨靜默 → 只重掛它。從未推播過的 symbol 不進
-        R2 母體 —— TXO 深價外契約本來就整場沒成交,收進來等於無止盡 churn。
+        超過門檻 → 整批重掛,**命中即 return**(同一輪不再走 R2:兩條規則各記一次
+        attempts 會讓退避與換窗階梯整條錯位)。09:01 那次事故(reap 殭屍 → 上游整批
+        退訂)就是這個形狀。
+        R2(symbol 級):靜默超過門檻就重掛,母體 = 「曾有推播」**或**「訂閱已超過
+        門檻卻從未推播」—— 後者是 08-18 個股面的實際形狀(部分死亡:同 session 其他
+        腿還在流,R1 因此不成立,而那些從未推播的腿舊母體收不到,永遠沒人救)。
+        深價外契約那種本來就沒成交的 symbol 由 `heal_symbol_silence_secs=None` 整條
+        豁免(TXO session),不靠窄母體擋。
         """
         if not self._heal_active():
             return
-        subs = sorted(self._subscribed)  # 定序:log 與重掛順序可預期
+        # tuple() 先取快照再排序:巡檢期間 engine 可能訂/退訂(集合的單步操作在 GIL
+        # 下原子,但迭代中被改會 RuntimeError)。定序 → log 與重掛順序可預期。
+        subs = sorted(tuple(self._subscribed))
         if not subs:
             return
         t1 = self._heal_silence
@@ -480,37 +500,66 @@ class TC4QuoteSource:
         if t2 is None:
             return
         for sym in subs:
-            last = self._last_push.get(sym)
-            if last is not None and last < now - t2 and self._heal_next.get(sym, 0.0) <= now:
+            silent_since = self._last_push.get(sym, self._sub_at.get(sym))
+            if silent_since is None:  # 尚未成功訂閱過 → 沒有可比對的基準
+                continue
+            if silent_since < now - t2 and self._heal_next.get(sym, 0.0) <= now:
                 self._heal(sym, now, t2)
 
-    def _heal(self, symbol: str, now: float, base: float, cap: float = _HEAL_BACKOFF_CAP) -> None:
-        """單一 symbol 重掛 + 記帳(退避 base·2^(n-1),封頂 cap)。
+    def _next_variant(self, symbol: str, *, bump: bool) -> int:
+        """下一發要用的窗變體序號(1 → 2 → 3 → 1 …;窗開得再寬也回得來)。"""
+        variant = self._window_variant.get(symbol, 0)
+        return (variant % _HEAL_VARIANT_CYCLE) + 1 if bump else variant
+
+    def _heal_resub(self, symbol: str, *, bump_variant: bool) -> bool:
+        """重掛一發(watchdog 與個股健檢共用的基底;回「有沒有真的送出去」)。
+
+        `bump_variant` → **先對舊窗發 UNSUBQUOTE 再換窗**:換窗後才 UNSUB 送的是新窗,
+        舊窗那把 key 的 count 就永遠停在 >0(對 count 0 的 key 發 UNSUB 無害 —— TC4 log
+        09:00:52 `Remove count:0` 之後 Add 照常,既有的 UNSUB→SUB 冪等路徑天天在做)。
+
+        `symbol in self._subscribed` 的檢查必須**在鎖內**且緊貼 `_resub`:watchdog 取完
+        快照到這裡之間 engine 可能已經退訂,重掛會留下沒有任何持有者的幽靈訂閱。
 
         **不得拋**:watchdog / 健檢 timer 都在自己的 thread 上跑,一次 REQ 例外炸出去
         就等於自癒從此消失,而失效樣態(零推播)恰恰是沒有錯誤訊號的那一種。
         """
+        try:
+            with self._lock:  # 與 _check_stale 互斥:重連換 session 時不得同時重掛
+                if symbol not in self._subscribed:
+                    return False
+                if bump_variant:
+                    self._rt_request("UNSUBQUOTE", symbol)  # 舊窗 key 先歸零
+                    self._window_variant[symbol] = self._next_variant(symbol, bump=True)
+                self._resub(symbol)
+        except (ConnectionError, zmq.ZMQError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("TC4 自癒重掛失敗 %s: %s(下輪退避重試)", symbol, exc)
+            return False
+        return True
+
+    def _heal(
+        self, symbol: str, now: float, base: float, cap: float = _HEAL_BACKOFF_CAP
+    ) -> None:
+        """watchdog 的單一 symbol 重掛 + 記帳(退避 base·2^(n-1),封頂 300s)。
+
+        記帳(`_heal_attempts` / `_heal_next`)是 **watchdog 專屬**:個股健檢(R3)另有
+        自己的一組,共用會讓個股的 10/20/40/60s 退避被 watchdog 的階梯推到 300s。
+        兩邊只共用 `_window_variant`(那是「這把 key 現在是哪一把」的事實,不是節奏)。
+        """
         attempts = self._heal_attempts.get(symbol, 0) + 1
         self._heal_attempts[symbol] = attempts
-        if attempts >= _HEAL_VARIANT_AFTER:
-            variant = self._window_variant.get(symbol, 0)
-            self._window_variant[symbol] = (variant % _HEAL_VARIANT_CYCLE) + 1
         self._heal_next[symbol] = now + min(base * 2 ** (attempts - 1), cap)
+        bump = attempts >= _HEAL_VARIANT_AFTER
         silence = now - max(self._last_push.get(symbol, 0.0), self._sub_at.get(symbol, 0.0))
         logger.warning(
             "TC4 REALTIME 零推播自癒:%s 靜默 %.0fs → 重掛(attempt %d, window_variant=%d)",
             symbol,
             silence,
             attempts,
-            self._window_variant.get(symbol, 0),
+            self._next_variant(symbol, bump=bump),
         )
-        try:
-            with self._lock:  # 與 _check_stale 互斥:重連換 session 時不得同時重掛
-                self._resub(symbol)
-        except (ConnectionError, zmq.ZMQError, OSError, json.JSONDecodeError) as exc:
-            logger.warning("TC4 自癒重掛失敗 %s: %s(下輪退避重試)", symbol, exc)
-            return
-        self._sub_at[symbol] = now
+        if self._heal_resub(symbol, bump_variant=bump):
+            self._sub_at[symbol] = now
 
     def _note_push(self, symbol: str) -> None:
         """收到推播 = 這把 key 是活的:清 attempts/退避,**保留 variant**。"""
@@ -708,10 +757,23 @@ class TC4QuoteSource:
         self._sub_at[sym] = time.monotonic()
 
     def _unsub(self, sym: str) -> None:
-        """已訂閱才退訂(未訂閱 = no-op)。"""
+        """已訂閱才退訂(未訂閱 = no-op),並清掉這個 symbol 的自癒帳。
+
+        帳留著的話,下一輪訂閱會**帶著上一輪的 variant 與 attempts** 起跑:訂到一把
+        沒人知道的窗、第一次靜默就直接換窗,而 `_last_push` 的舊時戳讓它一進場就被
+        判成靜默。UNSUBQUOTE 必須先送完再清 —— 送的窗要用當下的 variant。
+        """
         if sym in self._subscribed:
             self._rt_request("UNSUBQUOTE", sym)
             self._subscribed.discard(sym)
+        for book in (
+            self._last_push,
+            self._sub_at,
+            self._heal_attempts,
+            self._heal_next,
+            self._window_variant,
+        ):
+            book.pop(sym, None)
 
     def subscribe(self, series: SeriesInfo, on_tick: Callable[[Tick], None]) -> None:
         self._ensure_connected()
