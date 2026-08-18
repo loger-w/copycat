@@ -3,7 +3,7 @@
 ## 自動化(repo root,2026-08-18)
 | gate | 結果 |
 |---|---|
-| `.venv\Scripts\python -m pytest -q` | **2725 passed**, 1 warning(150.6s);implementer 基線 2724 + 本 session 補 TXO 接線 1 |
+| `.venv\Scripts\python -m pytest -q` | round-1 修復後 **2755 passed / 1 failed**(154.6s);唯一紅 = `tests/server/test_ws_disconnect.py::TestAbruptDisconnect::test_no_write_to_dead_transport` 既有 timing flake(memory 08-05 已記;單檔重跑 3 次 2 過,本分支未動 ws 程式碼);修復前基線 2725 passed |
 | `.venv\Scripts\python -m ruff check copycat tests` | All checks passed! |
 | `.venv\Scripts\python -m pyright` | 0 errors, 0 warnings, 0 informations |
 | `.venv\Scripts\python -m copycat validate` | 42/42 PASS |
@@ -28,3 +28,7 @@
   之後 `/api/stock/state/<code>` `no_data:false, book!=null`、`/api/futures/state` TXF `t` 前進。
   TXF.HOT 日盤 key 由 TXO+futures 雙持 → 期貨 HOT 預期到 attempt 3(window_variant=1)才活(≈ 30+60s),
   或由 futures leaf fallback 先接手。停側車後同機制再驗一次(側車退訂 → symbol 斷 → 自癒接回)。
+
+## Code review round-1(2 lens,見 code-review-round-1.json)
+P0×1(variant 對全天窗 no-op)/ P1×9 / P2×8 → 全部 accepted 修畢(8 commits `6d8af274..0d504476`),rejected 1(加 `_subscribed` 鎖:CPython GIL 反證)。
+修後 gate:pytest 2755 passed + 1 既有 flake;ruff All checks passed;pyright 0 errors。
