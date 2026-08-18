@@ -22,8 +22,8 @@ grilling 姿態、無方向性抉擇 → 逐題 `[auto-default]` 推進不停等
 | SC-1 | 期貨分時圖 = 個股同款 core:游標移入出現**虛線十字**(垂直線落該分鐘、水平線跟滑鼠)+ 左緣價位標(整數點,不 snap 個股 tick)+ 底部「時間 / 該分鐘收盤」兩行標籤;左上 readout **六欄** `HH:MM / 價 / 漲跌% / 量 / 外 / 內`(無 hover 顯最新分鐘;時間文字為**牆上時刻**(如 `21:35`,不是軸索引);外 / 內來自 1K `uv/dv`);主線相對 `state.ref` 平盤上紅下綠 + 填色 | vitest `FuturesChart.test.tsx` 新案(`fireEvent.mouseMove` → `crosshair-v` / `crosshair-h` / `price-tag-text` / `time-tag-text` 印 `HH:MM` / readout 六欄;**hover 需 `getBoundingClientRect` stub 成 800×260,clientX 由 `minuteToX(index, 800, ALLDAY_WINDOW)` 反算才命中有 bar 的索引**,`[amendment 2026-08-18: review R7]`);截圖 `evidence/SC-1-fut-hover.png` |
 | SC-2 | 近全三段軸**保留**:13:45 與 15:01 相鄰(死區不佔 x)、05:00 為軸尾;底部時間標籤 = `09:00 11:00 13:00 15:00 18:00 21:00 00:00 03:00 05:00` 九個;前一交易日 bars 被 slice 掉 | vitest(polyline points x = `minuteToX(alldayIndexOf(HHMM), 800, ALLDAY_WINDOW)`;`XAxisLabels` 九個文字);截圖同 SC-1 |
 | SC-3 | 均價線(白 `stroke-ink` 1.2,值 = Σc·v/Σv 真量加權)+ 末點標籤;當日高 / 低空心環 + 價位文字(標在該分鐘;高===低只畫高);現價實心圈於序列末點(高於昨收紅 / 低綠 / 無 ref 灰);昨收虛線 `2 3`;左緣 3 格刻度(autofit:上 / 昨收 / 下)依相對昨收紅綠 | vitest testids `edge-price-vwap` / `day-high` / `day-low` / `last-dot` / `y-tick-price` 三格;截圖同 SC-1 |
-| SC-4 | 成交量副圖(`aria-label="成交量"`)+ 說明列 `外盤 X · 內盤 Y · 未分類 Z · 外盤比 · (判定率) / VWAP` 兩者皆 render;toggle 列五顆:均價 / VP 可按;**CDP / MA / 成交點反灰** + title「期貨分時本輪不提供 CDP/MA/成交點」;VP 開時 `vp-bar` ≥ 1(價位別量由分鐘收盤 × 量折入,鍵 = 5 點桶心 `snapDown(c)+tick/2`,一根 bar 鎖 `priceMilli` 期望值;`[amendment 2026-08-18: review R9]`) | vitest(副圖 svg / figcaption / `toggleDefs` disabled + title / `vp-bar` 數);截圖 `evidence/SC-4-fut-toggles.png` |
-| SC-5 | **hlines 保留**:持倉均價(本契約,label「均 23000 多2口」+ `<title>`)與 OI 撐 / 壓線在分時圖上照畫(testid `chart-hline`),**價位超出 y 域那一條不畫**(不 clamp);K 線態 hlines 不動 | 既有 `FuturesChart.test.tsx:316-373` 三案**只改前置一行**(`findByTestId("allday-line")` → `svg[aria-label="期貨近全時段分時走勢"]`),hlines 斷言(`均 23000 多2口` / `chart-hline` 計數 / 域外不畫)一字不動全綠;新域 ref 22,950,000、半幅 = max(650k, 550k, 229.5k)×1.1 = 715k → [22,235,000, 23,665,000]:23,000 內 / 30,000 外 / 21,000 外 → 「畫 1 條」期望不變(`[amendment 2026-08-18: review R1]`);截圖 `evidence/SC-5-fut-hlines.png`(有部位或 OI 時) |
+| SC-4 | 成交量副圖(`aria-label="成交量"`)+ 說明列 `外盤 X · 內盤 Y · 未分類 Z · 外盤比 · (判定率) / VWAP` 兩者皆 render;toggle 列五顆:均價 / VP 可按;**CDP / MA / 成交點反灰** + title「期貨分時本輪不提供 CDP/MA/成交點」;VP 開時 `vp-bar` ≥ 1(價位別量由分鐘收盤 × 量折入,鍵 = 5 點桶心 `snapDown(c)+tick/2`,一根 bar 鎖 `priceMilli` 期望值 = `snapDown(c) + 2_500`(毫元);`[amendment 2026-08-18: review R9]`) | vitest(副圖 svg / figcaption / `toggleDefs` disabled + title / `vp-bar` 數);截圖 `evidence/SC-4-fut-toggles.png` |
+| SC-5 | **hlines 保留**:持倉均價(本契約,label「均 23000 多2口」+ `<title>`)與 OI 撐 / 壓線在分時圖上照畫(testid `chart-hline`),**價位超出 y 域那一條不畫**(不 clamp);K 線態 hlines 不動 | 既有 `FuturesChart.test.tsx:316-373` 三案**只改前置一行**(`findByTestId("allday-line")` → `svg[aria-label="期貨近全時段分時走勢"]`),hlines 斷言(`均 23000 多2口` / `chart-hline` 計數 / 域外不畫)一字不動全綠;新域 ref 22,950,000、半幅 = max(dayHigh−ref, ref−dayLow, ref×1%)×1.1(`foldExtremes` 把 accum.high/low 摺入;fixture h/l = c±1 元 → 651k/551k)= 716,100 → [22,233,900, 23,666,100](`[amendment 2026-08-18: review R2-2]`):23,000 內 / 30,000 外 / 21,000 外 → 「畫 1 條」期望不變(`[amendment 2026-08-18: review R1]`);截圖 `evidence/SC-5-fut-hlines.png`(有部位或 OI 時) |
 | SC-6 | live 現價點語意保留:牆上時鐘落點 + 三道 gate(死區 / 錨定日 / 時鐘落後)→ gate 擋下時序列**不追加** live 分鐘、`last-dot` 落在末根 bar 的 x;同一錨定日通過時 `last-dot` cx = `minuteToX(當前分+1 索引)`、y = `state.p` | vitest 既有四案改為 core 語彙(`last-dot` cx / polyline 點數) |
 | SC-7 | 分時圖高度吃剩餘空間(同個股頁):wrapper 量測 → `svgBox(size, 800)` → mainH:subH = 260:70;jsdom 量不到 → viewBox `0 0 800 260` / `0 0 800 70`;**K 線態不傳 height(1400×578 等比不變)** | vitest(RO mock 沿 `StockChart.test`/`MarketPane.size.test` 樣板:量到 1000×500 → 主圖 viewBox 高 = `round(vbH×260/330)`;無 RO → 800×260) |
 | SC-8 | K 線檔位:模式列 = `分時 / 1分 / 2分 … 10分 / 15分 / 30分 / 60分 / 日K`(15 顆,順序如此);任一分 K 鈕 → `aggregateBars(bars, n)`(m7 → 7 分桶);localStorage 舊值 `m5` / 新值 `m7` 皆還原;`isFutChartMode("m7") === true`、`("m11") === false` | vitest `fut-chart-mode.test.ts`(逐值)+ `FuturesChart.test.tsx` 模式列案;截圖 `evidence/SC-8-fut-modes.png` |
@@ -96,6 +96,7 @@ hlines?: readonly ChartHLine[];
 新測試 `StockIntradayChart.futures.test.tsx`:readout 六欄且首欄走 `timeText`(index 3 → `"09:00"` 假函式可辨)/ 副圖 + 說明列在 /
 toggle 五顆:cdp / ma / fills disabled + title、vwap / vp enabled / hover 價標整數點不 snap / `xWindow` + `hourTicks` 注入:
 polyline x = `minuteToX(key, w, xw)`、XAxisLabels 印注入 label / hlines:域內畫(testid + title + label)、域外不畫 /
+**futures 態 minutes 末格 v=0 → readout 第 4/5/6 欄印「-」,同一份 accum 在 mode 預設(stock)印 `0`(反向 lock 只在 futures 態改;`[amendment 2026-08-18: review R2-1]`)** /
 不打 `/api/stock/overlay` / **W-1 lock**:mode 預設下 `hourTicks` = `hourTicksOf(SPOT_WINDOW)` 標籤、time-tag 走 `hhmm`、
 hlines 零(mutation:把 `pts` 判別改成 `!index` → stock 案紅)。
 
@@ -130,7 +131,7 @@ export function futuresBarsToAccum(input: {
 - `last`:live → `{p: live.p, t: "", cum_vol: 0}`;否則末根 bar `{p: c, t: "", cum_vol: 0}`(`t / cum_vol` 無來源 → 空值佔位、core 不讀,同 index adapter;`[amendment 2026-08-18: review R8]`);空 → null
   `[auto-default: 無 live 也在序列末點畫現價圈(同個股收盤後行為)| reason: core 的現價圈語意是「線走到哪」,不是「現在有推播」;live gate 擋下時圈落在末根 bar 是正確語意]`。
 - `meta`:`{name, ref, upper: null, lower: null, y_vol: null}`(±10% 漲跌停域會把期指日內線壓成平線 → 走對稱 autofit,同 index)。
-- `vp`:每根 bar `key = snapDown(c) + tickOf(c) / 2`(= 5 點桶的**桶心**;`buildVpBars` 的帶界 = 與 `stepUp/stepDown` 的中點 → 帶恰為 `[k, k+5)`,與桶區間一致,不偏 2.5 點;`[amendment 2026-08-18: review R9]`)累加 `{t: v, o: uv ?? 0, i: dv ?? 0}`;`c <= 0` 略過
+- `vp`:每根 bar `key = snapDown(c) + tickOf(c) / 2`(= 5 點桶的**桶心** k;`buildVpBars` 的帶界 = 與 `stepUp/stepDown` 的中點 → 帶 = `[k − tick/2, k + tick/2)` = `[snapDown(c), snapDown(c)+5 點)`,與桶區間一致,不偏 2.5 點;`[amendment 2026-08-18: review R9 / R2-4]`)累加 `{t: v, o: uv ?? 0, i: dv ?? 0}`;`c <= 0` 略過
   `[auto-default: VP 以分鐘收盤 × 量折入、5 點檔位 | reason: 1K 沒有逐筆價量,分鐘收盤是唯一可得的價位;5 點檔位在 2 萬多點的期指上是合理粒度]`。
 - 其餘:`code` / `seq: 0` / `ticks: []` / `book: null` / `noData: false` / `trial: false` / `amountMilli` = Σc·v / `volume` = Σv。
 - 測試:索引映射與死區略過 / uv/dv → o/i/u(缺欄 u=v)/ live 覆寫同索引 c 與 h/l、新索引補格 v=0 / vwap 量加權 / high-low 取 h/l /
@@ -179,8 +180,8 @@ export function futuresBarsToAccum(input: {
 | 檔 | 案 | 判定 | 理由 / 改法 |
 |---|---|---|---|
 | `FuturesChart.test.tsx` | import `INTRADAY_VB_W` / `xOf()` helper | **該紅(🔴)** | 改 `minuteToX(index, 800, ALLDAY_WINDOW).toFixed(1)` |
-| 〃 | 分時 SC-1 死區相鄰 :127 / slice :140 | **該紅** | `allday-line` → 主價線 polyline(`polyline.stroke-bull` 或 hasRef=false 時 `stroke-accent`;fixture STATE 有 ref → 取 clip 上半 `stroke-bull` 那條)points |
-| 〃 | unavailable :155 | **該紅(第二斷言退化)**(`[amendment 2026-08-18: review R6]`) | 文案斷言不動;`queryByTestId("allday-line")` 刪後恆真 → 改 `querySelector('svg[aria-label="期貨近全時段分時走勢"]')` 為 null,歸 🔴 [red] |
+| 〃 | 分時 SC-1 死區相鄰 :127 / slice :140 | **該紅** | `allday-line` → 主價線 polyline:本兩案 `state={null}` → hasRef=false → 取唯一的 `polyline.stroke-accent`;overlays 三案才是 STATE 有 ref 的雙 clip 版(`[amendment 2026-08-18: review R2-6]`)points |
+| 〃 | unavailable :155 | **不該紅(中性改寫,兩版皆綠;隨 🔴 commit 同步語彙)**(`[amendment 2026-08-18: review R6 / R2-3]`) | 文案斷言不動;`queryByTestId("allday-line")` 刪後恆真 → 改 `querySelector('svg[aria-label="期貨近全時段分時走勢"]')` 為 null,歸 🔴 [red] |
 | 〃 | 模式列 :105 / :117 | 不該紅 | 「5分」仍在;新增一案「1–10 / 15 / 30 / 60 共 15 顆、m7 寫 storage」 |
 | 〃 | 輪詢 gate :164 / :177 | 不該紅 | |
 | 〃 | live 四案 :195-243 | **該紅** | `allday-live` → `last-dot`:gate 擋下 → 主線點數 = bars 數且 `last-dot` cx = 末 bar x;通過 → cx = live 索引 x |
@@ -205,9 +206,9 @@ export function futuresBarsToAccum(input: {
 7. bar `c <= 0`(TC4 偶發 "0"):略過,不進 minutes / vp。
 8. `mode = "m7"` 於舊 build(若 prod 未重啟就切回):`isFutChartMode` 白名單退 intraday,不炸。
 9. 極矮視窗:`svgBox` 地板 180px → figure 溢出交 FuturesPage `overflow-y-auto`(既有逃生口)。
+10. 兩 pane 或多 tab 共用 toggles(全站 localStorage):期貨頁關 VP → 個股頁也關(既有跨頁語意,同 index R4)。
 11. hover 落在**無 bar 的分鐘**(夜盤薄量常見;近全軸 0.64 單位/分鐘,反演不 snap 最近):只有 crosshair-h + 價標,無十字垂直線 / readout 資料欄(core 既有分解退化,不是 bug;KR-5)。
 12. live 佔位分鐘(尚無 1K)為最新分鐘:readout 量 / 外 / 內 印「-」,副圖該格高 0(R4)。
-10. 兩 pane 或多 tab 共用 toggles(全站 localStorage):期貨頁關 VP → 個股頁也關(既有跨頁語意,同 index R4)。
 
 ## 5. 觀感差異(換元件的必然變化,不算破壞)
 
@@ -216,6 +217,7 @@ export function futuresBarsToAccum(input: {
 - viewBox 由 1140×340 等比改為 800 × 量測高(1140 分鐘擠進 724 單位繪圖區 → 每分鐘 0.63 單位;副圖量柱 1 單位寬彼此相接,視覺近似面積圖)。
 - 左緣價位帶 36 / 右緣 40 → 繪圖區寬 −76;hlines label 由 `W−4` 改到繪圖區右緣內側,字級 0.625 → 0.5625rem。
 - 無 live 時現價圈仍畫在末點(舊版沒有 live 就沒有點)。
+- 最新分鐘尚無 1K(live 佔位)時 readout 量 / 外 / 內 印「-」(個股態印數字;`[amendment 2026-08-18: review R2-1]`)。
 - 高低點用 1K `h/l`(tick 級極值反查必命中);VP 粒度 = 分鐘收盤 × 量。
 
 ## 6. 三類 commit 順序與 TDD tag
