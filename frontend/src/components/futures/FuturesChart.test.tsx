@@ -165,6 +165,22 @@ describe("FuturesChart 模式列(SC-2)", () => {
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
   });
 
+  it("模式列 15 顆:分時 / 1–10 分 / 15 / 30 / 60 分 / 日K;點「7分」寫 m7", async () => {
+    barsBody = { bars: [bar("2026-08-05 09:30", 23_000_000)], meta: META };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    // 模式列是頂列那一排(toggle 鈕在 core 的 figure 內,分時態才存在)→ 取第一個 div
+    const row = container.querySelector("div > div")!;
+    expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
+      "15分", "30分", "60分", "日K",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "7分" }));
+    expect(window.localStorage.getItem(FUT_CHART_MODE_KEY)).toBe("m7");
+    expect(screen.getByRole("button", { name: "7分" }).getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+  });
+
   it("localStorage 有合法值 → 還原該模式(日K 走 tf=D)", async () => {
     window.localStorage.setItem(FUT_CHART_MODE_KEY, "day");
     barsBody = { bars: [bar("2026-08-04", 22_900_000), bar("2026-08-05", 23_000_000)], meta: META };
