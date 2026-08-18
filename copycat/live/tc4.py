@@ -357,8 +357,17 @@ class TC4QuoteSource:
             return json.loads(text[idx + 1 :] if idx >= 0 else text)
         return json.loads(message)
 
+    def _rt_window(self, symbol: str) -> tuple[str, str]:
+        """REALTIME 訂閱窗(基底 = 台指盤別窗;子類覆寫這一支,不覆寫 `_rt_request`)。
+
+        窗是**唯一**的覆寫點:`_rt_request` 之後還要套自癒的 window variant,
+        子類各自複製一份 `_rt_request` 的話 variant 只會在基底那條路生效
+        (失效樣態:個股/海外腿的自癒永遠換不到新 key,零錯誤訊號)。
+        """
+        return session_window(session_key())
+
     def _rt_request(self, request: str, symbol: str) -> dict:
-        window = session_window(session_key())
+        window = self._rt_window(symbol)
         return self._session_req(lambda session: build_rt_request(request, session, symbol, window))
 
     # ---- QuoteSource 介面 ----

@@ -119,7 +119,7 @@ class FuturesQuoteSource(TC4QuoteSource):
         有把推播搶走的風險,而失效樣態是「訂閱成功但零推播」,零錯誤訊號。
 
         窗:**只有 SubHistory 的 start/end** 用 `YYYYMMDDHH` 全天範圍(與 stock_source
-        的歷史窗同款)。**不覆寫 `_rt_request`** —— 期貨 REALTIME 訂閱窗維持盤別窗
+        的歷史窗同款)。**不覆寫 `_rt_window`** —— 期貨 REALTIME 訂閱窗維持盤別窗
         (檔頭:期貨與 TXO 同時段),動它會改到期貨 tab 三檔的既有訂閱行為。
 
         分鐘域走 `FUTURES_MINUTE_DOMAIN`(08:46–13:45),不是個股的 0901–1330:
