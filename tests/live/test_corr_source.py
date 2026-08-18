@@ -94,6 +94,16 @@ class TestSubscribe:
         assert sent == []
 
 
+class TestHealDefaults:
+    """自癒門檻(change-spec §3):海外腿推播稀疏 → 門檻放寬到 120 / 240,盤外照跑。"""
+
+    def test_thresholds_and_always_active(self) -> None:
+        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+        assert src._heal_silence == 120.0
+        assert src._heal_symbol_silence == 240.0
+        assert src._heal_active() is True
+
+
 class TestHandleRaw:
     def test_realtime_quote_dispatched(self) -> None:
         got: list[dict] = []

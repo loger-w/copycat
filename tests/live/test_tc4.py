@@ -586,6 +586,222 @@ class TestReconnectResubWarning:
         assert src.reconnects == 1
 
 
+# ---- REALTIME 零推播自癒(fix/tc4-realtime-refcount-kill)----
+#
+# root cause(repro.md):TC4 的訂閱 refcount 以 key = symbol|DataType|StartTime|EndTime 計,
+# 上游 feed 卻以 **symbol** 為單位 —— 任一把 key 歸零就退訂整個 symbol,而 count 仍 > 0 的
+# 其他 key 再送 SUBQUOTE 不會重掛上游 → 那些 key 永久零推播,且全鏈零錯誤訊號。
+
+HEAL_A = "TC.S.TWS.2317"
+HEAL_B = "TC.S.TWS.2330"
+
+
+def _rt_pairs(api: FakeApi) -> list[tuple[str, str]]:
+    return [(r["Request"], r["Param"]["Symbol"]) for r in api.rt_requests]
+
+
+def _push_raw(symbol: str) -> str:
+    return "Q:" + json.dumps({"DataType": "REALTIME", "Quote": {"Symbol": symbol}})
+
+
+class TestHealSessionSilence:
+    """T1(R1):整條 session 靜默超過門檻 → 對每個 sub 發 UNSUBQUOTE + SUBQUOTE。"""
+
+    @staticmethod
+    def _src(api: FakeApi, **kw: Any) -> TC4QuoteSource:
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", **kw)
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        return src
+
+    def test_silent_session_resubscribes_every_symbol(self) -> None:
+        api = FakeApi({})
+        src = self._src(api, heal_silence_secs=30.0)
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [
+            ("UNSUBQUOTE", HEAL_A),
+            ("SUBQUOTE", HEAL_A),
+            ("UNSUBQUOTE", HEAL_B),
+            ("SUBQUOTE", HEAL_B),
+        ]
+
+    def test_inactive_gate_skips_heal(self) -> None:
+        api = FakeApi({})
+        src = self._src(api, heal_silence_secs=30.0, heal_active=lambda: False)
+        src._heal_tick(100.0)
+        assert api.rt_requests == []
+
+    def test_recent_push_skips_heal(self) -> None:
+        api = FakeApi({})
+        src = self._src(api, heal_silence_secs=30.0)
+        src._last_push = {HEAL_B: 90.0}  # 90 秒那則推播 = 整條 session 還活著
+        src._heal_tick(100.0)
+        assert api.rt_requests == []
+
+    def test_recent_resubscribe_skips_heal(self) -> None:
+        # 剛重掛過(訂閱窗才建立)不算靜默 —— 否則每輪都重掛,churn 到 TC4 上游
+        api = FakeApi({})
+        src = self._src(api, heal_silence_secs=30.0)
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 95.0}
+        src._heal_tick(100.0)
+        assert api.rt_requests == []
+
+
+class TestHealSymbolSilence:
+    """T2(R2):曾有推播、之後單獨靜默的 symbol 才重掛(其餘照流)。"""
+
+    @staticmethod
+    def _src(api: FakeApi, **kw: Any) -> TC4QuoteSource:
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", **kw)
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        return src
+
+    def test_only_the_silent_symbol_is_healed(self) -> None:
+        api = FakeApi({})
+        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src._last_push = {HEAL_A: 10.0, HEAL_B: 95.0}
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+    def test_never_pushed_symbol_is_not_r2_healed(self) -> None:
+        # R2 的母體是「曾有推播」;從未推過的 symbol 由 R1 / 個股健檢負責,
+        # 否則 TXO 深價外那種本來就沒成交的 symbol 會被無止盡 churn
+        api = FakeApi({})
+        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src._last_push = {HEAL_B: 95.0}
+        src._heal_tick(100.0)
+        assert api.rt_requests == []
+
+    def test_push_resets_attempts(self) -> None:
+        api = FakeApi({})
+        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src._last_push = {HEAL_A: 10.0}
+        src._heal_tick(100.0)
+        assert src._heal_attempts[HEAL_A] == 1
+        src.handle_raw(_push_raw(HEAL_A))
+        assert HEAL_A not in src._heal_attempts  # 推播回來 = 這把 key 活了
+
+
+class TestHealWindowVariantEscalation:
+    """T3:同一把 key 連續兩次沒救回 → 換窗(TXF.HOT 由 TXO+futures 雙持,
+    自己 UNSUB→SUB 到不了 count 0,TC4 就不會重掛上游 feed)。"""
+
+    @staticmethod
+    def _src(api: FakeApi) -> TC4QuoteSource:
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        src._last_push = {HEAL_A: 0.0}
+        return src
+
+    @staticmethod
+    def _end_times(api: FakeApi) -> list[str]:
+        return [r["Param"]["EndTime"] for r in api.rt_requests if r["Request"] == "SUBQUOTE"]
+
+    def test_third_attempt_switches_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
+        api = FakeApi({})
+        src = self._src(api)
+        for now in (100.0, 300.0, 700.0):  # 退避 60 / 120 後仍靜默
+            src._heal_tick(now)
+        assert self._end_times(api) == ["2026081806", "2026081806", "2026081807"]
+        assert src._window_variant[HEAL_A] == 1
+
+    def test_fourth_attempt_switches_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
+        api = FakeApi({})
+        src = self._src(api)
+        for now in (100.0, 300.0, 700.0, 1500.0):
+            src._heal_tick(now)
+        assert self._end_times(api)[-1] == "2026081808"
+
+    def test_variant_survives_a_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 推播回來只清 attempts:variant 指的那把 key 正是活著的那把,退回原窗等於自殺
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
+        api = FakeApi({})
+        src = self._src(api)
+        for now in (100.0, 300.0, 700.0):
+            src._heal_tick(now)
+        src.handle_raw(_push_raw(HEAL_A))
+        src._resub(HEAL_A)
+        assert self._end_times(api)[-1] == "2026081807"
+
+
+class TestHealResilience:
+    """T4:REQ 例外只退避、不得殺 watchdog 執行緒。"""
+
+    def test_request_failure_is_swallowed_and_backs_off(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(
+            port="0", api=api, session="sess-1", lock_timeout_secs=0.5, heal_silence_secs=30.0
+        )
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        with caplog.at_level(logging.WARNING):
+            src._heal_tick(100.0)  # 不得拋
+        assert "TC4 REALTIME 零推播自癒" in caplog.text
+        assert src._heal_attempts[HEAL_A] == 1
+        assert src._heal_next[HEAL_A] == 130.0  # T·2^0 退避
+
+    def test_backoff_blocks_the_next_tick(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_silence_secs=30.0)
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        src._heal_tick(100.0)
+        src._sub_at[HEAL_A] = 0.0  # 模擬重掛後仍零推播(退避期內不得再打)
+        src._heal_tick(120.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+    def test_heal_thread_survives_failing_requests(self) -> None:
+        api = _ReqApi(_RaisingSocket())
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            lock_timeout_secs=0.5,
+            heal_silence_secs=0.01,
+            heal_poll_secs=0.01,
+        )
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        try:
+            src._start_healer()
+            deadline = time.monotonic() + 3.0
+            while src._heal_attempts.get(HEAL_A, 0) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert src._heal_attempts.get(HEAL_A, 0) >= 2, "watchdog 未持續重試"
+            healer = src._healer
+            assert healer is not None and healer.is_alive(), "REQ 例外不得殺 watchdog"
+        finally:
+            src._stop.set()
+            if src._healer is not None:
+                src._healer.join(timeout=3.0)
+
+
+class TestHealDisabledByDefault:
+    """基底預設全關:各條 session 的門檻由子類建構子帶,基底不主動 churn。"""
+
+    def test_defaults_are_off(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        assert src._heal_silence is None
+        assert src._heal_symbol_silence is None
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        src._last_push = {HEAL_A: 0.0}
+        src._heal_tick(10_000.0)
+        assert api.rt_requests == []
+
+    def test_healer_thread_not_started_when_disabled(self) -> None:
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        src._start_healer()
+        assert src._healer is None
+
+
 class TestSpotSymbol:
     def test_spot_symbol_uses_txf_product_code(self) -> None:
         """item 2(2026-07-20 盤中驗證):TC4 symbol 樹的台指期產品碼是 TXF,FITX 不存在。
