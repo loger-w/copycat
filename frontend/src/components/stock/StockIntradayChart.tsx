@@ -1,6 +1,10 @@
 import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
+// 型別借用既有 export(K 線圖的水平 overlay 與分時圖畫的是同一組語意:持倉均價 / OI 撐壓)。
+// CandleChart 不 import 本檔,不成環;兩邊各定義一份的失效樣態是「K 線加了 title 欄、
+// 分時圖沒有」這種同一份資料在兩張圖上長不一樣,沒有 assertion 會紅。
+import type { ChartHLine } from "@/components/stock/CandleChart";
 import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
@@ -116,6 +120,11 @@ const EMPTY_PEGS: readonly PegInput[] = [];
 /** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
 const EMPTY_ENERGY: { bars: EnergyBar[]; maxTotal: number } = { bars: [], maxTotal: 1 };
 
+/** 水平參考線的空集合(stock / index 態恆為它)。**模組層常數**,理由同 `EMPTY_PEGS`:
+ *  預設值寫成 `hlines = []` 會讓**所有既有頁面**每次 render 都打穿 ChartStatic 的 memo,
+ *  而症狀只是 hover 掉幀,沒有任何測試會紅。 */
+const EMPTY_HLINES: readonly ChartHLine[] = [];
+
 /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
 const MARK_LABEL_TOP = 9;
 
@@ -160,6 +169,7 @@ const ChartStatic = memo(function ChartStatic({
   priceText,
   tickText = fmt,
   pegs = EMPTY_PEGS,
+  hlines = EMPTY_HLINES,
 }: {
   g: IntradayGeometry;
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -198,6 +208,9 @@ const ChartStatic = memo(function ChartStatic({
   /** 域外疊線掛牌(index 態限定;stock 態恆為 `EMPTY_PEGS` → 零渲染、obstacles 不變)。
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
   pegs?: readonly PegInput[];
+  /** 任意水平參考線(futures 態:持倉均價 / OI 撐壓;stock / index 態恆為 `EMPTY_HLINES`)。
+   *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
+  hlines?: readonly ChartHLine[];
 }) {
   // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
   // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
@@ -427,6 +440,45 @@ const ChartStatic = memo(function ChartStatic({
       ) : (
         <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
       )}
+      {/* 任意水平參考線(futures 態:持倉均價 / OI 撐壓)。與 `CandleChart` 同一套語意
+          (`<title>` 承載證據、**超出 y 域不畫**)—— clamp 到邊緣會把「圖外的價位」
+          講成「圖緣的價位」,是完全靜默的假陳述。
+          域判定與 `overlayLines` 同規(閉區間、同一組 `g.yDomain`),不另寫一把尺。
+          **畫在主價線之後、極值標記之前**:svg 沒有 z-index,圖層完全由文件順序決定 ——
+          排在主價線之前會被 strokeWidth 1.6 的價線壓過(舊自繪版沒這問題是因為它沒有
+          填色與雙色價線);排在極值標記之後則會把那兩顆環的文字蓋掉。
+          label 畫在**繪圖區右緣內側**(不是 viewBox 右緣):右緣 `R_AXIS_W` 帶是 CDP/MA
+          價位標的走廊,壓進去兩種標籤會互疊。 */}
+      {hlines.map((ln, i) => {
+        const [yBottom, yTop] = g.yDomain;
+        if (ln.priceMilli < yBottom || ln.priceMilli > yTop) return null;
+        const y = g.toY(ln.priceMilli);
+        return (
+          <g key={`hl-${i}-${ln.priceMilli}`} data-testid="chart-hline">
+            {ln.title === undefined ? null : <title>{ln.title}</title>}
+            <line
+              x1={Y_AXIS_W}
+              x2={w - R_AXIS_W}
+              y1={y}
+              y2={y}
+              className={ln.className}
+              strokeWidth={1}
+              strokeDasharray="5 3"
+            />
+            <text
+              x={w - R_AXIS_W - 2}
+              y={y - 3}
+              textAnchor="end"
+              className="fill-ink stroke-surface"
+              strokeWidth={2}
+              paintOrder="stroke"
+              fontSize="0.5625rem"
+            >
+              {ln.label}
+            </text>
+          </g>
+        );
+      })}
       {/* 當日高低(round4 項 1;round6 項 1 改圓環並上移圖層)。
           橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」這個語意,而使用者要的
           只是「最高點在哪、多少錢」。標在**摸到極值的那一分鐘**上 + 就地價位文字。
@@ -740,8 +792,26 @@ interface CoreProps extends Props {
   width?: number;
   /** `"index"` = 指數分時(台股綜合):副圖 / VP / 成交點 / 說明列一律關,readout 三欄,
    *  疊線由 caller 注入(**不打 `/api/stock/overlay`** —— `IX:TWSE` 不是股號),
-   *  右緣與 hover 的價位文字走 `fmt` 不 snap tick(指數沒有可下單檔位)。預設 `"stock"`。 */
-  mode?: "stock" | "index";
+   *  右緣與 hover 的價位文字走 `fmt` 不 snap tick(指數沒有可下單檔位)。預設 `"stock"`。
+   *
+   *  `"futures"` = 期貨近全時段分時:語彙**同 stock**(副圖 / 說明列 / readout 六欄 / VP),
+   *  但價位口徑同 index(`fmtIndexPts` —— 期指沒有個股 tick 表)、不打 `/api/stock/overlay`
+   *  (CDP/MA/成交點反灰)、x 軸由 caller 注入(近全三段軸的**索引**當 key)。 */
+  mode?: "stock" | "index" | "futures";
+  /** x 軸窗覆寫(key 值域;預設 `stkfut ? STKFUT_WINDOW : SPOT_WINDOW`)。
+   *  **必經模組層常數**(identity 穩定)—— 它會一路傳進 `ChartStatic` / `EnergySub` 的 props,
+   *  行內 `{start, end}` 字面值每次 render 新 identity,兩層 memo 一起被打穿。 */
+  xWindow?: XWindow;
+  /** 整點刻度覆寫(預設 `hourTicksOf(xw)`);identity 要求同 `xWindow`。
+   *  近全軸的「整點」不是 key 的整點倍數(死區不佔 x),只能由 caller 給。 */
+  hourTicks?: readonly HourTick[];
+  /** key → 時間文字(readout 首欄 / hover 底部標籤);預設 `hhmm`。**必經模組層函式**
+   *  —— 兩處要同一份口徑,注入點只留一個。近全軸的 key 是**軸索引**,拿 `hhmm` 換算
+   *  會印出假時刻(index 300 的真值是 15:01,`hhmm` 會印 05:00)。 */
+  timeText?: (minute: number) => string;
+  /** 任意水平參考線(futures 態:持倉均價 / OI 撐壓)。域外不畫;預設 `EMPTY_HLINES`。
+   *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fills`。 */
+  hlines?: readonly ChartHLine[];
   /** index 態注入的疊線;stock 態忽略(仍走內建 `useStockOverlay`)。 */
   overlay?: StockOverlay | null;
   /** 疊線查詢失敗**且該查詢當前有效**(語意同 `MarketChart.overlayError`:閘關時不鎖鈕)。 */
@@ -766,6 +836,10 @@ export function IntradayChartCore({
   stkfut = false,
   fills = EMPTY_FILLS,
   mode = "stock",
+  xWindow,
+  hourTicks: hourTicksProp,
+  timeText = hhmm,
+  hlines = EMPTY_HLINES,
   overlay: overlayProp = null,
   overlayError = false,
   overlaySupported = true,
@@ -776,13 +850,21 @@ export function IntradayChartCore({
   // index 態的**唯一**判別子。一處求值、下面各分支共用 —— 各處各寫一次 `mode === "index"`
   // 的話,漏改一處的樣態是「指數圖只有某一半換了語彙」(例如 readout 三欄了、副圖卻還在)。
   const index = mode === "index";
+  // futures 態的**唯一**判別子,理由同 `index`。刻意與 `index` 分開兩個變數而不是合成
+  // 一個「非 stock」:兩態的差集不同(futures 有副圖 / 說明列 / VP,index 全關),
+  // 合成之後每個分支都得再拆回來,而拆漏一處就是「期貨圖少了半套語彙」。
+  const futures = mode === "futures";
   // 主副圖共用同一個 viewBox 寬:分開兩份的話,副圖 hover 線的 x 換算與主圖會各自漂
   const w = width ?? DEFAULT_W;
   const mainH = mainHeight ?? MAIN.height;
   const subH = subHeight ?? SUB.height;
   // 模組層常數 → identity 穩定,直接進 memo 子元件的 props 不會打穿 memo
-  const xw = stkfut ? STKFUT_WINDOW : SPOT_WINDOW;
-  const hourTicks = useMemo(() => hourTicksOf(xw), [xw]);
+  // (注入的 `xWindow` 同樣要是模組層常數,見 prop 的 doc)
+  const xw = xWindow ?? (stkfut ? STKFUT_WINDOW : SPOT_WINDOW);
+  // hook 不可條件化 → 注入與否都算一遍,再由 `??` 選(本 repo 沒裝 react-hooks lint)。
+  // 成本是窗內整點的一次 map(≤ 9 顆),而條件化 hook 是整個元件的 render 崩潰。
+  const derivedTicks = useMemo(() => hourTicksOf(xw), [xw]);
+  const hourTicks = hourTicksProp ?? derivedTicks;
   // 期貨態不打 overlay:CDP/MA 是**現股日線**衍生的(/api/stock/overlay 吃股號),
   // 對合約既取不到也不該套 —— 拿標的現股的 CDP 疊在期貨價上是假陳述。
   //
@@ -793,9 +875,12 @@ export function IntradayChartCore({
   //
   // 第三道閘 `index`:指數的 code 是 `IX:TWSE` / `IX:OTC`,既不是股號也取不到現股日線
   // —— 疊線由 caller(`MarketChart`)從 `/api/index/overlay` 注入。
+  //
+  // 第四道閘 `futures`:期貨的 code 是契約鍵(`TXF.HOT`),同樣既不是股號也不該套現股
+  // 的 CDP/MA —— 本輪期貨分時不提供疊線(caller 傳 `overlaySupported={false}` 讓鈕反灰)。
   const overlayQ = useStockOverlay(
-    index ? null : accum.code || null,
-    !index && !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
+    index || futures ? null : accum.code || null,
+    !index && !futures && !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
   );
   // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
@@ -854,10 +939,11 @@ export function IntradayChartCore({
 
   // index 態:資料源與失敗旗標都換一邊(caller 注入),**判準本身逐字相同** ——
   // 兩態各寫一份 available 判定的話,「未回前視為可用」這條紀律會在其中一態靜默漂掉。
-  const overlay = index ? overlayProp : (overlayQ.data ?? null);
-  const overlayFailed = index ? overlayError : overlayQ.isError;
-  // index 態多一道資料源閘:櫃買沒有日 K 來源(已拍板跳過),CDP/MA 恆反灰。
-  const supported = !index || overlaySupported;
+  const overlay = index || futures ? overlayProp : (overlayQ.data ?? null);
+  const overlayFailed = index || futures ? overlayError : overlayQ.isError;
+  // index / futures 態多一道資料源閘:櫃買沒有日 K 來源(已拍板跳過)、期貨本輪不提供,
+  // 兩者都靠 caller 傳 `overlaySupported={false}` 讓 CDP/MA 恆反灰。
+  const supported = (!index && !futures) || overlaySupported;
   // 可用性:資料未回前視為可用(不預先反灰);回了但該類 null / 請求失敗 → 反灰 + 顯示 off
   const cdpAvailable =
     supported && (overlayFailed ? false : overlay ? overlay.cdp !== null : true);
@@ -901,7 +987,10 @@ export function IntradayChartCore({
           !index && "rounded-md border border-line bg-surface",
         )}
       >
-        <p className="text-sm text-ink-muted">{index ? "等待指數資料…" : "尚無成交"}</p>
+        {/* futures 態沿用舊自繪版的字面(「無分時資料」)—— 換元件不換語彙 */}
+        <p className="text-sm text-ink-muted">
+          {index ? "等待指數資料…" : futures ? "無分時資料" : "尚無成交"}
+        </p>
       </div>
     );
   }
@@ -947,7 +1036,7 @@ export function IntradayChartCore({
           { label: "內", value: "-" },
         ]
       : [
-          { label: "", value: hhmm(shownMin) },
+          { label: "", value: timeText(shownMin) },
           {
             label: "",
             value: fmt(shownAgg.c),
@@ -958,9 +1047,21 @@ export function IntradayChartCore({
             value: shownChg === null ? "-" : fmtPct(shownChg),
             tone: shownChg === null ? "muted" : shownChg > 0 ? "bull" : shownChg < 0 ? "bear" : "muted",
           },
-          { label: "量", value: String(shownAgg.v) },
-          { label: "外", value: String(shownAgg.o), tone: "bull" },
-          { label: "內", value: String(shownAgg.i), tone: "bear" },
+          // futures 態的 `v === 0` = 「這一分鐘的 1K 還沒回」(live 點走牆上時鐘、bars 60s
+          // 輪詢,最新那一分鐘常態是尚無成交資料的佔位格),不是「零成交」——
+          // 印 0 是假數字。stock / index 態不套這條:個股的分鐘由 tick 累出必 v ≥ 1、
+          // index adapter 的 v 恆為 1,那裡的 0 沒有第二種來源。
+          ...(futures && shownAgg.v === 0
+            ? ([
+                { label: "量", value: "-" },
+                { label: "外", value: "-" },
+                { label: "內", value: "-" },
+              ] as ReadoutField[])
+            : ([
+                { label: "量", value: String(shownAgg.v) },
+                { label: "外", value: String(shownAgg.o), tone: "bull" },
+                { label: "內", value: String(shownAgg.i), tone: "bear" },
+              ] as ReadoutField[])),
         ];
   // 「成交」欄(R2 SC-4):shown 分鐘上有我的成交時**尾端追加**一欄。
   //
@@ -1001,10 +1102,17 @@ export function IntradayChartCore({
   // index 態不 snap tick:tick 表是個股的可下單檔位,指數的價位量尺是連續的 ——
   // snap 出來的點位是憑空捏造的(同右緣 `priceText` 的口徑分權)。文字口徑走 `fmtIndexPts`
   // (加權 8 字會溢出 36px 價標盒 → 收整數點;櫃買 6 字保留小數),見 lib/format。
+  //
+  // futures 態同口徑:期指的量尺同樣連續(TXF 是 1 點,不是個股那張分級 tick 表),
+  // 拿 `snapDown` 的個股檔位去 snap 出來的價位是憑空捏造的。
+  // **一處求值四處共用**(hover 價 / hover 文字 / 右緣價位標 / 左緣刻度):各判各的話
+  // 會出現「CDP snap 了、hover 沒 snap」這種同圖兩套口徑,沒有任何錯誤訊號。
+  // 變數名不叫 `pts` —— 那是 `@/lib/svg-points` 的點串格式化函式,同名會遮蔽掉。
+  const ptsPrice = index || futures;
   const hoverPrice =
-    hover === null ? null : index ? g.priceAtY(hover.y) : snapDown(g.priceAtY(hover.y));
+    hover === null ? null : ptsPrice ? g.priceAtY(hover.y) : snapDown(g.priceAtY(hover.y));
   const hoverPriceText =
-    hoverPrice === null ? "" : index ? fmtIndexPts(hoverPrice) : fmt(hoverPrice);
+    hoverPrice === null ? "" : ptsPrice ? fmtIndexPts(hoverPrice) : fmt(hoverPrice);
   const timeTagX =
     hoverMin !== null ? clampTagX(minuteToX(hoverMin, w, xw), TIME_TAG.w, w) : null;
   const timeTagSpan: [number, number] | null =
@@ -1042,9 +1150,11 @@ export function IntradayChartCore({
         { key: "ma", label: "MA", available: !stkfut && maAvailable },
         // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
         { key: "vp", label: "量分佈", available: !stkfut },
-        // 成交點同樣零外部資料依賴(orders 已在手上),**期貨態也不反灰**(AD-5):
+        // 成交點同樣零外部資料依賴(orders 已在手上),**個股期態也不反灰**(AD-5):
         // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
-        { key: "fills", label: "成交點", available: true },
+        // futures(近全軸)態反灰:`fillPoints` 現為「今日 ∨ 昨日活單」,近全軸的日期界
+        // (夜盤成交屬前一錨定日)要另做 —— 本輪不提供,反灰 + tooltip 才講得出為什麼。
+        { key: "fills", label: "成交點", available: !futures },
       ];
 
   const body = (
@@ -1065,7 +1175,7 @@ export function IntradayChartCore({
             title={
               available
                 ? hint
-                : index
+                : index || futures
                   ? overlayOffTitle
                   : stkfut
                     ? "期貨合約本輪不提供"
@@ -1111,9 +1221,10 @@ export function IntradayChartCore({
           hourTicks={hourTicks}
           fillMarks={fillMarks}
           // 模組層函式 → identity 穩定,不打穿 memo(行內箭頭函式會)
-          priceText={index ? fmtIndexPts : fmtTickPrice}
-          tickText={index ? fmtIndexPts : undefined}
+          priceText={ptsPrice ? fmtIndexPts : fmtTickPrice}
+          tickText={ptsPrice ? fmtIndexPts : undefined}
           pegs={pegs}
+          hlines={hlines}
         />
         <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
@@ -1204,7 +1315,7 @@ export function IntradayChartCore({
                   className="fill-time"
                   fontSize="0.625rem"
                 >
-                  {hhmm(hoverMin)}
+                  {timeText(hoverMin)}
                 </text>
                 <text
                   data-testid="time-tag-price"
