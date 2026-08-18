@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ALLDAY_HOUR_TICKS,
   ALLDAY_LEN,
   ALLDAY_SEGMENTS,
   ALLDAY_TICKS,
+  ALLDAY_WINDOW,
+  alldayHhmmOf,
   alldayIndexOf,
+  alldayIndexOfStamp,
   anchorDateOf,
   sliceCurrentAllday,
 } from "@/lib/allday";
@@ -184,5 +188,73 @@ describe("sliceCurrentAllday(以最後一根 bar 反推錨定日)", () => {
     const out = sliceCurrentAllday(bars);
     expect(out[0]).toBe(bars[0]);
     expect(bars.length).toBe(2);
+  });
+});
+
+/** 以下為「近全軸當 IntradayChartCore 的 x 窗」所需的新增(change-spec §3.2)。
+ *  既有 export 的值與簽名一律不動(W-9)—— 那由上面各節逐值鎖住。 */
+
+describe("ALLDAY_WINDOW / ALLDAY_HOUR_TICKS(core 的 x 窗與整點刻度)", () => {
+  it("窗 = [0, ALLDAY_LEN − 1](key 值域就是軸索引本身)", () => {
+    expect(ALLDAY_WINDOW).toEqual({ start: 0, end: ALLDAY_LEN - 1 });
+    expect(ALLDAY_WINDOW.end).toBe(1139);
+  });
+
+  it("HourTick 形狀:minute 欄放**軸索引**、label 與 ALLDAY_TICKS 逐項相同", () => {
+    expect(ALLDAY_HOUR_TICKS.map((t) => t.label)).toEqual(ALLDAY_TICKS.map((t) => t.label));
+    expect(ALLDAY_HOUR_TICKS.map((t) => t.minute)).toEqual(ALLDAY_TICKS.map((t) => t.index));
+    expect(ALLDAY_HOUR_TICKS.length).toBe(9);
+  });
+
+  it("每個刻度都落在窗內(否則 minuteToX 會把標籤畫出繪圖區)", () => {
+    for (const t of ALLDAY_HOUR_TICKS) {
+      expect(t.minute).toBeGreaterThanOrEqual(ALLDAY_WINDOW.start);
+      expect(t.minute).toBeLessThanOrEqual(ALLDAY_WINDOW.end);
+    }
+  });
+});
+
+describe("alldayHhmmOf(alldayIndexOf 的反函式)", () => {
+  it("三段錨點反查", () => {
+    expect(alldayHhmmOf(0)).toBe("08:46");
+    expect(alldayHhmmOf(299)).toBe("13:45");
+    expect(alldayHhmmOf(300)).toBe("15:01");
+    expect(alldayHhmmOf(838)).toBe("23:59");
+    expect(alldayHhmmOf(839)).toBe("00:00");
+    expect(alldayHhmmOf(1139)).toBe("05:00");
+  });
+
+  it("與 alldayIndexOf 互逆(全軸逐格)", () => {
+    for (let i = 0; i < ALLDAY_LEN; i += 1) {
+      const hhmm = alldayHhmmOf(i);
+      expect(hhmm).not.toBe("");
+      expect(alldayIndexOf(hhmm.replace(":", ""))).toBe(i);
+    }
+  });
+
+  it("域外 / 非整數 → 空字串(不猜、不夾制)", () => {
+    expect(alldayHhmmOf(-1)).toBe("");
+    expect(alldayHhmmOf(ALLDAY_LEN)).toBe("");
+    expect(alldayHhmmOf(1.5)).toBe("");
+    expect(alldayHhmmOf(Number.NaN)).toBe("");
+  });
+});
+
+describe("alldayIndexOfStamp(自 FuturesChart indexOfBar 搬入,行為逐字同)", () => {
+  it("`YYYY-MM-DD HH:MM` → 軸索引", () => {
+    expect(alldayIndexOfStamp("2026-08-18 08:46")).toBe(0);
+    expect(alldayIndexOfStamp("2026-08-18 09:00")).toBe(alldayIndexOf("0900"));
+    expect(alldayIndexOfStamp("2026-08-18 15:01")).toBe(300);
+    expect(alldayIndexOfStamp("2026-08-19 00:00")).toBe(839);
+  });
+
+  it("死區時戳 → null", () => {
+    expect(alldayIndexOfStamp("2026-08-18 14:00")).toBeNull();
+    expect(alldayIndexOfStamp("2026-08-18 05:30")).toBeNull();
+  });
+
+  it("非分 K 時戳(日 K:無空格)→ null", () => {
+    expect(alldayIndexOfStamp("2026-08-18")).toBeNull();
+    expect(alldayIndexOfStamp("")).toBeNull();
   });
 });
