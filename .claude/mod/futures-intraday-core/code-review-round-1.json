@@ -1,0 +1,102 @@
+{
+ "round": 1,
+ "lenses": [
+  "A correctness",
+  "B whitelist/spec"
+ ],
+ "P0": 0,
+ "P1": 0,
+ "p2_summary": {
+  "count": 10,
+  "themes": [
+   "右緣標籤互疊(A1/A5b)",
+   "adapter 畸形資料收口(A2/B4)",
+   "測試鎖半截 / 脆弱選擇子(B1/B2)",
+   "spec 與實作同步(B3/B5/A3)",
+   "型別單源(A4)"
+  ]
+ },
+ "findings": [
+  {
+   "id": "A1",
+   "lens": "correctness",
+   "severity": "P2",
+   "summary": "hlines label 與 VWAP 末點標籤同走廊無避讓",
+   "disposition": "accepted→next-time",
+   "resolution": "非行為級;記 next-time(hlines y 併入 maObstacles + VWAP 標籤避 hlines)"
+  },
+  {
+   "id": "A2",
+   "lens": "correctness",
+   "severity": "P2",
+   "summary": "adapter h/l 未套 >0 收口,l=0 讓日低標記消失",
+   "disposition": "accepted",
+   "resolution": "b3b7d1ae [red] / 0ccbd1a8 [green]"
+  },
+  {
+   "id": "A3",
+   "lens": "correctness",
+   "severity": "P2",
+   "summary": "vpEnabled 註解「期貨態不畫 VP」與 futures 態相反",
+   "disposition": "accepted",
+   "resolution": "902bea69 註解改口"
+  },
+  {
+   "id": "A4",
+   "lens": "correctness",
+   "severity": "P2",
+   "summary": "FUT_CHART_MODES 的 as 斷言讓 union 與 MINUTE_STEPS 可岔開",
+   "disposition": "accepted",
+   "resolution": "34b9681e 🔵 union 由表推導"
+  },
+  {
+   "id": "A5",
+   "lens": "correctness",
+   "severity": "P2",
+   "summary": "K 線態仍掛 RO 白算 / VWAP 標籤口徑第五處未收進 ptsPrice",
+   "disposition": "accepted→next-time",
+   "resolution": "(a) 與 StockChart 同款不動;(b) 記 next-time"
+  },
+  {
+   "id": "B1",
+   "lens": "whitelist",
+   "severity": "P2",
+   "summary": "模式列 15 顆案 div>div 選到根 div,靠 isPending 時序才綠",
+   "disposition": "accepted",
+   "resolution": "641f25e3 改「分時」鈕父層"
+  },
+  {
+   "id": "B2",
+   "lens": "whitelist",
+   "severity": "P2",
+   "summary": "SC-6 cy / SC-4 桶心渲染層 / SC-8 m5·m7 還原 只鎖一半",
+   "disposition": "accepted(a,c)/(b) 記 adapter 承擔",
+   "resolution": "641f25e3;桶心口徑由 adapter 測試承擔(spec 註記)"
+  },
+  {
+   "id": "B3",
+   "lens": "whitelist",
+   "severity": "P2",
+   "summary": "§3.5 allday.test 標「不改一字」與實作(追加新案)不符",
+   "disposition": "accepted",
+   "resolution": "spec §3.5 拆列"
+  },
+  {
+   "id": "B4",
+   "lens": "whitelist",
+   "severity": "P2",
+   "summary": "tailIndex 與 adapter 對 c<=0 末根用兩把尺",
+   "disposition": "accepted (b)",
+   "resolution": "刻意:c=0 分鐘不報量;adapter 測試釘住(b3b7d1ae);spec §4 補 edge 13"
+  },
+  {
+   "id": "B5",
+   "lens": "whitelist",
+   "severity": "P2",
+   "summary": "期貨 tab 冷開觸發 useChartToggles 一次性 bb 升級寫入",
+   "disposition": "accepted",
+   "resolution": "spec §8 + verification 回歸清單補記"
+  }
+ ],
+ "post_fix_gate": "見 verification.md"
+}

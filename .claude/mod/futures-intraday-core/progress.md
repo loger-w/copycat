@@ -28,3 +28,6 @@
 - `npx tsc -b` / `npx eslint src`:零錯。
 - 個股 / 群組 / 綜合既有測試(`StockIntradayChart*` / `GroupGridView*` / `MarketChart` /
   `MarketPane*` / `stock-intraday-svg` / `App` / `FuturesPage`)一支未紅、一字未改(SC-9)。
+
+| cr1 | code review round 1:P0/P1 零、P2×10 → 6 修(b3b7d1ae/0ccbd1a8/641f25e3/34b9681e/902bea69)+ spec 補記;A1/A5 next-time | done | |
+| verify | 自動化全綠 + 真環境截圖(vite→prod TC4 真資料)| done | verification.md |

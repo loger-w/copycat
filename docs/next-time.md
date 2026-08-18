@@ -1,3 +1,22 @@
+## 2026-08-18(mod/futures-intraday-core 期貨分時圖換 core + 檔位 1–10/15/30/60 留尾)
+
+- [ ] **期貨分時 CDP / MA 疊線**:本輪反灰(title「期貨分時本輪不提供 CDP/MA/成交點」)。要做 = 以期貨日 K
+  (`useFuturesBars(product, "day")` 已有)前端算 CDP / MA5 / MA20;先拍板「昨日 H/L/C 取日盤 vs 近全時段」
+  口徑,再經 core 的 `overlay` 注入(index 態同管道)。
+- [ ] **期貨分時成交點**(承 08-17 R2 留尾):core 已共用幾何,只差近全軸的日期界(夜盤成交屬錨定日;
+  `fillPoints` 現為今日 ∨ 昨日活單)+ 成交分鐘 → `alldayIndexOf`;做完把 `fills.available = !futures` 解開。
+- [ ] **hlines label 與 VWAP 末點標籤同走廊無避讓**(cr1 A-1):持倉均價貼近 VWAP 時兩標籤 halo 互蓋。
+  候選 = 域內 hline 的 y 併入 `maObstacles`,VWAP 標籤也避 hlines。
+- [ ] **VWAP 末點標籤走 `fmt` 不走 `priceText`**(cr1 A-5b):期指 VWAP 8 字 > `VWAP_LABEL_W` 估值,與同圖
+  左緣 `fmtIndexPts` 兩套口徑(index 態既有同型)。候選 = VWAP 標籤吃注入口徑並重估寬。
+- [ ] **近全軸 hover 命中率**(KR-5):1139 索引壓 724 單位,無 bar 分鐘反演回 null → 十字退化;夜盤薄量常見。
+  候選 = futures 態限定「±N 索引最近 snap」(動 `minuteOf` 白名單,另案)。
+- [ ] **主副圖比例 260:70 三份口徑**(FuturesChart `MAIN_RATIO_*` / StockChart 行內 / chart-frame `CARD_MAIN_RATIO`)
+  → 🔵 收成 chart-frame 單一 export;`EMPTY_HLINES` 兩份(CandleChart private + core)同批搬 lib。
+- [ ] **副圖 1140 根 1 單位寬 rect 每 tick 重建**(KR-4):真環境 hover 目視未見掉幀(TMF 夜盤);若日後 TXF
+  日盤高頻 tick 卡,候選 = EnergySub 改單一 path。
+- [ ] 真 TC4 層 user 過目點:對稱域 ±1% 地板讓平靜日線視覺變平(同 index R4);量欄「-」佔位語意。
+
 ## 2026-08-18(fix/tc4-realtime-refcount-kill 開盤全站零推播 root cause 留尾)
 
 - [ ] **shutdown 保證 LOGOUT**:09:00:49 那次是 uvicorn graceful shutdown 但 lifespan 沒跑完就被 run.ps1 `taskkill /T /F`
