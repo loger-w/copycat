@@ -478,9 +478,12 @@ class TestNoDataHealthCheck:
         )
         flagged: list[str] = []
         src.set_on_no_data(flagged.append)
-        src.subscribe_symbol("2330")
-        threading.Event().wait(0.1)
-        assert flagged == ["2330"]
+        try:
+            src.subscribe_symbol("2330")
+            threading.Event().wait(0.1)
+            assert flagged == ["2330"]
+        finally:
+            src.close()  # 重掛鏈會一路排下去(C-4);測試收尾一律關掉
 
     def test_push_cancels_health_check(self) -> None:
         src = StockQuoteSource(
@@ -492,15 +495,21 @@ class TestNoDataHealthCheck:
         )
         flagged: list[str] = []
         src.set_on_no_data(flagged.append)
-        src.subscribe_symbol("2330")
-        src.handle_raw(
-            "REALTIME:"
-            + json.dumps(
-                {"DataType": "REALTIME", "Quote": {"Symbol": "TC.S.TWS.2330", "Security": "2330"}}
+        try:
+            src.subscribe_symbol("2330")
+            src.handle_raw(
+                "REALTIME:"
+                + json.dumps(
+                    {
+                        "DataType": "REALTIME",
+                        "Quote": {"Symbol": "TC.S.TWS.2330", "Security": "2330"},
+                    }
+                )
             )
-        )
-        threading.Event().wait(0.1)
-        assert flagged == []
+            threading.Event().wait(0.1)
+            assert flagged == []
+        finally:
+            src.close()
 
     def test_health_check_disabled_outside_trading_hours(self) -> None:
         src = StockQuoteSource(
@@ -851,20 +860,26 @@ class TestHealthCheckKeyedBySymbol:
         src = self._src(no_data_secs=0.01)
         flagged: list[str] = []
         src.set_on_no_data(flagged.append)
-        src.subscribe_symbol("F:CDF:202609")
-        threading.Event().wait(0.1)
-        assert flagged == ["F:CDF:202609"]  # 回呼傳 key(engine 的 `_no_data` 以 key 記)
+        try:
+            src.subscribe_symbol("F:CDF:202609")
+            threading.Event().wait(0.1)
+            assert flagged == ["F:CDF:202609"]  # 回呼傳 key(engine `_no_data` 以 key 記)
+        finally:
+            src.close()
 
     def test_contract_push_cancels_its_own_health_check(self) -> None:
         src = self._src(no_data_secs=0.05)
         flagged: list[str] = []
         src.set_on_no_data(flagged.append)
-        src.subscribe_symbol("F:CDF:202609")
-        # 個股期推播的 `Security` 是產品碼 / 股號(未實證),以 Security 為鍵時
-        # 這一則對不上 "F:CDF:202609" → 健檢誤判 no_data
-        self._push(src, "TC.F.TWF.CDF.202609", "CDF")
-        threading.Event().wait(0.15)
-        assert flagged == []
+        try:
+            src.subscribe_symbol("F:CDF:202609")
+            # 個股期推播的 `Security` 是產品碼 / 股號(未實證),以 Security 為鍵時
+            # 這一則對不上 "F:CDF:202609" → 健檢誤判 no_data
+            self._push(src, "TC.F.TWF.CDF.202609", "CDF")
+            threading.Event().wait(0.15)
+            assert flagged == []
+        finally:
+            src.close()
 
     def test_contract_push_does_not_cancel_the_spot_health_check(self) -> None:
         """同一個 `Security` 可能同時出現在現貨與合約推播上 —— 以 Security 為鍵時,
@@ -872,10 +887,13 @@ class TestHealthCheckKeyedBySymbol:
         src = self._src(no_data_secs=0.01)
         flagged: list[str] = []
         src.set_on_no_data(flagged.append)
-        src.subscribe_symbol("2330")
-        self._push(src, "TC.F.TWF.CDF.202609", "2330")
-        threading.Event().wait(0.1)
-        assert flagged == ["2330"]
+        try:
+            src.subscribe_symbol("2330")
+            self._push(src, "TC.F.TWF.CDF.202609", "2330")
+            threading.Event().wait(0.1)
+            assert flagged == ["2330"]
+        finally:
+            src.close()
 
     def test_hot_leg_has_no_health_check(self) -> None:
         """兩段形 HOT 腿維持現行排除(R2-3):放開會讓 `_handle_no_data` 廣播
