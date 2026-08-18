@@ -82,9 +82,11 @@ describe("localStorage 還原(白名單驗證)", () => {
     expect(initialFutChartMode()).toBe("intraday");
   });
 
-  it("合法值原樣還原", () => {
-    window.localStorage.setItem(FUT_CHART_MODE_KEY, "m30");
-    expect(initialFutChartMode()).toBe("m30");
+  it("合法值原樣還原(舊值 m5 / 新值 m7 / m30)", () => {
+    for (const v of ["m5", "m7", "m30"]) {
+      window.localStorage.setItem(FUT_CHART_MODE_KEY, v);
+      expect(initialFutChartMode()).toBe(v);
+    }
   });
 
   it("壞值 / 別頁的值 → 退回 intraday(不把 'm11' 這種白名單外的值放行)", () => {
