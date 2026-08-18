@@ -58,6 +58,28 @@ Watchdog thread `_heal_loop`(daemon;`_start_listener` 內、heal 開啟時才起
 - T6 純搬家:stock/corr 覆寫 `_rt_window` 後 SUBQUOTE 的窗與改前完全相同(既有測試應直接覆蓋)。
 - 現有全部測試綠;`ruff` / `pyright` 綠。
 
+## 實作 deviation(round-1 收尾補記)
+
+規格寫的與實際實作不同、或規格沒寫而實作有的行為,逐條列出(review round-1 T-5 / T-8 要求):
+
+- **R1 命中即 return**:同一輪 tick 內 R1 整批重掛後**不再走 R2**。兩條規則各記一次
+  `_heal_attempts` 會讓退避與換窗階梯整條錯位(spec §1 只寫「R1 → 對所有 subs 逐一 heal」,
+  沒寫短路)。鎖在 `TestHealRuleInteraction`。
+- **`_note_push` 同時 pop `_heal_next`**:spec 只寫「清 attempts、variant 保留」。只清
+  attempts 的話,恢復後又靜默的 symbol 要等上一輪算出的退避到期(最壞 300s)才救得回。
+- **R2 母體(round-1 C-6)**:改為「曾有推播」**或**「`_sub_at` 已超過 T2 卻從未推播」。
+  spec 原文只收前者,漏掉「從未推播的部分死亡腿」—— 那正是 08-18 個股面的形狀。
+- **窗變體規則(round-1 C-1)**:spec 的「EndTime +k,滿 23 改 StartTime −k」對 corr 全天窗
+  是 no-op、對 TXO 夜盤窗 k=1/2/3 塌成同一把 key。改為「總位移 k 先加 EndTime,餘量推
+  StartTime;StartTime 已頂到 00 則改往後推」,四把 base 窗的 variant 1..3 互異且 != base。
+- **換窗那一發先 UNSUB 舊窗(round-1 C-7)**:序列 = `[UNSUB 舊窗, UNSUB 新窗, SUB 新窗]`。
+- **R3 獨立記帳(round-1 C-9)**:個股健檢的 attempts/退避改記在 `_no_data_attempts` /
+  `_no_data_next`,與 watchdog 只共用 `_window_variant`(spec §2 原寫「共用基底記帳」)。
+- **`heal_active` AND 交易日曆(round-1 C-5)**:prod 的 TXO / stock / index / futures 四條
+  session 的閘再 AND `trading_calendar.is_trading_day(today)`;corr 維持 always。
+  已知邊界:週六凌晨 00:00–05:00 屬週五夜盤那一場,`is_trading_day(週六)` 為 False → 該段
+  不自癒(取「寧可少救不可空 churn」)。
+
 ## 不做(留 next-time)
 - shutdown 保證 LOGOUT(run.ps1 taskkill /F 之下做不到;有自癒後不再是必要條件)。
 - TXO/futures 對 TXF.HOT 的雙持去重(variant escalation 已涵蓋)。
