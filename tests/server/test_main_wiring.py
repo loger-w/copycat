@@ -221,3 +221,27 @@ def test_verify_refuses_canonical_port(monkeypatch: pytest.MonkeyPatch) -> None:
         main_mod.main(["--verify"])
 
     assert cap.create_args is None and cap.run_kwargs is None
+
+
+def test_default_txo_source_wires_realtime_heal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TXO 是唯一直接用基底 `TC4QuoteSource` 的 session,基底自癒預設全關 →
+    `_default_source` 必須顯式開 R1(60s)+ 日/夜盤閘,否則 09:01 那種 reap 殺 key
+    的事故 TXO 面永遠救不回(fix/tc4-realtime-refcount-kill)。"""
+    import copycat.live.tc4 as tc4_mod
+    from copycat.live.session import in_txo_session
+    from copycat.server import app as app_mod
+
+    seen: dict[str, Any] = {}
+
+    class _Capture:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+
+    monkeypatch.setattr(tc4_mod, "TC4QuoteSource", _Capture)
+
+    app_mod._default_source()
+
+    assert seen["kwargs"]["heal_silence_secs"] == tc4_mod.TXO_HEAL_SILENCE_SECS == 60.0
+    assert seen["kwargs"]["heal_active"] is in_txo_session
+    assert "heal_symbol_silence_secs" not in seen["kwargs"], "TXO R2 必須維持關(深價外契約 churn)"
