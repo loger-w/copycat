@@ -75,8 +75,14 @@ _HEAL_VARIANT_CYCLE = 3
 #: 窗小時的合法值域(TC4 窗字串 = YYYYMMDDHH)
 _WINDOW_HOUR_MAX = 23
 _WINDOW_HOUR_MIN = 0
-#: TXO session(`app._default_source` 直接用基底類)的建議門檻:R1 60s、R2 關
-#: —— 277 檔契約深價外本就整場靜默,R2 會把它們無止盡 churn(change-spec §3)。
+#: TXO session 的門檻:R1 60s、R2 關 —— 277 檔契約深價外本就整場靜默,R2 收它們
+#: 等於無止盡 churn(change-spec §3)。
+#:
+#: **尚未接線**:TXO 是唯一直接用基底類當 source 的 session(`app._default_source`),
+#: 而基底預設必須全關(否則所有子類與既有測試都被動吃到自癒)。接線 = 在
+#: `app._default_source` 補兩個參數,本輪 scope 不動 server/:
+#:     TC4QuoteSource(..., heal_silence_secs=TXO_HEAL_SILENCE_SECS,
+#:                    heal_active=in_txo_session)   # copycat.live.session
 TXO_HEAL_SILENCE_SECS = 60.0
 # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
 # 才可被 _stop 中斷。10s = 實測最重呼叫 QUERYALLINSTRUMENT(Opt) 1.93s 的 5 倍裕度;
