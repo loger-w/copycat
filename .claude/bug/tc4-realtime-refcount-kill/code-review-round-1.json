@@ -1,0 +1,20 @@
+{
+  "round": 1, "base": "fd03822f", "head": "735bbeca", "lenses": ["concurrency-tc4-semantics", "test-coverage-spec"],
+  "findings": [
+    {"id":"C-1/T-4","severity":"P0","disposition":"accepted","title":"_apply_variant 對 corr 全天窗 no-op、夜盤窗 k=1/2/3 塌成同一把 key","fix":"variant 規則改為恆產生互異 key:先 end+k(≤23),餘量再 start−r(≥0),仍不行(全天窗 00–23)則 start+r;四把 base 窗 variant 1..3 互異且 != base 的測試"},
+    {"id":"C-2/T-3","severity":"P1","disposition":"accepted(部分)","title":"_heal_loop 無 catch-all;sorted(_subscribed) 併發疑慮","fix":"_heal_loop 包 try/except Exception logger.exception 續行 + 測試;快照改 tuple()。**不加新鎖**:CPython sorted(set)/tuple(set) 是單一 C 呼叫、不釋放 GIL,不會 RuntimeError(main session 反證);set add/discard/in 在 GIL 下原子"},
+    {"id":"C-3","severity":"P1","disposition":"accepted","title":"heal 與 engine 退訂交錯 → 幽靈訂閱","fix":"_heal 在 with self._lock 內、_resub 前檢查 symbol in _subscribed 否則 return;測試"},
+    {"id":"C-4/T-1/T-2/T-10","severity":"P1","disposition":"accepted","title":"R3 timer 鏈:重複 subscribe 疊鏈、不看 _stop、close 後續跑、不看退避","fix":"per-code 單一 timer handle(subscribe_symbol 先 cancel 舊的)、_health_check 開頭 _stop.is_set() 早退、close() cancel 全部 timer、既有測試補 close/unsubscribe 收尾;測試三則"},
+    {"id":"C-5","severity":"P1","disposition":"accepted","title":"heal_active 純牆鐘不看交易日曆 → 假日 churn","fix":"app.py 建構點把 trading_calendar(create_app 已注入)AND 進 stock/index/futures/TXO 的 heal_active(calendar None 時退回牆鐘);corr 維持 always(海外腿台灣假日照開)。source 建構子簽名不變,測試 wiring"},
+    {"id":"C-6","severity":"P1","disposition":"accepted","title":"部分死亡(從未推播的腿)R1/R2 都收不到;corr 無 R3","fix":"R2 母體改為 last_push 有值 OR(_sub_at 已超過 T2 且從未 last_push);TXO R2=None 照舊豁免;測試"},
+    {"id":"C-7/T-6","severity":"P2→修","disposition":"accepted","title":"variant 在 _resub 前 bump → 舊 key 永不釋放;測試未鎖 UNSUB/SUB 同窗","fix":"bump 前先對舊 variant 窗發 UNSUBQUOTE(對 count 0 key 發 UNSUB 無害:TC4 log 09:00:52 Remove count:0 後 Add 正常,既有 UNSUB→SUB 冪等路徑天天在做),再 bump、再 _resub;測試斷言序列 [UNSUB 舊窗, UNSUB 新窗, SUB 新窗] 且 UNSUB/SUB 末兩發同窗"},
+    {"id":"C-8/T-11","severity":"P2→修","disposition":"accepted(最小)","title":"自癒五本帳沒有生命週期","fix":"_unsub 清該 symbol 五本帳;StockQuoteSource.set_trade_date 清全部 variant/attempts/next(換日不帶舊 variant);測試。收盤尾巴 churn 與 rollover 舊窗 key 洩漏(既有行為)記 next-time"},
+    {"id":"C-9","severity":"P2→修","disposition":"accepted","title":"R3 與 watchdog 共用 attempts/next → 個股退避變 300s","fix":"R3 獨立 attempts/next 記帳(_no_data_attempts),只共用 _window_variant;基底抽 _heal_resub(symbol, bump_variant) 供兩邊呼叫;測試鎖 R3 退避在 watchdog 干擾下仍為 10/20/40/60"},
+    {"id":"T-5","severity":"P1","disposition":"accepted","title":"缺 R1+R2 同開測試;R1 命中即 return 未宣告","fix":"兩則測試;deviation 補進 change-spec"},
+    {"id":"T-7","severity":"P2","disposition":"accepted","title":"缺實驗 G 形狀端到端測試","fix":"test_push_silence_heal_recovery_cycle"},
+    {"id":"T-8","severity":"P2","disposition":"accepted","title":"_note_push pop _heal_next 未宣告/未測","fix":"補 assert + change-spec deviation"},
+    {"id":"T-9","severity":"P2","disposition":"accepted","title":"_health_check 盤外仍先 heal 一次","fix":"閘檢查上移到 heal 前 + 測試"}
+  ],
+  "p2_summary": "另 rejected/記錄:C-2 的新鎖(GIL 反證);p2 備註 _note_push 與 _heal 對 _heal_attempts 無互斥(後果 = 多/少一輪重掛,接受);R1 resub_since session 級會被使用者操作壓住(R2+R3 覆蓋,記 change-spec 門檻表備註);in_txo_session 不看日曆已由 C-5 收。",
+  "rejected": [{"id":"C-2(加鎖部分)","reason":"CPython sorted/tuple(set) 單一 C 呼叫不釋放 GIL;set 單步操作原子;catch-all 已足"}]
+}
