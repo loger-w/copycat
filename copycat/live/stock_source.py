@@ -3,7 +3,7 @@
 繼承 TC4QuoteSource 複用連線/REQ 全域互斥/_dispose/stale 重連機制(不動 tc4.py,
 案 A:TXO 實盤路徑零風險)。覆寫:
 
-- `_rt_request`:REALTIME 窗 = 個股當日 UTC 日盤窗(非 TXO 時段窗)。
+- `_rt_window`:REALTIME 窗 = 個股當日 UTC 日盤窗(非 TXO 時段窗)。
 - listener 原始分派:REALTIME → `on_message(Quote dict)`(book/meta 都要,不能只回 Tick)。
 - 逐檔 subscribe/unsubscribe(refcount 池在 engine 層)+ 無推播健檢(訂閱後 N 秒
   無該檔任何推播 → `on_no_data(code)`;僅交易時段生效 — 個股休市 snapshot 行為
@@ -19,7 +19,7 @@ import time
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
 
 from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
-from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, build_rt_request
+from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource
 from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
 
 logger = logging.getLogger(__name__)
@@ -455,9 +455,8 @@ class StockQuoteSource(TC4QuoteSource):
 
     # ---- 覆寫:REALTIME 窗 = 個股當日日盤窗 ----
 
-    def _rt_request(self, request: str, symbol: str) -> dict:
-        window = stock_window(self._trade_date)
-        return self._session_req(lambda session: build_rt_request(request, session, symbol, window))
+    def _rt_window(self, symbol: str) -> tuple[str, str]:
+        return stock_window(self._trade_date)
 
     # ---- 逐檔訂閱 ----
 

@@ -4,7 +4,7 @@
 
 1. **不限交易所段**:`futures_source.futures_symbol` 寫死 `TC.F.TWF.` 前綴,
    本引擎要訂 SGX / CBOT / CME 三段,故改吃完整 symbol 字串(由設定檔給)。
-2. **訂閱窗覆寫為全天窗**:基底 `TC4QuoteSource._rt_request` 用
+2. **訂閱窗覆寫為全天窗**:基底 `TC4QuoteSource._rt_window` 用
    `session_window(session_key())` —— 那是**台指期**盤別窗(日盤 UTC 00–06 /
    夜盤 UTC 06–22)。海外腿時段不同(美股現貨 UTC 13:30–20:00),在台指日盤窗訂
    CME 會落在窗外。且 TC4 對訂閱一律回 `Success: OK`(CLAUDE.md §8),窗不匹配的
@@ -20,7 +20,7 @@ import time
 from typing import Any, Callable
 
 from copycat.live.river_backfill import collect_1k_minutes
-from copycat.live.tc4 import TC4QuoteSource, build_rt_request
+from copycat.live.tc4 import TC4QuoteSource
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -51,9 +51,8 @@ class CorrQuoteSource(TC4QuoteSource):
 
     # ---- 訂閱窗覆寫(本類別存在的主要理由)----
 
-    def _rt_request(self, request: str, symbol: str) -> dict:
-        window = all_day_window()
-        return self._session_req(lambda session: build_rt_request(request, session, symbol, window))
+    def _rt_window(self, symbol: str) -> tuple[str, str]:
+        return all_day_window()
 
     # ---- 泛化 symbol 訂閱(UNSUB→SUB 冪等;失敗 raise 供引擎降級)----
 
