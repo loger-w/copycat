@@ -297,11 +297,17 @@ class _Booted:
 
 
 def _default_source() -> QuoteSource:
-    from copycat.live.tc4 import TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
+    from copycat.live.session import in_txo_session
+    from copycat.live.tc4 import TXO_HEAL_SILENCE_SECS, TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
 
     return TC4QuoteSource(
         port=_tc4_port(),
         backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
+        # REALTIME 零推播自癒(fix/tc4-realtime-refcount-kill):TXO 是唯一直接用基底類的
+        # session,基底預設全關 → 這裡顯式開 R1(60s 全場靜默 → 整批重掛)、R2 關(277 檔
+        # 深價外契約本就靜默),閘 = 日盤/夜盤牆鐘。
+        heal_silence_secs=TXO_HEAL_SILENCE_SECS,
+        heal_active=in_txo_session,
     )
 
 
