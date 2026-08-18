@@ -51,8 +51,19 @@ class FuturesQuoteSource(TC4QuoteSource):
         api: Any | None = None,
         session: str | None = None,
         poll_wait_secs: float = 1.0,
+        heal_silence_secs: float | None = 30.0,
+        heal_symbol_silence_secs: float | None = 60.0,
     ) -> None:
-        super().__init__(port, api=api, session=session, poll_wait_secs=poll_wait_secs)
+        # 自癒不設盤別閘:三檔 HOT 日夜盤都該有推播,盤外最壞 churn = 3 symbol / 300s;
+        # 而 09:01 事故正是「新 server 沿用殭屍建的 feed」那種盤前/盤初形狀
+        super().__init__(
+            port,
+            api=api,
+            session=session,
+            poll_wait_secs=poll_wait_secs,
+            heal_silence_secs=heal_silence_secs,
+            heal_symbol_silence_secs=heal_symbol_silence_secs,
+        )
         self._on_message: Callable[[dict], None] | None = None
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:

@@ -64,6 +64,20 @@ class HistoryResult(NamedTuple):
 
 _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
+#: 自癒重掛的退避上限(秒):同一 symbol 救不回時最慢每 5 分鐘再試一次
+_HEAL_BACKOFF_CAP = 300.0
+#: 第幾次重掛起改用新窗(= 新 key)。同一把 key 連兩次沒救回,代表這把 key 還有
+#: 別的持有者(TXF.HOT 由 TXO + futures 雙持、外部 probe 也算)—— 自己 UNSUB→SUB
+#: 永遠到不了 SumSubCount 0,TC4 就不會 ReqSubQuote 重掛上游 feed(repro.md 實驗 G)。
+_HEAL_VARIANT_AFTER = 3
+#: window variant 的循環長度(1 → 2 → 3 → 1 …;窗開得再寬也回得來)
+_HEAL_VARIANT_CYCLE = 3
+#: 窗小時的合法值域(TC4 窗字串 = YYYYMMDDHH)
+_WINDOW_HOUR_MAX = 23
+_WINDOW_HOUR_MIN = 0
+#: TXO session(`app._default_source` 直接用基底類)的建議門檻:R1 60s、R2 關
+#: —— 277 檔契約深價外本就整場靜默,R2 會把它們無止盡 churn(change-spec §3)。
+TXO_HEAL_SILENCE_SECS = 60.0
 # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
 # 才可被 _stop 中斷。10s = 實測最重呼叫 QUERYALLINSTRUMENT(Opt) 1.93s 的 5 倍裕度;
 # GetHistory 分頁實測 max 1.1ms(3,482 次、10.7 萬 rows)不受影響(2026-07-20 probe)。
@@ -71,6 +85,11 @@ _REQ_TIMEOUT_MS = 10_000
 # 回補收割輪數上限與零進展早停(fetch_backfill round 制;空頁無法區分未備妥/無資料)
 _HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
+
+
+def _always_active() -> bool:
+    """`heal_active` 預設:不設閘 = 全時段自癒(盤別閘由各 source 建構子帶)。"""
+    return True
 
 
 def build_rt_request(request: str, session: str, symbol: str, window: tuple[str, str]) -> dict:
@@ -234,6 +253,14 @@ class TC4QuoteSource:
         # 取捨:毒鎖(KeepAlive Pong 無 try/finally)的偵測延遲從 5s 拉長到 12s ——
         # 那條路本來就要重建連線,晚 7 秒發現可接受;而誤殺健康連線是每次都發生。
         lock_timeout_secs: float = 12.0,
+        # ---- REALTIME 零推播自癒(預設全關;門檻由各子類建構子帶)----
+        #: R1「整條 session 靜默」門檻(秒);None = 自癒整體關閉
+        heal_silence_secs: float | None = None,
+        #: R2「單 symbol 曾有推播後靜默」門檻(秒);None = R2 關
+        heal_symbol_silence_secs: float | None = None,
+        #: 只在回 True 時自癒(盤外不 churn)
+        heal_active: Callable[[], bool] = _always_active,
+        heal_poll_secs: float = 5.0,
     ) -> None:
         self._port = port
         self._api = api
@@ -255,6 +282,19 @@ class TC4QuoteSource:
         self._api_lock = threading.Lock()
         self.reconnects = 0
         self.on_reconnect: Callable[[], None] | None = None
+        self._heal_silence = heal_silence_secs
+        self._heal_symbol_silence = heal_symbol_silence_secs
+        self._heal_active = heal_active
+        self._heal_poll = heal_poll_secs
+        #: symbol → 最後一則 REALTIME 推播的 monotonic(`_realtime_msg` 單點記錄)
+        self._last_push: dict[str, float] = {}
+        #: symbol → 最後一次 SUBQUOTE 成功的 monotonic(剛重掛不算靜默)
+        self._sub_at: dict[str, float] = {}
+        self._heal_attempts: dict[str, int] = {}
+        self._heal_next: dict[str, float] = {}
+        #: symbol → 訂閱窗變體序號(0 = 原窗);見 `_apply_variant`
+        self._window_variant: dict[str, int] = {}
+        self._healer: threading.Thread | None = None
 
     # ---- 連線 ----
 
@@ -366,9 +406,116 @@ class TC4QuoteSource:
         """
         return session_window(session_key())
 
+    def _apply_variant(self, symbol: str, window: tuple[str, str]) -> tuple[str, str]:
+        """套自癒的窗變體:variant k > 0 → EndTime 小時 +k(封頂 23,已滿則改推 StartTime −k)。
+
+        TC4 的訂閱 refcount 鍵是 `symbol|DataType|StartTime|EndTime`,**換窗 = 換一把
+        count 0 的新 key**,才會觸發上游 `ReqSubQuote`(repro.md 實驗 D/G)。窗只推小時、
+        方向單一,好讓 UNSUBQUOTE 與 SUBQUOTE 恆用同一把鍵。
+
+        **歷史路徑(`_sub_history` / `_get_history`)不吃 variant** —— 回補窗與 REALTIME
+        窗是不同 DataType 的兩把鍵,動它只會讓回補改抓別的區間。
+        """
+        k = self._window_variant.get(symbol, 0)
+        if k <= 0:
+            return window
+        start, end = window
+        end_hour = int(end[8:10])
+        if end_hour < _WINDOW_HOUR_MAX:
+            return start, f"{end[:8]}{min(end_hour + k, _WINDOW_HOUR_MAX):02d}"
+        start_hour = int(start[8:10])
+        return f"{start[:8]}{max(start_hour - k, _WINDOW_HOUR_MIN):02d}", end
+
     def _rt_request(self, request: str, symbol: str) -> dict:
-        window = self._rt_window(symbol)
+        window = self._apply_variant(symbol, self._rt_window(symbol))
         return self._session_req(lambda session: build_rt_request(request, session, symbol, window))
+
+    # ---- REALTIME 零推播自癒(watchdog;root cause 見 repro.md)----
+
+    def _heal_enabled(self) -> bool:
+        return self._heal_silence is not None or self._heal_symbol_silence is not None
+
+    def _start_healer(self) -> None:
+        """watchdog thread(daemon;`_stop` 為止)。heal 全關時不起。"""
+        if self._healer is not None or not self._heal_enabled():
+            return
+        self._healer = threading.Thread(target=self._heal_loop, daemon=True)
+        self._healer.start()
+        logger.info(
+            "TC4 REALTIME 自癒 watchdog 啟動(R1=%s R2=%s poll=%.0fs)",
+            self._heal_silence,
+            self._heal_symbol_silence,
+            self._heal_poll,
+        )
+
+    def _heal_loop(self) -> None:
+        while not self._stop.wait(self._heal_poll):
+            self._heal_tick(time.monotonic())
+
+    def _heal_tick(self, now: float) -> None:
+        """一輪判定(`now` 可注入 → 測試不靠真時鐘)。
+
+        R1(session 級):訂閱非空、**全部** symbol 都靜默超過門檻、且最近一次重掛也
+        超過門檻 → 整批重掛。09:01 那次事故(reap 殭屍 → 上游整批退訂)就是這個形狀。
+        R2(symbol 級):曾有推播、之後單獨靜默 → 只重掛它。從未推播過的 symbol 不進
+        R2 母體 —— TXO 深價外契約本來就整場沒成交,收進來等於無止盡 churn。
+        """
+        if not self._heal_active():
+            return
+        subs = sorted(self._subscribed)  # 定序:log 與重掛順序可預期
+        if not subs:
+            return
+        t1 = self._heal_silence
+        if t1 is not None:
+            quiet_since = max((self._last_push.get(s, 0.0) for s in subs), default=0.0)
+            resub_since = max((self._sub_at.get(s, 0.0) for s in subs), default=0.0)
+            if quiet_since < now - t1 and resub_since < now - t1:
+                for sym in subs:
+                    if self._heal_next.get(sym, 0.0) <= now:
+                        self._heal(sym, now, t1)
+                return  # R1 已整批重掛,同一輪不再走 R2
+        t2 = self._heal_symbol_silence
+        if t2 is None:
+            return
+        for sym in subs:
+            last = self._last_push.get(sym)
+            if last is not None and last < now - t2 and self._heal_next.get(sym, 0.0) <= now:
+                self._heal(sym, now, t2)
+
+    def _heal(self, symbol: str, now: float, base: float, cap: float = _HEAL_BACKOFF_CAP) -> None:
+        """單一 symbol 重掛 + 記帳(退避 base·2^(n-1),封頂 cap)。
+
+        **不得拋**:watchdog / 健檢 timer 都在自己的 thread 上跑,一次 REQ 例外炸出去
+        就等於自癒從此消失,而失效樣態(零推播)恰恰是沒有錯誤訊號的那一種。
+        """
+        attempts = self._heal_attempts.get(symbol, 0) + 1
+        self._heal_attempts[symbol] = attempts
+        if attempts >= _HEAL_VARIANT_AFTER:
+            variant = self._window_variant.get(symbol, 0)
+            self._window_variant[symbol] = (variant % _HEAL_VARIANT_CYCLE) + 1
+        self._heal_next[symbol] = now + min(base * 2 ** (attempts - 1), cap)
+        silence = now - max(self._last_push.get(symbol, 0.0), self._sub_at.get(symbol, 0.0))
+        logger.warning(
+            "TC4 REALTIME 零推播自癒:%s 靜默 %.0fs → 重掛(attempt %d, window_variant=%d)",
+            symbol,
+            silence,
+            attempts,
+            self._window_variant.get(symbol, 0),
+        )
+        try:
+            with self._lock:  # 與 _check_stale 互斥:重連換 session 時不得同時重掛
+                self._resub(symbol)
+        except (ConnectionError, zmq.ZMQError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("TC4 自癒重掛失敗 %s: %s(下輪退避重試)", symbol, exc)
+            return
+        self._sub_at[symbol] = now
+
+    def _note_push(self, symbol: str) -> None:
+        """收到推播 = 這把 key 是活的:清 attempts/退避,**保留 variant**。"""
+        self._last_push[symbol] = time.monotonic()
+        if symbol in self._heal_attempts:
+            self._heal_attempts.pop(symbol, None)
+            self._heal_next.pop(symbol, None)
 
     # ---- QuoteSource 介面 ----
 
@@ -556,6 +703,7 @@ class TC4QuoteSource:
         if r.get("Success") != "OK":
             raise ConnectionError(f"SUBQUOTE fail {sym}: {r.get('ErrMsg')}")
         self._subscribed.add(sym)
+        self._sub_at[sym] = time.monotonic()
 
     def _unsub(self, sym: str) -> None:
         """已訂閱才退訂(未訂閱 = no-op)。"""
@@ -578,6 +726,7 @@ class TC4QuoteSource:
                 logger.warning("SUBQUOTE fail %s: %s", sym, r.get("ErrMsg"))
                 continue
             self._subscribed.add(sym)
+            self._sub_at[sym] = time.monotonic()
         logger.info("subscribed %d symbols (series=%s)", len(self._subscribed), series.series_id)
 
     def unsubscribe(self, series: SeriesInfo) -> None:
@@ -618,6 +767,7 @@ class TC4QuoteSource:
             raise ConnectionError("TC4 quote listener 需要真連線的 SubPort")
         self._listener = threading.Thread(target=self._listen_loop, daemon=True)
         self._listener.start()
+        self._start_healer()
 
     def _realtime_msg(self, raw: str) -> dict | None:
         """原始電文 → REALTIME 訊息 dict;無 topic 分隔 / 非 JSON / 非 REALTIME → None。
@@ -634,6 +784,13 @@ class TC4QuoteSource:
             return None
         if msg.get("DataType") != "REALTIME":
             return None
+        # 自癒的推播時鐘記在這裡:四個子類的 handle_raw 都經過本方法,單點記錄
+        # (各自在 handle_raw 記 = 下次新增 source 必漏,而漏了完全沒有訊號)
+        quote = msg.get("Quote")
+        if isinstance(quote, dict):
+            symbol = quote.get("Symbol")
+            if isinstance(symbol, str) and symbol:
+                self._note_push(symbol)
         return msg
 
     def handle_raw(self, raw: str) -> None:
@@ -700,6 +857,7 @@ class TC4QuoteSource:
                         r = self._rt_request("SUBQUOTE", sym)
                         if r.get("Success") == "OK":
                             self._subscribed.add(sym)
+                            self._sub_at[sym] = time.monotonic()
                         else:
                             # 掉訂品的復原靠 engine 端 on_reconnect 對帳(futures);
                             # 這裡至少留 grep 判準,不再靜默蒸發(回溯審 P1-3)

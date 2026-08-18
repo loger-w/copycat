@@ -424,8 +424,21 @@ class StockQuoteSource(TC4QuoteSource):
         poll_wait_secs: float = 1.0,
         no_data_secs: float = 10.0,
         in_trading_hours: Callable[[], bool] = in_trading_hours_now,
+        heal_silence_secs: float | None = 30.0,
+        heal_symbol_silence_secs: float | None = 60.0,
+        heal_poll_secs: float = 5.0,
     ) -> None:
-        super().__init__(port, api=api, session=session, poll_wait_secs=poll_wait_secs)
+        # 自癒閘沿用既有的盤中判定:個股盤外沒有推播是正常的,churn 沒有意義
+        super().__init__(
+            port,
+            api=api,
+            session=session,
+            poll_wait_secs=poll_wait_secs,
+            heal_silence_secs=heal_silence_secs,
+            heal_symbol_silence_secs=heal_symbol_silence_secs,
+            heal_active=in_trading_hours,
+            heal_poll_secs=heal_poll_secs,
+        )
         self._trade_date = trade_date or f"{_dt.date.today():%Y-%m-%d}"
         self._no_data_secs = no_data_secs
         self._in_trading_hours = in_trading_hours
