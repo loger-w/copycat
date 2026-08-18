@@ -9,6 +9,8 @@
  */
 
 import type { Bar } from "@/lib/candle";
+import type { XWindow } from "@/lib/stock-intraday-svg";
+import { hhmm, type HourTick } from "@/lib/time-labels";
 
 export interface AlldaySegment {
   /** 段首分鐘(HHMM,含) */
@@ -94,6 +96,54 @@ export const ALLDAY_TICKS: readonly AlldayTick[] = (() => {
     { index: at(night2, "0500"), label: "05:00" },
   ];
 })();
+
+/** 近全軸當 `IntradayChartCore` 的 x 窗:**key = 軸索引**(0..ALLDAY_LEN−1)不是分鐘數。
+ *
+ *  core 的幾何(`minuteToX` / `minuteOf` / `windowedEntries` / `sideSummary` / `barW`)
+ *  對 key 的唯一要求是「落在 `[xw.start, xw.end]` 的整數、可排序」—— 近全軸的索引正好
+ *  滿足,而且死區自然不佔 x(13:45 與 15:01 相鄰)。
+ *
+ *  **模組層常數不是行內字面值**:窗物件會直接進 `memo` 子元件的 props,行內 `{...}`
+ *  每次 render 都是新 identity,靜態圖層的 memo 會被整層打穿(同 `STKFUT_WINDOW`)。 */
+export const ALLDAY_WINDOW: XWindow = { start: 0, end: ALLDAY_LEN - 1 };
+
+/** `ALLDAY_TICKS` 換成 core 的 `HourTick` 形狀(`minute` 欄放的是**軸索引**)。
+ *
+ *  兩份標籤表不各寫一次:index 的推導(15:00 釘在夜盤段起點)只此一處,
+ *  漏同步的樣態是「軸標籤與線各自對一套刻度」,目視幾乎抓不到。identity 同上。 */
+export const ALLDAY_HOUR_TICKS: readonly HourTick[] = ALLDAY_TICKS.map(({ index, label }) => ({
+  minute: index,
+  label,
+}));
+
+/** 軸索引 → `HH:MM`(`alldayIndexOf` 的反函式)。域外 / 非整數 → `""`。
+ *
+ *  core 的 readout 首欄與 hover 底部標籤吃這一支(`timeText` 注入)—— 不注入的話印出來的
+ *  是把索引當分鐘數換算的假時刻(index 300 → 「05:00」,真值是 15:01)。
+ *
+ *  **不夾制、不猜**:域外回空字串而不是最近的合法時刻 —— 索引本來就只在 [0, 1139]
+ *  有意義,回一個「看起來對」的時刻會讓錯位完全靜默(同 `alldayIndexOf` 的死區回 null)。 */
+export function alldayHhmmOf(index: number): string {
+  if (!Number.isInteger(index)) return "";
+  for (const seg of ALLDAY_SEGMENTS) {
+    if (index >= seg.offset && index < seg.offset + seg.len) {
+      return hhmm(minuteOf(seg.start)! + (index - seg.offset));
+    }
+  }
+  return "";
+}
+
+/** `YYYY-MM-DD HH:MM` → 軸索引;非分 K 時戳(日 K:無空格)/ 死區 → null。
+ *
+ *  自 `FuturesChart.indexOfBar` 搬入(行為逐字同):adapter 與 live gate 兩處都要用,
+ *  留在元件裡的話 lib 側就得再寫一份,而兩份對「日 K 時戳」的處理一旦漂掉,
+ *  症狀是日 K bars 被當成 index 0 全部堆在開盤那一分鐘。 */
+export function alldayIndexOfStamp(t: string): number | null {
+  const sp = t.indexOf(" ");
+  if (sp < 0) return null;
+  const hm = t.slice(sp + 1);
+  return alldayIndexOf(`${hm.slice(0, 2)}${hm.slice(3, 5)}`);
+}
 
 function shiftDate(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00`);
