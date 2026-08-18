@@ -54,6 +54,16 @@ const FUT = futuresBarsToAccum({
   code: "TXF.HOT",
 });
 
+/** live 落在**新索引**(15:02 的 1K 尚未回)→ 末格是 v=0 的佔位格。
+ *  同一份 accum 在 futures 態印「-」、在 stock 態印「0」(反向 lock:閘只在 futures 態開)。 */
+const FUT_LIVE = futuresBarsToAccum({
+  bars: BARS,
+  live: { index: IDX_1501 + 1, p: 22_970_000 },
+  ref: 23_000_000,
+  name: "台指近",
+  code: "TXF.HOT",
+});
+
 /** 模組層常數(identity 穩定,不打穿 ChartStatic 的 memo)—— 呼叫端的紀律同 `fills`。 */
 const HLINES: readonly ChartHLine[] = [
   { priceMilli: 23_100_000, label: "均 23100 多2口", className: "stroke-bull", title: "持倉均價 23100 · 多 2 口" },
@@ -221,14 +231,7 @@ describe("IntradayChartCore mode=\"futures\"", () => {
   });
 
   it("live 佔位分鐘(v=0)→ readout 量 / 外 / 內 印「-」(bars 尚無 1K,印 0 是假數字)", () => {
-    const withLive = futuresBarsToAccum({
-      bars: BARS,
-      live: { index: IDX_1501 + 1, p: 22_970_000 },
-      ref: 23_000_000,
-      name: "台指近",
-      code: "TXF.HOT",
-    });
-    renderFut({ accum: withLive });
+    renderFut({ accum: FUT_LIVE });
     const readout = screen.getByTestId("chart-readout");
     expect(readout.children[0]!.textContent).toBe("15:02");
     expect([3, 4, 5].map((i) => readout.children[i]!.textContent)).toEqual(["量 -", "外 -", "內 -"]);
@@ -312,20 +315,21 @@ describe("W-1:mode 預設 = stock,軸 / 時間文字 / 價位口徑 / hlines 零
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/stock/overlay/2330");
   });
 
-  it("v=0 的分鐘在 stock 態仍印「0」(「-」是 futures 態的 live 佔位語意)", () => {
-    const zero = fromSnapshot({
-      code: "2330",
-      seq: 1,
-      last: { p: 2_380_000, t: "09:01:30.000", cum_vol: 0 },
-      vwap: null,
-      minutes: { "541": { c: 2_380_000, v: 0, i: 0, o: 0, u: 0, h: 2_380_000, l: 2_380_000 } },
-      ticks: [],
-      book: null,
-      high: 2_380_000,
-      low: 2_380_000,
-      meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
-    });
-    wrap(<StockIntradayChart accum={zero} />);
-    expect(screen.getByTestId("chart-readout").children[3]!.textContent).toBe("量 0");
+  it("**同一份** live 佔位 accum 在 stock 態仍印「量 0」(「-」的閘只在 futures 態開)", () => {
+    // 軸窗照樣注入(`xWindow` 與 mode 是兩件事)—— 只有 `mode` 這一個變因不同,
+    // 才證明得出翻面的是 `futures` 判別子而不是別的東西。
+    wrap(
+      <IntradayChartCore
+        accum={FUT_LIVE}
+        toggles={{ ...TOGGLES, cdp: false, ma: false }}
+        onToggle={() => {}}
+        variant="page"
+        xWindow={ALLDAY_WINDOW}
+        hourTicks={ALLDAY_HOUR_TICKS}
+      />,
+    );
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.children.length).toBe(6);
+    expect([3, 4, 5].map((i) => readout.children[i]!.textContent)).toEqual(["量 0", "外 0", "內 0"]);
   });
 });
