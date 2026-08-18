@@ -516,6 +516,21 @@ class TestNoDataHealthCheck:
         assert flagged == []
 
 
+class TestHealDefaults:
+    """自癒門檻(change-spec §3):個股 / 指數共用類 30 / 60,且盤外不 churn。"""
+
+    def test_thresholds_follow_trading_hours_gate(self) -> None:
+        src = StockQuoteSource(
+            api=FakeApi(lambda o: ok()),
+            session="s1",
+            trade_date="2026-07-21",
+            in_trading_hours=lambda: False,
+        )
+        assert src._heal_silence == 30.0
+        assert src._heal_symbol_silence == 60.0
+        assert src._heal_active() is False  # heal_active = 既有 in_trading_hours 參數
+
+
 class TestContractKeySubscription:
     """SC-3:三段形合約鍵沿現貨那條路(只換 symbol + 空試撮窗)。"""
 

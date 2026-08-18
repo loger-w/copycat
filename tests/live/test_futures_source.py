@@ -13,6 +13,17 @@ class TestSymbol:
         assert futures_symbol("TMF") == "TC.F.TWF.TMF.HOT"
 
 
+class TestHealDefaults:
+    """自癒門檻(change-spec §3):三檔 HOT 全天都該有推播 → 30 / 60,盤外照跑
+    (churn 上限 = 3 symbol / 300s,可接受;夜盤反而是最需要自癒的時段)。"""
+
+    def test_thresholds_and_always_active(self) -> None:
+        src = FuturesQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+        assert src._heal_silence == 30.0
+        assert src._heal_symbol_silence == 60.0
+        assert src._heal_active() is True
+
+
 class TestSubscribe:
     def test_subscribe_unsub_then_sub_realtime_with_session_window(self) -> None:
         sent: list[dict] = []
