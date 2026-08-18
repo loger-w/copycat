@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+import datetime
 import time
 
-from copycat.live.session import session_key, session_window
+from copycat.live.session import in_txo_session, session_key, session_window
 
 
 def _utc(y: int, mo: int, d: int, h: int, mi: int = 0) -> time.struct_time:
@@ -39,6 +40,29 @@ class TestSessionKey:
         ymd, kind = session_key()
         assert ymd == time.strftime("%Y%m%d", time.gmtime())
         assert kind in ("day", "night")
+
+
+class TestInTxoSession:
+    """TXO session 的自癒閘(台北牆鐘):日盤 08:45–13:45 / 夜盤 15:00–次日 05:00。"""
+
+    def test_day_session(self) -> None:
+        assert in_txo_session(datetime.time(8, 45)) is True
+        assert in_txo_session(datetime.time(13, 45)) is True
+
+    def test_night_session_wraps_midnight(self) -> None:
+        assert in_txo_session(datetime.time(15, 0)) is True
+        assert in_txo_session(datetime.time(23, 30)) is True
+        assert in_txo_session(datetime.time(0, 30)) is True
+        assert in_txo_session(datetime.time(5, 0)) is True
+
+    def test_closed_gaps(self) -> None:
+        # 盤外不自癒:零推播是正常的,重掛只會 churn TC4 上游
+        assert in_txo_session(datetime.time(8, 44)) is False
+        assert in_txo_session(datetime.time(14, 30)) is False
+        assert in_txo_session(datetime.time(5, 1)) is False
+
+    def test_defaults_to_wall_clock(self) -> None:
+        assert in_txo_session() in (True, False)
 
 
 class TestSessionWindow:
