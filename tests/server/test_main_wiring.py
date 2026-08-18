@@ -14,6 +14,7 @@ today,傳真日曆會讓 verify server 在假日整片空 —— 而 prod 漏傳
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from copycat.server.app import (
 )
 from copycat.server.verify import FAIL_ENV_KEY, FakeTxoSource
 from copycat.trading_calendar import TradingCalendar
+from tests.helpers.boot import BootedClient
 
 
 class _Capture:
@@ -228,20 +230,144 @@ def test_default_txo_source_wires_realtime_heal(monkeypatch: pytest.MonkeyPatch)
     `_default_source` 必須顯式開 R1(60s)+ 日/夜盤閘,否則 09:01 那種 reap 殺 key
     的事故 TXO 面永遠救不回(fix/tc4-realtime-refcount-kill)。"""
     import copycat.live.tc4 as tc4_mod
-    from copycat.live.session import in_txo_session
     from copycat.server import app as app_mod
 
-    seen: dict[str, Any] = {}
-
-    class _Capture:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            seen["args"] = args
-            seen["kwargs"] = kwargs
-
-    monkeypatch.setattr(tc4_mod, "TC4QuoteSource", _Capture)
+    seen = _capture(monkeypatch, tc4_mod, "TC4QuoteSource")
 
     app_mod._default_source()
 
     assert seen["kwargs"]["heal_silence_secs"] == tc4_mod.TXO_HEAL_SILENCE_SECS == 60.0
-    assert seen["kwargs"]["heal_active"] is in_txo_session
     assert "heal_symbol_silence_secs" not in seen["kwargs"], "TXO R2 必須維持關(深價外契約 churn)"
+    # 無日曆 = 逐字等於改動前的純牆鐘閘
+    assert seen["kwargs"]["heal_active"] is _session_mod().in_txo_session
+
+
+# ---- C-5:自癒閘 AND 交易日曆(純牆鐘 → 假日整天 churn TC4 上游)----
+
+_SATURDAY = date(2026, 8, 15)
+_TUESDAY = date(2026, 8, 18)
+#: 假日表空 → 週末由 weekday() 擋、平日全開;閘的組合律用這一把就驗得完
+_CAL = TradingCalendar(frozenset(), frozenset(), frozenset({2026}))
+
+
+def _session_mod() -> Any:
+    import copycat.live.session as session_mod
+
+    return session_mod
+
+
+def _capture(monkeypatch: pytest.MonkeyPatch, module: Any, name: str) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+
+    class _CaptureSource:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+
+    monkeypatch.setattr(module, name, _CaptureSource)
+    return seen
+
+
+@pytest.mark.parametrize("clock", [True, False])
+def test_txo_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock: bool) -> None:
+    import copycat.live.tc4 as tc4_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, tc4_mod, "TC4QuoteSource")
+    monkeypatch.setattr(_session_mod(), "in_txo_session", lambda: clock)
+
+    app_mod._default_source(_CAL)
+    gate = seen["kwargs"]["heal_active"]
+
+    monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+    assert gate() is False, "非交易日不得自癒(整天每 5s 對 TC4 送 UNSUB+SUB)"
+    monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+    assert gate() is clock, "交易日仍要 AND 牆鐘時段閘"
+
+
+@pytest.mark.parametrize("factory", ["_default_stock_source", "_default_index_source"])
+def test_stock_and_index_heal_gate_ands_the_calendar(
+    monkeypatch: pytest.MonkeyPatch, factory: str
+) -> None:
+    """個股 / 指數的閘走既有的 `in_trading_hours` 參數(健檢與自癒同一把)。"""
+    import copycat.live.stock_source as stock_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, stock_mod, "StockQuoteSource")
+    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: True)
+
+    getattr(app_mod, factory)(_CAL)
+    gate = seen["kwargs"]["in_trading_hours"]
+
+    monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+    assert gate() is False
+    monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+    assert gate() is True
+    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: False)
+    assert gate() is False, "交易日的盤外仍不得自癒"
+
+
+def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """期貨原本是 always(三檔 HOT 日夜盤都該有推播)—— 日曆只砍掉「整天沒有盤」那些日子。"""
+    import copycat.live.futures_source as futures_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, futures_mod, "FuturesQuoteSource")
+
+    app_mod._default_futures_source(_CAL)
+    gate = seen["kwargs"]["heal_active"]
+
+    monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+    assert gate() is False
+    monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+    assert gate() is True
+
+
+def test_corr_source_keeps_the_always_on_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """海外腿(SGX/CBOT/CME)在台灣假日照開 → corr 不接日曆(接了等於整天不自癒)。"""
+    import copycat.live.corr_source as corr_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
+
+    app_mod._default_corr_source()
+
+    assert "heal_active" not in seen["kwargs"]
+
+
+def test_create_app_passes_the_calendar_into_every_default_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """接線點在 `create_app` 內:factory 收得到日曆才有意義,漏傳的失效樣態是
+    「假日照樣 churn」—— 只有 TC4 那頭的 log 看得出來,我方零訊號。"""
+    from copycat.server import app as app_mod
+
+    seen: dict[str, Any] = {}
+
+    def _txo(calendar: Any = None) -> Any:
+        seen["txo"] = calendar
+        return FakeTxoSource()
+
+    def _none(key: str) -> Any:
+        def _factory(calendar: Any = None) -> Any:
+            seen[key] = calendar
+            return None  # 引擎不建 → 不碰 ZMQ
+
+        return _factory
+
+    monkeypatch.setattr(app_mod, "_default_source", _txo)
+    monkeypatch.setattr(app_mod, "_default_stock_source", _none("stock"))
+    monkeypatch.setattr(app_mod, "_default_index_source", _none("index"))
+    monkeypatch.setattr(app_mod, "_default_futures_source", _none("futures"))
+
+    app = app_mod.create_app(
+        stock_source=DEFAULT_STOCK,
+        index_source=DEFAULT_INDEX,
+        futures_source=DEFAULT_FUTURES,
+        stock_watchlist_path=tmp_path / "stock_watchlist.json",
+        trading_calendar=_CAL,
+    )
+    with BootedClient(app):
+        pass
+
+    assert seen == {"txo": _CAL, "stock": _CAL, "index": _CAL, "futures": _CAL}
