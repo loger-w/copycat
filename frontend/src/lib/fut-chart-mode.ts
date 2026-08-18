@@ -1,24 +1,40 @@
 /** 期貨 tab 的圖表模式值域(SC-2;design §4.4)。
  *
  * **刻意不共用 `lib/timeframe.ts`** —— 那是大盤頁專用,動它的 union 會讓大盤頁長出
- * 一排用不到的按鈕(W-1 同型教訓)。期貨的檔位(1/5/15/30/60)也與個股(1–10 連續)
- * 不同,兩邊各自定義比硬湊一個超集清楚。
+ * 一排用不到的按鈕(W-1 同型教訓)。期貨的檔位(1–10 連續 + 15/30/60)與大盤頁的
+ * 那份仍不相同,兩邊各自定義比硬湊一個超集清楚。
  */
 
 import { FUT_CHART_MODE_KEY } from "@/lib/constants";
 
-export type FutChartMode = "intraday" | "m1" | "m5" | "m15" | "m30" | "m60" | "day";
+export type FutChartMode =
+  | "intraday"
+  | "m1"
+  | "m2"
+  | "m3"
+  | "m4"
+  | "m5"
+  | "m6"
+  | "m7"
+  | "m8"
+  | "m9"
+  | "m10"
+  | "m15"
+  | "m30"
+  | "m60"
+  | "day";
 
-/** 模式列(值 + 繁中標籤);**渲染順序與值域的唯一來源**。 */
+/** 分 K 檔位(分鐘數);表在上面的 union 之外**只此一份**,順序即渲染順序。 */
+const MINUTE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 30, 60] as const;
+
+/** 模式列(值 + 繁中標籤);**渲染順序與值域的唯一來源**。
+ *  分 K 那一段由 `MINUTE_STEPS` map 產生 —— 值與標籤各手寫一次的話,加檔位時
+ *  漏改的那一份會讓某顆鈕的文字與它寫進 localStorage 的值對不上。 */
 export const FUT_CHART_MODES: readonly (readonly [FutChartMode, string])[] = [
   ["intraday", "分時"],
-  ["m1", "1分"],
-  ["m5", "5分"],
-  ["m15", "15分"],
-  ["m30", "30分"],
-  ["m60", "60分"],
+  ...MINUTE_STEPS.map((n) => [`m${n}`, `${n}分`] as readonly [FutChartMode, string]),
   ["day", "日K"],
-] as const;
+];
 
 /** 白名單驗證。值域直接由 `FUT_CHART_MODES` 推導 —— 另寫一條 regex 就是第二份值域,
  *  加模式時漏改的那一份會靜默把新模式擋在 localStorage 還原之外。 */
