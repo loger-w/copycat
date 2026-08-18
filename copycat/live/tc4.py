@@ -69,7 +69,7 @@ _HEAL_BACKOFF_CAP = 300.0
 #: 第幾次重掛起改用新窗(= 新 key)。同一把 key 連兩次沒救回,代表這把 key 還有
 #: 別的持有者(TXF.HOT 由 TXO + futures 雙持、外部 probe 也算)—— 自己 UNSUB→SUB
 #: 永遠到不了 SumSubCount 0,TC4 就不會 ReqSubQuote 重掛上游 feed(repro.md 實驗 G)。
-_HEAL_VARIANT_AFTER = 3
+HEAL_VARIANT_AFTER = 3
 #: window variant 的循環長度(1 → 2 → 3 → 1 …;窗開得再寬也回得來)
 _HEAL_VARIANT_CYCLE = 3
 #: 窗小時的合法值域(TC4 窗字串 = YYYYMMDDHH)
@@ -537,9 +537,7 @@ class TC4QuoteSource:
             return False
         return True
 
-    def _heal(
-        self, symbol: str, now: float, base: float, cap: float = _HEAL_BACKOFF_CAP
-    ) -> None:
+    def _heal(self, symbol: str, now: float, base: float) -> None:
         """watchdog 的單一 symbol 重掛 + 記帳(退避 base·2^(n-1),封頂 300s)。
 
         記帳(`_heal_attempts` / `_heal_next`)是 **watchdog 專屬**:個股健檢(R3)另有
@@ -548,8 +546,8 @@ class TC4QuoteSource:
         """
         attempts = self._heal_attempts.get(symbol, 0) + 1
         self._heal_attempts[symbol] = attempts
-        self._heal_next[symbol] = now + min(base * 2 ** (attempts - 1), cap)
-        bump = attempts >= _HEAL_VARIANT_AFTER
+        self._heal_next[symbol] = now + min(base * 2 ** (attempts - 1), _HEAL_BACKOFF_CAP)
+        bump = attempts >= HEAL_VARIANT_AFTER
         silence = now - max(self._last_push.get(symbol, 0.0), self._sub_at.get(symbol, 0.0))
         logger.warning(
             "TC4 REALTIME 零推播自癒:%s 靜默 %.0fs → 重掛(attempt %d, window_variant=%d)",

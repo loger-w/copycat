@@ -19,7 +19,7 @@ import time
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
 
 from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
-from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource
+from copycat.live.tc4 import BARS_POLL_DEADLINE, HEAL_VARIANT_AFTER, TC4QuoteSource
 from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
 
 logger = logging.getLogger(__name__)
@@ -454,6 +454,16 @@ class StockQuoteSource(TC4QuoteSource):
         # 以它為鍵時合約的推播會把現貨的健檢一起消掉(現貨真的零推播也不再有訊號)。
         self._seen: set[str] = set()
         self._seen_lock = threading.Lock()
+        #: R3 專屬的重掛記帳(**不與 watchdog 共用**:共用時個股的 10/20/40/60s 退避
+        #: 會被 watchdog 的 300s 階梯推走)。兩邊只共用 `_window_variant` —— 那是
+        #: 「這把 key 現在是哪一把」的事實,不是節奏。
+        self._no_data_attempts: dict[str, int] = {}
+        self._no_data_next: dict[str, float] = {}
+        #: code → 待觸發的健檢 timer(**per-code 單一把**)。重複訂閱(rollover /
+        #: 退訂後再訂)不換掉舊的話會疊出多條鏈:同一檔被通報多次、重掛頻率成倍,
+        #: 而每條鏈都只是「照設計在跑」,沒有任何錯誤訊號。
+        self._no_data_timers: dict[str, threading.Timer] = {}
+        self._timer_lock = threading.Lock()
 
     # ---- 設定 ----
 
@@ -468,8 +478,17 @@ class StockQuoteSource(TC4QuoteSource):
         self._on_no_data = cb
 
     def set_trade_date(self, trade_date: str) -> None:
-        """rollover 階段一:換日窗(重掛訂閱由呼叫端執行)。"""
+        """rollover 階段一:換日窗(重掛訂閱由呼叫端執行)。
+
+        自癒的 variant / attempts / 退避一併清掉:那些是「**昨天**那把 key 救不回來」
+        的事實,帶進新的一天等於一開盤就訂到一把沒人知道的窗、第一次靜默就換窗。
+        """
         self._trade_date = trade_date
+        self._window_variant.clear()
+        self._heal_attempts.clear()
+        self._heal_next.clear()
+        self._no_data_attempts.clear()
+        self._no_data_next.clear()
 
     # ---- 覆寫:REALTIME 窗 = 個股當日日盤窗 ----
 
@@ -492,12 +511,37 @@ class StockQuoteSource(TC4QuoteSource):
         # `_handle_no_data` 會廣播 code="F:CDF" 的 watchlist_quote,與 D16(只收自選碼)
         # 直接打架 —— 側欄會多出一格對不上任何自選項目的卡片。
         if (not is_futures_key(code) or is_contract_key(code)) and self._in_trading_hours():
-            timer = threading.Timer(self._no_data_secs, self._health_check, args=(code,))
-            timer.daemon = True
-            timer.start()
+            self._no_data_attempts.pop(symbol, None)  # 新一輪訂閱 = 新的退避階梯
+            self._arm_health_check(code, self._no_data_secs, attempt=1)
+
+    def _arm_health_check(self, code: str, delay: float, *, attempt: int) -> None:
+        """排下一發健檢,並**換掉**這個 code 上待觸發的那一把(疊鏈是 C-4 的根因)。"""
+        timer = threading.Timer(delay, self._health_check, args=(code, attempt))
+        timer.daemon = True
+        with self._timer_lock:
+            old = self._no_data_timers.get(code)
+            if old is not None:
+                old.cancel()
+            if self._stop.is_set():  # 收工中不再排(close 已經清過一輪)
+                return
+            self._no_data_timers[code] = timer
+        timer.start()
 
     def unsubscribe_symbol(self, code: str) -> None:
         self._unsub(stock_symbol(code))
+
+    def close(self) -> None:
+        """收工:先關閘再取消所有待觸發的健檢,最後走基底的退訂 / Disconnect。
+
+        timer 不收的話,process 收工後最長還會有一發健檢對已死的連線送 REQ ——
+        `_stop` 早退是第二道防線,兩道都要(timer 已在飛的那一瞬間只有 `_stop` 擋得住)。
+        """
+        self._stop.set()
+        with self._timer_lock:
+            for timer in self._no_data_timers.values():
+                timer.cancel()
+            self._no_data_timers.clear()
+        super().close()
 
     def _health_check(self, code: str, attempt: int = 1) -> None:
         """零推播 → 通報(僅第一次)+ 重掛,並以退避排下一輪(R3)。
@@ -508,10 +552,13 @@ class StockQuoteSource(TC4QuoteSource):
         只有讓自己那把 key 走一次 0→1(或換一把新窗 key)才觸發 `ReqSubQuote`
         —— 09:00 那台 server 從 boot 起就 `no_data` 正是這個形狀(repro.md 觸發鏈 4)。
 
-        退避 10 → 20 → 40 → 60s(封頂),`_heal` 內共用基底的 attempts / variant 記帳,
-        持續到收到推播或被退訂;**盤外不再排下一輪**(`_heal_active` 同一把閘:個股
-        收盤後零推播是正常的,churn 到隔天早上沒有意義)。
+        退避 10 → 20 → 40 → 60s(封頂),記在 **R3 自己的** `_no_data_attempts` /
+        `_no_data_next`(與 watchdog 分帳,理由見宣告處),持續到收到推播或被退訂;
+        **盤外連重掛都不做**(個股收盤後零推播是正常的,churn 到隔天早上沒有意義;
+        通報仍照舊發 —— 那是 engine 的狀態,不是對 TC4 的動作)。
         """
+        if self._stop.is_set():  # 收工後仍在飛的那一發
+            return
         symbol = stock_symbol(code)
         with self._seen_lock:
             seen = symbol in self._seen
@@ -519,14 +566,21 @@ class StockQuoteSource(TC4QuoteSource):
             return
         if attempt == 1 and self._on_no_data is not None:
             self._on_no_data(code)
-        now = time.monotonic()
-        self._heal(symbol, now, self._no_data_secs, cap=_NO_DATA_HEAL_CAP)
         if not self._in_trading_hours():
             return
-        delay = max(self._heal_next.get(symbol, now) - now, self._no_data_secs)
-        timer = threading.Timer(delay, self._health_check, args=(code, attempt + 1))
-        timer.daemon = True
-        timer.start()
+        attempts = self._no_data_attempts.get(symbol, 0) + 1
+        self._no_data_attempts[symbol] = attempts
+        delay = min(self._no_data_secs * 2 ** (attempts - 1), _NO_DATA_HEAL_CAP)
+        self._no_data_next[symbol] = time.monotonic() + delay
+        bump = attempts >= HEAL_VARIANT_AFTER
+        logger.warning(
+            "個股零推播健檢:%s 重掛(attempt %d, window_variant=%d)",
+            symbol,
+            attempts,
+            self._next_variant(symbol, bump=bump),
+        )
+        self._heal_resub(symbol, bump_variant=bump)
+        self._arm_health_check(code, delay, attempt=attempt + 1)
 
     # ---- 回補(收割分頁;跨 symbol 序列化由 engine worker queue 統籌)----
 
