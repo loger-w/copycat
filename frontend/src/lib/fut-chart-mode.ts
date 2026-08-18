@@ -7,32 +7,20 @@
 
 import { FUT_CHART_MODE_KEY } from "@/lib/constants";
 
-export type FutChartMode =
-  | "intraday"
-  | "m1"
-  | "m2"
-  | "m3"
-  | "m4"
-  | "m5"
-  | "m6"
-  | "m7"
-  | "m8"
-  | "m9"
-  | "m10"
-  | "m15"
-  | "m30"
-  | "m60"
-  | "day";
-
-/** 分 K 檔位(分鐘數);表在上面的 union 之外**只此一份**,順序即渲染順序。 */
+/** 分 K 檔位(分鐘數);**值域的唯一來源**,順序即渲染順序 —— `FutChartMode` 的 union
+ *  由它推導(code review A-4):加檔位只改這一處,型別 / 模式列 / 白名單自動跟上。 */
 const MINUTE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 30, 60] as const;
+
+type MinuteMode = `m${(typeof MINUTE_STEPS)[number]}`;
+
+export type FutChartMode = "intraday" | MinuteMode | "day";
 
 /** 模式列(值 + 繁中標籤);**渲染順序與值域的唯一來源**。
  *  分 K 那一段由 `MINUTE_STEPS` map 產生 —— 值與標籤各手寫一次的話,加檔位時
  *  漏改的那一份會讓某顆鈕的文字與它寫進 localStorage 的值對不上。 */
 export const FUT_CHART_MODES: readonly (readonly [FutChartMode, string])[] = [
   ["intraday", "分時"],
-  ...MINUTE_STEPS.map((n) => [`m${n}`, `${n}分`] as readonly [FutChartMode, string]),
+  ...MINUTE_STEPS.map((n): readonly [FutChartMode, string] => [`m${n}`, `${n}分`]),
   ["day", "日K"],
 ];
 
