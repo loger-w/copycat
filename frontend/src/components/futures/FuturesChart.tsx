@@ -1,11 +1,23 @@
 import { useMemo, useState, type ReactNode } from "react";
 
 import { CandleChart, type ChartHLine } from "@/components/stock/CandleChart";
+import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
 import { useCapitalPositions } from "@/hooks/useCapital";
+import { useChartToggles } from "@/hooks/useChartToggles";
+import { useContainerSize } from "@/hooks/useContainerSize";
 import { useFuturesBars, type FuturesBarsKey } from "@/hooks/useFuturesBars";
 import { useOiLevels } from "@/hooks/useOiLevels";
-import { ALLDAY_LEN, ALLDAY_TICKS, alldayIndexOf, anchorDateOf, sliceCurrentAllday } from "@/lib/allday";
+import {
+  ALLDAY_HOUR_TICKS,
+  ALLDAY_WINDOW,
+  alldayHhmmOf,
+  alldayIndexOf,
+  alldayIndexOfStamp,
+  anchorDateOf,
+  sliceCurrentAllday,
+} from "@/lib/allday";
 import { aggregateBars, type Bar } from "@/lib/candle";
+import { svgBox } from "@/lib/chart-frame";
 import { fmt } from "@/lib/format";
 import {
   FUT_CHART_MODES,
@@ -14,48 +26,34 @@ import {
   persistFutChartMode,
   type FutChartMode,
 } from "@/lib/fut-chart-mode";
+import { futuresBarsToAccum } from "@/lib/futures-accum-adapter";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { pickOiLines } from "@/lib/oi-levels";
-import { pts } from "@/lib/svg-points";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
 
 /** 期貨 tab 主圖(SC-1/2/4/7/8/11)。
  *
- * 一份 `tf=1&session=allday` 原料餵所有分鐘級模式:分時走本檔的近全軸 SVG、
- * 分 K 走 `aggregateBars` → `CandleChart`、日 K 另走 `tf=D`。
+ * 一份 `tf=1&session=allday` 原料餵所有分鐘級模式:分時走個股同一份
+ * `IntradayChartCore`(mode="futures";近全軸由本檔注入)、分 K 走 `aggregateBars`
+ * → `CandleChart`、日 K 另走 `tf=D`。
  *
- * **overlays(均價線 / OI 撐壓)兩種模式都畫**,幾何各自算但語意同一套:
- * 超出當前 y 視窗的線一律不畫(clamp 到邊緣會把「圖外的價位」講成「圖緣的價位」)。
+ * **overlays(均價線 / OI 撐壓)兩種模式都畫**:同一份 `hlines` 分別交給 core 與
+ * `CandleChart`,兩邊語意同一套 —— 超出當前 y 視窗的線一律不畫
+ * (clamp 到邊緣會把「圖外的價位」講成「圖緣的價位」)。
  */
 
-/** 分時 viewBox 寬。**刻意 = `ALLDAY_LEN`** —— 一分鐘一像素,x 幾何就是索引本身,
- *  軸標籤與折線不可能各算一份比例而漂移。export 供測試算期望 x。 */
-export const INTRADAY_VB_W = ALLDAY_LEN;
-const INTRADAY_VB_H = 340;
-/** y 域上下 pad(指數 / 期指皆無漲跌停以外的自然邊界,沿用大盤分時的 0.3%) */
-const Y_PAD = 0.003;
-/** 底部時間標籤帶 */
-const X_LABEL_H = 12;
+/** 主圖佔可用高的比例(= core 的 `MAIN.height : MAIN.height + SUB.height`,同個股頁)。 */
+const MAIN_RATIO_NUM = 260;
+const MAIN_RATIO_DEN = 330;
+/** 分時 viewBox 寬 = core 的 `DEFAULT_W`;`svgBox` 反解要用同一個值。 */
+const INTRADAY_VB_W = 800;
 
 const DAILY_INIT_BARS = 120;
 const MINUTE_INIT_BARS = 240;
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
-}
-
-/** `YYYY-MM-DD HH:MM` → 近全軸索引;非分 K 時戳 / 死區 → null。 */
-function indexOfBar(t: string): number | null {
-  const sp = t.indexOf(" ");
-  if (sp < 0) return null;
-  const hhmm = t.slice(sp + 1);
-  return alldayIndexOf(`${hhmm.slice(0, 2)}${hhmm.slice(3, 5)}`);
-}
-
-interface IntradayPoint {
-  index: number;
-  c: number;
 }
 
 /** 牆上時鐘 → live 點的落點。
@@ -76,155 +74,6 @@ function liveSlotOf(now: Date): { index: number; anchor: string } | null {
   return { index, anchor: anchorDateOf(`${date} ${hh}:${mm}`) };
 }
 
-interface IntradayGeometry {
-  line: { x: number; y: number }[];
-  refY: number;
-  yTicks: { y: number; priceMilli: number }[];
-  /** 毫點 → y;**超出 y 域回 null**(overlay 線不畫,同 `hlineYOf` 的判定語意) */
-  hlineY: (priceMilli: number) => number | null;
-}
-
-function toX(index: number): number {
-  return (index / ALLDAY_LEN) * INTRADAY_VB_W;
-}
-
-function buildIntradayGeometry(
-  series: readonly IntradayPoint[],
-  refMilli: number | null,
-  height: number,
-): IntradayGeometry {
-  const closes = series.map((p) => p.c);
-  const base =
-    refMilli ?? (closes.length > 0 ? closes.reduce((s, c) => s + c, 0) / closes.length : 0);
-  const hi = Math.max(base, ...closes);
-  const lo = Math.min(base, ...closes);
-  const yTop = hi * (1 + Y_PAD) || 1;
-  const yBottom = lo * (1 - Y_PAD);
-  const span = yTop - yBottom || 1;
-  const toY = (p: number): number => ((yTop - p) / span) * height;
-  return {
-    line: series.map((p) => ({ x: toX(p.index), y: toY(p.c) })),
-    refY: toY(base),
-    yTicks: [yBottom, base, yTop].map((p) => ({ y: toY(p), priceMilli: Math.round(p) })),
-    hlineY: (priceMilli) =>
-      priceMilli >= yBottom && priceMilli <= yTop ? toY(priceMilli) : null,
-  };
-}
-
-function IntradayChart({
-  series,
-  refMilli,
-  live,
-  hlines,
-}: {
-  series: readonly IntradayPoint[];
-  refMilli: number | null;
-  /** live 點的軸索引(已過死區與錨定日 gate);無 live 點 → null */
-  live: number | null;
-  hlines: readonly ChartHLine[];
-}) {
-  const g = buildIntradayGeometry(series, refMilli, INTRADAY_VB_H - X_LABEL_H);
-  const lastPt = g.line[g.line.length - 1];
-  return (
-    <svg
-      viewBox={`0 0 ${INTRADAY_VB_W} ${INTRADAY_VB_H}`}
-      className="w-full"
-      role="img"
-      aria-label="期貨近全時段分時走勢"
-    >
-      {ALLDAY_TICKS.map(({ index, label }) => (
-        <g key={label}>
-          <line
-            x1={toX(index)}
-            x2={toX(index)}
-            y1={0}
-            y2={INTRADAY_VB_H - X_LABEL_H}
-            className="stroke-line"
-            strokeWidth={0.4}
-          />
-          <text
-            x={toX(index) + 2}
-            y={INTRADAY_VB_H - 2}
-            className="fill-ink-dim"
-            fontSize="0.625rem"
-          >
-            {label}
-          </text>
-        </g>
-      ))}
-      <line
-        x1={0}
-        x2={INTRADAY_VB_W}
-        y1={g.refY}
-        y2={g.refY}
-        className="stroke-line"
-        strokeDasharray="2 3"
-        strokeWidth={1}
-      />
-      {g.yTicks.map((t) => (
-        <text
-          key={t.priceMilli}
-          x={2}
-          y={Math.min(Math.max(t.y - 2, 8), INTRADAY_VB_H - X_LABEL_H - 2)}
-          className="fill-ink-dim"
-          fontSize="0.625rem"
-        >
-          {fmt(t.priceMilli)}
-        </text>
-      ))}
-      {g.line.length > 0 ? (
-        <polyline
-          data-testid="allday-line"
-          points={pts(g.line)}
-          fill="none"
-          className="stroke-accent"
-          strokeWidth={1.4}
-        />
-      ) : null}
-      {/* live 現價點:只在渲染層 merge(不寫 query cache),所以它就是序列尾那一點 */}
-      {live !== null && lastPt !== undefined ? (
-        <circle
-          data-testid="allday-live"
-          cx={toX(live).toFixed(1)}
-          cy={lastPt.y.toFixed(1)}
-          r={2.5}
-          className="fill-accent"
-        />
-      ) : null}
-      {/* 水平 overlay:與 CandleChart 同一套語意(超窗不畫、`<title>` 承載證據) */}
-      {hlines.map((ln, i) => {
-        const y = g.hlineY(ln.priceMilli);
-        if (y === null) return null;
-        return (
-          <g key={`hl-${i}-${ln.priceMilli}`} data-testid="chart-hline">
-            {ln.title === undefined ? null : <title>{ln.title}</title>}
-            <line
-              x1={0}
-              x2={INTRADAY_VB_W}
-              y1={y}
-              y2={y}
-              className={ln.className}
-              strokeWidth={1}
-              strokeDasharray="5 3"
-            />
-            <text
-              x={INTRADAY_VB_W - 4}
-              y={y - 3}
-              textAnchor="end"
-              className="fill-ink stroke-surface"
-              strokeWidth={2}
-              paintOrder="stroke"
-              fontSize="0.625rem"
-            >
-              {ln.label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
 interface Props {
   product: FuturesBarsKey;
   /** WS 現價(live 點與 OI 帶中心);未就緒 → 不畫 live 點、OI 以 `ref` 為中心 */
@@ -241,6 +90,8 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   const { data, isPending, isError, error } = useFuturesBars(product, mode, active);
   const { data: oi } = useOiLevels();
   const { data: positionsData } = useCapitalPositions();
+  // 全站單一份 toggle 存檔(與個股頁 / 群組圖牆 / 台股綜合共用同一把 localStorage 鍵)
+  const { toggles, set } = useChartToggles();
 
   function selectMode(next: FutChartMode): void {
     setMode(next);
@@ -291,36 +142,60 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
 
   // ---- 分時序列(近全軸)-------------------------------------------------
   const slice = useMemo(() => sliceCurrentAllday(bars), [bars]);
-  const basePoints = useMemo<IntradayPoint[]>(() => {
-    const out: IntradayPoint[] = [];
-    for (const b of slice) {
-      const index = indexOfBar(b.t);
-      if (index === null) continue;
-      out.push({ index, c: b.c });
+  /** slice 尾往前**第一個索引可解**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
+   *
+   *  不是「最後一根 bar」:尾巴若是死區分鐘 / 日 K 時戳,那根本來就不進圖,拿它當
+   *  「資料走到哪」會讓時鐘落後守衛比對到一個畫面上不存在的點。 */
+  const tailIndex = useMemo<number | null>(() => {
+    for (let i = slice.length - 1; i >= 0; i--) {
+      const index = alldayIndexOfStamp(slice[i]!.t);
+      if (index !== null) return index;
     }
-    return out;
+    return null;
   }, [slice]);
 
   // live 點吃牆上時鐘 → **刻意不進 useMemo**(memo 的 deps 表達不了「現在幾點」;
   // 重算成本是一次 Date 運算)。WS 每則推播都會讓本元件 re-render,自然跟著走。
-  const { series, liveIndex } = ((): { series: IntradayPoint[]; liveIndex: number | null } => {
-    const none = { series: basePoints, liveIndex: null };
+  // 四道 gate 的判準逐字不動(白名單 W-4);同索引覆寫 / 新索引補格的分派下沉到 adapter。
+  const { liveIndex } = ((): { liveIndex: number | null } => {
+    const none = { liveIndex: null };
     const last = slice[slice.length - 1];
     const p = state?.p ?? null;
     if (p === null || last === undefined) return none;
     const live = liveSlotOf(new Date());
     if (live === null) return none; // 死區
     if (live.anchor !== anchorDateOf(last.t)) return none; // 錨定日 gate(§3.2)
-    const tail = basePoints[basePoints.length - 1];
-    if (tail !== undefined && tail.index > live.index) return none; // 時鐘落後資料
-    const out = [...basePoints];
-    if (tail !== undefined && tail.index === live.index) {
-      out[out.length - 1] = { index: live.index, c: p };
-    } else {
-      out.push({ index: live.index, c: p });
-    }
-    return { series: out, liveIndex: live.index };
+    if (tailIndex !== null && tailIndex > live.index) return none; // 時鐘落後資料
+    return { liveIndex: live.index };
   })();
+  const liveP = state?.p ?? null;
+
+  /** 分時圖的資料模型 = 個股同一份 `StockAccum`(近全軸索引當 key)。
+   *
+   *  deps 全是純量或 `slice` 的 identity —— live 落點是每 render 現算的兩個數字,
+   *  同一分鐘同一價就命中 memo(價變才重折 1140 格)。 */
+  const accum = useMemo(
+    () =>
+      futuresBarsToAccum({
+        bars: slice,
+        live: liveIndex === null || liveP === null ? null : { index: liveIndex, p: liveP },
+        ref: state?.ref ?? null,
+        name: state?.name ?? product,
+        code: product,
+      }),
+    [slice, liveIndex, liveP, state?.ref, state?.name, product],
+  );
+
+  // ---- 分時圖尺寸(同個股頁:量測 → viewBox 高)---------------------------
+  // 量的是「剩下多少」不是「圖表現在多高」→ ref 掛在**恆存 wrapper**(loading /
+  // error / data 三態都 mount),且該 wrapper 的高由外層 flex 指派。
+  const [sizeRef, size] = useContainerSize<HTMLDivElement>();
+  const box = svgBox(size, INTRADAY_VB_W);
+  // 主副圖上下相接:總高按 260:70 拆,且用減法讓兩者相加恰等於總高(各自 round 會多 1px)
+  const mainH = box.usable
+    ? Math.round((box.viewBoxHeight * MAIN_RATIO_NUM) / MAIN_RATIO_DEN)
+    : undefined;
+  const subH = box.usable ? box.viewBoxHeight - (mainH ?? 0) : undefined;
 
   // ---- 分 K / 日 K -------------------------------------------------------
   const minutes = futMinutesOf(mode);
@@ -371,22 +246,24 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
       );
     }
     if (mode === "intraday") {
-      if (series.length === 0) {
-        return (
-          <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
-            <p className="text-sm text-ink-muted">無分時資料</p>
-          </div>
-        );
-      }
+      // 空序列的「無分時資料」與外框(figure)都由 core 承接 —— 換元件不換語彙
       return (
-        <div className="rounded-md border border-line bg-surface p-2">
-          <IntradayChart
-            series={series}
-            refMilli={state?.ref ?? null}
-            live={liveIndex}
-            hlines={hlines}
-          />
-        </div>
+        <IntradayChartCore
+          accum={accum}
+          toggles={toggles}
+          onToggle={set}
+          variant="page"
+          mode="futures"
+          mainHeight={mainH}
+          subHeight={subH}
+          xWindow={ALLDAY_WINDOW}
+          hourTicks={ALLDAY_HOUR_TICKS}
+          timeText={alldayHhmmOf}
+          hlines={hlines}
+          overlaySupported={false}
+          overlayOffTitle="期貨分時本輪不提供 CDP/MA/成交點"
+          ariaLabel="期貨近全時段分時走勢"
+        />
       );
     }
     return (
@@ -406,7 +283,11 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {modeRow}
-      {body()}
+      {/* 量測 wrapper **恆存**(loading / error / data 三態都在內):只包 data 分支的話
+          冷載入量到 0×0,而 `useContainerSize` 的 callback ref 不會為此再跑一次 */}
+      <div ref={sizeRef} className="flex min-h-0 flex-1 flex-col">
+        {body()}
+      </div>
     </div>
   );
 }
