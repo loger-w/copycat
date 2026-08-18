@@ -590,8 +590,44 @@ class TestNoDataResubscribes:
         for attempt in range(1, 6):
             before = time.monotonic()
             src._health_check("2330", attempt)
-            delays.append(round(src._heal_next["TC.S.TWS.2330"] - before))
+            delays.append(round(src._no_data_next["TC.S.TWS.2330"] - before))
         assert delays == [10, 20, 40, 60, 60]
+
+    def test_backoff_is_independent_of_the_watchdog(self) -> None:
+        """C-9:R3 與 watchdog 共用一組 attempts 時,個股退避會被推到 300s。
+
+        兩者盯的不是同一件事:watchdog 是「整條 session / 這條腿突然沒聲音」,
+        R3 是「這一檔從訂閱起就沒推播」—— 後者盤中每分鐘試一次的成本(2 個 REQ)
+        遠低於一檔自選整場空白。共用的只有 `_window_variant`(那把 key 是哪一把)。
+        """
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=10.0)
+        src.subscribe_symbol("2330")
+        delays: list[int] = []
+        for attempt in range(1, 6):
+            src._heal("TC.S.TWS.2330", time.monotonic(), 30.0)  # watchdog 同時在動這一把
+            before = time.monotonic()
+            src._health_check("2330", attempt)
+            delays.append(round(src._no_data_next["TC.S.TWS.2330"] - before))
+        assert delays == [10, 20, 40, 60, 60]
+
+    def test_out_of_hours_health_check_skips_the_resubscribe(self) -> None:
+        """T-9:盤外閘要擋在重掛**之前**(舊碼先掛一次才判閘 = 收盤後多一發 churn)。"""
+        sent: list[dict] = []
+        src = StockQuoteSource(
+            api=FakeApi(lambda o: sent.append(o) or ok()),  # type: ignore[func-returns-value]
+            session="s1",
+            trade_date="2026-07-21",
+            no_data_secs=3600.0,
+            in_trading_hours=lambda: False,
+        )
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src._subscribed.add("TC.S.TWS.2330")
+        sent.clear()
+        src._health_check("2330")
+        assert sent == []
+        assert flagged == ["2330"]  # 通報照舊(engine 的 no_data 語意不變)
 
     def test_third_attempt_switches_window(self) -> None:
         sent: list[dict] = []
@@ -619,6 +655,81 @@ class TestNoDataResubscribes:
             assert flagged == ["2330"]
         finally:
             src.unsubscribe_symbol("2330")  # 停掉重掛鏈(下一輪健檢早退)
+
+
+class TestNoDataTimerLifecycle:
+    """C-4:R3 的 timer 鏈生命週期(疊鏈 / close 後續跑 / `_stop` 不看)。
+
+    失效樣態全是「盤後或關機後還在對 TC4 送 REQ」與「同一檔被兩條鏈輪流重掛」,
+    兩者都不會有錯誤訊號,只會在 TC4 那頭多出對不上任何人的訂閱動作。
+    """
+
+    @staticmethod
+    def _src(sent: list[dict], **kw: object) -> StockQuoteSource:
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            return ok()
+
+        return StockQuoteSource(
+            api=FakeApi(handler),
+            session="s1",
+            trade_date="2026-07-21",
+            in_trading_hours=lambda: True,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    def test_repeat_subscribe_does_not_stack_timer_chains(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=0.05)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        try:
+            src.subscribe_symbol("2330")
+            src.subscribe_symbol("2330")  # rollover / refcount 之外的重複訂閱
+            time.sleep(0.25)
+            assert flagged == ["2330"], "疊鏈時同一檔會被通報兩次、重掛兩倍頻率"
+        finally:
+            src.close()
+
+    def test_health_check_early_returns_after_stop(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=3600.0)
+        src.subscribe_symbol("2330")
+        src._stop.set()
+        sent.clear()
+        src._health_check("2330")
+        assert sent == []
+
+    def test_close_cancels_pending_timers(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=0.1)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src.subscribe_symbol("2330")
+        src.close()
+        sent.clear()
+        time.sleep(0.25)
+        assert flagged == []
+        assert sent == [], "close 之後不得再對 TC4 送任何 REQ"
+
+
+class TestRolloverClearsHealBooks:
+    """C-8:換日不得帶著舊 variant / attempts —— 那是「昨天那把 key」的事實。"""
+
+    def test_set_trade_date_clears_variant_and_attempts(self) -> None:
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+        sym = "TC.S.TWS.2330"
+        src._window_variant[sym] = 2
+        src._heal_attempts[sym] = 3
+        src._heal_next[sym] = 999.0
+        src._no_data_attempts[sym] = 4
+        src._no_data_next[sym] = 999.0
+        src.set_trade_date("2026-07-22")
+        assert src._window_variant == {}
+        assert src._heal_attempts == {}
+        assert src._heal_next == {}
+        assert src._no_data_attempts == {}
+        assert src._no_data_next == {}
 
 
 class TestHealDefaults:
