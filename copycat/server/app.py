@@ -296,8 +296,27 @@ class _Booted:
     crosscheck_task: asyncio.Task[None] | None = None
 
 
-def _default_source() -> QuoteSource:
-    from copycat.live.session import in_txo_session
+def _heal_gate(
+    calendar: TradingCalendar | None, clock_gate: Callable[[], bool]
+) -> Callable[[], bool]:
+    """自癒閘 = 牆鐘時段 **AND 今天有開盤**;`calendar=None` 逐字等於改動前的純牆鐘。
+
+    純牆鐘的失效樣態:週末 / 國定假日整天閘都成立 → 每 5s 巡檢一次、對 TC4 上游
+    送 UNSUB+SUB,而那些 symbol 在休市日本來就不會有推播 → 退避爬到 300s 之後仍
+    整天不停。我方全鏈零訊號(自癒 log 本來就是 warning 級的日常),只有 TC4 那頭
+    的 QuoteZMQService log 看得出來。
+
+    日期取樣一律經 `_today()`(日曆推導的唯一取樣點)。**已知邊界**:夜盤跨午夜,
+    週六凌晨 00:00–05:00 屬週五那一場,`is_trading_day(週六)` 為 False → 那一段
+    不自癒。取「寧可少救不可空 churn」,與 R3 個股健檢的盤外早退同一取捨。
+    """
+    if calendar is None:
+        return clock_gate
+    return lambda: calendar.is_trading_day(_today()) and clock_gate()
+
+
+def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
+    from copycat.live import session as session_mod
     from copycat.live.tc4 import TXO_HEAL_SILENCE_SECS, TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
 
     return TC4QuoteSource(
@@ -305,28 +324,40 @@ def _default_source() -> QuoteSource:
         backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
         # REALTIME 零推播自癒(fix/tc4-realtime-refcount-kill):TXO 是唯一直接用基底類的
         # session,基底預設全關 → 這裡顯式開 R1(60s 全場靜默 → 整批重掛)、R2 關(277 檔
-        # 深價外契約本就靜默),閘 = 日盤/夜盤牆鐘。
+        # 深價外契約本就靜默),閘 = 日盤/夜盤牆鐘 AND 交易日。
         heal_silence_secs=TXO_HEAL_SILENCE_SECS,
-        heal_active=in_txo_session,
+        heal_active=_heal_gate(calendar, session_mod.in_txo_session),
     )
 
 
-def _default_stock_source() -> StockSource:
-    from copycat.live.stock_source import StockQuoteSource  # 延遲 import:測試不觸 pyzmq
+def _default_stock_source(calendar: TradingCalendar | None = None) -> StockSource:
+    from copycat.live import stock_source as stock_mod  # 延遲 import:測試不觸 pyzmq
 
-    return StockQuoteSource(port=_tc4_port())
-
-
-def _default_index_source() -> IndexSource:
-    from copycat.live.stock_source import StockQuoteSource  # 獨立 session(指數專用)
-
-    return StockQuoteSource(port=_tc4_port())
+    # 個股走既有的 `in_trading_hours` 注入點(健檢與自癒同一把閘),不另開參數
+    return stock_mod.StockQuoteSource(
+        port=_tc4_port(),
+        in_trading_hours=_heal_gate(calendar, stock_mod.in_trading_hours_now),
+    )
 
 
-def _default_futures_source() -> FuturesSource:
-    from copycat.live.futures_source import FuturesQuoteSource  # 延遲 import:測試不觸 pyzmq
+def _default_index_source(calendar: TradingCalendar | None = None) -> IndexSource:
+    from copycat.live import stock_source as stock_mod  # 獨立 session(指數專用)
 
-    return FuturesQuoteSource(port=_tc4_port())
+    return stock_mod.StockQuoteSource(
+        port=_tc4_port(),
+        in_trading_hours=_heal_gate(calendar, stock_mod.in_trading_hours_now),
+    )
+
+
+def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesSource:
+    from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
+    from copycat.live.tc4 import always_active
+
+    # 期貨原閘 = always(三檔 HOT 日夜盤都該有推播)→ 日曆只砍掉整天沒有盤的日子
+    return futures_mod.FuturesQuoteSource(
+        port=_tc4_port(),
+        heal_active=_heal_gate(calendar, always_active),
+    )
 
 
 def _default_corr_source() -> CorrSource:
@@ -484,7 +515,7 @@ def create_app(
         app.state.build = build_info.capture()
         logger.info("%s", app.state.build.banner())
         runtime = EngineRuntime(
-            source if source is not None else _default_source(),
+            source if source is not None else _default_source(trading_calendar),
             throttle_secs=throttle_secs,
             queue_maxsize=queue_maxsize,
             # 固定日回補模式(休市日)停用時段切換偵測:跨界重跑只會重拿同一份
@@ -557,7 +588,9 @@ def create_app(
             def _make_stock() -> StockEngine | None:
                 nonlocal stkfut_source
                 resolved_stock = (
-                    _default_stock_source() if stock_source is DEFAULT_STOCK else stock_source
+                    _default_stock_source(trading_calendar)
+                    if stock_source is DEFAULT_STOCK
+                    else stock_source
                 )
                 if resolved_stock is None:
                     return None
@@ -694,7 +727,9 @@ def create_app(
             # index engine:失敗不得波及其他引擎(同 trade/stock 邊界慣例)
             def _make_index() -> IndexEngine | None:
                 resolved_index = (
-                    _default_index_source() if index_source is DEFAULT_INDEX else index_source
+                    _default_index_source(trading_calendar)
+                    if index_source is DEFAULT_INDEX
+                    else index_source
                 )
                 if resolved_index is None:
                     return None
@@ -759,7 +794,7 @@ def create_app(
             # 測試未傳(None)零連線;source 實例亦可
             def _make_futures() -> FuturesEngine | None:
                 if futures_source is DEFAULT_FUTURES:
-                    resolved_futures: FuturesSource | None = _default_futures_source()
+                    resolved_futures: FuturesSource | None = _default_futures_source(trading_calendar)
                 else:
                     resolved_futures = cast("FuturesSource | None", futures_source)
                 if resolved_futures is None:

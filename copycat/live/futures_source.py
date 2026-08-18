@@ -17,7 +17,7 @@ from typing import Any, Callable
 from copycat.live.futures_models import PRODUCTS
 from copycat.live.river_backfill import collect_1k_minutes
 from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
-from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource
+from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, always_active
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -53,9 +53,11 @@ class FuturesQuoteSource(TC4QuoteSource):
         poll_wait_secs: float = 1.0,
         heal_silence_secs: float | None = 30.0,
         heal_symbol_silence_secs: float | None = 60.0,
+        heal_active: Callable[[], bool] = always_active,
     ) -> None:
-        # 自癒不設盤別閘:三檔 HOT 日夜盤都該有推播,盤外最壞 churn = 3 symbol / 300s;
-        # 而 09:01 事故正是「新 server 沿用殭屍建的 feed」那種盤前/盤初形狀
+        # 自癒預設不設盤別閘:三檔 HOT 日夜盤都該有推播,盤外最壞 churn = 3 symbol /
+        # 300s;而 09:01 事故正是「新 server 沿用殭屍建的 feed」那種盤前/盤初形狀。
+        # prod 由 `app._default_futures_source` 補上交易日曆閘(假日整天不 churn)。
         super().__init__(
             port,
             api=api,
@@ -63,6 +65,7 @@ class FuturesQuoteSource(TC4QuoteSource):
             poll_wait_secs=poll_wait_secs,
             heal_silence_secs=heal_silence_secs,
             heal_symbol_silence_secs=heal_symbol_silence_secs,
+            heal_active=heal_active,
         )
         self._on_message: Callable[[dict], None] | None = None
 
