@@ -32,3 +32,11 @@
 ## Code review round-1(2 lens,見 code-review-round-1.json)
 P0×1(variant 對全天窗 no-op)/ P1×9 / P2×8 → 全部 accepted 修畢(8 commits `6d8af274..0d504476`),rejected 1(加 `_subscribed` 鎖:CPython GIL 反證)。
 修後 gate:pytest 2755 passed + 1 既有 flake;ruff All checks passed;pyright 0 errors。
+
+## 真實環境(2026-08-18 15:23 prod 重啟 366bf238,兩輪自癒實證)
+- 15:23:51 boot,五條 session 各起 watchdog(TXO R1=60 / stock+index 30-60 / futures 30-60 / corr 120-240)。
+- **第一輪(舊 server 殭屍 reap)**:TC4 log 15:24:40 reap 舊 TXO session、15:24:50 reap 其餘四條;舊 futures session 的日盤 key `TXF.HOT|00–06` 歸零 → 上游退訂 → 夜盤 key(count 2)全斷。
+  server log:15:25:25 期貨三檔靜默 35s → 重掛;15:25:52 TXO 277 檔 R1 整批重掛;MXF/TMF 第 1 次即活(獨持);TXF(TXO+futures 雙持,count 2↔1 兩次不救)**15:27:55 attempt 3 換窗 `06–23` → TC4 `GetSubQuoteCount count:0 → Add count:1`(重掛上游)→ 15:28:49 起即時**。
+- **第二輪(側車硬殺)**:15:33:03 taskkill 側車 → 15:34:00 reap → 15:34:31 三檔靜默 30s → 重掛(TXF 已在 variant=1 獨持 key,attempt 1 即活)→ 15:36:03 三檔即時;NK225M 15:34:11 R2「訂閱久未推播」重掛(大阪 15:30 開盤,正常)。
+- 零 `自癒重掛失敗`、零 ERROR;corr 六腿 stale=false;前端右上「版本落差」徽章消失。
+- 個股面夜間閘關,個股 R3 / R1 的真環境驗證留待 08-19 08:30 開盤(側車 reap 已把個股日盤 key 上游退掉,明早開盤前個股 key 應為死態 → 開盤 R3 10s 內重掛;log grep `零推播自癒:TC.S.TWS`)。
