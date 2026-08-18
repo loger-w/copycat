@@ -1,0 +1,48 @@
+{
+ "round": 2,
+ "scope": "限縮:R1..R9 amendment 段落",
+ "findings": [
+  {
+   "id": "R2-1",
+   "severity": "P1",
+   "disposition": "accepted",
+   "resolution": "§3.1 新測試補 v=0→「-」+ stock 反向 lock;§5 補行;P1 dispatch 追加該案"
+  },
+  {
+   "id": "R2-2",
+   "severity": "P2",
+   "disposition": "accepted",
+   "resolution": "SC-5 算式補高低摺入 716,100"
+  },
+  {
+   "id": "R2-3",
+   "severity": "P2",
+   "disposition": "accepted",
+   "resolution": "unavailable 案改標「不該紅(中性改寫)」"
+  },
+  {
+   "id": "R2-4",
+   "severity": "P2",
+   "disposition": "accepted",
+   "resolution": "帶界改 [k−tick/2,k+tick/2);SC-4 期望值 snapDown+2500"
+  },
+  {
+   "id": "R2-5",
+   "severity": "P2",
+   "disposition": "accepted",
+   "resolution": "edge 11/12 移到清單末"
+  },
+  {
+   "id": "R2-6",
+   "severity": "P2",
+   "disposition": "accepted",
+   "resolution": "死區/slice 案指認改 stroke-accent(state=null)"
+  }
+ ],
+ "summary": {
+  "P0": 0,
+  "P1": 1,
+  "P2": 5,
+  "accepted": 6
+ }
+}
