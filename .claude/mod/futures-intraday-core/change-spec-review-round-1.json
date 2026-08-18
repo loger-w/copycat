@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "findings": [
+    {"id":"R1","severity":"P0","section":"SC-5 / §3.5 overlays 分時三案","problem":"三案前置 findByTestId('allday-line') 必紅,spec 卻標「不改一字」","disposition":"accepted","resolution":"SC-5 + §3.5 改標「該紅(前置一行)/ 斷言本體不動」,補新域對三線判定"},
+    {"id":"R2","severity":"P1","section":"§3.5 fut-chart-mode.test 壞值案","problem":"bad 清單含 'm7' 會紅,漏標","disposition":"accepted","resolution":"§3.4/§3.5 補:m7 移出 bad 清單改 m11/m0/m61,案名改寫"},
+    {"id":"R3","severity":"P1","section":"§3.3 gate 4 輸入來源","problem":"basePoints 刪除後 tail.index 無來源","disposition":"accepted","resolution":"§3.3 明寫 tailIndex = slice 由尾往前第一個索引可解的 bar;§3.5 補 gate 4 獨立測試"},
+    {"id":"R4","severity":"P1","section":"§3.2 live 佔位分鐘 readout 量 0","problem":"盤中無 hover 預設 readout 常態印 量0/外0/內0 假數字","disposition":"accepted","resolution":"選 (b):futures 態 shownAgg.v === 0 → 量/外/內 印「-」;補 vitest;§4/§5 註記"},
+    {"id":"R5","severity":"P2","section":"current-state §1.4 / §3.5","problem":"App.test.tsx 期貨 tab 案漏列","disposition":"accepted","resolution":"兩處補列,標不該紅"},
+    {"id":"R6","severity":"P2","section":"§3.5 unavailable :155","problem":"queryByTestId('allday-line') 恆真退化","disposition":"accepted","resolution":"改核 svg[aria-label] 為 null,歸 🔴 [red]"},
+    {"id":"R7","severity":"P2","section":"§4/§9/SC-1","problem":"近全軸 hover 命中率低未列 KR;測試需 gBCR stub","disposition":"accepted","resolution":"KR-5 + edge + SC-1 驗證作法補註"},
+    {"id":"R8","severity":"P2","section":"§3.2 last 形狀","problem":"缺 t/cum_vol 編譯錯","disposition":"accepted","resolution":"改 {p, t:'', cum_vol:0}"},
+    {"id":"R9","severity":"P2","section":"§3.2 vp key","problem":"snapDown 桶心與 buildVpBars 帶心差 2.5 點","disposition":"accepted","resolution":"選 (a):key = snapDown(c) + tickOf/2(桶心),帶界恰為 [k, k+5)"}
+  ],
+  "summary": {"P0":1,"P1":3,"P2":5,"accepted":9,"rejected":0}
+}
