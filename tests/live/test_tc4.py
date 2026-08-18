@@ -600,8 +600,89 @@ def _rt_pairs(api: FakeApi) -> list[tuple[str, str]]:
     return [(r["Request"], r["Param"]["Symbol"]) for r in api.rt_requests]
 
 
+def _rt_keys(api: FakeApi) -> list[tuple[str, str, str]]:
+    """(Request, StartTime, EndTime) —— TC4 refcount 的鍵就是後兩者(repro.md)。"""
+    return [
+        (r["Request"], r["Param"]["StartTime"], r["Param"]["EndTime"]) for r in api.rt_requests
+    ]
+
+
 def _push_raw(symbol: str) -> str:
     return "Q:" + json.dumps({"DataType": "REALTIME", "Quote": {"Symbol": symbol}})
+
+
+#: 四把在跑的 base 窗(stock 日窗 / TXO 日窗 / TXO 夜窗 / corr 全天窗)。
+#: 變體必須對**每一把**都產出互異的新鍵 —— 塌回同一把 key 的失效樣態是
+#: 「自癒照跑、log 照印,但 TC4 refcount 沒歸零 → 上游永遠不重掛」(零錯誤訊號)。
+_BASE_WINDOWS = {
+    "stock-day": ("2026081800", "2026081806"),
+    "txo-day": ("2026081800", "2026081806"),
+    "txo-night": ("2026081806", "2026081822"),
+    "corr-all-day": ("2026081800", "2026081823"),
+}
+
+
+class TestApplyVariant:
+    """C-1:窗變體必須恆為新鍵(舊規則對全天窗 no-op、對夜盤窗 k=1/2/3 塌成同一把)。"""
+
+    @staticmethod
+    def _src() -> TC4QuoteSource:
+        return TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+
+    @pytest.mark.parametrize("base", list(_BASE_WINDOWS.values()), ids=list(_BASE_WINDOWS))
+    def test_variants_are_pairwise_distinct(self, base: tuple[str, str]) -> None:
+        src = self._src()
+        seen = {base}
+        for k in (1, 2, 3):
+            src._window_variant[HEAL_A] = k
+            window = src._apply_variant(HEAL_A, base)
+            assert window not in seen, f"variant {k} 撞既有鍵:{window}"
+            seen.add(window)
+
+    def test_variant_zero_is_the_base_window(self) -> None:
+        base = _BASE_WINDOWS["stock-day"]
+        assert self._src()._apply_variant(HEAL_A, base) == base
+
+    def test_day_window_extends_the_end_hour(self) -> None:
+        src = self._src()
+        base = _BASE_WINDOWS["stock-day"]
+        got = []
+        for k in (1, 2, 3):
+            src._window_variant[HEAL_A] = k
+            got.append(src._apply_variant(HEAL_A, base))
+        assert got == [
+            ("2026081800", "2026081807"),
+            ("2026081800", "2026081808"),
+            ("2026081800", "2026081809"),
+        ]
+
+    def test_night_window_spills_the_remainder_into_start(self) -> None:
+        # 夜盤窗 06–22 只剩 1 小時的 end 餘量 → 餘量往 StartTime 推
+        src = self._src()
+        base = _BASE_WINDOWS["txo-night"]
+        got = []
+        for k in (1, 2, 3):
+            src._window_variant[HEAL_A] = k
+            got.append(src._apply_variant(HEAL_A, base))
+        assert got == [
+            ("2026081806", "2026081823"),
+            ("2026081805", "2026081823"),
+            ("2026081804", "2026081823"),
+        ]
+
+    def test_all_day_window_shifts_start_forward(self) -> None:
+        # 全天窗 00–23 兩端都到底 → 只能把 StartTime 往後推(往前推是 no-op)
+        src = self._src()
+        base = _BASE_WINDOWS["corr-all-day"]
+        got = []
+        for k in (1, 2, 3):
+            src._window_variant[HEAL_A] = k
+            got.append(src._apply_variant(HEAL_A, base))
+        assert got == [
+            ("2026081801", "2026081823"),
+            ("2026081802", "2026081823"),
+            ("2026081803", "2026081823"),
+        ]
 
 
 class TestHealSessionSilence:
@@ -664,23 +745,37 @@ class TestHealSymbolSilence:
         src._heal_tick(100.0)
         assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
 
-    def test_never_pushed_symbol_is_not_r2_healed(self) -> None:
-        # R2 的母體是「曾有推播」;從未推過的 symbol 由 R1 / 個股健檢負責,
-        # 否則 TXO 深價外那種本來就沒成交的 symbol 會被無止盡 churn
+    def test_never_pushed_symbol_is_healed_after_the_grace_window(self) -> None:
+        # C-6:**部分死亡**(訂閱起就從未推播過的腿)是 08-18 個股面的實際形狀 ——
+        # 舊母體只收「曾有推播」,那些腿 R1(其他 symbol 還在流)與 R2 都收不到,
+        # 永遠沒人救。訂閱後超過 T2 仍零推播 = 與「靜默」同一件事。
         api = FakeApi({})
         src = self._src(api, heal_symbol_silence_secs=60.0)
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 95.0}
         src._last_push = {HEAL_B: 95.0}
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+    def test_never_pushed_symbol_within_the_grace_window_is_left_alone(self) -> None:
+        # 剛訂閱就判死 = 每輪都重掛;TXO 深價外那類本就沒成交的 symbol 由
+        # R2=None 豁免(app._default_source),不是靠這條窄母體擋
+        api = FakeApi({})
+        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src._sub_at = {HEAL_A: 50.0, HEAL_B: 50.0}
         src._heal_tick(100.0)
         assert api.rt_requests == []
 
     def test_push_resets_attempts(self) -> None:
         api = FakeApi({})
         src = self._src(api, heal_symbol_silence_secs=60.0)
-        src._last_push = {HEAL_A: 10.0}
+        src._last_push = {HEAL_A: 10.0, HEAL_B: 95.0}
         src._heal_tick(100.0)
         assert src._heal_attempts[HEAL_A] == 1
         src.handle_raw(_push_raw(HEAL_A))
         assert HEAL_A not in src._heal_attempts  # 推播回來 = 這把 key 活了
+        # T-8:退避也要一起清 —— 只清 attempts 的話,恢復後又靜默的 symbol 要等
+        # 上一輪算出的 `_heal_next` 到期(最壞 300s)才救得回
+        assert HEAL_A not in src._heal_next
 
 
 class TestHealWindowVariantEscalation:
@@ -780,6 +875,178 @@ class TestHealResilience:
             src._stop.set()
             if src._healer is not None:
                 src._healer.join(timeout=3.0)
+
+
+class TestHealVariantReleasesOldKey:
+    """C-7:換窗前必須先放掉舊窗那把 key。
+
+    舊實作是「bump 之後才 UNSUB」→ UNSUBQUOTE 送的是**新窗**、舊窗 key 的 count
+    永遠停在 >0。TC4 的上游 feed 以 symbol 為單位、任一 key 歸零才重掛,自己留著
+    一把不歸零的舊 key 等於把 symbol 鎖在死狀態(repro.md root cause)。
+    """
+
+    def test_bump_shot_unsubscribes_old_window_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        src._last_push = {HEAL_A: 0.0}
+        for now in (100.0, 300.0):  # 前兩發同窗(退避 60 / 120)
+            src._heal_tick(now)
+        api.rt_requests.clear()
+        src._heal_tick(700.0)  # 第三發 = 換窗那一發
+        assert _rt_keys(api) == [
+            ("UNSUBQUOTE", "2026081800", "2026081806"),  # 先放掉舊窗 key
+            ("UNSUBQUOTE", "2026081800", "2026081807"),  # 再對新窗冪等 UNSUB→SUB
+            ("SUBQUOTE", "2026081800", "2026081807"),
+        ]
+
+
+class TestHealConcurrentUnsubscribe:
+    """C-3:watchdog 取完快照後 engine 才退訂 —— 這一發不得把 symbol 掛回去。
+
+    幽靈訂閱(沒有任何持有者的 REALTIME 訂閱)不會有錯誤訊號:推播照收、
+    engine 沒有對應狀態機、TC4 那頭的 refcount 也回不去。
+    """
+
+    def test_heal_skips_a_symbol_the_engine_already_unsubscribed(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_silence_secs=30.0)
+        src._subscribed = set()
+        src._heal(HEAL_A, 100.0, 30.0)
+        assert api.rt_requests == []
+        assert HEAL_A not in src._subscribed
+
+
+class TestHealLoopResilience:
+    """C-2:watchdog 迴圈的 catch-all —— 非 IO 例外(邏輯 bug)不得殺掉自癒。
+
+    `_heal` 只吞 TC4 通訊類例外;`KeyError` / `RuntimeError` 這種逃出來就是
+    thread 靜靜死掉,而它守的正是「零推播且零錯誤訊號」那條路。
+    """
+
+    def test_unexpected_exception_keeps_the_loop_running(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        src = TC4QuoteSource(
+            port="0",
+            api=FakeApi({}),
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_poll_secs=0.01,
+        )
+        calls: list[float] = []
+
+        def _boom(now: float) -> None:
+            calls.append(now)
+            if len(calls) >= 3:
+                src._stop.set()
+            raise RuntimeError("watchdog 內部 bug")
+
+        monkeypatch.setattr(src, "_heal_tick", _boom)
+        thread = threading.Thread(target=src._heal_loop)
+        with caplog.at_level(logging.ERROR):
+            thread.start()
+            thread.join(timeout=3.0)
+        assert not thread.is_alive(), "watchdog 迴圈未收斂"
+        assert len(calls) >= 3, "例外之後不得停止巡檢"
+        assert "watchdog" in caplog.text
+
+
+class TestHealRuleInteraction:
+    """T-5:R1 / R2 同時開啟時的分工(TXO 之外的三條 session 都是這個組態)。"""
+
+    @staticmethod
+    def _src(api: FakeApi) -> TC4QuoteSource:
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_symbol_silence_secs=60.0,
+        )
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        return src
+
+    def test_r1_batch_hit_short_circuits_r2_in_the_same_tick(self) -> None:
+        api = FakeApi({})
+        src = self._src(api)
+        src._last_push = {HEAL_A: 0.0, HEAL_B: 0.0}
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [
+            ("UNSUBQUOTE", HEAL_A),
+            ("SUBQUOTE", HEAL_A),
+            ("UNSUBQUOTE", HEAL_B),
+            ("SUBQUOTE", HEAL_B),
+        ]
+        # 同一輪不得再被 R2 收一次:attempts 多跳一格 = 退避與換窗階梯整條錯位
+        assert src._heal_attempts == {HEAL_A: 1, HEAL_B: 1}
+
+    def test_r2_still_fires_when_r1_does_not(self) -> None:
+        api = FakeApi({})
+        src = self._src(api)
+        src._last_push = {HEAL_A: 0.0, HEAL_B: 95.0}  # B 還在流 → R1 不成立
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+
+class TestHealBookkeepingLifecycle:
+    """C-8:五本帳的生命週期 —— 退訂即清,不得跨訂閱週期帶著舊 variant。"""
+
+    def test_unsub_clears_every_heal_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        src._last_push = {HEAL_A: 0.0}
+        src._heal_attempts[HEAL_A] = 2
+        src._heal_next[HEAL_A] = 999.0
+        src._window_variant[HEAL_A] = 2
+        src._unsub(HEAL_A)
+        for book in (
+            src._last_push,
+            src._sub_at,
+            src._heal_attempts,
+            src._heal_next,
+            src._window_variant,
+        ):
+            assert HEAL_A not in book
+        # 下一輪訂閱回到 base 窗(帶著舊 variant 訂的是一把沒人知道的窗)
+        api.rt_requests.clear()
+        src._resub(HEAL_A)
+        assert _rt_keys(api)[-1] == ("SUBQUOTE", "2026081800", "2026081806")
+
+
+class TestHealRecoveryCycle:
+    """T-7:實驗 G 的形狀端到端 —— 流動 → 靜默 → 重掛 → 復活後不再 churn。"""
+
+    def test_push_silence_heal_recovery_cycle(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src._subscribed = {HEAL_A}
+        base = time.monotonic()
+        src._sub_at = {HEAL_A: base}
+        src._last_push = {HEAL_A: base}
+
+        src._heal_tick(base + 10.0)  # 還在流動
+        assert api.rt_requests == []
+
+        src._heal_tick(base + 100.0)  # 靜默 100s > 60s
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+        assert src._heal_attempts[HEAL_A] == 1
+
+        src.handle_raw(_push_raw(HEAL_A))  # 上游回來了
+        assert HEAL_A not in src._heal_attempts
+        assert HEAL_A not in src._heal_next
+
+        api.rt_requests.clear()
+        src._heal_tick(time.monotonic() + 10.0)
+        assert api.rt_requests == [], "復活後不得繼續 churn"
 
 
 class TestHealDisabledByDefault:
