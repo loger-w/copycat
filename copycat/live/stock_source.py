@@ -6,8 +6,8 @@
 - `_rt_window`:REALTIME 窗 = 個股當日 UTC 日盤窗(非 TXO 時段窗)。
 - listener 原始分派:REALTIME → `on_message(Quote dict)`(book/meta 都要,不能只回 Tick)。
 - 逐檔 subscribe/unsubscribe(refcount 池在 engine 層)+ 無推播健檢(訂閱後 N 秒
-  無該檔任何推播 → `on_no_data(code)`;僅交易時段生效 — 個股休市 snapshot 行為
-  未實測,design R5)。
+  無該檔任何推播 → `on_no_data(code)` 一次 + 退避重掛直到有推播;僅交易時段生效
+  — 個股休市 snapshot 行為未實測,design R5)。
 """
 
 from __future__ import annotations
@@ -43,6 +43,11 @@ _MIN_CLAMP_END = "1335"
 #: 兩邊各寫一份數字就會漂(review L1-P2-2)。
 WINDOW_VARIANT_END_BASE = 6
 WINDOW_VARIANT_END_CAP = 23
+
+#: 零推播健檢重掛的退避上限(秒)。比基底 watchdog 的 300s 短:個股健檢盯的是
+#: 「這一檔從訂閱起就沒推播」,盤中每分鐘試一次的成本(2 個 REQ)遠低於一檔自選
+#: 整場空白的代價。
+_NO_DATA_HEAL_CAP = 60.0
 
 
 class DailyBar(TypedDict):
@@ -494,14 +499,34 @@ class StockQuoteSource(TC4QuoteSource):
     def unsubscribe_symbol(self, code: str) -> None:
         self._unsub(stock_symbol(code))
 
-    def _health_check(self, code: str) -> None:
-        """回呼一律傳 **key**(engine 的 `_no_data` 以 key 記);`_seen` 比對用 symbol。"""
+    def _health_check(self, code: str, attempt: int = 1) -> None:
+        """零推播 → 通報(僅第一次)+ 重掛,並以退避排下一輪(R3)。
+
+        回呼一律傳 **key**(engine 的 `_no_data` 以 key 記);`_seen` 比對用 symbol。
+
+        通報之外還要**重掛**:被 TC4 上游退訂的 key 再送幾次 SUBQUOTE 也不會回來,
+        只有讓自己那把 key 走一次 0→1(或換一把新窗 key)才觸發 `ReqSubQuote`
+        —— 09:00 那台 server 從 boot 起就 `no_data` 正是這個形狀(repro.md 觸發鏈 4)。
+
+        退避 10 → 20 → 40 → 60s(封頂),`_heal` 內共用基底的 attempts / variant 記帳,
+        持續到收到推播或被退訂;**盤外不再排下一輪**(`_heal_active` 同一把閘:個股
+        收盤後零推播是正常的,churn 到隔天早上沒有意義)。
+        """
         symbol = stock_symbol(code)
         with self._seen_lock:
             seen = symbol in self._seen
-        if not seen and symbol in self._subscribed:
-            if self._on_no_data is not None:
-                self._on_no_data(code)
+        if seen or symbol not in self._subscribed:
+            return
+        if attempt == 1 and self._on_no_data is not None:
+            self._on_no_data(code)
+        now = time.monotonic()
+        self._heal(symbol, now, self._no_data_secs, cap=_NO_DATA_HEAL_CAP)
+        if not self._in_trading_hours():
+            return
+        delay = max(self._heal_next.get(symbol, now) - now, self._no_data_secs)
+        timer = threading.Timer(delay, self._health_check, args=(code, attempt + 1))
+        timer.daemon = True
+        timer.start()
 
     # ---- 回補(收割分頁;跨 symbol 序列化由 engine worker queue 統籌)----
 
