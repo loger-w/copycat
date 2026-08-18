@@ -285,16 +285,17 @@ def test_txo_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock:
     assert gate() is clock, "交易日仍要 AND 牆鐘時段閘"
 
 
+@pytest.mark.parametrize("clock", [True, False])
 @pytest.mark.parametrize("factory", ["_default_stock_source", "_default_index_source"])
 def test_stock_and_index_heal_gate_ands_the_calendar(
-    monkeypatch: pytest.MonkeyPatch, factory: str
+    monkeypatch: pytest.MonkeyPatch, factory: str, clock: bool
 ) -> None:
     """個股 / 指數的閘走既有的 `in_trading_hours` 參數(健檢與自癒同一把)。"""
     import copycat.live.stock_source as stock_mod
     from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, stock_mod, "StockQuoteSource")
-    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: True)
+    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: clock)
 
     getattr(app_mod, factory)(_CAL)
     gate = seen["kwargs"]["in_trading_hours"]
@@ -302,9 +303,7 @@ def test_stock_and_index_heal_gate_ands_the_calendar(
     monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
     assert gate() is False
     monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
-    assert gate() is True
-    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: False)
-    assert gate() is False, "交易日的盤外仍不得自癒"
+    assert gate() is clock, "交易日仍要 AND 盤中時段(盤外不得 churn)"
 
 
 def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch) -> None:

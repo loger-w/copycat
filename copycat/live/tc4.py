@@ -89,7 +89,7 @@ _HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
 
 
-def _always_active() -> bool:
+def always_active() -> bool:
     """`heal_active` 預設:不設閘 = 全時段自癒(盤別閘由各 source 建構子帶)。"""
     return True
 
@@ -261,7 +261,7 @@ class TC4QuoteSource:
         #: R2「單 symbol 曾有推播後靜默」門檻(秒);None = R2 關
         heal_symbol_silence_secs: float | None = None,
         #: 只在回 True 時自癒(盤外不 churn)
-        heal_active: Callable[[], bool] = _always_active,
+        heal_active: Callable[[], bool] = always_active,
         heal_poll_secs: float = 5.0,
     ) -> None:
         self._port = port
