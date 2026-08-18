@@ -55,8 +55,11 @@ export function futuresBarsToAccum(input: Input): StockAccum {
       // 未分類 = 總量扣掉已判定的兩側。`uv/dv` 缺欄(DK 路徑)→ u = v,說明列的判定率
       // 印 0% 是**誠實呈現**不是壞掉;夾制 0 是防畸形資料在畫面上長出負數量。
       u: Math.max(0, b.v - uv - dv),
-      h: b.h,
-      l: b.l,
+      // h / l 與 c 同一把「> 0 才是價」的尺(code review A-2):TC4 只壞一欄時 l=0 會
+      // 進 `accum.low` → 幾何的 `norm` 把它擋成 null,日低標記靜默消失、對稱域也少摺
+      // 真實低點。頂替值取該分鐘收盤(= 沒有更好的資訊時最保守的極值)。
+      h: b.h > 0 ? b.h : b.c,
+      l: b.l > 0 ? b.l : b.c,
     });
     // 價位別成交量:1K 沒有逐筆價量,分鐘收盤 × 該分鐘總量是唯一可得的折法。
     // key = **5 點桶的桶心** `snapDown(c) + tickOf(c)/2` —— `buildVpBars` 的帶界取
