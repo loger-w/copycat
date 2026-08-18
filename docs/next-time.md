@@ -1,3 +1,21 @@
+## 2026-08-18(fix/tc4-realtime-refcount-kill 開盤全站零推播 root cause 留尾)
+
+- [ ] **shutdown 保證 LOGOUT**:09:00:49 那次是 uvicorn graceful shutdown 但 lifespan 沒跑完就被 run.ps1 `taskkill /T /F`
+  收掉(TC4 log 直到 60s 後 reap 才 `RemoveLoginInfo`);sources `close()` 有 UNSUB+Disconnect 但沒機會執行。
+  候選 = run.ps1 Ctrl+C 後先等 lifespan(輪詢 :8721 消失、上限 ~10s)再 taskkill;或 app lifespan 把 capital-com
+  執行緒收尾放到 TC4 sources close 之後。有自癒後不再是必要條件,但少一輪 ~60s 暗窗。
+- [ ] **TXO session 與 futures session 雙持 `TXF.HOT` 同 key**:單 session UNSUB→SUB 永遠到不了 count 0,靠第 3 次
+  heal 的 window variant 才救得回(多一輪 backoff)。候選 = TXO source 的 SPOT 訂閱改用不同窗(例如 EndTime 07)或
+  由 futures_engine 單持、TXO 讀 futures.state。
+- [ ] **futures_engine leaf fallback 的註解與 07-28 事實一起改口**:HOT 零推播的真因不是「跨 session 只推一邊」而是
+  reap 殺 key;leaf 仍有效是因為 leaf 是新 symbol/新 key。註解 `futures_engine.py:117` 與 `corr_engine.py:6/149`、
+  `corr_config.py:7`、`app.py:775` 都引用舊說法,下次動這些檔時順手校正(本輪不動 server/*.py)。
+- [ ] **prod 復活側車 `holder_sidecar.py`(scratchpad)不入 repo**:它退訂時會帶走 symbol feed;fix 上線後就停,
+  再需要時從 TC4 log 的 `AddSubQuoteCount` 抓 prod key 重做即可(repro.md 有做法)。
+- [ ] **TC4 QuoteZMQService log(`C:\TC4\APPs\TCoreRelease\Logs\QuoteZMQService-YYYYMMDD-0.log`)是排查訂閱問題的第一
+  現場**:`Add/RemoveSubQuoteCount` / `ReqSubQuote` / `RemoveLoginInfo` / `ExecuteCheckPingTime` 全有;ops-discipline
+  skill 補一節「零推播先看這份 log」。
+
 ## 2026-08-18(mod/signal-denoise 個股訊號降噪留尾)
 
 - [ ] **真 tick 減量對照(驗證窗口 2026-08-18 盤中)**:回放(1 分 K 近似)dwell 300 讓 CDP 事件 127→89(−29.9%);

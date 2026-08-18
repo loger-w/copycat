@@ -20,14 +20,21 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
 - **現版 `SUBQUOTE REALTIME` 必帶 StartTime/EndTime**(官方 wrapper SubQuote 未帶會 fail,
   見 docs/research/2026-07-18-txo-chain-probe.md)。client 是 `pyzmq` + asyncio,不是 httpx/aiohttp,
   新接 service 不要照貼 trash-cmoney 的 httpx pattern。(Trigger:寫 TC4 client)
-- **TC4 同 symbol 跨 session 只推一邊**(2026-07-28 夜盤三次重啟實證):TXO runtime 已訂
-  `TC.F.TWF.TXF.HOT` 時,futures engine 同 symbol SUBQUOTE 回 OK 但永收不到推播。解法 = 訂實際
-  月份 leaf 契約(symbol 字串不同即無衝突;futures_engine leaf fallback:resolve 已知後寬限 3s
-  仍零推播才補訂,換月靠跨日清 p 重武裝)。**2026-07-30 補實證:leaf fallback 有前提(要先由
-  推播解析出契約月份,全部商品零推播時啟動不了),且 futures_engine 會間歇性整段零推播**
-  (實測兩個相反狀態並存,觸發條件未定位)。**新引擎不要假設「讀既有 engine 的 state 一定拿得到
-  行情」**——要嘛自己有 fallback,要嘛把「上游空著」當正常狀態處理(corr_engine 選後者:base 腿
-  無資料回 None 不假造)。修法候選見 `docs/next-time.md`。(Trigger:新引擎訂既有模組已訂的 symbol、或讀既有 engine state 當資料源)
+- **TC4 REALTIME 訂閱的真實模型(2026-08-18 以 `C:\TC4\APPs\TCoreRelease\Logs\QuoteZMQService-*.log`
+  + 受控 probe 實證;取代 07-28「同 symbol 跨 session 只推一邊」的錯誤結論)**:
+  (a) 推播是**單一 PUB port(54322)廣播**,所有 session 都收得到所有 symbol 的 REALTIME,不存在「只推一邊」;
+  (b) TC4 refcount 以 **key = `symbol|DataType|StartTime|EndTime`** 計(log `Add/RemoveSubQuoteCount(...) count:N, SumSubCount:M`),
+  但**上游 feed 以 symbol 為單位**:key count 0→1 才 `ReqSubQuote(symbol)`;**任一把 key SumSubCount 歸 0 → 上游退訂整個
+  symbol,同 symbol 其他 key(count 仍 >0)一起斷,之後對那些 key 再 SUBQUOTE 因 count>0 不重掛上游 → 永久零推播**;
+  (c) 沒 LOGOUT 就死的 process(taskkill /F、crash)其 session 約 60s 後被 `ExecuteCheckPingTime` reap,reap 時它獨持的 key
+  (夜盤窗、昨日窗、舊 corr 全天窗…)歸零 → 殺掉新 server 同 symbol 的活 key。**這就是每次重啟後 ~60s「訂閱成功但零推播」
+  的根因**(07-28 夜盤三次重啟、07-30 futures 間歇零推播、08-13 index REALTIME 靜默、08-17/18 全站零推播皆同一機制)。
+  (d) 復活條件:讓某把 key 走 count 0→1 —— 自己是唯一持有者時 UNSUB→SUB 即可;多持(TXF.HOT 由 TXO+futures 雙 session
+  持有、外部 probe 也持)時只有**換一把新 key(window variant)**才會觸發 `ReqSubQuote`,且新 key 一旦退訂 symbol 又斷。
+  修法 = source 層零推播自癒(R1 session 靜默 / R2 symbol 靜默 / 個股 R3 health-check 重掛 + 第 3 次起 window variant),
+  見 `.claude/bug/tc4-realtime-refcount-kill/`。**probe 腳本收工必 UNSUB + Disconnect,且不要用 prod 的窗訂 prod 的 symbol**
+  (退訂時會把 prod 的 feed 一起帶走)。leaf fallback(futures_engine)仍保留:leaf 是不同 symbol,天然新 key。
+  (Trigger:重啟後零推播 / 新引擎訂既有模組已訂的 symbol / 寫任何 TC4 probe)
 - **同 symbol 的歷史一律從「持有該 symbol REALTIME 訂閱的那條 session」問**(2026-07-30 通則):
   加權 `IX0001` 的 REALTIME 與當日 1K 回補都在 index session(`app.py` `_default_index_source()`
   獨立 session),從個股 session 問同一檔有把推播搶走的風險,失效樣態是「訂閱成功但零推播」

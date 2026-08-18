@@ -103,3 +103,17 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   realtime ±1 tick 抖動(liveP 路徑真的變);port 走 argv。盤外 `useGroupSnapshots` 不輪詢 →
   fake 重啟後首輪 snapshot 若還在回補,卡片停「回補中…」直到重整(非 bug)。
   (Trigger:起 fake server 驗個股 / 群組 UI)
+
+## 零推播 / 訂閱異常排查順序(2026-08-18 開盤全站零推播實證)
+
+1. **先看 TC4 自己的 log**:`C:\TC4\APPs\TCoreRelease\Logs\QuoteZMQService-YYYYMMDD-0.log`(每天一份、盤中 50MB+)。
+   `grep "<symbol>|REALTIME|"` 追一把 key 的 `AddSubQuoteCount / RemoveSubQuoteCount(... count:N, SumSubCount:M)` 生命史;
+   `ReqSubQuote()` = 真的向上游掛(只在 key count 0→1 時出現);`RemoveLoginInfo` + `ExecuteCheckPingTime` = reap 殭屍 session
+   (無 LOGOUT 的 process 死後 ~60s)。任一 key SumSubCount 歸 0 之後同 symbol 全死 → 見 tc4-market-facts「REALTIME 訂閱的真實模型」。
+2. server 側:`py-spy dump --pid <pid>`(.venv 已裝)看 `_listen_loop` 是否全在 `sock.recv()` 閒置(閒置 = TC4 沒發,不是我們卡住);
+   `/api/stock/state/<code>` 的 `no_data/book/meta` 與 `/api/futures/state` 的 `t` 是否凍結。
+3. 判別 probe(scratchpad 一次性腳本):訂 **prod 沒訂過的 symbol**(如 2330)驗 TC4 基建;再訂 prod 的 symbol **換一把窗**
+   (EndTime+1h)看是否活 —— 活 = key 被殺,不是 TC4 壞。**probe 一律 UNSUB + Disconnect 收工,且不要用 prod 的窗訂 prod 的 symbol**
+   (退訂會把 prod feed 一起帶走)。
+4. 不重啟的止血:側車 process 用變體窗持有 prod 全部 key(從 TC4 log 抓 `AddSubQuoteCount(<prod session>,…|REALTIME|…)`),
+   PUB 是廣播所以 prod 立刻復活;fix 上線後再停側車(停掉那刻 feed 會再斷一次,由自癒接手)。
