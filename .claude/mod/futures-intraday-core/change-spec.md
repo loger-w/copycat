@@ -191,6 +191,7 @@ export function futuresBarsToAccum(input: {
 | 〃 | 「壞值 / 別頁的值 → 退回 intraday(不把 'm7' 放行)」:69-74 | **該紅**(`[amendment 2026-08-18: review R2]`) | bad 清單移除 `"m7"`,改補 `"m11" / "m0" / "m61"`;案名括號改「不把 m11 這種白名單外的值放行」 |
 | 〃 | futMinutesOf / 其餘 storage 案 | 不該紅 | |
 | `FuturesPage.test.tsx` | 全檔 | 不該紅 | 不引用分時 svg 語彙(current-state §1.4);若因 core 多掛 hook(useChartToggles / RO)而需 stub → `test-infra-fix` |
+| `allday.test.ts` | 既有案 | 不該紅、既有斷言不動;**新 export 的新案追加於檔尾**(`[amendment 2026-08-18: code review B-3]`,取代下列「不改一字」對本檔的表述) | |
 | `App.test.tsx` 期貨 tab 案(:400-521,含 :515「期貨商品選擇寫入 localStorage」)| 全部 | 不該紅(`[amendment 2026-08-18: review R5]`) | 間接掛出 FuturesChart;core futures 態不打任何新 endpoint(`useStockOverlay` enabled=false、`useChartToggles` 只碰 localStorage、無 RO 走 800×260);[green] 後列入回歸清單 |
 | `StockIntradayChart*.test` / `GroupGridView*.test` / `MarketChart.test` / `MarketPane*.test` / `stock-intraday-svg.test` / `time-labels.test` / `allday.test` | 全部 | **不該紅(SC-9 / W-1 / W-9)**,不改一字 | |
 
@@ -209,6 +210,7 @@ export function futuresBarsToAccum(input: {
 10. 兩 pane 或多 tab 共用 toggles(全站 localStorage):期貨頁關 VP → 個股頁也關(既有跨頁語意,同 index R4)。
 11. hover 落在**無 bar 的分鐘**(夜盤薄量常見;近全軸 0.64 單位/分鐘,反演不 snap 最近):只有 crosshair-h + 價標,無十字垂直線 / readout 資料欄(core 既有分解退化,不是 bug;KR-5)。
 12. live 佔位分鐘(尚無 1K)為最新分鐘:readout 量 / 外 / 內 印「-」,副圖該格高 0(R4)。
+13. 末根 bar `c <= 0` 且 live 同索引(`[amendment 2026-08-18: code review B-4]`):`tailIndex`(gate 4)仍以該根為末點(W-4 逐字),adapter 已略過該根 → live 走佔位格 v=0、量欄「-」;**刻意**:c=0 的分鐘本就不該報量,「-」比報舊值誠實;adapter 測試釘住。
 
 ## 5. 觀感差異(換元件的必然變化,不算破壞)
 
@@ -243,6 +245,8 @@ export function futuresBarsToAccum(input: {
 
 無對外 API / 資料格式變更。localStorage:`FUT_CHART_MODE_KEY` 值域擴大(舊值皆合法);`CHART_TOGGLES_KEY` 多一讀寫者(schema 不動)。
 無 migration;可逆見 §6。
+`[amendment 2026-08-18: code review B-5]` 副作用:期貨 tab 冷開即掛 `useChartToggles` → 舊存檔 v<2 的一次性 bb 升級寫入多一個觸發入口(與個股頁同源同語意);verification 回歸清單記一行。
+`[amendment 2026-08-18: code review B-2b]` SC-4 桶心口徑(`snapDown(c)+2_500`)由 adapter 測試承擔,渲染層只數 `vp-bar` 根數。
 
 ## 9. Known risks
 
@@ -253,3 +257,6 @@ export function futuresBarsToAccum(input: {
 - KR-5 近全軸 hover 命中率:1139 索引壓進 724 單位繪圖區(渲染 ~1200px 時 ~1 索引/px),無 bar 分鐘反演回 null → 十字與資料欄退化;verification 記真環境夜盤 hover 目視;改善候選 = futures 態「±N 索引最近 snap」(動白名單,留 next-time)。
 - KR-4 副圖 1140 根 1 單位寬 rect 每 tick 重建(EnergySub memo 依 bars identity → 每次 accum 重折都重建):實測 hover 是否掉幀,掉幀則
   candidate = 副圖改 path 單元素(另案)。
+
+---
+self_review_head: 902bea69(code review round 1:P0/P1 零;P2×10 → 6 修(b3b7d1ae/0ccbd1a8/641f25e3/34b9681e/902bea69 + spec 補記)、A1/A5 入 next-time;post-fix 全量 gate 見 verification.md)

@@ -1,0 +1,7 @@
+{"captured_at":"2026-08-18T18:33+08:00","source":"vite dev 5174 → prod 8721(TC4 真資料,TMF 夜盤)",
+ "fut_mode_storage_after_click_7分":"m7",
+ "intraday_viewBox":"0 0 800 258","sub_viewBox":"0 0 800 76","svg_rect_px":{"width":2190,"height":706},
+ "toggles":["均價:on","CDP:off(期貨分時本輪不提供 CDP/MA/成交點)","MA:off(同)","量分佈:on","成交點:off(同)"],
+ "hlines":["撐 45000・OI 2707口・2026-08-18 / label 撐 45000"],"vp_bars":179,
+ "x_labels":["09:00","11:00","13:00","15:00","18:00","21:00","00:00","03:00","05:00"],
+ "document_scroll":[1271,1271],"futures_page_scroll":"none(唯一捲動容器為個股頁自選側欄)"}
