@@ -42,8 +42,19 @@ class CorrQuoteSource(TC4QuoteSource):
         api: Any | None = None,
         session: str | None = None,
         poll_wait_secs: float = 1.0,
+        heal_silence_secs: float | None = 120.0,
+        heal_symbol_silence_secs: float | None = 240.0,
     ) -> None:
-        super().__init__(port, api=api, session=session, poll_wait_secs=poll_wait_secs)
+        # 門檻放寬一倍:海外腿(SGX/CBOT/CME)時段錯開、成交稀疏,台指門檻會把
+        # 「這條腿現在本來就沒人交易」誤判成零推播。不設盤別閘 —— 全天窗本就跨時段。
+        super().__init__(
+            port,
+            api=api,
+            session=session,
+            poll_wait_secs=poll_wait_secs,
+            heal_silence_secs=heal_silence_secs,
+            heal_symbol_silence_secs=heal_symbol_silence_secs,
+        )
         self._on_message: Callable[[dict], None] | None = None
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
