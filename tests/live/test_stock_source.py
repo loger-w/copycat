@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from typing import Callable
 
 import pytest
@@ -514,6 +515,110 @@ class TestNoDataHealthCheck:
         src.subscribe_symbol("2330")
         threading.Event().wait(0.1)
         assert flagged == []
+
+
+class TestNoDataResubscribes:
+    """T5(R3):訂閱後零推播不只通報 —— 還要重掛,並以退避持續到 seen 或退訂。
+
+    08-18 開盤的個股面是「boot 起就 no_data」:健檢通報完就沒有下文,那把 key 的
+    上游 feed 已被 TC4 reap 掉,不重掛就永遠不會回來(repro.md 觸發鏈 4)。
+    """
+
+    @staticmethod
+    def _src(sent: list[dict], **kw: object) -> StockQuoteSource:
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            return ok()
+
+        return StockQuoteSource(
+            api=FakeApi(handler),
+            session="s1",
+            trade_date="2026-07-21",
+            in_trading_hours=lambda: True,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    @staticmethod
+    def _subquotes(sent: list[dict]) -> list[dict]:
+        return [o for o in sent if o["Request"] == "SUBQUOTE"]
+
+    def test_no_data_resubscribes_and_notifies_only_once(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=3600.0)  # 自動 timer 不在本測試窗內觸發
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        src.subscribe_symbol("2330")
+        sent.clear()
+
+        src._health_check("2330")
+        assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+        assert flagged == ["2330"]
+
+        sent.clear()
+        src._health_check("2330", 2)
+        assert [o["Request"] for o in sent] == ["UNSUBQUOTE", "SUBQUOTE"]
+        assert flagged == ["2330"]  # 通報維持只發第一次(engine 的 no_data 語意不變)
+
+    def test_seen_symbol_is_not_resubscribed(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=3600.0)
+        src.subscribe_symbol("2330")
+        src.handle_raw(
+            "REALTIME:"
+            + json.dumps(
+                {"DataType": "REALTIME", "Quote": {"Symbol": "TC.S.TWS.2330", "Security": "2330"}}
+            )
+        )
+        sent.clear()
+        src._health_check("2330")
+        assert sent == []
+
+    def test_unsubscribed_symbol_is_not_resubscribed(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=3600.0)
+        src.subscribe_symbol("2330")
+        src.unsubscribe_symbol("2330")
+        sent.clear()
+        src._health_check("2330", 2)
+        assert sent == []
+
+    def test_backoff_schedule_caps_at_60s(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=10.0)
+        src.subscribe_symbol("2330")
+        delays: list[int] = []
+        for attempt in range(1, 6):
+            before = time.monotonic()
+            src._health_check("2330", attempt)
+            delays.append(round(src._heal_next["TC.S.TWS.2330"] - before))
+        assert delays == [10, 20, 40, 60, 60]
+
+    def test_third_attempt_switches_window(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=3600.0)
+        src.subscribe_symbol("2330")
+        sent.clear()
+        for attempt in (1, 2, 3):
+            src._health_check("2330", attempt)
+        # 同一把 key 兩次沒救回 → 換窗(EndTime +1h);個股日盤窗 00–06 → 07
+        assert self._subquotes(sent)[-1]["Param"]["EndTime"] == "2026072107"
+        assert src._window_variant["TC.S.TWS.2330"] == 1
+
+    def test_silence_keeps_rescheduling_until_seen(self) -> None:
+        sent: list[dict] = []
+        src = self._src(sent, no_data_secs=0.01)
+        flagged: list[str] = []
+        src.set_on_no_data(flagged.append)
+        try:
+            src.subscribe_symbol("2330")
+            deadline = time.monotonic() + 3.0
+            while len(self._subquotes(sent)) < 3 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            # 初次訂閱 + 至少兩輪重掛(單發一次的舊行為只會有 1 筆)
+            assert len(self._subquotes(sent)) >= 3
+            assert flagged == ["2330"]
+        finally:
+            src.unsubscribe_symbol("2330")  # 停掉重掛鏈(下一輪健檢早退)
 
 
 class TestHealDefaults:
