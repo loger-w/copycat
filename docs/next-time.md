@@ -12,6 +12,13 @@
   `corr_config.py:7`、`app.py:775` 都引用舊說法,下次動這些檔時順手校正(本輪不動 server/*.py)。
 - [ ] **prod 復活側車 `holder_sidecar.py`(scratchpad)不入 repo**:它退訂時會帶走 symbol feed;fix 上線後就停,
   再需要時從 TC4 log 的 `AddSubQuoteCount` 抓 prod key 重做即可(repro.md 有做法)。
+- [ ] **自癒閘週六凌晨 00:00–05:00 不開**(round-1 C-5 逐字用 `is_trading_day(today)`):週五夜盤跨午夜那 5 小時若 key 被殺,
+  要到週一 08:45 閘開才自癒。要收 = `_heal_gate` 對 TXO/futures 改「hour < 6 看前一日是否交易日」。
+- [ ] **corr 海外腿在自身休市段落入 R2「從未推播」母體**(C-6 放寬後):每腿最慢 300s 一發 UNSUB+SUB、每 3 發換窗;
+  上限 6 腿 × 12 發/小時。要收 = corr 每腿各自時段閘。
+- [ ] **rollover 舊窗 key 洩漏(既有行為,非本輪引入)**:stage 2 `_resub` 的 UNSUB 用新日期窗,前一交易日的 key 留在 session 上直到
+  session 死;死時歸零會把 symbol 上游帶走(正是殭屍 reap 殺 key 的素材)。要收 = set_trade_date 前先對舊窗逐 symbol UNSUB。
+- [ ] `tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` flake 本輪又見(3 跑 1 紅),與 08-05 memory 同一支,仍待排查。
 - [ ] **TC4 QuoteZMQService log(`C:\TC4\APPs\TCoreRelease\Logs\QuoteZMQService-YYYYMMDD-0.log`)是排查訂閱問題的第一
   現場**:`Add/RemoveSubQuoteCount` / `ReqSubQuote` / `RemoveLoginInfo` / `ExecuteCheckPingTime` 全有;ops-discipline
   skill 補一節「零推播先看這份 log」。
