@@ -2,9 +2,13 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FuturesChart, INTRADAY_VB_W } from "@/components/futures/FuturesChart";
-import { ALLDAY_LEN, alldayIndexOf } from "@/lib/allday";
+import { FuturesChart } from "@/components/futures/FuturesChart";
+import { ALLDAY_WINDOW, alldayIndexOf } from "@/lib/allday";
+import { svgBox } from "@/lib/chart-frame";
 import { FUT_CHART_MODE_KEY } from "@/lib/constants";
+import { fmtIndexPts } from "@/lib/format";
+import { futuresBarsToAccum } from "@/lib/futures-accum-adapter";
+import { buildIntradayGeometry, minuteToX } from "@/lib/stock-intraday-svg";
 import { wrap } from "@/test-utils";
 import type { Bar } from "@/lib/candle";
 import type { CapitalPosition, FuturesProductState, OiLevelsResponse } from "@/types";
@@ -64,9 +68,56 @@ let oiBody: unknown;
 let oiStatus: number;
 let positionsBody: unknown;
 
-/** 每個 x 座標在 `points` 字串裡的形(pts 一律 toFixed(1))。 */
+/** core 的 viewBox(jsdom 無 ResizeObserver → 退回 `IntradayChartCore` 的預設)。 */
+const VB_W = 800;
+const VB_H = 260;
+
+/** 每個 x 座標在主價線 `points` 字串裡的形(core 的 `pts` 一律 toFixed(1))。 */
 function xOf(index: number): string {
-  return ((index / ALLDAY_LEN) * INTRADAY_VB_W).toFixed(1);
+  return minuteToX(index, VB_W, ALLDAY_WINDOW).toFixed(1);
+}
+
+/** `last-dot` 的 `cx`(直接吃 `lastPt.x`,不經 toFixed)。 */
+function cxOf(index: number): string {
+  return String(minuteToX(index, VB_W, ALLDAY_WINDOW));
+}
+
+/** 分時態的 svg(core 的 `ariaLabel`);K 線態 / 空態下不存在 → 用它指認「走的是分時」。 */
+function findIntraday(): Promise<HTMLElement> {
+  return screen.findByRole("img", { name: "期貨近全時段分時走勢" });
+}
+
+/** 主價線的 x 座標串。
+ *
+ *  無昨收(`state={null}` → `meta.ref` null)→ 單條 `stroke-accent`;
+ *  有昨收 → 紅綠雙段(同一份 points,取上半段那條)。均價線是 `stroke-ink`,不會誤中。 */
+function mainLineXs(container: HTMLElement): string[] {
+  const line = container.querySelector("polyline.stroke-accent, polyline.stroke-bull");
+  return (line?.getAttribute("points") ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter((s) => s !== "")
+    .map((p) => p.split(",")[0]!);
+}
+
+/** ResizeObserver 的最小替身(樣板同 `MarketPane.size.test`):`observe` 當下同步餵一筆。 */
+class FakeResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(node: Element): void {
+    this.cb(
+      [{ target: node, contentRect: { width: 1000, height: 500 } } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  unobserve(): void {}
+
+  disconnect(): void {}
 }
 
 beforeEach(() => {
@@ -129,10 +180,9 @@ describe("FuturesChart 分時圖(SC-1)", () => {
       bars: [bar("2026-08-05 13:45", 23_000_000), bar("2026-08-05 15:01", 23_020_000)],
       meta: META,
     };
-    wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
-    const line = await screen.findByTestId("allday-line");
-    const xs = (line.getAttribute("points") ?? "").split(" ").map((p) => p.split(",")[0]);
-    expect(xs).toEqual([xOf(alldayIndexOf("1345")!), xOf(alldayIndexOf("1501")!)]);
+    const { container } = wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
+    await findIntraday();
+    expect(mainLineXs(container)).toEqual([xOf(alldayIndexOf("1345")!), xOf(alldayIndexOf("1501")!)]);
     // 「相鄰」的定義寫死在斷言裡:兩個索引差 1 = 折線上只隔一個 slot
     expect(alldayIndexOf("1501")! - alldayIndexOf("1345")!).toBe(1);
   });
@@ -146,17 +196,138 @@ describe("FuturesChart 分時圖(SC-1)", () => {
       ],
       meta: META,
     };
-    wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
-    const line = await screen.findByTestId("allday-line");
-    const xs = (line.getAttribute("points") ?? "").split(" ");
-    expect(xs.length).toBe(2);
+    const { container } = wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(2);
   });
 
   it("meta.source=unavailable → 進行式空態文案(不下「沒有資料」的結論)", async () => {
     barsBody = { bars: [], meta: { ...META, source: "unavailable" } };
-    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await waitFor(() => expect(screen.getByText("暫無資料(TC4 未回應)")).toBeTruthy());
-    expect(screen.queryByTestId("allday-line")).toBeNull();
+    expect(container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')).toBeNull();
+  });
+});
+
+/** 換 `IntradayChartCore`(mode="futures")後的語彙(change-spec SC-1/2/3/4/7)。
+ *
+ *  這一組鎖的是**接線**:軸 / 時間文字 / 價位口徑 / hlines 有沒有真的注進 core。
+ *  core 自身的契約在 `StockIntradayChart.futures.test.tsx`,不在這裡重測。 */
+describe("FuturesChart 分時圖 core 語彙", () => {
+  /** 三段都有 bar(日盤兩根 + 夜盤一根),h/l 由 `bar()` 給成 c±1 元 → 高低標記畫得出來。 */
+  const CORE_BARS = [
+    bar("2026-08-05 09:00", 22_960_000),
+    bar("2026-08-05 09:30", 23_000_000),
+    bar("2026-08-05 15:01", 22_980_000),
+  ];
+
+  beforeEach(() => {
+    barsBody = { bars: CORE_BARS, meta: META };
+    // jsdom 的 getBoundingClientRect 恆 0 → hover 座標換算需要真實寬高(frontend-testing 慣例)
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, right: VB_W, bottom: VB_H,
+      width: VB_W, height: VB_H, x: 0, y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderCore() {
+    return wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+  }
+
+  it("SC-2 底部時間標籤 = 注入的近全軸九個(不是現貨窗的 09:00–13:00)", async () => {
+    const { container } = renderCore();
+    await findIntraday();
+    const labels = [
+      ...container.querySelectorAll('svg[aria-label="期貨近全時段分時走勢"] text.fill-time'),
+    ];
+    expect(labels.map((t) => t.textContent)).toEqual([
+      "09:00", "11:00", "13:00", "15:00", "18:00", "21:00", "00:00", "03:00", "05:00",
+    ]);
+  });
+
+  it("SC-3 均價線末點標籤 / 當日高低環 / 現價圈 / 左緣三格刻度都在", async () => {
+    renderCore();
+    await findIntraday();
+    expect(screen.getByTestId("edge-price-vwap")).toBeTruthy();
+    expect(screen.getByTestId("day-high")).toBeTruthy();
+    expect(screen.getByTestId("day-low")).toBeTruthy();
+    expect(screen.getByTestId("last-dot")).toBeTruthy();
+    // upper/lower 傳 null → 對稱 autofit 的三格(上 / 昨收 / 下)
+    expect(screen.getAllByTestId("y-tick-price").length).toBe(3);
+  });
+
+  it("SC-4 成交量副圖 + 說明列 + toggle 五顆(CDP / MA / 成交點 反灰)+ VP", async () => {
+    const { container } = renderCore();
+    await findIntraday();
+    expect(container.querySelector('svg[aria-label="成交量"]')).toBeTruthy();
+    expect(container.querySelector("figcaption")).toBeTruthy();
+    const defs: readonly (readonly [string, boolean])[] = [
+      ["均價", false],
+      ["CDP", true],
+      ["MA", true],
+      ["量分佈", false],
+      ["成交點", true],
+    ];
+    for (const [name, off] of defs) {
+      const btn = screen.getByRole("button", { name });
+      expect(btn.hasAttribute("disabled")).toBe(off);
+      if (off) {
+        expect(btn.getAttribute("title")).toBe("期貨分時本輪不提供 CDP/MA/成交點");
+      }
+    }
+    expect(container.querySelectorAll('[data-testid="vp-bar"]').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("SC-1 hover:十字 + 價位標整數點(不 snap 個股 tick)+ 時間標走近全軸 + readout 六欄", async () => {
+    renderCore();
+    const svg = await findIntraday();
+    const idx = alldayIndexOf("0930")!;
+    fireEvent.mouseMove(svg, { clientX: minuteToX(idx, VB_W, ALLDAY_WINDOW), clientY: 100 });
+
+    expect(screen.getByTestId("crosshair-v")).toBeTruthy();
+    expect(screen.getByTestId("crosshair-h")).toBeTruthy();
+    expect(screen.getByTestId("time-tag-text").textContent).toBe("09:30");
+    expect(screen.getByTestId("chart-readout").children.length).toBe(6);
+
+    // 價標口徑:同一份 accum 走 core 幾何反演 → 整數點,不經 `snapDown`
+    const accum = futuresBarsToAccum({
+      bars: CORE_BARS,
+      live: null,
+      ref: STATE.ref,
+      name: STATE.name,
+      code: "TXF",
+    });
+    const g = buildIntradayGeometry(
+      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+      { width: VB_W, height: VB_H },
+      ALLDAY_WINDOW,
+    );
+    expect(screen.getByTestId("price-tag-text").textContent).toBe(fmtIndexPts(g.priceAtY(100)));
+  });
+
+  it("SC-7 有 ResizeObserver → 主 / 副圖 viewBox 高按量測後的 260:70 拆分", async () => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    const { container } = renderCore();
+    const svg = await findIntraday();
+    const box = svgBox({ width: 1000, height: 500 }, VB_W);
+    const mainH = Math.round((box.viewBoxHeight * 260) / 330);
+    expect(box.usable).toBe(true);
+    expect(svg.getAttribute("viewBox")).toBe(`0 0 ${VB_W} ${mainH}`);
+    expect(container.querySelector('svg[aria-label="成交量"]')!.getAttribute("viewBox")).toBe(
+      `0 0 ${VB_W} ${box.viewBoxHeight - mainH}`,
+    );
+  });
+
+  it("SC-7 無 ResizeObserver(jsdom 預設)→ 退回 core 預設 800×260", async () => {
+    expect(typeof ResizeObserver).toBe("undefined");
+    renderCore();
+    const svg = await findIntraday();
+    expect(svg.getAttribute("viewBox")).toBe(`0 0 ${VB_W} ${VB_H}`);
   });
 });
 
@@ -200,9 +371,11 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     // 05:00 那根屬**前一交易日**(2026-08-04)的夜盤後半;08:46 的 live 點屬 08-05。
     // 此案 tail.index(1139)> live.index(0),兩道 gate 同時成立 → 只證「有擋」。
     vi.setSystemTime(new Date(2026, 7, 5, 8, 45, 30));
-    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    await screen.findByTestId("allday-line");
-    expect(screen.queryByTestId("allday-live")).toBeNull();
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    // gate 擋下 = 序列不追加 live 分鐘、現價圈落在末根 bar 的 x(不是「圈不見了」)
+    expect(mainLineXs(container).length).toBe(2);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0500")!));
   });
 
   it("錨定日 gate 獨立於時鐘落後守衛:末根 = 前一交易日 08:46、時鐘 = 次日 08:47 → 不畫", async () => {
@@ -211,12 +384,28 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     // 擋下 live 點的只剩錨定日不同這一條(短路它 → 假 live 點被畫在今日圖上)。
     barsBody = { bars: [bar("2026-08-04 08:46", 22_900_000)], meta: META };
     vi.setSystemTime(new Date(2026, 7, 5, 8, 47, 0));
-    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    await screen.findByTestId("allday-line");
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
     // 前置條件寫死在斷言裡:兩個索引的大小關係就是「守衛沒被觸發」的證據
     expect(alldayIndexOf("0846")).toBe(0);
     expect(alldayIndexOf("0848")).toBe(2);
-    expect(screen.queryByTestId("allday-live")).toBeNull();
+    expect(mainLineXs(container).length).toBe(1);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(0));
+  });
+
+  it("gate 4 單獨成立:末根 bar 索引 > live 索引(bars 至 D 10:00、時鐘 D 09:30)→ 不追加", async () => {
+    // 錨定日相同、live 分鐘不在死區 → 前三道 gate 全不成立,擋下的只剩「時鐘落後資料」。
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 10:00", 23_000_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 30, 0));
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    // 前置條件寫死在斷言裡:live 落 09:31,末根 bar 的索引在它之後
+    expect(alldayIndexOf("1000")!).toBeGreaterThan(alldayIndexOf("0931")!);
+    expect(mainLineXs(container).length).toBe(2);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1000")!));
   });
 
   it("同一錨定日:live 點以「當前分 + 1」為終點標記落在序列尾", async () => {
@@ -225,9 +414,11 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
       meta: META,
     };
     vi.setSystemTime(new Date(2026, 7, 5, 9, 35, 30));
-    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    const live = await screen.findByTestId("allday-live");
-    expect(live.getAttribute("cx")).toBe(xOf(alldayIndexOf("0936")!));
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    // live 分鐘是**新索引** → 序列多一格,現價圈落在它上面
+    expect(mainLineXs(container).length).toBe(3);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0936")!));
   });
 
   it("live 分鐘落死區(14:30)→ 不畫 live 點", async () => {
@@ -236,9 +427,10 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
       meta: META,
     };
     vi.setSystemTime(new Date(2026, 7, 5, 14, 30, 0));
-    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    await screen.findByTestId("allday-line");
-    expect(screen.queryByTestId("allday-live")).toBeNull();
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(2);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1345")!));
   });
 });
 
@@ -335,7 +527,7 @@ describe("FuturesChart 分時模式的 overlays(SC-7 / SC-11;與 K 線同一套�
   it("本契約部位 → 分時圖畫出均價 hline(label + 線元素)", async () => {
     positionsBody = { positions: [futPos({ qty: 2, avg_price: 23_000 })] };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    await screen.findByTestId("allday-line"); // 確定走的是分時而非 CandleChart
+    await findIntraday(); // 確定走的是分時而非 CandleChart
     await waitFor(() => expect(screen.getByText("均 23000 多2口")).toBeTruthy());
     expect(screen.getAllByTestId("chart-hline").length).toBe(1);
   });
@@ -343,7 +535,7 @@ describe("FuturesChart 分時模式的 overlays(SC-7 / SC-11;與 K 線同一套�
   it("OI 有值 → 分時圖畫出壓/撐 hline(帶外 55000 仍不入選)", async () => {
     oiBody = OI_BODY;
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    await screen.findByTestId("allday-line");
+    await findIntraday();
     await waitFor(() => expect(screen.getByText("壓 23500")).toBeTruthy());
     expect(screen.getByText("撐 22500")).toBeTruthy();
     expect(screen.queryByText("壓 55000")).toBeNull();
@@ -363,7 +555,7 @@ describe("FuturesChart 分時模式的 overlays(SC-7 / SC-11;與 K 線同一套�
       strikes: [{ strike: 21_000, call_oi: 5_000, put_oi: 5_000 }],
     } satisfies OiLevelsResponse;
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    await screen.findByTestId("allday-line");
+    await findIntraday();
     await waitFor(() => expect(screen.getByText("均 23000 多2口")).toBeTruthy());
     expect(screen.queryByText("均 30000 多1口")).toBeNull();
     expect(screen.queryByText("壓 21000")).toBeNull();
