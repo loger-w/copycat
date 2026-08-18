@@ -927,10 +927,11 @@ export function IntradayChartCore({
   // 關掉時回**同一個空陣列語意**的重算即可 —— 依賴沒變就不會重算,不需要另設常數。
   // `w` 直接沿用傳給 `buildIntradayGeometry` 的同一個值:寬度另寫一份字面值的話,
   // 幾何與長條會各自依據不同的畫布寬算,bar 的滿寬比例靜默漂掉。
-  // 期貨態不畫 VP:`accum.vp` 由 `foldVp` 折出,而 foldVp 的分鐘窗仍是現貨窗
-  // (本輪不參數化 —— 期貨態既然不畫,參數化只是加一條沒人走的分支)。
+  // 個股期(`stkfut`)態不畫 VP:`accum.vp` 由 `foldVp` 折出,而 foldVp 的分鐘窗仍是現貨窗
+  // (未參數化 —— 個股期既然不畫,參數化只是加一條沒人走的分支)。
   // 直方圖若照畫,08:45–08:59 與 13:31–13:45 的成交會整段缺席而畫面看不出來。
   // index 態同樣不畫:`accum.vp` 是空 Map(指數沒有逐筆量),畫出來是一片空白的假圖層。
+  // `mode="futures"` **照畫**:它的 vp 由 `futuresBarsToAccum` 以近全軸自折,不走 `foldVp`。
   const vpEnabled = toggles.vp && !stkfut && !index;
   const vpBars = useMemo(
     () => (vpEnabled ? buildVpBars(accum.vp, g, w) : []),
