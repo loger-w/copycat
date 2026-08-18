@@ -168,8 +168,10 @@ describe("FuturesChart 模式列(SC-2)", () => {
   it("模式列 15 顆:分時 / 1–10 分 / 15 / 30 / 60 分 / 日K;點「7分」寫 m7", async () => {
     barsBody = { bars: [bar("2026-08-05 09:30", 23_000_000)], meta: META };
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    // 模式列是頂列那一排(toggle 鈕在 core 的 figure 內,分時態才存在)→ 取第一個 div
-    const row = container.querySelector("div > div")!;
+    // 模式列 = 「分時」鈕的直接父層(cr1 B-1:`div > div` 會命中元件根 div,
+    // 綠只是因為斷言跑在 isPending 那一瞬、core 的 toggle 鈕還沒掛出)
+    const row = screen.getByRole("button", { name: "分時" }).parentElement!;
+    expect(container.contains(row)).toBe(true);
     expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
       "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
       "15分", "30分", "60分", "日K",
@@ -424,17 +426,33 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1000")!));
   });
 
-  it("同一錨定日:live 點以「當前分 + 1」為終點標記落在序列尾", async () => {
-    barsBody = {
-      bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 09:30", 23_000_000)],
-      meta: META,
-    };
+  it("同一錨定日:live 點以「當前分 + 1」為終點標記落在序列尾,且 y = state.p", async () => {
+    const bars = [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 09:30", 23_000_000)];
+    barsBody = { bars, meta: META };
+    // live 價刻意 ≠ 末根 c(cr1 B-2a):adapter 若拿末根 bar 的 c 當 live 價,cx 照樣
+    // 正確而圈畫在錯的價位上 —— 兩者同值時 cy 斷言恆綠。
+    const live: FuturesProductState = { ...STATE, p: 23_040_000 };
     vi.setSystemTime(new Date(2026, 7, 5, 9, 35, 30));
-    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    const { container } = wrap(<FuturesChart product="TXF" state={live} resolvedYm="202608" />);
     await findIntraday();
     // live 分鐘是**新索引** → 序列多一格,現價圈落在它上面
     expect(mainLineXs(container).length).toBe(3);
-    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0936")!));
+    const dot = screen.getByTestId("last-dot");
+    expect(dot.getAttribute("cx")).toBe(cxOf(alldayIndexOf("0936")!));
+    const accum = futuresBarsToAccum({
+      bars,
+      live: { index: alldayIndexOf("0936")!, p: 23_040_000 },
+      ref: STATE.ref,
+      name: STATE.name,
+      code: "TXF",
+    });
+    const g = buildIntradayGeometry(
+      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+      { width: VB_W, height: VB_H },
+      ALLDAY_WINDOW,
+    );
+    expect(dot.getAttribute("cy")).toBe(String(g.toY(23_040_000)));
+    expect(g.toY(23_040_000)).not.toBe(g.toY(23_000_000));
   });
 
   it("live 分鐘落死區(14:30)→ 不畫 live 點", async () => {
