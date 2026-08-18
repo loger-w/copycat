@@ -195,6 +195,34 @@ describe("futuresBarsToAccum", () => {
     expect(a.vp.size).toBe(2);
   });
 
+  it("h / l 為 0(TC4 只壞一欄)→ 以該分鐘收盤頂替,不讓 0 進 accum.low 把日低標記與對稱域拉走(cr1 A-2)", () => {
+    const a = futuresBarsToAccum({
+      bars: [
+        bar("2026-08-18 08:46", { c: 23_000_000, h: 23_010_000, l: 0, v: 5 }),
+        bar("2026-08-18 08:47", { c: 22_990_000, h: 0, l: 22_980_000, v: 5 }),
+      ],
+      live: null,
+      ...BASE,
+    });
+    expect(a.minutes.get(0)!.l).toBe(23_000_000);
+    expect(a.minutes.get(1)!.h).toBe(22_990_000);
+    expect(a.high).toBe(23_010_000);
+    expect(a.low).toBe(22_980_000);
+  });
+
+  it("末根 bar c=0 且 live 同索引 → 該 bar 已被 c<=0 閘略過,live 走佔位格 v=0(刻意:c=0 的分鐘本就不該報量;cr1 B-4)", () => {
+    const a = futuresBarsToAccum({
+      bars: [
+        bar("2026-08-18 08:46", { v: 3, uv: 2, dv: 1 }),
+        bar("2026-08-18 08:47", { c: 0, v: 9, uv: 5, dv: 4 }),
+      ],
+      live: { index: 1, p: 23_005_000 },
+      ...BASE,
+    });
+    expect(a.minutes.get(1)).toEqual({ c: 23_005_000, v: 0, o: 0, i: 0, u: 0, h: 23_005_000, l: 23_005_000 });
+    expect(a.volume).toBe(3);
+  });
+
   it("空 bars 且無 live → 空 Map、vwap / high / low / last 皆 null", () => {
     const a = futuresBarsToAccum({ bars: [], live: null, ...BASE });
     expect(a.minutes.size).toBe(0);
