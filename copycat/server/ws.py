@@ -124,9 +124,9 @@ async def relay(
 
     心跳(`_beat`):`heartbeat_secs=None` → **呼叫當下**讀模組常數 `WS_HEARTBEAT_SECS`
     (測試 monkeypatch 得到);`<= 0` 不建 task = 現況行為。每滿一個間隔送一則 `PING`,
-    **定時而非補空窗**(有推播時照送);因為第一則要等滿一個間隔,route 自送的 seed /
-    stream 的首則永遠排在任何 ping 之前。ping 直送 `send_json`,不經 `WsBroadcaster`
-    的 per-client queue。
+    **定時而非補空窗**(有推播時照送);因為第一則要等滿一個間隔,route 自送的 seed 與
+    stream 同步入列的 seed 永遠排在任何 ping 之前;無 seed 的路(index/capital/futures)
+    首則可能是 ping。ping 直送 `send_json`,不經 `WsBroadcaster` 的 per-client queue。
 
     `send_lock` 只序列化「單次 `await send_json`」,**不得**包住 `async for` 迴圈或
     `await queue.get()`:那會讓 `_beat` 在零流量時永遠等鎖 = 心跳靜默失效
