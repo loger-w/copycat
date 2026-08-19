@@ -138,7 +138,11 @@ def _abort(sock: socket.socket) -> None:
 
 
 class TestAbruptDisconnect:
-    def test_no_write_to_dead_transport(self) -> None:
+    def test_no_write_to_dead_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """本測試鎖的是「RST 之後零寫入」這條不變式,應用層心跳是無關變因 ——
+        顯式關掉(`WS_HEARTBEAT_SECS = 0`),計數才只反映推播鏈本身。心跳開啟版本由
+        `TestBroadcastRouteDisconnect::test_no_write_to_dead_transport_with_heartbeat` 另外守。"""
+        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0)
         source = _TickingSource()
         app = create_app(source, throttle_secs=0.02)
         config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", ws="auto")
@@ -712,6 +716,25 @@ class _PingRaisingWebSocket(_FakeWebSocket):
         await super().send_json(data)
 
 
+class _MarkingWebSocket(_FakeWebSocket):
+    """送出中間有一個 await 讓步點的 WS:記 `('in', data)` → `sleep(0)` → `('out', data)`。
+
+    `_FakeWebSocket.send_json` 純同步 append,對 event loop 原子 —— 用它測不出
+    `send_lock` 有沒有守住(刪鎖全綠)。真 `WebSocket.send_json` 會 await 到 transport,
+    中間本來就會讓步,交錯在 prod 是真做得到的事;這個替身只是把那個窗口變成必然。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.marks: list[tuple[str, dict]] = []
+
+    async def send_json(self, data: dict) -> None:
+        self.marks.append(("in", data))
+        await asyncio.sleep(0)
+        self.marks.append(("out", data))
+        await super().send_json(data)
+
+
 async def _one_message() -> AsyncGenerator[dict, None]:
     """產一則後掛住:讓 send 側必然呼叫一次 send_json,再由該次呼叫決定結局。"""
     yield {"n": 0}
@@ -803,32 +826,93 @@ class TestRelay:
         await asyncio.wait_for(relay(websocket, _one_message()), timeout=2)
 
     async def test_heartbeat_ping_when_idle(self) -> None:
-        """SC-1:零推播的流上也要定時收到 ping(前端靜默 watchdog 的唯一依據)。"""
+        """SC-1:零推播的流上也要定時收到 ping(前端靜默 watchdog 的唯一依據)。
+
+        **有界輪詢而非固定時間窗**:原本的「睡 0.07 s 後數 `>= 2`」在 Windows 15.6 ms
+        timer 粒度下零餘裕(實測恆 2)—— 排程一抖就假紅。改成「等到 3 則或 2 s deadline」:
+        心跳真的沒在跑時仍會在 deadline 到期後紅,慢只會慢不會錯(同 `_drain_frames` 的理由)。
+        """
+        loop = asyncio.get_running_loop()
         websocket = _FakeWebSocket()
         task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0.02))
         try:
-            await asyncio.sleep(0.07)
-            assert websocket.sent.count(PING) >= 2, (
-                f"0.07s / 間隔 0.02s 內只送出 {websocket.sent.count(PING)} 則 ping:心跳沒在跑"
+            deadline = loop.time() + 2.0
+            while websocket.sent.count(PING) < 3 and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert websocket.sent.count(PING) >= 3, (
+                f"2s 內(間隔 0.02s)只送出 {websocket.sent.count(PING)} 則 ping:心跳沒在跑"
             )
         finally:
             websocket.disconnect()
             await asyncio.wait_for(task, timeout=2)
 
     async def test_heartbeat_preserves_stream_order(self) -> None:
-        """Edge 1:ping 與推播共用 send lock → 各自完整,推播彼此的相對順序不變。"""
+        """Edge 1:ping 與推播共用 send lock → 各自完整,推播彼此的相對順序不變。
+
+        等「三則推播都到」而非固定 0.14 s 窗:後者只剩 ~47 ms 餘裕,同 T4 的粒度問題。
+        """
+        loop = asyncio.get_running_loop()
         websocket = _FakeWebSocket()
         task = asyncio.ensure_future(
             relay(websocket, _paced_messages(3, 0.03), heartbeat_secs=0.02)
         )
         try:
-            await asyncio.sleep(0.14)
+            deadline = loop.time() + 2.0
+            while (
+                sum(1 for msg in websocket.sent if msg != PING) < 3 and loop.time() < deadline
+            ):
+                await asyncio.sleep(0.01)
             pushed = [msg for msg in websocket.sent if msg != PING]
             assert pushed == [{"n": 0}, {"n": 1}, {"n": 2}], f"推播順序被心跳打亂:{websocket.sent}"
             assert PING in websocket.sent, "有推播時心跳仍應照送(定時,不看流量)"
         finally:
             websocket.disconnect()
             await asyncio.wait_for(task, timeout=2)
+
+    async def test_heartbeat_and_stream_frames_do_not_interleave(self) -> None:
+        """SC-1 的「不與推播 frame 交錯」那半 —— `send_lock` 的守門(review T5)。
+
+        `_FakeWebSocket.send_json` 沒有讓步點 → 單次送出對 event loop 是原子的,
+        把 relay 的 `async with send_lock` 整個拿掉也全綠 = 這條不變式原本無測試守。
+        `_MarkingWebSocket` 在送出中間插一個 `await`,把「交錯做得到」變成必然可觀測:
+        同週期的推播與心跳會落在同一輪 ready queue,無鎖時第二則的 in 會插進第一則的
+        in / out 之間。
+
+        判準寫成「每個 in 的下一個 mark 必須是自己的 out」而不是數則數:前者就是 frame
+        完整性本身,與時序抖動無關 —— 有鎖時恆成立,無鎖時第一次碰撞就紅。
+        """
+        loop = asyncio.get_running_loop()
+        websocket = _MarkingWebSocket()
+        task = asyncio.ensure_future(
+            relay(websocket, _paced_messages(200, 0.01), heartbeat_secs=0.01)
+        )
+        try:
+            deadline = loop.time() + 2.0
+            while loop.time() < deadline:
+                sent_in = [data for kind, data in websocket.marks if kind == "in"]
+                # 兩側都要出過手:只有心跳(或只有推播)的取樣證明不了兩者不交錯
+                if (
+                    len(websocket.marks) >= 24
+                    and PING in sent_in
+                    and any(data != PING for data in sent_in)
+                ):
+                    break
+                await asyncio.sleep(0.01)
+            marks = list(websocket.marks)
+        finally:
+            websocket.disconnect()
+            await asyncio.wait_for(task, timeout=2)
+
+        sent_in = [data for kind, data in marks if kind == "in"]
+        assert len(marks) >= 12, f"取樣不足({len(marks)} 個 mark),不足以證明沒交錯:{marks}"
+        assert PING in sent_in, f"心跳側沒動,無碰撞機會:{marks}"
+        assert any(data != PING for data in sent_in), f"推播側沒動,無碰撞機會:{marks}"
+        # 尾端可能停在「送到一半」的 in(快照時機),奇數個就丟掉最後那個未配對的
+        for i in range(0, len(marks) - 1, 2):
+            (kind_in, data_in), (kind_out, data_out) = marks[i], marks[i + 1]
+            assert (kind_in, kind_out) == ("in", "out") and data_in == data_out, (
+                f"frame 交錯於 marks[{i}:{i + 2}] = {marks[i : i + 2]};完整序列:{marks}"
+            )
 
     async def test_heartbeat_disabled_when_zero(self) -> None:
         """Edge 6:`heartbeat_secs<=0` → 不建 `_beat` task,行為 = 現況。"""
