@@ -6,21 +6,30 @@
  *  heap、不自動回收**。本 app 每則 WS 訊息都讓整棵樹 re-render → 實測 632 筆/秒 ≈ 1.1 MB/s,
  *  看盤數小時後 renderer 膨脹到 10 GB 級 → Aw Snap(證據:docs/research/2026-08-19-browser-crash-scan.md)。
  *
- *  修法 = 定期清掉。只在 `import.meta.env.DEV` 安裝(production build 沒有那段 React 程式,
- *  也不該替別人的效能工具清 buffer);app 自身不用 performance.mark/measure,清除不影響邏輯;
- *  DevTools Performance 錄製在 measure 發出當下就擷取了,事後清 buffer 不影響錄到的 track。 */
+ *  修法 = 條目數到閾值就清。**用 PerformanceObserver 不用 setInterval**:看盤分頁常在背景,
+ *  Chrome 對隱藏分頁的 timer 做 intensive throttling(實測 20 s 只跑 7 次 1 s interval),
+ *  observer 回呼不受節流(同 20 s 256 次)。
+ *
+ *  只在 `import.meta.env.DEV` 安裝(production build 沒有那段 React 程式,也不該替別人的效能
+ *  工具清 buffer);app 自身不用 performance.mark/measure,清除不影響邏輯;DevTools Performance
+ *  錄製在 measure 發出當下就擷取了,事後清 buffer 不影響錄到的 track。 */
 
 export interface UserTimingGuardOptions {
-  /** 清除週期。10 s × 632 筆/秒 ≈ 6,000 筆 ≈ 11 MB 的上限,對 DevTools 即時觀察夠用也夠小。 */
-  intervalMs: number;
+  /** 條目數上限;達到即清空。5,000 筆 × ~1.8 KB ≈ 9 MB 的暫存上限,對 DevTools 即時觀察夠用也夠小。 */
+  maxEntries: number;
 }
 
-/** 回傳 dispose;HMR / 測試用。`performance.clearMeasures` 不存在的環境直接 no-op。 */
-export function installUserTimingGuard({ intervalMs }: UserTimingGuardOptions): () => void {
-  if (typeof performance.clearMeasures !== "function") return () => {};
-  const timer = setInterval(() => {
-    performance.clearMeasures();
-    performance.clearMarks();
-  }, intervalMs);
-  return () => clearInterval(timer);
+/** 回傳 dispose;HMR / 測試用。缺 PerformanceObserver / clearMeasures 的環境直接 no-op。 */
+export function installUserTimingGuard({ maxEntries }: UserTimingGuardOptions): () => void {
+  if (typeof PerformanceObserver !== "function" || typeof performance.clearMeasures !== "function") {
+    return () => {};
+  }
+  const observer = new PerformanceObserver(() => {
+    if (performance.getEntriesByType("measure").length >= maxEntries) {
+      performance.clearMeasures();
+      performance.clearMarks();
+    }
+  });
+  observer.observe({ type: "measure" });
+  return () => observer.disconnect();
 }

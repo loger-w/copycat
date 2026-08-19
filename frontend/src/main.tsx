@@ -7,8 +7,8 @@ import "@/index.css";
 import { installUserTimingGuard } from "@/lib/dev-perf-guard";
 
 // dev-only:React dev build 每次 re-render 留下的 performance.measure 條目無上限累積
-// (1.1 MB/s → 數小時後 renderer Aw Snap),定期清掉。production build 不裝。
-if (import.meta.env.DEV) installUserTimingGuard({ intervalMs: 10_000 });
+// (1.1 MB/s → 數小時後 renderer Aw Snap),條目數到閾值就清(observer 驅動,背景分頁不受 timer 節流)。production build 不裝。
+if (import.meta.env.DEV) installUserTimingGuard({ maxEntries: 5_000 });
 
 const queryClient = new QueryClient();
 
