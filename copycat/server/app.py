@@ -1139,8 +1139,11 @@ def create_app(
         runtime: EngineRuntime = websocket.app.state.runtime
         await websocket.accept()
         try:
-            await websocket.send_json(runtime.latest_snapshot())
-            await relay(websocket, runtime.snapshots())
+            # seed 必須是「已送出的那一個 dict 物件」:再叫一次 latest_snapshot 的話,
+            # 兩次之間發生的變動會被 generator 當成「跟首則一樣」吃掉
+            snap = runtime.latest_snapshot()
+            await websocket.send_json(snap)
+            await relay(websocket, runtime.snapshots(seed=snap))
         except WebSocketDisconnect:
             return
 

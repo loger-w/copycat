@@ -67,20 +67,26 @@ class ChainAggregator:
         self.totals = Totals()
         # spot 獨立於序列(DR-13),reset 不清
 
-    def route(self, tick: Tick) -> None:
+    def route(self, tick: Tick) -> bool:
+        """回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價皆 False。
+
+        呼叫端(EngineRuntime._consume)據此決定要不要標 changed;丟棄計數照舊累加。
+        """
         if tick.symbol.startswith(_SPOT_PREFIX):
+            if self.spot_millipts == tick.price_millipts:
+                return False
             self.spot_millipts = tick.price_millipts
-            return
+            return True
         if tick.symbol not in self._contracts:
             self.totals.dropped_foreign_ticks += 1
-            return
-        self._ingest(tick)
+            return False
+        return self._ingest(tick)
 
-    def _ingest(self, tick: Tick) -> None:
+    def _ingest(self, tick: Tick) -> bool:
         if tick.cum_volume is not None:
             last = self._last_cum.get(tick.symbol)
             if last is not None and tick.cum_volume <= last:
-                return  # stale-drop(重複推播 / 重連重放 / 回補重疊)
+                return False  # stale-drop(重複推播 / 重連重放 / 回補重疊)
             self._last_cum[tick.symbol] = tick.cum_volume
         self.totals.ticks += 1
         pos = self._pos.setdefault(tick.symbol, _PosState())
@@ -103,6 +109,7 @@ class ChainAggregator:
         else:
             self.totals.unclassified_ticks += 1
             self.totals.unclassified_qty += tick.qty
+        return True
 
     def ingest_backfill(self, ticks: list[Tick]) -> dict[str, int]:
         """回補灌入:按 (symbol, precise_time, seq) 排序;重建 cum(Σqty)寫 _last_cum。
