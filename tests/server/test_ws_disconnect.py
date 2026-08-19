@@ -39,6 +39,7 @@ from fastapi import FastAPI, WebSocketDisconnect
 
 import copycat.capital.factory as capital_factory
 import copycat.server.app as app_mod
+import copycat.server.ws as ws_mod
 from copycat.live.models import SeriesInfo, Tick
 from copycat.server.app import create_app
 from copycat.server.ws import PING, WsBroadcaster, relay
@@ -542,6 +543,9 @@ _WS_CASES = [
     _WsCase("/ws/capital", _build_capital, _pump_capital),
 ]
 
+#: 心跳開啟版突斷測試用的單一路(心跳在 relay 層,對 route 無差別;不重跑六路省時間)
+_HEARTBEAT_CASE = _WS_CASES[0]
+
 
 class TestBroadcastRouteDisconnect:
     """`/ws/txo-pnl` 之外的六條 relay 路,逐條過同一套劇本。
@@ -560,6 +564,26 @@ class TestBroadcastRouteDisconnect:
 
     @pytest.mark.parametrize("case", _WS_CASES, ids=[c.path for c in _WS_CASES])
     def test_no_write_to_dead_transport(
+        self, case: _WsCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """本測試鎖的是「RST 之後零寫入」這條不變式,應用層心跳是無關變因 ——
+        顯式關掉(`WS_HEARTBEAT_SECS = 0`),計數才只反映推播鏈本身。心跳開啟版本由
+        `test_no_write_to_dead_transport_with_heartbeat` 另外守。"""
+        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0)
+        self._assert_no_dead_transport_writes(case, tmp_path, monkeypatch)
+
+    def test_no_write_to_dead_transport_with_heartbeat(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """心跳開啟時同一條不變式仍成立:RST 後 `_beat` 不得對死 transport 續寫。
+
+        心跳住 `relay`(與 route 無關)→ 取一路跑即可;間隔 0.2 s 讓斷線後那 1.5 s
+        窗口內有 ~7 次心跳機會,`_beat` 沒被收尾就會現形。
+        """
+        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.2)
+        self._assert_no_dead_transport_writes(_HEARTBEAT_CASE, tmp_path, monkeypatch)
+
+    def _assert_no_dead_transport_writes(
         self, case: _WsCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # 前一路的 server 沒收乾淨時,它的殭屍迴圈仍在往全域 asyncio logger 寫警告 ——
