@@ -167,6 +167,34 @@ describe("connectWithRetry", () => {
     handle.close();
   });
 
+  // 抽出前 8 hook 的 onMessage 本體都在 parse 的 try 內 → handler 例外被同一個 catch 吞掉。
+  // 🔵 抽出時 try 收窄成只包 JSON.parse,這條釘住補回來的對等性(review A1)。
+  it("onMessage 拋例外 → warn 吞掉不外漏,後續訊息照常投遞", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seen: unknown[] = [];
+    let boom = true;
+    const handle = connectWithRetry(
+      "ws://host/ws/x",
+      {
+        onMessage: (msg) => {
+          seen.push(msg);
+          if (boom) throw new Error("handler 爆了");
+        },
+      },
+      { label: "corr ws" },
+    );
+
+    expect(() => latest().emit({ seq: 1 })).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toBe("corr ws: 訊息處理失敗"); // 與 parse 失敗可區分
+
+    boom = false;
+    latest().emit({ seq: 2 }); // 這代 socket 沒被拆掉,後續訊息照常
+    expect(seen).toEqual([{ seq: 1 }, { seq: 2 }]);
+    warn.mockRestore();
+    handle.close();
+  });
+
   // 由 🔵 characterization「[該變] onerror alias」翻轉而來(spec §7 SC-5):
   // 舊語意 = 第一代 error 關掉第二代(alias);新語意 = 只關自身。
   it("onerror 只關自身 socket,不動新世代(SC-5)", () => {
