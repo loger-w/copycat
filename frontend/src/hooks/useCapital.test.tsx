@@ -15,6 +15,7 @@ import {
   useCapitalWsStatus,
   type CapitalEvent,
 } from "@/hooks/useCapital";
+import { resetWsPingMemory } from "@/lib/ws-reconnect";
 
 class FakeWS {
   static instances: FakeWS[] = [];
@@ -155,6 +156,54 @@ describe("useCapitalStream(WS 連線 + wsStatus store)", () => {
     expect(FakeWS.instances.length).toBe(2);
     hook.unmount();
     expect(FakeWS.instances[1]!.closed).toBe(true);
+  });
+
+  it("收過 ping 後 35 s 全靜默 → wsStatus 轉 closed(W11:閃電武裝往安全方向解除)", () => {
+    resetWsPingMemory();
+    vi.useFakeTimers();
+    const hook = renderHook(
+      () => {
+        useCapitalStream();
+        return useCapitalWsStatus();
+      },
+      { wrapper: makeWrapper(newClient()) },
+    );
+    const ws = FakeWS.instances[0]!;
+    act(() => {
+      ws.onopen?.();
+      ws.emit({ type: "ping" });
+    });
+    expect(hook.result.current).toBe("open");
+
+    act(() => {
+      vi.advanceTimersByTime(35_000);
+    });
+    expect(ws.closed).toBe(true);
+    expect(hook.result.current).toBe("closed");
+    hook.unmount();
+  });
+
+  it("從未收 ping:60 s 全靜默仍是 open(舊後端不多出 closed 邊沿;W11)", () => {
+    resetWsPingMemory();
+    vi.useFakeTimers();
+    const hook = renderHook(
+      () => {
+        useCapitalStream();
+        return useCapitalWsStatus();
+      },
+      { wrapper: makeWrapper(newClient()) },
+    );
+    const ws = FakeWS.instances[0]!;
+    act(() => ws.onopen?.());
+    expect(hook.result.current).toBe("open");
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(ws.closed).toBe(false);
+    expect(hook.result.current).toBe("open");
+    expect(FakeWS.instances.length).toBe(1);
+    hook.unmount();
   });
 
   it("useCapitalWsStatus 可在 stream 外元件讀(module store + 測試 setter)", () => {

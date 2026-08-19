@@ -3,6 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
+import { resetWsPingMemory } from "@/lib/ws-reconnect";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -82,5 +83,29 @@ describe("useTxoSnapshot", () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: "ping" }) });
     });
     expect(result.current.data?.series_id).toBe("TX4.202607"); // 仍是原 snapshot
+  });
+
+  it("收過 ping 後 35 s 全靜默 → 卸掉半死 socket 並重連(SC-2)", () => {
+    resetWsPingMemory();
+    const { result } = renderHook(() => useTxoSnapshot());
+    const ws = FakeWebSocket.instances[0];
+    expect(ws).toBeDefined();
+    act(() => {
+      ws?.onopen?.();
+      ws?.onmessage?.({ data: JSON.stringify({ type: "ping" }) });
+    });
+    expect(result.current.wsStatus).toBe("open");
+
+    act(() => {
+      vi.advanceTimersByTime(35_000);
+    });
+    expect(ws?.closed).toBe(true);
+    expect(result.current.wsStatus).toBe("closed");
+
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(result.current.wsStatus).toBe("connecting");
   });
 });
