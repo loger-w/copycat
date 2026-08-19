@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import datetime
 import json
 
-from copycat.live.futures_source import FuturesQuoteSource, futures_symbol
+from copycat.live.futures_source import (
+    FuturesQuoteSource,
+    futures_symbol,
+    in_futures_session_now,
+)
 from copycat.live.session import session_key, session_window
 from tests.helpers.tc4_fakes import FakeApi, ok
 
@@ -11,6 +16,13 @@ class TestSymbol:
     def test_futures_symbol_hot(self) -> None:
         assert futures_symbol("TXF") == "TC.F.TWF.TXF.HOT"
         assert futures_symbol("TMF") == "TC.F.TWF.TMF.HOT"
+
+
+def test_in_futures_session_now_uses_pad5() -> None:
+    """期貨盤別閘 = TXO 時段各寬 5 分(不另建第二張時段表)。"""
+    assert in_futures_session_now(datetime.time(13, 48)) is True  # 日盤收後寬限內
+    assert in_futures_session_now(datetime.time(13, 52)) is False  # 寬限外 = 盤外
+    assert in_futures_session_now(datetime.time(5, 3)) is True  # 夜盤收後寬限內
 
 
 class TestHealDefaults:

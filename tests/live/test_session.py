@@ -65,6 +65,21 @@ class TestInTxoSession:
         assert in_txo_session() in (True, False)
 
 
+def test_in_txo_session_pad() -> None:
+    """`pad` 把兩段各往外撐(期貨自癒閘用 5 分寬限,避免邊界誤關自癒)。"""
+    pad = datetime.timedelta(minutes=5)
+    assert in_txo_session(datetime.time(8, 39), pad=pad) is False
+    assert in_txo_session(datetime.time(8, 40), pad=pad) is True
+    assert in_txo_session(datetime.time(13, 50), pad=pad) is True
+    assert in_txo_session(datetime.time(13, 51), pad=pad) is False
+    assert in_txo_session(datetime.time(14, 54), pad=pad) is False
+    assert in_txo_session(datetime.time(14, 55), pad=pad) is True
+    assert in_txo_session(datetime.time(23, 59), pad=pad) is True
+    assert in_txo_session(datetime.time(2, 0), pad=pad) is True
+    assert in_txo_session(datetime.time(5, 5), pad=pad) is True
+    assert in_txo_session(datetime.time(5, 6), pad=pad) is False
+
+
 class TestSessionWindow:
     def test_day_window_matches_legacy(self) -> None:
         # 日盤窗與既有寫死窗完全一致(SC-4 日盤不變)
