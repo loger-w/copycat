@@ -13,7 +13,9 @@
  *    Chromium closing handshake 逾時 60 s)。不送 ping 的舊後端永不武裝 = 行為同現況;
  *  - `onerror` 關**自身** socket(SC-5);`onclose` 只由 `stopped` 守門,不做世代比對
  *    (被 watchdog 放棄的那代已經卸掉 handler,遲到事件進不來);
- *  - `close()` 停止重連、清 watchdog、關掉當下的 socket,之後所有回呼不再觸發。
+ *  - `close()` 停止重連、清 watchdog、卸掉當下 socket 的 onmessage/onopen/onerror 再關它
+ *    (onclose 留著,本來就由 `stopped` 守門);`connect()` 入口另有 `stopped` 守門,
+ *    擋掉「onClose 內同步 close()」這種排程後才停掉的路徑。之後所有回呼不再觸發。
  *
  * 心跳間隔的產生點在後端 `copycat/server/ws.py::WS_HEARTBEAT_SECS`(10 s),
  * `WS_SILENCE_TIMEOUT_MS` 必須遠大於它(CLAUDE.md §4「WS 心跳契約」)。
@@ -105,6 +107,9 @@ export function connectWithRetry(
   };
 
   const connect = (): void => {
+    // scheduleReconnect 先呼叫 onClose 再排 timer:handler 內同步 close() 清掉的是「上一顆」
+    // timer,新排的那顆仍會燒到這裡。守門放在入口一次擋掉所有「排程後才 stopped」的路徑。
+    if (stopped) return;
     openedAt = null;
     handlers.onConnecting?.();
     const target = typeof url === "string" ? url : url();
@@ -200,7 +205,15 @@ export function connectWithRetry(
       stopped = true;
       window.clearTimeout(timer);
       stopWatchdog();
-      current?.close();
+      if (current !== null) {
+        // 鏡射 watchdog 放棄路徑:先卸 handler 再 close,遲到的 message / open / error
+        // 一律進不來(否則「之後所有回呼不再觸發」只對 onclose 成立)。
+        // onclose 刻意留著 —— 它本來就由 stopped 守門,留著等於保留 W3 的逐字複刻語意。
+        current.onmessage = null;
+        current.onopen = null;
+        current.onerror = null;
+        current.close();
+      }
     },
   };
 }
