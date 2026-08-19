@@ -206,19 +206,67 @@ class TestCoalesce:
             await engine.close()
 
     async def test_burst_two_products_two_messages_seq_contiguous(self) -> None:
+        # 推送順序刻意反 `PRODUCTS`(MXF→TXF):順推的話「按 PRODUCTS 順序送」的實作
+        # 也會過,斷言就釘不住 dirty 插入序(review T3)
         src = FakeSource()
         events: list[dict] = []
         engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
         await engine.start()
         try:
-            for price in ("23500", "23510", "23520"):
-                _push(src, _quote(TradingPrice=price))
             for price in ("23400", "23410"):
                 _push(src, _quote("MXF", Security="FIMTX", TradingPrice=price))
+            for price in ("23500", "23510", "23520"):
+                _push(src, _quote(TradingPrice=price))
             await asyncio.sleep(0.2)
-            assert [e["product"] for e in events] == ["TXF", "MXF"]  # dirty 插入序
+            assert [e["product"] for e in events] == ["MXF", "TXF"]  # dirty 插入序
             assert [e["seq"] for e in events] == [1, 2]
             assert engine.state()["seq"] == 2
+        finally:
+            await engine.close()
+
+    async def test_seq_increments_without_broadcast(self) -> None:
+        """D2f:`_broadcast is None` 只是不送,`seq` 一樣每則 +1(與 coalesce 前同語意)。"""
+        src = FakeSource()
+        engine = FuturesEngine(lambda: src, flush_interval_secs=0.0)
+        await engine.start()
+        try:
+            _push(src, _quote())
+            _push(src, _quote("MXF", Security="FIMTX"))
+            await _drain()
+            assert engine.state()["seq"] == 2
+        finally:
+            await engine.close()
+
+    async def test_burst_reuses_single_flush_timer(self) -> None:
+        """叢發期間只有一顆 timer(每 quote 都 `call_later` 的退化 = 節流形同虛設)。"""
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
+        await engine.start()
+        try:
+            _push(src, _quote())
+            await asyncio.sleep(0)
+            handle = engine._flush_timer
+            assert handle is not None
+            for price in ("23510", "23520", "23530", "23540"):
+                _push(src, _quote(TradingPrice=price))
+            await asyncio.sleep(0)
+            assert engine._flush_timer is handle  # 同一顆,沒有被重排
+            assert events == []
+        finally:
+            await engine.close()
+
+    async def test_state_updates_immediately_before_flush(self) -> None:
+        """W3:state 每 quote 即時更新(corr pull 讀 / GET 全量不受 flush 週期影響)。"""
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=5.0)
+        await engine.start()
+        try:
+            _push(src, _quote())
+            await asyncio.sleep(0)
+            assert engine.state()["products"]["TXF"]["p"] == 23_500_000
+            assert events == []  # 廣播還沒到週期
         finally:
             await engine.close()
 
@@ -238,18 +286,26 @@ class TestCoalesce:
             await engine.close()
 
     async def test_single_quote_delivered_within_interval(self) -> None:
-        """SC-4:latency 上限 = flush 週期(單筆不得被拖到下一輪)。"""
+        """SC-4:latency 上限 = flush 週期(單筆不得被拖到下一輪)。
+
+        週期取 0.2 s 並實量耗時,裕度只留 0.05 s:週期若被誤實作成兩倍(或單筆要等
+        下一輪才送),0.4 s 會直接撞穿門檻(review T6:原本 3× 裕度什麼都殺不掉)。
+        """
         src = FakeSource()
         events: list[dict] = []
-        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.2)
         await engine.start()
         try:
+            loop = asyncio.get_running_loop()
+            t0 = loop.time()
             _push(src, _quote())
-            for _ in range(10):
+            for _ in range(100):
                 if events:
                     break
                 await asyncio.sleep(0.01)
+            elapsed = loop.time() - t0
             assert len(events) == 1
+            assert elapsed < 0.25, f"單筆 quote 等了 {elapsed:.3f}s(週期 0.2s)"
         finally:
             await engine.close()
 
@@ -308,14 +364,37 @@ class TestCoalesce:
             await engine.close()
 
     async def test_close_with_pending_flush_timer_does_not_broadcast(self) -> None:
-        """W4 / SC-0 close 不變式:timer pending 時 close → 取消、不廣播、seq 不變。"""
+        """W4 / SC-0 close 不變式:timer pending 時 close → 取消、不廣播、seq 不變。
+
+        決定性版本(review T1):單次 `sleep(0)` 讓 `_handle_quote` 跑完並先斷言 timer
+        真的在 pending(否則「根本沒排」也會 vacuous 綠);週期取 5 s —— 遠大於 close
+        自身耗時(~ms),不必等待也不會有 false-red,且 close 漏 cancel 時那顆
+        TimerHandle 會原樣留在 loop 上 → `handle.cancelled()` 直接抓到。
+        """
         src = FakeSource()
         events: list[dict] = []
-        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.5)
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=5.0)
         await engine.start()
         _push(src, _quote())
+        await asyncio.sleep(0)
+        handle = engine._flush_timer
+        assert handle is not None  # 前提:真的有 pending timer
+        await engine.close()  # 不等 flush
+        assert handle.cancelled()  # 漏 cancel = 這顆還掛在 loop 上活到週期結束
+        assert engine._flush_timer is None
+        assert events == []
+        assert engine.state()["seq"] == 0
+
+    async def test_handle_quote_after_close_schedules_nothing(self) -> None:
+        """Edge 3:`_loop is None`(close 後)時 `_handle_quote` 不排 timer、不炸。"""
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.0)
+        await engine.start()
+        await engine.close()
+        engine._handle_quote(_quote())  # 繞過 threadsafe 入口直呼:不得 raise
         await _drain()
-        await engine.close()  # 不等 flush 週期
+        assert engine._flush_timer is None
         assert events == []
         assert engine.state()["seq"] == 0
 
