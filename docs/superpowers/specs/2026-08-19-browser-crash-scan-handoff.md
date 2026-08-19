@@ -12,7 +12,9 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
 4.5 小時 15 GB → renderer Aw Snap。**只影響 `npm run dev`**。證據與量測全在
 `docs/research/2026-08-19-browser-crash-scan.md` 的「根因(已確認)」節。
 
-### R0(最優先)`/bug dev 看盤數小時後 renderer Aw Snap:React dev Component Performance Track measure 無上限累積`
+### R0 ✅ 已出貨(2026-08-19 PR #70)`/bug dev 看盤數小時後 renderer Aw Snap:React dev Component Performance Track measure 無上限累積`
+- 出貨:`frontend/src/lib/dev-perf-guard.ts`(PerformanceObserver 閾值 5,000 清除,單例 / 降級 no-op)+ main.tsx dev-only 安裝;
+  真環境 renderer 記憶體走平。**未拍板**:看盤日常是否改跑 production build(仍建議)。
 - 紅測試難寫(瀏覽器 buffer 行為);以「dev-only 在 main.tsx 每 10 s `performance.clearMeasures()+clearMarks()`」
   為最小修法,verify = 同 MCP 分頁實測 renderer Private 記憶體 30 分鐘走平(原 session loop 已裝同款 in-page
   緩解並持續量測,結果會寫回報告「觀察紀錄」)。

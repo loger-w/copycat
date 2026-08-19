@@ -117,3 +117,20 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
    (退訂會把 prod feed 一起帶走)。
 4. 不重啟的止血:側車 process 用變體窗持有 prod 全部 key(從 TC4 log 抓 `AddSubQuoteCount(<prod session>,…|REALTIME|…)`),
    PUB 是廣播所以 prod 立刻復活;fix 上線後再停側車(停掉那刻 feed 會再斷一次,由自癒接手)。
+
+## 瀏覽器分頁「跑幾小時後掛掉」排查順序(2026-08-19 renderer Aw Snap 實證)
+
+1. **OS 層先看 renderer process**(PowerShell `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'"` 取 `--type=renderer`
+   + `Get-Process` 的 WorkingSet / Private / CPU / 建立時間;background loop 每 60 s 寫 CSV):分頁 JS 層量不到 Blink 側記憶體。
+   實證:renderer Private 15 GB、一核 100% 4.5 h,而 `performance.memory.usedJSHeapSize` 全程 ≤ 170 MB。
+2. **Long Task API 只看 >50 ms,`performance.memory` 只看 V8 heap** —— 主執行緒 66% 忙 / 15 GB 膨脹都「看不見」。
+   主執行緒忙碌度用 MessageChannel ping-pong 2 s 迭代數對照靜態頁(200k vs 68k);非 V8 記憶體先查
+   `performance.getEntriesByType('measure'|'mark').length`(User Timing buffer 無上限、不回收)、Web Audio 節點、canvas。
+3. **確認哪個分頁在哪個 process**:分頁內 `new Uint8Array(300MB)` 看哪個 renderer 跳;導到靜態頁看 CPU 是否歸 0。
+   Chrome 會把同站分頁合進同一 process(同站主框架門檻),user 分頁與 MCP 分頁可能共生死。
+4. **隱藏分頁 timer 被 intensive throttling 壓到每分鐘一次**(20 s 實測 `setInterval(1s)` 7 次)→ 背景清理 / 取樣不要靠
+   setInterval;PerformanceObserver 回呼不受節流(同 20 s 256 次)。sampler 寫 localStorage(分頁死了仍可讀)。
+5. **React 19.2 dev build Component Performance Track**:props identity 變的 re-render 每筆 `performance.measure`(~1.8 KB),
+   本 app 每則 WS 全樹 re-render → 632 筆/s ≈ 1.1 MB/s。已由 `frontend/src/lib/dev-perf-guard.ts` dev-only 守門(PR #70);
+   **看盤日常仍建議跑 production build**,dev server 只做開發。chrome-devtools MCP 是獨立 profile,看不到 user 的 Chrome。
+   (Trigger:任何「瀏覽器用一段時間變慢 / 掛掉」回報、或在 dev server 上長時間跑 WS 重繪型頁面)
