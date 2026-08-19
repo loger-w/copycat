@@ -44,6 +44,8 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
 - 前端消費點 `useTxoSnapshot.ts:29-33`;`<TxoPage />` 在 `App.tsx:242` 無條件掛載(只 hidden)。
 
 ### R2(後端)`/mod futures_engine 每則 quote 無節流廣播 + leaf fallback 永不退訂`
+
+> **已出貨 2026-08-19(PR #69)**:per-product coalesce 0.1 s + 自癒閘看盤別;**leaf 備胎不退(user 拍板,理由見 `.claude/mod/futures-broadcast-coalesce-leaf-unsub/change-spec.md` 檔頭 + docs/next-time.md 08-19 節)**;D2 拍板 = coalesce。SC-8 prod 量測待重啟。
 - `futures_engine.py:426-435` `_handle_quote` 尾端無條件 `_seq += 1` + broadcast 完整 payload(含五檔),
   全檔 grep `throttle` 零命中;對照 `index_engine.py:498-500`、`stock_engine.py:1297-1300`、`corr_engine.py:187-190` 皆有 1s 閘。
 - `futures_engine.py:312-345` `_leaf_fallback` → `subscribe_leaf` 只訂不退;`_leaf_fed.discard`(:406)只是記帳;
