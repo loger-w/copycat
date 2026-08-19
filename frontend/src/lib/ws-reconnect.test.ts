@@ -374,6 +374,28 @@ describe("connectWithRetry 靜默 watchdog", () => {
     handle.close();
   });
 
+  // review T1/T2:武裝後的每一則 ping 都要餵狗(否則零推播的健康連線每 35 s 自砍一次),
+  // 且 arm() 必須冪等(否則每則 ping 疊一顆 interval)。
+  it("後續 ping 一樣餵 watchdog,且 arm() 冪等只留一顆 interval(T1/T2)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" }); // 武裝
+
+    vi.advanceTimersByTime(20_000);
+    gen1.emit({ type: "ping" }); // 第二則心跳:餵狗,不重排 timer
+    expect(vi.getTimerCount()).toBe(1); // T2:arm() 冪等,沒疊出第二顆 interval
+
+    vi.advanceTimersByTime(20_000); // 距最後一則 ping 才 20 s
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+
+    vi.advanceTimersByTime(35_000); // 心跳真的停了才判定
+    expect(onClose).toHaveBeenCalledTimes(1);
+    handle.close();
+  });
+
   it("29 s 時收到任一訊息 → 基準重置,再 29 s 仍不觸發(Edge 3)", () => {
     const onClose = vi.fn();
     const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
@@ -523,6 +545,11 @@ describe("connectWithRetry 靜默 watchdog", () => {
     vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS); // 醒來後第一個 tick
     expect(onClose).not.toHaveBeenCalled();
     expect(FakeWS.instances.length).toBe(1);
+
+    // T3:那個 tick 不只「不判定」,還要把基準重置成 now —— 否則下一個(正常間隔的)tick
+    // 就會拿凍結前的 lastMsgAt 判定靜默,防誤判只延後一個 tick 而已。
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS);
+    expect(onClose).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(35_000); // 重置後才是真靜默
     expect(onClose).toHaveBeenCalledTimes(1);
