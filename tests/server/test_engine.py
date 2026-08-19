@@ -410,6 +410,39 @@ async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
         await rt.close()
 
 
+async def test_snapshots_two_clients_no_lost_wakeup() -> None:
+    """SC-3(WS-TXO-SHARED-EVENT):A 在 throttle sleep 期間被 B `clear()` 掉喚醒 → 漏版本。
+
+    以「內容真的會變」的方式 bump(新 cum 的合約 tick),避免與內容比對短路混淆。
+    """
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.05)
+    await rt.start()
+    agen_a = rt.snapshots()
+    agen_b = rt.snapshots()
+    try:
+        assert fake.on_tick is not None
+        task_a = asyncio.ensure_future(agen_a.__anext__())
+        await asyncio.sleep(0)  # A 進入 wait()
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        first_a = await asyncio.wait_for(task_a, timeout=1.0)
+        assert first_a["totals"]["call_net_qty"] == 1
+
+        task_a2 = asyncio.ensure_future(agen_a.__anext__())
+        await asyncio.sleep(0)  # A 停在 throttle sleep
+        task_b = asyncio.ensure_future(agen_b.__anext__())
+        await asyncio.sleep(0)  # B 停在 wait()
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=2, t=2))
+        snap_b = await asyncio.wait_for(task_b, timeout=1.0)
+        assert snap_b["totals"]["call_net_qty"] == 2
+        snap_a = await asyncio.wait_for(task_a2, timeout=1.0)
+        assert snap_a["totals"]["call_net_qty"] == 2
+        await agen_a.aclose()
+        await agen_b.aclose()
+    finally:
+        await rt.close()
+
+
 async def test_snapshots_throttled_stream_yields_on_change() -> None:
     fake = FakeQuoteSource()
     rt = EngineRuntime(fake, throttle_secs=0.01)
