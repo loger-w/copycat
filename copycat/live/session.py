@@ -30,7 +30,13 @@ def session_key(now: time.struct_time | None = None) -> SessionKey:
 
 
 def _shift(t: _dt.time, delta: _dt.timedelta) -> _dt.time:
-    """時刻平移(經 datetime 運算,避免 time 自行加減的跨午夜錯算)。"""
+    """時刻平移(`time` 不支援加減,故繞 datetime)。
+
+    **只取回 time,跨午夜的溢位靜默 wrap**(08:45 減 9 小時 = 23:45,不是「前一天」)——
+    呼叫端的 `pad` 必須小於 `min(08:45, 24:00−05:00)` = 8 小時 45 分,否則兩段的
+    邊界比較會 wrap 成語意未定義的區間。實際用值是 5 分鐘,離上界極遠;不加 raise
+    是因為這是 module 內部 helper,唯一呼叫端就在下面。
+    """
     return (_dt.datetime.combine(_dt.date(2000, 1, 1), t) + delta).time()
 
 
@@ -41,7 +47,9 @@ def in_txo_session(now: _dt.time | None = None, *, pad: _dt.timedelta = _dt.time
     夜盤跨午夜,故以「≥ 15:00 或 ≤ 05:00」判(不能寫成單一區間比較)。
 
     `pad` 把兩段各往外撐(期貨用 5 分寬限,避免邊界誤關自癒);預設 0 = 原行為。
-    期貨與 TXO 同時段(檔頭時區事實),故共用這張表,不另建第二張。
+    **前提:`pad` < 8 小時 45 分**(= `min(日盤開盤, 24:00−夜盤收盤)`);超過會讓
+    `_shift` wrap 過午夜,兩段的邊界比較語意未定義。期貨與 TXO 同時段(檔頭時區事實),
+    故共用這張表,不另建第二張。
     """
     t = _dt.datetime.now().time() if now is None else now
     if _shift(_TXO_DAY[0], -pad) <= t <= _shift(_TXO_DAY[1], pad):

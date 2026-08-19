@@ -800,6 +800,8 @@ def create_app(
                 if resolved_futures is None:
                     return None
                 fut_src = resolved_futures
+                # 刻意不傳 flush_interval_secs:prod 吃預設 0.1 s(D2e)——
+                # 五檔盤中要即時,1 s 週期會讓閃電梯五檔慢一秒
                 return FuturesEngine(lambda: fut_src, broadcast=futures_ws.publish)
 
             futures = await _boot(
