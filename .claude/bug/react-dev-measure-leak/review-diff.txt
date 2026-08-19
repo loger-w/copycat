@@ -1,0 +1,134 @@
+diff --git a/frontend/src/lib/dev-perf-guard.test.tsx b/frontend/src/lib/dev-perf-guard.test.tsx
+new file mode 100644
+index 00000000..91ffc5d4
+--- /dev/null
++++ b/frontend/src/lib/dev-perf-guard.test.tsx
+@@ -0,0 +1,71 @@
++// @vitest-environment jsdom
++/** dev-only User Timing guard(2026-08-19 /bug react-dev-measure-leak)。
++ *
++ *  React 19.2 development build 的 Component Performance Track 對每個「props identity 變了」的
++ *  re-render 打一筆 `performance.measure`;Chrome 的 User Timing buffer 沒上限、不在 V8 heap、
++ *  不自動回收 → 看盤 632 筆/秒 ≈ 1.1 MB/s,數小時後 renderer Aw Snap。
++ *
++ *  guard 走 PerformanceObserver「條目數 ≥ 閾值就清」,**不用 setInterval**:背景分頁的 timer 被
++ *  Chrome 節流到每分鐘一次(真環境實測 20 s 只跑 7 次),observer 回呼不受節流(同 20 s 256 次)。
++ *
++ *  vitest 的 console 沒有 `timeStamp`,React 據此判定 `supportsUserTiming=false` 整段不發 →
++ *  必須在 react-dom 載入前補 stub 才重現得出來(hoisted + 動態 import)。 */
++import { afterEach, expect, test, vi } from "vitest";
++
++vi.hoisted(() => {
++  (console as unknown as { timeStamp: () => void }).timeStamp = () => {};
++});
++
++function Leaf({ rows }: { rows: number[] }) {
++  return <div>{rows.length}</div>;
++}
++
++afterEach(() => {
++  vi.useRealTimers();
++  performance.clearMeasures();
++  performance.clearMarks();
++});
++
++/** 模擬背景分頁的 timer 節流:setInterval 永不觸發(setTimeout 保持真,observer flush 用)。
++ *  靠 setInterval 的實作在這裡會紅 —— 這正是真環境抓到的失效樣態。 */
++const freezeIntervals = (): void => {
++  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
++};
++
++async function renderTimes(n: number): Promise<void> {
++  const { act, render } = await import("@testing-library/react");
++  const { rerender } = render(<Leaf rows={[0]} />);
++  for (let i = 1; i <= n; i++) {
++    act(() => {
++      rerender(<Leaf rows={[i]} />);
++    });
++  }
++}
++
++/** observer 回呼是獨立 task,要讓出主執行緒才會跑。 */
++const flushObservers = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
++
++test("前提自檢:React dev build 每次 props 變的 re-render 都留下 measure 條目", async () => {
++  await renderTimes(20);
++  expect(performance.getEntriesByType("measure").length).toBeGreaterThan(20);
++});
++
++test("SC-1 條目數達閾值後被清空(不依賴 timer,背景分頁也會跑)", async () => {
++  freezeIntervals();
++  const { installUserTimingGuard } = await import("@/lib/dev-perf-guard");
++  const dispose = installUserTimingGuard({ maxEntries: 10 });
++  await renderTimes(20);
++  await flushObservers();
++  expect(performance.getEntriesByType("measure").length).toBeLessThan(10);
++  expect(performance.getEntriesByType("mark").length).toBe(0);
++  dispose();
++});
++
++test("SC-2 dispose 後不再清除(HMR / 測試不殘留 observer)", async () => {
++  const { installUserTimingGuard } = await import("@/lib/dev-perf-guard");
++  const dispose = installUserTimingGuard({ maxEntries: 10 });
++  dispose();
++  await renderTimes(20);
++  await flushObservers();
++  expect(performance.getEntriesByType("measure").length).toBeGreaterThan(20);
++});
+diff --git a/frontend/src/lib/dev-perf-guard.ts b/frontend/src/lib/dev-perf-guard.ts
+new file mode 100644
+index 00000000..c8057496
+--- /dev/null
++++ b/frontend/src/lib/dev-perf-guard.ts
+@@ -0,0 +1,35 @@
++/** dev-only User Timing guard(2026-08-19 /bug react-dev-measure-leak)。
++ *
++ *  React 19.2 development build 的 Component Performance Track(`react-dom-client.development.js`
++ *  `logComponentRender`)對每個「props identity 變了」的 re-render 打一筆 `performance.measure`
++ *  (含 Changed Props diff 的 detail,~1.8 KB);Chrome 的 User Timing buffer **沒有上限、不在 V8
++ *  heap、不自動回收**。本 app 每則 WS 訊息都讓整棵樹 re-render → 實測 632 筆/秒 ≈ 1.1 MB/s,
++ *  看盤數小時後 renderer 膨脹到 10 GB 級 → Aw Snap(證據:docs/research/2026-08-19-browser-crash-scan.md)。
++ *
++ *  修法 = 條目數到閾值就清。**用 PerformanceObserver 不用 setInterval**:看盤分頁常在背景,
++ *  Chrome 對隱藏分頁的 timer 做 intensive throttling(實測 20 s 只跑 7 次 1 s interval),
++ *  observer 回呼不受節流(同 20 s 256 次)。
++ *
++ *  只在 `import.meta.env.DEV` 安裝(production build 沒有那段 React 程式,也不該替別人的效能
++ *  工具清 buffer);app 自身不用 performance.mark/measure,清除不影響邏輯;DevTools Performance
++ *  錄製在 measure 發出當下就擷取了,事後清 buffer 不影響錄到的 track。 */
++
++export interface UserTimingGuardOptions {
++  /** 條目數上限;達到即清空。5,000 筆 × ~1.8 KB ≈ 9 MB 的暫存上限,對 DevTools 即時觀察夠用也夠小。 */
++  maxEntries: number;
++}
++
++/** 回傳 dispose;HMR / 測試用。缺 PerformanceObserver / clearMeasures 的環境直接 no-op。 */
++export function installUserTimingGuard({ maxEntries }: UserTimingGuardOptions): () => void {
++  if (typeof PerformanceObserver !== "function" || typeof performance.clearMeasures !== "function") {
++    return () => {};
++  }
++  const observer = new PerformanceObserver(() => {
++    if (performance.getEntriesByType("measure").length >= maxEntries) {
++      performance.clearMeasures();
++      performance.clearMarks();
++    }
++  });
++  observer.observe({ type: "measure" });
++  return () => observer.disconnect();
++}
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+index dabe3fc4..bb5b1c02 100644
+--- a/frontend/src/main.tsx
++++ b/frontend/src/main.tsx
+@@ -4,6 +4,11 @@ import { createRoot } from "react-dom/client";
+ 
+ import App from "@/App";
+ import "@/index.css";
++import { installUserTimingGuard } from "@/lib/dev-perf-guard";
++
++// dev-only:React dev build 每次 re-render 留下的 performance.measure 條目無上限累積
++// (1.1 MB/s → 數小時後 renderer Aw Snap),條目數到閾值就清(observer 驅動,背景分頁不受 timer 節流)。production build 不裝。
++if (import.meta.env.DEV) installUserTimingGuard({ maxEntries: 5_000 });
+ 
+ const queryClient = new QueryClient();
+ 
