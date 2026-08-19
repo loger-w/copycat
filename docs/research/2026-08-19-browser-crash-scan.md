@@ -158,3 +158,4 @@ user 的 14:11 崩潰與 19:07 崩潰都是同一機制。
 2. **看盤日常改跑 production build**(`npm run build` + `vite preview` 或靜態 serve 指向 8721):
    根本上不該整天用 dev server 看盤;也順便拿掉 StrictMode double-render / dev 診斷開銷。
 3. 放大因子(R6 memo 邊界 / R2 futures 節流 / FE-1 App 根 setState)仍值得做,但屬效能,不是洩漏本體。
+| 19:55 | 67(修後版重載) | 6240 | – | **修後版(observer 閾值 5000)**:measure 條目 2,138(上限內震盪);renderer 16404 私有記憶體 ~150–200MB 走平 25 分鐘、25280(另一分頁)480MB 走平;sampler 重植(含 measures 欄) |
