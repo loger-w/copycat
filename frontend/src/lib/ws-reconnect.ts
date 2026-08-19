@@ -43,7 +43,8 @@ export interface WsHandlers {
   /** 每次建 socket 前呼叫(含首次與每次重連)。 */
   onConnecting?(): void;
   onOpen?(): void;
-  /** 收到的是 `JSON.parse` 後的值;parse 失敗只 warn 不呼叫,`{type:"ping"}` 心跳被過濾。 */
+  /** 收到的是 `JSON.parse` 後的值;parse 失敗只 warn 不呼叫,`{type:"ping"}` 心跳被過濾。
+   *  本身拋例外也只 warn(逐字複刻抽出前的吞法),不會打斷連線或後續訊息。 */
   onMessage(msg: unknown): void;
   onClose?(): void;
 }
@@ -171,7 +172,14 @@ export function connectWithRetry(
         arm();
         return; // SC-3:心跳不進 hook,免得覆蓋 state
       }
-      handlers.onMessage(value);
+      try {
+        handlers.onMessage(value);
+      } catch (err) {
+        // 逐字複刻:抽出前 8 hook 的 onMessage 本體全在 parse 的 try 內,handler 例外一樣被
+        // 這個 catch 吞掉(只 warn)。🔵 抽出時把 try 收窄成只包 JSON.parse,對等性靠這裡補回;
+        // 標籤與 parse 失敗可區分,免得兩種故障在 console 混成一種。
+        console.warn(`${label}: 訊息處理失敗`, err);
+      }
     };
     sock.onclose = () => {
       clearWatchdog();
