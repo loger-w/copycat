@@ -49,9 +49,15 @@ def _fmt_precise_time(precise_time: int) -> str:
 def _content(snap: dict) -> dict:
     """內容比對用的複本:排除 `generated_at`(每次取都不同,不排除等於沒比)。
 
-    複本 —— 送出去的 dict 一個 key 都不能少。
+    複本 —— 送出去的 dict 一個 key 都不能少。`handover` 另做一層 dict 複本:
+    `_handover` 目前只被整體重新賦值(淺複本還沒出事),但只要日後改成就地改鍵,
+    prev 會跟著同步變動 → 比對恆等 → 永不推播,而且零錯誤訊號。
     """
-    return {k: v for k, v in snap.items() if k != "generated_at"}
+    body = {k: v for k, v in snap.items() if k != "generated_at"}
+    handover = body.get("handover")
+    if isinstance(handover, dict):
+        body["handover"] = dict(handover)
+    return body
 
 
 class EngineRuntime:
