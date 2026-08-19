@@ -351,12 +351,12 @@ def _default_index_source(calendar: TradingCalendar | None = None) -> IndexSourc
 
 def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesSource:
     from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
-    from copycat.live.tc4 import always_active
 
-    # 期貨原閘 = always(三檔 HOT 日夜盤都該有推播)→ 日曆只砍掉整天沒有盤的日子
+    # 閘 = 交易日曆 AND 盤別(日夜盤各寬 5 分)。原本是 always:假日整天、以及日盤收後
+    # 13:45–15:00 與夜盤收後 05:00–08:45 兩段都在對 TC4 空 churn UNSUB+SUB
     return futures_mod.FuturesQuoteSource(
         port=_tc4_port(),
-        heal_active=_heal_gate(calendar, always_active),
+        heal_active=_heal_gate(calendar, futures_mod.in_futures_session_now),
     )
 
 

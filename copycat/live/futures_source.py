@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from copycat.live.futures_models import PRODUCTS
 from copycat.live.river_backfill import collect_1k_minutes
+from copycat.live.session import in_txo_session
 from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
 from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, always_active
 from copycat.tc4common import TC4_DEFAULT_PORT
@@ -38,6 +39,20 @@ FUTURES_ALLDAY_DOMAIN: tuple[tuple[str, str, str], ...] = (
 )
 
 
+#: 期貨自癒閘的盤別寬限:邊界前後各 5 分仍算盤中(收盤那幾秒的殘留推播 / 開盤前的
+#: 首波都不該被閘掉;誤關自癒的代價 = 整場零推播無復原,誤開的代價只是幾發 UNSUB+SUB)
+FUTURES_SESSION_PAD = _dt.timedelta(minutes=5)
+
+
+def in_futures_session_now(now: _dt.time | None = None) -> bool:
+    """期貨盤別閘 = TXO 時段各寬 5 分(期貨與 TXO 同時段,共用 `in_txo_session`)。
+
+    prod 自癒閘 = 交易日曆 AND 這把(`app._default_futures_source`)。原本是 `always_active`
+    → 日盤收後 13:45–15:00 與夜盤收後 05:00–08:45 整段對 TC4 空 churn UNSUB/SUB。
+    """
+    return in_txo_session(now, pad=FUTURES_SESSION_PAD)
+
+
 def futures_symbol(product: str) -> str:
     """產品碼 → TC4 期貨樹熱門月 symbol(台指期產品碼 = TXF,非 FITX;07-20 實證)。"""
     return f"TC.F.TWF.{product}.HOT"
@@ -55,9 +70,10 @@ class FuturesQuoteSource(TC4QuoteSource):
         heal_symbol_silence_secs: float | None = 60.0,
         heal_active: Callable[[], bool] = always_active,
     ) -> None:
-        # 自癒預設不設盤別閘:三檔 HOT 日夜盤都該有推播,盤外最壞 churn = 3 symbol /
-        # 300s;而 09:01 事故正是「新 server 沿用殭屍建的 feed」那種盤前/盤初形狀。
-        # prod 由 `app._default_futures_source` 補上交易日曆閘(假日整天不 churn)。
+        # 自癒預設不設閘(source 層 always):純建構這個 source 的用途(測試 / 一次性
+        # 腳本)不該被牆鐘左右。prod 由 `app._default_futures_source` 補上
+        # **交易日曆 AND 盤別**(`in_futures_session_now`,日夜盤各寬 5 分):
+        # 假日整天、以及 13:45–15:00 / 05:00–08:45 兩段盤外都不 churn。
         super().__init__(
             port,
             api=api,
