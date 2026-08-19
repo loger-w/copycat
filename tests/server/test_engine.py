@@ -9,7 +9,7 @@ from typing import Any, AsyncGenerator, Callable
 import pytest
 
 from copycat.live.models import OptionContract, SeriesInfo, Tick
-from copycat.server.engine import EngineRuntime, HandoverBusyError
+from copycat.server.engine import EngineRuntime, HandoverBusyError, _content
 
 C44000 = OptionContract(symbol="TC.O.TWF.TX4.202607.C.44000", cp="C", strike_millipts=44_000_000)
 C45000 = OptionContract(symbol="TC.O.TWF.TX5.202607.C.45000", cp="C", strike_millipts=45_000_000)
@@ -19,6 +19,7 @@ SERIES_A = SeriesInfo(
 SERIES_B = SeriesInfo(
     series_id="TX5.202607", name="TX5 202607", expiry="202607", contracts=(C45000,)
 )
+TXF = "TC.F.TWF.TXF.HOT"  # 台指期(SPOT_PREFIX);TXO runtime 只拿它更新現價
 
 
 def tick(symbol: str, *, price: int, qty: int, cum: int | None = None, t: int = 1) -> Tick:
@@ -412,16 +413,63 @@ async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
         await rt.close()
 
 
+async def _drain(
+    task: "asyncio.Task[dict] | None", agen: AsyncGenerator[dict, None] | None
+) -> None:
+    """收尾規約:pending 的 task 一律 cancel(取消過的 generator 視為終結、不再迭代);
+    只有 task 已完成(或從未起 task)的路徑才 aclose generator。
+
+    已完成但帶例外的 task 一律 re-raise:不撈出來的話真 traceback 只會退化成一則
+    「exception was never retrieved」GC 警告,測試看到的失敗訊息會與根因無關。
+    """
+    if task is not None and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError, StopAsyncIteration):
+            await task
+        return
+    if task is not None and not task.cancelled():
+        exc = task.exception()
+        if exc is not None:
+            raise exc
+    if agen is not None:
+        await agen.aclose()
+
+
+def _count_latest_snapshot(rt: EngineRuntime, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """把「不變式 (b) 寫錯」從 hang 變成紅。
+
+    `last = self._version` 若晚於內容比對,內容相同那輪會原地打轉;換代 Event 恆為
+    set,迴圈裡一個 await 都不剩 → event loop 餓死,連 `asyncio.timeout` 都跑不到,
+    測試表現為無限 hang 而非失敗。計數 wrapper 超過門檻就拋,tight loop 因此變成
+    「task 帶例外完成」= 可斷言的紅。
+    """
+    calls = [0]
+    orig = rt.latest_snapshot
+
+    def counting() -> dict:
+        calls[0] += 1
+        if calls[0] > 50:
+            raise RuntimeError("snapshots() tight loop")
+        return orig()
+
+    monkeypatch.setattr(rt, "latest_snapshot", counting)
+    return calls
+
+
 async def test_snapshots_two_clients_no_lost_wakeup() -> None:
     """SC-3(WS-TXO-SHARED-EVENT):A 在 throttle sleep 期間被 B `clear()` 掉喚醒 → 漏版本。
 
     以「內容真的會變」的方式 bump(新 cum 的合約 tick),避免與內容比對短路混淆。
+    throttle 取 0.5:窗太窄的話高負載下 A 可能早就醒過來自己重讀 Event,測試會假綠。
     """
     fake = FakeQuoteSource()
-    rt = EngineRuntime(fake, throttle_secs=0.05)
+    rt = EngineRuntime(fake, throttle_secs=0.5)
     await rt.start()
     agen_a = rt.snapshots()
     agen_b = rt.snapshots()
+    task_a: asyncio.Task[dict] | None = None
+    task_a2: asyncio.Task[dict] | None = None
+    task_b: asyncio.Task[dict] | None = None
     try:
         assert fake.on_tick is not None
         task_a = asyncio.ensure_future(agen_a.__anext__())
@@ -434,14 +482,16 @@ async def test_snapshots_two_clients_no_lost_wakeup() -> None:
         await asyncio.sleep(0)  # A 停在 throttle sleep
         task_b = asyncio.ensure_future(agen_b.__anext__())
         await asyncio.sleep(0)  # B 停在 wait()
+        assert not task_a2.done()  # A 確實還在 sleep 裡(否則下面驗不到漏喚醒)
         fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=2, t=2))
         snap_b = await asyncio.wait_for(task_b, timeout=1.0)
         assert snap_b["totals"]["call_net_qty"] == 2
         snap_a = await asyncio.wait_for(task_a2, timeout=1.0)
         assert snap_a["totals"]["call_net_qty"] == 2
-        await agen_a.aclose()
-        await agen_b.aclose()
     finally:
+        await _drain(task_a, None)
+        await _drain(task_a2, agen_a)
+        await _drain(task_b, agen_b)
         await rt.close()
 
 
@@ -458,20 +508,6 @@ async def test_snapshots_throttled_stream_yields_on_change() -> None:
         await agen.aclose()
     finally:
         await rt.close()
-
-
-async def _drain(
-    task: "asyncio.Task[dict] | None", agen: AsyncGenerator[dict, None] | None
-) -> None:
-    """收尾規約:pending 的 task 一律 cancel(取消過的 generator 視為終結、不再迭代);
-    只有 task 已完成(或從未起 task)的路徑才 aclose generator。"""
-    if task is not None and not task.done():
-        task.cancel()
-        with suppress(asyncio.CancelledError, StopAsyncIteration):
-            await task
-        return
-    if agen is not None:
-        await agen.aclose()
 
 
 async def test_snapshots_ignores_foreign_and_stale_ticks() -> None:
@@ -491,7 +527,7 @@ async def test_snapshots_ignores_foreign_and_stale_ticks() -> None:
         fake.on_tick(tick("TC.F.TWF.MXF.HOT", price=43_800_000, qty=1, cum=9, t=2))
         fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=3))  # stale:cum 未增
         await asyncio.sleep(0.3)
-        assert not task.done()
+        assert not task.done(), task.result()
 
         fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=2, t=4))
         nxt = await asyncio.wait_for(task, timeout=1.0)
@@ -501,11 +537,12 @@ async def test_snapshots_ignores_foreign_and_stale_ticks() -> None:
         await rt.close()
 
 
-async def test_snapshots_skips_identical_payload() -> None:
+async def test_snapshots_skips_identical_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """SC-2:version 有變但內容(排除 generated_at)相同 → 不 yield;真變動才推。"""
     fake = FakeQuoteSource()
     rt = EngineRuntime(fake, throttle_secs=0.01)
     await rt.start()
+    calls = _count_latest_snapshot(rt, monkeypatch)
     agen = rt.snapshots()
     task: asyncio.Task[dict] | None = None
     try:
@@ -517,22 +554,25 @@ async def test_snapshots_skips_identical_payload() -> None:
         rt._mark_changed()
         rt._mark_changed()
         await asyncio.sleep(0.3)  # 正常返回 = 迴圈在 await,不是無 await 的 tight loop
-        assert not task.done()
+        assert not task.done(), task.result()
 
         rt._set_status("degraded")
         snap = await asyncio.wait_for(task, timeout=1.0)
         assert snap["status"] == "degraded"
         assert re.fullmatch(r"\d{2}:\d{2}:\d{2}", snap["generated_at"]) is not None
+        # 1 首則 + 1 兩次 bare _mark_changed 合併後的比對 + 1 degraded
+        assert calls[0] <= 3
     finally:
         await _drain(task, agen)
         await rt.close()
 
 
-async def test_snapshots_seed_pushes_only_if_changed() -> None:
+async def test_snapshots_seed_pushes_only_if_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     """SC-3b:seed = 已送出的首則;內容沒動不重推,首則之後發生的變動照推。"""
     fake = FakeQuoteSource()
     rt = EngineRuntime(fake, throttle_secs=0.01)
     await rt.start()
+    calls = _count_latest_snapshot(rt, monkeypatch)
     task: asyncio.Task[dict] | None = None
     agen: AsyncGenerator[dict, None] | None = None
     try:
@@ -541,9 +581,11 @@ async def test_snapshots_seed_pushes_only_if_changed() -> None:
         agen = rt.snapshots(seed=rt.latest_snapshot())
         task = asyncio.ensure_future(agen.__anext__())
         await asyncio.sleep(0.3)
-        assert not task.done()
+        assert not task.done(), task.result()
+        assert calls[0] <= 3  # 1 取 seed + 1 首次迭代的比對
         await _drain(task, agen)
         task = None
+        calls[0] = 0  # (b) 是另一組 seed / generator,分開計數
 
         # (b) 首則送出後、迭代開始前發生的 tick 仍會在首次迭代推出
         seed = rt.latest_snapshot()
@@ -552,8 +594,55 @@ async def test_snapshots_seed_pushes_only_if_changed() -> None:
         agen = rt.snapshots(seed=seed)
         snap = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
         assert snap["totals"]["call_net_qty"] == 1
+        assert calls[0] <= 3  # 1 取 seed + 1 首次迭代的比對
     finally:
         await _drain(task, agen)
+        await rt.close()
+
+
+async def test_snapshots_spot_price_change_pushes_same_price_skips() -> None:
+    """W4:spot(台指期)價變 → 推播;同價重送 → 不推。engine 層補 aggregate 層之外的覆蓋。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    agen = rt.snapshots()
+    task: asyncio.Task[dict] | None = None
+    try:
+        assert fake.on_tick is not None
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        await asyncio.wait_for(agen.__anext__(), timeout=1.0)  # 建立 prev 基準
+
+        task = asyncio.ensure_future(agen.__anext__())
+        fake.on_tick(tick(TXF, price=43_735_460, qty=1, t=2))
+        snap = await asyncio.wait_for(task, timeout=1.0)
+        assert snap["spot"]["price"] == 43735.46
+
+        task = asyncio.ensure_future(agen.__anext__())
+        fake.on_tick(tick(TXF, price=43_735_460, qty=1, t=3))  # 同價重送
+        await asyncio.sleep(0.3)
+        assert not task.done(), task.result()
+    finally:
+        await _drain(task, agen)
+        await rt.close()
+
+
+async def test_content_compare_covers_whole_payload() -> None:
+    """SC-2 / W8:內容比對範圍 = 整個 payload 減 `generated_at`,不得再縮。
+
+    縮比對範圍 = 改契約:`test_ws_disconnect` 的 `batches >= 3` 全靠 `totals.ticks` /
+    per-contract volume 每筆都動,少比一個鍵就會靜默丟掉推播(零錯誤訊號)。
+    """
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        assert fake.on_tick is not None
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        await asyncio.sleep(0.05)
+        snap = rt.latest_snapshot()
+        assert "generated_at" in snap
+        assert set(_content(snap)) == set(snap) - {"generated_at"}
+    finally:
         await rt.close()
 
 
