@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
-from typing import Any, Callable
+from contextlib import suppress
+from typing import Any, AsyncGenerator, Callable
 
 import pytest
 
@@ -455,6 +457,103 @@ async def test_snapshots_throttled_stream_yields_on_change() -> None:
         assert snap["totals"]["call_net_qty"] == 1
         await agen.aclose()
     finally:
+        await rt.close()
+
+
+async def _drain(
+    task: "asyncio.Task[dict] | None", agen: AsyncGenerator[dict, None] | None
+) -> None:
+    """收尾規約:pending 的 task 一律 cancel(取消過的 generator 視為終結、不再迭代);
+    只有 task 已完成(或從未起 task)的路徑才 aclose generator。"""
+    if task is not None and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError, StopAsyncIteration):
+            await task
+        return
+    if agen is not None:
+        await agen.aclose()
+
+
+async def test_snapshots_ignores_foreign_and_stale_ticks() -> None:
+    """SC-1:外來 symbol 與 stale(cum 未增)tick 不改 snapshot 內容 → 不推播。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    agen = rt.snapshots()
+    task: asyncio.Task[dict] | None = None
+    try:
+        assert fake.on_tick is not None
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        first = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
+        assert first["totals"]["call_net_qty"] == 1
+
+        task = asyncio.ensure_future(agen.__anext__())
+        fake.on_tick(tick("TC.F.TWF.MXF.HOT", price=43_800_000, qty=1, cum=9, t=2))
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=3))  # stale:cum 未增
+        await asyncio.sleep(0.3)
+        assert not task.done()
+
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=2, t=4))
+        nxt = await asyncio.wait_for(task, timeout=1.0)
+        assert nxt["totals"]["call_net_qty"] == 2
+    finally:
+        await _drain(task, agen)
+        await rt.close()
+
+
+async def test_snapshots_skips_identical_payload() -> None:
+    """SC-2:version 有變但內容(排除 generated_at)相同 → 不 yield;真變動才推。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    agen = rt.snapshots()
+    task: asyncio.Task[dict] | None = None
+    try:
+        assert fake.on_tick is not None
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        await asyncio.wait_for(agen.__anext__(), timeout=1.0)  # 建立 prev 基準
+
+        task = asyncio.ensure_future(agen.__anext__())
+        rt._mark_changed()
+        rt._mark_changed()
+        await asyncio.sleep(0.3)  # 正常返回 = 迴圈在 await,不是無 await 的 tight loop
+        assert not task.done()
+
+        rt._set_status("degraded")
+        snap = await asyncio.wait_for(task, timeout=1.0)
+        assert snap["status"] == "degraded"
+        assert re.fullmatch(r"\d{2}:\d{2}:\d{2}", snap["generated_at"]) is not None
+    finally:
+        await _drain(task, agen)
+        await rt.close()
+
+
+async def test_snapshots_seed_pushes_only_if_changed() -> None:
+    """SC-3b:seed = 已送出的首則;內容沒動不重推,首則之後發生的變動照推。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    task: asyncio.Task[dict] | None = None
+    agen: AsyncGenerator[dict, None] | None = None
+    try:
+        assert fake.on_tick is not None
+        # (a) seed 之後零變動 → 不重推首則
+        agen = rt.snapshots(seed=rt.latest_snapshot())
+        task = asyncio.ensure_future(agen.__anext__())
+        await asyncio.sleep(0.3)
+        assert not task.done()
+        await _drain(task, agen)
+        task = None
+
+        # (b) 首則送出後、迭代開始前發生的 tick 仍會在首次迭代推出
+        seed = rt.latest_snapshot()
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        await asyncio.sleep(0.05)
+        agen = rt.snapshots(seed=seed)
+        snap = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
+        assert snap["totals"]["call_net_qty"] == 1
+    finally:
+        await _drain(task, agen)
         await rt.close()
 
 
