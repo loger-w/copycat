@@ -31,6 +31,7 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
 - D2 futures 廣播節流:改 1s 週期 flush(與其他引擎一致)還是保留 event-driven 但 coalesce 同商品?
   (五檔盤中要即時,建議 coalesce:每商品保留最新 payload,以 ≥100ms 週期 flush)
 - D3 WS 心跳:應用層 ping/pong 訊息型別要不要進 8 條 WS 契約?(涉前後端契約,§4 規則同改兩邊)
+  → **已拍板(08-19,user 選「server 定時報平安」)**:應用層 ping 進 8 條 WS 契約;前端靜默 watchdog 以 ping 為準,不靠資料頻率。
 
 ## 建議分輪(各自 /mod,三類分離)
 
@@ -56,7 +57,10 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
 - 附帶:`app.py:359` 期貨自癒閘只看交易日不看盤別 → 13:45–15:00 / 05:00–08:45 持續 UNSUB/SUB churn(log 那行的來源)。
   `futures_source.py:29,34-38` 有 `FUTURES_MINUTE_DOMAIN`。
 
-### R3(前後端契約)`/mod 8 條 WS 加應用層心跳 / 靜默 watchdog`(D3 拍板後)
+### R3(前後端契約)`/mod 8 條 WS 加應用層心跳 / 靜默 watchdog` — **已出貨(08-19,PR #TBD,branch mod/ws-app-heartbeat)**
+- 出貨內容:relay 每 10 s `{type:"ping"}`(8 條 WS,不經 queue);前端 `lib/ws-reconnect.ts` 共用 helper(首則 ping 武裝 + sticky per-URL 的 30 s 靜默 watchdog、backoff 三分支 1/2/4/5/5 短命 cap、onerror 關自身、ping 過濾);後端 accept-then-close 不動(前端 short-lived cap 已解 1 Hz)。
+- **注意:後端重啟後請重整瀏覽器分頁**(舊 bundle 的 txo hook 會把 ping 當 snapshot → TXO 頁例外;dev HMR 不受影響)。spec / 證據:`.claude/mod/ws-app-heartbeat/`。
+- 原記載:
 - 前端 8 hook 重連唯一入口是 `ws.onclose`,無 heartbeat / lastMsg watchdog(grep 零命中);後端 `ws.py:96` relay
   無心跳,只靠 uvicorn 預設 ws_ping 20s。專案 CLAUDE.md §7 明文要求 heartbeat。
 - 同輪順手:引擎缺席時 accept-then-close(`app.py:1629/1663/1686/1700`、`capital_api.py:325/347`)+ 前端 onopen

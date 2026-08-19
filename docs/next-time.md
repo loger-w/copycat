@@ -1,3 +1,12 @@
+## 2026-08-19(mod/ws-app-heartbeat 8 條 WS 應用層心跳 + 前端靜默 watchdog 留尾)
+
+- [ ] **7 份 `WsStatus` 同值型別宣告 + `types.ts` 一份**(spec review R13):本輪刻意不收斂;下次動 hook 時統一從一處 import。
+- [ ] **分頁第一代連線在首則 ping 前就半死 → 永久不偵測**(spec §4.2 殘餘盲區,同現況;sticky 只涵蓋後代):要封得掉要「open 即武裝」對舊後端就會誤重連,等 prod 穩定跑心跳一陣子後可考慮翻成一律 open 即武裝。
+- [ ] **後端 accept-then-close 8 處未改 reject-before-accept**(handoff R3 原建議):前端 short-lived cap 5 s 已把空轉降到 0.2 Hz;uvicorn access log 仍每 5 s 一行,嫌吵再改。
+- [ ] **隱藏分頁 > 5 min 的 Chrome intensive throttling 下 watchdog 恆不判定**(review A3;凍結守門每 tick 成立):false negative、回前景 ≤ 35 s 自癒;若要封,候選 = `visibilitychange` 回前景時重置基準並立即評估,或以「tick 間有無收到任何訊息」取代純時間守門。
+- [ ] **watchdog 同步觸發的 thundering herd**(review A7):8 條 WS 同 tick 觸發、1 s 後齊重連 + refetch;真環境未見問題,若 prod 觀察到復原卡頓再對 watchdog 路徑加 jitter。
+- [ ] **uvicorn `close_sent` 後 ASGI send 的 `RuntimeError` 窗口**(spec Edge 5):`_beat` 與 `_send` 同款曝險 → ASGI traceback log 噪音;prod 觀察到再決定是否在 relay 辨識該 RuntimeError 訊息收斂。
+
 ## 2026-08-19(mod/futures-broadcast-coalesce-leaf-unsub 期貨廣播 coalesce 留尾)
 
 - [ ] **leaf 備胎訂閱退訂(user 2026-08-19 拍板本輪不退)**:handoff R2 原要求 HOT 回魂後退 leaf;spec review 指出退訂後 HOT 再被
@@ -15,7 +24,8 @@
   (行為改動,另案 /bug 或 /mod)。
 - [ ] **TXO 推播仍是全量 ~22 KB 整包**(review R10):有行情時 spot 每次價變都推整包;delta / 分欄推播未做。
 - [ ] **回補重試期間 WS 可十幾分鐘零訊息**(code review C4):同值 `backfilling` 不再推,保活只剩 uvicorn ws ping 20s;
-  候選 = 把重試進度寫進 `_handover`(attempt / backfill_secs)讓內容真的變、前端可觀測 — 與 R3 應用層心跳一併看。
+  候選 = 把重試進度寫進 `_handover`(attempt / backfill_secs)讓內容真的變、前端可觀測 —
+  〔2026-08-19 R3 心跳已出貨:零訊息不再被前端誤判斷線(保活面已解),本條只剩「重試進度可觀測」的 UX 面〕。
 - [ ] **code review lens 並行汙染**:本輪 test-coverage lens 做 mutation 改檔,與 correctness lens 並行 → 後者讀到汙染樹
   (W8 首跑 243s 紅)。memory `mutation-reviewers-serial` 早有此條;會改檔的 lens 一律序列或 worktree 隔離。
 
@@ -725,7 +735,7 @@
 
 ## 2026-07-18(txo-aggregate-pnl Phase 4 自評 P2 彙總,10 條聚類)
 
-- [ ] 觀測性:前端 WS 無 heartbeat 判停(server 靜默時段分不出斷線 vs 無變更;考慮 server 週期 keepalive frame + client stale timer,週一盤中觀察真實需求再定)
+- [x] ~~觀測性:前端 WS 無 heartbeat 判停(server 靜默時段分不出斷線 vs 無變更;考慮 server 週期 keepalive frame + client stale timer,週一盤中觀察真實需求再定)~~ **2026-08-19 mod/ws-app-heartbeat 出貨**:relay 每 10 s 送 `{type:"ping"}`(8 條 WS)+ 前端 `lib/ws-reconnect.ts` 靜默 watchdog(首則 ping 武裝 / sticky per-URL / 30 s + 5 s tick)
 - [ ] engine._run_handover 重試時 re-subscribe 與 activate 的 unsubscribe 不對稱,若改主動觸發自癒要先收斂這段
 
 ## 2026-07-19(dq4-order-phase1 Phase 4 自評 P2 彙總,15 條聚類,shortSymbol/BLOCKED_REASON 已本輪吸收)
