@@ -7,7 +7,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { connectWithRetry, WS_BACKOFF_CAP_MS, WS_BACKOFF_START_MS } from "@/lib/ws-reconnect";
+import {
+  connectWithRetry,
+  WS_BACKOFF_CAP_MS,
+  WS_BACKOFF_START_MS,
+  WS_MIN_UPTIME_MS,
+  WS_SHORT_LIVED_CAP_MS,
+} from "@/lib/ws-reconnect";
 
 class FakeWS {
   static instances: FakeWS[] = [];
@@ -177,9 +183,9 @@ describe("connectWithRetry", () => {
     handle.close();
   });
 
-  // [該變] 下一個 🔴 commit 翻轉此預期(spec §7):移除 onopen 歸零,改由 onclose 的
-  // 「存活 ≥ WS_MIN_UPTIME_MS」分支歸零(SC-4),屆時第二次延遲為 2 s 而非 1 s。
-  it("[該變] onopen 歸零 backoff(accept-then-close 現況 = 1 Hz 重連)", () => {
+  // 由 🔵 characterization「[該變] onopen 歸零 backoff」翻轉而來(spec §7 SC-4):
+  // 歸零改由 onclose 的「存活 ≥ WS_MIN_UPTIME_MS」分支負責,第二次延遲 = 2 s 而非 1 s。
+  it("onopen 不再歸零 backoff(accept-then-close 不再 1 Hz)", () => {
     const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
 
     latest().onopen?.(); // 立刻 open
@@ -189,10 +195,71 @@ describe("connectWithRetry", () => {
 
     latest().onopen?.(); // 第二代同樣 open→close
     latest().onclose?.();
-    vi.advanceTimersByTime(999);
-    expect(FakeWS.instances.length).toBe(2); // 還沒到
+    vi.advanceTimersByTime(1_999);
+    expect(FakeWS.instances.length).toBe(2); // 還沒到(不再是 1 s)
     vi.advanceTimersByTime(1);
-    expect(FakeWS.instances.length).toBe(3); // 現況:仍是 1 s(歸零過),不是 2 s
+    expect(FakeWS.instances.length).toBe(3);
+    handle.close();
+  });
+
+  it("有 open 但存活 < 5 s(accept-then-close)→ 倍增但 cap 5 s:1,2,4,5,5(SC-4 (ii))", () => {
+    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
+    const expected = [1_000, 2_000, 4_000, WS_SHORT_LIVED_CAP_MS, WS_SHORT_LIVED_CAP_MS];
+
+    let generation = 1;
+    for (const delay of expected) {
+      latest().onopen?.(); // accept
+      latest().onclose?.(); // 立刻 close(存活 0 ms)
+      vi.advanceTimersByTime(delay - 1);
+      expect(FakeWS.instances.length).toBe(generation);
+      vi.advanceTimersByTime(1);
+      generation += 1;
+      expect(FakeWS.instances.length).toBe(generation);
+    }
+    handle.close();
+  });
+
+  it("存活 ≥ WS_MIN_UPTIME_MS 後斷線 → 下次 1 s(SC-4 (i);健康連線行為不變)", () => {
+    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
+
+    // 先用兩代短命連線把 backoff 推到 4 s
+    latest().onopen?.();
+    latest().onclose?.();
+    vi.advanceTimersByTime(1_000);
+    latest().onopen?.();
+    latest().onclose?.();
+    vi.advanceTimersByTime(2_000);
+    expect(FakeWS.instances.length).toBe(3);
+
+    latest().onopen?.(); // 第三代健康存活滿 5 s 才斷
+    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
+    latest().onclose?.();
+    vi.advanceTimersByTime(999);
+    expect(FakeWS.instances.length).toBe(3);
+    vi.advanceTimersByTime(1);
+    expect(FakeWS.instances.length).toBe(4); // 歸零回初值 1 s
+    handle.close();
+  });
+
+  it("曾健康 open ≥5 s,之後連續握手失敗 → 走「從未 open」分支 2,4,8(Edge 12)", () => {
+    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
+
+    latest().onopen?.();
+    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
+    latest().onclose?.(); // 健康斷線 → 1 s
+    vi.advanceTimersByTime(1_000);
+    expect(FakeWS.instances.length).toBe(2);
+
+    // 之後每一代都沒 onopen(server down):openedAt 每代重設 → 不會退化成 1 Hz
+    let generation = 2;
+    for (const delay of [2_000, 4_000, 8_000]) {
+      latest().onclose?.();
+      vi.advanceTimersByTime(delay - 1);
+      expect(FakeWS.instances.length).toBe(generation);
+      vi.advanceTimersByTime(1);
+      generation += 1;
+      expect(FakeWS.instances.length).toBe(generation);
+    }
     handle.close();
   });
 
