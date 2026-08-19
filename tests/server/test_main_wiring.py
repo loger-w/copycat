@@ -306,20 +306,22 @@ def test_stock_and_index_heal_gate_ands_the_calendar(
     assert gate() is clock, "交易日仍要 AND 盤中時段(盤外不得 churn)"
 
 
-def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
-    """期貨原本是 always(三檔 HOT 日夜盤都該有推播)—— 日曆只砍掉「整天沒有盤」那些日子。"""
+@pytest.mark.parametrize("clock", [True, False])
+def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock: bool) -> None:
+    """期貨閘 = 交易日曆 AND 盤別(原本是 always → 13:45–15:00 / 05:00–08:45 整段空 churn)。"""
     import copycat.live.futures_source as futures_mod
     from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, futures_mod, "FuturesQuoteSource")
+    monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
 
     app_mod._default_futures_source(_CAL)
     gate = seen["kwargs"]["heal_active"]
 
     monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
-    assert gate() is False
+    assert gate() is False, "非交易日不得自癒"
     monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
-    assert gate() is True
+    assert gate() is clock, "交易日仍要 AND 盤別(盤外不得 churn)"
 
 
 def test_corr_source_keeps_the_always_on_gate(monkeypatch: pytest.MonkeyPatch) -> None:
