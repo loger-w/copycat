@@ -128,9 +128,10 @@ class EngineRuntime:
         """節流 snapshot 流:版本有變才 yield,間隔 ≥ throttle_secs。"""
         last = self._version
         while True:
-            await self._changed.wait()
-            self._changed.clear()
             if self._version == last:
+                # 每輪重讀 `self._changed`(換代 Event):等的必須是「當下那一代」,
+                # 快取住舊代等於等一個永遠不會再 set 的物件
+                await self._changed.wait()
                 continue
             last = self._version
             yield self.latest_snapshot()
@@ -350,8 +351,15 @@ class EngineRuntime:
         self._mark_changed()
 
     def _mark_changed(self) -> None:
+        """版本 +1 並「換代」Event:set 舊的、換上新的。
+
+        單一 Event + consumer `clear()` 會漏版本:A 還在 throttle sleep 時 B 醒來
+        clear 掉,A 回頭 `wait()` 就卡在一個已消費的訊號上(WS-TXO-SHARED-EVENT)。
+        換代後沒有人 clear,每個 consumer 等的都是自己那一代。
+        """
         self._version += 1
-        self._changed.set()
+        ev, self._changed = self._changed, asyncio.Event()
+        ev.set()
 
     # ---- 測試鉤(僅測試用;凍結消費以模擬 queue 壓力)----
 
