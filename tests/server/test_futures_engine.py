@@ -85,7 +85,9 @@ async def _drain() -> None:
 async def _make() -> tuple[FuturesEngine, FakeSource, list[dict]]:
     src = FakeSource()
     events: list[dict] = []
-    engine = FuturesEngine(lambda: src, broadcast=events.append)
+    # flush_interval_secs=0.0:coalesce 後仍走同一條 flush 路徑,但下一輪 loop 就送出,
+    # `_drain` 的「消化 call_soon 排入的 handler」語意不變(既有 assert 一則不動)
+    engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.0)
     await engine.start()
     return engine, src, events
 
@@ -174,6 +176,119 @@ class TestBroadcast:
         assert ev["product"] == "TXF"
         assert ev["state"]["p"] == 23_500_000
         await engine.close()
+
+
+class TestCoalesce:
+    """SC-0~4:廣播改 per-product coalesce(flush 週期 0.1 s),`seq` 在 flush 時每則 +1。
+
+    行情叢發(夜盤實測 20 s / 312 則)每則都帶五檔全量 → WS 寫入量與前端 render 壓力
+    正比於 tick 數。state 仍每 quote 即時更新(W3),只有廣播被合併。
+    """
+
+    async def test_default_flush_interval_is_100ms(self) -> None:
+        engine = FuturesEngine(lambda: FakeSource())
+        assert engine._flush_interval_secs == 0.1
+
+    async def test_burst_same_product_coalesced(self) -> None:
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
+        await engine.start()
+        try:
+            for price in ("23500", "23510", "23520", "23530", "23540"):
+                _push(src, _quote(TradingPrice=price))
+            await asyncio.sleep(0.2)
+            assert len(events) == 1
+            assert events[0]["state"]["p"] == 23_540_000  # payload = 最新 state
+            assert events[0]["seq"] == 1
+            assert engine.state()["seq"] == 1  # GET 與 WS 同源
+        finally:
+            await engine.close()
+
+    async def test_burst_two_products_two_messages_seq_contiguous(self) -> None:
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
+        await engine.start()
+        try:
+            for price in ("23500", "23510", "23520"):
+                _push(src, _quote(TradingPrice=price))
+            for price in ("23400", "23410"):
+                _push(src, _quote("MXF", Security="FIMTX", TradingPrice=price))
+            await asyncio.sleep(0.2)
+            assert [e["product"] for e in events] == ["TXF", "MXF"]  # dirty 插入序
+            assert [e["seq"] for e in events] == [1, 2]
+            assert engine.state()["seq"] == 2
+        finally:
+            await engine.close()
+
+    async def test_second_wave_after_flush(self) -> None:
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
+        await engine.start()
+        try:
+            _push(src, _quote(TradingPrice="23500"))
+            await asyncio.sleep(0.2)
+            _push(src, _quote(TradingPrice="23600"))
+            await asyncio.sleep(0.2)
+            assert [e["seq"] for e in events] == [1, 2]
+            assert events[1]["state"]["p"] == 23_600_000
+        finally:
+            await engine.close()
+
+    async def test_single_quote_delivered_within_interval(self) -> None:
+        """SC-4:latency 上限 = flush 週期(單筆不得被拖到下一輪)。"""
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
+        await engine.start()
+        try:
+            _push(src, _quote())
+            for _ in range(10):
+                if events:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(events) == 1
+        finally:
+            await engine.close()
+
+    async def test_broadcast_exception_does_not_stall_stream(self) -> None:
+        """SC-0:單則廣播拋例外 → 記 log 續行,timer 不留殘骸(下一筆照排)。"""
+        src = FakeSource()
+        events: list[dict] = []
+        calls = 0
+
+        def broadcast(ev: dict) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("boom")
+            events.append(ev)
+
+        engine = FuturesEngine(lambda: src, broadcast=broadcast, flush_interval_secs=0.0)
+        await engine.start()
+        try:
+            _push(src, _quote())
+            await _drain()
+            assert events == []
+            _push(src, _quote(TradingPrice="23600"))
+            await _drain()
+            assert [e["seq"] for e in events] == [2]  # seq 續增,不因例外卡住
+        finally:
+            await engine.close()
+
+    async def test_close_with_pending_flush_timer_does_not_broadcast(self) -> None:
+        """W4 / SC-0 close 不變式:timer pending 時 close → 取消、不廣播、seq 不變。"""
+        src = FakeSource()
+        events: list[dict] = []
+        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.5)
+        await engine.start()
+        _push(src, _quote())
+        await _drain()
+        await engine.close()  # 不等 flush 週期
+        assert events == []
+        assert engine.state()["seq"] == 0
 
 
 class TestClosedEngine:
