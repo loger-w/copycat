@@ -1,0 +1,442 @@
+diff --git a/copycat/live/futures_source.py b/copycat/live/futures_source.py
+index 414c6c7f..c253edd0 100644
+--- a/copycat/live/futures_source.py
++++ b/copycat/live/futures_source.py
+@@ -16,6 +16,7 @@ from typing import Any, Callable
+ 
+ from copycat.live.futures_models import PRODUCTS
+ from copycat.live.river_backfill import collect_1k_minutes
++from copycat.live.session import in_txo_session
+ from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
+ from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, always_active
+ from copycat.tc4common import TC4_DEFAULT_PORT
+@@ -38,6 +39,20 @@ FUTURES_ALLDAY_DOMAIN: tuple[tuple[str, str, str], ...] = (
+ )
+ 
+ 
++#: 期貨自癒閘的盤別寬限:邊界前後各 5 分仍算盤中(收盤那幾秒的殘留推播 / 開盤前的
++#: 首波都不該被閘掉;誤關自癒的代價 = 整場零推播無復原,誤開的代價只是幾發 UNSUB+SUB)
++FUTURES_SESSION_PAD = _dt.timedelta(minutes=5)
++
++
++def in_futures_session_now(now: _dt.time | None = None) -> bool:
++    """期貨盤別閘 = TXO 時段各寬 5 分(期貨與 TXO 同時段,共用 `in_txo_session`)。
++
++    prod 自癒閘 = 交易日曆 AND 這把(`app._default_futures_source`)。原本是 `always_active`
++    → 日盤收後 13:45–15:00 與夜盤收後 05:00–08:45 整段對 TC4 空 churn UNSUB/SUB。
++    """
++    return in_txo_session(now, pad=FUTURES_SESSION_PAD)
++
++
+ def futures_symbol(product: str) -> str:
+     """產品碼 → TC4 期貨樹熱門月 symbol(台指期產品碼 = TXF,非 FITX;07-20 實證)。"""
+     return f"TC.F.TWF.{product}.HOT"
+@@ -55,9 +70,10 @@ class FuturesQuoteSource(TC4QuoteSource):
+         heal_symbol_silence_secs: float | None = 60.0,
+         heal_active: Callable[[], bool] = always_active,
+     ) -> None:
+-        # 自癒預設不設盤別閘:三檔 HOT 日夜盤都該有推播,盤外最壞 churn = 3 symbol /
+-        # 300s;而 09:01 事故正是「新 server 沿用殭屍建的 feed」那種盤前/盤初形狀。
+-        # prod 由 `app._default_futures_source` 補上交易日曆閘(假日整天不 churn)。
++        # 自癒預設不設閘(source 層 always):純建構這個 source 的用途(測試 / 一次性
++        # 腳本)不該被牆鐘左右。prod 由 `app._default_futures_source` 補上
++        # **交易日曆 AND 盤別**(`in_futures_session_now`,日夜盤各寬 5 分):
++        # 假日整天、以及 13:45–15:00 / 05:00–08:45 兩段盤外都不 churn。
+         super().__init__(
+             port,
+             api=api,
+diff --git a/copycat/live/session.py b/copycat/live/session.py
+index e170f25d..62f7de6d 100644
+--- a/copycat/live/session.py
++++ b/copycat/live/session.py
+@@ -29,16 +29,24 @@ def session_key(now: time.struct_time | None = None) -> SessionKey:
+     return (time.strftime("%Y%m%d", t), "day" if t.tm_hour < 7 else "night")
+ 
+ 
+-def in_txo_session(now: _dt.time | None = None) -> bool:
+-    """現在是否在台指期權盤中(TXO session 的 `heal_active` 閘)。
++def _shift(t: _dt.time, delta: _dt.timedelta) -> _dt.time:
++    """時刻平移(經 datetime 運算,避免 time 自行加減的跨午夜錯算)。"""
++    return (_dt.datetime.combine(_dt.date(2000, 1, 1), t) + delta).time()
++
++
++def in_txo_session(now: _dt.time | None = None, *, pad: _dt.timedelta = _dt.timedelta(0)) -> bool:
++    """現在是否在台指期權盤中(TXO / 期貨 session 的 `heal_active` 閘)。
+ 
+     盤外零推播是正常的,重掛只會 churn TC4 上游 —— 自癒必須有時段閘。
+     夜盤跨午夜,故以「≥ 15:00 或 ≤ 05:00」判(不能寫成單一區間比較)。
++
++    `pad` 把兩段各往外撐(期貨用 5 分寬限,避免邊界誤關自癒);預設 0 = 原行為。
++    期貨與 TXO 同時段(檔頭時區事實),故共用這張表,不另建第二張。
+     """
+     t = _dt.datetime.now().time() if now is None else now
+-    if _TXO_DAY[0] <= t <= _TXO_DAY[1]:
++    if _shift(_TXO_DAY[0], -pad) <= t <= _shift(_TXO_DAY[1], pad):
+         return True
+-    return t >= _TXO_NIGHT[0] or t <= _TXO_NIGHT[1]
++    return t >= _shift(_TXO_NIGHT[0], -pad) or t <= _shift(_TXO_NIGHT[1], pad)
+ 
+ 
+ def session_window(key: SessionKey) -> tuple[str, str]:
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 9fdb8d48..faf2a65f 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -351,12 +351,12 @@ def _default_index_source(calendar: TradingCalendar | None = None) -> IndexSourc
+ 
+ def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesSource:
+     from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
+-    from copycat.live.tc4 import always_active
+ 
+-    # 期貨原閘 = always(三檔 HOT 日夜盤都該有推播)→ 日曆只砍掉整天沒有盤的日子
++    # 閘 = 交易日曆 AND 盤別(日夜盤各寬 5 分)。原本是 always:假日整天、以及日盤收後
++    # 13:45–15:00 與夜盤收後 05:00–08:45 兩段都在對 TC4 空 churn UNSUB+SUB
+     return futures_mod.FuturesQuoteSource(
+         port=_tc4_port(),
+-        heal_active=_heal_gate(calendar, always_active),
++        heal_active=_heal_gate(calendar, futures_mod.in_futures_session_now),
+     )
+ 
+ 
+diff --git a/copycat/server/futures_engine.py b/copycat/server/futures_engine.py
+index 3637d883..d1a41dac 100644
+--- a/copycat/server/futures_engine.py
++++ b/copycat/server/futures_engine.py
+@@ -5,6 +5,9 @@
+ - `resolved_contract(product)`:HOT 推播月份欄位解析 YYYYMM(resolve_contract_ym 純函式,
+   futures_models)快取;跨日失效(date 變更清空)、換月即更新;解析不到 None = 送單層
+   拒單(design §5 edge case 4)。
++- 廣播 per-product coalesce:quote 只更新 state + 標 dirty,每 `flush_interval_secs`
++  (prod 0.1 s)把每個 dirty 商品各送**一則最新 payload**;`seq` 在 flush 時每則 +1
++  (前端以 seq 連續判跳號)。state 本身仍每 quote 即時更新(REST/pull 讀不受影響)。
+ - 期貨無試撮窗、分鐘聚合 out of scope(梯不需要)→ 不做兩段式換日/StockDayState。
+ - 成交欄位 last-write-wins 不做 cum 序 stale-drop:REALTIME TradeVolume 每時段(日/夜盤)
+   重新起算(live/session 時區事實),同日 cum 回捲是正常換場,嚴格遞增 guard 會整段丟夜盤。
+@@ -106,6 +109,7 @@ class FuturesEngine:
+         products: tuple[str, ...] = PRODUCTS,
+         leaf_grace_secs: float = 3.0,
+         resub_interval_secs: float = 10.0,
++        flush_interval_secs: float = 0.1,
+     ) -> None:
+         self._source_factory = source_factory
+         self._broadcast = broadcast
+@@ -114,6 +118,11 @@ class FuturesEngine:
+         self._seq = 0
+         self._source: FuturesSource | None = None
+         self._loop: asyncio.AbstractEventLoop | None = None
++        # 廣播節流:dirty 商品集(dict 保插入序,value 不用)+ 單一 flush timer。
++        # 五檔盤中要即時 → 週期取 0.1 s(1 s 會讓閃電梯五檔慢一秒)
++        self._flush_interval_secs = flush_interval_secs
++        self._dirty: dict[str, None] = {}
++        self._flush_timer: asyncio.TimerHandle | None = None
+         # leaf fallback:HOT 與 TXO runtime spot 同 symbol 跨 session 只推一邊
+         # (2026-07-28 盤中實證)→ resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約
+         self._leaf_grace_secs = leaf_grace_secs
+@@ -215,6 +224,11 @@ class FuturesEngine:
+         # 到即將關閉的 loop(index_engine review A1 同款);_loop=None 同時擋
+         # leaf task 的收尾回寫(review I1)
+         self._loop = None
++        # flush timer 緊接著取消(任何 await 之前):留著會在 close 的 await 空隙觸發,
++        # 把「關機中」的 state 再廣播一次 / 讓 seq 前進(W4)
++        if self._flush_timer is not None:
++            self._flush_timer.cancel()
++            self._flush_timer = None
+         # 重試迴圈先收掉:留著會在 source close 後繼續 subscribe → 重連 TC4(同 leaf I1 理由)
+         resub, self._resub_task = self._resub_task, None
+         if resub is not None:
+@@ -423,13 +437,39 @@ class FuturesEngine:
+         if ym is not None:
+             st.resolved_ym = ym  # 快取;換月推播即更新
+             self._schedule_leaf_fallback(ym)
+-        self._seq += 1
+-        if self._broadcast is not None:
+-            self._broadcast(
+-                {
+-                    "type": "futures",
+-                    "seq": self._seq,
+-                    "product": product,
+-                    "state": st.payload(product),
+-                }
+-            )
++        # 廣播延到 flush:同商品叢發只送最後一則(payload 是全量快照,合併無資訊損失)
++        self._dirty[product] = None
++        if self._flush_timer is None and self._loop is not None:
++            self._flush_timer = self._loop.call_later(self._flush_interval_secs, self._flush)
++
++    def _flush(self) -> None:
++        """把 dirty 商品逐一廣播(插入序,每則 `seq += 1`)。
++
++        不變式(SC-0):首行先卸 timer(之後任何早退都不會留殘骸,下一筆 quote 照排);
++        `_loop is None` = close 已開始 → 不廣播;單則廣播例外記 log 續行下一個商品,
++        不中斷整輪(一個壞 WS 客戶端不得讓其餘商品的行情停擺)。
++        """
++        self._flush_timer = None
++        if self._loop is None:
++            return
++        while self._dirty:
++            product = next(iter(self._dirty))
++            del self._dirty[product]
++            st = self._states.get(product)
++            if st is None:
++                continue
++            # seq 一律遞增(`_broadcast is None` 只是不送)—— 與 coalesce 前同語意
++            self._seq += 1
++            if self._broadcast is None:
++                continue
++            try:
++                self._broadcast(
++                    {
++                        "type": "futures",
++                        "seq": self._seq,
++                        "product": product,
++                        "state": st.payload(product),
++                    }
++                )
++            except Exception:
++                logger.exception("futures broadcast failed (%s)", product)
+diff --git a/tests/live/test_futures_source.py b/tests/live/test_futures_source.py
+index 1dafa7ae..d3c9c5f0 100644
+--- a/tests/live/test_futures_source.py
++++ b/tests/live/test_futures_source.py
+@@ -1,8 +1,13 @@
+ from __future__ import annotations
+ 
++import datetime
+ import json
+ 
+-from copycat.live.futures_source import FuturesQuoteSource, futures_symbol
++from copycat.live.futures_source import (
++    FuturesQuoteSource,
++    futures_symbol,
++    in_futures_session_now,
++)
+ from copycat.live.session import session_key, session_window
+ from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+@@ -13,9 +18,19 @@ class TestSymbol:
+         assert futures_symbol("TMF") == "TC.F.TWF.TMF.HOT"
+ 
+ 
++def test_in_futures_session_now_uses_pad5() -> None:
++    """期貨盤別閘 = TXO 時段各寬 5 分(不另建第二張時段表)。"""
++    assert in_futures_session_now(datetime.time(13, 48)) is True  # 日盤收後寬限內
++    assert in_futures_session_now(datetime.time(13, 52)) is False  # 寬限外 = 盤外
++    assert in_futures_session_now(datetime.time(5, 3)) is True  # 夜盤收後寬限內
++
++
+ class TestHealDefaults:
+-    """自癒門檻(change-spec §3):三檔 HOT 全天都該有推播 → 30 / 60,盤外照跑
+-    (churn 上限 = 3 symbol / 300s,可接受;夜盤反而是最需要自癒的時段)。"""
++    """自癒門檻(change-spec §3):三檔 HOT 盤中都該有推播 → 30 / 60。
++
++    **source 層預設仍是 always**(純建構不看牆鐘);prod 的閘由
++    `app._default_futures_source` 給 = 交易日曆 AND `in_futures_session_now`
++    (日夜盤各寬 5 分),盤外不 churn。"""
+ 
+     def test_thresholds_and_always_active(self) -> None:
+         src = FuturesQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+diff --git a/tests/live/test_session.py b/tests/live/test_session.py
+index d81e4814..ae2d63af 100644
+--- a/tests/live/test_session.py
++++ b/tests/live/test_session.py
+@@ -65,6 +65,21 @@ class TestInTxoSession:
+         assert in_txo_session() in (True, False)
+ 
+ 
++def test_in_txo_session_pad() -> None:
++    """`pad` 把兩段各往外撐(期貨自癒閘用 5 分寬限,避免邊界誤關自癒)。"""
++    pad = datetime.timedelta(minutes=5)
++    assert in_txo_session(datetime.time(8, 39), pad=pad) is False
++    assert in_txo_session(datetime.time(8, 40), pad=pad) is True
++    assert in_txo_session(datetime.time(13, 50), pad=pad) is True
++    assert in_txo_session(datetime.time(13, 51), pad=pad) is False
++    assert in_txo_session(datetime.time(14, 54), pad=pad) is False
++    assert in_txo_session(datetime.time(14, 55), pad=pad) is True
++    assert in_txo_session(datetime.time(23, 59), pad=pad) is True
++    assert in_txo_session(datetime.time(2, 0), pad=pad) is True
++    assert in_txo_session(datetime.time(5, 5), pad=pad) is True
++    assert in_txo_session(datetime.time(5, 6), pad=pad) is False
++
++
+ class TestSessionWindow:
+     def test_day_window_matches_legacy(self) -> None:
+         # 日盤窗與既有寫死窗完全一致(SC-4 日盤不變)
+diff --git a/tests/server/test_futures_engine.py b/tests/server/test_futures_engine.py
+index f4a0f92b..663e5304 100644
+--- a/tests/server/test_futures_engine.py
++++ b/tests/server/test_futures_engine.py
+@@ -85,7 +85,9 @@ async def _drain() -> None:
+ async def _make() -> tuple[FuturesEngine, FakeSource, list[dict]]:
+     src = FakeSource()
+     events: list[dict] = []
+-    engine = FuturesEngine(lambda: src, broadcast=events.append)
++    # flush_interval_secs=0.0:coalesce 後仍走同一條 flush 路徑,但下一輪 loop 就送出,
++    # `_drain` 的「消化 call_soon 排入的 handler」語意不變(既有 assert 一則不動)
++    engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.0)
+     await engine.start()
+     return engine, src, events
+ 
+@@ -176,6 +178,119 @@ class TestBroadcast:
+         await engine.close()
+ 
+ 
++class TestCoalesce:
++    """SC-0~4:廣播改 per-product coalesce(flush 週期 0.1 s),`seq` 在 flush 時每則 +1。
++
++    行情叢發(夜盤實測 20 s / 312 則)每則都帶五檔全量 → WS 寫入量與前端 render 壓力
++    正比於 tick 數。state 仍每 quote 即時更新(W3),只有廣播被合併。
++    """
++
++    async def test_default_flush_interval_is_100ms(self) -> None:
++        engine = FuturesEngine(lambda: FakeSource())
++        assert engine._flush_interval_secs == 0.1
++
++    async def test_burst_same_product_coalesced(self) -> None:
++        src = FakeSource()
++        events: list[dict] = []
++        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
++        await engine.start()
++        try:
++            for price in ("23500", "23510", "23520", "23530", "23540"):
++                _push(src, _quote(TradingPrice=price))
++            await asyncio.sleep(0.2)
++            assert len(events) == 1
++            assert events[0]["state"]["p"] == 23_540_000  # payload = 最新 state
++            assert events[0]["seq"] == 1
++            assert engine.state()["seq"] == 1  # GET 與 WS 同源
++        finally:
++            await engine.close()
++
++    async def test_burst_two_products_two_messages_seq_contiguous(self) -> None:
++        src = FakeSource()
++        events: list[dict] = []
++        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
++        await engine.start()
++        try:
++            for price in ("23500", "23510", "23520"):
++                _push(src, _quote(TradingPrice=price))
++            for price in ("23400", "23410"):
++                _push(src, _quote("MXF", Security="FIMTX", TradingPrice=price))
++            await asyncio.sleep(0.2)
++            assert [e["product"] for e in events] == ["TXF", "MXF"]  # dirty 插入序
++            assert [e["seq"] for e in events] == [1, 2]
++            assert engine.state()["seq"] == 2
++        finally:
++            await engine.close()
++
++    async def test_second_wave_after_flush(self) -> None:
++        src = FakeSource()
++        events: list[dict] = []
++        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
++        await engine.start()
++        try:
++            _push(src, _quote(TradingPrice="23500"))
++            await asyncio.sleep(0.2)
++            _push(src, _quote(TradingPrice="23600"))
++            await asyncio.sleep(0.2)
++            assert [e["seq"] for e in events] == [1, 2]
++            assert events[1]["state"]["p"] == 23_600_000
++        finally:
++            await engine.close()
++
++    async def test_single_quote_delivered_within_interval(self) -> None:
++        """SC-4:latency 上限 = flush 週期(單筆不得被拖到下一輪)。"""
++        src = FakeSource()
++        events: list[dict] = []
++        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.05)
++        await engine.start()
++        try:
++            _push(src, _quote())
++            for _ in range(10):
++                if events:
++                    break
++                await asyncio.sleep(0.01)
++            assert len(events) == 1
++        finally:
++            await engine.close()
++
++    async def test_broadcast_exception_does_not_stall_stream(self) -> None:
++        """SC-0:單則廣播拋例外 → 記 log 續行,timer 不留殘骸(下一筆照排)。"""
++        src = FakeSource()
++        events: list[dict] = []
++        calls = 0
++
++        def broadcast(ev: dict) -> None:
++            nonlocal calls
++            calls += 1
++            if calls == 1:
++                raise RuntimeError("boom")
++            events.append(ev)
++
++        engine = FuturesEngine(lambda: src, broadcast=broadcast, flush_interval_secs=0.0)
++        await engine.start()
++        try:
++            _push(src, _quote())
++            await _drain()
++            assert events == []
++            _push(src, _quote(TradingPrice="23600"))
++            await _drain()
++            assert [e["seq"] for e in events] == [2]  # seq 續增,不因例外卡住
++        finally:
++            await engine.close()
++
++    async def test_close_with_pending_flush_timer_does_not_broadcast(self) -> None:
++        """W4 / SC-0 close 不變式:timer pending 時 close → 取消、不廣播、seq 不變。"""
++        src = FakeSource()
++        events: list[dict] = []
++        engine = FuturesEngine(lambda: src, broadcast=events.append, flush_interval_secs=0.5)
++        await engine.start()
++        _push(src, _quote())
++        await _drain()
++        await engine.close()  # 不等 flush 週期
++        assert events == []
++        assert engine.state()["seq"] == 0
++
++
+ class TestClosedEngine:
+     async def test_push_after_close_no_broadcast_no_seq_no_error(self) -> None:
+         # review C9:close 先斷 threadsafe 入口 — 之後 TC4 推播不得
+diff --git a/tests/server/test_main_wiring.py b/tests/server/test_main_wiring.py
+index 095f28a0..47e7bf17 100644
+--- a/tests/server/test_main_wiring.py
++++ b/tests/server/test_main_wiring.py
+@@ -306,20 +306,22 @@ def test_stock_and_index_heal_gate_ands_the_calendar(
+     assert gate() is clock, "交易日仍要 AND 盤中時段(盤外不得 churn)"
+ 
+ 
+-def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
+-    """期貨原本是 always(三檔 HOT 日夜盤都該有推播)—— 日曆只砍掉「整天沒有盤」那些日子。"""
++@pytest.mark.parametrize("clock", [True, False])
++def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock: bool) -> None:
++    """期貨閘 = 交易日曆 AND 盤別(原本是 always → 13:45–15:00 / 05:00–08:45 整段空 churn)。"""
+     import copycat.live.futures_source as futures_mod
+     from copycat.server import app as app_mod
+ 
+     seen = _capture(monkeypatch, futures_mod, "FuturesQuoteSource")
++    monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
+ 
+     app_mod._default_futures_source(_CAL)
+     gate = seen["kwargs"]["heal_active"]
+ 
+     monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+-    assert gate() is False
++    assert gate() is False, "非交易日不得自癒"
+     monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+-    assert gate() is True
++    assert gate() is clock, "交易日仍要 AND 盤別(盤外不得 churn)"
+ 
+ 
+ def test_corr_source_keeps_the_always_on_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+diff --git a/tests/server/test_ws_disconnect.py b/tests/server/test_ws_disconnect.py
+index 5314037e..061bb79b 100644
+--- a/tests/server/test_ws_disconnect.py
++++ b/tests/server/test_ws_disconnect.py
+@@ -613,6 +613,8 @@ class TestBroadcastRouteDisconnect:
+                 _abort(sock)
+                 # 0.02s cadence × 1.5s ≈ 75 次寫入,遠超 asyncio 的 5 次門檻:
+                 # 未修時必然累積警告,修好後 watcher 毫秒級收尾。
++                # (futures 一路走 per-product coalesce 0.1 s → 寫入次數降為 ~15 次;
++                #  pump 次數不受影響,15 仍遠超 5 次門檻,論證成立)
+                 time.sleep(1.5)
+ 
+                 assert pump.is_alive(), (
