@@ -4,11 +4,23 @@
 > 完整結果與量測見 `docs/research/2026-08-19-browser-crash-scan.md`;
 > workflow 原始 JSON 在該 session 的 `tasks/wuumatu3a.output`(session 專屬暫存,可能已清)。
 
-## 現況一句話
+## 現況一句話(2026-08-19 19:20 更新)
 
-renderer crash 的**根因尚未確認**(程式碼掃描無獨立可解釋的 P0/P1;閒置分頁無洩漏;崩潰時刻 14:11 為
-無行情空窗)。取證 loop 由原 session 的 cron 跑著;下面這批是掃描抓出、驗證者確認**程式碼事實成立但非
-崩潰根因**的 P2,值得獨立處理。**不要把它們當作 crash fix 來 commit**(subject 不寫「修崩潰」)。
+**根因已確認(19:07 第二次崩潰 + 19:09 重載即重現 + clearMeasures 實證)**:React 19.2.7 dev build 的
+Component Performance Track 對每個「props identity 變了」的 re-render 打一筆 `performance.measure`(~1.8 KB,
+含 props diff detail),Chrome 的 User Timing buffer 無上限、不在 V8 heap → 632 筆/秒 ≈ 1.1 MB/s 線性累積,
+4.5 小時 15 GB → renderer Aw Snap。**只影響 `npm run dev`**。證據與量測全在
+`docs/research/2026-08-19-browser-crash-scan.md` 的「根因(已確認)」節。
+
+### R0(最優先)`/bug dev 看盤數小時後 renderer Aw Snap:React dev Component Performance Track measure 無上限累積`
+- 紅測試難寫(瀏覽器 buffer 行為);以「dev-only 在 main.tsx 每 10 s `performance.clearMeasures()+clearMarks()`」
+  為最小修法,verify = 同 MCP 分頁實測 renderer Private 記憶體 30 分鐘走平(原 session loop 已裝同款 in-page
+  緩解並持續量測,結果會寫回報告「觀察紀錄」)。
+- 同步拍板:看盤日常是否改跑 production build(`npm run build` + preview / 靜態 serve → 8721)。
+- 放大因子(每則 WS 全樹 re-render、無 memo)歸 R2 / R6,不混進 R0。
+
+下面 R1–R6 是掃描抓出的 P2(驗證者當時判「非崩潰根因」;其中 FE-1/FE-3/FE-4 類 memo 缺口現在升格為
+**放大因子**,仍走 R6 效能輪)。
 
 ## 拍板待問(開工前先問 user 一次)
 
