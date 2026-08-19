@@ -1,0 +1,6 @@
+health: 0af45d67 None
+first series_id=TXO.202608 status=live ticks=0
+msgs in 20s = 1 (incl first)  bytes=588  KB/s=0.03
+consecutive identical (excl generated_at/dropped_foreign/queue_dropped) = 0
+ws state at end = OPEN
+GET /api/txo/snapshot == last ws msg (excl set): True; dropped_foreign first=0 get=0

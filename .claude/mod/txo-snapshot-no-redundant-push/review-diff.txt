@@ -1,0 +1,395 @@
+diff --git a/copycat/live/aggregate.py b/copycat/live/aggregate.py
+index c212d00f..40bf9bf9 100644
+--- a/copycat/live/aggregate.py
++++ b/copycat/live/aggregate.py
+@@ -67,20 +67,26 @@ class ChainAggregator:
+         self.totals = Totals()
+         # spot 獨立於序列(DR-13),reset 不清
+ 
+-    def route(self, tick: Tick) -> None:
++    def route(self, tick: Tick) -> bool:
++        """回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價皆 False。
++
++        呼叫端(EngineRuntime._consume)據此決定要不要標 changed;丟棄計數照舊累加。
++        """
+         if tick.symbol.startswith(_SPOT_PREFIX):
++            if self.spot_millipts == tick.price_millipts:
++                return False
+             self.spot_millipts = tick.price_millipts
+-            return
++            return True
+         if tick.symbol not in self._contracts:
+             self.totals.dropped_foreign_ticks += 1
+-            return
+-        self._ingest(tick)
++            return False
++        return self._ingest(tick)
+ 
+-    def _ingest(self, tick: Tick) -> None:
++    def _ingest(self, tick: Tick) -> bool:
+         if tick.cum_volume is not None:
+             last = self._last_cum.get(tick.symbol)
+             if last is not None and tick.cum_volume <= last:
+-                return  # stale-drop(重複推播 / 重連重放 / 回補重疊)
++                return False  # stale-drop(重複推播 / 重連重放 / 回補重疊)
+             self._last_cum[tick.symbol] = tick.cum_volume
+         self.totals.ticks += 1
+         pos = self._pos.setdefault(tick.symbol, _PosState())
+@@ -103,6 +109,7 @@ class ChainAggregator:
+         else:
+             self.totals.unclassified_ticks += 1
+             self.totals.unclassified_qty += tick.qty
++        return True
+ 
+     def ingest_backfill(self, ticks: list[Tick]) -> dict[str, int]:
+         """回補灌入:按 (symbol, precise_time, seq) 排序;重建 cum(Σqty)寫 _last_cum。
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index e9bc773c..9fdb8d48 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -1139,8 +1139,11 @@ def create_app(
+         runtime: EngineRuntime = websocket.app.state.runtime
+         await websocket.accept()
+         try:
+-            await websocket.send_json(runtime.latest_snapshot())
+-            await relay(websocket, runtime.snapshots())
++            # seed 必須是「已送出的那一個 dict 物件」:再叫一次 latest_snapshot 的話,
++            # 兩次之間發生的變動會被 generator 當成「跟首則一樣」吃掉
++            snap = runtime.latest_snapshot()
++            await websocket.send_json(snap)
++            await relay(websocket, runtime.snapshots(seed=snap))
+         except WebSocketDisconnect:
+             return
+ 
+diff --git a/copycat/server/engine.py b/copycat/server/engine.py
+index 7f6620fa..d6a58cf9 100644
+--- a/copycat/server/engine.py
++++ b/copycat/server/engine.py
+@@ -46,6 +46,14 @@ def _fmt_precise_time(precise_time: int) -> str:
+     return f"{hour:02d}:{hhmmss[2:4]}:{hhmmss[4:6]}"
+ 
+ 
++def _content(snap: dict) -> dict:
++    """內容比對用的複本:排除 `generated_at`(每次取都不同,不排除等於沒比)。
++
++    複本 —— 送出去的 dict 一個 key 都不能少。
++    """
++    return {k: v for k, v in snap.items() if k != "generated_at"}
++
++
+ class EngineRuntime:
+     """單一 active 序列的執行時:queue 消費 + 交接 + 自癒 + 節流廣播。"""
+ 
+@@ -124,16 +132,34 @@ class EngineRuntime:
+         snap["handover"] = self._handover
+         return snap
+ 
+-    async def snapshots(self) -> AsyncGenerator[dict, None]:
+-        """節流 snapshot 流:版本有變才 yield,間隔 ≥ throttle_secs。"""
++    async def snapshots(self, seed: dict | None = None) -> AsyncGenerator[dict, None]:
++        """節流 snapshot 流:版本有變**且內容有變**才 yield,間隔 ≥ throttle_secs。
++
++        `seed` = 呼叫端已經送出去的首則 payload(`/ws/txo-pnl` accept 後那一則)。傳進來
++        首則與串流就同源:首次迭代拿它當比對基準 —— 沒變動不重推同一份,而「首則送出後、
++        generator 起手前」發生的變動仍會在第一則推出。不傳則維持舊語意(第一次版本變動
++        一律推)。
++        """
+         last = self._version
++        prev = _content(seed) if seed is not None else None
++        if seed is not None:
++            # 首次迭代不等版本:seed 之後可能已經有變動,得馬上比一次
++            last = -1
+         while True:
+-            await self._changed.wait()
+-            self._changed.clear()
+             if self._version == last:
++                # 每輪重讀 `self._changed`(換代 Event):等的必須是「當下那一代」,
++                # 快取住舊代等於等一個永遠不會再 set 的物件
++                await self._changed.wait()
+                 continue
++            # `last` 必須在內容比對之前就推進:否則內容相同的那一輪會原地打轉,
++            # 而換代 Event 恆為 set → 無 await 的 tight loop 餓死 event loop
+             last = self._version
+-            yield self.latest_snapshot()
++            snap = self.latest_snapshot()
++            body = _content(snap)
++            if body == prev:
++                continue
++            prev = body
++            yield snap
+             await asyncio.sleep(self._throttle)
+ 
+     # ---- 生命週期 ----
+@@ -292,8 +318,9 @@ class EngineRuntime:
+             except TimeoutError:
+                 await self._maybe_self_heal()
+                 continue
+-            if self._agg is not None:
+-                self._agg.route(tick)
++            if self._agg is not None and self._agg.route(tick):
++                # route 回 False = 外來 symbol / stale 重送 / spot 同價 → snapshot 內容
++                # 沒動,標 changed 只會讓每個 WS client 白收一份 ~22 KB 全量快照
+                 self._mark_changed()
+             if self._force_heal:
+                 # 重連自癒不能只靠 timeout 分支:盤中連續 tick 下 timeout 永不觸發(Alt-3)
+@@ -350,8 +377,15 @@ class EngineRuntime:
+         self._mark_changed()
+ 
+     def _mark_changed(self) -> None:
++        """版本 +1 並「換代」Event:set 舊的、換上新的。
++
++        單一 Event + consumer `clear()` 會漏版本:A 還在 throttle sleep 時 B 醒來
++        clear 掉,A 回頭 `wait()` 就卡在一個已消費的訊號上(WS-TXO-SHARED-EVENT)。
++        換代後沒有人 clear,每個 consumer 等的都是自己那一代。
++        """
+         self._version += 1
+-        self._changed.set()
++        ev, self._changed = self._changed, asyncio.Event()
++        ev.set()
+ 
+     # ---- 測試鉤(僅測試用;凍結消費以模擬 queue 壓力)----
+ 
+diff --git a/tests/live/test_aggregate.py b/tests/live/test_aggregate.py
+index e32de083..1605547f 100644
+--- a/tests/live/test_aggregate.py
++++ b/tests/live/test_aggregate.py
+@@ -380,3 +380,20 @@ class TestContractsDetail:
+             agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+         assert not caplog.records  # snapshot 路徑零 warning
+         assert snap["contracts"][0]["strike"] == 42500
++
++
++def test_route_returns_change_flag() -> None:
++    """SC-1:route 回傳「本 tick 有沒有改到 snapshot 內容」,engine 只在 True 時標 changed。"""
++    agg = make_agg()
++    # 非本鏈 symbol:計數照加,但 snapshot 內容沒動 → False
++    assert agg.route(tick("TC.F.TWF.MXF.HOT", price=43_800_000, qty=1)) is False
++    assert agg.totals.dropped_foreign_ticks == 1
++    # 正常合約 tick → True;同 cum 重送(stale-drop)→ False
++    fresh = tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=10)
++    assert agg.route(fresh) is True
++    stale = tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=10)
++    assert agg.route(stale) is False
++    # spot:首筆寫入 → True;同價第二筆 → False;新價 → True
++    assert agg.route(tick(TXF, price=43_735_460, qty=1)) is True
++    assert agg.route(tick(TXF, price=43_735_460, qty=1, cum=100)) is False
++    assert agg.route(tick(TXF, price=43_736_000, qty=1)) is True
+diff --git a/tests/server/test_app.py b/tests/server/test_app.py
+index 0be3d696..247b472a 100644
+--- a/tests/server/test_app.py
++++ b/tests/server/test_app.py
+@@ -1,11 +1,13 @@
+ from __future__ import annotations
+ 
+-from typing import Callable
++from typing import AsyncGenerator, Callable
+ 
++import pytest
+ from fastapi.testclient import TestClient
+ 
+ from copycat.live.models import OptionContract, SeriesInfo, Tick
+ from copycat.server.app import create_app
++from copycat.server.engine import EngineRuntime
+ 
+ from tests.helpers.boot import BootedClient
+ 
+@@ -125,6 +127,39 @@ class TestWebSocket:
+                 nxt = ws.receive_json()
+                 assert nxt["totals"]["call_net_qty"] == 2
+ 
++    def test_ws_seed_is_first_sent_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """SC-3b:傳給 snapshots() 的 seed 必須就是已 send_json 出去的那一個 dict 物件
++        (不得二次呼叫 latest_snapshot —— 兩次之間的變動會被當成「沒變」吃掉)。"""
++        client, _ = make_client()
++        sent: list[dict] = []
++        seeds: list[dict | None] = []
++        with client:  # runtime 在 boot 序列裡才掛上 app.state
++            runtime: EngineRuntime = client.app.state.runtime  # type: ignore[attr-defined]
++            orig_latest = runtime.latest_snapshot
++            orig_snapshots = runtime.snapshots
++            # snapshots() 內部也用 self.latest_snapshot() 取快照,而 instance monkeypatch
++            # 一樣攔得到 → 過了 endpoint 那一行就停止記錄,計數才代表「endpoint 叫幾次」
++            recording = [True]
++
++            def latest_snapshot() -> dict:
++                snap = orig_latest()
++                if recording[0]:
++                    sent.append(snap)
++                return snap
++
++            def snapshots(seed: dict | None = None) -> AsyncGenerator[dict, None]:
++                seeds.append(seed)
++                recording[0] = False
++                return orig_snapshots(seed=seed)
++
++            monkeypatch.setattr(runtime, "latest_snapshot", latest_snapshot)
++            monkeypatch.setattr(runtime, "snapshots", snapshots)
++            with client.websocket_connect("/ws/txo-pnl") as ws:
++                assert ws.receive_json()["series_id"] == "TX4.202607"
++        assert len(sent) == 1
++        assert len(seeds) == 1
++        assert seeds[0] is sent[0]
++
+ 
+ class TestTxoContractsRoute:
+     """SC-11(Task 16b):OrderPanel 全鏈選單來源 — active 序列全集,非 snapshot 成交子集。"""
+diff --git a/tests/server/test_engine.py b/tests/server/test_engine.py
+index a52b0957..23c80c7b 100644
+--- a/tests/server/test_engine.py
++++ b/tests/server/test_engine.py
+@@ -1,8 +1,10 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import re
+ import threading
+-from typing import Any, Callable
++from contextlib import suppress
++from typing import Any, AsyncGenerator, Callable
+ 
+ import pytest
+ 
+@@ -410,6 +412,39 @@ async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
+         await rt.close()
+ 
+ 
++async def test_snapshots_two_clients_no_lost_wakeup() -> None:
++    """SC-3(WS-TXO-SHARED-EVENT):A 在 throttle sleep 期間被 B `clear()` 掉喚醒 → 漏版本。
++
++    以「內容真的會變」的方式 bump(新 cum 的合約 tick),避免與內容比對短路混淆。
++    """
++    fake = FakeQuoteSource()
++    rt = EngineRuntime(fake, throttle_secs=0.05)
++    await rt.start()
++    agen_a = rt.snapshots()
++    agen_b = rt.snapshots()
++    try:
++        assert fake.on_tick is not None
++        task_a = asyncio.ensure_future(agen_a.__anext__())
++        await asyncio.sleep(0)  # A 進入 wait()
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
++        first_a = await asyncio.wait_for(task_a, timeout=1.0)
++        assert first_a["totals"]["call_net_qty"] == 1
++
++        task_a2 = asyncio.ensure_future(agen_a.__anext__())
++        await asyncio.sleep(0)  # A 停在 throttle sleep
++        task_b = asyncio.ensure_future(agen_b.__anext__())
++        await asyncio.sleep(0)  # B 停在 wait()
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=2, t=2))
++        snap_b = await asyncio.wait_for(task_b, timeout=1.0)
++        assert snap_b["totals"]["call_net_qty"] == 2
++        snap_a = await asyncio.wait_for(task_a2, timeout=1.0)
++        assert snap_a["totals"]["call_net_qty"] == 2
++        await agen_a.aclose()
++        await agen_b.aclose()
++    finally:
++        await rt.close()
++
++
+ async def test_snapshots_throttled_stream_yields_on_change() -> None:
+     fake = FakeQuoteSource()
+     rt = EngineRuntime(fake, throttle_secs=0.01)
+@@ -425,6 +460,103 @@ async def test_snapshots_throttled_stream_yields_on_change() -> None:
+         await rt.close()
+ 
+ 
++async def _drain(
++    task: "asyncio.Task[dict] | None", agen: AsyncGenerator[dict, None] | None
++) -> None:
++    """收尾規約:pending 的 task 一律 cancel(取消過的 generator 視為終結、不再迭代);
++    只有 task 已完成(或從未起 task)的路徑才 aclose generator。"""
++    if task is not None and not task.done():
++        task.cancel()
++        with suppress(asyncio.CancelledError, StopAsyncIteration):
++            await task
++        return
++    if agen is not None:
++        await agen.aclose()
++
++
++async def test_snapshots_ignores_foreign_and_stale_ticks() -> None:
++    """SC-1:外來 symbol 與 stale(cum 未增)tick 不改 snapshot 內容 → 不推播。"""
++    fake = FakeQuoteSource()
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    await rt.start()
++    agen = rt.snapshots()
++    task: asyncio.Task[dict] | None = None
++    try:
++        assert fake.on_tick is not None
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
++        first = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
++        assert first["totals"]["call_net_qty"] == 1
++
++        task = asyncio.ensure_future(agen.__anext__())
++        fake.on_tick(tick("TC.F.TWF.MXF.HOT", price=43_800_000, qty=1, cum=9, t=2))
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=3))  # stale:cum 未增
++        await asyncio.sleep(0.3)
++        assert not task.done()
++
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=2, t=4))
++        nxt = await asyncio.wait_for(task, timeout=1.0)
++        assert nxt["totals"]["call_net_qty"] == 2
++    finally:
++        await _drain(task, agen)
++        await rt.close()
++
++
++async def test_snapshots_skips_identical_payload() -> None:
++    """SC-2:version 有變但內容(排除 generated_at)相同 → 不 yield;真變動才推。"""
++    fake = FakeQuoteSource()
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    await rt.start()
++    agen = rt.snapshots()
++    task: asyncio.Task[dict] | None = None
++    try:
++        assert fake.on_tick is not None
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
++        await asyncio.wait_for(agen.__anext__(), timeout=1.0)  # 建立 prev 基準
++
++        task = asyncio.ensure_future(agen.__anext__())
++        rt._mark_changed()
++        rt._mark_changed()
++        await asyncio.sleep(0.3)  # 正常返回 = 迴圈在 await,不是無 await 的 tight loop
++        assert not task.done()
++
++        rt._set_status("degraded")
++        snap = await asyncio.wait_for(task, timeout=1.0)
++        assert snap["status"] == "degraded"
++        assert re.fullmatch(r"\d{2}:\d{2}:\d{2}", snap["generated_at"]) is not None
++    finally:
++        await _drain(task, agen)
++        await rt.close()
++
++
++async def test_snapshots_seed_pushes_only_if_changed() -> None:
++    """SC-3b:seed = 已送出的首則;內容沒動不重推,首則之後發生的變動照推。"""
++    fake = FakeQuoteSource()
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    await rt.start()
++    task: asyncio.Task[dict] | None = None
++    agen: AsyncGenerator[dict, None] | None = None
++    try:
++        assert fake.on_tick is not None
++        # (a) seed 之後零變動 → 不重推首則
++        agen = rt.snapshots(seed=rt.latest_snapshot())
++        task = asyncio.ensure_future(agen.__anext__())
++        await asyncio.sleep(0.3)
++        assert not task.done()
++        await _drain(task, agen)
++        task = None
++
++        # (b) 首則送出後、迭代開始前發生的 tick 仍會在首次迭代推出
++        seed = rt.latest_snapshot()
++        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
++        await asyncio.sleep(0.05)
++        agen = rt.snapshots(seed=seed)
++        snap = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
++        assert snap["totals"]["call_net_qty"] == 1
++    finally:
++        await _drain(task, agen)
++        await rt.close()
++
++
+ class _BlockingUnsubSource(FakeQuoteSource):
+     """`unsubscribe` 卡住 —— 那是 `activate` 在設交接旗標**之前**的讓出點。
+ 
