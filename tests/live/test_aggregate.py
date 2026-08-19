@@ -380,3 +380,20 @@ class TestContractsDetail:
             agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
         assert not caplog.records  # snapshot 路徑零 warning
         assert snap["contracts"][0]["strike"] == 42500
+
+
+def test_route_returns_change_flag() -> None:
+    """SC-1:route 回傳「本 tick 有沒有改到 snapshot 內容」,engine 只在 True 時標 changed。"""
+    agg = make_agg()
+    # 非本鏈 symbol:計數照加,但 snapshot 內容沒動 → False
+    assert agg.route(tick("TC.F.TWF.MXF.HOT", price=43_800_000, qty=1)) is False
+    assert agg.totals.dropped_foreign_ticks == 1
+    # 正常合約 tick → True;同 cum 重送(stale-drop)→ False
+    fresh = tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=10)
+    assert agg.route(fresh) is True
+    stale = tick(C44000.symbol, price=100_000, qty=2, bid=99_000, ask=100_000, cum=10)
+    assert agg.route(stale) is False
+    # spot:首筆寫入 → True;同價第二筆 → False;新價 → True
+    assert agg.route(tick(TXF, price=43_735_460, qty=1)) is True
+    assert agg.route(tick(TXF, price=43_735_460, qty=1, cum=100)) is False
+    assert agg.route(tick(TXF, price=43_736_000, qty=1)) is True

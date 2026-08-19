@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import AsyncGenerator, Callable
 
+import pytest
 from fastapi.testclient import TestClient
 
 from copycat.live.models import OptionContract, SeriesInfo, Tick
 from copycat.server.app import create_app
+from copycat.server.engine import EngineRuntime
 
 from tests.helpers.boot import BootedClient
 
@@ -124,6 +126,39 @@ class TestWebSocket:
                 fake.on_tick(tick(price=100_000, qty=2, cum=2, t=5))
                 nxt = ws.receive_json()
                 assert nxt["totals"]["call_net_qty"] == 2
+
+    def test_ws_seed_is_first_sent_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SC-3b:傳給 snapshots() 的 seed 必須就是已 send_json 出去的那一個 dict 物件
+        (不得二次呼叫 latest_snapshot —— 兩次之間的變動會被當成「沒變」吃掉)。"""
+        client, _ = make_client()
+        sent: list[dict] = []
+        seeds: list[dict | None] = []
+        with client:  # runtime 在 boot 序列裡才掛上 app.state
+            runtime: EngineRuntime = client.app.state.runtime  # type: ignore[attr-defined]
+            orig_latest = runtime.latest_snapshot
+            orig_snapshots = runtime.snapshots
+            # snapshots() 內部也用 self.latest_snapshot() 取快照,而 instance monkeypatch
+            # 一樣攔得到 → 過了 endpoint 那一行就停止記錄,計數才代表「endpoint 叫幾次」
+            recording = [True]
+
+            def latest_snapshot() -> dict:
+                snap = orig_latest()
+                if recording[0]:
+                    sent.append(snap)
+                return snap
+
+            def snapshots(seed: dict | None = None) -> AsyncGenerator[dict, None]:
+                seeds.append(seed)
+                recording[0] = False
+                return orig_snapshots(seed=seed)
+
+            monkeypatch.setattr(runtime, "latest_snapshot", latest_snapshot)
+            monkeypatch.setattr(runtime, "snapshots", snapshots)
+            with client.websocket_connect("/ws/txo-pnl") as ws:
+                assert ws.receive_json()["series_id"] == "TX4.202607"
+        assert len(sent) == 1
+        assert len(seeds) == 1
+        assert seeds[0] is sent[0]
 
 
 class TestTxoContractsRoute:
