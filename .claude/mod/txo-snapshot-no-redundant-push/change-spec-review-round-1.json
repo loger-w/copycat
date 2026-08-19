@@ -1,0 +1,18 @@
+{
+ "round": 1, "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-19",
+ "note": "reviewer agent 無 Write 工具,原始 JSON 由 main agent 依 final message 摘錄落檔;problem 欄為摘要",
+ "findings": [
+  {"id":"R1","severity":"P0","location":{"file":"change-spec.md","section":"SC-1/SC-2"},"problem":"wait_for(agen.__anext__()) 逾時會 cancel 並終結 async generator,之後只剩 StopAsyncIteration;SC 照寫必紅","disposition":"accepted","resolution":"SC-1/SC-2 改 pending-task 判法(ensure_future + sleep + assert not done)"},
+  {"id":"R2","severity":"P0","location":{"file":"change-spec.md","section":"SC-3 vs SC-2"},"problem":"SC-3 用 bare _mark_changed bump 會被 SC-2 內容比對吃掉,兩 SC 互斥","disposition":"accepted","resolution":"SC-3 以真內容變動(新 cum tick)bump;明寫驗的是 Event 換代"},
+  {"id":"R3","severity":"P1","location":{"file":"copycat/server/app.py","section":"Edge 1 / W1"},"problem":"首則 send_json 與 generator 起手之間的 tick 版本會漏,改後推播稀疏讓 stale 持續到下一次真變動","disposition":"accepted","resolution":"新增 SC-3b snapshots(seed=首則) 內容比對;app.py 傳 seed"},
+  {"id":"R4","severity":"P1","location":{"file":"current-state.md","section":"Caller map"},"problem":"handover.py:63 flush 路徑逐筆 agg.route,caller map 寫反","disposition":"accepted","resolution":"caller map 補 handover.py:63;W9;edge 4 改寫(忽略回傳值,交接結束 _set_status 統一標)"},
+  {"id":"R5","severity":"P1","location":{"file":"change-spec.md","section":"Diff 級章節"},"problem":"Event 換代讓 SC-3 由紅轉綠 = bug fix,不能標 🔵 refactor","disposition":"accepted","resolution":"改 🔴 commit A 獨立;commit B 為內容比對/route bool"},
+  {"id":"R6","severity":"P1","location":{"file":"change-spec.md","section":"SC-4"},"problem":"20s ≤ 1 則在連線失敗時 vacuous 綠;未驗連線存活","disposition":"accepted","resolution":"SC-4 補首則 series_id 非 null / 仍 open / 反向 GET 對照"},
+  {"id":"R7","severity":"P2","location":{"file":"copycat/server/engine.py","section":"SC-2/D1b"},"problem":"pop generated_at 再比會把欄位從送出 payload 拿掉,前端靜默變「更新 -」","disposition":"accepted","resolution":"SC-2 明寫複本比對 + 測試 assert payload 仍含 generated_at"},
+  {"id":"R8","severity":"P2","location":{"file":"change-spec.md","section":"SC-5"},"problem":"「更新」在 footer 非 header","disposition":"accepted","resolution":"SC-5 改 footer App.tsx:352-358"},
+  {"id":"R9","severity":"P2","location":{"file":"change-spec.md","section":"白名單"},"problem":"test_no_write_to_dead_transport 依賴內容比對對每筆 tick 敏感,未列白名單","disposition":"accepted","resolution":"W8;比對範圍不得縮;註明 baseline 整檔跑間歇紅"},
+  {"id":"R10","severity":"P2","location":{"file":"change-spec.md","section":"SC/Out of scope"},"problem":"有行情時 spot 價變仍每週期推整包,無前後對照","disposition":"accepted","resolution":"Known risks 觀測型對照(非 gate)"},
+  {"id":"R11","severity":"P2","location":{"file":"copycat/server/ws.py","section":"Out of scope R3"},"problem":"長靜默保活只靠 uvicorn ping,未確認實作","disposition":"accepted","resolution":"已查 venv websockets 16.1.1 無 wsproto → ping 20s;Known risks 記錄"}
+ ],
+ "summary": {"P0":2,"P1":4,"P2":5,"accepted":11,"rejected":0}
+}
