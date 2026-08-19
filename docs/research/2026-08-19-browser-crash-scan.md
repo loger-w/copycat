@@ -89,3 +89,72 @@ WS-TXO-SHARED-EVENT、HEAL-SET-ITERATION、CAP-QUERY-OBSERVER-FANOUT 等)見 wor
 | 14:15 | 27 | 6791 | – | 基線(sampler 未裝) |
 | 14:31 | 27 | 6791 | – | 閒置 16 分鐘無變化 |
 | 14:45 | 30 | 6791 | 0 / 0 | sampler 植入 |
+| 15:07 | 47–70(GC 鋸齒) | 5426→5507 | 5 / 174 | 分頁 hidden(取樣被節流成 60s);15:00 夜盤開,DOM 6 分鐘 +80 節點,heap 無單向上升 |
+| 15:37 | 55–76(鋸齒,基線 47→57) | 6049(+542/30min) | 5 / 174 | 成長來源=hidden TXO 頁報價表列數(夜盤契約逐一有成交才長列,上限=鏈 143 檔),有界;非洩漏跡象 |
+| 16:07 | 67–106(谷底爬升:每 10 分鐘 min 30/45/37/43/55/60/55/67) | 6339 | 5 / 174 | **heap 谷底約 +35MB/小時 趨勢**,尚未達回報門檻(30 分鐘 <50MB),但若日盤 tick 量級下成比例放大即為嫌疑;下輪續看谷底是否被 major GC 拉回 |
+| 16:37 | 74–117(谷底 67/61/75/74,爬升放緩 ~+8MB/30min) | 6480 | 115 / 375 | 長任務 30 分鐘內 +110 次(max 375ms,可能分頁被切到前景);heap 趨勢仍微升、未達門檻 |
+| 17:07 | 89–130(谷底 74/78/81/89,單向 +12MB/30min;2h15m 累積谷底 +59MB) | 6534 | 115 / 375 | 慢速洩漏樣態確立(谷底不被 major GC 拉回);devtools MCP 為獨立 profile 看不到此分頁,heap snapshot 需 user 在 DevTools Memory 手動抓兩份(相隔 30 分)交我比對 |
+| 17:37 | 94–152(谷底 86/91/94/99,+10MB/30min 持平) | 6560 | 115 / 375 | 趨勢不變;等 user 的兩份 heapsnapshot |
+| 18:07 | 107–162(谷底 99/100/105/107,+8MB/30min) | 6600 | 115 / 375 | 趨勢不變;3h20m 谷底 30→107 |
+| 18:37 | (CDP 逾時,無法取樣) | – | – | **MCP 分頁 renderer 凍結**:javascript_tool `Runtime.evaluate` 45s 逾時、截圖回「Cannot access contents」 |
+
+### 18:40 OS 層證據(renderer 凍結當下)
+
+```
+PID 10572  --type=renderer  建立時間 14:11:27(= user 回報的 vite ECONNABORTED 時刻,即 F12 重整後新生的 renderer)
+  WorkingSet 6,188 MB / Private 15,330 MB / 累積 CPU 15,707 s(4.5 小時內 ≈ 一顆核心 100% 全程)
+  10 秒取樣 CPU delta = 10.05 s(此刻仍滿載一核);29 threads
+  最忙 thread 24288 = 12,250 s(其餘 926 / 539 / 295 / 290 s)
+其他 renderer 全部 <260 MB、CPU <160 s;系統 free 9.7 GB / 31.8 GB(不是系統層 OOM)
+```
+
+判讀:
+- 同一 renderer 自 14:11:27 起**單一執行緒持續 100% CPU + 記憶體線性膨脹到 15 GB commit**,這就是「跑幾小時後 Aw Snap」的直接成因(renderer 撞 V8/沙盒上限或 GC thrash 後被殺)。
+- 取樣分頁(同 site,極可能同 process)的 V8 heap 全程只 30→160 MB、主執行緒長任務僅 115 次 →
+  **膨脹的不是這個分頁的 JS heap、燒 CPU 的也不是主執行緒**。嫌疑:user 那個分頁(不同頁面 / 狀態)或
+  非 V8 記憶體(Web Audio 節點、ArrayBuffer、canvas/layer 備份、worker)。前端程式碼無 Worker;
+  Web Audio 只在 `useSignalAlerts.ts:playBeep`(R4 finding:suspended 時節點永不結束)。
+- 需要 user 端確認:Chrome 工作管理員(Shift+Esc)PID 10572 對應哪個分頁、該分頁停在哪一頁;
+  對該分頁開 DevTools → Performance 錄 10 秒看哪條 thread 滿載;Memory → heap snapshot。
+
+### 19:07 renderer 10572 死亡;19:09 重載後在新 renderer 16404 立刻重現 → 根因定位
+
+時序與量測(全部實測):
+- 19:07 PID 10572 消失;MCP 分頁變錯誤頁(截圖被拒 / localStorage 拒存取)。sampler 最後一筆 18:18:55
+  (V8 heap 115 MB)→ 之後主執行緒凍死到被殺;**V8 heap 全程最高 169 MB,與 15 GB 無關**。
+- 19:09:43 重載 → 新 renderer 16404 2 分鐘內 CPU 84 s、WS 362 MB,之後每分鐘 +70 MB、CPU ~75% 一核
+  (與 10572 的 1.1 MB/s 同速率)。分頁導去靜態頁 `/__build/sha` → CPU 立刻歸 0 → 是 app 頁本身。
+  在分頁內配 300 MB 後 16404 跳 +384 MB → 確認 16404 就是 MCP 分頁的 process(user 分頁不在其中)。
+- 主執行緒忙碌度:MessageChannel ping-pong 2 秒迭代數 靜態頁 200,033 vs app 頁 68,052 → **主執行緒 ~66%
+  忙,但全是 <50 ms 短任務**(所以 Long Task 觀察器看到 0,之前的 P2 判斷被這點誤導)。
+- 8 條 WS 實測 10 秒:futures 17.9 msg/s、stock 3.6、txo-pnl 1.2(23 KB/s)、corr/river 1.2 → 不是 IO 風暴。
+- **`performance.getEntriesByType('measure').length`:載入 1 分鐘 21,746 → 10 秒後 +6,318(632 筆/秒)
+  → 75,179**。名稱 `​LadderView` / `​Btn` / `​SideCells` …,detail =
+  `{devtools:{track:"Components ⚛", properties:[["Changed Props",""],["  rows","Referentially unequal but deeply equal objects. Consider memoization."]]}}`。
+- `performance.clearMeasures()` 清掉 75,179 筆 → renderer Private 762 → 624 MB(**−138 MB ≈ 1.8 KB/筆;
+  × 632 筆/秒 ≈ 1.1 MB/s,與 15 GB / 4.5 h 完全吻合**),之後又開始爬。
+
+## 根因(已確認)
+
+**React 19.2.7 development build 的 Component Performance Track**(`react-dom-client.development.js:4104-4180`):
+元件 re-render 且 `alternate.memoizedProps !== props` 時,用 `performance.measure("​"+name, {detail:{devtools:…}})`
+(還先跑 `addObjectDiffToProperties` 算 props diff);只有 props 同 identity 才走不留痕的 `console.timeStamp`。
+`supportsUserTiming` 在 Chrome 恆 true。Chrome 的 User Timing 條目(mark/measure)**沒有緩衝上限、不在 V8 heap、
+永不自動回收** → 每秒數百筆 × 1.8 KB 線性累積,幾小時後 renderer 吃到數 GB → Aw Snap。
+同時 props diff 計算讓主執行緒常態 ~66% 忙(短任務)。
+
+放大因子(本 app 特性):每則 WS 訊息(夜盤 ~25/s,日盤更高)都讓 App 根 setState → 五頁全樹 re-render,
+且幾乎所有子元件 props 都是新 identity(無 memo / useMemo)→ 每則訊息數十~數百個元件各留一筆 measure。
+這正是 workflow 被降為 P2 的 FE-1 / ALL-TABS-MOUNTED / FE-4 / FE-3 等「無記憶體滯留所以非根因」的 findings ——
+它們的 V8 推論沒錯,錯在沒算到 Blink 側的 User Timing buffer。
+
+**只影響 `npm run dev`(development build)**;production build(`npm run build`)沒有這段程式。
+user 的 14:11 崩潰與 19:07 崩潰都是同一機制。
+
+## 修法(待拍板,建議 /bug 走流程)
+
+1. **立即緩解(dev-only,一行)**:`main.tsx` 在 `import.meta.env.DEV` 下 `setInterval(() => { performance.clearMeasures(); performance.clearMarks(); }, 10_000)`。
+   不影響 DevTools Performance 錄製(trace 在發出當下就被擷取)。MCP 分頁已裝同款暫時緩解,由 loop 驗證走平。
+2. **看盤日常改跑 production build**(`npm run build` + `vite preview` 或靜態 serve 指向 8721):
+   根本上不該整天用 dev server 看盤;也順便拿掉 StrictMode double-render / dev 診斷開銷。
+3. 放大因子(R6 memo 邊界 / R2 futures 節流 / FE-1 App 根 setState)仍值得做,但屬效能,不是洩漏本體。
