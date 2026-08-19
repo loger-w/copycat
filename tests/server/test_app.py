@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from copycat.live.models import OptionContract, SeriesInfo, Tick
+from copycat.server import ws as ws_mod
 from copycat.server.app import create_app
 from copycat.server.engine import EngineRuntime
 
@@ -159,6 +160,25 @@ class TestWebSocket:
         assert len(sent) == 1
         assert len(seeds) == 1
         assert seeds[0] is sent[0]
+
+    def test_ws_heartbeat_ping_after_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SC-1(route 層):route 沒傳 `heartbeat_secs` 也要吃到模組常數。
+
+        首則仍是快照(W2:ping 不得插在 seed 之前 —— `_beat` 第一則要等滿一個間隔),
+        之後在零推播下也會收到 `{"type": "ping"}`。
+        """
+        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.05)
+        client, _ = make_client()
+        with client:
+            with client.websocket_connect("/ws/txo-pnl") as ws:
+                first = ws.receive_json()
+                assert first["series_id"] == "TX4.202607", "首則必須是快照,不是 ping"
+                for _ in range(10):
+                    msg = ws.receive_json()
+                    if msg == {"type": "ping"}:
+                        break
+                else:
+                    pytest.fail("10 則之內沒收到心跳 ping")
 
 
 class TestTxoContractsRoute:

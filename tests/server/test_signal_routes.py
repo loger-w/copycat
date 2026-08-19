@@ -32,6 +32,7 @@ from copycat.live.stock_models import StockBook, StockMeta, StockTick
 from copycat.live.stock_state import StockDayState
 from copycat.server import app as app_mod
 from copycat.server import signal_hub as hub_mod
+from copycat.server import ws as ws_mod
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
 from copycat.signal_rules import RULE_KINDS, Rule
@@ -778,6 +779,26 @@ class TestSignalRoutesWithoutStock:
 
         assert msg["kind"] == "limit_lock"
         assert msg["code"] == "2330"
+
+    def test_ws_stock_hub_only_stream_gets_ping(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """W13:TC4 down 的 hub-only 空流是「恆無推播」那條 —— 心跳最有價值處。
+
+        沒有心跳時這條連線與「半死」在前端完全不可分辨。首則仍是 status seed(W2)。
+        """
+        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.05)
+        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
+        _seed_watchlist(tmp_path)
+        app, _ = make_app(tmp_path, with_stock=False)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect("/ws/stock") as ws:
+                assert _recv_json(ws) == {
+                    "type": "status",
+                    "tc4": "down",
+                    "backfilling": None,
+                }
+                assert _recv_until(ws, "ping") == {"type": "ping"}
 
     def test_basis_falls_back_to_empty_daily_bars(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
