@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { useEffect, useSyncExternalStore } from "react";
 
 import { parseErrorDetail } from "@/lib/api-error";
+import { connectWithRetry } from "@/lib/ws-reconnect";
 import type {
   CapitalCancelBody,
   CapitalCloseBody,
@@ -215,58 +216,37 @@ export function useClosePosition() {
 // WS 連線(App 層掛一次 = 唯一連線 + 唯一 invalidate 接線;review B2/B4)
 // ---------------------------------------------------------------------------
 
-const BACKOFF_START_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
-
 export function useCapitalStream(): void {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
-
     // 唯一擁有者:WS 事件 → debounce invalidate(orders/positions hooks 不自行接線)
     const unsub = subscribeCapitalEvents((ev) => {
       const queryKey = EVENT_QUERY_KEY[ev.event];
       if (queryKey !== undefined) scheduleInvalidate(queryClient, queryKey);
     });
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/capital`);
-      setCapitalWsStatus("connecting");
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setCapitalWsStatus("open");
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          const msg = JSON.parse(ev.data) as CapitalEvent;
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/capital`;
+      },
+      {
+        onConnecting: () => setCapitalWsStatus("connecting"),
+        onOpen: () => setCapitalWsStatus("open"),
+        onMessage: (raw) => {
+          const msg = raw as CapitalEvent;
           if (typeof msg.event === "string") emitCapitalEvent(msg);
-        } catch (err) {
-          console.warn("capital ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        if (!alive) return;
-        setCapitalWsStatus("closed");
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+        },
+        onClose: () => setCapitalWsStatus("closed"),
+      },
+      { label: "capital ws" },
+    );
 
-    connect();
     return () => {
-      alive = false;
       unsub();
       clearInvalidateTimers();
-      window.clearTimeout(timer);
-      ws?.close();
+      conn.close();
     };
   }, [queryClient]);
 }

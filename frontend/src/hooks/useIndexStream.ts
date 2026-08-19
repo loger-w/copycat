@@ -8,6 +8,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { connectWithRetry } from "@/lib/ws-reconnect";
+
 export type WsStatus = "connecting" | "open" | "closed";
 
 export interface IndexSeries {
@@ -32,6 +34,7 @@ export interface IndexStreamState {
   wsStatus: WsStatus;
 }
 
+/** refetch 失敗重試的退避(WS 重連退避已移進 `connectWithRetry`)。 */
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
 
@@ -43,6 +46,15 @@ interface WireSeries {
   stale?: boolean;
   last_minute?: [string, number] | null;
   minutes?: Record<string, number>;
+}
+
+/** WS 一則訊息的線上形狀(原本寫在 `handle` 的參數位置,抽名字給 helper 的 cast 用)。 */
+interface WireMsg {
+  type: string;
+  trade_date?: string;
+  twse?: WireSeries;
+  otc?: WireSeries;
+  txf?: TxfQuote | null;
 }
 
 function toSeries(w: WireSeries, prev: IndexSeries | null): IndexSeries {
@@ -131,21 +143,10 @@ export function useIndexStream(): IndexStreamState {
   };
 
   useEffect(() => {
-    let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
-
     aliveRef.current = true; // StrictMode remount:cleanup 後重進要復活
     void refetch();
 
-    const handle = (msg: {
-      type: string;
-      trade_date?: string;
-      twse?: WireSeries;
-      otc?: WireSeries;
-      txf?: TxfQuote | null;
-    }): void => {
+    const handle = (msg: WireMsg): void => {
       if (msg.type !== "index") return;
       const incomingDate = msg.trade_date ?? null;
       if (
@@ -167,41 +168,28 @@ export function useIndexStream(): IndexStreamState {
       if (msg.txf !== undefined) setTxf(msg.txf);
     };
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/index`);
-      setWsStatus("connecting");
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setWsStatus("open");
-        void refetch(); // reconnect 對齊(F3:斷線期間漏訊息)
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          handle(JSON.parse(ev.data));
-        } catch (err) {
-          console.warn("index ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        if (!alive) return;
-        setWsStatus("closed");
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/index`;
+      },
+      {
+        onConnecting: () => setWsStatus("connecting"),
+        onOpen: () => {
+          setWsStatus("open");
+          void refetch(); // reconnect 對齊(F3:斷線期間漏訊息)
+        },
+        onMessage: (msg) => handle(msg as WireMsg),
+        onClose: () => setWsStatus("closed"),
+      },
+      { label: "index ws" },
+    );
 
-    connect();
     return () => {
-      alive = false;
       aliveRef.current = false;
-      window.clearTimeout(timer);
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = undefined;
-      ws?.close();
+      conn.close();
     };
   }, []);
 

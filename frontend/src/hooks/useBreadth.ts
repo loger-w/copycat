@@ -10,11 +10,10 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { BreadthPoint, BreadthState } from "@/types";
 
 const ENDPOINT = "/api/market/breadth";
-const BACKOFF_START_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
 
 /** WS 每輪一則;`last_minute` 只在該輪真的 append 了一格時帶值。 */
 interface WireMsg {
@@ -84,11 +83,6 @@ export function useBreadth(): BreadthState | null {
   };
 
   useEffect(() => {
-    let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
-
     void refetch();
 
     const handle = (msg: WireMsg): void => {
@@ -118,35 +112,23 @@ export function useBreadth(): BreadthState | null {
       });
     };
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/breadth`);
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        void refetch(); // reconnect 對齊:斷線期間的分鐘格只在全量裡
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          handle(JSON.parse(ev.data) as WireMsg);
-        } catch (err) {
-          console.warn("breadth ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        if (!alive) return;
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+    // 本 hook 無 wsStatus → 不需要 onConnecting
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/breadth`;
+      },
+      {
+        onOpen: () => {
+          void refetch(); // reconnect 對齊:斷線期間的分鐘格只在全量裡
+        },
+        onMessage: (msg) => handle(msg as WireMsg),
+      },
+      { label: "breadth ws" },
+    );
 
-    connect();
     return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      ws?.close();
+      conn.close();
     };
   }, []);
 

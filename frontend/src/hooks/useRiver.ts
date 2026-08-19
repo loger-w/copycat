@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { RiverDelta, RiverLeg, RiverState } from "@/types";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -22,9 +23,6 @@ export interface RiverStreamState {
   state: RiverState | null;
   wsStatus: WsStatus;
 }
-
-const BACKOFF_START_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
 
 /** union 合併:既有 offset 優先(較新的 delta 不被較舊的 snapshot 蓋掉)。 */
 function mergeLeg(prev: RiverLeg | undefined, next: RiverLeg): RiverLeg {
@@ -86,10 +84,8 @@ export function useRiver(): RiverStreamState {
   const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // `alive` 只剩 `load()` 的在途守門(WS 重連守門已移進 helper 的 `stopped`)
     let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
 
     const applySnapshot = (next: RiverState): void => {
       // 直接採用 snapshot 的 seq(不取 max):snapshot 一律反映 server 當下狀態,
@@ -136,39 +132,27 @@ export function useRiver(): RiverStreamState {
       });
     };
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/river`);
-      setWsStatus("connecting");
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setWsStatus("open");
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          const msg = JSON.parse(ev.data) as RiverState | RiverDelta;
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/river`;
+      },
+      {
+        onConnecting: () => setWsStatus("connecting"),
+        onOpen: () => setWsStatus("open"),
+        onMessage: (raw) => {
+          const msg = raw as RiverState | RiverDelta;
           if (msg.type === "river") applySnapshot(msg as RiverState);
           else if (msg.type === "river_delta") onDelta(msg as RiverDelta);
-        } catch (err) {
-          console.warn("river ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        if (!alive) return;
-        setWsStatus("closed");
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+        },
+        onClose: () => setWsStatus("closed"),
+      },
+      { label: "river ws" },
+    );
 
-    connect();
     return () => {
       alive = false;
-      window.clearTimeout(timer);
-      ws?.close();
+      conn.close();
     };
   }, []);
 
