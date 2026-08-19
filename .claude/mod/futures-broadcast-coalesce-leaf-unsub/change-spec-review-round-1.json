@@ -1,0 +1,21 @@
+{
+ "round": 1, "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-19",
+ "note": "reviewer 無 Write,JSON 由 main agent 依 final message 摘錄;problem 為摘要",
+ "findings": [
+  {"id":"R1","severity":"P0","section":"Diff/commit C","problem":"test_main_wiring::test_futures_heal_gate_ands_the_calendar 交易日 gate() is True 會依牆鐘紅,spec 漏標該紅","disposition":"accepted","resolution":"SC-7 標該紅→改寫(monkeypatch in_futures_session_now);caller map 補"},
+  {"id":"R2","severity":"P0","section":"commit A flush_interval_secs","problem":"未釘預設值/未列 app.py 接線,prod 可能 no-op","disposition":"accepted","resolution":"D2e 預設 0.1、_make 傳 0.0、SC-0 鎖預設值測試"},
+  {"id":"R3","severity":"P1","section":"SC-8 降級","problem":"--verify 不建 futures engine,降級路徑不存在","disposition":"accepted","resolution":"改 sidecar PushingFuturesSource 樣板"},
+  {"id":"R4","severity":"P1","section":"D2c/W5","problem":"退訂後 HOT 二度靜默無再武裝路徑","disposition":"accepted","resolution":"D2h 選 (a) 依賴 source 層 per-symbol 自癒;Known risks + next-time 觀察"},
+  {"id":"R5","severity":"P1","section":"D2c vs Out of scope","problem":"全部 ym vs 舊月不退 自相矛盾","disposition":"accepted","resolution":"D2g 全部 ym 含舊月;Out of scope 改寫;SC-5 多 ym 案例"},
+  {"id":"R6","severity":"P1","section":"SC-7/D2d","problem":"SC-7 案例全被既有 in_txo_session 通過,驗不到寬限;重複時段表","disposition":"accepted","resolution":"改擴充 session.in_txo_session(pad);SC-7 鎖邊界 08:39/08:40/13:50/13:51/14:54/14:55/05:05/05:06"},
+  {"id":"R7","severity":"P1","section":"commit B unsubscribe_leaf","problem":"未規定不 ensure_connected,鏡射會在 close 後重連(KeepAlive 洩漏)","disposition":"accepted","resolution":"SC-6 明寫不 ensure_connected + Connect 次數 0 斷言"},
+  {"id":"R8","severity":"P1","section":"Edge 1/3 flush","problem":"_flush 不變式未定:例外可留 timer 殘骸 → 永久停擺零訊號","disposition":"accepted","resolution":"SC-0 不變式 + broadcast 拋例外測試"},
+  {"id":"R9","severity":"P2","section":"Edge 5","problem":"退訂失敗以 tick 率重試佔 REQ 互斥","disposition":"accepted","resolution":"leaf_unsub_backoff_secs=30 退避"},
+  {"id":"R10","severity":"P2","section":"Caller map","problem":"漏測試層 caller(capital_api ws / ws_disconnect futures case)","disposition":"accepted","resolution":"caller map + W9"},
+  {"id":"R11","severity":"P2","section":"D2a","problem":"_broadcast None 時 seq 是否遞增未定","disposition":"accepted","resolution":"D2f 一律遞增"},
+  {"id":"R12","severity":"P2","section":"SC-5/W5","problem":"測試類名錯、第三條斷言 vacuous","disposition":"accepted","resolution":"類名對齊;斷言改 count 不增 / key 不回 _leaf_done"},
+  {"id":"R13","severity":"P2","section":"futures_source docstring","problem":"commit C 後 docstring / TestHealDefaults 說明過時","disposition":"accepted","resolution":"W10 同 commit 更新"},
+  {"id":"R14","severity":"P2","section":"Edge cases","problem":"leaf subscribe in-flight 時 HOT 回來的交錯未列","disposition":"accepted","resolution":"Edge 8:靠下一筆 HOT 收掉,不加分支"}
+ ],
+ "summary": {"P0":2,"P1":6,"P2":6,"accepted":14,"rejected":0}
+}
