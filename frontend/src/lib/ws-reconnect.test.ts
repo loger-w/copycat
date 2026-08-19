@@ -9,10 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   connectWithRetry,
+  resetWsPingMemory,
   WS_BACKOFF_CAP_MS,
   WS_BACKOFF_START_MS,
   WS_MIN_UPTIME_MS,
   WS_SHORT_LIVED_CAP_MS,
+  WS_SILENCE_TIMEOUT_MS,
+  WS_WATCHDOG_TICK_MS,
 } from "@/lib/ws-reconnect";
 
 class FakeWS {
@@ -290,6 +293,168 @@ describe("connectWithRetry", () => {
     latest().onclose?.();
     vi.advanceTimersByTime(150);
     expect(FakeWS.instances.length).toBe(3);
+    handle.close();
+  });
+});
+
+/** SC-2:半死連線(TCP 活著但零 frame)靠「太久沒收到任何訊息」自己分辨並重連。 */
+describe("connectWithRetry 靜默 watchdog", () => {
+  const URL_A = "ws://host/ws/wd-a";
+
+  beforeEach(() => {
+    resetWsPingMemory();
+  });
+
+  it("收到首則 ping 後武裝;35 s 全靜默 → 卸 handler + close + onClose + 重連", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" });
+
+    vi.advanceTimersByTime(WS_SILENCE_TIMEOUT_MS); // 30 s 整:尚未「超過」
+    expect(onClose).not.toHaveBeenCalled();
+    expect(gen1.closed).toBe(false);
+
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS); // 下一個 tick → 判定靜默
+    expect(gen1.closed).toBe(true);
+    expect(gen1.onmessage).toBeNull(); // 放棄前先卸 handler(不等 onclose)
+    expect(gen1.onclose).toBeNull();
+    expect(gen1.onerror).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(FakeWS.instances.length).toBe(1); // 重連走 backoff,不是同步新建
+
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS); // 存活遠超 minUptime → 1 s
+    expect(FakeWS.instances.length).toBe(2);
+    handle.close();
+  });
+
+  it("29 s 時收到任一訊息 → 基準重置,再 29 s 仍不觸發(Edge 3)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+
+    vi.advanceTimersByTime(29_000);
+    latest().emit({ type: "corr", seq: 1 });
+    vi.advanceTimersByTime(29_000);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+    handle.close();
+  });
+
+  it("從未收過 ping → 永不武裝:60 s 全靜默也不重連(舊後端行為 = 現況)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry("ws://host/ws/wd-never", { onMessage: () => {}, onClose });
+    latest().onopen?.();
+
+    vi.advanceTimersByTime(60_000);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+    expect(vi.getTimerCount()).toBe(0); // 連 interval 都沒建
+    handle.close();
+  });
+
+  it("被放棄的舊 socket 遲到 onclose / onmessage 不回呼也不重複重連(Edge 2)", () => {
+    const onClose = vi.fn();
+    const onMessage = vi.fn();
+    const handle = connectWithRetry(URL_A, { onMessage, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" });
+
+    vi.advanceTimersByTime(35_000); // watchdog 觸發
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(FakeWS.instances.length).toBe(2);
+
+    gen1.onclose?.(); // Chromium closing handshake 60 s 後才到
+    gen1.emit({ type: "corr", late: true });
+    vi.advanceTimersByTime(WS_BACKOFF_CAP_MS * 2);
+
+    expect(FakeWS.instances.length).toBe(2);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    handle.close();
+  });
+
+  it("舊世代 watchdog 不觸發新世代重連(任何關閉路徑都 clearInterval)", () => {
+    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" }); // gen1 武裝
+    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
+    gen1.onclose?.(); // 自然斷線(非 watchdog)
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(FakeWS.instances.length).toBe(2);
+
+    // gen2 尚未 onopen → 未武裝;gen1 的 interval 若沒清會誤生第三代
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(2);
+    handle.close();
+  });
+
+  it("close() 清掉 watchdog interval(不留任何 timer)", () => {
+    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+    expect(vi.getTimerCount()).toBe(1); // watchdog interval
+
+    handle.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("sticky:同 URL 的後續世代 onopen 即武裝(即使自己沒收過 ping)", () => {
+    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" }); // 記住「這個 server 會送 ping」
+    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
+    gen1.onclose?.();
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(FakeWS.instances.length).toBe(2);
+
+    const gen2 = latest();
+    gen2.onopen?.(); // gen2 全程收不到任何訊息(含 ping)
+    vi.advanceTimersByTime(35_000);
+    expect(gen2.closed).toBe(true);
+    expect(FakeWS.instances.length).toBe(2);
+
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(FakeWS.instances.length).toBe(3);
+    handle.close();
+  });
+
+  it("不同 URL 不互相 sticky", () => {
+    const a = connectWithRetry(URL_A, { onMessage: () => {} });
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+    a.close();
+
+    FakeWS.instances = [];
+    const onClose = vi.fn();
+    const b = connectWithRetry("ws://host/ws/wd-b", { onMessage: () => {}, onClose });
+    latest().onopen?.(); // 另一個 URL:沒人證明它會送 ping
+
+    vi.advanceTimersByTime(60_000);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+    b.close();
+  });
+
+  it("主執行緒凍結 / 睡眠喚醒:tick 間隔 > 2×tick 只重置基準不判定(Edge 13)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+
+    vi.setSystemTime(Date.now() + 40_000); // 凍結 40 s(timer 沒跑,牆鐘照走)
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS); // 醒來後第一個 tick
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+
+    vi.advanceTimersByTime(35_000); // 重置後才是真靜默
+    expect(onClose).toHaveBeenCalledTimes(1);
     handle.close();
   });
 });
