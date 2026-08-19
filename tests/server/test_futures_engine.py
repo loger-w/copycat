@@ -271,10 +271,39 @@ class TestCoalesce:
         try:
             _push(src, _quote())
             await _drain()
-            assert events == []
+            # 失敗那則回標 dirty(review C1)→ 下一週期(interval 0.0 = 下一輪 loop)重送
+            assert [e["seq"] for e in events] == [2]
             _push(src, _quote(TradingPrice="23600"))
             await _drain()
-            assert [e["seq"] for e in events] == [2]  # seq 續增,不因例外卡住
+            assert [e["seq"] for e in events] == [2, 3]  # seq 續增,不因例外卡住
+        finally:
+            await engine.close()
+
+    async def test_broadcast_failure_requeues_latest_state(self) -> None:
+        """review C1:廣播失敗那則不得永久遺失(叢發尾巴無後續 quote = client 停舊價)。
+
+        重送耗掉的 seq 1 不回收(D2f:每則 flush 一律 +1)→ client 看到 seq 由 0 跳到 2,
+        前端 `useFuturesStream` 判跳號後 REST refetch 全量,收斂到同一份 state,可接受。
+        """
+        src = FakeSource()
+        events: list[dict] = []
+        calls = 0
+
+        def broadcast(ev: dict) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("boom")
+            events.append(ev)
+
+        engine = FuturesEngine(lambda: src, broadcast=broadcast, flush_interval_secs=0.05)
+        await engine.start()
+        try:
+            _push(src, _quote(TradingPrice="23555"))
+            await asyncio.sleep(0.2)
+            assert len(events) == 1
+            assert events[0]["state"]["p"] == 23_555_000  # 重送的是最新 state,不是空的
+            assert events[0]["seq"] == 2
         finally:
             await engine.close()
 

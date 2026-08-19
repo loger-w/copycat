@@ -448,16 +448,20 @@ class FuturesEngine:
         不變式(SC-0):首行先卸 timer(之後任何早退都不會留殘骸,下一筆 quote 照排);
         `_loop is None` = close 已開始 → 不廣播;單則廣播例外記 log 續行下一個商品,
         不中斷整輪(一個壞 WS 客戶端不得讓其餘商品的行情停擺)。
+
+        **失敗那則回標 dirty、下一週期重送**(review C1):不重排的話,叢發尾巴那則若
+        廣播失敗又沒有後續 quote,client 會停在舊價且全鏈零訊號。重排放迴圈外走同一個
+        `call_later` 週期 —— broadcast 恆拋時就是每週期試一次,不會原地打轉。
+        迭代取 `list(self._dirty)` 快照(不是 `while self._dirty`):回標的項目不得在
+        同一輪被重讀,否則恆拋的 broadcast 會讓這個 callback 永不返回、整條 loop 卡死。
         """
         self._flush_timer = None
         if self._loop is None:
             return
-        while self._dirty:
-            product = next(iter(self._dirty))
-            del self._dirty[product]
-            st = self._states.get(product)
-            if st is None:
-                continue
+        failed: list[str] = []
+        for product in list(self._dirty):
+            self._dirty.pop(product, None)
+            st = self._states[product]  # _handle_quote 只對 _states 既有 key 標 dirty
             # seq 一律遞增(`_broadcast is None` 只是不送)—— 與 coalesce 前同語意
             self._seq += 1
             if self._broadcast is None:
@@ -473,3 +477,8 @@ class FuturesEngine:
                 )
             except Exception:
                 logger.exception("futures broadcast failed (%s)", product)
+                failed.append(product)
+        for product in failed:
+            self._dirty.setdefault(product, None)  # 期間有新 quote 就沿用它的插入位
+        if failed and self._flush_timer is None and self._loop is not None:
+            self._flush_timer = self._loop.call_later(self._flush_interval_secs, self._flush)
