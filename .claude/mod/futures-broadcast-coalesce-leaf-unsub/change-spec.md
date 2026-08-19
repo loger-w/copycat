@@ -111,3 +111,8 @@
 退訂而 moot,其餘 accepted)
 - leaf 退訂撤下後雙訂閱續存:engine 仍處理 HOT+leaf 兩流(CPU 微量),WS 層由 coalesce 合併。
 - R10:`test_ws_disconnect` futures 一路寫入次數論證裕度變薄(~15 次 vs 5 次門檻),實作加註。
+
+## self_review_head
+
+`301fdfcd`(code review round-1:correctness(唯讀)→ test-coverage(mutation)序列兩 lens,P1×2 / P2×12 全 accepted;
+fix 波 cf6ee247 / 1e81ee61 / 301fdfcd)。收尾增量 review 以此為基準。

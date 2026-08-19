@@ -1,0 +1,23 @@
+{
+ "round": 1, "date": "2026-08-19", "base": "bfb1bd12..a8ff852a", "lenses": ["correctness (opus, read-only probe)", "test-coverage (opus, mutation; 序列執行)"],
+ "gates_at_review": {"pytest": "2775 passed(implementer 全套)", "ruff": "pass", "pyright": "0"},
+ "findings": [
+  {"id":"C1","severity":"P2","file":"copycat/server/futures_engine.py","line":462,"claim":"broadcast 拋例外那一則的 state 永久遺失(dirty 已清、不重排),叢發尾巴無後續 quote 時 client 停舊價零訊號","disposition":"accepted","resolution":"迴圈外收集 failed → 回標 dirty + 重排 timer(週期天然限速)+ 測試"},
+  {"id":"C2","severity":"P2","file":"copycat/live/session.py","line":32,"claim":"_shift 大 pad 仍 wrap,docstring 誤導","disposition":"accepted","resolution":"docstring 明寫 pad 上界前提(不加 raise)"},
+  {"id":"C3","severity":"P2","file":"copycat/live/futures_source.py","line":43,"claim":"5 分寬限比個股 30 分窄,盤前窗理由未記","disposition":"accepted","resolution":"FUTURES_SESSION_PAD 註解補理由(期貨無試撮 + R1 5s 內重掛)"},
+  {"id":"C4","severity":"P2","file":"copycat/server/futures_engine.py","line":259,"claim":"state() seq 是廣播游標,products 可領先一個週期","disposition":"accepted","resolution":"state() docstring 明寫"},
+  {"id":"T1","severity":"P1","file":"tests/server/test_futures_engine.py","line":281,"claim":"close 不變式測試不殺 mutant (b)(e),且 _drain 300ms vs 0.5s 有 false-red 風險","disposition":"accepted","resolution":"改決定性版本(interval 0.0 + sleep(0) + assert timer is not None → close)"},
+  {"id":"T2","severity":"P1","file":"tests/server/test_futures_engine.py","line":181,"claim":"W3 state 每 quote 即時更新 零覆蓋","disposition":"accepted","resolution":"interval 5.0 push → sleep(0) → state p 新值且 events == []"},
+  {"id":"T3","severity":"P2","file":"tests/server/test_futures_engine.py","line":219,"claim":"插入序斷言對 PRODUCTS 順序實作免疫","disposition":"accepted","resolution":"推送順序改 MXF→TXF 斷言 ['MXF','TXF']"},
+  {"id":"T4","severity":"P2","file":"copycat/server/futures_engine.py","line":462,"claim":"_broadcast None 時 seq 遞增零覆蓋","disposition":"accepted","resolution":"新測 broadcast=None 兩品 → seq 2"},
+  {"id":"T5","severity":"P2","file":"copycat/server/futures_engine.py","line":442,"claim":"單一 flush timer 去重零覆蓋(每 quote 排 timer 的退化不可見)","disposition":"accepted","resolution":"timer handle 同一顆斷言"},
+  {"id":"T6","severity":"P2","file":"tests/server/test_futures_engine.py","line":240,"claim":"latency 測試實鬆 3×","disposition":"accepted","resolution":"interval 0.2 + loop.time 實量 < 0.2+0.05"},
+  {"id":"T7","severity":"P2","file":"tests/live/test_futures_source.py","line":21,"claim":"uses_pad5 釘不住 5(pad=3 存活)","disposition":"accepted","resolution":"邊界對 13:50/13:51、05:05/05:06 + assert FUTURES_SESSION_PAD == 5 min"},
+  {"id":"T8","severity":"P2","file":"copycat/server/futures_engine.py","line":442,"claim":"Edge 3 _loop None 時 _handle_quote 不排 timer 零覆蓋","disposition":"accepted","resolution":"close 後直呼 _handle_quote 不 raise、timer None、events []"},
+  {"id":"T9","severity":"P2","file":"copycat/server/futures_engine.py","line":455,"claim":"while self._dirty 違反時 hang 非紅;st is None 分支不可達","disposition":"accepted","resolution":"改 for product in list(self._dirty): pop;刪不可達分支(併 C1 同 commit)"},
+  {"id":"T10","severity":"P2","file":"copycat/server/app.py","line":803,"claim":"prod 不覆寫 0.1 未鎖","disposition":"accepted","resolution":"app.py:803 加註 D2e + test_main_wiring 斷言 create_app 出的 engine _flush_interval_secs == 0.1(若取得 engine 成本低)"}
+ ],
+ "whitelist_check": "W1–W10 全 ok(correctness lens probe 實證);W3 / W4(flush 面)測試層缺口 → T1/T2 補",
+ "process_note": "本輪兩 lens 序列(唯讀 → mutation),無汙染;mutation lens 收工 git status 乾淨。",
+ "summary": {"P0":0,"P1":2,"P2":12,"accepted":14,"rejected":0}
+}

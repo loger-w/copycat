@@ -1,0 +1,8 @@
+health: a8ff852a
+msgs in 10s = 192  bytes=52416  KB/s=5.12  per-product={'TXF': 64, 'MXF': 64, 'TMF': 64}
+seq first=181 last=372 gaps=0; GET state seq=420 (>= last ws seq: True)
+inter-msg gap ms: min=0.0 p50=0.1 max=128.1
+  MXF: per-product gap ms min=123.1 p50=125.6 n=64
+  TMF: per-product gap ms min=123.1 p50=125.6 n=64
+  TXF: per-product gap ms min=123.1 p50=125.6 n=64
+ws state at end = OPEN
