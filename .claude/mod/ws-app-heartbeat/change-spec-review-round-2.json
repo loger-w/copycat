@@ -1,0 +1,18 @@
+{
+  "round": 2,
+  "mode": "narrowed (amendment sections only)",
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-19",
+  "summary": {"P0": 0, "P1": 5, "P2": 3, "accepted": 8, "rejected": 0, "refuted": 0},
+  "findings": [
+    {"id": "R14", "severity": "P1", "claim": "openedAt 未規定每代重設 → 曾健康後 server down 退化 1 Hz", "disposition": "accepted", "resolution": "§4.3 connect() 首行 openedAt=null;Edge 12;🔴(b) 增紅測 2,4,8"},
+    {"id": "R15", "severity": "P1", "claim": "三分支與 🔵 複刻 onopen 歸零衝突、第二條該變 assertion 未事前標", "disposition": "accepted", "resolution": "🔴(b) 明寫移除 onopen 歸零;🔵 characterization 兩條事前標『該變』"},
+    {"id": "R16", "severity": "P1", "claim": "首則 ping 武裝 → 首則 ping 前半死永久盲區,代價敘述不實", "disposition": "accepted", "resolution": "sticky per-URL(收過 ping 後後代 onopen 即武裝)+ 殘餘盲區(分頁第一代)如實記 Edge 14 + 測試"},
+    {"id": "R17", "severity": "P1", "claim": "🔵 若做 onclose 世代比對 = 夾帶行為改動", "disposition": "accepted", "resolution": "逐 handler 寫清:🔵 onclose 只 stopped 守門、無世代比對;🟢 watchdog 卸舊 socket handler,不另做比對"},
+    {"id": "R18", "severity": "P1", "claim": "SC-7『半死期間顯示連線中斷』與狀態機矛盾(1 s 後轉連線中)", "disposition": "accepted", "resolution": "SC-7 改兩段序列;SC-2(c) 證據以 Network 面板時戳為主、badge 為輔"},
+    {"id": "R19", "severity": "P2", "claim": "starlette OSError→Disconnect 只在 CONNECTED;close_sent 後 RuntimeError 路徑未表態", "quick_check": "starlette/websockets.py:85-89、uvicorn utils.py:10 已驗", "disposition": "accepted", "resolution": "Edge 5 更正;RuntimeError 同 _send 曝險接受 + test_heartbeat_non_disconnect_error_propagates"},
+    {"id": "R20", "severity": "P2", "claim": "5 s tick 後偵測延遲 30–35 s,SC 仍寫 31 s", "disposition": "accepted", "resolution": "SC 上界 36 s;測試以 tick 邊界表述"},
+    {"id": "R21", "severity": "P2", "claim": "驗證需先等首則 ping;主執行緒凍結誤判 → 解除武裝未表態", "disposition": "accepted", "resolution": "SC-2(c) 步驟先等 ≥10 s;§4.2 凍結防誤判(tick 間隔 >2×tick 重置基準)+ W11 註記 + Edge 13"}
+  ],
+  "exit": "無 P0,P1 全數處置 → spec review 結束(預設 1 輪 + P0 觸發限縮 1 輪,已用盡,不再加輪)"
+}

@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "scope": "git diff e55f6082..86c0f843 (review-diff.txt)",
+  "lenses": ["correctness/async (opus)", "test-coverage/spec-parity (opus)"],
+  "date": "2026-08-20",
+  "summary": {"P0": 0, "P1": 2, "P2": 12, "accepted": 12, "accepted_doc_only": 3, "rejected": 0, "deferred": 1},
+  "findings": [
+    {"id": "T1", "severity": "P1", "file": "frontend/src/lib/ws-reconnect.test.ts", "claim": "無測試證明後續 ping 也餵 watchdog(mutant:lastMsgAt 只在資料訊息更新 → 零推播健康連線每 35 s 自砍)", "disposition": "accepted", "resolution": "新增測試:ping 武裝 → 20 s → 再 ping → 20 s 不觸發 → 35 s 觸發;併 T2 斷言 getTimerCount()===1"},
+    {"id": "T4", "severity": "P1", "file": "tests/server/test_ws_disconnect.py", "claim": "test_heartbeat_ping_when_idle `>= 2` 在 Windows 15.6 ms timer 粒度下零餘裕(實測恆 2)→ flake 候選", "disposition": "accepted", "resolution": "改事件驅動有界輪詢:等到 count >= 3 或 2 s deadline,再斷言 >= 3"},
+    {"id": "T2", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts", "claim": "arm() 冪等守門無測試(interval 洩漏 mutant 全綠)", "disposition": "accepted", "resolution": "併入 T1 測試 getTimerCount()===1 after 2+ pings"},
+    {"id": "T3", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.test.ts", "claim": "凍結防誤判只釘「不判定」未釘「重置基準」", "disposition": "accepted", "resolution": "凍結 tick 後先 advance 一個 tick 斷言 onClose 未呼叫,再 35 s 觸發"},
+    {"id": "T5", "severity": "P2", "file": "tests/server/test_ws_disconnect.py", "claim": "send_lock(frame 不交錯)無守門,刪鎖全綠", "disposition": "accepted", "resolution": "新 fake send_json 記 in/out + await sleep(0),推播與心跳並行後斷言 in/out 成對不相鄰 in,in"},
+    {"id": "T6", "severity": "P2", "file": "tests/server/test_ws_disconnect.py", "claim": "心跳版 RST 測試的 batches>=4 正向對照可被 ping 單獨滿足", "disposition": "accepted_doc_only", "resolution": "docstring 註明正向對照由零心跳版提供、本測試只驗 RST 後零寫入"},
+    {"id": "T7", "severity": "P2", "file": "tests/server/test_ws_disconnect.py:141", "claim": "TestAbruptDisconnect::test_no_write_to_dead_transport 未隔離心跳", "disposition": "accepted", "resolution": "同款 monkeypatch WS_HEARTBEAT_SECS=0 + docstring 一句"},
+    {"id": "A1", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts:174", "claim": "🔵 commit 把 onMessage 移出 try → handler 例外不再被吞(逐字複刻不成立)", "disposition": "accepted", "resolution": "恢復對等:onMessage 另包 try/catch + console.warn(`${label}: 訊息處理失敗`)(🔵 修正 commit);parse 失敗與處理失敗標籤可區分"},
+    {"id": "A2", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts:191", "claim": "handle.close() 未卸 onmessage/onopen/onerror,與文件「之後所有回呼不再觸發」不符", "disposition": "accepted", "resolution": "🔴 red→green:close() 先卸三 handler 再 close(鏡射 watchdog 路徑);紅測 = close() 後舊 socket emit → onMessage 不呼叫"},
+    {"id": "A3", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts:129", "claim": "Chrome intensive throttling(隱藏 >5 min,timer 每分鐘一次)下凍結守門每 tick 都成立 → watchdog 在背景分頁恆不判定(false negative;回前景 ~35 s 自癒)", "disposition": "accepted_doc_only", "resolution": "spec Edge 15 + next-time 記限制(看盤分頁常駐可見;隱藏分頁失效模式 = 回前景後 35 s 內自癒,不誤殺武裝);不改 code"},
+    {"id": "A4", "severity": "P2", "file": "copycat/server/ws.py:128", "claim": "docstring 過度宣稱「stream 首則永遠在 ping 前」(index/capital/futures 無 seed,首幀可為 ping)", "disposition": "accepted", "resolution": "docstring 改寫"},
+    {"id": "A5", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts:106", "claim": "connect() 無 stopped 守門(onClose 內同步 close() 會漏一條重連)", "disposition": "accepted", "resolution": "connect() 首行 if (stopped) return(併入 A2 的 commit 或獨立 🔴)"},
+    {"id": "A6", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts:71", "claim": "sticky Set 不過期:後端回滾到無 ping 版且分頁未重整 → 每 35 s 誤殺", "disposition": "accepted_doc_only", "resolution": "spec §3 補第三個錯位方向(回滾也要重整分頁)"},
+    {"id": "A7", "severity": "P2", "file": "frontend/src/lib/ws-reconnect.ts:143", "claim": "8 條 WS 同步觸發 → 1 s 後同時重連 + refetch(thundering herd)", "disposition": "deferred", "resolution": "真環境 SC-2 兩輪 stall 復原皆即時無 stampede 跡象;記 next-time(加 jitter 候選)"}
+  ],
+  "p2_summary": "commit hygiene 全過(5 對 red/green 配對正確、三類未混、既有 assertion 零改);W1–W13 無違反;backend relay 鎖範圍 / cancel / 例外分流核過;frontend openedAt 每代重設、三分支算術、interval 清理、卸 handler 核過。sub-P2 nits(txo warn 文案、PING 可變 dict、雙例外 raise 短路、時鐘倒退)不處理。"
+}
