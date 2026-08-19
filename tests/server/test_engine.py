@@ -557,6 +557,31 @@ async def test_snapshots_seed_pushes_only_if_changed() -> None:
         await rt.close()
 
 
+async def test_snapshots_handover_in_place_key_change_pushes() -> None:
+    """C1:`handover` 若與 `_handover` 同物件,就地改鍵會讓 prev 同步變動 → 永不推播。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    agen = rt.snapshots()
+    task: asyncio.Task[dict] | None = None
+    try:
+        assert fake.on_tick is not None
+        handover: dict = {"phase": "idle"}
+        rt._handover = handover
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        first = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
+        assert first["handover"] == {"phase": "idle"}
+
+        task = asyncio.ensure_future(agen.__anext__())
+        handover["phase"] = "backfilling"  # 就地改鍵(不整體重新賦值)
+        rt._mark_changed()
+        snap = await asyncio.wait_for(task, timeout=1.0)
+        assert snap["handover"] == {"phase": "backfilling"}
+    finally:
+        await _drain(task, agen)
+        await rt.close()
+
+
 class _BlockingUnsubSource(FakeQuoteSource):
     """`unsubscribe` 卡住 —— 那是 `activate` 在設交接旗標**之前**的讓出點。
 
