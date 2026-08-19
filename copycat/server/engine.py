@@ -46,6 +46,14 @@ def _fmt_precise_time(precise_time: int) -> str:
     return f"{hour:02d}:{hhmmss[2:4]}:{hhmmss[4:6]}"
 
 
+def _content(snap: dict) -> dict:
+    """內容比對用的複本:排除 `generated_at`(每次取都不同,不排除等於沒比)。
+
+    複本 —— 送出去的 dict 一個 key 都不能少。
+    """
+    return {k: v for k, v in snap.items() if k != "generated_at"}
+
+
 class EngineRuntime:
     """單一 active 序列的執行時:queue 消費 + 交接 + 自癒 + 節流廣播。"""
 
@@ -124,17 +132,34 @@ class EngineRuntime:
         snap["handover"] = self._handover
         return snap
 
-    async def snapshots(self) -> AsyncGenerator[dict, None]:
-        """節流 snapshot 流:版本有變才 yield,間隔 ≥ throttle_secs。"""
+    async def snapshots(self, seed: dict | None = None) -> AsyncGenerator[dict, None]:
+        """節流 snapshot 流:版本有變**且內容有變**才 yield,間隔 ≥ throttle_secs。
+
+        `seed` = 呼叫端已經送出去的首則 payload(`/ws/txo-pnl` accept 後那一則)。傳進來
+        首則與串流就同源:首次迭代拿它當比對基準 —— 沒變動不重推同一份,而「首則送出後、
+        generator 起手前」發生的變動仍會在第一則推出。不傳則維持舊語意(第一次版本變動
+        一律推)。
+        """
         last = self._version
+        prev = _content(seed) if seed is not None else None
+        if seed is not None:
+            # 首次迭代不等版本:seed 之後可能已經有變動,得馬上比一次
+            last = -1
         while True:
             if self._version == last:
                 # 每輪重讀 `self._changed`(換代 Event):等的必須是「當下那一代」,
                 # 快取住舊代等於等一個永遠不會再 set 的物件
                 await self._changed.wait()
                 continue
+            # `last` 必須在內容比對之前就推進:否則內容相同的那一輪會原地打轉,
+            # 而換代 Event 恆為 set → 無 await 的 tight loop 餓死 event loop
             last = self._version
-            yield self.latest_snapshot()
+            snap = self.latest_snapshot()
+            body = _content(snap)
+            if body == prev:
+                continue
+            prev = body
+            yield snap
             await asyncio.sleep(self._throttle)
 
     # ---- 生命週期 ----
@@ -293,8 +318,9 @@ class EngineRuntime:
             except TimeoutError:
                 await self._maybe_self_heal()
                 continue
-            if self._agg is not None:
-                self._agg.route(tick)
+            if self._agg is not None and self._agg.route(tick):
+                # route 回 False = 外來 symbol / stale 重送 / spot 同價 → snapshot 內容
+                # 沒動,標 changed 只會讓每個 WS client 白收一份 ~22 KB 全量快照
                 self._mark_changed()
             if self._force_heal:
                 # 重連自癒不能只靠 timeout 分支:盤中連續 tick 下 timeout 永不觸發(Alt-3)
