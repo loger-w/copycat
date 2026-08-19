@@ -1,0 +1,11 @@
+{
+ "round": 2, "scope": "限縮輪(只審 round-1 amendment 段落 + cross-round)", "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-19",
+ "findings": [
+  {"id":"R12","severity":"P1","location":{"file":"change-spec.md","section":"SC-2/SC-3b"},"problem":"seed=None 時 prev 初值未定義,SC-2 可達性依賴此未寫的選擇","disposition":"accepted","resolution":"seed=None → prev=None(舊語意);SC-2 測試先餵真 tick 取第一則再驗短路"},
+  {"id":"R13","severity":"P1","location":{"file":"change-spec.md","section":"SC-2/SC-3 疊加"},"problem":"換代 Event + 內容比對短路若未先推進 last → 無 await tight loop 餓死 loop","disposition":"accepted","resolution":"SC-2 明寫迴圈不變式 (a)(b)(c) + sleep 正常返回斷言"},
+  {"id":"R14","severity":"P1","location":{"file":"change-spec.md","section":"SC-4 (4) vs W7"},"problem":"GET 對照嚴格相等會因 dropped_foreign_ticks / queue_dropped 增加而假紅","disposition":"accepted","resolution":"排除集合加 totals.dropped_foreign_ticks / totals.queue_dropped,增量記錄為 SC-1 佐證"},
+  {"id":"R15","severity":"P2","location":{"file":"change-spec.md","section":"SC-1 判法"},"problem":"pending task 收尾未規約,失敗路徑 aclose 會拋 already running","disposition":"accepted","resolution":"SC-1 補收尾規約(cancel + suppress;取消後不再迭代)"},
+  {"id":"R16","severity":"P2","location":{"file":"copycat/server/app.py","section":"SC-3b 接線"},"problem":"app.py 若二次呼叫 latest_snapshot 當 seed 會靜默留下 R3 的洞且測試全綠","disposition":"accepted","resolution":"SC-3b 明寫同一 dict 物件;新增 test_app 接線測試(monkeypatch 記錄物件同一性)"}
+ ],
+ "summary": {"P0":0,"P1":3,"P2":2,"accepted":5,"rejected":0,"exit":"無 P0,P1 全數修入 spec → 退出 spec review"}
+}
