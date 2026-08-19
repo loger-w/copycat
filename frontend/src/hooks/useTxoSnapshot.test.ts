@@ -67,4 +67,20 @@ describe("useTxoSnapshot", () => {
     unmount();
     expect(FakeWebSocket.instances[0]?.closed).toBe(true);
   });
+
+  it("心跳 ping 不覆蓋 snapshot(SC-3)", () => {
+    const { result } = renderHook(() => useTxoSnapshot());
+    const ws = FakeWebSocket.instances[0];
+    expect(ws).toBeDefined();
+    act(() => {
+      ws?.onopen?.();
+      ws?.onmessage?.({ data: JSON.stringify({ series_id: "TX4.202607", curve: [] }) });
+    });
+    expect(result.current.data?.series_id).toBe("TX4.202607");
+
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: "ping" }) });
+    });
+    expect(result.current.data?.series_id).toBe("TX4.202607"); // 仍是原 snapshot
+  });
 });
