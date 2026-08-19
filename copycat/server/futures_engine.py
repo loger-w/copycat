@@ -5,6 +5,9 @@
 - `resolved_contract(product)`:HOT 推播月份欄位解析 YYYYMM(resolve_contract_ym 純函式,
   futures_models)快取;跨日失效(date 變更清空)、換月即更新;解析不到 None = 送單層
   拒單(design §5 edge case 4)。
+- 廣播 per-product coalesce:quote 只更新 state + 標 dirty,每 `flush_interval_secs`
+  (prod 0.1 s)把每個 dirty 商品各送**一則最新 payload**;`seq` 在 flush 時每則 +1
+  (前端以 seq 連續判跳號)。state 本身仍每 quote 即時更新(REST/pull 讀不受影響)。
 - 期貨無試撮窗、分鐘聚合 out of scope(梯不需要)→ 不做兩段式換日/StockDayState。
 - 成交欄位 last-write-wins 不做 cum 序 stale-drop:REALTIME TradeVolume 每時段(日/夜盤)
   重新起算(live/session 時區事實),同日 cum 回捲是正常換場,嚴格遞增 guard 會整段丟夜盤。
@@ -106,6 +109,7 @@ class FuturesEngine:
         products: tuple[str, ...] = PRODUCTS,
         leaf_grace_secs: float = 3.0,
         resub_interval_secs: float = 10.0,
+        flush_interval_secs: float = 0.1,
     ) -> None:
         self._source_factory = source_factory
         self._broadcast = broadcast
@@ -114,6 +118,11 @@ class FuturesEngine:
         self._seq = 0
         self._source: FuturesSource | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # 廣播節流:dirty 商品集(dict 保插入序,value 不用)+ 單一 flush timer。
+        # 五檔盤中要即時 → 週期取 0.1 s(1 s 會讓閃電梯五檔慢一秒)
+        self._flush_interval_secs = flush_interval_secs
+        self._dirty: dict[str, None] = {}
+        self._flush_timer: asyncio.TimerHandle | None = None
         # leaf fallback:HOT 與 TXO runtime spot 同 symbol 跨 session 只推一邊
         # (2026-07-28 盤中實證)→ resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約
         self._leaf_grace_secs = leaf_grace_secs
@@ -215,6 +224,11 @@ class FuturesEngine:
         # 到即將關閉的 loop(index_engine review A1 同款);_loop=None 同時擋
         # leaf task 的收尾回寫(review I1)
         self._loop = None
+        # flush timer 緊接著取消(任何 await 之前):留著會在 close 的 await 空隙觸發,
+        # 把「關機中」的 state 再廣播一次 / 讓 seq 前進(W4)
+        if self._flush_timer is not None:
+            self._flush_timer.cancel()
+            self._flush_timer = None
         # 重試迴圈先收掉:留著會在 source close 後繼續 subscribe → 重連 TC4(同 leaf I1 理由)
         resub, self._resub_task = self._resub_task, None
         if resub is not None:
@@ -423,13 +437,39 @@ class FuturesEngine:
         if ym is not None:
             st.resolved_ym = ym  # 快取;換月推播即更新
             self._schedule_leaf_fallback(ym)
-        self._seq += 1
-        if self._broadcast is not None:
-            self._broadcast(
-                {
-                    "type": "futures",
-                    "seq": self._seq,
-                    "product": product,
-                    "state": st.payload(product),
-                }
-            )
+        # 廣播延到 flush:同商品叢發只送最後一則(payload 是全量快照,合併無資訊損失)
+        self._dirty[product] = None
+        if self._flush_timer is None and self._loop is not None:
+            self._flush_timer = self._loop.call_later(self._flush_interval_secs, self._flush)
+
+    def _flush(self) -> None:
+        """把 dirty 商品逐一廣播(插入序,每則 `seq += 1`)。
+
+        不變式(SC-0):首行先卸 timer(之後任何早退都不會留殘骸,下一筆 quote 照排);
+        `_loop is None` = close 已開始 → 不廣播;單則廣播例外記 log 續行下一個商品,
+        不中斷整輪(一個壞 WS 客戶端不得讓其餘商品的行情停擺)。
+        """
+        self._flush_timer = None
+        if self._loop is None:
+            return
+        while self._dirty:
+            product = next(iter(self._dirty))
+            del self._dirty[product]
+            st = self._states.get(product)
+            if st is None:
+                continue
+            # seq 一律遞增(`_broadcast is None` 只是不送)—— 與 coalesce 前同語意
+            self._seq += 1
+            if self._broadcast is None:
+                continue
+            try:
+                self._broadcast(
+                    {
+                        "type": "futures",
+                        "seq": self._seq,
+                        "product": product,
+                        "state": st.payload(product),
+                    }
+                )
+            except Exception:
+                logger.exception("futures broadcast failed (%s)", product)
