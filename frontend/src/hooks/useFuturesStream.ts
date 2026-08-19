@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { FuturesProductState, FuturesState } from "@/types";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -45,9 +46,6 @@ export function mergePending(snap: FuturesState, pending: FuturesWsMsg[]): Futur
   }
   return next;
 }
-
-const BACKOFF_START_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
 
 export function useFuturesStream(): FuturesStreamState {
   const [state, setState] = useState<FuturesState | null>(null);
@@ -88,11 +86,6 @@ export function useFuturesStream(): FuturesStreamState {
   };
 
   useEffect(() => {
-    let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
-
     void refetch();
 
     const handle = (msg: FuturesWsMsg): void => {
@@ -113,38 +106,25 @@ export function useFuturesStream(): FuturesStreamState {
       }
     };
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/futures`);
-      setWsStatus("connecting");
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setWsStatus("open");
-        void refetch(); // 重連對齊(斷線期間漏訊息)
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          handle(JSON.parse(ev.data) as FuturesWsMsg);
-        } catch (err) {
-          console.warn("futures ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        if (!alive) return;
-        setWsStatus("closed");
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/futures`;
+      },
+      {
+        onConnecting: () => setWsStatus("connecting"),
+        onOpen: () => {
+          setWsStatus("open");
+          void refetch(); // 重連對齊(斷線期間漏訊息)
+        },
+        onMessage: (msg) => handle(msg as FuturesWsMsg),
+        onClose: () => setWsStatus("closed"),
+      },
+      { label: "futures ws" },
+    );
 
-    connect();
     return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      ws?.close();
+      conn.close();
     };
   }, []);
 

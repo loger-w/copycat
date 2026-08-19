@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { CorrState } from "@/types";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -15,19 +16,14 @@ export interface CorrStreamState {
   wsStatus: WsStatus;
 }
 
-const BACKOFF_START_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
-
 export function useCorrelation(): CorrStreamState {
   const [state, setState] = useState<CorrState | null>(null);
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const seqRef = useRef<number>(-1);
 
   useEffect(() => {
+    // `alive` 只剩 `load()` 的在途守門(WS 重連守門已移進 helper 的 `stopped`)
     let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
 
     const apply = (next: CorrState): void => {
       // 全量快照:只擋住亂序抵達的舊快照,不做跳號 refetch
@@ -50,39 +46,27 @@ export function useCorrelation(): CorrStreamState {
 
     void load();
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/corr`);
-      setWsStatus("connecting");
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setWsStatus("open");
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          const msg = JSON.parse(ev.data) as CorrState;
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/corr`;
+      },
+      {
+        onConnecting: () => setWsStatus("connecting"),
+        onOpen: () => setWsStatus("open"),
+        onMessage: (raw) => {
+          const msg = raw as CorrState;
           if (msg.type !== "corr") return;
           apply(msg);
-        } catch (err) {
-          console.warn("corr ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        if (!alive) return;
-        setWsStatus("closed");
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+        },
+        onClose: () => setWsStatus("closed"),
+      },
+      { label: "corr ws" },
+    );
 
-    connect();
     return () => {
       alive = false;
-      window.clearTimeout(timer);
-      ws?.close();
+      conn.close();
     };
   }, []);
 

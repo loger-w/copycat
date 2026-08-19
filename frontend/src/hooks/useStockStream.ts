@@ -12,6 +12,7 @@ import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickMsg } from "@/lib/stock-accum";
 import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
+import { connectWithRetry } from "@/lib/ws-reconnect";
 
 export type WsStatus = "connecting" | "open" | "closed";
 
@@ -48,9 +49,6 @@ export interface StockStreamState {
   stkfut: StkfutQuote | null;
   wsStatus: WsStatus;
 }
-
-const BACKOFF_START_MS = 1_000;
-const BACKOFF_CAP_MS = 30_000;
 
 /** snapshot refetch 失敗的重試節奏(F-3)。與 WS 重連的 backoff 分開:WS 斷了整頁都停,
  *  refetch 失敗只是**這一個標的**的一次取數失敗,cap 短一點才不會讓自癒等半分鐘。
@@ -285,10 +283,6 @@ export function useStockStream(
 
   // WS 連線(單條,頁面生命週期)
   useEffect(() => {
-    let alive = true;
-    let ws: WebSocket | null = null;
-    let timer: number | undefined;
-    let backoff = BACKOFF_START_MS;
     mountedRef.current = true; // StrictMode 的 mount→cleanup→mount 會把它翻回來
 
     const handle = (msg: WsMsg): void => {
@@ -427,49 +421,39 @@ export function useStockStream(
       }
     };
 
-    const connect = (): void => {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/stock`);
-      setWsStatus("connecting");
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        wsOpenRef.current = true;
-        setWsStatus("open");
-        void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
-        emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
-      };
-      ws.onmessage = (ev: MessageEvent<string>) => {
-        try {
-          handle(JSON.parse(ev.data) as WsMsg);
-        } catch (err) {
-          console.warn("stock ws: 無法解析訊息", err);
-        }
-      };
-      ws.onclose = () => {
-        // `alive` 早退**必須在寫旗標之前**:`wsOpenRef` 是跨 socket 世代共用的單一
-        // 旗標,而 StrictMode(dev)的 mount→cleanup→mount 會讓舊 socket 的 close
-        // 晚於新 socket 的 `onopen` 到達 —— 寫在前面的話旗標被清成 false 且**再也
-        // 回不去**(新 socket 的 onopen 已經發生過了),scheduleRetry 的第三道檢查
-        // 永遠早退 = F-3 自癒整條失效。unmount 語意不受影響:cleanup 自己會清旗標。
-        if (!alive) return;
-        wsOpenRef.current = false;
-        setWsStatus("closed");
-        timer = window.setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
-      };
-      ws.onerror = () => {
-        ws?.close();
-      };
-    };
+    // helper 的 `stopped` 守門(= 舊 `alive` 早退)在 `onClose` **被呼叫之前**就擋掉了,
+    // 所以下面寫旗標的順序語意與舊版相同:`wsOpenRef` 是跨 socket 世代共用的單一旗標,
+    // 而 StrictMode(dev)的 mount→cleanup→mount 會讓舊 socket 的 close 晚於新 socket 的
+    // `onopen` 到達 —— 旗標若被清成 false 就**再也回不去**(新 socket 的 onopen 已經發生
+    // 過了),scheduleRetry 的第三道檢查永遠早退 = F-3 自癒整條失效。
+    // unmount 語意不受影響:cleanup 自己會清旗標。
+    const conn = connectWithRetry(
+      () => {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${proto}://${window.location.host}/ws/stock`;
+      },
+      {
+        onConnecting: () => setWsStatus("connecting"),
+        onOpen: () => {
+          wsOpenRef.current = true;
+          setWsStatus("open");
+          void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
+          emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
+        },
+        onMessage: (msg) => handle(msg as WsMsg),
+        onClose: () => {
+          wsOpenRef.current = false;
+          setWsStatus("closed");
+        },
+      },
+      { label: "stock ws" },
+    );
 
-    connect();
     return () => {
-      alive = false;
       mountedRef.current = false;
       wsOpenRef.current = false;
       cancelRetry(); // in-flight 的 refetch 事後失敗時才不會排到已卸載的元件上
-      window.clearTimeout(timer);
-      ws?.close();
+      conn.close();
     };
   }, []);
 
