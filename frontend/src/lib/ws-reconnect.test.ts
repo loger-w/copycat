@@ -263,6 +263,20 @@ describe("connectWithRetry", () => {
     handle.close();
   });
 
+  it('{ type: "ping" } 心跳不進 onMessage(SC-3)', () => {
+    const onMessage = vi.fn();
+    const handle = connectWithRetry("ws://host/ws/ping-filter", { onMessage });
+
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+    expect(onMessage).not.toHaveBeenCalled();
+
+    latest().emit({ type: "corr", seq: 1 });
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith({ type: "corr", seq: 1 });
+    handle.close();
+  });
+
   it("opts 可覆寫 backoff 初值與上限", () => {
     const handle = connectWithRetry(
       "ws://host/ws/x",
