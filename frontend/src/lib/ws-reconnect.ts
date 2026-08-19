@@ -26,7 +26,7 @@ export interface WsHandlers {
   /** 每次建 socket 前呼叫(含首次與每次重連)。 */
   onConnecting?(): void;
   onOpen?(): void;
-  /** 收到的是 `JSON.parse` 後的值;parse 失敗只 warn 不呼叫。 */
+  /** 收到的是 `JSON.parse` 後的值;parse 失敗只 warn 不呼叫,`{type:"ping"}` 心跳被過濾。 */
   onMessage(msg: unknown): void;
   onClose?(): void;
 }
@@ -38,6 +38,15 @@ export interface WsOptions {
   backoffCapMs?: number;
   minUptimeMs?: number;
   shortLivedCapMs?: number;
+}
+
+/** 後端 `relay()` 的應用層心跳(`copycat/server/ws.py::PING`)。 */
+function isPing(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "ping"
+  );
 }
 
 export interface WsHandle {
@@ -83,11 +92,15 @@ export function connectWithRetry(
       handlers.onOpen?.();
     };
     sock.onmessage = (ev: MessageEvent<string>) => {
+      let value: unknown;
       try {
-        handlers.onMessage(JSON.parse(ev.data));
+        value = JSON.parse(ev.data);
       } catch (err) {
         console.warn(`${label}: 無法解析訊息`, err);
+        return;
       }
+      if (isPing(value)) return; // SC-3:心跳不進 hook,免得覆蓋 state
+      handlers.onMessage(value);
     };
     sock.onclose = () => {
       if (stopped) return;
