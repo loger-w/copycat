@@ -139,8 +139,25 @@ describe("connectWithRetry", () => {
     vi.advanceTimersByTime(WS_BACKOFF_CAP_MS * 2);
     expect(FakeWS.instances.length).toBe(1);
     expect(onClose).not.toHaveBeenCalled();
-    // 註:🔵 階段只守 onclose / 重連;主動卸掉舊 socket 的 onmessage/onerror 是 🟢
-    // watchdog 那一包的事(spec §4.3),本檔不預先斷言。
+    // 註:這條只釘 onclose / 重連;handle.close() 主動卸掉舊 socket 的
+    // onmessage/onopen/onerror 由下方 A2 那條釘(review A2 補上)。
+  });
+
+  // review A5:scheduleReconnect 先呼叫 onClose 再排 setTimeout,handler 內同步 close() 清掉的
+  // 是「上一個」timer,新排的那顆照樣燒出下一代連線。
+  it("onClose 內同步呼叫 close() → 不會漏出下一代連線(A5)", () => {
+    let handle: ReturnType<typeof connectWithRetry> | null = null;
+    handle = connectWithRetry("ws://host/ws/x", {
+      onMessage: () => {},
+      onClose: () => {
+        handle?.close(); // 例:hook 在 onClose 裡判定要收工
+      },
+    });
+
+    latest().onclose?.();
+    vi.advanceTimersByTime(WS_BACKOFF_CAP_MS * 2);
+    expect(FakeWS.instances.length).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("已排程的重連在 close() 後不會發生", () => {
@@ -430,6 +447,32 @@ describe("connectWithRetry 靜默 watchdog", () => {
 
     handle.close();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // review A2:close() 的文件宣稱「之後所有回呼不再觸發」,但只關 socket 沒卸 handler ——
+  // onclose 有 stopped 守門,onmessage / onopen / onerror 沒有。
+  it("close() 卸掉舊 socket 的 handler:遲到的 message / open 都不再回呼也不武裝(A2)", () => {
+    // 先讓 URL_A 進 sticky 記憶,之後任何一代 onopen 都會武裝 watchdog
+    const warm = connectWithRetry(URL_A, { onMessage: () => {} });
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+    warm.close();
+
+    const onMessage = vi.fn();
+    const onOpen = vi.fn();
+    const handle = connectWithRetry(URL_A, { onMessage, onOpen });
+    const gen = latest();
+    handle.close();
+
+    expect(gen.onmessage).toBeNull(); // 鏡射 watchdog 放棄路徑:先卸 handler 再 close
+    expect(gen.onopen).toBeNull();
+    expect(gen.onerror).toBeNull();
+
+    gen.emit({ type: "corr", late: true }); // 遲到的資料 frame
+    gen.onopen?.(); // 遲到的 open(Chromium 握手完成得比 close 慢)
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0); // 沒被 sticky 武裝出殘留 interval
   });
 
   it("sticky:同 URL 的後續世代 onopen 即武裝(即使自己沒收過 ping)", () => {
