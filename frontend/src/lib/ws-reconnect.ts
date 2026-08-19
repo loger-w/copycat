@@ -5,8 +5,7 @@
  *  - `onConnecting` 承接各 hook 原本寫在 `connect()` 本體的 `setWsStatus("connecting")`
  *    (含首次與每次重連);
  *  - `onopen` **歸零 backoff**(現行語意,accept-then-close 會因此 1 Hz 重連);
- *  - `onerror` 關的是閉包共用的 `current`(= 現行 8 處的 `ws?.close()`,**含 alias 缺陷**:
- *    StrictMode 下舊 socket 晚到的 error 會關掉新 socket);
+ *  - `onerror` 關**自身** socket(SC-5;原 alias 缺陷「舊 socket 的 error 關掉新 socket」已修);
  *  - `onclose` **只由 `stopped` 守門**(= 現行 `if (!alive) return`),不做世代比對;
  *  - `close()` 停止重連並關掉當下的 socket,之後所有回呼不再觸發。
  *
@@ -75,8 +74,9 @@ export function connectWithRetry(
       backoff = Math.min(backoff * 2, capMs);
     };
     sock.onerror = () => {
-      // 逐字複刻:關的是閉包共用的 `current`,不是 `sock`(FE-WS-ONERROR-ALIAS)。
-      current?.close();
+      // SC-5:關自身 socket。舊版關的是閉包共用的 `current`(alias),StrictMode 下
+      // 舊 socket 晚到的 error 會把剛建好的新 socket 一起關掉。
+      sock.close();
     };
   };
 
