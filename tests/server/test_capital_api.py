@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import pytest
 from fastapi import FastAPI
@@ -1069,6 +1069,17 @@ class TestWsBroadcasterBackpressure:
 
 
 class TestWebSockets:
+    def test_prod_wiring_keeps_default_flush_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """T10 / D2e:`create_app` 出的 futures 引擎不覆寫 flush 週期(prod = 0.1 s)。
+
+        接線處若順手傳個 1.0,盤中五檔會慢一秒而測試全綠 —— 這條把預設釘在接線層。
+        """
+        with make_client(monkeypatch, futures_source=FakeFuturesSource()) as client:
+            # starlette 宣告 `TestClient.app` 是 `ASGIApp`;此處恆為 create_app 的 FastAPI
+            engine = cast("FastAPI", client.app).state.futures
+            assert engine is not None
+            assert engine._flush_interval_secs == 0.1
+
     def test_ws_futures_streams_quote(self, monkeypatch: pytest.MonkeyPatch) -> None:
         src = FakeFuturesSource()
         with make_client(monkeypatch, futures_source=src) as client:

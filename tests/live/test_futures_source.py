@@ -4,6 +4,7 @@ import datetime
 import json
 
 from copycat.live.futures_source import (
+    FUTURES_SESSION_PAD,
     FuturesQuoteSource,
     futures_symbol,
     in_futures_session_now,
@@ -19,10 +20,16 @@ class TestSymbol:
 
 
 def test_in_futures_session_now_uses_pad5() -> None:
-    """期貨盤別閘 = TXO 時段各寬 5 分(不另建第二張時段表)。"""
-    assert in_futures_session_now(datetime.time(13, 48)) is True  # 日盤收後寬限內
-    assert in_futures_session_now(datetime.time(13, 52)) is False  # 寬限外 = 盤外
-    assert in_futures_session_now(datetime.time(5, 3)) is True  # 夜盤收後寬限內
+    """期貨盤別閘 = TXO 時段各寬 **5** 分(不另建第二張時段表)。
+
+    斷言貼在 13:50/13:51 與 05:05/05:06 兩對邊界上(不是 13:48 那種鬆的內點),
+    pad 被改成 3 或 10 都會紅;常數本身也一併釘住(review T7)。
+    """
+    assert FUTURES_SESSION_PAD == datetime.timedelta(minutes=5)
+    assert in_futures_session_now(datetime.time(13, 50)) is True  # 日盤收後寬限最後一分
+    assert in_futures_session_now(datetime.time(13, 51)) is False  # 寬限外 = 盤外
+    assert in_futures_session_now(datetime.time(5, 5)) is True  # 夜盤收後寬限最後一分
+    assert in_futures_session_now(datetime.time(5, 6)) is False
 
 
 class TestHealDefaults:
