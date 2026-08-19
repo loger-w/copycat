@@ -1,0 +1,5 @@
+health: b6d06f04
+msgs in 20s = 312  bytes=120527  KB/s=5.89  per-product={'TMF': 116, 'MXF': 102, 'TXF': 94}
+seq first=507946 last=508257 gaps=0; GET state seq=508285 (>= last ws seq: True)
+inter-msg gap ms: min=0.0 p50=0.9 max=487.7
+ws state at end = OPEN

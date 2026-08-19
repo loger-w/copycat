@@ -21,7 +21,12 @@
 - `state()`:`capital_api.py:343`(GET)、`corr_engine._futures_leg_book`(pull 讀 bids/asks/p,不經推播)— 不受 flush 時序影響(state 即時更新)。
 - `resolved_contract` / `bars_range` / `fetch_day_1k`:不動。
 - `subscribe_leaf` 實作者:`live/futures_source.py:87`、測試 `tests/server/test_futures_engine.py::FakeSource`、`tests/helpers/fake_sources.py::FakeFuturesSource`(需同步加 `unsubscribe_leaf`);corr_engine 不用 futures source 的 leaf。
-- `always_active`:`live/tc4.py`;`app.py:353,358`;其他 source 各自的 clock gate(stock `in_trading_hours_now`)。
+- `always_active`:`live/tc4.py`;`app.py:353,358`;其他 source 各自的 clock gate(stock `in_trading_hours_now`);
+  **既有測試 `tests/server/test_main_wiring.py::test_futures_heal_gate_ands_the_calendar`(:309-322)斷言交易日 gate() is True
+  → commit C 後該紅 / 該改** `[amendment 2026-08-19: review R1]`。
+- 測試層 caller:`tests/server/test_capital_api.py::TestWebSockets::test_ws_futures_streams_quote`(:1072)、
+  `tests/server/test_ws_disconnect.py` `/ws/futures` case(:536)`[amendment 2026-08-19: review R10]`。
+- `session.in_txo_session`:TXO source `heal_active`(`app._default_source`)+ `tests/live/test_session.py:46-62`;加 pad 參數預設 0 不影響。
 - 動態用法:`bars_range` 以 getattr 取 `fetch_bars_range`(不動);無其他反射。
 
 ## Backward compat / migration
