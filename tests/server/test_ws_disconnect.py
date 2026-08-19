@@ -613,6 +613,8 @@ class TestBroadcastRouteDisconnect:
                 _abort(sock)
                 # 0.02s cadence × 1.5s ≈ 75 次寫入,遠超 asyncio 的 5 次門檻:
                 # 未修時必然累積警告,修好後 watcher 毫秒級收尾。
+                # (futures 一路走 per-product coalesce 0.1 s → 寫入次數降為 ~15 次;
+                #  pump 次數不受影響,15 仍遠超 5 次門檻,論證成立)
                 time.sleep(1.5)
 
                 assert pump.is_alive(), (
