@@ -1,0 +1,144 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness(opus)",
+  "test-coverage(opus)"
+ ],
+ "findings": [
+  {
+   "id": "C-1",
+   "severity": "P1",
+   "file": "frontend/src/lib/dev-perf-guard.ts",
+   "line": 28,
+   "claim": "observer 回呼每次 getEntriesByType 全表掃描取 length,O(buffer)/回呼",
+   "disposition": "accepted",
+   "resolution": "改用 list.getEntries().length 增量累計,達閾值清並歸零"
+  },
+  {
+   "id": "C-2",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.ts",
+   "line": 30,
+   "claim": "clearMarks 未做 typeof 守門,與 clearMeasures 不對稱",
+   "disposition": "accepted",
+   "resolution": "早退條件併入 clearMarks 檢查"
+  },
+  {
+   "id": "C-3",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.ts",
+   "line": 33,
+   "claim": "observe({type}) 在 Level-1 實作 throw TypeError → main.tsx 頂層炸 → dev 白畫面",
+   "disposition": "accepted",
+   "resolution": "observe 包 try/catch,失敗回 no-op dispose;紅測試 stub observe 拋錯"
+  },
+  {
+   "id": "C-4",
+   "severity": "P2",
+   "file": "frontend/src/main.tsx",
+   "line": 11,
+   "claim": "install 無冪等、main.tsx 丟棄 dispose,重複安裝 observer 疊加",
+   "disposition": "accepted",
+   "resolution": "模組層 active 旗標(dispose 清回 null);main.tsx 接 import.meta.hot?.dispose;紅測試 install 兩次 dispose 一次後不再清"
+  },
+  {
+   "id": "C-5",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 61,
+   "claim": "SC-1 dispose 在 expect 之後,失敗時 observer 外洩到 SC-2(同 T-5)",
+   "disposition": "accepted",
+   "resolution": "dispose 交 afterEach"
+  },
+  {
+   "id": "T-1",
+   "severity": "P1",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 53,
+   "claim": "無「閾值以下不清」測試,刪 if 條件全綠",
+   "disposition": "accepted",
+   "resolution": "手動 measure N-1 / N 邊界 lock 測試(同時殺 T-3)"
+  },
+  {
+   "id": "T-2",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 60,
+   "claim": "mark 斷言 vacuous(環境無人產 mark)",
+   "disposition": "accepted",
+   "resolution": "測試內手動 performance.mark 後驗清空"
+  },
+  {
+   "id": "T-3",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 56,
+   "claim": ">= vs > 邊界未釘",
+   "disposition": "accepted",
+   "resolution": "併 T-1 邊界測試"
+  },
+  {
+   "id": "T-4",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.ts",
+   "line": 24,
+   "claim": "缺 PerformanceObserver / clearMeasures 降級路徑無測試",
+   "disposition": "accepted",
+   "resolution": "vi.stubGlobal 兩案 not.toThrow + dispose 可呼叫"
+  },
+  {
+   "id": "T-5",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 61,
+   "claim": "同 C-5",
+   "disposition": "accepted",
+   "resolution": "同 C-5"
+  },
+  {
+   "id": "T-6",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 23,
+   "claim": "afterEach 缺 RTL cleanup(repo 無 globals,auto-cleanup 不註冊)",
+   "disposition": "accepted",
+   "resolution": "afterEach 內 cleanup()"
+  },
+  {
+   "id": "T-7",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 59,
+   "claim": "SC-1 不自證前提(清前 ≥ maxEntries)",
+   "disposition": "accepted",
+   "resolution": "flush 前補 >= maxEntries 斷言"
+  },
+  {
+   "id": "T-8",
+   "severity": "P2",
+   "file": "frontend/src/lib/dev-perf-guard.test.tsx",
+   "line": 50,
+   "claim": "門檻寫死 > renders 隱含 2 筆/render",
+   "disposition": "accepted",
+   "resolution": "改 >= RENDERS 常數"
+  },
+  {
+   "id": "T-9",
+   "severity": "P2",
+   "file": ".claude/bug/react-dev-measure-leak/repro.md",
+   "line": 1,
+   "claim": "repro.md §4/SC 仍寫 intervalMs timer 版",
+   "disposition": "accepted",
+   "resolution": "改寫為 observer 閾值版 + 節流背景"
+  }
+ ],
+ "p2_summary": {
+  "count": 12,
+  "themes": [
+   "測試覆蓋 / 邊界 / 衛生",
+   "guard 防禦對稱性與冪等",
+   "spec 漂移"
+  ]
+ },
+ "refuted": []
+}
