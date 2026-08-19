@@ -583,6 +583,12 @@ class TestBroadcastRouteDisconnect:
 
         心跳住 `relay`(與 route 無關)→ 取一路跑即可;間隔 0.2 s 讓斷線後那 1.5 s
         窗口內有 ~7 次心跳機會,`_beat` 沒被收尾就會現形。
+
+        ⚠ 本測試**只**釘「RST 後零寫入 with heartbeat on」這一件事:斷線前的
+        `batches >= 4` 正向對照在此可被 ping 單獨滿足(0.2 s 間隔在 15 s 收滿窗內
+        自己就送得出四批),所以它證明不了推播鏈有在動。資料流那半的正向對照由
+        零心跳版(`test_no_write_to_dead_transport`,`WS_HEARTBEAT_SECS = 0`)提供 ——
+        那條的批數只可能出自 relay 的推播。兩條合起來才是完整的守門(review T6)。
         """
         monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.2)
         self._assert_no_dead_transport_writes(_HEARTBEAT_CASE, tmp_path, monkeypatch)
