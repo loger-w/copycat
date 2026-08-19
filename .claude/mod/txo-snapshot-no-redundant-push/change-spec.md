@@ -28,14 +28,24 @@
   **「沒推」判法 `[amendment 2026-08-19: review R1]`**:不得對 `agen.__anext__()` 用 `wait_for` 逾時
   (cancel 會終結 async generator,之後只剩 StopAsyncIteration)— 一律
   `task = asyncio.ensure_future(agen.__anext__()); await asyncio.sleep(0.3); assert not task.done()`,
-  再餵真 tick → `await asyncio.wait_for(task, 1.0)` 取同一則。
+  再餵真 tick → `await asyncio.wait_for(task, 1.0)` 取同一則。收尾規約 `[amendment 2026-08-19: review R15]`:
+  task 仍 pending 的分支一律 `task.cancel()` + `suppress(CancelledError, StopAsyncIteration)` await;取消過的
+  generator 視為終結不得再迭代(要續驗重建 `rt.snapshots()`);只有 task 已完成的路徑才 `agen.aclose()`。
 - **SC-2 內容不變不推**:`snapshots()` 與上一則 yield 的 payload(排除 `generated_at`)相同 → 不 yield。
   比對**以複本比較,不得改動送出的 dict**(`{k: v for k, v in snap.items() if k != "generated_at"}`);
   比對範圍 = 整個 payload 減 `generated_at`,**不得再縮**(`totals.ticks` / per-contract volume 都算)
   `[amendment 2026-08-19: review R7/R9]`。
-  驗證:`tests/server/test_engine.py::test_snapshots_skips_identical_payload`(直接 `rt._mark_changed()` 兩次
-  且中間無狀態改動 → pending task 0.3 s 不完成;`_set_status("degraded")` 後 → 同一 task 取到,且 payload
-  仍含 `generated_at` 為 `HH:MM:SS` 字串)。
+  驗證:`tests/server/test_engine.py::test_snapshots_skips_identical_payload`(**先餵一筆真 tick 取到第一則**
+  (建立 `prev` 基準),再 `rt._mark_changed()` 兩次且中間無狀態改動 → pending task 0.3 s 不完成、
+  且 `await asyncio.sleep(0.3)` 正常返回(= 迴圈在等待非空轉);`_set_status("degraded")` 後 → 同一 task
+  取到,且 payload 仍含 `generated_at` 為 `HH:MM:SS` 字串)。
+  **`prev` 初值與迴圈不變式 `[amendment 2026-08-19: review R12/R13]`**:
+  - `seed=None` → `prev = None`(第一次 version 變動一律 yield = 舊語意,`test_snapshots_throttled_stream_yields_on_change` 不變);
+    `seed` 給 → `prev = strip(seed)`、`last = -1`。
+  - 迴圈每輪:(a) `if self._version == last: ev = self._changed(每輪重讀不快取); await ev.wait(); continue`;
+    (b) **`last = self._version` 必在內容比對之前**;內容相同 → 只 `continue`(不重設 last、不 sleep);
+    (c) 只有 yield 之後才 `await asyncio.sleep(self._throttle)`。違反 (b) = 換代 Event 永遠 set → 無 await
+    tight loop 餓死 event loop。
 - **SC-3 多 client 不漏版本**(`WS-TXO-SHARED-EVENT`,驗的是 Event 換代 / 先比 version,不是內容比對):
   兩個 `snapshots()` 併行迭代,client A 取第一則後停在 throttle sleep;此時以**內容真的會變**的方式 bump
   (餵一筆新 cum 的合約 tick)`[amendment 2026-08-19: review R2]`;client B 取到;client A 下一次
@@ -45,10 +55,16 @@
   app.py 把已送的首則傳入,generator 首次迭代對 seed 做內容比對 —— 首則送出後、迭代開始前發生的
   tick 仍會在下一則推出;無變動則不重推首則。驗證:`test_snapshots_seed_pushes_only_if_changed`
   (seed = `latest_snapshot()`,不動 → pending 0.3 s;先餵 tick 再建 `snapshots(seed=舊 snap)` →
-  首次迭代立即取到新內容)。`seed=None` 保留舊語意(`last = self._version`,測試 / 舊 caller 相容)。
+  首次迭代立即取到新內容)。`seed=None` 保留舊語意(`last = self._version`、`prev = None`,測試 / 舊 caller 相容)。
+  **app.py 接線 `[amendment 2026-08-19: review R16]`**:seed 必須是傳給 `send_json` 的**同一個 dict 物件**,不得
+  二次呼叫 `latest_snapshot()`;驗證 `tests/server/test_app.py::TestWebSocket::test_ws_seed_is_first_sent_snapshot`
+  (monkeypatch `app.state.runtime.latest_snapshot` 記錄回傳物件、`snapshots` 記錄 `seed`;連線後 assert
+  `latest_snapshot` 恰被叫一次且 `seed is` 該物件)。
 - **SC-4 真環境流量** `[amendment 2026-08-19: review R6]`:盤後(TXO 無成交)`/ws/txo-pnl` 20 s 窗:
   (1) 首則必收且 `series_id` 非 null;(2) 20 s 內訊息數 ≤ 1;(3) 窗結束 WS 仍 open、無 close;
-  (4) 反向對照:窗後 `GET /api/txo/snapshot`(排除 `generated_at`)== 首則。量法:scratchpad `websockets`
+  (4) 反向對照:窗後 `GET /api/txo/snapshot` 與首則比對,排除集合 = `{generated_at, totals.dropped_foreign_ticks,
+  totals.queue_dropped}`(W7 允許這兩個診斷計數 WS 落後 GET;其增量反而是 SC-1 正向佐證,一併記錄)
+  `[amendment 2026-08-19: review R14]`。量法:scratchpad `websockets`
   腳本(對照 handoff 量測 20 則)。**驗證窗口**:盤後 / 夜盤外(無 TXO 成交);窗口外(盤中)降級 =
   「連續兩則內容(排除 generated_at)不得相同」+ (1)(3)。⚠ 需 prod 重啟載新碼;重啟前只能記
   「待 prod 重啟後量」。
@@ -105,7 +121,7 @@
 - 🟢 無新功能。
 - 既有測試「該紅」:無。
 
-## Known risks / P2 註記(spec review round-1,全部 accepted)
+## Known risks / P2 註記(spec review round-1 11 條 + round-2 5 條,全部 accepted)
 
 - R10:有行情時(spot 每次價變)仍每 throttle 週期推整包 ~22 KB;本輪省的是無成交空窗與 stale/foreign
   tick 造成的流量;delta / 分欄推播 out of scope。SC-4 量測順帶記夜盤 / 盤中 20 s 訊息數與 KB/s 前後對照
