@@ -158,9 +158,9 @@ describe("connectWithRetry", () => {
     handle.close();
   });
 
-  // [該變] 下一個 🔴 commit 翻轉此預期(spec §7):onerror 改成只關自身 socket(SC-5),
-  // 屆時斷言變成「gen1.closed === true 且 gen2.closed === false」。
-  it("[該變] onerror 關的是閉包共用的當下 socket(FE-WS-ONERROR-ALIAS 現況)", () => {
+  // 由 🔵 characterization「[該變] onerror alias」翻轉而來(spec §7 SC-5):
+  // 舊語意 = 第一代 error 關掉第二代(alias);新語意 = 只關自身。
+  it("onerror 只關自身 socket,不動新世代(SC-5)", () => {
     const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
     const gen1 = FakeWS.instances[0];
     expect(gen1).toBeDefined();
@@ -172,8 +172,8 @@ describe("connectWithRetry", () => {
     expect(gen2).toBeDefined();
 
     gen1?.onerror?.(); // 舊世代的 error
-    expect(gen2?.closed).toBe(true); // 現況:關掉的是**新**世代
-    expect(gen1?.closed).toBe(false);
+    expect(gen1?.closed).toBe(true); // 關的是自己
+    expect(gen2?.closed).toBe(false); // 新世代不受影響
     handle.close();
   });
 
