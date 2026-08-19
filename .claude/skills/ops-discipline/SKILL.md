@@ -59,6 +59,14 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   注意種子價域(2330 ref 1200 ±2%):注入價落在 y 域外會被圖層合法丟掉(不是 bug),先算好再注入。
   (Trigger:驗三梯徽章 / 成交點 / 委託列表等吃 orders 的畫面)
 
+- **驗 WS 心跳 / 靜默重連用「側車 event-loop stall」模擬半死連線**(2026-08-20 mod/ws-app-heartbeat):側車加
+  `POST /_fake/stall?secs=N` 同步 `time.sleep` 阻塞 loop(TCP 活、零 frame、零 ping),比 suspend process / 拔網路乾淨;
+  頁內掛 `MutationObserver` 記 badge 文字變化時戳 + helper 的 `console.warn` 時戳當主證(「連線中斷,重試中」只亮 ~2 s
+  截不到靜態圖);patch `window.WebSocket` 記建連時間量 backoff。**觸發前先等 ≥ 1 個心跳間隔**(watchdog 收到首則 ping 才
+  武裝)。Chrome MCP 背景分頁 timer 對齊 1 s 粒度(1 s backoff 實測 2 s)屬瀏覽器行為不是 bug;同分頁 dev build 下
+  `Page.captureScreenshot` 偶發逾時,重試即可。樣板 `.claude/mod/ws-app-heartbeat/evidence/sidecar_server.py`。
+  (Trigger:驗 WS 重連 / 心跳 / 半死連線行為)
+
 ## Worktree 三險(2026-07-30 全數真踩到)
 
 - **gitignored 依賴要「複製」不要「junction」**:`frontend/node_modules` 與 `spikes/TCPY` 被

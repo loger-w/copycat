@@ -27,6 +27,15 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
 - **`hidden` attribute > 條件 render**:tab 切換用 `<div hidden={tab !== "x"}>` 保留 DOM。
 - **`eslint-plugin-react-you-might-not-need-an-effect`** 開起來,`useEffect` 是 anti-pattern 直接 lint 抓。
 
+## WebSocket hook(2026-08-20 mod/ws-app-heartbeat 沉澱)
+
+- **新 WS hook 一律走 `lib/ws-reconnect.ts::connectWithRetry(url, {onConnecting,onOpen,onMessage,onClose}, opts)`**,
+  不自寫 `new WebSocket + onclose 重連` 骨架:helper 統一承載 backoff 三分支(存活 ≥5 s 歸零 / 短命 cap 5 s /
+  從未 open cap 30 s)、靜默 watchdog(收到首則 `{type:"ping"}` 武裝、sticky per-URL、30 s + 5 s tick、
+  凍結防誤判)、ping 過濾(hook 的 onMessage 永遠看不到 ping)、onerror 關自身、close() 卸 handler。
+  後端契約 = `copycat/server/ws.py::WS_HEARTBEAT_SECS`(CLAUDE.md §4)。測試用 `resetWsPingMemory()` 清 sticky。
+  Trigger:新增 / 改任何 WS hook;想調 WS 重連節奏。
+
 # 前端版面 / 響應式慣例
 
 ## 字級縮放(2026-07-03 responsive 沉澱)
