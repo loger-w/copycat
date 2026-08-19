@@ -1,0 +1,1929 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index b2926c3c..1519924c 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -148,6 +148,11 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
+   WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
+   WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string
+   已同源)。改值 = 改契約要同時改兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
++- **WS 心跳契約**(2026-08-19 起):後端每條 WS 每 `WS_HEARTBEAT_SECS`(10 s)送
++  `{"type":"ping"}`(產生點 `copycat/server/ws.py::WS_HEARTBEAT_SECS`,relay 直送不經
++  per-client queue);讀者 = 前端 `frontend/src/lib/ws-reconnect.ts::WS_SILENCE_TIMEOUT_MS`
++  (30 s 靜默 watchdog,**必須 > 心跳間隔**,否則健康連線會被誤判半死而狂重連)。
++  改值 = 改契約要同時改兩邊;前端 hook 的 `onMessage` 看不到 ping(helper 已過濾)。
+ 
+ ## 5. 資料源
+ 
+diff --git a/copycat/server/ws.py b/copycat/server/ws.py
+index c33e3856..42f55b59 100644
+--- a/copycat/server/ws.py
++++ b/copycat/server/ws.py
+@@ -7,6 +7,11 @@ capital / futures / corr / river / stock / index 六路 WS 原本各抄一份同
+ `relay` 是這六路唯一的送出路徑:send-only 迴圈察覺不到 client 斷線(uvicorn 的
+ `connection_lost` 只把 `websocket.disconnect` 放進 receive queue,不設旗標),
+ 必須並行 receive 才收得到 —— 沒有它就是殭屍迴圈對死 transport 連寫。
++
++應用層心跳(`WS_HEARTBEAT_SECS` / `PING`)也住這裡:半死 TCP(連線活著但零 frame)
++在瀏覽器端與「server 只是沒東西可推」完全同形,前端唯有「太久沒收到任何訊息」
++這個判準可以自癒 —— 前提是 server 保證定時出聲。心跳由 `relay` **直送**,
++不經 `WsBroadcaster` 的 per-client queue(不佔位、不受「滿了丟最舊」影響)。
+ """
+ 
+ from __future__ import annotations
+@@ -22,6 +27,14 @@ logger = logging.getLogger(__name__)
+ #: 預設 per-client queue 上限(capital/futures/corr/river 沿用;engine 層各自傳值)
+ CLIENT_QUEUE_MAX = 500
+ 
++#: 應用層心跳間隔(秒);`<= 0` 停用。跨檔契約:前端靜默 watchdog
++#: (`frontend/src/lib/ws-reconnect.ts::WS_SILENCE_TIMEOUT_MS`)必須**大於**本值,
++#: 改值要同改兩邊(CLAUDE.md §4)。
++WS_HEARTBEAT_SECS: float = 10.0
++
++#: 心跳訊息;8 條 WS 共用同一形狀(前端 helper 過濾,不進各 hook 的 onMessage)。
++PING: dict[str, str] = {"type": "ping"}
++
+ 
+ class WsBroadcaster:
+     """per-client 有界 queue fanout;`publish` 必須在 event loop 上呼叫。"""
+@@ -91,8 +104,13 @@ def _consume_ws_task(task: asyncio.Task[None]) -> None:
+         logger.warning("ws 任務收尾例外(已忽略): %r", exc)
+ 
+ 
+-async def relay(websocket: WsConnection, stream: AsyncGenerator[dict, None]) -> None:
+-    """stream → WS 送出,並行 receive 偵測 client 斷線(review B3)。
++async def relay(
++    websocket: WsConnection,
++    stream: AsyncGenerator[dict, None],
++    *,
++    heartbeat_secs: float | None = None,
++) -> None:
++    """stream → WS 送出,並行 receive 偵測 client 斷線(review B3)+ 定時心跳。
+ 
+     無推播流量時 send 側永遠掛在 queue.get,察覺不到 client 斷線 →
+     per-client queue 洩漏;receive task 在斷線時收到 `websocket.disconnect` 收尾。
+@@ -103,11 +121,35 @@ async def relay(websocket: WsConnection, stream: AsyncGenerator[dict, None]) ->
+     突斷(TCP RST,無 close frame)也走同一條:uvicorn 的 `connection_lost` 只把
+     disconnect 訊息放進 receive queue,send 側的 `transport.write()` 不會 raise
+     (sans-io state 仍 OPEN)—— 不 receive 就永遠不知道對面已經死了。
++
++    心跳(`_beat`):`heartbeat_secs=None` → **呼叫當下**讀模組常數 `WS_HEARTBEAT_SECS`
++    (測試 monkeypatch 得到);`<= 0` 不建 task = 現況行為。每滿一個間隔送一則 `PING`,
++    **定時而非補空窗**(有推播時照送);因為第一則要等滿一個間隔,route 自送的 seed /
++    stream 的首則永遠排在任何 ping 之前。ping 直送 `send_json`,不經 `WsBroadcaster`
++    的 per-client queue。
++
++    `send_lock` 只序列化「單次 `await send_json`」,**不得**包住 `async for` 迴圈或
++    `await queue.get()`:那會讓 `_beat` 在零流量時永遠等鎖 = 心跳靜默失效
++    (正是本功能要解的那個症狀)。慢 client 的 `send_json` drain 卡住時 `_beat` 等鎖,
++    ping 不會疊加。
++
++    `_beat` 也進 `asyncio.wait(FIRST_COMPLETED)` 集合,例外分流與 `_send` 完全相同:
++    死 transport 的 OSError 已由 starlette 轉成 `WebSocketDisconnect` → 吞掉收尾;
++    其餘(如 uvicorn `close_sent` 後 ASGI send 的 `RuntimeError`)一律 re-raise。
+     """
++    secs = WS_HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
++    send_lock = asyncio.Lock()
+ 
+     async def _send() -> None:
+         async for msg in stream:
+-            await websocket.send_json(msg)
++            async with send_lock:
++                await websocket.send_json(msg)
++
++    async def _beat() -> None:
++        while True:
++            await asyncio.sleep(secs)
++            async with send_lock:
++                await websocket.send_json(PING)
+ 
+     async def _recv() -> None:
+         while True:
+@@ -118,15 +160,17 @@ async def relay(websocket: WsConnection, stream: AsyncGenerator[dict, None]) ->
+             if message.get("type") == "websocket.disconnect":
+                 return
+ 
+-    send_task = asyncio.ensure_future(_send())
+-    recv_task = asyncio.ensure_future(_recv())
++    tasks: list[asyncio.Task[None]] = [
++        asyncio.ensure_future(_send()),
++        asyncio.ensure_future(_recv()),
++    ]
++    if secs > 0:
++        tasks.append(asyncio.ensure_future(_beat()))
+     done: set[asyncio.Task[None]] = set()
+     try:
+-        done, _pending = await asyncio.wait(
+-            {send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED
+-        )
++        done, _pending = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
+     finally:
+-        for t in (send_task, recv_task):
++        for t in tasks:
+             if not t.done():
+                 t.cancel()
+                 t.add_done_callback(_consume_ws_task)
+diff --git a/frontend/src/hooks/useBreadth.ts b/frontend/src/hooks/useBreadth.ts
+index 166b8016..0ad06aee 100644
+--- a/frontend/src/hooks/useBreadth.ts
++++ b/frontend/src/hooks/useBreadth.ts
+@@ -10,11 +10,10 @@
+ 
+ import { useEffect, useLayoutEffect, useRef, useState } from "react";
+ 
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ import type { BreadthPoint, BreadthState } from "@/types";
+ 
+ const ENDPOINT = "/api/market/breadth";
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+ 
+ /** WS 每輪一則;`last_minute` 只在該輪真的 append 了一格時帶值。 */
+ interface WireMsg {
+@@ -84,11 +83,6 @@ export function useBreadth(): BreadthState | null {
+   };
+ 
+   useEffect(() => {
+-    let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+-
+     void refetch();
+ 
+     const handle = (msg: WireMsg): void => {
+@@ -118,35 +112,23 @@ export function useBreadth(): BreadthState | null {
+       });
+     };
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/breadth`);
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        void refetch(); // reconnect 對齊:斷線期間的分鐘格只在全量裡
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          handle(JSON.parse(ev.data) as WireMsg);
+-        } catch (err) {
+-          console.warn("breadth ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++    // 本 hook 無 wsStatus → 不需要 onConnecting
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/breadth`;
++      },
++      {
++        onOpen: () => {
++          void refetch(); // reconnect 對齊:斷線期間的分鐘格只在全量裡
++        },
++        onMessage: (msg) => handle(msg as WireMsg),
++      },
++      { label: "breadth ws" },
++    );
+ 
+-    connect();
+     return () => {
+-      alive = false;
+-      window.clearTimeout(timer);
+-      ws?.close();
++      conn.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/hooks/useCapital.test.tsx b/frontend/src/hooks/useCapital.test.tsx
+index 43e13b85..43fe85d8 100644
+--- a/frontend/src/hooks/useCapital.test.tsx
++++ b/frontend/src/hooks/useCapital.test.tsx
+@@ -15,6 +15,7 @@ import {
+   useCapitalWsStatus,
+   type CapitalEvent,
+ } from "@/hooks/useCapital";
++import { resetWsPingMemory } from "@/lib/ws-reconnect";
+ 
+ class FakeWS {
+   static instances: FakeWS[] = [];
+@@ -157,6 +158,54 @@ describe("useCapitalStream(WS 連線 + wsStatus store)", () => {
+     expect(FakeWS.instances[1]!.closed).toBe(true);
+   });
+ 
++  it("收過 ping 後 35 s 全靜默 → wsStatus 轉 closed(W11:閃電武裝往安全方向解除)", () => {
++    resetWsPingMemory();
++    vi.useFakeTimers();
++    const hook = renderHook(
++      () => {
++        useCapitalStream();
++        return useCapitalWsStatus();
++      },
++      { wrapper: makeWrapper(newClient()) },
++    );
++    const ws = FakeWS.instances[0]!;
++    act(() => {
++      ws.onopen?.();
++      ws.emit({ type: "ping" });
++    });
++    expect(hook.result.current).toBe("open");
++
++    act(() => {
++      vi.advanceTimersByTime(35_000);
++    });
++    expect(ws.closed).toBe(true);
++    expect(hook.result.current).toBe("closed");
++    hook.unmount();
++  });
++
++  it("從未收 ping:60 s 全靜默仍是 open(舊後端不多出 closed 邊沿;W11)", () => {
++    resetWsPingMemory();
++    vi.useFakeTimers();
++    const hook = renderHook(
++      () => {
++        useCapitalStream();
++        return useCapitalWsStatus();
++      },
++      { wrapper: makeWrapper(newClient()) },
++    );
++    const ws = FakeWS.instances[0]!;
++    act(() => ws.onopen?.());
++    expect(hook.result.current).toBe("open");
++
++    act(() => {
++      vi.advanceTimersByTime(60_000);
++    });
++    expect(ws.closed).toBe(false);
++    expect(hook.result.current).toBe("open");
++    expect(FakeWS.instances.length).toBe(1);
++    hook.unmount();
++  });
++
+   it("useCapitalWsStatus 可在 stream 外元件讀(module store + 測試 setter)", () => {
+     const hook = renderHook(() => useCapitalWsStatus());
+     expect(hook.result.current).toBe("connecting");
+diff --git a/frontend/src/hooks/useCapital.ts b/frontend/src/hooks/useCapital.ts
+index b34e8327..e79d1d30 100644
+--- a/frontend/src/hooks/useCapital.ts
++++ b/frontend/src/hooks/useCapital.ts
+@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
+ import { useEffect, useSyncExternalStore } from "react";
+ 
+ import { parseErrorDetail } from "@/lib/api-error";
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ import type {
+   CapitalCancelBody,
+   CapitalCloseBody,
+@@ -215,58 +216,37 @@ export function useClosePosition() {
+ // WS 連線(App 層掛一次 = 唯一連線 + 唯一 invalidate 接線;review B2/B4)
+ // ---------------------------------------------------------------------------
+ 
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+-
+ export function useCapitalStream(): void {
+   const queryClient = useQueryClient();
+ 
+   useEffect(() => {
+-    let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+-
+     // 唯一擁有者:WS 事件 → debounce invalidate(orders/positions hooks 不自行接線)
+     const unsub = subscribeCapitalEvents((ev) => {
+       const queryKey = EVENT_QUERY_KEY[ev.event];
+       if (queryKey !== undefined) scheduleInvalidate(queryClient, queryKey);
+     });
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/capital`);
+-      setCapitalWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        setCapitalWsStatus("open");
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          const msg = JSON.parse(ev.data) as CapitalEvent;
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/capital`;
++      },
++      {
++        onConnecting: () => setCapitalWsStatus("connecting"),
++        onOpen: () => setCapitalWsStatus("open"),
++        onMessage: (raw) => {
++          const msg = raw as CapitalEvent;
+           if (typeof msg.event === "string") emitCapitalEvent(msg);
+-        } catch (err) {
+-          console.warn("capital ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        setCapitalWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++        },
++        onClose: () => setCapitalWsStatus("closed"),
++      },
++      { label: "capital ws" },
++    );
+ 
+-    connect();
+     return () => {
+-      alive = false;
+       unsub();
+       clearInvalidateTimers();
+-      window.clearTimeout(timer);
+-      ws?.close();
++      conn.close();
+     };
+   }, [queryClient]);
+ }
+diff --git a/frontend/src/hooks/useCorrelation.ts b/frontend/src/hooks/useCorrelation.ts
+index 0eed1ea0..05d7dd56 100644
+--- a/frontend/src/hooks/useCorrelation.ts
++++ b/frontend/src/hooks/useCorrelation.ts
+@@ -6,6 +6,7 @@
+  */
+ import { useEffect, useRef, useState } from "react";
+ 
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ import type { CorrState } from "@/types";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+@@ -15,19 +16,14 @@ export interface CorrStreamState {
+   wsStatus: WsStatus;
+ }
+ 
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+-
+ export function useCorrelation(): CorrStreamState {
+   const [state, setState] = useState<CorrState | null>(null);
+   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
+   const seqRef = useRef<number>(-1);
+ 
+   useEffect(() => {
++    // `alive` 只剩 `load()` 的在途守門(WS 重連守門已移進 helper 的 `stopped`)
+     let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+ 
+     const apply = (next: CorrState): void => {
+       // 全量快照:只擋住亂序抵達的舊快照,不做跳號 refetch
+@@ -50,39 +46,27 @@ export function useCorrelation(): CorrStreamState {
+ 
+     void load();
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/corr`);
+-      setWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        setWsStatus("open");
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          const msg = JSON.parse(ev.data) as CorrState;
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/corr`;
++      },
++      {
++        onConnecting: () => setWsStatus("connecting"),
++        onOpen: () => setWsStatus("open"),
++        onMessage: (raw) => {
++          const msg = raw as CorrState;
+           if (msg.type !== "corr") return;
+           apply(msg);
+-        } catch (err) {
+-          console.warn("corr ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        setWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++        },
++        onClose: () => setWsStatus("closed"),
++      },
++      { label: "corr ws" },
++    );
+ 
+-    connect();
+     return () => {
+       alive = false;
+-      window.clearTimeout(timer);
+-      ws?.close();
++      conn.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/hooks/useFuturesStream.ts b/frontend/src/hooks/useFuturesStream.ts
+index f2eef4fb..ed54bb8f 100644
+--- a/frontend/src/hooks/useFuturesStream.ts
++++ b/frontend/src/hooks/useFuturesStream.ts
+@@ -7,6 +7,7 @@
+  */
+ import { useEffect, useRef, useState } from "react";
+ 
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ import type { FuturesProductState, FuturesState } from "@/types";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+@@ -46,9 +47,6 @@ export function mergePending(snap: FuturesState, pending: FuturesWsMsg[]): Futur
+   return next;
+ }
+ 
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+-
+ export function useFuturesStream(): FuturesStreamState {
+   const [state, setState] = useState<FuturesState | null>(null);
+   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
+@@ -88,11 +86,6 @@ export function useFuturesStream(): FuturesStreamState {
+   };
+ 
+   useEffect(() => {
+-    let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+-
+     void refetch();
+ 
+     const handle = (msg: FuturesWsMsg): void => {
+@@ -113,38 +106,25 @@ export function useFuturesStream(): FuturesStreamState {
+       }
+     };
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/futures`);
+-      setWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        setWsStatus("open");
+-        void refetch(); // 重連對齊(斷線期間漏訊息)
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          handle(JSON.parse(ev.data) as FuturesWsMsg);
+-        } catch (err) {
+-          console.warn("futures ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        setWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/futures`;
++      },
++      {
++        onConnecting: () => setWsStatus("connecting"),
++        onOpen: () => {
++          setWsStatus("open");
++          void refetch(); // 重連對齊(斷線期間漏訊息)
++        },
++        onMessage: (msg) => handle(msg as FuturesWsMsg),
++        onClose: () => setWsStatus("closed"),
++      },
++      { label: "futures ws" },
++    );
+ 
+-    connect();
+     return () => {
+-      alive = false;
+-      window.clearTimeout(timer);
+-      ws?.close();
++      conn.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/hooks/useIndexStream.ts b/frontend/src/hooks/useIndexStream.ts
+index 98868142..1c7dad79 100644
+--- a/frontend/src/hooks/useIndexStream.ts
++++ b/frontend/src/hooks/useIndexStream.ts
+@@ -8,6 +8,8 @@
+ 
+ import { useEffect, useLayoutEffect, useRef, useState } from "react";
+ 
++import { connectWithRetry } from "@/lib/ws-reconnect";
++
+ export type WsStatus = "connecting" | "open" | "closed";
+ 
+ export interface IndexSeries {
+@@ -32,6 +34,7 @@ export interface IndexStreamState {
+   wsStatus: WsStatus;
+ }
+ 
++/** refetch 失敗重試的退避(WS 重連退避已移進 `connectWithRetry`)。 */
+ const BACKOFF_START_MS = 1_000;
+ const BACKOFF_CAP_MS = 30_000;
+ 
+@@ -45,6 +48,15 @@ interface WireSeries {
+   minutes?: Record<string, number>;
+ }
+ 
++/** WS 一則訊息的線上形狀(原本寫在 `handle` 的參數位置,抽名字給 helper 的 cast 用)。 */
++interface WireMsg {
++  type: string;
++  trade_date?: string;
++  twse?: WireSeries;
++  otc?: WireSeries;
++  txf?: TxfQuote | null;
++}
++
+ function toSeries(w: WireSeries, prev: IndexSeries | null): IndexSeries {
+   const minutes = { ...(w.minutes ?? prev?.minutes ?? {}) };
+   if (w.last_minute) minutes[w.last_minute[0]] = w.last_minute[1];
+@@ -131,21 +143,10 @@ export function useIndexStream(): IndexStreamState {
+   };
+ 
+   useEffect(() => {
+-    let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+-
+     aliveRef.current = true; // StrictMode remount:cleanup 後重進要復活
+     void refetch();
+ 
+-    const handle = (msg: {
+-      type: string;
+-      trade_date?: string;
+-      twse?: WireSeries;
+-      otc?: WireSeries;
+-      txf?: TxfQuote | null;
+-    }): void => {
++    const handle = (msg: WireMsg): void => {
+       if (msg.type !== "index") return;
+       const incomingDate = msg.trade_date ?? null;
+       if (
+@@ -167,41 +168,28 @@ export function useIndexStream(): IndexStreamState {
+       if (msg.txf !== undefined) setTxf(msg.txf);
+     };
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/index`);
+-      setWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        setWsStatus("open");
+-        void refetch(); // reconnect 對齊(F3:斷線期間漏訊息)
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          handle(JSON.parse(ev.data));
+-        } catch (err) {
+-          console.warn("index ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        setWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/index`;
++      },
++      {
++        onConnecting: () => setWsStatus("connecting"),
++        onOpen: () => {
++          setWsStatus("open");
++          void refetch(); // reconnect 對齊(F3:斷線期間漏訊息)
++        },
++        onMessage: (msg) => handle(msg as WireMsg),
++        onClose: () => setWsStatus("closed"),
++      },
++      { label: "index ws" },
++    );
+ 
+-    connect();
+     return () => {
+-      alive = false;
+       aliveRef.current = false;
+-      window.clearTimeout(timer);
+       window.clearTimeout(retryTimerRef.current);
+       retryTimerRef.current = undefined;
+-      ws?.close();
++      conn.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/hooks/useRiver.ts b/frontend/src/hooks/useRiver.ts
+index 36d4497d..fb7ac151 100644
+--- a/frontend/src/hooks/useRiver.ts
++++ b/frontend/src/hooks/useRiver.ts
+@@ -14,6 +14,7 @@
+  */
+ import { useEffect, useRef, useState } from "react";
+ 
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ import type { RiverDelta, RiverLeg, RiverState } from "@/types";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+@@ -23,9 +24,6 @@ export interface RiverStreamState {
+   wsStatus: WsStatus;
+ }
+ 
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+-
+ /** union 合併:既有 offset 優先(較新的 delta 不被較舊的 snapshot 蓋掉)。 */
+ function mergeLeg(prev: RiverLeg | undefined, next: RiverLeg): RiverLeg {
+   if (prev === undefined) return next;
+@@ -86,10 +84,8 @@ export function useRiver(): RiverStreamState {
+   const sessionRef = useRef<string | null>(null);
+ 
+   useEffect(() => {
++    // `alive` 只剩 `load()` 的在途守門(WS 重連守門已移進 helper 的 `stopped`)
+     let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+ 
+     const applySnapshot = (next: RiverState): void => {
+       // 直接採用 snapshot 的 seq(不取 max):snapshot 一律反映 server 當下狀態,
+@@ -136,39 +132,27 @@ export function useRiver(): RiverStreamState {
+       });
+     };
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/river`);
+-      setWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        setWsStatus("open");
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          const msg = JSON.parse(ev.data) as RiverState | RiverDelta;
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/river`;
++      },
++      {
++        onConnecting: () => setWsStatus("connecting"),
++        onOpen: () => setWsStatus("open"),
++        onMessage: (raw) => {
++          const msg = raw as RiverState | RiverDelta;
+           if (msg.type === "river") applySnapshot(msg as RiverState);
+           else if (msg.type === "river_delta") onDelta(msg as RiverDelta);
+-        } catch (err) {
+-          console.warn("river ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        setWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++        },
++        onClose: () => setWsStatus("closed"),
++      },
++      { label: "river ws" },
++    );
+ 
+-    connect();
+     return () => {
+       alive = false;
+-      window.clearTimeout(timer);
+-      ws?.close();
++      conn.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/hooks/useStockStream.ts b/frontend/src/hooks/useStockStream.ts
+index 015295f4..d3425b1d 100644
+--- a/frontend/src/hooks/useStockStream.ts
++++ b/frontend/src/hooks/useStockStream.ts
+@@ -12,6 +12,7 @@ import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
+ import type { SignalMsg } from "@/lib/signal-model";
+ import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickMsg } from "@/lib/stock-accum";
+ import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+ 
+@@ -49,9 +50,6 @@ export interface StockStreamState {
+   wsStatus: WsStatus;
+ }
+ 
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+-
+ /** snapshot refetch 失敗的重試節奏(F-3)。與 WS 重連的 backoff 分開:WS 斷了整頁都停,
+  *  refetch 失敗只是**這一個標的**的一次取數失敗,cap 短一點才不會讓自癒等半分鐘。
+  *  刻意**不設次數上限** —— TC4 / 後端一時不可用是常態,自癒比放棄有用;避免無限打的
+@@ -285,10 +283,6 @@ export function useStockStream(
+ 
+   // WS 連線(單條,頁面生命週期)
+   useEffect(() => {
+-    let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+     mountedRef.current = true; // StrictMode 的 mount→cleanup→mount 會把它翻回來
+ 
+     const handle = (msg: WsMsg): void => {
+@@ -427,49 +421,39 @@ export function useStockStream(
+       }
+     };
+ 
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/stock`);
+-      setWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        wsOpenRef.current = true;
+-        setWsStatus("open");
+-        void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
+-        emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          handle(JSON.parse(ev.data) as WsMsg);
+-        } catch (err) {
+-          console.warn("stock ws: 無法解析訊息", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        // `alive` 早退**必須在寫旗標之前**:`wsOpenRef` 是跨 socket 世代共用的單一
+-        // 旗標,而 StrictMode(dev)的 mount→cleanup→mount 會讓舊 socket 的 close
+-        // 晚於新 socket 的 `onopen` 到達 —— 寫在前面的話旗標被清成 false 且**再也
+-        // 回不去**(新 socket 的 onopen 已經發生過了),scheduleRetry 的第三道檢查
+-        // 永遠早退 = F-3 自癒整條失效。unmount 語意不受影響:cleanup 自己會清旗標。
+-        if (!alive) return;
+-        wsOpenRef.current = false;
+-        setWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++    // helper 的 `stopped` 守門(= 舊 `alive` 早退)在 `onClose` **被呼叫之前**就擋掉了,
++    // 所以下面寫旗標的順序語意與舊版相同:`wsOpenRef` 是跨 socket 世代共用的單一旗標,
++    // 而 StrictMode(dev)的 mount→cleanup→mount 會讓舊 socket 的 close 晚於新 socket 的
++    // `onopen` 到達 —— 旗標若被清成 false 就**再也回不去**(新 socket 的 onopen 已經發生
++    // 過了),scheduleRetry 的第三道檢查永遠早退 = F-3 自癒整條失效。
++    // unmount 語意不受影響:cleanup 自己會清旗標。
++    const conn = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/stock`;
++      },
++      {
++        onConnecting: () => setWsStatus("connecting"),
++        onOpen: () => {
++          wsOpenRef.current = true;
++          setWsStatus("open");
++          void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
++          emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
++        },
++        onMessage: (msg) => handle(msg as WsMsg),
++        onClose: () => {
++          wsOpenRef.current = false;
++          setWsStatus("closed");
++        },
++      },
++      { label: "stock ws" },
++    );
+ 
+-    connect();
+     return () => {
+-      alive = false;
+       mountedRef.current = false;
+       wsOpenRef.current = false;
+       cancelRetry(); // in-flight 的 refetch 事後失敗時才不會排到已卸載的元件上
+-      window.clearTimeout(timer);
+-      ws?.close();
++      conn.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/hooks/useTxoSnapshot.test.ts b/frontend/src/hooks/useTxoSnapshot.test.ts
+index 01026ee1..19965f8f 100644
+--- a/frontend/src/hooks/useTxoSnapshot.test.ts
++++ b/frontend/src/hooks/useTxoSnapshot.test.ts
+@@ -3,6 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
++import { resetWsPingMemory } from "@/lib/ws-reconnect";
+ 
+ class FakeWebSocket {
+   static instances: FakeWebSocket[] = [];
+@@ -67,4 +68,44 @@ describe("useTxoSnapshot", () => {
+     unmount();
+     expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+   });
++
++  it("心跳 ping 不覆蓋 snapshot(SC-3)", () => {
++    const { result } = renderHook(() => useTxoSnapshot());
++    const ws = FakeWebSocket.instances[0];
++    expect(ws).toBeDefined();
++    act(() => {
++      ws?.onopen?.();
++      ws?.onmessage?.({ data: JSON.stringify({ series_id: "TX4.202607", curve: [] }) });
++    });
++    expect(result.current.data?.series_id).toBe("TX4.202607");
++
++    act(() => {
++      ws?.onmessage?.({ data: JSON.stringify({ type: "ping" }) });
++    });
++    expect(result.current.data?.series_id).toBe("TX4.202607"); // 仍是原 snapshot
++  });
++
++  it("收過 ping 後 35 s 全靜默 → 卸掉半死 socket 並重連(SC-2)", () => {
++    resetWsPingMemory();
++    const { result } = renderHook(() => useTxoSnapshot());
++    const ws = FakeWebSocket.instances[0];
++    expect(ws).toBeDefined();
++    act(() => {
++      ws?.onopen?.();
++      ws?.onmessage?.({ data: JSON.stringify({ type: "ping" }) });
++    });
++    expect(result.current.wsStatus).toBe("open");
++
++    act(() => {
++      vi.advanceTimersByTime(35_000);
++    });
++    expect(ws?.closed).toBe(true);
++    expect(result.current.wsStatus).toBe("closed");
++
++    act(() => {
++      vi.advanceTimersByTime(1_000);
++    });
++    expect(FakeWebSocket.instances.length).toBe(2);
++    expect(result.current.wsStatus).toBe("connecting");
++  });
+ });
+diff --git a/frontend/src/hooks/useTxoSnapshot.ts b/frontend/src/hooks/useTxoSnapshot.ts
+index c8d23d89..f3e77248 100644
+--- a/frontend/src/hooks/useTxoSnapshot.ts
++++ b/frontend/src/hooks/useTxoSnapshot.ts
+@@ -1,54 +1,32 @@
+ import { useEffect, useState } from "react";
+ 
++import { connectWithRetry } from "@/lib/ws-reconnect";
+ import type { Snapshot } from "@/types";
+ 
+ export type WsStatus = "connecting" | "open" | "closed";
+ 
+-const BACKOFF_START_MS = 1_000;
+-const BACKOFF_CAP_MS = 30_000;
+-
+ /** WS push 流(不套 TanStack Query:TQ 是 request/response 模型,design §5)。 */
+ export function useTxoSnapshot(): { data: Snapshot | null; wsStatus: WsStatus } {
+   const [data, setData] = useState<Snapshot | null>(null);
+   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
+ 
+   useEffect(() => {
+-    let alive = true;
+-    let ws: WebSocket | null = null;
+-    let timer: number | undefined;
+-    let backoff = BACKOFF_START_MS;
+-
+-    const connect = (): void => {
+-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+-      ws = new WebSocket(`${proto}://${window.location.host}/ws/txo-pnl`);
+-      setWsStatus("connecting");
+-      ws.onopen = () => {
+-        backoff = BACKOFF_START_MS;
+-        setWsStatus("open");
+-      };
+-      ws.onmessage = (ev: MessageEvent<string>) => {
+-        try {
+-          setData(JSON.parse(ev.data) as Snapshot);
+-        } catch (err) {
+-          console.warn("txo-pnl: 無法解析 snapshot", err);
+-        }
+-      };
+-      ws.onclose = () => {
+-        if (!alive) return;
+-        setWsStatus("closed");
+-        timer = window.setTimeout(connect, backoff);
+-        backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+-      };
+-      ws.onerror = () => {
+-        ws?.close();
+-      };
+-    };
++    const handle = connectWithRetry(
++      () => {
++        const proto = window.location.protocol === "https:" ? "wss" : "ws";
++        return `${proto}://${window.location.host}/ws/txo-pnl`;
++      },
++      {
++        onConnecting: () => setWsStatus("connecting"),
++        onOpen: () => setWsStatus("open"),
++        onMessage: (msg) => setData(msg as Snapshot),
++        onClose: () => setWsStatus("closed"),
++      },
++      { label: "txo-pnl" },
++    );
+ 
+-    connect();
+     return () => {
+-      alive = false;
+-      window.clearTimeout(timer);
+-      ws?.close();
++      handle.close();
+     };
+   }, []);
+ 
+diff --git a/frontend/src/lib/ws-reconnect.test.ts b/frontend/src/lib/ws-reconnect.test.ts
+new file mode 100644
+index 00000000..27ca3dc8
+--- /dev/null
++++ b/frontend/src/lib/ws-reconnect.test.ts
+@@ -0,0 +1,460 @@
++/** @vitest-environment jsdom */
++/** `connectWithRetry` 的 characterization 測試(mod/ws-app-heartbeat FE-1)。
++ *
++ * 本檔鎖的是**抽出當下的現行語意**(8 hook 逐字複刻),用途是證明重構零行為改動。
++ * 其中兩條是**事前標記為「該變」**的現況鎖(`[該變]` 註記),下一個 🔴 commit 會翻轉它們
++ * ——這是鐵則 E 允許改既有 assertion 的唯一通道(事前標明)。
++ */
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import {
++  connectWithRetry,
++  resetWsPingMemory,
++  WS_BACKOFF_CAP_MS,
++  WS_BACKOFF_START_MS,
++  WS_MIN_UPTIME_MS,
++  WS_SHORT_LIVED_CAP_MS,
++  WS_SILENCE_TIMEOUT_MS,
++  WS_WATCHDOG_TICK_MS,
++} from "@/lib/ws-reconnect";
++
++class FakeWS {
++  static instances: FakeWS[] = [];
++  onopen: (() => void) | null = null;
++  onmessage: ((ev: { data: string }) => void) | null = null;
++  onclose: (() => void) | null = null;
++  onerror: (() => void) | null = null;
++  closed = false;
++
++  constructor(public url: string) {
++    FakeWS.instances.push(this);
++  }
++
++  close(): void {
++    this.closed = true;
++    this.onclose?.();
++  }
++
++  emit(obj: unknown): void {
++    this.onmessage?.({ data: JSON.stringify(obj) });
++  }
++
++  emitRaw(data: string): void {
++    this.onmessage?.({ data });
++  }
++}
++
++/** 最新一代 socket(重連後 handler 只掛在它身上)。 */
++function latest(): FakeWS {
++  const sock = FakeWS.instances.at(-1);
++  expect(sock).toBeDefined();
++  return sock!;
++}
++
++beforeEach(() => {
++  FakeWS.instances = [];
++  vi.useFakeTimers();
++  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
++});
++
++afterEach(() => {
++  vi.useRealTimers();
++  vi.unstubAllGlobals();
++});
++
++describe("connectWithRetry", () => {
++  it("首次即建立連線,url 可傳函式(每次重連當下重算)", () => {
++    let n = 0;
++    const handle = connectWithRetry(
++      () => `ws://host/ws/x?n=${++n}`,
++      { onMessage: () => {} },
++    );
++    expect(FakeWS.instances.length).toBe(1);
++    expect(latest().url).toBe("ws://host/ws/x?n=1");
++
++    latest().onclose?.();
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(FakeWS.instances.length).toBe(2);
++    expect(latest().url).toBe("ws://host/ws/x?n=2");
++    handle.close();
++  });
++
++  it("onConnecting 在首次與每次重連都觸發(W12)", () => {
++    const onConnecting = vi.fn();
++    const handle = connectWithRetry("ws://host/ws/x", { onConnecting, onMessage: () => {} });
++    expect(onConnecting).toHaveBeenCalledTimes(1);
++
++    latest().onclose?.();
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(onConnecting).toHaveBeenCalledTimes(2);
++
++    latest().onclose?.();
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS * 2);
++    expect(onConnecting).toHaveBeenCalledTimes(3);
++    handle.close();
++  });
++
++  it("onOpen / onMessage / onClose 逐一轉發", () => {
++    const onOpen = vi.fn();
++    const onMessage = vi.fn();
++    const onClose = vi.fn();
++    const handle = connectWithRetry("ws://host/ws/x", { onOpen, onMessage, onClose });
++
++    latest().onopen?.();
++    latest().emit({ type: "corr", seq: 3 });
++    expect(onOpen).toHaveBeenCalledTimes(1);
++    expect(onMessage).toHaveBeenCalledWith({ type: "corr", seq: 3 });
++
++    latest().onclose?.();
++    expect(onClose).toHaveBeenCalledTimes(1);
++    handle.close();
++  });
++
++  it("重連延遲倍增並在 30 s 封頂(W8;未 open 的連線 backoff 不歸零)", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++    const expected = [1_000, 2_000, 4_000, 8_000, 16_000, WS_BACKOFF_CAP_MS, WS_BACKOFF_CAP_MS];
++
++    let generation = 1;
++    for (const delay of expected) {
++      latest().onclose?.();
++      vi.advanceTimersByTime(delay - 1);
++      expect(FakeWS.instances.length).toBe(generation); // 差 1 ms 還沒重連
++      vi.advanceTimersByTime(1);
++      generation += 1;
++      expect(FakeWS.instances.length).toBe(generation);
++    }
++    handle.close();
++  });
++
++  it("close() 停止重連,舊 socket 之後的 close 不再回呼也不排程(W3)", () => {
++    const onClose = vi.fn();
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {}, onClose });
++    const gen1 = latest();
++
++    handle.close();
++    expect(gen1.closed).toBe(true); // close() 關掉當下的 socket
++    expect(onClose).not.toHaveBeenCalled(); // stopped 守門(= 現行 `if (!alive) return`)
++
++    gen1.onclose?.(); // 遲到的 close(Chromium closing handshake)
++    vi.advanceTimersByTime(WS_BACKOFF_CAP_MS * 2);
++    expect(FakeWS.instances.length).toBe(1);
++    expect(onClose).not.toHaveBeenCalled();
++    // 註:🔵 階段只守 onclose / 重連;主動卸掉舊 socket 的 onmessage/onerror 是 🟢
++    // watchdog 那一包的事(spec §4.3),本檔不預先斷言。
++  });
++
++  it("已排程的重連在 close() 後不會發生", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++    latest().onclose?.(); // 排了 1 s 後重連
++    handle.close();
++    vi.advanceTimersByTime(WS_BACKOFF_CAP_MS);
++    expect(FakeWS.instances.length).toBe(1);
++  });
++
++  it("無法解析的訊息 → warn 且不進 onMessage", () => {
++    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
++    const onMessage = vi.fn();
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage }, { label: "corr ws" });
++
++    latest().emitRaw("not json{");
++    expect(onMessage).not.toHaveBeenCalled();
++    expect(warn).toHaveBeenCalledTimes(1);
++    expect(String(warn.mock.calls[0]?.[0])).toBe("corr ws: 無法解析訊息");
++
++    latest().emit({ ok: true });
++    expect(onMessage).toHaveBeenCalledTimes(1);
++    warn.mockRestore();
++    handle.close();
++  });
++
++  // 由 🔵 characterization「[該變] onerror alias」翻轉而來(spec §7 SC-5):
++  // 舊語意 = 第一代 error 關掉第二代(alias);新語意 = 只關自身。
++  it("onerror 只關自身 socket,不動新世代(SC-5)", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++    const gen1 = FakeWS.instances[0];
++    expect(gen1).toBeDefined();
++
++    gen1?.onclose?.();
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(FakeWS.instances.length).toBe(2);
++    const gen2 = FakeWS.instances[1];
++    expect(gen2).toBeDefined();
++
++    gen1?.onerror?.(); // 舊世代的 error
++    expect(gen1?.closed).toBe(true); // 關的是自己
++    expect(gen2?.closed).toBe(false); // 新世代不受影響
++    handle.close();
++  });
++
++  // 由 🔵 characterization「[該變] onopen 歸零 backoff」翻轉而來(spec §7 SC-4):
++  // 歸零改由 onclose 的「存活 ≥ WS_MIN_UPTIME_MS」分支負責,第二次延遲 = 2 s 而非 1 s。
++  it("onopen 不再歸零 backoff(accept-then-close 不再 1 Hz)", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++
++    latest().onopen?.(); // 立刻 open
++    latest().onclose?.(); // 立刻 close(accept-then-close)
++    vi.advanceTimersByTime(1_000);
++    expect(FakeWS.instances.length).toBe(2);
++
++    latest().onopen?.(); // 第二代同樣 open→close
++    latest().onclose?.();
++    vi.advanceTimersByTime(1_999);
++    expect(FakeWS.instances.length).toBe(2); // 還沒到(不再是 1 s)
++    vi.advanceTimersByTime(1);
++    expect(FakeWS.instances.length).toBe(3);
++    handle.close();
++  });
++
++  it("有 open 但存活 < 5 s(accept-then-close)→ 倍增但 cap 5 s:1,2,4,5,5(SC-4 (ii))", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++    const expected = [1_000, 2_000, 4_000, WS_SHORT_LIVED_CAP_MS, WS_SHORT_LIVED_CAP_MS];
++
++    let generation = 1;
++    for (const delay of expected) {
++      latest().onopen?.(); // accept
++      latest().onclose?.(); // 立刻 close(存活 0 ms)
++      vi.advanceTimersByTime(delay - 1);
++      expect(FakeWS.instances.length).toBe(generation);
++      vi.advanceTimersByTime(1);
++      generation += 1;
++      expect(FakeWS.instances.length).toBe(generation);
++    }
++    handle.close();
++  });
++
++  it("存活 ≥ WS_MIN_UPTIME_MS 後斷線 → 下次 1 s(SC-4 (i);健康連線行為不變)", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++
++    // 先用兩代短命連線把 backoff 推到 4 s
++    latest().onopen?.();
++    latest().onclose?.();
++    vi.advanceTimersByTime(1_000);
++    latest().onopen?.();
++    latest().onclose?.();
++    vi.advanceTimersByTime(2_000);
++    expect(FakeWS.instances.length).toBe(3);
++
++    latest().onopen?.(); // 第三代健康存活滿 5 s 才斷
++    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
++    latest().onclose?.();
++    vi.advanceTimersByTime(999);
++    expect(FakeWS.instances.length).toBe(3);
++    vi.advanceTimersByTime(1);
++    expect(FakeWS.instances.length).toBe(4); // 歸零回初值 1 s
++    handle.close();
++  });
++
++  it("曾健康 open ≥5 s,之後連續握手失敗 → 走「從未 open」分支 2,4,8(Edge 12)", () => {
++    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
++
++    latest().onopen?.();
++    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
++    latest().onclose?.(); // 健康斷線 → 1 s
++    vi.advanceTimersByTime(1_000);
++    expect(FakeWS.instances.length).toBe(2);
++
++    // 之後每一代都沒 onopen(server down):openedAt 每代重設 → 不會退化成 1 Hz
++    let generation = 2;
++    for (const delay of [2_000, 4_000, 8_000]) {
++      latest().onclose?.();
++      vi.advanceTimersByTime(delay - 1);
++      expect(FakeWS.instances.length).toBe(generation);
++      vi.advanceTimersByTime(1);
++      generation += 1;
++      expect(FakeWS.instances.length).toBe(generation);
++    }
++    handle.close();
++  });
++
++  it('{ type: "ping" } 心跳不進 onMessage(SC-3)', () => {
++    const onMessage = vi.fn();
++    const handle = connectWithRetry("ws://host/ws/ping-filter", { onMessage });
++
++    latest().onopen?.();
++    latest().emit({ type: "ping" });
++    expect(onMessage).not.toHaveBeenCalled();
++
++    latest().emit({ type: "corr", seq: 1 });
++    expect(onMessage).toHaveBeenCalledTimes(1);
++    expect(onMessage).toHaveBeenCalledWith({ type: "corr", seq: 1 });
++    handle.close();
++  });
++
++  it("opts 可覆寫 backoff 初值與上限", () => {
++    const handle = connectWithRetry(
++      "ws://host/ws/x",
++      { onMessage: () => {} },
++      { backoffStartMs: 100, backoffCapMs: 150 },
++    );
++    latest().onclose?.();
++    vi.advanceTimersByTime(100);
++    expect(FakeWS.instances.length).toBe(2);
++
++    latest().onclose?.();
++    vi.advanceTimersByTime(150);
++    expect(FakeWS.instances.length).toBe(3);
++    handle.close();
++  });
++});
++
++/** SC-2:半死連線(TCP 活著但零 frame)靠「太久沒收到任何訊息」自己分辨並重連。 */
++describe("connectWithRetry 靜默 watchdog", () => {
++  const URL_A = "ws://host/ws/wd-a";
++
++  beforeEach(() => {
++    resetWsPingMemory();
++  });
++
++  it("收到首則 ping 後武裝;35 s 全靜默 → 卸 handler + close + onClose + 重連", () => {
++    const onClose = vi.fn();
++    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
++    const gen1 = latest();
++    gen1.onopen?.();
++    gen1.emit({ type: "ping" });
++
++    vi.advanceTimersByTime(WS_SILENCE_TIMEOUT_MS); // 30 s 整:尚未「超過」
++    expect(onClose).not.toHaveBeenCalled();
++    expect(gen1.closed).toBe(false);
++
++    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS); // 下一個 tick → 判定靜默
++    expect(gen1.closed).toBe(true);
++    expect(gen1.onmessage).toBeNull(); // 放棄前先卸 handler(不等 onclose)
++    expect(gen1.onclose).toBeNull();
++    expect(gen1.onerror).toBeNull();
++    expect(onClose).toHaveBeenCalledTimes(1);
++    expect(FakeWS.instances.length).toBe(1); // 重連走 backoff,不是同步新建
++
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS); // 存活遠超 minUptime → 1 s
++    expect(FakeWS.instances.length).toBe(2);
++    handle.close();
++  });
++
++  it("29 s 時收到任一訊息 → 基準重置,再 29 s 仍不觸發(Edge 3)", () => {
++    const onClose = vi.fn();
++    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
++    latest().onopen?.();
++    latest().emit({ type: "ping" });
++
++    vi.advanceTimersByTime(29_000);
++    latest().emit({ type: "corr", seq: 1 });
++    vi.advanceTimersByTime(29_000);
++
++    expect(onClose).not.toHaveBeenCalled();
++    expect(FakeWS.instances.length).toBe(1);
++    handle.close();
++  });
++
++  it("從未收過 ping → 永不武裝:60 s 全靜默也不重連(舊後端行為 = 現況)", () => {
++    const onClose = vi.fn();
++    const handle = connectWithRetry("ws://host/ws/wd-never", { onMessage: () => {}, onClose });
++    latest().onopen?.();
++
++    vi.advanceTimersByTime(60_000);
++    expect(onClose).not.toHaveBeenCalled();
++    expect(FakeWS.instances.length).toBe(1);
++    expect(vi.getTimerCount()).toBe(0); // 連 interval 都沒建
++    handle.close();
++  });
++
++  it("被放棄的舊 socket 遲到 onclose / onmessage 不回呼也不重複重連(Edge 2)", () => {
++    const onClose = vi.fn();
++    const onMessage = vi.fn();
++    const handle = connectWithRetry(URL_A, { onMessage, onClose });
++    const gen1 = latest();
++    gen1.onopen?.();
++    gen1.emit({ type: "ping" });
++
++    vi.advanceTimersByTime(35_000); // watchdog 觸發
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(FakeWS.instances.length).toBe(2);
++
++    gen1.onclose?.(); // Chromium closing handshake 60 s 後才到
++    gen1.emit({ type: "corr", late: true });
++    vi.advanceTimersByTime(WS_BACKOFF_CAP_MS * 2);
++
++    expect(FakeWS.instances.length).toBe(2);
++    expect(onMessage).not.toHaveBeenCalled();
++    expect(onClose).toHaveBeenCalledTimes(1);
++    handle.close();
++  });
++
++  it("舊世代 watchdog 不觸發新世代重連(任何關閉路徑都 clearInterval)", () => {
++    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
++    const gen1 = latest();
++    gen1.onopen?.();
++    gen1.emit({ type: "ping" }); // gen1 武裝
++    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
++    gen1.onclose?.(); // 自然斷線(非 watchdog)
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(FakeWS.instances.length).toBe(2);
++
++    // gen2 尚未 onopen → 未武裝;gen1 的 interval 若沒清會誤生第三代
++    vi.advanceTimersByTime(60_000);
++    expect(FakeWS.instances.length).toBe(2);
++    handle.close();
++  });
++
++  it("close() 清掉 watchdog interval(不留任何 timer)", () => {
++    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
++    latest().onopen?.();
++    latest().emit({ type: "ping" });
++    expect(vi.getTimerCount()).toBe(1); // watchdog interval
++
++    handle.close();
++    expect(vi.getTimerCount()).toBe(0);
++  });
++
++  it("sticky:同 URL 的後續世代 onopen 即武裝(即使自己沒收過 ping)", () => {
++    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
++    const gen1 = latest();
++    gen1.onopen?.();
++    gen1.emit({ type: "ping" }); // 記住「這個 server 會送 ping」
++    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
++    gen1.onclose?.();
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(FakeWS.instances.length).toBe(2);
++
++    const gen2 = latest();
++    gen2.onopen?.(); // gen2 全程收不到任何訊息(含 ping)
++    vi.advanceTimersByTime(35_000);
++    expect(gen2.closed).toBe(true);
++    expect(FakeWS.instances.length).toBe(2);
++
++    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
++    expect(FakeWS.instances.length).toBe(3);
++    handle.close();
++  });
++
++  it("不同 URL 不互相 sticky", () => {
++    const a = connectWithRetry(URL_A, { onMessage: () => {} });
++    latest().onopen?.();
++    latest().emit({ type: "ping" });
++    a.close();
++
++    FakeWS.instances = [];
++    const onClose = vi.fn();
++    const b = connectWithRetry("ws://host/ws/wd-b", { onMessage: () => {}, onClose });
++    latest().onopen?.(); // 另一個 URL:沒人證明它會送 ping
++
++    vi.advanceTimersByTime(60_000);
++    expect(onClose).not.toHaveBeenCalled();
++    expect(FakeWS.instances.length).toBe(1);
++    b.close();
++  });
++
++  it("主執行緒凍結 / 睡眠喚醒:tick 間隔 > 2×tick 只重置基準不判定(Edge 13)", () => {
++    const onClose = vi.fn();
++    const handle = connectWithRetry(URL_A, { onMessage: () => {}, onClose });
++    latest().onopen?.();
++    latest().emit({ type: "ping" });
++
++    vi.setSystemTime(Date.now() + 40_000); // 凍結 40 s(timer 沒跑,牆鐘照走)
++    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS); // 醒來後第一個 tick
++    expect(onClose).not.toHaveBeenCalled();
++    expect(FakeWS.instances.length).toBe(1);
++
++    vi.advanceTimersByTime(35_000); // 重置後才是真靜默
++    expect(onClose).toHaveBeenCalledTimes(1);
++    handle.close();
++  });
++});
+diff --git a/frontend/src/lib/ws-reconnect.ts b/frontend/src/lib/ws-reconnect.ts
+new file mode 100644
+index 00000000..71259d56
+--- /dev/null
++++ b/frontend/src/lib/ws-reconnect.ts
+@@ -0,0 +1,198 @@
++/** 8 條 WS hook 共用的「連線 + 自動重連 + 靜默 watchdog」骨架(mod/ws-app-heartbeat)。
++ *
++ * 骨架本體是 8 份同款 `ws / timer / backoff / alive / connect` 的抽出(FE-1 逐字複刻),
++ * 之上加了三件半死連線需要的事:
++ *  - `onConnecting` 承接各 hook 原本寫在 `connect()` 本體的 `setWsStatus("connecting")`
++ *    (含首次與每次重連);
++ *  - backoff 三分支(SC-4;`onopen` **不歸零**,歸零由 onclose 的「存活 ≥ minUptime」分支達成):
++ *    存活 ≥ 5 s 斷線 → 回初值 1 s;有 open 但短命(accept-then-close)→ 倍增 cap 5 s;
++ *    從未 open(握手失敗)→ 倍增 cap 30 s;
++ *  - `{type:"ping"}` 後端心跳在本層過濾(SC-3),不進 `onMessage`,但會武裝 / 餵 watchdog;
++ *  - 靜默 watchdog(SC-2):**收到第一則 ping 才武裝**,之後 `silenceTimeout` 內零訊息就
++ *    卸掉舊 socket 的 handler、`close()`、走與 onclose 相同的重連路徑(不等 onclose —
++ *    Chromium closing handshake 逾時 60 s)。不送 ping 的舊後端永不武裝 = 行為同現況;
++ *  - `onerror` 關**自身** socket(SC-5);`onclose` 只由 `stopped` 守門,不做世代比對
++ *    (被 watchdog 放棄的那代已經卸掉 handler,遲到事件進不來);
++ *  - `close()` 停止重連、清 watchdog、關掉當下的 socket,之後所有回呼不再觸發。
++ *
++ * 心跳間隔的產生點在後端 `copycat/server/ws.py::WS_HEARTBEAT_SECS`(10 s),
++ * `WS_SILENCE_TIMEOUT_MS` 必須遠大於它(CLAUDE.md §4「WS 心跳契約」)。
++ */
++
++export const WS_BACKOFF_START_MS = 1_000;
++export const WS_BACKOFF_CAP_MS = 30_000;
++/** 連線存活 ≥ 此值才算「健康過」,斷線後退避歸零回初值(SC-4 (i))。 */
++export const WS_MIN_UPTIME_MS = 5_000;
++/** 有 open 但短命(accept-then-close)時的退避上限(SC-4 (ii))。 */
++export const WS_SHORT_LIVED_CAP_MS = 5_000;
++/** 自最後一則訊息(含 ping)起多久沒動靜視為半死;必須 > 後端心跳間隔(SC-2)。 */
++export const WS_SILENCE_TIMEOUT_MS = 30_000;
++/** watchdog 巡檢間隔;偵測延遲 = timeout ~ timeout + tick。 */
++export const WS_WATCHDOG_TICK_MS = 5_000;
++
++/** 記住「這個 URL 的 server 會送 ping」:某一代收過之後,同 URL 的後續世代 onopen 即武裝
++ *  (封住「新連線在首則 ping 抵達前就半死」的盲區;spec §4.2 sticky)。 */
++const pingingUrls = new Set<string>();
++
++/** 測試用:清掉 sticky 記憶,讓各測試互不影響。 */
++export function resetWsPingMemory(): void {
++  pingingUrls.clear();
++}
++
++export interface WsHandlers {
++  /** 每次建 socket 前呼叫(含首次與每次重連)。 */
++  onConnecting?(): void;
++  onOpen?(): void;
++  /** 收到的是 `JSON.parse` 後的值;parse 失敗只 warn 不呼叫,`{type:"ping"}` 心跳被過濾。 */
++  onMessage(msg: unknown): void;
++  onClose?(): void;
++}
++
++export interface WsOptions {
++  /** `console.warn` 前綴(各 hook 沿用原本的字樣)。 */
++  label?: string;
++  backoffStartMs?: number;
++  backoffCapMs?: number;
++  minUptimeMs?: number;
++  shortLivedCapMs?: number;
++  silenceTimeoutMs?: number;
++  watchdogTickMs?: number;
++}
++
++/** 後端 `relay()` 的應用層心跳(`copycat/server/ws.py::PING`)。 */
++function isPing(value: unknown): boolean {
++  return (
++    typeof value === "object" && value !== null && (value as { type?: unknown }).type === "ping"
++  );
++}
++
++export interface WsHandle {
++  /** 停止重連 + 關 socket,之後所有回呼不再觸發。 */
++  close(): void;
++}
++
++/** 建立 WS 連線並在斷線後以指數退避重連。`url` 傳函式 = 每次重連當下重算。 */
++export function connectWithRetry(
++  url: string | (() => string),
++  handlers: WsHandlers,
++  opts: WsOptions = {},
++): WsHandle {
++  const label = opts.label ?? "ws";
++  const startMs = opts.backoffStartMs ?? WS_BACKOFF_START_MS;
++  const capMs = opts.backoffCapMs ?? WS_BACKOFF_CAP_MS;
++  const minUptimeMs = opts.minUptimeMs ?? WS_MIN_UPTIME_MS;
++  const shortLivedCapMs = opts.shortLivedCapMs ?? WS_SHORT_LIVED_CAP_MS;
++  const silenceTimeoutMs = opts.silenceTimeoutMs ?? WS_SILENCE_TIMEOUT_MS;
++  const tickMs = opts.watchdogTickMs ?? WS_WATCHDOG_TICK_MS;
++
++  let current: WebSocket | null = null;
++  let timer: number | undefined;
++  let backoff = startMs;
++  let stopped = false;
++  /** 當代連線的 open 時刻(每次 `connect()` 重設,只有 `onopen` 寫)。 */
++  let openedAt: number | null = null;
++  /** 停掉「當下這代」的 watchdog(每次 `connect()` 換新的;`handle.close()` 用)。 */
++  let stopWatchdog = (): void => {};
++
++  /** 斷線後排程重連並依「這代活多久」決定退避(SC-4 三分支)。 */
++  const scheduleReconnect = (): void => {
++    handlers.onClose?.();
++    const lived = openedAt !== null ? Date.now() - openedAt : null;
++    const delay = lived !== null && lived >= minUptimeMs ? startMs : backoff;
++    timer = window.setTimeout(connect, delay);
++    backoff = Math.min(delay * 2, lived !== null ? shortLivedCapMs : capMs);
++  };
++
++  const connect = (): void => {
++    openedAt = null;
++    handlers.onConnecting?.();
++    const target = typeof url === "string" ? url : url();
++    const sock = new WebSocket(target);
++    current = sock;
++
++    // --- 以下全部綁在「這一代」socket 的閉包上,舊世代不可能碰到新世代的狀態 ---
++    let watchdog: number | undefined;
++    let lastMsgAt = 0;
++    let lastTickAt = 0;
++
++    const clearWatchdog = (): void => {
++      if (watchdog === undefined) return;
++      window.clearInterval(watchdog);
++      watchdog = undefined;
++    };
++
++    /** 半死判定:自最後一則訊息起靜默超過 timeout 就放棄這條連線。 */
++    const tick = (): void => {
++      const now = Date.now();
++      const sinceTick = now - lastTickAt;
++      lastTickAt = now;
++      if (sinceTick > tickMs * 2) {
++        // 主執行緒長阻塞 / 機器睡醒:server 的 ping 不是沒送,是沒被處理 → 只重置基準。
++        lastMsgAt = now;
++        return;
++      }
++      if (now - lastMsgAt <= silenceTimeoutMs) return;
++
++      console.warn(`${label}: ${Math.round((now - lastMsgAt) / 1000)} s 無訊息,重連`);
++      sock.onmessage = null; // 先卸 handler:被放棄的 socket 之後的事件一律進不來
++      sock.onclose = null;
++      sock.onerror = null;
++      clearWatchdog();
++      sock.close(); // 不等 onclose(Chromium closing handshake 逾時 60 s)
++      if (stopped) return;
++      scheduleReconnect();
++    };
++
++    /** 武裝:單一 setInterval 巡檢(onmessage 只寫時間戳,個股 tick 洪流下零 timer churn)。 */
++    const arm = (): void => {
++      if (watchdog !== undefined || stopped) return;
++      lastMsgAt = Date.now();
++      lastTickAt = lastMsgAt;
++      watchdog = window.setInterval(tick, tickMs);
++    };
++    stopWatchdog = clearWatchdog;
++
++    sock.onopen = () => {
++      openedAt = Date.now();
++      if (pingingUrls.has(target)) arm(); // sticky:寬限 = 完整 silenceTimeout
++      handlers.onOpen?.();
++    };
++    sock.onmessage = (ev: MessageEvent<string>) => {
++      lastMsgAt = Date.now();
++      let value: unknown;
++      try {
++        value = JSON.parse(ev.data);
++      } catch (err) {
++        console.warn(`${label}: 無法解析訊息`, err);
++        return;
++      }
++      if (isPing(value)) {
++        pingingUrls.add(target);
++        arm();
++        return; // SC-3:心跳不進 hook,免得覆蓋 state
++      }
++      handlers.onMessage(value);
++    };
++    sock.onclose = () => {
++      clearWatchdog();
++      if (stopped) return;
++      scheduleReconnect();
++    };
++    sock.onerror = () => {
++      // SC-5:關自身 socket。舊版關的是閉包共用的 `current`(alias),StrictMode 下
++      // 舊 socket 晚到的 error 會把剛建好的新 socket 一起關掉。
++      sock.close();
++    };
++  };
++
++  connect();
++
++  return {
++    close: (): void => {
++      stopped = true;
++      window.clearTimeout(timer);
++      stopWatchdog();
++      current?.close();
++    },
++  };
++}
+diff --git a/tests/server/test_app.py b/tests/server/test_app.py
+index 247b472a..02af74d2 100644
+--- a/tests/server/test_app.py
++++ b/tests/server/test_app.py
+@@ -6,6 +6,7 @@ import pytest
+ from fastapi.testclient import TestClient
+ 
+ from copycat.live.models import OptionContract, SeriesInfo, Tick
++from copycat.server import ws as ws_mod
+ from copycat.server.app import create_app
+ from copycat.server.engine import EngineRuntime
+ 
+@@ -160,6 +161,25 @@ class TestWebSocket:
+         assert len(seeds) == 1
+         assert seeds[0] is sent[0]
+ 
++    def test_ws_heartbeat_ping_after_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """SC-1(route 層):route 沒傳 `heartbeat_secs` 也要吃到模組常數。
++
++        首則仍是快照(W2:ping 不得插在 seed 之前 —— `_beat` 第一則要等滿一個間隔),
++        之後在零推播下也會收到 `{"type": "ping"}`。
++        """
++        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.05)
++        client, _ = make_client()
++        with client:
++            with client.websocket_connect("/ws/txo-pnl") as ws:
++                first = ws.receive_json()
++                assert first["series_id"] == "TX4.202607", "首則必須是快照,不是 ping"
++                for _ in range(10):
++                    msg = ws.receive_json()
++                    if msg == {"type": "ping"}:
++                        break
++                else:
++                    pytest.fail("10 則之內沒收到心跳 ping")
++
+ 
+ class TestTxoContractsRoute:
+     """SC-11(Task 16b):OrderPanel 全鏈選單來源 — active 序列全集,非 snapshot 成交子集。"""
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index d8a774ba..4edac787 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -32,6 +32,7 @@ from copycat.live.stock_models import StockBook, StockMeta, StockTick
+ from copycat.live.stock_state import StockDayState
+ from copycat.server import app as app_mod
+ from copycat.server import signal_hub as hub_mod
++from copycat.server import ws as ws_mod
+ from copycat.server.app import create_app
+ from copycat.server.signal_hub import SignalHub
+ from copycat.signal_rules import RULE_KINDS, Rule
+@@ -779,6 +780,26 @@ class TestSignalRoutesWithoutStock:
+         assert msg["kind"] == "limit_lock"
+         assert msg["code"] == "2330"
+ 
++    def test_ws_stock_hub_only_stream_gets_ping(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """W13:TC4 down 的 hub-only 空流是「恆無推播」那條 —— 心跳最有價值處。
++
++        沒有心跳時這條連線與「半死」在前端完全不可分辨。首則仍是 status seed(W2)。
++        """
++        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.05)
++        monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
++        _seed_watchlist(tmp_path)
++        app, _ = make_app(tmp_path, with_stock=False)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            with client.websocket_connect("/ws/stock") as ws:
++                assert _recv_json(ws) == {
++                    "type": "status",
++                    "tc4": "down",
++                    "backfilling": None,
++                }
++                assert _recv_until(ws, "ping") == {"type": "ping"}
++
+     def test_basis_falls_back_to_empty_daily_bars(
+         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+     ) -> None:
+diff --git a/tests/server/test_ws_disconnect.py b/tests/server/test_ws_disconnect.py
+index 061bb79b..7eca19bd 100644
+--- a/tests/server/test_ws_disconnect.py
++++ b/tests/server/test_ws_disconnect.py
+@@ -22,6 +22,7 @@ import asyncio
+ import base64
+ import dataclasses
+ import datetime as _dt
++import gc
+ import json
+ import logging
+ import os
+@@ -38,9 +39,10 @@ from fastapi import FastAPI, WebSocketDisconnect
+ 
+ import copycat.capital.factory as capital_factory
+ import copycat.server.app as app_mod
++import copycat.server.ws as ws_mod
+ from copycat.live.models import SeriesInfo, Tick
+ from copycat.server.app import create_app
+-from copycat.server.ws import WsBroadcaster, relay
++from copycat.server.ws import PING, WsBroadcaster, relay
+ from tests.helpers.boot import wait_boot
+ from tests.helpers.fake_sources import (
+     FakeCorrSource,
+@@ -541,6 +543,9 @@ _WS_CASES = [
+     _WsCase("/ws/capital", _build_capital, _pump_capital),
+ ]
+ 
++#: 心跳開啟版突斷測試用的單一路(心跳在 relay 層,對 route 無差別;不重跑六路省時間)
++_HEARTBEAT_CASE = _WS_CASES[0]
++
+ 
+ class TestBroadcastRouteDisconnect:
+     """`/ws/txo-pnl` 之外的六條 relay 路,逐條過同一套劇本。
+@@ -560,6 +565,26 @@ class TestBroadcastRouteDisconnect:
+     @pytest.mark.parametrize("case", _WS_CASES, ids=[c.path for c in _WS_CASES])
+     def test_no_write_to_dead_transport(
+         self, case: _WsCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """本測試鎖的是「RST 之後零寫入」這條不變式,應用層心跳是無關變因 ——
++        顯式關掉(`WS_HEARTBEAT_SECS = 0`),計數才只反映推播鏈本身。心跳開啟版本由
++        `test_no_write_to_dead_transport_with_heartbeat` 另外守。"""
++        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0)
++        self._assert_no_dead_transport_writes(case, tmp_path, monkeypatch)
++
++    def test_no_write_to_dead_transport_with_heartbeat(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """心跳開啟時同一條不變式仍成立:RST 後 `_beat` 不得對死 transport 續寫。
++
++        心跳住 `relay`(與 route 無關)→ 取一路跑即可;間隔 0.2 s 讓斷線後那 1.5 s
++        窗口內有 ~7 次心跳機會,`_beat` 沒被收尾就會現形。
++        """
++        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.2)
++        self._assert_no_dead_transport_writes(_HEARTBEAT_CASE, tmp_path, monkeypatch)
++
++    def _assert_no_dead_transport_writes(
++        self, case: _WsCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+     ) -> None:
+         # 前一路的 server 沒收乾淨時,它的殭屍迴圈仍在往全域 asyncio logger 寫警告 ——
+         # 本路的計數會混到別人的帳(review F4)。明示 fail 而不是讓它變成一串假失敗。
+@@ -670,12 +695,43 @@ class _RaisingWebSocket(_FakeWebSocket):
+         raise self._exc
+ 
+ 
++class _PingRaisingWebSocket(_FakeWebSocket):
++    """只有**心跳 ping** 的送出會炸;推播照常記錄。
++
++    釘的是「`_beat` 的例外分流與 `_send` 同款」:用共用的 `_RaisingWebSocket` 會連推播
++    一起炸掉,分不出結局是誰造成的。
++    """
++
++    def __init__(self, exc: BaseException) -> None:
++        super().__init__()
++        self._exc = exc
++
++    async def send_json(self, data: dict) -> None:
++        if data == PING:
++            raise self._exc
++        await super().send_json(data)
++
++
+ async def _one_message() -> AsyncGenerator[dict, None]:
+     """產一則後掛住:讓 send 側必然呼叫一次 send_json,再由該次呼叫決定結局。"""
+     yield {"n": 0}
+     await asyncio.sleep(3600)
+ 
+ 
++async def _idle_stream() -> AsyncGenerator[dict, None]:
++    """永遠不推播的流:心跳是「定時」不是「補空窗」,零流量下也必須照送。"""
++    await asyncio.sleep(3600)
++    yield {}  # pragma: no cover - 上一行永不返回
++
++
++async def _paced_messages(count: int, gap: float) -> AsyncGenerator[dict, None]:
++    """每 `gap` 秒推一則,推完掛住:讓推播與心跳在同一段時間內交錯。"""
++    for i in range(count):
++        await asyncio.sleep(gap)
++        yield {"n": i}
++    await asyncio.sleep(3600)
++
++
+ async def _spin(times: int = 5) -> None:
+     """讓被取消的子任務跑完 finally(同步 cancel 不 await,需要 loop 再轉幾圈)。"""
+     for _ in range(times):
+@@ -745,3 +801,88 @@ class TestRelay:
+         """capital_api / app.py 的 endpoint 直接 await relay,斷線不該冒成 500。"""
+         websocket = _RaisingWebSocket(WebSocketDisconnect(code=1006))
+         await asyncio.wait_for(relay(websocket, _one_message()), timeout=2)
++
++    async def test_heartbeat_ping_when_idle(self) -> None:
++        """SC-1:零推播的流上也要定時收到 ping(前端靜默 watchdog 的唯一依據)。"""
++        websocket = _FakeWebSocket()
++        task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0.02))
++        try:
++            await asyncio.sleep(0.07)
++            assert websocket.sent.count(PING) >= 2, (
++                f"0.07s / 間隔 0.02s 內只送出 {websocket.sent.count(PING)} 則 ping:心跳沒在跑"
++            )
++        finally:
++            websocket.disconnect()
++            await asyncio.wait_for(task, timeout=2)
++
++    async def test_heartbeat_preserves_stream_order(self) -> None:
++        """Edge 1:ping 與推播共用 send lock → 各自完整,推播彼此的相對順序不變。"""
++        websocket = _FakeWebSocket()
++        task = asyncio.ensure_future(
++            relay(websocket, _paced_messages(3, 0.03), heartbeat_secs=0.02)
++        )
++        try:
++            await asyncio.sleep(0.14)
++            pushed = [msg for msg in websocket.sent if msg != PING]
++            assert pushed == [{"n": 0}, {"n": 1}, {"n": 2}], f"推播順序被心跳打亂:{websocket.sent}"
++            assert PING in websocket.sent, "有推播時心跳仍應照送(定時,不看流量)"
++        finally:
++            websocket.disconnect()
++            await asyncio.wait_for(task, timeout=2)
++
++    async def test_heartbeat_disabled_when_zero(self) -> None:
++        """Edge 6:`heartbeat_secs<=0` → 不建 `_beat` task,行為 = 現況。"""
++        websocket = _FakeWebSocket()
++        task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0))
++        try:
++            await asyncio.sleep(0.1)
++            assert websocket.sent == [], f"心跳關閉時不該送出任何東西:{websocket.sent}"
++        finally:
++            websocket.disconnect()
++            await asyncio.wait_for(task, timeout=2)
++
++    async def test_heartbeat_stops_on_disconnect(self) -> None:
++        """收尾要 cancel `_beat`:留著就是對死 transport 每 10s 寫一次的殭屍心跳。"""
++        websocket = _FakeWebSocket()
++        task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0.02))
++        await asyncio.sleep(0.05)
++        websocket.disconnect()
++        await asyncio.wait_for(task, timeout=2)
++        await _spin()
++        after_relay = list(websocket.sent)
++        await asyncio.sleep(0.06)  # 3 個間隔
++        assert websocket.sent == after_relay, "relay 返回後心跳仍在送:`_beat` 沒被 cancel"
++
++    async def test_heartbeat_send_disconnect_ends_relay_cleanly(self) -> None:
++        """Edge 5:半死 transport 上 ping 的 send 會是 `WebSocketDisconnect` → 吞掉收尾。
++
++        另外釘住「不留 unretrieved task 例外」:那會由 asyncio 的 exception handler
++        印 `Task exception was never retrieved`,是 prod log 噪音也是收尾漏洞的訊號。
++        """
++        loop = asyncio.get_running_loop()
++        caught: list[dict[str, Any]] = []
++        original = loop.get_exception_handler()
++        loop.set_exception_handler(lambda _loop, context: caught.append(context))
++        try:
++            websocket = _PingRaisingWebSocket(WebSocketDisconnect(code=1006))
++            await asyncio.wait_for(
++                relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
++            )
++            await _spin()
++            gc.collect()
++            await _spin()
++        finally:
++            loop.set_exception_handler(original)
++        assert websocket.sent == [{"n": 0}], "推播不該因心跳炸掉而遺失"
++        assert caught == [], f"有 task 例外沒被消費:{caught}"
++
++    async def test_heartbeat_non_disconnect_error_propagates(self) -> None:
++        """Edge 5:非斷線例外(uvicorn close_sent 後的 RuntimeError)一律 re-raise。
++
++        與 `_send` 同一條規則 —— 不懂的 error 不寬鬆 catch。
++        """
++        websocket = _PingRaisingWebSocket(RuntimeError("心跳送出炸了"))
++        with pytest.raises(RuntimeError, match="心跳送出炸了"):
++            await asyncio.wait_for(
++                relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
++            )

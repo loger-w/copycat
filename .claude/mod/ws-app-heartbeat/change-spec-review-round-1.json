@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "date": "2026-08-19",
+  "summary": {"P0": 3, "P1": 4, "P2": 6, "accepted": 13, "rejected": 0, "refuted": 0},
+  "findings": [
+    {"id": "R1", "severity": "P0", "claim": "caller map 漏 useFlashArm conn_lost / 三梯 lockDisabled 消費 capital wsStatus;watchdog 誤觸發或新前端舊後端窗口會每 30 s 解除武裝", "quick_check": "useFlashArm.ts:50 已驗", "disposition": "accepted", "resolution": "watchdog 改『收到首則 ping 後武裝』→ 舊後端零 closed 邊沿;caller 入 current-state §2.2;W11 + useCapital.test 兩條"},
+    {"id": "R2", "severity": "P0", "claim": "useStockStream.test.ts:507 fake timers 累積 31 s 會被 30 s watchdog 打紅", "quick_check": "nextRetryDelay :117-126、REFETCH_RETRY 1s/8s 已驗", "disposition": "accepted", "resolution": "同 R1 招(測試不 emit ping → 未武裝);spec 前端表註明"},
+    {"id": "R3", "severity": "P0", "claim": "舊前端 + 新後端 = TXO 頁 render 例外,非『瞬間清空』", "quick_check": "App.tsx:343 snapshot ? 真值守門已驗", "disposition": "accepted", "resolution": "§3 兩向窗口重寫;dev HMR 先換前端故實際窗口 = 新前端舊後端(已由 R1 招解);舊前端窗口 = 重啟後重整分頁(PR 指引 + handoff)"},
+    {"id": "R4", "severity": "P1", "claim": "helper 無 onConnecting → 重連時 connecting 態消失", "quick_check": "useTxoSnapshot.ts:24 等 connect 本體 setWsStatus('connecting') 已驗", "disposition": "accepted", "resolution": "WsHandlers.onConnecting + W12 + helper 測試"},
+    {"id": "R5", "severity": "P1", "claim": "_beat 在 wait 集合 / 例外分流未定;半死 TCP 下 send 不 raise", "disposition": "accepted", "resolution": "§4.1 明寫進集合、例外同 _send(starlette OSError→WebSocketDisconnect)、finally 三 task;Edge 5 改寫;新測試 test_heartbeat_send_disconnect_ends_relay_cleanly"},
+    {"id": "R6", "severity": "P1", "claim": "min-uptime 讓 boot 期間復原延遲最壞 30 s", "disposition": "accepted", "resolution": "三分支:short-lived cap 5 s(SC-4 重寫、Edge 10)"},
+    {"id": "R7", "severity": "P1", "claim": "🔵 列夾帶 onerror 行為改動", "disposition": "accepted", "resolution": "🔵 逐字複刻 alias + characterization 事前標『該變』;🔴 (a) 翻轉"},
+    {"id": "R8", "severity": "P2", "claim": "watchdog timer 生命週期 / per-message churn 未定", "disposition": "accepted", "resolution": "單一 setInterval 5 s 比對 lastMsgAt;所有關閉路徑 clearInterval;舊世代不觸發新世代(測試)"},
+    {"id": "R9", "severity": "P2", "claim": "call site 9 非 8;hub-only 空流值得專測", "disposition": "accepted", "resolution": "current-state 更正;W13 + test_ws_stock_hub_only_stream_gets_ping"},
+    {"id": "R10", "severity": "P2", "claim": "RST 測試與心跳的 timing 耦合", "disposition": "accepted", "resolution": "該測試顯式 WS_HEARTBEAT_SECS=0 + 新增心跳開啟版"},
+    {"id": "R11", "severity": "P2", "claim": "lock 範圍語意兩讀", "disposition": "accepted", "resolution": "§4.1 明寫只包單次 send_json,入 docstring"},
+    {"id": "R12", "severity": "P2", "claim": "server 端半死殭屍連線累積未表態", "quick_check": "uvicorn Config 預設 ws_ping_interval/timeout=20/20 已驗", "disposition": "accepted", "resolution": "§4.7 + Edge 11:uvicorn protocol ping 20/20 回收 ≤ ~40 s,不另做 reap;§6 記"},
+    {"id": "R13", "severity": "P2", "claim": "WsStatus 實為 7 份 + types.ts", "quick_check": "grep 已驗", "disposition": "accepted", "resolution": "current-state 更正;§4.6 改為不收斂、helper 不引第 9 份;next-time 記"}
+  ],
+  "next": "round 2 限縮輪(審 amendment 段落)"
+}

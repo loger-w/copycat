@@ -1,0 +1,15 @@
+# SC-4(ii) 真環境:側車 capital/breadth engine 缺席 → /ws/capital、/ws/breadth accept-then-close;
+# 頁內 patch window.WebSocket 記每次建連時間(patch 於 16:02:28Z 掛上,故只捕到 cap 段;1,2,4 起步段由 helper 單測鎖)
+16:02:28.589 /ws/breadth gap=null
+16:02:28.590 /ws/capital gap=0.00
+16:02:34.586 /ws/breadth gap=6.00
+16:02:34.586 /ws/capital gap=0.00
+16:02:40.583 /ws/breadth gap=6.00
+16:02:40.583 /ws/capital gap=0.00
+16:02:46.582 /ws/breadth gap=6.00
+16:02:46.582 /ws/capital gap=0.00
+16:02:52.578 /ws/breadth gap=6.00
+16:02:52.578 /ws/capital gap=0.00
+16:02:57.590 /ws/breadth gap=5.01
+16:02:58.576 /ws/capital gap=0.99
+# 結論:短命連線 cap 5 s 成立(觀測 5.0–6.0 s;+~1 s 為背景分頁 timer 對齊 + 握手往返),不再 1 Hz;engine 起來後最壞 ~6 s 接上。

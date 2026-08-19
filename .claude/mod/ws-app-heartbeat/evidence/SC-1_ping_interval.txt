@@ -1,0 +1,5 @@
+# SC-1(c) 真環境:側車 8899(worktree code,git_sha 0126aa20,零 ZMQ)/ws/txo-pnl 零推播流;首幀 snapshot 後 ping 間隔(期望 10.0 ± 0.5 s)— 2026-08-19 23:35
+data   t+  0.00s keys=['accumulated_from', 'beps', 'contracts', 'curve']
+ping #1 t+ 10.01s gap=-
+ping #2 t+ 20.01s gap=10.00s
+ping #3 t+ 30.01s gap=10.00s
