@@ -29,16 +29,24 @@ def session_key(now: time.struct_time | None = None) -> SessionKey:
     return (time.strftime("%Y%m%d", t), "day" if t.tm_hour < 7 else "night")
 
 
-def in_txo_session(now: _dt.time | None = None) -> bool:
-    """現在是否在台指期權盤中(TXO session 的 `heal_active` 閘)。
+def _shift(t: _dt.time, delta: _dt.timedelta) -> _dt.time:
+    """時刻平移(經 datetime 運算,避免 time 自行加減的跨午夜錯算)。"""
+    return (_dt.datetime.combine(_dt.date(2000, 1, 1), t) + delta).time()
+
+
+def in_txo_session(now: _dt.time | None = None, *, pad: _dt.timedelta = _dt.timedelta(0)) -> bool:
+    """現在是否在台指期權盤中(TXO / 期貨 session 的 `heal_active` 閘)。
 
     盤外零推播是正常的,重掛只會 churn TC4 上游 —— 自癒必須有時段閘。
     夜盤跨午夜,故以「≥ 15:00 或 ≤ 05:00」判(不能寫成單一區間比較)。
+
+    `pad` 把兩段各往外撐(期貨用 5 分寬限,避免邊界誤關自癒);預設 0 = 原行為。
+    期貨與 TXO 同時段(檔頭時區事實),故共用這張表,不另建第二張。
     """
     t = _dt.datetime.now().time() if now is None else now
-    if _TXO_DAY[0] <= t <= _TXO_DAY[1]:
+    if _shift(_TXO_DAY[0], -pad) <= t <= _shift(_TXO_DAY[1], pad):
         return True
-    return t >= _TXO_NIGHT[0] or t <= _TXO_NIGHT[1]
+    return t >= _shift(_TXO_NIGHT[0], -pad) or t <= _shift(_TXO_NIGHT[1], pad)
 
 
 def session_window(key: SessionKey) -> tuple[str, str]:

@@ -26,8 +26,11 @@ def test_in_futures_session_now_uses_pad5() -> None:
 
 
 class TestHealDefaults:
-    """自癒門檻(change-spec §3):三檔 HOT 全天都該有推播 → 30 / 60,盤外照跑
-    (churn 上限 = 3 symbol / 300s,可接受;夜盤反而是最需要自癒的時段)。"""
+    """自癒門檻(change-spec §3):三檔 HOT 盤中都該有推播 → 30 / 60。
+
+    **source 層預設仍是 always**(純建構不看牆鐘);prod 的閘由
+    `app._default_futures_source` 給 = 交易日曆 AND `in_futures_session_now`
+    (日夜盤各寬 5 分),盤外不 churn。"""
 
     def test_thresholds_and_always_active(self) -> None:
         src = FuturesQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
