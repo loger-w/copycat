@@ -22,6 +22,7 @@ import asyncio
 import base64
 import dataclasses
 import datetime as _dt
+import gc
 import json
 import logging
 import os
@@ -40,7 +41,7 @@ import copycat.capital.factory as capital_factory
 import copycat.server.app as app_mod
 from copycat.live.models import SeriesInfo, Tick
 from copycat.server.app import create_app
-from copycat.server.ws import WsBroadcaster, relay
+from copycat.server.ws import PING, WsBroadcaster, relay
 from tests.helpers.boot import wait_boot
 from tests.helpers.fake_sources import (
     FakeCorrSource,
@@ -670,9 +671,40 @@ class _RaisingWebSocket(_FakeWebSocket):
         raise self._exc
 
 
+class _PingRaisingWebSocket(_FakeWebSocket):
+    """只有**心跳 ping** 的送出會炸;推播照常記錄。
+
+    釘的是「`_beat` 的例外分流與 `_send` 同款」:用共用的 `_RaisingWebSocket` 會連推播
+    一起炸掉,分不出結局是誰造成的。
+    """
+
+    def __init__(self, exc: BaseException) -> None:
+        super().__init__()
+        self._exc = exc
+
+    async def send_json(self, data: dict) -> None:
+        if data == PING:
+            raise self._exc
+        await super().send_json(data)
+
+
 async def _one_message() -> AsyncGenerator[dict, None]:
     """產一則後掛住:讓 send 側必然呼叫一次 send_json,再由該次呼叫決定結局。"""
     yield {"n": 0}
+    await asyncio.sleep(3600)
+
+
+async def _idle_stream() -> AsyncGenerator[dict, None]:
+    """永遠不推播的流:心跳是「定時」不是「補空窗」,零流量下也必須照送。"""
+    await asyncio.sleep(3600)
+    yield {}  # pragma: no cover - 上一行永不返回
+
+
+async def _paced_messages(count: int, gap: float) -> AsyncGenerator[dict, None]:
+    """每 `gap` 秒推一則,推完掛住:讓推播與心跳在同一段時間內交錯。"""
+    for i in range(count):
+        await asyncio.sleep(gap)
+        yield {"n": i}
     await asyncio.sleep(3600)
 
 
@@ -745,3 +777,88 @@ class TestRelay:
         """capital_api / app.py 的 endpoint 直接 await relay,斷線不該冒成 500。"""
         websocket = _RaisingWebSocket(WebSocketDisconnect(code=1006))
         await asyncio.wait_for(relay(websocket, _one_message()), timeout=2)
+
+    async def test_heartbeat_ping_when_idle(self) -> None:
+        """SC-1:零推播的流上也要定時收到 ping(前端靜默 watchdog 的唯一依據)。"""
+        websocket = _FakeWebSocket()
+        task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0.02))
+        try:
+            await asyncio.sleep(0.07)
+            assert websocket.sent.count(PING) >= 2, (
+                f"0.07s / 間隔 0.02s 內只送出 {websocket.sent.count(PING)} 則 ping:心跳沒在跑"
+            )
+        finally:
+            websocket.disconnect()
+            await asyncio.wait_for(task, timeout=2)
+
+    async def test_heartbeat_preserves_stream_order(self) -> None:
+        """Edge 1:ping 與推播共用 send lock → 各自完整,推播彼此的相對順序不變。"""
+        websocket = _FakeWebSocket()
+        task = asyncio.ensure_future(
+            relay(websocket, _paced_messages(3, 0.03), heartbeat_secs=0.02)
+        )
+        try:
+            await asyncio.sleep(0.14)
+            pushed = [msg for msg in websocket.sent if msg != PING]
+            assert pushed == [{"n": 0}, {"n": 1}, {"n": 2}], f"推播順序被心跳打亂:{websocket.sent}"
+            assert PING in websocket.sent, "有推播時心跳仍應照送(定時,不看流量)"
+        finally:
+            websocket.disconnect()
+            await asyncio.wait_for(task, timeout=2)
+
+    async def test_heartbeat_disabled_when_zero(self) -> None:
+        """Edge 6:`heartbeat_secs<=0` → 不建 `_beat` task,行為 = 現況。"""
+        websocket = _FakeWebSocket()
+        task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0))
+        try:
+            await asyncio.sleep(0.1)
+            assert websocket.sent == [], f"心跳關閉時不該送出任何東西:{websocket.sent}"
+        finally:
+            websocket.disconnect()
+            await asyncio.wait_for(task, timeout=2)
+
+    async def test_heartbeat_stops_on_disconnect(self) -> None:
+        """收尾要 cancel `_beat`:留著就是對死 transport 每 10s 寫一次的殭屍心跳。"""
+        websocket = _FakeWebSocket()
+        task = asyncio.ensure_future(relay(websocket, _idle_stream(), heartbeat_secs=0.02))
+        await asyncio.sleep(0.05)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=2)
+        await _spin()
+        after_relay = list(websocket.sent)
+        await asyncio.sleep(0.06)  # 3 個間隔
+        assert websocket.sent == after_relay, "relay 返回後心跳仍在送:`_beat` 沒被 cancel"
+
+    async def test_heartbeat_send_disconnect_ends_relay_cleanly(self) -> None:
+        """Edge 5:半死 transport 上 ping 的 send 會是 `WebSocketDisconnect` → 吞掉收尾。
+
+        另外釘住「不留 unretrieved task 例外」:那會由 asyncio 的 exception handler
+        印 `Task exception was never retrieved`,是 prod log 噪音也是收尾漏洞的訊號。
+        """
+        loop = asyncio.get_running_loop()
+        caught: list[dict[str, Any]] = []
+        original = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: caught.append(context))
+        try:
+            websocket = _PingRaisingWebSocket(WebSocketDisconnect(code=1006))
+            await asyncio.wait_for(
+                relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
+            )
+            await _spin()
+            gc.collect()
+            await _spin()
+        finally:
+            loop.set_exception_handler(original)
+        assert websocket.sent == [{"n": 0}], "推播不該因心跳炸掉而遺失"
+        assert caught == [], f"有 task 例外沒被消費:{caught}"
+
+    async def test_heartbeat_non_disconnect_error_propagates(self) -> None:
+        """Edge 5:非斷線例外(uvicorn close_sent 後的 RuntimeError)一律 re-raise。
+
+        與 `_send` 同一條規則 —— 不懂的 error 不寬鬆 catch。
+        """
+        websocket = _PingRaisingWebSocket(RuntimeError("心跳送出炸了"))
+        with pytest.raises(RuntimeError, match="心跳送出炸了"):
+            await asyncio.wait_for(
+                relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
+            )
