@@ -1,0 +1,13 @@
+{
+ "round": 2, "scope": "限縮輪(amendment 段落 + cross-round)", "reviewer": "change-spec-reviewer (opus)", "date": "2026-08-19",
+ "findings": [
+  {"id":"R2-1","severity":"P1","section":"SC-8","problem":"≤10 則/s/商品 門檻 before 已滿足 → vacuous","disposition":"accepted","resolution":"改 per-product 最小間隔 ≥ 95 ms 指紋 + seq 連續 + 下降比例記錄;腳本補 per-product gap(before 實測 per-product min gap 0.0 ms)"},
+  {"id":"R2-2","severity":"P1","section":"SC-6","problem":"FakeApi 無 Connect、既有建構法早退 → 斷言 vacuous","disposition":"moot","resolution":"leaf 退訂整組撤下(user 拍板)"},
+  {"id":"R2-3","severity":"P1","section":"D2h","problem":"source 層 UNSUB→SUB 救不回同 symbol 衝突;退訂後乒乓凍結零訊號","disposition":"accepted→撤 scope","resolution":"升級問 user(方向性):拍板「備胎不退」;commit B/SC-5/SC-6/D2c/g/h 撤下記 next-time"},
+  {"id":"R2-4","severity":"P2","section":"W5","problem":"類名未同步","disposition":"accepted","resolution":"W5 類名對齊"},
+  {"id":"R2-5","severity":"P2","section":"SC-0/W4","problem":"close 內 flush timer cancel 位置未釘;await 期間可廣播","disposition":"accepted","resolution":"close 不變式 + test_close_with_pending_flush_timer_does_not_broadcast"},
+  {"id":"R2-6","severity":"P2","section":"W9","problem":"「顯式傳小 flush 值」選項需改 create_app 簽名","disposition":"accepted","resolution":"刪該選項,只加註"},
+  {"id":"R2-7","severity":"P2","section":"D2d/Out of scope","problem":"週一凌晨 00:00–05:05 假開未列","disposition":"accepted","resolution":"Out of scope 補對稱說明;真修法記 next-time"}
+ ],
+ "summary": {"P0":0,"P1":3,"P2":4,"accepted":5,"moot":2,"exit":"無 P0 → 退出"}
+}

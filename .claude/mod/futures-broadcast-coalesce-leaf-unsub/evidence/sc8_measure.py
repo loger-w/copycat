@@ -11,6 +11,7 @@ async def main() -> None:
     health = json.load(urllib.request.urlopen(f"http://localhost:{PORT}/api/health"))
     print("health:", health.get("git_sha"))
     n = 0; nbytes = 0; per = Counter(); gaps = 0; last_seq = None; first_seq = None
+    per_last: dict = {}; per_gaps: dict = {}
     t0 = time.monotonic(); gap_ms: list[float] = []; last_t = t0
     async with websockets.connect(f"ws://localhost:{PORT}/ws/futures", max_size=None) as ws:
         while time.monotonic() - t0 < WINDOW:
@@ -19,7 +20,9 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 break
             now = time.monotonic(); gap_ms.append((now - last_t) * 1000); last_t = now
-            m = json.loads(raw); n += 1; nbytes += len(raw); per[m.get("product")] += 1
+            m = json.loads(raw); n += 1; nbytes += len(raw); prod = m.get("product"); per[prod] += 1
+            if prod in per_last: per_gaps.setdefault(prod, []).append((now - per_last[prod]) * 1000)
+            per_last[prod] = now
             s = m.get("seq")
             if first_seq is None: first_seq = s
             if last_seq is not None and s != last_seq + 1: gaps += 1
@@ -30,6 +33,8 @@ async def main() -> None:
     print(f"seq first={first_seq} last={last_seq} gaps={gaps}; GET state seq={state.get('seq')} (>= last ws seq: {state.get('seq') is not None and last_seq is not None and state['seq'] >= last_seq})")
     if gap_ms[1:]:
         g = sorted(gap_ms[1:]); print(f"inter-msg gap ms: min={g[0]:.1f} p50={g[len(g)//2]:.1f} max={g[-1]:.1f}")
+    for prod, gs in sorted(per_gaps.items()):
+        gs = sorted(gs); print(f"  {prod}: per-product gap ms min={gs[0]:.1f} p50={gs[len(gs)//2]:.1f} n={len(gs)+1}")
     print(f"ws state at end = {st}")
 
 asyncio.run(main())

@@ -1,3 +1,12 @@
+## 2026-08-19(mod/futures-broadcast-coalesce-leaf-unsub 期貨廣播 coalesce 留尾)
+
+- [ ] **leaf 備胎訂閱退訂(user 2026-08-19 拍板本輪不退)**:handoff R2 原要求 HOT 回魂後退 leaf;spec review 指出退訂後 HOT 再被
+  TXO session 搶走推播(同 symbol 只推一邊,UNSUB→SUB 救不回)時既有再武裝路徑(pending `st.p is None` 只冷啟動、跨日重武裝只掃
+  `_leaf_fed`)都不觸發 → 凍結零訊號;夜盤冷門品「靜默再武裝」又會乒乓。要做 = 先設計 engine 層 HOT 靜默偵測(>N 秒且同族他品有推播)
+  再武裝,且 `unsubscribe_leaf` 不得 `_ensure_connected`(review I1 KeepAlive 洩漏)。coalesce 後雙流 WS 流量已歸零,收益只剩 engine CPU。
+- [ ] **`_heal_gate` 跨午夜段日曆歸屬**:週一 / 長假後首交易日凌晨 00:00–05:05 假開(空 churn)、週六凌晨假關;真修法 = 凌晨段改查
+  前一日 `is_trading_day`。
+
 ## 2026-08-19(mod/txo-snapshot-no-redundant-push TXO 快照只在內容有變才推 留尾)
 
 - [ ] **`ChainAggregator.route` spot 分支缺 `price_millipts > 0` 閘**(code review C2,既有問題):`_ingest` 有閘
