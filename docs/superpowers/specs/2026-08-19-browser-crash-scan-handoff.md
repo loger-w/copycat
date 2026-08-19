@@ -21,6 +21,8 @@ renderer crash 的**根因尚未確認**(程式碼掃描無獨立可解釋的 P0
 ## 建議分輪(各自 /mod,三類分離)
 
 ### R1(後端,最高價值)`/mod TXO /ws/txo-pnl 每秒推 22.6KB 相同快照 → 外來 tick 不標 changed + 內容不變不推`
+
+> **已出貨 2026-08-19(PR #68)**;artifact `.claude/mod/txo-snapshot-no-redundant-push/`;SC-4 prod 量測 + SC-5 待 prod 重啟。D1 拍板 = 兩者皆做 + Event 換代。
 - 位置:`copycat/server/engine.py:295-297`(`_consume` 在 `self._agg.route(tick)` 後無條件 `_mark_changed()`;
   route 對非本鏈 symbol 早退只加 `dropped_foreign_ticks`)、`engine.py:127-137`(`snapshots()` 1s 節流無內容比對)。
 - 證據:14:22 實測 `/ws/txo-pnl` 1 msg/s、23.2 KB/s(佔全部 WS 96%),連續 6 則去掉 generated_at 逐字相同;
