@@ -257,6 +257,12 @@ class FuturesEngine:
     # ---- 對外查詢 ----
 
     def state(self) -> dict:
+        """全量快照。**`seq` 是廣播游標,不是內容版本**(coalesce 後兩者不再同步):
+
+        `products` 每則 quote 就即時更新,`seq` 只在 flush 時遞增 → 內容最多可領先
+        `seq` 一個 flush 週期(prod 0.1 s)。前端拿 GET 當「跳號後的全量補齊」用:
+        內容永遠是最新的,而 seq 對齊「最後一則已廣播」,之後的 WS 訊息仍嚴格 +1。
+        """
         return {
             "seq": self._seq,
             "products": {p: st.payload(p) for p, st in self._states.items()},
