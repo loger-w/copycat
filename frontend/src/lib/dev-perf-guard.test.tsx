@@ -39,7 +39,7 @@ test("前提自檢:React dev build 每次 props 變的 re-render 都留下 measu
 });
 
 test("SC-1 guard 安裝後,React 留下的 measure / mark 條目被定期清空", async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const { installUserTimingGuard } = await import("@/lib/dev-perf-guard");
   const dispose = installUserTimingGuard({ intervalMs: 10_000 });
   await renderTimes(20);
@@ -51,7 +51,7 @@ test("SC-1 guard 安裝後,React 留下的 measure / mark 條目被定期清空"
 });
 
 test("SC-2 dispose 後不再清除(HMR / unmount 不殘留 timer)", async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const { installUserTimingGuard } = await import("@/lib/dev-perf-guard");
   const dispose = installUserTimingGuard({ intervalMs: 10_000 });
   dispose();
