@@ -128,4 +128,13 @@
   (觀測型,非 gate)。
 - R11:改後 `/ws/txo-pnl` 可長時間零訊息;保活靠 uvicorn ws ping(已查:venv 裝 `websockets 16.1.1`、
   無 `wsproto` → `ws="auto"` 選 websockets,預設 ping 20 s)。SC-4 (3) 順帶驗 20 s 靜默後仍 open。
-  應用層心跳仍留 R3。
+  應用層心跳仍留 R3。**code review C4 補記**:回補重試迴圈每輪同值 `_set_status("backfilling")` 在內容比對下
+  不再推(edge case 3),重試期間 `_buffer` 吞 tick、`_consume` 零 mark → WS 可連續 3 × backfill timeout
+  (十幾分鐘)零訊息,靠 uvicorn ping 保活;不改行為,記 next-time(把重試進度寫進 `_handover`)。
+- W8 修正(code review T2):`test_no_write_to_dead_transport` 的 `_tick` 每筆也動 `curve` / `contracts` / `net_qty`,
+  縮掉 `totals` 它照樣綠 → 「不得再縮」改由 engine 層範圍鎖測試 `test_content_compare_covers_whole_payload` 守。
+
+## self_review_head
+
+`0af45d67`(code review round-1:correctness + test-coverage 兩 lens,P1×2 / P2×9,accepted 9 / rejected 2;
+fix 波 eb0f5087 + 0af45d67)。收尾增量 review 以此為基準。

@@ -1,3 +1,15 @@
+## 2026-08-19(mod/txo-snapshot-no-redundant-push TXO 快照只在內容有變才推 留尾)
+
+- [ ] **`ChainAggregator.route` spot 分支缺 `price_millipts > 0` 閘**(code review C2,既有問題):`_ingest` 有閘
+  (鎖停時 TC4 簿第一檔推市價佇列 0 價),spot 沒有 → 0 價會記成 `spot.price=0.0` 並拿 0 點內插 `spot_pnl`;
+  新的同價短路還讓「0 ↔ 真價」交替每筆都算價變。候選 = spot 分支開頭 `if tick.price_millipts <= 0: return False`
+  (行為改動,另案 /bug 或 /mod)。
+- [ ] **TXO 推播仍是全量 ~22 KB 整包**(review R10):有行情時 spot 每次價變都推整包;delta / 分欄推播未做。
+- [ ] **回補重試期間 WS 可十幾分鐘零訊息**(code review C4):同值 `backfilling` 不再推,保活只剩 uvicorn ws ping 20s;
+  候選 = 把重試進度寫進 `_handover`(attempt / backfill_secs)讓內容真的變、前端可觀測 — 與 R3 應用層心跳一併看。
+- [ ] **code review lens 並行汙染**:本輪 test-coverage lens 做 mutation 改檔,與 correctness lens 並行 → 後者讀到汙染樹
+  (W8 首跑 243s 紅)。memory `mutation-reviewers-serial` 早有此條;會改檔的 lens 一律序列或 worktree 隔離。
+
 ## 2026-08-18(mod/futures-intraday-core 期貨分時圖換 core + 檔位 1–10/15/30/60 留尾)
 
 - [ ] **期貨分時 CDP / MA 疊線**:本輪反灰(title「期貨分時本輪不提供 CDP/MA/成交點」)。要做 = 以期貨日 K

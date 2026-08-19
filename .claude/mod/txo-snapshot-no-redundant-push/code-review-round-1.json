@@ -1,0 +1,21 @@
+{
+ "round": 1, "date": "2026-08-19", "base": "0d34bc47..d1c7901b", "lenses": ["correctness (opus)", "test-coverage (opus, mutation 實證)"],
+ "gates_at_review": {"pytest": "2762 passed", "ruff": "pass", "pyright": "0 errors", "validate": "42/42 PASS"},
+ "process_note": "兩 lens 並行、test-coverage lens 做 mutation 改檔 → correctness lens 一度讀到汙染樹(W8 首跑 243s 紅,隔離後綠)。違反 memory mutation-reviewers-serial;收工 git status / grep MUTANT 皆乾淨。教訓:會改檔的 lens 一律序列。",
+ "findings": [
+  {"id":"T1","severity":"P1","file":"tests/server/test_engine.py","line":519,"claim":"迴圈不變式 (b) 寫錯時 SC-2 / SC-3b 測試無限 hang(event loop 餓死,asyncio.timeout 也救不了)而非紅","disposition":"accepted","resolution":"monkeypatch latest_snapshot 計數、超過 50 次即 raise RuntimeError → tight loop 變 task 帶例外 → 紅;正常路徑 assert 呼叫次數 ≤ 3"},
+  {"id":"T2","severity":"P1","file":"copycat/server/engine.py","line":49,"claim":"內容比對範圍「不得再縮」零測試守;W8 宣稱的保護實測不成立(縮掉 totals 79 passed)","disposition":"accepted","resolution":"新增範圍鎖測試 set(_content(snap)) == set(snap) - {generated_at};spec W8 敘述修正"},
+  {"id":"T3","severity":"P2","file":"tests/server/test_engine.py","line":463,"claim":"_drain 在 task 帶例外完成的路徑不 re-raise,真 traceback 退化成 GC 警告","disposition":"accepted","resolution":"_drain done 分支 re-raise task.exception();斷言改 assert not task.done(), task.result()"},
+  {"id":"T4","severity":"P2","file":"tests/server/test_engine.py","line":415,"claim":"two_clients 測試綁 50 ms throttle 窗,負載高會假綠","disposition":"accepted","resolution":"throttle 0.05 → 0.5;餵第二筆前 assert not task_a2.done()"},
+  {"id":"T5","severity":"P2","file":"tests/server/test_engine.py","line":477,"claim":"W4 spot 價變 → 推播 只有 aggregate 層測試,engine 層零覆蓋","disposition":"accepted","resolution":"新增 engine 層 spot 價變推 / 同價不推 測試"},
+  {"id":"T6","severity":"P2","file":"copycat/server/engine.py","line":321,"claim":"_agg is None 分支無測試(非本輪引入)","disposition":"rejected_with_reason","resolution":"finder 自判不擋出貨;行為與 master 相同"},
+  {"id":"T7","severity":"P2","file":"tests/server/test_engine.py","line":441,"claim":"two_clients 測試收尾不走 _drain(與 C3 同)","disposition":"accepted","resolution":"併 C3 修"},
+  {"id":"C1","severity":"P2","file":"copycat/server/engine.py","line":132,"claim":"_content 淺複本,snap['handover'] 與 self._handover 同物件;日後就地改鍵會永不推","disposition":"accepted","resolution":"_content 對 handover 另做 dict 複本 + docstring 註明"},
+  {"id":"C2","severity":"P2","file":"copycat/live/aggregate.py","line":75,"claim":"spot 分支缺 price>0 閘(既有問題)","disposition":"rejected_with_reason","resolution":"行為改動超出本 spec(spot 0 價目前會記);記 docs/next-time.md"},
+  {"id":"C3","severity":"P2","file":"tests/server/test_engine.py","line":437,"claim":"two_clients 測試未套 R15 收尾規約","disposition":"accepted","resolution":"_drain 上移 + finally 走 _drain"},
+  {"id":"C4","severity":"P2","file":"copycat/server/engine.py","line":240,"claim":"回補重試期間同值 backfilling 不再推 → WS 可十幾分鐘零訊息,落在 R11 風險面","disposition":"accepted","resolution":"選 (b):寫進 spec Known risks R11(不改行為);SC-4 (3) 順帶驗靜默存活"}
+ ],
+ "whitelist_check": "W1–W9 全 ok(correctness lens 逐條 probe 實證)",
+ "p2_summary": {"count": 9, "themes": ["測試收尾/診斷品質(T3/T7/C3)", "timing 窗(T4)", "覆蓋缺口(T5)", "淺複本隱性不變式(C1)", "既有 spot 0 價(C2→next-time)", "回補重試靜默(C4→Known risks)"]},
+ "summary": {"P0":0,"P1":2,"P2":9,"accepted":9,"rejected":2}
+}

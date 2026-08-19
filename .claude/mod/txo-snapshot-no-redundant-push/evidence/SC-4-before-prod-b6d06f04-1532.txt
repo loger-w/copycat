@@ -1,0 +1,13 @@
+health: b6d06f04 None
+first series_id=TX4.202608 status=live ticks=199
+msgs in 20s = 19 (incl first)  bytes=183597  KB/s=8.96
+  +  2.1s 9605 B ticks=199 gen=15:32:27
+  +  3.1s 9605 B ticks=199 gen=15:32:28
+  +  4.1s 9605 B ticks=199 gen=15:32:29
+  +  5.1s 9605 B ticks=199 gen=15:32:30
+  +  6.1s 9605 B ticks=199 gen=15:32:31
+  +  7.1s 9605 B ticks=199 gen=15:32:32
+  +  8.2s 9605 B ticks=199 gen=15:32:33
+consecutive identical (excl generated_at/dropped_foreign/queue_dropped) = 13
+ws state at end = OPEN
+GET /api/txo/snapshot == last ws msg (excl set): False; dropped_foreign first=64652 get=65229
