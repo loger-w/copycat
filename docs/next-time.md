@@ -1,3 +1,15 @@
+## 2026-08-20(盤後 server log 巡檢發現)
+
+- [ ] **capital 損益報告 kind 標籤解析 None → 當日新買部位均價/含費稅損益不回填 + log 每分鐘 3 行**:
+  盤後起的 server(627c2bf9,16:12)每輪 balance 60s 週期噴
+  `profit row 種類不符略過: 3450/5608/6456 報告=None 部位=['cash'/'margin'/'cash']`
+  (server-20260820-1612.log,69 發/半小時);當日早盤 server(0818)與 08-17~08-19 各日全零,
+  這三檔疑為 12:12 停機後盤中新買 → T 日交割中的列在「未實現-彙總」報告的種類欄
+  不是 現股/融資/融券 三字面(`balance.py::_PNL_KIND` 表外 → `r.kind=None` 整列略過,
+  `client.py:419`)。影響:該部位均價 / pnl_base 恆缺(前端三處損益顯示退化)+ 洗版。
+  第一步 = kind miss 的 warning 帶 `parts[_PNL_IDX_KIND]` 原文(現在 raw 標籤沒進 log,
+  無從對映)+ 同 key 節流;確認實際字面後補 `_PNL_KIND` 對映屬 🔴 另案 /bug。
+
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 
 - [ ] **真 tick trace 對照**(驗證窗口外降級):夜盤或次一交易日盤中,prod build 分頁
@@ -96,16 +108,20 @@
   上限 6 腿 × 12 發/小時。要收 = corr 每腿各自時段閘。
 - [ ] **rollover 舊窗 key 洩漏(既有行為,非本輪引入)**:stage 2 `_resub` 的 UNSUB 用新日期窗,前一交易日的 key 留在 session 上直到
   session 死;死時歸零會把 symbol 上游帶走(正是殭屍 reap 殺 key 的素材)。要收 = set_trade_date 前先對舊窗逐 symbol UNSUB。
-- [ ] `tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` flake 本輪又見(3 跑 1 紅),與 08-05 memory 同一支,仍待排查。
+- [x] ~~`tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` flake(3 跑 1 紅)~~
+  **2026-08-20 修畢**:根因 = `_ws_handshake` 丟棄與 101 同 TCP segment 的殘留位元組(helper
+  docstring 早已自證的已知缺陷),該 frame 被吞後 recv 等到 timeout;改走 `_ws_handshake_keep_rest`
+  並把殘留納入 snapshot 斷言、舊 wrapper 退役。修前 13 跑 2 紅、修後 25 跑全綠。
 - [ ] **TC4 QuoteZMQService log(`C:\TC4\APPs\TCoreRelease\Logs\QuoteZMQService-YYYYMMDD-0.log`)是排查訂閱問題的第一
   現場**:`Add/RemoveSubQuoteCount` / `ReqSubQuote` / `RemoveLoginInfo` / `ExecuteCheckPingTime` 全有;ops-discipline
   skill 補一節「零推播先看這份 log」。
 
 ## 2026-08-18(mod/signal-denoise 個股訊號降噪留尾)
 
-- [ ] **真 tick 減量對照(驗證窗口 2026-08-18 盤中)**:回放(1 分 K 近似)dwell 300 讓 CDP 事件 127→89(−29.9%);
-  prod 重啟後拿當日 `data/signals/<date>.jsonl` 與 08-17(192 則 / CDP 120)對照,若減量 < 20% 或單穿股漏發,
-  回頭看 `cdp_rearm_dwell_secs`(規則 UI 可調)與側別 seed。Discord 同 tick 合併真發也待這天過目。
+- [x] ~~真 tick 減量對照~~ **2026-08-20 驗畢 PASS**:降噪自 08-18 開盤即生效(fd03822f),
+  以單位時間事件率對照(各日檔案跨度不同):CDP 35.9/h(08-17 基準)→ 25.0 / 27.0 / 27.5(08-18/19/20),
+  三日一致 −23%~−30%,吻合回放預測 −29.9%;CDP 覆蓋檔數 30→32→34→42 不減反增、單檔最高重複 12→5,
+  無漏發跡象。剩 **Discord 同 tick 合併真發過目**(翻頻道 08-18 起的訊息即可,log 無逐則記錄)。
 - [ ] **toast / 桌面通知不合併**(spec D5 刻意 out of scope):同 tick 三則仍跳三張 toast;若盤中覺得吵,
   候選 = `useSignalAlerts` 走同一個 `groupSignals` 口徑合成一張。
 - [ ] **規則 UI `rearm_dwell_secs` step="1" 且前端不擋 0–3600 值域**(code review T-10 rejected):沿
@@ -115,9 +131,12 @@
   候選 = 逐段 span 各帶自己的 title「kind(rule)」。
 - [ ] **合併列在 200px rail 內易被 truncate**(真環境過目:「突破 CDP AH・爆量 5.9 倍」被截成「突破 CDP AH・…」),
   full text 在 title;若嫌難讀,候選 = 合併列允許換行或縮字級。
-- [ ] **conftest `TestConftestWatchlistIsolation::test_hub_data_dir_isolated_without_explicit_path` 順序脆弱**
-  (correctness lens 附帶觀察,非本輪 diff):以 test_signal_hub + test_signal_rules + test_signal_routes 三檔
-  子集跑會紅、單檔 / 全套綠;既有測試基建順序依賴,另案追。
+- [x] ~~conftest `TestConftestWatchlistIsolation` 順序脆弱~~ **2026-08-20 修畢**:根因不是測試污染,
+  是 pytest 9.1.1 參數順序 bug —— 命令列「server 檔、tests 根檔、server 檔」交錯時,最後那個 server 檔
+  的測試在**收集期**就丟失 `tests/server/conftest.py` 的 autouse fixture(與 signal 檔無關,任意檔
+  組合可重現;root conftest 的 autouse 不受影響)。修法 = 隔離 fixture 上移 root `tests/conftest.py`
+  (`sys.modules.get` 惰性取模組,不讓 [live] extras 變硬依賴),`tests/server/conftest.py` 退役。
+  三檔子集 5 跑全綠(修前 5/5 紅)。
 
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
@@ -356,13 +375,8 @@
   搜尋區上放開時 `dropTargetFromPointer` 取最近 zone(落未分組 index 0)而非作廢;本輪
   全收/全展鈕使 sticky 高一列,遮蔽帶隨之加高。收斂方向 = 把 sticky 高度傳進 `zonesNow`,
   y 落帶內回 null(拖到搜尋列 = 作廢),不動 ROW_H / bounds。
-- [ ] **conftest 自選隔離 fixture 的組合跑 flake**:`tests/server/test_signal_routes.py::
-  TestConftestWatchlistIsolation::test_hub_data_dir_isolated_without_explicit_path` 在
-  特定 8 檔組合同跑時紅(`hub._data_dir == data`,隔離未生效),單跑與全套跑皆綠;
-  master 5a1a97aa 可重現,非 watchlist-ux-limit-50 引入。它是 XR-3 SC-8 擋牆自身的鎖,
-  壞掉是靜默的(某顆 hub 讀真 `data/stock_watchlist.json`);二段 bisect 未定位到單一
-  污染源。候選:fixture 改 autouse session 級斷言、或該測試自帶 delenv/monkeypatch
-  不依賴共用 fixture。
+- [x] ~~conftest 自選隔離 fixture 的組合跑 flake~~ **2026-08-20 修畢**(與 08-18 signal-denoise
+  節同一條):根因 = pytest 9.1.1 參數順序 bug,fixture 已上移 root conftest,細節見該節。
 
 ## 2026-08-13(mod/trial-pause-badge 第一段收尾留尾巴)
 
