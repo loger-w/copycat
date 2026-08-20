@@ -12,6 +12,9 @@ import {
   groupKindLabels,
   groupRuleNames,
   groupSignals,
+  kindLabel,
+  type KindSegment,
+  type SignalGroup,
   type SignalMsg,
 } from "@/lib/signal-model";
 import { cn } from "@/lib/utils";
@@ -51,6 +54,21 @@ function toneOf(sig: SignalMsg): string {
     return sig.direction === "from_above" ? "text-bear" : "text-bull";
   }
   return "text-ink-muted";
+}
+
+/** kind 段的 hover 提示:「label(rule)」;rule_name 缺值(舊 jsonl)只留 label。 */
+function segmentTitle(seg: KindSegment): string {
+  const rule = seg.sig.rule_name;
+  return rule === undefined || rule === "" ? seg.label : `${seg.label}(${rule})`;
+}
+
+/** 規則名段的 hover 提示:「rule:該規則在這一 tick 發出的 kind 文案」(到達序、去重)。 */
+function ruleTitle(group: SignalGroup, name: string): string {
+  const labels = new Set<string>();
+  for (const item of [...group.items].reverse()) {
+    if (item.rule_name === name) labels.add(kindLabel(item));
+  }
+  return `${name}:${[...labels].join("・")}`;
 }
 
 function Toggle({
@@ -111,8 +129,10 @@ export function SignalRail({
               放得下十來列。合併只發生在顯示層 —— WS payload / jsonl / toast 仍逐則。 */}
           {groupSignals(signals).map((group) => {
             const segments = groupKindLabels(group);
-            const kindText = segments.map((seg) => seg.label).join("・");
-            const ruleText = groupRuleNames(group).join("・");
+            const ruleNames = groupRuleNames(group);
+            // **合併列才換版**(B3):單則列一行放得下,照舊 truncate;合併列的 kind 段
+            // 實測 154px 只分到 95px(38% 被切),改 clamp 2 行 + 規則名另起一行。
+            const merged = segments.length > 1;
             return (
               <li key={group.key}>
                 <button
@@ -133,14 +153,22 @@ export function SignalRail({
                     {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
                         漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
                         規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
-                        升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
+                        升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。
+                        合併列改堆疊(kind 上 / 規則名下):並排時兩段搶同一行寬,
+                        kind 154 + 規則名 92 > 可用 150,任一段都還是被切。 */}
                     <span
-                      title={ruleText === "" ? kindText : `${kindText}(${ruleText})`}
-                      className="flex min-w-0 items-baseline gap-1"
+                      className={cn("min-w-0 items-baseline gap-1", merged ? "flex flex-col" : "flex")}
                     >
                       {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
-                          整段套第一則的 tone 會把其中一半畫成相反的方向。 */}
-                      <span className="min-w-0 truncate text-xs">
+                          整段套第一則的 tone 會把其中一半畫成相反的方向。
+                          **逐段 title**(T-12):整列單一 title 看不出 kind 段與規則名段
+                          的一對一對應,改成各段自帶「label(rule)」。 */}
+                      <span
+                        className={cn(
+                          "min-w-0 text-xs",
+                          merged ? "line-clamp-2 break-words whitespace-normal" : "truncate",
+                        )}
+                      >
                         {segments.map((seg, i) => (
                           <Fragment key={seg.label}>
                             {/* 分隔符是視覺用的:讀螢幕器唸出來只會把兩段文案黏成一句 */}
@@ -149,13 +177,25 @@ export function SignalRail({
                                 ・
                               </span>
                             )}
-                            <span className={toneOf(seg.sig)}>{seg.label}</span>
+                            <span className={toneOf(seg.sig)} title={segmentTitle(seg)}>
+                              {seg.label}
+                            </span>
                           </Fragment>
                         ))}
                       </span>
-                      {ruleText === "" ? null : (
-                        <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
-                          {ruleText}
+                      {ruleNames.length === 0 ? null : (
+                        <span
+                          className={cn(
+                            "min-w-0 text-[0.625rem] text-ink-dim",
+                            merged ? "line-clamp-2 break-words whitespace-normal" : "truncate",
+                          )}
+                        >
+                          {ruleNames.map((name, i) => (
+                            <Fragment key={name}>
+                              {i === 0 ? null : <span aria-hidden="true">・</span>}
+                              <span title={ruleTitle(group, name)}>{name}</span>
+                            </Fragment>
+                          ))}
                         </span>
                       )}
                     </span>

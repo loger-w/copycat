@@ -187,7 +187,10 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
   it("段間分隔符對輔助技術隱藏(aria-hidden)", () => {
     renderRail({ signals: [CDP, CRASH] });
     const list = within(screen.getByTestId("signal-rail-list"));
-    expect(list.getByText("・").getAttribute("aria-hidden")).toBe("true");
+    // kind 段與規則名段各一個分隔符(B3 起規則名段也逐段 span),全部都要藏
+    const seps = list.getAllByText("・");
+    expect(seps.length).toBe(2);
+    for (const sep of seps) expect(sep.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("合併列每段各自著色(整段套同一色會把爆跌畫成紅的)", () => {
