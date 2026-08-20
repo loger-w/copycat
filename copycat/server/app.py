@@ -1296,7 +1296,9 @@ def create_app(
         **無查參**:未宣告的查參 FastAPI 一律忽略,舊 bundle 打 `?market=exclude`
         照樣 200(前後端部署順序無關)。
         """
-        return {"signals": _signals(request).today_signals()}
+        # 讀整份當日 jsonl 是同步 IO,訊號多的日子會卡住 event loop(8 條 WS 一起頓)
+        # → 丟 worker thread;_signals 的 503 判定留在 loop 內(handoff R5)。
+        return {"signals": await asyncio.to_thread(_signals(request).today_signals)}
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
 
