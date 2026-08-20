@@ -40,8 +40,8 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
 
 ## 字級縮放(2026-07-03 responsive 沉澱)
 
-- **全站字級縮放機制 = root font-size media query(≥1920 112.5% / ≥2560 125%)+ 全 rem**:新 code 禁用 `text-[Npx]` px-literal(不吃縮放),SVG 內 fontSize 一律 rem 字串(viewBox 1:1 直接生效);SVG 大標籤用 `chip-theme.ts::svgLabelFont(width)` / `svgLegendFont(width)`(<500px 容器自動降級)。幾何驅動的動態字級(chip-price-bar rowH 那顆)保留 px。Trigger:新增任何含文字的元件 / SVG renderer。
-- **Container query 門檻若邏輯上是「px 版面塞不塞得下」,用 px 任意值不用 rem 級距**:曾用 `@md`(28rem),2560 螢幕 root 放大後門檻變 560px > 面板寬 420px,桌面反而藏欄。改 `@[400px]:`。Trigger:寫任何 container query 減欄 / 降級。
+- **字級一律 rem(root 恆 16px —— copycat 前端沒有 neigui 那組 ≥1920 112.5% / ≥2560 125% 的 root font-size media query,2026-08-21 三檔 headless 實測;本條舊文是 neigui 來源,別拿它推 1920/2560 的期望值)**:新 code 禁用 `text-[Npx]` px-literal(不吃縮放),SVG 內 fontSize 一律 rem 字串(viewBox 1:1 直接生效);SVG 大標籤用 `chip-theme.ts::svgLabelFont(width)` / `svgLegendFont(width)`(<500px 容器自動降級)。幾何驅動的動態字級(chip-price-bar rowH 那顆)保留 px。Trigger:新增任何含文字的元件 / SVG renderer。
+- **Container query 門檻若邏輯上是「px 版面塞不塞得下」,用 px 任意值不用 rem 級距**:曾用 `@md`(28rem),2560 螢幕 root 放大後門檻變 560px > 面板寬 420px,桌面反而藏欄。改 `@[400px]:`。(neigui 教訓;copycat root 恆 16px 時 rem = px,取捨改看「門檻跟誰走」—— 面板寬固定 px 用 px、內容是 rem 字級用 rem,見下方 `@max-[…]` 條。)Trigger:寫任何 container query 減欄 / 降級。
 - **觸控目標用 Tailwind `pointer-coarse:` variant(4.1+ 內建)加 min-h-11 / py 放大**,桌面視覺零影響;K 線 crosshair 這類 hover 互動在觸控上靠 tap 的 synthetic mousemove 免改即可用(overlay 是 onMouseMove + onClick 才成立,改 pointer event + pointerType 過濾就會破)。Trigger:新增可互動元件 / 改 chart overlay 事件模型。
 
 ## JS 響應式分支
@@ -86,7 +86,19 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   分隔線改 `shadow-[inset_0_-1px_0_var(--color-line)]` 由 cell 自繪。Trigger:內捲表格加 sticky 表頭。
 - **svg 內 rem 字級隨 viewBox 縮放**:pane 變窄(svg 渲染寬 ÷ viewBox 寬 < 0.5)後 0.625rem
   只剩 ~5px;要鎖渲染 px 得把 `unitScale = vbW / svgW` 乘進 fontSize(`lib/pane-frame.ts::
-  paneUnitScale` + `svgFontRem`)。Trigger:把固定 viewBox 圖放進會變窄的欄位。
+  paneUnitScale` + `svgFontRem`)。**補償只補得了字,補不了 viewBox 單位的排版常數**(hover 標籤框 /
+  X 軸標籤帶 / 極值標記 offset)—— 分時態(08-17)與 K 線態(08-21,`paneCandleBox` + CandleChart
+  `width` prop)都改走 **1:1 px viewBox**,補償只剩 OverlayCard 一個讀者;新的圖一律 1:1。
+  1:1 的 chrome 常數(`CANDLE_CHROME_Y 100` / `INTRADAY_CHROME_Y 26` / inset 34)假設 root 16px,
+  且**地板 96 被吃到時 svg 仍會被 flex 壓矮 → 縮放比 < 1**(1536×864 實測 0.84),是既知邊界。
+  Trigger:把固定 viewBox 圖放進會變窄的欄位。
+- **Tailwind v4 `@max-[…]:` 容器變體可用**(2026-08-21 首用;編成 `@container not (min-width:…)`,
+  build CSS 可 grep 驗證)。語意是「窄容器降級」的 class 掛它,量的仍是最近 `@container` 祖先 ——
+  右欄 / pane 本身不是 container 時要先自掛 `@container`(先 grep 子樹無 `absolute`/`fixed` 與既有
+  `@[…]` 變體,D4 式核查)。門檻單位跟內容走:內容是 rem 字級就用 rem(`@max-[41rem]`),面板寬固定 px
+  才用 px。twMerge 不會把 `px-2` 與 `@max-[41rem]:px-1` 當衝突。jsdom 不套 CSS,class 鎖只防漏寫,
+  CSS 層靠 headless host 的 computed style(`display` / `paddingLeft`)斷言。
+  Trigger:任何「容器窄於 N 就藏欄 / 縮 padding」的需求。
 
 ## 驗證截圖
 
@@ -139,5 +151,9 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   `chrome.exe --headless=new --user-data-dir=<scratch> --window-size=W,H --virtual-time-budget=4000
   --screenshot=<png> <url>` 對 vite dev 臨時 host 頁可直接出圖;量測用 host 內 `useEffect` 讀
   clientWidth/scrollWidth/getBoundingClientRect 渲染成 `<pre>` 讓截圖帶讀數(jsdom 量不到 px)。
-  host 檔收尾必刪。Trigger:UI SC 要真字型量測但兩條 MCP 通道都不可用。
+  host 檔收尾必刪。**升級版(2026-08-21 B1)**:host 內 `__measure()` 把 computed style / rect 渲染成
+  `<pre>`,用 `--dump-dom` 抓 HTML 再 regex 取 JSON 落 evidence(截圖只當人眼證據,數字走 JSON);
+  query 參數 `tab=`/`stock=`/`mode=` 由 host 點擊;**同一 `--user-data-dir` 會記住上次點的 tab /
+  個股(localStorage)**,換場景要帶 `tab=` 明確點回,否則量到別頁全 0。`--virtual-time-budget`
+  下 fetch / WS 照常回。Trigger:同上。
 

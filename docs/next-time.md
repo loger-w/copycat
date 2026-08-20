@@ -1,3 +1,16 @@
+## 2026-08-21(mod/overview-narrow-pane-legibility B1 留尾)
+
+- [ ] **1536×864 高度下 K 線態仍吃地板 96 → CandleChart svg 被 figure 壓到 81px(實縮 0.84)**:
+  根因 = K 線態雙層 figure chrome 100(分時只 26)+ Quote figcaption 在 350px pane 折三行,
+  864 高沒有空間;改前同樣被壓(0.20)。候選:K 線態 chrome 瘦身(CandleChart 共用 figure,
+  需顧個股頁零差異)或 Quote figcaption 單行化。證據 `.claude/mod/overview-narrow-pane-legibility/
+  evidence/SC-1-1536-candle-crop3x.png`;1920×1080 / 2560×1440 未吃地板。
+- [ ] CandleChart figcaption(`120 根 / 高 / 低 / 期間`)在 < ~320px 寬會折兩行溢出固定 `h-4`(既有,
+  與上條同根)。
+- [ ] `Y_TICKS = 5` 不隨 svg 高調整:1:1 後 96px 高的圖 5 條刻度 + 10px 字幾乎相接(可依高度降為 3)。
+- [ ] frontend-conventions 舊文「root font-size media query 112.5%/125%」已更正為 neigui 來源;若日後
+  真要加 root 縮放,`CANDLE_CHROME_Y` / `INTRADAY_CHROME_Y` / inset 34 需改 rem 反算(pane-frame.ts 註解已標)。
+
 ## 2026-08-20(盤後 server log 巡檢發現)
 
 - [x] ~~capital 損益報告 kind 標籤解析 None → 均價/打平/損益三處「—」+ log 每分鐘 3 行~~
@@ -197,7 +210,7 @@
   `buildOverlayGeometry` 仍活),`index-chart-svg.test.ts` 有 3 個 describe 只測沒人走的碼 → 🔵 清理連測試一起。
 - [ ] `INTRADAY_CHROME_Y` export 無外部讀者(`MarketPane.size.test` 硬寫 26 / 272)→ 測試改 import 它,
   免常數與註解各漂各的。
-- [ ] 加權 pane 週期列在 ~350px 寬 pane 折 3 行(1536 兩欄態),吃掉 35px 圖高(TWSE svg 121 vs OTC 156);
+- [x] 加權 pane 週期列在 ~350px 寬 pane 折 3 行(1536 兩欄態)〔2026-08-21 已出貨 PR #77 mod/overview-narrow-pane-legibility〕,吃掉 35px 圖高(TWSE svg 121 vs OTC 156);
   既有折行行為,可考慮週期鈕收窄或折疊。〔2026-08-20 MCP 實測:350px pane 週期列 3 行、總高 74px
   (單鈕 22px),兩個 pane 皆命中;截圖 docs/specs/next-time-mcp-verification-2026-08-20/screenshots/
   90-52-overview-dayk-and-3row-periods.jpg〕
@@ -331,7 +344,7 @@
 
 ## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
 
-- [ ] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**(review WL-3
+- [x] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**〔2026-08-21 已出貨 PR #77 mod/overview-narrow-pane-legibility〕(1:1 viewBox,1536 實測 computed 10px)(review WL-3
   partial / KR-3):CandleChart 是共用元件、viewBox 寬 1400 寫死,一頁總覽後 pane svg 寬
   ≈ 312–420px(改版前 ≈ 550,當時也已 3.9px)。〔2026-08-20 機械實測:1536×864 兩欄態加權
   pane 實渲染 282×113px、scale 0.202,**全部文字 3.0px 高**——比原估更窄〕本輪只補了 intraday / overlay 的
@@ -341,7 +354,7 @@
 - [ ] **`rightEdgeLabels` 的 `EDGE_LABEL_H` 未隨 unitScale 縮放**(fix 波偏離 2):字放大後右緣
   標籤(昨收 / CDP / MA)間距相對變密,極端時可能相疊;`lib/index-chart-svg.ts` 是個股圖共用
   契約故本輪不動。修法:clamp 高度也乘 unitScale(需連 StockIntradayChart 的呼叫端一起看)。
-- [ ] **1536 寬右欄漲跌停表水平捲軸**(截圖觀察):th / 徽章已 `whitespace-nowrap`
+- [x] **1536 寬右欄漲跌停表水平捲軸**(截圖觀察)〔2026-08-21 已出貨 PR #77 mod/overview-narrow-pane-legibility〕(< 41rem 藏金額/量比 + px-1,431 = 431):th / 徽章已 `whitespace-nowrap`
   防折行截字;9 欄在窄容器內本就擠。候選:金額(億)/ 量比 兩欄在窄容器 `@[…]:hidden`,或縮
   px-2 → px-1。看 user 實際使用感受再決定。〔2026-08-20 機械實測:1536×864 下 scroller
   clientWidth 431px、表 612px → 恆有捲軸,約 30% 欄寬藏在捲軸後,非邊緣 case〕
