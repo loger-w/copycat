@@ -25,6 +25,10 @@ export interface SignalToast {
  *  爆量時後面幾聲直接失敗。 */
 let audioCtx: AudioContext | null = null;
 
+/** resume 進行中旗標:autoplay 未解鎖時 resume() 會 pending 到取得手勢為止,
+ *  每則訊號都排一次會累積 pending promise(review F2)—— 同時間只留一發。 */
+let resuming = false;
+
 /** 短嗶。**任何失敗都吞掉**:提示音是附加價值,自動播放政策 / 無 Web Audio /
  *  context 被系統回收都不該影響 toast 出現。 */
 export function playBeep(): void {
@@ -35,10 +39,24 @@ export function playBeep(): void {
     audioCtx ??= new Ctor();
     const ctx = audioCtx;
     if (ctx.state !== "running") {
+      if (ctx.state === "closed") {
+        // 系統回收後 context 永不復活、resume 必 reject(review F4)——
+        // 回收單例,下一則訊號重建新 context 恢復出聲。
+        audioCtx = null;
+        return;
+      }
       // suspended 時 currentTime 凍結,排出去的 osc.stop 永不執行 → 已 start 的節點
       // 不可 GC,整天累積(handoff R4)。這一聲直接放棄,resume 讓後續訊號恢復出聲;
-      // closed 時 resume 會 reject,提示音是附加價值,吞掉。
-      ctx.resume().catch(() => {});
+      // 被 autoplay / 系統拒絕就吞掉(提示音是附加價值)。
+      if (!resuming) {
+        resuming = true;
+        ctx
+          .resume()
+          .catch(() => {})
+          .finally(() => {
+            resuming = false;
+          });
+      }
       return;
     }
     const osc = ctx.createOscillator();
@@ -55,7 +73,8 @@ export function playBeep(): void {
   }
 }
 
-/** 固定 tag:全部訊號共用一格 OS 通知(同 tag 覆蓋),爆量不疊成一排(handoff R4)。 */
+/** 固定 tag:全部訊號共用一格 OS 通知,跨窗的新通知覆蓋前一則、不疊成一排;
+ *  同一節流窗內至多發一則(取首則),窗內不會發生覆蓋(handoff R4 / review F3)。 */
 const NOTIFY_TAG = "copycat-signal";
 /** 通知節流窗(leading edge):固定 tag 已在 OS 層合併,節流只防通知系統 churn。 */
 const NOTIFY_MIN_INTERVAL_MS = 5_000;
@@ -111,6 +130,8 @@ export function useSignalAlerts() {
       // 「不要出聲」不是「不要通知」(design §8.3 / SC-10)—— 人離開分頁時桌面通知
       // 是唯一的抵達路徑,被音效開關順帶關掉等於整條提示鏈斷掉。
       if (document.hidden) {
+        // 牆鐘記帳:NTP 回跳只會讓通知靜默多擋跳幅秒數,一次性可接受;
+        // 換 performance.now 的測試成本不成比例(review F5 rejected)。
         const now = Date.now();
         if (now - lastNotifyRef.current >= NOTIFY_MIN_INTERVAL_MS) {
           if (notifyDesktop(text)) lastNotifyRef.current = now;
