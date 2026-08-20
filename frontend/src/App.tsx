@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { IndexBar } from "@/components/IndexBar";
@@ -42,6 +42,13 @@ const FUT_PRODUCTS = [
   ["TMF", "微台"],
 ] as const;
 export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
+
+/** 無下單標的的右欄 context(TXO / 台股綜合 / 相關係數三顆 tab)。
+ *
+ *  **module 級單例**:寫成 inline `{ kind: "none" }` 的話 `railCtx` 每一輪 render 都是
+ *  新 identity,`RightRail` 的 memo 形同不存在 —— 停在這三顆 tab 時右欄內容恆定,
+ *  卻仍隨 App 的五條流(指數 ~1s / 廣度 / 個股報價批 1s / 期貨 0.1s / 訊號)整棵重繪。 */
+const NONE_CTX: RailContext = { kind: "none" };
 
 /** localStorage 值域**加回** `corr`(2026-08-16 R2 SC-1):相關係數升為第 5 顆頂層 tab。
  *  沿革:R1 曾把它併入台股綜合頁(先收合區塊、後 subtab),那段期間 `corr` 不在合法
@@ -183,24 +190,40 @@ export default function App() {
     }
   }
 
-  // 右欄內容跟隨當前 tab 標的,版面位置固定(D2)
+  // 右欄內容跟隨當前 tab 標的,版面位置固定(D2)。
+  //
+  // **兩腿各自 useMemo + 模組常數 NONE_CTX**(refactor/memo-boundaries S1):本元件掛五條
+  // 流,每則推播都重繪它;單一 inline 物件會讓 `railCtx` 每輪換 identity,期貨 10 Hz tick
+  // 因此每秒把右欄閃電梯 subtree(全站最重的 render)重畫 10 次 —— 而使用者停在個股 /
+  // 指數 / TXO 頁時,期貨腿與右欄顯示的東西毫無關係。拆成兩腿是為了讓「哪一條流該動
+  // 右欄」在 deps 上就講清楚:期貨腿動 futuresCtx、個股腿動 stockCtx,互不牽連。
+  //
+  // deps 完整性**沒有 lint 守**(本 repo 無 eslint-plugin-react-hooks),守門是
+  // `App.memo.test.tsx` 的計次 + 內容斷言:漏掉 `accum` 的樣態是右欄掛著舊五檔 / 舊成交價
+  // (真錢面板),畫面與其他測試都不會有任何訊號。
+  const stockCtx = useMemo<RailContext>(
+    () => ({
+      kind: "stock",
+      // **恆為股號**(D5 口徑寫死):RightRail 的五檔點價 gate 比對 `detail.code === ctx.code`,
+      // 而事件是主區的 OrderBook 以股號發的;塞 instrument key 會讓整條點價路徑靜默失效,
+      // 下單面也會顯示 `F:CDF:202609`。合約走獨立欄。
+      code: stockCode,
+      contract: stkfutContract,
+      name: accum?.meta?.name ?? "",
+      book: accum?.book ?? null,
+      last: accum?.last ?? null,
+      meta: accum?.meta ?? null,
+    }),
+    [stockCode, stkfutContract, accum],
+  );
+  // `futContract` 是 render body 內現算的,但型別是 `string | null`(primitive)→ 值沒變
+  // 時 identity 也沒變,可以直接當 dep;`futProd` 則是期貨流每則推播的新物件,本來就該動。
+  const futuresCtx = useMemo<RailContext>(
+    () => ({ kind: "futures", product, state: futProd, contract: futContract }),
+    [product, futProd, futContract],
+  );
   const railCtx: RailContext =
-    tab === "stock"
-      ? {
-          kind: "stock",
-          // **恆為股號**(D5 口徑寫死):RightRail 的五檔點價 gate 比對 `detail.code === ctx.code`,
-          // 而事件是主區的 OrderBook 以股號發的;塞 instrument key 會讓整條點價路徑靜默失效,
-          // 下單面也會顯示 `F:CDF:202609`。合約走獨立欄。
-          code: stockCode,
-          contract: stkfutContract,
-          name: accum?.meta?.name ?? "",
-          book: accum?.book ?? null,
-          last: accum?.last ?? null,
-          meta: accum?.meta ?? null,
-        }
-      : tab === "futures"
-        ? { kind: "futures", product, state: futProd, contract: futContract }
-        : { kind: "none" };
+    tab === "stock" ? stockCtx : tab === "futures" ? futuresCtx : NONE_CTX;
 
   return (
     <div className="flex h-full w-full flex-col gap-3 px-4 py-4">

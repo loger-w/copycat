@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
 import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
@@ -68,7 +68,11 @@ function EmptyFlash() {
   );
 }
 
-export function RightRail({ ctx }: { ctx: RailContext }) {
+/** `memo` 包裹(refactor/memo-boundaries S1):唯一的 prop 是 `ctx`,而 App 已把它拆成
+ *  兩腿 useMemo + 模組常數 `NONE_CTX` —— 兩者要成對才有效(memo 沒有 = ctx 穩定也照重繪;
+ *  ctx 每輪新 identity = memo 的比較永遠不過)。具名 `memo(function RightRail(...))` 是
+ *  專案慣例:匿名箭頭在 DevTools / react-doctor 的元件樹上會變成 `Memo`。 */
+export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) {
   const [tab, setTab] = useState<RailTab>(initialTab);
   const [centerRequest, setCenterRequest] = useState<CenterRequest | null>(null);
   const [tradeKind, setTradeKind] = useState<TradeKind>("cash");
@@ -309,4 +313,4 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
       ) : null}
     </aside>
   );
-}
+});
