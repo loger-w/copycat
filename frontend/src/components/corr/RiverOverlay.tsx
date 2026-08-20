@@ -1,5 +1,5 @@
 /** 重疊模式:六腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { fmtPct } from "@/lib/format";
 import {
@@ -36,7 +36,32 @@ interface Props {
 
 export function RiverOverlay({ entries, window: win, baseKey }: Props) {
   const [cursor, setCursor] = useState<number | null>(null);
-  const g = buildOverlayGeometry(entries, win, SIZE);
+  // 幾何與純 derive 自幾何的量一起包:游標在圖上滑一下是數十則 mousemove,每則都
+  // setCursor → re-render,而滿窗夜盤是 840 分鐘 × 七腿。`readout` 依賴 cursor,
+  // **不能**進來(進來就會被凍在 cursor === null,讀值列永遠是「—」而線照畫)。
+  const { g, labelYs, lateStarts } = useMemo(() => {
+    const geo = buildOverlayGeometry(entries, win, SIZE);
+    // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
+    const ys = spreadLabelYs(
+      geo.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
+      11,
+      SIZE.height - 14,
+    );
+    // 基準時點分歧註記:每腿以「本場自己的第一筆」為 0%(buildOverlayGeometry),開盤時間不同的腿
+    // (小日經 OSE 夜盤台北 16:00 開,其餘腿 15:00)基準時點就不同,線的絕對高度不可比、只有
+    // 斜率可比。首筆晚於最早腿超過 LATE_START_MIN 分鐘者在標頭列標示起算時刻;零改幾何。
+    const firstOffsets = geo.lines.flatMap((l) => (l.pts.length > 0 ? [l.pts[0]!.offset] : []));
+    const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
+    return {
+      g: geo,
+      labelYs: ys,
+      lateStarts: geo.lines.flatMap((l) =>
+        l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
+          ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
+          : [],
+      ),
+    };
+  }, [entries, win]);
   const span = Math.max(1, win.end_min - win.start_min);
   const toX = (offset: number): number => (offset / span) * SIZE.width;
 
@@ -48,24 +73,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     setCursor(offsetAtX(px, win, SIZE));
   }
 
-  // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
-  const labelYs = spreadLabelYs(
-    g.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
-    11,
-    SIZE.height - 14,
-  );
-
-  // 基準時點分歧註記:每腿以「本場自己的第一筆」為 0%(buildOverlayGeometry),開盤時間不同的腿
-  // (小日經 OSE 夜盤台北 16:00 開,其餘腿 15:00)基準時點就不同,線的絕對高度不可比、只有
-  // 斜率可比。首筆晚於最早腿超過 LATE_START_MIN 分鐘者在標頭列標示起算時刻;零改幾何。
-  const firstOffsets = g.lines.flatMap((l) => (l.pts.length > 0 ? [l.pts[0]!.offset] : []));
-  const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
-  const lateStarts = g.lines.flatMap((l) =>
-    l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
-      ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
-      : [],
-  );
-
+  // 讀值列:唯一依賴 cursor 的量,刻意留在幾何 useMemo 之外(見上)
   const readout =
     cursor === null
       ? null

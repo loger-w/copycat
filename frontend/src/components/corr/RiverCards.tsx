@@ -3,6 +3,8 @@
  * 每腿 y 域各自 autofit —— 六腿價格量級差 15 倍(富台 3462 vs 道瓊 51909),共用域會讓
  * 低價腿壓成一條直線。跨腿比較走「重疊」模式(那邊才正規化成 %)。
  */
+import { memo, useMemo } from "react";
+
 import { fmtPct } from "@/lib/format";
 import { buildLegGeometry, timeTicks, type RiverSize } from "@/lib/river-chart-svg";
 import { pts } from "@/lib/svg-points";
@@ -24,8 +26,10 @@ interface CardProps {
   colorIndex: number;
 }
 
-function RiverCard({ legKey, leg, window: win, colorIndex }: CardProps) {
-  const g = buildLegGeometry(leg, win, SIZE);
+/** 具名 memo:每秒的 delta 通常只動一兩腿(`useRiver.applyDelta` 對沒收到點的腿保留同參照,
+ *  `window` 也隨 `{...prev}` 保持 identity),沒動的卡不必跟著重算全窗幾何。 */
+const RiverCard = memo(function RiverCard({ legKey, leg, window: win, colorIndex }: CardProps) {
+  const g = useMemo(() => buildLegGeometry(leg, win, SIZE), [leg, win]);
   const stroke = RIVER_STROKES[colorIndex % RIVER_STROKES.length]!;
   // 腿名文字色用 RIVER_TEXTS 常數,不用 stroke 字串 replace —— Tailwind 只產生
   // 原始碼裡出現過的 class,動態拼出來的 `text-river-N` 不會被生成
@@ -91,7 +95,7 @@ function RiverCard({ legKey, leg, window: win, colorIndex }: CardProps) {
       </svg>
     </figure>
   );
-}
+});
 
 interface Props {
   order: string[];
