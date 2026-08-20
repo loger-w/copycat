@@ -420,9 +420,10 @@ class CapitalClient:
             if p is None:
                 # kind=None(未知標籤)也略過:寧缺均價,不可套錯成本基礎
                 logger.warning(
-                    "profit row 種類不符略過: %s 報告=%s 部位=%s",
+                    "profit row 種類不符略過: %s 報告=%s(原文=%r) 部位=%s",
                     r.stock_no,
                     r.kind,
+                    r.kind_raw,
                     [q.kind for q in same_no],
                 )
                 continue

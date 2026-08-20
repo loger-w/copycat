@@ -1124,7 +1124,11 @@ def test_profit_row_for_dropped_stock_is_silent(
             "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
         )
         other._handle_profit("##,,,,")
-    assert any("種類不符" in r.message for r in caplog.records)
+    mismatch = [r for r in caplog.records if "種類不符" in r.message]
+    assert mismatch
+    # warning 必帶群益原文標籤:kind=None(表外標籤)時「報告=None」無診斷力,
+    # 要能從 log 直接看出該補哪個字進 _PNL_KIND(2026-08-20 prod 三檔實錄)
+    assert any("現股" in r.message for r in mismatch)
     p = other.store.position_for("3357", "margin")
     assert p is not None and p.avg_price is None  # 種類不符不回填
 

@@ -151,6 +151,7 @@ class ProfitRow(NamedTuple):
     price: float | None  # 報告市價
     cost: float | None  # 成交價金(% 分母)
     kind: PositionKind | None = None  # None=未知標籤(回填端視為不符、略過)
+    kind_raw: str = ""  # 種類欄原文:kind=None 時 log 要能看出該補哪個字進 _PNL_KIND
 
 
 def _opt_float(parts: list[str], i: int) -> float | None:
@@ -184,6 +185,7 @@ def parse_profit_line(raw: str) -> ProfitRow | None:
         price=_opt_float(parts, _PNL_IDX_PRICE),
         cost=_opt_float(parts, _PNL_IDX_COST),
         kind=_PNL_KIND.get(parts[_PNL_IDX_KIND].strip()),
+        kind_raw=parts[_PNL_IDX_KIND].strip(),
     )
 
 

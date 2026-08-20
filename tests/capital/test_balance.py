@@ -182,23 +182,28 @@ def test_parse_profit_line() -> None:
     # 均價之外還要 [9]損益(含費稅息)/[5]報告市價/[12]成交價金 —— 前端「券商基底+即時平移」口徑用;
     # [3]交易種類也要解析:同檔多種庫存並存時每種類一列,回填只認同種類(成本基礎不可混用)
     assert parse_profit_line(RAW_PNL_ROW) == ProfitRow(
-        "2493", 178.05, 1368.0, 180.0, 178000.0, "cash"
+        "2493", 178.05, 1368.0, 180.0, 178000.0, "cash", "現股"
     )
     assert parse_profit_line(RAW_PNL_MARGIN) == ProfitRow(
-        "3357", 311.75, -74636.0, 288.0, 935000.0, "margin"
+        "3357", 311.75, -74636.0, 288.0, 935000.0, "margin", "融資"
     )
 
 
 def test_parse_profit_line_pnl_fields_optional() -> None:
     # 損益欄壞掉只丟那幾欄,均價仍要保住(均價是主要產出)
     bad = RAW_PNL_ROW.replace(",1368.00,", ",x,")
-    assert parse_profit_line(bad) == ProfitRow("2493", 178.05, None, 180.0, 178000.0, "cash")
+    assert parse_profit_line(bad) == ProfitRow(
+        "2493", 178.05, None, 180.0, 178000.0, "cash", "現股"
+    )
 
 
 def test_parse_profit_line_unknown_kind_is_none() -> None:
-    # 未知交易種類標籤 → kind=None:回填端視為不符、略過(寧缺均價,不可套錯成本基礎)
+    # 未知交易種類標籤 → kind=None:回填端視為不符、略過(寧缺均價,不可套錯成本基礎)。
+    # 原文標籤必須保留(kind_raw):2026-08-20 prod 實錄 kind=None 只 log「報告=None」,
+    # 看不到群益到底回了什麼字,對照表無從補起。
     row = parse_profit_line(RAW_PNL_ROW.replace(",現股,", ",信用,"))
     assert row is not None and row.kind is None
+    assert row.kind_raw == "信用"
 
 
 def test_parse_profit_skips_status_total_end_and_junk() -> None:
@@ -218,7 +223,7 @@ def test_collector_with_profit_parser() -> None:
     c.feed(RAW_PNL_ROW)
     c.feed(RAW_PNL_TOTAL)
     c.feed("##")
-    assert got == [[ProfitRow("2493", 178.05, 1368.0, 180.0, 178000.0, "cash")]]
+    assert got == [[ProfitRow("2493", 178.05, 1368.0, 180.0, 178000.0, "cash", "現股")]]
 
 
 # OnOpenInterest(GetOpenInterestGW nFormat=1)— 合成治具,欄序 prod 實測後校正。
