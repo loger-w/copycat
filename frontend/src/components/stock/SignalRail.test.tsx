@@ -106,7 +106,7 @@ describe("SignalRail 訊號列", () => {
     renderRail({ signals: [sig({ kind: "surge", direction: null, pct: 2.5 })] });
     const [text = ""] = rowTexts();
     expect(text).toContain("爆拉 +2.50%");
-    expect(text).not.toContain("·"); // 分隔符不得單獨留下
+    expect(text).not.toContain("・"); // 分隔符不得單獨留下
   });
 
   it("最新在上:signals 的順序即 DOM 序", () => {
@@ -187,10 +187,14 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
   it("段間分隔符對輔助技術隱藏(aria-hidden)", () => {
     renderRail({ signals: [CDP, CRASH] });
     const list = within(screen.getByTestId("signal-rail-list"));
-    // kind 段與規則名段各一個分隔符(B3 起規則名段也逐段 span),全部都要藏
-    const seps = list.getAllByText("・");
-    expect(seps.length).toBe(2);
-    for (const sep of seps) expect(sep.getAttribute("aria-hidden")).toBe("true");
+    // kind 段與規則名段各自一個分隔符(B3 起規則名段也逐段 span),各自都要藏
+    const kindSpan = list.getByText("突破 CDP 中軸").parentElement!;
+    const ruleSpan = list.getByText("CDP 穿越").parentElement!;
+    for (const span of [kindSpan, ruleSpan]) {
+      const seps = within(span).getAllByText("・");
+      expect(seps.length).toBe(1);
+      expect(seps[0]?.getAttribute("aria-hidden")).toBe("true");
+    }
   });
 
   it("合併列每段各自著色(整段套同一色會把爆跌畫成紅的)", () => {
@@ -252,6 +256,23 @@ describe("SignalRail 合併列可讀性(B3:換行 + 逐段 title)", () => {
     const singleKind = list.getByText("鎖漲停").parentElement;
     expect(singleKind?.className).toContain("truncate");
     expect(singleKind?.className).not.toContain("line-clamp-2");
+    // D2 堆疊:合併列 wrapper 走 flex-col(規則名另起一行),單則列仍並排
+    expect(mergedKind?.parentElement?.className).toContain("flex-col");
+    expect(singleKind?.parentElement?.className).not.toContain("flex-col");
+    // 規則名段固定 truncate(堆疊後已有整行寬;列高上限 = 1 + 2 + 1 行)
+    expect(list.getByText("CDP 穿越").parentElement?.className).toContain("truncate");
+  });
+
+  it("SC-1 edge:三段合併(cdp+crash+vol_burst)→ 仍 clamp 2、三段 title 各自完整、分隔符 2 個", () => {
+    const VOL = sig({ id: "v", kind: "vol_burst", direction: null, pct: 3.5, rule_name: "我的爆量" });
+    renderRail({ signals: [VOL, CRASH, CDP_DOWN] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    const kindSpan = list.getByText("跌破 CDP 中軸").parentElement!;
+    expect(kindSpan.className).toContain("line-clamp-2");
+    expect(within(kindSpan).getAllByText("・").length).toBe(2);
+    expect(list.getByText("爆量 3.5 倍").getAttribute("title")).toBe("爆量 3.5 倍(我的爆量)");
+    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%(爆拉爆跌)");
+    expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸(CDP 穿越)");
   });
 
   it("SC-2 逐段 title:kind span = label(rule);規則名 span = rule:kind labels", () => {
@@ -263,11 +284,16 @@ describe("SignalRail 合併列可讀性(B3:換行 + 逐段 title)", () => {
     expect(list.getByText("爆拉爆跌").getAttribute("title")).toBe("爆拉爆跌:爆跌 -2.06%");
   });
 
-  it("SC-2 edge:rule_name 缺值 → kind span title 只有 label,無規則名段", () => {
-    renderRail({ signals: [sig({ ...CRASH, rule_name: undefined }), sig({ ...CDP_DOWN, rule_name: undefined })] });
+  it("SC-2 edge:rule_name 缺值(undefined / 空字串)→ title 只有 label、無規則名段、kind 仍 clamp 2", () => {
+    renderRail({
+      signals: [sig({ ...CRASH, rule_name: "" }), sig({ ...CDP_DOWN, rule_name: undefined })],
+    });
     const list = within(screen.getByTestId("signal-rail-list"));
     expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸");
+    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%"); // 不是「爆跌 -2.06%()」
     expect(list.queryByText("CDP 穿越")).toBeNull();
+    expect(list.getByText("跌破 CDP 中軸").parentElement?.className).toContain("line-clamp-2");
+    expect(list.getAllByText("・").length).toBe(1); // 只剩 kind 段那一個
   });
 
   it("SC-2 edge:同 kind 兩規則 → kind 段一段、規則名兩段各指回同一 label", () => {
@@ -278,6 +304,22 @@ describe("SignalRail 合併列可讀性(B3:換行 + 逐段 title)", () => {
     expect(list.getAllByText("爆跌 -2.06%").length).toBe(1);
     expect(list.getByText("爆拉爆跌").getAttribute("title")).toBe("爆拉爆跌:爆跌 -2.06%");
     expect(list.getByText("爆跌備援").getAttribute("title")).toBe("爆跌備援:爆跌 -2.06%");
+    // kind span title 取首見(最早到 = 輸入末筆 CRASH)的 rule_name
+    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%(爆拉爆跌)");
+    // 規則名兩段 = 真合併列:同樣走堆疊版型,不然兩規則名與 kind 並排照樣被切
+    expect(list.getByText("爆跌 -2.06%").parentElement?.parentElement?.className).toContain("flex-col");
+  });
+
+  it("SC-2 edge:單一規則同 tick 兩 kind → 規則名 title 依到達序列出、同 label 去重", () => {
+    renderRail({
+      signals: [
+        sig({ ...CDP_DOWN, id: "dup", rule_name: "組合規則" }), // 最新到:與下一則同 label → 去重
+        sig({ ...CDP_DOWN, id: "k2", rule_name: "組合規則" }),
+        sig({ ...CRASH, id: "k1", rule_name: "組合規則" }), // 最早到
+      ],
+    });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText("組合規則").getAttribute("title")).toBe("組合規則:爆跌 -2.06%・跌破 CDP 中軸");
   });
 });
 
