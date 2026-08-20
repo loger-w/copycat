@@ -534,3 +534,57 @@ describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
     expect(screen.getByTestId("limit-name-1101").className).toContain("whitespace-nowrap");
   });
 });
+
+// 🔴 SC-2:1536 兩欄態的右欄捲動容器只有 431px,而九欄表 scrollWidth 612px → 恆有
+// 水平捲軸,金額 / 量比 / 狀態尾段全藏在捲軸後面。實測基準 612:只藏兩欄(省 ~140)
+// → 472 仍捲;只收 padding(9 cell × 8 = 72)→ 540 仍捲;**兩者併用** → ~416 < 431。
+//
+// 門檻用 **rem 不用 px**:表格內容是 rem 字級,「塞不塞得下」隨 root font-size 縮放
+// (≥1920 112.5% / ≥2560 125%)—— 41rem = 656@100% / 738@112.5% / 820@125%。
+// 右欄寬模型:1536 → 470(降級)/ 1920 → 605(降級,本就塞不下)/ 2560 → 844(九欄)。
+//
+// **jsdom 不套 CSS** → 這裡只鎖 class 字串(九欄 DOM 恆在,既有的「表頭九欄文字與
+// 順序」不該紅);實際 display:none 與 scrollWidth ≤ clientWidth 由 SC-2 真環境量測把關。
+describe("LimitListSection 窄右欄降級(SC-2)", () => {
+  it("root 自掛 @container(門檻要量右欄寬,不是頁 root 寬)", async () => {
+    await openWith(mkState(ROWS));
+    // 右欄框不是 container(它的 @[1050px] 刻意量頁 root)→ 不自掛的話這裡量到的
+    // 也是頁 root 寬,1536 全螢幕永遠 > 41rem,降級永不發生
+    expect(screen.getByTestId("limit-list").className).toContain("@container");
+  });
+
+  it("窄容器藏 金額(億) / 量比 兩欄(th + td),其餘七欄不藏", async () => {
+    await openWith(mkState(ROWS));
+    const hidden = "@max-[41rem]:hidden";
+    const th = (name: string) => screen.getByRole("columnheader", { name });
+
+    // 藏這兩欄的理由:兩者都仍可由篩選列的門檻輸入控制,資訊沒有消失(W-5)
+    expect(th("金額(億)").className).toContain(hidden);
+    expect(th("量比").className).toContain(hidden);
+    expect(screen.getByTestId("limit-amount-1101").className).toContain(hidden);
+    expect(screen.getByTestId("limit-ratio-1101").className).toContain(hidden);
+
+    // 其餘七欄一律不藏 —— 少一條這種反向斷言,「順手多藏一欄」不會被任何測試擋下
+    for (const name of ["代號", "名稱", "市場", "現價", "漲跌幅", "連板", "狀態"]) {
+      expect(th(name).className).not.toContain(hidden);
+    }
+    for (const id of ["limit-name-1101", "limit-market-1101", "limit-close-1101"]) {
+      expect(screen.getByTestId(id).className).not.toContain(hidden);
+    }
+    expect(screen.getByTestId("limit-change-1101").className).not.toContain(hidden);
+    expect(screen.getByTestId("limit-streak-1101").className).not.toContain(hidden);
+  });
+
+  it("cell 左右 padding:窄容器 px-1,寬容器仍是既有 px-2", async () => {
+    await openWith(mkState(ROWS));
+    const narrow = "@max-[41rem]:px-1";
+    const th = screen.getByRole("columnheader", { name: "代號" });
+    expect(th.className).toContain(narrow);
+    // twMerge 不判成衝突(不同 variant);被吃掉的話寬右欄的 padding 也跟著變
+    expect(th.className).toContain("px-2");
+
+    const td = screen.getByTestId("limit-name-1101");
+    expect(td.className).toContain(narrow);
+    expect(td.className).toContain("px-2");
+  });
+});
