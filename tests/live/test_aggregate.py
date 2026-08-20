@@ -397,3 +397,36 @@ def test_route_returns_change_flag() -> None:
     assert agg.route(tick(TXF, price=43_735_460, qty=1)) is True
     assert agg.route(tick(TXF, price=43_735_460, qty=1, cum=100)) is False
     assert agg.route(tick(TXF, price=43_736_000, qty=1)) is True
+
+
+class TestSpotZeroPriceGate:
+    """鎖停時 TC4 於簿第一檔推「市價佇列」0 價:spot 分支必須同 `_ingest` 一樣閘掉 0/負價,
+    否則 0 會被記成現價拿去內插損益,且與真價交替時每筆都算 changed(推播風暴)。"""
+
+    def test_zero_price_spot_is_not_recorded_and_not_changed(self) -> None:
+        agg = make_agg()
+        assert agg.route(tick(TXF, price=43_735_460, qty=1)) is True
+        assert agg.route(tick(TXF, price=0, qty=0)) is False
+        assert agg.spot_millipts == 43_735_460
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["spot"]["price"] == 43735.46
+
+    def test_zero_price_before_any_real_spot_leaves_spot_none(self) -> None:
+        agg = make_agg()
+        assert agg.route(tick(TXF, price=0, qty=0)) is False
+        assert agg.spot_millipts is None
+        snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert snap["spot"]["price"] is None
+
+    def test_negative_price_spot_is_rejected(self) -> None:
+        agg = make_agg()
+        assert agg.route(tick(TXF, price=-1, qty=0)) is False
+        assert agg.spot_millipts is None
+
+    def test_zero_real_alternation_only_real_changes_count(self) -> None:
+        """0↔真價交替:只有「真價且與上次真價不同」那筆算 changed。"""
+        agg = make_agg()
+        seq = [43_735_460, 0, 43_735_460, 0, 43_736_000, 0, 43_736_000]
+        flags = [agg.route(tick(TXF, price=p, qty=1)) for p in seq]
+        assert flags == [True, False, False, False, True, False, False]
+        assert agg.spot_millipts == 43_736_000
