@@ -435,10 +435,14 @@ class TestSignalsTodayRoute:
     def test_reads_jsonl_off_event_loop(self, tmp_path: Path) -> None:
         """handoff R5:同步讀整份 jsonl 會卡住 event loop(8 條 WS 推播/心跳一起頓),
         且前端每次 WS 重連自癒都打這條,恰在連線抖動時雪上加霜 —— route 必須把
-        讀取丟到 worker thread。probe:to_thread 內 `asyncio.get_running_loop()` 必 raise。"""
+        讀取丟到 worker thread。probe:to_thread 內 `asyncio.get_running_loop()` 必 raise。
+
+        涵蓋面(review T-1):證的是「不在 loop 執行緒」;若改寫成同步 `def` route
+        (anyio worker pool)也會綠 —— 那個寫法同樣不卡 loop,可接受。"""
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
             hub = app.state.signal_hub
+            assert hub is not None
             probe: dict[str, bool] = {}
 
             def _probing_today() -> list[dict]:
@@ -451,7 +455,26 @@ class TestSignalsTodayRoute:
 
             hub.today_signals = _probing_today  # type: ignore[method-assign]
             assert client.get("/api/stock/signals/today").json() == {"signals": []}
-        assert probe["in_event_loop"] is False
+        # dict 全等:probe 空(route 沒呼叫 today_signals)與 True(跑在 loop 上)
+        # 兩種回歸都要印出實際值,不能壓成無訊息的 KeyError(review TC-1/T-1)
+        assert probe == {"in_event_loop": False}, f"today_signals 未被呼叫或跑在 loop 上:{probe}"
+
+    def test_unexpected_error_propagates_as_502(self, tmp_path: Path) -> None:
+        """Edge case 3(review TC-2):to_thread 內的非預期例外要原樣傳回 await 處、
+        落全域 handler 收 502 TC4_DOWN —— 不得被靜默降級成 200 + 空清單(那會讓
+        前端自癒 baseline 整天顯示「今天沒訊號」,零錯誤訊號)。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            hub = app.state.signal_hub
+            assert hub is not None
+
+            def _boom() -> list[dict]:
+                raise RuntimeError("jsonl exploded")
+
+            hub.today_signals = _boom  # type: ignore[method-assign]
+            r = client.get("/api/stock/signals/today")
+        assert r.status_code == 502
+        assert r.json()["detail"]["error"] == "TC4_DOWN"
 
     def test_legacy_market_query_param_is_ignored(self, tmp_path: Path) -> None:
         """舊 bundle 打 `?market=exclude` 照樣 200 且結果與裸 URL 全等(spec §3)。

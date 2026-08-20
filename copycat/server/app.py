@@ -1298,6 +1298,9 @@ def create_app(
         """
         # 讀整份當日 jsonl 是同步 IO,訊號多的日子會卡住 event loop(8 條 WS 一起頓)
         # → 丟 worker thread;_signals 的 503 判定留在 loop 內(handoff R5)。
+        # to_thread 走 loop 預設 executor,與 daily_bars / capital close 同池且工作
+        # 執行緒不可中斷 —— TC4 半死的殭屍執行緒堆積時這條會跟著排隊(review C-1);
+        # today 若變慢先查同池鄰居,別急著懷疑 jsonl。
         return {"signals": await asyncio.to_thread(_signals(request).today_signals)}
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
