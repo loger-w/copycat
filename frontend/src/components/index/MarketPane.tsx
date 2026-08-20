@@ -133,12 +133,21 @@ function OverlayCard({
 }) {
   const size = { width: SIZE.width, height };
   const font = svgFontRem(0.625, unitScale);
-  const g = buildOverlayGeometry(
-    [
-      { minutes: twse.minutes, ref: twse.ref },
-      { minutes: otc.minutes, ref: otc.ref },
-    ],
-    size,
+  // **必經 useMemo**:重疊開著時,App 層那五條流(期貨 coalesce 0.1s = 10 Hz 最兇)
+  // 每推一次就重繪整棵樹 —— 加權/櫃買一個分鐘點都沒動,兩條全窗 series 的 pct → x/y
+  // 換算照樣重跑一遍。症狀只有 CPU 知道,線照畫值照對,沒有任何行為測試會紅。
+  // deps 拆成**欄位級**四項 + height:`size` 是 render 內現建的物件,拿它當 dep 等於
+  // 沒 memo(同 L363-366 那條警告);`unitScale` / `font` 只進字級不進幾何,不是輸入。
+  const g = useMemo(
+    () =>
+      buildOverlayGeometry(
+        [
+          { minutes: twse.minutes, ref: twse.ref },
+          { minutes: otc.minutes, ref: otc.ref },
+        ],
+        { width: SIZE.width, height },
+      ),
+    [twse.minutes, twse.ref, otc.minutes, otc.ref, height],
   );
   return (
     <figure className="rounded-md border border-line bg-surface p-4">
