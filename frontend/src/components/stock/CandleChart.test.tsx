@@ -687,3 +687,28 @@ describe("CandleChart 拖曳既有行為(characterization)", () => {
     expect(fireEvent.wheel(svg, { deltaY: 100, clientX: 700, cancelable: true })).toBe(false);
   });
 });
+
+// 🟢 SC-4 / W-1:`width` 是**新開的 optional prop**,只有台股綜合 pane(窄容器)會傳
+// 量測到的 px 寬 → viewBox 1:1 → 縮放比恆 1 → 字級就是它字面的大小。個股頁 / 期貨 tab
+// 不傳,逐值沿用 1400 —— 這一組是那條「零差異」承諾的鎖。
+describe("CandleChart viewBox 寬(width prop;SC-4)", () => {
+  /** svg 內第一個 `<text>` = y 軸價位刻度(ChartStatic 先畫 yTicks)。 */
+  function firstTickFont(container: HTMLElement): string | null {
+    return container.querySelector("svg text")!.getAttribute("font-size");
+  }
+
+  it("傳 width → viewBox 1:1(窄 pane 用),y 刻度字級仍是原生 0.625rem", () => {
+    // 1536 兩欄態實測值:pane 內 CandleChart 渲染 282×113px
+    const { container } = render(<CandleChart bars={BARS} width={282} height={113} />);
+    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 282 113");
+    // 1:1 的**唯一目的**:字級不再被 `1400 / svgW` 縮掉(改版前是 3.0px)。
+    // 這裡鎖「字面值沒被補償邏輯動過」——真正的渲染 px 由 SC-1 的真環境量測把關。
+    expect(firstTickFont(container)).toBe("0.625rem");
+  });
+
+  it("未傳 width → viewBox 0 0 1400 578(StockChart / FuturesChart 零差異;lock)", () => {
+    const { container } = render(<CandleChart bars={BARS} />);
+    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 578");
+    expect(firstTickFont(container)).toBe("0.625rem");
+  });
+});
