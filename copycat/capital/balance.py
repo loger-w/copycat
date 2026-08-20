@@ -142,6 +142,12 @@ _PNL_IDX_AVG = 10  # 平均買進(券賣)成本(4-2-p 未實現-彙總)
 _PNL_IDX_COST = 12  # 成交價金(報酬率分母 — 實測同報告[21]口徑)
 _PNL_MIN_FIELDS = 11
 _PNL_KIND: dict[str, PositionKind] = {"現股": "cash", "融資": "margin", "融券": "short"}
+#: [25] 種類代碼 —— 標籤損毀時的備援來源(2026-08-20 prod:SKCOM 中文欄整列亂碼,
+#: Big5 被當 CP1252 再 best-fit 壓回 ASCII,不可逆;數字欄不受影響)。現股=1 / 融資=2
+#: 由 prod 實錄與 06-11 乾淨 fixture 雙源交叉;融券代碼未實證(疑 3)→ 刻意不對映,
+#: 寧缺勿錯 —— 對映錯的代價是把成本基礎回填進錯的種類列。
+_PNL_IDX_KIND_CODE = 25
+_PNL_KIND_CODE: dict[str, PositionKind] = {"1": "cash", "2": "margin"}
 
 
 class ProfitRow(NamedTuple):
@@ -178,14 +184,22 @@ def parse_profit_line(raw: str) -> ProfitRow | None:
         return None
     if not stock_no or avg <= 0:
         return None
+    kind_raw = parts[_PNL_IDX_KIND].strip()
+    kind = _PNL_KIND.get(kind_raw)
+    if kind is None and len(parts) > _PNL_IDX_KIND_CODE:
+        # 標籤亂碼(SKCOM 編碼鏈損毀,見 _PNL_KIND_CODE 註)→ 退 [25] 種類代碼
+        kind = _PNL_KIND_CODE.get(parts[_PNL_IDX_KIND_CODE].strip())
+    if kind is None:
+        # 標籤與代碼都對不上才留痕(代碼備援命中就該安靜):整列進 log 是唯一診斷素材
+        logger.warning("profit line 種類標籤未知 %r,整列: %r", kind_raw, raw)
     return ProfitRow(
         stock_no=stock_no,
         avg_price=avg,
         pnl=_opt_float(parts, _PNL_IDX_PNL),
         price=_opt_float(parts, _PNL_IDX_PRICE),
         cost=_opt_float(parts, _PNL_IDX_COST),
-        kind=_PNL_KIND.get(parts[_PNL_IDX_KIND].strip()),
-        kind_raw=parts[_PNL_IDX_KIND].strip(),
+        kind=kind,
+        kind_raw=kind_raw,
     )
 
 

@@ -197,13 +197,45 @@ def test_parse_profit_line_pnl_fields_optional() -> None:
     )
 
 
-def test_parse_profit_line_unknown_kind_is_none() -> None:
-    # 未知交易種類標籤 → kind=None:回填端視為不符、略過(寧缺均價,不可套錯成本基礎)。
-    # 原文標籤必須保留(kind_raw):2026-08-20 prod 實錄 kind=None 只 log「報告=None」,
-    # 看不到群益到底回了什麼字,對照表無從補起。
-    row = parse_profit_line(RAW_PNL_ROW.replace(",現股,", ",信用,"))
+# 2026-08-20 prod 實錄(ID/帳號去敏):SKCOM 中文欄位整列損毀(Big5 被當 CP1252 再
+# best-fit 壓回 ASCII,「現股」→'2{aN'、「融資」→'?A﹐e',不可逆)— 系統 ACP=950 正常,
+# 損壞在 SKCOM 自身鏈路。數字欄不受影響;[25] = 種類代碼(現股=1/融資=2,與 06-11
+# 乾淨樣本交叉一致)是標籤損毀時唯一可靠的種類來源。
+RAW_PNL_GARBLED_CASH = "Ap?v,3450,?O1o,2{aN,1000,553.00,-14.00,553000.00,551199.00,-17947.00,569.15,569146.00,569000.00,146.00,142.00,0.00,1659.00,0,0,0,0.00,-3.14,0,,Y,1,0,571.005000,A123456789,1234567890"
+RAW_PNL_GARBLED_MARGIN = "￥|ou¯e,5608,?O1o,?A﹐e,5000,17.05,-0.45,85250.00,34938.00,188.00,16.96,34775.00,84750.00,25.00,21.00,0.00,255.00,34750,50000,10,0.00,0.22,0,,Y,2,3,17.010000,A123456789,1234567890"
+
+
+def test_parse_profit_line_garbled_label_falls_back_to_kind_code() -> None:
+    # 標籤亂碼 → 退 [25] 種類代碼:現股=1 / 融資=2(prod 2026-08-20 + fixture 06-11 雙源一致)
+    cash = parse_profit_line(RAW_PNL_GARBLED_CASH)
+    assert cash is not None and cash.kind == "cash" and cash.avg_price == 569.15
+    assert cash.kind_raw == "2{aN"
+    margin = parse_profit_line(RAW_PNL_GARBLED_MARGIN)
+    assert margin is not None and margin.kind == "margin" and margin.avg_price == 16.96
+
+
+def test_parse_profit_line_label_wins_over_kind_code() -> None:
+    # 標籤可解時以標籤為準([25] 語意屬觀察歸納,非官方文件;可解標籤是更強證據)
+    row = parse_profit_line(RAW_PNL_ROW.replace(",Y,1,0,", ",Y,2,0,"))
+    assert row is not None and row.kind == "cash"
+
+
+def test_parse_profit_line_unknown_kind_is_none(caplog: pytest.LogCaptureFixture) -> None:
+    # 標籤與 [25] 都對不上 → kind=None:回填端視為不符、略過(寧缺均價,不可套錯成本
+    # 基礎;融券代碼未實證前不猜)。整列進 log 才有下一步診斷素材;kind_raw 保留原文。
+    raw = RAW_PNL_ROW.replace(",現股,", ",信用,").replace(",Y,1,0,", ",Y,7,0,")
+    with caplog.at_level("WARNING"):
+        row = parse_profit_line(raw)
     assert row is not None and row.kind is None
     assert row.kind_raw == "信用"
+    assert any("信用" in r.message and "揚博" in r.message for r in caplog.records)
+
+
+def test_parse_profit_line_fallback_hit_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    # 亂碼標籤但 [25] 有解 → 不洗版(修好就該安靜;2026-08-20 修前每分鐘 3 發)
+    with caplog.at_level("WARNING"):
+        parse_profit_line(RAW_PNL_GARBLED_CASH)
+    assert not [r for r in caplog.records if "種類標籤未知" in r.message]
 
 
 def test_parse_profit_skips_status_total_end_and_junk() -> None:

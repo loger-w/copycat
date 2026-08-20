@@ -206,6 +206,13 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   現股市價 ROD 合法(鎖停日簿頂 price=0 的「市價佇列」就是留存簿中的未成交市價 ROD 單;2026-08-17
   batch3 R1 review 曾誤套此條,機械反證後現股閃電梯市價鈕維持 market+ROD)。(e) OnAccount/OnOpenInterest 欄序
   為未實測假定,首次 prod 登入要核對。(Trigger:碰 copycat/capital / 群益送單欄位 / 驗證方式)
+- **SKCOM 事件字串的中文欄位在本機是不可逆亂碼,勿依賴中文標籤解析**(2026-08-20 prod 實證):
+  `OnProfitLossGWReport` 整列中文欄(股名/幣別/種類)損毀 —「現股」→`'2{aN'`、「融資」→`'?A﹐e'`,
+  形態 = Big5 bytes 被當 CP1252 解讀再 best-fit 壓回 ASCII(`¸`→`,` 再被轉全形 `﹐`),多對一不可逆;
+  系統 ACP=950 正常,損壞在 SKCOM 自身鏈路。數字欄不受影響。**種類判定走 [25] 代碼備援**
+  (現股=1/融資=2,06-11 乾淨樣本 + 08-20 亂碼樣本雙源交叉;融券代碼未實證不對映)—
+  `balance.py::_PNL_KIND_CODE`。06-11 的乾淨中文 fixture 說明鏈路曾正常,何時壞掉未知;新接任何
+  SKCOM 事件欄位一律優先用代碼/數字欄,中文欄當 display-only。(Trigger:解析任何 SKCOM 事件字串)
 - **`OrderRecord.date` / `time` 是最新事件日 / 時,不是委託建立日**(2026-08-17 R2 review 實證:
   `CapitalStore.apply_reply` 對每筆回報「有值就覆寫」`date`/`time`)。後果:昨日建立今日成交的單
   `date` 已是今日;昨日部分成交今日刪單的單 `date` 也是今日而 `avg_fill_price` 是昨日的 → 任何
