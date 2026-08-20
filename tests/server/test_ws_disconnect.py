@@ -121,16 +121,6 @@ def _ws_handshake_keep_rest(port: int, path: str) -> tuple[socket.socket, bytes]
     return sock, buf.split(b"\r\n\r\n", 1)[1]
 
 
-def _ws_handshake(port: int, path: str) -> socket.socket:
-    """丟棄殘留的版本(既有測試沿用,行為與收斂前逐位元組相同)。
-
-    ⚠ 丟殘留 = 上面那個 flake 仍在。修它要動既有測試的斷言,不在本輪 scope(已記
-    next-time);**新測試一律用 `_ws_handshake_keep_rest`**。
-    """
-    sock, _rest = _ws_handshake_keep_rest(port, path)
-    return sock
-
-
 def _abort(sock: socket.socket) -> None:
     """SO_LINGER=(on, 0) → close 發 RST 而非 FIN:模擬分頁被殺 / 網路斷,無 close frame。"""
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
@@ -175,11 +165,12 @@ class TestAbruptDisconnect:
             wait_boot(app)
             port = int(server.servers[0].sockets[0].getsockname()[1])
 
-            sock = _ws_handshake(port, "/ws/txo-pnl")
+            sock, rest = _ws_handshake_keep_rest(port, "/ws/txo-pnl")
             sock.settimeout(5)
             # 初始 snapshot 在 relay 之外(accept 後直送)→ 先單獨收掉,不讓它充當
-            # 下面「relay 迴圈在跑」的證據
-            assert sock.recv(4096), "連線後應收到至少一則 snapshot frame"
+            # 下面「relay 迴圈在跑」的證據;與 101 同 segment 的殘留位元組就是
+            # 那則 frame(的前段),沒有殘留才需要真的 recv
+            assert rest or sock.recv(4096), "連線後應收到至少一則 snapshot frame"
 
             # 正向對照:tick → snapshot → relay send 這條鏈必須真的在跑。少了它,
             # 上游任一環靜默斷掉(fake 沒被訂閱 / 版本沒 bump / 節流卡住)時,
