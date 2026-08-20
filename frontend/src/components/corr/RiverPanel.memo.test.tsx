@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RiverPanel } from "@/components/corr/RiverPanel";
+// 共檔 fixture(`river-test-fixtures.ts`):與 `RiverPanel.test.tsx` 同一組數字 —— 本檔的
+// 「台指 —」自檢與 `xAt` 換算就是行為檔拍下來的那組,分兩份會各自漂。
+import { mockRect, riverState as state, xAt } from "@/components/corr/river-test-fixtures";
 import type { RiverLeg, RiverState } from "@/types";
 
 /** S3 memo 邊界的 regression lock:江波圖的兩道重算邊界有沒有真的擋住。
@@ -27,10 +30,12 @@ const hoisted = vi.hoisted(() => ({
   overlay: 0,
   /** buildLegGeometry 每次呼叫的腿名(= 哪一張並排卡片重算了幾何) */
   legs: [] as string[],
-  /** timeTicks 呼叫次數。**並排模式下只有 `RiverCard` 會呼叫它**(RiverPanel 自己不叫、
-   *  RiverOverlay 沒 mount),而它在卡片 render body 內、不在任何 useMemo 裡
-   *  → 這個數字就是「卡片實際 render 了幾次」。
-   *  非有它不可:卡內的 `useMemo([leg, win])` 會把幾何擋住,所以光看 buildLegGeometry
+  /** timeTicks 呼叫次數 = **render body 實際跑了幾次**(它在 render body 內、不在任何
+   *  useMemo 裡)。呼叫者依模式而異,兩種模式各取其一,別混讀:
+   *  - 並排:只有 `RiverCard` 叫它(RiverPanel 自己不叫、RiverOverlay 沒 mount)
+   *    → 數字 = 卡片 render 次數;
+   *  - 重疊:只有 `RiverOverlay` 叫它(卡片沒 mount)→ 數字 = 重疊圖 render 次數。
+   *  並排案非有它不可:卡內的 `useMemo([leg, win])` 會把幾何擋住,所以光看 buildLegGeometry
    *  量不出 `memo(RiverCard)` 在不在 —— 拔掉 memo 卡片照樣每輪重跑整個 render body
    *  (七腿 × 全窗刻度 + polyline 字串),而 buildLegGeometry 計次紋風不動。 */
   ticks: 0,
@@ -55,33 +60,6 @@ vi.mock("@/lib/river-chart-svg", async (importOriginal) => {
   };
 });
 
-const DAY = { start_min: 525, end_min: 825 };
-
-function state(): RiverState {
-  return {
-    type: "river",
-    seq: 3,
-    session: "day",
-    base: "TXF",
-    window: DAY,
-    legs: {
-      TXF: {
-        label: "台指",
-        minutes: { "10": 40_000_000, "20": 40_400_000 },
-        last: 40_400_000,
-        last_minute: 20,
-      },
-      TWN: {
-        label: "富台",
-        minutes: { "10": 3_400_000, "20": 3_366_000 },
-        last: 3_366_000,
-        last_minute: 20,
-      },
-      YM: { label: "道瓊", minutes: {}, last: null, last_minute: null },
-    },
-  };
-}
-
 /** 模擬 `useRiver.applyDelta` 的產物:只有收到點的腿換 identity,其餘腿與 `window` 保持同參照。 */
 function withTick(prev: RiverState, key: string, minute: number, price: number): RiverState {
   const leg = prev.legs[key] as RiverLeg;
@@ -93,23 +71,13 @@ function withTick(prev: RiverState, key: string, minute: number, price: number):
   };
 }
 
-/** viewBox 寬 = 960(RiverOverlay.SIZE);jsdom 的 rect 恆 0 會讓 handleMouseMove 早退。 */
-function mockRect(): void {
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
-    left: 0,
-    top: 0,
-    right: 960,
-    bottom: 340,
-    width: 960,
-    height: 340,
-    x: 0,
-    y: 0,
-    toJSON: () => ({}),
-  } as DOMRect);
-}
-
-function xAt(offset: number): number {
-  return (offset / (DAY.end_min - DAY.start_min)) * 960;
+/** 重疊圖上某一腿的腿名標籤 x(= 該腿末點 x + 4;`RiverOverlay` 的右緣標籤)。
+ *  取 svg 內的 `<text>` 而非勾選列的按鈕 —— 兩處文字相同,按鈕不隨資料動。 */
+function legLabelX(label: string): number {
+  const svg = screen.getByRole("img", { name: "各腿重疊走勢" });
+  const el = Array.from(svg.querySelectorAll("text")).find((t) => t.textContent === label);
+  if (el === undefined) throw new Error(`重疊圖上沒有 ${label} 這一腿的標籤`);
+  return Number(el.getAttribute("x"));
 }
 
 beforeEach(() => {
@@ -133,6 +101,7 @@ describe("江波圖 memo 邊界計次(S3)", () => {
     // 自檢:圖真的畫出來了(幾何至少算過一次),否則下面量的 +0 與 memo 無關
     expect(hoisted.overlay).toBeGreaterThan(0);
     const before = hoisted.overlay;
+    const beforeRender = hoisted.ticks;
 
     // 三個**相異**的 offset:同一 offset 連發會被 setState 的相同值 bail out,量不到東西
     fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
@@ -142,6 +111,33 @@ describe("江波圖 memo 邊界計次(S3)", () => {
     // 自檢:讀值列真的跟著游標動了(hover 沒生效的話 +0 是假綠)
     expect(screen.getByText("台指 —")).toBeTruthy();
     expect(hoisted.overlay - before).toBe(0);
+    // **成本現況拍照,不是收斂目標**:hover 仍然每則 mousemove 重跑一次 RiverOverlay 的
+    // render body(timeTicks 全窗刻度 + 七條 polyline 字串 + 讀值列),S3 的 useMemo
+    // 只擋住了「幾何」那一塊。這條在意的是這個數字**別在無人察覺下往上長**(例如把
+    // cursor 提到 RiverPanel 層 → 連 RiverCards / 勾選列一起重繪);要往下收得換手法
+    // (cursor 下沉到子元件 / 十字線獨立成一層),那是另一個題目。
+    expect(hoisted.ticks - beforeRender).toBe(3);
+  });
+
+  it("重疊圖:一腿有新 tick → 幾何恰重算一次,且該腿末點跟著換(entries deps 反向守門)", () => {
+    const s1 = state();
+    const { rerender } = render(<RiverPanel state={s1} />);
+    fireEvent.click(screen.getByRole("button", { name: "重疊" }));
+    // 自檢:重疊圖真的畫出來了(沒畫的話下面的 +1 與 +0 都無從談起)
+    expect(hoisted.overlay).toBeGreaterThan(0);
+    const before = hoisted.overlay;
+    // 富台末點在 offset 20 → x = (20/300)*960 = 64,腿名標籤畫在 x+4
+    expect(legLabelX("富台")).toBe(68);
+
+    // 只有富台收到新 tick(applyDelta 樣態:台指腿與 window 保持同參照)
+    rerender(<RiverPanel state={withTick(s1, "TWN", 30, 3_400_000)} />);
+
+    // 上面那條案例鎖的是「別多算」,這條鎖的是**反向**:`entries` 的 deps 掉了 `legs`
+    // (只剩 `off`)→ identity 永不換 → 幾何 +0、富台的線凍在 offset 20,而畫面上
+    // 「線照畫、值照對」,只有那一腿悄悄停在過去。
+    expect(hoisted.overlay - before).toBe(1);
+    expect(legLabelX("富台")).toBe(100); // offset 30 → x = 96
+    expect(legLabelX("台指")).toBe(68); // 同輪對照組:沒收到 tick 的腿末點不動
   });
 
   it("並排卡片:一腿有新 tick → 只有那張卡重算幾何(同輪對照組:沒動的腿)", () => {
