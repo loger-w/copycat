@@ -3,35 +3,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RiverPanel } from "@/components/corr/RiverPanel";
-import type { RiverState } from "@/types";
-
-const DAY = { start_min: 525, end_min: 825 };
-
-function state(over: Partial<RiverState> = {}): RiverState {
-  return {
-    type: "river",
-    seq: 3,
-    session: "day",
-    base: "TXF",
-    window: DAY,
-    legs: {
-      TXF: {
-        label: "台指",
-        minutes: { "10": 40_000_000, "20": 40_400_000 },
-        last: 40_400_000,
-        last_minute: 20,
-      },
-      TWN: {
-        label: "富台",
-        minutes: { "10": 3_400_000, "20": 3_366_000 },
-        last: 3_366_000,
-        last_minute: 20,
-      },
-      YM: { label: "道瓊", minutes: {}, last: null, last_minute: null },
-    },
-    ...over,
-  };
-}
+// 共檔 fixture(`river-test-fixtures.ts`):與 `RiverPanel.memo.test.tsx` 同一組數字。
+import { mockRect, riverState as state, xAt } from "@/components/corr/river-test-fixtures";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -187,26 +160,6 @@ describe("RiverPanel", () => {
  *  (先例 `MarketChart.test.tsx` hover 節);座標換算假設 svg 等比渲染。
  */
 describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
-  /** viewBox 寬 = 960(RiverOverlay.SIZE),量測寬取同值 → clientX 即 viewBox x。 */
-  function mockRect(): void {
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
-      left: 0,
-      top: 0,
-      right: 960,
-      bottom: 340,
-      width: 960,
-      height: 340,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
-  }
-
-  /** offset(分鐘)→ clientX。窗長 300 分、圖寬 960 → 每分鐘 3.2px。 */
-  function xAt(offset: number): number {
-    return (offset / (DAY.end_min - DAY.start_min)) * 960;
-  }
-
   function overlay(): SVGElement {
     render(<RiverPanel state={state()} />);
     fireEvent.click(screen.getByRole("button", { name: "重疊" }));
