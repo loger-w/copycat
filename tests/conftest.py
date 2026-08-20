@@ -9,6 +9,7 @@ factory._getenv 讀 os.environ + repo root .env(Phase 6 real-env finding)— 開
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,31 @@ def _neutralize_discord_env(monkeypatch: pytest.MonkeyPatch) -> None:
 #: 那是新模組的私有名,測試基建不該綁它的內部符號
 #: (verify.py 檔頭同一條理由:不讓 [live] extras 變成整套測試的硬依賴)。
 FINMIND_ENV_KEY = "FINMIND_TOKEN"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_watchlist_default_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """hub 落點隔離(XR-3 SC-8)—— **必須住在 root conftest,不得下放 tests/server/**。
+
+    SignalHub 解耦後恆建,`data_dir` = `wl_path.parent`:沒顯式傳 `stock_watchlist_path`
+    的 app 測試會落在 repo 真 `data/`,把 `signal_rules.json` / fake 訊號寫進 prod 的
+    `data/signals/*.jsonl`(today 端點的歷史真相源)。故 autouse 一次隔離
+    `app.py` call-time 讀的模組級 `WATCHLIST_DEFAULT_PATH`;顯式傳路徑的測試不受影響。
+
+    住 root 的理由(2026-08-20 實證,pytest 9.1.1):子目錄 conftest 的 autouse 在
+    「server 檔、tests 根檔、server 檔」交錯的命令列參數順序下,**最後那個 server 檔
+    的測試會靜默丟失該 fixture**(收集期 closure 就少它;root conftest 的 autouse 不受
+    影響)。這正是 `TestConftestWatchlistIsolation` 在三檔子集紅、單跑與全套綠的根因。
+
+    不頂層 import `copycat.server.app`(同 `_neutralize_finmind_env` 的理由:不讓
+    [live] extras 變成整套測試的硬依賴)—— 收集階段會 import 所有被選測試模組,
+    任何會呼叫 `create_app` 的 run 到 fixture 執行時模組必已在 `sys.modules`;
+    不在就代表這輪根本沒有人碰 server app,無隔離對象。
+    """
+    app_mod = sys.modules.get("copycat.server.app")
+    if app_mod is None:
+        return
+    monkeypatch.setattr(app_mod, "WATCHLIST_DEFAULT_PATH", tmp_path / "stock_watchlist.json")
 
 
 @pytest.fixture(autouse=True)

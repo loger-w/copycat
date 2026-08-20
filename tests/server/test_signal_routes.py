@@ -1017,11 +1017,15 @@ class TestWsStockCloseBranches:
 
 
 class TestConftestWatchlistIsolation:
-    """T-4:`tests/server/conftest.py` 的落點隔離 fixture 自身要有鎖。
+    """T-4:root `tests/conftest.py` 的落點隔離 fixture 自身要有鎖。
 
     它是 SC-8 唯一的擋牆(hub 恆建之後,沒傳 `stock_watchlist_path` 的 19 個站點全會
     把 `signal_rules.json` / fake 訊號寫進 repo 真 `data/`),而 fixture 壞掉是
     **靜默**的:所有測試照樣綠,只有 prod 的 today 端點多出從未發生過的訊號列。
+
+    fixture 原住 `tests/server/conftest.py`,2026-08-20 因 pytest 9.1.1 的參數順序
+    bug(子目錄 conftest autouse 在「server 檔、根檔、server 檔」交錯參數下對最後
+    一個 server 檔靜默失效)上移 root conftest —— 本測試當時就是那個必然紅的受害者。
     """
 
     def test_hub_data_dir_isolated_without_explicit_path(self, tmp_path: Path) -> None:
@@ -1029,7 +1033,7 @@ class TestConftestWatchlistIsolation:
             FakeTxoSource(),
             stock_source=FakeStockSource(),
             throttle_secs=0.01,
-        )  # 刻意不傳 stock_watchlist_path → 落點由 conftest 的 autouse fixture 決定
+        )  # 刻意不傳 stock_watchlist_path → 落點由 root conftest 的 autouse fixture 決定
         with BootedClient(app, raise_server_exceptions=False):
             hub = app.state.signal_hub
             assert hub is not None
