@@ -228,6 +228,56 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
   });
 });
 
+describe("SignalRail 合併列可讀性(B3:換行 + 逐段 title)", () => {
+  // 2026-08-20 prod 實錄:「跌破 CDP 中軸・爆跌 -2.06%」在 189px 列內只分到 95px
+  const CDP_DOWN = sig({
+    id: "a",
+    kind: "cdp_cross",
+    levels: ["cdp"],
+    direction: "from_above",
+    pct: null,
+    rule_name: "CDP 穿越",
+  });
+  const CRASH = sig({ id: "b", kind: "crash", direction: null, pct: -2.06, rule_name: "爆拉爆跌" });
+
+  it("SC-1 合併列 kind 段不 truncate,改 clamp 2 行;單則列維持 truncate", () => {
+    renderRail({ signals: [CRASH, CDP_DOWN, sig({ id: "s", code: "2317", name: "鴻海" })] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    const mergedKind = list.getByText("跌破 CDP 中軸").parentElement;
+    expect(mergedKind?.className).toContain("line-clamp-2");
+    expect(mergedKind?.className).not.toContain("truncate");
+    const singleKind = list.getByText("鎖漲停").parentElement;
+    expect(singleKind?.className).toContain("truncate");
+    expect(singleKind?.className).not.toContain("line-clamp-2");
+  });
+
+  it("SC-2 逐段 title:kind span = label(rule);規則名 span = rule:kind labels", () => {
+    renderRail({ signals: [CRASH, CDP_DOWN] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸(CDP 穿越)");
+    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%(爆拉爆跌)");
+    expect(list.getByText("CDP 穿越").getAttribute("title")).toBe("CDP 穿越:跌破 CDP 中軸");
+    expect(list.getByText("爆拉爆跌").getAttribute("title")).toBe("爆拉爆跌:爆跌 -2.06%");
+  });
+
+  it("SC-2 edge:rule_name 缺值 → kind span title 只有 label,無規則名段", () => {
+    renderRail({ signals: [sig({ ...CRASH, rule_name: undefined }), sig({ ...CDP_DOWN, rule_name: undefined })] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸");
+    expect(list.queryByText("CDP 穿越")).toBeNull();
+  });
+
+  it("SC-2 edge:同 kind 兩規則 → kind 段一段、規則名兩段各指回同一 label", () => {
+    renderRail({
+      signals: [sig({ ...CRASH, id: "c2", rule_name: "爆跌備援" }), CRASH],
+    });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getAllByText("爆跌 -2.06%").length).toBe(1);
+    expect(list.getByText("爆拉爆跌").getAttribute("title")).toBe("爆拉爆跌:爆跌 -2.06%");
+    expect(list.getByText("爆跌備援").getAttribute("title")).toBe("爆跌備援:爆跌 -2.06%");
+  });
+});
+
 describe("SignalRail 規則區", () => {
   const RULES = [
     rule({ id: "r1", name: "CDP 穿越", kind: "cdp_cross", cdp_levels: ["ah"] }),
