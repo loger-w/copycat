@@ -1,3 +1,16 @@
+## 2026-08-20(refactor/memo-boundaries R6 留尾)
+
+- [ ] **真 tick trace 對照**(驗證窗口外降級):夜盤或次一交易日盤中,prod build 分頁
+  DevTools performance trace 對照 scripting 佔比;殘留預期見
+  `.claude/refactor/memo-boundaries/verification.md`(期貨 tab rail 仍 10Hz 是正確行為)。
+- [ ] **RiverOverlay hover 的 render body 成本**(review F5):幾何已 memo,但每 mousemove
+  仍重跑 timeTicks + 七腿 polyline 字串重組(夜盤滿窗 840 分);要收斂把 polyline 字串
+  併入幾何 useMemo — 注意 RiverCards 的 timeTicks 現在是計次探針,動它要一併換探針。
+- [ ] **GroupGridView 2.5 萬 SVG 節點縮減**(handoff R6 原文):per-card memo 已有,
+  節點數縮減屬視覺/結構設計變更(虛擬化或降採樣),另案 /mod。
+- [ ] **useChartToggles.set 包 useCallback**:目前零受益(無 memo 節點收 onToggle);
+  哪天有邊界要收 onToggle 時一併做(plan review R9)。
+
 ## 2026-08-20(mod/signals-today-offload 留尾)
 
 - [ ] **loop 預設 executor 同池耦合**(review C-1):to_thread 全走同一 ThreadPoolExecutor

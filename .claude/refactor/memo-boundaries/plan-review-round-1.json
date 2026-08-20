@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "reviewer": "refactor-plan-reviewer (opus)",
+  "target": "refactor-plan.md + test-inventory.md(改版前)",
+  "findings": [
+    { "id": "R1", "severity": "P0", "claim": "RiverOverlay readout 依賴 cursor,包進 [entries,win] useMemo 會凍住讀值列(零訊號行為改變)", "resolution": "accepted — readout 切出 useMemo;S3 前置 hover characterization(plan 改版)" },
+    { "id": "R2", "severity": "P0", "claim": "entries 實際輸入是 order+legs+off,state.base 不參與;照原 deps 勾選腿不會消失", "resolution": "accepted — deps=[state?.legs, off](plan 改版)" },
+    { "id": "R3", "severity": "P0", "claim": "order/entries 在 state===null 早退之後,就地包 useMemo = 條件式 hook,corr tab 開站崩;repo 無 react-hooks lint 不會擋", "resolution": "accepted — useMemo 上提早退前 + null 守 + null→有資料連續 render 驗收(plan 改版)" },
+    { "id": "R4", "severity": "P1", "claim": "S1 守門寫 eslint react-hooks,該 plugin 不存在", "resolution": "accepted — 守門改 App 層計次+內容測試;新增「守門事實」節" },
+    { "id": "R5", "severity": "P1", "claim": "harness 層計次測試關不上 App railCtx deps 的缺口", "resolution": "accepted — S1 必有 App.memo.test.tsx(mock RightRail stub,futures-only 不動 / accum 動且 ctx 內容新)" },
+    { "id": "R6", "severity": "P1", "claim": "useChartToggles 呼叫端五處,MarketPane 不呼叫;caller map 漏三個", "resolution": "accepted — 五處入 blast radius;配合 R9 刪掉動 set 的半步" },
+    { "id": "R7", "severity": "P1", "claim": "OverlayCard deps 欄位名錯(prev_close 不存在,叫 ref;size 是 render 內現建物件)", "resolution": "accepted — deps=[twse.minutes, twse.ref, otc.minutes, otc.ref, height]" },
+    { "id": "R8", "severity": "P1", "claim": "量測與 commit 順序矛盾(綠斷言在 memo 前必紅)", "resolution": "accepted — 三拍順序:baseline 數字(不 commit 紅斷言)→ 🔵 memo → 🟢 計次" },
+    { "id": "R9", "severity": "P2", "claim": "set 包 useCallback 零受益(無 memo 節點收 onToggle;GroupGridView 註解刻意繞開)", "resolution": "accepted — 刪半步,記 next-time 待有受益節點" },
+    { "id": "R10", "severity": "P2", "claim": "OverlayCard 只在重疊 toggle 開啟時 render(預設關),S2 收益條件性未記載", "resolution": "accepted — S2 降序至最後、收益前提入 plan、baseline 記 toggle 狀態" },
+    { "id": "R11", "severity": "P2", "claim": "mock lib 純函式的計次法過脆且會漏 re-export(X_START_MIN / offsetAtX 等)", "resolution": "accepted — 優先子元件邊界 + 同輪對照組;必要時 importOriginal partial mock" },
+    { "id": "R12", "severity": "P2", "claim": "baseline sha 指到非起點 commit", "resolution": "REFUTED — 分支起點即 master 294f604a,2323 為本 session 於分支 HEAD 實跑(d9f6412d 是對話起始快照,已過時)" },
+    { "id": "R13", "severity": "P2", "claim": "可量化改進缺殘留預期(期貨 tab rail 本來就該 10Hz)", "resolution": "accepted — 殘留預期入量測節與可量化改進節" }
+  ],
+  "exit": "P0 全數 accepted 修入 plan 改版 → 觸發限縮 round 2(只審 changelog 標記段落)"
+}
