@@ -1,0 +1,71 @@
+{
+  "round": 1,
+  "lenses": ["web-audio-notification-correctness+whitelist", "test-coverage"],
+  "model": "opus",
+  "diff": "review-diff.txt (master..a1137843)",
+  "whitelist_check": "6/6 PASS(correctness lens 逐條核,含 MFS-1 / 可見分頁 / jsdom / 嗶聲參數 / 單例 / unmount)",
+  "findings": [
+    {
+      "id": "TC-1",
+      "severity": "P1",
+      "claim": "節流測試三則同文案(formatToastText 不含 id)→ 內容斷言退化成長度檢查,leading-edge 語意沒被鎖住",
+      "resolution": "accepted — sig() 改 code:id 讓文案互異,斷言變真內容比對(commit 42634310)"
+    },
+    {
+      "id": "TC-2",
+      "severity": "P1",
+      "claim": "spec Edge case 3(背景爆量 20 則)無測試;節流閘若上提會吃掉 toast 也抓不到",
+      "resolution": "accepted — 新增爆量 20 則測試(1 通知 + toast 4 + overflow 16)(commit 42634310)"
+    },
+    {
+      "id": "TC-3/F1",
+      "severity": "P1",
+      "claim": ".catch(() => {}) 零覆蓋(fake resume 永遠 resolve、無 closed/reject 情境),拿掉照樣全綠",
+      "resolution": "accepted — fake 加 resumeRejects,新增 resume 被拒測試;mutation 抽驗:移除 .catch → vitest Unhandled Rejection exit 1(commit 42634310/aef58782)"
+    },
+    {
+      "id": "F2",
+      "severity": "P2",
+      "claim": "suspended 每則訊號都排一次 resume,autoplay 未解鎖時 pending promise 無上限累積(同型洩漏)",
+      "resolution": "accepted — module 級 resuming in-flight 旗標,紅測試先行(commit aef58782)"
+    },
+    {
+      "id": "F4",
+      "severity": "P2",
+      "claim": "closed context 單例永不重建 → 整 session 永久失聲,且每則對必 reject 的 resume 呼叫",
+      "resolution": "accepted — closed 分支回收單例不 resume,下一則重建;紅測試先行(commit aef58782)"
+    },
+    {
+      "id": "F3",
+      "severity": "P2",
+      "claim": "leading-edge 節流下「同 tag 覆蓋最新一則」註解與實際語意(窗內取首則)相反",
+      "resolution": "accepted(選項 a)— src/test 註解改寫為「跨窗覆蓋、窗內取首則」;trailing/latest-wins 留 next-time"
+    },
+    {
+      "id": "TC-4",
+      "severity": "P2",
+      "claim": "節流窗下邊界(4999ms)無測試,NOTIFY_MIN_INTERVAL_MS 改小照樣綠",
+      "resolution": "accepted — 節流測試拆 4999/+1 兩段;mutation 抽驗:窗改 500ms → 邊界測試紅(commit 42634310)"
+    },
+    {
+      "id": "TC-5",
+      "severity": "P2",
+      "claim": "suspended → running 恢復出聲無測試",
+      "resolution": "accepted — 新增恢復測試 + contexts 不重建斷言(commit 42634310)"
+    },
+    {
+      "id": "TC-6",
+      "severity": "P2",
+      "claim": "節流狀態放 useRef,雙掛載時通知翻倍且無測試變紅",
+      "resolution": "rejected_with_reason — 單掛載是 hook docstring 明文前提且 caller map 唯一(App.tsx:141);雙掛載會先讓嗶聲/toast 翻倍(更早可見的症狀),且固定 tag 下 OS 仍覆蓋合併、通知格數不翻倍"
+    },
+    {
+      "id": "F5",
+      "severity": "P2",
+      "claim": "Date.now() 牆鐘,NTP 回跳會靜默多擋通知",
+      "resolution": "rejected_with_reason — 一次性延遲數秒、影響僅附加價值層;performance.now 需另 fake timers 配置,成本不成比例;已留行內註解記載取捨"
+    }
+  ],
+  "p2_summary": "P2 共 7 條:5 accepted 已修(F2/F4/F3/TC-4/TC-5)、2 rejected(TC-6/F5,理由如上)",
+  "exit": "無未處置 P0/P1;accepted 全數修復並綠(22/22)"
+}
