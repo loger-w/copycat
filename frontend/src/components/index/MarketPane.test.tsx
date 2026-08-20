@@ -138,9 +138,12 @@ function btn(name: string): HTMLButtonElement {
 // 一無所知 —— 真正「折幾行」由 SC-3 的真環境量測(getBoundingClientRect().height ≤ 48)
 // 把關,這裡防的是「漏寫 / 被 twMerge 吃掉」。
 //
-// ⚠ 門檻用 **rem 不用 px**:鈕的文字與 padding 全是 rem,root font-size 在 ≥1920 放大
-// 到 112.5% / ≥2560 放大到 125%,px 門檻會讓寬螢幕誤判(frontend-conventions 的 px 案例
-// 反過來 —— 那裡量的是固定 px 面板寬)。26.5rem = 424@100% / 477@112.5% / 530@125%。
+// ⚠ 門檻用 **rem 不用 px**:鈕的文字與 padding 全是 rem,rem 門檻讓「塞不塞得下」這個
+// 條件對 root font-size 不變(frontend-conventions 的 px 案例反過來 —— 那裡量的是固定
+// px 面板寬)。**本專案 root 目前恆 16px(無縮放 media query),26.5rem = 424px /
+// 41rem = 656px**;真環境量測(2026-08-21):1536 pane 350 → 降級(右欄 473 亦降級);
+// 1920 pane 466 → 不 compact 但週期列仍 2 行(48px)、右欄 627 → 七欄;2560 pane 658、
+// 右欄 883 → 九欄。
 describe("MarketPane 窄容器週期列(SC-3)", () => {
   it("pane root 自掛 @container(週期列的門檻要量 pane 寬,不是左欄寬)", () => {
     renderPane();

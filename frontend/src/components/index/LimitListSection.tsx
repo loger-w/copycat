@@ -43,8 +43,11 @@ const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpe
 
 /** 資料格與表頭共用的左右 padding。**窄右欄收成 `px-1`**(9 個 cell 各省 8px = 72px)。
  *
- *  門檻用 **rem 不用 px**:表格內容是 rem 字級,「塞不塞得下」隨 root font-size 縮放
- *  (≥1920 → 112.5%、≥2560 → 125%)—— 41rem = 656@100% / 738@112.5% / 820@125%。
+ *  門檻用 **rem 不用 px**:表格的內容是 rem 字級,rem 門檻讓「塞不塞得下」這個條件
+ *  對 root font-size 不變。**本專案 root 目前恆 16px(無縮放 media query),41rem =
+ *  656px / 26.5rem = 424px**;真環境量測(2026-08-21):1536 右欄 473 / pane 350 →
+ *  降級;1920 右欄 627 → 七欄、pane 466 → 不 compact 但週期列仍 2 行(48px);
+ *  2560 右欄 883 → 九欄、pane 658。
  *  這與 `frontend-conventions` 那條「container query 門檻用 px 任意值」的案例**方向相反**:
  *  那裡量的是固定 px 的面板寬,這裡量的是「rem 內容塞不塞得下 rem 門檻」。 */
 const CELL_X = "px-2 @max-[41rem]:px-1";
