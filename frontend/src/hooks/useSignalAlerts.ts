@@ -34,7 +34,13 @@ export function playBeep(): void {
     if (Ctor === undefined) return;
     audioCtx ??= new Ctor();
     const ctx = audioCtx;
-    if (ctx.state === "suspended") void ctx.resume();
+    if (ctx.state !== "running") {
+      // suspended 時 currentTime 凍結,排出去的 osc.stop 永不執行 → 已 start 的節點
+      // 不可 GC,整天累積(handoff R4)。這一聲直接放棄,resume 讓後續訊號恢復出聲;
+      // closed 時 resume 會 reject,提示音是附加價值,吞掉。
+      ctx.resume().catch(() => {});
+      return;
+    }
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
@@ -49,14 +55,22 @@ export function playBeep(): void {
   }
 }
 
-/** 分頁在背景時才發桌面通知 —— 前景有 toast,兩個一起跳是重複打擾。 */
-function notifyDesktop(text: string, tag: string): void {
+/** 固定 tag:全部訊號共用一格 OS 通知(同 tag 覆蓋),爆量不疊成一排(handoff R4)。 */
+const NOTIFY_TAG = "copycat-signal";
+/** 通知節流窗(leading edge):固定 tag 已在 OS 層合併,節流只防通知系統 churn。 */
+const NOTIFY_MIN_INTERVAL_MS = 5_000;
+
+/** 分頁在背景時才發桌面通知 —— 前景有 toast,兩個一起跳是重複打擾。
+ *  回傳「是否真的發出」供節流記帳:permission 擋掉的不該消耗窗口。 */
+function notifyDesktop(text: string): boolean {
   try {
     const Ctor = globalThis.Notification as typeof Notification | undefined;
-    if (Ctor === undefined || Ctor.permission !== "granted") return;
-    new Ctor(text, { tag }); // tag:同一則訊號重發時系統自行取代,不疊成一排
+    if (Ctor === undefined || Ctor.permission !== "granted") return false;
+    new Ctor(text, { tag: NOTIFY_TAG });
+    return true;
   } catch {
     // 通知被瀏覽器 / 作業系統擋掉不影響其他提示
+    return false;
   }
 }
 
@@ -68,6 +82,8 @@ export function useSignalAlerts() {
 
   const seqRef = useRef(0);
   const timersRef = useRef(new Map<string, number>());
+  /** 上次真的發出桌面通知的時刻;hook 常駐 App 單掛載,ref 即全域節流狀態。 */
+  const lastNotifyRef = useRef(-Infinity);
 
   /** deps **必須恆為 `[]`**:函式體只碰 `timersRef` 與 `setQueue`(兩者恆定),而下面的
    *  bus 訂閱 effect 以它為 dep —— 只要 `drop` 換身分,effect 就會重跑並在 cleanup 清光
@@ -94,7 +110,12 @@ export function useSignalAlerts() {
       // 分頁在背景就發桌面通知,**不受靜音影響**(review MFS-1):靜音的語意是
       // 「不要出聲」不是「不要通知」(design §8.3 / SC-10)—— 人離開分頁時桌面通知
       // 是唯一的抵達路徑,被音效開關順帶關掉等於整條提示鏈斷掉。
-      if (document.hidden) notifyDesktop(text, sig.id);
+      if (document.hidden) {
+        const now = Date.now();
+        if (now - lastNotifyRef.current >= NOTIFY_MIN_INTERVAL_MS) {
+          if (notifyDesktop(text)) lastNotifyRef.current = now;
+        }
+      }
       // 靜音只關音效。bus 訂閱只做一次(deps 恆定),故讀當下值而不是閉包捕捉的 soundOn
       if (getSoundOn()) playBeep();
     });
