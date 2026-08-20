@@ -36,12 +36,14 @@ interface Props {
   /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
    *  gate 停(review round-2 XR-4);未給時預設 true。 */
   active?: boolean;
-  /** 圖高,單位是 **viewBox 單位**不是 px(§4.1 CS-1 口徑):caller(`MarketPane`)
-   *  已經扣掉 figure / K 線頂列的 chrome,並用「viewBox 寬 ÷ 容器寬」把 px 反解成
-   *  viewBox 單位。**K 線態專用,intraday 不讀**(分時走 1:1 的 `intradayBox`)——
-   *  同一個 prop 不帶兩種單位。**刻意無預設值**:未給 → 直接透傳 undefined 讓
-   *  `CandleChart` 用它自己的 578,在這裡給預設就等於替它決定了它的高。 */
-  height?: number;
+  /** K 線圖的 viewBox 尺寸,單位是 **px(1:1)**,由 `paneCandleBox` 量出來。
+   *  **K 線態限定**;未給(jsdom / 量不到)→ 透傳 undefined 讓 `CandleChart` 用它自己的
+   *  1400×578(W-3),在這裡給預設就等於替它決定了它的尺寸。
+   *
+   *  **2026-08-21 由 `height`(viewBox 單位)改型而來**:同名異義(同一個 `height`
+   *  從 viewBox 單位變 px)比改名危險得多 —— 換算改了而型別沒變,圖照畫、只有比例
+   *  悄悄錯掉。與 `intradayBox` 同型同單位,兩態的語彙自此一致。 */
+  candleBox?: { width: number; height: number };
   /** 分時圖的 viewBox 尺寸,單位是 **px(1:1)**,由 `paneIntradayBox` 量出來。
    *  **分時態限定**;未給(jsdom / 量不到)→ core 走它自己的 800×260 預設。
    *  1:1 之後 svg 的縮放比恆 1,字級與 pane 寬無關 —— 舊的 `unitScale` 補償隨自繪版
@@ -58,7 +60,7 @@ export function MarketChart({
   toggles,
   onToggle,
   active = true,
-  height,
+  candleBox,
   intradayBox,
 }: Props) {
   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
@@ -146,9 +148,12 @@ export function MarketChart({
         showBb={toggles.bb}
         onToggleBb={(v) => onToggle("bb", v)}
         showVolume={meta.volume}
-        height={height}
+        // 1:1:寬高皆為量到的 px,縮放比恆 1 → 字級與排版常數就是它們字面的大小。
+        // 兩個一起給或一起不給(`paneCandleBox` 一次算兩個),只給一邊會退回等比縮放。
+        width={candleBox?.width}
+        height={candleBox?.height}
       />
-      {/* `h-4 truncate` 是**契約不是裝飾**:`PANE_FRAMES.candle` 的 chromeY 把這一列
+      {/* `h-4 truncate` 是**契約不是裝飾**:`pane-frame.ts::CANDLE_CHROME_Y` 把這一列
           算成固定 20px(h-4 16 + mt-1 4)。窄 pane 下最長的來源字串超過欄寬,不限高就
           折成兩行 → chromeY 少算一行 → svg 溢出 figure(WL-2)。 */}
       <p data-testid="market-meta" className="mt-1 h-4 truncate font-mono text-xs text-ink-dim">
