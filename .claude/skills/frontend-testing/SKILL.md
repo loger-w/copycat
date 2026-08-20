@@ -42,3 +42,12 @@ description: 前端 vitest / RTL 測試慣例。寫 component 或 hook 測試前
   不等式。樣板 `CapitalConfirmDialog.test.tsx`。Trigger:測任何 `<dialog>` 元件。
 - **RTL `waitFor` 在 vitest 下偵測不到 fake timers**(`jestFakeTimersAreEnabled()` 查全域 `jest`,vitest 恆 false → 退回真 interval):`vi.useFakeTimers()` + `findBy*`/`waitFor` 組合會 timeout(lazy 元件連 mount 都等不到)。解法:輪詢行為用「hook/元件層 fake timers + 手動 advance」測;App 級整鏈改斷言 `refetchInterval` 求值結果(白盒但可紅),或只假造 `Date` 不假造 timer。用了 fake timers 的測試檔 `afterEach` 必補 `vi.useRealTimers()`(不還原會外溢到別檔)。樣板:`useBreadthRows.test.ts` / `App.test.tsx` R3 跳轉測試。Trigger:測任何 refetchInterval / 輪詢節奏。
 - **「preventDefault 有沒有被呼叫」jsdom 可觀察:`fireEvent.*` 的回傳值就是 `dispatchEvent` 結果**(2026-08-11 CandleChart wheel 實證):事件 `cancelable: true` 且任一 listener(含原生 `passive: false` 的 addEventListener)呼叫 `preventDefault` → `fireEvent` 回 `false`。「原生 listener + passive:false 擋頁面捲動」這類契約別當成 jsdom 不可測 —— 一行 `expect(fireEvent.wheel(el, { …, cancelable: true })).toBe(false)` 就釘住(換回 React `onWheel`(root 掛載,passive)或忘了 preventDefault 的 mutant 都會紅)。另:連發兩個 mousemove 才能區分「絕對位移(以拖曳起點為基準)」與「逐次累加」— 單 move 的拖曳測試兩種實作恆同值,clamp 漂移 mutant 全綠。樣板 `CandleChart.test.tsx` characterization 節。Trigger:測 wheel/scroll 攔截、或任何「以起點為基準」的拖曳幾何。
+- **memo 計次 lock 的探針不能落在 useMemo 內**(2026-08-20 memo-boundaries 實證):量「拔
+  `memo(Component)` 會不會紅」時,若探針是元件內已被 `useMemo` 包住的計算(如幾何函式),
+  拔掉 memo 後 useMemo 照樣擋住重算 → mutant 全綠、lock 是假的。探針要選 **render body 內、
+  不在任何 useMemo 裡**的呼叫(如 `timeTicks`)或子元件邊界;寫 lock 前先想「目標 mutant
+  會不會讓這個探針動」。同輪教訓:內部符號(`RiverCard`/`OverlayCard`)`vi.mock` 搆不到 →
+  `importOriginal` partial mock lib 函式,**其餘 export 必須 `...actual` 保真**(漏了
+  X_START_MIN/offsetAtX 這類常數,座標全 NaN)。樣板 `RiverPanel.memo.test.tsx` /
+  `MarketPane.memo.test.tsx` / `App.memo.test.tsx`(葉子 mock + deps 內容斷言雙向守門)。
+  Trigger:寫任何 `.memo.test.tsx` 計次測試 / mock 內部元件符號。
