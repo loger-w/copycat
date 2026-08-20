@@ -1,0 +1,234 @@
+diff --git a/frontend/src/components/stock/SignalRail.test.tsx b/frontend/src/components/stock/SignalRail.test.tsx
+index 1419b1d2..437f23e4 100644
+--- a/frontend/src/components/stock/SignalRail.test.tsx
++++ b/frontend/src/components/stock/SignalRail.test.tsx
+@@ -106,7 +106,7 @@ describe("SignalRail 訊號列", () => {
+     renderRail({ signals: [sig({ kind: "surge", direction: null, pct: 2.5 })] });
+     const [text = ""] = rowTexts();
+     expect(text).toContain("爆拉 +2.50%");
+-    expect(text).not.toContain("·"); // 分隔符不得單獨留下
++    expect(text).not.toContain("・"); // 分隔符不得單獨留下
+   });
+ 
+   it("最新在上:signals 的順序即 DOM 序", () => {
+@@ -187,7 +187,14 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
+   it("段間分隔符對輔助技術隱藏(aria-hidden)", () => {
+     renderRail({ signals: [CDP, CRASH] });
+     const list = within(screen.getByTestId("signal-rail-list"));
+-    expect(list.getByText("・").getAttribute("aria-hidden")).toBe("true");
++    // kind 段與規則名段各自一個分隔符(B3 起規則名段也逐段 span),各自都要藏
++    const kindSpan = list.getByText("突破 CDP 中軸").parentElement!;
++    const ruleSpan = list.getByText("CDP 穿越").parentElement!;
++    for (const span of [kindSpan, ruleSpan]) {
++      const seps = within(span).getAllByText("・");
++      expect(seps.length).toBe(1);
++      expect(seps[0]?.getAttribute("aria-hidden")).toBe("true");
++    }
+   });
+ 
+   it("合併列每段各自著色(整段套同一色會把爆跌畫成紅的)", () => {
+@@ -228,6 +235,94 @@ describe("SignalRail 同 tick 合併列(SC-5)", () => {
+   });
+ });
+ 
++describe("SignalRail 合併列可讀性(B3:換行 + 逐段 title)", () => {
++  // 2026-08-20 prod 實錄:「跌破 CDP 中軸・爆跌 -2.06%」在 189px 列內只分到 95px
++  const CDP_DOWN = sig({
++    id: "a",
++    kind: "cdp_cross",
++    levels: ["cdp"],
++    direction: "from_above",
++    pct: null,
++    rule_name: "CDP 穿越",
++  });
++  const CRASH = sig({ id: "b", kind: "crash", direction: null, pct: -2.06, rule_name: "爆拉爆跌" });
++
++  it("SC-1 合併列 kind 段不 truncate,改 clamp 2 行;單則列維持 truncate", () => {
++    renderRail({ signals: [CRASH, CDP_DOWN, sig({ id: "s", code: "2317", name: "鴻海" })] });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    const mergedKind = list.getByText("跌破 CDP 中軸").parentElement;
++    expect(mergedKind?.className).toContain("line-clamp-2");
++    expect(mergedKind?.className).not.toContain("truncate");
++    const singleKind = list.getByText("鎖漲停").parentElement;
++    expect(singleKind?.className).toContain("truncate");
++    expect(singleKind?.className).not.toContain("line-clamp-2");
++    // D2 堆疊:合併列 wrapper 走 flex-col(規則名另起一行),單則列仍並排
++    expect(mergedKind?.parentElement?.className).toContain("flex-col");
++    expect(singleKind?.parentElement?.className).not.toContain("flex-col");
++    // 規則名段固定 truncate(堆疊後已有整行寬;列高上限 = 1 + 2 + 1 行)
++    expect(list.getByText("CDP 穿越").parentElement?.className).toContain("truncate");
++  });
++
++  it("SC-1 edge:三段合併(cdp+crash+vol_burst)→ 仍 clamp 2、三段 title 各自完整、分隔符 2 個", () => {
++    const VOL = sig({ id: "v", kind: "vol_burst", direction: null, pct: 3.5, rule_name: "我的爆量" });
++    renderRail({ signals: [VOL, CRASH, CDP_DOWN] });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    const kindSpan = list.getByText("跌破 CDP 中軸").parentElement!;
++    expect(kindSpan.className).toContain("line-clamp-2");
++    expect(within(kindSpan).getAllByText("・").length).toBe(2);
++    expect(list.getByText("爆量 3.5 倍").getAttribute("title")).toBe("爆量 3.5 倍(我的爆量)");
++    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%(爆拉爆跌)");
++    expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸(CDP 穿越)");
++  });
++
++  it("SC-2 逐段 title:kind span = label(rule);規則名 span = rule:kind labels", () => {
++    renderRail({ signals: [CRASH, CDP_DOWN] });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸(CDP 穿越)");
++    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%(爆拉爆跌)");
++    expect(list.getByText("CDP 穿越").getAttribute("title")).toBe("CDP 穿越:跌破 CDP 中軸");
++    expect(list.getByText("爆拉爆跌").getAttribute("title")).toBe("爆拉爆跌:爆跌 -2.06%");
++  });
++
++  it("SC-2 edge:rule_name 缺值(undefined / 空字串)→ title 只有 label、無規則名段、kind 仍 clamp 2", () => {
++    renderRail({
++      signals: [sig({ ...CRASH, rule_name: "" }), sig({ ...CDP_DOWN, rule_name: undefined })],
++    });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    expect(list.getByText("跌破 CDP 中軸").getAttribute("title")).toBe("跌破 CDP 中軸");
++    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%"); // 不是「爆跌 -2.06%()」
++    expect(list.queryByText("CDP 穿越")).toBeNull();
++    expect(list.getByText("跌破 CDP 中軸").parentElement?.className).toContain("line-clamp-2");
++    expect(list.getAllByText("・").length).toBe(1); // 只剩 kind 段那一個
++  });
++
++  it("SC-2 edge:同 kind 兩規則 → kind 段一段、規則名兩段各指回同一 label", () => {
++    renderRail({
++      signals: [sig({ ...CRASH, id: "c2", rule_name: "爆跌備援" }), CRASH],
++    });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    expect(list.getAllByText("爆跌 -2.06%").length).toBe(1);
++    expect(list.getByText("爆拉爆跌").getAttribute("title")).toBe("爆拉爆跌:爆跌 -2.06%");
++    expect(list.getByText("爆跌備援").getAttribute("title")).toBe("爆跌備援:爆跌 -2.06%");
++    // kind span title 取首見(最早到 = 輸入末筆 CRASH)的 rule_name
++    expect(list.getByText("爆跌 -2.06%").getAttribute("title")).toBe("爆跌 -2.06%(爆拉爆跌)");
++    // 規則名兩段 = 真合併列:同樣走堆疊版型,不然兩規則名與 kind 並排照樣被切
++    expect(list.getByText("爆跌 -2.06%").parentElement?.parentElement?.className).toContain("flex-col");
++  });
++
++  it("SC-2 edge:單一規則同 tick 兩 kind → 規則名 title 依到達序列出、同 label 去重", () => {
++    renderRail({
++      signals: [
++        sig({ ...CDP_DOWN, id: "dup", rule_name: "組合規則" }), // 最新到:與下一則同 label → 去重
++        sig({ ...CDP_DOWN, id: "k2", rule_name: "組合規則" }),
++        sig({ ...CRASH, id: "k1", rule_name: "組合規則" }), // 最早到
++      ],
++    });
++    const list = within(screen.getByTestId("signal-rail-list"));
++    expect(list.getByText("組合規則").getAttribute("title")).toBe("組合規則:爆跌 -2.06%・跌破 CDP 中軸");
++  });
++});
++
+ describe("SignalRail 規則區", () => {
+   const RULES = [
+     rule({ id: "r1", name: "CDP 穿越", kind: "cdp_cross", cdp_levels: ["ah"] }),
+diff --git a/frontend/src/components/stock/SignalRail.tsx b/frontend/src/components/stock/SignalRail.tsx
+index 6355b9ac..fea209ff 100644
+--- a/frontend/src/components/stock/SignalRail.tsx
++++ b/frontend/src/components/stock/SignalRail.tsx
+@@ -12,6 +12,9 @@ import {
+   groupKindLabels,
+   groupRuleNames,
+   groupSignals,
++  kindLabel,
++  type KindSegment,
++  type SignalGroup,
+   type SignalMsg,
+ } from "@/lib/signal-model";
+ import { cn } from "@/lib/utils";
+@@ -53,6 +56,21 @@ function toneOf(sig: SignalMsg): string {
+   return "text-ink-muted";
+ }
+ 
++/** kind 段的 hover 提示:「label(rule)」;rule_name 缺值(舊 jsonl)只留 label。 */
++function segmentTitle(seg: KindSegment): string {
++  const rule = seg.sig.rule_name;
++  return rule === undefined || rule === "" ? seg.label : `${seg.label}(${rule})`;
++}
++
++/** 規則名段的 hover 提示:「rule:該規則在這一 tick 發出的 kind 文案」(到達序、去重)。 */
++function ruleTitle(group: SignalGroup, name: string): string {
++  const labels = new Set<string>();
++  for (const item of [...group.items].reverse()) {
++    if (item.rule_name === name) labels.add(kindLabel(item));
++  }
++  return `${name}:${[...labels].join("・")}`;
++}
++
+ function Toggle({
+   label,
+   checked,
+@@ -111,8 +129,12 @@ export function SignalRail({
+               放得下十來列。合併只發生在顯示層 —— WS payload / jsonl / toast 仍逐則。 */}
+           {groupSignals(signals).map((group) => {
+             const segments = groupKindLabels(group);
+-            const kindText = segments.map((seg) => seg.label).join("・");
+-            const ruleText = groupRuleNames(group).join("・");
++            const ruleNames = groupRuleNames(group);
++            // **合併列才換版**(B3):單則列一行放得下,照舊 truncate;合併列的 kind 段
++            // 實測 154px 只分到 95px(38% 被切),改 clamp 2 行 + 規則名另起一行。
++            // 「合併」看兩邊:同 kind 兩條規則時 kind 段去重只剩一段,但規則名有兩段,
++            // 與 kind 並排照樣搶同一行寬(review round-1)。
++            const merged = segments.length > 1 || ruleNames.length > 1;
+             return (
+               <li key={group.key}>
+                 <button
+@@ -133,14 +155,26 @@ export function SignalRail({
+                     {/* **並列**不是二選一(review B1):kind 文案是「發生什麼事」(含
+                         漲跌幅 / 穿越的線),規則名只是「誰發的」且可取任意字串 ——
+                         規則名蓋掉主文時,列表可能整片是「我的規則1」。規則名缺值 =
+-                        升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。 */}
++                        升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。
++                        合併列改堆疊(kind 上 / 規則名下):並排時兩段搶同一行寬,
++                        kind 154 + 規則名 92 > 可用 150,任一段都還是被切。 */}
+                     <span
+-                      title={ruleText === "" ? kindText : `${kindText}(${ruleText})`}
+-                      className="flex min-w-0 items-baseline gap-1"
++                      className={cn(
++                        "min-w-0 gap-1",
++                        // column 方向 items-baseline 無意義(退 flex-start),兩分支各自顯式
++                        merged ? "flex flex-col items-start" : "flex items-baseline",
++                      )}
+                     >
+                       {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
+-                          整段套第一則的 tone 會把其中一半畫成相反的方向。 */}
+-                      <span className="min-w-0 truncate text-xs">
++                          整段套第一則的 tone 會把其中一半畫成相反的方向。
++                          **逐段 title**(T-12):整列單一 title 看不出 kind 段與規則名段
++                          的一對一對應,改成各段自帶「label(rule)」。 */}
++                      <span
++                        className={cn(
++                          "min-w-0 text-xs",
++                          merged ? "line-clamp-2 break-words whitespace-normal" : "truncate",
++                        )}
++                      >
+                         {segments.map((seg, i) => (
+                           <Fragment key={seg.label}>
+                             {/* 分隔符是視覺用的:讀螢幕器唸出來只會把兩段文案黏成一句 */}
+@@ -149,13 +183,23 @@ export function SignalRail({
+                                 ・
+                               </span>
+                             )}
+-                            <span className={toneOf(seg.sig)}>{seg.label}</span>
++                            <span className={toneOf(seg.sig)} title={segmentTitle(seg)}>
++                              {seg.label}
++                            </span>
+                           </Fragment>
+                         ))}
+                       </span>
+-                      {ruleText === "" ? null : (
++                      {/* 規則名段固定單行 truncate:堆疊後已有整行寬(實測 92px < 150),
++                          且它只是「誰發的」,截掉時 hover title 有全文;列高上限因此
++                          封在 1 + 2 + 1 行,不是 1 + 2 + 2。 */}
++                      {ruleNames.length === 0 ? null : (
+                         <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
+-                          {ruleText}
++                          {ruleNames.map((name, i) => (
++                            <Fragment key={name}>
++                              {i === 0 ? null : <span aria-hidden="true">・</span>}
++                              <span title={ruleTitle(group, name)}>{name}</span>
++                            </Fragment>
++                          ))}
+                         </span>
+                       )}
+                     </span>
