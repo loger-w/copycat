@@ -1,0 +1,1077 @@
+﻿diff --git a/frontend/src/App.memo.test.tsx b/frontend/src/App.memo.test.tsx
+new file mode 100644
+index 00000000..04356b2d
+--- /dev/null
++++ b/frontend/src/App.memo.test.tsx
+@@ -0,0 +1,311 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import App from "@/App";
++import type { StockBook } from "@/lib/stock-accum";
++import type { FuturesProductState } from "@/types";
++
++/** 🟢 S1 [lock]:App 層 `railCtx` 的 memo 邊界 —— 跨流串擾擋不擋得下來,以及擋下來之後
++ *  右欄拿到的還是不是最新的簿 / 成交。
++ *
++ *  這件事**在畫面上完全看不出來**:memo 失效只是期貨 10 Hz tick 每一則都把右欄整棵
++ *  subtree(閃電梯 = 全站最重的 render)重畫一次;memo 生效但 deps 漏一項,則是右欄
++ *  掛著舊五檔 / 舊成交價,而那是真錢面板。兩種失效都零錯誤訊號。
++ *
++ *  量法(plan R14/R15/R16):
++ *  - **mock RightRail 內部的葉子、保留真 RightRail 與真 memo** —— 把 RightRail 本身
++ *    換成 stub 等於把要測的 memo 一起換掉(stub 不包 memo 恆紅、包了 memo 守門是空的);
++ *  - 前置 `copycat-tab=stock` + 主檔 —— tab 落在別的分支時 railCtx 走 `NONE_CTX` 恆定,
++ *    斷言零訊號恆綠;
++ *  - 案例依**實際訊息型別**拆:單一則更新不可能同時動 book / last / meta。
++ *    tick 的 `seq` 必須接續 snapshot 的 seq(跳號會觸發自癒 refetch,多一次 setAccum 汙染計次)。 */
++
++const hoisted = vi.hoisted(() => ({
++  /** 個股閃電梯(右欄 subtree 的葉子)每次 render 的 {book,last,meta} 記錄 */
++  ladder: [] as { book: unknown; last: unknown; meta: unknown }[],
++  /** `kind:"none"` 分支的葉子(委託 tab 的兩段清單)每次 render 的 market 記錄 */
++  orders: [] as string[],
++}));
++
++vi.mock("@/components/stock/PriceLadder", () => ({
++  PriceLadder: ({ book, last, meta }: { book: unknown; last: unknown; meta: unknown }) => {
++    hoisted.ladder.push({ book, last, meta });
++    return <div data-testid="ladder-stub" />;
++  },
++}));
++
++vi.mock("@/components/capital/CapitalOrdersList", () => ({
++  CapitalOrdersList: ({ market }: { market: string }) => {
++    hoisted.orders.push(market);
++    return <div data-testid={`orders-stub-${market}`} />;
++  },
++}));
++
++class FakeWS {
++  static instances: FakeWS[] = [];
++  onopen: (() => void) | null = null;
++  onmessage: ((ev: { data: string }) => void) | null = null;
++  onclose: (() => void) | null = null;
++  onerror: (() => void) | null = null;
++
++  constructor(public url: string) {
++    FakeWS.instances.push(this);
++  }
++
++  close(): void {}
++}
++
++const INDEX_STATE = {
++  trade_date: "2026-07-28",
++  twse: {
++    p: 42_039_920, ref: 43_634_190, high: 43_221_930, low: 41_815_780,
++    stale: false, last_minute: null, minutes: { "0901": 43_000_000 },
++  },
++  otc: {
++    p: 359_800, ref: 378_090, high: 373_420, low: 358_430,
++    stale: false, last_minute: null, minutes: { "1017": 359_800 },
++  },
++  txf: { p: 42_142_000, time: "10:16:10" },
++};
++
++const BREADTH_ROWS = {
++  enabled: true,
++  trade_date: "2026-08-06",
++  as_of: "10:31:00",
++  stale: false,
++  streaks_ready: true,
++  rows: [],
++};
++
++function futProduct(p: number): FuturesProductState {
++  return {
++    product: "TXF",
++    name: "台指期",
++    p,
++    q: 1,
++    cum_vol: 100,
++    t: "10:00:00",
++    date: "2026-07-28",
++    bids: [[p - 1_000, 5]],
++    asks: [[p + 1_000, 3]],
++    ref: 20_940_000,
++    upper: 23_034_000,
++    lower: 18_846_000,
++    resolved_contract: "202608",
++  };
++}
++
++/** 個股主圖 snapshot。`seq: 1` → 接續的 tick 用 `seq: 2`(跳號會多打一次全量對齊)。 */
++function stockSnapshot(code: string) {
++  return {
++    code,
++    seq: 1,
++    last: { p: 2_380_000, t: "09:00:01.000", cum_vol: 1 },
++    vwap: 2_380_000,
++    minutes: {},
++    ticks: [],
++    book: { bids: [[2_375_000, 5]], asks: [[2_380_000, 3]] },
++    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
++    no_data: false,
++  };
++}
++
++function appFetch() {
++  return vi.fn(async (url: string) => {
++    const u = String(url);
++    if (u.includes("/api/index/state")) return new Response(JSON.stringify(INDEX_STATE));
++    if (u.includes("/api/futures/state")) {
++      return new Response(JSON.stringify({ seq: 0, products: { TXF: futProduct(21_042_000) } }));
++    }
++    if (u.includes("/api/market/breadth/rows")) return new Response(JSON.stringify(BREADTH_ROWS));
++    if (u.includes("/api/stock/signals/today")) return new Response(JSON.stringify({ signals: [] }));
++    if (u.includes("/api/stock/signals/rules")) return new Response(JSON.stringify({ rules: [] }));
++    if (u.includes("/api/stock/watchlist")) {
++      return new Response(JSON.stringify({ groups: [{ name: "自選", codes: ["2330"] }] }));
++    }
++    if (u.includes("/api/stock/names")) return new Response(JSON.stringify({ names: [], count: 0 }));
++    if (u.includes("/api/stock/stkfut/contracts/")) {
++      return new Response(JSON.stringify({ detail: { error: "NO_STKFUT" } }), { status: 404 });
++    }
++    if (u.includes("/api/stock/overlay/")) {
++      return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
++    }
++    if (u.includes("/api/stock/bars")) return new Response(JSON.stringify({ bars: [], status: "ok" }));
++    if (u.includes("/api/stock/state/")) {
++      const code = u.slice("/api/stock/state/".length).split("?")[0] ?? "2330";
++      return new Response(JSON.stringify(stockSnapshot(code)));
++    }
++    if (u.includes("/api/capital/orders")) return new Response(JSON.stringify({ orders: [] }));
++    if (u.includes("/api/capital/positions")) return new Response(JSON.stringify({ positions: [] }));
++    if (u.includes("/api/health")) {
++      return new Response(JSON.stringify({ git_sha: null, git_dirty: false }));
++    }
++    if (u.includes("/__build/sha")) {
++      return new Response(JSON.stringify({ git_sha: null, behind: null }));
++    }
++    if (u.includes("/api/calendar")) {
++      return new Response(
++        JSON.stringify({
++          today: "2026-08-16", trade_date: "2026-08-14", calendar_trade_date: "2026-08-14",
++          backfill_env: null, holidays: [], years_loaded: [2026], calendar_loaded: true,
++        }),
++      );
++    }
++    return new Response(JSON.stringify({}), { status: 404 });
++  });
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  hoisted.ladder.length = 0;
++  hoisted.orders.length = 0;
++  FakeWS.instances = [];
++  // 右欄閃電梯掛載即置中;jsdom 無 scrollIntoView(同 App.test / PriceLadder.test)
++  Element.prototype.scrollIntoView = vi.fn();
++  vi.stubGlobal("WebSocket", FakeWS as unknown as typeof WebSocket);
++  vi.stubGlobal("fetch", appFetch());
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.restoreAllMocks();
++});
++
++function renderApp() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <App />
++    </QueryClientProvider>,
++  );
++}
++
++function fetchUrls(): string[] {
++  return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
++}
++
++function futStateCalls(): number {
++  return fetchUrls().filter((u) => u.includes("/api/futures/state")).length;
++}
++
++function wsOf(path: string): FakeWS {
++  const found = FakeWS.instances.filter((w) => w.url.endsWith(path)).at(-1);
++  if (found === undefined) throw new Error(`no ws for ${path}`);
++  return found;
++}
++
++function send(path: string, msg: unknown): void {
++  wsOf(path).onmessage?.({ data: JSON.stringify(msg) });
++}
++
++/** 把 in-flight 的 fetch / TQ 通知排乾(TQ 走 notifyManager 的 macrotask 排程)。 */
++async function settle(): Promise<void> {
++  await act(async () => {
++    await new Promise((r) => setTimeout(r, 0));
++  });
++}
++
++/** 期貨腿推兩則**連號**訊息。回傳前的自檢在呼叫端:兩則都被吃下 = 不會多打一次
++ *  `/api/futures/state`(seq 對不上就會全量對齊)—— 少了這道,「計次沒變」在
++ *  「訊息根本沒進到 hook」的世界裡也是綠的。 */
++function pushFuturesTicks(): void {
++  // 兩則各自一個 act:同一批送出會被 React 合併成一次 re-render,量到的串擾會被低估
++  // (真實 10 Hz 是各自獨立的一則)
++  act(() => {
++    send("/ws/futures", { type: "futures", seq: 1, product: "TXF", state: futProduct(21_050_000) });
++  });
++  act(() => {
++    send("/ws/futures", { type: "futures", seq: 2, product: "TXF", state: futProduct(21_060_000) });
++  });
++}
++
++describe("App railCtx memo 邊界(S1)", () => {
++  it("停在個股 tab 時,期貨推播不重畫右欄葉子(跨流串擾)", async () => {
++    window.localStorage.setItem("copycat-tab", "stock");
++    window.localStorage.setItem("copycat-stock-main-code", "2330");
++    renderApp();
++    await screen.findByTestId("ladder-stub");
++    await waitFor(() => expect(futStateCalls()).toBe(1));
++    await settle();
++    await settle();
++
++    const before = hoisted.ladder.length;
++    expect(before).toBeGreaterThan(0);
++    pushFuturesTicks();
++
++    // 自檢:兩則都被期貨流吃下(連號 → 不需要全量對齊)
++    expect(futStateCalls()).toBe(1);
++    expect(hoisted.ladder.length).toBe(before);
++  });
++
++  it("book 訊息 → 右欄葉子拿到新的五檔(stockCtx deps 完整)", async () => {
++    window.localStorage.setItem("copycat-tab", "stock");
++    window.localStorage.setItem("copycat-stock-main-code", "2330");
++    renderApp();
++    await screen.findByTestId("ladder-stub");
++    await settle();
++    const before = hoisted.ladder.length;
++
++    act(() => {
++      send("/ws/stock", {
++        type: "book",
++        code: "2330",
++        bids: [[2_376_000, 9]],
++        asks: [[2_381_000, 4]],
++      });
++    });
++
++    expect(hoisted.ladder.length).toBeGreaterThan(before);
++    const book = hoisted.ladder.at(-1)?.book as StockBook;
++    expect(book.bids[0]?.[0]).toBe(2_376_000);
++    expect(book.asks[0]?.[0]).toBe(2_381_000);
++  });
++
++  it("tick 訊息(seq 接續)→ 右欄葉子拿到新的成交(stockCtx deps 完整)", async () => {
++    window.localStorage.setItem("copycat-tab", "stock");
++    window.localStorage.setItem("copycat-stock-main-code", "2330");
++    renderApp();
++    await screen.findByTestId("ladder-stub");
++    await settle();
++    const before = hoisted.ladder.length;
++    const stateCalls = fetchUrls().filter((u) => u.includes("/api/stock/state/")).length;
++
++    act(() => {
++      send("/ws/stock", {
++        type: "tick",
++        code: "2330",
++        t: "09:10:00.000",
++        p: 2_390_000,
++        q: 3,
++        side: "outer",
++        seq: 2,
++      });
++    });
++
++    // 自檢:seq 接得上(跳號會多打一次全量 snapshot,那條路的重繪與 memo 無關)
++    expect(fetchUrls().filter((u) => u.includes("/api/stock/state/")).length).toBe(stateCalls);
++    expect(hoisted.ladder.length).toBeGreaterThan(before);
++    const last = hoisted.ladder.at(-1)?.last as { p: number };
++    expect(last.p).toBe(2_390_000);
++  });
++
++  it("停在台股綜合 tab 時,期貨推播不重畫右欄葉子(NONE_CTX 恆定)", async () => {
++    window.localStorage.setItem("copycat-tab", "index");
++    window.localStorage.setItem("copycat-rail-tab", "orders");
++    renderApp();
++    await screen.findByTestId("orders-stub-sec");
++    await waitFor(() => expect(futStateCalls()).toBe(1));
++    await settle();
++    await settle();
++
++    const before = hoisted.orders.length;
++    expect(before).toBeGreaterThan(0);
++    pushFuturesTicks();
++
++    expect(futStateCalls()).toBe(1);
++    expect(hoisted.orders.length).toBe(before);
++  });
++});
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 59f3567a..d76be08f 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -1,4 +1,4 @@
+-import { lazy, Suspense, useEffect, useState } from "react";
++import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+ 
+ import { ConnectionBadge } from "@/components/ConnectionBadge";
+ import { IndexBar } from "@/components/IndexBar";
+@@ -43,6 +43,13 @@ const FUT_PRODUCTS = [
+ ] as const;
+ export type FutProduct = (typeof FUT_PRODUCTS)[number][0];
+ 
++/** 無下單標的的右欄 context(TXO / 台股綜合 / 相關係數三顆 tab)。
++ *
++ *  **module 級單例**:寫成 inline `{ kind: "none" }` 的話 `railCtx` 每一輪 render 都是
++ *  新 identity,`RightRail` 的 memo 形同不存在 —— 停在這三顆 tab 時右欄內容恆定,
++ *  卻仍隨 App 的五條流(指數 ~1s / 廣度 / 個股報價批 1s / 期貨 0.1s / 訊號)整棵重繪。 */
++const NONE_CTX: RailContext = { kind: "none" };
++
+ /** localStorage 值域**加回** `corr`(2026-08-16 R2 SC-1):相關係數升為第 5 顆頂層 tab。
+  *  沿革:R1 曾把它併入台股綜合頁(先收合區塊、後 subtab),那段期間 `corr` 不在合法
+  *  清單內、舊值一律 fallback 到 `index`;subtab 機制本輪退役後值域回到 R1 前的樣子,
+@@ -183,24 +190,40 @@ export default function App() {
+     }
+   }
+ 
+-  // 右欄內容跟隨當前 tab 標的,版面位置固定(D2)
++  // 右欄內容跟隨當前 tab 標的,版面位置固定(D2)。
++  //
++  // **兩腿各自 useMemo + 模組常數 NONE_CTX**(refactor/memo-boundaries S1):本元件掛五條
++  // 流,每則推播都重繪它;單一 inline 物件會讓 `railCtx` 每輪換 identity,期貨 10 Hz tick
++  // 因此每秒把右欄閃電梯 subtree(全站最重的 render)重畫 10 次 —— 而使用者停在個股 /
++  // 指數 / TXO 頁時,期貨腿與右欄顯示的東西毫無關係。拆成兩腿是為了讓「哪一條流該動
++  // 右欄」在 deps 上就講清楚:期貨腿動 futuresCtx、個股腿動 stockCtx,互不牽連。
++  //
++  // deps 完整性**沒有 lint 守**(本 repo 無 eslint-plugin-react-hooks),守門是
++  // `App.memo.test.tsx` 的計次 + 內容斷言:漏掉 `accum` 的樣態是右欄掛著舊五檔 / 舊成交價
++  // (真錢面板),畫面與其他測試都不會有任何訊號。
++  const stockCtx = useMemo<RailContext>(
++    () => ({
++      kind: "stock",
++      // **恆為股號**(D5 口徑寫死):RightRail 的五檔點價 gate 比對 `detail.code === ctx.code`,
++      // 而事件是主區的 OrderBook 以股號發的;塞 instrument key 會讓整條點價路徑靜默失效,
++      // 下單面也會顯示 `F:CDF:202609`。合約走獨立欄。
++      code: stockCode,
++      contract: stkfutContract,
++      name: accum?.meta?.name ?? "",
++      book: accum?.book ?? null,
++      last: accum?.last ?? null,
++      meta: accum?.meta ?? null,
++    }),
++    [stockCode, stkfutContract, accum],
++  );
++  // `futContract` 是 render body 內現算的,但型別是 `string | null`(primitive)→ 值沒變
++  // 時 identity 也沒變,可以直接當 dep;`futProd` 則是期貨流每則推播的新物件,本來就該動。
++  const futuresCtx = useMemo<RailContext>(
++    () => ({ kind: "futures", product, state: futProd, contract: futContract }),
++    [product, futProd, futContract],
++  );
+   const railCtx: RailContext =
+-    tab === "stock"
+-      ? {
+-          kind: "stock",
+-          // **恆為股號**(D5 口徑寫死):RightRail 的五檔點價 gate 比對 `detail.code === ctx.code`,
+-          // 而事件是主區的 OrderBook 以股號發的;塞 instrument key 會讓整條點價路徑靜默失效,
+-          // 下單面也會顯示 `F:CDF:202609`。合約走獨立欄。
+-          code: stockCode,
+-          contract: stkfutContract,
+-          name: accum?.meta?.name ?? "",
+-          book: accum?.book ?? null,
+-          last: accum?.last ?? null,
+-          meta: accum?.meta ?? null,
+-        }
+-      : tab === "futures"
+-        ? { kind: "futures", product, state: futProd, contract: futContract }
+-        : { kind: "none" };
++    tab === "stock" ? stockCtx : tab === "futures" ? futuresCtx : NONE_CTX;
+ 
+   return (
+     <div className="flex h-full w-full flex-col gap-3 px-4 py-4">
+diff --git a/frontend/src/components/corr/RiverCards.tsx b/frontend/src/components/corr/RiverCards.tsx
+index 4c170fcd..79354c43 100644
+--- a/frontend/src/components/corr/RiverCards.tsx
++++ b/frontend/src/components/corr/RiverCards.tsx
+@@ -3,6 +3,8 @@
+  * 每腿 y 域各自 autofit —— 六腿價格量級差 15 倍(富台 3462 vs 道瓊 51909),共用域會讓
+  * 低價腿壓成一條直線。跨腿比較走「重疊」模式(那邊才正規化成 %)。
+  */
++import { memo, useMemo } from "react";
++
+ import { fmtPct } from "@/lib/format";
+ import { buildLegGeometry, timeTicks, type RiverSize } from "@/lib/river-chart-svg";
+ import { pts } from "@/lib/svg-points";
+@@ -24,8 +26,10 @@ interface CardProps {
+   colorIndex: number;
+ }
+ 
+-function RiverCard({ legKey, leg, window: win, colorIndex }: CardProps) {
+-  const g = buildLegGeometry(leg, win, SIZE);
++/** 具名 memo:每秒的 delta 通常只動一兩腿(`useRiver.applyDelta` 對沒收到點的腿保留同參照,
++ *  `window` 也隨 `{...prev}` 保持 identity),沒動的卡不必跟著重算全窗幾何。 */
++const RiverCard = memo(function RiverCard({ legKey, leg, window: win, colorIndex }: CardProps) {
++  const g = useMemo(() => buildLegGeometry(leg, win, SIZE), [leg, win]);
+   const stroke = RIVER_STROKES[colorIndex % RIVER_STROKES.length]!;
+   // 腿名文字色用 RIVER_TEXTS 常數,不用 stroke 字串 replace —— Tailwind 只產生
+   // 原始碼裡出現過的 class,動態拼出來的 `text-river-N` 不會被生成
+@@ -91,7 +95,7 @@ function RiverCard({ legKey, leg, window: win, colorIndex }: CardProps) {
+       </svg>
+     </figure>
+   );
+-}
++});
+ 
+ interface Props {
+   order: string[];
+diff --git a/frontend/src/components/corr/RiverOverlay.tsx b/frontend/src/components/corr/RiverOverlay.tsx
+index 204ce3b5..5178fe7a 100644
+--- a/frontend/src/components/corr/RiverOverlay.tsx
++++ b/frontend/src/components/corr/RiverOverlay.tsx
+@@ -1,5 +1,5 @@
+ /** 重疊模式:六腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
+-import { useState } from "react";
++import { useMemo, useState } from "react";
+ 
+ import { fmtPct } from "@/lib/format";
+ import {
+@@ -36,7 +36,32 @@ interface Props {
+ 
+ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
+   const [cursor, setCursor] = useState<number | null>(null);
+-  const g = buildOverlayGeometry(entries, win, SIZE);
++  // 幾何與純 derive 自幾何的量一起包:游標在圖上滑一下是數十則 mousemove,每則都
++  // setCursor → re-render,而滿窗夜盤是 840 分鐘 × 七腿。`readout` 依賴 cursor,
++  // **不能**進來(進來就會被凍在 cursor === null,讀值列永遠是「—」而線照畫)。
++  const { g, labelYs, lateStarts } = useMemo(() => {
++    const geo = buildOverlayGeometry(entries, win, SIZE);
++    // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
++    const ys = spreadLabelYs(
++      geo.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
++      11,
++      SIZE.height - 14,
++    );
++    // 基準時點分歧註記:每腿以「本場自己的第一筆」為 0%(buildOverlayGeometry),開盤時間不同的腿
++    // (小日經 OSE 夜盤台北 16:00 開,其餘腿 15:00)基準時點就不同,線的絕對高度不可比、只有
++    // 斜率可比。首筆晚於最早腿超過 LATE_START_MIN 分鐘者在標頭列標示起算時刻;零改幾何。
++    const firstOffsets = geo.lines.flatMap((l) => (l.pts.length > 0 ? [l.pts[0]!.offset] : []));
++    const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
++    return {
++      g: geo,
++      labelYs: ys,
++      lateStarts: geo.lines.flatMap((l) =>
++        l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
++          ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
++          : [],
++      ),
++    };
++  }, [entries, win]);
+   const span = Math.max(1, win.end_min - win.start_min);
+   const toX = (offset: number): number => (offset / span) * SIZE.width;
+ 
+@@ -48,24 +73,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
+     setCursor(offsetAtX(px, win, SIZE));
+   }
+ 
+-  // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
+-  const labelYs = spreadLabelYs(
+-    g.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
+-    11,
+-    SIZE.height - 14,
+-  );
+-
+-  // 基準時點分歧註記:每腿以「本場自己的第一筆」為 0%(buildOverlayGeometry),開盤時間不同的腿
+-  // (小日經 OSE 夜盤台北 16:00 開,其餘腿 15:00)基準時點就不同,線的絕對高度不可比、只有
+-  // 斜率可比。首筆晚於最早腿超過 LATE_START_MIN 分鐘者在標頭列標示起算時刻;零改幾何。
+-  const firstOffsets = g.lines.flatMap((l) => (l.pts.length > 0 ? [l.pts[0]!.offset] : []));
+-  const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
+-  const lateStarts = g.lines.flatMap((l) =>
+-    l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
+-      ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
+-      : [],
+-  );
+-
++  // 讀值列:唯一依賴 cursor 的量,刻意留在幾何 useMemo 之外(見上)
+   const readout =
+     cursor === null
+       ? null
+diff --git a/frontend/src/components/corr/RiverPanel.memo.test.tsx b/frontend/src/components/corr/RiverPanel.memo.test.tsx
+new file mode 100644
+index 00000000..6dfb14f7
+--- /dev/null
++++ b/frontend/src/components/corr/RiverPanel.memo.test.tsx
+@@ -0,0 +1,164 @@
++/** @vitest-environment jsdom */
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { RiverPanel } from "@/components/corr/RiverPanel";
++import type { RiverLeg, RiverState } from "@/types";
++
++/** S3 memo 邊界的 regression lock:江波圖的兩道重算邊界有沒有真的擋住。
++ *
++ *  這兩件事**在畫面上完全看不出來** —— 失效只是多算幾何:
++ *  (1) 重疊圖每次 mousemove(游標在圖上滑一下 = 數十則事件)重算七腿全窗幾何;
++ *  (2) 任一腿有新 tick(每秒)時六張並排卡片全部重算,而 delta 通常只動一兩腿。
++ *  線照畫、值照對,只有 CPU 知道。
++ *
++ *  量法(refactor-plan R11):`importOriginal` partial mock `@/lib/river-chart-svg`,
++ *  **只包住** `buildOverlayGeometry` / `buildLegGeometry` 兩支計次,其餘 export
++ *  (`offsetAtX` / `spreadLabelYs` / `timeTicks` / `PAD_Y` …)一律保留真身 ——
++ *  漏了 `offsetAtX` 游標換算就變 NaN、漏了 `timeTicks` 時間軸整條不見,
++ *  測試會以為自己在量 memo,其實在量壞掉的圖。
++ *  跨腿案採「同輪對照組」:未變的腿(台指)與變了的腿(富台)在同一次 rerender 內比較。
++ *
++ *  **獨立檔**:`vi.mock` 是檔案級 + hoisted,與同目錄那份要看到真幾何數字的
++ *  `RiverPanel.test.tsx` 不能共存。 */
++
++const hoisted = vi.hoisted(() => ({
++  /** buildOverlayGeometry 被呼叫幾次(= 重疊圖七腿全窗幾何重算次數) */
++  overlay: 0,
++  /** buildLegGeometry 每次呼叫的腿名(= 哪一張並排卡片重算了幾何) */
++  legs: [] as string[],
++  /** timeTicks 呼叫次數。**並排模式下只有 `RiverCard` 會呼叫它**(RiverPanel 自己不叫、
++   *  RiverOverlay 沒 mount),而它在卡片 render body 內、不在任何 useMemo 裡
++   *  → 這個數字就是「卡片實際 render 了幾次」。
++   *  非有它不可:卡內的 `useMemo([leg, win])` 會把幾何擋住,所以光看 buildLegGeometry
++   *  量不出 `memo(RiverCard)` 在不在 —— 拔掉 memo 卡片照樣每輪重跑整個 render body
++   *  (七腿 × 全窗刻度 + polyline 字串),而 buildLegGeometry 計次紋風不動。 */
++  ticks: 0,
++}));
++
++vi.mock("@/lib/river-chart-svg", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("@/lib/river-chart-svg")>();
++  return {
++    ...actual,
++    buildOverlayGeometry: (...args: Parameters<typeof actual.buildOverlayGeometry>) => {
++      hoisted.overlay += 1;
++      return actual.buildOverlayGeometry(...args);
++    },
++    buildLegGeometry: (...args: Parameters<typeof actual.buildLegGeometry>) => {
++      hoisted.legs.push(args[0].label);
++      return actual.buildLegGeometry(...args);
++    },
++    timeTicks: (...args: Parameters<typeof actual.timeTicks>) => {
++      hoisted.ticks += 1;
++      return actual.timeTicks(...args);
++    },
++  };
++});
++
++const DAY = { start_min: 525, end_min: 825 };
++
++function state(): RiverState {
++  return {
++    type: "river",
++    seq: 3,
++    session: "day",
++    base: "TXF",
++    window: DAY,
++    legs: {
++      TXF: {
++        label: "台指",
++        minutes: { "10": 40_000_000, "20": 40_400_000 },
++        last: 40_400_000,
++        last_minute: 20,
++      },
++      TWN: {
++        label: "富台",
++        minutes: { "10": 3_400_000, "20": 3_366_000 },
++        last: 3_366_000,
++        last_minute: 20,
++      },
++      YM: { label: "道瓊", minutes: {}, last: null, last_minute: null },
++    },
++  };
++}
++
++/** 模擬 `useRiver.applyDelta` 的產物:只有收到點的腿換 identity,其餘腿與 `window` 保持同參照。 */
++function withTick(prev: RiverState, key: string, minute: number, price: number): RiverState {
++  const leg = prev.legs[key] as RiverLeg;
++  const minutes = { ...leg.minutes, [String(minute)]: price };
++  return {
++    ...prev,
++    seq: prev.seq + 1,
++    legs: { ...prev.legs, [key]: { ...leg, minutes, last: price, last_minute: minute } },
++  };
++}
++
++/** viewBox 寬 = 960(RiverOverlay.SIZE);jsdom 的 rect 恆 0 會讓 handleMouseMove 早退。 */
++function mockRect(): void {
++  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
++    left: 0,
++    top: 0,
++    right: 960,
++    bottom: 340,
++    width: 960,
++    height: 340,
++    x: 0,
++    y: 0,
++    toJSON: () => ({}),
++  } as DOMRect);
++}
++
++function xAt(offset: number): number {
++  return (offset / (DAY.end_min - DAY.start_min)) * 960;
++}
++
++beforeEach(() => {
++  hoisted.overlay = 0;
++  hoisted.legs.length = 0;
++  hoisted.ticks = 0;
++  window.localStorage.clear();
++});
++
++afterEach(() => {
++  cleanup();
++  vi.restoreAllMocks();
++});
++
++describe("江波圖 memo 邊界計次(S3)", () => {
++  it("重疊圖:游標滑過三個分鐘 → 七腿幾何零重算(cursor 只動讀值列)", () => {
++    mockRect();
++    render(<RiverPanel state={state()} />);
++    fireEvent.click(screen.getByRole("button", { name: "重疊" }));
++    const svg = screen.getByRole("img", { name: "各腿重疊走勢" });
++    // 自檢:圖真的畫出來了(幾何至少算過一次),否則下面量的 +0 與 memo 無關
++    expect(hoisted.overlay).toBeGreaterThan(0);
++    const before = hoisted.overlay;
++
++    // 三個**相異**的 offset:同一 offset 連發會被 setState 的相同值 bail out,量不到東西
++    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
++    fireEvent.mouseMove(svg, { clientX: xAt(10), clientY: 100 });
++    fireEvent.mouseMove(svg, { clientX: xAt(15), clientY: 100 });
++
++    // 自檢:讀值列真的跟著游標動了(hover 沒生效的話 +0 是假綠)
++    expect(screen.getByText("台指 —")).toBeTruthy();
++    expect(hoisted.overlay - before).toBe(0);
++  });
++
++  it("並排卡片:一腿有新 tick → 只有那張卡重算幾何(同輪對照組:沒動的腿)", () => {
++    const s1 = state();
++    const { rerender } = render(<RiverPanel state={s1} />);
++    // 自檢:三張卡都畫過(道瓊無點也照畫「無資料」卡)
++    expect(hoisted.legs.filter((l) => l === "台指").length).toBeGreaterThan(0);
++    const count = (label: string): number => hoisted.legs.filter((l) => l === label).length;
++    const [b台指, b富台, b渲染] = [count("台指"), count("富台"), hoisted.ticks];
++    // 自檢:掛載時三張卡都 render 過(台指 / 富台 / 道瓊)
++    expect(b渲染).toBe(3);
++
++    // 只有富台收到新 tick(= applyDelta 的樣態:台指腿與 window 保持同參照)
++    rerender(<RiverPanel state={withTick(s1, "TWN", 30, 3_400_000)} />);
++
++    expect(count("富台") - b富台).toBe(1); // 值真的變了,這張非重算不可(卡內 useMemo 邊界)
++    expect(count("台指") - b台指).toBe(0); // 對照組:沒動的腿不該被拖著重算幾何
++    expect(hoisted.ticks - b渲染).toBe(1); // 三張卡只有富台那張重繪(memo(RiverCard) 邊界)
++  });
++});
+diff --git a/frontend/src/components/corr/RiverPanel.test.tsx b/frontend/src/components/corr/RiverPanel.test.tsx
+index 8195ed43..045d20ee 100644
+--- a/frontend/src/components/corr/RiverPanel.test.tsx
++++ b/frontend/src/components/corr/RiverPanel.test.tsx
+@@ -1,6 +1,6 @@
+ /** @vitest-environment jsdom */
+ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+-import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { RiverPanel } from "@/components/corr/RiverPanel";
+ import type { RiverState } from "@/types";
+@@ -37,7 +37,10 @@ beforeEach(() => {
+   window.localStorage.clear();
+ });
+ 
+-afterEach(cleanup);
++afterEach(() => {
++  cleanup();
++  vi.restoreAllMocks();
++});
+ 
+ describe("RiverPanel", () => {
+   it("預設並排:兩顆鈕都在,並排為 accent,各腿名皆出現", () => {
+@@ -170,3 +173,95 @@ describe("RiverPanel", () => {
+     expect(screen.getByText("等待日盤資料…")).toBeTruthy();
+   });
+ });
++
++/** S3 memo 邊界的前置 characterization(refactor-plan R1/R17)。
++ *
++ *  拍的是**改動前的現狀**:重疊圖游標移動 → 讀值列即時換成該分鐘的各腿 %。
++ *  之所以要先拍:S3 要把 `buildOverlayGeometry` 與其衍生量包進 `useMemo([entries, win])`,
++ *  只要順手把 `readout`(唯一依賴 `cursor` 的量)一起包進去,讀值列就會被凍在
++ *  `cursor === null` 的那一刻 —— 線照畫、時間照走,只有讀值永遠是「—」,
++ *  而既有 14 條測試沒有任何一條碰過 mouseMove(零訊號)。
++ *
++ *  jsdom 坑:`handleMouseMove` 先取 `getBoundingClientRect()`,jsdom 恆回 0 →
++ *  `rect.width === 0` 早退 → cursor 永遠 null、斷言恆假綠。必須 spy 出真實寬高
++ *  (先例 `MarketChart.test.tsx` hover 節);座標換算假設 svg 等比渲染。
++ */
++describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
++  /** viewBox 寬 = 960(RiverOverlay.SIZE),量測寬取同值 → clientX 即 viewBox x。 */
++  function mockRect(): void {
++    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
++      left: 0,
++      top: 0,
++      right: 960,
++      bottom: 340,
++      width: 960,
++      height: 340,
++      x: 0,
++      y: 0,
++      toJSON: () => ({}),
++    } as DOMRect);
++  }
++
++  /** offset(分鐘)→ clientX。窗長 300 分、圖寬 960 → 每分鐘 3.2px。 */
++  function xAt(offset: number): number {
++    return (offset / (DAY.end_min - DAY.start_min)) * 960;
++  }
++
++  function overlay(): SVGElement {
++    render(<RiverPanel state={state()} />);
++    fireEvent.click(screen.getByRole("button", { name: "重疊" }));
++    return screen.getByRole("img", { name: "各腿重疊走勢" }) as unknown as SVGElement;
++  }
++
++  it("游標移入 → 讀值列出現各腿 % 與該分鐘時刻", () => {
++    mockRect();
++    const svg = overlay();
++    // 自檢:移入前是提示文案(移入後才會被讀值列取代)
++    expect(screen.getByText("游標移入圖內看各腿讀值")).toBeTruthy();
++
++    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
++
++    expect(screen.getByText("09:05")).toBeTruthy(); // window.start_min 525 + 20
++    expect(screen.getByText("台指 +1.00%")).toBeTruthy();
++    expect(screen.getByText("富台 -1.00%")).toBeTruthy();
++    expect(screen.queryByText("游標移入圖內看各腿讀值")).toBeNull();
++  });
++
++  it("游標移到另一分鐘 → 讀值跟著換(讀值不得被幾何 useMemo 凍住)", () => {
++    mockRect();
++    const svg = overlay();
++
++    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
++    expect(screen.getByText("台指 +1.00%")).toBeTruthy();
++
++    fireEvent.mouseMove(svg, { clientX: xAt(10), clientY: 100 });
++
++    expect(screen.getByText("08:55")).toBeTruthy();
++    expect(screen.getByText("台指 0.00%")).toBeTruthy();
++    expect(screen.getByText("富台 0.00%")).toBeTruthy();
++    expect(screen.queryByText("台指 +1.00%")).toBeNull();
++  });
++
++  it("該分鐘沒有點的腿顯示「—」(全窗無值的道瓊不進讀值列)", () => {
++    mockRect();
++    const svg = overlay();
++
++    fireEvent.mouseMove(svg, { clientX: xAt(15), clientY: 100 });
++
++    expect(screen.getByText("台指 —")).toBeTruthy();
++    expect(screen.getByText("富台 —")).toBeTruthy();
++    // 道瓊全窗無值 → buildOverlayGeometry 不收它,讀值列沒有這一腿(勾選鈕上的字不算)
++    expect(screen.queryByText(/^道瓊 /)).toBeNull();
++  });
++
++  it("游標移出 → 讀值列收回提示文案", () => {
++    mockRect();
++    const svg = overlay();
++    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
++
++    fireEvent.mouseLeave(svg);
++
++    expect(screen.getByText("游標移入圖內看各腿讀值")).toBeTruthy();
++    expect(screen.queryByText("台指 +1.00%")).toBeNull();
++  });
++});
+diff --git a/frontend/src/components/corr/RiverPanel.tsx b/frontend/src/components/corr/RiverPanel.tsx
+index 9f5d2715..831add26 100644
+--- a/frontend/src/components/corr/RiverPanel.tsx
++++ b/frontend/src/components/corr/RiverPanel.tsx
+@@ -3,7 +3,7 @@
+  * 吃 props 不自己呼叫 `useRiver` —— 與 `CorrPanel` 同款(資料流留在 `CorrPage`),
+  * 元件測試才能直接餵狀態(`[phase-3 補註]`:design §2 原寫 RiverPanel 內呼叫 hook)。
+  */
+-import { useState } from "react";
++import { useMemo, useState } from "react";
+ 
+ import { RIVER_MODE_KEY, RIVER_OFF_KEY } from "@/lib/constants";
+ import type { OverlayEntry } from "@/lib/river-chart-svg";
+@@ -40,6 +40,22 @@ export function RiverPanel({ state }: Props) {
+   const [mode, setMode] = useState<Mode>(initialMode);
+   const [off, setOff] = useState<string[]>(initialOff);
+ 
++  // 兩個 useMemo 必須在 `state === null` 早退**之前** —— 放在早退之後就是條件式 hook,
++  // 江波圖首載(state 尚未到)那一輪與有資料後的 hook 數量不同,corr tab 開站即崩。
++  // null 分支各自回空,早退在下面照舊。
++  const legs = state?.legs;
++  const order = useMemo(() => (legs === undefined ? [] : Object.keys(legs)), [legs]);
++  // `entries` 是 RiverOverlay 幾何 useMemo 的 dep,identity 每輪換掉的話下游 memo 全空轉。
++  // deps 不含 `state.base`:base 只決定哪條線畫粗(RiverOverlay 自己吃 prop),不進本計算。
++  const entries = useMemo<OverlayEntry[]>(() => {
++    if (legs === undefined) return [];
++    return Object.keys(legs).flatMap((key, i) => {
++      const leg = legs[key];
++      if (leg === undefined || off.includes(key)) return [];
++      return [{ key, colorIndex: i, leg, label: leg.label }];
++    });
++  }, [legs, off]);
++
+   function switchMode(next: Mode): void {
+     setMode(next);
+     window.localStorage.setItem(RIVER_MODE_KEY, next);
+@@ -59,12 +75,8 @@ export function RiverPanel({ state }: Props) {
+     );
+   }
+ 
+-  const order = Object.keys(state.legs);
+   const sessionText = state.session === "day" ? "日盤" : "夜盤";
+   const hasAnyPoint = order.some((key) => Object.keys(state.legs[key]?.minutes ?? {}).length > 0);
+-  const entries: OverlayEntry[] = order
+-    .map((key, i) => ({ key, colorIndex: i, leg: state.legs[key]!, label: state.legs[key]!.label }))
+-    .filter((entry) => !off.includes(entry.key));
+ 
+   return (
+     <section className="flex flex-col gap-2">
+diff --git a/frontend/src/components/index/MarketPane.memo.test.tsx b/frontend/src/components/index/MarketPane.memo.test.tsx
+new file mode 100644
+index 00000000..3ee118ac
+--- /dev/null
++++ b/frontend/src/components/index/MarketPane.memo.test.tsx
+@@ -0,0 +1,166 @@
++/** @vitest-environment jsdom */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { MarketPane, type PaneFutState, type PaneStores } from "@/components/index/MarketPane";
++import type { ChartToggles } from "@/hooks/useChartToggles";
++import type { IndexSeries } from "@/hooks/useIndexStream";
++import {
++  INDEX_OVERLAY_STORE,
++  MARKET_FUT_STORE,
++  MARKET_KEY_STORE,
++  MARKET_MODE_STORE,
++} from "@/lib/constants";
++
++/** S2 memo 邊界的 regression lock:`OverlayCard` 的疊圖幾何有沒有被無關的 rerender 拖著重算。
++ *
++ *  **畫面上完全看不出來** —— 失效只是多算幾何:重疊開著時,App 層那五條流(期貨
++ *  coalesce 0.1s 是最兇的一條)每推一次就重繪整棵樹 → 加權/櫃買一個分鐘點都沒動,
++ *  兩條 series 的全窗幾何照樣重算一遍。線照畫、值照對,只有 CPU 知道。
++ *
++ *  **收益條件性(refactor-plan R10)**:`OverlayCard` 只在「重疊」toggle 開啟時 render
++ *  (預設關)。本檔所有案例都**強制開啟** toggle(`fireEvent.click(btn("重疊"))`,沿
++ *  MarketPane.test.tsx:379 的既有操作慣例);使用者不開重疊時本步收益 = 0。
++ *
++ *  量法(refactor-plan R11):`importOriginal` partial mock `@/lib/index-chart-svg`,
++ *  **只包住** `buildOverlayGeometry` 計次,其餘 export(`X_START_MIN` / `X_END_MIN` /
++ *  `buildIndexGeometry` / `rightEdgeLabels` …)一律保留真身 —— 漏了 `X_START_MIN`
++ *  這對常數,MarketPane 自己的 `toX` 立刻變 NaN,測試會以為自己在量 memo,
++ *  其實在量壞掉的圖。
++ *
++ *  探針選在 `buildOverlayGeometry` 而不是「render 次數」:本步要鎖的就是這支呼叫有沒有
++ *  被 `useMemo` 擋住,拔掉 useMemo 後計次必然跳(S3 踩過的「探針在 useMemo 內、mutation
++ *  量不到」在這裡不成立,因為 useMemo 本身就是待測邊界)。
++ *
++ *  **獨立檔**:`vi.mock` 是檔案級 + hoisted,與同目錄那兩份要看到真幾何數字的
++ *  `MarketPane.test.tsx` / `MarketPane.size.test.tsx` 不能共存。
++ *
++ *  mutation-verified:(a) 拔掉 `useMemo` → 第一條紅(3 vs 0);(b) deps 改 `[]` →
++ *  第二條紅(0 vs 1)。兩個方向各有一條守著,不是單向的空 lock。 */
++
++const hoisted = vi.hoisted(() => ({
++  /** buildOverlayGeometry 被呼叫幾次(= 加權 + 櫃買兩條全窗幾何重算次數) */
++  overlay: 0,
++}));
++
++vi.mock("@/lib/index-chart-svg", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("@/lib/index-chart-svg")>();
++  return {
++    ...actual,
++    buildOverlayGeometry: (...args: Parameters<typeof actual.buildOverlayGeometry>) => {
++      hoisted.overlay += 1;
++      return actual.buildOverlayGeometry(...args);
++    },
++  };
++});
++
++function series(over: Partial<IndexSeries> = {}): IndexSeries {
++  return {
++    p: 42_039_920,
++    ref: 43_634_190,
++    high: 43_221_930,
++    low: 41_815_780,
++    stale: false,
++    minutes: { "0901": 43_000_000, "0930": 42_039_920 },
++    ...over,
++  };
++}
++
++const OTC = series({
++  p: 359_800,
++  ref: 378_090,
++  high: 373_420,
++  low: 358_430,
++  minutes: { "1017": 359_800 },
++});
++
++const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false, fills: true };
++
++const LEFT_STORES: PaneStores = {
++  key: MARKET_KEY_STORE,
++  mode: MARKET_MODE_STORE,
++  fut: MARKET_FUT_STORE,
++  overlay: INDEX_OVERLAY_STORE,
++};
++
++/** 期貨引擎 coalesce 0.1s 的推播樣態:每則都是新物件,而 `MarketPane` 在加權態
++ *  根本不讀它(`futState` 恆 null)—— 純粹是 App 層重繪整棵樹帶下來的串擾。 */
++function futures(p: number): Record<string, PaneFutState> {
++  return { TXF: { p, ref: 42_000_000 } };
++}
++
++function tree(twse: IndexSeries, fut: Record<string, PaneFutState>, client: QueryClient) {
++  return (
++    <QueryClientProvider client={client}>
++      <MarketPane
++        paneId="left"
++        twse={twse}
++        otc={OTC}
++        futures={fut}
++        stores={LEFT_STORES}
++        defaultKey="TWSE"
++        toggles={TOGGLES}
++        onToggle={() => {}}
++      />
++    </QueryClientProvider>
++  );
++}
++
++/** 開重疊 + 自檢圖真的畫出來了,回傳 rerender 與「此刻的計次」。 */
++function openOverlay() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  const twse = series();
++  const { rerender } = render(tree(twse, futures(42_142_000), client));
++  fireEvent.click(screen.getByRole("button", { name: "重疊" }));
++  // 自檢:重疊圖真的 mount 了(沒 mount 的話下面量的 +0 與 memo 無關,是空綠)
++  expect(screen.getByLabelText("指數重疊走勢")).toBeTruthy();
++  expect(hoisted.overlay).toBeGreaterThan(0);
++  return {
++    twse,
++    before: hoisted.overlay,
++    show: (next: IndexSeries, fut: Record<string, PaneFutState>) =>
++      rerender(tree(next, fut, client)),
++  };
++}
++
++beforeEach(() => {
++  hoisted.overlay = 0;
++  window.localStorage.clear();
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async () => new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }))),
++  );
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("OverlayCard 疊圖幾何 memo 邊界計次(S2;重疊 toggle = 開)", () => {
++  it("期貨 tick 連推三則(加權/櫃買一個分鐘點沒動)→ 疊圖幾何零重算", () => {
++    const { twse, before, show } = openOverlay();
++
++    // 三則**相異**的期貨現價:同值連發會被 React 的 props 比對省掉一輪,量不到東西。
++    // `twse` / `OTC` 兩個 series 全程保持同參照 = 指數流沒有新推播的真實樣態。
++    show(twse, futures(42_143_000));
++    show(twse, futures(42_144_000));
++    show(twse, futures(42_145_000));
++
++    // 自檢:重疊圖還在(切掉的話 +0 一樣是空綠)
++    expect(screen.getByLabelText("指數重疊走勢")).toBeTruthy();
++    expect(hoisted.overlay - before).toBe(0);
++  });
++
++  it("加權真的多出一個分鐘點 → 幾何重算,恰一次(memo 不可鎖死成 deps=[])", () => {
++    const { before, show } = openOverlay();
++
++    show(
++      series({ minutes: { "0901": 43_000_000, "0930": 42_039_920, "0931": 42_100_000 } }),
++      futures(42_142_000),
++    );
++
++    expect(hoisted.overlay - before).toBe(1);
++  });
++});
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index b409baca..4278301f 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -133,12 +133,21 @@ function OverlayCard({
+ }) {
+   const size = { width: SIZE.width, height };
+   const font = svgFontRem(0.625, unitScale);
+-  const g = buildOverlayGeometry(
+-    [
+-      { minutes: twse.minutes, ref: twse.ref },
+-      { minutes: otc.minutes, ref: otc.ref },
+-    ],
+-    size,
++  // **必經 useMemo**:重疊開著時,App 層那五條流(期貨 coalesce 0.1s = 10 Hz 最兇)
++  // 每推一次就重繪整棵樹 —— 加權/櫃買一個分鐘點都沒動,兩條全窗 series 的 pct → x/y
++  // 換算照樣重跑一遍。症狀只有 CPU 知道,線照畫值照對,沒有任何行為測試會紅。
++  // deps 拆成**欄位級**四項 + height:`size` 是 render 內現建的物件,拿它當 dep 等於
++  // 沒 memo(同 L363-366 那條警告);`unitScale` / `font` 只進字級不進幾何,不是輸入。
++  const g = useMemo(
++    () =>
++      buildOverlayGeometry(
++        [
++          { minutes: twse.minutes, ref: twse.ref },
++          { minutes: otc.minutes, ref: otc.ref },
++        ],
++        { width: SIZE.width, height },
++      ),
++    [twse.minutes, twse.ref, otc.minutes, otc.ref, height],
+   );
+   return (
+     <figure className="rounded-md border border-line bg-surface p-4">
+diff --git a/frontend/src/components/rail/RightRail.tsx b/frontend/src/components/rail/RightRail.tsx
+index 719cb6b3..965a0c5d 100644
+--- a/frontend/src/components/rail/RightRail.tsx
++++ b/frontend/src/components/rail/RightRail.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useState } from "react";
++import { memo, useEffect, useState } from "react";
+ 
+ import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
+ import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
+@@ -68,7 +68,11 @@ function EmptyFlash() {
+   );
+ }
+ 
+-export function RightRail({ ctx }: { ctx: RailContext }) {
++/** `memo` 包裹(refactor/memo-boundaries S1):唯一的 prop 是 `ctx`,而 App 已把它拆成
++ *  兩腿 useMemo + 模組常數 `NONE_CTX` —— 兩者要成對才有效(memo 沒有 = ctx 穩定也照重繪;
++ *  ctx 每輪新 identity = memo 的比較永遠不過)。具名 `memo(function RightRail(...))` 是
++ *  專案慣例:匿名箭頭在 DevTools / react-doctor 的元件樹上會變成 `Memo`。 */
++export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) {
+   const [tab, setTab] = useState<RailTab>(initialTab);
+   const [centerRequest, setCenterRequest] = useState<CenterRequest | null>(null);
+   const [tradeKind, setTradeKind] = useState<TradeKind>("cash");
+@@ -309,4 +313,4 @@ export function RightRail({ ctx }: { ctx: RailContext }) {
+       ) : null}
+     </aside>
+   );
+-}
++});

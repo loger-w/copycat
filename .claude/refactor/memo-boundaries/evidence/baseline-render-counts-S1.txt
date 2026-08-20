@@ -1,0 +1,46 @@
+S1 baseline(第 1 拍)— 改動前的右欄 subtree 重繪次數
+====================================================
+時間      : 2026-08-20
+分支      : refactor/memo-boundaries(App.tsx / RightRail.tsx 皆未改)
+指令      : frontend/ 下 `npx vitest run src/App.memo.test.tsx`
+量法      : mock RightRail 內部葉子(PriceLadder / CapitalOrdersList)計次,
+            **保留真 RightRail 與真 memo**;前置 localStorage 讓 tab 落在
+            stock / index 分支;期貨腿推兩則連號 WS 訊息(各自一個 act,
+            = 真實 10 Hz 的兩則獨立推播)。
+
+原始輸出
+--------
+ RUN  v3.2.7 C:/side-project/copycat/frontend
+
+ ❯ src/App.memo.test.tsx (4 tests | 2 failed) 108ms
+   × App railCtx memo 邊界(S1) > 停在個股 tab 時,期貨推播不重畫右欄葉子(跨流串擾) 59ms
+     → expected 4 to be 2 // Object.is equality
+   ✓ App railCtx memo 邊界(S1) > book 訊息 → 右欄葉子拿到新的五檔(stockCtx deps 完整) 11ms
+   ✓ App railCtx memo 邊界(S1) > tick 訊息(seq 接續)→ 右欄葉子拿到新的成交(stockCtx deps 完整) 9ms
+   × App railCtx memo 邊界(S1) > 停在台股綜合 tab 時,期貨推播不重畫右欄葉子(NONE_CTX 恆定) 28ms
+     → expected 8 to be 4 // Object.is equality
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 2 passed (4)
+
+數字判讀
+--------
+1) 個股 tab(railCtx 走 stock 分支,葉子 = PriceLadder)
+   掛載後計次 = 2 → 推 2 則期貨訊息後 = 4
+   **每一則期貨 tick 都重畫一次右欄閃電梯 subtree**(+2 / 2 tick = 1.0)。
+   期貨腿與個股腿完全無關 —— 這 2 次就是「跨流串擾」的全部。
+
+2) 台股綜合 tab(railCtx 走 kind:"none",葉子 = 委託 tab 的兩段 CapitalOrdersList)
+   掛載後計次 = 4(2 段清單 × 2 次 render)→ 推 2 則期貨訊息後 = 8
+   **每一則期貨 tick 重畫 2 個葉子**(+4 / 2 tick = 每 tick 整棵 rail subtree 一次)。
+   停在指數 / TXO / 相關係數頁時右欄內容恆定(`{kind:"none"}`),重繪 100% 是浪費。
+
+3) 內容面(book / tick)在改動前**已綠** —— 這兩條不是量測,是 deps 完整性的守門:
+   memo 加上去之後若 stockCtx 漏了 `accum`,右欄會掛著舊五檔 / 舊成交價(真錢面板),
+   而畫面與其他測試都不會有任何訊號。
+
+預期(第 2 拍後)
+----------------
+(1) 2 → 2(+0)、(2) 4 → 4(+0);(3) 兩條維持綠。
+殘留(plan R13):期貨 tab 的 rail 仍隨 futProd 每 tick 重繪、個股 tab 的 rail 仍隨
+accum 每 tick 重繪 —— 那是正確行為,不在本步的可量化改進內。

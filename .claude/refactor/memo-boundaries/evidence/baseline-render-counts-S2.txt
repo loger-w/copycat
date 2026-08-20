@@ -1,0 +1,53 @@
+S2 baseline(第 1 拍)— 改動前的 OverlayCard 疊圖幾何重算次數
+==============================================================
+時間      : 2026-08-20
+分支      : refactor/memo-boundaries(MarketPane.tsx 未改;HEAD = bff966e4 = S3 第 3 拍)
+指令      : frontend/ 下 `npx vitest run src/components/index/MarketPane.memo.test.tsx`
+量法      : importOriginal partial mock `@/lib/index-chart-svg`,只包 `buildOverlayGeometry`
+            計次,其餘 export(X_START_MIN / X_END_MIN / buildIndexGeometry /
+            rightEdgeLabels …)保留真身(plan R11)—— 漏了 X_START_MIN 這對常數,
+            MarketPane 自己的 `toX` 立刻 NaN,量到的就不是 memo 而是壞掉的圖。
+            探針就是待測邊界本身(useMemo 要包的那支呼叫),不像 S3 有「探針被 useMemo
+            擋住 → mutation 量不到」的問題。
+
+**toggle 狀態(plan R10 收益條件性)**
+------------------------------------
+`OverlayCard` 只在「重疊」toggle 開啟時 render,**產品預設是關**
+(`INDEX_OVERLAY_STORE` 無值 → overlay=false)。本檔兩個案例都在 render 後
+`fireEvent.click(btn("重疊"))` **強制開啟**(沿 MarketPane.test.tsx:379 既有操作慣例),
+localStorage 於 beforeEach 清空 = 不繼承任何使用者存檔。
+→ 使用者日常不開重疊時,本步實際收益 = 0;收尾對照須以此解讀。
+
+原始輸出
+--------
+ RUN  v3.2.7 C:/side-project/copycat/frontend
+
+ ❯ src/components/index/MarketPane.memo.test.tsx (2 tests | 1 failed) 101ms
+   × OverlayCard 疊圖幾何 memo 邊界計次(S2;重疊 toggle = 開) > 期貨 tick 連推三則(加權/櫃買一個分鐘點沒動)→ 疊圖幾何零重算 82ms
+     → expected 3 to be +0 // Object.is equality
+   ✓ OverlayCard 疊圖幾何 memo 邊界計次(S2;重疊 toggle = 開) > 加權真的多出一個分鐘點 → 幾何重算,恰一次(memo 不可鎖死成 deps=[])
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+
+數字判讀
+--------
+1) 無關 rerender(期貨 tick)
+   三則相異期貨現價的 rerender(twse / otc 兩個 series 全程同參照)
+   → `buildOverlayGeometry` +3,**1.0 次 / 事件**。
+   `MarketPane` 在加權態根本不讀 `futures`(`futState` 恆 null),這三次重算是
+   App 層重繪整棵樹帶下來的純串擾。prod 的期貨流是 coalesce 0.1s = 10 Hz,
+   重疊開著整天掛機 = 每秒 10 次兩條全窗 series 的 pct → x/y 換算。
+   (同 render 內 `size` 物件也每次現建,拿它當 dep 等於沒 memo —— 所以本案
+   同時擋住「deps 用 size」這個失效樣態。)
+
+2) 真變更(加權多一個分鐘點)
+   +1,已是最小值 → 本案第 1 拍即綠,角色是**反向守門**:
+   防止第 2 拍把 deps 寫成 `[]`(疊線凍住、值不再更新,畫面照畫)。
+
+預期(第 2 拍後)
+----------------
+(1) +3 → +0;(2) +1 不變。
+邊界外(不在本步收斂範圍):指數流每則推播都會換 `minutes` 物件 identity
+(`useIndexStream` L61 `{...prev.minutes}`)→ 指數自己的 ~1 s 推播照樣重算幾何,
+這是正確行為不是 memo 失效。本步擋的是「非指數流」的跨流串擾。

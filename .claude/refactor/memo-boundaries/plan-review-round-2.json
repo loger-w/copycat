@@ -1,0 +1,12 @@
+{
+  "round": 2,
+  "mode": "限縮(只審 round-1 修復觸及段落)",
+  "reviewer": "refactor-plan-reviewer (opus)",
+  "findings": [
+    { "id": "R14", "severity": "P1", "claim": "mock RightRail 本體會把要測的 memo 一起換掉(stub 無 memo 恆紅 / 有 memo 守門為空)", "resolution": "accepted — 改 mock 內部葉子(PriceLadder 等)保留真 RightRail 與真 memo(plan 改版)" },
+    { "id": "R15", "severity": "P2", "claim": "futures-only 案未指定 tab,落在 NONE_CTX 分支時零訊號綠", "resolution": "accepted — 前置 localStorage tab=stock + main code;另補 NONE_CTX 專案" },
+    { "id": "R16", "severity": "P2", "claim": "單一則更新不可能同時動 book/last/meta(engine 三種訊息型別);tick seq-gap 會觸發 refetch 汙染計次", "resolution": "accepted — 案例拆 book/tick/meta 三案 + seq 接續要求" },
+    { "id": "R17", "severity": "P2", "claim": "hover characterization 在 jsdom 因 getBoundingClientRect 恆 0 早退而必紅", "resolution": "accepted — plan 明列 spy 先例三處" }
+  ],
+  "exit": "無 P0;P1 修入 plan → 退出 review,進實作(S1→S3→S2)"
+}

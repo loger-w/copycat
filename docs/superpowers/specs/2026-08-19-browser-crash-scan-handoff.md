@@ -83,7 +83,13 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
   例外傳播 502 有 lock 測試)。artifact `.claude/mod/signals-today-offload/`。
 - 原記載:`app.py:1285` async route 內同步讀整份當日 jsonl → 8 條 WS 一起卡;改 `asyncio.to_thread` 或 aiofiles。
 
-### R6(前端效能清理,可選)`/refactor 閃電梯 / 江波圖 / MarketPane memo 邊界`
+### R6(前端效能清理,可選)`/refactor 閃電梯 / 江波圖 / MarketPane memo 邊界` — **已出貨(08-20,branch refactor/memo-boundaries)**
+- 出貨:App railCtx 雙 useMemo + memo(RightRail)(跨流串擾歸零:停個股/綜合 tab 時期貨
+  10Hz 不再重繪 rail subtree);江波圖 order/entries/幾何 useMemo + memo(RiverCard)
+  (hover 幾何重算歸零、單腿 tick 只重繪該卡);OverlayCard 疊圖幾何 useMemo(重疊開啟時
+  擋 futures 串擾)。PriceLadder/LadderView 本層維持原註解決策(邊界在上游);
+  GroupGridView 節點縮減記 next-time。artifact `.claude/refactor/memo-boundaries/`。
+- 原記載:
 - `LadderView` / `PriceLadder` / `RightRail` 無 memo(App.tsx:146-150 註解自承);`RiverCards.tsx:28` /
   `RiverOverlay.tsx:39` / `MarketPane.tsx:136` 幾何未 useMemo;`GroupGridView` 50 卡 ×(分時+271 量柱)≈ 2.5 萬 SVG 節點。
 - 純效能,行為不變 → /refactor;先量再改(React Profiler)。

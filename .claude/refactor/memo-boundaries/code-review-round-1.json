@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "lenses": ["behavior-preservation(deps 完整性 / stale / mutate 盤查)", "lock-test-robustness"],
+  "model": "opus",
+  "diff": "review-diff.txt(master..9497ac44,S1+S3+S2 七 commits)",
+  "behavior_preservation": "PASS — 三步 deps 逐項對照完整;四條上游 hook + applyTick 全 immutable;readout 正確留 memo 外;無 stale 幀",
+  "findings": [
+    { "id": "F1/R2", "severity": "P1", "claim": "futuresCtx deps 零守門(全 repo 無 futures tab 右欄內容測試),漏 futProd = 期貨梯永久凍結零訊號", "resolution": "accepted — 補 futures tab 葉子內容案 + 反向串擾案;mutant 去 futProd 紅(fix 72d144ef)" },
+    { "id": "F2", "severity": "P1", "claim": "futStateCalls 自檢證不了 delivery(type 早退與 handler 未掛都是 1)", "resolution": "accepted — 加故意跳號訊息斷言 refetch 1→2 + 註解改實證內容(fix 72d144ef)" },
+    { "id": "F3", "severity": "P1", "claim": "entries 的 legs dep 無反向 lock(deps 掉 legs = 重疊圖永久凍結,全套綠)", "resolution": "accepted — overlay 模式 withTick rerender 案,幾何恰 +1;mutant 紅(fix 72d144ef)" },
+    { "id": "F7/R1", "severity": "P2", "claim": "meta/換股型案例缺席;stockCode/stkfutContract dep 無守門(換股經 setAccum(null) 自癒落測試盲區)", "resolution": "accepted(fix 偏離記載)— 換股案在 accum 撞開 memo 下抓不到 mutant,改「雙檔 404、accum 恆 null」場景;mutant 去 stockCode 紅 expected '9101' to be '9102'(fix 72d144ef)" },
+    { "id": "F6/R3", "severity": "P2", "claim": "OverlayCard 兩份 size 字面量會漂移(寬度變數化時線與軸錯位)", "resolution": "accepted — size 包 useMemo([height]) 單一來源,幾何 deps 改吃 size(fix fa53c357,🔵)" },
+    { "id": "F4", "severity": "P2", "claim": "App.memo 全量 mock 吃掉 TRADE_KINDS / isFutMarket re-export", "resolution": "accepted — 改 importOriginal partial mock(fix 72d144ef)" },
+    { "id": "F5", "severity": "P2", "claim": "hover 只鎖幾何,render body(timeTicks/polyline 重組)仍每 mousemove 重跑,真 trace 會誤讀", "resolution": "accepted — hover 案補 ticks +3 成本 characterization + 殘留記 verification;polyline 收斂留 next-time(fix 72d144ef)" },
+    { "id": "F8", "severity": "P2", "claim": "river 測試 fixture 兩檔逐字複製會漂移", "resolution": "accepted — 抽 river-test-fixtures.ts 共檔(fix 72d144ef)" },
+    { "id": "R4", "severity": "P2", "claim": "CapitalOrdersList mock 計數器依賴 TXO snapshot 恆 null 的 fixture 前提,補端點會假紅", "resolution": "accepted — 檔頭註記前提(fix 72d144ef)" }
+  ],
+  "p2_summary": "P2 合併去重 6 條全 accepted 修畢(雙 lens 重疊三組:F1/R2、F6/R3、F7/R1)",
+  "fix_wave": { "commits": ["fa53c357(🔵 size 單一來源)", "72d144ef(🟢 lock 補齊)"], "gate": "2340 passed / tsc / eslint / react-doctor 全綠", "mutants": "futProd 去除紅 / entries 去 legs 紅 / stockCode 去除紅 / 拔 memo(RightRail) 三案紅" },
+  "exit": "P0 無;P1×3 修畢;增量(fix 波)= accepted findings 實作,main agent 機械快篩通過,不重跑全量"
+}
