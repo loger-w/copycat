@@ -115,7 +115,7 @@ const DK_BODY = {
   },
 };
 
-function renderCandle(height: number | undefined) {
+function renderCandle(candleBox: { width: number; height: number } | undefined) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   });
@@ -128,7 +128,7 @@ function renderCandle(height: number | undefined) {
         series={null}
         toggles={toggles()}
         onToggle={() => undefined}
-        height={height}
+        candleBox={candleBox}
       />
     </QueryClientProvider>,
   );
@@ -463,7 +463,7 @@ describe("MarketChart 空態", () => {
 
 // `intradayBox` 的單位是 **px(1:1)**,不是 viewBox 單位 —— caller(MarketPane)已經扣掉
 // figure / readout 列的 chrome。本檔只驗「拿到什麼就照畫」,px 那段的算術由
-// MarketPane.size.test.tsx 鎖。`height` 則維持 candle 專用(intraday 不讀)。
+// MarketPane.size.test.tsx 鎖。`candleBox` 同型同單位,是 K 線態專用(intraday 不讀)。
 describe("MarketChart intradayBox prop(SC-7)", () => {
   function intradaySvg(container: HTMLElement): Element {
     return container.querySelector('svg[role="img"]')!;
@@ -480,7 +480,7 @@ describe("MarketChart intradayBox prop(SC-7)", () => {
     expect(intradaySvg(noBox.container).getAttribute("viewBox")).toBe("0 0 800 260");
   });
 
-  // WL-2:`PANE_FRAMES.candle` 的 chromeY 把 meta 列算成 20px(text-xs 16 + mt-1 4),
+  // WL-2:`pane-frame.ts::CANDLE_CHROME_Y` 把 meta 列算成 20px(text-xs 16 + mt-1 4),
   // 而它原本沒有高度限制 —— 窄 pane(1536 兩欄態 312px)下最長的來源字串超過 400px 會
   // 折成兩行,chromeY 少算 16 → svg 溢出 figure。折不折得掉由這一列自己保證。
   it("candle:meta 列固定一行(h-4 + truncate),chromeY 才算得準", async () => {
@@ -491,11 +491,11 @@ describe("MarketChart intradayBox prop(SC-7)", () => {
     expect(meta.className).toContain("truncate");
   });
 
-  it("candle:height 透傳 CandleChart(未傳 → CandleChart 自有 578)", async () => {
+  it("candle:candleBox 透傳 CandleChart 走 1:1(未傳 → CandleChart 自有 1400×578)", async () => {
     stub(DK_BODY);
-    const withH = renderCandle(300);
+    const withH = renderCandle({ width: 430, height: 300 });
     const figure = await screen.findByTestId("candle-figure");
-    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 300");
+    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 430 300");
     withH.unmount();
     cleanup();
     renderCandle(undefined);

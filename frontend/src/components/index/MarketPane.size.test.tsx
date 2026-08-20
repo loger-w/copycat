@@ -20,7 +20,14 @@ import {
   MARKET_KEY_STORE,
   MARKET_MODE_STORE,
 } from "@/lib/constants";
-import { PANE_FRAMES, paneIntradayBox, paneSvgHeight } from "@/lib/pane-frame";
+import {
+  CANDLE_CHROME_Y,
+  CANDLE_INSET_X,
+  PANE_FRAMES,
+  paneCandleBox,
+  paneIntradayBox,
+  paneSvgHeight,
+} from "@/lib/pane-frame";
 
 const TWSE: IndexSeries = {
   p: 42_039_920,
@@ -135,7 +142,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("paneSvgHeight 兩態算式(§4.1)", () => {
+/** K 線態 2026-08-21 起也退出 `PANE_FRAMES`(改 1:1,見下一個 describe)——
+ *  這張表與這支反解只剩 `OverlayCard` 一個讀者。 */
+describe("paneSvgHeight(overlay 唯一讀者;§4.1)", () => {
   const size = { width: 430, height: 300 };
 
   it("overlay:巢狀 figure 再吃 62 高 34 寬", () => {
@@ -143,22 +152,43 @@ describe("paneSvgHeight 兩態算式(§4.1)", () => {
     expect(paneSvgHeight(size, PANE_FRAMES.overlay)).toBe(381);
   });
 
-  it("candle:vbW 是 CandleChart 的 1400,不是 640", () => {
-    // svgW = 396;renderPx = max(96, floor(300 − 100) − 2) = 198;198 × 1400 / 396
-    expect(paneSvgHeight(size, PANE_FRAMES.candle)).toBe(700);
-  });
-
   it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
     // svgW = 396;renderPx 夾到 96 → 96 × 640 / 396
     expect(paneSvgHeight({ width: 430, height: 30 }, PANE_FRAMES.overlay)).toBe(155);
-    expect(paneSvgHeight({ width: 430, height: 10 }, PANE_FRAMES.candle)).toBe(339);
   });
 
   it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → undefined(呼叫端走各自 fallback)", () => {
     expect(paneSvgHeight({ width: 0, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
     expect(paneSvgHeight({ width: 430, height: 0 }, PANE_FRAMES.overlay)).toBeUndefined();
     expect(paneSvgHeight({ width: 30, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
-    expect(paneSvgHeight({ width: 34, height: 300 }, PANE_FRAMES.candle)).toBeUndefined();
+  });
+});
+
+/** K 線態改 1:1(2026-08-21;同 2026-08-17 分時態的理由):字級補償補得了 7 處
+ *  fontSize,補不了 `PRICE_TAG` / `TIME_TAG` / `X_LABEL_H` 這些 viewBox 單位的排版
+ *  常數 —— 縮放比 0.2 下 hover 價位框只有 11×3px,字放大後必撞。
+ *
+ *  **常數一律 import 不硬寫**:`CANDLE_CHROME_Y` 的 80 + 20 拆解是 W-4 契約的出處
+ *  (`MarketChart` 的 meta 列 `h-4`),測試裡寫死 100 會讓契約漂掉時這裡照樣綠。 */
+describe("paneCandleBox 算式(1:1)", () => {
+  it("量得到:寬 = round(量到的寬 − insetX)、高 = max(96, floor(高 − chromeY) − 2)", () => {
+    expect(paneCandleBox({ width: 430, height: 300 })).toEqual({
+      width: 430 - CANDLE_INSET_X,
+      height: Math.max(96, Math.floor(300 - CANDLE_CHROME_Y) - 2),
+      usable: true,
+    });
+  });
+
+  it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
+    expect(paneCandleBox({ width: 430, height: 30 }).height).toBe(96);
+  });
+
+  it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → usable false(呼叫端傳 undefined)", () => {
+    expect(paneCandleBox({ width: 0, height: 300 }).usable).toBe(false);
+    expect(paneCandleBox({ width: 430, height: 0 }).usable).toBe(false);
+    // 邊界:寬恰等於 insetX → svgW = 0(edge 2);再窄一格同樣不得傳 0 / 負寬
+    expect(paneCandleBox({ width: CANDLE_INSET_X, height: 300 }).usable).toBe(false);
+    expect(paneCandleBox({ width: CANDLE_INSET_X - 4, height: 300 }).usable).toBe(false);
   });
 });
 
@@ -202,11 +232,11 @@ describe("MarketPane 量測 → 圖高(SC-4)", () => {
   });
 });
 
-/** 🔒 lock(review TD-7):**選對 frame** 這件事原本零測試 —— 三態的 chrome 差 30-70px,
+/** 🔒 lock(review TD-7):**選對換算** 這件事原本零測試 —— 三態的 chrome 差 30-70px,
  *  選錯的症狀是圖比容器高一點點、於是主 grid 長出一條誰也解釋不了的捲軸,而算式本身
- *  (`paneSvgHeight` 三態)照樣全綠。這兩支走整條真鏈:localStorage 預設 → 模式判別 →
- *  frame → 下傳 → 各自的 svg viewBox。 */
-describe("MarketPane 依模式選 frame(TD-7)", () => {
+ *  (`paneSvgHeight` / `paneCandleBox` / `paneIntradayBox` 各自)照樣全綠。這幾支走整條
+ *  真鏈:localStorage 預設 → 模式判別 → 換算 → 下傳 → 各自的 svg viewBox。 */
+describe("MarketPane 依模式選換算(TD-7)", () => {
   const SIZE = { width: 430, height: 300 };
 
   it("重疊態 → 用 overlay frame(巢狀 figure 再吃 62 高 34 寬)", () => {
@@ -220,7 +250,7 @@ describe("MarketPane 依模式選 frame(TD-7)", () => {
     expect(svg.getAttribute("viewBox")).toBe(`0 0 640 ${expected}`);
   });
 
-  it("K 線態 → 用 candle frame,且 viewBox 寬是 CandleChart 的 1400", async () => {
+  it("K 線態 → 1:1 candleBox(viewBox 寬 = 量到的 svg 寬,不再是 1400)", async () => {
     window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
     window.localStorage.setItem(MARKET_MODE_STORE, "day");
     vi.stubGlobal(
@@ -231,9 +261,29 @@ describe("MarketPane 依模式選 frame(TD-7)", () => {
     renderPane();
 
     const figure = await screen.findByTestId("candle-figure");
-    const expected = paneSvgHeight(SIZE, PANE_FRAMES.candle);
-    expect(expected).toBeDefined();
-    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe(`0 0 1400 ${expected}`);
+    const box = paneCandleBox(SIZE);
+    expect(box.usable).toBe(true);
+    // 寬也是變數(1:1)—— 只比高會漏掉「寬沒跟著量測走」這個失效樣態,而那正是
+    // 字級被縮成 3px 的成因(同 intradayViewBox 的理由)
+    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe(
+      `0 0 ${box.width} ${box.height}`,
+    );
+  });
+
+  // W-3:量不到就**不傳**,讓 CandleChart 走它自己的 1400×578 —— 傳一組 0 的話 svg
+  // 不報錯、純粹畫不出來(同分時態退回 core 預設的精神)。
+  it("無 ResizeObserver(jsdom 預設)→ K 線退回 CandleChart 自有的 1400×578(W-3)", async () => {
+    window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
+    window.localStorage.setItem(MARKET_MODE_STORE, "day");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(DK_BODY))),
+    );
+    expect(typeof ResizeObserver).toBe("undefined");
+    renderPane();
+
+    const figure = await screen.findByTestId("candle-figure");
+    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 578");
   });
 });
 
