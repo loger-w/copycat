@@ -14,6 +14,7 @@ Protocol,fake 複製一份就會在下次 Protocol 加方法時漂移成兩份�
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 import threading
@@ -430,6 +431,27 @@ class TestSignalsTodayRoute:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
+
+    def test_reads_jsonl_off_event_loop(self, tmp_path: Path) -> None:
+        """handoff R5:同步讀整份 jsonl 會卡住 event loop(8 條 WS 推播/心跳一起頓),
+        且前端每次 WS 重連自癒都打這條,恰在連線抖動時雪上加霜 —— route 必須把
+        讀取丟到 worker thread。probe:to_thread 內 `asyncio.get_running_loop()` 必 raise。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            hub = app.state.signal_hub
+            probe: dict[str, bool] = {}
+
+            def _probing_today() -> list[dict]:
+                try:
+                    asyncio.get_running_loop()
+                    probe["in_event_loop"] = True
+                except RuntimeError:
+                    probe["in_event_loop"] = False
+                return []
+
+            hub.today_signals = _probing_today  # type: ignore[method-assign]
+            assert client.get("/api/stock/signals/today").json() == {"signals": []}
+        assert probe["in_event_loop"] is False
 
     def test_legacy_market_query_param_is_ignored(self, tmp_path: Path) -> None:
         """舊 bundle 打 `?market=exclude` 照樣 200 且結果與裸 URL 全等(spec §3)。
