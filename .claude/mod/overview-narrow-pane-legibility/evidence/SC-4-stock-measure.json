@@ -1,0 +1,168 @@
+{
+ "viewport": [
+  2560,
+  1440
+ ],
+ "rootFont": "16px",
+ "panes": [
+  {
+   "id": "market-pane-left",
+   "width": 0,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 0,
+    "gap": "4px",
+    "btnPadL": "8px",
+    "btnH": 0
+   },
+   "candle": {
+    "viewBox": "0 0 1400 578",
+    "clientW": 0,
+    "clientH": 0,
+    "yTicks": [
+     {
+      "t": "44295",
+      "fontSize": "10px",
+      "rect": {
+       "x": 0,
+       "y": 0,
+       "w": 0,
+       "h": 0
+      }
+     },
+     {
+      "t": "44795",
+      "fontSize": "10px",
+      "rect": {
+       "x": 0,
+       "y": 0,
+       "w": 0,
+       "h": 0
+      }
+     },
+     {
+      "t": "45290",
+      "fontSize": "10px",
+      "rect": {
+       "x": 0,
+       "y": 0,
+       "w": 0,
+       "h": 0
+      }
+     },
+     {
+      "t": "45790",
+      "fontSize": "10px",
+      "rect": {
+       "x": 0,
+       "y": 0,
+       "w": 0,
+       "h": 0
+      }
+     },
+     {
+      "t": "46290",
+      "fontSize": "10px",
+      "rect": {
+       "x": 0,
+       "y": 0,
+       "w": 0,
+       "h": 0
+      }
+     }
+    ],
+    "yTickOverlap": false,
+    "textCount": 13,
+    "bars": 240,
+    "barW": 0
+   }
+  },
+  {
+   "id": "market-pane-right",
+   "width": 0,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 0,
+    "gap": "4px",
+    "btnPadL": "8px",
+    "btnH": 0
+   },
+   "intraday": {
+    "viewBox": "0 0 800 260",
+    "fontSize": "9px"
+   }
+  }
+ ],
+ "allCandles": [
+  {
+   "viewBox": "0 0 1400 766",
+   "clientW": 1710,
+   "clientH": 936,
+   "fontSize": "10px",
+   "bars": 120
+  },
+  {
+   "viewBox": "0 0 1400 578",
+   "clientW": 0,
+   "clientH": 0,
+   "fontSize": "10px",
+   "bars": 240
+  }
+ ],
+ "limitList": {
+  "rootW": 0,
+  "container": "inline-size",
+  "scrollW": 0,
+  "clientW": 0,
+  "ok": true,
+  "th": [
+   {
+    "t": "代號",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "名稱",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "市場",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "現價",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "漲跌幅",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "連板",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "金額(億)",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "量比",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "狀態",
+    "display": "table-cell",
+    "padL": "8px"
+   }
+  ],
+  "tdPadL": "8px",
+  "rows": 48
+ }
+}

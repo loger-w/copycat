@@ -1,0 +1,843 @@
+diff --git a/frontend/src/components/index/LimitListSection.test.tsx b/frontend/src/components/index/LimitListSection.test.tsx
+index 74cdc6ae..82e98914 100644
+--- a/frontend/src/components/index/LimitListSection.test.tsx
++++ b/frontend/src/components/index/LimitListSection.test.tsx
+@@ -534,3 +534,57 @@ describe("LimitListSection 內捲容器與 sticky 表頭(§4.1)", () => {
+     expect(screen.getByTestId("limit-name-1101").className).toContain("whitespace-nowrap");
+   });
+ });
++
++// 🔴 SC-2:1536 兩欄態的右欄捲動容器只有 431px,而九欄表 scrollWidth 612px → 恆有
++// 水平捲軸,金額 / 量比 / 狀態尾段全藏在捲軸後面。實測基準 612:只藏兩欄(省 ~140)
++// → 472 仍捲;只收 padding(9 cell × 8 = 72)→ 540 仍捲;**兩者併用** → ~416 < 431。
++//
++// 門檻用 **rem 不用 px**:表格內容是 rem 字級,「塞不塞得下」隨 root font-size 縮放
++// (≥1920 112.5% / ≥2560 125%)—— 41rem = 656@100% / 738@112.5% / 820@125%。
++// 右欄寬模型:1536 → 470(降級)/ 1920 → 605(降級,本就塞不下)/ 2560 → 844(九欄)。
++//
++// **jsdom 不套 CSS** → 這裡只鎖 class 字串(九欄 DOM 恆在,既有的「表頭九欄文字與
++// 順序」不該紅);實際 display:none 與 scrollWidth ≤ clientWidth 由 SC-2 真環境量測把關。
++describe("LimitListSection 窄右欄降級(SC-2)", () => {
++  it("root 自掛 @container(門檻要量右欄寬,不是頁 root 寬)", async () => {
++    await openWith(mkState(ROWS));
++    // 右欄框不是 container(它的 @[1050px] 刻意量頁 root)→ 不自掛的話這裡量到的
++    // 也是頁 root 寬,1536 全螢幕永遠 > 41rem,降級永不發生
++    expect(screen.getByTestId("limit-list").className).toContain("@container");
++  });
++
++  it("窄容器藏 金額(億) / 量比 兩欄(th + td),其餘七欄不藏", async () => {
++    await openWith(mkState(ROWS));
++    const hidden = "@max-[41rem]:hidden";
++    const th = (name: string) => screen.getByRole("columnheader", { name });
++
++    // 藏這兩欄的理由:兩者都仍可由篩選列的門檻輸入控制,資訊沒有消失(W-5)
++    expect(th("金額(億)").className).toContain(hidden);
++    expect(th("量比").className).toContain(hidden);
++    expect(screen.getByTestId("limit-amount-1101").className).toContain(hidden);
++    expect(screen.getByTestId("limit-ratio-1101").className).toContain(hidden);
++
++    // 其餘七欄一律不藏 —— 少一條這種反向斷言,「順手多藏一欄」不會被任何測試擋下
++    for (const name of ["代號", "名稱", "市場", "現價", "漲跌幅", "連板", "狀態"]) {
++      expect(th(name).className).not.toContain(hidden);
++    }
++    for (const id of ["limit-name-1101", "limit-market-1101", "limit-close-1101"]) {
++      expect(screen.getByTestId(id).className).not.toContain(hidden);
++    }
++    expect(screen.getByTestId("limit-change-1101").className).not.toContain(hidden);
++    expect(screen.getByTestId("limit-streak-1101").className).not.toContain(hidden);
++  });
++
++  it("cell 左右 padding:窄容器 px-1,寬容器仍是既有 px-2", async () => {
++    await openWith(mkState(ROWS));
++    const narrow = "@max-[41rem]:px-1";
++    const th = screen.getByRole("columnheader", { name: "代號" });
++    expect(th.className).toContain(narrow);
++    // twMerge 不判成衝突(不同 variant);被吃掉的話寬右欄的 padding 也跟著變
++    expect(th.className).toContain("px-2");
++
++    const td = screen.getByTestId("limit-name-1101");
++    expect(td.className).toContain(narrow);
++    expect(td.className).toContain("px-2");
++  });
++});
+diff --git a/frontend/src/components/index/LimitListSection.tsx b/frontend/src/components/index/LimitListSection.tsx
+index 04b5f2c8..aa77dfaa 100644
+--- a/frontend/src/components/index/LimitListSection.tsx
++++ b/frontend/src/components/index/LimitListSection.tsx
+@@ -41,6 +41,23 @@ const STATUS_TONE: Record<RowStatus, string> = {
+ 
+ const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpex: "上櫃" };
+ 
++/** 資料格與表頭共用的左右 padding。**窄右欄收成 `px-1`**(9 個 cell 各省 8px = 72px)。
++ *
++ *  門檻用 **rem 不用 px**:表格內容是 rem 字級,「塞不塞得下」隨 root font-size 縮放
++ *  (≥1920 → 112.5%、≥2560 → 125%)—— 41rem = 656@100% / 738@112.5% / 820@125%。
++ *  這與 `frontend-conventions` 那條「container query 門檻用 px 任意值」的案例**方向相反**:
++ *  那裡量的是固定 px 的面板寬,這裡量的是「rem 內容塞不塞得下 rem 門檻」。 */
++const CELL_X = "px-2 @max-[41rem]:px-1";
++
++/** 窄右欄下不顯示的欄位(金額(億) / 量比)。`hidden` = `display:none`,對 table-cell
++ *  合法且 th / td 必須成對掛,只掛一邊會讓整張表錯欄。
++ *
++ *  **為什麼藏這兩欄**:1536 兩欄態的捲動容器只有 431px 而九欄表 scrollWidth 612px,
++ *  恆有水平捲軸把狀態徽章推到看不見的地方。只收 padding(→540)或只藏兩欄(→472)
++ *  都還是捲,兩者併用才 ~416 < 431。挑中這兩欄是因為它們的**資料與篩選邏輯照舊**
++ *  (篩選列的「金額(億)」門檻仍在,量比只是輔助排序線索),藏的只是顯示(W-5)。 */
++const NARROW_HIDDEN = "@max-[41rem]:hidden";
++
+ /** 表頭儲存格的共用 class(對齊方向逐欄另加)。列表整高內捲後表頭必須黏住,否則
+  *  捲兩列就只剩九欄無名數字。
+  *
+@@ -50,8 +67,7 @@ const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpe
+  *  box-shadow 畫在 th 自己的 box 上,黏到哪畫到哪;`var(--color-line)` 直接取同一顆
+  *  token(Tailwind 任意值語法不吃 `theme()` 之外的別名)。
+  *  `whitespace-nowrap`:窄右欄(1536 兩欄態 475px)下「金額(億)」會折行把表頭撐高。 */
+-const TH =
+-  "sticky top-0 z-10 whitespace-nowrap bg-surface px-2 py-1 font-normal shadow-[inset_0_-1px_0_var(--color-line)]";
++const TH = `sticky top-0 z-10 whitespace-nowrap bg-surface ${CELL_X} py-1 font-normal shadow-[inset_0_-1px_0_var(--color-line)]`;
+ 
+ /** 一列的唯一狀態;三者皆無 → null(該列不入表)。
+  *
+@@ -444,8 +460,8 @@ function LimitListBody({
+                 <th className={cn(TH, "text-right")}>現價</th>
+                 <th className={cn(TH, "text-right")}>漲跌幅</th>
+                 <th className={cn(TH, "text-right")}>連板</th>
+-                <th className={cn(TH, "text-right")}>金額(億)</th>
+-                <th className={cn(TH, "text-right")}>量比</th>
++                <th className={cn(TH, "text-right", NARROW_HIDDEN)}>金額(億)</th>
++                <th className={cn(TH, "text-right", NARROW_HIDDEN)}>量比</th>
+                 <th className={cn(TH, "text-left")}>狀態</th>
+               </tr>
+             </thead>
+@@ -457,32 +473,33 @@ function LimitListBody({
+                   onClick={() => onOpenStock?.(row.stock_id)}
+                   className="cursor-pointer border-b border-line/50 hover:bg-bg-deep"
+                 >
+-                  <td className="px-2 py-1 font-mono text-ink">{row.stock_id}</td>
++                  <td className={cn(CELL_X, "py-1 font-mono text-ink")}>{row.stock_id}</td>
+                   {/* 名稱與連板兩欄 nowrap:四字檔名(台聯電 / 長榮航太)與「連 4 板」
+                       在右欄寬度下會折成兩行,列高從 24 撐到 40px —— 折的是「一屏看得到
+                       幾檔」。其餘欄位是數字或兩字標籤,折不了也就不掛。 */}
+                   <td
+                     data-testid={`limit-name-${row.stock_id}`}
+-                    className="px-2 py-1 whitespace-nowrap text-ink"
++                    className={cn(CELL_X, "py-1 whitespace-nowrap text-ink")}
+                   >
+                     {row.name}
+                   </td>
+                   <td
+                     data-testid={`limit-market-${row.stock_id}`}
+-                    className="px-2 py-1 text-ink-muted"
++                    className={cn(CELL_X, "py-1 text-ink-muted")}
+                   >
+                     {MARKET_LABEL[row.market]}
+                   </td>
+                   <td
+                     data-testid={`limit-close-${row.stock_id}`}
+-                    className="px-2 py-1 text-right font-mono tabular-nums text-ink"
++                    className={cn(CELL_X, "py-1 text-right font-mono tabular-nums text-ink")}
+                   >
+                     {decimalText(row.close)}
+                   </td>
+                   <td
+                     data-testid={`limit-change-${row.stock_id}`}
+                     className={cn(
+-                      "px-2 py-1 text-right font-mono tabular-nums",
++                      CELL_X,
++                      "py-1 text-right font-mono tabular-nums",
+                       changeTone(row.change_rate),
+                     )}
+                   >
+@@ -490,23 +507,33 @@ function LimitListBody({
+                   </td>
+                   <td
+                     data-testid={`limit-streak-${row.stock_id}`}
+-                    className="px-2 py-1 text-right whitespace-nowrap text-ink"
++                    className={cn(CELL_X, "py-1 text-right whitespace-nowrap text-ink")}
+                   >
+                     {streakText(row)}
+                   </td>
++                  {/* 金額 / 量比:窄右欄不顯示(th 同步藏,見 `NARROW_HIDDEN`)。
++                      資料與篩選邏輯不動 —— 兩者的門檻仍在篩選列上。 */}
+                   <td
+                     data-testid={`limit-amount-${row.stock_id}`}
+-                    className="px-2 py-1 text-right font-mono tabular-nums text-ink"
++                    className={cn(
++                      CELL_X,
++                      "py-1 text-right font-mono tabular-nums text-ink",
++                      NARROW_HIDDEN,
++                    )}
+                   >
+                     {amountText(row.total_amount)}
+                   </td>
+                   <td
+                     data-testid={`limit-ratio-${row.stock_id}`}
+-                    className="px-2 py-1 text-right font-mono tabular-nums text-ink-muted"
++                    className={cn(
++                      CELL_X,
++                      "py-1 text-right font-mono tabular-nums text-ink-muted",
++                      NARROW_HIDDEN,
++                    )}
+                   >
+                     {decimalText(row.volume_ratio)}
+                   </td>
+-                  <td className="px-2 py-1">
++                  <td className={cn(CELL_X, "py-1")}>
+                     <span
+                       data-testid={`limit-badge-${row.stock_id}`}
+                       // nowrap:窄欄下「觸及未鎖」會被拆成一字一行的直排
+@@ -545,7 +572,12 @@ export function LimitListSection({
+   active?: boolean;
+ }) {
+   return (
+-    <div data-testid="limit-list" className="flex min-h-0 flex-1 flex-col pt-2">
++    // `@container`:表格降級的 `@max-[41rem]:` 門檻要量的是**右欄自己的寬**。右欄框
++    // 刻意不是 container(它的 `@[1050px]` 量的是頁 root,單欄 / 兩欄的語意),所以
++    // 不自掛的話這裡量到的是頁 root 寬 → 1536 全螢幕永遠 > 41rem,降級永不發生。
++    // 副作用已查(D4):子樹無 absolute / fixed 定位子孫;唯一的 sticky th 其捲動祖先
++    // 是 `limit-list-scroll`(在新容器**之內**),不受 containing block 改變影響。
++    <div data-testid="limit-list" className="@container flex min-h-0 flex-1 flex-col pt-2">
+       <LimitListBody onOpenStock={onOpenStock} active={active} />
+     </div>
+   );
+diff --git a/frontend/src/components/index/MarketChart.test.tsx b/frontend/src/components/index/MarketChart.test.tsx
+index 3ee9525c..953a7374 100644
+--- a/frontend/src/components/index/MarketChart.test.tsx
++++ b/frontend/src/components/index/MarketChart.test.tsx
+@@ -115,7 +115,7 @@ const DK_BODY = {
+   },
+ };
+ 
+-function renderCandle(height: number | undefined) {
++function renderCandle(candleBox: { width: number; height: number } | undefined) {
+   const client = new QueryClient({
+     defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+   });
+@@ -128,7 +128,7 @@ function renderCandle(height: number | undefined) {
+         series={null}
+         toggles={toggles()}
+         onToggle={() => undefined}
+-        height={height}
++        candleBox={candleBox}
+       />
+     </QueryClientProvider>,
+   );
+@@ -463,7 +463,7 @@ describe("MarketChart 空態", () => {
+ 
+ // `intradayBox` 的單位是 **px(1:1)**,不是 viewBox 單位 —— caller(MarketPane)已經扣掉
+ // figure / readout 列的 chrome。本檔只驗「拿到什麼就照畫」,px 那段的算術由
+-// MarketPane.size.test.tsx 鎖。`height` 則維持 candle 專用(intraday 不讀)。
++// MarketPane.size.test.tsx 鎖。`candleBox` 同型同單位,是 K 線態專用(intraday 不讀)。
+ describe("MarketChart intradayBox prop(SC-7)", () => {
+   function intradaySvg(container: HTMLElement): Element {
+     return container.querySelector('svg[role="img"]')!;
+@@ -480,7 +480,7 @@ describe("MarketChart intradayBox prop(SC-7)", () => {
+     expect(intradaySvg(noBox.container).getAttribute("viewBox")).toBe("0 0 800 260");
+   });
+ 
+-  // WL-2:`PANE_FRAMES.candle` 的 chromeY 把 meta 列算成 20px(text-xs 16 + mt-1 4),
++  // WL-2:`pane-frame.ts::CANDLE_CHROME_Y` 把 meta 列算成 20px(text-xs 16 + mt-1 4),
+   // 而它原本沒有高度限制 —— 窄 pane(1536 兩欄態 312px)下最長的來源字串超過 400px 會
+   // 折成兩行,chromeY 少算 16 → svg 溢出 figure。折不折得掉由這一列自己保證。
+   it("candle:meta 列固定一行(h-4 + truncate),chromeY 才算得準", async () => {
+@@ -491,11 +491,11 @@ describe("MarketChart intradayBox prop(SC-7)", () => {
+     expect(meta.className).toContain("truncate");
+   });
+ 
+-  it("candle:height 透傳 CandleChart(未傳 → CandleChart 自有 578)", async () => {
++  it("candle:candleBox 透傳 CandleChart 走 1:1(未傳 → CandleChart 自有 1400×578)", async () => {
+     stub(DK_BODY);
+-    const withH = renderCandle(300);
++    const withH = renderCandle({ width: 430, height: 300 });
+     const figure = await screen.findByTestId("candle-figure");
+-    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 300");
++    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 430 300");
+     withH.unmount();
+     cleanup();
+     renderCandle(undefined);
+diff --git a/frontend/src/components/index/MarketChart.tsx b/frontend/src/components/index/MarketChart.tsx
+index 327b1fba..a7c91289 100644
+--- a/frontend/src/components/index/MarketChart.tsx
++++ b/frontend/src/components/index/MarketChart.tsx
+@@ -36,12 +36,14 @@ interface Props {
+   /** 使用者是否正看著本頁 tab(App 的 `tab === "index"`)。分 K 的背景輪詢要靠這道
+    *  gate 停(review round-2 XR-4);未給時預設 true。 */
+   active?: boolean;
+-  /** 圖高,單位是 **viewBox 單位**不是 px(§4.1 CS-1 口徑):caller(`MarketPane`)
+-   *  已經扣掉 figure / K 線頂列的 chrome,並用「viewBox 寬 ÷ 容器寬」把 px 反解成
+-   *  viewBox 單位。**K 線態專用,intraday 不讀**(分時走 1:1 的 `intradayBox`)——
+-   *  同一個 prop 不帶兩種單位。**刻意無預設值**:未給 → 直接透傳 undefined 讓
+-   *  `CandleChart` 用它自己的 578,在這裡給預設就等於替它決定了它的高。 */
+-  height?: number;
++  /** K 線圖的 viewBox 尺寸,單位是 **px(1:1)**,由 `paneCandleBox` 量出來。
++   *  **K 線態限定**;未給(jsdom / 量不到)→ 透傳 undefined 讓 `CandleChart` 用它自己的
++   *  1400×578(W-3),在這裡給預設就等於替它決定了它的尺寸。
++   *
++   *  **2026-08-21 由 `height`(viewBox 單位)改型而來**:同名異義(同一個 `height`
++   *  從 viewBox 單位變 px)比改名危險得多 —— 換算改了而型別沒變,圖照畫、只有比例
++   *  悄悄錯掉。與 `intradayBox` 同型同單位,兩態的語彙自此一致。 */
++  candleBox?: { width: number; height: number };
+   /** 分時圖的 viewBox 尺寸,單位是 **px(1:1)**,由 `paneIntradayBox` 量出來。
+    *  **分時態限定**;未給(jsdom / 量不到)→ core 走它自己的 800×260 預設。
+    *  1:1 之後 svg 的縮放比恆 1,字級與 pane 寬無關 —— 舊的 `unitScale` 補償隨自繪版
+@@ -58,7 +60,7 @@ export function MarketChart({
+   toggles,
+   onToggle,
+   active = true,
+-  height,
++  candleBox,
+   intradayBox,
+ }: Props) {
+   const { data, isPending, isError, error } = useMarketBars(marketKey, mode, active);
+@@ -146,9 +148,12 @@ export function MarketChart({
+         showBb={toggles.bb}
+         onToggleBb={(v) => onToggle("bb", v)}
+         showVolume={meta.volume}
+-        height={height}
++        // 1:1:寬高皆為量到的 px,縮放比恆 1 → 字級與排版常數就是它們字面的大小。
++        // 兩個一起給或一起不給(`paneCandleBox` 一次算兩個),只給一邊會退回等比縮放。
++        width={candleBox?.width}
++        height={candleBox?.height}
+       />
+-      {/* `h-4 truncate` 是**契約不是裝飾**:`PANE_FRAMES.candle` 的 chromeY 把這一列
++      {/* `h-4 truncate` 是**契約不是裝飾**:`pane-frame.ts::CANDLE_CHROME_Y` 把這一列
+           算成固定 20px(h-4 16 + mt-1 4)。窄 pane 下最長的來源字串超過欄寬,不限高就
+           折成兩行 → chromeY 少算一行 → svg 溢出 figure(WL-2)。 */}
+       <p data-testid="market-meta" className="mt-1 h-4 truncate font-mono text-xs text-ink-dim">
+diff --git a/frontend/src/components/index/MarketPane.size.test.tsx b/frontend/src/components/index/MarketPane.size.test.tsx
+index 364af330..83d2961e 100644
+--- a/frontend/src/components/index/MarketPane.size.test.tsx
++++ b/frontend/src/components/index/MarketPane.size.test.tsx
+@@ -20,7 +20,14 @@ import {
+   MARKET_KEY_STORE,
+   MARKET_MODE_STORE,
+ } from "@/lib/constants";
+-import { PANE_FRAMES, paneIntradayBox, paneSvgHeight } from "@/lib/pane-frame";
++import {
++  CANDLE_CHROME_Y,
++  CANDLE_INSET_X,
++  PANE_FRAMES,
++  paneCandleBox,
++  paneIntradayBox,
++  paneSvgHeight,
++} from "@/lib/pane-frame";
+ 
+ const TWSE: IndexSeries = {
+   p: 42_039_920,
+@@ -135,7 +142,9 @@ afterEach(() => {
+   vi.unstubAllGlobals();
+ });
+ 
+-describe("paneSvgHeight 兩態算式(§4.1)", () => {
++/** K 線態 2026-08-21 起也退出 `PANE_FRAMES`(改 1:1,見下一個 describe)——
++ *  這張表與這支反解只剩 `OverlayCard` 一個讀者。 */
++describe("paneSvgHeight(overlay 唯一讀者;§4.1)", () => {
+   const size = { width: 430, height: 300 };
+ 
+   it("overlay:巢狀 figure 再吃 62 高 34 寬", () => {
+@@ -143,22 +152,43 @@ describe("paneSvgHeight 兩態算式(§4.1)", () => {
+     expect(paneSvgHeight(size, PANE_FRAMES.overlay)).toBe(381);
+   });
+ 
+-  it("candle:vbW 是 CandleChart 的 1400,不是 640", () => {
+-    // svgW = 396;renderPx = max(96, floor(300 − 100) − 2) = 198;198 × 1400 / 396
+-    expect(paneSvgHeight(size, PANE_FRAMES.candle)).toBe(700);
+-  });
+-
+   it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
+     // svgW = 396;renderPx 夾到 96 → 96 × 640 / 396
+     expect(paneSvgHeight({ width: 430, height: 30 }, PANE_FRAMES.overlay)).toBe(155);
+-    expect(paneSvgHeight({ width: 430, height: 10 }, PANE_FRAMES.candle)).toBe(339);
+   });
+ 
+   it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → undefined(呼叫端走各自 fallback)", () => {
+     expect(paneSvgHeight({ width: 0, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
+     expect(paneSvgHeight({ width: 430, height: 0 }, PANE_FRAMES.overlay)).toBeUndefined();
+     expect(paneSvgHeight({ width: 30, height: 300 }, PANE_FRAMES.overlay)).toBeUndefined();
+-    expect(paneSvgHeight({ width: 34, height: 300 }, PANE_FRAMES.candle)).toBeUndefined();
++  });
++});
++
++/** K 線態改 1:1(2026-08-21;同 2026-08-17 分時態的理由):字級補償補得了 7 處
++ *  fontSize,補不了 `PRICE_TAG` / `TIME_TAG` / `X_LABEL_H` 這些 viewBox 單位的排版
++ *  常數 —— 縮放比 0.2 下 hover 價位框只有 11×3px,字放大後必撞。
++ *
++ *  **常數一律 import 不硬寫**:`CANDLE_CHROME_Y` 的 80 + 20 拆解是 W-4 契約的出處
++ *  (`MarketChart` 的 meta 列 `h-4`),測試裡寫死 100 會讓契約漂掉時這裡照樣綠。 */
++describe("paneCandleBox 算式(1:1)", () => {
++  it("量得到:寬 = round(量到的寬 − insetX)、高 = max(96, floor(高 − chromeY) − 2)", () => {
++    expect(paneCandleBox({ width: 430, height: 300 })).toEqual({
++      width: 430 - CANDLE_INSET_X,
++      height: Math.max(96, Math.floor(300 - CANDLE_CHROME_Y) - 2),
++      usable: true,
++    });
++  });
++
++  it("地板 96:容器矮到 chrome 都放不下時不回 0 / 負高", () => {
++    expect(paneCandleBox({ width: 430, height: 30 }).height).toBe(96);
++  });
++
++  it("量不到(0 寬 / 0 高)或寬度扣不出 svg 寬 → usable false(呼叫端傳 undefined)", () => {
++    expect(paneCandleBox({ width: 0, height: 300 }).usable).toBe(false);
++    expect(paneCandleBox({ width: 430, height: 0 }).usable).toBe(false);
++    // 邊界:寬恰等於 insetX → svgW = 0(edge 2);再窄一格同樣不得傳 0 / 負寬
++    expect(paneCandleBox({ width: CANDLE_INSET_X, height: 300 }).usable).toBe(false);
++    expect(paneCandleBox({ width: CANDLE_INSET_X - 4, height: 300 }).usable).toBe(false);
+   });
+ });
+ 
+@@ -202,11 +232,11 @@ describe("MarketPane 量測 → 圖高(SC-4)", () => {
+   });
+ });
+ 
+-/** 🔒 lock(review TD-7):**選對 frame** 這件事原本零測試 —— 三態的 chrome 差 30-70px,
++/** 🔒 lock(review TD-7):**選對換算** 這件事原本零測試 —— 三態的 chrome 差 30-70px,
+  *  選錯的症狀是圖比容器高一點點、於是主 grid 長出一條誰也解釋不了的捲軸,而算式本身
+- *  (`paneSvgHeight` 三態)照樣全綠。這兩支走整條真鏈:localStorage 預設 → 模式判別 →
+- *  frame → 下傳 → 各自的 svg viewBox。 */
+-describe("MarketPane 依模式選 frame(TD-7)", () => {
++ *  (`paneSvgHeight` / `paneCandleBox` / `paneIntradayBox` 各自)照樣全綠。這幾支走整條
++ *  真鏈:localStorage 預設 → 模式判別 → 換算 → 下傳 → 各自的 svg viewBox。 */
++describe("MarketPane 依模式選換算(TD-7)", () => {
+   const SIZE = { width: 430, height: 300 };
+ 
+   it("重疊態 → 用 overlay frame(巢狀 figure 再吃 62 高 34 寬)", () => {
+@@ -220,7 +250,7 @@ describe("MarketPane 依模式選 frame(TD-7)", () => {
+     expect(svg.getAttribute("viewBox")).toBe(`0 0 640 ${expected}`);
+   });
+ 
+-  it("K 線態 → 用 candle frame,且 viewBox 寬是 CandleChart 的 1400", async () => {
++  it("K 線態 → 1:1 candleBox(viewBox 寬 = 量到的 svg 寬,不再是 1400)", async () => {
+     window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
+     window.localStorage.setItem(MARKET_MODE_STORE, "day");
+     vi.stubGlobal(
+@@ -231,9 +261,29 @@ describe("MarketPane 依模式選 frame(TD-7)", () => {
+     renderPane();
+ 
+     const figure = await screen.findByTestId("candle-figure");
+-    const expected = paneSvgHeight(SIZE, PANE_FRAMES.candle);
+-    expect(expected).toBeDefined();
+-    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe(`0 0 1400 ${expected}`);
++    const box = paneCandleBox(SIZE);
++    expect(box.usable).toBe(true);
++    // 寬也是變數(1:1)—— 只比高會漏掉「寬沒跟著量測走」這個失效樣態,而那正是
++    // 字級被縮成 3px 的成因(同 intradayViewBox 的理由)
++    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe(
++      `0 0 ${box.width} ${box.height}`,
++    );
++  });
++
++  // W-3:量不到就**不傳**,讓 CandleChart 走它自己的 1400×578 —— 傳一組 0 的話 svg
++  // 不報錯、純粹畫不出來(同分時態退回 core 預設的精神)。
++  it("無 ResizeObserver(jsdom 預設)→ K 線退回 CandleChart 自有的 1400×578(W-3)", async () => {
++    window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
++    window.localStorage.setItem(MARKET_MODE_STORE, "day");
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async () => new Response(JSON.stringify(DK_BODY))),
++    );
++    expect(typeof ResizeObserver).toBe("undefined");
++    renderPane();
++
++    const figure = await screen.findByTestId("candle-figure");
++    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 578");
+   });
+ });
+ 
+diff --git a/frontend/src/components/index/MarketPane.test.tsx b/frontend/src/components/index/MarketPane.test.tsx
+index 13cdfa03..584c8417 100644
+--- a/frontend/src/components/index/MarketPane.test.tsx
++++ b/frontend/src/components/index/MarketPane.test.tsx
+@@ -130,6 +130,40 @@ function btn(name: string): HTMLButtonElement {
+   return screen.getByRole("button", { name }) as HTMLButtonElement;
+ }
+ 
++// 🔴 SC-3:17 顆週期鈕在 ~350px 的 pane(1536 兩欄態)折成 3 行、吃掉 50px 圖高。
++// 修法 = pane 自掛 `@container` + 窄容器下把 Btn 的 px-2 收成 px-1、列 gap-1 收成
++// gap-0.5(估算 ≈ 561px / 346px = 1.6 行 → 2 行)。
++//
++// **只能鎖 class 字串**:jsdom 不套 Tailwind CSS,`getComputedStyle` 對 container query
++// 一無所知 —— 真正「折幾行」由 SC-3 的真環境量測(getBoundingClientRect().height ≤ 48)
++// 把關,這裡防的是「漏寫 / 被 twMerge 吃掉」。
++//
++// ⚠ 門檻用 **rem 不用 px**:鈕的文字與 padding 全是 rem,root font-size 在 ≥1920 放大
++// 到 112.5% / ≥2560 放大到 125%,px 門檻會讓寬螢幕誤判(frontend-conventions 的 px 案例
++// 反過來 —— 那裡量的是固定 px 面板寬)。26.5rem = 424@100% / 477@112.5% / 530@125%。
++describe("MarketPane 窄容器週期列(SC-3)", () => {
++  it("pane root 自掛 @container(週期列的門檻要量 pane 寬,不是左欄寬)", () => {
++    renderPane();
++    // 最近的 container 祖先若還是左欄(兩欄態 630–930px),26.5rem 的門檻永不成立
++    expect(screen.getByTestId("market-pane-left").className).toContain("@container");
++  });
++
++  it("週期鈕:窄容器 px-1,寬容器仍是既有 px-2(W-6:兩個 token 都要在)", () => {
++    renderPane();
++    const cls = btn("日K").className;
++    expect(cls).toContain("@max-[26.5rem]:px-1");
++    // twMerge 不會把兩者判成衝突(不同 variant),被吃掉的話寬 pane 的 padding 也變了
++    expect(cls).toContain("px-2");
++  });
++
++  it("週期列容器:窄容器 gap-0.5,寬容器仍是既有 gap-1", () => {
++    renderPane();
++    const row = btn("日K").parentElement!;
++    expect(row.className).toContain("@max-[26.5rem]:gap-0.5");
++    expect(row.className).toContain("gap-1");
++  });
++});
++
+ describe("MarketPane 參數化(SC-2)", () => {
+   it("(a) 無 storage 時尊重 defaultKey:右 pane 預設櫃買", () => {
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index 571ec0ce..b29dace6 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -8,6 +8,7 @@ import { chgPct, fmtPct } from "@/lib/format";
+ import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+ import {
+   PANE_FRAMES,
++  paneCandleBox,
+   paneIntradayBox,
+   paneSvgHeight,
+   paneUnitScale,
+@@ -91,7 +92,12 @@ function Btn({
+       aria-pressed={active}
+       aria-disabled={disabled ? "true" : undefined}
+       className={cn(
+-        "rounded border px-2 py-0.5 text-xs",
++        // `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成
++        // 3 行、吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
++        // 門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,root font-size 在
++        // ≥1920 / ≥2560 放大到 112.5% / 125%,px 門檻在寬螢幕會誤判。
++        // 標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。
++        "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
+         disabled
+           ? "cursor-not-allowed border-line text-ink-muted opacity-40"
+           : active
+@@ -115,11 +121,12 @@ const OVERLAY_LINES = [
+ 
+ /** 加權 vs 櫃買 相對昨收 % 疊線(既有能力;SC-7 保留,計算與外觀不變)。
+  *
+- *  `height` 同 `MarketChart.height`(K 線態)的口徑:**viewBox 單位**,caller 已扣 chrome、
+- *  已反解;未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。
++ *  `height` 的單位是 **viewBox 單位**(caller 已扣 chrome、已用 `paneSvgHeight` 反解);
++ *  未給 → 220(= 改版前的固定 `SIZE`)。`toX` 只吃寬,不隨高改。
+  *  `unitScale` = `paneUnitScale` 算出的字級補償:抵銷 svg 等比縮放,未給 → 1(WL-3)。
+- *  **本卡是這條補償僅存的讀者** —— 分時態 2026-08-17 換 `IntradayChartCore` 後走 1:1 px,
+- *  縮放比恆 1,補償無用武之地(見 `paneIntradayBox`)。 */
++ *  **本卡是等比縮放與這條補償僅存的讀者** —— 分時態 2026-08-17、K 線態 2026-08-21 先後
++ *  改走 1:1 px,縮放比恆 1,補償無用武之地(見 `paneIntradayBox` / `paneCandleBox`)。
++ *  它留在這裡是因為 viewBox 寬寫死 640(幾何以 `SIZE.width` 為座標系),不是量測值。 */
+ function OverlayCard({
+   twse,
+   otc,
+@@ -361,18 +368,18 @@ export function MarketPane({
+   // series,拆成布林會讓 JSX 那側得再判一次 null(或掛 `!` 賭它)。
+   const overlayPair =
+     overlay && mode === "intraday" && twse !== null && otc !== null ? { twse, otc } : null;
+-  // 分時圖(非重疊)改吃 **1:1 px box**,不再有 viewBox 反解與字級補償可言。
++  // 三態各走各的換算,**只有重疊態還是等比縮放**:
++  //   重疊 → `PANE_FRAMES.overlay` 反解成 viewBox 單位 + `unitScale` 字級補償
++  //   分時(2026-08-17)/ K 線(2026-08-21)→ 1:1 px box,縮放比恆 1,無補償可言
++  // `frame` 因此只在重疊態非 null。另外兩態讓它落回某一格 frame 會算出一個沒人讀、
++  // 但看起來很正常的高度 —— 哪天有人把它接回去,症狀是圖高差一個 `vbW / svgW` 倍率
++  // 而畫面照畫。
+   const paneIntraday = overlayPair === null && mode === "intraday";
+-  // `frame` 在分時態是 **null 而不是 `PANE_FRAMES.candle`**:分時已退出這張表,讓它
+-  // 落到 candle 那格會算出一個沒人讀、但看起來很正常的高度 —— 哪天有人把它接回
+-  // `MarketChart` 時症狀是圖高差一個 `1400 / svgW` 倍率而畫面照畫。
+-  const frame = paneIntraday
+-    ? null
+-    : overlayPair !== null
+-      ? PANE_FRAMES.overlay
+-      : PANE_FRAMES.candle;
++  const paneCandle = overlayPair === null && mode !== "intraday";
++  const frame = overlayPair !== null ? PANE_FRAMES.overlay : null;
++  // `svgHeight` / `unitScale` 自此**只餵 OverlayCard**(K 線態 2026-08-21 起改吃 candleBox)
+   const svgHeight = frame === null ? undefined : paneSvgHeight(size, frame);
+-  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變);只剩 OverlayCard 讀
++  // 量不到 → 1 = 改版前的字級(W-10:fallback 態的外觀逐值不變)
+   const unitScale = frame === null ? 1 : (paneUnitScale(size, frame) ?? 1);
+   // **必經 useMemo**:物件 prop 每 render 新 identity 會一路打穿下游的 memo,而症狀
+   // 只是 hover 掉幀、沒有任何測試會紅。deps 拆成兩個純量 —— `size` 物件本身每次量測
+@@ -384,6 +391,13 @@ export function MarketPane({
+     const box = paneIntradayBox({ width: size.width, height: size.height });
+     return box.usable ? { width: box.width, height: box.height } : undefined;
+   }, [paneIntraday, size.width, size.height]);
++  // 同 `intradayBox` 的形狀與理由(memo / 純量 deps / 量不到傳 undefined)。K 線態的
++  // fallback 是 `CandleChart` 自有的 1400×578(W-3),不是 0。
++  const candleBox = useMemo(() => {
++    if (!paneCandle) return undefined;
++    const box = paneCandleBox({ width: size.width, height: size.height });
++    return box.usable ? { width: box.width, height: box.height } : undefined;
++  }, [paneCandle, size.width, size.height]);
+ 
+   return (
+     <section
+@@ -400,7 +414,13 @@ export function MarketPane({
+       // 兩種版面下的收斂:兩欄態 pane 縮到軌高,figure / wrapper 跟著縮 → 下一輪量測
+       // 讓 svg 跟著矮;單欄態 pane 由內容驅動高,沿 `wrapper − 2` 收斂到 figure 的
+       // `min-h-48` 地板(每輪只會變矮不會回彈,不形成迴圈)。
+-      className="flex min-h-0 min-w-0 flex-col gap-3"
++      // `@container`:週期列的 `@max-[26.5rem]:` 門檻要量的是 **pane 自己的寬**。
++      // 不掛的話最近的 container 祖先是左欄(兩欄態 630–930px),門檻永不成立。
++      // 副作用已查(D4):pane 子樹(MarketChart / CandleChart / StockIntradayChart /
++      // ChartReadout)沒有任何 absolute / fixed 定位子孫會被新的 containing block 接走,
++      // 也沒有別的 `@[…]` 變體會改量到誰;pane 所在 grid 軌是 `minmax(0,1fr)`,
++      // inline-size containment 不改軌算。
++      className="@container flex min-h-0 min-w-0 flex-col gap-3"
+     >
+       {/* 標的列(SC-2) */}
+       <div className="flex flex-wrap items-center gap-3">
+@@ -418,8 +438,9 @@ export function MarketPane({
+         ) : null}
+       </div>
+ 
+-      {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6) */}
+-      <div className="flex flex-wrap items-center gap-1">
++      {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6)。
++          窄 pane 下與 Btn 的 px-1 一起收(gap 省 16×0.5 = 8px),同一個 26.5rem 門檻。 */}
++      <div className="flex flex-wrap items-center gap-1 @max-[26.5rem]:gap-0.5">
+         {MARKET_MODES.map(([id, label]) => (
+           <Btn
+             key={id}
+@@ -480,10 +501,9 @@ export function MarketPane({
+               toggles={toggles}
+               onToggle={onToggle}
+               active={active}
+-              // 兩種單位分兩個 prop:`height` = K 線態的 viewBox 單位(已反解),
+-              // `intradayBox` = 分時態的 px(1:1)。同一個 prop 帶兩種單位時,
+-              // 改其中一態的換算會靜默改到另一態。
+-              height={svgHeight}
++              // 兩態各一個 prop,單位相同(px 1:1)但 chrome 扣法不同(K 線 100/34、
++              // 分時 26/0)。同一個 prop 帶兩態時,改其中一態的換算會靜默改到另一態。
++              candleBox={candleBox}
+               intradayBox={intradayBox}
+             />
+           )}
+diff --git a/frontend/src/components/stock/CandleChart.test.tsx b/frontend/src/components/stock/CandleChart.test.tsx
+index be0df71b..a822bfe2 100644
+--- a/frontend/src/components/stock/CandleChart.test.tsx
++++ b/frontend/src/components/stock/CandleChart.test.tsx
+@@ -687,3 +687,28 @@ describe("CandleChart 拖曳既有行為(characterization)", () => {
+     expect(fireEvent.wheel(svg, { deltaY: 100, clientX: 700, cancelable: true })).toBe(false);
+   });
+ });
++
++// 🟢 SC-4 / W-1:`width` 是**新開的 optional prop**,只有台股綜合 pane(窄容器)會傳
++// 量測到的 px 寬 → viewBox 1:1 → 縮放比恆 1 → 字級就是它字面的大小。個股頁 / 期貨 tab
++// 不傳,逐值沿用 1400 —— 這一組是那條「零差異」承諾的鎖。
++describe("CandleChart viewBox 寬(width prop;SC-4)", () => {
++  /** svg 內第一個 `<text>` = y 軸價位刻度(ChartStatic 先畫 yTicks)。 */
++  function firstTickFont(container: HTMLElement): string | null {
++    return container.querySelector("svg text")!.getAttribute("font-size");
++  }
++
++  it("傳 width → viewBox 1:1(窄 pane 用),y 刻度字級仍是原生 0.625rem", () => {
++    // 1536 兩欄態實測值:pane 內 CandleChart 渲染 282×113px
++    const { container } = render(<CandleChart bars={BARS} width={282} height={113} />);
++    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 282 113");
++    // 1:1 的**唯一目的**:字級不再被 `1400 / svgW` 縮掉(改版前是 3.0px)。
++    // 這裡鎖「字面值沒被補償邏輯動過」——真正的渲染 px 由 SC-1 的真環境量測把關。
++    expect(firstTickFont(container)).toBe("0.625rem");
++  });
++
++  it("未傳 width → viewBox 0 0 1400 578(StockChart / FuturesChart 零差異;lock)", () => {
++    const { container } = render(<CandleChart bars={BARS} />);
++    expect(container.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 1400 578");
++    expect(firstTickFont(container)).toBe("0.625rem");
++  });
++});
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index 08a2b20b..d19aeeb7 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -392,6 +392,18 @@ interface Props {
+    *  本元件不自呼叫該 hook,否則按鈕與圖會各管各的) */
+   showBb?: boolean;
+   onToggleBb?: (value: boolean) => void;
++  /** viewBox 寬度。**未傳 = `DIMS.width` 1400**,也就是個股頁 / 期貨 tab 既有的
++   *  等比縮放行為(svg `w-full` 把 1400 單位縮到容器寬),逐值零差異。
++   *
++   *  傳值的意義是 **1:1**:caller 已量到 svg 的渲染 px 寬,把它當 viewBox 寬 → 縮放比
++   *  恆 1 → viewBox 內的 rem 字級與 `PRICE_TAG` / `TIME_TAG` / `X_LABEL_H` 這些排版常數
++   *  在畫面上就是它們字面的大小。台股綜合 pane(1536 兩欄態只有 282px)是唯一的傳值者:
++   *  縮放比 0.2 下字只剩 3px,而字級補償補得了字、補不了排版常數(同 2026-08-17 分時態
++   *  棄補償改 1:1 的理由,見 `lib/pane-frame.ts::paneIntradayBox`)。
++   *
++   *  **與 `height` 成對**:只傳一邊會得到一個非 1:1 的比例(圖照畫、只有字級悄悄變),
++   *  所以傳值端一律走 `paneCandleBox` 一次拿兩個。 */
++  width?: number;
+   /** viewBox 高度(SC-6)。純量不是物件 —— memo 子元件吃純量才不會因 identity 重建
+    *  (W-5)。未傳 = 量測未就緒 / jsdom,沿用固定常數。 */
+   height?: number;
+@@ -448,12 +460,13 @@ export function CandleChart({
+   initBars = 120,
+   showBb = false,
+   onToggleBb,
++  width,
+   height,
+   showVolume = true,
+   hlines = EMPTY_HLINES,
+   volumeDelta = false,
+ }: Props) {
+-  const dimW = DIMS.width;
++  const dimW = width ?? DIMS.width;
+   const dimH = height ?? DIMS.height;
+   const svgRef = useRef<SVGSVGElement | null>(null);
+   // hover 座標語意與 bail-out 見 useCandleHover(存 viewBox 座標非 index,錨點守恆)
+diff --git a/frontend/src/hooks/useCandleViewport.ts b/frontend/src/hooks/useCandleViewport.ts
+index 4805743d..80879288 100644
+--- a/frontend/src/hooks/useCandleViewport.ts
++++ b/frontend/src/hooks/useCandleViewport.ts
+@@ -62,10 +62,10 @@ export function useCandleViewport({
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     return () => el.removeEventListener("wheel", onWheel);
+-    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
+-    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
+-    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
+-    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
++    // dimW **現在是 prop**(`CandleChart.width`;台股綜合 pane 傳量測寬走 1:1),
++    // 不再是模組常數 —— 它入 deps 已經不只是形式:pane 縮寬時 dimW 換值,舊 listener
++    // 的閉包會用舊寬算 `x / dimW` 這個縮放錨點,症狀是滾輪縮放的中心悄悄偏掉而圖照畫。
++    // dimH 仍不參與 x 幾何,列出來是為了「閉包捕捉什麼就寫什麼」,補不補行為相同。
+     // svgRef 是 ref(identity 恆定),入 deps 純為 exhaustive-deps 誠實,不會多跑。
+   }, [total, dimW, dimH, svgRef]);
+ 
+diff --git a/frontend/src/lib/pane-frame.ts b/frontend/src/lib/pane-frame.ts
+index 23bea8ab..dd64ffc7 100644
+--- a/frontend/src/lib/pane-frame.ts
++++ b/frontend/src/lib/pane-frame.ts
+@@ -1,4 +1,9 @@
+-/** 台股綜合雙圖 pane 的「量測 → viewBox 高」換算(§4.1 CS-1)。
++/** 台股綜合雙圖 pane 的「量測 → viewBox 尺寸」換算(§4.1 CS-1)。
++ *
++ *  **兩種語彙,別混**:1:1 的 `paneIntradayBox`(分時,2026-08-17)/ `paneCandleBox`
++ *  (K 線,2026-08-21)把量到的 px 直接當 viewBox 尺寸 → 縮放比恆 1,字級與排版常數
++ *  就是它們字面的大小;等比縮放的 `paneSvgHeight` + `paneUnitScale` 只剩 `OverlayCard`
++ *  (viewBox 寬寫死 640)一個讀者,字級得靠補償乘回去。新的圖一律走 1:1。
+  *
+  *  **為什麼在 lib 而不是 MarketPane 檔內**:這裡全是純函式與常數,與元件同檔會讓
+  *  `react-refresh/only-export-components` 每次都報一條(元件檔混非元件 export 會讓
+@@ -19,27 +24,22 @@ export interface PaneFrame {
+   vbW: number;
+ }
+ 
+-/** 兩種**等比縮放**圖模式各自的 chrome 用量。**逐條列舉不共用一組數字**:兩者的 DOM
+- *  巢狀深度不同,用同一組會差 38px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
++/** 仍走**等比縮放**的圖模式的 chrome 用量。**逐條列舉不共用一組數字**:各態的 DOM
++ *  巢狀深度不同,用同一組會差數十 px —— 症狀是圖比容器高一點點,於是主 grid 出現一條
+  *  誰也解釋不了的捲軸。
+  *
+- *  **每一項都必須是固定高的元素**:會折行的東西(K 線態那條 meta 列曾是 `text-xs`
+- *  無高度限制)在窄 pane 下折成兩行,chromeY 就少算一行的高度,svg 溢出 figure。
+- *  折不折得掉由該元素自己保證(meta 列 `h-4` + `truncate`),不是靠這裡多留餘裕。
++ *  **每一項都必須是固定高的元素**:會折行的東西在窄 pane 下折成兩行,chromeY 就少算
++ *  一行的高度,svg 溢出 figure。折不折得掉由該元素自己保證,不是靠這裡多留餘裕。
+  *
+- *  **分時態不在這張表裡**(2026-08-17 換 `IntradayChartCore`):它改走 1:1 px box
+- *  (`paneIntradayBox`),沒有 viewBox 反解也沒有縮放比可言。留一筆用不到的
+- *  `intraday` 條目在這裡,下一個人會以為兩條路都還在,而錯用的症狀是圖高差一個
++ *  **分時態(2026-08-17)與 K 線態(2026-08-21)都不在這張表裡**:兩者改走 1:1 px box
++ *  (`paneIntradayBox` / `paneCandleBox`),沒有 viewBox 反解也沒有縮放比可言。留一筆
++ *  用不到的條目在這裡,下一個人會以為兩條路都還在,而錯用的症狀是圖高差一個
+  *  `vbW / svgW` 倍率、畫面照畫。
+  *
+- *  - overlay:`OverlayCard` 是巢狀 figure —— border 2 + `p-4` 32 + 標題列 20 + svg `mt-2` 8
+- *    = 62;水平 border 2 + p-4 32 = 34。
+- *  - candle:`CandleChart` 自身 figure(border 2 + `p-4` 32 + 頂列 26 + figcaption 20 = 80)
+- *    + `MarketChart` 的 meta 列(`h-4` 16 + `mt-1` 4 = 20)= 100;水平同 overlay 34;
+- *    **viewBox 寬是 CandleChart 的 `DIMS.width` = 1400**,不是 640。 */
+-export const PANE_FRAMES: Record<"overlay" | "candle", PaneFrame> = {
++ *  剩下的唯一讀者是 overlay:`OverlayCard` 是巢狀 figure —— border 2 + `p-4` 32 +
++ *  標題列 20 + svg `mt-2` 8 = 62;水平 border 2 + p-4 32 = 34;viewBox 寬寫死 640。 */
++export const PANE_FRAMES: Record<"overlay", PaneFrame> = {
+   overlay: { chromeY: 62, insetX: 34, vbW: 640 },
+-  candle: { chromeY: 100, insetX: 34, vbW: 1400 },
+ };
+ 
+ /** 分時態 svg 以外、但在被量測 wrapper 之內的垂直用量(px):`IntradayChartCore` 的
+@@ -49,12 +49,30 @@ export const PANE_FRAMES: Record<"overlay" | "candle", PaneFrame> = {
+  *  的 figure `min-h-48` 算式不必跟著改。 */
+ export const INTRADAY_CHROME_Y = 26;
+ 
+-export interface IntradayBox {
++/** K 線態 svg 以外、但在被量測 wrapper 之內的垂直用量(px)。**這個 100 是 W-4 契約的
++ *  出處**,拆解:
++ *  - `CandleChart` 自身 figure:border 2 + `p-4` 32 + 頂列 `h-[1.375rem]`+`mb-1` 26
++ *    + figcaption `h-4`+`mt-1` 20 = **80**
++ *  - `MarketChart` 的 meta 列:`h-4` 16 + `mt-1` 4 = **20**
++ *
++ *  meta 列的 `h-4 truncate` 因此是契約不是裝飾:它原本無高度限制,窄 pane 下最長的
++ *  來源字串會折成兩行 → 這裡少算 16 → svg 溢出 figure。 */
++export const CANDLE_CHROME_Y = 100;
++
++/** K 線態的水平用量(px):`CandleChart` figure 的 border 2 + `p-4` 32。與 overlay 同值
++ *  是巧合不是共用 —— 兩者各自數自己的框。 */
++export const CANDLE_INSET_X = 34;
++
++/** 1:1 圖的 viewBox 尺寸(分時 / K 線共用)。
++ *
++ *  **改名自 `IntradayBox`**(2026-08-21 K 線態也走 1:1):留著分時專屬的名字會讓
++ *  `paneCandleBox` 的回傳型別看起來是借用別人的。 */
++export interface PaneBox {
+   /** viewBox 寬 = 量到的 px 寬(1:1) */
+   width: number;
+   /** viewBox 高 = 可用 px 高(1:1) */
+   height: number;
+-  /** 量測有效與否;false → 呼叫端傳 undefined,由 core 走它自己的預設尺寸 */
++  /** 量測有效與否;false → 呼叫端傳 undefined,由圖走它自己的預設尺寸 */
+   usable: boolean;
+ }
+ 
+@@ -68,7 +86,7 @@ export interface IntradayBox {
+  *  地板 96 與 −2 抗抖動的理由同 `paneSvgHeight`:容器矮到 chrome 都放不下時回 0 / 負高
+  *  會畫出一張沒有高度的圖(svg 不報錯,純粹消失);反解後的高恰等於量到的高時,亞像素
+  *  進位會讓內容比容器高半格,觸發 ResizeObserver 的「量測 → 設高 → 再量測」迴圈。 */
+-export function paneIntradayBox(size: Size): IntradayBox {
++export function paneIntradayBox(size: Size): PaneBox {
+   if (size.width <= 0 || size.height <= 0) return { width: 0, height: 0, usable: false };
+   return {
+     width: Math.round(size.width),
+@@ -77,11 +95,36 @@ export function paneIntradayBox(size: Size): IntradayBox {
+   };
+ }
+ 
++/** 量到的容器尺寸(px)→ K 線圖的 viewBox 尺寸(**1:1**,同 `paneIntradayBox` 的精神)。
++ *
++ *  **為什麼 K 線態 2026-08-21 也退出等比縮放**:縮放比 = `1400 / svgW`,1536 兩欄態的
++ *  pane 只有 282px → 比值 0.2 → 字級 0.625rem 只剩 3.0px。字級補償(`paneUnitScale`)
++ *  補得了 7 處 `fontSize`,補不了 `PRICE_TAG {56,16}` / `TIME_TAG {48,14}` /
++ *  `lib/candle.ts::X_LABEL_H 14` 這些 viewBox 單位的排版常數 —— 那些框在 0.2 倍下只有
++ *  11×3px,字放大回去必定撞在一起。1:1 之後三者都是真 px,與分時態是同一份像素語彙。
++ *
++ *  **寬要扣 `CANDLE_INSET_X`**(分時態不扣):被量測的 wrapper 在 `CandleChart` 的
++ *  figure **之外**,svg 實際渲染寬 = 容器寬 − figure 的 border + padding。少扣的症狀是
++ *  viewBox 比渲染寬大 34px → 又變回等比縮放(比值 0.9),只是這次沒人看得出來。
++ *
++ *  地板 96 與 −2 抗抖動的理由同 `paneIntradayBox`。任一邊 ≤ 0 或扣完寬 ≤ 0(pane 窄到
++ *  只剩框)→ `usable: false`,呼叫端傳 undefined 而不是傳 0(svg 不報錯,純粹消失)。 */
++export function paneCandleBox(size: Size): PaneBox {
++  if (size.width <= 0 || size.height <= 0) return { width: 0, height: 0, usable: false };
++  const svgW = Math.round(size.width - CANDLE_INSET_X);
++  if (svgW <= 0) return { width: 0, height: 0, usable: false };
++  return {
++    width: svgW,
++    height: Math.max(96, Math.floor(size.height - CANDLE_CHROME_Y) - 2),
++    usable: true,
++  };
++}
++
+ /** 量到的容器尺寸(px)→ 圖的 viewBox 高(viewBox 單位)。
+  *
+- *  **反解只此一處**(§4.1 CS-1):`MarketChart`(K 線態)/ `OverlayCard` 收到的 `height`
+- *  一律是 viewBox 單位,兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
+- *  分時態不走這支(1:1,見 `paneIntradayBox`)。
++ *  **反解只此一處**(§4.1 CS-1):`OverlayCard` 收到的 `height` 是 viewBox 單位,
++ *  兩邊各自換算會讓「誰扣了 chrome」變成得逐檔確認的事。
++ *  分時態(`paneIntradayBox`)與 K 線態(`paneCandleBox`)都不走這支,它們是 1:1。
+  *
+  *  地板 96:容器矮到連 chrome 都放不下時,回 0 / 負高會畫出一張沒有高度的圖(svg 不報錯,
+  *  純粹消失)。−2 是抗抖動餘裕 —— 反解後的 px 高恰等於量到的高時,亞像素進位會讓內容比

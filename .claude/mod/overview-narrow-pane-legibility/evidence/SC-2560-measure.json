@@ -1,0 +1,132 @@
+{
+ "viewport": [
+  2560,
+  1440
+ ],
+ "rootFont": "16px",
+ "panes": [
+  {
+   "id": "market-pane-left",
+   "width": 657.6,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 48,
+    "gap": "4px",
+    "btnPadL": "8px",
+    "btnH": 22
+   },
+   "candle": {
+    "viewBox": "0 0 590 451",
+    "clientW": 590,
+    "clientH": 451,
+    "yTicks": [
+     {
+      "t": "34825",
+      "fontSize": "10px",
+      "rect": {
+       "x": 52,
+       "y": 522.5,
+       "w": 28.2,
+       "h": 15
+      }
+     },
+     {
+      "t": "39305",
+      "fontSize": "10px",
+      "rect": {
+       "x": 52,
+       "y": 440.3,
+       "w": 28.2,
+       "h": 15
+      }
+     },
+     {
+      "t": "43785",
+      "fontSize": "10px",
+      "rect": {
+       "x": 51,
+       "y": 358.1,
+       "w": 29.2,
+       "h": 15
+      }
+     }
+    ],
+    "yTickOverlap": false,
+    "textCount": 11,
+    "bars": 120,
+    "barW": 3.4
+   }
+  },
+  {
+   "id": "market-pane-right",
+   "width": 657.6,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 48,
+    "gap": "4px",
+    "btnPadL": "8px",
+    "btnH": 22
+   },
+   "intraday": {
+    "viewBox": "0 0 624 525",
+    "fontSize": "9px"
+   }
+  }
+ ],
+ "limitList": {
+  "rootW": 882.8,
+  "container": "inline-size",
+  "scrollW": 841,
+  "clientW": 841,
+  "ok": true,
+  "th": [
+   {
+    "t": "代號",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "名稱",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "市場",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "現價",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "漲跌幅",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "連板",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "金額(億)",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "量比",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "狀態",
+    "display": "table-cell",
+    "padL": "8px"
+   }
+  ],
+  "tdPadL": "8px",
+  "rows": 48
+ }
+}

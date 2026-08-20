@@ -1,0 +1,20 @@
+{
+  "round": 1,
+  "reviewer": "change-spec-reviewer (opus)",
+  "summary": { "P0": 0, "P1": 3, "P2": 8 },
+  "width_model_verified": "容器 = 視窗 − 349(rem 部件隨 root 放大);右欄 = 0.4×(容器−gap);pane = (0.6×(容器−gap)−12)/2。1536:右欄 470 / pane 346(對上實測 475 / ~350);1920(root 112.5%):右欄 605 / pane 448;2560(125%):右欄 844 / pane 626。",
+  "findings": [
+    { "id": "R1", "severity": "P1", "disposition": "accepted", "resolution": "D2 數字 REFUTED(1920 右欄 ≈ 605 非 740)。門檻改 rem(`@max-[41rem]`:656@100% / 738@112.5% / 820@125%),理由 = 表格內容是 rem 字級、塞得下的門檻隨 root 縮放;1920 右欄 605 < 738 → 降級(本就塞不下 9 欄:605−32 < 612×1.125);2560 844 > 820 → 九欄。W-5 改述為「右欄 ≥ 41rem 九欄」;SC-2 加 1920 對照。" },
+    { "id": "R2", "severity": "P1", "disposition": "accepted", "resolution": "以實測 612 為唯一基準重算(7 cell × 8 = 56);邊際 ~10px 明寫;補 D2 FAIL 階梯:(1) 再藏「市場」欄 (2) 名稱欄 max-w + truncate。真資料量測決定是否啟用。" },
+    { "id": "R3", "severity": "P1", "disposition": "accepted", "resolution": "commit 順序改 🟢(CandleChart optional prop,預設零差異)→ 🔴。" },
+    { "id": "R4", "severity": "P2", "disposition": "accepted", "resolution": "W-8 改述為僅 ≤ ~197 根等價;> 197 根柱寬 0.83→1px 為既知可接受差異;SC-4 補 5分 態截圖。" },
+    { "id": "R5", "severity": "P2", "disposition": "accepted", "resolution": "edge 加價格區縮水(X_LABEL_H/PAD_Y 回真 px,約 −22%,與週期列省下高度對沖);SC-1 改 computed fontSize === 10px + 相鄰 y 刻度 rect 不重疊。" },
+    { "id": "R6", "severity": "P2", "disposition": "accepted", "resolution": "edge 2 改 size.width ≤ 34;測試邊界值 34/30。" },
+    { "id": "R7", "severity": "P2", "disposition": "accepted", "resolution": "W-6 改 computed padding-inline 8px / gap 4px;SC-3 2560 檢查改 computed style。" },
+    { "id": "R8", "severity": "P2", "disposition": "accepted", "resolution": "SC-2/SC-3 host 量測加 computed display / paddingLeft 斷言;「表頭不含」改述為 computed display none。" },
+    { "id": "R9", "severity": "P2", "disposition": "accepted", "resolution": "D3 門檻改 rem(`@max-[26.5rem]`:424@100% / 477@112.5% / 530@125%);1920 pane 448 < 477 → compact(估 631/448 = 1.4 → 2 行);2560 pane 626 > 530 不 compact(估 911/626 = 1.46 → 2 行);SC-3 加 1920 與 2560 行高量測。" },
+    { "id": "R10", "severity": "P2", "disposition": "accepted", "resolution": "D4 補斷言:兩新容器內無 absolute/fixed(grep 證實,只有 th sticky,其定位祖先 = limit-list-scroll);grid/flex 軌為 minmax(0,1fr)/父指派。" },
+    { "id": "R11", "severity": "P2", "disposition": "accepted", "resolution": "§5 補三處註解改寫:MarketChart.tsx:151 / MarketChart.test.tsx:483 指 CANDLE_CHROME_Y;useCandleViewport.ts:65 deps 註解改寫。" }
+  ],
+  "exit": "無 P0;P1 全 accepted 已修入 spec(amendment 2026-08-21);依 core-flow §3 不加輪。"
+}
