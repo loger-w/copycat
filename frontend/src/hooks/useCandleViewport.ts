@@ -62,10 +62,10 @@ export function useCandleViewport({
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-    // dimW / dimH 入 deps 只是把閉包捕捉的值誠實列出來:當前 dimW 是模組常數
-    // (DIMS.width),dimH 又不參與錨點計算,所以現在補不補行為都一樣 ——
-    // 補的理由是將來若讓 height prop 影響 x 幾何,這裡會是一個沒人看得出來的
-    // stale closure(錨點用舊尺寸算,縮放中心悄悄偏掉)。
+    // dimW **現在是 prop**(`CandleChart.width`;台股綜合 pane 傳量測寬走 1:1),
+    // 不再是模組常數 —— 它入 deps 已經不只是形式:pane 縮寬時 dimW 換值,舊 listener
+    // 的閉包會用舊寬算 `x / dimW` 這個縮放錨點,症狀是滾輪縮放的中心悄悄偏掉而圖照畫。
+    // dimH 仍不參與 x 幾何,列出來是為了「閉包捕捉什麼就寫什麼」,補不補行為相同。
     // svgRef 是 ref(identity 恆定),入 deps 純為 exhaustive-deps 誠實,不會多跑。
   }, [total, dimW, dimH, svgRef]);
 

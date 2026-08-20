@@ -392,6 +392,18 @@ interface Props {
    *  本元件不自呼叫該 hook,否則按鈕與圖會各管各的) */
   showBb?: boolean;
   onToggleBb?: (value: boolean) => void;
+  /** viewBox 寬度。**未傳 = `DIMS.width` 1400**,也就是個股頁 / 期貨 tab 既有的
+   *  等比縮放行為(svg `w-full` 把 1400 單位縮到容器寬),逐值零差異。
+   *
+   *  傳值的意義是 **1:1**:caller 已量到 svg 的渲染 px 寬,把它當 viewBox 寬 → 縮放比
+   *  恆 1 → viewBox 內的 rem 字級與 `PRICE_TAG` / `TIME_TAG` / `X_LABEL_H` 這些排版常數
+   *  在畫面上就是它們字面的大小。台股綜合 pane(1536 兩欄態只有 282px)是唯一的傳值者:
+   *  縮放比 0.2 下字只剩 3px,而字級補償補得了字、補不了排版常數(同 2026-08-17 分時態
+   *  棄補償改 1:1 的理由,見 `lib/pane-frame.ts::paneIntradayBox`)。
+   *
+   *  **與 `height` 成對**:只傳一邊會得到一個非 1:1 的比例(圖照畫、只有字級悄悄變),
+   *  所以傳值端一律走 `paneCandleBox` 一次拿兩個。 */
+  width?: number;
   /** viewBox 高度(SC-6)。純量不是物件 —— memo 子元件吃純量才不會因 identity 重建
    *  (W-5)。未傳 = 量測未就緒 / jsdom,沿用固定常數。 */
   height?: number;
@@ -448,12 +460,13 @@ export function CandleChart({
   initBars = 120,
   showBb = false,
   onToggleBb,
+  width,
   height,
   showVolume = true,
   hlines = EMPTY_HLINES,
   volumeDelta = false,
 }: Props) {
-  const dimW = DIMS.width;
+  const dimW = width ?? DIMS.width;
   const dimH = height ?? DIMS.height;
   const svgRef = useRef<SVGSVGElement | null>(null);
   // hover 座標語意與 bail-out 見 useCandleHover(存 viewBox 座標非 index,錨點守恆)
