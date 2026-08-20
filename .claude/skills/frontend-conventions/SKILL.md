@@ -100,6 +100,15 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
 
 - **程序派發 `new MouseEvent("mouseleave")` 不會觸發 React 的 onMouseLeave**(React 由 mouseout+relatedTarget 合成 enter/leave;jsdom/RTL 的 fireEvent.mouseLeave 可以,真瀏覽器 dispatchEvent 不行)→ 真環境驗證「移出清除」用 `mouseout` + `relatedTarget: document.body`,或 MCP hover 工具移真游標;驗到「殘留」先懷疑測試手法假陰性再懷疑 code(2026-07-18 PnlChart 實證)。另 mousemove 派發後 React re-render 是非同步,查 DOM 前要 `await setTimeout ~200ms`。Trigger:real-env 驗證任何 hover / cursor 行為時。
 
+## 編輯期 formatter hook 陷阱(2026-08-20 signal-alert-side-effects 沉澱)
+
+- **PostToolUse formatter 對每次 Edit 跑語意型 autofix(實證 prefer-const)**:分兩次 Edit
+  「先加 `let x = false` 宣告、下一次才補 `x = true` 賦值」,第一次 Edit 後 x 尚未被再賦值
+  → 被自動改成 `const`,補上的賦值變 runtime TypeError;落在 try/catch 內就**靜默吞掉**
+  (症狀 = 該路徑整段不執行、零錯誤訊號),tsc 也要等下次跑才報。module 級 `let` 旗標的
+  宣告與首個賦值一律**同一次 Edit 帶齊**;hook 提示「檔案被 formatter 改過」時,重讀被動
+  區塊再下一步。Trigger:任何分次 Edit 引入 module 級可變旗標 / 看到 PostToolUse formatter 提示。
+
 ## TanStack Query mutation 連發
 
 - **TQ v5 的 per-call callbacks(`mutate(vars, { onSuccess })`)只對同一 observer 的「最新一發」執行**(2026-08-11 WatchlistManagerDialog 實證,PR #39):連發時第二次 mutate 覆蓋第一發的 per-call callbacks → 第一發 onSuccess 靜默不跑;且事件 handler 以 render 閉包算 next 時,在途 PUT 未回 = stale 基底,第二發會把第一發結果還原。**連發場景一律 per-action `mutateAsync` + promise chain 串行佇列**:動作傳 `(base) => next` transform、以上一發回應為基底重算;失敗以世代計數短路已排隊動作、文案落 local state(下一發 mutateAsync 會立刻重設 observer 的 `error`,單靠它文案被洗掉);chain 尾必掛 `.catch` 收斂(任一步 throw 毒化 chain 後所有後續 `.then` 靜默跳過);基底與 prop 的同步走 useLayoutEffect + in-flight 計數守門,不在事件路徑同步(pending 歸零早於 re-render 的空窗會倒回舊值)。樣板:`WatchlistManagerDialog.tsx` commit();測試用 gated PUT(deferred resolver 逐發放行)打在途窗,樣板 `WatchlistManagerDialog.test.tsx`「連續操作」節。Trigger:同一 mutation 需支援連續操作 / 想寫 per-call callback / 測連發時序。
