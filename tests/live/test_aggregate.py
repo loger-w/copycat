@@ -410,6 +410,21 @@ class TestSpotZeroPriceGate:
         assert agg.spot_millipts == 43_735_460
         snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
         assert snap["spot"]["price"] == 43735.46
+        # 整筆早退:不計 ticks、也不是外來商品(不進 dropped_foreign_ticks)
+        assert snap["totals"]["ticks"] == 0
+        assert snap["totals"]["dropped_foreign_ticks"] == 0
+
+    def test_zero_price_spot_does_not_poison_spot_pnl(self) -> None:
+        """最花錢的症狀:0 點被拿去內插損益。有倉位 + 真價後餵 0 價,spot_pnl 不動。"""
+        agg = make_agg()
+        agg.route(tick(C44000.symbol, price=100_000, qty=2, bid=100_000, ask=101_000))
+        agg.route(tick(TXF, price=44_000_000, qty=1))
+        before = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert before["spot_pnl"] == 10_000.0
+        assert agg.route(tick(TXF, price=0, qty=0)) is False
+        after = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+        assert after["spot_pnl"] == 10_000.0
+        assert after["spot"]["price"] == 44000.0
 
     def test_zero_price_before_any_real_spot_leaves_spot_none(self) -> None:
         agg = make_agg()

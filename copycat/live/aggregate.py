@@ -68,7 +68,7 @@ class ChainAggregator:
         # spot 獨立於序列(DR-13),reset 不清
 
     def route(self, tick: Tick) -> bool:
-        """回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價皆 False。
+        """回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價 / spot 0 價皆 False。
 
         呼叫端(EngineRuntime._consume)據此決定要不要標 changed;丟棄計數照舊累加。
         """

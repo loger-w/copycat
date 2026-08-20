@@ -114,6 +114,13 @@ class TestParseRealtime:
         assert tick.price_millipts == 43_735_460
         assert tick.qty == 0
 
+    def test_txf_zero_price_passes_parse_layer(self) -> None:
+        """0 價不在 parse 層擋(鎖停市價佇列照樣產出 Tick),閘在 aggregate.route / _ingest。"""
+        raw = dict(REALTIME_RAW, Symbol="TC.F.TWF.TXF.HOT", TradeQuantity="0", TradingPrice="0")
+        parsed = parse_realtime(raw)
+        assert parsed is not None
+        assert parsed.price_millipts == 0
+
     def test_txf_month_leaf_zero_qty_also_parses(self) -> None:
         """leaf 契約(futures_engine fallback)同屬現價源。"""
         raw = dict(

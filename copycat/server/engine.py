@@ -325,7 +325,7 @@ class EngineRuntime:
                 await self._maybe_self_heal()
                 continue
             if self._agg is not None and self._agg.route(tick):
-                # route 回 False = 外來 symbol / stale 重送 / spot 同價 → snapshot 內容
+                # route 回 False = 外來 symbol / stale 重送 / spot 同價 / spot 0 價 → snapshot 內容
                 # 沒動,標 changed 只會讓每個 WS client 白收一份 ~22 KB 全量快照
                 self._mark_changed()
             if self._force_heal:
