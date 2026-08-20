@@ -132,7 +132,9 @@ export function SignalRail({
             const ruleNames = groupRuleNames(group);
             // **合併列才換版**(B3):單則列一行放得下,照舊 truncate;合併列的 kind 段
             // 實測 154px 只分到 95px(38% 被切),改 clamp 2 行 + 規則名另起一行。
-            const merged = segments.length > 1;
+            // 「合併」看兩邊:同 kind 兩條規則時 kind 段去重只剩一段,但規則名有兩段,
+            // 與 kind 並排照樣搶同一行寬(review round-1)。
+            const merged = segments.length > 1 || ruleNames.length > 1;
             return (
               <li key={group.key}>
                 <button
@@ -157,7 +159,11 @@ export function SignalRail({
                         合併列改堆疊(kind 上 / 規則名下):並排時兩段搶同一行寬,
                         kind 154 + 規則名 92 > 可用 150,任一段都還是被切。 */}
                     <span
-                      className={cn("min-w-0 items-baseline gap-1", merged ? "flex flex-col" : "flex")}
+                      className={cn(
+                        "min-w-0 gap-1",
+                        // column 方向 items-baseline 無意義(退 flex-start),兩分支各自顯式
+                        merged ? "flex flex-col items-start" : "flex items-baseline",
+                      )}
                     >
                       {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
                           整段套第一則的 tone 會把其中一半畫成相反的方向。
@@ -183,13 +189,11 @@ export function SignalRail({
                           </Fragment>
                         ))}
                       </span>
+                      {/* 規則名段固定單行 truncate:堆疊後已有整行寬(實測 92px < 150),
+                          且它只是「誰發的」,截掉時 hover title 有全文;列高上限因此
+                          封在 1 + 2 + 1 行,不是 1 + 2 + 2。 */}
                       {ruleNames.length === 0 ? null : (
-                        <span
-                          className={cn(
-                            "min-w-0 text-[0.625rem] text-ink-dim",
-                            merged ? "line-clamp-2 break-words whitespace-normal" : "truncate",
-                          )}
-                        >
+                        <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
                           {ruleNames.map((name, i) => (
                             <Fragment key={name}>
                               {i === 0 ? null : <span aria-hidden="true">・</span>}
