@@ -72,6 +72,16 @@ def test_kind_direction_mismatch_rejected() -> None:
         )
 
 
+def test_cash_short_direction_close_blocked_until_calibrated() -> None:
+    """現股負向部位(疑當沖先賣;balance 負股數列)刻意**不在** _CLOSE_MAP:
+    回補單種(現股買自動沖銷 vs 其他)要等首筆實錄校準,在那之前平倉鍵鎖住 —
+    比送錯方向(對空單再賣=加倉)安全。校準後把 (cash, False) 補進映射並改本測試。"""
+    with pytest.raises(ValueError, match="無法平倉"):
+        build_close_order(
+            _pos(-1, kind="cash"), PositionCloseRequest(market="sec", key="2330", price=450.0)
+        )
+
+
 def test_zero_price_rejected() -> None:
     with pytest.raises(ValueError, match="平倉價格"):
         build_close_order(_pos(3), PositionCloseRequest(market="sec", key="2330", price=0.0))

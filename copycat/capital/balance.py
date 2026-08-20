@@ -64,6 +64,13 @@ def parse_balance_line(raw: str) -> Position | None:
         return None
     if kind == "short":
         lots = -lots  # 融券放空 → 負張數(close 映射靠 qty>0 判多空)
+    elif shares < 0:
+        # 現股/融資列負股數 = 賣超(疑當沖先賣/無券賣出未回補;2026-08-20 user 實報)。
+        # 舊 abs() 會把真空單顯示成多單、平倉映射再送賣單 = 對空單加倉 → 方向必須保留。
+        # kind 歸類(daytrade_sell?)與回補單種待首筆實錄校準 — 校準前 _CLOSE_MAP 無
+        # (cash, False) 鍵,平倉鍵鎖住;整列 warning 即蒐證素材(空單回補後自然停)。
+        lots = -lots
+        logger.warning("balance line 負股數(疑當沖先賣/賣超),方向記空、平倉暫鎖,整列: %r", raw)
     return Position(market="sec", stock_no=stock_no, qty=lots, kind=kind)
 
 

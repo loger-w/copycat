@@ -10,6 +10,14 @@
 - [ ] **融券的 [25] 代碼未實證,刻意不對映**(上條留尾):首次持融券過夜時 log 會出現
   「種類標籤未知 …整列」,拿該列 [25] 值(疑 3)回填 `balance.py::_PNL_KIND_CODE` 即收工;
   在那之前融券部位的均價/打平照舊缺值(寧缺勿錯)。
+- [ ] **當沖空單第二層校準:kind 歸類 + 平倉映射解鎖**(2026-08-20 user 實報空單標記方向錯;
+  第一層已出貨 = 現股/融資負股數保留空方向 + 整列蒐證 warning + 平倉暫鎖):user 下一筆
+  現股當沖先賣(或資券互抵)開倉期間,log 會出現「balance line 負股數…整列」與損益列的
+  「種類標籤未知…整列」(若為融券態)→ 依實錄決定 (a) 負現股列歸 `daytrade_sell`(close
+  映射 `("daytrade_sell", False)` 已備)還是維持 cash + 補 `("cash", False)`;(b) 該態損益列
+  的 [25] 代碼與均價口徑(打平線要不要吃它)。校準後改 `test_cash_short_direction_close_
+  blocked_until_calibrated` 為解鎖語意。注意:打平公式的 SELL_TAX 固定 0.3%(user 拍板不分
+  當沖),當沖實際稅 0.15% → 空單打平線會偏保守(往不利側),要精確另議。
 
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 

@@ -104,6 +104,41 @@ def test_parse_short_negative_shares_defensive() -> None:
     assert p.qty == -2 and p.kind == "short"
 
 
+def test_parse_cash_negative_shares_keeps_short_direction(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """現股列負股數(疑當沖先賣/無券賣出未回補;2026-08-20 user 實報空單方向錯)——
+    舊 abs() 會把真空單顯示成多單,平倉映射再送賣單 = 對空單加倉(真金風險)。
+    方向必須保留;kind 歸類(daytrade_sell?)待首筆實錄校準,整列 warning 就是蒐證通道。"""
+    raw = RAW_T_BOUGHT.replace(",1000,0,,", ",-1000,0,,")
+    with caplog.at_level("WARNING"):
+        p = parse_balance_line(raw)
+    assert p is not None
+    assert p.qty == -1 and p.kind == "cash"
+    assert any("負股數" in r.message and "2493" in r.message for r in caplog.records)
+
+
+def test_parse_margin_negative_shares_keeps_short_direction(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw = RAW_C_MARGIN.replace(",3000,0,155.63,", ",-3000,0,155.63,")
+    with caplog.at_level("WARNING"):
+        p = parse_balance_line(raw)
+    assert p is not None
+    assert p.qty == -3 and p.kind == "margin"
+    assert any("負股數" in r.message for r in caplog.records)
+
+
+def test_parse_short_negative_shares_no_daytrade_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # 融券列負股數是既有防禦路徑(符號未實測),不屬「疑當沖賣」蒐證對象,不洗版
+    raw = RAW_L_SHORT.replace(",2000,0,130.25,", ",-2000,0,130.25,")
+    with caplog.at_level("WARNING"):
+        parse_balance_line(raw)
+    assert not [r for r in caplog.records if "負股數" in r.message]
+
+
 def test_daytrade_flat_skipped() -> None:
     # 當沖軋平(即時庫存 0)不佔一列
     assert parse_balance_line(RAW_T_FLAT) is None
