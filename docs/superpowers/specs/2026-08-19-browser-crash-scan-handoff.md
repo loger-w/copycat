@@ -78,8 +78,10 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
 - 這一輪與「跑一段時間後掛」的時間相依性最像(節點只增不減),但 14:11 無訊號,故驗證者仍判 P2;
   修法簡單(suspended 時 skip / resume 後才排;Notification tag 固定 + 節流)。
 
-### R5(後端小修)`/mod /api/stock/signals/today 同步讀 jsonl 阻塞 event loop`
-- `app.py:1285` async route 內同步讀整份當日 jsonl → 8 條 WS 一起卡;改 `asyncio.to_thread` 或 aiofiles。
+### R5(後端小修)`/mod /api/stock/signals/today 同步讀 jsonl 阻塞 event loop` — **已出貨(08-20,branch mod/signals-today-offload)**
+- 出貨:route 層 `await asyncio.to_thread(...)`(hub API 不動;503 判定留 loop 內;
+  例外傳播 502 有 lock 測試)。artifact `.claude/mod/signals-today-offload/`。
+- 原記載:`app.py:1285` async route 內同步讀整份當日 jsonl → 8 條 WS 一起卡;改 `asyncio.to_thread` 或 aiofiles。
 
 ### R6(前端效能清理,可選)`/refactor 閃電梯 / 江波圖 / MarketPane memo 邊界`
 - `LadderView` / `PriceLadder` / `RightRail` 無 memo(App.tsx:146-150 註解自承);`RiverCards.tsx:28` /
