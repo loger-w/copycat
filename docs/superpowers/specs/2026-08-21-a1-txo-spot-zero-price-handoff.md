@@ -46,6 +46,18 @@ early return 即可;丟棄要不要計數(`totals`)由 spec 階段決定(spot �
 - S 級可主 session 直做(2026-08-11 收窄判準);流程照 `/bug`(root cause 已定,
   重心在紅測試與 blast radius:`route` 的呼叫端 `EngineRuntime._consume` 拿回傳值標 changed)。
 
+## 分支與排程(2026-08-21 夜間無人值守鏈:A1 → B3 → B1)
+
+- **分支**:`bug/txo-spot-zero-price-gate`(branch-lifecycle 開在 master 最新)。
+- **鏈位**:第 1 棒,無前置,直接開。
+- **完成訊號(給第 2 棒 B3 輪詢)**:PR 已 merge → `git fetch && git log origin/master --oneline | grep spot` 有輸出
+  (或 `gh pr list --state merged --search "txo-spot-zero-price-gate"`)。
+- **prod 重啟**:本案是鏈上唯一的後端改動 —— merge 後由**本 session** 重啟 8721
+  (port → PID taskkill,再 `.venv\Scripts\python -m copycat.server` 背景起;夜間無盤,
+  in-memory 資料可棄),重啟後 `curl localhost:8721/api/health` 的 `git_sha` 必須是含本案的 master。
+  B3/B1 不得再動 server。
+- 工作樹:串行鏈不開 worktree;開工前 `git status` 必須乾淨(前一 session 收尾已保證)。
+
 ## 起跑 prompt
 
 ```

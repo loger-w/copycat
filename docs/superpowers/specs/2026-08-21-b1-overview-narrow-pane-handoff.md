@@ -61,6 +61,21 @@
   動佈局高度時注意這些測試的語意是「鎖行為」還是「鎖舊字面」。
 - M 級 → 實作依 harness 紀律 dispatch(顯式帶 model)。
 
+## 分支與排程(2026-08-21 夜間無人值守鏈:A1 → B3 → B1)
+
+- **分支**:`mod/overview-narrow-pane-legibility`。
+- **鏈位**:第 3 棒(最長,M 級)。**前置 = B3 已 merge**:用 `/loop` 輪詢
+  `git fetch && git log origin/master --oneline | grep merged-row`(或 `gh pr list --state merged --search "signal-merged-row-wrap"`),
+  有輸出才 `git checkout master && git pull` 後開分支;輪詢間隔 10–15 分鐘。
+- **完成訊號**:本案 PR merge 即鏈尾;user 早上在 `frontend/` 跑 `npm run build && npm run preview`
+  才看得到三案前端(preview 吃 build 產物)。
+- **不動 prod server**(純前端)。驗證 = `npm run dev` + claude-in-chrome + 同源 iframe host
+  控 1536×864(ops-discipline 手法);對照 2560 不得退化;收尾刪 host 檔、port → PID 收 vite。
+- 工作樹:串行鏈不開 worktree;開工前 `git status` 乾淨。
+- 若 B3 逾時未 merge(例如卡在 review 迴圈超過鐵則 F 三次上限而停下等 user):本案**仍可開工**
+  —— 兩案檔案不重疊(本案 index/ + CandleChart + LimitList + pane-frame;B3 只動 SignalRail),
+  直接從當下 master 開分支,merge 衝突風險極低。
+
 ## 起跑 prompt
 
 ```
