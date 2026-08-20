@@ -26,13 +26,21 @@ function sig(id: string): SignalMsg {
  *  hook 內若快取了 AudioContext 單例,舊實例的方法照樣寫到現在這份計數)。 */
 let oscillators = 0;
 let notified: string[] = [];
+let notifiedTags: (string | undefined)[] = [];
 let hidden = false;
+/** context 狀態走 module 變數(getter 讀):hook 快取 AudioContext 單例,
+ *  suspended 測試要能改到「早已建好的那個實例」的 state。 */
+let ctxState = "running";
+let resumes = 0;
 
 class FakeAudioContext {
-  state = "running";
+  get state(): string {
+    return ctxState;
+  }
   currentTime = 0;
   destination = {};
   resume(): Promise<void> {
+    resumes += 1;
     return Promise.resolve();
   }
   createOscillator() {
@@ -56,8 +64,9 @@ class FakeAudioContext {
 
 class FakeNotification {
   static permission = "granted";
-  constructor(title: string) {
+  constructor(title: string, options?: { tag?: string }) {
     notified.push(title);
+    notifiedTags.push(options?.tag);
   }
 }
 
@@ -65,7 +74,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   oscillators = 0;
   notified = [];
+  notifiedTags = [];
   hidden = false;
+  ctxState = "running";
+  resumes = 0;
   FakeNotification.permission = "granted";
   window.localStorage.clear();
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
@@ -157,6 +169,44 @@ describe("useSignalAlerts — Notification", () => {
     act(() => emitSignal(sig("a")));
     expect(notified).toEqual([]);
   });
+
+  // handoff R4:tag 用唯一 sig.id 會讓背景分頁每則各佔一格,爆量疊成一排 ——
+  // 固定 tag 讓 OS 以「覆蓋最新一則」合併。
+  it("通知 tag 固定為 copycat-signal(OS 層合併),不用 sig.id", () => {
+    hidden = true;
+    renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("a")));
+    expect(notifiedTags).toEqual(["copycat-signal"]);
+  });
+
+  it("連發訊號 5 秒窗內只發第一則,窗後放行(節流)", () => {
+    hidden = true;
+    renderHook(() => useSignalAlerts());
+    const first = sig("a");
+    act(() => {
+      emitSignal(first);
+      emitSignal(sig("b"));
+    });
+    expect(notified).toEqual([formatToastText(first)]);
+    const third = sig("c");
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+      emitSignal(third);
+    });
+    expect(notified).toEqual([formatToastText(first), formatToastText(third)]);
+  });
+
+  it("窗內被 permission 擋掉的不消耗窗口:授權後首則照發", () => {
+    hidden = true;
+    FakeNotification.permission = "default";
+    renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("a")));
+    expect(notified).toEqual([]);
+    FakeNotification.permission = "granted";
+    const s = sig("b");
+    act(() => emitSignal(s));
+    expect(notified).toEqual([formatToastText(s)]);
+  });
 });
 
 describe("useSignalAlerts — 音效與靜音", () => {
@@ -189,6 +239,17 @@ describe("useSignalAlerts — 音效與靜音", () => {
 
     const second = renderHook(() => useSignalAlerts());
     expect(second.result.current.soundOn).toBe(false);
+  });
+
+  // handoff R4:suspended 時 currentTime 凍結,排出去的 osc.stop 永不執行 →
+  // 已 start 的節點不可 GC,整天看盤只增不減。改成跳過該聲 + 嘗試 resume。
+  it("AudioContext suspended → 跳過該聲不建節點,並嘗試 resume;toast 照出", () => {
+    ctxState = "suspended";
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("a")));
+    expect(oscillators).toBe(0);
+    expect(resumes).toBe(1);
+    expect(hook.result.current.toasts.length).toBe(1);
   });
 
   it("AudioContext 不存在(舊瀏覽器)→ 靜默略過,toast 不受影響", () => {
