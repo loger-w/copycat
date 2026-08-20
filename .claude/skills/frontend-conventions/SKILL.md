@@ -129,3 +129,15 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   `<pattern>` 必須 `patternUnits="userSpaceOnUse"`(`objectBoundingBox` 讓 tile 被每個 rect 各自
   拉伸,270 根柱子 270 種紋理密度);窄元素(柱寬 ~2.5px)要在 tile 內先鋪底色再疊線條,否則
   整根可能落在空白帶被畫成透明。(2026-08-06,Trigger:SVG pattern / gradient 填色)
+
+## 格式化工具只有 eslint --fix(2026-08-21 B3 沉澱)
+
+- **專案沒裝 prettier;`npx prettier` 會臨時抓外部版(printWidth 80)把整檔重排成 +150 行的假 diff**。
+  格式化一律 `npx eslint --fix <file>`(與 PostToolUse `format-on-edit.py` 同源);diff 行數異常先
+  `git diff --stat -w --ignore-cr-at-eol` 看實質改動。Trigger:任何想手動格式化 / diff 行數遠大於改動量。
+- **headless 截圖 fallback**:claude-in-chrome 未連線且 chrome-devtools-mcp profile 被他 session 鎖時,
+  `chrome.exe --headless=new --user-data-dir=<scratch> --window-size=W,H --virtual-time-budget=4000
+  --screenshot=<png> <url>` 對 vite dev 臨時 host 頁可直接出圖;量測用 host 內 `useEffect` 讀
+  clientWidth/scrollWidth/getBoundingClientRect 渲染成 `<pre>` 讓截圖帶讀數(jsdom 量不到 px)。
+  host 檔收尾必刪。Trigger:UI SC 要真字型量測但兩條 MCP 通道都不可用。
+
