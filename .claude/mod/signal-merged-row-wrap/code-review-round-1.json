@@ -7,9 +7,9 @@
     {"id":"L2-1","severity":"P1","file":"SignalRail.tsx","claim":"flex-col 堆疊零測試覆蓋(mutant 恆 flex / 恆 flex-col 皆存活)","disposition":"accepted","fix":"SC-1 補 wrapper className 斷言(ea10d800)"},
     {"id":"L2-2","severity":"P1","file":"SignalRail.test.tsx","claim":"edge 2 三段合併無測試","disposition":"accepted","fix":"新增三段 fixture 測試(ea10d800)"},
     {"id":"L2-3","severity":"P1","file":"SignalRail.test.tsx:109","claim":"W5 斷言用 U+00B7 非 U+30FB,恆真","disposition":"accepted","fix":"改同字元 + edge 1 補分隔符計數 1(ea10d800)"},
-    {"id":"L1-3","severity":"P2","file":"SignalRail.tsx","claim":"merged 只看 segments,同 kind 兩規則(edge 3)走舊版型","disposition":"accepted","fix":"merged = segments>1 || ruleNames>1(00ecffa0)"},
-    {"id":"L1-4","severity":"P2","file":"SignalRail.tsx","claim":"規則名段也 clamp-2,列高上限 4 行","disposition":"accepted","fix":"規則名段固定 truncate(00ecffa0)"},
-    {"id":"L1-2","severity":"P2","file":"SignalRail.tsx","claim":"column 分支 items-baseline 為 dead declaration","disposition":"accepted","fix":"兩分支各自 items-start / items-baseline(00ecffa0)"},
+    {"id":"L1-3","severity":"P2","file":"SignalRail.tsx","claim":"merged 只看 segments,同 kind 兩規則(edge 3)走舊版型","disposition":"accepted","fix":"merged = segments>1 || ruleNames>1(0d4543a8)"},
+    {"id":"L1-4","severity":"P2","file":"SignalRail.tsx","claim":"規則名段也 clamp-2,列高上限 4 行","disposition":"accepted","fix":"規則名段固定 truncate(0d4543a8)"},
+    {"id":"L1-2","severity":"P2","file":"SignalRail.tsx","claim":"column 分支 items-baseline 為 dead declaration","disposition":"accepted","fix":"兩分支各自 items-start / items-baseline(0d4543a8)"},
     {"id":"L1-1","severity":"P2","file":"SignalRail.tsx","claim":"line-clamp overflow:hidden 可能讓價格 baseline 沉到第二行","disposition":"refuted","evidence":"headless 實測三段列 rows=2,price.top − kind.top = 1px(evidence/SC-3-b3-host-round2.png)"},
     {"id":"L1-5","severity":"P2","file":"spec W6","claim":"規則名文字多包一層 span,W6 字面未完全成立","disposition":"accepted-spec","fix":"W6 措辭改「版型 class 不變」"},
     {"id":"L1-6 / L2-p2","severity":"P2","file":"SignalRail.test.tsx","claim":"edge 3 kind title 未斷言;segmentTitle 空字串 / ruleTitle 序與去重 / 分隔符全域計數 脆弱","disposition":"accepted","fix":"ea10d800 全數補齊;mutation 抽驗 M5 reverse / M7 empty / M4 flex-col / dedup 皆 KILLED"}

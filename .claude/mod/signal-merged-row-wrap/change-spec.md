@@ -33,4 +33,4 @@ toast/通知合併(B4)、groupSignals 口徑、Discord 文案、單則列樣式�
 
 ## Review
 - round-1:`code-review-round-1.json`(2 lens,P1×3 / P2×8;全部處置完畢)。
-- self_review_head: 00ecffa0
+- self_review_head: 0d4543a8
